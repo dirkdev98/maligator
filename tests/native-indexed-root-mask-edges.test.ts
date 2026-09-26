@@ -149,6 +149,38 @@ function privateSlot(source: string, register: number): number {
 
 describe("native numeric indexed-load root publication", () => {
 	it.each(["int32", "number"] as const)(
+		"keeps the union mask eager and deduplicated without final private roots for %s indices",
+		(representation) => {
+			const source = emit(
+				fn([key, indexedLoad, indexedLoad, call, { opcode: "RETURN", value: 6 }]),
+				[
+					point(1, [0, 5], [0, 3, 5]),
+					point(2, [0, 5], [0, 3, 5]),
+					point(3, [0, 1, 3, 4, 5], [6]),
+				],
+				representation,
+			);
+			expect(source).not.toContain("__private_r");
+			const firstProbe = source.indexOf("mal_vm_array_try_get_index(");
+			const mask = source.indexOf("MAL_ROOT_MASK(");
+			expect(mask).toBeGreaterThan(-1);
+			expect(firstProbe).toBeGreaterThan(mask);
+			const secondProbe = source.indexOf("mal_vm_array_try_get_index(", firstProbe + 1);
+			expect(source.slice(0, secondProbe).match(/MAL_ROOT_MASK\(/g)).toHaveLength(1);
+			expect(source.slice(firstProbe, secondProbe)).not.toContain("MAL_ROOT_MASK(");
+			expect(source.match(/mal_vm_indexed_fast_load_index\(/g)).toHaveLength(2);
+		},
+	);
+
+	it("adds no publication for an indexed instruction without a refined GC point", () => {
+		const source = emit(fn([key, indexedLoad, { opcode: "RETURN", value: 3 }]), []);
+		expect(source).not.toContain("__private_r");
+		expect(source).not.toContain("MAL_ROOT_MASK(");
+		expect(source).toContain("mal_vm_array_try_get_index(");
+		expect(source).toContain("mal_vm_indexed_fast_load_index(");
+	});
+
+	it.each(["int32", "number"] as const)(
 		"publishes private inputs and the union mask only after the %s array probe misses",
 		(representation) => {
 			const source = ordinary(representation);

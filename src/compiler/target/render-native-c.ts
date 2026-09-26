@@ -3230,6 +3230,7 @@ function emitBody(
 		const indexedPropertyInstruction = fn.instructions[ip]!;
 		// Only the ordinary numeric-index probe has an audited noncollecting hit.
 		const deferredIndexedPropertyRoots =
+			hasPrivateRoots &&
 			indexedPropertyInstruction.opcode === "LOAD_PROPERTY" &&
 			isNumericRep(reps[indexedPropertyInstruction.key]!) &&
 			!staticPropertyProjectionConflicts(ip) &&
