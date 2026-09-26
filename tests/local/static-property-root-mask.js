@@ -686,4 +686,139 @@ for (let index = 0; index < 16; index++) {
 		throw new Error("throwing coercion lost a catch root");
 }
 
+let indexLoadObservation = 0;
+let indexLoadReceiverObservation = 0;
+
+function retainThroughIndexLoad(owner) {
+	const retained = owner.value;
+	const receiver = owner.receiver;
+	const result = receiver[1];
+	gc();
+	indexLoadObservation = result.marker;
+	indexLoadReceiverObservation = receiver.marker;
+	return retained;
+}
+
+function retainThroughThrowingIndexLoad(owner) {
+	const retained = owner.value;
+	const receiver = owner.receiver;
+	try {
+		const result = receiver[1];
+		gc();
+		indexLoadObservation = retained.marker + result.marker;
+	} catch (error) {
+		gc();
+		indexLoadObservation = retained.marker + error.payload.marker;
+	}
+	indexLoadReceiverObservation = receiver.marker;
+	return retained;
+}
+
+function detachedIndexHitAcrossPoll(owner) {
+	const retained = owner.value;
+	const receiver = owner.receiver;
+	const result = receiver[1];
+	receiver.length = 0;
+	owner.value = null;
+	owner.receiver = null;
+	gc();
+	indexLoadObservation = result.marker;
+	indexLoadReceiverObservation = receiver.length;
+	return retained;
+}
+
+globalThis.staticPropertyIndexLoads = [
+	retainThroughIndexLoad,
+	retainThroughThrowingIndexLoad,
+	detachedIndexHitAcrossPoll,
+];
+
+const indexLoadOwner = { value: { marker: 211 }, receiver: [, { marker: 223 }] };
+indexLoadOwner.receiver.marker = 227;
+for (let index = 0; index < 16; index++) {
+	const retained = globalThis.staticPropertyIndexLoads[0](indexLoadOwner);
+	if (
+		retained.marker !== 211 ||
+		indexLoadObservation !== 223 ||
+		indexLoadReceiverObservation !== 227
+	) {
+		throw new Error("dense numeric property load warmup mismatch");
+	}
+}
+indexLoadOwner.value = { marker: 229 };
+let collectingIndexLoadCalls = 0;
+Object.defineProperty(indexLoadOwner.receiver, "1", {
+	get() {
+		collectingIndexLoadCalls++;
+		indexLoadOwner.value = null;
+		indexLoadOwner.receiver = null;
+		gc();
+		return { marker: 233 };
+	},
+});
+const indexLoadRetained = globalThis.staticPropertyIndexLoads[0](indexLoadOwner);
+gc();
+if (
+	indexLoadRetained.marker !== 229 ||
+	indexLoadObservation !== 233 ||
+	indexLoadReceiverObservation !== 227 ||
+	collectingIndexLoadCalls !== 1
+) {
+	throw new Error(
+		"collecting numeric index getter lost incoming roots or its heap result",
+	);
+}
+
+const throwingIndexLoadOwner = {
+	value: { marker: 239 },
+	receiver: [, { marker: 241 }],
+};
+throwingIndexLoadOwner.receiver.marker = 251;
+for (let index = 0; index < 16; index++) {
+	const retained = globalThis.staticPropertyIndexLoads[1](throwingIndexLoadOwner);
+	if (
+		retained.marker !== 239 ||
+		indexLoadObservation !== 480 ||
+		indexLoadReceiverObservation !== 251
+	) {
+		throw new Error("throwing numeric property load warmup mismatch");
+	}
+}
+let throwingIndexLoadCalls = 0;
+Object.defineProperty(throwingIndexLoadOwner.receiver, "1", {
+	get() {
+		throwingIndexLoadCalls++;
+		throwingIndexLoadOwner.value = null;
+		throwingIndexLoadOwner.receiver = null;
+		const failure = { payload: { marker: 257 } };
+		gc();
+		throw failure;
+	},
+});
+const throwingIndexLoadRetained =
+	globalThis.staticPropertyIndexLoads[1](throwingIndexLoadOwner);
+gc();
+if (
+	throwingIndexLoadRetained.marker !== 239 ||
+	indexLoadObservation !== 496 ||
+	indexLoadReceiverObservation !== 251 ||
+	throwingIndexLoadCalls !== 1
+) {
+	throw new Error(
+		"throwing numeric index getter lost incoming roots or its caught heap payload",
+	);
+}
+
+for (let index = 0; index < 8; index++) {
+	const owner = { value: { marker: 263 }, receiver: [null, { marker: 271 }] };
+	const retained = globalThis.staticPropertyIndexLoads[2](owner);
+	if (
+		retained.marker !== 263 ||
+		indexLoadObservation !== 271 ||
+		indexLoadReceiverObservation !== 0
+	) {
+		throw new Error("heap-valued dense index hit lost at a later collecting poll");
+	}
+}
+
 console.log("static-property-root-mask PASS");

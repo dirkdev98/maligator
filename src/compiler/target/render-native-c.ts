@@ -3210,6 +3210,21 @@ function emitBody(
 		const deferredPropertyRoots =
 			fn.instructions[ip]!.opcode === "LOAD_PROPERTY_STATIC" &&
 			!staticPropertyProjectionConflicts(ip);
+		const indexedPropertyInstruction = fn.instructions[ip]!;
+		// Only the ordinary numeric-index probe has an audited noncollecting hit.
+		const deferredIndexedPropertyRoots =
+			indexedPropertyInstruction.opcode === "LOAD_PROPERTY" &&
+			isNumericRep(reps[indexedPropertyInstruction.key]!) &&
+			!staticPropertyProjectionConflicts(ip) &&
+			!stackObjectMaterializations.has(ip) &&
+			!nativeArrayPresenceProjectionActionByIp.has(ip) &&
+			!pairedArrayLoopActionByIp.has(ip) &&
+			!nativeIteratorCursorActionByIp.has(ip) &&
+			!nativeArrayPairDestructureActionByIp.has(ip) &&
+			!nativeIteratorResultVirtualizationActionByIp.has(ip) &&
+			!nativeIteratorEntryPairVirtualizationActionByIp.has(ip) &&
+			!numericFusionActionByIp.has(ip) &&
+			!staticPropertyNumericActionByIp.has(ip);
 		const deferredPropertyStoreRoots =
 			fn.instructions[ip]!.opcode === "STORE_PROPERTY_STATIC" &&
 			nativeInstructions[ip] === undefined &&
@@ -3231,6 +3246,7 @@ function emitBody(
 		if (
 			safepointKind !== "loop-backedge" &&
 			!deferredPropertyRoots &&
+			!deferredIndexedPropertyRoots &&
 			!deferredPropertyStoreRoots &&
 			!deferredOperatorRoots &&
 			!deferredTdzRoots &&
@@ -3242,6 +3258,10 @@ function emitBody(
 		const inactiveRootMask = inactiveRootMasks.get(ip);
 		const operatorInactiveRootMask =
 			deferredOperatorRoots && inactiveRootMask !== lastPublishedInactiveRootMask
+				? inactiveRootMask
+				: undefined;
+		const indexedPropertyLoadInactiveRootMask =
+			deferredIndexedPropertyRoots && inactiveRootMask !== lastPublishedInactiveRootMask
 				? inactiveRootMask
 				: undefined;
 		const staticPropertyStoreInactiveRootMask =
@@ -3299,6 +3319,7 @@ function emitBody(
 			tdzInactiveRootMask === undefined &&
 			knownOwnSlotLoadInactiveRootMask === undefined &&
 			staticPropertyLoadInactiveRootMask === undefined &&
+			indexedPropertyLoadInactiveRootMask === undefined &&
 			staticPropertyStoreInactiveRootMask === undefined &&
 			denseIteratorStepInactiveRootMask === undefined &&
 			inactiveRootMask !== lastPublishedInactiveRootMask
@@ -3313,6 +3334,7 @@ function emitBody(
 			tdzInactiveRootMask === undefined &&
 			knownOwnSlotLoadInactiveRootMask === undefined &&
 			staticPropertyLoadInactiveRootMask === undefined &&
+			indexedPropertyLoadInactiveRootMask === undefined &&
 			staticPropertyStoreInactiveRootMask === undefined &&
 			denseIteratorStepInactiveRootMask === undefined
 		) {
@@ -3344,6 +3366,7 @@ function emitBody(
 				gcSafepoint: safepointKind !== undefined,
 				incomingRootPublication:
 					deferredPropertyRoots ||
+					deferredIndexedPropertyRoots ||
 					deferredPropertyStoreRoots ||
 					deferredOperatorRoots ||
 					deferredTdzRoots ||
@@ -3368,6 +3391,7 @@ function emitBody(
 				tdzInactiveRootMask,
 				knownOwnSlotLoadInactiveRootMask,
 				staticPropertyLoadInactiveRootMask,
+				indexedPropertyLoadInactiveRootMask,
 				staticPropertyStoreInactiveRootMask,
 				denseIteratorStepRootPublication: deferredDenseIteratorRoots,
 				denseIteratorStepInactiveRootMask,
@@ -3431,6 +3455,7 @@ function emitBody(
 			tdzInactiveRootMask !== undefined ||
 			knownOwnSlotLoadInactiveRootMask !== undefined ||
 			staticPropertyLoadInactiveRootMask !== undefined ||
+			indexedPropertyLoadInactiveRootMask !== undefined ||
 			staticPropertyStoreInactiveRootMask !== undefined ||
 			denseIteratorStepInactiveRootMask !== undefined
 		) {
@@ -3749,6 +3774,7 @@ interface NativeInstructionContext {
 	readonly tdzInactiveRootMask?: bigint;
 	readonly knownOwnSlotLoadInactiveRootMask?: bigint;
 	readonly staticPropertyLoadInactiveRootMask?: bigint;
+	readonly indexedPropertyLoadInactiveRootMask?: bigint;
 	readonly staticPropertyStoreInactiveRootMask?: bigint;
 	readonly denseIteratorStepRootPublication?: boolean;
 	readonly denseIteratorStepInactiveRootMask?: bigint;
@@ -3923,6 +3949,7 @@ function emitInstruction(
 		tdzInactiveRootMask: context.tdzInactiveRootMask,
 		knownOwnSlotLoadInactiveRootMask: context.knownOwnSlotLoadInactiveRootMask,
 		staticPropertyLoadInactiveRootMask: context.staticPropertyLoadInactiveRootMask,
+		indexedPropertyLoadInactiveRootMask: context.indexedPropertyLoadInactiveRootMask,
 		staticPropertyStoreInactiveRootMask: context.staticPropertyStoreInactiveRootMask,
 		denseIteratorStepRootPublication: context.denseIteratorStepRootPublication,
 		denseIteratorStepInactiveRootMask: context.denseIteratorStepInactiveRootMask,
@@ -5245,6 +5272,12 @@ function emitInstruction(
 								`if (${receiverName} && mal_vm_array_try_get_index(${receiverName}, ${num(instruction.key)}, &__v_${ip})) {`,
 								`  r${instruction.dst} = __v_${ip};`,
 								`} else {`,
+								...(context.incomingRootPublication ?? []).map((line) => `  ${line}`),
+								...(context.indexedPropertyLoadInactiveRootMask === undefined
+									? []
+									: [
+											`  ${cInactiveRootMaskPublication(context.indexedPropertyLoadInactiveRootMask)};`,
+										]),
 								`  r${instruction.dst} = ${profileCall("property", `mal_vm_indexed_fast_load_index(vm, ${boxed(instruction.object)}, ${num(instruction.key)}, &${nativeBodyReference(resources, "propertyCache")}[${instruction.icIndex}])`)};`,
 								`  ${throwCheck()}`,
 								`}`,

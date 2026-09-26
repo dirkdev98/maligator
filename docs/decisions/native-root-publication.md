@@ -89,3 +89,15 @@ pure specialized operators need no mask update at all.
 Mask-state tracking records whether the emitted operator actually used its
 publication callback. A proven pure operator does not forget an unchanged
 mask merely because its generic opcode could have required publication.
+Recursive generic continuations forward that callback, and slow expressions
+are constructed only when included in the emitted path. Otherwise a fallback
+can change the runtime mask without the outer emitter restoring roots needed
+by a later call or collecting poll.
+
+Ordinary numeric indexed reads also defer incoming publication to the existing
+dense-array probe's miss branch. Numeric index conversion and a successful
+dense hit cannot collect or reenter JavaScript; the generic indexed helper can.
+Boxed keys and specialized indexed/projection plans retain their existing
+publication because their conversion or intermediate-storage contracts differ.
+The returned heap value is published before a later collecting poll, including
+unmasked root slots beyond the first 64.
