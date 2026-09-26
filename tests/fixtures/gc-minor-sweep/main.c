@@ -37,6 +37,10 @@ static TestCell *new_cell(MalHeap *heap, usize size) {
     return cell;
 }
 
+static void mark_live(TestCell *cell) {
+    cell->header.mark = MAL_MARK_OLD | g_heap->mark_color;
+}
+
 static void finalize_cell(MalHeapHeader *header) {
     TestCell *cell = (TestCell *) header;
     if (cell->id >= countof(g_finalized) || cell->signature != signature(cell->id)) {
@@ -51,7 +55,7 @@ static void finalize_cell(MalHeapHeader *header) {
 }
 
 static bool live_cell(const TestCell *cell, u32 id) {
-    return cell->header.mark == MAL_MARK_BLACK && cell->id == id
+    return mal_heap_mark_is_old(cell->header.mark) && cell->id == id
         && cell->signature == signature(id) && g_finalized[id] == 0;
 }
 
@@ -67,12 +71,13 @@ static bool major_reclaims_once_and_recycles_blocks(MalHeap *heap) {
     TestCell *dead = new_cell(heap, 512);
     u32 live_id = live->id;
     u32 dead_id = dead->id;
-    live->header.mark = MAL_MARK_BLACK;
+    mal_heap_begin_major(heap);
+    mark_live(live);
     mal_heap_sweep(heap, finalize_cell);
     CHECK(heap->live_bytes == mal_heap_allocation_charge(512));
     CHECK(g_finalized[dead_id] == 1);
 
-    live->header.mark = MAL_MARK_WHITE;
+    mal_heap_begin_major(heap);
     mal_heap_sweep(heap, finalize_cell);
     CHECK(heap->live_bytes == 0);
     CHECK(g_finalized[live_id] == 1 && g_finalized[dead_id] == 1);
@@ -82,13 +87,14 @@ static bool major_reclaims_once_and_recycles_blocks(MalHeap *heap) {
     memset(raw, 0x71, 2048);
     TestCell *reused = new_cell(heap, 4096);
     u32 reused_id = reused->id;
-    reused->header.mark = MAL_MARK_BLACK;
+    mal_heap_begin_major(heap);
+    mark_live(reused);
     mal_heap_sweep(heap, finalize_cell);
     CHECK(heap->live_bytes == mal_heap_allocation_charge(4096));
     for (usize i = 0; i < 2048; i++) CHECK(((u8 *) raw)[i] == 0x71);
     gc_free_raw(heap, raw);
 
-    reused->header.mark = MAL_MARK_WHITE;
+    mal_heap_begin_major(heap);
     mal_heap_sweep(heap, finalize_cell);
     CHECK(heap->live_bytes == 0);
     CHECK(g_finalized[reused_id] == 1);
@@ -99,15 +105,16 @@ static bool major_reclaims_once_and_recycles_blocks(MalHeap *heap) {
 static bool minor_preserves_old_cells_and_free_list_members(MalHeap *heap) {
     TestCell *cells[8];
     for (usize i = 0; i < countof(cells); i++) cells[i] = new_cell(heap, 512);
-    cells[0]->header.mark = MAL_MARK_BLACK;
-    cells[1]->header.mark = MAL_MARK_BLACK;
+    mal_heap_begin_major(heap);
+    mark_live(cells[0]);
+    mark_live(cells[1]);
     mal_heap_sweep(heap, finalize_cell);
     CHECK(heap->live_bytes == 2 * mal_heap_allocation_charge(512));
     for (u32 id = 3; id <= 8; id++) CHECK(g_finalized[id] == 1);
 
     TestCell *young_live = new_cell(heap, 512);
     CHECK(contains(cells + 2, 6, young_live));
-    young_live->header.mark = MAL_MARK_BLACK;
+    mark_live(young_live);
     TestCell *young_dead = new_cell(heap, 512);
     CHECK(contains(cells + 2, 6, young_dead) && young_dead != young_live);
     young_dead->owned = mal_heap_alloc_raw(heap, 64);
@@ -131,7 +138,7 @@ static bool minor_preserves_old_cells_and_free_list_members(MalHeap *heap) {
         CHECK(reused[i] != cells[0] && reused[i] != cells[1] && reused[i] != young_live);
         CHECK(!contains(reused, i, reused[i]));
         CHECK(contains(cells + 2, 6, reused[i]) == (i < 5));
-        reused[i]->header.mark = MAL_MARK_BLACK;
+        mark_live(reused[i]);
     }
     mal_heap_sweep_minor(heap, finalize_cell);
     CHECK(heap->live_bytes == 9 * mal_heap_allocation_charge(512));
@@ -145,8 +152,9 @@ static bool minor_reenrolls_reused_cells_in_untouched_blocks(MalHeap *heap) {
     TestCell *small_dead = new_cell(heap, 512);
     TestCell *large_live = new_cell(heap, 1024);
     TestCell *large_dead = new_cell(heap, 1024);
-    small_live->header.mark = MAL_MARK_BLACK;
-    large_live->header.mark = MAL_MARK_BLACK;
+    mal_heap_begin_major(heap);
+    mark_live(small_live);
+    mark_live(large_live);
     mal_heap_sweep(heap, finalize_cell);
     usize old_bytes = mal_heap_allocation_charge(512) + mal_heap_allocation_charge(1024);
     CHECK(heap->live_bytes == old_bytes);
@@ -162,7 +170,7 @@ static bool minor_reenrolls_reused_cells_in_untouched_blocks(MalHeap *heap) {
     CHECK(g_finalized[6] == 1 && heap->live_bytes == old_bytes);
     TestCell *large_promoted = new_cell(heap, 1024);
     CHECK(large_promoted == large_reused);
-    large_promoted->header.mark = MAL_MARK_BLACK;
+    mark_live(large_promoted);
     mal_heap_sweep_minor(heap, finalize_cell);
     usize promoted_bytes = old_bytes + mal_heap_allocation_charge(1024);
     CHECK(heap->live_bytes == promoted_bytes && live_cell(large_promoted, 7));
@@ -179,7 +187,10 @@ static bool minor_reenrolls_a_reclaimed_cell_away_from_the_bump_block(MalHeap *h
     TestCell *cells[8];
     for (usize i = 0; i < countof(cells); i++) {
         cells[i] = new_cell(heap, 8192);
-        if (i != 1) cells[i]->header.mark = MAL_MARK_BLACK;
+    }
+    mal_heap_begin_major(heap);
+    for (usize i = 0; i < countof(cells); i++) {
+        if (i != 1) mark_live(cells[i]);
     }
     mal_heap_sweep(heap, finalize_cell);
     usize old_bytes = 7 * mal_heap_allocation_charge(8192);
@@ -190,7 +201,7 @@ static bool minor_reenrolls_a_reclaimed_cell_away_from_the_bump_block(MalHeap *h
     CHECK(heap->live_bytes == old_bytes && g_finalized[9] == 1);
     TestCell *promoted = new_cell(heap, 8192);
     CHECK(promoted == cells[1]);
-    promoted->header.mark = MAL_MARK_BLACK;
+    mark_live(promoted);
     mal_heap_sweep_minor(heap, finalize_cell);
     CHECK(heap->live_bytes == old_bytes + mal_heap_allocation_charge(8192));
     CHECK(live_cell(promoted, 10));
@@ -202,15 +213,16 @@ static bool minor_reenrolls_a_reclaimed_cell_away_from_the_bump_block(MalHeap *h
 
 static bool major_resets_minor_tracking_before_block_reassignment(MalHeap *heap) {
     TestCell *old = new_cell(heap, 512);
-    old->header.mark = MAL_MARK_BLACK;
+    mal_heap_begin_major(heap);
+    mark_live(old);
     mal_heap_sweep(heap, finalize_cell);
     CHECK(heap->live_bytes == mal_heap_allocation_charge(512));
 
     new_cell(heap, 2048);
     mal_heap_sweep_minor(heap, finalize_cell);
     CHECK(g_finalized[2] == 1 && heap->live_bytes == mal_heap_allocation_charge(512));
-    old->header.mark = MAL_MARK_WHITE;
     new_cell(heap, 4096);
+    mal_heap_begin_major(heap);
     mal_heap_sweep(heap, finalize_cell);
     CHECK(heap->live_bytes == 0 && g_finalized[1] == 1 && g_finalized[3] == 1);
     CHECK(heap->free_blocks != nullptr);
@@ -223,14 +235,15 @@ static bool major_resets_minor_tracking_before_block_reassignment(MalHeap *heap)
     mal_heap_sweep_minor(heap, finalize_cell);
     CHECK(g_finalized[4] == 1 && heap->live_bytes == 0);
     for (usize i = 0; i < 2048; i++) CHECK(((u8 *) raw)[i] == 0x71);
+    mal_heap_begin_major(heap);
     mal_heap_sweep(heap, finalize_cell);
     gc_free_raw(heap, raw);
 
     TestCell *survivor = new_cell(heap, 4096);
-    survivor->header.mark = MAL_MARK_BLACK;
+    mark_live(survivor);
     mal_heap_sweep_minor(heap, finalize_cell);
     CHECK(live_cell(survivor, 5) && heap->live_bytes == mal_heap_allocation_charge(4096));
-    survivor->header.mark = MAL_MARK_WHITE;
+    mal_heap_begin_major(heap);
     mal_heap_sweep(heap, finalize_cell);
     CHECK(heap->live_bytes == 0);
     for (u32 id = 1; id <= 5; id++) CHECK(g_finalized[id] == 1);
@@ -242,17 +255,21 @@ static bool incremental_major_keeps_allocations_after_a_block_was_swept(MalHeap 
     new_cell(heap, 512);
     TestCell *second = new_cell(heap, 1024);
     new_cell(heap, 1024);
-    first->header.mark = MAL_MARK_BLACK;
-    second->header.mark = MAL_MARK_BLACK;
+    mal_heap_begin_major(heap);
+    mark_live(first);
+    mark_live(second);
     mal_heap_sweep(heap, finalize_cell);
 
+    mal_heap_begin_major(heap);
+    mark_live(first);
+    mark_live(second);
     mal_heap_sweep_begin(heap);
     mal_gc_black_alloc = true;
     CHECK(!mal_heap_sweep_step(heap, finalize_cell, 1));
     TestCell *after_visit = new_cell(heap, 512);
     TestCell *before_visit = new_cell(heap, 1024);
-    CHECK(after_visit->header.mark == MAL_MARK_BLACK);
-    CHECK(before_visit->header.mark == MAL_MARK_BLACK);
+    CHECK(mal_heap_mark_is_current(after_visit->header.mark, heap->mark_color));
+    CHECK(mal_heap_mark_is_current(before_visit->header.mark, heap->mark_color));
 
     // Exceed the current chunk so some BLACK allocations sit ahead of its cursor.
     TestCell *new_chunk_cells[200];
@@ -282,21 +299,21 @@ static bool large_cells_follow_major_and_minor_lifetime(MalHeap *heap) {
     TestCell *old = new_cell(heap, cell_size);
     TestCell *dead = new_cell(heap, cell_size);
     dead->owned = mal_heap_alloc_raw(heap, 12000);
-    old->header.mark = MAL_MARK_BLACK;
+    mal_heap_begin_major(heap);
+    mark_live(old);
     mal_heap_sweep(heap, finalize_cell);
     CHECK(heap->live_bytes == cell_size && g_finalized[2] == 1);
 
     TestCell *young = new_cell(heap, cell_size);
     TestCell *young_dead = new_cell(heap, cell_size);
     young_dead->owned = mal_heap_alloc_raw(heap, 13000);
-    young->header.mark = MAL_MARK_BLACK;
+    mark_live(young);
     mal_heap_sweep_minor(heap, finalize_cell);
     CHECK(heap->live_bytes == 2 * cell_size && g_finalized[4] == 1);
     mal_heap_sweep_minor(heap, finalize_cell);
     CHECK(heap->live_bytes == 2 * cell_size && live_cell(old, 1) && live_cell(young, 3));
 
-    old->header.mark = MAL_MARK_WHITE;
-    young->header.mark = MAL_MARK_WHITE;
+    mal_heap_begin_major(heap);
     mal_heap_sweep(heap, finalize_cell);
     CHECK(heap->live_bytes == 0 && g_finalized[1] == 1 && g_finalized[3] == 1);
     return true;
@@ -306,19 +323,19 @@ static bool incremental_major_accounts_new_large_cells(MalHeap *heap) {
     const usize cell_size = 10000;
     TestCell *old = new_cell(heap, cell_size);
     new_cell(heap, cell_size);
-    old->header.mark = MAL_MARK_BLACK;
+    mal_heap_begin_major(heap);
+    mark_live(old);
     mal_heap_sweep_begin(heap);
     mal_gc_black_alloc = true;
     CHECK(!mal_heap_sweep_step(heap, finalize_cell, 1));
     TestCell *newborn = new_cell(heap, cell_size);
-    CHECK(newborn->header.mark == MAL_MARK_BLACK);
+    CHECK(mal_heap_mark_is_current(newborn->header.mark, heap->mark_color));
     CHECK(mal_heap_sweep_step(heap, finalize_cell, (usize) -1));
     mal_gc_black_alloc = false;
     CHECK(heap->live_bytes == 2 * cell_size && g_finalized[2] == 1);
     mal_heap_sweep_minor(heap, finalize_cell);
     CHECK(heap->live_bytes == 2 * cell_size && live_cell(old, 1) && live_cell(newborn, 3));
-    old->header.mark = MAL_MARK_WHITE;
-    newborn->header.mark = MAL_MARK_WHITE;
+    mal_heap_begin_major(heap);
     mal_heap_sweep(heap, finalize_cell);
     CHECK(heap->live_bytes == 0 && g_finalized[1] == 1 && g_finalized[3] == 1);
     return true;

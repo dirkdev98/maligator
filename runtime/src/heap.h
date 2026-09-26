@@ -99,6 +99,8 @@ typedef struct MalHeap {
     /** Bytes of managed cells that survived the last sweep; sizes the next
      * auto-collection trigger. Zero until the first collection. */
     usize live_bytes;
+    /** Flipped at each major start; matching cells survived the current major. */
+    u8 mark_color;
     /** Heap-lifetime root of this isolate's hidden-class transition tree. */
     MalShape *shape_root;
     /** Canonical metadata keys reused by every native function allocation. */
@@ -389,18 +391,20 @@ typedef enum MalHeapStorage : u8 {
     MAL_HEAP_STORAGE_IMMORTAL,
 } MalHeapStorage;
 
-/**
- * Mark state of a managed cell, tracked in its header for the stop-the-world
- * mark/sweep collector. WHITE is the default (unmarked / live-but-unreached);
- * BLACK is set when the cell is reached during marking; FREE marks a reclaimed
- * cell on its block's free list, so the sweep never finalizes it twice. (A side
- * mark bitmap replaces this header field when marking goes concurrent.)
- */
+/** Generation, reclamation, and alternating major color share one atomic byte. */
 typedef enum MalHeapMark {
-    MAL_MARK_WHITE = 0,
-    MAL_MARK_BLACK = 1,
+    MAL_MARK_OLD = 1,
     MAL_MARK_FREE = 2,
+    MAL_MARK_COLOR = 4,
 } MalHeapMark;
+
+static inline bool mal_heap_mark_is_old(u8 mark) {
+    return (mark & (MAL_MARK_OLD | MAL_MARK_FREE)) == MAL_MARK_OLD;
+}
+
+static inline bool mal_heap_mark_is_current(u8 mark, u8 color) {
+    return (mark & MAL_MARK_FREE) == 0 && (mark & MAL_MARK_COLOR) == color;
+}
 
 /**
  * Common header stored at the start of every pointer-boxed heap allocation.
@@ -411,7 +415,7 @@ typedef enum MalHeapMark {
  *
  * The `dirty` byte records remembered-set membership:
  * the generational write barrier sets it (and links the cell on the remembered
- * set) when an old (survived-a-collection, sticky-BLACK) cell is written with a
+ * set) when an old cell is written with a
  * young pointer, so the minor collector traces that cell without re-marking the
  * whole old generation. The 4th byte it occupies falls in the padding every
  * embedder already carries after the header (MalObject packs its flags into one
@@ -442,6 +446,7 @@ typedef struct MalHeapHeader {
  * If capacity is 0, a default capacity is used.
  */
 void mal_heap_init(MalHeap *heap, usize capacity);
+void mal_heap_begin_major(MalHeap *heap);
 
 /**
  * Destroy a heap runtime instance.
@@ -508,15 +513,14 @@ void *gc_realloc_raw_profiled(MalHeap *heap, void *ptr, usize new_size, u8 profi
 typedef void (*MalHeapFinalizeFn)(MalHeapHeader *cell);
 
 /**
- * Reclaim every unmarked (WHITE) managed cell: run `finalize` on it, mark it
- * FREE, and return it to its block's free list for reuse. Marked (BLACK) cells
- * are kept and reset to WHITE for the next cycle. Caller must have completed the
- * mark phase first. Large-object cells are not yet swept.
+ * Reclaim managed cells whose major color does not match. Finalize dead cells,
+ * return block cells to free lists, and release managed large cells. Matching
+ * survivors become old. The caller must complete marking and weak processing first.
  */
 void mal_heap_sweep(MalHeap *heap, MalHeapFinalizeFn finalize);
 
-/** Sweep allocation-touched blocks after a minor mark. Old BLACK cells stay
- * live; existing FREE links remain valid. Empty blocks await a major before
+/** Sweep allocation-touched cells after a minor mark. Old cells stay live;
+ * existing FREE links remain valid. Empty blocks await a major before
  * page reclamation so no global free-list removal is needed. */
 void mal_heap_sweep_minor(MalHeap *heap, MalHeapFinalizeFn finalize);
 
@@ -529,10 +533,10 @@ void mal_heap_sweep_minor(MalHeap *heap, MalHeapFinalizeFn finalize);
 void mal_heap_sweep_begin(MalHeap *heap);
 
 /**
- * Sweep up to `max_blocks` managed (CELL) blocks from the cursor, reclaiming their
- * WHITE cells (finalize + free list) and recycling fully-dead blocks. Returns true
- * once the whole heap is swept (cursor exhausted) — the caller then closes the
- * cycle. `max_blocks == (usize)-1` sweeps everything remaining (the synchronous
+ * Sweep up to `max_blocks` managed blocks or large records from the captured cursors.
+ * Returns true when both cursors finish. `max_blocks == (usize)-1` sweeps the
+ * remaining heap synchronously. New large cells during the sweep are charged at
+ * allocation and stay ahead of the cursor. The caller then closes the
  * finish). Requires a prior mal_heap_sweep_begin.
  */
 bool mal_heap_sweep_step(MalHeap *heap, MalHeapFinalizeFn finalize, usize max_blocks);

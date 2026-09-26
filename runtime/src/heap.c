@@ -12,6 +12,8 @@
 #include "./shape.h"
 
 static _Atomic(u64) g_next_heap_identity = 1;
+/* One active mutator binds header initialization to its heap's major color. */
+static u8 g_allocation_mark_color;
 
 /* An allocation requests collection; the mutator honors it at a safepoint. */
 static inline void mal_heap_maybe_trigger_gc(const MalHeap *heap) {
@@ -337,9 +339,12 @@ static void mal_gc_unlink_large(MalGcLarge **head, MalGcLarge *rec) {
     if (rec->next != nullptr) rec->next->prev = rec->prev;
 }
 
-static bool mal_gc_sweep_large(MalHeap *heap, MalGcLarge *rec, MalHeapFinalizeFn finalize) {
+static bool mal_gc_sweep_large(MalHeap *heap, MalGcLarge *rec, MalHeapFinalizeFn finalize, bool major) {
     MalHeapHeader *header = (MalHeapHeader *) ((u8 *) rec + mal_gc_large_data_offset());
-    if (header->mark == MAL_MARK_BLACK) {
+    bool live = major ? mal_heap_mark_is_current(header->mark, heap->mark_color)
+        : mal_heap_mark_is_old(header->mark);
+    if (live) {
+        if (major) header->mark |= MAL_MARK_OLD;
         rec->accounted = 1;
         return true;
     }
@@ -472,6 +477,8 @@ void mal_heap_init(MalHeap *heap, usize capacity) {
     heap->large = nullptr;
     heap->raw_large = nullptr;
     heap->young_large = nullptr;
+    heap->mark_color = 0;
+    g_allocation_mark_color = 0;
     memset(heap->cell_blocks, 0, sizeof(heap->cell_blocks));
     memset(heap->raw_blocks, 0, sizeof(heap->raw_blocks));
     memset(heap->cell_free, 0, sizeof(heap->cell_free));
@@ -556,8 +563,13 @@ void mal_heap_header_init(MalHeapHeader *header, MalHeapType type) {
     header->type = type;
     header->storage = MAL_HEAP_STORAGE_DYNAMIC;
     // New cells stay live when allocated during an in-flight incremental sweep.
-    header->mark = mal_gc_black_alloc ? MAL_MARK_BLACK : MAL_MARK_WHITE;
+    header->mark = g_allocation_mark_color | (mal_gc_black_alloc ? MAL_MARK_OLD : 0);
     header->dirty = 0; // not on the remembered set
+}
+
+void mal_heap_begin_major(MalHeap *heap) {
+    heap->mark_color ^= MAL_MARK_COLOR;
+    g_allocation_mark_color = heap->mark_color;
 }
 
 MalHeapType mal_heap_header_type(const MalHeapHeader *header) {
@@ -809,13 +821,13 @@ static void mal_heap_sweep_block(
     for (u8 *cell = (u8 *) block + data_offset; cell + block->cell_size <= block->bump;
         cell += block->cell_size) {
         MalHeapHeader *header = (MalHeapHeader *) cell;
-        if (header->mark == MAL_MARK_BLACK) {
-            // Survivors stay old; a major resets marks before its full trace.
+        if (mal_heap_mark_is_current(header->mark, heap->mark_color)) {
+            header->mark |= MAL_MARK_OLD;
             *live_bytes += block->cell_size;
             block_live++;
             continue;
         }
-        if (header->mark == MAL_MARK_WHITE) {
+        if ((header->mark & MAL_MARK_FREE) == 0) {
             // Unreached: dead. Finalize (frees its owned side allocations), then
             // tombstone so a later sweep does not finalize it again.
             finalize(header);
@@ -877,7 +889,7 @@ void mal_heap_sweep(MalHeap *heap, MalHeapFinalizeFn finalize) {
     MalGcLarge *large = heap->large;
     while (large != nullptr) {
         MalGcLarge *next = large->next;
-        if (mal_gc_sweep_large(heap, large, finalize)) live_bytes += large->size;
+        if (mal_gc_sweep_large(heap, large, finalize, true)) live_bytes += large->size;
         large = next;
     }
 
@@ -899,9 +911,9 @@ void mal_heap_sweep_minor(MalHeap *heap, MalHeapFinalizeFn finalize) {
         for (u8 *cell = (u8 *) block + data_offset;
             cell + block->cell_size <= block->bump; cell += block->cell_size) {
             MalHeapHeader *header = (MalHeapHeader *) cell;
-            if (header->mark == MAL_MARK_BLACK) {
+            if (mal_heap_mark_is_old(header->mark)) {
                 block_live++;
-            } else if (header->mark == MAL_MARK_WHITE) {
+            } else if ((header->mark & MAL_MARK_FREE) == 0) {
                 finalize(header);
                 header->mark = MAL_MARK_FREE;
                 if (heap->poison_on_free) {
@@ -927,7 +939,7 @@ void mal_heap_sweep_minor(MalHeap *heap, MalHeapFinalizeFn finalize) {
         large->young_prev = nullptr;
         if (large->kind == MAL_GC_BLOCK_CELL) {
             bool accounted = large->accounted;
-            if (mal_gc_sweep_large(heap, large, finalize) && !accounted) {
+            if (mal_gc_sweep_large(heap, large, finalize, false) && !accounted) {
                 heap->live_bytes += large->size;
             }
         }
@@ -988,7 +1000,7 @@ bool mal_heap_sweep_step(MalHeap *heap, MalHeapFinalizeFn finalize, usize max_bl
         if (swept >= max_blocks) return false;
         MalGcLarge *large = heap->sweep_large;
         heap->sweep_large = large->next;
-        if (mal_gc_sweep_large(heap, large, finalize)) heap->sweep_live_bytes += large->size;
+        if (mal_gc_sweep_large(heap, large, finalize, true)) heap->sweep_live_bytes += large->size;
         swept++;
     }
     // Cursor exhausted: the whole heap is swept.

@@ -57,14 +57,10 @@
 #endif
 
 bool mal_gc_marking_active = false;
-/* Black allocation: while true, freshly allocated managed cells are born BLACK
- * (see mal_heap_header_init) so a cell created mid-cycle is never swept this
- * cycle. On for the WHOLE cycle (init-mark through sweep-complete), not just the
- * mark phase — a WHITE cell created during the incremental sweep would otherwise
- * be reclaimed while still reachable. Under generational this over-tenures those
- * cells (they read as sticky-old); accepted for v1, counted in MAL_GC_STATS. */
+/* New cells take the active color and OLD bit through mark and sweep, so a
+ * post-snapshot allocation cannot be reclaimed by the in-flight major. */
 bool mal_gc_black_alloc = false;
-/* Bytes born BLACK (over-tenured) since process start; see mal_gc_black_alloc. */
+/* Bytes promoted by allocation during a major since process start. */
 usize mal_gc_black_alloc_bytes = 0;
 
 volatile bool mal_gc_poll = false;
@@ -183,7 +179,7 @@ struct MalGcState {
     usize dead_keys_count;
     usize dead_keys_capacity;
 
-    // Remembered set: old (sticky-BLACK) cells written with a young pointer since
+    // Remembered set: old cells written with a young pointer since
     // the last collection (the card barrier records them). Rebuilt every collection.
     MalHeapHeader **remembered;
     usize remembered_count;
@@ -203,6 +199,7 @@ struct MalGcState {
 
     // Incremental-cycle state machine (driven from mal_gc_safepoint).
     MalGcPhase phase;
+    bool major_collection;
     // bytes_allocated at which an in-flight cycle must finish synchronously (the
     // hard backstop = the old STW trigger). Degrade-to-STW, never OOM.
     usize backstop_at;
@@ -344,7 +341,8 @@ void mal_gc_satb_record(MalValue old_value) {
         return;
     }
     MalHeapHeader *cell = mal_value_to_heap(old_value);
-    if (cell->storage == MAL_HEAP_STORAGE_IMMORTAL || cell->mark == MAL_MARK_BLACK) {
+    if (cell->storage == MAL_HEAP_STORAGE_IMMORTAL ||
+        mal_heap_mark_is_current(cell->mark, g_gc_vm->heap.mark_color)) {
         return;
     }
     if (g_gc->satb_count == g_gc->satb_capacity) {
@@ -583,7 +581,7 @@ static void mal_gc_shade(MalHeapHeader *cell) {
         return;
     }
     if (g_gc_verifying) {
-        if (cell->mark == MAL_MARK_FREE) {
+        if (cell->mark & MAL_MARK_FREE) {
             fprintf(stderr, "[gc verify] live cell (source type=%d) points to a freed "
                 "cell type=%d: a root or trace edge was missed, the target was swept "
                 "while still reachable\n", g_gc_verify_source, cell->type);
@@ -592,23 +590,35 @@ static void mal_gc_shade(MalHeapHeader *cell) {
         return;
     }
 #if defined(__wasi__)
-    if (cell->mark == MAL_MARK_BLACK) {
-        return;
-    }
-    if (cell->mark == MAL_MARK_FREE) {
+    u8 mark = cell->mark;
+    if (mark & MAL_MARK_FREE) {
         fprintf(stderr, "[gc] attempted to shade a reclaimed cell\n");
         abort();
     }
-    cell->mark = MAL_MARK_BLACK;
+    if (g_gc->major_collection) {
+        if (mal_heap_mark_is_current(mark, g_gc_vm->heap.mark_color)) return;
+        cell->mark = (mark & ~MAL_MARK_COLOR) | g_gc_vm->heap.mark_color;
+    } else {
+        if (mal_heap_mark_is_old(mark)) return;
+        cell->mark = mark | MAL_MARK_OLD;
+    }
 #else
-    u8 expected = MAL_MARK_WHITE;
-    if (!atomic_compare_exchange_strong_explicit(&cell->mark, &expected,
-            MAL_MARK_BLACK, memory_order_relaxed, memory_order_relaxed)) {
-        if (expected == MAL_MARK_FREE) {
+    u8 expected = atomic_load_explicit(&cell->mark, memory_order_relaxed);
+    for (;;) {
+        if (expected & MAL_MARK_FREE) {
             fprintf(stderr, "[gc] attempted to shade a reclaimed cell\n");
             abort();
         }
-        return;
+        u8 desired;
+        if (g_gc->major_collection) {
+            if (mal_heap_mark_is_current(expected, g_gc_vm->heap.mark_color)) return;
+            desired = (expected & ~MAL_MARK_COLOR) | g_gc_vm->heap.mark_color;
+        } else {
+            if (mal_heap_mark_is_old(expected)) return;
+            desired = expected | MAL_MARK_OLD;
+        }
+        if (atomic_compare_exchange_weak_explicit(&cell->mark, &expected, desired,
+                memory_order_relaxed, memory_order_relaxed)) break;
     }
 #endif
     mal_gc_grey_push(cell);
@@ -627,7 +637,11 @@ static bool mal_gc_is_marked(MalValue value) {
         return true;
     }
     MalHeapHeader *cell = mal_value_to_heap(value);
-    return cell->storage == MAL_HEAP_STORAGE_IMMORTAL || cell->mark == MAL_MARK_BLACK;
+    if (cell->storage == MAL_HEAP_STORAGE_IMMORTAL) return true;
+    u8 mark = cell->mark;
+    return g_gc->major_collection
+        ? mal_heap_mark_is_current(mark, g_gc_vm->heap.mark_color)
+        : mal_heap_mark_is_old(mark);
 }
 
 void mal_gc_mark_values(const MalValue *values, i32 count) {
@@ -772,7 +786,7 @@ static void mal_gc_trace_object_common(MalObject *object) {
     mal_gc_trace_table(object->overflow);
 }
 
-/** Trace a cell's outgoing edges (the cell is already BLACK). */
+/** Trace a cell's outgoing edges after its mark claim. */
 static void mal_gc_trace_cell(MalHeapHeader *cell) {
     switch (cell->type) {
         case MAL_HEAP_STRING: {
@@ -1517,7 +1531,7 @@ static void mal_gc_finalize_cell(MalHeapHeader *cell) {
 /** Verify visitor: re-trace a survivor's edges (in verify mode shading aborts on
  * a freed target). FREE cells are dead this cycle and are skipped. */
 static void mal_gc_verify_cell(MalHeapHeader *cell) {
-    if (cell->mark != MAL_MARK_FREE) {
+    if ((cell->mark & MAL_MARK_FREE) == 0) {
         g_gc_verify_source = (i32) cell->type;
         mal_gc_trace_cell(cell);
         g_gc_verify_source = -1;
@@ -1816,10 +1830,9 @@ static void mal_gc_weak_pass(void) {
     }
 }
 
-// --- Generational (sticky mark-bit) state -----------------------------------
+// --- Generational state ----------------------------------------------------
 //
-// Remembered set: old (survived-a-collection, sticky-BLACK) cells written with a
-// young (WHITE) pointer since the last collection, recorded by the card barrier
+// Remembered set: old cells written with a young pointer, recorded by the card barrier
 // (gc.h). A minor collection scans roots + traces each remembered cell to reach
 // its young children, WITHOUT re-marking the old generation — that is the work it
 // saves over a full mark. The set is rebuilt every collection.
@@ -1840,16 +1853,6 @@ static void mal_gc_clear_remembered(void) {
         g_gc->remembered[i]->dirty = 0;
     }
     g_gc->remembered_count = 0;
-}
-
-// Major-collection pre-pass visitor: demote every live cell to WHITE so the
-// following full mark reclaims old garbage and cross-generation cycles, and drop
-// any stale dirty flag (the remembered set is emptied alongside).
-static void mal_gc_reset_marks_cell(MalHeapHeader *cell) {
-    if (cell->mark == MAL_MARK_BLACK) {
-        cell->mark = MAL_MARK_WHITE;
-    }
-    cell->dirty = 0;
 }
 
 // --- Statistics helpers ----------------------------------------------------
@@ -1887,7 +1890,7 @@ static usize mal_gc_advance_trigger(MalVm *vm) {
     return grow;
 }
 
-/* A major resets old marks; a minor traces young cells from roots and remembered owners. */
+/* A major flips color; a minor traces young cells from roots and remembered owners. */
 static void mal_gc_collect_sync(MalVm *vm, bool major) {
 	mal_profile_event(vm, MAL_PROFILE_RECORD_GC_BEGIN, major ? 1 : 0);
     u64 start_ns = g_gc->stats_enabled ? mal_monotonic_now_ns() : 0;
@@ -1895,17 +1898,18 @@ static void mal_gc_collect_sync(MalVm *vm, bool major) {
     g_gc->weak_maps_count = 0;
     g_gc->weak_refs_count = 0;
     g_gc->fin_regs_count = 0;
+    g_gc->major_collection = major;
 
     if (major) {
-        mal_heap_walk_cells(&vm->heap, mal_gc_reset_marks_cell);
-        g_gc->remembered_count = 0; // dirty flags cleared by the reset walk above
+        mal_gc_clear_remembered();
+        mal_heap_begin_major(&vm->heap);
     }
-    // Survivors of BOTH minor and (gen) major stay BLACK = old (sticky promotion).
+    // Both collection kinds promote their survivors to old.
 
     mal_gc_scan_roots(vm);
     if (!major) {
         // Trace each remembered old cell's edges to reach (and mark) its young
-        // children; the old cell itself is left BLACK (not re-shaded), so the old
+        // children; the old cell itself stays claimed, so the old
         // generation is not re-marked. mal_gc_trace_cell also (re-)registers weak
         // collections it reaches, so a dirtied old WeakMap's dead young keys are
         // still cleaned this cycle.
@@ -1925,6 +1929,7 @@ static void mal_gc_collect_sync(MalVm *vm, bool major) {
     }
 
     mal_gc_clear_remembered();
+    g_gc->major_collection = false;
 
     if (g_gc->verify_enabled) {
         mal_gc_verify(vm);
@@ -1958,12 +1963,7 @@ static void mal_gc_collect_sync(MalVm *vm, bool major) {
 // so both pauses are O(roots), never O(heap).
 // ===========================================================================
 
-/* Begin an incremental MAJOR cycle: the init-mark pause. Scan roots, enable marking
- * (SATB barrier) + black allocation, and demote the whole
- * heap to WHITE first (as today's STW major does) so old garbage and
- * cross-generation cycles are reclaimed this cycle. O(roots + heap-reset); the
- * heap-reset walk is the one O(heap) step of a pause, unavoidable for a sticky
- * major and identical to the STW major's pre-pass. */
+/* Flipping the major color makes old marks stale without a heap-wide reset. */
 static void mal_gc_cycle_begin(MalVm *vm) {
     u64 start_ns = g_gc->stats_enabled ? mal_monotonic_now_ns() : 0;
     g_gc->grey_count = 0;
@@ -1973,8 +1973,9 @@ static void mal_gc_cycle_begin(MalVm *vm) {
     g_gc->satb_count = 0;
     g_gc->satb_drained = 0;
 
-    mal_heap_walk_cells(&vm->heap, mal_gc_reset_marks_cell);
-    g_gc->remembered_count = 0; // dirty flags cleared by the reset walk above
+    mal_gc_clear_remembered();
+    mal_heap_begin_major(&vm->heap);
+    g_gc->major_collection = true;
 
     // Enable the SATB deletion barrier + black allocation, THEN snapshot the roots.
     // Ordering: with marking active, any store the mutator makes after this shades
@@ -2016,7 +2017,7 @@ static void mal_gc_cycle_remark(MalVm *vm) {
 
     // Marking is complete: stop the barrier (further stores need no snapshot) and
     // hand off to the sweep. Black allocation stays ON through the sweep so a cell
-    // born during sweeping is not reclaimed as WHITE garbage.
+    // born during sweeping is retained.
     mal_gc_marking_active = false;
     g_gc->satb_count = 0;
     g_gc->satb_drained = 0;
@@ -2041,6 +2042,7 @@ static void mal_gc_cycle_finish_sweep(MalVm *vm) {
     mal_gc_clear_remembered();
     mal_gc_black_alloc = false;
     g_gc->phase = MAL_GC_PHASE_IDLE;
+    g_gc->major_collection = false;
 
     if (g_gc->verify_enabled) {
         mal_gc_verify(vm);
@@ -2255,7 +2257,7 @@ void mal_gc_safepoint(MalVm *vm) {
  * reachability. FREE cells (already finalized this run) are skipped, and the
  * cell is marked FREE so a second pass is a no-op. */
 static void mal_gc_finalize_live_cell(MalHeapHeader *cell) {
-    if (cell->mark != MAL_MARK_FREE) {
+    if ((cell->mark & MAL_MARK_FREE) == 0) {
         mal_gc_finalize_cell(cell);
         cell->mark = MAL_MARK_FREE;
     }

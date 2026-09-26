@@ -11,7 +11,7 @@ typedef struct MalGcState MalGcState;
 extern bool mal_gc_marking_active;
 /* Fresh cells remain live while an incremental sweep is in flight. */
 extern bool mal_gc_black_alloc;
-/* Bytes born BLACK (over-tenured under generational) since process start. */
+/* Bytes promoted immediately by allocation during a major cycle. */
 extern usize mal_gc_black_alloc_bytes;
 
 /* Raised by the collector to request that mutators reach a safepoint; polled at
@@ -118,10 +118,9 @@ static inline void mal_gc_write_barrier(MalValue old_value) {
 }
 
 /*
- * Generational card / remembered-set barrier. The collector is a non-moving sticky-mark-bit
- * generational design: a cell that survives a collection keeps its BLACK mark
- * ("old"); fresh allocations are WHITE ("young"). A minor collection scans roots
- * plus the remembered set (it does NOT reset or re-scan the old generation), so
+ * Generational card / remembered-set barrier. A cell that survives a collection
+ * gains the OLD bit; fresh allocations are young. A minor scans roots plus the
+ * remembered set without re-tracing the whole old generation, so
  * any old->young pointer MUST be recorded here or the young target is swept while
  * still reachable. `mal_gc_remember` links an old cell on the remembered set
  * (idempotent via the `dirty` flag); the inline helpers below are the call sites'
@@ -129,12 +128,12 @@ static inline void mal_gc_write_barrier(MalValue old_value) {
  */
 void mal_gc_remember(MalHeapHeader *owner);
 
-/* Remember `owner` if it is old (sticky-BLACK) and not already on the set. Used
+/* Remember `owner` if it is old and not already on the set. Used
  * for aggregate payloads (a generator frame, a promise's reaction list) where the
  * young target is not a single inspectable value — the minor collector traces the
  * whole cell, so unconditional remembering of an old owner is correct. */
 static inline void mal_gc_remember_if_old(MalHeapHeader *owner) {
-    if (owner != nullptr && owner->mark == MAL_MARK_BLACK && !owner->dirty) {
+    if (owner != nullptr && mal_heap_mark_is_old(owner->mark) && !owner->dirty) {
         mal_gc_remember(owner);
     }
 }
@@ -144,11 +143,11 @@ static inline void mal_gc_remember_if_old(MalHeapHeader *owner) {
  * case — a non-heap or already-old value never dirties the owner. Call AT or just
  * after the store of `new_value` into a pointer field of `owner`. */
 static inline void mal_gc_card(MalHeapHeader *owner, MalValue new_value) {
-    if (owner == nullptr || owner->mark != MAL_MARK_BLACK || owner->dirty) {
+    if (owner == nullptr || !mal_heap_mark_is_old(owner->mark) || owner->dirty) {
         return;
     }
     if (mal_value_is_heap(new_value) &&
-        mal_value_to_heap(new_value)->mark == MAL_MARK_WHITE) {
+        !mal_heap_mark_is_old(mal_value_to_heap(new_value)->mark)) {
         mal_gc_remember(owner);
     }
 }
