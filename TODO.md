@@ -24,7 +24,10 @@ rooting, and resource-safety defects can interrupt that order.
    stabilize alpha releases and recoverable resource handling.
 6. Advance ECMAScript, WinterTC, Node, and ecosystem correctness. Their existing
    backlog below remains in scope; it is not replaced by the performance programme.
-7. Pursue actors, SMP, embedding, and freestanding targets after the active runtime
+7. Move the native generational collector to GC workers, with the Wasm reactor
+   executing the same collector work inline. Follow the ownership and root contract
+   in [generational GC workers](docs/decisions/09-generational-gc-workers.md).
+8. Pursue actors, SMP, embedding, and freestanding targets after the active runtime
    foundations are ready.
 
 ## Verification workflow
@@ -731,13 +734,23 @@ remains a Maligator extension and does not count as global fetch conformance.
 - [ ] Define a minimal-core profile omitting unused bytecode, Intl data, web APIs, and
       host modules. Verify omitted personalities do not remain linked indirectly.
 
+## Generational GC workers
+
+- [ ] Consolidate the generational collector and isolate-owned GC state; remove
+      non-generational and single-threaded collector mode flags.
+- [ ] Parallelize native tracing while JavaScript is parked; retain inline Wasm
+      scheduling and mutator-owned finalization.
+- [ ] Run major marking concurrently after root publication and per-type tracing
+      access are safe under worker overlap.
+- [ ] Validate block reclamation ownership, shutdown, Wasm parity, race safety,
+      representative latency, throughput, CPU, and memory before accepting the
+      native default.
+
 # Triggered work
 
 These are not active tasks and become actionable only when their condition is
 observed.
 
-- Add concurrent marker or parallel GC workers only when a realistic large-heap
-  workload shows mutator marking is a leading cost.
 - Elide SATB barriers only if concurrent GC becomes the default and a realistic
   store-heavy workload makes the barrier material.
 - Revisit MalVm and host-structure layout when multiple VMs or isolates are active in

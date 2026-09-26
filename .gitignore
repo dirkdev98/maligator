@@ -13,6 +13,7 @@ tsconfig.tsbuildinfo
 tests/local/tmp*.js
 maligator_static_values*
 *_todo.md
+*_local.md
 .claude
 AGENTS.local.md
 scripts/local-gh-push.sh
