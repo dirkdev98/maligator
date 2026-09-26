@@ -67,6 +67,7 @@
 		"test:rust": "node ./scripts/test-rust.ts",
 		"test:sanitize": "node ./scripts/test-sanitize.ts",
 		"test:smoke": "node ./scripts/test-suite.ts smoke",
+		"test:tsan": "MAL_TSAN=1 node ./scripts/vitest.ts run --project native",
 		"test:unit": "node ./scripts/vitest.ts --project unit",
 		"test:unit:full-only": "node ./scripts/vitest.ts --maligator-unit-full-only --project unit --testTimeout=60000",
 		"test:wpt": "node ./scripts/wpt.ts",

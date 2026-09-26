@@ -8,3 +8,9 @@ globalThis.__heldAcrossTeardown = heldAcrossTeardown();
 if (globalThis.__heldAcrossTeardown.next().value !== 17) {
 	throw new Error("generator failed to suspend");
 }
+
+const retainedGraph = [];
+for (let i = 0; i < 1024; i++) {
+	retainedGraph.push({ child: { value: i } });
+}
+globalThis.__retainedGraph = retainedGraph;

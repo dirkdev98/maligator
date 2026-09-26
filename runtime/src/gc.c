@@ -3,6 +3,9 @@
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
+#if !defined(__wasi__)
+#include <pthread.h>
+#endif
 
 #include "./array_buffer_object.h"
 #include "./array_object.h"
@@ -120,11 +123,40 @@ typedef enum MalGcPhase {
     MAL_GC_PHASE_SWEEP, // incremental block sweep
 } MalGcPhase;
 
+#if !defined(__wasi__)
+#define MAL_GC_WORKER_COUNT 2
+typedef struct MalGcWorker {
+    MalGcState *gc;
+    pthread_t thread;
+    MalHeapHeader **discovered;
+    usize discovered_count;
+    usize discovered_capacity;
+    usize index;
+    u64 observed_batch;
+    u64 traced;
+} MalGcWorker;
+static _Thread_local MalGcWorker *g_trace_worker = nullptr;
+#endif
+
 struct MalGcState {
     // Grey worklist (explicit, no recursion): shaded-but-not-yet-traced cells.
     MalHeapHeader **grey;
     usize grey_count;
     usize grey_capacity;
+    MalHeapHeader **batch;
+    usize batch_capacity;
+#if !defined(__wasi__)
+    pthread_mutex_t worker_mutex;
+    pthread_cond_t worker_ready;
+    pthread_cond_t worker_done;
+    MalGcWorker workers[MAL_GC_WORKER_COUNT];
+    usize workers_created;
+    usize workers_pending;
+    usize worker_batch_count;
+    u64 worker_batch_epoch;
+    bool worker_sync_initialized;
+    bool worker_stop;
+#endif
 
     // Weak collections (WeakMap/WeakSet) reached during the main mark. Their entry
     // key/value edges are NOT traced there; the ephemeron pass after the mark marks
@@ -204,7 +236,12 @@ struct MalGcState {
     u64 remark_ns; // last remark pause
     u64 max_mark_step_ns; // largest single mark step
     u64 max_sweep_step_ns; // largest single sweep step
+    u64 worker_traces;
 };
+
+#if !defined(__wasi__)
+static void mal_gc_workers_stop(MalGcState *g);
+#endif
 
 /* Marking helpers and SATB barriers use the active VM throughout its lifetime. */
 static MalVm *g_gc_vm = nullptr;
@@ -242,9 +279,26 @@ i32 mal_gc_swap_stress_interval(i32 interval) {
 }
 
 static void mal_gc_grey_push(MalHeapHeader *cell) {
+#if !defined(__wasi__)
+    if (g_trace_worker != nullptr) {
+        MalGcWorker *worker = g_trace_worker;
+        if (worker->discovered_count == worker->discovered_capacity) {
+            usize capacity = worker->discovered_capacity == 0
+                ? 256 : worker->discovered_capacity * 2;
+            MalHeapHeader **cells = realloc(worker->discovered,
+                capacity * sizeof(MalHeapHeader *));
+            if (cells == nullptr) abort();
+            worker->discovered = cells;
+            worker->discovered_capacity = capacity;
+        }
+        worker->discovered[worker->discovered_count++] = cell;
+        return;
+    }
+#endif
     if (g_gc->grey_count == g_gc->grey_capacity) {
         g_gc->grey_capacity = g_gc->grey_capacity == 0 ? 4096 : g_gc->grey_capacity * 2;
         g_gc->grey = realloc(g_gc->grey, g_gc->grey_capacity * sizeof(MalHeapHeader *));
+        if (g_gc->grey == nullptr) abort();
     }
     g_gc->grey[g_gc->grey_count++] = cell;
 }
@@ -326,11 +380,13 @@ static void mal_gc_print_stats_now(void) {
             (unsigned long long) mal_vm_stack_object_materialization_count());
     fprintf(stderr,
             " cycles=%llu sync_backstop=%llu over_tenure_bytes=%llu "
-            "init_mark_ms=%.3f remark_ms=%.3f max_mark_step_ms=%.3f max_sweep_step_ms=%.3f",
+            "init_mark_ms=%.3f remark_ms=%.3f max_mark_step_ms=%.3f max_sweep_step_ms=%.3f "
+            "worker_traces=%llu",
             (unsigned long long) g->cycles, (unsigned long long) g->sync_backstop,
             (unsigned long long) mal_gc_black_alloc_bytes,
             (double) g->init_mark_ns / 1.0e6, (double) g->remark_ns / 1.0e6,
-            (double) g->max_mark_step_ns / 1.0e6, (double) g->max_sweep_step_ns / 1.0e6);
+            (double) g->max_mark_step_ns / 1.0e6, (double) g->max_sweep_step_ns / 1.0e6,
+            (unsigned long long) g->worker_traces);
     fprintf(stderr, "\n");
     if (getenv("MAL_PROMISE_STATS") != nullptr) {
         fprintf(
@@ -487,6 +543,9 @@ void mal_gc_begin_teardown(MalVm *vm) {
     if (g == nullptr) {
         return;
     }
+#if !defined(__wasi__)
+    mal_gc_workers_stop(g);
+#endif
     // Teardown invalidates published roots, so abandon any unfinished snapshot.
     g->phase = MAL_GC_PHASE_IDLE;
     g->stress_interval = 0;
@@ -519,11 +578,6 @@ void mal_gc_begin_teardown(MalVm *vm) {
 static i32 g_gc_verify_source = -1;
 static bool g_gc_verifying = false;
 
-/* Mark-byte claims will become atomic when workers share this worklist. */
-static inline void mal_gc_set_black(MalHeapHeader *cell) {
-    cell->mark = MAL_MARK_BLACK;
-}
-
 static void mal_gc_shade(MalHeapHeader *cell) {
     if (cell == nullptr || cell->storage == MAL_HEAP_STORAGE_IMMORTAL) {
         return;
@@ -537,10 +591,26 @@ static void mal_gc_shade(MalHeapHeader *cell) {
         }
         return;
     }
+#if defined(__wasi__)
     if (cell->mark == MAL_MARK_BLACK) {
         return;
     }
-    mal_gc_set_black(cell);
+    if (cell->mark == MAL_MARK_FREE) {
+        fprintf(stderr, "[gc] attempted to shade a reclaimed cell\n");
+        abort();
+    }
+    cell->mark = MAL_MARK_BLACK;
+#else
+    u8 expected = MAL_MARK_WHITE;
+    if (!atomic_compare_exchange_strong_explicit(&cell->mark, &expected,
+            MAL_MARK_BLACK, memory_order_relaxed, memory_order_relaxed)) {
+        if (expected == MAL_MARK_FREE) {
+            fprintf(stderr, "[gc] attempted to shade a reclaimed cell\n");
+            abort();
+        }
+        return;
+    }
+#endif
     mal_gc_grey_push(cell);
 }
 
@@ -1463,10 +1533,180 @@ static void mal_gc_verify(MalVm *vm) {
     g_gc_verifying = false;
 }
 
+static bool mal_gc_worker_can_trace(MalHeapHeader *cell) {
+    if (g_type_tracers[cell->type] != nullptr) return false;
+    switch (cell->type) {
+        case MAL_HEAP_STRING:
+        case MAL_HEAP_SYMBOL:
+        case MAL_HEAP_BIGINT:
+        case MAL_HEAP_ENV:
+        case MAL_HEAP_OBJECT:
+        case MAL_HEAP_ARRAY_OBJECT:
+        case MAL_HEAP_FUNCTION_OBJECT:
+        case MAL_HEAP_NATIVE_FUNCTION_OBJECT:
+        case MAL_HEAP_BOUND_FUNCTION_OBJECT:
+        case MAL_HEAP_PRIMITIVE_WRAPPER_OBJECT:
+        case MAL_HEAP_ITERATOR_OBJECT:
+            return true;
+        case MAL_HEAP_MAP_OBJECT:
+        case MAL_HEAP_SET_OBJECT:
+            return !((MalMapObject *) cell)->weak;
+        default:
+            return false;
+    }
+}
+
+#if !defined(__wasi__)
+static void *mal_gc_worker_main(void *argument) {
+    MalGcWorker *worker = argument;
+    MalGcState *g = worker->gc;
+    g_trace_worker = worker;
+    pthread_mutex_lock(&g->worker_mutex);
+    for (;;) {
+        while (!g->worker_stop && worker->observed_batch == g->worker_batch_epoch) {
+            pthread_cond_wait(&g->worker_ready, &g->worker_mutex);
+        }
+        if (g->worker_stop) break;
+        worker->observed_batch = g->worker_batch_epoch;
+        usize count = g->worker_batch_count;
+        MalHeapHeader **batch = g->batch;
+        pthread_mutex_unlock(&g->worker_mutex);
+        for (usize i = worker->index; i < count; i += MAL_GC_WORKER_COUNT) {
+            mal_gc_trace_cell(batch[i]);
+        }
+        pthread_mutex_lock(&g->worker_mutex);
+        if (--g->workers_pending == 0) pthread_cond_signal(&g->worker_done);
+    }
+    pthread_mutex_unlock(&g->worker_mutex);
+    g_trace_worker = nullptr;
+    return nullptr;
+}
+
+static void mal_gc_workers_start(MalGcState *g) {
+    if (g->worker_sync_initialized) return;
+    if (pthread_mutex_init(&g->worker_mutex, nullptr) != 0 ||
+        pthread_cond_init(&g->worker_ready, nullptr) != 0 ||
+        pthread_cond_init(&g->worker_done, nullptr) != 0) {
+        fprintf(stderr, "[gc] failed to initialize native worker synchronization\n");
+        abort();
+    }
+    g->worker_sync_initialized = true;
+    sigset_t worker_blocked;
+    sigset_t previous_mask;
+    sigemptyset(&worker_blocked);
+    sigaddset(&worker_blocked, SIGUSR1);
+    sigaddset(&worker_blocked, SIGPROF);
+    sigaddset(&worker_blocked, SIGINT);
+    sigaddset(&worker_blocked, SIGTERM);
+    int mask_result = pthread_sigmask(SIG_BLOCK, &worker_blocked, &previous_mask);
+    if (mask_result != 0) {
+        fprintf(stderr, "[gc] failed to mask signals during worker startup (%d)\n", mask_result);
+        abort();
+    }
+    for (usize i = 0; i < MAL_GC_WORKER_COUNT; ++i) {
+        MalGcWorker *worker = &g->workers[i];
+        worker->gc = g;
+        worker->index = i;
+        int result = pthread_create(&worker->thread, nullptr, mal_gc_worker_main, worker);
+        if (result != 0) {
+            pthread_mutex_lock(&g->worker_mutex);
+            g->worker_stop = true;
+            pthread_cond_broadcast(&g->worker_ready);
+            pthread_mutex_unlock(&g->worker_mutex);
+            for (usize joined = 0; joined < g->workers_created; ++joined) {
+                pthread_join(g->workers[joined].thread, nullptr);
+            }
+            pthread_sigmask(SIG_SETMASK, &previous_mask, nullptr);
+            fprintf(stderr, "[gc] failed to start native worker (%d)\n", result);
+            abort();
+        }
+        g->workers_created++;
+    }
+    mask_result = pthread_sigmask(SIG_SETMASK, &previous_mask, nullptr);
+    if (mask_result != 0) {
+        fprintf(stderr, "[gc] failed to restore mutator signal mask (%d)\n", mask_result);
+        abort();
+    }
+    mal_profile_mark_worker_cpu_possible();
+}
+
+static void mal_gc_workers_stop(MalGcState *g) {
+    if (!g->worker_sync_initialized) return;
+    pthread_mutex_lock(&g->worker_mutex);
+    g->worker_stop = true;
+    pthread_cond_broadcast(&g->worker_ready);
+    pthread_mutex_unlock(&g->worker_mutex);
+    for (usize i = 0; i < g->workers_created; ++i) {
+        pthread_join(g->workers[i].thread, nullptr);
+    }
+    g->workers_created = 0;
+}
+
+static void mal_gc_workers_trace_batch(MalGcState *g, usize count) {
+    mal_gc_workers_start(g);
+    pthread_mutex_lock(&g->worker_mutex);
+    g->worker_batch_count = count;
+    g->workers_pending = g->workers_created;
+    g->worker_batch_epoch++;
+    pthread_cond_broadcast(&g->worker_ready);
+    while (g->workers_pending != 0) {
+        pthread_cond_wait(&g->worker_done, &g->worker_mutex);
+    }
+    pthread_mutex_unlock(&g->worker_mutex);
+    for (usize i = 0; i < g->workers_created; ++i) {
+        MalGcWorker *worker = &g->workers[i];
+        for (usize j = 0; j < worker->discovered_count; ++j) {
+            mal_gc_grey_push(worker->discovered[j]);
+        }
+        worker->discovered_count = 0;
+    }
+    g->worker_traces += count;
+}
+#endif
+
+#define MAL_GC_TRACE_BATCH_SIZE 512
+#define MAL_GC_PARALLEL_BATCH_MIN 64
+
+static usize mal_gc_trace_grey_batch(usize limit) {
+    usize count = g_gc->grey_count;
+    if (count > limit) count = limit;
+    if (count > MAL_GC_TRACE_BATCH_SIZE) count = MAL_GC_TRACE_BATCH_SIZE;
+    if (count == 0) return 0;
+    if (g_gc->batch_capacity < count) {
+        MalHeapHeader **batch = realloc(g_gc->batch,
+            count * sizeof(MalHeapHeader *));
+        if (batch == nullptr) abort();
+        g_gc->batch = batch;
+        g_gc->batch_capacity = count;
+    }
+    for (usize i = 0; i < count; ++i) {
+        g_gc->batch[i] = g_gc->grey[--g_gc->grey_count];
+    }
+    usize safe_count = 0;
+    for (usize i = 0; i < count; ++i) {
+        MalHeapHeader *cell = g_gc->batch[i];
+        if (mal_gc_worker_can_trace(cell)) {
+            g_gc->batch[safe_count++] = cell;
+        } else {
+            mal_gc_trace_cell(cell);
+        }
+    }
+#if !defined(__wasi__)
+    if (safe_count >= MAL_GC_PARALLEL_BATCH_MIN) {
+        mal_gc_workers_trace_batch(g_gc, safe_count);
+        return count;
+    }
+#endif
+    for (usize i = 0; i < safe_count; ++i) {
+        mal_gc_trace_cell(g_gc->batch[i]);
+    }
+    return count;
+}
+
 /** Drain the grey worklist, tracing each cell's strong edges. */
 static void mal_gc_drain(void) {
     while (g_gc->grey_count > 0) {
-        mal_gc_trace_cell(g_gc->grey[--g_gc->grey_count]);
+        mal_gc_trace_grey_batch((usize) -1);
     }
 }
 
@@ -1821,8 +2061,7 @@ static bool mal_gc_mark_step(MalVm *vm, usize budget) {
     usize worked = 0;
     while (worked < budget) {
         if (g_gc->grey_count > 0) {
-            mal_gc_trace_cell(g_gc->grey[--g_gc->grey_count]);
-            worked++;
+            worked += mal_gc_trace_grey_batch(budget - worked);
         } else if (g_gc->satb_drained < g_gc->satb_count) {
             mal_gc_mark_value(g_gc->satb[g_gc->satb_drained++]);
             worked++;
@@ -2046,6 +2285,17 @@ void mal_gc_state_free(MalVm *vm) {
         return;
     }
     free(g->grey);
+    free(g->batch);
+#if !defined(__wasi__)
+    if (g->worker_sync_initialized) {
+        for (usize i = 0; i < MAL_GC_WORKER_COUNT; ++i) {
+            free(g->workers[i].discovered);
+        }
+        pthread_cond_destroy(&g->worker_done);
+        pthread_cond_destroy(&g->worker_ready);
+        pthread_mutex_destroy(&g->worker_mutex);
+    }
+#endif
     free(g->weak_maps);
     free(g->weak_refs);
     free(g->fin_regs);

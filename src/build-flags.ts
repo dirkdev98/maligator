@@ -45,7 +45,7 @@
 
 import type { Toolchain } from "./toolchain.ts";
 
-export type SanitizerMode = "none" | "asan" | "ubsan";
+export type SanitizerMode = "none" | "asan" | "ubsan" | "tsan";
 
 export interface NativeBuildPlan {
 	mode: "development" | "production";
@@ -264,6 +264,12 @@ function envOn(name: string, env: NodeJS.ProcessEnv = process.env): boolean {
  * stay at -O2 with no overhead or extra build directory.
  */
 export function sanitizerMode(env: NodeJS.ProcessEnv = process.env): SanitizerMode {
+	if (envOn("MAL_TSAN", env)) {
+		if (envOn("MAL_ASAN", env) || envOn("MAL_UBSAN", env)) {
+			throw new Error("ThreadSanitizer cannot be combined with ASan or UBSan");
+		}
+		return "tsan";
+	}
 	if (envOn("MAL_ASAN", env)) {
 		return "asan";
 	}
@@ -286,6 +292,7 @@ const SANITIZER_FLAGS: Record<SanitizerMode, Array<string>> = {
 		"-fno-omit-frame-pointer",
 	],
 	ubsan: ["-fsanitize=undefined", "-fno-sanitize-recover=all", "-fno-omit-frame-pointer"],
+	tsan: ["-fsanitize=thread", "-fno-sanitize-recover=all", "-fno-omit-frame-pointer"],
 };
 
 export function rejectObsoleteGcModes(env: NodeJS.ProcessEnv = process.env): void {

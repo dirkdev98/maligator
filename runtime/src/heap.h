@@ -1,5 +1,9 @@
 #pragma once
 
+#if !defined(__wasi__)
+#include <stdatomic.h>
+#endif
+
 #include "./defaults.h"
 
 #define MAL_DEFAULT_HEAP_SIZE 16 * 1024
@@ -414,7 +418,11 @@ typedef enum MalHeapMark {
 typedef struct MalHeapHeader {
     MalHeapType type;
     MalHeapStorage storage;
+#if defined(__wasi__)
     u8 mark;
+#else
+    _Atomic(u8) mark;
+#endif
     u8 dirty;
 } MalHeapHeader;
 
