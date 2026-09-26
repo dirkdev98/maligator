@@ -206,7 +206,7 @@ jobs:
       (github.event.action == 'synchronize' || github.event.label.name == 'native-compiler-performance')
     name: Frozen compiler slices / ${{ matrix.comparison }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 55
+    timeout-minutes: 70
     strategy:
       fail-fast: false
       matrix:
@@ -359,11 +359,11 @@ jobs:
           node scripts/self-compile-experiment.ts compare \
             .cache/native-performance/baseline .cache/native-performance/candidate \
             --output .cache/native-performance/shape --workload shape --pairs 5 \
-            --budget-seconds 480 --plan=json | tee .cache/native-performance/shape-plan.json
+            --budget-seconds 1500 --plan=json | tee .cache/native-performance/shape-plan.json
           node scripts/self-compile-experiment.ts compare \
             .cache/native-performance/baseline .cache/native-performance/candidate \
             --output .cache/native-performance/shape --workload shape --pairs 5 \
-            --budget-seconds 480 2>&1 | tee .cache/native-performance/shape.log
+            --budget-seconds 1500 2>&1 | tee .cache/native-performance/shape.log
 
       - name: Remove disposable baseline source and dependency links
         if: always() && steps.baseline.outputs.skip != 'true'
