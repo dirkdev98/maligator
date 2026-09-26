@@ -208,6 +208,55 @@ single-family self-compile comparisons also checkpoint between stages. Resume wi
 the same command plus `--resume <run-directory>` and a fresh time budget. Source
 content (including untracked files), revision, options, and host identity must match.
 Only complete pairs contribute metrics; a partial pair is retained but excluded.
+
+### Bounded native runtime and compiler checks
+
+`node scripts/native-micro-compare.ts --base REF --plan=json` describes a focused
+comparison of the baseline compiler and the current checkout. Remove `--plan=json`
+to execute, or select canonical kernels with repeated `--case ID` arguments:
+
+```sh
+node scripts/native-micro-compare.ts --base REF \
+  --case stable-shape-properties --case heap-valued-projection \
+  --pairs 7 --target-node-ms 80 --budget-seconds 2400 --plan=json
+```
+
+The default set contains six call, record, and allocation controls plus seven
+property/root-publication probes. The runner archives the baseline under its new
+`.cache/native-micro/` evidence directory and uses the same frozen fixture paths
+for both compilers. It requires identical dependency lockfiles and native build
+plans, records five in-process warmups per invocation, calibrates the shared work
+scale against Node with a native timeout cap, and alternates seven measured pairs.
+Each sample must match Node's case ID, scale, checksum, and operation count.
+
+`report.json` preserves every sample and complete pair, paired median reduction
+and median absolute deviation, source and fixture digests, native toolchain
+identity, generated C and compiler artifact bytes, executable and ELF `.text`
+bytes, build phases, and cache reuse. The command requires GNU-compatible `size`
+for its section measurement. Build timings are single observations with recorded
+cache state. They do not establish a build-time improvement. Logs, generated C,
+and fixtures remain in the report directory; the disposable baseline archive and
+source export are removed. Exit 2 marks failed or incomplete work, and a completed
+report does not classify a performance win.
+
+Same-repository pull requests can opt into the `Native performance` workflow with
+these labels; labeled and synchronize events both honor the current label set:
+
+| Label                         | Work per distinct baseline                                                                                                                     |
+| ----------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| `native-performance`          | Separate closed-compiled and open-compiled JavaScript comparisons, five initial pairs, up to seven pairs, 45-minute comparison budgets         |
+| `native-micro-performance`    | The 13 frozen micro kernels above, seven pairs, a 40-minute total build/run budget                                                             |
+| `native-compiler-performance` | One source-only compiler program, two native captures built with `--program` pointing to it, then parser and shape slices with five pairs each |
+
+Every family compares the candidate with `git merge-base HEAD PR_BASE_SHA` and,
+when different, with `git merge-base HEAD origin/main` for cumulative stacked-PR
+evidence. Each job has a 55-minute ceiling. Compiler captures use 15-minute build
+budgets and each slice uses an eight-minute comparison budget. The compiler lane
+uses `self-compile-experiment.ts`'s frozen Node output oracle and retains its build
+events, captured source identities, output digests, resource logs, and partial reports. The
+workflow uploads evidence even on failure, preserves failing exit codes, and
+does not update benchmark baselines. These checks complement the ordinary test
+gate; use the raw variability and completeness records when assessing a change.
 Classified metrics absent from any source/sample, such as native-build RSS on cache hits,
 are listed under `unpairedMetrics` and excluded rather than treated as zero.
 Source changes during execution invalidate resumption, even if later reverted.

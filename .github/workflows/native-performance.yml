@@ -7,17 +7,28 @@ on:
 permissions:
   contents: read
 
+defaults:
+  run:
+    shell: bash
+
 jobs:
   javascript:
     if: >-
       github.event.pull_request.head.repo.full_name == github.repository &&
-      contains(github.event.pull_request.labels.*.name, 'native-performance')
-    name: Paired JavaScript runtime
+      contains(github.event.pull_request.labels.*.name, 'native-performance') &&
+      (github.event.action == 'synchronize' || github.event.label.name == 'native-performance')
+    name: JavaScript ${{ matrix.mode }} / ${{ matrix.comparison }}
     runs-on: ubuntu-24.04
     timeout-minutes: 55
+    strategy:
+      fail-fast: false
+      matrix:
+        mode: [closed-compiled, open-compiled]
+        comparison: [parent, cumulative]
     env:
       BASE_SHA: ${{ github.event.pull_request.base.sha }}
       HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      COMPARISON: ${{ matrix.comparison }}
     steps:
       - name: Check out the candidate
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -26,10 +37,26 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      - name: Resolve matched baseline
+        id: baseline
+        run: |
+          parent="$(git merge-base "$HEAD_SHA" "$BASE_SHA")"
+          baseline="$parent"
+          if [ "$COMPARISON" = cumulative ]; then
+            baseline="$(git merge-base "$HEAD_SHA" origin/main)"
+          fi
+          echo "sha=$baseline" >> "$GITHUB_OUTPUT"
+          if [ "$COMPARISON" = cumulative ] && [ "$baseline" = "$parent" ]; then
+            echo 'skip=true' >> "$GITHUB_OUTPUT"
+            echo 'Cumulative baseline equals parent; the parent job covers this comparison.'
+          fi
+
       - name: Set up Linux
+        if: steps.baseline.outputs.skip != 'true'
         uses: ./.github/actions/setup-linux
 
       - name: Select matching LLVM archive and link tools
+        if: steps.baseline.outputs.skip != 'true'
         run: |
           sudo apt-get install --yes llvm-19 lld-19
           mkdir -p "$RUNNER_TEMP/native-performance-bin"
@@ -38,34 +65,41 @@ jobs:
           echo "$RUNNER_TEMP/native-performance-bin" >> "$GITHUB_PATH"
 
       - name: Check the runner environment
+        if: steps.baseline.outputs.skip != 'true'
+        env:
+          COMPARISON_BASE: ${{ steps.baseline.outputs.sha }}
         run: |
           mkdir -p .cache/native-performance
           npm run env:check -- --json | tee .cache/native-performance/environment.log
           node ./src/index.ts cache status
-          printf 'base=%s\nhead=%s\n' "$BASE_SHA" "$HEAD_SHA" | tee .cache/native-performance/refs.txt
+          printf 'pr_base=%s\nbaseline=%s\nhead=%s\n' "$BASE_SHA" "$COMPARISON_BASE" "$HEAD_SHA" | tee .cache/native-performance/refs.txt
 
       - name: Inspect the complete comparison plan
-        run: >-
-          node scripts/bench.ts javascript --compare "$BASE_SHA"
-          --runs 5 --max-pairs 7 --budget-seconds 2700 --plan=json
-          | tee .cache/native-performance/plan.json
+        if: steps.baseline.outputs.skip != 'true'
+        env:
+          COMPARISON_BASE: ${{ steps.baseline.outputs.sha }}
+          JAVASCRIPT_MODE: ${{ matrix.mode }}
+        run: |
+          node scripts/bench.ts javascript --mode "$JAVASCRIPT_MODE" --compare "$COMPARISON_BASE" \
+            --runs 5 --max-pairs 7 --budget-seconds 2700 --plan=json \
+            | tee .cache/native-performance/plan.json
 
       - name: Compare JavaScript runtime and individual phases
+        if: steps.baseline.outputs.skip != 'true'
+        env:
+          COMPARISON_BASE: ${{ steps.baseline.outputs.sha }}
+          JAVASCRIPT_MODE: ${{ matrix.mode }}
         run: |
           set -o pipefail
-          node scripts/bench.ts javascript --compare "$BASE_SHA" \
+          node scripts/bench.ts javascript --mode "$JAVASCRIPT_MODE" --compare "$COMPARISON_BASE" \
             --runs 5 --max-pairs 7 --budget-seconds 2700 \
             2>&1 | tee .cache/native-performance/comparison.log
 
-      - name: Show failed snapshot diagnostics
-        if: failure()
-        run: find .cache/bench-comparisons -maxdepth 2 -name '*.log' -exec tail -100 {} \;
-
       - name: Retain comparison evidence
-        if: always()
+        if: always() && steps.baseline.outputs.skip != 'true'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: native-performance-${{ github.event.pull_request.number }}-${{ github.run_id }}-${{ github.run_attempt }}
+          name: native-javascript-${{ github.event.pull_request.number }}-${{ matrix.mode }}-${{ matrix.comparison }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             .cache/native-performance/
             .cache/bench-comparisons/*/*.json
@@ -75,71 +109,281 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
 
-  evidence:
+  micro:
     if: >-
-      github.event.label.name == 'native-performance-report' &&
-      github.event.pull_request.head.repo.full_name == github.repository
-    name: Review retained performance evidence
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      contains(github.event.pull_request.labels.*.name, 'native-micro-performance') &&
+      (github.event.action == 'synchronize' || github.event.label.name == 'native-micro-performance')
+    name: Native micro / ${{ matrix.comparison }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    permissions:
-      contents: read
-      actions: read
+    timeout-minutes: 55
+    strategy:
+      fail-fast: false
+      matrix:
+        comparison: [parent, cumulative]
     env:
-      GH_TOKEN: ${{ github.token }}
-      REPOSITORY: ${{ github.repository }}
-      BRANCH: ${{ github.event.pull_request.head.ref }}
+      BASE_SHA: ${{ github.event.pull_request.base.sha }}
+      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      COMPARISON: ${{ matrix.comparison }}
     steps:
-      - name: Read bounded JSON reports from this branch's retained artifacts
+      - name: Check out the candidate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Resolve matched baseline
+        id: baseline
         run: |
-          python3 - <<'PY'
-          import io, json, os, urllib.error, urllib.request, zipfile
-          base = 'https://api.github.com/repos/' + os.environ['REPOSITORY']
-          headers = {'Authorization': 'Bearer ' + os.environ['GH_TOKEN'], 'Accept': 'application/vnd.github+json'}
-          def api(endpoint):
-              with urllib.request.urlopen(urllib.request.Request(base + endpoint, headers=headers), timeout=30) as response:
-                  return json.load(response)
-          class NoRedirect(urllib.request.HTTPRedirectHandler):
-              def redirect_request(self, request, response, code, message, response_headers, url):
-                  return None
-          opener = urllib.request.build_opener(NoRedirect)
-          artifacts = api('/actions/artifacts?per_page=100')['artifacts']
-          selected = [artifact for artifact in artifacts if not artifact['expired'] and artifact.get('workflow_run', {}).get('head_branch') == os.environ['BRANCH'] and artifact['size_in_bytes'] < 20 * 1024 * 1024][:8]
-          for artifact in selected:
-              try:
-                  response = opener.open(urllib.request.Request(base + '/actions/artifacts/' + str(artifact['id']) + '/zip', headers=headers), timeout=30)
-              except urllib.error.HTTPError as error:
-                  if error.code != 302:
-                      raise
-                  location = error.headers['Location']
-                  if not location.startswith('https://'):
-                      raise ValueError('Artifact redirect must use HTTPS')
-                  response = urllib.request.urlopen(location, timeout=30)
-              with response:
-                  data = response.read(20 * 1024 * 1024 + 1)
-              if len(data) > 20 * 1024 * 1024:
-                  raise ValueError('Artifact exceeds report limit')
-              archive = zipfile.ZipFile(io.BytesIO(data))
-              print('ARTIFACT ' + json.dumps({key: artifact[key] for key in ['id', 'name', 'workflow_run']}))
-              for item in archive.infolist():
-                  name = item.filename.rsplit('/', 1)[-1]
-                  if item.file_size > 8 * 1024 * 1024 or not name.endswith('.json'):
-                      continue
-                  if name not in ['micro-report.json', 'report.json', 'publication.json'] and not name.startswith(('pair-', 'warm-')):
-                      continue
-                  value = json.loads(archive.read(item))
-                  if name == 'micro-report.json':
-                      for row in value:
-                          result = {key: row.get(key) for key in ['id', 'medianReductionPercent', 'madPercentagePoints', 'fasterPairs']}
-                          for variant in ['baseline', 'candidate']:
-                              result[variant] = {key: row.get(variant, {}).get(key) for key in ['bytes', 'sha256', 'copies', 'sourceBytes']}
-                          result['samples'] = row.get('samples')
-                          print('MICRO ' + json.dumps(result))
-                  elif name == 'report.json':
-                      print('COMPARISON ' + json.dumps(value))
-                  elif name == 'publication.json':
-                      print('PUBLICATION ' + json.dumps(value))
-                  elif isinstance(value, dict) and 'javascript' in value:
-                      js = value['javascript']
-                      print('JAVASCRIPT ' + json.dumps({'snapshot': name, 'source': value.get('source'), 'workload': js.get('workload'), 'phaseChecksums': js.get('phaseChecksums'), 'node': js.get('node'), 'modes': js.get('modes')}))
-          PY
+          parent="$(git merge-base "$HEAD_SHA" "$BASE_SHA")"
+          baseline="$parent"
+          if [ "$COMPARISON" = cumulative ]; then
+            baseline="$(git merge-base "$HEAD_SHA" origin/main)"
+          fi
+          echo "sha=$baseline" >> "$GITHUB_OUTPUT"
+          if [ "$COMPARISON" = cumulative ] && [ "$baseline" = "$parent" ]; then
+            echo 'skip=true' >> "$GITHUB_OUTPUT"
+            echo 'Cumulative baseline equals parent; the parent job covers this comparison.'
+          fi
+
+      - name: Set up Linux
+        if: steps.baseline.outputs.skip != 'true'
+        uses: ./.github/actions/setup-linux
+
+      - name: Select matching LLVM archive and link tools
+        if: steps.baseline.outputs.skip != 'true'
+        run: |
+          sudo apt-get install --yes llvm-19 lld-19
+          mkdir -p "$RUNNER_TEMP/native-performance-bin"
+          ln -s "$(command -v llvm-ar-19)" "$RUNNER_TEMP/native-performance-bin/ar"
+          ln -s "$(command -v ld.lld-19)" "$RUNNER_TEMP/native-performance-bin/ld.lld"
+          echo "$RUNNER_TEMP/native-performance-bin" >> "$GITHUB_PATH"
+
+      - name: Check environment and inspect the micro plan
+        if: steps.baseline.outputs.skip != 'true'
+        env:
+          COMPARISON_BASE: ${{ steps.baseline.outputs.sha }}
+        run: |
+          mkdir -p .cache/native-performance
+          npm run env:check -- --json | tee .cache/native-performance/environment.log
+          node ./src/index.ts cache status
+          node scripts/native-micro-compare.ts --base "$COMPARISON_BASE" \
+            --pairs 7 --target-node-ms 80 --budget-seconds 2400 \
+            --output .cache/native-performance/micro --plan=json \
+            | tee .cache/native-performance/plan.json
+
+      - name: Compare frozen micro workloads
+        if: steps.baseline.outputs.skip != 'true'
+        env:
+          COMPARISON_BASE: ${{ steps.baseline.outputs.sha }}
+        run: |
+          set -o pipefail
+          node scripts/native-micro-compare.ts --base "$COMPARISON_BASE" \
+            --pairs 7 --target-node-ms 80 --budget-seconds 2400 \
+            --output .cache/native-performance/micro \
+            2>&1 | tee .cache/native-performance/comparison.log
+
+      - name: Retain micro evidence
+        if: always() && steps.baseline.outputs.skip != 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: native-micro-${{ github.event.pull_request.number }}-${{ matrix.comparison }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            .cache/native-performance/**/*.json
+            .cache/native-performance/**/*.log
+            .cache/native-performance/**/*.mjs
+            .cache/native-performance/**/*.c
+            .cache/native-performance/**/*.h
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 7
+
+  compiler:
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      contains(github.event.pull_request.labels.*.name, 'native-compiler-performance') &&
+      (github.event.action == 'synchronize' || github.event.label.name == 'native-compiler-performance')
+    name: Frozen compiler slices / ${{ matrix.comparison }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 55
+    strategy:
+      fail-fast: false
+      matrix:
+        comparison: [parent, cumulative]
+    env:
+      BASE_SHA: ${{ github.event.pull_request.base.sha }}
+      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      COMPARISON: ${{ matrix.comparison }}
+    steps:
+      - name: Check out the candidate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Resolve matched baseline
+        id: baseline
+        run: |
+          parent="$(git merge-base "$HEAD_SHA" "$BASE_SHA")"
+          baseline="$parent"
+          if [ "$COMPARISON" = cumulative ]; then
+            baseline="$(git merge-base "$HEAD_SHA" origin/main)"
+          fi
+          echo "sha=$baseline" >> "$GITHUB_OUTPUT"
+          if [ "$COMPARISON" = cumulative ] && [ "$baseline" = "$parent" ]; then
+            echo 'skip=true' >> "$GITHUB_OUTPUT"
+            echo 'Cumulative baseline equals parent; the parent job covers this comparison.'
+          fi
+
+      - name: Set up Linux
+        if: steps.baseline.outputs.skip != 'true'
+        uses: ./.github/actions/setup-linux
+
+      - name: Select matching LLVM archive and link tools
+        if: steps.baseline.outputs.skip != 'true'
+        run: |
+          sudo apt-get install --yes llvm-19 lld-19
+          mkdir -p "$RUNNER_TEMP/native-performance-bin"
+          ln -s "$(command -v llvm-ar-19)" "$RUNNER_TEMP/native-performance-bin/ar"
+          ln -s "$(command -v ld.lld-19)" "$RUNNER_TEMP/native-performance-bin/ld.lld"
+          echo "$RUNNER_TEMP/native-performance-bin" >> "$GITHUB_PATH"
+
+      - name: Check environment and freeze the compiler program
+        if: steps.baseline.outputs.skip != 'true'
+        env:
+          COMPARISON_BASE: ${{ steps.baseline.outputs.sha }}
+        run: |
+          mkdir -p .cache/native-performance
+          npm run env:check -- --json | tee .cache/native-performance/environment.log
+          node ./src/index.ts cache status
+          printf 'pr_base=%s\nbaseline=%s\nhead=%s\n' "$BASE_SHA" "$COMPARISON_BASE" "$HEAD_SHA" | tee .cache/native-performance/refs.txt
+          node scripts/self-compile-experiment.ts capture .cache/native-performance/program \
+            --source-only --budget-seconds 120 --plan=json \
+            | tee .cache/native-performance/program-plan.json
+          node scripts/self-compile-experiment.ts capture .cache/native-performance/program \
+            --source-only --budget-seconds 120
+
+      - name: Export an identified baseline without changing source
+        if: steps.baseline.outputs.skip != 'true'
+        env:
+          COMPARISON_BASE: ${{ steps.baseline.outputs.sha }}
+        run: |
+          baseline="$PWD/.cache/native-performance/baseline-source"
+          objects="$(git rev-parse --path-format=absolute --git-path objects)"
+          mkdir -p "$baseline"
+          git archive "$COMPARISON_BASE" | tar -x -C "$baseline"
+          cmp package-lock.json "$baseline/package-lock.json"
+          git init --quiet --initial-branch=benchmark "$baseline"
+          printf '%s\n' "$objects" > "$baseline/.git/objects/info/alternates"
+          git -C "$baseline" update-ref HEAD "$COMPARISON_BASE"
+          git -C "$baseline" read-tree "$COMPARISON_BASE"
+          ln -s "$PWD/node_modules" "$baseline/node_modules"
+          test -z "$(git -C "$baseline" status --porcelain)"
+          git -C "$baseline" rev-parse HEAD | tee .cache/native-performance/archive-commit.txt
+
+      - name: Capture the baseline compiler for the frozen program
+        if: steps.baseline.outputs.skip != 'true'
+        run: |
+          task="$PWD/.cache/native-performance"
+          script="$PWD/scripts/self-compile-experiment.ts"
+          cd "$task/baseline-source"
+          node "$script" capture "$task/baseline" --program "$task/program" \
+            --budget-seconds 900 --plan=json | tee "$task/baseline-plan.json"
+          node "$script" capture "$task/baseline" --program "$task/program" --budget-seconds 900
+
+      - name: Capture the candidate compiler for the frozen program
+        if: steps.baseline.outputs.skip != 'true'
+        run: |
+          node scripts/self-compile-experiment.ts capture .cache/native-performance/candidate \
+            --program .cache/native-performance/program --budget-seconds 900 --plan=json \
+            | tee .cache/native-performance/candidate-plan.json
+          node scripts/self-compile-experiment.ts capture .cache/native-performance/candidate \
+            --program .cache/native-performance/program --budget-seconds 900
+
+      - name: Record compiler build and section sizes
+        if: steps.baseline.outputs.skip != 'true'
+        run: |
+          node --input-type=module <<'JS'
+          import { spawnSync } from 'node:child_process';
+          import { createHash } from 'node:crypto';
+          import { readFileSync, statSync, writeFileSync } from 'node:fs';
+          const result = {};
+          for (const variant of ['baseline', 'candidate']) {
+            const directory = `.cache/native-performance/${variant}`;
+            const binary = `${directory}/compiler`;
+            const capture = JSON.parse(readFileSync(`${directory}/capture.json`, 'utf8'));
+            const phases = JSON.parse(readFileSync(`${directory}/build-events.json`, 'utf8'));
+            const size = spawnSync('size', ['--format=sysv', '--radix=10', binary], { encoding: 'utf8' });
+            writeFileSync(`${directory}/binary-size.log`, `${size.stdout ?? ''}\n${size.stderr ?? ''}`);
+            const textBytes = size.stdout?.match(/^\.text\s+(\d+)\s/m)?.[1];
+            if (size.status !== 0 || textBytes === undefined) throw new Error(`No .text measurement for ${variant}`);
+            const generated = phases.filter(event => event.phase === 'write generated C');
+            if (generated.length === 0 || generated.some(event => typeof event.bytes !== 'number')) {
+              throw new Error(`No generated C measurement for ${variant}`);
+            }
+            result[variant] = {
+              source: capture.source,
+              programSource: capture.programSource,
+              build: capture.build,
+              executableBytes: statSync(binary).size,
+              executableSha256: createHash('sha256').update(readFileSync(binary)).digest('hex'),
+              binaryTextBytes: Number(textBytes),
+              generatedCBytes: generated.reduce((sum, event) => sum + event.bytes, 0),
+            };
+          }
+          writeFileSync('.cache/native-performance/compiler-build-sizes.json', `${JSON.stringify(result, null, 2)}\n`);
+          JS
+
+      - name: Compare the parser slice
+        id: parser
+        if: steps.baseline.outputs.skip != 'true'
+        run: |
+          set -o pipefail
+          node scripts/self-compile-experiment.ts compare \
+            .cache/native-performance/baseline .cache/native-performance/candidate \
+            --output .cache/native-performance/parser --workload parser --pairs 5 \
+            --budget-seconds 480 --plan=json | tee .cache/native-performance/parser-plan.json
+          node scripts/self-compile-experiment.ts compare \
+            .cache/native-performance/baseline .cache/native-performance/candidate \
+            --output .cache/native-performance/parser --workload parser --pairs 5 \
+            --budget-seconds 480 2>&1 | tee .cache/native-performance/parser.log
+
+      - name: Compare the shape-analysis slice
+        if: >-
+          !cancelled() && steps.baseline.outputs.skip != 'true' &&
+          (steps.parser.outcome == 'success' || steps.parser.outcome == 'failure')
+        run: |
+          set -o pipefail
+          node scripts/self-compile-experiment.ts compare \
+            .cache/native-performance/baseline .cache/native-performance/candidate \
+            --output .cache/native-performance/shape --workload shape --pairs 5 \
+            --budget-seconds 480 --plan=json | tee .cache/native-performance/shape-plan.json
+          node scripts/self-compile-experiment.ts compare \
+            .cache/native-performance/baseline .cache/native-performance/candidate \
+            --output .cache/native-performance/shape --workload shape --pairs 5 \
+            --budget-seconds 480 2>&1 | tee .cache/native-performance/shape.log
+
+      - name: Remove disposable baseline source and dependency links
+        if: always() && steps.baseline.outputs.skip != 'true'
+        run: |
+          rm -rf .cache/native-performance/baseline-source
+          if [ -d .cache/native-performance ]; then
+            find .cache/native-performance -path '*/source/node_modules' -type l -delete
+          fi
+
+      - name: Retain compiler comparison evidence
+        if: always() && steps.baseline.outputs.skip != 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: native-compiler-${{ github.event.pull_request.number }}-${{ matrix.comparison }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            .cache/native-performance/**/*.json
+            .cache/native-performance/**/*.log
+            .cache/native-performance/**/*.patch
+            .cache/native-performance/**/*.md
+            .cache/native-performance/**/*.txt
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 7
