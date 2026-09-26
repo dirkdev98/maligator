@@ -277,6 +277,53 @@ static bool incremental_major_keeps_allocations_after_a_block_was_swept(MalHeap 
     return true;
 }
 
+static bool large_cells_follow_major_and_minor_lifetime(MalHeap *heap) {
+    const usize cell_size = 10000;
+    TestCell *old = new_cell(heap, cell_size);
+    TestCell *dead = new_cell(heap, cell_size);
+    dead->owned = mal_heap_alloc_raw(heap, 12000);
+    old->header.mark = MAL_MARK_BLACK;
+    mal_heap_sweep(heap, finalize_cell);
+    CHECK(heap->live_bytes == cell_size && g_finalized[2] == 1);
+
+    TestCell *young = new_cell(heap, cell_size);
+    TestCell *young_dead = new_cell(heap, cell_size);
+    young_dead->owned = mal_heap_alloc_raw(heap, 13000);
+    young->header.mark = MAL_MARK_BLACK;
+    mal_heap_sweep_minor(heap, finalize_cell);
+    CHECK(heap->live_bytes == 2 * cell_size && g_finalized[4] == 1);
+    mal_heap_sweep_minor(heap, finalize_cell);
+    CHECK(heap->live_bytes == 2 * cell_size && live_cell(old, 1) && live_cell(young, 3));
+
+    old->header.mark = MAL_MARK_WHITE;
+    young->header.mark = MAL_MARK_WHITE;
+    mal_heap_sweep(heap, finalize_cell);
+    CHECK(heap->live_bytes == 0 && g_finalized[1] == 1 && g_finalized[3] == 1);
+    return true;
+}
+
+static bool incremental_major_accounts_new_large_cells(MalHeap *heap) {
+    const usize cell_size = 10000;
+    TestCell *old = new_cell(heap, cell_size);
+    new_cell(heap, cell_size);
+    old->header.mark = MAL_MARK_BLACK;
+    mal_heap_sweep_begin(heap);
+    mal_gc_black_alloc = true;
+    CHECK(!mal_heap_sweep_step(heap, finalize_cell, 1));
+    TestCell *newborn = new_cell(heap, cell_size);
+    CHECK(newborn->header.mark == MAL_MARK_BLACK);
+    CHECK(mal_heap_sweep_step(heap, finalize_cell, (usize) -1));
+    mal_gc_black_alloc = false;
+    CHECK(heap->live_bytes == 2 * cell_size && g_finalized[2] == 1);
+    mal_heap_sweep_minor(heap, finalize_cell);
+    CHECK(heap->live_bytes == 2 * cell_size && live_cell(old, 1) && live_cell(newborn, 3));
+    old->header.mark = MAL_MARK_WHITE;
+    newborn->header.mark = MAL_MARK_WHITE;
+    mal_heap_sweep(heap, finalize_cell);
+    CHECK(heap->live_bytes == 0 && g_finalized[1] == 1 && g_finalized[3] == 1);
+    return true;
+}
+
 static bool run_check(bool (*check)(MalHeap *)) {
     MalHeap heap;
     mal_heap_init(&heap, 0);
@@ -299,6 +346,8 @@ int main(void) {
         minor_reenrolls_a_reclaimed_cell_away_from_the_bump_block,
         major_resets_minor_tracking_before_block_reassignment,
         incremental_major_keeps_allocations_after_a_block_was_swept,
+        large_cells_follow_major_and_minor_lifetime,
+        incremental_major_accounts_new_large_cells,
     };
     usize passed = 0;
     for (usize i = 0; i < countof(checks); i++) {

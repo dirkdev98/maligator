@@ -61,8 +61,10 @@ typedef struct MalHeap {
     MalGcChunk **chunk_index;
     usize chunk_count;
     usize chunk_capacity;
-    /** Large-object records (size > largest size class), singly linked. */
+    /** Managed large cells; RAW large buffers have separate owner lifetime. */
     MalGcLarge *large;
+    MalGcLarge *raw_large;
+    MalGcLarge *young_large;
     /** Current bump block per size class for managed cells. */
     MalGcBlock *cell_blocks[MAL_GC_NUM_SIZE_CLASSES];
     /** Current bump block per size class for owner-held raw buffers. */
@@ -135,6 +137,7 @@ typedef struct MalHeap {
      * this cycle, so skipping them is correct. */
     MalGcChunk *sweep_chunk;
     usize sweep_block;
+    MalGcLarge *sweep_large;
     usize sweep_live_bytes;
     bool sweeping;
 #if MAL_REALMS

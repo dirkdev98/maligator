@@ -88,8 +88,12 @@ struct MalGcChunk {
 
 struct MalGcLarge {
     struct MalGcLarge *next;
+    struct MalGcLarge *prev;
+    struct MalGcLarge *young_next;
+    struct MalGcLarge *young_prev;
     usize size; /* payload bytes */
     u8 kind;    /* MalGcBlockKind */
+    u8 accounted;
 };
 
 static inline usize mal_gc_align_up(usize value) {
@@ -303,6 +307,49 @@ static void mal_gc_clear_young_blocks(MalHeap *heap) {
     }
 }
 
+static void mal_gc_untrack_young_large(MalHeap *heap, MalGcLarge *rec) {
+    if (rec->young_prev != nullptr) {
+        rec->young_prev->young_next = rec->young_next;
+    } else if (heap->young_large == rec) {
+        heap->young_large = rec->young_next;
+    } else {
+        return;
+    }
+    if (rec->young_next != nullptr) rec->young_next->young_prev = rec->young_prev;
+    rec->young_next = nullptr;
+    rec->young_prev = nullptr;
+}
+
+static void mal_gc_clear_young_large(MalHeap *heap) {
+    MalGcLarge *rec = heap->young_large;
+    heap->young_large = nullptr;
+    while (rec != nullptr) {
+        MalGcLarge *next = rec->young_next;
+        rec->young_next = nullptr;
+        rec->young_prev = nullptr;
+        rec = next;
+    }
+}
+
+static void mal_gc_unlink_large(MalGcLarge **head, MalGcLarge *rec) {
+    if (rec->prev != nullptr) rec->prev->next = rec->next;
+    else *head = rec->next;
+    if (rec->next != nullptr) rec->next->prev = rec->prev;
+}
+
+static bool mal_gc_sweep_large(MalHeap *heap, MalGcLarge *rec, MalHeapFinalizeFn finalize) {
+    MalHeapHeader *header = (MalHeapHeader *) ((u8 *) rec + mal_gc_large_data_offset());
+    if (header->mark == MAL_MARK_BLACK) {
+        rec->accounted = 1;
+        return true;
+    }
+    mal_gc_untrack_young_large(heap, rec);
+    mal_gc_unlink_large(&heap->large, rec);
+    finalize(header);
+    free(rec);
+    return false;
+}
+
 /* Count cells over-tenured while an incremental major is in flight. */
 static inline void mal_gc_count_black(u8 kind, usize size) {
     if (kind == MAL_GC_BLOCK_CELL && mal_gc_black_alloc) {
@@ -317,8 +364,23 @@ static void *mal_gc_alloc_large(MalHeap *heap, usize size, u8 kind) {
     }
     rec->size = size;
     rec->kind = kind;
-    rec->next = heap->large;
-    heap->large = rec;
+    rec->accounted = 0;
+    rec->prev = nullptr;
+    rec->young_next = nullptr;
+    rec->young_prev = nullptr;
+    MalGcLarge **head = kind == MAL_GC_BLOCK_CELL ? &heap->large : &heap->raw_large;
+    rec->next = *head;
+    if (*head != nullptr) (*head)->prev = rec;
+    *head = rec;
+    if (kind == MAL_GC_BLOCK_CELL) {
+        rec->young_next = heap->young_large;
+        if (heap->young_large != nullptr) heap->young_large->young_prev = rec;
+        heap->young_large = rec;
+        if (heap->sweeping) {
+            heap->sweep_live_bytes += size;
+            rec->accounted = 1;
+        }
+    }
     heap->bytes_allocated += size;
     mal_gc_count_black(kind, size);
     mal_heap_maybe_trigger_gc(heap);
@@ -408,6 +470,8 @@ void mal_heap_init(MalHeap *heap, usize capacity) {
     heap->chunk_count = 0;
     heap->chunk_capacity = 0;
     heap->large = nullptr;
+    heap->raw_large = nullptr;
+    heap->young_large = nullptr;
     memset(heap->cell_blocks, 0, sizeof(heap->cell_blocks));
     memset(heap->raw_blocks, 0, sizeof(heap->raw_blocks));
     memset(heap->cell_free, 0, sizeof(heap->cell_free));
@@ -435,6 +499,7 @@ void mal_heap_init(MalHeap *heap, usize capacity) {
 #endif
     heap->sweep_chunk = nullptr;
     heap->sweep_block = 0;
+    heap->sweep_large = nullptr;
     heap->sweep_live_bytes = 0;
     heap->sweeping = false;
 #if MAL_REALMS
@@ -460,12 +525,21 @@ void mal_heap_free(MalHeap *heap) {
         free(large);
         large = next;
     }
+    large = heap->raw_large;
+    while (large != nullptr) {
+        MalGcLarge *next = large->next;
+        free(large);
+        large = next;
+    }
     heap->chunks = nullptr;
     heap->raw_lookup_chunk = nullptr;
     heap->chunk_index = nullptr;
     heap->chunk_count = 0;
     heap->chunk_capacity = 0;
     heap->large = nullptr;
+    heap->raw_large = nullptr;
+    heap->young_large = nullptr;
+    heap->sweep_large = nullptr;
     memset(heap->cell_blocks, 0, sizeof(heap->cell_blocks));
     memset(heap->raw_blocks, 0, sizeof(heap->raw_blocks));
     memset(heap->cell_free, 0, sizeof(heap->cell_free));
@@ -785,6 +859,7 @@ void mal_heap_sweep(MalHeap *heap, MalHeapFinalizeFn finalize) {
     usize data_offset = mal_gc_cell_data_offset();
     usize free_offset = mal_gc_free_next_offset();
     mal_gc_clear_young_blocks(heap);
+    mal_gc_clear_young_large(heap);
 
     // Rebuild the reclaimed-cell free lists from scratch: every non-live cell
     // (newly dead or already free) is re-linked, so cells reused since the last
@@ -797,6 +872,13 @@ void mal_heap_sweep(MalHeap *heap, MalHeapFinalizeFn finalize) {
             MalGcBlock *block = (MalGcBlock *) ((u8 *) chunk->base + block_index * MAL_GC_BLOCK_SIZE);
             mal_heap_sweep_block(heap, block, finalize, data_offset, free_offset, &live_bytes);
         }
+    }
+
+    MalGcLarge *large = heap->large;
+    while (large != nullptr) {
+        MalGcLarge *next = large->next;
+        if (mal_gc_sweep_large(heap, large, finalize)) live_bytes += large->size;
+        large = next;
     }
 
     heap->live_bytes = live_bytes;
@@ -837,6 +919,20 @@ void mal_heap_sweep_minor(MalHeap *heap, MalHeapFinalizeFn finalize) {
         block->live = block_live;
         block = next;
     }
+    MalGcLarge *large = heap->young_large;
+    heap->young_large = nullptr;
+    while (large != nullptr) {
+        MalGcLarge *next = large->young_next;
+        large->young_next = nullptr;
+        large->young_prev = nullptr;
+        if (large->kind == MAL_GC_BLOCK_CELL) {
+            bool accounted = large->accounted;
+            if (mal_gc_sweep_large(heap, large, finalize) && !accounted) {
+                heap->live_bytes += large->size;
+            }
+        }
+        large = next;
+    }
 }
 
 void mal_heap_sweep_begin(MalHeap *heap) {
@@ -850,6 +946,7 @@ void mal_heap_sweep_begin(MalHeap *heap) {
     // Allocations during the incremental sweep re-enroll their blocks. Keep that
     // new list at completion, including blocks already visited by the cursor.
     mal_gc_clear_young_blocks(heap);
+    mal_gc_clear_young_large(heap);
     // Walk only the chunks that exist NOW: chunks prepended during the sweep sit
     // ahead of this cursor in the (newest-first) list, hold only black-allocated
     // mid-cycle cells, and so are never garbage this cycle. The head chunk's
@@ -857,6 +954,7 @@ void mal_heap_sweep_begin(MalHeap *heap) {
     // walk terminates even as the mutator allocates.
     heap->sweep_chunk = heap->chunks;
     heap->sweep_block = 0;
+    heap->sweep_large = heap->large;
     heap->sweep_live_bytes = 0;
     heap->sweeping = true;
 }
@@ -886,6 +984,13 @@ bool mal_heap_sweep_step(MalHeap *heap, MalHeapFinalizeFn finalize, usize max_bl
         heap->sweep_chunk = chunk->next;
         heap->sweep_block = 0;
     }
+    while (heap->sweep_large != nullptr) {
+        if (swept >= max_blocks) return false;
+        MalGcLarge *large = heap->sweep_large;
+        heap->sweep_large = large->next;
+        if (mal_gc_sweep_large(heap, large, finalize)) heap->sweep_live_bytes += large->size;
+        swept++;
+    }
     // Cursor exhausted: the whole heap is swept.
     heap->live_bytes = heap->sweep_live_bytes;
     heap->sweeping = false;
@@ -905,6 +1010,9 @@ void mal_heap_walk_cells(MalHeap *heap, MalHeapFinalizeFn visit) {
                 visit((MalHeapHeader *) cell);
             }
         }
+    }
+    for (MalGcLarge *large = heap->large; large != nullptr; large = large->next) {
+        visit((MalHeapHeader *) ((u8 *) large + mal_gc_large_data_offset()));
     }
 }
 
@@ -957,15 +1065,9 @@ void gc_free_raw(MalHeap *heap, void *ptr) {
     }
     // Large-object buffer: unlink its record from the LOS list and free it.
     MalGcLarge *target = (MalGcLarge *) ((u8 *) ptr - mal_gc_large_data_offset());
-    MalGcLarge **link = &heap->large;
-    while (*link != nullptr) {
-        if (*link == target) {
-            *link = target->next;
-            free(target);
-            return;
-        }
-        link = &(*link)->next;
-    }
+    if (target->kind != MAL_GC_BLOCK_RAW) abort();
+    mal_gc_unlink_large(&heap->raw_large, target);
+    free(target);
 }
 
 void *gc_realloc_raw(MalHeap *heap, void *ptr, usize new_size) {

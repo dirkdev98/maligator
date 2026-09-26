@@ -2268,9 +2268,8 @@ static void mal_gc_finalize_live_cell(MalHeapHeader *cell) {
  * finalizer is idempotent (nulls each field), and gc_free_raw'd buffers that
  * live in the heap's RAW blocks / LOS are reclaimed by the following
  * mal_heap_free; this only covers the plain-malloc'd and Rust-owned memory that
- * mal_heap_free does not. LOS-resident cells (large MalObjects — effectively
- * none) are not walked; that gap matches the tracked LOS-sweep limitation. Call
- * once, immediately before mal_heap_free. */
+ * mal_heap_free does not. Managed large cells are included in the heap walk.
+ * Call once, immediately before mal_heap_free. */
 void mal_gc_finalize_all(MalVm *vm) {
     g_gc_vm = vm; // mal_gc_finalize_cell reaches the heap through g_gc_vm
     mal_heap_walk_cells(&vm->heap, mal_gc_finalize_live_cell);
