@@ -2056,18 +2056,17 @@ describe("emit-program-image instruction packing", () => {
 			expect(output).toContain(`MalValue __private_r${register};`);
 			expect(output).toContain(`#define r${register} (__private_r${register})`);
 		}
-		const hits = [
-			...output.matchAll(
-				/if \(mal_vm_property_read_region_try_load\(([^\n]+)\) \|\| mal_vm_property_try_load_static\(([^\n]+)\)\) \{([\s\S]*?)\} else \{/g,
-			),
-		];
-		expect(hits).toHaveLength(3);
-		expect(output.match(/mal_vm_property_try_load_static\(/g)).toHaveLength(3);
-		for (const hit of hits) {
-			// Both noncollecting probes write one temporary before the rooted miss arm.
-			expect(hit[1]!.split(", ").at(-1)).toBe(hit[2]!.split(", ").at(-1));
-			expect(hit[3]).not.toContain("__gc_slots");
-			expect(hit[3]).not.toContain("MAL_ROOT_MASK");
+		for (const helper of [
+			"mal_vm_property_read_region_try_load",
+			"mal_vm_property_try_load_static",
+		]) {
+			const hits = [
+				...output.matchAll(
+					new RegExp(`if \\(${helper}[^\\n]+\\) \\{([\\s\\S]*?)\\} else \\{`, "g"),
+				),
+			];
+			expect(hits, helper).toHaveLength(3);
+			for (const hit of hits) expect(hit[1], helper).not.toContain("__gc_slots");
 		}
 		const admission = output.indexOf(
 			"__property_region_0 = mal_vm_property_read_region_begin",

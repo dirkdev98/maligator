@@ -129,9 +129,6 @@ replays completed reads or readmits storage midway through the sequence. Every
 load retains its original position and throw handler. An inactive probe returns
 before dereferencing captured storage, so a getter may replace slots, mutate a
 prototype, or invalidate a later cache without reviving stale pointers.
-The region and ordinary probes share one result temporary and success arm.
-Short-circuit evaluation preserves their order; only failure of both probes
-reaches incoming root publication and the collecting miss.
 
 ## Extending native regions
 
