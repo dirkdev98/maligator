@@ -216,7 +216,10 @@ describe("private-root publication state at collecting edges", () => {
 				point(2, live, live),
 				point(5, [...live, 3], [...live, 3, 4]),
 			],
-			{ handlers: [{ startIp: 1, endIp: 3, handlerIp: 4 }] },
+			{
+				handlers: [{ startIp: 1, endIp: 3, handlerIp: 4 }],
+				nativeInstructions: new Map([[2, { kind: "call" }]]),
+			},
 		);
 		const publication = privatePublication(source);
 		const handler = source.indexOf("L4:;");
@@ -225,10 +228,84 @@ describe("private-root publication state at collecting edges", () => {
 		expect(hasIncomingCopy(beforeCall(source, 5, handler), publication)).toBe(true);
 	});
 
+	it("keeps an ordinary call result private until its poll or the next collecting call", () => {
+		const source = emit(
+			[load, call(retained, []), call(), returned],
+			[point(0, [0, 1], live), point(1, [0, 1], live), point(2)],
+		);
+		const publication = privatePublication(source);
+		const slot = publication.slice(0, publication.indexOf(" ="));
+		const before = beforeCall(
+			source,
+			1,
+			source.indexOf("mal_vm_op_load_property_ic_static_miss"),
+		);
+		expect(before).toContain(`${slot} = MAL_VALUE_UNDEFINED;`);
+		const result = afterCallResult(source, 1);
+		const poll = source.indexOf("mal_gc_safepoint(vm)", result);
+		expect(source.slice(result, poll)).toContain(`if (mal_gc_poll) { ${publication}`);
+		expect(hasIncomingCopy(beforeCall(source, 2, poll), publication)).toBe(true);
+		expect(source).not.toContain(`#define r${retained} (${slot})`);
+		expect(source).not.toContain(`__private_r${retained} = ${slot};`);
+	});
+
+	it("publishes the old incoming value when an ordinary call reuses its receiver and argument register", () => {
+		const reused = { ...call(retained), thisValue: retained };
+		const source = emit(
+			[load, reused, returned],
+			[point(0, [0, 1], live), point(1, live, live)],
+		);
+		const publication = privatePublication(source);
+		const before = beforeCall(
+			source,
+			1,
+			source.indexOf("mal_vm_op_load_property_ic_static_miss"),
+		);
+		expect(hasIncomingCopy(before, publication)).toBe(true);
+		const result = afterCallResult(source, 1);
+		expect(
+			source.slice(result, source.indexOf("mal_gc_safepoint(vm)", result)),
+		).toContain(`if (mal_gc_poll) { ${publication}`);
+	});
+
+	it("takes an ordinary call's throw edge before assigning its private result and republishes catch roots", () => {
+		const source = emit(
+			[
+				load,
+				call(3),
+				{ ...load, object: 3, dst: 4 },
+				returned,
+				{ opcode: "CATCH", dst: 4 },
+				call(),
+				returned,
+			],
+			[
+				point(0, [0, 1], live),
+				point(1, live, [...live, 3]),
+				point(2, [...live, 3], [...live, 4]),
+				point(5, [...live, 4], [...live, 4]),
+			],
+			{ handlers: [{ startIp: 1, endIp: 2, handlerIp: 4 }] },
+		);
+		const publication = privatePublication(source);
+		privatePublication(source, 3);
+		const firstCall = source.indexOf("MalCompletion call_result_1");
+		const throwEdge = source.indexOf(
+			"if (call_result_1.kind == MAL_COMPLETION_THROW) goto L4;",
+			firstCall,
+		);
+		expect(throwEdge).toBeGreaterThan(firstCall);
+		expect(throwEdge).toBeLessThan(afterCallResult(source, 1));
+		expect(
+			hasIncomingCopy(beforeCall(source, 5, source.indexOf("L4:;")), publication),
+		).toBe(true);
+	});
+
 	it("uses a rooted call result's reload as publication of the returned heap value", () => {
 		const source = emit(
 			[load, call(retained, []), call(), returned],
 			[point(0, [0, 1], live), point(1, [0, 1], live), point(2)],
+			{ nativeInstructions: new Map([[1, { kind: "call" }]]) },
 		);
 		const publication = privatePublication(source);
 		const slot = publication.slice(0, publication.indexOf(" ="));

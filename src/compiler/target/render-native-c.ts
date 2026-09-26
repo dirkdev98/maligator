@@ -38,6 +38,7 @@ import type {
 	NativePropertyProjectionOperand,
 } from "./lower-native-fast-paths.ts";
 import {
+	nativePrivateCallResultIps,
 	nativePrivateRootRegisters,
 	nativeEntryStableRootRegisters,
 	nativeRootedOutputRegisters,
@@ -571,6 +572,7 @@ function cInactiveRootMaskPublication(mask: bigint): string {
 }
 
 interface NativeRootPublication {
+	readonly privateCallResultIps: ReadonlySet<number>;
 	readonly entryStableRegisters: ReadonlySet<number>;
 	readonly slots: Map<number, number>;
 	readonly safepoints: ReadonlyMap<
@@ -726,8 +728,15 @@ function emitCompiledVariant(
 	}
 	const slotOf = new Map<number, number>();
 	valueRegs.forEach((reg, slot) => slotOf.set(reg, slot));
-	const privateCandidates = nativePrivateRootRegisters(fn, nativeContract, rootRegisters);
+	const privateCallResultIps = nativePrivateCallResultIps(fn, nativeContract);
+	const privateCandidates = nativePrivateRootRegisters(
+		fn,
+		nativeContract,
+		rootRegisters,
+		privateCallResultIps,
+	);
 	const rootPublication: NativeRootPublication = {
+		privateCallResultIps,
 		entryStableRegisters: nativeEntryStableRootRegisters(fn, privateCandidates),
 		slots: new Map([...slotOf].filter(([register]) => privateCandidates.has(register))),
 		safepoints: new Map(
@@ -3197,9 +3206,14 @@ function emitBody(
 			}
 		}
 		const safepointKind = gcSafepointKinds.get(ip);
-		const rootedOutputs = nativeRootedOutputRegisters(fn.instructions[ip]!).filter(
-			(register) => rootPublication?.slots.has(register),
-		);
+		const rootedOutputs =
+			rootPublication === undefined
+				? []
+				: nativeRootedOutputRegisters(
+						fn.instructions[ip]!,
+						ip,
+						rootPublication.privateCallResultIps,
+					).filter((register) => rootPublication.slots.has(register));
 		const rootedOutputReloads = rootedOutputs.map(
 			(register) =>
 				`__private_r${register} = __gc_slots[${rootPublication!.slots.get(register)!}];`,

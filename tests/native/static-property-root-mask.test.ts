@@ -1,5 +1,8 @@
 import { beforeAll, describe, expect, it } from "vitest";
-import { nativePrivateRootRegisters } from "../../src/compiler/target/lower-native-root-publication.ts";
+import {
+	nativePrivateCallResultIps,
+	nativePrivateRootRegisters,
+} from "../../src/compiler/target/lower-native-root-publication.ts";
 import { emitCompiledFunction } from "../../src/compiler/target/render-native-c.ts";
 import {
 	assertExactLines,
@@ -12,6 +15,24 @@ const fixture = "tests/local/static-property-root-mask.js";
 const hostGc = { MAL_HOST_GC: "1" };
 const expected = ["static-property-root-mask PASS"];
 const publicationKernels = [
+	{
+		name: "detachedCallResultAcrossPoll",
+		boundary: "CALL",
+		probe: "mal_vm_call_cached",
+		properties: [],
+		firstBoundaryOnly: true,
+		resultPrivate: true,
+		callResultPrivate: true,
+	},
+	{
+		name: "retainThroughThrowingCall",
+		boundary: "CALL",
+		probe: "mal_vm_call_cached",
+		properties: ["value"],
+		firstBoundaryOnly: true,
+		resultPrivate: true,
+		callResultPrivate: true,
+	},
 	{
 		name: "retainThroughNumberCoercion",
 		boundary: "BINARY",
@@ -98,8 +119,10 @@ describe("native static-property root-mask publication", () => {
 			source: string;
 			retainedRegisters: Array<number>;
 			privateRegisters: ReadonlySet<number>;
+			selectedPrivateCallIps: ReadonlySet<number>;
 			boundaryIncomingRoots: Array<ReadonlyArray<number>>;
 			boundaryResults: Array<{
+				ip: number;
 				register: number;
 				outgoingRoots: ReadonlyArray<number>;
 				nextCallIncomingRoots: ReadonlyArray<number>;
@@ -180,6 +203,7 @@ describe("native static-property root-mask publication", () => {
 				source: emitCompiledFunction(fn, native, index, "", false)?.source ?? "",
 				retainedRegisters,
 				privateRegisters,
+				selectedPrivateCallIps: nativePrivateCallResultIps(fn, native),
 				boundaryIncomingRoots: boundarySafepoints.map(
 					(safepoint) => safepoint.incomingRootRegisters ?? [],
 				),
@@ -187,8 +211,8 @@ describe("native static-property root-mask publication", () => {
 					"resultPrivate" in kernel
 						? boundarySafepoints.map((safepoint) => {
 								const load = fn.instructions[safepoint.instructionIp];
-								if (load?.opcode !== "LOAD_PROPERTY") {
-									throw new Error(`${name} has no numeric indexed load result`);
+								if (load?.opcode !== "LOAD_PROPERTY" && load?.opcode !== "CALL") {
+									throw new Error(`${name} has no indexed load or call result`);
 								}
 								const nextCall = native.gc.safepoints.find(
 									(next) =>
@@ -196,6 +220,7 @@ describe("native static-property root-mask publication", () => {
 										fn.instructions[next.instructionIp]?.opcode === "CALL",
 								);
 								return {
+									ip: safepoint.instructionIp,
 									register: load.dst,
 									outgoingRoots: safepoint.outgoingRootRegisters ?? [],
 									nextCallIncomingRoots: nextCall?.incomingRootRegisters ?? [],
@@ -206,7 +231,7 @@ describe("native static-property root-mask publication", () => {
 		}
 	}, 600_000);
 
-	it.each(publicationKernels)(
+	it.each(publicationKernels.filter((kernel) => kernel.properties.length > 0))(
 		"retains private preceding roots at the audited boundary in $name",
 		({ name, probe }) => {
 			const contract = publicationContracts.get(name);
@@ -226,7 +251,7 @@ describe("native static-property root-mask publication", () => {
 	);
 
 	it.each(publicationKernels.filter((kernel) => "resultPrivate" in kernel))(
-		"retains the private indexed result through the next collecting call in $name",
+		"retains the private heap result through the next collecting call in $name",
 		({ name }) => {
 			const contract = publicationContracts.get(name)!;
 			expect(contract.boundaryResults.length).toBeGreaterThan(0);
@@ -238,6 +263,43 @@ describe("native static-property root-mask publication", () => {
 				expect(result.outgoingRoots).toContain(result.register);
 				expect(result.nextCallIncomingRoots).toContain(result.register);
 			}
+		},
+	);
+
+	it.each(publicationKernels.filter((kernel) => "callResultPrivate" in kernel))(
+		"publishes the selected private CALL result before its return poll in $name",
+		({ name }) => {
+			const contract = publicationContracts.get(name)!;
+			expect(contract.boundaryResults).toHaveLength(1);
+			const { ip, register } = contract.boundaryResults[0]!;
+			expect(contract.selectedPrivateCallIps.has(ip)).toBe(true);
+			const callOffset = contract.source.indexOf(
+				`MalCompletion call_result_${ip} = mal_vm_call_cached(`,
+			);
+			expect(callOffset).toBeGreaterThanOrEqual(0);
+			// The active macro binding, not the declaration, owns the CALL result storage.
+			expect(
+				contract.source
+					.slice(0, callOffset)
+					.match(new RegExp(`#define r${register} [^\\n]+`, "g"))
+					?.at(-1),
+			).toBe(`#define r${register} (__private_r${register})`);
+			const continuation = contract.source.slice(callOffset);
+			const throwCheck = continuation.indexOf(
+				`if (call_result_${ip}.kind == MAL_COMPLETION_THROW)`,
+			);
+			const resultAssignment = continuation.indexOf(
+				`r${register} = call_result_${ip}.value;`,
+			);
+			const poll = continuation.indexOf("if (mal_gc_poll)");
+			const collection = continuation.indexOf("mal_gc_safepoint(vm);", poll);
+			expect(throwCheck).toBeGreaterThan(0);
+			expect(resultAssignment).toBeGreaterThan(throwCheck);
+			expect(poll).toBeGreaterThan(resultAssignment);
+			expect(collection).toBeGreaterThan(poll);
+			expect(continuation.slice(poll, collection)).toMatch(
+				new RegExp(`__gc_slots\\[\\d+\\] = r${register};`),
+			);
 		},
 	);
 

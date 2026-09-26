@@ -13,11 +13,33 @@ const ROOTED_OUTPUT_OPCODES = new Set([
 	"ITERATOR_NEXT",
 ]);
 
+/** Ordinary calls publish only their final returned value, after the helper and throw check. */
+export function nativePrivateCallResultIps(
+	fn: BytecodeFunction,
+	native: NativeFunctionPlan,
+): ReadonlySet<number> {
+	if (fn.isGenerator || fn.isAsync) return new Set();
+	const conflicts = new Set(native.regionActions.map(({ ip }) => ip));
+	for (const call of native.fieldCalls ?? []) conflicts.add(call.callIp);
+	const privateResults = new Set<number>();
+	for (const { instructionIp } of native.gc.safepoints) {
+		if (
+			fn.instructions[instructionIp]?.opcode === "CALL" &&
+			native.instructions[instructionIp] === undefined &&
+			!conflicts.has(instructionIp)
+		)
+			privateResults.add(instructionIp);
+	}
+	return privateResults;
+}
+
 /** Outputs whose intermediate values stay in shadow storage for the whole op. */
 export function nativeRootedOutputRegisters(
 	instruction: BytecodeInstruction,
+	ip: number,
+	privateCallResultIps: ReadonlySet<number>,
 ): ReadonlyArray<number> {
-	return ROOTED_OUTPUT_OPCODES.has(instruction.opcode)
+	return ROOTED_OUTPUT_OPCODES.has(instruction.opcode) && !privateCallResultIps.has(ip)
 		? vmInstructionWriteRegisters(instruction)
 		: [];
 }
@@ -60,6 +82,7 @@ export function nativePrivateRootRegisters(
 	fn: BytecodeFunction,
 	native: NativeFunctionPlan,
 	frameRegisters: ReadonlySet<number>,
+	privateCallResultIps = nativePrivateCallResultIps(fn, native),
 ): ReadonlySet<number> {
 	if (fn.isGenerator || fn.isAsync) return new Set();
 	const candidates = new Set<number>();
@@ -95,7 +118,8 @@ export function nativePrivateRootRegisters(
 	for (const [ip, instruction] of fn.instructions.entries()) {
 		const writes = vmInstructionWriteRegisters(instruction);
 		const rootedOutputs =
-			ROOTED_OUTPUT_OPCODES.has(instruction.opcode) && safepointIps.has(ip);
+			nativeRootedOutputRegisters(instruction, ip, privateCallResultIps).length > 0 &&
+			safepointIps.has(ip);
 		for (const register of candidates) {
 			const writesRegister = writes.includes(register);
 			// Every iterator-step variant writes its final VM outputs only after
@@ -114,6 +138,7 @@ export function nativePrivateRootRegisters(
 			if (
 				(writesRegister &&
 					!PRIVATE_RESULT_OPCODES.has(instruction.opcode) &&
+					!privateCallResultIps.has(ip) &&
 					!rootedOutputs) ||
 				(!(rootedOutputs && writesRegister) &&
 					!finalIteratorOutput &&
