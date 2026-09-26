@@ -14,11 +14,13 @@ Ordinary static stores likewise publish before their generic miss. A successful
 store may grow slots and invalidate assumptions without collecting or reentering
 JavaScript; its existing barriers remain in place.
 
-The monomorphic own-slot cache probe stays inline. The remaining static cache
-probes share an out-of-line helper, retaining their own-table, polymorphic,
-inherited, watched, primitive, length, and VM-wide cache guards. That helper
-cannot collect or reenter JavaScript: its caller may still hold private values
-and a borrowed receiver pointer. Root publication belongs after all those probes
+The monomorphic own-slot and watched-value cache probes stay inline. Watched
+values retain their protector, cache mode, key, and exact receiver guards,
+including watched function objects. The remaining static cache probes share an
+out-of-line helper, retaining their own-table, polymorphic, inherited, primitive,
+length, and VM-wide cache guards. That helper cannot collect or reenter
+JavaScript: its caller may still hold private values and a borrowed receiver
+pointer. Root publication belongs after all those probes
 fail, immediately before the generic property operation.
 The outlined helper returns hit status and value together. It does not receive
 the caller's result address, so successful inline probes need not spill their
@@ -101,6 +103,20 @@ projections retain continuously rooted storage. Resumable functions retain
 their heap register frames. Private selection is bounded to 32 registers per
 ordinary function to limit native register pressure and slow-edge code size.
 
+Private storage also needs a benefit during a collecting loop. An unchanged
+nonparameter value can be nominated by a property use in an unrelated lifetime,
+then require a shadow copy before every collecting call in a loop. Selection keeps
+that value continuously rooted when an ordinary control-flow cycle contains an
+incoming call root and has no definition or eligible property use of the register.
+Costs and benefits must be reachable from the branch target and able to return
+to the branch through ordinary edges. A backward exception continuation alone
+is insufficient, and a definition or property use on a one-way exit does not
+benefit repeated execution. Guarded direct calls and known helpers count when
+their operation safepoints require the incoming root. The analysis is bounded
+to each backward-branch interval; declining private storage changes neither
+liveness nor control-flow facts. Unmodified entry-published parameters and values
+defined or read by properties in the cycle retain their existing eligibility.
+
 ## Extending native regions
 
 Keeping a live `MalValue` private does not permit retaining a borrowed slots
@@ -141,3 +157,13 @@ Boxed keys and specialized indexed/projection plans retain their existing
 publication because their conversion or intermediate-storage contracts differ.
 The returned heap value is published before a later collecting poll, including
 unmasked root slots beyond the first 64.
+
+An ordinary indexed read with an int32 or Number key can itself nominate its
+result for private storage. It does not nominate the receiver. The same audit of
+every physical definition, native-region intermediate, and out-parameter use
+still applies, including when later instructions reuse the result register.
+Closure creation assigns its destination only after the value-returning runtime
+factory finishes. Exact operator-kind annotations refine ordinary final-value
+expressions without adding intermediate storage. Both can share a private result
+register with an indexed read; native regions and compound out-parameters retain
+their separate continuously rooted contracts.

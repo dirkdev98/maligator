@@ -891,4 +891,203 @@ if (callCatchResult !== 574 || throwingCallCount !== 1 || callThrowOwner.value !
 	throw new Error("throwing call lost its preceding private root or caught heap payload");
 }
 
+function numericOnlyIndexResult(receiver, afterLoad) {
+	const result = receiver[1];
+	afterLoad();
+	gc();
+	return result;
+}
+
+function numericOnlyIndexPair(receiver, observe) {
+	const retained = receiver[0];
+	const result = receiver[1];
+	gc();
+	observe(retained, result);
+	return result;
+}
+
+function numericOnlyThrowingIndex(receiver, observe) {
+	const retained = receiver[0];
+	try {
+		receiver[1];
+	} catch (error) {
+		gc();
+		observe(retained, error);
+		return retained;
+	}
+	return null;
+}
+
+function numericOnlyClosureLifetime(receiver, observe, captured) {
+	let value = function createdIndexedClosure(argument) {
+		return captured.marker + argument;
+	};
+	observe(value);
+	value = receiver[0];
+	observe(value);
+	gc();
+	return value;
+}
+
+globalThis.numericOnlyIndexReaders = [
+	numericOnlyIndexResult,
+	numericOnlyIndexPair,
+	numericOnlyThrowingIndex,
+	numericOnlyClosureLifetime,
+];
+
+const numericOnlyDense = [null, { marker: 307 }];
+const numericOnlyDenseResult = globalThis.numericOnlyIndexReaders[0](
+	numericOnlyDense,
+	function () {
+		numericOnlyDense.length = 0;
+		gc();
+	},
+);
+if (numericOnlyDenseResult.marker !== 307 || numericOnlyDense.length !== 0) {
+	throw new Error("numeric-only dense result was lost after detachment and collection");
+}
+
+const numericOnlyHole = globalThis.numericOnlyIndexReaders[0]([, ,], function () {
+	gc();
+});
+if (numericOnlyHole !== undefined) {
+	throw new Error("numeric-only hole did not use the missing-property continuation");
+}
+
+let numericOnlyGetterCalls = 0;
+const numericOnlyGetterReceiver = [{ marker: 311 }, ,];
+Object.defineProperty(numericOnlyGetterReceiver, "1", {
+	get() {
+		numericOnlyGetterCalls++;
+		numericOnlyGetterReceiver[0] = null;
+		gc();
+		return { marker: 313 };
+	},
+});
+const numericOnlyGetterResult = globalThis.numericOnlyIndexReaders[1](
+	numericOnlyGetterReceiver,
+	function (retained, result) {
+		gc();
+		if (retained.marker !== 311 || result.marker !== 313) {
+			throw new Error("numeric-only getter lost its incoming or returned heap root");
+		}
+	},
+);
+if (numericOnlyGetterResult.marker !== 313 || numericOnlyGetterCalls !== 1) {
+	throw new Error("numeric-only getter returned the wrong value or ran twice");
+}
+
+const numericOnlyInheritedReceiver = [{ marker: 317 }, ,];
+const numericOnlyPrototype = Object.create(Array.prototype);
+let numericOnlyInheritedCalls = 0;
+Object.defineProperty(numericOnlyPrototype, "1", {
+	get() {
+		numericOnlyInheritedCalls++;
+		if (this !== numericOnlyInheritedReceiver) {
+			throw new Error("numeric-only inherited getter received the wrong receiver");
+		}
+		numericOnlyInheritedReceiver[0] = null;
+		gc();
+		return { marker: 331 };
+	},
+});
+Object.setPrototypeOf(numericOnlyInheritedReceiver, numericOnlyPrototype);
+const numericOnlyInheritedResult = globalThis.numericOnlyIndexReaders[1](
+	numericOnlyInheritedReceiver,
+	function (retained, result) {
+		gc();
+		if (retained.marker !== 317 || result.marker !== 331) {
+			throw new Error("numeric-only inherited getter lost its incoming or returned root");
+		}
+	},
+);
+if (numericOnlyInheritedResult.marker !== 331 || numericOnlyInheritedCalls !== 1) {
+	throw new Error("numeric-only inherited lookup did not finish exactly once");
+}
+
+const numericOnlyProxyTarget = [{ marker: 337 }, { marker: 347 }];
+let numericOnlyProxyKeys = "";
+const numericOnlyProxy = new Proxy(numericOnlyProxyTarget, {
+	get(target, key) {
+		numericOnlyProxyKeys += key;
+		const result = target[key];
+		target[key] = null;
+		gc();
+		return result;
+	},
+});
+const numericOnlyProxyResult = globalThis.numericOnlyIndexReaders[1](
+	numericOnlyProxy,
+	function (retained, result) {
+		gc();
+		if (retained.marker !== 337 || result.marker !== 347) {
+			throw new Error("numeric-only Proxy lost a detached incoming or returned root");
+		}
+	},
+);
+if (numericOnlyProxyResult.marker !== 347 || numericOnlyProxyKeys !== "01") {
+	throw new Error("numeric-only Proxy did not preserve numeric-key conversion order");
+}
+
+const numericOnlyThrowReceiver = [{ marker: 349 }, ,];
+let numericOnlyThrowCalls = 0;
+Object.defineProperty(numericOnlyThrowReceiver, "1", {
+	get() {
+		numericOnlyThrowCalls++;
+		numericOnlyThrowReceiver[0] = null;
+		gc();
+		throw { payload: { marker: 353 } };
+	},
+});
+const numericOnlyThrowRetained = globalThis.numericOnlyIndexReaders[2](
+	numericOnlyThrowReceiver,
+	function (retained, failure) {
+		gc();
+		if (retained.marker !== 349 || failure.payload.marker !== 353) {
+			throw new Error("numeric-only thrown getter lost an incoming or caught heap root");
+		}
+	},
+);
+if (numericOnlyThrowRetained.marker !== 349 || numericOnlyThrowCalls !== 1) {
+	throw new Error("numeric-only throwing getter did not preserve its catch continuation");
+}
+
+const numericClosureCaptured = { marker: 359 };
+const numericClosureReceiver = [
+	function returnedIndexedClosure(argument) {
+		return numericClosureCaptured.marker + argument;
+	},
+];
+let numericClosureObservations = 0;
+const numericClosureResult = globalThis.numericOnlyIndexReaders[3](
+	numericClosureReceiver,
+	function (value) {
+		numericClosureObservations++;
+		const expectedName =
+			numericClosureObservations === 1
+				? "createdIndexedClosure"
+				: "returnedIndexedClosure";
+		if (numericClosureObservations === 2) numericClosureReceiver.length = 0;
+		gc();
+		if (
+			value.name !== expectedName ||
+			value.length !== 1 ||
+			Object.getPrototypeOf(value) !== Function.prototype ||
+			value(2) !== 361
+		) {
+			throw new Error(
+				"private closure lost its metadata, prototype, or captured environment",
+			);
+		}
+	},
+	numericClosureCaptured,
+);
+gc();
+if (numericClosureObservations !== 2 || numericClosureResult(4) !== 363) {
+	throw new Error(
+		"numeric-index closure result was lost after detachment and collection",
+	);
+}
+
 console.log("static-property-root-mask PASS");

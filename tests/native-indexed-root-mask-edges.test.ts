@@ -95,6 +95,7 @@ function emit(
 	safepoints: Array<Safepoint>,
 	keyRepresentation: VmRegisterRepresentation = "number",
 	plan?: NativeFunctionPlan["instructions"][number],
+	operatorPlan?: NativeFunctionPlan["instructions"][number],
 ): string {
 	const native = createConservativeNativePlan([body]).functions[0]!;
 	return emitCompiledFunction(
@@ -106,7 +107,11 @@ function emit(
 					index === indexedLoad.key ? keyRepresentation : representation,
 			),
 			instructions: body.instructions.map((instruction) =>
-				instruction.opcode === "LOAD_PROPERTY" ? plan : undefined,
+				instruction.opcode === "LOAD_PROPERTY"
+					? plan
+					: instruction.opcode === "BINARY" || instruction.opcode === "UNARY"
+						? operatorPlan
+						: undefined,
 			),
 			gc: { safepoints },
 		},
@@ -149,7 +154,7 @@ function privateSlot(source: string, register: number): number {
 
 describe("native numeric indexed-load root publication", () => {
 	it.each(["int32", "number"] as const)(
-		"keeps the union mask eager and deduplicated without final private roots for %s indices",
+		"admits only final results and leaves successful %s index probes without root-copy stores",
 		(representation) => {
 			const source = emit(
 				fn([key, indexedLoad, indexedLoad, call, { opcode: "RETURN", value: 6 }]),
@@ -160,17 +165,126 @@ describe("native numeric indexed-load root publication", () => {
 				],
 				representation,
 			);
-			expect(source).not.toContain("__private_r");
+			privateSlot(source, indexedLoad.dst);
+			expect(source).not.toContain("#define r0 (__private_r0)");
+			expect(source).toContain("#define r0 (__gc_slots[");
 			const firstProbe = source.indexOf("mal_vm_array_try_get_index(");
 			const mask = source.indexOf("MAL_ROOT_MASK(");
-			expect(mask).toBeGreaterThan(-1);
-			expect(firstProbe).toBeGreaterThan(mask);
+			expect(firstProbe).toBeGreaterThan(-1);
+			expect(mask).toBeGreaterThan(firstProbe);
 			const secondProbe = source.indexOf("mal_vm_array_try_get_index(", firstProbe + 1);
-			expect(source.slice(0, secondProbe).match(/MAL_ROOT_MASK\(/g)).toHaveLength(1);
-			expect(source.slice(firstProbe, secondProbe)).not.toContain("MAL_ROOT_MASK(");
+			for (const probe of [firstProbe, secondProbe]) {
+				const miss = source.indexOf("mal_vm_indexed_fast_load_index(", probe);
+				const fallback = source.lastIndexOf("} else {", miss);
+				expect(source.slice(probe, fallback)).toContain("r3 =");
+				expect(source.slice(probe, fallback)).not.toContain("__gc_slots[");
+				expect(source.slice(probe, fallback)).not.toContain("MAL_ROOT_MASK(");
+			}
 			expect(source.match(/mal_vm_indexed_fast_load_index\(/g)).toHaveLength(2);
 		},
 	);
+
+	it.each([
+		["boxed", undefined],
+		["number", { kind: "exact-contained-array-element" }],
+	] as const)(
+		"does not seed results of unaudited %s index plans",
+		(representation, plan) => {
+			const source = emit(
+				fn([key, indexedLoad, call, { opcode: "RETURN", value: 6 }]),
+				[point(1, [0, 5], [0, 3, 5]), point(2, [0, 3, 5], [6])],
+				representation,
+				plan,
+			);
+			expect(source).not.toContain("__private_r");
+		},
+	);
+
+	it("retains continuous storage when another definition uses a compound out-parameter", () => {
+		const source = emit(
+			fn([
+				{ opcode: "LOAD_STATIC_ARGUMENT", dst: 4, direct: -1, fallback: 3, index: 2 },
+				key,
+				indexedLoad,
+				call,
+				{ opcode: "RETURN", value: 6 },
+			]),
+			[
+				point(0, [0, 5], [0, 3, 4, 5]),
+				point(2, [0, 5], [0, 3, 5]),
+				point(3, [0, 3, 5], [6]),
+			],
+		);
+		expect(source).not.toContain("#define r3 (__private_r3)");
+		expect(source).toContain("#define r3 (__gc_slots[");
+	});
+
+	it("keeps closure construction final and later exact numeric results private", () => {
+		const source = emit(
+			fn([
+				{ opcode: "CREATE_FUNCTION", dst: 3, functionIndex: 1 },
+				call,
+				key,
+				indexedLoad,
+				{ opcode: "BINARY", dst: 3, left: 3, right: 2, operator: "+" },
+				{ opcode: "RETURN", value: 3 },
+			]),
+			[point(0, [0, 5], [0, 3, 5]), point(1, [0, 3, 5], [0, 5]), point(3, [0], [0, 3])],
+			"number",
+			undefined,
+			{ kind: "exact-operator-input-kinds", inputKindMasks: [8, 8] },
+		);
+		const slot = privateSlot(source, 3);
+		const create = source.indexOf("r3 = mal_vm_op_create_function(");
+		const publication = source.indexOf(`__gc_slots[${slot}] = r3;`, create);
+		const invoke = source.indexOf("mal_vm_call_cached(", create);
+		expect(create).toBeGreaterThan(-1);
+		expect(publication).toBeGreaterThan(create);
+		expect(invoke).toBeGreaterThan(publication);
+		const probe = source.indexOf("mal_vm_array_try_get_index(");
+		const fallback = source.indexOf("} else {", probe);
+		expect(source.slice(probe, fallback)).not.toContain("__gc_slots[");
+	});
+
+	it("publishes the preceding numeric-only result on a later indexed miss", () => {
+		const source = emit(
+			fn([key, indexedLoad, { ...indexedLoad, dst: 4, icIndex: 2 }, call]),
+			[
+				point(1, [0, 5], [0, 3, 5]),
+				point(2, [0, 3, 5], [0, 3, 4, 5]),
+				point(3, [0, 3, 4, 5], [6]),
+			],
+		);
+		const slot = privateSlot(source, indexedLoad.dst);
+		const firstMiss = source.indexOf("mal_vm_indexed_fast_load_index(");
+		const probe = source.indexOf("mal_vm_array_try_get_index(", firstMiss);
+		const miss = source.indexOf("mal_vm_indexed_fast_load_index(", probe);
+		const fallback = source.lastIndexOf("} else {", miss);
+		expect(source.slice(probe, fallback)).not.toContain("__gc_slots[");
+		expect(source.slice(fallback, miss)).toContain(`__gc_slots[${slot}] = r3;`);
+	});
+
+	it("publishes a numeric-only heap result before a collecting loop poll", () => {
+		const source = emit(fn([key, indexedLoad, { opcode: "JUMP", targetIp: 0 }]), [
+			point(1, [0], [0, 3]),
+			point(2, [0, 3], [0, 3], "loop-backedge"),
+		]);
+		const slot = privateSlot(source, indexedLoad.dst);
+		const miss = source.indexOf("mal_vm_indexed_fast_load_index(");
+		const pollGuard = source.indexOf("if (mal_gc_poll)", miss);
+		const collection = source.indexOf("mal_gc_safepoint(vm)", pollGuard);
+		expect(pollGuard).toBeGreaterThan(miss);
+		expect(source.slice(pollGuard, collection)).toContain(`__gc_slots[${slot}] = r3;`);
+	});
+
+	it("keeps an indexed result defined inside a collecting loop eligible", () => {
+		const source = emit(fn([key, indexedLoad, call, { opcode: "JUMP", targetIp: 1 }]), [
+			point(1, [0, 5], [0, 3, 5]),
+			point(2, [0, 3, 5], [0, 5, 6]),
+			point(3, [0, 5], [0, 5], "loop-backedge"),
+		]);
+		privateSlot(source, indexedLoad.dst);
+	});
 
 	it("adds no publication for an indexed instruction without a refined GC point", () => {
 		const source = emit(fn([key, indexedLoad, { opcode: "RETURN", value: 3 }]), []);

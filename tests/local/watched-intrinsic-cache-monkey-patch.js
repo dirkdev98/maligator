@@ -2,6 +2,23 @@ function callFloor(value) {
 	return Math.floor(value);
 }
 
+function readBytesPerElement(constructor) {
+	return constructor.BYTES_PER_ELEMENT;
+}
+
+for (let i = 0; i < 100; i++) {
+	if (readBytesPerElement(Uint8Array) !== 1)
+		throw new Error("Uint8Array watched constructor warm failure");
+}
+for (let i = 0; i < 100; i++) {
+	if (readBytesPerElement(Uint32Array) !== 4)
+		throw new Error("Uint32Array watched constructor identity failure");
+}
+for (let i = 0; i < 100; i++) {
+	if (readBytesPerElement(Uint8Array) !== 1 || readBytesPerElement(Uint32Array) !== 4)
+		throw new Error("alternating watched constructor identity failure");
+}
+
 const originalFloor = Math.floor;
 for (let i = 0; i < 100; i++) {
 	if (callFloor(7.9) !== 7) throw new Error("warm failure");

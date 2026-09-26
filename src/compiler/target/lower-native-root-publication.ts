@@ -1,3 +1,4 @@
+import { nativeProfitablePrivateRootRegisters } from "./lower-native-root-profitability.ts";
 import type { NativeFunctionPlan } from "./program-image.ts";
 import {
 	vmInstructionUsesRegister,
@@ -59,6 +60,7 @@ const PRIVATE_RESULT_OPCODES = new Set([
 	"CREATE_OBJECT",
 	"CREATE_OBJECT_SHAPED",
 	"CREATE_ARRAY",
+	"CREATE_FUNCTION",
 	"LOAD_THIS",
 	"LOAD_CAPTURED",
 	"LOAD_GLOBAL",
@@ -93,6 +95,15 @@ export function nativePrivateRootRegisters(
 		) {
 			if (frameRegisters.has(instruction.object)) candidates.add(instruction.object);
 			if (frameRegisters.has(instruction.dst)) candidates.add(instruction.dst);
+		} else if (
+			instruction.opcode === "LOAD_PROPERTY" &&
+			native.instructions[ip] === undefined &&
+			(native.registerRepresentations[instruction.key] === "int32" ||
+				native.registerRepresentations[instruction.key] === "number") &&
+			frameRegisters.has(instruction.dst)
+		) {
+			// The ordinary numeric probe writes a final result without collecting.
+			candidates.add(instruction.dst);
 		}
 	}
 	const actionsByIp = new Map<
@@ -117,6 +128,10 @@ export function nativePrivateRootRegisters(
 	}
 	for (const [ip, instruction] of fn.instructions.entries()) {
 		const writes = vmInstructionWriteRegisters(instruction);
+		// Exact operator kinds refine ordinary final-value expressions, not storage.
+		const hasStorageSpecialization =
+			native.instructions[ip] !== undefined &&
+			native.instructions[ip]?.kind !== "exact-operator-input-kinds";
 		const rootedOutputs =
 			nativeRootedOutputRegisters(instruction, ip, privateCallResultIps).length > 0 &&
 			safepointIps.has(ip);
@@ -143,7 +158,7 @@ export function nativePrivateRootRegisters(
 				(!(rootedOutputs && writesRegister) &&
 					!finalIteratorOutput &&
 					(regionRequiresContinuousRoot ||
-						(native.instructions[ip] !== undefined &&
+						(hasStorageSpecialization &&
 							(writesRegister || vmInstructionUsesRegister(instruction, register))))) ||
 				(instruction.opcode === "LOAD_ARGUMENT" &&
 					vmInstructionUsesRegister(instruction, register))
@@ -153,7 +168,11 @@ export function nativePrivateRootRegisters(
 		}
 	}
 	// Bound native register pressure and slow-edge code size in large functions.
-	return new Set([...candidates].slice(0, 32));
+	return nativeProfitablePrivateRootRegisters(
+		fn,
+		native,
+		new Set([...candidates].slice(0, 32)),
+	);
 }
 
 /** Entry-published parameters need no recopy while their physical registers are unchanged. */

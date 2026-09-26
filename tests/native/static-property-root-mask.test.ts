@@ -16,6 +16,40 @@ const hostGc = { MAL_HOST_GC: "1" };
 const expected = ["static-property-root-mask PASS"];
 const publicationKernels = [
 	{
+		name: "numericOnlyClosureLifetime",
+		boundary: "LOAD_PROPERTY",
+		probe: "mal_vm_array_try_get_index",
+		properties: [],
+		resultPrivate: true,
+		numericOnly: true,
+		closureDefinitionPrivate: true,
+	},
+	{
+		name: "numericOnlyIndexResult",
+		boundary: "LOAD_PROPERTY",
+		probe: "mal_vm_array_try_get_index",
+		properties: [],
+		resultPrivate: true,
+		numericOnly: true,
+	},
+	{
+		name: "numericOnlyIndexPair",
+		boundary: "LOAD_PROPERTY",
+		probe: "mal_vm_array_try_get_index",
+		properties: [],
+		resultPrivate: true,
+		numericOnly: true,
+	},
+	{
+		name: "numericOnlyThrowingIndex",
+		boundary: "LOAD_PROPERTY",
+		probe: "mal_vm_array_try_get_index",
+		properties: [],
+		firstBoundaryOnly: true,
+		resultPrivate: true,
+		numericOnly: true,
+	},
+	{
 		name: "detachedCallResultAcrossPoll",
 		boundary: "CALL",
 		probe: "mal_vm_call_cached",
@@ -189,10 +223,31 @@ describe("native static-property root-mask publication", () => {
 				return load.dst;
 			});
 			const native = result.programImage.native.functions[index]!;
+			if ("numericOnly" in kernel) {
+				expect(fn.instructions.some((op) => op.opcode === "LOAD_PROPERTY_STATIC")).toBe(
+					false,
+				);
+				for (const [ip, instruction] of fn.instructions.entries()) {
+					if (instruction.opcode !== "LOAD_PROPERTY") continue;
+					expect(native.instructions[ip]).toBeUndefined();
+					expect(["int32", "number"]).toContain(
+						native.registerRepresentations[instruction.key],
+					);
+				}
+			}
 			const frameRegisters = new Set(
 				native.gc.safepoints.flatMap((safepoint) => safepoint.rootRegisters),
 			);
 			const privateRegisters = nativePrivateRootRegisters(fn, native, frameRegisters);
+			if ("closureDefinitionPrivate" in kernel) {
+				expect(
+					fn.instructions.some(
+						(instruction) =>
+							instruction.opcode === "CREATE_FUNCTION" &&
+							privateRegisters.has(instruction.dst),
+					),
+				).toBe(true);
+			}
 			const boundarySafepoints = native.gc.safepoints
 				.filter(
 					(safepoint) =>
