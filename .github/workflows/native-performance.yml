@@ -154,7 +154,13 @@ jobs:
       - name: Select matching LLVM archive and link tools
         if: steps.baseline.outputs.skip != 'true'
         run: |
-          sudo apt-get install --yes llvm-19 lld-19
+          sudo apt-get install --yes llvm-19 lld-19 linux-tools-generic
+          for candidate in /usr/lib/linux-tools/*/perf; do
+            if [ -x "$candidate" ]; then
+              echo "NATIVE_MICRO_PERF=$candidate" >> "$GITHUB_ENV"
+              break
+            fi
+          done
           mkdir -p "$RUNNER_TEMP/native-performance-bin"
           ln -s "$(command -v llvm-ar-19)" "$RUNNER_TEMP/native-performance-bin/ar"
           ln -s "$(command -v ld.lld-19)" "$RUNNER_TEMP/native-performance-bin/ld.lld"
@@ -170,6 +176,7 @@ jobs:
           node ./src/index.ts cache status
           node scripts/native-micro-compare.ts --base "$COMPARISON_BASE" \
             --pairs 7 --target-node-ms 80 --budget-seconds 2400 \
+            --diagnostics --perf-pairs 3 \
             --output .cache/native-performance/micro --plan=json \
             | tee .cache/native-performance/plan.json
 
@@ -181,8 +188,36 @@ jobs:
           set -o pipefail
           node scripts/native-micro-compare.ts --base "$COMPARISON_BASE" \
             --pairs 7 --target-node-ms 80 --budget-seconds 2400 \
+            --diagnostics --perf-pairs 3 \
             --output .cache/native-performance/micro \
             2>&1 | tee .cache/native-performance/comparison.log
+
+      - name: Package bounded per-case production executables and symbol companions
+        if: always() && steps.baseline.outputs.skip != 'true'
+        run: |
+          mkdir -p .cache/native-performance/binary-bundles
+          for directory in .cache/native-performance/micro/builds/*; do
+            [ -d "$directory" ] || continue
+            files=()
+            for variant in baseline candidate; do
+              for name in production.elf symbols.elf; do
+                relative="$variant/diagnostics/$name"
+                if [ -f "$directory/$relative" ]; then
+                  files+=("$relative")
+                fi
+              done
+            done
+            [ "${#files[@]}" -gt 0 ] || continue
+            bundle=".cache/native-performance/binary-bundles/$(basename "$directory").tar.gz"
+            tar -czf "$bundle" -C "$directory" "${files[@]}"
+            bytes="$(stat -c %s "$bundle")"
+            printf '%s %s bytes\n' "$bundle" "$bytes" >> .cache/native-performance/binary-bundles.log
+            if [ "$bytes" -gt 32505856 ]; then
+              echo "Per-case executable bundle exceeds 31 MiB: $bundle ($bytes bytes)" >&2
+              mv "$bundle" "$bundle.oversized"
+              exit 2
+            fi
+          done
 
       - name: Retain micro evidence
         if: always() && steps.baseline.outputs.skip != 'true'
@@ -195,8 +230,154 @@ jobs:
             .cache/native-performance/**/*.mjs
             .cache/native-performance/**/*.c
             .cache/native-performance/**/*.h
+            .cache/native-performance/**/*.asm
+            .cache/native-performance/**/*.csv
+            .cache/native-performance/**/*.patch
           include-hidden-files: true
           if-no-files-found: warn
+          retention-days: 7
+
+      - name: Retain stable-shape-properties executable bundle
+        if: always() && steps.baseline.outputs.skip != 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: native-micro-elf-${{ github.event.pull_request.number }}-${{ matrix.comparison }}-stable-shape-properties-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .cache/native-performance/binary-bundles/stable-shape-properties.tar.gz
+          include-hidden-files: true
+          if-no-files-found: ignore
+          compression-level: 0
+          retention-days: 7
+
+      - name: Retain record-array-traversal executable bundle
+        if: always() && steps.baseline.outputs.skip != 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: native-micro-elf-${{ github.event.pull_request.number }}-${{ matrix.comparison }}-record-array-traversal-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .cache/native-performance/binary-bundles/record-array-traversal.tar.gz
+          include-hidden-files: true
+          if-no-files-found: ignore
+          compression-level: 0
+          retention-days: 7
+
+      - name: Retain direct-calls executable bundle
+        if: always() && steps.baseline.outputs.skip != 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: native-micro-elf-${{ github.event.pull_request.number }}-${{ matrix.comparison }}-direct-calls-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .cache/native-performance/binary-bundles/direct-calls.tar.gz
+          include-hidden-files: true
+          if-no-files-found: ignore
+          compression-level: 0
+          retention-days: 7
+
+      - name: Retain indirect-calls executable bundle
+        if: always() && steps.baseline.outputs.skip != 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: native-micro-elf-${{ github.event.pull_request.number }}-${{ matrix.comparison }}-indirect-calls-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .cache/native-performance/binary-bundles/indirect-calls.tar.gz
+          include-hidden-files: true
+          if-no-files-found: ignore
+          compression-level: 0
+          retention-days: 7
+
+      - name: Retain closure-calls executable bundle
+        if: always() && steps.baseline.outputs.skip != 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: native-micro-elf-${{ github.event.pull_request.number }}-${{ matrix.comparison }}-closure-calls-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .cache/native-performance/binary-bundles/closure-calls.tar.gz
+          include-hidden-files: true
+          if-no-files-found: ignore
+          compression-level: 0
+          retention-days: 7
+
+      - name: Retain short-lived-records executable bundle
+        if: always() && steps.baseline.outputs.skip != 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: native-micro-elf-${{ github.event.pull_request.number }}-${{ matrix.comparison }}-short-lived-records-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .cache/native-performance/binary-bundles/short-lived-records.tar.gz
+          include-hidden-files: true
+          if-no-files-found: ignore
+          compression-level: 0
+          retention-days: 7
+
+      - name: Retain heap-valued-projection executable bundle
+        if: always() && steps.baseline.outputs.skip != 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: native-micro-elf-${{ github.event.pull_request.number }}-${{ matrix.comparison }}-heap-valued-projection-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .cache/native-performance/binary-bundles/heap-valued-projection.tar.gz
+          include-hidden-files: true
+          if-no-files-found: ignore
+          compression-level: 0
+          retention-days: 7
+
+      - name: Retain chained-static-properties executable bundle
+        if: always() && steps.baseline.outputs.skip != 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: native-micro-elf-${{ github.event.pull_request.number }}-${{ matrix.comparison }}-chained-static-properties-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .cache/native-performance/binary-bundles/chained-static-properties.tar.gz
+          include-hidden-files: true
+          if-no-files-found: ignore
+          compression-level: 0
+          retention-days: 7
+
+      - name: Retain infrequent-getter-properties executable bundle
+        if: always() && steps.baseline.outputs.skip != 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: native-micro-elf-${{ github.event.pull_request.number }}-${{ matrix.comparison }}-infrequent-getter-properties-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .cache/native-performance/binary-bundles/infrequent-getter-properties.tar.gz
+          include-hidden-files: true
+          if-no-files-found: ignore
+          compression-level: 0
+          retention-days: 7
+
+      - name: Retain native-property-owned-3 executable bundle
+        if: always() && steps.baseline.outputs.skip != 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: native-micro-elf-${{ github.event.pull_request.number }}-${{ matrix.comparison }}-native-property-owned-3-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .cache/native-performance/binary-bundles/native-property-owned-3.tar.gz
+          include-hidden-files: true
+          if-no-files-found: ignore
+          compression-level: 0
+          retention-days: 7
+
+      - name: Retain native-property-owned-6 executable bundle
+        if: always() && steps.baseline.outputs.skip != 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: native-micro-elf-${{ github.event.pull_request.number }}-${{ matrix.comparison }}-native-property-owned-6-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .cache/native-performance/binary-bundles/native-property-owned-6.tar.gz
+          include-hidden-files: true
+          if-no-files-found: ignore
+          compression-level: 0
+          retention-days: 7
+
+      - name: Retain native-property-mixed-prototypes executable bundle
+        if: always() && steps.baseline.outputs.skip != 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: native-micro-elf-${{ github.event.pull_request.number }}-${{ matrix.comparison }}-native-property-mixed-prototypes-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .cache/native-performance/binary-bundles/native-property-mixed-prototypes.tar.gz
+          include-hidden-files: true
+          if-no-files-found: ignore
+          compression-level: 0
+          retention-days: 7
+
+      - name: Retain native-property-middle-getter executable bundle
+        if: always() && steps.baseline.outputs.skip != 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: native-micro-elf-${{ github.event.pull_request.number }}-${{ matrix.comparison }}-native-property-middle-getter-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .cache/native-performance/binary-bundles/native-property-middle-getter.tar.gz
+          include-hidden-files: true
+          if-no-files-found: ignore
+          compression-level: 0
           retention-days: 7
 
   compiler:

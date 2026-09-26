@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
 	appendFileSync,
 	cpSync,
@@ -25,6 +25,14 @@ import type * as ArtifactCodec from "../src/compiler/target/compiler-artifact-co
 import type * as ProgramImage from "../src/compiler/target/program-image.ts";
 import type { NativeBuildPhaseEvent } from "../src/native-build-context.ts";
 import type * as Harness from "../src/test-harness.ts";
+import {
+	collectNativeMicroDiagnostics,
+	copyBeforeNativeStrip,
+	hasValidMicroPerfCounters,
+	MICRO_PERF_EVENTS,
+	parseMicroPerfCounters,
+	probeNativeMicroPerf,
+} from "./native-micro-diagnostics.ts";
 import { runBoundedProcess } from "./performance-process.ts";
 import { loadRuntimeGapCatalog } from "./runtime-gap-catalog.ts";
 import {
@@ -61,6 +69,8 @@ const HELP = `Usage: node scripts/native-micro-compare.ts --base REF [options]
   --case-timeout-ms N        limit for each kernel process (default: 30000)
   --budget-seconds N         whole-run budget including builds (default: 2400)
   --output DIRECTORY        new evidence directory (default: .cache/native-micro/<time>)
+  --diagnostics             retain exact production ELF, symbol companion and assembly
+  --perf-pairs N            optional post-timing hardware-counter pairs (requires diagnostics)
   --plan=json               print selected work without writing or building
 
 The current checkout is the candidate. Both compilers build the same frozen fixture
@@ -70,6 +80,10 @@ checksum and operation-count oracle. Calibration is bounded by both native hosts
 Reports retain source/toolchain identities, build phases/cache reuse, generated C,
 artifact and executable sizes, binary text size, every sample, and child logs.
 Build times are single observations, not paired build-performance conclusions.
+Diagnostics require Linux ELF64, llvm-nm-19 and llvm-objdump-19. They isolate the
+final-link cache key to copy symbols before normal production stripping; generated
+objects and runtime archives remain reusable. Perf is probed without privilege or
+kernel-setting changes; unavailable counters remain explicitly unavailable.
 Exit 2 means failed or incomplete; completion does not declare a performance win.
 `;
 
@@ -82,6 +96,8 @@ interface Options {
 	budgetSeconds: number;
 	output: string;
 	plan: boolean;
+	diagnostics: boolean;
+	perfPairs: number;
 }
 
 interface BuildRequest {
@@ -89,6 +105,8 @@ interface BuildRequest {
 	fixture: string;
 	id: string;
 	output: string;
+	diagnostics: boolean;
+	linkCacheVariant: string;
 }
 
 interface BuildEvidence {
@@ -121,6 +139,14 @@ interface CaseEvidence {
 	pairs: Array<Pair>;
 	scale?: number;
 	oracle?: KernelOutput;
+	perfStatus?: "not-requested" | "unavailable" | "running" | "complete" | "failed";
+	perfError?: string;
+	perfSamples?: Array<{
+		pair: number;
+		variant: "baseline" | "candidate";
+		output: KernelOutput;
+		counters: ReturnType<typeof parseMicroPerfCounters>;
+	}>;
 }
 
 function sha256(value: string | Uint8Array): string {
@@ -219,11 +245,17 @@ function parseOptions(args: Array<string>): Options | undefined {
 			new Date().toISOString().replaceAll(":", "-"),
 		),
 		plan: false,
+		diagnostics: false,
+		perfPairs: 0,
 	};
 	while (args.length > 0) {
 		const option = args.shift();
 		if (option === "--plan=json") {
 			options.plan = true;
+			continue;
+		}
+		if (option === "--diagnostics") {
+			options.diagnostics = true;
 			continue;
 		}
 		const value = args.shift();
@@ -239,10 +271,13 @@ function parseOptions(args: Array<string>): Options | undefined {
 			else if (option === "--target-node-ms") options.targetNodeMs = number;
 			else if (option === "--case-timeout-ms") options.caseTimeoutMs = number;
 			else if (option === "--budget-seconds") options.budgetSeconds = number;
+			else if (option === "--perf-pairs") options.perfPairs = number;
 			else throw new Error(`unknown option: ${option}`);
 		}
 	}
 	if (!options.base) throw new Error("--base REF is required");
+	if (options.perfPairs > 0 && !options.diagnostics)
+		throw new Error("--perf-pairs requires --diagnostics");
 	if (options.cases.length === 0) options.cases = DEFAULT_CASES;
 	if (new Set(options.cases).size !== options.cases.length)
 		throw new Error("--case IDs must not repeat");
@@ -271,6 +306,7 @@ async function buildWorker(request: BuildRequest): Promise<void> {
 	const phases: Array<NativeBuildPhaseEvent> = [];
 	const frontend: Array<unknown> = [];
 	const nativeCaches: Array<unknown> = [];
+	const diagnosticDirectory = path.join(path.dirname(request.output), "diagnostics");
 	const started = performance.now();
 	const built = buildNativeBinaryResult({
 		fixture: request.fixture,
@@ -279,11 +315,13 @@ async function buildWorker(request: BuildRequest): Promise<void> {
 		config,
 		compiled: true,
 		production: true,
+		nativeLinkCacheVariant: request.diagnostics ? request.linkCacheVariant : undefined,
 		outDir: path.dirname(request.output),
 		environment: cleanTestEnvironment(),
 		onFrontendCacheEvent: (event) => frontend.push(event),
 		onNativeCacheEvent: (event) => nativeCaches.push(event),
 		onNativeBuildPhase: (event) => {
+			if (request.diagnostics) copyBeforeNativeStrip(diagnosticDirectory, event);
 			phases.push(event);
 			console.log(JSON.stringify(event));
 		},
@@ -305,7 +343,11 @@ async function buildWorker(request: BuildRequest): Promise<void> {
 		throw new Error("size did not produce a decimal .text section measurement");
 	const generated = phases.find((event) => event.phase === "write generated C");
 	if (generated?.bytes === undefined) throw new Error("build omitted generated C size");
+	const diagnostics = request.diagnostics
+		? collectNativeMicroDiagnostics(built, diagnosticDirectory, request.linkCacheVariant)
+		: undefined;
 	writeJson(request.output, {
+		diagnostics,
 		binaryPath: built.binaryPath,
 		buildMs,
 		executableBytes: statSync(built.binaryPath).size,
@@ -353,6 +395,10 @@ async function compare(options: Options): Promise<void> {
 		cases: selected.map(({ fixturePath: _fixturePath, ...descriptor }) => descriptor),
 		builds: selected.length * 2,
 		measuredPairs: selected.length * options.pairs,
+		optionalPerfPairs: selected.length * options.perfPairs,
+		diagnosticLinkPolicy: options.diagnostics
+			? "fresh cache key; unchanged production flags; copy before strip"
+			: undefined,
 		warmupBlocksPerProcess: 5,
 		maximumCalibrationScale: 256,
 		parity: ["id", "scale", "operations", "checksum"],
@@ -384,13 +430,21 @@ async function compare(options: Options): Promise<void> {
 		},
 		fixtureFiles: {} as Record<string, string>,
 		baselineArchiveSha256: "",
+		perf: undefined as ReturnType<typeof probeNativeMicroPerf> | undefined,
 		cases,
 		error: undefined as string | undefined,
 	};
 	const save = () =>
 		writeJson(path.join(options.output, "report.json"), {
 			...report,
-			cases: cases.map((entry) => ({ ...entry, summary: summarize(entry.pairs) })),
+			timingComplete:
+				cases.length === selected.length &&
+				cases.every((entry) => entry.pairs.length === options.pairs),
+			cases: cases.map((entry) => ({
+				...entry,
+				timingComplete: entry.pairs.length === options.pairs,
+				summary: summarize(entry.pairs),
+			})),
 		});
 	const remaining = (limit = Number.MAX_SAFE_INTEGER) => {
 		const milliseconds = Math.floor(deadline - performance.now());
@@ -403,13 +457,17 @@ async function compare(options: Options): Promise<void> {
 		args: Array<string>,
 		cwd: string,
 		limit?: number,
+		environmentOverrides: NodeJS.ProcessEnv = {},
 	) => {
 		const log = path.join(options.output, "logs", `${label}.log`);
 		mkdirSync(path.dirname(log), { recursive: true });
-		writeFileSync(log, `${JSON.stringify({ executable, args, cwd })}\n`);
+		writeFileSync(
+			log,
+			`${JSON.stringify({ executable, args, cwd, environmentOverrides })}\n`,
+		);
 		const result = await runBoundedProcess(executable, args, {
 			cwd,
-			environment: cleanTestEnvironment(),
+			environment: cleanTestEnvironment(environmentOverrides),
 			timeoutMs: remaining(limit),
 			onStdout: (chunk) => appendFileSync(log, chunk),
 			onStderr: (chunk) => appendFileSync(log, chunk),
@@ -438,6 +496,35 @@ async function compare(options: Options): Promise<void> {
 		cpSync(path.join(ROOT, "bench/runtime-gap"), fixtures, { recursive: true });
 		report.fixtureFiles = fileManifest(fixtures);
 		writeJson(path.join(options.output, "plan.json"), plan);
+		if (options.diagnostics) {
+			writeFileSync(
+				path.join(options.output, "candidate.patch"),
+				git(["diff", "--binary", "HEAD"]),
+			);
+			writeJson(
+				path.join(options.output, "candidate-source-files.json"),
+				Object.fromEntries(
+					git(["ls-files", "-z"])
+						.split("\0")
+						.filter(Boolean)
+						.map((file) => [
+							file,
+							existsSync(path.join(ROOT, file))
+								? sha256(readFileSync(path.join(ROOT, file)))
+								: null,
+						]),
+				),
+			);
+			const untracked = git(["ls-files", "--others", "--exclude-standard", "-z"])
+				.split("\0")
+				.filter(Boolean);
+			for (const file of untracked) {
+				const destination = path.join(options.output, "candidate-untracked", file);
+				mkdirSync(path.dirname(destination), { recursive: true });
+				cpSync(path.join(ROOT, file), destination, { dereference: false });
+			}
+		}
+		if (options.perfPairs > 0) report.perf = probeNativeMicroPerf(options.output);
 		for (const [caseIndex, descriptor] of selected.entries()) {
 			console.log(`${descriptor.id}: build matching compilers`);
 			const fixture = path.join(fixtures, descriptor.fixture);
@@ -468,6 +555,8 @@ async function compare(options: Options): Promise<void> {
 					fixture,
 					id: descriptor.id,
 					output: path.join(buildDirectory, "build.json"),
+					diagnostics: options.diagnostics,
+					linkCacheVariant: `micro-diagnostics-${randomUUID()}`,
 				};
 				await run(
 					`${descriptor.id}-build-${variant}`,
@@ -560,6 +649,75 @@ async function compare(options: Options): Promise<void> {
 				save();
 			}
 			console.log(JSON.stringify({ id: entry.id, ...summarize(entry.pairs) }));
+			entry.perfStatus =
+				options.perfPairs === 0
+					? "not-requested"
+					: report.perf?.status === "available"
+						? "running"
+						: "unavailable";
+			save();
+			if (options.perfPairs > 0 && report.perf?.status === "available") {
+				try {
+					entry.perfSamples = [];
+					for (let pair = 0; pair < options.perfPairs; pair++) {
+						const order =
+							pair % 2 === 0
+								? (["baseline", "candidate"] as const)
+								: (["candidate", "baseline"] as const);
+						for (const variant of order) {
+							const countersFile = path.join(
+								options.output,
+								"logs",
+								`${descriptor.id}-perf-${pair}-${variant}.csv`,
+							);
+							const output = parseKernelOutput(
+								await run(
+									`${descriptor.id}-perf-${pair}-${variant}`,
+									report.perf.executable,
+									[
+										"stat",
+										"--no-big-num",
+										"-x",
+										";",
+										"-o",
+										countersFile,
+										"-e",
+										MICRO_PERF_EVENTS.join(","),
+										"--",
+										entry.builds[variant]!.binaryPath,
+										String(entry.scale),
+										"5",
+									],
+									ROOT,
+									options.caseTimeoutMs,
+									{ LC_ALL: "C" },
+								),
+							);
+							const counters = parseMicroPerfCounters(readFileSync(countersFile, "utf8"));
+							entry.perfSamples.push({ pair, variant, output, counters });
+							save();
+							assertRuntimeGapParity(entry.oracle, output);
+							if (!hasValidMicroPerfCounters(counters))
+								throw new Error(
+									`${descriptor.id}: hardware counters became unavailable after the probe`,
+								);
+						}
+					}
+					entry.perfStatus = "complete";
+					save();
+				} catch (error) {
+					entry.perfStatus = "failed";
+					entry.perfError = error instanceof Error ? error.message : String(error);
+					save();
+					throw error;
+				}
+			}
+		}
+		for (const entry of cases) {
+			for (const build of Object.values(entry.builds)) {
+				if (sha256(readFileSync(build.binaryPath)) !== build.executableSha256)
+					throw new Error(`${entry.id}: measured executable changed during comparison`);
+			}
 		}
 		if (!isDeepStrictEqual(candidate, sourceIdentity()))
 			throw new Error("candidate source changed during comparison");
