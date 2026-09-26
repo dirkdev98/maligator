@@ -1803,7 +1803,7 @@ describe("emit-program-image instruction packing", () => {
 		);
 	});
 
-	it("reuses rooted call outputs through static-property hits and misses", () => {
+	it("reuses native-planned rooted call outputs through static-property hits and misses", () => {
 		const call: BytecodeInstruction = {
 			opcode: "CALL",
 			dst: 0,
@@ -1837,6 +1837,9 @@ describe("emit-program-image instruction packing", () => {
 			0,
 			(plan) => ({
 				...plan,
+				instructions: exactLoadFunction.instructions.map((instruction) =>
+					instruction.opcode === "CALL" ? { kind: "call" as const } : undefined,
+				),
 				gc: {
 					safepoints: [
 						{

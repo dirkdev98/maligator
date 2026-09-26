@@ -2125,9 +2125,9 @@ MalInlineCache *mal_vm_inherited_property_stub_cache(MalVm *vm) {
 }
 
 /**
- * Shared cold handler for a compiled static-name site's second-level inherited
- * or missing-chain row. The emitted always-inline prefix has already rejected
- * its local own/inherited/special handlers. Keeping full chain and table-handle
+ * Shared handler for a compiled static-name site's second-level inherited
+ * or missing-chain row. The static probes have already rejected the local
+ * own/inherited/special handlers. Keeping full chain and table-handle
  * validation here avoids cloning it into every generated property access.
  */
 bool mal_vm_inherited_stub_try_load_static(
@@ -2143,6 +2143,44 @@ bool mal_vm_inherited_stub_try_load_static(
         &vm->inherited_property_stub[mal_inherited_stub_hash(
             object->shape, object->prototype, site->key)];
     return mal_vm_inherited_try_load(receiver, site->key, stub, out);
+}
+
+// Keep all non-monomorphic static cache hits noncollecting: callers may hold private roots.
+__attribute__((noinline)) bool mal_vm_property_try_load_static_remaining(
+    MalVm *vm, MalValue receiver, const MalObject *object,
+    const MalInlineCache *ic, MalValue *out
+) {
+    if (ic->mode == MAL_IC_MODE_ARRAY_LENGTH &&
+        mal_value_is_heap_type(receiver, MAL_HEAP_ARRAY_OBJECT)) {
+        const MalArrayObject *array = (const MalArrayObject *) mal_value_to_heap(receiver);
+        *out = mal_ops_number_value((f64) array->length);
+        mal_perf_ic_load_array_length_hit();
+        return true;
+    }
+    if (ic->mode == MAL_IC_MODE_TYPED_ARRAY_LENGTH) {
+        MalTypedArrayObject *array;
+        u32 length;
+        if (mal_vm_admit_typed_array_length(vm, receiver, &array, &length)) {
+            *out = mal_value_from_i32((i32) length);
+            mal_perf_ic_load_typed_array_length_hit();
+            return true;
+        }
+    }
+    if (ic->mode == MAL_IC_MODE_INHERITED_VALUE && ic->poly_count > 0 &&
+        ic->receiver_type == MAL_HEAP_OBJECT) {
+        return mal_vm_local_inherited_value_try_load_static(
+            object, ic, out);
+    }
+    if (ic->mode == MAL_IC_MODE_INHERITED_VALUE ||
+        ic->mode == MAL_IC_MODE_INHERITED_SLOT ||
+        ic->mode == MAL_IC_MODE_INHERITED_TABLE ||
+        ic->mode == MAL_IC_MODE_MISSING) {
+        return mal_vm_inherited_try_load_static(receiver, ic, out);
+    }
+    return (object != nullptr && mal_vm_object_try_load_remaining(object, ic->key, ic, out)) ||
+        mal_vm_watched_try_load_static(receiver, ic, out) ||
+        mal_vm_special_try_load_static(vm, receiver, ic, out) ||
+        mal_vm_inherited_stub_try_load_static(vm, receiver, object, ic, out);
 }
 
 /**

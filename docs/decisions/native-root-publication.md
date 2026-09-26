@@ -1,9 +1,9 @@
 # Native root publication
 
 The native backend can keep eligible property receivers and results in private
-`MalValue` locals between collecting edges. The ordinary static property cache
-probe is unchanged. A successful probe assigns the private result directly;
-only its collecting/reentrant miss publishes incoming roots. Numeric operator
+`MalValue` locals between collecting edges. Static property loads retain the
+existing cache admission rules. A successful probe assigns the private result
+directly; only its collecting/reentrant miss publishes incoming roots. Numeric operator
 guards and TDZ checks likewise publish inside their generic or throwing edge.
 Dense Array-values iteration uses its existing noncalling probe and publishes
 only before the generic step. Length and storage are read afresh on each probe;
@@ -11,6 +11,13 @@ holes and nonstandard iterators retain the complete JavaScript protocol.
 Ordinary static stores likewise publish before their generic miss. A successful
 store may grow slots and invalidate assumptions without collecting or reentering
 JavaScript; its existing barriers remain in place.
+
+The monomorphic own-slot cache probe stays inline. The remaining static cache
+probes share an out-of-line helper, retaining their own-table, polymorphic,
+inherited, watched, primitive, length, and VM-wide cache guards. That helper
+cannot collect or reenter JavaScript: its caller may still hold private values
+and a borrowed receiver pointer. Root publication belongs after all those probes
+fail, immediately before the generic property operation.
 
 ## Effects and root maps
 
@@ -70,6 +77,16 @@ outputs temporarily alias shadow slots for the entire operation, with explicit
 reloads into private locals on both normal and throwing exits. The iterator-step
 emitter already uses runtime-owned temporary results and assigns its final VM
 outputs after success, so those final assignments can remain private.
+
+An ordinary `CALL` also assigns only a final value: its completion is checked for
+a throw before the destination changes, and its outgoing poll follows that
+assignment. When the call has no native instruction plan, region action, or
+virtual field-call materialization, a selected destination stays private through
+that sequence. Incoming publication retains the old operand if register reuse
+also makes the destination a receiver or argument. The returned value is copied
+inside a collecting return poll and again before a later collecting call if the
+poll might have been skipped. Specialized calls keep their existing rooted-output
+contract until their intermediate storage is admitted separately.
 
 Register reuse does not erase these obligations. Selection audits every
 definition of a physical register. Virtual field-call materializations,
@@ -147,9 +164,12 @@ are constructed only when included in the emitted path. Otherwise a fallback
 can change the runtime mask without the outer emitter restoring roots needed
 by a later call or collecting poll.
 
-Ordinary numeric indexed reads also defer incoming publication to the existing
-dense-array probe's miss branch. Numeric index conversion and a successful
-dense hit cannot collect or reenter JavaScript; the generic indexed helper can.
+In functions with private roots, ordinary numeric indexed reads also defer
+incoming publication to the existing dense-array probe's miss branch. Numeric
+index conversion and a successful dense hit cannot collect or reenter JavaScript;
+the generic indexed helper can. Functions without private roots publish the mask
+at the instruction boundary. Refined GC metadata still excludes proven
+noncollecting operations.
 Boxed keys and specialized indexed/projection plans retain their existing
 publication because their conversion or intermediate-storage contracts differ.
 The returned heap value is published before a later collecting poll, including

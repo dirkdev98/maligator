@@ -821,4 +821,74 @@ for (let index = 0; index < 8; index++) {
 	}
 }
 
+function detachedCallResultAcrossPoll(callback, collect) {
+	const result = callback();
+	collect();
+	return result.marker;
+}
+
+function retainThroughThrowingCall(owner, callback) {
+	const retained = owner.value;
+	try {
+		const result = callback();
+		gc();
+		return retained.marker + result.marker;
+	} catch (error) {
+		gc();
+		return retained.marker + error.payload.marker;
+	}
+}
+
+globalThis.staticPropertyCallResults = [
+	detachedCallResultAcrossPoll,
+	retainThroughThrowingCall,
+];
+
+let callResultCollections = 0;
+for (let index = 0; index < 8; index++) {
+	const owner = { value: { marker: 277 } };
+	const result = globalThis.staticPropertyCallResults[0](
+		function () {
+			const value = owner.value;
+			owner.value = null;
+			return value;
+		},
+		function () {
+			callResultCollections++;
+			gc();
+		},
+	);
+	if (result !== 277 || owner.value !== null) {
+		throw new Error("detached call result lost at a return poll or reentrant collection");
+	}
+}
+if (callResultCollections !== 8) {
+	throw new Error("call result did not cross the reentrant collecting callback");
+}
+
+const callThrowOwner = { value: { marker: 281 } };
+for (let index = 0; index < 8; index++) {
+	if (
+		globalThis.staticPropertyCallResults[1](callThrowOwner, function () {
+			return { marker: 283 };
+		}) !== 564
+	) {
+		throw new Error("heap-valued call result warmup mismatch");
+	}
+}
+let throwingCallCount = 0;
+const callCatchResult = globalThis.staticPropertyCallResults[1](
+	callThrowOwner,
+	function () {
+		throwingCallCount++;
+		callThrowOwner.value = null;
+		const failure = { payload: { marker: 293 } };
+		gc();
+		throw failure;
+	},
+);
+if (callCatchResult !== 574 || throwingCallCount !== 1 || callThrowOwner.value !== null) {
+	throw new Error("throwing call lost its preceding private root or caught heap payload");
+}
+
 console.log("static-property-root-mask PASS");
