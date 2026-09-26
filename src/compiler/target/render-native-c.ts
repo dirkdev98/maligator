@@ -37,9 +37,16 @@ import type {
 	NativePropertyProjectionAction,
 	NativePropertyProjectionOperand,
 } from "./lower-native-fast-paths.ts";
+import {
+	nativePrivateCallResultIps,
+	nativePrivateRootRegisters,
+	nativeEntryStableRootRegisters,
+	nativeRootedOutputRegisters,
+} from "./lower-native-root-publication.ts";
 import { profileOperationForInstruction } from "./profile-metadata.ts";
 import {
 	nativeFrameRootRegisters,
+	nativeInstructionEffects,
 	vmCallProvesBuiltin,
 	validateNativeDirectEntry,
 	validateNativeLiteralSwitches,
@@ -64,6 +71,7 @@ import {
 	computeArgumentRetentionLimit,
 	decodeVmValueOperand,
 	vmExceptionHandlerTargets as exceptionHandlerTargets,
+	vmInstructionWriteRegisters,
 } from "./runtime-image.ts";
 import type { BytecodeFunction, BytecodeInstruction } from "./runtime-image.ts";
 
@@ -563,6 +571,43 @@ function cInactiveRootMaskPublication(mask: bigint): string {
 	return `MAL_ROOT_MASK(0x${mask.toString(16)})`;
 }
 
+interface NativeRootPublication {
+	readonly privateCallResultIps: ReadonlySet<number>;
+	readonly entryStableRegisters: ReadonlySet<number>;
+	readonly slots: Map<number, number>;
+	readonly safepoints: ReadonlyMap<
+		number,
+		NativeFunctionPlan["gc"]["safepoints"][number]
+	>;
+}
+
+function cPrivateRootPublication(
+	plan: NativeRootPublication | undefined,
+	ip: number,
+	edge: "incoming" | "outgoing",
+	knownPublished?: ReadonlySet<number>,
+): Array<string> {
+	const point = plan?.safepoints.get(ip);
+	if (plan === undefined || plan.slots.size === 0 || point === undefined) return [];
+	const live = new Set(
+		edge === "incoming" ? point.incomingRootRegisters : point.outgoingRootRegisters,
+	);
+	const active = new Set(point.rootRegisters);
+	const stores: Array<string> = [];
+	for (const [register, slot] of plan.slots) {
+		if (live.has(register)) {
+			if (plan.entryStableRegisters.has(register) || knownPublished?.has(register))
+				continue;
+			stores.push(`__gc_slots[${slot}] = r${register};`);
+		} else if (slot >= 64 || active.has(register)) {
+			// A dead private local can still contain a reclaimed pointer. In particular,
+			// an output-only root must stay empty until the helper returns its value.
+			stores.push(`__gc_slots[${slot}] = MAL_VALUE_UNDEFINED;`);
+		}
+	}
+	return stores;
+}
+
 /**
  * Emit a compiled C function for `fn`, or null when it uses a construct the
  * backend doesn't lower yet (the caller then leaves it to the interpreter).
@@ -651,15 +696,16 @@ function emitCompiledVariant(
 	// them with a contiguous `__gc_slots` array published as a MalRootFrame, so a
 	// collection at a call/back-edge safepoint inside this function can mark them.
 	// (number/boolean-rep registers hold unboxed scalars — never heap pointers.)
-	// The registers ARE the slots (via `#define r<i> (__gc_slots[<slot>])`), so no
-	// spilling is needed; every exit must unlink the frame (gcUnlink).
+	// Audited property values can remain private between collecting edges. Other
+	// registers alias these slots, including compound helper outputs that must be
+	// visible throughout an operation. Every exit unlinks the frame (gcUnlink).
 	//
 	// Execution lowering owns precise per-safepoint physical-register liveness,
 	// including operation operands/results, exceptional exits, target temporaries,
 	// and native loop-backedge polls. This static-shadow-frame backend consumes that
 	// contract by allocating the union of its exact maps and publishing dead-slot
-	// masks at each individual site. It never re-runs liveness or infers GC policy
-	// from bytecode; slots beyond the fixed-width mask remain conservatively rooted.
+	// masks at each individual site. Private publications consume its separate
+	// incoming/outgoing maps; dead private slots beyond the mask are cleared.
 	const rootRegisters = new Set(nativeFrameRootRegisters(fn, nativeContract));
 	const valueRegs: Array<number> = [];
 	for (let i = 0; i < fn.registerCount; i++) {
@@ -682,6 +728,21 @@ function emitCompiledVariant(
 	}
 	const slotOf = new Map<number, number>();
 	valueRegs.forEach((reg, slot) => slotOf.set(reg, slot));
+	const privateCallResultIps = nativePrivateCallResultIps(fn, nativeContract);
+	const privateCandidates = nativePrivateRootRegisters(
+		fn,
+		nativeContract,
+		rootRegisters,
+		privateCallResultIps,
+	);
+	const rootPublication: NativeRootPublication = {
+		privateCallResultIps,
+		entryStableRegisters: nativeEntryStableRootRegisters(fn, privateCandidates),
+		slots: new Map([...slotOf].filter(([register]) => privateCandidates.has(register))),
+		safepoints: new Map(
+			nativeContract.gc.safepoints.map((point) => [point.instructionIp, point]),
+		),
+	};
 	const slotCount = valueRegs.length;
 	const inactiveRootMasks = nativeInactiveRootMasks(nativeContract.gc.safepoints, slotOf);
 	const gcSafepointKinds = new Map(
@@ -1009,10 +1070,12 @@ function emitCompiledVariant(
 		fieldCalls,
 		nativeContract.literalSwitches,
 		stringConstants,
+		rootPublication,
 	);
 	if (body === null) {
 		return null;
 	}
+	const privateRegisters = new Set(rootPublication.slots.keys());
 
 	// Defensive: a register operand of -1 (a "no register" sentinel beyond the
 	// RETURN case handled below) would emit invalid C like `r-1`. Bail to the
@@ -1085,11 +1148,9 @@ function emitCompiledVariant(
 		);
 	}
 
-	// Registers are plain C locals: `number`-rep ones as doubles, `boolean`-rep
-	// as bool (both unboxed). MalValue-rep registers instead alias slots of the
-	// root-frame array so the collector can scan them; the `#define` keeps the
-	// `r<i>` spelling used throughout the body. The macros are #undef'd at the end
-	// of the function (the batch path emits many functions into one unit).
+	// Numeric/scalar and eligible private boxed registers are plain C locals.
+	// Continuously rooted values alias the frame; the shared r<i> spelling lets
+	// instruction lowering preserve its existing intermediate/output contracts.
 	if (totalSlots > 0) {
 		lines.push(`    MalValue __gc_slots[${totalSlots}];`);
 	}
@@ -1108,7 +1169,10 @@ function emitCompiledVariant(
 	}
 	for (let i = 0; i < fn.registerCount; i++) {
 		const slot = slotOf.get(i);
-		if (slot !== undefined) {
+		if (privateRegisters.has(i)) {
+			lines.push(`    MalValue __private_r${i};`);
+			lines.push(`#define r${i} (__private_r${i})`);
+		} else if (slot !== undefined) {
 			lines.push(`#define r${i} (__gc_slots[${slot}])`);
 		} else {
 			lines.push(`    ${cTypeOf(reps[i]!)} r${i};`);
@@ -1130,6 +1194,9 @@ function emitCompiledVariant(
 	}
 	for (let i = fn.parameterCount; i < fn.registerCount; i++) {
 		lines.push(`    r${i} = ${zeroOf(reps[i]!)};`);
+	}
+	for (const register of privateRegisters) {
+		lines.push(`    __gc_slots[${slotOf.get(register)!}] = r${register};`);
 	}
 	if (fn.argumentSnapshotCount > 0) {
 		lines.push(
@@ -2212,6 +2279,7 @@ function emitBody(
 	fieldCalls?: ReadonlyArray<NativeFieldCall>,
 	literalSwitches?: NativeFunctionPlan["literalSwitches"],
 	stringConstants: ReadonlyArray<ReadonlyArray<number>> = [],
+	rootPublication?: NativeRootPublication,
 ): EmittedBody | null {
 	if (!vmRegionActionsAreCurrent(specializations, regionActions)) {
 		throw new Error("Native function has stale region actions");
@@ -2973,6 +3041,18 @@ function emitBody(
 		indexedLoopElements,
 	);
 	const staticPropertyNumericActionByIp = nativeFastPaths.propertyProjectionActions;
+	// Numeric projections can elide boxed writes entirely. Their dormant boxed
+	// temporaries must retain the collector-cleared storage used by the fallback.
+	for (const projection of nativeFastPaths.propertyProjections) {
+		for (const load of projection.loads)
+			rootPublication?.slots.delete(load.instruction.dst);
+		for (const step of projection.steps)
+			rootPublication?.slots.delete(step.instruction.dst);
+		for (const ip of projection.skippedIps) {
+			for (const register of vmInstructionWriteRegisters(fn.instructions[ip]!))
+				rootPublication?.slots.delete(register);
+		}
+	}
 	const pairedArrayLoopActionByIp = nativeFastPaths.pairedArrayLoopActions;
 	const pairedArrayLoopByLengthLoad = new Map(
 		nativeFastPaths.pairedArrayLoops.map((plan) => [plan.lengthLoadIp, plan]),
@@ -3039,6 +3119,9 @@ function emitBody(
 	let lastPublishedPos = -1;
 	let lastPublishedSite = -1;
 	let lastPublishedInactiveRootMask: bigint | undefined;
+	// Entry initialization copies every private value into its shadow slot.
+	let knownPublishedPrivateRoots = new Set(rootPublication?.slots.keys());
+	const hasPrivateRoots = (rootPublication?.slots.size ?? 0) > 0;
 	for (let ip = 0; ip < fn.instructions.length; ip++) {
 		if (jumpTargets.has(ip)) {
 			lines.push(`L${ip}:;`);
@@ -3046,15 +3129,25 @@ function emitBody(
 			lastPublishedPos = -1;
 			lastPublishedSite = -1;
 			lastPublishedInactiveRootMask = undefined;
+			knownPublishedPrivateRoots.clear();
 		}
 		const literalSwitch = switches.get(ip);
 		if (literalSwitch !== undefined) {
+			knownPublishedPrivateRoots.clear();
 			const branch = (target: number, branchIp: number) => {
 				const mask = inactiveRootMasks.get(branchIp);
 				if (target > branchIp) return `goto L${target};`;
 				if (gcSafepointKinds.get(branchIp) !== "loop-backedge")
 					throw new Error("Native switch backedge has no root plan");
-				return `if (mal_gc_poll) { ${mask === undefined ? "" : `${cInactiveRootMaskPublication(mask)}; `}mal_gc_safepoint(vm); } goto L${target};`;
+				return `if (mal_gc_poll) { ${cPrivateRootPublication(
+					rootPublication,
+					branchIp,
+					"outgoing",
+				)
+					.map((line) => `${line} `)
+					.join(
+						"",
+					)}${mask === undefined ? "" : `${cInactiveRootMaskPublication(mask)}; `}mal_gc_safepoint(vm); } goto L${target};`;
 			};
 			if (literalSwitch.kind === "string") {
 				const emitted = emitStringSwitch(
@@ -3113,7 +3206,126 @@ function emitBody(
 			}
 		}
 		const safepointKind = gcSafepointKinds.get(ip);
+		const rootedOutputs =
+			rootPublication === undefined
+				? []
+				: nativeRootedOutputRegisters(
+						fn.instructions[ip]!,
+						ip,
+						rootPublication.privateCallResultIps,
+					).filter((register) => rootPublication.slots.has(register));
+		const rootedOutputReloads = rootedOutputs.map(
+			(register) =>
+				`__private_r${register} = __gc_slots[${rootPublication!.slots.get(register)!}];`,
+		);
+		const incomingRootPublication = cPrivateRootPublication(
+			rootPublication,
+			ip,
+			"incoming",
+			knownPublishedPrivateRoots,
+		);
+		const deferredPropertyRoots =
+			fn.instructions[ip]!.opcode === "LOAD_PROPERTY_STATIC" &&
+			!staticPropertyProjectionConflicts(ip);
+		const indexedPropertyInstruction = fn.instructions[ip]!;
+		// Only the ordinary numeric-index probe has an audited noncollecting hit.
+		const deferredIndexedPropertyRoots =
+			hasPrivateRoots &&
+			indexedPropertyInstruction.opcode === "LOAD_PROPERTY" &&
+			isNumericRep(reps[indexedPropertyInstruction.key]!) &&
+			!staticPropertyProjectionConflicts(ip) &&
+			!stackObjectMaterializations.has(ip) &&
+			!nativeArrayPresenceProjectionActionByIp.has(ip) &&
+			!pairedArrayLoopActionByIp.has(ip) &&
+			!nativeIteratorCursorActionByIp.has(ip) &&
+			!nativeArrayPairDestructureActionByIp.has(ip) &&
+			!nativeIteratorResultVirtualizationActionByIp.has(ip) &&
+			!nativeIteratorEntryPairVirtualizationActionByIp.has(ip) &&
+			!numericFusionActionByIp.has(ip) &&
+			!staticPropertyNumericActionByIp.has(ip);
+		const deferredPropertyStoreRoots =
+			fn.instructions[ip]!.opcode === "STORE_PROPERTY_STATIC" &&
+			nativeInstructions[ip] === undefined &&
+			!stackObjectAccesses.has(ip) &&
+			!stackObjectMaterializations.has(ip) &&
+			!constructorInitializationActionByIp.has(ip);
+		const deferredOperatorRoots = fn.instructions[ip]!.opcode === "BINARY";
+		// Only selected private values need the operator's mask on its fallback edge.
+		const eagerOperatorRootPublication =
+			deferredOperatorRoots && (rootPublication?.slots.size ?? 0) === 0;
+		const deferredTdzRoots = fn.instructions[ip]!.opcode === "THROW_IF_TDZ";
+		const iteratorCursorAction = nativeIteratorCursorActionByIp.get(ip);
+		const deferredDenseIteratorRoots =
+			hasPrivateRoots &&
+			fn.instructions[ip]!.opcode === "ITERATOR_STEP" &&
+			nativeInstructions[ip] === undefined &&
+			iteratorCursorAction?.role === "step" &&
+			iteratorCursorAction.cursor.protocol === "array-values" &&
+			!nativeArrayPairDestructureActionByIp.has(ip) &&
+			!nativeIteratorEntryPairVirtualizationActionByIp.has(ip) &&
+			!nativeRegExpIteratorProjectionActionByIp.has(ip);
+		const effects = nativeInstructionEffects(fn.instructions[ip]!);
+		const publishesIncomingRoots =
+			safepointKind !== "loop-backedge" &&
+			!deferredPropertyRoots &&
+			!deferredIndexedPropertyRoots &&
+			!deferredPropertyStoreRoots &&
+			!deferredOperatorRoots &&
+			!deferredTdzRoots &&
+			!deferredDenseIteratorRoots &&
+			(effects.collection || effects.reentry);
+		// Derive fallthrough equality without changing the current incoming state.
+		const nextPublishedPrivateRoots = hasPrivateRoots
+			? new Set(knownPublishedPrivateRoots)
+			: knownPublishedPrivateRoots;
+		if (rootPublication !== undefined && hasPrivateRoots) {
+			const point = rootPublication.safepoints.get(ip);
+			if (publishesIncomingRoots) {
+				for (const register of point?.incomingRootRegisters ?? []) {
+					if (rootPublication.slots.has(register))
+						nextPublishedPrivateRoots.add(register);
+				}
+			}
+			// Refined GC maps, not broad opcode effects, identify possible shadow clearing.
+			if (point !== undefined) {
+				const incoming = new Set(point.incomingRootRegisters);
+				const outgoing = new Set(point.outgoingRootRegisters);
+				for (const register of nextPublishedPrivateRoots) {
+					if (!incoming.has(register) || !outgoing.has(register))
+						nextPublishedPrivateRoots.delete(register);
+				}
+			}
+			for (const register of vmInstructionWriteRegisters(fn.instructions[ip]!))
+				nextPublishedPrivateRoots.delete(register);
+			// Polls read the shadow alias; the final reload establishes private equality.
+			for (const register of rootedOutputs) nextPublishedPrivateRoots.add(register);
+		}
+		const outgoingRootPublication = cPrivateRootPublication(
+			rootPublication,
+			ip,
+			"outgoing",
+			nextPublishedPrivateRoots,
+		);
+		if (publishesIncomingRoots) {
+			lines.push(...incomingRootPublication.map((line) => `    ${line}`));
+		}
 		const inactiveRootMask = inactiveRootMasks.get(ip);
+		const operatorInactiveRootMask =
+			deferredOperatorRoots && inactiveRootMask !== lastPublishedInactiveRootMask
+				? inactiveRootMask
+				: undefined;
+		const indexedPropertyLoadInactiveRootMask =
+			deferredIndexedPropertyRoots && inactiveRootMask !== lastPublishedInactiveRootMask
+				? inactiveRootMask
+				: undefined;
+		const staticPropertyStoreInactiveRootMask =
+			deferredPropertyStoreRoots && inactiveRootMask !== lastPublishedInactiveRootMask
+				? inactiveRootMask
+				: undefined;
+		const denseIteratorStepInactiveRootMask =
+			deferredDenseIteratorRoots && inactiveRootMask !== lastPublishedInactiveRootMask
+				? inactiveRootMask
+				: undefined;
 		const loopBackedgeInactiveRootMask =
 			safepointKind === "loop-backedge" &&
 			inactiveRootMask !== lastPublishedInactiveRootMask
@@ -3156,10 +3368,14 @@ function emitBody(
 		if (
 			inactiveRootMask !== undefined &&
 			loopBackedgeInactiveRootMask === undefined &&
+			operatorInactiveRootMask === undefined &&
 			mathCallInactiveRootMask === undefined &&
 			tdzInactiveRootMask === undefined &&
 			knownOwnSlotLoadInactiveRootMask === undefined &&
 			staticPropertyLoadInactiveRootMask === undefined &&
+			indexedPropertyLoadInactiveRootMask === undefined &&
+			staticPropertyStoreInactiveRootMask === undefined &&
+			denseIteratorStepInactiveRootMask === undefined &&
 			inactiveRootMask !== lastPublishedInactiveRootMask
 		) {
 			lines.push(`    ${cInactiveRootMaskPublication(inactiveRootMask)};`);
@@ -3167,10 +3383,14 @@ function emitBody(
 		if (
 			inactiveRootMask !== undefined &&
 			loopBackedgeInactiveRootMask === undefined &&
+			operatorInactiveRootMask === undefined &&
 			mathCallInactiveRootMask === undefined &&
 			tdzInactiveRootMask === undefined &&
 			knownOwnSlotLoadInactiveRootMask === undefined &&
-			staticPropertyLoadInactiveRootMask === undefined
+			staticPropertyLoadInactiveRootMask === undefined &&
+			indexedPropertyLoadInactiveRootMask === undefined &&
+			staticPropertyStoreInactiveRootMask === undefined &&
+			denseIteratorStepInactiveRootMask === undefined
 		) {
 			lastPublishedInactiveRootMask = inactiveRootMask;
 		}
@@ -3178,6 +3398,7 @@ function emitBody(
 			(fn.profileSiteIds?.[ip] ?? -1) >= 0 ? {} : undefined;
 		const arrayPresenceAction = nativeArrayPresenceProjectionActionByIp.get(ip);
 		emittedInstructions.add(ip);
+		let operatorMaskEmitted = false;
 		const emitted = emitInstruction(
 			fn.instructions[ip]!,
 			ip,
@@ -3197,11 +3418,38 @@ function emitBody(
 				profileSiteId: fn.profileSiteIds?.[ip],
 				profile: instructionProfile,
 				gcSafepoint: safepointKind !== undefined,
+				incomingRootPublication:
+					deferredPropertyRoots ||
+					deferredIndexedPropertyRoots ||
+					deferredPropertyStoreRoots ||
+					deferredOperatorRoots ||
+					deferredTdzRoots ||
+					deferredDenseIteratorRoots
+						? operatorInactiveRootMask === undefined
+							? incomingRootPublication
+							: [
+									...incomingRootPublication,
+									`${cInactiveRootMaskPublication(operatorInactiveRootMask)};`,
+								]
+						: [],
+				eagerIncomingRootPublication: eagerOperatorRootPublication,
+				onIncomingRootPublication:
+					operatorInactiveRootMask === undefined
+						? undefined
+						: () => {
+								operatorMaskEmitted = true;
+							},
+				outgoingRootPublication,
+				rootedOutputReloads,
 				loopBackedgeInactiveRootMask,
 				mathCallInactiveRootMask,
 				tdzInactiveRootMask,
 				knownOwnSlotLoadInactiveRootMask,
 				staticPropertyLoadInactiveRootMask,
+				indexedPropertyLoadInactiveRootMask,
+				staticPropertyStoreInactiveRootMask,
+				denseIteratorStepRootPublication: deferredDenseIteratorRoots,
+				denseIteratorStepInactiveRootMask,
 				stackObjectSite: stackObjectSites.get(ip),
 				stackObjectAccess: stackObjectAccesses.get(ip),
 				stackObjectMaterialization: stackObjectMaterializations.get(ip),
@@ -3257,10 +3505,21 @@ function emitBody(
 			return null;
 		}
 		if (
+			eagerOperatorRootPublication &&
+			operatorMaskEmitted &&
+			operatorInactiveRootMask !== undefined
+		) {
+			lines.push(`    ${cInactiveRootMaskPublication(operatorInactiveRootMask)};`);
+			lastPublishedInactiveRootMask = operatorInactiveRootMask;
+		} else if (
+			operatorMaskEmitted ||
 			mathCallInactiveRootMask !== undefined ||
 			tdzInactiveRootMask !== undefined ||
 			knownOwnSlotLoadInactiveRootMask !== undefined ||
-			staticPropertyLoadInactiveRootMask !== undefined
+			staticPropertyLoadInactiveRootMask !== undefined ||
+			indexedPropertyLoadInactiveRootMask !== undefined ||
+			staticPropertyStoreInactiveRootMask !== undefined ||
+			denseIteratorStepInactiveRootMask !== undefined
 		) {
 			// Conditional paths can preserve the old mask or publish the instruction's mask.
 			lastPublishedInactiveRootMask = undefined;
@@ -3305,9 +3564,21 @@ function emitBody(
 				);
 			}
 		}
+		for (const register of rootedOutputs) {
+			lines.push(`#undef r${register}`);
+			lines.push(
+				`#define r${register} (__gc_slots[${rootPublication!.slots.get(register)!}])`,
+			);
+		}
 		for (const line of emitted) {
 			lines.push(`    ${line}`);
 		}
+		lines.push(...rootedOutputReloads.map((line) => `    ${line}`));
+		for (const register of rootedOutputs) {
+			lines.push(`#undef r${register}`);
+			lines.push(`#define r${register} (__private_r${register})`);
+		}
+		knownPublishedPrivateRoots = nextPublishedPrivateRoots;
 	}
 
 	return {
@@ -3557,11 +3828,20 @@ interface NativeInstructionContext {
 	readonly profile?: NativeInstructionProfile;
 	readonly nativePlan?: NativeInstructionPlan;
 	readonly gcSafepoint: boolean;
+	readonly incomingRootPublication?: ReadonlyArray<string>;
+	readonly eagerIncomingRootPublication?: boolean;
+	readonly onIncomingRootPublication?: () => void;
+	readonly outgoingRootPublication?: ReadonlyArray<string>;
+	readonly rootedOutputReloads?: ReadonlyArray<string>;
 	readonly loopBackedgeInactiveRootMask?: bigint;
 	readonly mathCallInactiveRootMask?: bigint;
 	readonly tdzInactiveRootMask?: bigint;
 	readonly knownOwnSlotLoadInactiveRootMask?: bigint;
 	readonly staticPropertyLoadInactiveRootMask?: bigint;
+	readonly indexedPropertyLoadInactiveRootMask?: bigint;
+	readonly staticPropertyStoreInactiveRootMask?: bigint;
+	readonly denseIteratorStepRootPublication?: boolean;
+	readonly denseIteratorStepInactiveRootMask?: bigint;
 	readonly stackObjectSite?: StackObjectSite;
 	readonly stackObjectAccess?: { site: StackObjectSite; slot: number };
 	readonly stackObjectMaterialization?: StackObjectSite;
@@ -3708,6 +3988,13 @@ function emitInstruction(
 		profileOperation === undefined
 			? expression
 			: nativeProfileCall(kind, expression, profileSiteId, profileOperation);
+	const reentrantValue = (expression: string): string => {
+		const publication = context.incomingRootPublication ?? [];
+		if (publication.length > 0) context.onIncomingRootPublication?.();
+		return publication.length === 0 || context.eagerIncomingRootPublication
+			? expression
+			: `(${publication.map((store) => store.slice(0, -1)).join(", ")}, ${expression})`;
+	};
 	const genericContext: NativeInstructionContext = {
 		stringConstants: context.stringConstants,
 		staticDefineStringIndexByIp: context.staticDefineStringIndexByIp,
@@ -3717,11 +4004,20 @@ function emitInstruction(
 		nativePlan,
 		resources,
 		gcSafepoint: context.gcSafepoint,
+		incomingRootPublication: context.incomingRootPublication,
+		eagerIncomingRootPublication: context.eagerIncomingRootPublication,
+		onIncomingRootPublication: context.onIncomingRootPublication,
+		outgoingRootPublication: context.outgoingRootPublication,
+		rootedOutputReloads: context.rootedOutputReloads,
 		loopBackedgeInactiveRootMask: context.loopBackedgeInactiveRootMask,
 		mathCallInactiveRootMask: context.mathCallInactiveRootMask,
 		tdzInactiveRootMask: context.tdzInactiveRootMask,
 		knownOwnSlotLoadInactiveRootMask: context.knownOwnSlotLoadInactiveRootMask,
 		staticPropertyLoadInactiveRootMask: context.staticPropertyLoadInactiveRootMask,
+		indexedPropertyLoadInactiveRootMask: context.indexedPropertyLoadInactiveRootMask,
+		staticPropertyStoreInactiveRootMask: context.staticPropertyStoreInactiveRootMask,
+		denseIteratorStepRootPublication: context.denseIteratorStepRootPublication,
+		denseIteratorStepInactiveRootMask: context.denseIteratorStepInactiveRootMask,
 		ownedCaptureFunctionIndex: context.ownedCaptureFunctionIndex,
 		strictCompiledTargets: context.strictCompiledTargets,
 		directCompiledTargets,
@@ -3935,24 +4231,31 @@ function emitInstruction(
 		coro !== null && coro.isAsyncFunction
 			? "__async_result_promise"
 			: "MAL_VALUE_UNDEFINED";
-	const onThrow = (): string =>
-		handlerIp !== undefined
-			? `goto L${handlerIp};`
-			: `goto ${nativeBodyReference(resources, "throwExit")};`;
+	const onThrow = (): string => {
+		const jump =
+			handlerIp !== undefined
+				? `goto L${handlerIp};`
+				: `goto ${nativeBodyReference(resources, "throwExit")};`;
+		return (context.rootedOutputReloads?.length ?? 0) === 0
+			? jump
+			: `{ ${context.rootedOutputReloads!.join(" ")} ${jump} }`;
+	};
 	const throwCheck = (): string =>
 		`if (vm->completion.kind == MAL_COMPLETION_THROW) ${onThrow()}`;
 	// A poll without corresponding exact-root metadata can expose dead slots or clear
 	// a just-produced result under the preceding instruction's mask.
 	const poll =
-		context.loopBackedgeInactiveRootMask === undefined
-			? context.gcSafepoint
-				? "if (mal_gc_poll) mal_gc_safepoint(vm);"
-				: ""
-			: `if (mal_gc_poll) { ${cInactiveRootMaskPublication(context.loopBackedgeInactiveRootMask)}; mal_gc_safepoint(vm); }`;
+		(context.outgoingRootPublication?.length ?? 0) > 0
+			? `if (mal_gc_poll) { ${context.outgoingRootPublication!.join(" ")} ${context.loopBackedgeInactiveRootMask === undefined ? "" : `${cInactiveRootMaskPublication(context.loopBackedgeInactiveRootMask)}; `}mal_gc_safepoint(vm); }`
+			: context.loopBackedgeInactiveRootMask === undefined
+				? context.gcSafepoint
+					? "if (mal_gc_poll) mal_gc_safepoint(vm);"
+					: ""
+				: `if (mal_gc_poll) { ${cInactiveRootMaskPublication(context.loopBackedgeInactiveRootMask)}; mal_gc_safepoint(vm); }`;
 	const mathPoll =
 		context.mathCallInactiveRootMask === undefined
 			? poll
-			: `if (mal_gc_poll) { ${cInactiveRootMaskPublication(context.mathCallInactiveRootMask)}; mal_gc_safepoint(vm); }`;
+			: `if (mal_gc_poll) { ${(context.outgoingRootPublication ?? []).map((line) => `${line} `).join("")}${cInactiveRootMaskPublication(context.mathCallInactiveRootMask)}; mal_gc_safepoint(vm); }`;
 	const mathFallbackRootPublication =
 		context.mathCallInactiveRootMask === undefined
 			? []
@@ -4355,6 +4658,7 @@ function emitInstruction(
 			// throw propagates out, exactly like the interpreter op.
 			return [
 				`if (mal_value_is_empty(${boxed(instruction.src)})) {`,
+				...(context.incomingRootPublication ?? []).map((line) => `  ${line}`),
 				...(context.tdzInactiveRootMask === undefined
 					? []
 					: [`  ${cInactiveRootMaskPublication(context.tdzInactiveRootMask)};`]),
@@ -5033,6 +5337,12 @@ function emitInstruction(
 								`if (${receiverName} && mal_vm_array_try_get_index(${receiverName}, ${num(instruction.key)}, &__v_${ip})) {`,
 								`  r${instruction.dst} = __v_${ip};`,
 								`} else {`,
+								...(context.incomingRootPublication ?? []).map((line) => `  ${line}`),
+								...(context.indexedPropertyLoadInactiveRootMask === undefined
+									? []
+									: [
+											`  ${cInactiveRootMaskPublication(context.indexedPropertyLoadInactiveRootMask)};`,
+										]),
 								`  r${instruction.dst} = ${profileCall("property", `mal_vm_indexed_fast_load_index(vm, ${boxed(instruction.object)}, ${num(instruction.key)}, &${nativeBodyReference(resources, "propertyCache")}[${instruction.icIndex}])`)};`,
 								`  ${throwCheck()}`,
 								`}`,
@@ -5142,6 +5452,7 @@ function emitInstruction(
 				`if (${probe()}) {`,
 				`  r${instruction.dst} = __v_${ip};`,
 				`} else {`,
+				...(context.incomingRootPublication ?? []).map((line) => `  ${line}`),
 				...(context.staticPropertyLoadInactiveRootMask === undefined
 					? []
 					: [
@@ -5313,6 +5624,12 @@ function emitInstruction(
 			return [
 				`MalObject *${receiverName} = mal_vm_as_object(${boxed(instruction.object)});`,
 				`if (!(${probe()})) {`,
+				...(context.incomingRootPublication ?? []).map((line) => `  ${line}`),
+				...(context.staticPropertyStoreInactiveRootMask === undefined
+					? []
+					: [
+							`  ${cInactiveRootMaskPublication(context.staticPropertyStoreInactiveRootMask)};`,
+						]),
 				`  ${profileCall("property", `mal_vm_op_store_property_ic(vm, ${boxed(instruction.object)}, ${key}, ${boxed(instruction.value)}, ${strict}, &${nativeBodyReference(resources, "propertyCache")}[${instruction.icIndex}])`)};`,
 				`  ${throwCheck()}`,
 				`}`,
@@ -5653,8 +5970,8 @@ function emitInstruction(
 						: `  r${dst} = mal_value_new_boolean(${membership} != 0);`,
 					`} else {`,
 					dstIsBool
-						? `  r${dst} = mal_value_to_boolean(${profileCall("binary", `mal_vm_binary_op(vm, ${emitBinaryOperator(operator)}, ${boxed(left)}, ${boxed(right)})`)});`
-						: `  r${dst} = ${profileCall("binary", `mal_vm_binary_op(vm, ${emitBinaryOperator(operator)}, ${boxed(left)}, ${boxed(right)})`)};`,
+						? `  r${dst} = mal_value_to_boolean(${profileCall("binary", reentrantValue(`mal_vm_binary_op(vm, ${emitBinaryOperator(operator)}, ${boxed(left)}, ${boxed(right)})`))});`
+						: `  r${dst} = ${profileCall("binary", reentrantValue(`mal_vm_binary_op(vm, ${emitBinaryOperator(operator)}, ${boxed(left)}, ${boxed(right)})`))};`,
 					`  ${throwCheck()}`,
 					`}`,
 				];
@@ -5677,7 +5994,9 @@ function emitInstruction(
 					if (!rightIsNum) guards.push(`mal_ops_is_number(${boxed(right)})`);
 					const slow = profileCall(
 						"binary",
-						`mal_vm_binary_op(vm, ${emitBinaryOperator(operator)}, ${boxed(left)}, ${boxed(right)})`,
+						reentrantValue(
+							`mal_vm_binary_op(vm, ${emitBinaryOperator(operator)}, ${boxed(left)}, ${boxed(right)})`,
+						),
 					);
 					return [
 						`__nf_${fusion.id}_ok = ${guards.length === 0 ? "true" : guards.join(" && ")};`,
@@ -5721,7 +6040,9 @@ function emitInstruction(
 							: `${externalExpr} ${compare} __nf_${fusion.id}_value`;
 						const slow = profileCall(
 							"binary",
-							`mal_vm_binary_op(vm, ${emitBinaryOperator(operator)}, ${boxed(left)}, ${boxed(right)})`,
+							reentrantValue(
+								`mal_vm_binary_op(vm, ${emitBinaryOperator(operator)}, ${boxed(left)}, ${boxed(right)})`,
+							),
 						);
 						return [
 							`if (${guard}) {`,
@@ -5754,7 +6075,9 @@ function emitInstruction(
 							: `__nf_${fusion.id}_ok && mal_ops_is_number(${boxed(external)})`;
 						const slow = profileCall(
 							"binary",
-							`mal_vm_binary_op(vm, ${emitBinaryOperator(operator)}, ${boxed(left)}, ${boxed(right)})`,
+							reentrantValue(
+								`mal_vm_binary_op(vm, ${emitBinaryOperator(operator)}, ${boxed(left)}, ${boxed(right)})`,
+							),
 						);
 						return [
 							`if (${guard}) {`,
@@ -5774,7 +6097,7 @@ function emitInstruction(
 			) {
 				const result = `__binary_result_${ip}`;
 				return [
-					`MalValue ${result} = ${profileCall("binary", `mal_vm_binary_op(vm, ${emitBinaryOperator(operator)}, ${boxed(left)}, ${boxed(right)})`)};`,
+					`MalValue ${result} = ${profileCall("binary", reentrantValue(`mal_vm_binary_op(vm, ${emitBinaryOperator(operator)}, ${boxed(left)}, ${boxed(right)})`))};`,
 					throwCheck(),
 					`r${dst} = ${reps[dst] === "int32" ? `mal_ops_number_to_i32(mal_ops_number_as_f64(${result}))` : `mal_ops_number_as_f64(${result})`};`,
 				];
@@ -5811,10 +6134,13 @@ function emitInstruction(
 			if (operator === "**" && leftIsNum && rightIsNum) {
 				return [storeNumber(dst, `mal_number_exponentiate(${num(left)}, ${num(right)})`)];
 			}
-			const slow = profileCall(
-				"binary",
-				`mal_vm_binary_op(vm, ${emitBinaryOperator(operator)}, ${boxed(left)}, ${boxed(right)})`,
-			);
+			const slow = (): string =>
+				profileCall(
+					"binary",
+					reentrantValue(
+						`mal_vm_binary_op(vm, ${emitBinaryOperator(operator)}, ${boxed(left)}, ${boxed(right)})`,
+					),
+				);
 			const completionCheck = throwCheck();
 			// Store a C bool into the dst: raw for a boolean-rep register, boxed
 			// otherwise. Comparisons (and the boolean cases below) flow through here.
@@ -5942,21 +6268,23 @@ function emitInstruction(
 								: `  r${dst} = ${profileCall("boxing", `mal_value_new_boolean(${fastBool})`)};`,
 							`} else {`,
 							dstIsBool
-								? `  r${dst} = mal_value_to_boolean(${slow});`
-								: `  r${dst} = ${slow};`,
+								? `  r${dst} = mal_value_to_boolean(${slow()});`
+								: `  r${dst} = ${slow()};`,
 							`  ${completionCheck}`,
 							`}`,
 						];
 					}
 					return [
 						dstIsBool
-							? `r${dst} = ${numberGuard} ? (${fastBool}) : mal_value_to_boolean(${slow});`
-							: `r${dst} = ${numberGuard} ? ${profileCall("boxing", `mal_value_new_boolean(${fastBool})`)} : ${slow};`,
+							? `r${dst} = ${numberGuard} ? (${fastBool}) : mal_value_to_boolean(${slow()});`
+							: `r${dst} = ${numberGuard} ? ${profileCall("boxing", `mal_value_new_boolean(${fastBool})`)} : ${slow()};`,
 						...compareCheck,
 					];
 				}
 				return [
-					dstIsBool ? `r${dst} = mal_value_to_boolean(${slow});` : `r${dst} = ${slow};`,
+					dstIsBool
+						? `r${dst} = mal_value_to_boolean(${slow()});`
+						: `r${dst} = ${slow()};`,
 					...compareCheck,
 				];
 			}
@@ -5997,19 +6325,19 @@ function emitInstruction(
 							`if (${numberGuard}) {`,
 							`  r${dst} = ${fast};`,
 							`} else {`,
-							`  r${dst} = ${slow};`,
+							`  r${dst} = ${slow()};`,
 							`  ${completionCheck}`,
 							`}`,
 						];
 					}
-					return [`r${dst} = ${numberGuard} ? ${fast} : ${slow};`];
+					return [`r${dst} = ${numberGuard} ? ${fast} : ${slow()};`];
 				}
 			}
 			// Fully general fallback: `**`, `in`, `instanceof`, or a string/bigint
 			// operand. Any non-comparison op can throw (BigInt domain errors), so
 			// propagate the completion — previously only `in`/`instanceof` did, which
 			// silently swallowed BigInt TypeErrors/RangeErrors here.
-			const lowered = [`r${dst} = ${slow};`];
+			const lowered = [`r${dst} = ${slow()};`];
 			if (binaryOpCanThrow(operator)) {
 				lowered.push(completionCheck);
 			}
@@ -8236,10 +8564,27 @@ function emitInstruction(
 						: `r${instruction.doneDst} = ${profileCall("boxing", `mal_value_new_boolean(${done})`)};`,
 				];
 			}
+			const denseProbe =
+				cursorInitializeIp === undefined
+					? `mal_vm_iterator_try_dense_array_step(&${rec}, &${val}, &${done})`
+					: `(__iter_cursor_${cursorInitializeIp} != nullptr ? mal_vm_iterator_try_dense_array_cursor_step(__iter_cursor_${cursorInitializeIp}, &${val}, &${done}) : mal_vm_iterator_try_dense_array_step(&${rec}, &${val}, &${done}))`;
+			const advance = context.denseIteratorStepRootPublication
+				? [
+						`if (!${denseProbe}) {`,
+						...(context.incomingRootPublication ?? []).map((line) => `  ${line}`),
+						...(context.denseIteratorStepInactiveRootMask === undefined
+							? []
+							: [
+									`  ${cInactiveRootMaskPublication(context.denseIteratorStepInactiveRootMask)};`,
+								]),
+						`  if (!mal_vm_iterator_step(vm, &${rec}, &${val}, &${done})) ${onThrow()}`,
+						`}`,
+					]
+				: [`if (!(${step})) ${onThrow()}`];
 			const lines = [
 				`MalIteratorRecord ${rec} = { .iterator = ${boxed(instruction.iterator)}, .next_method = ${boxed(instruction.next)} };`,
 				`MalValue ${val}; bool ${done};`,
-				`if (!(${step})) ${onThrow()}`,
+				...advance,
 				`r${instruction.valueDst} = ${val};`,
 				reps[instruction.doneDst] === "boolean"
 					? `r${instruction.doneDst} = ${done};`

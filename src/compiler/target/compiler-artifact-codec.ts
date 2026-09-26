@@ -42,7 +42,7 @@ import type {
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal artifacts are hard cut-overs: stale cache entries rebuild.
-export const COMPILER_ARTIFACT_VERSION = 85;
+export const COMPILER_ARTIFACT_VERSION = 86;
 
 const MAX_REGION_ANCHORS = 8;
 const MAX_REGION_CLAIMS = 96;
@@ -537,6 +537,51 @@ export function serializeCompilerArtifact(
 	return writer.finish();
 }
 
+// Exact phases are subsets of the sorted union, so only their excluded roots
+// need storage. The caller validates this contract before writing any phase.
+function writeNativeRootExclusions(
+	w: Writer,
+	rootRegisters: ReadonlyArray<number>,
+	phaseRegisters: ReadonlyArray<number>,
+): void {
+	const excludedCount = rootRegisters.length - phaseRegisters.length;
+	w.u32(excludedCount);
+	if (excludedCount === 0) return;
+	let phaseIndex = 0;
+	for (const register of rootRegisters) {
+		if (phaseRegisters[phaseIndex] === register) phaseIndex++;
+		else w.i32(register);
+	}
+}
+
+function readNativeRootPhase(
+	r: Reader,
+	rootRegisters: ReadonlyArray<number>,
+): Array<number> {
+	const excludedCount = r.count(1);
+	if (excludedCount > rootRegisters.length) {
+		throw new RangeError("program-image-codec: invalid native root exclusions");
+	}
+	if (excludedCount === 0) return rootRegisters.slice();
+	const phaseRegisters = new Array<number>(rootRegisters.length - excludedCount);
+	let rootIndex = 0;
+	let phaseIndex = 0;
+	for (let excludedIndex = 0; excludedIndex < excludedCount; excludedIndex++) {
+		const excluded = r.i32();
+		while (rootIndex < rootRegisters.length && rootRegisters[rootIndex]! < excluded) {
+			phaseRegisters[phaseIndex++] = rootRegisters[rootIndex++]!;
+		}
+		if (rootRegisters[rootIndex] !== excluded) {
+			throw new RangeError("program-image-codec: invalid native root exclusions");
+		}
+		rootIndex++;
+	}
+	while (rootIndex < rootRegisters.length) {
+		phaseRegisters[phaseIndex++] = rootRegisters[rootIndex++]!;
+	}
+	return phaseRegisters;
+}
+
 function writeCompilerArtifact(
 	w: Writer,
 	def: RuntimeImage,
@@ -598,6 +643,16 @@ function writeCompilerArtifact(
 			);
 			w.i32(safepoint.instructionIp);
 			w.i32Array([...safepoint.rootRegisters]);
+			writeNativeRootExclusions(
+				w,
+				safepoint.rootRegisters,
+				safepoint.incomingRootRegisters,
+			);
+			writeNativeRootExclusions(
+				w,
+				safepoint.rootRegisters,
+				safepoint.outgoingRootRegisters,
+			);
 		}
 
 		w.u32(native.registerRepresentations.length);
@@ -704,6 +759,16 @@ function writeCompilerArtifact(
 				w.u8(safepoint.kind === "operation" ? 0 : 1);
 				w.i32(safepoint.instructionIp);
 				w.i32Array([...safepoint.rootRegisters]);
+				writeNativeRootExclusions(
+					w,
+					safepoint.rootRegisters,
+					safepoint.incomingRootRegisters,
+				);
+				writeNativeRootExclusions(
+					w,
+					safepoint.rootRegisters,
+					safepoint.outgoingRootRegisters,
+				);
 			}
 		}
 
@@ -2913,12 +2978,14 @@ function readCompilerArtifact(r: Reader, runtimeImage: RuntimeImage): ProgramIma
 	}
 	const nativeFunctions: Array<NativeFunctionPlan> = [];
 	for (const [functionIndex, fn] of functions.entries()) {
-		const safepointCount = r.count(2);
+		const safepointCount = r.count(5);
 		const safepoints: Array<NativeFunctionPlan["gc"]["safepoints"][number]> = [];
 		for (let safepointIndex = 0; safepointIndex < safepointCount; safepointIndex++) {
 			const kindTag = r.u8();
 			const instructionIp = r.i32();
 			const rootRegisters = r.i32Array();
+			const incomingRootRegisters = readNativeRootPhase(r, rootRegisters);
+			const outgoingRootRegisters = readNativeRootPhase(r, rootRegisters);
 			if (
 				kindTag > 2 ||
 				instructionIp < 0 ||
@@ -2932,6 +2999,8 @@ function readCompilerArtifact(r: Reader, runtimeImage: RuntimeImage): ProgramIma
 					kindTag === 0 ? "operation" : kindTag === 1 ? "loop-backedge" : "conservative",
 				instructionIp,
 				rootRegisters,
+				incomingRootRegisters,
+				outgoingRootRegisters,
 			});
 		}
 
@@ -3076,7 +3145,7 @@ function readCompilerArtifact(r: Reader, runtimeImage: RuntimeImage): ProgramIma
 			) {
 				throw new Error("program-image-codec: invalid direct-entry register classes");
 			}
-			const directSafepointCount = r.count(2);
+			const directSafepointCount = r.count(5);
 			const directSafepoints: Array<NativeFunctionPlan["gc"]["safepoints"][number]> = [];
 			for (
 				let safepointIndex = 0;
@@ -3086,6 +3155,8 @@ function readCompilerArtifact(r: Reader, runtimeImage: RuntimeImage): ProgramIma
 				const kindTag = r.u8();
 				const instructionIp = r.i32();
 				const rootRegisters = r.i32Array();
+				const incomingRootRegisters = readNativeRootPhase(r, rootRegisters);
+				const outgoingRootRegisters = readNativeRootPhase(r, rootRegisters);
 				if (
 					kindTag > 1 ||
 					instructionIp < 0 ||
@@ -3098,6 +3169,8 @@ function readCompilerArtifact(r: Reader, runtimeImage: RuntimeImage): ProgramIma
 					kind: kindTag === 0 ? "operation" : "loop-backedge",
 					instructionIp,
 					rootRegisters,
+					incomingRootRegisters,
+					outgoingRootRegisters,
 				});
 			}
 			const entry = {

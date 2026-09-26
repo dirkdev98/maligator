@@ -1,0 +1,570 @@
+name: Native performance
+
+on:
+  pull_request:
+    types: [labeled, synchronize]
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  javascript:
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      contains(github.event.pull_request.labels.*.name, 'native-performance') &&
+      (github.event.action == 'synchronize' || github.event.label.name == 'native-performance')
+    name: JavaScript ${{ matrix.mode }} / ${{ matrix.comparison }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 55
+    strategy:
+      fail-fast: false
+      matrix:
+        mode: [closed-compiled, open-compiled]
+        comparison: [parent, cumulative]
+    env:
+      BASE_SHA: ${{ github.event.pull_request.base.sha }}
+      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      COMPARISON: ${{ matrix.comparison }}
+    steps:
+      - name: Check out the candidate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Resolve matched baseline
+        id: baseline
+        run: |
+          parent="$(git merge-base "$HEAD_SHA" "$BASE_SHA")"
+          baseline="$parent"
+          if [ "$COMPARISON" = cumulative ]; then
+            baseline="$(git merge-base "$HEAD_SHA" origin/main)"
+          fi
+          echo "sha=$baseline" >> "$GITHUB_OUTPUT"
+          if [ "$COMPARISON" = cumulative ] && [ "$baseline" = "$parent" ]; then
+            echo 'skip=true' >> "$GITHUB_OUTPUT"
+            echo 'Cumulative baseline equals parent; the parent job covers this comparison.'
+          fi
+
+      - name: Set up Linux
+        if: steps.baseline.outputs.skip != 'true'
+        uses: ./.github/actions/setup-linux
+
+      - name: Select matching LLVM archive and link tools
+        if: steps.baseline.outputs.skip != 'true'
+        run: |
+          sudo apt-get install --yes llvm-19 lld-19
+          mkdir -p "$RUNNER_TEMP/native-performance-bin"
+          ln -s "$(command -v llvm-ar-19)" "$RUNNER_TEMP/native-performance-bin/ar"
+          ln -s "$(command -v ld.lld-19)" "$RUNNER_TEMP/native-performance-bin/ld.lld"
+          echo "$RUNNER_TEMP/native-performance-bin" >> "$GITHUB_PATH"
+
+      - name: Check the runner environment
+        if: steps.baseline.outputs.skip != 'true'
+        env:
+          COMPARISON_BASE: ${{ steps.baseline.outputs.sha }}
+        run: |
+          mkdir -p .cache/native-performance
+          npm run env:check -- --json | tee .cache/native-performance/environment.log
+          node ./src/index.ts cache status
+          printf 'pr_base=%s\nbaseline=%s\nhead=%s\n' "$BASE_SHA" "$COMPARISON_BASE" "$HEAD_SHA" | tee .cache/native-performance/refs.txt
+
+      - name: Inspect the complete comparison plan
+        if: steps.baseline.outputs.skip != 'true'
+        env:
+          COMPARISON_BASE: ${{ steps.baseline.outputs.sha }}
+          JAVASCRIPT_MODE: ${{ matrix.mode }}
+        run: |
+          node scripts/bench.ts javascript --mode "$JAVASCRIPT_MODE" --compare "$COMPARISON_BASE" \
+            --runs 5 --max-pairs 7 --budget-seconds 2700 --plan=json \
+            | tee .cache/native-performance/plan.json
+
+      - name: Compare JavaScript runtime and individual phases
+        if: steps.baseline.outputs.skip != 'true'
+        env:
+          COMPARISON_BASE: ${{ steps.baseline.outputs.sha }}
+          JAVASCRIPT_MODE: ${{ matrix.mode }}
+        run: |
+          set -o pipefail
+          node scripts/bench.ts javascript --mode "$JAVASCRIPT_MODE" --compare "$COMPARISON_BASE" \
+            --runs 5 --max-pairs 7 --budget-seconds 2700 \
+            2>&1 | tee .cache/native-performance/comparison.log
+
+      - name: Retain comparison evidence
+        if: always() && steps.baseline.outputs.skip != 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: native-javascript-${{ github.event.pull_request.number }}-${{ matrix.mode }}-${{ matrix.comparison }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            .cache/native-performance/
+            .cache/bench-comparisons/*/*.json
+            .cache/bench-comparisons/*/*.log
+            .cache/bench-comparisons/*/*.md
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 7
+
+  micro:
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      contains(github.event.pull_request.labels.*.name, 'native-micro-performance') &&
+      (github.event.action == 'synchronize' || github.event.label.name == 'native-micro-performance')
+    name: Native micro / ${{ matrix.comparison }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 55
+    strategy:
+      fail-fast: false
+      matrix:
+        comparison: [parent, cumulative]
+    env:
+      BASE_SHA: ${{ github.event.pull_request.base.sha }}
+      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      COMPARISON: ${{ matrix.comparison }}
+    steps:
+      - name: Check out the candidate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Resolve matched baseline
+        id: baseline
+        run: |
+          parent="$(git merge-base "$HEAD_SHA" "$BASE_SHA")"
+          baseline="$parent"
+          if [ "$COMPARISON" = cumulative ]; then
+            baseline="$(git merge-base "$HEAD_SHA" origin/main)"
+          fi
+          echo "sha=$baseline" >> "$GITHUB_OUTPUT"
+          if [ "$COMPARISON" = cumulative ] && [ "$baseline" = "$parent" ]; then
+            echo 'skip=true' >> "$GITHUB_OUTPUT"
+            echo 'Cumulative baseline equals parent; the parent job covers this comparison.'
+          fi
+
+      - name: Set up Linux
+        if: steps.baseline.outputs.skip != 'true'
+        uses: ./.github/actions/setup-linux
+
+      - name: Select matching LLVM archive and link tools
+        if: steps.baseline.outputs.skip != 'true'
+        run: |
+          sudo apt-get install --yes llvm-19 lld-19 linux-tools-generic
+          for candidate in /usr/lib/linux-tools/*/perf; do
+            if [ -x "$candidate" ]; then
+              echo "NATIVE_MICRO_PERF=$candidate" >> "$GITHUB_ENV"
+              break
+            fi
+          done
+          mkdir -p "$RUNNER_TEMP/native-performance-bin"
+          ln -s "$(command -v llvm-ar-19)" "$RUNNER_TEMP/native-performance-bin/ar"
+          ln -s "$(command -v ld.lld-19)" "$RUNNER_TEMP/native-performance-bin/ld.lld"
+          echo "$RUNNER_TEMP/native-performance-bin" >> "$GITHUB_PATH"
+
+      - name: Check environment and inspect the micro plan
+        if: steps.baseline.outputs.skip != 'true'
+        env:
+          COMPARISON_BASE: ${{ steps.baseline.outputs.sha }}
+        run: |
+          mkdir -p .cache/native-performance
+          npm run env:check -- --json | tee .cache/native-performance/environment.log
+          node ./src/index.ts cache status
+          node scripts/native-micro-compare.ts --base "$COMPARISON_BASE" \
+            --pairs 7 --target-node-ms 80 --budget-seconds 2400 \
+            --diagnostics --perf-pairs 3 \
+            --output .cache/native-performance/micro --plan=json \
+            | tee .cache/native-performance/plan.json
+
+      - name: Compare frozen micro workloads
+        if: steps.baseline.outputs.skip != 'true'
+        env:
+          COMPARISON_BASE: ${{ steps.baseline.outputs.sha }}
+        run: |
+          set -o pipefail
+          node scripts/native-micro-compare.ts --base "$COMPARISON_BASE" \
+            --pairs 7 --target-node-ms 80 --budget-seconds 2400 \
+            --diagnostics --perf-pairs 3 \
+            --output .cache/native-performance/micro \
+            2>&1 | tee .cache/native-performance/comparison.log
+
+      - name: Package bounded per-case production executables and symbol companions
+        if: always() && steps.baseline.outputs.skip != 'true'
+        run: |
+          mkdir -p .cache/native-performance/binary-bundles
+          for directory in .cache/native-performance/micro/builds/*; do
+            [ -d "$directory" ] || continue
+            files=()
+            for variant in baseline candidate; do
+              for name in production.elf symbols.elf; do
+                relative="$variant/diagnostics/$name"
+                if [ -f "$directory/$relative" ]; then
+                  files+=("$relative")
+                fi
+              done
+            done
+            [ "${#files[@]}" -gt 0 ] || continue
+            bundle=".cache/native-performance/binary-bundles/$(basename "$directory").tar.gz"
+            tar -czf "$bundle" -C "$directory" "${files[@]}"
+            bytes="$(stat -c %s "$bundle")"
+            printf '%s %s bytes\n' "$bundle" "$bytes" >> .cache/native-performance/binary-bundles.log
+            if [ "$bytes" -gt 32505856 ]; then
+              echo "Per-case executable bundle exceeds 31 MiB: $bundle ($bytes bytes)" >&2
+              mv "$bundle" "$bundle.oversized"
+              exit 2
+            fi
+          done
+
+      - name: Retain micro evidence
+        if: always() && steps.baseline.outputs.skip != 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: native-micro-${{ github.event.pull_request.number }}-${{ matrix.comparison }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            .cache/native-performance/**/*.json
+            .cache/native-performance/**/*.log
+            .cache/native-performance/**/*.mjs
+            .cache/native-performance/**/*.c
+            .cache/native-performance/**/*.h
+            .cache/native-performance/**/*.asm
+            .cache/native-performance/**/*.csv
+            .cache/native-performance/**/*.patch
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Retain stable-shape-properties executable bundle
+        if: always() && steps.baseline.outputs.skip != 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: native-micro-elf-${{ github.event.pull_request.number }}-${{ matrix.comparison }}-stable-shape-properties-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .cache/native-performance/binary-bundles/stable-shape-properties.tar.gz
+          include-hidden-files: true
+          if-no-files-found: ignore
+          compression-level: 0
+          retention-days: 7
+
+      - name: Retain record-array-traversal executable bundle
+        if: always() && steps.baseline.outputs.skip != 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: native-micro-elf-${{ github.event.pull_request.number }}-${{ matrix.comparison }}-record-array-traversal-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .cache/native-performance/binary-bundles/record-array-traversal.tar.gz
+          include-hidden-files: true
+          if-no-files-found: ignore
+          compression-level: 0
+          retention-days: 7
+
+      - name: Retain direct-calls executable bundle
+        if: always() && steps.baseline.outputs.skip != 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: native-micro-elf-${{ github.event.pull_request.number }}-${{ matrix.comparison }}-direct-calls-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .cache/native-performance/binary-bundles/direct-calls.tar.gz
+          include-hidden-files: true
+          if-no-files-found: ignore
+          compression-level: 0
+          retention-days: 7
+
+      - name: Retain indirect-calls executable bundle
+        if: always() && steps.baseline.outputs.skip != 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: native-micro-elf-${{ github.event.pull_request.number }}-${{ matrix.comparison }}-indirect-calls-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .cache/native-performance/binary-bundles/indirect-calls.tar.gz
+          include-hidden-files: true
+          if-no-files-found: ignore
+          compression-level: 0
+          retention-days: 7
+
+      - name: Retain closure-calls executable bundle
+        if: always() && steps.baseline.outputs.skip != 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: native-micro-elf-${{ github.event.pull_request.number }}-${{ matrix.comparison }}-closure-calls-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .cache/native-performance/binary-bundles/closure-calls.tar.gz
+          include-hidden-files: true
+          if-no-files-found: ignore
+          compression-level: 0
+          retention-days: 7
+
+      - name: Retain short-lived-records executable bundle
+        if: always() && steps.baseline.outputs.skip != 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: native-micro-elf-${{ github.event.pull_request.number }}-${{ matrix.comparison }}-short-lived-records-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .cache/native-performance/binary-bundles/short-lived-records.tar.gz
+          include-hidden-files: true
+          if-no-files-found: ignore
+          compression-level: 0
+          retention-days: 7
+
+      - name: Retain heap-valued-projection executable bundle
+        if: always() && steps.baseline.outputs.skip != 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: native-micro-elf-${{ github.event.pull_request.number }}-${{ matrix.comparison }}-heap-valued-projection-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .cache/native-performance/binary-bundles/heap-valued-projection.tar.gz
+          include-hidden-files: true
+          if-no-files-found: ignore
+          compression-level: 0
+          retention-days: 7
+
+      - name: Retain chained-static-properties executable bundle
+        if: always() && steps.baseline.outputs.skip != 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: native-micro-elf-${{ github.event.pull_request.number }}-${{ matrix.comparison }}-chained-static-properties-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .cache/native-performance/binary-bundles/chained-static-properties.tar.gz
+          include-hidden-files: true
+          if-no-files-found: ignore
+          compression-level: 0
+          retention-days: 7
+
+      - name: Retain infrequent-getter-properties executable bundle
+        if: always() && steps.baseline.outputs.skip != 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: native-micro-elf-${{ github.event.pull_request.number }}-${{ matrix.comparison }}-infrequent-getter-properties-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .cache/native-performance/binary-bundles/infrequent-getter-properties.tar.gz
+          include-hidden-files: true
+          if-no-files-found: ignore
+          compression-level: 0
+          retention-days: 7
+
+      - name: Retain native-property-owned-3 executable bundle
+        if: always() && steps.baseline.outputs.skip != 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: native-micro-elf-${{ github.event.pull_request.number }}-${{ matrix.comparison }}-native-property-owned-3-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .cache/native-performance/binary-bundles/native-property-owned-3.tar.gz
+          include-hidden-files: true
+          if-no-files-found: ignore
+          compression-level: 0
+          retention-days: 7
+
+      - name: Retain native-property-owned-6 executable bundle
+        if: always() && steps.baseline.outputs.skip != 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: native-micro-elf-${{ github.event.pull_request.number }}-${{ matrix.comparison }}-native-property-owned-6-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .cache/native-performance/binary-bundles/native-property-owned-6.tar.gz
+          include-hidden-files: true
+          if-no-files-found: ignore
+          compression-level: 0
+          retention-days: 7
+
+      - name: Retain native-property-mixed-prototypes executable bundle
+        if: always() && steps.baseline.outputs.skip != 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: native-micro-elf-${{ github.event.pull_request.number }}-${{ matrix.comparison }}-native-property-mixed-prototypes-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .cache/native-performance/binary-bundles/native-property-mixed-prototypes.tar.gz
+          include-hidden-files: true
+          if-no-files-found: ignore
+          compression-level: 0
+          retention-days: 7
+
+      - name: Retain native-property-middle-getter executable bundle
+        if: always() && steps.baseline.outputs.skip != 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: native-micro-elf-${{ github.event.pull_request.number }}-${{ matrix.comparison }}-native-property-middle-getter-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .cache/native-performance/binary-bundles/native-property-middle-getter.tar.gz
+          include-hidden-files: true
+          if-no-files-found: ignore
+          compression-level: 0
+          retention-days: 7
+
+  compiler:
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      contains(github.event.pull_request.labels.*.name, 'native-compiler-performance') &&
+      (github.event.action == 'synchronize' || github.event.label.name == 'native-compiler-performance')
+    name: Frozen compiler slices / ${{ matrix.comparison }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 70
+    strategy:
+      fail-fast: false
+      matrix:
+        comparison: [parent, cumulative]
+    env:
+      BASE_SHA: ${{ github.event.pull_request.base.sha }}
+      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      COMPARISON: ${{ matrix.comparison }}
+    steps:
+      - name: Check out the candidate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Resolve matched baseline
+        id: baseline
+        run: |
+          parent="$(git merge-base "$HEAD_SHA" "$BASE_SHA")"
+          baseline="$parent"
+          if [ "$COMPARISON" = cumulative ]; then
+            baseline="$(git merge-base "$HEAD_SHA" origin/main)"
+          fi
+          echo "sha=$baseline" >> "$GITHUB_OUTPUT"
+          if [ "$COMPARISON" = cumulative ] && [ "$baseline" = "$parent" ]; then
+            echo 'skip=true' >> "$GITHUB_OUTPUT"
+            echo 'Cumulative baseline equals parent; the parent job covers this comparison.'
+          fi
+
+      - name: Set up Linux
+        if: steps.baseline.outputs.skip != 'true'
+        uses: ./.github/actions/setup-linux
+
+      - name: Select matching LLVM archive and link tools
+        if: steps.baseline.outputs.skip != 'true'
+        run: |
+          sudo apt-get install --yes llvm-19 lld-19
+          mkdir -p "$RUNNER_TEMP/native-performance-bin"
+          ln -s "$(command -v llvm-ar-19)" "$RUNNER_TEMP/native-performance-bin/ar"
+          ln -s "$(command -v ld.lld-19)" "$RUNNER_TEMP/native-performance-bin/ld.lld"
+          echo "$RUNNER_TEMP/native-performance-bin" >> "$GITHUB_PATH"
+
+      - name: Check environment and freeze the compiler program
+        if: steps.baseline.outputs.skip != 'true'
+        env:
+          COMPARISON_BASE: ${{ steps.baseline.outputs.sha }}
+        run: |
+          mkdir -p .cache/native-performance
+          npm run env:check -- --json | tee .cache/native-performance/environment.log
+          node ./src/index.ts cache status
+          printf 'pr_base=%s\nbaseline=%s\nhead=%s\n' "$BASE_SHA" "$COMPARISON_BASE" "$HEAD_SHA" | tee .cache/native-performance/refs.txt
+          node scripts/self-compile-experiment.ts capture .cache/native-performance/program \
+            --source-only --budget-seconds 120 --plan=json \
+            | tee .cache/native-performance/program-plan.json
+          node scripts/self-compile-experiment.ts capture .cache/native-performance/program \
+            --source-only --budget-seconds 120
+
+      - name: Export an identified baseline without changing source
+        if: steps.baseline.outputs.skip != 'true'
+        env:
+          COMPARISON_BASE: ${{ steps.baseline.outputs.sha }}
+        run: |
+          baseline="$PWD/.cache/native-performance/baseline-source"
+          objects="$(git rev-parse --path-format=absolute --git-path objects)"
+          mkdir -p "$baseline"
+          git archive "$COMPARISON_BASE" | tar -x -C "$baseline"
+          cmp package-lock.json "$baseline/package-lock.json"
+          git init --quiet --initial-branch=benchmark "$baseline"
+          printf '%s\n' "$objects" > "$baseline/.git/objects/info/alternates"
+          git -C "$baseline" update-ref HEAD "$COMPARISON_BASE"
+          git -C "$baseline" read-tree "$COMPARISON_BASE"
+          ln -s "$PWD/node_modules" "$baseline/node_modules"
+          test -z "$(git -C "$baseline" status --porcelain)"
+          git -C "$baseline" rev-parse HEAD | tee .cache/native-performance/archive-commit.txt
+
+      - name: Capture the baseline compiler for the frozen program
+        if: steps.baseline.outputs.skip != 'true'
+        run: |
+          task="$PWD/.cache/native-performance"
+          script="$PWD/scripts/self-compile-experiment.ts"
+          cd "$task/baseline-source"
+          node "$script" capture "$task/baseline" --program "$task/program" \
+            --budget-seconds 900 --plan=json | tee "$task/baseline-plan.json"
+          node "$script" capture "$task/baseline" --program "$task/program" --budget-seconds 900
+
+      - name: Capture the candidate compiler for the frozen program
+        if: steps.baseline.outputs.skip != 'true'
+        run: |
+          node scripts/self-compile-experiment.ts capture .cache/native-performance/candidate \
+            --program .cache/native-performance/program --budget-seconds 900 --plan=json \
+            | tee .cache/native-performance/candidate-plan.json
+          node scripts/self-compile-experiment.ts capture .cache/native-performance/candidate \
+            --program .cache/native-performance/program --budget-seconds 900
+
+      - name: Record compiler build and section sizes
+        if: steps.baseline.outputs.skip != 'true'
+        run: |
+          node --input-type=module <<'JS'
+          import { spawnSync } from 'node:child_process';
+          import { createHash } from 'node:crypto';
+          import { readFileSync, statSync, writeFileSync } from 'node:fs';
+          const result = {};
+          for (const variant of ['baseline', 'candidate']) {
+            const directory = `.cache/native-performance/${variant}`;
+            const binary = `${directory}/compiler`;
+            const capture = JSON.parse(readFileSync(`${directory}/capture.json`, 'utf8'));
+            const phases = JSON.parse(readFileSync(`${directory}/build-events.json`, 'utf8'));
+            const size = spawnSync('size', ['--format=sysv', '--radix=10', binary], { encoding: 'utf8' });
+            writeFileSync(`${directory}/binary-size.log`, `${size.stdout ?? ''}\n${size.stderr ?? ''}`);
+            const textBytes = size.stdout?.match(/^\.text\s+(\d+)\s/m)?.[1];
+            if (size.status !== 0 || textBytes === undefined) throw new Error(`No .text measurement for ${variant}`);
+            const generated = phases.filter(event => event.phase === 'write generated C');
+            if (generated.length === 0 || generated.some(event => typeof event.bytes !== 'number')) {
+              throw new Error(`No generated C measurement for ${variant}`);
+            }
+            result[variant] = {
+              source: capture.source,
+              programSource: capture.programSource,
+              build: capture.build,
+              executableBytes: statSync(binary).size,
+              executableSha256: createHash('sha256').update(readFileSync(binary)).digest('hex'),
+              binaryTextBytes: Number(textBytes),
+              generatedCBytes: generated.reduce((sum, event) => sum + event.bytes, 0),
+            };
+          }
+          writeFileSync('.cache/native-performance/compiler-build-sizes.json', `${JSON.stringify(result, null, 2)}\n`);
+          JS
+
+      - name: Compare the parser slice
+        id: parser
+        if: steps.baseline.outputs.skip != 'true'
+        run: |
+          set -o pipefail
+          node scripts/self-compile-experiment.ts compare \
+            .cache/native-performance/baseline .cache/native-performance/candidate \
+            --output .cache/native-performance/parser --workload parser --pairs 5 \
+            --budget-seconds 480 --plan=json | tee .cache/native-performance/parser-plan.json
+          node scripts/self-compile-experiment.ts compare \
+            .cache/native-performance/baseline .cache/native-performance/candidate \
+            --output .cache/native-performance/parser --workload parser --pairs 5 \
+            --budget-seconds 480 2>&1 | tee .cache/native-performance/parser.log
+
+      - name: Compare the shape-analysis slice
+        if: >-
+          !cancelled() && steps.baseline.outputs.skip != 'true' &&
+          (steps.parser.outcome == 'success' || steps.parser.outcome == 'failure')
+        run: |
+          set -o pipefail
+          node scripts/self-compile-experiment.ts compare \
+            .cache/native-performance/baseline .cache/native-performance/candidate \
+            --output .cache/native-performance/shape --workload shape --pairs 5 \
+            --budget-seconds 1500 --plan=json | tee .cache/native-performance/shape-plan.json
+          node scripts/self-compile-experiment.ts compare \
+            .cache/native-performance/baseline .cache/native-performance/candidate \
+            --output .cache/native-performance/shape --workload shape --pairs 5 \
+            --budget-seconds 1500 2>&1 | tee .cache/native-performance/shape.log
+
+      - name: Remove disposable baseline source and dependency links
+        if: always() && steps.baseline.outputs.skip != 'true'
+        run: |
+          rm -rf .cache/native-performance/baseline-source
+          if [ -d .cache/native-performance ]; then
+            find .cache/native-performance -path '*/source/node_modules' -type l -delete
+          fi
+
+      - name: Retain compiler comparison evidence
+        if: always() && steps.baseline.outputs.skip != 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: native-compiler-${{ github.event.pull_request.number }}-${{ matrix.comparison }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            .cache/native-performance/**/*.json
+            .cache/native-performance/**/*.log
+            .cache/native-performance/**/*.patch
+            .cache/native-performance/**/*.md
+            .cache/native-performance/**/*.txt
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 7

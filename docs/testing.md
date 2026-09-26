@@ -208,6 +208,76 @@ single-family self-compile comparisons also checkpoint between stages. Resume wi
 the same command plus `--resume <run-directory>` and a fresh time budget. Source
 content (including untracked files), revision, options, and host identity must match.
 Only complete pairs contribute metrics; a partial pair is retained but excluded.
+
+### Bounded native runtime and compiler checks
+
+`node scripts/native-micro-compare.ts --base REF --plan=json` describes a focused
+comparison of the baseline compiler and the current checkout. Remove `--plan=json`
+to execute, or select canonical kernels with repeated `--case ID` arguments:
+
+```sh
+node scripts/native-micro-compare.ts --base REF \
+  --case stable-shape-properties --case heap-valued-projection \
+  --pairs 7 --target-node-ms 80 --budget-seconds 2400 --plan=json
+```
+
+The default set contains six call, record, and allocation controls plus seven
+property/root-publication probes. The runner archives the baseline under its new
+`.cache/native-micro/` evidence directory and uses the same frozen fixture paths
+for both compilers. It requires identical dependency lockfiles and native build
+plans, records five in-process warmups per invocation, calibrates the shared work
+scale against Node with a native timeout cap, and alternates seven measured pairs.
+Each sample must match Node's case ID, scale, checksum, and operation count.
+
+`report.json` preserves every sample and complete pair, paired median reduction
+and median absolute deviation, source and fixture digests, native toolchain
+identity, generated C and compiler artifact bytes, executable and ELF `.text`
+bytes, build phases, and cache reuse. The command requires GNU-compatible `size`
+for its section measurement. Build timings are single observations with recorded
+cache state. They do not establish a build-time improvement. Logs, generated C,
+and fixtures remain in the report directory; the disposable baseline archive and
+source export are removed. Exit 2 marks failed or incomplete work, and a completed
+report does not classify a performance win.
+
+On Linux, `--diagnostics` also retains the exact timed production ELF, a symbol
+companion copied before stripping, generated-function sizes, and disassembly.
+It requires `llvm-nm-19` and `llvm-objdump-19`. A unique final-link cache key forces
+that copy without changing production flags or discarding reusable generated
+objects and runtime archives. Reapplying the recorded strip command must reproduce
+the measured executable byte for byte; the companion's `.text` bytes and address
+must also match. Function indices map symbols to the captured ProgramImage;
+inlined or eliminated functions with no final symbol remain unattributed.
+
+`--perf-pairs 3` adds separate counter samples after the ordinary timing pairs and
+requires diagnostics. The runner probes PMU availability without changing kernel
+policy or privileges. Unavailable counters are explicit, and every counter process
+must pass the same output oracle. Counters include startup and five warmups, so
+they are whole-process evidence rather than the timed kernel interval. Reports
+preserve ordinary timing completeness separately from counter status. The micro
+workflow enables both options and uploads one compressed executable bundle per
+case, each capped at 31 MiB, alongside the reports and disassembly.
+
+Same-repository pull requests can opt into the `Native performance` workflow with
+these labels. Adding a label starts only that family; pushing a new head starts
+every currently labeled family. Remove other family labels before a push when
+only one family needs to run:
+
+| Label                         | Work per distinct baseline                                                                                                                     |
+| ----------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| `native-performance`          | Separate closed-compiled and open-compiled JavaScript comparisons, five initial pairs, up to seven pairs, 45-minute comparison budgets         |
+| `native-micro-performance`    | The 13 frozen micro kernels above, seven pairs, a 40-minute total build/run budget                                                             |
+| `native-compiler-performance` | One source-only compiler program, two native captures built with `--program` pointing to it, then parser and shape slices with five pairs each |
+
+Every family compares the candidate with `git merge-base HEAD PR_BASE_SHA` and,
+when different, with `git merge-base HEAD origin/main` for cumulative stacked-PR
+evidence. JavaScript and micro jobs have 55-minute ceilings; compiler jobs have a
+70-minute ceiling. Compiler captures use 15-minute build budgets, the parser slice
+has an eight-minute comparison budget, and the shape slice has a 25-minute budget.
+The compiler lane uses `self-compile-experiment.ts`'s frozen Node output oracle and retains its build
+events, captured source identities, output digests, resource logs, and partial reports. The
+workflow uploads evidence even on failure, preserves failing exit codes, and
+does not update benchmark baselines. These checks complement the ordinary test
+gate; use the raw variability and completeness records when assessing a change.
 Classified metrics absent from any source/sample, such as native-build RSS on cache hits,
 are listed under `unpairedMetrics` and excluded rather than treated as zero.
 Source changes during execution invalidate resumption, even if later reverted.

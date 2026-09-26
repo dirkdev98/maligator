@@ -1501,6 +1501,8 @@ describe("emit-program-image instruction packing", () => {
 				kind: "operation" as const,
 				instructionIp,
 				rootRegisters: Array.from({ length: count }, (_, register) => register),
+				incomingRootRegisters: Array.from({ length: count }, (_, register) => register),
+				outgoingRootRegisters: Array.from({ length: count }, (_, register) => register),
 			}));
 			const image = withNativeFunctionPlan(
 				testProgramImage({ ...definition.runtime, functions: [wideFunction] }),
@@ -1596,12 +1598,48 @@ describe("emit-program-image instruction packing", () => {
 				...plan,
 				gc: {
 					safepoints: [
-						{ kind: "operation", instructionIp: 0, rootRegisters: [0, 1, 3] },
-						{ kind: "operation", instructionIp: 1, rootRegisters: [0, 1, 3] },
-						{ kind: "operation", instructionIp: 4, rootRegisters: [0, 1, 3] },
-						{ kind: "operation", instructionIp: 5, rootRegisters: [0, 1, 3] },
-						{ kind: "loop-backedge", instructionIp: 6, rootRegisters: [0, 2, 3] },
-						{ kind: "operation", instructionIp: 7, rootRegisters: [0, 2, 3] },
+						{
+							kind: "operation",
+							instructionIp: 0,
+							rootRegisters: [0, 1, 3],
+							incomingRootRegisters: [0, 1, 3],
+							outgoingRootRegisters: [0, 1, 3],
+						},
+						{
+							kind: "operation",
+							instructionIp: 1,
+							rootRegisters: [0, 1, 3],
+							incomingRootRegisters: [0, 1, 3],
+							outgoingRootRegisters: [0, 1, 3],
+						},
+						{
+							kind: "operation",
+							instructionIp: 4,
+							rootRegisters: [0, 1, 3],
+							incomingRootRegisters: [0, 1, 3],
+							outgoingRootRegisters: [0, 1, 3],
+						},
+						{
+							kind: "operation",
+							instructionIp: 5,
+							rootRegisters: [0, 1, 3],
+							incomingRootRegisters: [0, 1, 3],
+							outgoingRootRegisters: [0, 1, 3],
+						},
+						{
+							kind: "loop-backedge",
+							instructionIp: 6,
+							rootRegisters: [0, 2, 3],
+							incomingRootRegisters: [0, 2, 3],
+							outgoingRootRegisters: [0, 2, 3],
+						},
+						{
+							kind: "operation",
+							instructionIp: 7,
+							rootRegisters: [0, 2, 3],
+							incomingRootRegisters: [0, 2, 3],
+							outgoingRootRegisters: [0, 2, 3],
+						},
 					],
 				},
 			}),
@@ -1650,9 +1688,27 @@ describe("emit-program-image instruction packing", () => {
 				...plan,
 				gc: {
 					safepoints: [
-						{ kind: "operation", instructionIp: 0, rootRegisters: [1] },
-						{ kind: "operation", instructionIp: 1, rootRegisters: [0] },
-						{ kind: "operation", instructionIp: 2, rootRegisters: [1] },
+						{
+							kind: "operation",
+							instructionIp: 0,
+							rootRegisters: [1],
+							incomingRootRegisters: [1],
+							outgoingRootRegisters: [1],
+						},
+						{
+							kind: "operation",
+							instructionIp: 1,
+							rootRegisters: [0],
+							incomingRootRegisters: [0],
+							outgoingRootRegisters: [0],
+						},
+						{
+							kind: "operation",
+							instructionIp: 2,
+							rootRegisters: [1],
+							incomingRootRegisters: [1],
+							outgoingRootRegisters: [1],
+						},
 					],
 				},
 			}),
@@ -1710,9 +1766,27 @@ describe("emit-program-image instruction packing", () => {
 				...plan,
 				gc: {
 					safepoints: [
-						{ kind: "operation", instructionIp: 0, rootRegisters: [1] },
-						{ kind: "operation", instructionIp: 1, rootRegisters: [0] },
-						{ kind: "operation", instructionIp: 2, rootRegisters: [1] },
+						{
+							kind: "operation",
+							instructionIp: 0,
+							rootRegisters: [1],
+							incomingRootRegisters: [1],
+							outgoingRootRegisters: [1],
+						},
+						{
+							kind: "operation",
+							instructionIp: 1,
+							rootRegisters: [0],
+							incomingRootRegisters: [0],
+							outgoingRootRegisters: [0],
+						},
+						{
+							kind: "operation",
+							instructionIp: 2,
+							rootRegisters: [1],
+							incomingRootRegisters: [1],
+							outgoingRootRegisters: [1],
+						},
 					],
 				},
 			}),
@@ -1729,7 +1803,7 @@ describe("emit-program-image instruction packing", () => {
 		);
 	});
 
-	it("publishes exact static-property roots only inside the generic fallback", () => {
+	it("reuses native-planned rooted call outputs through static-property hits and misses", () => {
 		const call: BytecodeInstruction = {
 			opcode: "CALL",
 			dst: 0,
@@ -1763,25 +1837,236 @@ describe("emit-program-image instruction packing", () => {
 			0,
 			(plan) => ({
 				...plan,
+				instructions: exactLoadFunction.instructions.map((instruction) =>
+					instruction.opcode === "CALL" ? { kind: "call" as const } : undefined,
+				),
 				gc: {
 					safepoints: [
-						{ kind: "operation", instructionIp: 0, rootRegisters: [1] },
-						{ kind: "operation", instructionIp: 1, rootRegisters: [0] },
-						{ kind: "operation", instructionIp: 2, rootRegisters: [1] },
+						{
+							kind: "operation",
+							instructionIp: 0,
+							rootRegisters: [0, 1],
+							incomingRootRegisters: [1],
+							outgoingRootRegisters: [0, 1],
+						},
+						{
+							kind: "operation",
+							instructionIp: 1,
+							rootRegisters: [0, 1],
+							incomingRootRegisters: [0, 1],
+							outgoingRootRegisters: [1],
+						},
+						{
+							kind: "operation",
+							instructionIp: 2,
+							rootRegisters: [0, 1],
+							incomingRootRegisters: [1],
+							outgoingRootRegisters: [0],
+						},
 					],
 				},
 			}),
 		);
 		const output = emitProgramImage(image, { compiled: true });
 
-		expect(output.match(/MAL_ROOT_MASK\(0x1\);/g)).toHaveLength(2);
-		expect(output.match(/MAL_ROOT_MASK\(0x2\);/g)).toHaveLength(1);
+		expect(output).toContain("#define r0 (__private_r0)");
+		const propertyStart = output.indexOf("if (mal_vm_property_try_load_static");
+		const propertyEnd = output.indexOf("static MalCallCache __cc_2", propertyStart);
+		expect(propertyStart).toBeGreaterThan(0);
+		expect(propertyEnd).toBeGreaterThan(propertyStart);
+		const property = output.slice(propertyStart, propertyEnd);
+		expect(property).toContain("r0 = __v_1;");
+		expect(property).toContain("r0 = mal_vm_op_load_property_ic_static_miss");
+		expect(property).not.toContain("__gc_slots[0] = r0;");
+
+		// Calls bind the reused destination to continuously rooted storage, then
+		// restore its private value on either control-flow exit.
+		expect(output).toMatch(/#define r0 \(__gc_slots\[0\]\)[\s\S]*?mal_vm_call_cached/);
 		expect(output).toMatch(
-			/if \(mal_vm_property_try_load_static[^\n]+\) \{[\s\S]*?\} else \{\n\s+MAL_ROOT_MASK\(0x2\);\n\s+r0 = mal_vm_op_load_property_ic/,
+			/MAL_COMPLETION_THROW\) \{ __private_r0 = __gc_slots\[0\]; goto __throw_exit; \}/,
 		);
 		expect(output).toMatch(
-			/mal_vm_op_load_property_ic[\s\S]*?\n\s+\}\n\s+MAL_ROOT_MASK\(0x1\);/,
+			/__private_r0 = __gc_slots\[0\];\n#undef r0\n#define r0 \(__private_r0\)/,
 		);
+	});
+
+	it("keeps chained property hits private and publishes at miss and poll edges", () => {
+		const loadFunction: BytecodeFunction = {
+			...fn,
+			capturedCount: 0,
+			parameterCount: 1,
+			registerCount: 4,
+			instructions: [
+				{ opcode: "LOAD_PROPERTY_STATIC", object: 0, dst: 1, stringIndex: 1, icIndex: 0 },
+				{ opcode: "LOAD_PROPERTY_STATIC", object: 1, dst: 2, stringIndex: 2, icIndex: 1 },
+				{ opcode: "CREATE_OBJECT", dst: 3 },
+				{ opcode: "JUMP_IF", cond: 2, targetIp: 0 },
+				{ opcode: "RETURN", value: 2 },
+			],
+		};
+		const image = withNativeFunctionPlan(
+			testProgramImage({ ...definition.runtime, functions: [loadFunction] }),
+			0,
+			(plan) => ({
+				...plan,
+				gc: {
+					safepoints: [
+						{
+							kind: "operation",
+							instructionIp: 0,
+							rootRegisters: [0, 1],
+							incomingRootRegisters: [0],
+							outgoingRootRegisters: [0, 1],
+						},
+						{
+							kind: "operation",
+							instructionIp: 1,
+							rootRegisters: [0, 1, 2],
+							incomingRootRegisters: [0, 1],
+							outgoingRootRegisters: [0, 2],
+						},
+						{
+							kind: "operation",
+							instructionIp: 2,
+							rootRegisters: [0, 2, 3],
+							incomingRootRegisters: [0, 2],
+							outgoingRootRegisters: [0, 2, 3],
+						},
+						{
+							kind: "loop-backedge",
+							instructionIp: 3,
+							rootRegisters: [0, 2],
+							incomingRootRegisters: [0, 2],
+							outgoingRootRegisters: [0, 2],
+						},
+					],
+				},
+			}),
+		);
+		const output = emitCompiledFunction(
+			loadFunction,
+			image.native.functions[0]!,
+			0,
+			"",
+			false,
+		)!.source;
+		for (const register of [0, 1, 2]) {
+			expect(output).toContain(`MalValue __private_r${register};`);
+			expect(output).toContain(`#define r${register} (__private_r${register})`);
+		}
+		const hits = [
+			...output.matchAll(
+				/if \(mal_vm_property_try_load_static[^\n]+\) \{([\s\S]*?)\} else \{/g,
+			),
+		];
+		expect(hits).toHaveLength(2);
+		for (const hit of hits) expect(hit[1]).not.toContain("__gc_slots");
+		expect(output).toMatch(
+			/__gc_slots\[1\] = MAL_VALUE_UNDEFINED;[\s\S]*?r1 = mal_vm_op_load_property_ic_static_miss/,
+		);
+		expect(output).toMatch(
+			/__gc_slots\[1\] = r1;[\s\S]*?__gc_slots\[2\] = MAL_VALUE_UNDEFINED;[\s\S]*?r2 = mal_vm_op_load_property_ic_static_miss/,
+		);
+		const allocationEnd = output.indexOf("r3 = mal_vm_op_create_object");
+		const secondMissEnd = output.indexOf(
+			"if (vm->completion.kind",
+			output.indexOf("r2 = mal_vm_op_load_property_ic_static_miss"),
+		);
+		expect(output.slice(secondMissEnd, allocationEnd)).not.toContain("__gc_slots");
+		expect(output).toMatch(
+			/if \(mal_gc_poll\) \{[^\n]*__gc_slots\[2\] = r2;[^\n]*mal_gc_safepoint\(vm\);/,
+		);
+	});
+
+	it("publishes live private roots and clears dead private slots beyond the root mask", () => {
+		const allRoots = Array.from({ length: 67 }, (_, register) => register);
+		const loadFunction: BytecodeFunction = {
+			...fn,
+			capturedCount: 0,
+			parameterCount: 67,
+			registerCount: 67,
+			instructions: [
+				{
+					opcode: "CALL",
+					dst: 64,
+					callee: 0,
+					thisValue: -1,
+					argumentCount: 66,
+					arguments: allRoots.slice(1),
+				},
+				{ opcode: "MOVE", dst: 65, src: 66 },
+				{
+					opcode: "LOAD_PROPERTY_STATIC",
+					object: 65,
+					dst: 66,
+					stringIndex: 1,
+					icIndex: 0,
+				},
+				{ opcode: "JUMP_IF", cond: 66, targetIp: 1 },
+				{ opcode: "RETURN", value: 66 },
+			],
+		};
+		const image = withNativeFunctionPlan(
+			testProgramImage({ ...definition.runtime, functions: [loadFunction] }),
+			0,
+			(plan) => ({
+				...plan,
+				gc: {
+					safepoints: [
+						{
+							kind: "operation",
+							instructionIp: 0,
+							rootRegisters: allRoots,
+							incomingRootRegisters: allRoots,
+							outgoingRootRegisters: [66],
+						},
+						{
+							kind: "operation",
+							instructionIp: 2,
+							rootRegisters: [65, 66],
+							incomingRootRegisters: [65],
+							outgoingRootRegisters: [66],
+						},
+						{
+							kind: "loop-backedge",
+							instructionIp: 3,
+							rootRegisters: [66],
+							incomingRootRegisters: [66],
+							outgoingRootRegisters: [66],
+						},
+					],
+				},
+			}),
+		);
+		const output = emitCompiledFunction(
+			loadFunction,
+			image.native.functions[0]!,
+			0,
+			"",
+			false,
+		)!.source;
+		for (const register of [65, 66]) {
+			expect(output).toContain(`#define r${register} (__private_r${register})`);
+			expect(output).toContain(`__gc_slots[${register}] = r${register};`);
+		}
+		const property = output.match(
+			/if \(mal_vm_property_try_load_static[^\n]+\) \{([\s\S]*?)\} else \{([\s\S]*?)\n\s+\}/,
+		);
+		expect(property).not.toBeNull();
+		expect(property![1]).not.toContain("__gc_slots");
+		const miss = property![2]!;
+		const callOffset = miss.indexOf("r66 = mal_vm_op_load_property_ic_static_miss");
+		expect(callOffset).toBeGreaterThanOrEqual(0);
+		const incoming = miss.slice(0, callOffset);
+		expect(incoming).toContain("__gc_slots[65] = r65;");
+		expect(incoming).toContain("__gc_slots[66] = MAL_VALUE_UNDEFINED;");
+		const poll = output
+			.slice(output.indexOf("r66 = mal_vm_op_load_property_ic_static_miss"))
+			.match(/if \(mal_gc_poll\) \{([^\n]*)mal_gc_safepoint\(vm\);/);
+		expect(poll).not.toBeNull();
+		expect(poll![1]).toContain("__gc_slots[65] = MAL_VALUE_UNDEFINED;");
+		expect(poll![1]).toContain("__gc_slots[66] = r66;");
+		expect(poll![1]).not.toContain("__gc_slots[65] = r65;");
 	});
 
 	it.each(["single", "batch"])(
@@ -1946,8 +2231,20 @@ describe("native update-expression representation", () => {
 				registerRepresentations: ["boxed", "int32", "int32", "boxed"],
 				gc: {
 					safepoints: [
-						{ kind: "operation", instructionIp: 2, rootRegisters: [0] },
-						{ kind: "operation", instructionIp: 3, rootRegisters: [0] },
+						{
+							kind: "operation",
+							instructionIp: 2,
+							rootRegisters: [0],
+							incomingRootRegisters: [0],
+							outgoingRootRegisters: [0],
+						},
+						{
+							kind: "operation",
+							instructionIp: 3,
+							rootRegisters: [0],
+							incomingRootRegisters: [0],
+							outgoingRootRegisters: [0],
+						},
 					],
 				},
 				instructions: plan.instructions.map((instruction, index) =>
@@ -2423,9 +2720,21 @@ describe("native update-expression representation", () => {
 		const output = emitProgramImage(definition, { compiled: true });
 		expect(output).toContain("MalIteratorObject *__iter_cursor_");
 		expect(output).toContain("mal_vm_iterator_protocol_cursor(");
-		expect(output).toContain("mal_vm_iterator_step_dense_array_cursor(vm,");
+		expect(output).toContain("mal_vm_iterator_step_dense_array_cursor(");
 		expect(output).not.toContain("mal_vm_iterator_step_protocol_cursor(vm,");
 		expect(output).toContain("mal_vm_iterator_step_fast(vm,");
+		const ownerOutput = emitCompiledFunction(
+			definition.runtime.functions[ownerIndex]!,
+			owner,
+			ownerIndex,
+			"",
+			false,
+		)!.source;
+		expect(ownerOutput).not.toContain("__private_r");
+		const cursorCall = ownerOutput.indexOf("mal_vm_iterator_step_dense_array_cursor(");
+		const stepStart = ownerOutput.lastIndexOf("\nL", cursorCall);
+		expect(stepStart).toBeGreaterThan(0);
+		expect(ownerOutput.slice(stepStart, cursorCall)).toContain("MAL_ROOT_MASK(");
 
 		const retainedGeneric = withSpecializations(
 			definition,
@@ -2439,6 +2748,109 @@ describe("native update-expression representation", () => {
 		const genericOutput = emitProgramImage(retainedGeneric, { compiled: true });
 		expect(genericOutput).toContain("mal_vm_iterator_step(vm,");
 		expect(genericOutput).not.toContain("mal_vm_iterator_step_fast(vm,");
+	});
+
+	it("publishes private static-store inputs and the root mask only after the cache probe misses", () => {
+		const definition = lower(`
+			"use strict";
+			function write(receiver, value) {
+				const retained = receiver.child;
+				receiver.updated = value;
+				return retained.value;
+			}
+			globalThis.write = write;
+		`);
+		const ownerIndex = definition.runtime.functions.findIndex(
+			(fn) =>
+				fn.instructions.filter(
+					(instruction) => instruction.opcode === "LOAD_PROPERTY_STATIC",
+				).length === 2 &&
+				fn.instructions.some(
+					(instruction) => instruction.opcode === "STORE_PROPERTY_STATIC",
+				),
+		);
+		expect(ownerIndex).toBeGreaterThanOrEqual(0);
+		const fn = definition.runtime.functions[ownerIndex]!;
+		const owner = definition.native.functions[ownerIndex]!;
+		const storeIp = fn.instructions.findIndex(
+			(instruction) => instruction.opcode === "STORE_PROPERTY_STATIC",
+		);
+		const store = fn.instructions[storeIp]!;
+		if (store.opcode !== "STORE_PROPERTY_STATIC") throw new Error("missing static store");
+		const output = emitCompiledFunction(fn, owner, ownerIndex, "", false)!.source;
+		expect(output).toContain(`#define r${store.object} (__private_r${store.object})`);
+		const probe = output.indexOf("mal_vm_object_try_store_static(");
+		expect(probe).toBeGreaterThan(0);
+		const previousLoadEnd = output.lastIndexOf("\n    }", probe);
+		expect(previousLoadEnd).toBeGreaterThan(0);
+		expect(output.slice(previousLoadEnd, probe)).not.toMatch(
+			/__gc_slots\[\d+\]\s*=|MAL_ROOT_MASK\(/,
+		);
+		const call = output.indexOf("mal_vm_op_store_property_ic(", probe);
+		expect(call).toBeGreaterThan(probe);
+		const fallback = output.slice(probe, call);
+
+		const retained = fn.instructions.find(
+			(instruction) => instruction.opcode === "LOAD_PROPERTY_STATIC",
+		);
+		if (retained?.opcode !== "LOAD_PROPERTY_STATIC")
+			throw new Error("missing retained property value");
+		expect(retained.dst).not.toBe(store.object);
+		expect(output).toContain(`#define r${retained.dst} (__private_r${retained.dst})`);
+		const receiverPublication = new RegExp(
+			`__gc_slots\\[\\d+\\] = r${store.object};`,
+			"g",
+		);
+		expect(output.match(receiverPublication)).toHaveLength(1);
+		expect(output.slice(0, output.indexOf("mal_root_frame_head = &__gc_frame"))).toMatch(
+			receiverPublication,
+		);
+		expect(fallback).not.toMatch(receiverPublication);
+		expect(fallback).toMatch(new RegExp(`__gc_slots\\[\\d+\\] = r${retained.dst};`));
+
+		expect(fallback).toContain("MAL_ROOT_MASK(");
+	});
+
+	it("publishes private iterator results and the root mask only after the dense probe misses", () => {
+		const definition = lower(`
+			"use strict";
+			function sum(values) {
+				let total = 0;
+				for (const value of values) total += value.child.meta.value;
+				return total;
+			}
+			globalThis.sum = sum;
+		`);
+		const ownerIndex = definition.native.functions.findIndex((fn) =>
+			fn.specializations.some((region) => region.kind === "array-values-iterator-cursor"),
+		);
+		const owner = definition.native.functions[ownerIndex]!;
+		const fn = definition.runtime.functions[ownerIndex]!;
+		const cursor = owner.specializations.find(
+			(region) => region.kind === "array-values-iterator-cursor",
+		);
+		if (cursor?.kind !== "array-values-iterator-cursor")
+			throw new Error("missing array cursor");
+		const stepIp = cursor.stepIps[0]!;
+		const step = fn.instructions[stepIp]!;
+		if (step.opcode !== "ITERATOR_STEP") throw new Error("missing iterator step");
+		const output = emitCompiledFunction(fn, owner, ownerIndex, "", false)!.source;
+		expect(output).toContain(`#define r${step.valueDst} (__private_r${step.valueDst})`);
+		const probe = output.indexOf("mal_vm_iterator_try_dense_array_cursor_step(");
+		expect(probe).toBeGreaterThan(0);
+		const blockStart = output.lastIndexOf("\nL", probe);
+		expect(blockStart).toBeGreaterThan(0);
+		expect(output.slice(blockStart, probe)).not.toMatch(
+			/__gc_slots\[\d+\]\s*=|MAL_ROOT_MASK\(/,
+		);
+		const result = output.indexOf(`r${step.valueDst} = iter_val_${stepIp};`, probe);
+		expect(result).toBeGreaterThan(probe);
+		const fallback = output.slice(probe, result);
+		expect(fallback).toMatch(/__gc_slots\[\d+\] = MAL_VALUE_UNDEFINED;/);
+		const publication = fallback.indexOf("MAL_ROOT_MASK(");
+		const call = fallback.indexOf(`mal_vm_iterator_step(vm, &iter_rec_${stepIp},`);
+		expect(publication).toBeGreaterThan(0);
+		expect(call).toBeGreaterThan(publication);
 	});
 
 	it.each([
@@ -2826,9 +3238,27 @@ describe("native update-expression representation", () => {
 				registerRepresentations: ["boxed", "boxed", "number", "number"],
 				gc: {
 					safepoints: [
-						{ kind: "operation", instructionIp: 3, rootRegisters: [1] },
-						{ kind: "operation", instructionIp: 4, rootRegisters: [0] },
-						{ kind: "operation", instructionIp: 5, rootRegisters: [1] },
+						{
+							kind: "operation",
+							instructionIp: 3,
+							rootRegisters: [1],
+							incomingRootRegisters: [1],
+							outgoingRootRegisters: [1],
+						},
+						{
+							kind: "operation",
+							instructionIp: 4,
+							rootRegisters: [0],
+							incomingRootRegisters: [0],
+							outgoingRootRegisters: [0],
+						},
+						{
+							kind: "operation",
+							instructionIp: 5,
+							rootRegisters: [1],
+							incomingRootRegisters: [1],
+							outgoingRootRegisters: [1],
+						},
 					],
 				},
 				instructions: plan.instructions.with(4, {

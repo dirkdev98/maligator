@@ -428,6 +428,16 @@ export function inputFactsFixture(): { image: ProgramImage; expected: Array<stri
 							representations[register] === "boxed" ||
 							representations[register] === "string",
 					),
+					incomingRootRegisters: point.incomingRootRegisters.filter(
+						(register) =>
+							representations[register] === "boxed" ||
+							representations[register] === "string",
+					),
+					outgoingRootRegisters: point.outgoingRootRegisters.filter(
+						(register) =>
+							representations[register] === "boxed" ||
+							representations[register] === "string",
+					),
 				})),
 			},
 		};
@@ -444,6 +454,12 @@ export function inputFactsFixture(): { image: ProgramImage; expected: Array<stri
 					safepoints: plan.gc.safepoints.map((point) => ({
 						...point,
 						rootRegisters: point.rootRegisters.filter((register) => register !== 0),
+						incomingRootRegisters: point.incomingRootRegisters.filter(
+							(register) => register !== 0,
+						),
+						outgoingRootRegisters: point.outgoingRootRegisters.filter(
+							(register) => register !== 0,
+						),
 					})),
 				},
 			},

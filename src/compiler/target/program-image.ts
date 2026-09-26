@@ -21,7 +21,11 @@ import { compilerOperatorInputKindsHaveExactNativeSemantics } from "../shared/co
 import type { CompilerOperatorInputKindMasks } from "../shared/compiler-value-kinds.ts";
 import { NATIVE_STRING_SWITCH_CASE_LIMIT } from "../shared/native-string-switch.ts";
 import { getPrimordialCatalog } from "../shared/primordial-catalog-data.ts";
-import type { ExecutionFunction, ExecutionProgram } from "./execution-ir.ts";
+import type {
+	ExecutionFunction,
+	ExecutionProgram,
+	ExecutionSafepointRoots,
+} from "./execution-ir.ts";
 import { collectCompilerFactFlowReport } from "./fact-flow-report.ts";
 import { buildProfileMetadata } from "./profile-metadata.ts";
 import type { CompilerRemark, ProfileSite } from "./profile-metadata.ts";
@@ -930,6 +934,90 @@ export function vmRegionActionsAreCurrent(
 	);
 }
 
+export interface NativeEdgeEffects {
+	readonly allocation: boolean;
+	readonly collection: boolean;
+	readonly reentry: boolean;
+	readonly throwing: boolean;
+	readonly invalidation: boolean;
+}
+
+/** The static cache probe only reads admitted storage; a miss may invoke arbitrary JS. */
+export const nativeStaticPropertyEffects: Readonly<{
+	probe: NativeEdgeEffects;
+	miss: NativeEdgeEffects;
+}> = Object.freeze({
+	probe: Object.freeze({
+		allocation: false,
+		collection: false,
+		reentry: false,
+		throwing: false,
+		invalidation: false,
+	}),
+	miss: Object.freeze({
+		allocation: true,
+		collection: true,
+		reentry: true,
+		throwing: true,
+		invalidation: true,
+	}),
+});
+
+/** A cached store may grow slot storage and invalidate assumptions without collecting. */
+export const nativeStaticPropertyStoreEffects: Readonly<{
+	hit: NativeEdgeEffects;
+	miss: NativeEdgeEffects;
+}> = Object.freeze({
+	hit: Object.freeze({
+		allocation: true,
+		collection: false,
+		reentry: false,
+		throwing: false,
+		invalidation: true,
+	}),
+	miss: nativeStaticPropertyEffects.miss,
+});
+
+const NATIVE_ALLOCATION_EFFECTS: NativeEdgeEffects = Object.freeze({
+	allocation: true,
+	collection: false,
+	reentry: false,
+	throwing: false,
+	invalidation: false,
+});
+
+const NATIVE_FALLIBLE_ALLOCATION_EFFECTS: NativeEdgeEffects = Object.freeze({
+	...NATIVE_ALLOCATION_EFFECTS,
+	throwing: true,
+});
+
+/** Allocation requests a later poll; these creation helpers never collect or reenter. */
+export function nativeInstructionEffects(
+	instruction: BytecodeInstruction,
+): NativeEdgeEffects {
+	switch (instruction.opcode) {
+		case "MOVE":
+		case "CREATE_UNDEFINED":
+		case "CREATE_NULL":
+		case "CREATE_EMPTY":
+		case "CREATE_BOOLEAN":
+		case "CREATE_NUMBER":
+		case "CREATE_F64":
+		case "CREATE_STRING":
+		case "CREATE_BIGINT":
+			return nativeStaticPropertyEffects.probe;
+		case "CREATE_OBJECT":
+			return NATIVE_FALLIBLE_ALLOCATION_EFFECTS;
+		case "CREATE_OBJECT_SHAPED":
+		case "CREATE_ARRAY":
+			return NATIVE_ALLOCATION_EFFECTS;
+		case "STORE_PROPERTY_STATIC":
+			return nativeStaticPropertyStoreEffects.miss;
+		default:
+			return nativeStaticPropertyEffects.miss;
+	}
+}
+
 export interface NativeFunctionPlan {
 	readonly specializedOnly?: true;
 	readonly functionIndex: number;
@@ -969,11 +1057,12 @@ export interface NativeFunctionPlan {
 		}>;
 	}>;
 	readonly gc: {
-		readonly safepoints: ReadonlyArray<{
-			readonly kind: "operation" | "loop-backedge" | "conservative";
-			readonly instructionIp: number;
-			readonly rootRegisters: ReadonlyArray<number>;
-		}>;
+		readonly safepoints: ReadonlyArray<
+			ExecutionSafepointRoots & {
+				readonly kind: "operation" | "loop-backedge" | "conservative";
+				readonly instructionIp: number;
+			}
+		>;
 	};
 	/** One native-only decision per bytecode IP; absent entries mean generic lowering. */
 	readonly instructions: ReadonlyArray<NativeInstructionPlan | undefined>;
@@ -1346,6 +1435,14 @@ export function createConservativeNativePlan(
 						{ length: fn.registerCount },
 						(_, register) => register,
 					),
+					incomingRootRegisters: Array.from(
+						{ length: fn.registerCount },
+						(_, register) => register,
+					),
+					outgoingRootRegisters: Array.from(
+						{ length: fn.registerCount },
+						(_, register) => register,
+					),
 				})),
 			},
 			instructions: Array.from({ length: fn.instructions.length }),
@@ -1409,6 +1506,27 @@ export function nativeFrameRootRegisters(
 			}
 			previousRegister = register;
 			frameRoots.add(register);
+		}
+		const combinedRoots = new Set<number>();
+		const declaredRoots = new Set(safepoint.rootRegisters);
+		for (const boundary of ["incomingRootRegisters", "outgoingRootRegisters"] as const) {
+			let previousBoundaryRegister = -1;
+			for (const register of safepoint[boundary]) {
+				if (
+					!Number.isSafeInteger(register) ||
+					register <= previousBoundaryRegister ||
+					!declaredRoots.has(register)
+				) {
+					throw new RangeError(
+						`native ${boundary} must be unique ordered subsets of GC roots`,
+					);
+				}
+				previousBoundaryRegister = register;
+				combinedRoots.add(register);
+			}
+		}
+		if (combinedRoots.size !== safepoint.rootRegisters.length) {
+			throw new RangeError("native GC roots must equal the incoming/outgoing root union");
 		}
 	}
 	for (const [instructionIp, instruction] of fn.instructions.entries()) {
@@ -4075,12 +4193,28 @@ function lowerExecutionFunctionToNativePlan(
 			}
 		}
 	}
-	const safepoints = fn.gc.safepoints.flatMap(({ kind, instruction, rootRegisters }) => {
-		const instructionIp = instructionIndexByTargetInstruction.get(instruction);
-		return instructionIp === undefined
-			? []
-			: [{ kind, instructionIp, rootRegisters: [...rootRegisters] }];
-	});
+	const safepoints = fn.gc.safepoints.flatMap(
+		({
+			kind,
+			instruction,
+			rootRegisters,
+			incomingRootRegisters,
+			outgoingRootRegisters,
+		}) => {
+			const instructionIp = instructionIndexByTargetInstruction.get(instruction);
+			return instructionIp === undefined
+				? []
+				: [
+						{
+							kind,
+							instructionIp,
+							rootRegisters,
+							incomingRootRegisters,
+							outgoingRootRegisters,
+						},
+					];
+		},
+	);
 	const directEntries: Array<NativeDirectEntryPlan> = fn.directEntries.map((entry) => ({
 		id: entry.id,
 		...(entry.operatorInputs === undefined
@@ -4117,12 +4251,28 @@ function lowerExecutionFunctionToNativePlan(
 				}),
 		registerRepresentations: [...entry.registerRepresentations],
 		gc: {
-			safepoints: entry.gc.safepoints.flatMap(({ kind, instruction, rootRegisters }) => {
-				const instructionIp = instructionIndexByTargetInstruction.get(instruction);
-				return instructionIp === undefined
-					? []
-					: [{ kind, instructionIp, rootRegisters: [...rootRegisters] }];
-			}),
+			safepoints: entry.gc.safepoints.flatMap(
+				({
+					kind,
+					instruction,
+					rootRegisters,
+					incomingRootRegisters,
+					outgoingRootRegisters,
+				}) => {
+					const instructionIp = instructionIndexByTargetInstruction.get(instruction);
+					return instructionIp === undefined
+						? []
+						: [
+								{
+									kind,
+									instructionIp,
+									rootRegisters,
+									incomingRootRegisters,
+									outgoingRootRegisters,
+								},
+							];
+				},
+			),
 		},
 	}));
 	return {

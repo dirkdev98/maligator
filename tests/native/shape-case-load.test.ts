@@ -168,6 +168,12 @@ const definition: ProgramImage = withNativeFunctionPlan(
 					rootRegisters: safepoint.rootRegisters.filter(
 						(register) => registerRepresentations[register] === "boxed",
 					),
+					incomingRootRegisters: safepoint.incomingRootRegisters.filter(
+						(register) => registerRepresentations[register] === "boxed",
+					),
+					outgoingRootRegisters: safepoint.outgoingRootRegisters.filter(
+						(register) => registerRepresentations[register] === "boxed",
+					),
 				})),
 			},
 		};
