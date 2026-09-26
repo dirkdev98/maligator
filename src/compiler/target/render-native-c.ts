@@ -36,6 +36,7 @@ import type {
 	NativePairedArrayLoopPlan,
 	NativePropertyProjectionAction,
 	NativePropertyProjectionOperand,
+	NativePropertyReadRegionAction,
 } from "./lower-native-fast-paths.ts";
 import {
 	nativePrivateCallResultIps,
@@ -3041,6 +3042,7 @@ function emitBody(
 		indexedLoopElements,
 	);
 	const staticPropertyNumericActionByIp = nativeFastPaths.propertyProjectionActions;
+	const propertyReadRegionActionByIp = nativeFastPaths.propertyReadRegionActions;
 	// Numeric projections can elide boxed writes entirely. Their dormant boxed
 	// temporaries must retain the collector-cleared storage used by the fallback.
 	for (const projection of nativeFastPaths.propertyProjections) {
@@ -3072,6 +3074,9 @@ function emitBody(
 		for (const [index] of projection.steps.entries())
 			lines.push(`f64 __property_projection_${projection.id}_step_${index} = 0.0;`);
 	}
+	for (const region of nativeFastPaths.propertyReadRegions) {
+		lines.push(`MalNativePropertyReadRegion __property_region_${region.id} = {0};`);
+	}
 	for (const paired of nativeFastPaths.pairedArrayLoops) {
 		lines.push(
 			`bool __paired_array_${paired.id}_fast = false;`,
@@ -3084,6 +3089,8 @@ function emitBody(
 		if (
 			staticPropertyNumericActionByIp.has(ip) ||
 			staticPropertyNumericActionByIp.has(ip + 1) ||
+			propertyReadRegionActionByIp.has(ip) ||
+			propertyReadRegionActionByIp.has(ip + 1) ||
 			first.opcode !== "LOAD_PROPERTY_STATIC" ||
 			second.opcode !== "LOAD_PROPERTY_STATIC" ||
 			first.object !== second.object ||
@@ -3495,6 +3502,7 @@ function emitBody(
 				numericFusionAction: numericFusionActionByIp.get(ip),
 				staticPropertyProjectionAction: staticPropertyProjectionActionByIp.get(ip),
 				staticPropertyNumericAction: staticPropertyNumericActionByIp.get(ip),
+				propertyReadRegionAction: propertyReadRegionActionByIp.get(ip),
 				constructorInitializationAction: constructorInitializationActionByIp.get(ip),
 				privateFieldReserveCount:
 					privateFieldReserve?.id === ip ? privateFieldReserve.count : undefined,
@@ -3879,6 +3887,7 @@ interface NativeInstructionContext {
 	readonly numericFusionAction?: NativeNumericFusionAction;
 	readonly staticPropertyProjectionAction?: NativeStaticPropertyProjectionAction;
 	readonly staticPropertyNumericAction?: NativePropertyProjectionAction;
+	readonly propertyReadRegionAction?: NativePropertyReadRegionAction;
 	readonly constructorInitializationAction?: NativeConstructorInitializationAction;
 	readonly privateFieldReserveCount?: number;
 	readonly relocation: NativeRelocationExpressions;
@@ -3977,6 +3986,7 @@ function emitInstruction(
 		numericFusionAction,
 		staticPropertyProjectionAction,
 		staticPropertyNumericAction,
+		propertyReadRegionAction,
 		constructorInitializationAction,
 		privateFieldReserveCount,
 		relocation,
@@ -5052,6 +5062,29 @@ function emitInstruction(
 				return [
 					`__property_projection_${plan.id}_fast = ${helper}(${boxed(instruction.object)}, ${[...cacheArguments, ...valueArguments].join(", ")});`,
 					`if (!__property_projection_${plan.id}_fast) {`,
+					...fallback.map((line) => `  ${line}`),
+					`}`,
+				];
+			}
+			if (
+				instruction.opcode === "LOAD_PROPERTY_STATIC" &&
+				propertyReadRegionAction !== undefined
+			) {
+				const fallback = emitGenericInstruction();
+				if (fallback === null) return null;
+				const { plan, index } = propertyReadRegionAction;
+				const region = `__property_region_${plan.id}`;
+				const value = `__property_region_value_${ip}`;
+				return [
+					...(index === 0
+						? [
+								`${region} = mal_vm_property_read_region_begin(${boxed(instruction.object)});`,
+							]
+						: []),
+					`MalValue ${value};`,
+					`if (mal_vm_property_read_region_try_load(&${region}, &${nativeBodyReference(resources, "propertyCache")}[${instruction.icIndex}], &${value})) {`,
+					`  r${instruction.dst} = ${value};`,
+					`} else {`,
 					...fallback.map((line) => `  ${line}`),
 					`}`,
 				];

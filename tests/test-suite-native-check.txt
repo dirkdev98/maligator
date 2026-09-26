@@ -18,6 +18,7 @@ tests/native/literal-materialization.test.ts
 tests/native/static-data-query.test.ts
 tests/native/static-primitive-operations.test.ts
 tests/native/static-property-root-mask.test.ts
+tests/native/native-property-read-regions.test.ts
 tests/native/symbol-registry-reuse.test.ts
 tests/native/virtual-state.test.ts
 tests/native/map-get-set-cache.test.ts

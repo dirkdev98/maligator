@@ -101,13 +101,52 @@ projections retain continuously rooted storage. Resumable functions retain
 their heap register frames. Private selection is bounded to 32 registers per
 ordinary function to limit native register pressure and slow-edge code size.
 
+## Bounded property read regions
+
+A property read region contains 2–8 static loads from the same receiver within
+at most 24 instructions. Gaps admit only numeric/Boolean constants, copies with
+compatible representations, and audited arithmetic, comparisons, or unary
+operations with proven numeric inputs. Control-flow entries, receiver writes,
+and competing native plans end selection. The final load may replace the
+receiver after reading it. Existing numeric projections take precedence;
+exactly two adjacent loads retain the existing paired-load path.
+
+On each visit, the first load admits an ordinary object and captures its shape,
+slots pointer, first prototype, and absence of public overflow. Each site then
+checks its current cache row against that admission. A primary own-slot row
+needs a matching shape and real slot. An inherited-value row needs a matching
+shape, an ordinary receiver, the exact first prototype, no public overflow, and
+dependencies registered from the first prototype through the property holder.
+In this mode, `ic.poly_count > 0` marks successful dependency registration.
+Mutations eagerly invalidate the cached value through those dependencies.
+
+Eligible receivers and loaded values remain in private locals. Later mutation
+does not replace values already read. The admission's raw pointers are not GC
+roots and do not extend any object's lifetime. Before an actual collecting or
+reentrant miss, incoming publication roots the receiver and all earlier values
+needed by normal or exceptional continuations. Returned heap values are
+published before a later collecting poll; intermediate and out-parameter
+storage retains its existing continuous-root obligations.
+
+The first declined region probe deactivates the admission before executing the
+original ordinary property probe and its miss path. The remainder of the region
+uses that generic continuation, even if an ordinary probe succeeds. It never
+replays completed reads or readmits storage midway through the sequence. Every
+load retains its original position and throw handler. An inactive probe returns
+before dereferencing captured storage, so a getter may replace slots, mutate a
+prototype, or invalidate a later cache without reviving stale pointers.
+
 ## Extending native regions
 
 Keeping a live `MalValue` private does not permit retaining a borrowed slots
 pointer or prototype-derived assumption across arbitrary effects. Getters and
 proxies can mutate them. A collecting poll can also yield to another fiber.
-Storage/prototype admissions must therefore end at an invalidating operation,
-or leave through a generic continuation and obtain a new admission afterward.
+A collecting poll is a hard admission boundary even when collection does not
+move objects. The bounded property region excludes calls, stores, polls,
+branches, allocation, and unknown coercions. An allocation-only effect does not
+by itself license retaining borrowed storage. Future extensions must end the
+admission at an invalidating operation or use a generic continuation; fresh
+admission belongs to a subsequent region, after the invalidation.
 
 Tests exercise cache-hit emission, distinct phase maps, artifact round trips,
 collecting and throwing getters, Proxy traps, callback mutation, returned heap
