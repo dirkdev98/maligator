@@ -2057,7 +2057,9 @@ describe("emit-program-image instruction packing", () => {
 		const incoming = miss.slice(0, callOffset);
 		expect(incoming).toContain("__gc_slots[65] = r65;");
 		expect(incoming).toContain("__gc_slots[66] = MAL_VALUE_UNDEFINED;");
-		const poll = output.match(/if \(mal_gc_poll\) \{([^\n]*)mal_gc_safepoint\(vm\);/);
+		const poll = output
+			.slice(output.indexOf("r66 = mal_vm_op_load_property_ic_static_miss"))
+			.match(/if \(mal_gc_poll\) \{([^\n]*)mal_gc_safepoint\(vm\);/);
 		expect(poll).not.toBeNull();
 		expect(poll![1]).toContain("__gc_slots[65] = MAL_VALUE_UNDEFINED;");
 		expect(poll![1]).toContain("__gc_slots[66] = r66;");

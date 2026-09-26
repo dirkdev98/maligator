@@ -586,7 +586,7 @@ function cPrivateRootPublication(
 	knownPublished?: ReadonlySet<number>,
 ): Array<string> {
 	const point = plan?.safepoints.get(ip);
-	if (plan === undefined || point === undefined) return [];
+	if (plan === undefined || plan.slots.size === 0 || point === undefined) return [];
 	const live = new Set(
 		edge === "incoming" ? point.incomingRootRegisters : point.outgoingRootRegisters,
 	);
@@ -3111,7 +3111,8 @@ function emitBody(
 	let lastPublishedSite = -1;
 	let lastPublishedInactiveRootMask: bigint | undefined;
 	// Entry initialization copies every private value into its shadow slot.
-	const knownPublishedPrivateRoots = new Set(rootPublication?.slots.keys());
+	let knownPublishedPrivateRoots = new Set(rootPublication?.slots.keys());
+	const hasPrivateRoots = (rootPublication?.slots.size ?? 0) > 0;
 	for (let ip = 0; ip < fn.instructions.length; ip++) {
 		if (jumpTargets.has(ip)) {
 			lines.push(`L${ip}:;`);
@@ -3209,11 +3210,6 @@ function emitBody(
 			"incoming",
 			knownPublishedPrivateRoots,
 		);
-		const outgoingRootPublication = cPrivateRootPublication(
-			rootPublication,
-			ip,
-			"outgoing",
-		);
 		const deferredPropertyRoots =
 			fn.instructions[ip]!.opcode === "LOAD_PROPERTY_STATIC" &&
 			!staticPropertyProjectionConflicts(ip);
@@ -3262,6 +3258,38 @@ function emitBody(
 			!deferredTdzRoots &&
 			!deferredDenseIteratorRoots &&
 			(effects.collection || effects.reentry);
+		// Derive fallthrough equality without changing the current incoming state.
+		const nextPublishedPrivateRoots = hasPrivateRoots
+			? new Set(knownPublishedPrivateRoots)
+			: knownPublishedPrivateRoots;
+		if (rootPublication !== undefined && hasPrivateRoots) {
+			const point = rootPublication.safepoints.get(ip);
+			if (publishesIncomingRoots) {
+				for (const register of point?.incomingRootRegisters ?? []) {
+					if (rootPublication.slots.has(register))
+						nextPublishedPrivateRoots.add(register);
+				}
+			}
+			// Refined GC maps, not broad opcode effects, identify possible shadow clearing.
+			if (point !== undefined) {
+				const incoming = new Set(point.incomingRootRegisters);
+				const outgoing = new Set(point.outgoingRootRegisters);
+				for (const register of nextPublishedPrivateRoots) {
+					if (!incoming.has(register) || !outgoing.has(register))
+						nextPublishedPrivateRoots.delete(register);
+				}
+			}
+			for (const register of vmInstructionWriteRegisters(fn.instructions[ip]!))
+				nextPublishedPrivateRoots.delete(register);
+			// Polls read the shadow alias; the final reload establishes private equality.
+			for (const register of rootedOutputs) nextPublishedPrivateRoots.add(register);
+		}
+		const outgoingRootPublication = cPrivateRootPublication(
+			rootPublication,
+			ip,
+			"outgoing",
+			nextPublishedPrivateRoots,
+		);
 		if (publishesIncomingRoots) {
 			lines.push(...incomingRootPublication.map((line) => `    ${line}`));
 		}
@@ -3534,28 +3562,7 @@ function emitBody(
 			lines.push(`#undef r${register}`);
 			lines.push(`#define r${register} (__private_r${register})`);
 		}
-		if (rootPublication !== undefined) {
-			const point = rootPublication.safepoints.get(ip);
-			if (publishesIncomingRoots) {
-				for (const register of point?.incomingRootRegisters ?? []) {
-					if (rootPublication.slots.has(register))
-						knownPublishedPrivateRoots.add(register);
-				}
-			}
-			// Refined GC maps, not broad opcode effects, identify possible shadow clearing.
-			if (point !== undefined) {
-				const incoming = new Set(point.incomingRootRegisters);
-				const outgoing = new Set(point.outgoingRootRegisters);
-				for (const register of knownPublishedPrivateRoots) {
-					if (!incoming.has(register) || !outgoing.has(register))
-						knownPublishedPrivateRoots.delete(register);
-				}
-			}
-			for (const register of vmInstructionWriteRegisters(fn.instructions[ip]!))
-				knownPublishedPrivateRoots.delete(register);
-			// These outputs alias shadow storage until the explicit reload above.
-			for (const register of rootedOutputs) knownPublishedPrivateRoots.add(register);
-		}
+		knownPublishedPrivateRoots = nextPublishedPrivateRoots;
 	}
 
 	return {

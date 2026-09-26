@@ -133,6 +133,7 @@ describe("private-root publication state at collecting edges", () => {
 		expect(
 			hasIncomingCopy(beforeCall(source, 2, afterCallResult(source, 1)), publication),
 		).toBe(false);
+		expect(beforeCall(source, 2, afterCallResult(source, 1))).not.toContain(publication);
 	});
 
 	it("publishes a replacement after the physical private register is written", () => {
@@ -240,6 +241,7 @@ describe("private-root publication state at collecting edges", () => {
 		const afterResult = beforeCall(source, 2, afterCallResult(source, 1));
 		expect(afterResult).toContain(`__private_r${retained} = ${slot};`);
 		expect(hasIncomingCopy(afterResult, publication)).toBe(false);
+		expect(afterResult).not.toContain(publication);
 	});
 
 	it("clears a replaced root on a getter miss and republishes the new private result", () => {

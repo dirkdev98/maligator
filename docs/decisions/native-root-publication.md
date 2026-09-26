@@ -60,6 +60,10 @@ Conditional misses establish no new fact. At an actual safepoint, only roots liv
 on both incoming and outgoing edges retain the fact, because collection can clear
 inactive shadows. Refined GC metadata identifies those points; broad opcode
 effects do not make a certified noncollecting instruction a publication boundary.
+The same equality proof removes redundant copies inside outgoing polls. Roots
+written by the instruction lose equality; compound outputs already alias their
+shadow slots until their explicit reload. Private heap-valued results still need
+publication before a poll when that equality has not been established.
 
 Some instructions expose intermediate or out-parameter storage. Their selected
 outputs temporarily alias shadow slots for the entire operation, with explicit
