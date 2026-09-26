@@ -5067,29 +5067,6 @@ function emitInstruction(
 			}
 			if (
 				instruction.opcode === "LOAD_PROPERTY_STATIC" &&
-				propertyReadRegionAction !== undefined
-			) {
-				const fallback = emitGenericInstruction();
-				if (fallback === null) return null;
-				const { plan, index } = propertyReadRegionAction;
-				const region = `__property_region_${plan.id}`;
-				const value = `__property_region_value_${ip}`;
-				return [
-					...(index === 0
-						? [
-								`${region} = mal_vm_property_read_region_begin(${boxed(instruction.object)});`,
-							]
-						: []),
-					`MalValue ${value};`,
-					`if (mal_vm_property_read_region_try_load(&${region}, &${nativeBodyReference(resources, "propertyCache")}[${instruction.icIndex}], &${value})) {`,
-					`  r${instruction.dst} = ${value};`,
-					`} else {`,
-					...fallback.map((line) => `  ${line}`),
-					`}`,
-				];
-			}
-			if (
-				instruction.opcode === "LOAD_PROPERTY_STATIC" &&
 				staticPropertyProjectionAction !== undefined
 			) {
 				const fallback = emitGenericInstruction();
@@ -5478,10 +5455,24 @@ function emitInstruction(
 			}
 			const probe = (): string =>
 				`mal_vm_property_try_load_static(vm, ${boxed(instruction.object)}, &${nativeBodyReference(resources, "propertyCache")}[${instruction.icIndex}], &__v_${ip})`;
+			const region =
+				propertyReadRegionAction === undefined
+					? undefined
+					: `__property_region_${propertyReadRegionAction.plan.id}`;
+			// A declined region is inactive before the complete probe; both hits stay private.
+			const regionProbe =
+				region === undefined
+					? undefined
+					: `mal_vm_property_read_region_try_load(&${region}, &${nativeBodyReference(resources, "propertyCache")}[${instruction.icIndex}], &__v_${ip})`;
 			const ordinary = (): Array<string> => [
+				...(propertyReadRegionAction?.index === 0
+					? [
+							`${region} = mal_vm_property_read_region_begin(${boxed(instruction.object)});`,
+						]
+					: []),
 				`MalObject *${receiverName} = mal_vm_as_object(${boxed(instruction.object)});`,
 				`MalValue __v_${ip};`,
-				`if (${probe()}) {`,
+				`if (${regionProbe === undefined ? probe() : `${regionProbe} || ${probe()}`}) {`,
 				`  r${instruction.dst} = __v_${ip};`,
 				`} else {`,
 				...(context.incomingRootPublication ?? []).map((line) => `  ${line}`),
