@@ -5,8 +5,10 @@ The native backend can keep eligible property receivers and results in private
 existing cache admission rules. A successful probe assigns the private result
 directly; only its collecting/reentrant miss publishes incoming roots. Numeric operator
 guards and TDZ checks likewise publish inside their generic or throwing edge.
-Dense Array-values iteration uses its existing noncalling probe and publishes
-only before the generic step. Length and storage are read afresh on each probe;
+Dense Array-values iteration in functions with private roots uses its existing
+noncalling probe and publishes only before the generic step. Functions without
+final private roots retain the combined cursor helper and its eager root mask.
+Length and storage are read afresh on each probe;
 holes and nonstandard iterators retain the complete JavaScript protocol.
 Ordinary static stores likewise publish before their generic miss. A successful
 store may grow slots and invalidate assumptions without collecting or reentering

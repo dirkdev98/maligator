@@ -3256,6 +3256,7 @@ function emitBody(
 		const deferredTdzRoots = fn.instructions[ip]!.opcode === "THROW_IF_TDZ";
 		const iteratorCursorAction = nativeIteratorCursorActionByIp.get(ip);
 		const deferredDenseIteratorRoots =
+			hasPrivateRoots &&
 			fn.instructions[ip]!.opcode === "ITERATOR_STEP" &&
 			nativeInstructions[ip] === undefined &&
 			iteratorCursorAction?.role === "step" &&
