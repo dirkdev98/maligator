@@ -3915,6 +3915,7 @@ function emitInstruction(
 		resources,
 		gcSafepoint: context.gcSafepoint,
 		incomingRootPublication: context.incomingRootPublication,
+		onIncomingRootPublication: context.onIncomingRootPublication,
 		outgoingRootPublication: context.outgoingRootPublication,
 		rootedOutputReloads: context.rootedOutputReloads,
 		loopBackedgeInactiveRootMask: context.loopBackedgeInactiveRootMask,
@@ -6035,12 +6036,13 @@ function emitInstruction(
 			if (operator === "**" && leftIsNum && rightIsNum) {
 				return [storeNumber(dst, `mal_number_exponentiate(${num(left)}, ${num(right)})`)];
 			}
-			const slow = profileCall(
-				"binary",
-				reentrantValue(
-					`mal_vm_binary_op(vm, ${emitBinaryOperator(operator)}, ${boxed(left)}, ${boxed(right)})`,
-				),
-			);
+			const slow = (): string =>
+				profileCall(
+					"binary",
+					reentrantValue(
+						`mal_vm_binary_op(vm, ${emitBinaryOperator(operator)}, ${boxed(left)}, ${boxed(right)})`,
+					),
+				);
 			const completionCheck = throwCheck();
 			// Store a C bool into the dst: raw for a boolean-rep register, boxed
 			// otherwise. Comparisons (and the boolean cases below) flow through here.
@@ -6168,21 +6170,23 @@ function emitInstruction(
 								: `  r${dst} = ${profileCall("boxing", `mal_value_new_boolean(${fastBool})`)};`,
 							`} else {`,
 							dstIsBool
-								? `  r${dst} = mal_value_to_boolean(${slow});`
-								: `  r${dst} = ${slow};`,
+								? `  r${dst} = mal_value_to_boolean(${slow()});`
+								: `  r${dst} = ${slow()};`,
 							`  ${completionCheck}`,
 							`}`,
 						];
 					}
 					return [
 						dstIsBool
-							? `r${dst} = ${numberGuard} ? (${fastBool}) : mal_value_to_boolean(${slow});`
-							: `r${dst} = ${numberGuard} ? ${profileCall("boxing", `mal_value_new_boolean(${fastBool})`)} : ${slow};`,
+							? `r${dst} = ${numberGuard} ? (${fastBool}) : mal_value_to_boolean(${slow()});`
+							: `r${dst} = ${numberGuard} ? ${profileCall("boxing", `mal_value_new_boolean(${fastBool})`)} : ${slow()};`,
 						...compareCheck,
 					];
 				}
 				return [
-					dstIsBool ? `r${dst} = mal_value_to_boolean(${slow});` : `r${dst} = ${slow};`,
+					dstIsBool
+						? `r${dst} = mal_value_to_boolean(${slow()});`
+						: `r${dst} = ${slow()};`,
 					...compareCheck,
 				];
 			}
@@ -6223,19 +6227,19 @@ function emitInstruction(
 							`if (${numberGuard}) {`,
 							`  r${dst} = ${fast};`,
 							`} else {`,
-							`  r${dst} = ${slow};`,
+							`  r${dst} = ${slow()};`,
 							`  ${completionCheck}`,
 							`}`,
 						];
 					}
-					return [`r${dst} = ${numberGuard} ? ${fast} : ${slow};`];
+					return [`r${dst} = ${numberGuard} ? ${fast} : ${slow()};`];
 				}
 			}
 			// Fully general fallback: `**`, `in`, `instanceof`, or a string/bigint
 			// operand. Any non-comparison op can throw (BigInt domain errors), so
 			// propagate the completion — previously only `in`/`instanceof` did, which
 			// silently swallowed BigInt TypeErrors/RangeErrors here.
-			const lowered = [`r${dst} = ${slow};`];
+			const lowered = [`r${dst} = ${slow()};`];
 			if (binaryOpCanThrow(operator)) {
 				lowered.push(completionCheck);
 			}
