@@ -1581,10 +1581,17 @@ static inline bool mal_vm_property_try_load(MalVm *vm, MalValue receiver, MalVal
         mal_vm_special_try_load(vm, receiver, key, ic, out);
 }
 
+/** Return status and value without exposing the caller's result temporary. */
+typedef struct MalStaticPropertyProbeResult {
+    bool hit;
+    MalValue value;
+} MalStaticPropertyProbeResult;
+
 /** Noncollecting cache probes after the inline monomorphic own-slot probe misses. */
-__attribute__((noinline)) bool mal_vm_property_try_load_static_remaining(
+__attribute__((noinline)) MalStaticPropertyProbeResult
+mal_vm_property_try_load_static_remaining(
     MalVm *vm, MalValue receiver, const MalObject *object,
-    const MalInlineCache *ic, MalValue *out
+    const MalInlineCache *ic
 );
 
 /** Static-name property probe: the site identity supplies the key guard. */
@@ -1596,7 +1603,11 @@ static inline __attribute__((always_inline)) bool mal_vm_property_try_load_stati
         mal_vm_object_try_load_monomorphic(object, ic->key, ic, out)) {
         return true;
     }
-    return mal_vm_property_try_load_static_remaining(vm, receiver, object, ic, out);
+    MalStaticPropertyProbeResult result =
+        mal_vm_property_try_load_static_remaining(vm, receiver, object, ic);
+    if (!result.hit) return false;
+    *out = result.value;
+    return true;
 }
 
 /** Captured storage is usable only before the region's first generic continuation. */
