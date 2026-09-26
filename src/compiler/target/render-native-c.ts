@@ -40,6 +40,7 @@ import type {
 } from "./lower-native-fast-paths.ts";
 import {
 	nativePrivateRootRegisters,
+	nativeEntryStableRootRegisters,
 	nativeRootedOutputRegisters,
 } from "./lower-native-root-publication.ts";
 import { profileOperationForInstruction } from "./profile-metadata.ts";
@@ -571,6 +572,7 @@ function cInactiveRootMaskPublication(mask: bigint): string {
 }
 
 interface NativeRootPublication {
+	readonly entryStableRegisters: ReadonlySet<number>;
 	readonly slots: Map<number, number>;
 	readonly safepoints: ReadonlyMap<
 		number,
@@ -592,6 +594,7 @@ function cPrivateRootPublication(
 	const stores: Array<string> = [];
 	for (const [register, slot] of plan.slots) {
 		if (live.has(register)) {
+			if (plan.entryStableRegisters.has(register)) continue;
 			stores.push(`__gc_slots[${slot}] = r${register};`);
 		} else if (slot >= 64 || active.has(register)) {
 			// A dead private local can still contain a reclaimed pointer. In particular,
@@ -724,6 +727,7 @@ function emitCompiledVariant(
 	valueRegs.forEach((reg, slot) => slotOf.set(reg, slot));
 	const privateCandidates = nativePrivateRootRegisters(fn, nativeContract, rootRegisters);
 	const rootPublication: NativeRootPublication = {
+		entryStableRegisters: nativeEntryStableRootRegisters(fn, privateCandidates),
 		slots: new Map([...slotOf].filter(([register]) => privateCandidates.has(register))),
 		safepoints: new Map(
 			nativeContract.gc.safepoints.map((point) => [point.instructionIp, point]),
@@ -3213,6 +3217,21 @@ function emitBody(
 		const deferredPropertyRoots =
 			fn.instructions[ip]!.opcode === "LOAD_PROPERTY_STATIC" &&
 			!staticPropertyProjectionConflicts(ip);
+		const indexedPropertyInstruction = fn.instructions[ip]!;
+		// Only the ordinary numeric-index probe has an audited noncollecting hit.
+		const deferredIndexedPropertyRoots =
+			indexedPropertyInstruction.opcode === "LOAD_PROPERTY" &&
+			isNumericRep(reps[indexedPropertyInstruction.key]!) &&
+			!staticPropertyProjectionConflicts(ip) &&
+			!stackObjectMaterializations.has(ip) &&
+			!nativeArrayPresenceProjectionActionByIp.has(ip) &&
+			!pairedArrayLoopActionByIp.has(ip) &&
+			!nativeIteratorCursorActionByIp.has(ip) &&
+			!nativeArrayPairDestructureActionByIp.has(ip) &&
+			!nativeIteratorResultVirtualizationActionByIp.has(ip) &&
+			!nativeIteratorEntryPairVirtualizationActionByIp.has(ip) &&
+			!numericFusionActionByIp.has(ip) &&
+			!staticPropertyNumericActionByIp.has(ip);
 		const deferredPropertyStoreRoots =
 			fn.instructions[ip]!.opcode === "STORE_PROPERTY_STATIC" &&
 			nativeInstructions[ip] === undefined &&
@@ -3234,6 +3253,7 @@ function emitBody(
 		if (
 			safepointKind !== "loop-backedge" &&
 			!deferredPropertyRoots &&
+			!deferredIndexedPropertyRoots &&
 			!deferredPropertyStoreRoots &&
 			!deferredOperatorRoots &&
 			!deferredTdzRoots &&
@@ -3243,6 +3263,14 @@ function emitBody(
 			lines.push(...incomingRootPublication.map((line) => `    ${line}`));
 		}
 		const inactiveRootMask = inactiveRootMasks.get(ip);
+		const operatorInactiveRootMask =
+			deferredOperatorRoots && inactiveRootMask !== lastPublishedInactiveRootMask
+				? inactiveRootMask
+				: undefined;
+		const indexedPropertyLoadInactiveRootMask =
+			deferredIndexedPropertyRoots && inactiveRootMask !== lastPublishedInactiveRootMask
+				? inactiveRootMask
+				: undefined;
 		const staticPropertyStoreInactiveRootMask =
 			deferredPropertyStoreRoots && inactiveRootMask !== lastPublishedInactiveRootMask
 				? inactiveRootMask
@@ -3293,10 +3321,12 @@ function emitBody(
 		if (
 			inactiveRootMask !== undefined &&
 			loopBackedgeInactiveRootMask === undefined &&
+			operatorInactiveRootMask === undefined &&
 			mathCallInactiveRootMask === undefined &&
 			tdzInactiveRootMask === undefined &&
 			knownOwnSlotLoadInactiveRootMask === undefined &&
 			staticPropertyLoadInactiveRootMask === undefined &&
+			indexedPropertyLoadInactiveRootMask === undefined &&
 			staticPropertyStoreInactiveRootMask === undefined &&
 			denseIteratorStepInactiveRootMask === undefined &&
 			inactiveRootMask !== lastPublishedInactiveRootMask
@@ -3306,10 +3336,12 @@ function emitBody(
 		if (
 			inactiveRootMask !== undefined &&
 			loopBackedgeInactiveRootMask === undefined &&
+			operatorInactiveRootMask === undefined &&
 			mathCallInactiveRootMask === undefined &&
 			tdzInactiveRootMask === undefined &&
 			knownOwnSlotLoadInactiveRootMask === undefined &&
 			staticPropertyLoadInactiveRootMask === undefined &&
+			indexedPropertyLoadInactiveRootMask === undefined &&
 			staticPropertyStoreInactiveRootMask === undefined &&
 			denseIteratorStepInactiveRootMask === undefined
 		) {
@@ -3319,6 +3351,7 @@ function emitBody(
 			(fn.profileSiteIds?.[ip] ?? -1) >= 0 ? {} : undefined;
 		const arrayPresenceAction = nativeArrayPresenceProjectionActionByIp.get(ip);
 		emittedInstructions.add(ip);
+		let operatorMaskEmitted = false;
 		const emitted = emitInstruction(
 			fn.instructions[ip]!,
 			ip,
@@ -3340,12 +3373,24 @@ function emitBody(
 				gcSafepoint: safepointKind !== undefined,
 				incomingRootPublication:
 					deferredPropertyRoots ||
+					deferredIndexedPropertyRoots ||
 					deferredPropertyStoreRoots ||
 					deferredOperatorRoots ||
 					deferredTdzRoots ||
 					deferredDenseIteratorRoots
-						? incomingRootPublication
+						? operatorInactiveRootMask === undefined
+							? incomingRootPublication
+							: [
+									...incomingRootPublication,
+									`${cInactiveRootMaskPublication(operatorInactiveRootMask)};`,
+								]
 						: [],
+				onIncomingRootPublication:
+					operatorInactiveRootMask === undefined
+						? undefined
+						: () => {
+								operatorMaskEmitted = true;
+							},
 				outgoingRootPublication,
 				rootedOutputReloads,
 				loopBackedgeInactiveRootMask,
@@ -3353,6 +3398,7 @@ function emitBody(
 				tdzInactiveRootMask,
 				knownOwnSlotLoadInactiveRootMask,
 				staticPropertyLoadInactiveRootMask,
+				indexedPropertyLoadInactiveRootMask,
 				staticPropertyStoreInactiveRootMask,
 				denseIteratorStepRootPublication: deferredDenseIteratorRoots,
 				denseIteratorStepInactiveRootMask,
@@ -3412,10 +3458,12 @@ function emitBody(
 			return null;
 		}
 		if (
+			operatorMaskEmitted ||
 			mathCallInactiveRootMask !== undefined ||
 			tdzInactiveRootMask !== undefined ||
 			knownOwnSlotLoadInactiveRootMask !== undefined ||
 			staticPropertyLoadInactiveRootMask !== undefined ||
+			indexedPropertyLoadInactiveRootMask !== undefined ||
 			staticPropertyStoreInactiveRootMask !== undefined ||
 			denseIteratorStepInactiveRootMask !== undefined
 		) {
@@ -3726,6 +3774,7 @@ interface NativeInstructionContext {
 	readonly nativePlan?: NativeInstructionPlan;
 	readonly gcSafepoint: boolean;
 	readonly incomingRootPublication?: ReadonlyArray<string>;
+	readonly onIncomingRootPublication?: () => void;
 	readonly outgoingRootPublication?: ReadonlyArray<string>;
 	readonly rootedOutputReloads?: ReadonlyArray<string>;
 	readonly loopBackedgeInactiveRootMask?: bigint;
@@ -3733,6 +3782,7 @@ interface NativeInstructionContext {
 	readonly tdzInactiveRootMask?: bigint;
 	readonly knownOwnSlotLoadInactiveRootMask?: bigint;
 	readonly staticPropertyLoadInactiveRootMask?: bigint;
+	readonly indexedPropertyLoadInactiveRootMask?: bigint;
 	readonly staticPropertyStoreInactiveRootMask?: bigint;
 	readonly denseIteratorStepRootPublication?: boolean;
 	readonly denseIteratorStepInactiveRootMask?: bigint;
@@ -3886,6 +3936,7 @@ function emitInstruction(
 			: nativeProfileCall(kind, expression, profileSiteId, profileOperation);
 	const reentrantValue = (expression: string): string => {
 		const publication = context.incomingRootPublication ?? [];
+		if (publication.length > 0) context.onIncomingRootPublication?.();
 		return publication.length === 0
 			? expression
 			: `(${publication.map((store) => store.slice(0, -1)).join(", ")}, ${expression})`;
@@ -3900,6 +3951,7 @@ function emitInstruction(
 		resources,
 		gcSafepoint: context.gcSafepoint,
 		incomingRootPublication: context.incomingRootPublication,
+		onIncomingRootPublication: context.onIncomingRootPublication,
 		outgoingRootPublication: context.outgoingRootPublication,
 		rootedOutputReloads: context.rootedOutputReloads,
 		loopBackedgeInactiveRootMask: context.loopBackedgeInactiveRootMask,
@@ -3907,6 +3959,7 @@ function emitInstruction(
 		tdzInactiveRootMask: context.tdzInactiveRootMask,
 		knownOwnSlotLoadInactiveRootMask: context.knownOwnSlotLoadInactiveRootMask,
 		staticPropertyLoadInactiveRootMask: context.staticPropertyLoadInactiveRootMask,
+		indexedPropertyLoadInactiveRootMask: context.indexedPropertyLoadInactiveRootMask,
 		staticPropertyStoreInactiveRootMask: context.staticPropertyStoreInactiveRootMask,
 		denseIteratorStepRootPublication: context.denseIteratorStepRootPublication,
 		denseIteratorStepInactiveRootMask: context.denseIteratorStepInactiveRootMask,
@@ -5252,6 +5305,12 @@ function emitInstruction(
 								`if (${receiverName} && mal_vm_array_try_get_index(${receiverName}, ${num(instruction.key)}, &__v_${ip})) {`,
 								`  r${instruction.dst} = __v_${ip};`,
 								`} else {`,
+								...(context.incomingRootPublication ?? []).map((line) => `  ${line}`),
+								...(context.indexedPropertyLoadInactiveRootMask === undefined
+									? []
+									: [
+											`  ${cInactiveRootMaskPublication(context.indexedPropertyLoadInactiveRootMask)};`,
+										]),
 								`  r${instruction.dst} = ${profileCall("property", `mal_vm_indexed_fast_load_index(vm, ${boxed(instruction.object)}, ${num(instruction.key)}, &${nativeBodyReference(resources, "propertyCache")}[${instruction.icIndex}])`)};`,
 								`  ${throwCheck()}`,
 								`}`,
@@ -6043,12 +6102,13 @@ function emitInstruction(
 			if (operator === "**" && leftIsNum && rightIsNum) {
 				return [storeNumber(dst, `mal_number_exponentiate(${num(left)}, ${num(right)})`)];
 			}
-			const slow = profileCall(
-				"binary",
-				reentrantValue(
-					`mal_vm_binary_op(vm, ${emitBinaryOperator(operator)}, ${boxed(left)}, ${boxed(right)})`,
-				),
-			);
+			const slow = (): string =>
+				profileCall(
+					"binary",
+					reentrantValue(
+						`mal_vm_binary_op(vm, ${emitBinaryOperator(operator)}, ${boxed(left)}, ${boxed(right)})`,
+					),
+				);
 			const completionCheck = throwCheck();
 			// Store a C bool into the dst: raw for a boolean-rep register, boxed
 			// otherwise. Comparisons (and the boolean cases below) flow through here.
@@ -6176,21 +6236,23 @@ function emitInstruction(
 								: `  r${dst} = ${profileCall("boxing", `mal_value_new_boolean(${fastBool})`)};`,
 							`} else {`,
 							dstIsBool
-								? `  r${dst} = mal_value_to_boolean(${slow});`
-								: `  r${dst} = ${slow};`,
+								? `  r${dst} = mal_value_to_boolean(${slow()});`
+								: `  r${dst} = ${slow()};`,
 							`  ${completionCheck}`,
 							`}`,
 						];
 					}
 					return [
 						dstIsBool
-							? `r${dst} = ${numberGuard} ? (${fastBool}) : mal_value_to_boolean(${slow});`
-							: `r${dst} = ${numberGuard} ? ${profileCall("boxing", `mal_value_new_boolean(${fastBool})`)} : ${slow};`,
+							? `r${dst} = ${numberGuard} ? (${fastBool}) : mal_value_to_boolean(${slow()});`
+							: `r${dst} = ${numberGuard} ? ${profileCall("boxing", `mal_value_new_boolean(${fastBool})`)} : ${slow()};`,
 						...compareCheck,
 					];
 				}
 				return [
-					dstIsBool ? `r${dst} = mal_value_to_boolean(${slow});` : `r${dst} = ${slow};`,
+					dstIsBool
+						? `r${dst} = mal_value_to_boolean(${slow()});`
+						: `r${dst} = ${slow()};`,
 					...compareCheck,
 				];
 			}
@@ -6231,19 +6293,19 @@ function emitInstruction(
 							`if (${numberGuard}) {`,
 							`  r${dst} = ${fast};`,
 							`} else {`,
-							`  r${dst} = ${slow};`,
+							`  r${dst} = ${slow()};`,
 							`  ${completionCheck}`,
 							`}`,
 						];
 					}
-					return [`r${dst} = ${numberGuard} ? ${fast} : ${slow};`];
+					return [`r${dst} = ${numberGuard} ? ${fast} : ${slow()};`];
 				}
 			}
 			// Fully general fallback: `**`, `in`, `instanceof`, or a string/bigint
 			// operand. Any non-comparison op can throw (BigInt domain errors), so
 			// propagate the completion — previously only `in`/`instanceof` did, which
 			// silently swallowed BigInt TypeErrors/RangeErrors here.
-			const lowered = [`r${dst} = ${slow};`];
+			const lowered = [`r${dst} = ${slow()};`];
 			if (binaryOpCanThrow(operator)) {
 				lowered.push(completionCheck);
 			}

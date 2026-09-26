@@ -2873,7 +2873,25 @@ describe("native update-expression representation", () => {
 		const call = output.indexOf("mal_vm_op_store_property_ic(", probe);
 		expect(call).toBeGreaterThan(probe);
 		const fallback = output.slice(probe, call);
-		expect(fallback).toMatch(new RegExp(`__gc_slots\\[\\d+\\] = r${store.object};`));
+
+		const retained = fn.instructions.find(
+			(instruction) => instruction.opcode === "LOAD_PROPERTY_STATIC",
+		);
+		if (retained?.opcode !== "LOAD_PROPERTY_STATIC")
+			throw new Error("missing retained property value");
+		expect(retained.dst).not.toBe(store.object);
+		expect(output).toContain(`#define r${retained.dst} (__private_r${retained.dst})`);
+		const receiverPublication = new RegExp(
+			`__gc_slots\\[\\d+\\] = r${store.object};`,
+			"g",
+		);
+		expect(output.match(receiverPublication)).toHaveLength(1);
+		expect(output.slice(0, output.indexOf("mal_root_frame_head = &__gc_frame"))).toMatch(
+			receiverPublication,
+		);
+		expect(fallback).not.toMatch(receiverPublication);
+		expect(fallback).toMatch(new RegExp(`__gc_slots\\[\\d+\\] = r${retained.dst};`));
+
 		expect(fallback).toContain("MAL_ROOT_MASK(");
 	});
 

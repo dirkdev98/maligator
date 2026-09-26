@@ -13,6 +13,27 @@ const hostGc = { MAL_HOST_GC: "1" };
 const expected = ["static-property-root-mask PASS"];
 const publicationKernels = [
 	{
+		name: "retainThroughNumberCoercion",
+		boundary: "BINARY",
+		probe: "mal_vm_binary_op",
+		properties: ["value"],
+		firstBoundaryOnly: true,
+	},
+	{
+		name: "retainThroughStringCoercion",
+		boundary: "BINARY",
+		probe: "mal_vm_binary_op",
+		properties: ["value"],
+		firstBoundaryOnly: true,
+	},
+	{
+		name: "retainThroughThrowingCoercion",
+		boundary: "BINARY",
+		probe: "mal_vm_binary_op",
+		properties: ["value"],
+		firstBoundaryOnly: true,
+	},
+	{
 		name: "retainThroughArrayTraversal",
 		boundary: "ITERATOR_STEP",
 		probe: "mal_vm_iterator_try_dense_array_cursor_step",
@@ -36,6 +57,27 @@ const publicationKernels = [
 		probe: "mal_vm_object_try_store_static",
 		properties: ["value", "receiver"],
 	},
+	{
+		name: "retainThroughIndexLoad",
+		boundary: "LOAD_PROPERTY",
+		probe: "mal_vm_array_try_get_index",
+		properties: ["value", "receiver"],
+		resultPrivate: true,
+	},
+	{
+		name: "retainThroughThrowingIndexLoad",
+		boundary: "LOAD_PROPERTY",
+		probe: "mal_vm_array_try_get_index",
+		properties: ["value", "receiver"],
+		resultPrivate: true,
+	},
+	{
+		name: "detachedIndexHitAcrossPoll",
+		boundary: "LOAD_PROPERTY",
+		probe: "mal_vm_array_try_get_index",
+		properties: ["value", "receiver"],
+		resultPrivate: true,
+	},
 ];
 const verificationEnv = {
 	...hostGc,
@@ -57,6 +99,11 @@ describe("native static-property root-mask publication", () => {
 			retainedRegisters: Array<number>;
 			privateRegisters: ReadonlySet<number>;
 			boundaryIncomingRoots: Array<ReadonlyArray<number>>;
+			boundaryResults: Array<{
+				register: number;
+				outgoingRoots: ReadonlyArray<number>;
+				nextCallIncomingRoots: ReadonlyArray<number>;
+			}>;
 		}
 	>();
 
@@ -123,22 +170,44 @@ describe("native static-property root-mask publication", () => {
 				native.gc.safepoints.flatMap((safepoint) => safepoint.rootRegisters),
 			);
 			const privateRegisters = nativePrivateRootRegisters(fn, native, frameRegisters);
+			const boundarySafepoints = native.gc.safepoints
+				.filter(
+					(safepoint) =>
+						fn.instructions[safepoint.instructionIp]?.opcode === kernel.boundary,
+				)
+				.slice(0, "firstBoundaryOnly" in kernel ? 1 : undefined);
 			publicationContracts.set(name, {
 				source: emitCompiledFunction(fn, native, index, "", false)?.source ?? "",
 				retainedRegisters,
 				privateRegisters,
-				boundaryIncomingRoots: native.gc.safepoints
-					.filter(
-						(safepoint) =>
-							fn.instructions[safepoint.instructionIp]?.opcode === kernel.boundary,
-					)
-					.map((safepoint) => safepoint.incomingRootRegisters ?? []),
+				boundaryIncomingRoots: boundarySafepoints.map(
+					(safepoint) => safepoint.incomingRootRegisters ?? [],
+				),
+				boundaryResults:
+					"resultPrivate" in kernel
+						? boundarySafepoints.map((safepoint) => {
+								const load = fn.instructions[safepoint.instructionIp];
+								if (load?.opcode !== "LOAD_PROPERTY") {
+									throw new Error(`${name} has no numeric indexed load result`);
+								}
+								const nextCall = native.gc.safepoints.find(
+									(next) =>
+										next.instructionIp > safepoint.instructionIp &&
+										fn.instructions[next.instructionIp]?.opcode === "CALL",
+								);
+								return {
+									register: load.dst,
+									outgoingRoots: safepoint.outgoingRootRegisters ?? [],
+									nextCallIncomingRoots: nextCall?.incomingRootRegisters ?? [],
+								};
+							})
+						: [],
 			});
 		}
 	}, 600_000);
 
 	it.each(publicationKernels)(
-		"retains private preceding roots at the emitted fast probe in $name",
+		"retains private preceding roots at the audited boundary in $name",
 		({ name, probe }) => {
 			const contract = publicationContracts.get(name);
 			expect(contract).toBeDefined();
@@ -152,6 +221,22 @@ describe("native static-property root-mask publication", () => {
 				for (const roots of contract!.boundaryIncomingRoots) {
 					expect(roots).toContain(register);
 				}
+			}
+		},
+	);
+
+	it.each(publicationKernels.filter((kernel) => "resultPrivate" in kernel))(
+		"retains the private indexed result through the next collecting call in $name",
+		({ name }) => {
+			const contract = publicationContracts.get(name)!;
+			expect(contract.boundaryResults.length).toBeGreaterThan(0);
+			for (const result of contract.boundaryResults) {
+				expect(contract.privateRegisters.has(result.register)).toBe(true);
+				expect(contract.source).toContain(
+					`#define r${result.register} (__private_r${result.register})`,
+				);
+				expect(result.outgoingRoots).toContain(result.register);
+				expect(result.nextCallIncomingRoots).toContain(result.register);
 			}
 		},
 	);

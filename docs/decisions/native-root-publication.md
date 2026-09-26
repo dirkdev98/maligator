@@ -46,6 +46,13 @@ A returned private value is published inside a later collecting poll. Ordinary
 noncollecting code does not need to copy it to the shadow frame. Collection does
 not move objects, so a live private `MalValue` does not need reloading afterward.
 
+Private parameters are published at function entry. If no instruction writes
+their physical register, later live publications omit the redundant copy.
+Exact liveness still controls their masks and dead-slot clearing: after a
+collection clears a dead entry value, that unchanged value cannot become live
+again along the same continuation. Reassigned parameters and all helper outputs
+keep the ordinary publication path. This does not retain borrowed pointers.
+
 Some instructions expose intermediate or out-parameter storage. Their selected
 outputs temporarily alias shadow slots for the entire operation, with explicit
 reloads into private locals on both normal and throwing exits. The iterator-step
@@ -111,3 +118,25 @@ collecting and throwing getters, Proxy traps, callback mutation, returned heap
 values, and more than 64 live roots. A root optimization must also demonstrate
 that the relevant hot generated code uses private results before its timing is
 interpreted as evidence for the mechanism.
+
+Binary numeric guards leave the root mask untouched on their noncollecting
+path. The original union mask is published with incoming private roots inside
+the coercing operator expression, before it can call user code. A conditional
+publication invalidates the emitter's known-mask state for the next operation;
+pure specialized operators need no mask update at all.
+
+Mask-state tracking records whether the emitted operator actually used its
+publication callback. A proven pure operator does not forget an unchanged
+mask merely because its generic opcode could have required publication.
+Recursive generic continuations forward that callback, and slow expressions
+are constructed only when included in the emitted path. Otherwise a fallback
+can change the runtime mask without the outer emitter restoring roots needed
+by a later call or collecting poll.
+
+Ordinary numeric indexed reads also defer incoming publication to the existing
+dense-array probe's miss branch. Numeric index conversion and a successful
+dense hit cannot collect or reenter JavaScript; the generic indexed helper can.
+Boxed keys and specialized indexed/projection plans retain their existing
+publication because their conversion or intermediate-storage contracts differ.
+The returned heap value is published before a later collecting poll, including
+unmasked root slots beyond the first 64.
