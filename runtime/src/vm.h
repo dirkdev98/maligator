@@ -1485,9 +1485,7 @@ typedef struct MalVm {
     MalExactScriptCall *exact_script_call;
 
     MalHeap heap;
-    /** Per-isolate collector working state (grey worklist, weak lists, remembered
-     * set, stats, and — concurrent build — the SATB buffer + incremental-cycle
-     * state). Allocated by mal_gc_init, freed by mal_gc_state_free. See gc.c. */
+    /** Per-isolate collector cycle, worklists, remembered set, and statistics. */
     MalGcState *gc;
 #if MAL_REALMS
     /** Isolate-wide private symbol backing captured Error stacks. Shared by every

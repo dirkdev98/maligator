@@ -12,8 +12,6 @@ import { promisify } from "node:util";
 import { buildDerivationFromConfig, resolveBuildConfig } from "../build-config.ts";
 import {
 	buildSuffix,
-	gcDefines,
-	gcGenerational,
 	gmallocEnabled,
 	perfStatsDefines,
 	platformCcFlags,
@@ -106,7 +104,6 @@ const CC_COMPILE_FLAGS = [
 	...platformCcFlags(),
 	"-I",
 	"runtime/src",
-	...gcDefines(),
 	...perfStatsDefines(),
 	...sanitizerCcFlags(),
 ];
@@ -359,9 +356,7 @@ export function test262PrepareBuild() {
 		rmSync(path.join(WORK_PATH, name), { recursive: true, force: true });
 	}
 
-	test262Log(
-		`Building LibMaligator${gcGenerational() ? " (generational)" : " (non-generational)"}...`,
-	);
+	test262Log("Building LibMaligator...");
 	const config = resolveBuildConfig({
 		engine: {
 			primordials: "mutable",
@@ -416,12 +411,9 @@ export function test262PrepareBuild() {
 
 	if (wireBackend()) return;
 
-	// The mains include gc.h, whose header layout + barrier code differ under
-	// MAL_GC_GENERATIONAL, so they must compile with the same defines as the lib;
-	// sanitizer/perf flags likewise keep them instrumented in lockstep with the lib.
+	// Sanitizer/perf flags must reach the harness mains and runtime archive together.
 	const mainFlags = [
 		...platformCcFlags(),
-		...gcDefines(),
 		...perfStatsDefines(),
 		...sanitizerCcFlags(),
 	].join(" ");

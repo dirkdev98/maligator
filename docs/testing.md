@@ -601,8 +601,7 @@ The full gate uses these deliberately non-Cartesian standards dimensions:
 | WPT smoke cross-section     | Wire     | `MAL_GC_STRESS=1 MAL_GC_VERIFY=1` |
 
 Wire executions cache compiler artifacts but always execute every selected test
-in a fork-isolated standard runtime. The full gate additionally runs the targeted
-GC suite under non-generational and concurrent collector builds and the macOS leak
+in a fork-isolated standard runtime. The full gate additionally runs the macOS leak
 audit. Native sanitizer coverage is already part of the disjoint smoke/check/full
 partition. "Full WPT" means every test in the pinned server-runtime curated corpus,
 not the complete browser WPT repository.

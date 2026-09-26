@@ -50,7 +50,6 @@ static void finalize_cell(MalHeapHeader *header) {
     }
 }
 
-#if MAL_GC_GENERATIONAL
 static bool live_cell(const TestCell *cell, u32 id) {
     return cell->header.mark == MAL_MARK_BLACK && cell->id == id
         && cell->signature == signature(id) && g_finalized[id] == 0;
@@ -62,7 +61,6 @@ static bool contains(TestCell *const *cells, usize count, const TestCell *target
     }
     return false;
 }
-#endif
 
 static bool major_reclaims_once_and_recycles_blocks(MalHeap *heap) {
     TestCell *live = new_cell(heap, 512);
@@ -98,7 +96,6 @@ static bool major_reclaims_once_and_recycles_blocks(MalHeap *heap) {
     return true;
 }
 
-#if MAL_GC_GENERATIONAL
 static bool minor_preserves_old_cells_and_free_list_members(MalHeap *heap) {
     TestCell *cells[8];
     for (usize i = 0; i < countof(cells); i++) cells[i] = new_cell(heap, 512);
@@ -240,7 +237,6 @@ static bool major_resets_minor_tracking_before_block_reassignment(MalHeap *heap)
     return true;
 }
 
-#if MAL_GC_CONCURRENT
 static bool incremental_major_keeps_allocations_after_a_block_was_swept(MalHeap *heap) {
     TestCell *first = new_cell(heap, 512);
     new_cell(heap, 512);
@@ -280,39 +276,29 @@ static bool incremental_major_keeps_allocations_after_a_block_was_swept(MalHeap 
     CHECK(heap->live_bytes == live_bytes && g_finalized[2] == 1 && g_finalized[4] == 1);
     return true;
 }
-#endif
-#endif
 
 static bool run_check(bool (*check)(MalHeap *)) {
     MalHeap heap;
     mal_heap_init(&heap, 0);
+    heap.poison_on_free = getenv("MAL_GC_VERIFY") != nullptr;
     g_heap = &heap;
     g_next_id = 0;
     memset(g_finalized, 0, sizeof(g_finalized));
     g_invalid_finalizer = false;
-    mal_heap_sweep_sticky = true;
     bool ok = check(&heap);
-    mal_heap_sweep_sticky = false;
-#if MAL_GC_CONCURRENT
     mal_gc_black_alloc = false;
-#endif
     mal_heap_free(&heap);
     return ok && !g_invalid_finalizer;
 }
 
 int main(void) {
-    mal_heap_poison_on_free = getenv("MAL_GC_VERIFY") != nullptr;
     bool (*checks[])(MalHeap *) = {
         major_reclaims_once_and_recycles_blocks,
-#if MAL_GC_GENERATIONAL
         minor_preserves_old_cells_and_free_list_members,
         minor_reenrolls_reused_cells_in_untouched_blocks,
         minor_reenrolls_a_reclaimed_cell_away_from_the_bump_block,
         major_resets_minor_tracking_before_block_reassignment,
-#if MAL_GC_CONCURRENT
         incremental_major_keeps_allocations_after_a_block_was_swept,
-#endif
-#endif
     };
     usize passed = 0;
     for (usize i = 0; i < countof(checks); i++) {

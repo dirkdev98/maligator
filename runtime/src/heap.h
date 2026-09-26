@@ -70,11 +70,9 @@ typedef struct MalHeap {
     /** Reclaimed managed cells per size class. Majors rebuild these lists;
      * minors preserve existing entries and add newly dead cells. */
     void *cell_free[MAL_GC_NUM_SIZE_CLASSES];
-#if MAL_GC_GENERATIONAL
     /** Managed blocks allocated into since the last sweep, including cell reuse.
      * Minor collections sweep only this list; old-only blocks need no visit. */
     MalGcBlock *young_blocks;
-#endif
     /** Per-size-class list of RAW blocks that hold at least one reclaimable cell
      * (a doubly-linked intrusive list threaded through MalGcBlock.next_free /
      * prev_free). Unlike cell_free this is NOT rebuilt by the sweep — RAW buffers
@@ -86,9 +84,12 @@ typedef struct MalHeap {
      * allocator pops a cell from a partial block before bumping a fresh one, which
      * bounds RAW footprint. */
     MalGcBlock *raw_partial[MAL_GC_NUM_SIZE_CLASSES];
-    /** Monotonic total of handed-out cell sizes (never decremented); the
-     * auto-collection trigger compares it against mal_gc_next_at. */
+    /** Monotonic total of handed-out cell sizes (never decremented). */
     usize bytes_allocated;
+    /** Automatic collection is disabled while this is SIZE_MAX. */
+    usize next_gc_at;
+    /** Poison reclaimed payloads when verification is enabled. */
+    bool poison_on_free;
     /** Bytes of managed cells that survived the last sweep; sizes the next
      * auto-collection trigger. Zero until the first collection. */
     usize live_bytes;
@@ -121,8 +122,7 @@ typedef struct MalHeap {
 	u8 profile_native_category;
 #endif
 #endif
-#if MAL_GC_CONCURRENT
-    /** Incremental-sweep cursor (concurrent build): the chunk + in-chunk block
+    /** Incremental-sweep cursor: the chunk + in-chunk block
      * index the lazy per-safepoint sweep has reached, and the survivor-byte total
      * accumulated so far this sweep. Set by mal_heap_sweep_begin; advanced by
      * mal_heap_sweep_step until the cursor is exhausted (the cycle is done). Only
@@ -133,7 +133,6 @@ typedef struct MalHeap {
     usize sweep_block;
     usize sweep_live_bytes;
     bool sweeping;
-#endif
 #if MAL_REALMS
     /** Cached back-pointer to the VM's current realm, kept in lockstep with
      * vm->current_realm by mal_realm_switch. Lets function-object init stamp a new
@@ -403,7 +402,7 @@ typedef enum MalHeapMark {
  * 3 bytes (align 1) and any embedder's first pointer follows in the same 8-byte
  * word rather than after a 4-byte-enum-padded 12-byte header.
  *
- * Under MAL_GC_GENERATIONAL the `dirty` byte records remembered-set membership:
+ * The `dirty` byte records remembered-set membership:
  * the generational write barrier sets it (and links the cell on the remembered
  * set) when an old (survived-a-collection, sticky-BLACK) cell is written with a
  * young pointer, so the minor collector traces that cell without re-marking the
@@ -416,9 +415,7 @@ typedef struct MalHeapHeader {
     MalHeapType type;
     MalHeapStorage storage;
     u8 mark;
-#if MAL_GC_GENERATIONAL
     u8 dirty;
-#endif
 } MalHeapHeader;
 
 /**
@@ -500,22 +497,6 @@ void *gc_realloc_raw_profiled(MalHeap *heap, void *ptr, usize new_size, u8 profi
 typedef void (*MalHeapFinalizeFn)(MalHeapHeader *cell);
 
 /**
- * When set, the sweep stomps every reclaimed cell's payload (past the intrusive
- * free-list link) with a poison pattern, so a use-after-free of a cell that was
- * dropped because a root was missed reads obviously-wrong data — turning silent
- * heap corruption into a loud crash. Debug aid; enabled by MAL_GC_VERIFY. Only
- * touches dead cells, so a correctly-rooted program is unaffected. */
-extern bool mal_heap_poison_on_free;
-
-/**
- * When set, the sweep does NOT reset surviving (BLACK) cells back to WHITE — they
- * stay marked so the generational collector treats them as old (sticky mark-bit).
- * The generational minor and major collectors set it around their sweep; a normal
- * full collection leaves it false and resets marks as before. No effect unless
- * MAL_GC_GENERATIONAL is built. */
-extern bool mal_heap_sweep_sticky;
-
-/**
  * Reclaim every unmarked (WHITE) managed cell: run `finalize` on it, mark it
  * FREE, and return it to its block's free list for reuse. Marked (BLACK) cells
  * are kept and reset to WHITE for the next cycle. Caller must have completed the
@@ -523,16 +504,13 @@ extern bool mal_heap_sweep_sticky;
  */
 void mal_heap_sweep(MalHeap *heap, MalHeapFinalizeFn finalize);
 
-#if MAL_GC_GENERATIONAL
 /** Sweep allocation-touched blocks after a minor mark. Old BLACK cells stay
  * live; existing FREE links remain valid. Empty blocks await a major before
  * page reclamation so no global free-list removal is needed. */
 void mal_heap_sweep_minor(MalHeap *heap, MalHeapFinalizeFn finalize);
-#endif
 
-#if MAL_GC_CONCURRENT
 /**
- * Begin an incremental sweep (concurrent collector): bump the epoch (before any
+ * Begin an incremental sweep: bump the epoch (before any
  * cell can be reused), clear the reclaimed-cell free lists (rebuilt as blocks are
  * swept), and point the cursor at the first block. Call once at the remark→sweep
  * transition, then drive mal_heap_sweep_step until it returns true.
@@ -547,7 +525,6 @@ void mal_heap_sweep_begin(MalHeap *heap);
  * finish). Requires a prior mal_heap_sweep_begin.
  */
 bool mal_heap_sweep_step(MalHeap *heap, MalHeapFinalizeFn finalize, usize max_blocks);
-#endif
 
 /** Call `visit` on every managed (CELL) cell, in any state. Used by the heap
  * verifier to re-examine each cell's edges after marking. */

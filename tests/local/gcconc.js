@@ -1,8 +1,8 @@
-// Targeted GC unit test: the concurrent incremental collector under AUTO-triggered
+// Targeted GC unit test: incremental major collection under AUTO-triggered
 // cycles. The other gc fixtures call gc() (a synchronous complete collection), so
 // they never exercise an INCREMENTAL cycle. This one allocates enough transient
 // garbage under a small MAL_GC_THRESHOLD (+ MAL_GC_MAJOR_EVERY=1, set by the lane)
-// to drive many auto-triggered cycles, so in a concurrent build the mark and sweep
+// to drive many auto-triggered cycles, so the mark and sweep
 // are sliced across the allocation loops' safepoints while the mutator keeps
 // running. It asserts the collector's live-set integrity through that interleaving:
 //
@@ -15,8 +15,7 @@
 //     (the coroutine-resume shade must preserve it);
 //   - WeakRef / FinalizationRegistry observations across the run.
 //
-// Build-agnostic: in a non-concurrent build it is the same program under STW
-// auto-collection and must pass identically. A failed assertion throws; the final
+// A failed assertion throws; the final
 // "gcconc PASS N/N" prints only on full success. Driven on the HOST event loop so
 // the suspended generator spans real turns and FinalizationRegistry jobs drain.
 
@@ -106,7 +105,7 @@ const registry = new FinalizationRegistry((held) => {
 // garbage to push allocation past the threshold and drive auto cycles at the loop
 // back-edge safepoints — so marking/sweeping interleaves with live mutation. Kept
 // deliberately modest in safepoint count: under MAL_GC_STRESS every safepoint is a
-// full collection, so a huge loop would be pathologically slow in the STW build.
+// full collection, so a huge loop would be pathologically slow under stress.
 function churn(base) {
 	// Publish into every old live element (covers the whole working set each call,
 	// so the post-churn integrity checks see a ref on every element).
@@ -118,7 +117,7 @@ function churn(base) {
 	// unlike an array's element vector which is plain-malloc'd) so a handful of
 	// iterations pushes bytes_allocated past the threshold and drives real auto
 	// cycles, while keeping the safepoint count low (a huge loop is pathologically
-	// slow under MAL_GC_STRESS in the STW build, which collects at every safepoint).
+	// slow under MAL_GC_STRESS, which collects at every safepoint).
 	for (let i = 0; i < 100; i++) {
 		const junk = { s: ("malgc-" + (i & 255)).repeat(3000), c: node(i & 63) };
 		void junk;
@@ -147,7 +146,7 @@ const turns = [
 		}
 		ok("live-set-intact-after-churn", allIntact);
 		// The published refs on the live elements survived (young target kept alive
-		// by the barriers through the concurrent mark).
+		// by the barriers through the incremental mark).
 		let refsOk = true;
 		for (let i = 0; i < LIVE; i++) {
 			if (live[i].ref == null || typeof live[i].ref.owner !== "number") {

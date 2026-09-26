@@ -744,6 +744,7 @@ static void mal_vm_init_execution_state(MalVm *vm, const MalRuntimeImage *progra
 /** Phase 4: create language heap roots, intrinsics, module state, and the main fiber. */
 static void mal_vm_init_language_state(MalVm *vm, const MalRuntimeImage *program) {
 	mal_heap_init(&vm->heap, 0);
+    mal_gc_configure_heap(vm);
     vm->heap.native_function_length_key =
         mal_string_new_ascii(&vm->heap, "length", 6);
     vm->heap.native_function_name_key =
@@ -916,6 +917,7 @@ bool mal_vm_register_runtime_cleanup(MalVm *vm, void (*cleanup)(MalVm *vm)) {
 }
 
 void mal_vm_free(MalVm *vm) {
+    mal_gc_begin_teardown(vm);
     while (vm->prepared_values != nullptr) {
         MalPreparedValue *entry = vm->prepared_values;
         vm->prepared_values = entry->next;
@@ -3481,9 +3483,8 @@ void mal_vm_resume_generator(MalVm *vm, MalGeneratorObject *generator, MalValue 
     // Shade its current register/arg values into the snapshot BEFORE the resume
     // delivers the sent value / runs the body, or a value published from a
     // coroutine register into an already-black object would be lost (the
-    // root-migration window; gc_todo §1). Mirrors the tracer: null-check the frame
+    // root-migration window). Mirrors the tracer: null-check the frame
     // function before re-resolving (splice-safe) so register_count is read fresh.
-    // Folds out off-cycle (mal_gc_marking_active is compile-time 0 non-concurrent).
     if (mal_gc_marking_active && generator->frame.function != nullptr) {
         generator->frame.function = function;
         mal_gc_satb_shade_frame(&generator->frame);

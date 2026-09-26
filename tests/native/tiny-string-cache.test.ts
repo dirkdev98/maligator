@@ -28,7 +28,6 @@ function perfField(stderr: string, name: string): number {
 describe("bounded tiny-string cache", () => {
 	let compiled: string;
 	let interpreted: string;
-	let concurrent: string;
 	let instrumented: string;
 
 	beforeAll(() => {
@@ -47,15 +46,6 @@ describe("bounded tiny-string cache", () => {
 			mainFile,
 			outDir,
 			realmsEnabled: true,
-		});
-		concurrent = buildNativeBinary({
-			fixture,
-			name: "tiny-string-cache-concurrent",
-			compiled: true,
-			mainFile,
-			outDir,
-			realmsEnabled: true,
-			environment: { ...process.env, MAL_GC_CONCURRENT: "1" },
 		});
 		instrumented = buildNativeBinary({
 			fixture,
@@ -80,11 +70,11 @@ describe("bounded tiny-string cache", () => {
 		run(compiled, { ...STRESS_ENV, MAL_HOST_GC: "1" });
 	});
 
-	it("replaces rooted representatives safely during concurrent GC", () => {
-		run(concurrent, {
-			...STRESS_ENV,
+	it("replaces rooted representatives safely during automatic major GC", () => {
+		run(compiled, {
 			MAL_HOST_GC: "1",
 			MAL_GC_THRESHOLD: "262144",
+			MAL_GC_VERIFY: "1",
 			MAL_GC_MAJOR_EVERY: "1",
 		});
 	});

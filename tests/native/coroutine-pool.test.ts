@@ -78,10 +78,8 @@ describe("pooled suspendable-frame support", () => {
 	let fairnessInterpreted: string;
 	let reuseCompiled: string;
 	let reuseInterpreted: string;
-	let reuseConcurrent: string;
 	let terminalYieldCompiled: string;
 	let terminalYieldInterpreted: string;
-	let terminalYieldConcurrent: string;
 
 	beforeAll(() => {
 		compiled = buildNativeBinary({
@@ -133,13 +131,6 @@ describe("pooled suspendable-frame support", () => {
 			outDir,
 			environment: { ...process.env, MAL_PERF_STATS: "1" },
 		});
-		reuseConcurrent = buildNativeBinary({
-			fixture: "tests/local/coroutine-buffer-reuse.js",
-			name: "coroutine-buffer-reuse-concurrent",
-			compiled: true,
-			outDir,
-			environment: { ...process.env, MAL_GC_CONCURRENT: "1" },
-		});
 		terminalYieldCompiled = buildNativeBinary({
 			fixture: "tests/local/terminal-yield.js",
 			name: "terminal-yield",
@@ -151,13 +142,6 @@ describe("pooled suspendable-frame support", () => {
 			name: "terminal-yield-ni",
 			compiled: false,
 			outDir,
-		});
-		terminalYieldConcurrent = buildNativeBinary({
-			fixture: "tests/local/terminal-yield.js",
-			name: "terminal-yield-concurrent",
-			compiled: true,
-			outDir,
-			environment: { ...process.env, MAL_GC_CONCURRENT: "1" },
 		});
 	});
 
@@ -181,13 +165,13 @@ describe("pooled suspendable-frame support", () => {
 		);
 	});
 
-	it("keeps reused prefixes undefined under concurrent GC", () => {
+	it("keeps reused prefixes undefined under automatic major GC", () => {
 		assertExactLines(
-			runToStdout(reuseConcurrent, {
+			runToStdout(reuseCompiled, {
 				env: {
 					...hostGc,
-					...STRESS_ENV,
 					MAL_GC_THRESHOLD: "262144",
+					MAL_GC_VERIFY: "1",
 					MAL_GC_MAJOR_EVERY: "1",
 				},
 			}),
@@ -235,13 +219,13 @@ describe("pooled suspendable-frame support", () => {
 		assertExactLines(runToStdout(binary(), { env: STRESS_ENV }), terminalYieldExpected);
 	});
 
-	it("releases an eval-spliced terminal frame under concurrent GC", () => {
+	it("releases an eval-spliced terminal frame under automatic major GC", () => {
 		assertExactLines(
-			runToStdout(terminalYieldConcurrent, {
+			runToStdout(terminalYieldCompiled, {
 				env: {
 					...hostGc,
-					...STRESS_ENV,
 					MAL_GC_THRESHOLD: "262144",
+					MAL_GC_VERIFY: "1",
 					MAL_GC_MAJOR_EVERY: "1",
 				},
 			}),

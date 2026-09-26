@@ -33,7 +33,6 @@ function run(binary: string, env: NodeJS.ProcessEnv = {}, timeout = 120_000): st
 describe("direct async-generator request Promises", () => {
 	let compiled: string;
 	let interpreted: string;
-	let concurrent: string;
 	let instrumented: string;
 	let poolOverflow: string;
 	let crossRealm: string;
@@ -50,13 +49,6 @@ describe("direct async-generator request Promises", () => {
 			name: "async-generator-direct-promise-ni",
 			compiled: false,
 			outDir,
-		});
-		concurrent = buildNativeBinary({
-			fixture: "tests/local/async-generator-direct-promise.js",
-			name: "async-generator-direct-promise-concurrent",
-			compiled: true,
-			outDir,
-			environment: { ...process.env, MAL_GC_CONCURRENT: "1" },
 		});
 		instrumented = buildNativeBinary({
 			fixture: "tests/local/async-generator-direct-promise.js",
@@ -99,10 +91,10 @@ describe("direct async-generator request Promises", () => {
 		130_000,
 	);
 
-	it("retains pending requests under concurrent GC", () => {
-		run(concurrent, {
-			...STRESS_ENV,
+	it("retains pending requests under automatic major GC", () => {
+		run(compiled, {
 			MAL_GC_THRESHOLD: "262144",
+			MAL_GC_VERIFY: "1",
 			MAL_GC_MAJOR_EVERY: "1",
 		});
 	});

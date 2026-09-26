@@ -45,7 +45,6 @@ function run(binary: string, env: NodeJS.ProcessEnv = {}, timeoutMs = 60_000) {
 describe("direct Promise.prototype.then capabilities", () => {
 	let compiled: string;
 	let interpreted: string;
-	let concurrent: string;
 	let instrumented: string;
 
 	beforeAll(() => {
@@ -60,13 +59,6 @@ describe("direct Promise.prototype.then capabilities", () => {
 			name: "promise-direct-capability-ni",
 			compiled: false,
 			outDir,
-		});
-		concurrent = buildNativeBinary({
-			fixture: "tests/local/promise-direct-capability.js",
-			name: "promise-direct-capability-concurrent",
-			compiled: true,
-			outDir,
-			environment: { ...process.env, MAL_GC_CONCURRENT: "1" },
 		});
 		instrumented = buildNativeBinary({
 			fixture: "tests/local/promise-direct-capability.js",
@@ -121,14 +113,14 @@ describe("direct Promise.prototype.then capabilities", () => {
 	);
 
 	it(
-		"preserves direct targets under concurrent GC",
+		"preserves direct targets under automatic major GC",
 		() => {
 			run(
-				concurrent,
+				compiled,
 				{
-					...STRESS_ENV,
 					MAL_HOST_GC: "1",
 					MAL_GC_THRESHOLD: "262144",
+					MAL_GC_VERIFY: "1",
 					MAL_GC_MAJOR_EVERY: "1",
 				},
 				120_000,

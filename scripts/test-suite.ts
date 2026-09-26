@@ -621,20 +621,6 @@ const fullCommands: Array<Command> = [
 	node("full: wire loader differential", milestoneScripts[2]!),
 	npm("full: Rust runtime unit suite", "test:rust"),
 	...remainingNativeCommands,
-	{
-		...npm("full: non-generational GC", "test:native", [
-			...vitestPolicy,
-			"tests/native/gc.test.ts",
-		]),
-		env: { MAL_GC_GENERATIONAL: "0" },
-	},
-	{
-		...npm("full: concurrent GC", "test:native", [
-			...vitestPolicy,
-			"tests/native/gc.test.ts",
-		]),
-		env: { MAL_GC_CONCURRENT: "1" },
-	},
 	npm("full: WPT compiled normal", "test:wpt", [
 		"--canonical",
 		"--mode",

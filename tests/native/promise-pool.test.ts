@@ -17,7 +17,6 @@ const hostGc = { MAL_HOST_GC: "1", MAL_GC_AT_EXIT: "1" };
 describe("pooled promise reactions and jobs", () => {
 	let compiled: string;
 	let interpreted: string;
-	let concurrent: string;
 	let instrumented: string;
 
 	beforeAll(() => {
@@ -32,13 +31,6 @@ describe("pooled promise reactions and jobs", () => {
 			name: "promise-pool-ni",
 			compiled: false,
 			outDir,
-		});
-		concurrent = buildNativeBinary({
-			fixture: "tests/local/promise-pool.js",
-			name: "promise-pool-concurrent",
-			compiled: true,
-			outDir,
-			environment: { ...process.env, MAL_GC_CONCURRENT: "1" },
 		});
 		instrumented = buildNativeBinary({
 			fixture: "tests/local/promise-pool.js",
@@ -71,13 +63,13 @@ describe("pooled promise reactions and jobs", () => {
 		);
 	});
 
-	it("preserves slab jobs under concurrent GC", () => {
+	it("preserves slab jobs under automatic major GC", () => {
 		assertExactLines(
-			runToStdout(concurrent, {
+			runToStdout(compiled, {
 				env: {
 					...hostGc,
-					...STRESS_ENV,
 					MAL_GC_THRESHOLD: "262144",
+					MAL_GC_VERIFY: "1",
 					MAL_GC_MAJOR_EVERY: "1",
 				},
 			}),

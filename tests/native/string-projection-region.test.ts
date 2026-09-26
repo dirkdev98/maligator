@@ -23,20 +23,4 @@ describe("projected String producer-consumer regions", () => {
 		});
 		expect(runToStdout(binary, { env: STRESS_ENV })).toContain(expected);
 	});
-
-	it("preserves projections under concurrent verified GC", () => {
-		const environment = {
-			...process.env,
-			MAL_GC_CONCURRENT: "1",
-			MAL_GC_STRESS: "1",
-			MAL_GC_VERIFY: "1",
-		};
-		const binary = buildNativeBinary({
-			fixture,
-			name: "string-projection-region-concurrent",
-			compiled: true,
-			environment,
-		});
-		expect(runToStdout(binary, { env: environment })).toContain(expected);
-	});
 });

@@ -288,29 +288,17 @@ const SANITIZER_FLAGS: Record<SanitizerMode, Array<string>> = {
 	ubsan: ["-fsanitize=undefined", "-fno-sanitize-recover=all", "-fno-omit-frame-pointer"],
 };
 
-/**
- * Whether to build the generational collector (`MAL_GC_GENERATIONAL`): a
- * non-moving sticky-mark-bit minor collector layered on the STW mark-sweep. ON by
- * default (2026-07-10 flip — the measured per-store card tax is ~1.3% median on
- * store-heavy micros). Opt out with an explicit `MAL_GC_GENERATIONAL=0` (the
- * card-barrier sites then compile to nothing, §5.4a) for minimal/bare-metal
- * profiles; any other value (incl. unset) keeps it on.
- */
-export function gcGenerational(env: NodeJS.ProcessEnv = process.env): boolean {
-	return env.MAL_GC_GENERATIONAL !== "0";
-}
-
-/**
- * Whether to build the concurrent collector (`MAL_GC_CONCURRENT=1`): activates the
- * SATB (snapshot-at-the-beginning) deletion write-barrier half. Off by default —
- * the barrier folds out entirely when off (the day-one barrier sites compile to
- * nothing, §2). Under this build the barrier is compiled ACTIVE-but-inert until the
- * concurrent marker exists: `mal_gc_marking_active` is a real global (false at
- * runtime) and `mal_gc_satb_record` is still a no-op, so it is behaviour-identical
- * while proving every barrier site reads a valid `old_value` on live paths.
- */
-export function gcConcurrent(env: NodeJS.ProcessEnv = process.env): boolean {
-	return envOn("MAL_GC_CONCURRENT", env);
+export function rejectObsoleteGcModes(env: NodeJS.ProcessEnv = process.env): void {
+	for (const name of [
+		"MAL_GC_GENERATIONAL",
+		"MAL_GC_CONCURRENT",
+		"MAL_GC_MODE",
+		"MAL_GC_OFF",
+	]) {
+		if (env[name] !== undefined) {
+			throw new Error(`${name} was removed; Maligator builds one generational collector`);
+		}
+	}
 }
 
 /**
@@ -329,20 +317,6 @@ export function perfStatsDefines(env: NodeJS.ProcessEnv = process.env): Array<st
 }
 
 /**
- * Preprocessor defines selecting GC build dimensions. The generational define is
- * emitted EXPLICITLY (=1 or =0) rather than only when opted in: the opt-out
- * (`=0`) must reach the C preprocessor end-to-end, and stamping the value into
- * every cc flag set also changes the test262 artifact-cache fingerprint so the
- * 2026-07-10 default flip cannot silently reuse pre-flip (non-gen) objects.
- */
-export function gcDefines(env: NodeJS.ProcessEnv = process.env): Array<string> {
-	return [
-		`-DMAL_GC_GENERATIONAL=${gcGenerational(env) ? 1 : 0}`,
-		...(gcConcurrent(env) ? ["-DMAL_GC_CONCURRENT=1"] : []),
-	];
-}
-
-/**
  * Binary suffix for the current sanitizer/GC/instrumentation mode. Native
  * archives carry these exact compiler flags in their content-addressed identity.
  * Empty for the normal build.
@@ -356,15 +330,7 @@ export function buildSuffix(
 ): string {
 	const mode = sanitizerMode(env);
 	let suffix = mode === "none" ? "" : `-${mode}`;
-	// Generational is the default (2026-07-10 flip), so it is UNSUFFIXED; the
-	// opt-out (`MAL_GC_GENERATIONAL=0`) gets its own `-nongen` dir so the two
-	// dimensions never share an archive/cache (header layout + barrier code differ).
-	if (!gcGenerational(env)) {
-		suffix += "-nongen";
-	}
-	if (gcConcurrent(env)) {
-		suffix += "-conc";
-	}
+	rejectObsoleteGcModes(env);
 	if (perfStatsEnabled(env)) {
 		suffix += "-perf";
 	}
@@ -397,11 +363,11 @@ export function ccExtraFlags(
 	env: NodeJS.ProcessEnv = process.env,
 	platform: NodeJS.Platform = process.platform,
 ): Array<string> {
+	rejectObsoleteGcModes(env);
 	return [
 		...platformCcFlags(platform),
 		...optFlags(plan, env),
 		...SANITIZER_FLAGS[sanitizerMode(env)],
-		...gcDefines(env),
 		...perfStatsDefines(env),
 	];
 }

@@ -26,7 +26,6 @@ function perfField(stderr: string, field: string): number {
 describe("String.prototype.split fresh dense results", () => {
 	let compiled: string;
 	let interpreted: string;
-	let concurrent: string;
 	let instrumented: string;
 
 	beforeAll(() => {
@@ -41,13 +40,6 @@ describe("String.prototype.split fresh dense results", () => {
 			name: "string-split-fresh-array-ni",
 			compiled: false,
 			outDir,
-		});
-		concurrent = buildNativeBinary({
-			fixture: "tests/local/string-split-fresh-array.js",
-			name: "string-split-fresh-array-concurrent",
-			compiled: true,
-			outDir,
-			environment: { ...process.env, MAL_GC_CONCURRENT: "1" },
 		});
 		instrumented = buildNativeBinary({
 			fixture: "tests/local/string-split-fresh-array.js",
@@ -70,11 +62,11 @@ describe("String.prototype.split fresh dense results", () => {
 		run(compiled, { ...STRESS_ENV, MAL_HOST_GC: "1" });
 	});
 
-	it("publishes dense result elements safely under concurrent GC", () => {
-		run(concurrent, {
-			...STRESS_ENV,
+	it("publishes dense result elements safely under automatic major GC", () => {
+		run(compiled, {
 			MAL_HOST_GC: "1",
 			MAL_GC_THRESHOLD: "262144",
+			MAL_GC_VERIFY: "1",
 			MAL_GC_MAJOR_EVERY: "1",
 		});
 	});

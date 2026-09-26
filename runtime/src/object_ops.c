@@ -52,9 +52,7 @@ void mal_invalidate_primitive_method_protector(void) {
     mal_semantic_epoch_bump(&epochs->watched_methods);
 }
 
-/* Generational card barrier for a property descriptor stored into `owner`'s
- * dictionary table: any of value/getter/setter may be a young heap pointer. No-op
- * unless MAL_GC_GENERATIONAL is built (mal_gc_card folds out). */
+/* A descriptor can introduce young edges through value, getter, or setter. */
 static inline void mal_gc_card_desc(MalHeapHeader *owner, const MalPropertyDesc *desc) {
     mal_gc_card(owner, desc->value);
     mal_gc_card(owner, desc->getter);

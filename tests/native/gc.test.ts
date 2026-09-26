@@ -1,24 +1,20 @@
+import { spawnSync } from "node:child_process";
 import { mkdtempSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { beforeAll, describe, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import {
 	assertPassLine,
 	buildBackendPairFromOneProgramImage,
 	HOST_MAIN,
 	runToStdout,
+	resolveHarnessExecutionInvocation,
 	scaledNativeRunTimeoutMs,
 	STRESS_ENV,
 } from "../../src/test-harness.ts";
 
 const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-gc-"));
 
-// Forced-collection host hooks on for every run; the fixture asserts, a failed
-// assertion throws (non-zero exit) which runToStdout surfaces. The whole suite is
-// build-dimension-parametric: the default `npm run test:native` runs the
-// generational collector (the 2026-07-10 default), while `MAL_GC_GENERATIONAL=0
-// npm run test:native` (or an MAL_UBSAN=1 build) re-runs every fixture under that
-// dimension; each fixture ensures and links the matching artifacts.
 const HOST_GC: NodeJS.ProcessEnv = { MAL_HOST_GC: "1" };
 
 /**
@@ -75,16 +71,15 @@ const FIXTURES: Array<GcFixture> = [
 	},
 	// RAW-table delete/clear barrier: Map/Set/dictionary deletes interleaved with GC.
 	{ fixture: "tests/local/gctable.js", name: "gctable", tag: "gctable" },
-	// Concurrent incremental collector under AUTO-triggered cycles: a small threshold
+	// Incremental major collection under AUTO-triggered cycles: a small threshold
 	// + major-every-1 drive many auto cycles so the mark/sweep slices interleave with
-	// live mutation (SATB + card barriers, coroutine-resume shade, weak refs). In a
-	// non-concurrent build it runs the same program under STW auto-collection.
+	// live mutation (SATB + card barriers, coroutine-resume shade, weak refs).
 	{
 		fixture: "tests/local/gcconc.js",
 		name: "gcconc",
 		tag: "gcconc",
 		mainFile: HOST_MAIN,
-		env: { MAL_GC_THRESHOLD: "1048576", MAL_GC_MAJOR_EVERY: "1" },
+		env: { MAL_GC_THRESHOLD: "1048576", MAL_GC_MAJOR_EVERY: "1", MAL_GC_VERIFY: "1" },
 	},
 ];
 
@@ -109,6 +104,26 @@ describe("targeted GC unit tests", () => {
 					spec.tag,
 				);
 			});
+
+			if (spec.tag === "gcconc") {
+				it("runs an automatic major cycle across allocations", () => {
+					const invocation = resolveHarnessExecutionInvocation(compiled);
+					const result = spawnSync(invocation.executable, invocation.args, {
+						env: { ...process.env, ...HOST_GC, ...spec.env, MAL_GC_STATS: "1" },
+						encoding: "utf8",
+						timeout: scaledNativeRunTimeoutMs(120_000),
+					});
+					if (result.error !== undefined) throw result.error;
+					expect(result.status, result.stderr || result.stdout).toBe(0);
+					assertPassLine(result.stdout, spec.tag);
+					const cycles = Number(result.stderr.match(/\bcycles=(\d+)/)?.[1] ?? 0);
+					const blackAllocation = Number(
+						result.stderr.match(/\bover_tenure_bytes=(\d+)/)?.[1] ?? 0,
+					);
+					expect(cycles).toBeGreaterThan(0);
+					expect(blackAllocation).toBeGreaterThan(0);
+				});
+			}
 
 			it(
 				"compiled + MAL_GC_STRESS + MAL_GC_VERIFY",

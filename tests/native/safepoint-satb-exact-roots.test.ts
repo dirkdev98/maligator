@@ -13,8 +13,9 @@ import {
 const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-safepoint-satb-exact-roots-"));
 const expected = "safepoint-satb-exact-roots PASS\n";
 
-describe("portable exact roots at concurrent SATB frame migrations", () => {
+describe("portable exact roots at generator frame migrations", () => {
 	let binary: string;
+	let incrementalBinary: string;
 
 	beforeAll(() => {
 		const result = buildNativeBinaryResult({
@@ -24,9 +25,16 @@ describe("portable exact roots at concurrent SATB frame migrations", () => {
 			entryGoal: "script",
 			mainFile: HOST_MAIN,
 			outDir,
-			environment: { ...process.env, MAL_GC_CONCURRENT: "1" },
 		});
 		binary = result.binaryPath;
+		incrementalBinary = buildNativeBinaryResult({
+			fixture: "tests/local/safepoint-satb-incremental.js",
+			name: "safepoint-satb-incremental",
+			compiled: false,
+			entryGoal: "script",
+			mainFile: "tests/fixtures/safepoint-satb-incremental/main.c",
+			outDir,
+		}).binaryPath;
 
 		const generator = result.programImage.runtime.functions.find(
 			(fn) => fn.isGenerator && fn.instructions.some(({ opcode }) => opcode === "YIELD"),
@@ -67,12 +75,18 @@ describe("portable exact roots at concurrent SATB frame migrations", () => {
 		}
 	}, 600_000);
 
-	it("does not SATB-shade dead generator registers across verified GC cycles", () => {
+	it("does not retain dead generator registers across verified GC cycles", () => {
 		expect(
 			runToStdout(binary, {
 				env: { MAL_HOST_GC: "1", ...STRESS_ENV },
 				timeoutMs: 60_000,
 			}),
 		).toBe(expected);
+	});
+
+	it("excludes a stale dead register when resuming during incremental marking", () => {
+		expect(runToStdout(incrementalBinary, { env: { MAL_GC_VERIFY: "1" } })).toBe(
+			"safepoint-satb-incremental PASS\n",
+		);
 	});
 });

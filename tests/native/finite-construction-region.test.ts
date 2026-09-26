@@ -30,21 +30,4 @@ describe("finite construction regions", () => {
 		const output = runToStdout(binary, { env: STRESS_ENV });
 		expect(output).toContain("RESULT 15/15");
 	});
-
-	it("keeps cached shapes rooted under concurrent verified GC", () => {
-		const environment = {
-			...process.env,
-			MAL_GC_CONCURRENT: "1",
-			MAL_GC_STRESS: "1",
-			MAL_GC_VERIFY: "1",
-		};
-		const binary = buildNativeBinary({
-			fixture,
-			name: "finite-construction-region-concurrent",
-			compiled: true,
-			environment,
-		});
-		const output = runToStdout(binary, { env: environment });
-		expect(output).toContain("RESULT 15/15");
-	});
 });

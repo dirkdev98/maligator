@@ -588,8 +588,6 @@ export async function runBenchmarkComparison(options: ComparisonOptions): Promis
 				"MAL_UBSAN",
 				"MAL_GC_STRESS",
 				"MAL_GC_VERIFY",
-				"MAL_GC_GENERATIONAL",
-				"MAL_GC_CONCURRENT",
 				"MAL_PERF_STATS",
 			].flatMap((name) =>
 				process.env[name] === undefined ? [] : [[name, process.env[name]]],
