@@ -298,12 +298,23 @@
 			}
 			.chart {
 				min-height: 260px;
+				display: grid;
+				grid-template-columns: auto minmax(0, 1fr);
 			}
 			.chart svg {
 				display: block;
-				width: 100%;
-				height: auto;
-				overflow: visible;
+			}
+			.chart-plot {
+				min-width: 0;
+				overflow-x: auto;
+				overflow-y: hidden;
+				overscroll-behavior-inline: contain;
+			}
+			.chart-scroll-hint {
+				grid-column: 2;
+				margin: 0.35rem 0 0;
+				color: var(--muted);
+				font: 0.72rem/1.3 var(--mono);
 			}
 			.chart .grid {
 				stroke: var(--line);
@@ -1129,12 +1140,6 @@ Mal.serve({
 						day: "numeric",
 						timeZone: "UTC",
 					});
-				const axisDate = (value) =>
-					calendarDate(value).toLocaleDateString("en-GB", {
-						month: "short",
-						day: "numeric",
-						timeZone: "UTC",
-					});
 				const el = (name, attrs = {}) => {
 					const node = document.createElementNS(ns, name);
 					for (const [key, value] of Object.entries(attrs))
@@ -1246,17 +1251,28 @@ Mal.serve({
 				document.querySelector("[data-binary-profile]").textContent =
 					data.binary.binaryProfile;
 
-				function renderChart({
-					containerId,
-					tooltipId,
-					points,
-					yMin,
-					yMax,
-					ticks,
-					series,
-					tooltip,
-					tickFormat = (value) => value,
-				}) {
+				const chartSpecs = new Map();
+				const chartWidths = new Map();
+				const chartObserver = new ResizeObserver((entries) => {
+					for (const entry of entries) {
+						const id = entry.target.id;
+						const width = entry.target.clientWidth;
+						if (width === chartWidths.get(id)) continue;
+						renderChart(chartSpecs.get(id));
+					}
+				});
+				function renderChart(config) {
+					const {
+						containerId,
+						tooltipId,
+						points,
+						yMin,
+						yMax,
+						ticks,
+						series,
+						tooltip,
+						tickFormat = (value) => value,
+					} = config;
 					const container = document.getElementById(containerId);
 					const tip = document.getElementById(tooltipId);
 					if (points.length === 0) {
@@ -1265,14 +1281,17 @@ Mal.serve({
 						return;
 					}
 					const compact = container.clientWidth < 560;
-					const width = compact ? Math.max(300, container.clientWidth) : 920,
-						height = compact ? 300 : 380,
-						left = compact ? 48 : 68,
-						right = compact ? 12 : 24,
+					const height = compact ? 300 : 380,
+						axisWidth = compact ? 64 : 76,
 						top = 22,
-						bottom = compact ? 42 : 48;
-					const plotWidth = width - left - right,
-						plotHeight = height - top - bottom;
+						bottom = compact ? 42 : 48,
+						plotInset = 10;
+					const viewportWidth = Math.max(0, container.clientWidth - axisWidth);
+					const plotWidth = Math.max(
+						viewportWidth,
+						(points.length - 1) * 44 + 2 * plotInset,
+					);
+					const plotHeight = height - top - bottom;
 					const dates = points.map((point) => new Date(point.date).getTime());
 					let minDate = Math.min(...dates),
 						maxDate = Math.max(...dates);
@@ -1281,38 +1300,50 @@ Mal.serve({
 						maxDate += 3 * 86400000;
 					}
 					const x = (date) =>
-						left +
-						((new Date(date).getTime() - minDate) / (maxDate - minDate)) * plotWidth;
+						plotInset +
+						((new Date(date).getTime() - minDate) / (maxDate - minDate)) *
+							(plotWidth - 2 * plotInset);
 					const y = (value) => top + (1 - (value - yMin) / (yMax - yMin)) * plotHeight;
+					const axis = el("svg", {
+						viewBox: `0 0 ${axisWidth} ${height}`,
+						width: axisWidth,
+						height,
+						"aria-hidden": "true",
+					});
 					const svg = el("svg", {
-						viewBox: `0 0 ${width} ${height}`,
+						viewBox: `0 0 ${plotWidth} ${height}`,
+						width: plotWidth,
+						height,
 						role: "group",
 						"aria-label": container.getAttribute("aria-label") ?? "Chart",
 					});
 					for (const tick of ticks) {
 						const py = y(tick);
 						svg.append(
-							el("line", { class: "grid", x1: left, x2: width - right, y1: py, y2: py }),
+							el("line", { class: "grid", x1: 0, x2: plotWidth, y1: py, y2: py }),
 						);
 						const label = el("text", {
 							class: "axis-label",
-							x: left - 12,
+							x: axisWidth - 12,
 							y: py + 4,
 							"text-anchor": "end",
 						});
 						label.textContent = tickFormat(tick);
-						svg.append(label);
+						axis.append(label);
 					}
-					const labelPoints = [
-						points[0],
-						points[Math.floor((points.length - 1) / 2)],
-						points.at(-1),
-					].filter(
-						(point, index, all) =>
-							all.findIndex(
-								(candidate) => axisDate(candidate.date) === axisDate(point.date),
-							) === index,
-					);
+					const labelPoints = [];
+					for (const point of points) {
+						if (
+							labelPoints.length === 0 ||
+							x(point.date) - x(labelPoints.at(-1).date) >= 120
+						)
+							labelPoints.push(point);
+					}
+					if (labelPoints.at(-1) !== points.at(-1)) {
+						if (x(points.at(-1).date) - x(labelPoints.at(-1).date) < 120)
+							labelPoints.pop();
+						labelPoints.push(points.at(-1));
+					}
 					for (const point of labelPoints) {
 						const label = el("text", {
 							class: "axis-label",
@@ -1325,7 +1356,7 @@ Mal.serve({
 										? "end"
 										: "middle",
 						});
-						label.textContent = axisDate(point.date);
+						label.textContent = shortDate(point.date);
 						svg.append(label);
 					}
 					for (const [seriesIndex, item] of series.entries()) {
@@ -1373,7 +1404,22 @@ Mal.serve({
 							svg.append(circle);
 						}
 					}
-					container.replaceChildren(svg);
+					const plot = document.createElement("div");
+					plot.className = "chart-plot";
+					plot.tabIndex = 0;
+					plot.setAttribute("aria-label", "Scroll horizontally through chart dates");
+					plot.append(svg);
+					container.replaceChildren(axis, plot);
+					if (plotWidth > viewportWidth + 1) {
+						const hint = document.createElement("p");
+						hint.className = "chart-scroll-hint";
+						hint.textContent = "Scroll left for earlier results ←";
+						container.append(hint);
+						plot.scrollLeft = plot.scrollWidth;
+					}
+					chartSpecs.set(containerId, config);
+					chartWidths.set(containerId, container.clientWidth);
+					chartObserver.observe(container);
 				}
 
 				const test262 = data.test262;
