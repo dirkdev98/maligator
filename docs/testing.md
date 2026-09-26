@@ -240,7 +240,9 @@ source export are removed. Exit 2 marks failed or incomplete work, and a complet
 report does not classify a performance win.
 
 Same-repository pull requests can opt into the `Native performance` workflow with
-these labels; labeled and synchronize events both honor the current label set:
+these labels. Adding a label starts only that family; pushing a new head starts
+every currently labeled family. Remove other family labels before a push when
+only one family needs to run:
 
 | Label                         | Work per distinct baseline                                                                                                                     |
 | ----------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -250,9 +252,10 @@ these labels; labeled and synchronize events both honor the current label set:
 
 Every family compares the candidate with `git merge-base HEAD PR_BASE_SHA` and,
 when different, with `git merge-base HEAD origin/main` for cumulative stacked-PR
-evidence. Each job has a 55-minute ceiling. Compiler captures use 15-minute build
-budgets and each slice uses an eight-minute comparison budget. The compiler lane
-uses `self-compile-experiment.ts`'s frozen Node output oracle and retains its build
+evidence. JavaScript and micro jobs have 55-minute ceilings; compiler jobs have a
+70-minute ceiling. Compiler captures use 15-minute build budgets, the parser slice
+has an eight-minute comparison budget, and the shape slice has a 25-minute budget.
+The compiler lane uses `self-compile-experiment.ts`'s frozen Node output oracle and retains its build
 events, captured source identities, output digests, resource logs, and partial reports. The
 workflow uploads evidence even on failure, preserves failing exit codes, and
 does not update benchmark baselines. These checks complement the ordinary test
