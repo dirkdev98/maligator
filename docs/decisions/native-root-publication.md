@@ -53,6 +53,18 @@ collection clears a dead entry value, that unchanged value cannot become live
 again along the same continuation. Reassigned parameters and all helper outputs
 keep the ordinary publication path. This does not retain borrowed pointers.
 
+Within a basic block, the emitter also remembers when a private value equals its
+published shadow. Unconditional incoming publication and rooted-output reloads
+establish that fact; physical definitions and control-flow joins invalidate it.
+Conditional misses establish no new fact. At an actual safepoint, only roots live
+on both incoming and outgoing edges retain the fact, because collection can clear
+inactive shadows. Refined GC metadata identifies those points; broad opcode
+effects do not make a certified noncollecting instruction a publication boundary.
+The same equality proof removes redundant copies inside outgoing polls. Roots
+written by the instruction lose equality; compound outputs already alias their
+shadow slots until their explicit reload. Private heap-valued results still need
+publication before a poll when that equality has not been established.
+
 Some instructions expose intermediate or out-parameter storage. Their selected
 outputs temporarily alias shadow slots for the entire operation, with explicit
 reloads into private locals on both normal and throwing exits. The iterator-step
@@ -119,11 +131,13 @@ values, and more than 64 live roots. A root optimization must also demonstrate
 that the relevant hot generated code uses private results before its timing is
 interpreted as evidence for the mechanism.
 
-Binary numeric guards leave the root mask untouched on their noncollecting
-path. The original union mask is published with incoming private roots inside
-the coercing operator expression, before it can call user code. A conditional
-publication invalidates the emitter's known-mask state for the next operation;
-pure specialized operators need no mask update at all.
+When a function retains private roots, binary numeric guards leave the root mask
+untouched on their noncollecting path. The original union mask is published with
+incoming private roots inside the coercing operator expression, before it can
+call user code. A conditional publication invalidates the emitter's known-mask
+state for the next operation. Functions with no selected private roots keep an
+eager mask at the instruction boundary when the emitted operator includes a
+generic fallback. Pure specialized operators need no mask update in either case.
 
 Mask-state tracking records whether the emitted operator actually used its
 publication callback. A proven pure operator does not forget an unchanged

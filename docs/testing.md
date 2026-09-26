@@ -239,6 +239,24 @@ and fixtures remain in the report directory; the disposable baseline archive and
 source export are removed. Exit 2 marks failed or incomplete work, and a completed
 report does not classify a performance win.
 
+On Linux, `--diagnostics` also retains the exact timed production ELF, a symbol
+companion copied before stripping, generated-function sizes, and disassembly.
+It requires `llvm-nm-19` and `llvm-objdump-19`. A unique final-link cache key forces
+that copy without changing production flags or discarding reusable generated
+objects and runtime archives. Reapplying the recorded strip command must reproduce
+the measured executable byte for byte; the companion's `.text` bytes and address
+must also match. Function indices map symbols to the captured ProgramImage;
+inlined or eliminated functions with no final symbol remain unattributed.
+
+`--perf-pairs 3` adds separate counter samples after the ordinary timing pairs and
+requires diagnostics. The runner probes PMU availability without changing kernel
+policy or privileges. Unavailable counters are explicit, and every counter process
+must pass the same output oracle. Counters include startup and five warmups, so
+they are whole-process evidence rather than the timed kernel interval. Reports
+preserve ordinary timing completeness separately from counter status. The micro
+workflow enables both options and uploads one compressed executable bundle per
+case, each capped at 31 MiB, alongside the reports and disassembly.
+
 Same-repository pull requests can opt into the `Native performance` workflow with
 these labels. Adding a label starts only that family; pushing a new head starts
 every currently labeled family. Remove other family labels before a push when
