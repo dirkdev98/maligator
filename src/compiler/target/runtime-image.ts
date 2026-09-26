@@ -1349,6 +1349,8 @@ export function vmInstructionWriteRegisters(
 			return [instruction.resultDst];
 		case "ITERATOR_STEP":
 			return [instruction.valueDst, instruction.doneDst];
+		case "LOAD_STATIC_ARGUMENT":
+			return [instruction.dst, instruction.fallback];
 		case "WITH_SET":
 			return [instruction.found];
 		default: {

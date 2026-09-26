@@ -1493,7 +1493,9 @@ static bool mal_loaded_instruction_writes_register(
         MAL_WRITES_DST(MAL_OP_CREATE_ARGUMENTS_OBJECT, create_arguments_object);
         MAL_WRITES_DST(MAL_OP_LOAD_ARGUMENT_COUNT, load_argument_count);
         MAL_WRITES_DST(MAL_OP_LOAD_ARGUMENT, load_argument);
-        MAL_WRITES_DST(MAL_OP_LOAD_STATIC_ARGUMENT, load_static_argument);
+        case MAL_OP_LOAD_STATIC_ARGUMENT:
+            return instruction->as.load_static_argument.dst == target_register ||
+                instruction->as.load_static_argument.fallback == target_register;
         MAL_WRITES_DST(MAL_OP_LOAD_THIS, load_this);
         MAL_WRITES_DST(MAL_OP_LOAD_NEW_TARGET, load_new_target);
         MAL_WRITES_DST(MAL_OP_LOAD_CALLEE, load_callee);
