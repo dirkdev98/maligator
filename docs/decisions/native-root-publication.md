@@ -85,3 +85,7 @@ path. The original union mask is published with incoming private roots inside
 the coercing operator expression, before it can call user code. A conditional
 publication invalidates the emitter's known-mask state for the next operation;
 pure specialized operators need no mask update at all.
+
+Mask-state tracking records whether the emitted operator actually used its
+publication callback. A proven pure operator does not forget an unchanged
+mask merely because its generic opcode could have required publication.

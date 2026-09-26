@@ -624,18 +624,21 @@ if (
 }
 
 function retainThroughNumberCoercion(holder, operand) {
+	gc();
 	const retained = holder.value;
 	const result = operand + 1;
 	gc();
 	return result + retained.marker;
 }
 function retainThroughStringCoercion(holder, operand) {
+	gc();
 	const retained = holder.value;
 	const result = operand + 1;
 	gc();
 	return result + retained.marker;
 }
 function retainThroughThrowingCoercion(holder, operand) {
+	gc();
 	const retained = holder.value;
 	try {
 		return operand + 1;

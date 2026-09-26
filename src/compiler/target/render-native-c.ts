@@ -3322,6 +3322,7 @@ function emitBody(
 			(fn.profileSiteIds?.[ip] ?? -1) >= 0 ? {} : undefined;
 		const arrayPresenceAction = nativeArrayPresenceProjectionActionByIp.get(ip);
 		emittedInstructions.add(ip);
+		let operatorMaskEmitted = false;
 		const emitted = emitInstruction(
 			fn.instructions[ip]!,
 			ip,
@@ -3354,6 +3355,12 @@ function emitBody(
 									`${cInactiveRootMaskPublication(operatorInactiveRootMask)};`,
 								]
 						: [],
+				onIncomingRootPublication:
+					operatorInactiveRootMask === undefined
+						? undefined
+						: () => {
+								operatorMaskEmitted = true;
+							},
 				outgoingRootPublication,
 				rootedOutputReloads,
 				loopBackedgeInactiveRootMask,
@@ -3419,7 +3426,7 @@ function emitBody(
 			return null;
 		}
 		if (
-			operatorInactiveRootMask !== undefined ||
+			operatorMaskEmitted ||
 			mathCallInactiveRootMask !== undefined ||
 			tdzInactiveRootMask !== undefined ||
 			knownOwnSlotLoadInactiveRootMask !== undefined ||
@@ -3734,6 +3741,7 @@ interface NativeInstructionContext {
 	readonly nativePlan?: NativeInstructionPlan;
 	readonly gcSafepoint: boolean;
 	readonly incomingRootPublication?: ReadonlyArray<string>;
+	readonly onIncomingRootPublication?: () => void;
 	readonly outgoingRootPublication?: ReadonlyArray<string>;
 	readonly rootedOutputReloads?: ReadonlyArray<string>;
 	readonly loopBackedgeInactiveRootMask?: bigint;
@@ -3892,6 +3900,7 @@ function emitInstruction(
 			: nativeProfileCall(kind, expression, profileSiteId, profileOperation);
 	const reentrantValue = (expression: string): string => {
 		const publication = context.incomingRootPublication ?? [];
+		if (publication.length > 0) context.onIncomingRootPublication?.();
 		return publication.length === 0
 			? expression
 			: `(${publication.map((store) => store.slice(0, -1)).join(", ")}, ${expression})`;
