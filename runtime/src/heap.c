@@ -855,7 +855,7 @@ static void mal_heap_sweep_block(
             // Unreached: dead. Finalize (frees its owned side allocations), then
             // tombstone so a later sweep does not finalize it again.
             finalize(header);
-            header->mark = MAL_MARK_FREE;
+            atomic_store_explicit(&header->mark, MAL_MARK_FREE, memory_order_relaxed);
             if (heap->poison_on_free) {
                 mal_gc_poison_cell(cell, block->cell_size, free_offset);
             }
@@ -939,7 +939,7 @@ void mal_heap_sweep_minor(MalHeap *heap, MalHeapFinalizeFn finalize) {
                 block_live++;
             } else if ((header->mark & MAL_MARK_FREE) == 0) {
                 finalize(header);
-                header->mark = MAL_MARK_FREE;
+                atomic_store_explicit(&header->mark, MAL_MARK_FREE, memory_order_relaxed);
                 if (heap->poison_on_free) {
                     mal_gc_poison_cell(cell, block->cell_size, free_offset);
                 }
