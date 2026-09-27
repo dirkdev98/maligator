@@ -4910,19 +4910,12 @@ function emitInstruction(
 			];
 		}
 		case "STORE_CAPTURED": {
-			if (instruction.ownerFunctionIndex === context.ownedCaptureFunctionIndex) {
-				const primitive =
-					reps[instruction.src] === "number" ||
-					reps[instruction.src] === "int32" ||
-					reps[instruction.src] === "boolean";
+			if (instruction.ownerFunctionIndex === context.ownedCaptureFunctionIndex)
 				return [
 					`mal_gc_write_barrier(env->slots[${instruction.index}]);`,
 					`env->slots[${instruction.index}] = ${boxed(instruction.src)};`,
-					...(!primitive
-						? [`mal_gc_card(&env->header, env->slots[${instruction.index}]);`]
-						: []),
+					`mal_gc_card(&env->header, env->slots[${instruction.index}]);`,
 				];
-			}
 			return [
 				`mal_vm_store_captured(env, ${relocation.ownerFunctionIndex(instruction.ownerFunctionIndex)}, ${instruction.index}, ${boxed(instruction.src)});`,
 			];

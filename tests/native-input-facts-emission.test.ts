@@ -83,7 +83,7 @@ describe("local native input admission", () => {
 		}
 	});
 
-	it("omits only the generational card for scalar captured stores", () => {
+	it("keeps both barriers for scalar captured stores", () => {
 		const stores: Array<{
 			create: BytecodeInstruction;
 			representation: VmRegisterRepresentation;
@@ -106,7 +106,7 @@ describe("local native input admission", () => {
 			});
 			expect(owned).toContain("mal_gc_write_barrier(env->slots[0]);");
 			expect(owned).toContain("env->slots[0] = ");
-			expect(owned).not.toContain("mal_gc_card(&env->header,");
+			expect(owned).toContain("mal_gc_card(&env->header,");
 			const rebound = emitInputContract(
 				[{ opcode: "ENV_PUSH", scopeId: -2, slotCount: 1 }, ...instructions],
 				[representation],
