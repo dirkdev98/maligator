@@ -736,15 +736,19 @@ remains a Maligator extension and does not count as global fetch conformance.
 
 ## Generational GC workers
 
-- [ ] Consolidate the generational collector and isolate-owned GC state; remove
-      non-generational and single-threaded collector mode flags.
-- [ ] Parallelize native tracing while JavaScript is parked; retain inline Wasm
-      scheduling and mutator-owned finalization.
-- [ ] Run major marking concurrently after root publication and per-type tracing
-      access are safe under worker overlap.
-- [ ] Validate block reclamation ownership, shutdown, Wasm parity, race safety,
-      representative latency, throughput, CPU, and memory before accepting the
-      native default.
+- [ ] Finish current-source Wasm parity, the normal gate, focused GC sanitizer and
+      standards runs, and an enabled-worker ThreadSanitizer lane. Inspect exact
+      coverage and any failures before accepting native concurrent marking.
+- [ ] Compare retained-heap latency, throughput, CPU, and memory against the frozen
+      pre-worker baseline with matched output and repeated representative controls.
+      Use those results to tune snapshot dispatch and decide whether mutator sweep
+      remains the best reclamation schedule.
+- [ ] Validate native worker capacity under constrained and nested CPU quotas; the
+      current affinity and common cgroup-file checks cannot observe every mount or
+      hidden ancestor limit. Keep the inline capacity fallback covered.
+- [ ] Measure peak committed/deferred storage, long root/remark/finalizer pauses,
+      backstop completions, and teardown with a worker actively tracing. Extend
+      block ownership only if a measured need justifies background reclamation.
 
 # Triggered work
 
