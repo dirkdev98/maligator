@@ -2046,7 +2046,8 @@ static void mal_gc_trace_parked_batch(usize count, bool drain) {
         }
     }
 #if !defined(__wasi__)
-    if (g_gc->worker_limit > 0 && safe_count >= MAL_GC_PARALLEL_BATCH_MIN) {
+    if (g_gc->major_collection && g_gc->worker_limit > 0 &&
+        safe_count >= MAL_GC_PARALLEL_BATCH_MIN) {
         if (mal_gc_workers_trace_batch(g_gc, safe_count, drain)) return;
     }
 #endif
@@ -2411,8 +2412,8 @@ static void mal_gc_collect_sync(MalVm *vm, bool major) {
 // Incremental major collector.
 //
 // The mutator owns roots, weak processing, and sweep; eligible major-mark tasks
-// may run on native workers between safepoints. Minors park JavaScript, may trace
-// in parallel, and do not start while a major cycle is in flight. Black allocation over-tenures
+// may run on native workers between safepoints. Minors park JavaScript, trace inline,
+// and do not start while a major cycle is in flight. Black allocation over-tenures
 // mid-cycle allocations (accepted, counted). Roots are SATB-exempt: init-mark and
 // remark re-scan them, so both pauses are O(roots), never O(heap).
 // ===========================================================================
