@@ -46,6 +46,10 @@ interface Sample {
 	digest: string;
 }
 interface GcResourceSample extends Sample {
+	iterations: number;
+	workloadDigest: string;
+	oracleDigest: string;
+	instrumentation: "gc-stats";
 	gcStats: Readonly<Record<string, number>>;
 	stderr: string;
 }
@@ -63,6 +67,7 @@ const compilerWorker = path.join(root, "scripts/bench-quick-compiler.ts");
 const batchFixture = path.join(root, "bench/quick/app-batch.mts");
 const ROWS = 2560;
 const ITERATIONS = 200;
+const GC_LONG_ITERATIONS = 2000;
 const APP_CONFIG = {
 	outputName: "app-batch",
 	engine: { eval: false, realms: false, intl: { enabled: false } },
@@ -77,7 +82,7 @@ const HELP = `Usage: npm run bench:quick -- --baseline CHECKOUT [options]
   --candidate CHECKOUT       candidate source (default: current repository)
   --workload compiler-app|app-batch|self-compile (default: compiler-app)
   --pairs N                  fixed alternating pairs, 1..15 (default: 3)
-  --budget-seconds N         includes preparation, oracle, warmups, and samples (default: 300)
+  --budget-seconds N         includes preparation, oracles, warmups, samples, and diagnostics (default: 300)
   --output DIRECTORY         new evidence directory (default: .cache/bench-quick/<timestamp>)
   --prepare-only             build reusable app-batch artifacts without measuring
   --prepared DIRECTORY       use matching app-batch preparation
@@ -92,8 +97,9 @@ one Node reference; self-compile matches each native compiler to its revision's 
 output. Compiler output may change between revisions, while compiler-app must remain
 deterministic within each revision. Fresh processes are timed end to end; warmups warm
 caches, not a persistent JavaScript process. No cold-start, calibration, profiling,
-or adaptive extra pairs run. app-batch collects separate GC resource samples after
-ordinary timing; those instrumented runs are excluded from performance pairs.
+or adaptive extra pairs run. app-batch saves ordinary timing before two separate
+GC resource samples per revision at 200 and 2000 iterations, using a second Node
+oracle for the longer run. Instrumented runs are excluded from performance pairs.
 Exit 2 means failed or incomplete. Standalone runs provide family evidence; only the
 complete configured portfolio makes an acceptance decision.
 `;
@@ -255,7 +261,11 @@ function identity(value: Options) {
 				: "production",
 		work:
 			value.workload === "app-batch"
-				? { rows: ROWS, iterations: ITERATIONS }
+				? {
+						rows: ROWS,
+						iterations: ITERATIONS,
+						gcResourceIterations: [ITERATIONS, GC_LONG_ITERATIONS],
+					}
 				: value.workload === "self-compile"
 					? { entry: "bench/self-compile.mts", input: "frozen baseline source graph" }
 					: { entry: "tests/fixtures/express-5/app.js" },
@@ -270,8 +280,13 @@ async function run(value: Options): Promise<void> {
 	const pairs: Array<{ baseline: Sample; candidate: Sample }> = [];
 	const samples: Array<Sample> = [];
 	const gcResources: Array<GcResourceSample> = [];
+	const gcResourceOracles: Record<number, string> = {};
 	const phases: Record<string, number> = {};
 	let complete = false;
+	let ordinaryComplete = false;
+	let gcResourcesStatus: "not-started" | "running" | "complete" | "failed" =
+		"not-started";
+	let gcResourcesError: string | undefined;
 	let status = "running";
 	let stage = "identity";
 	let error: string | undefined;
@@ -290,23 +305,27 @@ async function run(value: Options): Promise<void> {
 			2
 		);
 	};
-	const persist = () => {
+	const report = () => {
 		const reductions = pairs.map(
 			(pair) => 100 * (1 - pair.candidate.wallMs / pair.baseline.wallMs),
 		);
 		const cpuReductions = pairs.map(
 			(pair) => 100 * (1 - pair.candidate.cpuMs / pair.baseline.cpuMs),
 		);
-		save(path.join(value.output, "report.json"), {
+		return {
 			schema: 1,
 			status,
 			complete,
+			ordinaryComplete,
+			gcResourcesStatus,
+			gcResourcesError,
 			stage,
 			error,
 			options: value,
 			identity: runIdentity,
 			inputDigest,
 			oracle,
+			gcResourceOracles,
 			revisionOracles,
 			elapsedMs: performance.now() - started,
 			phases,
@@ -340,8 +359,9 @@ async function run(value: Options): Promise<void> {
 							rangePercent: [Math.min(...reductions), Math.max(...reductions)],
 							preliminary: pairs.length === 1,
 						},
-		});
+		};
 	};
+	const persist = () => save(path.join(value.output, "report.json"), report());
 	const stop = () => {
 		interruption = "interrupted";
 		active?.();
@@ -611,6 +631,33 @@ async function run(value: Options): Promise<void> {
 			);
 			return digest(JSON.stringify(files(output)));
 		};
+		const nodeBatchOracle = async (
+			iterations: number,
+			label: string,
+		): Promise<string> => {
+			const reference = await execute(
+				label,
+				process.execPath,
+				[target, input, String(iterations)],
+				preparation,
+			);
+			const stdout = readFileSync(reference.stdout);
+			const observed = JSON.parse(stdout.toString("utf8")) as {
+				rows: number;
+				iterations: number;
+				checksum: number;
+				summary: Array<unknown>;
+			};
+			if (
+				observed.rows !== ROWS ||
+				observed.iterations !== iterations ||
+				!Number.isInteger(observed.checksum) ||
+				!Array.isArray(observed.summary) ||
+				observed.summary.length === 0
+			)
+				throw new Error(`invalid Node workload oracle at ${iterations} iterations`);
+			return digest(stdout);
+		};
 		await inPhase("oracle", async () => {
 			if (oracle !== undefined) return;
 			if (value.workload === "self-compile") {
@@ -620,29 +667,10 @@ async function run(value: Options): Promise<void> {
 			} else if (value.workload === "compiler-app") {
 				oracle = (await sample("oracle", "baseline")).digest;
 			} else {
-				const reference = await execute(
-					"oracle",
-					process.execPath,
-					[target, input, String(ITERATIONS)],
-					preparation,
-				);
-				const observed = JSON.parse(readFileSync(reference.stdout, "utf8")) as {
-					rows: number;
-					iterations: number;
-					checksum: number;
-					summary: Array<unknown>;
-				};
-				if (
-					observed.rows !== ROWS ||
-					observed.iterations !== ITERATIONS ||
-					!Number.isInteger(observed.checksum) ||
-					!Array.isArray(observed.summary) ||
-					observed.summary.length === 0
-				)
-					throw new Error("invalid Node workload oracle");
-				oracle = digest(readFileSync(reference.stdout));
+				oracle = await nodeBatchOracle(ITERATIONS, "oracle");
 			}
 		});
+		if (value.workload === "app-batch") gcResourceOracles[ITERATIONS] = oracle!;
 		if (value.workload === "compiler-app") revisionOracles.baseline = oracle!;
 		else if (value.workload === "app-batch") {
 			revisionOracles.baseline = oracle!;
@@ -694,37 +722,71 @@ async function run(value: Options): Promise<void> {
 					persist();
 				}
 			});
+			checkBudget();
+			if (!isDeepStrictEqual(runIdentity, identity(value)))
+				throw new Error("source or host identity changed during ordinary timing");
+			if (!isDeepStrictEqual(frozenFiles, files(preparation)))
+				throw new Error("workload or prepared artifacts changed during ordinary timing");
+			ordinaryComplete = true;
+			persist();
+			save(path.join(value.output, "ordinary-report.json"), {
+				...report(),
+				status: "complete",
+				complete: true,
+				stage: "ordinary-complete",
+			});
 			if (value.workload === "app-batch") {
+				gcResourcesStatus = "running";
 				await inPhase("gc-resources", async () => {
-					for (const revision of ["baseline", "candidate"] as const) {
-						const label = `gc-resource-${revision}`;
-						const measured = await execute(
-							label,
-							path.join(preparation, binaries[revision]),
-							[input, String(ITERATIONS)],
-							preparation,
-							true,
-							{ MAL_GC_STATS: "1" },
+					for (const iterations of [ITERATIONS, GC_LONG_ITERATIONS]) {
+						if (iterations === GC_LONG_ITERATIONS)
+							gcResourceOracles[iterations] = await nodeBatchOracle(
+								iterations,
+								`oracle-gc-${iterations}`,
+							);
+						const oracleDigest = gcResourceOracles[iterations]!;
+						const workloadDigest = digest(
+							JSON.stringify({
+								source: digest(readFileSync(target)),
+								data: digest(readFileSync(input)),
+								iterations,
+							}),
 						);
-						const outputDigest = digest(readFileSync(measured.stdout));
-						if (outputDigest !== oracle)
-							throw new Error(`${label} differs from the Node oracle`);
-						const gcStats = parseGcStats(readFileSync(measured.stderr, "utf8"));
-						if (gcStats?.collections === undefined)
-							throw new Error(`${label} omitted GC collection statistics`);
-						gcResources.push({
-							label,
-							revision,
-							wallMs: measured.wallMs,
-							cpuMs: measured.cpuMs,
-							peakRssBytes: measured.peakRssBytes,
-							digest: outputDigest,
-							gcStats,
-							stderr: measured.stderr,
-						});
-						persist();
+						for (const revision of ["baseline", "candidate"] as const) {
+							const label = `gc-resource-${iterations}-${revision}`;
+							const measured = await execute(
+								label,
+								path.join(preparation, binaries[revision]),
+								[input, String(iterations)],
+								preparation,
+								true,
+								{ MAL_GC_STATS: "1" },
+							);
+							const outputDigest = digest(readFileSync(measured.stdout));
+							if (outputDigest !== oracleDigest)
+								throw new Error(`${label} differs from the Node oracle`);
+							const gcStats = parseGcStats(readFileSync(measured.stderr, "utf8"));
+							if (gcStats?.collections === undefined)
+								throw new Error(`${label} omitted GC collection statistics`);
+							gcResources.push({
+								label,
+								revision,
+								iterations,
+								workloadDigest,
+								oracleDigest,
+								instrumentation: "gc-stats",
+								wallMs: measured.wallMs,
+								cpuMs: measured.cpuMs,
+								peakRssBytes: measured.peakRssBytes,
+								digest: outputDigest,
+								gcStats,
+								stderr: measured.stderr,
+							});
+							persist();
+						}
 					}
 				});
+				gcResourcesStatus = "complete";
 			}
 		}
 		checkBudget();
@@ -737,6 +799,10 @@ async function run(value: Options): Promise<void> {
 		stage = "complete";
 	} catch (failure) {
 		error = failure instanceof Error ? failure.message : String(failure);
+		if (gcResourcesStatus === "running") {
+			gcResourcesStatus = "failed";
+			gcResourcesError = error;
+		}
 		status = interruption === undefined ? "failed" : "incomplete";
 		throw failure;
 	} finally {
@@ -773,7 +839,11 @@ if (import.meta.main) {
 										"one warmup per revision",
 										`${value.pairs} alternating pairs with output validation`,
 										...(value.workload === "app-batch"
-											? ["one separate GC resource sample per revision"]
+											? [
+													"save ordinary evidence before diagnostics",
+													"one 2000-iteration Node oracle after timing",
+													"one separate GC resource sample per revision at 200 and 2000 iterations",
+												]
 											: []),
 									]),
 						],

@@ -14,12 +14,42 @@ import { expect, it, onTestFinished } from "vitest";
 
 const script = path.resolve("scripts/bench-quick.ts");
 function fixture(
-	failure: "none" | "output" | "self-compile-output" | "timeout" = "none",
+	failure:
+		| "none"
+		| "output"
+		| "self-compile-output"
+		| "timeout"
+		| "app"
+		| "app-long-output" = "none",
 ) {
 	const root = mkdtempSync(path.join(os.tmpdir(), "mal-bench-quick-"));
 	onTestFinished(() => rmSync(root, { recursive: true, force: true }));
 	const checkout = (label: string) => {
 		const directory = path.join(root, label);
+		const appBinary = `#!/usr/bin/env node
+import { spawnSync } from 'node:child_process';
+import * as path from 'node:path';
+const iterations = Number(process.argv[3]);
+const result = spawnSync(process.execPath, [path.join(process.cwd(), 'app-batch.mts'), ...process.argv.slice(2)], { encoding: 'utf8' });
+if (result.status !== 0) throw new Error(result.stderr);
+if (${JSON.stringify(failure === "app-long-output" && label === "candidate")} && iterations === 2000) {
+  const observed = JSON.parse(result.stdout);
+  observed.checksum++;
+  process.stdout.write(JSON.stringify(observed) + '\\n');
+} else process.stdout.write(result.stdout);
+if (process.env.MAL_GC_STATS === '1') process.stderr.write('[gc-stats] collections=' + Math.ceil(iterations / 100) + '\\n');
+`;
+		const selfCompileBinary = `#!/usr/bin/env node
+import { mkdirSync, writeFileSync } from 'node:fs';
+import * as path from 'node:path';
+const output = process.argv[3];
+mkdirSync(output, { recursive: true });
+writeFileSync(path.join(output, 'self-compile-output.c'), ${JSON.stringify(
+			failure === "self-compile-output" && label === "candidate"
+				? "deterministic native miscompile"
+				: `${label} node output`,
+		)});
+`;
 		const files = {
 			"package.json": '{"type":"module"}',
 			"package-lock.json": '{"lockfileVersion":3}',
@@ -38,17 +68,7 @@ const artifact = process.argv[process.argv.indexOf('--artifact') + 1];
 const name = 'self-compile-fixture';
 const binary = path.join(artifact, 'bin', name);
 mkdirSync(path.dirname(binary), { recursive: true });
-writeFileSync(binary, ${JSON.stringify(`#!/usr/bin/env node
-import { mkdirSync, writeFileSync } from 'node:fs';
-import * as path from 'node:path';
-const output = process.argv[3];
-mkdirSync(output, { recursive: true });
-writeFileSync(path.join(output, 'self-compile-output.c'), ${JSON.stringify(
-				failure === "self-compile-output" && label === "candidate"
-					? "deterministic native miscompile"
-					: `${label} node output`,
-			)});
-`)});
+writeFileSync(binary, ${JSON.stringify(failure === "app" || failure === "app-long-output" ? appBinary : selfCompileBinary)});
 chmodSync(binary, 0o755);
 writeFileSync(path.join(artifact, 'artifact.json'), JSON.stringify({ name, production: true }));
 `,
@@ -115,7 +135,7 @@ export function compileEntrypoint(input) {
 			],
 			{
 				encoding: "utf8",
-				timeout: 20_000,
+				timeout: 60_000,
 				env: {
 					...process.env,
 					CC: "cc",
@@ -127,6 +147,18 @@ export function compileEntrypoint(input) {
 		JSON.parse(readFileSync(path.join(output, "report.json"), "utf8")) as {
 			status: string;
 			complete: boolean;
+			ordinaryComplete: boolean;
+			inputDigest: string;
+			gcResourcesStatus: string;
+			gcResourceOracles: Record<string, string>;
+			gcResources: Array<{
+				label: string;
+				revision: string;
+				iterations: number;
+				workloadDigest: string;
+				oracleDigest: string;
+				instrumentation: string;
+			}>;
 			samples: Array<{ label: string; cpuMs: number; peakRssBytes: number }>;
 			summary?: { pairs: number; baselineMedianCpuMs: number };
 			pairs: Array<unknown>;
@@ -160,6 +192,116 @@ it("plans one prepared self-hosted compiler pair loop without diagnostic repetit
 		],
 	});
 	expect(existsSync(test.output)).toBe(false);
+});
+
+it("plans app-batch timing and both separate GC resource durations", () => {
+	const test = fixture("app");
+	const result = test.run("--workload", "app-batch", "--plan=json");
+	expect(result.status, result.stderr).toBe(0);
+	expect(JSON.parse(result.stdout)).toMatchObject({
+		workload: "app-batch",
+		work: [
+			"freeze dataset and build two production binaries once",
+			"output oracle",
+			"one warmup per revision",
+			"2 alternating pairs with output validation",
+			"save ordinary evidence before diagnostics",
+			"one 2000-iteration Node oracle after timing",
+			"one separate GC resource sample per revision at 200 and 2000 iterations",
+		],
+	});
+});
+
+it("keeps app-batch timing separate from 200 and 2000 iteration resource samples", () => {
+	const test = fixture("app");
+	const preparation = test.run("--workload", "app-batch", "--prepare-only");
+	expect(preparation.status, preparation.stderr).toBe(0);
+	const output = `${test.output}-measured`;
+	const result = test.run(
+		"--workload",
+		"app-batch",
+		"--prepared",
+		path.join(test.output, "prepared"),
+		"--output",
+		output,
+		"--pairs",
+		"1",
+		"--budget-seconds",
+		"90",
+	);
+	expect(result.status, result.stderr).toBe(0);
+	expect(result.stdout).not.toContain("build-baseline:");
+	const report = JSON.parse(
+		readFileSync(path.join(output, "report.json"), "utf8"),
+	) as ReturnType<typeof test.report>;
+	expect(report).toMatchObject({
+		status: "complete",
+		ordinaryComplete: true,
+		gcResourcesStatus: "complete",
+		summary: { pairs: 1 },
+	});
+	expect(report.samples.map((sample) => sample.label)).toEqual([
+		"warm-baseline",
+		"warm-candidate",
+		"pair-0-baseline",
+		"pair-0-candidate",
+	]);
+	expect(
+		report.gcResources.map((sample) => [sample.revision, sample.iterations]),
+	).toEqual([
+		["baseline", 200],
+		["candidate", 200],
+		["baseline", 2000],
+		["candidate", 2000],
+	]);
+	expect(report.gcResourceOracles["200"]).not.toBe(report.gcResourceOracles["2000"]);
+	expect(report.gcResources[0]?.workloadDigest).toBe(report.inputDigest);
+	expect(report.gcResources[1]?.workloadDigest).toBe(report.inputDigest);
+	expect(report.gcResources[2]?.workloadDigest).not.toBe(report.inputDigest);
+	for (const sample of report.gcResources) {
+		expect(sample.oracleDigest).toBe(report.gcResourceOracles[String(sample.iterations)]);
+		expect(sample.instrumentation).toBe("gc-stats");
+	}
+	expect(
+		JSON.parse(readFileSync(path.join(output, "ordinary-report.json"), "utf8")),
+	).toMatchObject({
+		status: "complete",
+		ordinaryComplete: true,
+		gcResourcesStatus: "not-started",
+		gcResources: [],
+	});
+});
+
+it("retains complete ordinary app-batch evidence when only the long diagnostic mismatches", () => {
+	const test = fixture("app-long-output");
+	const result = test.run(
+		"--workload",
+		"app-batch",
+		"--pairs",
+		"1",
+		"--budget-seconds",
+		"90",
+	);
+	expect(result.status, result.stderr).toBe(2);
+	expect(test.report()).toMatchObject({
+		status: "failed",
+		ordinaryComplete: true,
+		gcResourcesStatus: "failed",
+		summary: { pairs: 1 },
+	});
+	expect(test.report().error).toContain(
+		"gc-resource-2000-candidate differs from the Node oracle",
+	);
+	expect(test.report().gcResources.map((sample) => sample.iterations)).toEqual([
+		200, 200, 2000,
+	]);
+	expect(
+		JSON.parse(readFileSync(path.join(test.output, "ordinary-report.json"), "utf8")),
+	).toMatchObject({
+		status: "complete",
+		ordinaryComplete: true,
+		pairs: [expect.any(Object)],
+	});
 });
 
 it("rejects a deterministic native self-compile miscompile against its revision's Node oracle", () => {
