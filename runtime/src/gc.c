@@ -142,6 +142,7 @@ void (*mal_gc_test_trace_env_hook)(MalEnv *env) = nullptr;
 #endif
 
 struct MalGcState {
+    MalVm *vm;
     // Grey worklist (explicit, no recursion): shaded-but-not-yet-traced cells.
     MalHeapHeader **grey;
     usize grey_count;
@@ -257,8 +258,14 @@ static void mal_gc_workers_stop(MalGcState *g);
 #endif
 
 /* Marking helpers and SATB barriers use the active VM throughout its lifetime. */
+#if defined(__wasi__)
 static MalVm *g_gc_vm = nullptr;
 static MalGcState *g_gc = nullptr;
+#else
+/* A worker binds its owning isolate before tracing and cannot borrow the mutator's context. */
+static _Thread_local MalVm *g_gc_vm = nullptr;
+static _Thread_local MalGcState *g_gc = nullptr;
+#endif
 /* Captured for the atexit stats printer (which has no vm handle). Points at the
  * live vm->gc while the vm exists, and at g_gc_stats_snapshot after teardown so the
  * exit report survives an explicit mal_vm_free. The printer reads only scalar stat
@@ -494,6 +501,7 @@ void mal_gc_init(MalVm *vm) {
     }
     MalGcState *g = calloc(1, sizeof(MalGcState));
     vm->gc = g;
+    g->vm = vm;
     g_gc = g;
     g_gc_vm = vm;
     g_gc_stats_state = g;
@@ -566,6 +574,7 @@ void mal_gc_begin_teardown(MalVm *vm) {
     if (g == nullptr) {
         return;
     }
+    if (g_gc != g || g_gc_vm != vm) abort();
 #if !defined(__wasi__)
     mal_gc_workers_stop(g);
 #endif
@@ -1613,6 +1622,8 @@ static bool mal_gc_worker_can_trace_during_mutation(MalHeapHeader *cell) {
 static void *mal_gc_worker_main(void *argument) {
     MalGcWorker *worker = argument;
     MalGcState *g = worker->gc;
+    g_gc = g;
+    g_gc_vm = g->vm;
     g_trace_worker = worker;
     pthread_mutex_lock(&g->worker_mutex);
     for (;;) {
@@ -1644,6 +1655,8 @@ static void *mal_gc_worker_main(void *argument) {
     }
     pthread_mutex_unlock(&g->worker_mutex);
     g_trace_worker = nullptr;
+    g_gc_vm = nullptr;
+    g_gc = nullptr;
     return nullptr;
 }
 
@@ -2434,7 +2447,7 @@ static void mal_gc_finalize_live_cell(MalHeapHeader *cell) {
  * mal_heap_free does not. Managed large cells are included in the heap walk.
  * Call once, immediately before mal_heap_free. */
 void mal_gc_finalize_all(MalVm *vm) {
-    g_gc_vm = vm; // mal_gc_finalize_cell reaches the heap through g_gc_vm
+    if (g_gc_vm != vm) abort();
     mal_heap_walk_cells(&vm->heap, mal_gc_finalize_live_cell);
 }
 
