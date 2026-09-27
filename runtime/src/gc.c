@@ -300,12 +300,6 @@ struct MalGcState {
     usize last_major_live_bytes;
     usize promotion_debt;
     u64 promoted_bytes;
-    usize major_allocated_at_begin;
-    usize major_allocated_at_remark;
-    usize major_black_at_begin;
-    usize major_black_at_remark;
-    usize major_mark_allocated_cycle;
-    usize major_mark_black_cycle;
 
     // --- Config (read once from env in mal_gc_init) ---------------------------
     // Stress mode (MAL_GC_STRESS=N): collect every N gated safepoints.
@@ -333,15 +327,6 @@ struct MalGcState {
     u64 minor_sweep_ns;
     u64 minor_cells_inspected;
     u64 minor_blocks_inspected;
-    u64 minor_young_cells_swept;
-    u64 minor_young_cell_bytes_swept;
-    u64 minor_old_cells_inspected;
-    u64 promoted_followup_reclaimed_bytes;
-    u64 promoted_followup_retained_bytes;
-    u64 major_mark_allocated_bytes;
-    u64 major_sweep_allocated_bytes;
-    u64 major_mark_black_bytes;
-    u64 major_sweep_black_bytes;
     u64 minor_remembered_owners;
     u64 minor_remembered_container_slots;
     u64 minor_remembered_discoveries;
@@ -578,13 +563,6 @@ static void mal_gc_print_stats_now(void) {
     bool live_heap = g_gc_vm != nullptr && g_gc_vm->gc == g;
     MalHeapUsage usage = live_heap
         ? mal_heap_usage(&g_gc_vm->heap) : g->heap_usage_before_teardown;
-    u64 promoted_reclaimed = live_heap
-        ? g_gc_vm->heap.promoted_followup_reclaimed_bytes : g->promoted_followup_reclaimed_bytes;
-    u64 promoted_retained = live_heap
-        ? g_gc_vm->heap.promoted_followup_retained_bytes : g->promoted_followup_retained_bytes;
-    u64 promoted_classified = promoted_reclaimed + promoted_retained;
-    u64 promoted_unclassified = g->promoted_bytes > promoted_classified
-        ? g->promoted_bytes - promoted_classified : 0;
     usize worker_limit = 0;
 #if !defined(__wasi__)
     worker_limit = g->worker_limit;
@@ -609,11 +587,6 @@ static void mal_gc_print_stats_now(void) {
     fprintf(stderr,
             " cycles=%llu sync_backstop=%llu over_tenure_bytes=%llu "
             "promoted_bytes=%llu promotion_debt=%llu last_major_live_bytes=%llu "
-            "promoted_next_major_reclaimed_bytes=%llu "
-            "promoted_next_major_retained_bytes=%llu "
-            "promoted_unclassified_bytes=%llu "
-            "major_mark_allocated_bytes=%llu major_sweep_allocated_bytes=%llu "
-            "major_mark_black_bytes=%llu major_sweep_black_bytes=%llu "
             "satb_flushes=%llu satb_high_water=%llu "
             "init_mark_ms=%.3f remark_ms=%.3f max_mark_step_ms=%.3f "
             "major_array_trace_slots=%llu major_array_trace_ms=%.3f "
@@ -622,8 +595,6 @@ static void mal_gc_print_stats_now(void) {
             "minor_pause_ms=%.3f max_minor_pause_ms=%.3f "
             "minor_mark_ms=%.3f minor_sweep_ms=%.3f "
             "minor_cells_inspected=%llu minor_blocks_inspected=%llu "
-            "minor_young_cells_swept=%llu minor_young_cell_bytes_swept=%llu "
-            "minor_old_cells_inspected=%llu "
             "remembered_owners=%llu remembered_container_slots=%llu "
             "remembered_discoveries=%llu remembered_array_owners=%llu "
             "remembered_array_slots=%llu remembered_array_discoveries=%llu "
@@ -649,13 +620,6 @@ static void mal_gc_print_stats_now(void) {
             (unsigned long long) g->promoted_bytes,
             (unsigned long long) g->promotion_debt,
             (unsigned long long) g->last_major_live_bytes,
-            (unsigned long long) promoted_reclaimed,
-            (unsigned long long) promoted_retained,
-            (unsigned long long) promoted_unclassified,
-            (unsigned long long) g->major_mark_allocated_bytes,
-            (unsigned long long) g->major_sweep_allocated_bytes,
-            (unsigned long long) g->major_mark_black_bytes,
-            (unsigned long long) g->major_sweep_black_bytes,
             (unsigned long long) g->satb_flushes,
             (unsigned long long) g->satb_high_water,
             (double) g->init_mark_ns / 1.0e6, (double) g->remark_ns / 1.0e6,
@@ -670,9 +634,6 @@ static void mal_gc_print_stats_now(void) {
             (double) g->minor_sweep_ns / 1.0e6,
             (unsigned long long) g->minor_cells_inspected,
             (unsigned long long) g->minor_blocks_inspected,
-            (unsigned long long) g->minor_young_cells_swept,
-            (unsigned long long) g->minor_young_cell_bytes_swept,
-            (unsigned long long) g->minor_old_cells_inspected,
             (unsigned long long) g->minor_remembered_owners,
             (unsigned long long) g->minor_remembered_container_slots,
             (unsigned long long) g->minor_remembered_discoveries,
@@ -982,8 +943,7 @@ static void mal_gc_shade(MalHeapHeader *cell) {
         cell->mark = (mark & ~MAL_MARK_COLOR) | g_gc_vm->heap.mark_color;
     } else {
         if (mal_heap_mark_is_old(mark)) return;
-        cell->mark = mark | MAL_MARK_OLD
-            | (g_gc->stats_enabled ? MAL_MARK_PROMOTED : 0);
+        cell->mark = mark | MAL_MARK_OLD;
     }
 #else
     u8 expected = atomic_load_explicit(&cell->mark, memory_order_relaxed);
@@ -998,8 +958,7 @@ static void mal_gc_shade(MalHeapHeader *cell) {
             desired = (expected & ~MAL_MARK_COLOR) | g_gc_vm->heap.mark_color;
         } else {
             if (mal_heap_mark_is_old(expected)) return;
-            desired = expected | MAL_MARK_OLD
-                | (g_gc->stats_enabled ? MAL_MARK_PROMOTED : 0);
+            desired = expected | MAL_MARK_OLD;
         }
         if (atomic_compare_exchange_weak_explicit(&cell->mark, &expected, desired,
                 memory_order_relaxed, memory_order_relaxed)) break;
@@ -2758,9 +2717,6 @@ static void mal_gc_collect_sync(MalVm *vm, bool major) {
         if (g_gc->stats_enabled) {
             g_gc->minor_cells_inspected = vm->heap.minor_cells_inspected;
             g_gc->minor_blocks_inspected = vm->heap.minor_blocks_inspected;
-            g_gc->minor_young_cells_swept = vm->heap.minor_young_cells_swept;
-            g_gc->minor_young_cell_bytes_swept = vm->heap.minor_young_cell_bytes_swept;
-            g_gc->minor_old_cells_inspected = vm->heap.minor_old_cells_inspected;
         }
     } else
     {
@@ -2822,12 +2778,6 @@ static void mal_gc_cycle_begin(MalVm *vm) {
     mal_gc_clear_remembered();
     mal_heap_begin_major(&vm->heap);
     g_gc->major_collection = true;
-    if (g_gc->stats_enabled) {
-        g_gc->major_allocated_at_begin = vm->heap.bytes_allocated;
-        g_gc->major_black_at_begin = mal_gc_black_alloc_bytes;
-        g_gc->major_mark_allocated_cycle = 0;
-        g_gc->major_mark_black_cycle = 0;
-    }
 
     // Enable the SATB deletion barrier + black allocation, THEN snapshot the roots.
     // Ordering: with marking active, any store the mutator makes after this shades
@@ -2876,15 +2826,6 @@ static void mal_gc_cycle_remark(MalVm *vm) {
 
     mal_gc_weak_pass();
 
-    if (g_gc->stats_enabled) {
-        g_gc->major_allocated_at_remark = vm->heap.bytes_allocated;
-        g_gc->major_black_at_remark = mal_gc_black_alloc_bytes;
-        g_gc->major_mark_allocated_cycle =
-            g_gc->major_allocated_at_remark - g_gc->major_allocated_at_begin;
-        g_gc->major_mark_black_cycle =
-            g_gc->major_black_at_remark - g_gc->major_black_at_begin;
-    }
-
     // Marking is complete: stop the barrier (further stores need no snapshot) and
     // hand off to the sweep. Black allocation stays ON through the sweep so a cell
     // born during sweeping is retained.
@@ -2908,14 +2849,6 @@ static void mal_gc_cycle_remark(MalVm *vm) {
  * advance the trigger. Called both by the incremental sweep on completion and by
  * the synchronous-finish path (which sweeps everything remaining first). */
 static void mal_gc_cycle_finish_sweep(MalVm *vm) {
-    if (g_gc->stats_enabled) {
-        g_gc->major_mark_allocated_bytes += g_gc->major_mark_allocated_cycle;
-        g_gc->major_mark_black_bytes += g_gc->major_mark_black_cycle;
-        g_gc->major_sweep_allocated_bytes +=
-            vm->heap.bytes_allocated - g_gc->major_allocated_at_remark;
-        g_gc->major_sweep_black_bytes +=
-            mal_gc_black_alloc_bytes - g_gc->major_black_at_remark;
-    }
     mal_gc_clear_remembered();
     mal_gc_black_alloc = false;
     g_gc->phase = MAL_GC_PHASE_IDLE;
@@ -3201,8 +3134,9 @@ void mal_gc_finalize_all(MalVm *vm) {
     mal_heap_walk_cells(&vm->heap, mal_gc_finalize_live_cell);
 }
 
-/* Copy heap-backed stats before mal_heap_free resets them, then release the
- * collector state after mal_gc_finalize_all. */
+/* Free the per-isolate collector state's growable buffers + the struct itself.
+ * Call at VM teardown (after mal_gc_finalize_all, before/after mal_heap_free — the
+ * buffers are plain malloc'd, independent of the heap). */
 void mal_gc_state_free(MalVm *vm) {
     MalGcState *g = vm->gc;
     if (g == nullptr) {
@@ -3236,8 +3170,6 @@ void mal_gc_state_free(MalVm *vm) {
         if (vm->heap.bytes_allocated > g->allocated_bytes) {
             g->allocated_bytes = vm->heap.bytes_allocated;
         }
-        g->promoted_followup_reclaimed_bytes = vm->heap.promoted_followup_reclaimed_bytes;
-        g->promoted_followup_retained_bytes = vm->heap.promoted_followup_retained_bytes;
         g_gc_stats_snapshot = *g;
         g_gc_stats_state = &g_gc_stats_snapshot;
     }

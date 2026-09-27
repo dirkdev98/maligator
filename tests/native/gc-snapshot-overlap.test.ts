@@ -118,33 +118,6 @@ describe("dense array fill barriers", () => {
 			expect(result.status, result.stderr || result.stdout).toBe(0);
 			expect(result.stdout).toBe("gc-dense-fill-card PASS\n");
 			expect(Number(result.stderr.match(/\bminor=(\d+)/)?.[1] ?? 0)).toBeGreaterThan(0);
-			const inspected = Number(
-				result.stderr.match(/\bminor_cells_inspected=(\d+)/)?.[1] ?? 0,
-			);
-			const youngSwept = Number(
-				result.stderr.match(/\bminor_young_cells_swept=(\d+)/)?.[1] ?? 0,
-			);
-			const youngBytes = Number(
-				result.stderr.match(/\bminor_young_cell_bytes_swept=(\d+)/)?.[1] ?? 0,
-			);
-			expect(youngSwept).toBeGreaterThan(0);
-			expect(youngSwept).toBeLessThanOrEqual(inspected);
-			expect(youngBytes).toBeGreaterThan(0);
-			const promoted = Number(result.stderr.match(/\bpromoted_bytes=(\d+)/)?.[1] ?? 0);
-			const reclaimed = Number(
-				result.stderr.match(/\bpromoted_next_major_reclaimed_bytes=(\d+)/)?.[1] ?? 0,
-			);
-			const retained = Number(
-				result.stderr.match(/\bpromoted_next_major_retained_bytes=(\d+)/)?.[1] ?? 0,
-			);
-			const unclassified = Number(
-				result.stderr.match(/\bpromoted_unclassified_bytes=(\d+)/)?.[1] ?? 0,
-			);
-			expect(result.stderr).toMatch(/\bpromoted_next_major_retained_bytes=\d+\b/);
-			expect(result.stderr).toMatch(/\bpromoted_unclassified_bytes=\d+\b/);
-			expect(reclaimed).toBeGreaterThan(0);
-			expect(reclaimed + retained).toBe(promoted);
-			expect(unclassified).toBe(0);
 		} finally {
 			rmSync(outDir, { recursive: true, force: true });
 		}
