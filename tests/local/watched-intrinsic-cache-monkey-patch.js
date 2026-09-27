@@ -2,6 +2,14 @@ function callFloor(value) {
 	return Math.floor(value);
 }
 
+// One load expression keeps both constructors on the same inline-cache site.
+for (let i = 0; i < 400; i++) {
+	const wide = i >= 100 && (i < 200 || (i & 1) !== 0);
+	const constructor = wide ? Uint32Array : Uint8Array;
+	if (constructor.BYTES_PER_ELEMENT !== (wide ? 4 : 1))
+		throw new Error("watched constructor identity failure");
+}
+
 const originalFloor = Math.floor;
 for (let i = 0; i < 100; i++) {
 	if (callFloor(7.9) !== 7) throw new Error("warm failure");

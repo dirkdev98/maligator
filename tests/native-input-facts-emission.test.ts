@@ -33,6 +33,16 @@ function emitInputContract(
 							representations[register] === "boxed" ||
 							representations[register] === "string",
 					),
+					incomingRootRegisters: point.incomingRootRegisters.filter(
+						(register) =>
+							representations[register] === "boxed" ||
+							representations[register] === "string",
+					),
+					outgoingRootRegisters: point.outgoingRootRegisters.filter(
+						(register) =>
+							representations[register] === "boxed" ||
+							representations[register] === "string",
+					),
 				})),
 			},
 		},
@@ -166,6 +176,12 @@ function mathCallSource(stable: boolean, binary: boolean): string {
 				safepoints: plan.gc.safepoints.map((point) => ({
 					...point,
 					rootRegisters: point.rootRegisters.filter((register) => register > 1),
+					incomingRootRegisters: point.incomingRootRegisters.filter(
+						(register) => register > 1,
+					),
+					outgoingRootRegisters: point.outgoingRootRegisters.filter(
+						(register) => register > 1,
+					),
 				})),
 			},
 		},

@@ -4,7 +4,7 @@ import { lowerSemanticProgramToCore } from "../src/compiler/core/core-frontend.t
 import { optimizeCore } from "../src/compiler/core/optimize.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
 import type { CompilerInstruction } from "../src/compiler/shared/compiler-instruction.ts";
-import { executionSafepointRootRegisters } from "../src/compiler/target/execution-liveness.ts";
+import { executionSafepointRoots } from "../src/compiler/target/execution-liveness.ts";
 import type {
 	ExecutionFunction,
 	ExecutionProgram,
@@ -280,12 +280,20 @@ describe("Core target construction", () => {
 		let checkedEntries = 0;
 		for (const fn of program.functions) {
 			for (const entry of fn.directEntries) {
-				const exact = executionSafepointRootRegisters(
+				const exact = executionSafepointRoots(
 					{ ...fn, registerRepresentations: entry.registerRepresentations },
 					new Set(entry.gc.safepoints.map(({ instruction }) => instruction)),
 				);
 				for (const [index, point] of entry.gc.safepoints.entries()) {
-					expect(point.rootRegisters).toEqual(exact.get(point.instruction));
+					expect(point.rootRegisters).toEqual(
+						exact.get(point.instruction)?.rootRegisters,
+					);
+					expect(point.incomingRootRegisters).toEqual(
+						exact.get(point.instruction)?.incomingRootRegisters,
+					);
+					expect(point.outgoingRootRegisters).toEqual(
+						exact.get(point.instruction)?.outgoingRootRegisters,
+					);
 					retainedStringRoots += point.rootRegisters.filter(
 						(register) => entry.registerRepresentations[register] === "string",
 					).length;
@@ -346,8 +354,20 @@ describe("Core target construction", () => {
 	it("maps exact native root sets onto shadow-frame slots", () => {
 		const masks = nativeInactiveRootMasks(
 			[
-				{ kind: "operation", instructionIp: 2, rootRegisters: [0, 2] },
-				{ kind: "loop-backedge", instructionIp: 7, rootRegisters: [1, 2] },
+				{
+					kind: "operation",
+					instructionIp: 2,
+					rootRegisters: [0, 2],
+					incomingRootRegisters: [0, 2],
+					outgoingRootRegisters: [0, 2],
+				},
+				{
+					kind: "loop-backedge",
+					instructionIp: 7,
+					rootRegisters: [1, 2],
+					incomingRootRegisters: [1, 2],
+					outgoingRootRegisters: [1, 2],
+				},
 			],
 			new Map([
 				[0, 0],
@@ -376,9 +396,23 @@ describe("Core target construction", () => {
 						kind: "operation",
 						instructionIp: 0,
 						rootRegisters: [2, 4, 8, 9, 100],
+						incomingRootRegisters: [2, 4, 8, 9, 100],
+						outgoingRootRegisters: [2, 4, 8, 9, 100],
 					},
-					{ kind: "operation", instructionIp: 1, rootRegisters: [2, 8] },
-					{ kind: "operation", instructionIp: 2, rootRegisters: [] },
+					{
+						kind: "operation",
+						instructionIp: 1,
+						rootRegisters: [2, 8],
+						incomingRootRegisters: [2, 8],
+						outgoingRootRegisters: [2, 8],
+					},
+					{
+						kind: "operation",
+						instructionIp: 2,
+						rootRegisters: [],
+						incomingRootRegisters: [],
+						outgoingRootRegisters: [],
+					},
 				],
 				slots,
 			),
@@ -389,7 +423,15 @@ describe("Core target construction", () => {
 		]);
 		expect(
 			nativeInactiveRootMasks(
-				[{ kind: "operation", instructionIp: 0, rootRegisters: [2, 4] }],
+				[
+					{
+						kind: "operation",
+						instructionIp: 0,
+						rootRegisters: [2, 4],
+						incomingRootRegisters: [2, 4],
+						outgoingRootRegisters: [2, 4],
+					},
+				],
 				slots,
 			).size,
 		).toBe(0);
@@ -876,6 +918,34 @@ describe("Core target verification", () => {
 		);
 		expect(incomplete.context).toMatchObject({ functionIndex });
 	});
+
+	it.each(["incomingRootRegisters", "outgoingRootRegisters"] as const)(
+		"rejects missing %s even when the continuously rooted union is correct",
+		(boundary) => {
+			const program = optimizedTarget(HANDLER_SOURCE, "gc-boundary-roots.js");
+			const functionIndex = program.functions.findIndex((fn) =>
+				fn.gc.safepoints.some((point) => point[boundary].length > 0),
+			);
+			const fn = program.functions[functionIndex]!;
+			const safepointIndex = fn.gc.safepoints.findIndex(
+				(point) => point[boundary].length > 0,
+			);
+			const point = fn.gc.safepoints[safepointIndex]!;
+			const malformed = withFunction(program, functionIndex, {
+				gc: {
+					safepoints: fn.gc.safepoints.with(safepointIndex, {
+						...point,
+						[boundary]: point[boundary].slice(1),
+					}),
+				},
+			});
+			const error = verificationError(malformed);
+			expect(error.detail).toBe(
+				`GC safepoint roots do not match exact execution liveness (${boundary})`,
+			);
+			expect(error.context.register).toBe(point[boundary][0]);
+		},
+	);
 
 	it("rejects a violated two-address instruction constraint", () => {
 		for (const [source, type, operand, requirement] of [

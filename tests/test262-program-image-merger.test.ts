@@ -71,7 +71,7 @@ function image(
 }
 
 describe("Test262 VM image merger", () => {
-	it("keeps compiler-issued native ABIs valid after helper rebasing", () => {
+	it("keeps compiler-issued native ABIs and phased roots valid after helper rebasing", () => {
 		const compile = (source: string) =>
 			compileSemanticProgramToProgramImage(
 				analyzeSourceAndRunSemanticAnalysis(source, "native-contracts.js"),
@@ -101,7 +101,22 @@ describe("Test262 VM image merger", () => {
 				fn.instructions.some((plan) => plan?.kind === "call" && plan.numericSortCallback),
 			),
 		).toBe(true);
-		const merged = mergeProgramImages([prefix, program]).image;
+		expect(
+			plans.some((fn) =>
+				fn.gc.safepoints.some(
+					({ incomingRootRegisters, outgoingRootRegisters }) =>
+						incomingRootRegisters.join() !== outgoingRootRegisters.join(),
+				),
+			),
+		).toBe(true);
+		const { image: merged, functionBases } = mergeProgramImages([prefix, program]);
+		for (const [index, plan] of plans.entries()) {
+			const restored = merged.native.functions[functionBases[1]! + index]!;
+			expect(restored.gc).toEqual(plan.gc);
+			expect(restored.directEntries.map((entry) => entry.gc)).toEqual(
+				plan.directEntries.map((entry) => entry.gc),
+			);
+		}
 		expect(() => emitProgramImage(merged, {})).not.toThrow();
 	});
 

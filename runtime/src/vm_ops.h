@@ -1235,16 +1235,23 @@ bool mal_vm_own_table_try_load(
 );
 
 // Own-data hits run no user code, so property regions can omit the throw check.
-static inline bool mal_vm_object_try_load(const MalObject *object, MalValue key, const MalInlineCache *ic,
-                                          MalValue *out) {
-    if (ic->mode == MAL_IC_MODE_OWN_TABLE) {
-        return mal_vm_own_table_try_load(object, key, ic, out);
-    }
+static inline bool mal_vm_object_try_load_monomorphic(
+    const MalObject *object, MalValue key, const MalInlineCache *ic, MalValue *out
+) {
     if (ic->mode == MAL_IC_MODE_SHAPE && object->shape == ic->shape && key == ic->key &&
         ic->slot != MAL_IC_VALUE_SLOT) {
         mal_perf_ic_load_mono_hit();
         *out = object->slots[ic->slot];
         return true;
+    }
+    return false;
+}
+
+static inline bool mal_vm_object_try_load_remaining(
+    const MalObject *object, MalValue key, const MalInlineCache *ic, MalValue *out
+) {
+    if (ic->mode == MAL_IC_MODE_OWN_TABLE) {
+        return mal_vm_own_table_try_load(object, key, ic, out);
     }
     if (ic->mode == MAL_IC_MODE_SHAPE && ic->poly_count > 0 && key == ic->key &&
         ic->slot != MAL_IC_VALUE_SLOT) {
@@ -1257,6 +1264,12 @@ static inline bool mal_vm_object_try_load(const MalObject *object, MalValue key,
         }
     }
     return false;
+}
+
+static inline bool mal_vm_object_try_load(const MalObject *object, MalValue key, const MalInlineCache *ic,
+                                          MalValue *out) {
+    return mal_vm_object_try_load_monomorphic(object, key, ic, out) ||
+        mal_vm_object_try_load_remaining(object, key, ic, out);
 }
 
 /**
@@ -1568,42 +1581,35 @@ static inline bool mal_vm_property_try_load(MalVm *vm, MalValue receiver, MalVal
         mal_vm_special_try_load(vm, receiver, key, ic, out);
 }
 
+/** Return status and value without exposing the caller's result temporary. */
+typedef struct MalStaticPropertyProbeResult {
+    bool hit;
+    MalValue value;
+} MalStaticPropertyProbeResult;
+
+/** Noncollecting cache probes after the inline own-slot and watched-value probes miss. */
+__attribute__((noinline)) MalStaticPropertyProbeResult
+mal_vm_property_try_load_static_remaining(
+    MalVm *vm, MalValue receiver, const MalObject *object,
+    const MalInlineCache *ic
+);
+
 /** Static-name property probe: the site identity supplies the key guard. */
 static inline __attribute__((always_inline)) bool mal_vm_property_try_load_static(
     MalVm *vm, MalValue receiver, const MalInlineCache *ic, MalValue *out
 ) {
-    if (ic->mode == MAL_IC_MODE_ARRAY_LENGTH &&
-        mal_value_is_heap_type(receiver, MAL_HEAP_ARRAY_OBJECT)) {
-        const MalArrayObject *array = (const MalArrayObject *) mal_value_to_heap(receiver);
-        *out = mal_ops_number_value((f64) array->length);
-        mal_perf_ic_load_array_length_hit();
+    const MalObject *object = mal_vm_as_object(receiver);
+    if (object != nullptr &&
+        mal_vm_object_try_load_monomorphic(object, ic->key, ic, out)) {
         return true;
     }
-    if (ic->mode == MAL_IC_MODE_TYPED_ARRAY_LENGTH) {
-        MalTypedArrayObject *array;
-        u32 length;
-        if (mal_vm_admit_typed_array_length(vm, receiver, &array, &length)) {
-            *out = mal_value_from_i32((i32) length);
-            mal_perf_ic_load_typed_array_length_hit();
-            return true;
-        }
-    }
-    if (ic->mode == MAL_IC_MODE_INHERITED_VALUE && ic->poly_count > 0 &&
-        ic->receiver_type == MAL_HEAP_OBJECT) {
-        return mal_vm_local_inherited_value_try_load_static(
-            mal_vm_as_object(receiver), ic, out);
-    }
-    if (ic->mode == MAL_IC_MODE_INHERITED_VALUE ||
-        ic->mode == MAL_IC_MODE_INHERITED_SLOT ||
-        ic->mode == MAL_IC_MODE_INHERITED_TABLE ||
-        ic->mode == MAL_IC_MODE_MISSING) {
-        return mal_vm_inherited_try_load_static(receiver, ic, out);
-    }
-    MalObject *object = mal_vm_as_object(receiver);
-    return (object != nullptr && mal_vm_object_try_load_static(object, ic, out)) ||
-        mal_vm_watched_try_load_static(receiver, ic, out) ||
-        mal_vm_special_try_load_static(vm, receiver, ic, out) ||
-        mal_vm_inherited_stub_try_load_static(vm, receiver, object, ic, out);
+    if (ic->mode == MAL_IC_MODE_SHAPE &&
+        mal_vm_watched_try_load_static(receiver, ic, out)) return true;
+    MalStaticPropertyProbeResult result =
+        mal_vm_property_try_load_static_remaining(vm, receiver, object, ic);
+    if (!result.hit) return false;
+    *out = result.value;
+    return true;
 }
 
 /** Two adjacent fixed-name own-slot reads can share one receiver and shape guard. */
@@ -1649,11 +1655,12 @@ static inline __attribute__((always_inline)) bool mal_vm_property_try_load_stati
         first->shape != second->shape) {
         return false;
     }
-    MalValue first_value = object->slots[first->slot];
-    MalValue second_value = object->slots[second->slot];
-    if (!mal_ops_is_number(first_value) || !mal_ops_is_number(second_value)) return false;
-    *first_out = mal_ops_number_as_f64(first_value);
-    *second_out = mal_ops_number_as_f64(second_value);
+    f64 first_value;
+    if (!mal_ops_try_number_as_f64(object->slots[first->slot], &first_value)) return false;
+    f64 second_value;
+    if (!mal_ops_try_number_as_f64(object->slots[second->slot], &second_value)) return false;
+    *first_out = first_value;
+    *second_out = second_value;
     mal_perf_ic_load_mono_hit();
     mal_perf_ic_load_mono_hit();
     return true;
@@ -1681,17 +1688,15 @@ static inline __attribute__((always_inline)) bool mal_vm_property_try_load_stati
         first->shape != third->shape) {
         return false;
     }
-    MalValue first_value = object->slots[first->slot];
-    MalValue second_value = object->slots[second->slot];
-    MalValue third_value = object->slots[third->slot];
-    if (!mal_ops_is_number(first_value) ||
-        !mal_ops_is_number(second_value) ||
-        !mal_ops_is_number(third_value)) {
-        return false;
-    }
-    *first_out = mal_ops_number_as_f64(first_value);
-    *second_out = mal_ops_number_as_f64(second_value);
-    *third_out = mal_ops_number_as_f64(third_value);
+    f64 first_value;
+    if (!mal_ops_try_number_as_f64(object->slots[first->slot], &first_value)) return false;
+    f64 second_value;
+    if (!mal_ops_try_number_as_f64(object->slots[second->slot], &second_value)) return false;
+    f64 third_value;
+    if (!mal_ops_try_number_as_f64(object->slots[third->slot], &third_value)) return false;
+    *first_out = first_value;
+    *second_out = second_value;
+    *third_out = third_value;
     mal_perf_ic_load_mono_hit();
     mal_perf_ic_load_mono_hit();
     mal_perf_ic_load_mono_hit();
@@ -1725,20 +1730,18 @@ static inline __attribute__((always_inline)) bool mal_vm_property_try_load_stati
         first->shape != fourth->shape) {
         return false;
     }
-    MalValue first_value = object->slots[first->slot];
-    MalValue second_value = object->slots[second->slot];
-    MalValue third_value = object->slots[third->slot];
-    MalValue fourth_value = object->slots[fourth->slot];
-    if (!mal_ops_is_number(first_value) ||
-        !mal_ops_is_number(second_value) ||
-        !mal_ops_is_number(third_value) ||
-        !mal_ops_is_number(fourth_value)) {
-        return false;
-    }
-    *first_out = mal_ops_number_as_f64(first_value);
-    *second_out = mal_ops_number_as_f64(second_value);
-    *third_out = mal_ops_number_as_f64(third_value);
-    *fourth_out = mal_ops_number_as_f64(fourth_value);
+    f64 first_value;
+    if (!mal_ops_try_number_as_f64(object->slots[first->slot], &first_value)) return false;
+    f64 second_value;
+    if (!mal_ops_try_number_as_f64(object->slots[second->slot], &second_value)) return false;
+    f64 third_value;
+    if (!mal_ops_try_number_as_f64(object->slots[third->slot], &third_value)) return false;
+    f64 fourth_value;
+    if (!mal_ops_try_number_as_f64(object->slots[fourth->slot], &fourth_value)) return false;
+    *first_out = first_value;
+    *second_out = second_value;
+    *third_out = third_value;
+    *fourth_out = fourth_value;
     mal_perf_ic_load_mono_hit();
     mal_perf_ic_load_mono_hit();
     mal_perf_ic_load_mono_hit();

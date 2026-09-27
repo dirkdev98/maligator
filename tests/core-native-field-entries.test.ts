@@ -118,7 +118,7 @@ describe("numeric own-field native entry contracts", () => {
 				expect(leaf.leaf).toBe(true);
 				const worker = leaf.source.slice(
 					0,
-					leaf.source.indexOf(`\nstatic double ${leaf.symbol}(`),
+					leaf.source.lastIndexOf("\n", leaf.source.indexOf(`${leaf.symbol}(`)),
 				);
 				expect(worker).not.toMatch(/MalVm|MalEnv|mal_gc_|vm->/);
 			} else expect(leaf.leaf).toBeUndefined();

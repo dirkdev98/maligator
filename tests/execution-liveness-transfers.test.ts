@@ -1,8 +1,11 @@
 import { deepStrictEqual } from "node:assert";
 import { describe, it } from "vitest";
 import type { CompilerInstruction } from "../src/compiler/shared/compiler-instruction.ts";
-import type { ExecutionFunction } from "../src/compiler/target/execution-ir.ts";
-import { executionSafepointRootRegisters } from "../src/compiler/target/execution-liveness.ts";
+import type {
+	ExecutionFunction,
+	ExecutionSafepointRoots,
+} from "../src/compiler/target/execution-ir.ts";
+import { executionSafepointRoots } from "../src/compiler/target/execution-liveness.ts";
 
 interface Operation {
 	type: string;
@@ -20,7 +23,7 @@ function reference(
 	blocks: Array<Array<Operation>>,
 	representations: Array<string>,
 	safepoints: Set<Operation>,
-): Map<Operation, Array<number>> {
+): Map<Operation, ExecutionSafepointRoots> {
 	const rooted = (register: number) =>
 		register >= 0 && ["boxed", "string"].includes(representations[register]!);
 	const operands = (operation: Operation) => {
@@ -75,16 +78,23 @@ function reference(
 			}
 		}
 	}
-	const result = new Map<Operation, Array<number>>();
+	const result = new Map<Operation, ExecutionSafepointRoots>();
 	for (let block = 0; block < blocks.length; block++) {
 		const live = liveOut(block);
 		for (const instruction of blocks[block]!.toReversed()) {
 			const { reads, writes } = operands(instruction);
 			if (safepoints.has(instruction)) {
-				result.set(
-					instruction,
-					[...new Set([...live, ...reads, ...writes])].sort((a, b) => a - b),
-				);
+				result.set(instruction, {
+					rootRegisters: [...new Set([...live, ...reads, ...writes])].sort(
+						(a, b) => a - b,
+					),
+					incomingRootRegisters: [
+						...new Set(
+							[...live].filter((register) => !writes.includes(register)).concat(reads),
+						),
+					].sort((a, b) => a - b),
+					outgoingRootRegisters: [...new Set([...live, ...writes])].sort((a, b) => a - b),
+				});
 			}
 			for (const register of writes) live.delete(register);
 			for (const register of reads) live.add(register);
@@ -100,7 +110,7 @@ function check(blocks: Array<Array<Operation>>, representations: Array<string>):
 		registerRepresentations: representations,
 		blocks: blocks.map((instructions) => ({ instructions })),
 	} as unknown as ExecutionFunction;
-	const actual = executionSafepointRootRegisters(
+	const actual = executionSafepointRoots(
 		fn,
 		safepoints as unknown as Set<CompilerInstruction>,
 	);

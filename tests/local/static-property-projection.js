@@ -4,6 +4,10 @@ function project(receiver) {
 	return left ^ right ^ 7;
 }
 
+function projectPairNumbers(receiver) {
+	return receiver.left + receiver.right;
+}
+
 function projectThree(receiver) {
 	return receiver.left + receiver.right + receiver.kind;
 }
@@ -71,6 +75,65 @@ if (accessOrder.join(",") !== "left,right,left,right,kind,left,right,kind,tag") 
 }
 if (proxyOrder.join(",") !== "left,right,left,right,kind,left,right,kind,tag") {
 	throw new Error(`proxy order ${proxyOrder.join(",")}`);
+}
+
+const numericEdges = [
+	[-0, -0, -0, -0, -0, -0],
+	[2147483647, 1, -2, 0, 2147483646, 2147483648],
+	[-2147483648, -1, 2, 0, -2147483647, -2147483649],
+	[1.25, 2.5, -0.75, 0, 3, 3.75],
+	[Infinity, -Infinity, 1, 0, NaN, NaN],
+	[-Infinity, 1, 2, 0, -Infinity, -Infinity],
+	[5e-324, 0, 0, 0, 5e-324, 5e-324],
+	[1e100, -1e100, 7, 0, 7, 0],
+	[NaN, 1, 2, 0, NaN, NaN],
+	[1, 2, NaN, 0, NaN, 3],
+];
+for (let round = 0; round < 20; round++) {
+	for (const values of numericEdges) {
+		stable.left = values[0];
+		stable.right = values[1];
+		stable.kind = values[2];
+		stable.tag = values[3];
+		if (!Object.is(projectPairNumbers(stable), values[5])) {
+			throw new Error("numeric pair projection changed a Number");
+		}
+		if (!Object.is(projectThree(stable), values[4])) {
+			throw new Error("numeric triple projection changed a Number");
+		}
+		if (!Object.is(projectFour(stable), values[4])) {
+			throw new Error("numeric quad projection changed a Number");
+		}
+	}
+}
+stable.left = "1";
+stable.right = 2;
+stable.kind = 3;
+stable.tag = 4;
+if (
+	projectPairNumbers(stable) !== "12" ||
+	projectThree(stable) !== "123" ||
+	projectFour(stable) !== "1234"
+) {
+	throw new Error("nonnumeric projection did not resume string addition");
+}
+stable.left = {
+	valueOf() {
+		stable.kind = 9;
+		return 1;
+	},
+};
+stable.kind = 3;
+if (projectPairNumbers(stable) !== 3) {
+	throw new Error("pair projection did not resume numeric coercion");
+}
+stable.kind = 3;
+if (projectThree(stable) !== 12) {
+	throw new Error("triple projection read a later property before numeric coercion");
+}
+stable.kind = 3;
+if (projectFour(stable) !== 16) {
+	throw new Error("quad projection read a later property before numeric coercion");
 }
 
 console.log("static-property-projection PASS");

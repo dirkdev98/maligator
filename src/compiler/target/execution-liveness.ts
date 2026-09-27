@@ -1,6 +1,6 @@
 import { coreOpcodeRegistry, isCoreOpcode } from "../core/core-ir-opcodes.ts";
 import type { CompilerInstruction } from "../shared/compiler-instruction.ts";
-import type { ExecutionFunction } from "./execution-ir.ts";
+import type { ExecutionFunction, ExecutionSafepointRoots } from "./execution-ir.ts";
 
 const STRUCTURAL_WRITE_COUNTS: Readonly<Record<string, number>> = {
 	sourcePos: 0,
@@ -79,13 +79,13 @@ interface BoxedOperands {
 
 /**
  * Exact boxed physical-register obligations at selected execution instructions.
- * The set includes operands used while the operation can collect and values live
- * immediately afterwards (including a result observed by a call-return poll).
+ * Incoming and outgoing sets separate values present before the operation from
+ * its returned values. The union supports continuously rooted register storage.
  */
-export function executionSafepointRootRegisters(
+export function executionSafepointRoots(
 	fn: ExecutionFunction,
 	safepoints: ReadonlySet<CompilerInstruction>,
-): ReadonlyMap<CompilerInstruction, ReadonlyArray<number>> {
+): ReadonlyMap<CompilerInstruction, ExecutionSafepointRoots> {
 	if (safepoints.size === 0) return new Map();
 	const wordCount = Math.ceil(fn.registerCount / 32);
 	const add = (registers: Uint32Array, register: number): void => {
@@ -182,7 +182,7 @@ export function executionSafepointRootRegisters(
 		}
 	}
 
-	const roots = new Map<CompilerInstruction, ReadonlyArray<number>>();
+	const roots = new Map<CompilerInstruction, ExecutionSafepointRoots>();
 	for (const [block, { instructions }] of fn.blocks.entries()) {
 		const firstSafepoint = firstSafepoints[block]!;
 		if (firstSafepoint < 0) continue;
@@ -194,10 +194,18 @@ export function executionSafepointRootRegisters(
 			const instruction = instructions[index]!;
 			const instructionOperands = operands[block]![index]!;
 			if (safepoints.has(instruction)) {
-				const atSafepoint = live.slice();
-				for (const register of instructionOperands.reads) add(atSafepoint, register);
-				for (const register of instructionOperands.writes) add(atSafepoint, register);
-				roots.set(instruction, rootRegisters(atSafepoint));
+				const incoming = live.slice();
+				for (const register of instructionOperands.writes) remove(incoming, register);
+				for (const register of instructionOperands.reads) add(incoming, register);
+				const outgoing = live.slice();
+				for (const register of instructionOperands.writes) add(outgoing, register);
+				const combined = incoming.slice();
+				unionInto(combined, outgoing);
+				roots.set(instruction, {
+					rootRegisters: rootRegisters(combined),
+					incomingRootRegisters: rootRegisters(incoming),
+					outgoingRootRegisters: rootRegisters(outgoing),
+				});
 			}
 			for (const register of instructionOperands.writes) remove(live, register);
 			for (const register of instructionOperands.reads) add(live, register);

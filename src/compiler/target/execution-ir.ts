@@ -61,23 +61,30 @@ export interface ExecutionParallelCopy {
 	readonly temporaries: ReadonlyArray<number>;
 }
 
-export type ExecutionSafepoint =
-	| {
-			readonly kind: "operation";
-			/** Core instruction that emitted `instruction`. */
-			readonly coreInstruction: CoreInstructionId;
-			/** Core collection points realized while this operation executes. */
-			readonly realizedCoreInstructions: ReadonlyArray<CoreInstructionId>;
-			readonly instruction: CompilerInstruction;
-			/** Exact boxed physical registers required by this collection point. */
-			readonly rootRegisters: ReadonlyArray<number>;
-	  }
-	| {
-			readonly kind: "loop-backedge";
-			readonly instruction: CompilerInstruction;
-			/** Exact boxed physical registers required by the taken-edge poll. */
-			readonly rootRegisters: ReadonlyArray<number>;
-	  };
+export interface ExecutionSafepointRoots {
+	/** Union retained by continuously rooted register storage. */
+	readonly rootRegisters: ReadonlyArray<number>;
+	/** Values needed before the operation runs, excluding output-only old values. */
+	readonly incomingRootRegisters: ReadonlyArray<number>;
+	/** Values needed after the operation, including outputs observed by a return poll. */
+	readonly outgoingRootRegisters: ReadonlyArray<number>;
+}
+
+export type ExecutionSafepoint = ExecutionSafepointRoots &
+	(
+		| {
+				readonly kind: "operation";
+				/** Core instruction that emitted `instruction`. */
+				readonly coreInstruction: CoreInstructionId;
+				/** Core collection points realized while this operation executes. */
+				readonly realizedCoreInstructions: ReadonlyArray<CoreInstructionId>;
+				readonly instruction: CompilerInstruction;
+		  }
+		| {
+				readonly kind: "loop-backedge";
+				readonly instruction: CompilerInstruction;
+		  }
+	);
 
 /**
  * One ordinary-call entry contract selected from closed-world call-site facts.

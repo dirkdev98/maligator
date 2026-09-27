@@ -65,11 +65,12 @@ import type {
 	ExecutionProgram,
 	ExecutionRegisterRepresentation,
 	ExecutionSafepoint,
+	ExecutionSafepointRoots,
 } from "./execution-ir.ts";
 import { executionFunctionIndex } from "./execution-ir.ts";
 import {
 	executionLoopBackedgeInstructions,
-	executionSafepointRootRegisters,
+	executionSafepointRoots,
 } from "./execution-liveness.ts";
 import { verifyExecutionProgram } from "./verify-execution.ts";
 
@@ -2037,7 +2038,10 @@ function lowerFunctionToTarget(
 		);
 
 	const pendingOperationSafepoints: Array<
-		Omit<Extract<ExecutionSafepoint, { kind: "operation" }>, "rootRegisters">
+		Omit<
+			Extract<ExecutionSafepoint, { kind: "operation" }>,
+			keyof ExecutionSafepointRoots
+		>
 	> = [];
 	for (const blockId of blockOrder) {
 		const loweredBlock = loweredBlockForCore.get(blockId)!;
@@ -2449,7 +2453,7 @@ function lowerFunctionToTarget(
 			instruction,
 		})),
 	];
-	const roots = executionSafepointRootRegisters(
+	const roots = executionSafepointRoots(
 		analysisFunction,
 		new Set(pendingSafepoints.map(({ instruction }) => instruction)),
 	);
@@ -2462,7 +2466,7 @@ function lowerFunctionToTarget(
 	const safepoints: Array<ExecutionSafepoint> = pendingSafepoints
 		.map((safepoint) => ({
 			...safepoint,
-			rootRegisters: roots.get(safepoint.instruction) ?? [],
+			...roots.get(safepoint.instruction)!,
 		}))
 		.sort(
 			(left, right) =>
@@ -2614,6 +2618,16 @@ function lowerFunctionToTarget(
 					...safepoint,
 					// Entries share the body and only refine boxed registers; liveness is per register.
 					rootRegisters: safepoint.rootRegisters.filter(
+						(register) =>
+							representations[register] === "boxed" ||
+							representations[register] === "string",
+					),
+					incomingRootRegisters: safepoint.incomingRootRegisters.filter(
+						(register) =>
+							representations[register] === "boxed" ||
+							representations[register] === "string",
+					),
+					outgoingRootRegisters: safepoint.outgoingRootRegisters.filter(
 						(register) =>
 							representations[register] === "boxed" ||
 							representations[register] === "string",

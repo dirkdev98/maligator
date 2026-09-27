@@ -1,6 +1,7 @@
 #pragma once
 
 #include <math.h>
+#include <string.h>
 #include "./defaults.h"
 #include "heap.h"
 #include "heap_bigint.h"
@@ -101,6 +102,25 @@ static inline f64 mal_ops_number_as_f64(MalValue value) {
         return -0.0;
     }
     return NAN; // MAL_VALUE_NAN
+}
+
+/** Classify and decode one Number without retaining its boxed form across a guard join. */
+static inline __attribute__((always_inline)) bool mal_ops_try_number_as_f64(MalValue value, f64 *out) {
+    if ((value & MAL_VALUE_CLASS_MASK) == MAL_VALUE_INT32) {
+        *out = (f64) (i32) (u32) (value & MASK_INT32);
+        return true;
+    }
+    if ((value & MASK_EXPONENT_BITS) != MASK_EXPONENT_BITS) {
+        memcpy(out, &value, sizeof(value));
+        return true;
+    }
+    switch (value) {
+        case MAL_VALUE_NAN: *out = NAN; return true;
+        case MAL_VALUE_NEGATIVE_ZERO: *out = -0.0; return true;
+        case MAL_VALUE_POSITIVE_INFINITY: *out = INFINITY; return true;
+        case MAL_VALUE_NEGATIVE_INFINITY: *out = -INFINITY; return true;
+        default: return false;
+    }
 }
 
 /** Reinterpret a uint32 result as the corresponding signed two's-complement value. */
