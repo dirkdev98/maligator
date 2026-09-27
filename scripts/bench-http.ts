@@ -3,6 +3,12 @@ export interface OhaMetrics {
 	p99Ms: number;
 }
 
+export interface CheckedOhaMetrics extends OhaMetrics {
+	completedRequests: number;
+	completedRps: number;
+	abortedRequests: number;
+}
+
 export interface ExpressHttpWorkload {
 	name: "routes" | "json" | "form";
 	durationSeconds: number;
@@ -83,8 +89,9 @@ export function parseOhaOutput(output: string): OhaMetrics {
 export function parseCheckedOhaOutput(
 	output: string,
 	expectedStatuses: ReadonlyArray<number>,
-): OhaMetrics {
+): CheckedOhaMetrics {
 	const parsed = JSON.parse(output) as {
+		summary?: { total?: number };
 		statusCodeDistribution?: Record<string, number>;
 		errorDistribution?: Record<string, number>;
 	};
@@ -118,6 +125,25 @@ export function parseCheckedOhaOutput(
 		throw new Error(`oha transport errors: ${JSON.stringify(parsed.errorDistribution)}`);
 	}
 	const metrics = parseOhaOutput(output);
-	if (metrics.rps <= 0) throw new Error("oha reported no completed requests");
-	return metrics;
+	const elapsedSeconds = parsed.summary?.total;
+	const completedRequests = statuses.reduce((sum, [, count]) => sum + count, 0);
+	const abortedRequests = Object.values(parsed.errorDistribution).reduce(
+		(sum, count) => sum + count,
+		0,
+	);
+	if (
+		metrics.rps <= 0 ||
+		!Number.isFinite(elapsedSeconds) ||
+		elapsedSeconds === undefined ||
+		elapsedSeconds <= 0 ||
+		!Number.isSafeInteger(completedRequests) ||
+		completedRequests <= 0
+	)
+		throw new Error("oha reported no completed requests or elapsed duration");
+	return {
+		...metrics,
+		completedRequests,
+		completedRps: completedRequests / elapsedSeconds,
+		abortedRequests,
+	};
 }

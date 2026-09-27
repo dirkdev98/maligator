@@ -55,9 +55,24 @@ describe("ordinary HTTP comparison process", () => {
 				path.join(directory, "evidence"),
 				3,
 				performance.now() + 90000,
-			)) as { http: { instrumentation: string; oracleDigest: string } };
+			)) as {
+				http: {
+					instrumentation: string;
+					oracleDigest: string;
+					bare: {
+						malCompletedRequests: number;
+						malCompletedRps: number;
+						malCpuPerCompletedRequestMs?: number;
+					};
+				};
+			};
 			expect(result.http.instrumentation).toBe("none");
 			expect(result.http.oracleDigest).toMatch(/^[a-f0-9]{64}$/);
+			expect(result.http.bare.malCompletedRequests).toBeGreaterThan(0);
+			expect(result.http.bare.malCompletedRps).toBeGreaterThan(0);
+			if (process.platform === "linux") {
+				expect(Number.isFinite(result.http.bare.malCpuPerCompletedRequestMs)).toBe(true);
+			}
 			expect(JSON.parse(readFileSync(process.env.TEST_ENV_LOG, "utf8"))).toEqual({});
 		},
 		100_000,

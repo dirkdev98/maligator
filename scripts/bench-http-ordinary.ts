@@ -8,7 +8,7 @@ import {
 	parseCheckedOhaOutput,
 	planExpressHttpWorkload,
 } from "./bench-http.ts";
-import type { ExpressHttpWorkload, OhaMetrics } from "./bench-http.ts";
+import type { CheckedOhaMetrics, ExpressHttpWorkload } from "./bench-http.ts";
 import { cleanTestEnvironment } from "./test-environment.ts";
 
 type Revision = "base" | "head";
@@ -410,9 +410,11 @@ function oha(
 	label: string,
 	deadline: number,
 	args: Array<string> = [],
-): OhaMetrics {
+	cpuWindow?: { pid: number | undefined; ticksPerSecond: number },
+): CheckedOhaMetrics & { processCpuMs?: number } {
 	const remaining = Math.floor(deadline - performance.now());
 	if (remaining <= 0) throw new Error("HTTP comparison time budget exhausted");
+	const cpuBefore = processCpuSample(cpuWindow?.pid);
 	const result = spawnSync(
 		"oha",
 		[
@@ -434,17 +436,31 @@ function oha(
 			timeout: Math.min(Math.ceil((seconds + 10) * 1000), remaining),
 		},
 	);
+	const cpuAfter = processCpuSample(cpuWindow?.pid);
 	if (result.status !== 0)
 		throw new Error(`oha failed for ${label}: ${result.stderr || result.error?.message}`);
 	if (performance.now() >= deadline)
 		throw new Error("HTTP comparison time budget exhausted");
+	const processCpuMs =
+		cpuWindow === undefined
+			? undefined
+			: processCpuDeltaMs(cpuBefore, cpuAfter, cpuWindow.ticksPerSecond);
+	if (cpuWindow !== undefined && processCpuMs === undefined)
+		throw new Error(`HTTP ${label} process CPU sample is invalid`);
 	writeFileSync(path.join(directory, `${label}.oha.json`), result.stdout);
-	return parseCheckedOhaOutput(result.stdout, expectedStatuses);
+	return {
+		...parseCheckedOhaOutput(result.stdout, expectedStatuses),
+		...(processCpuMs === undefined ? {} : { processCpuMs }),
+	};
 }
 
-function usage(
-	pid: number | undefined,
-): { cpuMs: number; peakRssBytes: number; measurementScope: string } | undefined {
+export interface ProcessCpuSample {
+	pid: number;
+	startTimeTicks: number;
+	cpuTicks: number;
+}
+
+function processCpuSample(pid: number | undefined): ProcessCpuSample | undefined {
 	if (pid === undefined || process.platform !== "linux") return undefined;
 	try {
 		const statText = readFileSync(`/proc/${pid}/stat`, "utf8");
@@ -452,23 +468,61 @@ function usage(
 			.slice(statText.lastIndexOf(")") + 2)
 			.trim()
 			.split(/\s+/);
+		const startTimeTicks = Number(stat[19]);
+		const cpuTicks = Number(stat[11]) + Number(stat[12]);
+		if (
+			!Number.isSafeInteger(startTimeTicks) ||
+			startTimeTicks < 0 ||
+			!Number.isSafeInteger(cpuTicks) ||
+			cpuTicks < 0
+		)
+			return undefined;
+		return { pid, startTimeTicks, cpuTicks };
+	} catch {
+		return undefined;
+	}
+}
+
+export function processCpuDeltaMs(
+	before: ProcessCpuSample | undefined,
+	after: ProcessCpuSample | undefined,
+	ticksPerSecond: number,
+): number | undefined {
+	if (
+		before === undefined ||
+		after === undefined ||
+		before.pid !== after.pid ||
+		before.startTimeTicks !== after.startTimeTicks ||
+		after.cpuTicks < before.cpuTicks ||
+		!Number.isFinite(ticksPerSecond) ||
+		ticksPerSecond <= 0
+	)
+		return undefined;
+	return ((after.cpuTicks - before.cpuTicks) * 1000) / ticksPerSecond;
+}
+
+function clockTicksPerSecond(): number | undefined {
+	if (process.platform !== "linux") return undefined;
+	const result = spawnSync("getconf", ["CLK_TCK"], {
+		encoding: "utf8",
+		env: cleanTestEnvironment(),
+	});
+	const ticks = Number(result.stdout?.trim());
+	return result.status === 0 && Number.isFinite(ticks) && ticks > 0 ? ticks : undefined;
+}
+
+function usage(
+	pid: number | undefined,
+): { cpuMs: number; peakRssBytes: number; measurementScope: string } | undefined {
+	if (pid === undefined || process.platform !== "linux") return undefined;
+	try {
+		const cpu = processCpuSample(pid);
 		const status = readFileSync(`/proc/${pid}/status`, "utf8");
 		const hwm = Number(status.match(/^VmHWM:\s+(\d+) kB/m)?.[1]);
-		const ticks = Number(
-			spawnSync("getconf", ["CLK_TCK"], {
-				encoding: "utf8",
-				env: cleanTestEnvironment(),
-			}).stdout.trim(),
-		);
-		const cpuMs = ((Number(stat[11]) + Number(stat[12])) * 1000) / ticks;
-		if (
-			!Number.isFinite(ticks) ||
-			ticks <= 0 ||
-			!Number.isFinite(hwm) ||
-			hwm <= 0 ||
-			!Number.isFinite(cpuMs) ||
-			cpuMs < 0
-		)
+		const ticks = clockTicksPerSecond();
+		const cpuMs =
+			cpu === undefined || ticks === undefined ? NaN : (cpu.cpuTicks * 1000) / ticks;
+		if (!Number.isFinite(hwm) || hwm <= 0 || !Number.isFinite(cpuMs) || cpuMs < 0)
 			return undefined;
 		return {
 			cpuMs,
@@ -556,6 +610,9 @@ export async function runHttpSnapshot(
 							]
 						: planExpressHttpWorkload(seconds);
 				const entries: Record<string, unknown> = {};
+				const ticksPerSecond = clockTicksPerSecond();
+				if (process.platform === "linux" && ticksPerSecond === undefined)
+					throw new Error("HTTP process CPU clock resolution is unavailable");
 				for (const workload of workloads) {
 					const headers = workload.headers?.map((value): [string, string] => {
 						const separator = value.indexOf(":");
@@ -583,8 +640,9 @@ export async function runHttpSnapshot(
 						`${workload.paths.map((value) => `http://127.0.0.1:${nodePort}${value}`).join("\n")}\n`,
 					);
 					const extra = workloadArgs(workload);
-					const malSamples: Array<OhaMetrics> = [];
-					const nodeSamples: Array<OhaMetrics> = [];
+					const malSamples: Array<CheckedOhaMetrics> = [];
+					const nodeSamples: Array<CheckedOhaMetrics> = [];
+					let malWorkloadCpuMs: number | undefined;
 					for (const [index, target] of [paths, nodePaths].entries()) {
 						const sample = oha(
 							target,
@@ -594,9 +652,14 @@ export async function runHttpSnapshot(
 							`${kind}-${workload.name}-${index}`,
 							deadline,
 							["--urls-from-file", ...extra],
+							index === 0 && process.platform === "linux"
+								? { pid: mal.child.pid, ticksPerSecond: ticksPerSecond! }
+								: undefined,
 						);
-						if (index === 0) malSamples.push(sample);
-						else nodeSamples.push(sample);
+						if (index === 0) {
+							malSamples.push(sample);
+							malWorkloadCpuMs = sample.processCpuMs;
+						} else nodeSamples.push(sample);
 					}
 					const after = await assertResponses(malPort, nodePort, requests, deadline);
 					if (before.digest !== after.digest)
@@ -604,10 +667,35 @@ export async function runHttpSnapshot(
 					oracles[`${kind}.${workload.name}`] = before.digest;
 					const malRps = median(malSamples.map((sample) => sample.rps));
 					const nodeRps = median(nodeSamples.map((sample) => sample.rps));
+					const malCompletedRps = median(malSamples.map((sample) => sample.completedRps));
+					const nodeCompletedRps = median(
+						nodeSamples.map((sample) => sample.completedRps),
+					);
+					const malCompletedRequests = malSamples.reduce(
+						(sum, sample) => sum + sample.completedRequests,
+						0,
+					);
 					entries[workload.name] = {
 						malRps,
 						nodeRps,
 						ratio: malRps / nodeRps,
+						malCompletedRps,
+						nodeCompletedRps,
+						completedRatio: malCompletedRps / nodeCompletedRps,
+						malCompletedRequests,
+						malAbortedRequests: malSamples.reduce(
+							(sum, sample) => sum + sample.abortedRequests,
+							0,
+						),
+						...(malWorkloadCpuMs === undefined
+							? {}
+							: {
+									malWorkloadCpuMs,
+									malCpuPerCompletedRequestMs: malWorkloadCpuMs / malCompletedRequests,
+									cpuClockTicksPerSecond: ticksPerSecond,
+									cpuMeasurementScope:
+										"server process across oha invocation, including client startup, deadline tail, and aborted-request work",
+								}),
 						malP99Ms: median(malSamples.map((sample) => sample.p99Ms)),
 						nodeP99Ms: median(nodeSamples.map((sample) => sample.p99Ms)),
 					};

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { processCpuDeltaMs } from "../scripts/bench-http-ordinary.ts";
 import {
 	formatOhaDuration,
 	parseCheckedOhaOutput,
@@ -63,17 +64,23 @@ describe("HTTP benchmark support", () => {
 			errorDistribution: Record<string, number> = {},
 		) =>
 			JSON.stringify({
-				summary: { requestsPerSec: 10 },
+				summary: { requestsPerSec: 78, total: 2 },
 				latencyPercentiles: { p99: 0.01 },
 				statusCodeDistribution,
 				errorDistribution,
 			});
 		expect(
 			parseCheckedOhaOutput(
-				output({ 200: 100, 302: 3, 404: 2, 500: 1 }),
+				output({ 200: 100, 302: 3, 404: 2, 500: 1 }, { "aborted due to deadline": 50 }),
 				[200, 302, 404, 500],
 			),
-		).toEqual({ rps: 10, p99Ms: 10 });
+		).toEqual({
+			rps: 78,
+			p99Ms: 10,
+			completedRequests: 106,
+			completedRps: 53,
+			abortedRequests: 50,
+		});
 		expect(() => parseCheckedOhaOutput(output({ 200: 10, 503: 1 }), [200])).toThrow(
 			/unexpected statuses/,
 		);
@@ -86,5 +93,25 @@ describe("HTTP benchmark support", () => {
 		expect(() =>
 			parseCheckedOhaOutput(output({ 200: 10 }, { "connection refused": 1 }), [200]),
 		).toThrow(/transport errors/);
+		expect(() =>
+			parseCheckedOhaOutput(
+				JSON.stringify({
+					summary: { requestsPerSec: 10 },
+					latencyPercentiles: { p99: 0.01 },
+					statusCodeDistribution: { 200: 10 },
+					errorDistribution: {},
+				}),
+				[200],
+			),
+		).toThrow(/elapsed duration/);
+	});
+
+	it("rejects a CPU delta from a replaced or regressed server process", () => {
+		const before = { pid: 42, startTimeTicks: 100, cpuTicks: 500 };
+		expect(processCpuDeltaMs(before, { ...before, cpuTicks: 550 }, 100)).toBe(500);
+		expect(
+			processCpuDeltaMs(before, { ...before, startTimeTicks: 101 }, 100),
+		).toBeUndefined();
+		expect(processCpuDeltaMs(before, { ...before, cpuTicks: 499 }, 100)).toBeUndefined();
 	});
 });

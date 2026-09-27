@@ -42,6 +42,9 @@ test("paired comparison gives time and throughput ratios opposite directions", (
 	expect(
 		classifyMetricSamples("http.express.workloads.routes.ratio", higher)?.status,
 	).toBe("improvement");
+	expect(
+		classifyMetricSamples("http.express.workloads.routes.completedRatio", higher)?.status,
+	).toBe("improvement");
 });
 
 test("paired comparison retains confident sub-percent time and throughput gains", () => {
@@ -58,6 +61,9 @@ test("paired comparison retains confident sub-percent time and throughput gains"
 			?.status,
 	).toBe("improvement");
 	expect(classifyMetricSamples("http.bare.malRps", throughput)?.status).toBe(
+		"improvement",
+	);
+	expect(classifyMetricSamples("http.bare.malCompletedRps", throughput)?.status).toBe(
 		"improvement",
 	);
 });
