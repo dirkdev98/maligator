@@ -141,6 +141,8 @@ typedef struct MalHeap {
     usize sweep_block;
     MalGcLarge *sweep_large;
     usize sweep_live_bytes;
+    /** Separates cursor accounting from the independently wrapping identity epoch. */
+    u64 sweep_epoch;
     bool sweeping;
 #if MAL_REALMS
     /** Cached back-pointer to the VM's current realm, kept in lockstep with

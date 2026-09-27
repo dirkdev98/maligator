@@ -267,8 +267,10 @@ static bool incremental_major_keeps_allocations_after_a_block_was_swept(MalHeap 
     mal_gc_black_alloc = true;
     CHECK(!mal_heap_sweep_step(heap, finalize_cell, 1));
     TestCell *after_visit = new_cell(heap, 512);
+    TestCell *after_visit_bump = new_cell(heap, 512);
     TestCell *before_visit = new_cell(heap, 1024);
     CHECK(mal_heap_mark_is_current(after_visit->header.mark, heap->mark_color));
+    CHECK(mal_heap_mark_is_current(after_visit_bump->header.mark, heap->mark_color));
     CHECK(mal_heap_mark_is_current(before_visit->header.mark, heap->mark_color));
 
     // Exceed the current chunk so some BLACK allocations sit ahead of its cursor.
@@ -276,21 +278,105 @@ static bool incremental_major_keeps_allocations_after_a_block_was_swept(MalHeap 
     for (usize i = 0; i < countof(new_chunk_cells); i++) {
         new_chunk_cells[i] = new_cell(heap, 8192);
     }
+    CHECK(heap->chunk_count >= 2);
     CHECK(mal_heap_sweep_step(heap, finalize_cell, (usize) -1));
     mal_gc_black_alloc = false;
 
-    // The first block's new BLACK cell was allocated after its major-sweep visit.
-    mal_heap_sweep_minor(heap, finalize_cell);
-    usize live_bytes = 2 * mal_heap_allocation_charge(512) + 2 * mal_heap_allocation_charge(1024)
+    usize live_bytes = 3 * mal_heap_allocation_charge(512) + 2 * mal_heap_allocation_charge(1024)
         + countof(new_chunk_cells) * mal_heap_allocation_charge(8192);
     CHECK(heap->live_bytes == live_bytes);
+    mal_heap_sweep_minor(heap, finalize_cell);
+    CHECK(heap->live_bytes == live_bytes);
     CHECK(live_cell(first, 1) && live_cell(second, 3));
-    CHECK(live_cell(after_visit, 5) && live_cell(before_visit, 6));
+    CHECK(live_cell(after_visit, 5) && live_cell(after_visit_bump, 6) && live_cell(before_visit, 7));
     for (usize i = 0; i < countof(new_chunk_cells); i++) {
-        CHECK(live_cell(new_chunk_cells[i], 7 + (u32) i));
+        CHECK(live_cell(new_chunk_cells[i], 8 + (u32) i));
     }
     mal_heap_sweep_minor(heap, finalize_cell);
     CHECK(heap->live_bytes == live_bytes && g_finalized[2] == 1 && g_finalized[4] == 1);
+    return true;
+}
+
+static bool incremental_major_accounts_a_new_block_in_a_completed_chunk(MalHeap *heap) {
+    TestCell *old = new_cell(heap, 512);
+    TestCell *large = new_cell(heap, 10000);
+    mal_heap_begin_major(heap);
+    mark_live(old);
+    mark_live(large);
+    mal_heap_sweep_begin(heap);
+    mal_gc_black_alloc = true;
+    CHECK(!mal_heap_sweep_step(heap, finalize_cell, 1));
+    TestCell *newborn = new_cell(heap, 1024);
+    CHECK(heap->chunk_count == 1);
+    CHECK(mal_heap_sweep_step(heap, finalize_cell, (usize) -1));
+    mal_gc_black_alloc = false;
+    usize live_bytes = mal_heap_allocation_charge(512) + mal_heap_allocation_charge(1024) + 10000;
+    CHECK(heap->live_bytes == live_bytes);
+    mal_heap_sweep_minor(heap, finalize_cell);
+    mal_heap_sweep_minor(heap, finalize_cell);
+    CHECK(heap->live_bytes == live_bytes);
+    CHECK(live_cell(old, 1) && live_cell(large, 2) && live_cell(newborn, 3));
+    return true;
+}
+
+static bool incremental_major_accounts_recycled_raw_blocks(MalHeap *heap) {
+    void *raw_behind = mal_heap_alloc_raw(heap, 2048);
+    TestCell *old_behind = new_cell(heap, 512);
+    void *raw_ahead = mal_heap_alloc_raw(heap, 4096);
+    TestCell *old_ahead = new_cell(heap, 1024);
+    mal_heap_begin_major(heap);
+    mark_live(old_behind);
+    mark_live(old_ahead);
+    mal_heap_sweep_begin(heap);
+    mal_gc_black_alloc = true;
+    CHECK(!mal_heap_sweep_step(heap, finalize_cell, 1));
+    gc_free_raw(heap, raw_behind);
+    TestCell *reused_behind = new_cell(heap, 3072);
+    gc_free_raw(heap, raw_ahead);
+    TestCell *reused_ahead = new_cell(heap, 7168);
+    CHECK(mal_heap_sweep_step(heap, finalize_cell, (usize) -1));
+    mal_gc_black_alloc = false;
+    usize live_bytes = mal_heap_allocation_charge(512) + mal_heap_allocation_charge(1024)
+        + mal_heap_allocation_charge(3072) + mal_heap_allocation_charge(7168);
+    CHECK(heap->live_bytes == live_bytes);
+    mal_heap_sweep_minor(heap, finalize_cell);
+    mal_heap_sweep_minor(heap, finalize_cell);
+    CHECK(heap->live_bytes == live_bytes);
+    CHECK(live_cell(old_behind, 1) && live_cell(old_ahead, 2));
+    CHECK(live_cell(reused_behind, 3) && live_cell(reused_ahead, 4));
+    return true;
+}
+
+static bool incremental_major_resets_sweep_epochs_on_wrap(MalHeap *heap) {
+    TestCell *first = new_cell(heap, 512);
+    TestCell *second = new_cell(heap, 1024);
+    mal_heap_begin_major(heap);
+    mark_live(first);
+    mark_live(second);
+    mal_heap_sweep_begin(heap);
+    CHECK(mal_heap_sweep_step(heap, finalize_cell, (usize) -1));
+
+    heap->sweep_epoch = UINT64_MAX;
+    mal_heap_begin_major(heap);
+    mark_live(first);
+    mark_live(second);
+    mal_heap_sweep_begin(heap);
+    CHECK(heap->sweep_epoch == 1);
+    mal_gc_black_alloc = true;
+    CHECK(!mal_heap_sweep_step(heap, finalize_cell, 1));
+    TestCell *newborn = new_cell(heap, 512);
+    TestCell *before_cursor = new_cell(heap, 1024);
+    TestCell *fresh_block = new_cell(heap, 2048);
+    CHECK(mal_heap_sweep_step(heap, finalize_cell, (usize) -1));
+    mal_gc_black_alloc = false;
+    usize live_bytes = 2 * mal_heap_allocation_charge(512) + 2 * mal_heap_allocation_charge(1024)
+        + mal_heap_allocation_charge(2048);
+    CHECK(heap->live_bytes == live_bytes);
+    mal_heap_sweep_minor(heap, finalize_cell);
+    mal_heap_sweep_minor(heap, finalize_cell);
+    CHECK(heap->live_bytes == live_bytes);
+    CHECK(live_cell(first, 1) && live_cell(second, 2));
+    CHECK(live_cell(newborn, 3) && live_cell(before_cursor, 4) && live_cell(fresh_block, 5));
     return true;
 }
 
@@ -424,6 +510,9 @@ int main(void) {
         minor_reenrolls_a_reclaimed_cell_away_from_the_bump_block,
         major_resets_minor_tracking_before_block_reassignment,
         incremental_major_keeps_allocations_after_a_block_was_swept,
+        incremental_major_accounts_a_new_block_in_a_completed_chunk,
+        incremental_major_accounts_recycled_raw_blocks,
+        incremental_major_resets_sweep_epochs_on_wrap,
         large_cells_follow_major_and_minor_lifetime,
         finalizer_raw_storage_reuses_partial_slots_and_blocks,
         incremental_major_accounts_new_large_cells,

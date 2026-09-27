@@ -77,6 +77,7 @@ struct MalGcBlock {
     struct MalGcBlock *next_free;
     struct MalGcBlock *prev_free;
     struct MalGcBlock *next_young;
+    u64 sweep_epoch;
 };
 
 struct MalGcChunk {
@@ -86,6 +87,7 @@ struct MalGcChunk {
     usize next_block;    /* index of the next unused block in this chunk */
     usize block_count;   /* CHUNK_SIZE / BLOCK_SIZE */
     struct MalGcChunk *next;
+    u64 sweep_epoch;
 };
 
 struct MalGcLarge {
@@ -244,6 +246,7 @@ static MalGcChunk *mal_gc_new_chunk(MalHeap *heap) {
     chunk->mmap_size = mmap_size;
     chunk->block_count = MAL_GC_CHUNK_SIZE / MAL_GC_BLOCK_SIZE;
     chunk->next_block = 0;
+    chunk->sweep_epoch = heap->sweeping ? heap->sweep_epoch : 0;
     if (!mal_gc_index_chunk(heap, chunk)) {
         free(chunk);
         munmap(mmap_base, mmap_size);
@@ -260,9 +263,11 @@ static MalGcBlock *mal_gc_new_block(MalHeap *heap, u16 size_class, u8 kind) {
     // madvised pages refault on first write.
     MalGcBlock *recycled = heap->free_blocks;
     u8 *block_base;
+    u64 sweep_epoch;
     if (recycled != nullptr) {
         heap->free_blocks = recycled->next_free;
         block_base = (u8 *) recycled;
+        sweep_epoch = recycled->sweep_epoch;
     } else {
         MalGcChunk *chunk = heap->chunks;
         if (chunk == nullptr || chunk->next_block >= chunk->block_count) {
@@ -271,6 +276,7 @@ static MalGcBlock *mal_gc_new_block(MalHeap *heap, u16 size_class, u8 kind) {
         }
         block_base = (u8 *) chunk->base + chunk->next_block * MAL_GC_BLOCK_SIZE;
         chunk->next_block++;
+        sweep_epoch = chunk->sweep_epoch;
     }
 
     MalGcBlock *block = (MalGcBlock *) block_base;
@@ -282,6 +288,7 @@ static MalGcBlock *mal_gc_new_block(MalHeap *heap, u16 size_class, u8 kind) {
     block->size_class = size_class;
     block->cell_size = g_class_cell_size[size_class];
     block->live = 0;
+    block->sweep_epoch = sweep_epoch;
     block->free_list = nullptr;
     block->next_free = nullptr;
     block->prev_free = nullptr;
@@ -355,10 +362,14 @@ static bool mal_gc_sweep_large(MalHeap *heap, MalGcLarge *rec, MalHeapFinalizeFn
     return false;
 }
 
-/* Count cells over-tenured while an incremental major is in flight. */
-static inline void mal_gc_count_black(u8 kind, usize size) {
+/* A black cell behind the sweep cursor needs immediate survivor accounting. */
+static inline void mal_gc_count_black(MalHeap *heap, MalGcBlock *block, u8 kind, usize size) {
     if (kind == MAL_GC_BLOCK_CELL && mal_gc_black_alloc) {
         mal_gc_black_alloc_bytes += size;
+        if (block != nullptr && heap->sweeping && block->sweep_epoch == heap->sweep_epoch) {
+            heap->sweep_live_bytes += size;
+            block->live++;
+        }
     }
 }
 
@@ -389,7 +400,7 @@ static void *mal_gc_alloc_large(MalHeap *heap, usize size, u8 kind) {
         }
     }
     heap->bytes_allocated += size;
-    mal_gc_count_black(kind, size);
+    mal_gc_count_black(heap, nullptr, kind, size);
     mal_heap_maybe_trigger_gc(heap);
     return (u8 *) rec + offset;
 }
@@ -413,10 +424,10 @@ static void *mal_gc_alloc(MalHeap *heap, usize size, u8 kind) {
     if (kind == MAL_GC_BLOCK_CELL && heap->cell_free[size_class] != nullptr) {
         void *cell = heap->cell_free[size_class];
         heap->cell_free[size_class] = *(void **) ((u8 *) cell + mal_gc_free_next_offset());
-        mal_gc_track_young_block(heap,
-            (MalGcBlock *) ((uptr) cell & ~(uptr) (MAL_GC_BLOCK_SIZE - 1)));
+        MalGcBlock *block = (MalGcBlock *) ((uptr) cell & ~(uptr) (MAL_GC_BLOCK_SIZE - 1));
+        mal_gc_track_young_block(heap, block);
         heap->bytes_allocated += g_class_cell_size[size_class];
-        mal_gc_count_black(kind, g_class_cell_size[size_class]);
+        mal_gc_count_black(heap, block, kind, g_class_cell_size[size_class]);
         mal_heap_maybe_trigger_gc(heap);
         return cell;
     }
@@ -463,7 +474,7 @@ static void *mal_gc_alloc(MalHeap *heap, usize size, u8 kind) {
         mal_gc_track_young_block(heap, block);
     }
     heap->bytes_allocated += block->cell_size;
-    mal_gc_count_black(kind, block->cell_size);
+    mal_gc_count_black(heap, block, kind, block->cell_size);
     mal_heap_maybe_trigger_gc(heap);
     return cell;
 }
@@ -510,6 +521,7 @@ void mal_heap_init(MalHeap *heap, usize capacity) {
     heap->sweep_block = 0;
     heap->sweep_large = nullptr;
     heap->sweep_live_bytes = 0;
+    heap->sweep_epoch = 0;
     heap->sweeping = false;
 #if MAL_REALMS
     // Set once the VM creates its initial realm (mal_realm_switch). Null until then,
@@ -962,6 +974,17 @@ void mal_heap_sweep_begin(MalHeap *heap) {
     // the gap the allocator carves fresh blocks (whose cells are black-allocated).
     heap->epoch++;
     mal_perf_collection_epoch(heap->epoch);
+    if (++heap->sweep_epoch == 0) {
+        for (MalGcChunk *chunk = heap->chunks; chunk != nullptr; chunk = chunk->next) {
+            chunk->sweep_epoch = 0;
+            for (usize index = 0; index < chunk->next_block; index++) {
+                MalGcBlock *block =
+                    (MalGcBlock *) ((u8 *) chunk->base + index * MAL_GC_BLOCK_SIZE);
+                block->sweep_epoch = 0;
+            }
+        }
+        heap->sweep_epoch = 1;
+    }
     memset(heap->cell_free, 0, sizeof(heap->cell_free));
     // Allocations during the incremental sweep re-enroll their blocks. Keep that
     // new list at completion, including blocks already visited by the cursor.
@@ -996,11 +1019,14 @@ bool mal_heap_sweep_step(MalHeap *heap, MalHeapFinalizeFn finalize, usize max_bl
                 (MalGcBlock *) ((u8 *) chunk->base + heap->sweep_block * MAL_GC_BLOCK_SIZE);
             heap->sweep_block++;
             if (block->kind != MAL_GC_BLOCK_CELL || block->recycled) {
+                block->sweep_epoch = heap->sweep_epoch;
                 continue; // RAW / already-recycled: no work, no budget
             }
             mal_heap_sweep_block(heap, block, finalize, data_offset, free_offset, &heap->sweep_live_bytes);
+            block->sweep_epoch = heap->sweep_epoch;
             swept++;
         }
+        chunk->sweep_epoch = heap->sweep_epoch;
         heap->sweep_chunk = chunk->next;
         heap->sweep_block = 0;
     }
