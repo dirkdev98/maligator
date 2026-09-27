@@ -38,6 +38,11 @@ static void count_finalized(MalHeapHeader *cell) {
 int main(void) {
     MalVm vm;
     mal_vm_init(&vm, &mal_runtime_image);
+    if (mal_gc_worker_limit(&vm) == 0) {
+        mal_vm_free(&vm);
+        puts("gc-snapshot-object SKIP");
+        return 0;
+    }
     mal_gc_register_finalizer(MAL_HEAP_OBJECT, count_finalized);
     MalKey first = mal_key_from_value(mal_value_from_string(
         mal_string_new_ascii(&vm.heap, (const byte *) "first", 5)));

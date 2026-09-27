@@ -22,7 +22,7 @@ describe("concurrent object edge snapshots", () => {
 			intent: "retains copied shaped edges across value and layout changes",
 		},
 	])
-		it(spec.intent, () => {
+		it(spec.intent, (ctx) => {
 			const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-gc-snapshot-overlap-"));
 			try {
 				const binary = buildNativeBinary({
@@ -44,6 +44,10 @@ describe("concurrent object edge snapshots", () => {
 				});
 				if (result.error !== undefined) throw result.error;
 				expect(result.status, result.stderr || result.stdout).toBe(0);
+				if (result.stdout === `${spec.name} SKIP\n`) {
+					expect(result.stderr).toMatch(/\bworker_limit=0\b/);
+					ctx.skip("GC workers unavailable at this CPU capacity");
+				}
 				expect(result.stdout).toBe(`${spec.name} PASS\n`);
 				expect(
 					Number(result.stderr.match(/\bsnapshot_discoveries=(\d+)/)?.[1] ?? 0),

@@ -39,8 +39,10 @@ describe("collector lifecycle", () => {
 		if (result.error !== undefined) throw result.error;
 		expect(result.status, result.stderr || result.stdout).toBe(0);
 		expect(result.stdout).toBe("gc-lifecycle PASS\n");
-		expect(
-			Number(result.stderr.match(/\bworker_traces=(\d+)/)?.[1] ?? 0),
-		).toBeGreaterThan(0);
+		if (!/\bworker_limit=0\b/.test(result.stderr)) {
+			expect(
+				Number(result.stderr.match(/\bworker_traces=(\d+)/)?.[1] ?? 0),
+			).toBeGreaterThan(0);
+		}
 	});
 });

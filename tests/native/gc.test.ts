@@ -144,7 +144,7 @@ describe("targeted GC unit tests", () => {
 			}
 
 			if (spec.tag === "gc-worker-batches") {
-				it("traces reachable cells on native GC workers", () => {
+				it("traces reachable cells on native GC workers", (ctx) => {
 					const invocation = resolveHarnessExecutionInvocation(compiled);
 					const result = spawnSync(invocation.executable, invocation.args, {
 						env: { ...process.env, ...HOST_GC, MAL_GC_STATS: "1", MAL_GC_VERIFY: "1" },
@@ -154,6 +154,9 @@ describe("targeted GC unit tests", () => {
 					if (result.error !== undefined) throw result.error;
 					expect(result.status, result.stderr || result.stdout).toBe(0);
 					assertPassLine(result.stdout, spec.tag);
+					if (/\bworker_limit=0\b/.test(result.stderr)) {
+						ctx.skip("GC workers unavailable at this CPU capacity");
+					}
 					expect(
 						Number(result.stderr.match(/\bworker_traces=(\d+)/)?.[1] ?? 0),
 					).toBeGreaterThan(0);
@@ -161,7 +164,7 @@ describe("targeted GC unit tests", () => {
 			}
 
 			if (spec.tag === "gc-concurrent-workers") {
-				it("dispatches immutable cells to background workers", () => {
+				it("dispatches immutable cells to background workers", (ctx) => {
 					const invocation = resolveHarnessExecutionInvocation(compiled);
 					const result = spawnSync(invocation.executable, invocation.args, {
 						env: { ...process.env, ...HOST_GC, ...spec.env, MAL_GC_STATS: "1" },
@@ -171,6 +174,9 @@ describe("targeted GC unit tests", () => {
 					if (result.error !== undefined) throw result.error;
 					expect(result.status, result.stderr || result.stdout).toBe(0);
 					assertPassLine(result.stdout, spec.tag);
+					if (/\bworker_limit=0\b/.test(result.stderr)) {
+						ctx.skip("GC workers unavailable at this CPU capacity");
+					}
 					expect(
 						Number(result.stderr.match(/\bconcurrent_batches=(\d+)/)?.[1] ?? 0),
 					).toBeGreaterThan(0);

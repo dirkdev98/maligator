@@ -14,6 +14,11 @@ extern void (*mal_gc_test_trace_snapshot_hook)(MalHeapHeader *cell);
 
 typedef struct MalGcState MalGcState;
 
+#if !defined(__wasi__)
+/* Worker capacity reflects CPU availability at VM initialization. */
+usize mal_gc_worker_limit(MalVm *vm);
+#endif
+
 /* Set during an incremental major mark cycle (init-mark → remark). */
 extern bool mal_gc_marking_active;
 /* Fresh cells remain live while an incremental sweep is in flight. */
@@ -104,15 +109,16 @@ void mal_gc_configure_heap(MalVm *vm);
 /* Stop collection before VM teardown releases roots and program tables. */
 void mal_gc_begin_teardown(MalVm *vm);
 
-/* Free the per-isolate collector state (vm->gc) and its growable buffers. Call
- * once at VM teardown. */
+/* Free the per-isolate collector state (vm->gc) and its growable buffers after
+ * mal_gc_begin_teardown has joined workers. Call once at VM teardown. */
 void mal_gc_state_free(MalVm *vm);
 
 /* Free every cell's owned side allocations regardless of liveness, for a clean
  * VM teardown (no shutdown leak of overflow tables, Map entries, ArrayBuffer
  * data, Rust handles, ...). Call once immediately before mal_heap_free; the
  * collector must not run afterwards. Used by mal_vm_free and the leak-audit
- * exit path (MAL_GC_AT_EXIT). */
+ * exit path (MAL_GC_AT_EXIT). Call mal_gc_begin_teardown first so no worker can
+ * still read the VM while live cells are finalized. */
 void mal_gc_finalize_all(MalVm *vm);
 
 /*

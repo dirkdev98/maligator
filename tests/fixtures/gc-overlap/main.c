@@ -42,6 +42,11 @@ static void count_finalized(MalHeapHeader *cell) {
 int main(void) {
     MalVm vm;
     mal_vm_init(&vm, &mal_runtime_image);
+    if (mal_gc_worker_limit(&vm) == 0) {
+        mal_vm_free(&vm);
+        puts("gc-overlap SKIP");
+        return 0;
+    }
     mal_gc_test_trace_env_hook = pause_env_trace;
     mal_gc_register_finalizer(MAL_HEAP_OBJECT, count_finalized);
 

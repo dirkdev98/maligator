@@ -1,4 +1,6 @@
 #include <stdio.h>
+#include <sched.h>
+#include <time.h>
 
 #include "gc.h"
 #include "vm.h"
@@ -20,8 +22,10 @@ int main(void) {
         mal_gc_safepoint(&vm);
         if (!mal_gc_marking_active) return 2;
         if (i == 1) {
-            for (int steps = 0; steps < 1000 && mal_gc_marking_active; steps++) {
+            time_t deadline = time(nullptr) + 30;
+            while (mal_gc_marking_active && time(nullptr) < deadline) {
                 mal_gc_safepoint(&vm);
+                sched_yield();
             }
             if (mal_gc_marking_active || !vm.heap.sweeping) return 4;
         }

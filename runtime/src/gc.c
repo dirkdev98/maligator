@@ -6,6 +6,10 @@
 #if !defined(__wasi__)
 #include <pthread.h>
 #include <time.h>
+#include <unistd.h>
+#if defined(__linux__)
+#include <sched.h>
+#endif
 #endif
 
 #include "./array_buffer_object.h"
@@ -127,6 +131,47 @@ typedef enum MalGcPhase {
 
 #if !defined(__wasi__)
 #define MAL_GC_WORKER_COUNT 2
+
+static usize mal_gc_native_worker_limit(void) {
+    long online = sysconf(_SC_NPROCESSORS_ONLN);
+    usize cpus = online > 0 ? (usize) online : 1;
+#if defined(__linux__)
+    cpu_set_t affinity;
+    if (sched_getaffinity(0, sizeof(affinity), &affinity) == 0) {
+        usize allowed = (usize) CPU_COUNT(&affinity);
+        if (allowed > 0 && allowed < cpus) cpus = allowed;
+    }
+    FILE *quota_file = fopen("/sys/fs/cgroup/cpu.max", "r");
+    if (quota_file != nullptr) {
+        unsigned long long quota;
+        unsigned long long period;
+        if (fscanf(quota_file, "%llu %llu", &quota, &period) == 2 && period > 0) {
+            usize quota_cpus = (usize) (quota / period);
+            if (quota_cpus == 0) quota_cpus = 1;
+            if (quota_cpus < cpus) cpus = quota_cpus;
+        }
+        fclose(quota_file);
+    } else {
+        FILE *legacy_quota = fopen("/sys/fs/cgroup/cpu/cpu.cfs_quota_us", "r");
+        FILE *legacy_period = fopen("/sys/fs/cgroup/cpu/cpu.cfs_period_us", "r");
+        if (legacy_quota != nullptr && legacy_period != nullptr) {
+            long long quota;
+            long long period;
+            if (fscanf(legacy_quota, "%lld", &quota) == 1 &&
+                fscanf(legacy_period, "%lld", &period) == 1 && quota > 0 && period > 0) {
+                usize quota_cpus = (usize) (quota / period);
+                if (quota_cpus == 0) quota_cpus = 1;
+                if (quota_cpus < cpus) cpus = quota_cpus;
+            }
+        }
+        if (legacy_quota != nullptr) fclose(legacy_quota);
+        if (legacy_period != nullptr) fclose(legacy_period);
+    }
+#endif
+    usize spare = cpus > 1 ? cpus - 1 : 0;
+    return spare < MAL_GC_WORKER_COUNT ? spare : MAL_GC_WORKER_COUNT;
+}
+
 typedef struct MalGcWorker {
     MalGcState *gc;
     pthread_t thread;
@@ -162,6 +207,7 @@ struct MalGcState {
     pthread_cond_t worker_ready;
     pthread_cond_t worker_done;
     MalGcWorker workers[MAL_GC_WORKER_COUNT];
+    usize worker_limit;
     usize workers_created;
     usize workers_pending;
     usize worker_batch_count;
@@ -398,6 +444,10 @@ static void mal_gc_print_stats_now(void) {
     usize allocated_bytes = g_gc_vm != nullptr && g_gc_vm->gc == g
         ? g_gc_vm->heap.bytes_allocated
         : g->allocated_bytes;
+    usize worker_limit = 0;
+#if !defined(__wasi__)
+    worker_limit = g->worker_limit;
+#endif
     fprintf(stderr,
             "[gc-stats] collections=%llu minor=%llu major=%llu total_ms=%.3f "
             "max_pause_ms=%.3f peak_live_bytes=%llu allocated_bytes=%llu "
@@ -419,7 +469,8 @@ static void mal_gc_print_stats_now(void) {
             "init_mark_ms=%.3f remark_ms=%.3f max_mark_step_ms=%.3f max_sweep_step_ms=%.3f "
             "worker_traces=%llu concurrent_batches=%llu concurrent_traces=%llu "
             "concurrent_env_traces=%llu concurrent_discoveries=%llu "
-            "worker_cpu_ms=%.3f concurrent_worker_cpu_ms=%.3f mutator_assist_traces=%llu "
+            "worker_limit=%llu worker_cpu_ms=%.3f concurrent_worker_cpu_ms=%.3f "
+            "mutator_assist_traces=%llu "
             "snapshot_traces=%llu snapshot_values=%llu snapshot_heap_values=%llu "
             "snapshot_discoveries=%llu snapshot_only_batches=%llu "
             "snapshot_copy_ms=%.3f remark_join_ms=%.3f",
@@ -432,6 +483,7 @@ static void mal_gc_print_stats_now(void) {
             (unsigned long long) g->concurrent_traces,
             (unsigned long long) g->concurrent_env_traces,
             (unsigned long long) g->concurrent_discoveries,
+            (unsigned long long) worker_limit,
             (double) g->worker_cpu_ns / 1.0e6,
             (double) g->concurrent_worker_cpu_ns / 1.0e6,
             (unsigned long long) g->mutator_assist_traces,
@@ -510,6 +562,12 @@ u64 mal_gc_collection_count(MalVm *vm) {
     return vm->gc == nullptr ? 0 : vm->gc->collections;
 }
 
+#if !defined(__wasi__)
+usize mal_gc_worker_limit(MalVm *vm) {
+    return vm->gc == nullptr ? 0 : vm->gc->worker_limit;
+}
+#endif
+
 /* Auto-collection heap-growth policy: the first collection fires once this many
  * bytes have been allocated; after each one the next trigger is set past the
  * surviving set by at least this floor (so a small live set cannot thrash). */
@@ -527,6 +585,9 @@ void mal_gc_init(MalVm *vm) {
     MalGcState *g = calloc(1, sizeof(MalGcState));
     vm->gc = g;
     g->vm = vm;
+#if !defined(__wasi__)
+    g->worker_limit = mal_gc_native_worker_limit();
+#endif
     g_gc = g;
     g_gc_vm = vm;
     g_gc_stats_state = g;
@@ -1705,7 +1766,7 @@ static void *mal_gc_worker_main(void *argument) {
         pthread_mutex_unlock(&g->worker_mutex);
         struct timespec cpu_start;
         if (g->stats_enabled && clock_gettime(CLOCK_THREAD_CPUTIME_ID, &cpu_start) != 0) abort();
-        for (usize i = worker->index; i < count; i += MAL_GC_WORKER_COUNT) {
+        for (usize i = worker->index; i < count; i += g->workers_created) {
             if (g->worker_batch_concurrent && g->batch_edge_counts[i] != SIZE_MAX) {
                 if (mal_gc_test_trace_snapshot_hook != nullptr) {
                     mal_gc_test_trace_snapshot_hook(batch[i]);
@@ -1742,6 +1803,7 @@ static void *mal_gc_worker_main(void *argument) {
 
 static void mal_gc_workers_start(MalGcState *g) {
     if (g->worker_sync_initialized) return;
+    if (g->worker_limit == 0) abort();
     if (pthread_mutex_init(&g->worker_mutex, nullptr) != 0 ||
         pthread_cond_init(&g->worker_ready, nullptr) != 0 ||
         pthread_cond_init(&g->worker_done, nullptr) != 0) {
@@ -1761,7 +1823,7 @@ static void mal_gc_workers_start(MalGcState *g) {
         fprintf(stderr, "[gc] failed to mask signals during worker startup (%d)\n", mask_result);
         abort();
     }
-    for (usize i = 0; i < MAL_GC_WORKER_COUNT; ++i) {
+    for (usize i = 0; i < g->worker_limit; ++i) {
         MalGcWorker *worker = &g->workers[i];
         worker->gc = g;
         worker->index = i;
@@ -1802,6 +1864,7 @@ static void mal_gc_workers_stop(MalGcState *g) {
 
 static void mal_gc_workers_start_batch(MalGcState *g, usize count, bool concurrent) {
     mal_gc_workers_start(g);
+    if (g->workers_created == 0) abort();
     pthread_mutex_lock(&g->worker_mutex);
     if (g->worker_batch_active) abort();
     g->worker_batch_count = count;
@@ -1883,7 +1946,7 @@ static void mal_gc_trace_parked_batch(usize count) {
         }
     }
 #if !defined(__wasi__)
-    if (safe_count >= MAL_GC_PARALLEL_BATCH_MIN) {
+    if (g_gc->worker_limit > 0 && safe_count >= MAL_GC_PARALLEL_BATCH_MIN) {
         mal_gc_workers_trace_batch(g_gc, safe_count);
         return;
     }
@@ -1893,6 +1956,10 @@ static void mal_gc_trace_parked_batch(usize count) {
 
 #if !defined(__wasi__)
 static bool mal_gc_trace_concurrent_batch(usize limit, usize *worked) {
+    if (g_gc->worker_limit == 0) {
+        *worked = 0;
+        return false;
+    }
     usize count = g_gc->grey_count;
     if (count > limit) count = limit;
     if (count > MAL_GC_TRACE_BATCH_SIZE) count = MAL_GC_TRACE_BATCH_SIZE;
@@ -2227,8 +2294,8 @@ static void mal_gc_collect_sync(MalVm *vm, bool major) {
 // Incremental major collector.
 //
 // The mutator owns roots, weak processing, and sweep; eligible major-mark tasks
-// may run on native workers between safepoints. Minors stay stop-the-world inline
-// and do not start while a major cycle is in flight. Black allocation over-tenures
+// may run on native workers between safepoints. Minors park JavaScript, may trace
+// in parallel, and do not start while a major cycle is in flight. Black allocation over-tenures
 // mid-cycle allocations (accepted, counted). Roots are SATB-exempt: init-mark and
 // remark re-scan them, so both pauses are O(roots), never O(heap).
 // ===========================================================================
