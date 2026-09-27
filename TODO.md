@@ -764,7 +764,10 @@ remains a Maligator extension and does not count as global fetch conformance.
 - [ ] Snapshot/dispatch: compare copied heap bytes, discovery yield, preparation,
       worker CPU, merge, and remark wait on finished app-batch and HTTP binaries.
       The primitive filter remains provisional; shape-key omission and active-worker
-      sizing were reverted after application regressions.
+      sizing were reverted after application regressions. A ten-pair, 30-second HTTP
+      comparison found Express routes about 0.66% slower than `d149ffe6`, with
+      exact completed-response counts confirming the signal. Attribute per-route
+      CPU and GC work before changing collector dispatch.
 - [ ] Safe worker traversal: private draining was removed after zero app-batch
       drain traces and no measured benefit. Revisit only with a representative
       chain or shared-graph handoff benefit and combined CPU gain.
@@ -784,15 +787,18 @@ remains a Maligator extension and does not count as global fetch conformance.
       tracing or wider exact frame liveness.
 - [ ] Minor locality: black-allocation enrollment showed no application gain.
       The young-position bitmap reduced counted visits but slowed seven paired
-      app-batch runs, so it was reverted. Compare the new stats-only count of
-      young managed cells swept against inspected and prior old cells on actual
-      applications before testing young-block placement, allocation cost, and
-      fragmentation. Native finalizers are cleanup-only after the mark/weak
-      fixpoint; they may not allocate from the heap or publish graph edges.
+      app-batch runs, so it was reverted. A diagnostic app run inspected about
+      1.26 cells per young cell swept; the stats-only counters were removed after
+      recording their evidence. Test young-block placement only if a workload
+      shows material sweep time from fragmentation, and account for allocation
+      cost and fragmentation. Native finalizers are cleanup-only after the
+      mark/weak fixpoint; they may not allocate from the heap or publish graph edges.
 - [ ] Survivor age: measure post-promotion deaths and allocation during majors;
-      the stats-only provenance checkpoint classifies promoted charged bytes at
-      the next completed major. Define remembered-set persistence and weak-key
-      liveness before changing age.
+      one diagnostic app run reclaimed about 87% of promoted bytes at the next
+      completed major and allocated about 1.3 MB during major marking. This
+      establishes temporary promotion, not its exact death time or a benefit from
+      another young survival. The stats-only counters were removed after the run.
+      Define remembered-set persistence and weak-key liveness before changing age.
 - [ ] Dirty ranges: compare sparse and dense old-container writes with logical
       scanned slots and discoveries on applications. The 8,192-slot sparse array
       fixture shows one discovery from a full-owner scan; cards remain experimental.
@@ -805,7 +811,8 @@ remains a Maligator extension and does not count as global fetch conformance.
       point-in-time heap-usage counters before replacing global free lists or
       releasing chunks.
 - [ ] Re-run the native/Wasm/sanitizer gate and the matched five-family portfolio
-      on the retained combination; record per-candidate and combined decisions.
+      on the retained combination without the stats-only counters; record
+      per-candidate and combined decisions.
 
 # Triggered work
 
