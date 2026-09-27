@@ -742,13 +742,16 @@ remains a Maligator extension and does not count as global fetch conformance.
       Native property-region coverage checks more than 64 shadow slots; the
       generator-overlap fixture resumes and completes a suspended compiled frame
       while its only tracing worker is paused, then checks later reclamation.
-- [ ] Finish current-source Wasm parity, the normal gate, focused GC sanitizer and
-      standards runs, and an enabled-worker ThreadSanitizer lane. Inspect exact
-      coverage and any failures before accepting native concurrent marking.
-- [ ] Compare retained-heap latency, throughput, CPU, and memory against merged main
-      `40063120` with matched output and repeated representative controls.
-      Use those results to tune snapshot dispatch and decide whether mutator sweep
-      remains the best reclamation schedule.
+- [x] Verify the selected source with Wasm parity and embedding lifecycle,
+      the normal gate, focused GC sanitizer and standards runs, and an
+      enabled-worker ThreadSanitizer lane. The five-family portfolio also
+      completed with exact output parity.
+- [ ] Resolve the measured native performance trade-off against merged main
+      `40063120`: the five-family portfolio classifies a 1.15% aggregate cost
+      (95% interval 0.01–4.17% worse), with app-batch and HTTP regressions
+      alongside shorter GC pauses. Attribute remaining app-batch CPU cost on
+      finished binaries, then tune or explicitly accept the default. Keep
+      mutator-owned sweep unless a measured benefit justifies worker ownership.
 - [ ] Validate native worker capacity under constrained and nested CPU quotas; the
       current affinity and common cgroup-file checks cannot observe every mount or
       hidden ancestor limit. Keep the inline capacity fallback covered.
