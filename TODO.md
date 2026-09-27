@@ -765,8 +765,9 @@ remains a Maligator extension and does not count as global fetch conformance.
       worker CPU, merge, and remark wait on finished app-batch and HTTP binaries.
       The primitive filter remains provisional; shape-key omission and active-worker
       sizing were reverted after application regressions.
-- [ ] Safe worker traversal: demonstrate a chain or shared-graph handoff benefit
-      and recheck combined CPU before retaining bounded private draining.
+- [ ] Safe worker traversal: private draining was removed after zero app-batch
+      drain traces and no measured benefit. Revisit only with a representative
+      chain or shared-graph handoff benefit and combined CPU gain.
 - [ ] Barriers: decide dense-fill and scalar captured-store card specialization
       after representative HTTP and compiler comparisons; app-batch screens were
       mixed. Dense reverse removes redundant scans under whole-array tracing and
@@ -795,8 +796,10 @@ remains a Maligator extension and does not count as global fetch conformance.
 - [ ] Dirty ranges: compare sparse and dense old-container writes with logical
       scanned slots and discoveries on applications. The 8,192-slot sparse array
       fixture shows one discovery from a full-owner scan; cards remain experimental.
-- [ ] Ephemerons: finish sanitizer and application timing for the indexed weak
-      pass; retain the separate weak-cleanup SATB correctness fix.
+- [ ] Ephemerons: focused Linux ASan+UBSan and app-batch timing are complete,
+      but app-batch visited zero weak entries. Measure a representative
+      weak-heavy workload and bounded pending-index memory before retaining
+      the indexed pass; retain the separate weak-cleanup SATB correctness fix.
 - [ ] Reclamation: measure fresh allocation during sweep, reusable capacity,
       mapped and resident memory, page faults, and grow/shrink cycles with the new
       point-in-time heap-usage counters before replacing global free lists or
