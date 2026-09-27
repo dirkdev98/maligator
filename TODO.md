@@ -24,9 +24,9 @@ rooting, and resource-safety defects can interrupt that order.
    stabilize alpha releases and recoverable resource handling.
 6. Advance ECMAScript, WinterTC, Node, and ecosystem correctness. Their existing
    backlog below remains in scope; it is not replaced by the performance programme.
-7. Move the native generational collector to GC workers, with the Wasm reactor
-   executing the same collector work inline. Follow the ownership and root contract
-   in [generational GC workers](docs/decisions/09-generational-gc-workers.md).
+7. Recover throughput and bound latency in the concurrent generational collector.
+   Keep the native worker and Wasm inline behavior, following the ownership and
+   root contract in [generational GC workers](docs/decisions/09-generational-gc-workers.md).
 8. Pursue actors, SMP, embedding, and freestanding targets after the active runtime
    foundations are ready.
 
@@ -783,12 +783,15 @@ remains a Maligator extension and does not count as global fetch conformance.
       tracing or wider exact frame liveness.
 - [ ] Minor locality: black-allocation enrollment showed no application gain.
       The young-position bitmap reduced counted visits but slowed seven paired
-      app-batch runs, so it was reverted. Compare young-block placement only
-      against measured old-block scan amplification and allocation cost. Native
-      finalizers are cleanup-only after the mark/weak fixpoint; they may not
-      allocate from the heap or publish graph edges.
+      app-batch runs, so it was reverted. Compare the new stats-only count of
+      young managed cells swept against inspected and prior old cells on actual
+      applications before testing young-block placement, allocation cost, and
+      fragmentation. Native finalizers are cleanup-only after the mark/weak
+      fixpoint; they may not allocate from the heap or publish graph edges.
 - [ ] Survivor age: measure post-promotion deaths and allocation during majors;
-      define remembered-set persistence and weak-key liveness before changing age.
+      the stats-only provenance checkpoint classifies promoted charged bytes at
+      the next completed major. Define remembered-set persistence and weak-key
+      liveness before changing age.
 - [ ] Dirty ranges: compare sparse and dense old-container writes with logical
       scanned slots and discoveries on applications. The 8,192-slot sparse array
       fixture shows one discovery from a full-owner scan; cards remain experimental.
