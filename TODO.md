@@ -736,11 +736,15 @@ remains a Maligator extension and does not count as global fetch conformance.
 
 ## Generational GC workers
 
+- [ ] Verify the merged #65/#66 compiler contracts with the worker collector:
+      publish private roots before a fresh automatic major scan, preserve storage
+      lifetime across a middle getter and collecting fallback, and cover worker
+      overlap, more than 64 shadow slots, and suspended generators.
 - [ ] Finish current-source Wasm parity, the normal gate, focused GC sanitizer and
       standards runs, and an enabled-worker ThreadSanitizer lane. Inspect exact
       coverage and any failures before accepting native concurrent marking.
-- [ ] Compare retained-heap latency, throughput, CPU, and memory against the frozen
-      pre-worker baseline with matched output and repeated representative controls.
+- [ ] Compare retained-heap latency, throughput, CPU, and memory against merged main
+      `40063120` with matched output and repeated representative controls.
       Use those results to tune snapshot dispatch and decide whether mutator sweep
       remains the best reclamation schedule.
 - [ ] Validate native worker capacity under constrained and nested CPU quotas; the
@@ -755,12 +759,6 @@ remains a Maligator extension and does not count as global fetch conformance.
 These are not active tasks and become actionable only when their condition is
 observed.
 
-- When draft PRs #65/#66 integrate, test private root publication before a fresh
-  automatic major root scan with actual worker overlap and later reclamation.
-  Cover more than 64 shadow slots, suspended generators, and a middle getter
-  that replaces property storage, collects, and changes later reads. Merge
-  liveness, verifier, artifact-version, manifest, and primordial-inventory
-  changes together; synchronous GC stress alone cannot prove this boundary.
 - Elide SATB barriers only if concurrent GC becomes the default and a realistic
   store-heavy workload makes the barrier material.
 - Revisit MalVm and host-structure layout when multiple VMs or isolates are active in
