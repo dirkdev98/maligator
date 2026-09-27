@@ -792,20 +792,26 @@ static void mal_gc_shade(MalHeapHeader *cell) {
         cell->mark = mark | MAL_MARK_OLD;
     }
 #else
+    if (!g_gc->major_collection) {
+        // Minor tracing has one mutator owner and no concurrent mark claims.
+        u8 mark = atomic_load_explicit(&cell->mark, memory_order_relaxed);
+        if (mark & MAL_MARK_FREE) {
+            fprintf(stderr, "[gc] attempted to shade a reclaimed cell\n");
+            abort();
+        }
+        if (mal_heap_mark_is_old(mark)) return;
+        atomic_store_explicit(&cell->mark, mark | MAL_MARK_OLD, memory_order_relaxed);
+        mal_gc_grey_push(cell);
+        return;
+    }
     u8 expected = atomic_load_explicit(&cell->mark, memory_order_relaxed);
     for (;;) {
         if (expected & MAL_MARK_FREE) {
             fprintf(stderr, "[gc] attempted to shade a reclaimed cell\n");
             abort();
         }
-        u8 desired;
-        if (g_gc->major_collection) {
-            if (mal_heap_mark_is_current(expected, g_gc_vm->heap.mark_color)) return;
-            desired = (expected & ~MAL_MARK_COLOR) | g_gc_vm->heap.mark_color;
-        } else {
-            if (mal_heap_mark_is_old(expected)) return;
-            desired = expected | MAL_MARK_OLD;
-        }
+        if (mal_heap_mark_is_current(expected, g_gc_vm->heap.mark_color)) return;
+        u8 desired = (expected & ~MAL_MARK_COLOR) | g_gc_vm->heap.mark_color;
         if (atomic_compare_exchange_weak_explicit(&cell->mark, &expected, desired,
                 memory_order_relaxed, memory_order_relaxed)) break;
     }
