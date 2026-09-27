@@ -19,8 +19,9 @@ unsupported.
 
 The collector uses an old-generation bit and remembered set for minor collections.
 An alternating major mark color keeps generation age separate from liveness.
-Minors park JavaScript and may parallelize safe trace batches; they do not overlap
-an active major. Major roots are scanned at mutator safepoints before background
+Minors park JavaScript and trace inline; measured worker handoff cost exceeded
+their short mark work. They do not overlap an active major. Major roots are scanned
+at mutator safepoints before background
 work begins and again at remark. The compiled root maps and native root spans are
 read only while their owner is parked. SATB deletion barriers preserve the initial
 major graph, and card barriers preserve old-to-young edges. The SATB buffer holds
