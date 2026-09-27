@@ -2345,6 +2345,10 @@ static void mal_gc_weak_pass(void) {
         mal_gc_drain(); // a freshly marked value may revive another weak key
     }
 
+    // Collector-owned deletion of dead weak entries must not put those edges back
+    // into SATB after the ephemeron fixpoint has completed.
+    mal_gc_marking_active = false;
+
     // Drop entries whose key did not survive (collected first; deleting mid-
     // iteration is avoided). The values, if dead, are reclaimed by the sweep.
     for (usize i = 0; i < g_gc->weak_maps_count; ++i) {
