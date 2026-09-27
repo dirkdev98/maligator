@@ -4,7 +4,12 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+	nativePrivateCallResultIps,
+	nativePrivateRootRegisters,
+} from "../../src/compiler/target/lower-native-root-publication.ts";
+import {
 	buildNativeBinary,
+	buildNativeBinaryResult,
 	resolveHarnessExecutionInvocation,
 	scaledNativeRunTimeoutMs,
 } from "../../src/test-harness.ts";
@@ -56,4 +61,72 @@ describe("concurrent object edge snapshots", () => {
 				rmSync(outDir, { recursive: true, force: true });
 			}
 		});
+});
+
+describe("compiled roots during a concurrent object snapshot", () => {
+	it("preserves property-region fallback and publishes a private native call result at the worker poll", (ctx) => {
+		const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-gc-compiled-worker-"));
+		try {
+			const build = buildNativeBinaryResult({
+				fixture: "tests/local/gc-compiled-worker-boundary.js",
+				name: "gc-compiled-worker-boundary",
+				mainFile: "tests/fixtures/gc-compiled-worker-boundary/main.c",
+				outDir,
+			});
+			const image = build.programImage;
+			const getterIndex = image.runtime.functions.findIndex(
+				(fn) =>
+					String.fromCharCode(
+						...(image.runtime.stringConstants[fn.nameStringIndex] ?? []),
+					) === "readReturnedToken",
+			);
+			expect(getterIndex).toBeGreaterThanOrEqual(0);
+			const fn = image.runtime.functions[getterIndex]!;
+			const native = image.native.functions[getterIndex]!;
+			const privateCalls = nativePrivateCallResultIps(fn, native);
+			const frameRegisters = new Set(
+				native.gc.safepoints.flatMap((point) => point.rootRegisters),
+			);
+			const privateRegisters = nativePrivateRootRegisters(
+				fn,
+				native,
+				frameRegisters,
+				privateCalls,
+			);
+			const calls = fn.instructions.flatMap((instruction, ip) =>
+				instruction.opcode === "CALL" ? [{ instruction, ip }] : [],
+			);
+			expect(calls).toHaveLength(1);
+			const call = calls[0]!;
+			expect(privateCalls.has(call.ip)).toBe(true);
+			expect(privateRegisters.has(call.instruction.dst)).toBe(true);
+			expect(
+				native.gc.safepoints.find((point) => point.instructionIp === call.ip)
+					?.outgoingRootRegisters,
+			).toContain(call.instruction.dst);
+			const invocation = resolveHarnessExecutionInvocation(build.binaryPath);
+			const result = spawnSync(invocation.executable, invocation.args, {
+				env: {
+					...process.env,
+					MAL_GC_STRESS: "0",
+					MAL_GC_VERIFY: "1",
+					MAL_GC_STATS: "1",
+				},
+				encoding: "utf8",
+				timeout: scaledNativeRunTimeoutMs(120_000),
+			});
+			if (result.error !== undefined) throw result.error;
+			expect(result.status, result.stderr || result.stdout).toBe(0);
+			if (result.stdout === "gc-compiled-worker-boundary SKIP\n") {
+				expect(result.stderr).toMatch(/\bworker_limit=0\b/);
+				ctx.skip("GC workers unavailable at this CPU capacity");
+			}
+			expect(result.stdout).toBe("gc-compiled-worker-boundary PASS\n");
+			expect(
+				Number(result.stderr.match(/\bsnapshot_discoveries=(\d+)/)?.[1] ?? 0),
+			).toBeGreaterThan(0);
+		} finally {
+			rmSync(outDir, { recursive: true, force: true });
+		}
+	}, 600_000);
 });

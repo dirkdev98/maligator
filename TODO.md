@@ -740,6 +740,9 @@ remains a Maligator extension and does not count as global fetch conformance.
       publish private roots before a fresh automatic major scan, preserve storage
       lifetime across a middle getter and collecting fallback, and cover worker
       overlap, more than 64 shadow slots, and suspended generators.
+      The compiled worker-boundary fixture now covers a worker-triggered poll,
+      private call result publication, property-region fallback, and reclamation;
+      the wider root and suspended-frame combinations remain.
 - [ ] Finish current-source Wasm parity, the normal gate, focused GC sanitizer and
       standards runs, and an enabled-worker ThreadSanitizer lane. Inspect exact
       coverage and any failures before accepting native concurrent marking.

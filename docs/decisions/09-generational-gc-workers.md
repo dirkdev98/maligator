@@ -91,7 +91,9 @@ can still create long pauses. Wasm parity and broad performance acceptance are
 tracked in [TODO.md](../../TODO.md).
 
 A copying nursery, simultaneous minor and major cycles, compaction, shared-heap
-mutators, and multiple active isolates require separate contracts. Merged PRs #65
-and #66 require a combined-tree check of private-root publication before a fresh
-major scan and property-storage invalidation before a collecting getter fallback;
-synchronous GC stress cannot establish worker overlap.
+mutators, and multiple active isolates require separate contracts. The compiled
+worker-boundary fixture combines merged PRs #65 and #66: a paused snapshot worker
+requests the next poll while a getter changes property storage, and that first
+poll sees the native callback's result in an active compiled root slot. It also
+checks the region's first, middle, and final values and later reclamation.
+Synchronous GC stress alone cannot establish this overlap.
