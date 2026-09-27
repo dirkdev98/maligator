@@ -184,6 +184,36 @@ void (*mal_gc_test_trace_snapshot_hook)(MalHeapHeader *cell) = nullptr;
 void (*mal_gc_test_before_worker_join_hook)(void) = nullptr;
 #endif
 
+typedef enum MalGcPauseReason {
+    MAL_GC_PAUSE_MINOR,
+    MAL_GC_PAUSE_MAJOR_SLICE,
+    MAL_GC_PAUSE_EXPLICIT,
+    MAL_GC_PAUSE_FINISH_PENDING,
+    MAL_GC_PAUSE_BACKSTOP,
+    MAL_GC_PAUSE_STRESS_MINOR,
+    MAL_GC_PAUSE_STRESS_MAJOR,
+    MAL_GC_PAUSE_REASON_COUNT,
+} MalGcPauseReason;
+
+typedef struct MalGcLatency {
+    u64 bins[10];
+    u64 max_ns;
+} MalGcLatency;
+
+static const u64 mal_gc_latency_bounds_ns[] = {
+    10000, 25000, 50000, 100000, 250000, 500000, 1000000, 2500000, 5000000,
+};
+
+static const char *const mal_gc_latency_bin_names[] = {
+    "0to10us", "10to25us", "25to50us", "50to100us", "100to250us",
+    "250to500us", "500to1000us", "1000to2500us", "2500to5000us", "ge5000us",
+};
+
+static const char *const mal_gc_pause_reason_names[MAL_GC_PAUSE_REASON_COUNT] = {
+    "minor", "major_slice", "explicit", "finish_pending", "backstop",
+    "stress_minor", "stress_major",
+};
+
 struct MalGcState {
     MalVm *vm;
     // Grey worklist (explicit, no recursion): shaded-but-not-yet-traced cells.
@@ -291,6 +321,8 @@ struct MalGcState {
     u64 max_pause_ns;
     u64 minor_pause_ns;
     u64 max_minor_pause_ns;
+    MalGcLatency pause_latency[MAL_GC_PAUSE_REASON_COUNT];
+    MalGcLatency mark_step_latency;
     u64 minor_mark_ns;
     u64 minor_sweep_ns;
     u64 minor_cells_inspected;
@@ -502,6 +534,24 @@ void mal_gc_satb_record(MalValue old_value) {
     }
 }
 
+static void mal_gc_record_latency(MalGcLatency *latency, u64 elapsed_ns) {
+    usize bin = 0;
+    while (bin < countof(mal_gc_latency_bounds_ns) &&
+           elapsed_ns >= mal_gc_latency_bounds_ns[bin]) {
+        bin++;
+    }
+    latency->bins[bin]++;
+    if (elapsed_ns > latency->max_ns) latency->max_ns = elapsed_ns;
+}
+
+static void mal_gc_print_latency(const char *name, const MalGcLatency *latency) {
+    for (usize i = 0; i < countof(latency->bins); ++i) {
+        fprintf(stderr, " %s_%s=%llu", name, mal_gc_latency_bin_names[i],
+            (unsigned long long) latency->bins[i]);
+    }
+    fprintf(stderr, " %s_max_ns=%llu", name, (unsigned long long) latency->max_ns);
+}
+
 static void mal_gc_print_stats_now(void) {
     MalGcState *g = g_gc_stats_state;
     if (g == nullptr) {
@@ -654,6 +704,12 @@ static void mal_gc_print_stats_now(void) {
         (unsigned long long) usage.unclaimed_chunk_bytes,
         (unsigned long long) usage.chunk_mapped_bytes,
         (unsigned long long) snapshot_reserved_bytes);
+    for (usize i = 0; i < MAL_GC_PAUSE_REASON_COUNT; ++i) {
+        char name[48];
+        snprintf(name, sizeof(name), "pause_%s", mal_gc_pause_reason_names[i]);
+        mal_gc_print_latency(name, &g->pause_latency[i]);
+    }
+    mal_gc_print_latency("mark_step", &g->mark_step_latency);
     fprintf(stderr, "\n");
     if (getenv("MAL_PROMISE_STATS") != nullptr) {
         fprintf(
@@ -2556,12 +2612,13 @@ static u64 mal_gc_pause_begin(MalVm *vm, bool major) {
     return start_ns;
 }
 
-static void mal_gc_pause_end(MalVm *vm, bool major, u64 start_ns) {
+static void mal_gc_pause_end(MalVm *vm, bool major, MalGcPauseReason reason, u64 start_ns) {
     mal_profile_event(vm, MAL_PROFILE_RECORD_GC_END, major ? 1 : 0);
     if (!g_gc->stats_enabled) return;
     u64 elapsed_ns = mal_monotonic_now_ns() - start_ns;
     g_gc->pause_count++;
     g_gc->total_ns += elapsed_ns;
+    mal_gc_record_latency(&g_gc->pause_latency[reason], elapsed_ns);
     if (elapsed_ns > g_gc->max_pause_ns) g_gc->max_pause_ns = elapsed_ns;
     if (!major) {
         g_gc->minor_pause_ns += elapsed_ns;
@@ -2856,6 +2913,7 @@ finish_mark_step:
     g_gc->bytes_at_last_step = vm->heap.bytes_allocated;
     if (g_gc->stats_enabled) {
         u64 elapsed = mal_monotonic_now_ns() - start_ns;
+        mal_gc_record_latency(&g_gc->mark_step_latency, elapsed);
         if (elapsed > g_gc->max_mark_step_ns) {
             g_gc->max_mark_step_ns = elapsed;
         }
@@ -2900,7 +2958,7 @@ bool mal_gc_finish_pending_cycle(MalVm *vm) {
     if (vm->gc_native_frames != 0 || g_gc->phase == MAL_GC_PHASE_IDLE) return false;
     u64 start_ns = mal_gc_pause_begin(vm, true);
     mal_gc_cycle_finish_sync(vm);
-    mal_gc_pause_end(vm, true, start_ns);
+    mal_gc_pause_end(vm, true, MAL_GC_PAUSE_FINISH_PENDING, start_ns);
     return true;
 }
 
@@ -2918,7 +2976,7 @@ void mal_gc_collect(MalVm *vm) {
         mal_gc_cycle_finish_sync(vm);
     }
     mal_gc_collect_sync(vm, true); // fresh full major over the current snapshot
-    mal_gc_pause_end(vm, true, start_ns);
+    mal_gc_pause_end(vm, true, MAL_GC_PAUSE_EXPLICIT, start_ns);
 }
 
 /* Advance an in-flight cycle by one step, or (if idle) decide whether a collection
@@ -2926,7 +2984,7 @@ void mal_gc_collect(MalVm *vm) {
  * The pacer: the assist budget is proportional to bytes allocated since the last
  * mark step, so marking outruns allocation; the hard backstop finishes the cycle
  * synchronously if allocation reaches the heap trigger first. */
-static void mal_gc_cycle_advance(MalVm *vm, usize mark_budget) {
+static MalGcPauseReason mal_gc_cycle_advance(MalVm *vm, usize mark_budget) {
     switch (g_gc->phase) {
         case MAL_GC_PHASE_MARK: {
             // Hard backstop: if allocation has reached the old STW trigger before the
@@ -2934,21 +2992,21 @@ static void mal_gc_cycle_advance(MalVm *vm, usize mark_budget) {
             if (vm->heap.bytes_allocated >= g_gc->backstop_at) {
                 mal_gc_cycle_finish_sync(vm);
                 if (g_gc->stats_enabled) g_gc->sync_backstop++;
-                return;
+                return MAL_GC_PAUSE_BACKSTOP;
             }
             if (mal_gc_mark_step(vm, mark_budget)) {
                 mal_gc_cycle_remark(vm); // marking drained → remark + open the sweep
             }
-            return;
+            return MAL_GC_PAUSE_MAJOR_SLICE;
         }
         case MAL_GC_PHASE_SWEEP: {
             if (mal_gc_sweep_step(vm)) {
                 mal_gc_cycle_finish_sweep(vm);
             }
-            return;
+            return MAL_GC_PAUSE_MAJOR_SLICE;
         }
         default:
-            return;
+            return MAL_GC_PAUSE_MAJOR_SLICE;
     }
 }
 
@@ -2975,7 +3033,8 @@ static void mal_gc_incremental_safepoint(MalVm *vm) {
             bool major = (g_gc->collection_index++ % g_gc->major_every) == 0;
             u64 start_ns = mal_gc_pause_begin(vm, major);
             mal_gc_collect_sync(vm, major);
-            mal_gc_pause_end(vm, major, start_ns);
+            mal_gc_pause_end(vm, major,
+                major ? MAL_GC_PAUSE_STRESS_MAJOR : MAL_GC_PAUSE_STRESS_MINOR, start_ns);
         }
         return;
     }
@@ -2990,8 +3049,8 @@ static void mal_gc_incremental_safepoint(MalVm *vm) {
         atomic_exchange_explicit(&mal_gc_poll, false, memory_order_relaxed);
 #endif
         u64 start_ns = mal_gc_pause_begin(vm, true);
-        mal_gc_cycle_advance(vm, mal_gc_mark_budget(vm));
-        mal_gc_pause_end(vm, true, start_ns);
+        MalGcPauseReason reason = mal_gc_cycle_advance(vm, mal_gc_mark_budget(vm));
+        mal_gc_pause_end(vm, true, reason, start_ns);
         return;
     }
 
@@ -3010,7 +3069,7 @@ static void mal_gc_incremental_safepoint(MalVm *vm) {
         g_gc->collection_index++;
         u64 start_ns = mal_gc_pause_begin(vm, false);
         mal_gc_collect_sync(vm, false);
-        mal_gc_pause_end(vm, false, start_ns);
+        mal_gc_pause_end(vm, false, MAL_GC_PAUSE_MINOR, start_ns);
         return;
     }
 
@@ -3026,7 +3085,7 @@ static void mal_gc_incremental_safepoint(MalVm *vm) {
     g_gc->backstop_at = vm->heap.bytes_allocated + grow;
     u64 start_ns = mal_gc_pause_begin(vm, true);
     mal_gc_cycle_begin(vm);
-    mal_gc_pause_end(vm, true, start_ns);
+    mal_gc_pause_end(vm, true, MAL_GC_PAUSE_MAJOR_SLICE, start_ns);
 }
 
 void mal_gc_safepoint(MalVm *vm) {

@@ -9,6 +9,15 @@ import {
 	scaledNativeRunTimeoutMs,
 } from "../../src/test-harness.ts";
 
+const latencyBins =
+	"(?:0to10|10to25|25to50|50to100|100to250|250to500|500to1000|1000to2500|2500to5000|ge5000)us";
+
+function latencyCount(stats: string, name: string): number {
+	const bins = [...stats.matchAll(new RegExp(`\\b${name}_${latencyBins}=(\\d+)`, "g"))];
+	expect(bins).toHaveLength(10);
+	return bins.reduce((total, match) => total + Number(match[1]), 0);
+}
+
 describe("incremental major array trace attribution", () => {
 	it("records 8K and 256K slot mutator traces without synchronous completion", () => {
 		const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-gc-mark-step-scaling-"));
@@ -44,6 +53,28 @@ describe("incremental major array trace attribution", () => {
 				);
 				expect(result.stderr).toMatch(/\bmax_major_array_trace_ms=\d+\.\d+\b/);
 				expect(result.stderr).toMatch(/\bmax_mark_step_ms=\d+\.\d+\b/);
+				const stats = result.stderr.match(/^\[gc-stats\].*$/m)?.[0];
+				expect(stats).toBeDefined();
+				expect(latencyCount(stats!, "pause_major_slice")).toBeGreaterThan(1);
+				expect(latencyCount(stats!, "mark_step")).toBeGreaterThan(0);
+				expect(latencyCount(stats!, "pause_explicit")).toBe(0);
+				expect(latencyCount(stats!, "pause_finish_pending")).toBe(0);
+				expect(latencyCount(stats!, "pause_backstop")).toBe(0);
+				const pauseReasons = [
+					"minor",
+					"major_slice",
+					"explicit",
+					"finish_pending",
+					"backstop",
+					"stress_minor",
+					"stress_major",
+				];
+				expect(
+					pauseReasons.reduce(
+						(total, reason) => total + latencyCount(stats!, `pause_${reason}`),
+						0,
+					),
+				).toBe(Number(stats!.match(/\bpauses=(\d+)/)?.[1]));
 			}
 		} finally {
 			rmSync(outDir, { recursive: true, force: true });

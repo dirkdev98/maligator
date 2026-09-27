@@ -1,6 +1,8 @@
 #include <stdio.h>
+#include <string.h>
 
 #include "gc.h"
+#include "heap.h"
 #include "host.h"
 #include "object.h"
 #include "scheduler.h"
@@ -101,7 +103,27 @@ static int check_idle_boundary(int boundary) {
     return 0;
 }
 
+static int check_backstop(void) {
+    MalVm vm;
+    mal_vm_init(&vm, &mal_runtime_image);
+    vm.heap.next_gc_at = 1;
+    mal_gc_poll = true;
+    mal_gc_safepoint(&vm);
+    if (!mal_gc_marking_active) return 1;
+    void *raw = mal_heap_alloc_raw(&vm.heap, 8 * 1024 * 1024);
+    mal_gc_safepoint(&vm);
+    if (mal_gc_marking_active || vm.heap.sweeping) return 2;
+    gc_free_raw(&vm.heap, raw);
+    mal_vm_free(&vm);
+    return 0;
+}
+
 int main(int argc, char **argv) {
+    if (argc == 2 && strcmp(argv[1], "backstop") == 0) {
+        if (check_backstop() != 0) return 1;
+        puts("gc-idle-completion PASS");
+        return 0;
+    }
     int first = 0;
     int last = 4;
     if (argc == 2) {
