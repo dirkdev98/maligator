@@ -313,6 +313,8 @@ struct MalGcState {
     u64 max_minor_pause_ns;
     u64 minor_mark_ns;
     u64 minor_sweep_ns;
+    u64 minor_cells_inspected;
+    u64 minor_blocks_inspected;
     usize peak_live_bytes;
     usize allocated_bytes;
     u64 compiled_root_slots_scanned;
@@ -539,6 +541,7 @@ static void mal_gc_print_stats_now(void) {
             "init_mark_ms=%.3f remark_ms=%.3f max_mark_step_ms=%.3f max_sweep_step_ms=%.3f "
             "minor_pause_ms=%.3f max_minor_pause_ms=%.3f "
             "minor_mark_ms=%.3f minor_sweep_ms=%.3f "
+            "minor_cells_inspected=%llu minor_blocks_inspected=%llu "
             "worker_traces=%llu single_worker_batches=%llu "
             "dispatched_worker_slots=%llu worker_drain_traces=%llu "
             "minor_worker_batches=%llu minor_worker_traces=%llu "
@@ -564,6 +567,8 @@ static void mal_gc_print_stats_now(void) {
             (double) g->max_minor_pause_ns / 1.0e6,
             (double) g->minor_mark_ns / 1.0e6,
             (double) g->minor_sweep_ns / 1.0e6,
+            (unsigned long long) g->minor_cells_inspected,
+            (unsigned long long) g->minor_blocks_inspected,
             (unsigned long long) g->worker_traces,
             (unsigned long long) g->single_worker_batches,
             (unsigned long long) g->dispatched_worker_slots,
@@ -744,6 +749,7 @@ void mal_gc_init(MalVm *vm) {
 
 void mal_gc_configure_heap(MalVm *vm) {
     MalGcState *g = vm->gc;
+    vm->heap.gc_stats = g->stats_enabled;
     if (g->stress_interval == 0) {
         const char *threshold = getenv("MAL_GC_THRESHOLD");
         vm->heap.next_gc_at = threshold != nullptr
@@ -2479,6 +2485,10 @@ static void mal_gc_collect_sync(MalVm *vm, bool major) {
 
     if (!major) {
         mal_heap_sweep_minor(&vm->heap, mal_gc_finalize_cell);
+        if (g_gc->stats_enabled) {
+            g_gc->minor_cells_inspected = vm->heap.minor_cells_inspected;
+            g_gc->minor_blocks_inspected = vm->heap.minor_blocks_inspected;
+        }
     } else
     {
         mal_heap_sweep(&vm->heap, mal_gc_finalize_cell);

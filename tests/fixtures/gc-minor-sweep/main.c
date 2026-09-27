@@ -373,6 +373,48 @@ static bool incremental_major_charges_raw_block_traversal(MalHeap *heap) {
     return true;
 }
 
+static usize g_narrow_minor_cells;
+static usize g_wide_minor_cells;
+
+static bool measure_fragmented_minor(MalHeap *heap, bool wide) {
+    const usize old_count = wide ? 180 : 60;
+    TestCell *old[180];
+    heap->gc_stats = true;
+    for (usize i = 0; i < old_count; i++) old[i] = new_cell(heap, 512);
+    mal_heap_begin_major(heap);
+    for (usize i = 0; i < old_count; i++) {
+        bool hole = wide ? i == 0 || i == 63 || i == 126 : i < 3;
+        if (!hole) mark_live(old[i]);
+    }
+    mal_heap_sweep(heap, finalize_cell);
+    TestCell *young[3];
+    for (usize i = 0; i < countof(young); i++) young[i] = new_cell(heap, 512);
+    mark_live(young[0]);
+    mark_live(young[1]);
+    mal_heap_sweep_minor(heap, finalize_cell);
+    CHECK(live_cell(young[0], (u32) old_count + 1));
+    CHECK(live_cell(young[1], (u32) old_count + 2));
+    CHECK(g_finalized[old_count + 3] == 1);
+    if (wide) {
+        g_wide_minor_cells = heap->minor_cells_inspected;
+        CHECK(heap->minor_cells_inspected > 2 * g_narrow_minor_cells);
+        CHECK(heap->minor_blocks_inspected > 1);
+    } else {
+        g_narrow_minor_cells = heap->minor_cells_inspected;
+        CHECK(g_narrow_minor_cells >= old_count);
+        CHECK(heap->minor_blocks_inspected == 1);
+    }
+    return true;
+}
+
+static bool minor_sweep_scans_one_old_block_for_three_new_cells(MalHeap *heap) {
+    return measure_fragmented_minor(heap, false);
+}
+
+static bool minor_sweep_scans_three_old_blocks_for_three_new_cells(MalHeap *heap) {
+    return measure_fragmented_minor(heap, true);
+}
+
 static bool incremental_major_resets_sweep_epochs_on_wrap(MalHeap *heap) {
     TestCell *first = new_cell(heap, 512);
     TestCell *second = new_cell(heap, 1024);
@@ -539,6 +581,8 @@ int main(void) {
         incremental_major_accounts_a_new_block_in_a_completed_chunk,
         incremental_major_accounts_recycled_raw_blocks,
         incremental_major_charges_raw_block_traversal,
+        minor_sweep_scans_one_old_block_for_three_new_cells,
+        minor_sweep_scans_three_old_blocks_for_three_new_cells,
         incremental_major_resets_sweep_epochs_on_wrap,
         large_cells_follow_major_and_minor_lifetime,
         finalizer_raw_storage_reuses_partial_slots_and_blocks,
@@ -550,5 +594,7 @@ int main(void) {
         if (run_check(checks[i])) passed++;
     }
     printf("gc-minor-sweep PASS %zu/%zu\n", passed, (usize) countof(checks));
+    printf("gc-minor-sweep inspected cells: narrow=%zu wide=%zu for three young allocations\n",
+        g_narrow_minor_cells, g_wide_minor_cells);
     return passed == countof(checks) ? 0 : 1;
 }

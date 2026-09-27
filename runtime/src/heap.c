@@ -522,6 +522,9 @@ void mal_heap_init(MalHeap *heap, usize capacity) {
     heap->next_gc_at = (usize) -1;
     heap->poison_on_free = false;
     heap->live_bytes = 0;
+    heap->gc_stats = false;
+    heap->minor_cells_inspected = 0;
+    heap->minor_blocks_inspected = 0;
     mal_shape_heap_init(heap);
     heap->native_function_length_key = nullptr;
     heap->native_function_name_key = nullptr;
@@ -591,6 +594,9 @@ void mal_heap_free(MalHeap *heap) {
     heap->next_gc_at = (usize) -1;
     heap->poison_on_free = false;
     heap->live_bytes = 0;
+    heap->gc_stats = false;
+    heap->minor_cells_inspected = 0;
+    heap->minor_blocks_inspected = 0;
 }
 
 void mal_heap_header_init(MalHeapHeader *header, MalHeapType type) {
@@ -948,6 +954,11 @@ void mal_heap_sweep_minor(MalHeap *heap, MalHeapFinalizeFn finalize) {
         block->on_young = 0;
         block->next_young = nullptr;
         usize block_live = 0;
+        if (heap->gc_stats) {
+            heap->minor_blocks_inspected++;
+            heap->minor_cells_inspected +=
+                (usize) (block->bump - ((u8 *) block + data_offset)) / block->cell_size;
+        }
         for (u8 *cell = (u8 *) block + data_offset;
             cell + block->cell_size <= block->bump; cell += block->cell_size) {
             MalHeapHeader *header = (MalHeapHeader *) cell;

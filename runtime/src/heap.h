@@ -99,6 +99,9 @@ typedef struct MalHeap {
     /** Bytes of managed cells that survived the last sweep; sizes the next
      * auto-collection trigger. Zero until the first collection. */
     usize live_bytes;
+    bool gc_stats;
+    u64 minor_cells_inspected;
+    u64 minor_blocks_inspected;
     /** Flipped at each major start; matching cells survived the current major. */
     u8 mark_color;
     /** Heap-lifetime root of this isolate's hidden-class transition tree. */
