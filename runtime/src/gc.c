@@ -316,6 +316,15 @@ struct MalGcState {
     u64 minor_sweep_ns;
     u64 minor_cells_inspected;
     u64 minor_blocks_inspected;
+    u64 minor_remembered_owners;
+    u64 minor_remembered_container_slots;
+    u64 minor_remembered_discoveries;
+    u64 minor_remembered_array_owners;
+    u64 minor_remembered_array_slots;
+    u64 minor_remembered_array_discoveries;
+    u64 minor_remembered_map_owners;
+    u64 minor_remembered_map_slots;
+    u64 minor_remembered_map_discoveries;
     usize peak_live_bytes;
     usize allocated_bytes;
     u64 compiled_root_slots_scanned;
@@ -554,6 +563,11 @@ static void mal_gc_print_stats_now(void) {
             "minor_pause_ms=%.3f max_minor_pause_ms=%.3f "
             "minor_mark_ms=%.3f minor_sweep_ms=%.3f "
             "minor_cells_inspected=%llu minor_blocks_inspected=%llu "
+            "remembered_owners=%llu remembered_container_slots=%llu "
+            "remembered_discoveries=%llu remembered_array_owners=%llu "
+            "remembered_array_slots=%llu remembered_array_discoveries=%llu "
+            "remembered_map_owners=%llu remembered_map_slots=%llu "
+            "remembered_map_discoveries=%llu "
             "worker_traces=%llu worker_drain_traces=%llu "
             "minor_worker_batches=%llu minor_worker_traces=%llu "
             "minor_worker_cpu_ms=%.3f "
@@ -586,6 +600,15 @@ static void mal_gc_print_stats_now(void) {
             (double) g->minor_sweep_ns / 1.0e6,
             (unsigned long long) g->minor_cells_inspected,
             (unsigned long long) g->minor_blocks_inspected,
+            (unsigned long long) g->minor_remembered_owners,
+            (unsigned long long) g->minor_remembered_container_slots,
+            (unsigned long long) g->minor_remembered_discoveries,
+            (unsigned long long) g->minor_remembered_array_owners,
+            (unsigned long long) g->minor_remembered_array_slots,
+            (unsigned long long) g->minor_remembered_array_discoveries,
+            (unsigned long long) g->minor_remembered_map_owners,
+            (unsigned long long) g->minor_remembered_map_slots,
+            (unsigned long long) g->minor_remembered_map_discoveries,
             (unsigned long long) g->worker_traces,
             (unsigned long long) g->worker_drain_traces,
             (unsigned long long) g->minor_worker_batches,
@@ -2540,6 +2563,17 @@ static void mal_gc_clear_remembered(void) {
     g_gc->remembered_count = 0;
 }
 
+static u64 mal_gc_remembered_table_slots(const MalTable *table) {
+    if (table == nullptr) return 0;
+    return mal_table_size(table) *
+        (mal_table_mode(table) == MAL_TABLE_MODE_OBJECT ? 4 : 2);
+}
+
+static u64 mal_gc_remembered_object_slots(const MalObject *object) {
+    u64 slots = object->slots == nullptr ? 0 : object->shape->inline_count * 2;
+    return slots + mal_gc_remembered_table_slots(object->overflow);
+}
+
 // --- Statistics helpers ----------------------------------------------------
 
 static u64 mal_gc_pause_begin(MalVm *vm, bool major) {
@@ -2607,8 +2641,37 @@ static void mal_gc_collect_sync(MalVm *vm, bool major) {
         // generation is not re-marked. mal_gc_trace_cell also (re-)registers weak
         // collections it reaches, so a dirtied old WeakMap's dead young keys are
         // still cleaned this cycle.
-        for (usize i = 0; i < g_gc->remembered_count; ++i) {
-            mal_gc_trace_cell(g_gc->remembered[i]);
+        if (!g_gc->stats_enabled) {
+            for (usize i = 0; i < g_gc->remembered_count; ++i) {
+                mal_gc_trace_cell(g_gc->remembered[i]);
+            }
+        } else {
+            for (usize i = 0; i < g_gc->remembered_count; ++i) {
+                MalHeapHeader *owner = g_gc->remembered[i];
+                usize grey_before = g_gc->grey_count;
+                mal_gc_trace_cell(owner);
+                u64 discoveries = g_gc->grey_count - grey_before;
+                g_gc->minor_remembered_owners++;
+                g_gc->minor_remembered_discoveries += discoveries;
+                if (owner->type == MAL_HEAP_ARRAY_OBJECT) {
+                    MalArrayObject *array = (MalArrayObject *) owner;
+                    u64 slots = mal_gc_remembered_object_slots(&array->object) +
+                        (array->elements == nullptr ? 0 : array->dense_count);
+                    g_gc->minor_remembered_container_slots += slots;
+                    g_gc->minor_remembered_array_owners++;
+                    g_gc->minor_remembered_array_slots += slots;
+                    g_gc->minor_remembered_array_discoveries += discoveries;
+                } else if (owner->type == MAL_HEAP_MAP_OBJECT ||
+                           owner->type == MAL_HEAP_SET_OBJECT) {
+                    MalMapObject *map = (MalMapObject *) owner;
+                    u64 slots = mal_gc_remembered_object_slots(&map->object) +
+                        (map->weak ? 0 : mal_gc_remembered_table_slots(map->entries));
+                    g_gc->minor_remembered_container_slots += slots;
+                    g_gc->minor_remembered_map_owners++;
+                    g_gc->minor_remembered_map_slots += slots;
+                    g_gc->minor_remembered_map_discoveries += discoveries;
+                }
+            }
         }
     }
     mal_gc_drain();
