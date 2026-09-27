@@ -83,6 +83,49 @@ describe("local native input admission", () => {
 		}
 	});
 
+	it("omits only the generational card for scalar captured stores", () => {
+		const stores: Array<{
+			create: BytecodeInstruction;
+			representation: VmRegisterRepresentation;
+		}> = [
+			{ create: { opcode: "CREATE_NUMBER", dst: 0, value: 7 }, representation: "int32" },
+			{ create: { opcode: "CREATE_F64", dst: 0, value: 1.5 }, representation: "number" },
+			{
+				create: { opcode: "CREATE_BOOLEAN", dst: 0, value: true },
+				representation: "boolean",
+			},
+		];
+		for (const { create, representation } of stores) {
+			const instructions: Array<BytecodeInstruction> = [
+				create,
+				{ opcode: "STORE_CAPTURED", src: 0, ownerFunctionIndex: 0, index: 0 },
+				{ opcode: "RETURN", value: 0 },
+			];
+			const owned = emitInputContract(instructions, [representation], {
+				capturedCount: 1,
+			});
+			expect(owned).toContain("mal_gc_write_barrier(env->slots[0]);");
+			expect(owned).toContain("env->slots[0] = ");
+			expect(owned).not.toContain("mal_gc_card(&env->header,");
+			const rebound = emitInputContract(
+				[{ opcode: "ENV_PUSH", scopeId: -2, slotCount: 1 }, ...instructions],
+				[representation],
+				{ capturedCount: 1 },
+			);
+			expect(rebound).toContain("mal_vm_store_captured(");
+		}
+		const pointer = emitInputContract(
+			[
+				{ opcode: "CREATE_STRING", dst: 0, stringIndex: 0 },
+				{ opcode: "STORE_CAPTURED", src: 0, ownerFunctionIndex: 0, index: 0 },
+				{ opcode: "RETURN", value: 0 },
+			],
+			["string"],
+			{ capturedCount: 1 },
+		);
+		expect(pointer).toContain("mal_gc_card(&env->header,");
+	});
+
 	it("keeps a canonical string key's nullish check on the failing branch", () => {
 		const instructions: Array<BytecodeInstruction> = [
 			{ opcode: "CREATE_F64", dst: 0, value: 0 },
