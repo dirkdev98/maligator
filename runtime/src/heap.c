@@ -942,9 +942,10 @@ void mal_heap_sweep_minor(MalHeap *heap, MalHeapFinalizeFn finalize) {
         for (u8 *cell = (u8 *) block + data_offset;
             cell + block->cell_size <= block->bump; cell += block->cell_size) {
             MalHeapHeader *header = (MalHeapHeader *) cell;
-            if (mal_heap_mark_is_old(header->mark)) {
+            u8 mark = atomic_load_explicit(&header->mark, memory_order_relaxed);
+            if (mal_heap_mark_is_old(mark)) {
                 block_live++;
-            } else if ((header->mark & MAL_MARK_FREE) == 0) {
+            } else if ((mark & MAL_MARK_FREE) == 0) {
                 finalize(header);
                 atomic_store_explicit(&header->mark, MAL_MARK_FREE, memory_order_relaxed);
                 if (heap->poison_on_free) {
