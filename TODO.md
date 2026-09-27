@@ -755,6 +755,12 @@ remains a Maligator extension and does not count as global fetch conformance.
 These are not active tasks and become actionable only when their condition is
 observed.
 
+- When draft PRs #65/#66 integrate, test private root publication before a fresh
+  automatic major root scan with actual worker overlap and later reclamation.
+  Cover more than 64 shadow slots, suspended generators, and a middle getter
+  that replaces property storage, collects, and changes later reads. Merge
+  liveness, verifier, artifact-version, manifest, and primordial-inventory
+  changes together; synchronous GC stress alone cannot prove this boundary.
 - Elide SATB barriers only if concurrent GC becomes the default and a realistic
   store-heavy workload makes the barrier material.
 - Revisit MalVm and host-structure layout when multiple VMs or isolates are active in

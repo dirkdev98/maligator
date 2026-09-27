@@ -91,5 +91,6 @@ tracked in [TODO.md](../../TODO.md).
 
 A copying nursery, simultaneous minor and major cycles, compaction, shared-heap
 mutators, and multiple active isolates require separate contracts. Draft PRs #65
-and #66 must be checked against root publication and property-storage lifetime
-before integration.
+and #66 require a combined-tree check of private-root publication before a fresh
+major scan and property-storage invalidation before a collecting getter fallback;
+synchronous GC stress cannot establish worker overlap.
