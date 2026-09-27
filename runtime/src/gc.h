@@ -167,11 +167,11 @@ static inline void mal_gc_remember_if_old(MalHeapHeader *owner) {
  * case — a non-heap or already-old value never dirties the owner. Call AT or just
  * after the store of `new_value` into a pointer field of `owner`. */
 static inline void mal_gc_card(MalHeapHeader *owner, MalValue new_value) {
-    if (owner == nullptr || !mal_heap_mark_is_old(owner->mark) || owner->dirty) {
+    if (!mal_value_is_heap(new_value) || owner == nullptr ||
+        !mal_heap_mark_is_old(owner->mark) || owner->dirty) {
         return;
     }
-    if (mal_value_is_heap(new_value) &&
-        !mal_heap_mark_is_old(mal_value_to_heap(new_value)->mark)) {
+    if (!mal_heap_mark_is_old(mal_value_to_heap(new_value)->mark)) {
         mal_gc_remember(owner);
     }
 }
