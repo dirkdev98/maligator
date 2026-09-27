@@ -63,7 +63,12 @@ bool mal_gc_black_alloc = false;
 /* Bytes promoted by allocation during a major since process start. */
 usize mal_gc_black_alloc_bytes = 0;
 
-volatile bool mal_gc_poll = false;
+#if defined(__wasi__)
+bool mal_gc_poll = false;
+#else
+static_assert(ATOMIC_BOOL_LOCK_FREE == 2, "GC poll must be signal-safe and lock-free");
+_Atomic bool mal_gc_poll = false;
+#endif
 
 MalRootFrame *mal_root_frame_head = nullptr;
 MalRootSpan *mal_root_span_head = nullptr;
@@ -132,6 +137,7 @@ typedef struct MalGcWorker {
     u64 traced;
 } MalGcWorker;
 static _Thread_local MalGcWorker *g_trace_worker = nullptr;
+void (*mal_gc_test_trace_env_hook)(MalEnv *env) = nullptr;
 #endif
 
 struct MalGcState {
@@ -150,6 +156,8 @@ struct MalGcState {
     usize workers_pending;
     usize worker_batch_count;
     u64 worker_batch_epoch;
+    bool worker_batch_active;
+    bool worker_batch_concurrent;
     bool worker_sync_initialized;
     bool worker_stop;
 #endif
@@ -234,6 +242,10 @@ struct MalGcState {
     u64 max_mark_step_ns; // largest single mark step
     u64 max_sweep_step_ns; // largest single sweep step
     u64 worker_traces;
+    u64 concurrent_batches;
+    u64 concurrent_traces;
+    u64 concurrent_env_traces;
+    u64 concurrent_discoveries;
 };
 
 #if !defined(__wasi__)
@@ -379,12 +391,17 @@ static void mal_gc_print_stats_now(void) {
     fprintf(stderr,
             " cycles=%llu sync_backstop=%llu over_tenure_bytes=%llu "
             "init_mark_ms=%.3f remark_ms=%.3f max_mark_step_ms=%.3f max_sweep_step_ms=%.3f "
-            "worker_traces=%llu",
+            "worker_traces=%llu concurrent_batches=%llu concurrent_traces=%llu "
+            "concurrent_env_traces=%llu concurrent_discoveries=%llu",
             (unsigned long long) g->cycles, (unsigned long long) g->sync_backstop,
             (unsigned long long) mal_gc_black_alloc_bytes,
             (double) g->init_mark_ns / 1.0e6, (double) g->remark_ns / 1.0e6,
             (double) g->max_mark_step_ns / 1.0e6, (double) g->max_sweep_step_ns / 1.0e6,
-            (unsigned long long) g->worker_traces);
+            (unsigned long long) g->worker_traces,
+            (unsigned long long) g->concurrent_batches,
+            (unsigned long long) g->concurrent_traces,
+            (unsigned long long) g->concurrent_env_traces,
+            (unsigned long long) g->concurrent_discoveries);
     fprintf(stderr, "\n");
     if (getenv("MAL_PROMISE_STATS") != nullptr) {
         fprintf(
@@ -809,10 +826,18 @@ static void mal_gc_trace_cell(MalHeapHeader *cell) {
             // (the count is stored on the env, so synthetic per-iteration envs trace
             // too).
             MalEnv *env = (MalEnv *) cell;
+#if !defined(__wasi__)
+            if (g_trace_worker != nullptr && g_gc->worker_batch_concurrent &&
+                mal_gc_test_trace_env_hook != nullptr) {
+                mal_gc_test_trace_env_hook(env);
+            }
+#endif
             if (env->parent != nullptr) {
                 mal_gc_shade(&env->parent->header);
             }
-            mal_gc_mark_values(env->slots, env->slot_count);
+            for (i32 i = 0; i < env->slot_count; ++i) {
+                mal_gc_mark_value(env->slots[i]);
+            }
             return;
         }
         case MAL_HEAP_ASYNC_CONTEXT: {
@@ -1229,6 +1254,7 @@ static void mal_gc_scan_roots(MalVm *vm) {
 
     // Isolate-shared roots (one per isolate, not per fiber).
     mal_gc_mark_value(vm->allocation_error);
+    mal_gc_mark_value(vm->error_stack_marker);
     for (MalPreparedValue *entry = vm->prepared_values; entry != nullptr; entry = entry->next) {
         mal_gc_mark_value(entry->value);
     }
@@ -1238,7 +1264,6 @@ static void mal_gc_scan_roots(MalVm *vm) {
     }
 #endif
 #if MAL_REALMS
-    mal_gc_mark_value(vm->error_stack_marker);
     // Every realm's globals and intrinsics are roots. The VM aliases point into the
     // current realm, which this loop already covers.
     for (MalRealm *realm = vm->realms; realm != nullptr; realm = realm->next) {
@@ -1570,6 +1595,12 @@ static bool mal_gc_worker_can_trace(MalHeapHeader *cell) {
     }
 }
 
+static bool mal_gc_worker_can_trace_during_mutation(MalHeapHeader *cell) {
+    if (g_type_tracers[cell->type] != nullptr) return false;
+    return cell->type == MAL_HEAP_SYMBOL || cell->type == MAL_HEAP_ASYNC_CONTEXT ||
+        cell->type == MAL_HEAP_ENV;
+}
+
 #if !defined(__wasi__)
 static void *mal_gc_worker_main(void *argument) {
     MalGcWorker *worker = argument;
@@ -1589,7 +1620,10 @@ static void *mal_gc_worker_main(void *argument) {
             mal_gc_trace_cell(batch[i]);
         }
         pthread_mutex_lock(&g->worker_mutex);
-        if (--g->workers_pending == 0) pthread_cond_signal(&g->worker_done);
+        if (--g->workers_pending == 0) {
+            if (g->worker_batch_concurrent) mal_gc_poll = true;
+            pthread_cond_signal(&g->worker_done);
+        }
     }
     pthread_mutex_unlock(&g->worker_mutex);
     g_trace_worker = nullptr;
@@ -1656,30 +1690,120 @@ static void mal_gc_workers_stop(MalGcState *g) {
     g->workers_created = 0;
 }
 
-static void mal_gc_workers_trace_batch(MalGcState *g, usize count) {
+static void mal_gc_workers_start_batch(MalGcState *g, usize count, bool concurrent) {
     mal_gc_workers_start(g);
     pthread_mutex_lock(&g->worker_mutex);
+    if (g->worker_batch_active) abort();
     g->worker_batch_count = count;
+    g->worker_batch_concurrent = concurrent;
     g->workers_pending = g->workers_created;
+    g->worker_batch_active = true;
     g->worker_batch_epoch++;
     pthread_cond_broadcast(&g->worker_ready);
-    while (g->workers_pending != 0) {
-        pthread_cond_wait(&g->worker_done, &g->worker_mutex);
+    pthread_mutex_unlock(&g->worker_mutex);
+}
+
+static bool mal_gc_workers_collect_batch(MalGcState *g, bool wait) {
+    if (!g->worker_batch_active) return true;
+    pthread_mutex_lock(&g->worker_mutex);
+    if (wait) {
+        while (g->workers_pending != 0) {
+            pthread_cond_wait(&g->worker_done, &g->worker_mutex);
+        }
+    } else if (g->workers_pending != 0) {
+        pthread_mutex_unlock(&g->worker_mutex);
+        return false;
     }
     pthread_mutex_unlock(&g->worker_mutex);
     for (usize i = 0; i < g->workers_created; ++i) {
         MalGcWorker *worker = &g->workers[i];
+        if (g->worker_batch_concurrent) g->concurrent_discoveries += worker->discovered_count;
         for (usize j = 0; j < worker->discovered_count; ++j) {
             mal_gc_grey_push(worker->discovered[j]);
         }
         worker->discovered_count = 0;
     }
-    g->worker_traces += count;
+    g->worker_traces += g->worker_batch_count;
+    if (g->worker_batch_concurrent) {
+        g->concurrent_batches++;
+        g->concurrent_traces += g->worker_batch_count;
+        for (usize i = 0; i < g->worker_batch_count; ++i) {
+            if (g->batch[i]->type == MAL_HEAP_ENV) g->concurrent_env_traces++;
+        }
+    }
+    g->worker_batch_active = false;
+    return true;
+}
+
+static void mal_gc_workers_trace_batch(MalGcState *g, usize count) {
+    mal_gc_workers_start_batch(g, count, false);
+    mal_gc_workers_collect_batch(g, true);
 }
 #endif
 
 #define MAL_GC_TRACE_BATCH_SIZE 512
 #define MAL_GC_PARALLEL_BATCH_MIN 64
+
+static void mal_gc_trace_parked_batch(usize count) {
+    usize safe_count = 0;
+    for (usize i = 0; i < count; ++i) {
+        MalHeapHeader *cell = g_gc->batch[i];
+        if (mal_gc_worker_can_trace(cell)) {
+            g_gc->batch[safe_count++] = cell;
+        } else {
+            mal_gc_trace_cell(cell);
+        }
+    }
+#if !defined(__wasi__)
+    if (safe_count >= MAL_GC_PARALLEL_BATCH_MIN) {
+        mal_gc_workers_trace_batch(g_gc, safe_count);
+        return;
+    }
+#endif
+    for (usize i = 0; i < safe_count; ++i) mal_gc_trace_cell(g_gc->batch[i]);
+}
+
+#if !defined(__wasi__)
+static bool mal_gc_trace_concurrent_batch(usize limit, usize *worked) {
+    usize count = g_gc->grey_count;
+    if (count > limit) count = limit;
+    if (count > MAL_GC_TRACE_BATCH_SIZE) count = MAL_GC_TRACE_BATCH_SIZE;
+    if (count < MAL_GC_PARALLEL_BATCH_MIN) {
+        *worked = 0;
+        return false;
+    }
+    if (g_gc->batch_capacity < count) {
+        MalHeapHeader **batch = realloc(g_gc->batch, count * sizeof(MalHeapHeader *));
+        if (batch == nullptr) abort();
+        g_gc->batch = batch;
+        g_gc->batch_capacity = count;
+    }
+    for (usize i = 0; i < count; ++i) {
+        g_gc->batch[i] = g_gc->grey[--g_gc->grey_count];
+    }
+    usize concurrent_count = 0;
+    for (usize i = 0; i < count; ++i) {
+        if (mal_gc_worker_can_trace_during_mutation(g_gc->batch[i])) concurrent_count++;
+    }
+    if (concurrent_count < MAL_GC_PARALLEL_BATCH_MIN) {
+        mal_gc_trace_parked_batch(count);
+        *worked = count;
+        return false;
+    }
+    usize safe_count = 0;
+    for (usize i = 0; i < count; ++i) {
+        MalHeapHeader *cell = g_gc->batch[i];
+        if (mal_gc_worker_can_trace_during_mutation(cell)) {
+            g_gc->batch[safe_count++] = cell;
+        } else {
+            mal_gc_trace_cell(cell);
+        }
+    }
+    mal_gc_workers_start_batch(g_gc, safe_count, true);
+    *worked = count;
+    return true;
+}
+#endif
 
 static usize mal_gc_trace_grey_batch(usize limit) {
     usize count = g_gc->grey_count;
@@ -1696,24 +1820,7 @@ static usize mal_gc_trace_grey_batch(usize limit) {
     for (usize i = 0; i < count; ++i) {
         g_gc->batch[i] = g_gc->grey[--g_gc->grey_count];
     }
-    usize safe_count = 0;
-    for (usize i = 0; i < count; ++i) {
-        MalHeapHeader *cell = g_gc->batch[i];
-        if (mal_gc_worker_can_trace(cell)) {
-            g_gc->batch[safe_count++] = cell;
-        } else {
-            mal_gc_trace_cell(cell);
-        }
-    }
-#if !defined(__wasi__)
-    if (safe_count >= MAL_GC_PARALLEL_BATCH_MIN) {
-        mal_gc_workers_trace_batch(g_gc, safe_count);
-        return count;
-    }
-#endif
-    for (usize i = 0; i < safe_count; ++i) {
-        mal_gc_trace_cell(g_gc->batch[i]);
-    }
+    mal_gc_trace_parked_batch(count);
     return count;
 }
 
@@ -1955,12 +2062,11 @@ static void mal_gc_collect_sync(MalVm *vm, bool major) {
 // ===========================================================================
 // Incremental major collector.
 //
-// The whole cycle runs on the mutator thread, sliced at safepoints. Minors
-// stay stop-the-world inline; only the periodic MAJOR runs as an incremental
-// cycle, and no minor starts while a cycle is in flight (the safepoint
-// advances the cycle instead). Black allocation over-tenures mid-cycle allocations
-// (accepted, counted). Roots are SATB-exempt: init-mark and remark re-scan them,
-// so both pauses are O(roots), never O(heap).
+// The mutator owns roots, weak processing, and sweep; eligible major-mark tasks
+// may run on native workers between safepoints. Minors stay stop-the-world inline
+// and do not start while a major cycle is in flight. Black allocation over-tenures
+// mid-cycle allocations (accepted, counted). Roots are SATB-exempt: init-mark and
+// remark re-scan them, so both pauses are O(roots), never O(heap).
 // ===========================================================================
 
 /* Flipping the major color makes old marks stale without a heap-wide reset. */
@@ -2002,6 +2108,9 @@ static void mal_gc_cycle_begin(MalVm *vm) {
  * to the incremental sweep. O(roots + floating snapshot), not O(heap). */
 static void mal_gc_cycle_remark(MalVm *vm) {
     u64 start_ns = g_gc->stats_enabled ? mal_monotonic_now_ns() : 0;
+#if !defined(__wasi__)
+    mal_gc_workers_collect_batch(g_gc, true);
+#endif
 
     // Re-scan roots: a value that moved from a (SATB-exempt) root into an already
     // black object during marking is caught here.
@@ -2061,7 +2170,25 @@ static void mal_gc_cycle_finish_sweep(MalVm *vm) {
 static bool mal_gc_mark_step(MalVm *vm, usize budget) {
     u64 start_ns = g_gc->stats_enabled ? mal_monotonic_now_ns() : 0;
     usize worked = 0;
+#if !defined(__wasi__)
+    if (!mal_gc_workers_collect_batch(g_gc, false)) {
+        while (worked < budget && worked < 256 && g_gc->grey_count > 0) {
+            mal_gc_trace_cell(g_gc->grey[--g_gc->grey_count]);
+            worked++;
+        }
+        goto finish_mark_step;
+    }
+#endif
     while (worked < budget) {
+#if !defined(__wasi__)
+        if (g_gc->grey_count >= MAL_GC_PARALLEL_BATCH_MIN) {
+            usize batch_work = 0;
+            bool dispatched = mal_gc_trace_concurrent_batch(budget - worked, &batch_work);
+            worked += batch_work;
+            if (dispatched) goto finish_mark_step;
+            if (batch_work > 0) continue;
+        }
+#endif
         if (g_gc->grey_count > 0) {
             worked += mal_gc_trace_grey_batch(budget - worked);
         } else if (g_gc->satb_drained < g_gc->satb_count) {
@@ -2071,7 +2198,13 @@ static bool mal_gc_mark_step(MalVm *vm, usize budget) {
             break; // nothing left to do this step
         }
     }
+#if !defined(__wasi__)
+finish_mark_step:
+#endif
     bool drained = g_gc->grey_count == 0 && g_gc->satb_drained >= g_gc->satb_count;
+#if !defined(__wasi__)
+    drained = drained && !g_gc->worker_batch_active;
+#endif
     g_gc->bytes_at_last_step = vm->heap.bytes_allocated;
     if (g_gc->stats_enabled) {
         u64 elapsed = mal_monotonic_now_ns() - start_ns;
@@ -2123,7 +2256,7 @@ static void mal_gc_cycle_finish_sync(MalVm *vm) {
  * synchronous major, which snapshots the CURRENT roots and reclaims that floating
  * garbage too. So gc() matches the STW collector's "reclaim everything dead now". */
 void mal_gc_collect(MalVm *vm) {
-    g_gc_vm = vm;
+    if (g_gc_vm != vm) abort();
     g_gc->collection_index++;
     if (g_gc->phase != MAL_GC_PHASE_IDLE) {
         mal_gc_cycle_finish_sync(vm);
@@ -2179,7 +2312,7 @@ static usize mal_gc_mark_budget(MalVm *vm) {
 }
 
 static void mal_gc_incremental_safepoint(MalVm *vm) {
-    g_gc_vm = vm;
+    if (g_gc_vm != vm) abort();
 
     // Stress collection completes at each selected safepoint, preserving the
     // diagnostic's ability to expose a missing root at that exact boundary.
@@ -2196,8 +2329,12 @@ static void mal_gc_incremental_safepoint(MalVm *vm) {
     if (g_gc->phase != MAL_GC_PHASE_IDLE) {
         // A cycle is in flight: advance it. Any auto-trigger poll raised meanwhile
         // ADVANCES this cycle (a mark/sweep step) rather than starting a collection.
-        mal_gc_cycle_advance(vm, mal_gc_mark_budget(vm));
+#if defined(__wasi__)
         mal_gc_poll = false;
+#else
+        atomic_exchange_explicit(&mal_gc_poll, false, memory_order_relaxed);
+#endif
+        mal_gc_cycle_advance(vm, mal_gc_mark_budget(vm));
         return;
     }
 

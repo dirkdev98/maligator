@@ -17,14 +17,6 @@
 #include "vm.h"
 #include "vm_ops.h"
 
-/** Unforgeable marker backing the captured-stack slot. */
-#if MAL_REALMS
-#define MAL_ERROR_STACK_MARKER(vm) ((vm)->error_stack_marker)
-#else
-static MalValue mal_error_stack_marker = MAL_VALUE_UNDEFINED;
-#define MAL_ERROR_STACK_MARKER(vm) ((void) (vm), mal_error_stack_marker)
-#endif
-
 static bool mal_builtin_error_throw_string_length(MalVm *vm) {
     mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Invalid string length");
     return false;
@@ -39,12 +31,12 @@ static inline void mal_error_dense_append(
 }
 
 static MalKey mal_error_stack_key(MalVm *vm) {
-    return (MalKey) {.kind = MAL_KEY_SYMBOL, .value = MAL_ERROR_STACK_MARKER(vm)};
+    return (MalKey) {.kind = MAL_KEY_SYMBOL, .value = vm->error_stack_marker};
 }
 
 void mal_builtin_error_finalize_object(MalVm *vm, MalObject *object) {
     if (!object->has_captured_stack
-        || mal_value_is_undefined(MAL_ERROR_STACK_MARKER(vm))) {
+        || mal_value_is_undefined(vm->error_stack_marker)) {
         return;
     }
     MalPropertyLookup lookup =
@@ -76,7 +68,7 @@ bool mal_builtin_value_has_error_data(MalVm *vm, MalValue value) {
  * marker is minted (errors created during early intrinsics init).
  */
 static bool mal_error_capture_stack(MalVm *vm, MalObject *error) {
-    if (mal_value_is_undefined(MAL_ERROR_STACK_MARKER(vm)) || vm->runtime_image->file_count == 0) {
+    if (mal_value_is_undefined(vm->error_stack_marker) || vm->runtime_image->file_count == 0) {
         return true;
     }
     MalStackTrace *trace = mal_vm_capture_stack(vm);
@@ -1161,15 +1153,9 @@ static MalObject *mal_builtin_error_install_kind(
 }
 
 void mal_builtin_error_install(MalVm *vm) {
-    // Mint the captured-stack marker before any error object is created. A
-    // realms build reuses the VM-owned marker for every realm.
-#if MAL_REALMS
     if (mal_value_is_undefined(vm->error_stack_marker)) {
         vm->error_stack_marker = mal_value_from_symbol(mal_symbol_new_private(&vm->heap));
     }
-#else
-    mal_error_stack_marker = mal_value_from_symbol(mal_symbol_new_private(&vm->heap));
-#endif
 
     MalObject *function_prototype = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]);
 

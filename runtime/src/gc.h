@@ -5,6 +5,12 @@
 
 typedef struct MalVm MalVm;
 
+#if !defined(__wasi__)
+struct MalEnv;
+/* Native tests may pause a worker before it reads an immutable env's atomic slots. */
+extern void (*mal_gc_test_trace_env_hook)(struct MalEnv *env);
+#endif
+
 typedef struct MalGcState MalGcState;
 
 /* Set during an incremental major mark cycle (init-mark → remark). */
@@ -14,10 +20,12 @@ extern bool mal_gc_black_alloc;
 /* Bytes promoted immediately by allocation during a major cycle. */
 extern usize mal_gc_black_alloc_bytes;
 
-/* Raised by the collector to request that mutators reach a safepoint; polled at
- * loop back-edges and call returns. `volatile`, not atomic: a missed read just
- * polls next time. */
-extern volatile bool mal_gc_poll;
+/* Workers can request a mutator safepoint after publishing a completed batch. */
+#if defined(__wasi__)
+extern bool mal_gc_poll;
+#else
+extern _Atomic bool mal_gc_poll;
+#endif
 
 /* Retain an overwritten heap edge until an incremental major reaches remark. */
 void mal_gc_satb_record(MalValue old_value);

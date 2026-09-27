@@ -450,7 +450,11 @@ MalEnv *mal_env_new(MalVm *vm, MalEnv *parent, i32 function_index, i32 count) {
     env->function_index = function_index;
     env->slot_count = count;
     for (i32 i = 0; i < count; i++) {
+#if defined(__wasi__)
         env->slots[i] = mal_value_new_undefined();
+#else
+        atomic_init(&env->slots[i], mal_value_new_undefined());
+#endif
     }
     return env;
 }
@@ -507,9 +511,7 @@ static void mal_vm_init_engine_state(MalVm *vm) {
 #if !MAL_REALMS
     memset(vm->known_primordial_values, 0, sizeof(vm->known_primordial_values));
 #endif
-#if MAL_REALMS
     vm->error_stack_marker = mal_value_new_undefined();
-#endif
     vm->allocation_error = mal_value_new_undefined();
     vm->tiny_string_cache = nullptr;
     vm->small_uint_string_cache = nullptr;

@@ -1147,8 +1147,19 @@ typedef struct MalEnv {
     // Number of MalValue slots; self-describing so the GC can trace any env
     // (including synthetic-id per-iteration envs) without a function lookup.
     i32 slot_count;
+#if defined(__wasi__)
     MalValue slots[];
+#else
+    _Atomic(MalValue) slots[];
+#endif
 } MalEnv;
+
+#if !defined(__wasi__)
+static_assert(sizeof(_Atomic(MalValue)) == sizeof(MalValue),
+    "captured slots must retain the MalValue cell layout");
+static_assert(alignof(_Atomic(MalValue)) == alignof(MalValue),
+    "captured slots must retain the MalValue alignment");
+#endif
 
 // function_index sentinel marking an object environment record: a `with` scope.
 // slots[0] holds the with-object. Distinct from any function index (>= 0) and any
@@ -1487,10 +1498,10 @@ typedef struct MalVm {
     MalHeap heap;
     /** Per-isolate collector cycle, worklists, remembered set, and statistics. */
     MalGcState *gc;
-#if MAL_REALMS
-    /** Isolate-wide private symbol backing captured Error stacks. Shared by every
-     * realm and rooted directly because a realm may temporarily hold no errors. */
+    /** Isolate-wide private symbol backing captured Error stacks. Rooted even
+     * before any Error exists or a realm retains it. */
     MalValue error_stack_marker;
+#if MAL_REALMS
     /** Current-realm globals; aliases current_realm->globals and is not owned here. */
     MalValue *globals;
     /**

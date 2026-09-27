@@ -87,6 +87,18 @@ const FIXTURES: Array<GcFixture> = [
 		tag: "gc-worker-batches",
 		stressEnv: { MAL_GC_STRESS: "1000", MAL_GC_VERIFY: "1" },
 	},
+	{
+		fixture: "tests/local/gc-concurrent-workers.js",
+		name: "gc-concurrent-workers",
+		tag: "gc-concurrent-workers",
+		env: { MAL_GC_THRESHOLD: "1048576", MAL_GC_MAJOR_EVERY: "1" },
+		stressEnv: { MAL_GC_STRESS: "1000", MAL_GC_VERIFY: "1" },
+	},
+	{
+		fixture: "tests/local/gc-error-stack-marker.js",
+		name: "gc-error-stack-marker",
+		tag: "gc-error-stack-marker",
+	},
 ];
 
 describe("targeted GC unit tests", () => {
@@ -144,6 +156,29 @@ describe("targeted GC unit tests", () => {
 					assertPassLine(result.stdout, spec.tag);
 					expect(
 						Number(result.stderr.match(/\bworker_traces=(\d+)/)?.[1] ?? 0),
+					).toBeGreaterThan(0);
+				});
+			}
+
+			if (spec.tag === "gc-concurrent-workers") {
+				it("dispatches immutable cells to background workers", () => {
+					const invocation = resolveHarnessExecutionInvocation(compiled);
+					const result = spawnSync(invocation.executable, invocation.args, {
+						env: { ...process.env, ...HOST_GC, ...spec.env, MAL_GC_STATS: "1" },
+						encoding: "utf8",
+						timeout: scaledNativeRunTimeoutMs(120_000),
+					});
+					if (result.error !== undefined) throw result.error;
+					expect(result.status, result.stderr || result.stdout).toBe(0);
+					assertPassLine(result.stdout, spec.tag);
+					expect(
+						Number(result.stderr.match(/\bconcurrent_batches=(\d+)/)?.[1] ?? 0),
+					).toBeGreaterThan(0);
+					expect(
+						Number(result.stderr.match(/\bconcurrent_traces=(\d+)/)?.[1] ?? 0),
+					).toBeGreaterThan(0);
+					expect(
+						Number(result.stderr.match(/\bconcurrent_env_traces=(\d+)/)?.[1] ?? 0),
 					).toBeGreaterThan(0);
 				});
 			}
