@@ -347,6 +347,32 @@ static bool incremental_major_accounts_recycled_raw_blocks(MalHeap *heap) {
     return true;
 }
 
+static bool incremental_major_charges_raw_block_traversal(MalHeap *heap) {
+    void *raw[128];
+    for (usize i = 0; i < countof(raw); i++) {
+        raw[i] = mal_heap_alloc_raw(heap, 8192);
+    }
+    mal_heap_begin_major(heap);
+    mal_heap_sweep_begin(heap);
+    MalGcChunk *first_chunk = heap->sweep_chunk;
+    for (usize i = 0; i < 16; i++) {
+        CHECK(!mal_heap_sweep_step(heap, finalize_cell, 1));
+        CHECK(heap->sweep_chunk == first_chunk && heap->sweep_block == i + 1);
+    }
+    CHECK(mal_heap_sweep_step(heap, finalize_cell, (usize) -1));
+    for (usize i = 0; i < countof(raw); i++) gc_free_raw(heap, raw[i]);
+    CHECK(heap->free_blocks != nullptr);
+    mal_heap_begin_major(heap);
+    mal_heap_sweep_begin(heap);
+    first_chunk = heap->sweep_chunk;
+    for (usize i = 0; i < 16; i++) {
+        CHECK(!mal_heap_sweep_step(heap, finalize_cell, 1));
+        CHECK(heap->sweep_chunk == first_chunk && heap->sweep_block == i + 1);
+    }
+    CHECK(mal_heap_sweep_step(heap, finalize_cell, (usize) -1));
+    return true;
+}
+
 static bool incremental_major_resets_sweep_epochs_on_wrap(MalHeap *heap) {
     TestCell *first = new_cell(heap, 512);
     TestCell *second = new_cell(heap, 1024);
@@ -512,6 +538,7 @@ int main(void) {
         incremental_major_keeps_allocations_after_a_block_was_swept,
         incremental_major_accounts_a_new_block_in_a_completed_chunk,
         incremental_major_accounts_recycled_raw_blocks,
+        incremental_major_charges_raw_block_traversal,
         incremental_major_resets_sweep_epochs_on_wrap,
         large_cells_follow_major_and_minor_lifetime,
         finalizer_raw_storage_reuses_partial_slots_and_blocks,

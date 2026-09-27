@@ -1039,13 +1039,13 @@ bool mal_heap_sweep_step(MalHeap *heap, MalHeapFinalizeFn finalize, usize max_bl
             MalGcBlock *block =
                 (MalGcBlock *) ((u8 *) chunk->base + heap->sweep_block * MAL_GC_BLOCK_SIZE);
             heap->sweep_block++;
+            swept++;
             if (block->kind != MAL_GC_BLOCK_CELL || block->recycled) {
                 block->sweep_epoch = heap->sweep_epoch;
-                continue; // RAW / already-recycled: no work, no budget
+                continue;
             }
             mal_heap_sweep_block(heap, block, finalize, data_offset, free_offset, &heap->sweep_live_bytes);
             block->sweep_epoch = heap->sweep_epoch;
-            swept++;
         }
         chunk->sweep_epoch = heap->sweep_epoch;
         heap->sweep_chunk = chunk->next;

@@ -535,11 +535,11 @@ void mal_heap_sweep_minor(MalHeap *heap, MalHeapFinalizeFn finalize);
 void mal_heap_sweep_begin(MalHeap *heap);
 
 /**
- * Sweep up to `max_blocks` managed blocks or large records from the captured cursors.
- * Returns true when both cursors finish. `max_blocks == (usize)-1` sweeps the
- * remaining heap synchronously. New large cells during the sweep are charged at
- * allocation and stay ahead of the cursor. The caller then closes the
- * finish). Requires a prior mal_heap_sweep_begin.
+ * Budget counts every visited block, including RAW and recycled blocks, plus
+ * large records. Managed blocks and finalizers remain indivisible. Returns true
+ * when both cursors finish; `(usize)-1` completes synchronously. New large cells
+ * are charged at allocation and stay ahead of the cursor. Requires a prior
+ * mal_heap_sweep_begin.
  */
 bool mal_heap_sweep_step(MalHeap *heap, MalHeapFinalizeFn finalize, usize max_blocks);
 

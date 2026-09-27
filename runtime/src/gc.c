@@ -2646,7 +2646,6 @@ finish_mark_step:
     return drained;
 }
 
-/* Number of CELL blocks to sweep per incremental sweep step. */
 #define MAL_GC_SWEEP_BLOCKS_PER_STEP 16
 
 /* One incremental sweep step: reclaim up to N blocks. Returns true when the whole
