@@ -124,7 +124,7 @@ describe("runtime-gap case catalog", () => {
 	it("covers explicit runtime suites and compiler algorithm cases", () => {
 		const catalog = loadRuntimeGapCatalog();
 		const kernels = catalog.cases;
-		expect(kernels.filter(({ group }) => group === "primitive")).toHaveLength(19);
+		expect(kernels.filter(({ group }) => group === "primitive")).toHaveLength(20);
 		expect(catalog.presets.quick).toHaveLength(37);
 		expect(catalog.presets.survey).toHaveLength(66);
 		expect(kernels.filter(({ group }) => group === "algorithm")).toHaveLength(15);

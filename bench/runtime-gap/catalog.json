@@ -358,6 +358,19 @@
 			"controls": []
 		},
 		{
+			"id": "retained-cache-churn",
+			"group": "primitive",
+			"suite": "runtime",
+			"owner": "long-lived cache graph with replacement and refill waves",
+			"category": "allocation-gc",
+			"mechanisms": ["allocation-gc"],
+			"inputShape": "8192 indexed records retained across 12 replace/query rounds and drop/refill waves",
+			"unit": "cache operation",
+			"sourceSeam": "runtime/src/gc.c",
+			"fixture": "cases/retained-cache-churn.mjs",
+			"controls": ["moderate-retention-churn"]
+		},
+		{
 			"id": "predictable-branches",
 			"group": "runtime",
 			"suite": "runtime",

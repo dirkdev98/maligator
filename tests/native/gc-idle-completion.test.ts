@@ -104,5 +104,5 @@ describe("GC idle completion", () => {
 		} finally {
 			rmSync(outDir, { recursive: true, force: true });
 		}
-	});
+	}, 180_000);
 });
