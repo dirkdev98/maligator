@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { expect, test } from "vitest";
@@ -68,6 +68,27 @@ function captureWithNestedPhases(): Uint8Array {
 		view.setUint8(offset, event.kind);
 		view.setBigUint64(offset + 8, event.timestampNs, true);
 		view.setBigUint64(offset + 16, event.value, true);
+	}
+	return bytes;
+}
+
+function captureWithTwoGcPauses(): Uint8Array {
+	const base = captureWithNestedPhases();
+	const oldFrameBase = 80 + 8 * 40;
+	const newFrameBase = 80 + 10 * 40;
+	const bytes = new Uint8Array(newFrameBase + 2 * 12);
+	bytes.set(base.subarray(0, oldFrameBase));
+	bytes.set(base.subarray(oldFrameBase), newFrameBase);
+	const view = new DataView(bytes.buffer);
+	view.setUint32(12, 10, true);
+	for (const [index, kind, timestampNs] of [
+		[8, 3, 21_000_000n],
+		[9, 4, 22_000_000n],
+	] as const) {
+		const offset = 80 + index * 40;
+		view.setUint8(offset, kind);
+		view.setBigUint64(offset + 8, timestampNs, true);
+		view.setBigUint64(offset + 16, 1n, true);
 	}
 	return bytes;
 }
@@ -393,7 +414,7 @@ test("profile finalization publishes standard views and joins remarks by source 
 			cpuSamples: 0,
 			allocationSamples: 0,
 			estimatedChargedBytes: 0,
-			gcCollections: 0,
+			gcPauses: 0,
 			gcPauseMs: 0,
 		},
 		spans: 2,
@@ -408,7 +429,7 @@ test("profile finalization publishes standard views and joins remarks by source 
 				selfMs: 15,
 				cpuSamples: 1,
 				allocationSamples: 0,
-				gcCollections: 0,
+				gcPauses: 0,
 			},
 			{
 				id: 2,
@@ -418,7 +439,7 @@ test("profile finalization publishes standard views and joins remarks by source 
 				selfMs: 10,
 				cpuSamples: 0,
 				allocationSamples: 1,
-				gcCollections: 1,
+				gcPauses: 1,
 				gcPauseMs: 2,
 			},
 		],
@@ -451,7 +472,7 @@ test("profile finalization publishes standard views and joins remarks by source 
 	});
 	const report = formatProfileReport(result).join("\n");
 	expect(report).toContain("Sampling 10.00 ms process-cpu CPU / 64 KiB poisson");
-	expect(report).toContain("GC 1 collections");
+	expect(report).toContain("GC 1 pause");
 	expect(report).toContain("estimated charged allocation traffic");
 	expect(report).toContain("Exact allocation families array/raw-payload 160 B");
 	expect(report).toContain("Compiler coverage 2/2 sites (100.0%)");
@@ -472,7 +493,7 @@ test("profile finalization publishes standard views and joins remarks by source 
 	expect(report).toContain("Phases 2 spans · 25.0 ms measured monotonic wall");
 	expect(report).toContain("graph · 25.0 ms / 15.0 ms · 100.0% wall · 1 span · 1 CPU");
 	expect(report).toContain("semantic · 10.0 ms / 10.0 ms · 40.0% wall · 1 span");
-	expect(report).toContain("64 KiB allocation (100.0%) · 1 GC / 2.00 ms");
+	expect(report).toContain("64 KiB allocation (100.0%) · 1 GC pause / 2.00 ms");
 	expect(report).toContain("Exact fallback pressure");
 	expect(report).toContain("2 fallback / 10 executions (20.0%)");
 	expect(report).toContain("Exact allocation sites");
@@ -519,10 +540,33 @@ test("phase summary preserves evidence outside measured spans", () => {
 		unphased: {
 			cpuSamples: 1,
 			allocationSamples: 1,
-			gcCollections: 0,
+			gcPauses: 0,
 		},
 	});
 	expect(result.manifest.phases.unphased.estimatedChargedBytes).toBeCloseTo(65_576, -1);
+});
+
+test("counts multiple major and minor pauses inside one phase", () => {
+	const directory = mkdtempSync(path.join(os.tmpdir(), "mal-profile-gc-pauses-"));
+	try {
+		writeFileSync(path.join(directory, "capture.bin"), captureWithTwoGcPauses());
+		const result = finalizeProfileCapture(directory, prepared, "run");
+		expect(result.manifest.gc).toMatchObject({
+			pauses: 2,
+			majorPauses: 1,
+			minorPauses: 1,
+			totalPauseMs: 3,
+			maxPauseMs: 2,
+		});
+		expect(
+			result.manifest.phases.timings.find((phase) => phase.name === "semantic"),
+		).toMatchObject({
+			gcPauses: 2,
+			gcPauseMs: 3,
+		});
+	} finally {
+		rmSync(directory, { recursive: true, force: true });
+	}
 });
 
 test("unmatched phase markers bias the capture instead of fabricating a duration", () => {

@@ -976,9 +976,9 @@ interface CompilerAllocationFamilySummary {
 }
 
 interface GcSummary {
-	collections: number;
-	major: number;
-	minor: number;
+	pauses: number;
+	majorPauses: number;
+	minorPauses: number;
 	totalPauseMs: number;
 	maxPauseMs: number;
 	incompleteEvents: number;
@@ -994,7 +994,7 @@ export interface ProfilePhaseTiming {
 	cpuSamples: number;
 	allocationSamples: number;
 	estimatedChargedBytes: number;
-	gcCollections: number;
+	gcPauses: number;
 	gcPauseMs: number;
 }
 
@@ -1005,7 +1005,7 @@ export interface ProfilePhaseSummary {
 		cpuSamples: number;
 		allocationSamples: number;
 		estimatedChargedBytes: number;
-		gcCollections: number;
+		gcPauses: number;
 		gcPauseMs: number;
 	};
 	spans: number;
@@ -1041,7 +1041,7 @@ function functionIdentityCoverage(prepared: PreparedProfile): FunctionIdentityCo
 }
 
 export interface ProfileManifest {
-	schema: 6;
+	schema: 7;
 	functionIdentities: FunctionIdentityCoverage;
 	status: "complete";
 	workloadSucceeded: boolean;
@@ -1090,7 +1090,7 @@ export interface ProfileManifest {
 		fallbacks: number;
 		boxing: number;
 		safepoints: number;
-		gc: number;
+		gcPauses: number;
 		runtimeDispatch: number;
 		runtimeString: number;
 		runtimeRegExp: number;
@@ -1115,9 +1115,9 @@ export interface ProfileManifest {
 
 function summarizeGc(records: Array<RawRecord>): GcSummary {
 	const begins: Array<{ timestampNs: number; major: boolean }> = [];
-	let collections = 0;
-	let major = 0;
-	let minor = 0;
+	let pauses = 0;
+	let majorPauses = 0;
+	let minorPauses = 0;
 	let totalPauseMs = 0;
 	let maxPauseMs = 0;
 	let unmatchedEnds = 0;
@@ -1125,9 +1125,9 @@ function summarizeGc(records: Array<RawRecord>): GcSummary {
 		if (record.kind === 3) {
 			const isMajor = record.value === 1;
 			begins.push({ timestampNs: record.timestampNs, major: isMajor });
-			collections++;
-			if (isMajor) major++;
-			else minor++;
+			pauses++;
+			if (isMajor) majorPauses++;
+			else minorPauses++;
 		} else if (record.kind === 4) {
 			const begin = begins.pop();
 			if (begin === undefined) {
@@ -1140,9 +1140,9 @@ function summarizeGc(records: Array<RawRecord>): GcSummary {
 		}
 	}
 	return {
-		collections,
-		major,
-		minor,
+		pauses,
+		majorPauses,
+		minorPauses,
 		totalPauseMs,
 		maxPauseMs,
 		incompleteEvents: begins.length + unmatchedEnds,
@@ -1166,7 +1166,7 @@ function summarizePhases(capture: RawCapture): ProfilePhaseSummary {
 		cpuSamples: number;
 		allocationSamples: number;
 		estimatedChargedBytes: number;
-		gcCollections: number;
+		gcPauses: number;
 		gcPauseNs: number;
 	}
 	const open: Array<OpenPhase> = [];
@@ -1176,7 +1176,7 @@ function summarizePhases(capture: RawCapture): ProfilePhaseSummary {
 		cpuSamples: 0,
 		allocationSamples: 0,
 		estimatedChargedBytes: 0,
-		gcCollections: 0,
+		gcPauses: 0,
 		gcPauseNs: 0,
 	};
 	const gcBegins: Array<{ timestampNs: number; phaseId?: number }> = [];
@@ -1190,7 +1190,7 @@ function summarizePhases(capture: RawCapture): ProfilePhaseSummary {
 				cpuSamples: 0,
 				allocationSamples: 0,
 				estimatedChargedBytes: 0,
-				gcCollections: 0,
+				gcPauses: 0,
 				gcPauseNs: 0,
 			};
 			evidence.set(id, value);
@@ -1238,7 +1238,7 @@ function summarizePhases(capture: RawCapture): ProfilePhaseSummary {
 			if (begin !== undefined) {
 				const activeEvidence =
 					begin.phaseId === undefined ? unphased : phaseEvidence(begin.phaseId);
-				activeEvidence.gcCollections++;
+				activeEvidence.gcPauses++;
 				activeEvidence.gcPauseNs += Math.max(0, record.timestampNs - begin.timestampNs);
 			}
 			continue;
@@ -1280,7 +1280,7 @@ function summarizePhases(capture: RawCapture): ProfilePhaseSummary {
 			cpuSamples: unphased.cpuSamples,
 			allocationSamples: unphased.allocationSamples,
 			estimatedChargedBytes: unphased.estimatedChargedBytes,
-			gcCollections: unphased.gcCollections,
+			gcPauses: unphased.gcPauses,
 			gcPauseMs: unphased.gcPauseNs / 1e6,
 		},
 		spans,
@@ -1299,7 +1299,7 @@ function summarizePhases(capture: RawCapture): ProfilePhaseSummary {
 					cpuSamples: phaseEvidence?.cpuSamples ?? 0,
 					allocationSamples: phaseEvidence?.allocationSamples ?? 0,
 					estimatedChargedBytes: phaseEvidence?.estimatedChargedBytes ?? 0,
-					gcCollections: phaseEvidence?.gcCollections ?? 0,
+					gcPauses: phaseEvidence?.gcPauses ?? 0,
 					gcPauseMs: (phaseEvidence?.gcPauseNs ?? 0) / 1e6,
 				};
 			})
@@ -1459,7 +1459,7 @@ export function finalizeProfileCapture(
 						: { id: record.value },
 			})),
 	);
-	atomicJson(path.join(directory, "phases.json"), { schema: 2, ...phases });
+	atomicJson(path.join(directory, "phases.json"), { schema: 3, ...phases });
 	atomicJson(
 		path.join(directory, "allocations.json"),
 		ranked.filter((finding) => finding.allocationSamples > 0),
@@ -1521,7 +1521,7 @@ export function finalizeProfileCapture(
 	const compilerOverflow =
 		compiler?.allocations.find((entry) => entry.siteId === -2) ?? null;
 	const manifest: ProfileManifest = {
-		schema: 6,
+		schema: 7,
 		functionIdentities: functionIdentityCoverage(prepared),
 		status: "complete",
 		workloadSucceeded: options.workloadSucceeded === true,
@@ -1585,7 +1585,7 @@ export function finalizeProfileCapture(
 						fallbacks: compilerEventTotal(compiler, "fallbacks"),
 						boxing: compilerEventTotal(compiler, "boxing"),
 						safepoints: compilerEventTotal(compiler, "safepoints"),
-						gc: compilerEventTotal(compiler, "gc"),
+						gcPauses: compilerEventTotal(compiler, "gc"),
 						runtimeDispatch: compilerEventTotal(compiler, "runtimeDispatch"),
 						runtimeString: compilerEventTotal(compiler, "runtimeString"),
 						runtimeRegExp: compilerEventTotal(compiler, "runtimeRegExp"),
@@ -1865,9 +1865,9 @@ export function formatProfileReport(
 		)} truncated stacks / ${formatCount(
 			manifest.stackTruncation.omittedFrames,
 		)} omitted stack frames`,
-		`  GC ${formatCount(manifest.gc.collections)} collections (${formatCount(
-			manifest.gc.major,
-		)} major / ${formatCount(manifest.gc.minor)} minor) · ${manifest.gc.totalPauseMs.toFixed(
+		`  GC ${formatCount(manifest.gc.pauses)} pause${manifest.gc.pauses === 1 ? "" : "s"} (${formatCount(
+			manifest.gc.majorPauses,
+		)} major / ${formatCount(manifest.gc.minorPauses)} minor) · ${manifest.gc.totalPauseMs.toFixed(
 			2,
 		)} ms total / ${manifest.gc.maxPauseMs.toFixed(2)} ms max${
 			manifest.gc.incompleteEvents === 0
@@ -1904,9 +1904,9 @@ export function formatProfileReport(
 			manifest.phases.unphased.allocationSamples === 0
 				? undefined
 				: `${formatBytes(manifest.phases.unphased.estimatedChargedBytes)} allocation`,
-			manifest.phases.unphased.gcCollections === 0
+			manifest.phases.unphased.gcPauses === 0
 				? undefined
-				: `${formatCount(manifest.phases.unphased.gcCollections)} GC / ${formatDuration(
+				: `${formatCount(manifest.phases.unphased.gcPauses)} GC pause${manifest.phases.unphased.gcPauses === 1 ? "" : "s"} / ${formatDuration(
 						manifest.phases.unphased.gcPauseMs,
 					)}`,
 		].filter((value): value is string => value !== undefined);
@@ -1947,9 +1947,9 @@ export function formatProfileReport(
 										: phase.estimatedChargedBytes /
 											manifest.allocation.estimatedChargedBytes) * 100
 								).toFixed(1)}%)`,
-						phase.gcCollections === 0
+						phase.gcPauses === 0
 							? undefined
-							: `${formatCount(phase.gcCollections)} GC / ${formatDuration(
+							: `${formatCount(phase.gcPauses)} GC pause${phase.gcPauses === 1 ? "" : "s"} / ${formatDuration(
 									phase.gcPauseMs,
 								)}`,
 					].filter((value): value is string => value !== undefined);

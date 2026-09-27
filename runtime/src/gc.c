@@ -295,6 +295,7 @@ struct MalGcState {
     u64 collections;
     u64 minor_count;
     u64 major_count;
+    u64 pause_count;
     u64 total_ns;
     u64 max_pause_ns;
     usize peak_live_bytes;
@@ -471,13 +472,14 @@ static void mal_gc_print_stats_now(void) {
     worker_limit = g->worker_limit;
 #endif
     fprintf(stderr,
-            "[gc-stats] collections=%llu minor=%llu major=%llu total_ms=%.3f "
+            "[gc-stats] collections=%llu minor=%llu major=%llu pauses=%llu total_ms=%.3f "
             "max_pause_ms=%.3f peak_live_bytes=%llu allocated_bytes=%llu "
             "compiled_root_slots_scanned=%llu compiled_root_slots_skipped=%llu "
             "object_slot_coallocations=%llu object_slot_grow_migrations=%llu "
             "object_slot_dictionary_migrations=%llu stack_object_materializations=%llu",
             (unsigned long long) g->collections, (unsigned long long) g->minor_count,
-            (unsigned long long) g->major_count, (double) g->total_ns / 1.0e6,
+            (unsigned long long) g->major_count, (unsigned long long) g->pause_count,
+            (double) g->total_ns / 1.0e6,
             (double) g->max_pause_ns / 1.0e6, (unsigned long long) g->peak_live_bytes,
             (unsigned long long) allocated_bytes,
             (unsigned long long) g->compiled_root_slots_scanned,
@@ -2224,14 +2226,19 @@ static void mal_gc_clear_remembered(void) {
 
 // --- Statistics helpers ----------------------------------------------------
 
-static void mal_gc_stat_record(u64 elapsed_ns) {
-    if (!g_gc->stats_enabled) {
-        return;
-    }
+static u64 mal_gc_pause_begin(MalVm *vm, bool major) {
+    u64 start_ns = g_gc->stats_enabled ? mal_monotonic_now_ns() : 0;
+    mal_profile_event(vm, MAL_PROFILE_RECORD_GC_BEGIN, major ? 1 : 0);
+    return start_ns;
+}
+
+static void mal_gc_pause_end(MalVm *vm, bool major, u64 start_ns) {
+    mal_profile_event(vm, MAL_PROFILE_RECORD_GC_END, major ? 1 : 0);
+    if (!g_gc->stats_enabled) return;
+    u64 elapsed_ns = mal_monotonic_now_ns() - start_ns;
+    g_gc->pause_count++;
     g_gc->total_ns += elapsed_ns;
-    if (elapsed_ns > g_gc->max_pause_ns) {
-        g_gc->max_pause_ns = elapsed_ns;
-    }
+    if (elapsed_ns > g_gc->max_pause_ns) g_gc->max_pause_ns = elapsed_ns;
 }
 
 static void mal_gc_stat_peak_live(MalVm *vm) {
@@ -2259,8 +2266,6 @@ static usize mal_gc_advance_trigger(MalVm *vm) {
 
 /* A major flips color; a minor traces young cells from roots and remembered owners. */
 static void mal_gc_collect_sync(MalVm *vm, bool major) {
-	mal_profile_event(vm, MAL_PROFILE_RECORD_GC_BEGIN, major ? 1 : 0);
-    u64 start_ns = g_gc->stats_enabled ? mal_monotonic_now_ns() : 0;
     g_gc->grey_count = 0;
     g_gc->weak_maps_count = 0;
     g_gc->weak_refs_count = 0;
@@ -2305,9 +2310,7 @@ static void mal_gc_collect_sync(MalVm *vm, bool major) {
     mal_gc_advance_trigger(vm);
 
 	if (g_gc->stats_enabled) {
-        u64 elapsed = mal_monotonic_now_ns() - start_ns;
         g_gc->collections++;
-        mal_gc_stat_record(elapsed);
         mal_gc_stat_peak_live(vm);
         if (major) {
             g_gc->major_count++;
@@ -2315,7 +2318,6 @@ static void mal_gc_collect_sync(MalVm *vm, bool major) {
             g_gc->minor_count++;
         }
 	}
-	mal_profile_event(vm, MAL_PROFILE_RECORD_GC_END, major ? 1 : 0);
 }
 
 
@@ -2359,7 +2361,6 @@ static void mal_gc_cycle_begin(MalVm *vm) {
         u64 elapsed = mal_monotonic_now_ns() - start_ns;
         g_gc->cycles++;
         g_gc->init_mark_ns = elapsed;
-        mal_gc_stat_record(elapsed);
     }
 }
 
@@ -2402,7 +2403,6 @@ static void mal_gc_cycle_remark(MalVm *vm) {
     if (g_gc->stats_enabled) {
         u64 elapsed = mal_monotonic_now_ns() - start_ns;
         g_gc->remark_ns = elapsed;
-        mal_gc_stat_record(elapsed);
     }
 }
 
@@ -2475,7 +2475,6 @@ finish_mark_step:
         if (elapsed > g_gc->max_mark_step_ns) {
             g_gc->max_mark_step_ns = elapsed;
         }
-        mal_gc_stat_record(elapsed);
     }
     return drained;
 }
@@ -2493,7 +2492,6 @@ static bool mal_gc_sweep_step(MalVm *vm) {
         if (elapsed > g_gc->max_sweep_step_ns) {
             g_gc->max_sweep_step_ns = elapsed;
         }
-        mal_gc_stat_record(elapsed);
     }
     return done;
 }
@@ -2516,7 +2514,9 @@ static void mal_gc_cycle_finish_sync(MalVm *vm) {
 bool mal_gc_finish_pending_cycle(MalVm *vm) {
     if (g_gc_vm != vm) abort();
     if (vm->gc_native_frames != 0 || g_gc->phase == MAL_GC_PHASE_IDLE) return false;
+    u64 start_ns = mal_gc_pause_begin(vm, true);
     mal_gc_cycle_finish_sync(vm);
+    mal_gc_pause_end(vm, true, start_ns);
     return true;
 }
 
@@ -2528,11 +2528,13 @@ bool mal_gc_finish_pending_cycle(MalVm *vm) {
  * garbage too. So gc() matches the STW collector's "reclaim everything dead now". */
 void mal_gc_collect(MalVm *vm) {
     if (g_gc_vm != vm) abort();
+    u64 start_ns = mal_gc_pause_begin(vm, true);
     g_gc->collection_index++;
     if (g_gc->phase != MAL_GC_PHASE_IDLE) {
         mal_gc_cycle_finish_sync(vm);
     }
     mal_gc_collect_sync(vm, true); // fresh full major over the current snapshot
+    mal_gc_pause_end(vm, true, start_ns);
 }
 
 /* Advance an in-flight cycle by one step, or (if idle) decide whether a collection
@@ -2546,12 +2548,8 @@ static void mal_gc_cycle_advance(MalVm *vm, usize mark_budget) {
             // Hard backstop: if allocation has reached the old STW trigger before the
             // cycle finished, finish it synchronously rather than float garbage.
             if (vm->heap.bytes_allocated >= g_gc->backstop_at) {
-                u64 s = g_gc->stats_enabled ? mal_monotonic_now_ns() : 0;
                 mal_gc_cycle_finish_sync(vm);
-                if (g_gc->stats_enabled) {
-                    g_gc->sync_backstop++;
-                    mal_gc_stat_record(mal_monotonic_now_ns() - s);
-                }
+                if (g_gc->stats_enabled) g_gc->sync_backstop++;
                 return;
             }
             if (mal_gc_mark_step(vm, mark_budget)) {
@@ -2591,7 +2589,9 @@ static void mal_gc_incremental_safepoint(MalVm *vm) {
         if (++g_gc->stress_counter >= g_gc->stress_interval) {
             g_gc->stress_counter = 0;
             bool major = (g_gc->collection_index++ % g_gc->major_every) == 0;
+            u64 start_ns = mal_gc_pause_begin(vm, major);
             mal_gc_collect_sync(vm, major);
+            mal_gc_pause_end(vm, major, start_ns);
         }
         return;
     }
@@ -2605,7 +2605,9 @@ static void mal_gc_incremental_safepoint(MalVm *vm) {
 #else
         atomic_exchange_explicit(&mal_gc_poll, false, memory_order_relaxed);
 #endif
+        u64 start_ns = mal_gc_pause_begin(vm, true);
         mal_gc_cycle_advance(vm, mal_gc_mark_budget(vm));
+        mal_gc_pause_end(vm, true, start_ns);
         return;
     }
 
@@ -2622,7 +2624,9 @@ static void mal_gc_incremental_safepoint(MalVm *vm) {
     if (!major) {
         // Minor: STW-inline, exactly as today (short by construction).
         g_gc->collection_index++;
+        u64 start_ns = mal_gc_pause_begin(vm, false);
         mal_gc_collect_sync(vm, false);
+        mal_gc_pause_end(vm, false, start_ns);
         return;
     }
 
@@ -2636,7 +2640,9 @@ static void mal_gc_incremental_safepoint(MalVm *vm) {
         grow = MAL_GC_MIN_INCREMENT;
     }
     g_gc->backstop_at = vm->heap.bytes_allocated + grow;
+    u64 start_ns = mal_gc_pause_begin(vm, true);
     mal_gc_cycle_begin(vm);
+    mal_gc_pause_end(vm, true, start_ns);
 }
 
 void mal_gc_safepoint(MalVm *vm) {

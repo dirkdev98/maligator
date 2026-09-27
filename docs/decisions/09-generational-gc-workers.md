@@ -73,7 +73,10 @@ reinitializes a VM while a worker is paused in tracing. ThreadSanitizer covers
 those overlap cases. A separate fixture checks idle completion before host exit,
 reactor wait, and scheduler exit. GC statistics separate mutator pause time,
 worker CPU, copied values and heap values, worker discoveries, and remark join
-time. These counters describe work distribution; they do not alone establish an
+time. A pause is one uninterrupted mutator stop; an incremental major can have
+several pauses while still counting as one collection. Profile manifest schema 7
+labels these events as pauses, while the raw capture layout remains schema 6.
+These counters describe work distribution; they do not alone establish an
 application speedup.
 Large root scans, mutator-only traces, finalization, and synchronous completion
 can still create long pauses. Wasm parity and broad performance acceptance are

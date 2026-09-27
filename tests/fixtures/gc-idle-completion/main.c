@@ -11,6 +11,7 @@ extern const MalRuntimeImage mal_runtime_image;
 
 static MalObject *dead_target;
 static u32 finalized;
+static u32 idle_calls;
 
 static usize one_worker(void) {
     return 1;
@@ -32,6 +33,15 @@ static void observe_timer(void *data) {
     observation->gc_finished = !mal_gc_marking_active && !observation->vm->heap.sweeping;
 }
 
+static bool start_major_on_idle(MalVm *vm) {
+    idle_calls++;
+    if (idle_calls != 1) return false;
+    vm->heap.next_gc_at = 1;
+    mal_gc_poll = true;
+    mal_gc_safepoint(vm);
+    return true;
+}
+
 static int check_idle_boundary(int boundary) {
     mal_gc_test_worker_limit_hook = one_worker;
     MalVm vm;
@@ -50,12 +60,17 @@ static int check_idle_boundary(int boundary) {
     dead_target = mal_object_new(&vm.heap, nullptr);
     MalRootSpan span;
     mal_gc_root(&span, roots, (i32) countof(roots));
-    vm.heap.next_gc_at = 1;
-    mal_gc_poll = true;
-    mal_gc_safepoint(&vm);
-    if (!mal_gc_marking_active) return 2;
-    mal_gc_safepoint(&vm);
-    if (!mal_gc_marking_active) return 3;
+    if (boundary != 3) {
+        vm.heap.next_gc_at = 1;
+        mal_gc_poll = true;
+        mal_gc_safepoint(&vm);
+        if (!mal_gc_marking_active) return 2;
+        mal_gc_safepoint(&vm);
+        if (!mal_gc_marking_active) return 3;
+    } else {
+        idle_calls = 0;
+        mal_host_register_idle_notify(start_major_on_idle);
+    }
 
     TimerObservation observation = {.vm = &vm};
     MalTimer timer = {
@@ -72,9 +87,12 @@ static int check_idle_boundary(int boundary) {
     } else {
         mal_host_run_event_loop(&vm);
     }
+    if (boundary == 3) mal_host_register_idle_notify(nullptr);
 
     if (mal_gc_marking_active || vm.heap.sweeping || finalized != 1) return 4;
     if (boundary == 1 && (!observation.fired || !observation.gc_finished)) return 5;
+    if (boundary == 3 && idle_calls != 1) return 6;
+    mal_gc_collect(&vm);
     mal_gc_unroot(&span);
     mal_gc_register_finalizer(MAL_HEAP_OBJECT, nullptr);
     mal_host_detach(&vm);
@@ -83,8 +101,15 @@ static int check_idle_boundary(int boundary) {
     return 0;
 }
 
-int main(void) {
-    for (int boundary = 0; boundary < 3; ++boundary) {
+int main(int argc, char **argv) {
+    int first = 0;
+    int last = 4;
+    if (argc == 2) {
+        if (argv[1][0] < '0' || argv[1][0] > '3' || argv[1][1] != '\0') return 1;
+        first = argv[1][0] - '0';
+        last = first + 1;
+    }
+    for (int boundary = first; boundary < last; ++boundary) {
         int result = check_idle_boundary(boundary);
         if (result != 0) return 10 * boundary + result;
     }

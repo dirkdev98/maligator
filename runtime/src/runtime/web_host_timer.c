@@ -235,7 +235,6 @@ void mal_host_run_event_loop(MalVm *vm) {
             continue;
         }
         if (mal_gc_finish_pending_cycle(vm)) {
-            progressed = true;
             continue;
         }
         // No callback is ready. If the reactor still holds timers/fd ops, block
