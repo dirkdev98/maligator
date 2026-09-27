@@ -1,4 +1,5 @@
 #include "./gc.h"
+#include "./gc_cpu_linux.h"
 
 #include <errno.h>
 #include <signal.h>
@@ -140,7 +141,10 @@ typedef enum MalGcPhase {
 usize (*mal_gc_test_worker_limit_hook)(void) = nullptr;
 bool (*mal_gc_test_worker_start_failure_hook)(usize index) = nullptr;
 
-static usize mal_gc_native_worker_limit(void) {
+static usize mal_gc_native_worker_limit(
+    MalGcQuotaStatus *quota_status, bool *quota_complete) {
+    *quota_status = MAL_GC_QUOTA_UNKNOWN;
+    *quota_complete = false;
     if (mal_gc_test_worker_limit_hook != nullptr) {
         usize requested = mal_gc_test_worker_limit_hook();
         return requested < MAL_GC_WORKER_COUNT ? requested : MAL_GC_WORKER_COUNT;
@@ -153,32 +157,10 @@ static usize mal_gc_native_worker_limit(void) {
         usize allowed = (usize) CPU_COUNT(&affinity);
         if (allowed > 0 && allowed < cpus) cpus = allowed;
     }
-    FILE *quota_file = fopen("/sys/fs/cgroup/cpu.max", "r");
-    if (quota_file != nullptr) {
-        unsigned long long quota;
-        unsigned long long period;
-        if (fscanf(quota_file, "%llu %llu", &quota, &period) == 2 && period > 0) {
-            usize quota_cpus = (usize) (quota / period);
-            if (quota_cpus == 0) quota_cpus = 1;
-            if (quota_cpus < cpus) cpus = quota_cpus;
-        }
-        fclose(quota_file);
-    } else {
-        FILE *legacy_quota = fopen("/sys/fs/cgroup/cpu/cpu.cfs_quota_us", "r");
-        FILE *legacy_period = fopen("/sys/fs/cgroup/cpu/cpu.cfs_period_us", "r");
-        if (legacy_quota != nullptr && legacy_period != nullptr) {
-            long long quota;
-            long long period;
-            if (fscanf(legacy_quota, "%lld", &quota) == 1 &&
-                fscanf(legacy_period, "%lld", &period) == 1 && quota > 0 && period > 0) {
-                usize quota_cpus = (usize) (quota / period);
-                if (quota_cpus == 0) quota_cpus = 1;
-                if (quota_cpus < cpus) cpus = quota_cpus;
-            }
-        }
-        if (legacy_quota != nullptr) fclose(legacy_quota);
-        if (legacy_period != nullptr) fclose(legacy_period);
-    }
+    MalGcCpuQuota quota = mal_gc_linux_cpu_quota(cpus);
+    cpus = quota.cpus;
+    *quota_status = quota.status;
+    *quota_complete = quota.complete;
 #endif
     usize spare = cpus > 1 ? cpus - 1 : 0;
     return spare < MAL_GC_WORKER_COUNT ? spare : MAL_GC_WORKER_COUNT;
@@ -215,6 +197,8 @@ struct MalGcState {
     usize grey_capacity;
     MalHeapHeader **batch;
     usize batch_capacity;
+    MalGcQuotaStatus worker_quota_status;
+    bool worker_quota_complete;
 #if !defined(__wasi__)
     MalValue *batch_edges;
     usize batch_edges_capacity;
@@ -651,6 +635,10 @@ static void mal_gc_print_stats_now(void) {
             (unsigned long long) g->weak_pending_links_visited,
             (unsigned long long) g->weak_pending_peak_bytes,
             (double) g->weak_pass_ns / 1.0e6);
+    const char *quota_status = g->worker_quota_status == MAL_GC_QUOTA_LIMITED ? "limited" :
+        g->worker_quota_status == MAL_GC_QUOTA_UNLIMITED ? "unlimited" : "unknown";
+    fprintf(stderr, " worker_quota_status=%s worker_quota_complete=%d",
+        quota_status, g->worker_quota_complete);
     fprintf(stderr, "\n");
     if (getenv("MAL_PROMISE_STATS") != nullptr) {
         fprintf(
@@ -744,7 +732,8 @@ void mal_gc_init(MalVm *vm) {
     vm->gc = g;
     g->vm = vm;
 #if !defined(__wasi__)
-    g->worker_limit = mal_gc_native_worker_limit();
+    g->worker_limit = mal_gc_native_worker_limit(
+        &g->worker_quota_status, &g->worker_quota_complete);
 #endif
     g_gc = g;
     g_gc_vm = vm;
