@@ -57,6 +57,11 @@ int main(void) {
     mal_gc_poll = true;
     mal_gc_safepoint(&vm);
     if (!mal_gc_marking_active) return 2;
+    mal_array_object_dense_reverse(target_array);
+    for (usize i = 0; i < countof(targets); ++i) {
+        if (target_array->elements[i] !=
+            mal_value_from_object(targets[countof(targets) - 1 - i])) return 8;
+    }
     time_t deadline = time(nullptr) + 30;
     while (!worker_entered && time(nullptr) < deadline) {
         mal_gc_safepoint(&vm);
@@ -71,6 +76,10 @@ int main(void) {
     }
     if (!worker_entered) return 3;
     if (mal_heap_mark_is_current(targets[1]->header.mark, vm.heap.mark_color)) return 4;
+    mal_array_object_dense_reverse(target_array);
+    for (usize i = 0; i < countof(targets); ++i) {
+        if (target_array->elements[i] != mal_value_from_object(targets[i])) return 9;
+    }
 
     MalObject *replacement = mal_object_new(&vm.heap, nullptr);
     mal_array_object_dense_fill(target_array, 0, 1, mal_value_from_object(replacement));

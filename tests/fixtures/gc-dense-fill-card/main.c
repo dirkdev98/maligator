@@ -9,12 +9,15 @@ extern const MalRuntimeImage mal_runtime_image;
 
 static MalObject *fill_target;
 static MalObject *build_target;
+static MalObject *reverse_target;
 static u32 fill_finalized;
 static u32 build_finalized;
+static u32 reverse_finalized;
 
 static void count_finalized(MalHeapHeader *cell) {
     if ((void *) cell == (void *) fill_target) fill_finalized++;
     if ((void *) cell == (void *) build_target) build_finalized++;
+    if ((void *) cell == (void *) reverse_target) reverse_finalized++;
 }
 
 int main(void) {
@@ -38,6 +41,7 @@ int main(void) {
 
     fill_target = mal_object_new(&vm.heap, nullptr);
     build_target = mal_object_new(&vm.heap, nullptr);
+    reverse_target = mal_object_new(&vm.heap, nullptr);
     mal_array_object_dense_fill(filled, 0, 0, mal_value_from_object(fill_target));
     if (!mal_array_object_dense_build_fill(built, 0, 0,
             mal_value_from_object(build_target)) ||
@@ -46,19 +50,21 @@ int main(void) {
     if (!mal_array_object_dense_build_fill(built, 0, 128,
             mal_value_from_object(build_target)) ||
         !filled->object.header.dirty || !built->object.header.dirty) return 3;
+    mal_array_object_dense_fill(filled, 0, 1, mal_value_from_object(reverse_target));
+    mal_array_object_dense_reverse(filled);
 
     vm.heap.next_gc_at = 1;
     mal_gc_poll = true;
     mal_gc_safepoint(&vm);
-    if (fill_finalized != 0 || build_finalized != 0 ||
+    if (fill_finalized != 0 || build_finalized != 0 || reverse_finalized != 0 ||
         filled->elements[0] != mal_value_from_object(fill_target) ||
-        filled->elements[127] != mal_value_from_object(fill_target) ||
+        filled->elements[127] != mal_value_from_object(reverse_target) ||
         built->elements[0] != mal_value_from_object(build_target) ||
         built->elements[127] != mal_value_from_object(build_target)) return 4;
 
     mal_gc_unroot(&span);
     mal_gc_collect(&vm);
-    if (fill_finalized != 1 || build_finalized != 1) return 5;
+    if (fill_finalized != 1 || build_finalized != 1 || reverse_finalized != 1) return 5;
     mal_gc_register_finalizer(MAL_HEAP_OBJECT, nullptr);
     mal_vm_free(&vm);
     puts("gc-dense-fill-card PASS");

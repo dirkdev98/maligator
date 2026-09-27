@@ -483,14 +483,13 @@ bool mal_array_object_dense_unshift_many(
 
 void mal_array_object_dense_reverse(MalArrayObject *array) {
     u32 count = array->dense_count;
-    mal_array_object_dense_barrier_range(array, 0, count);
+    // No safepoint interrupts this permutation; whole-array tracing and owner cards see the same edges.
     for (u32 left = 0; left < count / 2; left++) {
         u32 right = count - 1 - left;
         MalValue swap = array->elements[left];
         array->elements[left] = array->elements[right];
         array->elements[right] = swap;
     }
-    mal_array_object_dense_card_range(array, 0, count);
     mal_perf_collection_mutation(array, array->length);
 }
 

@@ -769,7 +769,10 @@ remains a Maligator extension and does not count as global fetch conformance.
       and recheck combined CPU before retaining bounded private draining.
 - [ ] Barriers: decide dense-fill and scalar captured-store card specialization
       after representative HTTP and compiler comparisons; app-batch screens were
-      mixed. Keep SATB deletion protection independent of generational facts.
+      mixed. The dense reverse permutation removes both range scans under the
+      whole-array tracing and whole-owner remembered-set contract; check its
+      application exposure before retaining it. Keep SATB deletion protection
+      independent of generational facts.
 - [ ] Pacing: measure young survival, promotion debt, major reclamation yield,
       current RAW/reusable/chunk capacity, external pressure, and assist/backstop
       cost before replacing the eighth-collection cadence. Validate nested cgroup
