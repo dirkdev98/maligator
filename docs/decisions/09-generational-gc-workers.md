@@ -57,7 +57,8 @@ ancestor limits may not be visible, so CPU-constrained deployments need a matche
 resource check. The pool starts on the first qualifying batch, parks while idle,
 and stops before VM teardown. Before the host loop or fiber scheduler waits or
 exits with no runnable work, the mutator completes any active cycle and checks
-the task queues again. Wasm never starts a native pool.
+the task queues again. The Wasm reactor completes any active cycle before init
+or a call returns to its embedder. Wasm never starts a native pool.
 
 Root-source registrations remain process-wide across sequential VMs. Registration
 deduplicates identical callbacks, rejects capacity exhaustion, and callbacks

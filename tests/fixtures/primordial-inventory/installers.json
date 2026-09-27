@@ -661,7 +661,7 @@
 	},
 	{
 		"file": "runtime/web_host_timer.c",
-		"sha256": "f038cc768519a89d4e4f16b610cb662e4589c8895e9f65ddf9fb87f665fbed83"
+		"sha256": "380312fdfdbb1af72a9dd058e971057754ef3c0325c6a1c5ededdd71cf55db64"
 	},
 	{
 		"file": "runtime/web_readable_stream.c",

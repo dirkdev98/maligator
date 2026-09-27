@@ -65,6 +65,7 @@ int mal_wasm_init(void) {
         status = 1;
         set_output(vm.completion.value);
     }
+    mal_gc_finish_pending_cycle(&vm);
     return status;
 }
 
@@ -93,6 +94,7 @@ const byte *mal_wasm_call(const byte *name, usize name_length, const byte *input
         set_output(completion.value);
     }
     mal_gc_unroot(&root);
+    mal_gc_finish_pending_cycle(&vm);
     return output;
 }
 

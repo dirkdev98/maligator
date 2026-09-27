@@ -33,13 +33,22 @@ beforeAll(() => {
 	module = new WebAssembly.Module(readFileSync(output));
 }, 300_000);
 
-function openEngine(stress = false): WasmEngine {
+function openEngine(mode: "normal" | "stress" | "automatic" = "normal"): WasmEngine {
 	const wasi = new WASI({
 		version: "preview1",
 		args: [],
 		env: {
 			TZ: "UTC",
-			...(stress ? { MAL_GC_STRESS: "1", MAL_GC_VERIFY: "1", MAL_GC_STATS: "1" } : {}),
+			...(mode === "stress"
+				? { MAL_GC_STRESS: "1", MAL_GC_VERIFY: "1", MAL_GC_STATS: "1" }
+				: mode === "automatic"
+					? {
+							MAL_GC_THRESHOLD: "1",
+							MAL_GC_MAJOR_EVERY: "1",
+							MAL_GC_VERIFY: "1",
+							MAL_GC_STATS: "1",
+						}
+					: {}),
 		},
 		preopens: {},
 		returnOnExit: true,
@@ -86,7 +95,7 @@ describe("Wasm reactor embedding", () => {
 	});
 
 	it("retains roots across verified stress collections and repeated calls", () => {
-		const engine = openEngine(true);
+		const engine = openEngine("stress");
 		try {
 			for (let index = 0; index < 20; index++) {
 				const input = `${index}:🐊`;
@@ -95,6 +104,24 @@ describe("Wasm reactor embedding", () => {
 				);
 			}
 			expect(engine.collections).toBeGreaterThan(0);
+		} finally {
+			engine.dispose();
+		}
+	});
+
+	it("completes automatic major cycles before returning across repeated calls", () => {
+		const engine = openEngine("automatic");
+		try {
+			let previous = engine.collections;
+			for (let index = 0; index < 6; index++) {
+				const input = `${index}:🐊`;
+				expect(JSON.parse(engine.call("retain", input))).toEqual(
+					Array.from({ length: 80 }, (_, index) => ({ index, input })),
+				);
+				expect(engine.collections).toBeGreaterThan(previous);
+				previous = engine.collections;
+			}
+			expect(engine.memoryBytes).toBeLessThanOrEqual(256 * 1024 * 1024);
 		} finally {
 			engine.dispose();
 		}
