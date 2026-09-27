@@ -774,8 +774,9 @@ remains a Maligator extension and does not count as global fetch conformance.
       RAW/external/reserve pressure, and assist/backstop cost before replacing the
       eighth-collection cadence. Validate nested cgroup quota discovery on Linux.
 - [ ] Bounded slices: retain the skipped-block sweep budget only after combined
-      latency review; identify a measured large-container or root-scan offender
-      before adding resumable tracing or wider exact frame liveness.
+      latency review; use mutator-only array trace attribution to identify a
+      measured large-container or root-scan offender before adding resumable
+      tracing or wider exact frame liveness.
 - [ ] Minor locality: compare black-allocation block enrollment, young-position
       bitmap, and young-block placement against old-block scan amplification and
       allocation cost. Define allocation during finalization before using a bitmap.

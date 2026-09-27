@@ -318,6 +318,11 @@ struct MalGcState {
     u64 init_mark_ns; // last init-mark pause
     u64 remark_ns; // last remark pause
     u64 max_mark_step_ns; // largest single mark step
+    u64 major_array_trace_slots;
+    u64 major_array_trace_ns;
+    u64 max_major_array_trace_ns;
+    u32 max_major_array_trace_slots;
+    bool in_mark_step;
     u64 max_sweep_step_ns; // largest single sweep step
     u64 worker_traces;
     u64 worker_drain_traces;
@@ -543,7 +548,10 @@ static void mal_gc_print_stats_now(void) {
             " cycles=%llu sync_backstop=%llu over_tenure_bytes=%llu "
             "promoted_bytes=%llu promotion_debt=%llu last_major_live_bytes=%llu "
             "satb_flushes=%llu satb_high_water=%llu "
-            "init_mark_ms=%.3f remark_ms=%.3f max_mark_step_ms=%.3f max_sweep_step_ms=%.3f "
+            "init_mark_ms=%.3f remark_ms=%.3f max_mark_step_ms=%.3f "
+            "major_array_trace_slots=%llu major_array_trace_ms=%.3f "
+            "max_major_array_trace_ms=%.3f max_major_array_trace_slots=%u "
+            "max_sweep_step_ms=%.3f "
             "minor_pause_ms=%.3f max_minor_pause_ms=%.3f "
             "minor_mark_ms=%.3f minor_sweep_ms=%.3f "
             "minor_cells_inspected=%llu minor_blocks_inspected=%llu "
@@ -577,7 +585,11 @@ static void mal_gc_print_stats_now(void) {
             (unsigned long long) g->satb_flushes,
             (unsigned long long) g->satb_high_water,
             (double) g->init_mark_ns / 1.0e6, (double) g->remark_ns / 1.0e6,
-            (double) g->max_mark_step_ns / 1.0e6, (double) g->max_sweep_step_ns / 1.0e6,
+            (double) g->max_mark_step_ns / 1.0e6,
+            (unsigned long long) g->major_array_trace_slots,
+            (double) g->major_array_trace_ns / 1.0e6,
+            (double) g->max_major_array_trace_ns / 1.0e6,
+            g->max_major_array_trace_slots, (double) g->max_sweep_step_ns / 1.0e6,
             (double) g->minor_pause_ns / 1.0e6,
             (double) g->max_minor_pause_ns / 1.0e6,
             (double) g->minor_mark_ns / 1.0e6,
@@ -1149,7 +1161,26 @@ static void mal_gc_trace_cell(MalHeapHeader *cell) {
             // sentinels are static (non-pointer) values, so marking them is a no-op.
             MalArrayObject *array = (MalArrayObject *) cell;
             if (array->elements != nullptr) {
+#if !defined(__wasi__)
+                bool measure = g_trace_worker == nullptr;
+#else
+                bool measure = true;
+#endif
+                measure = measure && g_gc->stats_enabled && g_gc->in_mark_step &&
+                    !g_gc_verifying;
+                u32 slots = array->dense_count;
+                u64 start_ns = measure ? mal_monotonic_now_ns() : 0;
                 mal_gc_mark_values(array->elements, (i32) array->dense_count);
+                if (measure) {
+                    u64 elapsed = mal_monotonic_now_ns() - start_ns;
+                    g_gc->major_array_trace_slots += slots;
+                    g_gc->major_array_trace_ns += elapsed;
+                    if (elapsed > g_gc->max_major_array_trace_ns) {
+                        g_gc->max_major_array_trace_ns = elapsed;
+                    }
+                    if (slots > g_gc->max_major_array_trace_slots)
+                        g_gc->max_major_array_trace_slots = slots;
+                }
             }
             break;
         }
@@ -2830,6 +2861,7 @@ static void mal_gc_cycle_finish_sweep(MalVm *vm) {
  * when marking is drained to empty (time to remark). */
 static bool mal_gc_mark_step(MalVm *vm, usize budget) {
     u64 start_ns = g_gc->stats_enabled ? mal_monotonic_now_ns() : 0;
+    if (g_gc->stats_enabled) g_gc->in_mark_step = true;
     usize worked = 0;
 #if !defined(__wasi__)
     if (!mal_gc_workers_collect_batch(g_gc, false)) {
@@ -2873,6 +2905,7 @@ finish_mark_step:
         if (elapsed > g_gc->max_mark_step_ns) {
             g_gc->max_mark_step_ns = elapsed;
         }
+        g_gc->in_mark_step = false;
     }
     return drained;
 }
