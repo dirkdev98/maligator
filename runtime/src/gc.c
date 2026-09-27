@@ -351,6 +351,12 @@ struct MalGcState {
     u64 snapshot_discoveries;
     u64 snapshot_only_batches;
     u64 snapshot_copy_ns;
+    u64 snapshot_admit_ns;
+    u64 snapshot_reserve_ns;
+    u64 snapshot_inline_ns;
+    u64 worker_merge_ns;
+    u64 worker_wait_ns;
+    u64 remark_wait_ns;
     u64 remark_join_ns;
     u64 worker_cpu_ns;
     u64 concurrent_worker_cpu_ns;
@@ -560,7 +566,10 @@ static void mal_gc_print_stats_now(void) {
             "snapshot_traces=%llu snapshot_examined_values=%llu "
             "snapshot_values=%llu snapshot_heap_values=%llu "
             "snapshot_discoveries=%llu snapshot_only_batches=%llu "
-            "snapshot_copy_ms=%.3f remark_join_ms=%.3f",
+            "snapshot_admit_ms=%.3f snapshot_reserve_ms=%.3f "
+            "snapshot_copy_ms=%.3f snapshot_inline_ms=%.3f "
+            "worker_merge_ms=%.3f worker_wait_ms=%.3f "
+            "remark_wait_ms=%.3f remark_join_ms=%.3f",
             (unsigned long long) g->cycles, (unsigned long long) g->sync_backstop,
             (unsigned long long) mal_gc_black_alloc_bytes,
             (unsigned long long) g->promoted_bytes,
@@ -602,7 +611,13 @@ static void mal_gc_print_stats_now(void) {
             (unsigned long long) g->snapshot_heap_values,
             (unsigned long long) g->snapshot_discoveries,
             (unsigned long long) g->snapshot_only_batches,
+            (double) g->snapshot_admit_ns / 1.0e6,
+            (double) g->snapshot_reserve_ns / 1.0e6,
             (double) g->snapshot_copy_ns / 1.0e6,
+            (double) g->snapshot_inline_ns / 1.0e6,
+            (double) g->worker_merge_ns / 1.0e6,
+            (double) g->worker_wait_ns / 1.0e6,
+            (double) g->remark_wait_ns / 1.0e6,
             (double) g->remark_join_ns / 1.0e6);
     fprintf(stderr, "\n");
     if (getenv("MAL_PROMISE_STATS") != nullptr) {
@@ -2077,6 +2092,7 @@ static void mal_gc_workers_start_batch(MalGcState *g, usize count,
 
 static bool mal_gc_workers_collect_batch(MalGcState *g, bool wait) {
     if (!g->worker_batch_active) return true;
+    u64 wait_start = g->stats_enabled && wait ? mal_monotonic_now_ns() : 0;
     pthread_mutex_lock(&g->worker_mutex);
     if (wait) {
         while (g->workers_pending != 0) {
@@ -2087,6 +2103,8 @@ static bool mal_gc_workers_collect_batch(MalGcState *g, bool wait) {
         return false;
     }
     pthread_mutex_unlock(&g->worker_mutex);
+    if (wait_start != 0) g->worker_wait_ns += mal_monotonic_now_ns() - wait_start;
+    u64 merge_start = g->stats_enabled ? mal_monotonic_now_ns() : 0;
     g->worker_traces += g->worker_batch_count;
     u64 batch_traces = g->worker_batch_count;
     for (usize i = 0; i < g->worker_batch_workers; ++i) {
@@ -2135,6 +2153,7 @@ static bool mal_gc_workers_collect_batch(MalGcState *g, bool wait) {
     g->batch_edges_count = 0;
     g->worker_batch_active = false;
     g->worker_batch_drain = false;
+    if (merge_start != 0) g->worker_merge_ns += mal_monotonic_now_ns() - merge_start;
     return true;
 }
 
@@ -2194,6 +2213,7 @@ static bool mal_gc_trace_concurrent_batch(usize limit, usize *worked) {
     usize direct_count = 0;
     usize snapshot_edges = 0;
     usize safe_count = 0;
+    u64 admit_start = g_gc->stats_enabled ? mal_monotonic_now_ns() : 0;
     for (usize i = 0; i < count; ++i) {
         MalHeapHeader *cell = g_gc->batch[i];
         usize edges = 0;
@@ -2206,6 +2226,7 @@ static bool mal_gc_trace_concurrent_batch(usize limit, usize *worked) {
         g_gc->batch[i] = g_gc->batch[safe_count];
         g_gc->batch[safe_count++] = cell;
     }
+    if (admit_start != 0) g_gc->snapshot_admit_ns += mal_monotonic_now_ns() - admit_start;
     if (direct_count + snapshot_edges < MAL_GC_PARALLEL_BATCH_MIN) {
         g_gc->batch_edges_count = 0;
         mal_gc_trace_parked_batch(count, false);
@@ -2217,6 +2238,7 @@ static bool mal_gc_trace_concurrent_batch(usize limit, usize *worked) {
         *worked = count;
         return false;
     }
+    u64 reserve_start = g_gc->stats_enabled ? mal_monotonic_now_ns() : 0;
     if (g_gc->batch_edge_meta_capacity < safe_count) {
         usize *offsets = realloc(g_gc->batch_edge_offsets, safe_count * sizeof(usize));
         usize *counts = realloc(g_gc->batch_edge_counts, safe_count * sizeof(usize));
@@ -2231,6 +2253,7 @@ static bool mal_gc_trace_concurrent_batch(usize limit, usize *worked) {
         g_gc->batch_edges = edges;
         g_gc->batch_edges_capacity = snapshot_edges;
     }
+    if (reserve_start != 0) g_gc->snapshot_reserve_ns += mal_monotonic_now_ns() - reserve_start;
     g_gc->batch_edges_count = 0;
     u64 snapshot_start = g_gc->stats_enabled ? mal_monotonic_now_ns() : 0;
     for (usize i = 0; i < safe_count; ++i) {
@@ -2246,7 +2269,9 @@ static bool mal_gc_trace_concurrent_batch(usize limit, usize *worked) {
     g_gc->snapshot_examined_values += snapshot_edges;
     g_gc->snapshot_values += g_gc->batch_edges_count;
     g_gc->snapshot_heap_values += g_gc->batch_edges_count;
+    u64 inline_start = g_gc->stats_enabled ? mal_monotonic_now_ns() : 0;
     for (usize i = safe_count; i < count; ++i) mal_gc_trace_cell(g_gc->batch[i]);
+    if (inline_start != 0) g_gc->snapshot_inline_ns += mal_monotonic_now_ns() - inline_start;
     mal_gc_workers_start_batch(g_gc, safe_count,
         direct_count + g_gc->batch_edges_count, true, false);
     *worked = count;
@@ -2585,8 +2610,12 @@ static void mal_gc_cycle_remark(MalVm *vm) {
 #if !defined(__wasi__)
     u64 wait_start = g_gc->stats_enabled && g_gc->worker_batch_active
         ? mal_monotonic_now_ns() : 0;
+    u64 worker_wait_before = g_gc->worker_wait_ns;
     mal_gc_workers_collect_batch(g_gc, true);
-    if (wait_start != 0) g_gc->remark_join_ns += mal_monotonic_now_ns() - wait_start;
+    if (wait_start != 0) {
+        g_gc->remark_join_ns += mal_monotonic_now_ns() - wait_start;
+        g_gc->remark_wait_ns += g_gc->worker_wait_ns - worker_wait_before;
+    }
 #endif
 
     // Re-scan roots: a value that moved from a (SATB-exempt) root into an already
