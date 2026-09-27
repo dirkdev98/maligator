@@ -426,11 +426,19 @@ static void mal_array_object_dense_barrier_range(
     }
 }
 
+// With whole-owner remembering and no safepoints, only imported values need carding.
 static void mal_array_object_dense_card_range(
     MalArrayObject *array, u32 start, u32 end
 ) {
+    MalHeapHeader *owner = &array->object.header;
+    if (!mal_heap_mark_is_old(owner->mark) || owner->dirty) return;
     for (u32 index = start; index < end; index++) {
-        mal_gc_card(&array->object.header, array->elements[index]);
+        MalValue value = array->elements[index];
+        if (mal_value_is_heap(value) &&
+            !mal_heap_mark_is_old(mal_value_to_heap(value)->mark)) {
+            mal_gc_remember(owner);
+            return;
+        }
     }
 }
 
@@ -443,7 +451,6 @@ void mal_array_object_dense_shift(MalArrayObject *array) {
                 sizeof(MalValue) * (usize) (count - 1));
         }
         array->dense_count = count - 1;
-        mal_array_object_dense_card_range(array, 0, count - 1);
     }
     array->length--;
     mal_perf_collection_mutation(array, array->length);
@@ -476,7 +483,7 @@ bool mal_array_object_dense_unshift_many(
     }
     array->dense_count = new_count;
     array->length += count;
-    mal_array_object_dense_card_range(array, 0, new_count);
+    mal_array_object_dense_card_range(array, 0, count);
     mal_perf_collection_mutation(array, array->length);
     return true;
 }
@@ -514,7 +521,6 @@ void mal_array_object_dense_copy_within(
     mal_array_object_dense_barrier_range(array, target, target + count);
     memmove(array->elements + target, array->elements + start,
         sizeof(MalValue) * (usize) count);
-    mal_array_object_dense_card_range(array, target, target + count);
     mal_perf_collection_mutation(array, array->length);
 }
 
@@ -532,8 +538,7 @@ bool mal_array_object_dense_splice(
         return false;
     }
 
-    // Every old slot can be overwritten, moved, or dropped. Shade the old
-    // references before the raw movement, then card the complete published range.
+    // Existing edges can be overwritten or dropped, while only inserted values can add young edges.
     mal_array_object_dense_barrier_range(array, 0, old_length);
     u32 tail_start = start + delete_count;
     u32 tail_count = old_length - tail_start;
@@ -551,7 +556,7 @@ bool mal_array_object_dense_splice(
     }
     array->dense_count = new_length;
     array->length = new_length;
-    mal_array_object_dense_card_range(array, 0, new_length);
+    mal_array_object_dense_card_range(array, start, start + insert_count);
     mal_perf_collection_mutation(array, array->length);
     return true;
 }
