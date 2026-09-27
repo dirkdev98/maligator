@@ -811,9 +811,10 @@ remains a Maligator extension and does not count as global fetch conformance.
       point-in-time heap-usage counters before replacing global free lists or
       releasing chunks. A local seven-pair sweep-reserve probe at 16 MiB showed
       that replacing one quarter of managed cells before their free lists were
-      rebuilt added about 4.26 MiB of mapping, 4.19 MiB of peak RSS, and 256 page
-      faults versus reuse after the cursor; final live bytes matched. The prior
-      app diagnostic allocated only 32.8 KiB during major sweep, so establish
+      rebuilt added 4.0625 MiB of mapping, 4.0–4.03125 MiB of peak RSS, and 256–258
+      page faults versus reuse after the cursor; final live bytes matched. Total
+      sweep-plus-allocation time varied by size class; no consistent win. The prior
+      app diagnostic allocated only 32,800 bytes during major sweep, so establish
       representative long-sweep exposure before adding per-block free lists.
 - [ ] Complete the matched five-family portfolio and separate HTTP/long-cadence
       diagnostics on the retained combination without stats-only counters; record
