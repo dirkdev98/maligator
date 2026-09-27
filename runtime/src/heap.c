@@ -599,6 +599,54 @@ void mal_heap_free(MalHeap *heap) {
     heap->minor_blocks_inspected = 0;
 }
 
+MalHeapUsage mal_heap_usage(const MalHeap *heap) {
+    MalHeapUsage usage = {0};
+    for (const MalGcChunk *chunk = heap->chunks; chunk != nullptr; chunk = chunk->next) {
+        usage.chunk_mapped_bytes += chunk->mmap_size;
+        usage.unclaimed_chunk_bytes +=
+            (chunk->block_count - chunk->next_block) * MAL_GC_BLOCK_SIZE;
+        for (usize index = 0; index < chunk->next_block; ++index) {
+            const MalGcBlock *block =
+                (const MalGcBlock *) ((const u8 *) chunk->base + index * MAL_GC_BLOCK_SIZE);
+            if (block->recycled) continue;
+            if (block->kind == MAL_GC_BLOCK_RAW) {
+                usize occupied = (usize) block->live * block->cell_size;
+                usize handed_out =
+                    (usize) (block->bump - ((const u8 *) block + mal_gc_cell_data_offset()));
+                if (occupied > handed_out) abort();
+                usage.raw_owned_bytes += occupied;
+                usage.raw_free_cell_bytes += handed_out - occupied;
+            }
+        }
+    }
+    for (const MalGcLarge *large = heap->raw_large; large != nullptr; large = large->next) {
+        usage.raw_owned_bytes += large->size;
+    }
+    for (usize size_class = 0; size_class < MAL_GC_NUM_SIZE_CLASSES; ++size_class) {
+        for (const void *cell = heap->cell_free[size_class]; cell != nullptr;
+            cell = *(void *const *) ((const u8 *) cell + mal_gc_free_next_offset())) {
+            usage.managed_free_cell_bytes += g_class_cell_size[size_class];
+        }
+        const MalGcBlock *cell_block = heap->cell_blocks[size_class];
+        if (cell_block != nullptr) {
+            usage.bump_free_bytes +=
+                (usize) (cell_block->limit - cell_block->bump) / cell_block->cell_size *
+                cell_block->cell_size;
+        }
+        const MalGcBlock *raw_block = heap->raw_blocks[size_class];
+        if (raw_block != nullptr) {
+            usage.bump_free_bytes +=
+                (usize) (raw_block->limit - raw_block->bump) / raw_block->cell_size *
+                raw_block->cell_size;
+        }
+    }
+    for (const MalGcBlock *block = heap->free_blocks; block != nullptr;
+        block = block->next_free) {
+        usage.recycled_block_bytes += MAL_GC_BLOCK_SIZE;
+    }
+    return usage;
+}
+
 void mal_heap_header_init(MalHeapHeader *header, MalHeapType type) {
     header->type = type;
     header->storage = MAL_HEAP_STORAGE_DYNAMIC;

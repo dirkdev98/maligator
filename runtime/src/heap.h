@@ -157,6 +157,18 @@ typedef struct MalHeap {
 #endif
 } MalHeap;
 
+/** Mutator-only capacity sample: RAW includes class slack; block reserves include
+ * headers, and chunk mappings exclude LOS allocations and resident memory. */
+typedef struct MalHeapUsage {
+    usize raw_owned_bytes;
+    usize managed_free_cell_bytes;
+    usize raw_free_cell_bytes;
+    usize bump_free_bytes;
+    usize recycled_block_bytes;
+    usize unclaimed_chunk_bytes;
+    usize chunk_mapped_bytes;
+} MalHeapUsage;
+
 /**
  * Runtime heap allocation kinds that may be boxed into a MalValue.
  */
@@ -457,6 +469,7 @@ void mal_heap_begin_major(MalHeap *heap);
  * Destroy a heap runtime instance.
  */
 void mal_heap_free(MalHeap *heap);
+MalHeapUsage mal_heap_usage(const MalHeap *heap);
 
 /**
  * Initialize a heap header in place.

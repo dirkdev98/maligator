@@ -37,6 +37,10 @@ describe("remembered owner scan attribution", () => {
 			if (result.error !== undefined) throw result.error;
 			expect(result.status, result.stderr || result.stdout).toBe(0);
 			expect(result.stdout).toBe("gc-remembered-scan PASS\n");
+			expect(result.stderr).toMatch(/\bheap_usage_at=pre_teardown\b/);
+			expect(
+				Number(result.stderr.match(/\braw_owned_bytes=(\d+)/)?.[1] ?? 0),
+			).toBeGreaterThan(0);
 			expect(result.stderr).toMatch(/remembered_array_owners=1\b/);
 			expect(result.stderr).toMatch(/remembered_array_slots=8192\b/);
 			expect(result.stderr).toMatch(

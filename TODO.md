@@ -771,8 +771,9 @@ remains a Maligator extension and does not count as global fetch conformance.
       after representative HTTP and compiler comparisons; app-batch screens were
       mixed. Keep SATB deletion protection independent of generational facts.
 - [ ] Pacing: measure young survival, promotion debt, major reclamation yield,
-      RAW/external/reserve pressure, and assist/backstop cost before replacing the
-      eighth-collection cadence. Validate nested cgroup quota discovery on Linux.
+      current RAW/reusable/chunk capacity, external pressure, and assist/backstop
+      cost before replacing the eighth-collection cadence. Validate nested cgroup
+      quota discovery on Linux.
 - [ ] Bounded slices: retain the skipped-block sweep budget only after combined
       latency review; use mutator-only array trace attribution to identify a
       measured large-container or root-scan offender before adding resumable
@@ -788,8 +789,9 @@ remains a Maligator extension and does not count as global fetch conformance.
 - [ ] Ephemerons: finish sanitizer and application timing for the indexed weak
       pass; retain the separate weak-cleanup SATB correctness fix.
 - [ ] Reclamation: measure fresh allocation during sweep, reusable capacity,
-      mapped and resident memory, page faults, and grow/shrink cycles before
-      replacing global free lists or releasing chunks.
+      mapped and resident memory, page faults, and grow/shrink cycles with the new
+      point-in-time heap-usage counters before replacing global free lists or
+      releasing chunks.
 - [ ] Re-run the native/Wasm/sanitizer gate and the matched five-family portfolio
       on the retained combination; record per-candidate and combined decisions.
 

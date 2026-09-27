@@ -18,6 +18,7 @@ tests/native/function-reflect-builtins.test.ts
 tests/native/gc.test.ts
 tests/native/gc-cgroup-capacity.test.ts
 tests/native/gc-ephemeron-index.test.ts
+tests/native/gc-heap-usage.test.ts
 tests/native/gc-mark-step-scaling.test.ts
 tests/native/gc-minor-sweep.test.ts
 tests/native/gc-remembered-scan.test.ts

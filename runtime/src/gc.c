@@ -311,6 +311,7 @@ struct MalGcState {
     u64 minor_remembered_map_discoveries;
     usize peak_live_bytes;
     usize allocated_bytes;
+    MalHeapUsage heap_usage_before_teardown;
     u64 compiled_root_slots_scanned;
     u64 compiled_root_slots_skipped;
     u64 cycles; // incremental major cycles started
@@ -523,6 +524,9 @@ static void mal_gc_print_stats_now(void) {
     usize allocated_bytes = g_gc_vm != nullptr && g_gc_vm->gc == g
         ? g_gc_vm->heap.bytes_allocated
         : g->allocated_bytes;
+    bool live_heap = g_gc_vm != nullptr && g_gc_vm->gc == g;
+    MalHeapUsage usage = live_heap
+        ? mal_heap_usage(&g_gc_vm->heap) : g->heap_usage_before_teardown;
     usize worker_limit = 0;
 #if !defined(__wasi__)
     worker_limit = g->worker_limit;
@@ -651,6 +655,25 @@ static void mal_gc_print_stats_now(void) {
         g->worker_quota_status == MAL_GC_QUOTA_UNLIMITED ? "unlimited" : "unknown";
     fprintf(stderr, " worker_quota_status=%s worker_quota_complete=%d",
         quota_status, g->worker_quota_complete);
+    usize snapshot_reserved_bytes = 0;
+#if !defined(__wasi__)
+    snapshot_reserved_bytes = g->batch_edges_capacity * sizeof(MalValue) +
+        g->batch_edge_meta_capacity * 2 * sizeof(usize);
+#endif
+    fprintf(stderr,
+        " heap_usage_at=%s raw_owned_bytes=%llu managed_free_cell_bytes=%llu "
+        "raw_free_cell_bytes=%llu bump_free_bytes=%llu recycled_block_bytes=%llu "
+        "unclaimed_chunk_bytes=%llu chunk_mapped_bytes=%llu "
+        "snapshot_reserved_bytes=%llu",
+        live_heap ? "live" : "pre_teardown",
+        (unsigned long long) usage.raw_owned_bytes,
+        (unsigned long long) usage.managed_free_cell_bytes,
+        (unsigned long long) usage.raw_free_cell_bytes,
+        (unsigned long long) usage.bump_free_bytes,
+        (unsigned long long) usage.recycled_block_bytes,
+        (unsigned long long) usage.unclaimed_chunk_bytes,
+        (unsigned long long) usage.chunk_mapped_bytes,
+        (unsigned long long) snapshot_reserved_bytes);
     fprintf(stderr, "\n");
     if (getenv("MAL_PROMISE_STATS") != nullptr) {
         fprintf(
@@ -827,6 +850,7 @@ void mal_gc_begin_teardown(MalVm *vm) {
 #if !defined(__wasi__)
     mal_gc_workers_stop(g);
 #endif
+    if (g->stats_enabled) g->heap_usage_before_teardown = mal_heap_usage(&vm->heap);
     // Teardown invalidates published roots, so abandon any unfinished snapshot.
     g->phase = MAL_GC_PHASE_IDLE;
     g->stress_interval = 0;
