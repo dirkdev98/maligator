@@ -302,6 +302,10 @@ struct MalGcState {
     u64 pause_count;
     u64 total_ns;
     u64 max_pause_ns;
+    u64 minor_pause_ns;
+    u64 max_minor_pause_ns;
+    u64 minor_mark_ns;
+    u64 minor_sweep_ns;
     usize peak_live_bytes;
     usize allocated_bytes;
     u64 compiled_root_slots_scanned;
@@ -314,6 +318,9 @@ struct MalGcState {
     u64 max_sweep_step_ns; // largest single sweep step
     u64 worker_traces;
     u64 worker_drain_traces;
+    u64 minor_worker_batches;
+    u64 minor_worker_traces;
+    u64 minor_worker_cpu_ns;
     u64 concurrent_batches;
     u64 concurrent_traces;
     u64 concurrent_env_traces;
@@ -510,7 +517,11 @@ static void mal_gc_print_stats_now(void) {
             " cycles=%llu sync_backstop=%llu over_tenure_bytes=%llu "
             "satb_flushes=%llu satb_high_water=%llu "
             "init_mark_ms=%.3f remark_ms=%.3f max_mark_step_ms=%.3f max_sweep_step_ms=%.3f "
+            "minor_pause_ms=%.3f max_minor_pause_ms=%.3f "
+            "minor_mark_ms=%.3f minor_sweep_ms=%.3f "
             "worker_traces=%llu worker_drain_traces=%llu "
+            "minor_worker_batches=%llu minor_worker_traces=%llu "
+            "minor_worker_cpu_ms=%.3f "
             "concurrent_batches=%llu concurrent_traces=%llu "
             "concurrent_env_traces=%llu concurrent_discoveries=%llu "
             "worker_limit=%llu worker_cpu_ms=%.3f concurrent_worker_cpu_ms=%.3f "
@@ -524,8 +535,15 @@ static void mal_gc_print_stats_now(void) {
             (unsigned long long) g->satb_high_water,
             (double) g->init_mark_ns / 1.0e6, (double) g->remark_ns / 1.0e6,
             (double) g->max_mark_step_ns / 1.0e6, (double) g->max_sweep_step_ns / 1.0e6,
+            (double) g->minor_pause_ns / 1.0e6,
+            (double) g->max_minor_pause_ns / 1.0e6,
+            (double) g->minor_mark_ns / 1.0e6,
+            (double) g->minor_sweep_ns / 1.0e6,
             (unsigned long long) g->worker_traces,
             (unsigned long long) g->worker_drain_traces,
+            (unsigned long long) g->minor_worker_batches,
+            (unsigned long long) g->minor_worker_traces,
+            (double) g->minor_worker_cpu_ns / 1.0e6,
             (unsigned long long) g->concurrent_batches,
             (unsigned long long) g->concurrent_traces,
             (unsigned long long) g->concurrent_env_traces,
@@ -1939,6 +1957,7 @@ static void mal_gc_workers_start_batch(MalGcState *g, usize count,
     g->worker_batch_count = count;
     g->worker_batch_concurrent = concurrent;
     g->worker_batch_drain = drain;
+    if (g->stats_enabled && !g->major_collection && !concurrent) g->minor_worker_batches++;
     g->workers_pending = g->workers_created;
     for (usize i = 0; i < g->workers_created; ++i) {
         g->workers[i].batch_snapshot_discoveries = 0;
@@ -1963,12 +1982,15 @@ static bool mal_gc_workers_collect_batch(MalGcState *g, bool wait) {
     }
     pthread_mutex_unlock(&g->worker_mutex);
     g->worker_traces += g->worker_batch_count;
+    u64 batch_traces = g->worker_batch_count;
     for (usize i = 0; i < g->workers_created; ++i) {
         MalGcWorker *worker = &g->workers[i];
         g->worker_drain_traces += worker->batch_drain_traces;
         g->worker_traces += worker->batch_drain_traces;
+        batch_traces += worker->batch_drain_traces;
         if (g->stats_enabled) {
             g->worker_cpu_ns += worker->batch_cpu_ns;
+            if (!g->major_collection) g->minor_worker_cpu_ns += worker->batch_cpu_ns;
             if (g->worker_batch_concurrent) {
                 g->concurrent_worker_cpu_ns += worker->batch_cpu_ns;
             }
@@ -1980,6 +2002,7 @@ static bool mal_gc_workers_collect_batch(MalGcState *g, bool wait) {
         }
         worker->discovered_count = 0;
     }
+    if (g->stats_enabled && !g->major_collection) g->minor_worker_traces += batch_traces;
     if (g->worker_batch_concurrent) {
         g->concurrent_batches++;
         usize direct_count = 0;
@@ -2291,6 +2314,10 @@ static void mal_gc_pause_end(MalVm *vm, bool major, u64 start_ns) {
     g_gc->pause_count++;
     g_gc->total_ns += elapsed_ns;
     if (elapsed_ns > g_gc->max_pause_ns) g_gc->max_pause_ns = elapsed_ns;
+    if (!major) {
+        g_gc->minor_pause_ns += elapsed_ns;
+        if (elapsed_ns > g_gc->max_minor_pause_ns) g_gc->max_minor_pause_ns = elapsed_ns;
+    }
 }
 
 static void mal_gc_stat_peak_live(MalVm *vm) {
@@ -2318,6 +2345,7 @@ static usize mal_gc_advance_trigger(MalVm *vm) {
 
 /* A major flips color; a minor traces young cells from roots and remembered owners. */
 static void mal_gc_collect_sync(MalVm *vm, bool major) {
+    u64 minor_mark_start = g_gc->stats_enabled && !major ? mal_monotonic_now_ns() : 0;
     g_gc->grey_count = 0;
     g_gc->weak_maps_count = 0;
     g_gc->weak_refs_count = 0;
@@ -2345,11 +2373,17 @@ static void mal_gc_collect_sync(MalVm *vm, bool major) {
 
     mal_gc_weak_pass();
 
+    u64 minor_sweep_start = g_gc->stats_enabled && !major ? mal_monotonic_now_ns() : 0;
+    if (minor_sweep_start != 0) g_gc->minor_mark_ns += minor_sweep_start - minor_mark_start;
+
     if (!major) {
         mal_heap_sweep_minor(&vm->heap, mal_gc_finalize_cell);
     } else
     {
         mal_heap_sweep(&vm->heap, mal_gc_finalize_cell);
+    }
+    if (minor_sweep_start != 0) {
+        g_gc->minor_sweep_ns += mal_monotonic_now_ns() - minor_sweep_start;
     }
 
     mal_gc_clear_remembered();
