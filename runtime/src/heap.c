@@ -565,7 +565,13 @@ void mal_heap_header_init(MalHeapHeader *header, MalHeapType type) {
     header->type = type;
     header->storage = MAL_HEAP_STORAGE_DYNAMIC;
     // New cells stay live when allocated during an in-flight incremental sweep.
-    header->mark = g_allocation_mark_color | (mal_gc_black_alloc ? MAL_MARK_OLD : 0);
+    u8 initial_mark = g_allocation_mark_color | (mal_gc_black_alloc ? MAL_MARK_OLD : 0);
+#if defined(__wasi__)
+    header->mark = initial_mark;
+#else
+    // The constructor publishes the cell only after its header and payload are initialized.
+    atomic_store_explicit(&header->mark, initial_mark, memory_order_relaxed);
+#endif
     header->dirty = 0; // not on the remembered set
 }
 
