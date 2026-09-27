@@ -21,6 +21,7 @@ tests/native/gc-lifecycle.test.ts
 tests/native/gc-idle-completion.test.ts
 tests/native/gc-overlap.test.ts
 tests/native/gc-root-source-lifecycle.test.ts
+tests/native/gc-satb-overflow.test.ts
 tests/native/gc-snapshot-overlap.test.ts
 tests/native/gc-worker-capacity.test.ts
 tests/native/platform-execution.test.ts

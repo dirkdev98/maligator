@@ -262,15 +262,14 @@ struct MalGcState {
     // One in every major_every collections (and the first) is a full major.
     u32 collection_index;
 
-    // SATB (snapshot-at-the-beginning) buffer: references handed over by the
-    // deletion barrier / frame shades while marking is active. Grown, never
-    // dropped; a mark step drains [satb_drained, satb_count) into the grey
-    // worklist. The buffer may grow during a drain (a shade fired by tracing),
-    // so draining reads satb_count each iteration.
+    // The bounded SATB buffer holds deletion-barrier values until a mark step or
+    // full-batch mark claim transfers them to the grey queue.
     MalValue *satb;
     usize satb_count;
     usize satb_capacity;
     usize satb_drained;
+    u64 satb_flushes;
+    usize satb_high_water;
 
     // Incremental-cycle state machine (driven from mal_gc_safepoint).
     MalGcPhase phase;
@@ -428,11 +427,9 @@ static void mal_gc_dead_key_push(MalKey key) {
     g_gc->dead_keys[g_gc->dead_keys_count++] = key;
 }
 
+#define MAL_GC_SATB_BATCH_CAPACITY 4096
+
 void mal_gc_satb_record(MalValue old_value) {
-    // Filter: only heap-pointer values that are not already marked need to enter
-    // the snapshot (marking is idempotent, but this trims the common no-op). Never
-    // drop a qualifying entry — the buffer grows as needed; a dropped deletion
-    // barrier value is a lost live object.
     if (!mal_value_is_heap(old_value)) {
         return;
     }
@@ -441,11 +438,24 @@ void mal_gc_satb_record(MalValue old_value) {
         mal_heap_mark_is_current(cell->mark, g_gc_vm->heap.mark_color)) {
         return;
     }
-    if (g_gc->satb_count == g_gc->satb_capacity) {
-        g_gc->satb_capacity = g_gc->satb_capacity == 0 ? 4096 : g_gc->satb_capacity * 2;
-        g_gc->satb = realloc(g_gc->satb, g_gc->satb_capacity * sizeof(MalValue));
+    if (g_gc->satb_capacity == 0) {
+        g_gc->satb = malloc(MAL_GC_SATB_BATCH_CAPACITY * sizeof(MalValue));
+        if (g_gc->satb == nullptr) abort();
+        g_gc->satb_capacity = MAL_GC_SATB_BATCH_CAPACITY;
+    } else if (g_gc->satb_count == g_gc->satb_capacity) {
+        for (usize i = g_gc->satb_drained; i < g_gc->satb_count; ++i) {
+            mal_gc_mark_value(g_gc->satb[i]);
+        }
+        g_gc->satb_count = 0;
+        g_gc->satb_drained = 0;
+        g_gc->satb_flushes++;
+        mal_gc_poll = true;
     }
+    if (mal_heap_mark_is_current(cell->mark, g_gc_vm->heap.mark_color)) return;
     g_gc->satb[g_gc->satb_count++] = old_value;
+    if (g_gc->satb_count > g_gc->satb_high_water) {
+        g_gc->satb_high_water = g_gc->satb_count;
+    }
 }
 
 static void mal_gc_print_stats_now(void) {
@@ -478,6 +488,7 @@ static void mal_gc_print_stats_now(void) {
             (unsigned long long) mal_vm_stack_object_materialization_count());
     fprintf(stderr,
             " cycles=%llu sync_backstop=%llu over_tenure_bytes=%llu "
+            "satb_flushes=%llu satb_high_water=%llu "
             "init_mark_ms=%.3f remark_ms=%.3f max_mark_step_ms=%.3f max_sweep_step_ms=%.3f "
             "worker_traces=%llu concurrent_batches=%llu concurrent_traces=%llu "
             "concurrent_env_traces=%llu concurrent_discoveries=%llu "
@@ -488,6 +499,8 @@ static void mal_gc_print_stats_now(void) {
             "snapshot_copy_ms=%.3f remark_join_ms=%.3f",
             (unsigned long long) g->cycles, (unsigned long long) g->sync_backstop,
             (unsigned long long) mal_gc_black_alloc_bytes,
+            (unsigned long long) g->satb_flushes,
+            (unsigned long long) g->satb_high_water,
             (double) g->init_mark_ns / 1.0e6, (double) g->remark_ns / 1.0e6,
             (double) g->max_mark_step_ns / 1.0e6, (double) g->max_sweep_step_ns / 1.0e6,
             (unsigned long long) g->worker_traces,
@@ -2080,9 +2093,7 @@ static void mal_gc_drain(void) {
     }
 }
 
-/** Drain the SATB buffer into the grey worklist: re-shade every recorded snapshot
- * reference. The buffer can grow while draining (tracing a shaded cell may fire a
- * barrier / another shade), so re-read satb_count each pass; never drop an entry. */
+/* Transfer unclaimed snapshot values to the grey queue without tracing payloads. */
 static void mal_gc_drain_satb(void) {
     while (g_gc->satb_drained < g_gc->satb_count) {
         MalValue v = g_gc->satb[g_gc->satb_drained++];

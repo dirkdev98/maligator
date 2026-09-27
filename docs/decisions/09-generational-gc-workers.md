@@ -23,8 +23,10 @@ Minors park JavaScript and may parallelize safe trace batches; they do not overl
 an active major. Major roots are scanned at mutator safepoints before background
 work begins and again at remark. The compiled root maps and native root spans are
 read only while their owner is parked. SATB deletion barriers preserve the initial
-major graph, and card barriers preserve old-to-young edges. New allocations are
-marked live while a major is in flight.
+major graph, and card barriers preserve old-to-young edges. The SATB buffer holds
+at most 4,096 values; a full buffer claims its pending values into the mutator's
+grey queue without tracing payloads or scanning roots inside an unrooted native
+frame. New allocations are marked live while a major is in flight.
 
 Workers claim marks atomically, append discoveries to private lists, and transfer
 those lists to the mutator only after every worker in a batch acknowledges
