@@ -48,6 +48,10 @@ finalizers, sweep, allocator free lists, and large-object reclamation remain wit
 the mutator. Moving sweep to workers would need exclusive block ownership and a
 separate mutator-affine finalization handoff; it is deferred unless matched
 measurements justify that complexity.
+Incremental sweep tags passed blocks and completed chunks. A black cell allocated
+behind the cursor contributes to survivor bytes immediately, while a cell ahead
+of it is counted when the cursor visits its block; both update the baseline used
+by the next minor collection exactly once.
 
 Native storage reserves room for two GC workers. At VM initialization, the active
 count is capped by online CPUs, Linux affinity, and commonly mounted cgroup v2/v1
