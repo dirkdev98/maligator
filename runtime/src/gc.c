@@ -361,6 +361,11 @@ struct MalGcState {
     u64 worker_cpu_ns;
     u64 concurrent_worker_cpu_ns;
     u64 mutator_assist_traces;
+    u64 weak_entry_visits;
+    u64 weak_cleanup_visits;
+    u64 weak_activated_values;
+    usize weak_pending_peak_bytes;
+    u64 weak_pass_ns;
 };
 
 #if !defined(__wasi__)
@@ -619,6 +624,14 @@ static void mal_gc_print_stats_now(void) {
             (double) g->worker_wait_ns / 1.0e6,
             (double) g->remark_wait_ns / 1.0e6,
             (double) g->remark_join_ns / 1.0e6);
+    fprintf(stderr,
+            " weak_entry_visits=%llu weak_cleanup_visits=%llu "
+            "weak_activated_values=%llu weak_pending_peak_bytes=%llu weak_pass_ms=%.3f",
+            (unsigned long long) g->weak_entry_visits,
+            (unsigned long long) g->weak_cleanup_visits,
+            (unsigned long long) g->weak_activated_values,
+            (unsigned long long) g->weak_pending_peak_bytes,
+            (double) g->weak_pass_ns / 1.0e6);
     fprintf(stderr, "\n");
     if (getenv("MAL_PROMISE_STATS") != nullptr) {
         fprintf(
@@ -2313,17 +2326,82 @@ static void mal_gc_drain_satb(void) {
     }
 }
 
-/** Weak-reference processing, after the main mark has drained. Today: the
- * WeakMap/WeakSet ephemeron pass. A weak entry's value is live iff its key is
- * live, and marking a value can revive another collection's key, so iterate the
- * "mark values of live keys" step to a fixpoint; then drop entries whose key did
- * not survive. Keys are tested, never shaded — that is what makes them weak. */
+typedef struct MalGcPendingEphemeron {
+    MalHeapHeader *key;
+    MalValue value;
+    usize next;
+} MalGcPendingEphemeron;
+
+typedef struct MalGcEphemeronIndex {
+    usize *buckets;
+    usize bucket_count;
+    MalGcPendingEphemeron *entries;
+    usize count;
+    usize capacity;
+} MalGcEphemeronIndex;
+
+static usize mal_gc_ephemeron_bucket(MalHeapHeader *key, usize bucket_count) {
+    usize bits = (usize) key >> 4;
+    bits ^= bits >> (sizeof(usize) * 4);
+    return (bits * (usize) 2654435761u) & (bucket_count - 1);
+}
+
+static void mal_gc_ephemeron_resize(MalGcEphemeronIndex *index, usize bucket_count) {
+    usize *buckets = calloc(bucket_count, sizeof(usize));
+    if (buckets == nullptr) abort();
+    for (usize i = 0; i < index->count; ++i) {
+        MalGcPendingEphemeron *entry = &index->entries[i];
+        usize bucket = mal_gc_ephemeron_bucket(entry->key, bucket_count);
+        entry->next = buckets[bucket];
+        buckets[bucket] = i + 1;
+    }
+    free(index->buckets);
+    index->buckets = buckets;
+    index->bucket_count = bucket_count;
+}
+
+static void mal_gc_ephemeron_wait(MalGcEphemeronIndex *index, MalHeapHeader *key,
+        MalValue value) {
+    if (index->bucket_count == 0 || index->count == index->bucket_count * 2) {
+        mal_gc_ephemeron_resize(index,
+            index->bucket_count == 0 ? 64 : index->bucket_count * 2);
+    }
+    if (index->count == index->capacity) {
+        usize capacity = index->capacity == 0 ? 64 : index->capacity * 2;
+        MalGcPendingEphemeron *entries = realloc(index->entries,
+            capacity * sizeof(MalGcPendingEphemeron));
+        if (entries == nullptr) abort();
+        index->entries = entries;
+        index->capacity = capacity;
+    }
+    usize bucket = mal_gc_ephemeron_bucket(key, index->bucket_count);
+    index->entries[index->count] = (MalGcPendingEphemeron) {
+        .key = key, .value = value, .next = index->buckets[bucket]
+    };
+    index->buckets[bucket] = ++index->count;
+}
+
+static void mal_gc_ephemeron_activate(MalGcEphemeronIndex *index, MalHeapHeader *key) {
+    if (index->bucket_count == 0) return;
+    usize bucket = mal_gc_ephemeron_bucket(key, index->bucket_count);
+    for (usize at = index->buckets[bucket]; at != 0;
+            at = index->entries[at - 1].next) {
+        MalGcPendingEphemeron *entry = &index->entries[at - 1];
+        if (entry->key != key || mal_gc_is_marked(entry->value)) continue;
+        mal_gc_mark_value(entry->value);
+        if (g_gc->stats_enabled) g_gc->weak_activated_values++;
+    }
+}
+
+/* The main mark is parked here, so newly activated keys can be observed as each
+ * grey cell is popped without sharing this temporary index with workers. */
 static void mal_gc_weak_pass(void) {
-    bool changed = true;
-    while (changed) {
-        changed = false;
-        for (usize i = 0; i < g_gc->weak_maps_count; ++i) {
-            MalTable *entries = g_gc->weak_maps[i]->entries;
+    u64 start_ns = g_gc->stats_enabled ? mal_monotonic_now_ns() : 0;
+    MalGcEphemeronIndex index = {0};
+    usize indexed_maps = 0;
+    while (indexed_maps < g_gc->weak_maps_count || g_gc->grey_count > 0) {
+        while (indexed_maps < g_gc->weak_maps_count) {
+            MalTable *entries = g_gc->weak_maps[indexed_maps++]->entries;
             if (entries == nullptr) {
                 continue;
             }
@@ -2332,18 +2410,28 @@ static void mal_gc_weak_pass(void) {
             MalKey key;
             void *entry;
             while (mal_table_iter_next(&iter, &key, &entry)) {
-                if (!mal_gc_is_marked(key.value)) {
-                    continue;
-                }
+                if (g_gc->stats_enabled) g_gc->weak_entry_visits++;
                 MalValue value = mal_table_entry_value(entries, entry);
-                if (mal_value_is_heap(value) && !mal_gc_is_marked(value)) {
+                if (mal_gc_is_marked(key.value)) {
                     mal_gc_mark_value(value);
-                    changed = true;
+                } else if (mal_value_is_heap(value) && !mal_gc_is_marked(value)) {
+                    mal_gc_ephemeron_wait(&index, mal_value_to_heap(key.value), value);
                 }
             }
         }
-        mal_gc_drain(); // a freshly marked value may revive another weak key
+        if (g_gc->grey_count > 0) {
+            MalHeapHeader *cell = g_gc->grey[--g_gc->grey_count];
+            mal_gc_ephemeron_activate(&index, cell);
+            mal_gc_trace_cell(cell);
+        }
     }
+    if (g_gc->stats_enabled) {
+        usize bytes = index.capacity * sizeof(MalGcPendingEphemeron)
+            + index.bucket_count * sizeof(usize);
+        if (bytes > g_gc->weak_pending_peak_bytes) g_gc->weak_pending_peak_bytes = bytes;
+    }
+    free(index.entries);
+    free(index.buckets);
 
     // Collector-owned deletion of dead weak entries must not put those edges back
     // into SATB after the ephemeron fixpoint has completed.
@@ -2362,6 +2450,7 @@ static void mal_gc_weak_pass(void) {
         MalKey key;
         void *entry;
         while (mal_table_iter_next(&iter, &key, &entry)) {
+            if (g_gc->stats_enabled) g_gc->weak_cleanup_visits++;
             if (!mal_gc_is_marked(key.value)) {
                 mal_gc_dead_key_push(key);
             }
@@ -2411,6 +2500,7 @@ static void mal_gc_weak_pass(void) {
             }
         }
     }
+    if (start_ns != 0) g_gc->weak_pass_ns += mal_monotonic_now_ns() - start_ns;
 }
 
 // --- Generational state ----------------------------------------------------
