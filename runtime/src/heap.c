@@ -15,10 +15,14 @@ static _Atomic(u64) g_next_heap_identity = 1;
 /* One active mutator binds header initialization to its heap's major color. */
 static u8 g_allocation_mark_color;
 
-/* An allocation requests collection; the mutator honors it at a safepoint. */
+/* Poll only requests mutator service; it does not publish heap or worker data. */
 static inline void mal_heap_maybe_trigger_gc(const MalHeap *heap) {
     if (heap->bytes_allocated >= heap->next_gc_at) {
+#if defined(__wasi__)
         mal_gc_poll = true;
+#else
+        atomic_store_explicit(&mal_gc_poll, true, memory_order_relaxed);
+#endif
     }
 }
 
