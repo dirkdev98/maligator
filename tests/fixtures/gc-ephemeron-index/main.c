@@ -7,7 +7,6 @@
 
 extern const MalRuntimeImage mal_runtime_image;
 
-#define CHAIN_COUNT 512
 #define FRAGMENTED_COUNT 64
 
 static usize no_workers(void) {
@@ -15,6 +14,14 @@ static usize no_workers(void) {
 }
 
 int main(void) {
+    usize chain_count = 512;
+    const char *count_env = getenv("MAL_GC_CHAIN_COUNT");
+    if (count_env != nullptr) {
+        char *end;
+        unsigned long parsed = strtoul(count_env, &end, 10);
+        if (*end != '\0' || parsed < 2 || parsed > 4096) abort();
+        chain_count = (usize) parsed;
+    }
     mal_gc_test_worker_limit_hook = no_workers;
     MalVm vm;
     mal_vm_init(&vm, &mal_runtime_image);
@@ -22,12 +29,12 @@ int main(void) {
 
     MalMapObject *first = mal_map_object_new(&vm.heap, MAL_HEAP_MAP_OBJECT, nullptr, true);
     MalMapObject *second = mal_map_object_new(&vm.heap, MAL_HEAP_MAP_OBJECT, nullptr, true);
-    MalObject **keys = malloc(CHAIN_COUNT * sizeof(MalObject *));
+    MalObject **keys = malloc(chain_count * sizeof(MalObject *));
     if (keys == nullptr) abort();
-    for (usize i = 0; i < CHAIN_COUNT; ++i) {
+    for (usize i = 0; i < chain_count; ++i) {
         keys[i] = mal_object_new(&vm.heap, nullptr);
     }
-    for (usize i = CHAIN_COUNT - 1; i > 0; --i) {
+    for (usize i = chain_count - 1; i > 0; --i) {
         MalMapObject *map = (i - 1) % 2 == 0 ? first : second;
         mal_map_object_set(map, mal_value_from_object(keys[i - 1]),
             mal_value_from_object(keys[i]));
@@ -71,12 +78,12 @@ int main(void) {
     mal_gc_collect(&vm);
 
     MalValue current = roots[2];
-    for (usize i = 0; i < CHAIN_COUNT - 1; ++i) {
+    for (usize i = 0; i < chain_count - 1; ++i) {
         MalMapObject *map = i % 2 == 0 ? first : second;
         current = mal_map_object_get(map, current);
         if (!mal_value_is_object(current)) return 1;
     }
-    if (mal_value_to_object(current) != keys[CHAIN_COUNT - 1]) return 2;
+    if (mal_value_to_object(current) != keys[chain_count - 1]) return 2;
     current = roots[4];
     for (usize i = 0; i < FRAGMENTED_COUNT - 1; ++i) {
         current = mal_map_object_get(second, current);
@@ -84,7 +91,7 @@ int main(void) {
     }
     if (mal_value_to_object(current) != fragmented[FRAGMENTED_COUNT - 1]) return 4;
     if (mal_map_object_size(first) + mal_map_object_size(second) !=
-            CHAIN_COUNT + FRAGMENTED_COUNT - 1) return 5;
+            chain_count + FRAGMENTED_COUNT - 1) return 5;
     MalValue late_value = mal_map_object_get(first, roots[3]);
     if (!mal_value_is_object(late_value) ||
         mal_value_to_object(late_value) != &late->object) return 6;
