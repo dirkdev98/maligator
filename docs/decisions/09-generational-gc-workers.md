@@ -59,8 +59,9 @@ and stops before VM teardown. Wasm never starts a native pool.
 
 Native overlap fixtures pause a worker after publication but before it reads an
 Env slot or copied object/array edges. They check snapshot survival, current
-reachability, later reclamation, and completion. ThreadSanitizer covers those
-overlap cases. GC statistics separate mutator pause time, worker CPU, copied
+reachability, later reclamation, and completion. One fixture also disposes and
+reinitializes a VM while a worker is paused in tracing. ThreadSanitizer covers
+those overlap cases. GC statistics separate mutator pause time, worker CPU, copied
 values and heap values, worker discoveries, and remark join time. These counters
 describe work distribution; they do not alone establish an application speedup.
 Large root scans, mutator-only traces, finalization, and synchronous completion

@@ -747,8 +747,8 @@ remains a Maligator extension and does not count as global fetch conformance.
       current affinity and common cgroup-file checks cannot observe every mount or
       hidden ancestor limit. Keep the inline capacity fallback covered.
 - [ ] Measure peak committed/deferred storage, long root/remark/finalizer pauses,
-      backstop completions, and teardown with a worker actively tracing. Extend
-      block ownership only if a measured need justifies background reclamation.
+      and backstop completions. Extend block ownership only if a measured need
+      justifies background reclamation.
 
 # Triggered work
 

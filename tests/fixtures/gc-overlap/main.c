@@ -18,6 +18,7 @@ static MalEnv **fixture_envs;
 static usize fixture_env_count;
 static MalObject *old_target;
 static u32 old_finalized;
+static bool teardown_release_called;
 
 static void pause_env_trace(MalEnv *env) {
     bool owned = false;
@@ -37,6 +38,14 @@ static void pause_env_trace(MalEnv *env) {
 
 static void count_finalized(MalHeapHeader *cell) {
     if ((void *) cell == (void *) old_target) old_finalized++;
+}
+
+static void release_at_teardown(void) {
+    teardown_release_called = true;
+    pthread_mutex_lock(&gate_mutex);
+    release_worker = true;
+    pthread_cond_broadcast(&gate_cond);
+    pthread_mutex_unlock(&gate_mutex);
 }
 
 int main(void) {
@@ -106,10 +115,37 @@ int main(void) {
     mal_gc_collect(&vm);
     if (old_finalized != 1 || target_env->slots[0] != mal_value_from_object(replacement)) return 3;
 
+    pthread_mutex_lock(&gate_mutex);
+    worker_entered = false;
+    release_worker = false;
+    pthread_mutex_unlock(&gate_mutex);
+    vm.heap.next_gc_at = 1;
+    mal_gc_poll = true;
+    mal_gc_safepoint(&vm);
+    if (!mal_gc_marking_active) return 7;
+    mal_gc_safepoint(&vm);
+    pthread_mutex_lock(&gate_mutex);
+    timespec_get(&worker_deadline, TIME_UTC);
+    worker_deadline.tv_sec += 30;
+    while (!worker_entered) {
+        if (pthread_cond_timedwait(&gate_cond, &gate_mutex, &worker_deadline) != 0) {
+            pthread_mutex_unlock(&gate_mutex);
+            return 8;
+        }
+    }
+    pthread_mutex_unlock(&gate_mutex);
+
     mal_gc_unroot(&span);
-    mal_gc_test_trace_env_hook = nullptr;
     mal_gc_register_finalizer(MAL_HEAP_OBJECT, nullptr);
+    mal_gc_test_before_worker_join_hook = release_at_teardown;
     mal_vm_free(&vm);
+    mal_gc_test_trace_env_hook = nullptr;
+    mal_gc_test_before_worker_join_hook = nullptr;
+    if (!teardown_release_called || mal_gc_marking_active || mal_gc_black_alloc || mal_gc_poll) return 9;
+    MalVm next_vm;
+    mal_vm_init(&next_vm, &mal_runtime_image);
+    mal_gc_collect(&next_vm);
+    mal_vm_free(&next_vm);
     puts("gc-overlap PASS");
     return 0;
 }

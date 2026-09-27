@@ -186,6 +186,7 @@ typedef struct MalGcWorker {
 static _Thread_local MalGcWorker *g_trace_worker = nullptr;
 void (*mal_gc_test_trace_env_hook)(MalEnv *env) = nullptr;
 void (*mal_gc_test_trace_snapshot_hook)(MalHeapHeader *cell) = nullptr;
+void (*mal_gc_test_before_worker_join_hook)(void) = nullptr;
 #endif
 
 struct MalGcState {
@@ -1856,6 +1857,9 @@ static void mal_gc_workers_stop(MalGcState *g) {
     g->worker_stop = true;
     pthread_cond_broadcast(&g->worker_ready);
     pthread_mutex_unlock(&g->worker_mutex);
+    if (mal_gc_test_before_worker_join_hook != nullptr) {
+        mal_gc_test_before_worker_join_hook();
+    }
     for (usize i = 0; i < g->workers_created; ++i) {
         pthread_join(g->workers[i].thread, nullptr);
     }

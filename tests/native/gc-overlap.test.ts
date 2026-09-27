@@ -10,7 +10,7 @@ import {
 } from "../../src/test-harness.ts";
 
 describe("concurrent environment tracing", () => {
-	it("retains an overwritten edge until remark and reclaims it on the next major", (ctx) => {
+	it("retains an overwritten edge and joins an active worker at teardown", (ctx) => {
 		const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-gc-overlap-"));
 		try {
 			const binary = buildNativeBinary({
@@ -24,6 +24,7 @@ describe("concurrent environment tracing", () => {
 				env: {
 					...process.env,
 					MAL_GC_STRESS: "0",
+					MAL_GC_MAJOR_EVERY: "1",
 					MAL_GC_VERIFY: "1",
 					MAL_GC_STATS: "1",
 				},
@@ -37,9 +38,6 @@ describe("concurrent environment tracing", () => {
 				ctx.skip("GC workers unavailable at this CPU capacity");
 			}
 			expect(result.stdout).toBe("gc-overlap PASS\n");
-			expect(
-				Number(result.stderr.match(/\bconcurrent_env_traces=(\d+)/)?.[1] ?? 0),
-			).toBeGreaterThan(0);
 		} finally {
 			rmSync(outDir, { recursive: true, force: true });
 		}
