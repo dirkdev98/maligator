@@ -318,6 +318,7 @@ async function ready(
 		}
 		try {
 			const response = await fetch(url, {
+				headers: { connection: "close" },
 				signal: AbortSignal.timeout(500),
 				redirect: "manual",
 			});
@@ -348,23 +349,35 @@ async function responseOracle(
 ): Promise<{ status: number; body: string; headers: Record<string, string | null> }> {
 	const remaining = Math.floor(deadline - performance.now());
 	if (remaining <= 0) throw new Error("HTTP comparison time budget exhausted");
-	const response = await fetch(`http://127.0.0.1:${port}${request.path}`, {
-		method: request.method,
-		headers: request.headers,
-		body: request.body,
-		redirect: "manual",
-		signal: AbortSignal.timeout(Math.min(5000, remaining)),
-	});
-	return {
-		status: response.status,
-		body: await response.text(),
-		headers: Object.fromEntries(
-			["content-type", "location", "set-cookie"].map((key) => [
-				key,
-				response.headers.get(key),
-			]),
-		),
-	};
+	// Synchronous oha runs block pooled socket close events between response probes.
+	const headers = new Headers(request.headers);
+	headers.set("connection", "close");
+	try {
+		const response = await fetch(`http://127.0.0.1:${port}${request.path}`, {
+			method: request.method,
+			headers,
+			body: request.body,
+			redirect: "manual",
+			signal: AbortSignal.timeout(Math.min(5000, remaining)),
+		});
+		return {
+			status: response.status,
+			body: await response.text(),
+			headers: Object.fromEntries(
+				["content-type", "location", "set-cookie"].map((key) => [
+					key,
+					response.headers.get(key),
+				]),
+			),
+		};
+	} catch (error) {
+		const cause =
+			error instanceof Error && error.cause !== undefined ? error.cause : error;
+		throw new Error(
+			`HTTP probe ${request.method ?? "GET"} ${request.path} on port ${port} failed: ${String(cause)}`,
+			{ cause: error },
+		);
+	}
 }
 
 async function assertResponses(
@@ -607,6 +620,11 @@ export async function runHttpSnapshot(
 					kind === "bare"
 						? { ...(entries.bare as object), resource }
 						: { workloads: entries, resource };
+			} catch (error) {
+				throw new Error(
+					`HTTP ${kind} failed: ${error instanceof Error ? error.message : String(error)}; Mal exit=${mal.child.exitCode ?? mal.child.signalCode ?? "no exit observed"}, stderr=${mal.stderr}; Node exit=${node.child.exitCode ?? node.child.signalCode ?? "no exit observed"}, stderr=${node.stderr}`,
+					{ cause: error },
+				);
 			} finally {
 				try {
 					await stopBoth(mal.child, node.child);

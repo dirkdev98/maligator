@@ -53,14 +53,14 @@ describe("ordinary HTTP comparison process", () => {
 				{ bare: binary, express: binary },
 				root,
 				path.join(directory, "evidence"),
-				1,
-				performance.now() + 45000,
+				3,
+				performance.now() + 90000,
 			)) as { http: { instrumentation: string; oracleDigest: string } };
 			expect(result.http.instrumentation).toBe("none");
 			expect(result.http.oracleDigest).toMatch(/^[a-f0-9]{64}$/);
 			expect(JSON.parse(readFileSync(process.env.TEST_ENV_LOG, "utf8"))).toEqual({});
 		},
-		60_000,
+		100_000,
 	);
 
 	it.skipIf(!ohaAvailable)(
