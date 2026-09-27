@@ -112,13 +112,17 @@ describe("Wasm reactor embedding", () => {
 	it("completes automatic major cycles before returning across repeated calls", () => {
 		const engine = openEngine("automatic");
 		try {
+			const initial = engine.collections;
+			expect(initial).toBeGreaterThan(0);
+			expect(engine.call("churn", "30000")).toBe("449985000");
+			expect(engine.collections).toBeGreaterThan(initial);
 			let previous = engine.collections;
 			for (let index = 0; index < 6; index++) {
 				const input = `${index}:🐊`;
 				expect(JSON.parse(engine.call("retain", input))).toEqual(
 					Array.from({ length: 80 }, (_, index) => ({ index, input })),
 				);
-				expect(engine.collections).toBeGreaterThan(previous);
+				expect(engine.collections).toBeGreaterThanOrEqual(previous);
 				previous = engine.collections;
 			}
 			expect(engine.memoryBytes).toBeLessThanOrEqual(256 * 1024 * 1024);

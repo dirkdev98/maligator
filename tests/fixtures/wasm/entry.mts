@@ -4,6 +4,7 @@ const api = globalThis as unknown as {
 	badDiagnostic: () => never;
 	oversized: () => string;
 	retain: (input: string) => string;
+	churn: (input: string) => string;
 };
 api.echo = (input) => `echo:${input}`;
 api.fail = () => {
@@ -22,6 +23,16 @@ api.retain = (input) => {
 	const values = [];
 	for (let index = 0; index < 80; index++) values.push({ index, input });
 	return JSON.stringify(values);
+};
+api.churn = (input) => {
+	const count = Number(input);
+	const values = [];
+	for (let index = 0; index < count; index++) {
+		values.push({ index, payload: [index + 1, index + 2] });
+	}
+	let checksum = 0;
+	for (const value of values) checksum += value.index;
+	return String(checksum);
 };
 
 export {};
