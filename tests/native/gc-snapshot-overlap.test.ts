@@ -71,6 +71,38 @@ describe("concurrent object edge snapshots", () => {
 		});
 });
 
+describe("dense array fill barriers", () => {
+	it("remembers one young value across a filled range in an old array", () => {
+		const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-gc-dense-fill-card-"));
+		try {
+			const binary = buildNativeBinary({
+				fixture: "tests/local/fibertest_stub.js",
+				name: "gc-dense-fill-card",
+				mainFile: "tests/fixtures/gc-dense-fill-card/main.c",
+				outDir,
+			});
+			const invocation = resolveHarnessExecutionInvocation(binary);
+			const result = spawnSync(invocation.executable, invocation.args, {
+				env: {
+					...process.env,
+					MAL_GC_STRESS: "0",
+					MAL_GC_MAJOR_EVERY: "8",
+					MAL_GC_VERIFY: "1",
+					MAL_GC_STATS: "1",
+				},
+				encoding: "utf8",
+				timeout: scaledNativeRunTimeoutMs(120_000),
+			});
+			if (result.error !== undefined) throw result.error;
+			expect(result.status, result.stderr || result.stdout).toBe(0);
+			expect(result.stdout).toBe("gc-dense-fill-card PASS\n");
+			expect(Number(result.stderr.match(/\bminor=(\d+)/)?.[1] ?? 0)).toBeGreaterThan(0);
+		} finally {
+			rmSync(outDir, { recursive: true, force: true });
+		}
+	});
+});
+
 describe("compiled roots during a concurrent object snapshot", () => {
 	it("preserves property-region fallback and publishes a private native call result at the worker poll", (ctx) => {
 		const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-gc-compiled-worker-"));

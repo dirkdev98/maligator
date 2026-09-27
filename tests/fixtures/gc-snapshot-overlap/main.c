@@ -73,9 +73,7 @@ int main(void) {
     if (mal_heap_mark_is_current(targets[1]->header.mark, vm.heap.mark_color)) return 4;
 
     MalObject *replacement = mal_object_new(&vm.heap, nullptr);
-    mal_gc_write_barrier(target_array->elements[0]);
-    target_array->elements[0] = mal_value_from_object(replacement);
-    mal_gc_card(&target_array->object.header, target_array->elements[0]);
+    mal_array_object_dense_fill(target_array, 0, 1, mal_value_from_object(replacement));
     mal_array_object_dense_delete(target_array, 2);
     mal_array_object_set_length(target_array, 3);
 

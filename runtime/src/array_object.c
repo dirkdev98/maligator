@@ -373,8 +373,8 @@ bool mal_array_object_dense_build_fill(
     for (u32 index = 0; index < count; index++) {
         array->elements[start + index] = value;
         mal_array_object_perf_observe_value(array, value);
-        mal_gc_card(&array->object.header, value);
     }
+    if (count > 0) mal_gc_card(&array->object.header, value);
     array->dense_count = start + count;
     if (array->length < array->dense_count) {
         array->length = array->dense_count;
@@ -501,8 +501,8 @@ void mal_array_object_dense_fill(
     for (u32 index = start; index < end; index++) {
         array->elements[index] = value;
         mal_array_object_perf_observe_value(array, value);
-        mal_gc_card(&array->object.header, value);
     }
+    if (start < end) mal_gc_card(&array->object.header, value);
     mal_perf_collection_mutation(array, array->length);
 }
 
