@@ -66,12 +66,27 @@ int main(void) {
     mal_map_object_set(late, mal_value_from_object(keys[0]),
         mal_value_from_object(marker));
 
+    MalObject *fanout_root = mal_object_new(&vm.heap, nullptr);
+    MalObject *fanout_key = mal_object_new(&vm.heap, nullptr);
+    MalObject *fanout_holder = mal_object_new(&vm.heap, fanout_key);
+    MalObject *fanout_values[2];
+    for (usize i = 0; i < countof(fanout_values); ++i) {
+        fanout_values[i] = mal_object_new(&vm.heap, nullptr);
+    }
+    mal_map_object_set(first, mal_value_from_object(fanout_root),
+        mal_value_from_object(fanout_holder));
+    mal_map_object_set(first, mal_value_from_object(fanout_key),
+        mal_value_from_object(fanout_values[0]));
+    mal_map_object_set(second, mal_value_from_object(fanout_key),
+        mal_value_from_object(fanout_values[1]));
+
     MalValue roots[] = {
         mal_value_from_object(&first->object),
         mal_value_from_object(&second->object),
         mal_value_from_object(keys[0]),
         mal_value_from_object(sentinel),
-        mal_value_from_object(fragmented[0])
+        mal_value_from_object(fragmented[0]),
+        mal_value_from_object(fanout_root)
     };
     MalRootSpan span;
     mal_gc_root(&span, roots, countof(roots));
@@ -91,11 +106,17 @@ int main(void) {
     }
     if (mal_value_to_object(current) != fragmented[FRAGMENTED_COUNT - 1]) return 4;
     if (mal_map_object_size(first) + mal_map_object_size(second) !=
-            chain_count + FRAGMENTED_COUNT - 1) return 5;
+            chain_count + FRAGMENTED_COUNT + 2) return 5;
     MalValue late_value = mal_map_object_get(first, roots[3]);
     if (!mal_value_is_object(late_value) ||
         mal_value_to_object(late_value) != &late->object) return 6;
     if (mal_map_object_get(late, roots[2]) != mal_value_from_object(marker)) return 7;
+    if (mal_map_object_get(first, roots[5]) != mal_value_from_object(fanout_holder) ||
+        fanout_holder->prototype != fanout_key ||
+        mal_map_object_get(first, mal_value_from_object(fanout_key)) !=
+            mal_value_from_object(fanout_values[0]) ||
+        mal_map_object_get(second, mal_value_from_object(fanout_key)) !=
+            mal_value_from_object(fanout_values[1])) return 10;
 
     MalObject *young = mal_object_new(&vm.heap, nullptr);
     mal_map_object_set(late, roots[2], mal_value_from_object(young));
@@ -107,6 +128,7 @@ int main(void) {
     roots[2] = mal_value_new_undefined();
     roots[3] = mal_value_new_undefined();
     roots[4] = mal_value_new_undefined();
+    roots[5] = mal_value_new_undefined();
     mal_gc_collect(&vm);
     if (mal_map_object_size(first) != 0 || mal_map_object_size(second) != 0) return 9;
 
