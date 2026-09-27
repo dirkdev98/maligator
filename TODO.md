@@ -759,6 +759,39 @@ remains a Maligator extension and does not count as global fetch conformance.
       and backstop completions. Extend block ownership only if a measured need
       justifies background reclamation.
 
+### Concurrent generational GC experiments
+
+- [ ] Snapshot/dispatch: compare copied heap bytes, discovery yield, preparation,
+      worker CPU, merge, and remark wait on finished app-batch and HTTP binaries.
+      The primitive filter remains provisional; shape-key omission and active-worker
+      sizing were reverted after application regressions.
+- [ ] Safe worker traversal: demonstrate a chain or shared-graph handoff benefit
+      and recheck combined CPU before retaining bounded private draining.
+- [ ] Barriers: decide dense-fill and scalar captured-store card specialization
+      after representative HTTP and compiler comparisons; app-batch screens were
+      mixed. Keep SATB deletion protection independent of generational facts.
+- [ ] Pacing: measure young survival, promotion debt, major reclamation yield,
+      RAW/external/reserve pressure, and assist/backstop cost before replacing the
+      eighth-collection cadence. Validate nested cgroup quota discovery on Linux.
+- [ ] Bounded slices: retain the skipped-block sweep budget only after combined
+      latency review; identify a measured large-container or root-scan offender
+      before adding resumable tracing or wider exact frame liveness.
+- [ ] Minor locality: compare black-allocation block enrollment, young-position
+      bitmap, and young-block placement against old-block scan amplification and
+      allocation cost. Define allocation during finalization before using a bitmap.
+- [ ] Survivor age: measure post-promotion deaths and allocation during majors;
+      define remembered-set persistence and weak-key liveness before changing age.
+- [ ] Dirty ranges: compare sparse and dense old-container writes with logical
+      scanned slots and discoveries on applications. The 8,192-slot sparse array
+      fixture shows one discovery from a full-owner scan; cards remain experimental.
+- [ ] Ephemerons: finish sanitizer and application timing for the indexed weak
+      pass; retain the separate weak-cleanup SATB correctness fix.
+- [ ] Reclamation: measure fresh allocation during sweep, reusable capacity,
+      mapped and resident memory, page faults, and grow/shrink cycles before
+      replacing global free lists or releasing chunks.
+- [ ] Re-run the native/Wasm/sanitizer gate and the matched five-family portfolio
+      on the retained combination; record per-candidate and combined decisions.
+
 # Triggered work
 
 These are not active tasks and become actionable only when their condition is
