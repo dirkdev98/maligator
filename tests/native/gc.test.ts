@@ -144,7 +144,7 @@ describe("targeted GC unit tests", () => {
 			}
 
 			if (spec.tag === "gc-worker-batches") {
-				it("traces reachable cells on native GC workers", (ctx) => {
+				it("drains native worker graphs and preserves deferred edges", (ctx) => {
 					const invocation = resolveHarnessExecutionInvocation(compiled);
 					const result = spawnSync(invocation.executable, invocation.args, {
 						env: { ...process.env, ...HOST_GC, MAL_GC_STATS: "1", MAL_GC_VERIFY: "1" },
@@ -159,6 +159,9 @@ describe("targeted GC unit tests", () => {
 					}
 					expect(
 						Number(result.stderr.match(/\bworker_traces=(\d+)/)?.[1] ?? 0),
+					).toBeGreaterThan(0);
+					expect(
+						Number(result.stderr.match(/\bworker_drain_traces=(\d+)/)?.[1] ?? 0),
 					).toBeGreaterThan(0);
 				});
 			}

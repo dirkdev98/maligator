@@ -194,6 +194,7 @@ typedef struct MalGcWorker {
     u64 observed_batch;
     u64 batch_cpu_ns;
     u64 batch_snapshot_discoveries;
+    u64 batch_drain_traces;
 } MalGcWorker;
 static _Thread_local MalGcWorker *g_trace_worker = nullptr;
 void (*mal_gc_test_trace_env_hook)(MalEnv *env) = nullptr;
@@ -227,6 +228,7 @@ struct MalGcState {
     u64 worker_batch_epoch;
     bool worker_batch_active;
     bool worker_batch_concurrent;
+    bool worker_batch_drain;
     bool worker_sync_initialized;
     bool worker_stop;
 #endif
@@ -311,6 +313,7 @@ struct MalGcState {
     u64 max_mark_step_ns; // largest single mark step
     u64 max_sweep_step_ns; // largest single sweep step
     u64 worker_traces;
+    u64 worker_drain_traces;
     u64 concurrent_batches;
     u64 concurrent_traces;
     u64 concurrent_env_traces;
@@ -507,7 +510,8 @@ static void mal_gc_print_stats_now(void) {
             " cycles=%llu sync_backstop=%llu over_tenure_bytes=%llu "
             "satb_flushes=%llu satb_high_water=%llu "
             "init_mark_ms=%.3f remark_ms=%.3f max_mark_step_ms=%.3f max_sweep_step_ms=%.3f "
-            "worker_traces=%llu concurrent_batches=%llu concurrent_traces=%llu "
+            "worker_traces=%llu worker_drain_traces=%llu "
+            "concurrent_batches=%llu concurrent_traces=%llu "
             "concurrent_env_traces=%llu concurrent_discoveries=%llu "
             "worker_limit=%llu worker_cpu_ms=%.3f concurrent_worker_cpu_ms=%.3f "
             "mutator_assist_traces=%llu "
@@ -521,6 +525,7 @@ static void mal_gc_print_stats_now(void) {
             (double) g->init_mark_ns / 1.0e6, (double) g->remark_ns / 1.0e6,
             (double) g->max_mark_step_ns / 1.0e6, (double) g->max_sweep_step_ns / 1.0e6,
             (unsigned long long) g->worker_traces,
+            (unsigned long long) g->worker_drain_traces,
             (unsigned long long) g->concurrent_batches,
             (unsigned long long) g->concurrent_traces,
             (unsigned long long) g->concurrent_env_traces,
@@ -1809,6 +1814,7 @@ static void *mal_gc_worker_main(void *argument) {
         worker->observed_batch = g->worker_batch_epoch;
         usize count = g->worker_batch_count;
         MalHeapHeader **batch = g->batch;
+        bool drain = g->worker_batch_drain;
         pthread_mutex_unlock(&g->worker_mutex);
         struct timespec cpu_start;
         if (g->stats_enabled && clock_gettime(CLOCK_THREAD_CPUTIME_ID, &cpu_start) != 0) abort();
@@ -1825,6 +1831,21 @@ static void *mal_gc_worker_main(void *argument) {
                 worker->batch_snapshot_discoveries += worker->discovered_count - before;
             } else {
                 mal_gc_trace_cell(batch[i]);
+            }
+        }
+        if (drain) {
+            usize deferred = 0;
+            while (worker->discovered_count > deferred) {
+                usize last = worker->discovered_count - 1;
+                MalHeapHeader *cell = worker->discovered[last];
+                if (mal_gc_worker_can_trace(cell)) {
+                    worker->discovered_count = last;
+                    mal_gc_trace_cell(cell);
+                    worker->batch_drain_traces++;
+                } else {
+                    worker->discovered[last] = worker->discovered[deferred];
+                    worker->discovered[deferred++] = cell;
+                }
             }
         }
         if (g->stats_enabled) {
@@ -1908,16 +1929,20 @@ static void mal_gc_workers_stop(MalGcState *g) {
     g->workers_created = 0;
 }
 
-static void mal_gc_workers_start_batch(MalGcState *g, usize count, bool concurrent) {
+static void mal_gc_workers_start_batch(MalGcState *g, usize count,
+        bool concurrent, bool drain) {
     mal_gc_workers_start(g);
     if (g->workers_created == 0) abort();
+    if (concurrent && drain) abort();
     pthread_mutex_lock(&g->worker_mutex);
     if (g->worker_batch_active) abort();
     g->worker_batch_count = count;
     g->worker_batch_concurrent = concurrent;
+    g->worker_batch_drain = drain;
     g->workers_pending = g->workers_created;
     for (usize i = 0; i < g->workers_created; ++i) {
         g->workers[i].batch_snapshot_discoveries = 0;
+        g->workers[i].batch_drain_traces = 0;
     }
     g->worker_batch_active = true;
     g->worker_batch_epoch++;
@@ -1937,8 +1962,11 @@ static bool mal_gc_workers_collect_batch(MalGcState *g, bool wait) {
         return false;
     }
     pthread_mutex_unlock(&g->worker_mutex);
+    g->worker_traces += g->worker_batch_count;
     for (usize i = 0; i < g->workers_created; ++i) {
         MalGcWorker *worker = &g->workers[i];
+        g->worker_drain_traces += worker->batch_drain_traces;
+        g->worker_traces += worker->batch_drain_traces;
         if (g->stats_enabled) {
             g->worker_cpu_ns += worker->batch_cpu_ns;
             if (g->worker_batch_concurrent) {
@@ -1952,7 +1980,6 @@ static bool mal_gc_workers_collect_batch(MalGcState *g, bool wait) {
         }
         worker->discovered_count = 0;
     }
-    g->worker_traces += g->worker_batch_count;
     if (g->worker_batch_concurrent) {
         g->concurrent_batches++;
         usize direct_count = 0;
@@ -1969,12 +1996,13 @@ static bool mal_gc_workers_collect_batch(MalGcState *g, bool wait) {
     }
     g->batch_edges_count = 0;
     g->worker_batch_active = false;
+    g->worker_batch_drain = false;
     return true;
 }
 
-static bool mal_gc_workers_trace_batch(MalGcState *g, usize count) {
+static bool mal_gc_workers_trace_batch(MalGcState *g, usize count, bool drain) {
     if (!mal_gc_workers_start(g)) return false;
-    mal_gc_workers_start_batch(g, count, false);
+    mal_gc_workers_start_batch(g, count, false, drain);
     mal_gc_workers_collect_batch(g, true);
     return true;
 }
@@ -1984,7 +2012,7 @@ static bool mal_gc_workers_trace_batch(MalGcState *g, usize count) {
 #define MAL_GC_PARKED_TRACE_BATCH_SIZE 2048
 #define MAL_GC_PARALLEL_BATCH_MIN 64
 
-static void mal_gc_trace_parked_batch(usize count) {
+static void mal_gc_trace_parked_batch(usize count, bool drain) {
     usize safe_count = 0;
     for (usize i = 0; i < count; ++i) {
         MalHeapHeader *cell = g_gc->batch[i];
@@ -1996,7 +2024,7 @@ static void mal_gc_trace_parked_batch(usize count) {
     }
 #if !defined(__wasi__)
     if (g_gc->worker_limit > 0 && safe_count >= MAL_GC_PARALLEL_BATCH_MIN) {
-        if (mal_gc_workers_trace_batch(g_gc, safe_count)) return;
+        if (mal_gc_workers_trace_batch(g_gc, safe_count, drain)) return;
     }
 #endif
     for (usize i = 0; i < safe_count; ++i) mal_gc_trace_cell(g_gc->batch[i]);
@@ -2041,7 +2069,7 @@ static bool mal_gc_trace_concurrent_batch(usize limit, usize *worked) {
     }
     if (direct_count + snapshot_edges < MAL_GC_PARALLEL_BATCH_MIN) {
         g_gc->batch_edges_count = 0;
-        mal_gc_trace_parked_batch(count);
+        mal_gc_trace_parked_batch(count, false);
         *worked = count;
         return false;
     }
@@ -2083,7 +2111,7 @@ static bool mal_gc_trace_concurrent_batch(usize limit, usize *worked) {
         }
     }
     for (usize i = safe_count; i < count; ++i) mal_gc_trace_cell(g_gc->batch[i]);
-    mal_gc_workers_start_batch(g_gc, safe_count, true);
+    mal_gc_workers_start_batch(g_gc, safe_count, true, false);
     *worked = count;
     return true;
 }
@@ -2104,7 +2132,7 @@ static usize mal_gc_trace_grey_batch(usize limit) {
     for (usize i = 0; i < count; ++i) {
         g_gc->batch[i] = g_gc->grey[--g_gc->grey_count];
     }
-    mal_gc_trace_parked_batch(count);
+    mal_gc_trace_parked_batch(count, limit == (usize) -1);
     return count;
 }
 
