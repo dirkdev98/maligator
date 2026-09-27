@@ -318,7 +318,7 @@ static MalGcBlock *mal_gc_new_block(MalHeap *heap, u16 size_class, u8 kind) {
 }
 
 static inline void mal_gc_track_young_block(MalHeap *heap, MalGcBlock *block) {
-    if (!block->on_young) {
+    if (!block->on_young && !mal_gc_black_alloc) {
         block->on_young = 1;
         block->next_young = heap->young_blocks;
         heap->young_blocks = block;
@@ -1018,8 +1018,8 @@ void mal_heap_sweep_begin(MalHeap *heap) {
         heap->sweep_epoch = 1;
     }
     memset(heap->cell_free, 0, sizeof(heap->cell_free));
-    // Allocations during the incremental sweep re-enroll their blocks. Keep that
-    // new list at completion, including blocks already visited by the cursor.
+    // Black allocations during sweep are already OLD and accounted for by the
+    // sweep cursor or mal_gc_count_black, so they need no minor enrollment.
     mal_gc_clear_young_blocks(heap);
     mal_gc_clear_young_large(heap);
     // Walk only the chunks that exist NOW: chunks prepended during the sweep sit
