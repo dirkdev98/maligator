@@ -535,6 +535,9 @@ void mal_heap_init(MalHeap *heap, usize capacity) {
     heap->gc_stats = false;
     heap->minor_cells_inspected = 0;
     heap->minor_blocks_inspected = 0;
+    heap->minor_young_cells_swept = 0;
+    heap->minor_young_cell_bytes_swept = 0;
+    heap->minor_old_cells_inspected = 0;
     heap->promoted_followup_reclaimed_bytes = 0;
     heap->promoted_followup_retained_bytes = 0;
     heap->promoted_followup_cycle_reclaimed_bytes = 0;
@@ -611,6 +614,9 @@ void mal_heap_free(MalHeap *heap) {
     heap->gc_stats = false;
     heap->minor_cells_inspected = 0;
     heap->minor_blocks_inspected = 0;
+    heap->minor_young_cells_swept = 0;
+    heap->minor_young_cell_bytes_swept = 0;
+    heap->minor_old_cells_inspected = 0;
     heap->promoted_followup_reclaimed_bytes = 0;
     heap->promoted_followup_retained_bytes = 0;
     heap->promoted_followup_cycle_reclaimed_bytes = 0;
@@ -1033,10 +1039,12 @@ void mal_heap_sweep_minor(MalHeap *heap, MalHeapFinalizeFn finalize) {
         block->on_young = 0;
         block->next_young = nullptr;
         usize block_live = 0;
+        usize young_dead = 0;
         if (heap->gc_stats) {
             heap->minor_blocks_inspected++;
             heap->minor_cells_inspected +=
                 (usize) (block->bump - ((u8 *) block + data_offset)) / block->cell_size;
+            heap->minor_old_cells_inspected += block->live;
         }
         for (u8 *cell = (u8 *) block + data_offset;
             cell + block->cell_size <= block->bump; cell += block->cell_size) {
@@ -1045,6 +1053,7 @@ void mal_heap_sweep_minor(MalHeap *heap, MalHeapFinalizeFn finalize) {
             if (mal_heap_mark_is_old(mark)) {
                 block_live++;
             } else if ((mark & MAL_MARK_FREE) == 0) {
+                if (heap->gc_stats) young_dead++;
                 finalize(header);
                 mal_heap_sweep_mark_store(header, MAL_MARK_FREE);
                 if (heap->poison_on_free) {
@@ -1056,6 +1065,11 @@ void mal_heap_sweep_minor(MalHeap *heap, MalHeapFinalizeFn finalize) {
                     heap->cell_free[block->size_class] = cell;
                 }
             }
+        }
+        if (heap->gc_stats) {
+            usize young_swept = young_dead + block_live - block->live;
+            heap->minor_young_cells_swept += young_swept;
+            heap->minor_young_cell_bytes_swept += young_swept * block->cell_size;
         }
         // Old BLACK cells cannot die during a minor and were already accounted for.
         heap->live_bytes += (block_live - block->live) * block->cell_size;

@@ -333,6 +333,9 @@ struct MalGcState {
     u64 minor_sweep_ns;
     u64 minor_cells_inspected;
     u64 minor_blocks_inspected;
+    u64 minor_young_cells_swept;
+    u64 minor_young_cell_bytes_swept;
+    u64 minor_old_cells_inspected;
     u64 promoted_followup_reclaimed_bytes;
     u64 promoted_followup_retained_bytes;
     u64 major_mark_allocated_bytes;
@@ -619,6 +622,8 @@ static void mal_gc_print_stats_now(void) {
             "minor_pause_ms=%.3f max_minor_pause_ms=%.3f "
             "minor_mark_ms=%.3f minor_sweep_ms=%.3f "
             "minor_cells_inspected=%llu minor_blocks_inspected=%llu "
+            "minor_young_cells_swept=%llu minor_young_cell_bytes_swept=%llu "
+            "minor_old_cells_inspected=%llu "
             "remembered_owners=%llu remembered_container_slots=%llu "
             "remembered_discoveries=%llu remembered_array_owners=%llu "
             "remembered_array_slots=%llu remembered_array_discoveries=%llu "
@@ -665,6 +670,9 @@ static void mal_gc_print_stats_now(void) {
             (double) g->minor_sweep_ns / 1.0e6,
             (unsigned long long) g->minor_cells_inspected,
             (unsigned long long) g->minor_blocks_inspected,
+            (unsigned long long) g->minor_young_cells_swept,
+            (unsigned long long) g->minor_young_cell_bytes_swept,
+            (unsigned long long) g->minor_old_cells_inspected,
             (unsigned long long) g->minor_remembered_owners,
             (unsigned long long) g->minor_remembered_container_slots,
             (unsigned long long) g->minor_remembered_discoveries,
@@ -2750,6 +2758,9 @@ static void mal_gc_collect_sync(MalVm *vm, bool major) {
         if (g_gc->stats_enabled) {
             g_gc->minor_cells_inspected = vm->heap.minor_cells_inspected;
             g_gc->minor_blocks_inspected = vm->heap.minor_blocks_inspected;
+            g_gc->minor_young_cells_swept = vm->heap.minor_young_cells_swept;
+            g_gc->minor_young_cell_bytes_swept = vm->heap.minor_young_cell_bytes_swept;
+            g_gc->minor_old_cells_inspected = vm->heap.minor_old_cells_inspected;
         }
     } else
     {

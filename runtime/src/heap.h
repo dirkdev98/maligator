@@ -102,6 +102,9 @@ typedef struct MalHeap {
     bool gc_stats;
     u64 minor_cells_inspected;
     u64 minor_blocks_inspected;
+    u64 minor_young_cells_swept;
+    u64 minor_young_cell_bytes_swept;
+    u64 minor_old_cells_inspected;
     /** Incomplete major sweep outcomes stay separate from published totals. */
     u64 promoted_followup_reclaimed_bytes;
     u64 promoted_followup_retained_bytes;

@@ -392,6 +392,9 @@ static bool measure_fragmented_minor(MalHeap *heap, bool wide) {
     mark_live(young[0]);
     mark_live(young[1]);
     mal_heap_sweep_minor(heap, finalize_cell);
+    CHECK(heap->minor_young_cells_swept == 3);
+    CHECK(heap->minor_young_cell_bytes_swept == 1536);
+    CHECK(heap->minor_old_cells_inspected == old_count - 3);
     CHECK(live_cell(young[0], (u32) old_count + 1));
     CHECK(live_cell(young[1], (u32) old_count + 2));
     CHECK(g_finalized[old_count + 3] == 1);
@@ -404,6 +407,11 @@ static bool measure_fragmented_minor(MalHeap *heap, bool wide) {
         CHECK(g_narrow_minor_cells >= old_count);
         CHECK(heap->minor_blocks_inspected == 1);
     }
+    u64 inspected = heap->minor_cells_inspected;
+    mal_heap_sweep_minor(heap, finalize_cell);
+    CHECK(heap->minor_cells_inspected == inspected);
+    CHECK(heap->minor_young_cells_swept == 3);
+    CHECK(heap->minor_young_cell_bytes_swept == 1536);
     return true;
 }
 
