@@ -319,6 +319,40 @@ static bool large_cells_follow_major_and_minor_lifetime(MalHeap *heap) {
     return true;
 }
 
+static bool finalizer_raw_storage_reuses_partial_slots_and_blocks(MalHeap *heap) {
+    TestCell *discard = new_cell(heap, 512);
+    TestCell *survivor = new_cell(heap, 512);
+    u32 discard_id = discard->id;
+    u32 survivor_id = survivor->id;
+    discard->owned = mal_heap_alloc_raw(heap, 128);
+    survivor->owned = mal_heap_alloc_raw(heap, 128);
+    void *discard_raw = discard->owned;
+    void *survivor_raw = survivor->owned;
+    memset(survivor_raw, 0x5a, 128);
+    usize chunks = heap->chunk_count;
+
+    mal_heap_begin_major(heap);
+    mark_live(survivor);
+    mal_heap_sweep(heap, finalize_cell);
+    CHECK(g_finalized[discard_id] == 1 && g_finalized[survivor_id] == 0);
+
+    void *reused = mal_heap_alloc_raw(heap, 128);
+    CHECK(reused == discard_raw && heap->chunk_count == chunks);
+    for (usize i = 0; i < 128; i++) CHECK(((u8 *) survivor_raw)[i] == 0x5a);
+    gc_free_raw(heap, reused);
+
+    mal_heap_begin_major(heap);
+    mal_heap_sweep(heap, finalize_cell);
+    CHECK(g_finalized[discard_id] == 1 && g_finalized[survivor_id] == 1);
+    CHECK(heap->free_blocks != nullptr);
+    MalGcBlock *recycled = heap->free_blocks;
+    void *new_class = mal_heap_alloc_raw(heap, 256);
+    CHECK(new_class != nullptr && heap->chunk_count == chunks);
+    CHECK(heap->free_blocks != recycled);
+    gc_free_raw(heap, new_class);
+    return true;
+}
+
 static bool incremental_major_accounts_new_large_cells(MalHeap *heap) {
     const usize cell_size = 10000;
     TestCell *old = new_cell(heap, cell_size);
@@ -364,6 +398,7 @@ int main(void) {
         major_resets_minor_tracking_before_block_reassignment,
         incremental_major_keeps_allocations_after_a_block_was_swept,
         large_cells_follow_major_and_minor_lifetime,
+        finalizer_raw_storage_reuses_partial_slots_and_blocks,
         incremental_major_accounts_new_large_cells,
     };
     usize passed = 0;

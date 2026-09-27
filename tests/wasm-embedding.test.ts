@@ -33,7 +33,9 @@ beforeAll(() => {
 	module = new WebAssembly.Module(readFileSync(output));
 }, 300_000);
 
-function openEngine(mode: "normal" | "stress" | "automatic" = "normal"): WasmEngine {
+function createInstance(
+	mode: "normal" | "stress" | "automatic" = "normal",
+): WebAssembly.Instance {
 	const wasi = new WASI({
 		version: "preview1",
 		args: [],
@@ -58,7 +60,11 @@ function openEngine(mode: "normal" | "stress" | "automatic" = "normal"): WasmEng
 		wasi.getImportObject() as WebAssembly.Imports,
 	);
 	wasi.initialize(instance);
-	return new WasmEngine(instance);
+	return instance;
+}
+
+function openEngine(mode: "normal" | "stress" | "automatic" = "normal"): WasmEngine {
+	return new WasmEngine(createInstance(mode));
 }
 
 describe("Wasm reactor embedding", () => {
@@ -106,6 +112,26 @@ describe("Wasm reactor embedding", () => {
 			expect(engine.collections).toBeGreaterThan(0);
 		} finally {
 			engine.dispose();
+		}
+	});
+
+	it("reinitializes the same reactor after collection, throws, and disposal", () => {
+		const instance = createInstance("stress");
+		for (let generation = 0; generation < 2; generation++) {
+			const engine = new WasmEngine(instance);
+			try {
+				for (let index = 0; index < 4; index++) {
+					const input = `${generation}:${index}:🐊`;
+					expect(JSON.parse(engine.call("retain", input))).toEqual(
+						Array.from({ length: 80 }, (_, index) => ({ index, input })),
+					);
+				}
+				expect(() => engine.call("fail", "")).toThrow("fixture exception");
+				expect(engine.call("echo", "recovered")).toBe("echo:recovered");
+				expect(engine.collections).toBeGreaterThan(0);
+			} finally {
+				engine.dispose();
+			}
 		}
 	});
 

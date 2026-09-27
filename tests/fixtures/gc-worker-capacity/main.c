@@ -1,6 +1,7 @@
+#include <pthread.h>
 #include <sched.h>
-#include <stdio.h>
 #include <stdatomic.h>
+#include <stdio.h>
 #include <time.h>
 
 #include "gc.h"
@@ -16,6 +17,8 @@ static MalEnv *envs[GRAPH_WIDTH];
 static MalObject *targets[GRAPH_WIDTH];
 static u32 finalized[GRAPH_WIDTH];
 static _Atomic u32 worker_env_traces;
+static pthread_t mutator_thread;
+static _Atomic bool wrong_finalizer_thread;
 
 static usize worker_limit(void) {
     return forced_workers;
@@ -31,12 +34,16 @@ static void count_worker_trace(MalEnv *env) {
 }
 
 static void count_finalized(MalHeapHeader *cell) {
+    if (!pthread_equal(pthread_self(), mutator_thread)) {
+        atomic_store_explicit(&wrong_finalizer_thread, true, memory_order_relaxed);
+    }
     for (usize i = 0; i < countof(targets); ++i) {
         if ((void *) cell == (void *) targets[i]) finalized[i]++;
     }
 }
 
 static int check_capacity(usize capacity) {
+    mutator_thread = pthread_self();
     forced_workers = capacity;
     mal_gc_test_worker_limit_hook = worker_limit;
     MalVm vm;
@@ -76,10 +83,14 @@ static int check_capacity(usize capacity) {
     mal_gc_collect(&vm);
     for (usize i = 0; i < countof(targets); ++i) {
         if (finalized[i] != 1) return 7;
+        targets[i] = nullptr;
     }
-    mal_gc_register_finalizer(MAL_HEAP_OBJECT, nullptr);
+    finalized[0] = 0;
+    targets[0] = mal_object_new(&vm.heap, nullptr);
     mal_gc_test_trace_env_hook = nullptr;
     mal_vm_free(&vm);
+    if (finalized[0] != 1 || atomic_load_explicit(&wrong_finalizer_thread, memory_order_relaxed)) return 8;
+    mal_gc_register_finalizer(MAL_HEAP_OBJECT, nullptr);
     mal_gc_test_worker_limit_hook = nullptr;
     return 0;
 }
@@ -93,6 +104,7 @@ int main(void) {
         finalized[i] = 0;
     }
     atomic_store_explicit(&worker_env_traces, 0, memory_order_relaxed);
+    atomic_store_explicit(&wrong_finalizer_thread, false, memory_order_relaxed);
     int worker_result = check_capacity(1);
     if (worker_result != 0) return worker_result + 10;
     puts("gc-worker-capacity PASS");
