@@ -20,6 +20,7 @@ import * as path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import type { MaligatorBuildConfig } from "../src/build-config.ts";
 import { createCacheLease } from "../src/cache-management.ts";
+import { parseGcStats } from "./runtime-gap.ts";
 import { prepareSelfCompileSource } from "./self-compile-workload.ts";
 import { cleanTestEnvironment } from "./test-environment.ts";
 
@@ -42,6 +43,10 @@ interface Sample {
 	wallMs: number;
 	peakRssBytes: number;
 	digest: string;
+}
+interface GcResourceSample extends Sample {
+	gcStats: Readonly<Record<string, number>>;
+	stderr: string;
 }
 interface Prepared {
 	schema: 1;
@@ -86,7 +91,8 @@ one Node reference; self-compile matches each native compiler to its revision's 
 output. Compiler output may change between revisions, while compiler-app must remain
 deterministic within each revision. Fresh processes are timed end to end; warmups warm
 caches, not a persistent JavaScript process. No cold-start, calibration, profiling,
-diagnostic instrumentation, or adaptive extra pairs run.
+or adaptive extra pairs run. app-batch collects separate GC resource samples after
+ordinary timing; those instrumented runs are excluded from performance pairs.
 Exit 2 means failed or incomplete. Standalone runs provide family evidence; only the
 complete configured portfolio makes an acceptance decision.
 `;
@@ -262,6 +268,7 @@ async function run(value: Options): Promise<void> {
 	const deadline = started + value.budgetSeconds * 1000;
 	const pairs: Array<{ baseline: Sample; candidate: Sample }> = [];
 	const samples: Array<Sample> = [];
+	const gcResources: Array<GcResourceSample> = [];
 	const phases: Record<string, number> = {};
 	let complete = false;
 	let status = "running";
@@ -300,6 +307,7 @@ async function run(value: Options): Promise<void> {
 			elapsedMs: performance.now() - started,
 			phases,
 			samples,
+			gcResources,
 			pairs,
 			preparation: {
 				reused: value.prepared !== undefined,
@@ -345,6 +353,7 @@ async function run(value: Options): Promise<void> {
 		args: Array<string>,
 		cwd: string,
 		timed = false,
+		extraEnv: Record<string, string> = {},
 	) => {
 		checkBudget();
 		const directory = path.join(value.output, label);
@@ -364,7 +373,7 @@ async function run(value: Options): Promise<void> {
 						: args,
 					{
 						cwd,
-						env: cleanTestEnvironment(),
+						env: { ...cleanTestEnvironment(), ...extraEnv },
 						stdio: ["ignore", out, err],
 						detached: true,
 					},
@@ -417,6 +426,7 @@ async function run(value: Options): Promise<void> {
 			wallMs,
 			peakRssBytes: Number(rss ?? 0) * (process.platform === "linux" ? 1024 : 1),
 			stdout,
+			stderr,
 		};
 	};
 	const inPhase = async <T>(name: string, action: () => Promise<T>): Promise<T> => {
@@ -667,6 +677,37 @@ async function run(value: Options): Promise<void> {
 					persist();
 				}
 			});
+			if (value.workload === "app-batch") {
+				await inPhase("gc-resources", async () => {
+					for (const revision of ["baseline", "candidate"] as const) {
+						const label = `gc-resource-${revision}`;
+						const measured = await execute(
+							label,
+							path.join(preparation, binaries[revision]),
+							[input, String(ITERATIONS)],
+							preparation,
+							true,
+							{ MAL_GC_STATS: "1" },
+						);
+						const outputDigest = digest(readFileSync(measured.stdout));
+						if (outputDigest !== oracle)
+							throw new Error(`${label} differs from the Node oracle`);
+						const gcStats = parseGcStats(readFileSync(measured.stderr, "utf8"));
+						if (gcStats?.collections === undefined)
+							throw new Error(`${label} omitted GC collection statistics`);
+						gcResources.push({
+							label,
+							revision,
+							wallMs: measured.wallMs,
+							peakRssBytes: measured.peakRssBytes,
+							digest: outputDigest,
+							gcStats,
+							stderr: measured.stderr,
+						});
+						persist();
+					}
+				});
+			}
 		}
 		checkBudget();
 		if (!isDeepStrictEqual(runIdentity, identity(value)))
@@ -713,6 +754,9 @@ if (import.meta.main) {
 								: [
 										"one warmup per revision",
 										`${value.pairs} alternating pairs with output validation`,
+										...(value.workload === "app-batch"
+											? ["one separate GC resource sample per revision"]
+											: []),
 									]),
 						],
 						evidence:
