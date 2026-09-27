@@ -266,7 +266,7 @@ export function buildWasmEngine(options: WasmBuildOptions) {
 							toolchain.tools.cc.path,
 							[...flags, "-x", "c", "-c", file, "-o", output],
 							env,
-							600_000,
+							1_800_000,
 						);
 						return [{ name: "object.o", file: output }];
 					},
