@@ -1785,7 +1785,7 @@ static bool mal_gc_snapshot_edge_count(MalHeapHeader *cell, usize *count) {
     if (object->shape == nullptr || object->overflow != nullptr ||
         object->shape->inline_count > MAL_GC_SNAPSHOT_INLINE_LIMIT ||
         (object->shape->inline_count > 0 && object->slots == nullptr)) return false;
-    usize edges = (object->prototype != nullptr ? 1 : 0) + object->shape->inline_count;
+    usize edges = (object->prototype != nullptr ? 1 : 0) + 2 * object->shape->inline_count;
     if (cell->type == MAL_HEAP_ARRAY_OBJECT) {
         MalArrayObject *array = (MalArrayObject *) cell;
         if (array->dense_count > MAL_GC_SNAPSHOT_DENSE_LIMIT ||
@@ -1803,8 +1803,8 @@ static void mal_gc_snapshot_edges(MalGcState *g, MalHeapHeader *cell, usize inde
         g->batch_edges[g->batch_edges_count++] = mal_value_from_object(object->prototype);
     }
     const MalShape *shape = object->shape;
-    // The heap-owned transition tree roots shape keys at initial mark and remark.
     for (u32 i = 0; i < shape->inline_count; ++i) {
+        g->batch_edges[g->batch_edges_count++] = shape->props[i].key;
         g->batch_edges[g->batch_edges_count++] = object->slots[shape->props[i].slot];
     }
     if (cell->type == MAL_HEAP_ARRAY_OBJECT) {
