@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
 	formatOhaDuration,
+	parseCheckedOhaOutput,
 	parseOhaOutput,
 	planExpressHttpWorkload,
 } from "../scripts/bench-http.ts";
@@ -54,5 +55,36 @@ describe("HTTP benchmark support", () => {
 		expect(() => parseOhaOutput('{"summary":{"requestsPerSec":10}}')).toThrow(
 			/requestsPerSec and p99/,
 		);
+	});
+
+	it("rejects transport failures and unexpected status codes while allowing fixture errors", () => {
+		const output = (
+			statusCodeDistribution: Record<string, number>,
+			errorDistribution: Record<string, number> = {},
+		) =>
+			JSON.stringify({
+				summary: { requestsPerSec: 10 },
+				latencyPercentiles: { p99: 0.01 },
+				statusCodeDistribution,
+				errorDistribution,
+			});
+		expect(
+			parseCheckedOhaOutput(
+				output({ 200: 100, 302: 3, 404: 2, 500: 1 }),
+				[200, 302, 404, 500],
+			),
+		).toEqual({ rps: 10, p99Ms: 10 });
+		expect(() => parseCheckedOhaOutput(output({ 200: 10, 503: 1 }), [200])).toThrow(
+			/unexpected statuses/,
+		);
+		expect(() => parseCheckedOhaOutput(output({ 200: 10 }), [200, 302])).toThrow(
+			/unexpected statuses/,
+		);
+		expect(() => parseCheckedOhaOutput(output({ 200: NaN }), [200])).toThrow(
+			/unexpected statuses/,
+		);
+		expect(() =>
+			parseCheckedOhaOutput(output({ 200: 10 }, { "connection refused": 1 }), [200]),
+		).toThrow(/transport errors/);
 	});
 });

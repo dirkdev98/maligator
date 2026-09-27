@@ -17,6 +17,8 @@ import {
 import * as os from "node:os";
 import * as path from "node:path";
 import { isDeepStrictEqual } from "node:util";
+import { prepareHttpBinaries, runHttpSnapshot } from "./bench-http-ordinary.ts";
+import type { HttpPreparation } from "./bench-http-ordinary.ts";
 
 export const BENCHMARK_LANE_RULES: ReadonlyArray<{
 	pattern: RegExp;
@@ -533,8 +535,16 @@ function comparisonMetrics(
 }
 
 function assertComparableSnapshots(base: unknown, head: unknown): void {
-	const left = base as { javascript?: { workload: string; phaseChecksums: unknown } };
+	const left = base as {
+		javascript?: { workload: string; phaseChecksums: unknown };
+		http?: { oracleDigest: string };
+	};
 	const right = head as typeof left;
+	if (left.http !== undefined || right.http !== undefined) {
+		if (left.http?.oracleDigest !== right.http?.oracleDigest) {
+			throw new Error("base/head HTTP response oracle differs");
+		}
+	}
 	if (left.javascript !== undefined || right.javascript !== undefined) {
 		if (
 			left.javascript?.workload !== right.javascript?.workload ||
@@ -623,6 +633,7 @@ export async function runBenchmarkComparison(options: ComparisonOptions): Promis
 		}
 	}
 	const base = path.join(runDirectory, "base");
+	let httpPreparation: HttpPreparation | undefined;
 	const samples = new Map<string, Array<MetricSample>>();
 	const unpairedMetrics = new Set<string>();
 	let pairCount = 0;
@@ -661,15 +672,54 @@ export async function runBenchmarkComparison(options: ComparisonOptions): Promis
 		activeSnapshot = label;
 		persist("running");
 		assertSource();
-		const result = await runSnapshot(
-			isBase ? base : repository,
-			options.lanes,
-			isBase ? identity.baseArgs : identity.headArgs,
-			runDirectory,
-			label,
-			deadline,
-			isBase ? identity.baseCommit : undefined,
-		);
+		if (!options.lanes.includes("http")) {
+			const result = await runSnapshot(
+				isBase ? base : repository,
+				options.lanes,
+				isBase ? identity.baseArgs : identity.headArgs,
+				runDirectory,
+				label,
+				deadline,
+				isBase ? identity.baseCommit : undefined,
+			);
+			assertSource();
+			activeSnapshot = undefined;
+			return result;
+		}
+		const saved = path.join(runDirectory, `${label}.json`);
+		let result: unknown;
+		if (existsSync(saved)) result = JSON.parse(readFileSync(saved, "utf8")) as unknown;
+		else {
+			const ordinaryLanes = options.lanes.filter((lane) => lane !== "http");
+			const ordinary =
+				ordinaryLanes.length === 0
+					? {}
+					: await runSnapshot(
+							isBase ? base : repository,
+							ordinaryLanes,
+							isBase ? identity.baseArgs : identity.headArgs,
+							runDirectory,
+							`${label}-other`,
+							deadline,
+							isBase ? identity.baseCommit : undefined,
+						);
+			const args = isBase ? identity.baseArgs : identity.headArgs;
+			const secondsIndex = args.indexOf("--http-seconds");
+			const seconds = secondsIndex < 0 ? 5 : Number(args[secondsIndex + 1]);
+			if (!Number.isFinite(seconds) || seconds <= 0)
+				throw new Error("invalid HTTP comparison duration");
+			if (httpPreparation === undefined)
+				throw new Error("HTTP binaries were not prepared");
+			const http = await runHttpSnapshot(
+				httpPreparation.binaries[isBase ? "base" : "head"],
+				repository,
+				path.join(runDirectory, "http-raw", label),
+				seconds,
+				deadline,
+			);
+			result = { ...(ordinary as object), ...(http as object) };
+			writeJson(saved, result);
+		}
 		assertSource();
 		activeSnapshot = undefined;
 		return result;
@@ -684,6 +734,28 @@ export async function runBenchmarkComparison(options: ComparisonOptions): Promis
 			rmSync(base, { recursive: true, force: true });
 			exportBase(identity.baseCommit, repository, runDirectory, deadline);
 			writeJson(baseReady, { commit: identity.baseCommit });
+		}
+		if (options.lanes.includes("http")) {
+			if (!isDeepStrictEqual(identity.baseArgs, identity.headArgs)) {
+				throw new Error(
+					"HTTP comparison cannot apply revision-specific benchmark options",
+				);
+			}
+			httpPreparation = await prepareHttpBinaries(
+				base,
+				repository,
+				runDirectory,
+				deadline,
+			);
+			const httpIdentityFile = path.join(runDirectory, "http-identity.json");
+			if (existsSync(httpIdentityFile)) {
+				const previous = JSON.parse(readFileSync(httpIdentityFile, "utf8")) as unknown;
+				if (!isDeepStrictEqual(previous, httpPreparation.identity)) {
+					throw new Error(
+						"HTTP binaries, fixtures, or tools changed; start a new comparison",
+					);
+				}
+			} else writeJson(httpIdentityFile, httpPreparation.identity);
 		}
 		await snapshot("warm-base", true);
 		await snapshot("warm-head", false);
@@ -740,6 +812,7 @@ export async function runBenchmarkComparison(options: ComparisonOptions): Promis
 		rmSync(base, { recursive: true, force: true });
 		rmSync(path.join(runDirectory, "base.tar"), { force: true });
 		rmSync(baseReady, { force: true });
+		rmSync(path.join(runDirectory, "http-build"), { recursive: true, force: true });
 		const metrics = comparisonMetrics(samples);
 		for (const metric of metrics) {
 			console.log(

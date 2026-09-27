@@ -10,3 +10,4 @@ tests/primordial-inventory.test.ts
 tests/bench-quick.test.ts
 tests/compiler-scale-runner.test.ts
 tests/bench-compare-runner.test.ts
+tests/bench-http-ordinary.test.ts

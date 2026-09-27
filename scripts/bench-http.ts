@@ -79,3 +79,45 @@ export function parseOhaOutput(output: string): OhaMetrics {
 	}
 	return { rps, p99Ms: p99Seconds * 1000 };
 }
+
+export function parseCheckedOhaOutput(
+	output: string,
+	expectedStatuses: ReadonlyArray<number>,
+): OhaMetrics {
+	const parsed = JSON.parse(output) as {
+		statusCodeDistribution?: Record<string, number>;
+		errorDistribution?: Record<string, number>;
+	};
+	const statuses = Object.entries(parsed.statusCodeDistribution ?? {});
+	if (
+		statuses.length === 0 ||
+		statuses.some(
+			([status, count]) =>
+				!expectedStatuses.includes(Number(status)) ||
+				!Number.isSafeInteger(count) ||
+				count <= 0,
+		) ||
+		expectedStatuses.some(
+			(status) => !statuses.some(([observed]) => Number(observed) === status),
+		)
+	) {
+		throw new Error(
+			`oha returned unexpected statuses: ${JSON.stringify(parsed.statusCodeDistribution)}`,
+		);
+	}
+	if (
+		parsed.errorDistribution === undefined ||
+		Object.entries(parsed.errorDistribution).some(
+			([reason, count]) =>
+				reason !== "aborted due to deadline" ||
+				!Number.isSafeInteger(count) ||
+				count < 0 ||
+				count > 50,
+		)
+	) {
+		throw new Error(`oha transport errors: ${JSON.stringify(parsed.errorDistribution)}`);
+	}
+	const metrics = parseOhaOutput(output);
+	if (metrics.rps <= 0) throw new Error("oha reported no completed requests");
+	return metrics;
+}
