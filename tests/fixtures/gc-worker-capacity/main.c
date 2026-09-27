@@ -151,6 +151,7 @@ int main(void) {
         {2, 0, true, 0, 1},
         {2, 1, false, 1, 2},
         {1, SIZE_MAX, false, 1, 0},
+        {2, SIZE_MAX, false, 2, 0},
     };
     for (usize scenario = 0; scenario < countof(cases); ++scenario) {
         for (usize i = 0; i < countof(targets); ++i) {
