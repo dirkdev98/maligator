@@ -7,6 +7,7 @@ import {
 	nativePrivateCallResultIps,
 	nativePrivateRootRegisters,
 } from "../../src/compiler/target/lower-native-root-publication.ts";
+import { emitCompiledFunction } from "../../src/compiler/target/render-native-c.ts";
 import {
 	buildNativeBinary,
 	buildNativeBinaryResult,
@@ -74,6 +75,24 @@ describe("compiled roots during a concurrent object snapshot", () => {
 				outDir,
 			});
 			const image = build.programImage;
+			const regionIndex = image.runtime.functions.findIndex(
+				(fn) =>
+					String.fromCharCode(
+						...(image.runtime.stringConstants[fn.nameStringIndex] ?? []),
+					) === "readRegion",
+			);
+			expect(regionIndex).toBeGreaterThanOrEqual(0);
+			const regionSource = emitCompiledFunction(
+				image.runtime.functions[regionIndex]!,
+				image.native.functions[regionIndex]!,
+				regionIndex,
+				"",
+				false,
+			)?.source;
+			expect(regionSource).toContain("mal_vm_property_read_region_begin(");
+			expect(regionSource?.match(/mal_vm_property_read_region_try_load\(/g)).toHaveLength(
+				3,
+			);
 			const getterIndex = image.runtime.functions.findIndex(
 				(fn) =>
 					String.fromCharCode(
