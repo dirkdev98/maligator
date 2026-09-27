@@ -736,13 +736,12 @@ remains a Maligator extension and does not count as global fetch conformance.
 
 ## Generational GC workers
 
-- [ ] Verify the merged #65/#66 compiler contracts with the worker collector:
-      publish private roots before a fresh automatic major scan, preserve storage
-      lifetime across a middle getter and collecting fallback, and cover worker
-      overlap, more than 64 shadow slots, and suspended generators.
-      The compiled worker-boundary fixture now covers a worker-triggered poll,
-      private call result publication, property-region fallback, and reclamation;
-      the wider root and suspended-frame combinations remain.
+- [x] Verify the merged #65/#66 compiler contracts with the worker collector:
+      the compiled worker-boundary fixture covers a worker-triggered poll,
+      private call result publication, property-region fallback, and reclamation.
+      Native property-region coverage checks more than 64 shadow slots; the
+      generator-overlap fixture resumes and completes a suspended compiled frame
+      while its only tracing worker is paused, then checks later reclamation.
 - [ ] Finish current-source Wasm parity, the normal gate, focused GC sanitizer and
       standards runs, and an enabled-worker ThreadSanitizer lane. Inspect exact
       coverage and any failures before accepting native concurrent marking.

@@ -42,4 +42,35 @@ describe("concurrent environment tracing", () => {
 			rmSync(outDir, { recursive: true, force: true });
 		}
 	});
+
+	it("retains a suspended generator's frame snapshot across worker overlap", (ctx) => {
+		const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-gc-generator-overlap-"));
+		try {
+			const binary = buildNativeBinary({
+				fixture: "tests/local/gc-generator-overlap.js",
+				name: "gc-generator-overlap",
+				mainFile: "tests/fixtures/gc-generator-overlap/main.c",
+				outDir,
+			});
+			const invocation = resolveHarnessExecutionInvocation(binary);
+			const result = spawnSync(invocation.executable, invocation.args, {
+				env: {
+					...process.env,
+					MAL_GC_STRESS: "0",
+					MAL_GC_MAJOR_EVERY: "1",
+					MAL_GC_VERIFY: "1",
+				},
+				encoding: "utf8",
+				timeout: scaledNativeRunTimeoutMs(120_000),
+			});
+			if (result.error !== undefined) throw result.error;
+			expect(result.status, result.stderr || result.stdout).toBe(0);
+			if (result.stdout === "gc-generator-overlap SKIP\n") {
+				ctx.skip("GC workers unavailable at this CPU capacity");
+			}
+			expect(result.stdout).toBe("gc-generator-overlap PASS\n");
+		} finally {
+			rmSync(outDir, { recursive: true, force: true });
+		}
+	});
 });

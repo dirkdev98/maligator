@@ -96,4 +96,7 @@ worker-boundary fixture combines merged PRs #65 and #66: a paused snapshot worke
 requests the next poll while a getter changes property storage, and that first
 poll sees the native callback's result in an active compiled root slot. It also
 checks the region's first, middle, and final values and later reclamation.
+The generator-overlap fixture holds the only worker before it reaches a rooted
+suspended generator, completes that generator while the worker is paused, and
+checks snapshot survival followed by reclamation in a fresh major.
 Synchronous GC stress alone cannot establish this overlap.
