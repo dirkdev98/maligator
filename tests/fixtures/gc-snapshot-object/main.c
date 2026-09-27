@@ -48,6 +48,13 @@ int main(void) {
         mal_string_new_ascii(&vm.heap, (const byte *) "first", 5)));
     MalKey second = mal_key_from_value(mal_value_from_string(
         mal_string_new_ascii(&vm.heap, (const byte *) "second", 6)));
+    MalKey scalar_keys[8];
+    for (usize i = 0; i < countof(scalar_keys); ++i) {
+        char name[16];
+        int length = snprintf(name, sizeof(name), "scalar%zu", i);
+        scalar_keys[i] = mal_key_from_value(mal_value_from_string(
+            mal_string_new_ascii(&vm.heap, (const byte *) name, (usize) length)));
+    }
     MalValue roots[40];
     MalObject *owners[40];
     for (usize i = 0; i < countof(roots); ++i) {
@@ -61,6 +68,9 @@ int main(void) {
         }
         if (!mal_object_set(owners[i], first, mal_value_from_object(first_child)) ||
             !mal_object_set(owners[i], second, mal_value_from_object(second_child))) return 1;
+        for (usize j = 0; j < countof(scalar_keys); ++j) {
+            if (!mal_object_set(owners[i], scalar_keys[j], mal_value_from_i32((i32) j))) return 1;
+        }
         roots[i] = mal_value_from_object(owners[i]);
     }
     MalRootSpan span;
@@ -111,11 +121,13 @@ int main(void) {
     MalPropertyLookup new_first = mal_object_get_own(paused_owner, first);
     MalPropertyLookup new_third = mal_object_get_own(paused_owner, third);
     MalPropertyLookup new_index = mal_object_get_own(paused_owner, mal_key_index(0));
+    MalPropertyLookup scalar = mal_object_get_own(paused_owner, scalar_keys[0]);
     if (overwritten_finalized != 1 || untouched_finalized != 0 ||
         !kept.present || kept.desc.value != mal_value_from_object(untouched_target) ||
         !new_first.present || new_first.desc.value != mal_value_from_object(replacement) ||
         !new_third.present || new_third.desc.value != mal_value_from_object(new_property) ||
-        !new_index.present || new_index.desc.value != mal_value_from_object(indexed)) return 7;
+        !new_index.present || new_index.desc.value != mal_value_from_object(indexed) ||
+        !scalar.present || scalar.desc.value != mal_value_from_i32(0)) return 7;
 
     mal_gc_unroot(&span);
     mal_gc_test_trace_snapshot_hook = nullptr;

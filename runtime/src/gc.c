@@ -333,6 +333,7 @@ struct MalGcState {
     u64 concurrent_drain_slots;
     u64 concurrent_drain_limit_hits;
     u64 snapshot_traces;
+    u64 snapshot_examined_values;
     u64 snapshot_values;
     u64 snapshot_heap_values;
     u64 snapshot_discoveries;
@@ -535,7 +536,8 @@ static void mal_gc_print_stats_now(void) {
             "concurrent_drain_slots=%llu concurrent_drain_limit_hits=%llu "
             "worker_limit=%llu worker_cpu_ms=%.3f concurrent_worker_cpu_ms=%.3f "
             "mutator_assist_traces=%llu "
-            "snapshot_traces=%llu snapshot_values=%llu snapshot_heap_values=%llu "
+            "snapshot_traces=%llu snapshot_examined_values=%llu "
+            "snapshot_values=%llu snapshot_heap_values=%llu "
             "snapshot_discoveries=%llu snapshot_only_batches=%llu "
             "snapshot_copy_ms=%.3f remark_join_ms=%.3f",
             (unsigned long long) g->cycles, (unsigned long long) g->sync_backstop,
@@ -566,6 +568,7 @@ static void mal_gc_print_stats_now(void) {
             (double) g->concurrent_worker_cpu_ns / 1.0e6,
             (unsigned long long) g->mutator_assist_traces,
             (unsigned long long) g->snapshot_traces,
+            (unsigned long long) g->snapshot_examined_values,
             (unsigned long long) g->snapshot_values,
             (unsigned long long) g->snapshot_heap_values,
             (unsigned long long) g->snapshot_discoveries,
@@ -1826,21 +1829,25 @@ static bool mal_gc_snapshot_edge_count(MalHeapHeader *cell, usize *count) {
     return edges > 0;
 }
 
+static void mal_gc_snapshot_append_heap_edge(MalGcState *g, MalValue value) {
+    if (mal_value_is_heap(value)) g->batch_edges[g->batch_edges_count++] = value;
+}
+
 static void mal_gc_snapshot_edges(MalGcState *g, MalHeapHeader *cell, usize index) {
     MalObject *object = (MalObject *) cell;
     usize offset = g->batch_edges_count;
     if (object->prototype != nullptr) {
-        g->batch_edges[g->batch_edges_count++] = mal_value_from_object(object->prototype);
+        mal_gc_snapshot_append_heap_edge(g, mal_value_from_object(object->prototype));
     }
     const MalShape *shape = object->shape;
     for (u32 i = 0; i < shape->inline_count; ++i) {
-        g->batch_edges[g->batch_edges_count++] = shape->props[i].key;
-        g->batch_edges[g->batch_edges_count++] = object->slots[shape->props[i].slot];
+        mal_gc_snapshot_append_heap_edge(g, shape->props[i].key);
+        mal_gc_snapshot_append_heap_edge(g, object->slots[shape->props[i].slot]);
     }
     if (cell->type == MAL_HEAP_ARRAY_OBJECT) {
         MalArrayObject *array = (MalArrayObject *) cell;
         for (u32 i = 0; i < array->dense_count; ++i) {
-            g->batch_edges[g->batch_edges_count++] = array->elements[i];
+            mal_gc_snapshot_append_heap_edge(g, array->elements[i]);
         }
     }
     g->batch_edge_offsets[index] = offset;
@@ -2190,12 +2197,9 @@ static bool mal_gc_trace_concurrent_batch(usize limit, usize *worked) {
     if (g_gc->stats_enabled) {
         g_gc->snapshot_copy_ns += mal_monotonic_now_ns() - snapshot_start;
     }
+    g_gc->snapshot_examined_values += snapshot_edges;
     g_gc->snapshot_values += g_gc->batch_edges_count;
-    if (g_gc->stats_enabled) {
-        for (usize i = 0; i < g_gc->batch_edges_count; ++i) {
-            g_gc->snapshot_heap_values += mal_value_is_heap(g_gc->batch_edges[i]);
-        }
-    }
+    g_gc->snapshot_heap_values += g_gc->batch_edges_count;
     for (usize i = safe_count; i < count; ++i) mal_gc_trace_cell(g_gc->batch[i]);
     mal_gc_workers_start_batch(g_gc, safe_count, true, false);
     *worked = count;

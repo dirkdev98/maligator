@@ -58,6 +58,13 @@ describe("concurrent object edge snapshots", () => {
 				expect(
 					Number(result.stderr.match(/\bsnapshot_discoveries=(\d+)/)?.[1] ?? 0),
 				).toBeGreaterThan(0);
+				if (spec.name === "gc-snapshot-object") {
+					const examined = Number(
+						result.stderr.match(/\bsnapshot_examined_values=(\d+)/)?.[1] ?? 0,
+					);
+					const copied = Number(result.stderr.match(/\bsnapshot_values=(\d+)/)?.[1] ?? 0);
+					expect(examined).toBeGreaterThan(copied);
+				}
 			} finally {
 				rmSync(outDir, { recursive: true, force: true });
 			}
