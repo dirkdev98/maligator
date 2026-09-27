@@ -7,8 +7,9 @@ typedef struct MalVm MalVm;
 
 #if !defined(__wasi__)
 struct MalEnv;
-/* Native tests may pause a worker before it reads an immutable env's atomic slots. */
+/* Native tests can pause workers at a controlled edge-read boundary. */
 extern void (*mal_gc_test_trace_env_hook)(struct MalEnv *env);
+extern void (*mal_gc_test_trace_snapshot_hook)(MalHeapHeader *cell);
 #endif
 
 typedef struct MalGcState MalGcState;
