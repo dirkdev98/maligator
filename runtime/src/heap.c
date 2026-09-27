@@ -368,13 +368,23 @@ static void mal_gc_unlink_large(MalGcLarge **head, MalGcLarge *rec) {
 
 static bool mal_gc_sweep_large(MalHeap *heap, MalGcLarge *rec, MalHeapFinalizeFn finalize, bool major) {
     MalHeapHeader *header = (MalHeapHeader *) ((u8 *) rec + mal_gc_large_data_offset());
-    bool live = major ? mal_heap_mark_is_current(header->mark, heap->mark_color)
-        : mal_heap_mark_is_old(header->mark);
+    u8 mark = mal_heap_sweep_mark_load(header);
+    bool live = major ? mal_heap_mark_is_current(mark, heap->mark_color)
+        : mal_heap_mark_is_old(mark);
+    bool promoted = major && heap->gc_stats && (mark & MAL_MARK_PROMOTED) != 0;
     if (live) {
-        if (major) header->mark |= MAL_MARK_OLD;
+        if (major) {
+            if (promoted) {
+                heap->promoted_followup_cycle_retained_bytes += rec->size;
+                mal_heap_sweep_mark_store(header, (mark | MAL_MARK_OLD) & ~MAL_MARK_PROMOTED);
+            } else {
+                header->mark |= MAL_MARK_OLD;
+            }
+        }
         rec->accounted = 1;
         return true;
     }
+    if (promoted) heap->promoted_followup_cycle_reclaimed_bytes += rec->size;
     mal_gc_untrack_young_large(heap, rec);
     mal_gc_unlink_large(&heap->large, rec);
     finalize(header);
@@ -525,6 +535,10 @@ void mal_heap_init(MalHeap *heap, usize capacity) {
     heap->gc_stats = false;
     heap->minor_cells_inspected = 0;
     heap->minor_blocks_inspected = 0;
+    heap->promoted_followup_reclaimed_bytes = 0;
+    heap->promoted_followup_retained_bytes = 0;
+    heap->promoted_followup_cycle_reclaimed_bytes = 0;
+    heap->promoted_followup_cycle_retained_bytes = 0;
     mal_shape_heap_init(heap);
     heap->native_function_length_key = nullptr;
     heap->native_function_name_key = nullptr;
@@ -597,6 +611,10 @@ void mal_heap_free(MalHeap *heap) {
     heap->gc_stats = false;
     heap->minor_cells_inspected = 0;
     heap->minor_blocks_inspected = 0;
+    heap->promoted_followup_reclaimed_bytes = 0;
+    heap->promoted_followup_retained_bytes = 0;
+    heap->promoted_followup_cycle_reclaimed_bytes = 0;
+    heap->promoted_followup_cycle_retained_bytes = 0;
 }
 
 MalHeapUsage mal_heap_usage(const MalHeap *heap) {
@@ -663,6 +681,8 @@ void mal_heap_header_init(MalHeapHeader *header, MalHeapType type) {
 
 void mal_heap_begin_major(MalHeap *heap) {
     heap->mark_color ^= MAL_MARK_COLOR;
+    heap->promoted_followup_cycle_reclaimed_bytes = 0;
+    heap->promoted_followup_cycle_retained_bytes = 0;
     g_allocation_mark_color = heap->mark_color;
 }
 
@@ -915,13 +935,22 @@ static void mal_heap_sweep_block(
     for (u8 *cell = (u8 *) block + data_offset; cell + block->cell_size <= block->bump;
         cell += block->cell_size) {
         MalHeapHeader *header = (MalHeapHeader *) cell;
-        if (mal_heap_mark_is_current(header->mark, heap->mark_color)) {
-            header->mark |= MAL_MARK_OLD;
+        u8 mark = mal_heap_sweep_mark_load(header);
+        if (mal_heap_mark_is_current(mark, heap->mark_color)) {
+            if (heap->gc_stats && (mark & MAL_MARK_PROMOTED) != 0) {
+                heap->promoted_followup_cycle_retained_bytes += block->cell_size;
+                mal_heap_sweep_mark_store(header, (mark | MAL_MARK_OLD) & ~MAL_MARK_PROMOTED);
+            } else {
+                header->mark |= MAL_MARK_OLD;
+            }
             *live_bytes += block->cell_size;
             block_live++;
             continue;
         }
-        if ((header->mark & MAL_MARK_FREE) == 0) {
+        if ((mark & MAL_MARK_FREE) == 0) {
+            if (heap->gc_stats && (mark & MAL_MARK_PROMOTED) != 0) {
+                heap->promoted_followup_cycle_reclaimed_bytes += block->cell_size;
+            }
             // Unreached: dead. Finalize (frees its owned side allocations), then
             // tombstone so a later sweep does not finalize it again.
             finalize(header);
@@ -988,6 +1017,8 @@ void mal_heap_sweep(MalHeap *heap, MalHeapFinalizeFn finalize) {
     }
 
     heap->live_bytes = live_bytes;
+    heap->promoted_followup_reclaimed_bytes += heap->promoted_followup_cycle_reclaimed_bytes;
+    heap->promoted_followup_retained_bytes += heap->promoted_followup_cycle_retained_bytes;
 }
 
 void mal_heap_sweep_minor(MalHeap *heap, MalHeapFinalizeFn finalize) {
@@ -1120,6 +1151,8 @@ bool mal_heap_sweep_step(MalHeap *heap, MalHeapFinalizeFn finalize, usize max_bl
     // Cursor exhausted: the whole heap is swept.
     heap->live_bytes = heap->sweep_live_bytes;
     heap->sweeping = false;
+    heap->promoted_followup_reclaimed_bytes += heap->promoted_followup_cycle_reclaimed_bytes;
+    heap->promoted_followup_retained_bytes += heap->promoted_followup_cycle_retained_bytes;
     return true;
 }
 

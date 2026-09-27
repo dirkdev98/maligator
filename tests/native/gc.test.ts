@@ -138,8 +138,24 @@ describe("targeted GC unit tests", () => {
 					const blackAllocation = Number(
 						result.stderr.match(/\bover_tenure_bytes=(\d+)/)?.[1] ?? 0,
 					);
+					const markBlack = Number(
+						result.stderr.match(/\bmajor_mark_black_bytes=(\d+)/)?.[1] ?? 0,
+					);
+					const sweepBlack = Number(
+						result.stderr.match(/\bmajor_sweep_black_bytes=(\d+)/)?.[1] ?? 0,
+					);
+					const markAllocated = Number(
+						result.stderr.match(/\bmajor_mark_allocated_bytes=(\d+)/)?.[1] ?? 0,
+					);
+					const sweepAllocated = Number(
+						result.stderr.match(/\bmajor_sweep_allocated_bytes=(\d+)/)?.[1] ?? 0,
+					);
 					expect(cycles).toBeGreaterThan(0);
 					expect(blackAllocation).toBeGreaterThan(0);
+					expect(markBlack + sweepBlack).toBeGreaterThan(0);
+					expect(markBlack + sweepBlack).toBeLessThanOrEqual(blackAllocation);
+					expect(markBlack).toBeLessThanOrEqual(markAllocated);
+					expect(sweepBlack).toBeLessThanOrEqual(sweepAllocated);
 				});
 			}
 

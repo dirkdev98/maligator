@@ -61,6 +61,10 @@ int main(void) {
         filled->elements[127] != mal_value_from_object(reverse_target) ||
         built->elements[0] != mal_value_from_object(build_target) ||
         built->elements[127] != mal_value_from_object(build_target)) return 4;
+    if (vm.heap.gc_stats &&
+        (((fill_target->header.mark & MAL_MARK_PROMOTED) == 0) ||
+         ((build_target->header.mark & MAL_MARK_PROMOTED) == 0) ||
+         ((reverse_target->header.mark & MAL_MARK_PROMOTED) == 0))) return 4;
 
     mal_gc_unroot(&span);
     mal_gc_collect(&vm);

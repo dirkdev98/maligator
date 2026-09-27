@@ -102,6 +102,11 @@ typedef struct MalHeap {
     bool gc_stats;
     u64 minor_cells_inspected;
     u64 minor_blocks_inspected;
+    /** Incomplete major sweep outcomes stay separate from published totals. */
+    u64 promoted_followup_reclaimed_bytes;
+    u64 promoted_followup_retained_bytes;
+    u64 promoted_followup_cycle_reclaimed_bytes;
+    u64 promoted_followup_cycle_retained_bytes;
     /** Flipped at each major start; matching cells survived the current major. */
     u8 mark_color;
     /** Heap-lifetime root of this isolate's hidden-class transition tree. */
@@ -413,6 +418,8 @@ typedef enum MalHeapMark {
     MAL_MARK_OLD = 1,
     MAL_MARK_FREE = 2,
     MAL_MARK_COLOR = 4,
+    /* Diagnostic provenance survives minor sweeps until the next completed major. */
+    MAL_MARK_PROMOTED = 8,
 } MalHeapMark;
 
 static inline bool mal_heap_mark_is_old(u8 mark) {

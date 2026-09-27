@@ -121,8 +121,8 @@ void mal_gc_configure_heap(MalVm *vm);
 /* Stop collection before VM teardown releases roots and program tables. */
 void mal_gc_begin_teardown(MalVm *vm);
 
-/* Free the per-isolate collector state (vm->gc) and its growable buffers after
- * mal_gc_begin_teardown has joined workers. Call once at VM teardown. */
+/* Free the collector state after workers join and live cells are finalized, but
+ * before mal_heap_free resets heap-backed statistics. */
 void mal_gc_state_free(MalVm *vm);
 
 /* Free every cell's owned side allocations regardless of liveness, for a clean

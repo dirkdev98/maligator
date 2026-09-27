@@ -589,6 +589,70 @@ static bool oversized_large_allocations_leave_heap_usable(MalHeap *heap) {
     return true;
 }
 
+static bool promoted_cells_are_classified_once_after_complete_major(MalHeap *heap) {
+    heap->gc_stats = true;
+    TestCell *small_keep = new_cell(heap, 512);
+    TestCell *small_drop = new_cell(heap, 512);
+    TestCell *large_keep = new_cell(heap, 10000);
+    TestCell *large_drop = new_cell(heap, 10000);
+    TestCell *cells[] = {small_keep, small_drop, large_keep, large_drop};
+    for (usize i = 0; i < countof(cells); i++) {
+        cells[i]->header.mark |= MAL_MARK_OLD | MAL_MARK_PROMOTED;
+    }
+    mal_heap_sweep_minor(heap, finalize_cell);
+    CHECK(heap->promoted_followup_reclaimed_bytes == 0);
+    CHECK(heap->promoted_followup_retained_bytes == 0);
+
+    mal_heap_begin_major(heap);
+    small_keep->header.mark =
+        (small_keep->header.mark & ~MAL_MARK_COLOR) | heap->mark_color;
+    large_keep->header.mark =
+        (large_keep->header.mark & ~MAL_MARK_COLOR) | heap->mark_color;
+    mal_heap_sweep_begin(heap);
+    CHECK(!mal_heap_sweep_step(heap, finalize_cell, 1));
+    CHECK(heap->promoted_followup_reclaimed_bytes == 0);
+    CHECK(heap->promoted_followup_retained_bytes == 0);
+    CHECK(mal_heap_sweep_step(heap, finalize_cell, (usize) -1));
+    CHECK(heap->promoted_followup_reclaimed_bytes == 10512);
+    CHECK(heap->promoted_followup_retained_bytes == 10512);
+    CHECK(g_finalized[2] == 1 && g_finalized[4] == 1);
+    CHECK((small_keep->header.mark & MAL_MARK_PROMOTED) == 0);
+    CHECK((large_keep->header.mark & MAL_MARK_PROMOTED) == 0);
+
+    TestCell *reused = new_cell(heap, 512);
+    CHECK(reused == small_drop);
+    CHECK((reused->header.mark & MAL_MARK_PROMOTED) == 0);
+    TestCell *direct_drop = new_cell(heap, 512);
+    direct_drop->header.mark |= MAL_MARK_OLD | MAL_MARK_PROMOTED;
+    mark_live(reused);
+    mal_heap_sweep_minor(heap, finalize_cell);
+    mal_heap_begin_major(heap);
+    mark_live(small_keep);
+    mark_live(large_keep);
+    mark_live(reused);
+    mal_heap_sweep(heap, finalize_cell);
+    CHECK(heap->promoted_followup_reclaimed_bytes == 11024);
+    CHECK(heap->promoted_followup_retained_bytes == 10512);
+    CHECK(g_finalized[6] == 1);
+    return true;
+}
+
+static bool incomplete_major_does_not_publish_promotion_outcomes(MalHeap *heap) {
+    heap->gc_stats = true;
+    TestCell *small = new_cell(heap, 512);
+    TestCell *large = new_cell(heap, 10000);
+    small->header.mark |= MAL_MARK_OLD | MAL_MARK_PROMOTED;
+    large->header.mark |= MAL_MARK_OLD | MAL_MARK_PROMOTED;
+    mal_heap_sweep_minor(heap, finalize_cell);
+    mal_heap_begin_major(heap);
+    mal_heap_sweep_begin(heap);
+    CHECK(!mal_heap_sweep_step(heap, finalize_cell, 1));
+    CHECK(heap->promoted_followup_cycle_reclaimed_bytes == 512);
+    CHECK(heap->promoted_followup_reclaimed_bytes == 0);
+    CHECK(heap->promoted_followup_retained_bytes == 0);
+    return true;
+}
+
 static bool run_check(bool (*check)(MalHeap *)) {
     MalHeap heap;
     mal_heap_init(&heap, 0);
@@ -622,6 +686,8 @@ int main(void) {
         finalizer_raw_storage_reuses_partial_slots_and_blocks,
         incremental_major_accounts_new_large_cells,
         oversized_large_allocations_leave_heap_usable,
+        promoted_cells_are_classified_once_after_complete_major,
+        incomplete_major_does_not_publish_promotion_outcomes,
     };
     usize passed = 0;
     for (usize i = 0; i < countof(checks); i++) {
