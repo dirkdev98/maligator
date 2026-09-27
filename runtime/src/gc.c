@@ -290,6 +290,9 @@ struct MalGcState {
     usize backstop_at;
     // bytes_allocated at the previous mark step, for the assist budget.
     usize bytes_at_last_step;
+    usize last_major_live_bytes;
+    usize promotion_debt;
+    u64 promoted_bytes;
 
     // --- Config (read once from env in mal_gc_init) ---------------------------
     // Stress mode (MAL_GC_STRESS=N): collect every N gated safepoints.
@@ -537,6 +540,7 @@ static void mal_gc_print_stats_now(void) {
             (unsigned long long) mal_vm_stack_object_materialization_count());
     fprintf(stderr,
             " cycles=%llu sync_backstop=%llu over_tenure_bytes=%llu "
+            "promoted_bytes=%llu promotion_debt=%llu last_major_live_bytes=%llu "
             "satb_flushes=%llu satb_high_water=%llu "
             "init_mark_ms=%.3f remark_ms=%.3f max_mark_step_ms=%.3f max_sweep_step_ms=%.3f "
             "minor_pause_ms=%.3f max_minor_pause_ms=%.3f "
@@ -559,6 +563,9 @@ static void mal_gc_print_stats_now(void) {
             "snapshot_copy_ms=%.3f remark_join_ms=%.3f",
             (unsigned long long) g->cycles, (unsigned long long) g->sync_backstop,
             (unsigned long long) mal_gc_black_alloc_bytes,
+            (unsigned long long) g->promoted_bytes,
+            (unsigned long long) g->promotion_debt,
+            (unsigned long long) g->last_major_live_bytes,
             (unsigned long long) g->satb_flushes,
             (unsigned long long) g->satb_high_water,
             (double) g->init_mark_ns / 1.0e6, (double) g->remark_ns / 1.0e6,
@@ -2452,6 +2459,7 @@ static usize mal_gc_advance_trigger(MalVm *vm) {
 
 /* A major flips color; a minor traces young cells from roots and remembered owners. */
 static void mal_gc_collect_sync(MalVm *vm, bool major) {
+    usize live_before = vm->heap.live_bytes;
     u64 minor_mark_start = g_gc->stats_enabled && !major ? mal_monotonic_now_ns() : 0;
     g_gc->grey_count = 0;
     g_gc->weak_maps_count = 0;
@@ -2495,6 +2503,14 @@ static void mal_gc_collect_sync(MalVm *vm, bool major) {
     }
     if (minor_sweep_start != 0) {
         g_gc->minor_sweep_ns += mal_monotonic_now_ns() - minor_sweep_start;
+    }
+    if (major) {
+        g_gc->last_major_live_bytes = vm->heap.live_bytes;
+        g_gc->promotion_debt = 0;
+    } else if (vm->heap.live_bytes > live_before) {
+        usize promoted = vm->heap.live_bytes - live_before;
+        g_gc->promotion_debt += promoted;
+        g_gc->promoted_bytes += promoted;
     }
 
     mal_gc_clear_remembered();
@@ -2612,6 +2628,8 @@ static void mal_gc_cycle_finish_sweep(MalVm *vm) {
     mal_gc_black_alloc = false;
     g_gc->phase = MAL_GC_PHASE_IDLE;
     g_gc->major_collection = false;
+    g_gc->last_major_live_bytes = vm->heap.live_bytes;
+    g_gc->promotion_debt = 0;
 
     if (g_gc->verify_enabled) {
         mal_gc_verify(vm);
