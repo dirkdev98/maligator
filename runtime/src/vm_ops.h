@@ -1612,6 +1612,59 @@ static inline __attribute__((always_inline)) bool mal_vm_property_try_load_stati
     return true;
 }
 
+/** Captured storage is usable only before the region's first generic continuation. */
+typedef struct MalNativePropertyReadRegion {
+    const MalObject *object;
+    const MalShape *shape;
+    const MalValue *slots;
+    bool active;
+} MalNativePropertyReadRegion;
+
+static inline __attribute__((always_inline)) MalNativePropertyReadRegion
+mal_vm_property_read_region_begin(MalValue receiver) {
+    const MalObject *object = mal_vm_as_object(receiver);
+    if (object == nullptr) {
+        return (MalNativePropertyReadRegion) {0};
+    }
+    return (MalNativePropertyReadRegion) {
+        .object = object,
+        .shape = object->shape,
+        .slots = object->slots,
+        .active = true,
+    };
+}
+
+/**
+ * A miss ends this admission before its generic twin can collect or reenter.
+ * Callers retain the same state through the remaining original instructions;
+ * they must not begin another admission inside that continuation.
+ */
+static inline __attribute__((always_inline)) bool mal_vm_property_read_region_try_load(
+    MalNativePropertyReadRegion *region, const MalInlineCache *ic, MalValue *out
+) {
+    // The borrowed object and storage must not be inspected after a generic continuation.
+    if (!region->active) return false;
+    if (region->shape == ic->shape) {
+        // Keep own-slot hits on the mode-dispatch fallthrough.
+        if (__builtin_expect(ic->mode == MAL_IC_MODE_SHAPE, 1)) {
+            if (ic->slot != MAL_IC_VALUE_SLOT) {
+                *out = region->slots[ic->slot];
+                mal_perf_ic_load_mono_hit();
+                return true;
+            }
+        } else if (ic->mode == MAL_IC_MODE_INHERITED_VALUE && ic->poly_count > 0 &&
+            ic->receiver_type == MAL_HEAP_OBJECT &&
+            !mal_object_has_public_overflow(region->object) &&
+            region->object->prototype == ic->proto_object[0]) {
+            *out = ic->value;
+            mal_perf_ic_load_inherited_hit();
+            return true;
+        }
+    }
+    region->active = false;
+    return false;
+}
+
 /** Two adjacent fixed-name own-slot reads can share one receiver and shape guard. */
 static inline __attribute__((always_inline)) bool mal_vm_property_try_load_static_pair(
     MalValue receiver,
