@@ -9,6 +9,7 @@ import {
 	planExpressHttpWorkload,
 } from "./bench-http.ts";
 import type { CheckedOhaMetrics, ExpressHttpWorkload } from "./bench-http.ts";
+import { parseGcStats } from "./runtime-gap.ts";
 import { cleanTestEnvironment } from "./test-environment.ts";
 
 type Revision = "base" | "head";
@@ -239,6 +240,9 @@ interface ServerProcess {
 	child: ReturnType<typeof spawn>;
 	stdout: string;
 	stderr: string;
+	rawStderr: string;
+	statsPending: string;
+	statsWaiters: Set<(line: string) => void>;
 	error?: Error;
 }
 
@@ -246,18 +250,40 @@ function start(
 	command: string,
 	args: Array<string>,
 	extra: NodeJS.ProcessEnv = {},
+	captureStats = false,
 ): ServerProcess {
 	const child = spawn(command, args, {
 		env: ordinaryEnvironment(extra),
 		stdio: ["ignore", "pipe", "pipe"],
 		detached: true,
 	});
-	const server: ServerProcess = { child, stdout: "", stderr: "" };
+	const server: ServerProcess = {
+		child,
+		stdout: "",
+		stderr: "",
+		rawStderr: "",
+		statsPending: "",
+		statsWaiters: new Set(),
+	};
 	child.stdout?.on("data", (chunk: Buffer) => {
 		server.stdout = (server.stdout + chunk.toString()).slice(-8192);
 	});
 	child.stderr?.on("data", (chunk: Buffer) => {
-		server.stderr = (server.stderr + chunk.toString()).slice(-8192);
+		const text = chunk.toString();
+		server.stderr = (server.stderr + text).slice(-8192);
+		if (!captureStats) return;
+		server.rawStderr += text;
+		server.statsPending += text;
+		for (
+			let newline = server.statsPending.indexOf("\n");
+			newline >= 0;
+			newline = server.statsPending.indexOf("\n")
+		) {
+			const line = server.statsPending.slice(0, newline).replace(/\r$/, "");
+			server.statsPending = server.statsPending.slice(newline + 1);
+			if (!line.startsWith("[gc-stats] ")) continue;
+			for (const waiter of server.statsWaiters) waiter(line);
+		}
 	});
 	child.on("error", (error) => {
 		server.error = error;
@@ -265,18 +291,159 @@ function start(
 	return server;
 }
 
+function waitForGcStats(
+	server: ServerProcess,
+	deadline: number,
+): { promise: Promise<string>; cancel: () => void } {
+	let cancel = () => {};
+	const promise = new Promise<string>((resolve, reject) => {
+		const timeout = Math.max(1, Math.min(5000, Math.floor(deadline - performance.now())));
+		const cleanup = () => {
+			clearTimeout(timer);
+			server.statsWaiters.delete(onLine);
+			server.child.off("exit", onExit);
+		};
+		const onLine = (line: string) => {
+			cleanup();
+			resolve(line);
+		};
+		const onExit = () => {
+			cleanup();
+			reject(new Error("HTTP GC diagnostic child exited before a stats snapshot"));
+		};
+		const timer = setTimeout(() => {
+			cleanup();
+			reject(new Error("HTTP GC diagnostic snapshot was not acknowledged"));
+		}, timeout);
+		server.statsWaiters.add(onLine);
+		server.child.once("exit", onExit);
+		cancel = cleanup;
+	});
+	void promise.catch(() => {});
+	return { promise, cancel: () => cancel() };
+}
+
+async function gcSnapshot(
+	server: ServerProcess,
+	port: number,
+	deadline: number,
+): Promise<{ raw: string; values: Readonly<Record<string, number>> }> {
+	if (server.child.pid === undefined)
+		throw new Error("HTTP GC diagnostic child has no process ID");
+	const waiter = waitForGcStats(server, deadline);
+	try {
+		process.kill(server.child.pid, "SIGUSR1");
+		const [response, snapshot] = await Promise.allSettled([
+			responseOracle(port, { path: "/middleware" }, deadline),
+			waiter.promise,
+		]);
+		if (
+			snapshot.status === "rejected" &&
+			snapshot.reason instanceof Error &&
+			snapshot.reason.message.includes("child exited")
+		)
+			throw snapshot.reason;
+		if (response.status === "rejected")
+			throw response.reason instanceof Error
+				? response.reason
+				: new Error(String(response.reason));
+		if (snapshot.status === "rejected")
+			throw snapshot.reason instanceof Error
+				? snapshot.reason
+				: new Error(String(snapshot.reason));
+		const raw = snapshot.value;
+		const values = parseGcStats(raw);
+		if (values?.collections === undefined || values.allocated_bytes === undefined)
+			throw new Error("HTTP GC diagnostic snapshot omitted cumulative counters");
+		return { raw, values };
+	} finally {
+		waiter.cancel();
+	}
+}
+
+const GC_CUMULATIVE_COUNTERS = [
+	"collections",
+	"sync_backstop",
+	"minor",
+	"major",
+	"pauses",
+	"allocated_bytes",
+	"total_ms",
+	"minor_pause_ms",
+	"minor_mark_ms",
+	"minor_sweep_ms",
+	"minor_cells_inspected",
+	"mutator_assist_traces",
+	"worker_traces",
+	"worker_cpu_ms",
+	"concurrent_batches",
+	"concurrent_traces",
+	"concurrent_handoffs",
+	"concurrent_worker_cpu_ms",
+	"snapshot_traces",
+	"snapshot_examined_values",
+	"snapshot_values",
+	"snapshot_heap_values",
+	"snapshot_discoveries",
+	"snapshot_admit_ms",
+	"snapshot_reserve_ms",
+	"snapshot_copy_ms",
+	"snapshot_inline_ms",
+	"worker_merge_ms",
+	"worker_wait_ms",
+	"remark_wait_ms",
+] as const;
+
+export function cumulativeGcDelta(
+	before: Readonly<Record<string, number>>,
+	after: Readonly<Record<string, number>>,
+): Record<string, number> {
+	const result: Record<string, number> = {};
+	for (const key of GC_CUMULATIVE_COUNTERS) {
+		if (before[key] === undefined || after[key] === undefined) continue;
+		const change = after[key] - before[key];
+		if (!Number.isFinite(change) || change < 0)
+			throw new Error(`HTTP GC counter ${key} moved backward`);
+		result[key] = change;
+	}
+	for (const key of ["collections", "allocated_bytes", "total_ms"])
+		if (result[key] === undefined) throw new Error(`HTTP GC diagnostic omitted ${key}`);
+	return result;
+}
+
 async function stop(child: ReturnType<typeof spawn>): Promise<void> {
 	if (child.pid === undefined) return;
 	if (child.exitCode !== null || child.signalCode !== null) return;
-	terminateGroup(child, "SIGTERM");
+	try {
+		terminateGroup(child, "SIGTERM");
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code !== "EPERM") throw error;
+		await new Promise<void>((resolve) => {
+			const onExit = () => {
+				clearTimeout(timer);
+				resolve();
+			};
+			const timer = setTimeout(() => {
+				child.off("exit", onExit);
+				resolve();
+			}, 100);
+			child.once("exit", onExit);
+		});
+		if (child.exitCode !== null || child.signalCode !== null) return;
+		throw error;
+	}
 	let timer: ReturnType<typeof setTimeout> | undefined;
 	try {
 		await Promise.race([
 			once(child, "exit"),
 			new Promise<never>((_, reject) => {
 				timer = setTimeout(() => {
-					terminateGroup(child, "SIGKILL");
-					reject(new Error("HTTP server required forced shutdown"));
+					try {
+						terminateGroup(child, "SIGKILL");
+						reject(new Error("HTTP server required forced shutdown"));
+					} catch (error) {
+						reject(error instanceof Error ? error : new Error(String(error)));
+					}
 				}, 5000);
 			}),
 		]);
@@ -733,5 +900,103 @@ export async function runHttpSnapshot(
 		};
 	} finally {
 		interruption.dispose();
+	}
+}
+
+export async function runHttpGcDiagnostic(
+	expressBinary: string,
+	root: string,
+	directory: string,
+	seconds: number,
+	deadline: number,
+): Promise<unknown> {
+	if (process.platform === "win32")
+		return { status: "unsupported", reason: "SIGUSR1 is unavailable" };
+	mkdirSync(directory, { recursive: true });
+	const workload = planExpressHttpWorkload(seconds)[0]!;
+	const malPort = 3113;
+	const nodePort = 3114;
+	const mal = start(
+		expressBinary,
+		[],
+		{ PORT: String(malPort), MAL_GC_STATS: "1", MAL_GC_CONTROL: "1" },
+		true,
+	);
+	const node = start(
+		process.execPath,
+		[path.join(root, "bench/http/express-server.cjs")],
+		{ PORT: String(nodePort) },
+	);
+	const interruption = cleanupOnInterrupt(new Set([mal.child, node.child]));
+	try {
+		await ready(mal, malPort, Math.min(deadline, performance.now() + 10000));
+		await ready(node, nodePort, Math.min(deadline, performance.now() + 10000));
+		oha(
+			`http://127.0.0.1:${malPort}/middleware`,
+			2,
+			[200],
+			directory,
+			"warm-mal",
+			deadline,
+		);
+		oha(
+			`http://127.0.0.1:${nodePort}/middleware`,
+			2,
+			[200],
+			directory,
+			"warm-node",
+			deadline,
+		);
+		const requests = workload.paths.map((requestPath) => ({ path: requestPath }));
+		const oracleBefore = await assertResponses(malPort, nodePort, requests, deadline);
+		const statsBefore = await gcSnapshot(mal, malPort, deadline);
+		const paths = path.join(directory, "routes-paths.txt");
+		writeFileSync(
+			paths,
+			`${workload.paths.map((value) => `http://127.0.0.1:${malPort}${value}`).join("\n")}\n`,
+		);
+		const load = oha(
+			paths,
+			workload.durationSeconds,
+			oracleBefore.statuses,
+			directory,
+			"routes-mal",
+			deadline,
+			["--urls-from-file"],
+		);
+		const statsAfter = await gcSnapshot(mal, malPort, deadline);
+		const oracleAfter = await assertResponses(malPort, nodePort, requests, deadline);
+		if (oracleBefore.digest !== oracleAfter.digest)
+			throw new Error("HTTP GC diagnostic responses changed during routes load");
+		interruption.assertActive();
+		return {
+			status: "complete",
+			instrumentation: "gc-stats",
+			workload: "routes",
+			oracleDigest: oracleBefore.digest,
+			load,
+			gc: {
+				before: statsBefore,
+				after: statsAfter,
+				delta: cumulativeGcDelta(statsBefore.values, statsAfter.values),
+			},
+			measurementScope:
+				"fresh diagnostic server; cumulative counters between signal-acknowledged middleware probes around Maligator routes load",
+		};
+	} catch (error) {
+		throw new Error(
+			`HTTP GC diagnostic failed: ${error instanceof Error ? error.message : String(error)}; Mal exit=${mal.child.exitCode ?? mal.child.signalCode ?? "no exit observed"}, stderr=${mal.stderr}`,
+			{ cause: error },
+		);
+	} finally {
+		try {
+			await stopBoth(mal.child, node.child);
+		} finally {
+			try {
+				writeFileSync(path.join(directory, "mal-stderr.log"), mal.rawStderr);
+			} finally {
+				interruption.dispose();
+			}
+		}
 	}
 }

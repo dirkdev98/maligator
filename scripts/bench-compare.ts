@@ -17,7 +17,11 @@ import {
 import * as os from "node:os";
 import * as path from "node:path";
 import { isDeepStrictEqual } from "node:util";
-import { prepareHttpBinaries, runHttpSnapshot } from "./bench-http-ordinary.ts";
+import {
+	prepareHttpBinaries,
+	runHttpGcDiagnostic,
+	runHttpSnapshot,
+} from "./bench-http-ordinary.ts";
 import type { HttpPreparation } from "./bench-http-ordinary.ts";
 
 export const BENCHMARK_LANE_RULES: ReadonlyArray<{
@@ -311,6 +315,7 @@ export interface ComparisonOptions {
 	budgetSeconds?: number;
 	resumeDirectory?: string;
 	outputDirectory?: string;
+	httpGcDiagnostics?: boolean;
 }
 
 export function selfCompileStages(runs: number): Array<string> {
@@ -337,6 +342,7 @@ interface ComparisonIdentity {
 	maxPairs: number;
 	baseArgs: Array<string>;
 	headArgs: Array<string>;
+	httpGcDiagnostics: boolean;
 	platform: string;
 	arch: string;
 	node: string;
@@ -563,6 +569,8 @@ export async function runBenchmarkComparison(options: ComparisonOptions): Promis
 	reportPath: string;
 	metrics: Array<MetricResult>;
 }> {
+	if (options.httpGcDiagnostics && !options.lanes.includes("http"))
+		throw new Error("HTTP GC diagnostics require the HTTP benchmark lane");
 	const started = performance.now();
 	const deadline =
 		options.budgetSeconds === undefined
@@ -581,6 +589,7 @@ export async function runBenchmarkComparison(options: ComparisonOptions): Promis
 		maxPairs: options.maxPairs ?? Math.max(options.pairs, 15),
 		baseArgs: options.extraArgs ?? [],
 		headArgs: [...(options.extraArgs ?? []), ...(options.headExtraArgs ?? [])],
+		httpGcDiagnostics: options.httpGcDiagnostics === true,
 		platform: process.platform,
 		arch: process.arch,
 		node: process.version,
@@ -618,6 +627,7 @@ export async function runBenchmarkComparison(options: ComparisonOptions): Promis
 				)
 			: path.resolve(options.resumeDirectory);
 	const reportPath = path.join(runDirectory, "report.json");
+	const ordinaryReportPath = path.join(runDirectory, "ordinary-report.json");
 	if (options.resumeDirectory !== undefined) {
 		const previous = JSON.parse(readFileSync(reportPath, "utf8")) as {
 			identity?: ComparisonIdentity;
@@ -638,15 +648,32 @@ export async function runBenchmarkComparison(options: ComparisonOptions): Promis
 	const unpairedMetrics = new Set<string>();
 	let pairCount = 0;
 	let activeSnapshot: string | undefined;
+	let ordinaryComplete = false;
+	const httpGcDiagnostics: {
+		status:
+			| "not-requested"
+			| "pending"
+			| "running"
+			| "complete"
+			| "incomplete"
+			| "failed";
+		results: Partial<Record<"base" | "head", unknown>>;
+		error?: string;
+	} = {
+		status: identity.httpGcDiagnostics ? "pending" : "not-requested",
+		results: {},
+	};
 	let resumeAllowed = true;
 	const persist = (
 		status: "running" | "complete" | "incomplete" | "failed",
 		error?: string,
+		file = reportPath,
 	) => {
-		writeJson(reportPath, {
+		writeJson(file, {
 			schema: 2,
 			status,
 			complete: status === "complete",
+			ordinaryComplete,
 			identity,
 			baseRef: options.baseRef,
 			lanes: options.lanes,
@@ -655,6 +682,7 @@ export async function runBenchmarkComparison(options: ComparisonOptions): Promis
 			completedPairs: pairCount,
 			unpairedMetrics: [...unpairedMetrics].sort(),
 			activeSnapshot,
+			httpGcDiagnostics,
 			resumeAllowed,
 			error,
 			metrics: comparisonMetrics(samples),
@@ -808,7 +836,49 @@ export async function runBenchmarkComparison(options: ComparisonOptions): Promis
 			)
 				break;
 		}
+		ordinaryComplete = true;
+		persist("complete", undefined, ordinaryReportPath);
 		persist("complete");
+		if (identity.httpGcDiagnostics) {
+			httpGcDiagnostics.status = "running";
+			persist("complete");
+			try {
+				if (httpPreparation === undefined)
+					throw new Error("HTTP GC diagnostics require prepared binaries");
+				const secondsIndex = identity.baseArgs.indexOf("--http-seconds");
+				const seconds =
+					secondsIndex < 0 ? 5 : Number(identity.baseArgs[secondsIndex + 1]);
+				for (const revision of ["base", "head"] as const) {
+					activeSnapshot = `http-gc-${revision}`;
+					persist("complete");
+					assertSource();
+					const saved = path.join(runDirectory, `${activeSnapshot}.json`);
+					httpGcDiagnostics.results[revision] = existsSync(saved)
+						? (JSON.parse(readFileSync(saved, "utf8")) as unknown)
+						: await runHttpGcDiagnostic(
+								httpPreparation.binaries[revision].express,
+								repository,
+								path.join(runDirectory, "http-gc-raw", revision),
+								seconds,
+								deadline,
+							);
+					writeJson(saved, httpGcDiagnostics.results[revision]);
+					assertSource();
+				}
+				httpGcDiagnostics.status = "complete";
+			} catch (error) {
+				if (!resumeAllowed) throw error;
+				httpGcDiagnostics.status =
+					error instanceof ComparisonInterrupted ? "incomplete" : "failed";
+				httpGcDiagnostics.error = error instanceof Error ? error.message : String(error);
+				console.error(
+					`[bench-compare] ${httpGcDiagnostics.error}; ordinary evidence retained: ${ordinaryReportPath}`,
+				);
+			} finally {
+				activeSnapshot = undefined;
+				persist("complete");
+			}
+		}
 		rmSync(base, { recursive: true, force: true });
 		rmSync(path.join(runDirectory, "base.tar"), { force: true });
 		rmSync(baseReady, { force: true });
@@ -820,7 +890,12 @@ export async function runBenchmarkComparison(options: ComparisonOptions): Promis
 			);
 		}
 		return {
-			exitCode: metrics.some((metric) => metric.status === "regression") ? 1 : 0,
+			exitCode:
+				httpGcDiagnostics.status === "failed" || httpGcDiagnostics.status === "incomplete"
+					? 2
+					: metrics.some((metric) => metric.status === "regression")
+						? 1
+						: 0,
 			reportPath,
 			metrics,
 		};

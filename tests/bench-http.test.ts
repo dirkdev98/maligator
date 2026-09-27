@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { processCpuDeltaMs } from "../scripts/bench-http-ordinary.ts";
+import { cumulativeGcDelta, processCpuDeltaMs } from "../scripts/bench-http-ordinary.ts";
 import {
 	formatOhaDuration,
 	parseCheckedOhaOutput,
@@ -113,5 +113,26 @@ describe("HTTP benchmark support", () => {
 			processCpuDeltaMs(before, { ...before, startTimeTicks: 101 }, 100),
 		).toBeUndefined();
 		expect(processCpuDeltaMs(before, { ...before, cpuTicks: 499 }, 100)).toBeUndefined();
+	});
+
+	it("subtracts cumulative GC work without treating last-cycle gauges as counters", () => {
+		expect(
+			cumulativeGcDelta(
+				{ collections: 2, allocated_bytes: 100, total_ms: 3, max_pause_ms: 2 },
+				{ collections: 4, allocated_bytes: 140, total_ms: 4, max_pause_ms: 1 },
+			),
+		).toEqual({ collections: 2, allocated_bytes: 40, total_ms: 1 });
+		expect(() =>
+			cumulativeGcDelta(
+				{ collections: 2, allocated_bytes: 100, total_ms: 3 },
+				{ collections: 1, allocated_bytes: 140, total_ms: 4 },
+			),
+		).toThrow(/moved backward/);
+		expect(() =>
+			cumulativeGcDelta(
+				{ collections: 2, allocated_bytes: 100, total_ms: 3.001 },
+				{ collections: 2, allocated_bytes: 100, total_ms: 3 },
+			),
+		).toThrow(/total_ms moved backward/);
 	});
 });

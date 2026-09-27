@@ -1817,7 +1817,7 @@ Options:
   --runs N            Paired/rotated sample count (default: 5)
   --http-seconds N    Total duration per HTTP scenario and subject (default: 5)
   --changed           Select families affected by files changed from a Git ref
-  --compare REF       Run paired base/head comparisons against REF
+  --compare REF       Run paired base/head comparisons against REF; HTTP adds a separate GC routes diagnostic
   --max-pairs N       Cap adaptive paired comparison samples
   --budget-seconds N  Stop a comparison at its wall-clock budget; exit 2 if incomplete
   --resume DIR        Resume a retained comparison with the same source/options
@@ -2016,6 +2016,9 @@ if (options.plan) {
 								(options.maxPairs ?? Math.max(options.runs, 15)) * 2,
 							budgetSeconds: options.budgetSeconds ?? null,
 							resumeDirectory: options.resumeDirectory ?? null,
+							httpGcDiagnostic: requestedLanes.includes("http")
+								? { workload: "routes", freshPairs: 1, afterOrdinaryPairs: true }
+								: null,
 							incompleteExitCode: 2,
 						}
 					: null,
@@ -2055,6 +2058,7 @@ if (options.compareRef !== undefined) {
 		maxPairs: options.maxPairs,
 		budgetSeconds: options.budgetSeconds,
 		resumeDirectory: options.resumeDirectory,
+		httpGcDiagnostics: requestedLanes.includes("http"),
 		extraArgs: [
 			"--http-seconds",
 			String(options.httpSeconds),

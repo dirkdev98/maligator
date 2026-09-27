@@ -43,6 +43,33 @@ describe("benchmark CLI", () => {
 		expect(result.stderr).toBe("");
 	});
 
+	it("plans a separate routes GC diagnostic after ordinary HTTP pairs", () => {
+		const result = spawnSync(
+			process.execPath,
+			[
+				"scripts/bench.ts",
+				"http",
+				"--compare",
+				"HEAD",
+				"--runs",
+				"1",
+				"--max-pairs",
+				"1",
+				"--plan=json",
+			],
+			{ encoding: "utf8" },
+		);
+		expect(result.status, result.stderr).toBe(0);
+		const plan = JSON.parse(result.stdout) as {
+			comparison: { httpGcDiagnostic: unknown };
+		};
+		expect(plan.comparison.httpGcDiagnostic).toEqual({
+			workload: "routes",
+			freshPairs: 1,
+			afterOrdinaryPairs: true,
+		});
+	});
+
 	it.each([
 		["--budget-seconds", "1"],
 		["--resume", ".cache/missing"],
