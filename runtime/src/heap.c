@@ -352,13 +352,10 @@ static void mal_gc_unlink_large(MalGcLarge **head, MalGcLarge *rec) {
 
 static bool mal_gc_sweep_large(MalHeap *heap, MalGcLarge *rec, MalHeapFinalizeFn finalize, bool major) {
     MalHeapHeader *header = (MalHeapHeader *) ((u8 *) rec + mal_gc_large_data_offset());
-    u8 mark = atomic_load_explicit(&header->mark, memory_order_relaxed);
-    bool live = major ? mal_heap_mark_is_current(mark, heap->mark_color)
-        : mal_heap_mark_is_old(mark);
+    bool live = major ? mal_heap_mark_is_current(header->mark, heap->mark_color)
+        : mal_heap_mark_is_old(header->mark);
     if (live) {
-        if (major && (mark & MAL_MARK_OLD) == 0) {
-            atomic_store_explicit(&header->mark, mark | MAL_MARK_OLD, memory_order_relaxed);
-        }
+        if (major) header->mark |= MAL_MARK_OLD;
         rec->accounted = 1;
         return true;
     }
@@ -848,17 +845,13 @@ static void mal_heap_sweep_block(
     for (u8 *cell = (u8 *) block + data_offset; cell + block->cell_size <= block->bump;
         cell += block->cell_size) {
         MalHeapHeader *header = (MalHeapHeader *) cell;
-        u8 mark = atomic_load_explicit(&header->mark, memory_order_relaxed);
-        if (mal_heap_mark_is_current(mark, heap->mark_color)) {
-            if ((mark & MAL_MARK_OLD) == 0) {
-                atomic_store_explicit(&header->mark, mark | MAL_MARK_OLD,
-                                      memory_order_relaxed);
-            }
+        if (mal_heap_mark_is_current(header->mark, heap->mark_color)) {
+            header->mark |= MAL_MARK_OLD;
             *live_bytes += block->cell_size;
             block_live++;
             continue;
         }
-        if ((mark & MAL_MARK_FREE) == 0) {
+        if ((header->mark & MAL_MARK_FREE) == 0) {
             // Unreached: dead. Finalize (frees its owned side allocations), then
             // tombstone so a later sweep does not finalize it again.
             finalize(header);
