@@ -131,8 +131,13 @@ typedef enum MalGcPhase {
 
 #if !defined(__wasi__)
 #define MAL_GC_WORKER_COUNT 2
+usize (*mal_gc_test_worker_limit_hook)(void) = nullptr;
 
 static usize mal_gc_native_worker_limit(void) {
+    if (mal_gc_test_worker_limit_hook != nullptr) {
+        usize requested = mal_gc_test_worker_limit_hook();
+        return requested < MAL_GC_WORKER_COUNT ? requested : MAL_GC_WORKER_COUNT;
+    }
     long online = sysconf(_SC_NPROCESSORS_ONLN);
     usize cpus = online > 0 ? (usize) online : 1;
 #if defined(__linux__)

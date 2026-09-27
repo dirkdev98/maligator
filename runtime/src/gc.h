@@ -12,6 +12,8 @@ extern void (*mal_gc_test_trace_env_hook)(struct MalEnv *env);
 extern void (*mal_gc_test_trace_snapshot_hook)(MalHeapHeader *cell);
 /* Allows a paused test tracer to finish after teardown has stopped the pool. */
 extern void (*mal_gc_test_before_worker_join_hook)(void);
+/* Tests can select a scheduler capacity before VM initialization. */
+extern usize (*mal_gc_test_worker_limit_hook)(void);
 #endif
 
 typedef struct MalGcState MalGcState;

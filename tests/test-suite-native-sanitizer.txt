@@ -20,6 +20,7 @@ tests/native/gc-minor-sweep.test.ts
 tests/native/gc-lifecycle.test.ts
 tests/native/gc-overlap.test.ts
 tests/native/gc-snapshot-overlap.test.ts
+tests/native/gc-worker-capacity.test.ts
 tests/native/platform-execution.test.ts
 tests/native/node-async-hooks.test.ts
 tests/native/node-scheduling.test.ts
