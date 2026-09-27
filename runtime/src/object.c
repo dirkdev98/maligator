@@ -257,8 +257,7 @@ u64 mal_object_slot_dictionary_migration_count(void) {
     return g_slot_dictionary_migrations;
 }
 
-void mal_object_init(MalHeap *heap, MalObject *object, MalHeapType type, MalObject *prototype) {
-    mal_heap_header_init(&object->header, type);
+static void mal_object_init_payload(MalHeap *heap, MalObject *object, MalObject *prototype) {
     object->shape = mal_shape_root(heap);
     object->slots = nullptr;
     // Overflow/dictionary table is allocated lazily: a fresh object is empty
@@ -282,16 +281,21 @@ void mal_object_init(MalHeap *heap, MalObject *object, MalHeapType type, MalObje
     mal_object_mark_as_prototype(prototype);
 }
 
+void mal_object_init(MalHeap *heap, MalObject *object, MalHeapType type, MalObject *prototype) {
+    mal_heap_header_init(&object->header, type);
+    mal_object_init_payload(heap, object, prototype);
+}
+
 MalObject *mal_object_new(MalHeap *heap, MalObject *prototype) {
     MalObject *object = mal_heap_alloc(heap, sizeof(MalObject), MAL_HEAP_OBJECT);
-    mal_object_init(heap, object, MAL_HEAP_OBJECT, prototype);
+    mal_object_init_payload(heap, object, prototype);
     return object;
 }
 
 MalObject *mal_object_try_new(MalHeap *heap, MalObject *prototype) {
     MalObject *object = mal_heap_try_alloc(heap, sizeof(MalObject), MAL_HEAP_OBJECT);
     if (object == nullptr) return nullptr;
-    mal_object_init(heap, object, MAL_HEAP_OBJECT, prototype);
+    mal_object_init_payload(heap, object, prototype);
     return object;
 }
 
@@ -299,7 +303,7 @@ MalObject *mal_object_new_reserved(MalHeap *heap, MalObject *prototype, u8 capac
     if (capacity == 0) return mal_object_new(heap, prototype);
     MalObject *object = mal_heap_alloc(
         heap, sizeof(MalObject) + sizeof(MalValue) * capacity, MAL_HEAP_OBJECT);
-    mal_object_init(heap, object, MAL_HEAP_OBJECT, prototype);
+    mal_object_init_payload(heap, object, prototype);
     object->slots = (MalValue *) (object + 1);
     object->slot_capacity = capacity;
     g_slot_coallocations++;
@@ -312,7 +316,7 @@ MalObject *mal_object_new_shaped(MalHeap *heap, MalObject *prototype, MalShape *
     assert(shape->inline_count == count);
     MalObject *object =
         mal_heap_alloc(heap, sizeof(MalObject) + sizeof(MalValue) * count, MAL_HEAP_OBJECT);
-    mal_object_init(heap, object, MAL_HEAP_OBJECT, prototype);
+    mal_object_init_payload(heap, object, prototype);
     object->shape = shape;
     object->slots = (MalValue *) (object + 1);
     object->slot_capacity = (u8) count;
@@ -330,7 +334,7 @@ MalObject *mal_object_try_new_shaped(
     MalObject *object = mal_heap_try_alloc(
         heap, sizeof(MalObject) + sizeof(MalValue) * count, MAL_HEAP_OBJECT);
     if (object == nullptr) return nullptr;
-    mal_object_init(heap, object, MAL_HEAP_OBJECT, prototype);
+    mal_object_init_payload(heap, object, prototype);
     object->shape = shape;
     object->slots = (MalValue *) (object + 1);
     object->slot_capacity = (u8) count;
