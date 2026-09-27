@@ -15,6 +15,22 @@ static _Atomic(u64) g_next_heap_identity = 1;
 /* One active mutator binds header initialization to its heap's major color. */
 static u8 g_allocation_mark_color;
 
+static inline u8 mal_heap_sweep_mark_load(const MalHeapHeader *header) {
+#if defined(__wasi__)
+    return header->mark;
+#else
+    return atomic_load_explicit(&header->mark, memory_order_relaxed);
+#endif
+}
+
+static inline void mal_heap_sweep_mark_store(MalHeapHeader *header, u8 mark) {
+#if defined(__wasi__)
+    header->mark = mark;
+#else
+    atomic_store_explicit(&header->mark, mark, memory_order_relaxed);
+#endif
+}
+
 /* Poll only requests mutator service; it does not publish heap or worker data. */
 static inline void mal_heap_maybe_trigger_gc(const MalHeap *heap) {
     if (heap->bytes_allocated >= heap->next_gc_at) {
@@ -855,7 +871,7 @@ static void mal_heap_sweep_block(
             // Unreached: dead. Finalize (frees its owned side allocations), then
             // tombstone so a later sweep does not finalize it again.
             finalize(header);
-            atomic_store_explicit(&header->mark, MAL_MARK_FREE, memory_order_relaxed);
+            mal_heap_sweep_mark_store(header, MAL_MARK_FREE);
             if (heap->poison_on_free) {
                 mal_gc_poison_cell(cell, block->cell_size, free_offset);
             }
@@ -935,12 +951,12 @@ void mal_heap_sweep_minor(MalHeap *heap, MalHeapFinalizeFn finalize) {
         for (u8 *cell = (u8 *) block + data_offset;
             cell + block->cell_size <= block->bump; cell += block->cell_size) {
             MalHeapHeader *header = (MalHeapHeader *) cell;
-            u8 mark = atomic_load_explicit(&header->mark, memory_order_relaxed);
+            u8 mark = mal_heap_sweep_mark_load(header);
             if (mal_heap_mark_is_old(mark)) {
                 block_live++;
             } else if ((mark & MAL_MARK_FREE) == 0) {
                 finalize(header);
-                atomic_store_explicit(&header->mark, MAL_MARK_FREE, memory_order_relaxed);
+                mal_heap_sweep_mark_store(header, MAL_MARK_FREE);
                 if (heap->poison_on_free) {
                     mal_gc_poison_cell(cell, block->cell_size, free_offset);
                 }
