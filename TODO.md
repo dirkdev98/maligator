@@ -809,10 +809,16 @@ remains a Maligator extension and does not count as global fetch conformance.
 - [ ] Reclamation: measure fresh allocation during sweep, reusable capacity,
       mapped and resident memory, page faults, and grow/shrink cycles with the new
       point-in-time heap-usage counters before replacing global free lists or
-      releasing chunks.
-- [ ] Re-run the native/Wasm/sanitizer gate and the matched five-family portfolio
-      on the retained combination without the stats-only counters; record
-      per-candidate and combined decisions.
+      releasing chunks. A local seven-pair sweep-reserve probe at 16 MiB showed
+      that replacing one quarter of managed cells before their free lists were
+      rebuilt added about 4.26 MiB of mapping, 4.19 MiB of peak RSS, and 256 page
+      faults versus reuse after the cursor; final live bytes matched. The prior
+      app diagnostic allocated only 32.8 KiB during major sweep, so establish
+      representative long-sweep exposure before adding per-block free lists.
+- [ ] Complete the matched five-family portfolio and separate HTTP/long-cadence
+      diagnostics on the retained combination without stats-only counters; record
+      per-candidate and combined decisions. The retained-source Linux gate and
+      Wasm parity have passed, while the final benchmark harness gate is queued.
 
 # Triggered work
 
