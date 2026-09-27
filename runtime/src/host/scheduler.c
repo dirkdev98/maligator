@@ -118,6 +118,7 @@ void mal_sched_run(MalScheduler *s) {
     for (;;) {
         MalFiber *f = mal_sched_dequeue(s);
         if (f == nullptr) {
+            if (mal_gc_finish_pending_cycle(s->vm)) continue;
             // Run queue drained. If the reactor still holds timers/ops, block until
             // one fires (which wakes — re-enqueues — a fiber), then loop. Otherwise
             // there is no way to make progress: the isolate is idle, so exit.

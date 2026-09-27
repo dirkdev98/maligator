@@ -53,7 +53,9 @@ CPU quota files, reserving one visible CPU for the mutator. Zero capacity runs w
 inline. Quota discovery is best effort: nested or nonstandard mounts and hidden
 ancestor limits may not be visible, so CPU-constrained deployments need a matched
 resource check. The pool starts on the first qualifying batch, parks while idle,
-and stops before VM teardown. Wasm never starts a native pool.
+and stops before VM teardown. Before the host loop or fiber scheduler waits or
+exits with no runnable work, the mutator completes any active cycle and checks
+the task queues again. Wasm never starts a native pool.
 
 ## Validation boundary
 
@@ -61,9 +63,11 @@ Native overlap fixtures pause a worker after publication but before it reads an
 Env slot or copied object/array edges. They check snapshot survival, current
 reachability, later reclamation, and completion. One fixture also disposes and
 reinitializes a VM while a worker is paused in tracing. ThreadSanitizer covers
-those overlap cases. GC statistics separate mutator pause time, worker CPU, copied
-values and heap values, worker discoveries, and remark join time. These counters
-describe work distribution; they do not alone establish an application speedup.
+those overlap cases. A separate fixture checks idle completion before host exit,
+reactor wait, and scheduler exit. GC statistics separate mutator pause time,
+worker CPU, copied values and heap values, worker discoveries, and remark join
+time. These counters describe work distribution; they do not alone establish an
+application speedup.
 Large root scans, mutator-only traces, finalization, and synchronous completion
 can still create long pauses. Wasm parity and broad performance acceptance are
 tracked in [TODO.md](../../TODO.md).

@@ -103,6 +103,9 @@ i32 mal_gc_swap_stress_interval(i32 interval);
  * Invoked explicitly (the gc() host hook); never from the allocator. */
 void mal_gc_collect(MalVm *vm);
 
+/* Complete an in-flight cycle before the mutator idles; never starts a new one. */
+bool mal_gc_finish_pending_cycle(MalVm *vm);
+
 u64 mal_gc_allocated_bytes(MalVm *vm);
 u64 mal_gc_collection_count(MalVm *vm);
 

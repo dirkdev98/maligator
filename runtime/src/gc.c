@@ -2493,6 +2493,13 @@ static void mal_gc_cycle_finish_sync(MalVm *vm) {
     }
 }
 
+bool mal_gc_finish_pending_cycle(MalVm *vm) {
+    if (g_gc_vm != vm) abort();
+    if (vm->gc_native_frames != 0 || g_gc->phase == MAL_GC_PHASE_IDLE) return false;
+    mal_gc_cycle_finish_sync(vm);
+    return true;
+}
+
 /* The explicit "collect now, completely and synchronously" entry (host gc() hook,
  * teardown). A complete collection is what the caller expects: if a cycle is
  * mid-flight, finish it synchronously FIRST — but that cycle's snapshot may retain
