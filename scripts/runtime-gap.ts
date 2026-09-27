@@ -71,6 +71,8 @@ interface TimedKernelSample {
 interface ResourceSample {
 	readonly cpuMs: number;
 	readonly peakRssBytes: number;
+	// The emitted VM-lifetime snapshot includes warmup; kernel counters below are deltas.
+	readonly gcStats?: Readonly<Record<string, number>>;
 	readonly gcWallMs?: number;
 	readonly gcEvents?: number;
 	readonly sampledAllocatedBytes?: number;
@@ -481,9 +483,22 @@ async function timeInvocation(
 	};
 }
 
-function gcStat(stderr: string, name: string): number | undefined {
-	const match = stderr.match(new RegExp(`${name}=([0-9.]+)`));
-	return match === null ? undefined : Number(match[1]);
+export function parseGcStats(
+	stderr: string,
+): Readonly<Record<string, number>> | undefined {
+	const line = stderr
+		.split(/\r?\n/)
+		.filter((entry) => entry.startsWith("[gc-stats] "))
+		.at(-1);
+	if (line === undefined) return undefined;
+	const values: Record<string, number> = {};
+	for (const token of line.slice("[gc-stats] ".length).split(/\s+/)) {
+		const match = token.match(/^([a-z][a-z0-9_]*)=([0-9]+(?:\.[0-9]+)?)$/);
+		if (match === null) continue;
+		const value = Number(match[2]);
+		if (Number.isFinite(value)) values[match[1]!] = value;
+	}
+	return Object.keys(values).length === 0 ? undefined : values;
 }
 
 function profileSelfSize(node: unknown): number {
@@ -590,15 +605,17 @@ async function maligatorResourceSample(
 		timeoutMs,
 	);
 	assertRuntimeGapParity(reference, measured.output);
+	const stats = parseGcStats(measured.stderr);
 	return {
 		cpuMs: measured.cpuMs,
 		peakRssBytes: measured.peakRssBytes,
-		gcWallMs: gcStat(measured.stderr, "total_ms"),
+		gcStats: stats,
+		gcWallMs: stats?.total_ms,
 		gcEvents: measured.output.collections,
 		allocatedBytes: measured.output.allocatedBytes,
 		collections: measured.output.collections,
-		peakLiveBytes: gcStat(measured.stderr, "peak_live_bytes"),
-		maxPauseMs: gcStat(measured.stderr, "max_pause_ms"),
+		peakLiveBytes: stats?.peak_live_bytes,
+		maxPauseMs: stats?.max_pause_ms,
 	};
 }
 

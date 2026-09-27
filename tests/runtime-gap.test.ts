@@ -18,6 +18,7 @@ import {
 	assertRuntimeGapParity,
 	calibrationScaleTimeoutCap,
 	captureOptionalResource,
+	parseGcStats,
 	parseKernelOutput,
 	RuntimeGapParityError,
 	summarizeRuntimeGapCategories,
@@ -83,6 +84,23 @@ describe("runtime-gap case catalog", () => {
 		const trace = '[1:0:0] 104 ms: GC: {"pause":0.2,"gc":"s"}';
 
 		expect(parseKernelOutput(`${record}\n${trace}`).checksum).toBe(42);
+	});
+
+	it("retains the final GC snapshot with exact zero and decimal counters", () => {
+		const stderr = [
+			"unrelated diagnostic",
+			"[gc-stats] collections=1 total_ms=2.5 max_pause_ms=2.0 worker_cpu_ms=1.5",
+			"[gc-stats] collections=2 total_ms=4.25 max_pause_ms=3.0 worker_cpu_ms=0 sync_backstop=1",
+			"Maximum resident set size (kbytes): 1024",
+		].join("\n");
+		expect(parseGcStats(stderr)).toEqual({
+			collections: 2,
+			total_ms: 4.25,
+			max_pause_ms: 3,
+			worker_cpu_ms: 0,
+			sync_backstop: 1,
+		});
+		expect(parseGcStats("[other-gc-stats] collections=3\n")).toBeUndefined();
 	});
 
 	it("plans the explicit bounded quick suite without writing reports", () => {
