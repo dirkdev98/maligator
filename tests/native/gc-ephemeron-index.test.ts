@@ -34,8 +34,13 @@ describe("indexed ephemerons", () => {
 			expect(result.status, result.stderr || result.stdout).toBe(0);
 			expect(result.stdout).toBe("gc-ephemeron-index PASS\n");
 			const visits = Number(result.stderr.match(/\bweak_entry_visits=(\d+)/)?.[1] ?? 0);
-			expect(visits).toBeGreaterThanOrEqual(512);
-			expect(visits).toBeLessThan(5120);
+			const links = Number(
+				result.stderr.match(/\bweak_pending_links_visited=(\d+)/)?.[1] ?? 0,
+			);
+			expect(visits).toBeGreaterThanOrEqual(576);
+			expect(visits).toBeLessThan(5760);
+			expect(links).toBeGreaterThan(0);
+			expect(links).toBeLessThan(5760);
 		} finally {
 			rmSync(outDir, { recursive: true, force: true });
 		}

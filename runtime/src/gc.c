@@ -364,6 +364,7 @@ struct MalGcState {
     u64 weak_entry_visits;
     u64 weak_cleanup_visits;
     u64 weak_activated_values;
+    u64 weak_pending_links_visited;
     usize weak_pending_peak_bytes;
     u64 weak_pass_ns;
 };
@@ -626,10 +627,12 @@ static void mal_gc_print_stats_now(void) {
             (double) g->remark_join_ns / 1.0e6);
     fprintf(stderr,
             " weak_entry_visits=%llu weak_cleanup_visits=%llu "
-            "weak_activated_values=%llu weak_pending_peak_bytes=%llu weak_pass_ms=%.3f",
+            "weak_activated_values=%llu weak_pending_links_visited=%llu "
+            "weak_pending_peak_bytes=%llu weak_pass_ms=%.3f",
             (unsigned long long) g->weak_entry_visits,
             (unsigned long long) g->weak_cleanup_visits,
             (unsigned long long) g->weak_activated_values,
+            (unsigned long long) g->weak_pending_links_visited,
             (unsigned long long) g->weak_pending_peak_bytes,
             (double) g->weak_pass_ns / 1.0e6);
     fprintf(stderr, "\n");
@@ -2341,16 +2344,26 @@ typedef struct MalGcEphemeronIndex {
 } MalGcEphemeronIndex;
 
 static usize mal_gc_ephemeron_bucket(MalHeapHeader *key, usize bucket_count) {
-    usize bits = (usize) key >> 4;
-    bits ^= bits >> (sizeof(usize) * 4);
-    return (bits * (usize) 2654435761u) & (bucket_count - 1);
+    u64 bits = (u64) (uptr) key;
+    bits ^= bits >> 30;
+    bits *= 0xbf58476d1ce4e5b9ull;
+    bits ^= bits >> 27;
+    bits *= 0x94d049bb133111ebull;
+    bits ^= bits >> 31;
+    return (usize) bits & (bucket_count - 1);
 }
 
 static void mal_gc_ephemeron_resize(MalGcEphemeronIndex *index, usize bucket_count) {
     usize *buckets = calloc(bucket_count, sizeof(usize));
     if (buckets == nullptr) abort();
+    if (g_gc->stats_enabled) {
+        usize bytes = index->capacity * sizeof(MalGcPendingEphemeron)
+            + (index->bucket_count + bucket_count) * sizeof(usize);
+        if (bytes > g_gc->weak_pending_peak_bytes) g_gc->weak_pending_peak_bytes = bytes;
+    }
     for (usize i = 0; i < index->count; ++i) {
         MalGcPendingEphemeron *entry = &index->entries[i];
+        if (entry->key == nullptr) continue;
         usize bucket = mal_gc_ephemeron_bucket(entry->key, bucket_count);
         entry->next = buckets[bucket];
         buckets[bucket] = i + 1;
@@ -2364,15 +2377,20 @@ static void mal_gc_ephemeron_wait(MalGcEphemeronIndex *index, MalHeapHeader *key
         MalValue value) {
     if (index->bucket_count == 0 || index->count == index->bucket_count * 2) {
         mal_gc_ephemeron_resize(index,
-            index->bucket_count == 0 ? 64 : index->bucket_count * 2);
+            index->bucket_count == 0 ? 16 : index->bucket_count * 2);
     }
     if (index->count == index->capacity) {
-        usize capacity = index->capacity == 0 ? 64 : index->capacity * 2;
+        usize capacity = index->capacity == 0 ? 16 : index->capacity * 2;
         MalGcPendingEphemeron *entries = realloc(index->entries,
             capacity * sizeof(MalGcPendingEphemeron));
         if (entries == nullptr) abort();
         index->entries = entries;
         index->capacity = capacity;
+        if (g_gc->stats_enabled) {
+            usize bytes = index->capacity * sizeof(MalGcPendingEphemeron)
+                + index->bucket_count * sizeof(usize);
+            if (bytes > g_gc->weak_pending_peak_bytes) g_gc->weak_pending_peak_bytes = bytes;
+        }
     }
     usize bucket = mal_gc_ephemeron_bucket(key, index->bucket_count);
     index->entries[index->count] = (MalGcPendingEphemeron) {
@@ -2384,12 +2402,20 @@ static void mal_gc_ephemeron_wait(MalGcEphemeronIndex *index, MalHeapHeader *key
 static void mal_gc_ephemeron_activate(MalGcEphemeronIndex *index, MalHeapHeader *key) {
     if (index->bucket_count == 0) return;
     usize bucket = mal_gc_ephemeron_bucket(key, index->bucket_count);
-    for (usize at = index->buckets[bucket]; at != 0;
-            at = index->entries[at - 1].next) {
-        MalGcPendingEphemeron *entry = &index->entries[at - 1];
-        if (entry->key != key || mal_gc_is_marked(entry->value)) continue;
-        mal_gc_mark_value(entry->value);
-        if (g_gc->stats_enabled) g_gc->weak_activated_values++;
+    usize *link = &index->buckets[bucket];
+    while (*link != 0) {
+        MalGcPendingEphemeron *entry = &index->entries[*link - 1];
+        if (g_gc->stats_enabled) g_gc->weak_pending_links_visited++;
+        if (entry->key != key) {
+            link = &entry->next;
+            continue;
+        }
+        *link = entry->next;
+        entry->key = nullptr;
+        if (!mal_gc_is_marked(entry->value)) {
+            mal_gc_mark_value(entry->value);
+            if (g_gc->stats_enabled) g_gc->weak_activated_values++;
+        }
     }
 }
 
@@ -2414,7 +2440,9 @@ static void mal_gc_weak_pass(void) {
                 MalValue value = mal_table_entry_value(entries, entry);
                 if (mal_gc_is_marked(key.value)) {
                     mal_gc_mark_value(value);
-                } else if (mal_value_is_heap(value) && !mal_gc_is_marked(value)) {
+                } else if (mal_value_is_heap(value) &&
+                        mal_value_to_heap(value) != mal_value_to_heap(key.value) &&
+                        !mal_gc_is_marked(value)) {
                     mal_gc_ephemeron_wait(&index, mal_value_to_heap(key.value), value);
                 }
             }

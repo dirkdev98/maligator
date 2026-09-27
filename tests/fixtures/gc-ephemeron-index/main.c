@@ -8,6 +8,7 @@
 extern const MalRuntimeImage mal_runtime_image;
 
 #define CHAIN_COUNT 512
+#define FRAGMENTED_COUNT 64
 
 static usize no_workers(void) {
     return 0;
@@ -32,6 +33,17 @@ int main(void) {
             mal_value_from_object(keys[i]));
     }
 
+    MalObject **fragmented = malloc(FRAGMENTED_COUNT * sizeof(MalObject *));
+    if (fragmented == nullptr) abort();
+    for (usize i = 0; i < FRAGMENTED_COUNT; ++i) {
+        fragmented[i] = mal_object_new(&vm.heap, nullptr);
+        for (usize j = 0; j < 450; ++j) mal_object_new(&vm.heap, nullptr);
+    }
+    for (usize i = FRAGMENTED_COUNT - 1; i > 0; --i) {
+        mal_map_object_set(second, mal_value_from_object(fragmented[i - 1]),
+            mal_value_from_object(fragmented[i]));
+    }
+
     MalObject *cycle_first = mal_object_new(&vm.heap, nullptr);
     MalObject *cycle_second = mal_object_new(&vm.heap, nullptr);
     mal_map_object_set(first, mal_value_from_object(cycle_first),
@@ -51,7 +63,8 @@ int main(void) {
         mal_value_from_object(&first->object),
         mal_value_from_object(&second->object),
         mal_value_from_object(keys[0]),
-        mal_value_from_object(sentinel)
+        mal_value_from_object(sentinel),
+        mal_value_from_object(fragmented[0])
     };
     MalRootSpan span;
     mal_gc_root(&span, roots, countof(roots));
@@ -64,13 +77,34 @@ int main(void) {
         if (!mal_value_is_object(current)) return 1;
     }
     if (mal_value_to_object(current) != keys[CHAIN_COUNT - 1]) return 2;
-    if (mal_map_object_size(first) + mal_map_object_size(second) != CHAIN_COUNT) return 3;
+    current = roots[4];
+    for (usize i = 0; i < FRAGMENTED_COUNT - 1; ++i) {
+        current = mal_map_object_get(second, current);
+        if (!mal_value_is_object(current)) return 3;
+    }
+    if (mal_value_to_object(current) != fragmented[FRAGMENTED_COUNT - 1]) return 4;
+    if (mal_map_object_size(first) + mal_map_object_size(second) !=
+            CHAIN_COUNT + FRAGMENTED_COUNT - 1) return 5;
     MalValue late_value = mal_map_object_get(first, roots[3]);
     if (!mal_value_is_object(late_value) ||
-        mal_value_to_object(late_value) != &late->object) return 4;
-    if (mal_map_object_get(late, roots[2]) != mal_value_from_object(marker)) return 5;
+        mal_value_to_object(late_value) != &late->object) return 6;
+    if (mal_map_object_get(late, roots[2]) != mal_value_from_object(marker)) return 7;
+
+    MalObject *young = mal_object_new(&vm.heap, nullptr);
+    mal_map_object_set(late, roots[2], mal_value_from_object(young));
+    vm.heap.next_gc_at = 1;
+    mal_gc_poll = true;
+    mal_gc_safepoint(&vm);
+    if (mal_map_object_get(late, roots[2]) != mal_value_from_object(young)) return 8;
+
+    roots[2] = mal_value_new_undefined();
+    roots[3] = mal_value_new_undefined();
+    roots[4] = mal_value_new_undefined();
+    mal_gc_collect(&vm);
+    if (mal_map_object_size(first) != 0 || mal_map_object_size(second) != 0) return 9;
 
     free(keys);
+    free(fragmented);
     mal_gc_unroot(&span);
     mal_vm_free(&vm);
     mal_gc_test_worker_limit_hook = nullptr;
