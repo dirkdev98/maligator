@@ -783,7 +783,9 @@ remains a Maligator extension and does not count as global fetch conformance.
       tracing or wider exact frame liveness.
 - [ ] Minor locality: compare black-allocation block enrollment, young-position
       bitmap, and young-block placement against old-block scan amplification and
-      allocation cost. Define allocation during finalization before using a bitmap.
+      allocation cost. Native finalizers are cleanup-only after the mark/weak
+      fixpoint; they may not allocate from the heap or publish graph edges. Verify
+      a bitmap against that contract before adding allocation-path writes.
 - [ ] Survivor age: measure post-promotion deaths and allocation during majors;
       define remembered-set persistence and weak-key liveness before changing age.
 - [ ] Dirty ranges: compare sparse and dense old-container writes with logical

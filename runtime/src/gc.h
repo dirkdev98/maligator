@@ -78,7 +78,9 @@ void mal_gc_register_root_source(MalGcRootSourceFn fn, void *data);
  * type they define (e.g. the fetch Response/Request body buffers), so the engine's
  * sweep frees their owned memory without a compile-time dependency on those types.
  * Invoked once per dead cell of that type, before the common object cleanup; must be
- * idempotent (null-after-free) — it also runs at teardown. */
+ * idempotent (null-after-free) — it also runs at teardown. A finalizer may release
+ * owned resources but must not allocate from MalHeap, publish heap edges, invoke JS,
+ * or reenter collection: the mark and weak fixpoint has already closed. */
 typedef void (*MalGcFinalizer)(MalHeapHeader *cell);
 void mal_gc_register_finalizer(MalHeapType type, MalGcFinalizer fn);
 
