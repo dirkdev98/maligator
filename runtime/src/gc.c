@@ -1980,7 +1980,8 @@ static bool mal_gc_workers_trace_batch(MalGcState *g, usize count) {
 }
 #endif
 
-#define MAL_GC_TRACE_BATCH_SIZE 512
+#define MAL_GC_CONCURRENT_TRACE_BATCH_SIZE 512
+#define MAL_GC_PARKED_TRACE_BATCH_SIZE 2048
 #define MAL_GC_PARALLEL_BATCH_MIN 64
 
 static void mal_gc_trace_parked_batch(usize count) {
@@ -2009,7 +2010,7 @@ static bool mal_gc_trace_concurrent_batch(usize limit, usize *worked) {
     }
     usize count = g_gc->grey_count;
     if (count > limit) count = limit;
-    if (count > MAL_GC_TRACE_BATCH_SIZE) count = MAL_GC_TRACE_BATCH_SIZE;
+    if (count > MAL_GC_CONCURRENT_TRACE_BATCH_SIZE) count = MAL_GC_CONCURRENT_TRACE_BATCH_SIZE;
     if (count == 0) {
         *worked = 0;
         return false;
@@ -2091,7 +2092,7 @@ static bool mal_gc_trace_concurrent_batch(usize limit, usize *worked) {
 static usize mal_gc_trace_grey_batch(usize limit) {
     usize count = g_gc->grey_count;
     if (count > limit) count = limit;
-    if (count > MAL_GC_TRACE_BATCH_SIZE) count = MAL_GC_TRACE_BATCH_SIZE;
+    if (count > MAL_GC_PARKED_TRACE_BATCH_SIZE) count = MAL_GC_PARKED_TRACE_BATCH_SIZE;
     if (count == 0) return 0;
     if (g_gc->batch_capacity < count) {
         MalHeapHeader **batch = realloc(g_gc->batch,
