@@ -1,6 +1,7 @@
 #include <pthread.h>
 #include <sched.h>
 #include <stdio.h>
+#include <string.h>
 #include <time.h>
 
 #include "gc.h"
@@ -35,7 +36,9 @@ static void count_finalized(MalHeapHeader *cell) {
     if ((void *) cell == (void *) untouched_target) untouched_finalized++;
 }
 
-int main(void) {
+int main(int argc, char **argv) {
+    bool pointer_values = argc == 2 && strcmp(argv[1], "pointer") == 0;
+    if (argc != 1 && !pointer_values) return 1;
     MalVm vm;
     mal_vm_init(&vm, &mal_runtime_image);
     if (mal_gc_worker_limit(&vm) == 0) {
@@ -49,11 +52,13 @@ int main(void) {
     MalKey second = mal_key_from_value(mal_value_from_string(
         mal_string_new_ascii(&vm.heap, (const byte *) "second", 6)));
     MalKey scalar_keys[8];
+    MalObject *shared_values[8] = {0};
     for (usize i = 0; i < countof(scalar_keys); ++i) {
         char name[16];
         int length = snprintf(name, sizeof(name), "scalar%zu", i);
         scalar_keys[i] = mal_key_from_value(mal_value_from_string(
             mal_string_new_ascii(&vm.heap, (const byte *) name, (usize) length)));
+        if (pointer_values) shared_values[i] = mal_object_new(&vm.heap, nullptr);
     }
     MalValue roots[40];
     MalObject *owners[40];
@@ -69,7 +74,9 @@ int main(void) {
         if (!mal_object_set(owners[i], first, mal_value_from_object(first_child)) ||
             !mal_object_set(owners[i], second, mal_value_from_object(second_child))) return 1;
         for (usize j = 0; j < countof(scalar_keys); ++j) {
-            if (!mal_object_set(owners[i], scalar_keys[j], mal_value_from_i32((i32) j))) return 1;
+            MalValue value = pointer_values
+                ? mal_value_from_object(shared_values[j]) : mal_value_from_i32((i32) j);
+            if (!mal_object_set(owners[i], scalar_keys[j], value)) return 1;
         }
         roots[i] = mal_value_from_object(owners[i]);
     }
@@ -127,7 +134,8 @@ int main(void) {
         !new_first.present || new_first.desc.value != mal_value_from_object(replacement) ||
         !new_third.present || new_third.desc.value != mal_value_from_object(new_property) ||
         !new_index.present || new_index.desc.value != mal_value_from_object(indexed) ||
-        !scalar.present || scalar.desc.value != mal_value_from_i32(0)) return 7;
+        !scalar.present || scalar.desc.value != (pointer_values
+            ? mal_value_from_object(shared_values[0]) : mal_value_from_i32(0))) return 7;
 
     mal_gc_unroot(&span);
     mal_gc_test_trace_snapshot_hook = nullptr;

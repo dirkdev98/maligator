@@ -21,11 +21,22 @@ describe("concurrent object edge snapshots", () => {
 			name: "gc-snapshot-overlap",
 			mainFile: "tests/fixtures/gc-snapshot-overlap/main.c",
 			intent: "retains copied dense edges across overwrite, delete, and resize",
+			args: [],
+			pointerValues: false,
 		},
 		{
 			name: "gc-snapshot-object",
 			mainFile: "tests/fixtures/gc-snapshot-object/main.c",
-			intent: "retains copied shaped edges across value and layout changes",
+			intent: "filters primitive values from shaped snapshots while retaining edges",
+			args: [],
+			pointerValues: false,
+		},
+		{
+			name: "gc-snapshot-object",
+			mainFile: "tests/fixtures/gc-snapshot-object/main.c",
+			intent: "copies pointer-heavy shaped records with shared values",
+			args: ["pointer"],
+			pointerValues: true,
 		},
 	])
 		it(spec.intent, (ctx) => {
@@ -38,16 +49,20 @@ describe("concurrent object edge snapshots", () => {
 					outDir,
 				});
 				const invocation = resolveHarnessExecutionInvocation(binary);
-				const result = spawnSync(invocation.executable, invocation.args, {
-					env: {
-						...process.env,
-						MAL_GC_STRESS: "0",
-						MAL_GC_VERIFY: "1",
-						MAL_GC_STATS: "1",
+				const result = spawnSync(
+					invocation.executable,
+					[...invocation.args, ...spec.args],
+					{
+						env: {
+							...process.env,
+							MAL_GC_STRESS: "0",
+							MAL_GC_VERIFY: "1",
+							MAL_GC_STATS: "1",
+						},
+						encoding: "utf8",
+						timeout: scaledNativeRunTimeoutMs(120_000),
 					},
-					encoding: "utf8",
-					timeout: scaledNativeRunTimeoutMs(120_000),
-				});
+				);
 				if (result.error !== undefined) throw result.error;
 				expect(result.status, result.stderr || result.stdout).toBe(0);
 				if (result.stdout === `${spec.name} SKIP\n`) {
@@ -63,7 +78,13 @@ describe("concurrent object edge snapshots", () => {
 						result.stderr.match(/\bsnapshot_examined_values=(\d+)/)?.[1] ?? 0,
 					);
 					const copied = Number(result.stderr.match(/\bsnapshot_values=(\d+)/)?.[1] ?? 0);
-					expect(examined).toBeGreaterThan(copied);
+					expect(copied).toBeLessThanOrEqual(examined);
+					if (spec.pointerValues) {
+						expect(examined).toBeGreaterThan(0);
+						expect(copied / examined).toBeGreaterThan(0.9);
+					} else {
+						expect(examined).toBeGreaterThan(copied);
+					}
 				}
 			} finally {
 				rmSync(outDir, { recursive: true, force: true });
