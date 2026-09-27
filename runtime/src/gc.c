@@ -2162,6 +2162,12 @@ static usize mal_gc_trace_grey_batch(usize limit) {
 
 /** Drain the grey worklist, tracing each cell's strong edges. */
 static void mal_gc_drain(void) {
+    if (!g_gc->major_collection) {
+        while (g_gc->grey_count > 0) {
+            mal_gc_trace_cell(g_gc->grey[--g_gc->grey_count]);
+        }
+        return;
+    }
     while (g_gc->grey_count > 0) {
         mal_gc_trace_grey_batch((usize) -1);
     }
