@@ -14,7 +14,7 @@ typedef struct TestCell {
 
 static MalHeap *g_heap;
 static u32 g_next_id;
-static u32 g_finalized[256];
+static u32 g_finalized[1024];
 static bool g_invalid_finalizer;
 
 #define CHECK(condition) \
@@ -397,11 +397,11 @@ static bool measure_fragmented_minor(MalHeap *heap, bool wide) {
     CHECK(g_finalized[old_count + 3] == 1);
     if (wide) {
         g_wide_minor_cells = heap->minor_cells_inspected;
-        CHECK(heap->minor_cells_inspected > 2 * g_narrow_minor_cells);
+        CHECK(heap->minor_cells_inspected == countof(young));
         CHECK(heap->minor_blocks_inspected > 1);
     } else {
         g_narrow_minor_cells = heap->minor_cells_inspected;
-        CHECK(g_narrow_minor_cells >= old_count);
+        CHECK(g_narrow_minor_cells == countof(young));
         CHECK(heap->minor_blocks_inspected == 1);
     }
     return true;
@@ -413,6 +413,43 @@ static bool minor_sweep_scans_one_old_block_for_three_new_cells(MalHeap *heap) {
 
 static bool minor_sweep_scans_three_old_blocks_for_three_new_cells(MalHeap *heap) {
     return measure_fragmented_minor(heap, true);
+}
+
+static bool minor_bitmap_reuses_high_words_without_recounting_old_cells(MalHeap *heap) {
+    CHECK(sizeof(TestCell) <= 48);
+    TestCell *old[675];
+    for (usize i = 0; i < countof(old); i++) old[i] = new_cell(heap, 48);
+    CHECK(((uptr) old[22] - (uptr) old[0]) / 16 >= 64);
+    CHECK(((uptr) old[674] - (uptr) old[0]) / 16 >= 31 * 64);
+    mal_heap_begin_major(heap);
+    for (usize i = 0; i < countof(old); i++) {
+        if (i != 22 && i != 674) mark_live(old[i]);
+    }
+    mal_heap_sweep(heap, finalize_cell);
+    CHECK(heap->live_bytes == 673 * mal_heap_allocation_charge(48));
+
+    TestCell *high = new_cell(heap, 48);
+    TestCell *low = new_cell(heap, 48);
+    CHECK(high == old[674] && low == old[22]);
+    u32 low_id = low->id;
+    mark_live(high);
+    heap->gc_stats = true;
+    mal_heap_sweep_minor(heap, finalize_cell);
+    CHECK(heap->minor_cells_inspected == 2);
+    CHECK(heap->live_bytes == 674 * mal_heap_allocation_charge(48));
+    CHECK(g_finalized[high->id] == 0 && g_finalized[low_id] == 1);
+
+    mal_heap_sweep_minor(heap, finalize_cell);
+    CHECK(heap->minor_cells_inspected == 2);
+    CHECK(heap->live_bytes == 674 * mal_heap_allocation_charge(48));
+    TestCell *again = new_cell(heap, 48);
+    CHECK(again == low);
+    mark_live(again);
+    mal_heap_sweep_minor(heap, finalize_cell);
+    CHECK(heap->minor_cells_inspected == 3);
+    CHECK(heap->live_bytes == 675 * mal_heap_allocation_charge(48));
+    CHECK(live_cell(high, 676) && live_cell(again, 678));
+    return true;
 }
 
 static bool incremental_major_resets_sweep_epochs_on_wrap(MalHeap *heap) {
@@ -583,6 +620,7 @@ int main(void) {
         incremental_major_charges_raw_block_traversal,
         minor_sweep_scans_one_old_block_for_three_new_cells,
         minor_sweep_scans_three_old_blocks_for_three_new_cells,
+        minor_bitmap_reuses_high_words_without_recounting_old_cells,
         incremental_major_resets_sweep_epochs_on_wrap,
         large_cells_follow_major_and_minor_lifetime,
         finalizer_raw_storage_reuses_partial_slots_and_blocks,
