@@ -180,6 +180,12 @@ describe("targeted GC unit tests", () => {
 					expect(
 						Number(result.stderr.match(/\bconcurrent_env_traces=(\d+)/)?.[1] ?? 0),
 					).toBeGreaterThan(0);
+					expect(
+						Number(result.stderr.match(/\bconcurrent_discoveries=(\d+)/)?.[1] ?? 0),
+					).toBeGreaterThan(0);
+					expect(
+						Number(result.stderr.match(/\bconcurrent_worker_cpu_ms=([\d.]+)/)?.[1] ?? 0),
+					).toBeGreaterThan(0);
 				});
 			}
 

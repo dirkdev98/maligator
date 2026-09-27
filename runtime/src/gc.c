@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #if !defined(__wasi__)
 #include <pthread.h>
+#include <time.h>
 #endif
 
 #include "./array_buffer_object.h"
@@ -134,7 +135,7 @@ typedef struct MalGcWorker {
     usize discovered_capacity;
     usize index;
     u64 observed_batch;
-    u64 traced;
+    u64 batch_cpu_ns;
 } MalGcWorker;
 static _Thread_local MalGcWorker *g_trace_worker = nullptr;
 void (*mal_gc_test_trace_env_hook)(MalEnv *env) = nullptr;
@@ -246,6 +247,9 @@ struct MalGcState {
     u64 concurrent_traces;
     u64 concurrent_env_traces;
     u64 concurrent_discoveries;
+    u64 worker_cpu_ns;
+    u64 concurrent_worker_cpu_ns;
+    u64 mutator_assist_traces;
 };
 
 #if !defined(__wasi__)
@@ -392,7 +396,8 @@ static void mal_gc_print_stats_now(void) {
             " cycles=%llu sync_backstop=%llu over_tenure_bytes=%llu "
             "init_mark_ms=%.3f remark_ms=%.3f max_mark_step_ms=%.3f max_sweep_step_ms=%.3f "
             "worker_traces=%llu concurrent_batches=%llu concurrent_traces=%llu "
-            "concurrent_env_traces=%llu concurrent_discoveries=%llu",
+            "concurrent_env_traces=%llu concurrent_discoveries=%llu "
+            "worker_cpu_ms=%.3f concurrent_worker_cpu_ms=%.3f mutator_assist_traces=%llu",
             (unsigned long long) g->cycles, (unsigned long long) g->sync_backstop,
             (unsigned long long) mal_gc_black_alloc_bytes,
             (double) g->init_mark_ns / 1.0e6, (double) g->remark_ns / 1.0e6,
@@ -401,7 +406,10 @@ static void mal_gc_print_stats_now(void) {
             (unsigned long long) g->concurrent_batches,
             (unsigned long long) g->concurrent_traces,
             (unsigned long long) g->concurrent_env_traces,
-            (unsigned long long) g->concurrent_discoveries);
+            (unsigned long long) g->concurrent_discoveries,
+            (double) g->worker_cpu_ns / 1.0e6,
+            (double) g->concurrent_worker_cpu_ns / 1.0e6,
+            (unsigned long long) g->mutator_assist_traces);
     fprintf(stderr, "\n");
     if (getenv("MAL_PROMISE_STATS") != nullptr) {
         fprintf(
@@ -1616,8 +1624,17 @@ static void *mal_gc_worker_main(void *argument) {
         usize count = g->worker_batch_count;
         MalHeapHeader **batch = g->batch;
         pthread_mutex_unlock(&g->worker_mutex);
+        struct timespec cpu_start;
+        if (g->stats_enabled && clock_gettime(CLOCK_THREAD_CPUTIME_ID, &cpu_start) != 0) abort();
         for (usize i = worker->index; i < count; i += MAL_GC_WORKER_COUNT) {
             mal_gc_trace_cell(batch[i]);
+        }
+        if (g->stats_enabled) {
+            struct timespec cpu_end;
+            if (clock_gettime(CLOCK_THREAD_CPUTIME_ID, &cpu_end) != 0) abort();
+            i64 elapsed = (i64) (cpu_end.tv_sec - cpu_start.tv_sec) * 1000000000
+                + (i64) (cpu_end.tv_nsec - cpu_start.tv_nsec);
+            worker->batch_cpu_ns = (u64) elapsed;
         }
         pthread_mutex_lock(&g->worker_mutex);
         if (--g->workers_pending == 0) {
@@ -1717,6 +1734,12 @@ static bool mal_gc_workers_collect_batch(MalGcState *g, bool wait) {
     pthread_mutex_unlock(&g->worker_mutex);
     for (usize i = 0; i < g->workers_created; ++i) {
         MalGcWorker *worker = &g->workers[i];
+        if (g->stats_enabled) {
+            g->worker_cpu_ns += worker->batch_cpu_ns;
+            if (g->worker_batch_concurrent) {
+                g->concurrent_worker_cpu_ns += worker->batch_cpu_ns;
+            }
+        }
         if (g->worker_batch_concurrent) g->concurrent_discoveries += worker->discovered_count;
         for (usize j = 0; j < worker->discovered_count; ++j) {
             mal_gc_grey_push(worker->discovered[j]);
@@ -2176,6 +2199,7 @@ static bool mal_gc_mark_step(MalVm *vm, usize budget) {
             mal_gc_trace_cell(g_gc->grey[--g_gc->grey_count]);
             worked++;
         }
+        if (g_gc->stats_enabled) g_gc->mutator_assist_traces += worked;
         goto finish_mark_step;
     }
 #endif
