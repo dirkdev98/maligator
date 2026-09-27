@@ -67,7 +67,6 @@ static inline void mal_heap_maybe_trigger_gc(const MalHeap *heap) {
 #define MAL_GC_LARGE_THRESHOLD (MAL_GC_BLOCK_SIZE / 4u)
 /* Every cell is 16-byte aligned: covers void*, f64, and MalBigInt's i128. */
 #define MAL_GC_CELL_ALIGN 16u
-#define MAL_GC_YOUNG_BITMAP_WORDS (MAL_GC_BLOCK_SIZE / MAL_GC_CELL_ALIGN / 64u)
 
 typedef enum MalGcBlockKind {
     MAL_GC_BLOCK_CELL,
@@ -99,7 +98,6 @@ struct MalGcBlock {
     struct MalGcBlock *prev_free;
     struct MalGcBlock *next_young;
     u64 sweep_epoch;
-    u64 young_bitmap[MAL_GC_YOUNG_BITMAP_WORDS];
 };
 
 struct MalGcChunk {
@@ -311,7 +309,6 @@ static MalGcBlock *mal_gc_new_block(MalHeap *heap, u16 size_class, u8 kind) {
     block->cell_size = g_class_cell_size[size_class];
     block->live = 0;
     block->sweep_epoch = sweep_epoch;
-    memset(block->young_bitmap, 0, sizeof(block->young_bitmap));
     block->free_list = nullptr;
     block->next_free = nullptr;
     block->prev_free = nullptr;
@@ -320,12 +317,7 @@ static MalGcBlock *mal_gc_new_block(MalHeap *heap, u16 size_class, u8 kind) {
     return block;
 }
 
-static inline void mal_gc_track_young_cell(MalHeap *heap, MalGcBlock *block, void *cell) {
-    if (!mal_gc_black_alloc) {
-        usize slot = (usize) ((u8 *) cell - ((u8 *) block + mal_gc_cell_data_offset())) /
-            MAL_GC_CELL_ALIGN;
-        block->young_bitmap[slot / 64] |= UINT64_C(1) << (slot % 64);
-    }
+static inline void mal_gc_track_young_block(MalHeap *heap, MalGcBlock *block) {
     if (!block->on_young && !mal_gc_black_alloc) {
         block->on_young = 1;
         block->next_young = heap->young_blocks;
@@ -340,7 +332,6 @@ static void mal_gc_clear_young_blocks(MalHeap *heap) {
         MalGcBlock *next = block->next_young;
         block->on_young = 0;
         block->next_young = nullptr;
-        memset(block->young_bitmap, 0, sizeof(block->young_bitmap));
         block = next;
     }
 }
@@ -454,7 +445,7 @@ static void *mal_gc_alloc(MalHeap *heap, usize size, u8 kind) {
         void *cell = heap->cell_free[size_class];
         heap->cell_free[size_class] = *(void **) ((u8 *) cell + mal_gc_free_next_offset());
         MalGcBlock *block = (MalGcBlock *) ((uptr) cell & ~(uptr) (MAL_GC_BLOCK_SIZE - 1));
-        mal_gc_track_young_cell(heap, block, cell);
+        mal_gc_track_young_block(heap, block);
         heap->bytes_allocated += g_class_cell_size[size_class];
         mal_gc_count_black(heap, block, kind, g_class_cell_size[size_class]);
         mal_heap_maybe_trigger_gc(heap);
@@ -500,7 +491,7 @@ static void *mal_gc_alloc(MalHeap *heap, usize size, u8 kind) {
     if (kind == MAL_GC_BLOCK_RAW) {
         block->live++; // per-block live count drives empty-block reclamation
     } else {
-        mal_gc_track_young_cell(heap, block, cell);
+        mal_gc_track_young_block(heap, block);
     }
     heap->bytes_allocated += block->cell_size;
     mal_gc_count_black(heap, block, kind, block->cell_size);
@@ -1010,35 +1001,28 @@ void mal_heap_sweep_minor(MalHeap *heap, MalHeapFinalizeFn finalize) {
         MalGcBlock *next = block->next_young;
         block->on_young = 0;
         block->next_young = nullptr;
-        // Bitmap entries were allocated since the last sweep, so OLD marks are new promotions.
-        usize block_live = block->live;
+        usize block_live = 0;
         if (heap->gc_stats) {
             heap->minor_blocks_inspected++;
+            heap->minor_cells_inspected +=
+                (usize) (block->bump - ((u8 *) block + data_offset)) / block->cell_size;
         }
-        for (usize word = 0; word < MAL_GC_YOUNG_BITMAP_WORDS; ++word) {
-            u64 pending = block->young_bitmap[word];
-            block->young_bitmap[word] = 0;
-            while (pending != 0) {
-                usize bit = (usize) __builtin_ctzll(pending);
-                pending &= pending - 1;
-                u8 *cell = (u8 *) block + data_offset +
-                    (word * 64 + bit) * MAL_GC_CELL_ALIGN;
-                MalHeapHeader *header = (MalHeapHeader *) cell;
-                if (heap->gc_stats) heap->minor_cells_inspected++;
-                u8 mark = mal_heap_sweep_mark_load(header);
-                if (mal_heap_mark_is_old(mark)) {
-                    block_live++;
-                } else if ((mark & MAL_MARK_FREE) == 0) {
-                    finalize(header);
-                    mal_heap_sweep_mark_store(header, MAL_MARK_FREE);
-                    if (heap->poison_on_free) {
-                        mal_gc_poison_cell(cell, block->cell_size, free_offset);
-                    }
-                    // Already-FREE cells remain linked; adding them again creates cycles.
-                    if (mal_gc_cell_reclaimable(block->cell_size)) {
-                        *(void **) (cell + free_offset) = heap->cell_free[block->size_class];
-                        heap->cell_free[block->size_class] = cell;
-                    }
+        for (u8 *cell = (u8 *) block + data_offset;
+            cell + block->cell_size <= block->bump; cell += block->cell_size) {
+            MalHeapHeader *header = (MalHeapHeader *) cell;
+            u8 mark = mal_heap_sweep_mark_load(header);
+            if (mal_heap_mark_is_old(mark)) {
+                block_live++;
+            } else if ((mark & MAL_MARK_FREE) == 0) {
+                finalize(header);
+                mal_heap_sweep_mark_store(header, MAL_MARK_FREE);
+                if (heap->poison_on_free) {
+                    mal_gc_poison_cell(cell, block->cell_size, free_offset);
+                }
+                // Already-FREE cells remain linked; adding them again creates cycles.
+                if (mal_gc_cell_reclaimable(block->cell_size)) {
+                    *(void **) (cell + free_offset) = heap->cell_free[block->size_class];
+                    heap->cell_free[block->size_class] = cell;
                 }
             }
         }

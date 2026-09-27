@@ -781,11 +781,12 @@ remains a Maligator extension and does not count as global fetch conformance.
       latency review; use mutator-only array trace attribution to identify a
       measured large-container or root-scan offender before adding resumable
       tracing or wider exact frame liveness.
-- [ ] Minor locality: compare black-allocation block enrollment, young-position
-      bitmap, and young-block placement against old-block scan amplification and
-      allocation cost. Native finalizers are cleanup-only after the mark/weak
-      fixpoint; they may not allocate from the heap or publish graph edges. Verify
-      a bitmap against that contract before adding allocation-path writes.
+- [ ] Minor locality: black-allocation enrollment showed no application gain.
+      The young-position bitmap reduced counted visits but slowed seven paired
+      app-batch runs, so it was reverted. Compare young-block placement only
+      against measured old-block scan amplification and allocation cost. Native
+      finalizers are cleanup-only after the mark/weak fixpoint; they may not
+      allocate from the heap or publish graph edges.
 - [ ] Survivor age: measure post-promotion deaths and allocation during majors;
       define remembered-set persistence and weak-key liveness before changing age.
 - [ ] Dirty ranges: compare sparse and dense old-container writes with logical

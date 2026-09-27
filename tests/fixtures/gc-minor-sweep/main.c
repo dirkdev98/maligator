@@ -397,11 +397,11 @@ static bool measure_fragmented_minor(MalHeap *heap, bool wide) {
     CHECK(g_finalized[old_count + 3] == 1);
     if (wide) {
         g_wide_minor_cells = heap->minor_cells_inspected;
-        CHECK(heap->minor_cells_inspected == countof(young));
+        CHECK(heap->minor_cells_inspected > 2 * g_narrow_minor_cells);
         CHECK(heap->minor_blocks_inspected > 1);
     } else {
         g_narrow_minor_cells = heap->minor_cells_inspected;
-        CHECK(g_narrow_minor_cells == countof(young));
+        CHECK(g_narrow_minor_cells >= old_count);
         CHECK(heap->minor_blocks_inspected == 1);
     }
     return true;
@@ -415,12 +415,9 @@ static bool minor_sweep_scans_three_old_blocks_for_three_new_cells(MalHeap *heap
     return measure_fragmented_minor(heap, true);
 }
 
-static bool minor_bitmap_reuses_high_words_without_recounting_old_cells(MalHeap *heap) {
-    CHECK(sizeof(TestCell) <= 48);
+static bool reused_young_cells_preserve_survivors_across_minors(MalHeap *heap) {
     TestCell *old[675];
     for (usize i = 0; i < countof(old); i++) old[i] = new_cell(heap, 48);
-    CHECK(((uptr) old[22] - (uptr) old[0]) / 16 >= 64);
-    CHECK(((uptr) old[674] - (uptr) old[0]) / 16 >= 31 * 64);
     mal_heap_begin_major(heap);
     for (usize i = 0; i < countof(old); i++) {
         if (i != 22 && i != 674) mark_live(old[i]);
@@ -428,27 +425,26 @@ static bool minor_bitmap_reuses_high_words_without_recounting_old_cells(MalHeap 
     mal_heap_sweep(heap, finalize_cell);
     CHECK(heap->live_bytes == 673 * mal_heap_allocation_charge(48));
 
-    TestCell *high = new_cell(heap, 48);
-    TestCell *low = new_cell(heap, 48);
-    CHECK(high == old[674] && low == old[22]);
-    u32 low_id = low->id;
-    mark_live(high);
-    heap->gc_stats = true;
+    TestCell *survivor = new_cell(heap, 48);
+    TestCell *dead = new_cell(heap, 48);
+    CHECK((survivor == old[674] && dead == old[22]) ||
+        (survivor == old[22] && dead == old[674]));
+    u32 survivor_id = survivor->id;
+    u32 dead_id = dead->id;
+    mark_live(survivor);
     mal_heap_sweep_minor(heap, finalize_cell);
-    CHECK(heap->minor_cells_inspected == 2);
     CHECK(heap->live_bytes == 674 * mal_heap_allocation_charge(48));
-    CHECK(g_finalized[high->id] == 0 && g_finalized[low_id] == 1);
+    CHECK(g_finalized[survivor_id] == 0 && g_finalized[dead_id] == 1);
 
     mal_heap_sweep_minor(heap, finalize_cell);
-    CHECK(heap->minor_cells_inspected == 2);
     CHECK(heap->live_bytes == 674 * mal_heap_allocation_charge(48));
     TestCell *again = new_cell(heap, 48);
-    CHECK(again == low);
+    CHECK(again == dead);
+    u32 again_id = again->id;
     mark_live(again);
     mal_heap_sweep_minor(heap, finalize_cell);
-    CHECK(heap->minor_cells_inspected == 3);
     CHECK(heap->live_bytes == 675 * mal_heap_allocation_charge(48));
-    CHECK(live_cell(high, 676) && live_cell(again, 678));
+    CHECK(live_cell(survivor, survivor_id) && live_cell(again, again_id));
     return true;
 }
 
@@ -620,7 +616,7 @@ int main(void) {
         incremental_major_charges_raw_block_traversal,
         minor_sweep_scans_one_old_block_for_three_new_cells,
         minor_sweep_scans_three_old_blocks_for_three_new_cells,
-        minor_bitmap_reuses_high_words_without_recounting_old_cells,
+        reused_young_cells_preserve_survivors_across_minors,
         incremental_major_resets_sweep_epochs_on_wrap,
         large_cells_follow_major_and_minor_lifetime,
         finalizer_raw_storage_reuses_partial_slots_and_blocks,
