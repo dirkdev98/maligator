@@ -375,6 +375,33 @@ static bool incremental_major_accounts_new_large_cells(MalHeap *heap) {
     return true;
 }
 
+static bool oversized_large_allocations_leave_heap_usable(MalHeap *heap) {
+    TestCell *first = new_cell(heap, 10000);
+    void *raw = mal_heap_alloc_raw(heap, 12000);
+    usize allocated = heap->bytes_allocated;
+    MalGcLarge *cells = heap->large;
+    MalGcLarge *raw_cells = heap->raw_large;
+    MalGcLarge *young = heap->young_large;
+    CHECK(mal_heap_try_alloc(heap, SIZE_MAX, MAL_HEAP_BIGINT) == nullptr);
+    CHECK(mal_heap_try_alloc_raw(heap, SIZE_MAX) == nullptr);
+    CHECK(heap->bytes_allocated == allocated && heap->large == cells &&
+        heap->raw_large == raw_cells && heap->young_large == young);
+
+    TestCell *second = new_cell(heap, 10000);
+    void *second_raw = mal_heap_alloc_raw(heap, 12000);
+    memset(second_raw, 0x6b, 12000);
+    gc_free_raw(heap, second_raw);
+    gc_free_raw(heap, raw);
+    mal_heap_begin_major(heap);
+    mark_live(first);
+    mal_heap_sweep(heap, finalize_cell);
+    CHECK(live_cell(first, 1) && g_finalized[2] == 1);
+    mal_heap_begin_major(heap);
+    mal_heap_sweep(heap, finalize_cell);
+    CHECK(heap->live_bytes == 0 && g_finalized[1] == 1 && g_finalized[2] == 1);
+    return true;
+}
+
 static bool run_check(bool (*check)(MalHeap *)) {
     MalHeap heap;
     mal_heap_init(&heap, 0);
@@ -400,6 +427,7 @@ int main(void) {
         large_cells_follow_major_and_minor_lifetime,
         finalizer_raw_storage_reuses_partial_slots_and_blocks,
         incremental_major_accounts_new_large_cells,
+        oversized_large_allocations_leave_heap_usable,
     };
     usize passed = 0;
     for (usize i = 0; i < countof(checks); i++) {

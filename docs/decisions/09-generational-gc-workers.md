@@ -59,6 +59,8 @@ and stops before VM teardown. Before the host loop or fiber scheduler waits or
 exits with no runnable work, the mutator completes any active cycle and checks
 the task queues again. The Wasm reactor completes any active cycle before init
 or a call returns to its embedder. Wasm never starts a native pool.
+If an optional native worker cannot start, the VM retains any workers already
+started and reduces its effective capacity; a zero-worker VM traces inline.
 
 Root-source registrations remain process-wide across sequential VMs. Registration
 deduplicates identical callbacks, rejects capacity exhaustion, and callbacks

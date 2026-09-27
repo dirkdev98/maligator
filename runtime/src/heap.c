@@ -363,7 +363,9 @@ static inline void mal_gc_count_black(u8 kind, usize size) {
 }
 
 static void *mal_gc_alloc_large(MalHeap *heap, usize size, u8 kind) {
-    MalGcLarge *rec = malloc(mal_gc_large_data_offset() + size);
+    usize offset = mal_gc_large_data_offset();
+    if (size > SIZE_MAX - offset) return nullptr;
+    MalGcLarge *rec = malloc(offset + size);
     if (rec == nullptr) {
         return nullptr;
     }
@@ -389,7 +391,7 @@ static void *mal_gc_alloc_large(MalHeap *heap, usize size, u8 kind) {
     heap->bytes_allocated += size;
     mal_gc_count_black(kind, size);
     mal_heap_maybe_trigger_gc(heap);
-    return (u8 *) rec + mal_gc_large_data_offset();
+    return (u8 *) rec + offset;
 }
 
 static void *mal_gc_alloc(MalHeap *heap, usize size, u8 kind) {

@@ -1,5 +1,6 @@
 #include "./gc.h"
 
+#include <errno.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -137,6 +138,7 @@ typedef enum MalGcPhase {
 #if !defined(__wasi__)
 #define MAL_GC_WORKER_COUNT 2
 usize (*mal_gc_test_worker_limit_hook)(void) = nullptr;
+bool (*mal_gc_test_worker_start_failure_hook)(usize index) = nullptr;
 
 static usize mal_gc_native_worker_limit(void) {
     if (mal_gc_test_worker_limit_hook != nullptr) {
@@ -398,32 +400,45 @@ static void mal_gc_grey_push(MalHeapHeader *cell) {
 
 static void mal_gc_register_weak_map(MalMapObject *map) {
     if (g_gc->weak_maps_count == g_gc->weak_maps_capacity) {
-        g_gc->weak_maps_capacity = g_gc->weak_maps_capacity == 0 ? 64 : g_gc->weak_maps_capacity * 2;
-        g_gc->weak_maps = realloc(g_gc->weak_maps, g_gc->weak_maps_capacity * sizeof(MalMapObject *));
+        usize capacity = g_gc->weak_maps_capacity == 0 ? 64 : g_gc->weak_maps_capacity * 2;
+        MalMapObject **maps = realloc(g_gc->weak_maps, capacity * sizeof(MalMapObject *));
+        if (maps == nullptr) abort();
+        g_gc->weak_maps = maps;
+        g_gc->weak_maps_capacity = capacity;
     }
     g_gc->weak_maps[g_gc->weak_maps_count++] = map;
 }
 
 static void mal_gc_register_weak_ref(MalWeakRefObject *ref) {
     if (g_gc->weak_refs_count == g_gc->weak_refs_capacity) {
-        g_gc->weak_refs_capacity = g_gc->weak_refs_capacity == 0 ? 64 : g_gc->weak_refs_capacity * 2;
-        g_gc->weak_refs = realloc(g_gc->weak_refs, g_gc->weak_refs_capacity * sizeof(MalWeakRefObject *));
+        usize capacity = g_gc->weak_refs_capacity == 0 ? 64 : g_gc->weak_refs_capacity * 2;
+        MalWeakRefObject **refs = realloc(g_gc->weak_refs, capacity * sizeof(MalWeakRefObject *));
+        if (refs == nullptr) abort();
+        g_gc->weak_refs = refs;
+        g_gc->weak_refs_capacity = capacity;
     }
     g_gc->weak_refs[g_gc->weak_refs_count++] = ref;
 }
 
 static void mal_gc_register_fin_reg(MalFinalizationRegistryObject *reg) {
     if (g_gc->fin_regs_count == g_gc->fin_regs_capacity) {
-        g_gc->fin_regs_capacity = g_gc->fin_regs_capacity == 0 ? 32 : g_gc->fin_regs_capacity * 2;
-        g_gc->fin_regs = realloc(g_gc->fin_regs, g_gc->fin_regs_capacity * sizeof(MalFinalizationRegistryObject *));
+        usize capacity = g_gc->fin_regs_capacity == 0 ? 32 : g_gc->fin_regs_capacity * 2;
+        MalFinalizationRegistryObject **regs = realloc(g_gc->fin_regs,
+            capacity * sizeof(MalFinalizationRegistryObject *));
+        if (regs == nullptr) abort();
+        g_gc->fin_regs = regs;
+        g_gc->fin_regs_capacity = capacity;
     }
     g_gc->fin_regs[g_gc->fin_regs_count++] = reg;
 }
 
 static void mal_gc_dead_key_push(MalKey key) {
     if (g_gc->dead_keys_count == g_gc->dead_keys_capacity) {
-        g_gc->dead_keys_capacity = g_gc->dead_keys_capacity == 0 ? 64 : g_gc->dead_keys_capacity * 2;
-        g_gc->dead_keys = realloc(g_gc->dead_keys, g_gc->dead_keys_capacity * sizeof(MalKey));
+        usize capacity = g_gc->dead_keys_capacity == 0 ? 64 : g_gc->dead_keys_capacity * 2;
+        MalKey *keys = realloc(g_gc->dead_keys, capacity * sizeof(MalKey));
+        if (keys == nullptr) abort();
+        g_gc->dead_keys = keys;
+        g_gc->dead_keys_capacity = capacity;
     }
     g_gc->dead_keys[g_gc->dead_keys_count++] = key;
 }
@@ -610,6 +625,7 @@ void mal_gc_init(MalVm *vm) {
         abort();
     }
     MalGcState *g = calloc(1, sizeof(MalGcState));
+    if (g == nullptr) abort();
     vm->gc = g;
     g->vm = vm;
 #if !defined(__wasi__)
@@ -1831,8 +1847,8 @@ static void *mal_gc_worker_main(void *argument) {
     return nullptr;
 }
 
-static void mal_gc_workers_start(MalGcState *g) {
-    if (g->worker_sync_initialized) return;
+static bool mal_gc_workers_start(MalGcState *g) {
+    if (g->worker_sync_initialized) return g->workers_created > 0;
     if (g->worker_limit == 0) abort();
     if (pthread_mutex_init(&g->worker_mutex, nullptr) != 0 ||
         pthread_cond_init(&g->worker_ready, nullptr) != 0 ||
@@ -1857,18 +1873,14 @@ static void mal_gc_workers_start(MalGcState *g) {
         MalGcWorker *worker = &g->workers[i];
         worker->gc = g;
         worker->index = i;
-        int result = pthread_create(&worker->thread, nullptr, mal_gc_worker_main, worker);
+        int result = mal_gc_test_worker_start_failure_hook != nullptr &&
+            mal_gc_test_worker_start_failure_hook(i)
+            ? EAGAIN : pthread_create(&worker->thread, nullptr, mal_gc_worker_main, worker);
         if (result != 0) {
-            pthread_mutex_lock(&g->worker_mutex);
-            g->worker_stop = true;
-            pthread_cond_broadcast(&g->worker_ready);
-            pthread_mutex_unlock(&g->worker_mutex);
-            for (usize joined = 0; joined < g->workers_created; ++joined) {
-                pthread_join(g->workers[joined].thread, nullptr);
-            }
-            pthread_sigmask(SIG_SETMASK, &previous_mask, nullptr);
-            fprintf(stderr, "[gc] failed to start native worker (%d)\n", result);
-            abort();
+            fprintf(stderr, "[gc] native worker start failed (%d); using %zu workers\n",
+                result, g->workers_created);
+            g->worker_limit = g->workers_created;
+            break;
         }
         g->workers_created++;
     }
@@ -1877,7 +1889,8 @@ static void mal_gc_workers_start(MalGcState *g) {
         fprintf(stderr, "[gc] failed to restore mutator signal mask (%d)\n", mask_result);
         abort();
     }
-    mal_profile_mark_worker_cpu_possible();
+    if (g->workers_created > 0) mal_profile_mark_worker_cpu_possible();
+    return g->workers_created > 0;
 }
 
 static void mal_gc_workers_stop(MalGcState *g) {
@@ -1959,9 +1972,11 @@ static bool mal_gc_workers_collect_batch(MalGcState *g, bool wait) {
     return true;
 }
 
-static void mal_gc_workers_trace_batch(MalGcState *g, usize count) {
+static bool mal_gc_workers_trace_batch(MalGcState *g, usize count) {
+    if (!mal_gc_workers_start(g)) return false;
     mal_gc_workers_start_batch(g, count, false);
     mal_gc_workers_collect_batch(g, true);
+    return true;
 }
 #endif
 
@@ -1980,8 +1995,7 @@ static void mal_gc_trace_parked_batch(usize count) {
     }
 #if !defined(__wasi__)
     if (g_gc->worker_limit > 0 && safe_count >= MAL_GC_PARALLEL_BATCH_MIN) {
-        mal_gc_workers_trace_batch(g_gc, safe_count);
-        return;
+        if (mal_gc_workers_trace_batch(g_gc, safe_count)) return;
     }
 #endif
     for (usize i = 0; i < safe_count; ++i) mal_gc_trace_cell(g_gc->batch[i]);
@@ -2027,6 +2041,11 @@ static bool mal_gc_trace_concurrent_batch(usize limit, usize *worked) {
     if (direct_count + snapshot_edges < MAL_GC_PARALLEL_BATCH_MIN) {
         g_gc->batch_edges_count = 0;
         mal_gc_trace_parked_batch(count);
+        *worked = count;
+        return false;
+    }
+    if (!mal_gc_workers_start(g_gc)) {
+        for (usize i = 0; i < count; ++i) mal_gc_trace_cell(g_gc->batch[i]);
         *worked = count;
         return false;
     }
@@ -2207,11 +2226,15 @@ static void mal_gc_weak_pass(void) {
 // saves over a full mark. The set is rebuilt every collection.
 
 void mal_gc_remember(MalHeapHeader *owner) {
-    owner->dirty = 1;
     if (g_gc->remembered_count == g_gc->remembered_capacity) {
-        g_gc->remembered_capacity = g_gc->remembered_capacity == 0 ? 256 : g_gc->remembered_capacity * 2;
-        g_gc->remembered = realloc(g_gc->remembered, g_gc->remembered_capacity * sizeof(MalHeapHeader *));
+        usize capacity = g_gc->remembered_capacity == 0 ? 256 : g_gc->remembered_capacity * 2;
+        MalHeapHeader **remembered = realloc(g_gc->remembered,
+            capacity * sizeof(MalHeapHeader *));
+        if (remembered == nullptr) abort();
+        g_gc->remembered = remembered;
+        g_gc->remembered_capacity = capacity;
     }
+    owner->dirty = 1;
     g_gc->remembered[g_gc->remembered_count++] = owner;
 }
 

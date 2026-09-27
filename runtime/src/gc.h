@@ -14,6 +14,8 @@ extern void (*mal_gc_test_trace_snapshot_hook)(MalHeapHeader *cell);
 extern void (*mal_gc_test_before_worker_join_hook)(void);
 /* Tests can select a scheduler capacity before VM initialization. */
 extern usize (*mal_gc_test_worker_limit_hook)(void);
+/* Tests can make a worker start fail before the first batch is published. */
+extern bool (*mal_gc_test_worker_start_failure_hook)(usize index);
 #endif
 
 typedef struct MalGcState MalGcState;
