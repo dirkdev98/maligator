@@ -13,7 +13,7 @@ extern const MalRuntimeImage mal_runtime_image;
 
 static pthread_mutex_t gate_mutex = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t gate_cond = PTHREAD_COND_INITIALIZER;
-static bool worker_entered;
+static _Atomic bool worker_entered;
 static bool release_worker;
 static MalObject *paused_owner;
 static MalObject *overwritten_target;
