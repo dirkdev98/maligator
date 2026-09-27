@@ -348,7 +348,9 @@ static MalValue mal_host_clear_timeout_native(
  * Registered with the engine so the collector roots them without knowing the type. */
 static void mal_host_timers_scan_roots(MalVm *vm, void *data) {
     (void) data;
-    for (MalHostTimer *t = mal_host(vm)->timers; t != nullptr; t = t->next) {
+    MalHost *host = mal_host(vm);
+    if (host == nullptr) return;
+    for (MalHostTimer *t = host->timers; t != nullptr; t = t->next) {
         mal_gc_mark_value(t->callback);
         mal_gc_mark_values(t->args, t->arg_count);
 #if MAL_NODE

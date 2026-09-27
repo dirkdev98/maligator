@@ -87,9 +87,9 @@ void (*mal_gc_preempt_hook)(MalVm *vm) = nullptr;
 /* External root sources: how the host/runtime layers contribute GC roots to the
  * engine without the engine knowing their types (e.g. pending setTimeout
  * callbacks). Each is invoked during root scanning and calls mal_gc_mark_value on
- * its live values. Process-global (host installs them once, shared across the
- * process); NOT part of the per-isolate MalGcState. SMP requires a per-isolate registry
- * once SMP runs multiple isolates. */
+ * its live values. Process-global registrations persist across sequential VMs, so
+ * each callback must tolerate an isolate without its host subsystem. SMP requires
+ * a per-isolate registry once multiple isolates run at the same time. */
 #define MAL_GC_MAX_ROOT_SOURCES 8
 static struct {
     MalGcRootSourceFn fn;
@@ -98,11 +98,16 @@ static struct {
 static i32 g_root_source_count = 0;
 
 void mal_gc_register_root_source(MalGcRootSourceFn fn, void *data) {
-    if (g_root_source_count < MAL_GC_MAX_ROOT_SOURCES) {
-        g_root_sources[g_root_source_count].fn = fn;
-        g_root_sources[g_root_source_count].data = data;
-        g_root_source_count++;
+    for (i32 i = 0; i < g_root_source_count; ++i) {
+        if (g_root_sources[i].fn == fn && g_root_sources[i].data == data) return;
     }
+    if (g_root_source_count == MAL_GC_MAX_ROOT_SOURCES) {
+        fprintf(stderr, "[gc] root source capacity exceeded\n");
+        abort();
+    }
+    g_root_sources[g_root_source_count].fn = fn;
+    g_root_sources[g_root_source_count].data = data;
+    g_root_source_count++;
 }
 
 /* Per-type finalizers/tracers registered by the host/runtime for types they own.
@@ -340,6 +345,7 @@ static _Thread_local MalGcState *g_gc = nullptr;
 static MalGcState g_gc_stats_snapshot;
 static MalGcState *g_gc_stats_state = nullptr;
 static volatile sig_atomic_t g_gc_stats_snapshot_requested = 0;
+static bool g_gc_stats_atexit_registered = false;
 #if !defined(__wasi__)
 static bool g_gc_stats_signal_installed = false;
 static struct sigaction g_gc_stats_previous_signal_action;
@@ -623,7 +629,10 @@ void mal_gc_init(MalVm *vm) {
 
     if (getenv("MAL_GC_STATS") != nullptr) {
         g->stats_enabled = true;
-        atexit(mal_gc_print_stats_at_exit);
+        if (!g_gc_stats_atexit_registered) {
+            if (atexit(mal_gc_print_stats_at_exit) != 0) abort();
+            g_gc_stats_atexit_registered = true;
+        }
 #if !defined(__wasi__)
         if (getenv("MAL_GC_CONTROL") != nullptr) {
             struct sigaction action = {0};

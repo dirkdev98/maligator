@@ -57,6 +57,11 @@ and stops before VM teardown. Before the host loop or fiber scheduler waits or
 exits with no runnable work, the mutator completes any active cycle and checks
 the task queues again. Wasm never starts a native pool.
 
+Root-source registrations remain process-wide across sequential VMs. Registration
+deduplicates identical callbacks, rejects capacity exhaustion, and callbacks
+tolerate a VM without the subsystem that originally installed them. The GC stats
+exit handler is registered once per process.
+
 ## Validation boundary
 
 Native overlap fixtures pause a worker after publication but before it reads an
