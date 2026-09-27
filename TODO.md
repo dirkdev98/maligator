@@ -769,10 +769,10 @@ remains a Maligator extension and does not count as global fetch conformance.
       and recheck combined CPU before retaining bounded private draining.
 - [ ] Barriers: decide dense-fill and scalar captured-store card specialization
       after representative HTTP and compiler comparisons; app-batch screens were
-      mixed. Dense reverse and intra-array moves remove redundant range scans
-      under whole-array tracing and whole-owner remembering; check application
-      exposure before retaining them. Keep SATB deletion protection independent
-      of generational facts.
+      mixed. Dense reverse removes redundant scans under whole-array tracing and
+      had a neutral application cut. Dense shift/copy card narrowing was rolled
+      back after a repeated application slowdown; its semantic fixture remains.
+      Keep SATB deletion protection independent of generational facts.
 - [ ] Pacing: measure young survival, promotion debt, major reclamation yield,
       current RAW/reusable/chunk capacity, external pressure, and assist/backstop
       cost before replacing the eighth-collection cadence. Validate nested cgroup
