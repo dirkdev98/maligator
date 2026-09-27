@@ -46,13 +46,12 @@ static inline void mal_perf_string_allocation(usize length) {
 }
 #endif
 
-static void mal_string_init_inline(
+static void mal_string_init_inline_payload(
     MalString *string,
     const c16 *code_units,
     usize length
 ) {
     if (length > MAL_STRING_INLINE_CODE_UNITS) abort();
-    mal_heap_header_init(&string->header, MAL_HEAP_STRING);
     string->storage = MAL_STRING_STORAGE_INLINE;
     string->hash_valid = false;
     string->array_index_impossible = false;
@@ -153,7 +152,7 @@ static MalTinyStringCacheResult mal_string_tiny_cache_get_or_create(
         MAL_PERF_COUNT(string_tiny_cache_replacements);
     }
     MalString *string = mal_heap_alloc(heap, sizeof(MalString), MAL_HEAP_STRING);
-    mal_string_init_inline(string, code_units, length);
+    mal_string_init_inline_payload(string, code_units, length);
     string->hash = hash;
     string->hash_valid = true;
     mal_string_tiny_cache_store(heap, index, string);
@@ -180,37 +179,53 @@ void mal_string_tiny_cache_promote(MalHeap *heap, MalString *atom) {
     MAL_PERF_COUNT(string_tiny_cache_promotions);
 }
 
-void mal_string_init_copy(MalHeap *heap, MalString *string, const c16 *code_units, usize length) {
-    mal_string_require_valid_length(length);
-    if (length <= MAL_STRING_INLINE_CODE_UNITS) {
-        mal_string_init_inline(string, code_units, length);
-        return;
-    }
+static c16 *mal_string_copy_code_units(
+    MalHeap *heap, const c16 *code_units, usize length
+) {
     c16 *owned_code_units = mal_heap_alloc_raw_profiled(
         heap, sizeof(c16) * length, MAL_PROFILE_ALLOCATION_FAMILY_STRING);
-
     if (length > 0) {
         memcpy(owned_code_units, code_units, sizeof(c16) * length);
     }
+    return owned_code_units;
+}
 
-    mal_heap_header_init(&string->header, MAL_HEAP_STRING);
+static void mal_string_init_owned_payload(MalString *string, const c16 *code_units, usize length) {
     string->storage = MAL_STRING_STORAGE_OWNED;
     string->hash_valid = false;
     string->array_index_impossible = false;
     string->property_atom = false;
     string->length = length;
-    string->code_units = owned_code_units;
+    string->code_units = code_units;
 }
 
-void mal_string_init_external(MalString *string, const c16 *code_units, usize length) {
+void mal_string_init_copy(MalHeap *heap, MalString *string, const c16 *code_units, usize length) {
     mal_string_require_valid_length(length);
+    if (length <= MAL_STRING_INLINE_CODE_UNITS) {
+        mal_heap_header_init(&string->header, MAL_HEAP_STRING);
+        mal_string_init_inline_payload(string, code_units, length);
+        return;
+    }
+    c16 *owned_code_units = mal_string_copy_code_units(heap, code_units, length);
     mal_heap_header_init(&string->header, MAL_HEAP_STRING);
+    mal_string_init_owned_payload(string, owned_code_units, length);
+}
+
+static void mal_string_init_external_payload(
+    MalString *string, const c16 *code_units, usize length
+) {
     string->storage = MAL_STRING_STORAGE_EXTERNAL;
     string->hash_valid = false;
     string->array_index_impossible = false;
     string->property_atom = false;
     string->length = length;
     string->code_units = code_units;
+}
+
+void mal_string_init_external(MalString *string, const c16 *code_units, usize length) {
+    mal_string_require_valid_length(length);
+    mal_heap_header_init(&string->header, MAL_HEAP_STRING);
+    mal_string_init_external_payload(string, code_units, length);
 }
 
 MalString *mal_string_new_copy(MalHeap *heap, const c16 *code_units, usize length) {
@@ -229,7 +244,8 @@ MalString *mal_string_new_copy(MalHeap *heap, const c16 *code_units, usize lengt
     MAL_PERF_COUNT(string_copy_allocations);
     MAL_PERF_ADD(string_copy_code_units, length);
     MalString *string = mal_heap_alloc(heap, sizeof(MalString), MAL_HEAP_STRING);
-    mal_string_init_copy(heap, string, code_units, length);
+    c16 *owned_code_units = mal_string_copy_code_units(heap, code_units, length);
+    mal_string_init_owned_payload(string, owned_code_units, length);
 
     return string;
 }
@@ -240,7 +256,7 @@ MalString *mal_string_new_external(MalHeap *heap, const c16 *code_units, usize l
     MAL_PERF_COUNT(string_external_allocations);
     MAL_PERF_ADD(string_external_code_units, length);
     MalString *string = mal_heap_alloc(heap, sizeof(MalString), MAL_HEAP_STRING);
-    mal_string_init_external(string, code_units, length);
+    mal_string_init_external_payload(string, code_units, length);
 
     return string;
 }
@@ -558,13 +574,7 @@ MalString *mal_string_new_owned(MalHeap *heap, const c16 *code_units, usize leng
     MAL_PERF_COUNT(string_owned_allocations);
     MAL_PERF_ADD(string_owned_code_units, length);
     MalString *string = mal_heap_alloc(heap, sizeof(MalString), MAL_HEAP_STRING);
-    mal_heap_header_init(&string->header, MAL_HEAP_STRING);
-    string->storage = MAL_STRING_STORAGE_OWNED;
-    string->hash_valid = false;
-    string->array_index_impossible = false;
-    string->property_atom = false;
-    string->length = length;
-    string->code_units = code_units;
+    mal_string_init_owned_payload(string, code_units, length);
 
     return string;
 }
@@ -596,13 +606,7 @@ MalString *mal_string_new_ascii(MalHeap *heap, const byte *bytes, usize length) 
     }
 
     MalString *string = mal_heap_alloc(heap, sizeof(MalString), MAL_HEAP_STRING);
-    mal_heap_header_init(&string->header, MAL_HEAP_STRING);
-    string->storage = MAL_STRING_STORAGE_OWNED;
-    string->hash_valid = false;
-    string->array_index_impossible = false;
-    string->property_atom = false;
-    string->length = length;
-    string->code_units = code_units;
+    mal_string_init_owned_payload(string, code_units, length);
 
     return string;
 }
