@@ -127,7 +127,8 @@ export function compileEntrypoint(input) {
 		JSON.parse(readFileSync(path.join(output, "report.json"), "utf8")) as {
 			status: string;
 			complete: boolean;
-			samples: Array<{ label: string; peakRssBytes: number }>;
+			samples: Array<{ label: string; cpuMs: number; peakRssBytes: number }>;
+			summary?: { pairs: number; baselineMedianCpuMs: number };
 			pairs: Array<unknown>;
 			error?: string;
 		};
@@ -204,6 +205,7 @@ it("compares both compiler revisions on frozen baseline input, preserving altern
 		status: "complete",
 		summary: { pairs: 2 },
 	});
+	expect(report.summary?.baselineMedianCpuMs).toBeGreaterThan(0);
 	expect(report.samples.map((sample) => sample.label)).toEqual([
 		"warm-baseline",
 		"warm-candidate",
@@ -212,7 +214,10 @@ it("compares both compiler revisions on frozen baseline input, preserving altern
 		"pair-1-candidate",
 		"pair-1-baseline",
 	]);
-	for (const sample of report.samples) expect(sample.peakRssBytes).toBeGreaterThan(0);
+	for (const sample of report.samples) {
+		expect(sample.cpuMs).toBeGreaterThan(0);
+		expect(sample.peakRssBytes).toBeGreaterThan(0);
+	}
 	expect(
 		readFileSync(
 			path.join(test.output, "pair-1-candidate/output/unit-runtime-image.c"),

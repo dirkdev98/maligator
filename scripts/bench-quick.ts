@@ -41,6 +41,7 @@ interface Sample {
 	label: string;
 	revision: Revision;
 	wallMs: number;
+	cpuMs: number;
 	peakRssBytes: number;
 	digest: string;
 }
@@ -293,6 +294,9 @@ async function run(value: Options): Promise<void> {
 		const reductions = pairs.map(
 			(pair) => 100 * (1 - pair.candidate.wallMs / pair.baseline.wallMs),
 		);
+		const cpuReductions = pairs.map(
+			(pair) => 100 * (1 - pair.candidate.cpuMs / pair.baseline.cpuMs),
+		);
 		save(path.join(value.output, "report.json"), {
 			schema: 1,
 			status,
@@ -329,6 +333,10 @@ async function run(value: Options): Promise<void> {
 							candidateMedianMs: median(pairs.map((pair) => pair.candidate.wallMs)),
 							medianReductionPercent: median(reductions),
 							pairReductionsPercent: reductions,
+							baselineMedianCpuMs: median(pairs.map((pair) => pair.baseline.cpuMs)),
+							candidateMedianCpuMs: median(pairs.map((pair) => pair.candidate.cpuMs)),
+							medianCpuReductionPercent: median(cpuReductions),
+							pairCpuReductionsPercent: cpuReductions,
 							rangePercent: [Math.min(...reductions), Math.max(...reductions)],
 							preliminary: pairs.length === 1,
 						},
@@ -421,9 +429,17 @@ async function run(value: Options): Promise<void> {
 			process.platform === "darwin"
 				? resource.match(/^\s*(\d+)\s+maximum resident set size\s*$/m)?.[1]
 				: resource.match(/Maximum resident set size \(kbytes\):\s*(\d+)/)?.[1];
+		const cpu =
+			process.platform === "darwin"
+				? resource.match(/([0-9.]+)\s+user\s+([0-9.]+)\s+sys/)
+				: resource.match(
+						/User time \(seconds\):\s*([0-9.]+)[\s\S]*?System time \(seconds\):\s*([0-9.]+)/,
+					);
 		if (timed && rss === undefined) throw new Error(`${label} omitted peak RSS`);
+		if (timed && cpu === null) throw new Error(`${label} omitted process CPU time`);
 		return {
 			wallMs,
+			cpuMs: cpu === null ? 0 : (Number(cpu[1]) + Number(cpu[2])) * 1000,
 			peakRssBytes: Number(rss ?? 0) * (process.platform === "linux" ? 1024 : 1),
 			stdout,
 			stderr,
@@ -576,6 +592,7 @@ async function run(value: Options): Promise<void> {
 				label,
 				revision,
 				wallMs: measured.wallMs,
+				cpuMs: measured.cpuMs,
 				peakRssBytes: measured.peakRssBytes,
 				digest:
 					value.workload === "app-batch"
@@ -699,6 +716,7 @@ async function run(value: Options): Promise<void> {
 							label,
 							revision,
 							wallMs: measured.wallMs,
+							cpuMs: measured.cpuMs,
 							peakRssBytes: measured.peakRssBytes,
 							digest: outputDigest,
 							gcStats,
