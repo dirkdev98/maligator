@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "ascii.h"
 #include "builtin_map.h"
 #include "gc.h"
 #include "heap_string.h"
@@ -33,10 +34,31 @@ static usize quiescent_strings(MalVm *vm) {
     return live_strings;
 }
 
+static bool stringify_query(MalVm *vm, MalValue target, MalValue list, MalValue stringify, MalValue query) {
+    CHECK(mal_array_object_store(mal_value_to_array_object(list), mal_key_index(0), query));
+    MalValue args[] = {target, list};
+    MalCompletion result = mal_vm_call_value(
+        vm, stringify, vm->intrinsics[MAL_INTRINSIC_JSON], args, countof(args));
+    CHECK(result.kind == MAL_COMPLETION_NORMAL);
+    CHECK(mal_value_is_string(result.value));
+    CHECK(mal_string_equals_ascii(mal_value_to_string(result.value), "{}"));
+    return true;
+}
+
 static bool missing_queries_release_storage(MalVm *vm) {
-    MalValue roots[] = {mal_value_from_object(mal_object_new(&vm->heap, nullptr)), MAL_VALUE_UNDEFINED};
+    MalValue roots[] = {
+        mal_value_from_object(mal_object_new(&vm->heap, nullptr)),
+        MAL_VALUE_UNDEFINED, MAL_VALUE_UNDEFINED, MAL_VALUE_UNDEFINED,
+    };
     MalRootSpan span;
     mal_gc_root(&span, roots, countof(roots));
+    roots[2] = mal_value_from_array_object(mal_array_object_new(
+        &vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ARRAY_PROTOTYPE])));
+    CHECK(mal_vm_get_property(vm, vm->intrinsics[MAL_INTRINSIC_JSON],
+        mal_intrinsic_string_key(vm, "stringify"), &roots[3]));
+    // Warm the fixed output's bounded tiny-string cache before measuring.
+    CHECK(stringify_query(vm, roots[0], roots[2], roots[3],
+        mal_value_from_string(mal_intrinsic_ascii(vm, "length"))));
     MalInlineCache ic = {0};
     usize strings_before = quiescent_strings(vm);
     usize atoms_before = mal_table_size(vm->atoms);
@@ -50,6 +72,7 @@ static bool missing_queries_release_storage(MalVm *vm) {
         CHECK(mal_vm_op_load_property_ic(vm, roots[0], roots[1], &ic) == MAL_VALUE_UNDEFINED);
         CHECK(mal_vm_binary_op(vm, MAL_BIN_IN, roots[1], roots[0]) == MAL_VALUE_FALSE);
         CHECK(mal_vm_op_delete_property(vm, roots[0], roots[1], false) == MAL_VALUE_TRUE);
+        CHECK(stringify_query(vm, roots[0], roots[2], roots[3], roots[1]));
         CHECK(!query->property_atom);
         // Computed destructuring prepares a key before the load and rest copy.
         roots[1] = mal_vm_op_to_property_key(
@@ -61,6 +84,7 @@ static bool missing_queries_release_storage(MalVm *vm) {
         CHECK(!mal_value_to_string(roots[1])->property_atom);
     }
     roots[1] = MAL_VALUE_UNDEFINED;
+    CHECK(mal_array_object_store(mal_value_to_array_object(roots[2]), mal_key_index(0), MAL_VALUE_UNDEFINED));
     usize strings_after_flat = quiescent_strings(vm);
     CHECK(mal_table_size(vm->atoms) == atoms_before);
     CHECK(strings_after_flat == strings_before);
