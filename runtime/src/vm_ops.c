@@ -5960,7 +5960,7 @@ MalValue mal_vm_op_to_property_key(MalVm *vm, MalValue object_value, MalValue ke
         return key_value;
     }
     MalKey key;
-    if (!mal_vm_to_property_key(vm, key_value, &key)) {
+    if (!mal_vm_to_property_query(vm, key_value, &key)) {
         return mal_value_new_undefined();
     }
     return key.value;
@@ -7101,7 +7101,7 @@ MalValue mal_vm_op_copy_data_properties(
     }
     mal_gc_root(&excluded_span, excluded_roots, excluded_count);
     for (i32 i = 0; i < excluded_count; i++) {
-        if (!mal_vm_value_to_property_key(vm, excluded_keys[i], &excluded[i])) {
+        if (!mal_vm_to_property_query(vm, excluded_keys[i], &excluded[i])) {
             mal_gc_unroot(&excluded_span);
             return mal_value_new_undefined();
         }

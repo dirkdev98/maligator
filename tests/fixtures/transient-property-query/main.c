@@ -51,6 +51,14 @@ static bool missing_queries_release_storage(MalVm *vm) {
         CHECK(mal_vm_binary_op(vm, MAL_BIN_IN, roots[1], roots[0]) == MAL_VALUE_FALSE);
         CHECK(mal_vm_op_delete_property(vm, roots[0], roots[1], false) == MAL_VALUE_TRUE);
         CHECK(!query->property_atom);
+        // Computed destructuring prepares a key before the load and rest copy.
+        roots[1] = mal_vm_op_to_property_key(
+            vm, roots[0], mal_value_from_i32(-1000000000 - (i32) i));
+        CHECK(mal_value_is_string(roots[1]));
+        CHECK(!mal_value_to_string(roots[1])->property_atom);
+        CHECK(mal_vm_op_load_property(vm, roots[0], roots[1]) == MAL_VALUE_UNDEFINED);
+        CHECK(mal_value_is_object(mal_vm_op_copy_data_properties(vm, roots[0], &roots[1], 1)));
+        CHECK(!mal_value_to_string(roots[1])->property_atom);
     }
     roots[1] = MAL_VALUE_UNDEFINED;
     usize strings_after_flat = quiescent_strings(vm);

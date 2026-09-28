@@ -143,4 +143,19 @@ const child = {
 };
 check(child.read(key("value", trace)) === 5);
 check(child.read(key("another-long-transient-missing-name", trace)) === undefined);
+const empty = Object.create(null);
+for (let i = 0; i < 16; i++) {
+	const converted = [];
+	const {
+		[key("missing-computed-destructuring-name-" + i, converted)]: missing,
+		...rest
+	} = empty;
+	check(missing === undefined && Object.keys(rest).length === 0);
+	check(converted.length === 1 && converted[0] === "string");
+}
+const updates = {};
+const updateTrace = [];
+updates[key("prepared-update-key", updateTrace)] = 1;
+updates[key("prepared-update-key", updateTrace)] += 2;
+check(updates["prepared-update-key"] === 3 && updateTrace.length === 2);
 console.log("transient-property-query PASS " + checks);
