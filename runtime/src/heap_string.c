@@ -125,10 +125,17 @@ static bool mal_string_tiny_cache_matches(
         || cached->storage == MAL_STRING_STORAGE_CONS) {
         return false;
     }
-    for (usize i = 0; i < length; i++) {
-        if (mal_string_code_unit_at((MalString *) cached, i) != code_units[i]) return false;
+    if (cached->latin1) {
+        const u8 *units = cached->storage == MAL_STRING_STORAGE_INLINE
+            ? cached->inline_latin1_units : cached->latin1_units;
+        for (usize i = 0; i < length; i++) {
+            if (units[i] != code_units[i]) return false;
+        }
+        return true;
     }
-    return true;
+    const c16 *units = cached->storage == MAL_STRING_STORAGE_INLINE
+        ? cached->inline_code_units : cached->code_units;
+    return length == 0 || memcmp(units, code_units, length * sizeof(c16)) == 0;
 }
 
 static MalTinyStringCacheResult mal_string_tiny_cache_get_or_create(
@@ -245,6 +252,53 @@ MalString *mal_string_new_external(MalHeap *heap, const c16 *code_units, usize l
 #define MAL_STRING_SLICE_SMALL_PARENT_CODE_UNITS ((usize) 4096)
 #define MAL_STRING_SLICE_MAX_RETAINED_RATIO ((usize) 8)
 
+static MalStringSegment mal_string_leaf_segment(
+    const MalString *string, usize offset, usize length
+) {
+    MalStringSegment segment = {.latin1 = string->latin1, .length = length};
+    if (string->latin1) {
+        segment.latin1_units = (string->storage == MAL_STRING_STORAGE_INLINE
+            ? string->inline_latin1_units : string->latin1_units) + offset;
+    } else {
+        segment.utf16_units = (string->storage == MAL_STRING_STORAGE_INLINE
+            ? string->inline_code_units : string->code_units) + offset;
+    }
+    return segment;
+}
+
+bool mal_string_try_get_segment(
+    const MalString *string, usize offset, usize length, MalStringSegment *segment
+) {
+    usize end;
+    if (string == nullptr || segment == nullptr ||
+        !mal_checked_size_add(offset, length, string->length, &end)) abort();
+    if (length == 0) {
+        *segment = (MalStringSegment) {
+            .latin1 = true, .length = 0, .latin1_units = string->inline_latin1_units,
+        };
+        return true;
+    }
+    for (;;) {
+        if (string->storage == MAL_STRING_STORAGE_DEPENDENT) {
+            offset += string->slice_offset;
+            string = string->parent;
+        } else if (string->storage == MAL_STRING_STORAGE_CONS) {
+            usize left_length = string->left->length;
+            if (offset >= left_length) {
+                offset -= left_length;
+                string = string->right;
+            } else if (length <= left_length - offset) {
+                string = string->left;
+            } else {
+                return false;
+            }
+        } else {
+            *segment = mal_string_leaf_segment(string, offset, length);
+            return true;
+        }
+    }
+}
+
 static void mal_string_iterator_push(MalStringIterator *iterator, MalStringIteratorPart part) {
     if (part.length == 0) return;
     if (iterator->count == iterator->capacity) {
@@ -305,15 +359,7 @@ bool mal_string_iterator_next(MalStringIterator *iterator, MalStringSegment *seg
             part.string = string->left;
             continue;
         }
-        segment->latin1 = string->latin1;
-        segment->length = part.length;
-        if (string->latin1) {
-            segment->latin1_units = (string->storage == MAL_STRING_STORAGE_INLINE
-                ? string->inline_latin1_units : string->latin1_units) + part.offset;
-        } else {
-            segment->utf16_units = (string->storage == MAL_STRING_STORAGE_INLINE
-                ? string->inline_code_units : string->code_units) + part.offset;
-        }
+        *segment = mal_string_leaf_segment(string, part.offset, part.length);
         return true;
     }
 }
@@ -325,17 +371,26 @@ void mal_string_iterator_dispose(MalStringIterator *iterator) {
     iterator->capacity = sizeof(iterator->inline_stack) / sizeof(iterator->inline_stack[0]);
 }
 
+static void mal_string_copy_segment_to(const MalStringSegment *segment, c16 *destination) {
+    if (segment->length == 0) return;
+    if (segment->latin1) {
+        for (usize i = 0; i < segment->length; i++) destination[i] = segment->latin1_units[i];
+    } else {
+        memcpy(destination, segment->utf16_units, segment->length * sizeof(c16));
+    }
+}
+
 void mal_string_copy_range_to(MalString *string, usize offset, usize length, c16 *destination) {
     if (length != 0 && destination == nullptr) abort();
+    MalStringSegment segment;
+    if (mal_string_try_get_segment(string, offset, length, &segment)) {
+        mal_string_copy_segment_to(&segment, destination);
+        return;
+    }
     MalStringIterator iterator;
     mal_string_iterator_init(&iterator, string, offset, length);
-    MalStringSegment segment;
     while (mal_string_iterator_next(&iterator, &segment)) {
-        if (segment.latin1) {
-            for (usize i = 0; i < segment.length; i++) destination[i] = segment.latin1_units[i];
-        } else {
-            memcpy(destination, segment.utf16_units, segment.length * sizeof(c16));
-        }
+        mal_string_copy_segment_to(&segment, destination);
         destination += segment.length;
     }
     mal_string_iterator_dispose(&iterator);
@@ -343,9 +398,12 @@ void mal_string_copy_range_to(MalString *string, usize offset, usize length, c16
 
 static bool mal_string_range_is_latin1(MalString *string, usize offset, usize length) {
     if (string->latin1) return true;
+    MalStringSegment segment;
+    if (mal_string_try_get_segment(string, offset, length, &segment)) {
+        return segment.latin1 || mal_string_units_are_latin1(segment.utf16_units, segment.length);
+    }
     MalStringIterator iterator;
     mal_string_iterator_init(&iterator, string, offset, length);
-    MalStringSegment segment;
     bool latin1 = true;
     while (mal_string_iterator_next(&iterator, &segment)) {
         if (!segment.latin1 && !mal_string_units_are_latin1(segment.utf16_units, segment.length)) {
@@ -357,9 +415,25 @@ static bool mal_string_range_is_latin1(MalString *string, usize offset, usize le
     return latin1;
 }
 
+static MalString *mal_string_adopt_utf16(MalHeap *heap, const c16 *units, usize length) {
+    mal_perf_string_allocation(length);
+    MAL_PERF_COUNT(string_owned_allocations);
+    MAL_PERF_ADD(string_owned_code_units, length);
+    MalString *string = mal_heap_alloc(heap, sizeof(MalString), MAL_HEAP_STRING);
+    mal_string_init_flat(string, MAL_STRING_STORAGE_OWNED, false, length);
+    string->code_units = units;
+    return string;
+}
+
 static MalString *mal_string_copy_range(
     MalHeap *heap, MalString *parent, usize offset, usize length
 ) {
+    MalStringSegment segment;
+    if (mal_string_try_get_segment(parent, offset, length, &segment)) {
+        return segment.latin1
+            ? mal_string_new_latin1_copy(heap, segment.latin1_units, length)
+            : mal_string_new_copy(heap, segment.utf16_units, length);
+    }
     if (length <= MAL_STRING_INLINE_LATIN1_CODE_UNITS) {
         c16 units[MAL_STRING_INLINE_LATIN1_CODE_UNITS];
         mal_string_copy_range_to(parent, offset, length, units);
@@ -370,7 +444,6 @@ static MalString *mal_string_copy_range(
         u8 *destination = units;
         MalStringIterator iterator;
         mal_string_iterator_init(&iterator, parent, offset, length);
-        MalStringSegment segment;
         while (mal_string_iterator_next(&iterator, &segment)) {
             if (segment.latin1) {
                 memcpy(destination, segment.latin1_units, segment.length);
@@ -384,7 +457,7 @@ static MalString *mal_string_copy_range(
     }
     c16 *units = mal_heap_alloc_raw_profiled(heap, sizeof(c16) * length, MAL_PROFILE_ALLOCATION_FAMILY_STRING);
     mal_string_copy_range_to(parent, offset, length, units);
-    return mal_string_new_owned(heap, units, length);
+    return mal_string_adopt_utf16(heap, units, length);
 }
 
 static MalString *mal_string_new_dependent_resolved(
@@ -583,13 +656,7 @@ MalString *mal_string_new_owned(MalHeap *heap, const c16 *code_units, usize leng
         gc_free_raw(heap, (void *) code_units);
         return mal_string_new_latin1_owned(heap, compact, length);
     }
-    mal_perf_string_allocation(length);
-    MAL_PERF_COUNT(string_owned_allocations);
-    MAL_PERF_ADD(string_owned_code_units, length);
-    MalString *string = mal_heap_alloc(heap, sizeof(MalString), MAL_HEAP_STRING);
-    mal_string_init_flat(string, MAL_STRING_STORAGE_OWNED, false, length);
-    string->code_units = code_units;
-    return string;
+    return mal_string_adopt_utf16(heap, code_units, length);
 }
 
 MalString *mal_string_new_ascii(MalHeap *heap, const byte *bytes, usize length) {
@@ -753,11 +820,15 @@ u64 mal_string_hash_slow(const MalString *string) {
     MAL_PERF_COUNT(string_hash_computes);
     if (string->storage == MAL_STRING_STORAGE_DEPENDENT) MAL_PERF_COUNT(string_hash_dependent_computes);
     u64 hash = 0xcbf29ce484222325;
-    MalStringIterator iterator;
-    mal_string_iterator_init(&iterator, string, 0, string->length);
     MalStringSegment segment;
-    while (mal_string_iterator_next(&iterator, &segment)) hash = mal_string_hash_segment(hash, &segment);
-    mal_string_iterator_dispose(&iterator);
+    if (mal_string_try_get_segment(string, 0, string->length, &segment)) {
+        hash = mal_string_hash_segment(hash, &segment);
+    } else {
+        MalStringIterator iterator;
+        mal_string_iterator_init(&iterator, string, 0, string->length);
+        while (mal_string_iterator_next(&iterator, &segment)) hash = mal_string_hash_segment(hash, &segment);
+        mal_string_iterator_dispose(&iterator);
+    }
     MalString *mutable = (MalString *) string;
     if (string->storage == MAL_STRING_STORAGE_DEPENDENT) {
         mutable->dependent_hash = hash;
@@ -806,27 +877,19 @@ static i32 mal_string_compare_code_units(
     return 0;
 }
 
-static MalStringSegment mal_string_flat_segment(const MalString *string) {
-    MalStringSegment segment = {.latin1 = string->latin1, .length = string->length};
-    if (string->latin1) {
-        segment.latin1_units = string->storage == MAL_STRING_STORAGE_INLINE
-            ? string->inline_latin1_units : string->latin1_units;
-    } else {
-        segment.utf16_units = string->storage == MAL_STRING_STORAGE_INLINE
-            ? string->inline_code_units : string->code_units;
-    }
-    return segment;
-}
-
 static i32 mal_string_compare_segments(
     const MalStringSegment *left, usize left_offset,
-    const MalStringSegment *right, usize right_offset, usize length
+    const MalStringSegment *right, usize right_offset, usize length, bool equality_only
 ) {
     if (left->latin1 && right->latin1) {
         int result = memcmp(left->latin1_units + left_offset, right->latin1_units + right_offset, length);
         return result < 0 ? -1 : result > 0 ? 1 : 0;
     }
     if (!left->latin1 && !right->latin1) {
+        if (equality_only) {
+            return memcmp(left->utf16_units + left_offset, right->utf16_units + right_offset,
+                length * sizeof(c16)) != 0;
+        }
         return mal_string_compare_code_units(left->utf16_units + left_offset, right->utf16_units + right_offset, length);
     }
     for (usize i = 0; i < length; i++) {
@@ -838,26 +901,26 @@ static i32 mal_string_compare_segments(
     return 0;
 }
 
-static i32 mal_string_compare_prefix(const MalString *left, const MalString *right, usize length) {
+static i32 mal_string_compare_prefix(
+    const MalString *left, const MalString *right, usize length, bool equality_only
+) {
     if (length == 0) return 0;
-    if (left->storage != MAL_STRING_STORAGE_CONS && left->storage != MAL_STRING_STORAGE_DEPENDENT &&
-        right->storage != MAL_STRING_STORAGE_CONS && right->storage != MAL_STRING_STORAGE_DEPENDENT) {
-        MalStringSegment a = mal_string_flat_segment(left);
-        MalStringSegment b = mal_string_flat_segment(right);
-        return mal_string_compare_segments(&a, 0, &b, 0, length);
+    MalStringSegment a, b;
+    if (mal_string_try_get_segment(left, 0, length, &a) &&
+        mal_string_try_get_segment(right, 0, length, &b)) {
+        return mal_string_compare_segments(&a, 0, &b, 0, length, equality_only);
     }
     MalStringIterator left_iterator;
     MalStringIterator right_iterator;
     mal_string_iterator_init(&left_iterator, left, 0, length);
     mal_string_iterator_init(&right_iterator, right, 0, length);
-    MalStringSegment a, b;
     if (!mal_string_iterator_next(&left_iterator, &a) || !mal_string_iterator_next(&right_iterator, &b)) abort();
     usize left_offset = 0, right_offset = 0;
     i32 result = 0;
     while (length > 0) {
         usize take = a.length - left_offset;
         if (take > b.length - right_offset) take = b.length - right_offset;
-        result = mal_string_compare_segments(&a, left_offset, &b, right_offset, take);
+        result = mal_string_compare_segments(&a, left_offset, &b, right_offset, take, equality_only);
         if (result != 0) break;
         length -= take;
         left_offset += take;
@@ -883,7 +946,7 @@ static i32 mal_string_compare_prefix(const MalString *left, const MalString *rig
  * Return false when the partitions or depth do not fit this bounded fast path.
  */
 static bool mal_string_compare_structural(
-    const MalString *left, const MalString *right, i32 *result_out
+    const MalString *left, const MalString *right, i32 *result_out, bool equality_only
 ) {
     if (left->length != right->length ||
         left->storage != MAL_STRING_STORAGE_CONS ||
@@ -927,7 +990,7 @@ static bool mal_string_compare_structural(
             continue;
         }
 
-        i32 result = mal_string_compare_prefix(pair.left, pair.right, pair.left->length);
+        i32 result = mal_string_compare_prefix(pair.left, pair.right, pair.left->length, equality_only);
         if (result != 0) {
             *result_out = result;
             return true;
@@ -950,7 +1013,7 @@ bool mal_string_equals(const MalString *left, const MalString *right) {
         return false;
     }
     i32 structural_result;
-    if (mal_string_compare_structural(left, right, &structural_result)) {
+    if (mal_string_compare_structural(left, right, &structural_result, true)) {
         return structural_result == 0;
     }
     // Computing a missing hash adds an unnecessary full pass before comparison.
@@ -965,16 +1028,16 @@ bool mal_string_equals(const MalString *left, const MalString *right) {
 
     MAL_PERF_COUNT(string_memcmp_calls);
     MAL_PERF_ADD(string_memcmp_code_units, left->length);
-    return mal_string_compare_prefix(left, right, left->length) == 0;
+    return mal_string_compare_prefix(left, right, left->length, true) == 0;
 }
 
 i32 mal_string_compare(const MalString *left, const MalString *right) {
     usize min_length = left->length < right->length ? left->length : right->length;
     i32 structural_result;
-    if (mal_string_compare_structural(left, right, &structural_result)) {
+    if (mal_string_compare_structural(left, right, &structural_result, false)) {
         return structural_result;
     }
-    i32 result = mal_string_compare_prefix(left, right, min_length);
+    i32 result = mal_string_compare_prefix(left, right, min_length, false);
     if (result != 0) return result;
 
     if (left->length < right->length) {

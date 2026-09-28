@@ -170,6 +170,12 @@ typedef struct MalStringSegment {
     };
 } MalStringSegment;
 
+/** Return a borrowed segment when a valid range lies in one leaf. Resolves
+ * dependent offsets without allocating or mutating; leaves `segment` unchanged
+ * when the range spans leaves. Empty ranges succeed with valid storage. */
+bool mal_string_try_get_segment(
+    const MalString *string, usize offset, usize length, MalStringSegment *segment);
+
 typedef struct MalStringIteratorPart {
     const MalString *string;
     usize offset;

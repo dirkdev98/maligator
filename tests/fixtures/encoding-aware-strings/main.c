@@ -2,6 +2,7 @@
 #include <string.h>
 
 #include "builtin_json.h"
+#include "builtin_string.h"
 #include "gc.h"
 #include "heap_string.h"
 #include "object_ops.h"
@@ -61,6 +62,15 @@ static bool ropes_and_slices_stream_without_materialization(MalVm *vm) {
     MalString *right = mal_string_new_external(&vm->heap, right_units, countof(right_units));
     MalString *rope;
     CHECK(mal_string_new_cons_checked(&vm->heap, left, right, &rope));
+    MalStringSegment segment;
+    CHECK(mal_string_try_get_segment(rope, 10, 16, &segment));
+    CHECK(segment.latin1 && segment.length == 16 && segment.latin1_units == left->latin1_units + 10);
+    CHECK(!mal_string_try_get_segment(rope, 120, 16, &segment));
+    CHECK(segment.latin1 && segment.length == 16 && segment.latin1_units == left->latin1_units + 10);
+    CHECK(mal_string_try_get_segment(rope, 136, 16, &segment));
+    CHECK(!segment.latin1 && segment.utf16_units == right_units + 8);
+    CHECK(mal_string_try_get_segment(rope, rope->length, 0, &segment));
+    CHECK(segment.length == 0 && segment.latin1_units != nullptr);
     MalString *flat = mal_string_new_copy(&vm->heap, expected, countof(expected));
     CHECK(mal_string_hash(rope) == mal_string_hash(flat));
     CHECK(mal_string_equals(rope, flat) && mal_string_compare(rope, flat) == 0);
@@ -74,7 +84,6 @@ static bool ropes_and_slices_stream_without_materialization(MalVm *vm) {
     CHECK(rope->storage == MAL_STRING_STORAGE_CONS);
     MalStringIterator iterator;
     mal_string_iterator_init(&iterator, slice, 16, 160);
-    MalStringSegment segment;
     usize offset = 0;
     usize segments = 0;
     while (mal_string_iterator_next(&iterator, &segment)) {
@@ -95,10 +104,34 @@ static bool ropes_and_slices_stream_without_materialization(MalVm *vm) {
     const c16 *flattened = mal_string_code_units(rope);
     CHECK(rope->storage == MAL_STRING_STORAGE_OWNED && !rope->latin1);
     CHECK(mal_string_code_units(slice) == flattened + 32);
+    CHECK(mal_string_try_get_segment(slice, 5, 16, &segment));
+    CHECK(!segment.latin1 && segment.utf16_units == flattened + 37);
     mal_gc_collect(vm);
     for (usize i = 0; i < slice->length; i++) CHECK(mal_string_code_unit_at(slice, i) == expected[32 + i]);
     CHECK(mal_string_hash(slice) == expected_hash);
     mal_gc_unroot(&span);
+    return true;
+}
+
+static bool direct_search_accepts_rope_receivers(MalVm *vm) {
+    MalString *left = mal_string_new_ascii(&vm->heap, "abcdefghX", 9);
+    MalString *right = mal_string_new_ascii(&vm->heap, "Yijklmnop", 9);
+    MalString *rope;
+    CHECK(mal_string_new_cons_checked(&vm->heap, left, right, &rope));
+    MalString *cross_leaf = mal_string_new_ascii(&vm->heap, "XY", 2);
+    MalString *single_leaf = mal_string_new_ascii(&vm->heap, "Yij", 3);
+    MalString *last_position = mal_string_new_ascii(&vm->heap, "op", 2);
+    MalValue result;
+    CHECK(mal_builtin_string_search_direct(mal_value_from_string(rope),
+        mal_value_from_string(cross_leaf), 0, MAL_STRING_SEARCH_INDEX_OF, &result));
+    CHECK(mal_value_to_i32(result) == 8);
+    CHECK(mal_builtin_string_search_direct(mal_value_from_string(rope),
+        mal_value_from_string(single_leaf), 0, MAL_STRING_SEARCH_INDEX_OF, &result));
+    CHECK(mal_value_to_i32(result) == 9);
+    CHECK(mal_builtin_string_search_direct(mal_value_from_string(rope),
+        mal_value_from_string(last_position), 0, MAL_STRING_SEARCH_INDEX_OF, &result));
+    CHECK(mal_value_to_i32(result) == 16);
+    CHECK(rope->storage == MAL_STRING_STORAGE_CONS);
     return true;
 }
 
@@ -227,6 +260,7 @@ int main(void) {
     mal_vm_init(&vm, &mal_runtime_image);
     bool passed = physical_encodings_have_equal_content(&vm)
         && ropes_and_slices_stream_without_materialization(&vm)
+        && direct_search_accepts_rope_receivers(&vm)
         && dependent_offsets_survive_parent_widening(&vm)
         && deep_segment_stacks_and_retained_slices(&vm)
         && compact_parse_lookup_build_serialize(&vm);
