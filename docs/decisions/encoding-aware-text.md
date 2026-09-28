@@ -142,10 +142,6 @@ uses that path without pattern setup or traversal. Exhaustion frees native
 scratch, and GC handles abandoned cursors after abrupt loop exits. No borrowed
 payload pointer survives a JavaScript body.
 
-Projected split/trim consumers scan only each field's whitespace boundaries. They
-preserve the shared subject's rope structure and compact width, so trimming the
-first field does not materialize the input before subsequent cursor advances.
-
 Latin-1 well-formedness and no-op trim preserve compact inputs. ASCII case changes
 use compact output, with identity results when unchanged; Unicode/locale fallbacks
 retain required bridges. Single-argument concat shares a balanced prefix beyond
