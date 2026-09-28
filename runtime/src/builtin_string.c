@@ -3825,6 +3825,10 @@ static bool mal_builtin_string_trim_span_direct_impl(
     MalString *subject = mal_value_to_string(subject_value);
     usize length = mal_string_length(subject);
     if (start > end || end > length) return false;
+    if (start == end) {
+        *out = mal_builtin_string_slice(vm, subject, start, 0);
+        return true;
+    }
     // Contiguous rope trimming avoids repeated edge descents; flat inputs keep compact width.
     MalStringSegment segment;
     if (subject->storage == MAL_STRING_STORAGE_CONS) {
