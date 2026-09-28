@@ -29,10 +29,10 @@ static bool string_iteration(MalVm *vm, usize leaves, bool materialize) {
     c16 *units = malloc(sizeof(*units) * length);
     for (usize i = 0; i < length; i++) units[i] = (c16) ('a' + i % 23);
     // Includes a pair spanning leaves and a lead whose lookahead must remain unconsumed.
-    units[30] = 0xd83d;
-    units[31] = 0xde00;
-    units[61] = 0xd800;
-    units[100] = 0x100;
+    units[92] = 0xd83d;
+    units[93] = 0xde00;
+    units[123] = 0xd800;
+    units[200] = 0x100;
     MalValue roots[2] = {mal_value_from_string(rope(vm, units, length)), MAL_VALUE_UNDEFINED};
     MalRootSpan span;
     mal_gc_root(&span, roots, 2);
@@ -46,7 +46,7 @@ static bool string_iteration(MalVm *vm, usize leaves, bool materialize) {
         bool done;
         CHECK(mal_vm_iterator_step_protocol_cursor(vm, iterator, &value, &done));
         CHECK(!done && mal_value_is_string(value));
-        usize count = position == 30 ? 2 : 1;
+        usize count = position == 92 ? 2 : 1;
         MalString *actual = mal_value_to_string(value);
         CHECK(actual->length == count);
         for (usize i = 0; i < count; i++) CHECK(mal_string_code_unit_at(actual, i) == units[position + i]);
@@ -62,7 +62,7 @@ static bool string_iteration(MalVm *vm, usize leaves, bool materialize) {
         if (materialize && position == 1) {
             CHECK(iterator->string_cursor != nullptr);
             MalStringIterator *frontier = iterator->string_cursor->iterator;
-            CHECK(frontier->count < 60);
+            CHECK(frontier->count < 60 && frontier->current.string->latin1);
             mal_string_code_units((MalString *) frontier->current.string);
             mal_string_code_units(mal_value_to_string(roots[0]));
             mal_gc_collect(vm);
@@ -102,7 +102,7 @@ static bool projected_split(MalVm *vm, usize fields, bool materialize) {
         CHECK(start == i * 33 && end == (i == fields ? length : start + 31));
         if (materialize && i == 0) {
             MalStringCursor *cursor = (MalStringCursor *) mal_value_to_heap(roots[2]);
-            CHECK(cursor->iterator->count < 60);
+            CHECK(cursor->iterator->count < 60 && cursor->iterator->current.string->latin1);
             mal_string_code_units((MalString *) cursor->iterator->current.string);
             mal_string_code_units(mal_value_to_string(roots[0]));
             mal_gc_collect(vm);
