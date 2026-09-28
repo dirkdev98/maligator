@@ -1204,8 +1204,16 @@ void *gc_realloc_raw(MalHeap *heap, void *ptr, usize new_size) {
 }
 
 void *gc_realloc_raw_profiled(MalHeap *heap, void *ptr, usize new_size, u8 profile_family) {
+    void *grown = mal_heap_try_realloc_raw_profiled(heap, ptr, new_size, profile_family);
+    if (grown == nullptr) abort();
+    return grown;
+}
+
+void *mal_heap_try_realloc_raw_profiled(
+    MalHeap *heap, void *ptr, usize new_size, u8 profile_family
+) {
     if (ptr == nullptr) {
-        return mal_heap_alloc_raw_profiled(heap, new_size, profile_family);
+        return mal_heap_try_alloc_raw_profiled(heap, new_size, profile_family);
     }
     // Recover the current cell's byte capacity (size-class cell size for an in-block
     // cell, recorded payload size for a LOS record) to decide whether the request
@@ -1227,11 +1235,17 @@ void *gc_realloc_raw_profiled(MalHeap *heap, void *ptr, usize new_size, u8 profi
         // copying the payload. Capture links before realloc can release the record.
         if (large->kind != MAL_GC_BLOCK_RAW) abort();
         usize offset = mal_gc_large_data_offset();
-        if (new_size > SIZE_MAX - offset) abort();
+        if (new_size > SIZE_MAX - offset) return nullptr;
+#if MAL_PERF_STATS
+        if (heap->fail_next_raw_allocation) {
+            heap->fail_next_raw_allocation = false;
+            return nullptr;
+        }
+#endif
         MalGcLarge *previous = large->prev;
         MalGcLarge *next = large->next;
         MalGcLarge *grown = realloc(large, offset + new_size);
-        if (grown == nullptr) abort();
+        if (grown == nullptr) return nullptr;
         grown->size = new_size;
         if (previous != nullptr) previous->next = grown;
         else heap->raw_large = grown;
@@ -1244,7 +1258,8 @@ void *gc_realloc_raw_profiled(MalHeap *heap, void *ptr, usize new_size, u8 profi
         return (u8 *) grown + offset;
     }
     // A size-classed cell cannot grow in place; copy into a larger cell or LOS.
-    void *fresh = mal_heap_alloc_raw_profiled(heap, new_size, profile_family);
+    void *fresh = mal_heap_try_alloc_raw_profiled(heap, new_size, profile_family);
+    if (fresh == nullptr) return nullptr;
     memcpy(fresh, ptr, old_size); // old_size < new_size, so the copy stays in bounds
     gc_free_raw(heap, ptr);
     return fresh;

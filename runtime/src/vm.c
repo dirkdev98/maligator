@@ -28,7 +28,7 @@
 #include "perf_stats.h"
 #include "profile.h"
 #include "proxy_object.h"
-#include "u16_buffer.h"
+#include "text_buffer.h"
 #include "value_ops.h"
 #include "vm_load.h"
 #include "vm_ops.h"
@@ -3879,25 +3879,25 @@ void mal_vm_release_stack_trace(MalVm *vm, i32 id) {
     MAL_PERF_COUNT(error_stack_trace_releases);
 }
 
-typedef MalU16Buffer MalStackBuf;
+typedef MalTextBuffer MalStackBuf;
 
-static void mal_stack_buf_require(MalU16BufferStatus status) {
+static void mal_stack_buf_require(MalTextBufferStatus status) {
     // Stack formatting has no completion channel; preserve its infallible contract.
-    if (status != MAL_U16_BUFFER_OK) {
+    if (status != MAL_TEXT_BUFFER_OK) {
         abort();
     }
 }
 
 static void mal_stack_buf_push_ascii(MalStackBuf *buf, const char *text) {
-    mal_stack_buf_require(mal_u16_buffer_append_ascii(buf, (const byte *) text));
+    mal_stack_buf_require(mal_text_buffer_append_ascii(buf, (const byte *) text));
 }
 
 static void mal_stack_buf_push_string(MalStackBuf *buf, const MalString *string) {
-    mal_stack_buf_require(mal_u16_buffer_append_string(buf, string));
+    mal_stack_buf_require(mal_text_buffer_append_string(buf, string));
 }
 
 static void mal_stack_buf_push_i32(MalStackBuf *buf, i32 value) {
-    mal_stack_buf_require(mal_u16_buffer_append_i32(buf, value));
+    mal_stack_buf_require(mal_text_buffer_append_i32(buf, value));
 }
 
 MalString *mal_vm_format_stack_frames(MalVm *vm, const MalStackTrace *trace) {
@@ -3983,7 +3983,7 @@ MalString *mal_vm_format_stack_frames(MalVm *vm, const MalStackTrace *trace) {
 
 done:
 
-    return mal_u16_buffer_finish(&vm->heap, &buf);
+    return mal_text_buffer_finish(&vm->heap, &buf);
 }
 
 MalValue mal_vm_interpret_function(

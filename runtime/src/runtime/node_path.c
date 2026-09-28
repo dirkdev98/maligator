@@ -15,7 +15,7 @@
 #include "intrinsics.h"
 #include "object.h"
 #include "property_store.h"
-#include "u16_buffer.h"
+#include "text_buffer.h"
 #include "utf8.h"
 #include "value.h"
 #include "value_ops.h"
@@ -37,49 +37,46 @@
 #define PATH_SEP ((c16) '/')
 #define PATH_DOT ((c16) '.')
 
-/* --------------------------------------------------------------------------
- * A growable UTF-16 scratch buffer (plain malloc storage, never a GC cell). The
- * path algorithms build results here, then copy into a heap MalString at the end.
- * -------------------------------------------------------------------------- */
+// Path normalization mutates contiguous UTF-16 scratch; finished strings own it.
 
-typedef MalU16Buffer MalPathBuf;
+typedef MalTextBuffer MalPathBuf;
 
 static void path_buf_init(MalPathBuf *b) {
-    *b = (MalPathBuf) {0};
+    *b = (MalPathBuf) {.utf16 = true};
 }
 
 static void path_buf_free(MalPathBuf *b) {
-    mal_u16_buffer_dispose(b);
+    mal_text_buffer_dispose(b);
 }
 
 static void path_buf_push_units(MalPathBuf *b, const c16 *units, usize n) {
-    mal_u16_buffer_append_units(b, units, n);
+    mal_text_buffer_append_units(b, units, n);
 }
 
 static void path_buf_push_char(MalPathBuf *b, c16 c) {
-    mal_u16_buffer_push(b, c);
+    mal_text_buffer_push(b, c);
 }
 
 /* Prepend `seg` + "/" to the buffer (the `${path}/${resolvedPath}` step of resolve). */
 static void path_buf_prepend_seg(MalPathBuf *b, const c16 *seg, usize seg_len) {
     usize add;
     if (!mal_checked_size_add(seg_len, 1, MAL_STRING_MAX_CODE_UNITS, &add)) {
-        b->status = MAL_U16_BUFFER_LENGTH_OVERFLOW;
+        b->status = MAL_TEXT_BUFFER_LENGTH_OVERFLOW;
         return;
     }
-    if (mal_u16_buffer_reserve(b, add) != MAL_U16_BUFFER_OK) {
+    if (mal_text_buffer_reserve(b, add) != MAL_TEXT_BUFFER_OK) {
         return;
     }
-    memmove(b->data + add, b->data, b->length * sizeof(c16));
+    memmove((c16 *) b->data + add, b->data, b->length * sizeof(c16));
     memcpy(b->data, seg, seg_len * sizeof(c16));
-    b->data[seg_len] = PATH_SEP;
+    ((c16 *) b->data)[seg_len] = PATH_SEP;
     b->length += add;
 }
 
 /* Index of the last '/' in the buffer, or -1. */
 static i64 path_buf_last_sep(const MalPathBuf *b) {
     for (i64 i = (i64) b->length - 1; i >= 0; --i) {
-        if (b->data[i] == PATH_SEP) {
+        if (mal_text_buffer_code_unit_at(b, (usize) i) == PATH_SEP) {
             return i;
         }
     }
@@ -106,10 +103,10 @@ static MalValue path_units(MalVm *vm, const c16 *units, usize n) {
 }
 
 static bool path_buf_check(MalVm *vm, const MalPathBuf *buffer) {
-    if (buffer->status == MAL_U16_BUFFER_OK) {
+    if (buffer->status == MAL_TEXT_BUFFER_OK) {
         return true;
     }
-    if (buffer->status == MAL_U16_BUFFER_LENGTH_OVERFLOW) {
+    if (buffer->status == MAL_TEXT_BUFFER_LENGTH_OVERFLOW) {
         mal_vm_throw_error(
             vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Invalid string length");
     } else {
@@ -122,7 +119,7 @@ static MalValue path_buf_to_value(MalVm *vm, MalPathBuf *buffer) {
     if (!path_buf_check(vm, buffer)) {
         return mal_value_new_undefined();
     }
-    return mal_value_from_string(mal_u16_buffer_finish(&vm->heap, buffer));
+    return mal_value_from_string(mal_text_buffer_finish(&vm->heap, buffer));
 }
 
 /* Node validateString: a non-string argument is an ERR_INVALID_ARG_TYPE TypeError.
@@ -165,7 +162,8 @@ static void normalize_string(const c16 *path, i64 len, bool allow_above_root, Ma
                 // NOOP: empty segment or a lone '.'.
             } else if (dots == 2) {
                 if ((i64) res->length < 2 || last_segment_length != 2
-                    || res->data[res->length - 1] != PATH_DOT || res->data[res->length - 2] != PATH_DOT) {
+                    || mal_text_buffer_code_unit_at(res, res->length - 1) != PATH_DOT
+                    || mal_text_buffer_code_unit_at(res, res->length - 2) != PATH_DOT) {
                     if ((i64) res->length > 2) {
                         i64 last_sep_index = path_buf_last_sep(res);
                         if (last_sep_index == -1) {

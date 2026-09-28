@@ -16,7 +16,7 @@
 #include "object_ops.h"
 #include "profile.h"
 #include "regexp_object.h"
-#include "u16_buffer.h"
+#include "text_buffer.h"
 #include "utf16.h"
 #include "value.h"
 #include "value_ops.h"
@@ -1187,20 +1187,20 @@ static MalValue regexp_proto_to_string(MalVm *vm, MalValue this_value, const Mal
 // Symbol.* protocol helpers
 // ---------------------------------------------------------------------------
 
-typedef MalU16Buffer RegexpBuilder;
+typedef MalTextBuffer RegexpBuilder;
 
 static bool regexp_builder_append_units(MalVm *vm, RegexpBuilder *b, const c16 *units, usize n) {
-    return mal_u16_buffer_append_units(b, units, n) == MAL_U16_BUFFER_OK ||
+    return mal_text_buffer_append_units(b, units, n) == MAL_TEXT_BUFFER_OK ||
         regexp_throw_string_length(vm);
 }
 
 static bool regexp_builder_append_string(MalVm *vm, RegexpBuilder *b, const MalString *s) {
-    return mal_u16_buffer_append_string(b, s) == MAL_U16_BUFFER_OK ||
+    return mal_text_buffer_append_string(b, s) == MAL_TEXT_BUFFER_OK ||
         regexp_throw_string_length(vm);
 }
 
 static MalValue regexp_builder_finish(MalVm *vm, RegexpBuilder *b) {
-    return mal_value_from_string(mal_u16_buffer_finish(&vm->heap, b));
+    return mal_value_from_string(mal_text_buffer_finish(&vm->heap, b));
 }
 
 // AdvanceStringIndex(S, index, unicode): +2 across a surrogate pair in unicode
@@ -1832,7 +1832,7 @@ done:
     mal_gc_unroot(&s_span);
     free(captures);
     free(results);
-    mal_u16_buffer_dispose(&accumulated);
+    mal_text_buffer_dispose(&accumulated);
     return ret;
 }
 
@@ -2316,7 +2316,7 @@ static MalValue regexp_escape(MalVm *vm, MalValue this_value, const MalValue *ar
         // result can't combine with a preceding character into an identifier.
         if (i == 0 && mal_ascii_is_alphanumeric(c)) {
             if (!regexp_escape_hex(vm, &builder, c)) {
-                mal_u16_buffer_dispose(&builder);
+                mal_text_buffer_dispose(&builder);
                 return mal_value_new_undefined();
             }
             continue;
@@ -2337,7 +2337,7 @@ static MalValue regexp_escape(MalVm *vm, MalValue this_value, const MalValue *ar
     return regexp_builder_finish(vm, &builder);
 
 fail:
-    mal_u16_buffer_dispose(&builder);
+    mal_text_buffer_dispose(&builder);
     return mal_value_new_undefined();
 }
 

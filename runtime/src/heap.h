@@ -527,6 +527,10 @@ void *gc_realloc_raw(MalHeap *heap, void *ptr, usize new_size);
 /** Raw grow with a stable profiler family for any newly allocated replacement. */
 void *gc_realloc_raw_profiled(MalHeap *heap, void *ptr, usize new_size, u8 profile_family);
 
+/** Fallible raw growth; failure leaves the existing buffer and ownership intact. */
+void *mal_heap_try_realloc_raw_profiled(
+    MalHeap *heap, void *ptr, usize new_size, u8 profile_family);
+
 /** Finalizer applied to a dead cell during the sweep (frees owned buffers). */
 typedef void (*MalHeapFinalizeFn)(MalHeapHeader *cell);
 
