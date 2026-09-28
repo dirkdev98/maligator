@@ -235,17 +235,19 @@ jobs:
           path: report
 
       - name: Post the comparison on the pull request
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         env:
-          GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ needs.request.outputs.pr }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: |
-          test -f report/summary.md
-          {
-            cat report/summary.md
-            printf '\n[Workflow run](%s)\n' "$RUN_URL"
-          } > report/comment.md
-          gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" \
-            --method POST \
-            --raw-field body="$(cat report/comment.md)"
+        with:
+          github-token: ${{ github.token }}
+          script: |
+            const fs = require("node:fs");
+            const summary = fs.readFileSync("report/summary.md", "utf8");
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: Number(process.env.PR_NUMBER),
+              body: summary + "\\n[Workflow run](" + process.env.RUN_URL + ")\\n",
+            });
 
