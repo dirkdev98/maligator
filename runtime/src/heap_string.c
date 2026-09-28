@@ -1036,10 +1036,12 @@ const c16 *mal_string_flatten(MalString *mutable) {
 static u64 mal_string_hash_segment(u64 hash, const MalStringSegment *segment) {
     MAL_PERF_ADD(string_hash_code_units, segment->length);
     if (segment->latin1) {
+        // UTF-16 FNV hashes a zero high byte after each Latin-1 unit. XORing
+        // zero is a no-op, so fold the two modular prime multiplies into one.
+        const u64 fnv_prime_squared = 0x366000002e329ULL;
         for (usize i = 0; i < segment->length; i++) {
             hash ^= segment->latin1_units[i];
-            hash *= 0x100000001b3;
-            hash *= 0x100000001b3;
+            hash *= fnv_prime_squared;
         }
     } else {
         for (usize i = 0; i < segment->length; i++) {
