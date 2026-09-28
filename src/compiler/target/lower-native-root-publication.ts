@@ -106,6 +106,19 @@ export function nativePrivateRootRegisters(
 			candidates.add(instruction.dst);
 		}
 	}
+	// Keep the receiver identity of ordinary numeric indexed reads private too.
+	// Append after existing candidates so the bounded selection keeps its order.
+	for (const [ip, instruction] of fn.instructions.entries()) {
+		if (
+			instruction.opcode === "LOAD_PROPERTY" &&
+			native.instructions[ip] === undefined &&
+			(native.registerRepresentations[instruction.key] === "int32" ||
+				native.registerRepresentations[instruction.key] === "number") &&
+			frameRegisters.has(instruction.object)
+		) {
+			candidates.add(instruction.object);
+		}
+	}
 	const actionsByIp = new Map<
 		number,
 		Array<NativeFunctionPlan["regionActions"][number]>

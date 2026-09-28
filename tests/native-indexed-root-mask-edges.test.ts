@@ -154,7 +154,7 @@ function privateSlot(source: string, register: number): number {
 
 describe("native numeric indexed-load root publication", () => {
 	it.each(["int32", "number"] as const)(
-		"admits only final results and leaves successful %s index probes without root-copy stores",
+		"keeps unchanged receivers and final results private on successful %s index probes",
 		(representation) => {
 			const source = emit(
 				fn([key, indexedLoad, indexedLoad, call, { opcode: "RETURN", value: 6 }]),
@@ -166,8 +166,8 @@ describe("native numeric indexed-load root publication", () => {
 				representation,
 			);
 			privateSlot(source, indexedLoad.dst);
-			expect(source).not.toContain("#define r0 (__private_r0)");
-			expect(source).toContain("#define r0 (__gc_slots[");
+			privateSlot(source, indexedLoad.object);
+			expect(source.match(/__gc_slots\[\d+\] = r0;/g)).toHaveLength(1);
 			const firstProbe = source.indexOf("mal_vm_array_try_get_index(");
 			const mask = source.indexOf("MAL_ROOT_MASK(");
 			expect(firstProbe).toBeGreaterThan(-1);
@@ -200,7 +200,7 @@ describe("native numeric indexed-load root publication", () => {
 		},
 	);
 
-	it("defers numeric-index masks while compound outputs retain continuous storage", () => {
+	it("admits the indexed receiver while keeping a compound output continuously rooted", () => {
 		const source = emit(
 			fn([
 				{ opcode: "LOAD_STATIC_ARGUMENT", dst: 4, direct: -1, fallback: 3, index: 2 },
@@ -215,18 +215,70 @@ describe("native numeric indexed-load root publication", () => {
 				point(3, [0, 3, 5], [6]),
 			],
 		);
-		expect(source).not.toContain("__private_r");
+		expect(source).not.toContain("#define r3 (__private_r3)");
 		expect(source).toContain("#define r3 (__gc_slots[");
-		const probe = source.indexOf("mal_vm_array_try_get_index(");
-		const miss = source.indexOf("mal_vm_indexed_fast_load_index(", probe);
-		const nextCall = source.indexOf("mal_vm_call_cached(", miss);
-		expect(probe).toBeGreaterThan(0);
-		expect(miss).toBeGreaterThan(probe);
-		expect(nextCall).toBeGreaterThan(miss);
-		expect(source.slice(0, probe)).not.toContain("MAL_ROOT_MASK(0x14)");
-		expect(source.slice(probe, miss)).toContain("MAL_ROOT_MASK(0x14)");
-		expect(source.slice(miss, nextCall)).toContain("MAL_ROOT_MASK(0x4)");
+		privateSlot(source, indexedLoad.object);
+		expect(source.match(/MalValue __private_r\d+;/g)).toEqual(["MalValue __private_r0;"]);
 	});
+
+	it("keeps an indexed receiver rooted when another definition uses a compound out-parameter", () => {
+		const source = emit(
+			fn([
+				{ opcode: "LOAD_STATIC_ARGUMENT", dst: 4, direct: -1, fallback: 0, index: 2 },
+				key,
+				indexedLoad,
+				call,
+				{ opcode: "RETURN", value: 6 },
+			]),
+			[
+				point(0, [0, 5], [0, 4, 5]),
+				point(2, [0, 5], [0, 3, 5]),
+				point(3, [0, 3, 5], [6]),
+			],
+		);
+		expect(source).not.toContain("#define r0 (__private_r0)");
+		expect(source).toContain("#define r0 (__gc_slots[");
+		privateSlot(source, indexedLoad.dst);
+	});
+
+	it.each(["int32", "number"] as const)(
+		"defers the %s indexed mask without private roots and restores the following call mask",
+		(representation) => {
+			const source = emit(
+				fn([
+					{ opcode: "LOAD_STATIC_ARGUMENT", dst: 4, direct: -1, fallback: 0, index: 2 },
+					{ opcode: "LOAD_STATIC_ARGUMENT", dst: 4, direct: -1, fallback: 3, index: 3 },
+					key,
+					indexedLoad,
+					call,
+					{ opcode: "RETURN", value: 6 },
+				]),
+				[
+					point(0, [0, 5], [0, 4, 5]),
+					point(1, [0, 5], [0, 3, 4, 5]),
+					point(3, [0, 5], [0, 3, 5]),
+					point(4, [0, 3, 5], [6]),
+				],
+				representation,
+			);
+			expect(source).not.toContain("__private_r");
+			const probe = source.indexOf("mal_vm_array_try_get_index(");
+			const start = source.lastIndexOf("r2 = 0;", probe);
+			const fallback = source.indexOf("} else {", probe);
+			const miss = source.indexOf("mal_vm_indexed_fast_load_index(", probe);
+			const end = source.indexOf("\n    }", miss);
+			const nextCall = source.indexOf("mal_vm_call_cached(", end);
+			expect(start).toBeGreaterThan(0);
+			expect(probe).toBeGreaterThan(start);
+			expect(fallback).toBeGreaterThan(probe);
+			expect(miss).toBeGreaterThan(fallback);
+			expect(end).toBeGreaterThan(miss);
+			expect(nextCall).toBeGreaterThan(end);
+			expect(source.slice(start, fallback)).not.toContain("MAL_ROOT_MASK(");
+			expect(source.slice(fallback, miss)).toContain("MAL_ROOT_MASK(0x14);");
+			expect(source.slice(end, nextCall)).toContain("MAL_ROOT_MASK(0x4);");
+		},
+	);
 
 	it("keeps closure construction final and later exact numeric results private", () => {
 		const source = emit(

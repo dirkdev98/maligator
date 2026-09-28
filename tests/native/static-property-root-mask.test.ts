@@ -155,6 +155,10 @@ describe("native static-property root-mask publication", () => {
 			privateRegisters: ReadonlySet<number>;
 			selectedPrivateCallIps: ReadonlySet<number>;
 			boundaryIncomingRoots: Array<ReadonlyArray<number>>;
+			indexedReceivers: Array<{
+				register: number;
+				incomingRoots: ReadonlyArray<number>;
+			}>;
 			boundaryResults: Array<{
 				ip: number;
 				register: number;
@@ -262,6 +266,17 @@ describe("native static-property root-mask publication", () => {
 				boundaryIncomingRoots: boundarySafepoints.map(
 					(safepoint) => safepoint.incomingRootRegisters ?? [],
 				),
+				indexedReceivers: boundarySafepoints.flatMap((safepoint) => {
+					const instruction = fn.instructions[safepoint.instructionIp];
+					return instruction?.opcode === "LOAD_PROPERTY"
+						? [
+								{
+									register: instruction.object,
+									incomingRoots: safepoint.incomingRootRegisters,
+								},
+							]
+						: [];
+				}),
 				boundaryResults:
 					"resultPrivate" in kernel
 						? boundarySafepoints.map((safepoint) => {
@@ -301,6 +316,21 @@ describe("native static-property root-mask publication", () => {
 				for (const roots of contract!.boundaryIncomingRoots) {
 					expect(roots).toContain(register);
 				}
+			}
+		},
+	);
+
+	it.each(publicationKernels.filter((kernel) => "numericOnly" in kernel))(
+		"roots the selected numeric-only receiver before the collecting index fallback in $name",
+		({ name }) => {
+			const contract = publicationContracts.get(name)!;
+			expect(contract.indexedReceivers.length).toBeGreaterThan(0);
+			for (const receiver of contract.indexedReceivers) {
+				expect(contract.privateRegisters.has(receiver.register)).toBe(true);
+				expect(contract.source).toContain(
+					`#define r${receiver.register} (__private_r${receiver.register})`,
+				);
+				expect(receiver.incomingRoots).toContain(receiver.register);
 			}
 		},
 	);
