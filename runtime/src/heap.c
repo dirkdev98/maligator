@@ -918,7 +918,7 @@ static void mal_heap_sweep_block(
         MalHeapHeader *header = (MalHeapHeader *) cell;
         u8 mark = mal_heap_sweep_mark_load(header);
         if (mal_heap_mark_is_current(mark, heap->mark_color)) {
-            // Mark workers are joined before the mutator owns sweep.
+            // Marking has completed before the mutator owns sweep.
             mal_heap_sweep_mark_store(header, mark | MAL_MARK_OLD);
             *live_bytes += block->cell_size;
             block_live++;
