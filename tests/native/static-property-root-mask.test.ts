@@ -101,6 +101,20 @@ const publicationKernels = [
 		properties: ["value"],
 	},
 	{
+		name: "rootedOnlyArrayTraversal",
+		boundary: "ITERATOR_STEP",
+		probe: "mal_vm_iterator_try_dense_array_cursor_step",
+		properties: [],
+		rootedOnlyCursor: true,
+	},
+	{
+		name: "rootedOnlyThrowingArrayTraversal",
+		boundary: "ITERATOR_STEP",
+		probe: "mal_vm_iterator_try_dense_array_cursor_step",
+		properties: [],
+		rootedOnlyCursor: true,
+	},
+	{
 		name: "retainThroughSetter",
 		boundary: "STORE_PROPERTY_STATIC",
 		probe: "mal_vm_object_try_store_static",
@@ -147,6 +161,16 @@ describe("native static-property root-mask publication", () => {
 	let interpreted: string;
 	let genericStaticSafepointLoadCount = 0;
 	let wideRootCount = 0;
+	const rootedCursorContracts = new Map<
+		string,
+		{
+			iterator: number;
+			next: number;
+			value: number;
+			retained: number;
+			loopRoots: ReadonlyArray<number>;
+		}
+	>();
 	const publicationContracts = new Map<
 		string,
 		{
@@ -258,6 +282,39 @@ describe("native static-property root-mask publication", () => {
 						fn.instructions[safepoint.instructionIp]?.opcode === kernel.boundary,
 				)
 				.slice(0, "firstBoundaryOnly" in kernel ? 1 : undefined);
+			if ("rootedOnlyCursor" in kernel) {
+				const cursors = native.specializations.filter(
+					(region) => region.kind === "array-values-iterator-cursor",
+				);
+				expect(cursors).toHaveLength(1);
+				const step = fn.instructions[cursors[0]!.stepIps[0]!];
+				const result = fn.instructions.find(
+					(instruction) => instruction.opcode === "CREATE_OBJECT_SHAPED",
+				);
+				if (
+					step?.opcode !== "ITERATOR_STEP" ||
+					result?.opcode !== "CREATE_OBJECT_SHAPED"
+				) {
+					throw new Error(`${name} lost its cursor or retained result`);
+				}
+				const retained =
+					result.valueRegisters[
+						result.keyStringIndices.findIndex((key) => stringConstant(key) === "retained")
+					]!;
+				const loop = native.gc.safepoints.find(
+					(safepoint) =>
+						safepoint.kind === "loop-backedge" &&
+						safepoint.rootRegisters.includes(step.iterator),
+				);
+				expect(loop).toBeDefined();
+				rootedCursorContracts.set(name, {
+					iterator: step.iterator,
+					next: step.next,
+					value: step.valueDst,
+					retained,
+					loopRoots: loop!.rootRegisters,
+				});
+			}
 			publicationContracts.set(name, {
 				source: emitCompiledFunction(fn, native, index, "", false)?.source ?? "",
 				retainedRegisters,
@@ -300,6 +357,47 @@ describe("native static-property root-mask publication", () => {
 			});
 		}
 	}, 600_000);
+
+	it.each(publicationKernels.filter((kernel) => "rootedOnlyCursor" in kernel))(
+		"publishes collecting cursor fallbacks and loop roots without private slots in $name",
+		({ name, probe }) => {
+			const contract = publicationContracts.get(name)!;
+			const cursor = rootedCursorContracts.get(name)!;
+			expect(contract.privateRegisters.size).toBe(0);
+			expect(contract.source).not.toContain("__private_r");
+			expect(contract.boundaryIncomingRoots).toHaveLength(1);
+			for (const register of [cursor.retained, cursor.iterator, cursor.next]) {
+				expect(contract.boundaryIncomingRoots[0]).toContain(register);
+				expect(cursor.loopRoots).toContain(register);
+			}
+			for (const register of [cursor.iterator, cursor.next, cursor.value]) {
+				expect(contract.source).toContain(`#define r${register} (__gc_slots[`);
+			}
+			const probeOffset = contract.source.indexOf(`${probe}(`);
+			expect(probeOffset).toBeGreaterThan(0);
+			const stepStart = contract.source.lastIndexOf("\nL", probeOffset);
+			expect(contract.source.slice(stepStart, probeOffset)).not.toContain(
+				"MAL_ROOT_MASK(",
+			);
+			const fallback = contract.source.indexOf("mal_vm_iterator_step(vm,", probeOffset);
+			expect(fallback).toBeGreaterThan(probeOffset);
+			const publication = contract.source
+				.slice(probeOffset, fallback)
+				.match(/MAL_ROOT_MASK\((0x[0-9a-f]+)\);/);
+			expect(publication).not.toBeNull();
+			const inactive = BigInt(publication![1]!);
+			for (const register of contract.boundaryIncomingRoots[0]!) {
+				const binding = contract.source.match(
+					new RegExp(`#define r${register} \\(__gc_slots\\[(\\d+)\\]\\)`),
+				);
+				expect(binding).not.toBeNull();
+				expect(inactive & (1n << BigInt(binding![1]!))).toBe(0n);
+			}
+			expect(contract.source).toMatch(
+				/if \(mal_gc_poll\) \{ MAL_ROOT_MASK\(0x[0-9a-f]+\); mal_gc_safepoint\(vm\); \}/,
+			);
+		},
+	);
 
 	it.each(publicationKernels.filter((kernel) => kernel.properties.length > 0))(
 		"retains private preceding roots at the audited boundary in $name",
