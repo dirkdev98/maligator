@@ -66,6 +66,7 @@ const HELP = `Usage: node scripts/native-micro-compare.ts --base REF [options]
   --case ID                 canonical runtime-gap case; repeatable
   --pairs N                 alternating baseline/candidate pairs (default: 7)
   --target-node-ms N         calibrated kernel target (default: 80)
+  --target-native-ms N       target for the faster native kernel (default: 300)
   --case-timeout-ms N        limit for each kernel process (default: 30000)
   --budget-seconds N         whole-run budget including builds (default: 2400)
   --output DIRECTORY        new evidence directory (default: .cache/native-micro/<time>)
@@ -92,6 +93,7 @@ interface Options {
 	cases: Array<string>;
 	pairs: number;
 	targetNodeMs: number;
+	targetNativeMs: number;
 	caseTimeoutMs: number;
 	budgetSeconds: number;
 	output: string;
@@ -227,6 +229,31 @@ function summarize(pairs: ReadonlyArray<Pair>) {
 	};
 }
 
+export function nativeMicroCalibrationScale(
+	nodeMs: number,
+	baselineMs: number,
+	candidateMs: number,
+	targetNodeMs: number,
+	targetNativeMs: number,
+	caseTimeoutMs: number,
+): number {
+	// Node can be much slower than either native executable. Its target alone can
+	// leave native samples too short to distinguish work from scheduling noise.
+	return Math.min(
+		256,
+		Math.max(
+			1,
+			Math.ceil(targetNodeMs / nodeMs),
+			Math.ceil(targetNativeMs / Math.min(baselineMs, candidateMs)),
+		),
+		calibrationScaleTimeoutCap(
+			caseTimeoutMs,
+			Math.max(nodeMs, baselineMs, candidateMs),
+			5,
+		),
+	);
+}
+
 function parseOptions(args: Array<string>): Options | undefined {
 	if (args.includes("--help") || args.includes("-h")) {
 		console.log(HELP);
@@ -237,6 +264,7 @@ function parseOptions(args: Array<string>): Options | undefined {
 		cases: [],
 		pairs: 7,
 		targetNodeMs: 80,
+		targetNativeMs: 300,
 		caseTimeoutMs: 30_000,
 		budgetSeconds: 2400,
 		output: path.join(
@@ -269,6 +297,7 @@ function parseOptions(args: Array<string>): Options | undefined {
 				throw new Error(`${option} requires an integer from 1 through 2147483`);
 			if (option === "--pairs") options.pairs = number;
 			else if (option === "--target-node-ms") options.targetNodeMs = number;
+			else if (option === "--target-native-ms") options.targetNativeMs = number;
 			else if (option === "--case-timeout-ms") options.caseTimeoutMs = number;
 			else if (option === "--budget-seconds") options.budgetSeconds = number;
 			else if (option === "--perf-pairs") options.perfPairs = number;
@@ -611,15 +640,13 @@ async function compare(options: Options): Promise<void> {
 			const candidateCalibration = await kernel("calibrate-candidate", "candidate", 1);
 			assertRuntimeGapParity(nodeCalibration, baselineCalibration);
 			assertRuntimeGapParity(nodeCalibration, candidateCalibration);
-			const slowerMs = Math.max(
+			entry.scale = nativeMicroCalibrationScale(
 				nodeCalibration.elapsedMs,
 				baselineCalibration.elapsedMs,
 				candidateCalibration.elapsedMs,
-			);
-			entry.scale = Math.min(
-				256,
-				Math.max(1, Math.ceil(options.targetNodeMs / nodeCalibration.elapsedMs)),
-				calibrationScaleTimeoutCap(options.caseTimeoutMs, slowerMs, 5),
+				options.targetNodeMs,
+				options.targetNativeMs,
+				options.caseTimeoutMs,
 			);
 			entry.oracle = await kernel("node-oracle", "node", entry.scale);
 			for (const variant of ["baseline", "candidate"] as const)
