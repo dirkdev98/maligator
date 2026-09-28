@@ -17,7 +17,7 @@ describe("UTF-8 string storage and decoded-unit limits", () => {
 
 	it("applies decoded limits and BOM handling at streaming and body entrypoints", () => {
 		const binary = buildNativeBinary({
-			fixture: "tests/fixtures/utf8-string-storage/boundaries.mjs",
+			fixture: "tests/local/utf8-string-boundaries.mjs",
 			name: "utf8-string-boundaries",
 			mainFile: HOST_MAIN,
 			nodeEnabled: true,
