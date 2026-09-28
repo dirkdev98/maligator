@@ -434,6 +434,10 @@ i32 mal_gc_swap_stress_interval(i32 interval) {
     return previous;
 }
 
+#if !defined(__wasi__)
+// Keep queue growth out of the mark probe's register-save prologue.
+__attribute__((noinline))
+#endif
 static void mal_gc_grey_push(MalHeapHeader *cell) {
 #if !defined(__wasi__)
     if (g_trace_worker != nullptr) {
