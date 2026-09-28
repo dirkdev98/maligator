@@ -2389,7 +2389,7 @@
 			"owner": "projected split iteration over prepared strings",
 			"category": "memory-layout-usage",
 			"mechanisms": ["string-traversal", "string-search", "string-allocation"],
-			"inputShape": "1024 prepared varying-length fields padded with spaces and tabs, appended with pipe separators before timing; split/trim loop hashes only field lengths",
+			"inputShape": "1024 varying-length padded fields with pipe separators prepared by repeated concatenation before timing, with the same contents as the flat control; split/trim hashes only field lengths and may materialize the shared input during warmup",
 			"unit": "full split and trim traversal",
 			"sourceSeam": "runtime/src/builtin_string.c",
 			"controls": ["string-flat-split-cursor", "string-split", "string-rope-access"],

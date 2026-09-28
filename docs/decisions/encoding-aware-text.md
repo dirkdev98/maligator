@@ -142,6 +142,11 @@ uses that path without pattern setup or traversal. Exhaustion frees native
 scratch, and GC handles abandoned cursors after abrupt loop exits. No borrowed
 payload pointer survives a JavaScript body.
 
+Projected split/trim consumers read field boundaries directly for flat and
+dependent subjects, preserving compact width. Rope subjects still use the
+contiguous UTF-16 bridge while materializing fields; the first trim may flatten
+the shared source. A fused nonescaping trim-length consumer remains follow-up work.
+
 Latin-1 well-formedness and no-op trim preserve compact inputs. ASCII case changes
 use compact output, with identity results when unchanged; Unicode/locale fallbacks
 retain required bridges. Single-argument concat shares a balanced prefix beyond

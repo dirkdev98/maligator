@@ -3805,9 +3805,17 @@ static bool mal_builtin_string_trim_span_direct_impl(
     MalString *subject = mal_value_to_string(subject_value);
     usize length = mal_string_length(subject);
     if (start > end || end > length) return false;
-    const c16 *units = mal_string_code_units(subject);
-    while (start < end && mal_ecma_is_string_whitespace(units[start])) start++;
-    while (end > start && mal_ecma_is_string_whitespace(units[end - 1])) end--;
+    // Contiguous rope trimming avoids repeated edge descents; flat inputs keep compact width.
+    if (subject->storage == MAL_STRING_STORAGE_CONS) {
+        const c16 *units = mal_string_code_units(subject);
+        while (start < end && mal_ecma_is_string_whitespace(units[start])) start++;
+        while (end > start && mal_ecma_is_string_whitespace(units[end - 1])) end--;
+    } else {
+        while (start < end &&
+            mal_ecma_is_string_whitespace(mal_string_code_unit_at(subject, start))) start++;
+        while (end > start &&
+            mal_ecma_is_string_whitespace(mal_string_code_unit_at(subject, end - 1))) end--;
+    }
     *out = mal_builtin_string_slice(vm, subject, start, end - start);
     return true;
 }

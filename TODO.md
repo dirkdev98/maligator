@@ -401,10 +401,18 @@ contracts or investigates costs still visible after the string follow-ups.
 
 ## Focused performance work
 
-- [ ] Investigate rope-preserving projected trim with matched first-pass and
-      repeated-input comparisons. Require split/trim throughput to hold against
-      the materializing implementation, with prepared rope and flat controls,
-      complete output checks, and GC/materialization safety.
+- [ ] Fuse projected split/trim length consumption without flattening the shared
+      rope or repeatedly descending from its root for each field's edges and slice.
+      First prove split and trim results and their aliases do not escape through
+      ordinary uses, terminators, or phi/jump-edge arguments; the current ordinary
+      use index does not cover control-edge uses. Carry that stronger Core proof
+      through region and artifact verification, and invalidate affected cache/schema
+      identities before suppressing materialization. Preserve trim identity guards,
+      observable fallback, reentry, and abrupt completion. Cover loop-carried and
+      returned fields, then compare matched first-pass and repeated-input runs of
+      concatenation-prepared and flat controls. Require throughput to hold against
+      the materializing implementation, with complete output checks and
+      GC/materialization safety.
 
 - [ ] Investigate a bounded repeated-miss probe before property-query normalization,
       where already-string keys can avoid repeated constant-name and atom-table
