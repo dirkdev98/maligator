@@ -1071,16 +1071,21 @@ static u64 mal_string_hash_segment(u64 hash, const MalStringSegment *segment) {
 }
 
 static u64 mal_string_hash_continue(u64 hash, const MalString *string) {
-    MalStringSegment segment;
-    if (mal_string_try_get_segment(string, 0, string->length, &segment)) {
-        hash = mal_string_hash_segment(hash, &segment);
-    } else {
-        MalStringIterator iterator;
-        mal_string_iterator_init(&iterator, string, 0, string->length);
-        while (mal_string_iterator_next(&iterator, &segment)) hash = mal_string_hash_segment(hash, &segment);
-        mal_string_iterator_dispose(&iterator);
+    // Hashing cannot reenter or collect. Rope balance bounds the left recursion;
+    // keeping the right walk iterative avoids GC-owned cursor bookkeeping.
+    while (string->storage == MAL_STRING_STORAGE_CONS) {
+        hash = mal_string_hash_continue(hash, string->left);
+        string = string->right;
     }
-    return hash;
+    usize length = string->length;
+    if (length == 0) return hash;
+    usize offset = 0;
+    if (string->storage == MAL_STRING_STORAGE_DEPENDENT) {
+        offset = string->slice_offset;
+        string = string->parent;
+    }
+    MalStringSegment segment = mal_string_leaf_segment(string, offset, length);
+    return mal_string_hash_segment(hash, &segment);
 }
 
 u64 mal_string_hash_slow(const MalString *string) {
