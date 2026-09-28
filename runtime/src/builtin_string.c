@@ -3830,8 +3830,22 @@ static bool mal_builtin_string_trim_span_direct_impl(
     if (subject->storage == MAL_STRING_STORAGE_CONS) {
         segment = (MalStringSegment) {.latin1 = false, .length = end - start,
             .utf16_units = mal_string_code_units(subject) + start};
-    } else if (!mal_string_try_get_segment(subject, start, end - start, &segment)) {
-        abort();
+    } else {
+        const MalString *flat = subject;
+        usize offset = start;
+        if (flat->storage == MAL_STRING_STORAGE_DEPENDENT) {
+            offset += flat->slice_offset;
+            flat = flat->parent;
+        }
+        segment.latin1 = flat->latin1;
+        segment.length = end - start;
+        if (segment.latin1) {
+            segment.latin1_units = (flat->storage == MAL_STRING_STORAGE_INLINE
+                ? flat->inline_latin1_units : flat->latin1_units) + offset;
+        } else {
+            segment.utf16_units = (flat->storage == MAL_STRING_STORAGE_INLINE
+                ? flat->inline_code_units : flat->code_units) + offset;
+        }
     }
     usize leading = 0, trailing = segment.length;
     if (segment.latin1) {
