@@ -489,6 +489,12 @@ static i64 mal_builtin_string_search_cursor_next(MalBuiltinStringSearch *cursor)
             cursor->position += next - cursor->local;
             cursor->local = next;
             if (next == cursor->segment.length) continue;
+            cursor->local++;
+            cursor->position++;
+            MAL_PERF_COUNT(string_search_linear_comparisons);
+            if (cursor->length == 1) return (i64) (cursor->position - 1);
+            matched = 1;
+            continue;
         }
         usize index = cursor->reverse
             ? cursor->segment.length - cursor->local - 1 : cursor->local;
@@ -568,7 +574,7 @@ static i64 mal_builtin_string_find(const MalString *string, const MalString *sea
     if (search_length == 0) return (i64) from;
     if (string == search) return 0;
 
-    if (search_length == 1) {
+    if (search_length == 1 && string->storage != MAL_STRING_STORAGE_CONS) {
         MalStringSegment segment;
         if (mal_string_try_get_segment(string, from, length - from, &segment)) {
             usize candidate = mal_builtin_string_segment_find_unit(
