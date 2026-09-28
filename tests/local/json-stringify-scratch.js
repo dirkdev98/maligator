@@ -211,6 +211,30 @@ check(
 	"late fallback preserves prefix, omitted keys, detached holders, and ancestor key snapshots",
 );
 
+const detachedAncestor = {
+	outer: {
+		early: "prefix",
+		inner: {
+			before: 1,
+			trigger: {
+				toJSON() {
+					delete detachedAncestor.outer;
+					collect();
+					return 2;
+				},
+			},
+			after: 3,
+		},
+		after: 4,
+	},
+	after: 5,
+};
+check(
+	JSON.stringify(detachedAncestor) ===
+		'{"outer":{"early":"prefix","inner":{"before":1,"trigger":2,"after":3},"after":4},"after":5}',
+	"late fallback roots a detached ancestor while its descendant invokes collecting callbacks",
+);
+
 const lateArrayLog = [];
 const lateArray = [
 	"prefix",
