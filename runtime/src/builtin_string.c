@@ -3817,17 +3817,24 @@ static bool mal_builtin_string_trim_span_direct_impl(
     usize length = mal_string_length(subject);
     if (start > end || end > length) return false;
     // Contiguous rope trimming avoids repeated edge descents; flat inputs keep compact width.
+    MalStringSegment segment;
     if (subject->storage == MAL_STRING_STORAGE_CONS) {
-        const c16 *units = mal_string_code_units(subject);
-        while (start < end && mal_ecma_is_string_whitespace(units[start])) start++;
-        while (end > start && mal_ecma_is_string_whitespace(units[end - 1])) end--;
-    } else {
-        while (start < end &&
-            mal_ecma_is_string_whitespace(mal_string_code_unit_at(subject, start))) start++;
-        while (end > start &&
-            mal_ecma_is_string_whitespace(mal_string_code_unit_at(subject, end - 1))) end--;
+        segment = (MalStringSegment) {.latin1 = false, .length = end - start,
+            .utf16_units = mal_string_code_units(subject) + start};
+    } else if (!mal_string_try_get_segment(subject, start, end - start, &segment)) {
+        abort();
     }
-    *out = mal_builtin_string_slice(vm, subject, start, end - start);
+    usize leading = 0, trailing = segment.length;
+    if (segment.latin1) {
+        const u8 *units = segment.latin1_units;
+        while (leading < trailing && mal_ecma_is_string_whitespace(units[leading])) leading++;
+        while (trailing > leading && mal_ecma_is_string_whitespace(units[trailing - 1])) trailing--;
+    } else {
+        const c16 *units = segment.utf16_units;
+        while (leading < trailing && mal_ecma_is_string_whitespace(units[leading])) leading++;
+        while (trailing > leading && mal_ecma_is_string_whitespace(units[trailing - 1])) trailing--;
+    }
+    *out = mal_builtin_string_slice(vm, subject, start + leading, trailing - leading);
     return true;
 }
 
