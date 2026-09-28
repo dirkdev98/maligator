@@ -216,10 +216,13 @@ static bool string_iteration_reacquires_leaf_storage(MalVm *vm, usize leaves, bo
         if (count == 2) CHECK(mal_string_code_unit_at(item, 1) == iteration_unit(index + 1));
         index += count;
         if (flatten && index == 97) {
-            // The source drops its old children; the cursor alone now traces its leaf.
-            CHECK(cursor->string_leaf != nullptr && cursor->string_leaf->latin1);
+            // The source drops its old children; the cursor frontier retains the leaf.
+            CHECK(cursor->string_cursor != nullptr && cursor->string_cursor->iterator != nullptr);
+            MalString *leaf = (MalString *) cursor->string_cursor->iterator->current.string;
+            CHECK(leaf != nullptr && leaf->latin1);
             mal_string_code_units(source);
-            mal_string_code_units(cursor->string_leaf);
+            mal_string_code_units(leaf);
+            CHECK(!leaf->latin1);
             mal_gc_collect(vm);
         }
         if (!flatten) CHECK(source->storage == MAL_STRING_STORAGE_CONS);
@@ -227,7 +230,7 @@ static bool string_iteration_reacquires_leaf_storage(MalVm *vm, usize leaves, bo
     }
     bool done;
     CHECK(mal_vm_iterator_step_protocol_cursor(vm, cursor, &roots[4], &done));
-    CHECK(done && cursor->string_leaf == nullptr);
+    CHECK(done && cursor->string_cursor == nullptr);
     mal_gc_unroot(&span);
     return true;
 }
