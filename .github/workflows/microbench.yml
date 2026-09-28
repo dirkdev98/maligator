@@ -1,0 +1,215 @@
+name: Native microbenchmark compare
+run-name: Microbench ${{ github.event.issue.number || inputs.pr || inputs.ref }} by @${{ github.actor }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: "PR number (provide either pr or ref)"
+        type: string
+      ref:
+        description: "Candidate branch, tag, or SHA (provide either pr or ref)"
+        type: string
+      cases:
+        description: "Comma-separated runtime-gap case IDs; empty uses the default 13 controls"
+        type: string
+      pairs:
+        description: "Alternating measurement pairs per case (3–21)"
+        type: string
+        default: "7"
+      budget_seconds:
+        description: "Comparison budget including builds (60–3000 seconds)"
+        type: string
+        default: "2400"
+      diagnostics:
+        description: "Retain final ELF/assembly diagnostics and optional perf counters"
+        type: boolean
+        default: false
+  issue_comment:
+    types: [created]
+
+permissions: {}
+cache-mode: none
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  request:
+    if: >-
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
+      (github.event_name == 'issue_comment' && github.event.issue.pull_request &&
+       contains(github.event.comment.body, '/microbench'))
+    name: Authorize request and pin revisions
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      requested: ${{ steps.request.outputs.requested }}
+      pr: ${{ steps.request.outputs.pr }}
+      checkout_ref: ${{ steps.request.outputs.checkout_ref }}
+      head_sha: ${{ steps.request.outputs.head_sha }}
+      base_sha: ${{ steps.request.outputs.base_sha }}
+      cases: ${{ steps.request.outputs.cases }}
+      pairs: ${{ steps.request.outputs.pairs }}
+      budget_seconds: ${{ steps.request.outputs.budget_seconds }}
+      diagnostics: ${{ steps.request.outputs.diagnostics }}
+    steps:
+      - name: Check out trusted request code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+
+      - name: Set up Node.js without shared caches
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.14.1
+          package-manager-cache: false
+
+      - name: Check current writer permission and resolve main and candidate
+        id: request
+        env:
+          MICROBENCH_TOKEN: ${{ github.token }}
+        run: node scripts/microbench-request.ts
+
+  compare:
+    name: Compare with main
+    needs: request
+    if: needs.request.outputs.requested == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 65
+    permissions:
+      contents: read
+    env:
+      HEAD_SHA: ${{ needs.request.outputs.head_sha }}
+      BASE_SHA: ${{ needs.request.outputs.base_sha }}
+      CASES: ${{ needs.request.outputs.cases }}
+      PAIRS: ${{ needs.request.outputs.pairs }}
+      BUDGET_SECONDS: ${{ needs.request.outputs.budget_seconds }}
+      DIAGNOSTICS: ${{ needs.request.outputs.diagnostics }}
+      MALIGATOR_CACHE_DIR: ${{ runner.temp }}/microbench-cache
+    steps:
+      - name: Check out trusted workflow helpers
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: control
+          persist-credentials: false
+
+      # PR code, dependency scripts, and compiler outputs execute only in this
+      # read-only job. It has no secrets, write token, or cross-run cache saves.
+      - name: Check out the candidate and repository history
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ needs.request.outputs.checkout_ref }}
+          fetch-depth: 0
+          path: candidate
+          persist-credentials: false
+
+      - name: Verify the exact authorized revisions
+        working-directory: candidate
+        run: |
+          test "$(git rev-parse HEAD)" = "$HEAD_SHA" || {
+            echo 'The PR head changed after authorization. Submit a new request.' >&2
+            exit 2
+          }
+          test "$(git rev-parse --verify "$BASE_SHA^{commit}")" = "$BASE_SHA"
+          mkdir -p "$GITHUB_WORKSPACE/evidence" "$MALIGATOR_CACHE_DIR"
+          printf 'main=%s\ncandidate=%s\n' "$BASE_SHA" "$HEAD_SHA" > "$GITHUB_WORKSPACE/evidence/revisions.txt"
+
+      - name: Set up Node.js without shared caches
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.14.1
+          package-manager-cache: false
+
+      - name: Install the native toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes clang-19 llvm-19 lld-19 linux-tools-generic
+          mkdir -p "$RUNNER_TEMP/microbench-bin"
+          ln -s "$(command -v llvm-ar-19)" "$RUNNER_TEMP/microbench-bin/ar"
+          ln -s "$(command -v ld.lld-19)" "$RUNNER_TEMP/microbench-bin/ld.lld"
+          echo "$RUNNER_TEMP/microbench-bin" >> "$GITHUB_PATH"
+          echo 'CC=clang-19' >> "$GITHUB_ENV"
+          echo 'CXX=clang++-19' >> "$GITHUB_ENV"
+          for candidate in /usr/lib/linux-tools/*/perf; do
+            if [ -x "$candidate" ]; then
+              echo "NATIVE_MICRO_PERF=$candidate" >> "$GITHUB_ENV"
+              break
+            fi
+          done
+          toolchain="$(sed -n 's/^channel = "\([^"]*\)"/\1/p' control/runtime/rust/rust-toolchain.toml)"
+          test -n "$toolchain"
+          rustup toolchain install "$toolchain" --profile minimal --no-self-update
+          echo "RUSTUP_TOOLCHAIN=$toolchain" >> "$GITHUB_ENV"
+
+      - name: Install candidate dependencies
+        working-directory: candidate
+        run: npm ci --ignore-scripts --no-audit --no-fund
+
+      - name: Check the benchmark environment
+        working-directory: candidate
+        run: |
+          set -o pipefail
+          npm run env:check -- --json | tee "$GITHUB_WORKSPACE/evidence/environment.log"
+          node src/index.ts cache status
+
+      - name: Inspect the comparison plan
+        working-directory: candidate
+        run: |
+          set -o pipefail
+          args=(--base "$BASE_SHA" --pairs "$PAIRS" --target-node-ms 80
+                --budget-seconds "$BUDGET_SECONDS" --output "$GITHUB_WORKSPACE/evidence/micro")
+          if [ -n "$CASES" ]; then
+            IFS=',' read -r -a selected <<< "$CASES"
+            for case_id in "${selected[@]}"; do args+=(--case "$case_id"); done
+          fi
+          if [ "$DIAGNOSTICS" = true ]; then args+=(--diagnostics --perf-pairs 3); fi
+          node scripts/native-micro-compare.ts "${args[@]}" --plan=json | tee "$GITHUB_WORKSPACE/evidence/plan.json"
+
+      - name: Measure frozen workloads in alternating pairs
+        working-directory: candidate
+        run: |
+          set -o pipefail
+          args=(--base "$BASE_SHA" --pairs "$PAIRS" --target-node-ms 80
+                --budget-seconds "$BUDGET_SECONDS" --output "$GITHUB_WORKSPACE/evidence/micro")
+          if [ -n "$CASES" ]; then
+            IFS=',' read -r -a selected <<< "$CASES"
+            for case_id in "${selected[@]}"; do args+=(--case "$case_id"); done
+          fi
+          if [ "$DIAGNOSTICS" = true ]; then args+=(--diagnostics --perf-pairs 3); fi
+          node scripts/native-micro-compare.ts "${args[@]}" 2>&1 | tee "$GITHUB_WORKSPACE/evidence/comparison.log"
+
+      - name: Summarize available results
+        if: always()
+        env:
+          COMPARISON_JOB_STATUS: ${{ job.status }}
+        run: node control/scripts/microbench-report.ts "$GITHUB_WORKSPACE/evidence/micro/report.json"
+
+      - name: Retain comparison evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: microbench-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            evidence/*.txt
+            evidence/*.json
+            evidence/*.log
+            evidence/*.md
+            evidence/micro/**/*.json
+            evidence/micro/**/*.log
+            evidence/micro/**/*.mjs
+            evidence/micro/**/*.c
+            evidence/micro/**/*.h
+            evidence/micro/**/*.asm
+            evidence/micro/**/*.csv
+            evidence/micro/**/*.patch
+            evidence/micro/**/production.elf
+            evidence/micro/**/symbols.elf
+          if-no-files-found: warn
+          retention-days: 7
