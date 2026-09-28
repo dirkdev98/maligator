@@ -228,6 +228,48 @@ equal(
 	"toJSON runs exactly once",
 );
 
+const functionOrder = [];
+function serializableFunction() {}
+serializableFunction.toJSON = function (key) {
+	functionOrder.push("keep:" + key);
+	collect();
+	return "\xff";
+};
+function omittedFunction() {}
+omittedFunction.toJSON = function (key) {
+	functionOrder.push("omit:" + key);
+	return undefined;
+};
+equal(
+	JSON.stringify({ prefix: "plain", keep: serializableFunction, omit: omittedFunction }),
+	'{"prefix":"plain","keep":"\xff"}',
+	"function values observe toJSON before function omission",
+);
+equal(functionOrder.join(","), "keep:keep,omit:omit", "function toJSON is not replayed");
+
+let inheritedIndexGets = 0;
+const holey = ["prefix", , "suffix"];
+const arrayPrototype = Object.create(Array.prototype);
+Object.defineProperty(arrayPrototype, "1", {
+	get() {
+		inheritedIndexGets++;
+		collect();
+		return "\u0100";
+	},
+});
+Object.setPrototypeOf(holey, arrayPrototype);
+equal(
+	JSON.stringify({ prefix: 1, holey }),
+	'{"prefix":1,"holey":["prefix","\u0100","suffix"]}',
+	"array holes observe inherited getters",
+);
+equal(inheritedIndexGets, 1, "inherited index getter is not replayed");
+equal(
+	JSON.stringify({ prefix: "plain", raw: JSON.rawJSON("123.50") }),
+	'{"prefix":"plain","raw":123.50}',
+	"raw JSON retains its unquoted source spelling",
+);
+
 const proxyOrder = [];
 const proxy = new Proxy(
 	{ value: "\xff" },
