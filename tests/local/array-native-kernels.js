@@ -720,6 +720,85 @@ async function main() {
 	);
 	delete Array.prototype[1];
 
+	const tinySparseShrink = [];
+	for (const index of [4294967294, 4096, 2147483649, 2048, 8192]) {
+		tinySparseShrink[index] = index;
+	}
+	Object.defineProperty(tinySparseShrink, "4096", { configurable: false });
+	check(
+		"tiny sparse shrink stops after deleting higher unsigned indices",
+		!Reflect.defineProperty(tinySparseShrink, "length", { value: 0 }) &&
+			tinySparseShrink.length === 4097 &&
+			tinySparseShrink[2048] === 2048 &&
+			tinySparseShrink[4096] === 4096 &&
+			!(8192 in tinySparseShrink) &&
+			!(2147483649 in tinySparseShrink) &&
+			!(4294967294 in tinySparseShrink),
+	);
+
+	const sparseShrink = [];
+	sparseShrink[1] = { value: 17 };
+	sparseShrink.metadata = "keep";
+	sparseShrink["4294967295"] = "not an array index";
+	for (let i = 0; i < 257; i++) {
+		const index = 4096 + ((i * 73) % 257) * 4099;
+		sparseShrink[index] = { index };
+	}
+	sparseShrink.length = 42;
+	let sparseRemoved = true;
+	for (let i = 0; i < 257; i++) {
+		if (4096 + i * 4099 in sparseShrink) sparseRemoved = false;
+	}
+	check(
+		"sparse length shrink removes scrambled indices and keeps other properties",
+		sparseRemoved &&
+			sparseShrink.length === 42 &&
+			sparseShrink[1].value === 17 &&
+			sparseShrink.metadata === "keep" &&
+			sparseShrink["4294967295"] === "not an array index" &&
+			!(17 in sparseShrink),
+	);
+
+	const blockedShrink = [];
+	let blockedGetterCalls = 0;
+	for (const index of [2147483649, 2048, 4294967294, 4096, 7000, 8192]) {
+		blockedShrink[index] = index;
+	}
+	for (let i = 0; i < 32; i++) {
+		const index = 9000 + ((i * 13) % 32) * 301;
+		blockedShrink[index] = index;
+	}
+	Object.defineProperty(blockedShrink, "4096", { configurable: false });
+	Object.defineProperty(blockedShrink, "7000", {
+		configurable: false,
+		get() {
+			blockedGetterCalls++;
+			return 7000;
+		},
+	});
+	const blockedResult = Reflect.defineProperty(blockedShrink, "length", {
+		value: 0,
+		writable: false,
+	});
+	let higherIndicesRemoved = true;
+	for (let i = 0; i < 32; i++) {
+		if (9000 + i * 301 in blockedShrink) higherIndicesRemoved = false;
+	}
+	check(
+		"sparse shrink orders unsigned indices and stops at the highest fixed element",
+		!blockedResult &&
+			higherIndicesRemoved &&
+			blockedShrink.length === 7001 &&
+			blockedShrink[2048] === 2048 &&
+			blockedShrink[4096] === 4096 &&
+			7000 in blockedShrink &&
+			!(8192 in blockedShrink) &&
+			!(2147483649 in blockedShrink) &&
+			!(4294967294 in blockedShrink) &&
+			!Object.getOwnPropertyDescriptor(blockedShrink, "length").writable &&
+			blockedGetterCalls === 0,
+	);
+
 	for (const [name, passed] of results) {
 		if (!passed) console.log("FAIL: " + name);
 	}

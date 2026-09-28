@@ -12,6 +12,8 @@
 extern const MalRuntimeImage mal_runtime_image;
 
 #define GRAPH_WIDTH 1024
+#define FANOUT_ROOTS 2
+#define FANOUT_WIDTH 4096
 
 static usize forced_workers;
 static usize failed_worker_index;
@@ -78,7 +80,7 @@ static int check_capacity(usize capacity, usize failure_index, bool start_parked
     mal_gc_test_trace_env_hook = count_worker_trace;
     mal_gc_register_finalizer(MAL_HEAP_OBJECT, count_finalized);
 
-    MalValue roots[GRAPH_WIDTH + 1];
+    MalValue roots[GRAPH_WIDTH + 1 + FANOUT_ROOTS];
     for (usize i = 0; i < GRAPH_WIDTH; ++i) {
         MalEnv *env = mal_env_new(&vm, nullptr, (i32) i, 1);
         envs[i] = env;
@@ -90,6 +92,16 @@ static int check_capacity(usize capacity, usize failure_index, bool start_parked
     map_target = mal_object_new(&vm.heap, nullptr);
     mal_map_object_set(map, mal_value_new_undefined(), mal_value_from_object(map_target));
     roots[GRAPH_WIDTH] = mal_value_from_map_object(map);
+    MalEnv *fanouts[FANOUT_ROOTS];
+    // A single batch can discover more children than the root worklist reserved.
+    for (usize root = 0; root < FANOUT_ROOTS; ++root) {
+        fanouts[root] = mal_env_new(&vm, nullptr, 0, FANOUT_WIDTH);
+        for (usize i = 0; i < FANOUT_WIDTH; ++i) {
+            MalObject *child = mal_object_new(&vm.heap, targets[i % GRAPH_WIDTH]);
+            fanouts[root]->slots[i] = mal_value_from_object(child);
+        }
+        roots[GRAPH_WIDTH + 1 + root] = mal_value_from_heap(&fanouts[root]->header);
+    }
     scan_values = roots;
     scan_value_count = (i32) countof(roots);
     scan_vm = &vm;
@@ -116,6 +128,13 @@ static int check_capacity(usize capacity, usize failure_index, bool start_parked
         if (finalized[i] != 0) return 7;
     }
     if (map_target_finalized != 0) return 11;
+    for (usize root = 0; root < FANOUT_ROOTS; ++root) {
+        for (usize i = 0; i < FANOUT_WIDTH; ++i) {
+            MalObject *child = mal_value_to_object(fanouts[root]->slots[i]);
+            if (!mal_heap_mark_is_old(child->header.mark) ||
+                child->prototype != targets[i % GRAPH_WIDTH]) return 13;
+        }
+    }
 
     scan_values = nullptr;
     scan_vm = nullptr;
@@ -151,6 +170,7 @@ int main(void) {
         {2, 0, true, 0, 1},
         {2, 1, false, 1, 2},
         {1, SIZE_MAX, false, 1, 0},
+        {2, SIZE_MAX, false, 2, 0},
     };
     for (usize scenario = 0; scenario < countof(cases); ++scenario) {
         for (usize i = 0; i < countof(targets); ++i) {

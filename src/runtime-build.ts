@@ -34,7 +34,7 @@ import type { RustArtifacts } from "./rust-build.ts";
 import { toolArguments } from "./toolchain.ts";
 
 const RUNTIME_OBJECT_PRODUCER = artifactProducer("runtime-object", 2, "cc");
-const RUNTIME_ARCHIVE_PRODUCER = artifactProducer("runtime-archive", 3, "ar");
+const RUNTIME_ARCHIVE_PRODUCER = artifactProducer("runtime-archive", 4, "ar");
 
 function runtimeSourceHash(
 	runtimeDirectory: string,
@@ -318,6 +318,8 @@ function runtimeSources(
 		for (const name of readdirSync(layerDirectory)
 			.filter((entry) => entry.endsWith(".c"))
 			.sort()) {
+			if (layer === "host" && name === "sqlite.c" && !context.features.nodeEnabled)
+				continue;
 			sources.push({
 				name,
 				path: path.join(layerDirectory, name),

@@ -254,7 +254,7 @@ static bool mal_table_grow_slots_if_needed(MalTable *table) {
 
 // Grows `entries` when the append cursor reaches capacity. The grow may move the
 // buffer, but handles/iterators are indices, so they stay valid. Routed through the
-// RAW space (gc_realloc_raw: alloc-new / copy / free-old) so the bytes count toward
+// RAW space so the bytes count toward
 // the GC trigger; no safepoint runs inside the allocator, so the detached old buffer
 // is never observed by the collector (the entries it holds are copied forward and
 // traced via the owner at the new address).
@@ -273,7 +273,9 @@ static void mal_table_grow_entries_if_needed(MalTable *table) {
 static bool mal_table_should_compact(const MalTable *table) {
     return table->role == MAL_TABLE_ROLE_MAP && table->iterator_pins == 0
         && table->tombstone_count >= 16
-        && table->tombstone_count > table->size;
+        && (table->tombstone_count >= table->size ||
+            (table->entry_count == table->entry_capacity &&
+                table->tombstone_count >= table->size / 4));
 }
 
 // The table header, non-inline `slots`, `entries`, and each entry's `data`
@@ -630,6 +632,12 @@ void mal_table_compact(MalTable *table) {
         target_slots *= 2;
     }
     mal_table_rehash(table, target_slots);
+}
+
+void mal_table_compact_if_needed(MalTable *table) {
+    if (table->size == 0 || mal_table_should_compact(table)) {
+        mal_table_compact(table);
+    }
 }
 
 void mal_table_pin(MalTable *table) {

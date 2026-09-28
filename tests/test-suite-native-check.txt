@@ -16,6 +16,7 @@ tests/native/gc-dense-card-moves.test.ts
 tests/native/gc-heap-usage.test.ts
 tests/native/gc-mark-step-scaling.test.ts
 tests/native/gc-minor-sweep.test.ts
+tests/native/gc-raw-realloc.test.ts
 tests/native/gc-remembered-scan.test.ts
 tests/native/gc-lifecycle.test.ts
 tests/native/global-property-cache.test.ts

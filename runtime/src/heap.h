@@ -517,10 +517,10 @@ void gc_free_raw(MalHeap *heap, void *ptr);
 
 /**
  * Grow (or shrink) a raw buffer previously returned by mal_heap_alloc_raw,
- * preserving its contents. RAW cells have no realloc, so a grow that outgrows the
- * current cell's size class is alloc-new / copy / free-old; a request that still
- * fits the current cell returns it unchanged. `ptr == nullptr` allocates fresh.
- * Copies the smaller of the old and new sizes. Owner-held only (no header).
+ * preserving its contents. A grow past an in-block cell's size class allocates,
+ * copies, and frees; large buffers use realloc. A request that still fits the
+ * current capacity returns it unchanged. `ptr == nullptr` allocates fresh.
+ * Owner-held only (no header).
  */
 void *gc_realloc_raw(MalHeap *heap, void *ptr, usize new_size);
 

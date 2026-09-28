@@ -10,7 +10,7 @@ import {
 } from "../../src/test-harness.ts";
 
 describe("GC worker capacity", () => {
-	it("retains and reclaims a wide graph with zero and one worker across VM reinitialization", () => {
+	it("retains and reclaims wide graphs with zero, one, and two workers across VM reinitialization", () => {
 		const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-gc-worker-capacity-"));
 		try {
 			const binary = buildNativeBinary({

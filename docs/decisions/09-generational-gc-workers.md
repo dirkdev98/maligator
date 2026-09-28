@@ -20,22 +20,28 @@ unsupported.
 The collector uses an old-generation bit and remembered set for minor collections.
 An alternating major mark color keeps generation age separate from liveness.
 Minors park JavaScript and trace inline; measured worker handoff cost exceeded
-their short mark work. They do not overlap an active major. Major roots are scanned
-at mutator safepoints before background
-work begins and again at remark. The compiled root maps and native root spans are
-read only while their owner is parked. SATB deletion barriers preserve the initial
+their short mark work. They do not overlap an active major or dispatch workers,
+so native minor mark claims use relaxed atomic loads and stores under exclusive
+mutator ownership. Shared major mark claims still require atomic compare/exchange.
+Major roots are scanned at mutator safepoints before background work begins and
+again at remark. The compiled root maps and native root spans are read only while
+their owner is parked. SATB deletion barriers preserve the initial
 major graph, and card barriers preserve old-to-young edges. The SATB buffer holds
 at most 4,096 values; a full buffer claims its pending values into the mutator's
 grey queue without tracing payloads or scanning roots inside an unrooted native
 frame. New allocations are marked live while a major is in flight.
 
-Workers claim marks atomically, append discoveries to private lists, and transfer
-those lists to the mutator only after every worker in a batch acknowledges
-completion. An empty mutator grey list cannot end a major while a batch remains
-active. The mutator may trace other grey cells during a batch. Remark joins the
-batch, rescans roots, drains SATB and grey work to a fixpoint, and processes weak
-references and ephemerons. An explicit `gc()` completes the in-flight cycle and
-performs a fresh full collection.
+Workers append discoveries to private lists and acknowledge completion under the
+batch mutex. Only after observing every acknowledgement does the mutator reserve
+space for the combined discovery count and copy each list in worker order. The
+reservation checks count and byte-size overflow. Workers wait for the next batch
+before modifying those lists again, and the batch remains active until the merge
+finishes. An empty mutator grey list cannot end a major while a batch remains
+active. The mutator may trace other grey cells during a batch. Remark waits for
+batch completion, rescans roots, drains SATB and grey work to a fixpoint, and
+processes weak references and ephemerons. Batch completion does not stop or join
+the worker threads. An explicit `gc()` completes the in-flight cycle and performs
+a fresh full collection.
 
 Direct tracing during mutation is limited to immutable Symbol descriptions,
 immutable AsyncContext links, and Env parent/slot edges whose native slot accesses
@@ -46,8 +52,11 @@ shapes with more than 32 inline properties, and arrays with more than 128 dense
 elements. A batch copies at most 2,048 values. All other mutable layouts are
 traced by the mutator or while JavaScript is parked. Weak processing, all
 finalizers, sweep, allocator free lists, and large-object reclamation remain with
-the mutator. Moving sweep to workers would need exclusive block ownership and a
-separate mutator-affine finalization handoff; it is deferred unless matched
+the mutator. Sweep starts after all marking and weak processing finish; no worker
+can still update a mark. Native block sweeping therefore uses relaxed atomic
+mark loads and stores, with no read-modify-write claim needed. Moving sweep to workers
+would need exclusive block ownership and a separate mutator-affine finalization
+handoff; it is deferred unless matched
 measurements justify that complexity.
 Incremental sweep tags passed blocks and completed chunks. A black cell allocated
 behind the cursor contributes to survivor bytes immediately, while a cell ahead
@@ -72,6 +81,23 @@ deduplicates identical callbacks, rejects capacity exhaustion, and callbacks
 tolerate a VM without the subsystem that originally installed them. The GC stats
 exit handler is registered once per process.
 
+## Weak table storage
+
+Weak cleanup deletes every dead key after the ephemeron fixpoint, with SATB
+marking disabled so deletion cannot revive a dead edge. Deletion repairs hash
+probe chains immediately; tombstoned entries are skipped by lookup and tracing.
+Rebuilding the insertion-order storage can therefore be deferred independently
+of weak-reference semantics.
+
+Cleanup releases empty, unpinned table storage immediately. Otherwise Map-family
+compaction requires no iterator pins and at least 16 tombstones. It runs when the
+dead count reaches the live count, or when the entry buffer is full and the dead
+count reaches the integer threshold `live_count / 4`. The proportional threshold
+prevents repeated sparse deletions from rebuilding a large full table every few
+insertions. Persistent Map/Set iterators prevent entry renumbering; compaction
+advances the handle epoch, and cached entry hints validate the live entry and key
+before use.
+
 ## Validation boundary
 
 Native overlap fixtures pause a worker after publication but before it reads an
@@ -79,8 +105,13 @@ Env slot or copied object/array edges. They check snapshot survival, current
 reachability, later reclamation, and completion. One fixture also disposes and
 reinitializes a VM while a worker is paused in tracing. ThreadSanitizer covers
 those overlap cases. A separate fixture checks idle completion before host exit,
-reactor wait, and scheduler exit. GC statistics separate mutator pause time,
-worker CPU, copied values and heap values, worker discoveries, and remark join
+reactor wait, and scheduler exit. The worker-capacity fixture discovers more
+children than the initial grey reservation and checks zero, one, and two workers,
+including partial startup failure. Weak-cleanup fixtures cover sparse object and
+symbol key churn through major and minor collections, surviving values, empty
+storage release, and bounded RAW ownership. Map tests cover cached hints after
+compaction and iterator pins during growth. GC statistics separate mutator pause
+time, worker CPU, copied values and heap values, worker discoveries, and remark join
 time. A pause is one uninterrupted mutator stop; an incremental major can have
 several pauses while still counting as one collection. Profile manifest schema 7
 labels these events as pauses, while the raw capture layout remains schema 6.

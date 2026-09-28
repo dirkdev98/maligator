@@ -99,9 +99,9 @@ bool mal_array_object_dense_reserve_exact(MalArrayObject *array, u32 needed) {
     }
     // Route the dense vector through the RAW space so its bytes count toward the
     // GC trigger (element-heavy workloads used to under-trigger) and so an empty
-    // RAW block returns to the OS. gc_realloc_raw grows by alloc-new / copy /
-    // free-old (RAW has no in-place grow); no safepoint runs inside it, so the
-    // detached old buffer is never observed by the collector.
+    // RAW block returns to the OS. Growth may move the buffer; no safepoint runs
+    // inside the allocator, so the detached old buffer is never observed by the
+    // collector.
     MalValue *grown = gc_realloc_raw_profiled(
         mal_gc_current_heap(), array->elements, sizeof(MalValue) * (usize) needed,
         MAL_PROFILE_ALLOCATION_FAMILY_ARRAY);
@@ -619,6 +619,29 @@ u32 mal_array_object_length(const MalArrayObject *array) {
     return array->length;
 }
 
+static int mal_array_compare_indices_descending(const void *left, const void *right) {
+    u32 left_index = *(const u32 *) left;
+    u32 right_index = *(const u32 *) right;
+    return (left_index < right_index) - (left_index > right_index);
+}
+
+static void mal_array_sort_indices_descending(u32 *indices, usize count) {
+    if (count > 16) {
+        qsort(indices, count, sizeof(u32), mal_array_compare_indices_descending);
+        return;
+    }
+    // Tiny sparse shrinks avoid the platform sort's indirect comparator calls.
+    for (usize i = 1; i < count; i++) {
+        u32 index = indices[i];
+        usize position = i;
+        while (position > 0 && indices[position - 1] < index) {
+            indices[position] = indices[position - 1];
+            position--;
+        }
+        indices[position] = index;
+    }
+}
+
 /**
  * Spec ArraySetLength deletion: drop own index elements at or past
  * new_length, highest first, stopping at the first non-configurable one.
@@ -658,15 +681,7 @@ static u32 mal_array_object_shrink(MalArrayObject *array, u32 new_length) {
     }
 
     // Descending order so a non-configurable element fixes the final length.
-    for (usize i = 0; i < count; i++) {
-        for (usize j = i + 1; j < count; j++) {
-            if (indices[j] > indices[i]) {
-                u32 tmp = indices[i];
-                indices[i] = indices[j];
-                indices[j] = tmp;
-            }
-        }
-    }
+    mal_array_sort_indices_descending(indices, count);
 
     u32 achieved = new_length;
     for (usize i = 0; i < count; i++) {

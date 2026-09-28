@@ -5,6 +5,7 @@
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #if !defined(__wasi__)
 #include <pthread.h>
 #include <time.h>
@@ -433,6 +434,10 @@ i32 mal_gc_swap_stress_interval(i32 interval) {
     return previous;
 }
 
+#if !defined(__wasi__)
+// Keep queue growth out of the mark probe's register-save prologue.
+__attribute__((noinline))
+#endif
 static void mal_gc_grey_push(MalHeapHeader *cell) {
 #if !defined(__wasi__)
     if (g_trace_worker != nullptr) {
@@ -958,7 +963,11 @@ static void mal_gc_shade(MalHeapHeader *cell) {
             desired = (expected & ~MAL_MARK_COLOR) | g_gc_vm->heap.mark_color;
         } else {
             if (mal_heap_mark_is_old(expected)) return;
-            desired = expected | MAL_MARK_OLD;
+            // Minors park the mutator and never dispatch workers, so no other
+            // thread can compete for this young cell's mark.
+            atomic_store_explicit(&cell->mark, expected | MAL_MARK_OLD,
+                memory_order_relaxed);
+            break;
         }
         if (atomic_compare_exchange_weak_explicit(&cell->mark, &expected, desired,
                 memory_order_relaxed, memory_order_relaxed)) break;
@@ -2146,6 +2155,22 @@ static void mal_gc_workers_start_batch(MalGcState *g, usize count,
     pthread_mutex_unlock(&g->worker_mutex);
 }
 
+static void mal_gc_grey_reserve(MalGcState *g, usize required) {
+    if (required > SIZE_MAX / sizeof(MalHeapHeader *)) abort();
+    usize capacity = g->grey_capacity == 0 ? 4096 : g->grey_capacity;
+    while (capacity < required) {
+        if (capacity > SIZE_MAX / (2 * sizeof(MalHeapHeader *))) {
+            capacity = required;
+            break;
+        }
+        capacity *= 2;
+    }
+    MalHeapHeader **cells = realloc(g->grey, capacity * sizeof(MalHeapHeader *));
+    if (cells == nullptr) abort();
+    g->grey = cells;
+    g->grey_capacity = capacity;
+}
+
 static bool mal_gc_workers_collect_batch(MalGcState *g, bool wait) {
     if (!g->worker_batch_active) return true;
     u64 wait_start = g->stats_enabled && wait ? mal_monotonic_now_ns() : 0;
@@ -2161,6 +2186,12 @@ static bool mal_gc_workers_collect_batch(MalGcState *g, bool wait) {
     pthread_mutex_unlock(&g->worker_mutex);
     if (wait_start != 0) g->worker_wait_ns += mal_monotonic_now_ns() - wait_start;
     u64 merge_start = g->stats_enabled ? mal_monotonic_now_ns() : 0;
+    usize merged_count = g->grey_count;
+    for (usize i = 0; i < g->workers_created; ++i) {
+        if (g->workers[i].discovered_count > SIZE_MAX - merged_count) abort();
+        merged_count += g->workers[i].discovered_count;
+    }
+    if (merged_count > g->grey_capacity) mal_gc_grey_reserve(g, merged_count);
     g->worker_traces += g->worker_batch_count;
     u64 batch_traces = g->worker_batch_count;
     for (usize i = 0; i < g->workers_created; ++i) {
@@ -2180,8 +2211,12 @@ static bool mal_gc_workers_collect_batch(MalGcState *g, bool wait) {
             g->concurrent_handoffs += worker->discovered_count;
         }
         g->snapshot_discoveries += worker->batch_snapshot_discoveries;
-        for (usize j = 0; j < worker->discovered_count; ++j) {
-            mal_gc_grey_push(worker->discovered[j]);
+        if (worker->discovered_count > 0) {
+            // Every worker has acknowledged this batch; their private queues
+            // cannot change until the next dispatch.
+            memcpy(g->grey + g->grey_count, worker->discovered,
+                worker->discovered_count * sizeof(MalHeapHeader *));
+            g->grey_count += worker->discovered_count;
         }
         worker->discovered_count = 0;
     }
@@ -2519,11 +2554,10 @@ static void mal_gc_weak_pass(void) {
         for (usize d = 0; d < g_gc->dead_keys_count; ++d) {
             mal_table_delete(entries, g_gc->dead_keys[d]);
         }
-        // mal_table_delete only tombstones; without compaction a churning weak
-        // collection's order array grows without bound. Weak collections have no
-        // JS iteration surface, so compacting (which renumbers storage) is safe.
+        // Deletion already repairs hash probes. Amortize storage compaction so a
+        // sparse death does not rebuild every surviving entry on each collection.
         if (g_gc->dead_keys_count > 0) {
-            mal_table_compact(entries);
+            mal_table_compact_if_needed(entries);
         }
     }
 
