@@ -6,7 +6,6 @@
 #include <string.h>
 
 #include "gc.h"
-#include "ascii.h"
 #include "heap_string.h"
 #include "object_ops.h"
 #include "perf_stats.h"
@@ -725,7 +724,21 @@ bool mal_array_key_is_length(MalKey key) {
         return false;
     }
 
-    return mal_string_equals_ascii(mal_value_to_string(key.value), "length");
+    MalString *string = mal_value_to_string(key.value);
+    if (mal_string_length(string) != 6) return false;
+    MalStringSegment segment;
+    if (mal_string_try_get_segment(string, 0, 6, &segment)) {
+        if (segment.latin1) return memcmp(segment.latin1_units, "length", 6) == 0;
+        const c16 *units = segment.utf16_units;
+        return units[0] == 'l' && units[1] == 'e' && units[2] == 'n'
+            && units[3] == 'g' && units[4] == 't' && units[5] == 'h';
+    }
+    return mal_string_code_unit_at(string, 0) == 'l'
+        && mal_string_code_unit_at(string, 1) == 'e'
+        && mal_string_code_unit_at(string, 2) == 'n'
+        && mal_string_code_unit_at(string, 3) == 'g'
+        && mal_string_code_unit_at(string, 4) == 't'
+        && mal_string_code_unit_at(string, 5) == 'h';
 }
 
 /**
