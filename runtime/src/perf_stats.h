@@ -79,6 +79,8 @@ typedef struct MalPerfStats {
     u64 string_hash_calls;
     u64 string_hash_cached_hits;
     u64 string_hash_computes;
+    u64 string_iterator_nodes;
+    u64 string_hash_code_units;
     u64 string_hash_dependent_computes;
     u64 string_hash_cons_flattens;
     u64 string_search_calls;
@@ -88,6 +90,7 @@ typedef struct MalPerfStats {
     u64 string_search_last_unit_rejects;
     u64 string_search_memcmp_calls;
     u64 string_search_memcmp_code_units;
+    u64 string_search_linear_comparisons;
     u64 string_reverse_search_calls;
     u64 string_reverse_search_candidates;
     u64 string_reverse_search_first_unit_rejects;

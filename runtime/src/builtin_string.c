@@ -415,6 +415,142 @@ static usize mal_builtin_string_segment_find_unit(
     return match == nullptr ? segment->length : (usize) (match - segment->latin1_units);
 }
 
+#define MAL_STRING_SEARCH_INLINE_UNITS 32u
+
+typedef struct MalBuiltinStringSearch {
+    MalStringIterator iterator;
+    MalStringSegment segment;
+    c16 *needle;
+    u32 *prefix;
+    usize length;
+    usize local;
+    usize position;
+    bool reverse;
+    c16 inline_needle[MAL_STRING_SEARCH_INLINE_UNITS];
+    u32 inline_prefix[MAL_STRING_SEARCH_INLINE_UNITS];
+} MalBuiltinStringSearch;
+
+// KMP owns its pattern so a split can allocate results between matches without
+// borrowing the needle's representation. The haystack cursor still must not
+// cross JS reentry or a UTF-16 bridge that can materialize its leaves.
+static void mal_builtin_string_search_cursor_init(
+    MalBuiltinStringSearch *cursor, const MalString *string,
+    const MalString *search, usize from, bool reverse
+) {
+    cursor->length = mal_string_length(search);
+    assert(cursor->length != 0);
+    cursor->needle = cursor->inline_needle;
+    cursor->prefix = cursor->inline_prefix;
+    if (cursor->length > MAL_STRING_SEARCH_INLINE_UNITS) {
+        cursor->prefix = malloc(cursor->length * (sizeof(u32) + sizeof(c16)));
+        if (cursor->prefix == nullptr) abort();
+        cursor->needle = (c16 *) (cursor->prefix + cursor->length);
+    }
+    mal_string_copy_range_to((MalString *) search, 0, cursor->length, cursor->needle);
+    if (reverse) {
+        for (usize i = 0; i < cursor->length / 2; i++) {
+            c16 unit = cursor->needle[i];
+            cursor->needle[i] = cursor->needle[cursor->length - i - 1];
+            cursor->needle[cursor->length - i - 1] = unit;
+        }
+    }
+    cursor->prefix[0] = 0;
+    for (usize i = 1, matched = 0; i < cursor->length; i++) {
+        while (matched != 0 && cursor->needle[i] != cursor->needle[matched]) {
+            MAL_PERF_COUNT(string_search_linear_comparisons);
+            matched = cursor->prefix[matched - 1];
+        }
+        MAL_PERF_COUNT(string_search_linear_comparisons);
+        if (cursor->needle[i] == cursor->needle[matched]) matched++;
+        cursor->prefix[i] = (u32) matched;
+    }
+    cursor->reverse = reverse;
+    cursor->segment.length = 0;
+    cursor->local = 0;
+    cursor->position = reverse ? from + cursor->length : from;
+    if (reverse) {
+        mal_string_iterator_init_reverse(&cursor->iterator, string, 0, cursor->position);
+    } else {
+        mal_string_iterator_init(&cursor->iterator, string, from, mal_string_length(string) - from);
+    }
+}
+
+// Matches do not overlap: split/replace resume after the complete previous match.
+static i64 mal_builtin_string_search_cursor_next(MalBuiltinStringSearch *cursor) {
+    usize matched = 0;
+    for (;;) {
+        if (cursor->local == cursor->segment.length) {
+            if (!mal_string_iterator_next(&cursor->iterator, &cursor->segment)) return -1;
+            cursor->local = 0;
+        }
+        if (matched == 0 && !cursor->reverse) {
+            usize next = mal_builtin_string_segment_find_unit(
+                &cursor->segment, cursor->local, cursor->needle[0]);
+            cursor->position += next - cursor->local;
+            cursor->local = next;
+            if (next == cursor->segment.length) continue;
+        }
+        usize index = cursor->reverse
+            ? cursor->segment.length - cursor->local - 1 : cursor->local;
+        c16 unit = mal_string_segment_code_unit_at(&cursor->segment, index);
+        cursor->local++;
+        if (cursor->reverse) cursor->position--;
+        else cursor->position++;
+        while (matched != 0 && unit != cursor->needle[matched]) {
+            MAL_PERF_COUNT(string_search_linear_comparisons);
+            matched = cursor->prefix[matched - 1];
+        }
+        MAL_PERF_COUNT(string_search_linear_comparisons);
+        if (unit == cursor->needle[matched]) matched++;
+        if (matched == cursor->length) {
+            return (i64) (cursor->reverse ? cursor->position : cursor->position - cursor->length);
+        }
+    }
+}
+
+static void mal_builtin_string_search_cursor_dispose(MalBuiltinStringSearch *cursor) {
+    mal_string_iterator_dispose(&cursor->iterator);
+    if (cursor->prefix != cursor->inline_prefix) free(cursor->prefix);
+}
+
+typedef struct MalBuiltinStringCopyCursor {
+    MalStringIterator iterator;
+    MalStringSegment segment;
+    usize local;
+    usize position;
+} MalBuiltinStringCopyCursor;
+
+static void mal_builtin_string_copy_cursor_init(
+    MalBuiltinStringCopyCursor *cursor, const MalString *string
+) {
+    mal_string_iterator_init(&cursor->iterator, string, 0, mal_string_length(string));
+    cursor->segment.length = 0;
+    cursor->local = 0;
+    cursor->position = 0;
+}
+
+static void mal_builtin_string_copy_cursor_advance(
+    MalBuiltinStringCopyCursor *cursor, usize end, MalTextBuffer *output
+) {
+    while (cursor->position < end) {
+        if (cursor->local == cursor->segment.length) {
+            if (!mal_string_iterator_next(&cursor->iterator, &cursor->segment)) abort();
+            cursor->local = 0;
+        }
+        usize count = cursor->segment.length - cursor->local;
+        if (count > end - cursor->position) count = end - cursor->position;
+        if (output != nullptr) {
+            if (cursor->segment.latin1) {
+                mal_text_buffer_append_latin1(output, cursor->segment.latin1_units + cursor->local, count);
+            } else {
+                mal_text_buffer_append_units(output, cursor->segment.utf16_units + cursor->local, count);
+            }
+        }
+        cursor->local += count;
+        cursor->position += count;
+    }
+}
+
 static i64 mal_builtin_string_find(const MalString *string, const MalString *search, usize from) {
     MAL_PERF_COUNT(string_search_calls);
     usize length = mal_string_length(string);
@@ -424,6 +560,13 @@ static i64 mal_builtin_string_find(const MalString *string, const MalString *sea
     if (string == search) return 0;
 
     if (search_length > 1) MAL_PERF_COUNT(string_search_multi_unit_calls);
+    if (search_length >= MAL_STRING_SEARCH_INLINE_UNITS) {
+        MalBuiltinStringSearch cursor;
+        mal_builtin_string_search_cursor_init(&cursor, string, search, from, false);
+        i64 result = mal_builtin_string_search_cursor_next(&cursor);
+        mal_builtin_string_search_cursor_dispose(&cursor);
+        return result;
+    }
     MalStringSegment needle;
     bool contiguous_needle = mal_string_try_get_segment(search, 0, search_length, &needle);
     c16 first = contiguous_needle ? mal_string_segment_code_unit_at(&needle, 0)
@@ -489,14 +632,21 @@ static i64 mal_builtin_string_reverse_find(
     usize search_length = mal_string_length(search);
     if (search_length == 0) return (i64) from;
     if (string == search) return 0;
+    if (search_length >= MAL_STRING_SEARCH_INLINE_UNITS) {
+        MalBuiltinStringSearch cursor;
+        mal_builtin_string_search_cursor_init(&cursor, string, search, from, true);
+        i64 result = mal_builtin_string_search_cursor_next(&cursor);
+        mal_builtin_string_search_cursor_dispose(&cursor);
+        return result;
+    }
     c16 first = mal_string_code_unit_at((MalString *) search, 0);
     MalStringIterator iterator;
-    mal_string_iterator_init(&iterator, string, 0, from + 1);
+    mal_string_iterator_init_reverse(&iterator, string, 0, from + 1);
     MalStringSegment segment;
-    usize offset = 0;
+    usize offset = from + 1;
     i64 result = -1;
-    // Each leaf is scanned backwards; the last matching leaf determines the result.
     while (mal_string_iterator_next(&iterator, &segment)) {
+        offset -= segment.length;
         usize end = segment.length;
         while (end != 0) {
             usize position = MAL_STRING_UNIT_NOT_FOUND;
@@ -511,12 +661,12 @@ static i64 mal_builtin_string_reverse_find(
             MAL_PERF_COUNT(string_reverse_search_candidates);
             if (search_length == 1 || mal_builtin_string_matches_at(string, search, offset + position)) {
                 result = (i64) (offset + position);
-                break;
+                goto done;
             }
             end = position;
         }
-        offset += segment.length;
     }
+done:
     mal_string_iterator_dispose(&iterator);
     return result;
 }
@@ -2651,27 +2801,30 @@ static bool mal_builtin_string_split_plan_matches(
 ) {
     usize length = mal_string_length(string);
     usize separator_length = mal_string_length(separator);
-    usize position = 0;
     *match_count = 0;
     *overflow_match_position = length;
 
     if (separator_length > length) return true;
 
 
-    while (position <= length - separator_length) {
-        i64 match_position = mal_builtin_string_find(string, separator, position);
+    MalBuiltinStringSearch cursor;
+    mal_builtin_string_search_cursor_init(&cursor, string, separator, 0, false);
+    bool complete = true;
+    for (;;) {
+        i64 match_position = mal_builtin_string_search_cursor_next(&cursor);
         if (match_position < 0) break;
         if (*match_count == MAL_STRING_SPLIT_MATCH_PLAN_CAPACITY) {
             MAL_PERF_COUNT(string_split_plan_overflows);
             *overflow_match_position = (usize) match_position;
-            return false;
+            complete = false;
+            break;
         }
         match_offsets[(*match_count)++] = (usize) match_position;
         MAL_PERF_COUNT(string_split_planned_matches);
-        if (*match_count == limit) return true;
-        position = (usize) match_position + separator_length;
+        if (*match_count == limit) break;
     }
-    return true;
+    mal_builtin_string_search_cursor_dispose(&cursor);
+    return complete;
 }
 
 static MalValue mal_builtin_string_prototype_split(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
@@ -2761,15 +2914,17 @@ static MalValue mal_builtin_string_prototype_split(MalVm *vm, MalValue this_valu
     if (separator_length == 0) {
         u32 exact_count = length < (usize) lim ? (u32) length : lim;
         (void) mal_array_object_fresh_dense_reserve_exact(result, exact_count);
-        // Split into individual code units, stopping at the limit.
-        for (usize i = 0; i < length; i++) {
-            if (result_length == lim) {
-                goto split_done;
+        MalStringIterator iterator;
+        mal_string_iterator_init(&iterator, string, 0, exact_count);
+        MalStringSegment units;
+        while (mal_string_iterator_next(&iterator, &units)) {
+            for (usize i = 0; i < units.length; i++) {
+                MalValue unit = mal_value_from_string(mal_intrinsic_code_unit(
+                    vm, mal_string_segment_code_unit_at(&units, i)));
+                mal_builtin_string_split_append(result, unit);
             }
-            MalValue segment = mal_builtin_string_slice(vm, string, i, 1);
-            mal_builtin_string_split_append(result, segment);
-            result_length++;
         }
+        mal_string_iterator_dispose(&iterator);
         goto split_done;
     }
 
@@ -2809,21 +2964,26 @@ static MalValue mal_builtin_string_prototype_split(MalVm *vm, MalValue this_valu
     }
 
     usize position = overflow_match_position;
+    MalBuiltinStringSearch cursor;
+    mal_builtin_string_search_cursor_init(
+        &cursor, string, separator, position + separator_length, false);
     while (true) {
         MalValue segment =
             mal_builtin_string_slice(vm, string, segment_start, position - segment_start);
         mal_builtin_string_split_append(result, segment);
         result_length++;
         if (result_length == lim) {
+            mal_builtin_string_search_cursor_dispose(&cursor);
             goto split_done;
         }
         position += separator_length;
         segment_start = position;
         if (position + separator_length > length) break;
-        i64 match_position = mal_builtin_string_find(string, separator, position);
+        i64 match_position = mal_builtin_string_search_cursor_next(&cursor);
         if (match_position < 0) break;
         position = (usize) match_position;
     }
+    mal_builtin_string_search_cursor_dispose(&cursor);
 
     MalValue segment =
         mal_builtin_string_slice(vm, string, segment_start, length - segment_start);
@@ -2902,6 +3062,9 @@ static bool mal_builtin_string_split_projection_impl(
 
     if (!plan_complete) {
         usize match_position = overflow_match_position;
+        MalBuiltinStringSearch cursor;
+        mal_builtin_string_search_cursor_init(
+            &cursor, string, separator, match_position + separator_length, false);
         while (true) {
             if (next_output < output_count && indices[next_output] == total_match_count) {
                 roots[2 + next_output] = mal_builtin_string_slice(
@@ -2911,11 +3074,11 @@ static bool mal_builtin_string_split_projection_impl(
             total_match_count++;
             segment_start = match_position + separator_length;
             if (segment_start + separator_length > length) break;
-            i64 next_match = mal_builtin_string_find(
-                string, separator, segment_start);
+            i64 next_match = mal_builtin_string_search_cursor_next(&cursor);
             if (next_match < 0) break;
             match_position = (usize) next_match;
         }
+        mal_builtin_string_search_cursor_dispose(&cursor);
     }
 
     if (next_output < output_count && indices[next_output] == total_match_count) {
@@ -3041,13 +3204,15 @@ static MalValue mal_builtin_string_replace_literal(
         if (search_length == 0) {
             match_count = length + 1;
         } else {
-            usize position = first_match + search_length;
-            while (position <= length - search_length) {
-                i64 match = mal_builtin_string_find(string, search, position);
+            MalBuiltinStringSearch cursor;
+            mal_builtin_string_search_cursor_init(
+                &cursor, string, search, first_match + search_length, false);
+            for (;;) {
+                i64 match = mal_builtin_string_search_cursor_next(&cursor);
                 if (match < 0) break;
                 match_count++;
-                position = (usize) match + search_length;
             }
+            mal_builtin_string_search_cursor_dispose(&cursor);
         }
     }
 
@@ -3063,26 +3228,38 @@ static MalValue mal_builtin_string_replace_literal(
     mal_text_buffer_hint_capacity(&output, result_length);
     usize source_position = 0;
     usize match_position = first_match;
+    MalBuiltinStringCopyCursor source_cursor;
+    mal_builtin_string_copy_cursor_init(&source_cursor, string);
+    MalBuiltinStringSearch cursor;
+    if (search_length != 0 && match_count > 1) {
+        mal_builtin_string_search_cursor_init(
+            &cursor, string, search, first_match + search_length, false);
+    }
     for (usize match_index = 0; match_index < match_count && output.status == MAL_TEXT_BUFFER_OK; match_index++) {
-        mal_text_buffer_append_range(&output, string, source_position, match_position - source_position);
+        mal_builtin_string_copy_cursor_advance(&source_cursor, match_position, &output);
         mal_text_buffer_append_string(&output, replacement);
         source_position = match_position + search_length;
+        mal_builtin_string_copy_cursor_advance(&source_cursor, source_position, nullptr);
         if (search_length == 0 && match_position < length) {
-            mal_text_buffer_append_range(&output, string, match_position, 1);
             source_position++;
+            mal_builtin_string_copy_cursor_advance(&source_cursor, source_position, &output);
         }
         if (match_index + 1 < match_count) {
             if (search_length == 0) match_position++;
             else {
-                i64 next = mal_builtin_string_find(string, search, source_position);
+                i64 next = mal_builtin_string_search_cursor_next(&cursor);
                 if (next < 0) abort();
                 match_position = (usize) next;
             }
         }
     }
-    if (source_position < length) {
-        mal_text_buffer_append_range(&output, string, source_position, length - source_position);
+    if (search_length != 0 && match_count > 1) {
+        mal_builtin_string_search_cursor_dispose(&cursor);
     }
+    if (source_position < length) {
+        mal_builtin_string_copy_cursor_advance(&source_cursor, length, &output);
+    }
+    mal_string_iterator_dispose(&source_cursor.iterator);
     return mal_builtin_string_finish_text(vm, &output);
 }
 
@@ -3097,6 +3274,11 @@ MalValue mal_builtin_string_replace_known(MalVm *vm, MalString *string, MalStrin
     mal_gc_root(&root_span, roots, 4);
     StrBuf out = {0};
     MalValue result = mal_value_new_undefined();
+    MalBuiltinStringSearch match_cursor;
+    bool match_cursor_active = false;
+    u32 inline_matches[MAL_STRING_SPLIT_MATCH_PLAN_CAPACITY];
+    u32 *matches = inline_matches;
+    usize match_count = 0, match_capacity = countof(inline_matches);
 
     bool functional = mal_value_is_callable(roots[2]);
     MalString *replacement = nullptr;
@@ -3129,8 +3311,39 @@ MalValue mal_builtin_string_replace_known(MalVm *vm, MalString *string, MalStrin
         goto done;
     }
 
+    if (search_length != 0 && all) {
+        mal_builtin_string_search_cursor_init(
+            &match_cursor, string, search, (usize) first_match + search_length, false);
+        match_cursor_active = true;
+        if (functional) {
+            // The spec collects positions before calling the replacer. Keeping
+            // only offsets also allows callbacks to materialize/collect ropes.
+            for (;;) {
+                i64 match = mal_builtin_string_search_cursor_next(&match_cursor);
+                if (match < 0) break;
+                if (match_count == match_capacity) {
+                    usize capacity = match_capacity * 2;
+                    u32 *grown = matches == inline_matches
+                        ? malloc(capacity * sizeof(u32))
+                        : realloc(matches, capacity * sizeof(u32));
+                    if (grown == nullptr) {
+                        mal_vm_throw_allocation_error(vm);
+                        goto done;
+                    }
+                    if (matches == inline_matches) memcpy(grown, matches, match_count * sizeof(u32));
+                    matches = grown;
+                    match_capacity = capacity;
+                }
+                matches[match_count++] = (u32) match;
+            }
+            mal_builtin_string_search_cursor_dispose(&match_cursor);
+            match_cursor_active = false;
+        }
+    }
+
     usize seg_start = 0;
     usize position = 0;
+    usize next_match = 0;
     bool first_match_pending = search_length != 0;
     bool replace_once_done = false;
     while (position <= length && !replace_once_done) {
@@ -3139,7 +3352,9 @@ MalValue mal_builtin_string_replace_known(MalVm *vm, MalString *string, MalStrin
                 position = (usize) first_match;
                 first_match_pending = false;
             } else {
-                i64 match_position = mal_builtin_string_find(string, search, position);
+                i64 match_position = functional
+                    ? (next_match < match_count ? (i64) matches[next_match++] : -1)
+                    : mal_builtin_string_search_cursor_next(&match_cursor);
                 if (match_position < 0) {
                     break;
                 }
@@ -3208,6 +3423,8 @@ MalValue mal_builtin_string_replace_known(MalVm *vm, MalString *string, MalStrin
     result = mal_builtin_string_finish_text(vm, &out);
 
 done:
+    if (match_cursor_active) mal_builtin_string_search_cursor_dispose(&match_cursor);
+    if (matches != inline_matches) free(matches);
     mal_text_buffer_dispose(&out);
     mal_gc_unroot(&root_span);
     return result;
