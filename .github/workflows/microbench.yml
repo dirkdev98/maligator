@@ -215,3 +215,37 @@ jobs:
             evidence/micro/**/symbols.elf
           if-no-files-found: warn
           retention-days: 7
+
+  report:
+    name: Report comparison on PR
+    needs: [request, compare]
+    if: >-
+      always() && github.event_name == 'issue_comment' &&
+      needs.request.outputs.requested == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      actions: read
+      issues: write
+    steps:
+      - name: Download the sanitized comparison summary
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: microbench-${{ github.run_id }}-${{ github.run_attempt }}
+          path: report
+
+      - name: Post the comparison on the pull request
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ needs.request.outputs.pr }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          test -f report/summary.md
+          {
+            cat report/summary.md
+            printf '\n[Workflow run](%s)\n' "$RUN_URL"
+          } > report/comment.md
+          gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" \
+            --method POST \
+            --raw-field body="$(cat report/comment.md)"
+
