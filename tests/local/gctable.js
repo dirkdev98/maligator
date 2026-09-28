@@ -142,16 +142,16 @@ ok(
 const sparseMap = new Map();
 for (let i = 0; i < 128; i++) sparseMap.set(i, i);
 ok("map-sparse-delete-hint-setup", sparseMap.get(127) === 127);
-for (let i = 0; i < 16; i++) sparseMap.delete(i);
+for (let i = 0; i < 32; i++) sparseMap.delete(i);
 sparseMap.set(128, 128);
 gc();
 const sparseKeys = Array.from(sparseMap.keys());
 ok(
 	"map-reuses-full-entry-buffer-with-sparse-tombstones",
-	sparseMap.size === 113 &&
+	sparseMap.size === 97 &&
 		sparseMap.get(127) === 127 &&
-		sparseKeys.length === 113 &&
-		sparseKeys.every((key, index) => key === index + 16),
+		sparseKeys.length === 97 &&
+		sparseKeys.every((key, index) => key === index + 32),
 );
 
 const pinnedMap = new Map();
