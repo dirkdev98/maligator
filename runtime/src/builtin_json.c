@@ -113,6 +113,30 @@ static usize mal_json_latin1_safe_run(const u8 *units, usize length) {
     return position;
 }
 
+static bool mal_json_halfword_has_zero(u64 word) {
+    return ((word - UINT64_C(0x0001000100010001)) & ~word &
+        UINT64_C(0x8000800080008000)) != 0;
+}
+
+static usize mal_json_utf16_unescaped_run(const c16 *units, usize length) {
+    usize position = 0;
+    while (length - position >= sizeof(u64) / sizeof(c16)) {
+        u64 word;
+        memcpy(&word, units + position, sizeof(word));
+        bool control = ((word - UINT64_C(0x0020002000200020)) & ~word &
+            UINT64_C(0x8000800080008000)) != 0;
+        if (control ||
+            mal_json_halfword_has_zero(word ^ UINT64_C(0x0022002200220022)) ||
+            mal_json_halfword_has_zero(word ^ UINT64_C(0x005c005c005c005c))) break;
+        position += sizeof(u64) / sizeof(c16);
+    }
+    while (position < length && units[position] >= 0x20 &&
+        units[position] != '"' && units[position] != '\\') {
+        position++;
+    }
+    return position;
+}
+
 static bool mal_json_builder_push_quoted(MalJsonBuilder *builder, const MalString *string) {
     if (!mal_json_builder_push(builder, '"')) return false;
     MalStringIterator iterator;
@@ -1184,11 +1208,15 @@ typedef struct MalJsonParser {
 } MalJsonParser;
 
 static void mal_json_parser_init(MalJsonParser *parser) {
-    mal_string_iterator_init(&parser->iterator, parser->source, 0, parser->length);
-    mal_string_iterator_next(&parser->iterator, &parser->segment);
+    if (!mal_string_try_get_segment(
+            parser->source, 0, parser->length, &parser->segment)) {
+        mal_string_iterator_init(&parser->iterator, parser->source, 0, parser->length);
+        mal_string_iterator_next(&parser->iterator, &parser->segment);
+    }
 }
 
-static c16 mal_json_parser_unit(MalJsonParser *parser, usize position) {
+__attribute__((noinline))
+static c16 mal_json_parser_unit_slow(MalJsonParser *parser, usize position) {
     if (position < parser->segment_start) {
         mal_string_iterator_dispose(&parser->iterator);
         mal_string_iterator_init(
@@ -1202,6 +1230,37 @@ static c16 mal_json_parser_unit(MalJsonParser *parser, usize position) {
     }
     return mal_string_segment_code_unit_at(
         &parser->segment, position - parser->segment_start);
+}
+
+static inline c16 mal_json_parser_unit(MalJsonParser *parser, usize position) {
+    usize offset = position - parser->segment_start;
+    if (offset < parser->segment.length) {
+        return mal_string_segment_code_unit_at(&parser->segment, offset);
+    }
+    return mal_json_parser_unit_slow(parser, position);
+}
+
+// Raw JSON string runs may contain surrogate code units. Only controls, the
+// delimiter, and backslashes interrupt a run; decoding escapes is a separate step.
+static bool mal_json_parser_unescaped_run(
+    MalJsonParser *parser, MalJsonBuilder *builder
+) {
+    while (parser->position < parser->length) {
+        usize offset = parser->position - parser->segment_start;
+        if (offset >= parser->segment.length) {
+            mal_json_parser_unit_slow(parser, parser->position);
+            offset = parser->position - parser->segment_start;
+        }
+        usize available = parser->segment.length - offset;
+        usize run = parser->segment.latin1
+            ? mal_json_latin1_safe_run(parser->segment.latin1_units + offset, available)
+            : mal_json_utf16_unescaped_run(parser->segment.utf16_units + offset, available);
+        if (builder != nullptr && run != 0 &&
+            !mal_json_builder_push_segment(builder, &parser->segment, offset, run)) return false;
+        parser->position += run;
+        if (run < available) break;
+    }
+    return true;
 }
 
 static MalValue mal_json_parse_value(
@@ -1311,26 +1370,28 @@ static bool mal_json_consume_keyword(MalJsonParser *parser, const byte *keyword)
 static MalValue mal_json_parse_string(MalJsonParser *parser) {
     // The opening quote was already consumed.
     usize start = parser->position;
-    usize position = start;
-    for (; position < parser->length; position++) {
-        c16 code_unit = mal_json_parser_unit(parser, position);
-        if (code_unit == '"') {
-            parser->position = position + 1;
-            return mal_value_from_string(mal_string_new_slice(
-                &parser->vm->heap, parser->source, start, position - start));
-        }
-        if (code_unit == '\\' || code_unit < 0x20) break;
+    mal_json_parser_unescaped_run(parser, nullptr);
+    if (parser->position < parser->length &&
+        mal_json_parser_unit(parser, parser->position) == '"') {
+        usize length = parser->position++ - start;
+        return mal_value_from_string(mal_string_new_slice(
+            &parser->vm->heap, parser->source, start, length));
+    }
+    if (parser->position == parser->length) {
+        mal_json_parse_error(parser);
+        return mal_value_new_undefined();
     }
     MalJsonBuilder builder = {.vm = parser->vm};
     if (mal_text_buffer_append_range(
-            &builder.buffer, parser->source, start, position - start) != MAL_TEXT_BUFFER_OK) {
+            &builder.buffer, parser->source, start, parser->position - start) != MAL_TEXT_BUFFER_OK) {
         mal_text_buffer_dispose(&builder.buffer);
         mal_json_throw_string_length(parser->vm);
         return mal_value_new_undefined();
     }
-    parser->position = position;
 
     while (parser->position < parser->length) {
+        if (!mal_json_parser_unescaped_run(parser, &builder)) goto length_error;
+        if (parser->position == parser->length) break;
         c16 code_unit = mal_json_parser_unit(parser, parser->position++);
         if (code_unit == '"') {
             MalValue result = mal_value_from_string(
@@ -1343,14 +1404,6 @@ static MalValue mal_json_parse_string(MalJsonParser *parser) {
             mal_text_buffer_dispose(&builder.buffer);
             mal_json_parse_error(parser);
             return mal_value_new_undefined();
-        }
-
-        if (code_unit != '\\') {
-            if (!mal_json_builder_push(&builder, code_unit)) {
-                mal_text_buffer_dispose(&builder.buffer);
-                return mal_value_new_undefined();
-            }
-            continue;
         }
 
         if (parser->position >= parser->length) {
@@ -1429,13 +1482,11 @@ static MalValue mal_json_parse_number(MalJsonParser *parser) {
         // A leading zero is the whole integer part. A following digit remains
         // as trailing input and makes the containing JSON text invalid.
     } else if (parser->position < parser->length &&
-               mal_json_parser_unit(parser, parser->position) >= '1' &&
-               mal_json_parser_unit(parser, parser->position) <= '9') {
+               (u32) (mal_json_parser_unit(parser, parser->position) - '1') < 9) {
         do {
             parser->position++;
         } while (parser->position < parser->length &&
-                 mal_json_parser_unit(parser, parser->position) >= '0' &&
-                 mal_json_parser_unit(parser, parser->position) <= '9');
+                 (u32) (mal_json_parser_unit(parser, parser->position) - '0') < 10);
     } else {
         mal_json_parse_error(parser);
         return mal_value_new_undefined();
@@ -1446,7 +1497,7 @@ static MalValue mal_json_parse_number(MalJsonParser *parser) {
         integer_literal = false;
         usize fraction_start = parser->position;
         while (parser->position < parser->length &&
-               mal_json_parser_unit(parser, parser->position) >= '0' && mal_json_parser_unit(parser, parser->position) <= '9') {
+               (u32) (mal_json_parser_unit(parser, parser->position) - '0') < 10) {
             parser->position++;
         }
         if (parser->position == fraction_start) {
@@ -1461,7 +1512,7 @@ static MalValue mal_json_parse_number(MalJsonParser *parser) {
         }
         usize exponent_start = parser->position;
         while (parser->position < parser->length &&
-               mal_json_parser_unit(parser, parser->position) >= '0' && mal_json_parser_unit(parser, parser->position) <= '9') {
+               (u32) (mal_json_parser_unit(parser, parser->position) - '0') < 10) {
             parser->position++;
         }
         if (parser->position == exponent_start) {
@@ -1815,27 +1866,37 @@ static MalValue mal_json_parse_value(
     }
 
     MalValue value;
-    if (mal_json_consume(parser, '"')) {
-        value = mal_json_parse_string(parser);
-        goto primitive;
-    }
-    if (mal_json_consume(parser, '[')) {
-        return mal_json_parse_array(parser, source_start, node_out);
-    }
-    if (mal_json_consume(parser, '{')) {
-        return mal_json_parse_object(parser, source_start, node_out);
-    }
-    if (mal_json_consume_keyword(parser, "null")) {
-        value = mal_value_new_null();
-        goto primitive;
-    }
-    if (mal_json_consume_keyword(parser, "true")) {
-        value = mal_value_new_boolean(true);
-        goto primitive;
-    }
-    if (mal_json_consume_keyword(parser, "false")) {
-        value = mal_value_new_boolean(false);
-        goto primitive;
+    switch (mal_json_parser_unit(parser, parser->position)) {
+        case '"':
+            parser->position++;
+            value = mal_json_parse_string(parser);
+            goto primitive;
+        case '[':
+            parser->position++;
+            return mal_json_parse_array(parser, source_start, node_out);
+        case '{':
+            parser->position++;
+            return mal_json_parse_object(parser, source_start, node_out);
+        case 'n':
+            if (mal_json_consume_keyword(parser, "null")) {
+                value = mal_value_new_null();
+                goto primitive;
+            }
+            break;
+        case 't':
+            if (mal_json_consume_keyword(parser, "true")) {
+                value = mal_value_new_boolean(true);
+                goto primitive;
+            }
+            break;
+        case 'f':
+            if (mal_json_consume_keyword(parser, "false")) {
+                value = mal_value_new_boolean(false);
+                goto primitive;
+            }
+            break;
+        default:
+            break;
     }
 
     value = mal_json_parse_number(parser);
