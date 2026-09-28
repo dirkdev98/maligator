@@ -154,7 +154,7 @@ function privateSlot(source: string, register: number): number {
 
 describe("native numeric indexed-load root publication", () => {
 	it.each(["int32", "number"] as const)(
-		"keeps final results and unchanged receivers private on successful %s index probes",
+		"admits only final results and leaves successful %s index probes without root-copy stores",
 		(representation) => {
 			const source = emit(
 				fn([key, indexedLoad, indexedLoad, call, { opcode: "RETURN", value: 6 }]),
@@ -166,8 +166,8 @@ describe("native numeric indexed-load root publication", () => {
 				representation,
 			);
 			privateSlot(source, indexedLoad.dst);
-			privateSlot(source, indexedLoad.object);
-			expect(source.match(/__gc_slots\[\d+\] = r0;/g)).toHaveLength(1);
+			expect(source).not.toContain("#define r0 (__private_r0)");
+			expect(source).toContain("#define r0 (__gc_slots[");
 			const firstProbe = source.indexOf("mal_vm_array_try_get_index(");
 			const mask = source.indexOf("MAL_ROOT_MASK(");
 			expect(firstProbe).toBeGreaterThan(-1);
@@ -184,38 +184,23 @@ describe("native numeric indexed-load root publication", () => {
 		},
 	);
 
-	it("publishes boxed-index roots before the generic helper and its final result before the next call", () => {
-		const source = emit(
-			fn([key, indexedLoad, call, { opcode: "RETURN", value: 6 }]),
-			[point(1, [0, 5], [0, 3, 5]), point(2, [0, 3, 5], [6])],
-			"boxed",
-		);
-		const slot = privateSlot(source, indexedLoad.dst);
-		const keyAssignment = source.indexOf("r2 = mal_value_from_i32(0);");
-		const helper = source.indexOf("mal_vm_indexed_fast_load(", keyAssignment);
-		const nextCall = source.indexOf("MalCompletion call_result_2", helper);
-		expect(keyAssignment).toBeGreaterThan(0);
-		expect(helper).toBeGreaterThan(keyAssignment);
-		expect(nextCall).toBeGreaterThan(helper);
-		const incoming = source.slice(keyAssignment, helper);
-		expect(incoming).toContain(`__gc_slots[${slot}] = MAL_VALUE_UNDEFINED;`);
-		expect(incoming).toContain("MAL_ROOT_MASK(");
-		expect(source.slice(helper, nextCall)).toContain(`__gc_slots[${slot}] = r3;`);
-		expect(source).not.toContain("mal_vm_array_try_get_index(");
-	});
+	it.each([
+		["boxed", undefined],
+		["number", { kind: "exact-contained-array-element" }],
+	] as const)(
+		"does not seed results of unaudited %s index plans",
+		(representation, plan) => {
+			const source = emit(
+				fn([key, indexedLoad, call, { opcode: "RETURN", value: 6 }]),
+				[point(1, [0, 5], [0, 3, 5]), point(2, [0, 3, 5], [6])],
+				representation,
+				plan,
+			);
+			expect(source).not.toContain("__private_r");
+		},
+	);
 
-	it("keeps specialized indexed storage continuously rooted", () => {
-		const source = emit(
-			fn([key, indexedLoad, call, { opcode: "RETURN", value: 6 }]),
-			[point(1, [0, 5], [0, 3, 5]), point(2, [0, 3, 5], [6])],
-			"number",
-			{ kind: "exact-contained-array-element" },
-		);
-		expect(source).not.toContain(`#define r${indexedLoad.dst} (__private_r`);
-		expect(source).toContain(`#define r${indexedLoad.dst} (__gc_slots[`);
-	});
-
-	it("retains continuous storage when another definition uses a compound out-parameter", () => {
+	it("defers numeric-index masks while compound outputs retain continuous storage", () => {
 		const source = emit(
 			fn([
 				{ opcode: "LOAD_STATIC_ARGUMENT", dst: 4, direct: -1, fallback: 3, index: 2 },
@@ -230,8 +215,17 @@ describe("native numeric indexed-load root publication", () => {
 				point(3, [0, 3, 5], [6]),
 			],
 		);
-		expect(source).not.toContain("#define r3 (__private_r3)");
+		expect(source).not.toContain("__private_r");
 		expect(source).toContain("#define r3 (__gc_slots[");
+		const probe = source.indexOf("mal_vm_array_try_get_index(");
+		const miss = source.indexOf("mal_vm_indexed_fast_load_index(", probe);
+		const nextCall = source.indexOf("mal_vm_call_cached(", miss);
+		expect(probe).toBeGreaterThan(0);
+		expect(miss).toBeGreaterThan(probe);
+		expect(nextCall).toBeGreaterThan(miss);
+		expect(source.slice(0, probe)).not.toContain("MAL_ROOT_MASK(0x14)");
+		expect(source.slice(probe, miss)).toContain("MAL_ROOT_MASK(0x14)");
+		expect(source.slice(miss, nextCall)).toContain("MAL_ROOT_MASK(0x4)");
 	});
 
 	it("keeps closure construction final and later exact numeric results private", () => {

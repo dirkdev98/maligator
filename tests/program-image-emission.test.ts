@@ -1544,8 +1544,6 @@ describe("emit-program-image instruction packing", () => {
 					Number(match[2]),
 				]),
 			);
-			for (const match of output!.matchAll(/__gc_slots\[(\d+)\] = r(\d+);/g))
-				slots.set(Number(match[2]), Number(match[1]));
 			const masks: Array<bigint> = [];
 			let publishedMask = 0n;
 			for (const match of output!.matchAll(
@@ -1665,13 +1663,9 @@ describe("emit-program-image instruction packing", () => {
 		expect(output.match(/__gc_frame\.inactive_slots = UINT64_C/g)).toHaveLength(1);
 		expect(output.match(/MAL_ROOT_MASK\(0x4\);/g)).toHaveLength(2);
 		expect(output.match(/MAL_ROOT_MASK\(0x2\);/g)).toHaveLength(2);
-		const join = output.indexOf("L4:;");
-		const joinedCall = output.indexOf("MalCompletion call_result_4", join);
-		expect(join).toBeGreaterThan(0);
-		expect(joinedCall).toBeGreaterThan(join);
-		expect(output.slice(join, joinedCall)).toContain("MAL_ROOT_MASK(0x4);");
+		expect(output).toMatch(/L4:;\n {4}MAL_ROOT_MASK\(0x4\);/);
 		expect(output).toMatch(
-			/if \(mal_gc_poll\) \{[^{}\n]*MAL_ROOT_MASK\(0x2\); mal_gc_safepoint\(vm\); \} goto L4;/,
+			/if \(mal_gc_poll\) \{ MAL_ROOT_MASK\(0x2\); mal_gc_safepoint\(vm\); \} goto L4;/,
 		);
 	});
 
@@ -1734,16 +1728,12 @@ describe("emit-program-image instruction packing", () => {
 
 		expect(output.match(/MAL_ROOT_MASK\(0x1\);/g)).toHaveLength(2);
 		expect(output.match(/MAL_ROOT_MASK\(0x2\);/g)).toHaveLength(1);
-		const branch = output.match(/if \(mal_value_is_empty\(r0\)\) \{([\s\S]*?)\n\s+\}/);
-		expect(branch).not.toBeNull();
-		const helper = branch![1]!.indexOf("mal_vm_op_throw_if_tdz(");
-		expect(helper).toBeGreaterThan(0);
-		expect(branch![1]!.slice(0, helper)).toContain("MAL_ROOT_MASK(0x2);");
-		expect(branch![1]!.slice(0, helper)).toMatch(/__gc_slots\[\d+\] = r0;/);
-		const continuation = output.slice(branch!.index! + branch![0].length);
-		const nextCall = continuation.indexOf("MalCompletion call_result_2");
-		expect(nextCall).toBeGreaterThan(0);
-		expect(continuation.slice(0, nextCall)).toContain("MAL_ROOT_MASK(0x1);");
+		expect(output).toMatch(
+			/if \(mal_value_is_empty\(r0\)\) \{\n\s+MAL_ROOT_MASK\(0x2\);\n\s+mal_vm_op_throw_if_tdz/,
+		);
+		expect(output).toMatch(
+			/mal_vm_op_throw_if_tdz[\s\S]*?\n\s+\}\n\s+MAL_ROOT_MASK\(0x1\);/,
+		);
 	});
 
 	it("publishes exact known-own-slot roots only inside the generic fallback", () => {
@@ -1819,14 +1809,9 @@ describe("emit-program-image instruction packing", () => {
 		expect(output).toMatch(
 			/if \(mal_vm_try_load_known_own_slots[^\n]+\) \{[\s\S]*?\} else \{\n\s+MAL_ROOT_MASK\(0x2\);\n\s+r0 = mal_vm_op_load_property_ic/,
 		);
-		const fallback = output.match(
-			/\} else \{\n\s+MAL_ROOT_MASK\(0x2\);([\s\S]*?)\n\s+\}/,
+		expect(output).toMatch(
+			/mal_vm_op_load_property_ic[\s\S]*?\n\s+\}\n\s+MAL_ROOT_MASK\(0x1\);/,
 		);
-		expect(fallback).not.toBeNull();
-		const continuation = output.slice(fallback!.index! + fallback![0].length);
-		const nextCall = continuation.indexOf("MalCompletion call_result_2");
-		expect(nextCall).toBeGreaterThan(0);
-		expect(continuation.slice(0, nextCall)).toContain("MAL_ROOT_MASK(0x1);");
 	});
 
 	it("reuses native-planned rooted call outputs through static-property hits and misses", () => {
@@ -2699,7 +2684,7 @@ describe("native update-expression representation", () => {
 		expect(output).not.toContain("MAL_UNARY_TO_NUMERIC");
 		expect(output).not.toContain("MAL_UNARY_INCREMENT");
 		expect(output).toMatch(
-			/if \(mal_gc_poll\) \{[^{}\n]*MAL_ROOT_MASK\(0x[0-9a-f]+\); mal_gc_safepoint\(vm\); \}/,
+			/if \(mal_gc_poll\) \{ MAL_ROOT_MASK\(0x[0-9a-f]+\); mal_gc_safepoint\(vm\); \}/,
 		);
 	});
 
@@ -2858,18 +2843,12 @@ describe("native update-expression representation", () => {
 			"",
 			false,
 		)!.source;
+		expect(ownerOutput).not.toContain("__private_r");
 		const step = definition.runtime.functions[ownerIndex]!.instructions[stepIp];
 		if (step?.opcode !== "ITERATOR_STEP") throw new Error("missing iterator step");
-		for (const register of [step.iterator, step.next]) {
+		for (const register of [step.iterator, step.next, step.valueDst]) {
 			expect(ownerOutput).toContain(`#define r${register} (__gc_slots[`);
 		}
-		expect(ownerOutput).toContain(
-			`#define r${step.valueDst} (__private_r${step.valueDst})`,
-		);
-		const resultSlot = ownerOutput.match(
-			new RegExp(`__gc_slots\\[(\\d+)\\] = r${step.valueDst};`),
-		)?.[1];
-		expect(resultSlot).toBeDefined();
 		const cursorCall = ownerOutput.indexOf(
 			"mal_vm_iterator_try_dense_array_cursor_step(",
 		);
@@ -2879,9 +2858,6 @@ describe("native update-expression representation", () => {
 		const fallback = ownerOutput.indexOf("mal_vm_iterator_step(vm,", cursorCall);
 		expect(fallback).toBeGreaterThan(cursorCall);
 		expect(ownerOutput.slice(cursorCall, fallback)).toContain("MAL_ROOT_MASK(");
-		expect(ownerOutput.slice(cursorCall, fallback)).toContain(
-			`__gc_slots[${resultSlot}] = MAL_VALUE_UNDEFINED;`,
-		);
 
 		const retainedGeneric = withSpecializations(
 			definition,
@@ -4826,18 +4802,20 @@ describe("native update-expression representation", () => {
 			globalThis.read = read;
 		`);
 		const lines = output.split("\n");
-		const poll = /if \(mal_gc_poll\)[^\n]*mal_gc_safepoint\(vm\);/;
+		const poll = "if (mal_gc_poll) mal_gc_safepoint(vm);";
 		const constructLine = lines.findIndex((line) =>
 			line.includes("mal_vm_call_known_native"),
 		);
 		const getLine = lines.findIndex((line) => line.includes("mal_builtin_map_get_key"));
 
 		expect(constructLine).toBeGreaterThanOrEqual(0);
-		expect(lines.slice(constructLine + 1, constructLine + 5).join("\n")).toMatch(poll);
+		expect(
+			lines.slice(constructLine + 1, constructLine + 5).map((line) => line.trim()),
+		).toContain(poll);
 		expect(getLine).toBeGreaterThanOrEqual(0);
-		expect(lines.slice(getLine + 1, getLine + 4).join("\n")).not.toContain(
-			"mal_gc_safepoint(vm)",
-		);
+		expect(
+			lines.slice(getLine + 1, getLine + 4).map((line) => line.trim()),
+		).not.toContain(poll);
 	});
 });
 

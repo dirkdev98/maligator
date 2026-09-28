@@ -75,7 +75,7 @@ const PRIVATE_RESULT_OPCODES = new Set([
 ]);
 
 /**
- * Selected values become private locals only when every definition
+ * Property receivers/results become private locals only when every definition
  * either assigns final values or has an explicit continuously rooted output
  * contract. Exact execution maps determine publication at collecting edges.
  * Unmodeled target-region intermediates keep continuously rooted storage.
@@ -106,9 +106,6 @@ export function nativePrivateRootRegisters(
 			candidates.add(instruction.dst);
 		}
 	}
-	// Give existing property candidates priority within the native-register cap.
-	// Every additional root must still pass the storage and loop-cost audits below.
-	for (const register of frameRegisters) candidates.add(register);
 	const actionsByIp = new Map<
 		number,
 		Array<NativeFunctionPlan["regionActions"][number]>

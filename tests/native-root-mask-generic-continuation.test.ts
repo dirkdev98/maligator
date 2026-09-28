@@ -24,7 +24,6 @@ function emit(
 	representations: Array<VmRegisterRepresentation>,
 	safepoints: NativeFunctionPlan["gc"]["safepoints"],
 	parameterCount = 2,
-	nativeInstructions?: NativeFunctionPlan["instructions"],
 ): string {
 	const fn: BytecodeFunction = {
 		nameStringIndex: -1,
@@ -53,12 +52,7 @@ function emit(
 	const native = createConservativeNativePlan([fn]).functions[0]!;
 	return emitCompiledFunction(
 		fn,
-		{
-			...native,
-			instructions: nativeInstructions ?? native.instructions,
-			registerRepresentations: representations,
-			gc: { safepoints },
-		},
+		{ ...native, registerRepresentations: representations, gc: { safepoints } },
 		0,
 		"",
 		false,
@@ -148,15 +142,15 @@ describe("native root-mask state through generic continuations", () => {
 			/MAL_ROOT_MASK\(0x20\)[\s\S]*MAL_ROOT_MASK\(0x0\)[\s\S]*mal_vm_call_cached[\s\S]*mal_gc_safepoint/,
 		);
 	});
-	it("keeps operator masks eager after numeric projections remove all private slots", () => {
+	it("defers operator masks after numeric projections remove all private slots", () => {
 		const widePoint = {
 			kind: "operation",
 			rootRegisters: [0, 2, 3, 4, 5],
 			incomingRootRegisters: [0, 2, 3, 4, 5],
 			outgoingRootRegisters: [0, 2, 3, 4, 5],
 		} as const;
-		// Specialized calls keep their input storage rooted. A numeric receiver needs
-		// no traced slot, so the projection removes all remaining private candidates.
+		// A numeric receiver needs no traced slot; the projection consumes both
+		// provisional private load results, leaving only continuously rooted values.
 		const output = emit(
 			[
 				{ opcode: "CREATE_NUMBER", dst: 1, value: 7 },
@@ -164,8 +158,8 @@ describe("native root-mask state through generic continuations", () => {
 				{ opcode: "LOAD_PROPERTY_STATIC", object: 1, dst: 2, stringIndex: 0, icIndex: 0 },
 				{ opcode: "LOAD_PROPERTY_STATIC", object: 1, dst: 3, stringIndex: 1, icIndex: 1 },
 				{ opcode: "BINARY", dst: 4, left: 2, right: 3, operator: "+" },
-				{ ...call, callee: 5, dst: 0 },
-				{ opcode: "RETURN", value: 0 },
+				call,
+				{ opcode: "RETURN", value: 5 },
 			],
 			["boxed", "number", "boxed", "boxed", "boxed", "boxed"],
 			[
@@ -175,23 +169,28 @@ describe("native root-mask state through generic continuations", () => {
 				{
 					kind: "operation",
 					instructionIp: 4,
-					rootRegisters: [2, 3, 4, 5],
-					incomingRootRegisters: [2, 3, 5],
-					outgoingRootRegisters: [4, 5],
+					rootRegisters: [0, 2, 3, 4],
+					incomingRootRegisters: [0, 2, 3],
+					outgoingRootRegisters: [0, 4],
 				},
 				{ ...widePoint, instructionIp: 5 },
 			],
 			1,
-			[undefined, { kind: "call" }, undefined, undefined, undefined, { kind: "call" }],
 		);
 		expect(output).toContain("mal_vm_property_try_load_static_number_pair");
 		expect(output).not.toContain("__private_r");
-		const eagerMask = output.indexOf("\n    MAL_ROOT_MASK(0x1);\n");
+		expect(output).not.toContain("\n    MAL_ROOT_MASK(0x10);\n");
+		const deferredMask = output.indexOf("MAL_ROOT_MASK(0x10)");
 		const binaryFallback = output.indexOf("mal_vm_binary_op");
-		expect(eagerMask).toBeGreaterThan(0);
-		expect(binaryFallback).toBeGreaterThan(eagerMask);
-		expect(output.slice(eagerMask, binaryFallback)).toContain("if (");
-		expect(output.match(/MAL_ROOT_MASK\(0x1\)/g)).toHaveLength(1);
+		expect(deferredMask).toBeGreaterThan(0);
+		expect(binaryFallback).toBeGreaterThan(deferredMask);
+		expect(output.slice(deferredMask, binaryFallback)).toMatch(
+			/^MAL_ROOT_MASK\(0x10\),\s*$/,
+		);
+		const nextCall = output.indexOf("MalCompletion call_result_5", binaryFallback);
+		expect(nextCall).toBeGreaterThan(binaryFallback);
+		expect(output.slice(binaryFallback, nextCall)).toContain("MAL_ROOT_MASK(0x0)");
+		expect(output.match(/MAL_ROOT_MASK\(0x10\)/g)).toHaveLength(1);
 		expect(output.match(/MAL_ROOT_MASK\(0x0\)/g)).toHaveLength(2);
 	});
 });

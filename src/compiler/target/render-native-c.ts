@@ -1028,7 +1028,7 @@ function emitCompiledVariant(
 	);
 	const gcUnlink =
 		(retainsForwardedArguments ? "mal_gc_unroot(&__argument_roots); " : "") +
-		(needsRootFrame ? "mal_root_frame_head = __gc_prev; " : "");
+		(needsRootFrame ? "mal_root_frame_head = __gc_frame.prev; " : "");
 
 	const profileDecisions: Array<BackendProfileDecision> = [];
 	const body = emitBody(
@@ -1224,8 +1224,7 @@ function emitCompiledVariant(
 	if (needsRootFrame) {
 		lines.push(
 			`    ${relocatable ? "" : "static "}const MalFrameDescriptor __gc_desc = { .function_index = ${relocation.functionIndex(index)}, .slot_count = ${totalSlots} };`,
-			`    MalRootFrame *const __gc_prev = mal_root_frame_head;`,
-			`    MalRootFrame __gc_frame = { .prev = __gc_prev, .desc = &__gc_desc, .slots = ${totalSlots > 0 ? "__gc_slots" : "nullptr"}, .inactive_slots = 0, .env = nullptr };`,
+			`    MalRootFrame __gc_frame = { .prev = mal_root_frame_head, .desc = &__gc_desc, .slots = ${totalSlots > 0 ? "__gc_slots" : "nullptr"}, .inactive_slots = 0, .env = nullptr };`,
 			`    mal_root_frame_head = &__gc_frame;`,
 		);
 	}
@@ -3239,7 +3238,7 @@ function emitBody(
 		const indexedPropertyInstruction = fn.instructions[ip]!;
 		// Only the ordinary numeric-index probe has an audited noncollecting hit.
 		const deferredIndexedPropertyRoots =
-			hasPrivateRoots &&
+			coro === null &&
 			indexedPropertyInstruction.opcode === "LOAD_PROPERTY" &&
 			isNumericRep(reps[indexedPropertyInstruction.key]!) &&
 			!staticPropertyProjectionConflicts(ip) &&
@@ -3259,13 +3258,12 @@ function emitBody(
 			!stackObjectMaterializations.has(ip) &&
 			!constructorInitializationActionByIp.has(ip);
 		const deferredOperatorRoots = fn.instructions[ip]!.opcode === "BINARY";
-		// Only selected private values need the operator's mask on its fallback edge.
-		const eagerOperatorRootPublication =
-			deferredOperatorRoots && (rootPublication?.slots.size ?? 0) === 0;
+		// Ordinary numeric hits cannot collect, regardless of the register storage.
+		const eagerOperatorRootPublication = deferredOperatorRoots && coro !== null;
 		const deferredTdzRoots = fn.instructions[ip]!.opcode === "THROW_IF_TDZ";
 		const iteratorCursorAction = nativeIteratorCursorActionByIp.get(ip);
 		const deferredDenseIteratorRoots =
-			hasPrivateRoots &&
+			coro === null &&
 			fn.instructions[ip]!.opcode === "ITERATOR_STEP" &&
 			nativeInstructions[ip] === undefined &&
 			iteratorCursorAction?.role === "step" &&
