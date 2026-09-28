@@ -154,7 +154,7 @@ function privateSlot(source: string, register: number): number {
 
 describe("native numeric indexed-load root publication", () => {
 	it.each(["int32", "number"] as const)(
-		"admits only final results and leaves successful %s index probes without root-copy stores",
+		"keeps unchanged receivers and final results private on successful %s index probes",
 		(representation) => {
 			const source = emit(
 				fn([key, indexedLoad, indexedLoad, call, { opcode: "RETURN", value: 6 }]),
@@ -166,8 +166,8 @@ describe("native numeric indexed-load root publication", () => {
 				representation,
 			);
 			privateSlot(source, indexedLoad.dst);
-			expect(source).not.toContain("#define r0 (__private_r0)");
-			expect(source).toContain("#define r0 (__gc_slots[");
+			privateSlot(source, indexedLoad.object);
+			expect(source.match(/__gc_slots\[\d+\] = r0;/g)).toHaveLength(1);
 			const firstProbe = source.indexOf("mal_vm_array_try_get_index(");
 			const mask = source.indexOf("MAL_ROOT_MASK(");
 			expect(firstProbe).toBeGreaterThan(-1);
@@ -200,7 +200,7 @@ describe("native numeric indexed-load root publication", () => {
 		},
 	);
 
-	it("retains continuous storage when another definition uses a compound out-parameter", () => {
+	it("admits the indexed receiver while keeping a compound output continuously rooted", () => {
 		const source = emit(
 			fn([
 				{ opcode: "LOAD_STATIC_ARGUMENT", dst: 4, direct: -1, fallback: 3, index: 2 },
@@ -217,6 +217,28 @@ describe("native numeric indexed-load root publication", () => {
 		);
 		expect(source).not.toContain("#define r3 (__private_r3)");
 		expect(source).toContain("#define r3 (__gc_slots[");
+		privateSlot(source, indexedLoad.object);
+		expect(source.match(/MalValue __private_r\d+;/g)).toEqual(["MalValue __private_r0;"]);
+	});
+
+	it("keeps an indexed receiver rooted when another definition uses a compound out-parameter", () => {
+		const source = emit(
+			fn([
+				{ opcode: "LOAD_STATIC_ARGUMENT", dst: 4, direct: -1, fallback: 0, index: 2 },
+				key,
+				indexedLoad,
+				call,
+				{ opcode: "RETURN", value: 6 },
+			]),
+			[
+				point(0, [0, 5], [0, 4, 5]),
+				point(2, [0, 5], [0, 3, 5]),
+				point(3, [0, 3, 5], [6]),
+			],
+		);
+		expect(source).not.toContain("#define r0 (__private_r0)");
+		expect(source).toContain("#define r0 (__gc_slots[");
+		privateSlot(source, indexedLoad.dst);
 	});
 
 	it("keeps closure construction final and later exact numeric results private", () => {

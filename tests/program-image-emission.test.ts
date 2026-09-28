@@ -2833,9 +2833,9 @@ describe("native update-expression representation", () => {
 		const output = emitProgramImage(definition, { compiled: true });
 		expect(output).toContain("MalIteratorObject *__iter_cursor_");
 		expect(output).toContain("mal_vm_iterator_protocol_cursor(");
-		expect(output).toContain("mal_vm_iterator_step_dense_array_cursor(");
+		expect(output).toContain("mal_vm_iterator_try_dense_array_cursor_step(");
 		expect(output).not.toContain("mal_vm_iterator_step_protocol_cursor(vm,");
-		expect(output).toContain("mal_vm_iterator_step_fast(vm,");
+		expect(output).toContain("mal_vm_iterator_step(vm,");
 		const ownerOutput = emitCompiledFunction(
 			definition.runtime.functions[ownerIndex]!,
 			owner,
@@ -2844,10 +2844,20 @@ describe("native update-expression representation", () => {
 			false,
 		)!.source;
 		expect(ownerOutput).not.toContain("__private_r");
-		const cursorCall = ownerOutput.indexOf("mal_vm_iterator_step_dense_array_cursor(");
+		const step = definition.runtime.functions[ownerIndex]!.instructions[stepIp];
+		if (step?.opcode !== "ITERATOR_STEP") throw new Error("missing iterator step");
+		for (const register of [step.iterator, step.next, step.valueDst]) {
+			expect(ownerOutput).toContain(`#define r${register} (__gc_slots[`);
+		}
+		const cursorCall = ownerOutput.indexOf(
+			"mal_vm_iterator_try_dense_array_cursor_step(",
+		);
 		const stepStart = ownerOutput.lastIndexOf("\nL", cursorCall);
 		expect(stepStart).toBeGreaterThan(0);
-		expect(ownerOutput.slice(stepStart, cursorCall)).toContain("MAL_ROOT_MASK(");
+		expect(ownerOutput.slice(stepStart, cursorCall)).not.toContain("MAL_ROOT_MASK(");
+		const fallback = ownerOutput.indexOf("mal_vm_iterator_step(vm,", cursorCall);
+		expect(fallback).toBeGreaterThan(cursorCall);
+		expect(ownerOutput.slice(cursorCall, fallback)).toContain("MAL_ROOT_MASK(");
 
 		const retainedGeneric = withSpecializations(
 			definition,
@@ -2861,6 +2871,7 @@ describe("native update-expression representation", () => {
 		const genericOutput = emitProgramImage(retainedGeneric, { compiled: true });
 		expect(genericOutput).toContain("mal_vm_iterator_step(vm,");
 		expect(genericOutput).not.toContain("mal_vm_iterator_step_fast(vm,");
+		expect(genericOutput).not.toContain("mal_vm_iterator_try_dense_array_cursor_step(");
 	});
 
 	it("publishes private static-store inputs and the root mask only after the cache probe misses", () => {

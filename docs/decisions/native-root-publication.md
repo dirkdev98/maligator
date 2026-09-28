@@ -5,9 +5,9 @@ The native backend can keep eligible property receivers and results in private
 existing cache admission rules. A successful probe assigns the private result
 directly; only its collecting/reentrant miss publishes incoming roots. Numeric operator
 guards and TDZ checks likewise publish inside their generic or throwing edge.
-Dense Array-values iteration in functions with private roots uses its existing
-noncalling probe and publishes only before the generic step. Functions without
-final private roots retain the combined cursor helper and its eager root mask.
+Dense Array-values iteration in ordinary functions uses its existing noncalling
+probe and publishes only before the generic step, including when the function
+has no private roots. Resumable functions retain their existing publication.
 Length and storage are read afresh on each probe;
 holes and nonstandard iterators retain the complete JavaScript protocol.
 Ordinary static stores likewise publish before their generic miss. A successful
@@ -203,9 +203,14 @@ The returned heap value is published before a later collecting poll, including
 unmasked root slots beyond the first 64.
 
 An ordinary indexed read with an int32 or Number key can itself nominate its
-result for private storage. It does not nominate the receiver. The same audit of
-every physical definition, native-region intermediate, and out-parameter use
-still applies, including when later instructions reuse the result register.
+receiver and result for private storage. Receiver candidates are appended after
+the existing property candidates, preserving their priority under the 32-register
+bound. A private receiver lets the C compiler retain its value and array type
+identity across noncollecting reads. Each probe still reads length and storage
+afresh; private storage does not preserve borrowed element pointers across
+effects. The same audit of every physical definition, native-region intermediate,
+and out-parameter use, and the same collecting-loop profitability filter still
+apply, including when later instructions reuse either physical register.
 Closure creation assigns its destination only after the value-returning runtime
 factory finishes. Exact operator-kind annotations refine ordinary final-value
 expressions without adding intermediate storage. Both can share a private result

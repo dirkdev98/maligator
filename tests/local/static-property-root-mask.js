@@ -531,6 +531,106 @@ if (
 	throw new Error("throwing array-index fallback lost roots or its catch continuation");
 }
 
+// These kernels have no property loads to nominate private C roots.
+function rootedOnlyArrayTraversal(values, retained) {
+	let total = 0;
+	for (const value of values) total += value;
+	gc();
+	return { retained, total };
+}
+
+function rootedOnlyThrowingArrayTraversal(values, retained) {
+	let total = 0;
+	let failure = null;
+	try {
+		for (const value of values) total += value;
+	} catch (error) {
+		failure = error;
+		gc();
+	}
+	gc();
+	return { retained, total, failure };
+}
+
+globalThis.rootedOnlyArrayTraversals = [
+	rootedOnlyArrayTraversal,
+	rootedOnlyThrowingArrayTraversal,
+];
+for (let index = 0; index < 16; index++) {
+	const plain = globalThis.rootedOnlyArrayTraversals[0]([1, 2, 3], { marker: 401 });
+	const caught = globalThis.rootedOnlyArrayTraversals[1]([4, 5, 6], { marker: 409 });
+	if (
+		plain.total !== 6 ||
+		plain.retained.marker !== 401 ||
+		caught.total !== 15 ||
+		caught.retained.marker !== 409 ||
+		caught.failure !== null
+	) {
+		throw new Error("rooted-only dense cursor warmup mismatch");
+	}
+}
+
+const rootedTraversalOwner = { value: { marker: 401 } };
+let rootedCollectingIndexCalls = 0;
+const rootedSparseTraversal = [10, , 30];
+Object.defineProperty(rootedSparseTraversal, "1", {
+	get() {
+		rootedCollectingIndexCalls++;
+		rootedTraversalOwner.value = null;
+		gc();
+		return {
+			valueOf() {
+				gc();
+				return 20;
+			},
+		};
+	},
+});
+const rootedTraversed = globalThis.rootedOnlyArrayTraversals[0](
+	rootedSparseTraversal,
+	rootedTraversalOwner.value,
+);
+gc();
+if (
+	rootedTraversed.retained.marker !== 401 ||
+	rootedTraversed.total !== 60 ||
+	rootedCollectingIndexCalls !== 1
+) {
+	throw new Error("rooted-only collecting cursor fallback lost roots or loop state");
+}
+
+rootedTraversalOwner.value = { marker: 409 };
+let rootedThrowingIndexCalls = 0;
+const rootedThrowingTraversal = [7, , ,];
+Object.defineProperty(rootedThrowingTraversal, "1", {
+	get() {
+		rootedThrowingIndexCalls++;
+		rootedTraversalOwner.value = null;
+		const failure = { marker: 419 };
+		gc();
+		throw failure;
+	},
+});
+Object.defineProperty(rootedThrowingTraversal, "2", {
+	get() {
+		rootedThrowingIndexCalls += 10;
+		throw new Error("rooted-only traversal continued after a thrown index getter");
+	},
+});
+const rootedFailedTraversal = globalThis.rootedOnlyArrayTraversals[1](
+	rootedThrowingTraversal,
+	rootedTraversalOwner.value,
+);
+gc();
+if (
+	rootedFailedTraversal.retained.marker !== 409 ||
+	rootedFailedTraversal.total !== 7 ||
+	rootedFailedTraversal.failure.marker !== 419 ||
+	rootedThrowingIndexCalls !== 1
+) {
+	throw new Error("rooted-only throwing cursor fallback lost roots or catch state");
+}
+
 let setterObservation = 0;
 let setterFailure = null;
 
