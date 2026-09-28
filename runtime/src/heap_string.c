@@ -307,6 +307,7 @@ void mal_string_get_leaf_range(
     if (string == nullptr || offset >= string->length) abort();
     usize available = string->length - offset;
     for (;;) {
+        MAL_PERF_COUNT(string_iterator_nodes);
         if (string->storage == MAL_STRING_STORAGE_DEPENDENT) {
             offset += string->slice_offset;
             string = string->parent;
