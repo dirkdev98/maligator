@@ -64,8 +64,10 @@ before JavaScript reentry or a bridge that could materialize that graph. Rooting
 a mutable source alone does not keep its former children alive after flattening.
 A separately traced identity can survive reentry when consumers obtain its
 payload afresh. `MalStringCursor` owns a GC-traced current leaf and pending-node
-frontier, with native scratch finalized on exhaustion or collection. Frontier
-updates publish removed edges through SATB and new edges through the cursor's
+frontier, with native scratch finalized on exhaustion or collection. Persistent
+frontier storage and search patterns use owner-held RAW buffers, so abandoned
+iteration contributes its full allocation cost to GC pacing and iterator profiles.
+Frontier updates publish removed edges through SATB and new edges through the cursor's
 minor-GC card. The cursor itself remains on the mutator's tracing path. JavaScript
 string iterators use it lazily for ropes; flat strings retain direct unit access.
 Sequential traversal visits consumed units and pending nodes once even if a

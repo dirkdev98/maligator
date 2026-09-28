@@ -200,7 +200,7 @@ typedef struct MalStringIterator {
     usize count;
     usize capacity;
     bool reverse;
-    /** Non-null only when an owning heap cursor traces this frontier. */
+    /** Non-null when a heap cursor traces this frontier and owns its RAW storage. */
     MalHeapHeader *owner;
     /** Flat owner of the last returned segment; valid until next/dispose. */
     MalStringIteratorPart current;
@@ -209,7 +209,7 @@ typedef struct MalStringIterator {
 
 /** Segments borrow leaf storage. Root the input across GC; do not retain an
  * iterator or segment across JS reentry or a UTF-16 bridge that may materialize
- * it. Traversal never collects, mutates strings, or allocates beyond malloc scratch. */
+ * it. Traversal never collects or mutates strings; borrowed scratch uses malloc. */
 void mal_string_iterator_init(
     MalStringIterator *iterator, const MalString *string, usize offset, usize length);
 /** Returns segments right to left; each segment retains its forward unit order. */
@@ -226,7 +226,7 @@ typedef struct MalStringCursor {
     usize local;
     usize position;
     usize length;
-    /** Optional pointer-free search scratch, owned until exhaustion or finalization. */
+    /** Optional pointer-free RAW scratch, owned until exhaustion or finalization. */
     void *scratch;
 } MalStringCursor;
 

@@ -209,6 +209,71 @@ static bool flat_split_without_frontier(MalVm *vm, bool dependent) {
     return true;
 }
 
+static bool split_scratch_collection(MalVm *vm) {
+    c16 units[16384];
+    for (usize i = 0; i < countof(units); i++) units[i] = 'a';
+    MalValue roots[4] = {mal_value_from_string(rope(vm, units, countof(units))),
+        MAL_VALUE_UNDEFINED, MAL_VALUE_UNDEFINED,
+        mal_value_from_string(mal_string_new_copy(&vm->heap, units, countof(units) / 2))};
+    MalRootSpan span;
+    mal_gc_root(&span, roots, countof(roots));
+    mal_gc_collect(vm);
+    usize owned = mal_heap_usage(&vm->heap).raw_owned_bytes;
+    for (usize i = 0; i < 16; i++) {
+        u64 allocated = mal_gc_allocated_bytes(vm);
+        vm->heap.next_gc_at = allocated + 4096;
+        MalStringSplitCursor state;
+        CHECK(mal_builtin_string_split_cursor_init_locked(vm, roots[0], roots[3],
+            &roots[1], &roots[2], &state));
+        CHECK(mal_gc_allocated_bytes(vm) > vm->heap.next_gc_at && mal_gc_poll);
+        CHECK(mal_heap_usage(&vm->heap).raw_owned_bytes > owned + 4096);
+        usize start, end;
+        CHECK(mal_builtin_string_split_cursor_next(roots[1], roots[2], &state, &start, &end));
+        CHECK(start == 0 && end == 0 && !state.done);
+        // Early exit drops an unfinished cursor. Its scratch must request collection.
+        roots[2] = MAL_VALUE_UNDEFINED;
+        mal_gc_safepoint(vm);
+        mal_gc_finish_pending_cycle(vm);
+        CHECK(vm->heap.next_gc_at > mal_gc_allocated_bytes(vm));
+        CHECK(mal_heap_usage(&vm->heap).raw_owned_bytes == owned);
+    }
+    mal_gc_unroot(&span);
+    return true;
+}
+
+static bool cursor_spilled_frontier(MalVm *vm) {
+    MalValue roots[2] = {mal_value_from_string(mal_string_new_ascii(&vm->heap,
+        "abcdefghijklmnopqrstuvwxyz01234", 31)), MAL_VALUE_UNDEFINED};
+    MalRootSpan span;
+    mal_gc_root(&span, roots, countof(roots));
+    // Shared halves give an 18-level frontier without allocating every logical leaf.
+    for (usize depth = 0; depth < 18; depth++) {
+        MalString *child = mal_value_to_string(roots[0]);
+        MalString *parent;
+        CHECK(mal_string_new_cons_checked(&vm->heap, child, child, &parent));
+        roots[0] = mal_value_from_string(parent);
+    }
+    mal_gc_collect(vm);
+    usize owned = mal_heap_usage(&vm->heap).raw_owned_bytes;
+    MalStringCursor *cursor = mal_string_cursor_new(&vm->heap, mal_value_to_string(roots[0]));
+    roots[1] = mal_value_from_heap(&cursor->header);
+    MalStringSegment segment;
+    CHECK(mal_string_cursor_segment(cursor, &segment));
+    CHECK(cursor->iterator->stack != cursor->iterator->inline_stack);
+    CHECK(cursor->iterator->count > countof(cursor->iterator->inline_stack));
+    CHECK(segment.length == 31 && mal_string_segment_code_unit_at(&segment, 0) == 'a');
+    mal_string_cursor_consume(cursor, segment.length);
+    mal_gc_collect(vm);
+    CHECK(mal_string_cursor_segment(cursor, &segment));
+    CHECK(segment.length == 31 && mal_string_segment_code_unit_at(&segment, 30) == '4');
+    mal_string_cursor_dispose(cursor);
+    CHECK(mal_heap_usage(&vm->heap).raw_owned_bytes == owned);
+    mal_string_cursor_dispose(cursor);
+    CHECK(mal_heap_usage(&vm->heap).raw_owned_bytes == owned);
+    mal_gc_unroot(&span);
+    return true;
+}
+
 int main(void) {
     mal_perf_stats_init();
     MalVm vm;
@@ -217,7 +282,8 @@ int main(void) {
         && string_iteration(&vm, 256, true) && projected_split(&vm, 512, false)
         && projected_split(&vm, 2048, false) && projected_split(&vm, 256, true)
         && split_patterns(&vm) && flat_split_without_frontier(&vm, false)
-        && flat_split_without_frontier(&vm, true);
+        && flat_split_without_frontier(&vm, true) && split_scratch_collection(&vm)
+        && cursor_spilled_frontier(&vm);
     mal_vm_free(&vm);
     if (!passed) return 1;
     puts("string-cursor-frontier PASS");

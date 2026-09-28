@@ -336,7 +336,13 @@ static void mal_string_iterator_push(MalStringIterator *iterator, MalStringItera
         if (!mal_checked_size_growth(iterator->capacity, iterator->count + 1,
                 16, MAL_STRING_MAX_CODE_UNITS, &capacity)) abort();
         MalStringIteratorPart *grown;
-        if (iterator->stack == iterator->inline_stack) {
+        if (iterator->owner != nullptr) {
+            bool inline_stack = iterator->stack == iterator->inline_stack;
+            grown = gc_realloc_raw_profiled(mal_gc_current_heap(),
+                inline_stack ? nullptr : iterator->stack, sizeof(*grown) * capacity,
+                MAL_PROFILE_ALLOCATION_FAMILY_ITERATOR);
+            if (inline_stack) memcpy(grown, iterator->stack, sizeof(*grown) * iterator->count);
+        } else if (iterator->stack == iterator->inline_stack) {
             grown = malloc(sizeof(*grown) * capacity);
             if (grown != nullptr) memcpy(grown, iterator->stack, sizeof(*grown) * iterator->count);
         } else {
@@ -437,8 +443,8 @@ void mal_string_iterator_dispose(MalStringIterator *iterator) {
 MalStringCursor *mal_string_cursor_new(MalHeap *heap, const MalString *string) {
     MalStringCursor *cursor = mal_heap_alloc(heap, sizeof(*cursor), MAL_HEAP_STRING_CURSOR);
     mal_heap_header_init(&cursor->header, MAL_HEAP_STRING_CURSOR);
-    cursor->iterator = malloc(sizeof(*cursor->iterator));
-    if (cursor->iterator == nullptr) abort();
+    cursor->iterator = mal_heap_alloc_raw_profiled(heap, sizeof(*cursor->iterator),
+        MAL_PROFILE_ALLOCATION_FAMILY_ITERATOR);
     mal_string_iterator_init(cursor->iterator, string, 0, string->length);
     cursor->iterator->owner = &cursor->header;
     cursor->local = 0;
@@ -470,6 +476,7 @@ void mal_string_cursor_consume(MalStringCursor *cursor, usize count) {
 }
 
 void mal_string_cursor_dispose(MalStringCursor *cursor) {
+    MalHeap *heap = mal_gc_current_heap();
     if (cursor->iterator != nullptr) {
         MalStringIterator *iterator = cursor->iterator;
         if (iterator->owner != nullptr) {
@@ -480,11 +487,11 @@ void mal_string_cursor_dispose(MalStringCursor *cursor) {
                 mal_gc_write_barrier(mal_value_from_string((MalString *) iterator->stack[i].string));
             }
         }
-        mal_string_iterator_dispose(iterator);
-        free(iterator);
+        if (iterator->stack != iterator->inline_stack) gc_free_raw(heap, iterator->stack);
+        gc_free_raw(heap, iterator);
         cursor->iterator = nullptr;
     }
-    free(cursor->scratch);
+    gc_free_raw(heap, cursor->scratch);
     cursor->scratch = nullptr;
 }
 

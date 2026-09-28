@@ -3603,11 +3603,13 @@ typedef struct MalBuiltinStringSplitPattern {
     u32 prefix[];
 } MalBuiltinStringSplitPattern;
 
-static MalBuiltinStringSplitPattern *mal_builtin_string_split_pattern_new(MalString *separator) {
+static MalBuiltinStringSplitPattern *mal_builtin_string_split_pattern_new(
+    MalHeap *heap, MalString *separator
+) {
     usize length = mal_string_length(separator);
-    MalBuiltinStringSplitPattern *pattern = malloc(sizeof(*pattern) +
-        length * (sizeof(u32) + sizeof(c16)));
-    if (pattern == nullptr) abort();
+    MalBuiltinStringSplitPattern *pattern = mal_heap_alloc_raw_profiled(heap,
+        sizeof(*pattern) + length * (sizeof(u32) + sizeof(c16)),
+        MAL_PROFILE_ALLOCATION_FAMILY_ITERATOR);
     pattern->length = length;
     c16 *needle = (c16 *) (pattern->prefix + length);
     mal_string_copy_range_to(separator, 0, length, needle);
@@ -3692,7 +3694,7 @@ static bool mal_builtin_string_split_cursor_init_impl(
         return true;
     }
     MalStringCursor *cursor = mal_string_cursor_new(&vm->heap, subject);
-    cursor->scratch = mal_builtin_string_split_pattern_new(mal_value_to_string(separator));
+    cursor->scratch = mal_builtin_string_split_pattern_new(&vm->heap, mal_value_to_string(separator));
     *traversal_out = mal_value_from_heap(&cursor->header);
     return true;
 }

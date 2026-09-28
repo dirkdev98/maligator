@@ -64,8 +64,10 @@ The JavaScript iterator lazily allocates a GC-owned cursor for rope input. Its
 current leaf and pending-node frontier are independently traced, so flattening
 the original source cannot release nodes still needed by iteration. Each step
 reacquires the payload; frontier changes use SATB deletion and minor-GC cards.
-Native scratch is released on exhaustion or cursor finalization, and tracing the
-mutable frontier stays on the mutator. Flat input retains direct unit access.
+Persistent scratch uses owner-held RAW storage and is released on exhaustion or
+cursor finalization. Its allocation participates in GC pacing, including patterns
+abandoned after an abrupt exit. Tracing the mutable frontier stays on the mutator.
+Flat input retains direct unit access.
 Compiler-projected split on rope input roots the same cursor across JavaScript
 bodies, together with an owned KMP pattern prepared once when a match is possible.
 Both traverse consumed units and visited nodes linearly across yields. Initially

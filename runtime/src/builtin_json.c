@@ -1376,7 +1376,7 @@ static MalValue mal_builtin_json_stringify(MalVm *vm, MalValue this_value, const
     MalValue holder = mal_value_new_undefined();
     MalJsonResult result;
     if (mal_json_try_serialize_plain(&state, &builder, value, &result)) {
-        // The guarded traversal completed without observable hooks.
+        // The plain traversal or its generic continuation handled the result.
     } else if (mal_value_is_callable(state.replacer_fn)) {
         // A replacer observes the synthetic root holder as its `this` value.
         MalObject *wrapper = mal_intrinsic_new_object(vm);
