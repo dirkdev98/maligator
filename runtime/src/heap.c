@@ -1212,17 +1212,39 @@ void *gc_realloc_raw_profiled(MalHeap *heap, void *ptr, usize new_size, u8 profi
     // cell, recorded payload size for a LOS record) to decide whether the request
     // still fits and how much content to carry over.
     usize old_size;
+    MalGcLarge *large = nullptr;
     if (mal_gc_ptr_in_chunks(heap, ptr)) {
         MalGcBlock *block = (MalGcBlock *) ((uptr) ptr & ~(uptr) (MAL_GC_BLOCK_SIZE - 1));
         old_size = block->cell_size;
     } else {
-        MalGcLarge *rec = (MalGcLarge *) ((u8 *) ptr - mal_gc_large_data_offset());
-        old_size = rec->size;
+        large = (MalGcLarge *) ((u8 *) ptr - mal_gc_large_data_offset());
+        old_size = large->size;
     }
     if (new_size <= old_size) {
         return ptr; // fits the current cell already (grow within slack, or a shrink)
     }
-    // Outgrew the cell: RAW has no in-place grow, so alloc-new / copy / free-old.
+    if (large != nullptr) {
+        // LOS records have no managed identity; libc can grow or remap them without
+        // copying the payload. Capture links before realloc can release the record.
+        if (large->kind != MAL_GC_BLOCK_RAW) abort();
+        usize offset = mal_gc_large_data_offset();
+        if (new_size > SIZE_MAX - offset) abort();
+        MalGcLarge *previous = large->prev;
+        MalGcLarge *next = large->next;
+        MalGcLarge *grown = realloc(large, offset + new_size);
+        if (grown == nullptr) abort();
+        grown->size = new_size;
+        if (previous != nullptr) previous->next = grown;
+        else heap->raw_large = grown;
+        if (next != nullptr) next->prev = grown;
+        heap->bytes_allocated += new_size;
+        mal_heap_maybe_trigger_gc(heap);
+        mal_heap_profile_allocation(
+            heap, new_size, new_size, MAL_PROFILE_ALLOCATION_RAW_PAYLOAD,
+            (MalProfileAllocationFamily) profile_family, MAL_PROFILE_OBJECT_TYPE_NONE);
+        return (u8 *) grown + offset;
+    }
+    // A size-classed cell cannot grow in place; copy into a larger cell or LOS.
     void *fresh = mal_heap_alloc_raw_profiled(heap, new_size, profile_family);
     memcpy(fresh, ptr, old_size); // old_size < new_size, so the copy stays in bounds
     gc_free_raw(heap, ptr);
