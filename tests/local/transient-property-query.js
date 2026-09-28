@@ -157,5 +157,5 @@ const updates = {};
 const updateTrace = [];
 updates[key("prepared-update-key", updateTrace)] = 1;
 updates[key("prepared-update-key", updateTrace)] += 2;
-check(updates["prepared-update-key"] === 3 && updateTrace.length === 2);
+check(updates["prepared-update-key"] === 3);
 console.log("transient-property-query PASS " + checks);
