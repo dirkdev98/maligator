@@ -236,7 +236,9 @@ bool mal_vm_string_is_canonical_numeric_index(MalVm *vm, MalString *string) {
     return mal_string_equals(string, round_trip);
 }
 
-static bool mal_vm_string_to_property_key(MalVm *vm, MalValue value, MalKey *key_out) {
+static bool mal_vm_string_to_property_key_impl(
+    MalVm *vm, MalValue value, MalKey *key_out, bool atomize
+) {
     u32 index = 0;
     if (mal_vm_string_to_array_index(mal_value_to_string(value), &index)) {
         *key_out = mal_key_index(index);
@@ -246,13 +248,19 @@ static bool mal_vm_string_to_property_key(MalVm *vm, MalValue value, MalKey *key
     MalString *string = mal_value_to_string(value);
     MalString *atom = mal_vm_string_constant_atom(vm, string);
     if (atom == nullptr) {
-        atom = mal_property_atomize_string(vm, string);
+        atom = atomize
+            ? mal_property_atomize_string(vm, string)
+            : mal_property_query_string(vm, string);
     }
     *key_out = (MalKey) {
         .kind = MAL_KEY_STRING,
         .value = mal_value_from_string(atom),
     };
     return true;
+}
+
+static bool mal_vm_string_to_property_key(MalVm *vm, MalValue value, MalKey *key_out) {
+    return mal_vm_string_to_property_key_impl(vm, value, key_out, true);
 }
 
 bool mal_vm_value_to_property_key(MalVm *vm, MalValue value, MalKey *key_out) {
@@ -269,13 +277,15 @@ bool mal_vm_value_to_property_key(MalVm *vm, MalValue value, MalKey *key_out) {
 // above this runs the object's @@toPrimitive / valueOf / toString exactly once,
 // so callers that convert a key a single time (the reflective Object/Reflect
 // builtins) observe correct coercion. Returns false on an abrupt completion.
-bool mal_vm_to_property_key(MalVm *vm, MalValue value, MalKey *key_out) {
+static bool mal_vm_to_property_key_impl(
+    MalVm *vm, MalValue value, MalKey *key_out, bool atomize
+) {
     if (mal_value_is_int32(value) && mal_value_to_i32(value) >= 0) {
         *key_out = mal_key_index(mal_value_to_i32(value));
         return true;
     }
     if (mal_value_is_string(value)) {
-        return mal_vm_string_to_property_key(vm, value, key_out);
+        return mal_vm_string_to_property_key_impl(vm, value, key_out, atomize);
     }
     if (mal_value_is_symbol(value)) {
         *key_out = (MalKey) {.kind = MAL_KEY_SYMBOL, .value = value};
@@ -294,7 +304,16 @@ bool mal_vm_to_property_key(MalVm *vm, MalValue value, MalKey *key_out) {
     if (!mal_vm_to_string(vm, primitive, &string)) {
         return false;
     }
-    return mal_vm_string_to_property_key(vm, mal_value_from_string(string), key_out);
+    return mal_vm_string_to_property_key_impl(
+        vm, mal_value_from_string(string), key_out, atomize);
+}
+
+bool mal_vm_to_property_key(MalVm *vm, MalValue value, MalKey *key_out) {
+    return mal_vm_to_property_key_impl(vm, value, key_out, true);
+}
+
+bool mal_vm_to_property_query(MalVm *vm, MalValue value, MalKey *key_out) {
+    return mal_vm_to_property_key_impl(vm, value, key_out, false);
 }
 
 bool mal_vm_desc_read(MalVm *vm, MalPropertyDesc desc, MalValue receiver, MalValue *out) {
@@ -1022,7 +1041,7 @@ MalValue mal_vm_query_static_data(MalVm *vm, i32 template_offset, i32 query_kind
     u32 start = 0, end = length;
     if (query_kind == 1) {
         MalKey key;
-        if (!mal_vm_to_property_key(vm, needle, &key)) {
+        if (!mal_vm_to_property_query(vm, needle, &key)) {
             mal_gc_unroot(&span);
             return MAL_VALUE_UNDEFINED;
         }
@@ -3609,12 +3628,17 @@ MalValue mal_vm_binary_op(MalVm *vm, MalBinaryOp op, MalValue left, MalValue rig
                 return mal_value_new_undefined();
             }
 
+            MalValue roots[] = {right, left};
+            MalRootSpan span;
+            mal_gc_root(&span, roots, countof(roots));
             MalKey key;
-            if (!mal_vm_value_to_property_key(vm, left, &key)) {
-                return mal_value_new_boolean(false);
+            bool present = false;
+            if (mal_vm_to_property_query(vm, left, &key)) {
+                roots[1] = key.value;
+                present = mal_vm_has_property(vm, right, key);
             }
-
-            return mal_value_new_boolean(mal_vm_has_property(vm, right, key));
+            mal_gc_unroot(&span);
+            return mal_value_new_boolean(present);
         }
         case MAL_BIN_INSTANCEOF: {
             if (!mal_value_is_object(right)) {
@@ -4833,18 +4857,25 @@ MalValue mal_vm_op_load_property(MalVm *vm, MalValue object_value, MalValue key_
         return mal_value_new_undefined();
     }
 
+    MalValue roots[] = {object_value, key_value};
+    MalRootSpan span;
+    mal_gc_root(&span, roots, countof(roots));
+    MalValue result = MAL_VALUE_UNDEFINED;
     MalKey key;
-    if (!mal_vm_value_to_property_key(vm, key_value, &key)) {
-        return mal_value_new_undefined();
+    if (mal_vm_to_property_query(vm, key_value, &key)) {
+        roots[1] = key.value;
+        result = mal_vm_op_load_property_keyed(vm, object_value, key);
     }
-    return mal_vm_op_load_property_keyed(vm, object_value, key);
+    mal_gc_unroot(&span);
+    return result;
 }
 
 static bool mal_ic_key_is_stable_string(MalValue key) {
-    // Property-IC slow paths canonicalize string keys through vm->atoms before
-    // reaching any recorder. The atom table is a VM root, so these identities
-    // remain valid for exactly the same lifetime as the VM-owned cache rows.
-    return mal_value_is_string(key);
+    // IC and shared-stub keys are untraced. Query conversion may now return a
+    // collectable string, so only existing VM roots or immortal names are safe.
+    if (!mal_value_is_string(key)) return false;
+    const MalString *string = mal_value_to_string(key);
+    return string->property_atom || string->header.storage == MAL_HEAP_STORAGE_IMMORTAL;
 }
 
 /**
@@ -5341,7 +5372,7 @@ static void mal_ic_try_record_inherited(
         MAL_PERF_COUNT(ic_inherited_reject_basic);
         return;
     }
-    if (!mal_value_is_string(key_value)) {
+    if (!mal_ic_key_is_stable_string(key_value)) {
         MAL_PERF_COUNT(ic_inherited_reject_key);
         return;
     }
@@ -5428,24 +5459,12 @@ static void mal_ic_try_record_inherited(
     MAL_PERF_COUNT(ic_inherited_fills);
 }
 
-static MalValue mal_vm_op_load_property_ic_impl(
-    MalVm *vm, MalValue object_value, MalValue key_value, MalInlineCache *ic,
+static MalValue mal_vm_op_load_property_ic_keyed(
+    MalVm *vm, MalValue object_value, MalKey key, MalInlineCache *ic,
     bool static_probe_missed
 ) {
     MAL_PERF_COUNT(ic_load_fallbacks);
-    MalKey converted_key;
-    bool key_converted = false;
-    if (mal_value_is_string(key_value)) {
-        if (!mal_vm_string_to_property_key(vm, key_value, &converted_key)) {
-            return mal_value_new_undefined();
-        }
-        key_converted = true;
-        if (converted_key.kind == MAL_KEY_STRING) {
-            // All cache probes and fills below now use the VM-lifetime atom, not
-            // the transient string instance supplied by a computed-key access.
-            key_value = converted_key.value;
-        }
-    }
+    MalValue key_value = key.value;
     MalValue special_value;
     if (!static_probe_missed &&
         mal_vm_special_try_load(vm, object_value, key_value, ic, &special_value)) {
@@ -5554,15 +5573,6 @@ static MalValue mal_vm_op_load_property_ic_impl(
             }
             MAL_PERF_COUNT(ic_load_mega_misses);
         }
-        // Miss on a plain object. Convert the key ONCE (running any user
-        // toString/valueOf exactly once) and reuse it for both the cache fill and
-        // the slow path — never fall through to a re-converting generic op.
-        MalKey key;
-        if (key_converted) {
-            key = converted_key;
-        } else if (!mal_vm_value_to_property_key(vm, key_value, &key)) {
-            return mal_value_new_undefined();
-        }
         if (key.kind == MAL_KEY_STRING) {
             i32 idx = mal_shape_find(object->shape, key, MAL_SHAPE_FIND_LOAD_IC);
             if (idx >= 0) {
@@ -5650,9 +5660,7 @@ static MalValue mal_vm_op_load_property_ic_impl(
             }
             return mal_value_from_i32((i32) mal_value_to_string(object_value)->length);
         }
-        MalValue result = key_converted
-            ? mal_vm_op_load_property_keyed(vm, object_value, converted_key)
-            : mal_vm_op_load_property(vm, object_value, key_value);
+        MalValue result = mal_vm_op_load_property_keyed(vm, object_value, key);
         // Cache only a plain DATA method resolved on the (watched) prototype chain:
         // an immortal string key that is not a string-receiver exotic own (length /
         // canonical index, resolved on the value not the prototype) and not an
@@ -5715,12 +5723,35 @@ static MalValue mal_vm_op_load_property_ic_impl(
         }
     }
     MAL_PERF_COUNT(ic_load_other_generic);
-    MalValue result = key_converted
-        ? mal_vm_op_load_property_keyed(vm, object_value, converted_key)
-        : mal_vm_op_load_property(vm, object_value, key_value);
+    MalValue result = mal_vm_op_load_property_keyed(vm, object_value, key);
     if (vm->completion.kind != MAL_COMPLETION_THROW) {
         mal_ic_try_record_inherited(vm, object_value, key_value, result, ic);
     }
+    return result;
+}
+
+static MalValue mal_vm_op_load_property_ic_impl(
+    MalVm *vm, MalValue object_value, MalValue key_value, MalInlineCache *ic,
+    bool static_probe_missed
+) {
+    if (mal_value_is_nil(object_value)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "Cannot read properties of null or undefined");
+        return MAL_VALUE_UNDEFINED;
+    }
+    MalValue roots[] = {object_value, key_value};
+    MalRootSpan span;
+    mal_gc_root(&span, roots, countof(roots));
+    MalKey key;
+    MalValue result = MAL_VALUE_UNDEFINED;
+    if (mal_vm_to_property_query(vm, key_value, &key)) {
+        // A coercion-created query has no atom root. Keep it alive through
+        // getters/proxies and the subsequent cache-admission checks.
+        roots[1] = key.value;
+        result = mal_vm_op_load_property_ic_keyed(
+            vm, object_value, key, ic, static_probe_missed);
+    }
+    mal_gc_unroot(&span);
     return result;
 }
 
@@ -5929,7 +5960,7 @@ MalValue mal_vm_op_to_property_key(MalVm *vm, MalValue object_value, MalValue ke
         return key_value;
     }
     MalKey key;
-    if (!mal_vm_to_property_key(vm, key_value, &key)) {
+    if (!mal_vm_to_property_query(vm, key_value, &key)) {
         return mal_value_new_undefined();
     }
     return key.value;
@@ -6148,21 +6179,22 @@ void mal_vm_op_store_super_property(
 MalValue mal_vm_op_load_super_property(
     MalVm *vm, MalValue base, MalValue key_value, MalValue receiver
 ) {
+    MalValue roots[] = {base, key_value, receiver};
+    MalRootSpan span;
+    mal_gc_root(&span, roots, countof(roots));
     MalKey key;
-    if (!mal_vm_value_to_property_key(vm, key_value, &key)) {
-        return mal_value_new_undefined();
+    MalValue out = MAL_VALUE_UNDEFINED;
+    if (mal_vm_to_property_query(vm, key_value, &key)) {
+        roots[1] = key.value;
+        // SuperProperty converts its key before checking the possibly-null base.
+        if (mal_value_is_nil(base)) {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+                "Cannot read properties of null or undefined");
+        } else {
+            mal_vm_get_property_with_receiver(vm, base, key, receiver, &out);
+        }
     }
-    // GetSuperBase may be null (extends null), but only after the computed key
-    // has been converted as part of SuperProperty evaluation.
-    if (mal_value_is_nil(base)) {
-        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
-                           "Cannot read properties of null or undefined");
-        return mal_value_new_undefined();
-    }
-    MalValue out = mal_value_new_undefined();
-    if (!mal_vm_get_property_with_receiver(vm, base, key, receiver, &out)) {
-        return mal_value_new_undefined();
-    }
+    mal_gc_unroot(&span);
     return out;
 }
 
@@ -6480,17 +6512,9 @@ void mal_op_load_prototype(MalCallable *callable, const MalInstruction *instruct
 // Shared by the interpreter op and the native backend: `delete object[key]`,
 // returning the boolean result. A strict-mode failed delete throws TypeError
 // (sets vm->completion); callers check completion.
-MalValue mal_vm_op_delete_property(MalVm *vm, MalValue object_value, MalValue key_value, bool strict) {
-    if (mal_value_is_nil(object_value)) {
-        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot convert undefined or null to object");
-        return mal_value_new_undefined();
-    }
-
-    MalKey key;
-    if (!mal_vm_value_to_property_key(vm, key_value, &key)) {
-        return mal_value_new_boolean(true);
-    }
-
+static MalValue mal_vm_op_delete_property_keyed(
+    MalVm *vm, MalValue object_value, MalKey key, bool strict
+) {
     bool deleted;
     if (!mal_value_is_object(object_value)) {
         // The only own properties a primitive can carry live on strings:
@@ -6516,6 +6540,25 @@ MalValue mal_vm_op_delete_property(MalVm *vm, MalValue object_value, MalValue ke
     }
 
     return mal_value_new_boolean(deleted);
+}
+
+MalValue mal_vm_op_delete_property(MalVm *vm, MalValue object_value, MalValue key_value, bool strict) {
+    if (mal_value_is_nil(object_value)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "Cannot convert undefined or null to object");
+        return MAL_VALUE_UNDEFINED;
+    }
+    MalValue roots[] = {object_value, key_value};
+    MalRootSpan span;
+    mal_gc_root(&span, roots, countof(roots));
+    MalKey key;
+    MalValue result = MAL_VALUE_TRUE;
+    if (mal_vm_to_property_query(vm, key_value, &key)) {
+        roots[1] = key.value;
+        result = mal_vm_op_delete_property_keyed(vm, object_value, key, strict);
+    }
+    mal_gc_unroot(&span);
+    return result;
 }
 
 void mal_op_delete_property(MalCallable *callable, const MalInstruction *instruction) {
@@ -7058,7 +7101,7 @@ MalValue mal_vm_op_copy_data_properties(
     }
     mal_gc_root(&excluded_span, excluded_roots, excluded_count);
     for (i32 i = 0; i < excluded_count; i++) {
-        if (!mal_vm_value_to_property_key(vm, excluded_keys[i], &excluded[i])) {
+        if (!mal_vm_to_property_query(vm, excluded_keys[i], &excluded[i])) {
             mal_gc_unroot(&excluded_span);
             return mal_value_new_undefined();
         }

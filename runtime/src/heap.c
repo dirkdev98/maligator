@@ -1144,6 +1144,23 @@ void mal_heap_walk_cells(MalHeap *heap, MalHeapFinalizeFn visit) {
     }
 }
 
+static usize mal_gc_raw_capacity(MalHeap *heap, const void *ptr, MalGcLarge **large_out) {
+    if (mal_gc_ptr_in_chunks(heap, ptr)) {
+        const MalGcBlock *block = (const MalGcBlock *) ((uptr) ptr & ~(uptr) (MAL_GC_BLOCK_SIZE - 1));
+        if (block->kind != MAL_GC_BLOCK_RAW) abort();
+        if (large_out != nullptr) *large_out = nullptr;
+        return block->cell_size;
+    }
+    MalGcLarge *large = (MalGcLarge *) ((const u8 *) ptr - mal_gc_large_data_offset());
+    if (large->kind != MAL_GC_BLOCK_RAW) abort();
+    if (large_out != nullptr) *large_out = large;
+    return large->size;
+}
+
+usize mal_heap_raw_capacity(MalHeap *heap, const void *ptr) {
+    return mal_gc_raw_capacity(heap, ptr, nullptr);
+}
+
 void gc_free_raw(MalHeap *heap, void *ptr) {
     if (ptr == nullptr) {
         return;
@@ -1218,15 +1235,8 @@ void *mal_heap_try_realloc_raw_profiled(
     // Recover the current cell's byte capacity (size-class cell size for an in-block
     // cell, recorded payload size for a LOS record) to decide whether the request
     // still fits and how much content to carry over.
-    usize old_size;
-    MalGcLarge *large = nullptr;
-    if (mal_gc_ptr_in_chunks(heap, ptr)) {
-        MalGcBlock *block = (MalGcBlock *) ((uptr) ptr & ~(uptr) (MAL_GC_BLOCK_SIZE - 1));
-        old_size = block->cell_size;
-    } else {
-        large = (MalGcLarge *) ((u8 *) ptr - mal_gc_large_data_offset());
-        old_size = large->size;
-    }
+    MalGcLarge *large;
+    usize old_size = mal_gc_raw_capacity(heap, ptr, &large);
     if (new_size <= old_size) {
         return ptr; // fits the current cell already (grow within slack, or a shrink)
     }

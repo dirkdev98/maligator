@@ -220,6 +220,47 @@ static bool failures_preserve_owner_and_pressure(MalVm *vm) {
     return true;
 }
 
+static bool finish_bounds_retained_storage_and_tolerates_trim_failure(MalVm *vm) {
+    MalHeap *heap = &vm->heap;
+    for (usize width = 1; width <= 2; width++) {
+        for (usize fail = 0; fail <= 1; fail++) {
+            mal_gc_collect(vm);
+            usize before = mal_heap_usage(heap).raw_owned_bytes;
+            MalTextBuffer buffer = {.heap = heap};
+            CHECK(mal_text_buffer_push(&buffer, width == 1 ? 'a' : 0x100) == MAL_TEXT_BUFFER_OK);
+            CHECK(mal_text_buffer_reserve(&buffer, 32768) == MAL_TEXT_BUFFER_OK);
+            for (usize i = 1; i < 1024; i++) {
+                CHECK(mal_text_buffer_push(&buffer, (c16) (i % 128)) == MAL_TEXT_BUFFER_OK);
+            }
+            mal_text_buffer_truncate(&buffer, 17);
+            void *original = buffer.data;
+            usize retained = mal_heap_usage(heap).raw_owned_bytes - before;
+            CHECK(retained >= 32768 * width);
+            heap->fail_next_raw_allocation = fail != 0;
+            MalString *string = mal_text_buffer_finish(heap, &buffer);
+            CHECK(string != nullptr && string->length == 17);
+            CHECK(buffer.data == nullptr && buffer.capacity == 0 && buffer.length == 0);
+            CHECK(!heap->fail_next_raw_allocation);
+            const void *payload = string->latin1
+                ? (const void *) string->latin1_units : (const void *) string->code_units;
+            CHECK((payload == original) == (fail != 0));
+            usize expected = fail ? retained : mal_heap_allocation_charge(17 * width);
+            CHECK(mal_heap_usage(heap).raw_owned_bytes - before == expected);
+            MalValue root = mal_value_from_string(string);
+            MalRootSpan span;
+            mal_gc_root(&span, &root, 1);
+            mal_gc_collect(vm);
+            CHECK(mal_string_code_unit_at(string, 0) == (width == 1 ? 'a' : 0x100));
+            for (usize i = 1; i < 17; i++) CHECK(mal_string_code_unit_at(string, i) == i);
+            CHECK(mal_heap_usage(heap).raw_owned_bytes - before == expected);
+            mal_gc_unroot(&span);
+            mal_gc_collect(vm);
+            CHECK(mal_heap_usage(heap).raw_owned_bytes == before);
+        }
+    }
+    return true;
+}
+
 int main(void) {
     MalVm vm;
     mal_vm_init(&vm, &mal_runtime_image);
@@ -227,7 +268,8 @@ int main(void) {
         && appends_rope_ranges_without_materialization(&vm)
         && initial_capacity_waits_for_content_encoding(&vm)
         && finish_transfers_storage_and_survives_collection(&vm)
-        && failures_preserve_owner_and_pressure(&vm);
+        && failures_preserve_owner_and_pressure(&vm)
+        && finish_bounds_retained_storage_and_tolerates_trim_failure(&vm);
     mal_vm_free(&vm);
     if (!passed) return 1;
     puts("text-buffer PASS");

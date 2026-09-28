@@ -1272,9 +1272,14 @@ static void mal_gc_trace_cell(MalHeapHeader *cell) {
         case MAL_HEAP_PRIMITIVE_WRAPPER_OBJECT:
             mal_gc_mark_value(((MalPrimitiveWrapperObject *) cell)->primitive_data);
             break;
-        case MAL_HEAP_ITERATOR_OBJECT:
-            mal_gc_mark_value(((MalIteratorObject *) cell)->target);
+        case MAL_HEAP_ITERATOR_OBJECT: {
+            MalIteratorObject *iterator = (MalIteratorObject *) cell;
+            mal_gc_mark_value(iterator->target);
+            if (iterator->kind == MAL_ITERATOR_STRING_VALUES && iterator->string_leaf != nullptr) {
+                mal_gc_mark_value(mal_value_from_string(iterator->string_leaf));
+            }
             break;
+        }
         case MAL_HEAP_MAP_OBJECT:
         case MAL_HEAP_SET_OBJECT: {
             MalMapObject *map = (MalMapObject *) cell;

@@ -451,10 +451,12 @@ static void mal_perf_stats_print(void) {
         "string_equals_calls=%llu string_pointer_hits=%llu string_length_misses=%llu "
         "string_hash_misses=%llu string_memcmp_calls=%llu string_memcmp_code_units=%llu "
         "hash_calls=%llu hash_cached_hits=%llu hash_computes=%llu "
+        "iterator_nodes=%llu hash_code_units=%llu "
         "hash_dependent_computes=%llu hash_cons_flattens=%llu "
         "search_calls=%llu search_multi_unit_calls=%llu search_candidates=%llu "
         "search_first_unit_rejects=%llu search_last_unit_rejects=%llu "
         "search_memcmp_calls=%llu search_memcmp_code_units=%llu "
+        "search_linear_comparisons=%llu "
         "reverse_search_calls=%llu reverse_search_candidates=%llu "
         "reverse_search_first_unit_rejects=%llu "
         "reverse_search_last_unit_rejects=%llu "
@@ -478,6 +480,8 @@ static void mal_perf_stats_print(void) {
         (unsigned long long) mal_perf_stats.string_hash_calls,
         (unsigned long long) mal_perf_stats.string_hash_cached_hits,
         (unsigned long long) mal_perf_stats.string_hash_computes,
+        (unsigned long long) mal_perf_stats.string_iterator_nodes,
+        (unsigned long long) mal_perf_stats.string_hash_code_units,
         (unsigned long long) mal_perf_stats.string_hash_dependent_computes,
         (unsigned long long) mal_perf_stats.string_hash_cons_flattens,
         (unsigned long long) mal_perf_stats.string_search_calls,
@@ -487,6 +491,7 @@ static void mal_perf_stats_print(void) {
         (unsigned long long) mal_perf_stats.string_search_last_unit_rejects,
         (unsigned long long) mal_perf_stats.string_search_memcmp_calls,
         (unsigned long long) mal_perf_stats.string_search_memcmp_code_units,
+        (unsigned long long) mal_perf_stats.string_search_linear_comparisons,
         (unsigned long long) mal_perf_stats.string_reverse_search_calls,
         (unsigned long long) mal_perf_stats.string_reverse_search_candidates,
         (unsigned long long) mal_perf_stats.string_reverse_search_first_unit_rejects,
@@ -506,6 +511,27 @@ static void mal_perf_stats_print(void) {
         (unsigned long long) mal_perf_stats.string_case_changed_allocations,
         (unsigned long long) mal_perf_stats.string_case_changed_code_units
     );
+    fprintf(stderr,
+        "[perf-json-stats] shape_plans=%llu shape_plan_bytes=%llu shape_plan_hits=%llu "
+        "escaped_key_code_units=%llu escaped_key_reuses=%llu escaped_key_capacity_bytes=%llu "
+        "plan_table_bytes=%llu plain_fallbacks=%llu plain_discarded_code_units=%llu "
+        "quote_latin1_code_units=%llu quote_utf16_code_units=%llu quote_utf16_scalar_probes=%llu "
+        "parser_backward_seeks=%llu reviver_index_entries=%llu reviver_index_probes=%llu\n",
+        (unsigned long long) mal_perf_stats.json_shape_plans,
+        (unsigned long long) mal_perf_stats.json_shape_plan_bytes,
+        (unsigned long long) mal_perf_stats.json_shape_plan_hits,
+        (unsigned long long) mal_perf_stats.json_escaped_key_code_units,
+        (unsigned long long) mal_perf_stats.json_escaped_key_reuses,
+        (unsigned long long) mal_perf_stats.json_escaped_key_capacity_bytes,
+        (unsigned long long) mal_perf_stats.json_plan_table_bytes,
+        (unsigned long long) mal_perf_stats.json_plain_fallbacks,
+        (unsigned long long) mal_perf_stats.json_plain_discarded_code_units,
+        (unsigned long long) mal_perf_stats.json_quote_latin1_code_units,
+        (unsigned long long) mal_perf_stats.json_quote_utf16_code_units,
+        (unsigned long long) mal_perf_stats.json_quote_utf16_scalar_probes,
+        (unsigned long long) mal_perf_stats.json_parser_backward_seeks,
+        (unsigned long long) mal_perf_stats.json_reviver_index_entries,
+        (unsigned long long) mal_perf_stats.json_reviver_index_probes);
     fprintf(stderr, "[perf-intl-collation-stats] hits=%llu misses=%llu\n",
         (unsigned long long) mal_perf_stats.intl_collation_cache_hits,
         (unsigned long long) mal_perf_stats.intl_collation_cache_misses);

@@ -205,6 +205,10 @@ bool mal_vm_value_to_property_key(MalVm *vm, MalValue value, MalKey *key_out);
 
 bool mal_vm_to_property_key(MalVm *vm, MalValue value, MalKey *key_out);
 
+/** ToPropertyKey without inserting unseen strings into the VM atom table.
+ * The caller must root the returned key across collection or JS reentry. */
+bool mal_vm_to_property_query(MalVm *vm, MalValue value, MalKey *key_out);
+
 /**
  * Read a resolved descriptor's value, invoking accessor getters with the
  * original receiver. Returns false when the getter threw; the throw

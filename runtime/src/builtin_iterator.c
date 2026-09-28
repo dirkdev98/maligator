@@ -274,6 +274,26 @@ static bool mal_builtin_iterator_array_advance(
     return true;
 }
 
+static c16 mal_builtin_iterator_string_unit(
+    MalIteratorObject *iterator, MalString *string, usize index
+) {
+    if (iterator->string_leaf == nullptr || index >= iterator->string_leaf_end) {
+        const MalString *leaf;
+        usize offset, available;
+        mal_string_get_leaf_range(string, index, &leaf, &offset, &available);
+        if (iterator->string_leaf != nullptr) {
+            mal_gc_write_barrier(mal_value_from_string(iterator->string_leaf));
+        }
+        iterator->string_leaf = (MalString *) leaf;
+        iterator->string_leaf_bias = (i32) offset - (i32) index;
+        iterator->string_leaf_end = (u32) (index + available);
+        mal_gc_card(&iterator->object.header, mal_value_from_string(iterator->string_leaf));
+    }
+    // JS may have widened this leaf or flattened its former ancestors since next().
+    return mal_string_code_unit_at(
+        iterator->string_leaf, (usize) ((i64) index + iterator->string_leaf_bias));
+}
+
 static bool mal_builtin_iterator_string_advance(
     MalVm *vm, MalIteratorObject *iterator, MalValue *value_out, bool *done_out
 ) {
@@ -283,20 +303,28 @@ static bool mal_builtin_iterator_string_advance(
 
     if (index >= length) {
         iterator->done = true;
+        if (iterator->string_leaf != nullptr) {
+            mal_gc_write_barrier(mal_value_from_string(iterator->string_leaf));
+            iterator->string_leaf = nullptr;
+        }
         *value_out = mal_value_new_undefined();
         *done_out = true;
         return true;
     }
 
-    const c16 *code_units = mal_string_code_units(string);
-    usize count = mal_utf16_code_point_width(code_units, length, index);
+    c16 units[2] = {mal_builtin_iterator_string_unit(iterator, string, index), 0};
+    usize count = 1;
+    if (mal_utf16_is_lead_surrogate(units[0]) && index + 1 < length) {
+        units[1] = mal_builtin_iterator_string_unit(iterator, string, index + 1);
+        if (mal_utf16_is_trail_surrogate(units[1])) count = 2;
+    }
 
     iterator->index += count;
     *done_out = false;
     *value_out = mal_value_from_string(
         count == 1
-            ? mal_intrinsic_code_unit(vm, code_units[index])
-            : mal_string_new_slice(&vm->heap, string, index, count)
+            ? mal_intrinsic_code_unit(vm, units[0])
+            : mal_string_new_copy(&vm->heap, units, count)
     );
     return true;
 }

@@ -4,6 +4,7 @@
 #include <string.h>
 
 #include "array_object.h"
+#include "ascii.h"
 #include "builtin_iterator.h"
 #include "function_object.h"
 #include "gc.h"
@@ -26,63 +27,108 @@ static bool mal_headers_token_unit(c16 unit) {
 }
 
 static bool mal_headers_validate_name(MalVm *vm, const MalString *name) {
-    usize len = mal_string_length(name);
-    const c16 *units = mal_string_code_units(name);
-    if (len == 0) {
-        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Invalid header name");
-        return false;
-    }
-    for (usize i = 0; i < len; i++) {
-        if (!mal_headers_token_unit(units[i])) {
-            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Invalid header name");
-            return false;
+    usize length = mal_string_length(name);
+    MalStringIterator iterator;
+    MalStringSegment segment;
+    mal_string_iterator_init(&iterator, name, 0, length);
+    bool valid = length != 0;
+    while (valid && mal_string_iterator_next(&iterator, &segment)) {
+        for (usize i = 0; i < segment.length; i++) {
+            if (!mal_headers_token_unit(mal_string_segment_code_unit_at(&segment, i))) {
+                valid = false;
+                break;
+            }
         }
     }
-    return true;
+    mal_string_iterator_dispose(&iterator);
+    if (!valid) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Invalid header name");
+    }
+    return valid;
 }
 
 static bool mal_headers_validate_value(MalVm *vm, const MalString *value) {
-    usize len = mal_string_length(value);
-    const c16 *units = mal_string_code_units(value);
-    for (usize i = 0; i < len; i++) {
-        if (units[i] > 0xFF || units[i] == 0 || units[i] == '\r' || units[i] == '\n') {
-            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Invalid header value");
-            return false;
+    MalStringIterator iterator;
+    MalStringSegment segment;
+    mal_string_iterator_init(&iterator, value, 0, mal_string_length(value));
+    bool valid = true;
+    while (valid && mal_string_iterator_next(&iterator, &segment)) {
+        for (usize i = 0; i < segment.length; i++) {
+            c16 unit = mal_string_segment_code_unit_at(&segment, i);
+            if (unit > 0xFF || unit == 0 || unit == '\r' || unit == '\n') {
+                valid = false;
+                break;
+            }
         }
     }
-    return true;
-}
-
-static MalString *mal_headers_lowercase_name(MalVm *vm, const MalString *name) {
-    usize len = mal_string_length(name);
-    const c16 *units = mal_string_code_units(name);
-    // Heap-owned rather than malloc'd: mal_heap_alloc_raw cannot return null, so
-    // there is no allocation-failure path to leave the buffer unwritten.
-    c16 *out = mal_heap_alloc_raw_profiled(
-        &vm->heap, sizeof(c16) * (len == 0 ? 1 : len),
-        MAL_PROFILE_ALLOCATION_FAMILY_HOST);
-    for (usize i = 0; i < len; i++) {
-        c16 unit = units[i];
-        out[i] = unit >= 'A' && unit <= 'Z' ? (c16) (unit + ('a' - 'A')) : unit;
+    mal_string_iterator_dispose(&iterator);
+    if (!valid) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Invalid header value");
     }
-    return mal_string_new_owned(&vm->heap, out, len);
+    return valid;
 }
 
-static MalString *mal_headers_trim_value(MalVm *vm, const MalString *value) {
-    const c16 *units = mal_string_code_units(value);
+static MalString *mal_headers_lowercase_name(MalVm *vm, MalString *name) {
+    usize length = mal_string_length(name);
+    MalStringIterator iterator;
+    MalStringSegment segment;
+    mal_string_iterator_init(&iterator, name, 0, length);
+    bool uppercase = false;
+    while (!uppercase && mal_string_iterator_next(&iterator, &segment)) {
+        for (usize i = 0; i < segment.length; i++) {
+            c16 unit = mal_string_segment_code_unit_at(&segment, i);
+            if (unit >= 'A' && unit <= 'Z') {
+                uppercase = true;
+                break;
+            }
+        }
+    }
+    mal_string_iterator_dispose(&iterator);
+    if (!uppercase) return name;
+
+    // Validation guarantees an ASCII token, so its normalized payload is compact.
+    u8 *output = mal_heap_alloc_raw_profiled(
+        &vm->heap, length, MAL_PROFILE_ALLOCATION_FAMILY_HOST);
+    mal_string_iterator_init(&iterator, name, 0, length);
+    usize offset = 0;
+    while (mal_string_iterator_next(&iterator, &segment)) {
+        for (usize i = 0; i < segment.length; i++) {
+            output[offset++] = (u8) mal_ascii_to_lower(mal_string_segment_code_unit_at(&segment, i));
+        }
+    }
+    mal_string_iterator_dispose(&iterator);
+    return mal_string_new_latin1_owned(&vm->heap, output, length);
+}
+
+static bool mal_headers_whitespace(c16 unit) {
+    return unit == ' ' || unit == '\t' || unit == '\r' || unit == '\n';
+}
+
+static MalString *mal_headers_trim_value(MalVm *vm, MalString *value) {
+    usize length = mal_string_length(value);
     usize start = 0;
-    usize end = mal_string_length(value);
-    while (start < end
-        && (units[start] == ' ' || units[start] == '\t' || units[start] == '\r'
-            || units[start] == '\n')) {
-        start++;
+    usize end = length;
+    MalStringIterator iterator;
+    MalStringSegment segment;
+    mal_string_iterator_init(&iterator, value, 0, length);
+    while (mal_string_iterator_next(&iterator, &segment)) {
+        usize i = 0;
+        while (i < segment.length &&
+            mal_headers_whitespace(mal_string_segment_code_unit_at(&segment, i))) i++;
+        start += i;
+        if (i != segment.length) break;
     }
-    while (end > start
-        && (units[end - 1] == ' ' || units[end - 1] == '\t' || units[end - 1] == '\r'
-            || units[end - 1] == '\n')) {
-        end--;
+    mal_string_iterator_dispose(&iterator);
+    mal_string_iterator_init_reverse(&iterator, value, start, length - start);
+    while (mal_string_iterator_next(&iterator, &segment)) {
+        usize i = segment.length;
+        while (i > 0 &&
+            mal_headers_whitespace(mal_string_segment_code_unit_at(&segment, i - 1))) i--;
+        end -= segment.length - i;
+        if (i != 0) break;
     }
-    return mal_string_new_copy(&vm->heap, units + start, end - start);
+    mal_string_iterator_dispose(&iterator);
+    return mal_string_new_slice(&vm->heap, value, start, end - start);
 }
 
 MalHeadersObject *mal_headers_object_new(MalHeap *heap, MalObject *prototype) {
@@ -102,28 +148,35 @@ MalHeadersObject *mal_headers_create(MalVm *vm) {
 
 MalString *mal_headers_new_lowercase_name(
     MalVm *vm, const char *name, usize name_len) {
-    c16 *units = mal_heap_alloc_raw_profiled(
-        &vm->heap, sizeof(c16) * (name_len == 0 ? 1 : name_len),
+    u8 *units = mal_heap_alloc_raw_profiled(
+        &vm->heap, name_len == 0 ? 1 : name_len,
         MAL_PROFILE_ALLOCATION_FAMILY_HOST);
     for (usize i = 0; i < name_len; i++) {
-        u8 unit = (u8) name[i];
-        units[i] = unit >= 'A' && unit <= 'Z'
-            ? (c16) (unit + ('a' - 'A')) : (c16) unit;
+        units[i] = (u8) mal_ascii_to_lower((u8) name[i]);
     }
-    return mal_string_new_owned(&vm->heap, units, name_len);
+    return mal_string_new_latin1_owned(&vm->heap, units, name_len);
 }
 
 static bool mal_headers_name_equals_bytes_ci(
     const MalString *name, const char *bytes, usize length) {
     if (mal_string_length(name) != length) return false;
-    const c16 *units = mal_string_code_units(name);
-    for (usize i = 0; i < length; i++) {
-        u8 unit = (u8) bytes[i];
-        c16 lower = unit >= 'A' && unit <= 'Z'
-            ? (c16) (unit + ('a' - 'A')) : (c16) unit;
-        if (units[i] != lower) return false;
+    MalStringIterator iterator;
+    MalStringSegment segment;
+    mal_string_iterator_init(&iterator, name, 0, length);
+    usize offset = 0;
+    bool equal = true;
+    while (equal && mal_string_iterator_next(&iterator, &segment)) {
+        for (usize i = 0; i < segment.length; i++) {
+            if (mal_string_segment_code_unit_at(&segment, i) !=
+                mal_ascii_to_lower((u8) bytes[offset + i])) {
+                equal = false;
+                break;
+            }
+        }
+        offset += segment.length;
     }
-    return true;
+    mal_string_iterator_dispose(&iterator);
+    return equal;
 }
 
 bool mal_headers_append_entry(MalHeadersObject *h, MalString *name, MalString *value) {
@@ -220,21 +273,15 @@ static bool mal_headers_can_mutate(MalVm *vm, const MalHeadersObject *h) {
 }
 
 static bool mal_headers_name_is_ascii(const MalString *name, const char *ascii) {
-    usize length = strlen(ascii);
-    if (mal_string_length(name) != length) return false;
-    const c16 *units = mal_string_code_units(name);
-    for (usize i = 0; i < length; i++) {
-        if (units[i] != (c16) (u8) ascii[i]) return false;
-    }
-    return true;
+    return mal_string_equals_ascii(name, ascii);
 }
 
 static bool mal_headers_name_starts_ascii(const MalString *name, const char *ascii) {
     usize length = strlen(ascii);
     if (mal_string_length(name) < length) return false;
-    const c16 *units = mal_string_code_units(name);
+    // These guard prefixes contain at most six units.
     for (usize i = 0; i < length; i++) {
-        if (units[i] != (c16) (u8) ascii[i]) return false;
+        if (mal_string_code_unit_at((MalString *) name, i) != (c16) (u8) ascii[i]) return false;
     }
     return true;
 }
@@ -257,13 +304,11 @@ static bool mal_headers_value_starts_ascii_ci(
     usize prefix = strlen(ascii);
     usize length = mal_string_length(value);
     if (length < prefix) return false;
-    const c16 *units = mal_string_code_units(value);
     for (usize i = 0; i < prefix; i++) {
-        c16 unit = units[i];
-        if (unit >= 'A' && unit <= 'Z') unit = (c16) (unit + ('a' - 'A'));
-        if (unit != (c16) (u8) ascii[i]) return false;
+        c16 unit = mal_string_code_unit_at((MalString *) value, i);
+        if (mal_ascii_to_lower(unit) != (c16) (u8) ascii[i]) return false;
     }
-    return length == prefix || units[prefix] == ';';
+    return length == prefix || mal_string_code_unit_at((MalString *) value, prefix) == ';';
 }
 
 static bool mal_headers_no_cors_safelisted(
@@ -366,13 +411,24 @@ static bool mal_headers_to_byte_string(MalVm *vm, MalValue input, MalValue *out)
     if (!mal_vm_to_string(vm, input, &string)) {
         return false;
     }
-    const c16 *units = mal_string_code_units(string);
-    for (usize i = 0; i < mal_string_length(string); i++) {
-        if (units[i] > 0xFF) {
-            mal_vm_throw_error(
-                vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Value is not a ByteString");
-            return false;
+    MalStringIterator iterator;
+    MalStringSegment segment;
+    mal_string_iterator_init(&iterator, string, 0, mal_string_length(string));
+    bool valid = true;
+    while (valid && mal_string_iterator_next(&iterator, &segment)) {
+        if (segment.latin1) continue;
+        for (usize i = 0; i < segment.length; i++) {
+            if (segment.utf16_units[i] > 0xFF) {
+                valid = false;
+                break;
+            }
         }
+    }
+    mal_string_iterator_dispose(&iterator);
+    if (!valid) {
+        mal_vm_throw_error(
+            vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Value is not a ByteString");
+        return false;
     }
     *out = mal_value_from_string(string);
     return true;
@@ -761,9 +817,9 @@ static MalValue mal_headers_join(MalVm *vm, MalHeadersObject *h, const MalString
             buf[offset++] = ',';
             buf[offset++] = ' ';
         }
-        const c16 *units = mal_string_code_units(h->entries[i].value);
-        usize len = mal_string_length(h->entries[i].value);
-        memcpy(buf + offset, units, sizeof(c16) * len);
+        MalString *value = h->entries[i].value;
+        usize len = mal_string_length(value);
+        mal_string_copy_range_to(value, 0, len, buf + offset);
         offset += len;
     }
     return mal_value_from_string(mal_string_new_owned(&vm->heap, buf, offset));
@@ -854,32 +910,11 @@ static MalValue mal_headers_constructor(
 /* --- sorted, live iteration (entries / keys / values / forEach / @@iterator) --- */
 
 static i32 mal_headers_name_compare(const MalString *a, const MalString *b) {
-    usize a_len = mal_string_length(a);
-    usize b_len = mal_string_length(b);
-    usize len = a_len < b_len ? a_len : b_len;
-    const c16 *a_units = mal_string_code_units(a);
-    const c16 *b_units = mal_string_code_units(b);
-    for (usize i = 0; i < len; i++) {
-        if (a_units[i] != b_units[i]) {
-            return a_units[i] < b_units[i] ? -1 : 1;
-        }
-    }
-    return a_len == b_len ? 0 : (a_len < b_len ? -1 : 1);
+    return mal_string_compare(a, b);
 }
 
 static bool mal_headers_name_is_set_cookie(const MalString *name) {
-    static const char set_cookie[] = "set-cookie";
-    usize len = mal_string_length(name);
-    if (len != sizeof(set_cookie) - 1) {
-        return false;
-    }
-    const c16 *units = mal_string_code_units(name);
-    for (usize i = 0; i < len; i++) {
-        if (units[i] != (c16) set_cookie[i]) {
-            return false;
-        }
-    }
-    return true;
+    return mal_string_equals_ascii(name, "set-cookie");
 }
 
 static i32 *mal_headers_sorted_indices(MalHeadersObject *h) {
@@ -915,7 +950,7 @@ static MalValue mal_headers_join_sorted_range(
         }
         MalString *value = h->entries[indices[i]].value;
         usize len = mal_string_length(value);
-        memcpy(buf + offset, mal_string_code_units(value), sizeof(c16) * len);
+        mal_string_copy_range_to(value, 0, len, buf + offset);
         offset += len;
     }
     MalValue result = mal_value_from_string(mal_string_new_copy(&vm->heap, buf, offset));

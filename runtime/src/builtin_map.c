@@ -365,7 +365,7 @@ static MalValue mal_builtin_map_set_value(
     if (entry == nullptr) {
         entry = mal_table_upsert_entry(map->entries, canonical_key, nullptr);
     }
-    mal_table_entry_set_value(map->entries, entry, value);
+    mal_table_entry_set_map_value(map->entries, entry, canonical_key, value);
     mal_gc_card(&map->object.header, key);
     mal_gc_card(&map->object.header, value);
     mal_builtin_map_cache_entry(map, entry);

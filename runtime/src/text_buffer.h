@@ -23,6 +23,9 @@ typedef struct MalTextBuffer {
 /** Reserve code units in the current encoding without changing length. */
 MalTextBufferStatus mal_text_buffer_reserve(MalTextBuffer *buffer, usize extra);
 
+/** Promote existing content and reserve UTF-16 space for direct writers. */
+MalTextBufferStatus mal_text_buffer_reserve_utf16(MalTextBuffer *buffer, usize extra);
+
 /** Delay an empty buffer's allocation until the first append determines its
  * encoding. With existing storage this has the same contract as reserve. */
 MalTextBufferStatus mal_text_buffer_hint_capacity(MalTextBuffer *buffer, usize extra);

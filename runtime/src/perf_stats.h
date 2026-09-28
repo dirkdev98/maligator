@@ -79,6 +79,8 @@ typedef struct MalPerfStats {
     u64 string_hash_calls;
     u64 string_hash_cached_hits;
     u64 string_hash_computes;
+    u64 string_iterator_nodes;
+    u64 string_hash_code_units;
     u64 string_hash_dependent_computes;
     u64 string_hash_cons_flattens;
     u64 string_search_calls;
@@ -88,6 +90,7 @@ typedef struct MalPerfStats {
     u64 string_search_last_unit_rejects;
     u64 string_search_memcmp_calls;
     u64 string_search_memcmp_code_units;
+    u64 string_search_linear_comparisons;
     u64 string_reverse_search_calls;
     u64 string_reverse_search_candidates;
     u64 string_reverse_search_first_unit_rejects;
@@ -151,6 +154,22 @@ typedef struct MalPerfStats {
     u64 string_flatten_cons_nodes;
     u64 string_flatten_flat_leaves;
     u64 string_flatten_shared_copies;
+
+    u64 json_shape_plans;
+    u64 json_shape_plan_bytes;
+    u64 json_shape_plan_hits;
+    u64 json_escaped_key_code_units;
+    u64 json_escaped_key_reuses;
+    u64 json_escaped_key_capacity_bytes;
+    u64 json_plan_table_bytes;
+    u64 json_plain_fallbacks;
+    u64 json_plain_discarded_code_units;
+    u64 json_quote_latin1_code_units;
+    u64 json_quote_utf16_code_units;
+    u64 json_quote_utf16_scalar_probes;
+    u64 json_parser_backward_seeks;
+    u64 json_reviver_index_entries;
+    u64 json_reviver_index_probes;
 
     u64 regexp_exec_calls;
     u64 regexp_fast_exec_calls;

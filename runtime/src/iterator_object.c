@@ -22,6 +22,8 @@ void mal_iterator_object_init(
     iterator->kind = kind;
     iterator->target = target;
     iterator->index = 0;
+    iterator->string_leaf_bias = 0;
+    iterator->string_leaf_end = 0;
     iterator->done = false;
     iterator->table_pinned = mal_iterator_kind_uses_table(kind);
     if (iterator->table_pinned) {

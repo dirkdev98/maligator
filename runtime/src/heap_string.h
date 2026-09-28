@@ -98,7 +98,8 @@ MalString *mal_string_new_external(MalHeap *heap, const c16 *code_units, usize l
 MalString *mal_string_new_slice(MalHeap *heap, MalString *parent, usize offset, usize length);
 
 /**
- * Allocate a lazy concatenation after checking its combined UTF-16 length.
+ * Allocate a weight-balanced lazy concatenation after checking its combined
+ * UTF-16 length. Every cons child occupies at most three quarters of its parent.
  * Returns false without allocating when the engine string limit would be exceeded.
  */
 bool mal_string_new_cons_checked(MalHeap *heap, MalString *left, MalString *right, MalString **out);
@@ -113,6 +114,8 @@ MalString *mal_string_new_owned(MalHeap *heap, const c16 *code_units, usize leng
 MalString *mal_string_new_latin1_copy(MalHeap *heap, const u8 *units, usize length);
 /** Takes ownership of a mal_heap_alloc_raw buffer. */
 MalString *mal_string_new_latin1_owned(MalHeap *heap, const u8 *units, usize length);
+/** Takes ownership of UTF-16 storage known to contain a unit above Latin-1. */
+MalString *mal_string_new_utf16_owned(MalHeap *heap, const c16 *units, usize length);
 
 /**
  * Allocate and initialize a string from ASCII bytes.
@@ -178,6 +181,13 @@ typedef struct MalStringSegment {
 bool mal_string_try_get_segment(
     const MalString *string, usize offset, usize length, MalStringSegment *segment);
 
+/** Find the flat leaf at an in-bounds offset. Available units stop at the
+ * visible input range, including dependent slices. Leaf identity can be rooted
+ * across reentry; obtain its payload afresh after possible materialization. */
+void mal_string_get_leaf_range(
+    const MalString *string, usize offset, const MalString **leaf_out,
+    usize *leaf_offset_out, usize *available_out);
+
 typedef struct MalStringIteratorPart {
     const MalString *string;
     usize offset;
@@ -188,6 +198,9 @@ typedef struct MalStringIterator {
     MalStringIteratorPart *stack;
     usize count;
     usize capacity;
+    bool reverse;
+    /** Flat owner of the last returned segment; valid until next/dispose. */
+    MalStringIteratorPart current;
     MalStringIteratorPart inline_stack[16];
 } MalStringIterator;
 
@@ -195,6 +208,9 @@ typedef struct MalStringIterator {
  * iterator or segment across JS reentry or a UTF-16 bridge that may materialize
  * it. Traversal never collects, mutates strings, or allocates beyond malloc scratch. */
 void mal_string_iterator_init(
+    MalStringIterator *iterator, const MalString *string, usize offset, usize length);
+/** Returns segments right to left; each segment retains its forward unit order. */
+void mal_string_iterator_init_reverse(
     MalStringIterator *iterator, const MalString *string, usize offset, usize length);
 bool mal_string_iterator_next(MalStringIterator *iterator, MalStringSegment *segment);
 void mal_string_iterator_dispose(MalStringIterator *iterator);

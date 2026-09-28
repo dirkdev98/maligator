@@ -485,17 +485,20 @@ static MalValue mal_web_text_decoder_decode(
         return mal_value_new_undefined();
     }
     usize total = old_pending + len;
-    byte *combined = malloc(total == 0 ? 1 : total);
-    if (combined == nullptr) {
-        mal_vm_throw_allocation_error(vm);
-        return mal_value_new_undefined();
-    }
-    u32 packed = state >> MAL_TEXT_DECODER_PENDING_BYTES_SHIFT;
-    for (usize i = 0; i < old_pending; i++) {
-        combined[i] = (byte) (packed >> (i * 8));
-    }
-    if (len > 0) {
-        memcpy(combined + old_pending, bytes, len);
+    byte *combined_storage = nullptr;
+    const byte *combined = bytes;
+    if (old_pending != 0) {
+        combined_storage = malloc(total);
+        if (combined_storage == nullptr) {
+            mal_vm_throw_allocation_error(vm);
+            return mal_value_new_undefined();
+        }
+        u32 packed = state >> MAL_TEXT_DECODER_PENDING_BYTES_SHIFT;
+        for (usize i = 0; i < old_pending; i++) {
+            combined_storage[i] = (byte) (packed >> (i * 8));
+        }
+        if (len > 0) memcpy(combined_storage + old_pending, bytes, len);
+        combined = combined_storage;
     }
 
     usize decode_len = total;
@@ -514,13 +517,43 @@ static MalValue mal_web_text_decoder_decode(
             << (MAL_TEXT_DECODER_PENDING_BYTES_SHIFT + i * 8);
     }
 
+    if (encoding == MAL_TEXT_ENCODING_UTF8) {
+        usize start = 0;
+        if ((state & MAL_TEXT_DECODER_BOM_SEEN) == 0 && decode_len > 0) {
+            state |= MAL_TEXT_DECODER_BOM_SEEN;
+            if ((state & MAL_TEXT_DECODER_IGNORE_BOM) == 0 && decode_len >= 3 &&
+                (u8) combined[0] == 0xef && (u8) combined[1] == 0xbb &&
+                (u8) combined[2] == 0xbf) start = 3;
+        }
+        bool had_error;
+        MalUtf8DecodeStatus status;
+        MalString *string = mal_string_from_utf8_report(
+            &vm->heap, start == 0 ? combined : combined + start,
+            decode_len - start, &had_error, &status);
+        free(combined_storage);
+        if (string == nullptr) {
+            if (status == MAL_UTF8_DECODE_LENGTH_OVERFLOW) {
+                mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
+                    "Invalid string length");
+            } else {
+                mal_vm_throw_allocation_error(vm);
+            }
+            return mal_value_new_undefined();
+        }
+        mal_web_text_decoder_set_flags(self, callee, (i32) state);
+        if ((flags & MAL_TEXT_DECODER_FATAL) != 0 && had_error) {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+                "TextDecoder.decode: input is not valid for the selected encoding");
+            return mal_value_new_undefined();
+        }
+        return mal_value_from_string(string);
+    }
+
     usize count;
     bool had_error;
-    c16 *units = encoding == MAL_TEXT_ENCODING_UTF8
-        ? mal_utf8_decode_report(combined, decode_len, &count, &had_error)
-        : mal_utf16_decode_report(
-              combined, decode_len, encoding == MAL_TEXT_ENCODING_UTF16BE, &count, &had_error);
-    free(combined);
+    c16 *units = mal_utf16_decode_report(
+        combined, decode_len, encoding == MAL_TEXT_ENCODING_UTF16BE, &count, &had_error);
+    free(combined_storage);
     if (units == nullptr) {
         mal_vm_throw_allocation_error(vm);
         return mal_value_new_undefined();

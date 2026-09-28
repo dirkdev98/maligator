@@ -97,3 +97,17 @@ tests/native/encoding-aware-text.test.ts
 tests/native/encoding-aware-strings.test.ts
 
 tests/native/text-buffer.test.ts
+
+tests/native/compact-string-boundaries.test.ts
+
+tests/native/json-algorithms.test.ts
+
+tests/native/map-string-representative.test.ts
+
+tests/native/string-rope-followups.test.ts
+
+tests/native/string-search-followups.test.ts
+
+tests/native/transient-property-query.test.ts
+
+tests/native/utf8-string-storage.test.ts

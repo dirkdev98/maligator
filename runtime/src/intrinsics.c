@@ -353,7 +353,9 @@ MalString *mal_intrinsic_ascii(MalVm *vm, const byte *name) {
     return atom;
 }
 
-MalString *mal_property_atomize_string(MalVm *vm, MalString *string) {
+static MalString *mal_property_resolve_string(
+    MalVm *vm, MalString *string, bool atomize
+) {
     if (string->property_atom) {
         return string;
     }
@@ -378,9 +380,19 @@ MalString *mal_property_atomize_string(MalVm *vm, MalString *string) {
         }
         return atom;
     }
-    string->property_atom = true;
-    (void) mal_table_upsert_entry(vm->atoms, key, nullptr);
+    if (atomize) {
+        string->property_atom = true;
+        (void) mal_table_upsert_entry(vm->atoms, key, nullptr);
+    }
     return string;
+}
+
+MalString *mal_property_query_string(MalVm *vm, MalString *string) {
+    return mal_property_resolve_string(vm, string, false);
+}
+
+MalString *mal_property_atomize_string(MalVm *vm, MalString *string) {
+    return mal_property_resolve_string(vm, string, true);
 }
 
 MalString *mal_intrinsic_code_unit(MalVm *vm, c16 code_unit) {

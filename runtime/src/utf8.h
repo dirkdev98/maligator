@@ -26,6 +26,9 @@ c16 *mal_utf8_decode(const byte *bytes, usize len, usize *out_count);
 c16 *mal_utf8_decode_report(
     const byte *bytes, usize len, usize *out_count, bool *had_error);
 
+/** Validate UTF-8 scalar sequences without allocating decoded output. */
+bool mal_utf8_is_valid(const byte *bytes, usize len);
+
 /** Encode a complete engine string. The returned byte buffer is not a C string. */
 byte *mal_string_to_utf8(const MalString *string, usize *out_len);
 
@@ -37,7 +40,19 @@ void mal_string_utf8_encode_into(
 /** Exact UTF-8 byte count for a complete engine string without flattening. */
 usize mal_string_utf8_length(const MalString *string);
 
-/** Decode UTF-8 with replacement and copy it into a new engine string. */
+typedef enum MalUtf8DecodeStatus : u8 {
+    MAL_UTF8_DECODE_OK,
+    MAL_UTF8_DECODE_LENGTH_OVERFLOW,
+    MAL_UTF8_DECODE_ALLOCATION_FAILURE,
+} MalUtf8DecodeStatus;
+
+/** Decode directly into compact storage. The limit counts decoded UTF-16 units,
+ * including replacements; status and had_error may be null. */
+MalString *mal_string_from_utf8_report(
+    MalHeap *heap, const byte *bytes, usize len,
+    bool *had_error, MalUtf8DecodeStatus *status);
+
+/** Decode UTF-8 with replacement directly into a new engine string. */
 MalString *mal_string_from_utf8(MalHeap *heap, const byte *bytes, usize len);
 
 typedef enum MalUtf8CStringResult : u8 {

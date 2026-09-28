@@ -59,7 +59,6 @@ static bool mal_shape_transition_hash(MalKey key, u8 attrs, u64 *out) {
     u64 hash;
     if (mal_value_is_string(key.value)) {
         MalString *string = mal_value_to_string(key.value);
-        if (mal_string_storage(string) == MAL_STRING_STORAGE_CONS) return false;
         hash = mal_string_hash(string);
     } else {
         hash = key.value;
@@ -72,7 +71,6 @@ static bool mal_shape_transition_hash(MalKey key, u8 attrs, u64 *out) {
 static bool mal_shape_find_hash(MalKey key, u64 *out) {
     if (mal_value_is_string(key.value)) {
         MalString *string = mal_value_to_string(key.value);
-        if (mal_string_storage(string) == MAL_STRING_STORAGE_CONS) return false;
         *out = mal_string_hash(string);
         return true;
     }

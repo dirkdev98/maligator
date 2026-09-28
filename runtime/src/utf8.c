@@ -4,6 +4,7 @@
 #include <string.h>
 
 #include "heap_string.h"
+#include "text_buffer.h"
 #include "utf16.h"
 
 usize mal_utf8_encoded_length(const c16 *units, usize len) {
@@ -73,62 +74,79 @@ c16 *mal_utf8_decode(const byte *bytes, usize len, usize *out_count) {
     return mal_utf8_decode_report(bytes, len, out_count, &had_error);
 }
 
+static u32 mal_utf8_read_scalar(
+    const byte *bytes, usize len, usize *offset, bool *had_error
+) {
+    usize i = *offset;
+    u8 b = (u8) bytes[i];
+    u32 cp;
+    usize n = 1;
+    u8 second_min = 0x80;
+    u8 second_max = 0xBF;
+    if (b < 0x80) {
+        cp = b;
+    } else if (b >= 0xC2 && b <= 0xDF) {
+        cp = b & 0x1Fu;
+        n = 2;
+    } else if (b >= 0xE0 && b <= 0xEF) {
+        cp = b & 0x0Fu;
+        n = 3;
+        if (b == 0xE0) second_min = 0xA0;
+        if (b == 0xED) second_max = 0x9F;
+    } else if (b >= 0xF0 && b <= 0xF4) {
+        cp = b & 0x07u;
+        n = 4;
+        if (b == 0xF0) second_min = 0x90;
+        if (b == 0xF4) second_max = 0x8F;
+    } else {
+        cp = 0xFFFD;
+        *had_error = true;
+    }
+    if (n > 1) {
+        usize consumed = 1;
+        for (usize k = 1; k < n; k++) {
+            if (k >= len - i) {
+                cp = 0xFFFD;
+                n = consumed;
+                *had_error = true;
+                break;
+            }
+            u8 cont = (u8) bytes[i + k];
+            u8 minimum = k == 1 ? second_min : 0x80;
+            u8 maximum = k == 1 ? second_max : 0xBF;
+            if (cont < minimum || cont > maximum) {
+                cp = 0xFFFD;
+                n = consumed;
+                *had_error = true;
+                break;
+            }
+            cp = (cp << 6) | (cont & 0x3Fu);
+            consumed++;
+        }
+    }
+    *offset = i + n;
+    return cp;
+}
+
+bool mal_utf8_is_valid(const byte *bytes, usize len) {
+    usize offset = 0;
+    bool had_error = false;
+    while (offset < len && !had_error) {
+        mal_utf8_read_scalar(bytes, len, &offset, &had_error);
+    }
+    return !had_error;
+}
+
 c16 *mal_utf8_decode_report(const byte *bytes, usize len, usize *out_count, bool *had_error) {
     *out_count = 0;
     *had_error = false;
     if (len > SIZE_MAX / sizeof(c16) - 1) return nullptr;
-    c16 *out = malloc(sizeof(c16) * (len + 1)); // <= len code units
+    c16 *out = malloc(sizeof(c16) * (len + 1));
     if (out == nullptr) return nullptr;
     usize o = 0;
     usize i = 0;
     while (i < len) {
-        u8 b = (u8) bytes[i];
-        u32 cp;
-        usize n = 1;
-        u8 second_min = 0x80;
-        u8 second_max = 0xBF;
-        if (b < 0x80) {
-            cp = b;
-        } else if (b >= 0xC2 && b <= 0xDF) {
-            cp = b & 0x1Fu;
-            n = 2;
-        } else if (b >= 0xE0 && b <= 0xEF) {
-            cp = b & 0x0Fu;
-            n = 3;
-            if (b == 0xE0) second_min = 0xA0;
-            if (b == 0xED) second_max = 0x9F;
-        } else if (b >= 0xF0 && b <= 0xF4) {
-            cp = b & 0x07u;
-            n = 4;
-            if (b == 0xF0) second_min = 0x90;
-            if (b == 0xF4) second_max = 0x8F;
-        } else {
-            cp = 0xFFFD;
-            *had_error = true;
-        }
-        if (n > 1) {
-            usize consumed = 1;
-            for (usize k = 1; k < n; k++) {
-                if (i + k >= len) {
-                    cp = 0xFFFD;
-                    n = consumed;
-                    *had_error = true;
-                    break;
-                }
-                u8 cont = (u8) bytes[i + k];
-                u8 minimum = k == 1 ? second_min : 0x80;
-                u8 maximum = k == 1 ? second_max : 0xBF;
-                if (cont < minimum || cont > maximum) {
-                    cp = 0xFFFD;
-                    n = consumed;
-                    *had_error = true;
-                    break;
-                }
-                cp = (cp << 6) | (cont & 0x3Fu);
-                consumed++;
-            }
-        }
-        i += n;
+        u32 cp = mal_utf8_read_scalar(bytes, len, &i, had_error);
         if (cp <= 0xFFFF) {
             out[o++] = (c16) cp;
         } else {
@@ -255,22 +273,66 @@ usize mal_string_utf8_length(const MalString *string) {
     return length;
 }
 
-MalString *mal_string_from_utf8(MalHeap *heap, const byte *bytes, usize len) {
+MalString *mal_string_from_utf8_report(
+    MalHeap *heap, const byte *bytes, usize len,
+    bool *had_error_out, MalUtf8DecodeStatus *status_out
+) {
+    bool had_error = false;
+    MalUtf8DecodeStatus status = MAL_UTF8_DECODE_OK;
+    MalString *string = nullptr;
     usize prefix = 0;
     while (prefix < len && (u8) bytes[prefix] < 0x80) prefix++;
     if (prefix == len) {
-        return len <= MAL_STRING_MAX_CODE_UNITS
-            ? mal_string_new_ascii(heap, bytes, len) : nullptr;
+        if (len > MAL_STRING_MAX_CODE_UNITS) status = MAL_UTF8_DECODE_LENGTH_OVERFLOW;
+        else string = mal_string_new_ascii(heap, bytes, len);
+        goto done;
     }
-    usize count;
-    c16 *units = mal_utf8_decode(bytes, len, &count);
-    if (units == nullptr || count > MAL_STRING_MAX_CODE_UNITS) {
-        free(units);
-        return nullptr;
+
+    MalTextBuffer buffer = {.heap = heap};
+    mal_text_buffer_append_latin1(&buffer, (const u8 *) bytes, prefix);
+    usize i = prefix;
+    while (i < len && buffer.status == MAL_TEXT_BUFFER_OK) {
+        usize start = i;
+        while (i < len && (u8) bytes[i] < 0x80) i++;
+        if (i != start) {
+            mal_text_buffer_append_latin1(&buffer, (const u8 *) bytes + start, i - start);
+            continue;
+        }
+        u32 cp = mal_utf8_read_scalar(bytes, len, &i, &had_error);
+        usize width = cp > 0xFFFF ? 2 : 1;
+        if (cp > UINT8_MAX && !buffer.utf16) {
+            mal_text_buffer_reserve_utf16(&buffer, width);
+        } else if (width > buffer.capacity - buffer.length) {
+            mal_text_buffer_reserve(&buffer, width);
+        }
+        if (buffer.status != MAL_TEXT_BUFFER_OK) break;
+        if (!buffer.utf16) {
+            ((u8 *) buffer.data)[buffer.length] = (u8) cp;
+        } else if (width == 1) {
+            ((c16 *) buffer.data)[buffer.length] = (c16) cp;
+        } else {
+            mal_utf16_emit_pair(cp, (c16 *) buffer.data + buffer.length);
+        }
+        buffer.length += width;
     }
-    MalString *string = mal_string_new_copy(heap, units, count);
-    free(units);
+    if (buffer.status == MAL_TEXT_BUFFER_OK) {
+        // This decoder never truncates, so promotion proves a wide unit remains.
+        string = buffer.utf16
+            ? mal_string_new_utf16_owned(heap, buffer.data, buffer.length)
+            : mal_text_buffer_finish(heap, &buffer);
+    } else {
+        status = buffer.status == MAL_TEXT_BUFFER_LENGTH_OVERFLOW
+            ? MAL_UTF8_DECODE_LENGTH_OVERFLOW : MAL_UTF8_DECODE_ALLOCATION_FAILURE;
+        mal_text_buffer_dispose(&buffer);
+    }
+done:
+    if (had_error_out != nullptr) *had_error_out = had_error;
+    if (status_out != nullptr) *status_out = status;
     return string;
+}
+
+MalString *mal_string_from_utf8(MalHeap *heap, const byte *bytes, usize len) {
+    return mal_string_from_utf8_report(heap, bytes, len, nullptr, nullptr);
 }
 
 MalUtf8CStringResult mal_string_to_utf8_c_string(

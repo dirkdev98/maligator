@@ -507,6 +507,9 @@ void *mal_heap_try_alloc_raw_profiled(MalHeap *heap, usize alloc_size, u8 profil
 /** Bytes charged to `heap.bytes_allocated` for one request of this size. */
 usize mal_heap_allocation_charge(usize alloc_size);
 
+/** Actual payload capacity of a live buffer returned by mal_heap_alloc_raw. */
+usize mal_heap_raw_capacity(MalHeap *heap, const void *ptr);
+
 /**
  * Free a raw buffer previously returned by mal_heap_alloc_raw. Returns an
  * in-block cell to its block's free list, or releases its LOS record. Used by
