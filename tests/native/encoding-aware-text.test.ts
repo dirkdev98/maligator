@@ -5,6 +5,7 @@ import { beforeAll, describe, it } from "vitest";
 import {
 	assertExactLines,
 	buildBackendPairFromOneProgramImage,
+	HOST_MAIN,
 	runToStdout,
 	STRESS_ENV,
 } from "../../src/test-harness.ts";
@@ -25,6 +26,7 @@ describe("encoding-aware string consumers and JSON traversal", () => {
 		({ compiled, interpreted } = buildBackendPairFromOneProgramImage({
 			fixture: "tests/local/encoding-aware-text.js",
 			name: "encoding-aware-text",
+			mainFile: HOST_MAIN,
 			outDir,
 		}));
 	});
