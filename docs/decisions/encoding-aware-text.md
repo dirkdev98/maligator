@@ -12,13 +12,13 @@ The string cell remains in the 32-byte size class. Its 32-bit length covers the
 existing 16-million-code-unit engine limit. The remaining half of the previous
 length word stores a dependent slice's offset.
 
-| Storage | Payload | Ownership and retained edges |
-| --- | --- | --- |
-| Inline | Eight Latin-1 units or four UTF-16 units | Inside the string cell |
-| Owned | Contiguous Latin-1 or UTF-16 units | GC-accounted RAW allocation |
-| External | Borrowed Latin-1 or UTF-16 units | Provider retains the backing storage |
-| Dependent | Parent plus UTF-16 offset and length | Parent may be flat or a rope |
-| Cons | Left and right strings | Children retain their own encodings |
+| Storage   | Payload                                  | Ownership and retained edges         |
+| --------- | ---------------------------------------- | ------------------------------------ |
+| Inline    | Eight Latin-1 units or four UTF-16 units | Inside the string cell               |
+| Owned     | Contiguous Latin-1 or UTF-16 units       | GC-accounted RAW allocation          |
+| External  | Borrowed Latin-1 or UTF-16 units         | Provider retains the backing storage |
+| Dependent | Parent plus UTF-16 offset and length     | Parent may be flat or a rope         |
+| Cons      | Left and right strings                   | Children retain their own encodings  |
 
 Copied UTF-16 input is compacted when eligible. Builders construct Latin-1
 directly, avoiding a temporary wide payload. Existing emitted and wire-loaded
