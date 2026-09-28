@@ -89,17 +89,27 @@ describe("entry-stable private roots", () => {
 		expect(source.match(/__gc_slots\[\d+\] = r0;/g)).toHaveLength(1);
 		expect(source.match(/mal_vm_call_cached\(/g)).toHaveLength(2);
 	});
-	it("does not nominate a no-property parameter whose physical register is replaced", () => {
-		const source = emit(
-			fn([
-				{ opcode: "CREATE_UNDEFINED", dst: 1 },
-				{ ...call, callee: 0, thisValue: 1, dst: 0 },
-				{ ...call, callee: 0, thisValue: 1 },
-				{ opcode: "RETURN", value: 2 },
-			]),
+	it("republishes a no-property parameter after an ordinary call replaces its value", () => {
+		const body = fn([
+			{ opcode: "CREATE_UNDEFINED", dst: 1 },
+			{ ...call, callee: 0, thisValue: 1, dst: 0 },
+			{ ...call, callee: 0, thisValue: 1 },
+			{ opcode: "RETURN", value: 2 },
+		]);
+		const source = emit(body);
+		expect(source).toContain("#define r0 (__private_r0)");
+		expect(nativeEntryStableRootRegisters(body, new Set([0])).has(0)).toBe(false);
+		const publication = source.match(/__gc_slots\[\d+\] = r0;/)?.[0];
+		expect(publication).toBeDefined();
+		const assignment = source.indexOf("r0 = call_result_1.value;");
+		const nextCall = source.indexOf("MalCompletion call_result_2");
+		expect(assignment).toBeGreaterThan(0);
+		expect(nextCall).toBeGreaterThan(assignment);
+		const continuation = source.slice(assignment, nextCall);
+		expect(continuation).toContain(
+			`if (mal_gc_poll) { ${publication} mal_gc_safepoint(vm); }`,
 		);
-		expect(source).toMatch(/#define r0 \(__gc_slots\[\d+\]\)/);
-		expect(source).not.toContain("#define r0 (__private_r0)");
+		expect(continuation.split("\n")).toContain(`    ${publication}`);
 	});
 	it("keeps a stable parameter in rooted storage when a specialized call uses it", () => {
 		const body = fn([

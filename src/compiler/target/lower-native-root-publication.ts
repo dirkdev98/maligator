@@ -106,10 +106,9 @@ export function nativePrivateRootRegisters(
 			candidates.add(instruction.dst);
 		}
 	}
-	// An unchanged parameter already has its live value in the entry-published
-	// shadow. Reading a private copy avoids alias-induced reloads after helpers.
-	for (const register of nativeEntryStableRootRegisters(fn, frameRegisters))
-		candidates.add(register);
+	// Give existing property candidates priority within the native-register cap.
+	// Every additional root must still pass the storage and loop-cost audits below.
+	for (const register of frameRegisters) candidates.add(register);
 	const actionsByIp = new Map<
 		number,
 		Array<NativeFunctionPlan["regionActions"][number]>

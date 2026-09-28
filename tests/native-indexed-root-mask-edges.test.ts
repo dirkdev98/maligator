@@ -184,22 +184,36 @@ describe("native numeric indexed-load root publication", () => {
 		},
 	);
 
-	it.each([
-		["boxed", undefined],
-		["number", { kind: "exact-contained-array-element" }],
-	] as const)(
-		"does not seed results of unaudited %s index plans",
-		(representation, plan) => {
-			const source = emit(
-				fn([key, indexedLoad, call, { opcode: "RETURN", value: 6 }]),
-				[point(1, [0, 5], [0, 3, 5]), point(2, [0, 3, 5], [6])],
-				representation,
-				plan,
-			);
-			expect(source).not.toContain(`#define r${indexedLoad.dst} (__private_r`);
-			expect(source).toContain(`#define r${indexedLoad.dst} (__gc_slots[`);
-		},
-	);
+	it("publishes boxed-index roots before the generic helper and its final result before the next call", () => {
+		const source = emit(
+			fn([key, indexedLoad, call, { opcode: "RETURN", value: 6 }]),
+			[point(1, [0, 5], [0, 3, 5]), point(2, [0, 3, 5], [6])],
+			"boxed",
+		);
+		const slot = privateSlot(source, indexedLoad.dst);
+		const keyAssignment = source.indexOf("r2 = mal_value_from_i32(0);");
+		const helper = source.indexOf("mal_vm_indexed_fast_load(", keyAssignment);
+		const nextCall = source.indexOf("MalCompletion call_result_2", helper);
+		expect(keyAssignment).toBeGreaterThan(0);
+		expect(helper).toBeGreaterThan(keyAssignment);
+		expect(nextCall).toBeGreaterThan(helper);
+		const incoming = source.slice(keyAssignment, helper);
+		expect(incoming).toContain(`__gc_slots[${slot}] = MAL_VALUE_UNDEFINED;`);
+		expect(incoming).toContain("MAL_ROOT_MASK(");
+		expect(source.slice(helper, nextCall)).toContain(`__gc_slots[${slot}] = r3;`);
+		expect(source).not.toContain("mal_vm_array_try_get_index(");
+	});
+
+	it("keeps specialized indexed storage continuously rooted", () => {
+		const source = emit(
+			fn([key, indexedLoad, call, { opcode: "RETURN", value: 6 }]),
+			[point(1, [0, 5], [0, 3, 5]), point(2, [0, 3, 5], [6])],
+			"number",
+			{ kind: "exact-contained-array-element" },
+		);
+		expect(source).not.toContain(`#define r${indexedLoad.dst} (__private_r`);
+		expect(source).toContain(`#define r${indexedLoad.dst} (__gc_slots[`);
+	});
 
 	it("retains continuous storage when another definition uses a compound out-parameter", () => {
 		const source = emit(
