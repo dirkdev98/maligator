@@ -149,6 +149,17 @@ MalValue mal_table_entry_value(const MalTable *table, void *entry);
 void mal_table_entry_set_value(MalTable *table, void *entry, MalValue value);
 
 /**
+ * Update a normal Map entry already resolved for `key` by lookup/upsert or a
+ * validated hint. Equal inline or tightly owned primitive strings may replace
+ * the stored representative without changing its hash or insertion order.
+ * Owned capacity must fit the allocation charge of the visible payload, using
+ * Latin-1 when either equal string is known compact. The caller must card the
+ * owning Map for the new key and value.
+ */
+void mal_table_entry_set_map_value(
+    MalTable *table, void *entry, MalKey key, MalValue value);
+
+/**
  * Check whether an entry handle still refers to a live entry. Storage-order
  * iterators may outlive deletions, so callers holding entry handles use this
  * to detect tombstoned entries.

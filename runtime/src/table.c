@@ -698,6 +698,34 @@ void mal_table_entry_set_value(MalTable *table, void *entry, MalValue value) {
     target->payload.value = value;
 }
 
+void mal_table_entry_set_map_value(
+    MalTable *table, void *entry, MalKey key, MalValue value
+) {
+    mal_table_entry_set_value(table, entry, value);
+    MalTableEntry *target = &table->entries[mal_table_handle_index(entry)];
+    if (target->key == key.value || !mal_value_is_string(key.value)) return;
+    const MalString *string = mal_value_to_string(key.value);
+    if (string->storage != MAL_STRING_STORAGE_INLINE &&
+        string->storage != MAL_STRING_STORAGE_OWNED) return;
+    if (string->storage == MAL_STRING_STORAGE_OWNED) {
+        const MalString *old_string = mal_value_to_string(target->key);
+        usize unit_size = string->latin1 || old_string->latin1 ? 1 : sizeof(c16);
+        usize limit = mal_heap_allocation_charge((usize) string->length * unit_size);
+        if (mal_heap_raw_capacity(mal_gc_current_heap(), string->code_units) > limit) return;
+    }
+
+    // The caller resolved this entry for the same primitive string value, so
+    // its hash, probe chain, and order index are unchanged. Retaining this flat
+    // representative makes following get/set/get accesses identity hits without
+    // retaining a rope graph, dependent backing parent, or borrowed payload.
+    // Actual RAW capacity excludes over-reserved owned buffers, including failed
+    // trims, and widening beyond the payload charge of a known compact key.
+    // The table already traces its key; replacing it needs the same SATB deletion
+    // barrier as a value update, plus the caller's existing young-edge card.
+    mal_gc_write_barrier(target->key);
+    target->key = key.value;
+}
+
 bool mal_table_entry_is_live(const MalTable *table, const void *entry) {
     return table->entries[mal_table_handle_index(entry)].live;
 }
