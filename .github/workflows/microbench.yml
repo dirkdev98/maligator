@@ -91,8 +91,10 @@ jobs:
       PAIRS: ${{ needs.request.outputs.pairs }}
       BUDGET_SECONDS: ${{ needs.request.outputs.budget_seconds }}
       DIAGNOSTICS: ${{ needs.request.outputs.diagnostics }}
-      MALIGATOR_CACHE_DIR: ${{ runner.temp }}/microbench-cache
     steps:
+      - name: Configure the isolated cache on the allocated runner
+        run: echo "MALIGATOR_CACHE_DIR=$RUNNER_TEMP/microbench-cache" >> "$GITHUB_ENV"
+
       - name: Check out trusted workflow helpers
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:

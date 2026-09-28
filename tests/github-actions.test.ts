@@ -23,6 +23,27 @@ function usedActions(value: unknown): Array<string> {
 }
 
 describe("GitHub Actions", () => {
+	it("does not use runner-local contexts in job-level environment expressions", () => {
+		const violations: Array<string> = [];
+		for (const file of yamlFiles(path.join(githubRoot, "workflows"))) {
+			const workflow = parse(readFileSync(file, "utf8")) as {
+				jobs?: Record<string, { env?: Record<string, unknown> }>;
+			};
+			for (const [job, configuration] of Object.entries(workflow.jobs ?? {})) {
+				for (const [name, value] of Object.entries(configuration.env ?? {})) {
+					if (
+						typeof value === "string" &&
+						/\$\{\{[^}]*\b(?:runner|steps|job|jobs|env)\./.test(value)
+					)
+						violations.push(
+							`${path.relative(githubRoot, file)}: jobs.${job}.env.${name}`,
+						);
+				}
+			}
+		}
+		expect(violations).toEqual([]);
+	});
+
 	it("selects the pinned Rust toolchain and prepares cacheable Test262 inputs", () => {
 		for (const platform of ["linux", "macos"]) {
 			const action = readFileSync(
