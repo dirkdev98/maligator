@@ -277,7 +277,13 @@ static bool mal_builtin_iterator_array_advance(
 static c16 mal_builtin_iterator_string_unit(
     MalIteratorObject *iterator, MalString *string, usize index
 ) {
-    if (iterator->string_cursor == nullptr) return mal_string_code_unit_at(string, index);
+    if (iterator->string_cursor == nullptr) {
+        if (string->storage == MAL_STRING_STORAGE_DEPENDENT) {
+            index += string->slice_offset;
+            string = string->parent;
+        }
+        return mal_string_flat_code_unit_at(string, index);
+    }
     MalStringCursor *cursor = iterator->string_cursor;
     MalStringIterator *frontier = cursor->iterator;
     if (cursor->local == frontier->current.length) {
