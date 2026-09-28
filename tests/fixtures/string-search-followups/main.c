@@ -116,6 +116,8 @@ static bool long_prefix_work_is_bounded(MalVm *vm) {
                 reverse ? MAL_STRING_SEARCH_LAST_INDEX_OF : MAL_STRING_SEARCH_INDEX_OF);
             CHECK(mal_value_to_i32(result) == -1);
 #if MAL_PERF_STATS
+            CHECK(mal_perf_stats.string_search_linear_comparisons != 0);
+            CHECK(mal_perf_stats.string_iterator_nodes != 0);
             CHECK(mal_perf_stats.string_search_linear_comparisons <= 3 * (length + needle_length));
             CHECK(mal_perf_stats.string_iterator_nodes <= 4 * (length + needle_length) / 47 + 128);
             printf("prefix length=%zu needle=%zu reverse=%zu comparisons=%llu nodes=%llu\n",
@@ -334,6 +336,13 @@ static bool compact_result_boundaries_and_concat_growth(MalVm *vm) {
 }
 
 int main(void) {
+    mal_perf_stats_init();
+#if MAL_PERF_STATS
+    if (!mal_perf_stats_enabled) {
+        fputs("string-search-followups requires MAL_PERF_STATS=1\n", stderr);
+        return 1;
+    }
+#endif
     MalVm vm;
     mal_vm_init(&vm, &mal_runtime_image);
     bool passed = search_matches_reference(&vm)
