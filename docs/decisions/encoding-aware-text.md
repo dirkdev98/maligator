@@ -10,7 +10,7 @@ ordinary string content.
 
 The string cell remains 32 bytes: a four-byte heap header, a four-byte metadata
 word, an independent eight-byte hash, and a sixteen-byte payload. The metadata
-packs a 25-bit length with the storage and content flags, preserving the inclusive
+packs a 25-bit length with storage and content flags, preserving the inclusive
 16,777,216-code-unit engine limit. Dependent offsets share the payload with the
 other representation-specific fields.
 
@@ -22,130 +22,217 @@ other representation-specific fields.
 | Dependent | Parent plus UTF-16 offset and length        | One flat parent                      |
 | Cons      | Left and right strings                      | Children retain their own encodings  |
 
-Copied UTF-16 input is compacted when eligible. Builders construct Latin-1
-directly, avoiding a temporary wide payload. Existing emitted and wire-loaded
-UTF-16 literals remain valid external strings; their consumers can traverse them
-without copying.
+Copied UTF-16 input is compacted when eligible. Builders and decoders construct
+Latin-1 directly. A caller that proves owned UTF-16 content contains a wider unit
+can use `mal_string_new_utf16_owned` without a redundant narrowing scan. Emitted
+and wire-loaded UTF-16 literals remain valid external strings.
 
-Slices retain a parent and an offset, never an interior payload pointer. This
-allows a compact parent to widen without invalidating a slice. Slice construction
-resolves nested slices and descends into a single rope child when the requested
-range fits there. Tiny slices and partial ranges still crossing rope children are
-copied. Dependent slices therefore retain flat parents only: repeatedly slicing a
-fixed-size window cannot keep an unbounded chain of earlier ropes alive. Full
-subtrees can be reused. A larger flat-parent slice copies when its parent exceeds
-4,096 code units and the retained range would be less than one eighth of that
-parent. Borrowed external parents do not charge an owned backing buffer to the
-slice.
+Cons joins preserve a weight bound: a cons child occupies at most three quarters
+of its parent's code units. A heavier flat/dependent leaf is allowed because it
+terminates rope traversal. Height is logarithmic in logical length without adding
+a height field. Joins reuse existing boundaries in the middle half of a subtree
+and rebuild included paths; they split a flat leaf only when necessary. Existing
+strings and shared subtrees keep their identities. Later materialization can
+remove edges without invalidating the bound.
+
+Slices retain a parent and an offset, never an interior payload pointer. A compact
+parent can therefore widen without invalidating a slice. Construction resolves
+nested slices and descends into containing rope children. Tiny slices and partial
+ranges still crossing children copy their requested content; full subtrees may be
+reused. Dependent slices retain flat parents only, preventing a sliding window
+from retaining an unbounded chain of earlier ropes. A slice copies when its owned
+flat parent exceeds 4,096 units and the retained range is less than one eighth of
+that parent. External parents do not charge an owned backing buffer to the slice.
+Any future lazy cross-rope slice must prune excluded ancestry and preserve this
+transitive retention contract.
 
 ## Traversal and contiguous access
 
-`MalStringIterator` yields contiguous leaves with an encoding tag and a code-unit
-length. Its range is measured in UTF-16 units. It visits ropes and slices
-iteratively, with small stack storage and native scratch allocation for deeper
-trees. Traversal does not collect, invoke JavaScript, flatten, or widen a string.
+`MalStringIterator` yields contiguous leaves with an encoding tag and UTF-16-unit
+length. Forward and reverse traversal use the same iterative stack; a reverse
+iterator yields leaves right to left while each returned segment retains forward
+unit order. Its current record identifies the flat owner, local offset, and visible
+length. A single-leaf range can use `mal_string_try_get_segment`, and
+`mal_string_get_leaf_range` resolves a visible range to its flat owner.
 
-A segment borrows its leaf's storage. Consumers keep the source graph rooted
-across collection and do not retain borrowed segment pointers across JavaScript
-reentry or a UTF-16 bridge that could materialize or widen the same leaf. Producers append a segment before
-advancing or crossing an observable call. A single-leaf range can use
-`mal_string_try_get_segment` to avoid the general iterator.
-
-The [algorithm audit](../text-algorithms.md) distinguishes sequential traversal
-from repeated root seeks, describes worst-case search and JSON costs, and links
-the prioritized follow-ups in the roadmap.
+Traversal does not collect, invoke JavaScript, flatten, or widen strings. Segments
+borrow payload storage, and pending iterator entries borrow descriptor identities.
+Keep the source graph rooted during use. Dispose or reacquire traversal state
+before JavaScript reentry or a bridge that could materialize that graph. Rooting
+a mutable source alone does not keep its former children alive after flattening.
+A separately traced leaf identity can survive reentry when consumers obtain its
+payload afresh. The JavaScript string iterator follows that leaf-cache contract;
+it still reseeks from the source root at leaf boundaries. A traced pending-node
+stack remains a separate improvement for linear traversal across reentry.
 
 `mal_string_code_units` is an explicit contiguous UTF-16 bridge. It can allocate
-and widen a compact leaf or flatten a rope/slice. Once obtained, its UTF-16 pointer
-is stable while the string is retained. Consumers that require a contiguous
-UTF-16 interface, including existing regular-expression and Unicode integrations,
-can use this bridge. Sequential consumers use segments instead.
+and widen a compact leaf or flatten a rope; a dependent slice resolves the bridge
+through its parent. Its returned UTF-16 pointer is stable while the string is
+retained. Existing regular-expression and Unicode integrations can use that
+interface when they require contiguous UTF-16. Sequential consumers use segments.
 
-Allocation requests a later GC poll; it does not itself run collection or
-JavaScript. Descriptor transitions retain the existing SATB publication of removed
-parent/child edges. Concurrent tracing does not inspect mutable string descriptors
-while the mutator runs. RAW ownership remains explicit through construction,
-adoption, and finalization.
+Allocation requests a later GC poll; it does not itself collect or invoke
+JavaScript. New retained edges use card/SATB publication, and representation
+changes preserve publication of removed parent/child edges. Concurrent tracing
+does not inspect mutable string descriptors while the mutator runs. RAW ownership
+remains explicit through construction, adoption, and finalization.
 
-## Content identity
+## Content identity and property keys
 
-Hashes retain the existing FNV64 contract over the low byte and high byte of each
-UTF-16 unit. Latin-1 traversal therefore includes the implicit zero high byte.
-Equal strings have equal hashes across physical encodings and rope partitions.
-Equality and lexical ordering compare UTF-16 content, including lone surrogates.
+Hashes retain the FNV64 contract over the low byte and high byte of each UTF-16
+unit, including Latin-1's zero high byte. Equal content has equal hashes across
+encodings and rope partitions. Every representation caches its full hash
+independently of its payload, and content-preserving representation changes retain
+that hash.
 
-Every representation caches its complete hash independently of the payload. A
-rope's first hash streams its leaves; subsequent hashes reuse the cache without
-materializing the rope. Hashing preserves segment and backing-storage lifetimes.
-Explicit content-preserving representation changes also retain the cached hash.
-The bounded tiny-string cache remains 256 entries and now accepts up to eight
-UTF-16 units, including compact Latin-1 strings.
+A cached left prefix is a valid FNV continuation state. Hashing can stream only
+the appended right content; balancing preserves that prefix state when it changes
+the physical prefix edge. Arbitrary final child hashes are not independently
+composable. Hashing preserves storage and borrowed segment lifetimes. Equality
+and lexical ordering first recognize pointer identity. Equality may reject
+unequal valid hashes but neither computes missing hashes merely for comparison
+nor treats a hash match as proof of equality. The bounded tiny-string cache has
+256 entries and accepts up to eight UTF-16 units.
 
-## Shared construction
+Property queries reuse an existing canonical atom or return the original transient
+string without inserting a missing name. Stored names still use atomization.
+Query conversion preserves indices, symbols, coercion order, and roots across
+observable trap-method lookup and calls. Property ICs and shared stubs admit only
+immortal strings or VM-rooted atoms because those caches are untraced. Shape-cache
+hits retain shape-owned keys; negative entries require the same stable-name
+contract. Rope keys participate in shape hashing without materialization. See
+[query and cache costs](../text-algorithms.md#property-queries-and-retained-identities).
 
-`MalTextBuffer` starts in Latin-1, promotes to UTF-16 when needed, and maintains
-length and capacity in code units. It supports code units, Latin-1 spans, string
-ranges, complete strings, buffers, ASCII, and decimal integers. Source ranges may
-not alias the destination buffer; explicit self-append handles that case.
+Normal `Map.set` may replace an equal primitive string's stored representative
+with an inline string or a tightly owned flat string, after resolving the same
+entry. Owned admission checks actual RAW capacity against the visible payload's
+allocator charge and uses Latin-1 width when either equal string is known compact.
+Rope, dependent, external, over-reserved, and widening representations that exceed
+that charge are excluded. The existing traced entry and Map card retain the new
+key, and a deletion barrier preserves the old key during an active snapshot. Hash
+and insertion order stay unchanged. Reads do not refresh keys, and WeakMap keeps
+its existing lifetime semantics.
 
-Growth uses fallible GC-accounted RAW reallocation. Existing size-class slack and
-large-buffer reallocation can retain the allocation, and promotion widens
-backwards when the address is reused. A failed growth preserves the old payload,
-ownership, and allocation accounting. Length overflow is detected before reading
-input. Finalization transfers RAW ownership to the appropriate string constructor;
-tiny strings move into inline storage. Rollback retains capacity and encoding.
-An append spanning several segments can retain an already appended prefix if a
-later growth fails; its error remains sticky. Append is not transactional.
-Producers that know the final length can hint capacity before appending; the first
-content selects the initial allocation width. Explicit reservation stays eager
-for callers that write directly into the buffer.
+## Search and compact builtin results
 
-Array joining, string replacement and raw construction, JSON, and the previous
-UTF-16 buffer consumers share this implementation. Path normalization explicitly
-selects UTF-16 scratch for its existing in-place algorithm. UTF-8 and Buffer output
-consume segments at the external boundary, including surrogate pairs split across
-leaves; bounded UTF-8 output never splits a scalar and reports UTF-16 units read.
+Long-pattern search uses an owned UTF-16 needle and KMP prefix table over segmented
+haystacks. Needles of at least 32 units use this path for individual forward and
+reverse searches; smaller needles retain low-setup candidate scans. Reverse
+traversal stops at the first complete match from the requested end. All comparison
+positions are UTF-16 units, including across encoding and leaf boundaries.
+
+Split and replacement can keep nonoverlapping search and copy cursors across
+allocation-only work. Functional `replaceAll` collects offsets and disposes its
+borrowed cursor before invoking JavaScript. Replacement-template literal runs
+also stream sequentially. Compiler-projected split iteration retains offsets,
+rather than borrowed traversal state, across arbitrary JavaScript bodies.
+
+Latin-1 well-formedness and no-op trim preserve compact inputs. ASCII case changes
+use compact output, with identity results when unchanged; Unicode/locale fallbacks
+retain required bridges. Single-argument concat shares a balanced prefix beyond
+inline results, multiargument concat uses the builder, and repeat/padding use
+encoded self-copying while retaining the large lazy-repeat path. These paths
+preserve observable coercion and callback order.
+
+## Shared construction and external encoding
+
+`MalTextBuffer` starts in Latin-1, promotes to UTF-16 when needed, and measures
+length/capacity in code units. It accepts units, Latin-1 spans, string ranges,
+complete strings, buffers, ASCII, and decimal integers. Source ranges cannot alias
+the destination allocation; explicit self-append handles that case.
+
+Growth uses fallible GC-accounted RAW reallocation. Reused capacity and backwards
+promotion avoid unnecessary copies. A failed growth preserves the old payload,
+ownership, and allocation accounting; overflow is detected before reading input.
+A segmented append can have committed earlier segments before later failure.
+Append is not transactional, and rollback preserves capacity/encoding without
+clearing an error. Producers may hint final capacity; the first content chooses
+the initial width. Explicit reservation remains eager for direct buffer writers.
+
+Finish normally transfers RAW ownership; tiny results use inline storage. For a
+non-inline result with capacity above 1,024 units and length below half capacity,
+finish attempts an exact-size RAW copy because RAW shrinking is otherwise a no-op.
+If trimming fails, it still transfers the valid original allocation. This is a
+best-effort retained-capacity bound, not a new failure of an otherwise complete
+output. UTF-16 finish may narrow content: truncation can remove every wide unit.
+
+The shared UTF-8 decoder builds directly in compact storage, copies ASCII runs,
+and promotes only when emitted units require it. Decoded UTF-16 units determine
+the string limit, including replacement characters for malformed input. APIs that
+strip a leading BOM do so before applying that decoded-length limit. Streaming
+state preserves incomplete sequences and BOM handling; TextDecoder borrows input
+unless it must join pending bytes. Buffer, StringDecoder, TextDecoder, and relevant
+host input paths share the decoder. A known-wide decoded result avoids another
+full-width scan at finish.
+
+UTF-8 Buffer encoding counts bytes before writing and adopts an exactly sized
+allocation. Surrogate pairing works across leaf boundaries; lone surrogates use
+replacement characters at the external boundary. Bounded encoding never splits
+a scalar and reports consumed UTF-16 units. Temporary host C-string and TextEncoder
+encoders still reserve `3N + 1`; path normalization retains a malloc UTF-16 decoder
+and mutable scratch where its algorithm requires them.
 
 ## JSON
 
-The parser reads a segmented code-unit cursor. Unescaped strings can retain safe
-slices, and escaped strings use the compact builder. Quoting scans contiguous
-leaves, copies unescaped runs in bulk, and carries surrogate pairing across leaf
-boundaries. Lone surrogates are escaped in JSON output.
+The parser consumes a segmented cursor. It accumulates small integer magnitudes
+while validating; fractional, exponent, and larger numbers retain their original
+token in byte scratch for conversion, preserving negative zero. Unescaped strings
+within one leaf can retain safe slices using that leaf's owner/offset. Cross-leaf
+and escaped tokens append consumed segments to compact output without source-root
+reseeks. Source ranges remain absolute UTF-16 offsets.
 
-Generic serialization prepares each property value in observable order before
-emitting its key and value directly into the final output. It retains the existing
-getter, proxy, `toJSON`, replacer, omission, and pretty-printing behavior without
-serializing each object member into a separate scratch output.
+Reviver source records lazily index canonical keys and the last duplicate
+occurrence, preserving property order and `context.source`. Parse records retain
+overwritten syntax members until cleanup. Cleanup uses an allocation-free iterative
+list. Parsing, reviver traversal, and generic serialization check both a
+512-container recursive limit and the VM's native stack bound, throwing
+`RangeError` before another container when a bound is reached. Small fibers and
+sanitizer frames can reach the stack bound earlier.
 
-A guarded serializer handles ordinary shaped data objects and packed arrays
-iteratively. It proves the absence of observable hooks over the relevant prototype
-chain, rejects unsupported storage and exotic objects, and checks active-path
-identities for cycles. Repeated non-cyclic references remain valid. Per-call shape
-plans reuse property order and slots and cache escaped keys; the root retains the
-immutable input graph throughout this callback-free traversal.
+Generic serialization prepares property values in observable order and writes
+directly to final output, preserving getters, proxies, `toJSON`, replacers,
+omission, and indentation. An active-path pointer set detects cycles while
+allowing repeated non-cyclic children. Serializing frames root active objects
+across callbacks.
+
+A guarded serializer handles eligible ordinary shaped objects and packed arrays
+iteratively. It proves the absence of observable hooks over relevant prototypes,
+rejects unsupported storage/exotics, and uses active-path identities for cycles.
+Per-call shape plans reuse property order/slots and escaped keys; the rooted input
+graph remains immutable throughout this callback-free traversal. It uses heap
+frames and is not subject to the generic recursive container cap.
 
 Replacers, property lists, indentation, accessors, proxies, holes, wrappers,
-`toJSON`, raw JSON, and other unsupported cases take the generic path. An
-unsupported descendant discards speculative output before generic traversal
-invokes any user code. This can repeat earlier pure work, but never repeats a
-getter or hook. Keeping caches within one invocation avoids cross-call shape and
-prototype invalidation state. The generic traversal remains recursive.
+`toJSON`, raw JSON, and other unsupported cases take the generic path. An unsupported
+descendant discards speculative output before generic traversal invokes user code.
+Only earlier pure work can repeat. Caches stay within one invocation, avoiding
+cross-call shape/prototype invalidation state. Quoting copies safe runs, preserves
+surrogate pairs across leaves, and escapes lone surrogates. Cache admission and
+UTF-16 quoting throughput are separate from these semantic contracts.
 
 ## Verification
 
-`encoding-aware-strings.test.ts` checks physical encodings, cross-encoding content
-identity, slice retention and bridge lifetime, deep segment traversal, forced GC,
-and compact storage through an actual parse–lookup–append–serialize pipeline.
-`text-buffer.test.ts` checks promotion, ownership, rollback, and injected allocation
-failures. `encoding-aware-text.test.ts` exercises observable string/JSON behavior
-through both native backends and GC stress. These contracts also run in the
-sanitizer selection.
+[Physical encoding tests](../../tests/native/encoding-aware-strings.test.ts) cover
+content identity, retained slices, bridge lifetime, and the compact
+parse–lookup–append–serialize pipeline. [Rope tests](../../tests/native/string-rope-followups.test.ts)
+cover weight bounds, both growth directions, mixed leaves, forward/reverse ranges,
+hashing, shape collisions, and GC. [Search tests](../../tests/native/string-search-followups.test.ts)
+cover adversarial patterns, callback reentry, and active comparison/traversal
+counts. [Builder](../../tests/native/text-buffer.test.ts),
+[encoding boundary](../../tests/native/utf8-string-storage.test.ts),
+[compact consumer](../../tests/native/compact-string-boundaries.test.ts),
+[property query](../../tests/native/transient-property-query.test.ts),
+[Map representative](../../tests/native/map-string-representative.test.ts), and
+[JSON algorithm](../../tests/native/json-algorithms.test.ts) fixtures exercise the
+owning allocation, failure, lifetime, and observable-behavior boundaries. The
+[behavior suite](../../tests/native/encoding-aware-text.test.ts) covers compiled
+and interpreted execution with GC stress. These fixtures are selected by the
+native check and sanitizer manifests.
 
-The `text-pipeline-latin1` and `text-pipeline-mixed` runtime-gap cases cover parsing
-records, slicing lookup keys, looking up values, joining and replacing labels,
-serializing output, and checksumming every output code unit. Use the native micro
-comparison runner with a specific baseline revision and repeated interleaved pairs.
-The same frozen case runs on both revisions, with Node supplying the output oracle.
-Timing conclusions belong to the measured workload and host; they do not establish
-whole-runtime performance by themselves.
+The [algorithm cost model and acceptance matrix](../text-algorithms.md) separate
+source-derived bounds from performance evidence. Use a specific baseline revision,
+complete checksums, and repeated interleaved pairs for the same frozen workloads.
+Instrumented custom C entrypoints must initialize and enable statistics and require
+positive relevant deltas. Timing, allocation traffic, retained backing, and
+quiescent live storage are distinct measurements; a native microbenchmark does
+not establish whole-runtime performance.
