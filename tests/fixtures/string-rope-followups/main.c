@@ -73,7 +73,11 @@ static bool check_range(const MalString *string, const c16 *expected, usize star
             consumed += segment.length;
         }
         CHECK(consumed == length);
-        if (mal_perf_stats_enabled) CHECK(mal_perf_stats.string_iterator_nodes - before <= 2 * length + 60);
+        if (mal_perf_stats_enabled) {
+            u64 visited = mal_perf_stats.string_iterator_nodes - before;
+            CHECK(length == 0 || visited > 0);
+            CHECK(visited <= 2 * length + 60);
+        }
         mal_string_iterator_dispose(&iterator);
     }
     return true;
@@ -181,6 +185,8 @@ static bool cached_append_hash_and_terminal_weight(MalVm *vm) {
         CHECK(mal_perf_stats.string_hash_code_units == repeated_before);
     }
     if (mal_perf_stats_enabled) {
+        CHECK(mal_perf_stats.string_hash_code_units > hashed_before);
+        CHECK(mal_perf_stats.string_cons_allocations > allocated_before);
         CHECK(mal_perf_stats.string_hash_code_units - hashed_before <= APPENDS * CHUNK * 8);
         CHECK(mal_perf_stats.string_cons_allocations - allocated_before <= APPENDS * 64);
     }
@@ -253,6 +259,8 @@ static bool rope_shape_keys_share_and_survive_collection(MalVm *vm, usize count)
         CHECK(mal_shape_find(shape, mal_key_from_value(mal_value_from_string(&probe)), MAL_SHAPE_FIND_GET_OWN) == 0);
     }
     if (mal_perf_stats_enabled) {
+        CHECK(mal_perf_stats.string_equals_calls > comparisons_before);
+        CHECK(mal_perf_stats.shape_transition_index_probes > probes_before);
         CHECK(mal_perf_stats.string_equals_calls - comparisons_before < count * 16);
         CHECK(mal_perf_stats.shape_transition_index_probes - probes_before < count * 32);
     }
@@ -307,6 +315,13 @@ static bool full_hash_collisions_preserve_key_identity(MalVm *vm) {
 }
 
 int main(void) {
+    mal_perf_stats_init();
+#if MAL_PERF_STATS
+    if (!mal_perf_stats_enabled) {
+        fputs("string-rope-followups requires MAL_PERF_STATS=1\n", stderr);
+        return 1;
+    }
+#endif
     MalVm vm;
     mal_vm_init(&vm, &mal_runtime_image);
     bool passed = true;
