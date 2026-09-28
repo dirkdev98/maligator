@@ -51,6 +51,14 @@ static bool string_iteration(MalVm *vm, usize leaves, bool materialize) {
         CHECK(actual->length == count);
         for (usize i = 0; i < count; i++) CHECK(mal_string_code_unit_at(actual, i) == units[position + i]);
         position += count;
+        if (position == 1) {
+            CHECK(mal_heap_mark_is_old(iterator->object.header.mark));
+            CHECK(iterator->string_cursor != nullptr);
+            vm->heap.next_gc_at = 1;
+            mal_gc_poll = true;
+            mal_gc_safepoint(vm);
+            CHECK(mal_heap_mark_is_old(iterator->string_cursor->header.mark));
+        }
         if (materialize && position == 1) {
             CHECK(iterator->string_cursor != nullptr);
             MalStringIterator *frontier = iterator->string_cursor->iterator;
@@ -121,13 +129,49 @@ static bool projected_split(MalVm *vm, usize fields, bool materialize) {
     return true;
 }
 
+static bool split_patterns(MalVm *vm) {
+    MalValue roots[4] = {mal_value_from_string(mal_string_new_ascii(&vm->heap, "", 0)),
+        MAL_VALUE_UNDEFINED, MAL_VALUE_UNDEFINED, MAL_VALUE_UNDEFINED};
+    MalRootSpan span;
+    mal_gc_root(&span, roots, 4);
+    c16 units[4096];
+    for (usize i = 0; i < countof(units); i++) units[i] = 'a';
+    roots[3] = mal_value_from_string(rope(vm, units, countof(units)));
+    MalStringSplitCursor state;
+    u64 nodes = mal_perf_stats.string_iterator_nodes;
+    u64 comparisons = mal_perf_stats.string_search_linear_comparisons;
+    CHECK(mal_builtin_string_split_cursor_init_locked(vm, roots[0], roots[3],
+        &roots[1], &roots[2], &state));
+    usize start, end;
+    CHECK(mal_builtin_string_split_cursor_next(roots[1], roots[2], &state, &start, &end));
+    CHECK(start == 0 && end == 0);
+    CHECK(mal_perf_stats.string_iterator_nodes == nodes);
+    CHECK(mal_perf_stats.string_search_linear_comparisons == comparisons);
+    const c16 pattern[] = {'a', 'b', 'a', 'b', 'a', 'c'};
+    for (usize i = 0; i < 28; i++) units[i] = i % 2 == 0 ? 'a' : 'b';
+    for (usize i = 28; i < 40; i++) units[i] = pattern[(i - 28) % 6];
+    roots[0] = mal_value_from_string(rope(vm, units, 40));
+    roots[3] = mal_value_from_string(mal_string_new_copy(&vm->heap, pattern, countof(pattern)));
+    CHECK(mal_builtin_string_split_cursor_init_locked(vm, roots[0], roots[3],
+        &roots[1], &roots[2], &state));
+    const usize expected[][2] = {{0, 28}, {34, 34}, {40, 40}};
+    for (usize i = 0; i < countof(expected); i++) {
+        CHECK(mal_builtin_string_split_cursor_next(roots[1], roots[2], &state, &start, &end));
+        CHECK(start == expected[i][0] && end == expected[i][1]);
+    }
+    CHECK(!mal_builtin_string_split_cursor_next(roots[1], roots[2], &state, &start, &end));
+    mal_gc_unroot(&span);
+    return true;
+}
+
 int main(void) {
     mal_perf_stats_init();
     MalVm vm;
     mal_vm_init(&vm, &mal_runtime_image);
     bool passed = string_iteration(&vm, 512, false) && string_iteration(&vm, 2048, false)
         && string_iteration(&vm, 256, true) && projected_split(&vm, 512, false)
-        && projected_split(&vm, 2048, false) && projected_split(&vm, 256, true);
+        && projected_split(&vm, 2048, false) && projected_split(&vm, 256, true)
+        && split_patterns(&vm);
     mal_vm_free(&vm);
     if (!passed) return 1;
     puts("string-cursor-frontier PASS");

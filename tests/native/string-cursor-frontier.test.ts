@@ -10,7 +10,12 @@ describe("traced string traversal frontiers", () => {
 			environment: { ...process.env, MAL_PERF_STATS: "1" },
 		});
 		expect(
-			runToStdout(binary, { env: { MAL_PERF_STATS: "1", MAL_GC_VERIFY: "1" } }),
+			runToStdout(binary, { env: {
+					MAL_PERF_STATS: "1",
+					MAL_GC_VERIFY: "1",
+					MAL_GC_STRESS: "0",
+					MAL_GC_MAJOR_EVERY: "8",
+				} }),
 		).toContain("string-cursor-frontier PASS\n");
 	});
 });
