@@ -461,7 +461,7 @@ static MalJsonResult mal_json_serialize_object(MalJsonState *state, MalJsonBuild
             // Canonicalize so a numeric key string ("0") resolves to the holder's
             // integer-indexed property rather than a missing string key.
             MalKey get_key;
-            mal_vm_value_to_property_key(vm, key, &get_key);
+            mal_vm_to_property_query(vm, key, &get_key);
             MalJsonResult result = mal_json_serialize_member(
                 state, builder, get_key, key, value, false,
                 mal_value_new_undefined(), depth + 1, any);
