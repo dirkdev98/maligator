@@ -1969,21 +1969,25 @@ static bool mal_gc_snapshot_edge_count(MalHeapHeader *cell, usize *count) {
     return edges > 0;
 }
 
+static void mal_gc_snapshot_append_heap_edge(MalGcState *g, MalValue value) {
+    if (mal_value_is_heap(value)) g->batch_edges[g->batch_edges_count++] = value;
+}
+
 static void mal_gc_snapshot_edges(MalGcState *g, MalHeapHeader *cell, usize index) {
     MalObject *object = (MalObject *) cell;
     usize offset = g->batch_edges_count;
     if (object->prototype != nullptr) {
-        g->batch_edges[g->batch_edges_count++] = mal_value_from_object(object->prototype);
+        mal_gc_snapshot_append_heap_edge(g, mal_value_from_object(object->prototype));
     }
     const MalShape *shape = object->shape;
     for (u32 i = 0; i < shape->inline_count; ++i) {
-        g->batch_edges[g->batch_edges_count++] = shape->props[i].key;
-        g->batch_edges[g->batch_edges_count++] = object->slots[shape->props[i].slot];
+        mal_gc_snapshot_append_heap_edge(g, shape->props[i].key);
+        mal_gc_snapshot_append_heap_edge(g, object->slots[shape->props[i].slot]);
     }
     if (cell->type == MAL_HEAP_ARRAY_OBJECT) {
         MalArrayObject *array = (MalArrayObject *) cell;
         for (u32 i = 0; i < array->dense_count; ++i) {
-            g->batch_edges[g->batch_edges_count++] = array->elements[i];
+            mal_gc_snapshot_append_heap_edge(g, array->elements[i]);
         }
     }
     g->batch_edge_offsets[index] = offset;
@@ -2314,11 +2318,7 @@ static bool mal_gc_trace_concurrent_batch(usize limit, usize *worked) {
     }
     g_gc->snapshot_examined_values += snapshot_edges;
     g_gc->snapshot_values += g_gc->batch_edges_count;
-    if (g_gc->stats_enabled) {
-        for (usize i = 0; i < g_gc->batch_edges_count; ++i) {
-            g_gc->snapshot_heap_values += mal_value_is_heap(g_gc->batch_edges[i]);
-        }
-    }
+    g_gc->snapshot_heap_values += g_gc->batch_edges_count;
     u64 inline_start = g_gc->stats_enabled ? mal_monotonic_now_ns() : 0;
     for (usize i = safe_count; i < count; ++i) mal_gc_trace_cell(g_gc->batch[i]);
     if (inline_start != 0) g_gc->snapshot_inline_ns += mal_monotonic_now_ns() - inline_start;
