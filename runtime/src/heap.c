@@ -368,11 +368,10 @@ static void mal_gc_unlink_large(MalGcLarge **head, MalGcLarge *rec) {
 
 static bool mal_gc_sweep_large(MalHeap *heap, MalGcLarge *rec, MalHeapFinalizeFn finalize, bool major) {
     MalHeapHeader *header = (MalHeapHeader *) ((u8 *) rec + mal_gc_large_data_offset());
-    u8 mark = mal_heap_sweep_mark_load(header);
-    bool live = major ? mal_heap_mark_is_current(mark, heap->mark_color)
-        : mal_heap_mark_is_old(mark);
+    bool live = major ? mal_heap_mark_is_current(header->mark, heap->mark_color)
+        : mal_heap_mark_is_old(header->mark);
     if (live) {
-        if (major) mal_heap_sweep_mark_store(header, mark | MAL_MARK_OLD);
+        if (major) header->mark |= MAL_MARK_OLD;
         rec->accounted = 1;
         return true;
     }

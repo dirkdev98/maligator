@@ -53,8 +53,8 @@ elements. A batch copies at most 2,048 values. All other mutable layouts are
 traced by the mutator or while JavaScript is parked. Weak processing, all
 finalizers, sweep, allocator free lists, and large-object reclamation remain with
 the mutator. Sweep starts after all marking and weak processing finish; no worker
-can still update a mark. Its native mark loads and stores are therefore relaxed
-atomic operations, with no read-modify-write claim needed. Moving sweep to workers
+can still update a mark. Native block sweeping therefore uses relaxed atomic
+mark loads and stores, with no read-modify-write claim needed. Moving sweep to workers
 would need exclusive block ownership and a separate mutator-affine finalization
 handoff; it is deferred unless matched
 measurements justify that complexity.
