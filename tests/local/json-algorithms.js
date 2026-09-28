@@ -267,6 +267,34 @@ for (const direction of ["balanced", "left", "right"]) {
 	}
 }
 
+// Exercise each exceptional unit in every lane of the UTF16 quote scan, including
+// the scalar prefix and the first two word blocks. Join gives a flat wide string.
+const escapedUnits = [
+	[34, '\\"'],
+	[92, "\\\\"],
+	[0xd800, "\\ud800"],
+	[0xdbff, "\\udbff"],
+	[0xdc00, "\\udc00"],
+	[0xdfff, "\\udfff"],
+];
+for (let unit = 0; unit < 32; unit++) {
+	const short = { 8: "\\b", 9: "\\t", 10: "\\n", 12: "\\f", 13: "\\r" };
+	escapedUnits.push([unit, short[unit] || "\\u00" + unit.toString(16).padStart(2, "0")]);
+}
+for (let offset = 0; offset < 12; offset++) {
+	const prefix = "Ā".repeat(offset);
+	const suffix = "Ā".repeat(12);
+	for (const [unit, escaped] of escapedUnits) {
+		const text = [prefix, String.fromCharCode(unit), suffix].join("");
+		check(
+			JSON.stringify(text) === '"' + prefix + escaped + suffix + '"',
+			"wide quote escape at word lane: " + offset + ":" + unit,
+		);
+	}
+	const paired = [prefix, "\ud83d\ude00", suffix].join("");
+	check(JSON.stringify(paired) === '"' + paired + '"', "wide quote keeps surrogate pairs");
+}
+
 for (const token of ["-", "01", "1.", "1e", "1e+", "1e-", "--1", "1.2.3"]) {
 	let caught;
 	try {

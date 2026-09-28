@@ -137,6 +137,41 @@ static usize mal_json_utf16_unescaped_run(const c16 *units, usize length) {
     return position;
 }
 
+static usize mal_json_utf16_safe_run(const c16 *units, usize length) {
+    usize position = 0;
+    // Short and escape-heavy runs stay scalar. Long ordinary runs inspect four
+    // code units at once, stopping before any surrogate needs pair handling.
+    while (position < length && position < 4) {
+        MAL_PERF_COUNT(json_quote_utf16_scalar_probes);
+        c16 unit = units[position];
+        if (unit < 0x20 || unit == '"' || unit == '\\' ||
+            mal_utf16_is_surrogate(unit)) return position;
+        position++;
+    }
+    while (length - position >= sizeof(u64) / sizeof(c16)) {
+        u64 word;
+        memcpy(&word, units + position, sizeof(word));
+        MAL_PERF_COUNT(string_unit_scan_word_blocks);
+        bool control = ((word - UINT64_C(0x0020002000200020)) & ~word &
+            UINT64_C(0x8000800080008000)) != 0;
+        if (control ||
+            mal_json_halfword_has_zero(word ^ UINT64_C(0x0022002200220022)) ||
+            mal_json_halfword_has_zero(word ^ UINT64_C(0x005c005c005c005c)) ||
+            mal_json_halfword_has_zero(
+                (word & UINT64_C(0xf800f800f800f800)) ^
+                UINT64_C(0xd800d800d800d800))) break;
+        position += sizeof(u64) / sizeof(c16);
+    }
+    while (position < length) {
+        MAL_PERF_COUNT(json_quote_utf16_scalar_probes);
+        c16 unit = units[position];
+        if (unit < 0x20 || unit == '"' || unit == '\\' ||
+            mal_utf16_is_surrogate(unit)) break;
+        position++;
+    }
+    return position;
+}
+
 static bool mal_json_builder_push_quoted(MalJsonBuilder *builder, const MalString *string) {
     if (!mal_json_builder_push(builder, '"')) return false;
     MalStringIterator iterator;
@@ -165,13 +200,8 @@ static bool mal_json_builder_push_quoted(MalJsonBuilder *builder, const MalStrin
                 position += mal_json_latin1_safe_run(
                     segment.latin1_units + position, segment.length - position);
             } else {
-                while (position < segment.length) {
-                    MAL_PERF_COUNT(json_quote_utf16_scalar_probes);
-                    c16 unit = segment.utf16_units[position];
-                    if (unit < 0x20 || unit == '"' || unit == '\\' ||
-                        mal_utf16_is_surrogate(unit)) break;
-                    position++;
-                }
+                position += mal_json_utf16_safe_run(
+                    segment.utf16_units + position, segment.length - position);
             }
             if (position > run && !mal_json_builder_push_segment(
                     builder, &segment, run, position - run)) {
