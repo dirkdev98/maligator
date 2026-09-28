@@ -279,10 +279,14 @@ static c16 mal_builtin_iterator_string_unit(
 ) {
     if (iterator->string_cursor == nullptr) return mal_string_code_unit_at(string, index);
     MalStringCursor *cursor = iterator->string_cursor;
-    MalStringSegment segment;
-    if (!mal_string_cursor_segment(cursor, &segment)) abort();
-    c16 unit = mal_string_segment_code_unit_at(&segment, 0);
-    mal_string_cursor_consume(cursor, 1);
+    MalStringIterator *frontier = cursor->iterator;
+    if (cursor->local == frontier->current.length) {
+        MalStringSegment segment;
+        if (!mal_string_cursor_segment(cursor, &segment)) abort();
+    }
+    c16 unit = mal_string_code_unit_at((MalString *) frontier->current.string,
+        frontier->current.offset + cursor->local++);
+    cursor->position++;
     return unit;
 }
 

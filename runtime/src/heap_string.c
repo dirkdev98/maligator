@@ -463,8 +463,8 @@ bool mal_string_cursor_segment(MalStringCursor *cursor, MalStringSegment *segmen
 }
 
 void mal_string_cursor_consume(MalStringCursor *cursor, usize count) {
-    assert(cursor->iterator != nullptr &&
-        count <= cursor->iterator->current.length - cursor->local);
+    if (cursor->iterator == nullptr ||
+        count > cursor->iterator->current.length - cursor->local) abort();
     cursor->local += count;
     cursor->position += count;
 }
