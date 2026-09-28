@@ -813,6 +813,24 @@
 			"controls": []
 		},
 		{
+			"id": "string-short-concat",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "short string concatenation",
+			"category": "memory-layout-usage",
+			"mechanisms": ["string-allocation", "string-concatenation"],
+			"inputShape": "18–23-unit dynamic template keys through 17–20-unit intermediates",
+			"unit": "concatenation chain",
+			"sourceSeam": "runtime/src/heap_string.c",
+			"controls": [
+				"string-keys",
+				"string-concatenation",
+				"string-append-hash",
+				"string-rope-access"
+			],
+			"fixture": "cases/string-short-concat.mjs"
+		},
+		{
 			"id": "string-concatenation",
 			"group": "runtime",
 			"suite": "runtime",

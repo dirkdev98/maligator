@@ -663,13 +663,20 @@ static usize mal_string_balanced_cut(
     return midpoint;
 }
 
+static bool mal_string_is_balance_terminal(const MalString *string) {
+    return string->storage != MAL_STRING_STORAGE_CONS ||
+        (string->length <= 2 * MAL_STRING_INLINE_LATIN1_CODE_UNITS &&
+            string->left->storage != MAL_STRING_STORAGE_CONS &&
+            string->right->storage != MAL_STRING_STORAGE_CONS);
+}
+
 static MalString *mal_string_join(MalHeap *heap, MalString *left, MalString *right) {
     usize length = left->length + right->length;
     usize maximum_child = length - (length + 3) / 4;
-    // Only flat leaves may exceed three quarters of their parent. Every edge
-    // into a cons therefore shrinks the remaining length, without height bits.
-    if (left->storage == MAL_STRING_STORAGE_CONS && left->length > maximum_child) {
-        if (left->left->storage != MAL_STRING_STORAGE_CONS &&
+    // A short flat+flat cons gets one extra terminal edge, avoiding a throwaway
+    // rotation on its next append. All deeper cons edges still shrink by 1/4.
+    if (left->length > maximum_child && !mal_string_is_balance_terminal(left)) {
+        if (mal_string_is_balance_terminal(left->left) &&
             left->left->length > maximum_child) {
             return mal_string_new_cons_node(heap, left->left,
                 mal_string_join(heap, left->right, right));
@@ -681,8 +688,8 @@ static MalString *mal_string_join(MalHeap *heap, MalString *left, MalString *rig
         mal_string_split(heap, left, cut, &prefix, &middle);
         return mal_string_new_cons_node(heap, prefix, mal_string_join(heap, middle, right));
     }
-    if (right->storage == MAL_STRING_STORAGE_CONS && right->length > maximum_child) {
-        if (right->right->storage != MAL_STRING_STORAGE_CONS &&
+    if (right->length > maximum_child && !mal_string_is_balance_terminal(right)) {
+        if (mal_string_is_balance_terminal(right->right) &&
             right->right->length > maximum_child) {
             return mal_string_new_cons_node(heap,
                 mal_string_join(heap, left, right->left), right->right);
