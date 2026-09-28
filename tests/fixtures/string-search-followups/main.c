@@ -142,6 +142,7 @@ static bool long_prefix_work_is_bounded(MalVm *vm) {
 }
 
 static usize replacement_calls;
+static usize replacement_throw_at;
 
 static MalValue materializing_replacer(
     MalVm *vm, MalValue receiver, const MalValue *args, i32 count,
@@ -152,6 +153,10 @@ static MalValue materializing_replacer(
     (void) callee;
     if (count != 3 || mal_ops_number_as_f64(args[1]) != (f64) (replacement_calls * 2 + 1)) abort();
     replacement_calls++;
+    if (replacement_calls == replacement_throw_at) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "replacement stopped");
+        return mal_value_new_undefined();
+    }
     MalString *source = mal_value_to_string(args[2]);
     (void) mal_string_code_units(source);
     if (replacement_calls % 32 == 0) mal_gc_collect(vm);
@@ -203,12 +208,19 @@ static bool split_and_replace_keep_sequential_state(MalVm *vm) {
         &vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
         mal_intrinsic_ascii(vm, "replacer"), materializing_replacer));
     replacement_calls = 0;
+    replacement_throw_at = 0;
     roots[3] = mal_builtin_string_replace_known(vm, source, mal_value_to_string(roots[1]), roots[4], true);
     CHECK(vm->completion.kind != MAL_COMPLETION_THROW && replacement_calls == 2048);
     replaced = mal_value_to_string(roots[3]);
     CHECK(replaced->length == countof(units));
     for (usize i = 0; i < replaced->length; i++) CHECK(mal_string_code_unit_at(replaced, i) == (i % 2 == 0 ? 'a' : '+'));
     CHECK(source->storage != MAL_STRING_STORAGE_CONS);
+    replacement_calls = 0;
+    replacement_throw_at = 17;
+    roots[3] = mal_builtin_string_replace_known(vm, source, mal_value_to_string(roots[1]), roots[4], true);
+    CHECK(vm->completion.kind == MAL_COMPLETION_THROW && replacement_calls == replacement_throw_at);
+    vm->completion = (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = mal_value_new_undefined()};
+    replacement_throw_at = 0;
     mal_gc_unroot(&span);
     return true;
 }
