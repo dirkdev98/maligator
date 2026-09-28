@@ -5,7 +5,6 @@ function run(scale) {
 	const stored = {};
 	for (const name of names) {
 		stored[name] = 1;
-		delete stored[name];
 	}
 	const object = { marker: 1 };
 	const operations = 180_000 * scale;
@@ -13,6 +12,8 @@ function run(scale) {
 	for (let i = 0; i < operations; i++) {
 		if (object[names[i & 3]] === undefined) checksum++;
 	}
+	// Observe the stored properties so an optimizer cannot discard atom preparation.
+	checksum += Object.keys(stored).length - names.length;
 	return { checksum, operations };
 }
 
