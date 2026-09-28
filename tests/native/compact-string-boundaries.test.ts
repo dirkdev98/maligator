@@ -9,6 +9,8 @@ describe("compact string runtime and host boundaries", () => {
 			mainFile: "tests/fixtures/compact-string-boundaries/main.c",
 			nodeEnabled: true,
 		});
-		expect(runToStdout(binary, { env: STRESS_ENV })).toBe("compact-string-boundaries PASS\n");
+		expect(runToStdout(binary, { env: STRESS_ENV })).toBe(
+			"compact-string-boundaries PASS\n",
+		);
 	});
 });
