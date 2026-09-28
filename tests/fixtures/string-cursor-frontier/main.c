@@ -149,6 +149,18 @@ static bool split_patterns(MalVm *vm) {
     CHECK(start == 0 && end == 0);
     CHECK(mal_perf_stats.string_iterator_nodes == nodes);
     CHECK(mal_perf_stats.string_search_linear_comparisons == comparisons);
+    roots[0] = mal_value_from_string(rope(vm, units, 40));
+    CHECK(mal_value_to_string(roots[0])->storage == MAL_STRING_STORAGE_CONS);
+    nodes = mal_perf_stats.string_iterator_nodes;
+    comparisons = mal_perf_stats.string_search_linear_comparisons;
+    allocated = mal_gc_allocated_bytes(vm);
+    CHECK(mal_builtin_string_split_cursor_init_locked(vm, roots[0], roots[3],
+        &roots[1], &roots[2], &state));
+    CHECK(mal_value_is_string(roots[2]) && mal_gc_allocated_bytes(vm) == allocated);
+    CHECK(mal_builtin_string_split_cursor_next(roots[1], roots[2], &state, &start, &end));
+    CHECK(start == 0 && end == 40);
+    CHECK(mal_perf_stats.string_iterator_nodes == nodes);
+    CHECK(mal_perf_stats.string_search_linear_comparisons == comparisons);
     const c16 pattern[] = {'a', 'b', 'a', 'b', 'a', 'c'};
     for (usize i = 0; i < 28; i++) units[i] = i % 2 == 0 ? 'a' : 'b';
     for (usize i = 28; i < 40; i++) units[i] = pattern[(i - 28) % 6];
