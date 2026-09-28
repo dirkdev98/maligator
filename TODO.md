@@ -407,11 +407,13 @@ contracts or investigates costs still visible after the string follow-ups.
       and require repeated-miss gains without taxing existing atoms or unique-name
       churn. Keep the three property-query benchmark controls together.
 
-- [ ] Profile the remaining mixed-text pipeline across parse, property lookup,
-      construction, quoting, and checksum before attributing aggregate timings.
-      Retain early/late wide units, sparse/dense escapes, BMP runs, and split
-      surrogate controls. JSON quote counters identify scalar scan work, but do
-      not establish its share of the complete pipeline's elapsed time.
+- [ ] Investigate full-output checksum traversal and construction/replacement in
+      the complete mixed-text pipeline. Use `scripts/profile-text-pipeline.ts`
+      with its encoding, escape, and surrogate controls, then confirm candidate
+      changes through paired ordinary builds with the complete checksum retained.
+      Bound marker overhead and resolve cooperative-sampler delay before treating
+      instrumented phase intervals as production cost shares. Quoting counters
+      alone do not attribute an aggregate timing change.
 
 # ECMAScript correctness
 
