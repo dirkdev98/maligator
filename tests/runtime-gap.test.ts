@@ -142,7 +142,7 @@ describe("runtime-gap case catalog", () => {
 	it("covers explicit runtime suites and compiler algorithm cases", () => {
 		const catalog = loadRuntimeGapCatalog();
 		const kernels = catalog.cases;
-		expect(kernels.filter(({ group }) => group === "primitive")).toHaveLength(20);
+		expect(kernels.filter(({ group }) => group === "primitive")).toHaveLength(23);
 		expect(catalog.presets.quick).toHaveLength(37);
 		expect(catalog.presets.survey).toHaveLength(66);
 		expect(kernels.filter(({ group }) => group === "algorithm")).toHaveLength(15);
@@ -160,6 +160,18 @@ describe("runtime-gap case catalog", () => {
 			),
 		).toBe(true);
 	});
+
+	it.each(["iteration", "split-cursor"])(
+		"keeps prepared string %s rope and flat controls matched",
+		(operation) => {
+			const rope = fixtureOutput(`string-rope-${operation}`);
+			const flat = fixtureOutput(`string-flat-${operation}`);
+			expect(flat).toMatchObject({
+				operations: rope.operations,
+				checksum: rope.checksum,
+			});
+		},
+	);
 
 	it.each(["hit", "miss"])("keeps Map %s key-kind probes matched", (outcome) => {
 		const objectKey = fixtureOutput(`map-get-${outcome}-4096-selected`);
