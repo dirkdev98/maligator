@@ -273,7 +273,8 @@ static void mal_table_grow_entries_if_needed(MalTable *table) {
 static bool mal_table_should_compact(const MalTable *table) {
     return table->role == MAL_TABLE_ROLE_MAP && table->iterator_pins == 0
         && table->tombstone_count >= 16
-        && table->tombstone_count > table->size;
+        && (table->tombstone_count >= table->size ||
+            table->entry_count == table->entry_capacity);
 }
 
 // The table header, non-inline `slots`, `entries`, and each entry's `data`
