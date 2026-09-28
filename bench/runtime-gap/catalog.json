@@ -882,7 +882,7 @@
 			"owner": "bounded absent property query caching",
 			"category": "api-builtins",
 			"mechanisms": ["runtime-collections-properties"],
-			"inputShape": "four dynamic names stored then deleted before querying",
+			"inputShape": "four dynamic names retained as stored keys on another object before repeated absent queries",
 			"unit": "absent property query",
 			"sourceSeam": "runtime/src/vm_ops.c",
 			"controls": [],
