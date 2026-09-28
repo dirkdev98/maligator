@@ -8,17 +8,19 @@ ordinary string content.
 
 ## Representation and ownership
 
-The string cell remains in the 32-byte size class. Its 32-bit length covers the
-existing 16-million-code-unit engine limit. The remaining half of the previous
-length word stores a dependent slice's offset.
+The string cell remains 32 bytes: a four-byte heap header, a four-byte metadata
+word, an independent eight-byte hash, and a sixteen-byte payload. The metadata
+packs a 25-bit length with the storage and content flags, preserving the inclusive
+16,777,216-code-unit engine limit. Dependent offsets share the payload with the
+other representation-specific fields.
 
-| Storage   | Payload                                  | Ownership and retained edges         |
-| --------- | ---------------------------------------- | ------------------------------------ |
-| Inline    | Eight Latin-1 units or four UTF-16 units | Inside the string cell               |
-| Owned     | Contiguous Latin-1 or UTF-16 units       | GC-accounted RAW allocation          |
-| External  | Borrowed Latin-1 or UTF-16 units         | Provider retains the backing storage |
-| Dependent | Parent plus UTF-16 offset and length     | Parent may be flat or a rope         |
-| Cons      | Left and right strings                   | Children retain their own encodings  |
+| Storage   | Payload                                     | Ownership and retained edges         |
+| --------- | ------------------------------------------- | ------------------------------------ |
+| Inline    | Sixteen Latin-1 units or eight UTF-16 units | Inside the string cell               |
+| Owned     | Contiguous Latin-1 or UTF-16 units          | GC-accounted RAW allocation          |
+| External  | Borrowed Latin-1 or UTF-16 units            | Provider retains the backing storage |
+| Dependent | Parent plus UTF-16 offset and length        | Parent may be flat or a rope         |
+| Cons      | Left and right strings                      | Children retain their own encodings  |
 
 Copied UTF-16 input is compacted when eligible. Builders construct Latin-1
 directly, avoiding a temporary wide payload. Existing emitted and wire-loaded
@@ -42,8 +44,7 @@ trees. Traversal does not collect, invoke JavaScript, flatten, or widen a string
 
 A segment borrows its leaf's storage. Consumers keep the source graph rooted
 across collection and do not retain borrowed segment pointers across JavaScript
-reentry or string materialization, including repeated rope hashing and a UTF-16
-bridge that could widen the same leaf. Producers append a segment before
+reentry or a UTF-16 bridge that could materialize or widen the same leaf. Producers append a segment before
 advancing or crossing an observable call. A single-leaf range can use
 `mal_string_try_get_segment` to avoid the general iterator.
 
@@ -66,15 +67,12 @@ UTF-16 unit. Latin-1 traversal therefore includes the implicit zero high byte.
 Equal strings have equal hashes across physical encodings and rope partitions.
 Equality and lexical ordering compare UTF-16 content, including lone surrogates.
 
-Flat strings cache their complete hash in the first payload word. Dependent
-strings use the other payload word for a cached hash while retaining their parent.
-A cons string streams its first hash without materializing. A second hash
-materializes compact owned storage and caches the complete hash, amortizing
-repeated Map and property-key operations. The reuse marker occupies the word
-otherwise used for a dependent offset. This policy preserves the 32-byte cell and
-existing hash contract while keeping one-pass consumers segmented. Materialization
-keeps the string identity and dependent offsets valid; it does not collect or
-invoke JavaScript.
+Every representation caches its complete hash independently of the payload. A
+rope's first hash streams its leaves; subsequent hashes reuse the cache without
+materializing the rope. Hashing preserves segment and backing-storage lifetimes.
+Explicit content-preserving representation changes also retain the cached hash.
+The bounded tiny-string cache remains 256 entries and now accepts up to eight
+UTF-16 units, including compact Latin-1 strings.
 
 ## Shared construction
 
