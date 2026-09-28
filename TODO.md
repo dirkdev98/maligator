@@ -410,6 +410,13 @@ contracts or investigates costs still visible after the string follow-ups.
 
 ## Focused performance work
 
+- [ ] Reduce transient node allocation for short concatenation chains while
+      preserving bounded rope height. The dynamic template-key control builds an
+      18–23-unit key through a 17–20-unit intermediate; balancing its final append
+      allocates a suffix and root, leaving one additional 32-byte cons cell as
+      garbage. Compare small-key construction with repeated-append and large-rope
+      controls before changing the balance rule or introducing small-string copies.
+
 - [ ] Profile the remaining mixed-text pipeline across parse, property lookup,
       construction, quoting, and checksum before attributing aggregate timings.
       Retain early/late wide units, sparse/dense escapes, BMP runs, and split
