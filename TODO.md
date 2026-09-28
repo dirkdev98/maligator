@@ -745,16 +745,18 @@ remains a Maligator extension and does not count as global fetch conformance.
 - [x] Verify the selected source with Wasm parity and embedding lifecycle,
       the normal gate, focused GC sanitizer and standards runs, and an
       enabled-worker ThreadSanitizer lane. The five-family portfolio also
-      completed with exact output parity.
-- [ ] Resolve the measured native performance trade-off against merged main
-      `40063120`: the five-family portfolio classifies a 1.15% aggregate cost
-      (95% interval 0.01–4.17% worse), with app-batch and HTTP regressions
-      alongside shorter GC pauses. Attribute remaining app-batch CPU cost on
-      finished binaries, then tune or explicitly accept the default. Keep
-      mutator-owned sweep unless a measured benefit justifies worker ownership.
-- [ ] Validate native worker capacity under constrained and nested CPU quotas; the
-      current affinity and common cgroup-file checks cannot observe every mount or
-      hidden ancestor limit. Keep the inline capacity fallback covered.
+      completed with its required output checks.
+- [ ] Resolve the native performance trade-off: the historical five-family
+      portfolio found a 1.15% aggregate cost against `40063120`, while the current
+      retained source estimates a 0.82% gain against `d149ffe6` with a 95% interval
+      from 0.87% worse to 2.29% better. Neither comparison establishes recovered
+      throughput. A separate ten-pair, 30-second HTTP routes comparison found a
+      0.66% loss against `d149ffe6`; attribute its CPU and GC work before tuning
+      or accepting the default. Keep mutator-owned sweep unless measured benefit
+      justifies worker ownership.
+- [ ] Validate native worker capacity under live constrained and nested CPU quotas.
+      Synthetic v1/v2 mounted-path and visible-ancestor fixtures pass; hidden
+      namespace ancestors cannot be inferred. Keep the inline capacity fallback.
 - [ ] Measure peak committed/deferred storage, long root/remark/finalizer pauses,
       and backstop completions. Extend block ownership only if a measured need
       justifies background reclamation.
@@ -767,7 +769,9 @@ remains a Maligator extension and does not count as global fetch conformance.
       sizing were reverted after application regressions. A ten-pair, 30-second HTTP
       comparison found Express routes about 0.66% slower than `d149ffe6`, with
       exact completed-response counts confirming the signal. Attribute per-route
-      CPU and GC work before changing collector dispatch.
+      CPU and GC work before changing collector dispatch. A separate app diagnostic
+      copied more total values despite primitive filtering while batch counts also
+      rose; filtering within a snapshot does not prove lower application work.
 - [ ] Safe worker traversal: private draining was removed after zero app-batch
       drain traces and no measured benefit. Revisit only with a representative
       chain or shared-graph handoff benefit and combined CPU gain.
@@ -782,9 +786,10 @@ remains a Maligator extension and does not count as global fetch conformance.
       cost before replacing the eighth-collection cadence. Validate nested cgroup
       quota discovery on Linux.
 - [ ] Bounded slices: retain the skipped-block sweep budget only after combined
-      latency review; use mutator-only array trace attribution to identify a
-      measured large-container or root-scan offender before adding resumable
-      tracing or wider exact frame liveness.
+      latency review. One instrumented app run had more short major slices and a
+      5.998 ms minor pause outlier; repeat before claiming application pause gains.
+      Use mutator-only array trace attribution to identify a measured large-container
+      or root-scan offender before adding resumable tracing or wider exact liveness.
 - [ ] Minor locality: black-allocation enrollment showed no application gain.
       The young-position bitmap reduced counted visits but slowed seven paired
       app-batch runs, so it was reverted. A diagnostic app run inspected about
@@ -817,10 +822,11 @@ remains a Maligator extension and does not count as global fetch conformance.
       unmeasured. The prior app diagnostic allocated only 32,800 bytes during major
       sweep; establish representative long-sweep exposure before adding per-block
       free lists.
-- [ ] Complete the matched five-family portfolio and separate HTTP/long-cadence
-      diagnostics on the retained combination without stats-only counters; record
-      per-candidate and combined decisions. The retained-source Linux gate and
-      Wasm parity have passed, while the final benchmark harness gate is queued.
+- [ ] Complete separate 30-second HTTP, cadence, and long-resource diagnostics on
+      the retained combination without stats-only counters; record per-candidate
+      and combined decisions. The retained-source five-family portfolio completed
+      with matching output checks and an inconclusive 0.82% aggregate gain estimate.
+      Linux gate and Wasm parity passed; the final benchmark harness gate is queued.
 
 # Triggered work
 
