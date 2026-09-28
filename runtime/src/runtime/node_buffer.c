@@ -214,7 +214,15 @@ done:
 static byte *mal_buffer_encode_string(
     const MalString *string, MalBufferEncoding encoding, usize *length_out
 ) {
-    if (encoding == MAL_BUFFER_UTF8) return mal_string_to_utf8(string, length_out);
+    if (encoding == MAL_BUFFER_UTF8) {
+        usize capacity = mal_string_utf8_length(string);
+        byte *bytes = malloc(capacity == 0 ? 1 : capacity);
+        *length_out = 0;
+        if (bytes != nullptr) {
+            mal_string_utf8_encode_into(string, bytes, capacity, nullptr, length_out);
+        }
+        return bytes;
+    }
     usize length = mal_string_length(string);
     usize capacity = encoding == MAL_BUFFER_UTF16LE ? length * 2
         : encoding == MAL_BUFFER_HEX ? length / 2
@@ -244,6 +252,18 @@ static usize mal_buffer_encoded_string_length(
 static MalValue mal_buffer_string_from_bytes(
     MalVm *vm, const byte *bytes, usize length, MalBufferEncoding encoding
 ) {
+    if (encoding == MAL_BUFFER_UTF8) {
+        MalUtf8DecodeStatus status;
+        MalString *string = mal_string_from_utf8_report(
+            &vm->heap, bytes, length, nullptr, &status);
+        if (string == nullptr) {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
+                status == MAL_UTF8_DECODE_LENGTH_OVERFLOW
+                    ? "Invalid string length" : "Buffer string allocation failed");
+            return mal_value_new_undefined();
+        }
+        return mal_value_from_string(string);
+    }
     usize output_length = length;
     if (encoding == MAL_BUFFER_HEX) {
         if (!mal_hex_encoded_length(
@@ -271,15 +291,6 @@ static MalValue mal_buffer_string_from_bytes(
         mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
                            "Invalid string length");
         return mal_value_new_undefined();
-    }
-    if (encoding == MAL_BUFFER_UTF8) {
-        MalString *string = mal_string_from_utf8(&vm->heap, bytes, length);
-        if (string == nullptr) {
-            mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
-                               "Buffer string allocation failed");
-            return mal_value_new_undefined();
-        }
-        return mal_value_from_string(string);
     }
     if (encoding == MAL_BUFFER_HEX) {
         return mal_value_from_string(

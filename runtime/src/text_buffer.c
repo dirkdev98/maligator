@@ -59,6 +59,10 @@ MalTextBufferStatus mal_text_buffer_reserve(MalTextBuffer *buffer, usize extra) 
     return mal_text_buffer_prepare(buffer, extra, false);
 }
 
+MalTextBufferStatus mal_text_buffer_reserve_utf16(MalTextBuffer *buffer, usize extra) {
+    return mal_text_buffer_prepare(buffer, extra, true);
+}
+
 MalTextBufferStatus mal_text_buffer_hint_capacity(MalTextBuffer *buffer, usize extra) {
     if (buffer->status != MAL_TEXT_BUFFER_OK) return buffer->status;
     if (buffer->data != nullptr) return mal_text_buffer_reserve(buffer, extra);
