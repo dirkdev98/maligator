@@ -69,7 +69,7 @@
 	},
 	{
 		"file": "builtin_iterator.c",
-		"sha256": "7d4d8febcfb5ecb54f6e2ab60bdc6bf6ee8e630b8c786498dcc53682d9628823"
+		"sha256": "6ab8cebd5d6ed1869f2f0f3e333fcdacc6513305aa7df13936562e9afc85aee1"
 	},
 	{
 		"file": "builtin_iterator_helpers.c",
@@ -77,7 +77,7 @@
 	},
 	{
 		"file": "builtin_json.c",
-		"sha256": "c22acc929b634c5d54424f72bed188c7d2626bbf589421532357ea1806791fb8"
+		"sha256": "fc49ed30554c74e1896f6a70fad1b40c1eb5c8d8c8617b256d380a2e7a191719"
 	},
 	{
 		"file": "builtin_map.c",
@@ -125,7 +125,7 @@
 	},
 	{
 		"file": "builtin_string.c",
-		"sha256": "cc631edf1f04506e652f6a53c94e28da21aea5d7863c4db7ac7ae09ab522bbbf"
+		"sha256": "1a6ab0c8356dc2df83237f453278b7f174b040c79656342200d98b30a6ef3356"
 	},
 	{
 		"file": "builtin_symbol.c",
