@@ -1,6 +1,7 @@
 #include "utf8.h"
 
 #include <stdlib.h>
+#include <string.h>
 
 #include "heap_string.h"
 #include "utf16.h"
@@ -139,16 +140,128 @@ c16 *mal_utf8_decode_report(const byte *bytes, usize len, usize *out_count, bool
     return out;
 }
 
+typedef struct MalUtf8StringCursor {
+    MalStringIterator iterator;
+    MalStringSegment segment;
+    usize offset;
+} MalUtf8StringCursor;
+
+static bool mal_utf8_string_cursor_ready(MalUtf8StringCursor *cursor) {
+    if (cursor->offset < cursor->segment.length) return true;
+    cursor->offset = 0;
+    if (mal_string_iterator_next(&cursor->iterator, &cursor->segment)) return true;
+    cursor->segment.length = 0;
+    return false;
+}
+
+static usize mal_utf8_scalar_width(u32 scalar) {
+    return scalar < 0x80 ? 1 : scalar < 0x800 ? 2 : scalar < 0x10000 ? 3 : 4;
+}
+
+static void mal_utf8_write_scalar(byte *output, u32 scalar, usize width) {
+    if (width == 1) {
+        output[0] = (byte) scalar;
+    } else if (width == 2) {
+        output[0] = (byte) (0xC0 | (scalar >> 6));
+        output[1] = (byte) (0x80 | (scalar & 0x3F));
+    } else if (width == 3) {
+        output[0] = (byte) (0xE0 | (scalar >> 12));
+        output[1] = (byte) (0x80 | ((scalar >> 6) & 0x3F));
+        output[2] = (byte) (0x80 | (scalar & 0x3F));
+    } else {
+        output[0] = (byte) (0xF0 | (scalar >> 18));
+        output[1] = (byte) (0x80 | ((scalar >> 12) & 0x3F));
+        output[2] = (byte) (0x80 | ((scalar >> 6) & 0x3F));
+        output[3] = (byte) (0x80 | (scalar & 0x3F));
+    }
+}
+
+static void mal_string_utf8_process(
+    const MalString *string, byte *output, usize capacity,
+    usize *read_out, usize *written_out
+) {
+    MalUtf8StringCursor cursor = {0};
+    mal_string_iterator_init(&cursor.iterator, string, 0, mal_string_length(string));
+    usize read = 0;
+    usize written = 0;
+    while (written < capacity && mal_utf8_string_cursor_ready(&cursor)) {
+        if (cursor.segment.latin1) {
+            const u8 *units = cursor.segment.latin1_units;
+            usize start = cursor.offset;
+            usize available = cursor.segment.length - start;
+            if (available > capacity - written) available = capacity - written;
+            usize end = start + available;
+            while (cursor.offset < end && units[cursor.offset] < 0x80) cursor.offset++;
+            usize count = cursor.offset - start;
+            if (count != 0) {
+                if (output != nullptr) memcpy(output + written, units + start, count);
+                read += count;
+                written += count;
+                continue;
+            }
+        }
+
+        c16 first = mal_string_segment_code_unit_at(&cursor.segment, cursor.offset++);
+        u32 scalar = first;
+        usize width = 1;
+        if (mal_utf16_is_lead_surrogate(first)) {
+            // A pair can span any two leaves, including a slice of a rope.
+            if (mal_utf8_string_cursor_ready(&cursor)) {
+                c16 second = mal_string_segment_code_unit_at(&cursor.segment, cursor.offset);
+                if (mal_utf16_is_trail_surrogate(second)) {
+                    cursor.offset++;
+                    scalar = mal_utf16_compose_pair(first, second);
+                    width = 2;
+                } else {
+                    scalar = 0xFFFD;
+                }
+            } else {
+                scalar = 0xFFFD;
+            }
+        } else if (mal_utf16_is_trail_surrogate(first)) {
+            scalar = 0xFFFD;
+        }
+        usize encoded_width = mal_utf8_scalar_width(scalar);
+        if (encoded_width > capacity - written) break;
+        if (output != nullptr) mal_utf8_write_scalar(output + written, scalar, encoded_width);
+        read += width;
+        written += encoded_width;
+    }
+    mal_string_iterator_dispose(&cursor.iterator);
+    if (read_out != nullptr) *read_out = read;
+    if (written_out != nullptr) *written_out = written;
+}
+
+void mal_string_utf8_encode_into(
+    const MalString *string, byte *output, usize capacity,
+    usize *read_out, usize *written_out
+) {
+    mal_string_utf8_process(string, output, capacity, read_out, written_out);
+}
+
 byte *mal_string_to_utf8(const MalString *string, usize *out_len) {
-    return mal_utf8_encode(mal_string_code_units(string), mal_string_length(string), out_len);
+    *out_len = 0;
+    usize length = mal_string_length(string);
+    if (length > (SIZE_MAX - 1) / 3) return nullptr;
+    byte *bytes = malloc(length * 3 + 1);
+    if (bytes == nullptr) return nullptr;
+    mal_string_utf8_encode_into(string, bytes, length * 3 + 1, nullptr, out_len);
+    return bytes;
 }
 
 usize mal_string_utf8_length(const MalString *string) {
-    return mal_utf8_encoded_length(
-        mal_string_code_units(string), mal_string_length(string));
+    usize length;
+    mal_string_utf8_process(string, nullptr, SIZE_MAX, nullptr, &length);
+    return length;
 }
 
 MalString *mal_string_from_utf8(MalHeap *heap, const byte *bytes, usize len) {
+    usize prefix = 0;
+    while (prefix < len && (u8) bytes[prefix] < 0x80) prefix++;
+    if (prefix == len) {
+        return len <= MAL_STRING_MAX_CODE_UNITS
+            ? mal_string_new_ascii(heap, bytes, len) : nullptr;
+    }
     usize count;
     c16 *units = mal_utf8_decode(bytes, len, &count);
     if (units == nullptr || count > MAL_STRING_MAX_CODE_UNITS) {
@@ -165,12 +278,25 @@ MalUtf8CStringResult mal_string_to_utf8_c_string(
 ) {
     *out = nullptr;
     *out_len = 0;
-    const c16 *units = mal_string_code_units(string);
-    usize length = mal_string_length(string);
-    for (usize i = 0; i < length; i++) {
-        if (units[i] == 0) return MAL_UTF8_C_STRING_EMBEDDED_NUL;
+    MalStringIterator iterator;
+    MalStringSegment segment;
+    mal_string_iterator_init(&iterator, string, 0, mal_string_length(string));
+    bool embedded_nul = false;
+    while (!embedded_nul && mal_string_iterator_next(&iterator, &segment)) {
+        if (segment.latin1) {
+            embedded_nul = memchr(segment.latin1_units, 0, segment.length) != nullptr;
+        } else {
+            for (usize i = 0; i < segment.length; i++) {
+                if (segment.utf16_units[i] == 0) {
+                    embedded_nul = true;
+                    break;
+                }
+            }
+        }
     }
-    byte *bytes = mal_utf8_encode(units, length, out_len);
+    mal_string_iterator_dispose(&iterator);
+    if (embedded_nul) return MAL_UTF8_C_STRING_EMBEDDED_NUL;
+    byte *bytes = mal_string_to_utf8(string, out_len);
     if (bytes == nullptr) return MAL_UTF8_C_STRING_ALLOCATION_FAILED;
     bytes[*out_len] = '\0';
     *out = (char *) bytes;

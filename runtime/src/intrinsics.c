@@ -53,7 +53,6 @@
 
 // Longest internal key in the codebase is well under this; longer names fall
 // back to a heap-converted probe buffer.
-#define MAL_INTERN_STACK_MAX 64
 
 #define MAL_HOT_KEY_SIGNATURE(length, first, last) \
     ((u32) (length) | ((u32) (u8) (first) << 8) | ((u32) (u8) (last) << 16))
@@ -283,11 +282,26 @@ static bool mal_ascii_atom_cache_matches(
     const MalString *atom, const byte *name, usize length
 ) {
     if (atom->length != length) return false;
-    const c16 *units = mal_string_code_units(atom);
-    for (usize i = 0; i < length; i++) {
-        if (units[i] != (c16) name[i]) return false;
+    MalStringIterator iterator;
+    MalStringSegment segment;
+    mal_string_iterator_init(&iterator, atom, 0, length);
+    usize offset = 0;
+    bool equal = true;
+    while (equal && mal_string_iterator_next(&iterator, &segment)) {
+        if (segment.latin1) {
+            equal = memcmp(segment.latin1_units, name + offset, segment.length) == 0;
+        } else {
+            for (usize i = 0; i < segment.length; i++) {
+                if (segment.utf16_units[i] != (c16) (u8) name[offset + i]) {
+                    equal = false;
+                    break;
+                }
+            }
+        }
+        offset += segment.length;
     }
-    return true;
+    mal_string_iterator_dispose(&iterator);
+    return equal;
 }
 
 MalString *mal_intrinsic_ascii(MalVm *vm, const byte *name) {
@@ -314,18 +328,9 @@ MalString *mal_intrinsic_ascii(MalVm *vm, const byte *name) {
         return cache->atom;
     }
 
-    // Probe the atom table with a stack-allocated (or, for rare long names,
-    // throwaway-heap) external key string so a hit costs no allocation. On a
-    // miss, allocate the canonical atom once and store it as its own key.
-    c16 stack_units[MAL_INTERN_STACK_MAX];
-    c16 *heap_units = length > MAL_INTERN_STACK_MAX ? malloc(sizeof(c16) * length) : nullptr;
-    c16 *units = heap_units != nullptr ? heap_units : stack_units;
-    for (usize i = 0; i < length; i++) {
-        units[i] = (u8) name[i];
-    }
-
+    // A borrowed Latin-1 probe avoids allocating or widening canonical names.
     MalString probe;
-    mal_string_init_external(&probe, units, length);
+    mal_string_init_external_latin1(&probe, (const u8 *) name, length);
     MalKey key = {.kind = MAL_KEY_STRING, .value = mal_value_from_string(&probe)};
 
     MalTableLookup lookup = mal_table_lookup(vm->atoms, key);
@@ -348,7 +353,6 @@ MalString *mal_intrinsic_ascii(MalVm *vm, const byte *name) {
     *cache = (MalAsciiAtomCacheEntry) {.hash = cache_hash, .atom = atom};
     MAL_PERF_COUNT(intrinsic_ascii_cache_fills);
 
-    free(heap_units);
     return atom;
 }
 

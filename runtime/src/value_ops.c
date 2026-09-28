@@ -88,52 +88,23 @@ static int mal_ops_string_number_digit(char c) {
     return -1;
 }
 
-// StringToNumber (7.1.4.1) over the StrNumericLiteral grammar — deliberately NOT
-// strtod, which would wrongly accept "inf"/"nan" and reject 0b/0o literals.
-MalValue mal_ops_string_units_to_number(const c16 *code_units, usize length) {
-    usize unit_start = 0;
-    usize unit_end = length;
-    while (unit_start < unit_end && mal_ecma_is_string_whitespace(code_units[unit_start])) {
-        unit_start++;
-    }
-    while (unit_end > unit_start && mal_ecma_is_string_whitespace(code_units[unit_end - 1])) {
-        unit_end--;
-    }
-    usize token_length = unit_end - unit_start;
-    // Numeric fields in protocols and structured text are overwhelmingly tiny.
-    // Keep their ASCII staging storage in the native frame; only unusually long
-    // tokens need a transient heap buffer.
-    byte stack_bytes[64];
-    byte *bytes = token_length < sizeof(stack_bytes)
-        ? stack_bytes
-        : malloc(token_length + 1);
-    bool heap_bytes = bytes != stack_bytes;
-
-    for (usize i = 0; i < token_length; i++) {
-        if (code_units[unit_start + i] > 0x7F) {
-            if (heap_bytes) free(bytes);
-            return mal_value_new_nan();
-        }
-        bytes[i] = (byte) code_units[unit_start + i];
-    }
-    bytes[token_length] = '\0';
-
+// The staging buffer is NUL-terminated; token_length still distinguishes an
+// embedded U+0000 from the terminator when checking the numeric grammar.
+static MalValue mal_ops_ascii_to_number(byte *bytes, usize token_length) {
     char *start = bytes;
     char *end = bytes + token_length;
 
     // Empty (or all-whitespace) string is +0.
     if (token_length == 0) {
-        if (heap_bytes) free(bytes);
         return mal_value_from_i32(0);
     }
 
     // Infinity literals (signed); the bare tokens only — no "inf"/"infinity".
-    if (strcmp(start, "Infinity") == 0 || strcmp(start, "+Infinity") == 0) {
-        if (heap_bytes) free(bytes);
+    if ((token_length == 8 && memcmp(start, "Infinity", 8) == 0) ||
+        (token_length == 9 && memcmp(start, "+Infinity", 9) == 0)) {
         return mal_ops_number_value((f64) INFINITY);
     }
-    if (strcmp(start, "-Infinity") == 0) {
-        if (heap_bytes) free(bytes);
+    if (token_length == 9 && memcmp(start, "-Infinity", 9) == 0) {
         return mal_ops_number_value((f64) -INFINITY);
     }
 
@@ -152,12 +123,10 @@ MalValue mal_ops_string_units_to_number(const c16 *code_units, usize length) {
             for (char *p = start + 2; p < end; p++) {
                 int digit = mal_ops_string_number_digit(*p);
                 if (digit < 0 || digit >= base) {
-                    if (heap_bytes) free(bytes);
                     return mal_value_new_nan();
                 }
                 number = number * (f64) base + (f64) digit;
             }
-            if (heap_bytes) free(bytes);
             return mal_ops_number_value(number);
         }
     }
@@ -187,7 +156,6 @@ MalValue mal_ops_string_units_to_number(const c16 *code_units, usize length) {
             magnitude = magnitude * 10u + digit;
         }
         if (decimal_integer) {
-            if (heap_bytes) free(bytes);
             f64 number = negative ? -(f64) magnitude : (f64) magnitude;
             return mal_ops_number_value(number);
         }
@@ -198,7 +166,6 @@ MalValue mal_ops_string_units_to_number(const c16 *code_units, usize length) {
     for (char *p = start; p < end; p++) {
         char c = *p;
         if (!((c >= '0' && c <= '9') || c == '.' || c == 'e' || c == 'E' || c == '+' || c == '-')) {
-            if (heap_bytes) free(bytes);
             return mal_value_new_nan();
         }
     }
@@ -206,18 +173,70 @@ MalValue mal_ops_string_units_to_number(const c16 *code_units, usize length) {
     char *parsed_end = start;
     f64 number = strtod(start, &parsed_end);
     if (parsed_end != end) {
-        if (heap_bytes) free(bytes);
         return mal_value_new_nan();
     }
 
-    if (heap_bytes) free(bytes);
     return mal_ops_number_value(number);
+}
+
+MalValue mal_ops_string_units_to_number(const c16 *code_units, usize length) {
+    usize start = 0;
+    usize end = length;
+    while (start < end && mal_ecma_is_string_whitespace(code_units[start])) start++;
+    while (end > start && mal_ecma_is_string_whitespace(code_units[end - 1])) end--;
+    usize token_length = end - start;
+    byte stack_bytes[64];
+    byte *bytes = token_length < sizeof(stack_bytes) ? stack_bytes : malloc(token_length + 1);
+    if (bytes == nullptr) abort();
+    MalValue result = mal_value_new_nan();
+    for (usize i = 0; i < token_length; i++) {
+        if (code_units[start + i] > 0x7F) goto done;
+        bytes[i] = (byte) code_units[start + i];
+    }
+    bytes[token_length] = '\0';
+    result = mal_ops_ascii_to_number(bytes, token_length);
+done:
+    if (bytes != stack_bytes) free(bytes);
+    return result;
 }
 
 static MalValue mal_ops_string_to_number(MalValue value) {
     MalString *string = mal_value_to_string(value);
-    return mal_ops_string_units_to_number(
-        mal_string_code_units(string), mal_string_length(string));
+    MalStringIterator iterator;
+    MalStringSegment segment;
+    mal_string_iterator_init(&iterator, string, 0, mal_string_length(string));
+    byte stack_bytes[64];
+    byte *bytes = stack_bytes;
+    usize capacity = sizeof(stack_bytes);
+    usize length = 0;
+    bool trailing_whitespace = false;
+    MalValue result = mal_value_new_nan();
+    while (mal_string_iterator_next(&iterator, &segment)) {
+        for (usize i = 0; i < segment.length; i++) {
+            c16 unit = mal_string_segment_code_unit_at(&segment, i);
+            if (mal_ecma_is_string_whitespace(unit)) {
+                if (length != 0) trailing_whitespace = true;
+                continue;
+            }
+            if (trailing_whitespace || unit > 0x7F) goto done;
+            if (length + 1 == capacity) {
+                usize next_capacity = capacity * 2;
+                byte *grown = bytes == stack_bytes
+                    ? malloc(next_capacity) : realloc(bytes, next_capacity);
+                if (grown == nullptr) abort();
+                if (bytes == stack_bytes) memcpy(grown, bytes, length);
+                bytes = grown;
+                capacity = next_capacity;
+            }
+            bytes[length++] = (byte) unit;
+        }
+    }
+    bytes[length] = '\0';
+    result = mal_ops_ascii_to_number(bytes, length);
+done:
+    mal_string_iterator_dispose(&iterator);
+    if (bytes != stack_bytes) free(bytes);
+    return result;
 }
 
 MalString *mal_ops_to_string(MalHeap *heap, MalValue value) {

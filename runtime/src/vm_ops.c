@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "ascii.h"
 #include "array_object.h"
 #include "arguments_object.h"
 #include "async_function.h"
@@ -157,33 +158,36 @@ MalValue mal_vm_concat_strings_known(MalVm *vm, MalString *left, MalString *righ
 static bool mal_vm_string_to_array_index(MalString *string, u32 *index_out) {
     if (string->array_index_impossible) return false;
     usize length = mal_string_length(string);
-    const c16 *code_units = mal_string_code_units(string);
-
-    if (length == 0) {
+    if (length == 0 || length > 10) {
         string->array_index_impossible = true;
         return false;
     }
 
-    if (length > 1 && code_units[0] == '0') {
-        string->array_index_impossible = true;
-        return false;
-    }
-
+    MalStringIterator iterator;
+    MalStringSegment segment;
+    mal_string_iterator_init(&iterator, string, 0, length);
     u64 value = 0;
-    for (usize i = 0; i < length; i++) {
-        c16 code_unit = code_units[i];
-        if (code_unit < '0' || code_unit > '9') {
-            string->array_index_impossible = true;
-            return false;
-        }
-
-        value = value * 10 + (u64) (code_unit - '0');
-        if (value >= UINT32_MAX) {
-            string->array_index_impossible = true;
-            return false;
+    usize offset = 0;
+    bool valid = true;
+    while (valid && mal_string_iterator_next(&iterator, &segment)) {
+        for (usize i = 0; i < segment.length; i++, offset++) {
+            c16 unit = mal_string_segment_code_unit_at(&segment, i);
+            if (unit < '0' || unit > '9' || (offset == 0 && length > 1 && unit == '0')) {
+                valid = false;
+                break;
+            }
+            value = value * 10 + (u64) (unit - '0');
+            if (value >= UINT32_MAX) {
+                valid = false;
+                break;
+            }
         }
     }
-
+    mal_string_iterator_dispose(&iterator);
+    if (!valid) {
+        string->array_index_impossible = true;
+        return false;
+    }
     *index_out = (u32) value;
     return true;
 }
@@ -221,9 +225,7 @@ static MalString *mal_vm_string_constant_atom(MalVm *vm, const MalString *string
 bool mal_vm_string_is_canonical_numeric_index(MalVm *vm, MalString *string) {
     // CanonicalNumericIndexString (7.1.21): "-0" is canonical by fiat; otherwise
     // a string is canonical iff ToString(ToNumber(string)) reproduces it exactly.
-    usize length = mal_string_length(string);
-    const c16 *units = mal_string_code_units(string);
-    if (length == 2 && units[0] == '-' && units[1] == '0') {
+    if (mal_string_equals_ascii(string, "-0")) {
         return true;
     }
     f64 number = mal_ops_to_number(mal_value_from_string(string));
@@ -3831,20 +3833,7 @@ static bool mal_vm_key_is_prototype(MalKey key) {
         return false;
     }
 
-    MalString *string = mal_value_to_string(key.value);
-    static const byte expected[] = "prototype";
-    if (mal_string_length(string) != lengthof(expected)) {
-        return false;
-    }
-
-    const c16 *code_units = mal_string_code_units(string);
-    for (usize i = 0; i < lengthof(expected); i++) {
-        if (code_units[i] != (c16) expected[i]) {
-            return false;
-        }
-    }
-
-    return true;
+    return mal_string_equals_ascii(mal_value_to_string(key.value), "prototype");
 }
 
 /**
@@ -4255,7 +4244,7 @@ bool mal_vm_get_property_with_receiver(MalVm *vm, MalValue object_value, MalKey 
                 u32 index = mal_key_index_value(key);
                 if ((usize) index < mal_string_length(string)) {
                     *out = mal_value_from_string(mal_intrinsic_code_unit(
-                        vm, mal_string_code_units(string)[(usize) index]
+                        vm, mal_string_code_unit_at(string, (usize) index)
                     ));
                 }
                 return true;
@@ -6922,9 +6911,8 @@ void mal_op_prepared_string_compare(MalCallable *callable, const MalInstruction 
     u32 plan = instruction->as.prepared_string_compare.locale_options;
     MalString *locale = &callable->vm->runtime_image->string_constants[plan >> 6];
     usize length = mal_string_length(locale);
-    const c16 *units = mal_string_code_units(locale);
     byte bytes[128];
-    for (usize i = 0; i < length; i++) bytes[i] = (byte) units[i];
+    for (usize i = 0; i < length; i++) bytes[i] = (byte) mal_string_code_unit_at(locale, i);
     callable->registers[instruction->as.prepared_string_compare.dst] = mal_builtin_string_locale_compare_prepared(
         callable->vm, callable->registers[instruction->as.prepared_string_compare.left],
         callable->registers[instruction->as.prepared_string_compare.right], bytes, length,
@@ -7147,22 +7135,24 @@ MalValue mal_vm_op_copy_data_properties(
         // String sources expose their code units as own enumerable index
         // properties.
         MalString *string = mal_value_to_string(source);
-        for (usize i = 0; i < mal_string_length(string); i++) {
-            MalKey key = mal_key_index(i);
-            bool skip;
-            MAL_COPY_KEY_EXCLUDED(key, skip);
-            if (skip) {
-                continue;
+        MalStringIterator iterator;
+        MalStringSegment segment;
+        mal_string_iterator_init(&iterator, string, 0, mal_string_length(string));
+        usize offset = 0;
+        while (mal_string_iterator_next(&iterator, &segment)) {
+            for (usize i = 0; i < segment.length; i++) {
+                MalKey key = mal_key_index(offset + i);
+                bool skip;
+                MAL_COPY_KEY_EXCLUDED(key, skip);
+                if (skip) continue;
+                mal_object_set(
+                    copy, key,
+                    mal_value_from_string(mal_intrinsic_code_unit(
+                        vm, mal_string_segment_code_unit_at(&segment, i))));
             }
-
-            mal_object_set(
-                copy,
-                key,
-                mal_value_from_string(
-                    mal_intrinsic_code_unit(vm, mal_string_code_units(string)[i])
-                )
-            );
+            offset += segment.length;
         }
+        mal_string_iterator_dispose(&iterator);
     } else if (mal_value_is_object(source)) {
         MalPropertyIter iter;
         mal_property_iter_init(&iter, mal_value_to_object(source), MAL_PROPERTY_ITER_ENUMERABLE_OWN_PROPERTY_ORDER);
@@ -7341,15 +7331,21 @@ void mal_vm_op_merge_data_properties(MalVm *vm, MalValue target_value, MalValue 
 
     if (mal_value_is_string(source)) {
         MalString *string = mal_value_to_string(source);
-        for (usize i = 0; i < mal_string_length(string); i++) {
-            MalPropertyDesc desc = mal_intrinsic_data_desc(
-                mal_value_from_string(
-                    mal_intrinsic_code_unit(vm, mal_string_code_units(string)[i])
-                ),
-                MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE
-            );
-            mal_object_define_own(target, mal_key_index(i), &desc);
+        MalStringIterator iterator;
+        MalStringSegment segment;
+        mal_string_iterator_init(&iterator, string, 0, mal_string_length(string));
+        usize offset = 0;
+        while (mal_string_iterator_next(&iterator, &segment)) {
+            for (usize i = 0; i < segment.length; i++) {
+                MalPropertyDesc desc = mal_intrinsic_data_desc(
+                    mal_value_from_string(mal_intrinsic_code_unit(
+                        vm, mal_string_segment_code_unit_at(&segment, i))),
+                    MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE);
+                mal_object_define_own(target, mal_key_index(offset + i), &desc);
+            }
+            offset += segment.length;
         }
+        mal_string_iterator_dispose(&iterator);
         return;
     }
 

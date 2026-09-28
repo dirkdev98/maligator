@@ -29,7 +29,12 @@ c16 *mal_utf8_decode_report(
 /** Encode a complete engine string. The returned byte buffer is not a C string. */
 byte *mal_string_to_utf8(const MalString *string, usize *out_len);
 
-/** Exact UTF-8 byte count for a complete engine string without allocating. */
+/** Encode engine-string segments without flattening, preserving scalar boundaries. */
+void mal_string_utf8_encode_into(
+    const MalString *string, byte *output, usize capacity,
+    usize *read_out, usize *written_out);
+
+/** Exact UTF-8 byte count for a complete engine string without flattening. */
 usize mal_string_utf8_length(const MalString *string);
 
 /** Decode UTF-8 with replacement and copy it into a new engine string. */
