@@ -813,7 +813,7 @@ void mal_gc_init(MalVm *vm) {
     mal_gc_black_alloc = false;
     mal_gc_poll = false;
     mal_perf_stats_init();
-    g->major_every = 4;
+    g->major_every = 8;
     g->phase = MAL_GC_PHASE_IDLE;
     g->assist = 4; // grey/SATB entries traced per byte allocated since the last step
     const char *assist = getenv("MAL_GC_ASSIST");
