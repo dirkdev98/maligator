@@ -463,6 +463,8 @@ static MalString *mal_string_copy_range(
 static MalString *mal_string_new_dependent_resolved(
     MalHeap *heap, MalString *parent, usize offset, usize length
 ) {
+    if (parent->storage == MAL_STRING_STORAGE_CONS ||
+        parent->storage == MAL_STRING_STORAGE_DEPENDENT) abort();
     mal_perf_string_allocation(length);
     MAL_PERF_COUNT(string_dependent_allocations);
     MAL_PERF_ADD(string_dependent_code_units, length);
@@ -495,8 +497,8 @@ MalString *mal_string_new_slice(MalHeap *heap, MalString *parent, usize offset, 
         return mal_string_copy_range(heap, parent, offset, length);
     }
 
-    // Resolve slices by offset, never by an interior pointer: widening a compact
-    // parent or flattening a retained rope cannot leave its dependents dangling.
+    // Resolve offsets and contained rope branches before choosing the retained
+    // flat parent. Offsets remain valid if that parent's storage is widened.
     for (;;) {
         if (parent->storage == MAL_STRING_STORAGE_DEPENDENT) {
             offset += parent->slice_offset;
@@ -518,6 +520,12 @@ MalString *mal_string_new_slice(MalHeap *heap, MalString *parent, usize offset, 
     if (offset == 0 && length == parent->length) {
         MAL_PERF_COUNT(string_slice_full_reuses);
         return parent;
+    }
+    // A cross-leaf view could retain arbitrarily many earlier slices despite a
+    // bounded logical parent length, as in repeated append-and-trim windows.
+    if (parent->storage == MAL_STRING_STORAGE_CONS) {
+        MAL_PERF_COUNT(string_slice_copy_results);
+        return mal_string_copy_range(heap, parent, offset, length);
     }
     usize minimum_dependent_length =
         (parent->length + MAL_STRING_SLICE_MAX_RETAINED_RATIO - 1) / MAL_STRING_SLICE_MAX_RETAINED_RATIO;

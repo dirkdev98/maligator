@@ -38,7 +38,7 @@ typedef struct MalString {
             struct MalString *right;
         };
         struct {
-            /** Retained parent may itself be a rope; offset is in UTF-16 units. */
+            /** Retained parent is flat; offset is in UTF-16 units. */
             struct MalString *parent;
             u32 slice_offset;
         };
@@ -90,8 +90,9 @@ MalString *mal_string_new_copy(MalHeap *heap, const c16 *code_units, usize lengt
 MalString *mal_string_new_external(MalHeap *heap, const c16 *code_units, usize length);
 
 /**
- * Allocate a substring using dependent storage when doing so will not retain a
- * disproportionate owned backing buffer. Offset and length are UTF-16 code units;
+ * Allocate a substring using a flat dependent parent when doing so will not
+ * retain a disproportionate owned backing buffer. Cross-leaf ranges are copied;
+ * complete subtrees may be reused. Offset and length are UTF-16 code units, and
  * the range must be in bounds. Full-range slices may return `parent`.
  */
 MalString *mal_string_new_slice(MalHeap *heap, MalString *parent, usize offset, usize length);
