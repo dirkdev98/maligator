@@ -209,6 +209,61 @@ static bool flat_split_without_frontier(MalVm *vm, bool dependent) {
     return true;
 }
 
+static bool projected_trim_spans(MalVm *vm, bool wide, bool flat, bool dependent) {
+    const c16 whitespace[] = {' ', '\t', '\n', 0xa0, 0xfeff, 0x1680, 0x2000, 0x2028, 0x3000};
+    const usize leading[] = {40, 64, 0, 1};
+    const usize trailing[] = {20, 0, 0, 1};
+    c16 units[260];
+    for (usize field = 0; field < countof(leading); field++) {
+        for (usize i = 0; i < 64; i++) {
+            bool space = i < leading[field] || i >= 64 - trailing[field];
+            units[field * 65 + i] = space
+                ? whitespace[i % (wide ? countof(whitespace) : 4)]
+                : (wide ? (i % 2 == 0 ? 0x200b : 0xd800) : (c16) ('a' + i % 23));
+        }
+        units[field * 65 + 64] = '|';
+    }
+    MalString *source = flat || dependent
+        ? mal_string_new_copy(&vm->heap, units, countof(units))
+        : rope(vm, units, countof(units));
+    // A bounded view checks offsets into a flat parent without retaining a rope view.
+    usize offset = dependent ? 65 : 0;
+    usize length = dependent ? 130 : countof(units);
+    if (dependent) source = mal_string_new_slice(&vm->heap, source, offset, length);
+    CHECK(source->storage == (dependent ? MAL_STRING_STORAGE_DEPENDENT
+        : flat ? MAL_STRING_STORAGE_OWNED : MAL_STRING_STORAGE_CONS));
+    CHECK(source->latin1 == !wide);
+    u8 storage = source->storage;
+    MalValue roots[5] = {mal_value_from_string(source), MAL_VALUE_UNDEFINED,
+        MAL_VALUE_UNDEFINED, mal_value_from_string(mal_string_new_ascii(&vm->heap, "|", 1)),
+        MAL_VALUE_UNDEFINED};
+    MalRootSpan span;
+    mal_gc_root(&span, roots, countof(roots));
+    MalStringSplitCursor state;
+    CHECK(mal_builtin_string_split_cursor_init_locked(vm, roots[0], roots[3],
+        &roots[1], &roots[2], &state));
+    usize fields = length / 65;
+    for (usize field = 0; field <= fields; field++) {
+        usize start, end;
+        CHECK(mal_builtin_string_split_cursor_next(roots[1], roots[2], &state, &start, &end));
+        CHECK(start == field * 65 && end == (field == fields ? length : start + 64));
+        CHECK(mal_builtin_string_trim_span_direct_locked(vm, roots[1], start, end, &roots[4]));
+        CHECK(source->storage == storage && source->latin1 == !wide);
+        usize original = offset / 65 + field;
+        usize expected_length = field == fields ? 0 : 64 - leading[original] - trailing[original];
+        MalString *actual = mal_value_to_string(roots[4]);
+        CHECK(actual->length == expected_length);
+        for (usize i = 0; i < expected_length; i++) {
+            CHECK(mal_string_code_unit_at(actual, i) == units[offset + start + leading[original] + i]);
+        }
+        mal_gc_collect(vm);
+    }
+    usize start, end;
+    CHECK(!mal_builtin_string_split_cursor_next(roots[1], roots[2], &state, &start, &end));
+    mal_gc_unroot(&span);
+    return true;
+}
+
 static bool split_scratch_collection(MalVm *vm) {
     c16 units[16384];
     for (usize i = 0; i < countof(units); i++) units[i] = 'a';
@@ -283,7 +338,13 @@ int main(void) {
         && projected_split(&vm, 2048, false) && projected_split(&vm, 256, true)
         && split_patterns(&vm) && flat_split_without_frontier(&vm, false)
         && flat_split_without_frontier(&vm, true) && split_scratch_collection(&vm)
-        && cursor_spilled_frontier(&vm);
+        && cursor_spilled_frontier(&vm)
+        && projected_trim_spans(&vm, false, false, false)
+        && projected_trim_spans(&vm, true, false, false)
+        && projected_trim_spans(&vm, false, true, false)
+        && projected_trim_spans(&vm, true, true, false)
+        && projected_trim_spans(&vm, false, false, true)
+        && projected_trim_spans(&vm, true, false, true);
     mal_vm_free(&vm);
     if (!passed) return 1;
     puts("string-cursor-frontier PASS");
