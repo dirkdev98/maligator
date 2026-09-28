@@ -335,6 +335,56 @@ static bool compact_result_boundaries_and_concat_growth(MalVm *vm) {
     return true;
 }
 
+static bool replacement_templates_stream_across_leaves(MalVm *vm) {
+    static const char tokens[] = "$$|$&|$`|$'|$1|$0|$x|$";
+    static const char substituted[] = "$|#|L|R|$1|$0|$x|$";
+    c16 template_units[46 + sizeof(tokens) - 1];
+    for (usize i = 0; i < 46; i++) template_units[i] = 'q';
+    template_units[0] = 0x100;
+    template_units[1] = 0;
+    template_units[2] = 0xd800;
+    for (usize i = 0; i < sizeof(tokens) - 1; i++) template_units[46 + i] = (u8) tokens[i];
+    MalValue roots[4] = {0};
+    MalRootSpan span;
+    mal_gc_root(&span, roots, countof(roots));
+    roots[0] = mal_value_from_string(mal_intrinsic_ascii(vm, "L#R"));
+    roots[1] = mal_value_from_string(mal_intrinsic_ascii(vm, "#"));
+    roots[2] = mal_value_from_string(rope_from_units(vm, template_units, countof(template_units), false));
+    roots[3] = mal_builtin_string_replace_known(vm, mal_value_to_string(roots[0]),
+        mal_value_to_string(roots[1]), roots[2], true);
+    CHECK(vm->completion.kind != MAL_COMPLETION_THROW);
+    MalString *output = mal_value_to_string(roots[3]);
+    CHECK(output->length == 1 + 46 + sizeof(substituted));
+    CHECK(mal_string_code_unit_at(output, 0) == 'L');
+    for (usize i = 0; i < 46; i++) CHECK(mal_string_code_unit_at(output, 1 + i) == template_units[i]);
+    for (usize i = 0; i < sizeof(substituted) - 1; i++) {
+        CHECK(mal_string_code_unit_at(output, 47 + i) == (u8) substituted[i]);
+    }
+    CHECK(mal_string_code_unit_at(output, output->length - 1) == 'R');
+    CHECK(mal_value_to_string(roots[2])->storage == MAL_STRING_STORAGE_CONS);
+
+    c16 repeated_tokens[8192];
+    for (usize i = 0; i < countof(repeated_tokens); i++) repeated_tokens[i] = i % 2 ? '&' : '$';
+    roots[2] = mal_value_from_string(rope_from_units(vm, repeated_tokens, countof(repeated_tokens), false));
+    mal_perf_stats_reset();
+    roots[3] = mal_builtin_string_replace_known(vm, mal_value_to_string(roots[0]),
+        mal_value_to_string(roots[1]), roots[2], false);
+    CHECK(vm->completion.kind != MAL_COMPLETION_THROW);
+    output = mal_value_to_string(roots[3]);
+    CHECK(output->length == 4098 && output->latin1);
+    CHECK(mal_string_code_unit_at(output, 0) == 'L');
+    for (usize i = 1; i <= 4096; i++) CHECK(mal_string_code_unit_at(output, i) == '#');
+    CHECK(mal_string_code_unit_at(output, 4097) == 'R');
+#if MAL_PERF_STATS
+    CHECK(mal_perf_stats.string_iterator_nodes != 0);
+    CHECK(mal_perf_stats.string_iterator_nodes < 2000);
+    printf("template length=8192 nodes=%llu\n", (unsigned long long) mal_perf_stats.string_iterator_nodes);
+#endif
+    CHECK(mal_value_to_string(roots[2])->storage == MAL_STRING_STORAGE_CONS);
+    mal_gc_unroot(&span);
+    return true;
+}
+
 int main(void) {
     mal_perf_stats_init();
 #if MAL_PERF_STATS
@@ -349,7 +399,8 @@ int main(void) {
         && long_prefix_work_is_bounded(&vm)
         && split_and_replace_keep_sequential_state(&vm)
         && compact_builtin_outputs_preserve_sources(&vm)
-        && compact_result_boundaries_and_concat_growth(&vm);
+        && compact_result_boundaries_and_concat_growth(&vm)
+        && replacement_templates_stream_across_leaves(&vm);
     mal_vm_free(&vm);
     if (!passed) return 1;
     puts("string-search-followups PASS");

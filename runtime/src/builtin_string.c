@@ -551,6 +551,15 @@ static void mal_builtin_string_copy_cursor_advance(
     }
 }
 
+static c16 mal_builtin_string_copy_cursor_read(MalBuiltinStringCopyCursor *cursor) {
+    if (cursor->local == cursor->segment.length) {
+        if (!mal_string_iterator_next(&cursor->iterator, &cursor->segment)) abort();
+        cursor->local = 0;
+    }
+    cursor->position++;
+    return mal_string_segment_code_unit_at(&cursor->segment, cursor->local++);
+}
+
 static i64 mal_builtin_string_find(const MalString *string, const MalString *search, usize from) {
     MAL_PERF_COUNT(string_search_calls);
     usize length = mal_string_length(string);
@@ -3099,31 +3108,37 @@ static bool mal_builtin_string_append_substitution(
 ) {
     usize length = mal_string_length(replacement);
     usize source_length = mal_string_length(string);
-    usize index = 0;
-    while (index < length) {
-        usize literal_start = index;
-        while (index < length && (mal_string_code_unit_at(replacement, index) != '$' || index + 1 == length)) index++;
-        if (!strbuf_range(vm, out, replacement, literal_start, index - literal_start)) return false;
-        if (index == length) break;
-        c16 next = mal_string_code_unit_at(replacement, index + 1);
+    MalBuiltinStringCopyCursor scan, copy;
+    mal_builtin_string_copy_cursor_init(&scan, replacement);
+    mal_builtin_string_copy_cursor_init(&copy, replacement);
+    while (scan.position < length && out->status == MAL_TEXT_BUFFER_OK) {
+        usize index = scan.position;
+        c16 unit = mal_builtin_string_copy_cursor_read(&scan);
+        if (unit != '$' || scan.position == length) continue;
+        c16 next = mal_builtin_string_copy_cursor_read(&scan);
+        if (next != '$' && next != '&' && next != '`' && next != '\'') continue;
+
+        mal_builtin_string_copy_cursor_advance(&copy, index, out);
+        mal_builtin_string_copy_cursor_advance(&copy, scan.position, nullptr);
         if (next == '$') {
-            if (!strbuf_range(vm, out, replacement, index, 1)) return false;
-            index += 2;
+            mal_text_buffer_push(out, '$');
         } else if (next == '&') {
-            if (!strbuf_range(vm, out, matched, 0, mal_string_length(matched))) return false;
-            index += 2;
+            mal_text_buffer_append_string(out, matched);
         } else if (next == '`') {
-            if (!strbuf_range(vm, out, string, 0, match_start)) return false;
-            index += 2;
-        } else if (next == '\'') {
-            if (!strbuf_range(vm, out, string, match_end, source_length - match_end)) return false;
-            index += 2;
+            mal_text_buffer_append_range(out, string, 0, match_start);
         } else {
-            if (!strbuf_range(vm, out, replacement, index, 1)) return false;
-            index++;
+            mal_text_buffer_append_range(out, string, match_end, source_length - match_end);
         }
     }
-    return true;
+    if (out->status == MAL_TEXT_BUFFER_OK) {
+        mal_builtin_string_copy_cursor_advance(&copy, length, out);
+    }
+    mal_string_iterator_dispose(&scan.iterator);
+    mal_string_iterator_dispose(&copy.iterator);
+    if (out->status == MAL_TEXT_BUFFER_OK) return true;
+    if (out->status == MAL_TEXT_BUFFER_LENGTH_OVERFLOW) return mal_builtin_string_throw_length(vm);
+    mal_vm_throw_allocation_error(vm);
+    return false;
 }
 
 static bool mal_builtin_string_replacement_is_literal(const MalString *replacement) {
