@@ -2346,6 +2346,32 @@
 			"fixture": "cases/utf8-encode.mjs"
 		},
 		{
+			"id": "json-unique-shapes",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "JSON shape cache and speculative traversal costs",
+			"category": "memory-layout-usage",
+			"mechanisms": ["json-stringify"],
+			"inputShape": "1024 distinct two-property shapes, one use each, complete output checksum",
+			"unit": "serialization",
+			"sourceSeam": "runtime/src/builtin_json.c",
+			"controls": ["json-stringify", "text-pipeline-mixed"],
+			"fixture": "cases/json-unique-shapes.mjs"
+		},
+		{
+			"id": "json-late-fallback",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "JSON shape cache and speculative traversal costs",
+			"category": "memory-layout-usage",
+			"mechanisms": ["json-stringify"],
+			"inputShape": "1024 plain records then one getter, complete output checksum and exact getter count",
+			"unit": "serialization",
+			"sourceSeam": "runtime/src/builtin_json.c",
+			"controls": ["json-stringify", "text-pipeline-mixed"],
+			"fixture": "cases/json-late-fallback.mjs"
+		},
+		{
 			"id": "method-name-unique",
 			"group": "runtime",
 			"suite": "runtime",
