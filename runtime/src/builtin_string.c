@@ -483,7 +483,8 @@ static i64 mal_builtin_string_search_cursor_next(MalBuiltinStringSearch *cursor)
             if (!mal_string_iterator_next(&cursor->iterator, &cursor->segment)) return -1;
             cursor->local = 0;
         }
-        if (matched == 0 && !cursor->reverse) {
+        if (matched == 0 && !cursor->reverse &&
+            cursor->length <= MAL_STRING_SEARCH_INLINE_UNITS) {
             usize next = mal_builtin_string_segment_find_unit(
                 &cursor->segment, cursor->local, cursor->needle[0]);
             cursor->position += next - cursor->local;
