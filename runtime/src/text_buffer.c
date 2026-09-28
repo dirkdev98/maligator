@@ -231,6 +231,21 @@ MalString *mal_text_buffer_finish(MalHeap *heap, MalTextBuffer *buffer) {
     void *data = buffer->data;
     usize length = buffer->length;
     bool utf16 = buffer->utf16;
+    // RAW realloc retains its size class or large allocation on shrink. Copy
+    // only disproportionate slack; failed trimming still transfers valid data.
+    usize inline_length = utf16 ? MAL_STRING_INLINE_CODE_UNITS
+        : MAL_STRING_INLINE_LATIN1_CODE_UNITS;
+    if (length > inline_length && buffer->capacity > 1024 &&
+        length < buffer->capacity / 2) {
+        usize bytes = length * (utf16 ? sizeof(c16) : sizeof(u8));
+        void *trimmed = mal_heap_try_alloc_raw_profiled(
+            heap, bytes, MAL_PROFILE_ALLOCATION_FAMILY_STRING);
+        if (trimmed != nullptr) {
+            memcpy(trimmed, data, bytes);
+            gc_free_raw(heap, data);
+            data = trimmed;
+        }
+    }
     *buffer = (MalTextBuffer) {0};
     return utf16 ? mal_string_new_owned(heap, data, length)
         : mal_string_new_latin1_owned(heap, data, length);
