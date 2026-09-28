@@ -1394,25 +1394,35 @@ static bool mal_json_consume_keyword(MalJsonParser *parser, const byte *keyword)
 }
 
 static MalValue mal_json_parse_string(MalJsonParser *parser) {
-    // The opening quote was already consumed.
+    // Borrow a token confined to this leaf; copy crossed segments as we visit
+    // them, before advancing the cursor. Neither path descends from the root.
     usize start = parser->position;
-    mal_json_parser_unescaped_run(parser, nullptr);
-    if (parser->position < parser->length &&
-        mal_json_parser_unit(parser, parser->position) == '"') {
-        usize length = parser->position++ - start;
-        return mal_value_from_string(mal_string_new_slice(
-            &parser->vm->heap, parser->source, start, length));
-    }
-    if (parser->position == parser->length) {
-        mal_json_parse_error(parser);
-        return mal_value_new_undefined();
-    }
     MalJsonBuilder builder = {.vm = parser->vm};
-    if (mal_text_buffer_append_range(
-            &builder.buffer, parser->source, start, parser->position - start) != MAL_TEXT_BUFFER_OK) {
-        mal_text_buffer_dispose(&builder.buffer);
-        mal_json_throw_string_length(parser->vm);
-        return mal_value_new_undefined();
+    while (parser->position < parser->length) {
+        usize offset = parser->position - parser->segment_start;
+        if (offset >= parser->segment.length) {
+            mal_json_parser_unit_slow(parser, parser->position);
+            offset = parser->position - parser->segment_start;
+        }
+        usize available = parser->segment.length - offset;
+        usize run = parser->segment.latin1
+            ? mal_json_latin1_safe_run(parser->segment.latin1_units + offset, available)
+            : mal_json_utf16_unescaped_run(parser->segment.utf16_units + offset, available);
+        parser->position += run;
+        if (run < available && builder.buffer.length == 0 &&
+            mal_string_segment_code_unit_at(&parser->segment, offset + run) == '"') {
+            parser->position++;
+            const MalStringIteratorPart *current = &parser->iterator.current;
+            MalString *owner = current->string != nullptr
+                ? (MalString *) current->string : parser->source;
+            usize owner_offset = current->string != nullptr
+                ? current->offset + offset : start;
+            return mal_value_from_string(mal_string_new_slice(
+                &parser->vm->heap, owner, owner_offset, run));
+        }
+        if (run != 0 && !mal_json_builder_push_segment(
+                &builder, &parser->segment, offset, run)) goto length_error;
+        if (run < available) break;
     }
 
     while (parser->position < parser->length) {
@@ -1500,86 +1510,106 @@ length_error:
     return mal_value_new_undefined();
 }
 
+typedef struct MalJsonNumberToken {
+    byte *data;
+    usize length;
+    usize capacity;
+    byte inline_data[64];
+} MalJsonNumberToken;
+
+static inline void mal_json_number_token_push(MalJsonNumberToken *token, byte unit) {
+    if (token->length == token->capacity) {
+        if (token->capacity > SIZE_MAX / 2) abort();
+        usize capacity = token->capacity * 2;
+        byte *data = malloc(capacity);
+        if (data == nullptr) abort();
+        memcpy(data, token->data, token->length);
+        if (token->data != token->inline_data) free(token->data);
+        token->data = data;
+        token->capacity = capacity;
+    }
+    token->data[token->length++] = unit;
+}
+
+static bool mal_json_number_consume(
+    MalJsonParser *parser, MalJsonNumberToken *token, c16 expected
+) {
+    if (!mal_json_consume(parser, expected)) return false;
+    mal_json_number_token_push(token, (byte) expected);
+    return true;
+}
+
 static MalValue mal_json_parse_number(MalJsonParser *parser) {
-    usize start = parser->position;
-    bool negative = mal_json_consume(parser, '-');
-    usize integer_start = parser->position;
-    if (mal_json_consume(parser, '0')) {
-        // A leading zero is the whole integer part. A following digit remains
-        // as trailing input and makes the containing JSON text invalid.
+    MalJsonNumberToken token;
+    token.data = token.inline_data;
+    token.length = 0;
+    token.capacity = sizeof(token.inline_data);
+    bool negative = mal_json_number_consume(parser, &token, '-');
+    usize integer_digits = 0;
+    u64 magnitude = 0;
+    if (mal_json_number_consume(parser, &token, '0')) {
+        // Leave subsequent leading-zero digits for the container's syntax check.
+        integer_digits = 1;
     } else if (parser->position < parser->length &&
                (u32) (mal_json_parser_unit(parser, parser->position) - '1') < 9) {
-        do {
+        while (parser->position < parser->length) {
+            u32 digit = (u32) (mal_json_parser_unit(parser, parser->position) - '0');
+            if (digit >= 10) break;
+            if (integer_digits < 16) magnitude = magnitude * 10 + digit;
+            integer_digits++;
+            mal_json_number_token_push(&token, (byte) ('0' + digit));
             parser->position++;
-        } while (parser->position < parser->length &&
-                 (u32) (mal_json_parser_unit(parser, parser->position) - '0') < 10);
+        }
     } else {
-        mal_json_parse_error(parser);
-        return mal_value_new_undefined();
+        goto syntax_error;
     }
-    usize integer_end = parser->position;
     bool integer_literal = true;
-    if (mal_json_consume(parser, '.')) {
+    if (mal_json_number_consume(parser, &token, '.')) {
         integer_literal = false;
         usize fraction_start = parser->position;
-        while (parser->position < parser->length &&
-               (u32) (mal_json_parser_unit(parser, parser->position) - '0') < 10) {
+        while (parser->position < parser->length) {
+            c16 unit = mal_json_parser_unit(parser, parser->position);
+            if ((u32) (unit - '0') >= 10) break;
+            mal_json_number_token_push(&token, (byte) unit);
             parser->position++;
         }
-        if (parser->position == fraction_start) {
-            mal_json_parse_error(parser);
-            return mal_value_new_undefined();
-        }
+        if (parser->position == fraction_start) goto syntax_error;
     }
-    if (mal_json_consume(parser, 'e') || mal_json_consume(parser, 'E')) {
+    if (mal_json_number_consume(parser, &token, 'e') ||
+        mal_json_number_consume(parser, &token, 'E')) {
         integer_literal = false;
-        if (!mal_json_consume(parser, '+')) {
-            mal_json_consume(parser, '-');
+        if (!mal_json_number_consume(parser, &token, '+')) {
+            mal_json_number_consume(parser, &token, '-');
         }
         usize exponent_start = parser->position;
-        while (parser->position < parser->length &&
-               (u32) (mal_json_parser_unit(parser, parser->position) - '0') < 10) {
+        while (parser->position < parser->length) {
+            c16 unit = mal_json_parser_unit(parser, parser->position);
+            if ((u32) (unit - '0') >= 10) break;
+            mal_json_number_token_push(&token, (byte) unit);
             parser->position++;
         }
-        if (parser->position == exponent_start) {
-            mal_json_parse_error(parser);
-            return mal_value_new_undefined();
-        }
+        if (parser->position == exponent_start) goto syntax_error;
     }
 
-    if (integer_literal && integer_end - integer_start <= 16) {
-        u64 magnitude = 0;
-        for (usize i = integer_start; i < integer_end; i++) {
-            magnitude = magnitude * 10 +
-                (u64) (mal_json_parser_unit(parser, i) - '0');
-        }
-        if (magnitude <= (u64) MAL_NUMBER_MAX_SAFE_INTEGER) {
-            if (negative && magnitude == 0) {
-                return MAL_VALUE_NEGATIVE_ZERO;
-            }
-            f64 number = (f64) magnitude;
-            return mal_ops_number_value(negative ? -number : number);
-        }
+    MalValue value;
+    if (integer_literal && integer_digits <= 16 &&
+        magnitude <= (u64) MAL_NUMBER_MAX_SAFE_INTEGER) {
+        f64 number = (f64) magnitude;
+        value = negative && magnitude == 0 ? MAL_VALUE_NEGATIVE_ZERO
+            : mal_ops_number_value(negative ? -number : number);
+    } else {
+        // This scratch terminator does not consume a JS string code unit, even
+        // when the numeric token reaches the engine's full source-length limit.
+        mal_json_number_token_push(&token, '\0');
+        value = mal_ops_number_value(strtod(token.data, nullptr));
     }
+    if (token.data != token.inline_data) free(token.data);
+    return value;
 
-    usize length = parser->position - start;
-    byte stack_buffer[64];
-    byte *buffer = stack_buffer;
-    if (length >= sizeof(stack_buffer)) {
-        buffer = malloc(length + 1);
-        if (buffer == nullptr) {
-            abort();
-        }
-    }
-    for (usize i = 0; i < length; i++) {
-        buffer[i] = (byte) mal_json_parser_unit(parser, start + i);
-    }
-    buffer[length] = '\0';
-    f64 number = strtod(buffer, nullptr);
-    if (buffer != stack_buffer) {
-        free(buffer);
-    }
-    return mal_ops_number_value(number);
+syntax_error:
+    if (token.data != token.inline_data) free(token.data);
+    mal_json_parse_error(parser);
+    return mal_value_new_undefined();
 }
 
 static MalValue mal_json_parse_array(
