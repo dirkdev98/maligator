@@ -6,6 +6,7 @@
 #include "checked_size.h"
 #include "heap_string.h"
 #include "intrinsics.h"
+#include "text_buffer.h"
 #include "vm.h"
 #include "vm_ops.h"
 
@@ -215,44 +216,19 @@ bool mal_rooted_string_parts_flatten(
         }
     }
 
-    usize bytes;
-    if (!mal_checked_size_multiply(
-            sizeof(c16), parts->total_length, SIZE_MAX, &bytes)) {
-        return false;
-    }
-    c16 *code_units = mal_heap_try_alloc_raw_profiled(
-        &vm->heap, bytes, MAL_PROFILE_ALLOCATION_FAMILY_STRING);
-    if (code_units == nullptr) {
-        return false;
-    }
-
-    separator = mal_value_to_string(parts->separator_root);
-    const c16 *separator_units = separator_length == 0
-        ? nullptr
-        : mal_string_code_units(separator);
-    usize offset = 0;
-    for (usize i = 0; i < parts->count; i++) {
-        if (i != 0 && separator_length != 0) {
-            memcpy(
-                code_units + offset,
-                separator_units,
-                separator_length * sizeof(c16));
-            offset += separator_length;
-        }
-        MalString *part = mal_value_is_undefined(parts->roots[i])
-            ? nullptr
-            : mal_value_to_string(parts->roots[i]);
-        usize part_length = part == nullptr ? 0 : mal_string_length(part);
-        if (part_length != 0) {
-            memcpy(
-                code_units + offset,
-                mal_string_code_units(part),
-                part_length * sizeof(c16));
-            offset += part_length;
+    MalTextBuffer buffer = {.heap = &vm->heap};
+    mal_text_buffer_reserve(&buffer, parts->total_length);
+    for (usize i = 0; i < parts->count && buffer.status == MAL_TEXT_BUFFER_OK; i++) {
+        if (i != 0) mal_text_buffer_append_string(&buffer, mal_value_to_string(parts->separator_root));
+        if (!mal_value_is_undefined(parts->roots[i])) {
+            mal_text_buffer_append_string(&buffer, mal_value_to_string(parts->roots[i]));
         }
     }
-
-    *out = mal_string_new_owned(&vm->heap, code_units, parts->total_length);
+    if (buffer.status != MAL_TEXT_BUFFER_OK) {
+        mal_text_buffer_dispose(&buffer);
+        return false;
+    }
+    *out = mal_text_buffer_finish(&vm->heap, &buffer);
     return true;
 }
 

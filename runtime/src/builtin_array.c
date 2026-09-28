@@ -20,7 +20,7 @@
 #include "proxy_object.h"
 #include "rooted_collection.h"
 #include "typed_array_object.h"
-#include "u16_buffer.h"
+#include "text_buffer.h"
 #include "value_ops.h"
 #include "vm.h"
 #include "vm_ops.h"
@@ -111,7 +111,7 @@ static bool mal_builtin_array_try_get_wide(MalVm *vm, MalValue this_value, f64 i
         }
 
         *out = mal_value_from_string(
-            mal_intrinsic_code_unit(vm, mal_string_code_units(string)[(usize) index])
+            mal_intrinsic_code_unit(vm, mal_string_code_unit_at(string, (usize) index))
         );
         return true;
     }
@@ -164,7 +164,7 @@ bool mal_builtin_array_try_get(MalVm *vm, MalValue this_value, u32 index, MalVal
         }
 
         *out = mal_value_from_string(
-            mal_intrinsic_code_unit(vm, mal_string_code_units(string)[index])
+            mal_intrinsic_code_unit(vm, mal_string_code_unit_at(string, index))
         );
         return true;
     }
@@ -2722,51 +2722,30 @@ static i32 mal_builtin_array_join_dense_strings(
         return 1;
     }
 
-    usize bytes;
-    if (!mal_checked_size_multiply(
-            sizeof(c16), result_length, SIZE_MAX, &bytes)) {
-        mal_builtin_array_throw_string_length(vm);
-        return -1;
-    }
-    c16 *units = mal_heap_try_alloc_raw_profiled(
-        &vm->heap, bytes, MAL_PROFILE_ALLOCATION_FAMILY_STRING);
-    if (units == nullptr) {
-        mal_vm_throw_allocation_error(vm);
-        return -1;
-    }
-    const c16 *separator_units = separator_length == 0
-        ? nullptr
-        : mal_string_code_units(separator);
-    usize offset = 0;
-    for (u32 index = 0; index < array->length; index++) {
-        if (index != 0 && separator_length != 0) {
-            memcpy(
-                units + offset, separator_units,
-                sizeof(c16) * separator_length);
-            offset += separator_length;
-        }
+    MalValue roots[] = {mal_value_from_array_object(array), mal_value_from_string(separator)};
+    MalRootSpan span;
+    mal_gc_root(&span, roots, 2);
+    MalTextBuffer buffer = {.heap = &vm->heap};
+    mal_text_buffer_reserve(&buffer, result_length);
+    for (u32 index = 0; index < length && buffer.status == MAL_TEXT_BUFFER_OK; index++) {
+        if (index != 0) mal_text_buffer_append_string(&buffer, mal_value_to_string(roots[1]));
         MalValue element;
-        if (!mal_array_object_dense_get(array, index, &element) ||
-            mal_value_is_nil(element)) {
-            continue;
-        }
-        MalString *part = mal_value_to_string(element);
-        usize part_length = mal_string_length(part);
-        if (part_length != 0) {
-            if (mal_string_storage(part) == MAL_STRING_STORAGE_CONS) {
-                mal_string_copy_range_to(part, 0, part_length, units + offset);
-            } else {
-                memcpy(
-                    units + offset, mal_string_code_units(part),
-                    sizeof(c16) * part_length);
-            }
-            offset += part_length;
+        if (mal_array_object_dense_get(mal_value_to_array_object(roots[0]), index, &element) && !mal_value_is_nil(element)) {
+            mal_text_buffer_append_string(&buffer, mal_value_to_string(element));
         }
     }
-    assert(offset == result_length);
-    *out = mal_value_from_string(
-        mal_string_new_owned(&vm->heap, units, result_length));
-    return 1;
+    bool success = buffer.status == MAL_TEXT_BUFFER_OK;
+    if (success) {
+        assert(buffer.length == result_length);
+        *out = mal_value_from_string(mal_text_buffer_finish(&vm->heap, &buffer));
+    } else if (buffer.status == MAL_TEXT_BUFFER_LENGTH_OVERFLOW) {
+        mal_builtin_array_throw_string_length(vm);
+    } else {
+        mal_vm_throw_allocation_error(vm);
+    }
+    mal_text_buffer_dispose(&buffer);
+    mal_gc_unroot(&span);
+    return success ? 1 : -1;
 }
 
 static usize mal_builtin_array_i32_decimal_length(i32 value) {
@@ -2816,34 +2795,34 @@ static i32 mal_builtin_array_join_dense_int32s(
     MalRootSpan roots_span;
     mal_gc_root(&roots_span, roots, 2);
     mal_gc_native_rooted_begin(vm);
-    MalU16Buffer buffer = {.heap = &vm->heap};
-    MalU16BufferStatus status = mal_u16_buffer_reserve(&buffer, result_length);
-    for (u32 index = 0; status == MAL_U16_BUFFER_OK && index < length; index++) {
+    MalTextBuffer buffer = {.heap = &vm->heap};
+    MalTextBufferStatus status = mal_text_buffer_reserve(&buffer, result_length);
+    for (u32 index = 0; status == MAL_TEXT_BUFFER_OK && index < length; index++) {
         if (index != 0) {
-            status = mal_u16_buffer_append_string(
+            status = mal_text_buffer_append_string(
                 &buffer, mal_value_to_string(roots[1]));
         }
-        if (status == MAL_U16_BUFFER_OK) {
+        if (status == MAL_TEXT_BUFFER_OK) {
             MalValue element;
             bool present = mal_array_object_dense_get(
                 mal_value_to_array_object(roots[0]), index, &element);
             assert(present && mal_value_is_int32(element));
-            status = mal_u16_buffer_append_i32(
+            status = mal_text_buffer_append_i32(
                 &buffer, mal_value_to_i32(element));
         }
     }
-    if (status == MAL_U16_BUFFER_OK) {
+    if (status == MAL_TEXT_BUFFER_OK) {
         assert(buffer.length == result_length);
-        *out = mal_value_from_string(mal_u16_buffer_finish(&vm->heap, &buffer));
-    } else if (status == MAL_U16_BUFFER_LENGTH_OVERFLOW) {
+        *out = mal_value_from_string(mal_text_buffer_finish(&vm->heap, &buffer));
+    } else if (status == MAL_TEXT_BUFFER_LENGTH_OVERFLOW) {
         mal_builtin_array_throw_string_length(vm);
     } else {
         mal_vm_throw_allocation_error(vm);
     }
-    mal_u16_buffer_dispose(&buffer);
+    mal_text_buffer_dispose(&buffer);
     mal_gc_native_rooted_end(vm);
     mal_gc_unroot(&roots_span);
-    return status == MAL_U16_BUFFER_OK ? 1 : -1;
+    return status == MAL_TEXT_BUFFER_OK ? 1 : -1;
 }
 
 static MalValue mal_builtin_array_join_active(
