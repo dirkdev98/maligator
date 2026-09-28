@@ -29,3 +29,5 @@ tests/native/shape-case-load.test.ts
 tests/native/string-char-code-at-direct.test.ts
 tests/native/string-split-fresh-array.test.ts
 tests/native/tiny-string-cache.test.ts
+
+tests/native/text-buffer.test.ts

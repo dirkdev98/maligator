@@ -41,3 +41,9 @@ tests/native/platform-execution.test.ts
 tests/native/test-runner-regressions.test.ts
 tests/native/template-literal-coercion.test.ts
 tests/native/wire-loader.test.ts
+
+tests/native/encoding-aware-text.test.ts
+
+tests/native/encoding-aware-strings.test.ts
+
+tests/native/text-buffer.test.ts

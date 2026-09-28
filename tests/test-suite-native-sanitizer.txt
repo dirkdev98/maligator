@@ -91,3 +91,9 @@ tests/native/postgres-load.test.ts
 tests/native/postgres-types-large-live.test.ts
 tests/native/temporal.test.ts
 tests/native/url.test.ts
+
+tests/native/encoding-aware-text.test.ts
+
+tests/native/encoding-aware-strings.test.ts
+
+tests/native/text-buffer.test.ts
