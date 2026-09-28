@@ -19,7 +19,7 @@ other representation-specific fields.
 | Inline    | Sixteen Latin-1 units or eight UTF-16 units | Inside the string cell               |
 | Owned     | Contiguous Latin-1 or UTF-16 units          | GC-accounted RAW allocation          |
 | External  | Borrowed Latin-1 or UTF-16 units            | Provider retains the backing storage |
-| Dependent | Parent plus UTF-16 offset and length        | Parent may be flat or a rope         |
+| Dependent | Parent plus UTF-16 offset and length        | One flat parent                      |
 | Cons      | Left and right strings                      | Children retain their own encodings  |
 
 Copied UTF-16 input is compacted when eligible. Builders construct Latin-1
@@ -28,12 +28,15 @@ UTF-16 literals remain valid external strings; their consumers can traverse them
 without copying.
 
 Slices retain a parent and an offset, never an interior payload pointer. This
-allows a parent to widen or a retained rope to flatten without invalidating a
-slice. Slice construction resolves nested slices and descends into a single rope
-child when the requested range fits there. Tiny slices are copied. A larger slice
-copies when its resolved parent exceeds 4,096 code units and the retained range
-would be less than one eighth of that parent. Borrowed external parents do not
-charge an owned backing buffer to the slice.
+allows a compact parent to widen without invalidating a slice. Slice construction
+resolves nested slices and descends into a single rope child when the requested
+range fits there. Tiny slices and partial ranges still crossing rope children are
+copied. Dependent slices therefore retain flat parents only: repeatedly slicing a
+fixed-size window cannot keep an unbounded chain of earlier ropes alive. Full
+subtrees can be reused. A larger flat-parent slice copies when its parent exceeds
+4,096 code units and the retained range would be less than one eighth of that
+parent. Borrowed external parents do not charge an owned backing buffer to the
+slice.
 
 ## Traversal and contiguous access
 
@@ -47,6 +50,10 @@ across collection and do not retain borrowed segment pointers across JavaScript
 reentry or a UTF-16 bridge that could materialize or widen the same leaf. Producers append a segment before
 advancing or crossing an observable call. A single-leaf range can use
 `mal_string_try_get_segment` to avoid the general iterator.
+
+The [algorithm audit](../text-algorithms.md) distinguishes sequential traversal
+from repeated root seeks, describes worst-case search and JSON costs, and links
+the prioritized follow-ups in the roadmap.
 
 `mal_string_code_units` is an explicit contiguous UTF-16 bridge. It can allocate
 and widen a compact leaf or flatten a rope/slice. Once obtained, its UTF-16 pointer
@@ -87,6 +94,8 @@ backwards when the address is reused. A failed growth preserves the old payload,
 ownership, and allocation accounting. Length overflow is detected before reading
 input. Finalization transfers RAW ownership to the appropriate string constructor;
 tiny strings move into inline storage. Rollback retains capacity and encoding.
+An append spanning several segments can retain an already appended prefix if a
+later growth fails; its error remains sticky. Append is not transactional.
 Producers that know the final length can hint capacity before appending; the first
 content selects the initial allocation width. Explicit reservation stays eager
 for callers that write directly into the buffer.

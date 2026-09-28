@@ -392,6 +392,116 @@ only reproducible input.
 - [ ] Add Intl locale subsetting with deterministic configuration and cache identity.
       Missing data must follow an explicit failure or fallback policy.
 
+# Strings and text
+
+The [text algorithm audit](docs/text-algorithms.md) records the current cost model,
+source evidence, and adversarial acceptance cases. Profile measured regressions
+before attributing them to one operation; keep content parity, physical encoding,
+allocation traffic, and retained memory distinct.
+
+## Correctness and bounded resources
+
+- [ ] Correct the pre-existing Buffer UTF-8 decode length check: input bytes above
+      the string-unit limit can decode to a valid-length string. Enforce the limit
+      on decoded UTF-16 units, including malformed-input replacements. Cover valid
+      two-/three-byte input above the encoded-byte cutoff and decoded max/max+1.
+
+- [ ] Bound native stack use in JSON parsing, generic serialization, reviver
+      traversal, and parse-node cleanup through iterative state or controlled
+      depth failure. Exercise deep compact output with an identity replacer,
+      late fallback, callback exceptions, cycles/DAGs, and GC verification.
+
+- [ ] Bound disproportionate retained capacity at text-buffer finish and adopted
+      UTF-8 Buffer output. A large buffer truncated to 17 units can retain its
+      entire capacity; ASCII UTF-8 output can adopt a three-times-sized backing.
+      Compare exact copying, tighter initial bounds, and fallible shrinking.
+      Preserve normal ownership transfer and failure behavior; measure actual
+      RAW/adopted backing and quiescent live storage separately from RSS.
+
+- [ ] Separate transient property queries from VM-lifetime atom insertion where
+      cache contracts permit. Unique missing-name queries currently retain their
+      strings and backing graphs in the atom table. Preserve IC/shape-cache key
+      lifetime, tracing, symbols, indices, coercion order, and proxy behavior;
+      validate missing-query churn without proportional permanent atom growth.
+
+## Algorithmic costs
+
+- [ ] Bound rope height and avoid repeated root descent in sequential consumers.
+      Compare balancing with segment cursors for indexing loops, empty-separator
+      split, replacement, and string iteration. Reacquire borrowed segments after
+      reentry or materialization. Measure balanced/left-/right-deep trees and visited
+      nodes as leaf count grows. Any future lazy cross-rope slice must prune
+      excluded ancestry and retain the bounded sliding-window ownership contract.
+
+- [ ] Remove the obsolete cons-string exclusion from shape lookup and transition
+      hashing now that all string hashes cache without materialization. Verify
+      cross-encoding equality, collisions, shape sharing, and GC/cache lifetime;
+      require near-linear transition comparisons for growing rope-key fan-out.
+
+- [ ] Reuse a cached left-child FNV state when hashing a new concatenation, then
+      stream only its right child. Do not combine arbitrary final child hashes.
+      Validate reference hashes across encodings, NUL, and surrogates; measure
+      append-then-hash growth separately from first and repeated hash calls.
+      Add the identity shortcut to lexical comparison while preserving the
+      equality path's avoidance of unnecessary hash computation.
+
+- [ ] Add a bounded long-pattern search strategy for repetitive inputs, and a
+      reverse traversal that can stop at the first suffix match. Avoid restarting
+      full rope traversal between split/replace matches. Test repeated-prefix
+      misses, overlaps, mixed leaves, NUL, lone surrogates, and clamped offsets;
+      measure comparisons and visited nodes as both haystack and needle grow.
+
+- [ ] Preserve token-local traversal in JSON parsing. Accumulate small integers
+      during validation and avoid root reseeks for numeric rereads and unescaped
+      token slices. Compare flat and balanced/skewed rope inputs with token ends
+      inside and exactly between leaves; require linear sequential traversal work
+      while preserving negative zero, malformed-token handling, and source ranges.
+
+- [ ] Index reviver source records by canonical key and last occurrence instead
+      of backward scanning every member. Replace generic stringify's linear
+      ancestor-vector membership with an active-path set. Validate lookup growth,
+      duplicate-key context.source, property mutation order, repeated shared
+      children, and cycles independently of unavoidable output size.
+
+## Throughput and boundary copies
+
+- [ ] Profile the remaining mixed-text pipeline cost across parse, lookup,
+      construction, quoting, and checksum before selecting a change. Contrast
+      early/late wide units, sparse/dense escapes, UTF-16 BMP runs, and surrogate
+      pairs across leaves. Evaluate bulk UTF-16 quoting and fewer redundant width
+      scans with full output checksums and the existing six workloads as controls.
+
+- [ ] Measure shape/key-cache admission and late fallback for one-use shapes and
+      large mostly-plain documents. Track plan/key bytes, cache reuse, discarded
+      output, and callback traces. Bound per-call cache growth with an uncached
+      eligible path if warranted; preserve repeated-shape throughput and required
+      callback order/counts. Speculation must add no getter, proxy trap, replacer,
+      or toJSON invocations.
+
+- [ ] Measure repeated equality in Map's existing entry hint for fresh equal keys
+      reused in get/set/get. Consider a traced query-identity cache or proven
+      intrinsic fusion only if compared-unit counts justify it. Cover mutation,
+      clear/rehash, collisions, GC, and retained large query graphs; keep WeakMap
+      lifetime behavior separate.
+
+- [ ] Migrate avoidable tiny reads and ASCII predicates off the UTF-16 bridge,
+      starting with array length-key rejection, path isAbsolute, specialized
+      string iteration, header validation, and host conversion. Validate source
+      compactness and iteration scaling. Distinguish bridges already required by
+      regex/Unicode consumers from independent materialization costs.
+
+- [ ] Preserve compact identity results for Latin-1 well-formedness and no-op trim,
+      and use compact construction for direct concat, ASCII case conversion,
+      repeat, and padding where profitable. Cover 8/9/16/17-unit results, late
+      wide content, Unicode fallbacks, and coercion order; measure prefix copying
+      in repeated concat and confirm unchanged inputs remain unmaterialized.
+
+- [ ] Decode non-ASCII UTF-8 directly into compact construction without a full
+      UTF-16 temporary followed by rescanning/narrowing. Preserve malformed-input,
+      replacement, streaming, and decoded-unit limits. Add input-decode and
+      output-encode workloads to complement the existing text-only pipeline;
+      measure peak transients, allocation, and time for Latin-1/BMP/astral input.
+
 # ECMAScript correctness
 
 ## Modules and agents
