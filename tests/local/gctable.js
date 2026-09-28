@@ -139,6 +139,36 @@ ok(
 		].join(",") && intact(collisions.get(collisionKeys[0]), 100),
 );
 
+const sparseMap = new Map();
+for (let i = 0; i < 128; i++) sparseMap.set(i, i);
+ok("map-sparse-delete-hint-setup", sparseMap.get(127) === 127);
+for (let i = 0; i < 16; i++) sparseMap.delete(i);
+sparseMap.set(128, 128);
+gc();
+const sparseKeys = Array.from(sparseMap.keys());
+ok(
+	"map-reuses-full-entry-buffer-with-sparse-tombstones",
+	sparseMap.size === 113 &&
+		sparseMap.get(127) === 127 &&
+		sparseKeys.length === 113 &&
+		sparseKeys.every((key, index) => key === index + 16),
+);
+
+const pinnedMap = new Map();
+for (let i = 0; i < 128; i++) pinnedMap.set(i, i);
+const pinnedKeys = pinnedMap.keys();
+ok("map-pinned-growth-iterator-setup", pinnedKeys.next().value === 0);
+for (let i = 1; i <= 16; i++) pinnedMap.delete(i);
+for (let i = 128; i < 144; i++) pinnedMap.set(i, i);
+gc();
+const remainingKeys = Array.from(pinnedKeys);
+ok(
+	"map-pinned-growth-preserves-iterator-position",
+	pinnedMap.size === 128 &&
+		remainingKeys.length === 127 &&
+		remainingKeys.every((key, index) => key === index + 17),
+);
+
 // --- Set delete + clear + reuse (object elements so the entries hold cells). ---
 let s = new Set();
 let elems = [];
