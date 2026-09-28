@@ -7,6 +7,7 @@
 #include "intrinsics.h"
 #include "perf_stats.h"
 #include "vm.h"
+#include "vm_ops.h"
 
 extern const MalRuntimeImage mal_runtime_image;
 

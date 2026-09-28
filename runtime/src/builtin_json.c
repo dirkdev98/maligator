@@ -1112,6 +1112,10 @@ static MalValue mal_json_frame_key(const MalJsonFrame *frame, usize position) {
 static MalJsonResult mal_json_resume_generic(
     MalJsonPlainState *plain, MalJsonState *generic, MalJsonBuilder *builder
 ) {
+    if (plain->count > MAL_JSON_MAX_RECURSION_DEPTH) {
+        mal_json_throw_depth(generic->vm);
+        return MAL_JSON_THROW;
+    }
     // Ancestor keys and array lengths were fixed before any callback. Retain
     // their holders and remaining keys even if reentry deletes the input graph.
     MalRootedValueList roots;
@@ -1131,10 +1135,6 @@ static MalJsonResult mal_json_resume_generic(
     generic->active = plain->active;
     plain->active = (MalJsonPointerMap) {0};
     MalJsonResult result = MAL_JSON_THROW;
-    if (plain->count > MAL_JSON_MAX_RECURSION_DEPTH) {
-        mal_json_throw_depth(generic->vm);
-        goto done;
-    }
     while (plain->count != 0) {
         MalJsonFrame *frame = &plain->frames[plain->count - 1];
         while (frame->position < frame->count) {
