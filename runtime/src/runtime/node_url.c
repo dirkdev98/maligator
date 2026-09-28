@@ -14,7 +14,7 @@
 #include "node_module.h"
 #include "object.h"
 #include "object_ops.h"
-#include "u16_buffer.h"
+#include "text_buffer.h"
 #include "utf8.h"
 #include "vm_ops.h"
 
@@ -22,14 +22,14 @@
     (MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE)
 #define URL_METHOD (MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE)
 
-typedef MalU16Buffer UrlBuffer;
+typedef MalTextBuffer UrlBuffer;
 
 static void url_buffer_append(UrlBuffer *buffer, const c16 *units, usize length) {
-    mal_u16_buffer_append_units(buffer, units, length);
+    mal_text_buffer_append_units(buffer, units, length);
 }
 
 static void url_buffer_char(UrlBuffer *buffer, c16 unit) {
-    mal_u16_buffer_push(buffer, unit);
+    mal_text_buffer_push(buffer, unit);
 }
 
 static MalValue url_slice(MalVm *vm, MalString *source, usize start, usize end) {
@@ -258,13 +258,13 @@ static MalValue url_format(
         url_buffer_append(&buffer, mal_string_code_units(hash), mal_string_length(hash));
     }
     if (vm->completion.kind == MAL_COMPLETION_THROW) {
-        mal_u16_buffer_dispose(&buffer);
+        mal_text_buffer_dispose(&buffer);
         return mal_value_new_undefined();
     }
-    if (buffer.status != MAL_U16_BUFFER_OK) {
-        MalU16BufferStatus status = buffer.status;
-        mal_u16_buffer_dispose(&buffer);
-        if (status == MAL_U16_BUFFER_LENGTH_OVERFLOW) {
+    if (buffer.status != MAL_TEXT_BUFFER_OK) {
+        MalTextBufferStatus status = buffer.status;
+        mal_text_buffer_dispose(&buffer);
+        if (status == MAL_TEXT_BUFFER_LENGTH_OVERFLOW) {
             mal_vm_throw_error(
                 vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Invalid string length");
         } else {
@@ -272,11 +272,11 @@ static MalValue url_format(
         }
         return mal_value_new_undefined();
     }
-    return mal_value_from_string(mal_u16_buffer_finish(&vm->heap, &buffer));
+    return mal_value_from_string(mal_text_buffer_finish(&vm->heap, &buffer));
 }
 
 static void url_buffer_ascii(UrlBuffer *buffer, const char *ascii) {
-    mal_u16_buffer_append_ascii(buffer, (const byte *) ascii);
+    mal_text_buffer_append_ascii(buffer, (const byte *) ascii);
 }
 
 static void url_append_file_path(UrlBuffer *buffer, const c16 *units, usize length) {
@@ -325,7 +325,7 @@ static MalValue url_path_to_file_url(
     if (!absolute) {
         char *cwd = getcwd(nullptr, 0);
         if (cwd == nullptr) {
-            mal_u16_buffer_dispose(&buffer);
+            mal_text_buffer_dispose(&buffer);
             mal_vm_throw_error(vm, MAL_INTRINSIC_ERROR_PROTOTYPE,
                 "Could not resolve the current working directory");
             return mal_value_new_undefined();
@@ -334,7 +334,7 @@ static MalValue url_path_to_file_url(
             &vm->heap, (const byte *) cwd, strlen(cwd));
         free(cwd);
         if (cwd_string == nullptr) {
-            mal_u16_buffer_dispose(&buffer);
+            mal_text_buffer_dispose(&buffer);
             mal_vm_throw_allocation_error(vm);
             return mal_value_new_undefined();
         }
@@ -343,13 +343,13 @@ static MalValue url_path_to_file_url(
         url_buffer_char(&buffer, '/');
     }
     url_append_file_path(&buffer, path_units, path_length);
-    if (buffer.status != MAL_U16_BUFFER_OK) {
-        mal_u16_buffer_dispose(&buffer);
+    if (buffer.status != MAL_TEXT_BUFFER_OK) {
+        mal_text_buffer_dispose(&buffer);
         mal_vm_throw_allocation_error(vm);
         return mal_value_new_undefined();
     }
     MalValue source = mal_value_from_string(
-        mal_u16_buffer_finish(&vm->heap, &buffer));
+        mal_text_buffer_finish(&vm->heap, &buffer));
     MalRootSpan root;
     mal_gc_root(&root, &source, 1);
     MalCompletion completion = mal_vm_construct_value(

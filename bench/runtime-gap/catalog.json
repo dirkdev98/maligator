@@ -2217,6 +2217,44 @@
 			"controls": ["stable-shape-properties", "record-array-traversal"]
 		},
 		{
+			"id": "text-pipeline-latin1",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "encoding-aware string and structured-text pipeline",
+			"category": "memory-layout-usage",
+			"mechanisms": [
+				"string-allocation",
+				"string-slice",
+				"property-lookup",
+				"json-parse",
+				"json-stringify"
+			],
+			"inputShape": "32 Latin-1 records and 64 path slices; parse, lookup, join, replace, serialize, full output checksum",
+			"unit": "64-record text pipeline batch",
+			"sourceSeam": "runtime/src/heap_string.c",
+			"controls": ["json-parse", "json-stringify", "string-keys", "text-pipeline-mixed"],
+			"fixture": "cases/text-pipeline-latin1.mjs"
+		},
+		{
+			"id": "text-pipeline-mixed",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "encoding-aware string and structured-text pipeline",
+			"category": "memory-layout-usage",
+			"mechanisms": [
+				"string-allocation",
+				"string-slice",
+				"property-lookup",
+				"json-parse",
+				"json-stringify"
+			],
+			"inputShape": "32 mixed Latin-1/BMP/non-BMP/lone-surrogate records and 64 path slices; parse, lookup, join, replace, serialize, full output checksum",
+			"unit": "64-record text pipeline batch",
+			"sourceSeam": "runtime/src/heap_string.c",
+			"controls": ["json-parse", "json-stringify", "string-keys", "text-pipeline-latin1"],
+			"fixture": "cases/text-pipeline-mixed.mjs"
+		},
+		{
 			"id": "method-name-unique",
 			"group": "runtime",
 			"suite": "runtime",

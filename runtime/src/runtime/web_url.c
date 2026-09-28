@@ -15,7 +15,7 @@
 #include "object.h"
 #include "object_ops.h"
 #include "property_store.h"
-#include "u16_buffer.h"
+#include "text_buffer.h"
 #include "utf16.h"
 #include "utf8.h"
 #include "value.h"
@@ -778,10 +778,10 @@ static void url_create_search_params(MalVm *vm, MalUrlObject *url) {
     mal_gc_unroot(&rs);
 }
 
-typedef MalU16Buffer UspOut;
+typedef MalTextBuffer UspOut;
 
 static bool usp_out_push(UspOut *o, c16 unit) {
-    return mal_u16_buffer_push(o, unit) == MAL_U16_BUFFER_OK;
+    return mal_text_buffer_push(o, unit) == MAL_TEXT_BUFFER_OK;
 }
 
 static bool usp_form_unreserved(byte c) {
@@ -822,12 +822,12 @@ static MalValue usp_serialize(MalVm *vm, MalUrlSearchParamsObject *p) {
             && usp_out_push(&o, '=')
             && usp_encode_append(&o, p->pairs[i].value);
         if (!ok) {
-            mal_u16_buffer_dispose(&o);
+            mal_text_buffer_dispose(&o);
             mal_vm_throw_allocation_error(vm);
             return mal_value_new_undefined();
         }
     }
-    return mal_value_from_string(mal_u16_buffer_finish(&vm->heap, &o));
+    return mal_value_from_string(mal_text_buffer_finish(&vm->heap, &o));
 }
 
 static void usp_update_url(MalVm *vm, MalUrlSearchParamsObject *p) {

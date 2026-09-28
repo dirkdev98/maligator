@@ -90,7 +90,7 @@ typedef enum MalStringCharacterOp {
     MAL_STRING_CHARACTER_CODE_POINT_AT,
 } MalStringCharacterOp;
 
-// Inlining exposes the exact character operation; lazy primitive strings may flatten here.
+// Character positions remain UTF-16 code-unit offsets for every physical encoding.
 static inline MalValue mal_builtin_string_character_numeric(
     MalVm *vm, MalString *string, f64 position, MalStringCharacterOp operation
 ) {
@@ -101,13 +101,19 @@ static inline MalValue mal_builtin_string_character_numeric(
         return operation == MAL_STRING_CHARACTER_CHAR_AT
             ? mal_value_from_string(mal_intrinsic_ascii(vm, "")) : mal_value_new_undefined();
     }
-    const c16 *units = mal_string_code_units(string);
+    usize index = (usize) position;
+    c16 unit = mal_string_code_unit_at(string, index);
     if (operation == MAL_STRING_CHARACTER_CODE_POINT_AT) {
-        u32 code_point;
-        mal_utf16_read_scalar(units, length, (usize) position, &code_point, nullptr);
+        u32 code_point = unit;
+        if (index + 1 < length && mal_utf16_is_lead_surrogate(unit)) {
+            c16 trail = mal_string_code_unit_at(string, index + 1);
+            if (mal_utf16_is_trail_surrogate(trail)) {
+                code_point = mal_utf16_compose_pair(unit, trail);
+            }
+        }
         return mal_value_from_i32((i32) code_point);
     }
-    return mal_value_from_string(mal_intrinsic_code_unit(vm, units[(usize) position]));
+    return mal_value_from_string(mal_intrinsic_code_unit(vm, unit));
 }
 
 // Flat-string guard misses leave receiver coercion and position conversion to the caller.
@@ -116,12 +122,12 @@ bool mal_builtin_string_character_direct(
     MalStringCharacterOp operation, MalValue *result
 );
 
-// Exact primitive strings may be cons strings; flattening retains both GC roots.
+// Search primitive strings without changing their representation.
 MalValue mal_builtin_string_search_strings(
     MalString *string, MalString *search, f64 position, MalStringSearchOp operation
 );
 
-// A false result is side-effect-free; flat primitive strings take the allocation-free path.
+// A false result is side-effect-free; primitive strings search their borrowed leaf storage.
 bool mal_builtin_string_search_direct(
     MalValue receiver, MalValue needle, f64 position,
     MalStringSearchOp operation, MalValue *result

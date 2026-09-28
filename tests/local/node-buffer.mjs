@@ -35,6 +35,25 @@ check(
 
 check("utf8 round trip", Buffer.from("hé😀").toString() === "hé😀");
 check("utf8 byte length", Buffer.byteLength("hé😀", "utf8") === 7);
+const compactSource = String.fromCharCode(0, 0x80, 0xe9, 0xff).repeat(20);
+const compactSlice = ("\u0100-prefix:" + compactSource + ":suffix-\u03a9").slice(9, -9);
+const splitPairRope = "x".repeat(64) + "\ud83d" + ("\ude00" + "y".repeat(64));
+check(
+	"compact and wide-slice Buffer sources preserve Latin-1 code units and NUL",
+	Buffer.from(compactSource, "latin1").toString("hex") === "0080e9ff".repeat(20) &&
+		Buffer.from(compactSlice, "latin1").toString("hex") === "0080e9ff".repeat(20) &&
+		Buffer.from(compactSlice, "utf16le").toString("hex") ===
+			"00008000e900ff00".repeat(20) &&
+		Buffer.from(compactSource).toString() === compactSource &&
+		Buffer.byteLength(compactSource) === 140,
+);
+check(
+	"Buffer UTF-8 combines surrogate pairs across rope leaves",
+	Buffer.from(splitPairRope).toString() === splitPairRope &&
+		Buffer.byteLength(splitPairRope) === 132 &&
+		Buffer.from(splitPairRope.slice(64, 66)).toString("hex") === "f09f9880" &&
+		Buffer.from(splitPairRope.slice(64, 65)).toString("hex") === "efbfbd",
+);
 check(
 	"utf8 replaces lone surrogates and malformed bytes",
 	Buffer.from("\ud800").toString("hex") === "efbfbd" &&

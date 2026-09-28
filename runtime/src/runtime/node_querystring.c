@@ -17,7 +17,7 @@
 #include "object.h"
 #include "object_ops.h"
 #include "property_iter.h"
-#include "u16_buffer.h"
+#include "text_buffer.h"
 #include "utf16.h"
 #include "utf8.h"
 #include "value_ops.h"
@@ -30,11 +30,11 @@ static MalValue qs_empty_string(MalVm *vm) {
     return mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) ""));
 }
 
-static MalValue qs_builder_finish(MalVm *vm, MalU16Buffer *builder) {
-    if (builder->status != MAL_U16_BUFFER_OK) {
-        MalU16BufferStatus status = builder->status;
-        mal_u16_buffer_dispose(builder);
-        if (status == MAL_U16_BUFFER_LENGTH_OVERFLOW) {
+static MalValue qs_builder_finish(MalVm *vm, MalTextBuffer *builder) {
+    if (builder->status != MAL_TEXT_BUFFER_OK) {
+        MalTextBufferStatus status = builder->status;
+        mal_text_buffer_dispose(builder);
+        if (status == MAL_TEXT_BUFFER_LENGTH_OVERFLOW) {
             mal_vm_throw_error(
                 vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Invalid string length");
         } else {
@@ -42,7 +42,7 @@ static MalValue qs_builder_finish(MalVm *vm, MalU16Buffer *builder) {
         }
         return mal_value_new_undefined();
     }
-    return mal_value_from_string(mal_u16_buffer_finish(&vm->heap, builder));
+    return mal_value_from_string(mal_text_buffer_finish(&vm->heap, builder));
 }
 
 static bool qs_contains(const c16 *units, usize length, c16 needle) {
@@ -136,12 +136,12 @@ static MalValue qs_prepare_custom_decode(
         return mal_value_from_string(
             mal_string_new_slice(&vm->heap, source, start, length));
     }
-    MalU16Buffer builder = {0};
+    MalTextBuffer builder = {0};
     for (usize i = 0; i < length; i++) {
         if (units[i] == '+') {
-            mal_u16_buffer_append_ascii(&builder, (const byte *) "%20");
+            mal_text_buffer_append_ascii(&builder, (const byte *) "%20");
         } else {
-            mal_u16_buffer_push(&builder, units[i]);
+            mal_text_buffer_push(&builder, units[i]);
         }
     }
     return qs_builder_finish(vm, &builder);
@@ -311,15 +311,15 @@ static MalValue qs_escape_string(MalVm *vm, MalString *string) {
         return mal_value_new_undefined();
     }
     static const byte hex[] = "0123456789ABCDEF";
-    MalU16Buffer builder = {0};
+    MalTextBuffer builder = {0};
     for (usize i = 0; i < byte_length; i++) {
         u8 value = (u8) bytes[i];
         if (qs_escape_allowed(value)) {
-            mal_u16_buffer_push(&builder, value);
+            mal_text_buffer_push(&builder, value);
         } else {
-            mal_u16_buffer_push(&builder, '%');
-            mal_u16_buffer_push(&builder, (c16) hex[value >> 4]);
-            mal_u16_buffer_push(&builder, (c16) hex[value & 0x0f]);
+            mal_text_buffer_push(&builder, '%');
+            mal_text_buffer_push(&builder, (c16) hex[value >> 4]);
+            mal_text_buffer_push(&builder, (c16) hex[value & 0x0f]);
         }
     }
     free(bytes);
@@ -443,7 +443,7 @@ static MalValue qs_encode_component(
 }
 
 static bool qs_append_pair(
-    MalVm *vm, MalU16Buffer *builder, bool *first,
+    MalVm *vm, MalTextBuffer *builder, bool *first,
     MalString *separator, MalString *equal,
     MalValue encoded_key, MalValue value, MalValue encoder
 ) {
@@ -457,13 +457,13 @@ static bool qs_append_pair(
         mal_gc_unroot(&root);
         return false;
     }
-    if (!*first) mal_u16_buffer_append_string(builder, separator);
+    if (!*first) mal_text_buffer_append_string(builder, separator);
     *first = false;
-    mal_u16_buffer_append_string(builder, mal_value_to_string(roots[0]));
-    mal_u16_buffer_append_string(builder, equal);
-    mal_u16_buffer_append_string(builder, mal_value_to_string(roots[2]));
+    mal_text_buffer_append_string(builder, mal_value_to_string(roots[0]));
+    mal_text_buffer_append_string(builder, equal);
+    mal_text_buffer_append_string(builder, mal_value_to_string(roots[2]));
     mal_gc_unroot(&root);
-    return builder->status == MAL_U16_BUFFER_OK;
+    return builder->status == MAL_TEXT_BUFFER_OK;
 }
 
 static MalValue qs_stringify(
@@ -527,7 +527,7 @@ static MalValue qs_stringify(
     }
     MalRootSpan key_root;
     mal_gc_root(&key_root, key_values, (i32) key_count);
-    MalU16Buffer builder = {0};
+    MalTextBuffer builder = {0};
     bool first = true;
     bool ok = true;
     for (usize i = 0; i < key_count && ok; i++) {
@@ -570,11 +570,11 @@ static MalValue qs_stringify(
     free(keys);
     free(key_values);
     if (!ok) {
-        if (builder.status != MAL_U16_BUFFER_OK
+        if (builder.status != MAL_TEXT_BUFFER_OK
             && vm->completion.kind != MAL_COMPLETION_THROW) {
             return qs_builder_finish(vm, &builder);
         }
-        mal_u16_buffer_dispose(&builder);
+        mal_text_buffer_dispose(&builder);
         return mal_value_new_undefined();
     }
     return qs_builder_finish(vm, &builder);

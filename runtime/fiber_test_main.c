@@ -72,7 +72,7 @@ static bool string_matches(MalValue value, const byte *bytes, int length) {
         return false;
     }
     for (int i = 0; i < length; i++) {
-        if (s->code_units[i] != (c16) (unsigned char) bytes[i]) {
+        if (mal_string_code_unit_at(s, (usize) i) != (c16) (unsigned char) bytes[i]) {
             return false;
         }
     }

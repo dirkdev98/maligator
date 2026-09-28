@@ -389,16 +389,21 @@ void mal_value_debug(MalValue value) {
 
     if (mal_value_is_string(value)) {
         MalString *string = mal_value_to_string(value);
-        const c16 *code_units = mal_string_code_units(string);
+        MalStringIterator iterator;
+        MalStringSegment segment;
+        mal_string_iterator_init(&iterator, string, 0, mal_string_length(string));
         printf("\"");
-        for (usize i = 0; i < mal_string_length(string); i++) {
-            c16 code_unit = code_units[i];
-            if (code_unit >= 0x20 && code_unit <= 0x7E) {
-                printf("%c", (char) code_unit);
-            } else {
-                printf("\\u%04x", code_unit);
+        while (mal_string_iterator_next(&iterator, &segment)) {
+            for (usize i = 0; i < segment.length; i++) {
+                c16 code_unit = mal_string_segment_code_unit_at(&segment, i);
+                if (code_unit >= 0x20 && code_unit <= 0x7E) {
+                    printf("%c", (char) code_unit);
+                } else {
+                    printf("\\u%04x", code_unit);
+                }
             }
         }
+        mal_string_iterator_dispose(&iterator);
         printf("\"");
         return;
     }

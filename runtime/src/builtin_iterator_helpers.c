@@ -12,7 +12,7 @@
 #include "object.h"
 #include "object_ops.h"
 #include "rooted_collection.h"
-#include "u16_buffer.h"
+#include "text_buffer.h"
 #include "value.h"
 #include "value_ops.h"
 #include "vm.h"
@@ -1047,8 +1047,8 @@ static MalValue mal_ih_method_includes(MalVm *vm, MalValue this_value, const Mal
     return result;
 }
 
-static bool mal_ih_join_append(MalVm *vm, MalU16Buffer *buffer, MalString *string) {
-    if (mal_u16_buffer_append_string(buffer, string) == MAL_U16_BUFFER_OK) {
+static bool mal_ih_join_append(MalVm *vm, MalTextBuffer *buffer, MalString *string) {
+    if (mal_text_buffer_append_string(buffer, string) == MAL_TEXT_BUFFER_OK) {
         return true;
     }
     mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Invalid string length");
@@ -1078,7 +1078,7 @@ static MalValue mal_ih_method_join(MalVm *vm, MalValue this_value, const MalValu
     mal_gc_root(&record_span, &record.iterator, 2);
     mal_gc_root(&separator_span, &separator_root, 1);
     mal_gc_native_rooted_begin(vm);
-    MalU16Buffer buffer = {.heap = &vm->heap};
+    MalTextBuffer buffer = {.heap = &vm->heap};
     bool first = true;
     MalValue result = mal_value_new_undefined();
     while (true) {
@@ -1090,7 +1090,7 @@ static MalValue mal_ih_method_join(MalVm *vm, MalValue this_value, const MalValu
         if (done) {
             result = buffer.length == 0
                 ? mal_value_from_string(mal_intrinsic_ascii(vm, ""))
-                : mal_value_from_string(mal_u16_buffer_finish(&vm->heap, &buffer));
+                : mal_value_from_string(mal_text_buffer_finish(&vm->heap, &buffer));
             goto done;
         }
         if (!first && !mal_ih_join_append(
@@ -1114,7 +1114,7 @@ static MalValue mal_ih_method_join(MalVm *vm, MalValue this_value, const MalValu
     }
 
 done:
-    mal_u16_buffer_dispose(&buffer);
+    mal_text_buffer_dispose(&buffer);
     mal_gc_native_rooted_end(vm);
     mal_gc_unroot(&separator_span);
     mal_gc_unroot(&record_span);
