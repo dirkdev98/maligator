@@ -5,6 +5,7 @@
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #if !defined(__wasi__)
 #include <pthread.h>
 #include <time.h>
@@ -433,6 +434,22 @@ i32 mal_gc_swap_stress_interval(i32 interval) {
     return previous;
 }
 
+static void mal_gc_grey_grow(MalGcState *g, usize required) {
+    if (required > SIZE_MAX / sizeof(MalHeapHeader *)) abort();
+    usize capacity = g->grey_capacity == 0 ? 4096 : g->grey_capacity;
+    while (capacity < required) {
+        if (capacity > SIZE_MAX / (2 * sizeof(MalHeapHeader *))) {
+            capacity = required;
+            break;
+        }
+        capacity *= 2;
+    }
+    MalHeapHeader **cells = realloc(g->grey, capacity * sizeof(MalHeapHeader *));
+    if (cells == nullptr) abort();
+    g->grey = cells;
+    g->grey_capacity = capacity;
+}
+
 static void mal_gc_grey_push(MalHeapHeader *cell) {
 #if !defined(__wasi__)
     if (g_trace_worker != nullptr) {
@@ -451,9 +468,7 @@ static void mal_gc_grey_push(MalHeapHeader *cell) {
     }
 #endif
     if (g_gc->grey_count == g_gc->grey_capacity) {
-        g_gc->grey_capacity = g_gc->grey_capacity == 0 ? 4096 : g_gc->grey_capacity * 2;
-        g_gc->grey = realloc(g_gc->grey, g_gc->grey_capacity * sizeof(MalHeapHeader *));
-        if (g_gc->grey == nullptr) abort();
+        mal_gc_grey_grow(g_gc, g_gc->grey_count + 1);
     }
     g_gc->grey[g_gc->grey_count++] = cell;
 }
@@ -2165,6 +2180,12 @@ static bool mal_gc_workers_collect_batch(MalGcState *g, bool wait) {
     pthread_mutex_unlock(&g->worker_mutex);
     if (wait_start != 0) g->worker_wait_ns += mal_monotonic_now_ns() - wait_start;
     u64 merge_start = g->stats_enabled ? mal_monotonic_now_ns() : 0;
+    usize merged_count = g->grey_count;
+    for (usize i = 0; i < g->workers_created; ++i) {
+        if (g->workers[i].discovered_count > SIZE_MAX - merged_count) abort();
+        merged_count += g->workers[i].discovered_count;
+    }
+    if (merged_count > g->grey_capacity) mal_gc_grey_grow(g, merged_count);
     g->worker_traces += g->worker_batch_count;
     u64 batch_traces = g->worker_batch_count;
     for (usize i = 0; i < g->workers_created; ++i) {
@@ -2184,8 +2205,12 @@ static bool mal_gc_workers_collect_batch(MalGcState *g, bool wait) {
             g->concurrent_handoffs += worker->discovered_count;
         }
         g->snapshot_discoveries += worker->batch_snapshot_discoveries;
-        for (usize j = 0; j < worker->discovered_count; ++j) {
-            mal_gc_grey_push(worker->discovered[j]);
+        if (worker->discovered_count > 0) {
+            // Every worker has acknowledged this batch; their private queues
+            // cannot change until the next dispatch.
+            memcpy(g->grey + g->grey_count, worker->discovered,
+                worker->discovered_count * sizeof(MalHeapHeader *));
+            g->grey_count += worker->discovered_count;
         }
         worker->discovered_count = 0;
     }
