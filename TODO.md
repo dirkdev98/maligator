@@ -755,8 +755,9 @@ remains a Maligator extension and does not count as global fetch conformance.
       loss and 1.68% more server CPU per completed response, both with intervals
       spanning zero. Its single GC diagnostic cannot attribute the loss. A
       direct ten-pair primitive-filter rollback found no routes throughput or
-      CPU recovery. Keep mutator-owned sweep unless measured benefit justifies
-      worker ownership.
+      CPU recovery. Profile matched finished HTTP binaries to locate the routes
+      CPU difference before another collector scheduling change. Keep
+      mutator-owned sweep unless measured benefit justifies worker ownership.
 - [ ] Validate native worker capacity under live constrained and nested CPU quotas.
       Synthetic v1/v2 mounted-path and visible-ancestor fixtures pass; hidden
       namespace ancestors cannot be inferred. Keep the inline capacity fallback.
