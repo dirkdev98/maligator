@@ -77,7 +77,7 @@
 	},
 	{
 		"file": "builtin_json.c",
-		"sha256": "2e6802a04ee7b1274b6015f2993382b146227139eba1ac3edb56aa02a27955d4"
+		"sha256": "2720e87d6a1f15ef8b57747afa02563c78a414bcc593e16e7d7480fa199d4c3c"
 	},
 	{
 		"file": "builtin_map.c",
@@ -125,7 +125,7 @@
 	},
 	{
 		"file": "builtin_string.c",
-		"sha256": "c9c503981cd5bce7c2874cc3eaaada1d65e9fe220d41059166ca9fd43c7e45a1"
+		"sha256": "34b44161a7665bfd5883a1d5624989043a5ec180dae3aacc1bc8e95b8d237084"
 	},
 	{
 		"file": "builtin_symbol.c",

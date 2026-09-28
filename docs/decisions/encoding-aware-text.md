@@ -42,8 +42,10 @@ trees. Traversal does not collect, invoke JavaScript, flatten, or widen a string
 
 A segment borrows its leaf's storage. Consumers keep the source graph rooted
 across collection and do not retain borrowed segment pointers across JavaScript
-reentry or a UTF-16 bridge that could widen the same leaf. Producers append a
-segment before advancing or crossing an observable call.
+reentry or string materialization, including repeated rope hashing and a UTF-16
+bridge that could widen the same leaf. Producers append a segment before
+advancing or crossing an observable call. A single-leaf range can use
+`mal_string_try_get_segment` to avoid the general iterator.
 
 `mal_string_code_units` is an explicit contiguous UTF-16 bridge. It can allocate
 and widen a compact leaf or flatten a rope/slice. Once obtained, its UTF-16 pointer
@@ -66,9 +68,13 @@ Equality and lexical ordering compare UTF-16 content, including lone surrogates.
 
 Flat strings cache their complete hash in the first payload word. Dependent
 strings use the other payload word for a cached hash while retaining their parent.
-Cons strings stream their leaves when hashed and remain unflattened. Caching a
-cons hash would require another representation trade-off; this change keeps the
-32-byte cell and existing hash contract.
+A cons string streams its first hash without materializing. A second hash
+materializes compact owned storage and caches the complete hash, amortizing
+repeated Map and property-key operations. The reuse marker occupies the word
+otherwise used for a dependent offset. This policy preserves the 32-byte cell and
+existing hash contract while keeping one-pass consumers segmented. Materialization
+keeps the string identity and dependent offsets valid; it does not collect or
+invoke JavaScript.
 
 ## Shared construction
 
@@ -83,6 +89,9 @@ backwards when the address is reused. A failed growth preserves the old payload,
 ownership, and allocation accounting. Length overflow is detected before reading
 input. Finalization transfers RAW ownership to the appropriate string constructor;
 tiny strings move into inline storage. Rollback retains capacity and encoding.
+Producers that know the final length can hint capacity before appending; the first
+content selects the initial allocation width. Explicit reservation stays eager
+for callers that write directly into the buffer.
 
 Array joining, string replacement and raw construction, JSON, and the previous
 UTF-16 buffer consumers share this implementation. Path normalization explicitly
