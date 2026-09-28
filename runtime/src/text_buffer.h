@@ -9,7 +9,8 @@ typedef enum MalTextBufferStatus : u8 {
 } MalTextBufferStatus;
 
 /** GC-accounted output storage. Zero initialization starts in Latin-1; lengths
- * and capacities always count UTF-16 code units, including lone surrogates. */
+ * and capacities count UTF-16 code units. Capacity may be an allocation hint
+ * while data is null; direct writers must call eager reserve before writing. */
 typedef struct MalTextBuffer {
     MalHeap *heap;
     void *data;
@@ -21,6 +22,10 @@ typedef struct MalTextBuffer {
 
 /** Reserve code units in the current encoding without changing length. */
 MalTextBufferStatus mal_text_buffer_reserve(MalTextBuffer *buffer, usize extra);
+
+/** Delay an empty buffer's allocation until the first append determines its
+ * encoding. With existing storage this has the same contract as reserve. */
+MalTextBufferStatus mal_text_buffer_hint_capacity(MalTextBuffer *buffer, usize extra);
 
 MalTextBufferStatus mal_text_buffer_push(MalTextBuffer *buffer, c16 code_unit);
 

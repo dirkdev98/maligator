@@ -20,7 +20,8 @@ static MalTextBufferStatus mal_text_buffer_prepare(
         return buffer->status = MAL_TEXT_BUFFER_LENGTH_OVERFLOW;
     }
     bool promote = utf16 && !buffer->utf16;
-    if (required <= buffer->capacity && !promote) return MAL_TEXT_BUFFER_OK;
+    if (required <= buffer->capacity && !promote &&
+        (buffer->data != nullptr || buffer->capacity == 0)) return MAL_TEXT_BUFFER_OK;
 
     usize capacity = buffer->capacity;
     usize bytes;
@@ -56,6 +57,21 @@ static MalTextBufferStatus mal_text_buffer_prepare(
 
 MalTextBufferStatus mal_text_buffer_reserve(MalTextBuffer *buffer, usize extra) {
     return mal_text_buffer_prepare(buffer, extra, false);
+}
+
+MalTextBufferStatus mal_text_buffer_hint_capacity(MalTextBuffer *buffer, usize extra) {
+    if (buffer->status != MAL_TEXT_BUFFER_OK) return buffer->status;
+    if (buffer->data != nullptr) return mal_text_buffer_reserve(buffer, extra);
+    usize required;
+    if (!mal_checked_size_add(
+            buffer->length, extra, MAL_STRING_MAX_CODE_UNITS, &required)) {
+        return buffer->status = MAL_TEXT_BUFFER_LENGTH_OVERFLOW;
+    }
+    if (required > buffer->capacity) {
+        buffer->capacity = required < MAL_TEXT_BUFFER_INITIAL_CAPACITY
+            ? MAL_TEXT_BUFFER_INITIAL_CAPACITY : required;
+    }
+    return MAL_TEXT_BUFFER_OK;
 }
 
 MalTextBufferStatus mal_text_buffer_push(MalTextBuffer *buffer, c16 code_unit) {
@@ -113,11 +129,12 @@ MalTextBufferStatus mal_text_buffer_append_latin1(
     return status;
 }
 
-MalTextBufferStatus mal_text_buffer_append_range(
+// Keep the rope traversal stack off the flat-string append path.
+__attribute__((noinline))
+static MalTextBufferStatus mal_text_buffer_append_segmented(
     MalTextBuffer *buffer, const MalString *string, usize offset, usize length
 ) {
-    if (length == 0 || buffer->status != MAL_TEXT_BUFFER_OK) return buffer->status;
-    if (mal_text_buffer_reserve(buffer, length) != MAL_TEXT_BUFFER_OK) return buffer->status;
+    if (buffer->data == nullptr) mal_text_buffer_hint_capacity(buffer, length);
     MalStringIterator iterator;
     MalStringSegment segment;
     mal_string_iterator_init(&iterator, string, offset, length);
@@ -129,6 +146,22 @@ MalTextBufferStatus mal_text_buffer_append_range(
     }
     mal_string_iterator_dispose(&iterator);
     return buffer->status;
+}
+
+MalTextBufferStatus mal_text_buffer_append_range(
+    MalTextBuffer *buffer, const MalString *string, usize offset, usize length
+) {
+    if (length == 0 || buffer->status != MAL_TEXT_BUFFER_OK) return buffer->status;
+    if (length > MAL_STRING_MAX_CODE_UNITS - buffer->length) {
+        return buffer->status = MAL_TEXT_BUFFER_LENGTH_OVERFLOW;
+    }
+    MalStringSegment segment;
+    if (mal_string_try_get_segment(string, offset, length, &segment)) {
+        return segment.latin1
+            ? mal_text_buffer_append_latin1(buffer, segment.latin1_units, length)
+            : mal_text_buffer_append_units(buffer, segment.utf16_units, length);
+    }
+    return mal_text_buffer_append_segmented(buffer, string, offset, length);
 }
 
 MalTextBufferStatus mal_text_buffer_append_string(

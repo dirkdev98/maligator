@@ -93,6 +93,53 @@ static bool appends_rope_ranges_without_materialization(MalVm *vm) {
     return true;
 }
 
+static bool initial_capacity_waits_for_content_encoding(MalVm *vm) {
+    MalHeap *heap = &vm->heap;
+    MalTextBuffer buffer = {.heap = heap};
+    const c16 wide_units[] = {0x100, 'a'};
+    usize charged = heap->bytes_allocated;
+    usize owned = mal_heap_usage(heap).raw_owned_bytes;
+    CHECK(mal_text_buffer_hint_capacity(&buffer, 1024) == MAL_TEXT_BUFFER_OK);
+    CHECK(buffer.data == nullptr && buffer.length == 0);
+    CHECK(heap->bytes_allocated == charged && mal_heap_usage(heap).raw_owned_bytes == owned);
+    CHECK(mal_text_buffer_append_units(&buffer, wide_units, countof(wide_units)) == MAL_TEXT_BUFFER_OK);
+    CHECK(buffer.utf16 && buffer.length == countof(wide_units));
+    CHECK(heap->bytes_allocated == charged + mal_heap_allocation_charge(1024 * sizeof(c16)));
+    CHECK(mal_text_buffer_code_unit_at(&buffer, 0) == 0x100);
+    mal_text_buffer_dispose(&buffer);
+    CHECK(mal_heap_usage(heap).raw_owned_bytes == owned);
+
+    const c16 narrow_units[] = {'b', 0xe9, 0xff};
+    MalString external;
+    mal_string_init_external(&external, narrow_units, countof(narrow_units));
+    buffer.heap = heap;
+    CHECK(mal_text_buffer_hint_capacity(&buffer, 1024) == MAL_TEXT_BUFFER_OK);
+    charged = heap->bytes_allocated;
+    CHECK(mal_text_buffer_append_string(&buffer, &external) == MAL_TEXT_BUFFER_OK);
+    CHECK(!buffer.utf16 && !external.latin1);
+    CHECK(heap->bytes_allocated == charged + mal_heap_allocation_charge(1024));
+    for (usize i = 0; i < countof(narrow_units); i++) {
+        CHECK(mal_text_buffer_code_unit_at(&buffer, i) == narrow_units[i]);
+    }
+    mal_text_buffer_dispose(&buffer);
+
+    buffer.heap = heap;
+    heap->fail_next_raw_allocation = true;
+    CHECK(mal_text_buffer_hint_capacity(&buffer, 1024) == MAL_TEXT_BUFFER_OK);
+    CHECK(heap->fail_next_raw_allocation && buffer.data == nullptr);
+    CHECK(mal_text_buffer_push(&buffer, 0x100) == MAL_TEXT_BUFFER_ALLOCATION_FAILURE);
+    CHECK(!heap->fail_next_raw_allocation && buffer.data == nullptr && buffer.length == 0);
+    mal_text_buffer_dispose(&buffer);
+
+    buffer.heap = heap;
+    CHECK(mal_text_buffer_hint_capacity(&buffer, 1024) == MAL_TEXT_BUFFER_OK);
+    CHECK(mal_text_buffer_reserve(&buffer, 0) == MAL_TEXT_BUFFER_OK);
+    CHECK(buffer.data != nullptr && buffer.capacity >= 1024);
+    mal_text_buffer_dispose(&buffer);
+    CHECK(mal_heap_usage(heap).raw_owned_bytes == owned);
+    return true;
+}
+
 static bool finish_transfers_storage_and_survives_collection(MalVm *vm) {
     for (usize width = 1; width <= 2; width++) {
         MalTextBuffer buffer = {.heap = &vm->heap};
@@ -178,6 +225,7 @@ int main(void) {
     mal_vm_init(&vm, &mal_runtime_image);
     bool passed = compact_output_promotes_and_rolls_back(&vm)
         && appends_rope_ranges_without_materialization(&vm)
+        && initial_capacity_waits_for_content_encoding(&vm)
         && finish_transfers_storage_and_survives_collection(&vm)
         && failures_preserve_owner_and_pressure(&vm);
     mal_vm_free(&vm);

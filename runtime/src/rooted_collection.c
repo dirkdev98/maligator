@@ -217,7 +217,7 @@ bool mal_rooted_string_parts_flatten(
     }
 
     MalTextBuffer buffer = {.heap = &vm->heap};
-    mal_text_buffer_reserve(&buffer, parts->total_length);
+    mal_text_buffer_hint_capacity(&buffer, parts->total_length);
     for (usize i = 0; i < parts->count && buffer.status == MAL_TEXT_BUFFER_OK; i++) {
         if (i != 0) mal_text_buffer_append_string(&buffer, mal_value_to_string(parts->separator_root));
         if (!mal_value_is_undefined(parts->roots[i])) {
