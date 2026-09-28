@@ -401,6 +401,11 @@ contracts or investigates costs still visible after the string follow-ups.
 
 ## Focused performance work
 
+- [ ] Investigate rope-preserving projected trim with matched first-pass and
+      repeated-input comparisons. Require split/trim throughput to hold against
+      the materializing implementation, with prepared rope and flat controls,
+      complete output checks, and GC/materialization safety.
+
 - [ ] Investigate a bounded repeated-miss probe before property-query normalization,
       where already-string keys can avoid repeated constant-name and atom-table
       lookup. Preserve coercion and prototype invalidation, bound retained storage,
