@@ -750,11 +750,8 @@ static MalString *mal_string_join(MalHeap *heap, MalString *left, MalString *rig
     // A short cons of two leaves gets one extra terminal edge, avoiding a throwaway
     // rotation on its next append. All deeper cons edges still shrink by 1/4.
     if (left->length > maximum_child && !mal_string_is_balance_terminal(left)) {
-        usize prefix_length = left->left->length;
-        // Most persistent appends can keep the root boundary. Splitting at that
-        // boundary would only return these same children through another call.
-        if (prefix_length >= length - maximum_child &&
-            (prefix_length <= maximum_child || mal_string_is_balance_terminal(left->left))) {
+        if (left->left->storage != MAL_STRING_STORAGE_CONS &&
+            left->left->length > maximum_child) {
             return mal_string_new_cons_node(heap, left->left,
                 mal_string_join(heap, left->right, right));
         }
@@ -766,9 +763,8 @@ static MalString *mal_string_join(MalHeap *heap, MalString *left, MalString *rig
         return mal_string_new_cons_node(heap, prefix, mal_string_join(heap, middle, right));
     }
     if (right->length > maximum_child && !mal_string_is_balance_terminal(right)) {
-        usize suffix_length = right->right->length;
-        if (suffix_length >= length - maximum_child &&
-            (suffix_length <= maximum_child || mal_string_is_balance_terminal(right->right))) {
+        if (right->right->storage != MAL_STRING_STORAGE_CONS &&
+            right->right->length > maximum_child) {
             return mal_string_new_cons_node(heap,
                 mal_string_join(heap, left, right->left), right->right);
         }
