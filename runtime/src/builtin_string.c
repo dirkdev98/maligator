@@ -1782,71 +1782,52 @@ static MalValue mal_builtin_string_prototype_normalize(MalVm *vm, MalValue this_
 }
 
 bool mal_builtin_string_concat_direct(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue *result) {
-    if (mal_builtin_string_is_flat_value(this_value)) {
-        usize total_length = mal_string_length(mal_value_to_string(this_value));
-        bool primitive = true;
-        for (i32 i = 0; i < arg_count; i++) {
-            if (!mal_builtin_string_is_flat_value(args[i]) ||
-                !mal_checked_size_add(
-                    total_length, mal_string_length(mal_value_to_string(args[i])),
-                    MAL_STRING_MAX_CODE_UNITS, &total_length)) {
-                primitive = false;
-                break;
-            }
-        }
-        if (primitive) {
-            if (total_length == mal_string_length(mal_value_to_string(this_value))) {
-                *result = this_value;
-                return true;
-            }
-            if (total_length <= MAL_STRING_INLINE_CODE_UNITS) {
-                c16 units[MAL_STRING_INLINE_CODE_UNITS];
-                usize offset = 0;
-                MalString *part = mal_value_to_string(this_value);
-                usize part_length = mal_string_length(part);
-                memcpy(units, mal_string_code_units(part), sizeof(c16) * part_length);
-                offset += part_length;
-                for (i32 i = 0; i < arg_count; i++) {
-                    part = mal_value_to_string(args[i]);
-                    part_length = mal_string_length(part);
-                    memcpy(units + offset, mal_string_code_units(part), sizeof(c16) * part_length);
-                    offset += part_length;
-                }
-                *result = mal_builtin_string_from_units(vm, units, total_length);
-                return true;
-            }
-            usize bytes;
-            if (!mal_checked_size_multiply(
-                    sizeof(c16), total_length, SIZE_MAX, &bytes)) {
-                mal_builtin_string_throw_length(vm);
-                *result = mal_value_new_undefined();
-                return true;
-            }
-            c16 *units = mal_heap_try_alloc_raw_profiled(
-                &vm->heap, bytes, MAL_PROFILE_ALLOCATION_FAMILY_STRING);
-            if (units == nullptr) {
-                mal_vm_throw_allocation_error(vm);
-                *result = mal_value_new_undefined();
-                return true;
-            }
-            usize offset = 0;
-            MalString *part = mal_value_to_string(this_value);
-            usize part_length = mal_string_length(part);
-            memcpy(units, mal_string_code_units(part), sizeof(c16) * part_length);
-            offset += part_length;
-            for (i32 i = 0; i < arg_count; i++) {
-                part = mal_value_to_string(args[i]);
-                part_length = mal_string_length(part);
-                memcpy(units + offset, mal_string_code_units(part), sizeof(c16) * part_length);
-                offset += part_length;
-            }
-            *result = mal_value_from_string(
-                mal_string_new_owned(&vm->heap, units, total_length));
-            return true;
+    if (!mal_value_is_string(this_value)) return false;
+    usize total_length = mal_string_length(mal_value_to_string(this_value));
+    MalValue nonempty = this_value;
+    usize nonempty_count = total_length != 0;
+    for (i32 i = 0; i < arg_count; i++) {
+        if (!mal_value_is_string(args[i])) return false;
+        usize length = mal_string_length(mal_value_to_string(args[i]));
+        if (!mal_checked_size_add(total_length, length, MAL_STRING_MAX_CODE_UNITS, &total_length)) return false;
+        if (length != 0) {
+            nonempty = args[i];
+            nonempty_count++;
         }
     }
-
-    return false;
+    if (nonempty_count <= 1) {
+        *result = nonempty;
+        return true;
+    }
+    if (total_length <= MAL_STRING_INLINE_LATIN1_CODE_UNITS) {
+        c16 units[MAL_STRING_INLINE_LATIN1_CODE_UNITS];
+        MalString *part = mal_value_to_string(this_value);
+        usize offset = mal_string_length(part);
+        mal_string_copy_range_to(part, 0, offset, units);
+        for (i32 i = 0; i < arg_count; i++) {
+            part = mal_value_to_string(args[i]);
+            usize length = mal_string_length(part);
+            mal_string_copy_range_to(part, 0, length, units + offset);
+            offset += length;
+        }
+        *result = mal_builtin_string_from_units(vm, units, total_length);
+        return true;
+    }
+    if (arg_count == 1) {
+        MalString *concatenated;
+        if (!mal_string_new_cons_checked(&vm->heap, mal_value_to_string(this_value),
+                mal_value_to_string(args[0]), &concatenated)) abort();
+        *result = mal_value_from_string(concatenated);
+        return true;
+    }
+    MalTextBuffer output = {.heap = &vm->heap};
+    mal_text_buffer_hint_capacity(&output, total_length);
+    mal_text_buffer_append_string(&output, mal_value_to_string(this_value));
+    for (i32 i = 0; i < arg_count; i++) {
+        mal_text_buffer_append_string(&output, mal_value_to_string(args[i]));
+    }
+    *result = mal_builtin_string_finish_text(vm, &output);
+    return true;
 }
 
 static MalValue mal_builtin_string_prototype_concat(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
@@ -1890,6 +1871,9 @@ static MalValue mal_builtin_string_prototype_concat(MalVm *vm, MalValue this_val
         }
     }
 
+    if (arg_count == 1 && mal_builtin_string_concat_direct(vm, parts.roots[0], parts.roots + 1, 1, &result)) {
+        goto done;
+    }
     MalString *flattened;
     if (!mal_rooted_string_parts_flatten(vm, &parts, &flattened)) {
         mal_builtin_string_throw_length(vm);
@@ -2059,6 +2043,23 @@ MAL_DEFINE_CREATE_HTML_METHOD(sup, "sup", nullptr)
 
 #undef MAL_DEFINE_CREATE_HTML_METHOD
 
+// Repeat an initialized prefix without expanding its physical encoding. Reacquire
+// both addresses after reserve because RAW growth may move the output buffer.
+static void mal_builtin_string_repeat_buffer(
+    MalTextBuffer *buffer, usize start, usize target
+) {
+    while (buffer->length < target && buffer->status == MAL_TEXT_BUFFER_OK) {
+        usize count = buffer->length - start;
+        if (count > target - buffer->length) count = target - buffer->length;
+        assert(count != 0);
+        if (mal_text_buffer_reserve(buffer, count) != MAL_TEXT_BUFFER_OK) break;
+        usize width = buffer->utf16 ? sizeof(c16) : sizeof(u8);
+        memcpy((u8 *) buffer->data + buffer->length * width,
+            (u8 *) buffer->data + start * width, count * width);
+        buffer->length += count;
+    }
+}
+
 #define MAL_STRING_REPEAT_LAZY_MIN_CODE_UNITS ((usize) 65536)
 
 static MalValue mal_builtin_string_prototype_repeat(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
@@ -2097,9 +2098,7 @@ MalValue mal_builtin_string_repeat_numeric(MalVm *vm, MalString *string, f64 cou
     }
     usize repeat = (usize) count;
     usize result_length;
-    usize bytes;
-    if (!mal_checked_size_multiply(length, repeat, MAL_STRING_MAX_CODE_UNITS, &result_length) ||
-        !mal_checked_size_multiply(sizeof(c16), result_length, SIZE_MAX, &bytes)) {
+    if (!mal_checked_size_multiply(length, repeat, MAL_STRING_MAX_CODE_UNITS, &result_length)) {
         mal_builtin_string_throw_length(vm);
         goto done;
     }
@@ -2148,57 +2147,49 @@ lazy_done:
         goto done;
     }
 
-    c16 *code_units = mal_heap_alloc_raw_profiled(
-        &vm->heap, bytes, MAL_PROFILE_ALLOCATION_FAMILY_STRING);
-    string = mal_value_to_string(string_root);
-    const c16 *source = mal_string_code_units(string);
-    usize filled = length;
-    memcpy(code_units, source, sizeof(c16) * length);
-    while (filled < result_length) {
-        usize remaining = result_length - filled;
-        usize copy_length = filled < remaining ? filled : remaining;
-        memcpy(code_units + filled, code_units, sizeof(c16) * copy_length);
-        filled += copy_length;
-    }
-
-    result_value = mal_value_from_string(
-        mal_string_new_owned(&vm->heap, code_units, result_length));
+    MalTextBuffer output = {.heap = &vm->heap};
+    mal_text_buffer_hint_capacity(&output, result_length);
+    mal_text_buffer_append_string(&output, mal_value_to_string(string_root));
+    mal_builtin_string_repeat_buffer(&output, 0, result_length);
+    result_value = mal_builtin_string_finish_text(vm, &output);
 
 done:
     mal_gc_unroot(&string_span);
     return result_value;
 }
 
+static usize mal_builtin_string_edge_whitespace(
+    const MalString *string, usize offset, usize length, bool reverse
+) {
+    MalStringIterator iterator;
+    if (reverse) mal_string_iterator_init_reverse(&iterator, string, offset, length);
+    else mal_string_iterator_init(&iterator, string, offset, length);
+    MalStringSegment segment;
+    usize count = 0;
+    while (mal_string_iterator_next(&iterator, &segment)) {
+        usize local = 0;
+        while (local < segment.length) {
+            usize index = reverse ? segment.length - local - 1 : local;
+            if (!mal_ecma_is_string_whitespace(mal_string_segment_code_unit_at(&segment, index))) break;
+            local++;
+        }
+        count += local;
+        if (local != segment.length) break;
+    }
+    mal_string_iterator_dispose(&iterator);
+    return count;
+}
+
 MalValue mal_builtin_string_trim_known(MalVm *vm, MalString *string, bool trim_start, bool trim_end) {
-    const c16 *code_units;
-    string = mal_builtin_string_flatten_for_scan(string, &code_units);
-    usize start = 0;
     usize end = mal_string_length(string);
+    usize start = trim_start ? mal_builtin_string_edge_whitespace(string, 0, end, false) : 0;
+    if (trim_end) end -= mal_builtin_string_edge_whitespace(string, start, end - start, true);
+    if (start == 0 && end == mal_string_length(string)) return mal_value_from_string(string);
 
-    while (trim_start && start < end && mal_ecma_is_string_whitespace(code_units[start])) {
-        start++;
-    }
-    while (trim_end && end > start && mal_ecma_is_string_whitespace(code_units[end - 1])) {
-        end--;
-    }
-
-    usize result_length = end - start;
-    if (start == 0 && result_length == mal_string_length(string)) {
-        return mal_value_from_string(string);
-    }
-    if (result_length == 0) {
-        return mal_builtin_string_empty(vm);
-    }
-    if (result_length == 1) {
-        return mal_value_from_string(
-            mal_intrinsic_code_unit(vm, code_units[start]));
-    }
-
-    // Only a dependent result can allocate while still needing its parent.
     MalBuiltinRootedString string_root;
     mal_builtin_string_root_init(&string_root, string);
     MalValue result = mal_builtin_string_slice(
-        vm, mal_builtin_string_root_get(&string_root), start, result_length);
+        vm, mal_builtin_string_root_get(&string_root), start, end - start);
     mal_builtin_string_root_dispose(&string_root);
     return result;
 }
@@ -2227,98 +2218,73 @@ static MalValue mal_builtin_string_prototype_trim_end(MalVm *vm, MalValue this_v
     return mal_builtin_string_trim_impl(vm, this_value, false, true);
 }
 
+static bool mal_builtin_string_ascii_case_scan(
+    const MalString *string, bool to_upper, bool *changed
+) {
+    MalStringIterator iterator;
+    mal_string_iterator_init(&iterator, string, 0, mal_string_length(string));
+    MalStringSegment segment;
+    *changed = false;
+    bool ascii = true;
+    while (mal_string_iterator_next(&iterator, &segment)) {
+        c16 aggregate = 0;
+        bool mapped_any = false;
+        for (usize i = 0; i < segment.length; i++) {
+            c16 unit = mal_string_segment_code_unit_at(&segment, i);
+            aggregate |= unit;
+            c16 mapped = to_upper ? mal_ascii_to_upper(unit) : mal_ascii_to_lower(unit);
+            mapped_any |= mapped != unit;
+        }
+        *changed |= mapped_any;
+        if (aggregate > 0x7f) {
+            ascii = false;
+            break;
+        }
+    }
+    mal_string_iterator_dispose(&iterator);
+    return ascii;
+}
+
 MalValue mal_builtin_string_case_known(MalVm *vm, MalString *string, bool to_upper, MalUnicodeLocale locale) {
     usize length = mal_string_length(string);
-    const c16 *source;
-    string = mal_builtin_string_flatten_for_scan(string, &source);
     MAL_PERF_COUNT(string_case_calls);
     MAL_PERF_ADD(string_case_input_code_units, length);
-    if (locale != MAL_UNICODE_LOCALE_ROOT || !mal_builtin_string_ascii_units(source, length)) {
+    bool changed;
+    if (locale != MAL_UNICODE_LOCALE_ROOT || !mal_builtin_string_ascii_case_scan(string, to_upper, &changed)) {
+        const c16 *source;
+        string = mal_builtin_string_flatten_for_scan(string, &source);
         c16 *output = nullptr;
         usize output_length = 0;
         MalUnicodeStatus status = mal_unicode_case(source, length, to_upper, locale, &output, &output_length);
         return mal_builtin_string_unicode_result(vm, string, status, output, output_length, true);
     }
-
-    usize changed_at = 0;
-    while (length - changed_at >= 4) {
-        bool unchanged = true;
-        for (usize lane = 0; lane < 4; lane++) {
-            c16 source_unit = source[changed_at + lane];
-            c16 mapped_unit = to_upper
-                ? mal_ascii_to_upper(source_unit)
-                : mal_ascii_to_lower(source_unit);
-            if (mapped_unit != source_unit) {
-                unchanged = false;
-                break;
-            }
-        }
-        if (!unchanged) break;
-        changed_at += 4;
-    }
-    while (changed_at < length) {
-        c16 source_unit = source[changed_at];
-        c16 mapped_unit =
-            to_upper ? mal_ascii_to_upper(source_unit) : mal_ascii_to_lower(source_unit);
-        if (mapped_unit != source_unit) break;
-        changed_at++;
-    }
-    if (changed_at == length) {
+    if (!changed) {
         MAL_PERF_COUNT(string_case_reuses);
         return mal_value_from_string(string);
     }
 
     MAL_PERF_COUNT(string_case_changed_allocations);
     MAL_PERF_ADD(string_case_changed_code_units, length);
-    if (length <= MAL_STRING_INLINE_CODE_UNITS) {
-        c16 code_units[MAL_STRING_INLINE_CODE_UNITS];
-        if (changed_at > 0) {
-            memcpy(code_units, source, sizeof(c16) * changed_at);
+    MalBuiltinRootedString root;
+    mal_builtin_string_root_init(&root, string);
+    u8 inline_units[MAL_STRING_INLINE_LATIN1_CODE_UNITS];
+    u8 *units = length <= sizeof(inline_units) ? inline_units
+        : mal_heap_alloc_raw_profiled(&vm->heap, length, MAL_PROFILE_ALLOCATION_FAMILY_STRING);
+    MalStringIterator iterator;
+    mal_string_iterator_init(&iterator, mal_builtin_string_root_get(&root), 0, length);
+    MalStringSegment segment;
+    usize position = 0;
+    while (mal_string_iterator_next(&iterator, &segment)) {
+        for (usize i = 0; i < segment.length; i++) {
+            c16 unit = mal_string_segment_code_unit_at(&segment, i);
+            units[position++] = (u8) (to_upper ? mal_ascii_to_upper(unit) : mal_ascii_to_lower(unit));
         }
-        usize i = changed_at;
-        while (length - i >= 4) {
-            for (usize lane = 0; lane < 4; lane++) {
-                code_units[i + lane] = to_upper
-                    ? mal_ascii_to_upper(source[i + lane])
-                    : mal_ascii_to_lower(source[i + lane]);
-            }
-            i += 4;
-        }
-        for (; i < length; i++) {
-            code_units[i] =
-                to_upper ? mal_ascii_to_upper(source[i]) : mal_ascii_to_lower(source[i]);
-        }
-        MalValue result = mal_builtin_string_from_units(vm, code_units, length);
-        return result;
     }
-
-    MalValue string_root = mal_value_from_string(string);
-    MalRootSpan root_span;
-    mal_gc_root(&root_span, &string_root, 1);
-    c16 *code_units = mal_heap_alloc_raw_profiled(
-        &vm->heap, sizeof(c16) * length, MAL_PROFILE_ALLOCATION_FAMILY_STRING);
-    string = mal_value_to_string(string_root);
-    source = mal_string_code_units(string);
-    if (changed_at > 0) {
-        memcpy(code_units, source, sizeof(c16) * changed_at);
-    }
-    usize i = changed_at;
-    while (length - i >= 4) {
-        for (usize lane = 0; lane < 4; lane++) {
-            code_units[i + lane] = to_upper
-                ? mal_ascii_to_upper(source[i + lane])
-                : mal_ascii_to_lower(source[i + lane]);
-        }
-        i += 4;
-    }
-    for (; i < length; i++) {
-        code_units[i] =
-            to_upper ? mal_ascii_to_upper(source[i]) : mal_ascii_to_lower(source[i]);
-    }
-    MalValue result = mal_value_from_string(
-        mal_string_new_owned(&vm->heap, code_units, length)
-    );
-    mal_gc_unroot(&root_span);
+    mal_string_iterator_dispose(&iterator);
+    MalValue result = mal_value_from_string(units == inline_units
+        ? mal_string_new_latin1_copy(&vm->heap, units, length)
+        : mal_string_new_latin1_owned(&vm->heap, units, length));
+    mal_builtin_string_root_dispose(&root);
     return result;
 }
 
@@ -2441,73 +2407,66 @@ bool mal_builtin_string_ascii_case_chain_length_span_locked(
         true);
 }
 
-static usize mal_builtin_string_find_invalid_utf16(
-    const c16 *units, usize length
-) {
-    usize index = 0;
-    while (index < length) {
-        while (length - index >= 4 &&
-               !mal_utf16_is_surrogate(units[index]) &&
-               !mal_utf16_is_surrogate(units[index + 1]) &&
-               !mal_utf16_is_surrogate(units[index + 2]) &&
-               !mal_utf16_is_surrogate(units[index + 3])) {
-            index += 4;
+static usize mal_builtin_string_find_invalid_utf16(const MalString *string) {
+    MalStringIterator iterator;
+    usize length = mal_string_length(string);
+    mal_string_iterator_init(&iterator, string, 0, length);
+    MalStringSegment segment;
+    usize position = 0, invalid = length;
+    bool pending_lead = false;
+    while (mal_string_iterator_next(&iterator, &segment)) {
+        if (segment.latin1) {
+            if (pending_lead) {
+                invalid = position - 1;
+                break;
+            }
+            position += segment.length;
+            continue;
         }
-        if (index == length) break;
-        usize width;
-        if (!mal_utf16_read_scalar(units, length, index, nullptr, &width)) {
-            return index;
+        for (usize i = 0; i < segment.length; i++, position++) {
+            c16 unit = segment.utf16_units[i];
+            if (pending_lead) {
+                if (!mal_utf16_is_trail_surrogate(unit)) {
+                    invalid = position - 1;
+                    goto done;
+                }
+                pending_lead = false;
+            } else if (mal_utf16_is_lead_surrogate(unit)) {
+                pending_lead = true;
+            } else if (mal_utf16_is_trail_surrogate(unit)) {
+                invalid = position;
+                goto done;
+            }
         }
-        index += width;
     }
-    return length;
+    if (invalid == length && pending_lead) invalid = length - 1;
+done:
+    mal_string_iterator_dispose(&iterator);
+    return invalid;
 }
 
 MalValue mal_builtin_string_is_well_formed_known(MalString *string) {
-    usize length = mal_string_length(string);
-    const c16 *units;
-    string = mal_builtin_string_flatten_for_scan(string, &units);
     return mal_value_new_boolean(
-        mal_builtin_string_find_invalid_utf16(units, length) == length);
+        mal_builtin_string_find_invalid_utf16(string) == mal_string_length(string));
 }
 
 MalValue mal_builtin_string_to_well_formed_known(MalVm *vm, MalString *string) {
     usize length = mal_string_length(string);
-    const c16 *source;
-    string = mal_builtin_string_flatten_for_scan(string, &source);
-    usize first_invalid = mal_builtin_string_find_invalid_utf16(source, length);
-    if (first_invalid == length) {
-        return mal_value_from_string(string);
-    }
+    usize first_invalid = mal_builtin_string_find_invalid_utf16(string);
+    if (first_invalid == length) return mal_value_from_string(string);
 
-    usize bytes;
-    if (!mal_checked_size_multiply(sizeof(c16), length, SIZE_MAX, &bytes)) {
-        mal_builtin_string_throw_length(vm);
-        return mal_value_new_undefined();
-    }
-    MalValue string_root = mal_value_from_string(string);
-    MalRootSpan root_span;
-    mal_gc_root(&root_span, &string_root, 1);
-    c16 *code_units = mal_heap_alloc_raw_profiled(
-        &vm->heap, bytes, MAL_PROFILE_ALLOCATION_FAMILY_STRING);
-    string = mal_value_to_string(string_root);
-    source = mal_string_code_units(string);
-    if (first_invalid != 0) {
-        memcpy(code_units, source, sizeof(c16) * first_invalid);
-    }
+    MalBuiltinRootedString root;
+    mal_builtin_string_root_init(&root, string);
+    c16 *units = mal_heap_alloc_raw_profiled(
+        &vm->heap, sizeof(c16) * length, MAL_PROFILE_ALLOCATION_FAMILY_STRING);
+    mal_string_copy_range_to(mal_builtin_string_root_get(&root), 0, length, units);
     for (usize i = first_invalid; i < length;) {
         usize width;
-        bool valid = mal_utf16_read_scalar(source, length, i, nullptr, &width);
-        if (valid) {
-            memcpy(code_units + i, source + i, sizeof(c16) * width);
-        } else {
-            code_units[i] = 0xFFFD;
-        }
+        if (!mal_utf16_read_scalar(units, length, i, nullptr, &width)) units[i] = 0xfffd;
         i += width;
     }
-    MalValue result = mal_value_from_string(
-        mal_string_new_owned(&vm->heap, code_units, length));
-    mal_gc_unroot(&root_span);
+    MalValue result = mal_value_from_string(mal_string_new_owned(&vm->heap, units, length));
+    mal_builtin_string_root_dispose(&root);
     return result;
 }
 
@@ -3557,36 +3516,17 @@ MalValue mal_builtin_string_pad_numeric(MalVm *vm, MalString *string, f64 raw_ta
         result = roots[1];
         goto done;
     }
-    usize bytes;
-    if (!mal_checked_size_multiply(sizeof(c16), target, SIZE_MAX, &bytes)) {
-        mal_builtin_string_throw_length(vm);
-        goto done;
-    }
-    c16 *code_units = mal_heap_alloc_raw_profiled(
-        &vm->heap, bytes, MAL_PROFILE_ALLOCATION_FAMILY_STRING);
+    usize fill_length = target - length;
+    MalTextBuffer output = {.heap = &vm->heap};
+    mal_text_buffer_hint_capacity(&output, target);
     string = mal_value_to_string(roots[0]);
     pad = mal_value_to_string(roots[1]);
-    usize fill_length = target - length;
-    usize fill_offset = pad_start ? 0 : length;
-
-    if (!pad_start) {
-        memcpy(code_units, mal_string_code_units(string), (usize) sizeof(c16) * length);
-    }
-    c16 *fill = code_units + fill_offset;
-    usize filled = pad_length < fill_length ? pad_length : fill_length;
-    memcpy(fill, mal_string_code_units(pad), sizeof(c16) * filled);
-    while (filled < fill_length) {
-        usize remaining = fill_length - filled;
-        usize copy_length = filled < remaining ? filled : remaining;
-        memcpy(fill + filled, fill, sizeof(c16) * copy_length);
-        filled += copy_length;
-    }
-    if (pad_start) {
-        memcpy(code_units + fill_length, mal_string_code_units(string), (usize) sizeof(c16) * length);
-    }
-
-    result = mal_value_from_string(
-        mal_string_new_owned(&vm->heap, code_units, target));
+    if (!pad_start) mal_text_buffer_append_string(&output, string);
+    usize fill_start = output.length;
+    mal_text_buffer_append_range(&output, pad, 0, pad_length < fill_length ? pad_length : fill_length);
+    mal_builtin_string_repeat_buffer(&output, fill_start, fill_start + fill_length);
+    if (pad_start) mal_text_buffer_append_string(&output, string);
+    result = mal_builtin_string_finish_text(vm, &output);
 
 done:
     mal_gc_unroot(&root_span);
