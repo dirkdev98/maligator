@@ -958,7 +958,11 @@ static void mal_gc_shade(MalHeapHeader *cell) {
             desired = (expected & ~MAL_MARK_COLOR) | g_gc_vm->heap.mark_color;
         } else {
             if (mal_heap_mark_is_old(expected)) return;
-            desired = expected | MAL_MARK_OLD;
+            // Minors park the mutator and never dispatch workers, so no other
+            // thread can compete for this young cell's mark.
+            atomic_store_explicit(&cell->mark, expected | MAL_MARK_OLD,
+                memory_order_relaxed);
+            break;
         }
         if (atomic_compare_exchange_weak_explicit(&cell->mark, &expected, desired,
                 memory_order_relaxed, memory_order_relaxed)) break;
