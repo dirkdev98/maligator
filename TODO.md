@@ -753,9 +753,10 @@ remains a Maligator extension and does not count as global fetch conformance.
       throughput. A separate ten-pair, 30-second HTTP routes comparison found a
       0.66% loss against `d149ffe6`; a newer five-pair run estimated a 1.77%
       loss and 1.68% more server CPU per completed response, both with intervals
-      spanning zero. Its single GC diagnostic cannot attribute the loss. The
-      direct primitive-filter ablation is queued; keep mutator-owned sweep unless
-      measured benefit justifies worker ownership.
+      spanning zero. Its single GC diagnostic cannot attribute the loss. A
+      direct ten-pair primitive-filter rollback found no routes throughput or
+      CPU recovery. Keep mutator-owned sweep unless measured benefit justifies
+      worker ownership.
 - [ ] Validate native worker capacity under live constrained and nested CPU quotas.
       Synthetic v1/v2 mounted-path and visible-ancestor fixtures pass; hidden
       namespace ancestors cannot be inferred. Keep the inline capacity fallback.
@@ -767,17 +768,19 @@ remains a Maligator extension and does not count as global fetch conformance.
 
 - [ ] Snapshot/dispatch: compare copied heap bytes, discovery yield, preparation,
       worker CPU, merge, and remark wait on finished app-batch and HTTP binaries.
-      The primitive filter remains provisional; shape-key omission and active-worker
-      sizing were reverted after application regressions. A ten-pair, 30-second HTTP
+      Keep the primitive filter, though its throughput benefit remains unproven.
+      Shape-key omission and active-worker sizing were reverted after application
+      regressions. A ten-pair, 30-second HTTP
       comparison found Express routes about 0.66% slower than `d149ffe6`, with
       exact completed-response counts confirming the signal. A newer five-pair
       routes run had a directionally consistent 1.77% loss and 1.68% more server
       CPU per completed response, but its GC diagnostic cannot assign the cause:
       snapshot preparation was only 5.434 ms during an 18-second routes load.
-      A direct primitive-filter rollback comparison is queued. A separate app
-      diagnostic copied more total values despite primitive filtering while
-      batch counts also rose; filtering within a snapshot does not prove lower
-      application work.
+      A direct ten-pair rollback found no resolved routes throughput or CPU gain
+      from removing the filter, while one diagnostic copied 13.4% more bytes per
+      completion. A separate app diagnostic copied more total values despite
+      primitive filtering while batch counts also rose; filtering within a
+      snapshot does not prove lower application work.
 - [ ] Safe worker traversal: private draining was removed after zero app-batch
       drain traces and no measured benefit. Revisit only with a representative
       chain or shared-graph handoff benefit and combined CPU gain.
@@ -793,8 +796,10 @@ remains a Maligator extension and does not count as global fetch conformance.
       comparison rejected fixed cadence 16: elapsed/CPU did not improve, and
       peak RSS rose about 27% in every pair; its 2,000-iteration diagnostic had
       fewer majors but more minor cell visits and a higher mapped/RSS plateau.
-      A cadence-four comparison with 200/2,000-iteration samples is queued;
-      neither fixed cadence is a pressure policy.
+      Fixed cadence four also failed to improve ordinary throughput materially
+      or lower RSS meaningfully: its 2,000-iteration diagnostic reduced minor
+      cells inspected by 16.5% but added major work and 3.1% total pause time.
+      Neither fixed cadence is a pressure policy.
       Validate nested cgroup quota discovery on Linux.
 - [ ] Bounded slices: retain the skipped-block sweep budget only after combined
       latency review. One instrumented app run had more short major slices and a
@@ -833,15 +838,17 @@ remains a Maligator extension and does not count as global fetch conformance.
       unmeasured. The prior app diagnostic allocated only 32,800 bytes during major
       sweep; establish representative long-sweep exposure before adding per-block
       free lists.
-- [ ] Complete the queued cadence-four resource control and primitive-filter HTTP
+- [x] Complete the cadence-four resource control and primitive-filter HTTP
       ablation; record per-candidate and combined decisions. The retained-source
       five-family portfolio completed with matching output checks and an inconclusive
       0.82% aggregate gain estimate. The separate 30-second HTTP diagnostic is
       complete but does not attribute the routes regression. The 15-pair fixed
       cadence-16 experiment was rejected for its consistent RSS cost; a 2,000-
       iteration control confirms a higher mapped/RSS plateau and more minor
-      sweep work. Linux gate, Wasm parity, and the final benchmark harness gate
-      passed.
+      sweep work. Cadence four reduces minor scanning but adds major work with
+      no established ordinary throughput benefit, so cadence eight remains.
+      Filter removal also failed to recover routes throughput. Linux gate,
+      Wasm parity, and the final benchmark harness gate passed.
 
 # Triggered work
 
