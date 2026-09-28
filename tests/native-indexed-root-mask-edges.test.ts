@@ -154,7 +154,7 @@ function privateSlot(source: string, register: number): number {
 
 describe("native numeric indexed-load root publication", () => {
 	it.each(["int32", "number"] as const)(
-		"admits only final results and leaves successful %s index probes without root-copy stores",
+		"keeps final results and unchanged receivers private on successful %s index probes",
 		(representation) => {
 			const source = emit(
 				fn([key, indexedLoad, indexedLoad, call, { opcode: "RETURN", value: 6 }]),
@@ -166,8 +166,8 @@ describe("native numeric indexed-load root publication", () => {
 				representation,
 			);
 			privateSlot(source, indexedLoad.dst);
-			expect(source).not.toContain("#define r0 (__private_r0)");
-			expect(source).toContain("#define r0 (__gc_slots[");
+			privateSlot(source, indexedLoad.object);
+			expect(source.match(/__gc_slots\[\d+\] = r0;/g)).toHaveLength(1);
 			const firstProbe = source.indexOf("mal_vm_array_try_get_index(");
 			const mask = source.indexOf("MAL_ROOT_MASK(");
 			expect(firstProbe).toBeGreaterThan(-1);
@@ -196,7 +196,8 @@ describe("native numeric indexed-load root publication", () => {
 				representation,
 				plan,
 			);
-			expect(source).not.toContain("__private_r");
+			expect(source).not.toContain(`#define r${indexedLoad.dst} (__private_r`);
+			expect(source).toContain(`#define r${indexedLoad.dst} (__gc_slots[`);
 		},
 	);
 

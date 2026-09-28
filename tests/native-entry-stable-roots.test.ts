@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { nativeEntryStableRootRegisters } from "../src/compiler/target/lower-native-root-publication.ts";
+import {
+	nativeEntryStableRootRegisters,
+	nativePrivateRootRegisters,
+} from "../src/compiler/target/lower-native-root-publication.ts";
 import { createConservativeNativePlan } from "../src/compiler/target/program-image.ts";
 import { emitCompiledFunction } from "../src/compiler/target/render-native-c.ts";
 import type {
@@ -72,6 +75,50 @@ describe("entry-stable private roots", () => {
 		expect(source).toContain("#define r0 (__private_r0)");
 		expect(source.match(/__gc_slots\[\d+\] = r0;/g)).toHaveLength(1);
 		expect(source).toContain("mal_vm_op_load_property_ic_static_miss");
+	});
+	it("publishes a stable callee once without requiring a property-access nomination", () => {
+		const invokeParameter: BytecodeInstruction = { ...call, callee: 0, thisValue: 1 };
+		const body = fn([
+			{ opcode: "CREATE_UNDEFINED", dst: 1 },
+			invokeParameter,
+			invokeParameter,
+			{ opcode: "RETURN", value: 2 },
+		]);
+		const source = emit(body);
+		expect(source).toContain("#define r0 (__private_r0)");
+		expect(source.match(/__gc_slots\[\d+\] = r0;/g)).toHaveLength(1);
+		expect(source.match(/mal_vm_call_cached\(/g)).toHaveLength(2);
+	});
+	it("does not nominate a no-property parameter whose physical register is replaced", () => {
+		const source = emit(
+			fn([
+				{ opcode: "CREATE_UNDEFINED", dst: 1 },
+				{ ...call, callee: 0, thisValue: 1, dst: 0 },
+				{ ...call, callee: 0, thisValue: 1 },
+				{ opcode: "RETURN", value: 2 },
+			]),
+		);
+		expect(source).toMatch(/#define r0 \(__gc_slots\[\d+\]\)/);
+		expect(source).not.toContain("#define r0 (__private_r0)");
+	});
+	it("keeps a stable parameter in rooted storage when a specialized call uses it", () => {
+		const body = fn([
+			{ opcode: "CREATE_UNDEFINED", dst: 1 },
+			{ ...call, callee: 0, thisValue: 1 },
+			{ opcode: "RETURN", value: 2 },
+		]);
+		const native = createConservativeNativePlan([body]).functions[0]!;
+		const frameRegisters = new Set(
+			native.gc.safepoints.flatMap((point) => point.rootRegisters),
+		);
+		expect(nativePrivateRootRegisters(body, native, frameRegisters).has(0)).toBe(true);
+		expect(
+			nativePrivateRootRegisters(
+				body,
+				{ ...native, instructions: [undefined, { kind: "call" }, undefined] },
+				frameRegisters,
+			).has(0),
+		).toBe(false);
 	});
 	it("keeps publication when a parameter register receives another heap value", () => {
 		const source = emit(

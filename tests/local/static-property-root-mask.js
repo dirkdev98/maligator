@@ -1090,4 +1090,76 @@ if (numericClosureObservations !== 2 || numericClosureResult(4) !== 363) {
 	);
 }
 
+function callEntryStableParameter(callback, collect) {
+	collect();
+	callback();
+	return callback;
+}
+
+function retainEntryStableParameterThroughLoop(value, callback, count) {
+	for (let index = 0; index < count; index++) {
+		try {
+			callback(index);
+		} catch (failure) {
+			if (failure !== 379) throw failure;
+			callback(-1);
+		}
+	}
+	return value;
+}
+
+globalThis.entryStableParameterReaders = [
+	callEntryStableParameter,
+	retainEntryStableParameterThroughLoop,
+];
+
+const entryStableCalleeOwner = {
+	value: function entryStableCalleeTarget() {
+		return 367;
+	},
+};
+let entryStableCalleeCollections = 0;
+const entryStableCalleeResult = globalThis.entryStableParameterReaders[0](
+	entryStableCalleeOwner.value,
+	function () {
+		entryStableCalleeOwner.value = null;
+		entryStableCalleeCollections++;
+		gc();
+	},
+);
+gc();
+if (
+	entryStableCalleeResult() !== 367 ||
+	entryStableCalleeOwner.value !== null ||
+	entryStableCalleeCollections !== 1
+) {
+	throw new Error("entry-stable callee was lost after detachment and collection");
+}
+
+for (let throwing = 0; throwing < 2; throwing++) {
+	const owner = { value: { marker: 373 } };
+	let collections = 0;
+	let catches = 0;
+	const result = globalThis.entryStableParameterReaders[1](
+		owner.value,
+		function (index) {
+			owner.value = null;
+			collections++;
+			gc();
+			if (index === -1) catches++;
+			if (throwing === 1 && index === 1) throw 379;
+		},
+		4,
+	);
+	gc();
+	if (
+		result.marker !== 373 ||
+		owner.value !== null ||
+		collections !== 4 + throwing ||
+		catches !== throwing
+	) {
+		throw new Error("entry-stable heap parameter was lost at a catch or loop join");
+	}
+}
+
 console.log("static-property-root-mask PASS");

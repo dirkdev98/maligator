@@ -1544,6 +1544,8 @@ describe("emit-program-image instruction packing", () => {
 					Number(match[2]),
 				]),
 			);
+			for (const match of output!.matchAll(/__gc_slots\[(\d+)\] = r(\d+);/g))
+				slots.set(Number(match[2]), Number(match[1]));
 			const masks: Array<bigint> = [];
 			let publishedMask = 0n;
 			for (const match of output!.matchAll(

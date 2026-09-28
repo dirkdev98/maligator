@@ -1,5 +1,6 @@
 import { beforeAll, describe, expect, it } from "vitest";
 import {
+	nativeEntryStableRootRegisters,
 	nativePrivateCallResultIps,
 	nativePrivateRootRegisters,
 } from "../../src/compiler/target/lower-native-root-publication.ts";
@@ -14,6 +15,14 @@ import {
 const fixture = "tests/local/static-property-root-mask.js";
 const hostGc = { MAL_HOST_GC: "1" };
 const expected = ["static-property-root-mask PASS"];
+const entryStableKernels = [
+	{ name: "callEntryStableParameter", parameters: [0], catchLoop: false },
+	{
+		name: "retainEntryStableParameterThroughLoop",
+		parameters: [0, 1],
+		catchLoop: true,
+	},
+];
 const publicationKernels = [
 	{
 		name: "numericOnlyClosureLifetime",
@@ -147,6 +156,18 @@ describe("native static-property root-mask publication", () => {
 	let interpreted: string;
 	let genericStaticSafepointLoadCount = 0;
 	let wideRootCount = 0;
+	const entryStableContracts = new Map<
+		string,
+		{
+			source: string;
+			privateRegisters: ReadonlySet<number>;
+			stableRegisters: ReadonlySet<number>;
+			callIncomingRoots: Array<ReadonlyArray<number>>;
+			hasPropertyAccess: boolean;
+			hasCatch: boolean;
+			hasLoopBackedge: boolean;
+		}
+	>();
 	const publicationContracts = new Map<
 		string,
 		{
@@ -209,6 +230,29 @@ describe("native static-property root-mask publication", () => {
 					...(result.programImage.runtime.stringConstants[stringIndex] ?? []),
 				);
 			const name = stringConstant(fn.nameStringIndex);
+			const entryStableKernel = entryStableKernels.find((kernel) => kernel.name === name);
+			if (entryStableKernel !== undefined) {
+				const native = result.programImage.native.functions[index]!;
+				const frameRegisters = new Set(
+					native.gc.safepoints.flatMap((point) => point.rootRegisters),
+				);
+				const privateRegisters = nativePrivateRootRegisters(fn, native, frameRegisters);
+				entryStableContracts.set(name, {
+					source: emitCompiledFunction(fn, native, index, "", false)?.source ?? "",
+					privateRegisters,
+					stableRegisters: nativeEntryStableRootRegisters(fn, privateRegisters),
+					callIncomingRoots: native.gc.safepoints
+						.filter((point) => fn.instructions[point.instructionIp]?.opcode === "CALL")
+						.map((point) => point.incomingRootRegisters),
+					hasPropertyAccess: fn.instructions.some((instruction) =>
+						instruction.opcode.includes("PROPERTY"),
+					),
+					hasCatch: fn.handlers.length > 0,
+					hasLoopBackedge: native.gc.safepoints.some(
+						(point) => point.kind === "loop-backedge",
+					),
+				});
+			}
 			const kernel = publicationKernels.find((kernel) => kernel.name === name);
 			if (!kernel) continue;
 			const retainedRegisters = kernel.properties.map((property) => {
@@ -285,6 +329,33 @@ describe("native static-property root-mask publication", () => {
 			});
 		}
 	}, 600_000);
+
+	it.each(entryStableKernels)(
+		"keeps the no-property parameters private and entry-published in $name",
+		({ name, parameters, catchLoop }) => {
+			const contract = entryStableContracts.get(name);
+			expect(contract).toBeDefined();
+			expect(contract!.hasPropertyAccess).toBe(false);
+			expect(contract!.callIncomingRoots.length).toBeGreaterThan(0);
+			for (const register of parameters) {
+				expect(contract!.privateRegisters.has(register)).toBe(true);
+				expect(contract!.stableRegisters.has(register)).toBe(true);
+				expect(contract!.source).toContain(
+					`#define r${register} (__private_r${register})`,
+				);
+				expect(
+					contract!.source.match(new RegExp(`__gc_slots\\[\\d+\\] = r${register};`, "g")),
+				).toHaveLength(1);
+				for (const roots of contract!.callIncomingRoots) {
+					expect(roots).toContain(register);
+				}
+			}
+			if (catchLoop) {
+				expect(contract!.hasCatch).toBe(true);
+				expect(contract!.hasLoopBackedge).toBe(true);
+			}
+		},
+	);
 
 	it.each(publicationKernels.filter((kernel) => kernel.properties.length > 0))(
 		"retains private preceding roots at the audited boundary in $name",
