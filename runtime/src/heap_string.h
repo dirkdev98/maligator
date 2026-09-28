@@ -143,28 +143,25 @@ static inline const c16 *mal_string_code_units(const MalString *string) {
     return mal_string_flatten((MalString *) string);
 }
 
+/** Read an in-bounds unit from a known flat leaf, reacquiring its current payload. */
+static inline c16 mal_string_flat_code_unit_at(const MalString *string, usize index) {
+    if (string->latin1) {
+        return string->storage == MAL_STRING_STORAGE_INLINE
+            ? string->inline_latin1_units[index] : string->latin1_units[index];
+    }
+    return string->storage == MAL_STRING_STORAGE_INLINE
+        ? string->inline_code_units[index] : string->code_units[index];
+}
+
+/** Ancestry resolution does not allocate, widen, flatten, or collect. */
+c16 mal_string_code_unit_at_slow(const MalString *string, usize index);
+
 /** Read one in-bounds UTF-16 unit without allocating, widening, or flattening. */
 static inline c16 mal_string_code_unit_at(MalString *string, usize index) {
-    for (;;) {
-        if (string->storage == MAL_STRING_STORAGE_DEPENDENT) {
-            index += string->slice_offset;
-            string = string->parent;
-        } else if (string->storage == MAL_STRING_STORAGE_CONS) {
-            MalString *left = string->left;
-            if (index < left->length) {
-                string = left;
-            } else {
-                index -= left->length;
-                string = string->right;
-            }
-        } else if (string->latin1) {
-            return string->storage == MAL_STRING_STORAGE_INLINE
-                ? string->inline_latin1_units[index] : string->latin1_units[index];
-        } else {
-            return string->storage == MAL_STRING_STORAGE_INLINE
-                ? string->inline_code_units[index] : string->code_units[index];
-        }
+    if (string->storage >= MAL_STRING_STORAGE_DEPENDENT) {
+        return mal_string_code_unit_at_slow(string, index);
     }
+    return mal_string_flat_code_unit_at(string, index);
 }
 
 typedef struct MalStringSegment {
