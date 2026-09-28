@@ -2548,11 +2548,10 @@ static void mal_gc_weak_pass(void) {
         for (usize d = 0; d < g_gc->dead_keys_count; ++d) {
             mal_table_delete(entries, g_gc->dead_keys[d]);
         }
-        // mal_table_delete only tombstones; without compaction a churning weak
-        // collection's order array grows without bound. Weak collections have no
-        // JS iteration surface, so compacting (which renumbers storage) is safe.
+        // Deletion already repairs hash probes. Amortize storage compaction so a
+        // sparse death does not rebuild every surviving entry on each collection.
         if (g_gc->dead_keys_count > 0) {
-            mal_table_compact(entries);
+            mal_table_compact_if_needed(entries);
         }
     }
 

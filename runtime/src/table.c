@@ -632,6 +632,12 @@ void mal_table_compact(MalTable *table) {
     mal_table_rehash(table, target_slots);
 }
 
+void mal_table_compact_if_needed(MalTable *table) {
+    if (table->size == 0 || mal_table_should_compact(table)) {
+        mal_table_compact(table);
+    }
+}
+
 void mal_table_pin(MalTable *table) {
     if (table != nullptr) table->iterator_pins++;
 }

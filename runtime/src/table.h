@@ -108,6 +108,9 @@ void mal_table_clear(MalTable *table);
  */
 void mal_table_compact(MalTable *table);
 
+/** Reclaim empty storage or compact a Map-family table once dead entries dominate. */
+void mal_table_compact_if_needed(MalTable *table);
+
 /** Prevent/re-enable entry renumbering while a persistent iterator is live. */
 void mal_table_pin(MalTable *table);
 void mal_table_unpin(MalTable *table);

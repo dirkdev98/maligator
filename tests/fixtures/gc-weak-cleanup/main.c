@@ -2,6 +2,7 @@
 #include <stdio.h>
 
 #include "gc.h"
+#include "heap_symbol.h"
 #include "map_object.h"
 #include "vm.h"
 
@@ -40,6 +41,65 @@ static void count_finalized(MalHeapHeader *cell) {
     if (entry->cell == cell) entry->finalizations++;
 }
 
+static MalValue new_weak_key(MalVm *vm, usize index) {
+    if (index % 2 == 0) {
+        return mal_value_from_object(mal_object_new(&vm->heap, nullptr));
+    }
+    return mal_value_from_symbol(mal_symbol_new(&vm->heap, nullptr));
+}
+
+static int check_sparse_churn(MalVm *vm) {
+    enum { LIVE_COUNT = 256, CHURN_COUNT = LIVE_COUNT * 3 };
+    MalValue roots[LIVE_COUNT + 2];
+    for (usize i = 0; i < countof(roots); ++i) roots[i] = mal_value_new_undefined();
+    MalRootSpan span;
+    mal_gc_root(&span, roots, countof(roots));
+    MalMapObject *map = mal_map_object_new(&vm->heap, MAL_HEAP_MAP_OBJECT, nullptr, true);
+    roots[0] = mal_value_from_object(&map->object);
+    MalMapObject *set = mal_map_object_new(&vm->heap, MAL_HEAP_SET_OBJECT, nullptr, true);
+    roots[1] = mal_value_from_object(&set->object);
+    for (usize i = 0; i < LIVE_COUNT; ++i) {
+        roots[i + 2] = new_weak_key(vm, i);
+        mal_map_object_set(map, roots[i + 2], mal_value_from_i32((i32) i));
+        mal_map_object_set(set, roots[i + 2], mal_value_new_undefined());
+    }
+    mal_gc_collect(vm);
+    usize initial_raw = mal_heap_usage(&vm->heap).raw_owned_bytes;
+    for (usize round = 0; round < CHURN_COUNT; ++round) {
+        usize index = round % LIVE_COUNT;
+        roots[index + 2] = mal_value_new_undefined();
+        mal_gc_collect(vm);
+        if (mal_map_object_size(map) != LIVE_COUNT - 1 ||
+            mal_map_object_size(set) != LIVE_COUNT - 1) return 5;
+        // Two tables may retain one extra entry buffer's worth of tombstones,
+        // but repeated weak deaths must not grow RAW ownership without bound.
+        if (mal_heap_usage(&vm->heap).raw_owned_bytes >
+            initial_raw + LIVE_COUNT * 64) return 6;
+        roots[index + 2] = new_weak_key(vm, index);
+        mal_map_object_set(map, roots[index + 2], mal_value_from_i32((i32) index));
+        mal_map_object_set(set, roots[index + 2], mal_value_new_undefined());
+        if (round % 64 == 0 || round + 1 == CHURN_COUNT) {
+            for (usize i = 0; i < LIVE_COUNT; ++i) {
+                if (mal_map_object_get(map, roots[i + 2]) != mal_value_from_i32((i32) i) ||
+                    !mal_map_object_has(set, roots[i + 2])) return 7;
+            }
+        }
+    }
+    for (usize i = 2; i < countof(roots); ++i) roots[i] = mal_value_new_undefined();
+    mal_gc_collect(vm);
+    if (mal_map_object_size(map) != 0 || mal_map_object_size(set) != 0) return 8;
+    usize empty_raw = mal_heap_usage(&vm->heap).raw_owned_bytes;
+    roots[2] = new_weak_key(vm, 0);
+    mal_map_object_set(map, roots[2], mal_value_from_i32(1));
+    mal_map_object_set(set, roots[2], mal_value_new_undefined());
+    roots[2] = mal_value_new_undefined();
+    mal_gc_collect(vm);
+    if (mal_map_object_size(map) != 0 || mal_map_object_size(set) != 0 ||
+        mal_heap_usage(&vm->heap).raw_owned_bytes != empty_raw) return 9;
+    mal_gc_unroot(&span);
+    return 0;
+}
+
 int main(void) {
     mal_gc_test_worker_limit_hook = no_workers;
     MalVm vm;
@@ -74,6 +134,8 @@ int main(void) {
 
     mal_gc_unroot(&span);
     mal_gc_register_finalizer(MAL_HEAP_OBJECT, nullptr);
+    int result = check_sparse_churn(&vm);
+    if (result != 0) return result;
     mal_vm_free(&vm);
     mal_gc_test_worker_limit_hook = nullptr;
     puts("gc-weak-cleanup PASS");
