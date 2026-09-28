@@ -292,7 +292,10 @@ for (let offset = 0; offset < 12; offset++) {
 		);
 	}
 	const paired = [prefix, "\ud83d\ude00", suffix].join("");
-	check(JSON.stringify(paired) === '"' + paired + '"', "wide quote keeps surrogate pairs");
+	check(
+		JSON.stringify(paired) === '"' + paired + '"',
+		"wide quote keeps surrogate pairs",
+	);
 }
 
 // Exhaust both cache admission limits while ordinary data keeps the iterative
