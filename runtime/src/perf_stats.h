@@ -155,6 +155,22 @@ typedef struct MalPerfStats {
     u64 string_flatten_flat_leaves;
     u64 string_flatten_shared_copies;
 
+    u64 json_shape_plans;
+    u64 json_shape_plan_bytes;
+    u64 json_shape_plan_hits;
+    u64 json_escaped_key_code_units;
+    u64 json_escaped_key_reuses;
+    u64 json_escaped_key_capacity_bytes;
+    u64 json_plan_table_bytes;
+    u64 json_plain_fallbacks;
+    u64 json_plain_discarded_code_units;
+    u64 json_quote_latin1_code_units;
+    u64 json_quote_utf16_code_units;
+    u64 json_quote_utf16_scalar_probes;
+    u64 json_parser_backward_seeks;
+    u64 json_reviver_index_entries;
+    u64 json_reviver_index_probes;
+
     u64 regexp_exec_calls;
     u64 regexp_fast_exec_calls;
     u64 regexp_ascii_exec_calls;
