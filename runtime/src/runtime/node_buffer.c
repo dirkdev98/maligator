@@ -106,152 +106,126 @@ static usize mal_buffer_decode_base64_into(
     const MalString *string, byte *bytes, usize capacity
 ) {
     if (capacity == 0) return 0;
-    usize length = mal_string_length(string);
-    const c16 *units = mal_string_code_units(string);
+    MalStringIterator iterator;
+    MalStringSegment segment;
+    mal_string_iterator_init(&iterator, string, 0, mal_string_length(string));
     u32 accumulator = 0;
     i32 sextets = 0;
     usize written = 0;
-    for (usize i = 0; i < length; i++) {
-        c16 unit = units[i];
-        if (unit == '=') break;
-        i32 digit = mal_base64_decode_digit(unit, MAL_BASE64_ALPHABET_EITHER);
-        if (digit < 0) continue;
-        accumulator = (accumulator << 6) | (u32) digit;
-        sextets++;
-        if (sextets == 4) {
-            byte block[3] = {
-                (byte) (accumulator >> 16),
-                (byte) (accumulator >> 8),
-                (byte) accumulator,
-            };
-            usize copy = capacity - written < 3 ? capacity - written : 3;
-            memcpy(bytes + written, block, copy);
-            written += copy;
-            if (written == capacity) return written;
-            accumulator = 0;
-            sextets = 0;
+    while (mal_string_iterator_next(&iterator, &segment)) {
+        for (usize i = 0; i < segment.length; i++) {
+            c16 unit = mal_string_segment_code_unit_at(&segment, i);
+            if (unit == '=') goto done;
+            i32 digit = mal_base64_decode_digit(unit, MAL_BASE64_ALPHABET_EITHER);
+            if (digit < 0) continue;
+            accumulator = (accumulator << 6) | (u32) digit;
+            sextets++;
+            if (sextets == 4) {
+                byte block[3] = {
+                    (byte) (accumulator >> 16),
+                    (byte) (accumulator >> 8),
+                    (byte) accumulator,
+                };
+                usize copy = capacity - written < 3 ? capacity - written : 3;
+                if (bytes != nullptr) memcpy(bytes + written, block, copy);
+                written += copy;
+                if (written == capacity) goto done;
+                accumulator = 0;
+                sextets = 0;
+            }
         }
     }
+done:
+    mal_string_iterator_dispose(&iterator);
     if (sextets == 2) {
         if (written < capacity) {
-            bytes[written++] = (byte) ((accumulator >> 4) & 0xff);
+            if (bytes != nullptr) bytes[written] = (byte) ((accumulator >> 4) & 0xff);
+            written++;
         }
     } else if (sextets == 3) {
         if (written < capacity) {
-            bytes[written++] = (byte) ((accumulator >> 10) & 0xff);
+            if (bytes != nullptr) bytes[written] = (byte) ((accumulator >> 10) & 0xff);
+            written++;
         }
         if (written < capacity) {
-            bytes[written++] = (byte) ((accumulator >> 2) & 0xff);
+            if (bytes != nullptr) bytes[written] = (byte) ((accumulator >> 2) & 0xff);
+            written++;
         }
     }
     return written;
-}
-
-static byte *mal_buffer_decode_base64(const MalString *string, usize *length_out) {
-    usize capacity = mal_string_length(string) / 4 * 3 + 3;
-    byte *bytes = malloc(capacity);
-    if (bytes == nullptr) {
-        *length_out = 0;
-        return nullptr;
-    }
-    *length_out = mal_buffer_decode_base64_into(string, bytes, capacity);
-    return bytes;
 }
 
 static usize mal_buffer_write_string(
     const MalString *string, MalBufferEncoding encoding,
     byte *output, usize capacity
 ) {
-    const c16 *units = mal_string_code_units(string);
-    usize length = mal_string_length(string);
     if (encoding == MAL_BUFFER_UTF8) {
         usize written;
-        mal_utf8_encode_into(
-            units, length, output, capacity, nullptr, &written);
+        mal_string_utf8_encode_into(string, output, capacity, nullptr, &written);
         return written;
     }
     if (encoding == MAL_BUFFER_BASE64 || encoding == MAL_BUFFER_BASE64URL) {
         return mal_buffer_decode_base64_into(string, output, capacity);
     }
-    if (encoding == MAL_BUFFER_HEX) {
-        usize written = 0;
-        while (written < capacity && written * 2 + 1 < length) {
-            i32 high = mal_hex_decode_digit(units[written * 2]);
-            i32 low = mal_hex_decode_digit(units[written * 2 + 1]);
-            if (high < 0 || low < 0) break;
-            output[written++] = (byte) ((high << 4) | low);
+    MalStringIterator iterator;
+    MalStringSegment segment;
+    mal_string_iterator_init(&iterator, string, 0, mal_string_length(string));
+    usize written = 0;
+    i32 high = -1;
+    while (written < capacity && mal_string_iterator_next(&iterator, &segment)) {
+        if (segment.latin1 &&
+            (encoding == MAL_BUFFER_LATIN1 || encoding == MAL_BUFFER_ASCII)) {
+            usize count = segment.length < capacity - written ? segment.length : capacity - written;
+            if (output != nullptr) memcpy(output + written, segment.latin1_units, count);
+            written += count;
+            continue;
         }
-        return written;
-    }
-    if (encoding == MAL_BUFFER_UTF16LE) {
-        usize read = 0;
-        usize written = 0;
-        while (read < length && capacity - written >= 2) {
-            c16 unit = units[read++];
-            output[written++] = (byte) unit;
-            output[written++] = (byte) (unit >> 8);
+        for (usize i = 0; i < segment.length && written < capacity; i++) {
+            c16 unit = mal_string_segment_code_unit_at(&segment, i);
+            if (encoding == MAL_BUFFER_HEX) {
+                i32 digit = mal_hex_decode_digit(unit);
+                if (digit < 0) goto done;
+                if (high < 0) {
+                    high = digit;
+                } else {
+                    if (output != nullptr) output[written] = (byte) ((high << 4) | digit);
+                    written++;
+                    high = -1;
+                }
+            } else if (encoding == MAL_BUFFER_UTF16LE) {
+                if (capacity - written < 2) goto done;
+                if (output != nullptr) {
+                    output[written] = (byte) unit;
+                    output[written + 1] = (byte) (unit >> 8);
+                }
+                written += 2;
+            } else {
+                // Node's ascii and latin1 encoders both retain the low eight bits.
+                if (output != nullptr) output[written] = (byte) (unit & 0xff);
+                written++;
+            }
         }
-        return written;
     }
-
-    usize written = length < capacity ? length : capacity;
-    for (usize i = 0; i < written; i++) {
-        output[i] = (byte) (units[i] & 0xff);
-    }
+done:
+    mal_string_iterator_dispose(&iterator);
     return written;
 }
 
 static byte *mal_buffer_encode_string(
     const MalString *string, MalBufferEncoding encoding, usize *length_out
 ) {
-    const c16 *units = mal_string_code_units(string);
+    if (encoding == MAL_BUFFER_UTF8) return mal_string_to_utf8(string, length_out);
     usize length = mal_string_length(string);
-    if (encoding == MAL_BUFFER_UTF8) {
-        return mal_string_to_utf8(string, length_out);
-    }
-    if (encoding == MAL_BUFFER_BASE64 || encoding == MAL_BUFFER_BASE64URL) {
-        return mal_buffer_decode_base64(string, length_out);
-    }
-    if (encoding == MAL_BUFFER_HEX) {
-        byte *bytes = malloc(length / 2 + 1);
-        if (bytes == nullptr) {
-            *length_out = 0;
-            return nullptr;
-        }
-        usize written = 0;
-        while (written * 2 + 1 < length) {
-            i32 high = mal_hex_decode_digit(units[written * 2]);
-            i32 low = mal_hex_decode_digit(units[written * 2 + 1]);
-            if (high < 0 || low < 0) break;
-            bytes[written++] = (byte) ((high << 4) | low);
-        }
-        *length_out = written;
-        return bytes;
-    }
-    if (encoding == MAL_BUFFER_UTF16LE) {
-        byte *bytes = malloc(length * 2 + 1);
-        if (bytes == nullptr) {
-            *length_out = 0;
-            return nullptr;
-        }
-        for (usize i = 0; i < length; i++) {
-            bytes[i * 2] = (byte) units[i];
-            bytes[i * 2 + 1] = (byte) (units[i] >> 8);
-        }
-        *length_out = length * 2;
-        return bytes;
-    }
-
-    byte *bytes = malloc(length == 0 ? 1 : length);
+    usize capacity = encoding == MAL_BUFFER_UTF16LE ? length * 2
+        : encoding == MAL_BUFFER_HEX ? length / 2
+        : encoding == MAL_BUFFER_BASE64 || encoding == MAL_BUFFER_BASE64URL ? length / 4 * 3 + 3
+        : length;
+    byte *bytes = malloc(capacity == 0 ? 1 : capacity);
     if (bytes == nullptr) {
         *length_out = 0;
         return nullptr;
     }
-    for (usize i = 0; i < length; i++) {
-        // Node's ascii and latin1 encoders both retain the low eight bits.
-        bytes[i] = (byte) (units[i] & 0xff);
-    }
-    *length_out = length;
+    *length_out = mal_buffer_write_string(string, encoding, bytes, capacity);
     return bytes;
 }
 
@@ -259,34 +233,10 @@ static usize mal_buffer_encoded_string_length(
     const MalString *string, MalBufferEncoding encoding
 ) {
     usize length = mal_string_length(string);
-    if (encoding == MAL_BUFFER_UTF8) {
-        return mal_string_utf8_length(string);
-    }
-    if (encoding == MAL_BUFFER_UTF16LE) {
-        return length * 2;
-    }
-    const c16 *units = mal_string_code_units(string);
-    if (encoding == MAL_BUFFER_HEX) {
-        usize written = 0;
-        while (written * 2 + 1 < length &&
-            mal_hex_decode_digit(units[written * 2]) >= 0 &&
-            mal_hex_decode_digit(units[written * 2 + 1]) >= 0) {
-            written++;
-        }
-        return written;
-    }
-    if (encoding == MAL_BUFFER_BASE64 ||
-        encoding == MAL_BUFFER_BASE64URL) {
-        usize sextets = 0;
-        for (usize index = 0; index < length; index++) {
-            if (units[index] == '=') break;
-            if (mal_base64_decode_digit(
-                    units[index], MAL_BASE64_ALPHABET_EITHER) >= 0) {
-                sextets++;
-            }
-        }
-        return sextets / 4 * 3 +
-            (sextets % 4 == 2 ? 1 : sextets % 4 == 3 ? 2 : 0);
+    if (encoding == MAL_BUFFER_UTF8) return mal_string_utf8_length(string);
+    if (encoding == MAL_BUFFER_UTF16LE) return length * 2;
+    if (encoding == MAL_BUFFER_HEX || encoding == MAL_BUFFER_BASE64 || encoding == MAL_BUFFER_BASE64URL) {
+        return mal_buffer_write_string(string, encoding, nullptr, SIZE_MAX);
     }
     return length;
 }
@@ -344,22 +294,26 @@ static MalValue mal_buffer_string_from_bytes(
                 : MAL_BASE64_ALPHABET_STANDARD,
             padding));
     }
+    if (encoding == MAL_BUFFER_LATIN1) {
+        return mal_value_from_string(mal_string_new_latin1_copy(&vm->heap, (const u8 *) bytes, length));
+    }
+    if (encoding == MAL_BUFFER_ASCII) {
+        u8 inline_units[MAL_STRING_INLINE_LATIN1_CODE_UNITS];
+        u8 *units = output_length <= MAL_STRING_INLINE_LATIN1_CODE_UNITS
+            ? inline_units : mal_heap_alloc_raw_profiled(
+                &vm->heap, output_length, MAL_PROFILE_ALLOCATION_FAMILY_STRING);
+        for (usize i = 0; i < output_length; i++) units[i] = (u8) bytes[i] & 0x7f;
+        MalString *result = units == inline_units
+            ? mal_string_new_latin1_copy(&vm->heap, units, output_length)
+            : mal_string_new_latin1_owned(&vm->heap, units, output_length);
+        return mal_value_from_string(result);
+    }
     c16 inline_units[MAL_STRING_INLINE_CODE_UNITS];
     c16 *units = output_length <= MAL_STRING_INLINE_CODE_UNITS
-        ? inline_units
-        : mal_heap_alloc_raw_profiled(
-            &vm->heap, sizeof(c16) * output_length,
-            MAL_PROFILE_ALLOCATION_FAMILY_STRING);
-    if (encoding == MAL_BUFFER_UTF16LE) {
-        for (usize i = 0; i < output_length; i++) {
-            units[i] = (c16) ((u8) bytes[i * 2] | ((u16) (u8) bytes[i * 2 + 1] << 8));
-        }
-    } else {
-        for (usize i = 0; i < length; i++) {
-            units[i] = encoding == MAL_BUFFER_ASCII
-                ? (u8) bytes[i] & 0x7f
-                : (u8) bytes[i];
-        }
+        ? inline_units : mal_heap_alloc_raw_profiled(
+            &vm->heap, sizeof(c16) * output_length, MAL_PROFILE_ALLOCATION_FAMILY_STRING);
+    for (usize i = 0; i < output_length; i++) {
+        units[i] = (c16) ((u8) bytes[i * 2] | ((u16) (u8) bytes[i * 2 + 1] << 8));
     }
     MalString *result = units == inline_units
         ? mal_string_new_copy(&vm->heap, units, output_length)

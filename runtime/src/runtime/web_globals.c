@@ -173,11 +173,9 @@ static MalValue mal_web_text_encoder_encode_into(
     }
     usize cap = mal_typed_array_object_byte_length(ta);
 
-    const c16 *u = mal_string_code_units(str);
-    usize len = mal_string_length(str);
     usize read = 0;
     usize written = 0;
-    mal_utf8_encode_into(u, len, dst, cap, &read, &written);
+    mal_string_utf8_encode_into(str, dst, cap, &read, &written);
 
     MalObject *result = mal_intrinsic_new_object(vm);
     mal_object_set(result, mal_intrinsic_string_key(vm, (const byte *) "read"),
