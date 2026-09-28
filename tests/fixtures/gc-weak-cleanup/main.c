@@ -89,12 +89,12 @@ static int check_sparse_churn(MalVm *vm) {
         MalValue transient = new_weak_key(vm, round);
         mal_map_object_set(map, transient, mal_value_from_i32(-1));
         mal_map_object_set(set, transient, mal_value_new_undefined());
-        u64 before = mal_gc_collection_count(vm);
+        u64 before = vm->heap.epoch;
         vm->heap.next_gc_at = 1;
         mal_gc_poll = true;
         mal_gc_safepoint(vm);
         mal_gc_finish_pending_cycle(vm);
-        if (mal_gc_collection_count(vm) <= before ||
+        if (vm->heap.epoch <= before ||
             mal_map_object_size(map) != LIVE_COUNT ||
             mal_map_object_size(set) != LIVE_COUNT) return 10;
         if (mal_heap_usage(&vm->heap).raw_owned_bytes >
