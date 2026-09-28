@@ -807,9 +807,11 @@ bool mal_string_new_cons_checked(MalHeap *heap, MalString *left, MalString *righ
     }
 
     MalString *string = mal_string_join(heap, left, right);
-    if (left->hash_valid && string->left != left) {
-        // Rebalancing changes the physical prefix edge. Keep append-and-hash
-        // incremental by continuing the original prefix before it is detached.
+    if (left->hash_valid) {
+        // Concatenation preserves the semantic left prefix even when balancing
+        // rewrites the physical tree. Carry its final FNV state forward now so
+        // the first property/Map lookup of the result does not re-enter the
+        // generic hash walk just to discover the same cached prefix.
         string->hash = mal_string_hash_continue(left->hash, right);
         string->hash_valid = true;
     }
