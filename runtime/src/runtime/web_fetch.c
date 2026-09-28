@@ -1010,24 +1010,19 @@ static MalValue mal_fetch_body_string_impl(
     if (body->bytes == nullptr || body->length == 0) {
         return mal_value_from_string(mal_string_new_ascii(&vm->heap, "", 0));
     }
-    usize count;
-    c16 *units = mal_utf8_decode(body->bytes, body->length, &count);
-    if (units == nullptr) {
+    usize offset = strip_bom && body->length >= 3 &&
+        (u8) body->bytes[0] == 0xef && (u8) body->bytes[1] == 0xbb &&
+        (u8) body->bytes[2] == 0xbf ? 3 : 0;
+    MalUtf8DecodeStatus status;
+    MalString *string = mal_string_from_utf8_report(
+        &vm->heap, body->bytes + offset, body->length - offset, nullptr, &status);
+    if (string == nullptr) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
-            "Body text allocation failed");
+            status == MAL_UTF8_DECODE_LENGTH_OVERFLOW
+                ? "Body text exceeds the string length limit" : "Body text allocation failed");
         return mal_value_new_undefined();
     }
-    usize offset = strip_bom && count > 0 && units[0] == 0xFEFF ? 1 : 0;
-    if (count - offset > MAL_STRING_MAX_CODE_UNITS) {
-        free(units);
-        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
-            "Body text exceeds the string length limit");
-        return mal_value_new_undefined();
-    }
-    MalValue s = mal_value_from_string(
-        mal_string_new_copy(&vm->heap, units + offset, count - offset));
-    free(units);
-    return s;
+    return mal_value_from_string(string);
 }
 
 static MalValue mal_fetch_body_string(MalVm *vm, const MalFetchBody *body) {

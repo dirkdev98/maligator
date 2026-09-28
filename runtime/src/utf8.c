@@ -128,6 +128,15 @@ static u32 mal_utf8_read_scalar(
     return cp;
 }
 
+bool mal_utf8_is_valid(const byte *bytes, usize len) {
+    usize offset = 0;
+    bool had_error = false;
+    while (offset < len && !had_error) {
+        mal_utf8_read_scalar(bytes, len, &offset, &had_error);
+    }
+    return !had_error;
+}
+
 c16 *mal_utf8_decode_report(const byte *bytes, usize len, usize *out_count, bool *had_error) {
     *out_count = 0;
     *had_error = false;

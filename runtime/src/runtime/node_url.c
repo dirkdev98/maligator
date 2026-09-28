@@ -460,18 +460,7 @@ bool mal_node_file_url_to_path_bytes(
     }
     free(encoded);
 
-    usize code_unit_count;
-    bool malformed;
-    c16 *code_units = mal_utf8_decode_report(
-        decoded, decoded_length, &code_unit_count, &malformed);
-    if (code_units == nullptr) {
-        free(decoded);
-        mal_gc_unroot(&root);
-        mal_vm_throw_allocation_error(vm);
-        return false;
-    }
-    free(code_units);
-    if (malformed) {
+    if (!mal_utf8_is_valid(decoded, decoded_length)) {
         free(decoded);
         mal_gc_unroot(&root);
         return url_file_path_error(

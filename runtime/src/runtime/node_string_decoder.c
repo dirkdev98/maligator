@@ -245,30 +245,23 @@ static MalValue sd_decode_utf8(
 
     usize retained = final ? 0 : sd_utf8_incomplete_tail(joined, total);
     usize decoded_length = total - retained;
-    if (decoded_length > MAL_STRING_MAX_CODE_UNITS * 2) {
+    MalUtf8DecodeStatus status;
+    MalString *string = mal_string_from_utf8_report(
+        &vm->heap, joined, decoded_length, nullptr, &status);
+    if (string == nullptr) {
         free(owned);
-        return sd_checked_output(vm, MAL_STRING_MAX_CODE_UNITS + 1);
-    }
-    usize unit_count;
-    c16 *units = mal_utf8_decode(joined, decoded_length, &unit_count);
-    if (units == nullptr) {
-        free(owned);
-        return sd_allocation_error(vm);
-    }
-    if (!sd_checked_output(vm, unit_count)) {
-        free(units);
-        free(owned);
+        if (status != MAL_UTF8_DECODE_LENGTH_OVERFLOW) return sd_allocation_error(vm);
+        sd_checked_output(vm, MAL_STRING_MAX_CODE_UNITS + 1);
         return mal_value_new_undefined();
     }
 
     u32 next_pending = retained == 0
         ? 0
         : sd_pending_pack(joined + decoded_length, retained);
-    MalValue result = sd_string_from_units(vm, units, unit_count);
+    MalValue result = mal_value_from_string(string);
     if (vm->completion.kind != MAL_COMPLETION_THROW) {
         sd_write_pending(vm, state, next_pending);
     }
-    free(units);
     free(owned);
     return result;
 }

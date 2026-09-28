@@ -85,6 +85,8 @@ static bool compact_decode_preserves_code_units_and_failures(MalVm *vm) {
 static bool buffer_limit_counts_decoded_units(MalVm *vm) {
     MalValue encoding = mal_value_from_string(
         mal_string_new_ascii(&vm->heap, (const byte *) "utf8", 4));
+    MalRootSpan encoding_root;
+    mal_gc_root(&encoding_root, &encoding, 1);
     const u8 patterns[][3] = {{0xc3, 0xa9, 0}, {0xe2, 0x82, 0xac}, {0xe1, 0x80, 0}};
     const usize widths[] = {2, 3, 2};
     const c16 units[] = {0xe9, 0x20ac, 0xfffd};
@@ -126,6 +128,7 @@ static bool buffer_limit_counts_decoded_units(MalVm *vm) {
     string = mal_string_from_utf8_report(&vm->heap, astral, maximum * 2 + 1, nullptr, &status);
     CHECK(string == nullptr && status == MAL_UTF8_DECODE_LENGTH_OVERFLOW);
     free(astral);
+    mal_gc_unroot(&encoding_root);
     return true;
 }
 

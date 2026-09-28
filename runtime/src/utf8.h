@@ -26,6 +26,9 @@ c16 *mal_utf8_decode(const byte *bytes, usize len, usize *out_count);
 c16 *mal_utf8_decode_report(
     const byte *bytes, usize len, usize *out_count, bool *had_error);
 
+/** Validate UTF-8 scalar sequences without allocating decoded output. */
+bool mal_utf8_is_valid(const byte *bytes, usize len);
+
 /** Encode a complete engine string. The returned byte buffer is not a C string. */
 byte *mal_string_to_utf8(const MalString *string, usize *out_len);
 
