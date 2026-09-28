@@ -142,7 +142,7 @@ describe("native root-mask state through generic continuations", () => {
 			/MAL_ROOT_MASK\(0x20\)[\s\S]*MAL_ROOT_MASK\(0x0\)[\s\S]*mal_vm_call_cached[\s\S]*mal_gc_safepoint/,
 		);
 	});
-	it("defers operator masks after numeric projections remove all private slots", () => {
+	it("keeps operator masks eager after numeric projections remove all private slots", () => {
 		const widePoint = {
 			kind: "operation",
 			rootRegisters: [0, 2, 3, 4, 5],
@@ -179,17 +179,11 @@ describe("native root-mask state through generic continuations", () => {
 		);
 		expect(output).toContain("mal_vm_property_try_load_static_number_pair");
 		expect(output).not.toContain("__private_r");
-		expect(output).not.toContain("\n    MAL_ROOT_MASK(0x10);\n");
-		const deferredMask = output.indexOf("MAL_ROOT_MASK(0x10)");
+		const eagerMask = output.indexOf("\n    MAL_ROOT_MASK(0x10);\n");
 		const binaryFallback = output.indexOf("mal_vm_binary_op");
-		expect(deferredMask).toBeGreaterThan(0);
-		expect(binaryFallback).toBeGreaterThan(deferredMask);
-		expect(output.slice(deferredMask, binaryFallback)).toMatch(
-			/^MAL_ROOT_MASK\(0x10\),\s*$/,
-		);
-		const nextCall = output.indexOf("MalCompletion call_result_5", binaryFallback);
-		expect(nextCall).toBeGreaterThan(binaryFallback);
-		expect(output.slice(binaryFallback, nextCall)).toContain("MAL_ROOT_MASK(0x0)");
+		expect(eagerMask).toBeGreaterThan(0);
+		expect(binaryFallback).toBeGreaterThan(eagerMask);
+		expect(output.slice(eagerMask, binaryFallback)).toContain("if (");
 		expect(output.match(/MAL_ROOT_MASK\(0x10\)/g)).toHaveLength(1);
 		expect(output.match(/MAL_ROOT_MASK\(0x0\)/g)).toHaveLength(2);
 	});

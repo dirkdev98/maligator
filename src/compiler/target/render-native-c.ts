@@ -3238,7 +3238,7 @@ function emitBody(
 		const indexedPropertyInstruction = fn.instructions[ip]!;
 		// Only the ordinary numeric-index probe has an audited noncollecting hit.
 		const deferredIndexedPropertyRoots =
-			coro === null &&
+			hasPrivateRoots &&
 			indexedPropertyInstruction.opcode === "LOAD_PROPERTY" &&
 			isNumericRep(reps[indexedPropertyInstruction.key]!) &&
 			!staticPropertyProjectionConflicts(ip) &&
@@ -3258,8 +3258,9 @@ function emitBody(
 			!stackObjectMaterializations.has(ip) &&
 			!constructorInitializationActionByIp.has(ip);
 		const deferredOperatorRoots = fn.instructions[ip]!.opcode === "BINARY";
-		// Ordinary numeric hits cannot collect, regardless of the register storage.
-		const eagerOperatorRootPublication = deferredOperatorRoots && coro !== null;
+		// Only selected private values need the operator's mask on its fallback edge.
+		const eagerOperatorRootPublication =
+			deferredOperatorRoots && (rootPublication?.slots.size ?? 0) === 0;
 		const deferredTdzRoots = fn.instructions[ip]!.opcode === "THROW_IF_TDZ";
 		const iteratorCursorAction = nativeIteratorCursorActionByIp.get(ip);
 		const deferredDenseIteratorRoots =

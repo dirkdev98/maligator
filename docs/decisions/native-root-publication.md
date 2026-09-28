@@ -6,9 +6,8 @@ existing cache admission rules. A successful probe assigns the private result
 directly; only its collecting/reentrant miss publishes incoming roots. Numeric operator
 guards and TDZ checks likewise publish inside their generic or throwing edge.
 Dense Array-values iteration in ordinary functions uses its existing noncalling
-probe and publishes only before the generic step, including when every value
-uses continuous root storage. Resumable functions retain the combined cursor
-helper and its eager root mask.
+probe and publishes only before the generic step, including when the function
+has no private roots. Resumable functions retain their existing publication.
 Length and storage are read afresh on each probe;
 holes and nonstandard iterators retain the complete JavaScript protocol.
 Ordinary static stores likewise publish before their generic miss. A successful
@@ -176,14 +175,13 @@ values, and more than 64 live roots. A root optimization must also demonstrate
 that the relevant hot generated code uses private results before its timing is
 interpreted as evidence for the mechanism.
 
-In ordinary functions, binary numeric guards leave the root mask untouched on
-their noncollecting path, whether or not any values use private storage. The
-original union mask is published with any incoming private roots inside the
-coercing operator expression, before it can call user code. A conditional
-publication invalidates the emitter's known-mask state for the next operation.
-Resumable functions keep an eager mask at the instruction boundary when the
-emitted operator includes a generic fallback. Pure specialized operators need no
-mask update in either case.
+When a function retains private roots, binary numeric guards leave the root mask
+untouched on their noncollecting path. The original union mask is published with
+incoming private roots inside the coercing operator expression, before it can
+call user code. A conditional publication invalidates the emitter's known-mask
+state for the next operation. Functions with no selected private roots keep an
+eager mask at the instruction boundary when the emitted operator includes a
+generic fallback. Pure specialized operators need no mask update in either case.
 
 Mask-state tracking records whether the emitted operator actually used its
 publication callback. A proven pure operator does not forget an unchanged
@@ -193,25 +191,26 @@ are constructed only when included in the emitted path. Otherwise a fallback
 can change the runtime mask without the outer emitter restoring roots needed
 by a later call or collecting poll.
 
-In ordinary functions, numeric indexed reads also defer incoming publication to
-the existing dense-array probe's miss branch, independently of private storage. Numeric
+In functions with private roots, ordinary numeric indexed reads also defer
+incoming publication to the existing dense-array probe's miss branch. Numeric
 index conversion and a successful dense hit cannot collect or reenter JavaScript;
-the generic indexed helper can. Resumable functions publish the mask at the
-instruction boundary. Refined GC metadata still excludes proven
+the generic indexed helper can. Functions without private roots publish the mask
+at the instruction boundary. Refined GC metadata still excludes proven
 noncollecting operations.
 Boxed keys and specialized indexed/projection plans retain their existing
 publication because their conversion or intermediate-storage contracts differ.
 The returned heap value is published before a later collecting poll, including
 unmasked root slots beyond the first 64.
 
-An ordinary indexed read with an int32 or Number key can nominate its result and
-receiver for private storage. Receiver candidates follow the existing property
-candidates so they do not displace them within the 32-register bound. Keeping a
-receiver's identity private can preserve the C compiler's array-type facts across
-opaque runtime calls; length and element storage are still read afresh by each
-probe. The same audit of every physical definition, native-region intermediate,
-and out-parameter use still applies, including when later instructions reuse
-either register. Receiver nomination also retains the existing loop-cost filter.
+An ordinary indexed read with an int32 or Number key can itself nominate its
+receiver and result for private storage. Receiver candidates are appended after
+the existing property candidates, preserving their priority under the 32-register
+bound. A private receiver lets the C compiler retain its value and array type
+identity across noncollecting reads. Each probe still reads length and storage
+afresh; private storage does not preserve borrowed element pointers across
+effects. The same audit of every physical definition, native-region intermediate,
+and out-parameter use, and the same collecting-loop profitability filter still
+apply, including when later instructions reuse either physical register.
 Closure creation assigns its destination only after the value-returning runtime
 factory finishes. Exact operator-kind annotations refine ordinary final-value
 expressions without adding intermediate storage. Both can share a private result
