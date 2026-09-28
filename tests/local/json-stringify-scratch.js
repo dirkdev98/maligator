@@ -205,10 +205,9 @@ const lateSource = {
 check(
 	JSON.stringify(lateSource) ===
 		'{"prefix":"' +
-		"retained".repeat(256) +
-		'","nested":{"before":1,"later":"\u0100"},"after":3}' &&
-		lateLog.join(",") ===
-			"toJSON:callback,get:nested-later,get:inherited-after",
+			"retained".repeat(256) +
+			'","nested":{"before":1,"later":"\u0100"},"after":3}' &&
+		lateLog.join(",") === "toJSON:callback,get:nested-later,get:inherited-after",
 	"late fallback preserves prefix, omitted keys, detached holders, and ancestor key snapshots",
 );
 
@@ -289,8 +288,7 @@ BigInt.prototype.toJSON = function (key) {
 	return String(this);
 };
 check(
-	JSON.stringify(bigintSource) ===
-		'{"prefix":[1,2],"bigint":"2","later":4}' &&
+	JSON.stringify(bigintSource) === '{"prefix":[1,2],"bigint":"2","later":4}' &&
 		bigintLog.join(",") === "bigint",
 	"late BigInt fallback invokes inherited toJSON with the original key",
 );
@@ -315,9 +313,7 @@ uncachedRows.push({
 	uncachedLater: 2,
 });
 check(
-	JSON.stringify(uncachedRows).endsWith(
-		',{"uncachedBefore":1,"uncachedLater":4}]',
-	),
+	JSON.stringify(uncachedRows).endsWith(',{"uncachedBefore":1,"uncachedLater":4}]'),
 	"late fallback retains uncached shape key snapshots after many unique shapes",
 );
 
