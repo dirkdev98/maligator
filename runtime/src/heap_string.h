@@ -5,7 +5,7 @@
 #include "perf_stats.h"
 
 /**
- * Storage policy for the UTF-16 code units referenced by a MalString.
+ * Physical ownership is independent of the encoding of a flat string's payload.
  */
 typedef enum MalStringStorage : u8 {
     MAL_STRING_STORAGE_OWNED,
@@ -18,30 +18,38 @@ typedef enum MalStringStorage : u8 {
 typedef struct MalString {
     MalHeapHeader header;
     MalStringStorage storage;
-    bool hash_valid;
-    bool array_index_impossible;
+    bool hash_valid : 1;
+    bool array_index_impossible : 1;
     /** Canonical VM-lifetime representative in the owning VM's atom table. */
-    bool property_atom;
+    bool property_atom : 1;
+    /** Flat payload is one byte per UTF-16 unit; ropes/slices may conservatively clear it. */
+    bool latin1 : 1;
     union {
-        /** Cached only for flat (owned/external) strings. */
+        /** Cached hash for flat strings. */
         u64 hash;
-        /** Ultimate flat parent retaining a dependent string's backing store. */
+        /** Retained parent of a dependent slice, which may itself be a rope. */
         struct MalString *parent;
         /** Left child of a lazy concatenation. */
         struct MalString *left;
     };
-    usize length;
+    u32 length;
+    /** UTF-16 offset into a dependent string's parent. */
+    u32 slice_offset;
     union {
         const c16 *code_units;
+        const u8 *latin1_units;
         /** Cell-local storage for strings of at most four UTF-16 code units. */
         c16 inline_code_units[4];
+        u8 inline_latin1_units[8];
         /** Right child of a lazy concatenation. */
         struct MalString *right;
+        u64 dependent_hash;
     };
 } MalString;
 
 static_assert(sizeof(MalString) <= 32, "MalString outgrew its 32-byte size class");
 #define MAL_STRING_INLINE_CODE_UNITS ((usize) 4)
+#define MAL_STRING_INLINE_LATIN1_CODE_UNITS ((usize) 8)
 
 /** Engine string lengths are measured in UTF-16 code units. */
 #define MAL_STRING_MAX_CODE_UNITS ((usize) 16 * 1024 * 1024)
@@ -60,7 +68,7 @@ u64 mal_string_hash_code_units(const c16 *code_units, usize length);
 void mal_string_tiny_cache_promote(MalHeap *heap, MalString *atom);
 
 /**
- * Initialize a string whose UTF-16 storage is copied into heap-owned memory.
+ * Copy UTF-16 input into compact Latin-1 storage whenever its units fit.
  */
 void mal_string_init_copy(MalHeap *heap, MalString *string, const c16 *code_units, usize length);
 
@@ -68,9 +76,10 @@ void mal_string_init_copy(MalHeap *heap, MalString *string, const c16 *code_unit
  * Initialize a string that borrows externally managed UTF-16 storage.
  */
 void mal_string_init_external(MalString *string, const c16 *code_units, usize length);
+void mal_string_init_external_latin1(MalString *string, const u8 *units, usize length);
 
 /**
- * Allocate and initialize a string with heap-owned UTF-16 storage.
+ * Allocate a string by copying UTF-16 input, compacting eligible payloads.
  */
 MalString *mal_string_new_copy(MalHeap *heap, const c16 *code_units, usize length);
 
@@ -94,52 +103,96 @@ bool mal_string_new_cons_checked(MalHeap *heap, MalString *left, MalString *righ
 
 /**
  * Allocate a string that TAKES OWNERSHIP of an existing heap-raw buffer (one
- * returned by `mal_heap_alloc_raw`), freeing it on finalization — no copy. Use
- * when the caller has already built the exact code-unit buffer (e.g. string
- * concatenation), to avoid a redundant alloc+copy (and the leak of the temporary).
+ * returned by `mal_heap_alloc_raw`). Eligible UTF-16 input is compacted; other
+ * input is adopted directly. Callers relinquish the input in either case.
  */
 MalString *mal_string_new_owned(MalHeap *heap, const c16 *code_units, usize length);
+
+MalString *mal_string_new_latin1_copy(MalHeap *heap, const u8 *units, usize length);
+/** Takes ownership of a mal_heap_alloc_raw buffer. */
+MalString *mal_string_new_latin1_owned(MalHeap *heap, const u8 *units, usize length);
 
 /**
  * Allocate and initialize a string from ASCII bytes.
  */
 MalString *mal_string_new_ascii(MalHeap *heap, const byte *bytes, usize length);
 
-/** Flatten a lazy concatenation and return its now-contiguous UTF-16 storage. */
+/** Explicit UTF-16 bridge: widen compact leaves or flatten ropes as needed. */
 const c16 *mal_string_flatten(MalString *string);
 
 /**
- * Return contiguous UTF-16 code units. Almost every string is already flat, so
- * keep that access local and leave the allocating cons-string path out of line.
+ * Return contiguous UTF-16 storage, widening or flattening when needed. Its
+ * address stays valid while the string is rooted. Prefer segments for traversal.
  */
 static inline const c16 *mal_string_code_units(const MalString *string) {
     // C memory operations require nonnull pointers, including empty wire strings.
-    if (string->storage == MAL_STRING_STORAGE_INLINE || string->length == 0) {
+    if (string->length == 0 ||
+        (string->storage == MAL_STRING_STORAGE_INLINE && !string->latin1)) {
         return string->inline_code_units;
     }
-    if (string->storage != MAL_STRING_STORAGE_CONS) {
+    if (!string->latin1 && string->storage != MAL_STRING_STORAGE_CONS &&
+        string->storage != MAL_STRING_STORAGE_DEPENDENT) {
         return string->code_units;
     }
     return mal_string_flatten((MalString *) string);
 }
 
-/** Read one in-bounds unit without flattening when a cons string's selected
- * immediate child is already flat. Nested cons children retain flatten-once behavior. */
+/** Read one in-bounds UTF-16 unit without allocating, widening, or flattening. */
 static inline c16 mal_string_code_unit_at(MalString *string, usize index) {
-    if (string->storage != MAL_STRING_STORAGE_CONS) {
-        return mal_string_code_units(string)[index];
+    for (;;) {
+        if (string->storage == MAL_STRING_STORAGE_DEPENDENT) {
+            index += string->slice_offset;
+            string = string->parent;
+        } else if (string->storage == MAL_STRING_STORAGE_CONS) {
+            MalString *left = string->left;
+            if (index < left->length) {
+                string = left;
+            } else {
+                index -= left->length;
+                string = string->right;
+            }
+        } else if (string->latin1) {
+            return string->storage == MAL_STRING_STORAGE_INLINE
+                ? string->inline_latin1_units[index] : string->latin1_units[index];
+        } else {
+            return string->storage == MAL_STRING_STORAGE_INLINE
+                ? string->inline_code_units[index] : string->code_units[index];
+        }
     }
+}
 
-    usize root_index = index;
-    MalString *child = string->left;
-    if (index >= child->length) {
-        index -= child->length;
-        child = string->right;
-    }
-    if (child->storage != MAL_STRING_STORAGE_CONS) {
-        return mal_string_code_units(child)[index];
-    }
-    return mal_string_code_units(string)[root_index];
+typedef struct MalStringSegment {
+    bool latin1;
+    usize length;
+    union {
+        const u8 *latin1_units;
+        const c16 *utf16_units;
+    };
+} MalStringSegment;
+
+typedef struct MalStringIteratorPart {
+    const MalString *string;
+    usize offset;
+    usize length;
+} MalStringIteratorPart;
+
+typedef struct MalStringIterator {
+    MalStringIteratorPart *stack;
+    usize count;
+    usize capacity;
+    MalStringIteratorPart inline_stack[16];
+} MalStringIterator;
+
+/** Segments borrow leaf storage. Root the input across GC, and do not retain a
+ * segment across JS reentry or a UTF-16 bridge that may widen that leaf. The
+ * iterator uses malloc scratch only and never collects or mutates strings. */
+void mal_string_iterator_init(
+    MalStringIterator *iterator, const MalString *string, usize offset, usize length);
+bool mal_string_iterator_next(MalStringIterator *iterator, MalStringSegment *segment);
+void mal_string_iterator_dispose(MalStringIterator *iterator);
+
+static inline c16 mal_string_segment_code_unit_at(const MalStringSegment *segment, usize index) {
+    return segment->latin1 ? segment->latin1_units[index] : segment->utf16_units[index];
 }
 
 /** Copy a valid range without flattening a lazy concatenation; destination holds length units. */
@@ -154,24 +207,21 @@ static inline usize mal_string_length(const MalString *string) {
 }
 
 /**
- * Return the string hash, caching it on flat strings and recomputing it for
- * dependent strings whose storage-specific word retains their parent. Lazy
- * concatenations are flattened before hashing.
+ * Hash UTF-16 content independent of physical encoding. Flat strings and slices
+ * cache the full hash; ropes are streamed without flattening.
  */
 u64 mal_string_hash_slow(const MalString *string);
 
 /**
  * Most property-name hashes are already cached. Keep that overwhelmingly hot
- * read at the call site; dependent strings, lazy cons strings, and first hashes
- * retain the full storage-aware implementation out of line.
+ * read at the call site; first hashes retain traversal out of line.
  */
 static inline u64 mal_string_hash(const MalString *string) {
     MAL_PERF_COUNT(string_hash_calls);
-    if (string->storage != MAL_STRING_STORAGE_DEPENDENT &&
-        string->storage != MAL_STRING_STORAGE_CONS &&
-        string->hash_valid) {
+    if (string->hash_valid) {
         MAL_PERF_COUNT(string_hash_cached_hits);
-        return string->hash;
+        return string->storage == MAL_STRING_STORAGE_DEPENDENT
+            ? string->dependent_hash : string->hash;
     }
     return mal_string_hash_slow(string);
 }
