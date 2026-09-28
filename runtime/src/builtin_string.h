@@ -127,7 +127,7 @@ MalValue mal_builtin_string_search_strings(
     MalString *string, MalString *search, f64 position, MalStringSearchOp operation
 );
 
-// A false result is side-effect-free; flat primitive strings take the allocation-free path.
+// A false result is side-effect-free; primitive strings search their borrowed leaf storage.
 bool mal_builtin_string_search_direct(
     MalValue receiver, MalValue needle, f64 position,
     MalStringSearchOp operation, MalValue *result

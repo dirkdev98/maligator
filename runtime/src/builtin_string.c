@@ -218,6 +218,26 @@ static MalValue mal_builtin_string_slice(MalVm *vm, MalString *string, usize off
     return mal_value_from_string(mal_string_new_slice(&vm->heap, string, offset, length));
 }
 
+static bool mal_builtin_string_segments_equal(
+    const MalStringSegment *left, usize left_offset,
+    const MalStringSegment *right, usize right_offset, usize length
+) {
+    if (left->latin1 == right->latin1) {
+        const void *a = left->latin1
+            ? (const void *) (left->latin1_units + left_offset)
+            : (const void *) (left->utf16_units + left_offset);
+        const void *b = right->latin1
+            ? (const void *) (right->latin1_units + right_offset)
+            : (const void *) (right->utf16_units + right_offset);
+        return memcmp(a, b, length * (left->latin1 ? 1 : sizeof(c16))) == 0;
+    }
+    for (usize i = 0; i < length; i++) {
+        if (mal_string_segment_code_unit_at(left, left_offset + i) !=
+            mal_string_segment_code_unit_at(right, right_offset + i)) return false;
+    }
+    return true;
+}
+
 static bool mal_builtin_string_matches_at(const MalString *string, const MalString *search, usize position) {
     usize search_length = mal_string_length(search);
     if (position + search_length > mal_string_length(string)) {
@@ -227,10 +247,14 @@ static bool mal_builtin_string_matches_at(const MalString *string, const MalStri
         return true;
     }
 
+    MalStringSegment left, right;
+    if (mal_string_try_get_segment(string, position, search_length, &left) &&
+        mal_string_try_get_segment(search, 0, search_length, &right)) {
+        return mal_builtin_string_segments_equal(&left, 0, &right, 0, search_length);
+    }
     MalStringIterator haystack, needle;
     mal_string_iterator_init(&haystack, string, position, search_length);
     mal_string_iterator_init(&needle, search, 0, search_length);
-    MalStringSegment left, right;
     usize left_offset = 0, right_offset = 0, remaining = search_length;
     bool equal = true;
     mal_string_iterator_next(&haystack, &left);
@@ -238,23 +262,8 @@ static bool mal_builtin_string_matches_at(const MalString *string, const MalStri
     while (remaining != 0) {
         usize count = left.length - left_offset;
         if (count > right.length - right_offset) count = right.length - right_offset;
-        if (left.latin1 == right.latin1) {
-            const void *a = left.latin1
-                ? (const void *) (left.latin1_units + left_offset)
-                : (const void *) (left.utf16_units + left_offset);
-            const void *b = right.latin1
-                ? (const void *) (right.latin1_units + right_offset)
-                : (const void *) (right.utf16_units + right_offset);
-            equal = memcmp(a, b, count * (left.latin1 ? 1 : sizeof(c16))) == 0;
-        } else {
-            for (usize i = 0; i < count; i++) {
-                if (mal_string_segment_code_unit_at(&left, left_offset + i) !=
-                    mal_string_segment_code_unit_at(&right, right_offset + i)) {
-                    equal = false;
-                    break;
-                }
-            }
-        }
+        equal = mal_builtin_string_segments_equal(
+            &left, left_offset, &right, right_offset, count);
         if (!equal) break;
         remaining -= count;
         left_offset += count;
@@ -377,32 +386,51 @@ static i64 mal_builtin_string_find(const MalString *string, const MalString *sea
     if (string == search) return 0;
 
     if (search_length > 1) MAL_PERF_COUNT(string_search_multi_unit_calls);
-    c16 first = mal_string_code_unit_at((MalString *) search, 0);
-    c16 last = mal_string_code_unit_at((MalString *) search, search_length - 1);
+    MalStringSegment needle;
+    bool contiguous_needle = mal_string_try_get_segment(search, 0, search_length, &needle);
+    c16 first = contiguous_needle ? mal_string_segment_code_unit_at(&needle, 0)
+        : mal_string_code_unit_at((MalString *) search, 0);
+    c16 last = contiguous_needle ? mal_string_segment_code_unit_at(&needle, search_length - 1)
+        : mal_string_code_unit_at((MalString *) search, search_length - 1);
     usize end = length - search_length + 1;
-    MalStringIterator iterator;
-    mal_string_iterator_init(&iterator, string, from, end - from);
     MalStringSegment segment;
+    bool contiguous = mal_string_try_get_segment(string, from, length - from, &segment);
+    MalStringIterator iterator;
+    if (!contiguous) mal_string_iterator_init(&iterator, string, from, length - from);
     usize offset = from;
     i64 result = -1;
-    while (mal_string_iterator_next(&iterator, &segment)) {
+    while (offset < end && (contiguous || mal_string_iterator_next(&iterator, &segment))) {
+        // Keep the complete leaf for match verification, limiting only candidate starts.
+        MalStringSegment candidates = segment;
+        if (candidates.length > end - offset) candidates.length = end - offset;
         usize local = 0;
-        while (local < segment.length) {
-            usize candidate = mal_builtin_string_segment_find_unit(&segment, local, first);
-            MAL_PERF_ADD(string_search_candidates, candidate - local + (candidate != segment.length));
+        while (local < candidates.length) {
+            usize candidate = mal_builtin_string_segment_find_unit(&candidates, local, first);
+            MAL_PERF_ADD(string_search_candidates, candidate - local + (candidate != candidates.length));
             MAL_PERF_ADD(string_search_first_unit_rejects, candidate - local);
-            if (candidate == segment.length) break;
+            if (candidate == candidates.length) break;
             usize position = offset + candidate;
             if (search_length == 1) {
                 result = (i64) position;
                 goto done;
             }
-            if (mal_string_code_unit_at((MalString *) string, position + search_length - 1) != last) {
+            bool contained = search_length <= segment.length - candidate;
+            c16 actual_last = contained
+                ? mal_string_segment_code_unit_at(&segment, candidate + search_length - 1)
+                : mal_string_code_unit_at((MalString *) string, position + search_length - 1);
+            if (actual_last != last) {
                 MAL_PERF_COUNT(string_search_last_unit_rejects);
             } else {
-                MAL_PERF_COUNT(string_search_memcmp_calls);
-                MAL_PERF_ADD(string_search_memcmp_code_units, search_length);
-                if (mal_builtin_string_matches_at(string, search, position)) {
+                usize interior_length = search_length - 2;
+                bool equal = interior_length == 0;
+                if (!equal) {
+                    MAL_PERF_COUNT(string_search_memcmp_calls);
+                    MAL_PERF_ADD(string_search_memcmp_code_units, interior_length);
+                    equal = contained && contiguous_needle
+                        ? mal_builtin_string_segments_equal(&segment, candidate + 1, &needle, 1, interior_length)
+                        : mal_builtin_string_matches_at(string, search, position);
+                }
+                if (equal) {
                     result = (i64) position;
                     goto done;
                 }
@@ -412,7 +440,7 @@ static i64 mal_builtin_string_find(const MalString *string, const MalString *sea
         offset += segment.length;
     }
 done:
-    mal_string_iterator_dispose(&iterator);
+    if (!contiguous) mal_string_iterator_dispose(&iterator);
     return result;
 }
 
@@ -455,7 +483,7 @@ static i64 mal_builtin_string_reverse_find(
     return result;
 }
 
-static MalValue mal_builtin_string_search_flat(
+static MalValue mal_builtin_string_search_impl(
     MalString *string, MalString *search, f64 position, MalStringSearchOp operation
 ) {
     MalValue result;
@@ -498,11 +526,10 @@ bool mal_builtin_string_search_direct(
     MalValue receiver, MalValue needle, f64 position,
     MalStringSearchOp operation, MalValue *result
 ) {
-    if (!mal_builtin_string_is_flat_value(receiver) ||
-        !mal_builtin_string_is_flat_value(needle)) {
+    if (!mal_value_is_string(receiver) || !mal_value_is_string(needle)) {
         return false;
     }
-    *result = mal_builtin_string_search_flat(
+    *result = mal_builtin_string_search_impl(
         mal_value_to_string(receiver), mal_value_to_string(needle), position, operation);
     return true;
 }
@@ -510,7 +537,7 @@ bool mal_builtin_string_search_direct(
 MalValue mal_builtin_string_search_strings(
     MalString *string, MalString *search, f64 position, MalStringSearchOp operation
 ) {
-    return mal_builtin_string_search_flat(string, search, position, operation);
+    return mal_builtin_string_search_impl(string, search, position, operation);
 }
 
 static MalValue mal_builtin_string_symbol_descriptive_string(
@@ -2995,7 +3022,7 @@ static MalValue mal_builtin_string_replace_literal(
     }
     if (result_length == 0) return mal_builtin_string_empty(vm);
     MalTextBuffer output = {.heap = &vm->heap};
-    mal_text_buffer_reserve(&output, result_length);
+    mal_text_buffer_hint_capacity(&output, result_length);
     usize source_position = 0;
     usize match_position = first_match;
     for (usize match_index = 0; match_index < match_count && output.status == MAL_TEXT_BUFFER_OK; match_index++) {
