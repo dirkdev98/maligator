@@ -85,6 +85,25 @@ static int check_sparse_churn(MalVm *vm) {
             }
         }
     }
+    for (usize round = 0; round < 128; ++round) {
+        MalValue transient = new_weak_key(vm, round);
+        mal_map_object_set(map, transient, mal_value_from_i32(-1));
+        mal_map_object_set(set, transient, mal_value_new_undefined());
+        u64 before = mal_gc_collection_count(vm);
+        vm->heap.next_gc_at = 1;
+        mal_gc_poll = true;
+        mal_gc_safepoint(vm);
+        mal_gc_finish_pending_cycle(vm);
+        if (mal_gc_collection_count(vm) <= before ||
+            mal_map_object_size(map) != LIVE_COUNT ||
+            mal_map_object_size(set) != LIVE_COUNT) return 10;
+        if (mal_heap_usage(&vm->heap).raw_owned_bytes >
+            initial_raw + LIVE_COUNT * 64) return 11;
+    }
+    for (usize i = 0; i < LIVE_COUNT; ++i) {
+        if (mal_map_object_get(map, roots[i + 2]) != mal_value_from_i32((i32) i) ||
+            !mal_map_object_has(set, roots[i + 2])) return 12;
+    }
     for (usize i = 2; i < countof(roots); ++i) roots[i] = mal_value_new_undefined();
     mal_gc_collect(vm);
     if (mal_map_object_size(map) != 0 || mal_map_object_size(set) != 0) return 8;
