@@ -140,8 +140,10 @@ static bool split_patterns(MalVm *vm) {
     MalStringSplitCursor state;
     u64 nodes = mal_perf_stats.string_iterator_nodes;
     u64 comparisons = mal_perf_stats.string_search_linear_comparisons;
+    u64 allocated = mal_gc_allocated_bytes(vm);
     CHECK(mal_builtin_string_split_cursor_init_locked(vm, roots[0], roots[3],
         &roots[1], &roots[2], &state));
+    CHECK(mal_value_is_string(roots[2]) && mal_gc_allocated_bytes(vm) == allocated);
     usize start, end;
     CHECK(mal_builtin_string_split_cursor_next(roots[1], roots[2], &state, &start, &end));
     CHECK(start == 0 && end == 0);
@@ -164,6 +166,37 @@ static bool split_patterns(MalVm *vm) {
     return true;
 }
 
+static bool flat_split_without_frontier(MalVm *vm, bool dependent) {
+    c16 units[256];
+    for (usize i = 0; i < countof(units); i++) units[i] = i % 4 < 2 ? 'a' : '|';
+    MalString *subject = mal_string_new_copy(&vm->heap, units, dependent ? 256 : 128);
+    if (dependent) subject = mal_string_new_slice(&vm->heap, subject, 16, 128);
+    CHECK(!dependent || subject->storage == MAL_STRING_STORAGE_DEPENDENT);
+    MalValue roots[4] = {mal_value_from_string(subject), MAL_VALUE_UNDEFINED,
+        MAL_VALUE_UNDEFINED, mal_value_from_string(mal_string_new_ascii(&vm->heap, "||", 2))};
+    MalRootSpan span;
+    mal_gc_root(&span, roots, 4);
+    MalStringSplitCursor state;
+    u64 allocated = mal_gc_allocated_bytes(vm);
+    CHECK(mal_builtin_string_split_cursor_init_locked(vm, roots[0], roots[3],
+        &roots[1], &roots[2], &state));
+    CHECK(mal_value_is_string(roots[2]) && mal_gc_allocated_bytes(vm) == allocated);
+    for (usize i = 0; i <= 32; i++) {
+        usize start, end;
+        CHECK(mal_builtin_string_split_cursor_next(roots[1], roots[2], &state, &start, &end));
+        CHECK(start == i * 4 && end == (i == 32 ? 128 : start + 2));
+        if (i == 0) {
+            CHECK(mal_gc_allocated_bytes(vm) == allocated);
+            mal_string_code_units(subject);
+            mal_gc_collect(vm);
+        }
+    }
+    usize start, end;
+    CHECK(!mal_builtin_string_split_cursor_next(roots[1], roots[2], &state, &start, &end));
+    mal_gc_unroot(&span);
+    return true;
+}
+
 int main(void) {
     mal_perf_stats_init();
     MalVm vm;
@@ -171,7 +204,8 @@ int main(void) {
     bool passed = string_iteration(&vm, 512, false) && string_iteration(&vm, 2048, false)
         && string_iteration(&vm, 256, true) && projected_split(&vm, 512, false)
         && projected_split(&vm, 2048, false) && projected_split(&vm, 256, true)
-        && split_patterns(&vm);
+        && split_patterns(&vm) && flat_split_without_frontier(&vm, false)
+        && flat_split_without_frontier(&vm, true);
     mal_vm_free(&vm);
     if (!passed) return 1;
     puts("string-cursor-frontier PASS");

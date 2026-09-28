@@ -222,7 +222,8 @@ typedef struct {
 /**
  * Start a closed split cursor. A false result is side-effect-free and leaves the
  * ordinary String#split call as the complete fallback. On success, both output
- * values must remain rooted across reentry; traversal owns the frontier and pattern.
+ * values must remain rooted across reentry. The opaque traversal root retains the
+ * separator for flat input, or owns a rope frontier and copied search pattern.
  */
 bool mal_builtin_string_split_cursor_init(
     MalVm *vm,

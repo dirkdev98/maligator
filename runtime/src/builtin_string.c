@@ -3682,11 +3682,17 @@ static bool mal_builtin_string_split_cursor_init_impl(
 #else
     (void) vm;
 #endif
-    MalStringCursor *cursor = mal_string_cursor_new(&vm->heap, mal_value_to_string(receiver));
-    if (mal_string_length(mal_value_to_string(separator)) <= cursor->length) {
-        cursor->scratch = mal_builtin_string_split_pattern_new(mal_value_to_string(separator));
-    }
+    MalString *subject = mal_value_to_string(receiver);
     *subject_out = receiver;
+    // Flat/dependent input cannot acquire rope ancestry during reentry. Rebuilding
+    // its pattern after a match costs at most the units that match consumed.
+    if (subject->storage != MAL_STRING_STORAGE_CONS ||
+        mal_string_length(mal_value_to_string(separator)) > subject->length) {
+        *traversal_out = separator;
+        return true;
+    }
+    MalStringCursor *cursor = mal_string_cursor_new(&vm->heap, subject);
+    cursor->scratch = mal_builtin_string_split_pattern_new(mal_value_to_string(separator));
     *traversal_out = mal_value_from_heap(&cursor->header);
     return true;
 }
@@ -3724,10 +3730,25 @@ bool mal_builtin_string_split_cursor_next(
     usize *start_out,
     usize *end_out
 ) {
-    if (cursor->done || !mal_value_is_string(subject_value) ||
-        !mal_value_is_heap_type(traversal_value, MAL_HEAP_STRING_CURSOR)) return false;
-    MalStringCursor *traversal = (MalStringCursor *) mal_value_to_heap(traversal_value);
+    if (cursor->done || !mal_value_is_string(subject_value)) return false;
     usize start = cursor->position;
+    if (mal_value_is_string(traversal_value)) {
+        MalString *subject = mal_value_to_string(subject_value);
+        MalString *separator = mal_value_to_string(traversal_value);
+        if (separator->length == 0 || start > subject->length) return false;
+        i64 match = mal_builtin_string_find(subject, separator, start);
+        *start_out = start;
+        if (match < 0) {
+            *end_out = subject->length;
+            cursor->done = true;
+        } else {
+            *end_out = (usize) match;
+            cursor->position = (usize) match + separator->length;
+        }
+        return true;
+    }
+    if (!mal_value_is_heap_type(traversal_value, MAL_HEAP_STRING_CURSOR)) return false;
+    MalStringCursor *traversal = (MalStringCursor *) mal_value_to_heap(traversal_value);
     i64 match = mal_builtin_string_split_cursor_find(traversal);
     *start_out = start;
     if (match < 0) {
