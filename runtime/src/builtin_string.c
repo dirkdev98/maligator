@@ -301,7 +301,7 @@ static inline bool mal_builtin_string_word_may_contain_unit(u64 word, c16 unit) 
  * Find one UTF-16 code unit in [from, end). Fixed-size memcpy permits
  * unaligned input while still compiling to a single word load.
  */
-static usize mal_builtin_string_find_unit(
+static usize mal_builtin_string_find_unit_words(
     const c16 *units,
     usize from,
     usize end,
@@ -327,6 +327,44 @@ static usize mal_builtin_string_find_unit(
         from++;
     }
     return end;
+}
+
+[[gnu::noinline]]
+static usize mal_builtin_string_find_unit_bytes(
+    const c16 *units, usize from, usize end, c16 unit
+) {
+    u8 needle[sizeof(c16)];
+    memcpy(needle, &unit, sizeof(unit));
+    usize lane = needle[0] == 0 ? 1 : 0;
+    usize rejected = 0;
+    while (from < end) {
+        const u8 *bytes = (const u8 *) (units + from);
+        const u8 *match = memchr(bytes + lane, needle[lane],
+            (end - from) * sizeof(c16) - lane);
+        if (match == nullptr) return end;
+        usize offset = (usize) (match - bytes);
+        usize position = from + offset / sizeof(c16);
+        if (offset % sizeof(c16) == lane) {
+            MAL_PERF_COUNT(string_unit_scan_scalar_code_units);
+            if (units[position] == unit) return position;
+        }
+        // A hit in the other byte cannot establish a unit match. Bound these
+        // false hits so dense byte aliases fall back to the word scanner.
+        from = position + 1;
+        if (++rejected == 4) break;
+    }
+    return mal_builtin_string_find_unit_words(units, from, end, unit);
+}
+
+static usize mal_builtin_string_find_unit(
+    const c16 *units, usize from, usize end, c16 unit
+) {
+    // Avoid the zero high byte in ASCII UTF-16; memchr can scan long spans with
+    // the platform's vector implementation while complete units verify hits.
+    if (unit != 0 && end - from >= 64) {
+        return mal_builtin_string_find_unit_bytes(units, from, end, unit);
+    }
+    return mal_builtin_string_find_unit_words(units, from, end, unit);
 }
 
 /**
