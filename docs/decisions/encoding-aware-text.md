@@ -202,13 +202,27 @@ Per-call shape plans reuse property order/slots and escaped keys; the rooted inp
 graph remains immutable throughout this callback-free traversal. It uses heap
 frames and is not subject to the generic recursive container cap.
 
+Optional cache admission allows 64 KiB of requested plan bytes and encoded-key
+buffer capacities. Shape/prototype maps each hold at most 256 entries, using at
+most 16 KiB of entry storage together. This bounds accounted cache payload/capacity
+to 80 KiB, excluding allocator headers and RAW size-class rounding. Active-path
+identities and traversal frames remain separate depth-dependent scratch. Shape
+admission stops at the limit; eligible uncached objects walk their immutable
+shapes and quote directly into final output. A quoted key is retained only when
+its cache growth, including width promotion, fits. Declining optional caching
+causes neither output discard nor generic fallback. Prototype proofs use bounded
+rotating eviction, so eligibility may revalidate a prototype chain.
+
 Replacers, property lists, indentation, accessors, proxies, holes, wrappers,
 `toJSON`, raw JSON, and other unsupported cases take the generic path. An unsupported
 descendant discards speculative output before generic traversal invokes user code.
 Only earlier pure work can repeat. Caches stay within one invocation, avoiding
-cross-call shape/prototype invalidation state. Quoting copies safe runs, preserves
-surrogate pairs across leaves, and escapes lone surrogates. Cache admission and
-UTF-16 quoting throughput are separate from these semantic contracts.
+cross-call shape/prototype invalidation state. Quoting scans safe runs in both
+encodings in bulk. UTF-16 scanning stops before surrogates so the existing pair
+handling can span leaves; lone surrogates are escaped. A short scalar prefix
+preserves the short-run and dense-escape path. Cache limits and bulk quoting do
+not eliminate the pure work discarded by a late unsupported descendant or
+establish the cause of an aggregate mixed-pipeline timing change.
 
 ## Verification
 

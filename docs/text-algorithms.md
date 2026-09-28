@@ -12,9 +12,10 @@ change.
 Let N count consumed UTF-16 units, R visited rope nodes, H rope height, M needle
 units, and O output units. Shared subtrees count again when their content must be
 emitted again. For JSON, V counts visited value/member occurrences, D container
-depth, K retained shape-plan entries, P validated prototype objects, and Q cached
-escaped-key units. Hash-table costs are expected bounds. User callbacks and
-platform number conversion have their own costs.
+depth, K retained shape-plan entries, P prototype-validation steps (including
+rechecks after cache eviction), and Q cached escaped-key units. Hash-table costs
+are expected bounds. User callbacks and platform number conversion have their own
+costs.
 
 | Operation                         | Current cost and qualification                                                                                                                                                                                                                                               | Owning implementation                                                                                                           |
 | --------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
@@ -29,8 +30,8 @@ platform number conversion have their own costs.
 | UTF-8 boundary                    | Decoding grows compact storage with emitted units. Buffer encoding counts bytes and writes an exactly sized adopted buffer. Both are linear passes; remaining temporary C-string encoders still reserve an upper bound.                                                      | [UTF-8](../runtime/src/utf8.c), [Buffer conversion](../runtime/src/runtime/node_buffer.c)                                       |
 | JSON parsing and reviver metadata | Token traversal is sequential; small integers accumulate during validation and other numbers use token-local byte scratch. Object source records build a last-occurrence hash index on demand, avoiding a backward member scan for each reviver lookup.                      | [JSON parser and source records](../runtime/src/builtin_json.c)                                                                 |
 | Generic stringify                 | Active-path membership is expected O(1) per container, with O(D) live identities. Native recursion has a 512-container cap and the VM's actual stack bound; pretty-printing and callbacks can add work independently of traversal.                                           | [Generic JSON serializer](../runtime/src/builtin_json.c)                                                                        |
-| Plain-data stringify              | Iterative traversal with expected O(V + O + K + P + Q) work, plus string traversal, and O(D + shapes + K + P + Q) auxiliary state. Cache construction and late fallback remain explicit costs.                                                                               | [Guarded JSON serializer](../runtime/src/builtin_json.c)                                                                        |
-| JSON quoting                      | O(N + O + R), including bounded escape expansion. Latin-1 safe runs use word scanning; UTF-16 quoting handles escapes and surrogate pairing across leaves.                                                                                                                   | [JSON quoting](../runtime/src/builtin_json.c)                                                                                   |
+| Plain-data stringify              | Iterative traversal with expected O(V + O + K + P + Q) work, plus string traversal. Optional caches have fixed admission budgets; frames and active-path state remain O(D). Prototype revalidation and late fallback remain explicit costs.                                  | [Guarded JSON serializer](../runtime/src/builtin_json.c)                                                                        |
+| JSON quoting                      | O(N + O + R), including bounded escape expansion. Safe Latin-1 and ordinary UTF-16 runs use word scanning; quoting stops for escapes and surrogate handling, including pairs across leaves.                                                                                  | [JSON quoting](../runtime/src/builtin_json.c)                                                                                   |
 
 ## Rope ownership, balancing, and sequential work
 
@@ -121,8 +122,10 @@ string or a VM-rooted property atom. A transient query does not clear unrelated
 existing rows. Shape-cache hits retain the shape-owned name; negative entries
 admit only stable names. Unique missing queries therefore do not themselves add
 VM-lifetime atom roots or leave untraced cache pointers into collectable rope
-graphs. Bounded tiny-string caches and explicit user storage remain independent
-sources of retention. See [query preparation](../runtime/src/vm_ops.c),
+graphs. Repeated absent dynamic names can consequently repeat lookup work; a
+future miss cache needs a bounded, traced lifetime contract. Bounded tiny-string
+caches and explicit user storage remain independent sources of retention. See
+[query preparation](../runtime/src/vm_ops.c),
 [atom resolution](../runtime/src/intrinsics.c), and [shape caches](../runtime/src/shape.c).
 
 A successful normal `Map.set` may refresh an equal primitive string's stored
@@ -174,12 +177,29 @@ but adds no getter, proxy trap, replacer, or `toJSON` invocation. Shape/prototyp
 maps and active-path checks already use hash tables; the parser's small shaped
 object duplicate scan remains capped at 32 names.
 
-One-use shapes, escaped-key storage, and a late unsupported descendant can still
-spend significant work on cache construction and discarded output. UTF-16 quoting
-also has costs distinct from storage promotion and string traversal. Use the JSON
-plan/key byte, reuse, discarded-output, quote-probe, and parser-seek counters to
-attribute those costs before extending cache lifetime or adding more output
-representations.
+Optional plain-serializer caches share a 64 KiB budget for requested shape-plan
+bytes and encoded-key buffer capacities. Shape and prototype maps each retain at
+most 256 entries and use at most 512 pointer-map slots, adding at most 16 KiB of
+entry storage. The resulting 80 KiB accounted cache bound excludes allocator
+headers and RAW size-class rounding; it is not a resident-memory bound. Traversal
+frames and the active-path set are separate depth-dependent scratch.
+
+After shape admission stops, eligible objects walk their validated immutable
+shape directly and quote keys into final output. Cache exhaustion neither discards
+output nor enters the generic serializer. A key is first quoted into final output;
+its encoded range is retained only when predicted buffer growth, including width
+promotion, fits the remaining budget. A declined key stays uncached. Prototype
+proofs use bounded rotating eviction, caching at most the nearest 256 nodes of a
+validated chain. Eviction can repeat prototype-validation work, so cache bounds
+do not imply a universal constant-time eligibility check.
+
+Ordinary UTF-16 quote runs use four-unit word scanning after a short scalar prefix.
+Scanning stops before controls, quote, backslash, or any surrogate; the existing
+scalar path then handles escaping and pairs across leaves. Short and dense-escape
+runs retain a scalar path. This avoids repeated scalar probes for long BMP runs
+without changing the output or materializing input strings. Plan/key capacity,
+reuse, discarded-output, quote-probe, and parser-seek counters describe these JSON
+costs; full mixed-pipeline attribution remains a separate task.
 
 ## Construction and external encoding
 
@@ -212,6 +232,21 @@ characters at the external boundary. Bounded encoding never splits a scalar and
 reports consumed UTF-16 units. Temporary C-string and TextEncoder allocation
 paths still use the existing `3N + 1` upper bound; the malloc UTF-16 decoder remains
 for path operations that require mutable UTF-16 scratch.
+
+## Remaining work
+
+- Preserve a traced pending-node frontier across JavaScript reentry for string
+  iteration and projected split yields, with invalidation when representation
+  changes remove previously borrowed graph edges.
+- Profile the complete mixed-text pipeline across parsing, property lookup,
+  construction, quoting, and checksum. JSON counters describe only part of that
+  work; a quoting control win does not attribute an aggregate pipeline change.
+  Keep early/late wide units, escape density, BMP, and astral content as separate
+  workload dimensions.
+- Recover repeated absent-name IC performance with a bounded lifetime strategy,
+  preserving the query path's avoidance of permanent atom growth.
+- Reduce work discarded by late plain-JSON fallback while preserving the rule
+  that eligibility checks add no getter, proxy, replacer, or `toJSON` call.
 
 ## Acceptance and measurement
 
