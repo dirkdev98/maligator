@@ -791,9 +791,9 @@ remains a Maligator extension and does not count as global fetch conformance.
       current RAW/reusable/chunk capacity, external pressure, and assist/backstop
       cost before replacing the eighth-collection cadence. A 15-pair app-batch
       comparison rejected fixed cadence 16: elapsed/CPU did not improve, and
-      peak RSS rose about 27% in every pair; its single diagnostic had fewer
-      majors but more minor cell visits. Longer-run resource control and a
-      cadence-four comparison with 200/2,000-iteration samples are queued;
+      peak RSS rose about 27% in every pair; its 2,000-iteration diagnostic had
+      fewer majors but more minor cell visits and a higher mapped/RSS plateau.
+      A cadence-four comparison with 200/2,000-iteration samples is queued;
       neither fixed cadence is a pressure policy.
       Validate nested cgroup quota discovery on Linux.
 - [ ] Bounded slices: retain the skipped-block sweep budget only after combined
@@ -833,13 +833,15 @@ remains a Maligator extension and does not count as global fetch conformance.
       unmeasured. The prior app diagnostic allocated only 32,800 bytes during major
       sweep; establish representative long-sweep exposure before adding per-block
       free lists.
-- [ ] Complete the queued long-resource cadence controls and primitive-filter HTTP
+- [ ] Complete the queued cadence-four resource control and primitive-filter HTTP
       ablation; record per-candidate and combined decisions. The retained-source
       five-family portfolio completed with matching output checks and an inconclusive
       0.82% aggregate gain estimate. The separate 30-second HTTP diagnostic is
       complete but does not attribute the routes regression. The 15-pair fixed
-      cadence-16 experiment was rejected for its consistent RSS cost. Linux gate
-      and Wasm parity passed; the final benchmark harness gate is running.
+      cadence-16 experiment was rejected for its consistent RSS cost; a 2,000-
+      iteration control confirms a higher mapped/RSS plateau and more minor
+      sweep work. Linux gate, Wasm parity, and the final benchmark harness gate
+      passed.
 
 # Triggered work
 
