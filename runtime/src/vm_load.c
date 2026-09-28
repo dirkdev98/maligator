@@ -2364,7 +2364,7 @@ MalLoadedRuntimeImage *mal_runtime_image_load_with_host_resolver(
         strings[s].array_index_impossible = false;
         strings[s].property_atom = false;
         strings[s].latin1 = false;
-        strings[s].slice_offset = 0;
+        strings[s].hash = 0;
         strings[s].length = length;
         strings[s].code_units = units;
     }

@@ -63,7 +63,7 @@ static void mal_string_init_flat(
     string->property_atom = false;
     string->latin1 = latin1;
     string->length = (u32) length;
-    string->slice_offset = 0;
+    string->hash = 0;
 }
 
 static void mal_string_init_inline(
@@ -471,7 +471,6 @@ static MalString *mal_string_new_dependent_resolved(
     mal_string_init_flat(string, MAL_STRING_STORAGE_DEPENDENT, parent->latin1, length);
     string->parent = parent;
     string->slice_offset = (u32) offset;
-    string->dependent_hash = 0;
     mal_gc_card(&string->header, mal_value_from_string(parent));
     if (mal_gc_marking_active) mal_gc_satb_record(mal_value_from_string(parent));
     return string;
@@ -787,9 +786,7 @@ const c16 *mal_string_flatten(MalString *mutable) {
         mal_gc_satb_record(mal_value_from_string(mutable->right));
     }
     mutable->storage = MAL_STRING_STORAGE_OWNED;
-    mutable->hash_valid = false;
     mutable->latin1 = false;
-    mutable->slice_offset = 0;
     mutable->code_units = code_units;
     return code_units;
 }
@@ -813,66 +810,12 @@ static u64 mal_string_hash_segment(u64 hash, const MalStringSegment *segment) {
     return hash;
 }
 
-#define MAL_STRING_CONS_HASH_SEEN ((u32) 1)
-
-static u64 mal_string_materialize_hash(MalString *string) {
-    bool latin1 = mal_string_range_is_latin1(string, 0, string->length);
-    MalHeap *heap = mal_gc_current_heap();
-    void *units = mal_heap_alloc_raw_profiled(heap,
-        string->length * (latin1 ? sizeof(u8) : sizeof(c16)),
-        MAL_PROFILE_ALLOCATION_FAMILY_STRING);
-    MalStringIterator iterator;
-    MalStringSegment segment;
-    mal_string_iterator_init(&iterator, string, 0, string->length);
-    usize offset = 0;
-    u64 hash = 0xcbf29ce484222325;
-    while (mal_string_iterator_next(&iterator, &segment)) {
-        hash = mal_string_hash_segment(hash, &segment);
-        if (latin1) {
-            u8 *destination = (u8 *) units + offset;
-            if (segment.latin1) {
-                memcpy(destination, segment.latin1_units, segment.length);
-            } else {
-                for (usize i = 0; i < segment.length; i++) {
-                    destination[i] = (u8) segment.utf16_units[i];
-                }
-            }
-        } else {
-            mal_string_copy_segment_to(&segment, (c16 *) units + offset);
-        }
-        offset += segment.length;
-    }
-    mal_string_iterator_dispose(&iterator);
-
-    // Publish only after copying and hashing; removed edges must remain visible
-    // to an active SATB cycle. RAW allocation and traversal cannot collect.
-    if (mal_gc_marking_active) {
-        mal_gc_satb_record(mal_value_from_string(string->left));
-        mal_gc_satb_record(mal_value_from_string(string->right));
-    }
-    string->storage = MAL_STRING_STORAGE_OWNED;
-    string->latin1 = latin1;
-    string->slice_offset = 0;
-    if (latin1) string->latin1_units = units;
-    else string->code_units = units;
-    string->hash = hash;
-    string->hash_valid = true;
-    MAL_PERF_COUNT(string_hash_cons_flattens);
-    MAL_PERF_COUNT(string_flatten_calls);
-    MAL_PERF_ADD(string_flatten_code_units, string->length);
-    return hash;
-}
-
 u64 mal_string_hash_slow(const MalString *string) {
     if (string->hash_valid) {
         MAL_PERF_COUNT(string_hash_cached_hits);
-        return string->storage == MAL_STRING_STORAGE_DEPENDENT ? string->dependent_hash : string->hash;
+        return string->hash;
     }
     MAL_PERF_COUNT(string_hash_computes);
-    if (string->storage == MAL_STRING_STORAGE_CONS &&
-        string->slice_offset == MAL_STRING_CONS_HASH_SEEN) {
-        return mal_string_materialize_hash((MalString *) string);
-    }
     if (string->storage == MAL_STRING_STORAGE_DEPENDENT) MAL_PERF_COUNT(string_hash_dependent_computes);
     u64 hash = 0xcbf29ce484222325;
     MalStringSegment segment;
@@ -885,15 +828,8 @@ u64 mal_string_hash_slow(const MalString *string) {
         mal_string_iterator_dispose(&iterator);
     }
     MalString *mutable = (MalString *) string;
-    if (string->storage == MAL_STRING_STORAGE_DEPENDENT) {
-        mutable->dependent_hash = hash;
-        mutable->hash_valid = true;
-    } else if (string->storage == MAL_STRING_STORAGE_CONS) {
-        mutable->slice_offset = MAL_STRING_CONS_HASH_SEEN;
-    } else {
-        mutable->hash = hash;
-        mutable->hash_valid = true;
-    }
+    mutable->hash = hash;
+    mutable->hash_valid = true;
     return hash;
 }
 
@@ -1069,18 +1005,14 @@ bool mal_string_equals(const MalString *left, const MalString *right) {
         MAL_PERF_COUNT(string_length_misses);
         return false;
     }
+    // Computing a missing hash adds an unnecessary full pass before comparison.
+    if (left->hash_valid && right->hash_valid && left->hash != right->hash) {
+        MAL_PERF_COUNT(string_hash_misses);
+        return false;
+    }
     i32 structural_result;
     if (mal_string_compare_structural(left, right, &structural_result, true)) {
         return structural_result == 0;
-    }
-    // Computing a missing hash adds an unnecessary full pass before comparison.
-    if (left->hash_valid && right->hash_valid) {
-        u64 a = left->storage == MAL_STRING_STORAGE_DEPENDENT ? left->dependent_hash : left->hash;
-        u64 b = right->storage == MAL_STRING_STORAGE_DEPENDENT ? right->dependent_hash : right->hash;
-        if (a != b) {
-            MAL_PERF_COUNT(string_hash_misses);
-            return false;
-        }
     }
 
     MAL_PERF_COUNT(string_memcmp_calls);

@@ -40,11 +40,41 @@ static bool physical_encodings_have_equal_content(MalVm *vm) {
     MalString *inline_compact = mal_string_new_latin1_copy(&vm->heap, inline_units, countof(inline_units));
     CHECK(inline_compact->latin1 && inline_compact->storage == MAL_STRING_STORAGE_INLINE);
     const c16 wide_units[] = {0, 0x7f, 0x80, 0x100, 'a', 'b', 'c', 'd'};
-    MalString *owned_wide = mal_string_new_copy(&vm->heap, wide_units, countof(wide_units));
-    CHECK(!owned_wide->latin1 && owned_wide->storage == MAL_STRING_STORAGE_OWNED);
-    CHECK(!mal_string_equals(inline_compact, owned_wide));
-    CHECK(mal_string_compare(inline_compact, owned_wide) < 0);
-    CHECK(mal_string_compare(owned_wide, inline_compact) > 0);
+    MalString *inline_wide = mal_string_new_copy(&vm->heap, wide_units, countof(wide_units));
+    CHECK(!inline_wide->latin1 && inline_wide->storage == MAL_STRING_STORAGE_INLINE);
+    CHECK(!mal_string_equals(inline_compact, inline_wide));
+    CHECK(mal_string_compare(inline_compact, inline_wide) < 0);
+    CHECK(mal_string_compare(inline_wide, inline_compact) > 0);
+    return true;
+}
+
+static bool inline_capacity_and_eight_unit_cache(MalVm *vm) {
+    u8 latin1[17];
+    c16 utf16[9];
+    c16 narrow_utf16[8];
+    for (usize i = 0; i < countof(latin1); i++) latin1[i] = (u8) (0x80 + i);
+    for (usize i = 0; i < countof(utf16); i++) utf16[i] = (c16) (0x100 + i);
+    for (usize i = 0; i < countof(narrow_utf16); i++) narrow_utf16[i] = latin1[i];
+    utf16[7] = 0xd800;
+    usize raw_before = mal_heap_usage(&vm->heap).raw_owned_bytes;
+    MalString *compact = mal_string_new_latin1_copy(&vm->heap, latin1, 16);
+    MalString *wide = mal_string_new_copy(&vm->heap, utf16, 8);
+    CHECK(compact->storage == MAL_STRING_STORAGE_INLINE && compact->latin1);
+    CHECK(wide->storage == MAL_STRING_STORAGE_INLINE && !wide->latin1);
+    CHECK(mal_heap_usage(&vm->heap).raw_owned_bytes == raw_before);
+    for (usize i = 0; i < 16; i++) CHECK(mal_string_code_unit_at(compact, i) == latin1[i]);
+    for (usize i = 0; i < 8; i++) CHECK(mal_string_code_unit_at(wide, i) == utf16[i]);
+    CHECK(mal_string_new_copy(&vm->heap, utf16, 8) == wide);
+    MalString *cached = mal_string_new_latin1_copy(&vm->heap, latin1, 8);
+    CHECK(cached->hash_valid && mal_string_new_copy(&vm->heap, narrow_utf16, 8) == cached);
+    CHECK(mal_string_hash(cached) == mal_string_hash_code_units(narrow_utf16, 8));
+
+    compact = mal_string_new_latin1_copy(&vm->heap, latin1, 17);
+    wide = mal_string_new_copy(&vm->heap, utf16, 9);
+    CHECK(compact->storage == MAL_STRING_STORAGE_OWNED && compact->latin1);
+    CHECK(wide->storage == MAL_STRING_STORAGE_OWNED && !wide->latin1);
+    for (usize i = 0; i < 17; i++) CHECK(mal_string_code_unit_at(compact, i) == latin1[i]);
+    for (usize i = 0; i < 9; i++) CHECK(mal_string_code_unit_at(wide, i) == utf16[i]);
     return true;
 }
 
@@ -80,7 +110,7 @@ static bool ropes_and_slices_stream_without_materialization(MalVm *vm) {
     CHECK(slice->storage == MAL_STRING_STORAGE_DEPENDENT && slice->parent == rope);
     u64 expected_hash = mal_string_hash_code_units(expected + 32, 192);
     CHECK(mal_string_hash(slice) == expected_hash && slice->hash_valid);
-    CHECK(mal_string_hash(slice) == expected_hash && slice->dependent_hash == expected_hash);
+    CHECK(mal_string_hash(slice) == expected_hash && slice->hash == expected_hash);
     CHECK(rope->storage == MAL_STRING_STORAGE_CONS);
     MalStringIterator iterator;
     mal_string_iterator_init(&iterator, slice, 16, 160);
@@ -135,7 +165,48 @@ static bool direct_search_accepts_rope_receivers(MalVm *vm) {
     return true;
 }
 
-static bool reused_rope_hashes_preserve_slice_content(MalVm *vm) {
+static bool utf16_search_rejects_byte_aliases(void) {
+    c16 units[256];
+    for (usize i = 0; i < 64; i++) units[i] = 0x7400;
+    units[64] = 't';
+    for (usize i = 65; i < 128; i++) units[i] = 0x0001;
+    units[128] = 0x0100;
+    for (usize i = 129; i < 192; i++) units[i] = 0x4142;
+    units[192] = 0x4141;
+    for (usize i = 193; i < 240; i++) units[i] = 0x1234;
+    units[240] = 0;
+    units[241] = 't';
+    units[242] = 0x0100;
+    units[243] = 0x4141;
+    for (usize i = 244; i < 255; i++) units[i] = 0xffff;
+    units[255] = 0x4141;
+    const c16 needles[] = {'t', 0x0100, 0x4141, 0, 0xffff, 0x7400, 1, 0x1234, 0xdead};
+    const usize starts[] = {0, 1, 60, 63, 64, 65, 67, 124, 127, 128, 129, 130,
+        190, 191, 192, 193, 237, 240, 241, 243, 244, 254, 255, 256, 257};
+    MalString haystack;
+    mal_string_init_external(&haystack, units, countof(units));
+    for (usize n = 0; n < countof(needles); n++) {
+        MalString needle;
+        mal_string_init_external(&needle, needles + n, 1);
+        for (usize s = 0; s < countof(starts); s++) {
+            i32 expected = -1;
+            for (usize i = starts[s]; i < countof(units); i++) {
+                if (units[i] == needles[n]) {
+                    expected = (i32) i;
+                    break;
+                }
+            }
+            MalValue actual;
+            CHECK(mal_builtin_string_search_direct(mal_value_from_string(&haystack),
+                mal_value_from_string(&needle), (f64) starts[s], MAL_STRING_SEARCH_INDEX_OF, &actual));
+            CHECK(mal_value_to_i32(actual) == expected);
+        }
+    }
+    CHECK(haystack.storage == MAL_STRING_STORAGE_EXTERNAL && !haystack.latin1);
+    return true;
+}
+
+static bool cached_rope_hashes_preserve_segments_and_slices(MalVm *vm) {
     c16 units[40];
     for (usize i = 0; i < countof(units); i++) units[i] = (c16) (i + 160);
     MalString *left = mal_string_new_copy(&vm->heap, units, 20);
@@ -143,21 +214,28 @@ static bool reused_rope_hashes_preserve_slice_content(MalVm *vm) {
     MalString *rope;
     CHECK(mal_string_new_cons_checked(&vm->heap, left, right, &rope));
     u64 hash = mal_string_hash_code_units(units, countof(units));
+    usize raw_before = mal_heap_usage(&vm->heap).raw_owned_bytes;
     CHECK(mal_string_hash(rope) == hash);
-    CHECK(rope->storage == MAL_STRING_STORAGE_CONS && !rope->hash_valid);
+    CHECK(rope->storage == MAL_STRING_STORAGE_CONS && rope->hash_valid && rope->hash == hash);
     MalString *slice = mal_string_new_slice(&vm->heap, rope, 7, 26);
     CHECK(slice->storage == MAL_STRING_STORAGE_DEPENDENT && slice->parent == rope);
     u64 slice_hash = mal_string_hash_code_units(units + 7, 26);
     CHECK(mal_string_hash(slice) == slice_hash && slice->hash_valid);
     CHECK(mal_string_hash(rope) == hash);
-    CHECK(rope->storage == MAL_STRING_STORAGE_OWNED && rope->latin1 && rope->hash_valid);
+    CHECK(rope->storage == MAL_STRING_STORAGE_CONS && rope->left == left && rope->right == right);
     CHECK(mal_string_hash(rope) == hash && mal_string_hash(slice) == slice_hash);
+    CHECK(mal_heap_usage(&vm->heap).raw_owned_bytes == raw_before);
     MalValue root = mal_value_from_string(slice);
     MalRootSpan span;
     mal_gc_root(&span, &root, 1);
     mal_gc_collect(vm);
     for (usize i = 0; i < slice->length; i++) CHECK(mal_string_code_unit_at(slice, i) == units[7 + i]);
-    CHECK(mal_string_hash(slice) == slice_hash);
+    CHECK(mal_string_hash(slice) == slice_hash && mal_string_hash(rope) == hash);
+    CHECK(rope->storage == MAL_STRING_STORAGE_CONS && rope->left == left && rope->right == right);
+    const c16 *flattened = mal_string_code_units(rope);
+    CHECK(memcmp(flattened, units, sizeof(units)) == 0);
+    CHECK(rope->hash_valid && rope->hash == hash && mal_string_hash(rope) == hash);
+    CHECK(mal_string_code_units(slice) == flattened + 7 && mal_string_hash(slice) == slice_hash);
     mal_gc_unroot(&span);
 
     units[21] = 0x100;
@@ -169,8 +247,10 @@ static bool reused_rope_hashes_preserve_slice_content(MalVm *vm) {
     hash = mal_string_hash_code_units(units, countof(units));
     CHECK(mal_string_hash(rope) == hash && rope->storage == MAL_STRING_STORAGE_CONS);
     CHECK(mal_string_hash(rope) == hash);
-    CHECK(rope->storage == MAL_STRING_STORAGE_OWNED && !rope->latin1 && rope->hash_valid);
-    CHECK(memcmp(mal_string_code_units(rope), units, sizeof(units)) == 0);
+    CHECK(rope->storage == MAL_STRING_STORAGE_CONS && !rope->latin1 && rope->hash_valid);
+    c16 copy[countof(units)];
+    mal_string_copy_range_to(rope, 0, rope->length, copy);
+    CHECK(memcmp(copy, units, sizeof(units)) == 0 && rope->storage == MAL_STRING_STORAGE_CONS);
     return true;
 }
 
@@ -298,9 +378,11 @@ int main(void) {
     MalVm vm;
     mal_vm_init(&vm, &mal_runtime_image);
     bool passed = physical_encodings_have_equal_content(&vm)
+        && inline_capacity_and_eight_unit_cache(&vm)
         && ropes_and_slices_stream_without_materialization(&vm)
         && direct_search_accepts_rope_receivers(&vm)
-        && reused_rope_hashes_preserve_slice_content(&vm)
+        && utf16_search_rejects_byte_aliases()
+        && cached_rope_hashes_preserve_segments_and_slices(&vm)
         && dependent_offsets_survive_parent_widening(&vm)
         && deep_segment_stacks_and_retained_slices(&vm)
         && compact_parse_lookup_build_serialize(&vm);

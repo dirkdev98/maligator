@@ -7,7 +7,7 @@
 /**
  * Physical ownership is independent of the encoding of a flat string's payload.
  */
-typedef enum MalStringStorage : u8 {
+typedef enum MalStringStorage : u32 {
     MAL_STRING_STORAGE_OWNED,
     MAL_STRING_STORAGE_INLINE,
     MAL_STRING_STORAGE_EXTERNAL,
@@ -17,43 +17,44 @@ typedef enum MalStringStorage : u8 {
 
 typedef struct MalString {
     MalHeapHeader header;
-    MalStringStorage storage;
-    bool hash_valid : 1;
-    bool array_index_impossible : 1;
+    /** The inclusive 2^24-unit engine limit needs 25 bits. */
+    u32 length : 25;
+    MalStringStorage storage : 3;
+    u32 hash_valid : 1;
+    u32 array_index_impossible : 1;
     /** Canonical VM-lifetime representative in the owning VM's atom table. */
-    bool property_atom : 1;
+    u32 property_atom : 1;
     /** Flat payload is one byte per UTF-16 unit; ropes/slices may conservatively clear it. */
-    bool latin1 : 1;
-    union {
-        /** Cached hash for flat strings. */
-        u64 hash;
-        /** Retained parent of a dependent slice, which may itself be a rope. */
-        struct MalString *parent;
-        /** Left child of a lazy concatenation. */
-        struct MalString *left;
-    };
-    u32 length;
-    /** Parent offset for a dependent slice; hash-reuse marker for a cons string. */
-    u32 slice_offset;
+    u32 latin1 : 1;
+    /** Full content hash for every representation, independent of its payload. */
+    u64 hash;
     union {
         const c16 *code_units;
         const u8 *latin1_units;
-        /** Cell-local storage for strings of at most four UTF-16 code units. */
-        c16 inline_code_units[4];
-        u8 inline_latin1_units[8];
-        /** Right child of a lazy concatenation. */
-        struct MalString *right;
-        u64 dependent_hash;
+        c16 inline_code_units[8];
+        u8 inline_latin1_units[16];
+        struct {
+            struct MalString *left;
+            struct MalString *right;
+        };
+        struct {
+            /** Retained parent may itself be a rope; offset is in UTF-16 units. */
+            struct MalString *parent;
+            u32 slice_offset;
+        };
     };
 } MalString;
 
-static_assert(sizeof(MalString) <= 32, "MalString outgrew its 32-byte size class");
-#define MAL_STRING_INLINE_CODE_UNITS ((usize) 4)
-#define MAL_STRING_INLINE_LATIN1_CODE_UNITS ((usize) 8)
+static_assert(sizeof(MalString) == 32, "MalString must fit its 32-byte cell");
+static_assert(offsetof(MalString, hash) == 8, "string metadata must occupy one word after its header");
+static_assert(offsetof(MalString, code_units) == 16, "string payload must follow its cached hash");
+#define MAL_STRING_INLINE_CODE_UNITS ((usize) 8)
+#define MAL_STRING_INLINE_LATIN1_CODE_UNITS ((usize) 16)
 
 /** Engine string lengths are measured in UTF-16 code units. */
 #define MAL_STRING_MAX_CODE_UNITS ((usize) 16 * 1024 * 1024)
 static_assert(MAL_STRING_MAX_CODE_UNITS <= INT32_MAX, "string length must fit regexp/i32 indices");
+static_assert(MAL_STRING_MAX_CODE_UNITS < ((usize) 1 << 25), "string length must fit its packed field");
 
 /**
  * Hash a UTF-16 code unit sequence.
@@ -190,9 +191,8 @@ typedef struct MalStringIterator {
 } MalStringIterator;
 
 /** Segments borrow leaf storage. Root the input across GC; do not retain an
- * iterator or segment across JS reentry or string materialization, including
- * repeated rope hashing and the UTF-16 bridge. Traversal itself never collects,
- * mutates strings, or allocates beyond malloc scratch. */
+ * iterator or segment across JS reentry or a UTF-16 bridge that may materialize
+ * it. Traversal never collects, mutates strings, or allocates beyond malloc scratch. */
 void mal_string_iterator_init(
     MalStringIterator *iterator, const MalString *string, usize offset, usize length);
 bool mal_string_iterator_next(MalStringIterator *iterator, MalStringSegment *segment);
@@ -214,9 +214,8 @@ static inline usize mal_string_length(const MalString *string) {
 }
 
 /**
- * Hash UTF-16 content independent of physical encoding. Flat strings and slices
- * cache the full hash. A rope's first hash streams its leaves; reuse materializes
- * compact storage and caches the result without collecting or reentering JS.
+ * Hash UTF-16 content independent of physical encoding. Every representation
+ * caches the full hash; computing it never materializes, collects, or reenters JS.
  */
 u64 mal_string_hash_slow(const MalString *string);
 
@@ -228,8 +227,7 @@ static inline u64 mal_string_hash(const MalString *string) {
     MAL_PERF_COUNT(string_hash_calls);
     if (string->hash_valid) {
         MAL_PERF_COUNT(string_hash_cached_hits);
-        return string->storage == MAL_STRING_STORAGE_DEPENDENT
-            ? string->dependent_hash : string->hash;
+        return string->hash;
     }
     return mal_string_hash_slow(string);
 }
