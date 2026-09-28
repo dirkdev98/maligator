@@ -6,6 +6,7 @@
 #include <string.h>
 
 #include "gc.h"
+#include "ascii.h"
 #include "heap_string.h"
 #include "object_ops.h"
 #include "perf_stats.h"
@@ -724,15 +725,7 @@ bool mal_array_key_is_length(MalKey key) {
         return false;
     }
 
-    MalString *string = mal_value_to_string(key.value);
-    const c16 *code_units = mal_string_code_units(string);
-    return mal_string_length(string) == 6 &&
-        code_units[0] == 'l' &&
-        code_units[1] == 'e' &&
-        code_units[2] == 'n' &&
-        code_units[3] == 'g' &&
-        code_units[4] == 't' &&
-        code_units[5] == 'h';
+    return mal_string_equals_ascii(mal_value_to_string(key.value), "length");
 }
 
 /**

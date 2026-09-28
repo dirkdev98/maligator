@@ -381,7 +381,7 @@ static MalValue mal_node_path_is_absolute(
     if (!path_require_string(vm, argc >= 1 ? args[0] : mal_value_new_undefined(), "path", &s)) {
         return mal_value_new_undefined();
     }
-    bool absolute = mal_string_length(s) > 0 && mal_string_code_units(s)[0] == PATH_SEP;
+    bool absolute = mal_string_length(s) > 0 && mal_string_code_unit_at(s, 0) == PATH_SEP;
     return mal_value_new_boolean(absolute);
 }
 
