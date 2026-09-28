@@ -51,9 +51,6 @@
 #include "typed_array_object.h"
 #include "vm.h"
 
-// Longest internal key in the codebase is well under this; longer names fall
-// back to a heap-converted probe buffer.
-
 #define MAL_HOT_KEY_SIGNATURE(length, first, last) \
     ((u32) (length) | ((u32) (u8) (first) << 8) | ((u32) (u8) (last) << 16))
 
