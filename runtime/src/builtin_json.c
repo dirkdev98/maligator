@@ -212,6 +212,94 @@ static bool mal_json_builder_push_quoted(MalJsonBuilder *builder, const MalStrin
     return ok && mal_json_builder_push(builder, '"');
 }
 
+typedef struct MalJsonPointerEntry {
+    const void *key;
+    void *value;
+} MalJsonPointerEntry;
+
+typedef struct MalJsonPointerMap {
+    MalJsonPointerEntry *entries;
+    usize capacity;
+    usize count;
+    usize used;
+} MalJsonPointerMap;
+
+static usize mal_json_pointer_hash(const void *pointer) {
+    u64 bits = (u64) (uintptr_t) pointer;
+    bits ^= bits >> 33;
+    bits *= UINT64_C(0xff51afd7ed558ccd);
+    bits ^= bits >> 33;
+    return (usize) bits;
+}
+
+static MalJsonPointerEntry *mal_json_pointer_find(
+    MalJsonPointerMap *map, const void *key
+) {
+    if (map->capacity == 0) return nullptr;
+    usize slot = mal_json_pointer_hash(key) & (map->capacity - 1);
+    while (map->entries[slot].key != nullptr) {
+        if (map->entries[slot].key == key) return &map->entries[slot];
+        slot = (slot + 1) & (map->capacity - 1);
+    }
+    return nullptr;
+}
+
+static void mal_json_pointer_insert(
+    MalJsonPointerMap *map, const void *key, void *value
+) {
+    if (map->used >= map->capacity - map->capacity / 4) {
+        usize capacity = map->capacity == 0 ? 16 : map->capacity;
+        if (map->count >= capacity / 2) {
+            if (capacity > SIZE_MAX / 2) abort();
+            capacity *= 2;
+        }
+        if (capacity > SIZE_MAX / sizeof(MalJsonPointerEntry)) abort();
+        MalJsonPointerEntry *entries = calloc(capacity, sizeof(*entries));
+        if (entries == nullptr) abort();
+        for (usize i = 0; i < map->capacity; i++) {
+            MalJsonPointerEntry entry = map->entries[i];
+            if (entry.key == nullptr) continue;
+            usize slot = mal_json_pointer_hash(entry.key) & (capacity - 1);
+            while (entries[slot].key != nullptr) slot = (slot + 1) & (capacity - 1);
+            entries[slot] = entry;
+        }
+        free(map->entries);
+        map->entries = entries;
+        map->capacity = capacity;
+        map->used = map->count;
+    }
+    usize slot = mal_json_pointer_hash(key) & (map->capacity - 1);
+    while (map->entries[slot].key != nullptr) {
+        if (map->entries[slot].key == key) {
+            map->entries[slot].value = value;
+            return;
+        }
+        slot = (slot + 1) & (map->capacity - 1);
+    }
+    if (map->entries[slot].key == nullptr) map->used++;
+    map->entries[slot] = (MalJsonPointerEntry) {.key = key, .value = value};
+    map->count++;
+}
+
+static void mal_json_pointer_remove(MalJsonPointerMap *map, const void *key) {
+    MalJsonPointerEntry *entry = mal_json_pointer_find(map, key);
+    if (entry == nullptr) return;
+    usize mask = map->capacity - 1;
+    usize hole = (usize) (entry - map->entries);
+    usize next = (hole + 1) & mask;
+    while (map->entries[next].key != nullptr) {
+        usize home = mal_json_pointer_hash(map->entries[next].key) & mask;
+        if (((next - home) & mask) >= ((next - hole) & mask)) {
+            map->entries[hole] = map->entries[next];
+            hole = next;
+        }
+        next = (next + 1) & mask;
+    }
+    map->entries[hole] = (MalJsonPointerEntry) {0};
+    map->count--;
+    map->used--;
+}
+
 typedef struct MalJsonState {
     MalVm *vm;
     MalValue replacer_fn;
@@ -219,9 +307,7 @@ typedef struct MalJsonState {
     MalRootedValueList property_list;
     const c16 *gap;
     usize gap_length;
-    MalValue *stack;
-    usize stack_count;
-    usize stack_capacity;
+    MalJsonPointerMap active;
 } MalJsonState;
 
 // Result of attempting to serialize a property: omitted (no output), written, or
@@ -271,19 +357,37 @@ static bool mal_json_push_indent(MalJsonState *state, MalJsonBuilder *builder, u
     return true;
 }
 
-/** Push value to the cycle stack, throwing a TypeError if it is already present. */
+// The generic paths retain native frames across observable callbacks. Bound them
+// independently of output size; plain serialization already uses heap frames.
+#define MAL_JSON_MAX_RECURSION_DEPTH ((usize) 512)
+
+static bool mal_json_throw_depth(MalVm *vm) {
+    mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
+        "JSON nesting exceeds the maximum depth");
+    return false;
+}
+
+static inline bool mal_json_check_depth(MalVm *vm, usize depth) {
+    // Fibers have smaller stacks, and sanitizer frames can be much larger.
+    // Share the VM's reserved stack margin; the count also covers unknown bounds.
+    if (depth >= MAL_JSON_MAX_RECURSION_DEPTH ||
+        (vm->stack_limit != 0 &&
+            (uptr) __builtin_frame_address(0) < vm->stack_limit)) {
+        return mal_json_throw_depth(vm);
+    }
+    return true;
+}
+
 static bool mal_json_stack_push(MalJsonState *state, MalValue value) {
-    for (usize i = 0; i < state->stack_count; i++) {
-        if (state->stack[i] == value) {
-            mal_vm_throw_error(state->vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Converting circular structure to JSON");
-            return false;
-        }
+    MalObject *object = mal_value_to_object(value);
+    if (mal_json_pointer_find(&state->active, object) != nullptr) {
+        mal_vm_throw_error(state->vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "Converting circular structure to JSON");
+        return false;
     }
-    if (state->stack_count == state->stack_capacity) {
-        state->stack_capacity = state->stack_capacity == 0 ? 16 : state->stack_capacity * 2;
-        state->stack = realloc(state->stack, sizeof(MalValue) * state->stack_capacity);
-    }
-    state->stack[state->stack_count++] = value;
+    if (!mal_json_check_depth(state->vm, state->active.count)) return false;
+    // The serializing frame roots every active object across callback reentry.
+    mal_json_pointer_insert(&state->active, object, nullptr);
     return true;
 }
 
@@ -331,7 +435,7 @@ static MalJsonResult mal_json_serialize_array(MalJsonState *state, MalJsonBuilde
         return MAL_JSON_THROW;
     }
 
-    state->stack_count--;
+    mal_json_pointer_remove(&state->active, mal_value_to_object(value));
     return MAL_JSON_WROTE;
 }
 
@@ -480,7 +584,7 @@ static MalJsonResult mal_json_serialize_object(MalJsonState *state, MalJsonBuild
         return MAL_JSON_THROW;
     }
 
-    state->stack_count--;
+    mal_json_pointer_remove(&state->active, mal_value_to_object(value));
     return MAL_JSON_WROTE;
 }
 
@@ -717,94 +821,6 @@ static bool mal_json_build_property_list(MalJsonState *state, MalValue replacer)
         }
     }
     return true;
-}
-
-typedef struct MalJsonPointerEntry {
-    const void *key;
-    void *value;
-} MalJsonPointerEntry;
-
-typedef struct MalJsonPointerMap {
-    MalJsonPointerEntry *entries;
-    usize capacity;
-    usize count;
-    usize used;
-} MalJsonPointerMap;
-
-static usize mal_json_pointer_hash(const void *pointer) {
-    u64 bits = (u64) (uintptr_t) pointer;
-    bits ^= bits >> 33;
-    bits *= UINT64_C(0xff51afd7ed558ccd);
-    bits ^= bits >> 33;
-    return (usize) bits;
-}
-
-static MalJsonPointerEntry *mal_json_pointer_find(
-    MalJsonPointerMap *map, const void *key
-) {
-    if (map->capacity == 0) return nullptr;
-    usize slot = mal_json_pointer_hash(key) & (map->capacity - 1);
-    while (map->entries[slot].key != nullptr) {
-        if (map->entries[slot].key == key) return &map->entries[slot];
-        slot = (slot + 1) & (map->capacity - 1);
-    }
-    return nullptr;
-}
-
-static void mal_json_pointer_insert(
-    MalJsonPointerMap *map, const void *key, void *value
-) {
-    if (map->used >= map->capacity - map->capacity / 4) {
-        usize capacity = map->capacity == 0 ? 16 : map->capacity;
-        if (map->count >= capacity / 2) {
-            if (capacity > SIZE_MAX / 2) abort();
-            capacity *= 2;
-        }
-        if (capacity > SIZE_MAX / sizeof(MalJsonPointerEntry)) abort();
-        MalJsonPointerEntry *entries = calloc(capacity, sizeof(*entries));
-        if (entries == nullptr) abort();
-        for (usize i = 0; i < map->capacity; i++) {
-            MalJsonPointerEntry entry = map->entries[i];
-            if (entry.key == nullptr) continue;
-            usize slot = mal_json_pointer_hash(entry.key) & (capacity - 1);
-            while (entries[slot].key != nullptr) slot = (slot + 1) & (capacity - 1);
-            entries[slot] = entry;
-        }
-        free(map->entries);
-        map->entries = entries;
-        map->capacity = capacity;
-        map->used = map->count;
-    }
-    usize slot = mal_json_pointer_hash(key) & (map->capacity - 1);
-    while (map->entries[slot].key != nullptr) {
-        if (map->entries[slot].key == key) {
-            map->entries[slot].value = value;
-            return;
-        }
-        slot = (slot + 1) & (map->capacity - 1);
-    }
-    if (map->entries[slot].key == nullptr) map->used++;
-    map->entries[slot] = (MalJsonPointerEntry) {.key = key, .value = value};
-    map->count++;
-}
-
-static void mal_json_pointer_remove(MalJsonPointerMap *map, const void *key) {
-    MalJsonPointerEntry *entry = mal_json_pointer_find(map, key);
-    if (entry == nullptr) return;
-    usize mask = map->capacity - 1;
-    usize hole = (usize) (entry - map->entries);
-    usize next = (hole + 1) & mask;
-    while (map->entries[next].key != nullptr) {
-        usize home = mal_json_pointer_hash(map->entries[next].key) & mask;
-        if (((next - home) & mask) >= ((next - hole) & mask)) {
-            map->entries[hole] = map->entries[next];
-            hole = next;
-        }
-        next = (next + 1) & mask;
-    }
-    map->entries[hole] = (MalJsonPointerEntry) {0};
-    map->count--;
-    map->used--;
 }
 
 typedef struct MalJsonKeyPlan {
@@ -1156,7 +1172,7 @@ static MalValue mal_builtin_json_stringify(MalVm *vm, MalValue this_value, const
     }
 
     mal_rooted_value_list_dispose(&state.property_list);
-    free(state.stack);
+    free(state.active.entries);
 
     if (result != MAL_JSON_WROTE) {
         mal_text_buffer_dispose(&builder.buffer);
@@ -1190,6 +1206,9 @@ struct MalJsonParseNode {
     MalJsonParseChild *children;
     usize child_count;
     usize child_capacity;
+    usize *key_index;
+    usize key_index_capacity;
+    MalJsonParseNode *dispose_next;
 };
 
 typedef struct MalJsonParseState {
@@ -1204,6 +1223,7 @@ typedef struct MalJsonParser {
     usize segment_start;
     usize length;
     usize position;
+    usize depth;
     MalJsonParseState *state;
 } MalJsonParser;
 
@@ -1315,14 +1335,20 @@ static void mal_json_parse_node_append(
 }
 
 static void mal_json_parse_node_dispose(MalJsonParseNode *node) {
-    if (node == nullptr) {
-        return;
+    while (node != nullptr) {
+        MalJsonParseNode *next = node->dispose_next;
+        for (usize i = 0; i < node->child_count; i++) {
+            MalJsonParseNode *child = node->children[i].node;
+            if (child != nullptr) {
+                child->dispose_next = next;
+                next = child;
+            }
+        }
+        free(node->key_index);
+        free(node->children);
+        free(node);
+        node = next;
     }
-    for (usize i = 0; i < node->child_count; i++) {
-        mal_json_parse_node_dispose(node->children[i].node);
-    }
-    free(node->children);
-    free(node);
 }
 
 static void mal_json_parse_error(MalJsonParser *parser) {
@@ -1872,11 +1898,18 @@ static MalValue mal_json_parse_value(
             value = mal_json_parse_string(parser);
             goto primitive;
         case '[':
-            parser->position++;
-            return mal_json_parse_array(parser, source_start, node_out);
-        case '{':
-            parser->position++;
-            return mal_json_parse_object(parser, source_start, node_out);
+        case '{': {
+            if (!mal_json_check_depth(parser->vm, parser->depth)) {
+                return mal_value_new_undefined();
+            }
+            bool array = mal_json_parser_unit(parser, parser->position++) == '[';
+            parser->depth++;
+            value = array
+                ? mal_json_parse_array(parser, source_start, node_out)
+                : mal_json_parse_object(parser, source_start, node_out);
+            parser->depth--;
+            return value;
+        }
         case 'n':
             if (mal_json_consume_keyword(parser, "null")) {
                 value = mal_value_new_null();
@@ -1958,19 +1991,47 @@ static MalJsonParseNode *mal_json_parse_array_child(
     return node->children[index].node;
 }
 
+static usize mal_json_parse_key_hash(MalKey key) {
+    if (key.kind == MAL_KEY_STRING) {
+        return (usize) mal_string_hash(mal_value_to_string(key.value));
+    }
+    return mal_json_pointer_hash((const void *) (uintptr_t) key.value);
+}
+
 static MalJsonParseNode *mal_json_parse_object_child(
     MalJsonParseState *state, MalJsonParseNode *node, MalKey key
 ) {
-    if (node == nullptr || node->kind != MAL_JSON_PARSE_OBJECT) {
+    if (node == nullptr || node->kind != MAL_JSON_PARSE_OBJECT ||
+        node->child_count == 0) {
         return nullptr;
     }
-    // JSON duplicate names overwrite earlier values. The parse record matching
-    // the resulting property is therefore the last child with that key.
-    for (usize i = node->child_count; i > 0; i--) {
-        MalJsonParseChild *child = &node->children[i - 1];
-        if (mal_json_parse_child_key_equals(state, child, key)) {
-            return child->node;
+    if (node->key_index == nullptr) {
+        usize capacity = 16;
+        while (capacity / 2 < node->child_count) {
+            if (capacity > SIZE_MAX / 2) abort();
+            capacity *= 2;
         }
+        node->key_index = calloc(capacity, sizeof(*node->key_index));
+        if (node->key_index == nullptr) abort();
+        node->key_index_capacity = capacity;
+        for (usize i = 0; i < node->child_count; i++) {
+            MalJsonParseChild *child = &node->children[i];
+            usize slot = mal_json_parse_key_hash(child->key) & (capacity - 1);
+            while (node->key_index[slot] != 0 &&
+                !mal_json_parse_child_key_equals(state,
+                    &node->children[node->key_index[slot] - 1], child->key)) {
+                slot = (slot + 1) & (capacity - 1);
+            }
+            // Keep the final duplicate's token without changing property order.
+            node->key_index[slot] = i + 1;
+        }
+    }
+    usize mask = node->key_index_capacity - 1;
+    usize slot = mal_json_parse_key_hash(key) & mask;
+    while (node->key_index[slot] != 0) {
+        MalJsonParseChild *child = &node->children[node->key_index[slot] - 1];
+        if (mal_json_parse_child_key_equals(state, child, key)) return child->node;
+        slot = (slot + 1) & mask;
     }
     return nullptr;
 }
@@ -1984,7 +2045,7 @@ static MalJsonParseNode *mal_json_parse_object_child(
 static bool mal_json_internalize(
     MalVm *vm, MalValue reviver, MalValue holder, MalValue name,
     MalJsonParseState *parse_state, MalJsonParseNode *parse_node,
-    MalValue *out
+    MalValue *out, usize depth
 ) {
     // Get(holder, name): `name` is a String (ToString of the array index or the
     // object key). Canonicalize it to a property key so a numeric index string
@@ -2011,6 +2072,7 @@ static bool mal_json_internalize(
     }
 
     if (mal_value_is_object(roots[3])) {
+        if (!mal_json_check_depth(vm, depth)) goto done;
         bool is_array;
         if (!mal_vm_is_array(vm, roots[3], &is_array)) {
             goto done;
@@ -2027,7 +2089,7 @@ static bool mal_json_internalize(
                     parse_node, i);
                 if (!mal_json_internalize(
                         vm, roots[0], roots[3], key_string,
-                        parse_state, element_node, &new_element)) {
+                        parse_state, element_node, &new_element, depth + 1)) {
                     goto done;
                 }
                 MalKey element_key = mal_key_index(i);
@@ -2070,7 +2132,7 @@ static bool mal_json_internalize(
                     parse_state, parse_node, keys.keys[i]);
                 if (!mal_json_internalize(
                         vm, roots[0], roots[3], key_string,
-                        parse_state, property_node, &new_element)) {
+                        parse_state, property_node, &new_element, depth + 1)) {
                     keys_ok = false;
                     break;
                 }
@@ -2186,7 +2248,7 @@ static MalValue mal_builtin_json_parse(MalVm *vm, MalValue this_value, const Mal
         MalValue revived;
         if (!mal_json_internalize(
                 vm, reviver, mal_value_from_object(root), empty_key,
-                &parse_state, root_node, &revived)) {
+                &parse_state, root_node, &revived, 0)) {
             mal_json_parse_node_dispose(root_node);
             mal_rooted_value_list_dispose(&parse_state.roots);
             mal_string_iterator_dispose(&parser.iterator);
