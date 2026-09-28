@@ -34,8 +34,15 @@ typedef struct MalIteratorObject {
      */
     u64 index;
 
-    /** Raw table kept alive by its pin if owner and iterator die together. */
-    MalTable *pinned_table;
+    union {
+        /** Raw table kept alive by its pin if owner and iterator die together. */
+        MalTable *pinned_table;
+        /** Traced leaf identity; its payload is reacquired at every step. */
+        MalString *string_leaf;
+    };
+    /** A string index plus bias gives the cached leaf's local code-unit index. */
+    i32 string_leaf_bias;
+    u32 string_leaf_end;
     MalIteratorKind kind;
 
     /**
@@ -47,8 +54,8 @@ typedef struct MalIteratorObject {
     bool table_pinned;
 } MalIteratorObject;
 
-static_assert(sizeof(MalIteratorObject) <= 72,
-              "built-in iterator outgrew its pinned-table layout");
+static_assert(sizeof(MalIteratorObject) <= 80,
+              "built-in iterator outgrew its cached-leaf layout");
 
 /**
  * Initialize iterator object state in caller-provided storage.
