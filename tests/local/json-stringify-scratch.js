@@ -163,7 +163,197 @@ check(
 	"toJSON shape changes fall back to inherited reads without adding keys",
 );
 
+const lateLog = [];
+const lateSource = {
+	prefix: "retained".repeat(256),
+	nested: {
+		before: 1,
+		omitted: undefined,
+		callback: {
+			toJSON(key) {
+				lateLog.push("toJSON:" + key);
+				const nested = lateSource.nested;
+				delete lateSource.nested;
+				nested.before = 99;
+				nested.omitted = 99;
+				nested.added = 99;
+				Object.defineProperty(nested, "later", {
+					enumerable: false,
+					get() {
+						lateLog.push("get:nested-later");
+						collect();
+						return "\u0100";
+					},
+				});
+				delete lateSource.after;
+				Object.setPrototypeOf(lateSource, {
+					get after() {
+						lateLog.push("get:inherited-after");
+						collect();
+						return 3;
+					},
+				});
+				lateSource.added = 99;
+				collect();
+				return undefined;
+			},
+		},
+		later: 2,
+	},
+	after: 2,
+};
+check(
+	JSON.stringify(lateSource) ===
+		'{"prefix":"' +
+		"retained".repeat(256) +
+		'","nested":{"before":1,"later":"\u0100"},"after":3}' &&
+		lateLog.join(",") ===
+			"toJSON:callback,get:nested-later,get:inherited-after",
+	"late fallback preserves prefix, omitted keys, detached holders, and ancestor key snapshots",
+);
+
+const lateArrayLog = [];
+const lateArray = [
+	"prefix",
+	{
+		toJSON(key) {
+			lateArrayLog.push("toJSON:" + key);
+			lateArray.length = 2;
+			Object.setPrototypeOf(lateArray, {
+				get 2() {
+					lateArrayLog.push("get:2");
+					collect();
+					return undefined;
+				},
+			});
+			lateArray[4] = 99;
+			return undefined;
+		},
+	},
+	2,
+	3,
+];
+check(
+	JSON.stringify(lateArray) === '["prefix",null,null,null]' &&
+		lateArrayLog.join(",") === "toJSON:1,get:2",
+	"late array fallback keeps the original length and performs inherited reads",
+);
+
+const lateProxyLog = [];
+const lateProxyTarget = { first: 1, later: 2 };
+const lateProxy = new Proxy(lateProxyTarget, {
+	get(target, key, receiver) {
+		lateProxyLog.push("get:" + key);
+		if (key === "first") delete target.later;
+		return Reflect.get(target, key, receiver);
+	},
+	ownKeys(target) {
+		lateProxyLog.push("ownKeys");
+		return Reflect.ownKeys(target);
+	},
+	getOwnPropertyDescriptor(target, key) {
+		lateProxyLog.push("desc:" + key);
+		return Reflect.getOwnPropertyDescriptor(target, key);
+	},
+});
+check(
+	JSON.stringify({ prefix: [1, 2, 3], proxy: lateProxy, last: 4 }) ===
+		'{"prefix":[1,2,3],"proxy":{"first":1},"last":4}' &&
+		lateProxyLog.join(",") ===
+			"get:toJSON,ownKeys,desc:first,desc:later,get:first,get:later",
+	"late proxy fallback performs each trap once in descriptor-before-get order",
+);
+
+const lateCycle = {
+	prefix: [1, 2, 3],
+	callback: {
+		toJSON() {
+			return lateCycle;
+		},
+	},
+};
+let lateCycleError = false;
+try {
+	JSON.stringify(lateCycle);
+} catch (error) {
+	lateCycleError = error instanceof TypeError;
+}
+check(lateCycleError, "late toJSON retains ancestor cycle membership");
+
+const bigintLog = [];
+const bigintSource = { prefix: [1, 2], bigint: 2n, later: 3 };
+BigInt.prototype.toJSON = function (key) {
+	bigintLog.push(key);
+	bigintSource.later = 4;
+	collect();
+	return String(this);
+};
+check(
+	JSON.stringify(bigintSource) ===
+		'{"prefix":[1,2],"bigint":"2","later":4}' &&
+		bigintLog.join(",") === "bigint",
+	"late BigInt fallback invokes inherited toJSON with the original key",
+);
+delete BigInt.prototype.toJSON;
+
+const uncachedRows = [];
+for (let i = 0; i < 300; i++) uncachedRows.push({ ["unique" + i]: i });
+uncachedRows.push({
+	uncachedBefore: 1,
+	uncachedCallback: {
+		toJSON() {
+			Object.defineProperty(uncachedRows[300], "uncachedLater", {
+				enumerable: false,
+				get() {
+					collect();
+					return 4;
+				},
+			});
+			return undefined;
+		},
+	},
+	uncachedLater: 2,
+});
+check(
+	JSON.stringify(uncachedRows).endsWith(
+		',{"uncachedBefore":1,"uncachedLater":4}]',
+	),
+	"late fallback retains uncached shape key snapshots after many unique shapes",
+);
+
 const marker = new Error("marker");
+const lateThrowLog = [];
+const lateThrowing = {
+	prefix: "retained".repeat(256),
+	callback: {
+		get toJSON() {
+			lateThrowLog.push("get:toJSON");
+			return function (key) {
+				lateThrowLog.push("call:" + key);
+				collect();
+				throw marker;
+			};
+		},
+	},
+	later: {
+		toJSON() {
+			lateThrowLog.push("later");
+		},
+	},
+};
+let lateCaught;
+try {
+	JSON.stringify(lateThrowing);
+} catch (error) {
+	lateCaught = error;
+}
+check(
+	lateCaught === marker &&
+		lateThrowLog.join(",") === "get:toJSON,call:callback" &&
+		JSON.stringify({ after: "late throw" }) === '{"after":"late throw"}',
+	"late throwing toJSON reads and calls once, stops later work, and releases traversal state",
+);
+
 const throwLog = [];
 const throwing = {};
 Object.defineProperty(throwing, "first", {
