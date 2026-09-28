@@ -2357,6 +2357,58 @@
 			"fixture": "cases/string-rope-access.mjs"
 		},
 		{
+			"id": "string-rope-iteration",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "string iteration over prepared strings",
+			"category": "memory-layout-usage",
+			"mechanisms": ["string-traversal"],
+			"inputShape": "1024 prepared 17/20-unit runtime leaves with UTF-16 units and surrogate pairs, appended before timing; for-of hashes every code unit",
+			"unit": "full string iteration",
+			"sourceSeam": "runtime/src/builtin_iterator.c",
+			"controls": ["string-flat-iteration", "string-rope-access", "text-pipeline-mixed"],
+			"fixture": "cases/string-rope-iteration.mjs"
+		},
+		{
+			"id": "string-flat-iteration",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "string iteration over prepared strings",
+			"category": "memory-layout-usage",
+			"mechanisms": ["string-traversal"],
+			"inputShape": "same 1024 prepared 17/20-unit leaves as the rope control, flattened by Array.join before timing; for-of hashes every code unit",
+			"unit": "full string iteration",
+			"sourceSeam": "runtime/src/builtin_iterator.c",
+			"controls": ["string-rope-iteration", "string-rope-access", "text-pipeline-mixed"],
+			"fixture": "cases/string-flat-iteration.mjs"
+		},
+		{
+			"id": "string-rope-split-cursor",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "projected split iteration over prepared strings",
+			"category": "memory-layout-usage",
+			"mechanisms": ["string-traversal", "string-search", "string-allocation"],
+			"inputShape": "1024 prepared varying-length fields padded with spaces and tabs, appended with pipe separators before timing; split/trim loop hashes only field lengths",
+			"unit": "full split and trim traversal",
+			"sourceSeam": "runtime/src/builtin_string.c",
+			"controls": ["string-flat-split-cursor", "string-split", "string-rope-access"],
+			"fixture": "cases/string-rope-split-cursor.mjs"
+		},
+		{
+			"id": "string-flat-split-cursor",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "projected split iteration over prepared strings",
+			"category": "memory-layout-usage",
+			"mechanisms": ["string-traversal", "string-search", "string-allocation"],
+			"inputShape": "same 1024 prepared padded fields and pipe separators as the rope control, flattened by Array.join before timing; split/trim loop hashes only field lengths",
+			"unit": "full split and trim traversal",
+			"sourceSeam": "runtime/src/builtin_string.c",
+			"controls": ["string-rope-split-cursor", "string-split", "string-rope-access"],
+			"fixture": "cases/string-flat-split-cursor.mjs"
+		},
+		{
 			"id": "string-append-hash",
 			"group": "runtime",
 			"suite": "runtime",
