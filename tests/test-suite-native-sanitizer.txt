@@ -22,6 +22,7 @@ tests/native/gc-ephemeron-index.test.ts
 tests/native/gc-heap-usage.test.ts
 tests/native/gc-mark-step-scaling.test.ts
 tests/native/gc-minor-sweep.test.ts
+tests/native/gc-raw-realloc.test.ts
 tests/native/gc-remembered-scan.test.ts
 tests/native/gc-lifecycle.test.ts
 tests/native/gc-idle-completion.test.ts
