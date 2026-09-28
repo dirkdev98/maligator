@@ -626,8 +626,19 @@ static int mal_array_compare_indices_descending(const void *left, const void *ri
 }
 
 static void mal_array_sort_indices_descending(u32 *indices, usize count) {
-    if (count > 1) {
+    if (count > 16) {
         qsort(indices, count, sizeof(u32), mal_array_compare_indices_descending);
+        return;
+    }
+    // Tiny sparse shrinks avoid the platform sort's indirect comparator calls.
+    for (usize i = 1; i < count; i++) {
+        u32 index = indices[i];
+        usize position = i;
+        while (position > 0 && indices[position - 1] < index) {
+            indices[position] = indices[position - 1];
+            position--;
+        }
+        indices[position] = index;
     }
 }
 

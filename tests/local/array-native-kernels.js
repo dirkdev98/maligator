@@ -720,6 +720,22 @@ async function main() {
 	);
 	delete Array.prototype[1];
 
+	const tinySparseShrink = [];
+	for (const index of [4294967294, 4096, 2147483649, 2048, 8192]) {
+		tinySparseShrink[index] = index;
+	}
+	Object.defineProperty(tinySparseShrink, "4096", { configurable: false });
+	check(
+		"tiny sparse shrink stops after deleting higher unsigned indices",
+		!Reflect.defineProperty(tinySparseShrink, "length", { value: 0 }) &&
+			tinySparseShrink.length === 4097 &&
+			tinySparseShrink[2048] === 2048 &&
+			tinySparseShrink[4096] === 4096 &&
+			!(8192 in tinySparseShrink) &&
+			!(2147483649 in tinySparseShrink) &&
+			!(4294967294 in tinySparseShrink),
+	);
+
 	const sparseShrink = [];
 	sparseShrink[1] = { value: 17 };
 	sparseShrink.metadata = "keep";
