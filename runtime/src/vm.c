@@ -518,6 +518,7 @@ static void mal_vm_init_engine_state(MalVm *vm) {
     vm->small_uint_string_cache_scan_limit = 0;
     vm->small_bigint_cache = nullptr;
     vm->array_join_frames = nullptr;
+    vm->missing_property_queries = nullptr;
     vm->semantic_epochs = (MalSemanticEpochs) {
         .activity = 1,
         .array_elements = 1,
@@ -1076,6 +1077,8 @@ void mal_vm_free(MalVm *vm) {
     vm->small_uint_string_cache_scan_limit = 0;
     free(vm->small_bigint_cache);
     vm->small_bigint_cache = nullptr;
+    free(vm->missing_property_queries);
+    vm->missing_property_queries = nullptr;
     // Snapshot allocation statistics while the heap counters are still intact.
     mal_gc_state_free(vm);
     mal_heap_free(&vm->heap);

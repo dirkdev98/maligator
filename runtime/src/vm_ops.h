@@ -926,6 +926,21 @@ static inline void mal_ic_set_recorded_prototype_epoch(MalInlineCache *ic, u64 e
 #define MAL_IC_MISSING_EXACT_CHAIN 1u
 #define MAL_IC_RECEIVER_DICTIONARY UINT8_MAX
 
+#define MAL_MISSING_PROPERTY_QUERY_CAPACITY 32u
+#define MAL_MISSING_PROPERTY_QUERY_MAX_UNITS 64u
+
+/** Copied keys and VM-lifetime shapes need no GC tracing. The prototype is an
+ * untraced identity guarded by the mutation/finalization epoch, never dereferenced. */
+typedef struct MalMissingPropertyQueryEntry {
+    u64 candidate_hash;
+    u64 hash;
+    u64 prototype_epoch;
+    const struct MalShape *shape;
+    const struct MalObject *prototype;
+    usize length;
+    c16 units[MAL_MISSING_PROPERTY_QUERY_MAX_UNITS];
+} MalMissingPropertyQueryEntry;
+
 // Primitive kinds for MAL_IC_MODE_PRIMITIVE_VALUE (0 = not cacheable).
 enum {
     MAL_PRIM_KIND_STRING = 1,
