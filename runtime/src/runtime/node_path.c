@@ -58,7 +58,8 @@ static void path_buf_push_char(MalPathBuf *b, c16 c) {
 }
 
 /* Prepend `seg` + "/" to the buffer (the `${path}/${resolvedPath}` step of resolve). */
-static void path_buf_prepend_seg(MalPathBuf *b, const c16 *seg, usize seg_len) {
+static void path_buf_prepend_seg(MalPathBuf *b, MalString *segment) {
+    usize seg_len = mal_string_length(segment);
     usize add;
     if (!mal_checked_size_add(seg_len, 1, MAL_STRING_MAX_CODE_UNITS, &add)) {
         b->status = MAL_TEXT_BUFFER_LENGTH_OVERFLOW;
@@ -68,7 +69,7 @@ static void path_buf_prepend_seg(MalPathBuf *b, const c16 *seg, usize seg_len) {
         return;
     }
     memmove((c16 *) b->data + add, b->data, b->length * sizeof(c16));
-    memcpy(b->data, seg, seg_len * sizeof(c16));
+    mal_string_copy_range_to(segment, 0, seg_len, b->data);
     ((c16 *) b->data)[seg_len] = PATH_SEP;
     b->length += add;
 }
@@ -283,8 +284,8 @@ static bool posix_resolve_core(MalVm *vm, const MalValue *args, i32 argc, MalPat
     bool resolved_absolute = false;
 
     for (i32 i = argc - 1; i >= -1 && !resolved_absolute; --i) {
-        const c16 *pu;
-        usize pl;
+        MalString *segment;
+        MalString cwd;
         c16 *cwd_units = nullptr;
         if (i >= 0) {
             if (!mal_value_is_string(args[i])) {
@@ -295,26 +296,24 @@ static bool posix_resolve_core(MalVm *vm, const MalValue *args, i32 argc, MalPat
                 path_buf_free(&resolved);
                 return false;
             }
-            MalString *s = mal_value_to_string(args[i]);
-            pu = mal_string_code_units(s);
-            pl = mal_string_length(s);
+            segment = mal_value_to_string(args[i]);
         } else {
-            usize cwd_len;
-            cwd_units = path_get_cwd(&cwd_len);
-            pu = cwd_units;
-            pl = cwd_len;
+            usize length;
+            cwd_units = path_get_cwd(&length);
+            mal_string_init_external(&cwd, cwd_units, length);
+            segment = &cwd;
         }
-        if (pl == 0) {
+        if (mal_string_length(segment) == 0) {
             free(cwd_units);
             continue;
         }
-        path_buf_prepend_seg(&resolved, pu, pl);
+        path_buf_prepend_seg(&resolved, segment);
         if (!path_buf_check(vm, &resolved)) {
             free(cwd_units);
             path_buf_free(&resolved);
             return false;
         }
-        resolved_absolute = pu[0] == PATH_SEP;
+        resolved_absolute = mal_string_code_unit_at(segment, 0) == PATH_SEP;
         free(cwd_units);
     }
 
@@ -407,7 +406,7 @@ static MalValue mal_node_path_join(
             if (have) {
                 path_buf_push_char(&joined, PATH_SEP);
             }
-            path_buf_push_units(&joined, mal_string_code_units(s), sl);
+            mal_text_buffer_append_string(&joined, s);
             have = true;
         }
     }
@@ -588,8 +587,7 @@ static bool path_append_value(
     MalString *string;
     if (!mal_vm_to_string(vm, value, &string)) return false;
     *string_root = mal_value_from_string(string);
-    path_buf_push_units(
-        buffer, mal_string_code_units(string), mal_string_length(string));
+    mal_text_buffer_append_string(buffer, string);
     return path_buf_check(vm, buffer);
 }
 

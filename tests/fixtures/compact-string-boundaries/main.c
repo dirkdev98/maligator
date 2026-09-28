@@ -53,6 +53,8 @@ static bool array_keys_stay_compact(MalVm *vm) {
 
 static bool path_predicate_stays_compact(MalVm *vm) {
     MalValue predicate = mal_value_new_undefined();
+    MalValue join = mal_value_new_undefined();
+    MalValue resolve = mal_value_new_undefined();
     for (i32 i = 0; i < vm->runtime_image->host_install_count; i++) {
         const MalHostInstall *install = &vm->runtime_image->host_installs[i];
         if (install->installer != mal_host_install_node_path) continue;
@@ -60,10 +62,14 @@ static bool path_predicate_stays_compact(MalVm *vm) {
         for (i32 j = 0; j < install->slot_count; j++) {
             if (strcmp(install->slots[j].name, "isAbsolute") == 0) {
                 predicate = vm->globals[install->slots[j].slot];
+            } else if (strcmp(install->slots[j].name, "join") == 0) {
+                join = vm->globals[install->slots[j].slot];
+            } else if (strcmp(install->slots[j].name, "resolve") == 0) {
+                resolve = vm->globals[install->slots[j].slot];
             }
         }
     }
-    CHECK(mal_value_is_callable(predicate));
+    CHECK(mal_value_is_callable(predicate) && mal_value_is_callable(join) && mal_value_is_callable(resolve));
     u8 bytes[4096];
     memset(bytes, 'x', sizeof(bytes));
     bytes[0] = '/';
@@ -85,6 +91,14 @@ static bool path_predicate_stays_compact(MalVm *vm) {
     result = mal_vm_call_value(vm, predicate, mal_value_new_undefined(), &roots[2], 1);
     CHECK(result.kind == MAL_COMPLETION_NORMAL && result.value == mal_value_new_boolean(false));
     CHECK(source->latin1);
+    result = mal_vm_call_value(vm, join, mal_value_new_undefined(), &roots[1], 2);
+    CHECK(result.kind == MAL_COMPLETION_NORMAL && mal_value_is_string(result.value));
+    CHECK(mal_value_to_string(result.value)->length == source->length + 129);
+    CHECK(source->latin1 && mal_value_to_string(roots[2])->latin1);
+    result = mal_vm_call_value(vm, resolve, mal_value_new_undefined(), &roots[1], 2);
+    CHECK(result.kind == MAL_COMPLETION_NORMAL && mal_value_is_string(result.value));
+    CHECK(mal_value_to_string(result.value)->length == source->length + 129);
+    CHECK(source->latin1 && mal_value_to_string(roots[2])->latin1);
     mal_gc_unroot(&span);
     return true;
 }
@@ -141,6 +155,13 @@ static bool headers_preserve_sources(MalVm *vm) {
         CHECK(mal_value_to_string(roots[2])->latin1 == compact);
         vm->completion = (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = mal_value_new_undefined()};
     }
+    roots[6] = mal_value_from_array_object(mal_intrinsic_new_dense_pair(vm, roots[1], roots[5]));
+    roots[7] = mal_value_from_array_object(mal_intrinsic_new_dense_array(vm, 1));
+    CHECK(mal_array_object_store(mal_value_to_array_object(roots[7]), mal_key_index(0), roots[6]));
+    MalHeadersObject *copied = mal_headers_from_init(vm, roots[7]);
+    CHECK(copied != nullptr && copied->count == 1);
+    roots[6] = mal_value_from_headers_object(copied);
+    CHECK(copied->entries[0].value == rope && mal_value_to_string(roots[1])->latin1);
     mal_gc_collect(vm);
     CHECK(rope->storage == MAL_STRING_STORAGE_CONS);
     mal_gc_unroot(&span);
