@@ -253,25 +253,6 @@ MalString *mal_string_new_external(MalHeap *heap, const c16 *code_units, usize l
 #define MAL_STRING_SLICE_SMALL_PARENT_CODE_UNITS ((usize) 4096)
 #define MAL_STRING_SLICE_MAX_RETAINED_RATIO ((usize) 8)
 
-[[gnu::noinline]]
-c16 mal_string_code_unit_at_slow(const MalString *string, usize index) {
-    while (string->storage == MAL_STRING_STORAGE_CONS) {
-        const MalString *left = string->left;
-        if (index < left->length) {
-            string = left;
-        } else {
-            index -= left->length;
-            string = string->right;
-        }
-    }
-    // Dependent strings retain a flat parent, including after materialization.
-    if (string->storage == MAL_STRING_STORAGE_DEPENDENT) {
-        index += string->slice_offset;
-        string = string->parent;
-    }
-    return mal_string_flat_code_unit_at(string, index);
-}
-
 static MalStringSegment mal_string_leaf_segment(
     const MalString *string, usize offset, usize length
 ) {
