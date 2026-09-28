@@ -284,7 +284,7 @@ static c16 mal_builtin_iterator_string_unit(
         MalStringSegment segment;
         if (!mal_string_cursor_segment(cursor, &segment)) abort();
     }
-    c16 unit = mal_string_code_unit_at((MalString *) frontier->current.string,
+    c16 unit = mal_string_flat_code_unit_at(frontier->current.string,
         frontier->current.offset + cursor->local++);
     cursor->position++;
     return unit;
