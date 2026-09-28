@@ -277,21 +277,13 @@ static bool mal_builtin_iterator_array_advance(
 static c16 mal_builtin_iterator_string_unit(
     MalIteratorObject *iterator, MalString *string, usize index
 ) {
-    if (iterator->string_leaf == nullptr || index >= iterator->string_leaf_end) {
-        const MalString *leaf;
-        usize offset, available;
-        mal_string_get_leaf_range(string, index, &leaf, &offset, &available);
-        if (iterator->string_leaf != nullptr) {
-            mal_gc_write_barrier(mal_value_from_string(iterator->string_leaf));
-        }
-        iterator->string_leaf = (MalString *) leaf;
-        iterator->string_leaf_bias = (i32) offset - (i32) index;
-        iterator->string_leaf_end = (u32) (index + available);
-        mal_gc_card(&iterator->object.header, mal_value_from_string(iterator->string_leaf));
-    }
-    // JS may have widened this leaf or flattened its former ancestors since next().
-    return mal_string_code_unit_at(
-        iterator->string_leaf, (usize) ((i64) index + iterator->string_leaf_bias));
+    if (iterator->string_cursor == nullptr) return mal_string_code_unit_at(string, index);
+    MalStringCursor *cursor = iterator->string_cursor;
+    MalStringSegment segment;
+    if (!mal_string_cursor_segment(cursor, &segment)) abort();
+    c16 unit = mal_string_segment_code_unit_at(&segment, 0);
+    mal_string_cursor_consume(cursor, 1);
+    return unit;
 }
 
 static bool mal_builtin_iterator_string_advance(
@@ -303,20 +295,31 @@ static bool mal_builtin_iterator_string_advance(
 
     if (index >= length) {
         iterator->done = true;
-        if (iterator->string_leaf != nullptr) {
-            mal_gc_write_barrier(mal_value_from_string(iterator->string_leaf));
-            iterator->string_leaf = nullptr;
+        if (iterator->string_cursor != nullptr) {
+            mal_string_cursor_dispose(iterator->string_cursor);
+            mal_gc_write_barrier(mal_value_from_heap(&iterator->string_cursor->header));
+            iterator->string_cursor = nullptr;
         }
         *value_out = mal_value_new_undefined();
         *done_out = true;
         return true;
     }
 
+    if (iterator->string_cursor == nullptr && string->storage == MAL_STRING_STORAGE_CONS) {
+        iterator->string_cursor = mal_string_cursor_new(&vm->heap, string);
+        mal_gc_card(&iterator->object.header,
+            mal_value_from_heap(&iterator->string_cursor->header));
+    }
     c16 units[2] = {mal_builtin_iterator_string_unit(iterator, string, index), 0};
     usize count = 1;
     if (mal_utf16_is_lead_surrogate(units[0]) && index + 1 < length) {
         units[1] = mal_builtin_iterator_string_unit(iterator, string, index + 1);
         if (mal_utf16_is_trail_surrogate(units[1])) count = 2;
+        else if (iterator->string_cursor != nullptr) {
+            // The lookahead can enter the next leaf; leave its first unit pending.
+            iterator->string_cursor->local--;
+            iterator->string_cursor->position--;
+        }
     }
 
     iterator->index += count;

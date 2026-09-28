@@ -2,6 +2,7 @@
 
 #include "./defaults.h"
 #include "object.h"
+#include "heap_string.h"
 
 /**
  * Iteration source + result shape for a built-in iterator instance.
@@ -37,12 +38,9 @@ typedef struct MalIteratorObject {
     union {
         /** Raw table kept alive by its pin if owner and iterator die together. */
         MalTable *pinned_table;
-        /** Traced leaf identity; its payload is reacquired at every step. */
-        MalString *string_leaf;
+        /** Traced frontier allocated lazily for rope traversal. */
+        MalStringCursor *string_cursor;
     };
-    /** A string index plus bias gives the cached leaf's local code-unit index. */
-    i32 string_leaf_bias;
-    u32 string_leaf_end;
     MalIteratorKind kind;
 
     /**
@@ -55,7 +53,7 @@ typedef struct MalIteratorObject {
 } MalIteratorObject;
 
 static_assert(sizeof(MalIteratorObject) <= 80,
-              "built-in iterator outgrew its cached-leaf layout");
+              "built-in iterator outgrew its frontier-pointer layout");
 
 /**
  * Initialize iterator object state in caller-provided storage.

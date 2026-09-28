@@ -386,6 +386,8 @@ typedef enum MalHeapType : u8 {
     MAL_HEAP_ASYNC_RESOURCE_STATE,
     /** Private mutable state for AsyncLocalStorage.withScope() results. */
     MAL_HEAP_ASYNC_RUN_SCOPE_STATE,
+    /** Internal traced frontier for string traversal across JavaScript reentry. */
+    MAL_HEAP_STRING_CURSOR,
 
     /**
      * Sentinel: number of distinct heap types. Must stay last. Sizes the baked

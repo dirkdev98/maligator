@@ -347,6 +347,9 @@ static void mal_string_iterator_push(MalStringIterator *iterator, MalStringItera
         iterator->capacity = capacity;
     }
     iterator->stack[iterator->count++] = part;
+    if (iterator->owner != nullptr) {
+        mal_gc_card(iterator->owner, mal_value_from_string((MalString *) part.string));
+    }
 }
 
 void mal_string_iterator_init(
@@ -358,6 +361,7 @@ void mal_string_iterator_init(
     iterator->count = 0;
     iterator->capacity = sizeof(iterator->inline_stack) / sizeof(iterator->inline_stack[0]);
     iterator->reverse = false;
+    iterator->owner = nullptr;
     iterator->current = (MalStringIteratorPart) {0};
     mal_string_iterator_push(iterator, (MalStringIteratorPart) {
         .string = string, .offset = offset, .length = length,
@@ -374,6 +378,9 @@ void mal_string_iterator_init_reverse(
 bool mal_string_iterator_next(MalStringIterator *iterator, MalStringSegment *segment) {
     if (iterator->count == 0) return false;
     MalStringIteratorPart part = iterator->stack[--iterator->count];
+    if (iterator->owner != nullptr) {
+        mal_gc_write_barrier(mal_value_from_string((MalString *) part.string));
+    }
     for (;;) {
         const MalString *string = part.string;
         MAL_PERF_COUNT(string_iterator_nodes);
@@ -409,6 +416,12 @@ bool mal_string_iterator_next(MalStringIterator *iterator, MalStringSegment *seg
             continue;
         }
         *segment = mal_string_leaf_segment(string, part.offset, part.length);
+        if (iterator->owner != nullptr) {
+            if (iterator->current.string != nullptr) {
+                mal_gc_write_barrier(mal_value_from_string((MalString *) iterator->current.string));
+            }
+            mal_gc_card(iterator->owner, mal_value_from_string((MalString *) part.string));
+        }
         iterator->current = part;
         return true;
     }
@@ -419,6 +432,60 @@ void mal_string_iterator_dispose(MalStringIterator *iterator) {
     iterator->stack = iterator->inline_stack;
     iterator->count = 0;
     iterator->capacity = sizeof(iterator->inline_stack) / sizeof(iterator->inline_stack[0]);
+}
+
+MalStringCursor *mal_string_cursor_new(MalHeap *heap, const MalString *string) {
+    MalStringCursor *cursor = mal_heap_alloc(heap, sizeof(*cursor), MAL_HEAP_STRING_CURSOR);
+    mal_heap_header_init(&cursor->header, MAL_HEAP_STRING_CURSOR);
+    cursor->iterator = malloc(sizeof(*cursor->iterator));
+    if (cursor->iterator == nullptr) abort();
+    mal_string_iterator_init(cursor->iterator, string, 0, string->length);
+    cursor->iterator->owner = &cursor->header;
+    cursor->local = 0;
+    cursor->position = 0;
+    cursor->length = string->length;
+    cursor->scratch = nullptr;
+    mal_gc_card(&cursor->header, mal_value_from_string((MalString *) string));
+    return cursor;
+}
+
+bool mal_string_cursor_segment(MalStringCursor *cursor, MalStringSegment *segment) {
+    if (cursor->iterator == nullptr || cursor->position == cursor->length) return false;
+    MalStringIterator *iterator = cursor->iterator;
+    if (cursor->local == iterator->current.length) {
+        if (!mal_string_iterator_next(iterator, segment)) abort();
+        cursor->local = 0;
+    }
+    // Only identities survive reentry: materialization can replace a leaf's payload.
+    *segment = mal_string_leaf_segment(iterator->current.string,
+        iterator->current.offset + cursor->local, iterator->current.length - cursor->local);
+    return true;
+}
+
+void mal_string_cursor_consume(MalStringCursor *cursor, usize count) {
+    assert(cursor->iterator != nullptr &&
+        count <= cursor->iterator->current.length - cursor->local);
+    cursor->local += count;
+    cursor->position += count;
+}
+
+void mal_string_cursor_dispose(MalStringCursor *cursor) {
+    if (cursor->iterator != nullptr) {
+        MalStringIterator *iterator = cursor->iterator;
+        if (iterator->owner != nullptr) {
+            if (iterator->current.string != nullptr) {
+                mal_gc_write_barrier(mal_value_from_string((MalString *) iterator->current.string));
+            }
+            for (usize i = 0; i < iterator->count; i++) {
+                mal_gc_write_barrier(mal_value_from_string((MalString *) iterator->stack[i].string));
+            }
+        }
+        mal_string_iterator_dispose(iterator);
+        free(iterator);
+        cursor->iterator = nullptr;
+    }
+    free(cursor->scratch);
+    cursor->scratch = nullptr;
 }
 
 static void mal_string_copy_segment_to(const MalStringSegment *segment, c16 *destination) {

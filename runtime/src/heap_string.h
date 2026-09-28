@@ -200,6 +200,8 @@ typedef struct MalStringIterator {
     usize count;
     usize capacity;
     bool reverse;
+    /** Non-null only when an owning heap cursor traces this frontier. */
+    MalHeapHeader *owner;
     /** Flat owner of the last returned segment; valid until next/dispose. */
     MalStringIteratorPart current;
     MalStringIteratorPart inline_stack[16];
@@ -215,6 +217,25 @@ void mal_string_iterator_init_reverse(
     MalStringIterator *iterator, const MalString *string, usize offset, usize length);
 bool mal_string_iterator_next(MalStringIterator *iterator, MalStringSegment *segment);
 void mal_string_iterator_dispose(MalStringIterator *iterator);
+
+/** Internal heap cell; never exposed as a JavaScript object. Pending subtree
+ * identities and the current leaf remain traced even if reentry flattens ancestors. */
+typedef struct MalStringCursor {
+    MalHeapHeader header;
+    MalStringIterator *iterator;
+    usize local;
+    usize position;
+    usize length;
+    /** Optional pointer-free search scratch, owned until exhaustion or finalization. */
+    void *scratch;
+} MalStringCursor;
+
+MalStringCursor *mal_string_cursor_new(MalHeap *heap, const MalString *string);
+/** Reacquire leaf storage; consume at most segment.length units before another call. */
+bool mal_string_cursor_segment(MalStringCursor *cursor, MalStringSegment *segment);
+void mal_string_cursor_consume(MalStringCursor *cursor, usize count);
+/** Release exhausted state. Also safe during GC finalization after clearing owner. */
+void mal_string_cursor_dispose(MalStringCursor *cursor);
 
 static inline c16 mal_string_segment_code_unit_at(const MalStringSegment *segment, usize index) {
     return segment->latin1 ? segment->latin1_units[index] : segment->utf16_units[index];
