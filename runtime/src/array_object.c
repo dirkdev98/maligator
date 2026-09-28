@@ -99,9 +99,9 @@ bool mal_array_object_dense_reserve_exact(MalArrayObject *array, u32 needed) {
     }
     // Route the dense vector through the RAW space so its bytes count toward the
     // GC trigger (element-heavy workloads used to under-trigger) and so an empty
-    // RAW block returns to the OS. gc_realloc_raw grows by alloc-new / copy /
-    // free-old (RAW has no in-place grow); no safepoint runs inside it, so the
-    // detached old buffer is never observed by the collector.
+    // RAW block returns to the OS. Growth may move the buffer; no safepoint runs
+    // inside the allocator, so the detached old buffer is never observed by the
+    // collector.
     MalValue *grown = gc_realloc_raw_profiled(
         mal_gc_current_heap(), array->elements, sizeof(MalValue) * (usize) needed,
         MAL_PROFILE_ALLOCATION_FAMILY_ARRAY);

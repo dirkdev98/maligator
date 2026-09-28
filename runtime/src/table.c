@@ -254,7 +254,7 @@ static bool mal_table_grow_slots_if_needed(MalTable *table) {
 
 // Grows `entries` when the append cursor reaches capacity. The grow may move the
 // buffer, but handles/iterators are indices, so they stay valid. Routed through the
-// RAW space (gc_realloc_raw: alloc-new / copy / free-old) so the bytes count toward
+// RAW space so the bytes count toward
 // the GC trigger; no safepoint runs inside the allocator, so the detached old buffer
 // is never observed by the collector (the entries it holds are copied forward and
 // traced via the owner at the new address).
