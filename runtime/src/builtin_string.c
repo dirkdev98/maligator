@@ -3655,14 +3655,17 @@ static i64 mal_builtin_string_split_cursor_find(MalStringCursor *cursor) {
             if (matched == 0) {
                 local = mal_builtin_string_segment_find_unit(&segment, local, needle[0]);
                 if (local == segment.length) break;
-            }
-            c16 unit = mal_string_segment_code_unit_at(&segment, local++);
-            while (matched != 0 && unit != needle[matched]) {
-                MAL_PERF_COUNT(string_search_linear_comparisons);
-                matched = pattern->prefix[matched - 1];
+                local++;
+                matched = 1;
+            } else {
+                c16 unit = mal_string_segment_code_unit_at(&segment, local++);
+                while (matched != 0 && unit != needle[matched]) {
+                    MAL_PERF_COUNT(string_search_linear_comparisons);
+                    matched = pattern->prefix[matched - 1];
+                }
+                if (unit == needle[matched]) matched++;
             }
             MAL_PERF_COUNT(string_search_linear_comparisons);
-            if (unit == needle[matched]) matched++;
             if (matched == pattern->length) {
                 mal_string_cursor_consume(cursor, local);
                 return (i64) (cursor->position - pattern->length);
