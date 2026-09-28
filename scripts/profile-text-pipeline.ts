@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
 	cpSync,
@@ -118,7 +118,14 @@ async function main() {
 		const profile = args[1] === "profile";
 		const output = args[2]!;
 		const config = resolveBuildConfig({
-			engine: { eval: false, realms: false, regexp: false, intl: { enabled: false } },
+			engine: {
+				primordials: "locked",
+				eval: false,
+				realms: false,
+				regexp: false,
+				temporal: false,
+				intl: { enabled: false },
+			},
 			surface: { node: true, webPlatform: false, maligator: true },
 		});
 		const built = buildNativeBinaryResult({
@@ -137,6 +144,7 @@ async function main() {
 			: undefined;
 		json(path.join(output, "build.json"), {
 			binary: built.binaryPath,
+			runtimeDirectory: built.context.runtimeDirectory,
 			sha256: createHash("sha256").update(readFileSync(built.binaryPath)).digest("hex"),
 			toolchain: built.context.toolchain,
 			plan: built.context.plan,
@@ -162,6 +170,22 @@ async function main() {
 			),
 		);
 		return;
+	}
+	const outputRelative = path.relative(ROOT, selected.output);
+	if (
+		!outputRelative.startsWith(`..${path.sep}`) &&
+		outputRelative !== ".." &&
+		!path.isAbsolute(outputRelative)
+	) {
+		const ignored = spawnSync(
+			"git",
+			["check-ignore", "--quiet", "--no-index", `${selected.output}${path.sep}`],
+			{ cwd: ROOT, timeout: 30_000 },
+		);
+		if (ignored.status !== 0)
+			throw new Error(
+				"output inside the repository must be ignored; use .cache/text-pipeline or a directory outside the repository",
+			);
 	}
 	if (existsSync(selected.output)) throw new Error("output directory must be new");
 	mkdirSync(selected.output, { recursive: true });
@@ -195,17 +219,26 @@ async function main() {
 		arguments_: Array<string>,
 		overrides: NodeJS.ProcessEnv = {},
 		timeoutMs = 120_000,
+		cwd = ROOT,
 	) => {
 		const result = await runBoundedProcess(executable, arguments_, {
 			environment: { ...environment, ...overrides },
 			timeoutMs,
-			cwd: ROOT,
+			cwd,
 		});
 		json(path.join(selected.output, `${label}.log.json`), result);
 		if (result.exitCode !== 0) throw new Error(`${label} failed: ${result.stderr}`);
 		return result.stdout;
 	};
-	const builds: Record<string, { binary: string; prepared?: PreparedProfile }> = {};
+	const builds: Record<
+		string,
+		{
+			binary: string;
+			runtimeDirectory: string;
+			sha256: string;
+			prepared?: PreparedProfile;
+		}
+	> = {};
 	for (const variant of ["ordinary", "profile"]) {
 		const directory = path.join(selected.output, variant);
 		mkdirSync(directory);
@@ -221,14 +254,25 @@ async function main() {
 			],
 			{},
 			600_000,
+			source,
 		);
 		builds[variant] = JSON.parse(
 			readFileSync(path.join(directory, "build.json"), "utf8"),
 		) as (typeof builds)[string];
+		if (builds[variant].runtimeDirectory !== path.join(source, "runtime"))
+			throw new Error(`${variant}: build did not use the frozen runtime directory`);
 	}
 	const ordinary = builds.ordinary!;
 	const profile = builds.profile!;
 	const prepared = profile.prepared!;
+	const expectedSpans: Readonly<Record<number, number>> = {
+		100: 1,
+		101: 64 * selected.scale,
+		102: 4096 * selected.scale,
+		103: 4096 * selected.scale,
+		104: 64 * selected.scale,
+		105: 64 * selected.scale,
+	};
 	type Run = { output: KernelOutput; manifest?: ProfileManifest; capture?: string };
 	type Pair = { ordinary: Run; sampled: Run; marked: Run };
 	const cases: Array<{
@@ -243,7 +287,14 @@ async function main() {
 			complete,
 			...selected,
 			source: identity,
+			binaries: Object.fromEntries(
+				Object.entries(builds).map(([variant, build]) => [
+					variant,
+					{ binary: build.binary, sha256: build.sha256 },
+				]),
+			),
 			phaseNames: PHASES,
+			expectedMeasuredSpans: expectedSpans,
 			attribution:
 				"instrumented complete-pipeline intervals; includes marker dispatch and sampled GC; residual is not redistributed",
 			cases,
@@ -285,10 +336,14 @@ async function main() {
 				);
 				const output = parseKernelOutput(stdout);
 				assertRuntimeGapParity(oracle, output);
+				if (!(output.elapsedMs > 0) || !Number.isFinite(output.elapsedMs))
+					throw new Error(`${label}: invalid elapsed time`);
 				const manifest =
 					capture === undefined
 						? undefined
-						: finalizeProfileCapture(capture.directory, prepared, label).manifest;
+						: finalizeProfileCapture(capture.directory, prepared, label, {
+								workloadSucceeded: true,
+							}).manifest;
 				if (
 					manifest !== undefined &&
 					(manifest.droppedRecords !== 0 ||
@@ -296,11 +351,20 @@ async function main() {
 						manifest.phases.incompleteEvents !== 0)
 				)
 					throw new Error(`${label}: incomplete profile capture`);
-				if (
-					mode === "marked" &&
-					manifest?.phases.timings.find((phase) => phase.id === 100)?.spans !== 1
-				)
-					throw new Error(`${label}: measured pipeline phase is missing`);
+				if (mode === "marked") {
+					if (manifest?.phases.timings.length !== Object.keys(expectedSpans).length)
+						throw new Error(`${label}: phase IDs differ from the complete pipeline`);
+					for (const [id, count] of Object.entries(expectedSpans)) {
+						const phase = manifest?.phases.timings.find(
+							(phase) => phase.id === Number(id),
+						);
+						if (phase?.spans !== count || !(phase.inclusiveMs > 0))
+							throw new Error(
+								`${label}: phase ${id} did not record ${count} positive spans`,
+							);
+					}
+				} else if (manifest !== undefined && manifest.phases.spans !== 0)
+					throw new Error(`${label}: unmarked control recorded phase spans`);
 				results[mode] = { output, manifest, capture: capture?.directory };
 			}
 			entry.pairs.push(results as Pair);
@@ -350,6 +414,13 @@ async function main() {
 	const joined = cases.find((entry) => entry.variant === "joined-surrogate");
 	if (split !== undefined && joined !== undefined)
 		assertRuntimeGapParity(split.oracle, joined.oracle);
+	for (const build of Object.values(builds)) {
+		if (
+			createHash("sha256").update(readFileSync(build.binary)).digest("hex") !==
+			build.sha256
+		)
+			throw new Error("profiled binary changed during measurement");
+	}
 	save(true);
 }
 
