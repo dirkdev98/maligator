@@ -135,52 +135,10 @@ static bool stored_names_remain_stable(MalVm *vm) {
     return true;
 }
 
-static bool bounded_query_cache_guards(MalVm *vm) {
-    MalValue roots[] = {
-        mal_value_from_object(mal_object_new(&vm->heap, nullptr)),
-        MAL_VALUE_UNDEFINED, MAL_VALUE_UNDEFINED,
-    };
-    MalRootSpan span;
-    mal_gc_root(&span, roots, countof(roots));
-    roots[1] = mal_value_from_object(mal_object_new(&vm->heap, mal_value_to_object(roots[0])));
-    const char *name = "bounded-query-guarded-missing-name";
-    roots[2] = mal_value_from_string(mal_string_new_ascii(&vm->heap, name, strlen(name)));
-    MalInlineCache ic = {0};
-    usize atoms_before = mal_table_size(vm->atoms);
-    for (usize i = 0; i < 5; i++) {
-        CHECK(mal_vm_op_load_property_ic(vm, roots[1], roots[2], &ic) == MAL_VALUE_UNDEFINED);
-    }
-    CHECK(vm->missing_property_queries != nullptr);
-    CHECK(ic.key == 0);
-    quiescent_strings(vm);
-    CHECK(mal_vm_op_load_property(vm, roots[1], roots[2]) == MAL_VALUE_UNDEFINED);
-
-    // Define through the owning object API without atomization, so the query
-    // continues exercising bounded-cache guards instead of becoming an atom hit.
-    MalKey key = {.kind = MAL_KEY_STRING, .value = roots[2]};
-    MalPropertyDesc desc = {
-        .flags = MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE,
-        .value = mal_value_from_i32(31),
-    };
-    CHECK(mal_object_define_own(mal_value_to_object(roots[0]), key, &desc) == MAL_DEFINE_OWN_APPLIED);
-    CHECK(mal_vm_op_load_property_ic(vm, roots[1], roots[2], &ic) == mal_value_from_i32(31));
-    CHECK(mal_object_delete_own(mal_value_to_object(roots[0]), key));
-    for (usize i = 0; i < 5; i++) {
-        CHECK(mal_vm_op_load_property_ic(vm, roots[1], roots[2], &ic) == MAL_VALUE_UNDEFINED);
-    }
-    desc.value = mal_value_from_i32(47);
-    CHECK(mal_object_define_own(mal_value_to_object(roots[1]), key, &desc) == MAL_DEFINE_OWN_APPLIED);
-    CHECK(mal_vm_op_load_property(vm, roots[1], roots[2]) == mal_value_from_i32(47));
-    CHECK(mal_table_size(vm->atoms) == atoms_before);
-    mal_gc_unroot(&span);
-    return true;
-}
-
 int main(void) {
     MalVm vm;
     mal_vm_init(&vm, &mal_runtime_image);
-    bool ok = missing_queries_release_storage(&vm) && stored_names_remain_stable(&vm)
-        && bounded_query_cache_guards(&vm);
+    bool ok = missing_queries_release_storage(&vm) && stored_names_remain_stable(&vm);
     if (vm.completion.kind != MAL_COMPLETION_NORMAL) ok = false;
     mal_vm_free(&vm);
     if (ok) puts("transient-property-query PASS");

@@ -158,45 +158,4 @@ const updateTrace = [];
 updates[key("prepared-update-key", updateTrace)] = 1;
 updates[key("prepared-update-key", updateTrace)] += 2;
 check(updates["prepared-update-key"] === 3);
-
-for (let family = 0; family < 4; family++) {
-	const name = "bounded-missing-query-" + String.fromCharCode(97 + family);
-	const prototype = { marker: family };
-	const object = Object.create(prototype);
-	function read() {
-		return object[key(name, trace)];
-	}
-	for (let i = 0; i < 8; i++) check(read() === undefined);
-	collect();
-	Object.defineProperty(prototype, name, {
-		configurable: true,
-		get() {
-			collect();
-			return this.marker + 41;
-		},
-	});
-	check(read() === family + 41);
-	delete prototype[name];
-	for (let i = 0; i < 8; i++) check(read() === undefined);
-	let calls = 0;
-	Object.setPrototypeOf(
-		object,
-		new Proxy(
-			{},
-			{
-				get(_, property) {
-					collect();
-					calls++;
-					return property === name ? 73 : undefined;
-				},
-			},
-		),
-	);
-	for (let i = 0; i < 4; i++) check(read() === 73);
-	check(calls === 4);
-	Object.setPrototypeOf(object, null);
-	for (let i = 0; i < 8; i++) check(read() === undefined);
-	object[name] = 89;
-	check(read() === 89);
-}
 console.log("transient-property-query PASS " + checks);

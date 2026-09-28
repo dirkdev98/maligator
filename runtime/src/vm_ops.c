@@ -4848,67 +4848,6 @@ static MalValue mal_vm_op_load_property_keyed(MalVm *vm, MalValue object_value, 
     return mal_value_new_undefined();
 }
 
-static MalMissingPropertyQueryEntry *mal_vm_missing_query_probe(
-    MalVm *vm, MalValue receiver, MalKey key, bool *hit
-) {
-    *hit = false;
-    if (key.kind != MAL_KEY_STRING) return nullptr;
-    MalString *string = mal_value_to_string(key.value);
-    if (string->property_atom || string->length == 0 ||
-        string->length > MAL_MISSING_PROPERTY_QUERY_MAX_UNITS ||
-        !mal_value_is_heap_type(receiver, MAL_HEAP_OBJECT)) return nullptr;
-    const MalObject *object = mal_value_to_object(receiver);
-    if (mal_object_has_public_overflow(object)) return nullptr;
-    if (vm->missing_property_queries == nullptr) {
-        vm->missing_property_queries = calloc(
-            MAL_MISSING_PROPERTY_QUERY_CAPACITY, sizeof(MalMissingPropertyQueryEntry));
-        if (vm->missing_property_queries == nullptr) return nullptr;
-    }
-    u64 hash = mal_string_hash(string);
-    MalMissingPropertyQueryEntry *entry = &vm->missing_property_queries[
-        hash & (MAL_MISSING_PROPERTY_QUERY_CAPACITY - 1)];
-    if (entry->shape == object->shape && entry->prototype_epoch != 0 &&
-        entry->prototype_epoch == mal_prototype_chain_epoch &&
-        entry->prototype == object->prototype && entry->hash == hash &&
-        entry->length == string->length) {
-        MalString probe;
-        mal_string_init_external(&probe, entry->units, entry->length);
-        if (mal_string_equals(string, &probe)) {
-            *hit = true;
-            MAL_PERF_COUNT(ic_load_missing_hits);
-            return nullptr;
-        }
-    }
-    // One-use churn records only a hash. A repeated hash permits the full name
-    // copy and chain proof; hash collisions can increase fills, never cause hits.
-    bool repeated = entry->candidate_hash == hash;
-    entry->candidate_hash = hash;
-    return repeated ? entry : nullptr;
-}
-
-static void mal_vm_missing_query_record(
-    MalVm *vm, MalValue receiver, MalKey key, MalValue result,
-    MalMissingPropertyQueryEntry *entry
-) {
-    if (entry == nullptr || result != MAL_VALUE_UNDEFINED ||
-        vm->completion.kind != MAL_COMPLETION_NORMAL || mal_prototype_chain_epoch == 0) return;
-    const MalObject *object = mal_value_to_object(receiver);
-    if (mal_object_has_public_overflow(object)) return;
-    // Reentry may have changed the chain or produced undefined through a getter.
-    // Prove absence again without invoking any exotic [[Get]] implementation.
-    for (const MalObject *cursor = object; cursor != nullptr; cursor = cursor->prototype) {
-        if (cursor->header.type != MAL_HEAP_OBJECT || mal_object_get_own(cursor, key).present) return;
-    }
-    MalString *string = mal_value_to_string(key.value);
-    entry->shape = object->shape;
-    entry->prototype = object->prototype;
-    entry->prototype_epoch = mal_prototype_chain_epoch;
-    entry->hash = mal_string_hash(string);
-    entry->length = string->length;
-    mal_string_copy_range_to(string, 0, string->length, entry->units);
-    MAL_PERF_COUNT(ic_load_missing_fills);
-}
-
 // Spec Get over a value with an already-evaluated key value, returning the
 // result (undefined on a non-coercible key or a throw — the caller propagates
 // vm->completion). Shared by the interpreter op and the native-C backend.
@@ -4925,13 +4864,7 @@ MalValue mal_vm_op_load_property(MalVm *vm, MalValue object_value, MalValue key_
     MalKey key;
     if (mal_vm_to_property_query(vm, key_value, &key)) {
         roots[1] = key.value;
-        bool missing;
-        MalMissingPropertyQueryEntry *entry =
-            mal_vm_missing_query_probe(vm, object_value, key, &missing);
-        if (!missing) {
-            result = mal_vm_op_load_property_keyed(vm, object_value, key);
-            mal_vm_missing_query_record(vm, object_value, key, result, entry);
-        }
+        result = mal_vm_op_load_property_keyed(vm, object_value, key);
     }
     mal_gc_unroot(&span);
     return result;
@@ -5815,14 +5748,8 @@ static MalValue mal_vm_op_load_property_ic_impl(
         // A coercion-created query has no atom root. Keep it alive through
         // getters/proxies and the subsequent cache-admission checks.
         roots[1] = key.value;
-        bool missing;
-        MalMissingPropertyQueryEntry *entry =
-            mal_vm_missing_query_probe(vm, object_value, key, &missing);
-        if (!missing) {
-            result = mal_vm_op_load_property_ic_keyed(
-                vm, object_value, key, ic, static_probe_missed);
-            mal_vm_missing_query_record(vm, object_value, key, result, entry);
-        }
+        result = mal_vm_op_load_property_ic_keyed(
+            vm, object_value, key, ic, static_probe_missed);
     }
     mal_gc_unroot(&span);
     return result;

@@ -1800,9 +1800,6 @@ typedef struct MalVm {
 
     /** Tail-only semantic versions: do not perturb established hot VM offsets. */
     MalSemanticEpochs semantic_epochs;
-
-    /** Bounded copied names; no heap string or receiver is retained. */
-    struct MalMissingPropertyQueryEntry *missing_property_queries;
 } MalVm;
 
 /** Every engine heap is the unique inline heap of one MalVm. */
