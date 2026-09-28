@@ -6,6 +6,16 @@ function equal(actual, expected, name) {
 	}
 }
 
+function jsonSyntaxError(source, name) {
+	let rejected = false;
+	try {
+		JSON.parse(source);
+	} catch (error) {
+		rejected = error instanceof SyntaxError;
+	}
+	equal(rejected, true, name);
+}
+
 function collect() {
 	const gc = globalThis.__mal_collect_garbage;
 	if (typeof gc === "function") gc();
@@ -187,6 +197,47 @@ equal(
 	'{"latin":"\x80\xe9\xff","nul":"\\u0000","wide":"\u0100"}',
 	"JSON output keeps code units and promotes at a later value",
 );
+const scannerSuffix = "\uffff\ud800X\udc00" + "z".repeat(64);
+for (let alignment = 0; alignment < 4; alignment++) {
+	const padding = "a".repeat(64 + alignment);
+	const rawHead = padding + "\u8000\uffff\ud800X";
+	const rawTail = "\udc00" + scannerSuffix;
+	equal(
+		JSON.parse(['"', rawHead].join("") + [rawTail, '"'].join("")),
+		rawHead + rawTail,
+		"raw UTF-16 string crosses scan words and leaves " + alignment,
+	);
+	equal(
+		JSON.parse(['"', padding, "\\"].join("") + "n" + scannerSuffix + '"'),
+		padding + "\n" + scannerSuffix,
+		"split escape precedes a wide raw suffix " + alignment,
+	);
+	equal(
+		JSON.parse(['"', padding, "\\u00"].join("") + "41" + scannerSuffix + '"'),
+		padding + "A" + scannerSuffix,
+		"split Unicode escape precedes lone raw surrogates " + alignment,
+	);
+	for (const control of [0, 0x1f]) {
+		const head = ['"', "\u8000", padding, String.fromCharCode(control), "bcde"].join("");
+		jsonSyntaxError(
+			head + scannerSuffix + '"',
+			"raw control inside a wide scan word " + alignment + ":" + control,
+		);
+	}
+	const incompleteHead = ['"', "\u8000", padding].join("");
+	jsonSyntaxError(
+		incompleteHead + "\\",
+		"trailing backslash at source boundary " + alignment,
+	);
+	jsonSyntaxError(
+		incompleteHead + "\\" + "u0",
+		"incomplete Unicode escape at source boundary " + alignment,
+	);
+	jsonSyntaxError(
+		incompleteHead + scannerSuffix,
+		"unterminated raw suffix at source boundary " + alignment,
+	);
+}
 console.log("encoding-aware-text producers PASS");
 
 const hookOrder = [];
