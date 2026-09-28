@@ -568,6 +568,17 @@ static i64 mal_builtin_string_find(const MalString *string, const MalString *sea
     if (search_length == 0) return (i64) from;
     if (string == search) return 0;
 
+    if (search_length == 1) {
+        MalStringSegment segment;
+        if (mal_string_try_get_segment(string, from, length - from, &segment)) {
+            usize candidate = mal_builtin_string_segment_find_unit(
+                &segment, 0, mal_string_code_unit_at((MalString *) search, 0));
+            MAL_PERF_ADD(string_search_candidates, candidate + (candidate != segment.length));
+            MAL_PERF_ADD(string_search_first_unit_rejects, candidate);
+            return candidate == segment.length ? -1 : (i64) (from + candidate);
+        }
+    }
+
     if (search_length > 1) MAL_PERF_COUNT(string_search_multi_unit_calls);
     if (search_length >= MAL_STRING_SEARCH_INLINE_UNITS) {
         MalBuiltinStringSearch cursor;
