@@ -5,6 +5,7 @@ import { beforeAll, describe, it } from "vitest";
 import {
 	assertExactLines,
 	buildBackendPairFromOneProgramImage,
+	buildNativeBinary,
 	runToStdout,
 	STRESS_ENV,
 } from "../../src/test-harness.ts";
@@ -16,6 +17,7 @@ const hostGc = { MAL_HOST_GC: "1" };
 describe("JSON bounded resources and token traversal", () => {
 	let compiled: string;
 	let interpreted: string;
+	let fiber: string;
 
 	beforeAll(() => {
 		({ compiled, interpreted } = buildBackendPairFromOneProgramImage({
@@ -23,11 +25,22 @@ describe("JSON bounded resources and token traversal", () => {
 			name: "json-algorithms",
 			outDir,
 		}));
+		fiber = buildNativeBinary({
+			fixture: "tests/local/fibertest_stub.js",
+			name: "json-fiber",
+			mainFile: "tests/fixtures/json-algorithms/fiber-main.c",
+			outDir,
+		});
 	});
 
 	it("preserves callbacks, sources, and bounded failure in both backends", () => {
 		assertExactLines(runToStdout(compiled, { env: hostGc }), expected);
 		assertExactLines(runToStdout(interpreted, { env: hostGc }), expected);
+	});
+
+	it("bounds recursive work on the scheduler's smaller fiber stack", () => {
+		assertExactLines(runToStdout(fiber), ["json-fiber PASS"]);
+		assertExactLines(runToStdout(fiber, { env: STRESS_ENV }), ["json-fiber PASS"]);
 	});
 
 	it("keeps active values and source records rooted under GC stress", () => {
