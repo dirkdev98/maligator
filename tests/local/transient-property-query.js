@@ -19,7 +19,7 @@ const target = { present: 7, 12: 19 };
 const symbol = Symbol("query");
 target[symbol] = 23;
 const trace = [];
-const proxy = new Proxy(target, {
+const handler = {
 	get(object, name, receiver) {
 		collect();
 		trace.push("get:" + String(name));
@@ -40,10 +40,21 @@ const proxy = new Proxy(target, {
 		trace.push("delete:" + String(name));
 		return Reflect.deleteProperty(object, name);
 	},
-});
+};
+for (const trap of ["get", "has", "getOwnPropertyDescriptor", "deleteProperty"]) {
+	const method = handler[trap];
+	Object.defineProperty(handler, trap, {
+		get() {
+			collect();
+			return method;
+		},
+	});
+}
+const proxy = new Proxy(target, handler);
 
 for (let i = 0; i < 16; i++) {
 	const name = "transient-missing-name-with-long-prefix-" + i;
+	const traceStart = trace.length;
 	check(proxy[key(name, trace)] === undefined);
 	check(Reflect.get(proxy, key(name, trace)) === undefined);
 	check(!(key(name, trace) in proxy));
@@ -56,6 +67,24 @@ for (let i = 0; i < 16; i++) {
 	check(delete proxy[key(name, trace)]);
 	check(Reflect.deleteProperty(proxy, key(name, trace)));
 	check(Object.prototype.__lookupGetter__.call(proxy, key(name, trace)) === undefined);
+	const expectedTrace = [];
+	for (const trap of [
+		"get",
+		"get",
+		"has",
+		"has",
+		"own",
+		"own",
+		"own",
+		"own",
+		"own",
+		"delete",
+		"delete",
+		"own",
+	]) {
+		expectedTrace.push("string", trap + ":" + name);
+	}
+	check(JSON.stringify(trace.slice(traceStart)) === JSON.stringify(expectedTrace));
 }
 check(trace.filter((entry) => entry === "string").length === 16 * 12);
 check(proxy[key("present", trace)] === 7);
