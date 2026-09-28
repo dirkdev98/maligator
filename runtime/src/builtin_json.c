@@ -695,6 +695,345 @@ static bool mal_json_build_property_list(MalJsonState *state, MalValue replacer)
     return true;
 }
 
+typedef struct MalJsonPointerEntry {
+    const void *key;
+    void *value;
+} MalJsonPointerEntry;
+
+typedef struct MalJsonPointerMap {
+    MalJsonPointerEntry *entries;
+    usize capacity;
+    usize count;
+    usize used;
+} MalJsonPointerMap;
+
+static usize mal_json_pointer_hash(const void *pointer) {
+    u64 bits = (u64) (uintptr_t) pointer;
+    bits ^= bits >> 33;
+    bits *= UINT64_C(0xff51afd7ed558ccd);
+    bits ^= bits >> 33;
+    return (usize) bits;
+}
+
+static MalJsonPointerEntry *mal_json_pointer_find(
+    MalJsonPointerMap *map, const void *key
+) {
+    if (map->capacity == 0) return nullptr;
+    usize slot = mal_json_pointer_hash(key) & (map->capacity - 1);
+    while (map->entries[slot].key != nullptr) {
+        if (map->entries[slot].key == key) return &map->entries[slot];
+        slot = (slot + 1) & (map->capacity - 1);
+    }
+    return nullptr;
+}
+
+static void mal_json_pointer_insert(
+    MalJsonPointerMap *map, const void *key, void *value
+) {
+    if (map->used >= map->capacity - map->capacity / 4) {
+        usize capacity = map->capacity == 0 ? 16 : map->capacity;
+        if (map->count >= capacity / 2) {
+            if (capacity > SIZE_MAX / 2) abort();
+            capacity *= 2;
+        }
+        if (capacity > SIZE_MAX / sizeof(MalJsonPointerEntry)) abort();
+        MalJsonPointerEntry *entries = calloc(capacity, sizeof(*entries));
+        if (entries == nullptr) abort();
+        for (usize i = 0; i < map->capacity; i++) {
+            MalJsonPointerEntry entry = map->entries[i];
+            if (entry.key == nullptr) continue;
+            usize slot = mal_json_pointer_hash(entry.key) & (capacity - 1);
+            while (entries[slot].key != nullptr) slot = (slot + 1) & (capacity - 1);
+            entries[slot] = entry;
+        }
+        free(map->entries);
+        map->entries = entries;
+        map->capacity = capacity;
+        map->used = map->count;
+    }
+    usize slot = mal_json_pointer_hash(key) & (map->capacity - 1);
+    while (map->entries[slot].key != nullptr) {
+        if (map->entries[slot].key == key) {
+            map->entries[slot].value = value;
+            return;
+        }
+        slot = (slot + 1) & (map->capacity - 1);
+    }
+    if (map->entries[slot].key == nullptr) map->used++;
+    map->entries[slot] = (MalJsonPointerEntry) {.key = key, .value = value};
+    map->count++;
+}
+
+static void mal_json_pointer_remove(MalJsonPointerMap *map, const void *key) {
+    MalJsonPointerEntry *entry = mal_json_pointer_find(map, key);
+    if (entry == nullptr) return;
+    usize mask = map->capacity - 1;
+    usize hole = (usize) (entry - map->entries);
+    usize next = (hole + 1) & mask;
+    while (map->entries[next].key != nullptr) {
+        usize home = mal_json_pointer_hash(map->entries[next].key) & mask;
+        if (((next - home) & mask) >= ((next - hole) & mask)) {
+            map->entries[hole] = map->entries[next];
+            hole = next;
+        }
+        next = (next + 1) & mask;
+    }
+    map->entries[hole] = (MalJsonPointerEntry) {0};
+    map->count--;
+    map->used--;
+}
+
+typedef struct MalJsonKeyPlan {
+    u32 slot;
+    MalString *key;
+    usize offset;
+    usize length;
+} MalJsonKeyPlan;
+
+typedef struct MalJsonShapePlan {
+    MalJsonBuilder escaped_keys;
+    usize count;
+    MalJsonKeyPlan keys[];
+} MalJsonShapePlan;
+
+typedef struct MalJsonFrame {
+    MalValue value;
+    MalJsonShapePlan *plan;
+    usize position;
+    usize count;
+    bool array;
+    bool any;
+} MalJsonFrame;
+
+typedef struct MalJsonPlainState {
+    MalVm *vm;
+    MalKey to_json;
+    MalJsonPointerMap shapes;
+    MalJsonPointerMap prototypes;
+    MalJsonPointerMap active;
+    MalJsonFrame *frames;
+    usize count;
+    usize capacity;
+} MalJsonPlainState;
+
+static bool mal_json_plain_prototype(MalJsonPlainState *state, MalObject *prototype) {
+    MalObject *current = prototype;
+    while (current != nullptr) {
+        if (mal_json_pointer_find(&state->prototypes, current) != nullptr) break;
+        if ((current->header.type != MAL_HEAP_OBJECT &&
+                current->header.type != MAL_HEAP_ARRAY_OBJECT) ||
+            current->is_arguments ||
+            mal_object_get_own(current, state->to_json).present) {
+            return false;
+        }
+        current = current->prototype;
+    }
+    while (prototype != current) {
+        mal_json_pointer_insert(&state->prototypes, prototype, nullptr);
+        prototype = prototype->prototype;
+    }
+    return true;
+}
+
+static MalJsonShapePlan *mal_json_plain_shape(
+    MalJsonPlainState *state, MalObject *object
+) {
+    if (object->shape == nullptr || mal_object_has_public_overflow(object) ||
+        object->is_arguments || object->is_raw_json) return nullptr;
+    MalJsonPointerEntry *cached = mal_json_pointer_find(&state->shapes, object->shape);
+    if (cached != nullptr) return cached->value;
+    const MalShape *shape = object->shape;
+    usize count = 0;
+    for (u32 i = 0; i < shape->inline_count; i++) {
+        const MalShapeProp *prop = &shape->props[i];
+        if ((prop->attrs & MAL_PROPERTY_ACCESSOR) != 0) return nullptr;
+        if (!mal_value_is_string(prop->key)) continue;
+        if (mal_string_equals(mal_value_to_string(prop->key),
+                mal_value_to_string(state->to_json.value))) return nullptr;
+        if ((prop->attrs & MAL_PROPERTY_ENUMERABLE) != 0) count++;
+    }
+    MalJsonShapePlan *plan = calloc(
+        1, sizeof(*plan) + count * sizeof(MalJsonKeyPlan));
+    if (plan == nullptr) abort();
+    plan->escaped_keys.vm = state->vm;
+    for (u32 i = 0; i < shape->inline_count; i++) {
+        const MalShapeProp *prop = &shape->props[i];
+        if (mal_value_is_string(prop->key) &&
+            (prop->attrs & MAL_PROPERTY_ENUMERABLE) != 0) {
+            plan->keys[plan->count++] = (MalJsonKeyPlan) {
+                .slot = prop->slot, .key = mal_value_to_string(prop->key),
+            };
+        }
+    }
+    mal_json_pointer_insert(&state->shapes, object->shape, plan);
+    return plan;
+}
+
+static bool mal_json_plain_key(
+    MalJsonBuilder *builder, MalJsonShapePlan *plan, MalJsonKeyPlan *key
+) {
+    if (key->length == 0) {
+        key->offset = plan->escaped_keys.buffer.length;
+        if (!mal_json_builder_push_quoted(&plan->escaped_keys, key->key) ||
+            !mal_json_builder_push(&plan->escaped_keys, ':')) return false;
+        key->length = plan->escaped_keys.buffer.length - key->offset;
+    }
+    MalTextBuffer *keys = &plan->escaped_keys.buffer;
+    MalTextBufferStatus status = keys->utf16
+        ? mal_text_buffer_append_units(
+            &builder->buffer, (const c16 *) keys->data + key->offset, key->length)
+        : mal_text_buffer_append_latin1(
+            &builder->buffer, (const u8 *) keys->data + key->offset, key->length);
+    return status == MAL_TEXT_BUFFER_OK || mal_json_throw_string_length(builder->vm);
+}
+
+static bool mal_json_plain_frame(
+    MalJsonPlainState *state, MalValue value, MalJsonFrame *frame
+) {
+    MalObject *object = mal_value_to_object(value);
+    *frame = (MalJsonFrame) {.value = value};
+    if (object->header.type == MAL_HEAP_ARRAY_OBJECT) {
+        MalArrayObject *array = mal_value_to_array_object(value);
+        if (array->dense_deopted || array->dense_maybe_holey ||
+            array->dense_count != array->length ||
+            mal_object_get_own(object, state->to_json).present) return false;
+        frame->array = true;
+        frame->count = array->length;
+    } else if (object->header.type == MAL_HEAP_OBJECT) {
+        frame->plan = mal_json_plain_shape(state, object);
+        if (frame->plan == nullptr) return false;
+        frame->count = frame->plan->count;
+    } else {
+        return false;
+    }
+    return mal_json_plain_prototype(state, object->prototype);
+}
+
+static void mal_json_plain_dispose(MalJsonPlainState *state) {
+    for (usize i = 0; i < state->shapes.capacity; i++) {
+        MalJsonPointerEntry *entry = &state->shapes.entries[i];
+        if (entry->key != nullptr) {
+            MalJsonShapePlan *plan = entry->value;
+            mal_text_buffer_dispose(&plan->escaped_keys.buffer);
+            free(plan);
+        }
+    }
+    free(state->shapes.entries);
+    free(state->prototypes.entries);
+    free(state->active.entries);
+    free(state->frames);
+}
+
+static bool mal_json_try_serialize_plain(
+    MalJsonState *generic, MalJsonBuilder *builder, MalValue root,
+    MalJsonResult *result
+) {
+    if (!mal_value_is_object(root) || mal_value_is_callable(generic->replacer_fn) ||
+        generic->has_property_list || generic->gap_length != 0) return false;
+    MalJsonPlainState state = {
+        .vm = generic->vm,
+        .to_json = mal_intrinsic_string_key(generic->vm, "toJSON"),
+    };
+    // Every descendant and prototype stays reachable from this immutable input
+    // graph: speculative traversal never invokes JS or changes a property.
+    MalRootSpan span;
+    mal_gc_root(&span, &root, 1);
+    MalValue value = root;
+    MalJsonFrame pending_frame;
+    bool has_pending_frame = false;
+    bool handled = true;
+    *result = MAL_JSON_WROTE;
+    while (true) {
+        if (mal_value_is_object(value)) {
+            MalObject *object = mal_value_to_object(value);
+            MalJsonFrame frame;
+            if (has_pending_frame) {
+                frame = pending_frame;
+                has_pending_frame = false;
+            } else if (!mal_json_plain_frame(&state, value, &frame)) {
+                goto unsupported;
+            }
+            if (mal_json_pointer_find(&state.active, object) != nullptr) {
+                mal_vm_throw_error(generic->vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+                    "Converting circular structure to JSON");
+                goto failed;
+            }
+            mal_json_pointer_insert(&state.active, object, nullptr);
+            if (state.count == state.capacity) {
+                usize capacity;
+                usize bytes;
+                if (!mal_checked_size_growth(
+                        state.capacity, state.count + 1, 16, SIZE_MAX, &capacity) ||
+                    !mal_checked_size_multiply(
+                        capacity, sizeof(MalJsonFrame), SIZE_MAX, &bytes)) abort();
+                MalJsonFrame *frames = realloc(state.frames, bytes);
+                if (frames == nullptr) abort();
+                state.frames = frames;
+                state.capacity = capacity;
+            }
+            state.frames[state.count++] = frame;
+            if (!mal_json_builder_push(builder, frame.array ? '[' : '{')) goto failed;
+        } else {
+            // BigInt can inherit toJSON, so it must take the observable path.
+            if (mal_value_is_bigint(value)) goto unsupported;
+            MalJsonResult leaf = mal_json_serialize_prepared(generic, builder, value, 0);
+            if (leaf == MAL_JSON_THROW) goto failed;
+        }
+
+        bool next = false;
+        while (state.count != 0) {
+            MalJsonFrame *frame = &state.frames[state.count - 1];
+            if (frame->position == frame->count) {
+                if (!mal_json_builder_push(builder, frame->array ? ']' : '}')) goto failed;
+                mal_json_pointer_remove(&state.active, mal_value_to_object(frame->value));
+                state.count--;
+                continue;
+            }
+            MalJsonKeyPlan *key = nullptr;
+            if (frame->array) {
+                MalArrayObject *array = mal_value_to_array_object(frame->value);
+                value = array->elements[frame->position++];
+                if (!mal_value_is_object(value) && mal_json_value_is_omitted(value)) {
+                    value = mal_value_new_null();
+                }
+            } else {
+                key = &frame->plan->keys[frame->position++];
+                value = mal_value_to_object(frame->value)->slots[key->slot];
+                if (!mal_value_is_object(value) && mal_json_value_is_omitted(value)) continue;
+            }
+            // An observable toJSON may omit this member. Prove its absence
+            // before reserving a key that would then not belong to the output.
+            if (mal_value_is_object(value)) {
+                if (!mal_json_plain_frame(&state, value, &pending_frame)) goto unsupported;
+                has_pending_frame = true;
+            } else if (mal_value_is_bigint(value)) {
+                goto unsupported;
+            }
+            if ((frame->any && !mal_json_builder_push(builder, ',')) ||
+                (key != nullptr && !mal_json_plain_key(builder, frame->plan, key))) goto failed;
+            frame->any = true;
+            next = true;
+            break;
+        }
+        if (!next) break;
+    }
+    goto done;
+
+unsupported:
+    // No user code has run. Discard all speculative output and let the generic
+    // path perform each getter, proxy trap, and toJSON call exactly once.
+    mal_text_buffer_dispose(&builder->buffer);
+    builder->buffer = (MalTextBuffer) {0};
+    handled = false;
+    goto done;
+failed:
+    *result = MAL_JSON_THROW;
+done:
+    mal_json_plain_dispose(&state);
+    mal_gc_unroot(&span);
+    return handled;
+}
+
 static MalValue mal_builtin_json_stringify(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) this_value;
     (void) new_target;
@@ -773,7 +1112,9 @@ static MalValue mal_builtin_json_stringify(MalVm *vm, MalValue this_value, const
     MalKey root_key = {.kind = MAL_KEY_STRING, .value = empty_key};
     MalValue holder = mal_value_new_undefined();
     MalJsonResult result;
-    if (mal_value_is_callable(state.replacer_fn)) {
+    if (mal_json_try_serialize_plain(&state, &builder, value, &result)) {
+        // The guarded traversal completed without observable hooks.
+    } else if (mal_value_is_callable(state.replacer_fn)) {
         // A replacer observes the synthetic root holder as its `this` value.
         MalObject *wrapper = mal_intrinsic_new_object(vm);
         mal_intrinsic_define_data(
