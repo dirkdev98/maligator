@@ -2791,6 +2791,26 @@ static bool mal_builtin_string_split_plan_matches(
 
     if (separator_length > length) return true;
 
+    if (separator_length == 1 && string->storage != MAL_STRING_STORAGE_CONS) {
+        MalStringSegment segment;
+        if (mal_string_try_get_segment(string, 0, length, &segment)) {
+            c16 unit = mal_string_code_unit_at(separator, 0);
+            usize from = 0;
+            for (;;) {
+                usize match = mal_builtin_string_segment_find_unit(&segment, from, unit);
+                if (match == segment.length) return true;
+                if (*match_count == MAL_STRING_SPLIT_MATCH_PLAN_CAPACITY) {
+                    MAL_PERF_COUNT(string_split_plan_overflows);
+                    *overflow_match_position = match;
+                    return false;
+                }
+                match_offsets[(*match_count)++] = match;
+                MAL_PERF_COUNT(string_split_planned_matches);
+                if (*match_count == limit) return true;
+                from = match + 1;
+            }
+        }
+    }
 
     MalBuiltinStringSearch cursor;
     mal_builtin_string_search_cursor_init(&cursor, string, separator, 0, false);
