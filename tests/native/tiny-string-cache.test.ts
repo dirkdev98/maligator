@@ -3,17 +3,25 @@ import { mkdtempSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
-import { assertPassLine, buildNativeBinary, STRESS_ENV } from "../../src/test-harness.ts";
+import {
+	assertPassLine,
+	buildNativeBinary,
+	scaledNativeRunTimeoutMs,
+	STRESS_ENV,
+} from "../../src/test-harness.ts";
 
 const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-tiny-string-cache-"));
 const fixture = "tests/local/tiny-string-cache.js";
 const mainFile = "runtime/test262_main.c";
+const baseTimeoutMs = 60_000;
+const stressEnv = { ...STRESS_ENV, MAL_HOST_GC: "1" };
 
 function run(binary: string, env: NodeJS.ProcessEnv = {}): string {
+	const environment = { ...process.env, MAL_TEST262: "1", ...env };
 	const result = spawnSync(binary, [], {
-		env: { ...process.env, MAL_TEST262: "1", ...env },
+		env: environment,
 		encoding: "utf-8",
-		timeout: 60000,
+		timeout: scaledNativeRunTimeoutMs(baseTimeoutMs, environment),
 	});
 	if (result.error !== undefined) throw result.error;
 	expect(result.status, result.stderr || result.stdout).toBe(0);
@@ -66,9 +74,17 @@ describe("bounded tiny-string cache", () => {
 		run(interpreted);
 	});
 
-	it("keeps cached representatives live under verified GC stress", () => {
-		run(compiled, { ...STRESS_ENV, MAL_HOST_GC: "1" });
-	});
+	it(
+		"keeps cached representatives live under verified GC stress",
+		() => {
+			run(compiled, stressEnv);
+		},
+		scaledNativeRunTimeoutMs(baseTimeoutMs, {
+			...process.env,
+			MAL_TEST262: "1",
+			...stressEnv,
+		}),
+	);
 
 	it("replaces rooted representatives safely during automatic major GC", () => {
 		run(compiled, {
