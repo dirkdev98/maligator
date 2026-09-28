@@ -161,6 +161,9 @@ equal(
 	"Number trims wide rope whitespace",
 );
 equal(Number.isNaN(Number("12\0.5")), true, "Number does not terminate at NUL");
+for (const spelling of ["Infinity", "+Infinity", "-Infinity"]) {
+	equal(Number.isNaN(Number(spelling + "\0x")), true, "Infinity requires an exact token");
+}
 equal(
 	JSON.stringify(rope),
 	'"' + prefix + pair + suffix + '"',
