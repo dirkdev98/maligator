@@ -871,12 +871,19 @@ typedef struct MalJsonShapePlan {
 
 typedef struct MalJsonFrame {
     MalValue value;
-    MalJsonShapePlan *plan;
+    union {
+        MalJsonShapePlan *plan;
+        const MalShape *shape;
+    };
     usize position;
     usize count;
     bool array;
     bool any;
+    bool cached_plan;
 } MalJsonFrame;
+
+#define MAL_JSON_PLAN_DATA_BUDGET ((usize) 64 * 1024)
+#define MAL_JSON_PLAN_ENTRY_LIMIT ((usize) 256)
 
 typedef struct MalJsonPlainState {
     MalVm *vm;
@@ -887,6 +894,8 @@ typedef struct MalJsonPlainState {
     MalJsonFrame *frames;
     usize count;
     usize capacity;
+    usize cache_data_bytes;
+    usize prototype_eviction_slot;
 } MalJsonPlainState;
 
 static bool mal_json_plain_prototype(MalJsonPlainState *state, MalObject *prototype) {
@@ -901,38 +910,65 @@ static bool mal_json_plain_prototype(MalJsonPlainState *state, MalObject *protot
         }
         current = current->prototype;
     }
-    while (prototype != current) {
+    usize admitted = 0;
+    while (prototype != current && admitted++ < MAL_JSON_PLAN_ENTRY_LIMIT) {
+        if (state->prototypes.count == MAL_JSON_PLAN_ENTRY_LIMIT) {
+            // Proofs are optional and independent of traversal frames. Rotate
+            // eviction so changing prototype chains cannot grow this table.
+            usize slot = state->prototype_eviction_slot;
+            usize mask = state->prototypes.capacity - 1;
+            while (state->prototypes.entries[slot].key == nullptr) {
+                slot = (slot + 1) & mask;
+            }
+            mal_json_pointer_remove(
+                &state->prototypes, state->prototypes.entries[slot].key);
+            state->prototype_eviction_slot = (slot + 1) & mask;
+        }
         mal_json_pointer_insert(&state->prototypes, prototype, nullptr);
         prototype = prototype->prototype;
     }
     return true;
 }
 
-static MalJsonShapePlan *mal_json_plain_shape(
-    MalJsonPlainState *state, MalObject *object
+static bool mal_json_plain_shape(
+    MalJsonPlainState *state, MalObject *object, MalJsonFrame *frame
 ) {
     if (object->shape == nullptr || mal_object_has_public_overflow(object) ||
-        object->is_arguments || object->is_raw_json) return nullptr;
+        object->is_arguments || object->is_raw_json) return false;
     MalJsonPointerEntry *cached = mal_json_pointer_find(&state->shapes, object->shape);
     if (cached != nullptr) {
         MAL_PERF_COUNT(json_shape_plan_hits);
-        return cached->value;
+        frame->plan = cached->value;
+        frame->count = frame->plan->count;
+        frame->cached_plan = true;
+        return true;
     }
     const MalShape *shape = object->shape;
     usize count = 0;
     for (u32 i = 0; i < shape->inline_count; i++) {
         const MalShapeProp *prop = &shape->props[i];
-        if ((prop->attrs & MAL_PROPERTY_ACCESSOR) != 0) return nullptr;
+        if ((prop->attrs & MAL_PROPERTY_ACCESSOR) != 0) return false;
         if (!mal_value_is_string(prop->key)) continue;
         if (mal_string_equals(mal_value_to_string(prop->key),
-                mal_value_to_string(state->to_json.value))) return nullptr;
+                mal_value_to_string(state->to_json.value))) return false;
         if ((prop->attrs & MAL_PROPERTY_ENUMERABLE) != 0) count++;
     }
-    MalJsonShapePlan *plan = calloc(
-        1, sizeof(*plan) + count * sizeof(MalJsonKeyPlan));
+    // Exhausting the optional cache does not discard output or enter the
+    // observable serializer. Eligible immutable shapes can be walked directly.
+    frame->shape = shape;
+    frame->count = shape->inline_count;
+    usize available = MAL_JSON_PLAN_DATA_BUDGET - state->cache_data_bytes;
+    if (state->shapes.count >= MAL_JSON_PLAN_ENTRY_LIMIT ||
+        available < sizeof(MalJsonShapePlan) ||
+        count > (available - sizeof(MalJsonShapePlan)) / sizeof(MalJsonKeyPlan)) {
+        return true;
+    }
+    usize bytes = sizeof(MalJsonShapePlan) + count * sizeof(MalJsonKeyPlan);
+    MalJsonShapePlan *plan = calloc(1, bytes);
     if (plan == nullptr) abort();
+    state->cache_data_bytes += bytes;
     MAL_PERF_COUNT(json_shape_plans);
-    MAL_PERF_ADD(json_shape_plan_bytes, sizeof(*plan) + count * sizeof(MalJsonKeyPlan));
+    MAL_PERF_ADD(json_shape_plan_bytes, bytes);
     plan->escaped_keys.vm = state->vm;
     for (u32 i = 0; i < shape->inline_count; i++) {
         const MalShapeProp *prop = &shape->props[i];
@@ -944,28 +980,84 @@ static MalJsonShapePlan *mal_json_plain_shape(
         }
     }
     mal_json_pointer_insert(&state->shapes, object->shape, plan);
-    return plan;
+    frame->plan = plan;
+    frame->count = plan->count;
+    frame->cached_plan = true;
+    return true;
 }
 
 static bool mal_json_plain_key(
-    MalJsonBuilder *builder, MalJsonShapePlan *plan, MalJsonKeyPlan *key
+    MalJsonPlainState *state, MalJsonBuilder *builder,
+    MalJsonShapePlan *plan, MalJsonKeyPlan *key
 ) {
-    if (key->length == 0) {
-        key->offset = plan->escaped_keys.buffer.length;
-        if (!mal_json_builder_push_quoted(&plan->escaped_keys, key->key) ||
-            !mal_json_builder_push(&plan->escaped_keys, ':')) return false;
-        key->length = plan->escaped_keys.buffer.length - key->offset;
-        MAL_PERF_ADD(json_escaped_key_code_units, key->length);
-    } else {
+    if (key->length != 0) {
         MAL_PERF_COUNT(json_escaped_key_reuses);
+        MalTextBuffer *keys = &plan->escaped_keys.buffer;
+        MalTextBufferStatus status = keys->utf16
+            ? mal_text_buffer_append_units(
+                &builder->buffer, (const c16 *) keys->data + key->offset, key->length)
+            : mal_text_buffer_append_latin1(
+                &builder->buffer, (const u8 *) keys->data + key->offset, key->length);
+        return status == MAL_TEXT_BUFFER_OK || mal_json_throw_string_length(builder->vm);
     }
+
+    // Quote once into final output. Only retain its encoded range when the
+    // exact buffer capacity, including a possible width promotion, fits.
+    usize start = builder->buffer.length;
+    if (!mal_json_builder_push_quoted(builder, key->key) ||
+        !mal_json_builder_push(builder, ':')) return false;
+    if (plan == nullptr || key->offset == SIZE_MAX) return true;
+    usize length = builder->buffer.length - start;
     MalTextBuffer *keys = &plan->escaped_keys.buffer;
-    MalTextBufferStatus status = keys->utf16
+    usize required;
+    usize capacity = keys->capacity;
+    if (!mal_checked_size_add(
+            keys->length, length, MAL_STRING_MAX_CODE_UNITS, &required)) {
+        key->offset = SIZE_MAX;
+        return true;
+    }
+    if (capacity == 0) {
+        MalTextBuffer hint = {0};
+        mal_text_buffer_hint_capacity(&hint, required);
+        capacity = hint.capacity;
+    } else if (!mal_checked_size_growth(
+            capacity, required, capacity, MAL_STRING_MAX_CODE_UNITS, &capacity)) {
+        key->offset = SIZE_MAX;
+        return true;
+    }
+    usize old_bytes = keys->capacity * (keys->utf16 ? sizeof(c16) : sizeof(u8));
+    usize available = MAL_JSON_PLAN_DATA_BUDGET - state->cache_data_bytes + old_bytes;
+    if (capacity > available) {
+        key->offset = SIZE_MAX;
+        return true;
+    }
+    bool utf16 = keys->utf16;
+    if (!utf16 && builder->buffer.utf16) {
+        const c16 *units = (const c16 *) builder->buffer.data + start;
+        for (usize i = 0; i < length; i++) {
+            if (units[i] > UINT8_MAX) {
+                utf16 = true;
+                break;
+            }
+        }
+    }
+    if (capacity > available / (utf16 ? sizeof(c16) : sizeof(u8))) {
+        key->offset = SIZE_MAX;
+        return true;
+    }
+    if (keys->capacity == 0) mal_text_buffer_hint_capacity(keys, required);
+    MalTextBufferStatus status = builder->buffer.utf16
         ? mal_text_buffer_append_units(
-            &builder->buffer, (const c16 *) keys->data + key->offset, key->length)
+            keys, (const c16 *) builder->buffer.data + start, length)
         : mal_text_buffer_append_latin1(
-            &builder->buffer, (const u8 *) keys->data + key->offset, key->length);
-    return status == MAL_TEXT_BUFFER_OK || mal_json_throw_string_length(builder->vm);
+            keys, (const u8 *) builder->buffer.data + start, length);
+    if (status != MAL_TEXT_BUFFER_OK) return mal_json_throw_string_length(builder->vm);
+    state->cache_data_bytes +=
+        keys->capacity * (keys->utf16 ? sizeof(c16) : sizeof(u8)) - old_bytes;
+    key->offset = required - length;
+    key->length = length;
+    MAL_PERF_ADD(json_escaped_key_code_units, length);
+    return true;
 }
 
 static bool mal_json_plain_frame(
@@ -981,9 +1073,7 @@ static bool mal_json_plain_frame(
         frame->array = true;
         frame->count = array->length;
     } else if (object->header.type == MAL_HEAP_OBJECT) {
-        frame->plan = mal_json_plain_shape(state, object);
-        if (frame->plan == nullptr) return false;
-        frame->count = frame->plan->count;
+        if (!mal_json_plain_shape(state, object, frame)) return false;
     } else {
         return false;
     }
@@ -1075,6 +1165,7 @@ static bool mal_json_try_serialize_plain(
                 continue;
             }
             MalJsonKeyPlan *key = nullptr;
+            MalJsonKeyPlan uncached_key;
             if (frame->array) {
                 MalArrayObject *array = mal_value_to_array_object(frame->value);
                 value = array->elements[frame->position++];
@@ -1082,7 +1173,17 @@ static bool mal_json_try_serialize_plain(
                     value = mal_value_new_null();
                 }
             } else {
-                key = &frame->plan->keys[frame->position++];
+                if (frame->cached_plan) {
+                    key = &frame->plan->keys[frame->position++];
+                } else {
+                    const MalShapeProp *prop = &frame->shape->props[frame->position++];
+                    if (!mal_value_is_string(prop->key) ||
+                        (prop->attrs & MAL_PROPERTY_ENUMERABLE) == 0) continue;
+                    uncached_key = (MalJsonKeyPlan) {
+                        .slot = prop->slot, .key = mal_value_to_string(prop->key),
+                    };
+                    key = &uncached_key;
+                }
                 value = mal_value_to_object(frame->value)->slots[key->slot];
                 if (!mal_value_is_object(value) && mal_json_value_is_omitted(value)) continue;
             }
@@ -1095,7 +1196,8 @@ static bool mal_json_try_serialize_plain(
                 goto unsupported;
             }
             if ((frame->any && !mal_json_builder_push(builder, ',')) ||
-                (key != nullptr && !mal_json_plain_key(builder, frame->plan, key))) goto failed;
+                (key != nullptr && !mal_json_plain_key(
+                    &state, builder, frame->cached_plan ? frame->plan : nullptr, key))) goto failed;
             frame->any = true;
             next = true;
             break;

@@ -295,6 +295,54 @@ for (let offset = 0; offset < 12; offset++) {
 	check(JSON.stringify(paired) === '"' + paired + '"', "wide quote keeps surrogate pairs");
 }
 
+// Exhaust both cache admission limits while ordinary data keeps the iterative
+// traversal. The final shape includes ignored properties and omitted values.
+const diverse = [];
+const diverseExpected = [];
+for (let i = 0; i < 300; i++) {
+	const key = "unique" + i;
+	const object = {};
+	object[key] = i;
+	diverse.push(object);
+	diverseExpected.push('{"' + key + '":' + i + "}");
+}
+const uncached = { visible: 7, omitted: undefined };
+Object.defineProperty(uncached, "hidden", { value: 8 });
+uncached[Symbol("ignored")] = 9;
+diverse.push(uncached);
+diverseExpected.push('{"visible":7}');
+check(
+	JSON.stringify(diverse) === "[" + diverseExpected.join(",") + "]",
+	"uncached eligible shapes preserve ignored and omitted property semantics",
+);
+const wideKey = "Ā".repeat(40000);
+const hugeKeyObject = {};
+hugeKeyObject[wideKey] = 1;
+const hugeKeyExpected = '{"' + wideKey + '":1}';
+check(
+	JSON.stringify([hugeKeyObject, hugeKeyObject]) ===
+		"[" + hugeKeyExpected + "," + hugeKeyExpected + "]",
+	"key encodings larger than the cache budget remain serializable and repeatable",
+);
+let uncachedGetterCalls = 0;
+diverse.push({
+	get final() {
+		uncachedGetterCalls++;
+		return 11;
+	},
+});
+check(
+	JSON.stringify(diverse) === "[" + diverseExpected.join(",") + ',{"final":11}]' &&
+		uncachedGetterCalls === 1,
+	"late fallback after cache exhaustion invokes the getter exactly once",
+);
+const prototypeRows = [];
+for (let i = 0; i < 300; i++) prototypeRows.push(Object.create({ inherited: i }));
+check(
+	JSON.stringify(prototypeRows) === "[" + "{},".repeat(299) + "{}]",
+	"bounded prototype proof eviction preserves output",
+);
+
 for (const token of ["-", "01", "1.", "1e", "1e+", "1e-", "--1", "1.2.3"]) {
 	let caught;
 	try {
