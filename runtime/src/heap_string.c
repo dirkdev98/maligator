@@ -740,7 +740,7 @@ static bool mal_string_is_balance_terminal(const MalString *string) {
 static MalString *mal_string_join(MalHeap *heap, MalString *left, MalString *right) {
     usize length = left->length + right->length;
     usize maximum_child = length - (length + 3) / 4;
-    // A short flat+flat cons gets one extra terminal edge, avoiding a throwaway
+    // A short cons of two leaves gets one extra terminal edge, avoiding a throwaway
     // rotation on its next append. All deeper cons edges still shrink by 1/4.
     if (left->length > maximum_child && !mal_string_is_balance_terminal(left)) {
         if (mal_string_is_balance_terminal(left->left) &&
