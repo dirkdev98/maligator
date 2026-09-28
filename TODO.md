@@ -792,7 +792,9 @@ remains a Maligator extension and does not count as global fetch conformance.
       cost before replacing the eighth-collection cadence. A 15-pair app-batch
       comparison rejected fixed cadence 16: elapsed/CPU did not improve, and
       peak RSS rose about 27% in every pair; its single diagnostic had fewer
-      majors but more minor cell visits. Longer-run resource control is queued.
+      majors but more minor cell visits. Longer-run resource control and a
+      cadence-four comparison with 200/2,000-iteration samples are queued;
+      neither fixed cadence is a pressure policy.
       Validate nested cgroup quota discovery on Linux.
 - [ ] Bounded slices: retain the skipped-block sweep budget only after combined
       latency review. One instrumented app run had more short major slices and a
@@ -831,7 +833,7 @@ remains a Maligator extension and does not count as global fetch conformance.
       unmeasured. The prior app diagnostic allocated only 32,800 bytes during major
       sweep; establish representative long-sweep exposure before adding per-block
       free lists.
-- [ ] Complete the queued long-resource cadence control and primitive-filter HTTP
+- [ ] Complete the queued long-resource cadence controls and primitive-filter HTTP
       ablation; record per-candidate and combined decisions. The retained-source
       five-family portfolio completed with matching output checks and an inconclusive
       0.82% aggregate gain estimate. The separate 30-second HTTP diagnostic is
