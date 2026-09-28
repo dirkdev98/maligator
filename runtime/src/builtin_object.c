@@ -750,12 +750,19 @@ static MalValue mal_builtin_object_get_own_property_descriptor(MalVm *vm, MalVal
         }
     }
 
+    MalValue roots[] = {target, MAL_VALUE_UNDEFINED};
+    MalRootSpan span;
+    mal_gc_root(&span, roots, countof(roots));
     MalKey key;
-    if (!mal_vm_to_property_key(vm, mal_builtin_object_arg(args, arg_count, 1), &key)) {
-        return mal_value_new_undefined();
+    if (!mal_vm_to_property_query(vm, mal_builtin_object_arg(args, arg_count, 1), &key)) {
+        mal_gc_unroot(&span);
+        return MAL_VALUE_UNDEFINED;
     }
+    roots[1] = key.value;
 
-    return mal_builtin_object_own_descriptor(vm, target, key);
+    MalValue result = mal_builtin_object_own_descriptor(vm, target, key);
+    mal_gc_unroot(&span);
+    return result;
 }
 
 // Compute target.[[GetOwnProperty]](key) and, when present, CreateDataProperty
@@ -1643,11 +1650,18 @@ static MalValue mal_builtin_object_has_own(MalVm *vm, MalValue this_value, const
         }
         target = mal_builtin_object_box_primitive(vm, target);
     }
+    MalValue roots[] = {target, MAL_VALUE_UNDEFINED};
+    MalRootSpan span;
+    mal_gc_root(&span, roots, countof(roots));
     MalKey key;
-    if (!mal_vm_to_property_key(vm, mal_builtin_object_arg(args, arg_count, 1), &key)) {
-        return mal_value_new_undefined();
+    if (!mal_vm_to_property_query(vm, mal_builtin_object_arg(args, arg_count, 1), &key)) {
+        mal_gc_unroot(&span);
+        return MAL_VALUE_UNDEFINED;
     }
-    return mal_builtin_object_has_own_resolved(vm, target, key);
+    roots[1] = key.value;
+    MalValue result = mal_builtin_object_has_own_resolved(vm, target, key);
+    mal_gc_unroot(&span);
+    return result;
 }
 
 MalValue mal_builtin_object_has_own_known(
@@ -1663,18 +1677,23 @@ static MalValue mal_builtin_object_prototype_has_own_property(MalVm *vm, MalValu
     (void) callee;
     // Object.prototype.hasOwnProperty(V): ToPropertyKey(V) before ToObject(this).
     MalKey key;
-    if (!mal_vm_to_property_key(vm, mal_builtin_object_arg(args, arg_count, 0), &key)) {
+    if (!mal_vm_to_property_query(vm, mal_builtin_object_arg(args, arg_count, 0), &key)) {
         return mal_value_new_undefined();
     }
+    MalRootSpan span;
+    mal_gc_root(&span, &key.value, 1);
     MalValue target = this_value;
     if (!mal_value_is_object(target)) {
         if (mal_value_is_nil(target)) {
             mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot convert undefined or null to object");
-            return mal_value_new_undefined();
+            mal_gc_unroot(&span);
+            return MAL_VALUE_UNDEFINED;
         }
         target = mal_builtin_object_box_primitive(vm, target);
     }
-    return mal_builtin_object_has_own_resolved(vm, target, key);
+    MalValue result = mal_builtin_object_has_own_resolved(vm, target, key);
+    mal_gc_unroot(&span);
+    return result;
 }
 
 static MalValue mal_builtin_object_prototype_is_prototype_of(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
@@ -1719,24 +1738,26 @@ static MalValue mal_builtin_object_prototype_property_is_enumerable(MalVm *vm, M
     // propertyIsEnumerable(V): ToPropertyKey(V), then ToObject(this); the result
     // is desc.[[Enumerable]] of O.[[GetOwnProperty]](P) (false when absent).
     MalKey key;
-    if (!mal_vm_to_property_key(vm, mal_builtin_object_arg(args, arg_count, 0), &key)) {
+    if (!mal_vm_to_property_query(vm, mal_builtin_object_arg(args, arg_count, 0), &key)) {
         return mal_value_new_undefined();
     }
+    MalRootSpan span;
+    mal_gc_root(&span, &key.value, 1);
     MalValue target = this_value;
     if (!mal_value_is_object(target)) {
         if (mal_value_is_nil(target)) {
             mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot convert undefined or null to object");
-            return mal_value_new_undefined();
+            mal_gc_unroot(&span);
+            return MAL_VALUE_UNDEFINED;
         }
         target = mal_builtin_object_box_primitive(vm, target);
     }
 
     bool present;
     MalPropertyDesc desc;
-    if (!mal_builtin_object_get_own(
-            vm, target, key, &present, &desc)) {
-        return mal_value_new_undefined();
-    }
+    bool ok = mal_builtin_object_get_own(vm, target, key, &present, &desc);
+    mal_gc_unroot(&span);
+    if (!ok) return MAL_VALUE_UNDEFINED;
     return mal_value_new_boolean(present && (desc.flags & MAL_PROPERTY_ENUMERABLE));
 }
 
@@ -2284,29 +2305,38 @@ static MalValue mal_builtin_object_prototype_lookup_accessor(MalVm *vm, MalValue
     }
 
     MalValue object = mal_value_is_object(this_value) ? this_value : mal_builtin_object_box_primitive(vm, this_value);
+    MalValue roots[] = {object, MAL_VALUE_UNDEFINED};
+    MalRootSpan span;
+    mal_gc_root(&span, roots, countof(roots));
     MalKey key;
-    if (!mal_vm_to_property_key(vm, mal_builtin_object_arg(args, arg_count, 0), &key)) {
+    if (!mal_vm_to_property_query(vm, mal_builtin_object_arg(args, arg_count, 0), &key)) {
+        mal_gc_unroot(&span);
         return mal_value_new_undefined();
     }
 
+    roots[1] = key.value;
     // Walk the prototype chain via [[GetOwnProperty]]/[[GetPrototypeOf]]
     // (proxy-aware): an abrupt completion from a trap propagates.
     while (true) {
         bool present;
         MalPropertyDesc desc;
         if (!mal_vm_get_own_property(vm, object, key, &present, &desc)) {
+            mal_gc_unroot(&span);
             return mal_value_new_undefined();
         }
         if (present) {
             if (!(desc.flags & MAL_PROPERTY_ACCESSOR)) {
+                mal_gc_unroot(&span);
                 return mal_value_new_undefined();
             }
+            mal_gc_unroot(&span);
             return is_setter ? desc.setter : desc.getter;
         }
 
         MalValue prototype;
         if (mal_value_is_proxy_object(object)) {
             if (!mal_proxy_get_prototype_of(vm, mal_value_to_proxy_object(object), &prototype)) {
+                mal_gc_unroot(&span);
                 return mal_value_new_undefined();
             }
         } else {
@@ -2314,9 +2344,11 @@ static MalValue mal_builtin_object_prototype_lookup_accessor(MalVm *vm, MalValue
             prototype = p == nullptr ? mal_value_new_null() : mal_value_from_object(p);
         }
         if (mal_value_is_null(prototype)) {
+            mal_gc_unroot(&span);
             return mal_value_new_undefined();
         }
         object = prototype;
+        roots[0] = prototype;
     }
 }
 

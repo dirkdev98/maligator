@@ -118,13 +118,17 @@ static MalValue mal_reflect_get(MalVm *vm, MalValue this_value, const MalValue *
     }
 
     MalKey key;
-    if (!mal_vm_to_property_key(vm, mal_reflect_arg(args, arg_count, 1), &key)) {
+    if (!mal_vm_to_property_query(vm, mal_reflect_arg(args, arg_count, 1), &key)) {
         return mal_value_new_undefined();
     }
 
+    MalRootSpan key_span;
+    mal_gc_root(&key_span, &key.value, 1);
+
     MalValue receiver = arg_count > 2 ? args[2] : target;
-    MalValue out;
+    MalValue out = MAL_VALUE_UNDEFINED;
     mal_vm_get_property_with_receiver(vm, target, key, receiver, &out);
+    mal_gc_unroot(&key_span);
     return out;
 }
 
@@ -161,11 +165,16 @@ static MalValue mal_reflect_has(MalVm *vm, MalValue this_value, const MalValue *
     }
 
     MalKey key;
-    if (!mal_vm_to_property_key(vm, mal_reflect_arg(args, arg_count, 1), &key)) {
+    if (!mal_vm_to_property_query(vm, mal_reflect_arg(args, arg_count, 1), &key)) {
         return mal_value_new_undefined();
     }
 
-    return mal_value_new_boolean(mal_vm_has_property(vm, target, key));
+    MalRootSpan key_span;
+    mal_gc_root(&key_span, &key.value, 1);
+
+    bool result = mal_vm_has_property(vm, target, key);
+    mal_gc_unroot(&key_span);
+    return mal_value_new_boolean(result);
 }
 
 static MalValue mal_reflect_delete_property(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
@@ -178,11 +187,16 @@ static MalValue mal_reflect_delete_property(MalVm *vm, MalValue this_value, cons
     }
 
     MalKey key;
-    if (!mal_vm_to_property_key(vm, mal_reflect_arg(args, arg_count, 1), &key)) {
+    if (!mal_vm_to_property_query(vm, mal_reflect_arg(args, arg_count, 1), &key)) {
         return mal_value_new_undefined();
     }
 
-    return mal_value_new_boolean(mal_vm_delete_property(vm, target, key));
+    MalRootSpan key_span;
+    mal_gc_root(&key_span, &key.value, 1);
+
+    bool result = mal_vm_delete_property(vm, target, key);
+    mal_gc_unroot(&key_span);
+    return mal_value_new_boolean(result);
 }
 
 static MalValue mal_reflect_define_property(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
@@ -224,15 +238,18 @@ static MalValue mal_reflect_get_own_property_descriptor(MalVm *vm, MalValue this
     }
 
     MalKey key;
-    if (!mal_vm_to_property_key(vm, mal_reflect_arg(args, arg_count, 1), &key)) {
+    if (!mal_vm_to_property_query(vm, mal_reflect_arg(args, arg_count, 1), &key)) {
         return mal_value_new_undefined();
     }
 
+    MalRootSpan key_span;
+    mal_gc_root(&key_span, &key.value, 1);
+
     bool present;
     MalPropertyDesc desc;
-    if (!mal_vm_get_own_property(vm, target, key, &present, &desc) || !present) {
-        return mal_value_new_undefined();
-    }
+    bool ok = mal_vm_get_own_property(vm, target, key, &present, &desc);
+    mal_gc_unroot(&key_span);
+    if (!ok || !present) return MAL_VALUE_UNDEFINED;
     return mal_builtin_object_descriptor_object(vm, desc);
 }
 

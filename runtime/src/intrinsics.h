@@ -512,6 +512,9 @@ MalString *mal_intrinsic_ascii(MalVm *vm, const byte *name);
  */
 MalString *mal_property_atomize_string(MalVm *vm, MalString *string);
 
+/** Reuse an existing atom without retaining a previously unseen query string. */
+MalString *mal_property_query_string(MalVm *vm, MalString *string);
+
 /** Return a one-code-unit string, interning Latin-1 values in a VM-local cache. */
 MalString *mal_intrinsic_code_unit(MalVm *vm, c16 code_unit);
 
