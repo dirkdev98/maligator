@@ -33,7 +33,7 @@ typedef struct MalString {
         struct MalString *left;
     };
     u32 length;
-    /** UTF-16 offset into a dependent string's parent. */
+    /** Parent offset for a dependent slice; hash-reuse marker for a cons string. */
     u32 slice_offset;
     union {
         const c16 *code_units;
@@ -189,9 +189,10 @@ typedef struct MalStringIterator {
     MalStringIteratorPart inline_stack[16];
 } MalStringIterator;
 
-/** Segments borrow leaf storage. Root the input across GC, and do not retain a
- * segment across JS reentry or a UTF-16 bridge that may widen that leaf. The
- * iterator uses malloc scratch only and never collects or mutates strings. */
+/** Segments borrow leaf storage. Root the input across GC; do not retain an
+ * iterator or segment across JS reentry or string materialization, including
+ * repeated rope hashing and the UTF-16 bridge. Traversal itself never collects,
+ * mutates strings, or allocates beyond malloc scratch. */
 void mal_string_iterator_init(
     MalStringIterator *iterator, const MalString *string, usize offset, usize length);
 bool mal_string_iterator_next(MalStringIterator *iterator, MalStringSegment *segment);
@@ -214,7 +215,8 @@ static inline usize mal_string_length(const MalString *string) {
 
 /**
  * Hash UTF-16 content independent of physical encoding. Flat strings and slices
- * cache the full hash; ropes are streamed without flattening.
+ * cache the full hash. A rope's first hash streams its leaves; reuse materializes
+ * compact storage and caches the result without collecting or reentering JS.
  */
 u64 mal_string_hash_slow(const MalString *string);
 

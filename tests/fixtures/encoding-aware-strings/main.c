@@ -135,6 +135,45 @@ static bool direct_search_accepts_rope_receivers(MalVm *vm) {
     return true;
 }
 
+static bool reused_rope_hashes_preserve_slice_content(MalVm *vm) {
+    c16 units[40];
+    for (usize i = 0; i < countof(units); i++) units[i] = (c16) (i + 160);
+    MalString *left = mal_string_new_copy(&vm->heap, units, 20);
+    MalString *right = mal_string_new_external(&vm->heap, units + 20, 20);
+    MalString *rope;
+    CHECK(mal_string_new_cons_checked(&vm->heap, left, right, &rope));
+    u64 hash = mal_string_hash_code_units(units, countof(units));
+    CHECK(mal_string_hash(rope) == hash);
+    CHECK(rope->storage == MAL_STRING_STORAGE_CONS && !rope->hash_valid);
+    MalString *slice = mal_string_new_slice(&vm->heap, rope, 7, 26);
+    CHECK(slice->storage == MAL_STRING_STORAGE_DEPENDENT && slice->parent == rope);
+    u64 slice_hash = mal_string_hash_code_units(units + 7, 26);
+    CHECK(mal_string_hash(slice) == slice_hash && slice->hash_valid);
+    CHECK(mal_string_hash(rope) == hash);
+    CHECK(rope->storage == MAL_STRING_STORAGE_OWNED && rope->latin1 && rope->hash_valid);
+    CHECK(mal_string_hash(rope) == hash && mal_string_hash(slice) == slice_hash);
+    MalValue root = mal_value_from_string(slice);
+    MalRootSpan span;
+    mal_gc_root(&span, &root, 1);
+    mal_gc_collect(vm);
+    for (usize i = 0; i < slice->length; i++) CHECK(mal_string_code_unit_at(slice, i) == units[7 + i]);
+    CHECK(mal_string_hash(slice) == slice_hash);
+    mal_gc_unroot(&span);
+
+    units[21] = 0x100;
+    units[27] = 0xd800;
+    units[35] = 0xdc00;
+    left = mal_string_new_copy(&vm->heap, units, 20);
+    right = mal_string_new_copy(&vm->heap, units + 20, 20);
+    CHECK(mal_string_new_cons_checked(&vm->heap, left, right, &rope));
+    hash = mal_string_hash_code_units(units, countof(units));
+    CHECK(mal_string_hash(rope) == hash && rope->storage == MAL_STRING_STORAGE_CONS);
+    CHECK(mal_string_hash(rope) == hash);
+    CHECK(rope->storage == MAL_STRING_STORAGE_OWNED && !rope->latin1 && rope->hash_valid);
+    CHECK(memcmp(mal_string_code_units(rope), units, sizeof(units)) == 0);
+    return true;
+}
+
 static bool dependent_offsets_survive_parent_widening(MalVm *vm) {
     u8 bytes[256];
     for (usize i = 0; i < countof(bytes); i++) bytes[i] = (u8) i;
@@ -261,6 +300,7 @@ int main(void) {
     bool passed = physical_encodings_have_equal_content(&vm)
         && ropes_and_slices_stream_without_materialization(&vm)
         && direct_search_accepts_rope_receivers(&vm)
+        && reused_rope_hashes_preserve_slice_content(&vm)
         && dependent_offsets_survive_parent_widening(&vm)
         && deep_segment_stacks_and_retained_slices(&vm)
         && compact_parse_lookup_build_serialize(&vm);
