@@ -35,7 +35,7 @@ jobs:
         run: |
           npx oxfmt .github/workflows/microbench.yml
           git diff -- .github/workflows/microbench.yml
-          git checkout -- .github/workflows/microbench.yml
+          exit 1
 
       - name: Run the canonical developer gate
         run: npm run test:check -- --workers 4
