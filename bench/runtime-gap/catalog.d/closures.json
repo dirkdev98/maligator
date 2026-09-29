@@ -64,6 +64,42 @@
 				"escaping-capture-projection-helper",
 				"explicit-capture-projection-helper"
 			]
+		},
+		{
+			"id": "branching-capture-projection-helper",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "closure-representation",
+			"category": "language-features",
+			"mechanisms": [
+				"capture-access",
+				"native-call-boundary",
+				"typed-arguments",
+				"control-flow"
+			],
+			"inputShape": "One numeric helper alternates an early return with a 20-term projection; its creator updates a bounded numeric bias before each call.",
+			"unit": "helper calls",
+			"sourceSeam": "src/compiler/core/core-local-capture-arguments.ts",
+			"fixture": "cases/branching-capture-projection-helper.mjs",
+			"controls": ["branching-explicit-capture-projection-helper"]
+		},
+		{
+			"id": "branching-explicit-capture-projection-helper",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "closure-representation",
+			"category": "language-features",
+			"mechanisms": [
+				"capture-access",
+				"native-call-boundary",
+				"typed-arguments",
+				"control-flow"
+			],
+			"inputShape": "One numeric helper alternates an early return with a 20-term projection; its creator updates a bounded numeric bias before each call and passes it as an explicit argument.",
+			"unit": "helper calls",
+			"sourceSeam": "src/compiler/core/core-local-capture-arguments.ts",
+			"fixture": "cases/branching-explicit-capture-projection-helper.mjs",
+			"controls": ["branching-capture-projection-helper"]
 		}
 	]
 }

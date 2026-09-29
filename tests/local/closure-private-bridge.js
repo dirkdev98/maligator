@@ -227,4 +227,45 @@ function coercionBeforeTdz() {
 	return read;
 }
 check("initialized generic coercion call", coercionBeforeTdz()(3), 9);
+
+function controlFlowCaptures(seed) {
+	let bias = seed;
+	const project = (x) => {
+		if (x < 0) throw bias;
+		let sum = 0;
+		for (let i = 0; i < x; i++) {
+			if (i & 1) continue;
+			sum += i + bias;
+		}
+		switch (x & 3) {
+			case 0:
+				return sum + bias;
+			case 1:
+				return sum - bias;
+			default:
+				return sum + x * bias;
+		}
+	};
+	globalThis.controlFlowProjection = project;
+	for (let x = 0; x < 20; x++) {
+		bias = seed + x;
+		let expected = 0;
+		for (let i = 0; i < x; i += 2) expected += i + bias;
+		expected += (x & 3) === 0 ? bias : (x & 3) === 1 ? -bias : x * bias;
+		check("private CFG capture and loop phi", project(x), expected);
+	}
+	let caught;
+	try {
+		project(-1);
+	} catch (error) {
+		caught = error;
+	}
+	check("private CFG throwing exit", caught, bias);
+	check("private CFG function identity", globalThis.controlFlowProjection, project);
+	return project;
+}
+const controlFlowLeft = controlFlowCaptures(7);
+const controlFlowRight = controlFlowCaptures(31);
+check("generic CFG left activation", controlFlowLeft(4), 80);
+check("generic CFG right activation", Reflect.apply(controlFlowRight, null, [4]), 152);
 console.log("closure-private-bridge PASS");

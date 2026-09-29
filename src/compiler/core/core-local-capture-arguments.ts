@@ -6,6 +6,7 @@ import type { CoreControlFlow } from "./core-ir-control-flow.ts";
 import { coreInstructionId } from "./core-ir.ts";
 import type {
 	CoreBlockId,
+	CoreEdge,
 	CoreFunctionId,
 	CoreInstructionId,
 	CoreValueId,
@@ -44,8 +45,11 @@ function key(slot: Capture): string {
 	return `${slot.owner}:${slot.index}`;
 }
 
-// Linear helpers can be cloned without relocating guard facts or exception edges.
-function linearBody(fn: CoreFunctionStore): ReadonlyArray<CoreBlockId> | undefined {
+// Ordinary control flow can be cloned without relocating guard facts or exception edges.
+function helperBody(
+	program: CoreProgram,
+	fn: CoreFunctionStore,
+): ReadonlyArray<CoreBlockId> | undefined {
 	if (
 		fn.isAsync ||
 		fn.isGenerator ||
@@ -56,11 +60,8 @@ function linearBody(fn: CoreFunctionStore): ReadonlyArray<CoreBlockId> | undefin
 		[...fn.factIds()].length !== 0
 	)
 		return undefined;
-	const blocks: Array<CoreBlockId> = [];
-	let block = fn.entry;
-	while (!blocks.includes(block)) {
+	for (const block of fn.blockIds()) {
 		if (fn.kernel.blockHandlerBlock(block) !== undefined) return undefined;
-		blocks.push(block);
 		for (const instruction of fn.bodyInstructionIds(block)) {
 			const opcode = fn.instructionOpcodeName(instruction);
 			if (
@@ -80,14 +81,10 @@ function linearBody(fn: CoreFunctionStore): ReadonlyArray<CoreBlockId> | undefin
 			)
 				return undefined;
 		}
-		const terminator = coreTerminatorInput(fn, fn.blockTerminator(block));
-		if (terminator.kind === "return" || terminator.kind === "throw") {
-			return blocks.length === [...fn.blockIds()].length ? blocks : undefined;
-		}
-		if (terminator.kind !== "jump") return undefined;
-		block = terminator.edge.block;
+		if (fn.instructionKind(fn.blockTerminator(block)) === "guard") return undefined;
 	}
-	return undefined;
+	const blocks = buildCoreControlFlow(program, fn.id).reversePostorder;
+	return blocks.length === [...fn.blockIds()].length ? blocks : undefined;
 }
 
 interface LocalCallPlan extends Creation {
@@ -327,19 +324,28 @@ function liftHelper(
 		parameterCount: fn.parameterCount + captures.length,
 		metadata: fn.metadata,
 	});
-	const entry = builder.createBlock([
-		...Array.from({ length: fn.parameterCount }, (_, index) => ({
-			representation: fn.valueRepresentation(fn.kernel.functionParameter(index)),
-		})),
-		...captures.map(() => ({})),
-	]);
 	const values = new Map<CoreValueId, CoreValueId>();
-	for (let index = 0; index < fn.parameterCount; index++) {
-		values.set(
-			fn.kernel.functionParameter(index),
-			builder.blockParameterValue(entry, index),
-		);
+	const clonedBlocks = new Map<CoreBlockId, CoreBlockId>();
+	for (const block of blocks) {
+		const start = fn.kernel.blockParameterStart(block);
+		const count = fn.kernel.blockParameterCount(block);
+		const clone = builder.createBlock([
+			...Array.from({ length: count }, (_, index) => ({
+				representation: fn.valueRepresentation(
+					fn.kernel.blockParameterValue(start + index),
+				),
+				role: fn.blockParameterRole(start + index),
+			})),
+			...(block === fn.entry ? captures.map(() => ({})) : []),
+		]);
+		clonedBlocks.set(block, clone);
+		for (let index = 0; index < count; index++)
+			values.set(
+				fn.kernel.blockParameterValue(start + index),
+				builder.blockParameterValue(clone, index),
+			);
 	}
+	const entry = clonedBlocks.get(fn.entry)!;
 	const captureValues = new Map(
 		captures.map((slot, index) => [
 			key(slot),
@@ -352,6 +358,7 @@ function liftHelper(
 		return result;
 	};
 	for (const block of blocks) {
+		const clone = clonedBlocks.get(block)!;
 		for (const instruction of fn.bodyInstructionIds(block)) {
 			const opcode = fn.instructionOpcodeName(instruction);
 			const start = fn.kernel.instructionResultStart(instruction);
@@ -364,7 +371,7 @@ function liftHelper(
 				continue;
 			}
 			const outputs = builder.appendInstruction(
-				entry,
+				clone,
 				opcode,
 				inputs(fn, instruction).map(mapped),
 				{
@@ -379,18 +386,68 @@ function liftHelper(
 			for (let index = 0; index < count; index++)
 				values.set(fn.kernel.resultAt(start + index), outputs[index]!);
 		}
-		const terminator = coreTerminatorInput(fn, fn.blockTerminator(block));
-		if (terminator.kind === "jump") {
-			const arguments_ = terminator.edge.arguments.map(mapped);
-			const start = fn.kernel.blockParameterStart(terminator.edge.block);
-			for (const [index, value] of arguments_.entries()) {
-				values.set(fn.kernel.blockParameterValue(start + index), value);
-			}
-		} else if (terminator.kind === "return" || terminator.kind === "throw") {
-			builder.setTerminator(entry, { ...terminator, value: mapped(terminator.value) });
+	}
+	// Backedges may carry values defined after their destination block in RPO.
+	const edge = (original: CoreEdge): CoreEdge => ({
+		block: clonedBlocks.get(original.block)!,
+		arguments: [
+			...original.arguments.map(mapped),
+			...(original.block === fn.entry ? captureValues.values() : []),
+		],
+	});
+	for (const block of blocks) {
+		const clone = clonedBlocks.get(block)!;
+		const instruction = fn.blockTerminator(block);
+		const terminator = coreTerminatorInput(fn, instruction);
+		const sourcePosition = fn.instructionSourcePosition(instruction);
+		switch (terminator.kind) {
+			case "jump":
+				builder.setTerminator(clone, {
+					...terminator,
+					edge: edge(terminator.edge),
+					sourcePosition,
+				});
+				break;
+			case "branch":
+				builder.setTerminator(clone, {
+					...terminator,
+					condition: mapped(terminator.condition),
+					consequent: edge(terminator.consequent),
+					alternate: edge(terminator.alternate),
+					sourcePosition,
+				});
+				break;
+			case "switch":
+				builder.setTerminator(clone, {
+					...terminator,
+					discriminant: mapped(terminator.discriminant),
+					cases: terminator.cases.map((branch) => ({
+						...branch,
+						edge: edge(branch.edge),
+					})),
+					default: edge(terminator.default),
+					sourcePosition,
+				});
+				break;
+			case "return":
+			case "throw":
+				builder.setTerminator(clone, {
+					...terminator,
+					value: mapped(terminator.value),
+					sourcePosition,
+				});
+				break;
+			case "unreachable":
+				builder.setTerminator(clone, { ...terminator, sourcePosition });
+				break;
+			case "guard":
+				throw new Error("Guard facts cannot cross the private capture ABI");
 		}
 	}
-	return builder.finish(entry).function;
+	return builder.finish(
+		entry,
+		fn.bodyEntry === undefined ? undefined : clonedBlocks.get(fn.bodyEntry),
+	).function;
 }
 
 /** Supply stable-for-the-call captures as ordinary SSA inputs to private helper entries. */
@@ -475,7 +532,7 @@ export function liftLocalCaptureArguments(
 		const sites = creations.get(id);
 		if (sites === undefined || sites.length === 0) continue;
 		const fn = program.function(id);
-		const blocks = linearBody(fn);
+		const blocks = helperBody(program, fn);
 		if (blocks === undefined) continue;
 		const captures = new Map<string, Capture>();
 		for (const block of blocks)

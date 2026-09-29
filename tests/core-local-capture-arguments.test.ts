@@ -177,6 +177,56 @@ describe("private local capture arguments", () => {
 		expect(privateHelpers(image)).toHaveLength(1);
 	});
 
+	it.each([
+		["branches", `if (x < 0) return bias - x; return ${arithmetic};`],
+		[
+			"loop-carried values",
+			`let sum = 0; for (let i = 0; i < (x & 7); i++) sum += i + bias; return sum + ${arithmetic};`,
+		],
+		[
+			"switch edges",
+			`switch (x & 3) { case 0: return bias; case 1: return x - bias; default: return ${arithmetic}; }`,
+		],
+	])("connects captures through %s to numeric native entries", (_label, body) => {
+		const image = deserializeCompilerArtifact(
+			serializeCompilerArtifact(
+				compile(
+					localSource.replace(
+						`const read = x => ${arithmetic};`,
+						`const read = x => { ${body} };`,
+					),
+					true,
+					true,
+				),
+			),
+		);
+		const helpers = privateHelpers(image);
+		expect(helpers).toHaveLength(1);
+		expect(
+			helpers[0]!.fn.instructions.some(
+				(instruction) => instruction.opcode === "LOAD_CAPTURED",
+			),
+		).toBe(false);
+		expect(helpers[0]!.native.directEntries).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({
+					parameterRepresentations: ["number", "number"],
+					resultRepresentation: "number",
+				}),
+			]),
+		);
+	});
+
+	it("keeps helpers with exception edges on their original capture convention", () => {
+		const image = compile(
+			localSource.replace(
+				`const read = x => ${arithmetic};`,
+				`const read = x => { try { globalThis.observe(x); return ${arithmetic}; } catch { return bias; } };`,
+			),
+		);
+		expect(privateHelpers(image)).toHaveLength(0);
+	});
+
 	it("keeps escaping closure objects on their original calling convention", () => {
 		const image = compile(`globalThis.run = seed => {
 			const bias = seed; const read = x => ${arithmetic};

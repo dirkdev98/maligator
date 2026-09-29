@@ -20,6 +20,38 @@ right.write(12);
 check("distinct setter", right.read(), 12);
 check("no cross-activation alias", deep(), 4);
 
+function makeDeepFamily(seed) {
+	let outer = { value: seed };
+	return {
+		write: (next) => (outer = { value: next }),
+		middle: (offset) => () => () => outer.value + offset,
+	};
+}
+const deepFamily = makeDeepFamily(30);
+const delayedFactory = deepFamily.middle(2);
+deepFamily.write(50);
+const delayedReader = delayedFactory();
+deepFamily.write(70);
+check("intermediate closures forward ancestor cells", delayedReader(), 72);
+
+function recursiveActivations(depth) {
+	let value = depth;
+	const nested = depth === 0 ? [] : recursiveActivations(depth - 1);
+	nested.push({
+		read: () => () => value,
+		write: (next) => (value = next),
+	});
+	return nested;
+}
+const recursiveBindings = recursiveActivations(3);
+const recursiveReaders = recursiveBindings.map((entry) => entry.read());
+recursiveBindings[2].write(42);
+check(
+	"recursive owners retain their own activation",
+	recursiveReaders.map((read) => read()).join(","),
+	"0,1,42,3",
+);
+
 const iterations = [];
 for (let i = 0; i < 4; i++) {
 	let value = i * 10;
@@ -31,6 +63,22 @@ check(
 	iterations.map((entry) => entry.read()).join(","),
 	"0:0,1:99,2:20,3:30",
 );
+
+const iterationFactories = [];
+for (let i = 0; i < 3; i++) {
+	iterationFactories.push(() => ({
+		read: () => i,
+		write: (next) => (i = next),
+	}));
+}
+const delayedIterations = iterationFactories.map((create) => create());
+delayedIterations[1].write(8);
+check(
+	"descendants created after the loop share the original iteration cell",
+	delayedIterations.map((entry) => entry.read()).join(","),
+	"0,8,2",
+);
+check("separate descendants share the same iteration", iterationFactories[1]().read(), 8);
 
 function initializedLater() {
 	const read = () => value;
@@ -111,6 +159,72 @@ check("first suspended activation", a.next().value, 1);
 check("second suspended activation", b.next().value, 2);
 check("resumed shared cell", a.next().value, 3);
 check("generator state remains shared", counter.read(), 3);
+
+function* suspendedIterations() {
+	for (let i = 0; i < 3; i++) {
+		yield { read: () => i, write: (next) => (i = next) };
+	}
+}
+const suspended = suspendedIterations();
+const suspendedFirst = suspended.next().value;
+const suspendedSecond = suspended.next().value;
+suspendedFirst.write(20);
+check("resumed loop copies into a new capture identity", suspendedSecond.read(), 1);
+check("old suspended iteration stays mutable", suspendedFirst.read(), 20);
+check("resumed loop keeps its current identity", suspended.next().value.read(), 2);
+
+function capturedArguments(value) {
+	return {
+		read: () => [arguments[0].count, value.count].join(":"),
+		replaceArgument: (next) => (arguments[0] = { count: next }),
+		replaceParameter: (next) => (value = { count: next }),
+	};
+}
+const argumentsFamily = capturedArguments({ count: 3 });
+argumentsFamily.replaceArgument(5);
+argumentsFamily.replaceParameter(7);
+check(
+	"lexical arguments and strict parameter cells stay distinct",
+	argumentsFamily.read(),
+	"5:7",
+);
+
+function capturedPrivateNames(seed) {
+	return class Holder {
+		#value = seed;
+		family() {
+			return {
+				read: () => this.#value,
+				write: (next) => (this.#value = next),
+			};
+		}
+		static reader() {
+			return (instance) => instance.#value;
+		}
+	};
+}
+const FirstHolder = capturedPrivateNames(13);
+const SecondHolder = capturedPrivateNames(17);
+const firstHolder = new FirstHolder();
+const privateFamily = firstHolder.family();
+privateFamily.write(19);
+check(
+	"private names and receiver survive nested closure creation",
+	privateFamily.read(),
+	19,
+);
+check("class constructor retains outer capture", new SecondHolder().family().read(), 17);
+let rejectedPrivateBrand = false;
+try {
+	SecondHolder.reader()(firstHolder);
+} catch (error) {
+	rejectedPrivateBrand = error instanceof TypeError;
+}
+check(
+	"separate class evaluations retain distinct private names",
+	rejectedPrivateBrand,
+	true,
+);
 
 function Receiver(value) {
 	this.value = value;
