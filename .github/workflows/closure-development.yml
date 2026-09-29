@@ -1,36 +1,62 @@
-name: Closure development workspace
+name: Closure development validation
 
 on:
   push:
     branches: [perf/compact-closures-native-calls]
-    paths: [.github/workflows/closure-development.yml]
+    paths: [.github/closure-development.patch]
 
-permissions:
-  contents: read
+permissions: {}
 
 jobs:
-  workspace:
+  apply:
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    outputs:
+      revision: ${{ steps.apply.outputs.revision }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          persist-credentials: false
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
-        with:
-          node-version: 24.14.1
-          package-manager-cache: false
-      - run: npm ci --ignore-scripts --no-audit --no-fund
-      - name: Package source and Node dependencies for offline development
+          ref: perf/compact-closures-native-calls
+      - name: Apply the submitted change on the isolated development branch
+        id: apply
+        shell: bash
         run: |
-          mkdir -p "$RUNNER_TEMP/closure-workspace/source"
-          git archive HEAD | tar -x -C "$RUNNER_TEMP/closure-workspace/source"
-          cp -a node_modules "$RUNNER_TEMP/closure-workspace/source/"
-          cp "$(command -v node)" "$RUNNER_TEMP/closure-workspace/node"
-          printf '%s\n' "$GITHUB_SHA" > "$RUNNER_TEMP/closure-workspace/revision.txt"
-          tar -czf "$RUNNER_TEMP/closure-workspace.tar.gz" -C "$RUNNER_TEMP" closure-workspace
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          patch=.github/closure-development.patch
+          message="$(head -n 1 "$patch" | sed 's/^# //')"
+          git apply --check "$patch"
+          git apply --index "$patch"
+          git rm "$patch"
+          git config user.name 'Dirk de Visser'
+          git config user.email 'github@dirkdevisser.nl'
+          git -c commit.gpgsign=false commit -m "$message"
+          git push origin HEAD:refs/heads/perf/compact-closures-native-calls
+          echo "revision=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+  verify:
+    needs: apply
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          name: closure-workspace
-          path: ${{ runner.temp }}/closure-workspace.tar.gz
-          retention-days: 1
+          ref: ${{ needs.apply.outputs.revision }}
+          persist-credentials: false
+      - uses: ./.github/actions/setup-linux
+      - run: npm run env:check -- --json
+      - run: npm run type-check
+      - name: Check capture lowering
+        run: npm run test:unit -- --run tests/native-closure-captures.test.ts
+      - name: Check closure semantics in both backends and GC stress
+        run: npm run test:native -- tests/native/compact-closures.test.ts
+      - name: Retain validation reports
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: closure-validation-${{ github.run_id }}
+          path: .cache/mal-build/test-suite/*.json
+          if-no-files-found: ignore
+          retention-days: 7
