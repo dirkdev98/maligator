@@ -11,6 +11,8 @@ extern const MalRuntimeImage mal_runtime_image;
 
 static MalHeapHeader *tracked[4];
 static i32 finalized[4];
+static MalHeapHeader *borrowed_vector_owner;
+static i32 borrowed_vector_finalizations;
 
 static usize no_workers(void) {
     return 0;
@@ -20,6 +22,10 @@ static void count_finalized(MalHeapHeader *cell) {
     for (usize i = 0; i < countof(tracked); i++) {
         if (tracked[i] == cell) finalized[i]++;
     }
+}
+
+static void count_vector_finalized(MalHeapHeader *cell) {
+    if (cell == borrowed_vector_owner) borrowed_vector_finalizations++;
 }
 
 static MalValue tracked_object(MalVm *vm, usize index) {
@@ -244,6 +250,50 @@ static int check_lookup_and_reexport(const MalRuntimeImage *image) {
     return 0;
 }
 
+static int check_fallback_vector_ownership(const MalRuntimeImage *image) {
+    for (usize i = 0; i < countof(tracked); i++) tracked[i] = nullptr;
+    MalVm vm;
+    mal_vm_init(&vm, image);
+    MalValue roots[2] = { mal_value_new_undefined(), mal_value_new_undefined() };
+    MalRootSpan span;
+    mal_gc_root(&span, roots, countof(roots));
+    MalEnv *base = mal_env_new(&vm, nullptr, 0, 1);
+    base->slots[0] = tracked_object(&vm, 0);
+    MalEnv *middle = mal_env_new(&vm, base, 1, 1);
+    middle->slots[0] = tracked_object(&vm, 1);
+    MalEnv *unselected = mal_env_new(&vm, middle, 3, 0);
+    MalEnv *last = mal_env_new(&vm, unselected, 4, 1);
+    last->slots[0] = tracked_object(&vm, 2);
+    MalValue source = mal_vm_op_create_function(&vm, 5, last);
+    MalFunctionObject *source_function = mal_value_to_function_object(source);
+    MalEnv *display = source_function->creation_env;
+    if (mal_env_is_single_owner(display) ||
+        display->function_index != MAL_ENV_CAPTURE_VECTOR) return 36;
+    borrowed_vector_owner = &source_function->object.header;
+    borrowed_vector_finalizations = 0;
+    roots[0] = mal_vm_op_create_function(&vm, 6, display);
+    if (mal_value_to_function_object(roots[0])->creation_env != display) return 37;
+    mal_gc_collect(&vm);
+    if (borrowed_vector_finalizations != 0) return 38;
+    if (mal_value_to_heap(mal_vm_load_captured(display, 1, 0)) != tracked[1]) return 39;
+
+    roots[1] = mal_vm_op_create_function(&vm, 7, display);
+    if (mal_value_to_function_object(roots[1])->creation_env != display) return 40;
+    roots[0] = mal_value_new_undefined();
+    mal_gc_collect(&vm);
+    if (borrowed_vector_finalizations != 0) return 41;
+    if (mal_value_to_heap(mal_vm_load_captured(display, 4, 0)) != tracked[2] ||
+        !mal_value_is_undefined(mal_vm_load_captured(display, 6, 0))) return 42;
+    roots[1] = mal_value_new_undefined();
+    mal_gc_collect(&vm);
+    if (borrowed_vector_finalizations != 1 ||
+        finalized[0] != 1 || finalized[1] != 1 || finalized[2] != 1) return 43;
+    borrowed_vector_owner = nullptr;
+    mal_gc_unroot(&span);
+    mal_vm_free(&vm);
+    return 0;
+}
+
 static int check_snapshot(const MalRuntimeImage *image) {
     for (usize i = 0; i < countof(tracked); i++) tracked[i] = nullptr;
     MalVm vm;
@@ -304,23 +354,31 @@ int main(void) {
     const i32 captured_owner[] = { 1 };
     const i32 captured_owners[] = { 1, 4 };
     const i32 all_owners[] = { 0, 1, 4 };
-    MalFunction functions[6];
+    const i32 incomplete_owners[] = { 0, 1, 4, 6 };
+    MalFunction functions[8];
     for (usize i = 0; i < countof(functions); i++) {
         functions[i] = mal_runtime_image.functions[0];
         functions[i].closure_capture_owners = i == 2 ? captured_owner
             : i == 3 ? captured_owners : i == 5 ? all_owners : empty_layout;
         functions[i].closure_capture_owner_count = i == 2 ? 1 : i == 3 ? 2 : i == 5 ? 3 : 0;
     }
+    functions[6].closure_capture_owners = nullptr;
+    functions[6].closure_capture_owner_count = -1;
+    functions[7].closure_capture_owners = incomplete_owners;
+    functions[7].closure_capture_owner_count = countof(incomplete_owners);
     MalRuntimeImage image = mal_runtime_image;
     image.functions = functions;
     image.function_count = countof(functions);
     mal_gc_test_worker_limit_hook = no_workers;
     mal_gc_register_finalizer(MAL_HEAP_OBJECT, count_finalized);
+    mal_gc_register_finalizer(MAL_HEAP_FUNCTION_OBJECT, count_vector_finalized);
     int result = check_retention(&image);
     if (result == 0) result = check_single_owner_frame(&image);
     if (result == 0) result = check_lookup_and_reexport(&image);
+    if (result == 0) result = check_fallback_vector_ownership(&image);
     if (result == 0) result = check_snapshot(&image);
     mal_gc_register_finalizer(MAL_HEAP_OBJECT, nullptr);
+    mal_gc_register_finalizer(MAL_HEAP_FUNCTION_OBJECT, nullptr);
     mal_gc_test_worker_limit_hook = nullptr;
     if (result != 0) {
         fprintf(stderr, "closure-capture-retention failed at %d\n", result);

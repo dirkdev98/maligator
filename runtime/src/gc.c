@@ -1306,6 +1306,9 @@ static void mal_gc_trace_cell(MalHeapHeader *cell) {
             MalEnv *env = ((MalFunctionObject *) cell)->creation_env;
             if (env != nullptr && !mal_env_is_single_owner(env) &&
                     env->function_index == MAL_ENV_CAPTURE_VECTOR) {
+                // Fallback closures can borrow a display coallocated in another function.
+                MalHeapHeader *owner = (MalHeapHeader *) env->parent;
+                if (owner != cell) mal_gc_shade(owner);
                 MalEnv **scopes = mal_env_capture_scopes(env);
                 for (i32 i = 0; i < env->slot_count; i++) {
                     mal_gc_shade(&scopes[i]->header);
