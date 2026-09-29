@@ -676,6 +676,7 @@ function firstNativeSafepointReader(bytes: Uint8Array) {
 	expect(reader.u32()).toBe(0); // Semantic protectors.
 	expect(reader.u32()).toBe(1); // Native functions.
 	expect(reader.u8()).toBe(0); // Unknown closure requirements retain the chain.
+	expect(reader.u8()).toBe(0); // No immutable value captures.
 	expect(reader.u32()).toBe(2); // Ordinary-entry safepoints.
 	return reader;
 }

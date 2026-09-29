@@ -751,6 +751,38 @@ describe("emit-program-image instruction packing", () => {
 		).toHaveLength(2);
 	});
 
+	it("shares immutable capture descriptors in ordinary and batch function tables", () => {
+		const leaf: BytecodeFunction = {
+			...fn,
+			capturedCount: 0,
+			closureCaptureOwners: [0],
+			closureCaptureValues: [{ ownerFunctionIndex: 0, capturedIndex: 1 }],
+			instructions: [
+				{ opcode: "LOAD_CAPTURED", dst: 0, ownerFunctionIndex: 0, index: 1 },
+				{ opcode: "RETURN", value: 0 },
+			],
+		};
+		const functions = [fn, leaf, { ...leaf }];
+		const image: ProgramImage = {
+			...definition,
+			runtime: { ...definition.runtime, functionCount: functions.length, functions },
+			native: createConservativeNativePlan(functions),
+		};
+		for (const output of [
+			emitProgramImage(image, { compiled: false }),
+			emitBatch([image], { compiled: false }),
+		]) {
+			const rows = malFunctionRows(output);
+			expect(rows[0]!.closure_capture_values).toBe("nullptr");
+			expect(rows[0]!.closure_capture_value_count).toBe("0");
+			expect(rows[1]!.closure_capture_values).not.toBe("nullptr");
+			expect(rows[1]!.closure_capture_values).toBe(rows[2]!.closure_capture_values);
+			expect(rows[1]!.closure_capture_value_count).toBe("1");
+			expect(output.match(/static const MalClosureCaptureValue /g)).toHaveLength(1);
+			expect(output).toContain("{ .owner_function_index = 0, .captured_index = 1 }");
+		}
+	});
+
 	it("rejects malformed runtime proofs from ordinary and batch C output", () => {
 		const invalidCallFunction: BytecodeFunction = {
 			...fn,

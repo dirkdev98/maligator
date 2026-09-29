@@ -135,16 +135,22 @@ describe("external closure scope requirements", () => {
 		expect(analyzed.runtime.functions.every(vmSafepointRootMapsAreTrusted)).toBe(true);
 	});
 
-	it.each([[0], [1], [-1, -1], [-1, -2], [1.5], [-0x80000000], [-0x7fffffff]])(
-		"rejects invalid cached closure owners %j",
-		(...owners) => {
-			const image = compile("globalThis.result = 1;");
-			image.runtime.functions[0]!.closureCaptureOwners = owners;
-			expect(() => serializeCompilerArtifact(image)).toThrow(
-				"invalid closure capture owners",
-			);
-		},
-	);
+	it.each([
+		[0],
+		[1],
+		[-1, -1],
+		[-1, -2],
+		[1.5],
+		[-0x80000000],
+		[-0x7fffffff],
+		[-0x7ffffffe],
+	])("rejects invalid cached closure owners %j", (...owners) => {
+		const image = compile("globalThis.result = 1;");
+		image.runtime.functions[0]!.closureCaptureOwners = owners;
+		expect(() => serializeCompilerArtifact(image)).toThrow(
+			"invalid closure capture owners",
+		);
+	});
 
 	it("retains exact scope requirements through compiler caching and both C table formats", () => {
 		const image = compile(`globalThis.make = function make(seed) {

@@ -1483,7 +1483,7 @@ MalValue mal_vm_op_with_get(MalVm *vm, MalEnv *env, i32 name_string_index) {
     MalKey key;
     if (mal_vm_value_to_property_key(vm, name, &key)) {
         for (MalEnv *e = env; e != nullptr && !mal_env_is_single_owner(e) &&
-                e->function_index != MAL_ENV_CAPTURE_VECTOR; e = e->parent) {
+                !mal_env_is_capture_display(e); e = e->parent) {
             if (e->function_index != MAL_ENV_WITH_OBJECT) {
                 continue;
             }
@@ -1514,7 +1514,7 @@ MalValue mal_vm_op_with_resolve_base(MalVm *vm, MalEnv *env, i32 name_string_ind
     MalKey key;
     if (mal_vm_value_to_property_key(vm, name, &key)) {
         for (MalEnv *e = env; e != nullptr && !mal_env_is_single_owner(e) &&
-                e->function_index != MAL_ENV_CAPTURE_VECTOR; e = e->parent) {
+                !mal_env_is_capture_display(e); e = e->parent) {
             if (e->function_index != MAL_ENV_WITH_OBJECT) {
                 continue;
             }
@@ -1549,7 +1549,7 @@ bool mal_vm_op_with_set(MalVm *vm, MalEnv *env, i32 name_string_index, MalValue 
     MalKey key;
     if (mal_vm_value_to_property_key(vm, name, &key)) {
         for (MalEnv *e = env; e != nullptr && !mal_env_is_single_owner(e) &&
-                e->function_index != MAL_ENV_CAPTURE_VECTOR; e = e->parent) {
+                !mal_env_is_capture_display(e); e = e->parent) {
             if (e->function_index != MAL_ENV_WITH_OBJECT) {
                 continue;
             }
@@ -1641,6 +1641,7 @@ bool mal_vm_capture_owners(MalEnv *source_env, const i32 *owners, i32 count, Mal
     for (MalEnv *env = source_env; env != nullptr && remaining > 0;) {
         bool terminal = mal_env_is_single_owner(env);
         if (terminal) env = mal_env_untag_single_owner(env);
+        if (env->function_index == MAL_ENV_CAPTURE_VALUES) break;
         if (env->function_index == MAL_ENV_CAPTURE_VECTOR) {
             // Both layouts are sorted. Copy selected owners once, leaving
             // any nearer activation of the same lexical owner in place.
@@ -1689,7 +1690,7 @@ static bool mal_vm_capture_chain_is_complete(MalEnv *env, const i32 *owners, i32
         if (env == nullptr) return false;
         bool terminal = mal_env_is_single_owner(env);
         MalEnv *scope = terminal ? mal_env_untag_single_owner(env) : env;
-        if (scope->function_index == MAL_ENV_CAPTURE_VECTOR ||
+        if (mal_env_is_capture_display(scope) ||
                 scope->function_index == MAL_ENV_WITH_OBJECT ||
                 !scope->compact_parent || scope->function_index != owners[index]) {
             return false;
@@ -1698,6 +1699,42 @@ static bool mal_vm_capture_chain_is_complete(MalEnv *env, const i32 *owners, i32
         env = scope->parent;
     }
     return env == nullptr;
+}
+
+// A value display is terminal; its parent is the allocating function object.
+static bool mal_vm_capture_value(MalEnv *env, i32 owner_function_index, i32 index, MalValue *value) {
+    for (; env != nullptr;) {
+        bool terminal = mal_env_is_single_owner(env);
+        if (terminal) env = mal_env_untag_single_owner(env);
+        if (env->function_index == MAL_ENV_CAPTURE_VALUES) {
+            const MalClosureCaptureValue *layout = mal_env_capture_values_layout(env);
+            i32 low = 0, high = env->slot_count;
+            while (low < high) {
+                i32 mid = low + (high - low) / 2;
+                if (layout[mid].owner_function_index < owner_function_index ||
+                        (layout[mid].owner_function_index == owner_function_index &&
+                         layout[mid].captured_index < index)) low = mid + 1;
+                else high = mid;
+            }
+            if (low == env->slot_count || layout[low].owner_function_index != owner_function_index ||
+                    layout[low].captured_index != index) return false;
+            *value = env->slots[low + 1];
+            return true;
+        }
+        if (env->function_index == MAL_ENV_CAPTURE_VECTOR) {
+            env = mal_vm_capture_owner(env, owner_function_index);
+            terminal = true;
+            if (env == nullptr) return false;
+        }
+        if (env->function_index == owner_function_index) {
+            if (index < 0 || index >= env->slot_count) return false;
+            *value = env->slots[index];
+            return true;
+        }
+        if (terminal) return false;
+        env = env->parent;
+    }
+    return false;
 }
 
 MalValue mal_vm_op_create_function(MalVm *vm, i32 function_index, MalEnv *creation_env) {
@@ -1730,6 +1767,11 @@ MalValue mal_vm_op_create_function(MalVm *vm, i32 function_index, MalEnv *creati
         creation_env, definition->closure_capture_owners, capture_count);
     usize capture_bytes = capture_count > 1 && !complete_capture_chain
         ? sizeof(MalEnv) + ((usize) capture_count + 1) * sizeof(void *) : 0;
+    i32 value_count = definition->closure_capture_values != nullptr &&
+            definition->closure_capture_value_count > 0 && definition->closure_capture_value_count <= 16
+        ? definition->closure_capture_value_count : 0;
+    usize value_bytes = value_count > 0 ? sizeof(MalEnv) + ((usize) value_count + 1) * sizeof(MalValue) : 0;
+    if (value_bytes > capture_bytes) capture_bytes = value_bytes;
     MalFunctionObject *function = mal_function_object_new(
         &vm->heap,
         mal_value_to_object(vm->intrinsics[prototype_slot]),
@@ -1741,6 +1783,30 @@ MalValue mal_vm_op_create_function(MalVm *vm, i32 function_index, MalEnv *creati
         capture_bytes
     );
     function->creation_env = creation_env;
+    if (value_count > 0) {
+        MalEnv *captures = (MalEnv *) ((MalValue *) (function + 1) + 2);
+        captures->parent = (MalEnv *) function;
+        captures->function_index = MAL_ENV_CAPTURE_VALUES;
+        captures->slot_count = value_count;
+        captures->compact_parent = false;
+        captures->compact_chain_length = 0;
+        ((const MalClosureCaptureValue **)(void *) captures->slots)[0] = definition->closure_capture_values;
+        bool complete = true;
+        for (i32 i = 0; i < value_count; i++) {
+            const MalClosureCaptureValue *capture = &definition->closure_capture_values[i];
+            MalValue value;
+            if (!mal_vm_capture_value(creation_env, capture->owner_function_index, capture->captured_index, &value) ||
+                    mal_value_is_empty(value)) {
+                complete = false;
+                break;
+            }
+            captures->slots[i + 1] = value;
+        }
+        if (complete) {
+            function->creation_env = captures;
+            return mal_value_from_function_object(function);
+        }
+    }
     if (capture_count == 0) {
         function->creation_env = nullptr;
     } else if (capture_count == 1) {
@@ -1839,6 +1905,7 @@ MalEnv *mal_vm_capture_owner(MalEnv *env, i32 owner_function_index) {
             MalEnv *owner = mal_env_untag_single_owner(env);
             return owner->function_index == owner_function_index ? owner : nullptr;
         }
+        if (env->function_index == MAL_ENV_CAPTURE_VALUES) return nullptr;
         if (env->function_index == owner_function_index) return env;
         if (env->function_index == MAL_ENV_CAPTURE_VECTOR) {
             const i32 *owners = mal_env_capture_layout(env);
@@ -1856,8 +1923,9 @@ MalEnv *mal_vm_capture_owner(MalEnv *env, i32 owner_function_index) {
 }
 
 MalValue mal_vm_load_captured(MalEnv *env, i32 owner_function_index, i32 index) {
-    MalEnv *owner = mal_vm_capture_owner(env, owner_function_index);
-    return owner != nullptr ? owner->slots[index] : mal_value_new_undefined();
+    MalValue value;
+    return mal_vm_capture_value(env, owner_function_index, index, &value)
+        ? value : mal_value_new_undefined();
 }
 
 void mal_vm_store_captured(MalEnv *env, i32 owner_function_index, i32 index, MalValue value) {

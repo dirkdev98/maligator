@@ -71,6 +71,34 @@ function image(
 }
 
 describe("Test262 VM image merger", () => {
+	it("rebases immutable capture owners without aliasing descriptor arrays or entries", () => {
+		const owner = { ...vmFunction([{ opcode: "RETURN", value: 0 }]), capturedCount: 3 };
+		const child = {
+			...vmFunction([
+				{ opcode: "LOAD_CAPTURED", dst: 0, ownerFunctionIndex: 0, index: 2 },
+				{ opcode: "RETURN", value: 0 },
+			]),
+			closureCaptureOwners: [0],
+			closureCaptureValues: [{ ownerFunctionIndex: 0, capturedIndex: 2 }],
+		};
+		const { image: merged } = mergeProgramImages([
+			image(),
+			image({ functions: [owner, child] }),
+		]);
+		const relocated = merged.runtime.functions[2]!;
+		expect(relocated.closureCaptureValues).toEqual([
+			{ ownerFunctionIndex: 1, capturedIndex: 2 },
+		]);
+		expect(relocated.closureCaptureOwners).toEqual([1]);
+		expect(relocated.instructions[0]).toMatchObject({ ownerFunctionIndex: 1, index: 2 });
+		expect(relocated.closureCaptureValues).not.toBe(child.closureCaptureValues);
+		expect(relocated.closureCaptureValues![0]).not.toBe(child.closureCaptureValues[0]);
+		expect(child.closureCaptureValues).toEqual([
+			{ ownerFunctionIndex: 0, capturedIndex: 2 },
+		]);
+		expect(merged.runtime.functions[0]!.closureCaptureValues).toBeUndefined();
+	});
+
 	it("rebases closure owners while preserving loop identities and unknown capture layouts", () => {
 		const prefix = image({
 			functions: [

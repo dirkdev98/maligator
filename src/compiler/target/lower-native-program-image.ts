@@ -1,3 +1,4 @@
+import { analyzeClosureCaptureValues } from "./analyze-closure-capture-values.ts";
 import { analyzeClosureCaptures } from "./analyze-closure-captures.ts";
 import { compactCaptureStorage } from "./compact-capture-storage.ts";
 import type { ExecutionProgram } from "./execution-ir.ts";
@@ -13,7 +14,10 @@ export function lowerExecutionToProgramImage(
 	verifyNativeExecutionProgram(program);
 	return analyzeClosureCaptures(
 		compactCaptureStorage(
-			lowerVerifiedExecutionToProgramImage(program, profile),
+			analyzeClosureCaptureValues(
+				lowerVerifiedExecutionToProgramImage(program, profile),
+				program,
+			),
 			program.context,
 		),
 		program.context,

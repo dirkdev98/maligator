@@ -121,9 +121,34 @@ import type { BytecodeFunction, BytecodeInstruction } from "./runtime-image.ts";
  */
 type RegisterRep = VmRegisterRepresentation;
 
+function copiedCaptureValues(fn: BytecodeFunction) {
+	return fn.strict && !fn.isGenerator && !fn.isAsync && fn.capturedCount === 0
+		? (fn.closureCaptureValues ?? [])
+		: [];
+}
+
+function captureValueKey(ownerFunctionIndex: number, capturedIndex: number): string {
+	return `${ownerFunctionIndex}:${capturedIndex}`;
+}
+
+function copiedCaptureIndexes(fn: BytecodeFunction): ReadonlyMap<string, number> {
+	return new Map(
+		copiedCaptureValues(fn).map((capture, index) => [
+			captureValueKey(capture.ownerFunctionIndex, capture.capturedIndex),
+			index,
+		]),
+	);
+}
+
 function fixedCaptureOwners(fn: BytecodeFunction, functionIndex: number): Array<number> {
 	const owners = new Set<number>();
+	const copied = copiedCaptureIndexes(fn);
 	for (const instruction of fn.instructions) {
+		if (
+			instruction.opcode === "LOAD_CAPTURED" &&
+			copied.has(captureValueKey(instruction.ownerFunctionIndex, instruction.index))
+		)
+			continue;
 		if (
 			(instruction.opcode === "LOAD_CAPTURED" ||
 				instruction.opcode === "STORE_CAPTURED") &&
@@ -206,6 +231,18 @@ function initializeFixedCaptureOwners(
 				: `mal_vm_capture_owner_at(env, ${relocation.ownerFunctionIndex(owner)}, ${captureIndex})`;
 		return `${binding}__capture_owner_${owner} = ${lookup};`;
 	});
+}
+
+function initializeCopiedCaptureValues(
+	fn: BytecodeFunction,
+	relocation: NativeRelocationExpressions,
+): Array<string> {
+	// A direct entry can receive an ordinary or foreign display. The inline
+	// accessor validates the tuple before reading its certified display ordinal.
+	return copiedCaptureValues(fn).map(
+		(capture, index) =>
+			`const MalValue __capture_value_${index} = mal_vm_load_captured_value_at(env, ${relocation.ownerFunctionIndex(capture.ownerFunctionIndex)}, ${capture.capturedIndex}, ${index});`,
+	);
 }
 
 function isNumericRep(rep: RegisterRep): boolean {
@@ -1121,7 +1158,8 @@ function emitCompiledVariant(
 	// A root frame is needed to scan MalValue registers, a derived constructor's
 	// `this`, this activation's captured env, and/or a reassigned `with` env; every
 	// exit past its link must unlink it.
-	const needsRootFrame = totalSlots > 0 || capturesEnv || hasWith;
+	const needsRootFrame =
+		totalSlots > 0 || capturesEnv || hasWith || copiedCaptureValues(fn).length > 0;
 	const retainsForwardedArguments = fn.instructions.some(
 		(instruction) => instruction.opcode === "CALL_REST_ARGUMENTS",
 	);
@@ -1347,6 +1385,9 @@ function emitCompiledVariant(
 	}
 
 	for (const line of initializeFixedCaptureOwners(fn, index, relocation, true)) {
+		lines.push(`    ${line}`);
+	}
+	for (const line of initializeCopiedCaptureValues(fn, relocation)) {
 		lines.push(`    ${line}`);
 	}
 
@@ -2409,6 +2450,7 @@ function emitBody(
 		throw new Error("Native function has stale region actions");
 	}
 	const stableCaptureOwners = new Set(fixedCaptureOwners(fn, functionIndex));
+	const copiedCaptures = copiedCaptureIndexes(fn);
 	// Closed-source layouts include every external lexical owner at creation,
 	// and every entry receives that closure's state, including coroutine resumes.
 	const requiredCaptureOwners = new Set(fn.closureCaptureOwners);
@@ -3625,6 +3667,7 @@ function emitBody(
 				ownedCaptureFunctionIndex: ownsCaptureEnvironment ? functionIndex : undefined,
 				fixedCaptureOwners: stableCaptureOwners,
 				requiredCaptureOwners,
+				copiedCaptures,
 				strictCompiledTargets,
 				directResultRepresentation,
 				directArgumentRepresentations,
@@ -3994,6 +4037,7 @@ interface NativeInstructionContext {
 	readonly ownedCaptureFunctionIndex?: number;
 	readonly fixedCaptureOwners?: ReadonlySet<number>;
 	readonly requiredCaptureOwners?: ReadonlySet<number>;
+	readonly copiedCaptures?: ReadonlyMap<string, number>;
 	readonly resources: Set<NativeBodyResource>;
 	readonly directEntryCalls: Map<number, Set<number>>;
 	readonly profileSiteId?: number;
@@ -4197,6 +4241,7 @@ function emitInstruction(
 		ownedCaptureFunctionIndex: context.ownedCaptureFunctionIndex,
 		fixedCaptureOwners: context.fixedCaptureOwners,
 		requiredCaptureOwners: context.requiredCaptureOwners,
+		copiedCaptures: context.copiedCaptures,
 		strictCompiledTargets: context.strictCompiledTargets,
 		directCompiledTargets,
 		directCompiledEntries,
@@ -5117,6 +5162,11 @@ function emitInstruction(
 			// fresh-call parameter (a coroutine resume skips the prologue).
 			return [`r${instruction.dst} = callee;`];
 		case "LOAD_CAPTURED": {
+			const copied = context.copiedCaptures?.get(
+				captureValueKey(instruction.ownerFunctionIndex, instruction.index),
+			);
+			if (copied !== undefined)
+				return [`r${instruction.dst} = __capture_value_${copied};`];
 			if (context.fixedCaptureOwners?.has(instruction.ownerFunctionIndex)) {
 				const owner = `__capture_owner_${instruction.ownerFunctionIndex}`;
 				if (context.requiredCaptureOwners?.has(instruction.ownerFunctionIndex))

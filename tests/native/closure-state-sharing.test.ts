@@ -153,3 +153,51 @@ it("preserves connected scalar calls and generic bridges across collection", () 
 		rmSync(outDir, { recursive: true, force: true });
 	}
 }, 600_000);
+
+it("preserves immutable capture values and cell fallbacks across collection", () => {
+	const fixture = "tests/local/immutable-closure-values.js";
+	const expected = execFileSync(process.execPath, [fixture], { encoding: "utf8" });
+	const config = resolveBuildConfig({
+		engine: { primordials: "locked", eval: false, realms: false },
+	});
+	const image = compileEntrypoint(resolve(fixture), { buildConfig: config });
+	const functions = new Map(
+		image.runtime.functions.map((fn) => [
+			String.fromCharCode(...(image.runtime.stringConstants[fn.nameStringIndex] ?? [])),
+			fn,
+		]),
+	);
+	// Require value captures on the product image so parity cannot silently cover
+	// only the original cell representation.
+	for (const [name, count] of [
+		["immutablePrimitive", 1],
+		["immutableObject", 1],
+		["immutableAlias", 1],
+		["immutablePair", 2],
+		["immutableDefault", 1],
+	] as const) {
+		const fn = functions.get(name);
+		expect(fn).toBeDefined();
+		expect(fn!.closureCaptureValues).toHaveLength(count);
+	}
+	for (const name of ["beforeInitialization", "mutableValue", "recursiveValue"]) {
+		const fn = functions.get(name);
+		expect(fn).toBeDefined();
+		expect(fn!.closureCaptureValues).toBeUndefined();
+	}
+	const outDir = mkdtempSync(join(tmpdir(), "mal-immutable-closure-values-"));
+	try {
+		for (const compiled of [true, false]) {
+			const binary = buildNativeProgramImage(image, {
+				name: `immutable-closure-values-${compiled ? "native" : "interpreted"}`,
+				config,
+				compiled,
+				outDir,
+			});
+			expect(runToStdout(binary)).toBe(expected);
+			expect(runToStdout(binary, { env: STRESS_ENV, timeoutMs: 60_000 })).toBe(expected);
+		}
+	} finally {
+		rmSync(outDir, { recursive: true, force: true });
+	}
+}, 600_000);

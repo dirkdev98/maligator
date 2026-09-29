@@ -758,6 +758,19 @@ void mal_op_env_pop(MalCallable *callable);
  */
 MalValue mal_vm_load_captured(MalEnv *env, i32 owner_function_index, i32 index);
 
+static inline MalValue mal_vm_load_captured_value_at(
+    MalEnv *env, i32 owner_function_index, i32 index, i32 capture_index
+) {
+    if (env != nullptr && !mal_env_is_single_owner(env) &&
+            env->function_index == MAL_ENV_CAPTURE_VALUES &&
+            capture_index >= 0 && capture_index < env->slot_count) {
+        const MalClosureCaptureValue *capture = &mal_env_capture_values_layout(env)[capture_index];
+        if (capture->owner_function_index == owner_function_index && capture->captured_index == index)
+            return env->slots[capture_index + 1];
+    }
+    return mal_vm_load_captured(env, owner_function_index, index);
+}
+
 void mal_vm_store_captured(MalEnv *env, i32 owner_function_index, i32 index, MalValue value);
 
 void mal_op_load_property(MalCallable *callable, const MalInstruction *instruction);

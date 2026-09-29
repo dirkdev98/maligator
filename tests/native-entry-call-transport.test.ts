@@ -114,6 +114,7 @@ function firstOverrideOffset(bytes: Uint8Array): number {
 	expect(reader.u32()).toBe(0); // Semantic protectors.
 	expect(reader.u32()).toBe(2); // Functions.
 	expect(reader.u8()).toBe(0); // Unknown closure layout.
+	expect(reader.u8()).toBe(0); // No immutable value captures.
 	const safepointCount = reader.u32();
 	for (let index = 0; index < safepointCount; index++) {
 		reader.u8();

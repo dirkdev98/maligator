@@ -859,6 +859,11 @@ typedef struct MalArgumentSnapshotMove {
     i32 source;
 } MalArgumentSnapshotMove;
 
+typedef struct MalClosureCaptureValue {
+    i32 owner_function_index;
+    i32 captured_index;
+} MalClosureCaptureValue;
+
 typedef struct MalFunction {
     /*
      * Pointer-sized fields lead the structure, followed by the i32 metadata and
@@ -869,6 +874,7 @@ typedef struct MalFunction {
     const MalArgumentSnapshotMove *argument_snapshot_plan;
     const i32 *mapped_argument_slots;
     const i32 *closure_capture_owners;
+    const MalClosureCaptureValue *closure_capture_values;
     const MalInstruction *instructions;
     const i32 *instruction_data;
     /** Flat [ip, root_count, roots..., clear_count, clears...] sorted by IP. */
@@ -904,6 +910,7 @@ typedef struct MalFunction {
     i32 captured_count;
     /** -1 retains the dynamic chain; otherwise the immutable external-owner layout. */
     i32 closure_capture_owner_count;
+    i32 closure_capture_value_count;
     /** -1 never retains; INT32_MAX always retains nonempty input; otherwise the
      * largest static index whose absence requires the supplied argument slice. */
     i32 argument_retention_limit;
@@ -961,7 +968,7 @@ typedef struct MalFunction {
     bool has_prototype;
 } MalFunction;
 
-static_assert(sizeof(MalFunction) <= (MAL_PROFILE ? 168 : 160),
+static_assert(sizeof(MalFunction) <= (MAL_PROFILE ? 176 : 168),
               "function metadata outgrew its packed layout");
 
 typedef struct MalPreparedValue {
@@ -1175,6 +1182,13 @@ static_assert(alignof(_Atomic(MalValue)) == alignof(MalValue),
 // An inline closure display is owned by the function stored in parent; it is not
 // a separately allocated GC cell. The payload holds a layout pointer then scopes.
 #define MAL_ENV_CAPTURE_VECTOR (-2147483647)
+#define MAL_ENV_CAPTURE_VALUES (-2147483646)
+
+// Both inline display kinds use parent as their containing function, not a scope.
+static inline bool mal_env_is_capture_display(const MalEnv *env) {
+    return env->function_index == MAL_ENV_CAPTURE_VECTOR ||
+        env->function_index == MAL_ENV_CAPTURE_VALUES;
+}
 
 // A single selected owner fits in the closure's environment pointer. Its tag
 // makes it a terminal reference: the owner's lexical parent may already be dead.
@@ -1201,6 +1215,10 @@ static inline MalEnv **mal_env_capture_scopes(MalEnv *env) {
     return (MalEnv **)(void *) env->slots + 1;
 }
 
+static inline const MalClosureCaptureValue *mal_env_capture_values_layout(const MalEnv *env) {
+    return ((const MalClosureCaptureValue *const *)(const void *) env->slots)[0];
+}
+
 MalEnv *mal_vm_capture_owner(MalEnv *env, i32 owner_function_index);
 // owners is sorted and unique; missing bindings are represented by null entries.
 bool mal_vm_capture_owners(MalEnv *env, const i32 *owners, i32 count, MalEnv **scopes);
@@ -1214,6 +1232,7 @@ static inline MalEnv *mal_vm_capture_owner_at(MalEnv *env, i32 owner_function_in
             MalEnv *owner = mal_env_untag_single_owner(env);
             return owner->function_index == owner_function_index ? owner : nullptr;
         }
+        if (env->function_index == MAL_ENV_CAPTURE_VALUES) return nullptr;
         if (env->function_index == owner_function_index) return env;
         if (env->function_index == MAL_ENV_CAPTURE_VECTOR) {
             if (capture_index >= 0 && capture_index < env->slot_count &&

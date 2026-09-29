@@ -200,6 +200,19 @@
 			"sourceSeam": "src/compiler/core/core-ir-region-selection.ts",
 			"fixture": "cases/connected-captured-helpers.mjs",
 			"controls": ["connected-numeric-helpers"]
+		},
+		{
+			"id": "escaped-immutable-capture",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "closure-representation",
+			"category": "language-features",
+			"mechanisms": ["capture-access", "immutable-value-captures", "generic-call-bridge"],
+			"inputShape": "Two escaped leaf readers retain two immutable numeric bindings; each call performs 16 bounded arithmetic steps through a generic callback.",
+			"unit": "reader calls",
+			"sourceSeam": "runtime/src/vm_ops.c",
+			"fixture": "cases/escaped-immutable-capture.mjs",
+			"controls": ["closure-create-owner-1"]
 		}
 	]
 }

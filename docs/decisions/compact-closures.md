@@ -41,6 +41,24 @@ Environment replacement and suspended-frame teardown use the same distinction.
 Stores retain atomic access, the SATB old-value barrier, and the generational card
 barrier on the real owning cell.
 
+An eligible immutable leaf instead coallocates captured values with its function.
+The proof runs on sealed Core before slot compaction and checks the complete live
+write set, mapped aliases, and exception-aware dominance of every closure creation.
+Each binding has one non-TDZ initializer outside cycles; any initial TDZ stores
+precede it at entry. The first slice accepts at most 16 slots from one creator in
+strict ordinary leaves without nested closures, captured writes, private names,
+local environment operations, or owned capture storage. Object values preserve
+their identity; immutability applies to the binding, not the object's properties.
+Unproved captures continue using owner cells.
+
+Shared value descriptors identify owner/slot pairs. The terminal value display
+contains boxed values and retains its containing function, not the creator's
+environment. GC traces those values, and SATB traces the containing function.
+The original owner layout remains available for ordinary incoming environments
+and conservative construction fallback. Native entries cache copied values once
+through an ordinal-and-tuple check; generic and relocated entries can still read
+the original lexical storage. The portable wire loader omits the value metadata.
+
 Native canonical and specialized entries resolve nonnegative external owner IDs
 once per entry, using a known vector ordinal for one owner or one traversal for
 multiple owners, then access slots directly. Certified entries avoid repeating
@@ -77,8 +95,7 @@ preserve these entry-specific edges.
 
 Private entry conversion does not replace observable closures. Calls whose identity,
 arity, effects, or capture initialization are unproved use the canonical bridge.
-TDZ sentinels never cross the ordinary argument ABI. The current physical retention
-unit is a lexical owner, so closures can still retain unrelated live slots belonging
-to the same owner. Persistently copying immutable bindings by value requires a
-separate initialization and alias proof; the current by-value conversion applies
-to private call arguments.
+TDZ sentinels never cross the ordinary argument ABI. Mutable and unproved captures
+retain storage at lexical-owner granularity, so they can retain other live slots
+belonging to the same owner. Immutable value snapshots and private-call projection
+use separate proofs: stability for one call does not establish lifetime immutability.

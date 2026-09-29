@@ -21,6 +21,8 @@ export function compactCaptureStorage(
 		live[owner]!.add(index);
 	};
 	for (const [owner, fn] of functions.entries()) {
+		for (const capture of fn.closureCaptureValues ?? [])
+			retain(capture.ownerFunctionIndex, capture.capturedIndex);
 		for (const index of fn.mappedArgumentSlots) {
 			if (index >= 0) retain(owner, index);
 		}
@@ -85,6 +87,14 @@ export function compactCaptureStorage(
 				mappedArgumentSlots: fn.mappedArgumentSlots.map((index) =>
 					index < 0 ? index : remap(owner, index),
 				),
+				...(fn.closureCaptureValues === undefined
+					? {}
+					: {
+							closureCaptureValues: fn.closureCaptureValues.map((capture) => ({
+								...capture,
+								capturedIndex: remap(capture.ownerFunctionIndex, capture.capturedIndex),
+							})),
+						}),
 				instructions: fn.instructions.map(instruction),
 			})),
 		},

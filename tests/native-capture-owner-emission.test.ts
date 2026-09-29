@@ -68,6 +68,77 @@ function emit(
 }
 
 describe("native lexical owner lookup contract", () => {
+	it("caches copied captures once per entry without retaining lexical owner caches", () => {
+		const emitted = emit(
+			[
+				{ opcode: "LOAD_CAPTURED", dst: 0, ownerFunctionIndex: 2, index: 3 },
+				{ opcode: "CREATE_OBJECT", dst: 1 },
+				{ opcode: "LOAD_CAPTURED", dst: 2, ownerFunctionIndex: 2, index: 3 },
+				{ opcode: "RETURN", value: 2 },
+			],
+			{
+				closureCaptureOwners: [2],
+				closureCaptureValues: [{ ownerFunctionIndex: 2, capturedIndex: 3 }],
+			},
+		);
+		for (const { source } of [emitted, ...emitted.directEntries]) {
+			expect(source.match(/mal_vm_load_captured_value_at\(/g)).toHaveLength(1);
+			expect(source).toContain(
+				"const MalValue __capture_value_0 = mal_vm_load_captured_value_at(env, 2, 3, 0);",
+			);
+			expect(source).toContain("r0 = __capture_value_0;");
+			expect(source).toContain("r2 = __capture_value_0;");
+			expect(source).not.toContain("__capture_owner_");
+			expect(source).not.toContain("mal_vm_capture_owner");
+			expect(source).not.toContain("mal_vm_load_captured(");
+			expect(source).toContain(".inactive_slots = 0, .env = env");
+			expect(source.indexOf("mal_root_frame_head = &__gc_frame;")).toBeLessThan(
+				source.indexOf("mal_vm_load_captured_value_at("),
+			);
+		}
+	});
+
+	it.each([false, true])(
+		"keeps copied capture tuples and ordinals distinct in every entry (relocatable=%s)",
+		(relocatable) => {
+			const emitted = emit(
+				[
+					{ opcode: "LOAD_CAPTURED", dst: 0, ownerFunctionIndex: 2, index: 3 },
+					{ opcode: "LOAD_CAPTURED", dst: 1, ownerFunctionIndex: 2, index: 5 },
+					{ opcode: "LOAD_CAPTURED", dst: 2, ownerFunctionIndex: 5, index: 3 },
+					{ opcode: "RETURN", value: 2 },
+				],
+				{
+					closureCaptureOwners: [2, 5],
+					closureCaptureValues: [
+						{ ownerFunctionIndex: 2, capturedIndex: 3 },
+						{ ownerFunctionIndex: 2, capturedIndex: 5 },
+						{ ownerFunctionIndex: 5, capturedIndex: 3 },
+					],
+				},
+				relocatable,
+			);
+			for (const { source } of [emitted, ...emitted.directEntries]) {
+				const owner = (index: number) =>
+					relocatable ? `(__mal_relocation->function_base + ${index})` : `${index}`;
+				expect(source.match(/mal_vm_load_captured_value_at\(/g)).toHaveLength(3);
+				expect(source).toContain(
+					`__capture_value_0 = mal_vm_load_captured_value_at(env, ${owner(2)}, 3, 0);`,
+				);
+				expect(source).toContain(
+					`__capture_value_1 = mal_vm_load_captured_value_at(env, ${owner(2)}, 5, 1);`,
+				);
+				expect(source).toContain(
+					`__capture_value_2 = mal_vm_load_captured_value_at(env, ${owner(5)}, 3, 2);`,
+				);
+				expect(source).toContain("r0 = __capture_value_0;");
+				expect(source).toContain("r1 = __capture_value_1;");
+				expect(source).toContain("r2 = __capture_value_2;");
+				expect(source).not.toContain("__capture_owner_");
+			}
+		},
+	);
+
 	it("resolves each external owner once in canonical and specialized entries", () => {
 		const emitted = emit([
 			{ opcode: "LOAD_CAPTURED", dst: 0, ownerFunctionIndex: 2, index: 0 },

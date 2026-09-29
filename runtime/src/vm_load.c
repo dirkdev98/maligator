@@ -1709,6 +1709,8 @@ static void rd_function(MalLoadedRuntimeImage *L, Rd *r, MalFunction *fn, bool d
     fn->register_count = rd_i32(r);
     fn->captured_count = rd_i32(r);
     fn->closure_capture_owners = nullptr;
+    fn->closure_capture_values = nullptr;
+    fn->closure_capture_value_count = 0;
     fn->closure_capture_owner_count = -1;
     fn->file_index = rd_i32(r);
     fn->literal_shape_count = (i32) rd_count(r, 1);
