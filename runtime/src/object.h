@@ -163,12 +163,13 @@ static inline void mal_object_field_store_token(
     MalObject *object, u32 ordinal, u16 field, MalValue value
 ) {
     assert(ordinal < object->shape->inline_count);
-    if (mal_shape_field_representation(field) == MAL_FIELD_I32 &&
-        mal_value_is_int32(value)) {
-        i32 integer = mal_value_to_i32(value);
-        memcpy((byte *) mal_object_fields_nonempty(object) + mal_shape_field_offset(field),
-               &integer, sizeof(integer));
-        return;
+    if (mal_shape_field_representation(field) == MAL_FIELD_I32) {
+        i32 integer;
+        if (mal_shape_value_as_i32(value, &integer)) {
+            memcpy((byte *) mal_object_fields_nonempty(object) + mal_shape_field_offset(field),
+                   &integer, sizeof(integer));
+            return;
+        }
     }
     if (mal_shape_field_representation(field) == MAL_FIELD_F64) {
         f64 number;
