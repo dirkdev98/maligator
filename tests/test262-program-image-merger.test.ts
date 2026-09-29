@@ -71,6 +71,55 @@ function image(
 }
 
 describe("Test262 VM image merger", () => {
+	it("rebases closure owners while preserving loop identities and unknown capture layouts", () => {
+		const prefix = image({
+			functions: [
+				vmFunction([{ opcode: "RETURN", value: 0 }]),
+				vmFunction([{ opcode: "RETURN", value: 0 }]),
+			],
+		});
+		const owner = {
+			...vmFunction([
+				{ opcode: "ENV_PUSH", scopeId: -2, slotCount: 1 },
+				{ opcode: "CREATE_FUNCTION", dst: 0, functionIndex: 1 },
+				{ opcode: "RETURN", value: 0 },
+			]),
+			capturedCount: 1,
+			closureCaptureOwners: [],
+		};
+		const child = {
+			...vmFunction([
+				{ opcode: "LOAD_CAPTURED", dst: 0, ownerFunctionIndex: 0, index: 0 },
+				{ opcode: "LOAD_CAPTURED", dst: 1, ownerFunctionIndex: -2, index: 0 },
+				{ opcode: "RETURN", value: 0 },
+			]),
+			closureCaptureOwners: [-2, 0],
+		};
+		const { image: merged } = mergeProgramImages([
+			prefix,
+			image({ functions: [owner, child] }),
+		]);
+		expect(merged.runtime.functions.map((fn) => fn.closureCaptureOwners)).toEqual([
+			undefined,
+			undefined,
+			[],
+			[-2, 2],
+		]);
+		expect(merged.runtime.functions[2]!.closureCaptureOwners).not.toBe(
+			owner.closureCaptureOwners,
+		);
+		expect(merged.runtime.functions[3]!.closureCaptureOwners).not.toBe(
+			child.closureCaptureOwners,
+		);
+		expect(merged.runtime.functions[3]!.instructions[0]).toMatchObject({
+			ownerFunctionIndex: 2,
+		});
+		expect(merged.runtime.functions[3]!.instructions[1]).toMatchObject({
+			ownerFunctionIndex: -2,
+		});
+		expect(child.closureCaptureOwners).toEqual([-2, 0]);
+	});
+
 	it("keeps compiler-issued native ABIs and phased roots valid after helper rebasing", () => {
 		const compile = (source: string) =>
 			compileSemanticProgramToProgramImage(

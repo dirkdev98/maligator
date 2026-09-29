@@ -644,6 +644,9 @@ export function mergeProgramImages(images: Array<ProgramImage>): MergedProgramIm
 		mergedRuntime.functions.push(
 			...runtime.functions.map((fn) => ({
 				...fn,
+				closureCaptureOwners: fn.closureCaptureOwners?.map((owner) =>
+					shifted(owner, base.function),
+				),
 				nameStringIndex: shifted(fn.nameStringIndex, base.string),
 				instructions: fn.instructions.map((instruction) =>
 					cloneInstruction(instruction, base),
