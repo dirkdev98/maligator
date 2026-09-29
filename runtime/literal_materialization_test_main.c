@@ -73,7 +73,7 @@ static int exercise(MalVm *vm, i32 first_slot, i32 deep_offset) {
     mal_realm_switch(vm, other);
     live[2] = mal_vm_instantiate_literal_template(vm, 0, first_slot);
     if (live[2] == live[1] ||
-        mal_value_to_object(live[2])->prototype !=
+        mal_object_prototype(mal_value_to_object(live[2])) !=
             mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ARRAY_PROTOTYPE])) return 13;
     for (i32 index = 1; index <= MAL_LITERAL_CACHE_CAPACITY; index++)
         mal_vm_instantiate_literal_template(vm, 0, first_slot + index);

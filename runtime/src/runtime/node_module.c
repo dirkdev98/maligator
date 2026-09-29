@@ -13,7 +13,7 @@
  * methods that way. Walked directly rather than through mal_vm_get_property so
  * publishing stays allocation-free and cannot run JS during install. */
 static bool mal_node_module_lookup(MalObject *object, MalKey key, MalValue *out) {
-    for (; object != nullptr; object = object->prototype) {
+    for (; object != nullptr; object = mal_object_prototype(object)) {
         MalPropertyLookup found = mal_object_get_own(object, key);
         if (found.present) {
             if ((found.desc.flags & MAL_PROPERTY_ACCESSOR) != 0) {

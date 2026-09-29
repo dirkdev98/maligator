@@ -27,6 +27,7 @@ typedef struct MalFinRegCell {
  */
 typedef struct MalFinalizationRegistryObject {
     MalObject object;
+    MalObjectStorage object_storage;
     MalValue cleanup_callback;
     MalFinRegCell *cells;
 } MalFinalizationRegistryObject;

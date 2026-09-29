@@ -10,6 +10,7 @@
  */
 typedef struct MalMapObject {
     MalObject object;
+    MalObjectStorage object_storage;
 
     /**
      * General-mode ordered table. Entry keys are canonicalized through

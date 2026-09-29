@@ -5,6 +5,7 @@
 
 typedef struct MalNodeSqliteDatabaseObject {
     MalObject object;
+    MalObjectStorage object_storage;
     MalSqliteDatabase *database;
     bool read_bigints;
     bool return_arrays;
@@ -21,6 +22,7 @@ typedef struct MalNodeSqliteBindScratch {
 
 typedef struct MalNodeSqliteStatementObject {
     MalObject object;
+    MalObjectStorage object_storage;
     MalSqliteStatement *statement;
     MalNodeSqliteBindScratch *bind_scratch;
     i32 bind_scratch_count;

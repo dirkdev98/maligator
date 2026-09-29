@@ -128,7 +128,7 @@ receiver after reading it. Existing numeric projections take precedence;
 exactly two adjacent loads retain the existing paired-load path.
 
 On each visit, the first load admits an ordinary object and captures its object,
-shape, and slots pointers. Each site then checks its current cache row against
+physical shape, and field payload. Each site then checks its current cache row against
 that admission. A primary own-slot row needs only a matching shape and real
 slot. Only an inherited-value row inspects public overflow and the first
 prototype, while the admission is still active. An inherited-value row needs a

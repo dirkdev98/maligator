@@ -49,7 +49,7 @@ static void expect_depth_failure(MalValue function, MalValue input, bool callbac
         json_vm, function, held[6], args, callback ? 2 : 1);
     check(completion.kind == MAL_COMPLETION_THROW &&
         mal_value_is_object(completion.value) &&
-        mal_value_to_object(completion.value)->prototype ==
+        mal_object_prototype(mal_value_to_object(completion.value)) ==
             mal_value_to_object(json_vm->intrinsics[MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE]),
         "small fiber stack reports RangeError");
     json_vm->completion = (MalCompletion) {

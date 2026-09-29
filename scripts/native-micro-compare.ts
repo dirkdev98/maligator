@@ -357,17 +357,26 @@ async function buildWorker(request: BuildRequest): Promise<void> {
 	});
 	const buildMs = performance.now() - started;
 	const artifact = serializeCompilerArtifact(built.programImage, { debugInfo: false });
-	const size = spawnSync("size", ["--format=sysv", "--radix=10", built.binaryPath], {
-		encoding: "utf8",
-		timeout: 10_000,
-		env: cleanTestEnvironment(),
-	});
+	const size = spawnSync(
+		"size",
+		process.platform === "darwin"
+			? ["-m", built.binaryPath]
+			: ["--format=sysv", "--radix=10", built.binaryPath],
+		{
+			encoding: "utf8",
+			timeout: 10_000,
+			env: cleanTestEnvironment(),
+		},
+	);
 	writeFileSync(
 		path.join(path.dirname(request.output), "binary-size.log"),
 		`${size.stdout ?? ""}\n${size.stderr ?? ""}`,
 	);
 	if (size.error !== undefined) throw size.error;
-	const textBytes = size.stdout.match(/^\.text\s+(\d+)\s/m)?.[1];
+	const textBytes =
+		process.platform === "darwin"
+			? size.stdout.match(/^\s*Section __text: (\d+)\s/m)?.[1]
+			: size.stdout.match(/^\.text\s+(\d+)\s/m)?.[1];
 	if (size.status !== 0 || textBytes === undefined || !/^\d+$/.test(textBytes))
 		throw new Error("size did not produce a decimal .text section measurement");
 	const generated = phases.find((event) => event.phase === "write generated C");

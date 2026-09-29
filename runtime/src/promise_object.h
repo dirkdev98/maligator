@@ -50,6 +50,7 @@ static_assert(sizeof(MalPromiseReaction) == 40,
 
 typedef struct MalPromiseObject {
     MalObject object;
+    MalObjectStorage object_storage;
     MalPromiseState state;
 
     /**

@@ -1021,6 +1021,19 @@
 			"controls": []
 		},
 		{
+			"id": "materialized-record-graph",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "retained record graph mutation and reflection",
+			"category": "memory-layout-usage",
+			"mechanisms": ["object-layout", "property-store", "reflection"],
+			"inputShape": "8192 mixed-field records; every 128th record generalizes",
+			"unit": "record update",
+			"sourceSeam": "runtime/src/object.c",
+			"fixture": "cases/materialized-record-graph.mjs",
+			"controls": ["record-array-traversal"]
+		},
+		{
 			"id": "parallel-typed-arrays",
 			"group": "runtime",
 			"suite": "runtime",

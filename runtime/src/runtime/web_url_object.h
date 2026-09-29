@@ -25,6 +25,7 @@ typedef enum MalUrlSearchParamsIteratorKind : u8 {
 
 typedef struct MalUrlObject {
     MalObject object;
+    MalObjectStorage object_storage;
     void *handle; // ada_url::Url, from mal_url_parse; freed by mal_url_free
     MalUrlSearchParamsObject *search_params;
 } MalUrlObject;
@@ -36,6 +37,7 @@ typedef struct MalUspPair {
 
 struct MalUrlSearchParamsObject {
     MalObject object;
+    MalObjectStorage object_storage;
     MalUspPair *pairs;
     i32 count;
     i32 cap;
@@ -44,6 +46,7 @@ struct MalUrlSearchParamsObject {
 
 typedef struct MalUrlSearchParamsIteratorObject {
     MalObject object;
+    MalObjectStorage object_storage;
     MalUrlSearchParamsObject *params;
     u64 index;
     MalUrlSearchParamsIteratorKind kind;

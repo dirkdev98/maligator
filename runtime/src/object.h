@@ -1,22 +1,31 @@
 #pragma once
 
+#include <assert.h>
+#include <stddef.h>
+#include <string.h>
+
 #include "./defaults.h"
+#include "gc.h"
 #include "heap.h"
 #include "shape.h"
 #include "table.h"
 #include "value.h"
 
-/**
- * Ordinary object (and the base of every exotic subtype). Named properties live
- * in one of two states:
- *   - shaped: `shape` describes the public string layout; the values are in
- *     `slots[0 .. shape->inline_count)`. `overflow` may contain only private
- *     names, which cannot affect public property resolution.
- *   - dictionary: `shape` is the empty shape and all properties live in the
- *     `overflow` MalTable (exactly the pre-shapes behavior).
- * Index (integer) keys are never in a shape; they always live in `overflow`,
- * which is lazily allocated on first need.
- */
+typedef struct MalObjectStorage {
+    struct MalObject *prototype;
+    void *fields;
+    MalTable *overflow;
+} MalObjectStorage;
+
+typedef enum MalObjectStorageKind {
+    MAL_OBJECT_COMPACT,
+    MAL_OBJECT_EMBEDDED,
+    MAL_OBJECT_EXTERNAL,
+} MalObjectStorageKind;
+
+/** Ordinary cells keep their prototype and fields after this prefix. Exotic
+ * cells embed MalObjectStorage immediately after it; generalized ordinary cells
+ * replace the prototype word with a pointer to separately owned storage. */
 typedef struct MalObject {
     MalHeapHeader header;
     /*
@@ -53,8 +62,7 @@ typedef struct MalObject {
      * protector, disabling cached values that assume those objects are unmodified.
      */
     bool watched_method_proto : 1;
-    /** `slots` points to a separately malloc-owned buffer. False for empty,
-     * coallocated, and compiler-emitted stack objects. */
+    /** Fields point to a separately malloc-owned buffer. */
     bool slots_owned : 1;
     /** A private Error.captureStackTrace id must be released at finalization. */
     bool has_captured_stack : 1;
@@ -66,33 +74,139 @@ typedef struct MalObject {
     bool primordial_locking : 1;
     /** A non-null overflow table contains private names only. */
     bool overflow_private_only : 1;
-    /** Allocated entries in `slots`; visible entries remain shape->inline_count. */
+    u8 storage_kind : 2;
+    /** Property count for packed fields; tagged entry capacity otherwise. */
     u8 slot_capacity;
+    /** Original cell size class capacity beyond the prototype word, in eight-byte units. */
+    u8 inline_payload_eights;
     MalShape *shape;
-    struct MalObject *prototype;
-    /** Inline named-property values for the shape; null in dictionary mode. */
-    MalValue *slots;
-    /** Dictionary/overflow table (named + index props); null until needed. */
-    MalTable *overflow;
 } MalObject;
 
-static inline bool mal_object_has_public_overflow(const MalObject *object) {
-    return object->overflow != nullptr && !object->overflow_private_only;
+typedef struct MalEmbeddedObject {
+    MalObject object;
+    MalObjectStorage storage;
+} MalEmbeddedObject;
+
+static inline const MalObjectStorage *mal_object_storage_const(const MalObject *object) {
+    if (object->storage_kind == MAL_OBJECT_EMBEDDED) {
+        return (const MalObjectStorage *) (object + 1);
+    }
+    MalObjectStorage *storage;
+    memcpy(&storage, object + 1, sizeof(storage));
+    return storage;
 }
 
-// Size-class guard: MalObject is the base of ~30 heap types, so it must stay in
-// the 48-byte class (4 pointers + a 3-byte header + a flag byte = 40). A new
-// field that pushed it past 48 would bump every object type up a class.
-static_assert(sizeof(MalObject) <= 48, "MalObject outgrew its 48-byte size class");
-static_assert(sizeof(MalObject) + sizeof(MalValue) <= 48,
-              "MalObject plus one coallocated slot outgrew its 48-byte size class");
-static_assert(sizeof(MalObject) % alignof(MalValue) == 0,
-              "MalObject trailing slot is misaligned");
+static inline MalObjectStorage *mal_object_storage(MalObject *object) {
+    return (MalObjectStorage *) mal_object_storage_const(object);
+}
+
+static inline MalObject *mal_object_prototype(const MalObject *object) {
+    if (object->storage_kind != MAL_OBJECT_EXTERNAL) {
+        MalObject *prototype;
+        memcpy(&prototype, object + 1, sizeof(prototype));
+        return prototype;
+    }
+    return mal_object_storage_const(object)->prototype;
+}
+
+static inline void *mal_object_fields(const MalObject *object) {
+    if (object->storage_kind == MAL_OBJECT_COMPACT) {
+        return object->slot_capacity == 0 ? nullptr
+            : (void *) ((u8 *) (object + 1) + sizeof(void *));
+    }
+    return mal_object_storage_const(object)->fields;
+}
+
+static inline void *mal_object_fields_nonempty(const MalObject *object) {
+    if (__builtin_expect(object->storage_kind == MAL_OBJECT_COMPACT, 1)) {
+        return (u8 *) (object + 1) + sizeof(void *);
+    }
+    return mal_object_storage_const(object)->fields;
+}
+
+static inline MalValue mal_object_field_load(const MalObject *object, u32 ordinal) {
+    assert(ordinal < object->shape->inline_count);
+    return mal_shape_field_load(
+        mal_object_fields_nonempty(object), object->shape->props[ordinal].field);
+}
+
+static inline MalValue mal_object_field_load_token(const MalObject *object, u16 field) {
+    return mal_shape_field_load(mal_object_fields_nonempty(object), field);
+}
+
+static inline MalTable *mal_object_overflow(const MalObject *object) {
+    return object->storage_kind == MAL_OBJECT_COMPACT
+        ? nullptr : mal_object_storage_const(object)->overflow;
+}
+
+static inline bool mal_object_has_public_overflow(const MalObject *object) {
+    return mal_object_overflow(object) != nullptr && !object->overflow_private_only;
+}
+
+static_assert(sizeof(MalObject) == 8 + sizeof(void *),
+              "ordinary object identity prefix grew");
+static_assert(sizeof(MalObjectStorage) == 3 * sizeof(void *),
+              "object sidecar grew");
+static_assert(sizeof(MalEmbeddedObject) == sizeof(MalObject) + sizeof(MalObjectStorage),
+              "exotic object base grew");
+static_assert(offsetof(MalEmbeddedObject, storage) == sizeof(MalObject),
+              "embedded storage must follow the object prefix");
+static_assert((sizeof(MalObject) + sizeof(void *)) % alignof(MalValue) == 0,
+              "compact payload must be aligned for tagged fields");
+
+void mal_object_set_prototype_pointer(MalObject *object, MalObject *prototype);
+void mal_object_set_fields_pointer(MalObject *object, void *fields);
+void mal_object_set_overflow_pointer(MalObject *object, MalTable *overflow);
+void mal_object_generalize_fields(MalObject *object);
+void mal_object_widen_field(MalObject *object, u32 ordinal, MalValue value);
+static inline void mal_object_field_store_token(
+    MalObject *object, u32 ordinal, u16 field, MalValue value
+) {
+    assert(ordinal < object->shape->inline_count);
+    if (mal_shape_field_representation(field) == MAL_FIELD_I32 &&
+        mal_value_is_int32(value)) {
+        i32 integer = mal_value_to_i32(value);
+        memcpy((byte *) mal_object_fields_nonempty(object) + mal_shape_field_offset(field),
+               &integer, sizeof(integer));
+        return;
+    }
+    if (mal_shape_field_representation(field) == MAL_FIELD_F64) {
+        f64 number;
+        if (mal_ops_try_number_as_f64(value, &number)) {
+            memcpy((byte *) mal_object_fields_nonempty(object) + mal_shape_field_offset(field),
+                   &number, sizeof(number));
+            return;
+        }
+    }
+    if (mal_shape_field_representation(field) == MAL_FIELD_TAGGED &&
+        !mal_gc_marking_active && !mal_value_is_heap(value)) {
+        memcpy((byte *) mal_object_fields_nonempty(object) + mal_shape_field_offset(field),
+               &value, sizeof(value));
+        return;
+    }
+    if (mal_gc_marking_active) {
+        mal_gc_satb_record(mal_object_field_load_token(object, field));
+    }
+    if (!mal_shape_field_try_store(mal_object_fields_nonempty(object), field, value)) {
+        mal_object_widen_field(object, ordinal, value);
+    }
+    mal_gc_card(&object->header, value);
+}
+
+static inline void mal_object_field_store(MalObject *object, u32 ordinal, MalValue value) {
+    mal_object_field_store_token(
+        object, ordinal, object->shape->props[ordinal].field, value);
+}
+void mal_object_field_initialize(
+    MalObject *object, const MalShape *shape, u32 ordinal, MalValue value);
 
 /**
  * Initialize object state in caller-provided storage.
  */
 void mal_object_init(MalHeap *heap, MalObject *object, MalHeapType type, MalObject *prototype);
+void mal_object_init_embedded_stack(
+    MalHeap *heap, MalEmbeddedObject *wrapper, MalObject *prototype,
+    MalShape *shape, MalValue *slots);
 
 /** Mark an object as participating in another object's prototype chain. */
 static inline void mal_object_mark_as_prototype(MalObject *object) {
@@ -154,6 +268,9 @@ MalObject *mal_object_new_reserved(MalHeap *heap, MalObject *prototype, u8 capac
 /** Allocate an ordinary object and its known inline slots in one managed cell. */
 MalObject *mal_object_new_shaped(MalHeap *heap, MalObject *prototype, MalShape *shape,
                                  const MalValue *values, u32 count);
+/** Use when every field is known to use the canonical tagged layout. */
+MalObject *mal_object_new_shaped_tagged(MalHeap *heap, MalObject *prototype,
+                                        MalShape *shape, const MalValue *values, u32 count);
 MalObject *mal_object_try_new_shaped(MalHeap *heap, MalObject *prototype, MalShape *shape,
                                      const MalValue *values, u32 count);
 

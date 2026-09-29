@@ -32,6 +32,7 @@ typedef enum MalPrimitiveWrapperKind {
  */
 typedef struct MalPrimitiveWrapperObject {
     MalObject object;
+    MalObjectStorage object_storage;
     MalPrimitiveWrapperKind kind;
     MalValue primitive_data;
 } MalPrimitiveWrapperObject;

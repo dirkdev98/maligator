@@ -30,6 +30,7 @@ typedef enum MalTypedArrayKind {
 
 typedef struct MalTypedArrayObject {
     MalObject object;
+    MalObjectStorage object_storage;
     MalArrayBufferObject *buffer;
     MalTypedArrayKind kind;
     u32 byte_offset;

@@ -5,6 +5,7 @@
 
 typedef struct MalArrayObject {
     MalObject object;
+    MalObjectStorage object_storage;
 
     /**
      * Dense element fast path. In dense mode (`elements != nullptr`), integer-index

@@ -14,6 +14,7 @@ typedef struct MalHeap MalHeap;
  */
 typedef struct MalDateObject {
     MalObject object;
+    MalObjectStorage object_storage;
     f64 date_value;
 } MalDateObject;
 

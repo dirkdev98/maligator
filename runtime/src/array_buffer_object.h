@@ -11,6 +11,7 @@
  */
 typedef struct MalArrayBufferObject {
     MalObject object;
+    MalObjectStorage object_storage;
     byte *data;
     u32 byte_length;
     // For resizable/growable buffers; equals byte_length for fixed buffers.

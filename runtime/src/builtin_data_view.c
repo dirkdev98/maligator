@@ -18,6 +18,7 @@
 // must come first (the value boxing casts to MalHeapHeader *).
 typedef struct MalDataViewObject {
     MalObject object;
+    MalObjectStorage object_storage;
     MalArrayBufferObject *buffer;
     u32 byte_offset;
     u32 byte_length;

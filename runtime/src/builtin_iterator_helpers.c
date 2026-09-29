@@ -1373,7 +1373,7 @@ static bool mal_ih_is_iterator_instance(MalVm *vm, MalValue value) {
         return false;
     }
     MalObject *target = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ITERATOR_PROTOTYPE]);
-    for (MalObject *proto = mal_value_to_object(value)->prototype; proto != nullptr; proto = proto->prototype) {
+    for (MalObject *proto = mal_object_prototype(mal_value_to_object(value)); proto != nullptr; proto = mal_object_prototype(proto)) {
         if (proto == target) {
             return true;
         }
@@ -1388,7 +1388,7 @@ static bool mal_ih_is_default_builtin_iterator(MalVm *vm, MalValue value) {
         return false;
     }
     MalObject *object = mal_value_to_object(value);
-    MalObject *prototype = object->prototype;
+    MalObject *prototype = mal_object_prototype(object);
     bool default_prototype =
         prototype == mal_value_to_object(
             vm->intrinsics[MAL_INTRINSIC_ARRAY_ITERATOR_PROTOTYPE]) ||

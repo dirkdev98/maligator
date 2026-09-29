@@ -12,6 +12,7 @@
  */
 typedef struct MalResponseObject {
     MalObject object;
+    MalObjectStorage object_storage;
     i32 status;
     MalValue status_text;
     MalValue headers; // a MalHeadersObject, or undefined

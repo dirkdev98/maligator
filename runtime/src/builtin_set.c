@@ -410,9 +410,9 @@ static bool mal_builtin_set_get_set_record(MalVm *vm, MalValue obj, MalSetRecord
         MalMapObject *candidate = mal_value_to_map_object(obj);
         MalObject *object = &candidate->object;
         if (!candidate->weak &&
-            object->prototype ==
+            mal_object_prototype(object) ==
                 mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_SET_PROTOTYPE]) &&
-            object->shape->inline_count == 0 && object->overflow == nullptr) {
+            object->shape->inline_count == 0 && mal_object_overflow(object) == nullptr) {
             *record_out = (MalSetRecord) {
                 .set_object = obj,
                 .has = vm->intrinsics[MAL_INTRINSIC_SET_PROTOTYPE_HAS],

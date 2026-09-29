@@ -52,6 +52,7 @@ typedef struct MalWritableStreamWriteRequest {
 
 typedef struct MalReadableStreamObject {
     MalObject object;
+    MalObjectStorage object_storage;
     MalReadableStreamKind kind;
     union {
         struct {

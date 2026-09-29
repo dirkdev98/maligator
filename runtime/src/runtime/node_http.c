@@ -1166,7 +1166,7 @@ static const MalShapeAppendPlan *http_readable_state_append_plan(MalVm *vm) {
 
 static usize http_object_property_count(const MalObject *object) {
     return (usize) object->shape->inline_count
-        + (object->overflow == nullptr ? 0 : mal_table_size(object->overflow));
+        + (mal_object_overflow(object) == nullptr ? 0 : mal_table_size(mal_object_overflow(object)));
 }
 
 static bool http_prototype_shape_matches(

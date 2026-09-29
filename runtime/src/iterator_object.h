@@ -26,6 +26,7 @@ typedef enum MalIteratorKind : u8 {
  */
 typedef struct MalIteratorObject {
     MalObject object;
+    MalObjectStorage object_storage;
     MalValue target;
 
     /**

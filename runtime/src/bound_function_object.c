@@ -46,15 +46,15 @@ void mal_bound_function_object_init_metadata(
 ) {
     MalObject *object = &bound->object;
     assert(object->shape->inline_count == 0);
-    assert(object->slots == nullptr);
-    assert(object->overflow == nullptr);
+    assert(mal_object_fields(object) == nullptr);
+    assert(mal_object_overflow(object) == nullptr);
     MalShape *shape =
         mal_shape_add_property(object->shape, length_key, MAL_PROPERTY_CONFIGURABLE);
     shape = mal_shape_add_property(shape, name_key, MAL_PROPERTY_CONFIGURABLE);
     object->shape = shape;
-    object->slots = (MalValue *) (bound + 1);
-    object->slots[0] = length;
-    object->slots[1] = name;
+    mal_object_set_fields_pointer(object, (MalValue *) (bound + 1));
+    mal_object_field_initialize(object, shape, 0, length);
+    mal_object_field_initialize(object, shape, 1, name);
     // Target metadata lookup can run user code and collect after the bound cell
     // was allocated, so it may already be old when these slots are installed.
     mal_gc_card(&object->header, length);

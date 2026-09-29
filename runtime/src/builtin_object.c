@@ -868,9 +868,9 @@ static bool mal_builtin_object_plain_capacity(
     MalObject *object, u32 *capacity_out
 ) {
     usize capacity = object->shape->inline_count;
-    if (object->overflow != nullptr &&
+    if (mal_object_overflow(object) != nullptr &&
         !mal_checked_size_add(
-            capacity, mal_table_size(object->overflow), UINT32_MAX,
+            capacity, mal_table_size(mal_object_overflow(object)), UINT32_MAX,
             &capacity)) {
         return false;
     }

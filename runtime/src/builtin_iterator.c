@@ -29,10 +29,12 @@ MalValue mal_vm_create_iter_result(MalVm *vm, MalValue value, bool done) {
         };
         vm->iterator_result_shape = mal_shape_from_string_keys(&vm->heap, keys, 2);
     }
-    // Shape lookup and shaped allocation contain no safepoint, so this local
-    // value pair cannot be collected between assembly and the inline-slot copy.
-    return mal_vm_create_object_shaped(
-        vm, vm->iterator_result_shape, values, 2);
+    MAL_PERF_COUNT(object_shaped_creations);
+    MalObject *prototype =
+        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]);
+    // Allocation cannot collect before the local value pair is copied into the cell.
+    return mal_value_from_object(mal_object_new_shaped_tagged(
+        &vm->heap, prototype, vm->iterator_result_shape, values, 2));
 }
 
 static MalIntrinsic mal_vm_iterator_prototype_slot(MalIteratorKind kind) {

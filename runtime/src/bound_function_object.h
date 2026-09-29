@@ -5,6 +5,7 @@
 
 typedef struct MalBoundFunctionObject {
     MalObject object;
+    MalObjectStorage object_storage;
     MalValue target;
     MalValue bound_this;
     i32 bound_count;

@@ -26,6 +26,7 @@ typedef struct MalEventListener {
 
 typedef struct MalEventTargetObject {
     MalObject object;
+    MalObjectStorage object_storage;
     MalEventListener *listeners;
     i32 count;
     i32 cap;

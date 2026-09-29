@@ -73,17 +73,28 @@ int main(void) {
         CHECK(same_number(output, cases[choice].numeric ? cases[choice].expected : 13.5));
     }
 
-    MalShape shape = {0}, other = {0};
+    MalShapeProp props[4] = {0};
+    MalShape shape = {.inline_count = 4, .props = props, .tagged_fields = 15}, other = {0};
     MalValue values[4];
     f64 expected[4];
-    MalObject object = {.header = MAL_HEAP_HEADER_IMMORTAL(MAL_HEAP_OBJECT), .shape = &shape, .slots = values};
+    MalEmbeddedObject object = {
+        .object = {
+            .header = MAL_HEAP_HEADER_IMMORTAL(MAL_HEAP_OBJECT),
+            .shape = &shape,
+            .storage_kind = MAL_OBJECT_EMBEDDED,
+        },
+        .storage = {.fields = values},
+    };
     MalInlineCache ic[4] = {0};
     for (int i = 0; i < 4; i++) {
+        props[i].slot = i;
+        props[i].field = mal_shape_field(MAL_FIELD_TAGGED, (u16) (i * sizeof(MalValue)));
         ic[i].shape = &shape;
         ic[i].slot = i;
+        ic[i].field = props[i].field;
         ic[i].mode = MAL_IC_MODE_SHAPE;
     }
-    MalValue receiver = mal_value_from_object(&object);
+    MalValue receiver = mal_value_from_object(&object.object);
     for (int count = 2; count <= 4; count++) {
         for (int changed = 0; changed < count; changed++) {
             for (unsigned choice = 0; choice < sizeof(cases) / sizeof(cases[0]); choice++) {
@@ -107,12 +118,12 @@ int main(void) {
             ic[changed].shape = &shape;
         }
         CHECK(check_projection(count, MAL_VALUE_NULL, ic, expected, false));
-        object.shape = &other;
+        object.object.shape = &other;
         CHECK(check_projection(count, receiver, ic, expected, false));
-        object.shape = &shape;
-        object.header.type = MAL_HEAP_ARRAY_OBJECT;
+        object.object.shape = &shape;
+        object.object.header.type = MAL_HEAP_ARRAY_OBJECT;
         CHECK(check_projection(count, receiver, ic, expected, false));
-        object.header.type = MAL_HEAP_OBJECT;
+        object.object.header.type = MAL_HEAP_OBJECT;
 
         // Successful stores retain argument order even when caller outputs alias.
         f64 shared = 13.5;

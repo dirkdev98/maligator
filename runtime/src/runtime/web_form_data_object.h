@@ -13,6 +13,7 @@ typedef struct MalFormDataEntry {
 
 typedef struct MalFormDataObject {
     MalObject object;
+    MalObjectStorage object_storage;
     MalFormDataEntry *entries;
     i32 count;
     i32 capacity;
@@ -26,6 +27,7 @@ typedef enum MalFormDataIteratorKind : u8 {
 
 typedef struct MalFormDataIteratorObject {
     MalObject object;
+    MalObjectStorage object_storage;
     MalFormDataObject *form_data;
     u64 index;
     MalFormDataIteratorKind kind;

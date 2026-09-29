@@ -1382,6 +1382,9 @@ const VM_REGISTER_USE_FIELDS = [
 	"parent",
 	"newTarget",
 	"found",
+	"needle",
+	"fromIndex",
+	"prototype",
 	"awaitedSrc",
 	"yieldedSrc",
 	"iterable",
@@ -1403,6 +1406,8 @@ export function vmInstructionUsesRegister(
 	instruction: BytecodeInstruction,
 	register: number,
 ): boolean {
+	if (instruction.opcode === "CONSTRUCT_SUPER_EXPLICIT" && instruction.dst === register)
+		return true;
 	if (
 		instruction.opcode === "CREATE_NUMBER" ||
 		instruction.opcode === "CREATE_F64" ||

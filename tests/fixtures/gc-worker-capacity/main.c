@@ -132,7 +132,7 @@ static int check_capacity(usize capacity, usize failure_index, bool start_parked
         for (usize i = 0; i < FANOUT_WIDTH; ++i) {
             MalObject *child = mal_value_to_object(fanouts[root]->slots[i]);
             if (!mal_heap_mark_is_old(child->header.mark) ||
-                child->prototype != targets[i % GRAPH_WIDTH]) return 13;
+                mal_object_prototype(child) != targets[i % GRAPH_WIDTH]) return 13;
         }
     }
 

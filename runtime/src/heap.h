@@ -504,7 +504,7 @@ void *mal_heap_try_alloc_raw(MalHeap *heap, usize alloc_size);
 /** Fallible raw allocation with a stable profiler family. */
 void *mal_heap_try_alloc_raw_profiled(MalHeap *heap, usize alloc_size, u8 profile_family);
 
-/** Bytes charged to `heap.bytes_allocated` for one request of this size. */
+/** Cell payload capacity and allocation charge for a request of this size. */
 usize mal_heap_allocation_charge(usize alloc_size);
 
 /** Actual payload capacity of a live buffer returned by mal_heap_alloc_raw. */

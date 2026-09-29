@@ -58,7 +58,7 @@ static MalArrayObject *mal_builtin_array_clean_dense(
     MalValue prototype = vm->intrinsics[MAL_INTRINSIC_ARRAY_PROTOTYPE];
     MalArrayObject *array = mal_value_to_array_object(value);
     if (!mal_value_is_array_object(prototype) || array->dense_deopted ||
-        array->object.prototype != mal_value_to_object(prototype)) {
+        mal_object_prototype(&array->object) != mal_value_to_object(prototype)) {
         return nullptr;
     }
     return array;
@@ -1377,7 +1377,7 @@ static MalValue mal_builtin_array_map(MalVm *vm, MalValue this_value, const MalV
         MalValue prototype = vm->intrinsics[MAL_INTRINSIC_ARRAY_PROTOTYPE];
         dense_default = mal_array_object_is_dense(source_array) &&
             mal_value_is_object(prototype) &&
-            source_array->object.prototype == mal_value_to_object(prototype) &&
+            mal_object_prototype(&source_array->object) == mal_value_to_object(prototype) &&
             mal_array_default_species(vm, this_value);
         if (dense_default) {
             result_array = mal_intrinsic_new_array(vm, 0);
@@ -1411,7 +1411,7 @@ static MalValue mal_builtin_array_map(MalVm *vm, MalValue this_value, const MalV
             if (dense_source &&
                 (!mal_array_elements_protector ||
                  !mal_array_object_is_dense(source_array) ||
-                 source_array->object.prototype != array_prototype)) {
+                 mal_object_prototype(&source_array->object) != array_prototype)) {
                 dense_source = false;
             }
             bool present = dense_source
@@ -1521,7 +1521,7 @@ static bool mal_array_method_is_default_builtin(
     }
     MalObject *receiver = mal_value_to_object(recv);
     MalObject *array_prototype = mal_value_to_object(prototype_value);
-    if (receiver->prototype != array_prototype) {
+    if (mal_object_prototype(receiver) != array_prototype) {
         return false;
     }
     MalKey key = mal_intrinsic_string_key(vm, method);
@@ -2145,7 +2145,7 @@ MalValue mal_builtin_array_push_known(
         MalValue prototype_value = vm->intrinsics[MAL_INTRINSIC_ARRAY_PROTOTYPE];
         MalArrayObject *array = mal_value_to_array_object(this_value);
         if (mal_value_is_array_object(prototype_value) &&
-            array->object.prototype == mal_value_to_object(prototype_value) &&
+            mal_object_prototype(&array->object) == mal_value_to_object(prototype_value) &&
             mal_array_object_dense_append_many(array, args, (u32) arg_count)) {
             MAL_PERF_COUNT(array_push_direct_hits);
             return mal_ops_number_value((f64) array->length);
@@ -2208,7 +2208,7 @@ bool mal_builtin_array_push_try_direct(
     MalValue prototype_value = vm->intrinsics[MAL_INTRINSIC_ARRAY_PROTOTYPE];
     MalArrayObject *array = mal_value_to_array_object(this_value);
     if (!mal_value_is_array_object(prototype_value) ||
-        array->object.prototype != mal_value_to_object(prototype_value) ||
+        mal_object_prototype(&array->object) != mal_value_to_object(prototype_value) ||
         mal_object_get_own(
             &array->object, mal_intrinsic_string_key(vm, "push")).present ||
         !mal_array_object_dense_append_many(array, args, (u32) arg_count)) {
@@ -2264,7 +2264,7 @@ bool mal_builtin_array_pair_destructure_try(
         return false;
     }
     MalArrayObject *array = mal_value_to_array_object(source);
-    if (array->object.prototype !=
+    if (mal_object_prototype(&array->object) !=
             mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ARRAY_PROTOTYPE]) ||
         mal_object_get_own(
             &array->object,
@@ -5112,7 +5112,7 @@ static MalValue mal_builtin_array_iteration_eligible(MalVm *vm, MalValue this_va
     MalObject *receiver = (MalObject *) mal_value_to_array_object(recv);
     MalValue prototype_value = vm->intrinsics[MAL_INTRINSIC_ARRAY_PROTOTYPE];
     if (!mal_value_is_object(prototype_value) ||
-        receiver->prototype != mal_value_to_object(prototype_value)) {
+        mal_object_prototype(receiver) != mal_value_to_object(prototype_value)) {
         return mal_value_new_boolean(false);
     }
 
