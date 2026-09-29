@@ -1,5 +1,4 @@
-function readLength(fallback) {
-	const values = [4, 5, 6];
+function readLength(values, fallback) {
 	const length = values.length;
 	return fallback.keep ? length + 1 : length;
 }
@@ -11,4 +10,5 @@ const fallback = {
 	},
 };
 
-console.log(readLength(fallback));
+globalThis.readLength = readLength;
+console.log(globalThis.readLength([4, 5, 6], fallback));

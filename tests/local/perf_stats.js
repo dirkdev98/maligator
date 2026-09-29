@@ -100,14 +100,17 @@ function concatenate(left, right) {
 }
 const inlineConsProbe = concatenate("a", "b");
 if (inlineConsProbe !== "ab") throw new Error("broken inline concat");
-const consProbe = concatenate("perf-", "stats");
-if (consProbe.charCodeAt(5) !== 115) throw new Error("broken cons flatten");
+const consProbe = concatenate("perf-", "stats-abcdefghijklmnopqrstuvwx");
+if (consProbe.charCodeAt(5) !== 115) throw new Error("broken cons indexing");
 if (consProbe.slice(1, 5) !== "erf-") throw new Error("broken inline slice");
 if (consProbe.slice(1, 8) !== "erf-sta") throw new Error("broken dependent slice");
+if (consProbe.slice(1, consProbe.length - 1) !== "erf-stats-abcdefghijklmnopqrstuvw")
+	throw new Error("broken large dependent slice");
 if (
 	consProbe.lastIndexOf("stats") !== 5 ||
 	consProbe.lastIndexOf("s", 8) !== 5 ||
 	consProbe.lastIndexOf("missing") !== -1 ||
+	"\u0100abcdef\u0100ghijkl\u0100".lastIndexOf("\u0100") !== 14 ||
 	"abcdef".indexOf("z") !== -1
 ) {
 	throw new Error("broken reverse string search");
@@ -121,7 +124,7 @@ if (
 	throw new Error("broken string case conversion");
 }
 const regexpProbe = /(?:stats)/;
-if (!regexpProbe.test("perf-stats") || !regexpProbe.test("perf-stats")) {
+if (!regexpProbe.test(consProbe) || !regexpProbe.test(consProbe)) {
 	throw new Error("broken regexp ASCII execution cache");
 }
 const fastRegexpMatch = /value=([0-9]+)/.exec("prefix value=42 suffix");

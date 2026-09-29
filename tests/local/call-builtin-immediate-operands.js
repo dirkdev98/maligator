@@ -3,11 +3,15 @@ function assert(condition, message) {
 }
 
 function exercise(dynamic) {
-	assert("alpha,beta".split(",")[1] === "beta", "string receiver and argument");
+	assert(
+		"alpha,beta".split(dynamic === undefined ? "," : dynamic)[1] === "beta",
+		"string receiver and argument",
+	);
 	assert((17).valueOf() === 17, "number receiver");
 	assert(true.valueOf() === true, "boolean receiver");
 	assert(Object.is(undefined, dynamic), "mixed immediate and register arguments");
-	assert(Object.is(null, null), "null arguments");
+	assert(!Object.is(null, dynamic), "null arguments");
+	assert(!Object.is(false, dynamic), "boolean dynamic argument");
 	assert(Object.is(false, false), "boolean arguments");
 
 	let total = 0;

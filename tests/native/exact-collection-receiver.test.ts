@@ -29,8 +29,13 @@ describe("exact collection receiver brands", () => {
 		});
 		const directCollectionCalls = pair.programImage.runtime.functions
 			.flatMap((fn) => fn.instructions)
-			.filter((instruction) => instruction.opcode === "CALL_KNOWN")
-			.map((instruction) => instruction.operation);
+			.flatMap((instruction) =>
+				instruction.opcode === "CALL_KNOWN"
+					? [instruction.operation]
+					: instruction.opcode === "CALL" && instruction.guardedBuiltinCall !== undefined
+						? [instruction.guardedBuiltinCall.operation]
+						: [],
+			);
 		expect(directCollectionCalls).toContain("Map.prototype.get");
 		compiled = pair.compiled;
 		interpreted = pair.interpreted;

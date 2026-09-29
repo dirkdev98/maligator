@@ -35,22 +35,26 @@ describe("bounded interpreter call-site cache", () => {
 			instructions: fn.instructions.map((instruction) => {
 				if (
 					(instruction.opcode !== "CALL" && instruction.opcode !== "CONSTRUCT") ||
-					instruction.exactFunctionIndex === undefined
+					(instruction.opcode === "CALL" && instruction.exactFunctionIndex === undefined)
 				) {
 					return instruction;
 				}
 				if (instruction.opcode === "CALL") exactCalls++;
 				else exactConstructs++;
+				const target = instruction.exactFunctionIndex;
 				return {
 					...instruction,
 					exactFunctionIndex:
-						(instruction.exactFunctionIndex + 1) %
-						pair.programImage.runtime.functionCount,
+						target === undefined
+							? 0
+							: (target + 1) % pair.programImage.runtime.functionCount,
 				};
 			}),
 		}));
 		if (exactCalls === 0 || exactConstructs === 0) {
-			throw new Error("fixture did not lower exact CALL and CONSTRUCT targets");
+			throw new Error(
+				"fixture needs an exact call and a construction for stale target hints",
+			);
 		}
 		mismatched = buildNativeProgramImage(
 			{

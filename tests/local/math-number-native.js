@@ -1,6 +1,10 @@
 function render(value) {
 	return Object.is(value, -0) ? "-0" : String(value);
 }
+function acoshNumber(value) {
+	return Math.acosh(+value);
+}
+globalThis.acoshNumber = acoshNumber;
 function exercise() {
 	for (let value = -3.5; value <= 4; value += 0.25) {
 		const evaluated = [
@@ -26,7 +30,7 @@ function exercise() {
 			["cosh", Math.cosh(value)],
 			["tanh", Math.tanh(value)],
 			["asinh", Math.asinh(value)],
-			["acosh", Math.acosh(value)],
+			["acosh", globalThis.acoshNumber(value)],
 			["atanh", Math.atanh(value)],
 			["log1p", Math.log1p(value)],
 			["expm1", Math.expm1(value)],

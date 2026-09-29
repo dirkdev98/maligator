@@ -8,6 +8,7 @@ import {
 	buildNativeBinary,
 	HOST_MAIN,
 	runToStdout,
+	scaledNativeRunTimeoutMs,
 	STRESS_ENV,
 } from "../../src/test-harness.ts";
 
@@ -51,11 +52,12 @@ describe("engine.primordials: locked", () => {
 		assertResultPass(runToStdout(interpreted));
 	});
 
-	it("holds under GC stress", () => {
-		// Full Intl + Temporal intrinsic installation verifies the heap after every
-		// allocation under STRESS_ENV; both backends take about 100 seconds on the
-		// reference development machine before running the shared 75 checks.
-		assertResultPass(runToStdout(compiled, { env: STRESS_ENV, timeoutMs: 180_000 }));
-		assertResultPass(runToStdout(interpreted, { env: STRESS_ENV, timeoutMs: 180_000 }));
-	}, 370_000);
+	it(
+		"holds under GC stress",
+		() => {
+			assertResultPass(runToStdout(compiled, { env: STRESS_ENV, timeoutMs: 180_000 }));
+			assertResultPass(runToStdout(interpreted, { env: STRESS_ENV, timeoutMs: 180_000 }));
+		},
+		scaledNativeRunTimeoutMs(360_000, STRESS_ENV) + 10_000,
+	);
 });
