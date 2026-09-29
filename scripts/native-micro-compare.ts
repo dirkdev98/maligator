@@ -33,6 +33,7 @@ import {
 	parseMicroPerfCounters,
 	probeNativeMicroPerf,
 } from "./native-micro-diagnostics.ts";
+import { compileNativeMicroProgram } from "./native-micro-frontend.ts";
 import { runBoundedProcess } from "./performance-process.ts";
 import { loadRuntimeGapCatalog } from "./runtime-gap-catalog.ts";
 import {
@@ -319,7 +320,7 @@ async function buildWorker(request: BuildRequest): Promise<void> {
 	const { resolveBuildConfig } = (await load(
 		"src/build-config.ts",
 	)) as typeof BuildConfig;
-	const { buildNativeBinaryResult } = (await load(
+	const { buildNativeProgramImageResult } = (await load(
 		"src/test-harness.ts",
 	)) as typeof Harness;
 	const { serializeCompilerArtifact } = (await load(
@@ -337,8 +338,9 @@ async function buildWorker(request: BuildRequest): Promise<void> {
 	const nativeCaches: Array<unknown> = [];
 	const diagnosticDirectory = path.join(path.dirname(request.output), "diagnostics");
 	const started = performance.now();
-	const built = buildNativeBinaryResult({
-		fixture: request.fixture,
+	const compiled = await compileNativeMicroProgram(request.root, request.fixture, config);
+	frontend.push(compiled.evidence);
+	const built = buildNativeProgramImageResult(compiled.programImage, {
 		name: request.id,
 		entryGoal: "module",
 		config,
@@ -347,7 +349,6 @@ async function buildWorker(request: BuildRequest): Promise<void> {
 		nativeLinkCacheVariant: request.diagnostics ? request.linkCacheVariant : undefined,
 		outDir: path.dirname(request.output),
 		environment: cleanTestEnvironment(),
-		onFrontendCacheEvent: (event) => frontend.push(event),
 		onNativeCacheEvent: (event) => nativeCaches.push(event),
 		onNativeBuildPhase: (event) => {
 			if (request.diagnostics) copyBeforeNativeStrip(diagnosticDirectory, event);
@@ -434,6 +435,7 @@ async function compare(options: Options): Promise<void> {
 		builds: selected.length * 2,
 		measuredPairs: selected.length * options.pairs,
 		optionalPerfPairs: selected.length * options.perfPairs,
+		frontendPolicy: "product-module-graph-with-closure-certificate",
 		diagnosticLinkPolicy: options.diagnostics
 			? "fresh cache key; unchanged production flags; copy before strip"
 			: undefined,
