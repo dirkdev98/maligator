@@ -644,6 +644,13 @@ export function mergeProgramImages(images: Array<ProgramImage>): MergedProgramIm
 		mergedRuntime.functions.push(
 			...runtime.functions.map((fn) => ({
 				...fn,
+				closureCaptureOwners: fn.closureCaptureOwners?.map((owner) =>
+					shifted(owner, base.function),
+				),
+				closureCaptureValues: fn.closureCaptureValues?.map((capture) => ({
+					...capture,
+					ownerFunctionIndex: capture.ownerFunctionIndex + base.function,
+				})),
 				nameStringIndex: shifted(fn.nameStringIndex, base.string),
 				instructions: fn.instructions.map((instruction) =>
 					cloneInstruction(instruction, base),
@@ -662,6 +669,10 @@ export function mergeProgramImages(images: Array<ProgramImage>): MergedProgramIm
 				registerRepresentations: [...native.registerRepresentations],
 				directEntries: native.directEntries.map((entry) => ({
 					...entry,
+					callOverrides: entry.callOverrides?.map((call) => ({
+						...call,
+						functionIndex: call.functionIndex + base.function,
+					})),
 					parameterRepresentations: [...entry.parameterRepresentations],
 					resultRepresentation: entry.resultRepresentation,
 					fieldParameters:

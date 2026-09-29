@@ -24,6 +24,7 @@ const representationProofs = new WeakMap<
 		readonly operatorInputs: CoreDirectEntryPlan["operatorInputs"];
 		readonly constants: CoreDirectEntryPlan["constantBooleans"];
 		readonly calls: CoreDirectEntryPlan["callSites"];
+		readonly callOverrides: CoreDirectEntryPlan["callOverrides"];
 		readonly fields: CoreDirectEntryPlan["fieldParameters"];
 	}
 >();
@@ -36,6 +37,7 @@ export function analyzeCoreNativeEntry(
 	callSites: CoreDirectEntryPlan["callSites"],
 	fields?: CoreDirectEntryPlan["fieldParameters"],
 	exactOperationResultMasks: ReadonlyMap<CoreInstructionId, number> = new Map(),
+	callOverrides?: CoreDirectEntryPlan["callOverrides"],
 ): {
 	readonly valueRepresentations: ReadonlyArray<CorePlanRepresentation>;
 	readonly resultRepresentation: CorePlanRepresentation;
@@ -138,6 +140,7 @@ export function analyzeCoreNativeEntry(
 				? undefined
 				: { keys: [...fields.keys], loads: fields.loads.map((load) => ({ ...load })) },
 		calls: callSites.map((site) => ({ ...site })),
+		callOverrides: callOverrides?.map((site) => ({ ...site })),
 	});
 	return {
 		valueRepresentations,
@@ -156,7 +159,8 @@ export function coreNativeEntryProofIsCurrent(
 			entry.argumentRepresentations === undefined &&
 			entry.constantBooleans === undefined &&
 			entry.fieldParameters === undefined &&
-			entry.operatorInputs === undefined
+			entry.operatorInputs === undefined &&
+			entry.callOverrides === undefined
 		);
 	const proof = representationProofs.get(entry.valueRepresentations);
 	const same = <T>(
@@ -175,6 +179,19 @@ export function coreNativeEntryProofIsCurrent(
 		same(proof.arguments, entry.argumentRepresentations) &&
 		proof.constants === entry.constantBooleans &&
 		proof.operatorInputs === entry.operatorInputs &&
+		(proof.callOverrides === undefined
+			? entry.callOverrides === undefined
+			: entry.callOverrides !== undefined &&
+				proof.callOverrides.length === entry.callOverrides.length &&
+				proof.callOverrides.every((site, index) => {
+					const current = entry.callOverrides![index]!;
+					return (
+						site.instruction === current.instruction &&
+						site.target === current.target &&
+						site.entryId === current.entryId &&
+						site.guarded === current.guarded
+					);
+				})) &&
 		same(proof.fields?.keys, entry.fieldParameters?.keys) &&
 		(proof.fields === undefined ||
 			(entry.fieldParameters !== undefined &&

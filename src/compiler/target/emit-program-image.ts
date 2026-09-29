@@ -4,6 +4,7 @@ import { knownOperationIndex } from "../shared/known-operations.ts";
 import { staticDataQueryTag } from "../shared/static-data-query.ts";
 import { finalizeCompilerRemarks } from "./profile-metadata.ts";
 import type { ProgramImage } from "./program-image.ts";
+import { validateNativeDirectEntry } from "./program-image.ts";
 import { directCompiledEntryKey, emitCompiledFunction } from "./render-native-c.ts";
 import type { CompiledFunction } from "./render-native-c.ts";
 import {
@@ -19,6 +20,7 @@ import {
 import type {
 	BytecodeFunction,
 	BytecodeInstruction,
+	ClosureCaptureValue,
 	RuntimeImage,
 } from "./runtime-image.ts";
 
@@ -102,8 +104,8 @@ export function cEscapeString(value: string): string {
 }
 
 const MAL_FUNCTION_ROW_MACRO = [
-	"#define MAL_FUNCTION_ROW(argument_snapshot_plan_value, mapped_argument_slots_value, instructions_value, instruction_data_value, gc_safepoints_value, handlers_value, compiled_value, positions_value, profile_site_ids_value, name_string_index_value, kind_value, parameter_count_value, argument_snapshot_count_value, argument_snapshot_plan_count_value, mapped_argument_count_value, length_value, register_count_value, captured_count_value, argument_retention_limit_value, property_ic_count_value, literal_shape_count_value, instruction_count_value, instruction_data_count_value, gc_safepoint_count_value, handler_count_value, file_index_value, position_count_value, strict_value, needs_arguments_value, mapped_arguments_value, gc_safepoints_trusted_value, is_derived_constructor_value, is_class_constructor_value, constructor_slot_reserve_value, has_prototype_value) { ",
-	".argument_snapshot_plan = argument_snapshot_plan_value, .mapped_argument_slots = mapped_argument_slots_value, .instructions = instructions_value, .instruction_data = instruction_data_value, .gc_safepoints = gc_safepoints_value, .handlers = handlers_value, .compiled = compiled_value, .positions = positions_value, MAL_FUNCTION_PROFILE_SITE(profile_site_ids_value) ",
+	"#define MAL_FUNCTION_ROW(argument_snapshot_plan_value, mapped_argument_slots_value, closure_captures_value, closure_capture_owner_count_value, instructions_value, instruction_data_value, gc_safepoints_value, handlers_value, compiled_value, positions_value, profile_site_ids_value, name_string_index_value, kind_value, parameter_count_value, argument_snapshot_count_value, argument_snapshot_plan_count_value, mapped_argument_count_value, length_value, register_count_value, captured_count_value, argument_retention_limit_value, property_ic_count_value, literal_shape_count_value, instruction_count_value, instruction_data_count_value, gc_safepoint_count_value, handler_count_value, file_index_value, position_count_value, strict_value, needs_arguments_value, mapped_arguments_value, gc_safepoints_trusted_value, is_derived_constructor_value, is_class_constructor_value, constructor_slot_reserve_value, has_prototype_value) { ",
+	".argument_snapshot_plan = argument_snapshot_plan_value, .mapped_argument_slots = mapped_argument_slots_value, .closure_captures = closure_captures_value, .closure_capture_owner_count = closure_capture_owner_count_value, .instructions = instructions_value, .instruction_data = instruction_data_value, .gc_safepoints = gc_safepoints_value, .handlers = handlers_value, .compiled = compiled_value, .positions = positions_value, MAL_FUNCTION_PROFILE_SITE(profile_site_ids_value) ",
 	".name_string_index = name_string_index_value, .kind = kind_value, .parameter_count = parameter_count_value, .argument_snapshot_count = argument_snapshot_count_value, .argument_snapshot_plan_count = argument_snapshot_plan_count_value, .mapped_argument_count = mapped_argument_count_value, .length = length_value, .register_count = register_count_value, .captured_count = captured_count_value, .argument_retention_limit = argument_retention_limit_value, .property_ic_count = property_ic_count_value, .literal_shape_count = literal_shape_count_value, .instruction_count = instruction_count_value, .instruction_data_count = instruction_data_count_value, .gc_safepoint_count = gc_safepoint_count_value, .handler_count = handler_count_value, .file_index = file_index_value, .position_count = position_count_value, .strict = strict_value, .needs_arguments = needs_arguments_value, .mapped_arguments = mapped_arguments_value, .gc_safepoints_trusted = gc_safepoints_trusted_value, .is_derived_constructor = is_derived_constructor_value, .is_class_constructor = is_class_constructor_value, .constructor_slot_reserve = constructor_slot_reserve_value, .has_prototype = has_prototype_value }",
 ].join("");
 
@@ -232,6 +234,23 @@ function malFunctionKind(fn: RuntimeImage["functions"][number]): string {
 				: "MAL_FUNCTION_KIND_NORMAL";
 }
 
+function closureCaptureValueArrayBody(values: Array<ClosureCaptureValue>): string {
+	return values
+		.map(
+			(value) =>
+				`    { .owner_function_index = ${value.ownerFunctionIndex}, .captured_index = ${value.capturedIndex} },`,
+		)
+		.join("\n");
+}
+
+function closureCaptureLayoutBody(
+	owners: string,
+	values: string,
+	valueCount: number,
+): string {
+	return `    { .owners = ${owners}, .values = ${values}, .value_count = ${valueCount} },`;
+}
+
 /** One MalFunction table row, given the (possibly shared) symbols it points at. */
 function malFunctionRow(
 	fn: RuntimeImage["functions"][number],
@@ -244,6 +263,7 @@ function malFunctionRow(
 	argumentSnapshotPlanSymbol: string,
 	argumentSnapshotPlanCount: number,
 	mappedArgumentSlotsSymbol: string,
+	closureCapturesSymbol: string,
 	handlersSymbol: string,
 	compiledSymbol: string,
 	profileSiteIdsSymbol: string,
@@ -253,6 +273,8 @@ function malFunctionRow(
 	const values = [
 		argumentSnapshotPlanSymbol,
 		mappedArgumentSlotsSymbol,
+		closureCapturesSymbol,
+		fn.closureCaptureOwners?.length ?? -1,
 		omitBytecode ? "nullptr" : instructionsSymbol,
 		instructionDataSymbol,
 		gcSafepointsSymbol,
@@ -578,6 +600,17 @@ function nativeCompilationAvailability(
 				}
 			}
 		}
+		for (const entry of native.directEntries) {
+			for (const call of entry.callOverrides ?? []) {
+				if (
+					compiledTargets.has(call.functionIndex) &&
+					compiled[call.functionIndex]!.source.length > 0 &&
+					!image.runtime.functions[call.functionIndex]!.isClassConstructor
+				) {
+					directCompiledTargets.add(call.functionIndex);
+				}
+			}
+		}
 	}
 	const directCompiledEntries: NativeCompilationAvailability["directCompiledEntries"] =
 		new Map();
@@ -675,6 +708,17 @@ function emitNativeFunctions(
 	const references = image.native.functions.map((native) => {
 		const targets = new Set<number>();
 		const entries = new Set<string>();
+		for (const entry of native.directEntries) {
+			validateNativeDirectEntry(
+				image.runtime.functions[native.functionIndex]!,
+				entry,
+				image.native.functions,
+			);
+			for (const call of entry.callOverrides ?? []) {
+				targets.add(call.functionIndex);
+				entries.add(directCompiledEntryKey(call.functionIndex, call.entryId));
+			}
+		}
 		for (const site of native.fieldCalls ?? [])
 			for (const entry of site.entries) {
 				targets.add(entry.functionIndex);
@@ -1033,9 +1077,67 @@ function emitProgramImageSource(
 
 	const positionInfo: Array<{ symbol: string; count: number }> = [];
 	const profileSiteSymbols: Array<string> = [];
+	const closureCaptureOwnerSymbols: Array<string> = [];
+	const closureCaptureLayouts = new Map<string, string>();
+	const closureCaptureValueSymbols: Array<string> = [];
+	const closureCaptureValueLayouts = new Map<string, string>();
+	const closureCaptureSymbols: Array<string> = [];
+	const closureCaptureMetadata = new Map<string, string>();
 
 	for (let i = 0; i < runtime.functions.length; ++i) {
 		const fn = runtime.functions[i]!;
+		if (fn.closureCaptureOwners === undefined) {
+			closureCaptureOwnerSymbols.push("nullptr");
+		} else {
+			const layout = fn.closureCaptureOwners.join(", ");
+			let symbol = closureCaptureLayouts.get(layout);
+			if (symbol === undefined) {
+				symbol = `mal_function_${i}_closure_capture_owners${suffix}`;
+				closureCaptureLayouts.set(layout, symbol);
+				// Non-null metadata distinguishes a known empty closure from a
+				// manually initialized function that still needs its lexical chain.
+				lines.push(`static const i32 ${symbol}[] = { ${layout || "0"} };`, "");
+			}
+			closureCaptureOwnerSymbols.push(symbol);
+		}
+		if (fn.closureCaptureValues === undefined) {
+			closureCaptureValueSymbols.push("nullptr");
+		} else {
+			const layout = closureCaptureValueArrayBody(fn.closureCaptureValues);
+			let symbol = closureCaptureValueLayouts.get(layout);
+			if (symbol === undefined) {
+				symbol = `mal_function_${i}_closure_capture_values${suffix}`;
+				closureCaptureValueLayouts.set(layout, symbol);
+				lines.push(
+					`static const MalClosureCaptureValue ${symbol}[] = {`,
+					layout,
+					"};",
+					"",
+				);
+			}
+			closureCaptureValueSymbols.push(symbol);
+		}
+		if (fn.closureCaptureOwners === undefined) {
+			closureCaptureSymbols.push("nullptr");
+		} else {
+			const body = closureCaptureLayoutBody(
+				closureCaptureOwnerSymbols[i]!,
+				closureCaptureValueSymbols[i]!,
+				fn.closureCaptureValues?.length ?? 0,
+			);
+			let symbol = closureCaptureMetadata.get(body);
+			if (symbol === undefined) {
+				symbol = `mal_function_${i}_closure_captures${suffix}`;
+				closureCaptureMetadata.set(body, symbol);
+				lines.push(
+					`static const MalClosureCaptureLayout ${symbol}[] = {`,
+					body,
+					"};",
+					"",
+				);
+			}
+			closureCaptureSymbols.push(symbol);
+		}
 		if (!omitBytecode[i]) {
 			if (fn.mappedArgumentSlots.length > 0) {
 				lines.push(
@@ -1128,6 +1230,7 @@ function emitProgramImageSource(
 				!omitBytecode[i] && fn.mappedArgumentSlots.length > 0
 					? `mal_function_${i}_mapped_argument_slots${suffix}`
 					: "nullptr",
+				closureCaptureSymbols[i]!,
 				fn.handlers.length > 0 ? `mal_function_${i}_handlers${suffix}` : "nullptr",
 				compiled[i] !== null && compiled[i]!.source.length > 0
 					? compiled[i]!.symbol
@@ -1904,9 +2007,43 @@ export function emitBatch(
 		const argumentSnapshotPlanSymbols: Array<string> = [];
 		const argumentSnapshotPlanCounts: Array<number> = [];
 		const mappedArgumentSlotsSymbols: Array<string> = [];
+		const closureCaptureOwnersSymbols: Array<string> = [];
+		const closureCaptureValuesSymbols: Array<string> = [];
+		const closureCaptureSymbols: Array<string> = [];
 		const handlerSymbols: Array<string> = [];
 		for (let i = 0; i < runtime.functions.length; ++i) {
 			const fn = runtime.functions[i]!;
+			closureCaptureOwnersSymbols.push(
+				fn.closureCaptureOwners !== undefined
+					? intern(
+							"closure_capture_owners",
+							"i32",
+							`    ${fn.closureCaptureOwners.join(", ") || "0"}`,
+						)
+					: "nullptr",
+			);
+			closureCaptureValuesSymbols.push(
+				fn.closureCaptureValues !== undefined
+					? intern(
+							"closure_capture_values",
+							"MalClosureCaptureValue",
+							closureCaptureValueArrayBody(fn.closureCaptureValues),
+						)
+					: "nullptr",
+			);
+			closureCaptureSymbols.push(
+				fn.closureCaptureOwners !== undefined
+					? intern(
+							"closure_captures",
+							"MalClosureCaptureLayout",
+							closureCaptureLayoutBody(
+								closureCaptureOwnersSymbols[i]!,
+								closureCaptureValuesSymbols[i]!,
+								fn.closureCaptureValues?.length ?? 0,
+							),
+						)
+					: "nullptr",
+			);
 			if (omitBytecode[i]) {
 				const seedData = compiledKnownOwnSlotSeedData(fn);
 				instructionSymbols.push("nullptr");
@@ -1981,6 +2118,7 @@ export function emitBatch(
 					argumentSnapshotPlanSymbols[i]!,
 					argumentSnapshotPlanCounts[i]!,
 					mappedArgumentSlotsSymbols[i]!,
+					closureCaptureSymbols[i]!,
 					handlerSymbols[i]!,
 					compiled[i] !== null && compiled[i]!.source.length > 0
 						? compiled[i]!.symbol

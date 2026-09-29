@@ -1039,12 +1039,36 @@ static void mal_gc_trace_table(MalTable *table) {
     }
 }
 
-/** Shade a closure environment cell. Its captured slots and parent chain are
- * traced when the cell is drained from the grey worklist (mal_gc_trace_cell,
- * MAL_HEAP_ENV) — keeping reachable envs (and only those) alive through a sweep. */
+// Active frames and exact complete-chain closures own their lexical links.
+// Tagged/display captures own selected lexical state only; the owners' parent
+// pointers may be stale after the frame exits and must not be followed.
 static void mal_gc_trace_env(MalEnv *env) {
-    if (env != nullptr) {
+    for (; env != nullptr; env = env->parent) {
+        if (mal_env_is_single_owner(env)) {
+            mal_gc_shade(&mal_env_untag_single_owner(env)->header);
+            return;
+        }
+        if (mal_env_is_capture_display(env)) {
+            mal_gc_shade((MalHeapHeader *) env->parent);
+            return;
+        }
         mal_gc_shade(&env->header);
+        if (!env->compact_parent) return;
+    }
+}
+
+void mal_gc_satb_record_env(MalEnv *env) {
+    for (; env != nullptr; env = env->parent) {
+        if (mal_env_is_single_owner(env)) {
+            mal_gc_satb_record(mal_value_from_heap(&mal_env_untag_single_owner(env)->header));
+            return;
+        }
+        if (mal_env_is_capture_display(env)) {
+            mal_gc_satb_record(mal_value_from_heap((MalHeapHeader *) env->parent));
+            return;
+        }
+        mal_gc_satb_record(mal_value_from_heap(&env->header));
+        if (!env->compact_parent) return;
     }
 }
 
@@ -1105,8 +1129,8 @@ static void mal_gc_trace_frame(MalVmFrame *frame) {
 
 /* SATB teardown/resume shade: see gc.h. Mirrors mal_gc_trace_frame but records
  * each edge into the SATB snapshot instead of marking. Only reached while marking
- * is active (call sites gate on mal_gc_marking_active); the env is boxed as a heap
- * value so the deletion barrier keeps the activation's captured-slot env too. */
+ * is active (call sites gate on mal_gc_marking_active). Compact lexical links are
+ * frame-owned edges, so record the full chain before the frame disappears. */
 void mal_gc_satb_shade_frame(MalVmFrame *frame) {
     mal_gc_visit_frame_registers(frame, mal_gc_satb_record);
     if (frame->arguments != nullptr) {
@@ -1118,9 +1142,7 @@ void mal_gc_satb_shade_frame(MalVmFrame *frame) {
     mal_gc_satb_record(frame->arguments_object);
     mal_gc_satb_record(frame->callee);
     mal_gc_satb_record(frame->new_target);
-    if (frame->env != nullptr) {
-        mal_gc_satb_record(mal_value_from_heap(&frame->env->header));
-    }
+    mal_gc_satb_record_env(frame->env);
 }
 
 /** Common edges of every MalObject-based cell: prototype, inline slots, overflow.
@@ -1189,9 +1211,7 @@ static void mal_gc_trace_cell(MalHeapHeader *cell) {
                 mal_gc_test_trace_env_hook(env);
             }
 #endif
-            if (env->parent != nullptr) {
-                mal_gc_shade(&env->parent->header);
-            }
+            if (!env->compact_parent) mal_gc_trace_env(env->parent);
             for (i32 i = 0; i < env->slot_count; ++i) {
                 mal_gc_mark_value(env->slots[i]);
             }
@@ -1244,9 +1264,16 @@ static void mal_gc_trace_cell(MalHeapHeader *cell) {
     }
 
     switch (cell->type) {
-        case MAL_HEAP_ARGUMENTS_OBJECT:
-            mal_gc_trace_env(((MalArgumentsObject *) cell)->env);
+        case MAL_HEAP_ARGUMENTS_OBJECT: {
+            MalEnv *env = ((MalArgumentsObject *) cell)->env;
+            // Mapped arguments own parameter slots, not their expired activation's links.
+            if (env != nullptr) {
+                if (mal_env_is_single_owner(env)) env = mal_env_untag_single_owner(env);
+                mal_gc_shade(mal_env_is_capture_display(env)
+                    ? (MalHeapHeader *) env->parent : &env->header);
+            }
             break;
+        }
         case MAL_HEAP_ARRAY_OBJECT: {
             // Dense element vector: trace the live region [0, dense_count). Hole
             // sentinels are static (non-pointer) values, so marking them is a no-op.
@@ -1275,9 +1302,26 @@ static void mal_gc_trace_cell(MalHeapHeader *cell) {
             }
             break;
         }
-        case MAL_HEAP_FUNCTION_OBJECT:
-            mal_gc_trace_env(((MalFunctionObject *) cell)->creation_env);
+        case MAL_HEAP_FUNCTION_OBJECT: {
+            MalEnv *env = ((MalFunctionObject *) cell)->creation_env;
+            if (env != nullptr && !mal_env_is_single_owner(env) &&
+                    mal_env_is_capture_display(env)) {
+                // Fallback closures can borrow a display coallocated in another function.
+                MalHeapHeader *owner = (MalHeapHeader *) env->parent;
+                if (owner != cell) mal_gc_shade(owner);
+                if (env->function_index == MAL_ENV_CAPTURE_VALUES) {
+                    for (i32 i = 0; i < env->slot_count; i++)
+                        mal_gc_mark_value(env->slots[i + 1]);
+                } else {
+                    MalEnv **scopes = mal_env_capture_scopes(env);
+                    for (i32 i = 0; i < env->slot_count; i++)
+                        mal_gc_shade(&scopes[i]->header);
+                }
+            } else {
+                mal_gc_trace_env(env);
+            }
             break;
+        }
         case MAL_HEAP_NATIVE_FUNCTION_OBJECT: {
             MalNativeFunctionObject *fn = (MalNativeFunctionObject *) cell;
             mal_gc_mark_string(fn->name);

@@ -442,13 +442,28 @@ void mal_vm_free_coroutine_buffer_pool(MalVm *vm) {
 #define MAL_MAX_STRING_CONSTANTS (128 * 1024)
 #define MAL_MAX_BIGINT_CONSTANTS (16 * 1024)
 
-MalEnv *mal_env_new(MalVm *vm, MalEnv *parent, i32 function_index, i32 count) {
+static MalEnv *mal_env_new_storage(MalVm *vm, MalEnv *parent, i32 function_index, i32 count, bool compact_parent) {
     MalEnv *env = mal_heap_alloc(
         &vm->heap, sizeof(MalEnv) + sizeof(MalValue) * (usize) count, MAL_HEAP_ENV
     );
     env->parent = parent;
     env->function_index = function_index;
     env->slot_count = count;
+    env->compact_parent = compact_parent;
+    env->compact_chain_length = 0;
+    if (compact_parent && function_index >= 0) {
+        if (parent == nullptr) {
+            env->compact_chain_length = 1;
+        } else {
+            bool terminal = mal_env_is_single_owner(parent);
+            MalEnv *scope = terminal ? mal_env_untag_single_owner(parent) : parent;
+            u16 length = terminal ? 1 : scope->compact_chain_length;
+            if (scope->compact_parent && length > 0 && length < UINT16_MAX &&
+                    scope->function_index == function_index - 1) {
+                env->compact_chain_length = length + 1;
+            }
+        }
+    }
     for (i32 i = 0; i < count; i++) {
 #if defined(__wasi__)
         env->slots[i] = mal_value_new_undefined();
@@ -457,6 +472,19 @@ MalEnv *mal_env_new(MalVm *vm, MalEnv *parent, i32 function_index, i32 count) {
 #endif
     }
     return env;
+}
+
+MalEnv *mal_env_new(MalVm *vm, MalEnv *parent, i32 function_index, i32 count) {
+    bool compact_parent = function_index >= 0
+        ? function_index < vm->runtime_image->function_count &&
+            vm->runtime_image->functions[function_index].closure_captures != nullptr
+        : parent != nullptr && (mal_env_is_single_owner(parent) || parent->compact_parent ||
+            mal_env_is_capture_display(parent));
+    return mal_env_new_storage(vm, parent, function_index, count, compact_parent);
+}
+
+MalEnv *mal_env_new_compact(MalVm *vm, MalEnv *parent, i32 function_index, i32 count) {
+    return mal_env_new_storage(vm, parent, function_index, count, true);
 }
 
 MalEnv *mal_env_new_with_object(MalVm *vm, MalEnv *parent, MalValue object) {
@@ -2798,7 +2826,7 @@ static void mal_vm_run_until_frame_count(
                 generator->state = MAL_GENERATOR_SUSPENDED_YIELD;
 
                 if (generator->frame.env != nullptr) {
-                    mal_gc_write_barrier(mal_value_from_heap(&generator->frame.env->header));
+                    mal_gc_write_barrier_env(generator->frame.env);
                 }
                 generator->frame = *frame;
                 // Re-suspend: an old generator re-acquires its frame + yielded value,
@@ -2869,7 +2897,7 @@ static void mal_vm_run_until_frame_count(
 
                 // SATB: frame.env is a traced heap field overwritten by the re-suspend.
                 if (state->frame.env != nullptr) {
-                    mal_gc_write_barrier(mal_value_from_heap(&state->frame.env->header));
+                    mal_gc_write_barrier_env(state->frame.env);
                 }
                 state->frame = *frame;
                 // Re-suspend at await: old async state re-acquires its frame.

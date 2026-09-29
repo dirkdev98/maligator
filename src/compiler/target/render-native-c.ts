@@ -121,6 +121,130 @@ import type { BytecodeFunction, BytecodeInstruction } from "./runtime-image.ts";
  */
 type RegisterRep = VmRegisterRepresentation;
 
+function copiedCaptureValues(fn: BytecodeFunction) {
+	return fn.strict && !fn.isGenerator && !fn.isAsync && fn.capturedCount === 0
+		? (fn.closureCaptureValues ?? [])
+		: [];
+}
+
+function captureValueKey(ownerFunctionIndex: number, capturedIndex: number): string {
+	return `${ownerFunctionIndex}:${capturedIndex}`;
+}
+
+function copiedCaptureIndexes(fn: BytecodeFunction): ReadonlyMap<string, number> {
+	return new Map(
+		copiedCaptureValues(fn).map((capture, index) => [
+			captureValueKey(capture.ownerFunctionIndex, capture.capturedIndex),
+			index,
+		]),
+	);
+}
+
+function fixedCaptureOwners(fn: BytecodeFunction, functionIndex: number): Array<number> {
+	const owners = new Set<number>();
+	const copied = copiedCaptureIndexes(fn);
+	for (const instruction of fn.instructions) {
+		if (
+			instruction.opcode === "LOAD_CAPTURED" &&
+			copied.has(captureValueKey(instruction.ownerFunctionIndex, instruction.index))
+		)
+			continue;
+		if (
+			(instruction.opcode === "LOAD_CAPTURED" ||
+				instruction.opcode === "STORE_CAPTURED") &&
+			instruction.ownerFunctionIndex >= 0 &&
+			instruction.ownerFunctionIndex !== functionIndex
+		) {
+			owners.add(instruction.ownerFunctionIndex);
+		}
+	}
+	return [...owners].sort((a, b) => a - b);
+}
+
+function initializeFixedCaptureOwners(
+	fn: BytecodeFunction,
+	functionIndex: number,
+	relocation: NativeRelocationExpressions,
+	declare: boolean,
+): Array<string> {
+	const owners = fixedCaptureOwners(fn, functionIndex);
+	const binding = declare ? "MalEnv *const " : "";
+	const layout = fn.closureCaptureOwners;
+	// Native constructors encode these layouts as one tagged owner, a display,
+	// or an exact complete chain. Wire overlays and resumed scopes can differ.
+	if (
+		owners.length > 0 &&
+		layout !== undefined &&
+		layout.length <= 16 &&
+		!relocation.enabled &&
+		!fn.isGenerator &&
+		!fn.isAsync &&
+		owners.every((owner) => layout.includes(owner))
+	) {
+		const incoming = fn.capturedCount > 0 ? "env->parent" : "env";
+		if (layout.length === 1)
+			return [
+				`${binding}__capture_owner_${owners[0]} = mal_env_untag_single_owner(${incoming});`,
+			];
+		const selected = new Set(owners);
+		const chain: Array<string> = [];
+		const last = layout.indexOf(owners[0]!);
+		for (let index = layout.length - 1; index >= last; index--) {
+			const owner = layout[index]!;
+			if (selected.has(owner))
+				chain.push(
+					`  __capture_owner_${owner} = ${index === 0 ? "mal_env_untag_single_owner(__capture_scope)" : "__capture_scope"};`,
+				);
+			if (index > last) chain.push("  __capture_scope = __capture_scope->parent;");
+		}
+		return [
+			...(declare ? owners.map((owner) => `MalEnv *__capture_owner_${owner};`) : []),
+			`MalEnv *const __closure_captures = ${incoming};`,
+			"if (__closure_captures->function_index == MAL_ENV_CAPTURE_VECTOR) {",
+			"  MalEnv **const __capture_scopes = mal_env_capture_scopes(__closure_captures);",
+			...owners.map(
+				(owner) =>
+					`  __capture_owner_${owner} = __capture_scopes[${layout.indexOf(owner)}];`,
+			),
+			"} else {",
+			"  MalEnv *__capture_scope = __closure_captures;",
+			...chain,
+			"}",
+		];
+	}
+	if (owners.length > 1) {
+		return [
+			`${relocation.enabled ? "" : "static "}const i32 __capture_owner_ids[] = { ${owners.map((owner) => relocation.ownerFunctionIndex(owner)).join(", ")} };`,
+			`MalEnv *__capture_owner_scopes[${owners.length}];`,
+			`mal_vm_capture_owners(env, __capture_owner_ids, ${owners.length}, __capture_owner_scopes);`,
+			...owners.map(
+				(owner, index) =>
+					`${binding}__capture_owner_${owner} = __capture_owner_scopes[${index}];`,
+			),
+		];
+	}
+	return owners.map((owner) => {
+		const captureIndex = fn.closureCaptureOwners?.indexOf(owner) ?? -1;
+		const lookup =
+			captureIndex < 0
+				? `mal_vm_capture_owner(env, ${relocation.ownerFunctionIndex(owner)})`
+				: `mal_vm_capture_owner_at(env, ${relocation.ownerFunctionIndex(owner)}, ${captureIndex})`;
+		return `${binding}__capture_owner_${owner} = ${lookup};`;
+	});
+}
+
+function initializeCopiedCaptureValues(
+	fn: BytecodeFunction,
+	relocation: NativeRelocationExpressions,
+): Array<string> {
+	// A direct entry can receive an ordinary or foreign display. The inline
+	// accessor validates the tuple before reading its certified display ordinal.
+	return copiedCaptureValues(fn).map(
+		(capture, index) =>
+			`const MalValue __capture_value_${index} = mal_vm_load_captured_value_at(env, ${relocation.ownerFunctionIndex(capture.ownerFunctionIndex)}, ${capture.capturedIndex}, ${index});`,
+	);
+}
+
 function isNumericRep(rep: RegisterRep): boolean {
 	return rep === "number" || rep === "int32";
 }
@@ -663,6 +787,17 @@ function emitCompiledVariant(
 									inputKindMasks: masks,
 								};
 						}
+						// These calls depend on this entry's parameter proof. Keep them
+						// out of the canonical boxed entry and other typed siblings.
+						for (const call of directEntry.callOverrides ?? []) {
+							instructions[call.instructionIp] = {
+								kind: "call",
+								...(call.guarded
+									? { guardedFunctionIndices: [call.functionIndex] }
+									: { directFunctionIndex: call.functionIndex }),
+								directEntryId: call.entryId,
+							};
+						}
 						return instructions;
 					})(),
 				};
@@ -1023,7 +1158,8 @@ function emitCompiledVariant(
 	// A root frame is needed to scan MalValue registers, a derived constructor's
 	// `this`, this activation's captured env, and/or a reassigned `with` env; every
 	// exit past its link must unlink it.
-	const needsRootFrame = totalSlots > 0 || capturesEnv || hasWith;
+	const needsRootFrame =
+		totalSlots > 0 || capturesEnv || hasWith || copiedCaptureValues(fn).length > 0;
 	const retainsForwardedArguments = fn.instructions.some(
 		(instruction) => instruction.opcode === "CALL_REST_ARGUMENTS",
 	);
@@ -1225,7 +1361,7 @@ function emitCompiledVariant(
 	if (needsRootFrame) {
 		lines.push(
 			`    ${relocatable ? "" : "static "}const MalFrameDescriptor __gc_desc = { .function_index = ${relocation.functionIndex(index)}, .slot_count = ${totalSlots} };`,
-			`    MalRootFrame __gc_frame = { .prev = mal_root_frame_head, .desc = &__gc_desc, .slots = ${totalSlots > 0 ? "__gc_slots" : "nullptr"}, .inactive_slots = 0, .env = nullptr };`,
+			`    MalRootFrame __gc_frame = { .prev = mal_root_frame_head, .desc = &__gc_desc, .slots = ${totalSlots > 0 ? "__gc_slots" : "nullptr"}, .inactive_slots = 0, .env = ${fn.closureCaptureOwners?.length === 0 ? "nullptr" : "env"} };`,
 			`    mal_root_frame_head = &__gc_frame;`,
 		);
 	}
@@ -1243,9 +1379,16 @@ function emitCompiledVariant(
 	// it, then root it in the published frame. capturesEnv implies needsRootFrame.
 	if (capturesEnv) {
 		lines.push(
-			`    env = mal_env_new(vm, env, ${relocation.functionIndex(index)}, ${fn.capturedCount});`,
+			`    env = ${fn.closureCaptureOwners === undefined ? "mal_env_new" : "mal_env_new_compact"}(vm, env, ${relocation.functionIndex(index)}, ${fn.capturedCount});`,
 			`    __gc_frame.env = env;`,
 		);
+	}
+
+	for (const line of initializeFixedCaptureOwners(fn, index, relocation, true)) {
+		lines.push(`    ${line}`);
+	}
+	for (const line of initializeCopiedCaptureValues(fn, relocation)) {
+		lines.push(`    ${line}`);
 	}
 
 	for (const line of body.lines) {
@@ -1617,6 +1760,9 @@ function emitResumableFunction(
 	lines.push(
 		`    MalGeneratorObject *resume_state = (MalGeneratorObject *) entry_state;`,
 	);
+	for (const owner of fixedCaptureOwners(fn, index)) {
+		lines.push(`    MalEnv *__capture_owner_${owner};`);
+	}
 	lines.push(`    MalGeneratorObject *__coro = resume_state;`);
 	lines.push(`    (void) __coro;`);
 	if (isAsyncFunction) {
@@ -1646,6 +1792,14 @@ function emitResumableFunction(
 		`        __gc_frame = (MalRootFrame){ .prev = mal_root_frame_head, .desc = &__gc_desc, .slots = __gc_slots, .inactive_slots = 0, .env = env };`,
 	);
 	lines.push(`        mal_root_frame_head = &__gc_frame;`);
+	for (const line of initializeFixedCaptureOwners(
+		fn,
+		index,
+		nativeRelocationExpressions(false),
+		false,
+	)) {
+		lines.push(`        ${line}`);
+	}
 	lines.push(`        switch (resume_state->frame.instruction_pointer) {`);
 	for (const resumeIp of resumePoints) {
 		lines.push(`        case ${resumeIp}: goto L${resumeIp};`);
@@ -1659,12 +1813,12 @@ function emitResumableFunction(
 	// build the captured env, then load parameters boxed before falling into body.
 	lines.push(`        __gc_slots = mal_coroutine_alloc_registers(vm, ${totalSlots});`);
 	lines.push(
-		`        __gc_frame = (MalRootFrame){ .prev = mal_root_frame_head, .desc = &__gc_desc, .slots = __gc_slots, .inactive_slots = 0, .env = env };`,
+		`        __gc_frame = (MalRootFrame){ .prev = mal_root_frame_head, .desc = &__gc_desc, .slots = __gc_slots, .inactive_slots = 0, .env = ${fn.closureCaptureOwners?.length === 0 ? "nullptr" : "env"} };`,
 	);
 	lines.push(`        mal_root_frame_head = &__gc_frame;`);
 	if (capturesEnv) {
 		lines.push(
-			`        env = mal_env_new(vm, env, ${index}, ${fn.capturedCount});`,
+			`        env = ${fn.closureCaptureOwners === undefined ? "mal_env_new" : "mal_env_new_compact"}(vm, env, ${index}, ${fn.capturedCount});`,
 			`        __gc_frame.env = env;`,
 		);
 	}
@@ -1676,6 +1830,14 @@ function emitResumableFunction(
 			`        MAL_PERF_ADD(argument_snapshot_logical_values, ${fn.argumentSnapshotCount});`,
 			`        MAL_PERF_ADD(argument_snapshot_destination_writes, ${fn.argumentSnapshotCount});`,
 		);
+	}
+	for (const line of initializeFixedCaptureOwners(
+		fn,
+		index,
+		nativeRelocationExpressions(false),
+		false,
+	)) {
+		lines.push(`        ${line}`);
 	}
 	lines.push(`    }`);
 
@@ -2287,6 +2449,11 @@ function emitBody(
 	if (!vmRegionActionsAreCurrent(specializations, regionActions)) {
 		throw new Error("Native function has stale region actions");
 	}
+	const stableCaptureOwners = new Set(fixedCaptureOwners(fn, functionIndex));
+	const copiedCaptures = copiedCaptureIndexes(fn);
+	// Closed-source layouts include every external lexical owner at creation,
+	// and every entry receives that closure's state, including coroutine resumes.
+	const requiredCaptureOwners = new Set(fn.closureCaptureOwners);
 	const numericFusionActionByIp = new Map<number, NativeNumericFusionAction>();
 	for (const action of regionActions) {
 		const region = specializations[action.regionIndex];
@@ -3498,6 +3665,9 @@ function emitBody(
 				directCompiledTargets,
 				directCompiledEntries,
 				ownedCaptureFunctionIndex: ownsCaptureEnvironment ? functionIndex : undefined,
+				fixedCaptureOwners: stableCaptureOwners,
+				requiredCaptureOwners,
+				copiedCaptures,
 				strictCompiledTargets,
 				directResultRepresentation,
 				directArgumentRepresentations,
@@ -3865,6 +4035,9 @@ interface NativeStaticPropertyProjectionAction {
 
 interface NativeInstructionContext {
 	readonly ownedCaptureFunctionIndex?: number;
+	readonly fixedCaptureOwners?: ReadonlySet<number>;
+	readonly requiredCaptureOwners?: ReadonlySet<number>;
+	readonly copiedCaptures?: ReadonlyMap<string, number>;
 	readonly resources: Set<NativeBodyResource>;
 	readonly directEntryCalls: Map<number, Set<number>>;
 	readonly profileSiteId?: number;
@@ -4066,6 +4239,9 @@ function emitInstruction(
 		denseIteratorStepRootPublication: context.denseIteratorStepRootPublication,
 		denseIteratorStepInactiveRootMask: context.denseIteratorStepInactiveRootMask,
 		ownedCaptureFunctionIndex: context.ownedCaptureFunctionIndex,
+		fixedCaptureOwners: context.fixedCaptureOwners,
+		requiredCaptureOwners: context.requiredCaptureOwners,
+		copiedCaptures: context.copiedCaptures,
 		strictCompiledTargets: context.strictCompiledTargets,
 		directCompiledTargets,
 		directCompiledEntries,
@@ -4917,11 +5093,6 @@ function emitInstruction(
 				throwCheck(),
 			];
 		case "CREATE_FUNCTION":
-			// The closure captures this frame's environment. Only reachable when
-			// the enclosing function has no captured slots of its own (see the
-			// capturedCount guard in emitCompiledFunction), so `env` — the
-			// enclosing function's creation_env — is exactly what its interpreted
-			// frame's env would be, making the closure's creation_env correct.
 			return [
 				`r${instruction.dst} = mal_vm_op_create_function(vm, ${relocation.functionIndex(instruction.functionIndex)}, env);`,
 			];
@@ -4991,6 +5162,19 @@ function emitInstruction(
 			// fresh-call parameter (a coroutine resume skips the prologue).
 			return [`r${instruction.dst} = callee;`];
 		case "LOAD_CAPTURED": {
+			const copied = context.copiedCaptures?.get(
+				captureValueKey(instruction.ownerFunctionIndex, instruction.index),
+			);
+			if (copied !== undefined)
+				return [`r${instruction.dst} = __capture_value_${copied};`];
+			if (context.fixedCaptureOwners?.has(instruction.ownerFunctionIndex)) {
+				const owner = `__capture_owner_${instruction.ownerFunctionIndex}`;
+				if (context.requiredCaptureOwners?.has(instruction.ownerFunctionIndex))
+					return [`r${instruction.dst} = ${owner}->slots[${instruction.index}];`];
+				return [
+					`r${instruction.dst} = ${owner} != nullptr ? ${owner}->slots[${instruction.index}] : MAL_VALUE_UNDEFINED;`,
+				];
+			}
 			if (instruction.ownerFunctionIndex === context.ownedCaptureFunctionIndex)
 				return [`r${instruction.dst} = env->slots[${instruction.index}];`];
 			return [
@@ -4998,6 +5182,23 @@ function emitInstruction(
 			];
 		}
 		case "STORE_CAPTURED": {
+			if (context.fixedCaptureOwners?.has(instruction.ownerFunctionIndex)) {
+				const owner = `__capture_owner_${instruction.ownerFunctionIndex}`;
+				const primitive =
+					reps[instruction.src] === "number" ||
+					reps[instruction.src] === "int32" ||
+					reps[instruction.src] === "boolean";
+				const store = [
+					`mal_gc_write_barrier(${owner}->slots[${instruction.index}]);`,
+					`${owner}->slots[${instruction.index}] = ${boxed(instruction.src)};`,
+					...(!primitive
+						? [`mal_gc_card(&${owner}->header, ${boxed(instruction.src)});`]
+						: []),
+				];
+				if (context.requiredCaptureOwners?.has(instruction.ownerFunctionIndex))
+					return store;
+				return [`if (${owner} != nullptr) {`, ...store.map((line) => `  ${line}`), `}`];
+			}
 			if (instruction.ownerFunctionIndex === context.ownedCaptureFunctionIndex) {
 				const primitive =
 					reps[instruction.src] === "number" ||
@@ -5007,7 +5208,7 @@ function emitInstruction(
 					`mal_gc_write_barrier(env->slots[${instruction.index}]);`,
 					`env->slots[${instruction.index}] = ${boxed(instruction.src)};`,
 					...(!primitive
-						? [`mal_gc_card(&env->header, env->slots[${instruction.index}]);`]
+						? [`mal_gc_card(&env->header, ${boxed(instruction.src)});`]
 						: []),
 				];
 			}

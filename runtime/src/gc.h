@@ -4,9 +4,9 @@
 #include "value.h"
 
 typedef struct MalVm MalVm;
+struct MalEnv;
 
 #if !defined(__wasi__)
-struct MalEnv;
 /* Native tests can pause workers at a controlled edge-read boundary. */
 extern void (*mal_gc_test_trace_env_hook)(struct MalEnv *env);
 extern void (*mal_gc_test_trace_snapshot_hook)(MalHeapHeader *cell);
@@ -41,6 +41,8 @@ extern _Atomic bool mal_gc_poll;
 
 /* Retain an overwritten heap edge until an incremental major reaches remark. */
 void mal_gc_satb_record(MalValue old_value);
+/* Retain an active lexical chain, including a compact display's owning closure. */
+void mal_gc_satb_record_env(struct MalEnv *env);
 
 typedef struct MalVmFrame MalVmFrame;
 
@@ -141,6 +143,12 @@ void mal_gc_finalize_all(MalVm *vm);
 static inline void mal_gc_write_barrier(MalValue old_value) {
     if (mal_gc_marking_active) {
         mal_gc_satb_record(old_value);
+    }
+}
+
+static inline void mal_gc_write_barrier_env(struct MalEnv *env) {
+    if (mal_gc_marking_active) {
+        mal_gc_satb_record_env(env);
     }
 }
 

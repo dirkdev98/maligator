@@ -14,6 +14,7 @@ import type { CoreLocalOptimizationPlanInput } from "./core-ir-region-selection.
 import { verifyCoreOptimizationPlan } from "./core-ir-region-validity.ts";
 import { verifyCoreProgram } from "./core-ir-verifier.ts";
 import type { CoreVerificationProfile } from "./core-ir-verifier.ts";
+import { liftLocalCaptureArguments } from "./core-local-capture-arguments.ts";
 import {
 	CORE_CONSTRUCTION_ANNOTATION_PASSES,
 	CORE_CONSTRUCTION_NORMALIZATION_PASSES,
@@ -222,6 +223,7 @@ export function optimizeCore(
 	);
 	pruneUnusedPlatformAliases(compilation);
 	pruneUnusedPlatformModuleInitializers(compilation);
+	if (ablatedFamily !== "inlining-cross-call") liftLocalCaptureArguments(compilation);
 	measurePhase(
 		"dense-generation-barrier",
 		() => compilation.program.finalizeConstructionGeneration(),

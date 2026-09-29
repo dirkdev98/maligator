@@ -65,6 +65,7 @@ import {
 	coreArgumentObservation,
 	analyzeCoreNativeEntry,
 } from "./core-native-entry-analysis.ts";
+import { connectCoreNativeEntries } from "./core-native-entry-graph.ts";
 import {
 	coreReadOnlyNumericParameterFields,
 	coreFieldEntryHasNumericComputations,
@@ -2023,9 +2024,63 @@ export function buildCoreOptimizationPlan(
 			}
 		}
 	}
-	const directEntries = [...directEntriesByFunction]
+	const initialDirectEntries = [...directEntriesByFunction]
 		.sort(([left], [right]) => left - right)
 		.flatMap(([, entries]) => entries);
+	const directEntries =
+		options.context?.facts.closure.sourceClosure.kind !== "known"
+			? initialDirectEntries
+			: connectCoreNativeEntries(
+					program,
+					summaries,
+					analyses,
+					live,
+					initialDirectEntries,
+					(target, instruction, generatedCode, compilerWork) => {
+						const budget: CoreTransformCandidate = {
+							kind: "direct-entry",
+							caller: target,
+							site: instruction,
+							revision: selectedExpansionsByFunction.get(target) ?? 0,
+							priorityClass: 2,
+							priorityScore: -8,
+							targets: [target],
+							generatedCodeCost: generatedCode,
+							compilerWorkCost: compilerWork,
+							// Native sibling counts are bounded by the graph worklist;
+							// local region sites use a different instruction ID space.
+							expansive: false,
+						};
+						increment(discoveredByKind, "direct-entry");
+						if (!service.offer(budget)) return false;
+						service.next();
+						const reason = service.admit(budget);
+						if (reason !== undefined) {
+							service.recordDeclined(reason);
+							increment(declinedByPlanReason, reason);
+							return false;
+						}
+						service.recordApplied(budget);
+						selectedExpansionsByFunction.set(
+							target,
+							(selectedExpansionsByFunction.get(target) ?? 0) + 1,
+						);
+						increment(selectedByKind, "direct-entry");
+						return true;
+					},
+					(functionId, compilerWork) => {
+						const cost = {
+							caller: functionId,
+							generatedCodeCost: 0,
+							compilerWorkCost: compilerWork,
+						};
+						const reason = service.admitDiscovery(cost);
+						if (reason !== undefined) return false;
+						service.recordDiscovery(cost);
+						discovery.compilerWork += compilerWork;
+						return true;
+					},
+				);
 	const budgetStatistics = service.statisticsSince(budgetBaseline);
 	const statistics: CoreOptimizationPlanStatistics = Object.freeze({
 		...budgetStatistics,

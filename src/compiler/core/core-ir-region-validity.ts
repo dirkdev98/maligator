@@ -1787,6 +1787,7 @@ function immutablePlanCopy(plan: CoreOptimizationPlan): CoreOptimizationPlan {
 			entry.valueRepresentations,
 			entry.operatorInputs,
 			entry.constantBooleans,
+			entry.callOverrides,
 		]) {
 			if (payload !== undefined) proofPayloads.add(payload);
 		}
@@ -1943,6 +1944,21 @@ export function verifyCoreOptimizationPlan(
 		}
 	}
 	const entriesByFunction = new Map<CoreFunctionId, number>();
+	const entriesByKey = new Map(
+		plan.directEntries.map((entry) => [`${entry.function}:${entry.id}`, entry]),
+	);
+	const reachableEntries = new Set<string>();
+	const pendingEntries = plan.directEntries.filter((entry) => entry.callSites.length > 0);
+	for (let cursor = 0; cursor < pendingEntries.length; cursor++) {
+		const entry = pendingEntries[cursor]!;
+		const key = `${entry.function}:${entry.id}`;
+		if (reachableEntries.has(key)) continue;
+		reachableEntries.add(key);
+		for (const call of entry.callOverrides ?? []) {
+			const target = entriesByKey.get(`${call.target}:${call.entryId}`);
+			if (target !== undefined) pendingEntries.push(target);
+		}
+	}
 	const callSites = new Map<
 		string,
 		{
@@ -1960,6 +1976,7 @@ export function verifyCoreOptimizationPlan(
 			entry.operatorInputs,
 			entry.constantBooleans,
 			entry.fieldParameters?.loads,
+			entry.callOverrides,
 		]) {
 			for (const { instruction } of records ?? []) {
 				if (!emittedInstructions.has(instruction))
@@ -1972,6 +1989,18 @@ export function verifyCoreOptimizationPlan(
 			fail(
 				`direct entry ${entry.function}:${entry.id} has no current representation proof`,
 			);
+		const overriddenInstructions = new Set<CoreInstructionId>();
+		for (const call of entry.callOverrides ?? []) {
+			if (
+				overriddenInstructions.has(call.instruction) ||
+				fn.instructionKind(call.instruction) !== "operation" ||
+				fn.instructionOpcodeName(call.instruction) !== "call" ||
+				!entriesByKey.has(`${call.target}:${call.entryId}`) ||
+				(call.guarded !== undefined && call.guarded !== true)
+			)
+				fail(`direct entry ${entry.function}:${entry.id} has an invalid call override`);
+			overriddenInstructions.add(call.instruction);
+		}
 		if (entry.argumentRepresentations !== undefined) {
 			const observation = coreArgumentObservation(fn);
 			if (
@@ -2060,8 +2089,8 @@ export function verifyCoreOptimizationPlan(
 				`direct entry ${entry.function}:${entry.id} disagrees with Core representations`,
 			);
 		}
-		if (entry.callSites.length === 0) {
-			fail(`direct entry ${entry.function}:${entry.id} has no callsites`);
+		if (!reachableEntries.has(`${entry.function}:${entry.id}`)) {
+			fail(`direct entry ${entry.function}:${entry.id} has no reachable callsites`);
 		}
 		for (const site of entry.callSites) {
 			if (

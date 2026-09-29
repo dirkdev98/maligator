@@ -15,9 +15,8 @@ typedef struct MalFunctionObject {
     MalObjectStorage object_storage;
     i32 function_index;
 
-    /**
-     * Captured-variable chain of the activation this closure was created in.
-     */
+    // Closed images select a tagged owner, inline vector, or exact complete chain.
+    // Dynamic images retain the ordinary lexical chain.
     MalEnv *creation_env;
 
 #if MAL_REALMS
@@ -121,7 +120,7 @@ void mal_function_object_init(
 );
 
 /**
- * Allocate a script function with coallocated `length` and `name` shape slots.
+ * Allocate a script function with coallocated metadata and capture_bytes of tail storage.
  */
 MalFunctionObject *mal_function_object_new(
     MalHeap *heap,
@@ -130,7 +129,8 @@ MalFunctionObject *mal_function_object_new(
     i32 length,
     MalString *name,
     MalKey length_key,
-    MalKey name_key
+    MalKey name_key,
+    usize capture_bytes
 );
 
 /**

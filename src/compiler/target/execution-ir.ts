@@ -96,6 +96,12 @@ export type ExecutionSafepoint = ExecutionSafepointRoots &
  */
 export interface ExecutionDirectEntry {
 	readonly id: number;
+	readonly callOverrides?: ReadonlyArray<{
+		readonly instruction: CompilerInstruction;
+		readonly functionIndex: number;
+		readonly entryId: number;
+		readonly guarded?: true;
+	}>;
 	readonly parameterRepresentations: ReadonlyArray<ExecutionRegisterRepresentation>;
 	readonly resultRepresentation: ExecutionRegisterRepresentation;
 	readonly fieldParameters?: {

@@ -859,6 +859,18 @@ typedef struct MalArgumentSnapshotMove {
     i32 source;
 } MalArgumentSnapshotMove;
 
+typedef struct MalClosureCaptureValue {
+    i32 owner_function_index;
+    i32 captured_index;
+} MalClosureCaptureValue;
+
+// Shared cold construction metadata; native entries retain their own proven layout.
+typedef struct MalClosureCaptureLayout {
+    const i32 *owners;
+    const MalClosureCaptureValue *values;
+    i32 value_count;
+} MalClosureCaptureLayout;
+
 typedef struct MalFunction {
     /*
      * Pointer-sized fields lead the structure, followed by the i32 metadata and
@@ -868,6 +880,7 @@ typedef struct MalFunction {
      */
     const MalArgumentSnapshotMove *argument_snapshot_plan;
     const i32 *mapped_argument_slots;
+    const MalClosureCaptureLayout *closure_captures;
     const MalInstruction *instructions;
     const i32 *instruction_data;
     /** Flat [ip, root_count, roots..., clear_count, clears...] sorted by IP. */
@@ -901,6 +914,8 @@ typedef struct MalFunction {
 
     i32 register_count;
     i32 captured_count;
+    /** -1 retains the dynamic chain; otherwise the immutable external-owner layout. */
+    i32 closure_capture_owner_count;
     /** -1 never retains; INT32_MAX always retains nonempty input; otherwise the
      * largest static index whose absence requires the supplied argument slice. */
     i32 argument_retention_limit;
@@ -958,7 +973,7 @@ typedef struct MalFunction {
     bool has_prototype;
 } MalFunction;
 
-static_assert(sizeof(MalFunction) <= (MAL_PROFILE ? 152 : 144),
+static_assert(sizeof(MalFunction) <= (MAL_PROFILE ? 168 : 160),
               "function metadata outgrew its packed layout");
 
 typedef struct MalPreparedValue {
@@ -1129,15 +1144,15 @@ typedef struct MalCjsModuleSlot {
     bool loaded;
 } MalCjsModuleSlot;
 
-/**
- * Heap-allocated captured-variable storage. One node per activation of a
- * function with captured slots; closures keep their defining chain reachable
- * through MalFunctionObject.creation_env. A GC cell (MAL_HEAP_ENV): the
- * collector marks envs reachable via creation_env, interpreter/compiled frame
- * envs, and parent chains, and sweeps the rest. The header must stay first.
- */
+// Shared atomic binding slots, grouped by activation or per-iteration identity.
+// Compact closures retain selected owners without their parent links. Active
+// frames root the lexical chain explicitly; fallback environments own the chain.
 typedef struct MalEnv {
     MalHeapHeader header;
+    // Active frames root lexical links; compact closures retain selected slots only.
+    bool compact_parent;
+    // Consecutive nonnegative owners ending at null/tag; zero means unproved.
+    u16 compact_chain_length;
     struct MalEnv *parent;
     // Capture-scope id this env satisfies for LOAD/STORE_CAPTURED matching. >= 0
     // is a function index (the activation's own captured slots); < 0 is a synthetic
@@ -1168,6 +1183,72 @@ static_assert(alignof(_Atomic(MalValue)) == alignof(MalValue),
 // with scope on the env chain (rather than a frame-local stack) is what lets a
 // closure created inside `with` capture the with-object via its creation_env.
 #define MAL_ENV_WITH_OBJECT (-2147483647 - 1)
+
+// An inline closure display is owned by the function stored in parent; it is not
+// a separately allocated GC cell. The payload holds a layout pointer then scopes.
+#define MAL_ENV_CAPTURE_VECTOR (-2147483647)
+#define MAL_ENV_CAPTURE_VALUES (-2147483646)
+
+// Both inline display kinds use parent as their containing function, not a scope.
+static inline bool mal_env_is_capture_display(const MalEnv *env) {
+    return env->function_index == MAL_ENV_CAPTURE_VECTOR ||
+        env->function_index == MAL_ENV_CAPTURE_VALUES;
+}
+
+// A single selected owner fits in the closure's environment pointer. Its tag
+// makes it a terminal reference: the owner's lexical parent may already be dead.
+static_assert(alignof(MalEnv) >= 2, "single-owner capture tag requires aligned environments");
+
+static inline bool mal_env_is_single_owner(const MalEnv *env) {
+    return ((uptr) env & (uptr) 1) != 0;
+}
+
+static inline MalEnv *mal_env_untag_single_owner(const MalEnv *env) {
+    return (MalEnv *) ((uptr) env & ~(uptr) 1);
+}
+
+// owner is a non-null, untagged slot-storage cell.
+static inline MalEnv *mal_env_tag_single_owner(MalEnv *owner) {
+    return (MalEnv *) ((uptr) owner | (uptr) 1);
+}
+
+static inline const i32 *mal_env_capture_layout(const MalEnv *env) {
+    return ((const i32 *const *)(const void *) env->slots)[0];
+}
+
+static inline MalEnv **mal_env_capture_scopes(MalEnv *env) {
+    return (MalEnv **)(void *) env->slots + 1;
+}
+
+static inline const MalClosureCaptureValue *mal_env_capture_values_layout(const MalEnv *env) {
+    return ((const MalClosureCaptureValue *const *)(const void *) env->slots)[0];
+}
+
+MalEnv *mal_vm_capture_owner(MalEnv *env, i32 owner_function_index);
+// owners is sorted and unique; missing bindings are represented by null entries.
+bool mal_vm_capture_owners(MalEnv *env, const i32 *owners, i32 count, MalEnv **scopes);
+
+// Native code knows the ordinal in its immutable capture layout. A local scope
+// can precede that display, and dynamic callers can supply a different shape;
+// preserve nearest-binding identity and use the general resolver on mismatch.
+static inline MalEnv *mal_vm_capture_owner_at(MalEnv *env, i32 owner_function_index, i32 capture_index) {
+    for (; env != nullptr; env = env->parent) {
+        if (mal_env_is_single_owner(env)) {
+            MalEnv *owner = mal_env_untag_single_owner(env);
+            return owner->function_index == owner_function_index ? owner : nullptr;
+        }
+        if (env->function_index == MAL_ENV_CAPTURE_VALUES) return nullptr;
+        if (env->function_index == owner_function_index) return env;
+        if (env->function_index == MAL_ENV_CAPTURE_VECTOR) {
+            if (capture_index >= 0 && capture_index < env->slot_count &&
+                    mal_env_capture_layout(env)[capture_index] == owner_function_index) {
+                return mal_env_capture_scopes(env)[capture_index];
+            }
+            return mal_vm_capture_owner(env, owner_function_index);
+        }
+    }
+    return nullptr;
+}
 
 /**
  * A native-backend (compiled) call frame, tracked only for stack traces. The
@@ -2172,6 +2253,8 @@ void mal_vm_retain_loaded_runtime_image(MalVm *vm, MalLoadedRuntimeImage *loaded
  * collection: the caller must have rooted `parent` and any live frame slots
  * before calling (the compiled prologue publishes its root frame first). */
 MalEnv *mal_env_new(MalVm *vm, MalEnv *parent, i32 function_index, i32 count);
+// Native entries with a certified closure layout already know the parent policy.
+MalEnv *mal_env_new_compact(MalVm *vm, MalEnv *parent, i32 function_index, i32 count);
 
 // Allocate a `with` object environment record (function_index MAL_ENV_WITH_OBJECT,
 // slots[0] = object) and link it onto `parent`. Pushed onto the env chain by

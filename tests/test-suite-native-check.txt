@@ -64,3 +64,6 @@ tests/native/string-search-followups.test.ts
 tests/native/transient-property-query.test.ts
 
 tests/native/utf8-string-storage.test.ts
+
+tests/native/closure-state-sharing.test.ts
+tests/native/closure-result-contracts.test.ts

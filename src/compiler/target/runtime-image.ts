@@ -428,9 +428,12 @@ export function vmSafepointRootMapsAreTrusted(fn: BytecodeFunction): boolean {
 	}
 }
 
-/**
- * Keep inline with the C struct
- */
+export interface ClosureCaptureValue {
+	readonly ownerFunctionIndex: number;
+	readonly capturedIndex: number;
+}
+
+/** Keep inline with the C struct. */
 export interface BytecodeFunction {
 	nameStringIndex: number;
 	isGenerator: boolean;
@@ -443,6 +446,10 @@ export interface BytecodeFunction {
 	/** Exact live traced registers at portable GC-capable instructions. */
 	gcSafepoints?: Array<VmSafepointRootMap>;
 	capturedCount: number;
+	/** External lexical owners; undefined retains the dynamic environment chain. */
+	closureCaptureOwners?: Array<number>;
+	/** Immutable values initialized before every creation of this closure. */
+	closureCaptureValues?: Array<ClosureCaptureValue>;
 	strict: boolean;
 
 	/**
@@ -503,6 +510,30 @@ export interface BytecodeFunction {
 	positions: Array<number>;
 	/** Dense profile site for each instruction, or -1 when no source is known. */
 	profileSiteIds?: Array<number>;
+}
+
+/** Closure metadata does not change instruction liveness or safepoint roots. */
+export function withClosureCaptureOwners(
+	fn: BytecodeFunction,
+	closureCaptureOwners: Array<number>,
+): BytecodeFunction {
+	const result = { ...fn, closureCaptureOwners };
+	if (vmSafepointRootMapsAreTrusted(fn)) {
+		trustedVmSafepointRootMaps.set(result, vmSafepointRootMapTrustFingerprint(result));
+	}
+	return result;
+}
+
+/** Capture descriptors preserve the instruction and safepoint contracts. */
+export function withClosureCaptureValues(
+	fn: BytecodeFunction,
+	closureCaptureValues: Array<ClosureCaptureValue>,
+): BytecodeFunction {
+	const result = { ...fn, closureCaptureValues };
+	if (vmSafepointRootMapsAreTrusted(fn)) {
+		trustedVmSafepointRootMaps.set(result, vmSafepointRootMapTrustFingerprint(result));
+	}
+	return result;
 }
 
 /** -1 never retains; INT32_MAX always retains nonempty input; otherwise the

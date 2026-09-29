@@ -1,4 +1,4 @@
-import { lstatSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, lstatSync, readdirSync, readFileSync } from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -139,7 +139,24 @@ export function loadRuntimeGapCatalog(file = RUNTIME_GAP_CATALOG): RuntimeGapCat
 	const survey = names(presets.survey, "survey preset");
 	const seen = new Set<string>();
 	const directory = path.dirname(file);
-	const cases = catalog.cases.map((value) => {
+	// Focused mechanism suites can be added without rewriting the generated catalog.
+	const fragments = path.join(directory, `${path.basename(file, ".json")}.d`);
+	const values: Array<unknown> = [...(catalog.cases as ReadonlyArray<unknown>)];
+	if (existsSync(fragments)) {
+		for (const name of readdirSync(fragments)
+			.filter((name) => name.endsWith(".json"))
+			.sort()) {
+			const fragment = record(
+				JSON.parse(readFileSync(path.join(fragments, name), "utf8")),
+				`runtime-gap fragment ${name}`,
+			);
+			if (fragment.schema !== 1 || !Array.isArray(fragment.cases)) {
+				throw new Error(`runtime-gap fragment schema is not supported: ${name}`);
+			}
+			values.push(...(fragment.cases as ReadonlyArray<unknown>));
+		}
+	}
+	const cases = values.map((value) => {
 		const caseDescriptor = fixtureDescriptor(value, directory);
 		if (seen.has(caseDescriptor.id)) {
 			throw new Error(`runtime-gap catalog repeats case: ${caseDescriptor.id}`);

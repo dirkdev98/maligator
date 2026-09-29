@@ -2493,6 +2493,7 @@ function lowerFunctionToTarget(
 		}
 	}
 	const directEntries = directEntryPlans.map((entry) => {
+		const overriddenCalls = new Set(entry.callOverrides?.map((call) => call.instruction));
 		const representations = [...physicalRepresentations];
 		if (entry.valueRepresentations !== undefined) {
 			const assigned = new Map<number, ExecutionRegisterRepresentation>();
@@ -2512,6 +2513,7 @@ function lowerFunctionToTarget(
 							privatePackedRestLengths.has(instruction));
 					if (
 						!directRestOperation &&
+						!overriddenCalls.has(instruction) &&
 						![
 							"binary",
 							"unary",
@@ -2574,6 +2576,17 @@ function lowerFunctionToTarget(
 		}
 		return {
 			id: entry.id,
+			...(entry.callOverrides === undefined
+				? {}
+				: {
+						callOverrides: entry.callOverrides.map(
+							({ instruction, target, ...call }) => ({
+								...call,
+								instruction: loweredInstructions.get(instruction)!,
+								functionIndex: functionMap.coreToExecution[target]!,
+							}),
+						),
+					}),
 			...(entry.operatorInputs === undefined
 				? {}
 				: {

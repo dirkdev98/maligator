@@ -394,6 +394,13 @@ export interface CoreDirectEntryPlan {
 	readonly id: number;
 	readonly function: CoreFunctionId;
 	readonly callSites: ReadonlyArray<CoreDirectEntryCallSite>;
+	/** Outgoing calls selected only while executing this representation variant. */
+	readonly callOverrides?: ReadonlyArray<{
+		readonly instruction: CoreInstructionId;
+		readonly target: CoreFunctionId;
+		readonly entryId: number;
+		readonly guarded?: true;
+	}>;
 	readonly parameterRepresentations: ReadonlyArray<CorePlanRepresentation>;
 	readonly resultRepresentation: CorePlanRepresentation;
 	readonly fieldParameters?: CoreEntryFields;

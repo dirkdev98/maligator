@@ -36,13 +36,99 @@ import { decodeVmValueOperand, validateVmShapeCases } from "./runtime-image.ts";
 import type {
 	BytecodeFunction,
 	BytecodeInstruction,
+	ClosureCaptureValue,
 	RuntimeImage,
 } from "./runtime-image.ts";
 
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal artifacts are hard cut-overs: stale cache entries rebuild.
-export const COMPILER_ARTIFACT_VERSION = 86;
+export const COMPILER_ARTIFACT_VERSION = 89;
+
+function validateClosureCaptureOwners(
+	owners: ReadonlyArray<number>,
+	functionIndex: number,
+	functionCount: number,
+): void {
+	if (
+		owners.some(
+			(owner, index) =>
+				!Number.isInteger(owner) ||
+				// The three lowest int32 ids identify dynamic and compact displays.
+				owner <= -0x7ffffffe ||
+				owner >= functionCount ||
+				owner === functionIndex ||
+				(index > 0 && owner <= owners[index - 1]!),
+		)
+	) {
+		throw new RangeError("program-image-codec: invalid closure capture owners");
+	}
+}
+
+function validateClosureCaptureValues(
+	values: ReadonlyArray<ClosureCaptureValue>,
+	functionIndex: number,
+	functions: ReadonlyArray<BytecodeFunction>,
+): void {
+	const fn = functions[functionIndex]!;
+	if (
+		values.length === 0 ||
+		values.length > 16 ||
+		!fn.strict ||
+		fn.isAsync ||
+		fn.isGenerator ||
+		fn.isClassConstructor ||
+		fn.isDerivedConstructor ||
+		fn.capturedCount !== 0 ||
+		fn.mappedArguments ||
+		fn.mappedArgumentSlots.length !== 0
+	) {
+		throw new RangeError("program-image-codec: invalid closure capture values");
+	}
+	const captures = new Set<string>();
+	for (const [ordinal, value] of values.entries()) {
+		const { ownerFunctionIndex: owner, capturedIndex: index } = value;
+		const previous = values[ordinal - 1];
+		if (
+			!Number.isInteger(owner) ||
+			owner < 0 ||
+			owner >= functions.length ||
+			owner === functionIndex ||
+			!Number.isInteger(index) ||
+			index < 0 ||
+			index >= functions[owner]!.capturedCount ||
+			!fn.closureCaptureOwners?.includes(owner) ||
+			(previous !== undefined &&
+				(owner < previous.ownerFunctionIndex ||
+					(owner === previous.ownerFunctionIndex && index <= previous.capturedIndex)))
+		) {
+			throw new RangeError("program-image-codec: invalid closure capture values");
+		}
+		captures.add(`${owner}:${index}`);
+	}
+	const reads = new Set<string>();
+	for (const instruction of fn.instructions) {
+		if (
+			instruction.opcode === "STORE_CAPTURED" ||
+			instruction.opcode === "CREATE_FUNCTION" ||
+			instruction.opcode === "CREATE_PRIVATE_NAMES" ||
+			instruction.opcode.startsWith("ENV_") ||
+			instruction.opcode.startsWith("WITH_")
+		) {
+			throw new RangeError("program-image-codec: invalid closure capture value body");
+		}
+		if (instruction.opcode === "LOAD_CAPTURED") {
+			const key = `${instruction.ownerFunctionIndex}:${instruction.index}`;
+			if (!captures.has(key)) {
+				throw new RangeError("program-image-codec: uncovered closure capture value load");
+			}
+			reads.add(key);
+		}
+	}
+	if (reads.size !== captures.size) {
+		throw new RangeError("program-image-codec: unread closure capture value");
+	}
+}
 
 const MAX_REGION_ANCHORS = 8;
 const MAX_REGION_CLAIMS = 96;
@@ -611,6 +697,24 @@ function writeCompilerArtifact(
 		if (native?.functionIndex !== functionIndex) {
 			throw new RangeError("program-image-codec: native function plan mismatch");
 		}
+		w.u8(fn.closureCaptureOwners === undefined ? 0 : 1);
+		if (fn.closureCaptureOwners !== undefined) {
+			validateClosureCaptureOwners(
+				fn.closureCaptureOwners,
+				functionIndex,
+				def.functions.length,
+			);
+			w.i32Array(fn.closureCaptureOwners);
+		}
+		w.u8(fn.closureCaptureValues === undefined ? 0 : 1);
+		if (fn.closureCaptureValues !== undefined) {
+			validateClosureCaptureValues(fn.closureCaptureValues, functionIndex, def.functions);
+			w.u32(fn.closureCaptureValues.length);
+			for (const value of fn.closureCaptureValues) {
+				w.i32(value.ownerFunctionIndex);
+				w.i32(value.capturedIndex);
+			}
+		}
 		validateNativeFieldCalls(fn, native, compiler.native.functions);
 		validateNativeLiteralSwitches(fn, native);
 		const representationTag = (representation: string): number =>
@@ -711,7 +815,7 @@ function writeCompilerArtifact(
 			) {
 				throw new RangeError("program-image-codec: invalid native direct entry");
 			}
-			validateNativeDirectEntry(fn, entry);
+			validateNativeDirectEntry(fn, entry, compiler.native.functions);
 			nativeFrameRootRegisters(fn, entry);
 			w.u32(entry.id);
 			w.u8(representationTag(entry.resultRepresentation));
@@ -744,6 +848,13 @@ function writeCompilerArtifact(
 				w.u32(instructionIp);
 				w.u8(masks.length);
 				for (const mask of masks) w.u8(mask);
+			}
+			w.u32(entry.callOverrides?.length ?? 0);
+			for (const call of entry.callOverrides ?? []) {
+				w.u32(call.instructionIp);
+				w.u32(call.functionIndex);
+				w.u32(call.entryId);
+				w.u8(call.guarded ? 1 : 0);
 			}
 			w.u32(entry.registerRepresentations.length);
 			for (const representation of entry.registerRepresentations) {
@@ -2978,6 +3089,31 @@ function readCompilerArtifact(r: Reader, runtimeImage: RuntimeImage): ProgramIma
 	}
 	const nativeFunctions: Array<NativeFunctionPlan> = [];
 	for (const [functionIndex, fn] of functions.entries()) {
+		const closureCaptureTag = r.u8();
+		if (closureCaptureTag !== 0 && closureCaptureTag !== 1) {
+			throw new RangeError("program-image-codec: invalid closure capture tag");
+		}
+		if (closureCaptureTag === 1) {
+			const owners = r.i32Array();
+			validateClosureCaptureOwners(owners, functionIndex, functions.length);
+			fn.closureCaptureOwners = owners;
+		}
+		const captureValuesTag = r.u8();
+		if (captureValuesTag !== 0 && captureValuesTag !== 1) {
+			throw new RangeError("program-image-codec: invalid closure capture values tag");
+		}
+		if (captureValuesTag === 1) {
+			const count = r.count(2);
+			if (count === 0 || count > 16) {
+				throw new RangeError("program-image-codec: invalid closure capture values");
+			}
+			const values = Array.from({ length: count }, () => ({
+				ownerFunctionIndex: r.i32(),
+				capturedIndex: r.i32(),
+			}));
+			validateClosureCaptureValues(values, functionIndex, functions);
+			fn.closureCaptureValues = values;
+		}
 		const safepointCount = r.count(5);
 		const safepoints: Array<NativeFunctionPlan["gc"]["safepoints"][number]> = [];
 		for (let safepointIndex = 0; safepointIndex < safepointCount; safepointIndex++) {
@@ -3129,6 +3265,20 @@ function readCompilerArtifact(r: Reader, runtimeImage: RuntimeImage): ProgramIma
 				) as unknown as CompilerOperatorInputKindMasks;
 				return { instructionIp, masks };
 			});
+			const callOverrides = Array.from({ length: r.count(4) }, () => {
+				const instructionIp = r.u32();
+				const functionIndex = r.u32();
+				const entryId = r.u32();
+				const guarded = r.u8();
+				if (guarded > 1)
+					throw new RangeError("program-image-codec: invalid direct-entry call guard");
+				return {
+					instructionIp,
+					functionIndex,
+					entryId,
+					...(guarded ? { guarded: true as const } : {}),
+				};
+			});
 			const directRegisterCount = r.count(1);
 			if (directRegisterCount !== fn.registerCount) {
 				throw new Error("program-image-codec: direct-entry register count mismatch");
@@ -3180,6 +3330,7 @@ function readCompilerArtifact(r: Reader, runtimeImage: RuntimeImage): ProgramIma
 				...(argumentRepresentations === undefined ? {} : { argumentRepresentations }),
 				...(constantCount === 0 ? {} : { constantBooleans }),
 				...(operatorInputs.length === 0 ? {} : { operatorInputs }),
+				...(callOverrides.length === 0 ? {} : { callOverrides }),
 				...(fieldParameters === undefined ? {} : { fieldParameters }),
 				registerRepresentations: directRegisterRepresentations,
 				gc: { safepoints: directSafepoints },
@@ -4511,6 +4662,8 @@ function readCompilerArtifact(r: Reader, runtimeImage: RuntimeImage): ProgramIma
 		nativeFunctions.push(nativeFunction);
 	}
 	for (const native of nativeFunctions) {
+		for (const entry of native.directEntries)
+			validateNativeDirectEntry(functions[native.functionIndex]!, entry, nativeFunctions);
 		validateNativeFieldCalls(functions[native.functionIndex]!, native, nativeFunctions);
 		validateNativeLiteralSwitches(functions[native.functionIndex]!, native);
 		for (const plan of native.instructions) {

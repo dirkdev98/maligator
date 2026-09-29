@@ -1,0 +1,231 @@
+{
+	"schema": 1,
+	"cases": [
+		{
+			"id": "local-capture-projection-helper",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "closure-representation",
+			"category": "language-features",
+			"mechanisms": ["capture-access", "native-call-boundary", "typed-arguments"],
+			"inputShape": "One local 20-term numeric projection helper; the creator changes a bounded numeric capture before each fixed-arity call.",
+			"unit": "helper calls",
+			"sourceSeam": "src/compiler/core/core-local-capture-arguments.ts",
+			"fixture": "cases/local-capture-projection-helper.mjs",
+			"controls": [
+				"explicit-capture-projection-helper",
+				"escaping-capture-projection-helper"
+			]
+		},
+		{
+			"id": "explicit-capture-projection-helper",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "closure-representation",
+			"category": "language-features",
+			"mechanisms": ["capture-access", "native-call-boundary", "typed-arguments"],
+			"inputShape": "One local 20-term numeric projection helper; the creator changes a bounded numeric capture before each fixed-arity call.",
+			"unit": "helper calls",
+			"sourceSeam": "src/compiler/core/core-local-capture-arguments.ts",
+			"fixture": "cases/explicit-capture-projection-helper.mjs",
+			"controls": [
+				"local-capture-projection-helper",
+				"escaping-capture-projection-helper"
+			]
+		},
+		{
+			"id": "escaping-capture-projection-helper",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "closure-representation",
+			"category": "language-features",
+			"mechanisms": ["capture-access", "native-call-boundary", "typed-arguments"],
+			"inputShape": "One local 20-term numeric projection helper; the creator changes a bounded numeric capture before each fixed-arity call.",
+			"unit": "helper calls",
+			"sourceSeam": "src/compiler/core/core-local-capture-arguments.ts",
+			"fixture": "cases/escaping-capture-projection-helper.mjs",
+			"controls": [
+				"local-capture-projection-helper",
+				"explicit-capture-projection-helper"
+			]
+		},
+		{
+			"id": "declared-capture-projection-helper",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "closure-representation",
+			"category": "language-features",
+			"mechanisms": ["capture-access", "native-call-boundary", "typed-arguments"],
+			"inputShape": "One escaping hoisted function declaration with a 20-term numeric projection; local calls read its single-writer captured function binding while the creator changes a bounded numeric capture.",
+			"unit": "helper calls",
+			"sourceSeam": "src/compiler/core/core-local-capture-arguments.ts",
+			"fixture": "cases/declared-capture-projection-helper.mjs",
+			"controls": [
+				"escaping-capture-projection-helper",
+				"explicit-capture-projection-helper"
+			]
+		},
+		{
+			"id": "branching-capture-projection-helper",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "closure-representation",
+			"category": "language-features",
+			"mechanisms": [
+				"capture-access",
+				"native-call-boundary",
+				"typed-arguments",
+				"control-flow"
+			],
+			"inputShape": "One numeric helper alternates an early return with a 20-term projection; its creator updates a bounded numeric bias before each call.",
+			"unit": "helper calls",
+			"sourceSeam": "src/compiler/core/core-local-capture-arguments.ts",
+			"fixture": "cases/branching-capture-projection-helper.mjs",
+			"controls": ["branching-explicit-capture-projection-helper"]
+		},
+		{
+			"id": "branching-explicit-capture-projection-helper",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "closure-representation",
+			"category": "language-features",
+			"mechanisms": [
+				"capture-access",
+				"native-call-boundary",
+				"typed-arguments",
+				"control-flow"
+			],
+			"inputShape": "One numeric helper alternates an early return with a 20-term projection; its creator updates a bounded numeric bias before each call and passes it as an explicit argument.",
+			"unit": "helper calls",
+			"sourceSeam": "src/compiler/core/core-local-capture-arguments.ts",
+			"fixture": "cases/branching-explicit-capture-projection-helper.mjs",
+			"controls": ["branching-capture-projection-helper"]
+		},
+		{
+			"id": "escaped-mutable-capture-depth-1",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "closure-representation",
+			"category": "language-features",
+			"mechanisms": [
+				"capture-access",
+				"shared-mutable-cells",
+				"lexical-depth",
+				"generic-call-bridge"
+			],
+			"inputShape": "Two escaped readers each mutate and read an outer binding 16 times per call through 1 lexical owners; escaped keeper closures retain intermediate scopes.",
+			"unit": "reader calls",
+			"sourceSeam": "runtime/src/vm_ops.c",
+			"fixture": "cases/escaped-mutable-capture-depth-1.mjs",
+			"controls": ["escaped-mutable-capture-depth-8"]
+		},
+		{
+			"id": "escaped-mutable-capture-depth-8",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "closure-representation",
+			"category": "language-features",
+			"mechanisms": [
+				"capture-access",
+				"shared-mutable-cells",
+				"lexical-depth",
+				"generic-call-bridge"
+			],
+			"inputShape": "Two escaped readers each mutate and read an outer binding 16 times per call through 8 lexical owners; escaped keeper closures retain intermediate scopes.",
+			"unit": "reader calls",
+			"sourceSeam": "runtime/src/vm_ops.c",
+			"fixture": "cases/escaped-mutable-capture-depth-8.mjs",
+			"controls": ["escaped-mutable-capture-depth-1"]
+		},
+		{
+			"id": "closure-create-owner-1",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "closure-representation",
+			"category": "allocation-gc",
+			"mechanisms": ["closure-creation", "capture-storage", "generic-call-bridge"],
+			"inputShape": "A retained factory creates one escaping closure per iteration capturing 1 lexical owners; a 64-element ring preserves observable identities and each closure returns the same input-plus-seed result.",
+			"unit": "closures created",
+			"sourceSeam": "runtime/src/vm_ops.c",
+			"fixture": "cases/closure-create-owner-1.mjs",
+			"controls": ["closure-create-owner-8"]
+		},
+		{
+			"id": "closure-create-owner-8",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "closure-representation",
+			"category": "allocation-gc",
+			"mechanisms": ["closure-creation", "capture-storage", "generic-call-bridge"],
+			"inputShape": "A retained factory creates one escaping closure per iteration capturing 8 lexical owners; a 64-element ring preserves observable identities and each closure returns the same input-plus-seed result.",
+			"unit": "closures created",
+			"sourceSeam": "runtime/src/vm_ops.c",
+			"fixture": "cases/closure-create-owner-8.mjs",
+			"controls": ["closure-create-owner-1"]
+		},
+		{
+			"id": "connected-numeric-helpers",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "closure-representation",
+			"category": "language-features",
+			"mechanisms": [
+				"capture-access",
+				"native-call-boundary",
+				"typed-arguments",
+				"typed-results",
+				"connected-call-graph"
+			],
+			"inputShape": "A retained run → visitor → helper → leaf graph passes an evolving bounded numeric bias explicitly across three call boundaries; each visitor calls the branching helper three times and each leaf evaluates 24 projection terms.",
+			"unit": "visitor calls",
+			"sourceSeam": "src/compiler/core/core-ir-region-selection.ts",
+			"fixture": "cases/connected-numeric-helpers.mjs",
+			"controls": ["connected-captured-helpers"]
+		},
+		{
+			"id": "connected-captured-helpers",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "closure-representation",
+			"category": "language-features",
+			"mechanisms": [
+				"capture-access",
+				"native-call-boundary",
+				"typed-arguments",
+				"typed-results",
+				"connected-call-graph"
+			],
+			"inputShape": "A retained run → visitor → helper → leaf graph shares an evolving bounded numeric bias through lexical capture; the branching helper and 24-term leaf match the explicit-argument control exactly.",
+			"unit": "visitor calls",
+			"sourceSeam": "src/compiler/core/core-ir-region-selection.ts",
+			"fixture": "cases/connected-captured-helpers.mjs",
+			"controls": ["connected-numeric-helpers"]
+		},
+		{
+			"id": "escaped-immutable-capture",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "closure-representation",
+			"category": "language-features",
+			"mechanisms": ["capture-access", "immutable-value-captures", "generic-call-bridge"],
+			"inputShape": "Two escaped leaf readers retain two immutable numeric bindings; each call performs 16 bounded arithmetic steps through a generic callback.",
+			"unit": "reader calls",
+			"sourceSeam": "runtime/src/vm_ops.c",
+			"fixture": "cases/escaped-immutable-capture.mjs",
+			"controls": ["closure-create-owner-1", "escaped-immutable-sparse-capture"]
+		},
+		{
+			"id": "escaped-immutable-sparse-capture",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "closure-representation",
+			"category": "language-features",
+			"mechanisms": ["capture-access", "immutable-value-captures", "generic-call-bridge"],
+			"inputShape": "Two escaped leaf readers each retain two immutable numeric bindings from a four-slot owner; temporary sibling closures consume the other bindings before the hot callback loop.",
+			"unit": "reader calls",
+			"sourceSeam": "runtime/src/vm_ops.c",
+			"fixture": "cases/escaped-immutable-sparse-capture.mjs",
+			"controls": ["escaped-immutable-capture"]
+		}
+	]
+}
