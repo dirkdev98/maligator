@@ -212,7 +212,20 @@
 			"unit": "reader calls",
 			"sourceSeam": "runtime/src/vm_ops.c",
 			"fixture": "cases/escaped-immutable-capture.mjs",
-			"controls": ["closure-create-owner-1"]
+			"controls": ["closure-create-owner-1", "escaped-immutable-sparse-capture"]
+		},
+		{
+			"id": "escaped-immutable-sparse-capture",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "closure-representation",
+			"category": "language-features",
+			"mechanisms": ["capture-access", "immutable-value-captures", "generic-call-bridge"],
+			"inputShape": "Two escaped leaf readers each retain two immutable numeric bindings from a four-slot owner; temporary sibling closures consume the other bindings before the hot callback loop.",
+			"unit": "reader calls",
+			"sourceSeam": "runtime/src/vm_ops.c",
+			"fixture": "cases/escaped-immutable-sparse-capture.mjs",
+			"controls": ["escaped-immutable-capture"]
 		}
 	]
 }

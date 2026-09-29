@@ -49,9 +49,14 @@ precede it at entry. The first slice accepts at most 16 slots from one creator i
 strict ordinary leaves without nested closures, captured writes, private names,
 local environment operations, or owned capture storage. Object values preserve
 their identity; immutability applies to the binding, not the object's properties.
-Unproved captures continue using owner cells.
+Unproved captures continue using owner cells. Proven immutable captures also keep
+owner storage when copying would not reduce retained storage: the first runtime
+policy requires the original owner to have more than one extra slot beyond the
+copied selection. Native entries still cache those immutable owner values once.
 
-Shared value descriptors identify owner/slot pairs. The terminal value display
+Shared value descriptors identify owner/slot pairs. Owner and value metadata share
+a cold layout record, preserving the hot function record's size and dispatch offsets.
+The terminal value display
 contains boxed values and retains its containing function, not the creator's
 environment. GC traces those values, and SATB traces the containing function.
 The original owner layout remains available for ordinary incoming environments

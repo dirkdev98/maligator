@@ -864,6 +864,13 @@ typedef struct MalClosureCaptureValue {
     i32 captured_index;
 } MalClosureCaptureValue;
 
+// Shared cold construction metadata; native entries retain their own proven layout.
+typedef struct MalClosureCaptureLayout {
+    const i32 *owners;
+    const MalClosureCaptureValue *values;
+    i32 value_count;
+} MalClosureCaptureLayout;
+
 typedef struct MalFunction {
     /*
      * Pointer-sized fields lead the structure, followed by the i32 metadata and
@@ -873,8 +880,7 @@ typedef struct MalFunction {
      */
     const MalArgumentSnapshotMove *argument_snapshot_plan;
     const i32 *mapped_argument_slots;
-    const i32 *closure_capture_owners;
-    const MalClosureCaptureValue *closure_capture_values;
+    const MalClosureCaptureLayout *closure_captures;
     const MalInstruction *instructions;
     const i32 *instruction_data;
     /** Flat [ip, root_count, roots..., clear_count, clears...] sorted by IP. */
@@ -910,7 +916,6 @@ typedef struct MalFunction {
     i32 captured_count;
     /** -1 retains the dynamic chain; otherwise the immutable external-owner layout. */
     i32 closure_capture_owner_count;
-    i32 closure_capture_value_count;
     /** -1 never retains; INT32_MAX always retains nonempty input; otherwise the
      * largest static index whose absence requires the supplied argument slice. */
     i32 argument_retention_limit;
@@ -968,7 +973,7 @@ typedef struct MalFunction {
     bool has_prototype;
 } MalFunction;
 
-static_assert(sizeof(MalFunction) <= (MAL_PROFILE ? 176 : 168),
+static_assert(sizeof(MalFunction) <= (MAL_PROFILE ? 168 : 160),
               "function metadata outgrew its packed layout");
 
 typedef struct MalPreparedValue {

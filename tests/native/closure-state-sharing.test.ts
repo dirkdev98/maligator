@@ -25,7 +25,7 @@ it("retains selected closure storage and active lexical roots through collection
 		});
 		expect(
 			runToStdout(binary, {
-				env: { MAL_GC_STRESS: "0", MAL_GC_VERIFY: "1" },
+				env: { MAL_GC_STRESS: "0", MAL_GC_VERIFY: "1", MAL_GC_MAJOR_EVERY: "8" },
 				timeoutMs: 60_000,
 			}),
 		).toBe("closure-capture-retention PASS\n");
@@ -175,6 +175,8 @@ it("preserves immutable capture values and cell fallbacks across collection", ()
 		["immutableAlias", 1],
 		["immutablePair", 2],
 		["immutableDefault", 1],
+		["immutableSerial", 1],
+		["denseImmutableValue", 1],
 	] as const) {
 		const fn = functions.get(name);
 		expect(fn).toBeDefined();

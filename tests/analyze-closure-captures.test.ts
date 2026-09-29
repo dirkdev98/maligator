@@ -165,7 +165,7 @@ describe("external closure scope requirements", () => {
 			true,
 		);
 		const emitted = emitProgramImage(decoded);
-		expect(emitted).toContain(".closure_capture_owners = closure_capture_owners_value");
+		expect(emitted).toContain(".closure_captures = closure_captures_value");
 		expect(emitted).toContain(
 			".closure_capture_owner_count = closure_capture_owner_count_value",
 		);
@@ -174,10 +174,10 @@ describe("external closure scope requirements", () => {
 				/static const i32 mal_\w*closure_capture_owners\w*\[\] = \{/,
 			);
 			expect(source).toMatch(
-				/MAL_FUNCTION_ROW\(nullptr, nullptr, mal_\w*closure_capture_owners\w*, 0,/,
+				/MAL_FUNCTION_ROW\(nullptr, nullptr, mal_\w*closure_captures\w*, 0,/,
 			);
 			expect(source).toMatch(
-				/MAL_FUNCTION_ROW\(nullptr, nullptr, mal_\w*closure_capture_owners\w*, 1,/,
+				/MAL_FUNCTION_ROW\(nullptr, nullptr, mal_\w*closure_captures\w*, 1,/,
 			);
 		}
 	});

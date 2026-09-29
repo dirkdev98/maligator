@@ -761,8 +761,12 @@ MalValue mal_vm_load_captured(MalEnv *env, i32 owner_function_index, i32 index);
 static inline MalValue mal_vm_load_captured_value_at(
     MalEnv *env, i32 owner_function_index, i32 index, i32 capture_index
 ) {
-    if (env != nullptr && !mal_env_is_single_owner(env) &&
-            env->function_index == MAL_ENV_CAPTURE_VALUES &&
+    if (mal_env_is_single_owner(env)) {
+        MalEnv *owner = mal_env_untag_single_owner(env);
+        return owner->function_index == owner_function_index && index >= 0 && index < owner->slot_count
+            ? owner->slots[index] : MAL_VALUE_UNDEFINED;
+    }
+    if (env != nullptr && env->function_index == MAL_ENV_CAPTURE_VALUES &&
             capture_index >= 0 && capture_index < env->slot_count) {
         const MalClosureCaptureValue *capture = &mal_env_capture_values_layout(env)[capture_index];
         if (capture->owner_function_index == owner_function_index && capture->captured_index == index)

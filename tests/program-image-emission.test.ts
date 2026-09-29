@@ -773,12 +773,13 @@ describe("emit-program-image instruction packing", () => {
 			emitBatch([image], { compiled: false }),
 		]) {
 			const rows = malFunctionRows(output);
-			expect(rows[0]!.closure_capture_values).toBe("nullptr");
-			expect(rows[0]!.closure_capture_value_count).toBe("0");
-			expect(rows[1]!.closure_capture_values).not.toBe("nullptr");
-			expect(rows[1]!.closure_capture_values).toBe(rows[2]!.closure_capture_values);
-			expect(rows[1]!.closure_capture_value_count).toBe("1");
+			expect(rows[0]!.closure_captures).toBe("nullptr");
+			expect(rows[1]!.closure_captures).not.toBe("nullptr");
+			expect(rows[1]!.closure_captures).toBe(rows[2]!.closure_captures);
+			expect(rows[1]!.closure_capture_owner_count).toBe("1");
 			expect(output.match(/static const MalClosureCaptureValue /g)).toHaveLength(1);
+			expect(output.match(/static const MalClosureCaptureLayout /g)).toHaveLength(1);
+			expect(output).toContain(".value_count = 1");
 			expect(output).toContain("{ .owner_function_index = 0, .captured_index = 1 }");
 		}
 	});

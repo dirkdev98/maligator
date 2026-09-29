@@ -1757,19 +1757,34 @@ MalValue mal_vm_op_create_function(MalVm *vm, i32 function_index, MalEnv *creati
     }
 
     const MalFunction *definition = &vm->runtime_image->functions[function_index];
+    const MalClosureCaptureLayout *layout = definition->closure_captures;
     MalString *name = definition->name_string_index >= 0 &&
             definition->name_string_index < vm->runtime_image->string_constant_count
         ? &vm->runtime_image->string_constants[definition->name_string_index]
         : mal_intrinsic_hot_ascii(vm, MAL_HOT_KEY_EMPTY);
-    i32 capture_count = definition->closure_capture_owners != nullptr
+    i32 capture_count = layout != nullptr
         ? definition->closure_capture_owner_count : -1;
     bool complete_capture_chain = capture_count > 1 && mal_vm_capture_chain_is_complete(
-        creation_env, definition->closure_capture_owners, capture_count);
+        creation_env, layout->owners, capture_count);
     usize capture_bytes = capture_count > 1 && !complete_capture_chain
         ? sizeof(MalEnv) + ((usize) capture_count + 1) * sizeof(void *) : 0;
-    i32 value_count = definition->closure_capture_values != nullptr &&
-            definition->closure_capture_value_count > 0 && definition->closure_capture_value_count <= 16
-        ? definition->closure_capture_value_count : 0;
+    i32 value_count = layout != nullptr && layout->values != nullptr &&
+            layout->value_count > 0 && layout->value_count <= 16 ? layout->value_count : 0;
+    if (value_count > 0) {
+        i32 owner = layout->values[0].owner_function_index;
+        // Snapshot only a sparse slice whose owner exceeds the copied display.
+        if (owner < 0 || owner >= vm->runtime_image->function_count ||
+                vm->runtime_image->functions[owner].captured_count <= value_count + 1) {
+            value_count = 0;
+        } else {
+            for (i32 i = 1; i < value_count; i++) {
+                if (layout->values[i].owner_function_index != owner) {
+                    value_count = 0;
+                    break;
+                }
+            }
+        }
+    }
     usize value_bytes = value_count > 0 ? sizeof(MalEnv) + ((usize) value_count + 1) * sizeof(MalValue) : 0;
     if (value_bytes > capture_bytes) capture_bytes = value_bytes;
     MalFunctionObject *function = mal_function_object_new(
@@ -1790,17 +1805,21 @@ MalValue mal_vm_op_create_function(MalVm *vm, i32 function_index, MalEnv *creati
         captures->slot_count = value_count;
         captures->compact_parent = false;
         captures->compact_chain_length = 0;
-        ((const MalClosureCaptureValue **)(void *) captures->slots)[0] = definition->closure_capture_values;
+        ((const MalClosureCaptureValue **)(void *) captures->slots)[0] = layout->values;
         bool complete = true;
         for (i32 i = 0; i < value_count; i++) {
-            const MalClosureCaptureValue *capture = &definition->closure_capture_values[i];
+            const MalClosureCaptureValue *capture = &layout->values[i];
             MalValue value;
             if (!mal_vm_capture_value(creation_env, capture->owner_function_index, capture->captured_index, &value) ||
                     mal_value_is_empty(value)) {
                 complete = false;
                 break;
             }
+#if defined(__wasi__)
             captures->slots[i + 1] = value;
+#else
+            atomic_init(&captures->slots[i + 1], value);
+#endif
         }
         if (complete) {
             function->creation_env = captures;
@@ -1810,7 +1829,7 @@ MalValue mal_vm_op_create_function(MalVm *vm, i32 function_index, MalEnv *creati
     if (capture_count == 0) {
         function->creation_env = nullptr;
     } else if (capture_count == 1) {
-        MalEnv *owner = mal_vm_capture_owner_at(creation_env, definition->closure_capture_owners[0], 0);
+        MalEnv *owner = mal_vm_capture_owner_at(creation_env, layout->owners[0], 0);
         if (owner != nullptr) function->creation_env = mal_env_tag_single_owner(owner);
     } else if (capture_count > 1 && !complete_capture_chain) {
         MalEnv *captures = (MalEnv *) ((MalValue *) (function + 1) + 2);
@@ -1819,9 +1838,9 @@ MalValue mal_vm_op_create_function(MalVm *vm, i32 function_index, MalEnv *creati
         captures->slot_count = capture_count;
         captures->compact_parent = false;
         captures->compact_chain_length = 0;
-        ((const i32 **)(void *) captures->slots)[0] = definition->closure_capture_owners;
+        ((const i32 **)(void *) captures->slots)[0] = layout->owners;
         MalEnv **scopes = mal_env_capture_scopes(captures);
-        if (mal_vm_capture_owners(creation_env, definition->closure_capture_owners, capture_count, scopes)) {
+        if (mal_vm_capture_owners(creation_env, layout->owners, capture_count, scopes)) {
             function->creation_env = captures;
         }
     }

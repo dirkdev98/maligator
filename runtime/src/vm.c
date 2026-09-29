@@ -477,7 +477,7 @@ static MalEnv *mal_env_new_storage(MalVm *vm, MalEnv *parent, i32 function_index
 MalEnv *mal_env_new(MalVm *vm, MalEnv *parent, i32 function_index, i32 count) {
     bool compact_parent = function_index >= 0
         ? function_index < vm->runtime_image->function_count &&
-            vm->runtime_image->functions[function_index].closure_capture_owners != nullptr
+            vm->runtime_image->functions[function_index].closure_captures != nullptr
         : parent != nullptr && (mal_env_is_single_owner(parent) || parent->compact_parent ||
             mal_env_is_capture_display(parent));
     return mal_env_new_storage(vm, parent, function_index, count, compact_parent);

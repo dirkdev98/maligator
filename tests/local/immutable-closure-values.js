@@ -8,6 +8,7 @@ globalThis.makeImmutableValues = function makeImmutableValues(seed) {
 	const value = seed;
 	const object = { value: seed, nested: { value: seed + 1 } };
 	const label = "value:" + seed;
+	const serial = seed + 100;
 	return {
 		read: function immutablePrimitive() {
 			return value;
@@ -24,6 +25,9 @@ globalThis.makeImmutableValues = function makeImmutableValues(seed) {
 		defaults: function immutableDefault(argument = value) {
 			return argument + value;
 		},
+		serial: function immutableSerial() {
+			return serial;
+		},
 	};
 };
 
@@ -36,6 +40,7 @@ check("shared immutable object binding", first.object(), first.alias());
 check("separate captured objects", first.object() === second.object(), false);
 check("two captured values preserve object identity", first.pair()[0], first.object());
 check("two captured values preserve string", first.pair()[1], "value:7");
+check("sibling capture has its own immutable value", first.serial(), 107);
 first.object().nested.value = 91;
 check(
 	"immutable binding retains mutable object identity",
@@ -57,6 +62,22 @@ check(
 	7,
 );
 
+// A one-slot owner is already compact; its immutable metadata must also work
+// when the runtime keeps that owner instead of copying a capture display.
+globalThis.makeDenseImmutable = function makeDenseImmutable(seed) {
+	const object = { value: seed };
+	return function denseImmutableValue() {
+		return object;
+	};
+};
+const denseFirst = globalThis.makeDenseImmutable(41);
+const denseSecond = globalThis.makeDenseImmutable(43);
+check("immutable owner fallback reads its captured value", denseFirst().value, 41);
+check("immutable owner fallback preserves object identity", denseFirst(), denseFirst());
+check("immutable owner fallback keeps distinct activations", denseSecond().value, 43);
+denseFirst().value = 45;
+check("immutable owner fallback sees property mutation", denseFirst().value, 45);
+
 // Only the escaped functions retain these objects after their creators return.
 // Stress-mode execution collects at safepoints while this loop creates garbage.
 let checksum = 0;
@@ -73,6 +94,12 @@ check(
 );
 check("escaped string survives allocation and collection", first.pair()[1], "value:7");
 check("second activation survives allocation and collection", second.read(), 20);
+check("sibling immutable value survives allocation and collection", first.serial(), 107);
+check(
+	"ordinary immutable owner survives allocation and collection",
+	denseFirst().value,
+	45,
+);
 
 function makeBeforeInitialization(seed) {
 	const read = function beforeInitialization() {
