@@ -1,7 +1,8 @@
 import { CoreFunctionBuilder } from "./core-builder.ts";
 import type { ConstructedCoreCompilation } from "./core-compilation.ts";
 import { CoreEditor } from "./core-editor.ts";
-import { coreTerminatorInput } from "./core-ir-control-flow.ts";
+import { buildCoreControlFlow, coreTerminatorInput } from "./core-ir-control-flow.ts";
+import type { CoreControlFlow } from "./core-ir-control-flow.ts";
 import { coreInstructionId } from "./core-ir.ts";
 import type {
 	CoreBlockId,
@@ -94,48 +95,204 @@ interface LocalCallPlan extends Creation {
 	readonly preserveIdentity: boolean;
 }
 
+interface LocalCaptureAccess {
+	readonly singleStores: ReadonlyMap<string, Creation | null>;
+	readonly initialized: (slot: Capture, call: CoreInstructionId) => boolean;
+	readonly loads: ReadonlyMap<string, ReadonlyArray<CoreInstructionId>>;
+	readonly implicitAliases: ReadonlySet<string>;
+	readonly dominates: (
+		caller: CoreFunctionId,
+		store: CoreInstructionId,
+		load: CoreInstructionId,
+	) => boolean;
+}
+
+// Used only while planning, before any editors mutate the construction graph.
+function capturedStoreDominance(program: CoreProgram): LocalCaptureAccess["dominates"] {
+	const checks = new Map<
+		CoreFunctionId,
+		(store: CoreInstructionId, load: CoreInstructionId) => boolean
+	>();
+	return (caller, store, load) => {
+		let check = checks.get(caller);
+		if (check === undefined) {
+			const fn = program.function(caller);
+			const positions = new Int32Array(fn.instructionCapacity);
+			for (const block of fn.blockIds()) {
+				let position = 0;
+				for (const instruction of fn.instructionIds(block))
+					positions[instruction] = position++;
+			}
+			let flow: CoreControlFlow | undefined;
+			check = (writer, reader) => {
+				const from = fn.instructionBlock(writer);
+				const to = fn.instructionBlock(reader);
+				return from === to
+					? positions[writer]! < positions[reader]!
+					: (flow ??= buildCoreControlFlow(program, caller)).instructionDominatesBlock(
+							from,
+							to,
+						);
+			};
+			checks.set(caller, check);
+		}
+		return check(store, load);
+	};
+}
+
+// The ordinary argument ABI excludes the internal TDZ sentinel. A private
+// capture may use it only after an initializer, not by moving its TDZ check.
+function initializedCaptureQueries(
+	program: CoreProgram,
+	stores: ReadonlyMap<string, ReadonlyArray<Creation>>,
+	dominates: LocalCaptureAccess["dominates"],
+): LocalCaptureAccess["initialized"] {
+	const nonempty = new Map<CoreFunctionId, Map<CoreValueId, boolean>>();
+	const entryCanRepeat = new Map<CoreFunctionId, boolean>();
+	const layouts = new Map<string, ReadonlyArray<CoreInstructionId>>();
+	const initializedValue = (fn: CoreFunctionStore, value: CoreValueId): boolean => {
+		const cache = nonempty.get(fn.id) ?? new Map<CoreValueId, boolean>();
+		nonempty.set(fn.id, cache);
+		const known = cache.get(value);
+		if (known !== undefined) return known;
+		cache.set(value, false);
+		let result = false;
+		if (fn.kernel.valueDefinitionKind(value) === 0) {
+			for (let index = 0; index < fn.parameterCount; index++)
+				if (fn.kernel.functionParameter(index) === value) result = true;
+		} else {
+			const definition = coreInstructionId(fn.kernel.valueDefinitionOwner(value));
+			const opcode = fn.instructionOpcodeName(definition);
+			result =
+				opcode === "move"
+					? initializedValue(fn, inputs(fn, definition)[0]!)
+					: (opcode.startsWith("create") && opcode !== "createEmpty") ||
+						opcode === "binary" ||
+						opcode === "unary";
+		}
+		cache.set(value, result);
+		return result;
+	};
+	return (slot, call) => {
+		const id = key(slot);
+		let initializers = layouts.get(id);
+		if (initializers === undefined) {
+			const fn = program.function(slot.owner as CoreFunctionId);
+			const uncertain: Array<CoreInstructionId> = [];
+			const definite: Array<CoreInstructionId> = [];
+			for (const store of stores.get(id) ?? []) {
+				if (store.caller !== fn.id) return false;
+				(initializedValue(fn, inputs(fn, store.instruction)[0]!)
+					? definite
+					: uncertain
+				).push(store.instruction);
+			}
+			// Only entry-prefix sentinel writes may precede initialization. Other
+			// unknown writes (including loop/phi resets) need reaching-definition proof.
+			let safePrefix = uncertain.every(
+				(instruction) => fn.instructionBlock(instruction) === fn.entry,
+			);
+			if (safePrefix && uncertain.length > 0) {
+				let repeats = entryCanRepeat.get(fn.id);
+				if (repeats === undefined) {
+					repeats =
+						(buildCoreControlFlow(program, fn.id).predecessors[fn.entry]?.length ?? 0) >
+						0;
+					entryCanRepeat.set(fn.id, repeats);
+				}
+				safePrefix = !repeats;
+			}
+			initializers = safePrefix
+				? definite.filter((write) =>
+						uncertain.every((before) => dominates(fn.id, before, write)),
+					)
+				: [];
+			layouts.set(id, initializers);
+		}
+		return initializers.some((write) =>
+			dominates(slot.owner as CoreFunctionId, write, call),
+		);
+	};
+}
+
 function localCalls(
 	program: CoreProgram,
 	target: CoreFunctionStore,
 	creations: ReadonlyArray<Creation>,
 	owner: number,
+	captures: ReadonlyArray<Capture>,
+	access: LocalCaptureAccess,
 ): ReadonlyArray<LocalCallPlan> | undefined {
 	const plans: Array<LocalCallPlan> = [];
 	for (const creation of creations) {
 		if (creation.caller !== owner) return undefined;
 		const caller = program.function(creation.caller);
 		if (caller.isAsync || caller.isGenerator) return undefined;
-		const value = caller.kernel.resultAt(
+		const root = caller.kernel.resultAt(
 			caller.kernel.instructionResultStart(creation.instruction),
 		);
+		const values = [root];
+		const seen = new Set(values);
 		const calls = new Set<CoreInstructionId>();
-		let preserveIdentity = caller.kernel.valueHandlerUseCount(value) !== 0;
-		for (
-			let use = caller.kernel.valueFirstUse(value);
-			use >= 0;
-			use = caller.kernel.useNext(use)
-		) {
-			if (caller.kernel.useLive(use) === 0) continue;
-			const instruction = coreInstructionId(caller.kernel.useInstruction(use));
-			if (caller.instructionKind(instruction) !== "operation") {
-				preserveIdentity = true;
-				continue;
-			}
-			const opcode = caller.instructionOpcodeName(instruction);
-			if (opcode === "throwIfTdz") continue;
-			const arguments_ = inputs(caller, instruction);
-			if (
-				opcode !== "call" ||
-				arguments_[0] !== value ||
-				arguments_.length !== target.parameterCount + 2 ||
-				arguments_.slice(1).includes(value)
+		let preserveIdentity = false;
+		for (let cursor = 0; cursor < values.length; cursor++) {
+			const value = values[cursor]!;
+			preserveIdentity ||= caller.kernel.valueHandlerUseCount(value) !== 0;
+			for (
+				let use = caller.kernel.valueFirstUse(value);
+				use >= 0;
+				use = caller.kernel.useNext(use)
 			) {
-				// Escape, reflection, construction and other arities keep the original
-				// closure. Only exact local calls may use the private capture ABI.
-				preserveIdentity = true;
-				continue;
+				if (caller.kernel.useLive(use) === 0) continue;
+				const instruction = coreInstructionId(caller.kernel.useInstruction(use));
+				if (caller.instructionKind(instruction) !== "operation") {
+					preserveIdentity = true;
+					continue;
+				}
+				const opcode = caller.instructionOpcodeName(instruction);
+				if (opcode === "throwIfTdz") continue;
+				if (opcode === "storeCaptured") {
+					// Hoisted declarations often reach their local calls through an env
+					// binding rather than a direct SSA use. Keep that observable binding,
+					// and follow only same-activation reads dominated by its sole writer.
+					preserveIdentity = true;
+					const slot = capture(caller, instruction);
+					if (slot?.owner !== creation.caller) continue;
+					const address = key(slot);
+					const writer = access.singleStores.get(address);
+					if (
+						writer?.caller !== creation.caller ||
+						writer.instruction !== instruction ||
+						access.implicitAliases.has(address)
+					)
+						continue;
+					for (const load of access.loads.get(address) ?? []) {
+						if (!access.dominates(creation.caller, instruction, load)) continue;
+						const loaded = caller.kernel.resultAt(
+							caller.kernel.instructionResultStart(load),
+						);
+						if (!seen.has(loaded)) {
+							seen.add(loaded);
+							values.push(loaded);
+						}
+					}
+					continue;
+				}
+				const arguments_ = inputs(caller, instruction);
+				if (
+					opcode !== "call" ||
+					arguments_[0] !== value ||
+					arguments_.length !== target.parameterCount + 2 ||
+					arguments_.slice(1).includes(value) ||
+					!captures.every((slot) => access.initialized(slot, instruction))
+				) {
+					// Escape, reflection, construction and other arities keep the original
+					// closure. Only exact local calls may use the private capture ABI.
+					preserveIdentity = true;
+					continue;
+				}
+				calls.add(instruction);
 			}
-			calls.add(instruction);
 		}
 		plans.push({ ...creation, calls: [...calls], preserveIdentity });
 	}
@@ -245,6 +402,9 @@ export function liftLocalCaptureArguments(
 	const functions = [...program.functionIds()];
 	const creations = new Map<number, Array<Creation>>();
 	const writers = new Map<string, Set<CoreFunctionId>>();
+	const singleStores = new Map<string, Creation | null>();
+	const stores = new Map<string, Array<Creation>>();
+	const loads = new Map<string, Array<CoreInstructionId>>();
 	const mappedArguments = new Set<string>();
 	const privateNames = new Set<string>();
 	for (const id of functions) {
@@ -264,9 +424,25 @@ export function liftLocalCaptureArguments(
 			} else if (opcode === "storeCaptured") {
 				const slot = capture(fn, instruction);
 				if (slot === undefined) return 0;
+				const writes = stores.get(key(slot)) ?? [];
+				writes.push({ caller: id, instruction });
+				stores.set(key(slot), writes);
+				const address = key(slot);
+				singleStores.set(
+					address,
+					singleStores.has(address) ? null : { caller: id, instruction },
+				);
 				const owners = writers.get(key(slot)) ?? new Set();
 				owners.add(id);
 				writers.set(key(slot), owners);
+			} else if (opcode === "loadCaptured") {
+				const slot = capture(fn, instruction);
+				if (slot?.owner === id) {
+					const address = key(slot);
+					const readers = loads.get(address) ?? [];
+					readers.push(instruction);
+					loads.set(address, readers);
+				}
 			} else if (opcode === "createPrivateNames") {
 				const attributes = fn.instructionAttributes(instruction);
 				if (
@@ -281,7 +457,20 @@ export function liftLocalCaptureArguments(
 			}
 		}
 	}
-	let lifted = 0;
+	const dominates = capturedStoreDominance(program);
+	const access: LocalCaptureAccess = {
+		singleStores,
+		loads,
+		implicitAliases: new Set([...mappedArguments, ...privateNames]),
+		dominates,
+		initialized: initializedCaptureQueries(program, stores, dominates),
+	};
+	const candidates: Array<{
+		fn: CoreFunctionStore;
+		blocks: ReadonlyArray<CoreBlockId>;
+		slots: ReadonlyArray<Capture>;
+		plans: ReadonlyArray<LocalCallPlan>;
+	}> = [];
 	for (const id of functions) {
 		const sites = creations.get(id);
 		if (sites === undefined || sites.length === 0) continue;
@@ -311,12 +500,14 @@ export function liftLocalCaptureArguments(
 			)
 		)
 			continue;
-		const plans = localCalls(program, fn, sites, owner);
-		if (plans === undefined) continue;
+		const plans = localCalls(program, fn, sites, owner, slots, access);
+		if (plans !== undefined) candidates.push({ fn, blocks, slots, plans });
+	}
+	for (const { fn, blocks, slots, plans } of candidates) {
 		// The creator is synchronously suspended during every admitted call. No other
 		// function or arguments alias can write these bindings until the call returns.
 		const target = liftHelper(program, fn, blocks, slots);
-		const caller = program.function(sites[0]!.caller);
+		const caller = program.function(plans[0]!.caller);
 		const editor = CoreEditor.open(program, caller.id);
 		for (const { instruction, calls, preserveIdentity } of plans) {
 			if (calls.length === 0) continue;
@@ -363,7 +554,6 @@ export function liftLocalCaptureArguments(
 			}
 		}
 		editor.commit();
-		lifted++;
 	}
-	return lifted;
+	return candidates.length;
 }
