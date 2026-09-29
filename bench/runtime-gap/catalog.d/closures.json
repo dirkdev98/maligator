@@ -162,6 +162,44 @@
 			"sourceSeam": "runtime/src/vm_ops.c",
 			"fixture": "cases/closure-create-owner-8.mjs",
 			"controls": ["closure-create-owner-1"]
+		},
+		{
+			"id": "connected-numeric-helpers",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "closure-representation",
+			"category": "language-features",
+			"mechanisms": [
+				"capture-access",
+				"native-call-boundary",
+				"typed-arguments",
+				"typed-results",
+				"connected-call-graph"
+			],
+			"inputShape": "A retained run → visitor → helper → leaf graph passes an evolving bounded numeric bias explicitly across three call boundaries; each visitor calls the branching helper three times and each leaf evaluates 24 projection terms.",
+			"unit": "visitor calls",
+			"sourceSeam": "src/compiler/core/core-ir-region-selection.ts",
+			"fixture": "cases/connected-numeric-helpers.mjs",
+			"controls": ["connected-captured-helpers"]
+		},
+		{
+			"id": "connected-captured-helpers",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "closure-representation",
+			"category": "language-features",
+			"mechanisms": [
+				"capture-access",
+				"native-call-boundary",
+				"typed-arguments",
+				"typed-results",
+				"connected-call-graph"
+			],
+			"inputShape": "A retained run → visitor → helper → leaf graph shares an evolving bounded numeric bias through lexical capture; the branching helper and 24-term leaf match the explicit-argument control exactly.",
+			"unit": "visitor calls",
+			"sourceSeam": "src/compiler/core/core-ir-region-selection.ts",
+			"fixture": "cases/connected-captured-helpers.mjs",
+			"controls": ["connected-numeric-helpers"]
 		}
 	]
 }

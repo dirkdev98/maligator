@@ -136,6 +136,35 @@ function fixedCaptureOwners(fn: BytecodeFunction, functionIndex: number): Array<
 	return [...owners].sort((a, b) => a - b);
 }
 
+function initializeFixedCaptureOwners(
+	fn: BytecodeFunction,
+	functionIndex: number,
+	relocation: NativeRelocationExpressions,
+	declare: boolean,
+): Array<string> {
+	const owners = fixedCaptureOwners(fn, functionIndex);
+	const binding = declare ? "MalEnv *const " : "";
+	if (owners.length > 1) {
+		return [
+			`${relocation.enabled ? "" : "static "}const i32 __capture_owner_ids[] = { ${owners.map((owner) => relocation.ownerFunctionIndex(owner)).join(", ")} };`,
+			`MalEnv *__capture_owner_scopes[${owners.length}];`,
+			`mal_vm_capture_owners(env, __capture_owner_ids, ${owners.length}, __capture_owner_scopes);`,
+			...owners.map(
+				(owner, index) =>
+					`${binding}__capture_owner_${owner} = __capture_owner_scopes[${index}];`,
+			),
+		];
+	}
+	return owners.map((owner) => {
+		const captureIndex = fn.closureCaptureOwners?.indexOf(owner) ?? -1;
+		const lookup =
+			captureIndex < 0
+				? `mal_vm_capture_owner(env, ${relocation.ownerFunctionIndex(owner)})`
+				: `mal_vm_capture_owner_at(env, ${relocation.ownerFunctionIndex(owner)}, ${captureIndex})`;
+		return `${binding}__capture_owner_${owner} = ${lookup};`;
+	});
+}
+
 function isNumericRep(rep: RegisterRep): boolean {
 	return rep === "number" || rep === "int32";
 }
@@ -677,6 +706,17 @@ function emitCompiledVariant(
 									kind: "exact-operator-input-kinds",
 									inputKindMasks: masks,
 								};
+						}
+						// These calls depend on this entry's parameter proof. Keep them
+						// out of the canonical boxed entry and other typed siblings.
+						for (const call of directEntry.callOverrides ?? []) {
+							instructions[call.instructionIp] = {
+								kind: "call",
+								...(call.guarded
+									? { guardedFunctionIndices: [call.functionIndex] }
+									: { directFunctionIndex: call.functionIndex }),
+								directEntryId: call.entryId,
+							};
 						}
 						return instructions;
 					})(),
@@ -1240,7 +1280,7 @@ function emitCompiledVariant(
 	if (needsRootFrame) {
 		lines.push(
 			`    ${relocatable ? "" : "static "}const MalFrameDescriptor __gc_desc = { .function_index = ${relocation.functionIndex(index)}, .slot_count = ${totalSlots} };`,
-			`    MalRootFrame __gc_frame = { .prev = mal_root_frame_head, .desc = &__gc_desc, .slots = ${totalSlots > 0 ? "__gc_slots" : "nullptr"}, .inactive_slots = 0, .env = env };`,
+			`    MalRootFrame __gc_frame = { .prev = mal_root_frame_head, .desc = &__gc_desc, .slots = ${totalSlots > 0 ? "__gc_slots" : "nullptr"}, .inactive_slots = 0, .env = ${fn.closureCaptureOwners?.length === 0 ? "nullptr" : "env"} };`,
 			`    mal_root_frame_head = &__gc_frame;`,
 		);
 	}
@@ -1258,18 +1298,13 @@ function emitCompiledVariant(
 	// it, then root it in the published frame. capturesEnv implies needsRootFrame.
 	if (capturesEnv) {
 		lines.push(
-			`    env = mal_env_new(vm, env, ${relocation.functionIndex(index)}, ${fn.capturedCount});`,
+			`    env = ${fn.closureCaptureOwners === undefined ? "mal_env_new" : "mal_env_new_compact"}(vm, env, ${relocation.functionIndex(index)}, ${fn.capturedCount});`,
 			`    __gc_frame.env = env;`,
 		);
 	}
 
-	for (const owner of fixedCaptureOwners(fn, index)) {
-		const captureIndex = fn.closureCaptureOwners?.indexOf(owner) ?? -1;
-		const lookup =
-			captureIndex < 0
-				? `mal_vm_capture_owner(env, ${relocation.ownerFunctionIndex(owner)})`
-				: `mal_vm_capture_owner_at(env, ${relocation.ownerFunctionIndex(owner)}, ${captureIndex})`;
-		lines.push(`    MalEnv *const __capture_owner_${owner} = ${lookup};`);
+	for (const line of initializeFixedCaptureOwners(fn, index, relocation, true)) {
+		lines.push(`    ${line}`);
 	}
 
 	for (const line of body.lines) {
@@ -1673,8 +1708,13 @@ function emitResumableFunction(
 		`        __gc_frame = (MalRootFrame){ .prev = mal_root_frame_head, .desc = &__gc_desc, .slots = __gc_slots, .inactive_slots = 0, .env = env };`,
 	);
 	lines.push(`        mal_root_frame_head = &__gc_frame;`);
-	for (const owner of fixedCaptureOwners(fn, index)) {
-		lines.push(`        __capture_owner_${owner} = mal_vm_capture_owner(env, ${owner});`);
+	for (const line of initializeFixedCaptureOwners(
+		fn,
+		index,
+		nativeRelocationExpressions(false),
+		false,
+	)) {
+		lines.push(`        ${line}`);
 	}
 	lines.push(`        switch (resume_state->frame.instruction_pointer) {`);
 	for (const resumeIp of resumePoints) {
@@ -1689,12 +1729,12 @@ function emitResumableFunction(
 	// build the captured env, then load parameters boxed before falling into body.
 	lines.push(`        __gc_slots = mal_coroutine_alloc_registers(vm, ${totalSlots});`);
 	lines.push(
-		`        __gc_frame = (MalRootFrame){ .prev = mal_root_frame_head, .desc = &__gc_desc, .slots = __gc_slots, .inactive_slots = 0, .env = env };`,
+		`        __gc_frame = (MalRootFrame){ .prev = mal_root_frame_head, .desc = &__gc_desc, .slots = __gc_slots, .inactive_slots = 0, .env = ${fn.closureCaptureOwners?.length === 0 ? "nullptr" : "env"} };`,
 	);
 	lines.push(`        mal_root_frame_head = &__gc_frame;`);
 	if (capturesEnv) {
 		lines.push(
-			`        env = mal_env_new(vm, env, ${index}, ${fn.capturedCount});`,
+			`        env = ${fn.closureCaptureOwners === undefined ? "mal_env_new" : "mal_env_new_compact"}(vm, env, ${index}, ${fn.capturedCount});`,
 			`        __gc_frame.env = env;`,
 		);
 	}
@@ -1707,8 +1747,13 @@ function emitResumableFunction(
 			`        MAL_PERF_ADD(argument_snapshot_destination_writes, ${fn.argumentSnapshotCount});`,
 		);
 	}
-	for (const owner of fixedCaptureOwners(fn, index)) {
-		lines.push(`        __capture_owner_${owner} = mal_vm_capture_owner(env, ${owner});`);
+	for (const line of initializeFixedCaptureOwners(
+		fn,
+		index,
+		nativeRelocationExpressions(false),
+		false,
+	)) {
+		lines.push(`        ${line}`);
 	}
 	lines.push(`    }`);
 

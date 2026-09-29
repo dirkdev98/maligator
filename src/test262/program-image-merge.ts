@@ -665,6 +665,10 @@ export function mergeProgramImages(images: Array<ProgramImage>): MergedProgramIm
 				registerRepresentations: [...native.registerRepresentations],
 				directEntries: native.directEntries.map((entry) => ({
 					...entry,
+					callOverrides: entry.callOverrides?.map((call) => ({
+						...call,
+						functionIndex: call.functionIndex + base.function,
+					})),
 					parameterRepresentations: [...entry.parameterRepresentations],
 					resultRepresentation: entry.resultRepresentation,
 					fieldParameters:

@@ -442,18 +442,14 @@ void mal_vm_free_coroutine_buffer_pool(MalVm *vm) {
 #define MAL_MAX_STRING_CONSTANTS (128 * 1024)
 #define MAL_MAX_BIGINT_CONSTANTS (16 * 1024)
 
-MalEnv *mal_env_new(MalVm *vm, MalEnv *parent, i32 function_index, i32 count) {
+static MalEnv *mal_env_new_storage(MalVm *vm, MalEnv *parent, i32 function_index, i32 count, bool compact_parent) {
     MalEnv *env = mal_heap_alloc(
         &vm->heap, sizeof(MalEnv) + sizeof(MalValue) * (usize) count, MAL_HEAP_ENV
     );
     env->parent = parent;
     env->function_index = function_index;
     env->slot_count = count;
-    env->compact_parent = function_index >= 0
-        ? function_index < vm->runtime_image->function_count &&
-            vm->runtime_image->functions[function_index].closure_capture_owners != nullptr
-        : parent != nullptr && (mal_env_is_single_owner(parent) || parent->compact_parent ||
-            parent->function_index == MAL_ENV_CAPTURE_VECTOR);
+    env->compact_parent = compact_parent;
     for (i32 i = 0; i < count; i++) {
 #if defined(__wasi__)
         env->slots[i] = mal_value_new_undefined();
@@ -462,6 +458,19 @@ MalEnv *mal_env_new(MalVm *vm, MalEnv *parent, i32 function_index, i32 count) {
 #endif
     }
     return env;
+}
+
+MalEnv *mal_env_new(MalVm *vm, MalEnv *parent, i32 function_index, i32 count) {
+    bool compact_parent = function_index >= 0
+        ? function_index < vm->runtime_image->function_count &&
+            vm->runtime_image->functions[function_index].closure_capture_owners != nullptr
+        : parent != nullptr && (mal_env_is_single_owner(parent) || parent->compact_parent ||
+            parent->function_index == MAL_ENV_CAPTURE_VECTOR);
+    return mal_env_new_storage(vm, parent, function_index, count, compact_parent);
+}
+
+MalEnv *mal_env_new_compact(MalVm *vm, MalEnv *parent, i32 function_index, i32 count) {
+    return mal_env_new_storage(vm, parent, function_index, count, true);
 }
 
 MalEnv *mal_env_new_with_object(MalVm *vm, MalEnv *parent, MalValue object) {

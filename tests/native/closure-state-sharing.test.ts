@@ -93,3 +93,48 @@ it("preserves observable closures across the private bridge under collection", (
 		rmSync(outDir, { recursive: true, force: true });
 	}
 }, 600_000);
+
+it("preserves connected scalar calls and generic bridges across collection", () => {
+	const fixture = "tests/local/connected-native-calls.js";
+	const expected = execFileSync(process.execPath, [fixture], { encoding: "utf8" });
+	const config = resolveBuildConfig({
+		engine: { primordials: "locked", eval: false, realms: false },
+	});
+	const image = compileEntrypoint(resolve(fixture), { buildConfig: config });
+	const names = image.runtime.functions.map((fn) =>
+		String.fromCharCode(...(image.runtime.stringConstants[fn.nameStringIndex] ?? [])),
+	);
+	const graph = ["leaf", "helper", "visitor"].map((name) => {
+		const index = names.indexOf(name);
+		expect(index).toBeGreaterThanOrEqual(0);
+		return image.native.functions[index]!;
+	});
+	const entries = graph.flatMap((fn) => fn.directEntries);
+	expect(
+		entries.flatMap((entry) => entry.callOverrides ?? []).length,
+	).toBeGreaterThanOrEqual(2);
+	for (const fn of graph) {
+		expect(fn.specializedOnly).toBeUndefined();
+		expect(fn.directEntries).toContainEqual(
+			expect.objectContaining({
+				parameterRepresentations: ["number", "number"],
+				resultRepresentation: "number",
+			}),
+		);
+	}
+	const outDir = mkdtempSync(join(tmpdir(), "mal-connected-native-calls-"));
+	try {
+		for (const compiled of [true, false]) {
+			const binary = buildNativeProgramImage(image, {
+				name: `connected-native-calls-${compiled ? "native" : "interpreted"}`,
+				config,
+				compiled,
+				outDir,
+			});
+			expect(runToStdout(binary)).toBe(expected);
+			expect(runToStdout(binary, { env: STRESS_ENV, timeoutMs: 60_000 })).toBe(expected);
+		}
+	} finally {
+		rmSync(outDir, { recursive: true, force: true });
+	}
+}, 600_000);

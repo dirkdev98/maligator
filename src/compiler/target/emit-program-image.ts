@@ -4,6 +4,7 @@ import { knownOperationIndex } from "../shared/known-operations.ts";
 import { staticDataQueryTag } from "../shared/static-data-query.ts";
 import { finalizeCompilerRemarks } from "./profile-metadata.ts";
 import type { ProgramImage } from "./program-image.ts";
+import { validateNativeDirectEntry } from "./program-image.ts";
 import { directCompiledEntryKey, emitCompiledFunction } from "./render-native-c.ts";
 import type { CompiledFunction } from "./render-native-c.ts";
 import {
@@ -581,6 +582,17 @@ function nativeCompilationAvailability(
 				}
 			}
 		}
+		for (const entry of native.directEntries) {
+			for (const call of entry.callOverrides ?? []) {
+				if (
+					compiledTargets.has(call.functionIndex) &&
+					compiled[call.functionIndex]!.source.length > 0 &&
+					!image.runtime.functions[call.functionIndex]!.isClassConstructor
+				) {
+					directCompiledTargets.add(call.functionIndex);
+				}
+			}
+		}
 	}
 	const directCompiledEntries: NativeCompilationAvailability["directCompiledEntries"] =
 		new Map();
@@ -678,6 +690,17 @@ function emitNativeFunctions(
 	const references = image.native.functions.map((native) => {
 		const targets = new Set<number>();
 		const entries = new Set<string>();
+		for (const entry of native.directEntries) {
+			validateNativeDirectEntry(
+				image.runtime.functions[native.functionIndex]!,
+				entry,
+				image.native.functions,
+			);
+			for (const call of entry.callOverrides ?? []) {
+				targets.add(call.functionIndex);
+				entries.add(directCompiledEntryKey(call.functionIndex, call.entryId));
+			}
+		}
 		for (const site of native.fieldCalls ?? [])
 			for (const entry of site.entries) {
 				targets.add(entry.functionIndex);

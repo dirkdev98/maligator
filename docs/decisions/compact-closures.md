@@ -39,7 +39,10 @@ Stores retain atomic access, the SATB old-value barrier, and the generational ca
 barrier on the real owning cell.
 
 Native canonical and specialized entries resolve nonnegative external owner IDs
-once per entry, using known vector ordinals when available, then access slots directly.
+once per entry, using a known vector ordinal for one owner or one traversal for
+multiple owners, then access slots directly. Certified entries avoid repeating
+the runtime environment-policy lookup; certified empty closures need no incoming
+environment root.
 An active local scope takes precedence; a mismatched layout uses general lookup.
 Suspended entries rebuild those local
 references from the restored environment before resume dispatch. Locally changing
@@ -47,6 +50,18 @@ iteration scopes keep dynamic lookup. Stable captures in eligible private helper
 instead become ordinary SSA arguments, allowing typed arguments and results across
 the call boundary. Branches, loops, and switches preserve their SSA edges; handlers,
 guard facts, dynamic scope, and uncertain initialization retain the generic path.
+
+Specialized entries carry their own outgoing call plans. A bounded worklist follows
+known closed singleton targets and derives argument representations from the caller
+variant. Proven scalar results flow back to its callers. Canonical entries and other
+variants keep their own plans, so a numeric invocation cannot cause an escaped
+string or object invocation to unbox unchecked arguments. Unknown targets cross the
+generic bridge. Captured mutable values retain their boxed result uncertainty.
+Recursive result cycles start boxed and cannot create their own scalar proof.
+At most four entries per function are admitted, subject to the existing generated
+code and compiler work budgets; bodies above 512 instructions are excluded from
+new downstream specialization. The artifact codec and merged-image relocation
+preserve these entry-specific edges.
 
 Private entry conversion does not replace observable closures. Calls whose identity,
 arity, effects, or capture initialization are unproved use the canonical bridge.

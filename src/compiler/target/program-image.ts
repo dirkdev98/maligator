@@ -1073,6 +1073,12 @@ export interface NativeFunctionPlan {
 
 export interface NativeDirectEntryPlan {
 	readonly id: number;
+	readonly callOverrides?: ReadonlyArray<{
+		readonly instructionIp: number;
+		readonly functionIndex: number;
+		readonly entryId: number;
+		readonly guarded?: true;
+	}>;
 	readonly parameterRepresentations: ReadonlyArray<VmRegisterRepresentation>;
 	readonly resultRepresentation: VmRegisterRepresentation;
 	readonly fieldParameters?: {
@@ -1098,7 +1104,32 @@ export interface NativeDirectEntryPlan {
 export function validateNativeDirectEntry(
 	fn: BytecodeFunction,
 	entry: NativeDirectEntryPlan,
+	functions?: ReadonlyArray<NativeFunctionPlan>,
 ): void {
+	const seenCalls = new Set<number>();
+	for (const call of entry.callOverrides ?? []) {
+		const instruction = fn.instructions[call.instructionIp];
+		if (
+			seenCalls.has(call.instructionIp) ||
+			instruction?.opcode !== "CALL" ||
+			!Number.isSafeInteger(call.functionIndex) ||
+			call.functionIndex < 0 ||
+			!Number.isSafeInteger(call.entryId) ||
+			call.entryId < 0 ||
+			(call.guarded !== undefined && call.guarded !== true)
+		)
+			throw new RangeError("Native direct entry has an invalid call override");
+		seenCalls.add(call.instructionIp);
+		const target = functions?.[call.functionIndex]?.directEntries[call.entryId];
+		if (
+			functions !== undefined &&
+			(target?.id !== call.entryId ||
+				target.fieldParameters !== undefined ||
+				(target.argumentRepresentations !== undefined &&
+					target.argumentRepresentations.length !== instruction.argumentCount))
+		)
+			throw new RangeError("Native direct-entry call override names an incompatible ABI");
+	}
 	const seenInputs = new Set<number>();
 	for (const { instructionIp, masks } of entry.operatorInputs ?? []) {
 		const instruction = fn.instructions[instructionIp];
@@ -4217,6 +4248,14 @@ function lowerExecutionFunctionToNativePlan(
 	);
 	const directEntries: Array<NativeDirectEntryPlan> = fn.directEntries.map((entry) => ({
 		id: entry.id,
+		...(entry.callOverrides === undefined
+			? {}
+			: {
+					callOverrides: entry.callOverrides.map(({ instruction, ...call }) => ({
+						...call,
+						instructionIp: instructionIndexByTargetInstruction.get(instruction)!,
+					})),
+				}),
 		...(entry.operatorInputs === undefined
 			? {}
 			: {

@@ -42,7 +42,7 @@ import type {
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal artifacts are hard cut-overs: stale cache entries rebuild.
-export const COMPILER_ARTIFACT_VERSION = 87;
+export const COMPILER_ARTIFACT_VERSION = 88;
 
 function validateClosureCaptureOwners(
 	owners: ReadonlyArray<number>,
@@ -740,7 +740,7 @@ function writeCompilerArtifact(
 			) {
 				throw new RangeError("program-image-codec: invalid native direct entry");
 			}
-			validateNativeDirectEntry(fn, entry);
+			validateNativeDirectEntry(fn, entry, compiler.native.functions);
 			nativeFrameRootRegisters(fn, entry);
 			w.u32(entry.id);
 			w.u8(representationTag(entry.resultRepresentation));
@@ -773,6 +773,13 @@ function writeCompilerArtifact(
 				w.u32(instructionIp);
 				w.u8(masks.length);
 				for (const mask of masks) w.u8(mask);
+			}
+			w.u32(entry.callOverrides?.length ?? 0);
+			for (const call of entry.callOverrides ?? []) {
+				w.u32(call.instructionIp);
+				w.u32(call.functionIndex);
+				w.u32(call.entryId);
+				w.u8(call.guarded ? 1 : 0);
 			}
 			w.u32(entry.registerRepresentations.length);
 			for (const representation of entry.registerRepresentations) {
@@ -3167,6 +3174,20 @@ function readCompilerArtifact(r: Reader, runtimeImage: RuntimeImage): ProgramIma
 				) as unknown as CompilerOperatorInputKindMasks;
 				return { instructionIp, masks };
 			});
+			const callOverrides = Array.from({ length: r.count(4) }, () => {
+				const instructionIp = r.u32();
+				const functionIndex = r.u32();
+				const entryId = r.u32();
+				const guarded = r.u8();
+				if (guarded > 1)
+					throw new RangeError("program-image-codec: invalid direct-entry call guard");
+				return {
+					instructionIp,
+					functionIndex,
+					entryId,
+					...(guarded ? { guarded: true as const } : {}),
+				};
+			});
 			const directRegisterCount = r.count(1);
 			if (directRegisterCount !== fn.registerCount) {
 				throw new Error("program-image-codec: direct-entry register count mismatch");
@@ -3218,6 +3239,7 @@ function readCompilerArtifact(r: Reader, runtimeImage: RuntimeImage): ProgramIma
 				...(argumentRepresentations === undefined ? {} : { argumentRepresentations }),
 				...(constantCount === 0 ? {} : { constantBooleans }),
 				...(operatorInputs.length === 0 ? {} : { operatorInputs }),
+				...(callOverrides.length === 0 ? {} : { callOverrides }),
 				...(fieldParameters === undefined ? {} : { fieldParameters }),
 				registerRepresentations: directRegisterRepresentations,
 				gc: { safepoints: directSafepoints },
@@ -4549,6 +4571,8 @@ function readCompilerArtifact(r: Reader, runtimeImage: RuntimeImage): ProgramIma
 		nativeFunctions.push(nativeFunction);
 	}
 	for (const native of nativeFunctions) {
+		for (const entry of native.directEntries)
+			validateNativeDirectEntry(functions[native.functionIndex]!, entry, nativeFunctions);
 		validateNativeFieldCalls(functions[native.functionIndex]!, native, nativeFunctions);
 		validateNativeLiteralSwitches(functions[native.functionIndex]!, native);
 		for (const plan of native.instructions) {

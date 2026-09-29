@@ -1200,6 +1200,8 @@ static inline MalEnv **mal_env_capture_scopes(MalEnv *env) {
 }
 
 MalEnv *mal_vm_capture_owner(MalEnv *env, i32 owner_function_index);
+// owners is sorted and unique; missing bindings are represented by null entries.
+bool mal_vm_capture_owners(MalEnv *env, const i32 *owners, i32 count, MalEnv **scopes);
 
 // Native code knows the ordinal in its immutable capture layout. A local scope
 // can precede that display, and dynamic callers can supply a different shape;
@@ -2225,6 +2227,8 @@ void mal_vm_retain_loaded_runtime_image(MalVm *vm, MalLoadedRuntimeImage *loaded
  * collection: the caller must have rooted `parent` and any live frame slots
  * before calling (the compiled prologue publishes its root frame first). */
 MalEnv *mal_env_new(MalVm *vm, MalEnv *parent, i32 function_index, i32 count);
+// Native entries with a certified closure layout already know the parent policy.
+MalEnv *mal_env_new_compact(MalVm *vm, MalEnv *parent, i32 function_index, i32 count);
 
 // Allocate a `with` object environment record (function_index MAL_ENV_WITH_OBJECT,
 // slots[0] = object) and link it onto `parent`. Pushed onto the env chain by

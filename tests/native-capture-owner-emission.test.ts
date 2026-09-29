@@ -78,8 +78,11 @@ describe("native lexical owner lookup contract", () => {
 		]);
 		expect(emitted.directEntries).toHaveLength(1);
 		for (const { source } of [emitted, ...emitted.directEntries]) {
-			expect(source.match(/mal_vm_capture_owner\(env, 2\)/g)).toHaveLength(1);
-			expect(source.match(/mal_vm_capture_owner\(env, 3\)/g)).toHaveLength(1);
+			expect(source).toContain("static const i32 __capture_owner_ids[] = { 2, 3 };");
+			expect(source.match(/mal_vm_capture_owners\(/g)).toHaveLength(1);
+			expect(source).toContain("__capture_owner_2 = __capture_owner_scopes[0]");
+			expect(source).toContain("__capture_owner_3 = __capture_owner_scopes[1]");
+			expect(source).not.toContain("mal_vm_capture_owner(");
 			expect(source).toContain("__capture_owner_2->slots[0]");
 			expect(source).toContain("__capture_owner_2->slots[1]");
 			expect(source).toContain("__capture_owner_3->slots[0]");
@@ -92,20 +95,38 @@ describe("native lexical owner lookup contract", () => {
 		}
 	});
 
-	it("uses certified owner ordinals in canonical and specialized entries", () => {
+	it("uses the certified ordinal for a single owner in every entry", () => {
 		const emitted = emit(
 			[
-				{ opcode: "LOAD_CAPTURED", dst: 0, ownerFunctionIndex: 2, index: 0 },
 				{ opcode: "LOAD_CAPTURED", dst: 1, ownerFunctionIndex: 5, index: 0 },
 				{ opcode: "RETURN", value: 1 },
 			],
 			{ closureCaptureOwners: [-2, 2, 4, 5] },
 		);
 		for (const { source } of [emitted, ...emitted.directEntries]) {
-			expect(source.match(/mal_vm_capture_owner_at\(env, 2, 1\)/g)).toHaveLength(1);
 			expect(source.match(/mal_vm_capture_owner_at\(env, 5, 3\)/g)).toHaveLength(1);
 			expect(source).not.toContain("mal_vm_capture_owner(env,");
+			expect(source).not.toContain("mal_vm_capture_owners(");
 		}
+	});
+
+	it("resolves multiple relocated owners in one call with runtime owner IDs", () => {
+		const { source } = emit(
+			[
+				{ opcode: "LOAD_CAPTURED", dst: 0, ownerFunctionIndex: 5, index: 0 },
+				{ opcode: "LOAD_CAPTURED", dst: 1, ownerFunctionIndex: 2, index: 0 },
+				{ opcode: "RETURN", value: 1 },
+			],
+			{},
+			true,
+		);
+		expect(source).toContain(
+			"const i32 __capture_owner_ids[] = { (__mal_relocation->function_base + 2), (__mal_relocation->function_base + 5) };",
+		);
+		expect(source).not.toContain("static const i32 __capture_owner_ids");
+		expect(source.match(/mal_vm_capture_owners\(/g)).toHaveLength(1);
+		expect(source).toContain("__capture_owner_2 = __capture_owner_scopes[0]");
+		expect(source).toContain("__capture_owner_5 = __capture_owner_scopes[1]");
 	});
 
 	it("keeps owned storage direct and resolves external storage after allocation", () => {
@@ -141,6 +162,43 @@ describe("native lexical owner lookup contract", () => {
 		expect(source).toContain("mal_vm_load_captured(env, -2, 0)");
 		expect(source).toContain("mal_vm_store_captured(env, -2, 0,");
 		expect(source).not.toContain("mal_vm_capture_owner(env, -2)");
+	});
+
+	it.each([false, true])(
+		"uses certified compact allocation for an owned environment (generator=%s)",
+		(isGenerator) => {
+			const emitted = emit(
+				[
+					...(isGenerator ? [{ opcode: "GENERATOR_START" as const }] : []),
+					{ opcode: "STORE_CAPTURED", src: 0, ownerFunctionIndex: 0, index: 0 },
+					{ opcode: "RETURN", value: 0 },
+				],
+				{ capturedCount: 1, closureCaptureOwners: [], isGenerator },
+			);
+			for (const { source } of [emitted, ...emitted.directEntries]) {
+				expect(source).toContain("env = mal_env_new_compact(vm, env, 0, 1);");
+				expect(source).not.toContain("env = mal_env_new(");
+				expect(source).toContain(".inactive_slots = 0, .env = nullptr");
+				expect(source.indexOf("__gc_frame.env = env;")).toBeGreaterThan(
+					source.indexOf("env = mal_env_new_compact("),
+				);
+			}
+		},
+	);
+
+	it("omits incoming environment roots only for a certified empty layout", () => {
+		const instructions: Array<BytecodeInstruction> = [
+			{ opcode: "CREATE_OBJECT", dst: 0 },
+			{ opcode: "RETURN", value: 0 },
+		];
+		for (const closureCaptureOwners of [undefined, [], [2]]) {
+			const emitted = emit(instructions, { closureCaptureOwners });
+			for (const { source } of [emitted, ...emitted.directEntries]) {
+				expect(source).toContain(
+					`.inactive_slots = 0, .env = ${closureCaptureOwners?.length === 0 ? "nullptr" : "env"}`,
+				);
+			}
+		}
 	});
 
 	it("relocates external owner identities with the function table", () => {
@@ -189,5 +247,25 @@ describe("native lexical owner lookup contract", () => {
 		expect(source.slice(restore, dispatch)).toContain("mal_vm_capture_owner(env, 2)");
 		expect(source.slice(dispatch)).toContain("mal_vm_capture_owner(env, 2)");
 		expect(source).not.toContain("mal_vm_load_captured(");
+	});
+
+	it("resolves multiple owners once on each fresh or resumed coroutine path", () => {
+		const { source } = emit(
+			[
+				{ opcode: "GENERATOR_START" },
+				{ opcode: "LOAD_CAPTURED", dst: 0, ownerFunctionIndex: 2, index: 0 },
+				{ opcode: "YIELD", yieldedSrc: 0, valueDst: 1, modeDst: 2 },
+				{ opcode: "LOAD_CAPTURED", dst: 0, ownerFunctionIndex: 5, index: 0 },
+				{ opcode: "RETURN", value: 0 },
+			],
+			{ isGenerator: true },
+		);
+		const restore = source.indexOf("env = resume_state->frame.env;");
+		const dispatch = source.indexOf("switch (resume_state->frame.instruction_pointer)");
+		expect(
+			source.slice(restore, dispatch).match(/mal_vm_capture_owners\(/g),
+		).toHaveLength(1);
+		expect(source.slice(dispatch).match(/mal_vm_capture_owners\(/g)).toHaveLength(1);
+		expect(source).not.toContain("mal_vm_capture_owner(");
 	});
 });

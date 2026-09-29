@@ -1621,6 +1621,48 @@ void mal_op_create_null(MalCallable *callable, const MalInstruction *instruction
     callable->registers[instruction->as.create_null.dst] = mal_value_new_null();
 }
 
+// Resolve a sorted unique selection in one traversal. No allocation or safepoint.
+bool mal_vm_capture_owners(MalEnv *source_env, const i32 *owners, i32 count, MalEnv **scopes) {
+    for (i32 i = 0; i < count; i++) scopes[i] = nullptr;
+    i32 remaining = count;
+    i32 next = count - 1;
+    for (MalEnv *env = source_env; env != nullptr && remaining > 0;) {
+        bool terminal = mal_env_is_single_owner(env);
+        if (terminal) env = mal_env_untag_single_owner(env);
+        if (env->function_index == MAL_ENV_CAPTURE_VECTOR) {
+            // Both layouts are sorted. Copy selected owners once, leaving
+            // any nearer activation of the same lexical owner in place.
+            const i32 *source_owners = mal_env_capture_layout(env);
+            MalEnv **source_scopes = mal_env_capture_scopes(env);
+            i32 source = 0;
+            for (i32 i = 0; i < count && source < env->slot_count; i++) {
+                while (source < env->slot_count && source_owners[source] < owners[i]) source++;
+                if (source < env->slot_count && source_owners[source] == owners[i] && scopes[i] == nullptr) {
+                    scopes[i] = source_scopes[source];
+                    remaining--;
+                }
+            }
+            break;
+        }
+        i32 low = next, high = count;
+        if (low < 0 || owners[low] != env->function_index) low = 0;
+        else high = low;
+        while (low < high) {
+            i32 mid = low + (high - low) / 2;
+            if (owners[mid] < env->function_index) low = mid + 1;
+            else high = mid;
+        }
+        if (low < count && owners[low] == env->function_index && scopes[low] == nullptr) {
+            scopes[low] = env;
+            remaining--;
+            while (next >= 0 && scopes[next] != nullptr) next--;
+        }
+        if (terminal) break;
+        env = env->parent;
+    }
+    return remaining == 0;
+}
+
 static bool mal_vm_capture_chain_is_complete(MalEnv *env, const i32 *owners, i32 count) {
     // Chain tracing retains exactly these owners; a tagged tail bounds traversal
     // without retaining an inline display's function object or any skipped scope.
@@ -1683,7 +1725,7 @@ MalValue mal_vm_op_create_function(MalVm *vm, i32 function_index, MalEnv *creati
     if (capture_count == 0) {
         function->creation_env = nullptr;
     } else if (capture_count == 1) {
-        MalEnv *owner = mal_vm_capture_owner(creation_env, definition->closure_capture_owners[0]);
+        MalEnv *owner = mal_vm_capture_owner_at(creation_env, definition->closure_capture_owners[0], 0);
         if (owner != nullptr) function->creation_env = mal_env_tag_single_owner(owner);
     } else if (capture_count > 1 && !complete_capture_chain) {
         MalEnv *captures = (MalEnv *) ((MalValue *) (function + 1) + 2);
@@ -1693,41 +1735,9 @@ MalValue mal_vm_op_create_function(MalVm *vm, i32 function_index, MalEnv *creati
         captures->compact_parent = false;
         ((const i32 **)(void *) captures->slots)[0] = definition->closure_capture_owners;
         MalEnv **scopes = mal_env_capture_scopes(captures);
-        const i32 *owners = definition->closure_capture_owners;
-        for (i32 i = 0; i < capture_count; i++) scopes[i] = nullptr;
-        i32 remaining = capture_count;
-        for (MalEnv *env = creation_env; env != nullptr && remaining > 0;) {
-            bool terminal = mal_env_is_single_owner(env);
-            if (terminal) env = mal_env_untag_single_owner(env);
-            if (env->function_index == MAL_ENV_CAPTURE_VECTOR) {
-                // Both layouts are sorted. Copy selected owners once, leaving
-                // any nearer activation of the same lexical owner in place.
-                const i32 *source_owners = mal_env_capture_layout(env);
-                MalEnv **source_scopes = mal_env_capture_scopes(env);
-                i32 source = 0;
-                for (i32 i = 0; i < capture_count && source < env->slot_count; i++) {
-                    while (source < env->slot_count && source_owners[source] < owners[i]) source++;
-                    if (source < env->slot_count && source_owners[source] == owners[i] && scopes[i] == nullptr) {
-                        scopes[i] = source_scopes[source];
-                        remaining--;
-                    }
-                }
-                break;
-            }
-            i32 low = 0, high = capture_count;
-            while (low < high) {
-                i32 mid = low + (high - low) / 2;
-                if (owners[mid] < env->function_index) low = mid + 1;
-                else high = mid;
-            }
-            if (low < capture_count && owners[low] == env->function_index && scopes[low] == nullptr) {
-                scopes[low] = env;
-                remaining--;
-            }
-            if (terminal) break;
-            env = env->parent;
+        if (mal_vm_capture_owners(creation_env, definition->closure_capture_owners, capture_count, scopes)) {
+            function->creation_env = captures;
         }
-        if (remaining == 0) function->creation_env = captures;
     }
 
     return mal_value_from_function_object(function);

@@ -163,6 +163,7 @@
 				"src/compiler/core/core-memory-passes.ts",
 				"src/compiler/core/core-native-body-reachability.ts",
 				"src/compiler/core/core-native-entry-analysis.ts",
+				"src/compiler/core/core-native-entry-graph.ts",
 				"src/compiler/core/core-native-field-analysis.ts",
 				"src/compiler/core/core-native-numeric-analysis.ts",
 				"src/compiler/core/core-optimization-families.ts",

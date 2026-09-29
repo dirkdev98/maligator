@@ -215,6 +215,15 @@ static int check_lookup_and_reexport(const MalRuntimeImage *image) {
     nearest->slots[0] = mal_value_from_i32(22);
     MalEnv *prefix = mal_env_new(&vm, nearest, 0, 1);
     prefix->slots[0] = mal_value_from_i32(200);
+    const i32 subset[] = { 1, 4 };
+    const i32 partial[] = { 1, 2, 4 };
+    MalEnv *resolved[3] = { source, source, source };
+    if (!mal_vm_capture_owners(source, subset, 2, resolved) ||
+        resolved[0] != original || resolved[1] != forwarded) return 44;
+    if (!mal_vm_capture_owners(prefix, subset, 2, resolved) ||
+        resolved[0] != nearest || resolved[1] != forwarded) return 45;
+    if (mal_vm_capture_owners(prefix, partial, 3, resolved) ||
+        resolved[0] != nearest || resolved[1] != nullptr || resolved[2] != forwarded) return 46;
     if (mal_vm_capture_owner_at(prefix, 1, 0) != nearest ||
         mal_vm_capture_owner_at(prefix, 4, 1) != forwarded ||
         mal_vm_capture_owner_at(source, 1, 1) != original ||
@@ -240,6 +249,10 @@ static int check_lookup_and_reexport(const MalRuntimeImage *image) {
         mal_vm_load_captured(source, 4, 0) != mal_value_from_i32(55)) return 26;
     roots[0] = mal_value_new_undefined();
     mal_gc_collect(&vm);
+    if (!mal_vm_capture_owners(selected, subset, 2, resolved) ||
+        resolved[0] != nearest || resolved[1] != forwarded) return 47;
+    if (mal_vm_capture_owners(single, subset, 2, resolved) ||
+        resolved[0] != nearest || resolved[1] != nullptr) return 48;
     if (mal_vm_capture_owner_at(selected, 1, 1) != nearest ||
         mal_vm_capture_owner_at(selected, 4, 0) != forwarded ||
         mal_vm_capture_owner_at(single, 4, 0) != nullptr ||
