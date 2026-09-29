@@ -587,8 +587,7 @@ static i64 mal_builtin_string_find(const MalString *string, const MalString *sea
     }
 
     if (search_length > 1) MAL_PERF_COUNT(string_search_multi_unit_calls);
-    if (search_length >= MAL_STRING_SEARCH_INLINE_UNITS ||
-        (search_length > 1 && string->storage == MAL_STRING_STORAGE_CONS)) {
+    if (search_length >= MAL_STRING_SEARCH_INLINE_UNITS) {
         MalBuiltinStringSearch cursor;
         mal_builtin_string_search_cursor_init(&cursor, string, search, from, false);
         i64 result = mal_builtin_string_search_cursor_next(&cursor);
