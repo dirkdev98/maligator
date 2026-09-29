@@ -1201,6 +1201,27 @@ static inline MalEnv **mal_env_capture_scopes(MalEnv *env) {
 
 MalEnv *mal_vm_capture_owner(MalEnv *env, i32 owner_function_index);
 
+// Native code knows the ordinal in its immutable capture layout. A local scope
+// can precede that display, and dynamic callers can supply a different shape;
+// preserve nearest-binding identity and use the general resolver on mismatch.
+static inline MalEnv *mal_vm_capture_owner_at(MalEnv *env, i32 owner_function_index, i32 capture_index) {
+    for (; env != nullptr; env = env->parent) {
+        if (mal_env_is_single_owner(env)) {
+            MalEnv *owner = mal_env_untag_single_owner(env);
+            return owner->function_index == owner_function_index ? owner : nullptr;
+        }
+        if (env->function_index == owner_function_index) return env;
+        if (env->function_index == MAL_ENV_CAPTURE_VECTOR) {
+            if (capture_index >= 0 && capture_index < env->slot_count &&
+                    mal_env_capture_layout(env)[capture_index] == owner_function_index) {
+                return mal_env_capture_scopes(env)[capture_index];
+            }
+            return mal_vm_capture_owner(env, owner_function_index);
+        }
+    }
+    return nullptr;
+}
+
 /**
  * A native-backend (compiled) call frame, tracked only for stack traces. The
  * interpreter's frames live in MalVm.frames; compiled functions run on the C

@@ -1673,12 +1673,41 @@ MalValue mal_vm_op_create_function(MalVm *vm, i32 function_index, MalEnv *creati
         captures->compact_parent = false;
         ((const i32 **)(void *) captures->slots)[0] = definition->closure_capture_owners;
         MalEnv **scopes = mal_env_capture_scopes(captures);
-        bool complete = true;
-        for (i32 i = 0; i < capture_count; i++) {
-            scopes[i] = mal_vm_capture_owner(creation_env, definition->closure_capture_owners[i]);
-            if (scopes[i] == nullptr) complete = false;
+        const i32 *owners = definition->closure_capture_owners;
+        for (i32 i = 0; i < capture_count; i++) scopes[i] = nullptr;
+        i32 remaining = capture_count;
+        for (MalEnv *env = creation_env; env != nullptr && remaining > 0;) {
+            bool terminal = mal_env_is_single_owner(env);
+            if (terminal) env = mal_env_untag_single_owner(env);
+            if (env->function_index == MAL_ENV_CAPTURE_VECTOR) {
+                // Both layouts are sorted. Copy selected owners once, leaving
+                // any nearer activation of the same lexical owner in place.
+                const i32 *source_owners = mal_env_capture_layout(env);
+                MalEnv **source_scopes = mal_env_capture_scopes(env);
+                i32 source = 0;
+                for (i32 i = 0; i < capture_count && source < env->slot_count; i++) {
+                    while (source < env->slot_count && source_owners[source] < owners[i]) source++;
+                    if (source < env->slot_count && source_owners[source] == owners[i] && scopes[i] == nullptr) {
+                        scopes[i] = source_scopes[source];
+                        remaining--;
+                    }
+                }
+                break;
+            }
+            i32 low = 0, high = capture_count;
+            while (low < high) {
+                i32 mid = low + (high - low) / 2;
+                if (owners[mid] < env->function_index) low = mid + 1;
+                else high = mid;
+            }
+            if (low < capture_count && owners[low] == env->function_index && scopes[low] == nullptr) {
+                scopes[low] = env;
+                remaining--;
+            }
+            if (terminal) break;
+            env = env->parent;
         }
-        if (complete) function->creation_env = captures;
+        if (remaining == 0) function->creation_env = captures;
     }
 
     return mal_value_from_function_object(function);

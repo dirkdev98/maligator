@@ -1264,9 +1264,12 @@ function emitCompiledVariant(
 	}
 
 	for (const owner of fixedCaptureOwners(fn, index)) {
-		lines.push(
-			`    MalEnv *const __capture_owner_${owner} = mal_vm_capture_owner(env, ${relocation.ownerFunctionIndex(owner)});`,
-		);
+		const captureIndex = fn.closureCaptureOwners?.indexOf(owner) ?? -1;
+		const lookup =
+			captureIndex < 0
+				? `mal_vm_capture_owner(env, ${relocation.ownerFunctionIndex(owner)})`
+				: `mal_vm_capture_owner_at(env, ${relocation.ownerFunctionIndex(owner)}, ${captureIndex})`;
+		lines.push(`    MalEnv *const __capture_owner_${owner} = ${lookup};`);
 	}
 
 	for (const line of body.lines) {
@@ -5044,7 +5047,7 @@ function emitInstruction(
 					`  mal_gc_write_barrier(${owner}->slots[${instruction.index}]);`,
 					`  ${owner}->slots[${instruction.index}] = ${boxed(instruction.src)};`,
 					...(!primitive
-						? [`  mal_gc_card(&${owner}->header, ${owner}->slots[${instruction.index}]);`]
+						? [`  mal_gc_card(&${owner}->header, ${boxed(instruction.src)});`]
 						: []),
 					`}`,
 				];
@@ -5058,7 +5061,7 @@ function emitInstruction(
 					`mal_gc_write_barrier(env->slots[${instruction.index}]);`,
 					`env->slots[${instruction.index}] = ${boxed(instruction.src)};`,
 					...(!primitive
-						? [`mal_gc_card(&env->header, env->slots[${instruction.index}]);`]
+						? [`mal_gc_card(&env->header, ${boxed(instruction.src)});`]
 						: []),
 				];
 			}

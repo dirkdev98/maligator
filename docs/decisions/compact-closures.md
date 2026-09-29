@@ -14,7 +14,8 @@ A closure with no external requirements retains no environment. A single owner
 uses a tagged terminal reference without additional storage. Multiple owners
 coallocate a flat vector with the function object; immutable owner identifiers
 remain in shared function metadata. Creation resolves the vector once, including
-transitive requirements. A missing owner conservatively retains the supplied
+transitive requirements. Construction scans active scopes once and merges the
+sorted incoming and requested layouts. A missing owner conservatively retains the supplied
 chain. Function properties, identity, construction, and generic call behavior
 continue to belong to the original function object.
 
@@ -30,7 +31,9 @@ Stores retain atomic access, the SATB old-value barrier, and the generational ca
 barrier on the real owning cell.
 
 Native canonical and specialized entries resolve nonnegative external owner IDs
-once per entry, then access slots directly. Suspended entries rebuild those local
+once per entry, using known vector ordinals when available, then access slots directly.
+An active local scope takes precedence; a mismatched layout uses general lookup.
+Suspended entries rebuild those local
 references from the restored environment before resume dispatch. Locally changing
 iteration scopes keep dynamic lookup. Stable captures in eligible private helpers
 instead become ordinary SSA arguments, allowing typed arguments and results across

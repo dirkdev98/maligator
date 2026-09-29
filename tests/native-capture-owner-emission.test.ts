@@ -88,6 +88,23 @@ describe("native lexical owner lookup contract", () => {
 			expect(source).toMatch(
 				/mal_gc_write_barrier\(__capture_owner_2->slots\[0\]\);[\s\S]*__capture_owner_2->slots\[0\] = [^;]+;[\s\S]*mal_gc_card\(&__capture_owner_2->header,/,
 			);
+			expect(source).toContain("mal_gc_card(&__capture_owner_2->header, r1);");
+		}
+	});
+
+	it("uses certified owner ordinals in canonical and specialized entries", () => {
+		const emitted = emit(
+			[
+				{ opcode: "LOAD_CAPTURED", dst: 0, ownerFunctionIndex: 2, index: 0 },
+				{ opcode: "LOAD_CAPTURED", dst: 1, ownerFunctionIndex: 5, index: 0 },
+				{ opcode: "RETURN", value: 1 },
+			],
+			{ closureCaptureOwners: [-2, 2, 4, 5] },
+		);
+		for (const { source } of [emitted, ...emitted.directEntries]) {
+			expect(source.match(/mal_vm_capture_owner_at\(env, 2, 1\)/g)).toHaveLength(1);
+			expect(source.match(/mal_vm_capture_owner_at\(env, 5, 3\)/g)).toHaveLength(1);
+			expect(source).not.toContain("mal_vm_capture_owner(env,");
 		}
 	});
 
@@ -102,6 +119,7 @@ describe("native lexical owner lookup contract", () => {
 			{ capturedCount: 1 },
 		);
 		expect(source).toContain("env->slots[0]");
+		expect(source).toContain("mal_gc_card(&env->header, r0);");
 		expect(source).not.toContain("mal_vm_capture_owner(env, 0)");
 		expect(source.indexOf("mal_vm_capture_owner(env, 2)")).toBeGreaterThan(
 			source.indexOf("env = mal_env_new("),
@@ -136,6 +154,20 @@ describe("native lexical owner lookup contract", () => {
 		);
 		expect(source).toContain(
 			"mal_vm_capture_owner(env, (__mal_relocation->function_base + 2))",
+		);
+	});
+
+	it("relocates certified owner identities while retaining their layout ordinal", () => {
+		const { source } = emit(
+			[
+				{ opcode: "LOAD_CAPTURED", dst: 0, ownerFunctionIndex: 2, index: 0 },
+				{ opcode: "RETURN", value: 0 },
+			],
+			{ closureCaptureOwners: [1, 2] },
+			true,
+		);
+		expect(source).toContain(
+			"mal_vm_capture_owner_at(env, (__mal_relocation->function_base + 2), 1)",
 		);
 	});
 
