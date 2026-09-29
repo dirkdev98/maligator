@@ -68,12 +68,18 @@ describe("exact collection receiver brands", () => {
 		);
 		for (const opcode of ["CALL_KNOWN", "CALL"] as const) {
 			expect(
-				trustedCollectionSites.some(
-					({ instruction, safepoint }) =>
-						instruction.opcode === opcode &&
-						safepoint?.clearRegisters?.includes(instruction.dst) === true,
-				),
+				trustedCollectionSites.some(({ instruction }) => instruction.opcode === opcode),
 			).toBe(true);
+		}
+		for (const { instruction, safepoint } of trustedCollectionSites) {
+			expect(safepoint).toBeDefined();
+			const inputs = [instruction.thisValue, ...instruction.arguments];
+			if (instruction.opcode === "CALL") inputs.push(instruction.callee);
+			if (inputs.includes(instruction.dst)) {
+				expect(safepoint?.clearRegisters?.includes(instruction.dst) ?? false).toBe(false);
+			} else if (safepoint?.rootRegisters.includes(instruction.dst)) {
+				expect(safepoint.clearRegisters?.includes(instruction.dst)).toBe(true);
+			}
 		}
 		trustedInterpreted = trusted.binaryPath;
 	}, 600_000);

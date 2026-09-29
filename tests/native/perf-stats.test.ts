@@ -187,9 +187,10 @@ describe("opt-in performance statistics", () => {
 			const table = reportLine(result.stderr, "[perf-table-stats]", `role=${role} `);
 			expect(field(table, "find_calls")).toBeGreaterThan(0);
 			if (role === "atoms") {
-				// Each access constructs a fresh but equal "beta" string. Property
-				// conversion must converge those strings on one VM-lifetime identity.
-				expect(field(table, "lookup_hits")).toBeGreaterThan(1000);
+				// Cached small strings can reuse their rooted atom without probing the table.
+				expect(
+					field(table, "lookup_hits") + field(properties, "constant_atom_hits"),
+				).toBeGreaterThan(1000);
 			}
 			if (role === "map") {
 				expect(field(table, "find_calls")).toBe(
