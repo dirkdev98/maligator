@@ -48,6 +48,22 @@
 				"local-capture-projection-helper",
 				"explicit-capture-projection-helper"
 			]
+		},
+		{
+			"id": "declared-capture-projection-helper",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "closure-representation",
+			"category": "language-features",
+			"mechanisms": ["capture-access", "native-call-boundary", "typed-arguments"],
+			"inputShape": "One escaping hoisted function declaration with a 20-term numeric projection; local calls read its single-writer captured function binding while the creator changes a bounded numeric capture.",
+			"unit": "helper calls",
+			"sourceSeam": "src/compiler/core/core-local-capture-arguments.ts",
+			"fixture": "cases/declared-capture-projection-helper.mjs",
+			"controls": [
+				"escaping-capture-projection-helper",
+				"explicit-capture-projection-helper"
+			]
 		}
 	]
 }

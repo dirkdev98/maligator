@@ -49,6 +49,57 @@ function make(seed) {
 	);
 	return { project, bias };
 }
+function makeDeclared(seed) {
+	let bias = seed;
+	function project(x) {
+		return (
+			x * 1 +
+			bias +
+			(x * 2 + bias) +
+			(x * 3 + bias) +
+			(x * 4 + bias) +
+			(x * 5 + bias) +
+			(x * 6 + bias) +
+			(x * 7 + bias) +
+			(x * 8 + bias) +
+			(x * 9 + bias) +
+			(x * 10 + bias) +
+			(x * 11 + bias) +
+			(x * 12 + bias) +
+			(x * 13 + bias) +
+			(x * 14 + bias) +
+			(x * 15 + bias) +
+			(x * 16 + bias) +
+			(x * 17 + bias) +
+			(x * 18 + bias) +
+			(x * 19 + bias) +
+			(x * 20 + bias)
+		);
+	}
+	globalThis.escapedProjection = project;
+	project.marker = seed;
+	let total = 0;
+	for (let i = 0; i < 20; i++) {
+		bias = seed + i;
+		total += project(i);
+	}
+	check("private calls see current bindings", total, 210 * 190 + 20 * (20 * seed + 190));
+	check("unchanged function identity", globalThis.escapedProjection, project);
+	check("unchanged source arity", project.length, 1);
+	check("unchanged name", project.name, "project");
+	check("unchanged function properties", project.marker, seed);
+	check("extra arguments stay generic", project(2, 123), 420 + 20 * bias);
+	check("missing arguments stay generic", Number.isNaN(project()), true);
+	bias += 10;
+	check(
+		"capture is taken after argument evaluation",
+		project((bias++, 3)),
+		630 + 20 * bias,
+	);
+	return { project, bias };
+}
+const declared = makeDeclared(17);
+check("declared generic bridge", declared.project(3), 630 + 20 * declared.bias);
 const left = make(7);
 const right = make(43);
 for (let i = 0; i < 20; i++) {
@@ -138,4 +189,42 @@ function reentrantMutation(seed) {
 	return read;
 }
 check("mutable generic state", reentrantMutation(5)(3), 18);
+function reassignedDeclaration(seed) {
+	const bias = seed;
+	function read(x) {
+		return x + bias;
+	}
+	globalThis.readCurrentDeclaration = () => read;
+	read = (x) => x * 2;
+	check("reassigned declaration keeps current callee", read(5), 10);
+	check(
+		"reassigned captured declaration identity",
+		globalThis.readCurrentDeclaration(),
+		read,
+	);
+}
+reassignedDeclaration(99);
+// Capture conversion must not hoist a TDZ check before user code in the helper.
+function coercionBeforeTdz() {
+	let coerced = 0;
+	const read = (x) => +x + value;
+	globalThis.escapedCoercionRead = read;
+	let caught = false;
+	try {
+		read({
+			valueOf() {
+				coerced++;
+				return 4;
+			},
+		});
+	} catch (error) {
+		caught = error instanceof ReferenceError;
+	}
+	check("coercion precedes capture TDZ", coerced, 1);
+	check("capture TDZ still throws", caught, true);
+	const value = 6;
+	check("initialized private coercion call", read(2), 8);
+	return read;
+}
+check("initialized generic coercion call", coercionBeforeTdz()(3), 9);
 console.log("closure-private-bridge PASS");

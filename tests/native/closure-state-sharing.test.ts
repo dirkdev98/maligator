@@ -40,21 +40,21 @@ it("preserves observable closures across the private bridge under collection", (
 	const config = resolveBuildConfig({
 		engine: { primordials: "locked", eval: false, realms: false },
 	});
-	// Use the product frontend: the ordinary fixture harness intentionally has no
-	// source-closure certificate and would silently skip this optimization.
+	// Assert the conversion on the product image before testing both backends;
+	// parity alone could otherwise exercise only the original generic entry.
 	const image = compileEntrypoint(resolve(fixture), { buildConfig: config });
-	const privateIndex = image.runtime.functions.findIndex(
-		(fn) =>
-			fn.parameterCount === 2 &&
-			fn.length === 1 &&
-			!fn.instructions.some((op) => op.opcode === "LOAD_CAPTURED"),
-	);
-	expect(privateIndex).toBeGreaterThanOrEqual(0);
-	expect(
-		image.native.functions[privateIndex]!.directEntries.some(
+	const privateIndices = image.runtime.functions.flatMap((fn, index) =>
+		fn.parameterCount === 2 &&
+		fn.length === 1 &&
+		!fn.instructions.some((op) => op.opcode === "LOAD_CAPTURED") &&
+		image.native.functions[index]!.directEntries.some(
 			(entry) => entry.parameterRepresentations.length === 2,
-		),
-	).toBe(true);
+		)
+			? [index]
+			: [],
+	);
+	// Both the arrow expression and the hoisted declaration must reach this path.
+	expect(privateIndices.length).toBeGreaterThanOrEqual(2);
 	const outDir = mkdtempSync(join(tmpdir(), "mal-closure-private-bridge-"));
 	try {
 		for (const compiled of [true, false]) {
