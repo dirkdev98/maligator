@@ -26,6 +26,9 @@ extra, duplicated, reordered, dynamic, or vector scopes. Every retained scope is
 required by the closure. In particular, a vector belonging to another function
 object cannot be shared this way: retaining that function would also keep its
 unrelated mutable properties alive.
+Consecutive nonnegative owner chains cache their exact length in existing environment
+padding. Together with the immutable sorted layout, this proves an exact match in
+constant time; sparse and synthetic owner lists still use the complete traversal.
 
 The vector owns selected binding storage, not the owners' lexical parent links.
 Active interpreter, compiled, and suspended frames explicitly root their lexical
@@ -43,6 +46,8 @@ once per entry, using a known vector ordinal for one owner or one traversal for
 multiple owners, then access slots directly. Certified entries avoid repeating
 the runtime environment-policy lookup; certified empty closures need no incoming
 environment root.
+Certified owner layouts also prove that required owners exist, eliminating repeated
+null checks around native slot operations. Unknown layouts keep the checked path.
 An active local scope takes precedence; a mismatched layout uses general lookup.
 Suspended entries rebuild those local
 references from the restored environment before resume dispatch. Locally changing

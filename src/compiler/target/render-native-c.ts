@@ -2366,6 +2366,9 @@ function emitBody(
 		throw new Error("Native function has stale region actions");
 	}
 	const stableCaptureOwners = new Set(fixedCaptureOwners(fn, functionIndex));
+	// Closed-source layouts include every external lexical owner at creation,
+	// and every entry receives that closure's state, including coroutine resumes.
+	const requiredCaptureOwners = new Set(fn.closureCaptureOwners);
 	const numericFusionActionByIp = new Map<number, NativeNumericFusionAction>();
 	for (const action of regionActions) {
 		const region = specializations[action.regionIndex];
@@ -3578,6 +3581,7 @@ function emitBody(
 				directCompiledEntries,
 				ownedCaptureFunctionIndex: ownsCaptureEnvironment ? functionIndex : undefined,
 				fixedCaptureOwners: stableCaptureOwners,
+				requiredCaptureOwners,
 				strictCompiledTargets,
 				directResultRepresentation,
 				directArgumentRepresentations,
@@ -3946,6 +3950,7 @@ interface NativeStaticPropertyProjectionAction {
 interface NativeInstructionContext {
 	readonly ownedCaptureFunctionIndex?: number;
 	readonly fixedCaptureOwners?: ReadonlySet<number>;
+	readonly requiredCaptureOwners?: ReadonlySet<number>;
 	readonly resources: Set<NativeBodyResource>;
 	readonly directEntryCalls: Map<number, Set<number>>;
 	readonly profileSiteId?: number;
@@ -4148,6 +4153,7 @@ function emitInstruction(
 		denseIteratorStepInactiveRootMask: context.denseIteratorStepInactiveRootMask,
 		ownedCaptureFunctionIndex: context.ownedCaptureFunctionIndex,
 		fixedCaptureOwners: context.fixedCaptureOwners,
+		requiredCaptureOwners: context.requiredCaptureOwners,
 		strictCompiledTargets: context.strictCompiledTargets,
 		directCompiledTargets,
 		directCompiledEntries,
@@ -5070,6 +5076,8 @@ function emitInstruction(
 		case "LOAD_CAPTURED": {
 			if (context.fixedCaptureOwners?.has(instruction.ownerFunctionIndex)) {
 				const owner = `__capture_owner_${instruction.ownerFunctionIndex}`;
+				if (context.requiredCaptureOwners?.has(instruction.ownerFunctionIndex))
+					return [`r${instruction.dst} = ${owner}->slots[${instruction.index}];`];
 				return [
 					`r${instruction.dst} = ${owner} != nullptr ? ${owner}->slots[${instruction.index}] : MAL_VALUE_UNDEFINED;`,
 				];
@@ -5087,15 +5095,16 @@ function emitInstruction(
 					reps[instruction.src] === "number" ||
 					reps[instruction.src] === "int32" ||
 					reps[instruction.src] === "boolean";
-				return [
-					`if (${owner} != nullptr) {`,
-					`  mal_gc_write_barrier(${owner}->slots[${instruction.index}]);`,
-					`  ${owner}->slots[${instruction.index}] = ${boxed(instruction.src)};`,
+				const store = [
+					`mal_gc_write_barrier(${owner}->slots[${instruction.index}]);`,
+					`${owner}->slots[${instruction.index}] = ${boxed(instruction.src)};`,
 					...(!primitive
-						? [`  mal_gc_card(&${owner}->header, ${boxed(instruction.src)});`]
+						? [`mal_gc_card(&${owner}->header, ${boxed(instruction.src)});`]
 						: []),
-					`}`,
 				];
+				if (context.requiredCaptureOwners?.has(instruction.ownerFunctionIndex))
+					return store;
+				return [`if (${owner} != nullptr) {`, ...store.map((line) => `  ${line}`), `}`];
 			}
 			if (instruction.ownerFunctionIndex === context.ownedCaptureFunctionIndex) {
 				const primitive =

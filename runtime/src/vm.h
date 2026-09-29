@@ -1139,6 +1139,8 @@ typedef struct MalEnv {
     MalHeapHeader header;
     // Active frames root lexical links; compact closures retain selected slots only.
     bool compact_parent;
+    // Consecutive nonnegative owners ending at null/tag; zero means unproved.
+    u16 compact_chain_length;
     struct MalEnv *parent;
     // Capture-scope id this env satisfies for LOAD/STORE_CAPTURED matching. >= 0
     // is a function index (the activation's own captured slots); < 0 is a synthetic

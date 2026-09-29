@@ -1623,6 +1623,18 @@ void mal_op_create_null(MalCallable *callable, const MalInstruction *instruction
 
 // Resolve a sorted unique selection in one traversal. No allocation or safepoint.
 bool mal_vm_capture_owners(MalEnv *source_env, const i32 *owners, i32 count, MalEnv **scopes) {
+    // Complete lexical layouts already have reverse-sorted owners. Fill them
+    // directly; sparse, shadowed, and vector layouts use the general merge below.
+    MalEnv *ordered = source_env;
+    for (i32 i = count - 1; i >= 0 && ordered != nullptr; i--) {
+        bool terminal = mal_env_is_single_owner(ordered);
+        MalEnv *scope = terminal ? mal_env_untag_single_owner(ordered) : ordered;
+        if (scope->function_index != owners[i]) break;
+        scopes[i] = scope;
+        if (i == 0) return true;
+        if (terminal) break;
+        ordered = scope->parent;
+    }
     for (i32 i = 0; i < count; i++) scopes[i] = nullptr;
     i32 remaining = count;
     i32 next = count - 1;
@@ -1664,6 +1676,13 @@ bool mal_vm_capture_owners(MalEnv *source_env, const i32 *owners, i32 count, Mal
 }
 
 static bool mal_vm_capture_chain_is_complete(MalEnv *env, const i32 *owners, i32 count) {
+    // Sorted unique IDs with this span are consecutive. The immutable chain
+    // certificate avoids revisiting every ancestor when a factory creates leaves.
+    if (env != nullptr && !mal_env_is_single_owner(env) && owners[0] >= 0 &&
+            owners[count - 1] - owners[0] == count - 1 &&
+            env->compact_chain_length == count && env->function_index == owners[count - 1]) {
+        return true;
+    }
     // Chain tracing retains exactly these owners; a tagged tail bounds traversal
     // without retaining an inline display's function object or any skipped scope.
     for (i32 index = count - 1; index >= 0; index--) {
@@ -1733,6 +1752,7 @@ MalValue mal_vm_op_create_function(MalVm *vm, i32 function_index, MalEnv *creati
         captures->function_index = MAL_ENV_CAPTURE_VECTOR;
         captures->slot_count = capture_count;
         captures->compact_parent = false;
+        captures->compact_chain_length = 0;
         ((const i32 **)(void *) captures->slots)[0] = definition->closure_capture_owners;
         MalEnv **scopes = mal_env_capture_scopes(captures);
         if (mal_vm_capture_owners(creation_env, definition->closure_capture_owners, capture_count, scopes)) {

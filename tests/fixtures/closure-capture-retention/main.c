@@ -190,6 +190,38 @@ static int check_single_owner_frame(const MalRuntimeImage *image) {
     return 0;
 }
 
+static int check_consecutive_owners(const MalRuntimeImage *image) {
+    for (usize i = 0; i < countof(tracked); i++) tracked[i] = nullptr;
+    MalVm vm;
+    mal_vm_init(&vm, image);
+    MalValue roots[2] = { MAL_VALUE_UNDEFINED, MAL_VALUE_UNDEFINED };
+    MalRootSpan span;
+    mal_gc_root(&span, roots, countof(roots));
+    MalEnv *base = mal_env_new(&vm, nullptr, 0, 1);
+    base->slots[0] = tracked_object(&vm, 0);
+    MalEnv *selected = mal_env_new(&vm, mal_env_tag_single_owner(base), 1, 1);
+    selected->slots[0] = tracked_object(&vm, 1);
+    roots[0] = mal_vm_op_create_function(&vm, 8, selected);
+    if (base->compact_chain_length != 1 || selected->compact_chain_length != 2 ||
+        mal_value_to_function_object(roots[0])->creation_env != selected) return 51;
+    MalEnv *extra = mal_env_new(&vm, selected, 3, 1);
+    extra->slots[0] = tracked_object(&vm, 2);
+    roots[1] = mal_vm_op_create_function(&vm, 8, extra);
+    MalEnv *display = mal_value_to_function_object(roots[1])->creation_env;
+    if (extra->compact_chain_length != 0 || display == extra ||
+        mal_vm_capture_owner(display, 0) != base ||
+        mal_vm_capture_owner(display, 1) != selected) return 52;
+    roots[0] = MAL_VALUE_UNDEFINED;
+    mal_gc_collect(&vm);
+    if (finalized[0] != 0 || finalized[1] != 0 || finalized[2] != 1) return 53;
+    roots[1] = MAL_VALUE_UNDEFINED;
+    mal_gc_collect(&vm);
+    if (finalized[0] != 1 || finalized[1] != 1) return 54;
+    mal_gc_unroot(&span);
+    mal_vm_free(&vm);
+    return 0;
+}
+
 static int check_lookup_and_reexport(const MalRuntimeImage *image) {
     for (usize i = 0; i < countof(tracked); i++) tracked[i] = nullptr;
     MalVm vm;
@@ -218,6 +250,14 @@ static int check_lookup_and_reexport(const MalRuntimeImage *image) {
     const i32 subset[] = { 1, 4 };
     const i32 partial[] = { 1, 2, 4 };
     MalEnv *resolved[3] = { source, source, source };
+    MalEnv *ordered = mal_env_new(&vm, mal_env_tag_single_owner(original), 4, 0);
+    if (!mal_vm_capture_owners(ordered, subset, 2, resolved) ||
+        resolved[0] != original || resolved[1] != ordered) return 49;
+    // A partially matching prefix must restart before resolving shadowed owners.
+    MalEnv *shadow = mal_env_new(&vm, ordered, 1, 0);
+    MalEnv *partial_prefix = mal_env_new(&vm, shadow, 4, 0);
+    if (mal_vm_capture_owners(partial_prefix, partial, 3, resolved) ||
+        resolved[0] != shadow || resolved[1] != nullptr || resolved[2] != partial_prefix) return 50;
     if (!mal_vm_capture_owners(source, subset, 2, resolved) ||
         resolved[0] != original || resolved[1] != forwarded) return 44;
     if (!mal_vm_capture_owners(prefix, subset, 2, resolved) ||
@@ -368,7 +408,8 @@ int main(void) {
     const i32 captured_owners[] = { 1, 4 };
     const i32 all_owners[] = { 0, 1, 4 };
     const i32 incomplete_owners[] = { 0, 1, 4, 6 };
-    MalFunction functions[8];
+    const i32 consecutive_owners[] = { 0, 1 };
+    MalFunction functions[9];
     for (usize i = 0; i < countof(functions); i++) {
         functions[i] = mal_runtime_image.functions[0];
         functions[i].closure_capture_owners = i == 2 ? captured_owner
@@ -379,6 +420,8 @@ int main(void) {
     functions[6].closure_capture_owner_count = -1;
     functions[7].closure_capture_owners = incomplete_owners;
     functions[7].closure_capture_owner_count = countof(incomplete_owners);
+    functions[8].closure_capture_owners = consecutive_owners;
+    functions[8].closure_capture_owner_count = countof(consecutive_owners);
     MalRuntimeImage image = mal_runtime_image;
     image.functions = functions;
     image.function_count = countof(functions);
@@ -387,6 +430,7 @@ int main(void) {
     mal_gc_register_finalizer(MAL_HEAP_FUNCTION_OBJECT, count_vector_finalized);
     int result = check_retention(&image);
     if (result == 0) result = check_single_owner_frame(&image);
+    if (result == 0) result = check_consecutive_owners(&image);
     if (result == 0) result = check_lookup_and_reexport(&image);
     if (result == 0) result = check_fallback_vector_ownership(&image);
     if (result == 0) result = check_snapshot(&image);

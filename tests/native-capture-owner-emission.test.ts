@@ -110,6 +110,51 @@ describe("native lexical owner lookup contract", () => {
 		}
 	});
 
+	it.each([false, true])(
+		"accesses certified owners without nullable fallbacks (generator=%s)",
+		(isGenerator) => {
+			const emitted = emit(
+				[
+					...(isGenerator ? [{ opcode: "GENERATOR_START" as const }] : []),
+					{ opcode: "LOAD_CAPTURED", dst: 0, ownerFunctionIndex: 2, index: 0 },
+					...(isGenerator
+						? [{ opcode: "YIELD" as const, yieldedSrc: 0, valueDst: 1, modeDst: 2 }]
+						: []),
+					{ opcode: "STORE_CAPTURED", src: 0, ownerFunctionIndex: 2, index: 0 },
+					{ opcode: "RETURN", value: 0 },
+				],
+				{ closureCaptureOwners: [2], isGenerator },
+			);
+			for (const { source } of [emitted, ...emitted.directEntries]) {
+				expect(source).toContain("r0 = __capture_owner_2->slots[0];");
+				expect(source).toContain("__capture_owner_2->slots[0] = r0;");
+				expect(source).not.toContain("__capture_owner_2 != nullptr");
+				expect(source).toContain("mal_gc_write_barrier(__capture_owner_2->slots[0]);");
+				expect(source).toContain("mal_gc_card(&__capture_owner_2->header, r0);");
+			}
+		},
+	);
+
+	it.each([{ closureCaptureOwners: undefined }, { closureCaptureOwners: [3] }])(
+		"retains nullable fallbacks for an owner absent from the certificate: %j",
+		({ closureCaptureOwners }) => {
+			const emitted = emit(
+				[
+					{ opcode: "LOAD_CAPTURED", dst: 0, ownerFunctionIndex: 2, index: 0 },
+					{ opcode: "STORE_CAPTURED", src: 0, ownerFunctionIndex: 2, index: 0 },
+					{ opcode: "RETURN", value: 0 },
+				],
+				{ closureCaptureOwners },
+			);
+			for (const { source } of [emitted, ...emitted.directEntries]) {
+				expect(source).toContain(
+					"r0 = __capture_owner_2 != nullptr ? __capture_owner_2->slots[0] : MAL_VALUE_UNDEFINED;",
+				);
+				expect(source).toContain("if (__capture_owner_2 != nullptr) {");
+			}
+		},
+	);
+
 	it("resolves multiple relocated owners in one call with runtime owner IDs", () => {
 		const { source } = emit(
 			[
