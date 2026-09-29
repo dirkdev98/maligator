@@ -1482,7 +1482,8 @@ MalValue mal_vm_op_with_get(MalVm *vm, MalEnv *env, i32 name_string_index) {
     MalValue name = mal_value_from_string(&vm->runtime_image->string_constants[name_string_index]);
     MalKey key;
     if (mal_vm_value_to_property_key(vm, name, &key)) {
-        for (MalEnv *e = env; e != nullptr && e->function_index != MAL_ENV_CAPTURE_VECTOR; e = e->parent) {
+        for (MalEnv *e = env; e != nullptr && !mal_env_is_single_owner(e) &&
+                e->function_index != MAL_ENV_CAPTURE_VECTOR; e = e->parent) {
             if (e->function_index != MAL_ENV_WITH_OBJECT) {
                 continue;
             }
@@ -1512,7 +1513,8 @@ MalValue mal_vm_op_with_resolve_base(MalVm *vm, MalEnv *env, i32 name_string_ind
     MalValue name = mal_value_from_string(&vm->runtime_image->string_constants[name_string_index]);
     MalKey key;
     if (mal_vm_value_to_property_key(vm, name, &key)) {
-        for (MalEnv *e = env; e != nullptr && e->function_index != MAL_ENV_CAPTURE_VECTOR; e = e->parent) {
+        for (MalEnv *e = env; e != nullptr && !mal_env_is_single_owner(e) &&
+                e->function_index != MAL_ENV_CAPTURE_VECTOR; e = e->parent) {
             if (e->function_index != MAL_ENV_WITH_OBJECT) {
                 continue;
             }
@@ -1546,7 +1548,8 @@ bool mal_vm_op_with_set(MalVm *vm, MalEnv *env, i32 name_string_index, MalValue 
     MalValue name = mal_value_from_string(&vm->runtime_image->string_constants[name_string_index]);
     MalKey key;
     if (mal_vm_value_to_property_key(vm, name, &key)) {
-        for (MalEnv *e = env; e != nullptr && e->function_index != MAL_ENV_CAPTURE_VECTOR; e = e->parent) {
+        for (MalEnv *e = env; e != nullptr && !mal_env_is_single_owner(e) &&
+                e->function_index != MAL_ENV_CAPTURE_VECTOR; e = e->parent) {
             if (e->function_index != MAL_ENV_WITH_OBJECT) {
                 continue;
             }
@@ -1644,7 +1647,7 @@ MalValue mal_vm_op_create_function(MalVm *vm, i32 function_index, MalEnv *creati
         : mal_intrinsic_hot_ascii(vm, MAL_HOT_KEY_EMPTY);
     i32 capture_count = definition->closure_capture_owners != nullptr
         ? definition->closure_capture_owner_count : -1;
-    usize capture_bytes = capture_count > 0
+    usize capture_bytes = capture_count > 1
         ? sizeof(MalEnv) + ((usize) capture_count + 1) * sizeof(void *) : 0;
     MalFunctionObject *function = mal_function_object_new(
         &vm->heap,
@@ -1659,7 +1662,10 @@ MalValue mal_vm_op_create_function(MalVm *vm, i32 function_index, MalEnv *creati
     function->creation_env = creation_env;
     if (capture_count == 0) {
         function->creation_env = nullptr;
-    } else if (capture_count > 0) {
+    } else if (capture_count == 1) {
+        MalEnv *owner = mal_vm_capture_owner(creation_env, definition->closure_capture_owners[0]);
+        if (owner != nullptr) function->creation_env = mal_env_tag_single_owner(owner);
+    } else if (capture_count > 1) {
         MalEnv *captures = (MalEnv *) ((MalValue *) (function + 1) + 2);
         captures->parent = (MalEnv *) function;
         captures->function_index = MAL_ENV_CAPTURE_VECTOR;
@@ -1750,6 +1756,10 @@ void mal_op_set_function_name(MalCallable *callable, const MalInstruction *instr
 
 MalEnv *mal_vm_capture_owner(MalEnv *env, i32 owner_function_index) {
     for (; env != nullptr; env = env->parent) {
+        if (mal_env_is_single_owner(env)) {
+            MalEnv *owner = mal_env_untag_single_owner(env);
+            return owner->function_index == owner_function_index ? owner : nullptr;
+        }
         if (env->function_index == owner_function_index) return env;
         if (env->function_index == MAL_ENV_CAPTURE_VECTOR) {
             const i32 *owners = mal_env_capture_layout(env);

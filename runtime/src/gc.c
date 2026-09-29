@@ -1043,6 +1043,10 @@ static void mal_gc_trace_table(MalTable *table) {
 // storage only; those owners' parent pointers may be stale after the frame exits.
 static void mal_gc_trace_env(MalEnv *env) {
     for (; env != nullptr; env = env->parent) {
+        if (mal_env_is_single_owner(env)) {
+            mal_gc_shade(&mal_env_untag_single_owner(env)->header);
+            return;
+        }
         if (env->function_index == MAL_ENV_CAPTURE_VECTOR) {
             mal_gc_shade((MalHeapHeader *) env->parent);
             return;
@@ -1054,6 +1058,10 @@ static void mal_gc_trace_env(MalEnv *env) {
 
 void mal_gc_satb_record_env(MalEnv *env) {
     for (; env != nullptr; env = env->parent) {
+        if (mal_env_is_single_owner(env)) {
+            mal_gc_satb_record(mal_value_from_heap(&mal_env_untag_single_owner(env)->header));
+            return;
+        }
         if (env->function_index == MAL_ENV_CAPTURE_VECTOR) {
             mal_gc_satb_record(mal_value_from_heap((MalHeapHeader *) env->parent));
             return;
@@ -1259,6 +1267,7 @@ static void mal_gc_trace_cell(MalHeapHeader *cell) {
             MalEnv *env = ((MalArgumentsObject *) cell)->env;
             // Mapped arguments own parameter slots, not their expired activation's links.
             if (env != nullptr) {
+                if (mal_env_is_single_owner(env)) env = mal_env_untag_single_owner(env);
                 mal_gc_shade(env->function_index == MAL_ENV_CAPTURE_VECTOR
                     ? (MalHeapHeader *) env->parent : &env->header);
             }
@@ -1294,7 +1303,8 @@ static void mal_gc_trace_cell(MalHeapHeader *cell) {
         }
         case MAL_HEAP_FUNCTION_OBJECT: {
             MalEnv *env = ((MalFunctionObject *) cell)->creation_env;
-            if (env != nullptr && env->function_index == MAL_ENV_CAPTURE_VECTOR) {
+            if (env != nullptr && !mal_env_is_single_owner(env) &&
+                    env->function_index == MAL_ENV_CAPTURE_VECTOR) {
                 MalEnv **scopes = mal_env_capture_scopes(env);
                 for (i32 i = 0; i < env->slot_count; i++) {
                     mal_gc_shade(&scopes[i]->header);

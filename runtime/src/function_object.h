@@ -15,7 +15,7 @@ typedef struct MalFunctionObject {
     MalObjectStorage object_storage;
     i32 function_index;
 
-    // Closed images use an inline flat scope vector; dynamic images retain a chain.
+    // Closed images select a tagged owner or inline scope vector; dynamic images retain a chain.
     MalEnv *creation_env;
 
 #if MAL_REALMS

@@ -10,8 +10,9 @@ representation. The portable wire loader does not trust native capture metadata.
 A captured binding remains an atomic slot in its activation or iteration owner.
 Siblings refer to the same owner and slot, while `ENV_COPY` supplies a new owner.
 This groups shared cells without allocating a separate heap object per binding.
-A closure with no external requirements retains no environment. Other closures
-coallocate a flat vector with their function object; immutable owner identifiers
+A closure with no external requirements retains no environment. A single owner
+uses a tagged terminal reference without additional storage. Multiple owners
+coallocate a flat vector with the function object; immutable owner identifiers
 remain in shared function metadata. Creation resolves the vector once, including
 transitive requirements. A missing owner conservatively retains the supplied
 chain. Function properties, identity, construction, and generic call behavior
@@ -23,6 +24,7 @@ chains. After activation exit a compact owner's parent may be stale and must not
 be traversed through a captured reference. Mapped arguments retain only their
 parameter storage. The inline vector is not a GC allocation: root and SATB helpers
 shade its containing function, and the function tracer shades the selected owners.
+Tagged single-owner references shade the owner directly and never follow its parent.
 Environment replacement and suspended-frame teardown use the same distinction.
 Stores retain atomic access, the SATB old-value barrier, and the generational card
 barrier on the real owning cell.

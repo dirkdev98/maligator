@@ -1174,6 +1174,23 @@ static_assert(alignof(_Atomic(MalValue)) == alignof(MalValue),
 // a separately allocated GC cell. The payload holds a layout pointer then scopes.
 #define MAL_ENV_CAPTURE_VECTOR (-2147483647)
 
+// A single selected owner fits in the closure's environment pointer. Its tag
+// makes it a terminal reference: the owner's lexical parent may already be dead.
+static_assert(alignof(MalEnv) >= 2, "single-owner capture tag requires aligned environments");
+
+static inline bool mal_env_is_single_owner(const MalEnv *env) {
+    return ((uptr) env & (uptr) 1) != 0;
+}
+
+static inline MalEnv *mal_env_untag_single_owner(const MalEnv *env) {
+    return (MalEnv *) ((uptr) env & ~(uptr) 1);
+}
+
+// owner is a non-null, untagged slot-storage cell.
+static inline MalEnv *mal_env_tag_single_owner(MalEnv *owner) {
+    return (MalEnv *) ((uptr) owner | (uptr) 1);
+}
+
 static inline const i32 *mal_env_capture_layout(const MalEnv *env) {
     return ((const i32 *const *)(const void *) env->slots)[0];
 }

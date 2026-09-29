@@ -452,7 +452,7 @@ MalEnv *mal_env_new(MalVm *vm, MalEnv *parent, i32 function_index, i32 count) {
     env->compact_parent = function_index >= 0
         ? function_index < vm->runtime_image->function_count &&
             vm->runtime_image->functions[function_index].closure_capture_owners != nullptr
-        : parent != nullptr && (parent->compact_parent ||
+        : parent != nullptr && (mal_env_is_single_owner(parent) || parent->compact_parent ||
             parent->function_index == MAL_ENV_CAPTURE_VECTOR);
     for (i32 i = 0; i < count; i++) {
 #if defined(__wasi__)
