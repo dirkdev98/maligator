@@ -55,6 +55,59 @@ static bool numeric_field_stores(MalVm *vm) {
     return ok;
 }
 
+static bool preferred_layout_joins(MalVm *vm) {
+    MalValue live[] = {
+        mal_value_from_object(mal_object_new(&vm->heap, nullptr)),
+        mal_value_new_undefined(),
+    };
+    MalRootSpan root;
+    mal_gc_root(&root, live, 2);
+    const MalValue samples[] = {
+        mal_value_new_undefined(), mal_value_from_i32(7),
+        mal_value_from_f64_convert_nan(1.25), live[0],
+    };
+    MalString *keys[64];
+    MalValue initial[64];
+    MalValue observed[64];
+    MalFieldRepresentation expected[64];
+    for (u32 slot = 0; slot < 64; slot++) {
+        char key[64];
+        snprintf(key, sizeof(key), "__compact_join_%u", slot);
+        keys[slot] = mal_intrinsic_ascii(vm, key);
+        u32 left = slot == 63 ? MAL_FIELD_I32 : slot % 4;
+        u32 right = slot == 63 ? MAL_FIELD_F64 : (slot / 4) % 4;
+        initial[slot] = samples[left];
+        observed[slot] = samples[right];
+        expected[slot] = left == right ? (MalFieldRepresentation) left
+            : ((left == MAL_FIELD_I32 || left == MAL_FIELD_F64) &&
+               (right == MAL_FIELD_I32 || right == MAL_FIELD_F64))
+                ? MAL_FIELD_F64 : MAL_FIELD_TAGGED;
+    }
+    MalShape *logical = mal_shape_from_string_keys(&vm->heap, keys, 64);
+    MalShape *first = mal_shape_compact_from_values(logical, initial, 64);
+    MalShape *joined = mal_shape_compact_from_values(logical, observed, 64);
+    bool ok = first != joined && mal_shape_is_compact(joined);
+    for (u32 slot = 0; slot < 64; slot++) {
+        ok = ok && mal_shape_field_representation(joined->props[slot].field) == expected[slot];
+    }
+    MalObject *object = mal_object_new_shaped(&vm->heap, nullptr, joined, observed, 64);
+    live[1] = mal_value_from_object(object);
+    live[0] = mal_value_new_undefined();
+    mal_gc_collect(vm);
+    for (u32 slot = 0; slot < 64; slot++) {
+        MalValue actual = mal_object_field_load(object, slot);
+        f64 wanted;
+        if (mal_ops_try_number_as_f64(observed[slot], &wanted)) {
+            f64 number;
+            ok = ok && mal_ops_try_number_as_f64(actual, &number) && number == wanted;
+        } else {
+            ok = ok && actual == observed[slot];
+        }
+    }
+    mal_gc_unroot(&root);
+    return ok;
+}
+
 static bool widening_preserves_payload(MalVm *vm, bool external) {
     MalString *child_keys[] = {mal_intrinsic_ascii(vm, "__compact_retained_payload")};
     MalShape *child_shape = mal_shape_from_string_keys(&vm->heap, child_keys, 1);
@@ -153,9 +206,9 @@ int main(int argc, char **argv) {
     mal_vm_init(&vm, &mal_runtime_image);
     MalHostLaunchContext launch = {.argc = argc, .argv = argv};
     mal_vm_run_host_installs(&vm, &launch);
-    if (!numeric_field_stores(&vm) || !widening_preserves_payload(&vm, false) ||
-        !widening_preserves_payload(&vm, true)) {
-        fputs("compact field-store or widening contract failed\n", stderr);
+    if (!numeric_field_stores(&vm) || !preferred_layout_joins(&vm) ||
+        !widening_preserves_payload(&vm, false) || !widening_preserves_payload(&vm, true)) {
+        fputs("compact field-store, layout join or widening contract failed\n", stderr);
         mal_vm_free(&vm);
         return 1;
     }
