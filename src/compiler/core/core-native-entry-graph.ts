@@ -119,13 +119,20 @@ export function connectCoreNativeEntries(
 			observation.kind === "general" ||
 			observation.readsCount ||
 			observation.indices.length > 0 ||
-			observation.restStarts.length > 0 ||
-			parameters.every((representation) => representation === "boxed")
+			observation.restStarts.length > 0
 		)
 			return undefined;
 		const generatedCode = Math.max(8, instructionCount);
 		const compilerWork = generatedCode + fn.valueCapacity;
-		if (!admit(target, instruction, generatedCode, compilerWork)) return undefined;
+		const resultOnly = parameters.every((representation) => representation === "boxed");
+		// A boxed-input helper can still return a scalar. Charge its proof as
+		// discovery so a rejected result does not consume a generated sibling.
+		if (
+			resultOnly
+				? !admitAnalysis(target, compilerWork)
+				: !admit(target, instruction, generatedCode, compilerWork)
+		)
+			return undefined;
 		const callSites = Object.freeze([]);
 		const variant = analyzeCoreNativeEntry(
 			fn,
@@ -134,6 +141,12 @@ export function connectCoreNativeEntries(
 			undefined,
 			callSites,
 		);
+		if (
+			resultOnly &&
+			(variant.resultRepresentation === "boxed" ||
+				!admit(target, instruction, generatedCode, 0))
+		)
+			return undefined;
 		return add(
 			Object.freeze({
 				id: entries.length,
