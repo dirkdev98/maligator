@@ -152,6 +152,7 @@
 				"src/compiler/core/core-known-operation-results.ts",
 				"src/compiler/core/core-known-operations.ts",
 				"src/compiler/core/core-literal-constants.ts",
+				"src/compiler/core/core-local-capture-arguments.ts",
 				"src/compiler/core/core-local-optimizer.ts",
 				"src/compiler/core/core-local-passes.ts",
 				"src/compiler/core/core-materialization-demands.ts",
