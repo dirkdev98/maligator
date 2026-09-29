@@ -1,4 +1,7 @@
+#include <math.h>
 #include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 
 #include "function_object.h"
 #include "gc.h"
@@ -7,6 +10,169 @@
 #include "vm.h"
 
 extern const MalRuntimeImage mal_runtime_image;
+
+static bool numeric_field_stores(MalVm *vm) {
+    MalString *keys[] = {
+        mal_intrinsic_ascii(vm, "__compact_numeric_boundary"),
+        mal_intrinsic_ascii(vm, "fraction"),
+        mal_intrinsic_ascii(vm, "overflow"),
+        mal_intrinsic_ascii(vm, "nan"),
+    };
+    MalShape *logical = mal_shape_from_string_keys(&vm->heap, keys, 4);
+    MalValue initial[] = {
+        mal_value_from_i32(1), mal_value_from_i32(2),
+        mal_value_from_i32(3), mal_value_from_i32(4),
+    };
+    MalObject *object = mal_object_new_shaped(&vm->heap, nullptr, logical, initial, 4);
+    MalValue live = mal_value_from_object(object);
+    MalRootSpan root;
+    mal_gc_root(&root, &live, 1);
+    MalShape *narrow = object->shape;
+    bool ok = mal_shape_field_representation(narrow->props[0].field) == MAL_FIELD_I32;
+    const f64 integers[] = {INT32_MIN, -1.0, 0.0, 1.0, INT32_MAX};
+    for (usize index = 0; index < sizeof(integers) / sizeof(integers[0]); index++) {
+        MalValue boxed = mal_value_from_f64_convert_nan(integers[index]);
+        mal_object_field_store(object, 0, boxed);
+        ok = ok && object->shape == narrow &&
+            mal_object_field_load(object, 0) == mal_value_from_i32((i32) integers[index]);
+    }
+    const f64 widened[] = {-0.0, 1.25, (f64) INT32_MAX + 1.0, NAN};
+    for (u32 ordinal = 0; ordinal < 4; ordinal++) {
+        mal_object_field_store(object, ordinal, mal_value_from_f64_convert_nan(widened[ordinal]));
+    }
+    mal_gc_collect(vm);
+    for (u32 ordinal = 0; ordinal < 4; ordinal++) {
+        f64 actual;
+        bool numeric = mal_ops_try_number_as_f64(mal_object_field_load(object, ordinal), &actual);
+        ok = ok && numeric;
+        if (numeric) {
+            ok = ok && (isnan(widened[ordinal]) ? isnan(actual)
+                : actual == widened[ordinal] &&
+                  (actual != 0.0 || !!signbit(actual) == !!signbit(widened[ordinal])));
+        }
+    }
+    mal_gc_unroot(&root);
+    return ok;
+}
+
+static bool preferred_layout_joins(MalVm *vm) {
+    MalValue live[] = {
+        mal_value_from_object(mal_object_new(&vm->heap, nullptr)),
+        mal_value_new_undefined(),
+    };
+    MalRootSpan root;
+    mal_gc_root(&root, live, 2);
+    const MalValue samples[] = {
+        mal_value_new_undefined(), mal_value_from_i32(7),
+        mal_value_from_f64_convert_nan(1.25), live[0],
+    };
+    MalString *keys[64];
+    MalValue initial[64];
+    MalValue observed[64];
+    MalFieldRepresentation expected[64];
+    for (u32 slot = 0; slot < 64; slot++) {
+        char key[64];
+        snprintf(key, sizeof(key), "__compact_join_%u", slot);
+        keys[slot] = mal_intrinsic_ascii(vm, key);
+        u32 left = slot == 63 ? MAL_FIELD_I32 : slot % 4;
+        u32 right = slot == 63 ? MAL_FIELD_F64 : (slot / 4) % 4;
+        initial[slot] = samples[left];
+        observed[slot] = samples[right];
+        expected[slot] = left == right ? (MalFieldRepresentation) left
+            : ((left == MAL_FIELD_I32 || left == MAL_FIELD_F64) &&
+               (right == MAL_FIELD_I32 || right == MAL_FIELD_F64))
+                ? MAL_FIELD_F64 : MAL_FIELD_TAGGED;
+    }
+    MalShape *logical = mal_shape_from_string_keys(&vm->heap, keys, 64);
+    MalShape *first = mal_shape_compact_from_values(logical, initial, 64);
+    MalShape *joined = mal_shape_compact_from_values(logical, observed, 64);
+    bool ok = first != joined && mal_shape_is_compact(joined);
+    for (u32 slot = 0; slot < 64; slot++) {
+        ok = ok && mal_shape_field_representation(joined->props[slot].field) == expected[slot];
+    }
+    MalObject *object = mal_object_new_shaped(&vm->heap, nullptr, joined, observed, 64);
+    live[1] = mal_value_from_object(object);
+    live[0] = mal_value_new_undefined();
+    mal_gc_collect(vm);
+    for (u32 slot = 0; slot < 64; slot++) {
+        MalValue actual = mal_object_field_load(object, slot);
+        f64 wanted;
+        if (mal_ops_try_number_as_f64(observed[slot], &wanted)) {
+            f64 number;
+            ok = ok && mal_ops_try_number_as_f64(actual, &number) && number == wanted;
+        } else {
+            ok = ok && actual == observed[slot];
+        }
+    }
+    mal_gc_unroot(&root);
+    return ok;
+}
+
+static bool widening_preserves_payload(MalVm *vm, bool external) {
+    MalString *child_keys[] = {mal_intrinsic_ascii(vm, "__compact_retained_payload")};
+    MalShape *child_shape = mal_shape_from_string_keys(&vm->heap, child_keys, 1);
+    MalValue child_values[] = {mal_value_from_i32(1234)};
+    MalObject *child = mal_object_new_shaped(&vm->heap, nullptr, child_shape, child_values, 1);
+    MalValue live[] = {mal_value_from_object(child), mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, live, 2);
+    MalString *keys[64];
+    MalValue values[64];
+    for (u32 slot = 0; slot < 64; slot++) {
+        char key[64];
+        snprintf(key, sizeof(key), "__compact_widen_%s_%u", external ? "external" : "inline", slot);
+        keys[slot] = mal_intrinsic_ascii(vm, key);
+        values[slot] = mal_value_new_undefined();
+    }
+    values[0] = mal_value_from_i32(7);
+    values[31] = live[0];
+    values[32] = mal_value_from_f64_convert_nan(-0.0);
+    values[63] = live[0];
+    MalShape *logical = mal_shape_from_string_keys(&vm->heap, keys, 64);
+    MalObject *object = mal_object_new_shaped(&vm->heap, nullptr, logical, values, 64);
+    live[1] = mal_value_from_object(object);
+    if (external) {
+        void *fields = malloc(object->shape->payload_bytes);
+        if (fields == nullptr) abort();
+        memcpy(fields, mal_object_fields_nonempty(object), object->shape->payload_bytes);
+        mal_object_set_fields_pointer(object, fields);
+        object->slots_owned = true;
+    }
+    void *payload = mal_object_fields_nonempty(object);
+    MalShape *original = object->shape;
+    // A different constructor observation widens two fields that this store must preserve.
+    values[31] = mal_value_new_undefined();
+    values[32] = mal_value_new_undefined();
+    mal_shape_compact_from_values(logical, values, 64);
+    mal_object_field_store(object, 63, mal_value_new_undefined());
+    bool ok = object->shape != original && mal_object_fields_nonempty(object) == payload &&
+        object->slots_owned == external && mal_object_field_load(object, 31) == live[0] &&
+        mal_object_field_load(object, 63) == mal_value_new_undefined() &&
+        mal_shape_field_representation(object->shape->props[31].field) == MAL_FIELD_TAGGED &&
+        mal_shape_field_representation(object->shape->props[32].field) == MAL_FIELD_TAGGED;
+    live[0] = mal_value_new_undefined();
+    mal_gc_collect(vm);
+    MalValue retained = mal_object_field_load(object, 31);
+    ok = ok && mal_value_is_heap_type(retained, MAL_HEAP_OBJECT);
+    if (mal_value_is_heap_type(retained, MAL_HEAP_OBJECT)) {
+        ok = ok && mal_object_field_load(mal_value_to_object(retained), 0) == child_values[0];
+    }
+    f64 number;
+    bool numeric = mal_ops_try_number_as_f64(mal_object_field_load(object, 32), &number);
+    ok = ok && numeric && number == 0.0 && signbit(number);
+
+    // The size-changing path may move storage; the following canonical fallback must not.
+    mal_object_field_store(object, 0, mal_value_from_f64_convert_nan(1.5));
+    payload = mal_object_fields_nonempty(object);
+    mal_object_field_store(object, 0, mal_value_new_undefined());
+    ok = ok && object->shape == logical && mal_object_fields_nonempty(object) == payload &&
+        mal_object_field_load(object, 0) == mal_value_new_undefined() &&
+        mal_object_field_load(object, 31) == retained;
+    mal_gc_collect(vm);
+    ok = ok && mal_object_field_load(object, 31) == retained;
+    mal_gc_unroot(&root);
+    return ok;
+}
 
 static MalValue record_layout(
     MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count,
@@ -40,6 +206,12 @@ int main(int argc, char **argv) {
     mal_vm_init(&vm, &mal_runtime_image);
     MalHostLaunchContext launch = {.argc = argc, .argv = argv};
     mal_vm_run_host_installs(&vm, &launch);
+    if (!numeric_field_stores(&vm) || !preferred_layout_joins(&vm) ||
+        !widening_preserves_payload(&vm, false) || !widening_preserves_payload(&vm, true)) {
+        fputs("compact field-store, layout join or widening contract failed\n", stderr);
+        mal_vm_free(&vm);
+        return 1;
+    }
     MalObject *global = mal_value_to_object(vm.intrinsics[MAL_INTRINSIC_GLOBAL_THIS]);
     MalNativeFunctionObject *probe = mal_native_function_object_new(
         &vm.heap, mal_value_to_object(vm.intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),

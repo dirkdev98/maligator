@@ -270,15 +270,18 @@ static MalFieldRepresentation mal_shape_representation_at(
         ((representations[slot / 32] >> ((slot % 32) * 2)) & 3u);
 }
 
-static MalFieldRepresentation mal_shape_join_representation(
-    MalFieldRepresentation left, MalFieldRepresentation right
-) {
-    if (left == right) return left;
-    if ((left == MAL_FIELD_I32 || left == MAL_FIELD_F64) &&
-        (right == MAL_FIELD_I32 || right == MAL_FIELD_F64)) {
-        return MAL_FIELD_F64;
-    }
-    return MAL_FIELD_TAGGED;
+/** Join 32 independent two-bit representation lanes without decoding each field. */
+static u64 mal_shape_join_representation_word(u64 left, u64 right) {
+    static_assert(MAL_FIELD_TAGGED == 0 && MAL_FIELD_I32 == 1 &&
+                  MAL_FIELD_F64 == 2 && MAL_FIELD_HEAP == 3,
+                  "packed joins require the two-bit representation encoding");
+    u64 different = left ^ right;
+    different = (different | (different >> 1)) & UINT64_C(0x5555555555555555);
+    u64 equal = ~(different | (different << 1));
+    // Numeric lanes (01 and 10) have differing low/high bits. A numeric mismatch
+    // joins to F64 (10); every other mismatch joins to tagged (00).
+    u64 numbers = (left ^ (left >> 1)) & (right ^ (right >> 1)) & different;
+    return (left & equal) | (numbers << 1);
 }
 
 static void mal_shape_join_preferred(
@@ -290,14 +293,9 @@ static void mal_shape_join_preferred(
          representations[1] == preferred->representations[1])) {
         return;
     }
-    for (u32 slot = 0; slot < logical->inline_count; slot++) {
-        MalFieldRepresentation joined = mal_shape_join_representation(
-            mal_shape_representation_at(representations, slot),
-            mal_shape_representation_at(preferred->representations, slot));
-        u32 index = slot / 32;
-        u32 shift = (slot % 32) * 2;
-        representations[index] = (representations[index] & ~(UINT64_C(3) << shift))
-            | ((u64) joined << shift);
+    for (u32 word = 0; word < 2; word++) {
+        representations[word] = mal_shape_join_representation_word(
+            representations[word], preferred->representations[word]);
     }
 }
 
