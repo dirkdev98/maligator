@@ -326,6 +326,26 @@ void mal_object_widen_field(MalObject *object, u32 ordinal, MalValue value) {
     MalShape *widened = mal_shape_widen_field(shape, ordinal, value);
     u32 count = shape->inline_count;
     void *fields = mal_object_fields_nonempty(object);
+    // Widening never shrinks a field, so equal payload sizes preserve every offset.
+    if (shape->payload_bytes == widened->payload_bytes) {
+        for (u32 word = 0; word < 2; word++) {
+            u64 next = mal_shape_is_compact(widened) ? widened->representations[word] : 0;
+            u64 changed = shape->representations[word] ^ next;
+            changed = (changed | (changed >> 1)) & UINT64_C(0x5555555555555555);
+            while (changed != 0) {
+                u32 slot = word * 32 + (u32) __builtin_ctzll(changed) / 2;
+                changed &= changed - 1;
+                if (slot == ordinal) continue;
+                MalValue unchanged = mal_shape_field_load(fields, shape->props[slot].field);
+                bool stored = mal_shape_field_try_store(fields, widened->props[slot].field, unchanged);
+                assert(stored);
+            }
+        }
+        bool stored = mal_shape_field_try_store(fields, widened->props[ordinal].field, value);
+        assert(stored);
+        object->shape = widened;
+        return;
+    }
     MalValue values[MAL_SHAPE_MAX_INLINE_SLOTS];
     for (u32 i = 0; i < count; i++) {
         values[i] = mal_shape_field_load(fields, shape->props[i].field);
