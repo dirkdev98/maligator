@@ -122,6 +122,21 @@ it("preserves connected scalar calls and generic bridges across collection", () 
 			}),
 		);
 	}
+	const declarationLeaf = names.indexOf("declaredLeaf");
+	const declarationVisitor = image.native.functions[names.indexOf("declaredVisitor")]!;
+	expect(image.native.functions[declarationLeaf]!.directEntries).toContainEqual(
+		expect.objectContaining({
+			parameterRepresentations: ["number", "number"],
+			resultRepresentation: "number",
+		}),
+	);
+	const declarationEntry = declarationVisitor.directEntries.find((entry) =>
+		entry.parameterRepresentations.every((representation) => representation === "number"),
+	)!;
+	expect(declarationEntry.resultRepresentation).toBe("boxed");
+	expect(declarationEntry.callOverrides).toContainEqual(
+		expect.objectContaining({ functionIndex: declarationLeaf, guarded: true }),
+	);
 	const outDir = mkdtempSync(join(tmpdir(), "mal-connected-native-calls-"));
 	try {
 		for (const compiled of [true, false]) {

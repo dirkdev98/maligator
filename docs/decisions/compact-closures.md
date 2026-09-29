@@ -48,6 +48,9 @@ the runtime environment-policy lookup; certified empty closures need no incoming
 environment root.
 Certified owner layouts also prove that required owners exist, eliminating repeated
 null checks around native slot operations. Unknown layouts keep the checked path.
+Normal nonrelocatable entries decode a single owner directly and layouts of up to
+16 owners with one vector/chain choice. Coroutines and wire overlays retain general
+lookup because their incoming state can include restored scopes or ordinary chains.
 An active local scope takes precedence; a mismatched layout uses general lookup.
 Suspended entries rebuild those local
 references from the restored environment before resume dispatch. Locally changing
@@ -62,6 +65,10 @@ variant. Proven scalar results flow back to its callers. Canonical entries and o
 variants keep their own plans, so a numeric invocation cannot cause an escaped
 string or object invocation to unbox unchecked arguments. Unknown targets cross the
 generic bridge. Captured mutable values retain their boxed result uncertainty.
+Sites with at most four hinted targets can select one typed entry behind an identity
+guard. Other targets use the generic bridge, and the joined result remains boxed
+even when the guarded callee later proves a scalar return. Failed inlining guards
+do not create redundant siblings for their fallback calls.
 Recursive result cycles start boxed and cannot create their own scalar proof.
 At most four entries per function are admitted, subject to the existing generated
 code and compiler work budgets; bodies above 512 instructions are excluded from

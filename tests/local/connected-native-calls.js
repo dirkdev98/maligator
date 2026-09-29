@@ -166,4 +166,82 @@ check("throw stops the visitor after one leaf", first.read(), beforeThrow + 1);
 check("other activation survives graph exception", second.visitor(1, 2), 1122);
 check("graph remains callable after exception", first.visitor(0, 1), 975);
 
+// Declaration bindings remain replaceable even when the caller has numeric
+// parameters. A typed callee guard must preserve the generic result and throw.
+function declaredLeaf(x, bias) {
+	return (
+		x * 1 +
+		bias +
+		(x * 2 + bias) +
+		(x * 3 + bias) +
+		(x * 4 + bias) +
+		(x * 5 + bias) +
+		(x * 6 + bias) +
+		(x * 7 + bias) +
+		(x * 8 + bias) +
+		(x * 9 + bias) +
+		(x * 10 + bias) +
+		(x * 11 + bias) +
+		(x * 12 + bias) +
+		(x * 13 + bias) +
+		(x * 14 + bias) +
+		(x * 15 + bias) +
+		(x * 16 + bias) +
+		(x * 17 + bias) +
+		(x * 18 + bias) +
+		(x * 19 + bias) +
+		(x * 20 + bias) +
+		(x * 21 + bias) +
+		(x * 22 + bias) +
+		(x * 23 + bias) +
+		(x * 24 + bias)
+	);
+}
+
+function declaredVisitor(x, bias) {
+	let result;
+	for (let step = 0; step < 3; step++) result = declaredLeaf(x + step, bias);
+	return result;
+}
+
+function setDeclaredLeaf(value) {
+	declaredLeaf = value;
+}
+
+globalThis.declaredVisitor = declaredVisitor;
+globalThis.setDeclaredLeaf = setDeclaredLeaf;
+const originalDeclaredLeaf = declaredLeaf;
+let declaredResult;
+for (let i = 0; i < 100; i++) declaredResult = declaredVisitor(i, 4);
+check("declaration graph numeric fast calls", declaredResult, 30396);
+const declaredEvents = [];
+setDeclaredLeaf((x) => {
+	declaredEvents.push(x);
+	return "replacement" + x;
+});
+check("changed declaration returns string", declaredVisitor(4, 4), "replacement6");
+check("changed declaration call order", declaredEvents.join(","), "4,5,6");
+const declaredObject = { answer: 42 };
+setDeclaredLeaf(() => declaredObject);
+check(
+	"changed declaration preserves object identity",
+	declaredVisitor(4, 4),
+	declaredObject,
+);
+const declaredFailure = { message: "replacement failure" };
+setDeclaredLeaf((x) => {
+	declaredEvents.push(x);
+	throw declaredFailure;
+});
+caught = undefined;
+try {
+	declaredVisitor(8, 4);
+} catch (error) {
+	caught = error;
+}
+check("changed declaration preserves thrown identity", caught, declaredFailure);
+check("changed declaration stops after throw", declaredEvents.join(","), "4,5,6,8");
+setDeclaredLeaf(originalDeclaredLeaf);
+check("restored declaration resumes numeric calls", declaredVisitor(2, 4), 1296);
+
 console.log("connected-native-calls PASS");

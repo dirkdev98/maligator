@@ -144,6 +144,49 @@ function initializeFixedCaptureOwners(
 ): Array<string> {
 	const owners = fixedCaptureOwners(fn, functionIndex);
 	const binding = declare ? "MalEnv *const " : "";
+	const layout = fn.closureCaptureOwners;
+	// Native constructors encode these layouts as one tagged owner, a display,
+	// or an exact complete chain. Wire overlays and resumed scopes can differ.
+	if (
+		owners.length > 0 &&
+		layout !== undefined &&
+		layout.length <= 16 &&
+		!relocation.enabled &&
+		!fn.isGenerator &&
+		!fn.isAsync &&
+		owners.every((owner) => layout.includes(owner))
+	) {
+		const incoming = fn.capturedCount > 0 ? "env->parent" : "env";
+		if (layout.length === 1)
+			return [
+				`${binding}__capture_owner_${owners[0]} = mal_env_untag_single_owner(${incoming});`,
+			];
+		const selected = new Set(owners);
+		const chain: Array<string> = [];
+		const last = layout.indexOf(owners[0]!);
+		for (let index = layout.length - 1; index >= last; index--) {
+			const owner = layout[index]!;
+			if (selected.has(owner))
+				chain.push(
+					`  __capture_owner_${owner} = ${index === 0 ? "mal_env_untag_single_owner(__capture_scope)" : "__capture_scope"};`,
+				);
+			if (index > last) chain.push("  __capture_scope = __capture_scope->parent;");
+		}
+		return [
+			...(declare ? owners.map((owner) => `MalEnv *__capture_owner_${owner};`) : []),
+			`MalEnv *const __closure_captures = ${incoming};`,
+			"if (__closure_captures->function_index == MAL_ENV_CAPTURE_VECTOR) {",
+			"  MalEnv **const __capture_scopes = mal_env_capture_scopes(__closure_captures);",
+			...owners.map(
+				(owner) =>
+					`  __capture_owner_${owner} = __capture_scopes[${layout.indexOf(owner)}];`,
+			),
+			"} else {",
+			"  MalEnv *__capture_scope = __closure_captures;",
+			...chain,
+			"}",
+		];
+	}
 	if (owners.length > 1) {
 		return [
 			`${relocation.enabled ? "" : "static "}const i32 __capture_owner_ids[] = { ${owners.map((owner) => relocation.ownerFunctionIndex(owner)).join(", ")} };`,

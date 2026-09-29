@@ -1,3 +1,4 @@
+import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { resolveBuildConfig } from "../src/build-config.ts";
 import { CoreAnalysisManager } from "../src/compiler/core/core-analysis-manager.ts";
@@ -13,6 +14,7 @@ import { CoreOptimizationReportBuilder } from "../src/compiler/core/core-optimiz
 import { CORE_PROGRAM_SUMMARIES_ANALYSIS } from "../src/compiler/core/core-program-flow-analysis.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
 import { compileSemanticProgramToProgramImage } from "../src/compiler/pipeline/compile-core.ts";
+import { compileEntrypoint } from "../src/compiler/pipeline/compile-program.ts";
 import {
 	compilerProgramFactsFromConfig,
 	programClosureCertificate,
@@ -144,6 +146,86 @@ function graph(
 }
 
 describe("connected native entry contracts", () => {
+	it("does not import a later scalar callee result through a guarded edge", () => {
+		const image = compile(`
+			function guardedHelper(x, bias) {
+				const exactLeaf = function exactLeaf(x, bias) { return ${arithmetic}; };
+				let sum = 0;
+				for (let i = 0; i < 3; i++) sum += exactLeaf(x + i, bias);
+				return sum;
+			}
+			function guardedVisitor(x, bias) {
+				let sum = 0;
+				for (let i = 0; i < 3; i++) sum += guardedHelper(x + i, bias);
+				return sum;
+			}
+			globalThis.guardedVisitor = guardedVisitor;
+			for (let i = 0; i < 100; i++) globalThis.result = guardedVisitor(i, 4);
+		`);
+		const names = image.runtime.functions.map((fn) =>
+			String.fromCharCode(...(image.runtime.stringConstants[fn.nameStringIndex] ?? [])),
+		);
+		const helper = names.indexOf("guardedHelper");
+		const helperEntry = image.native.functions[helper]!.directEntries[0]!;
+		const visitorEntry =
+			image.native.functions[names.indexOf("guardedVisitor")]!.directEntries[0]!;
+		expect(helperEntry.resultRepresentation).toBe("number");
+		expect(helperEntry.callOverrides).toContainEqual(
+			expect.not.objectContaining({ guarded: true }),
+		);
+		expect(visitorEntry.resultRepresentation).toBe("boxed");
+		expect(visitorEntry.callOverrides).toContainEqual(
+			expect.objectContaining({ functionIndex: helper, guarded: true }),
+		);
+	});
+
+	it("connects the declaration benchmark through guarded numeric leaf entries", () => {
+		const image = deserializeCompilerArtifact(
+			serializeCompilerArtifact(
+				compileEntrypoint(
+					resolve("bench/runtime-gap/cases/connected-numeric-helpers.mjs"),
+					{
+						buildConfig: resolveBuildConfig({
+							surface: { node: true },
+							engine: { eval: false, realms: false, primordials: "locked" },
+						}),
+						coreVerification: "per-pass",
+					},
+				),
+			),
+		);
+		const names = image.runtime.functions.map((fn) =>
+			String.fromCharCode(...(image.runtime.stringConstants[fn.nameStringIndex] ?? [])),
+		);
+		const leaf = names.indexOf("leaf");
+		const visitor = names.indexOf("visitor");
+		const entry = image.native.functions[visitor]!.directEntries[0]!;
+		expect(image.native.functions[leaf]!.directEntries).toContainEqual(
+			expect.objectContaining({
+				parameterRepresentations: ["number", "number"],
+				resultRepresentation: "number",
+			}),
+		);
+		// The branching helper is inlined in visitor. Its two leaf calls still
+		// load a mutable declaration, so only the guarded branch has a typed ABI.
+		expect(entry).toMatchObject({
+			parameterRepresentations: ["number", "number"],
+			resultRepresentation: "boxed",
+		});
+		expect(entry.callOverrides).toHaveLength(2);
+		for (const call of entry.callOverrides!) {
+			expect(call).toMatchObject({ functionIndex: leaf, guarded: true });
+			expect(
+				image.native.functions[visitor]!.instructions[call.instructionIp],
+			).not.toHaveProperty("directEntryId");
+			const instruction =
+				image.runtime.functions[visitor]!.instructions[call.instructionIp]!;
+			expect(instruction.opcode).toBe("CALL");
+			if (instruction.opcode === "CALL")
+				expect(entry.registerRepresentations[instruction.dst]).toBe("boxed");
+		}
+	});
+
 	it("preserves scalar arguments and results across an escaped visitor and two helpers", () => {
 		const image = compile(`
 			globalThis.run = function run(seed) {
