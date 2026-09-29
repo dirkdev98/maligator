@@ -231,7 +231,7 @@ MalTextBufferStatus mal_text_buffer_append_number(MalTextBuffer *buffer, MalValu
     if (isinf(number)) {
         return mal_text_buffer_append_ascii(buffer, number < 0 ? "-Infinity" : "Infinity");
     }
-    byte digits[32];
+    u8 digits[32];
     i32 length = mal_number_format_shortest(number, digits, (i32) sizeof(digits));
     if (length <= 0 || length > (i32) sizeof(digits)) abort();
     return mal_text_buffer_append_latin1(buffer, digits, (usize) length);

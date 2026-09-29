@@ -59,6 +59,8 @@ int main(int argc, char **argv) {
     if (host == nullptr || !mal_argon2_configure(&host->argon2, &config)) {
         printf("FAIL: could not configure the argon2 pool\n");
         printf("RESULT 0/1\n");
+        mal_host_detach(&vm);
+        mal_vm_free(&vm);
         return 1;
     }
     // Consumed by the fixture's first call, which must reach its callback with
@@ -76,5 +78,11 @@ int main(int argc, char **argv) {
     mal_vm_run(&vm, callable);
     mal_host_run_event_loop(&vm);
 
-    return vm.completion.kind == MAL_COMPLETION_THROW ? 1 : 0;
+    int code = vm.completion.kind == MAL_COMPLETION_THROW ? 1 : 0;
+    mal_vm_free_callable(callable);
+    mal_node_immediates_free(&vm);
+    mal_host_timers_free(&vm);
+    mal_host_detach(&vm);
+    mal_vm_free(&vm);
+    return code;
 }

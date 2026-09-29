@@ -709,7 +709,11 @@ static i64 mal_builtin_string_reverse_find(
         if (end > from - offset + 1) end = from - offset + 1;
         while (end != 0) {
             usize position = mal_builtin_string_segment_reverse_find_unit(&segment, end, first);
-            if (position == MAL_STRING_UNIT_NOT_FOUND) break;
+            if (position == MAL_STRING_UNIT_NOT_FOUND) {
+                MAL_PERF_ADD(string_reverse_search_first_unit_rejects, end);
+                break;
+            }
+            MAL_PERF_ADD(string_reverse_search_first_unit_rejects, end - position - 1);
             MAL_PERF_COUNT(string_reverse_search_candidates);
             if (search_length == 1) {
                 result = (i64) (offset + position);
@@ -723,8 +727,8 @@ static i64 mal_builtin_string_reverse_find(
                 mal_builtin_string_search_cursor_dispose(&cursor);
                 goto done;
             }
-            MAL_PERF_COUNT(string_search_memcmp_calls);
-            MAL_PERF_ADD(string_search_memcmp_code_units, search_length - 1);
+            MAL_PERF_COUNT(string_reverse_search_memcmp_calls);
+            MAL_PERF_ADD(string_reverse_search_memcmp_code_units, search_length - 1);
             if (mal_builtin_string_segments_equal(
                     &segment, position + 1, &needle, 1, search_length - 1)) {
                 result = (i64) (offset + position);
