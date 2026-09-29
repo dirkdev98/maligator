@@ -134,4 +134,101 @@ for (let i = 0; i < 2000; i++) {
 	check("allocation pressure", temporary.read(), i);
 }
 check("escaped state survives collection", retainedState.read(), 47);
+
+function localProjection(seed) {
+	let bias = seed;
+	const project = (x) =>
+		x * 1 +
+		bias +
+		(x * 2 + bias) +
+		(x * 3 + bias) +
+		(x * 4 + bias) +
+		(x * 5 + bias) +
+		(x * 6 + bias) +
+		(x * 7 + bias) +
+		(x * 8 + bias) +
+		(x * 9 + bias) +
+		(x * 10 + bias) +
+		(x * 11 + bias) +
+		(x * 12 + bias) +
+		(x * 13 + bias) +
+		(x * 14 + bias) +
+		(x * 15 + bias) +
+		(x * 16 + bias) +
+		(x * 17 + bias) +
+		(x * 18 + bias) +
+		(x * 19 + bias) +
+		(x * 20 + bias);
+	let sum = 0;
+	for (let i = 0; i < 32; i++) {
+		bias = (bias + 1) | 0;
+		sum += project(i);
+	}
+	return sum;
+}
+check(
+	"local capture argument changes on every call",
+	localProjection(5),
+	210 * 496 + 20 * (32 * 5 + 528),
+);
+
+function localLateInitialization() {
+	const project = (x) =>
+		x * 1 +
+		bias +
+		(x * 2 + bias) +
+		(x * 3 + bias) +
+		(x * 4 + bias) +
+		(x * 5 + bias) +
+		(x * 6 + bias) +
+		(x * 7 + bias) +
+		(x * 8 + bias) +
+		(x * 9 + bias) +
+		(x * 10 + bias) +
+		(x * 11 + bias) +
+		(x * 12 + bias) +
+		(x * 13 + bias) +
+		(x * 14 + bias) +
+		(x * 15 + bias) +
+		(x * 16 + bias) +
+		(x * 17 + bias) +
+		(x * 18 + bias) +
+		(x * 19 + bias) +
+		(x * 20 + bias);
+	let wasTdz = false;
+	try {
+		project(1);
+	} catch (error) {
+		wasTdz = error instanceof ReferenceError;
+	}
+	const bias = 9;
+	check("local capture argument keeps TDZ", wasTdz, true);
+	return project(2);
+}
+check("local capture argument after initialization", localLateInitialization(), 600);
+
+function localHeapCapture() {
+	let state = { count: 1 };
+	const read = (x) => state.count + x;
+	let sum = 0;
+	for (let i = 0; i < 1000; i++) {
+		state = { count: i };
+		sum += read(i);
+	}
+	return sum;
+}
+check("local heap capture argument stays rooted", localHeapCapture(), 999000);
+
+function siblingDuringRead() {
+	let bias = 1;
+	const update = (next) => (bias = next);
+	const project = (x) => x.value + bias;
+	return project({
+		get value() {
+			update(20);
+			return 2;
+		},
+	});
+}
+check("reentrant sibling keeps live cell", siblingDuringRead(), 22);
 console.log("closure-state-sharing PASS");

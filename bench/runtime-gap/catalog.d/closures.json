@@ -1,0 +1,53 @@
+{
+	"schema": 1,
+	"cases": [
+		{
+			"id": "local-capture-projection-helper",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "closure-representation",
+			"category": "language-features",
+			"mechanisms": ["capture-access", "native-call-boundary", "typed-arguments"],
+			"inputShape": "One local 20-term numeric projection helper; the creator changes a bounded numeric capture before each fixed-arity call.",
+			"unit": "helper calls",
+			"sourceSeam": "src/compiler/core/core-local-capture-arguments.ts",
+			"fixture": "cases/local-capture-projection-helper.mjs",
+			"controls": [
+				"explicit-capture-projection-helper",
+				"escaping-capture-projection-helper"
+			]
+		},
+		{
+			"id": "explicit-capture-projection-helper",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "closure-representation",
+			"category": "language-features",
+			"mechanisms": ["capture-access", "native-call-boundary", "typed-arguments"],
+			"inputShape": "One local 20-term numeric projection helper; the creator changes a bounded numeric capture before each fixed-arity call.",
+			"unit": "helper calls",
+			"sourceSeam": "src/compiler/core/core-local-capture-arguments.ts",
+			"fixture": "cases/explicit-capture-projection-helper.mjs",
+			"controls": [
+				"local-capture-projection-helper",
+				"escaping-capture-projection-helper"
+			]
+		},
+		{
+			"id": "escaping-capture-projection-helper",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "closure-representation",
+			"category": "language-features",
+			"mechanisms": ["capture-access", "native-call-boundary", "typed-arguments"],
+			"inputShape": "One local 20-term numeric projection helper; the creator changes a bounded numeric capture before each fixed-arity call.",
+			"unit": "helper calls",
+			"sourceSeam": "src/compiler/core/core-local-capture-arguments.ts",
+			"fixture": "cases/escaping-capture-projection-helper.mjs",
+			"controls": [
+				"local-capture-projection-helper",
+				"explicit-capture-projection-helper"
+			]
+		}
+	]
+}
