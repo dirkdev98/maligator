@@ -93,6 +93,7 @@ function graph(
 				right,
 			]);
 		}
+		if (result === undefined) throw new Error("Missing graph result");
 		builder.setTerminator(body, { kind: "return", value: result });
 		builder.finish(body);
 	}
