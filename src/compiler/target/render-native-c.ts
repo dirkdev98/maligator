@@ -6442,7 +6442,7 @@ function emitInstruction(
 							`  r${dst} = ${result};`,
 							`} else {`,
 							`  if (__nf_${fusion.id}_ok) r${first.dst} = ${profileCall("boxing", `mal_ops_number_value(__nf_${fusion.id}_value)`)};`,
-							`  r${dst} = ${slow};`,
+							`  r${dst} = ${callValue(dst, slow)};`,
 							`  ${throwCheck()}`,
 							`}`,
 						];

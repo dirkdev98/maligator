@@ -541,6 +541,24 @@ it("folds own-presence, descriptors, typeof and Array.isArray through shared fac
 	expect(inspected.structure.genericCalls).toBe(0);
 });
 
+it("uses the current realm for primordial descriptor values with realms enabled", () => {
+	const inspected = inspectStaticValueFunction(
+		"function probe() { return Object.getOwnPropertyDescriptor(String.prototype, 'split').value; } globalThis.probe = probe;",
+		"probe",
+		{ realms: true },
+	);
+	const loads = inspected.core.filter(
+		(operation) => operation.opcode === "loadPrimordial",
+	);
+	expect(loads.length).toBeGreaterThan(0);
+	expect(loads.some((operation) => operation.attributes.worldAssumptions)).toBe(true);
+	for (const load of loads) {
+		expect(load.attributes.worldAssumptions).toMatchObject({
+			realm: "current-execution-realm",
+		});
+	}
+});
+
 it.each([
 	"globalThis",
 	"Object.getOwnPropertyDescriptor(globalThis, 'globalThis').value",

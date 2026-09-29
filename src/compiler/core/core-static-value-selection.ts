@@ -526,7 +526,7 @@ export const foldStaticReflections: CoreFunctionPass = {
 								attributes: {
 									nodeIndex: value,
 									worldAssumptions: {
-										...builtinWorldAssumptions(node[0], "exact-builtin-proof", true),
+										...builtinWorldAssumptions(node[0], "exact-builtin-proof"),
 									},
 								},
 							},

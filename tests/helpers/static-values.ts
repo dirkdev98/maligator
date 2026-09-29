@@ -12,6 +12,7 @@ import type { CoreOperationInspection } from "./core-inspection.ts";
 
 export interface StaticValueOptions {
 	locked?: boolean;
+	realms?: boolean;
 	intl?: boolean;
 	profile?: boolean;
 	counters?: boolean;
@@ -47,6 +48,7 @@ export function inspectStaticValueFunctions(
 				resolveBuildConfig({
 					engine: {
 						primordials: options.locked === false ? "mutable" : "locked",
+						...(options.realms === undefined ? {} : { realms: options.realms }),
 						...(options.intl === undefined ? {} : { intl: { enabled: options.intl } }),
 					},
 				}),

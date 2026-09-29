@@ -27,6 +27,18 @@ check(argumentEdges(1, 2, effects++, 4) === 45, "four supplied arguments");
 check(effects === 1, "unused argument evaluation");
 check(argumentEdges() === 231, "absent default");
 check(Number.isNaN(argumentEdges(undefined)), "present undefined");
+check(argumentEdges("2", "3", 0, "7") === 74, "numeric coercion fallback");
+check(argumentEdges(null) === 199, "null coercion fallback");
+let coercions = 0;
+check(
+	argumentEdges({
+		valueOf() {
+			coercions++;
+			return 2;
+		},
+	}) === 205 && coercions === 1,
+	"object coercion fallback",
+);
 check(argumentEdges(2, 3, 5, 7, effects++) === 75, "different arity");
 check(effects === 2, "extra argument evaluation");
 
