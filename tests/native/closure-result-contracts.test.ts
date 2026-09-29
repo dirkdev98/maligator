@@ -5,11 +5,7 @@ import { join, resolve } from "node:path";
 import { expect, it } from "vitest";
 import { resolveBuildConfig } from "../../src/build-config.ts";
 import { compileEntrypoint } from "../../src/compiler/pipeline/compile-program.ts";
-import {
-	buildNativeProgramImage,
-	runToStdout,
-	STRESS_ENV,
-} from "../../src/test-harness.ts";
+import { buildNativeProgramImage, runToStdout, STRESS_ENV } from "../../src/test-harness.ts";
 
 it("preserves result-only closure calls through coercion, reentry and collection", () => {
 	const fixture = "tests/local/closure-result-contracts.js";
