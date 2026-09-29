@@ -483,12 +483,19 @@ static i64 mal_builtin_string_search_cursor_next(MalBuiltinStringSearch *cursor)
             if (!mal_string_iterator_next(&cursor->iterator, &cursor->segment)) return -1;
             cursor->local = 0;
         }
-        if (matched == 0 && !cursor->reverse) {
+        if (matched == 0 && !cursor->reverse &&
+            cursor->length <= MAL_STRING_SEARCH_INLINE_UNITS) {
             usize next = mal_builtin_string_segment_find_unit(
                 &cursor->segment, cursor->local, cursor->needle[0]);
             cursor->position += next - cursor->local;
             cursor->local = next;
             if (next == cursor->segment.length) continue;
+            cursor->local++;
+            cursor->position++;
+            MAL_PERF_COUNT(string_search_linear_comparisons);
+            if (cursor->length == 1) return (i64) (cursor->position - 1);
+            matched = 1;
+            continue;
         }
         usize index = cursor->reverse
             ? cursor->segment.length - cursor->local - 1 : cursor->local;
@@ -567,6 +574,17 @@ static i64 mal_builtin_string_find(const MalString *string, const MalString *sea
     if (search_length > length || from > length - search_length) return -1;
     if (search_length == 0) return (i64) from;
     if (string == search) return 0;
+
+    if (search_length == 1 && string->storage != MAL_STRING_STORAGE_CONS) {
+        MalStringSegment segment;
+        if (mal_string_try_get_segment(string, from, length - from, &segment)) {
+            usize candidate = mal_builtin_string_segment_find_unit(
+                &segment, 0, mal_string_code_unit_at((MalString *) search, 0));
+            MAL_PERF_ADD(string_search_candidates, candidate + (candidate != segment.length));
+            MAL_PERF_ADD(string_search_first_unit_rejects, candidate);
+            return candidate == segment.length ? -1 : (i64) (from + candidate);
+        }
+    }
 
     if (search_length > 1) MAL_PERF_COUNT(string_search_multi_unit_calls);
     if (search_length >= MAL_STRING_SEARCH_INLINE_UNITS) {
@@ -2774,6 +2792,26 @@ static bool mal_builtin_string_split_plan_matches(
 
     if (separator_length > length) return true;
 
+    if (separator_length == 1 && string->storage != MAL_STRING_STORAGE_CONS) {
+        MalStringSegment segment;
+        if (mal_string_try_get_segment(string, 0, length, &segment)) {
+            c16 unit = mal_string_code_unit_at(separator, 0);
+            usize from = 0;
+            for (;;) {
+                usize match = mal_builtin_string_segment_find_unit(&segment, from, unit);
+                if (match == segment.length) return true;
+                if (*match_count == MAL_STRING_SPLIT_MATCH_PLAN_CAPACITY) {
+                    MAL_PERF_COUNT(string_split_plan_overflows);
+                    *overflow_match_position = match;
+                    return false;
+                }
+                match_offsets[(*match_count)++] = match;
+                MAL_PERF_COUNT(string_split_planned_matches);
+                if (*match_count == limit) return true;
+                from = match + 1;
+            }
+        }
+    }
 
     MalBuiltinStringSearch cursor;
     mal_builtin_string_search_cursor_init(&cursor, string, separator, 0, false);
@@ -3598,18 +3636,79 @@ static MalValue mal_builtin_string_prototype_iterator(MalVm *vm, MalValue this_v
     return iterator;
 }
 
+typedef struct MalBuiltinStringSplitPattern {
+    usize length;
+    u32 prefix[];
+} MalBuiltinStringSplitPattern;
+
+static MalBuiltinStringSplitPattern *mal_builtin_string_split_pattern_new(
+    MalHeap *heap, MalString *separator
+) {
+    usize length = mal_string_length(separator);
+    MalBuiltinStringSplitPattern *pattern = mal_heap_alloc_raw_profiled(heap,
+        sizeof(*pattern) + length * (sizeof(u32) + sizeof(c16)),
+        MAL_PROFILE_ALLOCATION_FAMILY_ITERATOR);
+    pattern->length = length;
+    c16 *needle = (c16 *) (pattern->prefix + length);
+    mal_string_copy_range_to(separator, 0, length, needle);
+    pattern->prefix[0] = 0;
+    for (usize i = 1, matched = 0; i < length; i++) {
+        while (matched != 0 && needle[i] != needle[matched]) {
+            MAL_PERF_COUNT(string_search_linear_comparisons);
+            matched = pattern->prefix[matched - 1];
+        }
+        MAL_PERF_COUNT(string_search_linear_comparisons);
+        if (needle[i] == needle[matched]) matched++;
+        pattern->prefix[i] = (u32) matched;
+    }
+    return pattern;
+}
+
+static i64 mal_builtin_string_split_cursor_find(MalStringCursor *cursor) {
+    MalBuiltinStringSplitPattern *pattern = cursor->scratch;
+    if (pattern == nullptr) return -1;
+    c16 *needle = (c16 *) (pattern->prefix + pattern->length);
+    usize matched = 0;
+    MalStringSegment segment;
+    while (mal_string_cursor_segment(cursor, &segment)) {
+        usize local = 0;
+        while (local < segment.length) {
+            if (matched == 0) {
+                local = mal_builtin_string_segment_find_unit(&segment, local, needle[0]);
+                if (local == segment.length) break;
+                local++;
+                matched = 1;
+            } else {
+                c16 unit = mal_string_segment_code_unit_at(&segment, local++);
+                while (matched != 0 && unit != needle[matched]) {
+                    MAL_PERF_COUNT(string_search_linear_comparisons);
+                    matched = pattern->prefix[matched - 1];
+                }
+                if (unit == needle[matched]) matched++;
+            }
+            MAL_PERF_COUNT(string_search_linear_comparisons);
+            if (matched == pattern->length) {
+                mal_string_cursor_consume(cursor, local);
+                return (i64) (cursor->position - pattern->length);
+            }
+        }
+        mal_string_cursor_consume(cursor, local);
+    }
+    return -1;
+}
+
 static bool mal_builtin_string_split_cursor_init_impl(
     MalVm *vm,
     MalValue callee,
     MalValue receiver,
     MalValue separator,
     MalValue *subject_out,
-    MalValue *separator_out,
+    MalValue *traversal_out,
     MalStringSplitCursor *cursor_out,
     bool identity_locked
 ) {
     *subject_out = MAL_VALUE_UNDEFINED;
-    *separator_out = MAL_VALUE_UNDEFINED;
+    *traversal_out = MAL_VALUE_UNDEFINED;
     cursor_out->position = 0;
     cursor_out->done = false;
     if (!mal_value_is_string(receiver) || !mal_value_is_string(separator) ||
@@ -3626,8 +3725,18 @@ static bool mal_builtin_string_split_cursor_init_impl(
 #else
     (void) vm;
 #endif
+    MalString *subject = mal_value_to_string(receiver);
     *subject_out = receiver;
-    *separator_out = separator;
+    // Flat/dependent input cannot acquire rope ancestry during reentry. Rebuilding
+    // its pattern after a match costs at most the units that match consumed.
+    if (subject->storage != MAL_STRING_STORAGE_CONS ||
+        mal_string_length(mal_value_to_string(separator)) > subject->length) {
+        *traversal_out = separator;
+        return true;
+    }
+    MalStringCursor *cursor = mal_string_cursor_new(&vm->heap, subject);
+    cursor->scratch = mal_builtin_string_split_pattern_new(&vm->heap, mal_value_to_string(separator));
+    *traversal_out = mal_value_from_heap(&cursor->header);
     return true;
 }
 
@@ -3637,11 +3746,11 @@ bool mal_builtin_string_split_cursor_init(
     MalValue receiver,
     MalValue separator,
     MalValue *subject_out,
-    MalValue *separator_out,
+    MalValue *traversal_out,
     MalStringSplitCursor *cursor_out
 ) {
     return mal_builtin_string_split_cursor_init_impl(
-        vm, callee, receiver, separator, subject_out, separator_out, cursor_out, false);
+        vm, callee, receiver, separator, subject_out, traversal_out, cursor_out, false);
 }
 
 bool mal_builtin_string_split_cursor_init_locked(
@@ -3649,40 +3758,49 @@ bool mal_builtin_string_split_cursor_init_locked(
     MalValue receiver,
     MalValue separator,
     MalValue *subject_out,
-    MalValue *separator_out,
+    MalValue *traversal_out,
     MalStringSplitCursor *cursor_out
 ) {
     return mal_builtin_string_split_cursor_init_impl(
-        vm, MAL_VALUE_UNDEFINED, receiver, separator, subject_out, separator_out, cursor_out,
+        vm, MAL_VALUE_UNDEFINED, receiver, separator, subject_out, traversal_out, cursor_out,
         true);
 }
 
 bool mal_builtin_string_split_cursor_next(
     MalValue subject_value,
-    MalValue separator_value,
+    MalValue traversal_value,
     MalStringSplitCursor *cursor,
     usize *start_out,
     usize *end_out
 ) {
-    if (cursor->done || !mal_value_is_string(subject_value) ||
-        !mal_value_is_string(separator_value)) {
-        return false;
-    }
-    MalString *subject = mal_value_to_string(subject_value);
-    MalString *separator = mal_value_to_string(separator_value);
-    usize length = mal_string_length(subject);
-    usize separator_length = mal_string_length(separator);
-    if (separator_length == 0 || cursor->position > length) return false;
-
+    if (cursor->done || !mal_value_is_string(subject_value)) return false;
     usize start = cursor->position;
-    i64 match = mal_builtin_string_find(subject, separator, start);
+    if (mal_value_is_string(traversal_value)) {
+        MalString *subject = mal_value_to_string(subject_value);
+        MalString *separator = mal_value_to_string(traversal_value);
+        if (separator->length == 0 || start > subject->length) return false;
+        i64 match = mal_builtin_string_find(subject, separator, start);
+        *start_out = start;
+        if (match < 0) {
+            *end_out = subject->length;
+            cursor->done = true;
+        } else {
+            *end_out = (usize) match;
+            cursor->position = (usize) match + separator->length;
+        }
+        return true;
+    }
+    if (!mal_value_is_heap_type(traversal_value, MAL_HEAP_STRING_CURSOR)) return false;
+    MalStringCursor *traversal = (MalStringCursor *) mal_value_to_heap(traversal_value);
+    i64 match = mal_builtin_string_split_cursor_find(traversal);
     *start_out = start;
     if (match < 0) {
-        *end_out = length;
+        *end_out = traversal->length;
         cursor->done = true;
+        mal_string_cursor_dispose(traversal);
     } else {
         *end_out = (usize) match;
-        cursor->position = (usize) match + separator_length;
+        cursor->position = traversal->position;
     }
     return true;
 }
@@ -3728,10 +3846,43 @@ static bool mal_builtin_string_trim_span_direct_impl(
     MalString *subject = mal_value_to_string(subject_value);
     usize length = mal_string_length(subject);
     if (start > end || end > length) return false;
-    const c16 *units = mal_string_code_units(subject);
-    while (start < end && mal_ecma_is_string_whitespace(units[start])) start++;
-    while (end > start && mal_ecma_is_string_whitespace(units[end - 1])) end--;
-    *out = mal_builtin_string_slice(vm, subject, start, end - start);
+    if (start == end) {
+        *out = mal_builtin_string_slice(vm, subject, start, 0);
+        return true;
+    }
+    // Contiguous rope trimming avoids repeated edge descents; flat inputs keep compact width.
+    MalStringSegment segment;
+    if (subject->storage == MAL_STRING_STORAGE_CONS) {
+        segment = (MalStringSegment) {.latin1 = false, .length = end - start,
+            .utf16_units = mal_string_code_units(subject) + start};
+    } else {
+        const MalString *flat = subject;
+        usize offset = start;
+        if (flat->storage == MAL_STRING_STORAGE_DEPENDENT) {
+            offset += flat->slice_offset;
+            flat = flat->parent;
+        }
+        segment.latin1 = flat->latin1;
+        segment.length = end - start;
+        if (segment.latin1) {
+            segment.latin1_units = (flat->storage == MAL_STRING_STORAGE_INLINE
+                ? flat->inline_latin1_units : flat->latin1_units) + offset;
+        } else {
+            segment.utf16_units = (flat->storage == MAL_STRING_STORAGE_INLINE
+                ? flat->inline_code_units : flat->code_units) + offset;
+        }
+    }
+    usize leading = 0, trailing = segment.length;
+    if (segment.latin1) {
+        const u8 *units = segment.latin1_units;
+        while (leading < trailing && mal_ecma_is_string_whitespace(units[leading])) leading++;
+        while (trailing > leading && mal_ecma_is_string_whitespace(units[trailing - 1])) trailing--;
+    } else {
+        const c16 *units = segment.utf16_units;
+        while (leading < trailing && mal_ecma_is_string_whitespace(units[leading])) leading++;
+        while (trailing > leading && mal_ecma_is_string_whitespace(units[trailing - 1])) trailing--;
+    }
+    *out = mal_builtin_string_slice(vm, subject, start + leading, trailing - leading);
     return true;
 }
 

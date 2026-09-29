@@ -1099,6 +1099,77 @@ static void mal_json_plain_dispose(MalJsonPlainState *state) {
     free(state->frames);
 }
 
+static MalValue mal_json_frame_key(const MalJsonFrame *frame, usize position) {
+    if (frame->cached_plan) {
+        return mal_value_from_string(frame->plan->keys[position].key);
+    }
+    const MalShapeProp *prop = &frame->shape->props[position];
+    return mal_value_is_string(prop->key) &&
+        (prop->attrs & MAL_PROPERTY_ENUMERABLE) != 0
+        ? prop->key : mal_value_new_undefined();
+}
+
+static MalJsonResult mal_json_resume_generic(
+    MalJsonPlainState *plain, MalJsonState *generic, MalJsonBuilder *builder
+) {
+    if (plain->count > MAL_JSON_MAX_RECURSION_DEPTH) {
+        mal_json_throw_depth(generic->vm);
+        return MAL_JSON_THROW;
+    }
+    // Ancestor keys and array lengths were fixed before any callback. Retain
+    // their holders and remaining keys even if reentry deletes the input graph.
+    MalRootedValueList roots;
+    mal_rooted_value_list_init(&roots);
+    for (usize i = 0; i < plain->count; i++) {
+        const MalJsonFrame *frame = &plain->frames[i];
+        mal_rooted_value_list_append(&roots, frame->value);
+        if (!frame->array) {
+            for (usize k = frame->position; k < frame->count; k++) {
+                MalValue key = mal_json_frame_key(frame, k);
+                if (!mal_value_is_undefined(key)) {
+                    mal_rooted_value_list_append(&roots, key);
+                }
+            }
+        }
+    }
+    generic->active = plain->active;
+    plain->active = (MalJsonPointerMap) {0};
+    MalJsonResult result = MAL_JSON_THROW;
+    while (plain->count != 0) {
+        MalJsonFrame *frame = &plain->frames[plain->count - 1];
+        while (frame->position < frame->count) {
+            usize position = frame->position++;
+            MalJsonResult member;
+            if (frame->array) {
+                if (frame->any && !mal_json_builder_push(builder, ',')) goto done;
+                member = mal_json_serialize_property(generic, builder,
+                    mal_key_index((u32) position), mal_value_new_undefined(),
+                    frame->value, plain->count);
+                if (member == MAL_JSON_OMITTED &&
+                    !mal_json_builder_push_ascii(builder, "null")) goto done;
+            } else {
+                MalValue key = mal_json_frame_key(frame, position);
+                if (mal_value_is_undefined(key)) continue;
+                // Slots, descriptors, and prototypes can all change after the
+                // first callback; only the original enumerable key list survives.
+                member = mal_json_serialize_member(generic, builder,
+                    mal_key_from_value(key), key, frame->value, false,
+                    mal_value_new_undefined(), plain->count, frame->any);
+                if (member == MAL_JSON_OMITTED) continue;
+            }
+            if (member == MAL_JSON_THROW) goto done;
+            frame->any = true;
+        }
+        if (!mal_json_builder_push(builder, frame->array ? ']' : '}')) goto done;
+        mal_json_pointer_remove(&generic->active, mal_value_to_object(frame->value));
+        plain->count--;
+    }
+    result = MAL_JSON_WROTE;
+done:
+    mal_rooted_value_list_dispose(&roots);
+    return result;
+}
+
 static bool mal_json_try_serialize_plain(
     MalJsonState *generic, MalJsonBuilder *builder, MalValue root,
     MalJsonResult *result
@@ -1109,8 +1180,8 @@ static bool mal_json_try_serialize_plain(
         .vm = generic->vm,
         .to_json = mal_intrinsic_string_key(generic->vm, "toJSON"),
     };
-    // Every descendant and prototype stays reachable from this immutable input
-    // graph: speculative traversal never invokes JS or changes a property.
+    // Before fallback, descendants and prototypes remain reachable from root:
+    // the plain traversal never invokes JS or changes a property.
     MalRootSpan span;
     mal_gc_root(&span, &root, 1);
     MalValue value = root;
@@ -1191,10 +1262,10 @@ static bool mal_json_try_serialize_plain(
             // An observable toJSON may omit this member. Prove its absence
             // before reserving a key that would then not belong to the output.
             if (mal_value_is_object(value)) {
-                if (!mal_json_plain_frame(&state, value, &pending_frame)) goto unsupported;
+                if (!mal_json_plain_frame(&state, value, &pending_frame)) goto unsupported_child;
                 has_pending_frame = true;
             } else if (mal_value_is_bigint(value)) {
-                goto unsupported;
+                goto unsupported_child;
             }
             if ((frame->any && !mal_json_builder_push(builder, ',')) ||
                 (key != nullptr && !mal_json_plain_key(
@@ -1207,14 +1278,17 @@ static bool mal_json_try_serialize_plain(
     }
     goto done;
 
+unsupported_child:
+    // The current member has no comma, key, or output yet. Generic completion
+    // must read it before invoking any observable transformation exactly once.
+    state.frames[state.count - 1].position--;
 unsupported:
     MAL_PERF_COUNT(json_plain_fallbacks);
-    MAL_PERF_ADD(json_plain_discarded_code_units, builder->buffer.length);
-    // No user code has run. Discard all speculative output and let the generic
-    // path perform each getter, proxy trap, and toJSON call exactly once.
-    mal_text_buffer_dispose(&builder->buffer);
-    builder->buffer = (MalTextBuffer) {0};
-    handled = false;
+    if (state.count != 0) {
+        *result = mal_json_resume_generic(&state, generic, builder);
+    } else {
+        handled = false;
+    }
     goto done;
 failed:
     *result = MAL_JSON_THROW;
@@ -1303,7 +1377,7 @@ static MalValue mal_builtin_json_stringify(MalVm *vm, MalValue this_value, const
     MalValue holder = mal_value_new_undefined();
     MalJsonResult result;
     if (mal_json_try_serialize_plain(&state, &builder, value, &result)) {
-        // The guarded traversal completed without observable hooks.
+        // The plain traversal or its generic continuation handled the result.
     } else if (mal_value_is_callable(state.replacer_fn)) {
         // A replacer observes the synthetic root holder as its `this` value.
         MalObject *wrapper = mal_intrinsic_new_object(vm);

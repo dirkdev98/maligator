@@ -32,22 +32,13 @@ function cursor(value, separator) {
 	return total;
 }
 
-function cursorThrows(value) {
-	const parts = value.split("|");
-	for (let index = 0; index < parts.length; index++) {
-		const part = parts[index].trim();
-		if (part === "throw") throw new Error("cursor body");
-	}
-	return false;
-}
-
 function cursorRevalidates(value, separator, afterElement) {
 	const parts = value.split(separator);
 	let total = 0;
 	for (let index = 0; index < parts.length; index++) {
 		const part = parts[index].trim();
 		total += part.length;
-		afterElement(index);
+		afterElement();
 	}
 	return total;
 }
@@ -67,18 +58,29 @@ const results = [
 	cursor(" a\r\n b \r\n", "\r\n"),
 ];
 
+let reentrantInput = " ".repeat(32);
+for (let index = 0; index < 3; index++) {
+	if (index !== 0) reentrantInput += "|";
+	reentrantInput += String.fromCharCode(97 + index) + " ".repeat(32);
+}
+
+const cursorFailure = new Error("cursor body");
+let callbacksBeforeThrow = 0;
 try {
-	cursorThrows("a| throw |b");
+	cursorRevalidates(reentrantInput, "|", () => {
+		callbacksBeforeThrow++;
+		if (callbacksBeforeThrow === 2) throw cursorFailure;
+	});
 } catch (error) {
-	results.push(error.message === "cursor body" ? 1 : 0);
+	results.push(error === cursorFailure && callbacksBeforeThrow === 2 ? 1 : 0);
 }
 
 const originalTrim = String.prototype.trim;
-cursorRevalidates(" a | b | c ", "|", () => {});
+cursorRevalidates(reentrantInput, "|", () => {});
 let trimCalls = 0;
 let trimPatched = false;
 results.push(
-	cursorRevalidates(" a | b | c ", "|", () => {
+	cursorRevalidates(reentrantInput, "|", () => {
 		if (trimPatched) return;
 		trimPatched = true;
 		String.prototype.trim = function () {

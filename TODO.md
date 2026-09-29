@@ -399,42 +399,34 @@ ownership, and bounded-resource contracts. Keep content parity, physical encodin
 allocation traffic, and retained memory distinct. Remaining work below extends those
 contracts or investigates costs still visible after the string follow-ups.
 
-## Traversal across JavaScript reentry
-
-- [ ] Trace a complete pending-node frontier for JavaScript string iteration and
-      compiler-projected split iteration. The string iterator now reacquires a
-      traced current leaf, but still descends from the root at leaf boundaries;
-      projected split reinitializes search after each yielded JavaScript body.
-      Preserve GC/materialization safety and bounded retained ancestry while
-      making sequential traversal linear in consumed units and visited nodes.
-
 ## Focused performance work
 
-- [ ] Reduce transient node allocation for short concatenation chains while
-      preserving bounded rope height. The dynamic template-key control builds an
-      18–23-unit key through a 17–20-unit intermediate; balancing its final append
-      allocates a suffix and root, leaving one additional 32-byte cons cell as
-      garbage. Compare small-key construction with repeated-append and large-rope
-      controls before changing the balance rule or introducing small-string copies.
+- [ ] Fuse projected split/trim length consumption without flattening the shared
+      rope or repeatedly descending from its root for each field's edges and slice.
+      First prove split and trim results and their aliases do not escape through
+      ordinary uses, terminators, or phi/jump-edge arguments; the current ordinary
+      use index does not cover control-edge uses. Carry that stronger Core proof
+      through region and artifact verification, and invalidate affected cache/schema
+      identities before suppressing materialization. Preserve trim identity guards,
+      observable fallback, reentry, and abrupt completion. Cover loop-carried and
+      returned fields, then compare matched first-pass and repeated-input runs of
+      concatenation-prepared and flat controls. Require throughput to hold against
+      the materializing implementation, with complete output checks and
+      GC/materialization safety.
 
-- [ ] Profile the remaining mixed-text pipeline across parse, property lookup,
-      construction, quoting, and checksum before attributing aggregate timings.
-      Retain early/late wide units, sparse/dense escapes, BMP runs, and split
-      surrogate controls. JSON quote counters identify scalar scan work, but do
-      not establish its share of the complete pipeline's elapsed time.
+- [ ] Investigate a bounded repeated-miss probe before property-query normalization,
+      where already-string keys can avoid repeated constant-name and atom-table
+      lookup. Preserve coercion and prototype invalidation, bound retained storage,
+      and require repeated-miss gains without taxing existing atoms or unique-name
+      churn. Keep the three property-query benchmark controls together.
 
-- [ ] Investigate bounded caching for repeated absent-name property queries.
-      Transient misses no longer add permanent atoms, but names that have never
-      been stored cannot enter untraced property ICs. Compare repeated names with
-      unique churn and existing atoms; preserve key tracing, coercion/reentry,
-      and quiescent memory bounds rather than restoring lifetime-long retention.
-
-- [ ] Reduce discarded output when plain JSON serialization encounters a late
-      unsupported value. One-use shape/key cache admission is bounded separately;
-      a late getter can still discard nearly an entire already-built document
-      before generic serialization restarts. Measure elapsed time and allocation
-      as well as discarded units, and preserve exact getter, proxy, replacer,
-      and toJSON invocation order/counts.
+- [ ] Investigate full-output checksum traversal and construction/replacement in
+      the complete mixed-text pipeline. Use `scripts/profile-text-pipeline.ts`
+      with its encoding, escape, and surrogate controls, then confirm candidate
+      changes through paired ordinary builds with the complete checksum retained.
+      Bound marker overhead and resolve cooperative-sampler delay before treating
+      instrumented phase intervals as production cost shares. Quoting counters
+      alone do not attribute an aggregate timing change.
 
 # ECMAScript correctness
 

@@ -924,7 +924,7 @@ function emitCompiledVariant(
 			lengthIp,
 			backedgeIp,
 			subjectSlot: nextStackSlot,
-			separatorSlot: nextStackSlot + 1,
+			traversalSlot: nextStackSlot + 1,
 			...(hoistTrimIdentity ? { trimCalleeSlot: nextStackSlot + 2 } : {}),
 			semanticEpochStable: cursor.license.admission.mode === "stable",
 			epochName: `__string_split_cursor_${callIp}_semantic_epoch`,
@@ -1771,7 +1771,7 @@ interface NativeStringSplitCursorSite {
 	lengthIp: number;
 	backedgeIp: number;
 	subjectSlot: number;
-	separatorSlot: number;
+	traversalSlot: number;
 	trimCalleeSlot?: number;
 	/** Core proved the admitted semantic epochs stable across every licensed use. */
 	semanticEpochStable: boolean;
@@ -5603,9 +5603,9 @@ function emitInstruction(
 				const value = `${index} + (__string_split_cursor_${id}_has ? 1.0 : 0.0)`;
 				return [
 					`if (__string_split_cursor_${id}_active) {`,
-					`  __string_split_cursor_${id}_has = ${profileCall("string", `mal_builtin_string_split_cursor_next(__gc_slots[${site.subjectSlot}], __gc_slots[${site.separatorSlot}], &__string_split_cursor_${id}_state, &__string_split_cursor_${id}_start, &__string_split_cursor_${id}_end)`)};`,
+					`  __string_split_cursor_${id}_has = ${profileCall("string", `mal_builtin_string_split_cursor_next(__gc_slots[${site.subjectSlot}], __gc_slots[${site.traversalSlot}], &__string_split_cursor_${id}_state, &__string_split_cursor_${id}_start, &__string_split_cursor_${id}_end)`)};`,
 					`  r${instruction.dst} = ${reps[instruction.dst] === "number" ? value : profileCall("boxing", `mal_ops_number_value(${value})`)};`,
-					`  if (!__string_split_cursor_${id}_has) { __gc_slots[${site.subjectSlot}] = MAL_VALUE_UNDEFINED; __gc_slots[${site.separatorSlot}] = MAL_VALUE_UNDEFINED; }`,
+					`  if (!__string_split_cursor_${id}_has) { __gc_slots[${site.subjectSlot}] = MAL_VALUE_UNDEFINED; __gc_slots[${site.traversalSlot}] = MAL_VALUE_UNDEFINED; }`,
 					`} else {`,
 					...ordinary().map((line) => `  ${line}`),
 					`}`,
@@ -7540,7 +7540,7 @@ function emitInstruction(
 				const { site } = nativeStringSplitCursorAction;
 				const id = site.callIp;
 				return [
-					`__string_split_cursor_${id}_active = ${profileCall("string", `mal_builtin_string_split_cursor_init_locked(vm, ${boxedOperand(instruction.thisValue)}, ${boxedOperand(instruction.arguments[0]!)}, &__gc_slots[${site.subjectSlot}], &__gc_slots[${site.separatorSlot}], &__string_split_cursor_${id}_state)`)};`,
+					`__string_split_cursor_${id}_active = ${profileCall("string", `mal_builtin_string_split_cursor_init_locked(vm, ${boxedOperand(instruction.thisValue)}, ${boxedOperand(instruction.arguments[0]!)}, &__gc_slots[${site.subjectSlot}], &__gc_slots[${site.traversalSlot}], &__string_split_cursor_${id}_state)`)};`,
 					`if (__string_split_cursor_${id}_active) {`,
 					`  r${instruction.dst} = MAL_VALUE_UNDEFINED;`,
 					`} else {`,
@@ -7662,9 +7662,9 @@ function emitInstruction(
 				const initialize = site.lockedIdentity
 					? profileCall(
 							"string",
-							`mal_builtin_string_split_cursor_init_locked(vm, ${boxedOperand(instruction.thisValue)}, ${boxedOperand(instruction.arguments[0]!)}, &__gc_slots[${site.subjectSlot}], &__gc_slots[${site.separatorSlot}], &__string_split_cursor_${id}_state)`,
+							`mal_builtin_string_split_cursor_init_locked(vm, ${boxedOperand(instruction.thisValue)}, ${boxedOperand(instruction.arguments[0]!)}, &__gc_slots[${site.subjectSlot}], &__gc_slots[${site.traversalSlot}], &__string_split_cursor_${id}_state)`,
 						)
-					: `${admission} && ${trimIdentity} && ${profileCall("string", `mal_builtin_string_split_cursor_init(vm, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${boxedOperand(instruction.arguments[0]!)}, &__gc_slots[${site.subjectSlot}], &__gc_slots[${site.separatorSlot}], &__string_split_cursor_${id}_state)`)}`;
+					: `${admission} && ${trimIdentity} && ${profileCall("string", `mal_builtin_string_split_cursor_init(vm, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${boxedOperand(instruction.arguments[0]!)}, &__gc_slots[${site.subjectSlot}], &__gc_slots[${site.traversalSlot}], &__string_split_cursor_${id}_state)`)}`;
 				return [
 					`static MalCallCache __cc_${ip};`,
 					`__string_split_cursor_${id}_active = ${initialize};`,

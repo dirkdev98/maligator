@@ -336,7 +336,13 @@ static void mal_string_iterator_push(MalStringIterator *iterator, MalStringItera
         if (!mal_checked_size_growth(iterator->capacity, iterator->count + 1,
                 16, MAL_STRING_MAX_CODE_UNITS, &capacity)) abort();
         MalStringIteratorPart *grown;
-        if (iterator->stack == iterator->inline_stack) {
+        if (iterator->owner != nullptr) {
+            bool inline_stack = iterator->stack == iterator->inline_stack;
+            grown = gc_realloc_raw_profiled(mal_gc_current_heap(),
+                inline_stack ? nullptr : iterator->stack, sizeof(*grown) * capacity,
+                MAL_PROFILE_ALLOCATION_FAMILY_ITERATOR);
+            if (inline_stack) memcpy(grown, iterator->stack, sizeof(*grown) * iterator->count);
+        } else if (iterator->stack == iterator->inline_stack) {
             grown = malloc(sizeof(*grown) * capacity);
             if (grown != nullptr) memcpy(grown, iterator->stack, sizeof(*grown) * iterator->count);
         } else {
@@ -347,6 +353,9 @@ static void mal_string_iterator_push(MalStringIterator *iterator, MalStringItera
         iterator->capacity = capacity;
     }
     iterator->stack[iterator->count++] = part;
+    if (iterator->owner != nullptr) {
+        mal_gc_card(iterator->owner, mal_value_from_string((MalString *) part.string));
+    }
 }
 
 void mal_string_iterator_init(
@@ -358,6 +367,7 @@ void mal_string_iterator_init(
     iterator->count = 0;
     iterator->capacity = sizeof(iterator->inline_stack) / sizeof(iterator->inline_stack[0]);
     iterator->reverse = false;
+    iterator->owner = nullptr;
     iterator->current = (MalStringIteratorPart) {0};
     mal_string_iterator_push(iterator, (MalStringIteratorPart) {
         .string = string, .offset = offset, .length = length,
@@ -374,6 +384,9 @@ void mal_string_iterator_init_reverse(
 bool mal_string_iterator_next(MalStringIterator *iterator, MalStringSegment *segment) {
     if (iterator->count == 0) return false;
     MalStringIteratorPart part = iterator->stack[--iterator->count];
+    if (iterator->owner != nullptr) {
+        mal_gc_write_barrier(mal_value_from_string((MalString *) part.string));
+    }
     for (;;) {
         const MalString *string = part.string;
         MAL_PERF_COUNT(string_iterator_nodes);
@@ -409,6 +422,12 @@ bool mal_string_iterator_next(MalStringIterator *iterator, MalStringSegment *seg
             continue;
         }
         *segment = mal_string_leaf_segment(string, part.offset, part.length);
+        if (iterator->owner != nullptr) {
+            if (iterator->current.string != nullptr) {
+                mal_gc_write_barrier(mal_value_from_string((MalString *) iterator->current.string));
+            }
+            mal_gc_card(iterator->owner, mal_value_from_string((MalString *) part.string));
+        }
         iterator->current = part;
         return true;
     }
@@ -419,6 +438,61 @@ void mal_string_iterator_dispose(MalStringIterator *iterator) {
     iterator->stack = iterator->inline_stack;
     iterator->count = 0;
     iterator->capacity = sizeof(iterator->inline_stack) / sizeof(iterator->inline_stack[0]);
+}
+
+MalStringCursor *mal_string_cursor_new(MalHeap *heap, const MalString *string) {
+    MalStringCursor *cursor = mal_heap_alloc(heap, sizeof(*cursor), MAL_HEAP_STRING_CURSOR);
+    mal_heap_header_init(&cursor->header, MAL_HEAP_STRING_CURSOR);
+    cursor->iterator = mal_heap_alloc_raw_profiled(heap, sizeof(*cursor->iterator),
+        MAL_PROFILE_ALLOCATION_FAMILY_ITERATOR);
+    mal_string_iterator_init(cursor->iterator, string, 0, string->length);
+    cursor->iterator->owner = &cursor->header;
+    cursor->local = 0;
+    cursor->position = 0;
+    cursor->length = string->length;
+    cursor->scratch = nullptr;
+    mal_gc_card(&cursor->header, mal_value_from_string((MalString *) string));
+    return cursor;
+}
+
+bool mal_string_cursor_segment(MalStringCursor *cursor, MalStringSegment *segment) {
+    if (cursor->iterator == nullptr || cursor->position == cursor->length) return false;
+    MalStringIterator *iterator = cursor->iterator;
+    if (cursor->local == iterator->current.length) {
+        if (!mal_string_iterator_next(iterator, segment)) abort();
+        cursor->local = 0;
+    }
+    // Only identities survive reentry: materialization can replace a leaf's payload.
+    *segment = mal_string_leaf_segment(iterator->current.string,
+        iterator->current.offset + cursor->local, iterator->current.length - cursor->local);
+    return true;
+}
+
+void mal_string_cursor_consume(MalStringCursor *cursor, usize count) {
+    if (cursor->iterator == nullptr ||
+        count > cursor->iterator->current.length - cursor->local) abort();
+    cursor->local += count;
+    cursor->position += count;
+}
+
+void mal_string_cursor_dispose(MalStringCursor *cursor) {
+    MalHeap *heap = mal_gc_current_heap();
+    if (cursor->iterator != nullptr) {
+        MalStringIterator *iterator = cursor->iterator;
+        if (iterator->owner != nullptr) {
+            if (iterator->current.string != nullptr) {
+                mal_gc_write_barrier(mal_value_from_string((MalString *) iterator->current.string));
+            }
+            for (usize i = 0; i < iterator->count; i++) {
+                mal_gc_write_barrier(mal_value_from_string((MalString *) iterator->stack[i].string));
+            }
+        }
+        if (iterator->stack != iterator->inline_stack) gc_free_raw(heap, iterator->stack);
+        gc_free_raw(heap, iterator);
+        cursor->iterator = nullptr;
+    }
+    gc_free_raw(heap, cursor->scratch);
+    cursor->scratch = nullptr;
 }
 
 static void mal_string_copy_segment_to(const MalStringSegment *segment, c16 *destination) {
@@ -663,12 +737,19 @@ static usize mal_string_balanced_cut(
     return midpoint;
 }
 
+static bool mal_string_is_balance_terminal(const MalString *string) {
+    return string->storage != MAL_STRING_STORAGE_CONS ||
+        (string->length <= 2 * MAL_STRING_INLINE_LATIN1_CODE_UNITS &&
+            string->left->storage != MAL_STRING_STORAGE_CONS &&
+            string->right->storage != MAL_STRING_STORAGE_CONS);
+}
+
 static MalString *mal_string_join(MalHeap *heap, MalString *left, MalString *right) {
     usize length = left->length + right->length;
     usize maximum_child = length - (length + 3) / 4;
-    // Only flat leaves may exceed three quarters of their parent. Every edge
-    // into a cons therefore shrinks the remaining length, without height bits.
-    if (left->storage == MAL_STRING_STORAGE_CONS && left->length > maximum_child) {
+    // A short cons of two leaves gets one extra terminal edge, avoiding a throwaway
+    // rotation on its next append. All deeper cons edges still shrink by 1/4.
+    if (left->length > maximum_child && !mal_string_is_balance_terminal(left)) {
         if (left->left->storage != MAL_STRING_STORAGE_CONS &&
             left->left->length > maximum_child) {
             return mal_string_new_cons_node(heap, left->left,
@@ -681,7 +762,7 @@ static MalString *mal_string_join(MalHeap *heap, MalString *left, MalString *rig
         mal_string_split(heap, left, cut, &prefix, &middle);
         return mal_string_new_cons_node(heap, prefix, mal_string_join(heap, middle, right));
     }
-    if (right->storage == MAL_STRING_STORAGE_CONS && right->length > maximum_child) {
+    if (right->length > maximum_child && !mal_string_is_balance_terminal(right)) {
         if (right->right->storage != MAL_STRING_STORAGE_CONS &&
             right->right->length > maximum_child) {
             return mal_string_new_cons_node(heap,
@@ -722,9 +803,11 @@ bool mal_string_new_cons_checked(MalHeap *heap, MalString *left, MalString *righ
     }
 
     MalString *string = mal_string_join(heap, left, right);
-    if (left->hash_valid && string->left != left) {
-        // Rebalancing changes the physical prefix edge. Keep append-and-hash
-        // incremental by continuing the original prefix before it is detached.
+    if (left->hash_valid) {
+        // Concatenation preserves the semantic left prefix even when balancing
+        // rewrites the physical tree. Carry its final FNV state forward now so
+        // the first property/Map lookup of the result does not re-enter the
+        // generic hash walk just to discover the same cached prefix.
         string->hash = mal_string_hash_continue(left->hash, right);
         string->hash_valid = true;
     }
@@ -949,10 +1032,12 @@ const c16 *mal_string_flatten(MalString *mutable) {
 static u64 mal_string_hash_segment(u64 hash, const MalStringSegment *segment) {
     MAL_PERF_ADD(string_hash_code_units, segment->length);
     if (segment->latin1) {
+        // UTF-16 FNV hashes a zero high byte after each Latin-1 unit. XORing
+        // zero is a no-op, so fold the two modular prime multiplies into one.
+        const u64 fnv_prime_squared = 0x366000002e329ULL;
         for (usize i = 0; i < segment->length; i++) {
             hash ^= segment->latin1_units[i];
-            hash *= 0x100000001b3;
-            hash *= 0x100000001b3;
+            hash *= fnv_prime_squared;
         }
     } else {
         for (usize i = 0; i < segment->length; i++) {
@@ -967,16 +1052,21 @@ static u64 mal_string_hash_segment(u64 hash, const MalStringSegment *segment) {
 }
 
 static u64 mal_string_hash_continue(u64 hash, const MalString *string) {
-    MalStringSegment segment;
-    if (mal_string_try_get_segment(string, 0, string->length, &segment)) {
-        hash = mal_string_hash_segment(hash, &segment);
-    } else {
-        MalStringIterator iterator;
-        mal_string_iterator_init(&iterator, string, 0, string->length);
-        while (mal_string_iterator_next(&iterator, &segment)) hash = mal_string_hash_segment(hash, &segment);
-        mal_string_iterator_dispose(&iterator);
+    // Hashing cannot reenter or collect. Rope balance bounds the left recursion;
+    // keeping the right walk iterative avoids GC-owned cursor bookkeeping.
+    while (string->storage == MAL_STRING_STORAGE_CONS) {
+        hash = mal_string_hash_continue(hash, string->left);
+        string = string->right;
     }
-    return hash;
+    usize length = string->length;
+    if (length == 0) return hash;
+    usize offset = 0;
+    if (string->storage == MAL_STRING_STORAGE_DEPENDENT) {
+        offset = string->slice_offset;
+        string = string->parent;
+    }
+    MalStringSegment segment = mal_string_leaf_segment(string, offset, length);
+    return mal_string_hash_segment(hash, &segment);
 }
 
 u64 mal_string_hash_slow(const MalString *string) {

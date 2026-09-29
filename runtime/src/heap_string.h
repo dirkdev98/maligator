@@ -99,7 +99,8 @@ MalString *mal_string_new_slice(MalHeap *heap, MalString *parent, usize offset, 
 
 /**
  * Allocate a weight-balanced lazy concatenation after checking its combined
- * UTF-16 length. Every cons child occupies at most three quarters of its parent.
+ * UTF-16 length. Cons children occupy at most three quarters of their parent,
+ * except a short cons of two non-cons children, which adds one terminal height edge.
  * Returns false without allocating when the engine string limit would be exceeded.
  */
 bool mal_string_new_cons_checked(MalHeap *heap, MalString *left, MalString *right, MalString **out);
@@ -142,13 +143,20 @@ static inline const c16 *mal_string_code_units(const MalString *string) {
     return mal_string_flatten((MalString *) string);
 }
 
+/** Read an in-bounds unit from a known flat leaf, reacquiring its current payload. */
+static inline c16 mal_string_flat_code_unit_at(const MalString *string, usize index) {
+    if (string->latin1) {
+        return string->storage == MAL_STRING_STORAGE_INLINE
+            ? string->inline_latin1_units[index] : string->latin1_units[index];
+    }
+    return string->storage == MAL_STRING_STORAGE_INLINE
+        ? string->inline_code_units[index] : string->code_units[index];
+}
+
 /** Read one in-bounds UTF-16 unit without allocating, widening, or flattening. */
 static inline c16 mal_string_code_unit_at(MalString *string, usize index) {
-    for (;;) {
-        if (string->storage == MAL_STRING_STORAGE_DEPENDENT) {
-            index += string->slice_offset;
-            string = string->parent;
-        } else if (string->storage == MAL_STRING_STORAGE_CONS) {
+    if (string->storage >= MAL_STRING_STORAGE_DEPENDENT) {
+        while (string->storage == MAL_STRING_STORAGE_CONS) {
             MalString *left = string->left;
             if (index < left->length) {
                 string = left;
@@ -156,14 +164,14 @@ static inline c16 mal_string_code_unit_at(MalString *string, usize index) {
                 index -= left->length;
                 string = string->right;
             }
-        } else if (string->latin1) {
-            return string->storage == MAL_STRING_STORAGE_INLINE
-                ? string->inline_latin1_units[index] : string->latin1_units[index];
-        } else {
-            return string->storage == MAL_STRING_STORAGE_INLINE
-                ? string->inline_code_units[index] : string->code_units[index];
+        }
+        // Dependent strings retain a flat parent, including after materialization.
+        if (string->storage == MAL_STRING_STORAGE_DEPENDENT) {
+            index += string->slice_offset;
+            string = string->parent;
         }
     }
+    return mal_string_flat_code_unit_at(string, index);
 }
 
 typedef struct MalStringSegment {
@@ -199,6 +207,8 @@ typedef struct MalStringIterator {
     usize count;
     usize capacity;
     bool reverse;
+    /** Non-null when a heap cursor traces this frontier and owns its RAW storage. */
+    MalHeapHeader *owner;
     /** Flat owner of the last returned segment; valid until next/dispose. */
     MalStringIteratorPart current;
     MalStringIteratorPart inline_stack[16];
@@ -206,7 +216,7 @@ typedef struct MalStringIterator {
 
 /** Segments borrow leaf storage. Root the input across GC; do not retain an
  * iterator or segment across JS reentry or a UTF-16 bridge that may materialize
- * it. Traversal never collects, mutates strings, or allocates beyond malloc scratch. */
+ * it. Traversal never collects or mutates strings; borrowed scratch uses malloc. */
 void mal_string_iterator_init(
     MalStringIterator *iterator, const MalString *string, usize offset, usize length);
 /** Returns segments right to left; each segment retains its forward unit order. */
@@ -214,6 +224,25 @@ void mal_string_iterator_init_reverse(
     MalStringIterator *iterator, const MalString *string, usize offset, usize length);
 bool mal_string_iterator_next(MalStringIterator *iterator, MalStringSegment *segment);
 void mal_string_iterator_dispose(MalStringIterator *iterator);
+
+/** Internal heap cell; never exposed as a JavaScript object. Pending subtree
+ * identities and the current leaf remain traced even if reentry flattens ancestors. */
+typedef struct MalStringCursor {
+    MalHeapHeader header;
+    MalStringIterator *iterator;
+    usize local;
+    usize position;
+    usize length;
+    /** Optional pointer-free RAW scratch, owned until exhaustion or finalization. */
+    void *scratch;
+} MalStringCursor;
+
+MalStringCursor *mal_string_cursor_new(MalHeap *heap, const MalString *string);
+/** Reacquire leaf storage; consume at most segment.length units before another call. */
+bool mal_string_cursor_segment(MalStringCursor *cursor, MalStringSegment *segment);
+void mal_string_cursor_consume(MalStringCursor *cursor, usize count);
+/** Release exhausted state. Also safe during GC finalization after clearing owner. */
+void mal_string_cursor_dispose(MalStringCursor *cursor);
 
 static inline c16 mal_string_segment_code_unit_at(const MalStringSegment *segment, usize index) {
     return segment->latin1 ? segment->latin1_units[index] : segment->utf16_units[index];

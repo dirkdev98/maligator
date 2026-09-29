@@ -221,7 +221,9 @@ typedef struct {
 
 /**
  * Start a closed split cursor. A false result is side-effect-free and leaves the
- * ordinary String#split call as the complete fallback.
+ * ordinary String#split call as the complete fallback. On success, both output
+ * values must remain rooted across reentry. The opaque traversal root retains the
+ * separator for flat input, or owns a rope frontier and copied search pattern.
  */
 bool mal_builtin_string_split_cursor_init(
     MalVm *vm,
@@ -229,7 +231,7 @@ bool mal_builtin_string_split_cursor_init(
     MalValue receiver,
     MalValue separator,
     MalValue *subject_out,
-    MalValue *separator_out,
+    MalValue *traversal_out,
     MalStringSplitCursor *cursor_out
 );
 
@@ -239,14 +241,14 @@ bool mal_builtin_string_split_cursor_init_locked(
     MalValue receiver,
     MalValue separator,
     MalValue *subject_out,
-    MalValue *separator_out,
+    MalValue *traversal_out,
     MalStringSplitCursor *cursor_out
 );
 
 /** Publish the next split element as an immutable subject span. */
 bool mal_builtin_string_split_cursor_next(
     MalValue subject,
-    MalValue separator,
+    MalValue traversal,
     MalStringSplitCursor *cursor,
     usize *start_out,
     usize *end_out

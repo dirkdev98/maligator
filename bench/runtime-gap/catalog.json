@@ -813,6 +813,82 @@
 			"controls": []
 		},
 		{
+			"id": "string-short-concat",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "short string concatenation",
+			"category": "memory-layout-usage",
+			"mechanisms": ["string-allocation", "string-concatenation"],
+			"inputShape": "18–23-unit dynamic template keys through 17–20-unit intermediates",
+			"unit": "concatenation chain",
+			"sourceSeam": "runtime/src/heap_string.c",
+			"controls": [
+				"string-keys",
+				"string-concatenation",
+				"string-append-hash",
+				"string-rope-access"
+			],
+			"fixture": "cases/string-short-concat.mjs"
+		},
+		{
+			"id": "text-pipeline-phases",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "complete mixed-text pipeline phase attribution",
+			"category": "api-builtins",
+			"mechanisms": [
+				"string-allocation",
+				"string-traversal",
+				"property-lookup",
+				"json-parse",
+				"json-stringify"
+			],
+			"inputShape": "32 mixed records and 64 path slices; optional in-pipeline phase boundaries and selectable encoding/escape controls",
+			"unit": "64-record text pipeline batch",
+			"sourceSeam": "runtime/src/heap_string.c",
+			"controls": ["text-pipeline-mixed", "text-pipeline-latin1"],
+			"fixture": "cases/text-pipeline-phases.mjs"
+		},
+		{
+			"id": "property-query-repeated-missing",
+			"group": "primitive",
+			"suite": "runtime",
+			"owner": "bounded absent property query caching",
+			"category": "api-builtins",
+			"mechanisms": ["runtime-collections-properties"],
+			"inputShape": "four dynamically generated absent names never stored",
+			"unit": "absent property query",
+			"sourceSeam": "runtime/src/vm_ops.c",
+			"controls": ["property-query-unique-missing", "property-query-existing-atom"],
+			"fixture": "cases/property-query-repeated-missing.mjs"
+		},
+		{
+			"id": "property-query-unique-missing",
+			"group": "primitive",
+			"suite": "runtime",
+			"owner": "bounded absent property query caching",
+			"category": "api-builtins",
+			"mechanisms": ["runtime-collections-properties"],
+			"inputShape": "180000 fresh absent names",
+			"unit": "absent property query",
+			"sourceSeam": "runtime/src/vm_ops.c",
+			"controls": [],
+			"fixture": "cases/property-query-unique-missing.mjs"
+		},
+		{
+			"id": "property-query-existing-atom",
+			"group": "primitive",
+			"suite": "runtime",
+			"owner": "bounded absent property query caching",
+			"category": "api-builtins",
+			"mechanisms": ["runtime-collections-properties"],
+			"inputShape": "four dynamic names retained as stored keys on another object before repeated absent queries",
+			"unit": "absent property query",
+			"sourceSeam": "runtime/src/vm_ops.c",
+			"controls": [],
+			"fixture": "cases/property-query-existing-atom.mjs"
+		},
+		{
 			"id": "string-concatenation",
 			"group": "runtime",
 			"suite": "runtime",
@@ -2292,6 +2368,58 @@
 			"sourceSeam": "runtime/src/heap_string.c",
 			"controls": ["string-search", "text-pipeline-mixed"],
 			"fixture": "cases/string-rope-access.mjs"
+		},
+		{
+			"id": "string-rope-iteration",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "string iteration over prepared strings",
+			"category": "memory-layout-usage",
+			"mechanisms": ["string-traversal"],
+			"inputShape": "1024 prepared 17/20-unit runtime leaves with UTF-16 units and surrogate pairs, appended before timing; for-of hashes every code unit",
+			"unit": "full string iteration",
+			"sourceSeam": "runtime/src/builtin_iterator.c",
+			"controls": ["string-flat-iteration", "string-rope-access", "text-pipeline-mixed"],
+			"fixture": "cases/string-rope-iteration.mjs"
+		},
+		{
+			"id": "string-flat-iteration",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "string iteration over prepared strings",
+			"category": "memory-layout-usage",
+			"mechanisms": ["string-traversal"],
+			"inputShape": "same 1024 prepared 17/20-unit leaves as the rope control, flattened by Array.join before timing; for-of hashes every code unit",
+			"unit": "full string iteration",
+			"sourceSeam": "runtime/src/builtin_iterator.c",
+			"controls": ["string-rope-iteration", "string-rope-access", "text-pipeline-mixed"],
+			"fixture": "cases/string-flat-iteration.mjs"
+		},
+		{
+			"id": "string-rope-split-cursor",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "projected split iteration over prepared strings",
+			"category": "memory-layout-usage",
+			"mechanisms": ["string-traversal", "string-search", "string-allocation"],
+			"inputShape": "1024 varying-length padded fields with pipe separators prepared by repeated concatenation before timing, with the same contents as the flat control; split/trim hashes only field lengths and may materialize the shared input during warmup",
+			"unit": "full split and trim traversal",
+			"sourceSeam": "runtime/src/builtin_string.c",
+			"controls": ["string-flat-split-cursor", "string-split", "string-rope-access"],
+			"fixture": "cases/string-rope-split-cursor.mjs"
+		},
+		{
+			"id": "string-flat-split-cursor",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "projected split iteration over prepared strings",
+			"category": "memory-layout-usage",
+			"mechanisms": ["string-traversal", "string-search", "string-allocation"],
+			"inputShape": "same 1024 prepared padded fields and pipe separators as the rope control, flattened by Array.join before timing; split/trim loop hashes only field lengths",
+			"unit": "full split and trim traversal",
+			"sourceSeam": "runtime/src/builtin_string.c",
+			"controls": ["string-rope-split-cursor", "string-split", "string-rope-access"],
+			"fixture": "cases/string-flat-split-cursor.mjs"
 		},
 		{
 			"id": "string-append-hash",

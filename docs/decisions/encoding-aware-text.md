@@ -27,10 +27,12 @@ Latin-1 directly. A caller that proves owned UTF-16 content contains a wider uni
 can use `mal_string_new_utf16_owned` without a redundant narrowing scan. Emitted
 and wire-loaded UTF-16 literals remain valid external strings.
 
-Cons joins preserve a weight bound: a cons child occupies at most three quarters
-of its parent's code units. A heavier flat/dependent leaf is allowed because it
-terminates rope traversal. Height is logarithmic in logical length without adding
-a height field. Joins reuse existing boundaries in the middle half of a subtree
+Cons joins preserve a weight bound: a nonterminal cons child occupies at most
+three quarters of its parent's code units. Flat/dependent leaves and a cons of at
+most 32 units with two flat/dependent children are terminal for balancing. The
+short terminal cons adds at most one edge, avoiding reconstruction of tiny
+intermediates without copying their content. Height remains logarithmic in
+logical length without adding a height field. Joins reuse existing boundaries in the middle half of a subtree
 and rebuild included paths; they split a flat leaf only when necessary. Existing
 strings and shared subtrees keep their identities. Later materialization can
 remove edges without invalidating the bound.
@@ -60,10 +62,16 @@ borrow payload storage, and pending iterator entries borrow descriptor identitie
 Keep the source graph rooted during use. Dispose or reacquire traversal state
 before JavaScript reentry or a bridge that could materialize that graph. Rooting
 a mutable source alone does not keep its former children alive after flattening.
-A separately traced leaf identity can survive reentry when consumers obtain its
-payload afresh. The JavaScript string iterator follows that leaf-cache contract;
-it still reseeks from the source root at leaf boundaries. A traced pending-node
-stack remains a separate improvement for linear traversal across reentry.
+A separately traced identity can survive reentry when consumers obtain its
+payload afresh. `MalStringCursor` owns a GC-traced current leaf and pending-node
+frontier, with native scratch finalized on exhaustion or collection. Persistent
+frontier storage and search patterns use owner-held RAW buffers, so abandoned
+iteration contributes its full allocation cost to GC pacing and iterator profiles.
+Frontier updates publish removed edges through SATB and new edges through the cursor's
+minor-GC card. The cursor itself remains on the mutator's tracing path. JavaScript
+string iterators use it lazily for ropes; flat strings retain direct unit access.
+Sequential traversal visits consumed units and pending nodes once even if a
+callback flattens the source and disconnects its former children.
 
 `mal_string_code_units` is an explicit contiguous UTF-16 bridge. It can allocate
 and widen a compact leaf or flatten a rope; a dependent slice resolves the bridge
@@ -124,8 +132,20 @@ positions are UTF-16 units, including across encoding and leaf boundaries.
 Split and replacement can keep nonoverlapping search and copy cursors across
 allocation-only work. Functional `replaceAll` collects offsets and disposes its
 borrowed cursor before invoking JavaScript. Replacement-template literal runs
-also stream sequentially. Compiler-projected split iteration retains offsets,
-rather than borrowed traversal state, across arbitrary JavaScript bodies.
+also stream sequentially. Compiler-projected split iteration on rope input roots
+a `MalStringCursor` across arbitrary JavaScript bodies. Its owned pattern and KMP
+prefix table are prepared once when a match is possible; the frontier resumes
+the haystack without a new root descent or pattern setup after each yield.
+Initially flat or dependent inputs retain the allocation-free offset path and
+cannot gain rope ancestry through materialization. An overlong separator also
+uses that path without pattern setup or traversal. Exhaustion frees native
+scratch, and GC handles abandoned cursors after abrupt loop exits. No borrowed
+payload pointer survives a JavaScript body.
+
+Projected split/trim consumers read field boundaries directly for flat and
+dependent subjects, preserving compact width. Rope subjects still use the
+contiguous UTF-16 bridge while materializing fields; the first trim may flatten
+the shared source. A fused nonescaping trim-length consumer remains follow-up work.
 
 Latin-1 well-formedness and no-op trim preserve compact inputs. ASCII case changes
 use compact output, with identity results when unchanged; Unicode/locale fallbacks
@@ -213,16 +233,23 @@ its cache growth, including width promotion, fits. Declining optional caching
 causes neither output discard nor generic fallback. Prototype proofs use bounded
 rotating eviction, so eligibility may revalidate a prototype chain.
 
-Replacers, property lists, indentation, accessors, proxies, holes, wrappers,
-`toJSON`, raw JSON, and other unsupported cases take the generic path. An unsupported
-descendant discards speculative output before generic traversal invokes user code.
-Only earlier pure work can repeat. Caches stay within one invocation, avoiding
-cross-call shape/prototype invalidation state. Quoting scans safe runs in both
+Replacers, property lists, and indentation select the generic path from the start.
+When plain traversal reaches an unsupported descendant, it rolls back only the
+current member's uncommitted separator/key and resumes generic serialization on
+the active stack. Completed output is retained. Before invoking user code it roots
+all active holders and remaining snapshotted keys, preserves each original array
+length, and transfers active-path cycle membership. Subsequent properties use
+observable Get and preparation; shape slots and prototype proofs are no longer
+reused. A callback can mutate later properties without changing the saved key
+order or causing earlier hooks to run again. Generic depth limits still apply to
+continuation. Caches stay within one invocation, avoiding cross-call
+shape/prototype invalidation state. Quoting scans safe runs in both
 encodings in bulk. UTF-16 scanning stops before surrogates so the existing pair
 handling can span leaves; lone surrogates are escaped. A short scalar prefix
-preserves the short-run and dense-escape path. Cache limits and bulk quoting do
-not eliminate the pure work discarded by a late unsupported descendant or
-establish the cause of an aggregate mixed-pipeline timing change.
+preserves the short-run and dense-escape path. The complete-pipeline phase profiler
+measures parsing, lookup, construction, serialization, and checksum intervals,
+with separate sampler and marker overhead controls; quote counters alone do not
+attribute an aggregate timing change.
 
 ## Verification
 
@@ -232,7 +259,12 @@ parse–lookup–append–serialize pipeline. [Rope tests](../../tests/native/st
 cover weight bounds, both growth directions, mixed leaves, forward/reverse ranges,
 hashing, shape collisions, and GC. [Search tests](../../tests/native/string-search-followups.test.ts)
 cover adversarial patterns, callback reentry, and active comparison/traversal
-counts. [Builder](../../tests/native/text-buffer.test.ts),
+counts. [Cursor tests](../../tests/native/string-cursor-frontier.test.ts) cover
+detached frontier nodes, minor roots, impossible delimiters, and prefix overlap.
+[Late JSON tests](../../tests/native/json-late-fallback.test.ts) cover retained
+output and allocation work; [JSON callback tests](../../tests/native/json-stringify-scratch.test.ts)
+cover mutation and callback order through continuation.
+[Builder](../../tests/native/text-buffer.test.ts),
 [encoding boundary](../../tests/native/utf8-string-storage.test.ts),
 [compact consumer](../../tests/native/compact-string-boundaries.test.ts),
 [property query](../../tests/native/transient-property-query.test.ts),

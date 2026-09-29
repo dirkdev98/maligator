@@ -97,6 +97,36 @@ static bool search_matches_reference(MalVm *vm) {
     return true;
 }
 
+static bool compact_single_unit_search(MalVm *vm) {
+    c16 units[256];
+    for (usize i = 0; i < countof(units); i++) units[i] = (c16) ('a' + i % 23);
+    units[23] = 0xff;
+    units[53] = 0;
+    units[83] = '|';
+    MalString *parent = mal_string_new_copy(&vm->heap, units, countof(units));
+    MalString *strings[] = {
+        mal_string_new_copy(&vm->heap, units + 16, 128),
+        mal_string_new_slice(&vm->heap, parent, 16, 128),
+    };
+    CHECK(strings[0]->latin1 && strings[1]->latin1);
+    CHECK(strings[1]->storage == MAL_STRING_STORAGE_DEPENDENT);
+    const c16 needles[] = {'a', 0xff, 0, '|', 0x100, 0xd800};
+    const f64 starts[] = {-1, 0, 7, 24, 127, 128, 200};
+    for (usize n = 0; n < countof(needles); n++) {
+        MalString *needle = mal_string_new_copy(&vm->heap, needles + n, 1);
+        for (usize s = 0; s < countof(strings); s++) {
+            for (usize p = 0; p < countof(starts); p++) {
+                i32 expected = reference_find(units + 16, 128, needles + n, 1, starts[p], false);
+                MalValue actual = mal_builtin_string_search_strings(
+                    strings[s], needle, starts[p], MAL_STRING_SEARCH_INDEX_OF);
+                CHECK(mal_value_to_i32(actual) == expected);
+            }
+        }
+    }
+    CHECK(strings[0]->latin1 && strings[1]->latin1 && parent->latin1);
+    return true;
+}
+
 static bool long_prefix_work_is_bounded(MalVm *vm) {
     for (usize length = 4096; length <= 65536; length *= 4) {
         usize needle_length = length / 4;
@@ -407,7 +437,7 @@ int main(void) {
 #endif
     MalVm vm;
     mal_vm_init(&vm, &mal_runtime_image);
-    bool passed = search_matches_reference(&vm)
+    bool passed = search_matches_reference(&vm) && compact_single_unit_search(&vm)
         && long_prefix_work_is_bounded(&vm)
         && split_and_replace_keep_sequential_state(&vm)
         && compact_builtin_outputs_preserve_sources(&vm)

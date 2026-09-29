@@ -41,8 +41,14 @@ static bool inspect_rope(const MalString *string, usize *height, usize *nodes) {
     usize maximum_child = string->length - (string->length + 3) / 4;
     CHECK(string->left->length + string->right->length == string->length);
     CHECK(string->left->length > 0 && string->right->length > 0);
-    CHECK(string->left->storage != MAL_STRING_STORAGE_CONS || string->left->length <= maximum_child);
-    CHECK(string->right->storage != MAL_STRING_STORAGE_CONS || string->right->length <= maximum_child);
+    const MalString *children[] = {string->left, string->right};
+    for (usize i = 0; i < countof(children); i++) {
+        const MalString *child = children[i];
+        if (child->storage != MAL_STRING_STORAGE_CONS || child->length <= maximum_child) continue;
+        CHECK(child->length <= 2 * MAL_STRING_INLINE_LATIN1_CODE_UNITS);
+        CHECK(child->left->storage != MAL_STRING_STORAGE_CONS);
+        CHECK(child->right->storage != MAL_STRING_STORAGE_CONS);
+    }
     usize left_height, right_height;
     CHECK(inspect_rope(string->left, &left_height, nodes));
     CHECK(inspect_rope(string->right, &right_height, nodes));
@@ -87,6 +93,98 @@ static c16 fixture_unit(usize index) {
     const c16 special[] = {0, 0xff, 0x100, 0xd800, 0xdc00, 0xdfff};
     if (index % 23 < countof(special)) return special[index % 23];
     return (c16) ('a' + index % 26);
+}
+
+static bool short_chains_reuse_their_intermediate(MalVm *vm) {
+    for (usize encoding = 0; encoding < 3; encoding++) {
+        for (usize prefix_length = 10; prefix_length <= 13; prefix_length++) {
+            for (usize suffix_length = 1; suffix_length <= 3; suffix_length++) {
+                for (usize prepend = 0; prepend < 2; prepend++) {
+                    c16 prefix[13], middle[7], suffix[3], expected[23];
+                    for (usize i = 0; i < prefix_length; i++) prefix[i] = (c16) ('a' + i);
+                    for (usize i = 0; i < countof(middle); i++) middle[i] = (c16) ('k' + i);
+                    for (usize i = 0; i < suffix_length; i++) suffix[i] = (c16) ('0' + i);
+                    if (encoding == 1) prefix[2] = 0xff;
+                    if (encoding == 2) {
+                        prefix[2] = 0x100;
+                        middle[6] = 0xd800;
+                        suffix[0] = 0xdc00;
+                    }
+                    MalString *a = mal_string_new_copy(&vm->heap, prefix, prefix_length);
+                    MalString *b = mal_string_new_copy(&vm->heap, middle, countof(middle));
+                    MalString *c = mal_string_new_copy(&vm->heap, suffix, suffix_length);
+                    usize length = prefix_length + countof(middle) + suffix_length;
+                    MalString *intermediate, *result;
+                    u64 allocations_before = mal_perf_stats.string_allocations;
+                    u64 cons_before = mal_perf_stats.string_cons_allocations;
+                    if (prepend) {
+                        memcpy(expected, suffix, suffix_length * sizeof(c16));
+                        memcpy(expected + suffix_length, middle, sizeof(middle));
+                        memcpy(expected + suffix_length + countof(middle), prefix, prefix_length * sizeof(c16));
+                        CHECK(mal_string_new_cons_checked(&vm->heap, b, a, &intermediate));
+                        CHECK(mal_string_new_cons_checked(&vm->heap, c, intermediate, &result));
+                    } else {
+                        memcpy(expected, prefix, prefix_length * sizeof(c16));
+                        memcpy(expected + prefix_length, middle, sizeof(middle));
+                        memcpy(expected + prefix_length + countof(middle), suffix, suffix_length * sizeof(c16));
+                        CHECK(mal_string_new_cons_checked(&vm->heap, a, b, &intermediate));
+                        CHECK(mal_string_hash(intermediate) == reference_hash(expected, intermediate->length));
+                        CHECK(mal_string_new_cons_checked(&vm->heap, intermediate, c, &result));
+                    }
+                    if (mal_perf_stats_enabled) {
+                        CHECK(mal_perf_stats.string_allocations - allocations_before == 2);
+                        CHECK(mal_perf_stats.string_cons_allocations - cons_before == 2);
+                    }
+                    usize height, nodes = 0;
+                    CHECK(inspect_rope(result, &height, &nodes));
+                    CHECK(height == 2);
+                    CHECK(check_range(result, expected, 0, length));
+                    CHECK(mal_string_hash(result) == reference_hash(expected, length));
+                    MalValue roots[] = {mal_value_from_string(result), mal_value_from_string(intermediate)};
+                    MalRootSpan span;
+                    mal_gc_root(&span, roots, countof(roots));
+                    mal_gc_collect(vm);
+                    CHECK(check_range(result, expected, 0, length));
+                    // A retained short subtree may be materialized independently.
+                    mal_string_code_units(intermediate);
+                    CHECK(check_range(result, expected, 0, length));
+                    CHECK(mal_string_hash(result) == reference_hash(expected, length));
+                    mal_gc_unroot(&span);
+                }
+            }
+        }
+    }
+    return true;
+}
+
+static bool unit_appends_keep_bounded_height(MalVm *vm) {
+    enum { LENGTH = 4096 };
+    c16 expected[LENGTH];
+    for (usize encoding = 0; encoding < 3; encoding++) {
+        for (usize prepend = 0; prepend < 2; prepend++) {
+            MalString *rope = nullptr;
+            for (usize i = 0; i < LENGTH; i++) {
+                c16 unit = encoding == 2 ? fixture_unit(i) : (c16) (encoding == 1 ? 0x80 + i % 128 : 'a' + i % 26);
+                expected[prepend ? LENGTH - i - 1 : i] = unit;
+                MalString *piece = mal_string_new_copy(&vm->heap, &unit, 1);
+                if (rope == nullptr) rope = piece;
+                else if (prepend) CHECK(mal_string_new_cons_checked(&vm->heap, piece, rope, &rope));
+                else CHECK(mal_string_new_cons_checked(&vm->heap, rope, piece, &rope));
+            }
+            usize height, nodes = 0;
+            CHECK(inspect_rope(rope, &height, &nodes));
+            CHECK(nodes < LENGTH * 2);
+            CHECK(check_range(rope, expected, 0, LENGTH));
+            CHECK(mal_string_hash(rope) == reference_hash(expected, LENGTH));
+            MalValue rooted = mal_value_from_string(rope);
+            MalRootSpan span;
+            mal_gc_root(&span, &rooted, 1);
+            mal_gc_collect(vm);
+            CHECK(check_range(rope, expected, 0, LENGTH));
+            mal_gc_unroot(&span);
+        }
+    }
+    return true;
 }
 
 static bool traversal_and_balancing(MalVm *vm, usize leaves, usize construction) {
@@ -324,7 +422,8 @@ int main(void) {
 #endif
     MalVm vm;
     mal_vm_init(&vm, &mal_runtime_image);
-    bool passed = true;
+    bool passed = short_chains_reuse_their_intermediate(&vm)
+        && unit_appends_keep_bounded_height(&vm);
     for (usize construction = 0; construction < 4 && passed; construction++) {
         passed = traversal_and_balancing(&vm, 257, construction)
             && traversal_and_balancing(&vm, 1024, construction);

@@ -1163,6 +1163,16 @@ static void mal_gc_trace_cell(MalHeapHeader *cell) {
             }
             return;
         }
+        case MAL_HEAP_STRING_CURSOR: {
+            MalStringIterator *iterator = ((MalStringCursor *) cell)->iterator;
+            if (iterator != nullptr) {
+                mal_gc_mark_string((MalString *) iterator->current.string);
+                for (usize i = 0; i < iterator->count; i++) {
+                    mal_gc_mark_string((MalString *) iterator->stack[i].string);
+                }
+            }
+            return;
+        }
         case MAL_HEAP_BIGINT:
             return; // leaves (code_units / digits are non-pointer payload)
         case MAL_HEAP_SYMBOL:
@@ -1287,8 +1297,8 @@ static void mal_gc_trace_cell(MalHeapHeader *cell) {
         case MAL_HEAP_ITERATOR_OBJECT: {
             MalIteratorObject *iterator = (MalIteratorObject *) cell;
             mal_gc_mark_value(iterator->target);
-            if (iterator->kind == MAL_ITERATOR_STRING_VALUES && iterator->string_leaf != nullptr) {
-                mal_gc_mark_value(mal_value_from_string(iterator->string_leaf));
+            if (iterator->kind == MAL_ITERATOR_STRING_VALUES && iterator->string_cursor != nullptr) {
+                mal_gc_mark_value(mal_value_from_heap(&iterator->string_cursor->header));
             }
             break;
         }
@@ -1688,6 +1698,12 @@ static void mal_gc_finalize_cell(MalHeapHeader *cell) {
                 string->code_units = nullptr;
             }
             // External, dependent, and cons strings do not own code-unit buffers.
+            return;
+        }
+        case MAL_HEAP_STRING_CURSOR: {
+            MalStringCursor *cursor = (MalStringCursor *) cell;
+            if (cursor->iterator != nullptr) cursor->iterator->owner = nullptr;
+            mal_string_cursor_dispose(cursor);
             return;
         }
         case MAL_HEAP_SYMBOL:

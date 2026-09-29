@@ -17,27 +17,30 @@ rechecks after cache eviction), and Q cached escaped-key units. Hash-table costs
 are expected bounds. User callbacks and platform number conversion have their own
 costs.
 
-| Operation                         | Current cost and qualification                                                                                                                                                                                                                                               | Owning implementation                                                                                                           |
-| --------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
-| Concatenation                     | Inline results copy a bounded number of units. Larger joins reuse subtrees and rebuild affected paths; every cons child has at most three quarters of its parent's units, giving logarithmic height without descriptor metadata. Reconstruction can allocate multiple nodes. | [String construction](../runtime/src/heap_string.c)                                                                             |
-| Indexing and traversal            | Indexed access is O(H). Forward/reverse segment iteration consumes a range in O(N + R), with O(H) native scratch. A JavaScript string iterator caches a traced leaf but reseeks at leaf boundaries: O(N + leaves × H).                                                       | [String access](../runtime/src/heap_string.h), [string iterators](../runtime/src/builtin_iterator.c)                            |
-| Hashing                           | An uncached hash streams content in O(N + R), reusing a cached left-prefix FNV state when available. Append-and-hash retains prefix reuse through rebalancing; repeated full hashes are O(1).                                                                                | [Hashing](../runtime/src/heap_string.c)                                                                                         |
-| Equality and ordering             | Linear in the examined content and visited nodes. Identity, unequal cached hashes, contiguous leaves, and matching shared rope structure provide shortcuts. Equality does not compute missing hashes; equal hashes do not prove equality.                                    | [Comparison](../runtime/src/heap_string.c)                                                                                      |
-| Slicing                           | Descent costs O(H); complete ranges reuse subtrees. Partial cross-child ranges copy their content. Flat dependent slices retain one flat parent under the retention policy.                                                                                                  | [Slice construction](../runtime/src/heap_string.c)                                                                              |
-| Search                            | Needles of at least 32 units use streaming KMP: O(N + M + R) work and O(M + H) scratch. Short-needle filters retain low setup cost; cross-leaf candidate verification can add root seeks. Reverse traversal can stop at the first suffix match.                              | [String search](../runtime/src/builtin_string.c)                                                                                |
-| Builder                           | Geometric growth and one width promotion give amortized linear append copying. Finish may scan/narrow UTF-16 content or copy disproportionate capacity; trim allocation failure preserves the valid original allocation.                                                     | [Text buffer](../runtime/src/text_buffer.c)                                                                                     |
-| Property keys                     | Queries reuse existing atoms without inserting missing names. Shapes hash ropes without materialization; transition indexes avoid unbounded sibling-list scans for ordinary hash distributions. Untraced caches admit only stable key identities.                            | [Key resolution](../runtime/src/intrinsics.c), [shape indexes](../runtime/src/shape.c), [property ICs](../runtime/src/vm_ops.c) |
-| UTF-8 boundary                    | Decoding grows compact storage with emitted units. Buffer encoding counts bytes and writes an exactly sized adopted buffer. Both are linear passes; remaining temporary C-string encoders still reserve an upper bound.                                                      | [UTF-8](../runtime/src/utf8.c), [Buffer conversion](../runtime/src/runtime/node_buffer.c)                                       |
-| JSON parsing and reviver metadata | Token traversal is sequential; small integers accumulate during validation and other numbers use token-local byte scratch. Object source records build a last-occurrence hash index on demand, avoiding a backward member scan for each reviver lookup.                      | [JSON parser and source records](../runtime/src/builtin_json.c)                                                                 |
-| Generic stringify                 | Active-path membership is expected O(1) per container, with O(D) live identities. Native recursion has a 512-container cap and the VM's actual stack bound; pretty-printing and callbacks can add work independently of traversal.                                           | [Generic JSON serializer](../runtime/src/builtin_json.c)                                                                        |
-| Plain-data stringify              | Iterative traversal with expected O(V + O + K + P + Q) work, plus string traversal. Optional caches have fixed admission budgets; frames and active-path state remain O(D). Prototype revalidation and late fallback remain explicit costs.                                  | [Guarded JSON serializer](../runtime/src/builtin_json.c)                                                                        |
-| JSON quoting                      | O(N + O + R), including bounded escape expansion. Safe Latin-1 and ordinary UTF-16 runs use word scanning; quoting stops for escapes and surrogate handling, including pairs across leaves.                                                                                  | [JSON quoting](../runtime/src/builtin_json.c)                                                                                   |
+| Operation                         | Current cost and qualification                                                                                                                                                                                                                                                                           | Owning implementation                                                                                                           |
+| --------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| Concatenation                     | Inline results copy a bounded number of units. Larger joins reuse subtrees and rebuild affected paths; nonterminal cons children have at most three quarters of their parent's units. A <=32-unit cons with two non-cons children adds one terminal edge. Reconstruction can allocate multiple nodes.    | [String construction](../runtime/src/heap_string.c)                                                                             |
+| Indexing and traversal            | Indexed access is O(H). Forward/reverse segment iteration consumes a range in O(N + R), with O(H) native scratch. GC-owned string and projected-split cursors retain a traced frontier across reentry, giving the same linear traversal bound.                                                           | [String access](../runtime/src/heap_string.h), [string iterators](../runtime/src/builtin_iterator.c)                            |
+| Hashing                           | An uncached hash streams content in O(N + R), reusing a cached left-prefix FNV state when available. Append-and-hash retains prefix reuse through rebalancing; repeated full hashes are O(1).                                                                                                            | [Hashing](../runtime/src/heap_string.c)                                                                                         |
+| Equality and ordering             | Linear in the examined content and visited nodes. Identity, unequal cached hashes, contiguous leaves, and matching shared rope structure provide shortcuts. Equality does not compute missing hashes; equal hashes do not prove equality.                                                                | [Comparison](../runtime/src/heap_string.c)                                                                                      |
+| Slicing                           | Descent costs O(H); complete ranges reuse subtrees. Partial cross-child ranges copy their content. Flat dependent slices retain one flat parent under the retention policy.                                                                                                                              | [Slice construction](../runtime/src/heap_string.c)                                                                              |
+| Search                            | Needles of at least 32 units use streaming KMP: O(N + M + R) work and O(M + H) scratch. Short-needle filters retain low setup cost; cross-leaf candidate verification can add root seeks. Reverse traversal can stop at the first suffix match.                                                          | [String search](../runtime/src/builtin_string.c)                                                                                |
+| Builder                           | Geometric growth and one width promotion give amortized linear append copying. Finish may scan/narrow UTF-16 content or copy disproportionate capacity; trim allocation failure preserves the valid original allocation.                                                                                 | [Text buffer](../runtime/src/text_buffer.c)                                                                                     |
+| Property keys                     | Queries reuse existing atoms without inserting missing names. Shapes hash ropes without materialization; transition indexes avoid unbounded sibling-list scans for ordinary hash distributions. Untraced ICs admit only stable identities; repeated transient misses still pay normalization and lookup. | [Key resolution](../runtime/src/intrinsics.c), [shape indexes](../runtime/src/shape.c), [property ICs](../runtime/src/vm_ops.c) |
+| UTF-8 boundary                    | Decoding grows compact storage with emitted units. Buffer encoding counts bytes and writes an exactly sized adopted buffer. Both are linear passes; remaining temporary C-string encoders still reserve an upper bound.                                                                                  | [UTF-8](../runtime/src/utf8.c), [Buffer conversion](../runtime/src/runtime/node_buffer.c)                                       |
+| JSON parsing and reviver metadata | Token traversal is sequential; small integers accumulate during validation and other numbers use token-local byte scratch. Object source records build a last-occurrence hash index on demand, avoiding a backward member scan for each reviver lookup.                                                  | [JSON parser and source records](../runtime/src/builtin_json.c)                                                                 |
+| Generic stringify                 | Active-path membership is expected O(1) per container, with O(D) live identities. Native recursion has a 512-container cap and the VM's actual stack bound; pretty-printing and callbacks can add work independently of traversal.                                                                       | [Generic JSON serializer](../runtime/src/builtin_json.c)                                                                        |
+| Plain-data stringify              | Iterative traversal with expected O(V + O + K + P + Q) work, plus string traversal. Optional caches have fixed admission budgets; frames and active-path state remain O(D). Late unsupported descendants resume generic traversal on the active stack while retaining completed output.                  | [Guarded JSON serializer](../runtime/src/builtin_json.c)                                                                        |
+| JSON quoting                      | O(N + O + R), including bounded escape expansion. Safe Latin-1 and ordinary UTF-16 runs use word scanning; quoting stops for escapes and surrogate handling, including pairs across leaves.                                                                                                              | [JSON quoting](../runtime/src/builtin_json.c)                                                                                   |
 
 ## Rope ownership, balancing, and sequential work
 
-A cons-to-cons edge reduces remaining logical length to at most three quarters;
-a heavier flat leaf is permitted because traversal terminates there. This bounds
-height in terms of code-unit length even when leaf sizes differ greatly. Joins
+A nonterminal cons-to-cons edge reduces remaining logical length to at most three
+quarters. Flat/dependent leaves and a cons of at most 32 units whose children are
+both non-cons are terminal for balancing. The short cons adds at most one edge;
+its reuse avoids transient reconstruction in small concatenation chains without
+copying payloads. This bounds height in terms of code-unit length even when leaf
+sizes differ greatly. Joins
 prefer existing boundaries in the middle half of a subtree. Always splitting at
 the exact midpoint would repeatedly cut leaves and rebuild prefixes. Flattening
 a shared child preserves the bound because it removes edges without changing
@@ -57,13 +60,22 @@ Consumers must dispose or reacquire borrowed traversal state before JavaScript
 reentry or a representation-changing bridge. A traced leaf identity can survive
 those events if its payload is obtained afresh afterward.
 
-The JavaScript iterator uses that latter contract: it traces its current leaf,
-reacquires payload addresses on each step, and searches from the source root only
-at leaf boundaries. It avoids per-unit root descent, but fully linear traversal
-across reentry still needs a traced stack of pending nodes. Compiler-projected
-split iteration similarly retains offsets across arbitrary JavaScript bodies and
-reinitializes search at each yield. These are remaining consumer costs, distinct
-from the ordinary segment iterator's linear traversal.
+The JavaScript iterator lazily allocates a GC-owned cursor for rope input. Its
+current leaf and pending-node frontier are independently traced, so flattening
+the original source cannot release nodes still needed by iteration. Each step
+reacquires the payload; frontier changes use SATB deletion and minor-GC cards.
+Persistent scratch uses owner-held RAW storage and is released on exhaustion or
+cursor finalization. Its allocation participates in GC pacing, including patterns
+abandoned after an abrupt exit. Tracing the mutable frontier stays on the mutator.
+Flat input retains direct unit access.
+Compiler-projected split on rope input roots the same cursor across JavaScript
+bodies, together with an owned KMP pattern prepared once when a match is possible.
+Both traverse consumed units and visited nodes linearly across yields. Initially
+flat or dependent split inputs retain an offset and the separator without a new
+cursor allocation. They cannot acquire rope ancestry through materialization.
+Each successful match consumes a disjoint separator-length range, so repeated
+pattern setup on that path still totals O(N + M) work. An overlong separator also
+retains the offset path and skips traversal and pattern allocation.
 
 FNV hashes process each unit's low byte and high byte, including Latin-1's zero
 high byte. A cached prefix is a valid continuation state; arbitrary final child
@@ -122,9 +134,9 @@ string or a VM-rooted property atom. A transient query does not clear unrelated
 existing rows. Shape-cache hits retain the shape-owned name; negative entries
 admit only stable names. Unique missing queries therefore do not themselves add
 VM-lifetime atom roots or leave untraced cache pointers into collectable rope
-graphs. Repeated absent dynamic names can consequently repeat lookup work; a
-future miss cache needs a bounded, traced lifetime contract. Bounded tiny-string
-caches and explicit user storage remain independent sources of retention. See
+graphs. Repeated transient misses still pay query normalization and ordinary
+lookup. Bounded tiny-string caches and explicit user storage remain independent
+sources of retention. See
 [query preparation](../runtime/src/vm_ops.c),
 [atom resolution](../runtime/src/intrinsics.c), and [shape caches](../runtime/src/shape.c).
 
@@ -170,10 +182,16 @@ uses an active-path pointer set, removing identities as frames return so repeate
 non-cyclic children remain valid. The guarded plain serializer uses heap frames
 and is not subject to the recursive container cap.
 
-The plain serializer checks eligibility without executing hooks. Unsupported
-storage or behavior causes one top-level fallback: speculative output is discarded
-before the generic path performs observable work. This can repeat a pure prefix,
-but adds no getter, proxy trap, replacer, or `toJSON` invocation. Shape/prototype
+The plain serializer checks eligibility without executing hooks. At an unsupported
+descendant it rewinds only the current member's uncommitted separator/key, roots
+active holders and remaining keys, and resumes generic serialization while
+unwinding the existing stack. Original key lists, array lengths, completed output,
+and active-cycle membership survive; callbacks may mutate subsequent values.
+No cached slot or prototype proof is reused after reentry. This avoids serializing
+the completed prefix twice and adds no getter, proxy trap, replacer, or `toJSON`
+invocation. Continuation retains its root list until the operation ends, including
+holders disconnected by callbacks; this conservative lifetime is bounded by the
+saved active stack and remaining keys at fallback. Shape/prototype
 maps and active-path checks already use hash tables; the parser's small shaped
 object duplicate scan remains capped at 32 names.
 
@@ -199,7 +217,11 @@ scalar path then handles escaping and pairs across leaves. Short and dense-escap
 runs retain a scalar path. This avoids repeated scalar probes for long BMP runs
 without changing the output or materializing input strings. Plan/key capacity,
 reuse, discarded-output, quote-probe, and parser-seek counters describe these JSON
-costs; full mixed-pipeline attribution remains a separate task.
+costs. `scripts/profile-text-pipeline.ts` measures nested intervals within the
+complete mixed pipeline and reports sampler and marker overhead separately.
+Its eight controls retain early/late wide units, sparse/dense escapes, BMP runs,
+and split/joined surrogate pairs. Phase shares include instrumentation overhead;
+isolated quote probes do not establish a production timing share.
 
 ## Construction and external encoding
 
@@ -232,21 +254,6 @@ characters at the external boundary. Bounded encoding never splits a scalar and
 reports consumed UTF-16 units. Temporary C-string and TextEncoder allocation
 paths still use the existing `3N + 1` upper bound; the malloc UTF-16 decoder remains
 for path operations that require mutable UTF-16 scratch.
-
-## Remaining work
-
-- Preserve a traced pending-node frontier across JavaScript reentry for string
-  iteration and projected split yields, with invalidation when representation
-  changes remove previously borrowed graph edges.
-- Profile the complete mixed-text pipeline across parsing, property lookup,
-  construction, quoting, and checksum. JSON counters describe only part of that
-  work; a quoting control win does not attribute an aggregate pipeline change.
-  Keep early/late wide units, escape density, BMP, and astral content as separate
-  workload dimensions.
-- Recover repeated absent-name IC performance with a bounded lifetime strategy,
-  preserving the query path's avoidance of permanent atom growth.
-- Reduce work discarded by late plain-JSON fallback while preserving the rule
-  that eligibility checks add no getter, proxy, replacer, or `toJSON` call.
 
 ## Acceptance and measurement
 
