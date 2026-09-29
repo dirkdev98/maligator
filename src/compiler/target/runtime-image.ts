@@ -443,6 +443,8 @@ export interface BytecodeFunction {
 	/** Exact live traced registers at portable GC-capable instructions. */
 	gcSafepoints?: Array<VmSafepointRootMap>;
 	capturedCount: number;
+	/** External lexical owners; undefined retains the dynamic environment chain. */
+	closureCaptureOwners?: Array<number>;
 	strict: boolean;
 
 	/**
@@ -503,6 +505,18 @@ export interface BytecodeFunction {
 	positions: Array<number>;
 	/** Dense profile site for each instruction, or -1 when no source is known. */
 	profileSiteIds?: Array<number>;
+}
+
+/** Closure metadata does not change instruction liveness or safepoint roots. */
+export function withClosureCaptureOwners(
+	fn: BytecodeFunction,
+	closureCaptureOwners: Array<number>,
+): BytecodeFunction {
+	const result = { ...fn, closureCaptureOwners };
+	if (vmSafepointRootMapsAreTrusted(fn)) {
+		trustedVmSafepointRootMaps.set(result, vmSafepointRootMapTrustFingerprint(result));
+	}
+	return result;
 }
 
 /** -1 never retains; INT32_MAX always retains nonempty input; otherwise the

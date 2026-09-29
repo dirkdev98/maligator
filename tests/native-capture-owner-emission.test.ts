@@ -1,0 +1,161 @@
+import { describe, expect, it } from "vitest";
+import { createConservativeNativePlan } from "../src/compiler/target/program-image.ts";
+import { emitCompiledFunction } from "../src/compiler/target/render-native-c.ts";
+import type {
+	BytecodeFunction,
+	BytecodeInstruction,
+} from "../src/compiler/target/runtime-image.ts";
+
+function emit(
+	instructions: Array<BytecodeInstruction>,
+	options: Partial<BytecodeFunction> = {},
+	relocatable = false,
+) {
+	const fn: BytecodeFunction = {
+		nameStringIndex: -1,
+		isGenerator: false,
+		isAsync: false,
+		parameterCount: 0,
+		mappedArguments: false,
+		mappedArgumentSlots: [],
+		length: 0,
+		registerCount: 3,
+		capturedCount: 0,
+		strict: true,
+		needsArguments: false,
+		argumentSnapshotCount: 0,
+		argumentSnapshotPlan: [],
+		isDerivedConstructor: false,
+		isClassConstructor: false,
+		constructorSlotReserve: 0,
+		hasPrototype: false,
+		literalShapeCount: 0,
+		handlers: [],
+		fileIndex: -1,
+		positions: [],
+		...options,
+		instructions,
+	};
+	const native = createConservativeNativePlan([fn]).functions[0]!;
+	const emitted = emitCompiledFunction(
+		fn,
+		{
+			...native,
+			directEntries:
+				fn.isGenerator || fn.isAsync
+					? []
+					: [
+							{
+								id: 0,
+								parameterRepresentations: [],
+								resultRepresentation: "boxed",
+								registerRepresentations: native.registerRepresentations,
+								gc: native.gc,
+							},
+						],
+		},
+		0,
+		"",
+		false,
+		"static",
+		new Set(),
+		[],
+		new Map(),
+		relocatable,
+	);
+	expect(emitted).not.toBeNull();
+	return emitted!;
+}
+
+describe("native lexical owner lookup contract", () => {
+	it("resolves each external owner once in canonical and specialized entries", () => {
+		const emitted = emit([
+			{ opcode: "LOAD_CAPTURED", dst: 0, ownerFunctionIndex: 2, index: 0 },
+			{ opcode: "LOAD_CAPTURED", dst: 1, ownerFunctionIndex: 2, index: 1 },
+			{ opcode: "STORE_CAPTURED", src: 1, ownerFunctionIndex: 2, index: 0 },
+			{ opcode: "LOAD_CAPTURED", dst: 2, ownerFunctionIndex: 3, index: 0 },
+			{ opcode: "RETURN", value: 2 },
+		]);
+		expect(emitted.directEntries).toHaveLength(1);
+		for (const { source } of [emitted, ...emitted.directEntries]) {
+			expect(source.match(/mal_vm_capture_owner\(env, 2\)/g)).toHaveLength(1);
+			expect(source.match(/mal_vm_capture_owner\(env, 3\)/g)).toHaveLength(1);
+			expect(source).toContain("__capture_owner_2->slots[0]");
+			expect(source).toContain("__capture_owner_2->slots[1]");
+			expect(source).toContain("__capture_owner_3->slots[0]");
+			expect(source).not.toContain("mal_vm_load_captured(");
+			expect(source).not.toContain("mal_vm_store_captured(");
+			expect(source).toMatch(
+				/mal_gc_write_barrier\(__capture_owner_2->slots\[0\]\);[\s\S]*__capture_owner_2->slots\[0\] = [^;]+;[\s\S]*mal_gc_card\(&__capture_owner_2->header,/,
+			);
+		}
+	});
+
+	it("keeps owned storage direct and resolves external storage after allocation", () => {
+		const { source } = emit(
+			[
+				{ opcode: "LOAD_CAPTURED", dst: 0, ownerFunctionIndex: 2, index: 0 },
+				{ opcode: "STORE_CAPTURED", src: 0, ownerFunctionIndex: 0, index: 0 },
+				{ opcode: "LOAD_CAPTURED", dst: 1, ownerFunctionIndex: 0, index: 0 },
+				{ opcode: "RETURN", value: 1 },
+			],
+			{ capturedCount: 1 },
+		);
+		expect(source).toContain("env->slots[0]");
+		expect(source).not.toContain("mal_vm_capture_owner(env, 0)");
+		expect(source.indexOf("mal_vm_capture_owner(env, 2)")).toBeGreaterThan(
+			source.indexOf("env = mal_env_new("),
+		);
+	});
+
+	it("keeps per-iteration bindings dynamic while external owners remain stable", () => {
+		const { source } = emit([
+			{ opcode: "LOAD_CAPTURED", dst: 0, ownerFunctionIndex: 2, index: 0 },
+			{ opcode: "ENV_PUSH", scopeId: -2, slotCount: 1 },
+			{ opcode: "STORE_CAPTURED", src: 0, ownerFunctionIndex: -2, index: 0 },
+			{ opcode: "ENV_COPY", scopeId: -2, slotCount: 1 },
+			{ opcode: "LOAD_CAPTURED", dst: 1, ownerFunctionIndex: -2, index: 0 },
+			{ opcode: "STORE_CAPTURED", src: 1, ownerFunctionIndex: 2, index: 0 },
+			{ opcode: "ENV_POP" },
+			{ opcode: "RETURN", value: 1 },
+		]);
+		expect(source.match(/mal_vm_capture_owner\(env, 2\)/g)).toHaveLength(1);
+		expect(source).toContain("mal_vm_load_captured(env, -2, 0)");
+		expect(source).toContain("mal_vm_store_captured(env, -2, 0,");
+		expect(source).not.toContain("mal_vm_capture_owner(env, -2)");
+	});
+
+	it("relocates external owner identities with the function table", () => {
+		const { source } = emit(
+			[
+				{ opcode: "LOAD_CAPTURED", dst: 0, ownerFunctionIndex: 2, index: 0 },
+				{ opcode: "RETURN", value: 0 },
+			],
+			{},
+			true,
+		);
+		expect(source).toContain(
+			"mal_vm_capture_owner(env, (__mal_relocation->function_base + 2))",
+		);
+	});
+
+	it("resolves suspended owners from the restored environment before resume dispatch", () => {
+		const { source } = emit(
+			[
+				{ opcode: "GENERATOR_START" },
+				{ opcode: "LOAD_CAPTURED", dst: 0, ownerFunctionIndex: 2, index: 0 },
+				{ opcode: "YIELD", yieldedSrc: 0, valueDst: 1, modeDst: 2 },
+				{ opcode: "LOAD_CAPTURED", dst: 0, ownerFunctionIndex: 2, index: 0 },
+				{ opcode: "RETURN", value: 0 },
+			],
+			{ isGenerator: true },
+		);
+		const restore = source.indexOf("env = resume_state->frame.env;");
+		const dispatch = source.indexOf("switch (resume_state->frame.instruction_pointer)");
+		expect(restore).toBeGreaterThanOrEqual(0);
+		expect(dispatch).toBeGreaterThan(restore);
+		expect(source.slice(restore, dispatch)).toContain("mal_vm_capture_owner(env, 2)");
+		expect(source.slice(dispatch)).toContain("mal_vm_capture_owner(env, 2)");
+		expect(source).not.toContain("mal_vm_load_captured(");
+	});
+});

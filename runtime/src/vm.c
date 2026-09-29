@@ -449,6 +449,11 @@ MalEnv *mal_env_new(MalVm *vm, MalEnv *parent, i32 function_index, i32 count) {
     env->parent = parent;
     env->function_index = function_index;
     env->slot_count = count;
+    env->compact_parent = function_index >= 0
+        ? function_index < vm->runtime_image->function_count &&
+            vm->runtime_image->functions[function_index].closure_capture_owners != nullptr
+        : parent != nullptr && (parent->compact_parent ||
+            parent->function_index == MAL_ENV_CAPTURE_VECTOR);
     for (i32 i = 0; i < count; i++) {
 #if defined(__wasi__)
         env->slots[i] = mal_value_new_undefined();
@@ -2798,7 +2803,7 @@ static void mal_vm_run_until_frame_count(
                 generator->state = MAL_GENERATOR_SUSPENDED_YIELD;
 
                 if (generator->frame.env != nullptr) {
-                    mal_gc_write_barrier(mal_value_from_heap(&generator->frame.env->header));
+                    mal_gc_write_barrier_env(generator->frame.env);
                 }
                 generator->frame = *frame;
                 // Re-suspend: an old generator re-acquires its frame + yielded value,
@@ -2869,7 +2874,7 @@ static void mal_vm_run_until_frame_count(
 
                 // SATB: frame.env is a traced heap field overwritten by the re-suspend.
                 if (state->frame.env != nullptr) {
-                    mal_gc_write_barrier(mal_value_from_heap(&state->frame.env->header));
+                    mal_gc_write_barrier_env(state->frame.env);
                 }
                 state->frame = *frame;
                 // Re-suspend at await: old async state re-acquires its frame.

@@ -100,6 +100,68 @@
 			"sourceSeam": "src/compiler/core/core-local-capture-arguments.ts",
 			"fixture": "cases/branching-explicit-capture-projection-helper.mjs",
 			"controls": ["branching-capture-projection-helper"]
+		},
+		{
+			"id": "escaped-mutable-capture-depth-1",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "closure-representation",
+			"category": "language-features",
+			"mechanisms": [
+				"capture-access",
+				"shared-mutable-cells",
+				"lexical-depth",
+				"generic-call-bridge"
+			],
+			"inputShape": "Two escaped readers each mutate and read an outer binding 16 times per call through 1 lexical owners; escaped keeper closures retain intermediate scopes.",
+			"unit": "reader calls",
+			"sourceSeam": "runtime/src/vm_ops.c",
+			"fixture": "cases/escaped-mutable-capture-depth-1.mjs",
+			"controls": ["escaped-mutable-capture-depth-8"]
+		},
+		{
+			"id": "escaped-mutable-capture-depth-8",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "closure-representation",
+			"category": "language-features",
+			"mechanisms": [
+				"capture-access",
+				"shared-mutable-cells",
+				"lexical-depth",
+				"generic-call-bridge"
+			],
+			"inputShape": "Two escaped readers each mutate and read an outer binding 16 times per call through 8 lexical owners; escaped keeper closures retain intermediate scopes.",
+			"unit": "reader calls",
+			"sourceSeam": "runtime/src/vm_ops.c",
+			"fixture": "cases/escaped-mutable-capture-depth-8.mjs",
+			"controls": ["escaped-mutable-capture-depth-1"]
+		},
+		{
+			"id": "closure-create-owner-1",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "closure-representation",
+			"category": "allocation-gc",
+			"mechanisms": ["closure-creation", "capture-storage", "generic-call-bridge"],
+			"inputShape": "A retained factory creates one escaping closure per iteration capturing 1 lexical owners; a 64-element ring preserves observable identities and each closure returns the same input-plus-seed result.",
+			"unit": "closures created",
+			"sourceSeam": "runtime/src/vm_ops.c",
+			"fixture": "cases/closure-create-owner-1.mjs",
+			"controls": ["closure-create-owner-8"]
+		},
+		{
+			"id": "closure-create-owner-8",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "closure-representation",
+			"category": "allocation-gc",
+			"mechanisms": ["closure-creation", "capture-storage", "generic-call-bridge"],
+			"inputShape": "A retained factory creates one escaping closure per iteration capturing 8 lexical owners; a 64-element ring preserves observable identities and each closure returns the same input-plus-seed result.",
+			"unit": "closures created",
+			"sourceSeam": "runtime/src/vm_ops.c",
+			"fixture": "cases/closure-create-owner-8.mjs",
+			"controls": ["closure-create-owner-1"]
 		}
 	]
 }

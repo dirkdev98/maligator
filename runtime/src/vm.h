@@ -868,6 +868,7 @@ typedef struct MalFunction {
      */
     const MalArgumentSnapshotMove *argument_snapshot_plan;
     const i32 *mapped_argument_slots;
+    const i32 *closure_capture_owners;
     const MalInstruction *instructions;
     const i32 *instruction_data;
     /** Flat [ip, root_count, roots..., clear_count, clears...] sorted by IP. */
@@ -901,6 +902,8 @@ typedef struct MalFunction {
 
     i32 register_count;
     i32 captured_count;
+    /** -1 retains the dynamic chain; otherwise the immutable external-owner layout. */
+    i32 closure_capture_owner_count;
     /** -1 never retains; INT32_MAX always retains nonempty input; otherwise the
      * largest static index whose absence requires the supplied argument slice. */
     i32 argument_retention_limit;
@@ -958,7 +961,7 @@ typedef struct MalFunction {
     bool has_prototype;
 } MalFunction;
 
-static_assert(sizeof(MalFunction) <= (MAL_PROFILE ? 152 : 144),
+static_assert(sizeof(MalFunction) <= (MAL_PROFILE ? 168 : 160),
               "function metadata outgrew its packed layout");
 
 typedef struct MalPreparedValue {
@@ -1129,15 +1132,13 @@ typedef struct MalCjsModuleSlot {
     bool loaded;
 } MalCjsModuleSlot;
 
-/**
- * Heap-allocated captured-variable storage. One node per activation of a
- * function with captured slots; closures keep their defining chain reachable
- * through MalFunctionObject.creation_env. A GC cell (MAL_HEAP_ENV): the
- * collector marks envs reachable via creation_env, interpreter/compiled frame
- * envs, and parent chains, and sweeps the rest. The header must stay first.
- */
+// Shared atomic binding slots, grouped by activation or per-iteration identity.
+// Compact closures retain selected owners without their parent links. Active
+// frames root the lexical chain explicitly; fallback environments own the chain.
 typedef struct MalEnv {
     MalHeapHeader header;
+    // Active frames root lexical links; compact closures retain selected slots only.
+    bool compact_parent;
     struct MalEnv *parent;
     // Capture-scope id this env satisfies for LOAD/STORE_CAPTURED matching. >= 0
     // is a function index (the activation's own captured slots); < 0 is a synthetic
@@ -1168,6 +1169,20 @@ static_assert(alignof(_Atomic(MalValue)) == alignof(MalValue),
 // with scope on the env chain (rather than a frame-local stack) is what lets a
 // closure created inside `with` capture the with-object via its creation_env.
 #define MAL_ENV_WITH_OBJECT (-2147483647 - 1)
+
+// An inline closure display is owned by the function stored in parent; it is not
+// a separately allocated GC cell. The payload holds a layout pointer then scopes.
+#define MAL_ENV_CAPTURE_VECTOR (-2147483647)
+
+static inline const i32 *mal_env_capture_layout(const MalEnv *env) {
+    return ((const i32 *const *)(const void *) env->slots)[0];
+}
+
+static inline MalEnv **mal_env_capture_scopes(MalEnv *env) {
+    return (MalEnv **)(void *) env->slots + 1;
+}
+
+MalEnv *mal_vm_capture_owner(MalEnv *env, i32 owner_function_index);
 
 /**
  * A native-backend (compiled) call frame, tracked only for stack traces. The

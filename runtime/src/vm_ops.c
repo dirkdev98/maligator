@@ -1482,7 +1482,7 @@ MalValue mal_vm_op_with_get(MalVm *vm, MalEnv *env, i32 name_string_index) {
     MalValue name = mal_value_from_string(&vm->runtime_image->string_constants[name_string_index]);
     MalKey key;
     if (mal_vm_value_to_property_key(vm, name, &key)) {
-        for (MalEnv *e = env; e != nullptr; e = e->parent) {
+        for (MalEnv *e = env; e != nullptr && e->function_index != MAL_ENV_CAPTURE_VECTOR; e = e->parent) {
             if (e->function_index != MAL_ENV_WITH_OBJECT) {
                 continue;
             }
@@ -1512,7 +1512,7 @@ MalValue mal_vm_op_with_resolve_base(MalVm *vm, MalEnv *env, i32 name_string_ind
     MalValue name = mal_value_from_string(&vm->runtime_image->string_constants[name_string_index]);
     MalKey key;
     if (mal_vm_value_to_property_key(vm, name, &key)) {
-        for (MalEnv *e = env; e != nullptr; e = e->parent) {
+        for (MalEnv *e = env; e != nullptr && e->function_index != MAL_ENV_CAPTURE_VECTOR; e = e->parent) {
             if (e->function_index != MAL_ENV_WITH_OBJECT) {
                 continue;
             }
@@ -1546,7 +1546,7 @@ bool mal_vm_op_with_set(MalVm *vm, MalEnv *env, i32 name_string_index, MalValue 
     MalValue name = mal_value_from_string(&vm->runtime_image->string_constants[name_string_index]);
     MalKey key;
     if (mal_vm_value_to_property_key(vm, name, &key)) {
-        for (MalEnv *e = env; e != nullptr; e = e->parent) {
+        for (MalEnv *e = env; e != nullptr && e->function_index != MAL_ENV_CAPTURE_VECTOR; e = e->parent) {
             if (e->function_index != MAL_ENV_WITH_OBJECT) {
                 continue;
             }
@@ -1642,6 +1642,10 @@ MalValue mal_vm_op_create_function(MalVm *vm, i32 function_index, MalEnv *creati
             definition->name_string_index < vm->runtime_image->string_constant_count
         ? &vm->runtime_image->string_constants[definition->name_string_index]
         : mal_intrinsic_hot_ascii(vm, MAL_HOT_KEY_EMPTY);
+    i32 capture_count = definition->closure_capture_owners != nullptr
+        ? definition->closure_capture_owner_count : -1;
+    usize capture_bytes = capture_count > 0
+        ? sizeof(MalEnv) + ((usize) capture_count + 1) * sizeof(void *) : 0;
     MalFunctionObject *function = mal_function_object_new(
         &vm->heap,
         mal_value_to_object(vm->intrinsics[prototype_slot]),
@@ -1649,11 +1653,27 @@ MalValue mal_vm_op_create_function(MalVm *vm, i32 function_index, MalEnv *creati
         definition->length,
         name,
         mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_LENGTH),
-        mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_NAME)
+        mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_NAME),
+        capture_bytes
     );
-    // The closure captures the creating frame's environment chain so its body
-    // resolves captured bindings by owner function index.
     function->creation_env = creation_env;
+    if (capture_count == 0) {
+        function->creation_env = nullptr;
+    } else if (capture_count > 0) {
+        MalEnv *captures = (MalEnv *) ((MalValue *) (function + 1) + 2);
+        captures->parent = (MalEnv *) function;
+        captures->function_index = MAL_ENV_CAPTURE_VECTOR;
+        captures->slot_count = capture_count;
+        captures->compact_parent = false;
+        ((const i32 **)(void *) captures->slots)[0] = definition->closure_capture_owners;
+        MalEnv **scopes = mal_env_capture_scopes(captures);
+        bool complete = true;
+        for (i32 i = 0; i < capture_count; i++) {
+            scopes[i] = mal_vm_capture_owner(creation_env, definition->closure_capture_owners[i]);
+            if (scopes[i] == nullptr) complete = false;
+        }
+        if (complete) function->creation_env = captures;
+    }
 
     return mal_value_from_function_object(function);
 }
@@ -1728,27 +1748,35 @@ void mal_op_set_function_name(MalCallable *callable, const MalInstruction *instr
     );
 }
 
-// Walk the environment chain to the activation that owns the captured binding
-// and read its slot. Shared by the interpreter op and the native-C backend.
-MalValue mal_vm_load_captured(MalEnv *env, i32 owner_function_index, i32 index) {
+MalEnv *mal_vm_capture_owner(MalEnv *env, i32 owner_function_index) {
     for (; env != nullptr; env = env->parent) {
-        if (env->function_index == owner_function_index) {
-            return env->slots[index];
+        if (env->function_index == owner_function_index) return env;
+        if (env->function_index == MAL_ENV_CAPTURE_VECTOR) {
+            const i32 *owners = mal_env_capture_layout(env);
+            i32 low = 0, high = env->slot_count;
+            while (low < high) {
+                i32 mid = low + (high - low) / 2;
+                if (owners[mid] < owner_function_index) low = mid + 1;
+                else high = mid;
+            }
+            return low < env->slot_count && owners[low] == owner_function_index
+                ? mal_env_capture_scopes(env)[low] : nullptr;
         }
     }
+    return nullptr;
+}
 
-    return mal_value_new_undefined();
+MalValue mal_vm_load_captured(MalEnv *env, i32 owner_function_index, i32 index) {
+    MalEnv *owner = mal_vm_capture_owner(env, owner_function_index);
+    return owner != nullptr ? owner->slots[index] : mal_value_new_undefined();
 }
 
 void mal_vm_store_captured(MalEnv *env, i32 owner_function_index, i32 index, MalValue value) {
-    for (; env != nullptr; env = env->parent) {
-        if (env->function_index == owner_function_index) {
-            mal_gc_write_barrier(env->slots[index]); // SATB: shade the replaced capture
-            env->slots[index] = value;
-            mal_gc_card(&env->header, value); // old closure env -> young capture
-            return;
-        }
-    }
+    MalEnv *owner = mal_vm_capture_owner(env, owner_function_index);
+    if (owner == nullptr) return;
+    mal_gc_write_barrier(owner->slots[index]);
+    owner->slots[index] = value;
+    mal_gc_card(&owner->header, value);
 }
 
 void mal_op_load_captured(MalCallable *callable, const MalInstruction *instruction) {
@@ -7999,7 +8027,7 @@ void mal_vm_op_yield_compiled(
     // the resume point and the current env need saving for a later resume.
     generator->frame.instruction_pointer = resume_ip;
     if (generator->frame.env != nullptr) {
-        mal_gc_write_barrier(mal_value_from_heap(&generator->frame.env->header));
+        mal_gc_write_barrier_env(generator->frame.env);
     }
     generator->frame.env = env;
     mal_gc_remember_if_old(&generator->object.header);
@@ -8148,7 +8176,7 @@ void mal_vm_op_await_compiled(
     state->frame.instruction_pointer = resume_ip;
     // SATB: frame.env is a traced heap field being overwritten; shade the previous env.
     if (state->frame.env != nullptr) {
-        mal_gc_write_barrier(mal_value_from_heap(&state->frame.env->header));
+        mal_gc_write_barrier_env(state->frame.env);
     }
     state->frame.env = env;
     mal_gc_remember_if_old(&state->object.header);

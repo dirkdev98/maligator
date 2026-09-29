@@ -128,10 +128,12 @@ MalFunctionObject *mal_function_object_new(
     i32 length,
     MalString *name,
     MalKey length_key,
-    MalKey name_key
+    MalKey name_key,
+    usize capture_bytes
 ) {
     MalFunctionObject *function = mal_heap_alloc(
-        heap, sizeof(MalFunctionObject) + 2 * sizeof(MalValue), MAL_HEAP_FUNCTION_OBJECT);
+        heap, sizeof(MalFunctionObject) + 2 * sizeof(MalValue) + capture_bytes,
+        MAL_HEAP_FUNCTION_OBJECT);
     mal_function_init_state(heap, function, prototype, function_index);
     mal_function_init_metadata(
         &function->object, length_key, mal_value_from_i32(length), name_key, name,

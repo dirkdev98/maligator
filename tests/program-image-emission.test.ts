@@ -12,6 +12,7 @@ import {
 } from "../src/compiler/target/compiler-artifact-codec.ts";
 import {
 	DEFAULT_TRANSLATION_UNIT_POLICY,
+	NATIVE_C_HEADER_LINES,
 	emitBatch,
 	emitProgramImage,
 	emitProgramTranslationUnits,
@@ -50,10 +51,19 @@ function emitProgramTranslationUnitSources(
 	).map((unit) => unit.source);
 }
 
-function malFunctionRows(source: string): Array<Array<string>> {
-	return [...source.matchAll(/^\s+MAL_FUNCTION_ROW\((.*)\),$/gm)].map((match) =>
-		match[1]!.split(", "),
-	);
+function malFunctionRows(source: string): Array<Record<string, string>> {
+	const declaration = NATIVE_C_HEADER_LINES.find((line) =>
+		line.startsWith("#define MAL_FUNCTION_ROW("),
+	)!;
+	const fields = /^#define MAL_FUNCTION_ROW\(([^)]+)\)/
+		.exec(declaration)![1]!
+		.split(", ")
+		.map((parameter) => parameter.replace(/_value$/, ""));
+	return [...source.matchAll(/^\s+MAL_FUNCTION_ROW\((.*)\),$/gm)].map((match) => {
+		const values = match[1]!.split(", ");
+		expect(values).toHaveLength(fields.length);
+		return Object.fromEntries(fields.map((field, index) => [field, values[index]!]));
+	});
 }
 
 function boxedNativeDefinition(
@@ -504,11 +514,11 @@ describe("emit-program-image instruction packing", () => {
 		expect(output).toContain(".bits_low = 0x00000000u, .bits_high = 0x7ff00000u");
 		expect(output).toContain(".bits_low = 0x00000000u, .bits_high = 0x7ff80000u");
 		const [functionRow] = malFunctionRows(output);
-		expect(functionRow?.[3]).toBe("mal_function_0_instruction_data");
-		expect(functionRow?.[22]).toBe("38");
-		expect(functionRow?.[12]).toBe("0");
-		expect(functionRow?.[13]).toBe("0");
-		expect(functionRow?.[0]).toBe("nullptr");
+		expect(functionRow?.instruction_data).toBe("mal_function_0_instruction_data");
+		expect(functionRow?.instruction_data_count).toBe("38");
+		expect(functionRow?.argument_snapshot_count).toBe("0");
+		expect(functionRow?.argument_snapshot_plan_count).toBe("0");
+		expect(functionRow?.argument_snapshot_plan).toBe("nullptr");
 		expect(output).toContain(
 			".as.init_global_vars = { .data_offset = 28, .declaration_configurable = true }",
 		);
@@ -599,10 +609,10 @@ describe("emit-program-image instruction packing", () => {
 			// remain in the otherwise-unused instruction-data field so the packed
 			// MalFunction row does not grow.
 			const [functionRow] = malFunctionRows(output);
-			expect(functionRow?.[21]).toBe("0");
-			expect(functionRow?.[2]).toBe("nullptr");
-			expect(functionRow?.[3]).toBe("mal_function_0_instruction_data");
-			expect(functionRow?.[22]).toBe("13");
+			expect(functionRow?.instruction_count).toBe("0");
+			expect(functionRow?.instructions).toBe("nullptr");
+			expect(functionRow?.instruction_data).toBe("mal_function_0_instruction_data");
+			expect(functionRow?.instruction_data_count).toBe("13");
 			expect(output).toContain("{ 2, 0, 2, 1, 0, 0, 1, 1, 2, 1, 0, 0, 1 }");
 			expect(output).toContain("mal_vm_try_load_known_own_slots(vm,");
 			expect(output).toContain(
@@ -649,7 +659,7 @@ describe("emit-program-image instruction packing", () => {
 			emitProgramImage(synthetic, { compiled: true }),
 			emitProgramImage(synthetic, { compiled: false }),
 		]) {
-			expect(malFunctionRows(output)[0]?.[20]).toBe("1");
+			expect(malFunctionRows(output)[0]?.literal_shape_count).toBe("1");
 			expect(output).toContain(".shape_cache_index = 0");
 		}
 
@@ -736,7 +746,7 @@ describe("emit-program-image instruction packing", () => {
 		expect(output).toContain("static const i32 mal_shared_insn_data_");
 		expect(
 			malFunctionRows(output).filter((row) =>
-				row[3]?.startsWith("mal_shared_insn_data_"),
+				row.instruction_data?.startsWith("mal_shared_insn_data_"),
 			),
 		).toHaveLength(2);
 	});
@@ -1265,7 +1275,7 @@ describe("emit-program-image instruction packing", () => {
 		expect(output).not.toMatch(boxedNativeDefinition(0));
 		expect(output).toContain("MalInstruction mal_function_0_instructions[201]");
 		expect(output).toContain("void mal_initialize_mal_function_0_instructions_chunk_0(");
-		expect(malFunctionRows(output)[0]?.[6]).toBe("nullptr");
+		expect(malFunctionRows(output)[0]?.compiled).toBe("nullptr");
 	});
 
 	it("keeps canonical and typed entry size limits independent at call sites", () => {
@@ -1479,11 +1489,13 @@ describe("emit-program-image instruction packing", () => {
 		const output = emitProgramImage(compileSemanticProgramToProgramImage(semantic), {
 			compiled: false,
 		});
-		const trusted = malFunctionRows(output).find((row) => row[30] === "true");
+		const trusted = malFunctionRows(output).find(
+			(row) => row.gc_safepoints_trusted === "true",
+		);
 		expect(trusted).toBeDefined();
 		expect(output).toMatch(/mal_function_\d+_gc_safepoints\[\] = \{ \d+, \d+/);
-		expect(trusted?.[4]).toMatch(/mal_function_\d+_gc_safepoints/);
-		expect(Number(trusted?.[23])).toBeGreaterThan(0);
+		expect(trusted?.gc_safepoints).toMatch(/mal_function_\d+_gc_safepoints/);
+		expect(Number(trusted?.gc_safepoint_count)).toBeGreaterThan(0);
 	});
 
 	it.each([
@@ -2210,15 +2222,15 @@ describe("emit-program-image instruction packing", () => {
 					: emitBatch([image], { compiled: false });
 			expect(vmSafepointRootMapsAreTrusted(fn)).toBe(true);
 			const trusted = malFunctionRows(emit())[functionIndex]!;
-			expect(trusted[30]).toBe("true");
-			expect(trusted[4]).not.toBe("nullptr");
+			expect(trusted.gc_safepoints_trusted).toBe("true");
+			expect(trusted.gc_safepoints).not.toBe("nullptr");
 			fn.gcSafepoints![0]!.rootRegisters = [];
 			delete fn.gcSafepoints![0]!.clearRegisters;
 			expect(vmSafepointRootMapsAreTrusted(fn)).toBe(false);
 
 			const untrusted = malFunctionRows(emit())[functionIndex]!;
-			expect(untrusted[30]).toBe("false");
-			expect(untrusted[4]).toBe("nullptr");
+			expect(untrusted.gc_safepoints_trusted).toBe("false");
+			expect(untrusted.gc_safepoints).toBe("nullptr");
 		},
 	);
 
@@ -2231,8 +2243,8 @@ describe("emit-program-image instruction packing", () => {
 			},
 		};
 		const [functionRow] = malFunctionRows(emitProgramImage(simple, { compiled: false }));
-		expect(functionRow?.[22]).toBe("0");
-		expect(functionRow?.[3]).toBe("nullptr");
+		expect(functionRow?.instruction_data_count).toBe("0");
+		expect(functionRow?.instruction_data).toBe("nullptr");
 	});
 
 	it("aliases an asset to existing linked immutable bytes", () => {

@@ -60,10 +60,12 @@ function helperBody(
 		[...fn.factIds()].length !== 0
 	)
 		return undefined;
+	let hasCaptures = false;
 	for (const block of fn.blockIds()) {
 		if (fn.kernel.blockHandlerBlock(block) !== undefined) return undefined;
 		for (const instruction of fn.bodyInstructionIds(block)) {
 			const opcode = fn.instructionOpcodeName(instruction);
+			hasCaptures ||= opcode === "loadCaptured";
 			if (
 				fn.instructionEffectRefinement(instruction) !== undefined ||
 				opcode === "loadCallee" ||
@@ -83,6 +85,7 @@ function helperBody(
 		}
 		if (fn.instructionKind(fn.blockTerminator(block)) === "guard") return undefined;
 	}
+	if (!hasCaptures) return undefined;
 	const blocks = buildCoreControlFlow(program, fn.id).reversePostorder;
 	return blocks.length === [...fn.blockIds()].length ? blocks : undefined;
 }

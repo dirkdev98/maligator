@@ -102,8 +102,8 @@ export function cEscapeString(value: string): string {
 }
 
 const MAL_FUNCTION_ROW_MACRO = [
-	"#define MAL_FUNCTION_ROW(argument_snapshot_plan_value, mapped_argument_slots_value, instructions_value, instruction_data_value, gc_safepoints_value, handlers_value, compiled_value, positions_value, profile_site_ids_value, name_string_index_value, kind_value, parameter_count_value, argument_snapshot_count_value, argument_snapshot_plan_count_value, mapped_argument_count_value, length_value, register_count_value, captured_count_value, argument_retention_limit_value, property_ic_count_value, literal_shape_count_value, instruction_count_value, instruction_data_count_value, gc_safepoint_count_value, handler_count_value, file_index_value, position_count_value, strict_value, needs_arguments_value, mapped_arguments_value, gc_safepoints_trusted_value, is_derived_constructor_value, is_class_constructor_value, constructor_slot_reserve_value, has_prototype_value) { ",
-	".argument_snapshot_plan = argument_snapshot_plan_value, .mapped_argument_slots = mapped_argument_slots_value, .instructions = instructions_value, .instruction_data = instruction_data_value, .gc_safepoints = gc_safepoints_value, .handlers = handlers_value, .compiled = compiled_value, .positions = positions_value, MAL_FUNCTION_PROFILE_SITE(profile_site_ids_value) ",
+	"#define MAL_FUNCTION_ROW(argument_snapshot_plan_value, mapped_argument_slots_value, closure_capture_owners_value, closure_capture_owner_count_value, instructions_value, instruction_data_value, gc_safepoints_value, handlers_value, compiled_value, positions_value, profile_site_ids_value, name_string_index_value, kind_value, parameter_count_value, argument_snapshot_count_value, argument_snapshot_plan_count_value, mapped_argument_count_value, length_value, register_count_value, captured_count_value, argument_retention_limit_value, property_ic_count_value, literal_shape_count_value, instruction_count_value, instruction_data_count_value, gc_safepoint_count_value, handler_count_value, file_index_value, position_count_value, strict_value, needs_arguments_value, mapped_arguments_value, gc_safepoints_trusted_value, is_derived_constructor_value, is_class_constructor_value, constructor_slot_reserve_value, has_prototype_value) { ",
+	".argument_snapshot_plan = argument_snapshot_plan_value, .mapped_argument_slots = mapped_argument_slots_value, .closure_capture_owners = closure_capture_owners_value, .closure_capture_owner_count = closure_capture_owner_count_value, .instructions = instructions_value, .instruction_data = instruction_data_value, .gc_safepoints = gc_safepoints_value, .handlers = handlers_value, .compiled = compiled_value, .positions = positions_value, MAL_FUNCTION_PROFILE_SITE(profile_site_ids_value) ",
 	".name_string_index = name_string_index_value, .kind = kind_value, .parameter_count = parameter_count_value, .argument_snapshot_count = argument_snapshot_count_value, .argument_snapshot_plan_count = argument_snapshot_plan_count_value, .mapped_argument_count = mapped_argument_count_value, .length = length_value, .register_count = register_count_value, .captured_count = captured_count_value, .argument_retention_limit = argument_retention_limit_value, .property_ic_count = property_ic_count_value, .literal_shape_count = literal_shape_count_value, .instruction_count = instruction_count_value, .instruction_data_count = instruction_data_count_value, .gc_safepoint_count = gc_safepoint_count_value, .handler_count = handler_count_value, .file_index = file_index_value, .position_count = position_count_value, .strict = strict_value, .needs_arguments = needs_arguments_value, .mapped_arguments = mapped_arguments_value, .gc_safepoints_trusted = gc_safepoints_trusted_value, .is_derived_constructor = is_derived_constructor_value, .is_class_constructor = is_class_constructor_value, .constructor_slot_reserve = constructor_slot_reserve_value, .has_prototype = has_prototype_value }",
 ].join("");
 
@@ -244,6 +244,7 @@ function malFunctionRow(
 	argumentSnapshotPlanSymbol: string,
 	argumentSnapshotPlanCount: number,
 	mappedArgumentSlotsSymbol: string,
+	closureCaptureOwnersSymbol: string,
 	handlersSymbol: string,
 	compiledSymbol: string,
 	profileSiteIdsSymbol: string,
@@ -253,6 +254,8 @@ function malFunctionRow(
 	const values = [
 		argumentSnapshotPlanSymbol,
 		mappedArgumentSlotsSymbol,
+		closureCaptureOwnersSymbol,
+		fn.closureCaptureOwners?.length ?? -1,
 		omitBytecode ? "nullptr" : instructionsSymbol,
 		instructionDataSymbol,
 		gcSafepointsSymbol,
@@ -1033,9 +1036,25 @@ function emitProgramImageSource(
 
 	const positionInfo: Array<{ symbol: string; count: number }> = [];
 	const profileSiteSymbols: Array<string> = [];
+	const closureCaptureOwnerSymbols: Array<string> = [];
+	const closureCaptureLayouts = new Map<string, string>();
 
 	for (let i = 0; i < runtime.functions.length; ++i) {
 		const fn = runtime.functions[i]!;
+		if (fn.closureCaptureOwners === undefined) {
+			closureCaptureOwnerSymbols.push("nullptr");
+		} else {
+			const layout = fn.closureCaptureOwners.join(", ");
+			let symbol = closureCaptureLayouts.get(layout);
+			if (symbol === undefined) {
+				symbol = `mal_function_${i}_closure_capture_owners${suffix}`;
+				closureCaptureLayouts.set(layout, symbol);
+				// Non-null metadata distinguishes a known empty closure from a
+				// manually initialized function that still needs its lexical chain.
+				lines.push(`static const i32 ${symbol}[] = { ${layout || "0"} };`, "");
+			}
+			closureCaptureOwnerSymbols.push(symbol);
+		}
 		if (!omitBytecode[i]) {
 			if (fn.mappedArgumentSlots.length > 0) {
 				lines.push(
@@ -1128,6 +1147,7 @@ function emitProgramImageSource(
 				!omitBytecode[i] && fn.mappedArgumentSlots.length > 0
 					? `mal_function_${i}_mapped_argument_slots${suffix}`
 					: "nullptr",
+				closureCaptureOwnerSymbols[i]!,
 				fn.handlers.length > 0 ? `mal_function_${i}_handlers${suffix}` : "nullptr",
 				compiled[i] !== null && compiled[i]!.source.length > 0
 					? compiled[i]!.symbol
@@ -1904,9 +1924,19 @@ export function emitBatch(
 		const argumentSnapshotPlanSymbols: Array<string> = [];
 		const argumentSnapshotPlanCounts: Array<number> = [];
 		const mappedArgumentSlotsSymbols: Array<string> = [];
+		const closureCaptureOwnersSymbols: Array<string> = [];
 		const handlerSymbols: Array<string> = [];
 		for (let i = 0; i < runtime.functions.length; ++i) {
 			const fn = runtime.functions[i]!;
+			closureCaptureOwnersSymbols.push(
+				fn.closureCaptureOwners !== undefined
+					? intern(
+							"closure_capture_owners",
+							"i32",
+							`    ${fn.closureCaptureOwners.join(", ") || "0"}`,
+						)
+					: "nullptr",
+			);
 			if (omitBytecode[i]) {
 				const seedData = compiledKnownOwnSlotSeedData(fn);
 				instructionSymbols.push("nullptr");
@@ -1981,6 +2011,7 @@ export function emitBatch(
 					argumentSnapshotPlanSymbols[i]!,
 					argumentSnapshotPlanCounts[i]!,
 					mappedArgumentSlotsSymbols[i]!,
+					closureCaptureOwnersSymbols[i]!,
 					handlerSymbols[i]!,
 					compiled[i] !== null && compiled[i]!.source.length > 0
 						? compiled[i]!.symbol

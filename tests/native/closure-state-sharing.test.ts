@@ -7,10 +7,32 @@ import { resolveBuildConfig } from "../../src/build-config.ts";
 import { compileEntrypoint } from "../../src/compiler/pipeline/compile-program.ts";
 import {
 	buildBackendPairFromOneProgramImage,
+	buildNativeBinary,
 	buildNativeProgramImage,
 	runToStdout,
 	STRESS_ENV,
 } from "../../src/test-harness.ts";
+
+it("retains selected closure storage and active lexical roots through collection", () => {
+	const outDir = mkdtempSync(join(tmpdir(), "mal-closure-capture-retention-"));
+	try {
+		const binary = buildNativeBinary({
+			fixture: "tests/local/fibertest_stub.js",
+			name: "closure-capture-retention",
+			mainFile: "tests/fixtures/closure-capture-retention/main.c",
+			config: resolveBuildConfig({ engine: { eval: false, realms: false } }),
+			outDir,
+		});
+		expect(
+			runToStdout(binary, {
+				env: { MAL_GC_STRESS: "0", MAL_GC_VERIFY: "1" },
+				timeoutMs: 60_000,
+			}),
+		).toBe("closure-capture-retention PASS\n");
+	} finally {
+		rmSync(outDir, { recursive: true, force: true });
+	}
+}, 600_000);
 
 it("preserves closure cells and lexical identities across native and generic calls", () => {
 	const fixture = "tests/local/closure-state-sharing.js";

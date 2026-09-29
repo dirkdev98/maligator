@@ -42,7 +42,27 @@ import type {
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal artifacts are hard cut-overs: stale cache entries rebuild.
-export const COMPILER_ARTIFACT_VERSION = 86;
+export const COMPILER_ARTIFACT_VERSION = 87;
+
+function validateClosureCaptureOwners(
+	owners: ReadonlyArray<number>,
+	functionIndex: number,
+	functionCount: number,
+): void {
+	if (
+		owners.some(
+			(owner, index) =>
+				!Number.isInteger(owner) ||
+				// The two lowest int32 ids identify WITH and capture-vector environments.
+				owner <= -0x7fffffff ||
+				owner >= functionCount ||
+				owner === functionIndex ||
+				(index > 0 && owner <= owners[index - 1]!),
+		)
+	) {
+		throw new RangeError("program-image-codec: invalid closure capture owners");
+	}
+}
 
 const MAX_REGION_ANCHORS = 8;
 const MAX_REGION_CLAIMS = 96;
@@ -610,6 +630,15 @@ function writeCompilerArtifact(
 		const native = compiler.native.functions[functionIndex];
 		if (native?.functionIndex !== functionIndex) {
 			throw new RangeError("program-image-codec: native function plan mismatch");
+		}
+		w.u8(fn.closureCaptureOwners === undefined ? 0 : 1);
+		if (fn.closureCaptureOwners !== undefined) {
+			validateClosureCaptureOwners(
+				fn.closureCaptureOwners,
+				functionIndex,
+				def.functions.length,
+			);
+			w.i32Array(fn.closureCaptureOwners);
 		}
 		validateNativeFieldCalls(fn, native, compiler.native.functions);
 		validateNativeLiteralSwitches(fn, native);
@@ -2978,6 +3007,15 @@ function readCompilerArtifact(r: Reader, runtimeImage: RuntimeImage): ProgramIma
 	}
 	const nativeFunctions: Array<NativeFunctionPlan> = [];
 	for (const [functionIndex, fn] of functions.entries()) {
+		const closureCaptureTag = r.u8();
+		if (closureCaptureTag !== 0 && closureCaptureTag !== 1) {
+			throw new RangeError("program-image-codec: invalid closure capture tag");
+		}
+		if (closureCaptureTag === 1) {
+			const owners = r.i32Array();
+			validateClosureCaptureOwners(owners, functionIndex, functions.length);
+			fn.closureCaptureOwners = owners;
+		}
 		const safepointCount = r.count(5);
 		const safepoints: Array<NativeFunctionPlan["gc"]["safepoints"][number]> = [];
 		for (let safepointIndex = 0; safepointIndex < safepointCount; safepointIndex++) {

@@ -121,6 +121,21 @@ import type { BytecodeFunction, BytecodeInstruction } from "./runtime-image.ts";
  */
 type RegisterRep = VmRegisterRepresentation;
 
+function fixedCaptureOwners(fn: BytecodeFunction, functionIndex: number): Array<number> {
+	const owners = new Set<number>();
+	for (const instruction of fn.instructions) {
+		if (
+			(instruction.opcode === "LOAD_CAPTURED" ||
+				instruction.opcode === "STORE_CAPTURED") &&
+			instruction.ownerFunctionIndex >= 0 &&
+			instruction.ownerFunctionIndex !== functionIndex
+		) {
+			owners.add(instruction.ownerFunctionIndex);
+		}
+	}
+	return [...owners].sort((a, b) => a - b);
+}
+
 function isNumericRep(rep: RegisterRep): boolean {
 	return rep === "number" || rep === "int32";
 }
@@ -1225,7 +1240,7 @@ function emitCompiledVariant(
 	if (needsRootFrame) {
 		lines.push(
 			`    ${relocatable ? "" : "static "}const MalFrameDescriptor __gc_desc = { .function_index = ${relocation.functionIndex(index)}, .slot_count = ${totalSlots} };`,
-			`    MalRootFrame __gc_frame = { .prev = mal_root_frame_head, .desc = &__gc_desc, .slots = ${totalSlots > 0 ? "__gc_slots" : "nullptr"}, .inactive_slots = 0, .env = nullptr };`,
+			`    MalRootFrame __gc_frame = { .prev = mal_root_frame_head, .desc = &__gc_desc, .slots = ${totalSlots > 0 ? "__gc_slots" : "nullptr"}, .inactive_slots = 0, .env = env };`,
 			`    mal_root_frame_head = &__gc_frame;`,
 		);
 	}
@@ -1245,6 +1260,12 @@ function emitCompiledVariant(
 		lines.push(
 			`    env = mal_env_new(vm, env, ${relocation.functionIndex(index)}, ${fn.capturedCount});`,
 			`    __gc_frame.env = env;`,
+		);
+	}
+
+	for (const owner of fixedCaptureOwners(fn, index)) {
+		lines.push(
+			`    MalEnv *const __capture_owner_${owner} = mal_vm_capture_owner(env, ${relocation.ownerFunctionIndex(owner)});`,
 		);
 	}
 
@@ -1617,6 +1638,9 @@ function emitResumableFunction(
 	lines.push(
 		`    MalGeneratorObject *resume_state = (MalGeneratorObject *) entry_state;`,
 	);
+	for (const owner of fixedCaptureOwners(fn, index)) {
+		lines.push(`    MalEnv *__capture_owner_${owner};`);
+	}
 	lines.push(`    MalGeneratorObject *__coro = resume_state;`);
 	lines.push(`    (void) __coro;`);
 	if (isAsyncFunction) {
@@ -1646,6 +1670,9 @@ function emitResumableFunction(
 		`        __gc_frame = (MalRootFrame){ .prev = mal_root_frame_head, .desc = &__gc_desc, .slots = __gc_slots, .inactive_slots = 0, .env = env };`,
 	);
 	lines.push(`        mal_root_frame_head = &__gc_frame;`);
+	for (const owner of fixedCaptureOwners(fn, index)) {
+		lines.push(`        __capture_owner_${owner} = mal_vm_capture_owner(env, ${owner});`);
+	}
 	lines.push(`        switch (resume_state->frame.instruction_pointer) {`);
 	for (const resumeIp of resumePoints) {
 		lines.push(`        case ${resumeIp}: goto L${resumeIp};`);
@@ -1676,6 +1703,9 @@ function emitResumableFunction(
 			`        MAL_PERF_ADD(argument_snapshot_logical_values, ${fn.argumentSnapshotCount});`,
 			`        MAL_PERF_ADD(argument_snapshot_destination_writes, ${fn.argumentSnapshotCount});`,
 		);
+	}
+	for (const owner of fixedCaptureOwners(fn, index)) {
+		lines.push(`        __capture_owner_${owner} = mal_vm_capture_owner(env, ${owner});`);
 	}
 	lines.push(`    }`);
 
@@ -2287,6 +2317,7 @@ function emitBody(
 	if (!vmRegionActionsAreCurrent(specializations, regionActions)) {
 		throw new Error("Native function has stale region actions");
 	}
+	const stableCaptureOwners = new Set(fixedCaptureOwners(fn, functionIndex));
 	const numericFusionActionByIp = new Map<number, NativeNumericFusionAction>();
 	for (const action of regionActions) {
 		const region = specializations[action.regionIndex];
@@ -3498,6 +3529,7 @@ function emitBody(
 				directCompiledTargets,
 				directCompiledEntries,
 				ownedCaptureFunctionIndex: ownsCaptureEnvironment ? functionIndex : undefined,
+				fixedCaptureOwners: stableCaptureOwners,
 				strictCompiledTargets,
 				directResultRepresentation,
 				directArgumentRepresentations,
@@ -3865,6 +3897,7 @@ interface NativeStaticPropertyProjectionAction {
 
 interface NativeInstructionContext {
 	readonly ownedCaptureFunctionIndex?: number;
+	readonly fixedCaptureOwners?: ReadonlySet<number>;
 	readonly resources: Set<NativeBodyResource>;
 	readonly directEntryCalls: Map<number, Set<number>>;
 	readonly profileSiteId?: number;
@@ -4066,6 +4099,7 @@ function emitInstruction(
 		denseIteratorStepRootPublication: context.denseIteratorStepRootPublication,
 		denseIteratorStepInactiveRootMask: context.denseIteratorStepInactiveRootMask,
 		ownedCaptureFunctionIndex: context.ownedCaptureFunctionIndex,
+		fixedCaptureOwners: context.fixedCaptureOwners,
 		strictCompiledTargets: context.strictCompiledTargets,
 		directCompiledTargets,
 		directCompiledEntries,
@@ -4917,11 +4951,6 @@ function emitInstruction(
 				throwCheck(),
 			];
 		case "CREATE_FUNCTION":
-			// The closure captures this frame's environment. Only reachable when
-			// the enclosing function has no captured slots of its own (see the
-			// capturedCount guard in emitCompiledFunction), so `env` — the
-			// enclosing function's creation_env — is exactly what its interpreted
-			// frame's env would be, making the closure's creation_env correct.
 			return [
 				`r${instruction.dst} = mal_vm_op_create_function(vm, ${relocation.functionIndex(instruction.functionIndex)}, env);`,
 			];
@@ -4991,6 +5020,12 @@ function emitInstruction(
 			// fresh-call parameter (a coroutine resume skips the prologue).
 			return [`r${instruction.dst} = callee;`];
 		case "LOAD_CAPTURED": {
+			if (context.fixedCaptureOwners?.has(instruction.ownerFunctionIndex)) {
+				const owner = `__capture_owner_${instruction.ownerFunctionIndex}`;
+				return [
+					`r${instruction.dst} = ${owner} != nullptr ? ${owner}->slots[${instruction.index}] : MAL_VALUE_UNDEFINED;`,
+				];
+			}
 			if (instruction.ownerFunctionIndex === context.ownedCaptureFunctionIndex)
 				return [`r${instruction.dst} = env->slots[${instruction.index}];`];
 			return [
@@ -4998,6 +5033,22 @@ function emitInstruction(
 			];
 		}
 		case "STORE_CAPTURED": {
+			if (context.fixedCaptureOwners?.has(instruction.ownerFunctionIndex)) {
+				const owner = `__capture_owner_${instruction.ownerFunctionIndex}`;
+				const primitive =
+					reps[instruction.src] === "number" ||
+					reps[instruction.src] === "int32" ||
+					reps[instruction.src] === "boolean";
+				return [
+					`if (${owner} != nullptr) {`,
+					`  mal_gc_write_barrier(${owner}->slots[${instruction.index}]);`,
+					`  ${owner}->slots[${instruction.index}] = ${boxed(instruction.src)};`,
+					...(!primitive
+						? [`  mal_gc_card(&${owner}->header, ${owner}->slots[${instruction.index}]);`]
+						: []),
+					`}`,
+				];
+			}
 			if (instruction.ownerFunctionIndex === context.ownedCaptureFunctionIndex) {
 				const primitive =
 					reps[instruction.src] === "number" ||
