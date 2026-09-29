@@ -5,6 +5,7 @@
 
 #include "function_object.h"
 #include "gc.h"
+#include "heap_symbol.h"
 #include "intrinsics.h"
 #include "object_ops.h"
 #include "vm.h"
@@ -174,6 +175,107 @@ static bool widening_preserves_payload(MalVm *vm, bool external) {
     return ok;
 }
 
+static bool growing_preserves_fields(MalVm *vm, u32 mode) {
+    static MalString key_storage[4][MAL_SHAPE_MAX_INLINE_SLOTS];
+    static u8 key_names[4][MAL_SHAPE_MAX_INLINE_SLOTS][64];
+    MalString *keys[MAL_SHAPE_MAX_INLINE_SLOTS];
+    for (u32 slot = 0; slot < MAL_SHAPE_MAX_INLINE_SLOTS; slot++) {
+        u8 *name = key_names[mode][slot];
+        usize length = (usize) snprintf((char *) name, sizeof(key_names[mode][slot]),
+                                       "__compact_grow_%u_%u", mode, slot);
+        keys[slot] = &key_storage[mode][slot];
+        mal_string_init_external_latin1(keys[slot], name, length);
+        // Only immortal property names may extend a shape beyond its dynamic-key limit.
+        keys[slot]->header.storage = MAL_HEAP_STORAGE_IMMORTAL;
+    }
+    MalString *child_keys[] = {mal_intrinsic_ascii(vm, "__compact_grown_child")};
+    MalShape *child_shape = mal_shape_from_string_keys(&vm->heap, child_keys, 1);
+    MalValue live[] = {
+        mal_value_new_undefined(), mal_value_new_undefined(),
+        mal_value_new_undefined(), mal_value_new_undefined()
+    };
+    MalRootSpan roots;
+    mal_gc_root(&roots, live, countof(live));
+    if (mode == 3) live[3] = mal_value_from_symbol(mal_symbol_new_private(&vm->heap));
+    bool ok = true;
+    for (u32 count = 0; ok && count < MAL_SHAPE_MAX_INLINE_SLOTS; count++) {
+        MalValue marker = mal_value_from_i32((i32) count);
+        live[0] = mal_value_from_object(mal_object_new_shaped(
+            &vm->heap, nullptr, child_shape, &marker, 1));
+        MalValue values[MAL_SHAPE_MAX_INLINE_SLOTS];
+        for (u32 slot = 0; slot < count; slot++) {
+            values[slot] = slot % 4 == 0 ? mal_value_from_i32((i32) slot)
+                : slot % 4 == 1 ? mal_value_from_f64_convert_nan(-0.0)
+                : slot % 4 == 2 ? live[0] : mal_value_new_undefined();
+        }
+        MalShape *shape = mal_shape_from_string_keys(&vm->heap, keys, count);
+        bool tagged = mode == 1 || mode == 3;
+        MalObject *object = count == 0 ? mal_object_new(&vm->heap, nullptr)
+            : tagged ? mal_object_new_shaped_tagged(&vm->heap, nullptr, shape, values, count)
+            : mal_object_new_shaped(&vm->heap, nullptr, shape, values, count);
+        live[1] = mal_value_from_object(object);
+        if (mode == 3) {
+            ok = mal_object_set(object, mal_key_from_value(live[3]), marker) &&
+                object->storage_kind == MAL_OBJECT_EXTERNAL && object->overflow_private_only;
+            if (!ok) {
+                fprintf(stderr, "compact metadata setup failed: count=%u\n", count);
+                break;
+            }
+        }
+        if (mode == 2 && count != 0) {
+            void *fields = malloc(object->shape->payload_bytes);
+            if (fields == nullptr) abort();
+            memcpy(fields, mal_object_fields_nonempty(object), object->shape->payload_bytes);
+            mal_object_set_fields_pointer(object, fields);
+            object->slots_owned = true;
+        }
+        void *inline_fields = (u8 *) (object + 1) + sizeof(void *);
+        usize prefix_bytes = sizeof(MalObject) + sizeof(void *);
+        usize cell_bytes = mal_heap_allocation_charge(prefix_bytes + object->shape->payload_bytes);
+        bool retains_inline = object->storage_kind == MAL_OBJECT_COMPACT ||
+            mal_object_fields(object) == inline_fields;
+        bool fits_inline = !object->slots_owned && retains_inline &&
+            sizeof(MalValue) * (count + 1) <= cell_bytes - prefix_bytes;
+        MalValue appended_marker = mal_value_from_i32((i32) count + 1000);
+        live[2] = mal_value_from_object(mal_object_new_shaped(
+            &vm->heap, nullptr, child_shape, &appended_marker, 1));
+        MalPropertyDesc desc = {
+            .flags = MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE,
+            .value = live[2],
+            .getter = mal_value_new_undefined(),
+            .setter = mal_value_new_undefined(),
+        };
+        MalKey key = mal_key_from_value(mal_value_from_string(keys[count]));
+        ok = mal_object_define_own(object, key, &desc) == MAL_DEFINE_OWN_APPLIED &&
+            mal_value_to_object(live[1]) == object &&
+            !mal_shape_is_compact(object->shape) && object->shape->inline_count == count + 1 &&
+            object->slot_capacity >= count + 1 &&
+            (fits_inline ? !object->slots_owned && mal_object_fields(object) == inline_fields
+                : object->slots_owned);
+        live[0] = mal_value_new_undefined();
+        live[2] = mal_value_new_undefined();
+        mal_gc_collect(vm);
+        for (u32 slot = 0; ok && slot < count; slot++) {
+            ok = mal_object_field_load(object, slot) == values[slot] &&
+                object->shape->props[slot].key == mal_value_from_string(keys[slot]);
+            if (ok && slot % 4 == 2) {
+                ok = mal_object_field_load(mal_value_to_object(values[slot]), 0) == marker;
+            }
+        }
+        MalPropertyLookup appended = mal_object_get_own(object, key);
+        ok = ok && appended.present && appended.desc.flags == desc.flags &&
+            appended.desc.value == desc.value &&
+            mal_object_field_load(mal_value_to_object(appended.desc.value), 0) == appended_marker;
+        if (ok && mode == 3) {
+            MalPropertyLookup metadata = mal_object_get_own(object, mal_key_from_value(live[3]));
+            ok = metadata.present && metadata.desc.value == marker;
+        }
+        if (!ok) fprintf(stderr, "compact growth failed: mode=%u count=%u\n", mode, count);
+    }
+    mal_gc_unroot(&roots);
+    return ok;
+}
+
 static MalValue record_layout(
     MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count,
     MalValue new_target, MalValue callee
@@ -207,8 +309,10 @@ int main(int argc, char **argv) {
     MalHostLaunchContext launch = {.argc = argc, .argv = argv};
     mal_vm_run_host_installs(&vm, &launch);
     if (!numeric_field_stores(&vm) || !preferred_layout_joins(&vm) ||
-        !widening_preserves_payload(&vm, false) || !widening_preserves_payload(&vm, true)) {
-        fputs("compact field-store, layout join or widening contract failed\n", stderr);
+        !widening_preserves_payload(&vm, false) || !widening_preserves_payload(&vm, true) ||
+        !growing_preserves_fields(&vm, 0) || !growing_preserves_fields(&vm, 1) ||
+        !growing_preserves_fields(&vm, 2) || !growing_preserves_fields(&vm, 3)) {
+        fputs("compact field-store, layout join, widening or growth contract failed\n", stderr);
         mal_vm_free(&vm);
         return 1;
     }

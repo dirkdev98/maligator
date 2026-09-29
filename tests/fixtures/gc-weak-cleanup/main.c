@@ -48,6 +48,74 @@ static MalValue new_weak_key(MalVm *vm, usize index) {
     return mal_value_from_symbol(mal_symbol_new(&vm->heap, nullptr));
 }
 
+static i32 retain_minimum;
+
+static bool keep_table_key(MalValue key) {
+    return mal_value_to_i32(key) >= retain_minimum;
+}
+
+static int check_table_filter(void) {
+    // These keys share the last bucket of a 128-slot table, wrapping the probe cluster.
+    static const i32 clustered[] = {
+        50, 167, 274, 317, 964, 1054, 1247, 1299, 1320, 1398, 1457, 1609,
+        1662, 1825, 2106, 2249, 2252, 2255, 2371, 2444, 2535, 2599, 2603,
+        2634, 2844, 3215, 3253, 3337, 3615, 3746, 3897, 4145, 4440, 4467,
+        4698, 4848, 5170, 5226, 5383, 5413, 5496, 5580, 5589, 5619, 5696,
+        5832, 5962, 6132, 6213, 6367, 6642, 6645, 6812, 6817, 6922, 6971,
+        6977, 6999, 7090, 7359, 7456, 7577, 7690, 7744
+    };
+    static const usize removals[] = {0, 1, 16, 17, 32, 64, 17};
+    for (usize trial = 0; trial < countof(removals); ++trial) {
+        usize count = trial + 1 == countof(removals) ? 256 : countof(clustered);
+        MalTable *table = mal_table_new(MAL_TABLE_MODE_GENERAL, MAL_TABLE_ROLE_MAP);
+        if (!mal_table_reserve(table, count)) return 20;
+        void *handles[256];
+        for (usize i = 0; i < count; ++i) {
+            i32 number = count == countof(clustered) ? clustered[i] : (i32) i;
+            MalKey key = mal_key_index_unsigned((u32) number);
+            handles[i] = mal_table_upsert_entry(table, key, nullptr);
+            mal_table_entry_set_value(table, handles[i], mal_value_from_i32((i32) i));
+        }
+        mal_table_pin(table);
+        u64 epoch = mal_table_handle_epoch(table);
+        MalTableIter iter;
+        mal_table_iter_init(&iter, table, MAL_TABLE_ITER_STORAGE);
+        usize removed = removals[trial];
+        retain_minimum = removed == count ? INT32_MAX
+            : count == countof(clustered) ? clustered[removed] : (i32) removed;
+        if (mal_table_retain(table, keep_table_key) != removed ||
+            mal_table_size(table) != count - removed ||
+            mal_table_handle_epoch(table) != epoch) return 21;
+        if (mal_table_retain(table, keep_table_key) != 0) return 22;
+        for (usize i = 0; i < count; ++i) {
+            i32 number = count == countof(clustered) ? clustered[i] : (i32) i;
+            MalKey key = mal_key_index_unsigned((u32) number);
+            MalTableLookup found = mal_table_lookup(table, key);
+            if (found.present != (i >= removed) ||
+                mal_table_entry_is_live(table, handles[i]) != (i >= removed)) return 23;
+            if (found.present && (found.entry != handles[i] ||
+                mal_table_entry_value(table, found.entry) != mal_value_from_i32((i32) i))) return 24;
+        }
+        for (usize i = removed; i < count; ++i) {
+            MalKey key;
+            void *entry;
+            if (!mal_table_iter_next(&iter, &key, &entry) || entry != handles[i]) return 25;
+        }
+        MalKey added = mal_key_index_unsigned(100000);
+        void *added_entry = mal_table_upsert_entry(table, added, nullptr);
+        MalKey next_key;
+        void *next_entry;
+        if (!mal_table_iter_next(&iter, &next_key, &next_entry) ||
+            next_key.value != added.value || next_entry != added_entry ||
+            mal_table_iter_next(&iter, &next_key, &next_entry)) return 26;
+        mal_table_unpin(table);
+        mal_table_compact(table);
+        if (!mal_table_lookup(table, added).present) return 27;
+        mal_table_free(table);
+    }
+    return 0;
+}
+
 static int check_sparse_churn(MalVm *vm) {
     enum { LIVE_COUNT = 256, CHURN_COUNT = LIVE_COUNT * 3 };
     MalValue roots[LIVE_COUNT + 2];
@@ -124,6 +192,8 @@ int main(void) {
     MalVm vm;
     mal_vm_init(&vm, &mal_runtime_image);
     vm.heap.next_gc_at = (usize) -1;
+    int filter_result = check_table_filter();
+    if (filter_result != 0) return filter_result;
     mal_gc_register_finalizer(MAL_HEAP_OBJECT, count_finalized);
 
     MalMapObject *map = mal_map_object_new(&vm.heap, MAL_HEAP_MAP_OBJECT, nullptr, true);

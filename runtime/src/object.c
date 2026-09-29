@@ -294,17 +294,39 @@ void mal_object_set_overflow_pointer(MalObject *object, MalTable *overflow) {
     mal_object_externalize(object)->overflow = overflow;
 }
 
-void mal_object_generalize_fields(MalObject *object) {
+static u8 mal_object_inline_payload_eights(usize allocation_size) {
+    usize base = sizeof(MalObject) + sizeof(void *);
+    usize capacity = mal_heap_allocation_charge(allocation_size) - base;
+    assert(capacity % sizeof(MalValue) == 0 && capacity / sizeof(MalValue) <= UINT8_MAX);
+    return (u8) (capacity / sizeof(MalValue));
+}
+
+static u32 mal_object_inline_slot_capacity(MalObject *object) {
+    if (object->slots_owned || object->storage_kind == MAL_OBJECT_EMBEDDED ||
+        (object->storage_kind != MAL_OBJECT_COMPACT &&
+         mal_object_fields(object) != (u8 *) (object + 1) + sizeof(void *))) {
+        return 0;
+    }
+    if (object->inline_payload_eights == 0) {
+        if (object->header.storage != MAL_HEAP_STORAGE_DYNAMIC ||
+            mal_shape_is_compact(object->shape)) return 0;
+        // Before tagged inline growth, slot capacity still describes the original allocation.
+        usize allocation_size = sizeof(MalObject) + sizeof(void *)
+            + sizeof(MalValue) * object->slot_capacity;
+        object->inline_payload_eights = mal_object_inline_payload_eights(allocation_size);
+    }
+    return object->inline_payload_eights < MAL_SHAPE_MAX_INLINE_SLOTS
+        ? object->inline_payload_eights : MAL_SHAPE_MAX_INLINE_SLOTS;
+}
+
+static void mal_object_generalize_fields_capacity(MalObject *object, u32 capacity) {
     MalShape *shape = object->shape;
-    if (!mal_shape_is_compact(shape)) return;
     u32 count = shape->inline_count;
+    assert(mal_shape_is_compact(shape) && count <= capacity);
     void *fields = mal_object_fields(object);
-    bool inline_fields = !object->slots_owned
-        && fields == (u8 *) (object + 1) + sizeof(void *)
-        && (usize) object->inline_payload_eights * sizeof(MalValue)
-            >= sizeof(MalValue) * count;
+    bool inline_fields = capacity <= mal_object_inline_slot_capacity(object);
     MalValue stack_values[MAL_SHAPE_MAX_INLINE_SLOTS];
-    MalValue *values = inline_fields ? stack_values : malloc(sizeof(MalValue) * count);
+    MalValue *values = inline_fields ? stack_values : malloc(sizeof(MalValue) * capacity);
     if (values == nullptr) abort();
     for (u32 i = 0; i < count; i++) {
         values[i] = mal_shape_field_load(fields, shape->props[i].field);
@@ -313,11 +335,19 @@ void mal_object_generalize_fields(MalObject *object) {
         memcpy(fields, values, sizeof(MalValue) * count);
     } else {
         if (object->slots_owned) free(fields);
+        else if (object->header.storage == MAL_HEAP_STORAGE_DYNAMIC) {
+            g_slot_grow_migrations++;
+        }
         mal_object_set_fields_pointer(object, values);
         object->slots_owned = true;
     }
-    object->slot_capacity = (u8) count;
+    object->slot_capacity = (u8) capacity;
     object->shape = mal_shape_logical(shape);
+}
+
+void mal_object_generalize_fields(MalObject *object) {
+    if (!mal_shape_is_compact(object->shape)) return;
+    mal_object_generalize_fields_capacity(object, object->shape->inline_count);
 }
 
 void mal_object_widen_field(MalObject *object, u32 ordinal, MalValue value) {
@@ -367,13 +397,6 @@ void mal_object_widen_field(MalObject *object, u32 ordinal, MalValue value) {
         object->slots_owned = true;
     }
     object->shape = widened;
-}
-
-static u8 mal_object_inline_payload_eights(usize allocation_size) {
-    usize base = sizeof(MalObject) + sizeof(void *);
-    usize capacity = mal_heap_allocation_charge(allocation_size) - base;
-    assert(capacity % sizeof(MalValue) == 0 && capacity / sizeof(MalValue) <= UINT8_MAX);
-    return (u8) (capacity / sizeof(MalValue));
 }
 
 static void mal_object_initialize_admitted_fields(
@@ -563,16 +586,24 @@ void mal_object_set_shaped_values(
 }
 
 void mal_object_grow_slots(MalObject *object, u32 old_count, u32 new_count) {
-    if (mal_shape_is_compact(object->shape)) {
-        mal_object_generalize_fields(object);
-    }
-    if (new_count <= object->slot_capacity) return;
     assert(new_count <= MAL_SHAPE_MAX_INLINE_SLOTS);
+    bool compact = mal_shape_is_compact(object->shape);
+    if (!compact && new_count <= object->slot_capacity) return;
+    u32 inline_capacity = mal_object_inline_slot_capacity(object);
+    if (new_count <= inline_capacity) {
+        if (compact) mal_object_generalize_fields_capacity(object, inline_capacity);
+        else object->slot_capacity = (u8) inline_capacity;
+        return;
+    }
     u32 capacity = object->slot_capacity < 4 ? 4 : object->slot_capacity;
     while (capacity < new_count) {
         capacity = capacity < MAL_SHAPE_MAX_INLINE_SLOTS / 2
             ? capacity * 2
             : MAL_SHAPE_MAX_INLINE_SLOTS;
+    }
+    if (compact) {
+        mal_object_generalize_fields_capacity(object, capacity);
+        return;
     }
     // Spare slots stay invisible until callers initialize them and publish the shape.
     if (object->slots_owned) {

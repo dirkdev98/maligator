@@ -83,9 +83,15 @@ exit handler is registered once per process.
 
 ## Weak table storage
 
-Weak cleanup deletes every dead key after the ephemeron fixpoint, with SATB
-marking disabled so deletion cannot revive a dead edge. Deletion repairs hash
-probe chains immediately; tombstoned entries are skipped by lookup and tracing.
+Weak cleanup filters every dead key after the ephemeron fixpoint, with SATB
+marking disabled so deletion cannot revive a dead edge. The table filter uses
+constant scratch space. Sparse deaths repair individual probe chains; at least
+16 deaths and `dead_count >= live_count / 4` rebuild the existing hash slots
+once, avoiding repeated cluster repairs. All-dead tables use the clear path.
+The predicate is pure and may run twice, with no allocation or reentrant GC.
+Surviving entry handles and insertion order stay valid; tombstoned entries are
+skipped by lookup and tracing. Hash rebuilding is expected linear in table size,
+while adversarial surviving collisions retain open addressing's quadratic bound.
 Rebuilding the insertion-order storage can therefore be deferred independently
 of weak-reference semantics.
 

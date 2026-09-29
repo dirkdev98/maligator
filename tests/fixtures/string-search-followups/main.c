@@ -79,14 +79,28 @@ static bool search_matches_reference(MalVm *vm) {
     const f64 starts[] = {-INFINITY, -3, 0, 1, 45, 47, 500, 991, 1024, 1025, INFINITY, NAN};
     for (usize o = 0; o < countof(offsets); o++) {
         for (usize n = 0; n < countof(sizes); n++) {
-            MalString *needle = mal_string_new_copy(&vm->heap, units + offsets[o], sizes[n]);
-            for (usize s = 0; s < countof(strings); s++) {
-                for (usize p = 0; p < countof(starts); p++) {
-                    for (usize reverse = 0; reverse < 2; reverse++) {
-                        i32 expected = reference_find(units, countof(units), units + offsets[o], sizes[n], starts[p], reverse);
-                        MalValue actual = mal_builtin_string_search_strings(strings[s], needle, starts[p],
-                            reverse ? MAL_STRING_SEARCH_LAST_INDEX_OF : MAL_STRING_SEARCH_INDEX_OF);
-                        CHECK(mal_value_to_i32(actual) == expected);
+            MalString *needles[2] = {
+                mal_string_new_copy(&vm->heap, units + offsets[o], sizes[n]),
+            };
+            usize needle_count = 1;
+            if (sizes[n] > MAL_STRING_INLINE_LATIN1_CODE_UNITS) {
+                usize left_length = sizes[n] / 2;
+                MalString *left = mal_string_new_copy(&vm->heap, units + offsets[o], left_length);
+                MalString *right = mal_string_new_copy(
+                    &vm->heap, units + offsets[o] + left_length, sizes[n] - left_length);
+                CHECK(mal_string_new_cons_checked(&vm->heap, left, right, &needles[1]));
+                CHECK(needles[1]->storage == MAL_STRING_STORAGE_CONS);
+                needle_count++;
+            }
+            for (usize variant = 0; variant < needle_count; variant++) {
+                for (usize s = 0; s < countof(strings); s++) {
+                    for (usize p = 0; p < countof(starts); p++) {
+                        for (usize reverse = 0; reverse < 2; reverse++) {
+                            i32 expected = reference_find(units, countof(units), units + offsets[o], sizes[n], starts[p], reverse);
+                            MalValue actual = mal_builtin_string_search_strings(strings[s], needles[variant], starts[p],
+                                reverse ? MAL_STRING_SEARCH_LAST_INDEX_OF : MAL_STRING_SEARCH_INDEX_OF);
+                            CHECK(mal_value_to_i32(actual) == expected);
+                        }
                     }
                 }
             }
@@ -166,6 +180,48 @@ static bool long_prefix_work_is_bounded(MalVm *vm) {
 #endif
         CHECK(haystack->storage == MAL_STRING_STORAGE_CONS && needle->storage == MAL_STRING_STORAGE_CONS);
         free(needle_units);
+        free(units);
+    }
+    return true;
+}
+
+static bool short_rope_search_work_is_bounded(MalVm *vm) {
+    const usize needle_lengths[] = {3, 7, 16, 31};
+    for (usize length = 4096; length <= 65536; length *= 4) {
+        c16 *units = malloc(length * sizeof(c16));
+        if (units == nullptr) abort();
+        for (usize i = 0; i < length; i++) units[i] = 'a';
+        MalString *haystack = rope_from_units(vm, units, length, false);
+        for (usize n = 0; n < countof(needle_lengths); n++) {
+            usize needle_length = needle_lengths[n];
+            c16 needle_units[31];
+            for (usize i = 0; i < needle_length; i++) needle_units[i] = 'a';
+            needle_units[needle_length / 2] = 'b';
+            MalString *needle = mal_string_new_copy(&vm->heap, needle_units, needle_length);
+            for (usize reverse = 0; reverse < 2; reverse++) {
+                mal_perf_stats_reset();
+                MalValue result = mal_builtin_string_search_strings(haystack, needle,
+                    reverse ? INFINITY : 0,
+                    reverse ? MAL_STRING_SEARCH_LAST_INDEX_OF : MAL_STRING_SEARCH_INDEX_OF);
+                CHECK(mal_value_to_i32(result) == -1);
+#if MAL_PERF_STATS
+                CHECK(mal_perf_stats.string_search_linear_comparisons +
+                    mal_perf_stats.string_search_memcmp_code_units <= 3 * (length + needle_length));
+                CHECK(mal_perf_stats.string_iterator_nodes <= 4 * length / 47 + 128);
+#endif
+            }
+            MalString *hit;
+            CHECK(mal_string_new_cons_checked(&vm->heap, haystack, needle, &hit));
+            CHECK(mal_value_to_i32(mal_builtin_string_search_strings(
+                hit, needle, 0, MAL_STRING_SEARCH_INDEX_OF)) == (i32) length);
+            mal_perf_stats_reset();
+            CHECK(mal_value_to_i32(mal_builtin_string_search_strings(
+                hit, needle, INFINITY, MAL_STRING_SEARCH_LAST_INDEX_OF)) == (i32) length);
+#if MAL_PERF_STATS
+            CHECK(mal_perf_stats.string_iterator_nodes < 128);
+#endif
+        }
+        CHECK(haystack->storage == MAL_STRING_STORAGE_CONS);
         free(units);
     }
     return true;
@@ -439,6 +495,7 @@ int main(void) {
     mal_vm_init(&vm, &mal_runtime_image);
     bool passed = search_matches_reference(&vm) && compact_single_unit_search(&vm)
         && long_prefix_work_is_bounded(&vm)
+        && short_rope_search_work_is_bounded(&vm)
         && split_and_replace_keep_sequential_state(&vm)
         && compact_builtin_outputs_preserve_sources(&vm)
         && compact_result_boundaries_and_concat_growth(&vm)

@@ -93,6 +93,61 @@ static bool appends_rope_ranges_without_materialization(MalVm *vm) {
     return true;
 }
 
+static bool numeric_emission_preserves_spelling_without_heap_temporaries(MalVm *vm) {
+    struct {
+        MalValue value;
+        const char *expected;
+    } cases[] = {
+        {mal_value_from_i32(INT32_MIN), "-2147483648"},
+        {mal_value_from_i32(INT32_MAX), "2147483647"},
+        {mal_value_from_i32(0), "0"},
+        {MAL_VALUE_NEGATIVE_ZERO, "0"},
+        {mal_value_from_f64(-0.0), "0"},
+        {mal_value_from_f64(0.0), "0"},
+        {MAL_VALUE_NAN, "NaN"},
+        {MAL_VALUE_POSITIVE_INFINITY, "Infinity"},
+        {MAL_VALUE_NEGATIVE_INFINITY, "-Infinity"},
+        {mal_value_from_f64(5e-324), "5e-324"},
+        {mal_value_from_f64(1e-7), "1e-7"},
+        {mal_value_from_f64(1e-6), "0.000001"},
+        {mal_value_from_f64(1e20), "100000000000000000000"},
+        {mal_value_from_f64(1e21), "1e+21"},
+        {mal_value_from_f64(9007199254740991.0), "9007199254740991"},
+        {mal_value_from_f64(1000000000000000100.0), "1000000000000000100"},
+        {mal_value_from_f64(1.7976931348623157e308), "1.7976931348623157e+308"},
+    };
+    for (usize wide = 0; wide < 2; wide++) {
+        MalTextBuffer buffer = {.heap = &vm->heap};
+        CHECK(mal_text_buffer_push(&buffer, wide ? 0xd800 : 'x') == MAL_TEXT_BUFFER_OK);
+        CHECK(mal_text_buffer_reserve(&buffer, 4096) == MAL_TEXT_BUFFER_OK);
+        usize charged = vm->heap.bytes_allocated;
+        usize owned = mal_heap_usage(&vm->heap).raw_owned_bytes;
+        for (usize i = 0; i < countof(cases); i++) {
+            usize start = buffer.length;
+            CHECK(mal_text_buffer_append_number(&buffer, cases[i].value) == MAL_TEXT_BUFFER_OK);
+            usize length = strlen(cases[i].expected);
+            CHECK(buffer.length == start + length);
+            for (usize j = 0; j < length; j++) {
+                CHECK(mal_text_buffer_code_unit_at(&buffer, start + j) == cases[i].expected[j]);
+            }
+        }
+        CHECK(vm->heap.bytes_allocated == charged);
+        CHECK(mal_heap_usage(&vm->heap).raw_owned_bytes == owned);
+        CHECK(buffer.utf16 == (wide != 0));
+        CHECK(mal_text_buffer_code_unit_at(&buffer, 0) == (wide ? 0xd800 : 'x'));
+        mal_text_buffer_dispose(&buffer);
+    }
+    MalTextBuffer failed = {.heap = &vm->heap};
+    vm->heap.fail_next_raw_allocation = true;
+    CHECK(mal_text_buffer_append_number(&failed, mal_value_from_f64(1.25))
+        == MAL_TEXT_BUFFER_ALLOCATION_FAILURE);
+    CHECK(failed.length == 0 && failed.data == nullptr);
+    CHECK(mal_text_buffer_append_number(&failed, MAL_VALUE_NEGATIVE_ZERO)
+        == MAL_TEXT_BUFFER_ALLOCATION_FAILURE);
+    mal_text_buffer_dispose(&failed);
+    return true;
+}
+
 static bool initial_capacity_waits_for_content_encoding(MalVm *vm) {
     MalHeap *heap = &vm->heap;
     MalTextBuffer buffer = {.heap = heap};
@@ -266,6 +321,7 @@ int main(void) {
     mal_vm_init(&vm, &mal_runtime_image);
     bool passed = compact_output_promotes_and_rolls_back(&vm)
         && appends_rope_ranges_without_materialization(&vm)
+        && numeric_emission_preserves_spelling_without_heap_temporaries(&vm)
         && initial_capacity_waits_for_content_encoding(&vm)
         && finish_transfers_storage_and_survives_collection(&vm)
         && failures_preserve_owner_and_pressure(&vm)

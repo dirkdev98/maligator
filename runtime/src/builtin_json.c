@@ -732,7 +732,8 @@ static MalJsonResult mal_json_serialize_prepared(
     if (mal_json_is_number(value)) {
         f64 number = mal_ops_to_number(value);
         if (isfinite(number)) {
-            if (!mal_json_builder_push_string(builder, mal_ops_to_string(&vm->heap, value))) {
+            if (mal_text_buffer_append_number(&builder->buffer, value) != MAL_TEXT_BUFFER_OK) {
+                mal_json_throw_string_length(vm);
                 return MAL_JSON_THROW;
             }
         } else {

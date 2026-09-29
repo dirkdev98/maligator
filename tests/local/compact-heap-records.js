@@ -85,7 +85,7 @@ check(
 reflectRecord(selected, "id,weight,link,note");
 
 selected.extra = 17;
-check("added field moves to external storage", (inspect(selected) & 65) === 65);
+check("added field uses inline allocation slack", (inspect(selected) & 3) === 3);
 reflectRecord(selected, "id,weight,link,note,extra");
 let getterCalls = 0;
 let setterCalls = 0;

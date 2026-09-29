@@ -8,11 +8,13 @@
 #include "base64.h"
 #include "builtin_bigint.h"
 #include "builtin_iterator.h"
+#include "checked_size.h"
 #include "heap_bigint.h"
 #include "hex.h"
 #include "object_ops.h"
 #include "rooted_collection.h"
 #include "scalar_bits.h"
+#include "text_buffer.h"
 #include "typed_array_object.h"
 #include "value_ops.h"
 #include "vm.h"
@@ -1059,6 +1061,48 @@ static MalValue mal_ta_copy_within(MalVm *vm, MalValue this_value, const MalValu
     return this_value;
 }
 
+static MalValue mal_ta_join_numbers(
+    MalVm *vm, MalValue this_value, u32 length, MalString *separator
+) {
+    usize separator_units;
+    if (!mal_checked_size_multiply(
+            mal_string_length(separator), length == 0 ? 0 : length - 1,
+            MAL_STRING_MAX_CODE_UNITS, &separator_units)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Invalid string length");
+        return mal_value_new_undefined();
+    }
+    MalValue roots[2] = {this_value, mal_value_from_string(separator)};
+    MalRootSpan span;
+    mal_gc_root(&span, roots, 2);
+    mal_gc_native_rooted_begin(vm);
+    MalTextBuffer buffer = {.heap = &vm->heap};
+    MalTextBufferStatus status = mal_text_buffer_hint_capacity(&buffer, separator_units);
+    for (u32 i = 0; status == MAL_TEXT_BUFFER_OK && i < length; i++) {
+        if (i != 0) {
+            status = mal_text_buffer_append_string(&buffer, mal_value_to_string(roots[1]));
+        }
+        if (status != MAL_TEXT_BUFFER_OK) break;
+        // Separator coercion may detach or resize the view after length was fixed.
+        MalValue element = mal_typed_array_object_get(
+            vm, mal_value_to_typed_array_object(roots[0]), i);
+        if (!mal_value_is_undefined(element)) {
+            status = mal_text_buffer_append_number(&buffer, element);
+        }
+    }
+    MalValue result = mal_value_new_undefined();
+    if (status == MAL_TEXT_BUFFER_OK) {
+        result = mal_value_from_string(mal_text_buffer_finish(&vm->heap, &buffer));
+    } else if (status == MAL_TEXT_BUFFER_LENGTH_OVERFLOW) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Invalid string length");
+    } else {
+        mal_vm_throw_allocation_error(vm);
+    }
+    mal_text_buffer_dispose(&buffer);
+    mal_gc_native_rooted_end(vm);
+    mal_gc_unroot(&span);
+    return result;
+}
+
 static MalValue mal_ta_join(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) new_target;
     MalTypedArrayObject *array = mal_ta_this(vm, this_value);
@@ -1073,6 +1117,10 @@ static MalValue mal_ta_join(MalVm *vm, MalValue this_value, const MalValue *args
         }
     } else {
         separator = mal_intrinsic_ascii(vm, ",");
+    }
+
+    if (!mal_typed_array_is_bigint(array->kind)) {
+        return mal_ta_join_numbers(vm, this_value, length, separator);
     }
 
     MalRootedStringParts parts;

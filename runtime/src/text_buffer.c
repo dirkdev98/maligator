@@ -1,11 +1,15 @@
 #include "text_buffer.h"
 
+#include <assert.h>
+#include <math.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include "checked_size.h"
 #include "gc.h"
+#include "mal_number_format.h"
 #include "profile.h"
+#include "value_ops.h"
 
 #define MAL_TEXT_BUFFER_INITIAL_CAPACITY ((usize) 16)
 
@@ -213,6 +217,24 @@ MalTextBufferStatus mal_text_buffer_append_i32(MalTextBuffer *buffer, i32 value)
     } while (magnitude != 0);
     if (negative) digits[--start] = '-';
     return mal_text_buffer_append_latin1(buffer, digits + start, sizeof(digits) - start);
+}
+
+MalTextBufferStatus mal_text_buffer_append_number(MalTextBuffer *buffer, MalValue value) {
+    assert(mal_ops_is_number(value));
+    if (buffer->status != MAL_TEXT_BUFFER_OK) return buffer->status;
+    if (mal_value_is_int32(value)) {
+        return mal_text_buffer_append_i32(buffer, mal_value_to_i32(value));
+    }
+    f64 number = mal_ops_number_as_f64(value);
+    if (number == 0.0) return mal_text_buffer_push(buffer, '0');
+    if (isnan(number)) return mal_text_buffer_append_ascii(buffer, "NaN");
+    if (isinf(number)) {
+        return mal_text_buffer_append_ascii(buffer, number < 0 ? "-Infinity" : "Infinity");
+    }
+    byte digits[32];
+    i32 length = mal_number_format_shortest(number, digits, (i32) sizeof(digits));
+    if (length <= 0 || length > (i32) sizeof(digits)) abort();
+    return mal_text_buffer_append_latin1(buffer, digits, (usize) length);
 }
 
 void mal_text_buffer_truncate(MalTextBuffer *buffer, usize length) {

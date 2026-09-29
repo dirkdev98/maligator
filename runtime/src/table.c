@@ -210,13 +210,12 @@ static void mal_table_close_delete_hole(MalTable *table, usize hole) {
     table->slots[hole] = MAL_TABLE_EMPTY;
 }
 
-static void mal_table_rehash(MalTable *table, u32 capacity) {
+static void mal_table_fill_slots(MalTable *table, i32 *slots, u32 capacity) {
     if (mal_perf_stats_enabled) {
         MalPerfTableStats *stats = &mal_perf_stats.tables[table->role];
         stats->rehashes++;
         stats->rehash_entries += table->size;
     }
-    i32 *slots = mal_table_allocate_slots(table, capacity);
     for (u32 i = 0; i < capacity; i++) {
         slots[i] = MAL_TABLE_EMPTY;
     }
@@ -233,6 +232,11 @@ static void mal_table_rehash(MalTable *table, u32 capacity) {
         slots[index] = (i32) e;
     }
 
+}
+
+static void mal_table_rehash(MalTable *table, u32 capacity) {
+    i32 *slots = mal_table_allocate_slots(table, capacity);
+    mal_table_fill_slots(table, slots, capacity);
     mal_table_free_slots(table, table->slots);
     table->slots = slots;
     table->slot_capacity = capacity;
@@ -533,6 +537,55 @@ bool mal_table_delete(MalTable *table, MalKey key) {
     mal_table_close_delete_hole(table, index);
 
     return true;
+}
+
+usize mal_table_retain(MalTable *table, bool (*keep)(MalValue key)) {
+    MalValue rejected[16];
+    usize removed = 0;
+    for (u32 e = 0; e < table->entry_count; ++e) {
+        MalTableEntry *entry = &table->entries[e];
+        if (!entry->live || keep(entry->key)) continue;
+        if (removed < countof(rejected)) rejected[removed] = entry->key;
+        removed++;
+    }
+    if (removed == 0) return 0;
+    if (removed == table->size) {
+        mal_table_clear(table);
+        return removed;
+    }
+
+    usize remaining = table->size - removed;
+    if (removed < countof(rejected) || removed < remaining / 4) {
+        if (removed <= countof(rejected)) {
+            for (usize i = 0; i < removed; ++i) {
+                mal_table_delete(table, mal_key_from_value(rejected[i]));
+            }
+        } else {
+            for (u32 e = 0; e < table->entry_count; ++e) {
+                MalTableEntry *entry = &table->entries[e];
+                if (!entry->live || keep(entry->key)) continue;
+                mal_table_delete(table, mal_key_from_value(entry->key));
+            }
+        }
+        return removed;
+    }
+
+    // Repair dense deletions together; repeated backward shifts revisit the same clusters.
+    for (u32 e = 0; e < table->entry_count; ++e) {
+        MalTableEntry *entry = &table->entries[e];
+        if (!entry->live || keep(entry->key)) continue;
+        mal_gc_write_barrier(entry->key);
+        if (!entry->owns_data) mal_gc_write_barrier(entry->payload.value);
+        entry->live = false;
+    }
+    table->size -= (u32) removed;
+    table->tombstone_count += (u32) removed;
+    if (mal_perf_stats_enabled) {
+        mal_perf_stats.tables[table->role].deletes += removed;
+        mal_perf_stats.tables[table->role].delete_hits += removed;
+    }
+    mal_table_fill_slots(table, table->slots, table->slot_capacity);
+    return removed;
 }
 
 void mal_table_clear(MalTable *table) {

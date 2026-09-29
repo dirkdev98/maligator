@@ -267,12 +267,6 @@ struct MalGcState {
     usize fin_regs_count;
     usize fin_regs_capacity;
 
-    // Scratch list of dead keys to delete from a weak collection after its pass
-    // (deleting mid-iteration is avoided).
-    MalKey *dead_keys;
-    usize dead_keys_count;
-    usize dead_keys_capacity;
-
     // Remembered set: old cells written with a young pointer since
     // the last collection (the card barrier records them). Rebuilt every collection.
     MalHeapHeader **remembered;
@@ -495,17 +489,6 @@ static void mal_gc_register_fin_reg(MalFinalizationRegistryObject *reg) {
         g_gc->fin_regs_capacity = capacity;
     }
     g_gc->fin_regs[g_gc->fin_regs_count++] = reg;
-}
-
-static void mal_gc_dead_key_push(MalKey key) {
-    if (g_gc->dead_keys_count == g_gc->dead_keys_capacity) {
-        usize capacity = g_gc->dead_keys_capacity == 0 ? 64 : g_gc->dead_keys_capacity * 2;
-        MalKey *keys = realloc(g_gc->dead_keys, capacity * sizeof(MalKey));
-        if (keys == nullptr) abort();
-        g_gc->dead_keys = keys;
-        g_gc->dead_keys_capacity = capacity;
-    }
-    g_gc->dead_keys[g_gc->dead_keys_count++] = key;
 }
 
 #define MAL_GC_SATB_BATCH_CAPACITY 4096
@@ -2629,30 +2612,13 @@ static void mal_gc_weak_pass(void) {
     // into SATB after the ephemeron fixpoint has completed.
     mal_gc_marking_active = false;
 
-    // Drop entries whose key did not survive (collected first; deleting mid-
-    // iteration is avoided). The values, if dead, are reclaimed by the sweep.
     for (usize i = 0; i < g_gc->weak_maps_count; ++i) {
         MalTable *entries = g_gc->weak_maps[i]->entries;
         if (entries == nullptr) {
             continue;
         }
-        g_gc->dead_keys_count = 0;
-        MalTableIter iter;
-        mal_table_iter_init(&iter, entries, MAL_TABLE_ITER_STORAGE);
-        MalKey key;
-        void *entry;
-        while (mal_table_iter_next(&iter, &key, &entry)) {
-            if (g_gc->stats_enabled) g_gc->weak_cleanup_visits++;
-            if (!mal_gc_is_marked(key.value)) {
-                mal_gc_dead_key_push(key);
-            }
-        }
-        for (usize d = 0; d < g_gc->dead_keys_count; ++d) {
-            mal_table_delete(entries, g_gc->dead_keys[d]);
-        }
-        // Deletion already repairs hash probes. Amortize storage compaction so a
-        // sparse death does not rebuild every surviving entry on each collection.
-        if (g_gc->dead_keys_count > 0) {
+        if (g_gc->stats_enabled) g_gc->weak_cleanup_visits += mal_table_size(entries);
+        if (mal_table_retain(entries, mal_gc_is_marked) > 0) {
             mal_table_compact_if_needed(entries);
         }
     }
@@ -3292,7 +3258,6 @@ void mal_gc_state_free(MalVm *vm) {
     free(g->weak_maps);
     free(g->weak_refs);
     free(g->fin_regs);
-    free(g->dead_keys);
     free(g->remembered);
     free(g->satb);
     // Snapshot the stats before freeing so the atexit printer (MAL_GC_STATS) still

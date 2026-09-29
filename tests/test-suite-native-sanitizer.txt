@@ -97,6 +97,7 @@ tests/native/encoding-aware-text.test.ts
 tests/native/encoding-aware-strings.test.ts
 
 tests/native/text-buffer.test.ts
+tests/native/numeric-text-construction.test.ts
 
 tests/native/compact-string-boundaries.test.ts
 

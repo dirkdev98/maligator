@@ -556,9 +556,6 @@ MalDefineOwnStatus mal_object_define_own(MalObject *object, MalKey key, const Ma
         } else if (mal_object_desc_is_default_data(desc) &&
             !mal_object_has_public_overflow(object)
             && mal_shape_can_add_property(object->shape, key)) {
-            // Pure shaped (or empty) object with no dictionary props: grow the
-            // shape and the inline slots. Coallocated managed cells cannot move,
-            // so their first growth migrates to a separately-owned buffer.
             if (!object->extensible) {
                 return MAL_DEFINE_OWN_REJECTED;
             }

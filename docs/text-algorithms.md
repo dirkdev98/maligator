@@ -24,7 +24,7 @@ costs.
 | Hashing                           | An uncached hash streams content in O(N + R), reusing a cached left-prefix FNV state when available. Append-and-hash retains prefix reuse through rebalancing; repeated full hashes are O(1).                                                                                                            | [Hashing](../runtime/src/heap_string.c)                                                                                         |
 | Equality and ordering             | Linear in the examined content and visited nodes. Identity, unequal cached hashes, contiguous leaves, and matching shared rope structure provide shortcuts. Equality does not compute missing hashes; equal hashes do not prove equality.                                                                | [Comparison](../runtime/src/heap_string.c)                                                                                      |
 | Slicing                           | Descent costs O(H); complete ranges reuse subtrees. Partial cross-child ranges copy their content. Flat dependent slices retain one flat parent under the retention policy.                                                                                                                              | [Slice construction](../runtime/src/heap_string.c)                                                                              |
-| Search                            | Needles of at least 32 units use streaming KMP: O(N + M + R) work and O(M + H) scratch. Short-needle filters retain low setup cost; cross-leaf candidate verification can add root seeks. Reverse traversal can stop at the first suffix match.                                                          | [String search](../runtime/src/builtin_string.c)                                                                                |
+| Search                            | Needles of at least 32 units use streaming KMP. Short searches filter within leaves, switching once to KMP before root-seeking verification: O(N + M + R + H) work with the fixed short-pattern cap, and O(M + H) scratch. Reverse traversal stops at the first suffix match.                            | [String search](../runtime/src/builtin_string.c)                                                                                |
 | Builder                           | Geometric growth and one width promotion give amortized linear append copying. Finish may scan/narrow UTF-16 content or copy disproportionate capacity; trim allocation failure preserves the valid original allocation.                                                                                 | [Text buffer](../runtime/src/text_buffer.c)                                                                                     |
 | Property keys                     | Queries reuse existing atoms without inserting missing names. Shapes hash ropes without materialization; transition indexes avoid unbounded sibling-list scans for ordinary hash distributions. Untraced ICs admit only stable identities; repeated transient misses still pay normalization and lookup. | [Key resolution](../runtime/src/intrinsics.c), [shape indexes](../runtime/src/shape.c), [property ICs](../runtime/src/vm_ops.c) |
 | UTF-8 boundary                    | Decoding grows compact storage with emitted units. Buffer encoding counts bytes and writes an exactly sized adopted buffer. Both are linear passes; remaining temporary C-string encoders still reserve an upper bound.                                                                                  | [UTF-8](../runtime/src/utf8.c), [Buffer conversion](../runtime/src/runtime/node_buffer.c)                                       |
@@ -88,8 +88,15 @@ versus repeated hashes.
 
 ## Search and compact consumers
 
-The long-pattern path owns its UTF-16 needle and KMP prefix table and streams the
-haystack through leaf segments. Reverse search reverses the owned pattern and
+The streaming path owns its UTF-16 needle and KMP prefix table and traverses the
+haystack through leaf segments. Short searches retain leaf-local filters and
+verification. At the first candidate that would require verification across leaves
+or a fragmented needle, they switch once to KMP from that unresolved candidate.
+Earlier candidates are already ruled out, so the fallback cannot skip a match.
+With the fixed 31-unit short-pattern cap, local checks take bounded work per
+candidate; repeated false candidates no longer add O(N H) root-seeking work.
+Reverse search includes the candidate tail in each leaf while limiting eligible
+starts to the requested position. Streaming reverse search reverses the pattern and
 consumes segments from the requested end; it returns immediately on the first
 complete match. Comparisons remain by UTF-16 units, including NUL, lone
 surrogates, and pairs split across differently encoded leaves.
@@ -238,6 +245,16 @@ original valid allocation is still transferred, so the retention bound is best
 effort under allocation failure. Ordinary finishes transfer ownership directly;
 tiny outputs use inline storage. RAW reallocation itself still does not shrink.
 See [builder ownership](../runtime/src/text_buffer.h).
+
+Numeric construction writes directly into the shared buffer using the existing
+integer emitter and canonical shortest Number formatter. JSON handles non-finite
+numbers as `null` after its observable transformations; numeric TypedArray joins
+retain Number spellings, including `NaN`, infinities, and zero for negative zero.
+This avoids temporary Number strings and, for typed joins, the per-element rooted
+parts list. Output growth remains amortized linear with fixed numeric scratch.
+Typed joins snapshot length before separator coercion, then read each current
+element so detachment or resize still affects the emitted values. Separators use
+the ordinary segment append contract; BigInt joins retain their rooted path.
 
 The shared UTF-8-to-string decoder grows with emitted code units, starts in
 Latin-1, copies ASCII runs in bulk, and promotes for wider content. A known-wide

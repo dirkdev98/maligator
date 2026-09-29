@@ -1,6 +1,7 @@
 #pragma once
 
 #include "heap_string.h"
+#include "value.h"
 
 typedef enum MalTextBufferStatus : u8 {
     MAL_TEXT_BUFFER_OK,
@@ -54,6 +55,9 @@ MalTextBufferStatus mal_text_buffer_append_ascii(
     MalTextBuffer *buffer, const byte *ascii);
 
 MalTextBufferStatus mal_text_buffer_append_i32(MalTextBuffer *buffer, i32 value);
+
+/** Requires a Number primitive; preserves Number::toString spelling without a heap string. */
+MalTextBufferStatus mal_text_buffer_append_number(MalTextBuffer *buffer, MalValue value);
 
 static inline c16 mal_text_buffer_code_unit_at(const MalTextBuffer *buffer, usize index) {
     return buffer->utf16 ? ((const c16 *) buffer->data)[index]

@@ -10,7 +10,7 @@ import {
 } from "../../src/test-harness.ts";
 
 describe("incremental weak cleanup", () => {
-	it("reclaims dead weak entries and bounds storage through sparse key churn", () => {
+	it("preserves filtered table probes and iterators, and bounds weak-key churn", () => {
 		const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-gc-weak-cleanup-"));
 		try {
 			const binary = buildNativeBinary({

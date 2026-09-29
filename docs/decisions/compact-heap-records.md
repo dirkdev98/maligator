@@ -47,6 +47,16 @@ The allocator's charged size, rather than the requested payload size, determines
 whether in-place repacking fits. Raw pointers in compact fields receive the same
 card, SATB, and mark treatment as tagged references. Stack materialization
 copies the original cell-capacity bound so later widening cannot overrun it.
+Tagged ordinary objects derive that bound from their original slot capacity on
+first growth, avoiding allocator-size queries for objects that never grow.
+Embedded objects and separately owned fields cannot infer an inline bound.
+When adding a property requires canonical storage, existing typed fields decode
+directly into the final geometrically sized buffer, avoiding an exact-size
+allocation followed by growth.
+If the tagged prefix and new properties fit the original cell, conversion stages
+the overlapping fields before copying them back. Spare capacity remains invisible
+to reflection and tracing until each new field is initialized and its shape is
+published.
 
 ## Compiled access
 

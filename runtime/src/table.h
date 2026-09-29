@@ -96,6 +96,10 @@ void *mal_table_upsert_entry(MalTable *table, MalKey key, bool *inserted);
  */
 bool mal_table_delete(MalTable *table, MalKey key);
 
+/* The pure predicate may run twice; it must not allocate, mutate the table, or
+ * reenter GC. Surviving entry handles and insertion order remain valid. */
+usize mal_table_retain(MalTable *table, bool (*keep)(MalValue key));
+
 /**
  * Delete all live entries. Entries become tombstones rather than being
  * freed, so outstanding storage-order iterators stay valid and observe the

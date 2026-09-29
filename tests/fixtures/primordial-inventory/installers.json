@@ -77,7 +77,7 @@
 	},
 	{
 		"file": "builtin_json.c",
-		"sha256": "cbbdb3dbaa9e569ae0b94bfc1401cfddec219e0482ee2f40b295edea7162d24a"
+		"sha256": "18d16ac02c9a9961d45190f0734855775eca4db5a65f633aa23b535b15bed000"
 	},
 	{
 		"file": "builtin_map.c",
@@ -125,7 +125,7 @@
 	},
 	{
 		"file": "builtin_string.c",
-		"sha256": "d6f534f16bfb59f05a65cce3e1a3b02624d8f6a50cd84ff617a3a202067a965c"
+		"sha256": "3667d0aa47b28eb7b2dc0298bbb03bcbfb0ada478c3213d8c1551a163017069c"
 	},
 	{
 		"file": "builtin_symbol.c",
@@ -137,7 +137,7 @@
 	},
 	{
 		"file": "builtin_typed_array.c",
-		"sha256": "7bee9e188f70abe35dde0d85a3f77ccff54899b13868051abcf355d54bd1caa9"
+		"sha256": "105300f75b4c7dafacb215b4c54978c46056589fc62de5b78b978eedf33bd107"
 	},
 	{
 		"file": "builtin_uri.c",
@@ -321,7 +321,7 @@
 	},
 	{
 		"file": "object_ops.c",
-		"sha256": "a2a0457f505cc36e9265bbfd56c32b101590e8010d43a577245ce8e7c68f1caf"
+		"sha256": "dd95a178b36784ea15f553c33e7617b8587607230b2dd233018d9dd3e0739097"
 	},
 	{
 		"file": "object_ops.h",
