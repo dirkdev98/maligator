@@ -137,12 +137,12 @@ describe("native result-only contracts", () => {
 			const fn = graph.program.function(entry.function);
 			expect(coreNativeEntryProofIsCurrent(fn, entry)).toBe(true);
 		}
-		expect(graph.admissions).toEqual([
-			{ target: leaf.function, code: expect.any(Number), work: 0 },
-		]);
+		const fn = graph.program.function(leaf.function);
+		const code = Math.max(8, [...fn.instructionIds()].length);
+		expect(graph.admissions).toEqual([{ target: leaf.function, code, work: 0 }]);
 		expect(graph.discoveries).toContainEqual({
 			target: leaf.function,
-			work: expect.any(Number),
+			work: code + fn.valueCapacity,
 		});
 	});
 
