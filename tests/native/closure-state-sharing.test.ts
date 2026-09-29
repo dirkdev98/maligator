@@ -56,6 +56,28 @@ it("preserves closure cells and lexical identities across native and generic cal
 	}
 }, 600_000);
 
+it("preserves changing primitive and heap capture stores across collection and reentry", () => {
+	const fixture = "tests/local/closure-capture-stores.js";
+	const expected = execFileSync(process.execPath, [fixture], { encoding: "utf8" });
+	const outDir = mkdtempSync(join(tmpdir(), "mal-closure-capture-stores-"));
+	try {
+		const pair = buildBackendPairFromOneProgramImage({
+			fixture,
+			name: "closure-capture-stores",
+			config: resolveBuildConfig({
+				engine: { primordials: "locked", eval: false, realms: false },
+			}),
+			outDir,
+		});
+		for (const binary of [pair.compiled, pair.interpreted]) {
+			expect(runToStdout(binary)).toBe(expected);
+			expect(runToStdout(binary, { env: STRESS_ENV, timeoutMs: 60_000 })).toBe(expected);
+		}
+	} finally {
+		rmSync(outDir, { recursive: true, force: true });
+	}
+}, 600_000);
+
 it("preserves observable closures across the private bridge under collection", () => {
 	const fixture = "tests/local/closure-private-bridge.js";
 	const expected = execFileSync(process.execPath, [fixture], { encoding: "utf8" });
