@@ -89,13 +89,18 @@ function linearBody(fn: CoreFunctionStore): ReadonlyArray<CoreBlockId> | undefin
 	return undefined;
 }
 
+interface LocalCallPlan extends Creation {
+	readonly calls: ReadonlyArray<CoreInstructionId>;
+	readonly preserveIdentity: boolean;
+}
+
 function localCalls(
 	program: CoreProgram,
 	target: CoreFunctionStore,
 	creations: ReadonlyArray<Creation>,
 	owner: number,
-): ReadonlyArray<CoreInstructionId> | undefined {
-	const calls = new Set<CoreInstructionId>();
+): ReadonlyArray<LocalCallPlan> | undefined {
+	const plans: Array<LocalCallPlan> = [];
 	for (const creation of creations) {
 		if (creation.caller !== owner) return undefined;
 		const caller = program.function(creation.caller);
@@ -103,7 +108,8 @@ function localCalls(
 		const value = caller.kernel.resultAt(
 			caller.kernel.instructionResultStart(creation.instruction),
 		);
-		if (caller.kernel.valueHandlerUseCount(value) !== 0) return undefined;
+		const calls = new Set<CoreInstructionId>();
+		let preserveIdentity = caller.kernel.valueHandlerUseCount(value) !== 0;
 		for (
 			let use = caller.kernel.valueFirstUse(value);
 			use >= 0;
@@ -111,7 +117,10 @@ function localCalls(
 		) {
 			if (caller.kernel.useLive(use) === 0) continue;
 			const instruction = coreInstructionId(caller.kernel.useInstruction(use));
-			if (caller.instructionKind(instruction) !== "operation") return undefined;
+			if (caller.instructionKind(instruction) !== "operation") {
+				preserveIdentity = true;
+				continue;
+			}
 			const opcode = caller.instructionOpcodeName(instruction);
 			if (opcode === "throwIfTdz") continue;
 			const arguments_ = inputs(caller, instruction);
@@ -120,12 +129,17 @@ function localCalls(
 				arguments_[0] !== value ||
 				arguments_.length !== target.parameterCount + 2 ||
 				arguments_.slice(1).includes(value)
-			)
-				return undefined;
+			) {
+				// Escape, reflection, construction and other arities keep the original
+				// closure. Only exact local calls may use the private capture ABI.
+				preserveIdentity = true;
+				continue;
+			}
 			calls.add(instruction);
 		}
+		plans.push({ ...creation, calls: [...calls], preserveIdentity });
 	}
-	return calls.size > 0 ? [...calls] : undefined;
+	return plans.some((plan) => plan.calls.length > 0) ? plans : undefined;
 }
 
 function localStoredCapture(
@@ -297,38 +311,56 @@ export function liftLocalCaptureArguments(
 			)
 		)
 			continue;
-		const calls = localCalls(program, fn, sites, owner);
-		if (calls === undefined) continue;
+		const plans = localCalls(program, fn, sites, owner);
+		if (plans === undefined) continue;
 		// The creator is synchronously suspended during every admitted call. No other
 		// function or arguments alias can write these bindings until the call returns.
 		const target = liftHelper(program, fn, blocks, slots);
 		const caller = program.function(sites[0]!.caller);
 		const editor = CoreEditor.open(program, caller.id);
-		for (const { instruction } of sites) {
-			editor.replaceInstruction(instruction, "createFunction", [], {
+		for (const { instruction, calls, preserveIdentity } of plans) {
+			if (calls.length === 0) continue;
+			const options = {
 				attributes: {
 					...caller.instructionAttributes(instruction),
 					functionIndex: target,
 				},
 				sourcePosition: caller.instructionSourcePosition(instruction),
-			});
-		}
-		for (const call of calls) {
-			const captures = slots.map(
-				(slot) =>
-					localStoredCapture(caller, call, slot) ??
-					editor.insertInstruction(
-						caller.instructionBlock(call),
-						call,
-						"loadCaptured",
+			};
+			// Retain the observable closure and materialize a separate private target
+			// once at the same lexical creation site, never once per loop call.
+			const callee = preserveIdentity
+				? editor.insertInstruction(
+						caller.instructionBlock(instruction),
+						instruction,
+						"createFunction",
 						[],
-						{
-							attributes: { functionIndex: slot.owner, index: slot.index },
-							sourcePosition: caller.instructionSourcePosition(call),
-						},
-					).outputs[0]!,
-			);
-			editor.replaceOperands(call, [...inputs(caller, call), ...captures]);
+						options,
+					).outputs[0]!
+				: caller.kernel.resultAt(caller.kernel.instructionResultStart(instruction));
+			if (!preserveIdentity)
+				editor.replaceInstruction(instruction, "createFunction", [], options);
+			for (const call of calls) {
+				const captures = slots.map(
+					(slot) =>
+						localStoredCapture(caller, call, slot) ??
+						editor.insertInstruction(
+							caller.instructionBlock(call),
+							call,
+							"loadCaptured",
+							[],
+							{
+								attributes: { functionIndex: slot.owner, index: slot.index },
+								sourcePosition: caller.instructionSourcePosition(call),
+							},
+						).outputs[0]!,
+				);
+				editor.replaceOperands(call, [
+					callee,
+					...inputs(caller, call).slice(1),
+					...captures,
+				]);
+			}
 		}
 		editor.commit();
 		lifted++;

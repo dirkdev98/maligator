@@ -88,7 +88,82 @@ describe("private local capture arguments", () => {
 			const bias = seed; const read = x => ${arithmetic};
 			globalThis.escaped = read; return read(4);
 		};`);
+		expect(privateHelpers(image)).toHaveLength(1);
+		expect(
+			image.runtime.functions.some(
+				(fn) =>
+					fn.parameterCount === 1 &&
+					fn.length === 1 &&
+					fn.instructions.some((op) => op.opcode === "LOAD_CAPTURED"),
+			),
+		).toBe(true);
+	});
+
+	it("uses typed entries for an escaped helper without specializing its generic entry", () => {
+		const image = deserializeCompilerArtifact(
+			serializeCompilerArtifact(
+				compile(
+					localSource.replace("let sum = 0;", "globalThis.escaped = read; let sum = 0;"),
+					true,
+					true,
+				),
+			),
+		);
+		const helpers = privateHelpers(image);
+		expect(helpers).toHaveLength(1);
+		expect(helpers[0]!.native.directEntries).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({
+					parameterRepresentations: ["number", "number"],
+					resultRepresentation: "number",
+				}),
+			]),
+		);
+		expect(
+			image.runtime.functions.some(
+				(fn) =>
+					fn.parameterCount === 1 &&
+					fn.instructions.some((op) => op.opcode === "LOAD_CAPTURED"),
+			),
+		).toBe(true);
+	});
+
+	it.each([
+		"globalThis.escaped = read;",
+		"globalThis.length = read.length; globalThis.name = read.name;",
+		"globalThis.extra = read(4, 9);",
+		"globalThis.constructed = new read(4);",
+		"globalThis.observe(read);",
+	])("retains the original closure for %s alongside the private call", (observation) => {
+		const image = compile(`globalThis.run = seed => {
+			const bias = seed; const read = function(x) { return ${arithmetic}; };
+			${observation} return read(4);
+		};`);
+		expect(privateHelpers(image)).toHaveLength(1);
+		expect(
+			image.runtime.functions.some(
+				(fn) =>
+					fn.parameterCount === 1 &&
+					fn.length === 1 &&
+					fn.instructions.some((op) => op.opcode === "LOAD_CAPTURED"),
+			),
+		).toBe(true);
+	});
+
+	it("does not allocate a private target when all calls are dynamic", () => {
+		const image = compile(`globalThis.run = seed => {
+			const bias = seed; const read = x => ${arithmetic};
+			globalThis.escaped = read; return globalThis.invoke(read);
+		};`);
 		expect(privateHelpers(image)).toHaveLength(0);
+	});
+
+	it("retains an escaping identity used by an exception handler", () => {
+		const image = compile(`globalThis.run = seed => {
+			const bias = seed; const read = x => ${arithmetic};
+			try { return read(4); } catch { return read; }
+		};`);
+		expect(privateHelpers(image)).toHaveLength(1);
 	});
 
 	it("keeps sibling-writable bindings shared across reentrant calls", () => {
