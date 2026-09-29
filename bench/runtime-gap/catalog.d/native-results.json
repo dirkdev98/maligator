@@ -1,0 +1,24 @@
+{
+	"schema": 1,
+	"cases": [
+		{
+			"id": "connected-boxed-results",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "closure-representation",
+			"category": "language-features",
+			"mechanisms": [
+				"capture-access",
+				"native-call-boundary",
+				"boxed-arguments",
+				"typed-results",
+				"connected-call-graph"
+			],
+			"inputShape": "An escaped visitor passes a coercible object to a captured helper with no scalar parameters. Each helper computes 48 numeric terms and reads mutable lexical bias after coercion; each visitor makes three helper calls.",
+			"unit": "visitor calls",
+			"sourceSeam": "src/compiler/core/core-native-entry-graph.ts",
+			"fixture": "cases/connected-boxed-results.mjs",
+			"controls": ["connected-numeric-helpers", "connected-captured-helpers"]
+		}
+	]
+}
