@@ -14,6 +14,7 @@ typedef struct MalVm MalVm;
  */
 typedef struct MalWeakRefObject {
     MalObject object;
+    MalObjectStorage object_storage;
     MalValue target;
 } MalWeakRefObject;
 

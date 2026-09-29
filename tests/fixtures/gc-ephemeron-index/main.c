@@ -112,7 +112,7 @@ int main(void) {
         mal_value_to_object(late_value) != &late->object) return 6;
     if (mal_map_object_get(late, roots[2]) != mal_value_from_object(marker)) return 7;
     if (mal_map_object_get(first, roots[5]) != mal_value_from_object(fanout_holder) ||
-        fanout_holder->prototype != fanout_key ||
+        mal_object_prototype(fanout_holder) != fanout_key ||
         mal_map_object_get(first, mal_value_from_object(fanout_key)) !=
             mal_value_from_object(fanout_values[0]) ||
         mal_map_object_get(second, mal_value_from_object(fanout_key)) !=

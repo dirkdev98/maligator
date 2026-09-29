@@ -22,8 +22,8 @@ static void mal_function_init_metadata(
     MalValue *coallocated_slots
 ) {
     assert(object->shape->inline_count == 0);
-    assert(object->slots == nullptr);
-    assert(object->overflow == nullptr);
+    assert(mal_object_fields(object) == nullptr);
+    assert(mal_object_overflow(object) == nullptr);
     assert(length_key.kind == MAL_KEY_STRING);
     assert(name == nullptr || name_key.kind == MAL_KEY_STRING);
 
@@ -42,10 +42,10 @@ static void mal_function_init_metadata(
         return;
     }
     object->shape = shape;
-    object->slots = coallocated_slots;
+    mal_object_set_fields_pointer(object, coallocated_slots);
     object->slot_capacity = (u8) count;
     for (u32 i = 0; i < count; i++) {
-        object->slots[i] = values[i];
+        mal_object_field_initialize(object, shape, i, values[i]);
     }
 }
 

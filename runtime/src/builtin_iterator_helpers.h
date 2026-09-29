@@ -36,6 +36,7 @@ typedef enum MalIteratorZipMode : u8 {
  */
 typedef struct MalIteratorHelperObject {
     MalObject object;
+    MalObjectStorage object_storage;
 
     // Underlying iterator record.
     MalValue iterator;

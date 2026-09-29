@@ -21,6 +21,7 @@ typedef struct MalVm MalVm;
  */
 typedef struct MalProxyObject {
     MalObject object;
+    MalObjectStorage object_storage;
     MalValue target;
     MalValue handler;
     bool callable;

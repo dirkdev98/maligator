@@ -27,6 +27,7 @@ typedef enum MalHeadersGuard {
 
 typedef struct MalHeadersObject {
     MalObject object;
+    MalObjectStorage object_storage;
     MalHeaderEntry *entries; // owned
     i32 count;
     i32 cap;
@@ -41,6 +42,7 @@ typedef enum MalHeadersIteratorKind : u8 {
 
 typedef struct MalHeadersIteratorObject {
     MalObject object;
+    MalObjectStorage object_storage;
     MalHeadersObject *headers;
     i32 index;
     MalHeadersIteratorKind kind;

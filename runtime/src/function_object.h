@@ -12,6 +12,7 @@ typedef struct MalRealm MalRealm;
 
 typedef struct MalFunctionObject {
     MalObject object;
+    MalObjectStorage object_storage;
     i32 function_index;
 
     /**
@@ -53,6 +54,7 @@ typedef MalValue (*MalNativeFunctionCallback)(
 
 typedef struct MalNativeFunctionObject {
     MalObject object;
+    MalObjectStorage object_storage;
     MalString *name;
     MalNativeFunctionCallback callback;
 

@@ -241,7 +241,7 @@ static bool regexp_canonical_instance(
     MalObject *object = (MalObject *) re;
     if (mal_object_get_prototype(object) !=
             mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_REGEXP_PROTOTYPE]) ||
-        object->shape != regexp_instance_shape(vm) || object->overflow != nullptr ||
+        object->shape != regexp_instance_shape(vm) || mal_object_overflow(object) != nullptr ||
         !mal_object_is_extensible(object)) {
         return false;
     }
@@ -403,7 +403,7 @@ static MalObject *regexp_exact_last_index_object(
 ) {
     if (!mal_value_is_regexp_object(value)) return nullptr;
     MalObject *object = (MalObject *) mal_value_to_regexp_object(value);
-    if (object->shape != regexp_instance_shape(vm) || object->slots == nullptr) {
+    if (object->shape != regexp_instance_shape(vm) || mal_object_fields(object) == nullptr) {
         return nullptr;
     }
     return object;
@@ -413,7 +413,7 @@ static bool regexp_get_last_index(MalVm *vm, MalValue r, i64 *out) {
     MalValue v;
     MalObject *exact = regexp_exact_last_index_object(vm, r);
     if (exact != nullptr) {
-        v = exact->slots[exact->shape->props[0].slot];
+        v = mal_object_field_load(exact, exact->shape->props[0].slot);
     } else {
         if (!mal_vm_get_property(
                 vm, r,
@@ -440,7 +440,7 @@ static bool regexp_set_last_index(MalVm *vm, MalValue r, i64 value) {
     MalValue index_value = mal_ops_number_value((f64) value);
     MalObject *exact = regexp_exact_last_index_object(vm, r);
     if (exact != nullptr) {
-        exact->slots[exact->shape->props[0].slot] = index_value;
+        mal_object_field_store(exact, exact->shape->props[0].slot, index_value);
         return true;
     }
     bool ok = mal_vm_set_property(

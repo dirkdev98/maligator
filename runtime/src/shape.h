@@ -1,9 +1,13 @@
 #pragma once
 
+#include <stdlib.h>
+#include <string.h>
+
 #include "./defaults.h"
 #include "heap.h"
 #include "property_store.h"
 #include "table.h"
+#include "value_ops.h"
 
 /**
  * Dynamic keys stop extending shapes at the normal limit, bounding shape-tree
@@ -13,35 +17,148 @@
 #define MAL_SHAPE_DYNAMIC_INLINE_SLOTS 32
 #define MAL_SHAPE_MAX_INLINE_SLOTS 64
 
-/**
- * Hidden-class shape support. A MalShape is the
- * interned description of an object's named-property layout: an ordered
- * key -> slot map shared by every object with the same structure. An object in
- * "shaped" state stores its named property values inline in a slots array keyed
- * by the shape, instead of a per-object MalTable.
- *
- * Implementation note / deviation from the locked doc: the doc's struct embeds
- * `MalValue slots[]` inline in MalObject, but MalObject is the first member of
- * ~20 exotic subtypes, so it cannot end in a flexible array. We therefore keep a
- * `MalValue *slots` pointer on the object and use a 2-state model (shaped <->
- * dictionary). One-slot ordinary objects place that value in the slack of the
- * existing 48-byte managed-cell class; larger and grown objects use a separate
- * buffer. Object identity is the MalObject address, which never moves, so a
- * coallocated slot migrates rather than reallocating its cell. Index (array) keys never enter a shape;
- * anything a shape can't represent (delete, accessors, arbitrary descriptor
- * transitions, an integer key) drops the object to dictionary mode (a plain
- * MalTable). Seal/freeze transitions remain shaped: all shaped properties are
- * data properties, so their uniform integrity-level attribute change is another
- * immutable, interned layout.
- *
- * Each heap owns a transition tree rooted at its empty shape; adding a named
- * property (key + attrs) transitions to a child, interned so objects in that
- * isolate that add the same keys in the same order share one shape.
- */
-
 typedef struct MalShape MalShape;
 typedef struct MalShapeTransition MalShapeTransition;
 typedef struct MalShapeTransitionIndex MalShapeTransitionIndex;
+
+typedef enum MalFieldRepresentation : u8 {
+    MAL_FIELD_TAGGED,
+    MAL_FIELD_I32,
+    MAL_FIELD_F64,
+    MAL_FIELD_HEAP,
+} MalFieldRepresentation;
+
+#define MAL_FIELD_OFFSET_BITS 10
+#define MAL_FIELD_OFFSET_MASK ((1u << MAL_FIELD_OFFSET_BITS) - 1u)
+#define MAL_FIELD_INVALID UINT16_MAX
+
+static inline u16 mal_shape_field(MalFieldRepresentation representation, u16 offset) {
+    if (representation > MAL_FIELD_HEAP || offset > MAL_FIELD_OFFSET_MASK) abort();
+    return (u16) (((u16) representation << MAL_FIELD_OFFSET_BITS) | offset);
+}
+
+static inline MalFieldRepresentation mal_shape_field_representation(u16 field) {
+    return (MalFieldRepresentation) (field >> MAL_FIELD_OFFSET_BITS);
+}
+
+static inline u16 mal_shape_field_offset(u16 field) {
+    return field & MAL_FIELD_OFFSET_MASK;
+}
+
+static inline usize mal_shape_field_size(MalFieldRepresentation representation) {
+    switch (representation) {
+        case MAL_FIELD_TAGGED: return sizeof(MalValue);
+        case MAL_FIELD_I32: return sizeof(i32);
+        case MAL_FIELD_F64: return sizeof(f64);
+        case MAL_FIELD_HEAP: return sizeof(MalHeapHeader *);
+    }
+    abort();
+}
+
+static inline bool mal_shape_value_as_i32(MalValue value, i32 *out) {
+    if (mal_value_is_int32(value)) {
+        *out = mal_value_to_i32(value);
+        return true;
+    }
+    f64 number;
+    if (!mal_ops_try_number_as_f64(value, &number) ||
+        !(number >= INT32_MIN && number <= INT32_MAX) ||
+        (number == 0.0 && signbit(number))) {
+        return false;
+    }
+    i32 integer = (i32) number;
+    if ((f64) integer != number) return false;
+    *out = integer;
+    return true;
+}
+
+/** The layout's heap_fields map licenses this unchecked raw-reference load. */
+static inline MalHeapHeader *mal_shape_field_load_heap(const void *payload, u16 field) {
+    MalHeapHeader *value;
+    memcpy(&value, (const byte *) payload + mal_shape_field_offset(field), sizeof(value));
+    return value;
+}
+
+static inline i32 mal_shape_field_load_i32(const void *payload, u16 field) {
+    i32 value;
+    memcpy(&value, (const byte *) payload + mal_shape_field_offset(field), sizeof(value));
+    return value;
+}
+
+/** Field offsets address the field payload, excluding the ordinary object's prototype word. */
+static inline MalValue mal_shape_field_load(const void *payload, u16 field) {
+    const byte *address = (const byte *) payload + mal_shape_field_offset(field);
+    MalFieldRepresentation representation = mal_shape_field_representation(field);
+    if (representation == MAL_FIELD_TAGGED) {
+        MalValue value;
+        memcpy(&value, address, sizeof(value));
+        return value;
+    }
+    if (representation == MAL_FIELD_I32) {
+        i32 value;
+        memcpy(&value, address, sizeof(value));
+        return mal_value_from_i32(value);
+    }
+    if (representation == MAL_FIELD_F64) {
+        f64 value;
+        memcpy(&value, address, sizeof(value));
+        return mal_value_from_f64_convert_nan(value);
+    }
+    MalHeapHeader *value;
+    memcpy(&value, address, sizeof(value));
+    return MAL_VALUE_OBJECT | ((uptr) value & MAKS_PTR);
+}
+
+static inline bool mal_shape_field_try_load_number(
+    const void *payload, u16 field, f64 *out
+) {
+    const byte *address = (const byte *) payload + mal_shape_field_offset(field);
+    switch (mal_shape_field_representation(field)) {
+        case MAL_FIELD_I32: {
+            i32 value;
+            memcpy(&value, address, sizeof(value));
+            *out = (f64) value;
+            return true;
+        }
+        case MAL_FIELD_F64:
+            memcpy(out, address, sizeof(*out));
+            return true;
+        case MAL_FIELD_TAGGED:
+            return mal_ops_try_number_as_f64(mal_shape_field_load(payload, field), out);
+        case MAL_FIELD_HEAP:
+            return false;
+    }
+    abort();
+}
+
+/** A representation mismatch leaves the payload untouched; callers own GC barriers. */
+static inline bool mal_shape_field_try_store(void *payload, u16 field, MalValue value) {
+    byte *address = (byte *) payload + mal_shape_field_offset(field);
+    switch (mal_shape_field_representation(field)) {
+        case MAL_FIELD_TAGGED:
+            memcpy(address, &value, sizeof(value));
+            return true;
+        case MAL_FIELD_I32: {
+            i32 integer;
+            if (!mal_shape_value_as_i32(value, &integer)) return false;
+            memcpy(address, &integer, sizeof(integer));
+            return true;
+        }
+        case MAL_FIELD_F64: {
+            f64 number;
+            if (!mal_ops_try_number_as_f64(value, &number)) return false;
+            memcpy(address, &number, sizeof(number));
+            return true;
+        }
+        case MAL_FIELD_HEAP: {
+            if ((value & MAL_VALUE_CLASS_MASK) != MAL_VALUE_OBJECT) return false;
+            MalHeapHeader *pointer = mal_value_to_heap(value);
+            memcpy(address, &pointer, sizeof(pointer));
+            return true;
+        }
+    }
+    abort();
+}
 
 /**
  * Immutable proof that one shaped-object layout is the exact default-data
@@ -66,30 +183,51 @@ typedef enum MalShapeFindCaller {
     MAL_SHAPE_FIND_CALLER_COUNT,
 } MalShapeFindCaller;
 
-/** One named property in a shape: its key, slot index, and attribute flags. */
 typedef struct MalShapeProp {
-    /** Key value; the equality domain is derived on read (mal_key_kind_of).
-     * Shapes only ever hold string/symbol keys. */
     MalValue key;
-    /** Inline slot index in the object's slots buffer. */
+    /** Logical ordinal survives representation changes and physical field packing. */
     u32 slot;
-    /** MalPropertyFlags for the data property (writable/enumerable/configurable). */
     u8 attrs;
+    u16 field;
 } MalShapeProp;
 
 static_assert(sizeof(MalShapeProp) <= 16, "MalShapeProp outgrew 16 bytes (one per shaped property)");
 
 struct MalShape {
-    MalHeapHeader header; /* MAL_HEAP_SHAPE */
-    /** Number of named properties / inline slots. */
-    u32 inline_count;
-    /** `inline_count` ordered props (insertion order); null for the empty shape. */
+    MalHeapHeader header;
+    u16 inline_count;
+    u16 payload_bytes;
     MalShapeProp *props;
-    /** Optional side index for high-fanout transition sets. */
-    MalShapeTransitionIndex *transition_index;
-    /** Children, one per distinct added (key, attrs); singly linked. */
-    MalShapeTransition *transitions;
+    union {
+        struct {
+            MalShapeTransitionIndex *transition_index;
+            MalShapeTransition *transitions;
+        };
+        /** Compact variants have no transitions; two bits encode each field. */
+        u64 representations[2];
+    };
+    /** Null on the canonical tagged layout; compact variants share its logical identity. */
+    MalShape *logical;
+    /** Canonical shapes own this list; variants link the next list member. */
+    MalShape *compact_next;
+    /** Property-ordinal maps, independent of physical field order. */
+    u64 heap_fields;
+    u64 tagged_fields;
 };
+
+static inline bool mal_shape_is_compact(const MalShape *shape) {
+    return shape->logical != nullptr;
+}
+
+static inline MalShape *mal_shape_logical(MalShape *shape) {
+    return shape->logical == nullptr ? shape : shape->logical;
+}
+
+static inline bool mal_shape_same_logical(const MalShape *left, const MalShape *right) {
+    const MalShape *left_logical = left->logical == nullptr ? left : left->logical;
+    const MalShape *right_logical = right->logical == nullptr ? right : right->logical;
+    return left_logical == right_logical;
+}
 
 static inline bool mal_shape_can_add_property(const MalShape *shape, MalKey key) {
     if (shape->inline_count < MAL_SHAPE_DYNAMIC_INLINE_SLOTS) return true;
@@ -98,7 +236,11 @@ static inline bool mal_shape_can_add_property(const MalShape *shape, MalKey key)
         && mal_value_to_heap(key.value)->storage == MAL_HEAP_STORAGE_IMMORTAL;
 }
 
-static_assert(sizeof(MalShape) <= 32, "MalShape outgrew its 32-byte size class");
+static_assert(sizeof(MalShape) <= 64, "MalShape outgrew its 64-byte layout budget");
+
+/** Intern an exact physical layout, with a tagged fallback after bounded representation diversity. */
+MalShape *mal_shape_compact_from_values(MalShape *shape, const MalValue *values, u32 count);
+MalShape *mal_shape_widen_field(MalShape *shape, u32 ordinal, MalValue value);
 
 /** Initialize/free the transition tree owned by `heap`. */
 void mal_shape_heap_init(MalHeap *heap);

@@ -164,7 +164,7 @@ static MalValue rs_byob_result_view(
     u32 element_size = mal_typed_array_element_size(destination->kind);
     return mal_value_from_typed_array_object(mal_typed_array_object_new(
         &vm->heap,
-        destination->object.prototype, destination->buffer, destination->kind,
+        mal_object_prototype(&destination->object), destination->buffer, destination->kind,
         destination->byte_offset, byte_length / element_size, false));
 }
 
@@ -247,7 +247,7 @@ static MalValue rs_transfer_typed_array_view(MalVm *vm, MalValue view) {
     }
     mal_array_buffer_object_detach(source_buffer);
     roots[2] = mal_value_from_typed_array_object(mal_typed_array_object_new(
-        &vm->heap, source->object.prototype, transferred, source->kind,
+        &vm->heap, mal_object_prototype(&source->object), transferred, source->kind,
         source->byte_offset, source->length, source->length_tracking));
     MalValue result = roots[2];
     mal_gc_unroot(&span);
@@ -1895,7 +1895,7 @@ static MalValue rs_byob_request_respond_with_new_view(MalVm *vm, MalValue self,
         MalRootSpan span;
         mal_gc_root(&span, roots, 2);
         roots[1] = mal_value_from_typed_array_object(mal_typed_array_object_new(
-            &vm->heap, original->object.prototype, replacement->buffer,
+            &vm->heap, mal_object_prototype(&original->object), replacement->buffer,
             original->kind, original->byte_offset, original->length,
             original->length_tracking));
         if (orphaned) {

@@ -104,7 +104,7 @@ static bool mal_promise_is_canonical_intrinsic(
     }
 
     MalObject *object = &mal_value_to_promise_object(value)->object;
-    if (object->shape->inline_count != 0 || object->overflow != nullptr) {
+    if (object->shape->inline_count != 0 || mal_object_overflow(object) != nullptr) {
         return false;
     }
 
@@ -116,7 +116,7 @@ static bool mal_promise_is_canonical_intrinsic(
     MalObject *promise_prototype =
         mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_PROMISE_PROTOTYPE]);
 #endif
-    return object->prototype == promise_prototype;
+    return mal_object_prototype(object) == promise_prototype;
 }
 
 // --- Resolving functions -----------------------------------------------------

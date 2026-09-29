@@ -2,9 +2,11 @@ import { describe, expect, it } from "vitest";
 import { lowerNativeFastPaths } from "../src/compiler/target/lower-native-fast-paths.ts";
 import type { VmRegisterRepresentation } from "../src/compiler/target/program-image.ts";
 import type {
+	BytecodeExceptionHandler,
 	BytecodeFunction,
 	BytecodeInstruction,
 } from "../src/compiler/target/runtime-image.ts";
+import { vmInstructionUsesRegister } from "../src/compiler/target/runtime-image.ts";
 
 function load(dst: number, object = 0): BytecodeInstruction {
 	return {
@@ -22,6 +24,7 @@ function lower(
 		representations?: Array<VmRegisterRepresentation>;
 		jumpTargets?: ReadonlySet<number>;
 		conflicts?: (ip: number) => boolean;
+		handlers?: Array<BytecodeExceptionHandler>;
 	} = {},
 ) {
 	const representations: Array<VmRegisterRepresentation> =
@@ -46,7 +49,7 @@ function lower(
 		hasPrototype: false,
 		literalShapeCount: 0,
 		instructions,
-		handlers: [],
+		handlers: options.handlers ?? [],
 		fileIndex: -1,
 		positions: [],
 	};
@@ -61,6 +64,37 @@ function lower(
 const copy: BytecodeInstruction = { opcode: "MOVE", dst: 4, src: 1 };
 
 describe("bounded native property read regions", () => {
+	it("tracks every register consumed by static queries and explicit super construction", () => {
+		const query: BytecodeInstruction = {
+			opcode: "QUERY_STATIC_DATA",
+			dst: 1,
+			needle: 2,
+			fromIndex: 3,
+			templateOffset: 0,
+			queryKind: "includes",
+		};
+		expect(vmInstructionUsesRegister(query, 2)).toBe(true);
+		expect(vmInstructionUsesRegister(query, 3)).toBe(true);
+		expect(
+			vmInstructionUsesRegister(
+				{ opcode: "SET_PROTOTYPE", object: 1, prototype: 2, literal: true },
+				2,
+			),
+		).toBe(true);
+		expect(
+			vmInstructionUsesRegister(
+				{
+					opcode: "CONSTRUCT_SUPER_EXPLICIT",
+					dst: 4,
+					parent: 5,
+					argumentsArray: 6,
+					newTarget: 7,
+				},
+				4,
+			),
+		).toBe(true);
+	});
+
 	it("retains boxed results across pure steps and names the generic continuation", () => {
 		const lowered = lower([load(1), copy, load(2), load(3)]);
 		expect(lowered.propertyReadRegions).toHaveLength(1);
@@ -94,6 +128,60 @@ describe("bounded native property read regions", () => {
 		expect(numeric.propertyProjections).toHaveLength(1);
 		expect(numeric.propertyReadRegions).toHaveLength(0);
 		expect(lower([load(1), load(2)]).propertyReadRegions).toHaveLength(0);
+	});
+
+	it("keeps projected registers live across branches and exceptional definitions", () => {
+		const prefix: Array<BytecodeInstruction> = [
+			load(1),
+			load(2),
+			{ opcode: "BINARY", dst: 3, left: 2, right: 5, operator: "*" },
+			{ opcode: "BINARY", dst: 4, left: 1, right: 3, operator: "+" },
+			{
+				opcode: "STORE_PROPERTY_STATIC",
+				object: 0,
+				value: 4,
+				stringIndex: 1,
+				icIndex: 1,
+			},
+		];
+		const branch = lower([
+			...prefix,
+			{ opcode: "JUMP_IF", cond: 6, targetIp: 8 },
+			{ opcode: "CREATE_NUMBER", dst: 4, value: 0 },
+			{ opcode: "JUMP", targetIp: 9 },
+			{ opcode: "RETURN", value: 4 },
+			{ opcode: "RETURN", value: 6 },
+		]);
+		expect(branch.propertyProjections).toHaveLength(1);
+		expect(branch.propertyProjections[0]?.terminalStore).toBeUndefined();
+		const overwrittenOnBothPaths = lower([
+			...prefix,
+			{ opcode: "JUMP_IF", cond: 6, targetIp: 8 },
+			{ opcode: "CREATE_NUMBER", dst: 4, value: 0 },
+			{ opcode: "JUMP", targetIp: 9 },
+			{ opcode: "CREATE_NUMBER", dst: 4, value: 1 },
+			{ opcode: "RETURN", value: 4 },
+		]);
+		expect(overwrittenOnBothPaths.propertyProjections[0]?.terminalStore).toBeDefined();
+
+		const handled = lower(
+			[
+				...prefix,
+				{
+					opcode: "CALL",
+					dst: 4,
+					callee: 7,
+					thisValue: 0,
+					argumentCount: 0,
+					arguments: [],
+				},
+				{ opcode: "RETURN", value: 4 },
+				{ opcode: "RETURN", value: 4 },
+			],
+			{ handlers: [{ startIp: 5, endIp: 6, handlerIp: 7 }] },
+		);
+		expect(handled.propertyProjections).toHaveLength(1);
+		expect(handled.propertyProjections[0]?.terminalStore).toBeUndefined();
 	});
 
 	it("requires a continuation before collection, reentry, throwing, or mutation", () => {

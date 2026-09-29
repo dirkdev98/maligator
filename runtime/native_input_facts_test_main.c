@@ -37,7 +37,7 @@ int main(void) {
     MalString *limit_string = mal_value_to_string(vm.globals[0]);
     mal_vm_concat_strings_known(&vm, limit_string, limit_string);
     if (vm.completion.kind != MAL_COMPLETION_THROW ||
-        mal_value_to_object(vm.completion.value)->prototype !=
+        mal_object_prototype(mal_value_to_object(vm.completion.value)) !=
             mal_value_to_object(vm.intrinsics[MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE])) return 3;
     MalValue thrown = vm.completion.value;
     if (!mal_value_is_undefined(mal_vm_concat_strings_known(&vm, limit_string, limit_string)) ||

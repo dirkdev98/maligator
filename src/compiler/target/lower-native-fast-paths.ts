@@ -1,5 +1,6 @@
 import type { VmRegisterRepresentation } from "./program-image.ts";
 import {
+	vmExceptionHandlerTargets,
 	vmInstructionUsesRegister,
 	vmInstructionWriteRegisters,
 } from "./runtime-image.ts";
@@ -30,7 +31,41 @@ export interface NativePropertyProjectionPlan {
 		readonly instruction: StaticPropertyLoad;
 	}>;
 	readonly steps: ReadonlyArray<NativePropertyProjectionStep>;
+	readonly boxedRegisters: ReadonlyArray<number>;
 	readonly skippedIps: ReadonlySet<number>;
+	readonly terminalStore?: {
+		readonly ip: number;
+		readonly instruction: StaticPropertyStore;
+	};
+}
+
+type StaticPropertyStore = Extract<
+	BytecodeInstruction,
+	{ opcode: "STORE_PROPERTY_STATIC" }
+>;
+
+export interface NativePropertyNumericUpdatePlan {
+	readonly id: number;
+	readonly load: StaticPropertyLoad;
+	readonly store: StaticPropertyStore;
+	readonly storeIp: number;
+	readonly operationIp: number;
+	readonly constantIp?: number;
+	readonly operation:
+		| { readonly kind: "unary"; readonly operator: "increment" | "decrement" }
+		| {
+				readonly kind: "binary";
+				readonly operator: string;
+				readonly propertyIsLeft: boolean;
+				readonly right:
+					| { readonly kind: "literal"; readonly value: number }
+					| { readonly kind: "register"; readonly register: number };
+		  };
+}
+
+export interface NativePropertyNumericUpdateAction {
+	readonly plan: NativePropertyNumericUpdatePlan;
+	readonly role: "load" | "operation" | "skip";
 }
 
 export type NativePropertyProjectionAction =
@@ -44,6 +79,7 @@ export type NativePropertyProjectionAction =
 			readonly plan: NativePropertyProjectionPlan;
 			readonly index: number;
 	  }
+	| { readonly role: "store"; readonly plan: NativePropertyProjectionPlan }
 	| { readonly role: "skip"; readonly plan: NativePropertyProjectionPlan };
 
 /** A decline resumes the retained instructions and cannot reuse this admission. */
@@ -64,6 +100,11 @@ export interface NativePropertyReadRegionAction {
 }
 
 export interface NativeFastPathLowering {
+	readonly propertyNumericUpdates: ReadonlyArray<NativePropertyNumericUpdatePlan>;
+	readonly propertyNumericUpdateActions: ReadonlyMap<
+		number,
+		NativePropertyNumericUpdateAction
+	>;
 	readonly propertyProjections: ReadonlyArray<NativePropertyProjectionPlan>;
 	readonly propertyProjectionActions: ReadonlyMap<number, NativePropertyProjectionAction>;
 	readonly propertyReadRegions: ReadonlyArray<NativePropertyReadRegionPlan>;
@@ -99,11 +140,6 @@ export interface NativePairedArrayLoopPlan {
 export type NativePairedArrayLoopAction =
 	| { readonly role: "admit"; readonly plan: NativePairedArrayLoopPlan }
 	| { readonly role: "load"; readonly plan: NativePairedArrayLoopPlan };
-
-type StaticPropertyStore = Extract<
-	BytecodeInstruction,
-	{ opcode: "STORE_PROPERTY_STATIC" }
->;
 
 export interface NativeConstructorInitializationPlan {
 	readonly id: number;
@@ -141,6 +177,7 @@ function isNumericRepresentation(representation: VmRegisterRepresentation): bool
 	return representation === "number" || representation === "int32";
 }
 
+// Moving later property reads ahead of these instructions must not allocate, poll, or run JavaScript.
 function harmlessScalarInstruction(
 	instruction: BytecodeInstruction,
 	representations: ReadonlyArray<VmRegisterRepresentation>,
@@ -151,13 +188,6 @@ function harmlessScalarInstruction(
 		instruction.opcode === "CREATE_BOOLEAN" ||
 		(instruction.opcode === "MOVE" &&
 			representations[instruction.src] !== "boxed" &&
-			representations[instruction.dst] !== "boxed") ||
-		(instruction.opcode === "BINARY" &&
-			representations[instruction.left] !== "boxed" &&
-			representations[instruction.right] !== "boxed" &&
-			representations[instruction.dst] !== "boxed") ||
-		(instruction.opcode === "UNARY" &&
-			representations[instruction.src] !== "boxed" &&
 			representations[instruction.dst] !== "boxed")
 	);
 }
@@ -166,13 +196,140 @@ function registerEscapesPlan(
 	fn: BytecodeFunction,
 	register: number,
 	startIp: number,
+	handlerTargets: ReadonlyArray<number | undefined>,
 ): boolean {
-	for (let ip = startIp; ip < fn.instructions.length; ip++) {
+	const pending = [startIp];
+	const visited = new Set<number>();
+	while (pending.length > 0) {
+		const ip = pending.pop()!;
+		if (ip === fn.instructions.length) continue;
+		if (ip < 0 || ip > fn.instructions.length) return true;
+		if (visited.has(ip)) continue;
+		visited.add(ip);
 		const instruction = fn.instructions[ip]!;
 		if (vmInstructionUsesRegister(instruction, register)) return true;
-		if (vmInstructionWriteRegisters(instruction).includes(register)) return false;
+		const handlerIp = handlerTargets[ip];
+		if (handlerIp !== undefined) pending.push(handlerIp);
+		if (
+			instruction.opcode === "YIELD" ||
+			instruction.opcode === "AWAIT" ||
+			instruction.opcode === "GENERATOR_START" ||
+			instruction.opcode === "TRY_BEGIN"
+		)
+			return true;
+		if (vmInstructionWriteRegisters(instruction).includes(register)) continue;
+		if (instruction.opcode === "JUMP") {
+			pending.push(instruction.targetIp);
+		} else if (instruction.opcode === "JUMP_IF") {
+			pending.push(instruction.targetIp, ip + 1);
+		} else if (instruction.opcode !== "RETURN" && instruction.opcode !== "THROW") {
+			pending.push(ip + 1);
+		}
 	}
 	return false;
+}
+
+function lowerPropertyNumericUpdate(
+	fn: BytecodeFunction,
+	firstIp: number,
+	representations: ReadonlyArray<VmRegisterRepresentation>,
+	jumpTargets: ReadonlySet<number>,
+	conflicts: (ip: number) => boolean,
+): NativePropertyNumericUpdatePlan | undefined {
+	const load = fn.instructions[firstIp];
+	if (
+		load?.opcode !== "LOAD_PROPERTY_STATIC" ||
+		load.object === load.dst ||
+		representations[load.object] !== "boxed" ||
+		representations[load.dst] !== "boxed" ||
+		conflicts(firstIp)
+	)
+		return undefined;
+	let ip = firstIp + 1;
+	const admissible = () => !jumpTargets.has(ip) && !conflicts(ip);
+	if (!admissible()) return undefined;
+	const coercion = fn.instructions[ip];
+	if (
+		coercion?.opcode === "UNARY" &&
+		coercion.operator === "tonumeric" &&
+		coercion.src === load.dst &&
+		coercion.dst === load.dst
+	) {
+		ip++;
+		if (!admissible()) return undefined;
+	}
+	let literal: number | undefined;
+	let literalRegister: number | undefined;
+	let constantIp: number | undefined;
+	const constant = fn.instructions[ip];
+	if (
+		(constant?.opcode === "CREATE_NUMBER" || constant?.opcode === "CREATE_F64") &&
+		constant.dst !== load.object &&
+		constant.dst !== load.dst
+	) {
+		literal = constant.value;
+		literalRegister = constant.dst;
+		constantIp = ip;
+		ip++;
+		if (!admissible()) return undefined;
+	}
+	const operationIp = ip;
+	const instruction = fn.instructions[ip];
+	let operation: NativePropertyNumericUpdatePlan["operation"];
+	if (
+		instruction?.opcode === "UNARY" &&
+		(instruction.operator === "increment" || instruction.operator === "decrement") &&
+		instruction.src === load.dst &&
+		instruction.dst === load.dst
+	) {
+		operation = { kind: "unary", operator: instruction.operator };
+	} else if (
+		instruction?.opcode === "BINARY" &&
+		NATIVE_NUMBER_BINARY_OPERATORS.has(instruction.operator) &&
+		instruction.dst === load.dst &&
+		(instruction.left === load.dst || instruction.right === load.dst)
+	) {
+		const propertyIsLeft = instruction.left === load.dst;
+		const other = propertyIsLeft ? instruction.right : instruction.left;
+		if (other === load.object || other === load.dst) return undefined;
+		if (literalRegister !== undefined && other !== literalRegister) return undefined;
+		if (
+			literalRegister === undefined &&
+			representations[other] !== "boxed" &&
+			!isNumericRepresentation(representations[other]!)
+		)
+			return undefined;
+		operation = {
+			kind: "binary",
+			operator: instruction.operator,
+			propertyIsLeft,
+			right:
+				literalRegister === other
+					? { kind: "literal", value: literal! }
+					: { kind: "register", register: other },
+		};
+	} else {
+		return undefined;
+	}
+	if (literalRegister !== undefined && operation.kind !== "binary") return undefined;
+	ip++;
+	if (!admissible()) return undefined;
+	const store = fn.instructions[ip];
+	if (
+		store?.opcode !== "STORE_PROPERTY_STATIC" ||
+		store.object !== load.object ||
+		store.value !== load.dst
+	)
+		return undefined;
+	return Object.freeze({
+		id: firstIp,
+		load,
+		store,
+		storeIp: ip,
+		operationIp,
+		...(constantIp === undefined ? {} : { constantIp }),
+		operation,
+	});
 }
 
 function lowerPropertyProjection(
@@ -181,39 +338,41 @@ function lowerPropertyProjection(
 	representations: ReadonlyArray<VmRegisterRepresentation>,
 	jumpTargets: ReadonlySet<number>,
 	conflicts: (ip: number) => boolean,
+	terminalFusion: (
+		ip: number,
+	) => { readonly id: number; readonly role: "start" | "finish" } | undefined,
+	transparentJumpTargets: ReadonlySet<number>,
+	handlerTargets: ReadonlyArray<number | undefined>,
 ): NativePropertyProjectionPlan | undefined {
 	const first = fn.instructions[firstIp];
-	const second = fn.instructions[firstIp + 1];
 	if (
 		first?.opcode !== "LOAD_PROPERTY_STATIC" ||
-		second?.opcode !== "LOAD_PROPERTY_STATIC" ||
-		first.object !== second.object ||
 		first.dst === first.object ||
 		representations[first.dst] !== "boxed" ||
-		representations[second.dst] !== "boxed" ||
-		jumpTargets.has(firstIp + 1) ||
-		conflicts(firstIp) ||
-		conflicts(firstIp + 1)
+		conflicts(firstIp)
 	) {
 		return undefined;
 	}
 	const loads: Array<{ ip: number; instruction: StaticPropertyLoad }> = [
 		{ ip: firstIp, instruction: first },
-		{ ip: firstIp + 1, instruction: second },
 	];
 	const aliases = new Map<number, NativePropertyProjectionOperand>([
 		[first.dst, { kind: "load", index: 0 }],
-		[second.dst, { kind: "load", index: 1 }],
 	]);
-	const produced = new Set<number>([first.dst, second.dst]);
+	const produced = new Map<number, number>([[first.dst, firstIp]]);
 	const usedLoads = new Set<number>();
+	const boxedRegisters = new Map<number, number>();
 	const skippedIps = new Set<number>();
 	const steps: Array<NativePropertyProjectionStep> = [];
-	let receiverClobbered = second.dst === first.object;
+	let receiverClobbered = false;
 	const limit = Math.min(fn.instructions.length, firstIp + 20);
-	for (let ip = firstIp + 2; ip < limit; ip++) {
-		if (jumpTargets.has(ip) || conflicts(ip)) break;
+	for (let ip = firstIp + 1; ip < limit; ip++) {
+		if ((jumpTargets.has(ip) && !transparentJumpTargets.has(ip)) || conflicts(ip)) break;
 		const instruction = fn.instructions[ip]!;
+		if (instruction.opcode === "JUMP" && instruction.targetIp === ip + 1) {
+			skippedIps.add(ip);
+			continue;
+		}
 		if (
 			instruction.opcode === "LOAD_PROPERTY_STATIC" &&
 			instruction.object === first.object &&
@@ -224,7 +383,7 @@ function lowerPropertyProjection(
 			const index = loads.length;
 			loads.push({ ip, instruction });
 			aliases.set(instruction.dst, { kind: "load", index });
-			produced.add(instruction.dst);
+			produced.set(instruction.dst, ip);
 			receiverClobbered = instruction.dst === first.object;
 			continue;
 		}
@@ -235,8 +394,9 @@ function lowerPropertyProjection(
 		if (instruction.opcode === "MOVE" && aliases.has(instruction.src)) {
 			if (representations[instruction.dst] !== "boxed") break;
 			aliases.set(instruction.dst, aliases.get(instruction.src)!);
-			produced.add(instruction.dst);
+			produced.set(instruction.dst, ip);
 			skippedIps.add(ip);
+			receiverClobbered ||= instruction.dst === first.object;
 			continue;
 		}
 		if (
@@ -245,7 +405,8 @@ function lowerPropertyProjection(
 		) {
 			const operand = (register: number): NativePropertyProjectionOperand | undefined =>
 				aliases.get(register) ??
-				(isNumericRepresentation(representations[register]!)
+				(isNumericRepresentation(representations[register]!) ||
+				representations[register] === "boxed"
 					? { kind: "register", register }
 					: undefined);
 			const left = operand(instruction.left);
@@ -266,11 +427,17 @@ function lowerPropertyProjection(
 			}
 			for (const candidate of [left, right]) {
 				if (candidate.kind === "load") usedLoads.add(candidate.index);
+				if (
+					candidate.kind === "register" &&
+					representations[candidate.register] === "boxed"
+				)
+					boxedRegisters.set(candidate.register, ip);
 			}
 			const index = steps.length;
 			steps.push({ ip, instruction, left, right });
 			aliases.set(instruction.dst, { kind: "step", index });
-			produced.add(instruction.dst);
+			produced.set(instruction.dst, ip);
+			receiverClobbered ||= instruction.dst === first.object;
 			continue;
 		}
 		const touchesProjection = [...aliases.keys()].some(
@@ -278,23 +445,65 @@ function lowerPropertyProjection(
 				vmInstructionUsesRegister(instruction, register) ||
 				vmInstructionWriteRegisters(instruction).includes(register),
 		);
-		if (touchesProjection || !harmlessScalarInstruction(instruction, representations))
+		if (
+			touchesProjection ||
+			vmInstructionWriteRegisters(instruction).includes(first.object) ||
+			!harmlessScalarInstruction(instruction, representations)
+		)
 			break;
 	}
-	if (steps.length === 0 || loads.some((_load, index) => !usedLoads.has(index))) {
+	if (steps.length === 0) return undefined;
+	const lastIp = steps.at(-1)!.ip;
+	if (loads.length < 2 || loads.some((_load, index) => !usedLoads.has(index))) {
 		return undefined;
 	}
-	const finalRegister = steps.at(-1)!.instruction.dst;
-	for (const register of produced) {
-		if (register === finalRegister) continue;
-		if (registerEscapesPlan(fn, register, steps.at(-1)!.ip + 1)) return undefined;
+	for (const [register, consumingIp] of boxedRegisters) {
+		for (let ip = firstIp + 1; ip <= lastIp; ip++) {
+			if (
+				ip !== consumingIp &&
+				vmInstructionWriteRegisters(fn.instructions[ip]!).includes(register)
+			)
+				return undefined;
+		}
 	}
+	const finalRegister = steps.at(-1)!.instruction.dst;
+	for (const [register, producedIp] of produced) {
+		if (producedIp > lastIp) continue;
+		if (register === finalRegister) continue;
+		if (registerEscapesPlan(fn, register, lastIp + 1, handlerTargets)) return undefined;
+	}
+	const storeIp = lastIp + 1;
+	const store = fn.instructions[storeIp];
+	const fusedSteps =
+		steps.length === 2 &&
+		terminalFusion(steps[0]!.ip)?.role === "start" &&
+		terminalFusion(lastIp)?.role === "finish" &&
+		terminalFusion(steps[0]!.ip)?.id === terminalFusion(lastIp)?.id;
+	const standaloneSteps = steps.every((step) => terminalFusion(step.ip) === undefined);
+	const terminalStore =
+		loads.length === 2 &&
+		(fusedSteps || standaloneSteps) &&
+		loads[1]!.instruction.dst !== first.object &&
+		finalRegister !== first.object &&
+		representations[finalRegister] === "boxed" &&
+		store?.opcode === "STORE_PROPERTY_STATIC" &&
+		store.object === first.object &&
+		store.stringIndex === first.stringIndex &&
+		store.value === finalRegister &&
+		!jumpTargets.has(storeIp) &&
+		!conflicts(storeIp) &&
+		terminalFusion(storeIp) === undefined &&
+		!registerEscapesPlan(fn, finalRegister, storeIp + 1, handlerTargets)
+			? { ip: storeIp, instruction: store }
+			: undefined;
 	return Object.freeze({
 		id: firstIp,
 		object: first.object,
 		loads: Object.freeze(loads.map((load) => Object.freeze(load))),
 		steps: Object.freeze(steps.map((step) => Object.freeze(step))),
-		skippedIps,
+		boxedRegisters: Object.freeze([...boxedRegisters.keys()]),
+		skippedIps: new Set([...skippedIps].filter((ip) => ip <= lastIp)),
+		...(terminalStore === undefined ? {} : { terminalStore }),
 	});
 }
 
@@ -594,7 +803,16 @@ export function lowerNativeFastPaths(
 	jumpTargets: ReadonlySet<number>,
 	conflicts: (ip: number) => boolean,
 	indexedLoops: ReadonlyArray<NativeIndexedLoopElement> = [],
+	terminalFusion: (
+		ip: number,
+	) => { readonly id: number; readonly role: "start" | "finish" } | undefined = () =>
+		undefined,
+	transparentJumpTargets: ReadonlySet<number> = new Set(),
 ): NativeFastPathLowering {
+	const handlerTargets =
+		fn.handlers.length === 0
+			? []
+			: vmExceptionHandlerTargets(fn.instructions.length, fn.handlers);
 	const pairedArrayLoops = lowerPairedArrayLoops(
 		fn,
 		indexedLoops,
@@ -605,6 +823,35 @@ export function lowerNativeFastPaths(
 	for (const plan of pairedArrayLoops) {
 		pairedArrayLoopActions.set(plan.lengthLoadIp, { role: "admit", plan });
 		pairedArrayLoopActions.set(plan.secondaryLoadIp, { role: "load", plan });
+	}
+	const propertyNumericUpdates: Array<NativePropertyNumericUpdatePlan> = [];
+	const propertyNumericUpdateActions = new Map<
+		number,
+		NativePropertyNumericUpdateAction
+	>();
+	for (let ip = 0; ip < fn.instructions.length; ip++) {
+		const plan = lowerPropertyNumericUpdate(
+			fn,
+			ip,
+			representations,
+			jumpTargets,
+			(candidate) =>
+				conflicts(candidate) ||
+				pairedArrayLoopActions.has(candidate) ||
+				propertyNumericUpdateActions.has(candidate),
+		);
+		if (plan === undefined) continue;
+		propertyNumericUpdates.push(plan);
+		propertyNumericUpdateActions.set(ip, { plan, role: "load" });
+		propertyNumericUpdateActions.set(plan.operationIp, {
+			plan,
+			role: "operation",
+		});
+		for (let skip = ip + 1; skip <= plan.storeIp; skip++) {
+			if (skip !== plan.constantIp && !propertyNumericUpdateActions.has(skip))
+				propertyNumericUpdateActions.set(skip, { plan, role: "skip" });
+		}
+		ip = plan.storeIp;
 	}
 	const propertyProjections: Array<NativePropertyProjectionPlan> = [];
 	const propertyProjectionActions = new Map<number, NativePropertyProjectionAction>();
@@ -618,7 +865,11 @@ export function lowerNativeFastPaths(
 			(candidate) =>
 				conflicts(candidate) ||
 				pairedArrayLoopActions.has(candidate) ||
+				propertyNumericUpdateActions.has(candidate) ||
 				propertyProjectionActions.has(candidate),
+			terminalFusion,
+			transparentJumpTargets,
+			handlerTargets,
 		);
 		if (plan === undefined) continue;
 		propertyProjections.push(plan);
@@ -630,6 +881,9 @@ export function lowerNativeFastPaths(
 		}
 		for (const skippedIp of plan.skippedIps) {
 			propertyProjectionActions.set(skippedIp, { role: "skip", plan });
+		}
+		if (plan.terminalStore !== undefined) {
+			propertyProjectionActions.set(plan.terminalStore.ip, { role: "store", plan });
 		}
 	}
 	const propertyReadRegions: Array<NativePropertyReadRegionPlan> = [];
@@ -643,6 +897,7 @@ export function lowerNativeFastPaths(
 			(candidate) =>
 				conflicts(candidate) ||
 				pairedArrayLoopActions.has(candidate) ||
+				propertyNumericUpdateActions.has(candidate) ||
 				propertyProjectionActions.has(candidate),
 		);
 		if (plan === undefined) continue;
@@ -658,6 +913,7 @@ export function lowerNativeFastPaths(
 		(candidate) =>
 			conflicts(candidate) ||
 			pairedArrayLoopActions.has(candidate) ||
+			propertyNumericUpdateActions.has(candidate) ||
 			propertyProjectionActions.has(candidate),
 	);
 	const privateFieldReserve = lowerPrivateFieldReserve(fn);
@@ -674,6 +930,8 @@ export function lowerNativeFastPaths(
 	return Object.freeze({
 		pairedArrayLoops,
 		pairedArrayLoopActions,
+		propertyNumericUpdates: Object.freeze(propertyNumericUpdates),
+		propertyNumericUpdateActions,
 		propertyProjections: Object.freeze(propertyProjections),
 		propertyProjectionActions,
 		propertyReadRegions: Object.freeze(propertyReadRegions),

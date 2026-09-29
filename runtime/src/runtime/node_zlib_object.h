@@ -5,5 +5,6 @@
 
 typedef struct MalNodeZlibObject {
     MalObject object;
+    MalObjectStorage object_storage;
     MalZlibStream *handle;
 } MalNodeZlibObject;

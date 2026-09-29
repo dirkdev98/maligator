@@ -7,6 +7,7 @@ typedef struct MalEnv MalEnv;
 /** Mapped Arguments exotic object. The trailing map stores captured-slot indices. */
 typedef struct MalArgumentsObject {
     MalObject object;
+    MalObjectStorage object_storage;
     MalEnv *env;
     i32 map_count;
     i32 parameter_map[];

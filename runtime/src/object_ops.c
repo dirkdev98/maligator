@@ -138,10 +138,11 @@ static bool mal_object_desc_is_default_data(const MalPropertyDesc *desc) {
 
 /** Lazily create and return the object's dictionary/overflow table. */
 static MalTable *mal_object_ensure_overflow(MalObject *object) {
-    if (object->overflow == nullptr) {
-        object->overflow = mal_table_new(MAL_TABLE_MODE_OBJECT, MAL_TABLE_ROLE_OBJECT);
+    if (mal_object_overflow(object) == nullptr) {
+        mal_object_set_overflow_pointer(
+            object, mal_table_new(MAL_TABLE_MODE_OBJECT, MAL_TABLE_ROLE_OBJECT));
     }
-    return object->overflow;
+    return mal_object_overflow(object);
 }
 
 bool mal_object_add_private(MalObject *object, MalKey key, MalValue value) {
@@ -183,7 +184,7 @@ static void mal_object_dictionarize(MalObject *object) {
     MalTable *table = mal_object_ensure_overflow(object);
     for (u32 i = 0; i < shape->inline_count; ++i) {
         const MalShapeProp *prop = &shape->props[i];
-        MalPropertyDesc desc = mal_object_data_desc(object->slots[prop->slot], prop->attrs);
+        MalPropertyDesc desc = mal_object_data_desc(mal_object_field_load(object, prop->slot), prop->attrs);
         mal_property_define(table, mal_key_from_value(prop->key), &desc);
     }
     object->shape = mal_shape_dictionary_empty();
@@ -231,7 +232,7 @@ void mal_object_set_integrity_level(MalObject *object, bool clear_writable) {
     }
     bool has_shape_properties = object->shape->inline_count != 0;
     bool has_overflow_properties =
-        mal_object_has_public_overflow(object) && mal_table_size(object->overflow) != 0;
+        mal_object_has_public_overflow(object) && mal_table_size(mal_object_overflow(object)) != 0;
     bool noted_prototype_mutation = false;
     if (changed_dense_elements) {
         if (object->watched_method_proto) {
@@ -268,7 +269,7 @@ void mal_object_set_integrity_level(MalObject *object, bool clear_writable) {
     }
 
     MalTableIter iter;
-    mal_table_iter_init(&iter, object->overflow, MAL_TABLE_ITER_STORAGE);
+    mal_table_iter_init(&iter, mal_object_overflow(object), MAL_TABLE_ITER_STORAGE);
     MalKey key;
     void *entry;
     while (mal_table_iter_next(&iter, &key, &entry)) {
@@ -276,21 +277,21 @@ void mal_object_set_integrity_level(MalObject *object, bool clear_writable) {
             mal_symbol_is_private(mal_value_to_symbol(key.value))) {
             continue;
         }
-        MalPropertyDesc desc = mal_property_entry_desc(object->overflow, entry);
+        MalPropertyDesc desc = mal_property_entry_desc(mal_object_overflow(object), entry);
         desc.flags &= ~MAL_PROPERTY_CONFIGURABLE;
         if (clear_writable && !(desc.flags & MAL_PROPERTY_ACCESSOR)) {
             desc.flags &= ~MAL_PROPERTY_WRITABLE;
         }
-        mal_property_write_entry(object->overflow, entry, &desc);
+        mal_property_write_entry(mal_object_overflow(object), entry, &desc);
     }
 }
 
 MalObject *mal_object_get_prototype(const MalObject *object) {
-    return object->prototype;
+    return mal_object_prototype(object);
 }
 
 bool mal_object_set_prototype(MalObject *object, MalObject *prototype) {
-    if (object->prototype == prototype) {
+    if (mal_object_prototype(object) == prototype) {
         return true;
     }
 
@@ -305,7 +306,7 @@ bool mal_object_set_prototype(MalObject *object, MalObject *prototype) {
         return false;
     }
 
-    for (MalObject *cursor = prototype; cursor != nullptr; cursor = cursor->prototype) {
+    for (MalObject *cursor = prototype; cursor != nullptr; cursor = mal_object_prototype(cursor)) {
         if (cursor == object) {
             return false;
         }
@@ -326,10 +327,10 @@ bool mal_object_set_prototype(MalObject *object, MalObject *prototype) {
     // SATB: reparenting overwrites the traced prototype edge; shade the old
     // prototype (boxed, since prototype is a MalObject* not a MalValue) before it
     // is dropped. Early-returned above when unchanged, so this is a real overwrite.
-    if (object->prototype != nullptr) {
-        mal_gc_write_barrier(mal_value_from_heap(&object->prototype->header));
+    if (mal_object_prototype(object) != nullptr) {
+        mal_gc_write_barrier(mal_value_from_heap(&mal_object_prototype(object)->header));
     }
-    object->prototype = prototype;
+    mal_object_set_prototype_pointer(object, prototype);
     mal_object_mark_as_prototype(prototype);
     // Old object reparented onto a young prototype: remember it (the prototype is a
     // MalObject*, not a MalValue, so card on its boxed form).
@@ -417,16 +418,16 @@ MalPropertyLookup mal_object_get_own(const MalObject *object, MalKey key) {
             return (MalPropertyLookup){
                 .present = true,
                 .entry = nullptr, // shaped props have no table entry
-                .desc = mal_object_data_desc(object->slots[prop->slot], prop->attrs),
+                .desc = mal_object_data_desc(mal_object_field_load(object, prop->slot), prop->attrs),
             };
         }
     }
     // Index/symbol keys and dictionary-mode objects live in the overflow table.
     bool private_key = key.kind == MAL_KEY_SYMBOL &&
         mal_symbol_is_private(mal_value_to_symbol(key.value));
-    if (object->overflow != nullptr &&
+    if (mal_object_overflow(object) != nullptr &&
         (!object->overflow_private_only || private_key)) {
-        return mal_property_lookup(object->overflow, key);
+        return mal_property_lookup(mal_object_overflow(object), key);
     }
     return (MalPropertyLookup){.present = false, .entry = nullptr};
 }
@@ -437,7 +438,7 @@ static MalPropertyResolution mal_object_resolve_property_with_entry(
     if (entry_out != nullptr) {
         *entry_out = nullptr;
     }
-    for (const MalObject *cursor = object; cursor != nullptr; cursor = cursor->prototype) {
+    for (const MalObject *cursor = object; cursor != nullptr; cursor = mal_object_prototype(cursor)) {
         MalPropertyLookup lookup = mal_object_get_own(cursor, key);
 
         if (lookup.present) {
@@ -543,13 +544,11 @@ MalDefineOwnStatus mal_object_define_own(MalObject *object, MalKey key, const Ma
             const MalShapeProp *prop = &object->shape->props[idx];
             if (prop->attrs == (u8) desc->flags) {
                 MalPropertyDesc current =
-                    mal_object_data_desc(object->slots[prop->slot], prop->attrs);
+                    mal_object_data_desc(mal_object_field_load(object, prop->slot), prop->attrs);
                 if (!mal_object_define_is_compatible(current, *desc)) {
                     return MAL_DEFINE_OWN_REJECTED;
                 }
-                mal_gc_write_barrier(object->slots[prop->slot]); // SATB: shade overwritten ref
-                object->slots[prop->slot] = desc->value;
-                mal_gc_card(&object->header, desc->value); // old object -> young value
+                mal_object_field_store(object, prop->slot, desc->value);
                 return MAL_DEFINE_OWN_APPLIED;
             }
             // An attribute transition needs the dictionary's full descriptor
@@ -567,7 +566,7 @@ MalDefineOwnStatus mal_object_define_own(MalObject *object, MalKey key, const Ma
                 mal_shape_add_property(object->shape, key, (u8) MAL_DEFAULT_DATA_FLAGS);
             u32 count = child->inline_count;
             mal_object_grow_slots(object, object->shape->inline_count, count);
-            object->slots[count - 1] = desc->value;
+            mal_object_field_initialize(object, child, count - 1, desc->value);
             object->shape = child;
             // Old object gains a new shaped property. The value is carded here;
             // the canonical property atom is retained by vm->atoms and the
@@ -619,7 +618,8 @@ bool mal_object_append_plan_init(
 ) {
     if (plan == nullptr) return false;
     *plan = (MalShapeAppendPlan) {0};
-    if (source == nullptr || final == nullptr || count == 0) {
+    if (source == nullptr || final == nullptr || count == 0 ||
+        mal_shape_is_compact(final)) {
         return false;
     }
     // A non-null source also records that a caller attempted initialization.
@@ -675,7 +675,7 @@ bool mal_object_try_append_shaped_values(
     if (source_count > MAL_SHAPE_MAX_INLINE_SLOTS || final_count <= source_count
         || final_count > MAL_SHAPE_MAX_INLINE_SLOTS
         || count != final_count - source_count
-        || (source_count > 0 && object->slots == nullptr)
+        || (source_count > 0 && mal_object_fields(object) == nullptr)
         || (source_count == 0 && object->slots_owned)) {
         return false;
     }
@@ -689,7 +689,7 @@ bool mal_object_try_append_shaped_values(
     mal_object_grow_slots(object, source_count, final_count);
     for (u32 i = 0; i < count; ++i) {
         const MalShapeProp *prop = &plan->final->props[source_count + i];
-        object->slots[prop->slot] = values[i];
+        mal_object_field_initialize(object, plan->final, prop->slot, values[i]);
         mal_gc_card(&object->header, values[i]);
         mal_gc_card(&object->header, prop->key);
     }
@@ -742,8 +742,8 @@ bool mal_object_delete_own(MalObject *object, MalKey key) {
         mal_shape_find(object->shape, key, MAL_SHAPE_FIND_DELETE_OWN) >= 0) {
         mal_object_dictionarize(object);
     }
-    if (object->overflow != nullptr) {
-        return mal_table_delete(object->overflow, key);
+    if (mal_object_overflow(object) != nullptr) {
+        return mal_table_delete(mal_object_overflow(object), key);
     }
     return true;
 }
@@ -791,16 +791,14 @@ bool mal_object_set(MalObject *object, MalKey key, MalValue value) {
         i32 idx = mal_shape_find(object->shape, key, MAL_SHAPE_FIND_SET_OWN);
         if (idx >= 0) {
             u32 slot = object->shape->props[idx].slot;
-            mal_gc_write_barrier(object->slots[slot]); // SATB: shade overwritten ref
-            object->slots[slot] = value;
-            mal_gc_card(&object->header, value); // old object -> young value
+            mal_object_field_store(object, slot, value);
             return true;
         }
     }
 
     if (resolved_entry != nullptr) {
         resolution.desc.value = value;
-        mal_property_write_entry(object->overflow, resolved_entry, &resolution.desc);
+        mal_property_write_entry(mal_object_overflow(object), resolved_entry, &resolution.desc);
         mal_gc_card_desc(&object->header, &resolution.desc);
         return true;
     }

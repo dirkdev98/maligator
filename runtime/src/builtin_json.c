@@ -590,7 +590,7 @@ static MalJsonResult mal_json_serialize_object(MalJsonState *state, MalJsonBuild
                 !mal_object_has_public_overflow(object);
             MalJsonResult result = mal_json_serialize_member(
                 state, builder, key, key_string, value, direct,
-                direct ? object->slots[shape_snapshot->props[i].slot]
+                direct ? mal_object_field_load_token(object, shape_snapshot->props[i].field)
                     : mal_value_new_undefined(), depth + 1, any);
             if (result == MAL_JSON_THROW) {
                 ok = false;
@@ -857,7 +857,7 @@ static bool mal_json_build_property_list(MalJsonState *state, MalValue replacer)
 }
 
 typedef struct MalJsonKeyPlan {
-    u32 slot;
+    u16 field;
     MalString *key;
     usize offset;
     usize length;
@@ -908,7 +908,7 @@ static bool mal_json_plain_prototype(MalJsonPlainState *state, MalObject *protot
             mal_object_get_own(current, state->to_json).present) {
             return false;
         }
-        current = current->prototype;
+        current = mal_object_prototype(current);
     }
     usize admitted = 0;
     while (prototype != current && admitted++ < MAL_JSON_PLAN_ENTRY_LIMIT) {
@@ -925,7 +925,7 @@ static bool mal_json_plain_prototype(MalJsonPlainState *state, MalObject *protot
             state->prototype_eviction_slot = (slot + 1) & mask;
         }
         mal_json_pointer_insert(&state->prototypes, prototype, nullptr);
-        prototype = prototype->prototype;
+        prototype = mal_object_prototype(prototype);
     }
     return true;
 }
@@ -975,7 +975,7 @@ static bool mal_json_plain_shape(
         if (mal_value_is_string(prop->key) &&
             (prop->attrs & MAL_PROPERTY_ENUMERABLE) != 0) {
             plan->keys[plan->count++] = (MalJsonKeyPlan) {
-                .slot = prop->slot, .key = mal_value_to_string(prop->key),
+                .field = prop->field, .key = mal_value_to_string(prop->key),
             };
         }
     }
@@ -1077,7 +1077,7 @@ static bool mal_json_plain_frame(
     } else {
         return false;
     }
-    return mal_json_plain_prototype(state, object->prototype);
+    return mal_json_plain_prototype(state, mal_object_prototype(object));
 }
 
 static void mal_json_plain_dispose(MalJsonPlainState *state) {
@@ -1251,11 +1251,12 @@ static bool mal_json_try_serialize_plain(
                     if (!mal_value_is_string(prop->key) ||
                         (prop->attrs & MAL_PROPERTY_ENUMERABLE) == 0) continue;
                     uncached_key = (MalJsonKeyPlan) {
-                        .slot = prop->slot, .key = mal_value_to_string(prop->key),
+                        .field = prop->field, .key = mal_value_to_string(prop->key),
                     };
                     key = &uncached_key;
                 }
-                value = mal_value_to_object(frame->value)->slots[key->slot];
+                value = mal_object_field_load_token(
+                    mal_value_to_object(frame->value), key->field);
                 if (!mal_value_is_object(value) && mal_json_value_is_omitted(value)) continue;
             }
             // An observable toJSON may omit this member. Prove its absence

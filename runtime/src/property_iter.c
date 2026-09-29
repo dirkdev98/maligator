@@ -23,7 +23,7 @@ static bool mal_property_iter_desc_matches(const MalPropertyIter *iter, MalPrope
 static MalPropertyDesc mal_property_desc_from_shape(const MalObject *object, const MalShapeProp *prop) {
     return (MalPropertyDesc){
         .flags = prop->attrs,
-        .value = object->slots[prop->slot],
+        .value = mal_object_field_load(object, prop->slot),
         .getter = mal_value_new_undefined(),
         .setter = mal_value_new_undefined(),
     };
@@ -31,7 +31,7 @@ static MalPropertyDesc mal_property_desc_from_shape(const MalObject *object, con
 
 /** Whether the object has a dictionary/overflow table to iterate. */
 static bool mal_property_iter_has_overflow(const MalPropertyIter *iter) {
-    return iter->object->overflow != nullptr;
+    return mal_object_overflow(iter->object) != nullptr;
 }
 
 /**
@@ -108,7 +108,7 @@ static bool mal_property_iter_next_storage(MalPropertyIter *iter, MalKey *key_ou
     MalKey key;
     void *entry;
     while (mal_table_iter_next(&iter->table_iter, &key, &entry)) {
-        MalPropertyDesc desc = mal_property_entry_desc(iter->object->overflow, entry);
+        MalPropertyDesc desc = mal_property_entry_desc(mal_object_overflow(iter->object), entry);
 
         if (!mal_property_iter_desc_matches(iter, desc)) {
             continue;
@@ -150,7 +150,7 @@ static bool mal_property_iter_next_index(MalPropertyIter *iter, MalKey *key_out,
     MalPropertyDesc next_desc = {0};
     MalKey next_key = {0};
 
-    mal_table_iter_init(&table_iter, iter->object->overflow, MAL_TABLE_ITER_STORAGE);
+    mal_table_iter_init(&table_iter, mal_object_overflow(iter->object), MAL_TABLE_ITER_STORAGE);
 
     while (mal_table_iter_next(&table_iter, &key, &entry)) {
         if (key.kind != MAL_KEY_INDEX) {
@@ -163,7 +163,7 @@ static bool mal_property_iter_next_index(MalPropertyIter *iter, MalKey *key_out,
             continue;
         }
 
-        MalPropertyDesc desc = mal_property_entry_desc(iter->object->overflow, entry);
+        MalPropertyDesc desc = mal_property_entry_desc(mal_object_overflow(iter->object), entry);
 
         if (!mal_property_iter_desc_matches(iter, desc)) {
             continue;
@@ -202,7 +202,7 @@ static bool mal_property_iter_next_kind(MalPropertyIter *iter, MalKeyKind kind, 
             continue;
         }
 
-        MalPropertyDesc desc = mal_property_entry_desc(iter->object->overflow, entry);
+        MalPropertyDesc desc = mal_property_entry_desc(mal_object_overflow(iter->object), entry);
 
         if (!mal_property_iter_desc_matches(iter, desc)) {
             continue;
@@ -220,7 +220,7 @@ static bool mal_property_iter_next_kind(MalPropertyIter *iter, MalKeyKind kind, 
 static void mal_property_iter_start_phase(MalPropertyIter *iter, u32 phase) {
     iter->phase = phase;
     if (mal_property_iter_has_overflow(iter)) {
-        mal_table_iter_init(&iter->table_iter, iter->object->overflow, MAL_TABLE_ITER_STORAGE);
+        mal_table_iter_init(&iter->table_iter, mal_object_overflow(iter->object), MAL_TABLE_ITER_STORAGE);
     }
 }
 
@@ -231,8 +231,8 @@ void mal_property_iter_init(MalPropertyIter *iter, MalObject *object, MalPropert
     iter->last_index = 0;
     iter->has_last_index = false;
     iter->shape_index = 0;
-    if (object->overflow != nullptr) {
-        mal_table_iter_init(&iter->table_iter, object->overflow, MAL_TABLE_ITER_STORAGE);
+    if (mal_object_overflow(object) != nullptr) {
+        mal_table_iter_init(&iter->table_iter, mal_object_overflow(object), MAL_TABLE_ITER_STORAGE);
     }
 }
 

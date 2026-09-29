@@ -34,6 +34,7 @@ import type {
 	NativeConstructorInitializationAction,
 	NativePairedArrayLoopAction,
 	NativePairedArrayLoopPlan,
+	NativePropertyNumericUpdateAction,
 	NativePropertyProjectionAction,
 	NativePropertyProjectionOperand,
 	NativePropertyReadRegionAction,
@@ -1158,7 +1159,7 @@ function emitCompiledVariant(
 	}
 	for (const site of stackObjectSites.values()) {
 		if (site.elided === true) continue;
-		lines.push(`    MalObject ${site.objectName};`);
+		lines.push(`    MalEmbeddedObject ${site.objectName};`);
 		if (site.scalarSlot !== undefined) {
 			lines.push(
 				`    ${cTypeOf(site.scalarSlot.representation)} ${site.scalarSlot.name};`,
@@ -2628,6 +2629,28 @@ function emitBody(
 			jumpTargets.add(instruction.targetIp);
 		}
 	}
+	const handlerTargets = exceptionHandlerTargets(fn.instructions.length, fn.handlers);
+	const handlerEntries = new Set(fn.handlers.map((handler) => handler.handlerIp));
+	const transparentJumpTargets = new Set<number>();
+	if (coro === null && (literalSwitches?.length ?? 0) === 0) {
+		const incoming = new Map<number, number>();
+		for (const instruction of fn.instructions) {
+			if (instruction.opcode === "JUMP" || instruction.opcode === "JUMP_IF") {
+				incoming.set(instruction.targetIp, (incoming.get(instruction.targetIp) ?? 0) + 1);
+			}
+		}
+		for (const [ip, instruction] of fn.instructions.entries()) {
+			// Cross-handler fallthrough is safe only because projection hits cannot throw and misses replay each original instruction.
+			if (
+				instruction.opcode === "JUMP" &&
+				instruction.targetIp === ip + 1 &&
+				incoming.get(ip + 1) === 1 &&
+				!handlerEntries.has(ip + 1)
+			) {
+				transparentJumpTargets.add(ip + 1);
+			}
+		}
+	}
 	// A coroutine resumes at the instruction after each suspend (GENERATOR_START/
 	// YIELD/AWAIT), so those need labels for the entry dispatch to jump to.
 	if (coro !== null) {
@@ -2659,7 +2682,6 @@ function emitBody(
 			staticDefineStringIndexByIp.set(ip, prior.stringIndex);
 		}
 	}
-	const handlerTargets = exceptionHandlerTargets(fn.instructions.length, fn.handlers);
 	const mathUnaryCalls = new Set<number>();
 	const mathBinaryCalls = new Set<number>();
 	for (let ip = 0; ip < fn.instructions.length; ip++) {
@@ -3041,7 +3063,10 @@ function emitBody(
 		jumpTargets,
 		staticPropertyProjectionConflicts,
 		indexedLoopElements,
+		(ip) => numericFusionActionByIp.get(ip),
+		transparentJumpTargets,
 	);
+	const propertyNumericUpdateActionByIp = nativeFastPaths.propertyNumericUpdateActions;
 	const staticPropertyNumericActionByIp = nativeFastPaths.propertyProjectionActions;
 	const propertyReadRegionActionByIp = nativeFastPaths.propertyReadRegionActions;
 	// Numeric projections can elide boxed writes entirely. Their dormant boxed
@@ -3063,6 +3088,12 @@ function emitBody(
 	const constructorInitializationActionByIp =
 		nativeFastPaths.constructorInitializationActions;
 	const privateFieldReserve = nativeFastPaths.privateFieldReserve;
+	for (const update of nativeFastPaths.propertyNumericUpdates) {
+		lines.push(`bool __property_numeric_update_${update.id}_fast = false;`);
+		lines.push(
+			`MalValue __property_numeric_update_${update.id}_result = MAL_VALUE_UNDEFINED;`,
+		);
+	}
 	if (nativeFastPaths.constructorInitialization !== undefined) {
 		const id = nativeFastPaths.constructorInitialization.id;
 		lines.push(`bool __constructor_initialization_${id}_fast = false;`);
@@ -3088,6 +3119,8 @@ function emitBody(
 		const first = fn.instructions[ip]!;
 		const second = fn.instructions[ip + 1]!;
 		if (
+			propertyNumericUpdateActionByIp.has(ip) ||
+			propertyNumericUpdateActionByIp.has(ip + 1) ||
 			staticPropertyNumericActionByIp.has(ip) ||
 			staticPropertyNumericActionByIp.has(ip + 1) ||
 			propertyReadRegionActionByIp.has(ip) ||
@@ -3503,6 +3536,7 @@ function emitBody(
 				numericFusionAction: numericFusionActionByIp.get(ip),
 				staticPropertyProjectionAction: staticPropertyProjectionActionByIp.get(ip),
 				staticPropertyNumericAction: staticPropertyNumericActionByIp.get(ip),
+				propertyNumericUpdateAction: propertyNumericUpdateActionByIp.get(ip),
 				propertyReadRegionAction: propertyReadRegionActionByIp.get(ip),
 				constructorInitializationAction: constructorInitializationActionByIp.get(ip),
 				privateFieldReserveCount:
@@ -3673,7 +3707,7 @@ function profileDecisionsForInstruction(
 	} else if (operation === "property") {
 		if (
 			source.includes("mal_vm_object_slot_store(mal_value_to_object(") ||
-			/\bmal_value_to_object\([^)]*\)->slots\[\d+\]/.test(source)
+			source.includes("mal_object_field_load(mal_value_to_object(")
 		) {
 			decisions.push(decision("property.exact-own-slot", "applied"));
 		} else if (source.includes("mal_vm_try_load_known_own_slots(")) {
@@ -3888,6 +3922,7 @@ interface NativeInstructionContext {
 	readonly numericFusionAction?: NativeNumericFusionAction;
 	readonly staticPropertyProjectionAction?: NativeStaticPropertyProjectionAction;
 	readonly staticPropertyNumericAction?: NativePropertyProjectionAction;
+	readonly propertyNumericUpdateAction?: NativePropertyNumericUpdateAction;
 	readonly propertyReadRegionAction?: NativePropertyReadRegionAction;
 	readonly constructorInitializationAction?: NativeConstructorInitializationAction;
 	readonly privateFieldReserveCount?: number;
@@ -3987,6 +4022,7 @@ function emitInstruction(
 		numericFusionAction,
 		staticPropertyProjectionAction,
 		staticPropertyNumericAction,
+		propertyNumericUpdateAction,
 		propertyReadRegionAction,
 		constructorInitializationAction,
 		privateFieldReserveCount,
@@ -4318,7 +4354,7 @@ function emitInstruction(
 			case "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT":
 				return [
 					"MAL_PERF_COUNT(exact_own_slot_loads);",
-					`r${instruction.dst} = mal_value_to_object(${boxed(instruction.object)})->slots[${nativePlan.slot}];`,
+					`r${instruction.dst} = mal_object_field_load(mal_value_to_object(${boxed(instruction.object)}), ${nativePlan.slot});`,
 				];
 			case "STORE_PROPERTY_STATIC":
 			case "STORE_PROPERTY_STATIC_KNOWN_OWN_SLOT":
@@ -4609,6 +4645,60 @@ function emitInstruction(
 			),
 		];
 	}
+	if (propertyNumericUpdateAction !== undefined) {
+		const { plan, role } = propertyNumericUpdateAction;
+		const fallback = emitGenericInstruction();
+		if (fallback === null) return null;
+		const prefix = `__property_numeric_update_${plan.id}`;
+		if (role !== "load") {
+			return [`if (!${prefix}_fast) {`, ...fallback.map((line) => `  ${line}`), `}`];
+		}
+		const operand = plan.operation;
+		let guard = "true";
+		let expression: string | null;
+		if (operand.kind === "unary") {
+			expression = `${prefix}_old ${operand.operator === "increment" ? "+" : "-"} 1.0`;
+		} else {
+			let other: string;
+			if (operand.right.kind === "literal") {
+				other = cF64Literal(operand.right.value);
+			} else {
+				const register = operand.right.register;
+				if (reps[register] === "boxed") {
+					guard = `mal_ops_is_number(r${register})`;
+					other = `mal_ops_number_as_f64(r${register})`;
+				} else {
+					other = num(register);
+				}
+			}
+			expression = nativeNumberExpr(
+				operand.operator,
+				operand.propertyIsLeft ? `${prefix}_old` : other,
+				operand.propertyIsLeft ? other : `${prefix}_old`,
+			);
+		}
+		if (expression === null) return null;
+		const begin =
+			plan.load.stringIndex === plan.store.stringIndex
+				? `mal_vm_property_numeric_update_begin_same(${boxed(plan.load.object)}, &${nativeBodyReference(resources, "propertyCache")}[${plan.store.icIndex}], &${prefix}_state, &${prefix}_old)`
+				: `mal_vm_property_numeric_update_begin(${boxed(plan.load.object)}, &${nativeBodyReference(resources, "propertyCache")}[${plan.load.icIndex}], &${nativeBodyReference(resources, "propertyCache")}[${plan.store.icIndex}], &${prefix}_state, &${prefix}_old)`;
+		return [
+			`${prefix}_fast = false;`,
+			`if (${guard}) {`,
+			`  MalNativeNumericFieldUpdate ${prefix}_state;`,
+			`  f64 ${prefix}_old;`,
+			`  if (${begin}) {`,
+			`    f64 ${prefix}_next = ${expression};`,
+			`    ${prefix}_fast = mal_vm_property_numeric_update_commit(&${prefix}_state, ${prefix}_next, &${prefix}_result);`,
+			`  }`,
+			`}`,
+			`if (${prefix}_fast) {`,
+			`  r${plan.load.dst} = ${prefix}_result;`,
+			`} else {`,
+			...fallback.map((line) => `  ${line}`),
+			`}`,
+		];
+	}
 	switch (instruction.opcode) {
 		case "MOVE": {
 			if (staticPropertyNumericAction?.role === "skip") {
@@ -4728,8 +4818,8 @@ function emitInstruction(
 			}
 			return [
 				"mal_perf_stack_object_init();",
-				`${stackObjectSite.objectName} = (MalObject){ .header = MAL_HEAP_HEADER_IMMORTAL(MAL_HEAP_OBJECT), .extensible = true, .shape = mal_shape_root(&vm->heap), .prototype = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]), .slots = nullptr, .overflow = nullptr };`,
-				`r${instruction.dst} = mal_value_from_object(&${stackObjectSite.objectName});`,
+				`mal_object_init_embedded_stack(&vm->heap, &${stackObjectSite.objectName}, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]), mal_shape_root(&vm->heap), nullptr);`,
+				`r${instruction.dst} = mal_value_from_object(&${stackObjectSite.objectName}.object);`,
 			];
 		case "CREATE_BASE_CONSTRUCT_RECEIVER":
 			return [
@@ -4766,17 +4856,17 @@ function emitInstruction(
 					...shape,
 					`MalInlineCache *${icName} = &${nativeBodyReference(resources, "propertyCache")}[${stackObjectSite.inheritedIcIndex}];`,
 					`MalObject *${prototypeName} = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]);`,
-					`${fastName} = ${icName}->mode == MAL_IC_MODE_INHERITED_VALUE && ${icName}->shape == __oshape_${ip} && ((${icName}->poly_count > 0 && ${icName}->proto_object[0] == ${prototypeName}) || (${icName}->poly_count == 0 && ${inheritedStackObjectProtectorGuard(stackObjectSite)} && ${icName}->receiver_type == MAL_HEAP_OBJECT && ${icName}->obj == ${prototypeName}));`,
+					`${fastName} = ${icName}->mode == MAL_IC_MODE_INHERITED_VALUE && ${icName}->shape != nullptr && (${icName}->shape == __oshape_${ip} || ${icName}->shape->logical == __oshape_${ip}) && ((${icName}->poly_count > 0 && ${icName}->proto_object[0] == ${prototypeName}) || (${icName}->poly_count == 0 && ${inheritedStackObjectProtectorGuard(stackObjectSite)} && ${icName}->receiver_type == MAL_HEAP_OBJECT && ${icName}->obj == ${prototypeName}));`,
 					`if (${fastName}) {`,
 					`  ${inheritedValue} = ${icName}->value;`,
 					`  mal_perf_stack_object_init();`,
 					`  mal_perf_stack_object_inherited_fast_init();`,
-					`  ${objectName} = (MalObject){ .header = MAL_HEAP_HEADER_IMMORTAL(MAL_HEAP_OBJECT), .extensible = true, .shape = __oshape_${ip}, .prototype = ${prototypeName}, .slots = &__gc_slots[${slotsOffset!}], .overflow = nullptr };`,
+					`  mal_object_init_embedded_stack(&vm->heap, &${objectName}, ${prototypeName}, __oshape_${ip}, &__gc_slots[${slotsOffset!}]);`,
 					...instruction.valueRegisters.map(
 						(register, index) =>
 							`  ${stackObjectSlotReference(stackObjectSite, index)} = ${boxed(register)};`,
 					),
-					`  r${instruction.dst} = mal_value_from_object(&${objectName});`,
+					`  r${instruction.dst} = mal_value_from_object(&${objectName}.object);`,
 					`} else {`,
 					`  mal_perf_stack_object_inherited_heap_fallback();`,
 					`  r${instruction.dst} = ${profileCall("allocation", `mal_vm_create_object_shaped(vm, __oshape_${ip}, (MalValue[]){ ${values} }, ${instruction.count})`)};`,
@@ -4785,15 +4875,13 @@ function emitInstruction(
 			}
 			return [
 				...shape,
-				// Direct initialization is essential: this storage never enters the heap,
-				// and IMMORTAL+WHITE makes tracing/finalization/remembering skip the header.
 				"mal_perf_stack_object_init();",
-				`${objectName} = (MalObject){ .header = MAL_HEAP_HEADER_IMMORTAL(MAL_HEAP_OBJECT), .extensible = true, .shape = __oshape_${ip}, .prototype = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]), .slots = ${stackObjectSite.scalarSlot === undefined ? `&__gc_slots[${slotsOffset!}]` : "nullptr"}, .overflow = nullptr };`,
+				`mal_object_init_embedded_stack(&vm->heap, &${objectName}, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]), __oshape_${ip}, ${stackObjectSite.scalarSlot === undefined ? `&__gc_slots[${slotsOffset!}]` : "nullptr"});`,
 				...instruction.valueRegisters.map(
 					(register, index) =>
 						`${stackObjectSlotReference(stackObjectSite, index)} = ${stackObjectSite.scalarSlot === undefined ? boxed(register) : `r${register}`};`,
 				),
-				`r${instruction.dst} = mal_value_from_object(&${objectName});`,
+				`r${instruction.dst} = mal_value_from_object(&${objectName}.object);`,
 			];
 		}
 		case "CREATE_ARRAY":
@@ -5067,8 +5155,11 @@ function emitInstruction(
 				const valueArguments = plan.loads.map(
 					(_load, valueIndex) => `&__property_projection_${plan.id}_value_${valueIndex}`,
 				);
+				const boxedGuards = plan.boxedRegisters.map(
+					(register) => `mal_ops_is_number(r${register})`,
+				);
 				return [
-					`__property_projection_${plan.id}_fast = ${helper}(${boxed(instruction.object)}, ${[...cacheArguments, ...valueArguments].join(", ")});`,
+					`__property_projection_${plan.id}_fast = ${boxedGuards.length === 0 ? "" : `${boxedGuards.join(" && ")} && `}${helper}(${boxed(instruction.object)}, ${[...cacheArguments, ...valueArguments].join(", ")});`,
 					`if (!__property_projection_${plan.id}_fast) {`,
 					...fallback.map((line) => `  ${line}`),
 					`}`,
@@ -5581,6 +5672,29 @@ function emitInstruction(
 		}
 		case "STORE_PROPERTY":
 		case "STORE_PROPERTY_STATIC": {
+			if (
+				instruction.opcode === "STORE_PROPERTY_STATIC" &&
+				staticPropertyNumericAction?.role === "store"
+			) {
+				const fallback = emitGenericInstruction();
+				if (fallback === null) return null;
+				const plan = staticPropertyNumericAction.plan;
+				const prefix = `__property_projection_${plan.id}`;
+				const result = `${prefix}_step_${plan.steps.length - 1}`;
+				const cache = `&${nativeBodyReference(resources, "propertyCache")}[${instruction.icIndex}]`;
+				return [
+					`if (${prefix}_fast) {`,
+					`  MalNativeNumericFieldUpdate ${prefix}_update;`,
+					`  f64 ${prefix}_old;`,
+					`  if (!mal_vm_property_numeric_update_begin_same(${boxed(instruction.object)}, ${cache}, &${prefix}_update, &${prefix}_old) || !mal_vm_property_numeric_update_commit(&${prefix}_update, ${result}, nullptr)) {`,
+					`    r${instruction.value} = mal_ops_number_value(${result});`,
+					...fallback.map((line) => `    ${line}`),
+					`  }`,
+					`} else {`,
+					...fallback.map((line) => `  ${line}`),
+					`}`,
+				];
+			}
 			if (stackObjectAccess !== undefined) {
 				const { site, slot } = stackObjectAccess;
 				return [
@@ -5867,7 +5981,9 @@ function emitInstruction(
 						case "step":
 							return `__property_projection_${plan.id}_step_${value.index}`;
 						case "register":
-							return num(value.register);
+							return reps[value.register] === "boxed"
+								? `mal_ops_number_as_f64(r${value.register})`
+								: num(value.register);
 					}
 				};
 				const step = plan.steps[index]!;
@@ -5908,7 +6024,7 @@ function emitInstruction(
 				return [
 					`if (__property_projection_${plan.id}_fast) {`,
 					`  ${result} = ${expression};`,
-					...(last ? [`  ${store}`] : []),
+					...(last && plan.terminalStore === undefined ? [`  ${store}`] : []),
 					`} else {`,
 					...fallback.map((line) => `  ${line}`),
 					`}`,
@@ -8685,6 +8801,7 @@ function emitInstruction(
 			];
 		}
 		case "JUMP":
+			if (instruction.targetIp === ip + 1) return [];
 			// A back-edge (target <= current ip) is a loop edge: poll there so an
 			// allocation-free loop is still interruptible for collection.
 			return instruction.targetIp <= ip
@@ -8726,7 +8843,7 @@ function emitInstruction(
 			if (stackObjectMaterialization !== undefined) {
 				const materialized = `materialized_ret_${ip}`;
 				materialize.push(
-					`MalValue ${materialized} = mal_vm_materialize_stack_object(vm, &${stackObjectMaterialization.objectName});`,
+					`MalValue ${materialized} = mal_vm_materialize_stack_object(vm, &${stackObjectMaterialization.objectName}.object);`,
 					throwCheck(),
 				);
 				value = materialized;

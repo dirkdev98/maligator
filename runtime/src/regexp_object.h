@@ -33,6 +33,7 @@ typedef enum MalRegExpFlag {
  */
 typedef struct MalRegExpObject {
     MalObject object;
+    MalObjectStorage object_storage;
     void *matcher;        // [[RegExpMatcher]] — mal_regexp handle (freed by the GC finalizer)
     MalString *source;    // [[OriginalSource]] (the raw pattern; .source escapes it)
     MalString *flags;     // [[OriginalFlags]] (the flags string as given)
@@ -57,6 +58,7 @@ MalRegExpObject *mal_regexp_object_new(MalHeap *heap, MalObject *prototype);
  */
 typedef struct MalRegExpStringIteratorObject {
     MalObject object;
+    MalObjectStorage object_storage;
     MalValue regexp;     // [[IteratingRegExp]]
     MalString *string;   // [[IteratedString]]
     bool global;         // [[Global]]

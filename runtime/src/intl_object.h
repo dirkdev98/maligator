@@ -36,6 +36,7 @@ typedef enum MalIntlKind {
  */
 typedef struct MalIntlObject {
     MalObject object;
+    MalObjectStorage object_storage;
     MalIntlKind kind;
     void *handle;
     MalValue data;

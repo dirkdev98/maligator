@@ -907,10 +907,9 @@ observed.
 - Reopen VM-independent leaf workers only when actual activation overhead is a
   leading cost and existing eligibility covers real hot sites; neutral structural
   simplification is not justification for broader eligibility on its own.
-- Redesign persistent object layouts, specialize collection storage, or eliminate
-  generator/async objects only after a representative profile and explicit
-  identity/escape/completion contract establish the need. They are not prerequisites
-  for the bounded P1 work.
+- Specialize collection storage or eliminate generator/async objects only after a
+  representative profile and explicit identity/escape/completion contract establish
+  the need. They are not prerequisites for the bounded P1 work.
 - Start another emitter-only sweep when the fact-flow report identifies sufficient
   existing proofs that still select a general path; do not rediscover already
   implemented primitive kernels or mistake inline helpers for unavoidable calls.

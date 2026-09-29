@@ -88,7 +88,7 @@ bool mal_vm_try_fresh_dense_indexed_fill_reserve(
     MalArrayObject *array = mal_value_to_array_object(array_value);
     MalValue prototype = vm->intrinsics[MAL_INTRINSIC_ARRAY_PROTOTYPE];
     if (!mal_value_is_array_object(prototype) ||
-        array->object.prototype != mal_value_to_object(prototype)) {
+        mal_object_prototype(&array->object) != mal_value_to_object(prototype)) {
         MAL_PERF_COUNT(array_indexed_fill_guard_fallbacks);
         return false;
     }
@@ -440,8 +440,8 @@ static void mal_vm_own_keys_reserve(
     MalArrayObject *keys, const MalObject *object, usize exotic_count
 ) {
     usize count = exotic_count + object->shape->inline_count;
-    if (object->overflow != nullptr) {
-        count += mal_table_size(object->overflow);
+    if (mal_object_overflow(object) != nullptr) {
+        count += mal_table_size(mal_object_overflow(object));
     }
     if (object->header.type == MAL_HEAP_ARRAY_OBJECT) {
         count += ((const MalArrayObject *) object)->dense_count;
@@ -811,31 +811,38 @@ MalValue mal_vm_op_create_base_construct_receiver(
 MalValue mal_vm_materialize_stack_object(MalVm *vm, const MalObject *source) {
     assert(source->header.type == MAL_HEAP_OBJECT);
     assert(source->header.storage == MAL_HEAP_STORAGE_IMMORTAL);
-    assert(source->overflow == nullptr);
+    assert(mal_object_overflow(source) == nullptr);
     u32 count = source->shape->inline_count;
     assert(count <= MAL_SHAPE_MAX_INLINE_SLOTS);
-    assert((count == 0) == (source->slots == nullptr));
-
-    MalObject *object = mal_heap_try_alloc(
-        &vm->heap, sizeof(MalObject) + sizeof(MalValue) * count, MAL_HEAP_OBJECT);
+    assert((count == 0) == (mal_object_fields(source) == nullptr));
+    MalValue values[MAL_SHAPE_MAX_INLINE_SLOTS];
+    for (u32 i = 0; i < count; i++) {
+        values[i] = mal_object_field_load(source, i);
+    }
+    MalRootSpan roots;
+    if (count > 0) mal_gc_root(&roots, values, (i32) count);
+    MalObject *object = count == 0
+        ? mal_object_try_new(&vm->heap, mal_object_prototype(source))
+        : mal_object_try_new_shaped(
+            &vm->heap, mal_object_prototype(source),
+            mal_shape_logical(source->shape), values, count);
+    if (count > 0) mal_gc_unroot(&roots);
     if (object == nullptr) {
         mal_vm_throw_allocation_error(vm);
         return MAL_VALUE_UNDEFINED;
     }
-
-    // Preserve every ordinary-object internal field while retaining the fresh
-    // managed header. The trailing slots belong to the same GC cell.
     MalHeapHeader header = object->header;
+    MalShape *shape = object->shape;
+    u8 slot_capacity = object->slot_capacity;
+    u8 inline_payload_eights = object->inline_payload_eights;
+    u8 storage_kind = object->storage_kind;
     *object = *source;
     object->header = header;
+    object->shape = shape;
     object->slots_owned = false;
-    object->slot_capacity = (u8) count;
-    if (count == 0) {
-        object->slots = nullptr;
-    } else {
-        object->slots = (MalValue *) (object + 1);
-        memcpy(object->slots, source->slots, sizeof(MalValue) * count);
-    }
+    object->storage_kind = storage_kind;
+    object->slot_capacity = slot_capacity;
+    object->inline_payload_eights = inline_payload_eights;
     g_stack_object_materializations++;
     MAL_PERF_COUNT(stack_object_materializations);
     return mal_value_from_object(object);
@@ -2162,7 +2169,7 @@ bool mal_vm_inherited_stub_try_load_static(
     }
     const MalInlineCache *stub =
         &vm->inherited_property_stub[mal_inherited_stub_hash(
-            object->shape, object->prototype, site->key)];
+            object->shape, mal_object_prototype(object), site->key)];
     return mal_vm_inherited_try_load(receiver, site->key, stub, out);
 }
 
@@ -2170,7 +2177,7 @@ bool mal_vm_inherited_stub_try_load_static(
 __attribute__((noinline)) MalStaticPropertyProbeResult
 mal_vm_property_try_load_static_remaining(
     MalVm *vm, MalValue receiver, const MalObject *object,
-    const MalInlineCache *ic
+    MalInlineCache *ic
 ) {
     if (ic->mode == MAL_IC_MODE_ARRAY_LENGTH &&
         mal_value_is_heap_type(receiver, MAL_HEAP_ARRAY_OBJECT)) {
@@ -4194,8 +4201,8 @@ static bool mal_vm_ordinary_get(MalVm *vm, MalObject *start, MalKey key, MalValu
                 return false;
             }
         } else if (cursor->header.type == MAL_HEAP_OBJECT &&
-                   cursor->shape->inline_count == 0 && cursor->overflow != nullptr) {
-            MalPropertyRead read = mal_property_read(cursor->overflow, key);
+                   cursor->shape->inline_count == 0 && mal_object_overflow(cursor) != nullptr) {
+            MalPropertyRead read = mal_property_read(mal_object_overflow(cursor), key);
             if (read.kind == MAL_PROPERTY_READ_DATA) {
                 *out = read.value;
                 return true;
@@ -4210,7 +4217,7 @@ static bool mal_vm_ordinary_get(MalVm *vm, MalObject *start, MalKey key, MalValu
                 present = false;
             }
         } else if (
-            cursor->shape->inline_count == 0 && cursor->overflow == nullptr &&
+            cursor->shape->inline_count == 0 && mal_object_overflow(cursor) == nullptr &&
             !(key.kind == MAL_KEY_INDEX && cursor->header.type == MAL_HEAP_ARRAY_OBJECT)
         ) {
             present = false;
@@ -4521,7 +4528,7 @@ bool mal_vm_set_property(MalVm *vm, MalValue target, MalKey key, MalValue value,
             // handle length specially). A too-sparse index (NEEDS_TABLE) falls through.
             if (!array->dense_deopted && mal_array_elements_protector &&
                 array->object.extensible && array->length_writable &&
-                array->object.prototype ==
+                mal_object_prototype(&array->object) ==
                     mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ARRAY_PROTOTYPE])) {
                 if (mal_array_object_dense_store(array, index, value) ==
                     MAL_ARRAY_DENSE_APPLIED) {
@@ -4913,12 +4920,12 @@ bool mal_vm_own_table_try_load(
     const MalObject *object, MalValue key, const MalInlineCache *ic, MalValue *out
 ) {
     if (object->header.type != MAL_HEAP_OBJECT || key != ic->key ||
-        object->shape->inline_count != 0 || object->overflow == nullptr) {
+        object->shape->inline_count != 0 || mal_object_overflow(object) == nullptr) {
         return false;
     }
     MalValue value;
     u8 flags;
-    if (!mal_table_read_entry_hint(object->overflow, ic->entry, key, &value, &flags) ||
+    if (!mal_table_read_entry_hint(mal_object_overflow(object), ic->entry, key, &value, &flags) ||
         (flags & MAL_PROPERTY_ACCESSOR)) {
         return false;
     }
@@ -5000,6 +5007,7 @@ static void mal_ic_record(MalInlineCache *ic, const MalShape *shape, MalValue ke
         ic->shape = shape;
         ic->key = key;
         ic->slot = slot;
+        ic->field = shape->props[slot].field;
         ic->prim_kind = 0;
         ic->mode = MAL_IC_MODE_SHAPE;
 #if MAL_REALMS
@@ -5009,11 +5017,48 @@ static void mal_ic_record(MalInlineCache *ic, const MalShape *shape, MalValue ke
         ic->megamorphic = false;
         return;
     }
-    if (shape == ic->shape || ic->megamorphic) {
+    if (shape == ic->shape) {
+        return;
+    }
+    if (ic->megamorphic) {
+        for (u8 i = 0; i < ic->poly_count; i++) {
+            if (ic->poly_shape[i] == shape) {
+                mal_ic_promote_poly_slot(ic, i);
+                return;
+            }
+        }
+        ic->poly_shape[0] = ic->shape;
+        mal_ic_set_poly_slot(ic, 0, ic->slot);
+        ic->shape = shape;
+        ic->slot = (u8) slot;
+        ic->field = shape->props[slot].field;
+        return;
+    }
+    if (mal_shape_is_compact(shape) && shape->logical == ic->shape) {
+        const MalShape *logical = ic->shape;
+        u8 logical_slot = ic->slot;
+        u8 replacement = ic->poly_count;
+        for (u8 i = 0; i < ic->poly_count; i++) {
+            if (ic->poly_shape[i] == shape) {
+                replacement = i;
+                break;
+            }
+        }
+        if (replacement < MAL_IC_POLY_EXTRA) {
+            ic->poly_shape[replacement] = logical;
+            mal_ic_set_poly_slot(ic, replacement, logical_slot);
+            if (replacement == ic->poly_count) ic->poly_count++;
+        } else {
+            ic->megamorphic = true;
+        }
+        ic->shape = shape;
+        ic->slot = (u8) slot;
+        ic->field = shape->props[slot].field;
         return;
     }
     for (u8 i = 0; i < ic->poly_count; i++) {
         if (ic->poly_shape[i] == shape) {
+            mal_ic_promote_poly_slot(ic, i);
             return;
         }
     }
@@ -5023,6 +5068,11 @@ static void mal_ic_record(MalInlineCache *ic, const MalShape *shape, MalValue ke
         ic->poly_count++;
     } else {
         ic->megamorphic = true;
+        ic->poly_shape[0] = ic->shape;
+        mal_ic_set_poly_slot(ic, 0, ic->slot);
+        ic->shape = shape;
+        ic->slot = (u8) slot;
+        ic->field = shape->props[slot].field;
     }
 }
 
@@ -5043,7 +5093,7 @@ static bool mal_ic_record_local_prototype_chain(
     MalObject *receiver, MalObject *holder, MalInlineCache *ic,
     bool include_receiver
 ) {
-    if (receiver->prototype == nullptr) {
+    if (mal_object_prototype(receiver) == nullptr) {
         return false;
     }
     bool same_positive_chain =
@@ -5051,7 +5101,7 @@ static bool mal_ic_record_local_prototype_chain(
          ic->mode == MAL_IC_MODE_INHERITED_SLOT ||
          ic->mode == MAL_IC_MODE_INHERITED_TABLE) &&
         ic->poly_count > 0 &&
-        ic->proto_object[0] == receiver->prototype &&
+        ic->proto_object[0] == mal_object_prototype(receiver) &&
         ic->proto_object[1] == holder &&
         (!include_receiver ||
          (ic->receiver_type == MAL_IC_RECEIVER_DICTIONARY &&
@@ -5060,14 +5110,14 @@ static bool mal_ic_record_local_prototype_chain(
         ic->mode == MAL_IC_MODE_MISSING &&
         ic->receiver_type == MAL_IC_MISSING_EXACT_CHAIN &&
         ic->poly_count > 0 &&
-        ic->proto_object[0] == receiver->prototype &&
+        ic->proto_object[0] == mal_object_prototype(receiver) &&
         holder == nullptr;
     if (!same_positive_chain && !same_missing_chain &&
         !mal_object_register_prototype_cache(
             receiver, holder, ic, include_receiver)) {
         return false;
     }
-    ic->proto_object[0] = receiver->prototype;
+    ic->proto_object[0] = mal_object_prototype(receiver);
     ic->proto_object[1] = holder;
     ic->poly_count = 1;
     return true;
@@ -5083,10 +5133,10 @@ static bool mal_ic_record_transition(
     MalObject *object, const MalShape *source, MalValue key,
     const MalShape *child, MalInlineCache *ic
 ) {
-    if (object->prototype == nullptr) {
+    if (mal_object_prototype(object) == nullptr) {
         mal_ic_detach_prototype_cache(ic);
     } else if (!(ic->mode == MAL_IC_MODE_TRANSITION &&
-                 ic->obj == object->prototype) &&
+                 ic->obj == mal_object_prototype(object)) &&
                !mal_object_register_prototype_cache(
                    object, nullptr, ic, false)) {
         mal_vm_property_cache_invalidate(ic);
@@ -5095,7 +5145,7 @@ static bool mal_ic_record_transition(
     mal_perf_ic_note_replacement(ic, MAL_IC_MODE_TRANSITION);
     ic->shape = source;
     ic->key = key;
-    ic->obj = object->prototype;
+    ic->obj = mal_object_prototype(object);
     ic->poly_shape[0] = child;
     ic->slot = (u8) (child->inline_count - 1);
     ic->prim_kind = 0;
@@ -5115,7 +5165,7 @@ static bool mal_ic_record_transition(
 static bool mal_prototype_chain_allows_transition_store(
     const MalObject *prototype, MalKey key
 ) {
-    for (const MalObject *cursor = prototype; cursor != nullptr; cursor = cursor->prototype) {
+    for (const MalObject *cursor = prototype; cursor != nullptr; cursor = mal_object_prototype(cursor)) {
         if (cursor->header.type != MAL_HEAP_OBJECT) {
             return false;
         }
@@ -5195,21 +5245,24 @@ bool mal_vm_guard_base_constructor_layout(
 }
 
 static bool mal_ic_can_apply_transition_store(const MalObject *object, MalKey key) {
-	return mal_prototype_chain_allows_transition_store(object->prototype, key);
+	return mal_prototype_chain_allows_transition_store(mal_object_prototype(object), key);
 }
 
 static bool mal_ic_try_record_inherited_slot(
     MalValue receiver, MalValue key_value, MalPropertyResolution resolution,
     MalInlineCache *ic, bool count_fill
 ) {
-    if (!mal_value_is_heap_type(receiver, MAL_HEAP_OBJECT) ||
+    MalHeapType receiver_type = mal_value_heap_type(receiver);
+    if ((receiver_type != MAL_HEAP_OBJECT &&
+         receiver_type != MAL_HEAP_GENERATOR_OBJECT) ||
         (resolution.desc.flags & MAL_PROPERTY_ACCESSOR)) {
         return false;
     }
 
     MalObject *object = mal_value_to_object(receiver);
     bool dictionary_receiver = mal_object_has_public_overflow(object);
-    if ((dictionary_receiver && object->shape->inline_count != 0) ||
+    if ((dictionary_receiver &&
+         (receiver_type != MAL_HEAP_OBJECT || object->shape->inline_count != 0)) ||
         resolution.holder == nullptr ||
         resolution.holder->header.type != MAL_HEAP_OBJECT) {
         return false;
@@ -5224,7 +5277,7 @@ static bool mal_ic_try_record_inherited_slot(
     // object reached after the receiver is marked as a prototype at attachment
     // time, so a later structural mutation invalidates the shared epoch.
     bool found_holder = false;
-    for (MalObject *cursor = object->prototype; cursor != nullptr; cursor = cursor->prototype) {
+    for (MalObject *cursor = mal_object_prototype(object); cursor != nullptr; cursor = mal_object_prototype(cursor)) {
         if (cursor->header.type != MAL_HEAP_OBJECT) {
             return false;
         }
@@ -5255,7 +5308,7 @@ static bool mal_ic_try_record_inherited_slot(
         ic->mode = MAL_IC_MODE_INHERITED_VALUE;
         ic->receiver_type = dictionary_receiver
             ? MAL_IC_RECEIVER_DICTIONARY
-            : MAL_HEAP_OBJECT;
+            : (u8) receiver_type;
         if (dictionary_receiver) ic->obj = object;
         if (count_fill) MAL_PERF_COUNT(ic_inherited_fills);
         return true;
@@ -5277,7 +5330,7 @@ static bool mal_ic_try_record_inherited_slot(
         }
         mode = MAL_IC_MODE_INHERITED_TABLE;
         ic->entry = own.entry;
-        ic->table_handle_epoch = mal_table_handle_epoch(resolution.holder->overflow);
+        ic->table_handle_epoch = mal_table_handle_epoch(mal_object_overflow(resolution.holder));
     }
 
     mal_perf_ic_note_replacement(ic, mode);
@@ -5288,13 +5341,13 @@ static bool mal_ic_try_record_inherited_slot(
     if (mal_prototype_chain_epoch == 0) {
         return false;
     }
-    ic->proto_object[0] = object->prototype;
+    ic->proto_object[0] = mal_object_prototype(object);
     ic->proto_object[1] = resolution.holder;
     mal_ic_set_recorded_prototype_epoch(ic, mal_prototype_chain_epoch);
     ic->poly_count = 0;
     ic->megamorphic = false;
     ic->mode = mode;
-    ic->receiver_type = MAL_HEAP_OBJECT;
+    ic->receiver_type = (u8) receiver_type;
     if (count_fill) MAL_PERF_COUNT(ic_inherited_fills);
     return true;
 }
@@ -5313,7 +5366,7 @@ static bool mal_ic_try_record_missing(
     const MalShape *prototype_shapes[MAL_IC_POLY_EXTRA];
     u32 depth = 0;
     bool shape_chain = true;
-    for (MalObject *cursor = object->prototype; cursor != nullptr; cursor = cursor->prototype) {
+    for (MalObject *cursor = mal_object_prototype(object); cursor != nullptr; cursor = mal_object_prototype(cursor)) {
         if (cursor->header.type != MAL_HEAP_OBJECT) {
             return false;
         }
@@ -5332,7 +5385,7 @@ static bool mal_ic_try_record_missing(
     // its epoch normally.
     if (!shape_chain && ic->mode == MAL_IC_MODE_MISSING &&
         (ic->receiver_type == MAL_IC_MISSING_SHAPE_CHAIN ||
-         ic->proto_object[0] != object->prototype)) {
+         ic->proto_object[0] != mal_object_prototype(object))) {
         return false;
     }
 
@@ -5353,7 +5406,7 @@ static bool mal_ic_try_record_missing(
             if (mal_prototype_chain_epoch == 0) {
                 return false;
             }
-            ic->proto_object[0] = object->prototype;
+            ic->proto_object[0] = mal_object_prototype(object);
             mal_ic_set_recorded_prototype_epoch(ic, mal_prototype_chain_epoch);
             ic->poly_count = 0;
         }
@@ -5390,7 +5443,7 @@ static void mal_ic_try_record_inherited(
             MalObject *object = mal_value_to_object(receiver);
             MalInlineCache *stub =
                 &mal_vm_inherited_property_stub_cache(vm)[mal_inherited_stub_hash(
-                    object->shape, object->prototype, key_value)];
+                    object->shape, mal_object_prototype(object), key_value)];
             if (stub != ic) {
                 // A direct-mapped collision replaces the old independently
                 // registered chain. Clearing first bypasses the per-site policy
@@ -5416,7 +5469,7 @@ static void mal_ic_try_record_inherited(
             receiver, key_value, resolution, ic, true)) {
         MalInlineCache *stub =
             &mal_vm_inherited_property_stub_cache(vm)[mal_inherited_stub_hash(
-                object->shape, object->prototype, key_value)];
+                object->shape, mal_object_prototype(object), key_value)];
         if (stub != ic) {
             (void) mal_ic_try_record_inherited_slot(
                 receiver, key_value, resolution, stub, false);
@@ -5430,7 +5483,7 @@ static void mal_ic_try_record_inherited(
     }
 
     bool stable_chain = false;
-    for (MalObject *cursor = object->prototype; cursor != nullptr; cursor = cursor->prototype) {
+    for (MalObject *cursor = mal_object_prototype(object); cursor != nullptr; cursor = mal_object_prototype(cursor)) {
         if (!cursor->watched_method_proto) {
             break;
         }
@@ -5449,7 +5502,7 @@ static void mal_ic_try_record_inherited(
     ic->shape = object->shape;
     ic->key = key_value;
     ic->value = result;
-    ic->obj = object->prototype;
+    ic->obj = mal_object_prototype(object);
     ic->slot = MAL_IC_VALUE_SLOT;
     ic->prim_kind = 0;
     ic->poly_count = 0;
@@ -5487,7 +5540,7 @@ static MalValue mal_vm_op_load_property_ic_keyed(
         const MalObject *object = mal_value_to_object(object_value);
         const MalInlineCache *stub =
             &vm->inherited_property_stub[mal_inherited_stub_hash(
-                object->shape, object->prototype, key_value)];
+                object->shape, mal_object_prototype(object), key_value)];
         if (mal_vm_inherited_try_load(
                 object_value, key_value, stub, &inherited_value)) {
             return inherited_value;
@@ -5546,7 +5599,7 @@ static MalValue mal_vm_op_load_property_ic_keyed(
                 // site: fall through and re-resolve (may re-fill for this object).
             } else {
                 MAL_PERF_COUNT(ic_load_slow_mono_hits);
-                return object->slots[ic->slot]; // same layout + key: slot still valid
+                return mal_object_field_load_token(object, ic->field);
             }
         }
         // Polymorphic overflow: a previously-seen alternate shape for the same key
@@ -5557,7 +5610,8 @@ static MalValue mal_vm_op_load_property_ic_keyed(
             for (u8 i = 0; i < ic->poly_count; i++) {
                 if (object->shape == ic->poly_shape[i]) {
                     MAL_PERF_COUNT(ic_load_poly_hits);
-                    return object->slots[mal_ic_poly_slot(ic, i)];
+                    mal_ic_promote_poly_slot(ic, i);
+                    return mal_object_field_load_token(object, ic->field);
                 }
             }
         }
@@ -5569,7 +5623,10 @@ static MalValue mal_vm_op_load_property_ic_keyed(
                     mal_stub_hash(object->shape, key_value)];
             if (e->shape == object->shape && e->key == key_value) {
                 MAL_PERF_COUNT(ic_load_mega_hits);
-                return object->slots[e->slot];
+                if (mal_ic_key_is_stable_string(key_value)) {
+                    mal_ic_record(ic, object->shape, key_value, e->slot);
+                }
+                return mal_object_field_load_token(object, e->field);
             }
             MAL_PERF_COUNT(ic_load_mega_misses);
         }
@@ -5593,10 +5650,11 @@ static MalValue mal_vm_op_load_property_ic_keyed(
                     stub->key = key_value;
                     stub->slot = prop->slot;
                     stub->attrs = prop->attrs;
+                    stub->field = prop->field;
                 } else {
                     MAL_PERF_COUNT(ic_load_shape_uncacheable);
                 }
-                return object->slots[prop->slot];
+                return mal_object_field_load(object, prop->slot);
             }
             // Own overflow-table data property on a watched intrinsic (String, Math,
             // JSON, Object, Array, …): its many static/namespace methods live in the
@@ -5615,10 +5673,10 @@ static MalValue mal_vm_op_load_property_ic_keyed(
             }
         }
         if (object->header.type == MAL_HEAP_OBJECT &&
-            object->shape->inline_count == 0 && object->overflow != nullptr &&
+            object->shape->inline_count == 0 && mal_object_overflow(object) != nullptr &&
             key.kind == MAL_KEY_STRING) {
             MalValue result = mal_value_new_undefined();
-            MalPropertyLookup own = mal_property_lookup(object->overflow, key);
+            MalPropertyLookup own = mal_property_lookup(mal_object_overflow(object), key);
             if (own.present) {
                 if (!(own.desc.flags & MAL_PROPERTY_ACCESSOR)) {
                     if (mal_ic_key_is_stable_string(key_value)) {
@@ -5627,9 +5685,9 @@ static MalValue mal_vm_op_load_property_ic_keyed(
                     return own.desc.value;
                 }
                 mal_vm_desc_read(vm, own.desc, object_value, &result);
-            } else if (object->prototype != nullptr) {
+            } else if (mal_object_prototype(object) != nullptr) {
                 mal_vm_get_property_with_receiver(
-                    vm, mal_value_from_object(object->prototype), key, object_value, &result);
+                    vm, mal_value_from_object(mal_object_prototype(object)), key, object_value, &result);
             }
             if (!own.present && vm->completion.kind != MAL_COMPLETION_THROW) {
                 mal_ic_try_record_inherited(
@@ -5791,9 +5849,16 @@ void mal_vm_op_store_property_ic(
             MAL_PERF_COUNT(ic_store_slow_mono_hits);
             // hit: overwrite an existing shaped data slot (shape + key unchanged).
             // (A value-sentinel entry is a load-only cache — never index slots with it.)
-            mal_gc_write_barrier(object->slots[ic->slot]);
-            object->slots[ic->slot] = value;
-            mal_gc_card(&object->header, value); // old object -> young value
+            mal_object_field_store_token(object, ic->slot, ic->field, value);
+            return;
+        }
+        if (ic->mode == MAL_IC_MODE_SHAPE && ic->shape != nullptr &&
+            ic->slot != MAL_IC_VALUE_SLOT && key_value == ic->key &&
+            mal_shape_same_logical(object->shape, ic->shape)) {
+            MAL_PERF_COUNT(ic_store_poly_hits);
+            ic->shape = object->shape;
+            ic->field = object->shape->props[ic->slot].field;
+            mal_object_field_store_token(object, ic->slot, ic->field, value);
             return;
         }
         // Polymorphic overflow: an alternate shape for the same key. Entries are only
@@ -5803,9 +5868,7 @@ void mal_vm_op_store_property_ic(
                 if (object->shape == ic->poly_shape[i]) {
                     MAL_PERF_COUNT(ic_store_poly_hits);
                     u8 slot = mal_ic_poly_slot(ic, i);
-                    mal_gc_write_barrier(object->slots[slot]);
-                    object->slots[slot] = value;
-                    mal_gc_card(&object->header, value);
+                    mal_object_field_store(object, slot, value);
                     return;
                 }
             }
@@ -5821,9 +5884,7 @@ void mal_vm_op_store_property_ic(
             if (stub->shape == object->shape && stub->key == key_value &&
                 mal_shape_attrs_are_default(stub->attrs)) {
                 MAL_PERF_COUNT(ic_store_mega_hits);
-                mal_gc_write_barrier(object->slots[stub->slot]);
-                object->slots[stub->slot] = value;
-                mal_gc_card(&object->header, value);
+                mal_object_field_store_token(object, stub->slot, stub->field, value);
                 return;
             }
             MAL_PERF_COUNT(ic_store_mega_misses);
@@ -5855,6 +5916,7 @@ void mal_vm_op_store_property_ic(
                     stub->key = key_value;
                     stub->slot = prop->slot;
                     stub->attrs = prop->attrs;
+                    stub->field = prop->field;
                     MAL_PERF_COUNT(ic_store_shape_fills);
                 } else {
                     MAL_PERF_COUNT(ic_store_shape_uncacheable);
@@ -5862,9 +5924,7 @@ void mal_vm_op_store_property_ic(
                 if (mal_object_note_prototype_mutation(object)) {
                     MAL_PERF_COUNT(prototype_epoch_define_invalidations);
                 }
-                mal_gc_write_barrier(object->slots[prop->slot]);
-                object->slots[prop->slot] = value;
-                mal_gc_card(&object->header, value); // old object -> young value
+                mal_object_field_store(object, prop->slot, value);
                 return;
             }
             if (idx < 0 && !mal_object_has_public_overflow(object) && object->extensible &&
@@ -5884,7 +5944,7 @@ void mal_vm_op_store_property_ic(
                 }
                 mal_object_grow_slots(
                     object, source->inline_count, child->inline_count);
-                object->slots[child->inline_count - 1] = value;
+                mal_object_field_initialize(object, child, child->inline_count - 1, value);
                 object->shape = child;
                 mal_gc_card(&object->header, value);
                 mal_gc_card(&object->header, key.value);
@@ -6070,7 +6130,7 @@ static void mal_vm_op_store_property_keyed(
             // length. A too-sparse index (NEEDS_TABLE) falls through to the slow path.
             if (!array->dense_deopted && mal_array_elements_protector &&
                 array->object.extensible && array->length_writable &&
-                array->object.prototype ==
+                mal_object_prototype(&array->object) ==
                     mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ARRAY_PROTOTYPE])) {
                 if (mal_array_object_dense_store(array, index, value) ==
                     MAL_ARRAY_DENSE_APPLIED) {
@@ -6601,7 +6661,7 @@ static MalPropertyLookup mal_vm_global_dictionary_lookup(
         return (MalPropertyLookup) {.present = false, .entry = nullptr};
     }
     MalObject *global_object = (MalObject *) mal_value_to_heap(global);
-    MalTable *table = global_object->overflow;
+    MalTable *table = mal_object_overflow(global_object);
     if (table == nullptr) {
         return (MalPropertyLookup) {.present = false, .entry = nullptr};
     }
@@ -6806,7 +6866,7 @@ void mal_vm_op_store_global_property(
         }
         if (own.present && !(own.desc.flags & MAL_PROPERTY_CONFIGURABLE)) {
             own.desc.value = value;
-            mal_property_write_entry(global_object->overflow, own.entry, &own.desc);
+            mal_property_write_entry(mal_object_overflow(global_object), own.entry, &own.desc);
             mal_gc_card(&global_object->header, value);
             return;
         }
@@ -6830,7 +6890,7 @@ void mal_vm_op_store_global_property(
         && !(own.desc.flags & MAL_PROPERTY_ACCESSOR)
         && (own.desc.flags & MAL_PROPERTY_WRITABLE)) {
         own.desc.value = value;
-        mal_property_write_entry(global_object->overflow, own.entry, &own.desc);
+        mal_property_write_entry(mal_object_overflow(global_object), own.entry, &own.desc);
         mal_gc_card(&global_object->header, value);
         return;
     }
@@ -7152,7 +7212,7 @@ MalValue mal_vm_op_copy_data_properties(
                     result_shape, key,
                     MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE |
                         MAL_PROPERTY_CONFIGURABLE);
-                values[count++] = source_object->slots[prop->slot];
+                values[count++] = mal_object_field_load(source_object, prop->slot);
             }
             if (eligible) {
                 MalValue result = count == 0
@@ -7259,11 +7319,11 @@ static bool mal_vm_try_merge_shaped_data_properties(
     MalObject *target = mal_value_to_object(target_value);
     MalObject *source_object = mal_value_to_object(source);
     if (target->shape != mal_shape_root(&vm->heap)
-        || target->slots != nullptr
+        || mal_object_fields(target) != nullptr
         || mal_object_has_public_overflow(target)
         || !target->extensible
         || source_object->shape == nullptr
-        || source_object->slots == nullptr
+        || mal_object_fields(source_object) == nullptr
         || mal_object_has_public_overflow(source_object)) {
         return false;
     }
@@ -7272,7 +7332,7 @@ static bool mal_vm_try_merge_shaped_data_properties(
         return false;
     }
     MalShape *target_shape = target->shape;
-    MalShape *source_shape = source_object->shape;
+    MalShape *source_shape = mal_shape_logical(source_object->shape);
     uptr cache_hash = ((uptr) target_shape >> 4) ^ ((uptr) source_shape >> 4);
     MalShapeCopyCacheEntry *cached =
         &vm->shape_copy_cache[cache_hash & (MAL_SHAPE_COPY_CACHE_CAPACITY - 1)];
@@ -7281,16 +7341,13 @@ static bool mal_vm_try_merge_shaped_data_properties(
         && cached->append_plan.source == target_shape
         && cached->append_plan.final != nullptr) {
         MAL_PERF_COUNT(merge_shape_cache_hits);
-        const MalValue *values = source_object->slots;
         MalValue projected[MAL_SHAPE_DYNAMIC_INLINE_SLOTS];
-        if (!cached->identity_projection) {
-            for (u32 i = 0; i < cached->count; ++i) {
-                projected[i] = source_object->slots[cached->source_slots[i]];
-            }
-            values = projected;
+        for (u32 i = 0; i < cached->count; ++i) {
+            u32 ordinal = cached->identity_projection ? i : cached->source_slots[i];
+            projected[i] = mal_object_field_load(source_object, ordinal);
         }
         if (!mal_object_try_append_shaped_values(
-                target, &cached->append_plan, values, cached->count)) {
+                target, &cached->append_plan, projected, cached->count)) {
             return false;
         }
         MAL_PERF_COUNT(merge_data_shaped_hits);
@@ -7308,10 +7365,14 @@ static bool mal_vm_try_merge_shaped_data_properties(
     }
     if (!needs_normalization) {
         MalShapeAppendPlan plan;
+        MalValue values[MAL_SHAPE_DYNAMIC_INLINE_SLOTS];
+        for (u32 i = 0; i < source_count; i++) {
+            values[i] = mal_object_field_load(source_object, i);
+        }
         if (!mal_object_append_plan_init(
                 &plan, target_shape, source_shape, source_count)
             || !mal_object_try_append_shaped_values(
-                target, &plan, source_object->slots, source_count)) {
+                target, &plan, values, source_count)) {
             return false;
         }
         *cached = (MalShapeCopyCacheEntry) {
@@ -7337,7 +7398,7 @@ static bool mal_vm_try_merge_shaped_data_properties(
         }
         if ((prop->attrs & MAL_PROPERTY_ENUMERABLE) == 0) continue;
         result_shape = mal_shape_add_property(result_shape, key, default_attrs);
-        values[count] = source_object->slots[prop->slot];
+        values[count] = mal_object_field_load(source_object, prop->slot);
         source_slots[count++] = (u8) prop->slot;
     }
     if (count == 0) return true;
@@ -7716,7 +7777,7 @@ MalValue mal_vm_op_load_private(MalVm *vm, MalValue object_value, MalValue key_v
 
     MalValue value;
     if (!mal_table_get_private_value(
-            mal_value_to_object(object_value)->overflow, mal_value_to_symbol(key_value), &value)) {
+            mal_object_overflow(mal_value_to_object(object_value)), mal_value_to_symbol(key_value), &value)) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, mal_private_absent_message);
         return mal_value_new_undefined();
     }
@@ -7755,7 +7816,7 @@ void mal_vm_op_store_private(MalVm *vm, MalValue object_value, MalValue key_valu
     // SATB: PrivateSet overwrites an already-installed data field (checked above),
     // so shade the old value that mal_property_set_value is about to replace.
     mal_gc_write_barrier(lookup.desc.value);
-    mal_property_set_value(object->overflow, key, value);
+    mal_property_set_value(mal_object_overflow(object), key, value);
     mal_gc_card(&object->header, value); // old instance -> young private field value
 }
 

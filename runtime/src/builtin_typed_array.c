@@ -41,7 +41,7 @@ static bool mal_ta_default_species(
     MalVm *vm, MalTypedArrayObject *array
 ) {
     if (!mal_primitive_method_protector ||
-        array->object.prototype != mal_ta_kind_prototype(vm, array->kind)) {
+        mal_object_prototype(&array->object) != mal_ta_kind_prototype(vm, array->kind)) {
         return false;
     }
     return !mal_object_get_own(

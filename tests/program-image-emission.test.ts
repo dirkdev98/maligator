@@ -2613,7 +2613,7 @@ describe("native update-expression representation", () => {
 			}
 			globalThis.result = choose(41, true);
 		`);
-		expect(sunk).toContain("MalObject __stack_object_");
+		expect(sunk).toContain("MalEmbeddedObject __stack_object_");
 		expect(sunk).toContain("mal_vm_materialize_stack_object(");
 		expect(sunk).not.toContain("mal_vm_create_object_shaped(");
 	});
@@ -3160,6 +3160,16 @@ describe("native update-expression representation", () => {
 		expect(output).toMatch(/f64 __property_projection_\d+_step_0/);
 		expect(output).toMatch(
 			/r\d+ = mal_ops_number_value\(__property_projection_\d+_step_1\)/,
+		);
+	});
+
+	it("commits a two-step materialized field update without boxing the result", () => {
+		const output = emit(
+			`"use strict"; function advance(record) { record.vy += 0.01 * record.mass; } globalThis.advance = advance;`,
+		);
+		expect(output).toContain("mal_vm_property_try_load_static_number_pair(");
+		expect(output).toMatch(
+			/mal_vm_property_numeric_update_commit\(&__property_projection_\d+_update, __property_projection_\d+_step_1, nullptr\)/,
 		);
 	});
 

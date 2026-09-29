@@ -232,7 +232,7 @@ static bool mal_array_buffer_default_species(
             ? MAL_INTRINSIC_SHARED_ARRAY_BUFFER_PROTOTYPE
             : MAL_INTRINSIC_ARRAY_BUFFER_PROTOTYPE;
     MalObject *receiver = mal_value_to_object(object);
-    return receiver->prototype ==
+    return mal_object_prototype(receiver) ==
             mal_value_to_object(vm->intrinsics[prototype]) &&
         !mal_object_get_own(
             receiver,

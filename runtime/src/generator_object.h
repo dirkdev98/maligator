@@ -52,6 +52,7 @@ typedef struct MalGeneratorAsyncData {
  */
 struct MalGeneratorObject {
     MalObject object;
+    MalObjectStorage object_storage;
     MalVmFrame frame;
 
     /**
