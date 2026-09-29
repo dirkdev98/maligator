@@ -133,10 +133,10 @@ describe("native result-only contracts", () => {
 		]);
 		expect(graph.initial.resultRepresentation).toBe("boxed");
 		expect(graph.initial.callOverrides).toBeUndefined();
-		for (const entry of graph.entries)
-			expect(coreNativeEntryProofIsCurrent(graph.program.function(entry.function), entry)).toBe(
-				true,
-			);
+		for (const entry of graph.entries) {
+			const fn = graph.program.function(entry.function);
+			expect(coreNativeEntryProofIsCurrent(fn, entry)).toBe(true);
+		}
 		expect(graph.admissions).toEqual([
 			{ target: leaf.function, code: expect.any(Number), work: 0 },
 		]);
