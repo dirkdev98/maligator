@@ -1621,6 +1621,24 @@ void mal_op_create_null(MalCallable *callable, const MalInstruction *instruction
     callable->registers[instruction->as.create_null.dst] = mal_value_new_null();
 }
 
+static bool mal_vm_capture_chain_is_complete(MalEnv *env, const i32 *owners, i32 count) {
+    // Chain tracing retains exactly these owners; a tagged tail bounds traversal
+    // without retaining an inline display's function object or any skipped scope.
+    for (i32 index = count - 1; index >= 0; index--) {
+        if (env == nullptr) return false;
+        bool terminal = mal_env_is_single_owner(env);
+        MalEnv *scope = terminal ? mal_env_untag_single_owner(env) : env;
+        if (scope->function_index == MAL_ENV_CAPTURE_VECTOR ||
+                scope->function_index == MAL_ENV_WITH_OBJECT ||
+                !scope->compact_parent || scope->function_index != owners[index]) {
+            return false;
+        }
+        if (terminal) return index == 0;
+        env = scope->parent;
+    }
+    return env == nullptr;
+}
+
 MalValue mal_vm_op_create_function(MalVm *vm, i32 function_index, MalEnv *creation_env) {
     // Generator/async-generator function objects inherit their respective
     // %GeneratorFunction.prototype% / %AsyncGenerator%.
@@ -1647,7 +1665,9 @@ MalValue mal_vm_op_create_function(MalVm *vm, i32 function_index, MalEnv *creati
         : mal_intrinsic_hot_ascii(vm, MAL_HOT_KEY_EMPTY);
     i32 capture_count = definition->closure_capture_owners != nullptr
         ? definition->closure_capture_owner_count : -1;
-    usize capture_bytes = capture_count > 1
+    bool complete_capture_chain = capture_count > 1 && mal_vm_capture_chain_is_complete(
+        creation_env, definition->closure_capture_owners, capture_count);
+    usize capture_bytes = capture_count > 1 && !complete_capture_chain
         ? sizeof(MalEnv) + ((usize) capture_count + 1) * sizeof(void *) : 0;
     MalFunctionObject *function = mal_function_object_new(
         &vm->heap,
@@ -1665,7 +1685,7 @@ MalValue mal_vm_op_create_function(MalVm *vm, i32 function_index, MalEnv *creati
     } else if (capture_count == 1) {
         MalEnv *owner = mal_vm_capture_owner(creation_env, definition->closure_capture_owners[0]);
         if (owner != nullptr) function->creation_env = mal_env_tag_single_owner(owner);
-    } else if (capture_count > 1) {
+    } else if (capture_count > 1 && !complete_capture_chain) {
         MalEnv *captures = (MalEnv *) ((MalValue *) (function + 1) + 2);
         captures->parent = (MalEnv *) function;
         captures->function_index = MAL_ENV_CAPTURE_VECTOR;

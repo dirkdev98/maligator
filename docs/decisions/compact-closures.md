@@ -12,12 +12,20 @@ Siblings refer to the same owner and slot, while `ENV_COPY` supplies a new owner
 This groups shared cells without allocating a separate heap object per binding.
 A closure with no external requirements retains no environment. A single owner
 uses a tagged terminal reference without additional storage. Multiple owners
-coallocate a flat vector with the function object; immutable owner identifiers
+normally coallocate a flat vector with the function object; immutable owner identifiers
 remain in shared function metadata. Creation resolves the vector once, including
 transitive requirements. Construction scans active scopes once and merges the
 sorted incoming and requested layouts. A missing owner conservatively retains the supplied
 chain. Function properties, identity, construction, and generic call behavior
 continue to belong to the original function object.
+
+When the complete active chain already contains exactly the required compact
+owners in reverse layout order, a closure can reuse that chain without allocating
+a redundant vector. The check must reach null or the final tagged owner and rejects
+extra, duplicated, reordered, dynamic, or vector scopes. Every retained scope is
+required by the closure. In particular, a vector belonging to another function
+object cannot be shared this way: retaining that function would also keep its
+unrelated mutable properties alive.
 
 The vector owns selected binding storage, not the owners' lexical parent links.
 Active interpreter, compiled, and suspended frames explicitly root their lexical

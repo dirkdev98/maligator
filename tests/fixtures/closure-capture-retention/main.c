@@ -95,6 +95,37 @@ static int check_retention(const MalRuntimeImage *image) {
     if (finalized[2] != 1) return 7;
 
     for (usize i = 0; i < countof(tracked); i++) tracked[i] = nullptr;
+    MalEnv *discarded = mal_env_new(&vm, nullptr, 0, 1);
+    discarded->slots[0] = tracked_object(&vm, 0);
+    MalEnv *selected = mal_env_new(&vm, discarded, 1, 1);
+    selected->slots[0] = tracked_object(&vm, 1);
+    roots[0] = mal_vm_op_create_function(&vm, 2, selected);
+    MalEnv *tagged = mal_value_to_function_object(roots[0])->creation_env;
+    MalEnv *exact = mal_env_new(&vm, tagged, 4, 1);
+    exact->slots[0] = tracked_object(&vm, 2);
+    roots[1] = mal_vm_op_create_function(&vm, 3, exact);
+    if (mal_value_to_function_object(roots[1])->creation_env != exact) return 28;
+    MalEnv *duplicate = mal_env_new(&vm, exact, 4, 1);
+    duplicate->slots[0] = mal_value_from_i32(64);
+    roots[2] = mal_vm_op_create_function(&vm, 3, duplicate);
+    MalEnv *deduplicated = mal_value_to_function_object(roots[2])->creation_env;
+    if (mal_env_is_single_owner(deduplicated) ||
+        deduplicated->function_index != MAL_ENV_CAPTURE_VECTOR ||
+        mal_vm_capture_owner(deduplicated, 4) != duplicate) return 29;
+    mal_gc_collect(&vm);
+    if (finalized[0] != 1 || finalized[1] != 0 || finalized[2] != 0) return 30;
+    roots[1] = mal_value_new_undefined();
+    mal_gc_collect(&vm);
+    if (finalized[1] != 0 || finalized[2] != 1 ||
+        mal_vm_load_captured(deduplicated, 4, 0) != mal_value_from_i32(64)) return 31;
+    roots[2] = mal_value_new_undefined();
+    mal_gc_collect(&vm);
+    if (finalized[1] != 0 || mal_vm_capture_owner(tagged, 4) != nullptr) return 32;
+    roots[0] = mal_value_new_undefined();
+    mal_gc_collect(&vm);
+    if (finalized[1] != 1) return 33;
+
+    for (usize i = 0; i < countof(tracked); i++) tracked[i] = nullptr;
     MalEnv *active_parent = mal_env_new(&vm, nullptr, 0, 1);
     active_parent->slots[0] = tracked_object(&vm, 0);
     MalEnv *active_child = mal_env_new(&vm, active_parent, 1, 0);
@@ -166,10 +197,13 @@ static int check_lookup_and_reexport(const MalRuntimeImage *image) {
     base->slots[0] = mal_value_from_i32(100);
     MalEnv *original = mal_env_new(&vm, base, 1, 1);
     original->slots[0] = mal_value_from_i32(11);
-    MalEnv *forwarded = mal_env_new(&vm, original, 4, 1);
+    MalEnv *unselected = mal_env_new(&vm, original, 3, 0);
+    MalEnv *forwarded = mal_env_new(&vm, unselected, 4, 1);
     forwarded->slots[0] = mal_value_from_i32(44);
     roots[0] = mal_vm_op_create_function(&vm, 5, forwarded);
     MalEnv *source = mal_value_to_function_object(roots[0])->creation_env;
+    if (mal_env_is_single_owner(source) ||
+        source->function_index != MAL_ENV_CAPTURE_VECTOR) return 34;
     // The same lexical owner can occur in a nearer recursive activation.
     MalEnv *nearest = mal_env_new(&vm, source, 1, 1);
     nearest->slots[0] = mal_value_from_i32(22);
@@ -230,12 +264,15 @@ static int check_snapshot(const MalRuntimeImage *image) {
     };
     MalEnv *first = mal_env_new(&vm, nullptr, 1, 1);
     first->slots[0] = tracked_object(&vm, 1);
-    MalEnv *second = mal_env_new(&vm, first, 4, 1);
+    MalEnv *unselected = mal_env_new(&vm, first, 0, 0);
+    MalEnv *second = mal_env_new(&vm, unselected, 4, 1);
     second->slots[0] = tracked_object(&vm, 2);
     MalValue multiple_closure = mal_vm_op_create_function(&vm, 3, second);
     MalVmFrame multiple_frame = {
         .env = mal_value_to_function_object(multiple_closure)->creation_env
     };
+    if (mal_env_is_single_owner(multiple_frame.env) ||
+        multiple_frame.env->function_index != MAL_ENV_CAPTURE_VECTOR) return 35;
     MalEnv *parent = mal_env_new(&vm, nullptr, 0, 1);
     parent->slots[0] = tracked_object(&vm, 3);
     MalEnv *child = mal_env_new(&vm, parent, 1, 0);

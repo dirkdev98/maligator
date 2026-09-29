@@ -1039,8 +1039,9 @@ static void mal_gc_trace_table(MalTable *table) {
     }
 }
 
-// Active frames own their lexical links. A compact closure owns selected slot
-// storage only; those owners' parent pointers may be stale after the frame exits.
+// Active frames and exact complete-chain closures own their lexical links.
+// Tagged/vector captures own selected slot storage only; those owners' parent
+// pointers may be stale after the frame exits and must not be followed.
 static void mal_gc_trace_env(MalEnv *env) {
     for (; env != nullptr; env = env->parent) {
         if (mal_env_is_single_owner(env)) {
