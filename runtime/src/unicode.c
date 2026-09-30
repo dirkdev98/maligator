@@ -39,9 +39,8 @@ static bool unicode_property(const u32 *table, usize length, u32 cp) {
 }
 
 static u32 unicode_class(u32 cp) {
-    if (cp < 0x80) return 0;
-    size row = unicode_row(mal_unicode_classes, UNICODE_COUNT(mal_unicode_classes), 2, cp);
-    return row < 0 ? 0 : mal_unicode_classes[row + 1];
+    if (cp < 0x80 || cp >= 0x110000) return 0;
+    return mal_unicode_class_values[((usize) mal_unicode_class_pages[cp >> 8] << 8) | (cp & 255)];
 }
 
 static bool unicode_push(MalUnicodePoints *points, u32 cp) {

@@ -94,6 +94,27 @@ data.decomposition = [...decomposition]
 		return [cp, start, entry.values.length, Number(entry.compatibility)];
 	});
 data.classes = [...classes].sort(([a], [b]) => a - b).flat();
+const classValues = new Uint8Array(0x110000);
+for (const [cp, value] of classes) {
+	if (!Number.isInteger(value) || value < 0 || value > 255)
+		throw new Error("Combining class exceeds u8");
+	classValues[cp] = value;
+}
+const classPages: Array<number> = [];
+const classPageValues: Array<number> = [];
+const classPageIds = new Map<string, number>();
+for (let offset = 0; offset < classValues.length; offset += 256) {
+	const page = [...classValues.subarray(offset, offset + 256)];
+	const key = page.join(",");
+	let id = classPageIds.get(key);
+	if (id === undefined) {
+		id = classPageIds.size;
+		if (id > 255) throw new Error("Combining class page index exceeds u8");
+		classPageIds.set(key, id);
+		classPageValues.push(...page);
+	}
+	classPages.push(id);
+}
 const excluded = new Set(
 	rows("CompositionExclusions.txt").map((row) => Number.parseInt(row[0]!, 16)),
 );
@@ -133,14 +154,27 @@ const c = [
 	'#include "defaults.h"',
 	'#define MAL_UNICODE_VERSION "17.0.0"',
 ];
+function cArray(name: string, type: "u8" | "u32", values: ReadonlyArray<number>): string {
+	return `static const ${type} mal_unicode_${name}[] = {\n${Array.from({ length: Math.ceil(values.length / 16) }, (_, i) => `    ${values.slice(i * 16, i * 16 + 16).join(", ")},`).join("\n")}\n};`;
+}
 for (const [name, values] of Object.entries(data)) {
 	// Packed text keeps generated data out of the compiler's per-element IR.
 	ts.push(
 		`export const unicode${name[0]!.toUpperCase()}${name.slice(1)} = new Uint32Array("${values.join(",")}".split(",").map(Number));`,
 	);
-	c.push(
-		`static const u32 mal_unicode_${name.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`)}[] = {\n${Array.from({ length: Math.ceil(values.length / 16) }, (_, i) => `    ${values.slice(i * 16, i * 16 + 16).join(", ")},`).join("\n")}\n};`,
-	);
+	if (name === "classes") {
+		c.push(
+			cArray("class_pages", "u8", classPages),
+			cArray("class_values", "u8", classPageValues),
+		);
+	} else
+		c.push(
+			cArray(
+				name.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`),
+				"u32",
+				values,
+			),
+		);
 }
 mkdirSync(output, { recursive: true });
 const formatted = await format("unicode-data.ts", `${ts.join("\n")}\n`, {

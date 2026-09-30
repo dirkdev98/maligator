@@ -65,6 +65,32 @@
 			"sourceSeam": "runtime/src/builtin_json.c",
 			"fixture": "cases/json-unique-serialize.mjs",
 			"controls": ["json-unique-shapes", "json-stringify", "json-late-fallback"]
+		},
+		{
+			"id": "unicode-case-expansion-long",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "Unicode text transformations",
+			"category": "api-builtins",
+			"mechanisms": ["unicode-casing", "case-expansion", "input-size-scaling"],
+			"inputShape": "256 repeated mixed-script phrases with case expansions and astral letters; consume output length and endpoints",
+			"unit": "transformations",
+			"sourceSeam": "runtime/src/unicode.c",
+			"fixture": "cases/unicode-case-expansion-long.mjs",
+			"controls": ["unicode-normalize-nfc", "unicode-case-expansion"]
+		},
+		{
+			"id": "unicode-normalize-nfc-long",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "Unicode text transformations",
+			"category": "api-builtins",
+			"mechanisms": ["unicode-normalization", "combining-classes", "input-size-scaling"],
+			"inputShape": "8192 code units with repeated descending combining classes; consume output length and endpoints",
+			"unit": "transformations",
+			"sourceSeam": "runtime/src/unicode.c",
+			"fixture": "cases/unicode-normalize-nfc-long.mjs",
+			"controls": ["unicode-normalize-nfc", "unicode-case-expansion"]
 		}
 	]
 }
