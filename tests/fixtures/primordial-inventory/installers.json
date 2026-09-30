@@ -77,7 +77,7 @@
 	},
 	{
 		"file": "builtin_json.c",
-		"sha256": "0707babbab54e0297be507548a513b6856e5e79778cb49dea96424c74cdaf421"
+		"sha256": "2ac4849961b338dd9c5bd55230400bb8306ed17c306eb99e719c628d955029f2"
 	},
 	{
 		"file": "builtin_map.c",
@@ -693,6 +693,6 @@
 	},
 	{
 		"file": "vm_ops.h",
-		"sha256": "87893ecc1adfccb41971763dc6d719d4b50da0a2f34140ba47e6b92f4b626203"
+		"sha256": "b2c9ed97def4196f93f6c781bf800630d871f3fb3bd176f134a09ff0e80feb8f"
 	}
 ]

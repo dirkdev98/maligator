@@ -937,7 +937,7 @@ static bool mal_json_plain_shape(
     if (object->shape == nullptr || mal_object_has_public_overflow(object) ||
         object->is_arguments || object->is_raw_json) return false;
     MalJsonPointerEntry *cached = mal_json_pointer_find(&state->shapes, object->shape);
-    if (cached != nullptr) {
+    if (cached != nullptr && cached->value != nullptr) {
         MAL_PERF_COUNT(json_shape_plan_hits);
         frame->plan = cached->value;
         frame->count = frame->plan->count;
@@ -958,9 +958,15 @@ static bool mal_json_plain_shape(
     // observable serializer. Eligible immutable shapes can be walked directly.
     frame->shape = shape;
     frame->count = shape->inline_count;
+    // Null entries retain eligibility without building an escaped-key plan before reuse.
+    if (cached == nullptr) {
+        if (state->shapes.count < MAL_JSON_PLAN_ENTRY_LIMIT) {
+            mal_json_pointer_insert(&state->shapes, shape, nullptr);
+        }
+        return true;
+    }
     usize available = MAL_JSON_PLAN_DATA_BUDGET - state->cache_data_bytes;
-    if (state->shapes.count >= MAL_JSON_PLAN_ENTRY_LIMIT ||
-        available < sizeof(MalJsonShapePlan) ||
+    if (available < sizeof(MalJsonShapePlan) ||
         count > (available - sizeof(MalJsonShapePlan)) / sizeof(MalJsonKeyPlan)) {
         return true;
     }
@@ -1084,7 +1090,7 @@ static bool mal_json_plain_frame(
 static void mal_json_plain_dispose(MalJsonPlainState *state) {
     for (usize i = 0; i < state->shapes.capacity; i++) {
         MalJsonPointerEntry *entry = &state->shapes.entries[i];
-        if (entry->key != nullptr) {
+        if (entry->key != nullptr && entry->value != nullptr) {
             MalJsonShapePlan *plan = entry->value;
             MAL_PERF_ADD(json_escaped_key_capacity_bytes,
                 plan->escaped_keys.buffer.capacity * (plan->escaped_keys.buffer.utf16 ? 2 : 1));
