@@ -3917,94 +3917,39 @@ bool mal_builtin_string_trim_identity(MalVm *vm, MalValue callee) {
 #endif
 }
 
-static bool mal_builtin_string_trim_span_direct_impl(
-    MalVm *vm,
-    MalValue callee,
-    MalValue subject_value,
-    usize start,
-    usize end,
-    MalValue *out,
-    bool identity_locked
-) {
-    if (!mal_value_is_string(subject_value) ||
-        (!identity_locked && !mal_builtin_string_trim_identity(vm, callee))) {
-        return false;
-    }
-    MalString *subject = mal_value_to_string(subject_value);
-    usize length = mal_string_length(subject);
-    if (start > end || end > length) return false;
-    if (start == end) {
-        *out = mal_builtin_string_slice(vm, subject, start, 0);
-        return true;
-    }
-    // Contiguous rope trimming avoids repeated edge descents; flat inputs keep compact width.
+static u32 mal_builtin_string_trim_span_length(MalString *subject, usize start, usize end) {
     MalStringSegment segment;
     if (subject->storage == MAL_STRING_STORAGE_CONS) {
+        // Flatten once: independent edge descents across successive spans can be quadratic.
         segment = (MalStringSegment) {.latin1 = false, .length = end - start,
             .utf16_units = mal_string_code_units(subject) + start};
     } else {
-        const MalString *flat = subject;
-        usize offset = start;
-        if (flat->storage == MAL_STRING_STORAGE_DEPENDENT) {
-            offset += flat->slice_offset;
-            flat = flat->parent;
-        }
-        segment.latin1 = flat->latin1;
-        segment.length = end - start;
-        if (segment.latin1) {
-            segment.latin1_units = (flat->storage == MAL_STRING_STORAGE_INLINE
-                ? flat->inline_latin1_units : flat->latin1_units) + offset;
-        } else {
-            segment.utf16_units = (flat->storage == MAL_STRING_STORAGE_INLINE
-                ? flat->inline_code_units : flat->code_units) + offset;
-        }
+        bool contiguous = mal_string_try_get_segment(subject, start, end - start, &segment);
+        assert(contiguous);
     }
     usize leading = 0, trailing = segment.length;
-    if (segment.latin1) {
-        const u8 *units = segment.latin1_units;
-        while (leading < trailing && mal_ecma_is_string_whitespace(units[leading])) leading++;
-        while (trailing > leading && mal_ecma_is_string_whitespace(units[trailing - 1])) trailing--;
-    } else {
-        const c16 *units = segment.utf16_units;
-        while (leading < trailing && mal_ecma_is_string_whitespace(units[leading])) leading++;
-        while (trailing > leading && mal_ecma_is_string_whitespace(units[trailing - 1])) trailing--;
-    }
-    *out = mal_builtin_string_slice(vm, subject, start + leading, trailing - leading);
+    while (leading < trailing && mal_ecma_is_string_whitespace(
+            mal_string_segment_code_unit_at(&segment, leading))) leading++;
+    while (trailing > leading && mal_ecma_is_string_whitespace(
+            mal_string_segment_code_unit_at(&segment, trailing - 1))) trailing--;
+    return (u32) (trailing - leading);
+}
+
+bool mal_builtin_string_trim_span_length_locked(
+    MalValue subject_value, usize start, usize end, u32 *out
+) {
+    if (!mal_value_is_string(subject_value)) return false;
+    MalString *subject = mal_value_to_string(subject_value);
+    if (start > end || end > mal_string_length(subject)) return false;
+    *out = mal_builtin_string_trim_span_length(subject, start, end);
     return true;
 }
 
-bool mal_builtin_string_trim_span_direct(
-    MalVm *vm,
-    MalValue callee,
-    MalValue subject_value,
-    usize start,
-    usize end,
-    MalValue *out
+bool mal_builtin_string_trim_span_length_direct(
+    MalVm *vm, MalValue callee, MalValue subject_value, usize start, usize end, u32 *out
 ) {
-    return mal_builtin_string_trim_span_direct_impl(
-        vm, callee, subject_value, start, end, out, false);
-}
-
-bool mal_builtin_string_trim_span_direct_locked(
-    MalVm *vm,
-    MalValue subject_value,
-    usize start,
-    usize end,
-    MalValue *out
-) {
-    return mal_builtin_string_trim_span_direct_impl(
-        vm, MAL_VALUE_UNDEFINED, subject_value, start, end, out, true);
-}
-
-bool mal_builtin_string_trim_span_direct_licensed(
-    MalVm *vm,
-    MalValue subject_value,
-    usize start,
-    usize end,
-    MalValue *out
-) {
-    return mal_builtin_string_trim_span_direct_impl(
-        vm, MAL_VALUE_UNDEFINED, subject_value, start, end, out, true);
+    return mal_builtin_string_trim_identity(vm, callee) &&
+        mal_builtin_string_trim_span_length_locked(subject_value, start, end, out);
 }
 
 void mal_builtin_string_install(MalVm *vm) {

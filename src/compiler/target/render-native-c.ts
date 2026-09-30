@@ -2907,6 +2907,7 @@ function emitBody(
 			...(propertyLoad === undefined ? {} : { propertyLoad }),
 		});
 	}
+	const stringSplitTrimLengthSiteByIp = new Map<number, NativeStringSplitCursorSite>();
 	const nativeStringSplitCursorActionByIp = new Map<
 		number,
 		NativeStringSplitCursorAction
@@ -2916,6 +2917,9 @@ function emitBody(
 		if (cursor?.kind !== "string-split-cursor") continue;
 		const site = stringSplitCursorSites.get(cursor.anchors[0]!);
 		if (site === undefined) throw new Error("String.split cursor action has no site");
+		for (const lengthIp of cursor.primitiveStringLengthIps) {
+			stringSplitTrimLengthSiteByIp.set(lengthIp, site);
+		}
 		const propertyLoad = regionFallbackPropertyLoad(
 			fn,
 			cursor.propertyPlacement,
@@ -3068,6 +3072,7 @@ function emitBody(
 			`bool __string_split_cursor_${id}_active = false;`,
 			`bool __string_split_cursor_${id}_has = false;`,
 			`bool __string_split_cursor_${id}_trim_fast = false;`,
+			`u32 __string_split_cursor_${id}_trim_length = 0;`,
 			`MalStringSplitCursor __string_split_cursor_${id}_state = { 0 };`,
 			`usize __string_split_cursor_${id}_start = 0;`,
 			`usize __string_split_cursor_${id}_end = 0;`,
@@ -3723,6 +3728,7 @@ function emitBody(
 						: pairedArrayLoopByLengthLoad.get(arrayPresenceAction.indexed.loadIp),
 				nativeStringSplitProjectionAction: nativeStringSplitProjectionActionByIp.get(ip),
 				nativeStringSplitCursorAction: nativeStringSplitCursorActionByIp.get(ip),
+				stringSplitTrimLengthSite: stringSplitTrimLengthSiteByIp.get(ip),
 				nativeRegExpExecProjectionAction: nativeRegExpExecProjectionActionByIp.get(ip),
 				nativeRegExpIteratorProjectionAction:
 					nativeRegExpIteratorProjectionActionByIp.get(ip),
@@ -4127,6 +4133,7 @@ interface NativeInstructionContext {
 	readonly pairedArrayLoopPresence?: NativePairedArrayLoopPlan;
 	readonly nativeStringSplitProjectionAction?: NativeStringSplitProjectionAction;
 	readonly nativeStringSplitCursorAction?: NativeStringSplitCursorAction;
+	readonly stringSplitTrimLengthSite?: NativeStringSplitCursorSite;
 	readonly nativeRegExpExecProjectionAction?: NativeRegExpExecProjectionAction;
 	readonly nativeRegExpIteratorProjectionAction?: NativeRegExpIteratorProjectionAction;
 	readonly nativeStringSliceNumberFusionAction?: NativeStringSliceNumberFusionAction;
@@ -4284,6 +4291,7 @@ function emitInstruction(
 		charCodeAtCallRootPublication: context.charCodeAtCallRootPublication,
 		charCodeAtCallInactiveRootMask: context.charCodeAtCallInactiveRootMask,
 		iteratorStepRootPublication: context.iteratorStepRootPublication,
+		stringSplitTrimLengthSite: context.stringSplitTrimLengthSite,
 		iteratorStepInactiveRootMask: context.iteratorStepInactiveRootMask,
 		ownedCaptureFunctionIndex: context.ownedCaptureFunctionIndex,
 		fixedCaptureOwners: context.fixedCaptureOwners,
@@ -5790,19 +5798,20 @@ function emitInstruction(
 						: `${semanticDependencyValidationGuard(site.cursor.license.guard, site.epochName)} && `;
 					const trim = site.lockedTrimIdentity
 						? [
-								`  __string_split_cursor_${id}_trim_fast = ${profileCall("string", `mal_builtin_string_trim_span_direct_locked(vm, __gc_slots[${site.subjectSlot}], __string_split_cursor_${id}_start, __string_split_cursor_${id}_end, &r${instruction.dst})`)};`,
+								`  __string_split_cursor_${id}_trim_fast = ${profileCall("string", `mal_builtin_string_trim_span_length_locked(__gc_slots[${site.subjectSlot}], __string_split_cursor_${id}_start, __string_split_cursor_${id}_end, &__string_split_cursor_${id}_trim_length)`)};`,
 							]
 						: site.trimCalleeSlot !== undefined
 							? [
-									`  __string_split_cursor_${id}_trim_fast = ${semanticValidation}${profileCall("string", `mal_builtin_string_trim_span_direct_licensed(vm, __gc_slots[${site.subjectSlot}], __string_split_cursor_${id}_start, __string_split_cursor_${id}_end, &r${instruction.dst})`)};`,
+									`  __string_split_cursor_${id}_trim_fast = ${semanticValidation}${profileCall("string", `mal_builtin_string_trim_span_length_locked(__gc_slots[${site.subjectSlot}], __string_split_cursor_${id}_start, __string_split_cursor_${id}_end, &__string_split_cursor_${id}_trim_length)`)};`,
 								]
 							: [
 									`  MalValue __string_split_cursor_${id}_trim_callee;`,
-									`  __string_split_cursor_${id}_trim_fast = mal_vm_local_watched_primitive_value_try_load_static(vm, __watched_methods_epoch, MAL_PRIM_KIND_STRING, &${nativeBodyReference(resources, "propertyCache")}[${site.cursor.trimIcIndex}], &__string_split_cursor_${id}_trim_callee) && ${profileCall("string", `mal_builtin_string_trim_span_direct(vm, __string_split_cursor_${id}_trim_callee, __gc_slots[${site.subjectSlot}], __string_split_cursor_${id}_start, __string_split_cursor_${id}_end, &r${instruction.dst})`)};`,
+									`  __string_split_cursor_${id}_trim_fast = mal_vm_local_watched_primitive_value_try_load_static(vm, __watched_methods_epoch, MAL_PRIM_KIND_STRING, &${nativeBodyReference(resources, "propertyCache")}[${site.cursor.trimIcIndex}], &__string_split_cursor_${id}_trim_callee) && ${profileCall("string", `mal_builtin_string_trim_span_length_direct(vm, __string_split_cursor_${id}_trim_callee, __gc_slots[${site.subjectSlot}], __string_split_cursor_${id}_start, __string_split_cursor_${id}_end, &__string_split_cursor_${id}_trim_length)`)};`,
 								];
 					return [
 						`if (__string_split_cursor_${id}_active) {`,
 						...trim,
+						`  r${instruction.dst} = MAL_VALUE_UNDEFINED;`,
 						`  if (!__string_split_cursor_${id}_trim_fast) r${instruction.dst} = ${profileCall("string", `mal_builtin_string_split_cursor_materialize(vm, __gc_slots[${site.subjectSlot}], __string_split_cursor_${id}_start, __string_split_cursor_${id}_end)`)};`,
 						`} else {`,
 						...ordinary().map((line) => `  ${line}`),
@@ -5907,12 +5916,30 @@ function emitInstruction(
 							? `(i32) ${length}`
 							: `mal_value_from_i32((i32) ${length})`
 				};`;
-				if (reps[instruction.object] === "string") return [direct];
+				const ordinaryLength =
+					reps[instruction.object] === "string"
+						? [direct]
+						: [
+								`if (mal_value_is_string(${boxed(instruction.object)})) {`,
+								`  ${direct}`,
+								`} else {`,
+								...ordinary().map((line) => `  ${line}`),
+								`}`,
+							];
+				const site = context.stringSplitTrimLengthSite;
+				if (site === undefined) return ordinaryLength;
+				const scalar = `__string_split_cursor_${site.callIp}_trim_length`;
+				const value =
+					reps[instruction.dst] === "number"
+						? `(f64) ${scalar}`
+						: reps[instruction.dst] === "int32"
+							? `(i32) ${scalar}`
+							: `mal_value_from_i32((i32) ${scalar})`;
 				return [
-					`if (mal_value_is_string(${boxed(instruction.object)})) {`,
-					`  ${direct}`,
+					`if (__string_split_cursor_${site.callIp}_active && __string_split_cursor_${site.callIp}_trim_fast) {`,
+					`  r${instruction.dst} = ${value};`,
 					`} else {`,
-					...ordinary().map((line) => `  ${line}`),
+					...ordinaryLength.map((line) => `  ${line}`),
 					`}`,
 				];
 			}
@@ -7955,7 +7982,7 @@ function emitInstruction(
 				return [
 					`static MalCallCache __cc_${ip};`,
 					`if (__string_split_cursor_${id}_active && __string_split_cursor_${id}_trim_fast) {`,
-					`  r${instruction.dst} = ${boxedOperand(instruction.thisValue)};`,
+					`  r${instruction.dst} = MAL_VALUE_UNDEFINED;`,
 					`} else {`,
 					`  MalCompletion ${tmp} = ${profileCall("call", `mal_vm_call_cached(vm, &__cc_${ip}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length})`)};`,
 					`  if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow()}`,

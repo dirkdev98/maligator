@@ -262,16 +262,13 @@ static bool projected_trim_spans(MalVm *vm, bool wide, bool flat, bool dependent
         usize start, end;
         CHECK(mal_builtin_string_split_cursor_next(roots[1], roots[2], &state, &start, &end));
         CHECK(start == field * 65 && end == (field == fields ? length : start + 64));
-        CHECK(mal_builtin_string_trim_span_direct_locked(vm, roots[1], start, end, &roots[4]));
+        u32 trimmed_length;
+        CHECK(mal_builtin_string_trim_span_length_locked(roots[1], start, end, &trimmed_length));
         if (flat || dependent) CHECK(source->storage == storage && source->latin1 == !wide);
         if (dependent) CHECK(source->parent->latin1 == !wide);
         usize original = offset / 65 + field;
         usize expected_length = field == fields ? 0 : 64 - leading[original] - trailing[original];
-        MalString *actual = mal_value_to_string(roots[4]);
-        CHECK(actual->length == expected_length);
-        for (usize i = 0; i < expected_length; i++) {
-            CHECK(mal_string_code_unit_at(actual, i) == units[offset + start + leading[original] + i]);
-        }
+        CHECK(trimmed_length == expected_length);
         mal_gc_collect(vm);
     }
     usize start, end;

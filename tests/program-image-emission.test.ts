@@ -4395,7 +4395,7 @@ describe("native update-expression representation", () => {
 		expect(strings).toEqual(["alpha"]);
 	});
 
-	it("streams a closed indexed String split loop directly into trim", () => {
+	it("streams a closed indexed String split loop into scalar trimmed lengths", () => {
 		const code = `
 			function sum(value, separator) {
 				const parts = value.split(separator);
@@ -4412,15 +4412,15 @@ describe("native update-expression representation", () => {
 		expect(output).toContain("mal_builtin_string_split_cursor_init(vm,");
 		expect(output).toContain("mal_builtin_string_split_cursor_next(");
 		expect(output).toContain("mal_builtin_string_trim_identity(vm,");
-		expect(output).toContain("mal_builtin_string_trim_span_direct_licensed(vm,");
+		expect(output).toContain("mal_builtin_string_trim_span_length_locked(");
 		expect(output).toMatch(
-			/mal_vm_semantic_dependencies_validate\(vm, MAL_SEMANTIC_DEPENDENCY_WATCHED_METHODS, __string_split_cursor_\d+_semantic_epoch\) && mal_builtin_string_trim_span_direct_licensed/,
+			/mal_vm_semantic_dependencies_validate\(vm, MAL_SEMANTIC_DEPENDENCY_WATCHED_METHODS, __string_split_cursor_\d+_semantic_epoch\) && mal_builtin_string_trim_span_length_locked/,
 		);
 		expect(output).toContain("mal_builtin_string_split_cursor_materialize(vm,");
 
 		const lockedOutput = emitLocked(code);
 		expect(lockedOutput).toContain("mal_builtin_string_split_cursor_init_locked(vm,");
-		expect(lockedOutput).toContain("mal_builtin_string_trim_span_direct_locked(vm,");
+		expect(lockedOutput).toContain("mal_builtin_string_trim_span_length_locked(");
 		expect(lockedOutput).not.toContain("mal_builtin_string_split_cursor_init(vm,");
 		expect(lockedOutput).not.toContain(
 			"mal_vm_local_watched_primitive_value_try_load_static",

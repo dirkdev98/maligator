@@ -303,33 +303,13 @@ MalValue mal_builtin_string_split_cursor_materialize(
 /** Validate the exact current-Realm trim callback once for a licensed region. */
 bool mal_builtin_string_trim_identity(MalVm *vm, MalValue callee);
 
-/** Guard and execute exact builtin trim directly over one split span. */
-bool mal_builtin_string_trim_span_direct(
-    MalVm *vm,
-    MalValue callee,
-    MalValue subject,
-    usize start,
-    usize end,
-    MalValue *out
-);
+/** For a certified length-only consumer; never creates a trimmed string. */
+bool mal_builtin_string_trim_span_length_direct(
+    MalVm *vm, MalValue callee, MalValue subject, usize start, usize end, u32 *out);
 
-/** Locked-world span trim with the builtin identity proved by C emission. */
-bool mal_builtin_string_trim_span_direct_locked(
-    MalVm *vm,
-    MalValue subject,
-    usize start,
-    usize end,
-    MalValue *out
-);
-
-/** Mutable-world region variant after one entry identity/epoch validation. */
-bool mal_builtin_string_trim_span_direct_licensed(
-    MalVm *vm,
-    MalValue subject,
-    usize start,
-    usize end,
-    MalValue *out
-);
+/** Caller proves the captured builtin identity and any required semantic epochs. */
+bool mal_builtin_string_trim_span_length_locked(
+    MalValue subject, usize start, usize end, u32 *out);
 
 typedef enum MalStringRangeOp {
     MAL_STRING_RANGE_SLICE,
