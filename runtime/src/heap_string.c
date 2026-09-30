@@ -170,6 +170,60 @@ static MalTinyStringCacheResult mal_string_tiny_cache_get_or_create(
     return (MalTinyStringCacheResult) {.string = string, .hit = false};
 }
 
+static MalTinyStringCacheResult mal_string_tiny_cache_get_latin1(
+    MalHeap *heap, const u8 *units, usize length
+) {
+    if (length > MAL_STRING_INLINE_CODE_UNITS) abort();
+    MalString ***cache_slot = mal_string_tiny_cache_slot(heap);
+    if (*cache_slot == nullptr) {
+        *cache_slot = calloc(MAL_TINY_STRING_CACHE_CAPACITY, sizeof(**cache_slot));
+        if (*cache_slot == nullptr) abort();
+    }
+    u64 hash = 0xcbf29ce484222325;
+    // Each Latin-1 unit hashes its byte followed by a zero UTF-16 high byte.
+    MAL_PERF_ADD(string_hash_code_units, length);
+    for (usize i = 0; i < length; i++) {
+        hash = (hash ^ units[i]) * 0x366000002e329ULL;
+    }
+    usize index = (usize) hash & (MAL_TINY_STRING_CACHE_CAPACITY - 1);
+    MalString *cached = (*cache_slot)[index];
+    if (cached != nullptr && cached->length == length &&
+        cached->storage != MAL_STRING_STORAGE_DEPENDENT &&
+        cached->storage != MAL_STRING_STORAGE_CONS) {
+        bool equal;
+        if (cached->latin1) {
+            const u8 *cached_units = cached->storage == MAL_STRING_STORAGE_INLINE
+                ? cached->inline_latin1_units : cached->latin1_units;
+            equal = length == 0 || memcmp(cached_units, units, length) == 0;
+        } else {
+            const c16 *cached_units = cached->storage == MAL_STRING_STORAGE_INLINE
+                ? cached->inline_code_units : cached->code_units;
+            equal = true;
+            for (usize i = 0; i < length; i++) {
+                if (cached_units[i] != units[i]) {
+                    equal = false;
+                    break;
+                }
+            }
+        }
+        if (equal) {
+            MAL_PERF_COUNT(string_tiny_cache_hits);
+            return (MalTinyStringCacheResult) {.string = cached, .hit = true};
+        }
+    }
+    MAL_PERF_COUNT(string_tiny_cache_misses);
+    if (cached != nullptr) MAL_PERF_COUNT(string_tiny_cache_replacements);
+    MalString *string = mal_heap_alloc(heap, sizeof(MalString), MAL_HEAP_STRING);
+    mal_string_init_flat(string, MAL_STRING_STORAGE_INLINE, true, length);
+    if (length != 0) memcpy(string->inline_latin1_units, units, length);
+    MAL_PERF_COUNT(string_inline_allocations);
+    MAL_PERF_ADD(string_inline_code_units, length);
+    string->hash = hash;
+    string->hash_valid = true;
+    mal_string_tiny_cache_store(heap, index, string);
+    return (MalTinyStringCacheResult) {.string = string, .hit = false};
+}
+
 void mal_string_tiny_cache_promote(MalHeap *heap, MalString *atom) {
     if (atom == nullptr || atom->length > MAL_STRING_INLINE_CODE_UNITS
         || (atom->storage != MAL_STRING_STORAGE_INLINE
@@ -792,6 +846,19 @@ bool mal_string_new_cons_checked(MalHeap *heap, MalString *left, MalString *righ
     }
 
     if (length <= MAL_STRING_INLINE_LATIN1_CODE_UNITS) {
+        MalStringSegment left_segment;
+        MalStringSegment right_segment;
+        if (mal_string_try_get_segment(left, 0, left->length, &left_segment) &&
+            left_segment.latin1 &&
+            mal_string_try_get_segment(right, 0, right->length, &right_segment) &&
+            right_segment.latin1) {
+            u8 units[MAL_STRING_INLINE_LATIN1_CODE_UNITS];
+            memcpy(units, left_segment.latin1_units, left->length);
+            memcpy(units + left->length, right_segment.latin1_units, right->length);
+            MAL_PERF_COUNT(string_inline_concat_results);
+            *out = mal_string_new_latin1_copy(heap, units, length);
+            return true;
+        }
         c16 units[MAL_STRING_INLINE_LATIN1_CODE_UNITS];
         mal_string_copy_range_to(left, 0, left->length, units);
         mal_string_copy_range_to(right, 0, right->length, units + left->length);
@@ -821,9 +888,7 @@ static MalString *mal_string_new_latin1(
     mal_string_require_valid_length(length);
     MalString *string;
     if (length <= MAL_STRING_INLINE_CODE_UNITS) {
-        c16 small[MAL_STRING_INLINE_CODE_UNITS];
-        for (usize i = 0; i < length; i++) small[i] = units[i];
-        MalTinyStringCacheResult result = mal_string_tiny_cache_get_or_create(heap, small, length);
+        MalTinyStringCacheResult result = mal_string_tiny_cache_get_latin1(heap, units, length);
         if (owned) gc_free_raw(heap, (void *) units);
         if (result.hit) return result.string;
         string = result.string;

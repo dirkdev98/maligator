@@ -68,6 +68,11 @@ static bool inline_capacity_and_eight_unit_cache(MalVm *vm) {
     MalString *cached = mal_string_new_latin1_copy(&vm->heap, latin1, 8);
     CHECK(cached->hash_valid && mal_string_new_copy(&vm->heap, narrow_utf16, 8) == cached);
     CHECK(mal_string_hash(cached) == mal_string_hash_code_units(narrow_utf16, 8));
+    CHECK(memcmp(mal_string_code_units(cached), narrow_utf16, sizeof(narrow_utf16)) == 0);
+    CHECK(mal_string_new_latin1_copy(&vm->heap, latin1, 8) == cached);
+    u8 *owned = mal_heap_alloc_raw(&vm->heap, 8);
+    memcpy(owned, latin1, 8);
+    CHECK(mal_string_new_latin1_owned(&vm->heap, owned, 8) == cached);
 
     compact = mal_string_new_latin1_copy(&vm->heap, latin1, 17);
     wide = mal_string_new_copy(&vm->heap, utf16, 9);
@@ -75,6 +80,36 @@ static bool inline_capacity_and_eight_unit_cache(MalVm *vm) {
     CHECK(wide->storage == MAL_STRING_STORAGE_OWNED && !wide->latin1);
     for (usize i = 0; i < 17; i++) CHECK(mal_string_code_unit_at(compact, i) == latin1[i]);
     for (usize i = 0; i < 9; i++) CHECK(mal_string_code_unit_at(wide, i) == utf16[i]);
+    return true;
+}
+
+static bool short_concatenations_preserve_code_units(MalVm *vm) {
+    u8 bytes[16];
+    c16 units[16];
+    for (usize i = 0; i < countof(bytes); i++) {
+        bytes[i] = i == 0 ? 0 : (u8) (0xf0 + i);
+        units[i] = bytes[i];
+    }
+    for (usize split = 1; split < countof(bytes); split++) {
+        MalString *left = mal_string_new_latin1_copy(&vm->heap, bytes, split);
+        MalString *right = mal_string_new_latin1_copy(&vm->heap, bytes + split, countof(bytes) - split);
+        MalString *joined;
+        CHECK(mal_string_new_cons_checked(&vm->heap, left, right, &joined));
+        CHECK(mal_string_hash(joined) == mal_string_hash_code_units(units, countof(units)));
+        for (usize i = 0; i < countof(units); i++) CHECK(mal_string_code_unit_at(joined, i) == units[i]);
+        mal_string_code_units(left);
+        CHECK(mal_string_new_cons_checked(&vm->heap, left, right, &joined));
+        for (usize i = 0; i < countof(units); i++) CHECK(mal_string_code_unit_at(joined, i) == units[i]);
+    }
+    units[7] = 0xd800;
+    units[8] = 0xdc00;
+    units[15] = 0xdcff;
+    MalString *left = mal_string_new_copy(&vm->heap, units, 8);
+    MalString *right = mal_string_new_copy(&vm->heap, units + 8, 8);
+    MalString *joined;
+    CHECK(mal_string_new_cons_checked(&vm->heap, left, right, &joined));
+    CHECK(mal_string_hash(joined) == mal_string_hash_code_units(units, countof(units)));
+    for (usize i = 0; i < countof(units); i++) CHECK(mal_string_code_unit_at(joined, i) == units[i]);
     return true;
 }
 
@@ -435,6 +470,7 @@ int main(void) {
     mal_vm_init(&vm, &mal_runtime_image);
     bool passed = physical_encodings_have_equal_content(&vm)
         && inline_capacity_and_eight_unit_cache(&vm)
+        && short_concatenations_preserve_code_units(&vm)
         && ropes_stream_and_cross_leaf_slices_copy(&vm)
         && direct_search_accepts_rope_receivers(&vm)
         && utf16_search_rejects_byte_aliases()
