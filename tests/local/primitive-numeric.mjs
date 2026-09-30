@@ -183,4 +183,52 @@ function privateNumericNullish(index) {
 
 for (let index = 0; index <= 6; index++) record(privateNumericNullish(index));
 record(nullishFallbacks);
+
+function dynamicNumberResults(value) {
+	try {
+		record(value - 17);
+		record(17 - value);
+		record(value * 0);
+		record(value / 17);
+		record(value % 17);
+		record(17 % value);
+		record(value & 17);
+		record(value << 1);
+		record(1 >>> value);
+	} catch (error) {
+		record(error.name);
+	}
+}
+
+for (const value of [
+	-0,
+	-34,
+	1.5,
+	NaN,
+	Infinity,
+	"34",
+	true,
+	null,
+	undefined,
+	3n,
+	Symbol(),
+]) {
+	dynamicNumberResults(value);
+}
+let numberResultCoercions = 0;
+dynamicNumberResults({
+	valueOf() {
+		numberResultCoercions++;
+		if (typeof $262 !== "undefined") $262.gc();
+		else if (typeof gc === "function") gc();
+		return -34;
+	},
+});
+dynamicNumberResults({
+	valueOf() {
+		numberResultCoercions++;
+		throw new Error("numeric result coercion");
+	},
+});
+record(numberResultCoercions);
 console.log(JSON.stringify(results));

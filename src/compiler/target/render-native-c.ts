@@ -3311,7 +3311,10 @@ function emitBody(
 			second,
 		};
 		staticPropertyProjectionActionByIp.set(ip, { projection, role: "first" });
-		staticPropertyProjectionActionByIp.set(ip + 1, { projection, role: "second" });
+		staticPropertyProjectionActionByIp.set(ip + 1, {
+			projection,
+			role: "second",
+		});
 		lines.push(`bool __property_projection_${ip}_fast = false;`);
 		lines.push(
 			`MalValue __property_projection_${ip}_first = MAL_VALUE_UNDEFINED;`,
@@ -6454,10 +6457,27 @@ function emitInstruction(
 				(!leftIsNum || !rightIsNum)
 			) {
 				const result = `__binary_result_${ip}`;
-				return [
+				const fallback = [
 					`MalValue ${result} = ${profileCall("binary", reentrantValue(`mal_vm_binary_op(vm, ${emitBinaryOperator(operator)}, ${boxed(left)}, ${boxed(right)})`))};`,
 					throwCheck(),
 					`r${dst} = ${reps[dst] === "int32" ? `mal_ops_number_to_i32(mal_ops_number_as_f64(${result}))` : `mal_ops_number_as_f64(${result})`};`,
+				];
+				const expression = nativeNumberExpr(
+					operator,
+					leftIsNum ? num(left) : `mal_ops_number_as_f64(${boxed(left)})`,
+					rightIsNum ? num(right) : `mal_ops_number_as_f64(${boxed(right)})`,
+				);
+				if (expression === null) return fallback;
+				const guards = [
+					...(!leftIsNum ? [`mal_ops_is_number(${boxed(left)})`] : []),
+					...(!rightIsNum ? [`mal_ops_is_number(${boxed(right)})`] : []),
+				];
+				return [
+					`if (${guards.join(" && ")}) {`,
+					`  ${storeNumber(dst, expression)}`,
+					`} else {`,
+					...fallback.map((line) => `  ${line}`),
+					`}`,
 				];
 			}
 			if (reps[dst] === "int32") {
