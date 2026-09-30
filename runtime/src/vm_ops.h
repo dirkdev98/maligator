@@ -168,7 +168,12 @@ static inline bool mal_vm_try_capture_collection_method(
     }
 
     if (mal_object_prototype(&collection->object) !=
-            mal_value_to_object(vm->intrinsics[prototype_intrinsic]) ||
+            mal_value_to_object(vm->intrinsics[prototype_intrinsic])) {
+        return false;
+    }
+    // An empty own-property layout cannot shadow a prototype method.
+    if (((collection->object.shape != nullptr && collection->object.shape->inline_count != 0) ||
+         mal_object_has_public_overflow(&collection->object)) &&
         mal_object_get_own(
             &collection->object,
             mal_intrinsic_string_key(vm, method_name)).present) {
