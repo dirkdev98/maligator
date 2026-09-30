@@ -38,11 +38,10 @@ rooting, and resource-safety defects can interrupt that order.
       cold-build timeouts in remaining native/sanitizer suites, the asynchronous
       crypto event-loop tick assertion, and the compiled WPT harness failure.
 
-- [ ] Locate the historical closed-compiled JavaScript text and collections costs
-      against `d871b66e`. Five checksum-valid pairs show slower total execution;
-      a separate comparison against `1e1b4591` does not resolve a local runtime
-      regression. Profile the unchanged representative workload before changing
-      the text pipeline, collection kernels, or collector scheduling.
+- [ ] Resolve the remaining concatenation, typed-array, and retained-graph costs
+      against `d871b66e` with matched kernel measurements. The historical JavaScript
+      phase regressions have recovered; separate profile samples still show possible
+      kernel regressions. Keep representative output parity and phase timing controls.
 
 - [ ] Make `scripts/dx-performance.ts` verify the running application's revision
       before and after a dependency edit. A controlled driver that keeps reporting

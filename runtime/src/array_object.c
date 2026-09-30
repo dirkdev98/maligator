@@ -783,16 +783,15 @@ bool mal_array_object_store(MalArrayObject *array, MalKey key, MalValue value) {
         if (grows && !array->length_writable) {
             return false;
         }
-        // CreateDataProperty, NOT [[Set]]: this is the internal result-array
-        // populator (CreateArrayFromList and friends — Object.keys, spread,
-        // Array.from, regexp match arrays, ...). It must define an own element and
-        // ignore the prototype chain, so a poisoned inherited index on
-        // Array.prototype (a non-writable data or accessor "0") cannot intercept
-        // the write. A default-data define at an integer index still takes the
-        // dense fast path, so nothing here costs the common case. The element is
-        // defined FIRST and the length grow committed only on success: a
-        // non-extensible array rejects a fresh index and must not bump length
-        // (ArrayDefineOwnProperty 10.4.2.1 steps 3-4).
+        MalPropertyFlags flags =
+            MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE;
+        // Default own elements need no descriptor transition; prototypes still invalidate watchers.
+        if (!array->dense_deopted && array->object.extensible && !array->object.is_prototype &&
+            mal_array_object_dense_element_flags(array) == flags &&
+            mal_array_object_dense_store(array, index, value) == MAL_ARRAY_DENSE_APPLIED) {
+            if (grows) array->length = index + 1;
+            return true;
+        }
         MalPropertyDesc desc = {
             .flags = MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE,
             .value = value,

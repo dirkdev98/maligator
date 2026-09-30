@@ -77,6 +77,52 @@ check(
 	"fixed length rejects append",
 );
 
+class ReturnArray {
+	constructor(array) {
+		return array;
+	}
+}
+class DefineFirst extends ReturnArray {
+	[0] = 31;
+}
+class DefineSecond extends ReturnArray {
+	[1] = { marker: 47 };
+}
+const definedArray = new DefineSecond(new DefineFirst([]));
+const definedDescriptor = Object.getOwnPropertyDescriptor(definedArray, "1");
+check(
+	definedArray.length === 2 &&
+		definedArray[0] === 31 &&
+		definedArray[1].marker === 47 &&
+		definedDescriptor.writable &&
+		definedDescriptor.enumerable &&
+		definedDescriptor.configurable,
+	"public fields define default own Array elements and grow length",
+);
+check(
+	new DefineFirst(fixedLength) === fixedLength && fixedLength[0] === 31,
+	"own field replacement preserves fixed Array length",
+);
+check(
+	throwsTypeError(() => new DefineSecond(fixedLength)) &&
+		fixedLength.length === 1 &&
+		!Object.hasOwn(fixedLength, 1),
+	"own field definition rejects growth before touching a fixed-length Array",
+);
+const sealedFieldArray = Object.seal([9]);
+check(
+	throwsTypeError(() => new DefineFirst(sealedFieldArray)) && sealedFieldArray[0] === 9,
+	"default own fields cannot relax sealed element attributes",
+);
+const fieldPrototypeArray = [5];
+const fieldChild = Object.create(fieldPrototypeArray);
+for (let i = 0; i < 100; i++) load(fieldChild, 0);
+new DefineFirst(fieldPrototypeArray);
+check(
+	load(fieldChild, 0) === 31,
+	"own field replacement invalidates inherited element reads",
+);
+
 const nonExtensible = [1];
 Object.preventExtensions(nonExtensible);
 store(nonExtensible, 0, 2);

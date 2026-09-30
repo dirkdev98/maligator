@@ -7785,6 +7785,15 @@ static void mal_vm_define_property_key(MalVm *vm, MalValue object_value, MalKey 
         flags |= MAL_PROPERTY_ENUMERABLE;
     }
 
+    if (key.kind == MAL_KEY_INDEX &&
+        flags == (MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE) &&
+        mal_value_is_array_object(object_value)) {
+        if (!mal_array_object_store(mal_value_to_array_object(object_value), key, value)) {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot create array element");
+        }
+        return;
+    }
+
     // CreateDataProperty is [[DefineOwnProperty]]: a proxy receiver (e.g. a
     // public class field installed on the object a derived class's super()
     // returned) routes through the defineProperty trap rather than writing the
