@@ -1,0 +1,83 @@
+{
+	"schema": 1,
+	"cases": [
+		{
+			"id": "utf8-encode-latin1-128",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "utf8-boundary",
+			"category": "api-builtins",
+			"mechanisms": ["utf8-conversion", "encoding-boundary", "input-size-scaling"],
+			"inputShape": "128 UTF-16 code units of repeated latin1 text; consume encoded output length and endpoints without a full output traversal.",
+			"unit": "conversions",
+			"sourceSeam": "runtime/src/runtime/node_buffer.c",
+			"fixture": "cases/utf8-encode-latin1-128.mjs",
+			"controls": ["utf8-encode-boundary"]
+		},
+		{
+			"id": "utf8-encode-latin1-2048",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "utf8-boundary",
+			"category": "api-builtins",
+			"mechanisms": ["utf8-conversion", "encoding-boundary", "input-size-scaling"],
+			"inputShape": "2048 UTF-16 code units of repeated latin1 text; consume encoded output length and endpoints without a full output traversal.",
+			"unit": "conversions",
+			"sourceSeam": "runtime/src/runtime/node_buffer.c",
+			"fixture": "cases/utf8-encode-latin1-2048.mjs",
+			"controls": ["utf8-encode-boundary"]
+		},
+		{
+			"id": "utf8-encode-latin1-32768",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "utf8-boundary",
+			"category": "api-builtins",
+			"mechanisms": ["utf8-conversion", "encoding-boundary", "input-size-scaling"],
+			"inputShape": "32768 UTF-16 code units of repeated latin1 text; consume encoded output length and endpoints without a full output traversal.",
+			"unit": "conversions",
+			"sourceSeam": "runtime/src/runtime/node_buffer.c",
+			"fixture": "cases/utf8-encode-latin1-32768.mjs",
+			"controls": ["utf8-encode-boundary"]
+		},
+		{
+			"id": "utf8-encode-utf16-128",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "utf8-boundary",
+			"category": "api-builtins",
+			"mechanisms": ["utf8-conversion", "encoding-boundary", "input-size-scaling"],
+			"inputShape": "128 UTF-16 code units of repeated utf16 text; consume encoded output length and endpoints without a full output traversal.",
+			"unit": "conversions",
+			"sourceSeam": "runtime/src/runtime/node_buffer.c",
+			"fixture": "cases/utf8-encode-utf16-128.mjs",
+			"controls": ["utf8-encode-boundary"]
+		},
+		{
+			"id": "utf8-encode-utf16-2048",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "utf8-boundary",
+			"category": "api-builtins",
+			"mechanisms": ["utf8-conversion", "encoding-boundary", "input-size-scaling"],
+			"inputShape": "2048 UTF-16 code units of repeated utf16 text; consume encoded output length and endpoints without a full output traversal.",
+			"unit": "conversions",
+			"sourceSeam": "runtime/src/runtime/node_buffer.c",
+			"fixture": "cases/utf8-encode-utf16-2048.mjs",
+			"controls": ["utf8-encode-boundary"]
+		},
+		{
+			"id": "utf8-encode-utf16-32768",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "utf8-boundary",
+			"category": "api-builtins",
+			"mechanisms": ["utf8-conversion", "encoding-boundary", "input-size-scaling"],
+			"inputShape": "32768 UTF-16 code units of repeated utf16 text; consume encoded output length and endpoints without a full output traversal.",
+			"unit": "conversions",
+			"sourceSeam": "runtime/src/runtime/node_buffer.c",
+			"fixture": "cases/utf8-encode-utf16-32768.mjs",
+			"controls": ["utf8-encode-boundary"]
+		}
+	]
+}
