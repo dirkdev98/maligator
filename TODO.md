@@ -32,6 +32,18 @@ rooting, and resource-safety defects can interrupt that order.
 
 ## Verification workflow
 
+- [ ] Restore a portable full gate on Linux: derive native-entry audit targets from
+      the probed toolchain, honor the configured Cargo cache in toolchain fixtures,
+      and wait for subprocess readiness before testing signal handling. Resolve
+      cold-build timeouts in remaining native/sanitizer suites, the asynchronous
+      crypto event-loop tick assertion, and the compiled WPT harness failure.
+
+- [ ] Locate the historical closed-compiled JavaScript text and collections costs
+      against `d871b66e`. Five checksum-valid pairs show slower total execution;
+      a separate comparison against `1e1b4591` does not resolve a local runtime
+      regression. Profile the unchanged representative workload before changing
+      the text pipeline, collection kernels, or collector scheduling.
+
 - [ ] Make `scripts/dx-performance.ts` verify the running application's revision
       before and after a dependency edit. A controlled driver that keeps reporting
       revision 0 after the source changes to 1 currently passes on compiler log markers.
@@ -384,6 +396,8 @@ only reproducible input.
 - [ ] Complete recoverable allocation failure for CELL, RAW, LOS, GC-internal,
       runtime-helper, and direct-native allocations. OOM must remain catchable without
       corruption, lost roots, recursive failure, or partial observable objects.
+      Restore the partial-return allocation failure case in `stack-object.test.ts`
+      under both ordinary execution and GC stress/verification.
 
 - [ ] Deterministically release nonescaping RegExp and ICU handles at compiled scope
       end once ownership analysis proves their lifetime. Retain finalization for every
@@ -419,6 +433,8 @@ contracts or investigates costs still visible after the string follow-ups.
       lookup. Preserve coercion and prototype invalidation, bound retained storage,
       and require repeated-miss gains without taxing existing atoms or unique-name
       churn. Keep the three property-query benchmark controls together.
+      The rooted dynamic-key miss case in `property-transition-cache.test.ts` still
+      performs 16,384 comparisons against its 1,026 bound.
 
 - [ ] Investigate full-output checksum traversal and construction/replacement in
       the complete mixed-text pipeline. Use `scripts/profile-text-pipeline.ts`
