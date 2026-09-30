@@ -264,7 +264,7 @@ bool mal_array_object_dense_append_many(
         MalValue value = values[i];
         array->elements[start + i] = value;
         mal_array_object_perf_observe_value(array, value);
-        mal_gc_card(&array->object.header, value);
+        mal_gc_array_card(&array->object.header, start + i, value);
     }
     array->dense_count = end;
     array->length = end;
@@ -296,7 +296,7 @@ bool mal_array_object_contained_dense_push(
         MalValue value = values[i];
         array->elements[start + i] = value;
         mal_array_object_perf_observe_value(array, value);
-        mal_gc_card(&array->object.header, value);
+        mal_gc_array_card(&array->object.header, start + i, value);
     }
     array->dense_count = end;
     array->length = end;

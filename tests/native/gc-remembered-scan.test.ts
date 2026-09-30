@@ -14,6 +14,8 @@ describe("remembered owner scan attribution", () => {
 		["sparse", 1, 8192],
 		["dense", 8192, 8192],
 		["append", 1, 1],
+		["append-many", 2, 2],
+		["contained-push", 2, 2],
 		["append-prefix", 2, 8183],
 	] as const)("measures %s old array writes", (mode, discoveries, slots) => {
 		const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-gc-remembered-scan-"));

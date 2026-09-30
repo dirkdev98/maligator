@@ -14,11 +14,15 @@ int main(int argc, char **argv) {
     bool dense = argc == 2 && strcmp(argv[1], "dense") == 0;
     bool append = argc == 2 && strcmp(argv[1], "append") == 0;
     bool prefix = argc == 2 && strcmp(argv[1], "append-prefix") == 0;
-    if (argc != 2 || (!dense && !append && !prefix && strcmp(argv[1], "sparse") != 0)) return 1;
+    bool append_many = argc == 2 && strcmp(argv[1], "append-many") == 0;
+    bool contained_push = argc == 2 && strcmp(argv[1], "contained-push") == 0;
+    bool append_only = append || append_many || contained_push;
+    bool append_setup = append_only || prefix;
+    if (argc != 2 || (!dense && !append_setup && strcmp(argv[1], "sparse") != 0)) return 1;
 
     MalVm vm;
     mal_vm_init(&vm, &mal_runtime_image);
-    if (append || prefix) mal_gc_collect(&vm);
+    if (append_setup) mal_gc_collect(&vm);
     MalArrayObject *array = mal_array_object_new(&vm.heap, nullptr);
     MalValue root = mal_value_from_array_object(array);
     MalRootSpan span;
@@ -26,7 +30,7 @@ int main(int argc, char **argv) {
     for (u32 i = 0; i < SLOT_COUNT; ++i) {
         if (!mal_array_object_fresh_dense_append(array, mal_value_from_i32((i32) i))) return 2;
     }
-    if (append || prefix) {
+    if (append_setup) {
         vm.heap.next_gc_at = 1;
         mal_gc_poll = true;
         mal_gc_safepoint(&vm);
@@ -37,8 +41,17 @@ int main(int argc, char **argv) {
     if (append || prefix) {
         MalObject *target = mal_object_new(&vm.heap, nullptr);
         if (!mal_array_object_fresh_dense_append(array, mal_value_from_object(target))) return 2;
+    } else if (append_many || contained_push) {
+        MalValue values[2] = {
+            mal_value_from_object(mal_object_new(&vm.heap, nullptr)),
+            mal_value_from_object(mal_object_new(&vm.heap, nullptr)),
+        };
+        bool applied = append_many
+            ? mal_array_object_dense_append_many(array, values, 2)
+            : mal_array_object_contained_dense_push(array, values, 2);
+        if (!applied) return 2;
     }
-    for (u32 i = 0; i < (dense ? SLOT_COUNT : append ? 0 : 1); ++i) {
+    for (u32 i = 0; i < (dense ? SLOT_COUNT : append_only ? 0 : 1); ++i) {
         MalObject *target = mal_object_new(&vm.heap, nullptr);
         if (prefix) {
             if (mal_array_object_dense_store(array, 10, mal_value_from_object(target)) != MAL_ARRAY_DENSE_APPLIED) return 2;
@@ -49,9 +62,9 @@ int main(int argc, char **argv) {
     vm.heap.next_gc_at = 1;
     mal_gc_poll = true;
     mal_gc_safepoint(&vm);
-    for (u32 i = 0; i < (dense ? SLOT_COUNT : prefix ? 2 : 1); ++i) {
+    for (u32 i = 0; i < (dense ? SLOT_COUNT : prefix || append_many || contained_push ? 2 : 1); ++i) {
         MalValue value;
-        u32 index = append || (prefix && i == 0) ? SLOT_COUNT : prefix ? 10 : i;
+        u32 index = append_only ? SLOT_COUNT + i : prefix ? (i == 0 ? SLOT_COUNT : 10) : i;
         if (!mal_array_object_dense_get(array, index, &value) ||
             !mal_value_is_heap(value) ||
             !mal_heap_mark_is_old(mal_value_to_heap(value)->mark)) return 3;
