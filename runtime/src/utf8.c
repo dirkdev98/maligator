@@ -202,12 +202,13 @@ static void mal_string_utf8_process(
     mal_string_iterator_init(&cursor.iterator, string, 0, mal_string_length(string));
     usize read = 0;
     usize written = 0;
+    bool all_fits = mal_string_length(string) <= capacity / 3;
     while (written < capacity && mal_utf8_string_cursor_ready(&cursor)) {
         if (cursor.segment.latin1) {
             const u8 *units = cursor.segment.latin1_units;
             usize start = cursor.offset;
             usize available = cursor.segment.length - start;
-            if (available > capacity - written) available = capacity - written;
+            if (!all_fits && available > capacity - written) available = capacity - written;
             usize end = start + available;
             while (cursor.offset < end && units[cursor.offset] < 0x80) cursor.offset++;
             usize count = cursor.offset - start;
@@ -218,7 +219,7 @@ static void mal_string_utf8_process(
                 continue;
             }
             while (cursor.offset < cursor.segment.length && units[cursor.offset] >= 0x80) {
-                if (capacity - written < 2) goto finished;
+                if (!all_fits && capacity - written < 2) goto finished;
                 u8 unit = units[cursor.offset++];
                 if (output != nullptr) {
                     output[written] = (byte) (0xC0 | (unit >> 6));
@@ -234,7 +235,7 @@ static void mal_string_utf8_process(
             if (mal_utf16_is_lead_surrogate(unit)) break;
             u32 scalar = mal_utf16_is_trail_surrogate(unit) ? 0xFFFD : unit;
             usize encoded_width = mal_utf8_scalar_width(scalar);
-            if (encoded_width > capacity - written) goto finished;
+            if (!all_fits && encoded_width > capacity - written) goto finished;
             if (output != nullptr) mal_utf8_write_scalar(output + written, scalar, encoded_width);
             cursor.offset++;
             read++;
@@ -263,7 +264,7 @@ static void mal_string_utf8_process(
             scalar = 0xFFFD;
         }
         usize encoded_width = mal_utf8_scalar_width(scalar);
-        if (encoded_width > capacity - written) break;
+        if (!all_fits && encoded_width > capacity - written) break;
         if (output != nullptr) mal_utf8_write_scalar(output + written, scalar, encoded_width);
         read += width;
         written += encoded_width;
