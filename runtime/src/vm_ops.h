@@ -2586,6 +2586,55 @@ static inline bool mal_vm_iterator_try_dense_array_cursor_step(
     return false;
 }
 
+// Caller validates the captured String protocol; misses cannot advance the frontier.
+static inline bool mal_vm_iterator_try_string_cursor_step(
+    MalVm *vm, MalIteratorObject *iterator, MalValue *value_out, bool *done_out
+) {
+    if (iterator->done) {
+        *value_out = MAL_VALUE_UNDEFINED;
+        *done_out = true;
+        return true;
+    }
+    MalString *string = mal_value_to_string(iterator->target);
+    MalStringCursor *cursor = iterator->string_cursor;
+    if (iterator->index >= string->length) {
+        if (cursor != nullptr) return false;
+        iterator->done = true;
+        *value_out = MAL_VALUE_UNDEFINED;
+        *done_out = true;
+        return true;
+    }
+    c16 unit;
+    if (cursor != nullptr) {
+        if (cursor->iterator == nullptr || cursor->local >= cursor->iterator->current.length) {
+            return false;
+        }
+        MalStringIteratorPart *part = &cursor->iterator->current;
+        unit = mal_string_flat_code_unit_at(part->string, part->offset + cursor->local);
+    } else {
+        if (string->storage == MAL_STRING_STORAGE_CONS) return false;
+        unit = mal_string_code_unit_at(string, (usize) iterator->index);
+    }
+    if (unit > UINT8_MAX || vm->code_unit_strings[unit] == nullptr) return false;
+    iterator->index++;
+    if (cursor != nullptr) {
+        cursor->local++;
+        cursor->position++;
+    }
+    *value_out = mal_value_from_string(vm->code_unit_strings[unit]);
+    *done_out = false;
+    return true;
+}
+
+static inline bool mal_vm_iterator_try_string_step(
+    MalVm *vm, const MalIteratorRecord *record, MalValue *value_out, bool *done_out
+) {
+    MalIteratorObject *iterator = mal_vm_iterator_protocol_cursor(
+        record, MAL_ITERATOR_CURSOR_STRING_VALUES);
+    return iterator != nullptr &&
+        mal_vm_iterator_try_string_cursor_step(vm, iterator, value_out, done_out);
+}
+
 /** Step a compiler-retained cursor, falling back only for sparse/prototype Get. */
 static inline bool mal_vm_iterator_step_dense_array_cursor(
     MalVm *vm, MalIteratorObject *cursor, const MalIteratorRecord *record,

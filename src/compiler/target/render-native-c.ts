@@ -3466,12 +3466,13 @@ function emitBody(
 			deferredOperatorRoots && (rootPublication?.slots.size ?? 0) === 0;
 		const deferredTdzRoots = fn.instructions[ip]!.opcode === "THROW_IF_TDZ";
 		const iteratorCursorAction = nativeIteratorCursorActionByIp.get(ip);
-		const deferredDenseIteratorRoots =
+		const deferredIteratorRoots =
 			coro === null &&
 			fn.instructions[ip]!.opcode === "ITERATOR_STEP" &&
 			nativeInstructions[ip] === undefined &&
 			iteratorCursorAction?.role === "step" &&
-			iteratorCursorAction.cursor.protocol === "array-values" &&
+			(iteratorCursorAction.cursor.protocol === "array-values" ||
+				iteratorCursorAction.cursor.protocol === "string") &&
 			!nativeArrayPairDestructureActionByIp.has(ip) &&
 			!nativeIteratorEntryPairVirtualizationActionByIp.has(ip) &&
 			!nativeRegExpIteratorProjectionActionByIp.has(ip);
@@ -3483,7 +3484,7 @@ function emitBody(
 			!deferredPropertyStoreRoots &&
 			!deferredOperatorRoots &&
 			!deferredTdzRoots &&
-			!deferredDenseIteratorRoots &&
+			!deferredIteratorRoots &&
 			(effects.collection || effects.reentry);
 		// Derive fallthrough equality without changing the current incoming state.
 		const nextPublishedPrivateRoots = hasPrivateRoots
@@ -3533,8 +3534,8 @@ function emitBody(
 			deferredPropertyStoreRoots && inactiveRootMask !== lastPublishedInactiveRootMask
 				? inactiveRootMask
 				: undefined;
-		const denseIteratorStepInactiveRootMask =
-			deferredDenseIteratorRoots && inactiveRootMask !== lastPublishedInactiveRootMask
+		const iteratorStepInactiveRootMask =
+			deferredIteratorRoots && inactiveRootMask !== lastPublishedInactiveRootMask
 				? inactiveRootMask
 				: undefined;
 		const loopBackedgeInactiveRootMask =
@@ -3586,7 +3587,7 @@ function emitBody(
 			staticPropertyLoadInactiveRootMask === undefined &&
 			indexedPropertyLoadInactiveRootMask === undefined &&
 			staticPropertyStoreInactiveRootMask === undefined &&
-			denseIteratorStepInactiveRootMask === undefined &&
+			iteratorStepInactiveRootMask === undefined &&
 			inactiveRootMask !== lastPublishedInactiveRootMask
 		) {
 			lines.push(`    ${cInactiveRootMaskPublication(inactiveRootMask)};`);
@@ -3601,7 +3602,7 @@ function emitBody(
 			staticPropertyLoadInactiveRootMask === undefined &&
 			indexedPropertyLoadInactiveRootMask === undefined &&
 			staticPropertyStoreInactiveRootMask === undefined &&
-			denseIteratorStepInactiveRootMask === undefined
+			iteratorStepInactiveRootMask === undefined
 		) {
 			lastPublishedInactiveRootMask = inactiveRootMask;
 		}
@@ -3635,7 +3636,7 @@ function emitBody(
 					deferredPropertyStoreRoots ||
 					deferredOperatorRoots ||
 					deferredTdzRoots ||
-					deferredDenseIteratorRoots
+					deferredIteratorRoots
 						? operatorInactiveRootMask === undefined
 							? incomingRootPublication
 							: [
@@ -3659,8 +3660,8 @@ function emitBody(
 				staticPropertyLoadInactiveRootMask,
 				indexedPropertyLoadInactiveRootMask,
 				staticPropertyStoreInactiveRootMask,
-				denseIteratorStepRootPublication: deferredDenseIteratorRoots,
-				denseIteratorStepInactiveRootMask,
+				iteratorStepRootPublication: deferredIteratorRoots,
+				iteratorStepInactiveRootMask,
 				stackObjectSite: stackObjectSites.get(ip),
 				stackObjectAccess: stackObjectAccesses.get(ip),
 				stackObjectMaterialization: stackObjectMaterializations.get(ip),
@@ -3735,7 +3736,7 @@ function emitBody(
 			staticPropertyLoadInactiveRootMask !== undefined ||
 			indexedPropertyLoadInactiveRootMask !== undefined ||
 			staticPropertyStoreInactiveRootMask !== undefined ||
-			denseIteratorStepInactiveRootMask !== undefined
+			iteratorStepInactiveRootMask !== undefined
 		) {
 			// Conditional paths can preserve the old mask or publish the instruction's mask.
 			lastPublishedInactiveRootMask = undefined;
@@ -4059,8 +4060,8 @@ interface NativeInstructionContext {
 	readonly staticPropertyLoadInactiveRootMask?: bigint;
 	readonly indexedPropertyLoadInactiveRootMask?: bigint;
 	readonly staticPropertyStoreInactiveRootMask?: bigint;
-	readonly denseIteratorStepRootPublication?: boolean;
-	readonly denseIteratorStepInactiveRootMask?: bigint;
+	readonly iteratorStepRootPublication?: boolean;
+	readonly iteratorStepInactiveRootMask?: bigint;
 	readonly stackObjectSite?: StackObjectSite;
 	readonly stackObjectAccess?: { site: StackObjectSite; slot: number };
 	readonly stackObjectMaterialization?: StackObjectSite;
@@ -4239,8 +4240,8 @@ function emitInstruction(
 		staticPropertyLoadInactiveRootMask: context.staticPropertyLoadInactiveRootMask,
 		indexedPropertyLoadInactiveRootMask: context.indexedPropertyLoadInactiveRootMask,
 		staticPropertyStoreInactiveRootMask: context.staticPropertyStoreInactiveRootMask,
-		denseIteratorStepRootPublication: context.denseIteratorStepRootPublication,
-		denseIteratorStepInactiveRootMask: context.denseIteratorStepInactiveRootMask,
+		iteratorStepRootPublication: context.iteratorStepRootPublication,
+		iteratorStepInactiveRootMask: context.iteratorStepInactiveRootMask,
 		ownedCaptureFunctionIndex: context.ownedCaptureFunctionIndex,
 		fixedCaptureOwners: context.fixedCaptureOwners,
 		requiredCaptureOwners: context.requiredCaptureOwners,
@@ -8946,14 +8947,18 @@ function emitInstruction(
 				cursorInitializeIp === undefined
 					? `mal_vm_iterator_try_dense_array_step(&${rec}, &${val}, &${done})`
 					: `(__iter_cursor_${cursorInitializeIp} != nullptr ? mal_vm_iterator_try_dense_array_cursor_step(__iter_cursor_${cursorInitializeIp}, &${val}, &${done}) : mal_vm_iterator_try_dense_array_step(&${rec}, &${val}, &${done}))`;
-			const advance = context.denseIteratorStepRootPublication
+			const iteratorProbe =
+				nativeIteratorCursorAction?.cursor.protocol === "string"
+					? `(__iter_cursor_${cursorInitializeIp} != nullptr && mal_vm_iterator_try_string_cursor_step(vm, __iter_cursor_${cursorInitializeIp}, &${val}, &${done}))`
+					: `(${denseProbe} || mal_vm_iterator_try_string_step(vm, &${rec}, &${val}, &${done}))`;
+			const advance = context.iteratorStepRootPublication
 				? [
-						`if (!${denseProbe}) {`,
+						`if (!${iteratorProbe}) {`,
 						...(context.incomingRootPublication ?? []).map((line) => `  ${line}`),
-						...(context.denseIteratorStepInactiveRootMask === undefined
+						...(context.iteratorStepInactiveRootMask === undefined
 							? []
 							: [
-									`  ${cInactiveRootMaskPublication(context.denseIteratorStepInactiveRootMask)};`,
+									`  ${cInactiveRootMaskPublication(context.iteratorStepInactiveRootMask)};`,
 								]),
 						`  if (!mal_vm_iterator_step(vm, &${rec}, &${val}, &${done})) ${onThrow()}`,
 						`}`,

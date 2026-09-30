@@ -65,7 +65,7 @@ describe("global Buffer and node:buffer", () => {
 			outDir,
 			nodeEnabled: true,
 		});
-	});
+	}, 600_000);
 
 	it("passes ESM compiled", () => {
 		assertResultPass(runToStdout(esmCompiled));

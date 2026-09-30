@@ -7,6 +7,7 @@
 #include "heap_string.h"
 #include "perf_stats.h"
 #include "vm.h"
+#include "vm_ops.h"
 
 extern const MalRuntimeImage mal_runtime_image;
 
@@ -33,6 +34,7 @@ static bool string_iteration(MalVm *vm, usize leaves, bool materialize) {
     units[93] = 0xde00;
     units[123] = 0xd800;
     units[200] = 0x100;
+    units[201] = 0xff;
     MalValue roots[2] = {mal_value_from_string(rope(vm, units, length)), MAL_VALUE_UNDEFINED};
     MalRootSpan span;
     mal_gc_root(&span, roots, 2);
@@ -41,10 +43,22 @@ static bool string_iteration(MalVm *vm, usize leaves, bool materialize) {
     mal_gc_collect(vm);
     u64 before = mal_perf_stats.string_iterator_nodes;
     usize position = 0;
+    usize hits = 0;
     while (position < length) {
         MalValue value;
         bool done;
-        CHECK(mal_vm_iterator_step_protocol_cursor(vm, iterator, &value, &done));
+        MalStringCursor *cursor = iterator->string_cursor;
+        usize local = cursor == nullptr ? 0 : cursor->local;
+        usize cursor_position = cursor == nullptr ? 0 : cursor->position;
+        u64 allocated = mal_gc_allocated_bytes(vm);
+        if (mal_vm_iterator_try_string_cursor_step(vm, iterator, &value, &done)) {
+            CHECK(mal_gc_allocated_bytes(vm) == allocated);
+            hits++;
+        } else {
+            CHECK(iterator->index == position && iterator->string_cursor == cursor);
+            CHECK(cursor == nullptr || (cursor->local == local && cursor->position == cursor_position));
+            CHECK(mal_vm_iterator_step_protocol_cursor(vm, iterator, &value, &done));
+        }
         CHECK(!done && mal_value_is_string(value));
         usize count = position == 92 ? 2 : 1;
         MalString *actual = mal_value_to_string(value);
@@ -73,6 +87,7 @@ static bool string_iteration(MalVm *vm, usize leaves, bool materialize) {
     bool done;
     CHECK(mal_vm_iterator_step_protocol_cursor(vm, iterator, &value, &done) && done);
     CHECK(iterator->string_cursor == nullptr);
+    CHECK(hits > 0);
     u64 visited = mal_perf_stats.string_iterator_nodes - before;
     CHECK(visited > 0 && visited <= (materialize ? 4 : 2) * leaves + 64);
     printf("iteration leaves=%zu materialize=%d nodes=%llu\n", leaves, materialize,
