@@ -69,7 +69,7 @@ setInterval(() => {}, 1000);
 			await expect(
 				runBoundedProcess(process.execPath, [script], {
 					environment: process.env,
-					timeoutMs: 100,
+					timeoutMs: 2_000,
 				}),
 			).rejects.toThrow(/timed out/);
 			expect(existsSync(pidFile)).toBe(true);
