@@ -83,7 +83,12 @@ static MalArrayObject *regexp_legacy_state(MalVm *vm) {
 static void regexp_legacy_store(
     MalVm *vm, RegexpLegacyStateIndex index, MalValue value
 ) {
-    mal_array_object_store(regexp_legacy_state(vm), mal_key_index(index), value);
+    MalArrayObject *state = regexp_legacy_state(vm);
+    // This private intrinsic stays dense; no property descriptor can intercept replacement.
+    assert((u32) index < state->dense_count);
+    MalArrayDenseStore stored = mal_array_object_dense_store(state, (u32) index, value);
+    assert(stored == MAL_ARRAY_DENSE_APPLIED);
+    (void) stored;
 }
 
 static MalValue regexp_legacy_load(MalVm *vm, RegexpLegacyStateIndex index) {
