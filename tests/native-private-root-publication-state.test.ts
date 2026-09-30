@@ -30,6 +30,16 @@ const call = (dst = 4, arguments_: Array<number> = [retained]): BytecodeInstruct
 	arguments: arguments_,
 });
 const returned = { opcode: "RETURN", value: retained } satisfies BytecodeInstruction;
+const charCodeAtPlan = {
+	kind: "call",
+	guardedBuiltinCall: {
+		operation: "String.prototype.charCodeAt",
+		guard: {
+			dependencies: [{ kind: "world", fact: "primordials.locked" }],
+			obligations: ["fallback"],
+		},
+	},
+} satisfies NativeInstructionPlan;
 
 function point(
 	instructionIp: number,
@@ -266,6 +276,42 @@ describe("private-root publication state at collecting edges", () => {
 		expect(
 			source.slice(result, source.indexOf("mal_gc_safepoint(vm)", result)),
 		).toContain(`if (mal_gc_poll) { ${publication}`);
+	});
+
+	it.each(["callee", "receiver", "argument"] as const)(
+		"publishes charCodeAt's reused %s before binding its rooted destination",
+		(role) => {
+			const reused: BytecodeInstruction = {
+				opcode: "CALL",
+				dst: retained,
+				callee: role === "callee" ? retained : 1,
+				thisValue: role === "receiver" ? retained : 0,
+				argumentCount: 1,
+				arguments: [role === "argument" ? retained : 3],
+			};
+			const source = emit([load, reused, returned], [point(0, [0, 1], live), point(1)], {
+				nativeInstructions: new Map([[1, charCodeAtPlan]]),
+			});
+			const publication = privatePublication(source);
+			const slot = publication.slice(0, publication.indexOf(" ="));
+			const propertyMiss = source.indexOf("mal_vm_op_load_property_ic_static_miss");
+			const alias = source.indexOf(`#define r${retained} (${slot})`, propertyMiss);
+			expect(alias).toBeGreaterThan(propertyMiss);
+			expect(source.lastIndexOf(`\n    ${publication}`, alias)).toBeGreaterThan(
+				propertyMiss,
+			);
+			expect(
+				source.indexOf("mal_builtin_string_char_code_at_direct(vm", alias),
+			).toBeGreaterThan(alias);
+			expect(source).not.toContain("mal_builtin_string_char_code_at_try(");
+		},
+	);
+
+	it("defers charCodeAt publication when its destination is disjoint from its inputs", () => {
+		const source = emit([load, call(), returned], [point(0, [0, 1], live), point(1)], {
+			nativeInstructions: new Map([[1, charCodeAtPlan]]),
+		});
+		expect(source).toContain("mal_builtin_string_char_code_at_try(");
 	});
 
 	it("takes an ordinary call's throw edge before assigning its private result and republishes catch roots", () => {

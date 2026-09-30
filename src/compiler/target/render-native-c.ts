@@ -73,6 +73,7 @@ import {
 	computeArgumentRetentionLimit,
 	decodeVmValueOperand,
 	vmExceptionHandlerTargets as exceptionHandlerTargets,
+	vmInstructionUsesRegister,
 	vmInstructionWriteRegisters,
 } from "./runtime-image.ts";
 import type { BytecodeFunction, BytecodeInstruction } from "./runtime-image.ts";
@@ -3489,6 +3490,10 @@ function emitBody(
 			charCodeAtInstruction.opcode === "CALL" &&
 			charCodeAtPlan?.kind === "call" &&
 			vmCallProvesBuiltin(charCodeAtPlan, "String.prototype.charCodeAt") &&
+			// Rooted outputs alias shadow storage before dispatch, including reused inputs.
+			!rootedOutputs.some((register) =>
+				vmInstructionUsesRegister(charCodeAtInstruction, register),
+			) &&
 			charCodeAtPlan.numericSortCallback === undefined &&
 			!fieldCallSites.has(ip) &&
 			!mathUnaryCalls.has(ip) &&
