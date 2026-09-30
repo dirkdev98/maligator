@@ -1,0 +1,57 @@
+{
+	"schema": 1,
+	"cases": [
+		{
+			"id": "join-dense-strings",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "dense primitive joins",
+			"category": "api-builtins",
+			"mechanisms": ["string-construction", "primitive-values"],
+			"inputShape": "64 strings with one value mutated per join; pipe separator and output length/endpoints",
+			"unit": "joins",
+			"sourceSeam": "runtime/src/builtin_array.c",
+			"fixture": "cases/join-dense-strings.mjs",
+			"controls": ["array-join-mixed-values"]
+		},
+		{
+			"id": "join-dense-int32s",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "dense primitive joins",
+			"category": "api-builtins",
+			"mechanisms": ["string-construction", "primitive-values"],
+			"inputShape": "64 int32s with one value mutated per join; pipe separator and output length/endpoints",
+			"unit": "joins",
+			"sourceSeam": "runtime/src/builtin_array.c",
+			"fixture": "cases/join-dense-int32s.mjs",
+			"controls": ["array-join-mixed-values"]
+		},
+		{
+			"id": "utf8-decode-latin1-32768",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "utf8-boundary",
+			"category": "api-builtins",
+			"mechanisms": ["utf8-conversion", "encoding-boundary", "input-size-scaling"],
+			"inputShape": "32768 latin1 code units encoded before timing; decode and consume length/endpoints without a full traversal",
+			"unit": "conversions",
+			"sourceSeam": "runtime/src/utf8.c",
+			"fixture": "cases/utf8-decode-latin1-32768.mjs",
+			"controls": ["utf8-decode-boundary", "utf8-decode"]
+		},
+		{
+			"id": "utf8-decode-utf16-32768",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "utf8-boundary",
+			"category": "api-builtins",
+			"mechanisms": ["utf8-conversion", "encoding-boundary", "input-size-scaling"],
+			"inputShape": "32768 utf16 code units encoded before timing; decode and consume length/endpoints without a full traversal",
+			"unit": "conversions",
+			"sourceSeam": "runtime/src/utf8.c",
+			"fixture": "cases/utf8-decode-utf16-32768.mjs",
+			"controls": ["utf8-decode-boundary", "utf8-decode"]
+		}
+	]
+}

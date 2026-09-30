@@ -328,6 +328,38 @@ usize mal_string_utf8_length(const MalString *string) {
     return length > SIZE_MAX ? SIZE_MAX : (usize) length;
 }
 
+// Keep the bulk path outside the scalar decoder's inlining budget.
+__attribute__((noinline))
+static usize mal_utf8_decode_latin1_prefix(MalTextBuffer *buffer, const byte *bytes, usize len, usize i) {
+    if (!(len - i >= 4 && ((u8) bytes[i] == 0xc2 || (u8) bytes[i] == 0xc3) &&
+        (u8) bytes[i + 1] >= 0x80 && (u8) bytes[i + 1] <= 0xbf &&
+        ((u8) bytes[i + 2] == 0xc2 || (u8) bytes[i + 2] == 0xc3) &&
+        (u8) bytes[i + 3] >= 0x80 && (u8) bytes[i + 3] <= 0xbf)) return i;
+    usize run_end = i + 4;
+    while (len - run_end >= 2 &&
+        ((u8) bytes[run_end] == 0xc2 || (u8) bytes[run_end] == 0xc3) &&
+        (u8) bytes[run_end + 1] >= 0x80 && (u8) bytes[run_end + 1] <= 0xbf) run_end += 2;
+    usize count = (run_end - i) / 2;
+    mal_text_buffer_reserve(buffer, count);
+    if (buffer->status != MAL_TEXT_BUFFER_OK) return i;
+    usize output = buffer->length;
+    if (buffer->utf16) {
+        while (i < run_end) {
+            ((c16 *) buffer->data)[output++] = (c16)
+                ((((u8) bytes[i] & 3) << 6) | ((u8) bytes[i + 1] & 0x3f));
+            i += 2;
+        }
+    } else {
+        while (i < run_end) {
+            ((u8 *) buffer->data)[output++] = (u8)
+                ((((u8) bytes[i] & 3) << 6) | ((u8) bytes[i + 1] & 0x3f));
+            i += 2;
+        }
+    }
+    buffer->length = output;
+    return i;
+}
+
 MalString *mal_string_from_utf8_report(
     MalHeap *heap, const byte *bytes, usize len,
     bool *had_error_out, MalUtf8DecodeStatus *status_out
@@ -350,6 +382,7 @@ MalString *mal_string_from_utf8_report(
     mal_text_buffer_hint_capacity(&buffer, hint);
     mal_text_buffer_append_latin1(&buffer, (const u8 *) bytes, prefix);
     usize i = prefix;
+    if (((u8) bytes[i] & 0xfe) == 0xc2) i = mal_utf8_decode_latin1_prefix(&buffer, bytes, len, i);
     while (i < len && buffer.status == MAL_TEXT_BUFFER_OK) {
         usize start = i;
         while (i < len && (u8) bytes[i] < 0x80) i++;

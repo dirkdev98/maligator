@@ -45,6 +45,17 @@ static bool compact_decode_preserves_code_units_and_failures(MalVm *vm) {
     CHECK(mal_heap_usage(&vm->heap).raw_owned_bytes - before == mal_heap_allocation_charge(256));
     for (usize i = 0; i < 256; i++) CHECK(mal_string_code_unit_at(string, i) == i);
 
+    const byte prefix_malformed[] = {(byte) 0xc3, (byte) 0xa9, (byte) 0xc2, (byte) 0xa0,
+        (byte) 0xc3, '!', (byte) 0xe2, (byte) 0x82};
+    const c16 prefix_expected[] = {0xe9, 0xa0, 0xfffd, '!', 0xfffd};
+    string = mal_string_from_utf8_report(&vm->heap, prefix_malformed,
+        countof(prefix_malformed), &had_error, &status);
+    CHECK(string != nullptr && status == MAL_UTF8_DECODE_OK && had_error);
+    CHECK(string->length == countof(prefix_expected));
+    for (usize i = 0; i < countof(prefix_expected); i++) {
+        CHECK(mal_string_code_unit_at(string, i) == prefix_expected[i]);
+    }
+
     const byte malformed[] = {
         (byte) 0xe1, (byte) 0x80, 'A', (byte) 0xed, (byte) 0xa0, (byte) 0x80,
         (byte) 0xf4, (byte) 0x90, (byte) 0x80, (byte) 0x80,
