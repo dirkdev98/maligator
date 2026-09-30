@@ -1736,6 +1736,43 @@ describe("Core control-flow analyses and passes", () => {
 		}
 	});
 
+	it("rebuilds exceptional edges after a handler-argument rewrite", () => {
+		const program = new CoreProgram(coreOpcodeRegistry);
+		const builder = new CoreFunctionBuilder(program);
+		const entry = builder.createBlock([{ representation: "boxed" }]);
+		const parameter = inspectCoreBlockParameters(builder, entry)[0]!.value;
+		const [copy] = builder.appendInstruction(entry, "move", [parameter]);
+		const [result] = builder.appendInstruction(entry, "call", [parameter, parameter]);
+		const handler = builder.createBlock([
+			{ role: "exception", representation: "boxed" },
+			{ representation: "boxed" },
+		]);
+		builder.setHandler(entry, handler, [copy!]);
+		builder.setTerminator(entry, { kind: "return", value: result! });
+		builder.setTerminator(handler, {
+			kind: "return",
+			value: inspectCoreBlockParameters(builder, handler)[1]!.value,
+		});
+		const functionId = builder.finish(entry).function;
+		const analyses = new CoreAnalysisManager(
+			program,
+			context,
+			new CoreOptimizationReportBuilder(program),
+		);
+		const request = { scope: "function", function: functionId } as const;
+		const before = analyses.get(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, request).exceptional();
+		expect(before.successors[entry]![0]!.arguments).toEqual([copy!]);
+		const editor = CoreEditor.open(program, functionId);
+		editor.replaceValueUses(copy!, parameter);
+		const changes = editor.commit();
+		expect(changes.domains).not.toContain("cfg");
+		expect(changes.domains).toContain("exceptionFlow");
+		const after = analyses.get(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, request).exceptional();
+		expect(after).not.toBe(before);
+		expect(after.successors[entry]![0]!.arguments).toEqual([parameter]);
+		expect(after.predecessors[handler]![0]!.arguments).toEqual([parameter]);
+	});
+
 	it("reuses the real CFG analysis across operand-only rewrites", () => {
 		const program = new CoreProgram(coreOpcodeRegistry);
 		const builder = new CoreFunctionBuilder(program);

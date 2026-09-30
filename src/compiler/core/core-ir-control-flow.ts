@@ -82,6 +82,51 @@ export interface BuildCoreControlFlowOptions {
 const runWithoutOwner: CoreOptimizationOwnerRunner = (_owner, run) => run();
 const emptyEdgeArguments: ReadonlyArray<CoreValueId> = Object.freeze([]);
 
+// A shared getter avoids accessor closures per edge while body edits refresh lazy operands.
+class ArgumentControlEdge implements CoreControlEdge {
+	readonly from: CoreBlockId;
+	readonly to: CoreBlockId;
+	readonly kind: CoreControlEdgeKind;
+	readonly #fn: CoreFunctionStore;
+	readonly #start: number;
+	readonly #count: number;
+	#version = -1;
+	#arguments: ReadonlyArray<CoreValueId> | undefined;
+
+	constructor(
+		fn: CoreFunctionStore,
+		from: CoreBlockId,
+		to: CoreBlockId,
+		kind: CoreControlEdgeKind,
+		start: number,
+		count: number,
+	) {
+		this.#fn = fn;
+		this.from = from;
+		this.to = to;
+		this.kind = kind;
+		this.#start = start;
+		this.#count = count;
+	}
+
+	get arguments(): ReadonlyArray<CoreValueId> {
+		const version = this.#fn.version("body");
+		if (this.#arguments === undefined || version !== this.#version) {
+			const arguments_ = new Array<CoreValueId>(this.#count);
+			if (this.kind === "ordinary") {
+				for (let index = 0; index < this.#count; index++)
+					arguments_[index] = this.#fn.kernel.operandAt(this.#start + index);
+			} else {
+				for (let index = 0; index < this.#count; index++)
+					arguments_[index] = this.#fn.kernel.handlerArgumentAt(this.#start + index);
+			}
+			this.#version = version;
+			this.#arguments = arguments_;
+		}
+		return this.#arguments;
+	}
+}
+
 export function coreTerminatorEdges(
 	payload: CoreTerminatorPayload,
 ): ReadonlyArray<CoreEdge> {
@@ -168,23 +213,14 @@ function buildEdges(fn: CoreFunctionStore): {
 					arguments: emptyEdgeArguments,
 				};
 			} else {
-				let argumentVersion = -1;
-				let argumentsCache: ReadonlyArray<CoreValueId> | undefined;
-				controlEdge = {
-					from: block,
-					to: fn.kernel.terminatorEdgeBlock(edge),
-					kind: "ordinary",
-					get arguments() {
-						const version = fn.version("body");
-						if (argumentsCache === undefined || version !== argumentVersion) {
-							argumentVersion = version;
-							argumentsCache = Array.from({ length: argumentCount }, (_, index) =>
-								fn.kernel.operandAt(argumentStart + index),
-							);
-						}
-						return argumentsCache;
-					},
-				};
+				controlEdge = new ArgumentControlEdge(
+					fn,
+					block,
+					fn.kernel.terminatorEdgeBlock(edge),
+					"ordinary",
+					argumentStart,
+					argumentCount,
+				);
 			}
 			if (successors[block] === empty) successors[block] = [];
 			successors[block].push(controlEdge);
@@ -280,23 +316,7 @@ function buildExceptionalStructural(
 						arguments: emptyEdgeArguments,
 					};
 				} else {
-					let argumentVersion = -1;
-					let argumentsCache: ReadonlyArray<CoreValueId> | undefined;
-					edge = {
-						from: block,
-						to: handler,
-						kind: "exceptional",
-						get arguments() {
-							const version = fn.version("body");
-							if (argumentsCache === undefined || version !== argumentVersion) {
-								argumentVersion = version;
-								argumentsCache = Array.from({ length: count }, (_, index) =>
-									fn.kernel.handlerArgumentAt(start + index),
-								);
-							}
-							return argumentsCache;
-						},
-					};
+					edge = new ArgumentControlEdge(fn, block, handler, "exceptional", start, count);
 				}
 				successors[block] = [...(successors[block] ?? []), edge];
 				if (!mutablePredecessors.has(handler)) {
