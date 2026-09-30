@@ -2320,6 +2320,33 @@ MalValue mal_builtin_string_case_known(MalVm *vm, MalString *string, bool to_upp
     usize length = mal_string_length(string);
     MAL_PERF_COUNT(string_case_calls);
     MAL_PERF_ADD(string_case_input_code_units, length);
+    if (locale == MAL_UNICODE_LOCALE_ROOT && length <= MAL_STRING_INLINE_LATIN1_CODE_UNITS) {
+        MalStringSegment segment;
+        if (mal_string_try_get_segment(string, 0, length, &segment)) {
+            u8 units[MAL_STRING_INLINE_LATIN1_CODE_UNITS];
+            bool ascii = true;
+            bool changed = false;
+            for (usize i = 0; i < length; i++) {
+                c16 unit = mal_string_segment_code_unit_at(&segment, i);
+                if (unit > 0x7f) {
+                    ascii = false;
+                    break;
+                }
+                u8 mapped = (u8) (to_upper ? mal_ascii_to_upper(unit) : mal_ascii_to_lower(unit));
+                units[i] = mapped;
+                changed |= mapped != unit;
+            }
+            if (ascii) {
+                if (!changed) {
+                    MAL_PERF_COUNT(string_case_reuses);
+                    return mal_value_from_string(string);
+                }
+                MAL_PERF_COUNT(string_case_changed_allocations);
+                MAL_PERF_ADD(string_case_changed_code_units, length);
+                return mal_value_from_string(mal_string_new_latin1_copy(&vm->heap, units, length));
+            }
+        }
+    }
     bool changed;
     if (locale != MAL_UNICODE_LOCALE_ROOT || !mal_builtin_string_ascii_case_scan(string, to_upper, &changed)) {
         const c16 *source;

@@ -132,6 +132,39 @@ static bool numeric_ranges_preserve_storage(MalVm *vm) {
     return true;
 }
 
+static bool short_case_mapping_preserves_utf16(MalVm *vm) {
+    const c16 source[] = u"Abc\0xyzXYZ123!?_";
+    const c16 upper[] = u"ABC\0XYZXYZ123!?_";
+    const c16 lower[] = u"abc\0xyzxyz123!?_";
+    for (usize length = 0; length < countof(source); length++) {
+        MalString *strings[] = {
+            mal_string_new_copy(&vm->heap, source, length),
+            mal_string_new_external(&vm->heap, source, length),
+        };
+        for (usize i = 0; i < countof(strings); i++) {
+            MalString *up = mal_value_to_string(mal_builtin_string_case_known(
+                vm, strings[i], true, MAL_UNICODE_LOCALE_ROOT));
+            MalString *down = mal_value_to_string(mal_builtin_string_case_known(
+                vm, strings[i], false, MAL_UNICODE_LOCALE_ROOT));
+            CHECK(up->length == length && down->length == length);
+            for (usize j = 0; j < length; j++) {
+                CHECK(mal_string_code_unit_at(up, j) == upper[j]);
+                CHECK(mal_string_code_unit_at(down, j) == lower[j]);
+            }
+        }
+    }
+    const c16 non_ascii[] = {'a', 0xdf, 0xd800};
+    const c16 expected[] = {'A', 'S', 'S', 0xd800};
+    MalString *string = mal_string_new_copy(&vm->heap, non_ascii, countof(non_ascii));
+    MalString *mapped = mal_value_to_string(mal_builtin_string_case_known(
+        vm, string, true, MAL_UNICODE_LOCALE_ROOT));
+    CHECK(mapped->length == countof(expected));
+    for (usize i = 0; i < countof(expected); i++) {
+        CHECK(mal_string_code_unit_at(mapped, i) == expected[i]);
+    }
+    return true;
+}
+
 static bool short_concatenations_preserve_code_units(MalVm *vm) {
     u8 bytes[16];
     c16 units[16];
@@ -520,6 +553,7 @@ int main(void) {
     bool passed = physical_encodings_have_equal_content(&vm)
         && inline_capacity_and_eight_unit_cache(&vm)
         && numeric_ranges_preserve_storage(&vm)
+        && short_case_mapping_preserves_utf16(&vm)
         && short_concatenations_preserve_code_units(&vm)
         && ropes_stream_and_cross_leaf_slices_copy(&vm)
         && direct_search_accepts_rope_receivers(&vm)
