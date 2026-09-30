@@ -217,7 +217,30 @@ static void mal_string_utf8_process(
                 written += count;
                 continue;
             }
+            while (cursor.offset < cursor.segment.length && units[cursor.offset] >= 0x80) {
+                if (capacity - written < 2) goto finished;
+                u8 unit = units[cursor.offset++];
+                if (output != nullptr) {
+                    output[written] = (byte) (0xC0 | (unit >> 6));
+                    output[written + 1] = (byte) (0x80 | (unit & 0x3F));
+                }
+                read++;
+                written += 2;
+            }
+            continue;
         }
+        while (cursor.offset < cursor.segment.length) {
+            c16 unit = cursor.segment.utf16_units[cursor.offset];
+            if (mal_utf16_is_lead_surrogate(unit)) break;
+            u32 scalar = mal_utf16_is_trail_surrogate(unit) ? 0xFFFD : unit;
+            usize encoded_width = mal_utf8_scalar_width(scalar);
+            if (encoded_width > capacity - written) goto finished;
+            if (output != nullptr) mal_utf8_write_scalar(output + written, scalar, encoded_width);
+            cursor.offset++;
+            read++;
+            written += encoded_width;
+        }
+        if (cursor.offset == cursor.segment.length) continue;
 
         c16 first = mal_string_segment_code_unit_at(&cursor.segment, cursor.offset++);
         u32 scalar = first;
@@ -245,6 +268,7 @@ static void mal_string_utf8_process(
         read += width;
         written += encoded_width;
     }
+finished:
     mal_string_iterator_dispose(&cursor.iterator);
     if (read_out != nullptr) *read_out = read;
     if (written_out != nullptr) *written_out = written;
