@@ -845,7 +845,7 @@ bool mal_string_new_cons_checked(MalHeap *heap, MalString *left, MalString *righ
         return false;
     }
 
-    if (length <= MAL_STRING_INLINE_LATIN1_CODE_UNITS) {
+    if (length <= MAL_STRING_INLINE_CODE_UNITS) {
         MalStringSegment left_segment;
         MalStringSegment right_segment;
         if (mal_string_try_get_segment(left, 0, left->length, &left_segment) &&
@@ -870,11 +870,8 @@ bool mal_string_new_cons_checked(MalHeap *heap, MalString *left, MalString *righ
     }
 
     MalString *string = mal_string_join(heap, left, right);
-    if (left->hash_valid) {
-        // Concatenation preserves the semantic left prefix even when balancing
-        // rewrites the physical tree. Carry its final FNV state forward now so
-        // the first property/Map lookup of the result does not re-enter the
-        // generic hash walk just to discover the same cached prefix.
+    if (left->hash_valid && left->length > MAL_STRING_INLINE_CODE_UNITS) {
+        // Tiny-cache hashes imply no lookup demand; carry longer cached prefixes across balancing.
         string->hash = mal_string_hash_continue(left->hash, right);
         string->hash_valid = true;
     }
