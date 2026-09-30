@@ -98,6 +98,8 @@ struct MalGcBlock {
     struct MalGcBlock *prev_free;
     struct MalGcBlock *next_young;
     u64 sweep_epoch;
+    // Index cell starts by alignment units so allocation needs no size-class division.
+    u64 young_cells[MAL_GC_BLOCK_SIZE / MAL_GC_CELL_ALIGN / 64];
 };
 
 struct MalGcChunk {
@@ -303,6 +305,7 @@ static MalGcBlock *mal_gc_new_block(MalHeap *heap, u16 size_class, u8 kind) {
     block->kind = kind;
     block->on_young = 0;
     block->next_young = nullptr;
+    memset(block->young_cells, 0, sizeof(block->young_cells));
     block->recycled = 0;
     block->on_partial = 0;
     block->size_class = size_class;
@@ -317,8 +320,11 @@ static MalGcBlock *mal_gc_new_block(MalHeap *heap, u16 size_class, u8 kind) {
     return block;
 }
 
-static inline void mal_gc_track_young_block(MalHeap *heap, MalGcBlock *block) {
-    if (!block->on_young && !mal_gc_black_alloc) {
+static inline void mal_gc_track_young_block(MalHeap *heap, MalGcBlock *block, void *cell) {
+    if (mal_gc_black_alloc) return;
+    usize slot = ((uptr) cell & (MAL_GC_BLOCK_SIZE - 1)) / MAL_GC_CELL_ALIGN;
+    block->young_cells[slot / 64] |= UINT64_C(1) << (slot % 64);
+    if (!block->on_young) {
         block->on_young = 1;
         block->next_young = heap->young_blocks;
         heap->young_blocks = block;
@@ -332,6 +338,7 @@ static void mal_gc_clear_young_blocks(MalHeap *heap) {
         MalGcBlock *next = block->next_young;
         block->on_young = 0;
         block->next_young = nullptr;
+        memset(block->young_cells, 0, sizeof(block->young_cells));
         block = next;
     }
 }
@@ -445,7 +452,7 @@ static void *mal_gc_alloc(MalHeap *heap, usize size, u8 kind) {
         void *cell = heap->cell_free[size_class];
         heap->cell_free[size_class] = *(void **) ((u8 *) cell + mal_gc_free_next_offset());
         MalGcBlock *block = (MalGcBlock *) ((uptr) cell & ~(uptr) (MAL_GC_BLOCK_SIZE - 1));
-        mal_gc_track_young_block(heap, block);
+        mal_gc_track_young_block(heap, block, cell);
         heap->bytes_allocated += g_class_cell_size[size_class];
         mal_gc_count_black(heap, block, kind, g_class_cell_size[size_class]);
         mal_heap_maybe_trigger_gc(heap);
@@ -491,7 +498,7 @@ static void *mal_gc_alloc(MalHeap *heap, usize size, u8 kind) {
     if (kind == MAL_GC_BLOCK_RAW) {
         block->live++; // per-block live count drives empty-block reclamation
     } else {
-        mal_gc_track_young_block(heap, block);
+        mal_gc_track_young_block(heap, block, cell);
     }
     heap->bytes_allocated += block->cell_size;
     mal_gc_count_black(heap, block, kind, block->cell_size);
@@ -996,7 +1003,6 @@ void mal_heap_sweep(MalHeap *heap, MalHeapFinalizeFn finalize) {
 void mal_heap_sweep_minor(MalHeap *heap, MalHeapFinalizeFn finalize) {
     heap->epoch++;
     mal_perf_collection_epoch(heap->epoch);
-    usize data_offset = mal_gc_cell_data_offset();
     usize free_offset = mal_gc_free_next_offset();
     MalGcBlock *block = heap->young_blocks;
     heap->young_blocks = nullptr;
@@ -1004,34 +1010,41 @@ void mal_heap_sweep_minor(MalHeap *heap, MalHeapFinalizeFn finalize) {
         MalGcBlock *next = block->next_young;
         block->on_young = 0;
         block->next_young = nullptr;
+        u64 young_cells[countof(block->young_cells)];
+        memcpy(young_cells, block->young_cells, sizeof(young_cells));
+        memset(block->young_cells, 0, sizeof(block->young_cells));
         usize block_live = 0;
         if (heap->gc_stats) {
             heap->minor_blocks_inspected++;
-            heap->minor_cells_inspected +=
-                (usize) (block->bump - ((u8 *) block + data_offset)) / block->cell_size;
         }
-        for (u8 *cell = (u8 *) block + data_offset;
-            cell + block->cell_size <= block->bump; cell += block->cell_size) {
-            MalHeapHeader *header = (MalHeapHeader *) cell;
-            u8 mark = mal_heap_sweep_mark_load(header);
-            if (mal_heap_mark_is_old(mark)) {
-                block_live++;
-            } else if ((mark & MAL_MARK_FREE) == 0) {
-                finalize(header);
-                mal_heap_sweep_mark_store(header, MAL_MARK_FREE);
-                if (heap->poison_on_free) {
-                    mal_gc_poison_cell(cell, block->cell_size, free_offset);
-                }
-                // Already-FREE cells remain linked; adding them again creates cycles.
-                if (mal_gc_cell_reclaimable(block->cell_size)) {
-                    *(void **) (cell + free_offset) = heap->cell_free[block->size_class];
-                    heap->cell_free[block->size_class] = cell;
+        for (usize word = 0; word < countof(young_cells); word++) {
+            u64 remaining = young_cells[word];
+            if (heap->gc_stats) heap->minor_cells_inspected += (usize) __builtin_popcountll(remaining);
+            while (remaining != 0) {
+                usize slot = word * 64 + (usize) __builtin_ctzll(remaining);
+                remaining &= remaining - 1;
+                u8 *cell = (u8 *) block + slot * MAL_GC_CELL_ALIGN;
+                MalHeapHeader *header = (MalHeapHeader *) cell;
+                u8 mark = mal_heap_sweep_mark_load(header);
+                if (mal_heap_mark_is_old(mark)) {
+                    block_live++;
+                } else if ((mark & MAL_MARK_FREE) == 0) {
+                    finalize(header);
+                    mal_heap_sweep_mark_store(header, MAL_MARK_FREE);
+                    if (heap->poison_on_free) {
+                        mal_gc_poison_cell(cell, block->cell_size, free_offset);
+                    }
+                    // Already-FREE cells remain linked; adding them again creates cycles.
+                    if (mal_gc_cell_reclaimable(block->cell_size)) {
+                        *(void **) (cell + free_offset) = heap->cell_free[block->size_class];
+                        heap->cell_free[block->size_class] = cell;
+                    }
                 }
             }
         }
-        // Old BLACK cells cannot die during a minor and were already accounted for.
-        heap->live_bytes += (block_live - block->live) * block->cell_size;
-        block->live = block_live;
+        // Only newly allocated cells were visited; old survivors remain accounted for.
+        heap->live_bytes += block_live * block->cell_size;
+        block->live += block_live;
         block = next;
     }
     MalGcLarge *large = heap->young_large;

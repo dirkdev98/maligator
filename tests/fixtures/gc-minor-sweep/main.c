@@ -397,11 +397,11 @@ static bool measure_fragmented_minor(MalHeap *heap, bool wide) {
     CHECK(g_finalized[old_count + 3] == 1);
     if (wide) {
         g_wide_minor_cells = heap->minor_cells_inspected;
-        CHECK(heap->minor_cells_inspected > 2 * g_narrow_minor_cells);
+        CHECK(heap->minor_cells_inspected == countof(young));
         CHECK(heap->minor_blocks_inspected > 1);
     } else {
         g_narrow_minor_cells = heap->minor_cells_inspected;
-        CHECK(g_narrow_minor_cells >= old_count);
+        CHECK(g_narrow_minor_cells == countof(young));
         CHECK(heap->minor_blocks_inspected == 1);
     }
     return true;
