@@ -73,6 +73,13 @@ static inline MalValue mal_builtin_string_char_code_at_cached_in_bounds(
     return result;
 }
 
+// Hits cannot allocate or reenter; misses leave output untouched without coercion.
+bool mal_builtin_string_char_code_at_try(
+    MalVm *vm, MalValue callee, MalValue this_value,
+    const MalValue *args, i32 arg_count,
+    MalStringLeafReadCache *leaf_cache, MalValue *out
+);
+
 /**
  * Guarded native-backend dispatch for a direct `.charCodeAt(...)` site.
  * Primitive strings with the live builtin callback and an absent or numeric position

@@ -3477,6 +3477,24 @@ function emitBody(
 			!nativeArrayPairDestructureActionByIp.has(ip) &&
 			!nativeIteratorEntryPairVirtualizationActionByIp.has(ip) &&
 			!nativeRegExpIteratorProjectionActionByIp.has(ip);
+		const charCodeAtInstruction = fn.instructions[ip]!;
+		const charCodeAtPlan = nativeInstructions[ip];
+		const deferredCharCodeAtRoots =
+			coro === null &&
+			charCodeAtInstruction.opcode === "CALL" &&
+			charCodeAtPlan?.kind === "call" &&
+			vmCallProvesBuiltin(charCodeAtPlan, "String.prototype.charCodeAt") &&
+			charCodeAtPlan.numericSortCallback === undefined &&
+			!fieldCallSites.has(ip) &&
+			!mathUnaryCalls.has(ip) &&
+			!mathBinaryCalls.has(ip) &&
+			!nativeStringCharCodeAtChainActionByIp.has(ip) &&
+			!nativeStringSplitCursorActionByIp.has(ip) &&
+			!nativeStringSplitProjectionActionByIp.has(ip) &&
+			!nativeRegExpExecProjectionActionByIp.has(ip) &&
+			!nativeRegExpIteratorProjectionActionByIp.has(ip) &&
+			!nativeStringSliceNumberFusionActionByIp.has(ip) &&
+			!nativeBuiltinCollectionCallChainActionByIp.has(ip);
 		const effects = nativeInstructionEffects(fn.instructions[ip]!);
 		const publishesIncomingRoots =
 			safepointKind !== "loop-backedge" &&
@@ -3486,6 +3504,7 @@ function emitBody(
 			!deferredOperatorRoots &&
 			!deferredTdzRoots &&
 			!deferredIteratorRoots &&
+			!deferredCharCodeAtRoots &&
 			(effects.collection || effects.reentry);
 		// Derive fallthrough equality without changing the current incoming state.
 		const nextPublishedPrivateRoots = hasPrivateRoots
@@ -3539,6 +3558,10 @@ function emitBody(
 			deferredIteratorRoots && inactiveRootMask !== lastPublishedInactiveRootMask
 				? inactiveRootMask
 				: undefined;
+		const charCodeAtCallInactiveRootMask =
+			deferredCharCodeAtRoots && inactiveRootMask !== lastPublishedInactiveRootMask
+				? inactiveRootMask
+				: undefined;
 		const loopBackedgeInactiveRootMask =
 			safepointKind === "loop-backedge" &&
 			inactiveRootMask !== lastPublishedInactiveRootMask
@@ -3589,6 +3612,7 @@ function emitBody(
 			indexedPropertyLoadInactiveRootMask === undefined &&
 			staticPropertyStoreInactiveRootMask === undefined &&
 			iteratorStepInactiveRootMask === undefined &&
+			charCodeAtCallInactiveRootMask === undefined &&
 			inactiveRootMask !== lastPublishedInactiveRootMask
 		) {
 			lines.push(`    ${cInactiveRootMaskPublication(inactiveRootMask)};`);
@@ -3603,7 +3627,8 @@ function emitBody(
 			staticPropertyLoadInactiveRootMask === undefined &&
 			indexedPropertyLoadInactiveRootMask === undefined &&
 			staticPropertyStoreInactiveRootMask === undefined &&
-			iteratorStepInactiveRootMask === undefined
+			iteratorStepInactiveRootMask === undefined &&
+			charCodeAtCallInactiveRootMask === undefined
 		) {
 			lastPublishedInactiveRootMask = inactiveRootMask;
 		}
@@ -3638,7 +3663,8 @@ function emitBody(
 					deferredPropertyStoreRoots ||
 					deferredOperatorRoots ||
 					deferredTdzRoots ||
-					deferredIteratorRoots
+					deferredIteratorRoots ||
+					deferredCharCodeAtRoots
 						? operatorInactiveRootMask === undefined
 							? incomingRootPublication
 							: [
@@ -3662,6 +3688,8 @@ function emitBody(
 				staticPropertyLoadInactiveRootMask,
 				indexedPropertyLoadInactiveRootMask,
 				staticPropertyStoreInactiveRootMask,
+				charCodeAtCallRootPublication: deferredCharCodeAtRoots,
+				charCodeAtCallInactiveRootMask,
 				iteratorStepRootPublication: deferredIteratorRoots,
 				iteratorStepInactiveRootMask,
 				stackObjectSite: stackObjectSites.get(ip),
@@ -3738,7 +3766,8 @@ function emitBody(
 			staticPropertyLoadInactiveRootMask !== undefined ||
 			indexedPropertyLoadInactiveRootMask !== undefined ||
 			staticPropertyStoreInactiveRootMask !== undefined ||
-			iteratorStepInactiveRootMask !== undefined
+			iteratorStepInactiveRootMask !== undefined ||
+			charCodeAtCallInactiveRootMask !== undefined
 		) {
 			// Conditional paths can preserve the old mask or publish the instruction's mask.
 			lastPublishedInactiveRootMask = undefined;
@@ -4069,6 +4098,8 @@ interface NativeInstructionContext {
 	readonly staticPropertyLoadInactiveRootMask?: bigint;
 	readonly indexedPropertyLoadInactiveRootMask?: bigint;
 	readonly staticPropertyStoreInactiveRootMask?: bigint;
+	readonly charCodeAtCallRootPublication?: boolean;
+	readonly charCodeAtCallInactiveRootMask?: bigint;
 	readonly iteratorStepRootPublication?: boolean;
 	readonly iteratorStepInactiveRootMask?: bigint;
 	readonly stackObjectSite?: StackObjectSite;
@@ -4250,6 +4281,8 @@ function emitInstruction(
 		staticPropertyLoadInactiveRootMask: context.staticPropertyLoadInactiveRootMask,
 		indexedPropertyLoadInactiveRootMask: context.indexedPropertyLoadInactiveRootMask,
 		staticPropertyStoreInactiveRootMask: context.staticPropertyStoreInactiveRootMask,
+		charCodeAtCallRootPublication: context.charCodeAtCallRootPublication,
+		charCodeAtCallInactiveRootMask: context.charCodeAtCallInactiveRootMask,
 		iteratorStepRootPublication: context.iteratorStepRootPublication,
 		iteratorStepInactiveRootMask: context.iteratorStepInactiveRootMask,
 		ownedCaptureFunctionIndex: context.ownedCaptureFunctionIndex,
@@ -8415,6 +8448,29 @@ function emitInstruction(
 				];
 			}
 			if (vmCallProvesBuiltin(callPlan, "String.prototype.charCodeAt")) {
+				if (context.charCodeAtCallRootPublication) {
+					context.stringLeafCaches.add(ip);
+					const mask = context.charCodeAtCallInactiveRootMask;
+					const charPoll =
+						mask === undefined
+							? poll
+							: `if (mal_gc_poll) { ${(context.outgoingRootPublication ?? []).join(" ")} ${cInactiveRootMaskPublication(mask)}; mal_gc_safepoint(vm); }`;
+					return [
+						`static MalCallCache __cc_${ip};`,
+						`MalValue __char_value_${ip};`,
+						`if (mal_builtin_string_char_code_at_try(vm, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length}, &__string_leaf_cache_${ip}, &__char_value_${ip})) {`,
+						`  r${instruction.dst} = ${callResult(`__char_value_${ip}`)};`,
+						`} else {`,
+						...(context.incomingRootPublication ?? []).map((line) => `  ${line}`),
+						...(mask === undefined ? [] : [`  ${cInactiveRootMaskPublication(mask)};`]),
+						`  MalCompletion ${tmp} = mal_builtin_string_char_code_at_direct(vm, &__cc_${ip}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length}, &__string_leaf_cache_${ip});`,
+						`  if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow()}`,
+						`  r${instruction.dst} = ${callResult(`${tmp}.value`)};`,
+						`}`,
+						charPoll,
+					];
+				}
+
 				const boundedArgument =
 					args.length === 1 ? decodeVmValueOperand(args[0]!) : undefined;
 				const boundedPosition =

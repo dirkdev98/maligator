@@ -1238,14 +1238,10 @@ static MalValue mal_builtin_string_prototype_char_code_at(MalVm *vm, MalValue th
     return result;
 }
 
-MalCompletion mal_builtin_string_char_code_at_direct(
-    MalVm *vm,
-    MalCallCache *fallback_cache,
-    MalValue callee,
-    MalValue this_value,
-    const MalValue *args,
-    i32 arg_count,
-    MalStringLeafReadCache *leaf_cache
+bool mal_builtin_string_char_code_at_try(
+    MalVm *vm, MalValue callee, MalValue this_value,
+    const MalValue *args, i32 arg_count,
+    MalStringLeafReadCache *leaf_cache, MalValue *out
 ) {
     if (arg_count >= 0 && mal_value_is_string(this_value) &&
         mal_value_is_native_function_object(callee) &&
@@ -1264,15 +1260,25 @@ MalCompletion mal_builtin_string_char_code_at_direct(
             result = mal_builtin_string_char_code_at_cached_in_bounds(
                 vm, leaf_cache, this_value, (usize) position);
         }
-        return (MalCompletion) {
-            .kind = MAL_COMPLETION_NORMAL,
-            .value = result,
-        };
+        *out = result;
+        return true;
     }
 
+    return false;
+}
+
+MalCompletion mal_builtin_string_char_code_at_direct(
+    MalVm *vm, MalCallCache *fallback_cache, MalValue callee,
+    MalValue this_value, const MalValue *args, i32 arg_count,
+    MalStringLeafReadCache *leaf_cache
+) {
+    MalValue result;
+    if (mal_builtin_string_char_code_at_try(
+            vm, callee, this_value, args, arg_count, leaf_cache, &result)) {
+        return (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = result};
+    }
     MAL_PERF_COUNT(string_char_code_at_direct_fallbacks);
-    return mal_vm_call_cached(
-        vm, fallback_cache, callee, this_value, args, arg_count);
+    return mal_vm_call_cached(vm, fallback_cache, callee, this_value, args, arg_count);
 }
 
 MalCompletion mal_builtin_string_char_code_at_direct_in_bounds(
