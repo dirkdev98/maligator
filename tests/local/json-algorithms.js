@@ -165,6 +165,24 @@ let wideSource = '{"0":-0,"01":1,"é":2';
 const width = 512;
 for (let i = 0; i < width; i++) wideSource += ',"field' + i + '":' + i;
 wideSource += ',"0":-0.0,"\\u00e9":2.0,"field0":0e0,"field511":5.11e2}';
+const stagedWide = JSON.parse(wideSource);
+check(
+	Object.keys(stagedWide).length === width + 3 &&
+		Object.is(stagedWide[0], -0) &&
+		stagedWide.field511 === 511 &&
+		JSON.stringify(stagedWide) ===
+			JSON.stringify(JSON.parse(wideSource, (key, value) => value)),
+	"staged member growth preserves duplicate keys and insertion order",
+);
+const stagedSmall = JSON.parse('{"a":{"keep":1},"b":[2],"a":{"last":3},"c":4}');
+collect();
+check(
+	Object.keys(stagedSmall).join(",") === "a,b,c" &&
+		stagedSmall.a.last === 3 &&
+		stagedSmall.b[0] === 2 &&
+		stagedSmall.c === 4,
+	"inline staged members preserve nested values and the final duplicate",
+);
 let wideCalls = 0;
 let duplicateSources = "";
 const wide = JSON.parse(wideSource, function (key, value, context) {

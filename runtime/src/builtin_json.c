@@ -1898,24 +1898,66 @@ static MalValue mal_json_parse_array(
 }
 
 typedef struct MalJsonObjectMembers {
-    MalRootedKeySnapshot keys;
-    MalRootedValueList values;
+    MalKey *keys;
+    MalValue *roots;
+    usize count;
+    usize capacity;
+    MalRootSpan root_span;
+    MalKey inline_keys[4];
+    MalValue inline_roots[8];
 } MalJsonObjectMembers;
 
 static void mal_json_object_members_init(MalJsonObjectMembers *members) {
-    mal_rooted_key_snapshot_init(&members->keys);
-    mal_rooted_value_list_init(&members->values);
+    members->keys = members->inline_keys;
+    members->roots = members->inline_roots;
+    members->count = 0;
+    members->capacity = countof(members->inline_keys);
+    mal_gc_root(&members->root_span, members->roots, 0);
+}
+
+static void mal_json_object_members_append_key(MalJsonObjectMembers *members, MalKey key) {
+    if (members->count == members->capacity) {
+        usize capacity;
+        usize keys_bytes;
+        usize roots_bytes;
+        if (!mal_checked_size_growth(members->capacity, members->count + 1,
+                8, INT32_MAX / 2, &capacity) ||
+            !mal_checked_size_multiply(capacity, sizeof(MalKey), SIZE_MAX, &keys_bytes) ||
+            !mal_checked_size_multiply(capacity, sizeof(MalValue) * 2, SIZE_MAX, &roots_bytes)) abort();
+        MalKey *keys = malloc(keys_bytes);
+        MalValue *roots = malloc(roots_bytes);
+        if (keys == nullptr || roots == nullptr) abort();
+        memcpy(keys, members->keys, sizeof(*keys) * members->count);
+        memcpy(roots, members->roots, sizeof(*roots) * members->count * 2);
+        if (members->keys != members->inline_keys) {
+            free(members->keys);
+            free(members->roots);
+        }
+        members->keys = keys;
+        members->roots = roots;
+        members->capacity = capacity;
+        members->root_span.slots = roots;
+    }
+    members->keys[members->count] = key;
+    members->roots[members->count * 2] = key.value;
+    // The key must stay rooted while its value is parsed recursively.
+    members->roots[members->count * 2 + 1] = MAL_VALUE_UNDEFINED;
+    members->count++;
+    members->root_span.count = (i32) (members->count * 2);
 }
 
 static void mal_json_object_members_dispose(MalJsonObjectMembers *members) {
-    mal_rooted_value_list_dispose(&members->values);
-    mal_rooted_key_snapshot_dispose(&members->keys);
+    mal_gc_unroot(&members->root_span);
+    if (members->keys != members->inline_keys) {
+        free(members->keys);
+        free(members->roots);
+    }
 }
 
 static MalValue mal_json_object_members_finalize(
     MalJsonParser *parser, MalJsonObjectMembers *members
 ) {
-    if (members->keys.count == 0) {
+    if (members->count == 0) {
         return mal_value_from_object(mal_intrinsic_new_object(parser->vm));
     }
 
@@ -1923,14 +1965,14 @@ static MalValue mal_json_object_members_finalize(
     MalValue shape_values[MAL_SHAPE_DYNAMIC_INLINE_SLOTS];
     u32 shape_count = 0;
     bool shaped = true;
-    for (usize i = 0; i < members->keys.count; i++) {
-        MalKey key = members->keys.keys[i];
+    for (usize i = 0; i < members->count; i++) {
+        MalKey key = members->keys[i];
         if (key.kind != MAL_KEY_STRING) {
             shaped = false;
             break;
         }
 
-        MalString *string = mal_value_to_string(members->keys.roots[i]);
+        MalString *string = mal_value_to_string(members->roots[i * 2]);
         u32 slot = 0;
         while (slot < shape_count &&
                !mal_string_equals(shape_keys[slot], string)) {
@@ -1939,7 +1981,7 @@ static MalValue mal_json_object_members_finalize(
         if (slot < shape_count) {
             // CreateDataProperty overwrites a duplicate without changing its
             // first insertion position.
-            shape_values[slot] = members->values.values[i];
+            shape_values[slot] = members->roots[i * 2 + 1];
             continue;
         }
         if (shape_count == MAL_SHAPE_DYNAMIC_INLINE_SLOTS) {
@@ -1947,7 +1989,7 @@ static MalValue mal_json_object_members_finalize(
             break;
         }
         shape_keys[shape_count] = string;
-        shape_values[shape_count] = members->values.values[i];
+        shape_values[shape_count] = members->roots[i * 2 + 1];
         shape_count++;
     }
 
@@ -1963,14 +2005,14 @@ static MalValue mal_json_object_members_finalize(
     MalValue object_value = mal_value_from_object(mal_intrinsic_new_object(parser->vm));
     MalRootSpan object_span;
     mal_gc_root(&object_span, &object_value, 1);
-    for (usize i = 0; i < members->keys.count; i++) {
+    for (usize i = 0; i < members->count; i++) {
         MalPropertyDesc desc = mal_intrinsic_data_desc(
-            members->values.values[i],
+            members->roots[i * 2 + 1],
             MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE |
                 MAL_PROPERTY_CONFIGURABLE
         );
         mal_object_define_own(
-            mal_value_to_object(object_value), members->keys.keys[i], &desc);
+            mal_value_to_object(object_value), members->keys[i], &desc);
     }
     mal_gc_unroot(&object_span);
     return object_value;
@@ -2016,7 +2058,7 @@ static MalValue mal_json_parse_object_staged(
             mal_gc_unroot(&key_span);
             goto fail;
         }
-        mal_rooted_key_snapshot_append(&members.keys, property_key);
+        mal_json_object_members_append_key(&members, property_key);
         mal_gc_unroot(&key_span);
 
         MalJsonParseNode *value_node = nullptr;
@@ -2025,7 +2067,7 @@ static MalValue mal_json_parse_object_staged(
             mal_json_parse_node_dispose(value_node);
             goto fail;
         }
-        mal_rooted_value_list_append(&members.values, value);
+        members.roots[members.count * 2 - 1] = value;
 
         mal_json_skip_whitespace(parser);
         if (mal_json_consume(parser, ',')) {
