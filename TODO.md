@@ -43,6 +43,11 @@ rooting, and resource-safety defects can interrupt that order.
       phase regressions have recovered; separate profile samples still show possible
       kernel regressions. Keep representative output parity and phase timing controls.
 
+- [ ] Broaden runtime-gap coverage with enabled RegExp/Intl, pending and rejected
+      promises, weak-reference collection, arbitrary-precision BigInt beyond the
+      current 128-bit storage, and input-size scaling. Keep conversion costs separate
+      from traversal and checksum work.
+
 - [ ] Make `scripts/dx-performance.ts` verify the running application's revision
       before and after a dependency edit. A controlled driver that keeps reporting
       revision 0 after the source changes to 1 currently passes on compiler log markers.
