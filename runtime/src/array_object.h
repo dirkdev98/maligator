@@ -31,7 +31,7 @@ typedef struct MalArrayObject {
      * { writable: false }) clears this, after which length-changing stores
      * are rejected.
      */
-    bool length_writable : 1;
+    u32 length_writable : 1;
 
     /**
      * Set once an array has deoptimized to table storage; it then stays table-mode
@@ -39,18 +39,22 @@ typedef struct MalArrayObject {
      * must use the table) from a fresh/lazy one (elements == null, still eligible —
      * the first contiguous index store creates the vector).
      */
-    bool dense_deopted : 1;
+    u32 dense_deopted : 1;
 
     /**
      * Conservative hole summary for the dense region. False proves every slot in
      * [0, dense_count) is present; true may remain set after later hole filling.
      */
-    bool dense_maybe_holey : 1;
+    u32 dense_maybe_holey : 1;
 
     /** Uniform attributes synthesized for every present dense element. */
-    bool dense_elements_writable : 1;
-    bool dense_elements_configurable : 1;
+    u32 dense_elements_writable : 1;
+    u32 dense_elements_configurable : 1;
+    // Earlier elements contain no young edges; unindexed cards clear this frontier.
+    u32 minor_scan_start : 27;
 } MalArrayObject;
+
+#define MAL_ARRAY_MINOR_SCAN_MAX ((u32) ((1u << 27) - 1))
 
 static_assert(sizeof(MalArrayObject) <= 64, "MalArrayObject outgrew its 64-byte size class");
 

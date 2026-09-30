@@ -11,9 +11,11 @@ import {
 
 describe("remembered owner scan attribution", () => {
 	it.each([
-		["sparse", 1],
-		["dense", 8192],
-	] as const)("measures %s old array writes", (mode, discoveries) => {
+		["sparse", 1, 8192],
+		["dense", 8192, 8192],
+		["append", 1, 1],
+		["append-prefix", 2, 8183],
+	] as const)("measures %s old array writes", (mode, discoveries, slots) => {
 		const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-gc-remembered-scan-"));
 		try {
 			const binary = buildNativeBinary({
@@ -42,7 +44,7 @@ describe("remembered owner scan attribution", () => {
 				Number(result.stderr.match(/\braw_owned_bytes=(\d+)/)?.[1] ?? 0),
 			).toBeGreaterThan(0);
 			expect(result.stderr).toMatch(/remembered_array_owners=1\b/);
-			expect(result.stderr).toMatch(/remembered_array_slots=8192\b/);
+			expect(result.stderr).toMatch(new RegExp(`remembered_array_slots=${slots}\\b`));
 			expect(result.stderr).toMatch(
 				new RegExp(`remembered_array_discoveries=${discoveries}\\b`),
 			);

@@ -1270,8 +1270,14 @@ static void mal_gc_trace_cell(MalHeapHeader *cell) {
                 measure = measure && g_gc->stats_enabled && g_gc->in_mark_step &&
                     !g_gc_verifying;
                 u32 slots = array->dense_count;
+                bool minor_trace = !g_gc->major_collection && !g_gc_verifying;
+                u32 scan_start = minor_trace && array->minor_scan_start <= slots
+                    ? array->minor_scan_start : 0;
                 u64 start_ns = measure ? mal_monotonic_now_ns() : 0;
-                mal_gc_mark_values(array->elements, (i32) array->dense_count);
+                mal_gc_mark_values(array->elements + scan_start, (i32) (slots - scan_start));
+                if (minor_trace) {
+                    array->minor_scan_start = slots <= MAL_ARRAY_MINOR_SCAN_MAX ? slots : 0;
+                }
                 if (measure) {
                     u64 elapsed = mal_monotonic_now_ns() - start_ns;
                     g_gc->major_array_trace_slots += slots;
@@ -2668,6 +2674,13 @@ static void mal_gc_weak_pass(void) {
 // saves over a full mark. The set is rebuilt every collection.
 
 void mal_gc_remember(MalHeapHeader *owner) {
+    if (owner->type == MAL_HEAP_ARRAY_OBJECT) {
+        ((MalArrayObject *) owner)->minor_scan_start = 0;
+    }
+    if (owner->dirty != MAL_REMEMBERED_CLEAN) {
+        owner->dirty = MAL_REMEMBERED_FULL;
+        return;
+    }
     if (g_gc->remembered_count == g_gc->remembered_capacity) {
         usize capacity = g_gc->remembered_capacity == 0 ? 256 : g_gc->remembered_capacity * 2;
         MalHeapHeader **remembered = realloc(g_gc->remembered,
@@ -2676,8 +2689,22 @@ void mal_gc_remember(MalHeapHeader *owner) {
         g_gc->remembered = remembered;
         g_gc->remembered_capacity = capacity;
     }
-    owner->dirty = 1;
+    owner->dirty = MAL_REMEMBERED_FULL;
     g_gc->remembered[g_gc->remembered_count++] = owner;
+}
+
+void mal_gc_array_card(MalHeapHeader *owner, u32 index, MalValue value) {
+    if (!mal_heap_mark_is_old(owner->mark) || owner->dirty == MAL_REMEMBERED_FULL ||
+        !mal_value_is_heap(value) || mal_heap_mark_is_old(mal_value_to_heap(value)->mark)) return;
+    MalArrayObject *array = (MalArrayObject *) owner;
+    u32 start = array->minor_scan_start;
+    if (index < start) start = index;
+    if (owner->dirty == MAL_REMEMBERED_CLEAN) {
+        mal_gc_remember(owner);
+        // A partial card remains upgradeable by an unindexed store in the same epoch.
+        owner->dirty = MAL_REMEMBERED_ARRAY_RANGE;
+    }
+    array->minor_scan_start = start;
 }
 
 // Clear the remembered set after a collection: drop the dirty flag on each member
@@ -2777,6 +2804,8 @@ static void mal_gc_collect_sync(MalVm *vm, bool major) {
         } else {
             for (usize i = 0; i < g_gc->remembered_count; ++i) {
                 MalHeapHeader *owner = g_gc->remembered[i];
+                u32 array_scan_start = owner->type == MAL_HEAP_ARRAY_OBJECT
+                    ? ((MalArrayObject *) owner)->minor_scan_start : 0;
                 usize grey_before = g_gc->grey_count;
                 mal_gc_trace_cell(owner);
                 u64 discoveries = g_gc->grey_count - grey_before;
@@ -2785,7 +2814,8 @@ static void mal_gc_collect_sync(MalVm *vm, bool major) {
                 if (owner->type == MAL_HEAP_ARRAY_OBJECT) {
                     MalArrayObject *array = (MalArrayObject *) owner;
                     u64 slots = mal_gc_remembered_object_slots(&array->object) +
-                        (array->elements == nullptr ? 0 : array->dense_count);
+                        (array->elements == nullptr ? 0 : array->dense_count -
+                            (array_scan_start <= array->dense_count ? array_scan_start : 0));
                     g_gc->minor_remembered_container_slots += slots;
                     g_gc->minor_remembered_array_owners++;
                     g_gc->minor_remembered_array_slots += slots;

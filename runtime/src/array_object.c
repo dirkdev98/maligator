@@ -55,6 +55,7 @@ void mal_array_object_init(MalHeap *heap, MalArrayObject *array, MalObject *prot
     array->elements = nullptr;
     array->capacity = 0;
     array->dense_count = 0;
+    array->minor_scan_start = 0;
     array->dense_deopted = false;
     array->dense_maybe_holey = false;
     array->dense_elements_writable = true;
@@ -216,7 +217,7 @@ bool mal_array_object_fresh_dense_append(MalArrayObject *array, MalValue value) 
     mal_array_object_perf_observe_value(array, value);
     array->dense_count = index + 1;
     array->length = index + 1;
-    mal_gc_card(&array->object.header, value); // old array -> young element
+    mal_gc_array_card(&array->object.header, index, value);
     mal_perf_collection_mutation(array, array->length);
     MAL_PERF_COUNT(array_fresh_dense_stores);
     return true;
@@ -237,7 +238,7 @@ void mal_array_object_fresh_dense_append_reserved(
     mal_array_object_perf_observe_value(array, value);
     array->dense_count = index + 1;
     array->length = index + 1;
-    mal_gc_card(&array->object.header, value);
+    mal_gc_array_card(&array->object.header, index, value);
     mal_perf_collection_mutation(array, array->length);
     MAL_PERF_COUNT(array_fresh_dense_stores);
 }
@@ -562,7 +563,7 @@ MalArrayDenseStore mal_array_object_dense_store(MalArrayObject *array, u32 index
         mal_gc_write_barrier(array->elements[index]);
         array->elements[index] = value;
         mal_array_object_perf_observe_value(array, value);
-        mal_gc_card(&array->object.header, value); // old array -> young element
+        mal_gc_array_card(&array->object.header, index, value);
         mal_perf_collection_mutation(array, array->length);
         return MAL_ARRAY_DENSE_APPLIED;
     }
@@ -585,7 +586,7 @@ MalArrayDenseStore mal_array_object_dense_store(MalArrayObject *array, u32 index
     array->elements[index] = value;
     mal_array_object_perf_observe_value(array, value);
     array->dense_count = index + 1;
-    mal_gc_card(&array->object.header, value); // old array -> young element
+    mal_gc_array_card(&array->object.header, index, value);
     mal_perf_collection_mutation(array, array->length > index ? array->length : index + 1);
     return MAL_ARRAY_DENSE_APPLIED;
 }

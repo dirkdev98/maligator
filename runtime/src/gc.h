@@ -162,13 +162,14 @@ static inline void mal_gc_write_barrier_env(struct MalEnv *env) {
  * fast path.
  */
 void mal_gc_remember(MalHeapHeader *owner);
+void mal_gc_array_card(MalHeapHeader *owner, u32 index, MalValue value);
 
 /* Remember `owner` if it is old and not already on the set. Used
  * for aggregate payloads (a generator frame, a promise's reaction list) where the
  * young target is not a single inspectable value — the minor collector traces the
  * whole cell, so unconditional remembering of an old owner is correct. */
 static inline void mal_gc_remember_if_old(MalHeapHeader *owner) {
-    if (owner != nullptr && mal_heap_mark_is_old(owner->mark) && !owner->dirty) {
+    if (owner != nullptr && mal_heap_mark_is_old(owner->mark) && owner->dirty != MAL_REMEMBERED_FULL) {
         mal_gc_remember(owner);
     }
 }
@@ -178,7 +179,7 @@ static inline void mal_gc_remember_if_old(MalHeapHeader *owner) {
  * case — a non-heap or already-old value never dirties the owner. Call AT or just
  * after the store of `new_value` into a pointer field of `owner`. */
 static inline void mal_gc_card(MalHeapHeader *owner, MalValue new_value) {
-    if (owner == nullptr || !mal_heap_mark_is_old(owner->mark) || owner->dirty) {
+    if (owner == nullptr || !mal_heap_mark_is_old(owner->mark) || owner->dirty == MAL_REMEMBERED_FULL) {
         return;
     }
     if (mal_value_is_heap(new_value) &&

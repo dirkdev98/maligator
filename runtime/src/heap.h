@@ -432,7 +432,7 @@ static inline bool mal_heap_mark_is_current(u8 mark, u8 color) {
  * 3 bytes (align 1) and any embedder's first pointer follows in the same 8-byte
  * word rather than after a 4-byte-enum-padded 12-byte header.
  *
- * The `dirty` byte records remembered-set membership:
+ * The `dirty` byte records full or dense-array-range remembered-set membership:
  * the generational write barrier sets it (and links the cell on the remembered
  * set) when an old cell is written with a
  * young pointer, so the minor collector traces that cell without re-marking the
@@ -441,6 +441,12 @@ static inline bool mal_heap_mark_is_current(u8 mark, u8 color) {
  * byte, leaving the rest of the word slack), so `dirty` grows neither the header
  * nor the cell and never shifts the free-list link.
  */
+typedef enum MalRememberedState : u8 {
+    MAL_REMEMBERED_CLEAN,
+    MAL_REMEMBERED_FULL,
+    MAL_REMEMBERED_ARRAY_RANGE,
+} MalRememberedState;
+
 typedef struct MalHeapHeader {
     MalHeapType type;
     MalHeapStorage storage;
@@ -449,7 +455,7 @@ typedef struct MalHeapHeader {
 #else
     _Atomic(u8) mark;
 #endif
-    u8 dirty;
+    MalRememberedState dirty;
 } MalHeapHeader;
 
 /**
