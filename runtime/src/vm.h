@@ -1421,6 +1421,8 @@ typedef struct MalExactScriptCall {
     i32 function_index;
     MalCompiledFunction compiled_callback;
     MalNumericSortComparator numeric_sort_comparator;
+    bool numeric_sort_leaf;
+    bool numeric_sort_leaf_active;
     const MalFunction *function;
     MalEnv *env;
 } MalExactScriptCall;

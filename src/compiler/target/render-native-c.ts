@@ -1578,7 +1578,7 @@ export function emitCompiledFunction(
 			stringConstants,
 		);
 		if (emitted === null) return [];
-		const worker = debug ? null : numericLeafWorker(fn, entry);
+		const worker = numericLeafWorker(fn, entry);
 		if (worker === null) return [{ entry, emitted, leaf: undefined }];
 		const parameters = entry.parameterRepresentations
 			.map((rep, i) => `${cTypeOf(rep)} p${i}`)
@@ -1589,7 +1589,7 @@ export function emitCompiledFunction(
 		const symbol = `${emitted.symbol}_leaf`;
 		const source = `static __attribute__((aligned(64))) f64 ${symbol}(${parameters.join(", ") || "void"}) {\n${worker.join("\n")}\n}\n${emitted.source.replace(
 			" {\n",
-			` {\n    if (mal_vm_leaf_unobserved(vm)) return ${symbol}(${args.join(", ")});\n`,
+			` {\n    if (mal_vm_leaf_unobserved(vm) || (vm->exact_script_call != nullptr && vm->exact_script_call->numeric_sort_leaf_active && vm->exact_script_call->callee == callee)) return ${symbol}(${args.join(", ")});\n`,
 		)}`;
 		return [{ entry, emitted: { ...emitted, source }, leaf: true as const }];
 	});
@@ -8164,7 +8164,7 @@ function emitInstruction(
 				) {
 					return [
 						`static MalCallCache __cc_${ip};`,
-						`MalCompletion ${tmp} = mal_builtin_sort_numeric(vm, &__cc_${ip}, ${numericCallback.operation === "toSorted" ? "true" : "false"}, ${numericCallback.viaCall ? "true" : "false"}, ${relocation.functionIndex(numericCallback.functionIndex)}, mal_direct_${numericCallback.functionIndex}_${numericCallback.entryId}${suffix}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
+						`MalCompletion ${tmp} = mal_builtin_sort_numeric(vm, &__cc_${ip}, ${numericCallback.operation === "toSorted" ? "true" : "false"}, ${numericCallback.viaCall ? "true" : "false"}, ${relocation.functionIndex(numericCallback.functionIndex)}, mal_direct_${numericCallback.functionIndex}_${numericCallback.entryId}${suffix}, ${entry.leaf ? "true" : "false"}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
 						`if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow()}`,
 						`r${instruction.dst} = ${callResult(`${tmp}.value`)};`,
 						poll,

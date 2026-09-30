@@ -15,6 +15,23 @@ const fixture = "tests/local/numeric-sort-callback.mjs";
 const expected = execFileSync(process.execPath, [fixture], { encoding: "utf8" }).trim();
 
 describe("numeric sort callback specialization through both emitters", () => {
+	it("preserves bounded numeric leaves and effectful fallbacks in production", () => {
+		const pair = buildBackendPairFromOneProgramImage({
+			fixture,
+			name: "numeric-sort-callback-production",
+			mainFile: HOST_MAIN,
+			outDir: mkdtempSync(join(tmpdir(), "mal-numeric-sort-production-")),
+			production: true,
+			config: resolveBuildConfig({ engine: { eval: false, realms: false } }),
+		});
+		for (const binary of [pair.compiled, pair.interpreted]) {
+			expect(runToStdout(binary).trim()).toBe(expected);
+			expect(runToStdout(binary, { env: STRESS_ENV, timeoutMs: 60_000 }).trim()).toBe(
+				expected,
+			);
+		}
+	}, 600_000);
+
 	it("preserves an overridden call property on the canonical sort builtin", () => {
 		const overrideFixture = "tests/local/numeric-sort-call-override.mjs";
 		const expectedOverride = execFileSync(process.execPath, [overrideFixture], {

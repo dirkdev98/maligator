@@ -28,6 +28,8 @@ function equal(a, b) {
 	return ((a - a) * 0) / (b - b);
 }
 console.log("stable", show(new Float64Array([-0, 0, NaN, 4, -2]).sort(equal)));
+console.log("stable-array", show([-0, 0, NaN, 4, -2].sort(equal)));
+console.log("stable-array-copy", show([-0, 0, NaN, 4, -2].toSorted(equal)));
 console.log(
 	"empty",
 	show(sortInput(new Float64Array())),
