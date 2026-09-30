@@ -846,27 +846,24 @@ bool mal_string_new_cons_checked(MalHeap *heap, MalString *left, MalString *righ
     }
 
     if (length <= MAL_STRING_INLINE_CODE_UNITS) {
-        MalStringSegment left_segment;
-        MalStringSegment right_segment;
-        if (mal_string_try_get_segment(left, 0, left->length, &left_segment) &&
-            left_segment.latin1 &&
-            mal_string_try_get_segment(right, 0, right->length, &right_segment) &&
-            right_segment.latin1) {
-            u8 units[MAL_STRING_INLINE_LATIN1_CODE_UNITS];
+        if (left->latin1 && right->latin1 &&
+            left->storage < MAL_STRING_STORAGE_DEPENDENT &&
+            right->storage < MAL_STRING_STORAGE_DEPENDENT) {
+            MalStringSegment left_segment = mal_string_leaf_segment(left, 0, left->length);
+            MalStringSegment right_segment = mal_string_leaf_segment(right, 0, right->length);
+            u8 units[MAL_STRING_INLINE_CODE_UNITS];
             memcpy(units, left_segment.latin1_units, left->length);
             memcpy(units + left->length, right_segment.latin1_units, right->length);
             MAL_PERF_COUNT(string_inline_concat_results);
             *out = mal_string_new_latin1_copy(heap, units, length);
             return true;
         }
-        c16 units[MAL_STRING_INLINE_LATIN1_CODE_UNITS];
+        c16 units[MAL_STRING_INLINE_CODE_UNITS];
         mal_string_copy_range_to(left, 0, left->length, units);
         mal_string_copy_range_to(right, 0, right->length, units + left->length);
-        if (length <= MAL_STRING_INLINE_CODE_UNITS || mal_string_units_are_latin1(units, length)) {
-            MAL_PERF_COUNT(string_inline_concat_results);
-            *out = mal_string_new_copy(heap, units, length);
-            return true;
-        }
+        MAL_PERF_COUNT(string_inline_concat_results);
+        *out = mal_string_new_copy(heap, units, length);
+        return true;
     }
 
     MalString *string = mal_string_join(heap, left, right);
