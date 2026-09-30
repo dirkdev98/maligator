@@ -3515,7 +3515,8 @@ done:
  * elements and holes up front. A NaN comparator result counts as equal.
  */
 static bool mal_builtin_array_sort_order(MalVm *vm, MalValue comparator, MalValue left, MalValue right, f64 *order_out) {
-    if (mal_value_is_callable(comparator)) {
+    // Both sort entry points validate the comparator once before collecting elements.
+    if (!mal_value_is_undefined(comparator)) {
         MalNumericSortComparison direct = mal_vm_try_numeric_sort_comparison(
             vm, comparator, left, right, order_out);
         if (direct != MAL_NUMERIC_SORT_FALLBACK) return direct == MAL_NUMERIC_SORT_COMPLETE;

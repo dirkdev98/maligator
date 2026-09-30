@@ -1249,7 +1249,10 @@ static inline __attribute__((always_inline)) bool mal_vm_try_load_known_own_slot
 ) {
     MAL_PERF_COUNT(known_own_slot_load_probes);
     MalObject *object = mal_vm_as_object(receiver);
-    if (object != nullptr && mal_vm_object_try_load_static(object, ic, out)) {
+    if (object != nullptr && ic->mode == MAL_IC_MODE_SHAPE &&
+        object->shape == ic->shape && ic->slot != MAL_IC_VALUE_SLOT) {
+        *out = mal_object_field_load_token(object, ic->field);
+        mal_perf_ic_load_mono_hit();
         MAL_PERF_COUNT(known_own_slot_load_hits);
         return true;
     }

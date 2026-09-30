@@ -5285,6 +5285,10 @@ bool mal_vm_load_known_own_slot_miss(
     i32 candidate_count, const i32 *candidates, MalValue *out
 ) {
     if (object != nullptr) {
+        if (mal_vm_object_try_load_static(object, ic, out)) {
+            MAL_PERF_COUNT(known_own_slot_load_hits);
+            return true;
+        }
         for (i32 index = 0; index < candidate_count; index++) {
             i32 shape_function_index = candidates[index * 3];
             i32 shape_cache_index = candidates[index * 3 + 1];
