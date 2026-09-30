@@ -857,6 +857,11 @@ static bool mal_json_build_property_list(MalJsonState *state, MalValue replacer)
     return true;
 }
 
+typedef struct MalJsonEscapedKey {
+    usize offset;
+    usize length;
+} MalJsonEscapedKey;
+
 typedef struct MalJsonKeyPlan {
     u16 field;
     MalString *key;
@@ -890,6 +895,8 @@ typedef struct MalJsonPlainState {
     MalVm *vm;
     MalKey to_json;
     MalJsonPointerMap shapes;
+    MalJsonPointerMap keys;
+    MalTextBuffer shared_escaped_keys;
     MalJsonPointerMap prototypes;
     MalJsonPointerMap active;
     MalJsonFrame *frames;
@@ -993,10 +1000,100 @@ static bool mal_json_plain_shape(
     return true;
 }
 
+__attribute__((noinline))
+static bool mal_json_plain_shared_key(
+    MalJsonPlainState *state, MalJsonBuilder *builder,
+    MalJsonKeyPlan *key
+) {
+    bool cache = state->shapes.count > 1;
+    MalJsonPointerEntry *cached = cache ? mal_json_pointer_find(&state->keys, key->key) : nullptr;
+    MalJsonEscapedKey *escaped = cached == nullptr ? nullptr : cached->value;
+    if (escaped != nullptr) {
+        MAL_PERF_COUNT(json_escaped_key_reuses);
+        MalTextBuffer *keys = &state->shared_escaped_keys;
+        MalTextBufferStatus status = keys->utf16
+            ? mal_text_buffer_append_units(
+                &builder->buffer, (const c16 *) keys->data + escaped->offset, escaped->length)
+            : mal_text_buffer_append_latin1(
+                &builder->buffer, (const u8 *) keys->data + escaped->offset, escaped->length);
+        return status == MAL_TEXT_BUFFER_OK || mal_json_throw_string_length(builder->vm);
+    }
+
+    // Quote once into final output. Only retain its encoded range when the
+    // exact buffer capacity, including a possible width promotion, fits.
+    usize start = builder->buffer.length;
+    if (!mal_json_builder_push_quoted(builder, key->key) ||
+        !mal_json_builder_push(builder, ':')) return false;
+    if (!cache) return true;
+    if (cached == nullptr) {
+        if (state->keys.count == MAL_JSON_PLAN_ENTRY_LIMIT) return true;
+        usize capacity = state->keys.capacity;
+        if (state->keys.used >= capacity - capacity / 4) capacity = capacity == 0 ? 16 : capacity * 2;
+        usize extra = (capacity - state->keys.capacity) * sizeof(MalJsonPointerEntry);
+        if (extra > MAL_JSON_PLAN_DATA_BUDGET - state->cache_data_bytes) return true;
+        mal_json_pointer_insert(&state->keys, key->key, nullptr);
+        state->cache_data_bytes += extra;
+        return true;
+    }
+    usize length = builder->buffer.length - start;
+    MalTextBuffer *keys = &state->shared_escaped_keys;
+    usize required;
+    usize capacity = keys->capacity;
+    if (!mal_checked_size_add(
+            keys->length, length, MAL_STRING_MAX_CODE_UNITS, &required)) {
+        return true;
+    }
+    if (capacity == 0) {
+        MalTextBuffer hint = {0};
+        mal_text_buffer_hint_capacity(&hint, required);
+        capacity = hint.capacity;
+    } else if (!mal_checked_size_growth(
+            capacity, required, capacity, MAL_STRING_MAX_CODE_UNITS, &capacity)) {
+        return true;
+    }
+    usize old_bytes = keys->capacity * (keys->utf16 ? sizeof(c16) : sizeof(u8));
+    usize available = MAL_JSON_PLAN_DATA_BUDGET - state->cache_data_bytes;
+    if (available < sizeof(MalJsonEscapedKey)) return true;
+    available = available - sizeof(MalJsonEscapedKey) + old_bytes;
+    if (capacity > available) {
+        return true;
+    }
+    bool utf16 = keys->utf16;
+    if (!utf16 && builder->buffer.utf16) {
+        const c16 *units = (const c16 *) builder->buffer.data + start;
+        for (usize i = 0; i < length; i++) {
+            if (units[i] > UINT8_MAX) {
+                utf16 = true;
+                break;
+            }
+        }
+    }
+    if (capacity > available / (utf16 ? sizeof(c16) : sizeof(u8))) {
+        return true;
+    }
+    if (keys->capacity == 0) mal_text_buffer_hint_capacity(keys, required);
+    MalTextBufferStatus status = builder->buffer.utf16
+        ? mal_text_buffer_append_units(
+            keys, (const c16 *) builder->buffer.data + start, length)
+        : mal_text_buffer_append_latin1(
+            keys, (const u8 *) builder->buffer.data + start, length);
+    if (status != MAL_TEXT_BUFFER_OK) return mal_json_throw_string_length(builder->vm);
+    state->cache_data_bytes +=
+        keys->capacity * (keys->utf16 ? sizeof(c16) : sizeof(u8)) - old_bytes;
+    escaped = malloc(sizeof(*escaped));
+    if (escaped == nullptr) abort();
+    *escaped = (MalJsonEscapedKey) {.offset = required - length, .length = length};
+    cached->value = escaped;
+    state->cache_data_bytes += sizeof(*escaped);
+    MAL_PERF_ADD(json_escaped_key_code_units, length);
+    return true;
+}
+
 static bool mal_json_plain_key(
     MalJsonPlainState *state, MalJsonBuilder *builder,
     MalJsonShapePlan *plan, MalJsonKeyPlan *key
 ) {
+    if (plan == nullptr) return mal_json_plain_shared_key(state, builder, key);
     if (key->length != 0) {
         MAL_PERF_COUNT(json_escaped_key_reuses);
         MalTextBuffer *keys = &plan->escaped_keys.buffer;
@@ -1013,7 +1110,7 @@ static bool mal_json_plain_key(
     usize start = builder->buffer.length;
     if (!mal_json_builder_push_quoted(builder, key->key) ||
         !mal_json_builder_push(builder, ':')) return false;
-    if (plan == nullptr || key->offset == SIZE_MAX) return true;
+    if (key->offset == SIZE_MAX) return true;
     usize length = builder->buffer.length - start;
     MalTextBuffer *keys = &plan->escaped_keys.buffer;
     usize required;
@@ -1098,8 +1195,13 @@ static void mal_json_plain_dispose(MalJsonPlainState *state) {
             free(plan);
         }
     }
+    for (usize i = 0; i < state->keys.capacity; i++) free(state->keys.entries[i].value);
+    MAL_PERF_ADD(json_escaped_key_capacity_bytes,
+        state->shared_escaped_keys.capacity * (state->shared_escaped_keys.utf16 ? 2 : 1));
+    mal_text_buffer_dispose(&state->shared_escaped_keys);
+    free(state->keys.entries);
     MAL_PERF_ADD(json_plan_table_bytes,
-        (state->shapes.capacity + state->prototypes.capacity) * sizeof(MalJsonPointerEntry));
+        (state->shapes.capacity + state->prototypes.capacity + state->keys.capacity) * sizeof(MalJsonPointerEntry));
     free(state->shapes.entries);
     free(state->prototypes.entries);
     free(state->active.entries);

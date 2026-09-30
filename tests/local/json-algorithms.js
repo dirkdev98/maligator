@@ -336,6 +336,29 @@ check(
 	JSON.stringify(diverse) === "[" + diverseExpected.join(",") + "]",
 	"uncached eligible shapes preserve ignored and omitted property semantics",
 );
+const sharedKeyRows = [];
+const sharedKeyExpected = [];
+for (let i = 0; i < 300; i++) {
+	const row = {};
+	row['shared"\t'] = i;
+	row["unique-" + i] = i + 1;
+	if (i >= 3) row["Ā\ud800key"] = i + 2;
+	sharedKeyRows.push(row);
+	sharedKeyExpected.push(
+		'{"shared\\"\\t":' +
+			i +
+			',"unique-' +
+			i +
+			'":' +
+			(i + 1) +
+			(i >= 3 ? ',"Ā\\ud800key":' + (i + 2) : "") +
+			"}",
+	);
+}
+check(
+	JSON.stringify(sharedKeyRows) === "[" + sharedKeyExpected.join(",") + "]",
+	"escaped keys shared across unique shapes survive width promotion and cache exhaustion",
+);
 const wideKey = "Ā".repeat(40000);
 const hugeKeyObject = {};
 hugeKeyObject[wideKey] = 1;

@@ -52,6 +52,19 @@
 			"sourceSeam": "runtime/src/utf8.c",
 			"fixture": "cases/utf8-decode-utf16-32768.mjs",
 			"controls": ["utf8-decode-boundary", "utf8-decode"]
+		},
+		{
+			"id": "json-unique-serialize",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "guarded plain JSON serialization",
+			"category": "api-builtins",
+			"mechanisms": ["json-serialization", "shape-diversity", "key-escaping"],
+			"inputShape": "1024 prepared records with one shared and one unique key; consume serialized length and endpoints without traversing the full output",
+			"unit": "serialization batches",
+			"sourceSeam": "runtime/src/builtin_json.c",
+			"fixture": "cases/json-unique-serialize.mjs",
+			"controls": ["json-unique-shapes", "json-stringify", "json-late-fallback"]
 		}
 	]
 }
