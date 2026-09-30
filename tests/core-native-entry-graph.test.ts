@@ -324,6 +324,31 @@ describe("connected native entry contracts", () => {
 		);
 	});
 
+	it.each(["exact-cell-value-kinds", "captured-callback-inlining"])(
+		"charges boxed-input scalar result proofs as discovery for %s",
+		(fixture) => {
+			let resultOnlyEntries = 0;
+			compileEntrypoint(resolve(`tests/local/${fixture}.js`), {
+				buildConfig: resolveBuildConfig({
+					engine: { eval: false, realms: false, primordials: "locked" },
+				}),
+				coreVerification: "per-pass",
+				afterCoreOptimization(_program, _context, _report, plan) {
+					for (const entry of plan.directEntries) {
+						if (
+							entry.parameterRepresentations.every((value) => value === "boxed") &&
+							entry.resultRepresentation !== "boxed"
+						) {
+							expect(entry.cost.compilerWork).toBe(0);
+							resultOnlyEntries++;
+						}
+					}
+				},
+			});
+			expect(resultOnlyEntries).toBeGreaterThan(0);
+		},
+	);
+
 	it("converges through a long call chain and keeps denied targets generic", () => {
 		const targets = Array.from({ length: 80 }, (_, index) =>
 			index === 79 ? undefined : index + 1,

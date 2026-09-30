@@ -156,7 +156,11 @@ export function connectCoreNativeEntries(
 				...variant,
 				target: "native",
 				fallback: "canonical-core",
-				cost: Object.freeze({ generatedCode, compilerWork, runtimeBenefit: 8 }),
+				cost: Object.freeze({
+					generatedCode,
+					compilerWork: resultOnly ? 0 : compilerWork,
+					runtimeBenefit: 8,
+				}),
 			}),
 		);
 	};
