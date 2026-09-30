@@ -15,6 +15,9 @@ f64 mal_ops_to_number(MalValue value);
 /** StringToNumber over an already selected UTF-16 span. */
 MalValue mal_ops_string_units_to_number(const c16 *code_units, usize length);
 
+/** StringToNumber over an in-bounds range without changing the string's storage. */
+MalValue mal_ops_string_range_to_number(MalString *string, usize offset, usize length);
+
 #define MAL_NUMBER_MAX_SAFE_INTEGER 9007199254740991.0
 #define MAL_NUMBER_MIN_SAFE_INTEGER (-MAL_NUMBER_MAX_SAFE_INTEGER)
 

@@ -7527,7 +7527,7 @@ function emitInstruction(
 								: `__regexp_exec_${exec.site.projection.callIp}`;
 						const start = `${prefix}_starts[${slot}]`,
 							end = `${prefix}_ends[${slot}]`;
-						const parsed = `mal_ops_string_units_to_number(mal_string_code_units(mal_value_to_string(__gc_slots[${action.site.subjectSlot}])) + ${start}, (usize) (${end} - ${start}))`;
+						const parsed = `mal_ops_string_range_to_number(mal_value_to_string(__gc_slots[${action.site.subjectSlot}]), (usize) ${start}, (usize) (${end} - ${start}))`;
 						return [
 							`if (${prefix}_projected) {`,
 							`  r${instruction.dst} = ${start} < 0 ? ${reps[instruction.dst] === "number" ? "NAN" : "mal_value_new_nan()"} : ${reps[instruction.dst] === "number" ? `mal_ops_number_as_f64(${parsed})` : parsed};`,
@@ -7925,7 +7925,7 @@ function emitInstruction(
 				if (slot >= 0) {
 					const start = `__regexp_iter_${site.projection.stepIp}_starts[${slot}]`;
 					const end = `__regexp_iter_${site.projection.stepIp}_ends[${slot}]`;
-					const parsed = `mal_ops_string_units_to_number(mal_string_code_units(mal_value_to_string(__gc_slots[${site.subjectSlot}])) + ${start}, (usize) (${end} - ${start}))`;
+					const parsed = `mal_ops_string_range_to_number(mal_value_to_string(__gc_slots[${site.subjectSlot}]), (usize) ${start}, (usize) (${end} - ${start}))`;
 					const direct =
 						reps[instruction.dst] === "number"
 							? `mal_ops_number_as_f64(${parsed})`
@@ -7949,7 +7949,7 @@ function emitInstruction(
 				if (slot >= 0) {
 					const start = `__regexp_exec_${site.projection.callIp}_starts[${slot}]`;
 					const end = `__regexp_exec_${site.projection.callIp}_ends[${slot}]`;
-					const parsed = `mal_ops_string_units_to_number(mal_string_code_units(mal_value_to_string(__gc_slots[${site.subjectSlot}])) + ${start}, (usize) (${end} - ${start}))`;
+					const parsed = `mal_ops_string_range_to_number(mal_value_to_string(__gc_slots[${site.subjectSlot}]), (usize) ${start}, (usize) (${end} - ${start}))`;
 					const direct =
 						reps[instruction.dst] === "number"
 							? `mal_ops_number_as_f64(${parsed})`

@@ -200,11 +200,31 @@ done:
     return result;
 }
 
-static MalValue mal_ops_string_to_number(MalValue value) {
-    MalString *string = mal_value_to_string(value);
-    MalStringIterator iterator;
+MalValue mal_ops_string_range_to_number(MalString *string, usize offset, usize count) {
     MalStringSegment segment;
-    mal_string_iterator_init(&iterator, string, 0, mal_string_length(string));
+    if (mal_string_try_get_segment(string, offset, count, &segment)) {
+        if (!segment.latin1) {
+            return mal_ops_string_units_to_number(segment.utf16_units, count);
+        }
+        usize start = 0;
+        usize end = count;
+        while (start < end && mal_ecma_is_string_whitespace(segment.latin1_units[start])) start++;
+        while (end > start && mal_ecma_is_string_whitespace(segment.latin1_units[end - 1])) end--;
+        usize length = end - start;
+        u8 aggregate = 0;
+        for (usize i = start; i < end; i++) aggregate |= segment.latin1_units[i];
+        if (aggregate > 0x7f) return mal_value_new_nan();
+        byte stack_bytes[64];
+        byte *bytes = length < sizeof(stack_bytes) ? stack_bytes : malloc(length + 1);
+        if (bytes == nullptr) abort();
+        memcpy(bytes, segment.latin1_units + start, length);
+        bytes[length] = '\0';
+        MalValue result = mal_ops_ascii_to_number(bytes, length);
+        if (bytes != stack_bytes) free(bytes);
+        return result;
+    }
+    MalStringIterator iterator;
+    mal_string_iterator_init(&iterator, string, offset, count);
     byte stack_bytes[64];
     byte *bytes = stack_bytes;
     usize capacity = sizeof(stack_bytes);
@@ -237,6 +257,11 @@ done:
     mal_string_iterator_dispose(&iterator);
     if (bytes != stack_bytes) free(bytes);
     return result;
+}
+
+static MalValue mal_ops_string_to_number(MalValue value) {
+    MalString *string = mal_value_to_string(value);
+    return mal_ops_string_range_to_number(string, 0, string->length);
 }
 
 MalString *mal_ops_to_string(MalHeap *heap, MalValue value) {

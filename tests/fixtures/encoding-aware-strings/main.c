@@ -8,6 +8,7 @@
 #include "object_ops.h"
 #include "text_buffer.h"
 #include "value.h"
+#include "value_ops.h"
 #include "vm.h"
 
 extern const MalRuntimeImage mal_runtime_image;
@@ -80,6 +81,54 @@ static bool inline_capacity_and_eight_unit_cache(MalVm *vm) {
     CHECK(wide->storage == MAL_STRING_STORAGE_OWNED && !wide->latin1);
     for (usize i = 0; i < 17; i++) CHECK(mal_string_code_unit_at(compact, i) == latin1[i]);
     for (usize i = 0; i < 9; i++) CHECK(mal_string_code_unit_at(wide, i) == utf16[i]);
+    return true;
+}
+
+static bool numeric_ranges_preserve_storage(MalVm *vm) {
+    const struct {
+        const c16 *units;
+        usize length;
+        f64 expected;
+    } cases[] = {
+        {u"\u00a0-0\u00a0", 4, -0.0},
+        {u"9007199254740993", 16, 9007199254740992.0},
+        {u"1e400", 5, INFINITY},
+        {u"-Infinity", 9, -INFINITY},
+        {u"0x1f", 4, 31},
+        {u"0o71", 4, 57},
+        {u"0b101", 5, 5},
+        {u"-0x1f", 5, NAN},
+        {u"1\0" u"2", 3, NAN},
+        {u"1 2", 3, NAN},
+        {u"\u00e9", 1, NAN},
+        {u"\u2028 3.5\u2029", 6, 3.5},
+        {u"\u00a0\u00a0", 2, 0},
+        {u"", 0, 0},
+    };
+    for (usize i = 0; i < countof(cases); i++) {
+        c16 units[48];
+        usize length = 32 + cases[i].length;
+        for (usize j = 0; j < length; j++) units[j] = 'x';
+        memcpy(units + 16, cases[i].units, cases[i].length * sizeof(c16));
+        MalString *flat = mal_string_new_copy(&vm->heap, units, length);
+        MalString *wide = mal_string_new_external(&vm->heap, units, length);
+        usize cut = 16 + cases[i].length / 2;
+        MalString *left = mal_string_new_copy(&vm->heap, units, cut);
+        MalString *right = mal_string_new_copy(&vm->heap, units + cut, length - cut);
+        MalString *rope;
+        CHECK(mal_string_new_cons_checked(&vm->heap, left, right, &rope));
+        MalString *strings[] = {flat, wide, rope};
+        for (usize j = 0; j < countof(strings); j++) {
+            MalString *string = strings[j];
+            MalStringStorage storage = string->storage;
+            bool latin1 = string->latin1;
+            f64 actual = mal_ops_number_as_f64(
+                mal_ops_string_range_to_number(string, 16, cases[i].length));
+            CHECK(isnan(cases[i].expected) ? isnan(actual) : actual == cases[i].expected);
+            if (actual == 0) CHECK(signbit(actual) == signbit(cases[i].expected));
+            CHECK(string->storage == storage && string->latin1 == latin1);
+        }
+    }
     return true;
 }
 
@@ -470,6 +519,7 @@ int main(void) {
     mal_vm_init(&vm, &mal_runtime_image);
     bool passed = physical_encodings_have_equal_content(&vm)
         && inline_capacity_and_eight_unit_cache(&vm)
+        && numeric_ranges_preserve_storage(&vm)
         && short_concatenations_preserve_code_units(&vm)
         && ropes_stream_and_cross_leaf_slices_copy(&vm)
         && direct_search_accepts_rope_receivers(&vm)
