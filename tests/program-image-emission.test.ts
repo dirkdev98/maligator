@@ -4699,7 +4699,7 @@ describe("native update-expression representation", () => {
 			globalThis.parse = parse;
 		`);
 		expect(output).toContain("mal_regexp_exec_capture_projection(vm,");
-		expect(output).toContain("mal_ops_string_units_to_number(");
+		expect(output).toContain("mal_ops_string_range_to_number(");
 	});
 
 	it("keeps RegExp exec results materialized when identity escapes", () => {
@@ -4749,7 +4749,7 @@ describe("native update-expression representation", () => {
 			globalThis.total = total;
 		`);
 		expect(output).toContain("mal_regexp_try_exact_iterator_capture_projection(vm,");
-		expect(output).toContain("mal_ops_string_units_to_number(");
+		expect(output).toContain("mal_ops_string_range_to_number(");
 		expect(output).toContain("mal_vm_iterator_step_fast(vm,");
 	});
 

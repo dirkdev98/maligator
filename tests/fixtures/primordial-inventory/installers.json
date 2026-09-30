@@ -1,11 +1,11 @@
 [
 	{
 		"file": "array_object.c",
-		"sha256": "307b43a0761e378e8089235b7719bbca7db446ac3ba90603a7b9f4e3e40e2994"
+		"sha256": "c4a60da51816f47b02152912502c773895123a745c3fed704c9519f0ca986ada"
 	},
 	{
 		"file": "builtin_array.c",
-		"sha256": "cb036598f7689fa77575b7ab05859c7a13f5d0fd5c5e03ce53883cae4d9d5f44"
+		"sha256": "926faf2839d51cdc3b23752ee6c7e23dd38902484ad2eef9347f0ac386723d1d"
 	},
 	{
 		"file": "builtin_array_buffer.c",
@@ -77,7 +77,7 @@
 	},
 	{
 		"file": "builtin_json.c",
-		"sha256": "18d16ac02c9a9961d45190f0734855775eca4db5a65f633aa23b535b15bed000"
+		"sha256": "0707babbab54e0297be507548a513b6856e5e79778cb49dea96424c74cdaf421"
 	},
 	{
 		"file": "builtin_map.c",
@@ -125,7 +125,7 @@
 	},
 	{
 		"file": "builtin_string.c",
-		"sha256": "a5ac80a7253342a770c2e7b295123f230896598e7d4d0fe57e89eb11b1c71fb7"
+		"sha256": "cd4617e7b025ff04b86f2ef9a4a9e1475904db3728c501e5922fe886069f3b5e"
 	},
 	{
 		"file": "builtin_symbol.c",
@@ -685,14 +685,14 @@
 	},
 	{
 		"file": "vm.h",
-		"sha256": "5222294b709dcc0ca05ccdfa47854055b695ed115fcdf4362d96b5719f79b8ec"
+		"sha256": "dc9a7c7189f996def31cbf7d287a087d2efdcd74df639b7871f5790808cdbcfc"
 	},
 	{
 		"file": "vm_ops.c",
-		"sha256": "5228b08454424a65ed71bc4081407ad0b1264e82ea7d23f65d55262f277908f8"
+		"sha256": "e450254bc35f87daffbf092f8f575a0f6ec8a60e24f0ce01e665ad185300ca03"
 	},
 	{
 		"file": "vm_ops.h",
-		"sha256": "636796a20663df7c1d50ed4f33aec34f9b96120c68f75d700447c89930746803"
+		"sha256": "87893ecc1adfccb41971763dc6d719d4b50da0a2f34140ba47e6b92f4b626203"
 	}
 ]
