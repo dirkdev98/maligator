@@ -162,12 +162,49 @@ static bool adopted_utf8_storage_matches_output(MalVm *vm) {
     return true;
 }
 
+static bool encoded_storage_trims_to_the_allocator_size_class(MalVm *vm) {
+    usize length = 65536;
+    c16 *units = malloc(length * sizeof(c16));
+    CHECK(units != nullptr);
+    for (usize pattern = 0; pattern < 3; pattern++) {
+        for (usize i = 0; i < length; i++) {
+            units[i] = pattern == 0 ? (i % 64 == 0 ? 0xe9 : 'a')
+                : pattern == 1 ? 0x100 : (i % 2 == 0 ? 0xd83d : 0xde00);
+        }
+        usize expected_length;
+        byte *expected = mal_utf8_encode(units, length, &expected_length);
+        CHECK(expected != nullptr);
+        MalString *string = mal_string_new_copy(&vm->heap, units, length);
+        usize written;
+        byte *encoded = mal_node_buffer_decode_string(vm,
+            mal_value_from_string(string), MAL_VALUE_UNDEFINED, &written);
+        CHECK(encoded != nullptr && written == expected_length);
+        CHECK(memcmp(encoded, expected, written) == 0);
+        byte *exact = malloc(written);
+        CHECK(exact != nullptr);
+#if defined(__APPLE__)
+        CHECK(malloc_size(encoded) <= malloc_size(exact));
+#elif defined(__GLIBC__)
+        CHECK(malloc_usable_size(encoded) <= malloc_usable_size(exact));
+#endif
+        free(exact);
+        free(expected);
+        MalValue buffer = mal_node_buffer_from_owned_bytes(vm, encoded, written);
+        CHECK(vm->completion.kind != MAL_COMPLETION_THROW && mal_value_is_typed_array_object(buffer));
+        CHECK(mal_value_to_typed_array_object(buffer)->buffer->allocation_capacity == written);
+        mal_gc_collect(vm);
+    }
+    free(units);
+    return true;
+}
+
 int main(void) {
     MalVm vm;
     mal_vm_init(&vm, &mal_runtime_image);
     bool passed = compact_decode_preserves_code_units_and_failures(&vm)
         && buffer_limit_counts_decoded_units(&vm)
-        && adopted_utf8_storage_matches_output(&vm);
+        && adopted_utf8_storage_matches_output(&vm)
+        && encoded_storage_trims_to_the_allocator_size_class(&vm);
     mal_vm_free(&vm);
     if (!passed) return 1;
     puts("utf8-string-storage PASS");

@@ -361,7 +361,7 @@ MalString *mal_string_from_utf8_report(
         usize width = cp > 0xFFFF ? 2 : 1;
         if (cp > UINT8_MAX && !buffer.utf16) {
             mal_text_buffer_reserve_utf16(&buffer, width);
-        } else if (width > buffer.capacity - buffer.length) {
+        } else if (buffer.data == nullptr || width > buffer.capacity - buffer.length) {
             mal_text_buffer_reserve(&buffer, width);
         }
         if (buffer.status != MAL_TEXT_BUFFER_OK) break;

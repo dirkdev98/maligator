@@ -12,6 +12,7 @@
 #include "base64.h"
 #include "builtin_bigint.h"
 #include "builtin_data_view.h"
+#include "checked_size.h"
 #include "function_object.h"
 #include "gc.h"
 #include "heap_string.h"
@@ -215,11 +216,22 @@ static byte *mal_buffer_encode_string(
     const MalString *string, MalBufferEncoding encoding, usize *length_out
 ) {
     if (encoding == MAL_BUFFER_UTF8) {
-        usize capacity = mal_string_utf8_length(string);
-        byte *bytes = malloc(capacity == 0 ? 1 : capacity);
+        usize capacity;
         *length_out = 0;
+        if (!mal_checked_size_multiply(mal_string_length(string),
+                string->latin1 ? 2 : 3, SIZE_MAX, &capacity)) return nullptr;
+        byte *bytes = malloc(capacity == 0 ? 1 : capacity);
         if (bytes != nullptr) {
             mal_string_utf8_encode_into(string, bytes, capacity, nullptr, length_out);
+            if (*length_out != capacity) {
+                byte *trimmed = realloc(bytes, *length_out == 0 ? 1 : *length_out);
+                if (trimmed == nullptr) {
+                    free(bytes);
+                    *length_out = 0;
+                    return nullptr;
+                }
+                bytes = trimmed;
+            }
         }
         return bytes;
     }

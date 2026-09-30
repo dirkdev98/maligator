@@ -377,7 +377,7 @@
 	},
 	{
 		"file": "runtime/node_buffer.c",
-		"sha256": "2dfe0c5250f246a2855518a49ee9a306fa74480ea541aac33dd5885e576afd36"
+		"sha256": "dbdd67ff441d516b538f2ccaba8cb2f2a86283e6c93f1ef06da7c1a7de31d438"
 	},
 	{
 		"file": "runtime/node_buffer.h",

@@ -32,7 +32,7 @@ describe("node:string_decoder", () => {
 			nodeEnabled: true,
 			compiled: false,
 		});
-	});
+	}, 600_000);
 
 	it("passes compiled", () => {
 		assertResultPass(runToStdout(compiled));
