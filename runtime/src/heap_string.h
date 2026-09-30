@@ -99,8 +99,8 @@ MalString *mal_string_new_slice(MalHeap *heap, MalString *parent, usize offset, 
 
 /**
  * Allocate a weight-balanced lazy concatenation after checking its combined
- * UTF-16 length. Cons children occupy at most three quarters of their parent,
- * except a short cons of two non-cons children, which adds one terminal height edge.
+ * UTF-16 length. Above 32 units, cons children occupy at most three quarters
+ * of their parent; smaller subtrees can add at most 31 terminal height edges.
  * Returns false without allocating when the engine string limit would be exceeded.
  */
 bool mal_string_new_cons_checked(MalHeap *heap, MalString *left, MalString *right, MalString **out);
