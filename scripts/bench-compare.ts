@@ -268,11 +268,6 @@ function exportBase(
 		cwd: repository,
 		deadline,
 	});
-	if (currentLock !== baseLock) {
-		throw new Error(
-			"base and head package-lock.json differ; installable dependency identity is not comparable",
-		);
-	}
 	const archive = path.join(destination, "base.tar");
 	const descriptor = openSync(archive, "w");
 	try {
@@ -295,7 +290,9 @@ function exportBase(
 	const base = path.join(destination, "base");
 	mkdirSync(base, { recursive: true });
 	command("tar", ["-xf", archive, "-C", base], { deadline });
-	if (existsSync(path.join(repository, "node_modules"))) {
+	if (currentLock !== baseLock) {
+		command("npm", ["ci", "--no-audit", "--no-fund"], { cwd: base, deadline });
+	} else if (existsSync(path.join(repository, "node_modules"))) {
 		symlinkSync(
 			path.join(repository, "node_modules"),
 			path.join(base, "node_modules"),
@@ -335,6 +332,7 @@ export function selfCompileStages(runs: number): Array<string> {
 
 interface ComparisonIdentity {
 	baseCommit: string;
+	dependencyLocks: { base: string; head: string };
 	headCommit: string;
 	headDigest: string;
 	lanes: Array<string>;
@@ -578,10 +576,23 @@ export async function runBenchmarkComparison(options: ComparisonOptions): Promis
 			: started + options.budgetSeconds * 1000;
 	const repository = path.resolve(options.repository ?? process.cwd());
 	const head = performanceSourceIdentity(repository);
+	const baseCommit = command("git", ["rev-parse", options.baseRef], {
+		cwd: repository,
+	}).trim();
 	const identity: ComparisonIdentity = {
-		baseCommit: command("git", ["rev-parse", options.baseRef], {
-			cwd: repository,
-		}).trim(),
+		baseCommit,
+		dependencyLocks: {
+			base: createHash("sha256")
+				.update(
+					command("git", ["show", `${baseCommit}:package-lock.json`], {
+						cwd: repository,
+					}),
+				)
+				.digest("hex"),
+			head: createHash("sha256")
+				.update(readFileSync(path.join(repository, "package-lock.json")))
+				.digest("hex"),
+		},
 		headCommit: head.commit,
 		headDigest: head.digest,
 		lanes: options.lanes,

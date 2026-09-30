@@ -192,6 +192,73 @@ test("a workload mismatch is retained as failed evidence rather than a speedup",
 	expect(result.metrics).toEqual([]);
 });
 
+test("historical comparisons install each revision's locked dependencies", async () => {
+	const fixture = comparisonFixture();
+	const repository = fixture.repository;
+	const vendor = path.join(repository, "vendor");
+	mkdirSync(vendor);
+	writeFileSync(
+		path.join(repository, "package.json"),
+		JSON.stringify({ dependencies: { "fixture-dependency": "file:vendor" } }),
+	);
+	const runner = path.join(repository, "scripts/bench.ts");
+	writeFileSync(
+		runner,
+		readFileSync(runner, "utf8").replace(
+			'const base = label.endsWith("base");',
+			`const base = label.endsWith("base");
+const dependency = JSON.parse(readFileSync("node_modules/fixture-dependency/package.json", "utf8"));
+if (dependency.version !== (base ? "1.0.0" : "2.0.0")) throw new Error("wrong revision dependency");`,
+		),
+	);
+	const install = (version: string) => {
+		writeFileSync(
+			path.join(vendor, "package.json"),
+			JSON.stringify({ name: "fixture-dependency", version }),
+		);
+		writeFileSync(
+			path.join(repository, "package-lock.json"),
+			JSON.stringify({
+				lockfileVersion: 3,
+				packages: {
+					"": { dependencies: { "fixture-dependency": "file:vendor" } },
+					"node_modules/fixture-dependency": { resolved: "vendor", link: true },
+					vendor: { name: "fixture-dependency", version },
+				},
+			}),
+		);
+	};
+	install("1.0.0");
+	execFileSync("git", ["add", "."], { cwd: repository });
+	execFileSync(
+		"git",
+		[
+			"-c",
+			"user.name=Fixture",
+			"-c",
+			"user.email=fixture@example.invalid",
+			"commit",
+			"--no-gpg-sign",
+			"-qm",
+			"locked baseline",
+		],
+		{ cwd: repository },
+	);
+	install("2.0.0");
+	writeFileSync(path.join(repository, ".gitignore"), ".cache/\nnode_modules/\n");
+	execFileSync("npm", ["ci", "--no-audit", "--no-fund"], { cwd: repository });
+	const result = await runBenchmarkComparison(fixture.options);
+	expect(result.exitCode).toBe(0);
+	const report = JSON.parse(readFileSync(result.reportPath, "utf8")) as {
+		completedPairs: number;
+		identity: { dependencyLocks: { base: string; head: string } };
+	};
+	expect(report.completedPairs).toBe(2);
+	expect(report.identity.dependencyLocks.base).not.toBe(
+		report.identity.dependencyLocks.head,
+	);
+});
+
 test("source changes during execution invalidate resumption even after source restoration", async () => {
 	const fixture = comparisonFixture();
 	fixture.control({ mutate: "warm-head" });

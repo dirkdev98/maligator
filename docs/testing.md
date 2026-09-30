@@ -155,9 +155,11 @@ npm run bench -- javascript --compare HEAD --runs 5
 npm run bench -- --changed --compare HEAD
 ```
 
-The runner exports the requested Git revision to a temporary directory, verifies
-that its lockfile matches the working tree, warms both trees, and alternates the
-base/head execution order. `--changed` maps the Git diff to the smallest relevant
+The runner exports the requested Git revision to a temporary directory, shares
+dependencies when the lockfiles match, and otherwise installs the baseline with
+`npm ci` from its own lockfile. It records both lockfile hashes, warms both trees,
+and alternates the base/head execution order. A historical comparison includes
+dependency changes as part of the revision. `--changed` maps the Git diff to the smallest relevant
 benchmark lanes. It starts with the requested number of pairs and may collect up to
 15 while a result remains uncertain. The JavaScript family runs one deterministic
 ES module through the probed production native plan across the closed/open x
