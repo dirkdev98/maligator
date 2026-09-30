@@ -344,6 +344,10 @@ MalString *mal_string_from_utf8_report(
     }
 
     MalTextBuffer buffer = {.heap = heap};
+    // The ASCII prefix is exact; the rest is a growth hint, not a decoded-length bound.
+    usize hint = prefix + (len - prefix) / 2;
+    if (hint > MAL_STRING_MAX_CODE_UNITS) hint = MAL_STRING_MAX_CODE_UNITS;
+    mal_text_buffer_hint_capacity(&buffer, hint);
     mal_text_buffer_append_latin1(&buffer, (const u8 *) bytes, prefix);
     usize i = prefix;
     while (i < len && buffer.status == MAL_TEXT_BUFFER_OK) {
