@@ -194,7 +194,26 @@ static MalTinyStringCacheResult mal_string_tiny_cache_get_latin1(
         if (cached->latin1) {
             const u8 *cached_units = cached->storage == MAL_STRING_STORAGE_INLINE
                 ? cached->inline_latin1_units : cached->latin1_units;
-            equal = length == 0 || memcmp(cached_units, units, length) == 0;
+            if (length >= sizeof(u32)) {
+                static_assert(MAL_STRING_INLINE_CODE_UNITS <= 2 * sizeof(u32));
+                u32 first, cached_first;
+                memcpy(&first, units, sizeof(first));
+                memcpy(&cached_first, cached_units, sizeof(cached_first));
+                equal = first == cached_first;
+                if (equal && length > sizeof(u32)) {
+                    u32 last, cached_last;
+                    memcpy(&last, units + length - sizeof(last), sizeof(last));
+                    memcpy(&cached_last, cached_units + length - sizeof(cached_last), sizeof(cached_last));
+                    equal = last == cached_last;
+                }
+            } else if (length >= sizeof(u16)) {
+                u16 first, cached_first;
+                memcpy(&first, units, sizeof(first));
+                memcpy(&cached_first, cached_units, sizeof(cached_first));
+                equal = first == cached_first && units[length - 1] == cached_units[length - 1];
+            } else {
+                equal = length == 0 || units[0] == cached_units[0];
+            }
         } else {
             const c16 *cached_units = cached->storage == MAL_STRING_STORAGE_INLINE
                 ? cached->inline_code_units : cached->code_units;
@@ -793,16 +812,13 @@ static usize mal_string_balanced_cut(
 
 static bool mal_string_is_balance_terminal(const MalString *string) {
     return string->storage != MAL_STRING_STORAGE_CONS ||
-        (string->length <= 2 * MAL_STRING_INLINE_LATIN1_CODE_UNITS &&
-            string->left->storage != MAL_STRING_STORAGE_CONS &&
-            string->right->storage != MAL_STRING_STORAGE_CONS);
+        string->length <= 2 * MAL_STRING_INLINE_LATIN1_CODE_UNITS;
 }
 
 static MalString *mal_string_join(MalHeap *heap, MalString *left, MalString *right) {
     usize length = left->length + right->length;
     usize maximum_child = length - (length + 3) / 4;
-    // A short cons of two leaves gets one extra terminal edge, avoiding a throwaway
-    // rotation on its next append. All deeper cons edges still shrink by 1/4.
+    // A <=32-unit subtree adds at most 31 edges; larger cons edges still shrink by 1/4.
     if (left->length > maximum_child && !mal_string_is_balance_terminal(left)) {
         if (left->left->storage != MAL_STRING_STORAGE_CONS &&
             left->left->length > maximum_child) {
@@ -845,7 +861,8 @@ bool mal_string_new_cons_checked(MalHeap *heap, MalString *left, MalString *righ
         return false;
     }
 
-    if (length <= MAL_STRING_INLINE_CODE_UNITS) {
+    // Keep the eager cutoff below inline capacity to avoid hashing short-lived intermediates.
+    if (length <= 4) {
         if (left->latin1 && right->latin1 &&
             left->storage < MAL_STRING_STORAGE_DEPENDENT &&
             right->storage < MAL_STRING_STORAGE_DEPENDENT) {

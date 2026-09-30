@@ -46,8 +46,6 @@ static bool inspect_rope(const MalString *string, usize *height, usize *nodes) {
         const MalString *child = children[i];
         if (child->storage != MAL_STRING_STORAGE_CONS || child->length <= maximum_child) continue;
         CHECK(child->length <= 2 * MAL_STRING_INLINE_LATIN1_CODE_UNITS);
-        CHECK(child->left->storage != MAL_STRING_STORAGE_CONS);
-        CHECK(child->right->storage != MAL_STRING_STORAGE_CONS);
     }
     usize left_height, right_height;
     CHECK(inspect_rope(string->left, &left_height, nodes));

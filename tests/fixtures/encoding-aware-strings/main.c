@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "builtin_json.h"
@@ -161,6 +162,49 @@ static bool short_case_mapping_preserves_utf16(MalVm *vm) {
     CHECK(mapped->length == countof(expected));
     for (usize i = 0; i < countof(expected); i++) {
         CHECK(mal_string_code_unit_at(mapped, i) == expected[i]);
+    }
+    return true;
+}
+
+static bool tiny_cache_collisions_preserve_content(MalVm *vm) {
+    const u8 original[] = {0, 0xff, 0x7f, 'a', 'b', 'c', 'd', 'e'};
+    for (usize length = 0; length <= countof(original); length++) {
+        MalValue roots[3] = {MAL_VALUE_UNDEFINED, MAL_VALUE_UNDEFINED, MAL_VALUE_UNDEFINED};
+        MalRootSpan span;
+        mal_gc_root(&span, roots, countof(roots));
+        u8 *exact = malloc(length == 0 ? 1 : length);
+        CHECK(exact != nullptr);
+        memcpy(exact, original, length);
+        roots[0] = mal_value_from_string(mal_string_new_latin1_copy(&vm->heap, exact, length));
+        free(exact);
+        if (length >= 2) {
+            c16 collision[8];
+            for (usize i = 0; i < length; i++) collision[i] = original[i];
+            collision[length >= 6 ? length - 2 : 0] ^= 1;
+            usize slot = mal_string_hash(mal_value_to_string(roots[0])) & (MAL_TINY_STRING_CACHE_CAPACITY - 1);
+            bool found = false;
+            for (usize last = 0; last <= 0xff; last++) {
+                collision[length - 1] = (c16) last;
+                if ((mal_string_hash_code_units(collision, length) & (MAL_TINY_STRING_CACHE_CAPACITY - 1)) == slot) {
+                    found = true;
+                    break;
+                }
+            }
+            CHECK(found);
+            u8 bytes[8];
+            for (usize i = 0; i < length; i++) bytes[i] = (u8) collision[i];
+            roots[1] = mal_value_from_string(mal_string_new_latin1_copy(&vm->heap, bytes, length));
+            CHECK(!mal_string_equals(mal_value_to_string(roots[0]), mal_value_to_string(roots[1])));
+        }
+        MalString *reloaded = mal_string_new_latin1_copy(&vm->heap, original, length);
+        roots[2] = mal_value_from_string(reloaded);
+        CHECK(mal_string_new_latin1_copy(&vm->heap, original, length) == reloaded);
+        mal_string_code_units(reloaded);
+        CHECK(mal_string_new_latin1_copy(&vm->heap, original, length) == reloaded);
+        mal_gc_collect(vm);
+        for (usize i = 0; i < length; i++) CHECK(mal_string_code_unit_at(reloaded, i) == original[i]);
+        CHECK(mal_string_equals(mal_value_to_string(roots[0]), reloaded));
+        mal_gc_unroot(&span);
     }
     return true;
 }
@@ -552,6 +596,7 @@ int main(void) {
     mal_vm_init(&vm, &mal_runtime_image);
     bool passed = physical_encodings_have_equal_content(&vm)
         && inline_capacity_and_eight_unit_cache(&vm)
+        && tiny_cache_collisions_preserve_content(&vm)
         && numeric_ranges_preserve_storage(&vm)
         && short_case_mapping_preserves_utf16(&vm)
         && short_concatenations_preserve_code_units(&vm)
