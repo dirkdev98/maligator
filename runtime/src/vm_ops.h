@@ -1226,13 +1226,15 @@ static inline void mal_vm_seed_known_own_slot_ic(
     }
 }
 
-/**
- * Exact shaped-literal own-slot read shared by compiled and interpreted output.
- * Referenced source rows are normally pre-instantiated at VM initialization or
- * splice time; lazy literal creation remains a defensive fallback. Every miss
- * retains the ordinary static-property IC operation.
- */
-static inline bool mal_vm_try_load_known_own_slots(
+void mal_vm_record_own_slot(MalInlineCache *ic, const MalShape *shape, MalValue key, u32 slot);
+
+bool mal_vm_load_known_own_slot_miss(
+    MalVm *vm, MalObject *object, MalInlineCache *ic,
+    i32 candidate_count, const i32 *candidates, MalValue *out
+);
+
+// Literal candidates describe logical properties; hits must cache their physical layout.
+static inline __attribute__((always_inline)) bool mal_vm_try_load_known_own_slots(
     MalVm *vm,
     MalValue receiver,
     MalInlineCache *ic,
@@ -1246,21 +1248,7 @@ static inline bool mal_vm_try_load_known_own_slots(
         MAL_PERF_COUNT(known_own_slot_load_hits);
         return true;
     }
-    if (object != nullptr) {
-        for (i32 index = 0; index < candidate_count; index++) {
-            i32 shape_function_index = candidates[index * 3];
-            i32 shape_cache_index = candidates[index * 3 + 1];
-            i32 slot = candidates[index * 3 + 2];
-            MalShape **row = vm->literal_shape_cache[shape_function_index];
-            MalShape *expected = row == nullptr ? nullptr : row[shape_cache_index];
-            if (expected == nullptr || mal_shape_logical(object->shape) != expected) continue;
-            *out = mal_object_field_load(object, slot);
-            MAL_PERF_COUNT(known_own_slot_load_hits);
-            return true;
-        }
-    }
-    MAL_PERF_COUNT(known_own_slot_load_fallbacks);
-    return false;
+    return mal_vm_load_known_own_slot_miss(vm, object, ic, candidate_count, candidates, out);
 }
 
 // The caller has checked MAL_IC_MODE_OWN_TABLE; entry keys and attributes remain untrusted.
@@ -2138,6 +2126,7 @@ static inline bool mal_vm_try_store_known_own_slots(
             MalShape *expected = row == nullptr ? nullptr : row[shape_cache_index];
             if (expected == nullptr || mal_shape_logical(object->shape) != expected) continue;
             mal_vm_object_slot_store(object, (u32) slot, value);
+            mal_vm_record_own_slot(ic, object->shape, expected->props[slot].key, (u32) slot);
             MAL_PERF_COUNT(known_own_slot_store_hits);
             return true;
         }

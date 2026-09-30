@@ -78,6 +78,14 @@ check(
 );
 check("widened record stays inline with tagged fields", (inspect(selected) & 35) === 35);
 check("cached load observes new representation", readId(selected).marker === "wide");
+for (let index = 0; index < 32; index++) {
+	check(
+		"alternating compact and generalized layouts preserve cached field reads",
+		readId(retained[8]) === 8 &&
+			readId(selected).marker === "wide" &&
+			readId(retained[8]) === 8,
+	);
+}
 check(
 	"generalization preserves other fields",
 	selected.weight === 7.75 && selected.link.value === 36 && selected.note.retained === 22,

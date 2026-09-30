@@ -5203,7 +5203,7 @@ static void mal_ic_record_watched(
 // MAL_IC_POLY_EXTRA, after which the site is marked megamorphic and stops growing.
 // A key change (computed-key site) or a site currently holding a protector-gated
 // special entry (prim-method / watched-value) restarts monomorphic for this slot.
-static void mal_ic_record(MalInlineCache *ic, const MalShape *shape, MalValue key, u32 slot) {
+void mal_vm_record_own_slot(MalInlineCache *ic, const MalShape *shape, MalValue key, u32 slot) {
     mal_ic_detach_prototype_cache(ic);
     if (ic->mode != MAL_IC_MODE_SHAPE || key != ic->key || ic->shape == nullptr ||
         ic->slot == MAL_IC_VALUE_SLOT || ic->prim_kind != 0) {
@@ -5278,6 +5278,28 @@ static void mal_ic_record(MalInlineCache *ic, const MalShape *shape, MalValue ke
         ic->slot = (u8) slot;
         ic->field = shape->props[slot].field;
     }
+}
+
+bool mal_vm_load_known_own_slot_miss(
+    MalVm *vm, MalObject *object, MalInlineCache *ic,
+    i32 candidate_count, const i32 *candidates, MalValue *out
+) {
+    if (object != nullptr) {
+        for (i32 index = 0; index < candidate_count; index++) {
+            i32 shape_function_index = candidates[index * 3];
+            i32 shape_cache_index = candidates[index * 3 + 1];
+            i32 slot = candidates[index * 3 + 2];
+            MalShape **row = vm->literal_shape_cache[shape_function_index];
+            MalShape *expected = row == nullptr ? nullptr : row[shape_cache_index];
+            if (expected == nullptr || mal_shape_logical(object->shape) != expected) continue;
+            mal_vm_record_own_slot(ic, object->shape, expected->props[slot].key, (u32) slot);
+            *out = mal_object_field_load(object, slot);
+            MAL_PERF_COUNT(known_own_slot_load_hits);
+            return true;
+        }
+    }
+    MAL_PERF_COUNT(known_own_slot_load_fallbacks);
+    return false;
 }
 
 u64 mal_ic_recorded_prototype_epoch(const MalInlineCache *ic) {
@@ -5828,7 +5850,7 @@ static MalValue mal_vm_op_load_property_ic_keyed(
             if (e->shape == object->shape && e->key == key_value) {
                 MAL_PERF_COUNT(ic_load_mega_hits);
                 if (mal_ic_key_is_stable_string(key_value)) {
-                    mal_ic_record(ic, object->shape, key_value, e->slot);
+                    mal_vm_record_own_slot(ic, object->shape, key_value, e->slot);
                 }
                 return mal_object_field_load_token(object, e->field);
             }
@@ -5843,7 +5865,7 @@ static MalValue mal_vm_op_load_property_ic_keyed(
                 // this VM-owned cache row, so pointer identity is ABA-safe even
                 // when the source expression produced a collectable string.
                 if (mal_ic_key_is_stable_string(key_value)) {
-                    mal_ic_record(ic, object->shape, key_value, prop->slot);
+                    mal_vm_record_own_slot(ic, object->shape, key_value, prop->slot);
                     MAL_PERF_COUNT(ic_load_shape_fills);
                     // Warm the shared stub cache so a megamorphic site's next access to
                     // this (shape,key) is an O(1) probe rather than another shape search.
@@ -6112,7 +6134,7 @@ void mal_vm_op_store_property_ic(
                 // Canonical string atoms share the VM/cache lifetime. Accumulate
                 // alternate shapes (polymorphic sites) like the load path.
                 if (mal_ic_key_is_stable_string(key_value)) {
-                    mal_ic_record(ic, object->shape, key_value, prop->slot);
+                    mal_vm_record_own_slot(ic, object->shape, key_value, prop->slot);
                     MalPropertyStubEntry *stub =
                         &mal_vm_property_stub_cache(vm)[
                             mal_stub_hash(object->shape, key_value)];
