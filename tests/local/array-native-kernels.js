@@ -449,6 +449,11 @@ async function main() {
 			["a", , "b"].join() === "a,,b" &&
 			["", "only", ""].join("") === "only",
 	);
+	check(
+		"join mixes compact strings, wide strings, integer extremes, nullish values, and holes",
+		["caf\u00e9", -2147483648, null, , "\u0100", 2147483647, undefined].join("|") ===
+			"caf\u00e9|-2147483648|||\u0100|2147483647|" && ["", 42, ""].join("") === "42",
+	);
 	let numericJoinSeparatorCoercions = 0;
 	const numericJoinSeparator = {
 		toString() {
@@ -472,6 +477,18 @@ async function main() {
 				"0:0:0.5:NaN:Infinity:-Infinity" &&
 			[1, numericJoinFallback, 3].join(":") === "1:object:3" &&
 			numericJoinFallbackCoercions === 1,
+	);
+	let mixedJoinConversions = 0;
+	const mixedJoinObject = {
+		toString() {
+			mixedJoinConversions++;
+			return "observed";
+		},
+	};
+	check(
+		"mixed join keeps later object conversion observable",
+		["prefix", 7, null, mixedJoinObject, "\u0100"].join(":") ===
+			"prefix:7::observed:\u0100" && mixedJoinConversions === 1,
 	);
 	let deepRope = "rope";
 	for (let index = 0; index < 128; index++) {

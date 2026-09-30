@@ -5,7 +5,7 @@
 	},
 	{
 		"file": "builtin_array.c",
-		"sha256": "926faf2839d51cdc3b23752ee6c7e23dd38902484ad2eef9347f0ac386723d1d"
+		"sha256": "ba4166db6d6c6d24f9476189c68f5a50d158a706642135b26007762d89e2881e"
 	},
 	{
 		"file": "builtin_array_buffer.c",

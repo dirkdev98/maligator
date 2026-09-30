@@ -2672,6 +2672,18 @@ static MalValue mal_builtin_array_concat(MalVm *vm, MalValue this_value, const M
     return result;
 }
 
+static bool mal_builtin_array_join_remaining_primitives(
+    MalArrayObject *array, u32 start, bool strings
+) {
+    for (u32 index = start; index < array->length; index++) {
+        MalValue value;
+        bool present = mal_array_object_dense_get(array, index, &value);
+        if (strings && (!present || mal_value_is_nil(value))) continue;
+        if (!present || !(strings ? mal_value_is_string(value) : mal_value_is_int32(value))) return false;
+    }
+    return true;
+}
+
 /** Join an exact clean dense Array when every present non-nullish element is
  * already a string primitive. Returns 1 with *out set, 0 for the observable
  * generic fallback, and -1 with a pending length/allocation throw. */
@@ -2687,6 +2699,7 @@ static i32 mal_builtin_array_join_dense_strings(
     if (!mal_checked_size_multiply(
             separator_length, length == 0 ? 0 : length - 1,
             MAL_STRING_MAX_CODE_UNITS, &result_length)) {
+        if (!mal_builtin_array_join_remaining_primitives(array, 0, true)) return 0;
         mal_builtin_array_throw_string_length(vm);
         return -1;
     }
@@ -2704,6 +2717,7 @@ static i32 mal_builtin_array_join_dense_strings(
         if (!mal_checked_size_add(
                 result_length, part_length, MAL_STRING_MAX_CODE_UNITS,
                 &result_length)) {
+            if (!mal_builtin_array_join_remaining_primitives(array, index + 1, true)) return 0;
             mal_builtin_array_throw_string_length(vm);
             return -1;
         }
@@ -2770,6 +2784,7 @@ static i32 mal_builtin_array_join_dense_int32s(
     if (!mal_checked_size_multiply(
             separator_length, length - 1,
             MAL_STRING_MAX_CODE_UNITS, &result_length)) {
+        if (!mal_builtin_array_join_remaining_primitives(array, 0, false)) return 0;
         mal_builtin_array_throw_string_length(vm);
         return -1;
     }
@@ -2783,6 +2798,7 @@ static i32 mal_builtin_array_join_dense_int32s(
                 result_length,
                 mal_builtin_array_i32_decimal_length(mal_value_to_i32(element)),
                 MAL_STRING_MAX_CODE_UNITS, &result_length)) {
+            if (!mal_builtin_array_join_remaining_primitives(array, index + 1, false)) return 0;
             mal_builtin_array_throw_string_length(vm);
             return -1;
         }
@@ -2825,6 +2841,88 @@ static i32 mal_builtin_array_join_dense_int32s(
     return status == MAL_TEXT_BUFFER_OK ? 1 : -1;
 }
 
+static i32 mal_builtin_array_join_dense_primitives(
+    MalVm *vm,
+    MalArrayObject *array,
+    MalString *separator,
+    MalValue *out
+) {
+    usize length = array->length;
+    usize separator_length = mal_string_length(separator);
+    usize result_length;
+    bool overflow = !mal_checked_size_multiply(
+        separator_length, length == 0 ? 0 : length - 1,
+        MAL_STRING_MAX_CODE_UNITS, &result_length);
+    MalString *sole_part = nullptr;
+    usize nonempty_parts = 0;
+    for (u32 index = 0; index < array->length; index++) {
+        MalValue element;
+        if (!mal_array_object_dense_get(array, index, &element) ||
+            mal_value_is_nil(element)) {
+            continue;
+        }
+        MalString *part = nullptr;
+        usize part_length;
+        if (mal_value_is_string(element)) {
+            part = mal_value_to_string(element);
+            part_length = mal_string_length(part);
+        } else if (mal_value_is_int32(element)) {
+            part_length = mal_builtin_array_i32_decimal_length(mal_value_to_i32(element));
+        } else return 0;
+        if (!overflow) overflow = !mal_checked_size_add(
+            result_length, part_length, MAL_STRING_MAX_CODE_UNITS, &result_length);
+        if (part_length != 0) {
+            sole_part = part;
+            nonempty_parts++;
+        }
+    }
+    // A later object conversion must remain observable even if earlier lengths overflow.
+    if (overflow) {
+        mal_builtin_array_throw_string_length(vm);
+        return -1;
+    }
+    if (result_length == 0) {
+        *out = mal_value_from_string(mal_intrinsic_ascii(vm, ""));
+        return 1;
+    }
+    if (separator_length == 0 && nonempty_parts == 1 && sole_part != nullptr &&
+        mal_string_length(sole_part) == result_length) {
+        *out = mal_value_from_string(sole_part);
+        return 1;
+    }
+
+    MalValue roots[] = {mal_value_from_array_object(array), mal_value_from_string(separator)};
+    MalRootSpan span;
+    mal_gc_root(&span, roots, 2);
+    mal_gc_native_rooted_begin(vm);
+    MalTextBuffer buffer = {.heap = &vm->heap};
+    mal_text_buffer_reserve(&buffer, result_length);
+    for (u32 index = 0; index < length && buffer.status == MAL_TEXT_BUFFER_OK; index++) {
+        if (index != 0) mal_text_buffer_append_string(&buffer, mal_value_to_string(roots[1]));
+        MalValue element;
+        if (mal_array_object_dense_get(mal_value_to_array_object(roots[0]), index, &element) && !mal_value_is_nil(element)) {
+            if (mal_value_is_string(element)) {
+                mal_text_buffer_append_string(&buffer, mal_value_to_string(element));
+            } else {
+                mal_text_buffer_append_i32(&buffer, mal_value_to_i32(element));
+            }
+        }
+    }
+    bool success = buffer.status == MAL_TEXT_BUFFER_OK;
+    if (success) {
+        assert(buffer.length == result_length);
+        *out = mal_value_from_string(mal_text_buffer_finish(&vm->heap, &buffer));
+    } else if (buffer.status == MAL_TEXT_BUFFER_LENGTH_OVERFLOW) {
+        mal_builtin_array_throw_string_length(vm);
+    } else {
+        mal_vm_throw_allocation_error(vm);
+    }
+    mal_text_buffer_dispose(&buffer);
+    mal_gc_native_rooted_end(vm);
+    mal_gc_unroot(&span);
+    return success ? 1 : -1;
+}
+
 static MalValue mal_builtin_array_join_active(
     MalVm *vm, MalValue this_value, u32 length, MalString *separator) {
     if (length == 0) {
@@ -2848,6 +2946,8 @@ static MalValue mal_builtin_array_join_active(
                 ? dense_result
                 : mal_value_new_undefined();
         }
+        dense_status = mal_builtin_array_join_dense_primitives(vm, dense, separator, &dense_result);
+        if (dense_status != 0) return dense_status > 0 ? dense_result : mal_value_new_undefined();
     }
 
     MalRootedStringParts parts;
