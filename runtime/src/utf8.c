@@ -268,9 +268,40 @@ byte *mal_string_to_utf8(const MalString *string, usize *out_len) {
 }
 
 usize mal_string_utf8_length(const MalString *string) {
-    usize length;
-    mal_string_utf8_process(string, nullptr, SIZE_MAX, nullptr, &length);
-    return length;
+    MalStringIterator iterator;
+    MalStringSegment segment;
+    mal_string_iterator_init(&iterator, string, 0, mal_string_length(string));
+    u64 length = 0;
+    bool pending_lead = false;
+    while (mal_string_iterator_next(&iterator, &segment)) {
+        if (segment.latin1) {
+            if (pending_lead) {
+                length += 3;
+                pending_lead = false;
+            }
+            length += segment.length;
+            for (usize i = 0; i < segment.length; i++) {
+                length += segment.latin1_units[i] >> 7;
+            }
+            continue;
+        }
+        for (usize i = 0; i < segment.length; i++) {
+            c16 unit = segment.utf16_units[i];
+            if (pending_lead) {
+                pending_lead = false;
+                if (mal_utf16_is_trail_surrogate(unit)) {
+                    length += 4;
+                    continue;
+                }
+                length += 3;
+            }
+            if (mal_utf16_is_lead_surrogate(unit)) pending_lead = true;
+            else length += unit < 0x80 ? 1 : unit < 0x800 ? 2 : 3;
+        }
+    }
+    mal_string_iterator_dispose(&iterator);
+    if (pending_lead) length += 3;
+    return length > SIZE_MAX ? SIZE_MAX : (usize) length;
 }
 
 MalString *mal_string_from_utf8_report(
