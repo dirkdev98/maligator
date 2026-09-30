@@ -39,6 +39,7 @@ static bool unicode_property(const u32 *table, usize length, u32 cp) {
 }
 
 static u32 unicode_class(u32 cp) {
+    if (cp < 0x80) return 0;
     size row = unicode_row(mal_unicode_classes, UNICODE_COUNT(mal_unicode_classes), 2, cp);
     return row < 0 ? 0 : mal_unicode_classes[row + 1];
 }
@@ -154,6 +155,12 @@ MalUnicodeStatus mal_unicode_case(const c16 *source, usize length, bool upper, M
                 special[0] = 0x69; special[1] = 0x307; special[2] = cp == 0xcc ? 0x300 : cp == 0xcd ? 0x301 : 0x303; mapping = special; count = 3;
             }
         }
+        if (mapping == nullptr && cp < 0x80) {
+            special[0] = upper && cp >= 'a' && cp <= 'z' ? cp - 32
+                : !upper && cp >= 'A' && cp <= 'Z' ? cp + 32 : cp;
+            mapping = special;
+            count = 1;
+        }
         if (mapping == nullptr) {
             size row = unicode_row(table, table_length, 3, cp);
             if (row < 0) { special[0] = cp; mapping = special; count = 1; }
@@ -169,6 +176,7 @@ MalUnicodeStatus mal_unicode_case(const c16 *source, usize length, bool upper, M
 }
 
 static bool unicode_decompose(MalUnicodePoints *points, u32 cp, bool compatibility) {
+    if (cp < 0x80) return unicode_push(points, cp);
     if (cp >= 0xac00 && cp < 0xd7a4) {
         u32 syllable = cp - 0xac00;
         return unicode_push(points, 0x1100 + syllable / 588) &&
