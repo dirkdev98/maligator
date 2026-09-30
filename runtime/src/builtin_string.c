@@ -1244,7 +1244,8 @@ MalCompletion mal_builtin_string_char_code_at_direct(
     MalValue callee,
     MalValue this_value,
     const MalValue *args,
-    i32 arg_count
+    i32 arg_count,
+    MalStringLeafReadCache *leaf_cache
 ) {
     if (arg_count >= 0 && mal_value_is_string(this_value) &&
         mal_value_is_native_function_object(callee) &&
@@ -1254,7 +1255,15 @@ MalCompletion mal_builtin_string_char_code_at_direct(
         f64 position = arg_count == 0
             ? 0
             : mal_ops_number_as_f64(args[0]);
-        MalValue result = mal_builtin_string_char_code_at_number(this_value, position);
+        position = mal_ops_number_to_integer_or_infinity(position);
+        MalValue result;
+        if (position < 0 || position >= (f64) mal_string_length(mal_value_to_string(this_value))) {
+            result = mal_value_new_nan();
+            MAL_PERF_COUNT(string_char_code_at_direct_hits);
+        } else {
+            result = mal_builtin_string_char_code_at_cached_in_bounds(
+                vm, leaf_cache, this_value, (usize) position);
+        }
         return (MalCompletion) {
             .kind = MAL_COMPLETION_NORMAL,
             .value = result,
@@ -1273,7 +1282,8 @@ MalCompletion mal_builtin_string_char_code_at_direct_in_bounds(
     MalValue this_value,
     const MalValue *args,
     i32 arg_count,
-    f64 position
+    f64 position,
+    MalStringLeafReadCache *leaf_cache
 ) {
     if (arg_count == 1 && mal_value_is_string(this_value) &&
         mal_value_is_native_function_object(callee) &&
@@ -1282,8 +1292,8 @@ MalCompletion mal_builtin_string_char_code_at_direct_in_bounds(
         assert(position >= 0 &&
                position < (f64) mal_string_length(mal_value_to_string(this_value)) &&
                trunc(position) == position);
-        MalValue result = mal_builtin_string_char_code_at_in_bounds(
-            this_value, (usize) position);
+        MalValue result = mal_builtin_string_char_code_at_cached_in_bounds(
+            vm, leaf_cache, this_value, (usize) position);
         return (MalCompletion) {
             .kind = MAL_COMPLETION_NORMAL,
             .value = result,

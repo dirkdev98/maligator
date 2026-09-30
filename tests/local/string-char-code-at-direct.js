@@ -130,5 +130,17 @@ function mutateWhileEvaluatingPosition(value) {
 ok("method captured before argument mutation", mutateWhileEvaluatingPosition("A") === 65);
 String.prototype.charCodeAt = original;
 
-ok("checks ran", passed === 26);
+function* resumedCodeUnits(value) {
+	for (let index = 0; index < value.length; index++) {
+		yield value.charCodeAt(index);
+	}
+}
+let resumedSum = 0;
+for (const unit of resumedCodeUnits(concatenate("resumed-", "rope"))) {
+	if (typeof gc === "function") gc();
+	resumedSum += unit;
+}
+ok("resumed code-unit reads", resumedSum === boundedChecksum("resumed-rope"));
+
+ok("checks ran", passed === 27);
 console.log("string-char-code-at-direct PASS");

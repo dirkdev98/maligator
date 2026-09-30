@@ -3024,6 +3024,7 @@ function emitBody(
 	const resources = new Set<NativeBodyResource>();
 	const emittedInstructions = new Set<number>();
 	const directEntryCalls = new Map<number, Set<number>>();
+	const stringLeafCaches = new Set<number>();
 	const invocationPreamble: Array<string> = [];
 	for (const action of nativeStringCharCodeAtChainActionByIp.values()) {
 		if (action.role !== "call") continue;
@@ -3627,6 +3628,7 @@ function emitBody(
 				staticDefineStringIndexByIp,
 				resources,
 				directEntryCalls,
+				stringLeafCaches,
 				profileSiteId: fn.profileSiteIds?.[ip],
 				profile: instructionProfile,
 				gcSafepoint: safepointKind !== undefined,
@@ -3797,6 +3799,12 @@ function emitBody(
 		}
 		knownPublishedPrivateRoots = nextPublishedPrivateRoots;
 	}
+
+	const leafCacheDeclarations = [...stringLeafCaches].map(
+		(ip) => `MalStringLeafReadCache __string_leaf_cache_${ip} = {0};`,
+	);
+	if (coro === null) lines.unshift(...leafCacheDeclarations);
+	else invocationPreamble.push(...leafCacheDeclarations);
 
 	return {
 		lines,
@@ -4044,6 +4052,7 @@ interface NativeInstructionContext {
 	readonly copiedCaptures?: ReadonlyMap<string, number>;
 	readonly resources: Set<NativeBodyResource>;
 	readonly directEntryCalls: Map<number, Set<number>>;
+	readonly stringLeafCaches: Set<number>;
 	readonly profileSiteId?: number;
 	readonly profile?: NativeInstructionProfile;
 	readonly nativePlan?: NativeInstructionPlan;
@@ -4223,6 +4232,7 @@ function emitInstruction(
 		stringConstants: context.stringConstants,
 		staticDefineStringIndexByIp: context.staticDefineStringIndexByIp,
 		directEntryCalls: context.directEntryCalls,
+		stringLeafCaches: context.stringLeafCaches,
 		profileSiteId: context.profileSiteId,
 		profile: context.profile,
 		nativePlan,
@@ -7856,11 +7866,12 @@ function emitInstruction(
 						poll,
 					];
 				}
+				context.stringLeafCaches.add(ip);
 				return [
 					`static MalCallCache __cc_${ip};`,
 					`MalCompletion ${tmp};`,
 					`if (${captured}) {`,
-					`  ${tmp} = ${profileCall("string", `mal_builtin_string_char_code_at_direct(vm, &__cc_${ip}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length})`)};`,
+					`  ${tmp} = ${profileCall("string", `mal_builtin_string_char_code_at_direct(vm, &__cc_${ip}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length}, &__string_leaf_cache_${ip})`)};`,
 					`} else {`,
 					`  MAL_PERF_COUNT(string_char_code_at_direct_fallbacks);`,
 					`  ${tmp} = ${profileCall("call", `mal_vm_call_cached(vm, &__cc_${ip}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length})`)};`,
@@ -8009,12 +8020,13 @@ function emitInstruction(
 								? "0"
 								: "mal_value_new_nan()";
 					const direct = `(${end} > ${start} ? ${value} : ${empty})`;
+					context.stringLeafCaches.add(ip);
 					return [
 						`static MalCallCache __cc_${ip};`,
 						`if (${fast}) {`,
 						`  r${instruction.dst} = ${direct};`,
 						`} else {`,
-						`  MalCompletion ${tmp} = ${profileCall("string", `mal_builtin_string_char_code_at_direct(vm, &__cc_${ip}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length})`)};`,
+						`  MalCompletion ${tmp} = ${profileCall("string", `mal_builtin_string_char_code_at_direct(vm, &__cc_${ip}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length}, &__string_leaf_cache_${ip})`)};`,
 						`  if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow()}`,
 						`  r${instruction.dst} = ${callResult(`${tmp}.value`)};`,
 						`}`,
@@ -8412,17 +8424,19 @@ function emitInstruction(
 						? num(boundedArgument.register)
 						: null;
 				if (boundedPosition !== null) {
+					context.stringLeafCaches.add(ip);
 					return [
 						`static MalCallCache __cc_${ip};`,
-						`MalCompletion ${tmp} = ${profileCall("string", `mal_builtin_string_char_code_at_direct_in_bounds(vm, &__cc_${ip}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length}, ${boundedPosition})`)};`,
+						`MalCompletion ${tmp} = ${profileCall("string", `mal_builtin_string_char_code_at_direct_in_bounds(vm, &__cc_${ip}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length}, ${boundedPosition}, &__string_leaf_cache_${ip})`)};`,
 						`if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow()}`,
 						`r${instruction.dst} = ${tmp}.value;`,
 						poll,
 					];
 				}
+				context.stringLeafCaches.add(ip);
 				return [
 					`static MalCallCache __cc_${ip};`,
-					`MalCompletion ${tmp} = ${profileCall("string", `mal_builtin_string_char_code_at_direct(vm, &__cc_${ip}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length})`)};`,
+					`MalCompletion ${tmp} = ${profileCall("string", `mal_builtin_string_char_code_at_direct(vm, &__cc_${ip}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length}, &__string_leaf_cache_${ip})`)};`,
 					`if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow()}`,
 					`r${instruction.dst} = ${tmp}.value;`,
 					poll,
@@ -8951,6 +8965,10 @@ function emitInstruction(
 				nativeIteratorCursorAction?.cursor.protocol === "string"
 					? `(__iter_cursor_${cursorInitializeIp} != nullptr && mal_vm_iterator_try_string_cursor_step(vm, __iter_cursor_${cursorInitializeIp}, &${val}, &${done}))`
 					: `(${denseProbe} || mal_vm_iterator_try_string_step(vm, &${rec}, &${val}, &${done}))`;
+			const iteratorFallback =
+				nativeIteratorCursorAction?.cursor.protocol === "string"
+					? step
+					: `mal_vm_iterator_step(vm, &${rec}, &${val}, &${done})`;
 			const advance = context.iteratorStepRootPublication
 				? [
 						`if (!${iteratorProbe}) {`,
@@ -8960,7 +8978,7 @@ function emitInstruction(
 							: [
 									`  ${cInactiveRootMaskPublication(context.iteratorStepInactiveRootMask)};`,
 								]),
-						`  if (!mal_vm_iterator_step(vm, &${rec}, &${val}, &${done})) ${onThrow()}`,
+						`  if (!(${iteratorFallback})) ${onThrow()}`,
 						`}`,
 					]
 				: [`if (!(${step})) ${onThrow()}`];

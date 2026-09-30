@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "builtin_string.h"
 #include "gc.h"
 #include "heap_string.h"
 #include "perf_stats.h"
@@ -410,6 +411,39 @@ static bool full_hash_collisions_preserve_key_identity(MalVm *vm) {
     return true;
 }
 
+static bool leaf_cache_survives_materialization_and_collection(MalVm *vm) {
+    MalStringLeafReadCache cache = {0};
+    MalValue roots[3] = {MAL_VALUE_UNDEFINED, MAL_VALUE_UNDEFINED, MAL_VALUE_UNDEFINED};
+    MalRootSpan span;
+    mal_gc_root(&span, roots, countof(roots));
+    for (usize pass = 0; pass < 32; pass++) {
+        for (usize i = 0; i < countof(roots); i++) roots[i] = MAL_VALUE_UNDEFINED;
+        mal_gc_collect(vm);
+        c16 units[128];
+        for (usize i = 0; i < countof(units); i++) units[i] = (c16) ('a' + (i + pass) % 23);
+        units[127] = 0x100;
+        roots[0] = mal_value_from_string(mal_string_new_copy(&vm->heap, units, 64));
+        roots[1] = mal_value_from_string(mal_string_new_copy(&vm->heap, units + 64, 64));
+        MalString *source;
+        CHECK(mal_string_new_cons_checked(&vm->heap,
+            mal_value_to_string(roots[0]), mal_value_to_string(roots[1]), &source));
+        roots[2] = mal_value_from_string(source);
+        for (usize i = 0; i < countof(units); i++) {
+            if (i == 4) mal_string_code_units(mal_value_to_string(roots[0]));
+            if (i == 20) mal_gc_collect(vm);
+            if (i == 48) {
+                mal_string_code_units(source);
+                roots[0] = roots[1] = MAL_VALUE_UNDEFINED;
+                mal_gc_collect(vm);
+            }
+            CHECK(mal_value_to_i32(mal_builtin_string_char_code_at_cached_in_bounds(
+                vm, &cache, roots[2], i)) == units[i]);
+        }
+    }
+    mal_gc_unroot(&span);
+    return true;
+}
+
 int main(void) {
     mal_perf_stats_init();
 #if MAL_PERF_STATS
@@ -429,7 +463,8 @@ int main(void) {
     passed = passed && cached_append_hash_and_terminal_weight(&vm)
         && alternating_sides_of_a_large_leaf(&vm)
         && rope_shape_keys_share_and_survive_collection(&vm, 1024)
-        && full_hash_collisions_preserve_key_identity(&vm);
+        && full_hash_collisions_preserve_key_identity(&vm)
+        && leaf_cache_survives_materialization_and_collection(&vm);
     mal_vm_free(&vm);
     if (!passed) return 1;
     puts("string-rope-followups PASS");

@@ -41,6 +41,38 @@ static inline MalValue mal_builtin_string_char_code_at_in_bounds(
     return result;
 }
 
+typedef struct MalStringLeafReadCache {
+    const MalString *source;
+    const MalString *leaf;
+    usize start;
+    usize end;
+    usize leaf_offset;
+    u32 heap_epoch;
+} MalStringLeafReadCache;
+
+static inline MalValue mal_builtin_string_char_code_at_cached_in_bounds(
+    MalVm *vm, MalStringLeafReadCache *cache, MalValue this_value, usize position
+) {
+    MalString *string = mal_value_to_string(this_value);
+    if (string->storage != MAL_STRING_STORAGE_CONS) {
+        return mal_builtin_string_char_code_at_in_bounds(this_value, position);
+    }
+    // Sweep epochs protect unrooted leaf identities; payload addresses are reacquired each read.
+    if (cache->heap_epoch != vm->heap.epoch || cache->source != string ||
+        position < cache->start || position >= cache->end) {
+        usize available;
+        mal_string_get_leaf_range(string, position, &cache->leaf, &cache->leaf_offset, &available);
+        cache->source = string;
+        cache->start = position;
+        cache->end = position + available;
+        cache->heap_epoch = vm->heap.epoch;
+    }
+    MalValue result = mal_value_from_i32(mal_string_flat_code_unit_at(
+        cache->leaf, cache->leaf_offset + position - cache->start));
+    MAL_PERF_COUNT(string_char_code_at_direct_hits);
+    return result;
+}
+
 /**
  * Guarded native-backend dispatch for a direct `.charCodeAt(...)` site.
  * Primitive strings with the live builtin callback and an absent or numeric position
@@ -53,7 +85,8 @@ MalCompletion mal_builtin_string_char_code_at_direct(
     MalValue callee,
     MalValue this_value,
     const MalValue *args,
-    i32 arg_count
+    i32 arg_count,
+    MalStringLeafReadCache *leaf_cache
 );
 
 /** Guarded direct dispatch whose Core certificate proves the raw f64 position is
@@ -66,7 +99,8 @@ MalCompletion mal_builtin_string_char_code_at_direct_in_bounds(
     MalValue this_value,
     const MalValue *args,
     i32 arg_count,
-    f64 position
+    f64 position,
+    MalStringLeafReadCache *leaf_cache
 );
 
 /** Exact %String.prototype.charCodeAt% invocation after locked primitive-String
