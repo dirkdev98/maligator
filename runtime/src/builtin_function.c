@@ -8,8 +8,10 @@
 #include "builtin_eval.h"
 #include "checked_size.h"
 #include "heap_string.h"
+#include "intrinsics.h"
 #include "object_ops.h"
 #include "proxy_object.h"
+#include "table.h"
 #include "value_ops.h"
 #include "vm.h"
 #include "vm_ops.h"
@@ -280,6 +282,15 @@ static MalValue mal_builtin_function_prototype_to_string(MalVm *vm, MalValue thi
     usize name_length = name != nullptr && mal_builtin_function_native_name_is_safe(name)
         ? mal_string_length(name)
         : 0;
+    MalString *cache_name = name_length == 0
+        ? mal_intrinsic_hot_ascii(vm, MAL_HOT_KEY_EMPTY)
+        : mal_property_atomize_string(vm, name);
+    MalKey cache_key = {.kind = MAL_KEY_STRING, .value = mal_value_from_string(cache_name)};
+    MalTableLookup cache_lookup = mal_table_lookup(vm->atoms, cache_key);
+    if (cache_lookup.present) {
+        MalValue cached = mal_table_entry_value(vm->atoms, cache_lookup.entry);
+        if (mal_value_is_string(cached)) return cached;
+    }
     usize total_length;
     usize bytes;
     if (!mal_checked_size_add(
@@ -305,6 +316,10 @@ static MalValue mal_builtin_function_prototype_to_string(MalVm *vm, MalValue thi
     }
 
     MalString *result = mal_string_new_owned(&vm->heap, code_units, total_length);
+    // Atom-table values are otherwise unused; retaining one immutable rendering
+    // per internal callable name avoids rebuilding identical native source text.
+    void *cache_entry = mal_table_upsert_entry(vm->atoms, cache_key, nullptr);
+    mal_table_entry_set_value(vm->atoms, cache_entry, mal_value_from_string(result));
     return mal_value_from_string(result);
 }
 
