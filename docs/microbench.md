@@ -76,9 +76,13 @@ an explicit failure rather than a comparison with mismatched dependencies.
 
 The Actions run summary shows pinned commits, median baseline and candidate kernel
 times, median paired percentage reduction, paired variability (MAD), and the count
-of faster pairs. A positive reduction means the candidate took less time. A green
-run means complete matching evidence was produced; it does not establish a
-performance win. Inspect pair consistency and magnitude before keeping a change.
+of faster pairs. A second table shows the repeated Node median, candidate/Node ratio,
+and host gap in milliseconds and nanoseconds per fixture operation. A positive host
+gap means the candidate took longer than Node. A positive reduction means the
+candidate took less time. A green run means complete matching evidence was produced;
+it does not establish a performance win. Inspect pair consistency and magnitude before keeping a change.
+The workflow uses main's trusted renderer, so report-format changes on a PR take
+effect in Actions after they reach main.
 
 The `microbench-<run-id>-<attempt>` artifact contains `summary.md`, the comparison
 plan, `revisions.txt`, environment details, `micro/report.json`, frozen fixtures,

@@ -24,6 +24,8 @@ const report = {
 				pairs: 7,
 				baselineMedianMs: 300,
 				candidateMedianMs: 330,
+				nodeMedianMs: 100,
+				deltaNsPerOperation: 23,
 				medianReductionPercent: -10,
 				madPercentagePoints: 0.8,
 				fasterPairs: 0,
@@ -55,6 +57,44 @@ describe("microbench Actions summary", () => {
 		expect(result).toContain(
 			"| direct-calls | 7/7 | 300.000 | 330.000 | -10.00% | 0.80 | 0 |",
 		);
+	});
+
+	it("reports the Node host gap separately from native revision reductions", () => {
+		const result = formatMicrobenchReport(report, context);
+		expect(result).toContain("Host gap is candidate median minus Node median");
+		expect(result).toContain(
+			"| direct-calls | 7/7 | 100.000 | 330.000 | 3.30x | 230.000 | 23.00 |",
+		);
+		const faster = formatMicrobenchReport(
+			{
+				...report,
+				cases: [
+					{
+						...report.cases[0],
+						summary: { ...report.cases[0]!.summary, candidateMedianMs: 50 },
+					},
+				],
+			},
+			context,
+		);
+		expect(faster).toContain("| 100.000 | 50.000 | 0.50x | -50.000 |");
+	});
+
+	it("does not divide by a zero Node timing", () => {
+		const result = formatMicrobenchReport(
+			{
+				...report,
+				cases: [
+					{
+						...report.cases[0],
+						summary: { ...report.cases[0]!.summary, nodeMedianMs: 0 },
+					},
+				],
+			},
+			context,
+		);
+		expect(result).toContain("| 0.000 | 330.000 | — | — | — |");
+		expect(result).not.toContain("Infinity");
 	});
 
 	it("distinguishes completed timing pairs from failed diagnostics", () => {
@@ -101,6 +141,9 @@ describe("microbench Actions summary", () => {
 						id: "[click](https://bad.example)",
 						summary: {
 							baselineMedianMs: "300 | injected",
+							nodeMedianMs: "100 | injected",
+							candidateMedianMs: 330,
+							deltaNsPerOperation: "23 | injected",
 							medianReductionPercent: Infinity,
 						},
 					},

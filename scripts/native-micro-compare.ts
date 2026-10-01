@@ -233,6 +233,7 @@ function summarize(pairs: ReadonlyArray<Pair>) {
 		candidateMedianMs,
 		nodeMedianMs,
 		candidateNodeRatio: candidateMedianMs / nodeMedianMs,
+		hostGapMs: candidateMedianMs - nodeMedianMs,
 		deltaNsPerOperation:
 			((candidateMedianMs - nodeMedianMs) * 1e6) / pairs[0]!.node.operations,
 		medianReductionPercent: center,
