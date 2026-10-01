@@ -78,12 +78,13 @@ function scratchSource(id: string, source?: RuntimeGapCaseDescriptor): string {
 	const absolute = path.join(REPOSITORY_ROOT, "bench/runtime-gap", source.fixture);
 	return readFileSync(absolute, "utf8")
 		.replace(
-			'from "../case-runner.mjs"',
-			'from "../../../../bench/runtime-gap/case-runner.mjs"',
+			/from "\.\.\/(async-)?case-runner\.mjs"/,
+			(_match, asyncPrefix: string | undefined) =>
+				`from "../../../../bench/runtime-gap/${asyncPrefix ?? ""}case-runner.mjs"`,
 		)
 		.replace(
-			/runRuntimeGapCase\("[a-z0-9-]+"/,
-			`runRuntimeGapCase(${JSON.stringify(id)}`,
+			/(run(?:Async)?RuntimeGapCase)\("[a-z0-9-]+"/,
+			(_match, runner: string) => `${runner}(${JSON.stringify(id)}`,
 		);
 }
 
@@ -127,6 +128,8 @@ function newExperiment(args: ReadonlyArray<string>): void {
 		sourceSeam: source?.sourceSeam ?? "scratch experiment",
 		fixture: "case.mjs",
 		controls,
+		...(source?.methods === undefined ? {} : { methods: source.methods }),
+		...(source?.features === undefined ? {} : { features: source.features }),
 	};
 	writeFileSync(
 		path.join(directory, "experiment.json"),
@@ -204,8 +207,9 @@ function promoteExperiment(args: ReadonlyArray<string>): void {
 	if (preset === "quick") raw.presets.quick.push(id);
 	if (preset === "quick" || preset === "survey") raw.presets.survey.push(id);
 	const source = readFileSync(path.join(directory, "case.mjs"), "utf8").replace(
-		'from "../../../../bench/runtime-gap/case-runner.mjs"',
-		'from "../case-runner.mjs"',
+		/from "\.\.\/\.\.\/\.\.\/\.\.\/bench\/runtime-gap\/(async-)?case-runner\.mjs"/,
+		(_match, asyncPrefix: string | undefined) =>
+			`from "../${asyncPrefix ?? ""}case-runner.mjs"`,
 	);
 	writeFileSync(`${destination}.tmp`, source);
 	writeFileSync(

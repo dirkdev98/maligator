@@ -5,6 +5,9 @@ ref with the current `main` commit. Both revisions are pinned when the request i
 authorized. It uses the same frozen candidate workload and toolchain for both
 compilers, checks output against Node, and alternates baseline/candidate timing
 pairs on one runner.
+Each pair also records a Node timing sample, alternating before and after the
+native pair, so the raw report includes repeated Node/Maligator runtime offsets.
+All three hosts run with `TZ=UTC`.
 
 ## From a pull request
 
