@@ -20767,7 +20767,11 @@
 		{
 			"id": "[\"Array.prototype.values\",\"length\"]",
 			"owner": "Array.prototype.values",
-			"ownerPaths": ["Array.prototype.values", "Array.prototype[%Symbol.iterator%]"],
+			"ownerPaths": [
+				"Array.prototype.values",
+				"Array.prototype[%Symbol.iterator%]",
+				"MAL_INTRINSIC_ARRAY_PROTOTYPE_VALUES"
+			],
 			"key": "length",
 			"kind": "data",
 			"operations": [],
@@ -20777,7 +20781,11 @@
 		{
 			"id": "[\"Array.prototype.values\",\"name\"]",
 			"owner": "Array.prototype.values",
-			"ownerPaths": ["Array.prototype.values", "Array.prototype[%Symbol.iterator%]"],
+			"ownerPaths": [
+				"Array.prototype.values",
+				"Array.prototype[%Symbol.iterator%]",
+				"MAL_INTRINSIC_ARRAY_PROTOTYPE_VALUES"
+			],
 			"key": "name",
 			"kind": "data",
 			"operations": [],
@@ -95239,7 +95247,11 @@
 		{
 			"id": "[\"Array.prototype.values\",\"<call>\"]",
 			"owner": "Array.prototype.values",
-			"ownerPaths": ["Array.prototype.values", "Array.prototype[%Symbol.iterator%]"],
+			"ownerPaths": [
+				"Array.prototype.values",
+				"Array.prototype[%Symbol.iterator%]",
+				"MAL_INTRINSIC_ARRAY_PROTOTYPE_VALUES"
+			],
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Array.prototype.values"],
@@ -95249,7 +95261,11 @@
 		{
 			"id": "[\"Array.prototype.values\",\"<construct>\"]",
 			"owner": "Array.prototype.values",
-			"ownerPaths": ["Array.prototype.values", "Array.prototype[%Symbol.iterator%]"],
+			"ownerPaths": [
+				"Array.prototype.values",
+				"Array.prototype[%Symbol.iterator%]",
+				"MAL_INTRINSIC_ARRAY_PROTOTYPE_VALUES"
+			],
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Array.prototype.values"],
@@ -203052,6 +203068,16 @@
 			"key": "MAL_INTRINSIC_ARRAY_PROTOTYPE_PUSH",
 			"kind": "binding",
 			"operations": ["Array.prototype.push"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"[[roots]]\",\"MAL_INTRINSIC_ARRAY_PROTOTYPE_VALUES\"]",
+			"owner": "[[roots]]",
+			"ownerPaths": ["[[roots]]"],
+			"key": "MAL_INTRINSIC_ARRAY_PROTOTYPE_VALUES",
+			"kind": "binding",
+			"operations": ["Array.prototype.values"],
 			"task": "N-06",
 			"decisions": []
 		},

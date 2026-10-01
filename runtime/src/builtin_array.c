@@ -5400,6 +5400,7 @@ void mal_builtin_array_install(MalVm *vm) {
     mal_intrinsic_define_method_n(vm, prototype, "keys", 0, mal_builtin_array_keys);
     mal_intrinsic_define_method_n(vm, prototype, "entries", 0, mal_builtin_array_entries);
     MalValue values = mal_intrinsic_define_method_n(vm, prototype, "values", 0, mal_builtin_array_values);
+    vm->intrinsics[MAL_INTRINSIC_ARRAY_PROTOTYPE_VALUES] = values;
     mal_array_values_callback = mal_builtin_array_values;
 
     // Array.prototype[Symbol.iterator] === Array.prototype.values

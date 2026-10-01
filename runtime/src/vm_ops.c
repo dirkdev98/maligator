@@ -2022,21 +2022,11 @@ void mal_op_env_pop(MalCallable *callable) {
     callable->env = callable->env->parent;
 }
 
-// Build an arguments object over `args`: an array
-// of the call arguments plus an own @@iterator (%Array.prototype.values%) and a
-// `callee` slot — poisoned for an unmapped object, otherwise exposing the
-// function. Shared by the interpreter op and compiled code.
 MalValue mal_create_arguments_object(
     MalVm *vm, const MalValue *args, i32 arg_count, MalValue callee, MalEnv *env,
     bool mapped, i32 mapped_argument_count, const i32 *mapped_argument_slots
 ) {
-    // The arguments object is an ordinary object whose [[Prototype]] is
-    // %Object.prototype% (CreateUnmappedArgumentsObject step 2 / mapped step 8) —
-    // not %Array.prototype% and not null. It must NOT be an Array exotic: its
-    // `length` is an ordinary data property (writable, non-enumerable,
-    // configurable), so `arguments[i] = v` for i >= length adds an indexed
-    // property WITHOUT changing length (unlike an array's magic length), and
-    // Array.isArray(arguments) is false.
+    // Arguments length is an ordinary data property, independent of indexed writes.
     MalObject *prototype = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]);
     MalObject *arguments = mapped
         ? (MalObject *) mal_arguments_object_new(
@@ -2045,38 +2035,31 @@ MalValue mal_create_arguments_object(
         : mal_object_new(&vm->heap, prototype);
     arguments->is_arguments = true;
 
-    // Indexed args first (enumerable, writable, configurable data properties)...
+    // Reservation is optional; an unrepresentable capacity keeps incremental growth.
+    (void) mal_table_reserve(mal_object_properties(arguments), (usize) arg_count + 3);
+
+    // CreateDataProperty bypasses inherited setters and nonwritable properties.
     for (i32 i = 0; i < arg_count; i++) {
-        mal_object_set(
-            arguments,
-            mal_key_index(i),
-            args[i]
-        );
+        MalPropertyDesc desc = {
+            .flags = MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE,
+            .value = args[i],
+        };
+        mal_object_define_own(arguments, mal_key_index(i), &desc);
     }
 
-    // ...then the own `length` data property: writable + configurable, but
-    // non-enumerable (CreateUnmappedArgumentsObject step 4 / mapped step 22).
     MalPropertyDesc length_desc = {
         .flags = MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE,
         .value = mal_value_from_i32(arg_count),
     };
     mal_object_define_own(arguments, mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_LENGTH), &length_desc);
 
-    // Make the arguments object iterable: an own @@iterator = %Array.prototype.values%
-    // (spec CreateUnmappedArgumentsObject), non-enumerable/writable/configurable.
     MalKey iterator_key = mal_intrinsic_symbol_key(vm, MAL_INTRINSIC_SYMBOL_ITERATOR);
-    MalValue array_values;
-    if (mal_vm_get_property(vm, vm->intrinsics[MAL_INTRINSIC_ARRAY_PROTOTYPE], iterator_key, &array_values)) {
-        MalPropertyDesc iterator_desc = {
-            .flags = MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE,
-            .value = array_values,
-        };
-        mal_object_define_own((MalObject *) arguments, iterator_key, &iterator_desc);
-    }
+    MalPropertyDesc iterator_desc = {
+        .flags = MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE,
+        .value = vm->intrinsics[MAL_INTRINSIC_ARRAY_PROTOTYPE_VALUES],
+    };
+    mal_object_define_own(arguments, iterator_key, &iterator_desc);
 
-    // `callee`: an unmapped (strict) arguments object poisons it with
-    // %ThrowTypeError% (non-enumerable, non-configurable); a mapped (sloppy)
-    // one exposes the function as a writable, configurable data property.
     MalKey callee_key = mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_CALLEE);
     if (!mapped) {
         MalValue thrower = vm->intrinsics[MAL_INTRINSIC_THROW_TYPE_ERROR];

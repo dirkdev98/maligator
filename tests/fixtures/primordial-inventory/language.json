@@ -1179,7 +1179,11 @@
 				["length", 0, ["bits", "7ff9000000000000"], -1, -1],
 				["name", 0, ["string", "values"], -1, -1]
 			],
-			["Array.prototype.values", "Array.prototype[%Symbol.iterator%]"]
+			[
+				"Array.prototype.values",
+				"Array.prototype[%Symbol.iterator%]",
+				"MAL_INTRINSIC_ARRAY_PROTOTYPE_VALUES"
+			]
 		],
 		[
 			"Array.prototype.with",
@@ -12247,6 +12251,7 @@
 		["MAL_INTRINSIC_ARRAY_PROTOTYPE", 65],
 		["MAL_INTRINSIC_ARRAY_PROTOTYPE_MAP", 85],
 		["MAL_INTRINSIC_ARRAY_PROTOTYPE_PUSH", 87],
+		["MAL_INTRINSIC_ARRAY_PROTOTYPE_VALUES", 102],
 		["MAL_INTRINSIC_ASYNC_DISPOSABLE_STACK_CONSTRUCTOR", 121],
 		["MAL_INTRINSIC_ASYNC_DISPOSABLE_STACK_PROTOTYPE", 122],
 		["MAL_INTRINSIC_ASYNC_FUNCTION_CONSTRUCTOR", 5],

@@ -20,6 +20,7 @@ describe("Function and Reflect builtins", () => {
 		({ compiled, interpreted } = buildBackendPairFromOneProgramImage({
 			fixture: "tests/local/function-reflect-builtins.js",
 			name: "function-reflect-builtins",
+			entryGoal: "script",
 			outDir,
 		}));
 	}, 600_000);

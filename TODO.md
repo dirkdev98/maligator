@@ -483,8 +483,8 @@ contracts or investigates costs still visible after the string follow-ups.
 - [ ] Fix remaining RegExp @@replace protocol and coercion cases. Prefer shared
       replacement semantics over case-specific branches.
 
-- [ ] Fix remaining arguments-object indexed-property creation, legacy caller, and
-      parameter-expression behavior. Cover strict, sloppy, mapped, and unmapped forms.
+- [ ] Fix remaining arguments-object legacy caller and parameter-expression behavior.
+      Cover strict, sloppy, mapped, and unmapped forms.
 
 - [ ] Work class, compound-assignment, super, Proxy, and iterator-helper failures in
       descending shared-root-cause order. Keep each repaired cluster in the curated

@@ -188,4 +188,133 @@ assert(
 	"Reflect.ownKeys materializes function prototype",
 );
 
+function strictArguments() {
+	"use strict";
+	return arguments;
+}
+function mappedArguments(first, second) {
+	return arguments;
+}
+function nonsimpleArguments(first = 1) {
+	return arguments;
+}
+const originalValues = Array.prototype.values;
+const originalIterator = Object.getOwnPropertyDescriptor(
+	Array.prototype,
+	Symbol.iterator,
+);
+let inheritedReads = 0;
+let inheritedWrites = 0;
+let iteratorReads = 0;
+let strictList;
+let mappedList;
+try {
+	Object.defineProperty(Object.prototype, "0", {
+		configurable: true,
+		get() {
+			inheritedReads++;
+			return 91;
+		},
+		set() {
+			inheritedWrites++;
+		},
+	});
+	Object.defineProperty(Object.prototype, "1", {
+		configurable: true,
+		value: 92,
+		writable: false,
+	});
+	Object.defineProperty(Array.prototype, Symbol.iterator, {
+		configurable: true,
+		get() {
+			iteratorReads++;
+			throw new Error("mutable array iterator must not be read");
+		},
+	});
+	Array.prototype.values = () => {
+		throw new Error("replacement values");
+	};
+	strictList = strictArguments(7, undefined, { retained: true });
+	mappedList = mappedArguments(8, 9);
+	assert(
+		strictList[0] === 7 && strictList[1] === undefined,
+		"unmapped own indices bypass prototypes",
+	);
+	assert(
+		mappedList[0] === 8 && mappedList[1] === 9,
+		"mapped own indices bypass prototypes",
+	);
+	assert(
+		strictList[Symbol.iterator] === originalValues,
+		"unmapped intrinsic iterator identity",
+	);
+	assert(
+		mappedList[Symbol.iterator] === originalValues,
+		"mapped intrinsic iterator identity",
+	);
+	assert(
+		inheritedReads === 0 && inheritedWrites === 0 && iteratorReads === 0,
+		"arguments initialization runs no prototype hooks",
+	);
+	delete strictList[0];
+	assert(
+		strictList[0] === 91 && inheritedReads === 1,
+		"deleted argument exposes inherited getter",
+	);
+} finally {
+	delete Object.prototype[0];
+	delete Object.prototype[1];
+	Object.defineProperty(Array.prototype, Symbol.iterator, originalIterator);
+	Array.prototype.values = originalValues;
+}
+const indexDescriptor = Object.getOwnPropertyDescriptor(mappedList, "0");
+assert(
+	indexDescriptor.writable && indexDescriptor.enumerable && indexDescriptor.configurable,
+	"arguments index attributes",
+);
+assert(
+	strictList[2].retained && !Array.isArray(strictList),
+	"escaped arguments retain heap values and ordinary identity",
+);
+strictList[10] = 10;
+assert(strictList.length === 3, "indexed argument writes preserve ordinary length");
+assert(
+	Reflect.ownKeys(mappedList).map(String).join(",") ===
+		"0,1,length,callee,Symbol(Symbol.iterator)",
+	"arguments own-key order",
+);
+const emptyArguments = strictArguments();
+assert(
+	emptyArguments.length === 0 && emptyArguments[Symbol.iterator] === originalValues,
+	"empty arguments metadata",
+);
+const calleeDescriptor = Object.getOwnPropertyDescriptor(emptyArguments, "callee");
+assert(
+	!calleeDescriptor.configurable &&
+		!calleeDescriptor.enumerable &&
+		typeof calleeDescriptor.get === "function",
+	"strict callee is poisoned",
+);
+let calleeThrows = false;
+try {
+	emptyArguments.callee;
+} catch (error) {
+	calleeThrows = error instanceof TypeError;
+}
+assert(calleeThrows, "strict callee throws");
+const defaultArguments = nonsimpleArguments();
+const undefinedArguments = nonsimpleArguments(undefined);
+assert(defaultArguments.length === 0, "defaults preserve omitted arguments length");
+assert(
+	undefinedArguments.length === 1 && undefinedArguments[0] === undefined,
+	"defaults preserve the supplied arguments snapshot",
+);
+let defaultCalleeThrows = false;
+try {
+	defaultArguments.callee;
+} catch (error) {
+	defaultCalleeThrows = error instanceof TypeError;
+}
+assert(defaultCalleeThrows, "sloppy nonsimple parameters use unmapped arguments");
+
 console.log("function-reflect-builtins PASS");

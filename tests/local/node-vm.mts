@@ -14,6 +14,17 @@ check(
 	runInNewContext("globalThis.marker = 1; marker") === 1 &&
 		runInNewContext("typeof marker") === "undefined",
 );
+check(
+	"arguments retain their Realm's intrinsic iterator",
+	runInNewContext(`
+		const values = Array.prototype.values;
+		Array.prototype.values = undefined;
+		Object.defineProperty(Array.prototype, Symbol.iterator, {
+			get() { throw new Error("iterator lookup"); }, configurable: true
+		});
+		(function () { return arguments[Symbol.iterator] === values; })(1, 2)
+	`) === true,
+);
 
 setFlagsFromString("--expose_gc");
 const isolatedGc = runInNewContext("gc");
