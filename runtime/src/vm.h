@@ -1723,7 +1723,8 @@ typedef struct MalVm {
      * Canonical property-name strings, including compiler constants, computed
      * keys, and the fixed vocabulary handed out by mal_intrinsic_ascii. Keyed by
      * content and strongly retained for the VM lifetime so shapes, dictionaries,
-     * and ICs can converge on stable pointer identity.
+     * and ICs can converge on stable pointer identity. Inline values exclusively
+     * cache native callable source renderings by internal name.
      */
     MalTable *atoms;
 

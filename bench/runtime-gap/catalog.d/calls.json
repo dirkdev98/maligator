@@ -108,6 +108,67 @@
 			"sourceSeam": "runtime/src/bound_function_object.c; runtime/src/vm.c",
 			"fixture": "cases/call-bound-prefix-seventeen.mjs",
 			"controls": ["call-bound-prefix-args", "call-fixed-sixteen-args"]
+		},
+		{
+			"id": "call-function-source-reuse",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "function-source-rendering",
+			"category": "language-features",
+			"mechanisms": ["native-call-boundary", "source-string-cache"],
+			"inputShape": "An opaque Function.prototype.toString alias repeatedly renders Math.max and consumes the resulting text.",
+			"unit": "calls",
+			"sourceSeam": "runtime/src/builtin_function.c; runtime/src/vm.h",
+			"fixture": "cases/call-function-source-reuse.mjs",
+			"controls": ["call-this-two-args"]
+		},
+		{
+			"id": "call-array-apply",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "array-like-arguments",
+			"category": "language-features",
+			"mechanisms": ["native-call-boundary", "array-like-arguments", "packed-array"],
+			"inputShape": "An opaque script target and opaque stable two-element ordinary Array retain Reflect.apply argument preparation at runtime.",
+			"unit": "calls",
+			"sourceSeam": "runtime/src/vm_ops.c",
+			"fixture": "cases/call-array-apply.mjs",
+			"controls": ["call-literal-apply", "call-this-two-args"]
+		},
+		{
+			"id": "call-literal-apply",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "invocation-adapters",
+			"category": "language-features",
+			"mechanisms": [
+				"native-call-boundary",
+				"literal-argument-list",
+				"adapter-flattening"
+			],
+			"inputShape": "An opaque script target receives a freshly evaluated literal argument list through Reflect.apply; the compiler may remove the list and adapter.",
+			"unit": "calls",
+			"sourceSeam": "src/compiler/core/core-known-operations.ts; runtime/src/vm_ops.c",
+			"fixture": "cases/call-literal-apply.mjs",
+			"controls": ["call-array-apply", "call-this-two-args"]
+		},
+		{
+			"id": "call-literal-construct",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "invocation-adapters",
+			"category": "language-features",
+			"mechanisms": [
+				"native-call-boundary",
+				"literal-argument-list",
+				"adapter-flattening",
+				"constructor-call"
+			],
+			"inputShape": "An opaque script constructor receives two literal arguments through Reflect.construct with the default newTarget; results escape into property reads.",
+			"unit": "calls",
+			"sourceSeam": "src/compiler/core/core-known-operations.ts; runtime/src/vm_ops.c",
+			"fixture": "cases/call-literal-construct.mjs",
+			"controls": ["call-literal-apply"]
 		}
 	]
 }

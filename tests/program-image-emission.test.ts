@@ -3619,6 +3619,28 @@ describe("native update-expression representation", () => {
 		);
 	});
 
+	it("flattens literal Reflect argument lists for script calls and construction", () => {
+		const output = emitLocked(`
+			function Example(value) { this.value = value; }
+			function readValue() { return this.value; }
+			const instance = Reflect.construct(Example, [1]);
+			globalThis.result = Reflect.apply(readValue, instance, []);
+		`);
+		expect(output).not.toContain("mal_known_native_mal_reflect_construct");
+		expect(output).not.toContain("mal_known_native_mal_reflect_apply");
+		expect(output).not.toContain("mal_vm_op_create_array");
+		expect(output).toContain("mal_vm_construct_value(vm,");
+	});
+
+	it("retains Reflect.construct when an explicit newTarget differs", () => {
+		const output = emitLocked(`
+			function Target(value) { this.value = value; }
+			function NewTarget() {}
+			globalThis.result = Reflect.construct(Target, [1], NewTarget);
+		`);
+		expect(output).toContain("mal_known_native_mal_reflect_construct");
+	});
+
 	it("emits generic target dispatch for an intrinsic method alias call", () => {
 		const output = emit(`
 			const slice = Array.prototype.slice;

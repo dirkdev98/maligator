@@ -194,7 +194,7 @@ export const resolveKnownOperations: CoreFunctionPass = {
 			analysis = context.analysis(CORE_STATIC_VALUE_ANALYSIS);
 		const plans: Array<{
 			instruction: CoreInstructionId;
-			opcode: "loadPrimordial" | "callKnown";
+			opcode: "loadPrimordial" | "call" | "callKnown" | "construct";
 			args: ReadonlyArray<Argument>;
 			attributes: Record<string, CoreAttributeValue>;
 			store?: boolean;
@@ -232,6 +232,21 @@ export const resolveKnownOperations: CoreFunctionPass = {
 						...builtinWorldAssumptions(operation, "exact-builtin-proof", true),
 					},
 				},
+			});
+		};
+		const directInvocation = (
+			instruction: CoreInstructionId,
+			opcode: "call" | "construct",
+			args: ReadonlyArray<Argument>,
+		) => {
+			plans.push({
+				instruction,
+				opcode,
+				args,
+				attributes:
+					typeof fn.instructionAttributes(instruction).sourceCall === "number"
+						? { sourceCall: fn.instructionAttributes(instruction).sourceCall! }
+						: {},
 			});
 		};
 		for (const instruction of fn.instructionIds()) {
@@ -318,6 +333,22 @@ export const resolveKnownOperations: CoreFunctionPass = {
 						instruction,
 						!reflect,
 					);
+					if (invoked === undefined && value !== undefined && list !== undefined) {
+						if (isConstruct) {
+							const explicitNewTarget = invocation[3];
+							if (explicitNewTarget === undefined || explicitNewTarget === value) {
+								directInvocation(instruction, "construct", [value, ...list]);
+								continue;
+							}
+						} else {
+							directInvocation(instruction, "call", [
+								value,
+								invocation[reflect ? 2 : 1] ?? undefinedArgument,
+								...list,
+							]);
+							continue;
+						}
+					}
 					if (invoked !== undefined) {
 						target = invoked;
 						construct = isConstruct;

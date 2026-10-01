@@ -351,25 +351,43 @@ bool mal_vm_create_list_from_array_like(
         return false;
     }
 
-    MalValue length_value;
-    if (!mal_vm_get_property(
-            vm, list, mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_LENGTH),
-            &length_value)) {
-        return false;
-    }
-    f64 length_number;
-    if (!mal_vm_to_number(vm, length_value, &length_number)) {
-        return false;
-    }
+    i32 count;
+    const MalArrayObject *packed_array = nullptr;
+    if (mal_value_is_array_object(list)) {
+        const MalArrayObject *array = mal_value_to_array_object(list);
+        if (array->length > (u32) INT32_MAX) {
+            mal_vm_throw_error(
+                vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
+                "Arguments list exceeds the maximum call size");
+            return false;
+        }
+        count = (i32) array->length;
+        if (array->elements != nullptr &&
+            array->dense_count >= array->length &&
+            !array->dense_maybe_holey) {
+            packed_array = array;
+        }
+    } else {
+        MalValue length_value;
+        if (!mal_vm_get_property(
+                vm, list, mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_LENGTH),
+                &length_value)) {
+            return false;
+        }
+        f64 length_number;
+        if (!mal_vm_to_number(vm, length_value, &length_number)) {
+            return false;
+        }
 
-    f64 safe_length = mal_ops_number_to_length(length_number);
-    if (safe_length > (f64) INT32_MAX) {
-        mal_vm_throw_error(
-            vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
-            "Arguments list exceeds the maximum call size");
-        return false;
+        f64 safe_length = mal_ops_number_to_length(length_number);
+        if (safe_length > (f64) INT32_MAX) {
+            mal_vm_throw_error(
+                vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
+                "Arguments list exceeds the maximum call size");
+            return false;
+        }
+        count = (i32) safe_length;
     }
-    i32 count = (i32) safe_length;
     if (count == 0) {
         return true;
     }
@@ -382,22 +400,14 @@ bool mal_vm_create_list_from_array_like(
         return false;
     }
 
-    // A fully packed ordinary Array contains only own default-data elements.
-    // Once its non-overridable length has been read, copying those elements has
-    // no user-code checkpoint to skip. Holes and every exotic array-like retain
-    // the indexed Get loop below so inherited accessors and mutation order stay
-    // observable.
-    if (mal_value_is_array_object(list)) {
-        const MalArrayObject *array = mal_value_to_array_object(list);
-        bool packed = array->elements != nullptr &&
-            array->dense_count >= (u32) count &&
-            !array->dense_maybe_holey;
-        if (packed) {
-            memcpy(items, array->elements, sizeof(MalValue) * (usize) count);
-            *items_out = items;
-            *count_out = count;
-            return true;
-        }
+    // Array length is a non-overridable own data property. A packed Array also
+    // contains only own default-data elements, so this snapshot cannot skip a
+    // user-code checkpoint; holes retain the indexed Get loop below.
+    if (packed_array != nullptr) {
+        memcpy(items, packed_array->elements, sizeof(MalValue) * (usize) count);
+        *items_out = items;
+        *count_out = count;
+        return true;
     }
 
     MalRootSpan items_span;

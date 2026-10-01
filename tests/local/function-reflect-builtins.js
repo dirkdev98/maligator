@@ -49,6 +49,99 @@ events.length = 0;
 assert(Reflect.apply(sum, null, holey) === 13, "Reflect.apply inherited hole");
 assert(events.join(",") === "hole", "Reflect.apply observes inherited hole");
 
+const fixedLength = [2, 3, 99];
+fixedLength.length = 2;
+Object.defineProperty(fixedLength, "length", { writable: false });
+Object.setPrototypeOf(fixedLength, {
+	get length() {
+		throw new Error("inherited length must not be read");
+	},
+});
+assert(Reflect.apply(sum, null, fixedLength) === 5, "own fixed array length");
+
+let coercedFirst = 1;
+const coercedList = Object.create(Array.prototype, {
+	length: {
+		get() {
+			events.push("length");
+			return {
+				valueOf() {
+					events.push("valueOf");
+					coercedFirst = 7;
+					return 2;
+				},
+			};
+		},
+	},
+	0: {
+		get() {
+			events.push("0");
+			return coercedFirst;
+		},
+	},
+	1: {
+		get() {
+			events.push("1");
+			return 2;
+		},
+	},
+});
+events.length = 0;
+assert(Reflect.apply(sum, null, coercedList) === 9, "array-like length coercion");
+assert(events.join() === "length,valueOf,0,1", "length conversion precedes indices");
+
+const arrayProxy = new Proxy([1, 2, 3], {
+	get(target, key) {
+		events.push(String(key));
+		return key === "length" ? 2 : key === "0" ? 7 : key === "1" ? 8 : target[key];
+	},
+});
+events.length = 0;
+assert(Reflect.apply(sum, null, arrayProxy) === 15, "array proxy supplies its own list");
+assert(events.join() === "length,0,1", "array proxy observes length and index traps");
+
+const shrinkingList = [, 2, 3];
+Object.setPrototypeOf(shrinkingList, {
+	get 0() {
+		events.push("0");
+		shrinkingList.length = 1;
+		return 4;
+	},
+	get 1() {
+		events.push("1");
+		return 5;
+	},
+	get 2() {
+		events.push("2");
+		return 6;
+	},
+});
+events.length = 0;
+assert(
+	Reflect.apply(sum, null, shrinkingList) === 15,
+	"hole getter can shrink the source",
+);
+assert(events.join() === "0,1,2", "indexed gets retain the original length snapshot");
+
+const changedDescriptors = [1, 2];
+let descriptorReads = 0;
+Object.defineProperty(changedDescriptors, "0", {
+	configurable: true,
+	get() {
+		descriptorReads++;
+		return 8;
+	},
+});
+assert(
+	Reflect.apply(sum, null, changedDescriptors) === 10 && descriptorReads === 1,
+	"an accessor replaces packed element storage",
+);
+Object.defineProperty(changedDescriptors, "0", { value: 4, writable: false });
+assert(
+	Reflect.apply(sum, null, changedDescriptors) === 6,
+	"descriptor replacement value",
+);
+
 const longArgs = { length: 10 };
 for (let i = 0; i < 10; i++) longArgs[i] = i + 1;
 assert(Reflect.apply(sum, null, longArgs) === 55, "Reflect.apply owned buffer");
@@ -187,6 +280,49 @@ assert(nested(9, 10) === 55, "nested bind merged arguments");
 
 const targetText = Function.prototype.toString.call(target);
 assert(targetText === "function target() { [native code] }", "Function.toString result");
+const renderFunction = Function.prototype.toString;
+assert(
+	renderFunction.call(bound) === targetText,
+	"bound rendering retains its target name",
+);
+assert(
+	renderFunction.call(metadataTarget) === "function metadataTarget() { [native code] }" &&
+		metadataEvents.join() === "length,name",
+	"native rendering never reads a public name getter",
+);
+const sameNameOne = function repeatedName() {};
+const sameNameTwo = function repeatedName() {};
+const repeatedText = renderFunction.call(sameNameOne);
+assert(
+	renderFunction.call(sameNameTwo) === repeatedText,
+	"same internal names share spelling",
+);
+assert(repeatedText !== targetText, "different internal names keep different spellings");
+renderFunction.call(Object);
+for (let index = 0; index < 32; index++) {
+	Reflect.defineProperty({}, `render-property-${index}`, { value: index });
+}
+if (typeof __mal_collect_garbage === "function") __mal_collect_garbage();
+assert(
+	renderFunction.call(Object) === "function Object() { [native code] }",
+	"cached rendering survives collection and atomization",
+);
+const opaqueFunction = new Proxy(target, {
+	get() {
+		throw new Error("rendering must not inspect a proxy");
+	},
+});
+assert(
+	renderFunction.call(opaqueFunction) === "function () { [native code] }",
+	"callable proxy rendering bypasses property traps",
+);
+let noncallableTextThrows = false;
+try {
+	renderFunction.call({});
+} catch (error) {
+	noncallableTextThrows = error instanceof TypeError;
+}
+assert(noncallableTextThrows, "a warm anonymous rendering still rejects noncallables");
 
 const receiver = { marker: 42 };
 const getterTarget = {

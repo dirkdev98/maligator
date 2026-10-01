@@ -253,4 +253,156 @@ for (let i = 0; i < 10; i++) {
 	);
 	assert(regexpNumbers(`${i}x,2x`) === i + 2, "RegExp iterator Number projection");
 }
+function recordScript(first, second) {
+	if (typeof __mal_collect_garbage === "function") __mal_collect_garbage();
+	return { receiver: this, first, second, count: arguments.length };
+}
+const scriptTarget = Reflect.get(
+	{ recordScript },
+	globalThis.__scriptTargetKey ?? "recordScript",
+);
+function applyScript(target, receiver, first, second) {
+	return Reflect.apply(target, receiver, [first, second]);
+}
+function borrowScript(target, receiver, first, second) {
+	return target.apply(receiver, [first, second]);
+}
+const scriptReceiver = { marker: 42 };
+for (const invoke of [applyScript, borrowScript]) {
+	const result = invoke(scriptTarget, scriptReceiver, { marker: 7 }, { marker: 9 });
+	assert(
+		result.receiver === scriptReceiver &&
+			result.first.marker === 7 &&
+			result.second.marker === 9 &&
+			result.count === 2,
+		"flattened script arguments retain receiver, count and heap values",
+	);
+}
+let scriptProxyCalls = 0;
+const scriptProxy = new Proxy(scriptTarget, {
+	apply(target, receiver, args) {
+		scriptProxyCalls++;
+		return Reflect.apply(target, receiver, args);
+	},
+});
+assert(
+	applyScript(scriptProxy, scriptReceiver, 3, 4).first === 3 && scriptProxyCalls === 1,
+	"flattened apply preserves a callable proxy trap",
+);
+const boundScript = scriptTarget.bind(scriptReceiver, 5);
+const boundScriptResult = Reflect.apply(boundScript, null, [6]);
+assert(
+	boundScriptResult.receiver === scriptReceiver &&
+		boundScriptResult.first === 5 &&
+		boundScriptResult.second === 6,
+	"flattened apply preserves bound arguments and receiver",
+);
+const mutableScriptArgs = [1, 2];
+events.length = 0;
+const changedScriptResult = Reflect.apply(
+	scriptTarget,
+	scriptReceiver,
+	mutableScriptArgs,
+	((mutableScriptArgs[1] = 7), events.push("extra")),
+);
+assert(
+	changedScriptResult.second === 7 && events.join() === "extra",
+	"ignored adapter arguments still evaluate before the list snapshot",
+);
+let throwingExtraObserved = false;
+function throwingExtra() {
+	throw new Error("ignored argument");
+}
+try {
+	Reflect.apply(scriptProxy, scriptReceiver, [1, 2], throwingExtra());
+} catch (error) {
+	throwingExtraObserved = error.message === "ignored argument";
+}
+assert(
+	throwingExtraObserved && scriptProxyCalls === 1,
+	"an ignored argument can throw before invoking the target",
+);
+events.length = 0;
+const invalidTargetList = {
+	get length() {
+		events.push("length");
+		throw new Error("list must not be inspected");
+	},
+};
+let invalidScriptTargetThrows = false;
+try {
+	Reflect.apply(0, scriptReceiver, invalidTargetList);
+} catch (error) {
+	invalidScriptTargetThrows = error instanceof TypeError;
+}
+assert(
+	invalidScriptTargetThrows && events.length === 0,
+	"noncallable target validation precedes observable list reads",
+);
+let classCallThrows = false;
+try {
+	Reflect.apply(class RequiresConstruction {}, null, [1]);
+} catch (error) {
+	classCallThrows = error instanceof TypeError;
+}
+assert(classCallThrows, "flattened apply still rejects a class constructor call");
+const inheritedScriptArgs = [, 2];
+let inheritedScriptReads = 0;
+Object.setPrototypeOf(inheritedScriptArgs, {
+	get 0() {
+		inheritedScriptReads++;
+		return 9;
+	},
+});
+const inheritedScriptResult = Reflect.apply(
+	scriptTarget,
+	scriptReceiver,
+	inheritedScriptArgs,
+);
+assert(
+	inheritedScriptResult.first === 9 &&
+		inheritedScriptResult.second === 2 &&
+		inheritedScriptReads === 1,
+	"argument flattening retains an inherited getter on a hole",
+);
+function ScriptRecord(value) {
+	this.value = value;
+	this.observedTarget = new.target;
+	if (typeof __mal_collect_garbage === "function") __mal_collect_garbage();
+}
+function constructScript(target, value) {
+	return Reflect.construct(target, [value]);
+}
+const defaultScriptRecord = constructScript(ScriptRecord, { marker: 13 });
+const sameScriptRecord = Reflect.construct(ScriptRecord, [14], ScriptRecord);
+assert(
+	defaultScriptRecord.value.marker === 13 &&
+		defaultScriptRecord.observedTarget === ScriptRecord &&
+		sameScriptRecord.observedTarget === ScriptRecord,
+	"flattened construction preserves default and identical newTarget",
+);
+const alternateScriptRecord = Reflect.construct(ScriptRecord, [15], Custom);
+assert(
+	alternateScriptRecord.value === 15 &&
+		alternateScriptRecord.observedTarget === Custom &&
+		Object.getPrototypeOf(alternateScriptRecord) === Custom.prototype,
+	"different newTarget retains Reflect construction semantics",
+);
+let undefinedNewTargetThrows = false;
+try {
+	Reflect.construct(ScriptRecord, [16], undefined);
+} catch (error) {
+	undefinedNewTargetThrows = error instanceof TypeError;
+}
+assert(
+	undefinedNewTargetThrows,
+	"explicit undefined newTarget is not an omitted argument",
+);
+const boundScriptRecord = ScriptRecord.bind(null, { marker: 17 });
+const constructedBoundScript = Reflect.construct(boundScriptRecord, []);
+assert(
+	constructedBoundScript.value.marker === 17 &&
+		constructedBoundScript.observedTarget === ScriptRecord,
+	"flattened construction resolves a bound target",
+);
 console.log("known operations passed");
