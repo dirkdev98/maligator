@@ -2049,14 +2049,19 @@ MalValue mal_create_arguments_object(
         .flags = MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE,
         .value = mal_value_from_i32(arg_count),
     };
-    mal_object_define_own(arguments, mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_LENGTH), &length_desc);
+    // These unexposed dictionary entries are absent, so descriptor validation is unnecessary.
+    MalKey length_key = mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_LENGTH);
+    mal_property_define(properties, length_key, &length_desc);
+    mal_gc_card(&arguments->header, length_key.value);
 
     MalKey iterator_key = mal_intrinsic_symbol_key(vm, MAL_INTRINSIC_SYMBOL_ITERATOR);
     MalPropertyDesc iterator_desc = {
         .flags = MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE,
         .value = vm->intrinsics[MAL_INTRINSIC_ARRAY_PROTOTYPE_VALUES],
     };
-    mal_object_define_own(arguments, iterator_key, &iterator_desc);
+    mal_property_define(properties, iterator_key, &iterator_desc);
+    mal_gc_card(&arguments->header, iterator_key.value);
+    mal_gc_card(&arguments->header, iterator_desc.value);
 
     MalKey callee_key = mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_CALLEE);
     if (!mapped) {
@@ -2067,13 +2072,17 @@ MalValue mal_create_arguments_object(
             .getter = thrower,
             .setter = thrower,
         };
-        mal_object_define_own(arguments, callee_key, &callee_desc);
+        mal_property_define(properties, callee_key, &callee_desc);
+        mal_gc_card(&arguments->header, callee_key.value);
+        mal_gc_card(&arguments->header, thrower);
     } else if (mal_value_is_callable(callee)) {
         MalPropertyDesc callee_desc = {
             .flags = MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE,
             .value = callee,
         };
-        mal_object_define_own(arguments, callee_key, &callee_desc);
+        mal_property_define(properties, callee_key, &callee_desc);
+        mal_gc_card(&arguments->header, callee_key.value);
+        mal_gc_card(&arguments->header, callee);
     }
 
     return mal_value_from_object(arguments);

@@ -380,6 +380,52 @@ try {
 }
 assert(defaultCalleeThrows, "sloppy nonsimple parameters use unmapped arguments");
 
+const mappedMetadataFactory = Function("first", "second", "return arguments;");
+const mappedMetadataList = mappedMetadataFactory(8, 9);
+for (const list of [strictList, mappedMetadataList, defaultArguments]) {
+	const length = Object.getOwnPropertyDescriptor(list, "length");
+	assert(
+		length.value === list.length &&
+			length.writable &&
+			length.configurable &&
+			!length.enumerable,
+		"arguments length is configurable nonenumerable data",
+	);
+	const iterator = Object.getOwnPropertyDescriptor(list, Symbol.iterator);
+	assert(
+		iterator.value === originalValues &&
+			iterator.writable &&
+			iterator.configurable &&
+			!iterator.enumerable,
+		"arguments iterator is configurable nonenumerable intrinsic data",
+	);
+	const callee = Object.getOwnPropertyDescriptor(list, "callee");
+	if (list === mappedMetadataList) {
+		assert(
+			callee.value === mappedMetadataFactory &&
+				callee.writable &&
+				callee.configurable &&
+				!callee.enumerable,
+			"mapped callee is configurable nonenumerable data",
+		);
+	} else {
+		assert(
+			callee.get === callee.set &&
+				typeof callee.get === "function" &&
+				!callee.configurable &&
+				!callee.enumerable,
+			"unmapped callee shares its nonconfigurable poison accessors",
+		);
+		let setterThrows = false;
+		try {
+			callee.set.call(list, mappedArguments);
+		} catch (error) {
+			setterThrows = error instanceof TypeError;
+		}
+		assert(setterThrows, "unmapped callee setter throws");
+	}
+}
+
 for (const count of [0, 1, 8, 9, 16, 65]) {
 	for (const factory of [strictArguments, mappedArguments]) {
 		const input = Array.from({ length: count }, (_, index) => ({ index, count }));

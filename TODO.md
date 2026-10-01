@@ -485,6 +485,10 @@ contracts or investigates costs still visible after the string follow-ups.
 
 - [ ] Fix remaining arguments-object legacy caller and parameter-expression behavior.
       Cover strict, sloppy, mapped, and unmapped forms.
+      A statically declared sloppy function returning its mapped arguments can
+      expose a `callee` value unequal to that function binding. The new identity
+      assertion reproduces on `46b5043c` with compiled calls; investigate callee
+      identity preservation separately from fresh descriptor initialization.
 
 - [ ] Work class, compound-assignment, super, Proxy, and iterator-helper failures in
       descending shared-root-cause order. Keep each repaired cluster in the curated
