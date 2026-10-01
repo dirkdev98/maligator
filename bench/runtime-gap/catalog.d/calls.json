@@ -41,6 +41,23 @@
 			"controls": ["call-fixed-sixteen-args", "call-this-two-args"]
 		},
 		{
+			"id": "call-bound-receiver-chain",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "bound-function-calls",
+			"category": "language-features",
+			"mechanisms": [
+				"native-call-boundary",
+				"bound-chain-resolution",
+				"receiver-dispatch"
+			],
+			"inputShape": "Thirty-two receiver-only bind wrappers with no bound arguments; an opaque invocation supplies one numeric argument and reads the innermost receiver.",
+			"unit": "calls",
+			"sourceSeam": "runtime/src/bound_function_object.c; runtime/src/vm.c",
+			"fixture": "cases/call-bound-receiver-chain.mjs",
+			"controls": ["call-bound-prefix-args", "call-this-two-args"]
+		},
+		{
 			"id": "call-arguments-escape",
 			"group": "runtime",
 			"suite": "runtime",

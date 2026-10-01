@@ -71,18 +71,19 @@ an explicit failure rather than a comparison with mismatched dependencies.
 
 ## Runtime call probes
 
-These five cases keep the target opaque to the optimizer using a runtime property
+These six cases keep the target opaque to the optimizer using a runtime property
 name. The sixteen-argument cases resolve their target before warmup and timing;
 the receiver case includes method lookup on each call. Argument counts and most
 argument values remain known at each call site.
 
-| Case                      | Measured boundary                                                  |
-| ------------------------- | ------------------------------------------------------------------ |
-| `call-this-two-args`      | Method lookup, `this`, and two positional arguments                |
-| `call-fixed-sixteen-args` | Stable indirect target and sixteen positional arguments            |
-| `call-bound-prefix-args`  | Bound `this`, eight bound arguments, and eight supplied arguments  |
-| `call-arguments-escape`   | Returning a strict unmapped `arguments` object with sixteen values |
-| `call-rest-escape`        | Returning a rest array with the same sixteen values                |
+| Case                        | Measured boundary                                                  |
+| --------------------------- | ------------------------------------------------------------------ |
+| `call-this-two-args`        | Method lookup, `this`, and two positional arguments                |
+| `call-fixed-sixteen-args`   | Stable indirect target and sixteen positional arguments            |
+| `call-bound-prefix-args`    | Bound `this`, eight bound arguments, and eight supplied arguments  |
+| `call-bound-receiver-chain` | Thirty-two receiver-only bind wrappers and one supplied argument   |
+| `call-arguments-escape`     | Returning a strict unmapped `arguments` object with sixteen values |
+| `call-rest-escape`          | Returning a rest array with the same sixteen values                |
 
 The last two cases read identical runtime-selected endpoints and `length`; their
 objects escape the callee, so scalar argument loads and one-use rest forwarding

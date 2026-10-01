@@ -88,12 +88,14 @@ MalBoundResolution mal_bound_function_object_resolve(
     while (mal_value_is_bound_function_object(current)) {
         MalBoundFunctionObject *bound = mal_value_to_bound_function_object(current);
         prefix_count += bound->bound_count;
+        if (use_bound_this) resolution.this_value = bound->bound_this;
         current = bound->target;
     }
 
     resolution.callee = current;
     resolution.arg_count = prefix_count + arg_count;
     resolution.args_merged = prefix_count > 0;
+    if (prefix_count == 0) return resolution;
 
     MalValue *merged_args = nullptr;
     if (prefix_count > 0) {
@@ -111,7 +113,7 @@ MalBoundResolution mal_bound_function_object_resolve(
 
     // Walking outward-in: each outer level's bound arguments sit directly
     // before the already-placed arguments, so the innermost level ends up
-    // first. The innermost bound this wins.
+    // first.
     i32 front = prefix_count;
     current = callee;
     while (mal_value_is_bound_function_object(current)) {
@@ -119,10 +121,6 @@ MalBoundResolution mal_bound_function_object_resolve(
         front -= bound->bound_count;
         for (i32 i = 0; i < bound->bound_count; i++) {
             merged_args[front + i] = bound->bound_args[i];
-        }
-
-        if (use_bound_this) {
-            resolution.this_value = bound->bound_this;
         }
 
         current = bound->target;

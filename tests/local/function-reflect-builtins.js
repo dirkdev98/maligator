@@ -76,6 +76,69 @@ assert(bound.length === 2, "bind length");
 assert(bound.name === "bound target", "bind name");
 assert(bound(3, 4) === 10, "bind call");
 
+function captureBound(...values) {
+	if (typeof __mal_collect_garbage === "function") __mal_collect_garbage();
+	return { receiver: this, values };
+}
+
+function BoundRecord(...values) {
+	if (typeof __mal_collect_garbage === "function") __mal_collect_garbage();
+	this.values = values;
+	this.target = new.target;
+}
+
+for (const depth of [1, 2, 8, 32]) {
+	for (const arity of [0, 8, 9, 16]) {
+		const receiver = { depth, arity };
+		const values = Array.from({ length: arity }, (_, index) => ({ index }));
+		for (const hasPrefix of [false, true]) {
+			const prefix = hasPrefix ? values.slice(0, Math.max(0, arity - 1)) : [];
+			const tail = values.slice(prefix.length);
+			let callable = captureBound.bind(receiver, ...prefix);
+			let constructor = BoundRecord.bind(receiver, ...prefix);
+			for (let layer = 1; layer < depth; layer++) {
+				callable = callable.bind({ layer });
+				constructor = constructor.bind({ layer });
+			}
+			const result = callable(...tail);
+			assert(result.receiver === receiver, "innermost bound receiver");
+			assert(
+				result.values.length === arity &&
+					result.values.every((value, index) => value === values[index]),
+				"bound call preserves zero, inline and allocated argument lists",
+			);
+			const instance = new constructor(...tail);
+			assert(
+				instance instanceof BoundRecord && instance !== receiver,
+				"bound construction ignores receiver",
+			);
+			assert(instance.target === BoundRecord, "bound construction resolves new.target");
+			assert(
+				instance.values.length === arity &&
+					instance.values.every((value, index) => value === values[index]),
+				"bound construction preserves zero, inline and allocated argument lists",
+			);
+		}
+	}
+}
+
+const nestedReceiver = {};
+const nestedValues = Array.from({ length: 16 }, (_, index) => ({ index }));
+const orderedBound = captureBound
+	.bind(nestedReceiver, ...nestedValues.slice(0, 3))
+	.bind({ ignored: 1 })
+	.bind({ ignored: 2 }, ...nestedValues.slice(3, 11));
+const orderedResult = orderedBound(...nestedValues.slice(11));
+assert(
+	orderedResult.receiver === nestedReceiver,
+	"mixed bound chain keeps innermost receiver",
+);
+assert(
+	orderedResult.values.every((value, index) => value === nestedValues[index]) &&
+		orderedResult.values.length === 16,
+	"inner prefix precedes outer prefix and incoming arguments",
+);
+
 const metadataEvents = [];
 function metadataTarget(a, b, c, d, e) {
 	return a + b + c + d + e;
