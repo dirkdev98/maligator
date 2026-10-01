@@ -6,11 +6,13 @@ import {
 	assertExactLines,
 	buildBackendPairFromOneProgramImage,
 	runToStdout,
+	scaledNativeRunTimeoutMs,
 	STRESS_ENV,
 } from "../../src/test-harness.ts";
 
 const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-function-reflect-builtins-"));
 const expected = ["function-reflect-builtins PASS"];
+const stressEnv = { ...process.env, ...STRESS_ENV };
 
 describe("Function and Reflect builtins", () => {
 	let compiled: string;
@@ -25,13 +27,21 @@ describe("Function and Reflect builtins", () => {
 		}));
 	}, 600_000);
 
-	it("preserves native Function and Reflect semantics", () => {
-		assertExactLines(runToStdout(compiled), expected);
-		assertExactLines(runToStdout(interpreted), expected);
-	});
+	it(
+		"preserves native Function and Reflect semantics",
+		() => {
+			assertExactLines(runToStdout(compiled), expected);
+			assertExactLines(runToStdout(interpreted), expected);
+		},
+		Math.max(60_000, 2 * scaledNativeRunTimeoutMs() + 10_000),
+	);
 
-	it("keeps materialized and bound argument lists rooted under GC stress", () => {
-		assertExactLines(runToStdout(compiled, { env: STRESS_ENV }), expected);
-		assertExactLines(runToStdout(interpreted, { env: STRESS_ENV }), expected);
-	});
+	it(
+		"keeps materialized and bound argument lists rooted under GC stress",
+		() => {
+			assertExactLines(runToStdout(compiled, { env: stressEnv }), expected);
+			assertExactLines(runToStdout(interpreted, { env: stressEnv }), expected);
+		},
+		Math.max(60_000, 2 * scaledNativeRunTimeoutMs(undefined, stressEnv) + 10_000),
+	);
 });
