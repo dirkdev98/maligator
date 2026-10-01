@@ -345,12 +345,9 @@ static bool mal_array_object_dense_build_prepare(
     return mal_array_object_dense_reserve(array, end);
 }
 
-bool mal_array_object_dense_build_values(
+static void mal_array_object_dense_build_values_reserved(
     MalArrayObject *array, u32 start, const MalValue *values, u32 count
 ) {
-    if (!mal_array_object_dense_build_prepare(array, start, count)) {
-        return false;
-    }
     for (u32 index = 0; index < count; index++) {
         MalValue value = values[index];
         array->elements[start + index] = value;
@@ -362,6 +359,15 @@ bool mal_array_object_dense_build_values(
         array->length = array->dense_count;
     }
     mal_perf_collection_mutation(array, array->length);
+}
+
+bool mal_array_object_dense_build_values(
+    MalArrayObject *array, u32 start, const MalValue *values, u32 count
+) {
+    if (!mal_array_object_dense_build_prepare(array, start, count)) {
+        return false;
+    }
+    mal_array_object_dense_build_values_reserved(array, start, values, count);
     return true;
 }
 
@@ -605,6 +611,17 @@ MalArrayObject *mal_array_object_new(MalHeap *heap, MalObject *prototype) {
     MalArrayObject *array = mal_heap_alloc(heap, sizeof(MalArrayObject), MAL_HEAP_ARRAY_OBJECT);
     mal_array_object_init(heap, array, prototype);
 
+    return array;
+}
+
+MalArrayObject *mal_array_object_new_from_values(
+    MalHeap *heap, MalObject *prototype, const MalValue *values, u32 count
+) {
+    MalArrayObject *array = mal_array_object_new(heap, prototype);
+    if (count > 0) {
+        if (!mal_array_object_fresh_dense_reserve_exact(array, count)) abort();
+        mal_array_object_dense_build_values_reserved(array, 0, values, count);
+    }
     return array;
 }
 

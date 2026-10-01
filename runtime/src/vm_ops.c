@@ -7268,16 +7268,13 @@ MalValue mal_create_rest_arguments(MalVm *vm, const MalValue *args, i32 arg_coun
     MAL_PERF_COUNT(rest_array_allocations);
     MAL_PERF_ADD(rest_array_values, count);
 
-    MalArrayObject *rest = mal_array_object_new(
+    // Rest creates own elements even over inherited accessors or read-only indices.
+    MalArrayObject *rest = mal_array_object_new_from_values(
         &vm->heap,
-        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ARRAY_PROTOTYPE])
+        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ARRAY_PROTOTYPE]),
+        count > 0 ? args + start : nullptr,
+        (u32) count
     );
-    // Rest binding creates own data properties even over inherited accessors or read-only indices.
-    if (count > 0 &&
-        (!mal_array_object_fresh_dense_reserve_exact(rest, (u32) count) ||
-         !mal_array_object_dense_build_values(rest, 0, args + start, (u32) count))) {
-        abort();
-    }
 
     return mal_value_from_array_object(rest);
 }

@@ -53,6 +53,20 @@ for (let index = 0; index < owned.length; index++) {
 	check(owned[index].index === index, "rest array retains sole-owned references");
 }
 
+const lastOwned = owned[128];
+owned.push({ index: 129 });
+check(
+	owned.length === 130 && owned[128] === lastOwned,
+	"growth retains original elements",
+);
+check(owned[129].index === 129, "growth stores appended element");
+owned.length = 2;
+owned.length = 4;
+check(
+	!Object.hasOwn(owned, 2) && !Object.hasOwn(owned, 3),
+	"regrowth after truncation creates holes",
+);
+
 let prototypeCalls = 0;
 Object.defineProperty(Array.prototype, "0", {
 	configurable: true,

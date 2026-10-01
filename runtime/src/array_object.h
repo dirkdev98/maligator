@@ -242,6 +242,11 @@ void mal_array_object_init(MalHeap *heap, MalArrayObject *array, MalObject *prot
  * Allocate and initialize a new array object.
  */
 MalArrayObject *mal_array_object_new(MalHeap *heap, MalObject *prototype);
+
+/** Copy present values into a fresh Array with exact dense capacity. */
+MalArrayObject *mal_array_object_new_from_values(
+    MalHeap *heap, MalObject *prototype, const MalValue *values, u32 count
+);
 MalArrayObject *mal_array_object_try_new(MalHeap *heap, MalObject *prototype);
 
 /**
