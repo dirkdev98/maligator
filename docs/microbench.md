@@ -69,6 +69,45 @@ budget; select smaller related groups when investigating a regression. Matching
 dependency lockfiles and native build plans are required. Changing either causes
 an explicit failure rather than a comparison with mismatched dependencies.
 
+## Runtime call probes
+
+These five cases keep the target opaque to the optimizer using a runtime property
+name. The sixteen-argument cases resolve their target before warmup and timing;
+the receiver case includes method lookup on each call. Argument counts and most
+argument values remain known at each call site.
+
+| Case                      | Measured boundary                                                  |
+| ------------------------- | ------------------------------------------------------------------ |
+| `call-this-two-args`      | Method lookup, `this`, and two positional arguments                |
+| `call-fixed-sixteen-args` | Stable indirect target and sixteen positional arguments            |
+| `call-bound-prefix-args`  | Bound `this`, eight bound arguments, and eight supplied arguments  |
+| `call-arguments-escape`   | Returning a strict unmapped `arguments` object with sixteen values |
+| `call-rest-escape`        | Returning a rest array with the same sixteen values                |
+
+The last two cases read identical runtime-selected endpoints and `length`; their
+objects escape the callee, so scalar argument loads and one-use rest forwarding
+cannot replace materialization. Binding and target resolution are setup costs.
+The receiver and fixed-arity cases have different lookup and receiver work; their
+timing difference does not isolate argument count alone.
+
+Run a small parity-checked probe after the environment check:
+
+```sh
+npm run bench:performance -- gap \
+  --case call-this-two-args --case call-fixed-sixteen-args \
+  --case call-bound-prefix-args --case call-arguments-escape --case call-rest-escape \
+  --samples 1 --target-node-ms 5 --warmup-blocks 1 --budget-seconds 600 \
+  --skip-node-allocation
+```
+
+For an optimization comparison, pass these IDs to `native-micro-compare.ts` or
+`/microbench`. Validate call retention again for each compiler revision: inspect
+the optimized image for an ordinary hot call without an exact or guarded script
+target, its emitted C for runtime dispatch, and native disassembly for the retained
+dispatch call. A surviving generated function symbol alone does not exclude
+inlining. Node's JIT may inline its target; Node supplies the output oracle and a
+host comparison, while native call retention establishes this runtime boundary.
+
 ## Read the evidence
 
 The Actions run summary shows pinned commits, median baseline and candidate kernel

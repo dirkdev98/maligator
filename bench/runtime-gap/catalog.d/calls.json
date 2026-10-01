@@ -1,0 +1,70 @@
+{
+	"schema": 1,
+	"cases": [
+		{
+			"id": "call-this-two-args",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "function-call-dispatch",
+			"category": "language-features",
+			"mechanisms": ["native-call-boundary", "receiver-dispatch", "fixed-arity"],
+			"inputShape": "Runtime-key method dispatch with a stable object receiver and two numeric arguments; the target adds this.bias and both arguments.",
+			"unit": "calls",
+			"sourceSeam": "src/compiler/target/render-native-c.ts; runtime/src/vm.c",
+			"fixture": "cases/call-this-two-args.mjs",
+			"controls": ["call-fixed-sixteen-args"]
+		},
+		{
+			"id": "call-fixed-sixteen-args",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "function-call-dispatch",
+			"category": "language-features",
+			"mechanisms": ["native-call-boundary", "argument-packing", "fixed-arity"],
+			"inputShape": "Opaque stable callee with sixteen positional numeric arguments of known count; only the first varies, and the body adds the first and last.",
+			"unit": "calls",
+			"sourceSeam": "src/compiler/target/render-native-c.ts; runtime/src/vm.c",
+			"fixture": "cases/call-fixed-sixteen-args.mjs",
+			"controls": ["call-this-two-args"]
+		},
+		{
+			"id": "call-bound-prefix-args",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "bound-function-calls",
+			"category": "language-features",
+			"mechanisms": ["native-call-boundary", "bound-argument-merge", "receiver-dispatch"],
+			"inputShape": "One wrapper binds this and eight numeric prefix arguments during setup; each opaque invocation supplies eight more, exceeding the runtime's eight-slot scratch capacity.",
+			"unit": "calls",
+			"sourceSeam": "runtime/src/bound_function_object.c; runtime/src/vm.c",
+			"fixture": "cases/call-bound-prefix-args.mjs",
+			"controls": ["call-fixed-sixteen-args", "call-this-two-args"]
+		},
+		{
+			"id": "call-arguments-escape",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "arguments-materialization",
+			"category": "language-features",
+			"mechanisms": ["native-call-boundary", "arguments-object", "argument-packing"],
+			"inputShape": "An opaque strict module function receives sixteen fixed arguments and returns its unmapped arguments object; the caller reads length and runtime-selected endpoints.",
+			"unit": "calls",
+			"sourceSeam": "runtime/src/arguments_object.c; runtime/src/vm.c",
+			"fixture": "cases/call-arguments-escape.mjs",
+			"controls": ["call-fixed-sixteen-args", "call-rest-escape"]
+		},
+		{
+			"id": "call-rest-escape",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "rest-materialization",
+			"category": "language-features",
+			"mechanisms": ["native-call-boundary", "rest-array", "argument-packing"],
+			"inputShape": "An opaque function receives sixteen fixed arguments and returns its rest array; the caller reads length and runtime-selected endpoints, matching the arguments-object case.",
+			"unit": "calls",
+			"sourceSeam": "runtime/src/vm_ops.c; runtime/src/vm.c",
+			"fixture": "cases/call-rest-escape.mjs",
+			"controls": ["call-fixed-sixteen-args", "call-arguments-escape"]
+		}
+	]
+}
