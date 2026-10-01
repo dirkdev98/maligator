@@ -88,7 +88,7 @@ function BoundRecord(...values) {
 }
 
 for (const depth of [1, 2, 8, 32]) {
-	for (const arity of [0, 8, 9, 16]) {
+	for (const arity of [0, 7, 8, 9, 15, 16, 17, 32]) {
 		const receiver = { depth, arity };
 		const values = Array.from({ length: arity }, (_, index) => ({ index }));
 		for (const hasPrefix of [false, true]) {

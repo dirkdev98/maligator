@@ -34,7 +34,7 @@
 			"owner": "bound-function-calls",
 			"category": "language-features",
 			"mechanisms": ["native-call-boundary", "bound-argument-merge", "receiver-dispatch"],
-			"inputShape": "One wrapper binds this and eight numeric prefix arguments during setup; each opaque invocation supplies eight more, exceeding the runtime's eight-slot scratch capacity.",
+			"inputShape": "One wrapper binds this and eight numeric prefix arguments during setup; each opaque invocation supplies eight more, filling the runtime's sixteen-slot scratch capacity.",
 			"unit": "calls",
 			"sourceSeam": "runtime/src/bound_function_object.c; runtime/src/vm.c",
 			"fixture": "cases/call-bound-prefix-args.mjs",
@@ -82,6 +82,32 @@
 			"sourceSeam": "runtime/src/vm_ops.c; runtime/src/vm.c",
 			"fixture": "cases/call-rest-escape.mjs",
 			"controls": ["call-fixed-sixteen-args", "call-arguments-escape"]
+		},
+		{
+			"id": "call-bound-prefix-nine",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "bound-function-calls",
+			"category": "language-features",
+			"mechanisms": ["native-call-boundary", "bound-argument-merge", "receiver-dispatch"],
+			"inputShape": "One wrapper binds this and 4 numeric prefix arguments during setup; opaque invocations supply 5 more for 9 total arguments.",
+			"unit": "calls",
+			"sourceSeam": "runtime/src/bound_function_object.c; runtime/src/vm.c",
+			"fixture": "cases/call-bound-prefix-nine.mjs",
+			"controls": ["call-bound-prefix-args", "call-fixed-sixteen-args"]
+		},
+		{
+			"id": "call-bound-prefix-seventeen",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "bound-function-calls",
+			"category": "language-features",
+			"mechanisms": ["native-call-boundary", "bound-argument-merge", "receiver-dispatch"],
+			"inputShape": "One wrapper binds this and 9 numeric prefix arguments during setup; opaque invocations supply 8 more for 17 total arguments.",
+			"unit": "calls",
+			"sourceSeam": "runtime/src/bound_function_object.c; runtime/src/vm.c",
+			"fixture": "cases/call-bound-prefix-seventeen.mjs",
+			"controls": ["call-bound-prefix-args", "call-fixed-sixteen-args"]
 		}
 	]
 }

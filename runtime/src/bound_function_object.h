@@ -16,7 +16,7 @@ typedef struct MalBoundFunctionObject {
 static_assert(sizeof(MalBoundFunctionObject) <= 80,
               "bound function outgrew its packed layout");
 
-#define MAL_BOUND_INLINE_ARGS 8
+#define MAL_BOUND_INLINE_ARGS 16
 
 /**
  * Result of unwrapping a (possibly nested) bound function chain into a direct
