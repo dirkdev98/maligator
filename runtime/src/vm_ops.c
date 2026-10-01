@@ -2036,15 +2036,13 @@ MalValue mal_create_arguments_object(
     arguments->is_arguments = true;
 
     // Reservation is optional; an unrepresentable capacity keeps incremental growth.
-    (void) mal_table_reserve(mal_object_properties(arguments), (usize) arg_count + 3);
+    MalTable *properties = mal_object_properties(arguments);
+    (void) mal_table_reserve(properties, (usize) arg_count + 3);
 
-    // CreateDataProperty bypasses inherited setters and nonwritable properties.
+    // Fresh indexed entries need no descriptor compatibility or prototype invalidation.
     for (i32 i = 0; i < arg_count; i++) {
-        MalPropertyDesc desc = {
-            .flags = MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE,
-            .value = args[i],
-        };
-        mal_object_define_own(arguments, mal_key_index(i), &desc);
+        mal_property_set_value(properties, mal_key_index(i), args[i]);
+        mal_gc_card(&arguments->header, args[i]);
     }
 
     MalPropertyDesc length_desc = {

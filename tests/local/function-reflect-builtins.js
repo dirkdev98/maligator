@@ -380,4 +380,38 @@ try {
 }
 assert(defaultCalleeThrows, "sloppy nonsimple parameters use unmapped arguments");
 
+for (const count of [0, 1, 8, 9, 16, 65]) {
+	for (const factory of [strictArguments, mappedArguments]) {
+		const input = Array.from({ length: count }, (_, index) => ({ index, count }));
+		const list = Reflect.apply(factory, undefined, input);
+		input.length = 0;
+		if (typeof __mal_collect_garbage === "function") __mal_collect_garbage();
+		assert(list.length === count, "materialized arguments preserve supplied count");
+		assert(
+			Object.keys(list).join(",") ===
+				Array.from({ length: count }, (_, index) => String(index)).join(","),
+			"materialized arguments enumerate every index in order",
+		);
+		for (let index = 0; index < count; index++) {
+			const descriptor = Object.getOwnPropertyDescriptor(list, String(index));
+			assert(
+				descriptor.writable &&
+					descriptor.enumerable &&
+					descriptor.configurable &&
+					descriptor.value.index === index &&
+					descriptor.value.count === count,
+				"materialized arguments retain heap values and default index attributes",
+			);
+		}
+		if (count > 0) {
+			Object.defineProperty(list, "0", { value: "locked", writable: false });
+			Object.freeze(list);
+			assert(
+				list[0] === "locked" && !Object.getOwnPropertyDescriptor(list, "0").writable,
+				"materialized arguments preserve later descriptor transitions",
+			);
+		}
+	}
+}
+
 console.log("function-reflect-builtins PASS");
