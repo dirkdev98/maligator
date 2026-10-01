@@ -89,6 +89,7 @@ export function formatMicrobenchReport(value: unknown, context: ReportContext): 
 		"| --- | ---: | ---: | ---: | ---: | ---: | ---: |",
 	);
 	const cases = Array.isArray(report.cases) ? report.cases.slice(0, 24) : [];
+	const hostGapRows: Array<string> = [];
 	for (const value of cases) {
 		const entry = record(value);
 		const summary = record(entry.summary);
@@ -100,7 +101,31 @@ export function formatMicrobenchReport(value: unknown, context: ReportContext): 
 		lines.push(
 			`| ${id} | ${pairs} | ${numeric(summary.baselineMedianMs, 3)} | ${numeric(summary.candidateMedianMs, 3)} | ${numeric(summary.medianReductionPercent)}% | ${numeric(summary.madPercentagePoints)} | ${numeric(summary.fasterPairs, 0)} |`,
 		);
+		const nodeMs = summary.nodeMedianMs;
+		const candidateMs = summary.candidateMedianMs;
+		const validTimes =
+			typeof nodeMs === "number" &&
+			Number.isFinite(nodeMs) &&
+			nodeMs > 0 &&
+			typeof candidateMs === "number" &&
+			Number.isFinite(candidateMs) &&
+			candidateMs > 0;
+		const ratio = validTimes ? `${numeric(candidateMs / nodeMs)}x` : "—";
+		hostGapRows.push(
+			`| ${id} | ${pairs} | ${numeric(nodeMs, 3)} | ${numeric(candidateMs, 3)} | ${ratio} | ${numeric(validTimes ? candidateMs - nodeMs : undefined, 3)} | ${numeric(validTimes ? summary.deltaNsPerOperation : undefined)} |`,
+		);
 	}
+	if (cases.length === 0) lines.push("| No measured cases | — | — | — | — | — | — |");
+	lines.push(
+		"",
+		"## Node/Maligator host gap",
+		"",
+		"Host gap is candidate median minus Node median. A positive gap means Maligator took longer. The ratio is candidate median divided by Node median; per-operation gaps use the fixture's reported operation count.",
+		"",
+		"| Case | Pairs | Node median (ms) | Candidate median (ms) | Candidate / Node | Host gap (ms) | Gap (ns/op) |",
+		"| --- | ---: | ---: | ---: | ---: | ---: | ---: |",
+		...hostGapRows,
+	);
 	if (cases.length === 0) lines.push("| No measured cases | — | — | — | — | — | — |");
 	lines.push(
 		"",

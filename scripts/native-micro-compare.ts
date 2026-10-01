@@ -35,7 +35,9 @@ import {
 } from "./native-micro-diagnostics.ts";
 import { compileNativeMicroProgram } from "./native-micro-frontend.ts";
 import { runBoundedProcess } from "./performance-process.ts";
+import { runtimeGapBuildConfig } from "./runtime-gap-build-config.ts";
 import { loadRuntimeGapCatalog } from "./runtime-gap-catalog.ts";
+import type { RuntimeGapFeature } from "./runtime-gap-catalog.ts";
 import {
 	assertRuntimeGapParity,
 	calibrationScaleTimeoutCap,
@@ -110,6 +112,7 @@ interface BuildRequest {
 	output: string;
 	diagnostics: boolean;
 	linkCacheVariant: string;
+	features: ReadonlyArray<RuntimeGapFeature>;
 }
 
 interface BuildEvidence {
@@ -128,6 +131,8 @@ interface BuildEvidence {
 
 interface Pair {
 	order: ReadonlyArray<"baseline" | "candidate">;
+	sequence: ReadonlyArray<"node" | "baseline" | "candidate">;
+	node: KernelOutput;
 	baseline: KernelOutput;
 	candidate: KernelOutput;
 	reductionPercent: number;
@@ -220,13 +225,48 @@ function summarize(pairs: ReadonlyArray<Pair>) {
 	if (pairs.length === 0) return undefined;
 	const reductions = pairs.map((pair) => pair.reductionPercent);
 	const center = median(reductions);
+	const nodeMedianMs = median(pairs.map((pair) => pair.node.elapsedMs));
+	const candidateMedianMs = median(pairs.map((pair) => pair.candidate.elapsedMs));
 	return {
 		pairs: pairs.length,
 		baselineMedianMs: median(pairs.map((pair) => pair.baseline.elapsedMs)),
-		candidateMedianMs: median(pairs.map((pair) => pair.candidate.elapsedMs)),
+		candidateMedianMs,
+		nodeMedianMs,
+		candidateNodeRatio: candidateMedianMs / nodeMedianMs,
+		hostGapMs: candidateMedianMs - nodeMedianMs,
+		deltaNsPerOperation:
+			((candidateMedianMs - nodeMedianMs) * 1e6) / pairs[0]!.node.operations,
 		medianReductionPercent: center,
 		madPercentagePoints: median(reductions.map((value) => Math.abs(value - center))),
 		fasterPairs: reductions.filter((value) => value > 0).length,
+	};
+}
+
+export async function measureNativeMicroPair(
+	index: number,
+	reference: KernelOutput,
+	run: (host: "node" | "baseline" | "candidate") => Promise<KernelOutput>,
+): Promise<Pair> {
+	const order =
+		index % 2 === 0
+			? (["baseline", "candidate"] as const)
+			: (["candidate", "baseline"] as const);
+	const sequence =
+		index % 2 === 0 ? (["node", ...order] as const) : ([...order, "node"] as const);
+	const samples: Partial<Record<"node" | "baseline" | "candidate", KernelOutput>> = {};
+	for (const host of sequence) {
+		const sample = await run(host);
+		assertRuntimeGapParity(reference, sample);
+		samples[host] = sample;
+	}
+	return {
+		order,
+		sequence,
+		node: samples.node!,
+		baseline: samples.baseline!,
+		candidate: samples.candidate!,
+		reductionPercent:
+			100 * (1 - samples.candidate!.elapsedMs / samples.baseline!.elapsedMs),
 	};
 }
 
@@ -329,10 +369,7 @@ async function buildWorker(request: BuildRequest): Promise<void> {
 	const { programImageStats } = (await load(
 		"src/compiler/target/program-image.ts",
 	)) as typeof ProgramImage;
-	const config = resolveBuildConfig({
-		engine: { eval: false, realms: false, regexp: false, intl: { enabled: false } },
-		surface: { node: true, webPlatform: false, maligator: true },
-	});
+	const config = runtimeGapBuildConfig(request.features, resolveBuildConfig);
 	const phases: Array<NativeBuildPhaseEvent> = [];
 	const frontend: Array<unknown> = [];
 	const nativeCaches: Array<unknown> = [];
@@ -440,6 +477,8 @@ async function compare(options: Options): Promise<void> {
 			? "fresh cache key; unchanged production flags; copy before strip"
 			: undefined,
 		warmupBlocksPerProcess: 5,
+		nodeSamplesPerCase: options.pairs,
+		timeZone: "UTC",
 		maximumCalibrationScale: 256,
 		parity: ["id", "scale", "operations", "checksum"],
 		output: options.output,
@@ -507,7 +546,7 @@ async function compare(options: Options): Promise<void> {
 		);
 		const result = await runBoundedProcess(executable, args, {
 			cwd,
-			environment: cleanTestEnvironment(environmentOverrides),
+			environment: cleanTestEnvironment({ TZ: "UTC", ...environmentOverrides }),
 			timeoutMs: remaining(limit),
 			onStdout: (chunk) => appendFileSync(log, chunk),
 			onStderr: (chunk) => appendFileSync(log, chunk),
@@ -597,6 +636,7 @@ async function compare(options: Options): Promise<void> {
 					output: path.join(buildDirectory, "build.json"),
 					diagnostics: options.diagnostics,
 					linkCacheVariant: `micro-diagnostics-${randomUUID()}`,
+					features: descriptor.features ?? [],
 				};
 				await run(
 					`${descriptor.id}-build-${variant}`,
@@ -667,23 +707,11 @@ async function compare(options: Options): Promise<void> {
 				);
 			console.log(`${descriptor.id}: ${options.pairs} pairs at scale ${entry.scale}`);
 			for (let index = 0; index < options.pairs; index++) {
-				const pairOrder =
-					index % 2 === 0
-						? (["baseline", "candidate"] as const)
-						: (["candidate", "baseline"] as const);
-				const samples: Partial<Record<"baseline" | "candidate", KernelOutput>> = {};
-				for (const variant of pairOrder) {
-					const sample = await kernel(`pair-${index}-${variant}`, variant, entry.scale);
-					assertRuntimeGapParity(entry.oracle, sample);
-					samples[variant] = sample;
-				}
-				entry.pairs.push({
-					order: pairOrder,
-					baseline: samples.baseline!,
-					candidate: samples.candidate!,
-					reductionPercent:
-						100 * (1 - samples.candidate!.elapsedMs / samples.baseline!.elapsedMs),
-				});
+				entry.pairs.push(
+					await measureNativeMicroPair(index, entry.oracle, (host) =>
+						kernel(`pair-${index}-${host}`, host, entry.scale!),
+					),
+				);
 				save();
 			}
 			console.log(JSON.stringify({ id: entry.id, ...summarize(entry.pairs) }));

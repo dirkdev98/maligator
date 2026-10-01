@@ -90,6 +90,16 @@ artifact identity, image counts, generated-object measurements, executable size,
 cache outcomes. Use `--plan=json` before execution, `--category` or repeatable `--case`
 for focused work, and `--preset confirm --case ID` for deeper selected evidence.
 
+Use `--owner primordial-methods` to select the 50 grouped primordial microbenchmarks.
+`bench/runtime-gap/primordial-methods.json` records the selected 200 callable identities.
+Their catalog `methods` list records the methods exercised in each measured workload;
+the result is a group workload offset, not an individual method cost. Case `features`
+enable RegExp or the Intl collator only where required, and plans and reports record
+the resolved build configuration for each case. Run the date workloads with `TZ=UTC`.
+For a bounded local survey, use
+`TZ=UTC npm run bench:performance -- gap --owner primordial-methods --samples 5 --target-node-ms 20 --budget-seconds 3600 --plan=json`,
+then remove `--plan=json` to execute the inspected selection.
+
 Use `bench:performance -- experiment new ID [--from CASE] [--control CASE]` for ignored
 scratch work. `experiment run ID` supports `smoke`, `verify`, and `confirm` presets;
 promotion refuses collisions and does not add the new case to a default suite unless

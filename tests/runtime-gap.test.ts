@@ -13,6 +13,7 @@ import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
 import { PerformanceProcessInterruptedError } from "../scripts/performance-process.ts";
 import { loadRuntimeGapCatalog } from "../scripts/runtime-gap-catalog.ts";
+import type { RuntimeGapCaseDescriptor } from "../scripts/runtime-gap-catalog.ts";
 import { RUNTIME_GAP_EXPERIMENTS } from "../scripts/runtime-gap-experiment.ts";
 import {
 	assertRuntimeGapParity,
@@ -159,6 +160,25 @@ describe("runtime-gap case catalog", () => {
 					!catalog.presets.quick.includes(id) && !catalog.presets.survey.includes(id),
 			),
 		).toBe(true);
+	});
+
+	it("plans an owner selection without implicitly restricting it to the quick preset", () => {
+		const catalog = loadRuntimeGapCatalog();
+		const owner = catalog.cases.find((entry) => entry.suite === "compiler")!.owner;
+		const plan = JSON.parse(
+			execFileSync(
+				process.execPath,
+				["scripts/performance.ts", "gap", "--owner", owner, "--plan=json"],
+				{ encoding: "utf8" },
+			),
+		) as {
+			readonly preset: string | null;
+			readonly cases: ReadonlyArray<{ readonly id: string; readonly owner: string }>;
+		};
+		expect(plan.preset).toBeNull();
+		expect(plan.cases.map(({ id }) => id)).toEqual(
+			catalog.cases.filter((entry) => entry.owner === owner).map(({ id }) => id),
+		);
 	});
 
 	it.each(["iteration", "split-cursor"])(
@@ -505,6 +525,62 @@ runRuntimeGapCase("allocation-snapshot", run, verify);
 			rmSync(directory, { recursive: true, force: true });
 		}
 	});
+
+	it.each([
+		["primordial-regexp-escaped-records", true, false],
+		["primordial-string-normalize-collation", false, true],
+		["primordial-promise-batch-results", false, false],
+	] as const)(
+		"clones %s with runnable work and its required features",
+		(sourceId, regexp, collator) => {
+			const id = `unit-clone-${sourceId}-${process.pid}`;
+			const directory = path.join(RUNTIME_GAP_EXPERIMENTS, id);
+			const original = loadRuntimeGapCatalog().cases.find(({ id }) => id === sourceId)!;
+			try {
+				execFileSync(process.execPath, [
+					"scripts/performance.ts",
+					"experiment",
+					"new",
+					id,
+					"--from",
+					sourceId,
+				]);
+				const plan = JSON.parse(
+					execFileSync(
+						process.execPath,
+						["scripts/performance.ts", "experiment", "run", id, "--plan=json"],
+						{ encoding: "utf8" },
+					),
+				) as {
+					readonly cases: ReadonlyArray<RuntimeGapCaseDescriptor>;
+					readonly buildsByCase: Readonly<Record<string, { readonly engine: unknown }>>;
+				};
+				expect(plan.cases).toHaveLength(1);
+				expect(plan.cases[0]).toMatchObject({
+					id,
+					methods: original.methods,
+					features: original.features,
+				});
+				expect(plan.buildsByCase[id]!.engine).toMatchObject({
+					regexp,
+					intl: { enabled: collator, features: collator ? ["collator"] : [] },
+				});
+				const cloned = JSON.parse(
+					execFileSync(process.execPath, [path.join(directory, "case.mjs"), "1", "1"], {
+						encoding: "utf8",
+					}),
+				) as KernelOutput;
+				const expected = fixtureOutput(sourceId);
+				expect(cloned).toMatchObject({
+					id,
+					operations: expected.operations,
+					checksum: expected.checksum,
+				});
+			} finally {
+				rmSync(directory, { recursive: true, force: true });
+			}
+		},
+	);
 
 	it("rejects scratch dependencies outside the transported two-file closure", () => {
 		const id = `unit-experiment-dependency-${process.pid}`;

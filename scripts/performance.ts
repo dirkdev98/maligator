@@ -32,8 +32,8 @@ async function main(args: ReadonlyArray<string>): Promise<void> {
 	if (command !== "gap") throw new Error(`unknown performance command: ${command}`);
 	const forwarded = [...commandArgs];
 	if (
-		!["--preset", "--case", "--category", "--suite", "--group"].some((option) =>
-			forwarded.includes(option),
+		!["--preset", "--case", "--owner", "--category", "--suite", "--group"].some(
+			(option) => forwarded.includes(option),
 		)
 	) {
 		forwarded.push("--preset", "quick");

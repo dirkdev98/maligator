@@ -15,12 +15,13 @@ import {
 import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import { resolveBuildConfig } from "../src/build-config.ts";
+import type { ResolvedBuildConfig } from "../src/build-config.ts";
 import { CommandProgress } from "../src/command-progress.ts";
 import {
 	PerformanceProcessInterruptedError,
 	runBoundedProcess,
 } from "./performance-process.ts";
+import { runtimeGapBuildConfig } from "./runtime-gap-build-config.ts";
 import {
 	loadRuntimeGapCatalog,
 	loadRuntimeGapExperiment,
@@ -36,11 +37,6 @@ import { summarizeV8GcTrace } from "./v8-gc-trace.ts";
 const REPOSITORY_ROOT = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
 const DEFAULT_JSON = path.join(REPOSITORY_ROOT, ".cache/performance/runtime-gap.json");
 const DEFAULT_MARKDOWN = path.join(REPOSITORY_ROOT, ".cache/performance/runtime-gap.md");
-const CONFIG = resolveBuildConfig({
-	engine: { eval: false, realms: false, regexp: false, intl: { enabled: false } },
-	surface: { node: true, webPlatform: false, maligator: true },
-});
-
 type KernelDescriptor = RuntimeGapCaseDescriptor & { readonly fixturePath: string };
 type HostGapCategory = RuntimeGapCategory;
 
@@ -84,7 +80,8 @@ interface ResourceSample {
 }
 
 interface RuntimeGapBuildEvidence {
-	readonly schema: 1;
+	readonly schema: 2;
+	readonly config: ResolvedBuildConfig;
 	readonly binaryPath: string;
 	readonly buildMs: number;
 	readonly executableBytes: number;
@@ -192,6 +189,7 @@ interface Options {
 	readonly suites: ReadonlySet<KernelDescriptor["suite"]>;
 	readonly categories: ReadonlySet<HostGapCategory>;
 	readonly cases: ReadonlySet<string>;
+	readonly owners: ReadonlySet<string>;
 	readonly skipNodeAllocation: boolean;
 	readonly plan: boolean;
 	readonly preset?: Preset;
@@ -212,6 +210,7 @@ Options:
   --category NAME            select a report category; repeatable
   --group primitive|runtime|algorithm
   --case ID                  select a kernel; repeatable
+  --owner NAME               select a workload owner; repeatable
   --output PATH              JSON report (default: .cache/performance/runtime-gap.json)
   --markdown PATH            Markdown report (default: .cache/performance/runtime-gap.md)
   --skip-node-allocation     omit V8 sampled-allocation resource probes
@@ -263,6 +262,7 @@ function parseOptions(args: ReadonlyArray<string>): Options | undefined {
 	const suites = new Set<KernelDescriptor["suite"]>();
 	const categories = new Set<HostGapCategory>();
 	const cases = new Set<string>();
+	const owners = new Set<string>();
 	let skipNodeAllocation = preset === "quick";
 	let plan = false;
 	let selfCompile: string | undefined;
@@ -313,6 +313,9 @@ function parseOptions(args: ReadonlyArray<string>): Options | undefined {
 		} else if (option === "--case") {
 			cases.add(requiredValue(args, index));
 			index++;
+		} else if (option === "--owner") {
+			owners.add(requiredValue(args, index));
+			index++;
 		} else if (option === "--skip-node-allocation") {
 			skipNodeAllocation = true;
 		} else if (option === "--plan=json") {
@@ -339,6 +342,7 @@ function parseOptions(args: ReadonlyArray<string>): Options | undefined {
 		suites,
 		categories,
 		cases,
+		owners,
 		skipNodeAllocation,
 		plan,
 		...(preset === undefined ? {} : { preset }),
@@ -1186,6 +1190,8 @@ async function buildRuntimeGapCase(
 				`malgap-${token}`,
 				"--output",
 				output,
+				"--features",
+				JSON.stringify(descriptor.features ?? []),
 			],
 			{
 				cwd: REPOSITORY_ROOT,
@@ -1202,7 +1208,8 @@ async function buildRuntimeGapCase(
 			readFileSync(output, "utf8"),
 		) as Partial<RuntimeGapBuildEvidence>;
 		if (
-			report.schema !== 1 ||
+			report.schema !== 2 ||
+			report.config === undefined ||
 			typeof report.binaryPath !== "string" ||
 			!existsSync(report.binaryPath) ||
 			typeof report.buildMs !== "number" ||
@@ -1237,6 +1244,11 @@ export async function main(args: ReadonlyArray<string>): Promise<void> {
 	];
 	if (allDescriptors.length === 0) throw new Error("runtime-gap catalog has no cases");
 	const knownCategories = new Set(allDescriptors.map(({ category }) => category));
+	const knownOwners = new Set(allDescriptors.map(({ owner }) => owner));
+	const unknownOwners = [...options.owners].filter((owner) => !knownOwners.has(owner));
+	if (unknownOwners.length > 0) {
+		throw new Error(`unknown selected owners: ${unknownOwners.join(", ")}`);
+	}
 	const unknownCategories = [...options.categories].filter(
 		(category) => !knownCategories.has(category),
 	);
@@ -1250,6 +1262,7 @@ export async function main(args: ReadonlyArray<string>): Promise<void> {
 		(options.preset === "quick" || options.preset === "survey") &&
 		options.suites.size === 0 &&
 		options.groups.size === 0 &&
+		options.owners.size === 0 &&
 		options.cases.size === 0 &&
 		options.categories.size === 0;
 	const presetCases =
@@ -1260,6 +1273,7 @@ export async function main(args: ReadonlyArray<string>): Promise<void> {
 			(options.suites.size === 0 || options.suites.has(descriptor.suite)) &&
 			(options.categories.size === 0 || options.categories.has(descriptor.category)) &&
 			(options.cases.size === 0 || options.cases.has(descriptor.id)) &&
+			(options.owners.size === 0 || options.owners.has(descriptor.owner)) &&
 			(!implicitPresetSelection || presetCases.includes(descriptor.id)),
 	);
 	const unknownCases = [...options.cases].filter(
@@ -1283,6 +1297,12 @@ export async function main(args: ReadonlyArray<string>): Promise<void> {
 					workload: "performance-gap",
 					preset: options.preset ?? null,
 					cases: descriptors,
+					buildsByCase: Object.fromEntries(
+						descriptors.map((descriptor) => [
+							descriptor.id,
+							runtimeGapBuildConfig(descriptor.features),
+						]),
+					),
 					samples: options.samples,
 					targetNodeMs: options.targetNodeMs,
 					warmupBlocks: options.warmupBlocks,
@@ -1328,7 +1348,7 @@ export async function main(args: ReadonlyArray<string>): Promise<void> {
 				(left.maligator.resource?.allocatedBytes ?? 0),
 		);
 		return {
-			schema: 3,
+			schema: 4,
 			status,
 			complete,
 			generatedAt: new Date().toISOString(),
@@ -1370,7 +1390,13 @@ export async function main(args: ReadonlyArray<string>): Promise<void> {
 				),
 				driver: path.relative(REPOSITORY_ROOT, fileURLToPath(import.meta.url)),
 				driverDigest: digest(fileURLToPath(import.meta.url)),
-				build: CONFIG,
+				timeZone: process.env.TZ ?? null,
+				buildsByCase: Object.fromEntries(
+					descriptors.map((descriptor) => [
+						descriptor.id,
+						runtimeGapBuildConfig(descriptor.features),
+					]),
+				),
 				...(options.selfCompile === undefined
 					? {}
 					: {
