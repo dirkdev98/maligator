@@ -681,11 +681,11 @@
 	},
 	{
 		"file": "vm.c",
-		"sha256": "7ab1822ef7d79bf3e099b54536878066d6720e0f677c90158b435612d4e9ee64"
+		"sha256": "b016ae90ff68d601fa277caee5d0420d1ca5e26a4f96c77d5f41277e21ae5d2d"
 	},
 	{
 		"file": "vm.h",
-		"sha256": "dc9a7c7189f996def31cbf7d287a087d2efdcd74df639b7871f5790808cdbcfc"
+		"sha256": "58c95e009aec83e8a01a6b4f47e98da19ef7e663c2fa1efa46318ef753a7d117"
 	},
 	{
 		"file": "vm_ops.c",
