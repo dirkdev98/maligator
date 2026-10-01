@@ -26,18 +26,24 @@ describe("Error.captureStackTrace", () => {
 			name: "error-capture-stack-compiled",
 			outDir,
 		});
+	});
+	beforeAll(() => {
 		interpreted = buildNativeBinary({
 			fixture: "tests/local/error-capture-stack.js",
 			name: "error-capture-stack-interpreted",
 			outDir,
 			compiled: false,
 		});
+	});
+	beforeAll(() => {
 		instrumented = buildNativeBinary({
 			fixture: "tests/local/error-capture-stack.js",
 			name: "error-capture-stack-perf",
 			outDir,
 			environment: { ...process.env, MAL_PERF_STATS: "1" },
 		});
+	});
+	beforeAll(() => {
 		pinnedCompiled = buildNativeBinary({
 			fixture: "tests/fixtures/express-5/error-stack-smoke.cjs",
 			name: "error-stack-pinned-compiled",
@@ -45,6 +51,8 @@ describe("Error.captureStackTrace", () => {
 			outDir,
 			nodeEnabled: true,
 		});
+	});
+	beforeAll(() => {
 		pinnedInterpreted = buildNativeBinary({
 			fixture: "tests/fixtures/express-5/error-stack-smoke.cjs",
 			name: "error-stack-pinned-interpreted",
