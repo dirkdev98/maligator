@@ -6,6 +6,7 @@
 #include "heap_bigint.h"
 #include "heap_string.h"
 #include "intrinsics.h"
+#include "perf_stats.h"
 #include "profile.h"
 #include "shape.h"
 #include "value.h"
@@ -2020,7 +2021,60 @@ static inline void mal_gc_callee_roots_end(MalCalleeRoots *roots) {
  * when the native call depth limit would be exceeded, otherwise increments the
  * depth and returns true. Each successful enter must be paired with a leave.
  */
-bool mal_vm_enter_compiled(MalVm *vm, i32 function_index);
+void mal_vm_throw_stack_overflow(MalVm *vm);
+void mal_vm_grow_native_frames(MalVm *vm);
+
+#if UINTPTR_MAX != UINT64_MAX || (!defined(__aarch64__) && !defined(__x86_64__))
+uptr mal_vm_native_stack_address(void);
+#else
+static inline uptr mal_vm_native_stack_address(void) {
+    uptr address;
+    // A frame pointer can sit above a large caller's locals; the guard needs its SP.
+#if defined(__aarch64__)
+    __asm__ volatile("mov %0, sp" : "=r" (address) : : "memory");
+#else
+    __asm__ volatile("mov %%rsp, %0" : "=r" (address) : : "memory");
+#endif
+    return address;
+}
+#endif
+
+static inline bool mal_vm_enter_depth_checked(MalVm *vm) {
+    const uptr stack_limit = vm->stack_limit;
+    if ((stack_limit != 0 && mal_vm_native_stack_address() < stack_limit) ||
+        vm->native_call_depth >= MAL_NATIVE_CALL_DEPTH_LIMIT) {
+        mal_vm_throw_stack_overflow(vm);
+        return false;
+    }
+    vm->native_call_depth++;
+    return true;
+}
+
+static inline bool mal_vm_enter_compiled(MalVm *vm, i32 function_index) {
+    MAL_PERF_COUNT(compiled_enter_calls);
+    if (!mal_vm_enter_depth_checked(vm)) return false;
+    if (vm->runtime_image->file_count == 0) return true;
+
+    MAL_PERF_COUNT(compiled_debug_frame_entries);
+    if (vm->native_frame_count == vm->native_frame_capacity) {
+        mal_vm_grow_native_frames(vm);
+    }
+    vm->native_frames[vm->native_frame_count++] = (MalNativeFrame) {
+        .function_index = function_index,
+        .pos_id = -1,
+#if MAL_PROFILE
+        .site_id = -1,
+#endif
+        .enter_seq = vm->frame_seq++,
+        .hidden = false,
+    };
+    return true;
+}
+
+static inline void mal_vm_leave_compiled(MalVm *vm) {
+    vm->native_call_depth--;
+    if (vm->native_frame_count > 0) vm->native_frame_count--;
+}
 // A leaf cannot change observation modes; its enter and leave make the same choice.
 static inline bool mal_vm_leaf_unobserved(const MalVm *vm) {
 #if MAL_PROFILE
@@ -2030,11 +2084,19 @@ static inline bool mal_vm_leaf_unobserved(const MalVm *vm) {
     return vm->runtime_image->file_count == 0;
 #endif
 }
-bool mal_vm_enter_leaf_checked(MalVm *vm, i32 function_index);
-void mal_vm_leave_leaf_checked(MalVm *vm);
+static inline bool mal_vm_enter_leaf_checked(MalVm *vm, i32 function_index) {
+    if (!mal_vm_leaf_unobserved(vm)) return mal_vm_enter_compiled(vm, function_index);
+    MAL_PERF_COUNT(compiled_enter_calls);
+    return mal_vm_enter_depth_checked(vm);
+}
 
-/** Leave a compiled-function invocation, balancing a prior enter. */
-void mal_vm_leave_compiled(MalVm *vm);
+static inline void mal_vm_leave_leaf_checked(MalVm *vm) {
+    if (!mal_vm_leaf_unobserved(vm)) {
+        mal_vm_leave_compiled(vm);
+        return;
+    }
+    vm->native_call_depth--;
+}
 
 /**
  * Mark the top native frame hidden because the compiled function is bailing to

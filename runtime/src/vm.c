@@ -3619,67 +3619,20 @@ void mal_vm_resume_generator(MalVm *vm, MalGeneratorObject *generator, MalValue 
 #endif
 }
 
-static bool mal_vm_enter_depth_checked(MalVm *vm) {
-    // Real C-stack guard (robust to per-frame size): refuse when this entry's frame
-    // has descended past the reserved margin. Falls back to the fixed depth counter
-    // (also a backstop when stack bounds are unavailable). Both throw the same
-    // RangeError, so deep compiled recursion unwinds cleanly instead of segfaulting.
-    if ((vm->stack_limit != 0 && (uptr) __builtin_frame_address(0) < vm->stack_limit) ||
-        vm->native_call_depth >= MAL_NATIVE_CALL_DEPTH_LIMIT) {
-        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Maximum call stack size exceeded");
-        return false;
-    }
-    vm->native_call_depth++;
-    return true;
+#if UINTPTR_MAX != UINT64_MAX || (!defined(__aarch64__) && !defined(__x86_64__))
+__attribute__((noinline)) uptr mal_vm_native_stack_address(void) {
+    // The fallback frame is below the caller even when its frame pointer is not.
+    return (uptr) __builtin_frame_address(0);
 }
-
-bool mal_vm_enter_compiled(MalVm *vm, i32 function_index) {
-    MAL_PERF_COUNT(compiled_enter_calls);
-    if (!mal_vm_enter_depth_checked(vm)) return false;
-
-    // Record a native frame for stack traces. The compiled function writes its
-    // current source position into pos_id as it runs. Skipped when debug info is
-    // stripped (no file table) — keeping the compiled call path overhead-free, in
-    // lockstep with the backend, which emits no pos writes in that mode.
-    if (vm->runtime_image->file_count == 0) {
-        return true;
-    }
-    MAL_PERF_COUNT(compiled_debug_frame_entries);
-    if (vm->native_frame_count == vm->native_frame_capacity) {
-        vm->native_frame_capacity = vm->native_frame_capacity == 0 ? 16 : vm->native_frame_capacity * 2;
-        vm->native_frames = realloc(vm->native_frames, sizeof(MalNativeFrame) * (usize) vm->native_frame_capacity);
-    }
-    vm->native_frames[vm->native_frame_count++] = (MalNativeFrame) {
-        .function_index = function_index,
-        .pos_id = -1,
-#if MAL_PROFILE
-        .site_id = -1,
 #endif
-        .enter_seq = vm->frame_seq++,
-        .hidden = false,
-    };
-    return true;
+
+__attribute__((cold, noinline)) void mal_vm_throw_stack_overflow(MalVm *vm) {
+    mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Maximum call stack size exceeded");
 }
 
-bool mal_vm_enter_leaf_checked(MalVm *vm, i32 function_index) {
-    if (!mal_vm_leaf_unobserved(vm)) return mal_vm_enter_compiled(vm, function_index);
-    MAL_PERF_COUNT(compiled_enter_calls);
-    return mal_vm_enter_depth_checked(vm);
-}
-
-void mal_vm_leave_leaf_checked(MalVm *vm) {
-    if (!mal_vm_leaf_unobserved(vm)) {
-        mal_vm_leave_compiled(vm);
-        return;
-    }
-    vm->native_call_depth--;
-}
-
-void mal_vm_leave_compiled(MalVm *vm) {
-    vm->native_call_depth--;
-    if (vm->native_frame_count > 0) {
-        vm->native_frame_count--;
-    }
+__attribute__((cold, noinline)) void mal_vm_grow_native_frames(MalVm *vm) {
+    vm->native_frame_capacity = vm->native_frame_capacity == 0 ? 16 : vm->native_frame_capacity * 2;
+    vm->native_frames = realloc(vm->native_frames, sizeof(MalNativeFrame) * (usize) vm->native_frame_capacity);
 }
 
 /**

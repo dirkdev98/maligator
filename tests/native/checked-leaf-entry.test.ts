@@ -14,7 +14,7 @@ import {
 } from "../../src/test-harness.ts";
 
 describe("checked numeric leaf activation", () => {
-	it("balances depth and trace rows, rejects both stack limits, and preserves field behavior in observing modes", () => {
+	it("balances trace rows, rejects depth and current-stack limits inside large caller frames, and preserves field behavior in observing modes", () => {
 		const outDir = mkdtempSync(join(tmpdir(), "mal-checked-leaf-"));
 		for (const profileEnabled of [false, true]) {
 			const built = buildNativeBinaryResult({

@@ -4,6 +4,21 @@
 
 extern const MalRuntimeImage mal_runtime_image;
 
+__attribute__((noinline)) static bool rejects_large_caller_frame(MalVm *vm, bool leaf) {
+    volatile byte locals[32 * 1024];
+    for (usize i = 0; i < sizeof(locals); i++) locals[i] = (byte) i;
+    uptr saved_limit = vm->stack_limit;
+    vm->stack_limit = (uptr) &locals[sizeof(locals) / 2];
+    i32 depth = vm->native_call_depth;
+    i32 rows = vm->native_frame_count;
+    bool entered = leaf ? mal_vm_enter_leaf_checked(vm, 0) : mal_vm_enter_compiled(vm, 0);
+    bool rejected = !entered && vm->completion.kind == MAL_COMPLETION_THROW &&
+        vm->native_call_depth == depth && vm->native_frame_count == rows;
+    vm->stack_limit = saved_limit;
+    vm->completion = (MalCompletion) { .kind = MAL_COMPLETION_NORMAL, .value = MAL_VALUE_UNDEFINED };
+    return rejected && locals[0] == 0;
+}
+
 int main(void) {
     MalRuntimeImage image = mal_runtime_image;
     MalVm vm;
@@ -35,6 +50,7 @@ int main(void) {
             vm.native_call_depth != 0) return 8;
         vm.stack_limit = limit;
         vm.completion = (MalCompletion) { .kind = MAL_COMPLETION_NORMAL, .value = MAL_VALUE_UNDEFINED };
+        if (!rejects_large_caller_frame(&vm, false) || !rejects_large_caller_frame(&vm, true)) return 9;
     }
     vm.live_runtime_image.file_count = image.file_count;
     mal_gc_collect(&vm);
