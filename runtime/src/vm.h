@@ -2016,11 +2016,6 @@ static inline void mal_gc_callee_roots_end(MalCalleeRoots *roots) {
  */
 #define MAL_NATIVE_CALL_DEPTH_LIMIT 6000
 
-/**
- * Enter a compiled-function invocation: throws a RangeError and returns false
- * when the native call depth limit would be exceeded, otherwise increments the
- * depth and returns true. Each successful enter must be paired with a leave.
- */
 void mal_vm_throw_stack_overflow(MalVm *vm);
 void mal_vm_grow_native_frames(MalVm *vm);
 
@@ -2050,6 +2045,7 @@ static inline bool mal_vm_enter_depth_checked(MalVm *vm) {
     return true;
 }
 
+// A successful entry requires a matching leave; rejection records a RangeError.
 static inline bool mal_vm_enter_compiled(MalVm *vm, i32 function_index) {
     MAL_PERF_COUNT(compiled_enter_calls);
     if (!mal_vm_enter_depth_checked(vm)) return false;
