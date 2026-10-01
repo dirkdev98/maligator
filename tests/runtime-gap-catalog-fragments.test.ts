@@ -48,10 +48,36 @@ describe("runtime-gap catalog fragments", () => {
 		["repeats", { schema: 1, cases: [descriptor, descriptor] }],
 		["unknown control", { schema: 1, cases: [{ ...descriptor, controls: ["missing"] }] }],
 		["escapes", { schema: 1, cases: [{ ...descriptor, fixture: "../outside.mjs" }] }],
+		["features", { schema: 1, cases: [{ ...descriptor, features: ["unknown"] }] }],
+		[
+			"unique",
+			{ schema: 1, cases: [{ ...descriptor, methods: ["Math.abs", "Math.abs"] }] },
+		],
 	])("rejects invalid fragment: %s", (message, contents) => {
 		withCatalog((file, fragment) => {
 			fragment("bad.json", contents);
 			expect(() => loadRuntimeGapCatalog(file)).toThrow(String(message));
+		});
+	});
+
+	it("preserves canonical method coverage and required features through fragment loading", () => {
+		withCatalog((file, fragment) => {
+			fragment("regexp.json", {
+				schema: 1,
+				cases: [
+					{
+						...descriptor,
+						methods: ["RegExp.prototype.test", "%TypedArray%.prototype.includes"],
+						features: ["regexp"],
+					},
+				],
+			});
+			const [loaded] = loadRuntimeGapCatalog(file).cases;
+			expect(loaded?.methods).toEqual([
+				"RegExp.prototype.test",
+				"%TypedArray%.prototype.includes",
+			]);
+			expect(loaded?.features).toEqual(["regexp"]);
 		});
 	});
 

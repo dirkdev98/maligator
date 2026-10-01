@@ -19,6 +19,8 @@ export type RuntimeGapCategory =
 	| "compiler-algorithms"
 	| "unattributed-execution";
 
+export type RuntimeGapFeature = "regexp" | "intl-collator";
+
 export interface RuntimeGapCaseDescriptor {
 	readonly id: string;
 	readonly group: "primitive" | "runtime" | "algorithm";
@@ -31,6 +33,8 @@ export interface RuntimeGapCaseDescriptor {
 	readonly sourceSeam: string;
 	readonly fixture: string;
 	readonly controls: ReadonlyArray<string>;
+	readonly methods?: ReadonlyArray<string>;
+	readonly features?: ReadonlyArray<RuntimeGapFeature>;
 }
 
 export interface RuntimeGapCatalog {
@@ -47,7 +51,10 @@ export interface RuntimeGapExperiment {
 	readonly case: RuntimeGapCaseDescriptor & { readonly fixturePath: string };
 }
 
-const EXPERIMENT_RUNNER_IMPORT = "../../../../bench/runtime-gap/case-runner.mjs";
+const EXPERIMENT_RUNNER_IMPORTS = new Set([
+	"../../../../bench/runtime-gap/case-runner.mjs",
+	"../../../../bench/runtime-gap/async-case-runner.mjs",
+]);
 
 const CATEGORIES: ReadonlySet<string> = new Set<RuntimeGapCategory>([
 	"statements-operators",
@@ -78,6 +85,33 @@ function record(value: unknown, label: string): Readonly<Record<string, unknown>
 		throw new Error(`${label} must be an object`);
 	}
 	return value as Readonly<Record<string, unknown>>;
+}
+
+export function runtimeGapFeatures(value: unknown): ReadonlyArray<RuntimeGapFeature> {
+	if (
+		!Array.isArray(value) ||
+		value.some((feature) => feature !== "regexp" && feature !== "intl-collator") ||
+		new Set(value).size !== value.length
+	) {
+		throw new Error("runtime-gap features must be unique regexp or intl-collator names");
+	}
+	return value as ReadonlyArray<RuntimeGapFeature>;
+}
+
+function methodNames(value: unknown): ReadonlyArray<string> {
+	if (
+		!Array.isArray(value) ||
+		value.length === 0 ||
+		value.some(
+			(method) =>
+				typeof method !== "string" ||
+				!/^(?:%TypedArray%|[A-Za-z_$][\w$]*)(?:\.[A-Za-z_$][\w$]*)+$/.test(method),
+		) ||
+		new Set(value).size !== value.length
+	) {
+		throw new Error("runtime-gap methods must contain unique canonical method paths");
+	}
+	return value as ReadonlyArray<string>;
 }
 
 function descriptor(value: unknown): RuntimeGapCaseDescriptor {
@@ -113,6 +147,12 @@ function descriptor(value: unknown): RuntimeGapCaseDescriptor {
 		sourceSeam: candidate.sourceSeam,
 		fixture: candidate.fixture,
 		controls,
+		...(candidate.methods === undefined
+			? {}
+			: { methods: methodNames(candidate.methods) }),
+		...(candidate.features === undefined
+			? {}
+			: { features: runtimeGapFeatures(candidate.features) }),
 	};
 }
 
@@ -214,7 +254,7 @@ export function loadRuntimeGapExperiment(file: string): RuntimeGapExperiment {
 	]
 		.map((match) => match[1]!)
 		.filter((specifier) => specifier.startsWith(".") || specifier.startsWith("/"));
-	if (relativeSpecifiers.some((specifier) => specifier !== EXPERIMENT_RUNNER_IMPORT)) {
+	if (relativeSpecifiers.some((specifier) => !EXPERIMENT_RUNNER_IMPORTS.has(specifier))) {
 		throw new Error(
 			"runtime-gap experiment case.mjs must be self-contained except for the case runner",
 		);
