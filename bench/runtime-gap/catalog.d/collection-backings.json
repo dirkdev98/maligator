@@ -49,7 +49,7 @@
 			"mechanisms": ["keyed-lookup", "backing-transitions", "weak-identity-churn"],
 			"inputShape": "64 retained identity keys replaced through repeated WeakMap/WeakSet deletion and insertion",
 			"unit": "operations",
-			"sourceSeam": "runtime/src/map_object.c",
+			"sourceSeam": "runtime/src/weak_collection.c",
 			"fixture": "cases/weak-collection-churn.mjs",
 			"controls": ["primordial-weakmap-retained-keys", "map-operations"]
 		},
@@ -75,7 +75,7 @@
 			"mechanisms": ["keyed-lookup", "backing-transitions", "weak-identity-churn"],
 			"inputShape": "0, 1, 2, 3, 4 and 8 object or nonregistered-symbol keys with value updates and reinsertion",
 			"unit": "operations",
-			"sourceSeam": "runtime/src/map_object.c",
+			"sourceSeam": "runtime/src/weak_collection.c",
 			"fixture": "cases/weak-small-lifecycle.mjs",
 			"controls": ["weak-collection-churn", "map-small-lifecycle"]
 		}

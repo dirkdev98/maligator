@@ -17,7 +17,6 @@ typedef struct MalSetObject {
     MalObject object;
     MalObjectStorage object_storage;
     MalSetStorage *entries;
-    bool weak;
 } MalSetObject;
 
 typedef struct MalSetIter {
@@ -25,7 +24,7 @@ typedef struct MalSetIter {
     usize index;
 } MalSetIter;
 
-MalSetObject *mal_set_object_new(MalHeap *heap, MalObject *prototype, bool weak);
+MalSetObject *mal_set_object_new(MalHeap *heap, MalObject *prototype);
 void mal_set_object_add(MalSetObject *set, MalValue value);
 // Canonical inputs must come from collection normalization or Set iteration.
 void mal_set_object_add_canonical(MalSetObject *set, MalValue key);
@@ -47,8 +46,6 @@ void mal_set_storage_pin(MalSetStorage *storage);
 // Finalizers may only drop ownership; they must not read or rehash dead members.
 void mal_set_storage_unpin(MalSetStorage *storage);
 void mal_set_storage_release_owner(MalSetStorage *storage);
-// The predicate must not allocate, collect, or mutate the store.
-usize mal_set_storage_retain(MalSetStorage *storage, bool (*keep)(MalValue));
 usize mal_set_storage_traced_slots(const MalSetStorage *storage);
 MalSetKeyDomain mal_set_storage_key_domain(const MalSetStorage *storage);
 usize mal_set_storage_order_length(const MalSetStorage *storage);

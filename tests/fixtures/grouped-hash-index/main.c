@@ -39,7 +39,7 @@ static int check_masks(void) {
 
 static int check_churn(MalVm *vm, MalTableRole role) {
     MalTable *table = mal_table_new(role == MAL_TABLE_ROLE_OBJECT ? MAL_TABLE_MODE_OBJECT : MAL_TABLE_MODE_GENERAL, role);
-    MalSetObject *set = mal_set_object_new(&vm->heap, nullptr, false);
+    MalSetObject *set = mal_set_object_new(&vm->heap, nullptr);
     CHECK(mal_table_reserve(table, 128));
     CHECK(mal_set_object_reserve(set, 128));
     i32 keys[128];
@@ -121,7 +121,7 @@ static int check_transitions(MalVm *vm) {
     mal_table_free(table);
 
     table = mal_table_new(MAL_TABLE_MODE_GENERAL, MAL_TABLE_ROLE_ATOMS);
-    MalSetObject *set = mal_set_object_new(&vm->heap, nullptr, false);
+    MalSetObject *set = mal_set_object_new(&vm->heap, nullptr);
     CHECK(mal_table_reserve(table, 28) && mal_set_object_reserve(set, 28));
     MalValue keys[29];
     u32 count = 0;

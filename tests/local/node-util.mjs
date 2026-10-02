@@ -76,6 +76,21 @@ for (const [name, predicate, value, expected] of legacyCases) {
 check(!isBuffer(new Uint8Array(1)), "isBuffer rejects plain Uint8Array");
 check(!isObject(null) && !isObject(() => 1), "isObject follows legacy Node semantics");
 
+const collectionBrands = ["isMap", "isSet", "isWeakMap", "isWeakSet"];
+const collections = [new Map(), new Set(), new WeakMap(), new WeakSet()];
+for (let predicate = 0; predicate < collectionBrands.length; predicate++) {
+	for (let owner = 0; owner < collections.length; owner++) {
+		check(
+			types[collectionBrands[predicate]](collections[owner]) === (predicate === owner),
+			"collection brands distinguish strong and weak owners",
+		);
+	}
+	check(
+		!types[collectionBrands[predicate]](new Proxy(collections[predicate], {})),
+		"collection brands reject wrapped owners",
+	);
+}
+
 const typeCases = [
 	["isAnyArrayBuffer", new ArrayBuffer(1), true],
 	["isArrayBuffer", new ArrayBuffer(1), true],

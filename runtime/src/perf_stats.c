@@ -807,6 +807,23 @@ static void mal_perf_stats_print(void) {
             (unsigned long long) mal_perf_stats.collection_key_shapes[i][8]
         );
     }
+    for (usize i = 0; i < 2; i++) {
+        fprintf(stderr,
+            "[perf-weak-storage] kind=%s descriptors=%llu promotions=%llu rebuilds=%llu "
+            "demotions=%llu payload_bytes=%llu filtered=%llu gc_scan_slots=%llu "
+            "filter_scan_slots=%llu rebuild_scan_slots=%llu demotion_scan_slots=%llu\n",
+            i == 0 ? "weak_set" : "weak_map",
+            (unsigned long long) mal_perf_stats.weak_storage_descriptors[i],
+            (unsigned long long) mal_perf_stats.weak_storage_promotions[i],
+            (unsigned long long) mal_perf_stats.weak_storage_rebuilds[i],
+            (unsigned long long) mal_perf_stats.weak_storage_demotions[i],
+            (unsigned long long) mal_perf_stats.weak_storage_payload_bytes[i],
+            (unsigned long long) mal_perf_stats.weak_storage_filtered[i],
+            (unsigned long long) mal_perf_stats.weak_storage_gc_scan_slots[i],
+            (unsigned long long) mal_perf_stats.weak_storage_filter_scan_slots[i],
+            (unsigned long long) mal_perf_stats.weak_storage_rebuild_scan_slots[i],
+            (unsigned long long) mal_perf_stats.weak_storage_demotion_scan_slots[i]);
+    }
     fprintf(stderr,
         "[perf-map-storage] descriptors=%llu promotions=%llu small_inserts=%llu "
         "hashed_inserts=%llu payload_bytes=%llu index_bytes=%llu compactions=%llu "

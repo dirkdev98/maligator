@@ -26,7 +26,7 @@ static MalValue flat(MalVm *vm, usize length) {
 }
 
 static MalMapObject *new_map(MalVm *vm, MalValue *root) {
-    MalMapObject *map = mal_map_object_new(&vm->heap, nullptr, false);
+    MalMapObject *map = mal_map_object_new(&vm->heap, nullptr);
     *root = mal_value_from_object(&map->object);
     return map;
 }

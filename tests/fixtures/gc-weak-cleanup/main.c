@@ -3,8 +3,7 @@
 
 #include "gc.h"
 #include "heap_symbol.h"
-#include "map_object.h"
-#include "set_object.h"
+#include "weak_collection.h"
 #include "vm.h"
 
 extern const MalRuntimeImage mal_runtime_image;
@@ -123,14 +122,14 @@ static int check_sparse_churn(MalVm *vm) {
     for (usize i = 0; i < countof(roots); ++i) roots[i] = mal_value_new_undefined();
     MalRootSpan span;
     mal_gc_root(&span, roots, countof(roots));
-    MalMapObject *map = mal_map_object_new(&vm->heap, nullptr, true);
+    MalWeakMapObject *map = mal_weak_map_object_new(&vm->heap, nullptr);
     roots[0] = mal_value_from_object(&map->object);
-    MalSetObject *set = mal_set_object_new(&vm->heap, nullptr, true);
+    MalWeakSetObject *set = mal_weak_set_object_new(&vm->heap, nullptr);
     roots[1] = mal_value_from_object(&set->object);
     for (usize i = 0; i < LIVE_COUNT; ++i) {
         roots[i + 2] = new_weak_key(vm, i);
-        mal_map_object_set(map, roots[i + 2], mal_value_from_i32((i32) i));
-        mal_set_object_add(set, roots[i + 2]);
+        mal_weak_map_object_set(map, roots[i + 2], mal_value_from_i32((i32) i));
+        mal_weak_set_object_add(set, roots[i + 2]);
     }
     mal_gc_collect(vm);
     usize initial_raw = mal_heap_usage(&vm->heap).raw_owned_bytes;
@@ -138,51 +137,51 @@ static int check_sparse_churn(MalVm *vm) {
         usize index = round % LIVE_COUNT;
         roots[index + 2] = mal_value_new_undefined();
         mal_gc_collect(vm);
-        if (mal_map_object_size(map) != LIVE_COUNT - 1 ||
-            mal_set_object_size(set) != LIVE_COUNT - 1) return 5;
+        if (mal_weak_map_object_size(map) != LIVE_COUNT - 1 ||
+            mal_weak_set_object_size(set) != LIVE_COUNT - 1) return 5;
         // Both weak stores may retain one extra buffer's worth of tombstones,
         // but repeated weak deaths must not grow RAW ownership without bound.
         if (mal_heap_usage(&vm->heap).raw_owned_bytes >
             initial_raw + LIVE_COUNT * 64) return 6;
         roots[index + 2] = new_weak_key(vm, index);
-        mal_map_object_set(map, roots[index + 2], mal_value_from_i32((i32) index));
-        mal_set_object_add(set, roots[index + 2]);
+        mal_weak_map_object_set(map, roots[index + 2], mal_value_from_i32((i32) index));
+        mal_weak_set_object_add(set, roots[index + 2]);
         if (round % 64 == 0 || round + 1 == CHURN_COUNT) {
             for (usize i = 0; i < LIVE_COUNT; ++i) {
-                if (mal_map_object_get(map, roots[i + 2]) != mal_value_from_i32((i32) i) ||
-                    !mal_set_object_has(set, roots[i + 2])) return 7;
+                if (mal_weak_map_object_get(map, roots[i + 2]) != mal_value_from_i32((i32) i) ||
+                    !mal_weak_set_object_has(set, roots[i + 2])) return 7;
             }
         }
     }
     for (usize round = 0; round < 128; ++round) {
         MalValue transient = new_weak_key(vm, round);
-        mal_map_object_set(map, transient, mal_value_from_i32(-1));
-        mal_set_object_add(set, transient);
+        mal_weak_map_object_set(map, transient, mal_value_from_i32(-1));
+        mal_weak_set_object_add(set, transient);
         u64 before = vm->heap.epoch;
         vm->heap.next_gc_at = 1;
         mal_gc_poll = true;
         mal_gc_safepoint(vm);
         mal_gc_finish_pending_cycle(vm);
         if (vm->heap.epoch <= before ||
-            mal_map_object_size(map) != LIVE_COUNT ||
-            mal_set_object_size(set) != LIVE_COUNT) return 10;
+            mal_weak_map_object_size(map) != LIVE_COUNT ||
+            mal_weak_set_object_size(set) != LIVE_COUNT) return 10;
         if (mal_heap_usage(&vm->heap).raw_owned_bytes >
             initial_raw + LIVE_COUNT * 64) return 11;
     }
     for (usize i = 0; i < LIVE_COUNT; ++i) {
-        if (mal_map_object_get(map, roots[i + 2]) != mal_value_from_i32((i32) i) ||
-            !mal_set_object_has(set, roots[i + 2])) return 12;
+        if (mal_weak_map_object_get(map, roots[i + 2]) != mal_value_from_i32((i32) i) ||
+            !mal_weak_set_object_has(set, roots[i + 2])) return 12;
     }
     for (usize i = 2; i < countof(roots); ++i) roots[i] = mal_value_new_undefined();
     mal_gc_collect(vm);
-    if (mal_map_object_size(map) != 0 || mal_set_object_size(set) != 0) return 8;
+    if (mal_weak_map_object_size(map) != 0 || mal_weak_set_object_size(set) != 0) return 8;
     usize empty_raw = mal_heap_usage(&vm->heap).raw_owned_bytes;
     roots[2] = new_weak_key(vm, 0);
-    mal_map_object_set(map, roots[2], mal_value_from_i32(1));
-    mal_set_object_add(set, roots[2]);
+    mal_weak_map_object_set(map, roots[2], mal_value_from_i32(1));
+    mal_weak_set_object_add(set, roots[2]);
     roots[2] = mal_value_new_undefined();
     mal_gc_collect(vm);
-    if (mal_map_object_size(map) != 0 || mal_set_object_size(set) != 0 ||
+    if (mal_weak_map_object_size(map) != 0 || mal_weak_set_object_size(set) != 0 ||
         mal_heap_usage(&vm->heap).raw_owned_bytes != empty_raw) return 9;
     mal_gc_unroot(&span);
     return 0;
@@ -197,7 +196,7 @@ int main(void) {
     if (filter_result != 0) return filter_result;
     mal_gc_register_finalizer(MAL_HEAP_OBJECT, count_finalized);
 
-    MalMapObject *map = mal_map_object_new(&vm.heap, nullptr, true);
+    MalWeakMapObject *map = mal_weak_map_object_new(&vm.heap, nullptr);
     MalValue root = mal_value_from_object(&map->object);
     MalRootSpan span;
     mal_gc_root(&span, &root, 1);
@@ -206,14 +205,14 @@ int main(void) {
         MalObject *value = mal_object_new(&vm.heap, nullptr);
         track(key);
         track(value);
-        mal_map_object_set(map, mal_value_from_object(key), mal_value_from_object(value));
+        mal_weak_map_object_set(map, mal_value_from_object(key), mal_value_from_object(value));
     }
 
     vm.heap.next_gc_at = 1;
     mal_gc_poll = true;
     mal_gc_safepoint(&vm);
     if (!mal_gc_marking_active || !mal_gc_finish_pending_cycle(&vm)) return 1;
-    if (mal_map_object_size(map) != 0) return 2;
+    if (mal_weak_map_object_size(map) != 0) return 2;
     usize finalized = 0;
     for (usize i = 0; i < countof(tracked); ++i) {
         if (tracked[i].cell == nullptr) continue;

@@ -331,16 +331,15 @@ MalMapStorage *mal_map_object_storage(MalMapObject *map) {
     return map->entries;
 }
 
-void mal_map_object_init(MalHeap *heap, MalMapObject *map, MalObject *prototype, bool weak) {
+void mal_map_object_init(MalHeap *heap, MalMapObject *map, MalObject *prototype) {
     mal_object_init(heap, &map->object, MAL_HEAP_MAP_OBJECT, prototype);
     map->entries = nullptr;
-    map->weak = weak;
-    mal_perf_collection_new(map, weak ? MAL_PERF_COLLECTION_WEAK_MAP : MAL_PERF_COLLECTION_MAP, heap->epoch);
+    mal_perf_collection_new(map, MAL_PERF_COLLECTION_MAP, heap->epoch);
 }
 
-MalMapObject *mal_map_object_new(MalHeap *heap, MalObject *prototype, bool weak) {
+MalMapObject *mal_map_object_new(MalHeap *heap, MalObject *prototype) {
     MalMapObject *map = mal_heap_alloc(heap, sizeof(MalMapObject), MAL_HEAP_MAP_OBJECT);
-    mal_map_object_init(heap, map, prototype, weak);
+    mal_map_object_init(heap, map, prototype);
     return map;
 }
 
@@ -626,33 +625,6 @@ void mal_map_storage_release_owner(MalMapStorage *storage) {
     storage->hint_key = MAL_VALUE_EMPTY;
     if (storage->pins == 0) mal_map_free(storage);
     else storage->owner_released = true;
-}
-
-usize mal_map_storage_retain(MalMapStorage *storage, bool (*keep)(MalValue)) {
-    if (storage == nullptr) return 0;
-    usize removed = 0;
-    for (u32 i = 0; i < storage->count; i++) {
-        if (!mal_map_is_live(storage, i)) continue;
-        MalValue key = mal_map_key_at(storage, i);
-        if (keep(key)) continue;
-        if (storage->entry_hint == i + 1) {
-            storage->entry_hint = 0;
-            storage->hint_key = MAL_VALUE_EMPTY;
-        }
-        mal_gc_write_barrier(key);
-        mal_gc_write_barrier(mal_map_value_at(storage, i));
-        if (storage->payload == nullptr) storage->small[i] = MAL_VALUE_EMPTY;
-        else mal_map_controls(storage)[i] = 0;
-        storage->size--;
-        removed++;
-    }
-    if (removed != 0) {
-        if (storage->payload != nullptr) {
-            mal_map_fill_slots(storage, storage->slots, storage->slot_capacity);
-        }
-        if (mal_map_should_compact(storage)) mal_map_compact(storage);
-    }
-    return removed;
 }
 
 usize mal_map_storage_traced_slots(const MalMapStorage *storage) {

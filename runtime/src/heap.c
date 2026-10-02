@@ -690,6 +690,8 @@ static MalProfileAllocationFamily mal_profile_family_for_heap_type(MalHeapType t
             return MAL_PROFILE_ALLOCATION_FAMILY_ARRAY;
         case MAL_HEAP_MAP_OBJECT:
         case MAL_HEAP_SET_OBJECT:
+        case MAL_HEAP_WEAK_MAP_OBJECT:
+        case MAL_HEAP_WEAK_SET_OBJECT:
             return MAL_PROFILE_ALLOCATION_FAMILY_COLLECTION;
         case MAL_HEAP_ARRAY_BUFFER_OBJECT:
         case MAL_HEAP_TYPED_ARRAY_OBJECT:

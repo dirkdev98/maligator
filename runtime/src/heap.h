@@ -200,13 +200,7 @@ typedef enum MalHeapType : u8 {
     MAL_HEAP_NATIVE_FUNCTION_OBJECT,
     MAL_HEAP_BOUND_FUNCTION_OBJECT,
     MAL_HEAP_ARRAY_OBJECT,
-    /**
-     * Map and WeakMap instances (MalMapObject; the weak flag distinguishes).
-     */
     MAL_HEAP_MAP_OBJECT,
-    /**
-     * Set and WeakSet instances (MalSetObject with key-only storage).
-     */
     MAL_HEAP_SET_OBJECT,
     /**
      * Built-in iterator instances (MalIteratorObject) for the Map/Set/Array/
@@ -388,6 +382,8 @@ typedef enum MalHeapType : u8 {
     MAL_HEAP_ASYNC_RUN_SCOPE_STATE,
     /** Internal traced frontier for string traversal across JavaScript reentry. */
     MAL_HEAP_STRING_CURSOR,
+    MAL_HEAP_WEAK_MAP_OBJECT,
+    MAL_HEAP_WEAK_SET_OBJECT,
 
     /**
      * Sentinel: number of distinct heap types. Must stay last. Sizes the baked

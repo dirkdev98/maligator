@@ -81,13 +81,13 @@ deduplicates identical callbacks, rejects capacity exhaustion, and callbacks
 tolerate a VM without the subsystem that originally installed them. The GC stats
 exit handler is registered once per process.
 
-## Weak table storage
+## Weak collection storage
 
 Weak cleanup filters every dead key after the ephemeron fixpoint, with SATB
-marking disabled so deletion cannot revive a dead edge. Map and Set use their own
-storage filters; property tables no longer store weak entries. Filtering preserves
-surviving membership while hash-index maintenance remains independent of ordered
-payload compaction.
+marking disabled so deletion cannot revive a dead edge. WeakMap and WeakSet use
+[unordered direct buckets](specialized-weak-storage.md); property tables contain
+strong entries. Filtering erases dead buckets in place and performs at most one
+demotion, shrink or tombstone rebuild after the scan.
 
 Persistent strong Map/Set iterators pin order positions across growth, widening,
 deletion and clear. Their owners compact only after the pins permit renumbering.

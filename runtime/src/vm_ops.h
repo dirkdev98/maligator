@@ -118,7 +118,6 @@ static inline bool mal_vm_try_capture_collection_method(
     const bool set_receiver = mal_value_is_set_object(receiver);
     if (map_receiver) {
         MalMapObject *map = mal_value_to_map_object(receiver);
-        if (map->weak) return false;
         collection = &map->object;
         prototype_intrinsic = MAL_INTRINSIC_MAP_PROTOTYPE;
         switch (operation) {
@@ -145,7 +144,6 @@ static inline bool mal_vm_try_capture_collection_method(
         }
     } else if (set_receiver) {
         MalSetObject *set = mal_value_to_set_object(receiver);
-        if (set->weak) return false;
         collection = &set->object;
         prototype_intrinsic = MAL_INTRINSIC_SET_PROTOTYPE;
         switch (operation) {

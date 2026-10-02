@@ -207,6 +207,23 @@ describe("opt-in performance statistics", () => {
 			expect(field(mapStorage, counter)).toBeGreaterThan(0);
 		}
 
+		for (const kind of ["weak_map", "weak_set"]) {
+			const weakStorage = reportLine(
+				result.stderr,
+				"[perf-weak-storage]",
+				`kind=${kind} `,
+			);
+			for (const counter of [
+				"descriptors",
+				"promotions",
+				"rebuilds",
+				"demotions",
+				"payload_bytes",
+			]) {
+				expect(field(weakStorage, counter)).toBeGreaterThan(0);
+			}
+		}
+
 		for (const caller of ["get_own", "define_own", "load_ic"]) {
 			const shape = reportLine(result.stderr, "[perf-shape-stats]", `caller=${caller} `);
 			expect(field(shape, "calls")).toBeGreaterThan(0);

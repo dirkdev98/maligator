@@ -507,6 +507,16 @@ typedef struct MalPerfStats {
     u64 collection_tracking_misses;
     u64 collection_key_kinds[MAL_PERF_COLLECTION_KIND_COUNT][MAL_PERF_MAP_KEY_KIND_COUNT];
     u64 collection_key_shapes[MAL_PERF_COLLECTION_KIND_COUNT][MAL_PERF_COLLECTION_KEY_SHAPE_COUNT];
+    u64 weak_storage_descriptors[2];
+    u64 weak_storage_promotions[2];
+    u64 weak_storage_rebuilds[2];
+    u64 weak_storage_demotions[2];
+    u64 weak_storage_payload_bytes[2];
+    u64 weak_storage_filtered[2];
+    u64 weak_storage_gc_scan_slots[2];
+    u64 weak_storage_filter_scan_slots[2];
+    u64 weak_storage_rebuild_scan_slots[2];
+    u64 weak_storage_demotion_scan_slots[2];
     u64 map_storage_descriptors;
     u64 map_storage_promotions;
     u64 map_storage_small_inserts;

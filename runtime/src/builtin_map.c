@@ -5,17 +5,15 @@
 #include "heap_string.h"
 #include "heap_symbol.h"
 #include "map_object.h"
+#include "weak_collection.h"
 #include "set_object.h"
 #include "perf_stats.h"
 #include "value_ops.h"
 #include "vm.h"
 #include "vm_ops.h"
 
-/**
- * Unwrap a Map-family receiver with the right weak brand, or throw.
- */
-static MalMapObject *mal_builtin_map_this(MalVm *vm, MalValue this_value, bool weak, const byte *message) {
-    if (!mal_value_is_map_object(this_value) || mal_value_to_map_object(this_value)->weak != weak) {
+static MalMapObject *mal_builtin_map_this(MalVm *vm, MalValue this_value, const byte *message) {
+    if (!mal_value_is_map_object(this_value)) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, message);
         return nullptr;
     }
@@ -23,15 +21,12 @@ static MalMapObject *mal_builtin_map_this(MalVm *vm, MalValue this_value, bool w
     return mal_value_to_map_object(this_value);
 }
 
-/**
- * Spec CanBeHeldWeakly: objects and non-registered symbols qualify.
- */
-static bool mal_builtin_map_can_be_held_weakly(MalValue value) {
-    if (mal_value_is_object(value)) {
-        return true;
+static MalWeakMapObject *mal_builtin_weak_map_this(MalVm *vm, MalValue value) {
+    if (!mal_value_is_weak_map_object(value)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Receiver is not a WeakMap");
+        return nullptr;
     }
-
-    return mal_value_is_symbol(value) && !mal_value_to_symbol(value)->registered;
+    return mal_value_to_weak_map_object(value);
 }
 
 static MalValue mal_builtin_weak_map_prototype_set(
@@ -81,8 +76,11 @@ static MalValue mal_builtin_map_construct(
         return mal_value_new_undefined();
     }
 
-    MalMapObject *map = mal_map_object_new(&vm->heap, prototype, weak);
-    MalValue map_value = mal_value_from_map_object(map);
+    MalValue map_value = weak
+        ? mal_value_from_weak_map_object(mal_weak_map_object_new(&vm->heap, prototype))
+        : mal_value_from_map_object(mal_map_object_new(&vm->heap, prototype));
+    MalMapObject *map = weak ? nullptr : mal_value_to_map_object(map_value);
+    MalWeakMapObject *weak_map = weak ? mal_value_to_weak_map_object(map_value) : nullptr;
 
     if (arg_count < 1 || mal_value_is_nil(args[0])) {
         return map_value;
@@ -126,7 +124,8 @@ static MalValue mal_builtin_map_construct(
     usize size_hint;
     if (direct_adder &&
         mal_vm_builtin_iterator_size_hint(&record, &size_hint)) {
-        (void) mal_map_object_reserve(map, size_hint);
+        if (weak) (void) mal_weak_map_object_reserve(weak_map, size_hint);
+        else (void) mal_map_object_reserve(map, size_hint);
     }
 
     // Each step, the entry index Gets, and the adder all re-enter JS and can
@@ -196,14 +195,15 @@ static MalValue mal_builtin_map_construct(
         // the iterator, so reuse that captured identity after the entry Gets.
         if (direct_adder) {
             if (direct_weak_adder &&
-                !mal_builtin_map_can_be_held_weakly(roots[3])) {
+                !mal_weak_key_can_be_held(roots[3])) {
                 mal_vm_throw_error(
                     vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
                     "Invalid value used as weak map key");
                 mal_vm_iterator_close(vm, &record);
                 goto done;
             }
-            mal_map_object_set_canonical(
+            if (direct_weak_adder) mal_weak_map_object_set(weak_map, roots[3], roots[4]);
+            else mal_map_object_set_canonical(
                 map, mal_collection_canonical_value(roots[3]), roots[4]);
             continue;
         }
@@ -247,8 +247,7 @@ static MalValue mal_builtin_map_group_by(MalVm *vm, MalValue this_value, const M
     MalValue roots[5] = {
         mal_value_from_map_object(mal_map_object_new(
             &vm->heap,
-            mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_MAP_PROTOTYPE]),
-            false)),
+            mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_MAP_PROTOTYPE]))),
         args[1],
         mal_value_new_undefined(), // current element
         mal_value_new_undefined(), // callback result / canonical key
@@ -372,7 +371,7 @@ static MalValue mal_builtin_map_set_value(
 }
 
 static MalValue mal_builtin_map_prototype_get(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
-    MalMapObject *map = mal_builtin_map_this(vm, this_value, false, "Receiver is not a Map");
+    MalMapObject *map = mal_builtin_map_this(vm, this_value, "Receiver is not a Map");
     if (map == nullptr) {
         return mal_value_new_undefined();
     }
@@ -396,7 +395,7 @@ MalValue mal_builtin_map_get_known(
 }
 
 static MalValue mal_builtin_map_prototype_set(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
-    MalMapObject *map = mal_builtin_map_this(vm, this_value, false, "Receiver is not a Map");
+    MalMapObject *map = mal_builtin_map_this(vm, this_value, "Receiver is not a Map");
     if (map == nullptr) {
         return mal_value_new_undefined();
     }
@@ -483,103 +482,89 @@ MalCompletion mal_builtin_collection_direct(
         if (operation == MAL_GUARDED_BUILTIN_MAP_GET &&
             (exact_map || (unknown_receiver && mal_value_is_map_object(this_value)))) {
             MalMapObject *map = mal_value_to_map_object(this_value);
-            if (exact_map || !map->weak) {
-                if (exact_map) MAL_PERF_COUNT(collection_exact_receiver_hits);
-                MAL_PERF_COUNT(collection_direct_map_get_hits);
-                return (MalCompletion) {
-                    .kind = MAL_COMPLETION_NORMAL,
-                    .value = mal_builtin_map_get_value(
-                        vm, this_value, map,
-                        arg_count >= 1 ? args[0] : mal_value_new_undefined()),
-                };
-            }
+            if (exact_map) MAL_PERF_COUNT(collection_exact_receiver_hits);
+            MAL_PERF_COUNT(collection_direct_map_get_hits);
+            return (MalCompletion) {
+                .kind = MAL_COMPLETION_NORMAL,
+                .value = mal_builtin_map_get_value(
+                    vm, this_value, map,
+                    arg_count >= 1 ? args[0] : mal_value_new_undefined()),
+            };
         } else if (operation == MAL_GUARDED_BUILTIN_MAP_SET &&
                    (exact_map ||
                     (unknown_receiver && mal_value_is_map_object(this_value)))) {
             MalMapObject *map = mal_value_to_map_object(this_value);
-            if (exact_map || !map->weak) {
-                if (exact_map) MAL_PERF_COUNT(collection_exact_receiver_hits);
-                MAL_PERF_COUNT(collection_direct_map_set_hits);
-                return (MalCompletion) {
-                    .kind = MAL_COMPLETION_NORMAL,
-                    .value = mal_builtin_map_set_value(
-                        vm, this_value, map,
-                        arg_count >= 1 ? args[0] : mal_value_new_undefined(),
-                        arg_count >= 2 ? args[1] : mal_value_new_undefined()),
-                };
-            }
+            if (exact_map) MAL_PERF_COUNT(collection_exact_receiver_hits);
+            MAL_PERF_COUNT(collection_direct_map_set_hits);
+            return (MalCompletion) {
+                .kind = MAL_COMPLETION_NORMAL,
+                .value = mal_builtin_map_set_value(
+                    vm, this_value, map,
+                    arg_count >= 1 ? args[0] : mal_value_new_undefined(),
+                    arg_count >= 2 ? args[1] : mal_value_new_undefined()),
+            };
         } else if (has_operation &&
                    callee == vm->intrinsics[MAL_INTRINSIC_MAP_PROTOTYPE_HAS] &&
                    (exact_map ||
                     (unknown_receiver && mal_value_is_map_object(this_value)))) {
             MalMapObject *map = mal_value_to_map_object(this_value);
-            if (exact_map || !map->weak) {
-                if (exact_map) MAL_PERF_COUNT(collection_exact_receiver_hits);
-                MAL_PERF_COUNT(collection_direct_map_has_hits);
-                return (MalCompletion) {
-                    .kind = MAL_COMPLETION_NORMAL,
-                    .value = mal_value_new_boolean(mal_builtin_map_has_value(
-                        vm, this_value, map,
-                        arg_count >= 1 ? args[0] : mal_value_new_undefined())),
-                };
-            }
+            if (exact_map) MAL_PERF_COUNT(collection_exact_receiver_hits);
+            MAL_PERF_COUNT(collection_direct_map_has_hits);
+            return (MalCompletion) {
+                .kind = MAL_COMPLETION_NORMAL,
+                .value = mal_value_new_boolean(mal_builtin_map_has_value(
+                    vm, this_value, map,
+                    arg_count >= 1 ? args[0] : mal_value_new_undefined())),
+            };
         } else if (delete_operation &&
                    callee == vm->intrinsics[MAL_INTRINSIC_MAP_PROTOTYPE_DELETE] &&
                    (exact_map ||
                     (unknown_receiver && mal_value_is_map_object(this_value)))) {
             MalMapObject *map = mal_value_to_map_object(this_value);
-            if (exact_map || !map->weak) {
-                if (exact_map) MAL_PERF_COUNT(collection_exact_receiver_hits);
-                MAL_PERF_COUNT(collection_direct_map_delete_hits);
-                return (MalCompletion) {
-                    .kind = MAL_COMPLETION_NORMAL,
-                    .value = mal_value_new_boolean(mal_map_object_delete(
-                        map, arg_count >= 1 ? args[0] : mal_value_new_undefined())),
-                };
-            }
+            if (exact_map) MAL_PERF_COUNT(collection_exact_receiver_hits);
+            MAL_PERF_COUNT(collection_direct_map_delete_hits);
+            return (MalCompletion) {
+                .kind = MAL_COMPLETION_NORMAL,
+                .value = mal_value_new_boolean(mal_map_object_delete(
+                    map, arg_count >= 1 ? args[0] : mal_value_new_undefined())),
+            };
         } else if (operation == MAL_GUARDED_BUILTIN_SET_ADD &&
                    (exact_set ||
                     (unknown_receiver && mal_value_is_set_object(this_value)))) {
             MalSetObject *set = mal_value_to_set_object(this_value);
-            if (exact_set || !set->weak) {
-                if (exact_set) MAL_PERF_COUNT(collection_exact_receiver_hits);
-                MalValue value =
-                    arg_count >= 1 ? args[0] : mal_value_new_undefined();
-                mal_set_object_add(set, value);
-                MAL_PERF_COUNT(collection_direct_set_add_hits);
-                return (MalCompletion) {
-                    .kind = MAL_COMPLETION_NORMAL,
-                    .value = this_value,
-                };
-            }
+            if (exact_set) MAL_PERF_COUNT(collection_exact_receiver_hits);
+            MalValue value =
+                arg_count >= 1 ? args[0] : mal_value_new_undefined();
+            mal_set_object_add(set, value);
+            MAL_PERF_COUNT(collection_direct_set_add_hits);
+            return (MalCompletion) {
+                .kind = MAL_COMPLETION_NORMAL,
+                .value = this_value,
+            };
         } else if (has_operation &&
                    callee == vm->intrinsics[MAL_INTRINSIC_SET_PROTOTYPE_HAS] &&
                    (exact_set ||
                     (unknown_receiver && mal_value_is_set_object(this_value)))) {
             MalSetObject *set = mal_value_to_set_object(this_value);
-            if (exact_set || !set->weak) {
-                if (exact_set) MAL_PERF_COUNT(collection_exact_receiver_hits);
-                MAL_PERF_COUNT(collection_direct_set_has_hits);
-                return (MalCompletion) {
-                    .kind = MAL_COMPLETION_NORMAL,
-                    .value = mal_value_new_boolean(mal_set_object_has(
-                        set, arg_count >= 1 ? args[0] : mal_value_new_undefined())),
-                };
-            }
+            if (exact_set) MAL_PERF_COUNT(collection_exact_receiver_hits);
+            MAL_PERF_COUNT(collection_direct_set_has_hits);
+            return (MalCompletion) {
+                .kind = MAL_COMPLETION_NORMAL,
+                .value = mal_value_new_boolean(mal_set_object_has(
+                    set, arg_count >= 1 ? args[0] : mal_value_new_undefined())),
+            };
         } else if (delete_operation &&
                    callee == vm->intrinsics[MAL_INTRINSIC_SET_PROTOTYPE_DELETE] &&
                    (exact_set ||
                     (unknown_receiver && mal_value_is_set_object(this_value)))) {
             MalSetObject *set = mal_value_to_set_object(this_value);
-            if (exact_set || !set->weak) {
-                if (exact_set) MAL_PERF_COUNT(collection_exact_receiver_hits);
-                MAL_PERF_COUNT(collection_direct_set_delete_hits);
-                return (MalCompletion) {
-                    .kind = MAL_COMPLETION_NORMAL,
-                    .value = mal_value_new_boolean(mal_set_object_delete(
-                        set, arg_count >= 1 ? args[0] : mal_value_new_undefined())),
-                };
-            }
+            if (exact_set) MAL_PERF_COUNT(collection_exact_receiver_hits);
+            MAL_PERF_COUNT(collection_direct_set_delete_hits);
+            return (MalCompletion) {
+                .kind = MAL_COMPLETION_NORMAL,
+                .value = mal_value_new_boolean(mal_set_object_delete(
+                    set, arg_count >= 1 ? args[0] : mal_value_new_undefined())),
+            };
         }
     }
 
@@ -589,7 +574,7 @@ MalCompletion mal_builtin_collection_direct(
 }
 
 static MalValue mal_builtin_map_prototype_has(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
-    MalMapObject *map = mal_builtin_map_this(vm, this_value, false, "Receiver is not a Map");
+    MalMapObject *map = mal_builtin_map_this(vm, this_value, "Receiver is not a Map");
     if (map == nullptr) {
         return mal_value_new_undefined();
     }
@@ -600,7 +585,7 @@ static MalValue mal_builtin_map_prototype_has(MalVm *vm, MalValue this_value, co
 }
 
 static MalValue mal_builtin_map_prototype_delete(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
-    MalMapObject *map = mal_builtin_map_this(vm, this_value, false, "Receiver is not a Map");
+    MalMapObject *map = mal_builtin_map_this(vm, this_value, "Receiver is not a Map");
     if (map == nullptr) {
         return mal_value_new_undefined();
     }
@@ -639,7 +624,7 @@ static MalValue mal_builtin_map_prototype_clear(MalVm *vm, MalValue this_value, 
     (void) args;
     (void) arg_count;
 
-    MalMapObject *map = mal_builtin_map_this(vm, this_value, false, "Receiver is not a Map");
+    MalMapObject *map = mal_builtin_map_this(vm, this_value, "Receiver is not a Map");
     if (map == nullptr) {
         return mal_value_new_undefined();
     }
@@ -653,7 +638,7 @@ static MalValue mal_builtin_map_prototype_size_getter(MalVm *vm, MalValue this_v
     (void) args;
     (void) arg_count;
 
-    MalMapObject *map = mal_builtin_map_this(vm, this_value, false, "Receiver is not a Map");
+    MalMapObject *map = mal_builtin_map_this(vm, this_value, "Receiver is not a Map");
     if (map == nullptr) {
         return mal_value_new_undefined();
     }
@@ -661,10 +646,6 @@ static MalValue mal_builtin_map_prototype_size_getter(MalVm *vm, MalValue this_v
     return mal_value_from_i32((i32) mal_map_object_size(map));
 }
 
-/**
- * Shared body for Map.prototype.getOrInsert / WeakMap.prototype.getOrInsert.
- * Returns the existing value for key, or stores and returns `value`.
- */
 static MalValue mal_builtin_map_get_or_insert(MalVm *vm, MalMapObject *map, MalValue key, MalValue value) {
     (void) vm;
     MalValue canonical_key = mal_collection_canonical_value(key);
@@ -712,7 +693,7 @@ static MalValue mal_builtin_map_get_or_insert_computed(MalVm *vm, MalMapObject *
 }
 
 static MalValue mal_builtin_map_prototype_get_or_insert(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
-    MalMapObject *map = mal_builtin_map_this(vm, this_value, false, "Receiver is not a Map");
+    MalMapObject *map = mal_builtin_map_this(vm, this_value, "Receiver is not a Map");
     if (map == nullptr) {
         return mal_value_new_undefined();
     }
@@ -726,7 +707,7 @@ static MalValue mal_builtin_map_prototype_get_or_insert(MalVm *vm, MalValue this
 }
 
 static MalValue mal_builtin_map_prototype_get_or_insert_computed(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
-    MalMapObject *map = mal_builtin_map_this(vm, this_value, false, "Receiver is not a Map");
+    MalMapObject *map = mal_builtin_map_this(vm, this_value, "Receiver is not a Map");
     if (map == nullptr) {
         return mal_value_new_undefined();
     }
@@ -740,7 +721,7 @@ static MalValue mal_builtin_map_prototype_get_or_insert_computed(MalVm *vm, MalV
 }
 
 static MalValue mal_builtin_map_prototype_for_each(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
-    MalMapObject *map = mal_builtin_map_this(vm, this_value, false, "Receiver is not a Map");
+    MalMapObject *map = mal_builtin_map_this(vm, this_value, "Receiver is not a Map");
     if (map == nullptr) {
         return mal_value_new_undefined();
     }
@@ -774,7 +755,7 @@ static MalValue mal_builtin_map_prototype_for_each(MalVm *vm, MalValue this_valu
 }
 
 static MalValue mal_builtin_map_prototype_iterator(MalVm *vm, MalValue this_value, MalIteratorKind kind) {
-    if (mal_builtin_map_this(vm, this_value, false, "Receiver is not a Map") == nullptr) {
+    if (mal_builtin_map_this(vm, this_value, "Receiver is not a Map") == nullptr) {
         return mal_value_new_undefined();
     }
 
@@ -800,67 +781,94 @@ static MalValue mal_builtin_map_prototype_values(MalVm *vm, MalValue this_value,
 }
 
 static MalValue mal_builtin_weak_map_prototype_get(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
-    MalMapObject *map = mal_builtin_map_this(vm, this_value, true, "Receiver is not a WeakMap");
+    MalWeakMapObject *map = mal_builtin_weak_map_this(vm, this_value);
     if (map == nullptr) {
         return mal_value_new_undefined();
     }
 
-    return mal_map_object_get(map, arg_count >= 1 ? args[0] : mal_value_new_undefined());
+    return mal_weak_map_object_get(map, arg_count >= 1 ? args[0] : mal_value_new_undefined());
 }
 
 static MalValue mal_builtin_weak_map_prototype_set(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
-    MalMapObject *map = mal_builtin_map_this(vm, this_value, true, "Receiver is not a WeakMap");
+    MalWeakMapObject *map = mal_builtin_weak_map_this(vm, this_value);
     if (map == nullptr) {
         return mal_value_new_undefined();
     }
 
     MalValue key = arg_count >= 1 ? args[0] : mal_value_new_undefined();
-    if (!mal_builtin_map_can_be_held_weakly(key)) {
+    if (!mal_weak_key_can_be_held(key)) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Invalid value used as weak map key");
         return mal_value_new_undefined();
     }
 
-    mal_map_object_set(map, key, arg_count >= 2 ? args[1] : mal_value_new_undefined());
+    mal_weak_map_object_set(map, key, arg_count >= 2 ? args[1] : mal_value_new_undefined());
 
     return this_value;
 }
 
 static MalValue mal_builtin_weak_map_prototype_has(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
-    MalMapObject *map = mal_builtin_map_this(vm, this_value, true, "Receiver is not a WeakMap");
+    MalWeakMapObject *map = mal_builtin_weak_map_this(vm, this_value);
     if (map == nullptr) {
         return mal_value_new_undefined();
     }
 
-    return mal_value_new_boolean(mal_map_object_has(map, arg_count >= 1 ? args[0] : mal_value_new_undefined()));
+    return mal_value_new_boolean(mal_weak_map_object_has(map, arg_count >= 1 ? args[0] : mal_value_new_undefined()));
 }
 
 static MalValue mal_builtin_weak_map_prototype_delete(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
-    MalMapObject *map = mal_builtin_map_this(vm, this_value, true, "Receiver is not a WeakMap");
+    MalWeakMapObject *map = mal_builtin_weak_map_this(vm, this_value);
     if (map == nullptr) {
         return mal_value_new_undefined();
     }
 
-    return mal_value_new_boolean(mal_map_object_delete(map, arg_count >= 1 ? args[0] : mal_value_new_undefined()));
+    return mal_value_new_boolean(mal_weak_map_object_delete(map, arg_count >= 1 ? args[0] : mal_value_new_undefined()));
 }
 
 static MalValue mal_builtin_weak_map_prototype_get_or_insert(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
-    MalMapObject *map = mal_builtin_map_this(vm, this_value, true, "Receiver is not a WeakMap");
+    MalWeakMapObject *map = mal_builtin_weak_map_this(vm, this_value);
     if (map == nullptr) {
         return mal_value_new_undefined();
     }
 
     MalValue key = arg_count >= 1 ? args[0] : mal_value_new_undefined();
-    if (!mal_builtin_map_can_be_held_weakly(key)) {
+    if (!mal_weak_key_can_be_held(key)) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Invalid value used as weak map key");
         return mal_value_new_undefined();
     }
 
-    return mal_builtin_map_get_or_insert(vm, map, key, arg_count >= 2 ? args[1] : mal_value_new_undefined());
+    return mal_weak_map_object_get_or_insert(map, key, arg_count >= 2 ? args[1] : mal_value_new_undefined());
+}
+
+static MalValue mal_builtin_weak_map_get_or_insert_computed(
+    MalVm *vm, MalWeakMapObject *map, MalValue key, MalValue callback
+) {
+    MalValue existing;
+    if (mal_weak_map_object_lookup(map, key, &existing)) return existing;
+    MalValue roots[] = {mal_value_from_weak_map_object(map), key, callback, MAL_VALUE_UNDEFINED};
+    MalRootSpan span;
+    mal_gc_root(&span, roots, countof(roots));
+    mal_gc_native_rooted_begin(vm);
+    MalCompletion completion = mal_vm_call_value(vm, roots[2], MAL_VALUE_UNDEFINED, &roots[1], 1);
+    mal_gc_native_rooted_end(vm);
+    if (completion.kind == MAL_COMPLETION_NORMAL) {
+        roots[3] = completion.value;
+        // The callback may delete, insert, or rehash this owner before its result wins.
+        mal_weak_map_object_set(map, roots[1], roots[3]);
+    }
+    MalValue result = roots[3];
+    mal_gc_unroot(&span);
+    return result;
 }
 
 static MalValue mal_builtin_weak_map_prototype_get_or_insert_computed(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
-    MalMapObject *map = mal_builtin_map_this(vm, this_value, true, "Receiver is not a WeakMap");
+    MalWeakMapObject *map = mal_builtin_weak_map_this(vm, this_value);
     if (map == nullptr) {
+        return mal_value_new_undefined();
+    }
+
+    MalValue key = arg_count >= 1 ? args[0] : mal_value_new_undefined();
+    if (!mal_weak_key_can_be_held(key)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Invalid value used as weak map key");
         return mal_value_new_undefined();
     }
 
@@ -870,13 +878,7 @@ static MalValue mal_builtin_weak_map_prototype_get_or_insert_computed(MalVm *vm,
         return mal_value_new_undefined();
     }
 
-    MalValue key = arg_count >= 1 ? args[0] : mal_value_new_undefined();
-    if (!mal_builtin_map_can_be_held_weakly(key)) {
-        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Invalid value used as weak map key");
-        return mal_value_new_undefined();
-    }
-
-    return mal_builtin_map_get_or_insert_computed(vm, map, key, callback);
+    return mal_builtin_weak_map_get_or_insert_computed(vm, map, key, callback);
 }
 
 /**

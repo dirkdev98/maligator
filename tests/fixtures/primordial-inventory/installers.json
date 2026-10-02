@@ -81,7 +81,7 @@
 	},
 	{
 		"file": "builtin_map.c",
-		"sha256": "0520c8c04b2525ff042abab029423039b4184e9c23f7436425bdc0d8089303de"
+		"sha256": "87578720c422360369cd63c55a9a5e6ea13f76765e88da5c771d07a801a9900d"
 	},
 	{
 		"file": "builtin_math.c",
@@ -113,7 +113,7 @@
 	},
 	{
 		"file": "builtin_set.c",
-		"sha256": "d3414fb3e79fc20578ee511512210ee866f125778c666dfbaa3447632881aa17"
+		"sha256": "0089062ead7cd653283d2cf93a422ece1cf00c03ee8971882ce765c97e1804fa"
 	},
 	{
 		"file": "builtin_shadow_realm.c",
@@ -605,7 +605,7 @@
 	},
 	{
 		"file": "runtime/node_util.c",
-		"sha256": "343dc7d60aa6c32501337a9011d6b11d210dcaefe53a218ed794a6595d2af7a8"
+		"sha256": "4ce7bb0e6346f7ccfa146ecd4d785738aa3f3ecf4602a198c5bdbfd3768318aa"
 	},
 	{
 		"file": "runtime/node_util.h",
@@ -653,7 +653,7 @@
 	},
 	{
 		"file": "runtime/web_globals.c",
-		"sha256": "a62e9886faa1b66e4bc48ecb80a1ebc6617ad0f38659e4100bc667a7dc17f4ba"
+		"sha256": "1ce5ed2251b7e9976401222f880f69b20724809271b12e7af5ac5a47472cdf15"
 	},
 	{
 		"file": "runtime/web_headers.c",
@@ -689,10 +689,10 @@
 	},
 	{
 		"file": "vm_ops.c",
-		"sha256": "577592e5ce73cd5bc82b24fd6bc05ed0706d4c03e87a2089d4140ac7cf85aadb"
+		"sha256": "162517a65ebbdc3286ff89e88289c558e37debc7e4c82e3a79e901f2e301c1aa"
 	},
 	{
 		"file": "vm_ops.h",
-		"sha256": "b616238049f13f0b8fa77b1e426ee10a8ac4f53bdeb1860c5a172a8d156da167"
+		"sha256": "cde3befc62d3e8a5ee5457e8a293de4d515666f696f38e6c9d600c3db383d09b"
 	}
 ]

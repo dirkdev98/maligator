@@ -22,7 +22,6 @@ struct MalSetStorage {
     u32 pins;
     u32 reserve_size;
     MalSetKeyDomain domain;
-    bool weak;
     bool owner_released;
     MalValue small[MAL_SET_SMALL_CAPACITY];
 };
@@ -274,19 +273,18 @@ MalSetStorage *mal_set_object_storage(MalSetObject *set) {
         MAL_PERF_COUNT(set_storage_descriptors);
         MalSetStorage *storage = mal_heap_alloc_raw_profiled(
             mal_gc_current_heap(), sizeof(MalSetStorage), MAL_PROFILE_ALLOCATION_FAMILY_COLLECTION);
-        *storage = (MalSetStorage) {.capacity = MAL_SET_SMALL_CAPACITY, .weak = set->weak};
+        *storage = (MalSetStorage) {.capacity = MAL_SET_SMALL_CAPACITY};
         set->entries = storage;
     }
     return set->entries;
 }
 
-MalSetObject *mal_set_object_new(MalHeap *heap, MalObject *prototype, bool weak) {
+MalSetObject *mal_set_object_new(MalHeap *heap, MalObject *prototype) {
     MalSetObject *set = mal_heap_alloc(heap, sizeof(MalSetObject), MAL_HEAP_SET_OBJECT);
     mal_object_init(heap, &set->object, MAL_HEAP_SET_OBJECT, prototype);
     set->entries = nullptr;
-    set->weak = weak;
     mal_perf_collection_new(
-        set, weak ? MAL_PERF_COLLECTION_WEAK_SET : MAL_PERF_COLLECTION_SET, heap->epoch);
+        set, MAL_PERF_COLLECTION_SET, heap->epoch);
     return set;
 }
 
@@ -418,7 +416,7 @@ bool mal_set_object_delete_canonical(MalSetObject *set, MalValue key) {
         storage->deleted_slots += mal_hash_index_erase(storage->slots, storage->slot_capacity, slot);
     }
     if (index == storage->count) return false;
-    if (!storage->weak) mal_gc_write_barrier(mal_set_key_at(storage, index));
+    mal_gc_write_barrier(mal_set_key_at(storage, index));
     if (storage->payload == nullptr) storage->small[index] = MAL_VALUE_EMPTY;
     else mal_set_controls(storage)[index] = 0;
     storage->size--;
@@ -441,7 +439,7 @@ void mal_set_object_clear(MalSetObject *set) {
     bool mutated = storage->size != 0;
     for (u32 i = 0; i < storage->count; i++) {
         if (!mal_set_is_live(storage, i)) continue;
-        if (!storage->weak) mal_gc_write_barrier(mal_set_key_at(storage, i));
+        mal_gc_write_barrier(mal_set_key_at(storage, i));
         if (storage->payload == nullptr) storage->small[i] = MAL_VALUE_EMPTY;
         else mal_set_controls(storage)[i] = 0;
     }
@@ -506,28 +504,6 @@ void mal_set_storage_release_owner(MalSetStorage *storage) {
     if (storage == nullptr) return;
     if (storage->pins == 0) mal_set_free(storage);
     else storage->owner_released = true;
-}
-
-usize mal_set_storage_retain(MalSetStorage *storage, bool (*keep)(MalValue)) {
-    if (storage == nullptr) return 0;
-    usize removed = 0;
-    for (u32 i = 0; i < storage->count; i++) {
-        if (!mal_set_is_live(storage, i)) continue;
-        MalValue key = mal_set_key_at(storage, i);
-        if (keep(key)) continue;
-        if (!storage->weak) mal_gc_write_barrier(key);
-        if (storage->payload == nullptr) storage->small[i] = MAL_VALUE_EMPTY;
-        else mal_set_controls(storage)[i] = 0;
-        storage->size--;
-        removed++;
-    }
-    if (removed != 0) {
-        if (storage->payload != nullptr) {
-            mal_set_fill_slots(storage, storage->slots, storage->slot_capacity);
-        }
-        if (mal_set_should_compact(storage)) mal_set_compact(storage);
-    }
-    return removed;
 }
 
 usize mal_set_storage_traced_slots(const MalSetStorage *storage) {

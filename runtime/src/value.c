@@ -26,6 +26,14 @@ bool mal_value_is_set_object(MalValue value) {
     return mal_value_is_heap_type(value, MAL_HEAP_SET_OBJECT);
 }
 
+bool mal_value_is_weak_map_object(MalValue value) {
+    return mal_value_is_heap_type(value, MAL_HEAP_WEAK_MAP_OBJECT);
+}
+
+bool mal_value_is_weak_set_object(MalValue value) {
+    return mal_value_is_heap_type(value, MAL_HEAP_WEAK_SET_OBJECT);
+}
+
 bool mal_value_is_date_object(MalValue value) {
     return mal_value_is_heap_type(value, MAL_HEAP_DATE_OBJECT);
 }

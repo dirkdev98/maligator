@@ -3078,38 +3078,31 @@ bool mal_op_call_guarded_builtin(
     switch ((MalGuardedBuiltinCallOp) operation) {
         case MAL_GUARDED_BUILTIN_MAP_GET:
             expected = MAL_INTRINSIC_MAP_PROTOTYPE_GET;
-            receiver_matches = mal_value_is_map_object(receiver) &&
-                !mal_value_to_map_object(receiver)->weak;
+            receiver_matches = mal_value_is_map_object(receiver);
             break;
         case MAL_GUARDED_BUILTIN_MAP_SET:
             expected = MAL_INTRINSIC_MAP_PROTOTYPE_SET;
-            receiver_matches = mal_value_is_map_object(receiver) &&
-                !mal_value_to_map_object(receiver)->weak;
+            receiver_matches = mal_value_is_map_object(receiver);
             break;
         case MAL_GUARDED_BUILTIN_MAP_HAS:
             expected = MAL_INTRINSIC_MAP_PROTOTYPE_HAS;
-            receiver_matches = mal_value_is_map_object(receiver) &&
-                !mal_value_to_map_object(receiver)->weak;
+            receiver_matches = mal_value_is_map_object(receiver);
             break;
         case MAL_GUARDED_BUILTIN_MAP_DELETE:
             expected = MAL_INTRINSIC_MAP_PROTOTYPE_DELETE;
-            receiver_matches = mal_value_is_map_object(receiver) &&
-                !mal_value_to_map_object(receiver)->weak;
+            receiver_matches = mal_value_is_map_object(receiver);
             break;
         case MAL_GUARDED_BUILTIN_SET_ADD:
             expected = MAL_INTRINSIC_SET_PROTOTYPE_ADD;
-            receiver_matches = mal_value_is_set_object(receiver) &&
-                !mal_value_to_set_object(receiver)->weak;
+            receiver_matches = mal_value_is_set_object(receiver);
             break;
         case MAL_GUARDED_BUILTIN_SET_HAS:
             expected = MAL_INTRINSIC_SET_PROTOTYPE_HAS;
-            receiver_matches = mal_value_is_set_object(receiver) &&
-                !mal_value_to_set_object(receiver)->weak;
+            receiver_matches = mal_value_is_set_object(receiver);
             break;
         case MAL_GUARDED_BUILTIN_SET_DELETE:
             expected = MAL_INTRINSIC_SET_PROTOTYPE_DELETE;
-            receiver_matches = mal_value_is_set_object(receiver) &&
-                !mal_value_to_set_object(receiver)->weak;
+            receiver_matches = mal_value_is_set_object(receiver);
             break;
         default:
             return false;

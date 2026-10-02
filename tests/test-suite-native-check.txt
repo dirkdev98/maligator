@@ -57,6 +57,7 @@ tests/native/json-late-fallback.test.ts
 
 tests/native/map-string-representative.test.ts
 tests/native/map-storage.test.ts
+tests/native/weak-storage.test.ts
 
 tests/native/string-rope-followups.test.ts
 tests/native/string-cursor-frontier.test.ts

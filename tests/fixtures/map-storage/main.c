@@ -1,6 +1,7 @@
 #include <stdio.h>
 
 #include "gc.h"
+#include "weak_collection.h"
 #include "hash_index.h"
 #include "map_object.h"
 #include "set_object.h"
@@ -10,7 +11,7 @@ extern const MalRuntimeImage mal_runtime_image;
 #define CHECK(test) do { if (!(test)) { fprintf(stderr, "map-storage:%d\n", __LINE__); return 1; } } while (0)
 
 static int check_storage(MalVm *vm) {
-    MalMapObject *map = mal_map_object_new(&vm->heap, nullptr, false);
+    MalMapObject *map = mal_map_object_new(&vm->heap, nullptr);
     CHECK(map->entries == nullptr);
     CHECK(!mal_map_object_has(map, MAL_VALUE_UNDEFINED));
     CHECK(!mal_map_object_delete(map, MAL_VALUE_TRUE));
@@ -73,7 +74,7 @@ static int check_storage(MalVm *vm) {
     CHECK(mal_map_storage_key_domain(map->entries) == MAL_MAP_KEYS_EMPTY);
     CHECK(!mal_map_object_reserve(map, SIZE_MAX));
 
-    MalMapObject *generic = mal_map_object_new(&vm->heap, nullptr, false);
+    MalMapObject *generic = mal_map_object_new(&vm->heap, nullptr);
     for (i32 i = 0; i < 63; i++) mal_map_object_set(generic, mal_value_from_i32(i), MAL_VALUE_UNDEFINED);
     mal_map_object_set(generic, MAL_VALUE_TRUE, MAL_VALUE_UNDEFINED);
     CHECK(int_bytes < mal_map_storage_allocation_bytes(generic->entries));
@@ -82,7 +83,7 @@ static int check_storage(MalVm *vm) {
 
 static int check_transitions(MalVm *vm) {
     for (i32 generic = 0; generic < 2; generic++) {
-        MalMapObject *map = mal_map_object_new(&vm->heap, nullptr, false);
+        MalMapObject *map = mal_map_object_new(&vm->heap, nullptr);
         for (i32 i = 0; i < 64; i++) {
             MalValue key = generic && i == 63 ? MAL_VALUE_TRUE : mal_value_from_i32(i);
             mal_map_object_set(map, key, mal_value_from_i32(i + 100));
@@ -100,7 +101,7 @@ static int check_transitions(MalVm *vm) {
         }
         for (i32 i = 100; i < 116; i++) CHECK(mal_map_object_get(map, mal_value_from_i32(i)) == mal_value_from_i32(i + 100));
     }
-    MalMapObject *strings = mal_map_object_new(&vm->heap, nullptr, false);
+    MalMapObject *strings = mal_map_object_new(&vm->heap, nullptr);
     MalValue first = MAL_VALUE_UNDEFINED;
     for (i32 i = 0; i < 5; i++) {
         char text[32];
@@ -124,10 +125,10 @@ static int check_transitions(MalVm *vm) {
 }
 
 static int check_gc(MalVm *vm) {
-    MalMapObject *numeric = mal_map_object_new(&vm->heap, nullptr, false);
-    MalMapObject *weak = mal_map_object_new(&vm->heap, nullptr, true);
+    MalMapObject *numeric = mal_map_object_new(&vm->heap, nullptr);
+    MalWeakMapObject *weak = mal_weak_map_object_new(&vm->heap, nullptr);
     MalValue roots[3] = {
-        mal_value_from_map_object(numeric), mal_value_from_map_object(weak),
+        mal_value_from_map_object(numeric), mal_value_from_weak_map_object(weak),
         mal_value_from_object(mal_object_new(&vm->heap, nullptr))
     };
     MalRootSpan span;
@@ -136,7 +137,7 @@ static int check_gc(MalVm *vm) {
         MalObject *object = mal_object_new(&vm->heap, nullptr);
         mal_map_object_set(numeric, mal_value_from_i32(i), mal_value_from_object(object));
     }
-    mal_map_object_set(weak, roots[2], roots[0]);
+    mal_weak_map_object_set(weak, roots[2], roots[0]);
     mal_gc_collect(vm);
     CHECK(mal_map_storage_key_domain(numeric->entries) == MAL_MAP_KEYS_INT32);
     for (i32 i = 0; i < 64; i++) {
@@ -145,16 +146,16 @@ static int check_gc(MalVm *vm) {
     MalValue young = mal_value_from_object(mal_object_new(&vm->heap, nullptr));
     mal_map_object_set(numeric, mal_value_from_i32(17), young);
     MalValue young_weak = mal_value_from_object(mal_object_new(&vm->heap, nullptr));
-    mal_map_object_set(weak, roots[2], young_weak);
+    mal_weak_map_object_set(weak, roots[2], young_weak);
     vm->heap.next_gc_at = 1;
     mal_gc_poll = true;
     mal_gc_safepoint(vm);
     mal_gc_finish_pending_cycle(vm);
     CHECK(mal_map_object_get(numeric, mal_value_from_i32(17)) == young);
-    CHECK(mal_map_object_get(weak, roots[2]) == young_weak);
+    CHECK(mal_weak_map_object_get(weak, roots[2]) == young_weak);
     roots[2] = MAL_VALUE_UNDEFINED;
     mal_gc_collect(vm);
-    CHECK(mal_map_object_size(weak) == 0);
+    CHECK(mal_weak_map_object_size(weak) == 0);
     mal_gc_unroot(&span);
     return 0;
 }

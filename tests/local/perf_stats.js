@@ -78,6 +78,22 @@ if (
 }
 compactedMap.clear();
 
+const weakKeys = Array.from({ length: 40 }, () => ({}));
+const weakMap = new WeakMap();
+const weakSet = new WeakSet();
+for (let i = 0; i < weakKeys.length; i++) {
+	weakMap.set(weakKeys[i], i);
+	weakSet.add(weakKeys[i]);
+}
+for (let i = 0; i < 36; i++) {
+	if (!weakMap.delete(weakKeys[i]) || !weakSet.delete(weakKeys[i]))
+		throw new Error("broken weak deletion");
+}
+for (let i = 36; i < weakKeys.length; i++) {
+	if (weakMap.get(weakKeys[i]) !== i || !weakSet.has(weakKeys[i]))
+		throw new Error("broken weak demotion");
+}
+
 const fanoutKeys = [];
 for (let i = 0; i < 160; i++) {
 	const key = ["fanout", i].join("-");

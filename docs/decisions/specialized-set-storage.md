@@ -1,7 +1,8 @@
 # Specialized Set storage
 
-Set and WeakSet own a key-only ordered store through `MalSetObject`. Map and WeakMap
-use the dedicated [Map storage](specialized-map-storage.md). Shared SameValueZero
+Set owns a key-only ordered store through `MalSetObject`. Map uses the dedicated
+[Map storage](specialized-map-storage.md); WeakMap and WeakSet use separate
+[unordered storage](specialized-weak-storage.md). Shared SameValueZero
 canonicalization and hashing live in `key.h`; property-key canonicalization remains
 separate. Collection identity and ordinary object properties survive every backing
 change.
@@ -77,14 +78,9 @@ Performance finalization may classify member tags, but cannot dereference member
 
 Strong Sets trace each live member once; Number and Int32 domains have no member
 edges. Object properties and prototypes keep the ordinary exotic-object trace.
-Insertion cards old owners, including WeakSets, so remembered owners participate
-in minor tracing or weak registration. Strong deletion shades the removed edge
-for SATB; weak deletion must never make an otherwise dead member strong.
-
-WeakSets have a separate collector registry and are filtered after the complete
-WeakMap ephemeron fixpoint. This includes WeakSets discovered through activated
-WeakMap values. Filtering uses a non-allocating, non-mutating mark predicate and
-rebuilds the index before compaction. Verification traces surviving weak members.
+Insertion cards old owners so remembered owners participate in minor tracing.
+Deletion shades the removed edge for SATB. WeakSet has a distinct heap family,
+collector registry, and removal contract; it never enters this ordered store.
 
 Constructor items, algebra callback keys and forEach arguments remain explicitly
 rooted across user callbacks, including callable Proxy apply getters.

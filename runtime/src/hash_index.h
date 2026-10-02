@@ -97,8 +97,7 @@ static inline void mal_hash_index_insert(i32 *slots, u32 capacity, u32 slot, u32
     mal_hash_controls(slots, capacity)[slot] = mal_hash_tag(hash);
 }
 
-static inline u32 mal_hash_index_empty_slot(i32 *slots, u32 capacity, u64 hash) {
-    u8 *controls = mal_hash_controls(slots, capacity);
+static inline u32 mal_hash_controls_empty_slot(const u8 *controls, u32 capacity, u64 hash) {
     MalHashProbe probe = mal_hash_probe(hash, capacity);
     for (;;) {
         MalHashMask empty = mal_hash_group_match(controls + probe.group, MAL_HASH_EMPTY);
@@ -107,13 +106,20 @@ static inline u32 mal_hash_index_empty_slot(i32 *slots, u32 capacity, u64 hash) 
     }
 }
 
-static inline bool mal_hash_index_erase(i32 *slots, u32 capacity, u32 slot) {
-    u8 *controls = mal_hash_controls(slots, capacity);
+static inline u32 mal_hash_index_empty_slot(i32 *slots, u32 capacity, u64 hash) {
+    return mal_hash_controls_empty_slot(mal_hash_controls(slots, capacity), capacity, hash);
+}
+
+static inline bool mal_hash_controls_erase(u8 *controls, u32 slot) {
     u32 group = slot & ~(MAL_HASH_GROUP_WIDTH - 1);
     // An existing empty proves searches already stop here; a full group needs a tombstone.
     bool deleted = mal_hash_group_match(controls + group, MAL_HASH_EMPTY) == 0;
     controls[slot] = deleted ? MAL_HASH_DELETED : MAL_HASH_EMPTY;
     return deleted;
+}
+
+static inline bool mal_hash_index_erase(i32 *slots, u32 capacity, u32 slot) {
+    return mal_hash_controls_erase(mal_hash_controls(slots, capacity), slot);
 }
 
 static inline bool mal_hash_index_fits(usize size, u32 capacity) {

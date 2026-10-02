@@ -1,8 +1,9 @@
 # Specialized Map storage
 
-Map and WeakMap own `MalMapStorage`, independently of property tables. Their
-index uses the shared grouped-hash implementation; their payload, equality,
+Map owns `MalMapStorage`, independently of property tables. Its
+index uses the shared grouped-hash implementation; its payload, equality,
 mutation barriers, cursor lifetime, and tracing belong to the Map owner.
+Weak collections use distinct [unordered storage](specialized-weak-storage.md).
 
 An empty Map has no backing allocation. An insertion, iterator, or nonzero reserve
 hint creates a stable RAW descriptor with four inline key/value pairs. Larger Maps
@@ -37,13 +38,10 @@ compacting, or releasing the owner invalidates the hint. A compact-string
 representative replacement refreshes the mirror; an equal temporary query never
 becomes a new retention edge.
 
-Strong Maps trace every value, including Maps with numeric keys. Numeric keys
-need no key tracing. WeakMaps initially use the same ordered payload, but their
-entries remain ephemerons: the collector discovers all newly reachable weak owners
-and reaches its key/value fixpoint before filtering dead entries. Mutator writes
-retain conservative old-key/old-value barriers and card the owner for young edges.
-Collector cleanup runs after marking is disabled. Unordered weak storage is a
-separate change with different deletion and compaction rules.
+Maps trace every value, including Maps with numeric keys. Numeric keys need no
+key tracing. Mutator writes retain old-edge barriers and card the owner for young
+edges. WeakMap has a separate heap family and never enters Map cursor or tracing
+paths.
 
 All Map consumers use this owner API: construction, grouping, ordinary and direct
 methods, computed insertion, callbacks, iterator protocols and fast drains,

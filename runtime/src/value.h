@@ -18,6 +18,8 @@ typedef struct MalBoundFunctionObject MalBoundFunctionObject;
 typedef struct MalArrayObject MalArrayObject;
 typedef struct MalMapObject MalMapObject;
 typedef struct MalSetObject MalSetObject;
+typedef struct MalWeakMapObject MalWeakMapObject;
+typedef struct MalWeakSetObject MalWeakSetObject;
 typedef struct MalIteratorObject MalIteratorObject;
 typedef struct MalModuleNamespaceObject MalModuleNamespaceObject;
 typedef struct MalPromiseObject MalPromiseObject;
@@ -364,15 +366,11 @@ bool mal_value_is_module_namespace_object(MalValue value);
 MalModuleNamespaceObject *mal_value_to_module_namespace_object(MalValue value);
 MalValue mal_value_from_module_namespace_object(MalModuleNamespaceObject *ns);
 
-/**
- * Check if the value is a Map/WeakMap instance.
- */
 bool mal_value_is_map_object(MalValue value);
 
-/**
- * Check if the value is a Set/WeakSet instance.
- */
 bool mal_value_is_set_object(MalValue value);
+bool mal_value_is_weak_map_object(MalValue value);
+bool mal_value_is_weak_set_object(MalValue value);
 
 /**
  * Check if the value is a built-in iterator instance.
@@ -565,15 +563,20 @@ static inline MalArrayObject *mal_value_to_array_object(MalValue value) {
     return (MalArrayObject *) mal_value_to_heap(value);
 }
 
-/**
- * Unbox a map/set object (shared layout for all four collection types).
- */
 static inline MalMapObject *mal_value_to_map_object(MalValue value) {
     return (MalMapObject *) mal_value_to_heap(value);
 }
 
 static inline MalSetObject *mal_value_to_set_object(MalValue value) {
     return (MalSetObject *) mal_value_to_heap(value);
+}
+
+static inline MalWeakMapObject *mal_value_to_weak_map_object(MalValue value) {
+    return (MalWeakMapObject *) mal_value_to_heap(value);
+}
+
+static inline MalWeakSetObject *mal_value_to_weak_set_object(MalValue value) {
+    return (MalWeakSetObject *) mal_value_to_heap(value);
 }
 
 /**
@@ -676,14 +679,19 @@ static inline MalValue mal_value_from_array_object(MalArrayObject *array) {
     return MAL_VALUE_ARRAY | ((uptr) array & MAKS_PTR);
 }
 
-/**
- * Box a map object.
- */
 static inline MalValue mal_value_from_map_object(MalMapObject *map) {
     return MAL_VALUE_OBJECT | ((uptr) map & MAKS_PTR);
 }
 
 static inline MalValue mal_value_from_set_object(MalSetObject *set) {
+    return MAL_VALUE_OBJECT | ((uptr) set & MAKS_PTR);
+}
+
+static inline MalValue mal_value_from_weak_map_object(MalWeakMapObject *map) {
+    return MAL_VALUE_OBJECT | ((uptr) map & MAKS_PTR);
+}
+
+static inline MalValue mal_value_from_weak_set_object(MalWeakSetObject *set) {
     return MAL_VALUE_OBJECT | ((uptr) set & MAKS_PTR);
 }
 

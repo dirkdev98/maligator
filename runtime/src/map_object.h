@@ -17,7 +17,6 @@ typedef struct MalMapObject {
     MalObject object;
     MalObjectStorage object_storage;
     MalMapStorage *entries;
-    bool weak;
 } MalMapObject;
 
 typedef struct MalMapIter {
@@ -25,8 +24,8 @@ typedef struct MalMapIter {
     usize index;
 } MalMapIter;
 
-void mal_map_object_init(MalHeap *heap, MalMapObject *map, MalObject *prototype, bool weak);
-MalMapObject *mal_map_object_new(MalHeap *heap, MalObject *prototype, bool weak);
+void mal_map_object_init(MalHeap *heap, MalMapObject *map, MalObject *prototype);
+MalMapObject *mal_map_object_new(MalHeap *heap, MalObject *prototype);
 void mal_map_object_set(MalMapObject *map, MalValue key, MalValue value);
 // Canonical inputs come from collection normalization or Map/Set iteration.
 void mal_map_object_set_canonical(MalMapObject *map, MalValue key, MalValue value);
@@ -58,8 +57,6 @@ void mal_map_storage_pin(MalMapStorage *storage);
 // Finalizers may only drop ownership; they must not read or rehash dead members.
 void mal_map_storage_unpin(MalMapStorage *storage);
 void mal_map_storage_release_owner(MalMapStorage *storage);
-// The predicate must not allocate, collect, or mutate the store.
-usize mal_map_storage_retain(MalMapStorage *storage, bool (*keep)(MalValue));
 usize mal_map_storage_traced_slots(const MalMapStorage *storage);
 MalMapKeyDomain mal_map_storage_key_domain(const MalMapStorage *storage);
 usize mal_map_storage_order_length(const MalMapStorage *storage);

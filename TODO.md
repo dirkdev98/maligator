@@ -888,6 +888,10 @@ remains a Maligator extension and does not count as global fetch conformance.
       but app-batch visited zero weak entries. Measure a representative
       weak-heavy workload and bounded pending-index memory before retaining
       the indexed pass; retain the separate weak-cleanup SATB correctness fix.
+- [ ] Release exhausted Map/Set iterator targets after dropping their storage pin.
+      The current GC trace retains the entire owner through `iterator->target`.
+      Audit direct cursor helpers and preserve SATB before clearing that edge;
+      this retention predates the specialized collection stores.
 - [ ] Reclamation: measure fresh allocation during sweep, reusable capacity,
       mapped and resident memory, page faults, and grow/shrink cycles with the new
       point-in-time heap-usage counters before replacing global free lists or

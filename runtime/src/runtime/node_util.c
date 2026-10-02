@@ -708,13 +708,13 @@ UTIL_TYPE_PREDICATE(is_shared_array_buffer,
 UTIL_TYPE_PREDICATE(is_data_view, mal_value_is_data_view_object(value))
 UTIL_TYPE_PREDICATE(is_date, mal_value_is_date_object(value))
 UTIL_TYPE_PREDICATE(is_map,
-    mal_value_is_map_object(value) && !mal_value_to_map_object(value)->weak)
+    mal_value_is_map_object(value))
 UTIL_TYPE_PREDICATE(is_set,
-    mal_value_is_set_object(value) && !mal_value_to_set_object(value)->weak)
+    mal_value_is_set_object(value))
 UTIL_TYPE_PREDICATE(is_weak_map,
-    mal_value_is_map_object(value) && mal_value_to_map_object(value)->weak)
+    mal_value_is_weak_map_object(value))
 UTIL_TYPE_PREDICATE(is_weak_set,
-    mal_value_is_set_object(value) && mal_value_to_set_object(value)->weak)
+    mal_value_is_weak_set_object(value))
 UTIL_TYPE_PREDICATE(is_reg_exp, mal_value_is_regexp_object(value))
 UTIL_TYPE_PREDICATE(is_typed_array, mal_value_is_typed_array_object(value))
 UTIL_TYPE_PREDICATE(is_boxed_primitive, mal_value_is_primitive_wrapper(value))

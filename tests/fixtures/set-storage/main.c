@@ -1,6 +1,7 @@
 #include <stdio.h>
 
 #include "gc.h"
+#include "weak_collection.h"
 #include "iterator_object.h"
 #include "map_object.h"
 #include "set_object.h"
@@ -11,7 +12,7 @@ extern const MalRuntimeImage mal_runtime_image;
 #define CHECK(test) do { if (!(test)) { fprintf(stderr, "set-storage:%d\n", __LINE__); return 1; } } while (0)
 
 static int check_storage(MalVm *vm) {
-    MalSetObject *set = mal_set_object_new(&vm->heap, nullptr, false);
+    MalSetObject *set = mal_set_object_new(&vm->heap, nullptr);
     CHECK(set->entries == nullptr);
     CHECK(!mal_set_object_has(set, MAL_VALUE_UNDEFINED));
     CHECK(!mal_set_object_delete(set, MAL_VALUE_TRUE));
@@ -71,7 +72,7 @@ static int check_storage(MalVm *vm) {
 
 static int check_clusters(MalVm *vm) {
     for (i32 remove = 0; remove < 48; remove += 7) {
-        MalSetObject *set = mal_set_object_new(&vm->heap, nullptr, false);
+        MalSetObject *set = mal_set_object_new(&vm->heap, nullptr);
         CHECK(mal_set_object_reserve(set, 64));
         i32 values[48];
         i32 count = 0;
@@ -104,50 +105,50 @@ static int check_clusters(MalVm *vm) {
 }
 
 static int check_gc(MalVm *vm) {
-    MalSetObject *strong = mal_set_object_new(&vm->heap, nullptr, false);
-    MalSetObject *weak = mal_set_object_new(&vm->heap, nullptr, true);
-    MalMapObject *map = mal_map_object_new(&vm->heap, nullptr, true);
+    MalSetObject *strong = mal_set_object_new(&vm->heap, nullptr);
+    MalWeakSetObject *weak = mal_weak_set_object_new(&vm->heap, nullptr);
+    MalWeakMapObject *map = mal_weak_map_object_new(&vm->heap, nullptr);
     MalValue roots[4] = {
-        mal_value_from_set_object(strong), mal_value_from_set_object(weak),
-        mal_value_from_map_object(map), mal_value_from_object(mal_object_new(&vm->heap, nullptr))
+        mal_value_from_set_object(strong), mal_value_from_weak_set_object(weak),
+        mal_value_from_weak_map_object(map), mal_value_from_object(mal_object_new(&vm->heap, nullptr))
     };
     MalRootSpan span;
     mal_gc_root(&span, roots, countof(roots));
     MalValue last = roots[3];
     for (i32 i = 0; i < 64; i++) {
         MalValue next = mal_value_from_object(mal_object_new(&vm->heap, nullptr));
-        mal_map_object_set(map, last, next);
-        mal_set_object_add(weak, next);
+        mal_weak_map_object_set(map, last, next);
+        mal_weak_set_object_add(weak, next);
         last = next;
     }
-    MalSetObject *late = mal_set_object_new(&vm->heap, nullptr, true);
-    mal_set_object_add(late, last);
-    mal_set_object_add(late, mal_value_from_object(mal_object_new(&vm->heap, nullptr)));
-    mal_map_object_set(map, last, mal_value_from_set_object(late));
+    MalWeakSetObject *late = mal_weak_set_object_new(&vm->heap, nullptr);
+    mal_weak_set_object_add(late, last);
+    mal_weak_set_object_add(late, mal_value_from_object(mal_object_new(&vm->heap, nullptr)));
+    mal_weak_map_object_set(map, last, mal_value_from_weak_set_object(late));
     mal_gc_collect(vm);
-    CHECK(mal_set_object_size(weak) == 64);
-    CHECK(mal_set_object_size(late) == 1);
-    CHECK(mal_set_object_has(late, last));
+    CHECK(mal_weak_set_object_size(weak) == 64);
+    CHECK(mal_weak_set_object_size(late) == 1);
+    CHECK(mal_weak_set_object_has(late, last));
 
     MalValue young = mal_value_from_object(mal_object_new(&vm->heap, nullptr));
     mal_set_object_add(strong, young);
-    mal_set_object_add(weak, young);
+    mal_weak_set_object_add(weak, young);
     vm->heap.next_gc_at = 1;
     mal_gc_poll = true;
     mal_gc_safepoint(vm);
     CHECK(mal_set_object_has(strong, young));
-    CHECK(mal_set_object_has(weak, young));
+    CHECK(mal_weak_set_object_has(weak, young));
     if (mal_gc_marking_active) CHECK(mal_gc_finish_pending_cycle(vm));
     roots[3] = MAL_VALUE_UNDEFINED;
     mal_gc_collect(vm);
-    CHECK(mal_map_object_size(map) == 0);
-    CHECK(mal_set_object_size(weak) == 1);
+    CHECK(mal_weak_map_object_size(map) == 0);
+    CHECK(mal_weak_set_object_size(weak) == 1);
     mal_set_object_clear(strong);
     mal_gc_collect(vm);
-    CHECK(mal_set_object_size(weak) == 0);
+    CHECK(mal_weak_set_object_size(weak) == 0);
 
     for (i32 trial = 0; trial < 128; trial++) {
-        MalSetObject *abandoned = mal_set_object_new(&vm->heap, nullptr, false);
+        MalSetObject *abandoned = mal_set_object_new(&vm->heap, nullptr);
         MalIteratorObject *iterator = mal_iterator_object_new(
             &vm->heap, nullptr, MAL_ITERATOR_SET_VALUES, mal_value_from_set_object(abandoned));
         MalValue members[8];
@@ -174,7 +175,7 @@ static int check_gc(MalVm *vm) {
 }
 
 static int check_bytes(MalVm *vm) {
-    MalSetObject *set = mal_set_object_new(&vm->heap, nullptr, false);
+    MalSetObject *set = mal_set_object_new(&vm->heap, nullptr);
     for (i32 i = 0; i < 64; i++) mal_set_object_add(set, mal_value_from_i32(i));
     usize set_bytes = mal_set_storage_allocation_bytes(set->entries);
     MalHeapUsage before = mal_heap_usage(&vm->heap);
@@ -185,7 +186,7 @@ static int check_bytes(MalVm *vm) {
     usize table_bytes = mal_heap_usage(&vm->heap).raw_owned_bytes - before.raw_owned_bytes;
     mal_table_free(table);
     CHECK(set_bytes * 3 < table_bytes * 2);
-    MalSetObject *generic = mal_set_object_new(&vm->heap, nullptr, false);
+    MalSetObject *generic = mal_set_object_new(&vm->heap, nullptr);
     for (i32 i = 0; i < 63; i++) mal_set_object_add(generic, mal_value_from_i32(i));
     mal_set_object_add(generic, MAL_VALUE_TRUE);
     usize generic_bytes = mal_set_storage_allocation_bytes(generic->entries);

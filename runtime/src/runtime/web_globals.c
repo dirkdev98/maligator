@@ -1131,19 +1131,18 @@ static MalValue mal_sc_clone(MalVm *vm, MalValue value, MalMapObject *memo) {
         return clone;
     }
 
+    if (mal_value_is_weak_map_object(value) || mal_value_is_weak_set_object(value)) {
+        mal_dom_exception_throw(vm,
+            "structuredClone: a WeakMap/WeakSet cannot be cloned", "DataCloneError");
+        return mal_value_new_undefined();
+    }
     if (mal_value_is_map_object(value) || mal_value_is_set_object(value)) {
         bool is_set = mal_value_is_set_object(value);
-        bool weak = is_set ? mal_value_to_set_object(value)->weak : mal_value_to_map_object(value)->weak;
-        if (weak) {
-            mal_dom_exception_throw(vm,
-                "structuredClone: a WeakMap/WeakSet cannot be cloned", "DataCloneError");
-            return mal_value_new_undefined();
-        }
         MalObject *proto = mal_value_to_object(
             vm->intrinsics[is_set ? MAL_INTRINSIC_SET_PROTOTYPE : MAL_INTRINSIC_MAP_PROTOTYPE]);
         MalValue clone = is_set
-            ? mal_value_from_set_object(mal_set_object_new(&vm->heap, proto, false))
-            : mal_value_from_map_object(mal_map_object_new(&vm->heap, proto, false));
+            ? mal_value_from_set_object(mal_set_object_new(&vm->heap, proto))
+            : mal_value_from_map_object(mal_map_object_new(&vm->heap, proto));
         mal_map_object_set(memo, value, clone);
         // Serialization snapshots entries before member getters can mutate their source.
         MalRootedValueList entries;
@@ -1297,7 +1296,7 @@ static MalValue mal_web_structured_clone(
         return mal_value_new_undefined();
     }
     MalObject *map_proto = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_MAP_PROTOTYPE]);
-    MalMapObject *memo = mal_map_object_new(&vm->heap, map_proto, false);
+    MalMapObject *memo = mal_map_object_new(&vm->heap, map_proto);
     roots[2] = mal_value_from_map_object(memo);
     if (!mal_sc_prepare_transfers(vm, roots[1], memo)) {
         mal_gc_unroot(&roots_span);
