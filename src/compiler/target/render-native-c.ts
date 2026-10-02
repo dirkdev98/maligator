@@ -6920,14 +6920,12 @@ function emitInstruction(
 			if (operator === "+" && reps[dst] === "number") {
 				const value = `unary_number_${ip}`;
 				return [
-					`MalValue ${value} = mal_vm_unary_op(vm, MAL_UNARY_PLUS, ${boxed(src)});`,
+					`MalValue ${value} = mal_vm_unary_op_fast(vm, MAL_UNARY_PLUS, ${boxed(src)});`,
 					throwCheck(),
 					`r${dst} = ${callValue(dst, value)};`,
 				];
 			}
 			if (isNumericRep(reps[dst]!)) return null;
-			// Logical not yields a boolean: !ToBoolean(src). This is exactly
-			// mal_vm_unary_op(NOT) = mal_value_new_boolean(!mal_value_is_truthy(.)).
 			if (operator === "!") {
 				const negated = `!(${truthy(src)})`;
 				return [
@@ -6941,7 +6939,7 @@ function emitInstruction(
 				return null;
 			}
 			const lowered = [
-				`r${dst} = ${profileCall("unary", `mal_vm_unary_op(vm, ${emitUnaryOperator(operator)}, ${boxed(src)})`)};`,
+				`r${dst} = ${profileCall("unary", `mal_vm_unary_op_fast(vm, ${emitUnaryOperator(operator)}, ${boxed(src)})`)};`,
 			];
 			if (THROWING_UNARY_OPERATORS.has(operator)) {
 				lowered.push(throwCheck());

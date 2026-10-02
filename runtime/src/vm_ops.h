@@ -695,6 +695,29 @@ void mal_op_unary(MalCallable *callable, const MalInstruction *instruction);
  */
 MalValue mal_vm_unary_op(MalVm *vm, MalUnaryOp op, MalValue value);
 
+static inline MalValue mal_vm_unary_op_fast(MalVm *vm, MalUnaryOp op, MalValue value) {
+    if (op == MAL_UNARY_TO_NUMERIC &&
+        (mal_ops_is_number(value) || mal_value_is_bigint(value))) {
+        return value;
+    }
+    if (op == MAL_UNARY_INCREMENT || op == MAL_UNARY_DECREMENT) {
+        if (mal_value_is_int32(value)) {
+            i32 number = mal_value_to_i32(value);
+            if (op == MAL_UNARY_INCREMENT && number < INT32_MAX) {
+                return mal_value_from_i32(number + 1);
+            }
+            if (op == MAL_UNARY_DECREMENT && number > INT32_MIN) {
+                return mal_value_from_i32(number - 1);
+            }
+        }
+        if (mal_ops_is_number(value)) {
+            return mal_ops_number_value(mal_ops_number_as_f64(value) +
+                (op == MAL_UNARY_INCREMENT ? 1.0 : -1.0));
+        }
+    }
+    return mal_vm_unary_op(vm, op, value);
+}
+
 /** Classify a value using the exact result categories of the typeof operator. */
 MalTypeofResult mal_vm_typeof_result(MalValue value);
 
@@ -2263,9 +2286,13 @@ static inline MalValue mal_vm_indexed_fast_load(MalVm *vm, MalValue object_value
             // Integer-indexed exotic [[Get]] therefore owns the miss as well as
             // the hit: invalid, detached, and out-of-bounds indices are undefined
             // and never continue into the prototype/property machinery.
-            return mal_typed_array_object_get(
-                vm, mal_value_to_typed_array_object(object_value),
-                mal_vm_typed_array_numeric_index(index));
+            MalTypedArrayObject *array = mal_value_to_typed_array_object(object_value);
+            u32 element = mal_vm_typed_array_numeric_index(index);
+            if (!mal_typed_array_is_bigint(array->kind)) {
+                return mal_vm_exact_numeric_typed_array_load(
+                    array, element, array->kind, mal_typed_array_element_size(array->kind));
+            }
+            return mal_typed_array_object_get(vm, array, element);
         }
     }
     // Inline the monomorphic object-shape hit so a repeat `o.k` read is a shape +

@@ -4358,6 +4358,10 @@ bool mal_vm_to_string(MalVm *vm, MalValue value, MalString **out) {
 }
 
 bool mal_vm_to_numeric(MalVm *vm, MalValue value, MalValue *out) {
+    if (mal_ops_is_number(value) || mal_value_is_bigint(value)) {
+        *out = value;
+        return true;
+    }
     // ToNumeric: ToPrimitive(number); a BigInt primitive stays a BigInt, every
     // other primitive goes through ToNumber.
     MalValue primitive;
