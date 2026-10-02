@@ -42,6 +42,23 @@ function strip(source: string, filePath = "fixture.ts"): string {
 }
 
 describe("stripCompactTypes", () => {
+	test("preserves contextual calls, nested method types and ternaries in for-of headers", () => {
+		const source = `type Builtin = object;
+type satisfies = boolean;
+const builtin = {} as Builtin;
+const yes = true as satisfies;
+function satisfies(a: number, b: number): boolean { return a === b; }
+function retryAfter(response: { headers: { get(name: string): string | null } }): number {
+ return Number(response.headers.get("retry-after"));
+}
+let total = 0;
+for (const chunk of yes ? [1, 2] : [9]) total += chunk;
+globalThis.stripResult = [!satisfies(1, 2), retryAfter({ headers: { get: () => "4" } }), total, builtin];`;
+		const stripped = strip(source);
+		expect(() => parseModule(stripped)).not.toThrow();
+		expect(runInNewContext(stripped)).toEqual([true, 4, 3, {}]);
+	});
+
 	test("erases numeric literal annotations while preserving signed runtime values", () => {
 		const source = `function pick(unit: -1 | 1): 42 { return 42; } const input: -1 = -1; globalThis.stripResult = pick(input) + input;`;
 		const stripped = strip(source);

@@ -247,7 +247,7 @@ describe("command shell", () => {
 			licensePath: path.join(repoRoot, "LICENSE"),
 			testModulePath: path.join(repoRoot, "src/testing/runtime.mjs"),
 			nodeGlobalsPath: path.join(repoRoot, "src/node-globals.mjs"),
-			frontendIdentity: "compact-type-strip-v2",
+			frontendIdentity: "compact-type-strip-v3",
 			evalCompiler: {
 				kind: "source",
 				sourceDirectory: path.join(repoRoot, "src"),
@@ -274,7 +274,7 @@ describe("command shell", () => {
 		expect(installation.frontendIdentity).toBe(
 			developmentCompilerInstallation(path.join(repoRoot, "src")).frontendIdentity,
 		);
-		expect(installation.frontendIdentity).toBe("compact-type-strip-v2");
+		expect(installation.frontendIdentity).toBe("compact-type-strip-v3");
 		expect(installation.evalCompiler).toEqual({
 			kind: "prebuilt",
 			wirePath: path.resolve("compiler.malw"),

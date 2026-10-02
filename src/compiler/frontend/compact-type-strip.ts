@@ -14,7 +14,7 @@
  * can produce different output for source that already stripped successfully;
  * frontend, fragment, and test image caches key their stripped input on it.
  */
-export const TYPE_STRIPPER_IDENTITY = "compact-type-strip-v2";
+export const TYPE_STRIPPER_IDENTITY = "compact-type-strip-v3";
 
 /**
  * Erase types in place: every type span becomes spaces, so the result has the
@@ -1334,6 +1334,16 @@ function blankVariableAnnotations(
 				continue;
 			}
 			const char = source[i]!;
+			if (
+				nested === 0 &&
+				!initialized &&
+				i > after &&
+				isIdentifierStart(char) &&
+				!isIdentifierPart(source[i - 1])
+			) {
+				const candidate = wordAt(source, code, i)!;
+				if (candidate.text === "in" || candidate.text === "of") break;
+			}
 			// A declaration inside a `for` header ends at the header's closing
 			// parenthesis. That delimiter was opened before this local scan, so it
 			// must not make the relative nesting depth negative and let the scan
@@ -1479,7 +1489,7 @@ function blankMethodAnnotations(
 	const controlWords = new Set(["if", "for", "while", "switch", "catch", "with"]);
 	const methodModifiers = new Set(["async", "get", "set"]);
 	for (let open = 0; open < source.length; open++) {
-		if (!code[open] || source[open] !== "(") continue;
+		if (!code[open] || output[open] !== "(") continue;
 		let preceding = wordAtPreviousCode(source, code, open);
 		const beforeParameters = previousCodeIndex(source, code, open - 1);
 		if (
@@ -1550,6 +1560,7 @@ function blankTypeAssertions(
 	for (let wi = 0; wi < words.length; wi++) {
 		const word = words[wi]!;
 		if (word.start < blankedUntil) continue;
+		if (output[word.start] === " ") continue;
 		if (
 			(word.text !== "as" && word.text !== "satisfies") ||
 			insideImportOrExportStatement(source, code, words, wi) ||
@@ -1569,6 +1580,11 @@ function isTypeAssertionOperator(
 ): boolean {
 	const previous = previousCodeIndex(source, code, word.start - 1);
 	const previousWord = wordAtPreviousCode(source, code, word.start);
+	if (source[previous] === "!") {
+		const operand = previousCodeIndex(source, code, previous - 1);
+		if (!isIdentifierPart(source[operand]) && !")]".includes(source[operand]!))
+			return false;
+	}
 	if (previousWord && expressionPrefixWords.has(previousWord.text)) {
 		const beforePrevious = wordAtPreviousCode(source, code, previousWord.start);
 		if (beforePrevious?.text !== "as" && beforePrevious?.text !== "satisfies") {
@@ -1642,13 +1658,14 @@ function findAssertionEnd(
 				char === ">")
 		)
 			return i;
-		if (topLevel && sawType && isIdentifierStart(char)) {
+		if (topLevel && isIdentifierStart(char)) {
 			const candidate = wordAt(source, code, i)!;
 			if (candidate.text === "extends") pendingConditional++;
 			const beforeCandidate = previousCodeIndex(source, code, i - 1);
 			if (
-				">)]}\"'`0123456789".includes(source[beforeCandidate]!) ||
-				isIdentifierPart(source[beforeCandidate])
+				sawType &&
+				(">)]}\"'`0123456789".includes(source[beforeCandidate]!) ||
+					isIdentifierPart(source[beforeCandidate]))
 			) {
 				if (
 					candidate.text === "as" ||
@@ -1658,6 +1675,9 @@ function findAssertionEnd(
 				)
 					return i;
 			}
+			sawType = true;
+			i = candidate.end - 1;
+			continue;
 		}
 		if (topLevel && char === "?" && pendingConditional > 0) {
 			pendingConditional--;
@@ -1761,7 +1781,7 @@ function blankArrowAnnotations(
 	filePath: string,
 ): void {
 	for (let arrow = 0; arrow < source.length - 1; arrow++) {
-		if (!code[arrow] || source[arrow] !== "=" || source[arrow + 1] !== ">") continue;
+		if (!code[arrow] || output[arrow] !== "=" || output[arrow + 1] !== ">") continue;
 		const head = findParenthesizedArrowHead(source, code, arrow);
 		if (head !== undefined) {
 			const open = matchingBackward(
