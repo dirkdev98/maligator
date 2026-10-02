@@ -24,10 +24,13 @@ read, so dead-member reclamation cannot make RAW-only teardown dereference a key
 
 The admissible key families are INDEX, STRING, and SYMBOL. Index inputs represent
 0 through 2^32−2; alternate tagged-integer and integral-double spellings normalize
-to the same unsigned index. Hashing and exposed decoded keys use `mal_key_index`.
+to the same unsigned index. Hashing and exposed decoded keys use the same
+canonical bits as `mal_key_index`.
 An explicit STRING such as `"1"` retains its string family; ToPropertyKey conversion
 belongs to the caller. Symbols, including private names, compare by identity.
 Invalid internal key families or out-of-range indices abort at the owner boundary.
+Stored index decoding uses that validated range, and hashing dispatches on the
+encoded property family without generic collection-key handling.
 
 Strings compare by content and need not be VM atoms. Lookup and deletion accept
 borrowed stack probes without retaining them. An equal insertion preserves the

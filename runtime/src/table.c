@@ -75,11 +75,18 @@ static u64 mal_table_encode_key(MalKey key) {
 
 static inline MalValue mal_table_key_value(u64 key) {
     switch (key & MAL_TABLE_KIND_MASK) {
-        case MAL_TABLE_INDEX: return mal_key_index((u32) key).value;
+        case MAL_TABLE_INDEX: return mal_value_from_u32((u32) key);
         case MAL_TABLE_STRING: return MAL_VALUE_STRING | (key & MAKS_PTR);
         case MAL_TABLE_SYMBOL: return MAL_VALUE_SYMBOL | (key & MAKS_PTR);
         default: return MAL_VALUE_EMPTY;
     }
+}
+
+static inline u64 mal_table_key_hash(u64 key) {
+    if ((key & MAL_TABLE_KIND_MASK) == MAL_TABLE_STRING) {
+        return mal_key_hash_mix(mal_string_hash((MalString *) (uptr) (key & MAKS_PTR)));
+    }
+    return mal_key_hash_mix(mal_table_key_value(key));
 }
 
 static inline MalKey mal_table_decode_key(u64 key) {
@@ -219,7 +226,7 @@ static void mal_table_fill_slots(MalTable *table, i32 *slots, u32 capacity) {
     mal_hash_index_reset(slots, capacity);
     for (u32 e = 0; e < table->entry_count; e++) {
         if (!mal_table_row_live(&table->entries[e])) continue;
-        u64 hash = mal_key_hash_value(mal_table_key_value(table->entries[e].key));
+        u64 hash = mal_table_key_hash(table->entries[e].key);
         u32 slot = mal_hash_index_empty_slot(slots, capacity, hash);
         mal_hash_index_insert(slots, capacity, slot, e, hash);
     }
@@ -383,7 +390,7 @@ MalTableLookup mal_table_lookup(const MalTable *table, MalKey key) {
             }
         }
     }
-    u64 hash = table->slot_capacity == 0 ? 0 : mal_key_hash_value(mal_table_key_value(encoded));
+    u64 hash = table->slot_capacity == 0 ? 0 : mal_table_key_hash(encoded);
     u32 index = mal_table_find_slot(table, encoded, hash);
     i32 entry = mal_table_slot_entry(table, index);
 
@@ -407,7 +414,7 @@ void *mal_table_upsert_entry(MalTable *table, MalKey key, bool *inserted) {
         stats->upserts++;
     }
     mal_table_allocate_storage(table);
-    u64 hash = table->slot_capacity == 0 ? 0 : mal_key_hash_value(mal_table_key_value(encoded));
+    u64 hash = table->slot_capacity == 0 ? 0 : mal_table_key_hash(encoded);
     u32 index = mal_table_find_slot(table, encoded, hash);
     if (mal_table_slot_entry(table, index) != MAL_TABLE_EMPTY) {
         if (stats != nullptr) {
@@ -423,10 +430,10 @@ void *mal_table_upsert_entry(MalTable *table, MalKey key, bool *inserted) {
     bool reuses_deleted = table->slot_capacity != 0 &&
         mal_hash_controls(table->slots, table->slot_capacity)[index] == MAL_HASH_DELETED;
     if (mal_table_grow_slots_if_needed(table, reuses_deleted)) {
-        hash = mal_key_hash_value(mal_table_key_value(encoded));
+        hash = mal_table_key_hash(encoded);
         index = mal_table_find_slot(table, encoded, hash);
     } else if (table->slot_capacity == 0) {
-        hash = mal_key_hash_value(mal_table_key_value(encoded));
+        hash = mal_table_key_hash(encoded);
     }
 
     u32 entry_index = table->entry_count++;
@@ -456,7 +463,7 @@ bool mal_table_delete(MalTable *table, MalKey key) {
         stats->deletes++;
     }
     if (table->size == 0) return false;
-    u64 hash = table->slot_capacity == 0 ? 0 : mal_key_hash_value(mal_table_key_value(encoded));
+    u64 hash = table->slot_capacity == 0 ? 0 : mal_table_key_hash(encoded);
     u32 index = mal_table_find_slot(table, encoded, hash);
     i32 entry_index = mal_table_slot_entry(table, index);
 
@@ -708,7 +715,7 @@ bool mal_table_entry_matches(
     if (!mal_table_row_live(candidate)) return false;
     u64 encoded = mal_table_encode_key(key);
     if (table->slot_capacity == 0) return mal_table_key_equals(candidate, encoded, false);
-    u64 hash = mal_key_hash_value(mal_table_key_value(encoded));
+    u64 hash = mal_table_key_hash(encoded);
     return (candidate->key & MAL_TABLE_HASH_MASK) == mal_table_hash_fingerprint(hash) &&
         mal_table_key_equals(candidate, encoded, true);
 }
