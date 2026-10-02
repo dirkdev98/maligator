@@ -178,9 +178,12 @@ static int check_bytes(MalVm *vm) {
     for (i32 i = 0; i < 64; i++) mal_set_object_add(set, mal_value_from_i32(i));
     usize set_bytes = mal_set_storage_allocation_bytes(set->entries);
     MalHeapUsage before = mal_heap_usage(&vm->heap);
-    MalMapObject *map = mal_map_object_new(&vm->heap, nullptr, false);
-    for (i32 i = 0; i < 64; i++) mal_map_object_set(map, mal_value_from_i32(i), MAL_VALUE_UNDEFINED);
+    MalTable *table = mal_table_new(MAL_TABLE_MODE_GENERAL, MAL_TABLE_ROLE_ATOMS);
+    for (i32 i = 0; i < 64; i++) {
+        mal_table_upsert_entry(table, mal_collection_key_from_value(mal_value_from_i32(i)), nullptr);
+    }
     usize table_bytes = mal_heap_usage(&vm->heap).raw_owned_bytes - before.raw_owned_bytes;
+    mal_table_free(table);
     CHECK(set_bytes * 3 < table_bytes * 2);
     MalSetObject *generic = mal_set_object_new(&vm->heap, nullptr, false);
     for (i32 i = 0; i < 63; i++) mal_set_object_add(generic, mal_value_from_i32(i));

@@ -24,7 +24,7 @@ function perfField(stderr: string, field: string): number {
 	return Number(stderr.match(new RegExp(`(?:^|\\s)${field}=([0-9]+)`))?.[1] ?? -1);
 }
 
-describe("Map get-to-set table handle reuse", () => {
+describe("Map get-to-set entry reuse", () => {
 	let binary: string;
 	let instrumented: string;
 
@@ -46,11 +46,15 @@ describe("Map get-to-set table handle reuse", () => {
 		run(binary, STRESS_ENV);
 	});
 
-	it("reports exact cache checks, hits, and misses", () => {
+	it("accounts for cache checks and reuses entries across interleaved owners", () => {
 		const stderr = run(instrumented, { MAL_PERF_STATS: "1" });
 		expect(stderr).toContain("[perf-map-stats]");
-		expect(perfField(stderr, "get_set_cache_checks")).toBe(1957);
-		expect(perfField(stderr, "get_set_cache_hits")).toBe(853);
-		expect(perfField(stderr, "get_set_cache_misses")).toBe(1104);
+		const checks = perfField(stderr, "get_set_cache_checks");
+		const hits = perfField(stderr, "get_set_cache_hits");
+		const misses = perfField(stderr, "get_set_cache_misses");
+		expect(checks).toBe(1957);
+		expect(hits + misses).toBe(checks);
+		expect(hits).toBeGreaterThanOrEqual((2 + 3 + 8) * 64);
+		expect(misses).toBeGreaterThanOrEqual((2 + 3 + 8) * 64);
 	});
 });

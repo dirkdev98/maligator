@@ -55,50 +55,27 @@ static inline MalKeyKind mal_key_kind_of(MalValue value) {
 }
 
 // Canonical bits implement SameValueZero while keeping Number and BigInt distinct.
-static inline MalKey mal_collection_key_from_value(MalValue value) {
-    if (mal_value_is_string(value)) {
-        return (MalKey) {.kind = MAL_KEY_STRING, .value = value};
-    }
-
-    if (mal_value_is_symbol(value)) {
-        return (MalKey) {.kind = MAL_KEY_SYMBOL, .value = value};
-    }
-
-    if (mal_value_is_object(value)) {
-        return (MalKey) {.kind = MAL_KEY_OBJECT, .value = value};
-    }
-
-    if (mal_value_is_int32(value)) {
-        return (MalKey) {.kind = MAL_KEY_NUMBER, .value = mal_value_from_f64((f64) mal_value_to_i32(value))};
-    }
-
-    if (value == MAL_VALUE_NEGATIVE_ZERO) {
-        return (MalKey) {.kind = MAL_KEY_NUMBER, .value = mal_value_from_f64(0.0)};
-    }
-
+static inline MalValue mal_collection_canonical_value(MalValue value) {
+    if (mal_value_is_int32(value)) return mal_value_from_f64((f64) mal_value_to_i32(value));
+    if (value == MAL_VALUE_NEGATIVE_ZERO) return mal_value_from_f64(0.0);
     if (mal_value_is_f64(value)) {
         f64 number = mal_value_to_f64(value);
-
-        if (number == 0.0) {
-            return (MalKey) {.kind = MAL_KEY_NUMBER, .value = mal_value_from_f64(0.0)};
-        }
-
-        if (isnan(number)) {
-            return (MalKey) {.kind = MAL_KEY_NUMBER, .value = mal_value_new_nan()};
-        }
-
-        return (MalKey) {.kind = MAL_KEY_NUMBER, .value = value};
+        if (number == 0.0) return mal_value_from_f64(0.0);
+        if (isnan(number)) return MAL_VALUE_NAN;
     }
+    return value;
+}
 
-    if (value == MAL_VALUE_NAN || value == MAL_VALUE_POSITIVE_INFINITY || value == MAL_VALUE_NEGATIVE_INFINITY) {
-        return (MalKey) {.kind = MAL_KEY_NUMBER, .value = value};
-    }
-
-    if (mal_value_is_bigint(value)) {
-        return (MalKey) {.kind = MAL_KEY_NUMBER, .value = value};
-    }
-
-    return (MalKey) {.kind = MAL_KEY_STATIC, .value = value};
+static inline MalKey mal_collection_key_from_value(MalValue value) {
+    value = mal_collection_canonical_value(value);
+    MalKeyKind kind = MAL_KEY_STATIC;
+    if (mal_value_is_string(value)) kind = MAL_KEY_STRING;
+    else if (mal_value_is_symbol(value)) kind = MAL_KEY_SYMBOL;
+    else if (mal_value_is_object(value)) kind = MAL_KEY_OBJECT;
+    else if (mal_value_is_f64(value) || mal_value_is_bigint(value) ||
+            value == MAL_VALUE_NAN || value == MAL_VALUE_POSITIVE_INFINITY ||
+            value == MAL_VALUE_NEGATIVE_INFINITY) kind = MAL_KEY_NUMBER;
+    return (MalKey) {.kind = kind, .value = value};
 }
 
 

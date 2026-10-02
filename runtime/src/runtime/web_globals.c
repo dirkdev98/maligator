@@ -1155,15 +1155,14 @@ static MalValue mal_sc_clone(MalVm *vm, MalValue value, MalMapObject *memo) {
             while (mal_set_iter_next(&iter, &key)) mal_rooted_value_list_append(&entries, key);
             (void) mal_set_object_reserve(mal_value_to_set_object(clone), entries.count);
         } else {
-            MalKey key;
-            MalTable *table = mal_value_to_map_object(value)->entries;
-            MalTableIter iter;
-            mal_table_iter_init(&iter, table, MAL_TABLE_ITER_STORAGE);
-            void *entry;
-            while (mal_table_iter_next(&iter, &key, &entry)) {
-                mal_rooted_value_list_append(&entries, key.value);
-                mal_rooted_value_list_append(&entries, mal_table_entry_value(table, entry));
+            MalValue key, mapped;
+            MalMapIter iter;
+            mal_map_iter_init(&iter, mal_value_to_map_object(value)->entries);
+            while (mal_map_iter_next(&iter, &key, &mapped)) {
+                mal_rooted_value_list_append(&entries, key);
+                mal_rooted_value_list_append(&entries, mapped);
             }
+            (void) mal_map_object_reserve(mal_value_to_map_object(clone), entries.count / 2);
         }
         usize stride = is_set ? 1 : 2;
         for (usize i = 0; i < entries.count; i += stride) {

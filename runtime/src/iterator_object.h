@@ -4,6 +4,7 @@
 #include "object.h"
 #include "heap_string.h"
 #include "set_object.h"
+#include "map_object.h"
 
 /**
  * Iteration source + result shape for a built-in iterator instance.
@@ -38,8 +39,8 @@ typedef struct MalIteratorObject {
     u64 index;
 
     union {
-        /** Raw table kept alive by its pin if owner and iterator die together. */
-        MalTable *pinned_table;
+        /** Storage remains alive through its pin when owner and iterator die together. */
+        MalMapStorage *pinned_map;
         MalSetStorage *pinned_set;
         /** Traced frontier allocated lazily for rope traversal. */
         MalStringCursor *string_cursor;

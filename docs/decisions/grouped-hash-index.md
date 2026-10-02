@@ -1,6 +1,6 @@
 # Grouped hash indexing
 
-Set storage and MalTable share an index format and inline probing primitives in
+Map storage, Set storage and MalTable share an index format and inline probing primitives in
 `hash_index.h`. Ordered payloads remain owned by their stores: buckets contain
 four-byte order indices and one-byte metadata. Lookup filters 16 metadata bytes
 before accessing candidate payloads. A seven-bit tag comes from the high hash
@@ -29,8 +29,8 @@ Set retains its four-member inline scan. MalTable scans up to four physical
 entries without an index, then promotes; reserve can install an index earlier.
 This avoids a 16-bucket allocation for tiny dictionaries. Property flags, owned
 accessor data, private-symbol hints, entry handles, and collector barriers remain
-MalTable contracts. Maps currently receive the same index improvement through
-MalTable while their payload specialization remains a separate change.
+MalTable contracts. Map owns its packed payload and four-pair inline store; it
+shares the index without carrying property metadata or accessor ownership.
 
 Hash tombstones and ordered tombstones have independent counters and lifetimes.
 Clear resets hash metadata even when pins retain ordered history. Bulk filtering

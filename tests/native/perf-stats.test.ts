@@ -183,7 +183,7 @@ describe("opt-in performance statistics", () => {
 		expect(field(allocations, "function_literal_cache_bytes")).toBeGreaterThan(0);
 		expect(result.stderr).not.toContain("name=Intl.Segmenter ");
 
-		for (const role of ["object", "atoms", "map"]) {
+		for (const role of ["object", "atoms"]) {
 			const table = reportLine(result.stderr, "[perf-table-stats]", `role=${role} `);
 			expect(field(table, "find_calls")).toBeGreaterThan(0);
 			if (role === "atoms") {
@@ -192,20 +192,19 @@ describe("opt-in performance statistics", () => {
 					field(table, "lookup_hits") + field(properties, "constant_atom_hits"),
 				).toBeGreaterThan(1000);
 			}
-			if (role === "map") {
-				expect(field(table, "find_calls")).toBe(
-					field(table, "lookups") +
-						field(table, "upserts") +
-						field(table, "deletes") +
-						field(table, "slot_growths"),
-				);
-				expect(field(table, "delete_cluster_scans")).toBeGreaterThan(0);
-				expect(field(table, "delete_slot_moves")).toBeGreaterThan(0);
-				expect(field(table, "storage_allocations")).toBeGreaterThan(0);
-				expect(field(table, "storage_releases")).toBeGreaterThan(0);
-				expect(field(table, "entry_shrinks")).toBeGreaterThan(0);
-				expect(field(table, "compactions")).toBeGreaterThan(0);
-			}
+		}
+
+		const mapStorage = reportLine(result.stderr, "[perf-map-storage]");
+		for (const counter of [
+			"descriptors",
+			"promotions",
+			"small_inserts",
+			"hashed_inserts",
+			"payload_bytes",
+			"index_bytes",
+			"compactions",
+		]) {
+			expect(field(mapStorage, counter)).toBeGreaterThan(0);
 		}
 
 		for (const caller of ["get_own", "define_own", "load_ic"]) {

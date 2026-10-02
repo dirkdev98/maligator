@@ -367,7 +367,6 @@ static const char *const mal_perf_table_roles[MAL_PERF_TABLE_ROLE_COUNT] = {
     "object",
     "atoms",
     "symbol_registry",
-    "map",
 };
 
 static const char *const mal_perf_shape_callers[MAL_PERF_SHAPE_CALLER_COUNT] = {
@@ -809,6 +808,25 @@ static void mal_perf_stats_print(void) {
         );
     }
     fprintf(stderr,
+        "[perf-map-storage] descriptors=%llu promotions=%llu small_inserts=%llu "
+        "hashed_inserts=%llu payload_bytes=%llu index_bytes=%llu compactions=%llu "
+        "select_int32=%llu select_number=%llu select_string=%llu select_identity=%llu "
+        "select_generic=%llu widen_number=%llu widen_generic=%llu\n",
+        (unsigned long long) mal_perf_stats.map_storage_descriptors,
+        (unsigned long long) mal_perf_stats.map_storage_promotions,
+        (unsigned long long) mal_perf_stats.map_storage_small_inserts,
+        (unsigned long long) mal_perf_stats.map_storage_hashed_inserts,
+        (unsigned long long) mal_perf_stats.map_storage_payload_bytes,
+        (unsigned long long) mal_perf_stats.map_storage_index_bytes,
+        (unsigned long long) mal_perf_stats.map_storage_compactions,
+        (unsigned long long) mal_perf_stats.map_storage_domain_selections[1],
+        (unsigned long long) mal_perf_stats.map_storage_domain_selections[2],
+        (unsigned long long) mal_perf_stats.map_storage_domain_selections[3],
+        (unsigned long long) mal_perf_stats.map_storage_domain_selections[4],
+        (unsigned long long) mal_perf_stats.map_storage_domain_selections[5],
+        (unsigned long long) mal_perf_stats.map_storage_domain_widenings[2],
+        (unsigned long long) mal_perf_stats.map_storage_domain_widenings[5]);
+    fprintf(stderr,
         "[perf-set-storage] descriptors=%llu promotions=%llu small_inserts=%llu "
         "hashed_inserts=%llu payload_bytes=%llu index_bytes=%llu compactions=%llu "
         "select_int32=%llu select_number=%llu select_string=%llu select_identity=%llu "
@@ -1117,7 +1135,7 @@ static void mal_perf_stats_print(void) {
             "upserts=%llu upsert_hits=%llu upsert_inserts=%llu find_calls=%llu "
             "probes=%llu max_probe=%llu string_queries=%llu rehashes=%llu "
             "rehash_entries=%llu slot_growths=%llu deletes=%llu delete_hits=%llu "
-            "delete_cluster_scans=%llu delete_slot_moves=%llu clears=%llu compactions=%llu "
+            "clears=%llu compactions=%llu "
             "storage_allocations=%llu storage_releases=%llu entry_shrinks=%llu\n",
             mal_perf_table_roles[i],
             (unsigned long long) stats->lookups,
@@ -1135,8 +1153,6 @@ static void mal_perf_stats_print(void) {
             (unsigned long long) stats->slot_growths,
             (unsigned long long) stats->deletes,
             (unsigned long long) stats->delete_hits,
-            (unsigned long long) stats->delete_cluster_scans,
-            (unsigned long long) stats->delete_slot_moves,
             (unsigned long long) stats->clears,
             (unsigned long long) stats->compactions,
             (unsigned long long) stats->storage_allocations,

@@ -19,7 +19,6 @@ typedef enum MalTableRole {
     MAL_TABLE_ROLE_OBJECT,
     MAL_TABLE_ROLE_ATOMS,
     MAL_TABLE_ROLE_SYMBOL_REGISTRY,
-    MAL_TABLE_ROLE_MAP,
     MAL_TABLE_ROLE_COUNT,
 } MalTableRole;
 
@@ -53,12 +52,6 @@ MalTable *mal_table_new(MalTableMode mode, MalTableRole role);
  * Destroy a table previously created with mal_table_new.
  */
 void mal_table_free(MalTable *table);
-
-/**
- * Release a Map's ownership. If a dead iterator is still pinned during the
- * same GC sweep, defer the raw-table free until its finalizer drops the last pin.
- */
-void mal_table_release_owner(MalTable *table);
 
 /**
  * Return the mode associated with the table.
@@ -112,9 +105,6 @@ void mal_table_clear(MalTable *table);
  */
 void mal_table_compact(MalTable *table);
 
-/** Reclaim empty storage, dead-heavy tables, or full storage with proportional tombstones. */
-void mal_table_compact_if_needed(MalTable *table);
-
 /** Prevent/re-enable entry renumbering while a persistent iterator is live. */
 void mal_table_pin(MalTable *table);
 void mal_table_unpin(MalTable *table);
@@ -153,17 +143,6 @@ MalValue mal_table_entry_value(const MalTable *table, void *entry);
 void mal_table_entry_set_value(MalTable *table, void *entry, MalValue value);
 
 /**
- * Update a normal Map entry already resolved for `key` by lookup/upsert or a
- * validated hint. Equal inline or tightly owned primitive strings may replace
- * the stored representative without changing its hash or insertion order.
- * Owned capacity must fit the allocation charge of the visible payload, using
- * Latin-1 when either equal string is known compact. The caller must card the
- * owning Map for the new key and value.
- */
-void mal_table_entry_set_map_value(
-    MalTable *table, void *entry, MalKey key, MalValue value);
-
-/**
  * Check whether an entry handle still refers to a live entry. Storage-order
  * iterators may outlive deletions, so callers holding entry handles use this
  * to detect tombstoned entries.
@@ -183,12 +162,6 @@ u64 mal_table_handle_epoch(const MalTable *table);
 bool mal_table_entry_matches(
     const MalTable *table, const void *entry, u64 handle_epoch, MalKey key
 );
-
-/** Validate the per-table Map-family hint against the current live key. */
-void *mal_table_map_entry_hint(const MalTable *table, MalKey key);
-
-/** Remember one Map-family entry without retaining its key or owner. */
-void mal_table_remember_map_entry(MalTable *table, const void *entry);
 
 // Cross-table hints require a live value entry with exact key identity.
 bool mal_table_read_entry_hint(

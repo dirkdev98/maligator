@@ -69,7 +69,7 @@
 	},
 	{
 		"file": "builtin_iterator.c",
-		"sha256": "1529a27f53b9b8a7d991971c8bc2d397cc8dd540547b4c3028a12f256d864315"
+		"sha256": "8208be57c5e4ee22d4eaa401482ad645326f7e419faa1fc58dba5732320c991a"
 	},
 	{
 		"file": "builtin_iterator_helpers.c",
@@ -81,7 +81,7 @@
 	},
 	{
 		"file": "builtin_map.c",
-		"sha256": "e5920088f6af5ba0e45737c3e1242a6ba75108273eb0a06ecc509c724efcadb8"
+		"sha256": "0520c8c04b2525ff042abab029423039b4184e9c23f7436425bdc0d8089303de"
 	},
 	{
 		"file": "builtin_math.c",
@@ -653,7 +653,7 @@
 	},
 	{
 		"file": "runtime/web_globals.c",
-		"sha256": "3344c46c9129aa68e68b39732b1cf1fe77f4a441688b8d529ecf516726901dec"
+		"sha256": "a62e9886faa1b66e4bc48ecb80a1ebc6617ad0f38659e4100bc667a7dc17f4ba"
 	},
 	{
 		"file": "runtime/web_headers.c",

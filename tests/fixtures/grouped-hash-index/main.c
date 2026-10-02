@@ -109,7 +109,7 @@ static int check_churn(MalVm *vm, MalTableRole role) {
 }
 
 static int check_transitions(MalVm *vm) {
-    MalTable *table = mal_table_new(MAL_TABLE_MODE_GENERAL, MAL_TABLE_ROLE_MAP);
+    MalTable *table = mal_table_new(MAL_TABLE_MODE_GENERAL, MAL_TABLE_ROLE_ATOMS);
     for (i32 i = 0; i < 4; i++) mal_table_upsert_entry(table, mal_collection_key_from_value(mal_value_from_i32(i)), nullptr);
     for (i32 i = 1; i < 4; i++) CHECK(mal_table_delete(table, mal_collection_key_from_value(mal_value_from_i32(i))));
     mal_table_pin(table);
@@ -120,7 +120,7 @@ static int check_transitions(MalVm *vm) {
     mal_table_unpin(table);
     mal_table_free(table);
 
-    table = mal_table_new(MAL_TABLE_MODE_GENERAL, MAL_TABLE_ROLE_MAP);
+    table = mal_table_new(MAL_TABLE_MODE_GENERAL, MAL_TABLE_ROLE_ATOMS);
     MalSetObject *set = mal_set_object_new(&vm->heap, nullptr, false);
     CHECK(mal_table_reserve(table, 28) && mal_set_object_reserve(set, 28));
     MalValue keys[29];
@@ -184,6 +184,6 @@ int main(void) {
     }
     if (check_transitions(&vm)) return 1;
     mal_vm_free(&vm);
-    puts("grouped-hash-index PASS 6/6");
+    printf("grouped-hash-index PASS %d/%d\n", MAL_TABLE_ROLE_COUNT + 2, MAL_TABLE_ROLE_COUNT + 2);
     return 0;
 }

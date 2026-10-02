@@ -43,8 +43,6 @@ typedef struct MalTable {
     u32 entry_count;
     u32 entry_capacity;
     u32 iterator_pins;
-    bool owner_released;
-    u32 map_entry_hint;
     i32 *slots;
     MalTableEntry *entries;
 } MalTable;
@@ -207,14 +205,6 @@ static void mal_table_grow_entries_if_needed(MalTable *table) {
         MAL_PROFILE_ALLOCATION_FAMILY_COLLECTION);
 }
 
-static bool mal_table_should_compact(const MalTable *table) {
-    return table->role == MAL_TABLE_ROLE_MAP && table->iterator_pins == 0
-        && table->tombstone_count >= 16
-        && (table->tombstone_count >= table->size ||
-            (table->entry_count == table->entry_capacity &&
-                table->tombstone_count >= table->size / 4));
-}
-
 // The table header, non-inline `slots`, `entries`, and each entry's `data`
 // descriptor blob live in the GC RAW space so their bytes count toward the
 // collection trigger (big Maps/dictionaries used to under-trigger) and so an
@@ -236,8 +226,6 @@ MalTable *mal_table_new(MalTableMode mode, MalTableRole role) {
     table->entry_count = 0;
     table->entry_capacity = 0;
     table->iterator_pins = 0;
-    table->owner_released = false;
-    table->map_entry_hint = 0;
     table->slots = nullptr;
     table->entries = nullptr;
 
@@ -261,15 +249,6 @@ void mal_table_free(MalTable *table) {
     gc_free_raw(mal_gc_current_heap(), table->slots);
     gc_free_raw(heap, table->entries);
     gc_free_raw(heap, table);
-}
-
-void mal_table_release_owner(MalTable *table) {
-    if (table == nullptr) return;
-    if (table->iterator_pins == 0) {
-        mal_table_free(table);
-    } else {
-        table->owner_released = true;
-    }
 }
 
 MalTableMode mal_table_mode(const MalTable *table) {
@@ -378,7 +357,6 @@ void *mal_table_upsert_entry(MalTable *table, MalKey key, bool *inserted) {
     if (stats != nullptr) {
         stats->upserts++;
     }
-    if (mal_table_should_compact(table)) mal_table_compact(table);
     mal_table_allocate_storage(table);
     u64 hash = table->slot_capacity == 0 ? 0 : mal_key_hash_value(key.value);
     u32 index = mal_table_find_slot(table, key.value, hash);
@@ -612,12 +590,6 @@ void mal_table_compact(MalTable *table) {
     mal_table_rehash(table, target_slots);
 }
 
-void mal_table_compact_if_needed(MalTable *table) {
-    if (table->size == 0 || mal_table_should_compact(table)) {
-        mal_table_compact(table);
-    }
-}
-
 void mal_table_pin(MalTable *table) {
     if (table != nullptr) table->iterator_pins++;
 }
@@ -625,9 +597,6 @@ void mal_table_pin(MalTable *table) {
 void mal_table_unpin(MalTable *table) {
     if (table == nullptr || table->iterator_pins == 0) return;
     table->iterator_pins--;
-    if (table->iterator_pins == 0 && table->owner_released) {
-        mal_table_free(table);
-    }
 }
 
 MalKey mal_table_entry_key(const MalTable *table, void *entry) {
@@ -676,34 +645,6 @@ void mal_table_entry_set_value(MalTable *table, void *entry, MalValue value) {
     target->payload.value = value;
 }
 
-void mal_table_entry_set_map_value(
-    MalTable *table, void *entry, MalKey key, MalValue value
-) {
-    mal_table_entry_set_value(table, entry, value);
-    MalTableEntry *target = &table->entries[mal_table_handle_index(entry)];
-    if (target->key == key.value || !mal_value_is_string(key.value)) return;
-    const MalString *string = mal_value_to_string(key.value);
-    if (string->storage != MAL_STRING_STORAGE_INLINE &&
-        string->storage != MAL_STRING_STORAGE_OWNED) return;
-    if (string->storage == MAL_STRING_STORAGE_OWNED) {
-        const MalString *old_string = mal_value_to_string(target->key);
-        usize unit_size = string->latin1 || old_string->latin1 ? 1 : sizeof(c16);
-        usize limit = mal_heap_allocation_charge((usize) string->length * unit_size);
-        if (mal_heap_raw_capacity(mal_gc_current_heap(), string->code_units) > limit) return;
-    }
-
-    // The caller resolved this entry for the same primitive string value, so
-    // its hash, probe chain, and order index are unchanged. Retaining this flat
-    // representative makes following get/set/get accesses identity hits without
-    // retaining a rope graph, dependent backing parent, or borrowed payload.
-    // Actual RAW capacity excludes over-reserved owned buffers, including failed
-    // trims, and widening beyond the payload charge of a known compact key.
-    // The table already traces its key; replacing it needs the same SATB deletion
-    // barrier as a value update, plus the caller's existing young-edge card.
-    mal_gc_write_barrier(target->key);
-    target->key = key.value;
-}
-
 bool mal_table_entry_is_live(const MalTable *table, const void *entry) {
     return table->entries[mal_table_handle_index(entry)].live;
 }
@@ -727,27 +668,6 @@ bool mal_table_entry_matches(
     return candidate->live &&
         candidate->hash_fingerprint == mal_table_hash_fingerprint(hash) &&
         mal_key_value_equals(candidate->key, key.value);
-}
-
-void *mal_table_map_entry_hint(const MalTable *table, MalKey key) {
-    u32 index = table->map_entry_hint - 1;
-    if (index >= table->entry_count) return nullptr;
-    const MalTableEntry *candidate = &table->entries[index];
-    if (!candidate->live) return nullptr;
-    if (candidate->key == key.value) return mal_table_handle(index);
-    if (!mal_value_is_string(key.value) && !mal_value_is_bigint(key.value)) {
-        return nullptr;
-    }
-    u64 hash = mal_key_hash_value(key.value);
-    if (candidate->hash_fingerprint != mal_table_hash_fingerprint(hash) ||
-        !mal_key_value_equals(candidate->key, key.value)) {
-        return nullptr;
-    }
-    return mal_table_handle(index);
-}
-
-void mal_table_remember_map_entry(MalTable *table, const void *entry) {
-    table->map_entry_hint = entry == nullptr ? 0 : (u32) (uptr) entry;
 }
 
 bool mal_table_read_entry_hint(

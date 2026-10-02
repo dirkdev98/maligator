@@ -1,7 +1,7 @@
 # Specialized Set storage
 
 Set and WeakSet own a key-only ordered store through `MalSetObject`. Map and WeakMap
-retain `MalMapObject` and the general ordered table. Shared SameValueZero
+use the dedicated [Map storage](specialized-map-storage.md). Shared SameValueZero
 canonicalization and hashing live in `key.h`; property-key canonicalization remains
 separate. Collection identity and ordinary object properties survive every backing
 change.

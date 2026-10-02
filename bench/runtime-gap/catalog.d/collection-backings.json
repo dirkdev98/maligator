@@ -1,0 +1,83 @@
+{
+	"schema": 1,
+	"cases": [
+		{
+			"id": "map-small-lifecycle",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "collection backings",
+			"category": "object-array-representation",
+			"mechanisms": ["keyed-lookup", "backing-transitions", "ordered-traversal"],
+			"inputShape": "0, 1, 2, 3, 4 and 8 pairs over numeric, string, identity and mixed keys",
+			"unit": "operations",
+			"sourceSeam": "runtime/src/map_object.c",
+			"fixture": "cases/map-small-lifecycle.mjs",
+			"controls": ["map-operations", "set-small-lifecycle"]
+		},
+		{
+			"id": "map-string-operations",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "collection backings",
+			"category": "object-array-representation",
+			"mechanisms": ["keyed-lookup", "backing-transitions", "ordered-traversal"],
+			"inputShape": "256 equal-content string keys with deletion and ordered reinsertion",
+			"unit": "operations",
+			"sourceSeam": "runtime/src/map_object.c",
+			"fixture": "cases/map-string-operations.mjs",
+			"controls": ["string-keys", "set-string-operations"]
+		},
+		{
+			"id": "map-generic-operations",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "collection backings",
+			"category": "object-array-representation",
+			"mechanisms": ["keyed-lookup", "backing-transitions", "ordered-traversal"],
+			"inputShape": "mixed primitive and identity keys retaining object values",
+			"unit": "operations",
+			"sourceSeam": "runtime/src/map_object.c",
+			"fixture": "cases/map-generic-operations.mjs",
+			"controls": ["map-operations", "set-generic-operations"]
+		},
+		{
+			"id": "weak-collection-churn",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "collection backings",
+			"category": "object-array-representation",
+			"mechanisms": ["keyed-lookup", "backing-transitions", "weak-identity-churn"],
+			"inputShape": "64 retained identity keys replaced through repeated WeakMap/WeakSet deletion and insertion",
+			"unit": "operations",
+			"sourceSeam": "runtime/src/map_object.c",
+			"fixture": "cases/weak-collection-churn.mjs",
+			"controls": ["primordial-weakmap-retained-keys", "map-operations"]
+		},
+		{
+			"id": "dictionary-operations",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "collection backings",
+			"category": "object-array-representation",
+			"mechanisms": ["keyed-lookup", "backing-transitions", "ordered-traversal"],
+			"inputShape": "256 dynamic string properties deoptimized by deletion and restored in enumeration order",
+			"unit": "operations",
+			"sourceSeam": "runtime/src/table.c",
+			"fixture": "cases/dictionary-operations.mjs",
+			"controls": ["stable-shape-properties", "map-operations"]
+		},
+		{
+			"id": "weak-small-lifecycle",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "collection backings",
+			"category": "object-array-representation",
+			"mechanisms": ["keyed-lookup", "backing-transitions", "weak-identity-churn"],
+			"inputShape": "0, 1, 2, 3, 4 and 8 object or nonregistered-symbol keys with value updates and reinsertion",
+			"unit": "operations",
+			"sourceSeam": "runtime/src/map_object.c",
+			"fixture": "cases/weak-small-lifecycle.mjs",
+			"controls": ["weak-collection-churn", "map-small-lifecycle"]
+		}
+	]
+}

@@ -1,7 +1,6 @@
 #include "./iterator_object.h"
 
 #include "./map_object.h"
-#include "./table.h"
 
 static bool mal_iterator_kind_uses_collection(MalIteratorKind kind) {
     return kind == MAL_ITERATOR_MAP_KEYS
@@ -28,10 +27,10 @@ void mal_iterator_object_init(
         iterator->pinned_set = mal_set_object_storage(mal_value_to_set_object(target));
         mal_set_storage_pin(iterator->pinned_set);
     } else if (iterator->collection_pinned) {
-        iterator->pinned_table = mal_value_to_map_object(target)->entries;
-        mal_table_pin(iterator->pinned_table);
+        iterator->pinned_map = mal_map_object_storage(mal_value_to_map_object(target));
+        mal_map_storage_pin(iterator->pinned_map);
     } else {
-        iterator->pinned_table = nullptr;
+        iterator->pinned_map = nullptr;
     }
 }
 
@@ -52,9 +51,9 @@ void mal_iterator_object_finalize_collection_pin(MalIteratorObject *iterator) {
     if (iterator->kind == MAL_ITERATOR_SET_VALUES || iterator->kind == MAL_ITERATOR_SET_ENTRIES) {
         mal_set_storage_unpin(iterator->pinned_set);
     } else {
-        mal_table_unpin(iterator->pinned_table);
+        mal_map_storage_unpin(iterator->pinned_map);
     }
-    iterator->pinned_table = nullptr;
+    iterator->pinned_map = nullptr;
     iterator->collection_pinned = false;
 }
 
@@ -62,6 +61,8 @@ void mal_iterator_object_release_collection_pin(MalIteratorObject *iterator) {
     if (iterator == nullptr || !iterator->collection_pinned) return;
     bool set_cursor = iterator->kind == MAL_ITERATOR_SET_VALUES || iterator->kind == MAL_ITERATOR_SET_ENTRIES;
     MalSetObject *set = set_cursor ? mal_value_to_set_object(iterator->target) : nullptr;
+    MalMapObject *map = set_cursor ? nullptr : mal_value_to_map_object(iterator->target);
     mal_iterator_object_finalize_collection_pin(iterator);
     if (set != nullptr) mal_set_object_compact(set);
+    else mal_map_object_compact(map);
 }

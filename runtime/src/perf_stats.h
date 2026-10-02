@@ -6,7 +6,7 @@
 #define MAL_PERF_STATS 0
 #endif
 
-#define MAL_PERF_TABLE_ROLE_COUNT 4
+#define MAL_PERF_TABLE_ROLE_COUNT 3
 #define MAL_PERF_SHAPE_CALLER_COUNT 6
 #define MAL_PERF_IC_MODE_COUNT 10
 #define MAL_PERF_COLLECTION_KIND_COUNT 5
@@ -43,8 +43,6 @@ typedef struct MalPerfTableStats {
     u64 slot_growths;
     u64 deletes;
     u64 delete_hits;
-    u64 delete_cluster_scans;
-    u64 delete_slot_moves;
     u64 clears;
     u64 compactions;
     u64 storage_allocations;
@@ -509,6 +507,15 @@ typedef struct MalPerfStats {
     u64 collection_tracking_misses;
     u64 collection_key_kinds[MAL_PERF_COLLECTION_KIND_COUNT][MAL_PERF_MAP_KEY_KIND_COUNT];
     u64 collection_key_shapes[MAL_PERF_COLLECTION_KIND_COUNT][MAL_PERF_COLLECTION_KEY_SHAPE_COUNT];
+    u64 map_storage_descriptors;
+    u64 map_storage_promotions;
+    u64 map_storage_small_inserts;
+    u64 map_storage_hashed_inserts;
+    u64 map_storage_payload_bytes;
+    u64 map_storage_index_bytes;
+    u64 map_storage_compactions;
+    u64 map_storage_domain_selections[6];
+    u64 map_storage_domain_widenings[6];
     u64 set_storage_descriptors;
     u64 set_storage_promotions;
     u64 set_storage_small_inserts;

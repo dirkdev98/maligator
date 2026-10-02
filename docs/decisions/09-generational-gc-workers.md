@@ -84,25 +84,18 @@ exit handler is registered once per process.
 ## Weak table storage
 
 Weak cleanup filters every dead key after the ephemeron fixpoint, with SATB
-marking disabled so deletion cannot revive a dead edge. The table filter uses
-constant scratch space. Sparse deaths repair individual probe chains; at least
-16 deaths and `dead_count >= live_count / 4` rebuild the existing hash slots
-once, avoiding repeated cluster repairs. All-dead tables use the clear path.
-The predicate is pure and may run twice, with no allocation or reentrant GC.
-Surviving entry handles and insertion order stay valid; tombstoned entries are
-skipped by lookup and tracing. Hash rebuilding is expected linear in table size,
-while adversarial surviving collisions retain open addressing's quadratic bound.
-Rebuilding the insertion-order storage can therefore be deferred independently
-of weak-reference semantics.
+marking disabled so deletion cannot revive a dead edge. Map and Set use their own
+storage filters; property tables no longer store weak entries. Filtering preserves
+surviving membership while hash-index maintenance remains independent of ordered
+payload compaction.
 
-Cleanup releases empty, unpinned table storage immediately. Otherwise Map-family
-compaction requires no iterator pins and at least 16 tombstones. It runs when the
-dead count reaches the live count, or when the entry buffer is full and the dead
-count reaches the integer threshold `live_count / 4`. The proportional threshold
-prevents repeated sparse deletions from rebuilding a large full table every few
-insertions. Persistent Map/Set iterators prevent entry renumbering; compaction
-advances the handle epoch, and cached entry hints validate the live entry and key
-before use.
+Persistent strong Map/Set iterators pin order positions across growth, widening,
+deletion and clear. Their owners compact only after the pins permit renumbering.
+Map entry hints mirror a live stored key and are invalidated before removing or
+renumbering its row. Finalizers release ownership and pins without inspecting
+member cells. Layout and transition contracts live in
+[specialized Map storage](specialized-map-storage.md) and
+[specialized Set storage](specialized-set-storage.md).
 
 ## Validation boundary
 

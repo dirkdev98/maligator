@@ -38,23 +38,23 @@ static MalValue mal_builtin_weak_map_prototype_set(
     MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count,
     MalValue new_target, MalValue callee);
 
-static void *mal_builtin_map_cached_entry(
-    MalMapObject *map, MalKey key
+static u32 mal_builtin_map_cached_entry(
+    MalMapObject *map, MalValue key
 ) {
     MAL_PERF_COUNT(map_get_set_cache_checks);
-    void *entry = mal_table_map_entry_hint(map->entries, key);
-    if (entry != nullptr) {
+    u32 entry = mal_map_object_entry_hint(map, key);
+    if (entry != 0) {
         MAL_PERF_COUNT(map_get_set_cache_hits);
         return entry;
     }
     MAL_PERF_COUNT(map_get_set_cache_misses);
-    return nullptr;
+    return 0;
 }
 
 static void mal_builtin_map_cache_entry(
-    MalMapObject *map, void *entry
+    MalMapObject *map, u32 entry
 ) {
-    mal_table_remember_map_entry(map->entries, entry);
+    mal_map_object_remember_entry(map, entry);
 }
 
 /**
@@ -126,7 +126,7 @@ static MalValue mal_builtin_map_construct(
     usize size_hint;
     if (direct_adder &&
         mal_vm_builtin_iterator_size_hint(&record, &size_hint)) {
-        (void) mal_table_reserve(map->entries, size_hint);
+        (void) mal_map_object_reserve(map, size_hint);
     }
 
     // Each step, the entry index Gets, and the adder all re-enter JS and can
@@ -156,7 +156,7 @@ static MalValue mal_builtin_map_construct(
                 goto done;
             }
             mal_map_object_set_canonical(
-                map, mal_map_object_key_from_value(map, roots[3]), roots[4]);
+                map, mal_collection_canonical_value(roots[3]), roots[4]);
             continue;
         }
 
@@ -204,7 +204,7 @@ static MalValue mal_builtin_map_construct(
                 goto done;
             }
             mal_map_object_set_canonical(
-                map, mal_map_object_key_from_value(map, roots[3]), roots[4]);
+                map, mal_collection_canonical_value(roots[3]), roots[4]);
             continue;
         }
 
@@ -288,12 +288,12 @@ static MalValue mal_builtin_map_group_by(MalVm *vm, MalValue this_value, const M
             goto done;
         }
         MalMapObject *result = mal_value_to_map_object(roots[0]);
-        MalKey key = mal_map_object_key_from_value(result, completion.value);
-        roots[3] = key.value;
+        MalValue key = mal_collection_canonical_value(completion.value);
+        roots[3] = key;
 
-        MalTableLookup lookup = mal_table_lookup(result->entries, key);
-        if (lookup.present) {
-            roots[4] = mal_table_entry_value(result->entries, lookup.entry);
+        u32 entry = mal_map_object_find_canonical(result, key);
+        if (entry != 0) {
+            roots[4] = mal_map_storage_value(result->entries, entry);
         } else {
             roots[4] = mal_value_from_array_object(mal_intrinsic_new_array(vm, 0));
             mal_map_object_set_canonical(result, key, roots[4]);
@@ -326,18 +326,18 @@ static MalValue mal_builtin_map_get_value(
 ) {
     (void) vm;
     (void) this_value;
-    MalKey key = mal_map_object_key_from_value(map, key_value);
-    void *entry = mal_builtin_map_cached_entry(map, key);
-    if (entry != nullptr) {
-        return mal_table_entry_value(map->entries, entry);
+    MalValue key = mal_collection_canonical_value(key_value);
+    u32 entry = mal_builtin_map_cached_entry(map, key);
+    if (entry != 0) {
+        return mal_map_storage_value(map->entries, entry);
     }
-    MalTableLookup lookup = mal_table_lookup(map->entries, key);
-    if (!lookup.present) {
+    u32 found = mal_map_object_find_canonical(map, key);
+    if (found == 0) {
         return mal_value_new_undefined();
     }
 
-    mal_builtin_map_cache_entry(map, lookup.entry);
-    return mal_table_entry_value(map->entries, lookup.entry);
+    mal_builtin_map_cache_entry(map, found);
+    return mal_map_storage_value(map->entries, found);
 }
 
 static bool mal_builtin_map_has_value(
@@ -345,13 +345,13 @@ static bool mal_builtin_map_has_value(
 ) {
     (void) vm;
     (void) this_value;
-    MalKey key = mal_map_object_key_from_value(map, key_value);
-    if (mal_builtin_map_cached_entry(map, key) != nullptr) {
+    MalValue key = mal_collection_canonical_value(key_value);
+    if (mal_builtin_map_cached_entry(map, key) != 0) {
         return true;
     }
-    MalTableLookup lookup = mal_table_lookup(map->entries, key);
-    if (!lookup.present) return false;
-    mal_builtin_map_cache_entry(map, lookup.entry);
+    u32 found = mal_map_object_find_canonical(map, key);
+    if (found == 0) return false;
+    mal_builtin_map_cache_entry(map, found);
     return true;
 }
 
@@ -359,17 +359,14 @@ static MalValue mal_builtin_map_set_value(
     MalVm *vm, MalValue this_value, MalMapObject *map, MalValue key, MalValue value
 ) {
     (void) vm;
-    MalKey canonical_key = mal_map_object_key_from_value(map, key);
-    void *entry = mal_builtin_map_cached_entry(map, canonical_key);
+    MalValue canonical_key = mal_collection_canonical_value(key);
+    u32 entry = mal_builtin_map_cached_entry(map, canonical_key);
 
-    if (entry == nullptr) {
-        entry = mal_table_upsert_entry(map->entries, canonical_key, nullptr);
+    if (entry == 0) {
+        entry = mal_map_object_upsert_canonical(map, canonical_key, nullptr);
     }
-    mal_table_entry_set_map_value(map->entries, entry, canonical_key, value);
-    mal_gc_card(&map->object.header, key);
-    mal_gc_card(&map->object.header, value);
+    mal_map_object_update_entry(map, entry, canonical_key, value);
     mal_builtin_map_cache_entry(map, entry);
-    mal_perf_collection_mutation(map, mal_table_size(map->entries));
 
     return this_value;
 }
@@ -670,18 +667,14 @@ static MalValue mal_builtin_map_prototype_size_getter(MalVm *vm, MalValue this_v
  */
 static MalValue mal_builtin_map_get_or_insert(MalVm *vm, MalMapObject *map, MalValue key, MalValue value) {
     (void) vm;
-    MalKey canonical_key = mal_map_object_key_from_value(map, key);
+    MalValue canonical_key = mal_collection_canonical_value(key);
     bool inserted;
-    void *entry = mal_table_upsert_entry(
-        map->entries, canonical_key, &inserted);
+    u32 entry = mal_map_object_upsert_canonical(map, canonical_key, &inserted);
     if (!inserted) {
-        return mal_table_entry_value(map->entries, entry);
+        return mal_map_storage_value(map->entries, entry);
     }
 
-    mal_table_entry_set_value(map->entries, entry, value);
-    mal_gc_card(&map->object.header, canonical_key.value);
-    mal_gc_card(&map->object.header, value);
-    mal_perf_collection_mutation(map, mal_table_size(map->entries));
+    mal_map_object_update_entry(map, entry, canonical_key, value);
     return value;
 }
 
@@ -696,13 +689,13 @@ static MalValue mal_builtin_map_get_or_insert_computed(MalVm *vm, MalMapObject *
         return mal_value_new_undefined();
     }
 
-    MalKey canonical_key = mal_map_object_key_from_value(map, key);
-    MalTableLookup lookup = mal_table_lookup(map->entries, canonical_key);
-    if (lookup.present) {
-        return mal_table_entry_value(map->entries, lookup.entry);
+    MalValue canonical_key = mal_collection_canonical_value(key);
+    u32 found = mal_map_object_find_canonical(map, canonical_key);
+    if (found != 0) {
+        return mal_map_storage_value(map->entries, found);
     }
 
-    MalValue callback_key = canonical_key.value;
+    MalValue callback_key = canonical_key;
     // Receiver/key/callback are held by the outer call seam. Lift this native
     // frame so an allocating callback can collect, then re-search for the upsert:
     // the callback is allowed to mutate this same Map before its result wins.
@@ -759,32 +752,23 @@ static MalValue mal_builtin_map_prototype_for_each(MalVm *vm, MalValue this_valu
 
     MalValue this_arg = arg_count >= 2 ? args[1] : mal_value_new_undefined();
 
-    // Storage-order walk: entries added during the callback are visited,
-    // deleted entries are skipped.
-    mal_table_pin(map->entries);
-    MalTableIter iter;
-    mal_table_iter_init(&iter, map->entries, MAL_TABLE_ITER_STORAGE);
-
-    // The callback can collect; lift this builtin's GC suppression for the loop.
-    // No explicit roots are needed: the receiver Map is rooted by the call seam,
-    // its entries table is traced through it, and every callback argument
-    // (entry value, key, this) is therefore reachable from a root.
+    MalMapStorage *storage = mal_map_object_storage(map);
+    mal_map_storage_pin(storage);
+    MalMapIter iter;
+    mal_map_iter_init(&iter, storage);
+    // A callable Proxy's apply getter can remove the entry before arguments are copied.
+    MalValue callback_args[3] = {MAL_VALUE_UNDEFINED, MAL_VALUE_UNDEFINED, this_value};
+    MalRootSpan callback_span;
+    mal_gc_root(&callback_span, callback_args, countof(callback_args));
     mal_gc_native_rooted_begin(vm);
-    MalKey key;
-    void *entry;
-    while (mal_table_iter_next(&iter, &key, &entry)) {
-        MalValue callback_args[3] = {
-            mal_table_entry_value(map->entries, entry),
-            key.value,
-            this_value,
-        };
+    while (mal_map_iter_next(&iter, &callback_args[1], &callback_args[0])) {
         MalCompletion completion = mal_vm_call_value(vm, args[0], this_arg, callback_args, 3);
-        if (completion.kind != MAL_COMPLETION_NORMAL) {
-            break;
-        }
+        if (completion.kind != MAL_COMPLETION_NORMAL) break;
     }
     mal_gc_native_rooted_end(vm);
-    mal_table_unpin(map->entries);
+    mal_gc_unroot(&callback_span);
+    mal_map_storage_unpin(storage);
+    mal_map_object_compact(map);
 
     return mal_value_new_undefined();
 }

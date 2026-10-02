@@ -117,13 +117,11 @@ static void mal_builtin_iterator_map_take_entry(
     bool *done_out
 ) {
     MalMapObject *map = mal_value_to_map_object(iterator->target);
-    MalTableIter table_iter;
-    mal_table_iter_init(&table_iter, map->entries, MAL_TABLE_ITER_STORAGE);
-    table_iter.index = (usize) iterator->index;
+    MalMapIter map_iter;
+    mal_map_iter_init(&map_iter, map->entries);
+    map_iter.index = (usize) iterator->index;
 
-    MalKey key;
-    void *entry;
-    if (!mal_table_iter_next(&table_iter, &key, &entry)) {
+    if (!mal_map_iter_next(&map_iter, key_out, mapped_out)) {
         iterator->done = true;
         mal_iterator_object_release_collection_pin(iterator);
         *key_out = mal_value_new_undefined();
@@ -132,9 +130,7 @@ static void mal_builtin_iterator_map_take_entry(
         return;
     }
 
-    iterator->index = (u64) table_iter.index;
-    *key_out = key.value;
-    *mapped_out = mal_table_entry_value(map->entries, entry);
+    iterator->index = (u64) map_iter.index;
     mal_perf_collection_iteration_step(map);
     *done_out = false;
 }

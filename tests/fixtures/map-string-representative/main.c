@@ -6,7 +6,6 @@
 #include "heap_string.h"
 #include "map_object.h"
 #include "perf_stats.h"
-#include "table.h"
 #include "vm.h"
 
 extern const MalRuntimeImage mal_runtime_image;
@@ -74,7 +73,7 @@ static bool overwritten_key_survives_snapshot(MalVm *vm) {
     roots[1] = MAL_VALUE_UNDEFINED;
     CHECK(mal_gc_finish_pending_cycle(vm));
     CHECK(is_live(vm, old_key));
-    CHECK(mal_table_size(map->entries) == 1);
+    CHECK(mal_map_object_size(map) == 1);
     mal_gc_collect(vm);
     CHECK(!is_live(vm, old_key));
     roots[1] = flat(vm, 4096);
@@ -93,16 +92,15 @@ static bool flat_representatives_and_old_keys(MalVm *vm) {
     roots[2] = flat(vm, 4096);
     CHECK(roots[1] != roots[2]);
     set(vm, roots[0], roots[1], 7);
-    MalTableLookup original = mal_table_lookup(map->entries, mal_collection_key_from_value(roots[1]));
-    CHECK(original.present);
-    u64 epoch = mal_table_handle_epoch(map->entries);
+    u32 original = mal_map_object_find_canonical(map, mal_collection_key_from_value(roots[1]).value);
+    CHECK(original != 0);
     mal_perf_stats_reset();
     mal_perf_stats_enabled = true;
     CHECK(get(vm, roots[0], roots[2]) == mal_value_from_i32(7));
     set(vm, roots[0], roots[2], 9);
-    CHECK(mal_table_entry_key(map->entries, original.entry).value == roots[2]);
-    CHECK(mal_table_handle_epoch(map->entries) == epoch);
-    CHECK(mal_table_size(map->entries) == 1);
+    CHECK(mal_map_storage_key(map->entries, original) == roots[2]);
+    CHECK(mal_map_object_find_canonical(map, roots[2]) == original);
+    CHECK(mal_map_object_size(map) == 1);
     CHECK(mal_perf_stats.string_memcmp_code_units == 8192);
     mal_perf_stats_reset();
     usize checksum = 0;
@@ -121,12 +119,12 @@ static bool flat_representatives_and_old_keys(MalVm *vm) {
     mal_string_code_units(mal_value_to_string(roots[1]));
     CHECK(!mal_value_to_string(roots[1])->latin1);
     set(vm, roots[0], roots[1], 11);
-    CHECK(mal_table_entry_key(map->entries, original.entry).value == roots[2]);
+    CHECK(mal_map_storage_key(map->entries, original) == roots[2]);
     mal_map_object_clear(map);
     set(vm, roots[0], roots[1], 11);
-    original = mal_table_lookup(map->entries, mal_collection_key_from_value(roots[1]));
+    original = mal_map_object_find_canonical(map, mal_collection_key_from_value(roots[1]).value);
     set(vm, roots[0], roots[2], 13);
-    CHECK(mal_table_entry_key(map->entries, original.entry).value == roots[2]);
+    CHECK(mal_map_storage_key(map->entries, original) == roots[2]);
     CHECK(get(vm, roots[0], roots[1]) == mal_value_from_i32(13));
 
     // Keep only the old Map alive when a fresh representative enters it.
@@ -152,8 +150,8 @@ static bool flat_representatives_and_old_keys(MalVm *vm) {
     CHECK(mal_value_to_string(roots[2])->storage == MAL_STRING_STORAGE_INLINE);
     set(vm, roots[0], roots[1], 19);
     set(vm, roots[0], roots[2], 23);
-    MalTableLookup small = mal_table_lookup(map->entries, mal_collection_key_from_value(roots[1]));
-    CHECK(small.present && mal_table_entry_key(map->entries, small.entry).value == roots[2]);
+    u32 small = mal_map_object_find_canonical(map, mal_collection_key_from_value(roots[1]).value);
+    CHECK(small != 0 && mal_map_storage_key(map->entries, small) == roots[2]);
     CHECK(get(vm, roots[0], roots[1]) == mal_value_from_i32(23));
     mal_gc_unroot(&span);
     puts("Map representative flat: checksum=18432 repeated_units=0 old_key_units=4096 young_key=live");
@@ -167,7 +165,7 @@ static bool oversized_owned_queries_are_not_retained(MalVm *vm) {
     MalMapObject *map = new_map(vm, &roots[0]);
     roots[1] = flat(vm, 17);
     set(vm, roots[0], roots[1], 1);
-    MalTableLookup original = mal_table_lookup(map->entries, mal_collection_key_from_value(roots[1]));
+    u32 original = mal_map_object_find_canonical(map, mal_collection_key_from_value(roots[1]).value);
     mal_gc_collect(vm);
     mal_gc_collect(vm);
     usize raw_before = mal_heap_usage(&vm->heap).raw_owned_bytes;
@@ -179,7 +177,7 @@ static bool oversized_owned_queries_are_not_retained(MalVm *vm) {
         roots[2] = mal_value_from_string(mal_string_new_latin1_owned(&vm->heap, buffer, 17));
         CHECK(mal_value_to_string(roots[2])->storage == MAL_STRING_STORAGE_OWNED);
         set(vm, roots[0], roots[2], (i32) i + 2);
-        CHECK(mal_table_entry_key(map->entries, original.entry).value == roots[1]);
+        CHECK(mal_map_storage_key(map->entries, original) == roots[1]);
         CHECK(get(vm, roots[0], roots[2]) == mal_value_from_i32((i32) i + 2));
         roots[2] = MAL_VALUE_UNDEFINED;
         mal_gc_collect(vm);
@@ -199,7 +197,7 @@ static bool query_graphs_are_not_retained(MalVm *vm) {
     MalMapObject *map = new_map(vm, &roots[0]);
     roots[1] = flat(vm, 4096);
     set(vm, roots[0], roots[1], 1);
-    MalTableLookup original = mal_table_lookup(map->entries, mal_collection_key_from_value(roots[1]));
+    u32 original = mal_map_object_find_canonical(map, mal_collection_key_from_value(roots[1]).value);
     mal_gc_collect(vm);
     mal_gc_collect(vm);
     usize raw_before = mal_heap_usage(&vm->heap).raw_owned_bytes;
@@ -209,7 +207,7 @@ static bool query_graphs_are_not_retained(MalVm *vm) {
         &vm->heap, mal_value_to_string(roots[2]), 4096, 4096));
     CHECK(mal_value_to_string(roots[2])->storage == MAL_STRING_STORAGE_DEPENDENT);
     set(vm, roots[0], roots[2], 2);
-    CHECK(mal_table_entry_key(map->entries, original.entry).value == roots[1]);
+    CHECK(mal_map_storage_key(map->entries, original) == roots[1]);
     CHECK(get(vm, roots[0], roots[2]) == mal_value_from_i32(2));
 
     MalString *rope;
@@ -218,7 +216,7 @@ static bool query_graphs_are_not_retained(MalVm *vm) {
     roots[2] = mal_value_from_string(rope);
     CHECK(rope->storage == MAL_STRING_STORAGE_CONS);
     set(vm, roots[0], roots[2], 3);
-    CHECK(mal_table_entry_key(map->entries, original.entry).value == roots[1]);
+    CHECK(mal_map_storage_key(map->entries, original) == roots[1]);
     CHECK(get(vm, roots[0], roots[2]) == mal_value_from_i32(3));
 
     c16 external[4096];
@@ -226,7 +224,7 @@ static bool query_graphs_are_not_retained(MalVm *vm) {
     roots[2] = mal_value_from_string(mal_string_new_external(&vm->heap, external, countof(external)));
     CHECK(mal_value_to_string(roots[2])->storage == MAL_STRING_STORAGE_EXTERNAL);
     set(vm, roots[0], roots[2], 4);
-    CHECK(mal_table_entry_key(map->entries, original.entry).value == roots[1]);
+    CHECK(mal_map_storage_key(map->entries, original) == roots[1]);
     roots[2] = MAL_VALUE_UNDEFINED;
     mal_gc_collect(vm);
     mal_gc_collect(vm);
@@ -250,32 +248,32 @@ static bool collisions_growth_and_clear(MalVm *vm) {
         roots[1] = mal_value_from_string(mal_string_new_ascii(&vm->heap, name, (usize) length));
         set(vm, roots[0], roots[1], i);
     }
-    CHECK(mal_perf_stats.tables[MAL_TABLE_ROLE_MAP].max_probe > 1);
-    MalTableIter iter;
-    mal_table_pin(map->entries);
-    mal_table_iter_init(&iter, map->entries, MAL_TABLE_ITER_STORAGE);
+    CHECK(mal_perf_stats.hash_index_groups > 0 && mal_perf_stats.hash_index_rebuilds > 1);
+    MalMapIter iter;
+    mal_map_storage_pin(map->entries);
+    mal_map_iter_init(&iter, map->entries);
     for (i32 i = 0; i < 2048; i++) {
         int length = snprintf(name, sizeof(name), "collision-and-growth-key-%d", i);
         roots[1] = mal_value_from_string(mal_string_new_ascii(&vm->heap, name, (usize) length));
         CHECK(get(vm, roots[0], roots[1]) == mal_value_from_i32(i));
         set(vm, roots[0], roots[1], i + 1);
-        MalKey stored;
-        void *entry;
-        CHECK(mal_table_iter_next(&iter, &stored, &entry));
-        CHECK(stored.value == roots[1]);
-        CHECK(mal_table_entry_value(map->entries, entry) == mal_value_from_i32(i + 1));
+        MalValue stored;
+        MalValue mapped;
+        CHECK(mal_map_iter_next(&iter, &stored, &mapped));
+        CHECK(stored == roots[1]);
+        CHECK(mapped == mal_value_from_i32(i + 1));
     }
     mal_map_object_clear(map);
     CHECK(get(vm, roots[0], roots[1]) == MAL_VALUE_UNDEFINED);
     set(vm, roots[0], roots[1], 99);
-    MalKey stored;
-    void *entry;
-    CHECK(mal_table_iter_next(&iter, &stored, &entry));
-    CHECK(mal_table_entry_value(map->entries, entry) == mal_value_from_i32(99));
-    CHECK(!mal_table_iter_next(&iter, &stored, &entry));
-    mal_table_unpin(map->entries);
+    MalValue stored;
+    MalValue mapped;
+    CHECK(mal_map_iter_next(&iter, &stored, &mapped));
+    CHECK(mapped == mal_value_from_i32(99));
+    CHECK(!mal_map_iter_next(&iter, &stored, &mapped));
+    mal_map_storage_unpin(map->entries);
     CHECK(mal_map_object_delete(map, roots[1]));
-    mal_table_compact_if_needed(map->entries);
+    mal_map_object_compact(map);
     CHECK(get(vm, roots[0], roots[1]) == MAL_VALUE_UNDEFINED);
     set(vm, roots[0], roots[1], 101);
     CHECK(get(vm, roots[0], roots[1]) == mal_value_from_i32(101));

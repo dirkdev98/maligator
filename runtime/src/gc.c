@@ -1036,6 +1036,18 @@ static void mal_gc_trace_table(MalTable *table) {
     }
 }
 
+static void mal_gc_trace_map(MalMapStorage *storage) {
+    MalMapKeyDomain domain = mal_map_storage_key_domain(storage);
+    bool trace_keys = domain != MAL_MAP_KEYS_INT32 && domain != MAL_MAP_KEYS_NUMBER;
+    MalMapIter iter;
+    mal_map_iter_init(&iter, storage);
+    MalValue key, value;
+    while (mal_map_iter_next(&iter, &key, &value)) {
+        if (trace_keys) mal_gc_mark_value(key);
+        mal_gc_mark_value(value);
+    }
+}
+
 // Active frames and exact complete-chain closures own their lexical links.
 // Tagged/display captures own selected lexical state only; the owners' parent
 // pointers may be stale after the frame exits and must not be followed.
@@ -1359,7 +1371,7 @@ static void mal_gc_trace_cell(MalHeapHeader *cell) {
             if (map->weak && !g_gc_verifying) {
                 mal_gc_register_weak_map(map);
             } else {
-                mal_gc_trace_table(map->entries);
+                mal_gc_trace_map(map->entries);
             }
             break;
         }
@@ -1817,13 +1829,13 @@ static void mal_gc_finalize_cell(MalHeapHeader *cell) {
                 map,
                 kind,
                 g_gc_vm->heap.epoch,
-                map->entries == nullptr ? 0 : mal_table_size(map->entries),
+                mal_map_object_size(map),
                 0,
                 map->entries == nullptr ? 0 : mal_map_object_perf_key_mask(map),
                 false);
 #endif
             if (map->entries != nullptr) {
-                mal_table_release_owner(map->entries);
+                mal_map_storage_release_owner(map->entries);
                 map->entries = nullptr;
             }
             break;
@@ -2618,23 +2630,18 @@ static void mal_gc_weak_pass(void) {
     usize indexed_maps = 0;
     while (indexed_maps < g_gc->weak_maps_count || g_gc->grey_count > 0) {
         while (indexed_maps < g_gc->weak_maps_count) {
-            MalTable *entries = g_gc->weak_maps[indexed_maps++]->entries;
-            if (entries == nullptr) {
-                continue;
-            }
-            MalTableIter iter;
-            mal_table_iter_init(&iter, entries, MAL_TABLE_ITER_STORAGE);
-            MalKey key;
-            void *entry;
-            while (mal_table_iter_next(&iter, &key, &entry)) {
+            MalMapStorage *entries = g_gc->weak_maps[indexed_maps++]->entries;
+            MalMapIter iter;
+            mal_map_iter_init(&iter, entries);
+            MalValue key, value;
+            while (mal_map_iter_next(&iter, &key, &value)) {
                 if (g_gc->stats_enabled) g_gc->weak_entry_visits++;
-                MalValue value = mal_table_entry_value(entries, entry);
-                if (mal_gc_is_marked(key.value)) {
+                if (mal_gc_is_marked(key)) {
                     mal_gc_mark_value(value);
                 } else if (mal_value_is_heap(value) &&
-                        mal_value_to_heap(value) != mal_value_to_heap(key.value) &&
+                        mal_value_to_heap(value) != mal_value_to_heap(key) &&
                         !mal_gc_is_marked(value)) {
-                    mal_gc_ephemeron_wait(&index, mal_value_to_heap(key.value), value);
+                    mal_gc_ephemeron_wait(&index, mal_value_to_heap(key), value);
                 }
             }
         }
@@ -2657,14 +2664,9 @@ static void mal_gc_weak_pass(void) {
     mal_gc_marking_active = false;
 
     for (usize i = 0; i < g_gc->weak_maps_count; ++i) {
-        MalTable *entries = g_gc->weak_maps[i]->entries;
-        if (entries == nullptr) {
-            continue;
-        }
-        if (g_gc->stats_enabled) g_gc->weak_cleanup_visits += mal_table_size(entries);
-        if (mal_table_retain(entries, mal_gc_is_marked) > 0) {
-            mal_table_compact_if_needed(entries);
-        }
+        MalMapObject *map = g_gc->weak_maps[i];
+        if (g_gc->stats_enabled) g_gc->weak_cleanup_visits += mal_map_object_size(map);
+        mal_map_storage_retain(map->entries, mal_gc_is_marked);
     }
 
     for (usize i = 0; i < g_gc->weak_sets_count; i++) {
@@ -2868,7 +2870,7 @@ static void mal_gc_collect_sync(MalVm *vm, bool major) {
                 } else if (owner->type == MAL_HEAP_MAP_OBJECT) {
                     MalMapObject *map = (MalMapObject *) owner;
                     u64 slots = mal_gc_remembered_object_slots(&map->object) +
-                        (map->weak ? 0 : mal_gc_remembered_table_slots(map->entries));
+                        (map->weak ? 0 : mal_map_storage_traced_slots(map->entries));
                     g_gc->minor_remembered_container_slots += slots;
                     g_gc->minor_remembered_map_owners++;
                     g_gc->minor_remembered_map_slots += slots;

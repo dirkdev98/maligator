@@ -1,74 +1,69 @@
 #pragma once
 
-#include "./defaults.h"
 #include "object.h"
+
+typedef struct MalMapStorage MalMapStorage;
+
+typedef enum MalMapKeyDomain : u8 {
+    MAL_MAP_KEYS_EMPTY,
+    MAL_MAP_KEYS_INT32,
+    MAL_MAP_KEYS_NUMBER,
+    MAL_MAP_KEYS_STRING,
+    MAL_MAP_KEYS_IDENTITY,
+    MAL_MAP_KEYS_GENERIC,
+} MalMapKeyDomain;
 
 typedef struct MalMapObject {
     MalObject object;
     MalObjectStorage object_storage;
-
-    /**
-     * General-mode ordered table. Entry keys are canonicalized through
-     * mal_collection_key_from_value; map values live in the inline entry payload.
-     * Compaction is deferred while an iterator pins the table, so storage-order
-     * indexes stay stable for every outstanding iterator.
-     */
-    MalTable *entries;
-
+    MalMapStorage *entries;
     bool weak;
 } MalMapObject;
 
-/**
- * Initialize Map/WeakMap state in caller-provided storage.
- */
+typedef struct MalMapIter {
+    MalMapStorage *storage;
+    usize index;
+} MalMapIter;
+
 void mal_map_object_init(MalHeap *heap, MalMapObject *map, MalObject *prototype, bool weak);
-
-/**
- * Allocate and initialize a new Map/WeakMap object.
- */
 MalMapObject *mal_map_object_new(MalHeap *heap, MalObject *prototype, bool weak);
-
-/** Canonicalize a key and attribute its runtime kind to this collection. */
-MalKey mal_map_object_key_from_value(const MalMapObject *map, MalValue value);
-
-/**
- * Insert or update a Map entry.
- */
 void mal_map_object_set(MalMapObject *map, MalValue key, MalValue value);
-
-/** Insert or update using a key already produced by mal_collection_key_from_value. */
-void mal_map_object_set_canonical(MalMapObject *map, MalKey key, MalValue value);
-
-/**
- * Check for an entry under SameValueZero.
- */
+// Canonical inputs come from collection normalization or Map/Set iteration.
+void mal_map_object_set_canonical(MalMapObject *map, MalValue key, MalValue value);
 bool mal_map_object_has(const MalMapObject *map, MalValue key);
-
-/** Check for an entry using an already-canonicalized key. */
-bool mal_map_object_has_canonical(const MalMapObject *map, MalKey key);
-
-/**
- * Read the value stored for key, or undefined when absent.
- */
+bool mal_map_object_has_canonical(const MalMapObject *map, MalValue key);
 MalValue mal_map_object_get(const MalMapObject *map, MalValue key);
-
-/**
- * Delete the entry for key if present.
- */
 bool mal_map_object_delete(MalMapObject *map, MalValue key);
-
-/** Delete an entry using an already-canonicalized key. */
-bool mal_map_object_delete_canonical(MalMapObject *map, MalKey key);
-
-/**
- * Number of live entries.
- */
+bool mal_map_object_delete_canonical(MalMapObject *map, MalValue key);
 usize mal_map_object_size(const MalMapObject *map);
-
-/**
- * Remove all entries, keeping outstanding iterators valid.
- */
 void mal_map_object_clear(MalMapObject *map);
+void mal_map_object_compact(MalMapObject *map);
+
+// One-based order handles survive growth/widening; pin across mutations that may compact. Zero is absent.
+u32 mal_map_object_find_canonical(const MalMapObject *map, MalValue key);
+u32 mal_map_object_upsert_canonical(MalMapObject *map, MalValue key, bool *inserted);
+MalValue mal_map_storage_key(const MalMapStorage *storage, u32 entry);
+MalValue mal_map_storage_value(const MalMapStorage *storage, u32 entry);
+// A validated entry for an equal key may adopt a compact string representative.
+void mal_map_object_update_entry(MalMapObject *map, u32 entry, MalValue key, MalValue value);
+u32 mal_map_object_entry_hint(const MalMapObject *map, MalValue key);
+void mal_map_object_remember_entry(MalMapObject *map, u32 entry);
+
+// Empty/small storage realizes the hint on its first spill.
+bool mal_map_object_reserve(MalMapObject *map, usize desired_size);
+MalMapStorage *mal_map_object_storage(MalMapObject *map);
+void mal_map_iter_init(MalMapIter *iter, MalMapStorage *storage);
+bool mal_map_iter_next(MalMapIter *iter, MalValue *key, MalValue *value);
+void mal_map_storage_pin(MalMapStorage *storage);
+// Finalizers may only drop ownership; they must not read or rehash dead members.
+void mal_map_storage_unpin(MalMapStorage *storage);
+void mal_map_storage_release_owner(MalMapStorage *storage);
+// The predicate must not allocate, collect, or mutate the store.
+usize mal_map_storage_retain(MalMapStorage *storage, bool (*keep)(MalValue));
+usize mal_map_storage_traced_slots(const MalMapStorage *storage);
+MalMapKeyDomain mal_map_storage_key_domain(const MalMapStorage *storage);
+usize mal_map_storage_order_length(const MalMapStorage *storage);
+usize mal_map_storage_allocation_bytes(const MalMapStorage *storage);
 
 #if MAL_PERF_STATS
 u8 mal_map_object_perf_key_mask(const MalMapObject *map);
