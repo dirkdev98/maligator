@@ -1,9 +1,9 @@
 import { spawn } from "node:child_process";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { createServer } from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
-import { beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
 	buildNativeBinary,
 	HOST_MAIN,
@@ -12,6 +12,7 @@ import {
 } from "../../src/test-harness.ts";
 
 const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-node-http-client-"));
+afterAll(() => rmSync(outDir, { recursive: true, force: true }));
 
 describe("node:http outbound client", () => {
 	let binaries: Array<string>;

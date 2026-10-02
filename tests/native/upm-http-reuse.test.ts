@@ -1,10 +1,7 @@
 import { execFile } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import {
-	createServer as createHttpServer,
-	type IncomingMessage,
-	type ServerResponse,
-} from "node:http";
+import { createServer as createHttpServer } from "node:http";
+import type { IncomingMessage, ServerResponse } from "node:http";
 import { createServer as createHttpsServer } from "node:https";
 import type { Socket } from "node:net";
 import { tmpdir } from "node:os";
@@ -20,7 +17,7 @@ import {
 
 const outDir = mkdtempSync(join(tmpdir(), "mal-http-reuse-"));
 const fixture = "tests/local/upm-http-reuse.mjs";
-let binaries: string[];
+let binaries: Array<string>;
 let recordBinary: string;
 beforeAll(() => {
 	binaries = [true, false].map((compiled) =>
@@ -105,7 +102,7 @@ async function run(binary: string, secure: boolean, stress = false, ttl = false)
 			)
 		: createHttpServer(listener);
 	server.keepAliveTimeout = 15000;
-	server.on(secure ? "secureConnection" : "connection", (socket) => {
+	server.on(secure ? "secureConnection" : "connection", (socket: Socket) => {
 		ids.set(socket, ++connections);
 	});
 	server.on("connection", (socket) => {
@@ -122,12 +119,14 @@ async function run(binary: string, secure: boolean, stress = false, ttl = false)
 		throw new Error("missing server address");
 	const start = Date.now();
 	const other = createHttpServer((_request, response) => response.end("other-origin"));
-	await new Promise<void>((yes) => other.listen(0, "127.0.0.1", yes));
+	await new Promise<void>((yes) => {
+		other.listen(0, "127.0.0.1", yes);
+	});
 	const otherAddress = other.address();
 	if (otherAddress === null || typeof otherAddress === "string")
 		throw new Error("missing other origin");
 	try {
-		const stdout = await new Promise<string>((yes, no) =>
+		const stdout = await new Promise<string>((yes, no) => {
 			execFile(
 				binary,
 				[],
@@ -147,15 +146,19 @@ async function run(binary: string, secure: boolean, stress = false, ttl = false)
 				},
 				(error, stdout, stderr) =>
 					error ? no(new Error(`${error.message}\n${stdout}\n${stderr}`)) : yes(stdout),
-			),
-		);
+			);
+		});
 		assertResultPass(stdout);
 		expect(Date.now() - start).toBeLessThan(11000);
 	} finally {
 		for (const socket of sockets) socket.destroy();
-		await new Promise<void>((yes) => server.close(() => yes()));
+		await new Promise<void>((yes) => {
+			server.close(() => yes());
+		});
 		other.closeAllConnections();
-		await new Promise<void>((yes) => other.close(() => yes()));
+		await new Promise<void>((yes) => {
+			other.close(() => yes());
+		});
 	}
 }
 
