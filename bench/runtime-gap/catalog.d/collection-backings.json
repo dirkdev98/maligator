@@ -41,6 +41,19 @@
 			"controls": ["map-operations", "set-generic-operations"]
 		},
 		{
+			"id": "map-numeric-delete-pinned",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "collection backings",
+			"category": "object-array-representation",
+			"mechanisms": ["keyed-lookup", "ordered-deletion", "pinned-traversal"],
+			"inputShape": "8192 packed numeric keys deleted in a permuted order while a live iterator prevents compaction",
+			"unit": "operations",
+			"sourceSeam": "runtime/src/map_object.c",
+			"fixture": "cases/map-numeric-delete-pinned.mjs",
+			"controls": ["map-operations", "primordial-map-mutations"]
+		},
+		{
 			"id": "weak-collection-churn",
 			"group": "runtime",
 			"suite": "runtime",
@@ -91,6 +104,45 @@
 			"sourceSeam": "runtime/src/weak_collection.c",
 			"fixture": "cases/weak-small-lifecycle.mjs",
 			"controls": ["weak-collection-churn", "map-small-lifecycle"]
+		},
+		{
+			"id": "set-tagged-delete-scan",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "collection backings",
+			"category": "object-array-representation",
+			"mechanisms": ["keyed-lookup", "ordered-deletion", "pinned-traversal"],
+			"inputShape": "4096 Number, string and identity members with permuted deletion and pinned or unpinned survivor scans",
+			"unit": "operations",
+			"sourceSeam": "runtime/src/set_object.c",
+			"fixture": "cases/set-tagged-delete-scan.mjs",
+			"controls": ["set-operations", "set-generic-operations"]
+		},
+		{
+			"id": "map-string-hint-equal",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "collection backings",
+			"category": "object-array-representation",
+			"mechanisms": ["keyed-lookup", "string-hashing", "entry-hints"],
+			"inputShape": "8 long string keys queried in bursts of 16 fresh equal-content slices",
+			"unit": "operations",
+			"sourceSeam": "runtime/src/map_object.c",
+			"fixture": "cases/map-string-hint-equal.mjs",
+			"controls": ["string-keys", "map-string-operations"]
+		},
+		{
+			"id": "dictionary-string-queries",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "property table backing",
+			"category": "object-array-representation",
+			"mechanisms": ["keyed-lookup", "dictionary-properties", "string-hashing"],
+			"inputShape": "256 dictionary properties with same-length common-prefix cached misses, fresh misses and equal-content queries",
+			"unit": "operations",
+			"sourceSeam": "runtime/src/table.c",
+			"fixture": "cases/dictionary-string-queries.mjs",
+			"controls": ["dictionary-operations", "stable-shape-properties"]
 		}
 	]
 }
