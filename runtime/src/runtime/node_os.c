@@ -24,6 +24,7 @@
 #include "node_module.h"
 #include "object.h"
 #include "object_ops.h"
+#include "posix_signal.h"
 
 static MalValue os_release(
     MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
@@ -370,6 +371,7 @@ void mal_host_install_node_os(
     MalVm *vm, const MalHostInstallSlot *slots, i32 count,
     const MalHostLaunchContext *launch) {
     (void) launch;
+    if (mal_node_module_install_cached(vm, "node:os", slots, count)) return;
     MalValue module = vm->intrinsics[MAL_INTRINSIC_NODE_OS_MODULE];
     if (mal_value_is_undefined(module)) {
         module = mal_value_from_object(mal_intrinsic_new_object(vm));
@@ -424,10 +426,28 @@ void mal_host_install_node_os(
             mal_value_from_string(mal_string_new_ascii(
                 &vm->heap, (const byte *) "/dev/null", 9)),
             MAL_PROPERTY_ENUMERABLE);
+        MalValue constants = mal_value_from_object(mal_intrinsic_new_object(vm));
+        MalRootSpan constants_root;
+        mal_gc_root(&constants_root, &constants, 1);
+        MalValue signals = mal_value_from_object(mal_intrinsic_new_object(vm));
+        MalRootSpan signals_root;
+        mal_gc_root(&signals_root, &signals, 1);
+        for (i32 i = 0; mal_host_signal_constant_name(i) != nullptr; i++) {
+            mal_intrinsic_define_data(vm, mal_value_to_object(signals),
+                (const byte *) mal_host_signal_constant_name(i),
+                mal_value_from_i32(mal_host_signal_constant_number(i)),
+                MAL_PROPERTY_ENUMERABLE);
+        }
+        mal_intrinsic_define_data(vm, mal_value_to_object(constants),
+            (const byte *) "signals", signals, MAL_PROPERTY_ENUMERABLE);
+        mal_intrinsic_define_data(vm, mal_value_to_object(module),
+            (const byte *) "constants", constants, MAL_PROPERTY_ENUMERABLE);
+        mal_gc_unroot(&signals_root);
+        mal_gc_unroot(&constants_root);
         vm->intrinsics[MAL_INTRINSIC_NODE_OS_MODULE] = module;
         mal_gc_unroot(&root);
     }
-    mal_node_module_publish(vm, slots, count, module);
+    mal_node_module_publish(vm, "node:os", slots, count, module);
 }
 
 #endif /* MAL_NODE */

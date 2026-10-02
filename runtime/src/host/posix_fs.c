@@ -9,6 +9,7 @@
 #endif
 
 #include "posix_fs.h"
+#include <time.h>
 
 #include <dirent.h>
 #include <errno.h>
@@ -574,6 +575,21 @@ int mal_posix_fs_readdir(const char *path, MalPosixDirent **out_entries, usize *
     }
     *out_entries = arr;
     *out_count = count;
+    return 0;
+}
+
+int mal_posix_fs_rmdir(const char *path) {
+    return rmdir(path) == 0 ? 0 : errno;
+}
+
+int mal_posix_fs_sleep_milliseconds(i64 milliseconds) {
+    struct timespec remaining = {
+        .tv_sec = (time_t) (milliseconds / 1000),
+        .tv_nsec = (long) (milliseconds % 1000) * 1000000,
+    };
+    while (nanosleep(&remaining, &remaining) != 0) {
+        if (errno != EINTR) return errno;
+    }
     return 0;
 }
 

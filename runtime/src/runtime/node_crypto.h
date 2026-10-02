@@ -5,7 +5,7 @@
 /*
  * node:crypto host built-in (runtime layer, behind surface.node / MAL_NODE).
  *
- * Covers the authentication-grade surface: SHA-1/SHA-256/MD5 `createHash`,
+ * Covers the authentication-grade surface: SHA-1/SHA-256/SHA-384/SHA-512/MD5 `createHash`,
  * SHA-256 `createHmac`, one-shot `hash`, `pbkdf2Sync`, `timingSafeEqual`,
  * `randomBytes`/`randomInt`/`randomUUID` (sync and callback where Node has
  * one), and Argon2d/i/id via `argon2Sync` and the off-event-loop `argon2`.
@@ -20,7 +20,7 @@
  *     are then subject to a host resource policy (see MalArgon2Config). A
  *     request inside Node's range but past the ceilings is a fixed JavaScript
  *     Error; Node's answer to the same request is a SIGKILLed process.
- * Still narrower than Node: only sha1/sha256/md5 digests, only sha256 HMAC and
+ * Still narrower than Node: only SHA-1/SHA-2/MD5 digests, only sha256 HMAC and
  * pbkdf2, and `crypto.hash` accepts an ArrayBuffer input that Node rejects.
  *
  * Asynchrony, stated plainly: only Argon2 leaves the event loop. `argon2` runs

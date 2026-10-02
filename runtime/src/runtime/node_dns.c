@@ -7,6 +7,7 @@
 #include "function_object.h"
 #include "gc.h"
 #include "intrinsics.h"
+#include "node_module.h"
 #include "object.h"
 #include "vm_ops.h"
 
@@ -43,6 +44,7 @@ static MalValue node_dns_unavailable(
 void mal_host_install_node_dns(
     MalVm *vm, const MalHostInstallSlot *slots, i32 count,
     const MalHostLaunchContext *launch) {
+    if (mal_node_module_install_cached(vm, "node:dns", slots, count)) return;
     (void) launch;
     enum {
         DNS_MODULE,
@@ -120,18 +122,7 @@ void mal_host_install_node_dns(
         mal_intrinsic_define_data(vm, mal_value_to_object(roots[DNS_MODULE]),
             (const byte *) names[i], values[i], DNS_VISIBLE);
     }
-    for (i32 i = 0; i < count; i++) {
-        if (strcmp(slots[i].name, "default") == 0) {
-            vm->globals[slots[i].slot] = roots[DNS_MODULE];
-            continue;
-        }
-        for (usize j = 0; j < countof(names); j++) {
-            if (strcmp(slots[i].name, names[j]) == 0) {
-                vm->globals[slots[i].slot] = values[j];
-                break;
-            }
-        }
-    }
+    mal_node_module_publish(vm, "node:dns", slots, count, roots[DNS_MODULE]);
     mal_gc_unroot(&root);
 }
 

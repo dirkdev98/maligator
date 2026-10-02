@@ -1791,6 +1791,10 @@ static MalValue mal_fetch_body_collect_fulfilled(
 
 static MalValue mal_fetch_body_collect_stream(
     MalVm *vm, MalValue self, MalFetchBody *body, MalFetchBodyConsumeKind kind) {
+    if (mal_readable_stream_is_locked(*body->stream)
+        || mal_readable_stream_is_disturbed(*body->stream)) {
+        return mal_fetch_reject_type_error(vm);
+    }
     MalValue roots[8] = {
         mal_value_new_undefined(), mal_value_new_undefined(),
         mal_value_new_undefined(), mal_value_new_undefined(),

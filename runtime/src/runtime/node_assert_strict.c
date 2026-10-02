@@ -295,7 +295,7 @@ void mal_host_install_node_assert(
         vm->intrinsics[MAL_INTRINSIC_NODE_ASSERT_MODULE] = roots[0];
         mal_gc_unroot(&root);
     }
-    mal_node_module_publish(vm, slots, count, module);
+    mal_node_module_publish(vm, "node:assert", slots, count, module);
 }
 
 void mal_host_install_node_assert_strict(
@@ -316,7 +316,7 @@ void mal_host_install_node_assert_strict(
         vm->intrinsics[MAL_INTRINSIC_NODE_ASSERT_STRICT_MODULE] = module;
         mal_gc_unroot(&root);
     }
-    mal_node_module_publish(vm, slots, count, module);
+    mal_node_module_publish(vm, "node:assert/strict", slots, count, module);
 }
 
 #endif /* MAL_NODE */

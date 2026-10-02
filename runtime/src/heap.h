@@ -153,6 +153,8 @@ typedef struct MalHeap {
  * headers, and chunk mappings exclude LOS allocations and resident memory. */
 typedef struct MalHeapUsage {
     usize raw_owned_bytes;
+    usize managed_owned_bytes;
+    usize managed_large_bytes;
     usize managed_free_cell_bytes;
     usize raw_free_cell_bytes;
     // Unowned reserve includes headers and overlaps the free-cell and bump-capacity totals.

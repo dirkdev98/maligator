@@ -1,4 +1,5 @@
 #include "node_events.h"
+#include "node_module.h"
 
 #if MAL_NODE
 
@@ -782,20 +783,7 @@ void mal_host_install_node_events(
     MalVm *vm, const MalHostInstallSlot *slots, i32 count,
     const MalHostLaunchContext *launch) {
     (void) launch;
-    MalValue cached = vm->intrinsics[MAL_INTRINSIC_NODE_EVENT_EMITTER_CONSTRUCTOR];
-    if (!mal_value_is_undefined(cached)) {
-        MalValue error_monitor = mal_value_new_undefined();
-        mal_vm_get_property(vm, cached, ee_name_key(vm, "errorMonitor"), &error_monitor);
-        for (i32 i = 0; i < count; i++) {
-            if (strcmp(slots[i].name, "EventEmitter") == 0
-                || strcmp(slots[i].name, "default") == 0) {
-                vm->globals[slots[i].slot] = cached;
-            } else if (strcmp(slots[i].name, "errorMonitor") == 0) {
-                vm->globals[slots[i].slot] = error_monitor;
-            }
-        }
-        return;
-    }
+    if (mal_node_module_install_cached(vm, "node:events", slots, count)) return;
     static const MalNodeEventsMethod methods[] = {
         {"emit", 1, ee_emit},
         {"eventNames", 0, ee_event_names},
@@ -866,14 +854,7 @@ void mal_host_install_node_events(
                               (const byte *) "errorMonitor", roots[4], EE_WEC);
     mal_gc_unroot(&static_root);
 
-    for (i32 i = 0; i < count; i++) {
-        if (strcmp(slots[i].name, "EventEmitter") == 0
-            || strcmp(slots[i].name, "default") == 0) {
-            vm->globals[slots[i].slot] = roots[1];
-        } else if (strcmp(slots[i].name, "errorMonitor") == 0) {
-            vm->globals[slots[i].slot] = roots[4];
-        }
-    }
+    mal_node_module_publish(vm, "node:events", slots, count, roots[1]);
     mal_gc_unroot(&root);
 }
 

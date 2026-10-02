@@ -10,6 +10,7 @@
 #include <fcntl.h>
 #include <limits.h>
 #include <poll.h>
+#include <pthread.h>
 #include <signal.h>
 #include <stdlib.h>
 #include <string.h>
@@ -265,6 +266,127 @@ static void mal_proc_child(
     mal_proc_child_exec(req, envp);
     /* exec returned => it failed; errno is set. */
     mal_proc_child_fail(errpipe);
+}
+
+int mal_proc_spawn(const MalProcRequest *req, MalProcChild *child) {
+    *child = (MalProcChild) {.launch_fd = -1};
+    if (req->stdin_mode == MAL_PROC_STDIO_PIPE || req->stdout_mode == MAL_PROC_STDIO_PIPE
+        || req->stderr_mode == MAL_PROC_STDIO_PIPE) {
+        child->launch_errno = ENOTSUP;
+        return -1;
+    }
+#if defined(__APPLE__)
+    char *const *envp = req->envp != NULL ? req->envp : *_NSGetEnviron();
+#else
+    char *const *envp = req->envp != NULL ? req->envp : environ;
+#endif
+    int pipe_fds[2];
+    if (mal_proc_make_pipe(pipe_fds) != 0) {
+        child->launch_errno = errno;
+        return -1;
+    }
+    if (mal_proc_set_nonblock(pipe_fds[0]) != 0) {
+        child->launch_errno = errno;
+        mal_proc_close_pipe(pipe_fds);
+        return -1;
+    }
+    pid_t pid = fork();
+    if (pid == 0) {
+        close(pipe_fds[0]);
+        mal_proc_child(req, envp, -1, -1, -1, pipe_fds[1]);
+        _exit(127);
+    }
+    int fork_errno = errno;
+    close(pipe_fds[1]);
+    if (pid < 0) {
+        child->launch_errno = fork_errno;
+        close(pipe_fds[0]);
+        return -1;
+    }
+    child->pid = (int) pid;
+    child->launch_fd = pipe_fds[0];
+    return 0;
+}
+
+bool mal_proc_poll(MalProcChild *child, MalProcResult *out) {
+    *out = (MalProcResult) {0};
+    if (child->pid == 0) {
+        out->launch_errno = child->launch_errno;
+        return true;
+    }
+    if (child->launch_fd >= 0) {
+        ssize_t count;
+        do {
+            count = read(child->launch_fd, (byte *) &child->launch_errno + child->launch_bytes,
+                sizeof(child->launch_errno) - child->launch_bytes);
+        } while (count < 0 && errno == EINTR);
+        if (count > 0) child->launch_bytes += (usize) count;
+        if (count == 0 || child->launch_bytes == sizeof(child->launch_errno)) {
+            close(child->launch_fd);
+            child->launch_fd = -1;
+            child->launched = child->launch_bytes == 0;
+        } else if (count < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
+            out->io_errno = errno;
+        }
+    }
+    int status;
+    pid_t waited;
+    do { waited = waitpid((pid_t) child->pid, &status, WNOHANG); }
+    while (waited < 0 && errno == EINTR);
+    if (waited == 0) return false;
+    int wait_errno = errno;
+    child->reaped = true;
+    // Exec or launch failure can race the first nonblocking pipe read and reap.
+    if (child->launch_fd >= 0) {
+        ssize_t count;
+        do {
+            count = read(child->launch_fd, (byte *) &child->launch_errno + child->launch_bytes,
+                sizeof(child->launch_errno) - child->launch_bytes);
+        } while (count < 0 && errno == EINTR);
+        if (count > 0) child->launch_bytes += (usize) count;
+        child->launched = child->launch_bytes == 0 && count == 0;
+        if (count < 0) out->io_errno = errno;
+    }
+    out->launched = child->launched;
+    out->launch_errno = child->launch_errno;
+    if (waited < 0) out->io_errno = wait_errno;
+    else if (WIFEXITED(status)) {
+        out->exited = true;
+        out->exit_status = WEXITSTATUS(status);
+    } else if (WIFSIGNALED(status)) {
+        out->signaled = true;
+        out->term_signal = WTERMSIG(status);
+    }
+    if (child->launch_fd >= 0) {
+        close(child->launch_fd);
+        child->launch_fd = -1;
+    }
+    return true;
+}
+
+static void *mal_proc_reap_detached(void *data) {
+    pid_t pid = (pid_t) (intptr_t) data;
+    while (waitpid(pid, nullptr, 0) < 0 && errno == EINTR) {}
+    return nullptr;
+}
+
+void mal_proc_detach(MalProcChild *child) {
+    if (child->launch_fd >= 0) close(child->launch_fd);
+    child->launch_fd = -1;
+    if (child->pid <= 0 || child->reaped) return;
+    pid_t pid = (pid_t) child->pid;
+    pid_t waited;
+    do { waited = waitpid(pid, nullptr, WNOHANG); } while (waited < 0 && errno == EINTR);
+    if (waited != 0) return;
+    // Teardown transfers only PID ownership; the reaper cannot touch the VM or kill inherited commands.
+    pthread_t reaper;
+    if (pthread_create(&reaper, nullptr, mal_proc_reap_detached, (void *) (intptr_t) pid) == 0) {
+        pthread_detach(reaper);
+    }
+}
+
+bool mal_proc_kill(const MalProcChild *child, int signal) {
+    return child->pid > 0 && !child->reaped && kill((pid_t) child->pid, signal) == 0;
 }
 
 /* ---------------------------------------------------------------------------

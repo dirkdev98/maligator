@@ -9,6 +9,7 @@ typedef struct MalObject MalObject;
 typedef struct MalAsyncContext MalAsyncContext;
 typedef bool (*MalHostMacrotaskDrain)(MalVm *vm);
 typedef bool (*MalHostIdleNotify)(MalVm *vm);
+typedef int (*MalHostExitNotify)(MalVm *vm, int default_code);
 
 /*
  * Host timers (the JS-visible surface of the reactor).
@@ -29,6 +30,7 @@ typedef struct MalHostTimer {
     i64 id;
     MalTimer timer; /* reactor timer; removed from the heap when it fires */
     MalValue callback;
+    MalValue handle;
     MalValue *args; /* heap copy of setTimeout extra args (nullptr if none) */
     i32 arg_count;
 #if MAL_NODE
@@ -38,6 +40,7 @@ typedef struct MalHostTimer {
     bool repeating; /* distinguishes zero-delay intervals from one-shot timers */
     bool ready;     /* timer fired; callback awaits the macrotask phase */
     bool cancelled; /* clearTimeout'd before it fired/ran */
+    bool referenced;
     MalVm *vm;      /* back-ref for the reactor waker */
     struct MalHostTimer *previous;
     struct MalHostTimer *next;
@@ -54,6 +57,8 @@ i64 mal_host_set_interval(MalVm *vm, MalValue callback, i64 period_ms, MalValue 
 /* Cancel a pending timer by id (no-op if unknown / already run). Backs both
  * clearTimeout and clearInterval (shared id space). */
 void mal_host_clear_timeout(MalVm *vm, i64 id);
+void mal_host_timer_set_referenced(MalVm *vm, i64 id, bool referenced);
+bool mal_host_timers_are_node(MalVm *vm);
 
 /* Drive the event loop until the isolate is idle (no timers, fd ops, or
  * microtasks). Runs after the top-level program's synchronous phase. */
@@ -71,9 +76,12 @@ void mal_host_register_macrotask_drain(MalHostMacrotaskDrain drain, bool priorit
  * one more chance to schedule work before exiting. Same indirection rationale as
  * the macrotask drains: the host loop must not name a runtime module. */
 void mal_host_register_idle_notify(MalHostIdleNotify notify);
+void mal_host_register_exit_notify(MalHostExitNotify notify);
+int mal_host_finish_process(MalVm *vm, int default_code);
 
 /* Free all remaining timer tasks (teardown). */
 void mal_host_timers_free(MalVm *vm);
 
 /* Install setTimeout / clearTimeout as own methods of `global_this`. */
 void mal_host_timers_install(MalVm *vm, MalObject *global_this);
+void mal_host_timers_install_node(MalVm *vm, MalObject *global_this);

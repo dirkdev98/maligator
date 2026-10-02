@@ -76,3 +76,11 @@ tests/native/set-storage.test.ts
 tests/native/grouped-hash-index.test.ts
 tests/native/intern-stores.test.ts
 tests/native/property-storage.test.ts
+
+tests/native/upm-archive-compatibility.test.ts
+tests/native/upm-crypto-compatibility.test.ts
+tests/native/upm-fetch-compatibility.test.ts
+tests/native/upm-https-compatibility.test.ts
+tests/native/upm-filesystem-compatibility.test.ts
+tests/native/upm-process-commands.test.ts
+tests/native/upm-process-lifecycle.test.ts

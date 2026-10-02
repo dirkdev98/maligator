@@ -494,6 +494,7 @@ typedef enum MalIntrinsic {
     /* Per-realm Node Error stack customization state. */
     MAL_INTRINSIC_ERROR_PREPARE_STACK_TRACE_VALUE,
     MAL_INTRINSIC_ERROR_STACK_TRACE_LIMIT_VALUE,
+    MAL_INTRINSIC_NODE_BUILTIN_MODULES,
     MAL_INTRINSIC_COUNT,
 } MalIntrinsic;
 

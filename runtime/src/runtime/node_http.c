@@ -1,4 +1,5 @@
 #include "node_http.h"
+#include "node_https.h"
 
 #if MAL_NODE
 
@@ -18,6 +19,7 @@
 #include "host.h"
 #include "http_client.h"
 #include "intrinsics.h"
+#include "node_module.h"
 #include "node_stream.h"
 #include "node_buffer.h"
 #include "net.h"
@@ -260,6 +262,7 @@ typedef struct MalNodeHttpClientState {
     MalHostHandle operation;
     char *host;
     u16 port;
+    bool secure;
     char *method;
     usize method_len;
     char *path;
@@ -2071,7 +2074,7 @@ static bool http_client_ascii_string(
         return false;
     }
     for (usize i = 0; i < count; i++) {
-        if (units[i] > 0x7f) {
+        if (units[i] == 0 || units[i] > 0x7f) {
             free(bytes);
             mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
                                "HTTP URL components must be ASCII");
@@ -2131,7 +2134,7 @@ static bool http_client_parse_url(
     for (usize i = 0; i < host_len; i++) {
         if (host[i] >= 'A' && host[i] <= 'Z') host[i] = (char) (host[i] + 0x20);
     }
-    u16 port = 80;
+    u16 port = strcmp(protocol, "https:") == 0 ? 443 : 80;
     if (colon != nullptr) {
         usize parsed = 0;
         if (colon + 1 == authority_end) {
@@ -2381,9 +2384,10 @@ static bool http_client_start_request(
         ? state->content_length : automatic_length;
     if (streaming && !state->has_content_length) content_length = -1;
     char host_header[320];
-    int host_header_length = snprintf(
-        host_header, sizeof(host_header), "Host: %s:%u\r\n",
-        state->host, (unsigned) state->port);
+    int host_header_length = state->port == (state->secure ? 443 : 80)
+        ? snprintf(host_header, sizeof(host_header), "Host: %s\r\n", state->host)
+        : snprintf(host_header, sizeof(host_header), "Host: %s:%u\r\n",
+            state->host, (unsigned)state->port);
     if (host_header_length < 0 || (usize) host_header_length >= sizeof(host_header)) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_ERROR_PROTOTYPE,
                            "HTTP host header is too large");
@@ -2409,10 +2413,8 @@ static bool http_client_start_request(
     HTTP_CLIENT_COPY(state->headers, state->headers_len);
     HTTP_CLIENT_COPY(host_header, (usize) host_header_length);
 #undef HTTP_CLIENT_COPY
-    const char *connect_host = strcmp(state->host, "localhost") == 0
-        ? "127.0.0.1" : state->host;
     if (!mal_http_client_start(
-            mal_host(vm), connect_host, state->port, request, request_len,
+            mal_host(vm), state->host, state->port, state->secure, request, request_len,
             content_length,
             state->method_len == 4 && memcmp(state->method, "HEAD", 4) == 0,
             state->timeout_ms, &state->operation)) {
@@ -3975,6 +3977,7 @@ static bool http_client_drain(MalVm *vm) {
 
 bool mal_node_http_drain(MalVm *vm) {
     MAL_PERF_COUNT(http_drain_calls);
+    if (mal_http_client_drain_dns(mal_host(vm))) return true;
     if (http_client_drain(vm)) return true;
     MalNodeHttpServerState **link = &http_servers;
     while (*link != nullptr) {
@@ -4648,10 +4651,10 @@ static bool http_client_set_port(MalVm *vm, MalValue value, u16 *port) {
 
 static bool http_client_validate_endpoint(
     MalVm *vm, const char *protocol, const char *host, u16 port,
-    const char *path, usize path_len) {
-    if (strcmp(protocol, "http:") != 0) {
+    const char *path, usize path_len, bool secure) {
+    if (strcmp(protocol, secure ? "https:" : "http:") != 0) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
-                           "Only the http: protocol is supported");
+                           "HTTP request protocol does not match the module");
         return false;
     }
     if (host[0] == '\0') {
@@ -4659,13 +4662,11 @@ static bool http_client_validate_endpoint(
                            "HTTP hostname must not be empty");
         return false;
     }
-    if (strcmp(host, "localhost") != 0) {
-        struct sockaddr_storage address;
-        socklen_t address_len;
-        if (!mal_net_parse_ip(host, port, &address, &address_len)
-            || address.ss_family != AF_INET) {
-            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
-                               "HTTP hostname must be localhost or a numeric IPv4 address");
+    (void) port;
+    for (const char *cursor = host; *cursor != '\0'; cursor++) {
+        unsigned char ch = (unsigned char)*cursor;
+        if (ch <= 0x20 || ch >= 0x7f || ch == '/' || ch == '@' || ch == '\\') {
+            mal_vm_throw_error(vm,MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,"HTTP hostname contains invalid characters");
             return false;
         }
     }
@@ -4680,9 +4681,9 @@ static bool http_client_validate_endpoint(
     return true;
 }
 
-static MalValue http_request(
+static MalValue http_request_common(
     MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
-    MalValue new_target, MalValue callee) {
+    MalValue new_target, MalValue callee, bool secure) {
     (void) receiver;
     (void) new_target;
     (void) callee;
@@ -4696,6 +4697,8 @@ static MalValue http_request(
     MalValue options = options_only ? args[0]
         : (argc > 1 && mal_value_is_object(args[1]) ? args[1]
                                                     : mal_value_new_undefined());
+    if (secure && !mal_node_https_validate_options(vm, options, false,
+        mal_native_function_object_get_slot(mal_value_to_native_function_object(callee), 0))) return mal_value_new_undefined();
     MalValue callback = options_only
         ? (argc > 1 ? args[1] : mal_value_new_undefined())
         : (argc > 2 ? args[2]
@@ -4733,13 +4736,13 @@ static MalValue http_request(
     usize protocol_len = 0;
     usize host_len = 0;
     if (options_only) {
-        protocol = http_copy_bytes("http:", 5);
+        protocol = http_copy_bytes(secure ? "https:" : "http:", secure ? 6 : 5);
         state->host = http_copy_bytes("localhost", 9);
         state->path = http_copy_bytes("/", 1);
-        state->port = 80;
+        state->port = secure ? 443 : 80;
         state->path_len = 1;
         host_len = 9;
-        protocol_len = 5;
+        protocol_len = secure ? 6 : 5;
         if (protocol == nullptr || state->host == nullptr || state->path == nullptr) {
             mal_vm_throw_allocation_error(vm);
             goto fail_endpoint;
@@ -4777,6 +4780,8 @@ static MalValue http_request(
             goto fail_endpoint;
         }
     }
+    state->secure = strcmp(protocol, "https:") == 0;
+    if (options_only) state->port = state->secure ? 443 : 80;
     if (!http_client_option(vm, roots[0], "port", &roots[4])) goto fail_endpoint;
     if (!mal_value_is_undefined(roots[4])
         && !http_client_set_port(vm, roots[4], &state->port)) {
@@ -4800,7 +4805,7 @@ static MalValue http_request(
     }
     if (!http_client_validate_endpoint(
             vm, protocol, state->host, state->port,
-            state->path, state->path_len)) {
+            state->path, state->path_len, secure)) {
         goto fail_endpoint;
     }
     free(protocol);
@@ -4877,11 +4882,33 @@ fail:
     return mal_value_new_undefined();
 }
 
+static MalValue http_request(MalVm *vm, MalValue receiver, const MalValue *args,
+    i32 argc, MalValue new_target, MalValue callee) {
+    return http_request_common(vm, receiver, args, argc, new_target, callee, false);
+}
+
+MalValue mal_node_https_request(MalVm *vm, MalValue receiver, const MalValue *args,
+    i32 argc, MalValue new_target, MalValue callee) {
+    return http_request_common(vm, receiver, args, argc, new_target, callee, true);
+}
+
 static MalValue http_get(
     MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
     MalValue new_target, MalValue callee) {
     MalValue request = http_request(
         vm, receiver, args, argc, new_target, callee);
+    if (vm->completion.kind == MAL_COMPLETION_THROW) return mal_value_new_undefined();
+    MalRootSpan root;
+    mal_gc_root(&root, &request, 1);
+    bool ended = http_call_method(vm, request, "end", nullptr, 0);
+    MalValue result = ended ? request : mal_value_new_undefined();
+    mal_gc_unroot(&root);
+    return result;
+}
+
+MalValue mal_node_https_get(MalVm *vm, MalValue receiver, const MalValue *args,
+    i32 argc, MalValue new_target, MalValue callee) {
+    MalValue request = mal_node_https_request(vm, receiver, args, argc, new_target, callee);
     if (vm->completion.kind == MAL_COMPLETION_THROW) return mal_value_new_undefined();
     MalRootSpan root;
     mal_gc_root(&root, &request, 1);
@@ -4970,16 +4997,7 @@ static MalValue http_status_codes(MalVm *vm) {
 
 static void http_install_exports(
     MalVm *vm, const MalHostInstallSlot *slots, i32 count, MalValue module) {
-    for (i32 i = 0; i < count; i++) {
-        if (strcmp(slots[i].name, "default") == 0) {
-            vm->globals[slots[i].slot] = module;
-            continue;
-        }
-        MalPropertyLookup lookup = mal_object_get_own(
-            mal_value_to_object(module),
-            mal_intrinsic_string_key(vm, (const byte *) slots[i].name));
-        if (lookup.present) vm->globals[slots[i].slot] = lookup.desc.value;
-    }
+    mal_node_module_publish(vm, "node:http", slots, count, module);
 }
 
 void mal_host_install_node_http(

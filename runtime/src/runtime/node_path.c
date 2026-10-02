@@ -13,6 +13,7 @@
 #include "checked_size.h"
 #include "heap_string.h"
 #include "intrinsics.h"
+#include "node_module.h"
 #include "object.h"
 #include "property_store.h"
 #include "text_buffer.h"
@@ -907,6 +908,418 @@ static MalValue mal_node_path_relative(
     return result;
 }
 
+
+MalValue mal_node_path_resolve_path(MalVm *vm, MalValue path) {
+    return mal_node_path_resolve(vm, mal_value_new_undefined(), &path, 1,
+        mal_value_new_undefined(), mal_value_new_undefined());
+}
+
+typedef struct {
+    MalVm *vm;
+    usize remaining;
+    usize depth;
+} PathGlobContext;
+
+static bool path_glob_work(PathGlobContext *ctx) {
+    if (ctx->vm->completion.kind == MAL_COMPLETION_THROW) return false;
+    if (ctx->remaining > 0) { ctx->remaining--; return true; }
+    if (ctx->vm->completion.kind != MAL_COMPLETION_THROW) {
+        mal_vm_throw_error(ctx->vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Glob pattern is too complex");
+    }
+    return false;
+}
+
+static bool path_glob_enter(PathGlobContext *ctx) {
+    if (ctx->vm->completion.kind == MAL_COMPLETION_THROW) return false;
+    if (ctx->depth >= 256) {
+        mal_vm_throw_error(ctx->vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Glob pattern is too complex");
+        return false;
+    }
+    ctx->depth++;
+    return true;
+}
+
+
+static bool path_glob_explicit_dot(PathGlobContext *ctx, const c16 *p, usize pn);
+
+static bool path_glob_explicit_dot_impl(PathGlobContext *ctx, const c16 *p, usize pn) {
+    if (pn == 0) return false;
+    if (p[0] == '.') return true;
+    if (pn > 1 && p[0] == '\\' && p[1] == '.') return true;
+    if (pn >= 3 && p[0] == '[' && p[1] == '.' && p[2] == ']') return true;
+    if (pn > 2 && p[1] == '(' && (p[0] == '@' || p[0] == '?' || p[0] == '+' || p[0] == '*')) {
+        usize begin = 2;
+        usize depth = 0;
+        for (usize i = begin; i < pn; i++) {
+            if (p[i] == '(') depth++;
+            if (p[i] == ')' && depth == 0) return path_glob_explicit_dot(ctx, p + begin, i - begin);
+            if (p[i] == ')' && depth > 0) depth--;
+            if (p[i] == '|' && depth == 0) {
+                if (path_glob_explicit_dot(ctx, p + begin, i - begin)) return true;
+                begin = i + 1;
+            }
+        }
+    }
+    return false;
+}
+
+static bool path_glob_explicit_dot(PathGlobContext *ctx, const c16 *p, usize pn) {
+    if (!path_glob_enter(ctx)) return false;
+    bool result = path_glob_explicit_dot_impl(ctx, p, pn);
+    ctx->depth--;
+    return result;
+}
+
+static bool path_glob_atom(c16 s, const c16 *p, usize pn, usize *consumed) {
+    *consumed = 1;
+    if (p[0] == '?') return true;
+    if (p[0] == '\\' && pn > 1) { *consumed = 2; return s == p[1]; }
+    if (p[0] != '[') return s == p[0];
+    usize end = 1;
+    if (end < pn && (p[end] == '!' || p[end] == '^')) end++;
+    if (end < pn && p[end] == ']') end++;
+    while (end < pn && p[end] != ']') end++;
+    if (end == pn) return s == '[';
+    usize n = 1;
+    bool negate = p[n] == '!' || p[n] == '^';
+    if (negate) n++;
+    bool found = false;
+    while (n < end) {
+        c16 low = p[n++];
+        if (low == '\\' && n < end) low = p[n++];
+        if (n + 1 < end && p[n] == '-') {
+            c16 high = p[n + 1]; n += 2;
+            if (s >= low && s <= high) found = true;
+        } else if (s == low) found = true;
+    }
+    *consumed = end + 1;
+    return found != negate;
+}
+
+static bool path_glob_simple(const c16 *s, usize sn, const c16 *p, usize pn) {
+    usize si = 0, pi = 0, star = SIZE_MAX, retry = 0;
+    while (si < sn) {
+        if (pi < pn && p[pi] == '*') { star = ++pi; retry = si; continue; }
+        usize consumed;
+        if (pi < pn && path_glob_atom(s[si], p + pi, pn - pi, &consumed)) {
+            si++; pi += consumed; continue;
+        }
+        if (star == SIZE_MAX) return false;
+        pi = star; si = ++retry;
+    }
+    while (pi < pn && p[pi] == '*') pi++;
+    return pi == pn;
+}
+
+static bool path_glob_segment(PathGlobContext *ctx, const c16 *s, usize sn, const c16 *p, usize pn);
+static bool path_glob_alternatives(PathGlobContext *ctx, const c16 *s, usize sn, const c16 *p, usize pn);
+static bool path_glob_repeat(PathGlobContext *ctx, const c16 *s, usize sn, const c16 *group, usize gn, const c16 *suffix, usize suffix_length, bool required);
+static bool path_glob_parts(PathGlobContext *ctx, const c16 *s, usize sn, const c16 *p, usize pn, bool partial);
+
+
+static bool path_glob_alternatives_impl(PathGlobContext *ctx, const c16 *s, usize sn, const c16 *p, usize pn) {
+    usize begin = 0;
+    usize depth = 0;
+    for (usize i = 0; i <= pn; i++) {
+        if (i < pn && p[i] == '\\' && i + 1 < pn) { i++; continue; }
+        if (i < pn && p[i] == '(') depth++;
+        if (i < pn && p[i] == ')' && depth > 0) depth--;
+        if (i == pn || (p[i] == '|' && depth == 0)) {
+            if (path_glob_segment(ctx, s, sn, p + begin, i - begin)) return true;
+            begin = i + 1;
+        }
+    }
+    return false;
+}
+
+static bool path_glob_repeat_impl(PathGlobContext *ctx, const c16 *s, usize sn, const c16 *group, usize gn,
+    const c16 *suffix, usize suffix_length, bool required) {
+    if (!path_glob_work(ctx)) return false;
+    if (!required && path_glob_segment(ctx, s, sn, suffix, suffix_length)) return true;
+    for (usize n = 1; n <= sn; n++) {
+        if (ctx->vm->completion.kind == MAL_COMPLETION_THROW) return false;
+        if (path_glob_alternatives(ctx, s, n, group, gn)
+            && path_glob_repeat(ctx, s + n, sn - n, group, gn, suffix, suffix_length, false)) {
+            return true;
+        }
+    }
+    return required && path_glob_alternatives(ctx, s, 0, group, gn)
+        && path_glob_segment(ctx, s, sn, suffix, suffix_length);
+}
+
+static bool path_glob_segment_impl(PathGlobContext *ctx, const c16 *s, usize sn, const c16 *p, usize pn) {
+    if (!path_glob_work(ctx)) return false;
+    bool extended = false;
+    for (usize i = 0; i + 1 < pn; i++) {
+        if (p[i] == '\\') { i++; continue; }
+        if (p[i + 1] == '(' && (p[i] == '@' || p[i] == '?' || p[i] == '+' || p[i] == '*' || p[i] == '!')) {
+            extended = true;
+            break;
+        }
+    }
+    if (!extended) return path_glob_simple(s, sn, p, pn);
+    while (pn > 0) {
+        c16 c = *p;
+        if (pn > 1 && p[1] == '(' && (c == '@' || c == '?' || c == '+' || c == '*' || c == '!')) {
+            usize end = 2;
+            usize depth = 1;
+            for (; end < pn; end++) {
+                if (p[end] == '\\' && end + 1 < pn) { end++; continue; }
+                if (p[end] == '(') depth++;
+                if (p[end] == ')' && --depth == 0) break;
+            }
+            if (end < pn) {
+                const c16 *suffix = p + end + 1;
+                usize suffix_length = pn - end - 1;
+                if (c == '*' || c == '+') {
+                    return path_glob_repeat(ctx, s, sn, p + 2, end - 2, suffix, suffix_length, c == '+');
+                }
+                if (c == '?' && path_glob_segment(ctx, s, sn, suffix, suffix_length)) return true;
+                for (usize n = 0; n <= sn; n++) {
+                    if (ctx->vm->completion.kind == MAL_COMPLETION_THROW) return false;
+                    bool group_match = path_glob_alternatives(ctx, s, n, p + 2, end - 2);
+                    if ((c == '!' ? !group_match : group_match)
+                        && path_glob_segment(ctx, s + n, sn - n, suffix, suffix_length)) return true;
+                }
+                return false;
+            }
+        }
+        if (c == '*') {
+            do { p++; pn--; } while (pn > 0 && *p == '*');
+            if (pn == 0) return true;
+            for (usize n = 0; n <= sn; n++) {
+                if (ctx->vm->completion.kind == MAL_COMPLETION_THROW) return false;
+                if (path_glob_segment(ctx, s + n, sn - n, p, pn)) return true;
+            }
+            return false;
+        }
+        if (sn == 0) return false;
+        if (c == '?') { s++; sn--; p++; pn--; continue; }
+        if (c == '[') {
+            usize end = 1;
+            if (end < pn && (p[end] == '!' || p[end] == '^')) end++;
+            if (end < pn && p[end] == ']') end++;
+            while (end < pn && p[end] != ']') end++;
+            if (end < pn) {
+                usize n = 1;
+                bool negate = p[n] == '!' || p[n] == '^';
+                if (negate) n++;
+                bool found = false;
+                while (n < end) {
+                    c16 low = p[n++];
+                    if (low == '\\' && n < end) low = p[n++];
+                    if (n + 1 < end && p[n] == '-') {
+                        c16 high = p[n + 1];
+                        n += 2;
+                        if (*s >= low && *s <= high) found = true;
+                    } else if (*s == low) found = true;
+                }
+                if (found == negate) return false;
+                s++; sn--; p += end + 1; pn -= end + 1;
+                continue;
+            }
+        }
+        if (c == '\\' && pn > 1) { p++; pn--; c = *p; }
+        if (*s != c) return false;
+        s++; sn--; p++; pn--;
+    }
+    return sn == 0;
+}
+
+static bool path_glob_parts_impl(PathGlobContext *ctx, const c16 *s, usize sn, const c16 *p, usize pn, bool partial) {
+    if (!path_glob_work(ctx)) return false;
+    usize se = 0;
+    usize pe = 0;
+    while (se < sn && s[se] != '/') se++;
+    while (pe < pn && p[pe] != '/') pe++;
+    bool globstar = pe == 2 && p[0] == '*' && p[1] == '*';
+    if (globstar) {
+        usize next = pe;
+        while (next < pn && p[next] == '/') next++;
+        if (next < pn && path_glob_parts(ctx, s, sn, p + next, pn - next, partial)) return true;
+        if (sn == 0) return next == pn || partial;
+        if (s[0] == '.') return false;
+        if (next == pn && se == sn) return true;
+        if (se < sn) {
+            usize step = se;
+            while (step < sn && s[step] == '/') step++;
+            return path_glob_parts(ctx, s + step, sn - step, p, pn, partial);
+        }
+        return partial;
+    }
+    if (sn == 0 && partial) return true;
+    if (se > 0 && s[0] == '.' && !path_glob_explicit_dot(ctx, p, pe)) return false;
+    if (se == 0 && pe > 0) return false;
+    if (!path_glob_segment(ctx, s, se, p, pe)) return false;
+    if (pe == pn) {
+        while (se < sn && s[se] == '/') se++;
+        return se == sn;
+    }
+    if (se == sn) return partial;
+    while (se < sn && s[se] == '/') se++;
+    while (pe < pn && p[pe] == '/') pe++;
+    return path_glob_parts(ctx, s + se, sn - se, p + pe, pn - pe, partial);
+}
+
+
+static bool path_glob_segment(PathGlobContext *ctx, const c16 *s, usize sn, const c16 *p, usize pn) {
+    if (!path_glob_enter(ctx)) return false;
+    bool result = path_glob_segment_impl(ctx, s, sn, p, pn);
+    ctx->depth--;
+    return result;
+}
+
+static bool path_glob_alternatives(PathGlobContext *ctx, const c16 *s, usize sn, const c16 *p, usize pn) {
+    if (!path_glob_enter(ctx)) return false;
+    bool result = path_glob_alternatives_impl(ctx, s, sn, p, pn);
+    ctx->depth--;
+    return result;
+}
+
+static bool path_glob_repeat(PathGlobContext *ctx, const c16 *s, usize sn, const c16 *group,
+    usize gn, const c16 *suffix, usize suffix_length, bool required) {
+    if (!path_glob_enter(ctx)) return false;
+    bool result = path_glob_repeat_impl(ctx, s, sn, group, gn, suffix, suffix_length, required);
+    ctx->depth--;
+    return result;
+}
+
+static bool path_glob_parts(PathGlobContext *ctx, const c16 *s, usize sn, const c16 *p, usize pn, bool partial) {
+    if (!path_glob_enter(ctx)) return false;
+    bool result = path_glob_parts_impl(ctx, s, sn, p, pn, partial);
+    ctx->depth--;
+    return result;
+}
+
+static bool path_glob_range_number(const c16 *p, usize n, i64 *out) {
+    bool negative = n > 0 && p[0] == '-';
+    usize i = negative ? 1 : 0;
+    if (i == n || n > 15) return false;
+    i64 value = 0;
+    for (; i < n; i++) {
+        if (p[i] < '0' || p[i] > '9') return false;
+        value = value * 10 + p[i] - '0';
+    }
+    *out = negative ? -value : value;
+    return true;
+}
+
+static bool path_glob_expand(PathGlobContext *ctx, const c16 *s, usize sn, const c16 *p, usize pn,
+    bool partial, usize depth) {
+    if (depth > 64) {
+        mal_vm_throw_error(ctx->vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Glob pattern is too complex");
+        return false;
+    }
+    usize begin = 0;
+    for (; begin < pn; begin++) {
+        if (p[begin] == '\\' && begin + 1 < pn) { begin++; continue; }
+        if (p[begin] == '{') break;
+    }
+    if (begin == pn) return path_glob_parts(ctx, s, sn, p, pn, partial);
+    usize end = begin + 1;
+    usize nesting = 1;
+    bool comma = false;
+    for (; end < pn; end++) {
+        if (p[end] == '\\' && end + 1 < pn) { end++; continue; }
+        if (p[end] == '{') nesting++;
+        if (p[end] == '}' && --nesting == 0) break;
+        if (p[end] == ',' && nesting == 1) comma = true;
+    }
+    if (end == pn) return path_glob_parts(ctx, s, sn, p, pn, partial);
+    if (!comma) {
+        usize separator = begin + 1;
+        while (separator + 1 < end && !(p[separator] == '.' && p[separator + 1] == '.')) separator++;
+        if (separator + 1 >= end) return path_glob_parts(ctx, s, sn, p, pn, partial);
+        usize step_at = separator + 2;
+        while (step_at + 1 < end && !(p[step_at] == '.' && p[step_at + 1] == '.')) step_at++;
+        if (step_at + 1 >= end) step_at = end;
+        i64 low, high, step = 1;
+        usize low_length = separator - begin - 1;
+        usize high_length = step_at - separator - 2;
+        bool numbers = path_glob_range_number(p + begin + 1, low_length, &low)
+            && path_glob_range_number(p + separator + 2, high_length, &high);
+        if (!numbers) {
+            if (low_length != 1 || high_length != 1) return path_glob_parts(ctx, s, sn, p, pn, partial);
+            low = p[begin + 1]; high = p[separator + 2];
+        }
+        if (step_at < end && !path_glob_range_number(p + step_at + 2, end - step_at - 2, &step)) {
+            return path_glob_parts(ctx, s, sn, p, pn, partial);
+        }
+        if (step < 0) step = -step;
+        if (step == 0) step = 1;
+        if ((u64) (low > high ? low - high : high - low) / (u64) step > 10000) {
+            mal_vm_throw_error(ctx->vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Glob pattern is too complex");
+            return false;
+        }
+        c16 *expanded = malloc((pn + 32) * sizeof(c16));
+        if (expanded == nullptr) { mal_vm_throw_allocation_error(ctx->vm); return false; }
+        memcpy(expanded, p, begin * sizeof(c16));
+        bool matched = false;
+        bool padded = numbers && ((low_length > 1 && p[begin + 1] == '0')
+            || (high_length > 1 && p[separator + 2] == '0')
+            || (low_length > 2 && p[begin + 1] == '-' && p[begin + 2] == '0')
+            || (high_length > 2 && p[separator + 2] == '-' && p[separator + 3] == '0'));
+        int width = padded ? (int) (low_length > high_length ? low_length : high_length) : 0;
+        for (i64 value = low; low <= high ? value <= high : value >= high; value += low <= high ? step : -step) {
+            char formatted[32];
+            usize expansion_length;
+            if (numbers) {
+                expansion_length = (usize) snprintf(formatted, sizeof(formatted), "%0*lld", width, (long long) value);
+                for (usize i = 0; i < expansion_length; i++) expanded[begin + i] = (c16) formatted[i];
+            } else { expansion_length = 1; expanded[begin] = (c16) value; }
+            memcpy(expanded + begin + expansion_length, p + end + 1, (pn - end - 1) * sizeof(c16));
+            matched = path_glob_expand(ctx, s, sn, expanded, begin + expansion_length + pn - end - 1, partial, depth + 1);
+            if (matched || ctx->vm->completion.kind == MAL_COMPLETION_THROW) break;
+        }
+        free(expanded);
+        return matched;
+    }
+    c16 *expanded = malloc(pn * sizeof(c16));
+    if (expanded == nullptr) { mal_vm_throw_allocation_error(ctx->vm); return false; }
+    memcpy(expanded, p, begin * sizeof(c16));
+    usize branch = begin + 1;
+    nesting = 0;
+    bool matched = false;
+    for (usize i = branch; i <= end; i++) {
+        if (i < end && p[i] == '\\' && i + 1 < end) { i++; continue; }
+        if (i < end && p[i] == '{') nesting++;
+        if (i < end && p[i] == '}' && nesting > 0) nesting--;
+        if (i == end || (p[i] == ',' && nesting == 0)) {
+            usize expansion_length = i - branch;
+            memcpy(expanded + begin, p + branch, expansion_length * sizeof(c16));
+            memcpy(expanded + begin + expansion_length, p + end + 1, (pn - end - 1) * sizeof(c16));
+            matched = path_glob_expand(ctx, s, sn, expanded,
+                begin + expansion_length + pn - end - 1, partial, depth + 1);
+            if (matched || ctx->vm->completion.kind == MAL_COMPLETION_THROW) break;
+            branch = i + 1;
+        }
+    }
+    free(expanded);
+    return matched;
+}
+
+bool mal_node_path_glob_match(MalVm *vm, MalString *path, MalString *pattern, bool partial) {
+    const c16 *s = mal_string_code_units(path);
+    const c16 *p = mal_string_code_units(pattern);
+    usize sn = mal_string_length(path);
+    usize pn = mal_string_length(pattern);
+    if ((sn > 0 && s[0] == '/') != (pn > 0 && p[0] == '/')) return false;
+    PathGlobContext context = {.vm = vm, .remaining = 1000000};
+    return path_glob_expand(&context, s, sn, p, pn, partial, 0);
+}
+
+static MalValue mal_node_path_matches_glob(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) self; (void) nt; (void) callee;
+    MalString *path;
+    MalString *pattern;
+    if (!path_require_string(vm, argc > 0 ? args[0] : mal_value_new_undefined(), "path", &path)
+        || !path_require_string(vm, argc > 1 ? args[1] : mal_value_new_undefined(), "pattern", &pattern)) {
+        return mal_value_new_undefined();
+    }
+    return mal_value_new_boolean(mal_node_path_glob_match(vm, path, pattern, false));
+}
+
 /* --------------------------------------------------------------------------
  * Installer.
  * -------------------------------------------------------------------------- */
@@ -920,7 +1333,7 @@ typedef struct {
     MalNativeFunctionCallback callback;
 } MalNodePathExport;
 
-#define MAL_NODE_PATH_FUNCTION_COUNT 11
+#define MAL_NODE_PATH_FUNCTION_COUNT 12
 
 static const MalNodePathExport mal_node_path_exports[MAL_NODE_PATH_FUNCTION_COUNT] = {
     {"basename", 2, mal_node_path_basename},
@@ -929,6 +1342,7 @@ static const MalNodePathExport mal_node_path_exports[MAL_NODE_PATH_FUNCTION_COUN
     {"format", 1, mal_node_path_format},
     {"isAbsolute", 1, mal_node_path_is_absolute},
     {"join", 0, mal_node_path_join},
+    {"matchesGlob", 2, mal_node_path_matches_glob},
     {"normalize", 1, mal_node_path_normalize},
     {"parse", 1, mal_node_path_parse},
     {"relative", 2, mal_node_path_relative},
@@ -939,6 +1353,7 @@ static const MalNodePathExport mal_node_path_exports[MAL_NODE_PATH_FUNCTION_COUN
 void mal_host_install_node_path(
     MalVm *vm, const MalHostInstallSlot *slots, i32 count, const MalHostLaunchContext *launch) {
     (void) launch;
+    if (mal_node_module_install_cached(vm, "node:path", slots, count)) return;
     MalObject *fn_proto = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]);
 
     // Function values plus the default namespace object and two constant strings.
@@ -978,34 +1393,7 @@ void mal_host_install_node_path(
         vals[MAL_NODE_PATH_FUNCTION_COUNT],
         MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE);
 
-    for (i32 s = 0; s < count; ++s) {
-        const char *name = slots[s].name;
-        MalValue value = mal_value_new_undefined();
-        bool matched = false;
-        for (usize i = 0; i < MAL_NODE_PATH_FUNCTION_COUNT; ++i) {
-            if (strcmp(name, mal_node_path_exports[i].name) == 0) {
-                value = vals[i];
-                matched = true;
-                break;
-            }
-        }
-        if (!matched && strcmp(name, "default") == 0) {
-            value = vals[MAL_NODE_PATH_FUNCTION_COUNT];
-            matched = true;
-        } else if (!matched && strcmp(name, "delimiter") == 0) {
-            value = vals[MAL_NODE_PATH_FUNCTION_COUNT + 1];
-            matched = true;
-        } else if (!matched && strcmp(name, "sep") == 0) {
-            value = vals[MAL_NODE_PATH_FUNCTION_COUNT + 2];
-            matched = true;
-        } else if (!matched && strcmp(name, "posix") == 0) {
-            value = vals[MAL_NODE_PATH_FUNCTION_COUNT];
-            matched = true;
-        }
-        if (matched) {
-            vm->globals[slots[s].slot] = value;
-        }
-    }
+    mal_node_module_publish(vm, "node:path", slots, count, vals[MAL_NODE_PATH_FUNCTION_COUNT]);
 
     mal_gc_unroot(&rs);
 }

@@ -16,12 +16,77 @@ static _Atomic(MalReactor *) mal_host_signal_reactor;
 static bool mal_host_signal_installed[MAL_HOST_SIGNAL_COUNT];
 static struct sigaction mal_host_signal_previous[MAL_HOST_SIGNAL_COUNT];
 
+static const struct {
+    const char *name;
+    int number;
+} mal_host_signal_constants[] = {
+#define MAL_SIGNAL_CONSTANT(name) {#name, name},
+    MAL_SIGNAL_CONSTANT(SIGHUP)
+    MAL_SIGNAL_CONSTANT(SIGINT)
+    MAL_SIGNAL_CONSTANT(SIGQUIT)
+    MAL_SIGNAL_CONSTANT(SIGILL)
+    MAL_SIGNAL_CONSTANT(SIGTRAP)
+    MAL_SIGNAL_CONSTANT(SIGABRT)
+    MAL_SIGNAL_CONSTANT(SIGBUS)
+    MAL_SIGNAL_CONSTANT(SIGFPE)
+    MAL_SIGNAL_CONSTANT(SIGKILL)
+    MAL_SIGNAL_CONSTANT(SIGUSR1)
+    MAL_SIGNAL_CONSTANT(SIGSEGV)
+    MAL_SIGNAL_CONSTANT(SIGUSR2)
+    MAL_SIGNAL_CONSTANT(SIGPIPE)
+    MAL_SIGNAL_CONSTANT(SIGALRM)
+    MAL_SIGNAL_CONSTANT(SIGTERM)
+    MAL_SIGNAL_CONSTANT(SIGCHLD)
+    MAL_SIGNAL_CONSTANT(SIGCONT)
+    MAL_SIGNAL_CONSTANT(SIGSTOP)
+    MAL_SIGNAL_CONSTANT(SIGTSTP)
+    MAL_SIGNAL_CONSTANT(SIGTTIN)
+    MAL_SIGNAL_CONSTANT(SIGTTOU)
+    MAL_SIGNAL_CONSTANT(SIGURG)
+    MAL_SIGNAL_CONSTANT(SIGXCPU)
+    MAL_SIGNAL_CONSTANT(SIGXFSZ)
+    MAL_SIGNAL_CONSTANT(SIGVTALRM)
+    MAL_SIGNAL_CONSTANT(SIGPROF)
+    MAL_SIGNAL_CONSTANT(SIGWINCH)
+#ifdef SIGIO
+    MAL_SIGNAL_CONSTANT(SIGIO)
+#endif
+#ifdef SIGINFO
+    MAL_SIGNAL_CONSTANT(SIGINFO)
+#endif
+#ifdef SIGSYS
+    MAL_SIGNAL_CONSTANT(SIGSYS)
+#endif
+#undef MAL_SIGNAL_CONSTANT
+};
+
+const char *mal_host_signal_constant_name(i32 index) {
+    return index >= 0 && (usize) index < countof(mal_host_signal_constants)
+        ? mal_host_signal_constants[index].name : nullptr;
+}
+
+int mal_host_signal_constant_number(i32 index) {
+    return index >= 0 && (usize) index < countof(mal_host_signal_constants)
+        ? mal_host_signal_constants[index].number : 0;
+}
+
+int mal_host_signal_number_named(const char *name) {
+    for (usize i = 0; i < countof(mal_host_signal_constants); i++) {
+        if (strcmp(name, mal_host_signal_constants[i].name) == 0) {
+            return mal_host_signal_constants[i].number;
+        }
+    }
+    return 0;
+}
+
 static int mal_host_signal_number(MalHostSignal signal) {
     switch (signal) {
         case MAL_HOST_SIGNAL_INT:
             return SIGINT;
         case MAL_HOST_SIGNAL_TERM:
             return SIGTERM;
+        case MAL_HOST_SIGNAL_HUP:
+            return SIGHUP;
         default:
             return 0;
     }
@@ -33,6 +98,8 @@ const char *mal_host_signal_name(MalHostSignal signal) {
             return "SIGINT";
         case MAL_HOST_SIGNAL_TERM:
             return "SIGTERM";
+        case MAL_HOST_SIGNAL_HUP:
+            return "SIGHUP";
         default:
             return "";
     }

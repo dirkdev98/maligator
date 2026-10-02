@@ -47,7 +47,7 @@ void mal_host_install_node_v8(
         vm->intrinsics[MAL_INTRINSIC_NODE_V8_MODULE] = module;
         mal_gc_unroot(&root);
     }
-    mal_node_module_publish(vm, slots, count, module);
+    mal_node_module_publish(vm, "node:v8", slots, count, module);
 }
 
 #endif /* MAL_NODE */

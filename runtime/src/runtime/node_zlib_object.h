@@ -7,4 +7,8 @@ typedef struct MalNodeZlibObject {
     MalObject object;
     MalObjectStorage object_storage;
     MalZlibStream *handle;
+    usize chunk_size;
+    usize input_offset;
+    bool finishing;
+    bool pumping;
 } MalNodeZlibObject;

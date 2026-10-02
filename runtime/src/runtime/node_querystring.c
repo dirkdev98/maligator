@@ -584,6 +584,7 @@ void mal_host_install_node_querystring(
     MalVm *vm, const MalHostInstallSlot *slots, i32 count,
     const MalHostLaunchContext *launch
 ) {
+    if (mal_node_module_install_cached(vm, "node:querystring", slots, count)) return;
     (void) launch;
     MalValue module = vm->intrinsics[MAL_INTRINSIC_NODE_QUERYSTRING_MODULE];
     if (mal_value_is_undefined(module)) {
@@ -626,7 +627,7 @@ void mal_host_install_node_querystring(
         vm->intrinsics[MAL_INTRINSIC_NODE_QUERYSTRING_MODULE] = module;
         mal_gc_unroot(&root);
     }
-    mal_node_module_publish(vm, slots, count, module);
+    mal_node_module_publish(vm, "node:querystring", slots, count, module);
 }
 
 #endif /* MAL_NODE */

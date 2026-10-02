@@ -6,6 +6,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <signal.h>
+#include <math.h>
 
 #include "ascii.h"
 #include "array_object.h"
@@ -14,6 +16,10 @@
 #include "heap.h"
 #include "heap_string.h"
 #include "intrinsics.h"
+#include "node_module.h"
+#include "node_events.h"
+#include "posix_signal.h"
+#include "web_host_timer.h"
 #include "object.h"
 #include "object_ops.h"
 #include "posix_process.h" // host: fork/exec syscalls (MalProcRequest / MalProcResult)
@@ -98,9 +104,12 @@ static bool mal_ncp_option(MalVm *vm, MalValue opts, const char *name, MalValue 
 static char *mal_ncp_concat(const char *const *parts, usize n) {
     usize total = 0;
     for (usize i = 0; i < n; i++) {
-        total += strlen(parts[i]);
+        usize length = strlen(parts[i]);
+        if (length >= SIZE_MAX - total) return nullptr;
+        total += length;
     }
     char *s = malloc(total + 1);
+    if (s == nullptr) return nullptr;
     usize o = 0;
     for (usize i = 0; i < n; i++) {
         usize l = strlen(parts[i]);
@@ -149,6 +158,10 @@ static byte *mal_ncp_env_key(MalVm *vm, MalKey key, usize *len) {
     char index[16];
     int n = snprintf(index, sizeof(index), "%u", mal_key_index_value(key));
     byte *out = malloc((usize) n + 1);
+    if (out == nullptr) {
+        mal_vm_throw_allocation_error(vm);
+        return nullptr;
+    }
     memcpy(out, index, (usize) n + 1);
     *len = (usize) n;
     return out;
@@ -212,6 +225,11 @@ static void mal_ncp_throw_exit(MalVm *vm, const MalProcResult *res, const char *
     }
 
     char *message = mal_ncp_concat((const char *const[]) {"Command failed: ", file}, 2);
+    if (message == nullptr) {
+        mal_vm_throw_allocation_error(vm);
+        mal_gc_unroot(&rs);
+        return;
+    }
     mal_vm_throw_error(vm, MAL_INTRINSIC_ERROR_PROTOTYPE, (const byte *) message);
     free(message);
 
@@ -226,11 +244,13 @@ static void mal_ncp_throw_exit(MalVm *vm, const MalProcResult *res, const char *
 }
 
 /* Launch failure (missing executable, bad cwd): Error with .code/.errno/.syscall/.path. */
-static void mal_ncp_throw_launch(MalVm *vm, int launch_errno, const char *file) {
+static void mal_ncp_throw_launch(MalVm *vm, int launch_errno, const char *file, bool asynchronous) {
     const char *code = mal_ncp_errno_name(launch_errno);
 
-    char *syscall = mal_ncp_concat((const char *const[]) {"spawnSync ", file}, 2);
+    char *syscall = mal_ncp_concat((const char *const[]) {asynchronous ? "spawn " : "spawnSync ", file}, 2);
+    if (syscall == nullptr) { mal_vm_throw_allocation_error(vm); return; }
     char *message = mal_ncp_concat((const char *const[]) {syscall, " ", code != NULL ? code : "failed"}, 3);
+    if (message == nullptr) { free(syscall); mal_vm_throw_allocation_error(vm); return; }
     mal_vm_throw_error(vm, MAL_INTRINSIC_ERROR_PROTOTYPE, (const byte *) message);
     free(message);
 
@@ -265,8 +285,11 @@ static void mal_ncp_throw_launch(MalVm *vm, int launch_errno, const char *file) 
  * execFileSync(file[, args][, options]).
  * --------------------------------------------------------------------------- */
 
-static MalValue mal_node_exec_file_sync(
-    MalVm *vm, MalValue this_value, const MalValue *args, i32 argc, MalValue new_target, MalValue callee
+static MalValue mal_node_spawn_request(MalVm *vm, const MalProcRequest *request);
+
+static MalValue mal_node_process_command(
+    MalVm *vm, MalValue this_value, const MalValue *args, i32 argc, MalValue new_target, MalValue callee,
+    bool asynchronous
 ) {
     (void) this_value;
     (void) new_target;
@@ -386,6 +409,11 @@ static MalValue mal_node_exec_file_sync(
         envp = malloc((cap + 1) * sizeof(char *));
         MalKey *keys = cap > 0 ? malloc(cap * sizeof(MalKey)) : NULL;
         MalValue *key_values = cap > 0 ? malloc(cap * sizeof(MalValue)) : NULL;
+        if (envp == nullptr || (cap > 0 && (keys == nullptr || key_values == nullptr))) {
+            free(keys); free(key_values);
+            mal_vm_throw_allocation_error(vm);
+            goto cleanup;
+        }
         usize key_count = 0;
         mal_property_iter_init(&it, eo, MAL_PROPERTY_ITER_ENUMERABLE_OWN_PROPERTY_ORDER);
         while (mal_property_iter_next(&it, &k, &d)) {
@@ -472,6 +500,7 @@ static MalValue mal_node_exec_file_sync(
     {
         u32 nargs = mal_value_is_array_object(args_val) ? mal_array_object_length(mal_value_to_array_object(args_val)) : 0;
         argv = malloc(((usize) nargs + 2) * sizeof(char *));
+        if (argv == nullptr) { mal_vm_throw_allocation_error(vm); goto cleanup; }
         argv[0] = (char *) file_c;
         for (u32 i = 0; i < nargs; i++) {
             MalValue el;
@@ -502,12 +531,23 @@ static MalValue mal_node_exec_file_sync(
         .input_len = input_len,
     };
 
+    if (asynchronous) {
+        if (in_mode == MAL_PROC_STDIO_PIPE || out_mode == MAL_PROC_STDIO_PIPE
+            || err_mode == MAL_PROC_STDIO_PIPE) {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+                "Async spawn currently requires inherit or ignore stdio");
+        } else {
+            ret = mal_node_spawn_request(vm, &req);
+        }
+        goto cleanup;
+    }
+
     bool out_cap = out_mode == MAL_PROC_STDIO_PIPE;
     bool err_cap = err_mode == MAL_PROC_STDIO_PIPE;
 
     if (mal_proc_run(&req, &res) != 0) {
         if (!res.launched) {
-            mal_ncp_throw_launch(vm, res.launch_errno, (const char *) file_c);
+            mal_ncp_throw_launch(vm, res.launch_errno, (const char *) file_c, false);
             goto cleanup;
         }
         // Launched but a parent-side I/O/wait failure: surface it as a generic error.
@@ -543,6 +583,201 @@ cleanup:
     return ret;
 }
 
+static MalValue mal_node_exec_file_sync(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    return mal_node_process_command(vm, self, args, argc, nt, callee, false);
+}
+
+static MalValue mal_node_spawn(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    return mal_node_process_command(vm, self, args, argc, nt, callee, true);
+}
+
+typedef struct MalNodeChild {
+    MalVm *vm;
+    MalValue object;
+    MalProcChild process;
+    char *file;
+    bool spawn_emitted;
+    struct MalNodeChild *next;
+} MalNodeChild;
+
+static MalNodeChild *mal_node_children;
+
+static void mal_node_child_cleanup(MalVm *vm) {
+    MalNodeChild **link = &mal_node_children;
+    while (*link != nullptr) {
+        MalNodeChild *child = *link;
+        if (child->vm != vm) { link = &child->next; continue; }
+        *link = child->next;
+        mal_proc_detach(&child->process);
+        free(child->file);
+        free(child);
+    }
+}
+
+static void mal_node_child_scan_roots(MalVm *vm, void *data) {
+    (void) data;
+    for (MalNodeChild *child = mal_node_children; child != nullptr; child = child->next) {
+        if (child->vm == vm) mal_gc_mark_value(child->object);
+    }
+}
+
+static void mal_node_child_emit(MalVm *vm, MalValue object, const char *event,
+    const MalValue *args, i32 argc) {
+    MalValue roots[4] = {object, mal_value_new_undefined(), mal_value_new_undefined(),
+        mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    roots[1] = mal_ncp_string(vm, event);
+    for (i32 i = 0; i < argc && i < 2; i++) roots[i + 2] = args[i];
+    MalValue emit;
+    if (mal_vm_get_property(vm, roots[0], mal_ncp_name_key(vm, "emit"), &emit)) {
+        mal_vm_call_value(vm, emit, roots[0], roots + 1, argc + 1);
+    }
+    mal_gc_unroot(&root);
+}
+
+static MalValue mal_node_child_poll_task(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) self; (void) args; (void) argc; (void) nt;
+    MalValue object = mal_native_function_object_get_slot(mal_value_to_native_function_object(callee), 0);
+    MalNodeChild **link = &mal_node_children;
+    while (*link != nullptr && ((*link)->vm != vm || (*link)->object != object)) link = &(*link)->next;
+    if (*link == nullptr) return mal_value_new_undefined();
+    MalNodeChild *child = *link;
+    MalProcResult result;
+    bool finished = mal_proc_poll(&child->process, &result);
+    if (child->process.launched && !child->spawn_emitted) {
+        child->spawn_emitted = true;
+        mal_node_child_emit(vm, object, "spawn", nullptr, 0);
+    }
+    bool listener_threw = vm->completion.kind == MAL_COMPLETION_THROW;
+    if (!finished) {
+        if (!listener_threw) mal_host_set_timeout(vm, callee, 5, nullptr, 0);
+        return mal_value_new_undefined();
+    }
+    link = &mal_node_children;
+    while (*link != nullptr && *link != child) link = &(*link)->next;
+    if (*link == child) *link = child->next;
+    MalValue roots[] = {object, mal_value_new_undefined(), mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    if (listener_threw) goto child_done;
+    if (!result.launched || result.io_errno != 0) {
+        int error = result.launch_errno != 0 ? result.launch_errno : result.io_errno;
+        mal_ncp_throw_launch(vm, error, child->file, true);
+        roots[1] = vm->completion.value;
+        vm->completion = (MalCompletion) {.kind = MAL_COMPLETION_NORMAL,
+            .value = mal_value_new_undefined()};
+        mal_object_set(mal_value_to_object(object), mal_ncp_name_key(vm, "pid"),
+            mal_value_new_undefined());
+        mal_node_child_emit(vm, object, "error", roots + 1, 1);
+        if (vm->completion.kind != MAL_COMPLETION_THROW) {
+            roots[1] = mal_value_from_i32(-error);
+            roots[2] = mal_value_new_null();
+            mal_node_child_emit(vm, object, "close", roots + 1, 2);
+        }
+    } else {
+        roots[1] = result.exited ? mal_value_from_i32(result.exit_status) : mal_value_new_null();
+        const char *signal = result.signaled ? mal_proc_signal_name(result.term_signal) : nullptr;
+        roots[2] = signal != nullptr ? mal_ncp_string(vm, signal) : mal_value_new_null();
+        mal_object_set(mal_value_to_object(object), mal_ncp_name_key(vm, "exitCode"), roots[1]);
+        mal_object_set(mal_value_to_object(object), mal_ncp_name_key(vm, "signalCode"), roots[2]);
+        mal_node_child_emit(vm, object, "exit", roots + 1, 2);
+        if (vm->completion.kind != MAL_COMPLETION_THROW) {
+            mal_node_child_emit(vm, object, "close", roots + 1, 2);
+        }
+    }
+child_done:
+    free(child->file);
+    free(child);
+    mal_gc_unroot(&root);
+    return mal_value_new_undefined();
+}
+
+static MalValue mal_node_child_kill(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) nt; (void) callee;
+    int signal = SIGTERM;
+    if (argc > 0 && !mal_value_is_undefined(args[0])) {
+        if (mal_value_is_string(args[0])) {
+            byte *name = mal_ncp_to_cstr(vm, args[0], "signal");
+            if (name == nullptr) return mal_value_new_undefined();
+            signal = mal_host_signal_number_named((const char *) name);
+            free(name);
+            if (signal == 0) {
+                mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Unknown signal");
+                return mal_value_new_undefined();
+            }
+        } else if (mal_value_is_int32(args[0]) && mal_value_to_i32(args[0]) >= 0) {
+            signal = mal_value_to_i32(args[0]);
+        } else {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Invalid signal");
+            return mal_value_new_undefined();
+        }
+    }
+    for (MalNodeChild *child = mal_node_children; child != nullptr; child = child->next) {
+        if (child->vm == vm && child->object == self) {
+            bool killed = mal_proc_kill(&child->process, signal);
+            if (killed) mal_object_set(mal_value_to_object(self), mal_ncp_name_key(vm, "killed"),
+                mal_value_new_boolean(true));
+            return mal_value_new_boolean(killed);
+        }
+    }
+    return mal_value_new_boolean(false);
+}
+
+static MalValue mal_node_spawn_request(MalVm *vm, const MalProcRequest *request) {
+    MalNodeChild *child = calloc(1, sizeof(*child));
+    if (child == nullptr) {
+        mal_vm_throw_allocation_error(vm);
+        return mal_value_new_undefined();
+    }
+    if (!mal_vm_register_runtime_cleanup(vm, mal_node_child_cleanup)) {
+        free(child);
+        mal_vm_throw_allocation_error(vm);
+        return mal_value_new_undefined();
+    }
+    child->file = strdup(request->file);
+    if (child->file == nullptr) {
+        free(child);
+        mal_vm_throw_allocation_error(vm);
+        return mal_value_new_undefined();
+    }
+    mal_host_install_node_events(vm, nullptr, 0, nullptr);
+    MalValue roots[] = {
+        mal_value_from_object(mal_object_new(&vm->heap,
+            mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_NODE_EVENT_EMITTER_PROTOTYPE]))),
+        mal_value_new_undefined(),
+    };
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    child->vm = vm;
+    child->object = roots[0];
+    mal_proc_spawn(request, &child->process);
+    child->next = mal_node_children;
+    mal_node_children = child;
+    mal_gc_register_root_source(mal_node_child_scan_roots, nullptr);
+    MalObject *object = mal_value_to_object(roots[0]);
+    mal_intrinsic_define_data(vm, object, (const byte *) "pid",
+        child->process.pid > 0 ? mal_value_from_i32(child->process.pid) : mal_value_new_undefined(),
+        MAL_PROPERTY_ENUMERABLE);
+    mal_intrinsic_define_data(vm, object, (const byte *) "exitCode", mal_value_new_null(),
+        MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE);
+    mal_intrinsic_define_data(vm, object, (const byte *) "signalCode", mal_value_new_null(),
+        MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE);
+    mal_intrinsic_define_data(vm, object, (const byte *) "killed", mal_value_new_boolean(false),
+        MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE);
+    mal_intrinsic_define_method_n(vm, object, (const byte *) "kill", 1, mal_node_child_kill);
+    roots[1] = mal_value_from_native_function_object(mal_native_function_object_new_with_slots(
+        &vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
+        mal_intrinsic_ascii(vm, (const byte *) "childProcessPoll"), mal_node_child_poll_task, roots, 1));
+    mal_host_set_timeout(vm, roots[1], 0, nullptr, 0);
+    mal_gc_unroot(&root);
+    return roots[0];
+}
+
 /* ---------------------------------------------------------------------------
  * Installation.
  * --------------------------------------------------------------------------- */
@@ -564,24 +799,21 @@ void mal_host_install_node_child_process(
     MalVm *vm, const MalHostInstallSlot *slots, i32 count, const MalHostLaunchContext *launch
 ) {
     (void) launch;
-    MalObject *fn_proto = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]);
-    for (i32 i = 0; i < count; i++) {
-        if (strcmp(slots[i].name, "exec") == 0 ||
-			strcmp(slots[i].name, "execFile") == 0 ||
-            strcmp(slots[i].name, "spawn") == 0) {
-            const char *name = slots[i].name;
-            MalNativeFunctionObject *fn = mal_native_function_object_new_arity(
-                &vm->heap, fn_proto,
-                mal_intrinsic_ascii(vm, (const byte *) name), 3,
-                mal_node_async_child_process_unavailable);
-            vm->globals[slots[i].slot] = mal_value_from_native_function_object(fn);
-        } else if (strcmp(slots[i].name, "execFileSync") == 0) {
-            MalNativeFunctionObject *fn = mal_native_function_object_new_arity(
-                &vm->heap, fn_proto, mal_intrinsic_ascii(vm, (const byte *) "execFileSync"), 3, mal_node_exec_file_sync
-            );
-            vm->globals[slots[i].slot] = mal_value_from_native_function_object(fn);
-        }
+    if (mal_node_module_install_cached(vm, "node:child_process", slots, count)) return;
+    MalValue roots[2] = {mal_value_from_object(mal_intrinsic_new_object(vm)), mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, 2);
+    static const char *names[] = {"exec", "execFile", "spawn", "execFileSync"};
+    for (usize i = 0; i < countof(names); i++) {
+        roots[1] = mal_value_from_native_function_object(mal_native_function_object_new_arity(
+            &vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
+            mal_intrinsic_ascii(vm, (const byte *) names[i]), 3,
+            i == 3 ? mal_node_exec_file_sync : i == 2 ? mal_node_spawn : mal_node_async_child_process_unavailable));
+        mal_intrinsic_define_data(vm, mal_value_to_object(roots[0]), (const byte *) names[i], roots[1],
+            MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE);
     }
+    mal_node_module_publish(vm, "node:child_process", slots, count, roots[0]);
+    mal_gc_unroot(&root);
 }
 
 #endif /* MAL_NODE */

@@ -254,6 +254,33 @@ async function run() {
 			streamResponse.headers.get("content-type") === null &&
 			!streamResponse.bodyUsed,
 	);
+	const earlyStreamError = new Error("before reader");
+	const erroredStream = new ReadableStream({
+		start(controller) {
+			controller.error(earlyStreamError);
+		},
+	});
+	const erroredReader = erroredStream.getReader();
+	let earlyErrorPreserved = false;
+	try {
+		await erroredReader.read();
+	} catch (error) {
+		earlyErrorPreserved = error === earlyStreamError;
+	}
+	erroredReader.releaseLock();
+	check(
+		"pre-errored reader preserves error without duplicate rejection",
+		earlyErrorPreserved,
+	);
+	const disturbedStream = byteStream([1, 2]);
+	const disturbedResponse = new Response(disturbedStream);
+	const disturbedReader = disturbedStream.getReader();
+	await disturbedReader.read();
+	disturbedReader.releaseLock();
+	check(
+		"released disturbed BodyInit stream rejects consumption",
+		await rejectsTypeError(disturbedResponse.text()),
+	);
 	const streamingText = streamResponse.text();
 	check(
 		"streaming Body conversion disturbs and locks synchronously",

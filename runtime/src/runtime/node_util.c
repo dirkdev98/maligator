@@ -8,11 +8,13 @@
 #if MAL_NODE
 
 #include "array_object.h"
+#include "ascii.h"
 #include "array_buffer_object.h"
 #include "function_object.h"
 #include "gc.h"
 #include "heap_string.h"
 #include "intrinsics.h"
+#include "node_module.h"
 #include "iterator_object.h"
 #include "map_object.h"
 #include "set_object.h"
@@ -1866,6 +1868,142 @@ done:
     return value;
 }
 
+typedef struct MalUtilStyle {
+    const char *name;
+    const char *open;
+    const char *close;
+} MalUtilStyle;
+
+static const MalUtilStyle util_styles[] = {
+    {"reset", "\x1b[0m", "\x1b[0m"}, {"bold", "\x1b[1m", "\x1b[22m"},
+    {"dim", "\x1b[2m", "\x1b[22m"}, {"italic", "\x1b[3m", "\x1b[23m"},
+    {"underline", "\x1b[4m", "\x1b[24m"}, {"inverse", "\x1b[7m", "\x1b[27m"},
+    {"hidden", "\x1b[8m", "\x1b[28m"}, {"strikethrough", "\x1b[9m", "\x1b[29m"},
+    {"black", "\x1b[30m", "\x1b[39m"}, {"red", "\x1b[31m", "\x1b[39m"},
+    {"green", "\x1b[32m", "\x1b[39m"}, {"yellow", "\x1b[33m", "\x1b[39m"},
+    {"blue", "\x1b[34m", "\x1b[39m"}, {"magenta", "\x1b[35m", "\x1b[39m"},
+    {"cyan", "\x1b[36m", "\x1b[39m"}, {"white", "\x1b[37m", "\x1b[39m"},
+    {"gray", "\x1b[90m", "\x1b[39m"}, {"grey", "\x1b[90m", "\x1b[39m"},
+    {"blackBright", "\x1b[90m", "\x1b[39m"}, {"redBright", "\x1b[91m", "\x1b[39m"},
+    {"greenBright", "\x1b[92m", "\x1b[39m"}, {"yellowBright", "\x1b[93m", "\x1b[39m"},
+    {"blueBright", "\x1b[94m", "\x1b[39m"}, {"magentaBright", "\x1b[95m", "\x1b[39m"},
+    {"cyanBright", "\x1b[96m", "\x1b[39m"}, {"whiteBright", "\x1b[97m", "\x1b[39m"},
+    {"bgBlack", "\x1b[40m", "\x1b[49m"}, {"bgRed", "\x1b[41m", "\x1b[49m"},
+    {"bgGreen", "\x1b[42m", "\x1b[49m"}, {"bgYellow", "\x1b[43m", "\x1b[49m"},
+    {"bgBlue", "\x1b[44m", "\x1b[49m"}, {"bgMagenta", "\x1b[45m", "\x1b[49m"},
+    {"bgCyan", "\x1b[46m", "\x1b[49m"}, {"bgWhite", "\x1b[47m", "\x1b[49m"},
+    {"bgGray", "\x1b[100m", "\x1b[49m"}, {"bgGrey", "\x1b[100m", "\x1b[49m"},
+    {"bgRedBright", "\x1b[101m", "\x1b[49m"}, {"bgGreenBright", "\x1b[102m", "\x1b[49m"},
+    {"bgYellowBright", "\x1b[103m", "\x1b[49m"}, {"bgBlueBright", "\x1b[104m", "\x1b[49m"},
+    {"bgMagentaBright", "\x1b[105m", "\x1b[49m"}, {"bgCyanBright", "\x1b[106m", "\x1b[49m"},
+    {"bgWhiteBright", "\x1b[107m", "\x1b[49m"}, {"overline", "\x1b[53m", "\x1b[55m"},
+    {"doubleunderline", "\x1b[21m", "\x1b[24m"},
+};
+
+static bool util_style_ascii_at(MalString *text, usize offset, const char *ascii) {
+    usize length = strlen(ascii);
+    if (offset + length > text->length) return false;
+    for (usize i = 0; i < length; i++) {
+        if (mal_string_code_unit_at(text, offset + i) != (u8) ascii[i]) return false;
+    }
+    return true;
+}
+
+static MalValue util_style_env(MalVm *vm, const char *name) {
+    MalValue process = vm->intrinsics[MAL_INTRINSIC_NODE_PROCESS_MODULE];
+    MalValue env, value;
+    if (mal_value_is_object(process)
+        && mal_vm_get_property(vm, process, mal_intrinsic_string_key(vm, (const byte *) "env"), &env)
+        && mal_vm_get_property(vm, env, mal_intrinsic_string_key(vm, (const byte *) name), &value)) {
+        return value;
+    }
+    const char *native = getenv(name);
+    return native == nullptr ? mal_value_new_undefined()
+        : mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) native));
+}
+
+static MalValue util_style_text(MalVm *vm, MalValue self, const MalValue *args, i32 argc,
+    MalValue nt, MalValue callee) {
+    (void) self; (void) nt; (void) callee;
+    if (argc < 2 || !mal_value_is_string(args[1])) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "text must be a string");
+        return mal_value_new_undefined();
+    }
+    bool array = mal_value_is_array_object(args[0]);
+    u32 length = array ? mal_array_object_length(mal_value_to_array_object(args[0])) : 1;
+    const MalUtilStyle **styles = length > 0 ? malloc((usize) length * sizeof(*styles)) : nullptr;
+    if (length > 0 && styles == nullptr) { mal_vm_throw_allocation_error(vm); return mal_value_new_undefined(); }
+    MalValue result = mal_value_new_undefined();
+    for (u32 i = 0; i < length; i++) {
+        MalValue format = args[0];
+        if (array && !mal_vm_get_property(vm, args[0], mal_key_index(i), &format)) goto done;
+        styles[i] = nullptr;
+        if (mal_value_is_string(format)) {
+            for (usize j = 0; j < countof(util_styles); j++) {
+                if (mal_string_equals_ascii(mal_value_to_string(format), (const byte *) util_styles[j].name)) {
+                    styles[i] = &util_styles[j]; break;
+                }
+            }
+        }
+        if (styles[i] == nullptr) {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Unknown text style");
+            goto done;
+        }
+    }
+    bool color = false;
+    bool validate = true;
+    MalValue options = argc > 2 ? args[2] : mal_value_new_undefined();
+    MalValue stream, value;
+    if (mal_value_is_object(options)) {
+        if (!mal_vm_get_property(vm, options, mal_intrinsic_string_key(vm, (const byte *) "validateStream"), &value)) goto done;
+        validate = !mal_value_is_boolean(value) || mal_value_to_boolean(value);
+        if (!mal_vm_get_property(vm, options, mal_intrinsic_string_key(vm, (const byte *) "stream"), &stream)) goto done;
+    } else stream = mal_value_new_undefined();
+    if (mal_value_is_undefined(stream)) {
+        MalValue process = vm->intrinsics[MAL_INTRINSIC_NODE_PROCESS_MODULE];
+        if (mal_value_is_object(process) && !mal_vm_get_property(vm, process,
+                mal_intrinsic_string_key(vm, (const byte *) "stdout"), &stream)) goto done;
+    }
+    if (!validate) color = true;
+    else {
+        if (mal_value_is_object(stream)) {
+            if (!mal_vm_get_property(vm, stream, mal_intrinsic_string_key(vm, (const byte *) "isTTY"), &value)) goto done;
+            color = mal_value_is_truthy(value);
+        }
+        value = util_style_env(vm, "NO_COLOR");
+        if (!mal_value_is_undefined(value)) color = false;
+        value = util_style_env(vm, "NODE_DISABLE_COLORS");
+        if (!mal_value_is_undefined(value)) color = false;
+        value = util_style_env(vm, "FORCE_COLOR");
+        if (!mal_value_is_undefined(value)) {
+            color = !(mal_value_is_string(value)
+                && mal_string_equals_ascii(mal_value_to_string(value), (const byte *) "0"));
+        }
+        if (vm->completion.kind == MAL_COMPLETION_THROW) goto done;
+    }
+    if (!color || length == 0) { result = args[1]; goto done; }
+    MalUtilBuilder builder = {0};
+    for (u32 i = 0; i < length; i++) util_builder_ascii(&builder, styles[i]->open);
+    MalString *text = mal_value_to_string(args[1]);
+    for (usize at = 0; at < text->length;) {
+        bool reopened = false;
+        for (u32 i = 0; i < length; i++) {
+            if (util_style_ascii_at(text, at, styles[i]->close)) {
+                util_builder_ascii(&builder, styles[i]->open);
+                at += strlen(styles[i]->close);
+                reopened = true;
+                break;
+            }
+        }
+        if (!reopened) util_builder_code_unit(&builder, mal_string_code_unit_at(text, at++));
+    }
+    for (u32 i = length; i > 0; i--) util_builder_ascii(&builder, styles[i - 1]->close);
+    result = util_builder_finish(vm, &builder);
+ done:
+    free(styles);
+    return result;
+}
+
 typedef struct MalNodeUtilExport {
     const char *name;
     i32 length;
@@ -1893,11 +2031,13 @@ static const MalNodeUtilExport util_exports[] = {
     {"parseArgs", 0, util_parse_args},
     {"parseEnv", 1, util_parse_env},
     {"promisify", 1, util_promisify},
+    {"styleText", 2, util_style_text},
 };
 
 void mal_host_install_node_util(
     MalVm *vm, const MalHostInstallSlot *slots, i32 count,
     const MalHostLaunchContext *launch) {
+    if (mal_node_module_install_cached(vm, "node:util", slots, count)) return;
     (void) launch;
     const usize types_index = countof(util_exports);
     const usize namespace_index = types_index + 1;
@@ -1941,23 +2081,7 @@ void mal_host_install_node_util(
 	mal_intrinsic_define_data(vm, namespace,
 		(const byte *) "types", values[types_index], UTIL_VISIBLE);
 
-    for (i32 slot = 0; slot < count; slot++) {
-        MalValue value = mal_value_new_undefined();
-        for (usize i = 0; i < countof(util_exports); i++) {
-            if (strcmp(slots[slot].name, util_exports[i].name) == 0) {
-                value = values[i];
-                break;
-            }
-        }
-        if (strcmp(slots[slot].name, "default") == 0) {
-			value = values[namespace_index];
-		} else if (strcmp(slots[slot].name, "types") == 0) {
-			value = values[types_index];
-        }
-        if (!mal_value_is_undefined(value)) {
-            vm->globals[slots[slot].slot] = value;
-        }
-    }
+    mal_node_module_publish(vm, "node:util", slots, count, values[namespace_index]);
     mal_gc_unroot(&root);
 }
 

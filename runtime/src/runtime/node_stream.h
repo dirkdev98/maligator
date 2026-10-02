@@ -22,3 +22,7 @@ void mal_host_install_node_stream_promises(
 
 /* Complete a host-backed readable after its final queued chunk was delivered. */
 void mal_node_stream_end_readable(MalVm *vm, MalValue receiver);
+
+// Host producers stop at readable capacity and resume through their _read hook.
+i32 mal_node_stream_readable_capacity(MalVm *vm, MalValue receiver);
+bool mal_node_stream_push_chunk(MalVm *vm, MalValue receiver, MalValue chunk);

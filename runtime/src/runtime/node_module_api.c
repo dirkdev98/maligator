@@ -136,6 +136,7 @@ static MalValue node_module_create_require(
 void mal_host_install_node_module(
     MalVm *vm, const MalHostInstallSlot *slots, i32 count,
     const MalHostLaunchContext *launch) {
+    if (mal_node_module_install_cached(vm, "node:module", slots, count)) return;
     (void) launch;
     MalValue module = vm->intrinsics[MAL_INTRINSIC_NODE_MODULE_API_MODULE];
     if (mal_value_is_undefined(module)) {
@@ -178,7 +179,7 @@ void mal_host_install_node_module(
         vm->intrinsics[MAL_INTRINSIC_NODE_MODULE_API_MODULE] = roots[0];
         mal_gc_unroot(&root);
     }
-    mal_node_module_publish(vm, slots, count, module);
+    mal_node_module_publish(vm, "node:module", slots, count, module);
 }
 
 #endif /* MAL_NODE */

@@ -19,6 +19,7 @@
 #include "heap_bigint.h"
 #include "hex.h"
 #include "intrinsics.h"
+#include "node_module.h"
 #include "object.h"
 #include "object_ops.h"
 #include "scalar_bits.h"
@@ -1574,19 +1575,7 @@ static void mal_buffer_install_exports(
         vm->intrinsics[MAL_INTRINSIC_GLOBAL_THIS]);
     mal_intrinsic_define_data(vm, global_this, "Buffer", constructor,
                               MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
-    for (i32 i = 0; i < count; i++) {
-        if (strcmp(slots[i].name, "Buffer") == 0) {
-            vm->globals[slots[i].slot] = constructor;
-        } else if (strcmp(slots[i].name, "default") == 0) {
-            vm->globals[slots[i].slot] = module_default;
-        } else if (strcmp(slots[i].name, "constants") == 0) {
-            MalValue constants;
-            if (mal_vm_get_property(vm, module_default,
-                    mal_intrinsic_string_key(vm, "constants"), &constants)) {
-                vm->globals[slots[i].slot] = constants;
-            }
-        }
-    }
+    mal_node_module_publish(vm, "node:buffer", slots, count, module_default);
 }
 
 void mal_host_install_node_buffer(

@@ -1,4 +1,5 @@
 #include "node_http2.h"
+#include "node_module.h"
 
 #if MAL_NODE
 
@@ -27,6 +28,7 @@ void mal_host_install_node_http2(
     MalVm *vm, const MalHostInstallSlot *slots, i32 count,
     const MalHostLaunchContext *launch) {
     (void) launch;
+    if (mal_node_module_install_cached(vm, "node:http2", slots, count)) return;
     MalValue roots[] = {
         mal_value_from_object(mal_intrinsic_new_object(vm)),
         mal_value_new_undefined(),
@@ -42,13 +44,7 @@ void mal_host_install_node_http2(
     mal_intrinsic_define_data(vm, mal_value_to_object(roots[0]),
         (const byte *) "connect", roots[1],
         MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE);
-    for (i32 i = 0; i < count; i++) {
-        if (strcmp(slots[i].name, "default") == 0) {
-            vm->globals[slots[i].slot] = roots[0];
-        } else if (strcmp(slots[i].name, "connect") == 0) {
-            vm->globals[slots[i].slot] = roots[1];
-        }
-    }
+    mal_node_module_publish(vm, "node:http2", slots, count, roots[0]);
     mal_gc_unroot(&root);
 }
 

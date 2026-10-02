@@ -35,7 +35,7 @@ typedef enum MalHttpClientWriteResult {
     MAL_HTTP_CLIENT_WRITE_CLOSED,
 } MalHttpClientWriteResult;
 
-/* Start one streamed HTTP/1.1 request to a numeric IPv4 address. The host takes
+/* Start one streamed HTTP/1.1 request; secure transport verifies the hostname. The host takes
  * ownership of request_head on success. A negative content length selects chunked
  * framing; nonnegative lengths are validated across accepted writes.
  *
@@ -45,6 +45,7 @@ bool mal_http_client_start(
     MalHost *host,
     const char *host_name,
     u16 port,
+    bool secure,
     byte *request_head,
     usize request_head_len,
     i64 content_length,
@@ -75,3 +76,6 @@ void mal_http_client_shutdown(MalHost *host);
 
 void mal_http_client_result_free(void *data);
 void mal_http_client_progress_free(void *data);
+
+/* Consume DNS terminals, including cancelled lookups whose transport is gone. */
+bool mal_http_client_drain_dns(MalHost *host);

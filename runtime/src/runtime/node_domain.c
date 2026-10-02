@@ -1,4 +1,5 @@
 #include "node_domain.h"
+#include "node_module.h"
 
 #if MAL_NODE
 
@@ -27,6 +28,7 @@ void mal_host_install_node_domain(
     MalVm *vm, const MalHostInstallSlot *slots, i32 count,
     const MalHostLaunchContext *launch) {
     (void) launch;
+    if (mal_node_module_install_cached(vm, "node:domain", slots, count)) return;
     MalValue roots[] = {
         mal_value_from_object(mal_intrinsic_new_object(vm)),
         mal_value_new_undefined(),
@@ -47,18 +49,7 @@ void mal_host_install_node_domain(
             (const byte *) names[i], values[i],
             MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE);
     }
-    for (i32 i = 0; i < count; i++) {
-        if (strcmp(slots[i].name, "default") == 0) {
-            vm->globals[slots[i].slot] = roots[0];
-            continue;
-        }
-        for (usize j = 0; j < countof(names); j++) {
-            if (strcmp(slots[i].name, names[j]) == 0) {
-                vm->globals[slots[i].slot] = values[j];
-                break;
-            }
-        }
-    }
+    mal_node_module_publish(vm, "node:domain", slots, count, roots[0]);
     mal_gc_unroot(&root);
 }
 

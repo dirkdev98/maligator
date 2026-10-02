@@ -509,6 +509,7 @@ static void rs_error_stream(
     if (reader == nullptr) {
         return;
     }
+    mal_value_to_promise_object(reader->as.reader.closed_promise)->is_handled = true;
     mal_promise_reject(vm, mal_value_to_promise_object(reader->as.reader.closed_promise), error);
     while (reader->as.reader.requests_head != nullptr) {
         MalReadableStreamReadRequest *request = reader->as.reader.requests_head;
@@ -1199,6 +1200,7 @@ static MalReadableStreamObject *rs_acquire_reader_kind(MalVm *vm,
         mal_promise_fulfill(
             vm, mal_value_to_promise_object(roots[2]), mal_value_new_undefined());
     } else if (stream->as.stream.state == MAL_READABLE_STREAM_ERRORED) {
+        mal_value_to_promise_object(roots[2])->is_handled = true;
         mal_promise_reject(vm, mal_value_to_promise_object(roots[2]),
             stream->as.stream.stored_error);
     }

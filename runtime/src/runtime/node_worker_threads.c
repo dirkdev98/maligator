@@ -49,6 +49,7 @@ static MalValue node_worker_threads_mark_uncloneable(
 void mal_host_install_node_worker_threads(
     MalVm *vm, const MalHostInstallSlot *slots, i32 count,
     const MalHostLaunchContext *launch) {
+    if (mal_node_module_install_cached(vm, "node:worker_threads", slots, count)) return;
     (void) launch;
     MalValue module = vm->intrinsics[MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE];
     if (mal_value_is_undefined(module)) {
@@ -101,7 +102,7 @@ void mal_host_install_node_worker_threads(
         vm->intrinsics[MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE] = module;
         mal_gc_unroot(&root);
     }
-    mal_node_module_publish(vm, slots, count, module);
+    mal_node_module_publish(vm, "node:worker_threads", slots, count, module);
 }
 
 #endif /* MAL_NODE */

@@ -1,4 +1,5 @@
 #include "node_cluster.h"
+#include "node_module.h"
 
 #if MAL_NODE
 
@@ -41,6 +42,7 @@ void mal_host_install_node_cluster(
     MalVm *vm, const MalHostInstallSlot *slots, i32 count,
     const MalHostLaunchContext *launch) {
     (void) launch;
+    if (mal_node_module_install_cached(vm, "node:cluster", slots, count)) return;
     MalValue roots[] = {
         mal_value_from_object(mal_intrinsic_new_object(vm)),
         mal_value_new_undefined(),
@@ -79,18 +81,7 @@ void mal_host_install_node_cluster(
         mal_intrinsic_define_data(vm, mal_value_to_object(roots[0]),
             (const byte *) names[i], values[i], CLUSTER_VISIBLE);
     }
-    for (i32 i = 0; i < count; i++) {
-        if (strcmp(slots[i].name, "default") == 0) {
-            vm->globals[slots[i].slot] = roots[0];
-            continue;
-        }
-        for (usize j = 0; j < countof(names); j++) {
-            if (strcmp(slots[i].name, names[j]) == 0) {
-                vm->globals[slots[i].slot] = values[j];
-                break;
-            }
-        }
-    }
+    mal_node_module_publish(vm, "node:cluster", slots, count, roots[0]);
     mal_gc_unroot(&root);
 }
 

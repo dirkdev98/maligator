@@ -17,3 +17,6 @@ tests/native/node-process-events.test.ts
 tests/native/node-tls.test.ts
 tests/native/postgres-auth.test.ts
 tests/native/server.test.ts
+
+tests/native/upm-fetch-compatibility.test.ts
+tests/native/upm-https-compatibility.test.ts

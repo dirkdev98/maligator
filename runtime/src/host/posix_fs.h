@@ -162,6 +162,8 @@ void mal_posix_fs_free_dirents(MalPosixDirent *entries, usize count);
  * missing parent and treat an already-existing directory as success (mkdir -p /
  * fs.mkdirSync({recursive:true})). Returns 0 or an errno. */
 int mal_posix_fs_mkdir(const char *path, bool recursive);
+int mal_posix_fs_rmdir(const char *path);
+int mal_posix_fs_sleep_milliseconds(i64 milliseconds);
 
 /* The additional synchronous operations used by native compiler caches. String
  * results are malloc-owned and must be freed by the caller. */

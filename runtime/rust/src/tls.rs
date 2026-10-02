@@ -63,6 +63,7 @@ impl ServerCertVerifier for NoCertificateVerification {
 
 pub struct MalTlsClient {
     connection: ClientConnection,
+    peer_closed: bool,
 }
 
 struct BoundedWriter<'a> {
@@ -174,7 +175,12 @@ pub unsafe extern "C" fn mal_tls_client_create(
     let Ok(connection) = ClientConnection::new(Arc::new(config), server_name) else {
         return MAL_TLS_STATUS_ERROR;
     };
-    unsafe { *out_handle = Box::into_raw(Box::new(MalTlsClient { connection })) };
+    unsafe {
+        *out_handle = Box::into_raw(Box::new(MalTlsClient {
+            connection,
+            peer_closed: false,
+        }))
+    };
     MAL_TLS_STATUS_OK
 }
 
@@ -201,8 +207,9 @@ pub unsafe extern "C" fn mal_tls_client_read_ciphertext(
         return MAL_TLS_STATUS_ERROR;
     }
     unsafe { *consumed = cursor.position() as usize };
-    if client.connection.process_new_packets().is_err() {
-        return MAL_TLS_STATUS_ERROR;
+    match client.connection.process_new_packets() {
+        Ok(state) => client.peer_closed = state.peer_has_closed(),
+        Err(_) => return MAL_TLS_STATUS_ERROR,
     }
     MAL_TLS_STATUS_OK
 }
@@ -292,6 +299,16 @@ pub unsafe extern "C" fn mal_tls_client_write_ciphertext(
         }
         Err(_) => MAL_TLS_STATUS_ERROR,
     }
+}
+
+#[no_mangle]
+/// # Safety
+/// `handle` is null or a live TLS client handle borrowed for this call.
+pub unsafe extern "C" fn mal_tls_client_peer_closed(handle: *const MalTlsClient) -> i32 {
+    if handle.is_null() {
+        return 0;
+    }
+    i32::from(unsafe { &*handle }.peer_closed)
 }
 
 #[no_mangle]

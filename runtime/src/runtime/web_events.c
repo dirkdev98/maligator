@@ -995,7 +995,8 @@ static MalValue abort_signal_static_timeout(
     MalNativeFunctionObject *cb = mal_native_function_object_new_with_slots(
         &vm->heap, fn_proto, mal_intrinsic_ascii(vm, (const byte *) ""), abort_signal_timeout_fire,
         &signal, 1);
-    mal_host_set_timeout(vm, mal_value_from_native_function_object(cb), ms, nullptr, 0);
+    i64 timer = mal_host_set_timeout(vm, mal_value_from_native_function_object(cb), ms, nullptr, 0);
+    if (mal_host_timers_are_node(vm)) mal_host_timer_set_referenced(vm, timer, false);
     mal_gc_unroot(&rs);
     return signal;
 }

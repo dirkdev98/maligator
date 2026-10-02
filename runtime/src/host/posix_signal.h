@@ -25,11 +25,15 @@
 typedef enum MalHostSignal {
     MAL_HOST_SIGNAL_INT,
     MAL_HOST_SIGNAL_TERM,
+    MAL_HOST_SIGNAL_HUP,
     MAL_HOST_SIGNAL_COUNT,
 } MalHostSignal;
 
 /** The Node-visible name of a bridged signal ("SIGINT" / "SIGTERM"). */
 const char *mal_host_signal_name(MalHostSignal signal);
+const char *mal_host_signal_constant_name(i32 index);
+int mal_host_signal_constant_number(i32 index);
+int mal_host_signal_number_named(const char *name);
 
 /** Map a Node signal name to its slot; false for a signal this host cannot bridge. */
 bool mal_host_signal_lookup(const char *name, MalHostSignal *out);

@@ -1,4 +1,5 @@
 #include "node_sqlite.h"
+#include "node_module.h"
 
 #if MAL_NODE
 
@@ -877,21 +878,6 @@ static MalValue sqlite_statement_set_read_bigints(
     return mal_value_new_undefined();
 }
 
-static void sqlite_install_exports(
-    MalVm *vm, const MalHostInstallSlot *slots, i32 count,
-    MalValue module, MalValue database_constructor,
-    MalValue statement_constructor) {
-    for (i32 i = 0; i < count; i++) {
-        if (strcmp(slots[i].name, "default") == 0) {
-            vm->globals[slots[i].slot] = module;
-        } else if (strcmp(slots[i].name, "DatabaseSync") == 0) {
-            vm->globals[slots[i].slot] = database_constructor;
-        } else if (strcmp(slots[i].name, "StatementSync") == 0) {
-            vm->globals[slots[i].slot] = statement_constructor;
-        }
-    }
-}
-
 static MalValue sqlite_constructor(
     MalVm *vm, const char *name, i32 length,
     MalNativeFunctionCallback callback, MalValue prototype) {
@@ -917,17 +903,7 @@ void mal_host_install_node_sqlite(
     MalVm *vm, const MalHostInstallSlot *slots, i32 count,
     const MalHostLaunchContext *launch) {
     (void) launch;
-    MalValue cached =
-        vm->intrinsics[MAL_INTRINSIC_NODE_SQLITE_MODULE];
-    if (!mal_value_is_undefined(cached)) {
-        sqlite_install_exports(
-            vm, slots, count, cached,
-            vm->intrinsics[
-                MAL_INTRINSIC_NODE_SQLITE_DATABASE_CONSTRUCTOR],
-            vm->intrinsics[
-                MAL_INTRINSIC_NODE_SQLITE_STATEMENT_CONSTRUCTOR]);
-        return;
-    }
+    if (mal_node_module_install_cached(vm, "node:sqlite", slots, count)) return;
     mal_gc_register_finalizer(
         MAL_HEAP_NODE_SQLITE_DATABASE_OBJECT,
         sqlite_database_finalize);
@@ -1024,8 +1000,7 @@ void mal_host_install_node_sqlite(
     vm->intrinsics[MAL_INTRINSIC_NODE_SQLITE_STATEMENT_CONSTRUCTOR] =
         roots[3];
     vm->intrinsics[MAL_INTRINSIC_NODE_SQLITE_MODULE] = roots[4];
-    sqlite_install_exports(
-        vm, slots, count, roots[4], roots[2], roots[3]);
+    mal_node_module_publish(vm, "node:sqlite", slots, count, roots[4]);
     mal_gc_unroot(&root);
 }
 

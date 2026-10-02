@@ -35,6 +35,7 @@ typedef struct MalHost {
     struct MalNodeHttpRequestState *ready_http_requests_tail;
     usize pending_http_completions;
     i64 timer_next_id;
+    bool node_timers;
 
     /** Runtime-owned external assets installed for in-process development tests. */
     void *development_assets;

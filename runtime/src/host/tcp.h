@@ -6,6 +6,7 @@
 #include <sys/socket.h>
 
 typedef struct MalHost MalHost;
+typedef struct MalTlsClient MalTlsClient;
 
 typedef enum MalTcpProgressKind {
     MAL_TCP_CONNECTED = 1,
@@ -50,3 +51,9 @@ bool mal_tcp_start_tls(
     const byte *alpn, usize alpn_length, bool insecure);
 bool mal_tcp_cancel(MalHost *host, MalHostHandle operation);
 void mal_tcp_shutdown(MalHost *host);
+
+/* An explicit CA replaces defaults; otherwise use host roots plus NODE_EXTRA_CA_CERTS. */
+int mal_tcp_tls_create_client(
+    const byte *server_name, usize server_name_length,
+    const byte *ca_pem, usize ca_pem_length,
+    const byte *alpn, usize alpn_length, bool insecure, MalTlsClient **out);

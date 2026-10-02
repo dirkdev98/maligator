@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <unistd.h>
 
 #include "ascii.h"
 #include "array_buffer_object.h"
@@ -1354,6 +1355,18 @@ void mal_text_encoding_globals_install(MalVm *vm, MalObject *global_this) {
         MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
 }
 
+void mal_navigator_global_install(MalVm *vm, MalObject *global_this) {
+    long processors = sysconf(_SC_NPROCESSORS_ONLN);
+    MalValue value = mal_value_from_object(mal_intrinsic_new_object(vm));
+    MalRootSpan root;
+    mal_gc_root(&root, &value, 1);
+    mal_intrinsic_define_data(vm, mal_value_to_object(value), (const byte *) "hardwareConcurrency",
+        mal_value_from_f64(processors > 0 ? (f64) processors : 1), MAL_PROPERTY_ENUMERABLE);
+    mal_intrinsic_define_data(vm, global_this, (const byte *) "navigator", value,
+        MAL_PROPERTY_CONFIGURABLE);
+    mal_gc_unroot(&root);
+}
+
 void mal_web_globals_install(MalVm *vm, MalObject *global_this) {
     mal_web_mono_base_ns = mal_monotonic_now_ns();
     struct timespec rt;
@@ -1361,6 +1374,7 @@ void mal_web_globals_install(MalVm *vm, MalObject *global_this) {
     mal_web_time_origin_ms = (f64) rt.tv_sec * 1000.0 + (f64) rt.tv_nsec / 1.0e6;
 
     mal_text_encoding_globals_install(vm, global_this);
+    mal_navigator_global_install(vm, global_this);
 
     // btoa / atob.
     mal_intrinsic_define_method_n(vm, global_this, (const byte *) "btoa", 1, mal_web_btoa);

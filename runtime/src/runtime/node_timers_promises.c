@@ -8,6 +8,7 @@
 #include "gc.h"
 #include "intrinsics.h"
 #include "object.h"
+#include "node_module.h"
 #include "promise_object.h"
 #include "value_ops.h"
 #include "web_host_timer.h"
@@ -65,10 +66,11 @@ static MalValue node_timers_promises_set_timeout(
 void mal_host_install_node_timers_promises(
     MalVm *vm, const MalHostInstallSlot *slots, i32 count,
     const MalHostLaunchContext *launch) {
+    if (mal_node_module_install_cached(vm, "node:timers/promises", slots, count)) return;
     (void) launch;
     MalObject *global_this = mal_value_to_object(
         vm->intrinsics[MAL_INTRINSIC_GLOBAL_THIS]);
-    mal_host_timers_install(vm, global_this);
+    mal_host_timers_install_node(vm, global_this);
 
     MalValue roots[] = {
         mal_value_from_object(mal_intrinsic_new_object(vm)),
@@ -84,13 +86,7 @@ void mal_host_install_node_timers_promises(
     mal_intrinsic_define_data(vm, mal_value_to_object(roots[0]),
         (const byte *) "setTimeout", roots[1],
         MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE);
-    for (i32 i = 0; i < count; i++) {
-        if (strcmp(slots[i].name, "default") == 0) {
-            vm->globals[slots[i].slot] = roots[0];
-        } else if (strcmp(slots[i].name, "setTimeout") == 0) {
-            vm->globals[slots[i].slot] = roots[1];
-        }
-    }
+    mal_node_module_publish(vm, "node:timers/promises", slots, count, roots[0]);
     mal_gc_unroot(&root);
 }
 

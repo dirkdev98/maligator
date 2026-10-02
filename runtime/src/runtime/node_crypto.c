@@ -586,9 +586,123 @@ static bool crypto_byte_source_span(
     return mal_node_crypto_byte_span(vm, value, out);
 }
 
+typedef struct {
+    u64 state[8];
+    u64 bit_low;
+    u64 bit_high;
+    u8 block[128];
+    usize block_len;
+} MalSha512;
+
+static const u64 MAL_SHA512_K[80] = {
+    UINT64_C(0x428a2f98d728ae22), UINT64_C(0x7137449123ef65cd), UINT64_C(0xb5c0fbcfec4d3b2f), UINT64_C(0xe9b5dba58189dbbc),
+    UINT64_C(0x3956c25bf348b538), UINT64_C(0x59f111f1b605d019), UINT64_C(0x923f82a4af194f9b), UINT64_C(0xab1c5ed5da6d8118),
+    UINT64_C(0xd807aa98a3030242), UINT64_C(0x12835b0145706fbe), UINT64_C(0x243185be4ee4b28c), UINT64_C(0x550c7dc3d5ffb4e2),
+    UINT64_C(0x72be5d74f27b896f), UINT64_C(0x80deb1fe3b1696b1), UINT64_C(0x9bdc06a725c71235), UINT64_C(0xc19bf174cf692694),
+    UINT64_C(0xe49b69c19ef14ad2), UINT64_C(0xefbe4786384f25e3), UINT64_C(0x0fc19dc68b8cd5b5), UINT64_C(0x240ca1cc77ac9c65),
+    UINT64_C(0x2de92c6f592b0275), UINT64_C(0x4a7484aa6ea6e483), UINT64_C(0x5cb0a9dcbd41fbd4), UINT64_C(0x76f988da831153b5),
+    UINT64_C(0x983e5152ee66dfab), UINT64_C(0xa831c66d2db43210), UINT64_C(0xb00327c898fb213f), UINT64_C(0xbf597fc7beef0ee4),
+    UINT64_C(0xc6e00bf33da88fc2), UINT64_C(0xd5a79147930aa725), UINT64_C(0x06ca6351e003826f), UINT64_C(0x142929670a0e6e70),
+    UINT64_C(0x27b70a8546d22ffc), UINT64_C(0x2e1b21385c26c926), UINT64_C(0x4d2c6dfc5ac42aed), UINT64_C(0x53380d139d95b3df),
+    UINT64_C(0x650a73548baf63de), UINT64_C(0x766a0abb3c77b2a8), UINT64_C(0x81c2c92e47edaee6), UINT64_C(0x92722c851482353b),
+    UINT64_C(0xa2bfe8a14cf10364), UINT64_C(0xa81a664bbc423001), UINT64_C(0xc24b8b70d0f89791), UINT64_C(0xc76c51a30654be30),
+    UINT64_C(0xd192e819d6ef5218), UINT64_C(0xd69906245565a910), UINT64_C(0xf40e35855771202a), UINT64_C(0x106aa07032bbd1b8),
+    UINT64_C(0x19a4c116b8d2d0c8), UINT64_C(0x1e376c085141ab53), UINT64_C(0x2748774cdf8eeb99), UINT64_C(0x34b0bcb5e19b48a8),
+    UINT64_C(0x391c0cb3c5c95a63), UINT64_C(0x4ed8aa4ae3418acb), UINT64_C(0x5b9cca4f7763e373), UINT64_C(0x682e6ff3d6b2b8a3),
+    UINT64_C(0x748f82ee5defb2fc), UINT64_C(0x78a5636f43172f60), UINT64_C(0x84c87814a1f0ab72), UINT64_C(0x8cc702081a6439ec),
+    UINT64_C(0x90befffa23631e28), UINT64_C(0xa4506cebde82bde9), UINT64_C(0xbef9a3f7b2c67915), UINT64_C(0xc67178f2e372532b),
+    UINT64_C(0xca273eceea26619c), UINT64_C(0xd186b8c721c0c207), UINT64_C(0xeada7dd6cde0eb1e), UINT64_C(0xf57d4f7fee6ed178),
+    UINT64_C(0x06f067aa72176fba), UINT64_C(0x0a637dc5a2c898a6), UINT64_C(0x113f9804bef90dae), UINT64_C(0x1b710b35131c471b),
+    UINT64_C(0x28db77f523047d84), UINT64_C(0x32caab7b40c72493), UINT64_C(0x3c9ebe0a15c9bebc), UINT64_C(0x431d67c49c100d4c),
+    UINT64_C(0x4cc5d4becb3e42b6), UINT64_C(0x597f299cfc657e2a), UINT64_C(0x5fcb6fab3ad6faec), UINT64_C(0x6c44198c4a475817),
+};
+
+static u64 mal_sha512_rotr(u64 value, unsigned count) {
+    return (value >> count) | (value << (64 - count));
+}
+
+static void mal_sha512_init(MalSha512 *ctx, bool sha384) {
+    static const u64 initial[2][8] = {
+        {UINT64_C(0x6a09e667f3bcc908), UINT64_C(0xbb67ae8584caa73b),
+         UINT64_C(0x3c6ef372fe94f82b), UINT64_C(0xa54ff53a5f1d36f1),
+         UINT64_C(0x510e527fade682d1), UINT64_C(0x9b05688c2b3e6c1f),
+         UINT64_C(0x1f83d9abfb41bd6b), UINT64_C(0x5be0cd19137e2179)},
+        {UINT64_C(0xcbbb9d5dc1059ed8), UINT64_C(0x629a292a367cd507),
+         UINT64_C(0x9159015a3070dd17), UINT64_C(0x152fecd8f70e5939),
+         UINT64_C(0x67332667ffc00b31), UINT64_C(0x8eb44a8768581511),
+         UINT64_C(0xdb0c2e0d64f98fa7), UINT64_C(0x47b5481dbefa4fa4)},
+    };
+    memset(ctx, 0, sizeof(*ctx));
+    memcpy(ctx->state, initial[sha384 ? 1 : 0], sizeof(ctx->state));
+}
+
+static void mal_sha512_compress(MalSha512 *ctx, const u8 *data) {
+    u64 w[80];
+    for (usize i = 0; i < 16; i++) {
+        w[i] = 0;
+        for (usize j = 0; j < 8; j++) w[i] = (w[i] << 8) | data[i * 8 + j];
+    }
+    for (usize i = 16; i < 80; i++) {
+        u64 a = w[i - 15], b = w[i - 2];
+        w[i] = w[i - 16] + (mal_sha512_rotr(a, 1) ^ mal_sha512_rotr(a, 8) ^ (a >> 7))
+            + w[i - 7] + (mal_sha512_rotr(b, 19) ^ mal_sha512_rotr(b, 61) ^ (b >> 6));
+    }
+    u64 a = ctx->state[0], b = ctx->state[1], c = ctx->state[2], d = ctx->state[3];
+    u64 e = ctx->state[4], f = ctx->state[5], g = ctx->state[6], h = ctx->state[7];
+    for (usize i = 0; i < 80; i++) {
+        u64 t1 = h + (mal_sha512_rotr(e, 14) ^ mal_sha512_rotr(e, 18) ^ mal_sha512_rotr(e, 41))
+            + ((e & f) ^ (~e & g)) + MAL_SHA512_K[i] + w[i];
+        u64 t2 = (mal_sha512_rotr(a, 28) ^ mal_sha512_rotr(a, 34) ^ mal_sha512_rotr(a, 39))
+            + ((a & b) ^ (a & c) ^ (b & c));
+        h = g; g = f; f = e; e = d + t1; d = c; c = b; b = a; a = t1 + t2;
+    }
+    ctx->state[0] += a; ctx->state[1] += b; ctx->state[2] += c; ctx->state[3] += d;
+    ctx->state[4] += e; ctx->state[5] += f; ctx->state[6] += g; ctx->state[7] += h;
+}
+
+static void mal_sha512_update(MalSha512 *ctx, const u8 *data, usize length) {
+    u64 before = ctx->bit_low;
+    ctx->bit_low += (u64) length << 3;
+    ctx->bit_high += ((u64) length >> 61) + (ctx->bit_low < before);
+    if (ctx->block_len > 0) {
+        usize take = length < 128 - ctx->block_len ? length : 128 - ctx->block_len;
+        if (take > 0) memcpy(ctx->block + ctx->block_len, data, take);
+        ctx->block_len += take;
+        data += take; length -= take;
+        if (ctx->block_len < 128) return;
+        mal_sha512_compress(ctx, ctx->block);
+        ctx->block_len = 0;
+    }
+    while (length >= 128) {
+        mal_sha512_compress(ctx, data);
+        data += 128; length -= 128;
+    }
+    if (length > 0) memcpy(ctx->block, data, length);
+    ctx->block_len = length;
+}
+
+static void mal_sha512_final(MalSha512 *ctx, u8 *out, usize length) {
+    usize filled = ctx->block_len;
+    ctx->block[filled++] = 0x80;
+    if (filled > 112) {
+        memset(ctx->block + filled, 0, 128 - filled);
+        mal_sha512_compress(ctx, ctx->block);
+        filled = 0;
+    }
+    memset(ctx->block + filled, 0, 112 - filled);
+    for (usize i = 0; i < 8; i++) {
+        ctx->block[112 + i] = (u8) (ctx->bit_high >> (56 - 8 * i));
+        ctx->block[120 + i] = (u8) (ctx->bit_low >> (56 - 8 * i));
+    }
+    mal_sha512_compress(ctx, ctx->block);
+    for (usize i = 0; i < length; i++) out[i] = (u8) (ctx->state[i / 8] >> (56 - 8 * (i % 8)));
+}
+
 typedef enum {
     MAL_NODE_CRYPTO_SHA1,
     MAL_NODE_CRYPTO_SHA256,
+    MAL_NODE_CRYPTO_SHA384,
+    MAL_NODE_CRYPTO_SHA512,
     MAL_NODE_CRYPTO_MD5,
     MAL_NODE_CRYPTO_HMAC_SHA256,
 } MalNodeCryptoStateKind;
@@ -599,6 +713,7 @@ typedef struct {
     union {
         MalSha1 sha1;
         MalSha256 sha256;
+        MalSha512 sha512;
         MalMd5 md5;
         struct {
             MalSha256 inner;
@@ -644,6 +759,8 @@ static void mal_node_crypto_state_update(
         mal_sha1_update(&state->digest.sha1, data, length);
     } else if (state->kind == MAL_NODE_CRYPTO_SHA256) {
         mal_sha256_update(&state->digest.sha256, data, length);
+    } else if (state->kind == MAL_NODE_CRYPTO_SHA384 || state->kind == MAL_NODE_CRYPTO_SHA512) {
+        mal_sha512_update(&state->digest.sha512, data, length);
     } else if (state->kind == MAL_NODE_CRYPTO_MD5) {
         mal_md5_update(&state->digest.md5, data, length);
     } else {
@@ -697,7 +814,7 @@ static MalValue mal_node_crypto_digest(
         return mal_value_new_undefined();
     }
     state->finalized = true;
-    u8 result[32];
+    u8 result[64];
     usize length;
     if (state->kind == MAL_NODE_CRYPTO_SHA1) {
         mal_sha1_final(&state->digest.sha1, result);
@@ -705,6 +822,9 @@ static MalValue mal_node_crypto_digest(
     } else if (state->kind == MAL_NODE_CRYPTO_SHA256) {
         mal_sha256_final(&state->digest.sha256, result);
         length = 32;
+    } else if (state->kind == MAL_NODE_CRYPTO_SHA384 || state->kind == MAL_NODE_CRYPTO_SHA512) {
+        length = state->kind == MAL_NODE_CRYPTO_SHA384 ? 48 : 64;
+        mal_sha512_final(&state->digest.sha512, result, length);
     } else if (state->kind == MAL_NODE_CRYPTO_MD5) {
         mal_md5_final(&state->digest.md5, result);
         length = 16;
@@ -799,13 +919,17 @@ static MalValue mal_node_crypto_create_hash(
     }
     MalString *algorithm = mal_value_to_string(args[0]);
     MalNodeCryptoState state = {0};
-    if (mal_node_crypto_str_is(algorithm, "sha1", 4)) {
+    if (mal_string_equals_ascii_ci(algorithm, "sha1")) {
         state.kind = MAL_NODE_CRYPTO_SHA1;
         mal_sha1_init(&state.digest.sha1);
-    } else if (mal_node_crypto_str_is(algorithm, "sha256", 6)) {
+    } else if (mal_string_equals_ascii_ci(algorithm, "sha256")) {
         state.kind = MAL_NODE_CRYPTO_SHA256;
         mal_sha256_init(&state.digest.sha256);
-    } else if (mal_node_crypto_str_is(algorithm, "md5", 3)) {
+    } else if (mal_string_equals_ascii_ci(algorithm, "sha384") || mal_string_equals_ascii_ci(algorithm, "sha512")) {
+        bool sha384 = mal_string_equals_ascii_ci(algorithm, "sha384");
+        state.kind = sha384 ? MAL_NODE_CRYPTO_SHA384 : MAL_NODE_CRYPTO_SHA512;
+        mal_sha512_init(&state.digest.sha512, sha384);
+    } else if (mal_string_equals_ascii_ci(algorithm, "md5")) {
         state.kind = MAL_NODE_CRYPTO_MD5;
         mal_md5_init(&state.digest.md5);
     } else {
@@ -1666,16 +1790,29 @@ static MalValue mal_node_crypto_hash(
     MalValue data = argc >= 2 ? args[1] : mal_value_new_undefined();
     MalValue encoding = argc >= 3 ? args[2] : mal_value_new_undefined();
 
-    // Algorithm: a primitive string exactly equal to "sha256".
     if (!mal_value_is_string(algorithm)) {
-        crypto_throw(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
-            "crypto.hash: algorithm must be a string");
+        crypto_throw(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "crypto.hash: algorithm must be a string");
         return mal_value_new_undefined();
     }
-    MalString *algorithm_str = mal_value_to_string(algorithm);
-    if (!mal_node_crypto_str_is(algorithm_str, "sha256", 6)) {
-        crypto_throw(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
-            "crypto.hash: only the \"sha256\" algorithm is supported");
+    MalString *name = mal_value_to_string(algorithm);
+    MalNodeCryptoState state = {0};
+    usize digest_length;
+    if (mal_string_equals_ascii_ci(name, "sha1")) {
+        state.kind = MAL_NODE_CRYPTO_SHA1; digest_length = 20;
+        mal_sha1_init(&state.digest.sha1);
+    } else if (mal_string_equals_ascii_ci(name, "sha256")) {
+        state.kind = MAL_NODE_CRYPTO_SHA256; digest_length = 32;
+        mal_sha256_init(&state.digest.sha256);
+    } else if (mal_string_equals_ascii_ci(name, "sha384") || mal_string_equals_ascii_ci(name, "sha512")) {
+        bool sha384 = mal_string_equals_ascii_ci(name, "sha384");
+        state.kind = sha384 ? MAL_NODE_CRYPTO_SHA384 : MAL_NODE_CRYPTO_SHA512;
+        digest_length = sha384 ? 48 : 64;
+        mal_sha512_init(&state.digest.sha512, sha384);
+    } else if (mal_string_equals_ascii_ci(name, "md5")) {
+        state.kind = MAL_NODE_CRYPTO_MD5; digest_length = 16;
+        mal_md5_init(&state.digest.md5);
+    } else {
+        crypto_throw(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "crypto.hash: unsupported algorithm");
         return mal_value_new_undefined();
     }
 
@@ -1693,17 +1830,14 @@ static MalValue mal_node_crypto_hash(
         return mal_value_new_undefined();
     }
 
-    // ArrayBuffers and views are hashed as raw bytes; strings use their UTF-8
-    // encoding. SHA-256 itself never allocates, so a raw pointer remains valid.
-    MalSha256 ctx;
-    mal_sha256_init(&ctx);
+    // No VM allocation occurs while an input view is borrowed.
     if (data_is_byte_source) {
         MalBufferSourceSpan span;
         if (!mal_node_crypto_byte_span(vm, data, &span)) {
             return mal_value_new_undefined();
         }
         if (span.length > 0) {
-            mal_sha256_update(&ctx, (const u8 *) span.data, span.length);
+            mal_node_crypto_state_update(&state, (const u8 *) span.data, span.length);
         }
     } else {
         MalString *data_str = mal_value_to_string(data);
@@ -1713,23 +1847,31 @@ static MalValue mal_node_crypto_hash(
             mal_vm_throw_allocation_error(vm);
             return mal_value_new_undefined();
         }
-        mal_sha256_update(&ctx, (const u8 *) bytes, byte_len);
+        mal_node_crypto_state_update(&state, (const u8 *) bytes, byte_len);
         crypto_scrub_free(bytes, byte_len);
     }
 
-    u8 digest[32];
-    mal_sha256_final(&ctx, digest);
-    mal_secure_scrub((byte *) &ctx, sizeof(ctx));
+    u8 digest[64];
+    if (state.kind == MAL_NODE_CRYPTO_SHA1) mal_sha1_final(&state.digest.sha1, digest);
+    else if (state.kind == MAL_NODE_CRYPTO_SHA256) mal_sha256_final(&state.digest.sha256, digest);
+    else if (state.kind == MAL_NODE_CRYPTO_MD5) mal_md5_final(&state.digest.md5, digest);
+    else mal_sha512_final(&state.digest.sha512, digest, digest_length);
+    mal_secure_scrub((byte *) &state, sizeof(state));
 
     if (mal_value_is_undefined(encoding)) {
-        char hex[64];
-        mal_hex_encode_lower((const byte *) digest, countof(digest), hex);
-        return mal_value_from_string(
-            mal_string_new_ascii(&vm->heap, (const byte *) hex, 64));
+        char hex[128];
+        mal_hex_encode_lower((const byte *) digest, digest_length, hex);
+        MalValue result = mal_value_from_string(
+            mal_string_new_ascii(&vm->heap, (const byte *) hex, digest_length * 2));
+        mal_secure_scrub(digest, sizeof(digest));
+        mal_secure_scrub((byte *) hex, sizeof(hex));
+        return result;
     }
     if (mal_string_equals_ascii_ci(mal_value_to_string(encoding), "buffer")) {
-        return mal_node_buffer_encode_secret_bytes(
-            vm, (const byte *) digest, countof(digest), mal_value_new_undefined(), false);
+        MalValue result = mal_node_buffer_encode_secret_bytes(
+            vm, (const byte *) digest, digest_length, mal_value_new_undefined(), false);
+        mal_secure_scrub(digest, sizeof(digest));
+        return result;
     }
     // Unlike digest(), crypto.hash() rejects an unrecognized encoding.
     if (!mal_node_buffer_encoding_is_known(encoding)) {
@@ -1739,10 +1881,13 @@ static MalValue mal_node_crypto_hash(
         snprintf(message, sizeof(message),
             "The argument 'outputEncoding' is invalid. Received '%s'", received);
         crypto_throw(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, message);
+        mal_secure_scrub(digest, sizeof(digest));
         return mal_value_new_undefined();
     }
-    return mal_node_buffer_encode_bytes(
-        vm, (const byte *) digest, countof(digest), encoding, true);
+    MalValue result = mal_node_buffer_encode_bytes(
+        vm, (const byte *) digest, digest_length, encoding, true);
+    mal_secure_scrub(digest, sizeof(digest));
+    return result;
 }
 
 /* ---------------------------------------------------------------------------
@@ -2132,10 +2277,11 @@ static const CryptoExport CRYPTO_EXPORTS[] = {
 
 void mal_host_install_node_crypto(
     MalVm *vm, const MalHostInstallSlot *slots, i32 count, const MalHostLaunchContext *launch) {
+    if (mal_node_module_install_cached(vm, "node:crypto", slots, count)) return;
     (void) launch;
     MalValue cached = vm->intrinsics[MAL_INTRINSIC_NODE_CRYPTO_MODULE];
     if (!mal_value_is_undefined(cached)) {
-        mal_node_module_publish(vm, slots, count, cached);
+        mal_node_module_publish(vm, "node:crypto", slots, count, cached);
         return;
     }
 
@@ -2205,7 +2351,7 @@ void mal_host_install_node_crypto(
         return;
     }
     vm->intrinsics[MAL_INTRINSIC_NODE_CRYPTO_MODULE] = roots[6];
-    mal_node_module_publish(vm, slots, count, roots[6]);
+    mal_node_module_publish(vm, "node:crypto", slots, count, roots[6]);
     mal_gc_unroot(&root);
 }
 

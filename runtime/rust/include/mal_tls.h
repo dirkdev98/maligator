@@ -32,6 +32,7 @@ int32_t mal_tls_client_read_plaintext(
 int32_t mal_tls_client_write_ciphertext(
     MalTlsClient *handle, uint8_t *output, size_t output_len,
     size_t *produced);
+int32_t mal_tls_client_peer_closed(const MalTlsClient *handle);
 int32_t mal_tls_client_is_handshaking(const MalTlsClient *handle);
 int32_t mal_tls_client_wants_write(const MalTlsClient *handle);
 void mal_tls_client_free(MalTlsClient **handle);

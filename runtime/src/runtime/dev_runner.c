@@ -97,7 +97,8 @@ int mal_dev_run_wires(
 #if MAL_WEB_PLATFORM || MAL_NODE
     MalObject *global_this = mal_value_to_object(vm.intrinsics[MAL_INTRINSIC_GLOBAL_THIS]);
     if (web_platform || node) {
-        mal_host_timers_install(&vm, global_this);
+        if (node) mal_host_timers_install_node(&vm, global_this);
+        else mal_host_timers_install(&vm, global_this);
     }
 #endif
 #if MAL_NODE
@@ -109,6 +110,7 @@ int mal_dev_run_wires(
         if (!web_platform) {
             mal_text_encoding_globals_install(&vm, global_this);
             mal_structured_clone_global_install(&vm, global_this);
+            mal_navigator_global_install(&vm, global_this);
         }
     }
 #else
@@ -171,7 +173,7 @@ int mal_dev_run_wires(
         if (vm.completion.kind == MAL_COMPLETION_THROW) break;
     }
     mal_host_run_event_loop(&vm);
-    int code = vm.completion.kind == MAL_COMPLETION_THROW ? 1 : 0;
+    int code = mal_host_finish_process(&vm, vm.completion.kind == MAL_COMPLETION_THROW ? 1 : 0);
 
     if (getenv("MAL_GC_AT_EXIT") != nullptr) {
         mal_gc_collect(&vm);

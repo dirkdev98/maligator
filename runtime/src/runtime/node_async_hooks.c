@@ -1,4 +1,5 @@
 #include "node_async_hooks.h"
+#include "node_module.h"
 
 #if MAL_NODE
 
@@ -678,6 +679,7 @@ void mal_host_install_node_async_hooks(
     MalVm *vm, const MalHostInstallSlot *slots, i32 count,
     const MalHostLaunchContext *launch) {
     (void) launch;
+    if (mal_node_module_install_cached(vm, "node:async_hooks", slots, count)) return;
     enum {
         MODULE,
         RESOURCE_PROTO,
@@ -870,15 +872,7 @@ void mal_host_install_node_async_hooks(
         MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE |
             MAL_PROPERTY_CONFIGURABLE);
 
-    for (i32 i = 0; i < count; i++) {
-        if (strcmp(slots[i].name, "AsyncResource") == 0) {
-            vm->globals[slots[i].slot] = roots[RESOURCE_CTOR];
-        } else if (strcmp(slots[i].name, "AsyncLocalStorage") == 0) {
-            vm->globals[slots[i].slot] = roots[STORAGE_CTOR];
-        } else if (strcmp(slots[i].name, "default") == 0) {
-            vm->globals[slots[i].slot] = roots[MODULE];
-        }
-    }
+    mal_node_module_publish(vm, "node:async_hooks", slots, count, roots[MODULE]);
     mal_gc_unroot(&root);
 }
 

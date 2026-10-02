@@ -1,8 +1,11 @@
 #include "node_https.h"
+#include "node_http.h"
+#include "node_module.h"
 
 #if MAL_NODE
 
 #include <string.h>
+#include <stdio.h>
 
 #include "function_object.h"
 #include "gc.h"
@@ -14,12 +17,51 @@
 #define HTTPS_VISIBLE \
     (MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE)
 
+bool mal_node_https_validate_options(MalVm *vm, MalValue options, bool agent, MalValue default_agent) {
+    if (!mal_value_is_object(options)) return true;
+    static const char *unsupported[] = {
+        "ca", "servername", "rejectUnauthorized", "checkServerIdentity", "cert", "key",
+        "pfx", "passphrase", "secureContext", "secureProtocol", "secureOptions",
+        "minVersion", "maxVersion", "ciphers", "sigalgs", "ecdhCurve", "dhparam",
+        "ALPNProtocols", "session", "clientCertEngine", "privateKeyIdentifier",
+        "privateKeyEngine", "honorCipherOrder", "crl", "requestOCSP", "createConnection",
+        "psk", "pskCallback", "sessionIdContext", "lookup", "localAddress", "localPort", "family", "hints", "defaultPort",
+    };
+    for (usize i = 0; i < countof(unsupported); i++) {
+        MalValue value;
+        if (!mal_vm_get_property(vm, options, mal_intrinsic_string_key(vm, unsupported[i]), &value)) return false;
+        if (!mal_value_is_undefined(value)) {
+            char message[128];
+            snprintf(message, sizeof(message), "HTTPS option %s is not supported", unsupported[i]);
+            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, message);
+            return false;
+        }
+    }
+    MalValue value;
+    if (!mal_vm_get_property(vm, options, mal_intrinsic_string_key(vm, "agent"), &value)) return false;
+    if (!mal_value_is_undefined(value) && !(mal_value_is_boolean(value) && !mal_value_to_boolean(value))) {
+        if (agent || !mal_ops_same_value(value, default_agent)) {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Custom HTTPS agents are not supported");
+            return false;
+        }
+    }
+    if (agent) {
+        static const char *pool_options[] = {"keepAlive", "keepAliveMsecs", "maxSockets", "maxTotalSockets", "maxFreeSockets", "scheduling", "timeout"};
+        for (usize i=0;i<countof(pool_options);i++) {
+            if (!mal_vm_get_property(vm,options,mal_intrinsic_string_key(vm,pool_options[i]),&value)) return false;
+            if (!mal_value_is_undefined(value)) {
+                mal_vm_throw_error(vm,MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,"HTTPS Agent connection pooling options are not supported"); return false;
+            }
+        }
+    }
+    return vm->completion.kind != MAL_COMPLETION_THROW;
+}
+
 static MalValue node_https_agent(
     MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
     MalValue new_target, MalValue callee) {
     (void) receiver;
-    (void) args;
-    (void) argc;
+    if (argc > 0 && !mal_node_https_validate_options(vm, args[0], true, mal_value_new_undefined())) return mal_value_new_undefined();
     MalValue target = mal_value_is_undefined(new_target) ? callee : new_target;
     MalValue prototype_value = mal_vm_function_prototype(vm, target);
     MalObject *prototype = mal_value_is_object(prototype_value)
@@ -39,23 +81,13 @@ static MalValue node_https_agent_destroy(
     return receiver;
 }
 
-static MalValue node_https_request_unavailable(
-    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
-    MalValue new_target, MalValue callee) {
-    (void) receiver;
-    (void) args;
-    (void) argc;
-    (void) new_target;
-    (void) callee;
-    mal_vm_throw_error(vm, MAL_INTRINSIC_ERROR_PROTOTYPE,
-        "HTTPS requests are not supported by this host");
-    return mal_value_new_undefined();
-}
-
 void mal_host_install_node_https(
     MalVm *vm, const MalHostInstallSlot *slots, i32 count,
     const MalHostLaunchContext *launch) {
     (void) launch;
+    if (mal_node_module_install_cached(vm, "node:https", slots, count)) return;
+    mal_host_install_node_http(vm, nullptr, 0, launch);
+    if (vm->completion.kind == MAL_COMPLETION_THROW) return;
     enum {
         HTTPS_MODULE,
         HTTPS_AGENT_PROTOTYPE,
@@ -92,17 +124,17 @@ void mal_host_install_node_https(
     roots[HTTPS_GLOBAL_AGENT] = mal_value_from_object(mal_object_new(
         &vm->heap, mal_value_to_object(roots[HTTPS_AGENT_PROTOTYPE])));
     roots[HTTPS_REQUEST] = mal_value_from_native_function_object(
-        mal_native_function_object_new_arity(
+        mal_native_function_object_new_with_slots_arity(
             &vm->heap,
             mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
             mal_intrinsic_ascii(vm, (const byte *) "request"), 3,
-            node_https_request_unavailable));
+            mal_node_https_request, roots + HTTPS_GLOBAL_AGENT, 1));
     roots[HTTPS_GET] = mal_value_from_native_function_object(
-        mal_native_function_object_new_arity(
+        mal_native_function_object_new_with_slots_arity(
             &vm->heap,
             mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
             mal_intrinsic_ascii(vm, (const byte *) "get"), 3,
-            node_https_request_unavailable));
+            mal_node_https_get, roots + HTTPS_GLOBAL_AGENT, 1));
 
     static const char *names[] = {"Agent", "globalAgent", "request", "get"};
     MalValue values[] = {
@@ -114,18 +146,7 @@ void mal_host_install_node_https(
             vm, mal_value_to_object(roots[HTTPS_MODULE]),
             (const byte *) names[i], values[i], HTTPS_VISIBLE);
     }
-    for (i32 i = 0; i < count; i++) {
-        if (strcmp(slots[i].name, "default") == 0) {
-            vm->globals[slots[i].slot] = roots[HTTPS_MODULE];
-            continue;
-        }
-        for (usize j = 0; j < countof(names); j++) {
-            if (strcmp(slots[i].name, names[j]) == 0) {
-                vm->globals[slots[i].slot] = values[j];
-                break;
-            }
-        }
-    }
+    mal_node_module_publish(vm, "node:https", slots, count, roots[HTTPS_MODULE]);
     mal_gc_unroot(&root);
 }
 

@@ -88,7 +88,11 @@ int main(int argc, char **argv) {
     mal_host_attach(&vm);
 #if MAL_WEB_PLATFORM || MAL_NODE
     MalObject *global_this = mal_value_to_object(vm.intrinsics[MAL_INTRINSIC_GLOBAL_THIS]);
-    mal_host_timers_install(&vm, global_this); // setTimeout / clearTimeout
+#if MAL_NODE
+    mal_host_timers_install_node(&vm, global_this);
+#else
+    mal_host_timers_install(&vm, global_this);
+#endif
 #endif
 #if MAL_NODE
     mal_node_immediates_install(&vm, global_this);
@@ -97,6 +101,7 @@ int main(int argc, char **argv) {
     // them when that surface is present; otherwise install them here.
     mal_text_encoding_globals_install(&vm, global_this);
     mal_structured_clone_global_install(&vm, global_this);
+    mal_navigator_global_install(&vm, global_this);
 #endif
 #endif
 #if MAL_URL
@@ -130,7 +135,7 @@ int main(int argc, char **argv) {
     mal_vm_run(&vm, callable);      // synchronous top level + its microtask drain
     mal_host_run_event_loop(&vm);   // timers / I/O + their microtasks, until idle
 
-	int code = vm.completion.kind == MAL_COMPLETION_THROW ? 1 : 0;
+	int code = mal_host_finish_process(&vm, vm.completion.kind == MAL_COMPLETION_THROW ? 1 : 0);
 	mal_profile_finish(&vm);
 
     if (getenv("MAL_GC_AT_EXIT") != nullptr) {

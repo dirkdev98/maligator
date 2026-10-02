@@ -9,3 +9,8 @@ void mal_host_install_node_http(
 
 /* Run at most one queued server lifecycle event as a runtime macrotask. */
 bool mal_node_http_drain(MalVm *vm);
+
+MalValue mal_node_https_request(MalVm *vm, MalValue receiver, const MalValue *args,
+    i32 argc, MalValue new_target, MalValue callee);
+MalValue mal_node_https_get(MalVm *vm, MalValue receiver, const MalValue *args,
+    i32 argc, MalValue new_target, MalValue callee);

@@ -66,6 +66,21 @@ typedef struct MalProcResult {
  */
 int mal_proc_run(const MalProcRequest *req, MalProcResult *out);
 
+typedef struct MalProcChild {
+    int pid;
+    int launch_fd;
+    int launch_errno;
+    usize launch_bytes;
+    bool launched;
+    bool reaped;
+} MalProcChild;
+
+int mal_proc_spawn(const MalProcRequest *req, MalProcChild *child);
+/* Polls only this child's PID; never consumes another host consumer's status. */
+bool mal_proc_poll(MalProcChild *child, MalProcResult *out);
+bool mal_proc_kill(const MalProcChild *child, int signal);
+void mal_proc_detach(MalProcChild *child);
+
 /* Free any captured buffers held by `out` and clear their pointers. Idempotent. */
 void mal_proc_result_dispose(MalProcResult *out);
 

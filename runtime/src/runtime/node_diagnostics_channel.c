@@ -107,6 +107,7 @@ static MalValue node_diagnostics_tracing_channel(
 void mal_host_install_node_diagnostics_channel(
     MalVm *vm, const MalHostInstallSlot *slots, i32 count,
     const MalHostLaunchContext *launch) {
+    if (mal_node_module_install_cached(vm, "node:diagnostics_channel", slots, count)) return;
     (void) launch;
     MalValue module =
         vm->intrinsics[MAL_INTRINSIC_NODE_DIAGNOSTICS_CHANNEL_MODULE];
@@ -127,7 +128,7 @@ void mal_host_install_node_diagnostics_channel(
         vm->intrinsics[MAL_INTRINSIC_NODE_DIAGNOSTICS_CHANNEL_MODULE] = module;
         mal_gc_unroot(&root);
     }
-    mal_node_module_publish(vm, slots, count, module);
+    mal_node_module_publish(vm, "node:diagnostics_channel", slots, count, module);
 }
 
 #endif /* MAL_NODE */

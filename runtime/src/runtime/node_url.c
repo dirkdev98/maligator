@@ -532,6 +532,7 @@ static MalValue url_to_http_options_unavailable(
 void mal_host_install_node_url(
     MalVm *vm, const MalHostInstallSlot *slots, i32 count,
     const MalHostLaunchContext *launch) {
+    if (mal_node_module_install_cached(vm, "node:url", slots, count)) return;
     (void) launch;
     MalValue module = vm->intrinsics[MAL_INTRINSIC_NODE_URL_MODULE];
     if (mal_value_is_undefined(module)) {
@@ -587,7 +588,7 @@ void mal_host_install_node_url(
         module = roots[0];
         mal_gc_unroot(&root);
     }
-    mal_node_module_publish(vm, slots, count, module);
+    mal_node_module_publish(vm, "node:url", slots, count, module);
 }
 
 #endif /* MAL_NODE */

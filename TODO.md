@@ -679,6 +679,32 @@ remains a Maligator extension and does not count as global fetch conformance.
 
 # Node and ecosystem compatibility
 
+- [ ] Implement UPM performance paths after the Node compatibility slice: compiled
+      worker entry graphs with messaging/transfers/lifecycle, off-loop filesystem
+      and decompression scheduling, and DNS/Agent dispatcher reuse. Measure matched
+      workloads only after output parity; AOT does not need a V8 compile cache.
+
+- [ ] Refresh the remaining primordial descriptor configuration audits after the
+      UPM API changes. The targeted full, node, diagnostic, and intl-collator
+      captures update the catalog; configurations.json lists pending modes whose
+      prior digests still need recapture. The full matrix continues checking them.
+
+- [ ] Extend asynchronous child-process stdio to pipes and implement exec/execFile;
+      inherited and ignored stdio cover UPM commands. Exercise active-child cleanup
+      in embedded VM teardown and Linux memory/libc reporting on a Linux host.
+
+- [ ] Align node:module builtinModules/isBuiltin with the supported builtin registry;
+      its separate list omits stream/promises and advertises unsupported aliases.
+
+- [ ] Preserve partially consumed ciphertext in direct node:tls socket reads;
+      the Rust TLS input ABI can accept less than one socket-read buffer. Exercise
+      large encrypted bodies beyond the existing ping fixtures.
+
+- [ ] Extend HTTPS transport beyond its verified default-trust fetch boundary:
+      mutable Agent configuration and pooling, custom TLS options, and IPv6 DNS
+      address selection. Request options refuse unsupported direct overrides;
+      globalAgent mutation does not configure the current transport.
+
 - [ ] Complete package.json exports wildcard matching, null targets, validation, and
       remaining modern Node resolution. Test the general resolver rather than pinned
       dependency paths.

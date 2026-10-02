@@ -1,8 +1,9 @@
-/* oxlint-disable typescript/no-unsafe-argument, typescript/no-unsafe-assignment, typescript/no-unsafe-call, typescript/no-unsafe-member-access, typescript/no-unsafe-return, typescript/require-await -- This source is compiled inside Maligator, whose Node host objects intentionally have no TypeScript declarations. */
+/* oxlint-disable typescript/no-unsafe-argument, typescript/no-unsafe-assignment, typescript/no-unsafe-call, typescript/no-unsafe-member-access, typescript/no-unsafe-return -- This source is compiled inside Maligator, whose Node host objects intentionally have no TypeScript declarations. */
 
 /** Node-surface compatibility globals implemented over Maligator's node:* host modules. */
 
 import { request as nodeRequest } from "node:http";
+import { request as nodeSecureRequest } from "node:https";
 
 class MaligatorHeaders {
 	constructor(init = undefined) {
@@ -120,71 +121,268 @@ if (typeof globalThis.Headers !== "function") globalThis.Headers = MaligatorHead
 
 class MaligatorResponse {
 	constructor(body, init = {}) {
-		this._body = body;
 		this.status = init.status ?? 200;
 		this.statusText = init.statusText ?? "";
 		this.headers = new MaligatorHeaders(init.headers);
 		this.url = init.url ?? "";
-		this.redirected = false;
+		this.redirected = init.redirected ?? false;
 		this.type = "basic";
+		this._used = false;
+		if (body === null || body === undefined) this.body = null;
+		else if (typeof body.getReader === "function") this.body = body;
+		else {
+			const bytes = typeof body === "string" ? Buffer.from(body) : body;
+			this.body = new ReadableStream({
+				start(controller) {
+					controller.enqueue(bytes);
+					controller.close();
+				},
+			});
+		}
+		this._native =
+			typeof globalThis.Response === "function" &&
+			globalThis.Response !== MaligatorResponse
+				? new globalThis.Response(this.body)
+				: undefined;
+	}
+
+	get bodyUsed() {
+		return this._native?.bodyUsed ?? this._used;
 	}
 
 	get ok() {
 		return this.status >= 200 && this.status <= 299;
 	}
 
-	async text() {
-		return this._body.toString("utf8");
+	async bytes() {
+		if (this._native) return await this._native.bytes();
+		if (this.bodyUsed || this.body?.locked)
+			throw new TypeError("Body has already been consumed");
+		this._used = true;
+		if (this.body === null) return new Uint8Array(0);
+		const reader = this.body.getReader();
+		const chunks = [];
+		let length = 0;
+		try {
+			for (;;) {
+				const { done, value } = await reader.read();
+				if (done) break;
+				chunks.push(value);
+				length += value.byteLength;
+			}
+		} finally {
+			reader.releaseLock();
+		}
+		return Buffer.concat(chunks, length);
 	}
 
+	async text() {
+		if (this._native) return await this._native.text();
+		return (await this.bytes()).toString("utf8");
+	}
 	async json() {
 		return JSON.parse(await this.text());
 	}
-
 	async arrayBuffer() {
-		const copy = new Uint8Array(this._body.length);
-		copy.set(this._body);
-		return copy.buffer;
-	}
-
-	async bytes() {
-		const copy = new Uint8Array(this._body.length);
-		copy.set(this._body);
-		return copy;
+		const bytes = await this.bytes();
+		return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
 	}
 }
 
-function maligatorFetch(input, init = {}) {
+async function maligatorFetch(input, init = {}) {
+	const url = new URL(typeof input === "object" && input.url ? input.url : String(input));
+	if (url.username || url.password)
+		return Promise.reject(new TypeError("Fetch URL contains credentials"));
+	const headers = new MaligatorHeaders(init.headers);
+	const method = String(init.method ?? "GET").toUpperCase();
+	if (
+		(method === "GET" || method === "HEAD") &&
+		init.body !== undefined &&
+		init.body !== null
+	) {
+		return Promise.reject(new TypeError("GET and HEAD requests cannot have a body"));
+	}
+	const signal = init.signal;
+	// oxlint-disable-next-line typescript/prefer-promise-reject-errors -- AbortSignal.reason may be any JavaScript value.
+	if (signal?.aborted) return Promise.reject(signal.reason);
+	const redirect = init.redirect ?? "follow";
+	if (!["follow", "error", "manual"].includes(redirect)) {
+		return Promise.reject(new TypeError("Invalid redirect mode"));
+	}
+	return fetchRequest(url, method, headers, init.body, signal, redirect, 0);
+}
+
+function fetchRequest(url, method, headers, body, signal, redirect, redirects) {
 	return new Promise((resolve, reject) => {
-		const headers = new MaligatorHeaders(init.headers);
-		const requestHeaders = Object.create(null);
-		for (const [name, value] of headers) requestHeaders[name] = value;
-		const url = String(input);
-		const request = nodeRequest(
-			url,
-			{
-				method: init.method ?? "GET",
-				headers: requestHeaders,
-			},
-			(response) => {
-				const chunks = [];
-				response.on("data", (chunk) => chunks.push(chunk));
-				response.on("error", reject);
-				response.on("end", () => {
-					resolve(
-						new MaligatorResponse(Buffer.concat(chunks), {
-							status: response.statusCode ?? 0,
-							statusText: response.statusMessage ?? "",
-							headers: response.headers,
-							url,
-						}),
+		let request;
+		let response;
+		let controller;
+		let finished = false;
+		const cleanup = () => signal?.removeEventListener("abort", abort);
+		const fail = (error) => {
+			if (finished) return;
+			finished = true;
+			cleanup();
+			if (controller) controller.error(error);
+			// oxlint-disable-next-line typescript/prefer-promise-reject-errors -- AbortSignal.reason may be any JavaScript value.
+			reject(error);
+		};
+		const abort = () => {
+			const reason = signal.reason;
+			fail(reason);
+			response?.destroy();
+			request?.destroy();
+		};
+		signal?.addEventListener("abort", abort, { once: true });
+		if (signal?.aborted) {
+			abort();
+			return;
+		}
+		if (url.protocol === "data:") {
+			try {
+				const comma = url.href.indexOf(",");
+				if (comma < 0) throw new TypeError("Invalid data URL");
+				const meta = url.href.slice(5, comma);
+				const data = decodeURIComponent(url.href.slice(comma + 1));
+				const bytes = Buffer.from(data, meta.endsWith(";base64") ? "base64" : "utf8");
+				finished = true;
+				cleanup();
+				resolve(
+					new MaligatorResponse(bytes, {
+						url: url.href,
+						headers: {
+							"content-type":
+								meta.replace(/;base64$/, "") || "text/plain;charset=US-ASCII",
+						},
+					}),
+				);
+			} catch (error) {
+				fail(error);
+			}
+			return;
+		}
+		if (url.protocol !== "http:" && url.protocol !== "https:") {
+			fail(new TypeError("Unsupported fetch URL scheme"));
+			return;
+		}
+		try {
+			const requestHeaders = Object.create(null);
+			for (const [name, value] of headers) requestHeaders[name] = value;
+			const send = url.protocol === "https:" ? nodeSecureRequest : nodeRequest;
+			request = send(url.href, { method, headers: requestHeaders }, (incoming) => {
+				response = incoming;
+				response.on("error", fail);
+				const status = response.statusCode ?? 0;
+				const location = response.headers.location;
+				if (
+					[301, 302, 303, 307, 308].includes(status) &&
+					location &&
+					redirect !== "manual"
+				) {
+					if (redirect === "error" || redirects >= 20) {
+						fail(
+							new TypeError(
+								redirect === "error" ? "Unexpected redirect" : "Too many redirects",
+							),
+						);
+						response.destroy();
+						return;
+					}
+					try {
+						const next = new URL(location, url);
+						if (next.username || next.password)
+							throw new TypeError("Redirect URL contains credentials");
+						const nextHeaders = new MaligatorHeaders(headers);
+						if (next.origin !== url.origin) {
+							for (const name of ["authorization", "proxy-authorization", "cookie"])
+								nextHeaders.delete(name);
+						}
+						const rewrite =
+							(status === 303 && method !== "HEAD") ||
+							((status === 301 || status === 302) && method === "POST");
+						if (rewrite)
+							for (const name of [
+								"content-length",
+								"content-type",
+								"content-encoding",
+								"content-language",
+								"content-location",
+							])
+								nextHeaders.delete(name);
+						finished = true;
+						cleanup();
+						response.destroy();
+						resolve(
+							fetchRequest(
+								next,
+								rewrite ? "GET" : method,
+								nextHeaders,
+								rewrite ? undefined : body,
+								signal,
+								redirect,
+								redirects + 1,
+							),
+						);
+					} catch (error) {
+						fail(error);
+						response.destroy();
+					}
+					return;
+				}
+				const empty = method === "HEAD" || [204, 205, 304].includes(status);
+				let stream = null;
+				if (!empty) {
+					response.pause();
+					stream = new ReadableStream(
+						{
+							start(value) {
+								controller = value;
+							},
+							pull() {
+								response.resume();
+							},
+							cancel() {
+								finished = true;
+								cleanup();
+								response.destroy();
+								request.destroy();
+							},
+						},
+						{ highWaterMark: 65536, size: (chunk) => chunk.byteLength },
 					);
+					response.on("data", (chunk) => {
+						if (finished) return;
+						controller.enqueue(chunk);
+						if (controller.desiredSize <= 0) response.pause();
+					});
+				}
+				response.on("end", () => {
+					if (finished) return;
+					finished = true;
+					cleanup();
+					controller?.close();
 				});
-			},
-		);
-		request.on("error", reject);
-		if (init.body !== undefined && init.body !== null) request.write(init.body);
-		request.end();
+				response.on("close", () => {
+					if (!finished) fail(new TypeError("Response body closed prematurely"));
+				});
+				if (empty) response.resume();
+				resolve(
+					new MaligatorResponse(stream, {
+						status,
+						statusText: response.statusMessage ?? "",
+						headers: response.headers,
+						url: url.href,
+						redirected: redirects > 0,
+					}),
+				);
+			});
+			request.on("error", fail);
+			if (body !== undefined && body !== null) request.write(body);
+			request.end();
+		} catch (error) {
+			fail(error);
+			request?.destroy();
+		}
 	});
 }
 

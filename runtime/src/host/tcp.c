@@ -11,6 +11,7 @@
 #include "host.h"
 #include "mal_tls.h"
 #include "net.h"
+#include "posix_fs.h"
 #include "reactor.h"
 
 #define MAL_TCP_IO_TURN (64 * 1024)
@@ -531,6 +532,59 @@ bool mal_tcp_set_no_delay(MalHost *host, MalHostHandle operation, bool enabled) 
         &value, sizeof(value)) == 0;
 }
 
+int mal_tcp_tls_create_client(
+    const byte *server_name, usize server_name_length,
+    const byte *ca_pem, usize ca_pem_length,
+    const byte *alpn, usize alpn_length, bool insecure, MalTlsClient **out) {
+#if MAL_NODE
+    if (insecure || ca_pem != nullptr) {
+        return mal_tls_client_create((const uint8_t *)server_name, server_name_length,
+            (const uint8_t *)ca_pem, ca_pem_length, (const uint8_t *)alpn,
+            alpn_length, insecure ? 1 : 0, out);
+    }
+    static const char *bundles[] = {
+        "/etc/ssl/cert.pem", "/etc/ssl/certs/ca-certificates.crt",
+        "/etc/pki/tls/certs/ca-bundle.crt", "/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem",
+    };
+    byte *roots = nullptr;
+    usize roots_length = 0;
+    for (usize i = 0; i < countof(bundles); i++) {
+        if (mal_posix_fs_read_file(bundles[i], &roots, &roots_length) == 0) break;
+    }
+    const char *extra_path = getenv("NODE_EXTRA_CA_CERTS");
+    if (extra_path != nullptr && extra_path[0] != '\0') {
+        byte *extra = nullptr;
+        usize extra_length = 0;
+        if (mal_posix_fs_read_file(extra_path, &extra, &extra_length) != 0) {
+            free(roots); return MAL_TLS_STATUS_ERROR;
+        }
+        MalTlsClient *validation = nullptr;
+        int status = mal_tls_client_create((const uint8_t *)server_name, server_name_length,
+            (const uint8_t *)extra, extra_length, nullptr, 0, 0, &validation);
+        mal_tls_client_free(&validation);
+        if (status != MAL_TLS_STATUS_OK || roots_length == SIZE_MAX || extra_length > SIZE_MAX - roots_length - 1) {
+            free(extra); free(roots); return MAL_TLS_STATUS_ERROR;
+        }
+        byte *combined = realloc(roots, roots_length + extra_length + 1);
+        if (combined == nullptr) { free(extra); free(roots); return MAL_TLS_STATUS_ERROR; }
+        roots = combined;
+        roots[roots_length++] = '\n';
+        memcpy(roots + roots_length, extra, extra_length);
+        roots_length += extra_length;
+        free(extra);
+    }
+    int status = mal_tls_client_create((const uint8_t *)server_name, server_name_length,
+        (const uint8_t *)roots, roots_length, (const uint8_t *)alpn, alpn_length, 0, out);
+    free(roots);
+    return status;
+#else
+    (void) server_name; (void) server_name_length; (void) ca_pem; (void) ca_pem_length;
+    (void) alpn; (void) alpn_length; (void) insecure;
+    if (out != nullptr) *out = nullptr;
+    return -1;
+#endif
+}
+
 bool mal_tcp_start_tls(
     MalHost *host, MalHostHandle operation,
     const byte *server_name, usize server_name_length,
@@ -542,9 +596,9 @@ bool mal_tcp_start_tls(
         || server_name == nullptr || server_name_length == 0) {
         return false;
     }
-    if (mal_tls_client_create(server_name, server_name_length,
+    if (mal_tcp_tls_create_client(server_name, server_name_length,
             ca_pem, ca_pem_length, alpn, alpn_length,
-            insecure ? 1 : 0, &connection->tls) != MAL_TLS_STATUS_OK) {
+            insecure, &connection->tls) != MAL_TLS_STATUS_OK) {
         return false;
     }
     if (!tcp_flush(connection)) {

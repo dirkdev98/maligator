@@ -113,11 +113,7 @@ server.listen(0, "127.0.0.1", () => {
 		() => http.request({ hostname: "localhost", port, path: "/bad path" }),
 		/path/,
 	);
-	expectThrow(
-		"hostname",
-		() => http.request({ hostname: "example.com", port }),
-		/hostname/,
-	);
+	expectThrow("hostname", () => http.request({ hostname: "bad host", port }), /hostname/);
 	// The authority reaches the resolver and the serialized Host line, so control
 	// bytes have to be refused while parsing the URL, before either sees them.
 	expectThrow(

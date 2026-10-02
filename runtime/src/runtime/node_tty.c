@@ -11,6 +11,7 @@
 enum { MAL_TIOCGWINSZ = TIOCGWINSZ };
 
 #include "node_tty.h"
+#include "node_module.h"
 
 #if MAL_NODE
 
@@ -309,6 +310,7 @@ void mal_host_install_node_tty(
     MalVm *vm, const MalHostInstallSlot *slots, i32 count,
     const MalHostLaunchContext *launch) {
     (void) launch;
+    if (mal_node_module_install_cached(vm, "node:tty", slots, count)) return;
     enum {
         TTY_ISATTY,
         TTY_READ_STREAM,
@@ -363,21 +365,7 @@ void mal_host_install_node_tty(
     mal_intrinsic_define_data(vm, namespace, (const byte *) "WriteStream",
         values[TTY_WRITE_STREAM], TTY_VISIBLE);
 
-    for (i32 i = 0; i < count; i++) {
-        MalValue value = mal_value_new_undefined();
-        if (strcmp(slots[i].name, "isatty") == 0) {
-            value = values[TTY_ISATTY];
-        } else if (strcmp(slots[i].name, "ReadStream") == 0) {
-            value = values[TTY_READ_STREAM];
-        } else if (strcmp(slots[i].name, "WriteStream") == 0) {
-            value = values[TTY_WRITE_STREAM];
-        } else if (strcmp(slots[i].name, "default") == 0) {
-            value = values[TTY_DEFAULT];
-        }
-        if (!mal_value_is_undefined(value)) {
-            vm->globals[slots[i].slot] = value;
-        }
-    }
+    mal_node_module_publish(vm, "node:tty", slots, count, values[TTY_DEFAULT]);
     mal_gc_unroot(&root);
 }
 

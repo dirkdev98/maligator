@@ -635,11 +635,23 @@ MalHeapUsage mal_heap_usage(const MalHeap *heap) {
                 if (occupied > handed_out) abort();
                 usage.raw_owned_bytes += occupied;
                 usage.raw_free_cell_bytes += handed_out - occupied;
+            } else {
+                for (const u8 *cell = (const u8 *) block + mal_gc_cell_data_offset();
+                     cell < block->bump; cell += block->cell_size) {
+                    const MalHeapHeader *header = (const MalHeapHeader *) cell;
+                    if ((header->mark & MAL_MARK_FREE) == 0) {
+                        usage.managed_owned_bytes += block->cell_size;
+                    }
+                }
             }
         }
     }
     for (const MalGcLarge *large = heap->raw_large; large != nullptr; large = large->next) {
         usage.raw_owned_bytes += large->size;
+    }
+    for (const MalGcLarge *large = heap->large; large != nullptr; large = large->next) {
+        usage.managed_owned_bytes += large->size;
+        usage.managed_large_bytes += large->size;
     }
     for (usize size_class = 0; size_class < MAL_GC_NUM_SIZE_CLASSES; ++size_class) {
         for (const void *cell = heap->cell_free[size_class]; cell != nullptr;

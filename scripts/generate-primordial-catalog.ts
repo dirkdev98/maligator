@@ -10,6 +10,19 @@ import { primordialInventoryModes } from "./primordial-inventory-config.ts";
 import type { PrimordialInventoryPhase } from "./primordial-inventory-data.ts";
 
 const directory = path.resolve(process.argv[2] ?? ".cache/primordial-inventory");
+const selection = process.argv[3];
+if (selection !== undefined && !selection.startsWith("--modes="))
+	throw new Error("Expected --modes=full,node or omit it to capture every mode");
+const modes =
+	selection === undefined
+		? primordialInventoryModes
+		: selection.slice("--modes=".length).split(",");
+if (
+	!modes.includes("full") ||
+	new Set(modes).size !== modes.length ||
+	modes.some((mode) => !primordialInventoryModes.includes(mode))
+)
+	throw new Error("Catalog inputs must include full and contain valid unique modes");
 const phases = JSON.parse(
 	readFileSync(path.join(directory, "inventory-full.json"), "utf8"),
 ) as Array<PrimordialInventoryPhase>;
@@ -17,10 +30,7 @@ const language = phases.find((phase) => phase.phase === "language-initialized");
 const installed = phases.find((phase) => phase.phase === "host-installed");
 if (language === undefined || installed === undefined)
 	throw new Error("Both installation phases are required");
-const matrix = [
-	"full",
-	...primordialInventoryModes.filter((mode) => mode !== "full"),
-].map((mode) => ({
+const matrix = ["full", ...modes.filter((mode) => mode !== "full")].map((mode) => ({
 	mode,
 	phases: JSON.parse(
 		readFileSync(path.join(directory, `inventory-${mode}.json`), "utf8"),
@@ -57,6 +67,24 @@ const literalMethods = receivers.flatMap((receiver) => {
 				: [[receiver, key, prototype, catalog.nodes[property[2]]![0], node[0]]];
 		});
 });
+const fixtureDirectory = "tests/fixtures/primordial-inventory";
+const previousConfigurations = JSON.parse(
+	readFileSync(`${fixtureDirectory}/configurations.json`, "utf8"),
+) as {
+	platform: string;
+	arch: string;
+	modes: Array<{ mode: string; sha256: string }>;
+	availability: Array<[string, { string: string } | { symbol: string }, Array<string>]>;
+};
+const pendingModes = primordialInventoryModes.filter((mode) => !modes.includes(mode));
+if (
+	pendingModes.length > 0 &&
+	(previousConfigurations.platform !== process.platform ||
+		previousConfigurations.arch !== process.arch)
+)
+	throw new Error(
+		"Partial capture inputs must share the historical platform and architecture",
+	);
 const output = "src/compiler/shared/primordial-catalog-data.ts";
 writeFileSync(
 	output,
@@ -72,7 +100,26 @@ writeFileSync(
 			JSON.stringify(catalog),
 		)}) as PrimordialCatalog;\n}\n`,
 );
-const fixtureDirectory = "tests/fixtures/primordial-inventory";
+const availability = new Map<string, Set<string>>();
+for (const [owner, key, capturedModes] of previousConfigurations.availability) {
+	availability.set(
+		JSON.stringify([owner, key]),
+		new Set(capturedModes.filter((mode) => pendingModes.includes(mode))),
+	);
+}
+for (const { mode, phases } of matrix) {
+	for (const phase of phases) {
+		if (phase.phase !== "host-installed") continue;
+		for (const node of phase.nodes) {
+			for (const descriptor of node.descriptors) {
+				const id = JSON.stringify([node.id, descriptor.key]);
+				const availableModes = availability.get(id) ?? new Set<string>();
+				availableModes.add(mode);
+				availability.set(id, availableModes);
+			}
+		}
+	}
+}
 mkdirSync(fixtureDirectory, { recursive: true });
 writeFileSync(
 	`${fixtureDirectory}/installers.json`,
@@ -89,16 +136,28 @@ writeFileSync(
 	`${JSON.stringify({
 		platform: process.platform,
 		arch: process.arch,
-		modes: matrix.map(({ mode, phases }) => ({
-			mode,
-			sha256: primordialInventoryDigest(phases),
-			phases: phases.map((phase) => ({
-				phase: phase.phase,
-				nodes: phase.nodes.length,
-				descriptors: phase.nodes.reduce((sum, node) => sum + node.descriptors.length, 0),
-				repeatedOwnKeys: phase.repeatedOwnKeys,
+		pendingModes,
+		pendingAvailability: pendingModes.length > 0 ? "last-captured" : undefined,
+		modes: [
+			...previousConfigurations.modes.filter(({ mode }) => !modes.includes(mode)),
+			...matrix.map(({ mode, phases }) => ({
+				mode,
+				sha256: primordialInventoryDigest(phases),
+				phases: phases.map((phase) => ({
+					phase: phase.phase,
+					nodes: phase.nodes.length,
+					descriptors: phase.nodes.reduce(
+						(sum, node) => sum + node.descriptors.length,
+						0,
+					),
+					repeatedOwnKeys: phase.repeatedOwnKeys,
+				})),
 			})),
-		})),
+		].sort(
+			(left, right) =>
+				primordialInventoryModes.indexOf(left.mode) -
+				primordialInventoryModes.indexOf(right.mode),
+		),
 		availability: catalog.nodes.flatMap((node) =>
 			node[4].map((property) => {
 				const key =
@@ -108,22 +167,9 @@ writeFileSync(
 				return [
 					node[0],
 					key,
-					matrix
-						.filter(({ phases }) =>
-							phases.some(
-								(phase) =>
-									phase.phase === "host-installed" &&
-									phase.nodes.some(
-										(candidate) =>
-											candidate.id === node[0] &&
-											candidate.descriptors.some(
-												(descriptor) =>
-													JSON.stringify(descriptor.key) === JSON.stringify(key),
-											),
-									),
-							),
-						)
-						.map(({ mode }) => mode),
+					primordialInventoryModes.filter((mode) =>
+						availability.get(JSON.stringify([node[0], key]))?.has(mode),
+					),
 				];
 			}),
 		),

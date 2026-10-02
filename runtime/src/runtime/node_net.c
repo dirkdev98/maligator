@@ -895,9 +895,10 @@ static MalValue net_constructor(
 void mal_host_install_node_net(
     MalVm *vm, const MalHostInstallSlot *slots, i32 count,
     const MalHostLaunchContext *launch) {
+    if (mal_node_module_install_cached(vm, "node:net", slots, count)) return;
     MalValue module = vm->intrinsics[MAL_INTRINSIC_NODE_NET_MODULE];
     if (!mal_value_is_undefined(module)) {
-        mal_node_module_publish(vm, slots, count, module);
+        mal_node_module_publish(vm, "node:net", slots, count, module);
         return;
     }
     mal_host_install_node_stream(vm, nullptr, 0, launch);
@@ -959,7 +960,7 @@ void mal_host_install_node_net(
         mal_host_register_macrotask_drain(mal_node_net_drain, false);
         net_roots_installed = true;
     }
-    mal_node_module_publish(vm, slots, count, roots[0]);
+    mal_node_module_publish(vm, "node:net", slots, count, roots[0]);
     mal_gc_unroot(&root);
 }
 

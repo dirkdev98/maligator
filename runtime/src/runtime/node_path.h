@@ -1,10 +1,15 @@
 #pragma once
 
 #include "./defaults.h"
+#include "value.h"
 
 typedef struct MalVm MalVm;
 typedef struct MalHostInstallSlot MalHostInstallSlot;
 typedef struct MalHostLaunchContext MalHostLaunchContext;
+typedef struct MalString MalString;
+
+bool mal_node_path_glob_match(MalVm *vm, MalString *path, MalString *pattern, bool partial);
+MalValue mal_node_path_resolve_path(MalVm *vm, MalValue path);
 
 /**
  * Host installer for the `node:path` built-in (POSIX semantics), implemented

@@ -233,10 +233,11 @@ static MalValue node_tls_connect(
 void mal_host_install_node_tls(
     MalVm *vm, const MalHostInstallSlot *slots, i32 count,
     const MalHostLaunchContext *launch) {
+    if (mal_node_module_install_cached(vm, "node:tls", slots, count)) return;
     (void) launch;
     MalValue cached = vm->intrinsics[MAL_INTRINSIC_NODE_TLS_MODULE];
     if (!mal_value_is_undefined(cached)) {
-        mal_node_module_publish(vm, slots, count, cached);
+        mal_node_module_publish(vm, "node:tls", slots, count, cached);
         return;
     }
     MalValue module = mal_value_from_object(mal_intrinsic_new_object(vm));
@@ -249,7 +250,7 @@ void mal_host_install_node_tls(
         vm, mal_value_to_object(module), (const byte *) "connect", connect,
         TLS_VISIBLE);
     vm->intrinsics[MAL_INTRINSIC_NODE_TLS_MODULE] = module;
-    mal_node_module_publish(vm, slots, count, module);
+    mal_node_module_publish(vm, "node:tls", slots, count, module);
     mal_gc_unroot(&root);
 }
 

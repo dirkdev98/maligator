@@ -1,11 +1,10 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { beforeAll, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
+import { HOST_MODULES } from "../../src/compiler/frontend/host-modules.ts";
 import { buildNativeBinary, HOST_MAIN } from "../../src/test-harness.ts";
-
-const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-node-link-retention-"));
 
 function retainedHostInstallers(binary: string): Array<string> {
 	return execFileSync("nm", ["-g", binary], { encoding: "utf-8" })
@@ -18,77 +17,57 @@ function retainedHostInstallers(binary: string): Array<string> {
 }
 
 describe("node host installer link retention", () => {
-	let pathOnly: string;
-	let processOnly: string;
-	let deadPath: string;
-	let bufferOnly: string;
-	let deadBuffer: string;
-
-	beforeAll(() => {
-		pathOnly = buildNativeBinary({
-			fixture: "tests/local/node-link-path.mjs",
-			name: "node-link-path",
-			mainFile: HOST_MAIN,
-			outDir,
-			nodeEnabled: true,
-		});
-		processOnly = buildNativeBinary({
-			fixture: "tests/local/node-link-process.mjs",
-			name: "node-link-process",
-			mainFile: HOST_MAIN,
-			outDir,
-			nodeEnabled: true,
-		});
-		deadPath = buildNativeBinary({
-			fixture: "tests/local/node-link-dead-path.mjs",
-			name: "node-link-dead-path",
-			mainFile: HOST_MAIN,
-			outDir,
-			nodeEnabled: true,
-		});
-		bufferOnly = buildNativeBinary({
-			fixture: "tests/local/node-link-buffer.mjs",
-			name: "node-link-buffer",
-			mainFile: HOST_MAIN,
-			outDir,
-			nodeEnabled: true,
-		});
-		deadBuffer = buildNativeBinary({
-			fixture: "tests/local/node-link-dead-buffer.mjs",
-			name: "node-link-dead-buffer",
-			mainFile: HOST_MAIN,
-			outDir,
-			nodeEnabled: true,
-		});
-	});
+	function installers(fixture: string, name: string): Array<string> {
+		const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-node-link-retention-"));
+		try {
+			return retainedHostInstallers(
+				buildNativeBinary({
+					fixture,
+					name,
+					mainFile: HOST_MAIN,
+					outDir,
+					nodeEnabled: true,
+				}),
+			);
+		} finally {
+			rmSync(outDir, { recursive: true, force: true });
+		}
+	}
 
 	it("retains only the node:path installer for a path-only program", () => {
-		expect(retainedHostInstallers(pathOnly)).toEqual([
+		expect(installers("tests/local/node-link-path.mjs", "node-link-path")).toEqual([
 			"mal_host_install_maligator",
 			"mal_host_install_node_path",
 		]);
 	});
 
-	it("retains process and its EventEmitter dependency for a process-only program", () => {
-		expect(retainedHostInstallers(processOnly)).toEqual([
-			"mal_host_install_maligator",
-			"mal_host_install_node_events",
-			"mal_host_install_process",
-		]);
+	it("retains dynamic builtin installers when process.getBuiltinModule is available", () => {
+		expect(installers("tests/local/node-link-process.mjs", "node-link-process")).toEqual(
+			[
+				...new Set([
+					"mal_host_install_maligator",
+					...[...HOST_MODULES.values()].map((module) => module.installer),
+				]),
+			].sort(),
+		);
 	});
 
 	it("omits the path installer when its only read is optimized away", () => {
-		expect(retainedHostInstallers(deadPath)).toEqual(["mal_host_install_maligator"]);
+		expect(
+			installers("tests/local/node-link-dead-path.mjs", "node-link-dead-path"),
+		).toEqual(["mal_host_install_maligator"]);
 	});
 
 	it("retains Buffer for a reachable free global", () => {
-		expect(retainedHostInstallers(bufferOnly)).toEqual([
+		expect(installers("tests/local/node-link-buffer.mjs", "node-link-buffer")).toEqual([
 			"mal_host_install_maligator",
 			"mal_host_install_node_buffer",
 		]);
 	});
 
 	it("omits the Buffer installer when its imported read is optimized away", () => {
-		expect(retainedHostInstallers(deadBuffer)).toEqual(["mal_host_install_maligator"]);
+		expect(
+			installers("tests/local/node-link-dead-buffer.mjs", "node-link-dead-buffer"),
+		).toEqual(["mal_host_install_maligator"]);
 	});
 });
