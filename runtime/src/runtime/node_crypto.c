@@ -586,6 +586,31 @@ static bool crypto_byte_source_span(
     return mal_node_crypto_byte_span(vm, value, out);
 }
 
+#if defined(__APPLE__)
+#include <CommonCrypto/CommonDigest.h>
+
+typedef CC_SHA512_CTX MalSha512;
+
+static void mal_sha512_init(MalSha512 *ctx, bool sha384) {
+    if (sha384) CC_SHA384_Init(ctx);
+    else CC_SHA512_Init(ctx);
+}
+
+static void mal_sha512_update(MalSha512 *ctx, const u8 *data, usize length) {
+    // CommonCrypto's input length is 32 bits; Node byte sources are size_t-sized.
+    while (length > 0) {
+        CC_LONG chunk = length > UINT32_MAX ? UINT32_MAX : (CC_LONG) length;
+        CC_SHA512_Update(ctx, data, chunk);
+        data += chunk;
+        length -= chunk;
+    }
+}
+
+static void mal_sha512_final(MalSha512 *ctx, u8 *out, usize length) {
+    if (length == CC_SHA384_DIGEST_LENGTH) CC_SHA384_Final(out, ctx);
+    else CC_SHA512_Final(out, ctx);
+}
+#else
 typedef struct {
     u64 state[8];
     u64 bit_low;
@@ -697,6 +722,8 @@ static void mal_sha512_final(MalSha512 *ctx, u8 *out, usize length) {
     mal_sha512_compress(ctx, ctx->block);
     for (usize i = 0; i < length; i++) out[i] = (u8) (ctx->state[i / 8] >> (56 - 8 * (i % 8)));
 }
+
+#endif
 
 typedef enum {
     MAL_NODE_CRYPTO_SHA1,
