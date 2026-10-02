@@ -1562,8 +1562,9 @@ static inline bool mal_vm_watched_try_load_static(MalValue receiver,
     return mal_vm_watched_try_load(receiver, ic->key, ic, out);
 }
 
-static inline bool mal_vm_admit_typed_array_length(
-    MalVm *vm, MalValue receiver, MalTypedArrayObject **out, u32 *length
+static inline bool mal_vm_try_typed_array_length(
+    MalValue receiver, const MalInlineCache *ic,
+    MalTypedArrayObject **out, u32 *length
 );
 
 /**
@@ -1609,8 +1610,8 @@ static inline bool mal_vm_special_try_load(MalVm *vm, MalValue receiver, MalValu
     if (ic->mode == MAL_IC_MODE_TYPED_ARRAY_LENGTH) {
         MalTypedArrayObject *array;
         u32 length;
-        if (mal_vm_admit_typed_array_length(vm, receiver, &array, &length)) {
-            *out = mal_value_from_i32((i32) length);
+        if (mal_vm_try_typed_array_length(receiver, ic, &array, &length)) {
+            *out = mal_value_from_u32(length);
             mal_perf_ic_load_typed_array_length_hit();
             return true;
         }
@@ -2187,29 +2188,39 @@ static inline u32 mal_vm_typed_array_numeric_index(f64 index) {
     return UINT32_MAX;
 }
 
-static inline bool mal_vm_admit_typed_array_length(
-    MalVm *vm, MalValue receiver, MalTypedArrayObject **out, u32 *length
+bool mal_vm_resolve_typed_array_length(
+    MalVm *vm, MalValue receiver, MalInlineCache *ic,
+    MalTypedArrayObject **out, u32 *length
+);
+
+static inline bool mal_vm_try_typed_array_length(
+    MalValue receiver, const MalInlineCache *ic,
+    MalTypedArrayObject **out, u32 *length
 ) {
-    if (!mal_primitive_method_protector ||
-        !mal_value_is_typed_array_object(receiver)) {
-        return false;
-    }
+    if (ic->mode != MAL_IC_MODE_TYPED_ARRAY_LENGTH ||
+        !mal_value_is_typed_array_object(receiver)) return false;
     MalTypedArrayObject *array = mal_value_to_typed_array_object(receiver);
-    if (mal_object_prototype(&array->object) != mal_value_to_object(
-            vm->intrinsics[MAL_INTRINSIC_TYPED_ARRAY_KIND_PROTOTYPE_BASE + array->kind]) ||
-        mal_object_get_own(
-            &array->object, mal_intrinsic_string_key(vm, "length")).present) {
-        return false;
-    }
+    if (array->object.shape != ic->shape ||
+        mal_object_has_public_overflow(&array->object) ||
+        mal_object_prototype(&array->object) != ic->proto_object[0]) return false;
     *out = array;
     *length = mal_typed_array_object_length(array);
     return true;
 }
 
-static inline bool mal_vm_admit_numeric_typed_array_length(
-    MalVm *vm, MalValue receiver, MalTypedArrayObject **out, u32 *length
+static inline bool mal_vm_admit_typed_array_length(
+    MalVm *vm, MalValue receiver, MalInlineCache *ic,
+    MalTypedArrayObject **out, u32 *length
 ) {
-    return mal_vm_admit_typed_array_length(vm, receiver, out, length) &&
+    return mal_vm_try_typed_array_length(receiver, ic, out, length) ||
+        mal_vm_resolve_typed_array_length(vm, receiver, ic, out, length);
+}
+
+static inline bool mal_vm_admit_numeric_typed_array_length(
+    MalVm *vm, MalValue receiver, MalInlineCache *ic,
+    MalTypedArrayObject **out, u32 *length
+) {
+    return mal_vm_admit_typed_array_length(vm, receiver, ic, out, length) &&
         !mal_typed_array_is_bigint((*out)->kind);
 }
 

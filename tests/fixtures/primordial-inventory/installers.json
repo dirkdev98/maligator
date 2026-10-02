@@ -137,7 +137,7 @@
 	},
 	{
 		"file": "builtin_typed_array.c",
-		"sha256": "105300f75b4c7dafacb215b4c54978c46056589fc62de5b78b978eedf33bd107"
+		"sha256": "46e7bee3ce2beff47aea58d40256719492f6ac534f6a639d646763ac61d189b4"
 	},
 	{
 		"file": "builtin_uri.c",
@@ -697,10 +697,10 @@
 	},
 	{
 		"file": "vm_ops.c",
-		"sha256": "162517a65ebbdc3286ff89e88289c558e37debc7e4c82e3a79e901f2e301c1aa"
+		"sha256": "914c0cf1417f751b3360a81019cd4b10dfd62f56371a47d40a1f0566387b099e"
 	},
 	{
 		"file": "vm_ops.h",
-		"sha256": "cde3befc62d3e8a5ee5457e8a293de4d515666f696f38e6c9d600c3db383d09b"
+		"sha256": "d5bdc096e40e675d5b82f1d284422a499262a855eb8240655e9167697a65b1a2"
 	}
 ]

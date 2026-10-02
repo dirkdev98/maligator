@@ -703,7 +703,12 @@ static MalValue mal_ta_get_length(MalVm *vm, MalValue this_value, const MalValue
     (void) arg_count;
     (void) new_target;
     MalTypedArrayObject *array = mal_ta_this_raw(vm, this_value);
-    return array == nullptr ? mal_value_new_undefined() : mal_value_from_i32((i32) mal_typed_array_object_length(array));
+    return array == nullptr ? mal_value_new_undefined() : mal_value_from_u32(mal_typed_array_object_length(array));
+}
+
+bool mal_builtin_typed_array_is_length_getter(MalValue getter) {
+    return mal_value_is_native_function_object(getter) &&
+        mal_native_function_object_callback(mal_value_to_native_function_object(getter)) == mal_ta_get_length;
 }
 
 static MalValue mal_ta_get_byte_length(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {

@@ -10,6 +10,8 @@
  */
 void mal_builtin_typed_array_install(MalVm *vm);
 
+bool mal_builtin_typed_array_is_length_getter(MalValue getter);
+
 MalValue mal_builtin_typed_array_sort(MalVm *vm, MalValue receiver,
     const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee);
 MalValue mal_builtin_typed_array_to_sorted(MalVm *vm, MalValue receiver,

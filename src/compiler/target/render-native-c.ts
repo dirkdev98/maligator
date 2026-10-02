@@ -4575,7 +4575,7 @@ function emitInstruction(
 			`  r${instruction.dst} = ${reps[instruction.dst] === "number" ? `__indexed_length_${id}_induction` : `mal_value_from_u32(__indexed_length_${id}_value)`};`,
 			`  mal_perf_ic_load_array_length_hit();`,
 			...pairedAdmission,
-			`} else if (${reverse ? "false" : `mal_vm_admit_numeric_typed_array_length(vm, ${boxed(instruction.object)}, &__indexed_length_${id}_typed_array, &__indexed_length_${id}_value)`}) {`,
+			`} else if (${reverse ? "false" : `mal_vm_admit_numeric_typed_array_length(vm, ${boxed(instruction.object)}, &${nativeBodyReference(resources, "propertyCache")}[${instruction.icIndex}], &__indexed_length_${id}_typed_array, &__indexed_length_${id}_value)`}) {`,
 			`  __indexed_length_${id}_kind = 2;`,
 			`  __indexed_length_${id}_induction = (f64) __indexed_length_${id}_value;`,
 			`  r${instruction.dst} = ${reps[instruction.dst] === "number" ? `(f64) __indexed_length_${id}_value` : `mal_value_from_u32(__indexed_length_${id}_value)`};`,
@@ -5838,8 +5838,17 @@ function emitInstruction(
 				}
 				return ordinary();
 			}
-			const probe = (): string =>
-				`mal_vm_property_try_load_static(vm, ${boxed(instruction.object)}, &${nativeBodyReference(resources, "propertyCache")}[${instruction.icIndex}], &__v_${ip})`;
+			const name = context.stringConstants[instruction.stringIndex];
+			const lengthName =
+				name?.length === 6 &&
+				name.every((unit, index) => unit === [108, 101, 110, 103, 116, 104][index]);
+			const probe = (): string => {
+				const cache = `&${nativeBodyReference(resources, "propertyCache")}[${instruction.icIndex}]`;
+				const ordinary = `mal_vm_property_try_load_static(vm, ${boxed(instruction.object)}, ${cache}, &__v_${ip})`;
+				return lengthName
+					? `mal_vm_special_try_load_static(vm, ${boxed(instruction.object)}, ${cache}, &__v_${ip}) || ${ordinary}`
+					: ordinary;
+			};
 			const ordinary = (): Array<string> => [
 				`MalObject *${receiverName} = mal_vm_as_object(${boxed(instruction.object)});`,
 				`MalValue __v_${ip};`,

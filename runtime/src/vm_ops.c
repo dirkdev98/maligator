@@ -2393,8 +2393,8 @@ mal_vm_property_try_load_static_remaining(
     if (ic->mode == MAL_IC_MODE_TYPED_ARRAY_LENGTH) {
         MalTypedArrayObject *array;
         u32 length;
-        if (mal_vm_admit_typed_array_length(vm, receiver, &array, &length)) {
-            MalValue value = mal_value_from_i32((i32) length);
+        if (mal_vm_try_typed_array_length(receiver, ic, &array, &length)) {
+            MalValue value = mal_value_from_u32(length);
             mal_perf_ic_load_typed_array_length_hit();
             return (MalStaticPropertyProbeResult) { .hit = true, .value = value };
         }
@@ -5110,6 +5110,7 @@ static void mal_ic_detach_prototype_cache(MalInlineCache *ic) {
 		ic->mode == MAL_IC_MODE_INHERITED_TABLE ||
 		(ic->mode == MAL_IC_MODE_TRANSITION && ic->obj != nullptr) ||
 		ic->mode == MAL_IC_MODE_CONSTRUCTOR_LAYOUT ||
+        ic->mode == MAL_IC_MODE_TYPED_ARRAY_LENGTH ||
 		(ic->mode == MAL_IC_MODE_MISSING &&
          ic->receiver_type == MAL_IC_MISSING_EXACT_CHAIN &&
          ic->poly_count > 0)) {
@@ -5326,7 +5327,8 @@ static bool mal_ic_record_local_prototype_chain(
     bool same_positive_chain =
         ((ic->mode == MAL_IC_MODE_INHERITED_VALUE && ic->poly_count > 0) ||
          ic->mode == MAL_IC_MODE_INHERITED_SLOT ||
-         ic->mode == MAL_IC_MODE_INHERITED_TABLE) &&
+         ic->mode == MAL_IC_MODE_INHERITED_TABLE ||
+         ic->mode == MAL_IC_MODE_TYPED_ARRAY_LENGTH) &&
         ic->poly_count > 0 &&
         ic->proto_object[0] == mal_object_prototype(receiver) &&
         ic->proto_object[1] == holder &&
@@ -5348,6 +5350,41 @@ static bool mal_ic_record_local_prototype_chain(
     ic->proto_object[1] = holder;
     ic->poly_count = 1;
     return true;
+}
+
+bool mal_vm_resolve_typed_array_length(
+    MalVm *vm, MalValue receiver, MalInlineCache *ic,
+    MalTypedArrayObject **out, u32 *length
+) {
+    if (!mal_value_is_typed_array_object(receiver)) return false;
+    MalTypedArrayObject *array = mal_value_to_typed_array_object(receiver);
+    MalObject *object = &array->object;
+    if (mal_object_has_public_overflow(object)) return false;
+    MalKey key = mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_LENGTH);
+    if (mal_object_get_own(object, key).present) return false;
+    for (MalObject *holder = mal_object_prototype(object); holder != nullptr;
+         holder = mal_object_prototype(holder)) {
+        if (holder->header.type != MAL_HEAP_OBJECT) return false;
+        MalPropertyLookup lookup = mal_object_get_own(holder, key);
+        if (!lookup.present) continue;
+        if (!(lookup.desc.flags & MAL_PROPERTY_ACCESSOR) ||
+            !mal_builtin_typed_array_is_length_getter(lookup.desc.getter)) return false;
+        if (!mal_ic_record_local_prototype_chain(object, holder, ic, false)) return false;
+        mal_perf_ic_note_replacement(ic, MAL_IC_MODE_TYPED_ARRAY_LENGTH);
+        *ic = (MalInlineCache) {
+            .shape = object->shape,
+            .key = key.value,
+            .proto_object = {mal_object_prototype(object), holder},
+            .slot = MAL_IC_VALUE_SLOT,
+            .poly_count = 1,
+            .mode = MAL_IC_MODE_TYPED_ARRAY_LENGTH,
+        };
+        *out = array;
+        // Cache getter resolution; detachment and resizing still change each read.
+        *length = mal_typed_array_object_length(array);
+        return true;
+    }
+    return false;
 }
 
 /**
@@ -5789,13 +5826,9 @@ static MalValue mal_vm_op_load_property_ic_keyed(
         mal_array_key_is_length((MalKey) {.kind = MAL_KEY_STRING, .value = key_value})) {
         MalTypedArrayObject *array;
         u32 length;
-        if (mal_vm_admit_typed_array_length(vm, object_value, &array, &length)) {
-            if (mal_ic_key_is_stable_string(key_value)) {
-                mal_ic_record_special(
-                    vm, ic, MAL_IC_MODE_TYPED_ARRAY_LENGTH, 0, key_value,
-                    mal_value_new_undefined(), nullptr);
-            }
-            return mal_value_from_i32((i32) length);
+        if (mal_ic_key_is_stable_string(key_value) &&
+            mal_vm_admit_typed_array_length(vm, object_value, ic, &array, &length)) {
+            return mal_value_from_u32(length);
         }
     }
     MalObject *slot_object = mal_vm_as_own_slot_object(object_value);
