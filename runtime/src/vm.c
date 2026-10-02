@@ -773,6 +773,9 @@ static void mal_vm_init_execution_state(MalVm *vm, const MalRuntimeImage *progra
 
 /** Phase 4: create language heap roots, intrinsics, module state, and the main fiber. */
 static void mal_vm_init_language_state(MalVm *vm, const MalRuntimeImage *program) {
+    vm->symbol_registry = (MalSymbolRegistry) {0};
+    vm->atoms = (MalAtomStore) {0};
+    vm->native_source_cache = (MalNativeSourceCache) {0};
 	mal_heap_init(&vm->heap, 0);
     mal_gc_configure_heap(vm);
     vm->heap.native_function_length_key =
@@ -795,9 +798,6 @@ static void mal_vm_init_language_state(MalVm *vm, const MalRuntimeImage *program
     for (i32 i = 0; i < MAL_INTRINSIC_COUNT; i++) {
         vm->intrinsics[i] = mal_value_new_undefined();
     }
-    vm->symbol_registry = mal_table_new(MAL_TABLE_MODE_GENERAL, MAL_TABLE_ROLE_SYMBOL_REGISTRY);
-    // Must exist before mal_intrinsics_init, which interns keys through it.
-    vm->atoms = mal_table_new(MAL_TABLE_MODE_GENERAL, MAL_TABLE_ROLE_ATOMS);
     for (i32 i = 0; i < program->string_constant_count; i++) {
         vm->string_constant_atoms[i] = mal_property_atomize_string(
             vm, (MalString *) &vm->runtime_image->string_constants[i]);
@@ -1083,11 +1083,10 @@ void mal_vm_free(MalVm *vm) {
     vm->captured_trace_free_head = -1;
     vm->captured_trace_live_count = 0;
 
-    // These VM-global tables (unlike cell-owned tables, freed by finalizers) are
-    // torn down here. Their buffers live in the heap's RAW space, so mal_table_free
-    // now reaches the allocator (gc_free_raw): both frees MUST precede mal_heap_free.
-    mal_table_free(vm->symbol_registry);
-    mal_table_free(vm->atoms);
+    // Store RAW buffers must be released while the owning heap is still live.
+    mal_symbol_registry_free(&vm->symbol_registry);
+    mal_atom_store_free(&vm->atoms);
+    mal_native_source_cache_free(&vm->native_source_cache);
     // Free every live cell's owned side allocations before releasing the heap,
     // so a teardown leaves no shutdown leak (mal_heap_free only munmaps the
     // chunks + frees LOS records; it does not run per-cell finalizers).

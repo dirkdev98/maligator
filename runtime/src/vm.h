@@ -6,6 +6,7 @@
 #include "heap_bigint.h"
 #include "heap_string.h"
 #include "intrinsics.h"
+#include "intern_store.h"
 #include "perf_stats.h"
 #include "profile.h"
 #include "shape.h"
@@ -1714,19 +1715,10 @@ typedef struct MalVm {
      */
     MalValue entry_async_promise;
 
-    /**
-     * Symbol.for registry: string key -> symbol value (inline payload).
-     */
-    MalTable *symbol_registry;
-
-    /**
-     * Canonical property-name strings, including compiler constants, computed
-     * keys, and the fixed vocabulary handed out by mal_intrinsic_ascii. Keyed by
-     * content and strongly retained for the VM lifetime so shapes, dictionaries,
-     * and ICs can converge on stable pointer identity. Inline values exclusively
-     * cache native callable source renderings by internal name.
-     */
-    MalTable *atoms;
+    MalSymbolRegistry symbol_registry;
+    // Shapes and caches borrow these canonical pointers for the VM lifetime.
+    MalAtomStore atoms;
+    MalNativeSourceCache native_source_cache;
 
     /**
      * Direct pointers for measured request-hot atom names. The atom table owns

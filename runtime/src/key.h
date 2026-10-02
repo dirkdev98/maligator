@@ -19,11 +19,7 @@ typedef enum MalKeyKind {
     MAL_KEY_STATIC,
 } MalKeyKind;
 
-/**
- * Tagged key wrapper used by property storage and general tables. `kind` is
- * fully determined by `value`; table and shape entries therefore store only
- * the value and reconstruct the transient wrapper on read.
- */
+// Property entries store only value; their transient equality kind is derived on read.
 typedef struct MalKey {
     MalKeyKind kind;
     MalValue value;

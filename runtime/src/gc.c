@@ -1015,7 +1015,6 @@ static void mal_gc_mark_string(MalString *string) {
     }
 }
 
-/** Trace a table's live entries (keys + inline values + descriptor refs). */
 static void mal_gc_trace_table(MalTable *table) {
     if (table == nullptr) {
         return;
@@ -1026,14 +1025,10 @@ static void mal_gc_trace_table(MalTable *table) {
     void *entry;
     while (mal_table_iter_next(&iter, &key, &entry)) {
         mal_gc_mark_value(key.value);
-        if (mal_table_mode(table) == MAL_TABLE_MODE_OBJECT) {
-            MalPropertyDesc desc = mal_property_entry_desc(table, entry);
-            mal_gc_mark_value(desc.value);
-            mal_gc_mark_value(desc.getter);
-            mal_gc_mark_value(desc.setter);
-        } else {
-            mal_gc_mark_value(mal_table_entry_value(table, entry));
-        }
+        MalPropertyDesc desc = mal_property_entry_desc(table, entry);
+        mal_gc_mark_value(desc.value);
+        mal_gc_mark_value(desc.getter);
+        mal_gc_mark_value(desc.setter);
     }
 }
 
@@ -1743,8 +1738,28 @@ static void mal_gc_scan_roots(MalVm *vm) {
 #endif
     mal_gc_mark_values(vm->unhandled_rejections, vm->unhandled_count);
     mal_gc_mark_value(vm->entry_async_promise);
-    mal_gc_trace_table(vm->symbol_registry);
-    mal_gc_trace_table(vm->atoms);
+    u32 intern_cursor = 0;
+    MalString *atom;
+    while ((atom = mal_atom_store_next(&vm->atoms, &intern_cursor)) != nullptr) {
+        mal_gc_mark_string(atom);
+    }
+    MAL_PERF_ADD(intern_stores[MAL_PERF_INTERN_ATOMS].root_scan_slots, vm->atoms.capacity);
+    MAL_PERF_ADD(intern_stores[MAL_PERF_INTERN_ATOMS].root_values, vm->atoms.size);
+    intern_cursor = 0;
+    MalSymbol *registered_symbol;
+    while ((registered_symbol = mal_symbol_registry_next(&vm->symbol_registry, &intern_cursor)) != nullptr) {
+        mal_gc_mark_value(mal_value_from_symbol(registered_symbol));
+    }
+    MAL_PERF_ADD(intern_stores[MAL_PERF_INTERN_SYMBOL_REGISTRY].root_scan_slots, vm->symbol_registry.capacity);
+    MAL_PERF_ADD(intern_stores[MAL_PERF_INTERN_SYMBOL_REGISTRY].root_values, vm->symbol_registry.size);
+    intern_cursor = 0;
+    const MalNativeSourceEntry *native_source;
+    while ((native_source = mal_native_source_cache_next(&vm->native_source_cache, &intern_cursor)) != nullptr) {
+        mal_gc_mark_string(native_source->name);
+        mal_gc_mark_string(native_source->source);
+    }
+    MAL_PERF_ADD(intern_stores[MAL_PERF_INTERN_NATIVE_SOURCE_CACHE].root_scan_slots, vm->native_source_cache.capacity);
+    MAL_PERF_ADD(intern_stores[MAL_PERF_INTERN_NATIVE_SOURCE_CACHE].root_values, (u64) vm->native_source_cache.size * 2);
 
     for (MalJob *job = vm->job_head; job != nullptr; job = job->next) {
         mal_gc_mark_job(job);
@@ -2800,8 +2815,7 @@ static void mal_gc_clear_remembered(void) {
 
 static u64 mal_gc_remembered_table_slots(const MalTable *table) {
     if (table == nullptr) return 0;
-    return mal_table_size(table) *
-        (mal_table_mode(table) == MAL_TABLE_MODE_OBJECT ? 4 : 2);
+    return mal_table_size(table) * 4;
 }
 
 static u64 mal_gc_remembered_object_slots(const MalObject *object) {

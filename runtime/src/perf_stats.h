@@ -6,7 +6,7 @@
 #define MAL_PERF_STATS 0
 #endif
 
-#define MAL_PERF_TABLE_ROLE_COUNT 3
+#define MAL_PERF_INTERN_STORE_KIND_COUNT 3
 #define MAL_PERF_SHAPE_CALLER_COUNT 6
 #define MAL_PERF_IC_MODE_COUNT 10
 #define MAL_PERF_COLLECTION_KIND_COUNT 5
@@ -49,6 +49,27 @@ typedef struct MalPerfTableStats {
     u64 storage_releases;
     u64 entry_shrinks;
 } MalPerfTableStats;
+
+typedef enum MalPerfInternStoreKind : u8 {
+    MAL_PERF_INTERN_ATOMS,
+    MAL_PERF_INTERN_SYMBOL_REGISTRY,
+    MAL_PERF_INTERN_NATIVE_SOURCE_CACHE,
+} MalPerfInternStoreKind;
+
+typedef struct MalPerfInternStoreStats {
+    u64 lookups;
+    u64 hits;
+    u64 misses;
+    u64 inserts;
+    u64 insert_hits;
+    u64 groups;
+    u64 candidates;
+    u64 grows;
+    u64 rehash_entries;
+    u64 allocation_bytes;
+    u64 root_scan_slots;
+    u64 root_values;
+} MalPerfInternStoreStats;
 
 typedef struct MalPerfShapeStats {
     u64 calls;
@@ -411,7 +432,8 @@ typedef struct MalPerfStats {
     u64 http_response_shape_append_fallbacks;
     u64 http_response_slot_growths_avoided;
 
-    MalPerfTableStats tables[MAL_PERF_TABLE_ROLE_COUNT];
+    MalPerfTableStats table;
+    MalPerfInternStoreStats intern_stores[MAL_PERF_INTERN_STORE_KIND_COUNT];
     MalPerfShapeStats shapes[MAL_PERF_SHAPE_CALLER_COUNT];
     u64 shape_transition_calls;
     u64 shape_transition_hits;

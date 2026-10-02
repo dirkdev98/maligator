@@ -61,7 +61,7 @@ static bool missing_queries_release_storage(MalVm *vm) {
         mal_value_from_string(mal_intrinsic_ascii(vm, "length"))));
     MalInlineCache ic = {0};
     usize strings_before = quiescent_strings(vm);
-    usize atoms_before = mal_table_size(vm->atoms);
+    usize atoms_before = mal_atom_store_size(&vm->atoms);
     usize raw_before = mal_heap_usage(&vm->heap).raw_owned_bytes;
     char name[96];
     for (usize i = 0; i < 2048; i++) {
@@ -86,7 +86,7 @@ static bool missing_queries_release_storage(MalVm *vm) {
     roots[1] = MAL_VALUE_UNDEFINED;
     CHECK(mal_array_object_store(mal_value_to_array_object(roots[2]), mal_key_index(0), MAL_VALUE_UNDEFINED));
     usize strings_after_flat = quiescent_strings(vm);
-    CHECK(mal_table_size(vm->atoms) == atoms_before);
+    CHECK(mal_atom_store_size(&vm->atoms) == atoms_before);
     CHECK(strings_after_flat == strings_before);
     CHECK(mal_heap_usage(&vm->heap).raw_owned_bytes == raw_before);
 
@@ -102,12 +102,12 @@ static bool missing_queries_release_storage(MalVm *vm) {
     }
     roots[1] = MAL_VALUE_UNDEFINED;
     usize strings_after_rope = quiescent_strings(vm);
-    CHECK(mal_table_size(vm->atoms) == atoms_before);
+    CHECK(mal_atom_store_size(&vm->atoms) == atoms_before);
     CHECK(strings_after_rope == strings_before);
     CHECK(mal_heap_usage(&vm->heap).raw_owned_bytes == raw_before);
     CHECK(ic.key == 0);
     printf("transient query retention: atoms=%zu->%zu strings=%zu->%zu->%zu raw=%zu->%zu\n",
-        atoms_before, mal_table_size(vm->atoms), strings_before, strings_after_flat,
+        atoms_before, mal_atom_store_size(&vm->atoms), strings_before, strings_after_flat,
         strings_after_rope, raw_before, mal_heap_usage(&vm->heap).raw_owned_bytes);
     mal_gc_unroot(&span);
     return true;

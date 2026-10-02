@@ -140,7 +140,7 @@ static bool mal_object_desc_is_default_data(const MalPropertyDesc *desc) {
 static MalTable *mal_object_ensure_overflow(MalObject *object) {
     if (mal_object_overflow(object) == nullptr) {
         mal_object_set_overflow_pointer(
-            object, mal_table_new(MAL_TABLE_MODE_OBJECT, MAL_TABLE_ROLE_OBJECT));
+            object, mal_table_new());
     }
     return mal_object_overflow(object);
 }

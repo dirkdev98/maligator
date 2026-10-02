@@ -179,9 +179,9 @@ static int check_bytes(MalVm *vm) {
     for (i32 i = 0; i < 64; i++) mal_set_object_add(set, mal_value_from_i32(i));
     usize set_bytes = mal_set_storage_allocation_bytes(set->entries);
     MalHeapUsage before = mal_heap_usage(&vm->heap);
-    MalTable *table = mal_table_new(MAL_TABLE_MODE_GENERAL, MAL_TABLE_ROLE_ATOMS);
+    MalTable *table = mal_table_new();
     for (i32 i = 0; i < 64; i++) {
-        mal_table_upsert_entry(table, mal_collection_key_from_value(mal_value_from_i32(i)), nullptr);
+        mal_table_upsert_entry(table, mal_key_from_value(mal_collection_canonical_value(mal_value_from_i32(i))), nullptr);
     }
     usize table_bytes = mal_heap_usage(&vm->heap).raw_owned_bytes - before.raw_owned_bytes;
     mal_table_free(table);
@@ -191,7 +191,7 @@ static int check_bytes(MalVm *vm) {
     mal_set_object_add(generic, MAL_VALUE_TRUE);
     usize generic_bytes = mal_set_storage_allocation_bytes(generic->entries);
     CHECK(set_bytes < generic_bytes && generic_bytes < table_bytes);
-    printf("set-storage bytes int32=%zu generic=%zu generic-table=%zu\n", set_bytes, generic_bytes, table_bytes);
+    printf("set-storage bytes int32=%zu generic=%zu property-table=%zu\n", set_bytes, generic_bytes, table_bytes);
     return 0;
 }
 

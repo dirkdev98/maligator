@@ -11,7 +11,7 @@ import {
 const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-grouped-hash-index-"));
 afterAll(() => rmSync(outDir, { recursive: true, force: true }));
 
-it("preserves collided membership, pinned handles and clear continuations in every table role", () => {
+it("preserves collided membership, pinned handles and clear continuations in property tables and Sets", () => {
 	const binary = buildNativeBinary({
 		fixture: "tests/local/fibertest_stub.js",
 		name: "grouped-hash-index",

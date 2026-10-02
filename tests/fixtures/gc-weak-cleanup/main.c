@@ -67,7 +67,7 @@ static int check_table_filter(void) {
     static const usize removals[] = {0, 1, 16, 17, 32, 64, 17};
     for (usize trial = 0; trial < countof(removals); ++trial) {
         usize count = trial + 1 == countof(removals) ? 256 : countof(clustered);
-        MalTable *table = mal_table_new(MAL_TABLE_MODE_GENERAL, MAL_TABLE_ROLE_ATOMS);
+        MalTable *table = mal_table_new();
         if (!mal_table_reserve(table, count)) return 20;
         void *handles[256];
         for (usize i = 0; i < count; ++i) {

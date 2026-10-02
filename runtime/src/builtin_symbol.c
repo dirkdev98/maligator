@@ -122,18 +122,11 @@ static MalValue mal_builtin_symbol_for(MalVm *vm, MalValue this_value, const Mal
     if (!mal_vm_to_string(vm, arg_count >= 1 ? args[0] : mal_value_new_undefined(), &key)) {
         return mal_value_new_undefined();
     }
-    MalKey registry_key = {.kind = MAL_KEY_STRING, .value = mal_value_from_string(key)};
+    MalSymbol *symbol = mal_symbol_registry_find(&vm->symbol_registry, key);
+    if (symbol != nullptr) return mal_value_from_symbol(symbol);
 
-    MalTableLookup lookup = mal_table_lookup(vm->symbol_registry, registry_key);
-    if (lookup.present) {
-        return mal_table_entry_value(vm->symbol_registry, lookup.entry);
-    }
-
-    MalSymbol *symbol = mal_symbol_new(&vm->heap, key);
-    symbol->registered = true;
-
-    void *entry = mal_table_upsert_entry(vm->symbol_registry, registry_key, nullptr);
-    mal_table_entry_set_value(vm->symbol_registry, entry, mal_value_from_symbol(symbol));
+    symbol = mal_symbol_new(&vm->heap, key);
+    symbol = mal_symbol_registry_insert(&vm->symbol_registry, symbol);
 
     return mal_value_from_symbol(symbol);
 }

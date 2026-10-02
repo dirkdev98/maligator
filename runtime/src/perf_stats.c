@@ -363,10 +363,10 @@ void mal_perf_array_element_write(const void *array, u64 value) {
     record->array_element_mask |= bit;
 }
 
-static const char *const mal_perf_table_roles[MAL_PERF_TABLE_ROLE_COUNT] = {
-    "object",
+static const char *const mal_perf_intern_store_kinds[MAL_PERF_INTERN_STORE_KIND_COUNT] = {
     "atoms",
     "symbol_registry",
+    "native_source_cache",
 };
 
 static const char *const mal_perf_shape_callers[MAL_PERF_SHAPE_CALLER_COUNT] = {
@@ -1144,8 +1144,8 @@ static void mal_perf_stats_print(void) {
         (unsigned long long) mal_perf_stats.hash_index_candidates,
         (unsigned long long) mal_perf_stats.hash_index_tombstone_reuses,
         (unsigned long long) mal_perf_stats.hash_index_rebuilds);
-    for (u32 i = 0; i < MAL_PERF_TABLE_ROLE_COUNT; i++) {
-        const MalPerfTableStats *stats = &mal_perf_stats.tables[i];
+    {
+        const MalPerfTableStats *stats = &mal_perf_stats.table;
         fprintf(
             stderr,
             "[perf-table-stats] role=%s lookups=%llu lookup_hits=%llu lookup_misses=%llu "
@@ -1154,7 +1154,7 @@ static void mal_perf_stats_print(void) {
             "rehash_entries=%llu slot_growths=%llu deletes=%llu delete_hits=%llu "
             "clears=%llu compactions=%llu "
             "storage_allocations=%llu storage_releases=%llu entry_shrinks=%llu\n",
-            mal_perf_table_roles[i],
+            "object",
             (unsigned long long) stats->lookups,
             (unsigned long long) stats->lookup_hits,
             (unsigned long long) stats->lookup_misses,
@@ -1176,6 +1176,26 @@ static void mal_perf_stats_print(void) {
             (unsigned long long) stats->storage_releases,
             (unsigned long long) stats->entry_shrinks
         );
+    }
+    for (u32 i = 0; i < MAL_PERF_INTERN_STORE_KIND_COUNT; i++) {
+        const MalPerfInternStoreStats *stats = &mal_perf_stats.intern_stores[i];
+        fprintf(stderr,
+            "[perf-intern-store] kind=%s lookups=%llu hits=%llu misses=%llu "
+            "inserts=%llu insert_hits=%llu groups=%llu candidates=%llu grows=%llu "
+            "rehash_entries=%llu allocation_bytes=%llu root_scan_slots=%llu root_values=%llu\n",
+            mal_perf_intern_store_kinds[i],
+            (unsigned long long) stats->lookups,
+            (unsigned long long) stats->hits,
+            (unsigned long long) stats->misses,
+            (unsigned long long) stats->inserts,
+            (unsigned long long) stats->insert_hits,
+            (unsigned long long) stats->groups,
+            (unsigned long long) stats->candidates,
+            (unsigned long long) stats->grows,
+            (unsigned long long) stats->rehash_entries,
+            (unsigned long long) stats->allocation_bytes,
+            (unsigned long long) stats->root_scan_slots,
+            (unsigned long long) stats->root_values);
     }
     for (u32 i = 0; i < MAL_PERF_SHAPE_CALLER_COUNT; i++) {
         const MalPerfShapeStats *stats = &mal_perf_stats.shapes[i];

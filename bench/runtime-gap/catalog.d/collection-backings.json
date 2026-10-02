@@ -67,6 +67,19 @@
 			"controls": ["stable-shape-properties", "map-operations"]
 		},
 		{
+			"id": "property-atom-reuse",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "property atom interning",
+			"category": "object-array-representation",
+			"mechanisms": ["keyed-lookup", "property-atoms", "shape-transitions"],
+			"inputShape": "256 long property names repeatedly reconstructed across shaped objects",
+			"unit": "operations",
+			"sourceSeam": "runtime/src/intrinsics.c; runtime/src/intern_store.c",
+			"fixture": "cases/property-atom-reuse.mjs",
+			"controls": ["dictionary-operations", "stable-shape-properties"]
+		},
+		{
 			"id": "weak-small-lifecycle",
 			"group": "runtime",
 			"suite": "runtime",

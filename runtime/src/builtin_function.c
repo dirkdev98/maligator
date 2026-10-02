@@ -296,12 +296,8 @@ static MalValue mal_builtin_function_prototype_to_string(MalVm *vm, MalValue thi
     MalString *cache_name = name_length == 0
         ? mal_intrinsic_hot_ascii(vm, MAL_HOT_KEY_EMPTY)
         : mal_property_atomize_string(vm, name);
-    MalKey cache_key = {.kind = MAL_KEY_STRING, .value = mal_value_from_string(cache_name)};
-    MalTableLookup cache_lookup = mal_table_lookup(vm->atoms, cache_key);
-    if (cache_lookup.present) {
-        MalValue cached = mal_table_entry_value(vm->atoms, cache_lookup.entry);
-        if (mal_value_is_string(cached)) return cached;
-    }
+    MalString *cached = mal_native_source_cache_find(&vm->native_source_cache, cache_name);
+    if (cached != nullptr) return mal_value_from_string(cached);
 
     c16 *code_units = mal_heap_alloc_raw(&vm->heap, bytes);
     usize offset = 0;
@@ -317,8 +313,7 @@ static MalValue mal_builtin_function_prototype_to_string(MalVm *vm, MalValue thi
     }
 
     MalString *result = mal_string_new_owned(&vm->heap, code_units, total_length);
-    void *cache_entry = mal_table_upsert_entry(vm->atoms, cache_key, nullptr);
-    mal_table_entry_set_value(vm->atoms, cache_entry, mal_value_from_string(result));
+    result = mal_native_source_cache_insert(&vm->native_source_cache, cache_name, result);
     return mal_value_from_string(result);
 }
 

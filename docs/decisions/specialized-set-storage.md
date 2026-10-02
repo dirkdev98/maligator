@@ -8,7 +8,7 @@ separate. Collection identity and ordinary object properties survive every backi
 change.
 
 The Set API carries canonical `MalValue` members directly through lookup, algebra
-and traversal. Transient property-key kinds belong to the general table boundary.
+and traversal. Transient property-key kinds belong to the property table boundary.
 Raw member entry points apply shared collection normalization; canonical entry
 points accept values produced by that normalization or Set iteration.
 

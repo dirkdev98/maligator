@@ -328,20 +328,13 @@ MalString *mal_intrinsic_ascii(MalVm *vm, const byte *name) {
     // A borrowed Latin-1 probe avoids allocating or widening canonical names.
     MalString probe;
     mal_string_init_external_latin1(&probe, (const u8 *) name, length);
-    MalKey key = {.kind = MAL_KEY_STRING, .value = mal_value_from_string(&probe)};
-
-    MalTableLookup lookup = mal_table_lookup(vm->atoms, key);
-    MalString *atom;
-    if (lookup.present) {
+    MalString *atom = mal_atom_store_find(&vm->atoms, &probe);
+    if (atom != nullptr) {
         MAL_PERF_COUNT(intrinsic_ascii_hits);
-        atom = mal_value_to_string(mal_table_entry_key(vm->atoms, lookup.entry).value);
-        atom->property_atom = true;
     } else {
         MAL_PERF_COUNT(intrinsic_ascii_misses);
         atom = mal_string_new_ascii(&vm->heap, name, length);
-        atom->property_atom = true;
-        MalKey atom_key = {.kind = MAL_KEY_STRING, .value = mal_value_from_string(atom)};
-        (void) mal_table_upsert_entry(vm->atoms, atom_key, nullptr);
+        atom = mal_atom_store_intern(&vm->atoms, atom);
     }
     if (hot_key != MAL_HOT_KEY_COUNT) {
         vm->hot_intrinsic_keys[hot_key] = atom;
@@ -366,23 +359,15 @@ static MalString *mal_property_resolve_string(
         && vm->tiny_string_cache[
             (usize) string->hash & (MAL_TINY_STRING_CACHE_CAPACITY - 1)]
             == string;
-    MalKey key = {
-        .kind = MAL_KEY_STRING,
-        .value = mal_value_from_string(string),
-    };
-    MalTableLookup lookup = mal_table_lookup(vm->atoms, key);
-    if (lookup.present) {
-        MalString *atom =
-            mal_value_to_string(mal_table_entry_key(vm->atoms, lookup.entry).value);
-        atom->property_atom = true;
+    MalString *atom = mal_atom_store_find(&vm->atoms, string);
+    if (atom != nullptr) {
         if (tiny_cache_entry) {
             mal_string_tiny_cache_promote(&vm->heap, atom);
         }
         return atom;
     }
     if (atomize) {
-        string->property_atom = true;
-        (void) mal_table_upsert_entry(vm->atoms, key, nullptr);
+        return mal_atom_store_intern(&vm->atoms, string);
     }
     return string;
 }
@@ -407,16 +392,10 @@ MalString *mal_intrinsic_code_unit(MalVm *vm, c16 code_unit) {
 
     MalString probe;
     mal_string_init_external(&probe, &code_unit, 1);
-    MalKey key = {.kind = MAL_KEY_STRING, .value = mal_value_from_string(&probe)};
-    MalTableLookup lookup = mal_table_lookup(vm->atoms, key);
-    if (lookup.present) {
-        cached = mal_value_to_string(mal_table_entry_key(vm->atoms, lookup.entry).value);
-        cached->property_atom = true;
-    } else {
+    cached = mal_atom_store_find(&vm->atoms, &probe);
+    if (cached == nullptr) {
         cached = mal_string_new_copy(&vm->heap, &code_unit, 1);
-        cached->property_atom = true;
-        MalKey atom_key = {.kind = MAL_KEY_STRING, .value = mal_value_from_string(cached)};
-        (void) mal_table_upsert_entry(vm->atoms, atom_key, nullptr);
+        cached = mal_atom_store_intern(&vm->atoms, cached);
     }
     vm->code_unit_strings[code_unit] = cached;
     return cached;

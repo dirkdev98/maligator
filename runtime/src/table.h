@@ -6,25 +6,6 @@
 typedef struct MalTable MalTable;
 typedef struct MalSymbol MalSymbol;
 
-/**
- * Storage mode carried by a table instance.
- */
-typedef enum MalTableMode {
-    MAL_TABLE_MODE_OBJECT,
-    MAL_TABLE_MODE_GENERAL,
-} MalTableMode;
-
-/** Instrumentation role; storage semantics continue to come from MalTableMode. */
-typedef enum MalTableRole {
-    MAL_TABLE_ROLE_OBJECT,
-    MAL_TABLE_ROLE_ATOMS,
-    MAL_TABLE_ROLE_SYMBOL_REGISTRY,
-    MAL_TABLE_ROLE_COUNT,
-} MalTableRole;
-
-/**
- * Physical iteration order exposed by the table substrate.
- */
 typedef enum MalTableIterKind {
     MAL_TABLE_ITER_STORAGE,
 } MalTableIterKind;
@@ -43,24 +24,10 @@ typedef struct MalTableLookup {
     void *entry;
 } MalTableLookup;
 
-/**
- * Create a new ordered table substrate.
- */
-MalTable *mal_table_new(MalTableMode mode, MalTableRole role);
+MalTable *mal_table_new(void);
 
-/**
- * Destroy a table previously created with mal_table_new.
- */
 void mal_table_free(MalTable *table);
 
-/**
- * Return the mode associated with the table.
- */
-MalTableMode mal_table_mode(const MalTable *table);
-
-/**
- * Return the number of live entries currently stored in the table.
- */
 usize mal_table_size(const MalTable *table);
 
 /**
@@ -93,11 +60,7 @@ bool mal_table_delete(MalTable *table, MalKey key);
  * reenter GC. Surviving entry handles and insertion order remain valid. */
 usize mal_table_retain(MalTable *table, bool (*keep)(MalValue key));
 
-/**
- * Delete all live entries. Entries become tombstones rather than being
- * freed, so outstanding storage-order iterators stay valid and observe the
- * emptied table (Map.prototype.clear semantics).
- */
+// Pinned storage-order cursors retain their positions through clear and later appends.
 void mal_table_clear(MalTable *table);
 
 /**
@@ -126,7 +89,6 @@ void *mal_table_entry_data(const MalTable *table, void *entry);
  */
 void mal_table_entry_set_owned_data(MalTable *table, void *entry, void *data);
 
-/** Compact property metadata carried inline by object-mode table entries. */
 u8 mal_table_entry_property_flags(const MalTable *table, void *entry);
 void mal_table_entry_set_property_flags(
     MalTable *table, void *entry, u8 flags);

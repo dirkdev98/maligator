@@ -183,16 +183,14 @@ describe("opt-in performance statistics", () => {
 		expect(field(allocations, "function_literal_cache_bytes")).toBeGreaterThan(0);
 		expect(result.stderr).not.toContain("name=Intl.Segmenter ");
 
-		for (const role of ["object", "atoms"]) {
-			const table = reportLine(result.stderr, "[perf-table-stats]", `role=${role} `);
-			expect(field(table, "find_calls")).toBeGreaterThan(0);
-			if (role === "atoms") {
-				// Cached small strings can reuse their rooted atom without probing the table.
-				expect(
-					field(table, "lookup_hits") + field(properties, "constant_atom_hits"),
-				).toBeGreaterThan(1000);
-			}
-		}
+		const table = reportLine(result.stderr, "[perf-table-stats]", "role=object ");
+		expect(field(table, "find_calls")).toBeGreaterThan(0);
+		const atoms = reportLine(result.stderr, "[perf-intern-store]", "kind=atoms ");
+		expect(field(atoms, "groups")).toBeGreaterThan(0);
+		expect(field(atoms, "inserts")).toBeGreaterThan(0);
+		expect(
+			field(atoms, "hits") + field(properties, "constant_atom_hits"),
+		).toBeGreaterThan(1000);
 
 		const mapStorage = reportLine(result.stderr, "[perf-map-storage]");
 		for (const counter of [

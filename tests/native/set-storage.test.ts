@@ -58,7 +58,7 @@ describe("specialized Set storage", () => {
 		if (result.error !== undefined) throw result.error;
 		expect(result.status, result.stderr || result.stdout).toBe(0);
 		expect(result.stdout).toMatch(
-			/^set-storage bytes int32=\d+ generic=\d+ generic-table=\d+\nset-storage ABI PASS\n$/,
+			/^set-storage bytes int32=\d+ generic=\d+ property-table=\d+\nset-storage ABI PASS\n$/,
 		);
 	});
 });
