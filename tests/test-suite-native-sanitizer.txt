@@ -116,3 +116,5 @@ tests/native/transient-property-query.test.ts
 tests/native/utf8-string-storage.test.ts
 
 tests/native/set-storage.test.ts
+
+tests/native/grouped-hash-index.test.ts

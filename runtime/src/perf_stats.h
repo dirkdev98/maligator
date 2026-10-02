@@ -65,6 +65,11 @@ typedef struct MalPerfShapeStats {
 } MalPerfShapeStats;
 
 typedef struct MalPerfStats {
+    u64 hash_index_groups;
+    u64 hash_index_candidates;
+    u64 hash_index_tombstone_reuses;
+    u64 hash_index_rebuilds;
+
     u64 key_equals_calls;
     u64 key_pointer_hits;
     u64 key_string_fallbacks;

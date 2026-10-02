@@ -1104,6 +1104,11 @@ static void mal_perf_stats_print(void) {
         (unsigned long long) mal_perf_stats.http_response_shape_append_fallbacks,
         (unsigned long long) mal_perf_stats.http_response_slot_growths_avoided
     );
+    fprintf(stderr, "[perf-hash-index] groups=%llu candidates=%llu tombstone_reuses=%llu rebuilds=%llu\n",
+        (unsigned long long) mal_perf_stats.hash_index_groups,
+        (unsigned long long) mal_perf_stats.hash_index_candidates,
+        (unsigned long long) mal_perf_stats.hash_index_tombstone_reuses,
+        (unsigned long long) mal_perf_stats.hash_index_rebuilds);
     for (u32 i = 0; i < MAL_PERF_TABLE_ROLE_COUNT; i++) {
         const MalPerfTableStats *stats = &mal_perf_stats.tables[i];
         fprintf(

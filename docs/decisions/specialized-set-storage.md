@@ -19,21 +19,21 @@ Small stores search linearly and allocate no hash index. Capacity hints from
 constructors, copying and algebra remain lazy, so reserving an empty Set cannot
 choose a generic domain before seeing its members.
 
-Hashed storage separates ordered keys, liveness/fingerprints and an open-addressed
+Hashed storage separates ordered keys, one-byte liveness and a grouped hash
 index. An index slot names an insertion-order position; it never exposes an entry
-pointer to consumers. Packed int32 keys use four bytes per position plus four bytes
-of control data. Other domains use an eight-byte canonical tagged key plus the same
-control data. Index slots, capacity slack, the descriptor and allocator charges are
+pointer to consumers. Packed int32 keys use four bytes per position plus one byte
+of liveness. Other domains use an eight-byte canonical tagged key plus the same
+liveness. Index slots, capacity slack, the descriptor and allocator charges are
 additional costs. There is no duplicated value lane or accessor sidecar.
 
 | Domain   | Accepted inserted members                 | Query comparison              | Payload bytes per position |
 | -------- | ----------------------------------------- | ----------------------------- | -------------------------- |
 | Empty    | First member chooses the domain           | Always absent                 | Inline only                |
-| Int32    | Integral Numbers in signed 32-bit range   | Unboxed integer               | 8                          |
-| Number   | All Numbers, including NaN and infinities | Canonical bits                | 12                         |
-| String   | Strings                                   | Content equality              | 12                         |
-| Identity | Objects and symbols                       | Identity                      | 12                         |
-| Generic  | All members                               | Shared SameValueZero equality | 12                         |
+| Int32    | Integral Numbers in signed 32-bit range   | Unboxed integer               | 5                          |
+| Number   | All Numbers, including NaN and infinities | Canonical bits                | 9                          |
+| String   | Strings                                   | Content equality              | 9                          |
+| Identity | Objects and symbols                       | Identity                      | 9                          |
+| Generic  | All members                               | Shared SameValueZero equality | 9                          |
 
 A novel insertion joins the current domain with its member's domain. Int32 widens
 to Number, and incompatible domains widen to Generic. Queries and duplicate
@@ -43,10 +43,11 @@ Numbers, signed zero and NaN while keeping Number and BigInt distinct.
 
 Int32 widening decodes keys into a replacement lane. Other domains have the same
 physical width and can generalize without copying. Growth copies existing lanes
-and fingerprints rather than hashing every member again. Rehashing rebuilds index
+and liveness rather than hashing every member again. Rehashing rebuilds index
 slots from live members. Insertions reuse their initial missing-slot probe unless
-rehashing invalidates it. Deletion closes probe holes by shifting index slots;
-ordered tombstones stay outside the lookup index.
+rehashing invalidates it. Deletion changes bucket metadata without hashing neighboring members;
+ordered tombstones stay separate from hash tombstones. The shared index contract
+is described in [grouped hash indexing](grouped-hash-index.md).
 
 ## Order and ownership
 

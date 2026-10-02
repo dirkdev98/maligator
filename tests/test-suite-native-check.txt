@@ -70,3 +70,5 @@ tests/native/closure-state-sharing.test.ts
 tests/native/closure-result-contracts.test.ts
 
 tests/native/set-storage.test.ts
+
+tests/native/grouped-hash-index.test.ts

@@ -4,13 +4,12 @@
 #include <string.h>
 
 #include "gc.h"
+#include "hash_index.h"
 #include "perf_stats.h"
 #include "profile.h"
 
 #define MAL_SET_SMALL_CAPACITY 4
-#define MAL_SET_LIVE UINT32_C(0x80000000)
-#define MAL_SET_FINGERPRINT UINT32_C(0x7fffffff)
-#define MAL_SET_EMPTY_SLOT (-1)
+#define MAL_SET_LIVE UINT8_C(1)
 
 struct MalSetStorage {
     void *payload;
@@ -19,6 +18,7 @@ struct MalSetStorage {
     u32 count;
     u32 capacity;
     u32 slot_capacity;
+    u32 deleted_slots;
     u32 pins;
     u32 reserve_size;
     MalSetKeyDomain domain;
@@ -54,8 +54,8 @@ static usize mal_set_key_width(MalSetKeyDomain domain) {
     return domain == MAL_SET_KEYS_INT32 ? sizeof(i32) : sizeof(MalValue);
 }
 
-static u32 *mal_set_controls(const MalSetStorage *storage) {
-    return (u32 *) ((u8 *) storage->payload + storage->capacity * mal_set_key_width(storage->domain));
+static u8 *mal_set_controls(const MalSetStorage *storage) {
+    return (u8 *) storage->payload + storage->capacity * mal_set_key_width(storage->domain);
 }
 
 static bool mal_set_is_live(const MalSetStorage *storage, u32 index) {
@@ -80,10 +80,6 @@ static void mal_set_store_key(
     } else {
         ((MalValue *) payload)[index] = key;
     }
-}
-
-static u32 mal_set_control(u64 hash) {
-    return MAL_SET_LIVE | ((u32) (hash >> 32) & MAL_SET_FINGERPRINT);
 }
 
 static bool mal_set_accepts_domain(const MalSetStorage *storage, MalSetKeyDomain domain) {
@@ -116,25 +112,38 @@ static inline bool mal_set_key_equals(const MalSetStorage *storage, u32 index, M
 }
 
 static u32 mal_set_find_slot(const MalSetStorage *storage, MalValue key, u64 hash) {
-    u32 mask = storage->slot_capacity - 1;
-    u32 slot = (u32) hash & mask;
-    u32 fingerprint = mal_set_control(hash);
-    u32 *controls = mal_set_controls(storage);
-    while (storage->slots[slot] != MAL_SET_EMPTY_SLOT) {
-        u32 index = (u32) storage->slots[slot];
-        if (controls[index] == fingerprint && mal_set_key_equals(storage, index, key)) break;
-        slot = (slot + 1) & mask;
+    u8 *controls = mal_hash_controls(storage->slots, storage->slot_capacity);
+    MalHashProbe probe = mal_hash_probe(hash, storage->slot_capacity);
+    u32 available = UINT32_MAX;
+    for (;;) {
+        MAL_PERF_COUNT(hash_index_groups);
+        MalHashMask matches = mal_hash_group_match(controls + probe.group, mal_hash_tag(hash));
+        while (matches != 0) {
+            u32 slot = probe.group + mal_hash_mask_first(matches);
+            MAL_PERF_COUNT(hash_index_candidates);
+            if (mal_set_key_equals(storage, (u32) storage->slots[slot], key)) return slot;
+            matches &= matches - 1;
+        }
+        if (available == UINT32_MAX) {
+            MalHashMask deleted = mal_hash_group_match(controls + probe.group, MAL_HASH_DELETED);
+            if (deleted != 0) available = probe.group + mal_hash_mask_first(deleted);
+        }
+        MalHashMask empty = mal_hash_group_match(controls + probe.group, MAL_HASH_EMPTY);
+        if (empty != 0) return available == UINT32_MAX
+            ? probe.group + mal_hash_mask_first(empty) : available;
+        mal_hash_probe_next(&probe);
     }
-    return slot;
 }
 
 static void mal_set_fill_slots(MalSetStorage *storage, i32 *slots, u32 capacity) {
-    for (u32 i = 0; i < capacity; i++) slots[i] = MAL_SET_EMPTY_SLOT;
+    MAL_PERF_COUNT(hash_index_rebuilds);
+    mal_hash_index_reset(slots, capacity);
+    storage->deleted_slots = 0;
     for (u32 i = 0; i < storage->count; i++) {
         if (!mal_set_is_live(storage, i)) continue;
-        u32 slot = (u32) mal_key_hash_value(mal_set_key_at(storage, i)) & (capacity - 1);
-        while (slots[slot] != MAL_SET_EMPTY_SLOT) slot = (slot + 1) & (capacity - 1);
-        slots[slot] = (i32) i;
+        u64 hash = mal_key_hash_value(mal_set_key_at(storage, i));
+        u32 slot = mal_hash_index_empty_slot(slots, capacity, hash);
+        mal_hash_index_insert(slots, capacity, slot, i, hash);
     }
 }
 
@@ -149,12 +158,13 @@ static bool mal_set_capacity(usize required, u32 minimum, u32 *out) {
     return true;
 }
 
-static bool mal_set_slot_capacity(usize size, u32 *out) {
-    u32 capacity = 8;
-    while (size * 4 > (usize) capacity * 3) {
+static bool mal_set_slot_capacity(usize members, u32 *out) {
+    u32 capacity = MAL_HASH_GROUP_WIDTH;
+    while (!mal_hash_index_fits(members, capacity)) {
         if (capacity > (u32) INT32_MAX / 2) return false;
         capacity *= 2;
     }
+    if ((usize) capacity > SIZE_MAX / (sizeof(i32) + sizeof(u8))) return false;
     *out = capacity;
     return true;
 }
@@ -164,22 +174,21 @@ static void mal_set_replace_payload(
     MalSetStorage *storage, MalSetKeyDomain domain, u32 capacity
 ) {
     usize width = mal_set_key_width(domain);
-    if (capacity > SIZE_MAX / (width + sizeof(u32))) abort();
-    MAL_PERF_ADD(set_storage_payload_bytes, capacity * (width + sizeof(u32)));
+    if (capacity > SIZE_MAX / (width + sizeof(u8))) abort();
+    MAL_PERF_ADD(set_storage_payload_bytes, capacity * (width + sizeof(u8)));
     void *payload = mal_heap_alloc_raw_profiled(
-        mal_gc_current_heap(), capacity * (width + sizeof(u32)),
+        mal_gc_current_heap(), capacity * (width + sizeof(u8)),
         MAL_PROFILE_ALLOCATION_FAMILY_COLLECTION);
-    u32 *controls = (u32 *) ((u8 *) payload + capacity * width);
+    u8 *controls = (u8 *) ((u8 *) payload + capacity * width);
     if (storage->payload != nullptr && width == mal_set_key_width(storage->domain)) {
         memcpy(payload, storage->payload, storage->count * width);
-        memcpy(controls, mal_set_controls(storage), storage->count * sizeof(u32));
+        memcpy(controls, mal_set_controls(storage), storage->count * sizeof(u8));
     } else {
         for (u32 i = 0; i < storage->count; i++) {
             if (mal_set_is_live(storage, i)) {
                 MalValue key = mal_set_key_at(storage, i);
                 mal_set_store_key(payload, domain, i, key);
-                controls[i] = storage->payload == nullptr
-                    ? mal_set_control(mal_key_hash_value(key)) : mal_set_controls(storage)[i];
+                controls[i] = MAL_SET_LIVE;
             } else {
                 controls[i] = 0;
             }
@@ -193,9 +202,9 @@ static void mal_set_replace_payload(
 }
 
 static void mal_set_rehash(MalSetStorage *storage, u32 capacity) {
-    MAL_PERF_ADD(set_storage_index_bytes, (usize) capacity * sizeof(i32));
+    MAL_PERF_ADD(set_storage_index_bytes, mal_hash_index_bytes(capacity));
     i32 *slots = mal_heap_alloc_raw_profiled(
-        mal_gc_current_heap(), (usize) capacity * sizeof(i32),
+        mal_gc_current_heap(), mal_hash_index_bytes(capacity),
         MAL_PROFILE_ALLOCATION_FAMILY_COLLECTION);
     mal_set_fill_slots(storage, slots, capacity);
     i32 *old_slots = storage->slots;
@@ -220,7 +229,7 @@ static void mal_set_compact(MalSetStorage *storage) {
             storage->small[count] = storage->small[i];
         } else {
             MalValue key = mal_set_key_at(storage, i);
-            u32 control = mal_set_controls(storage)[i];
+            u8 control = mal_set_controls(storage)[i];
             mal_set_store_key(storage->payload, storage->domain, count, key);
             mal_set_controls(storage)[count] = control;
         }
@@ -235,6 +244,7 @@ static void mal_set_compact(MalSetStorage *storage) {
         storage->slots = nullptr;
         storage->capacity = MAL_SET_SMALL_CAPACITY;
         storage->slot_capacity = 0;
+        storage->deleted_slots = 0;
         storage->reserve_size = 0;
         if (count == 0) storage->domain = MAL_SET_KEYS_EMPTY;
         return;
@@ -290,7 +300,8 @@ static bool mal_set_small_has(const MalSetStorage *storage, MalValue key) {
 static bool mal_set_storage_has(const MalSetStorage *storage, MalValue key) {
     if (storage == nullptr || storage->size == 0 || !mal_set_accepts_query(storage, key)) return false;
     if (storage->payload == nullptr) return mal_set_small_has(storage, key);
-    return storage->slots[mal_set_find_slot(storage, key, mal_key_hash_value(key))] != MAL_SET_EMPTY_SLOT;
+    return mal_hash_slot_live(storage->slots, storage->slot_capacity,
+        mal_set_find_slot(storage, key, mal_key_hash_value(key)));
 }
 
 static void mal_set_perf_query(MalValue key) {
@@ -326,7 +337,7 @@ void mal_set_object_add_canonical(MalSetObject *set, MalValue key) {
     if (known_slot) {
         hash = mal_key_hash_value(key);
         missing_slot = mal_set_find_slot(storage, key, hash);
-        if (storage->slots[missing_slot] != MAL_SET_EMPTY_SLOT) return;
+        if (mal_hash_slot_live(storage->slots, storage->slot_capacity, missing_slot)) return;
     } else if (accepts && mal_set_small_has(storage, key)) {
         return;
     }
@@ -359,7 +370,10 @@ void mal_set_object_add_canonical(MalSetObject *set, MalValue key) {
         }
         usize members = storage->reserve_size > storage->size + 1
             ? storage->reserve_size : storage->size + 1;
-        if (storage->slot_capacity == 0 || members * 4 > (usize) storage->slot_capacity * 3) {
+        bool reuses_deleted = known_slot &&
+            mal_hash_controls(storage->slots, storage->slot_capacity)[missing_slot] == MAL_HASH_DELETED;
+        if (storage->slot_capacity == 0 ||
+            !mal_hash_index_fits(members + storage->deleted_slots - reuses_deleted, storage->slot_capacity)) {
             u32 slots;
             if (!mal_set_slot_capacity(members, &slots)) abort();
             mal_set_rehash(storage, slots);
@@ -369,8 +383,11 @@ void mal_set_object_add_canonical(MalSetObject *set, MalValue key) {
         u32 slot = known_slot ? missing_slot : mal_set_find_slot(storage, key, hash);
         u32 index = storage->count++;
         mal_set_store_key(storage->payload, storage->domain, index, key);
-        mal_set_controls(storage)[index] = mal_set_control(hash);
-        storage->slots[slot] = (i32) index;
+        mal_set_controls(storage)[index] = MAL_SET_LIVE;
+        if (mal_hash_controls(storage->slots, storage->slot_capacity)[slot] == MAL_HASH_DELETED) {
+            storage->deleted_slots--;
+        }
+        mal_hash_index_insert(storage->slots, storage->slot_capacity, slot, index, hash);
         storage->reserve_size = 0;
     }
     storage->size++;
@@ -380,21 +397,6 @@ void mal_set_object_add_canonical(MalSetObject *set, MalValue key) {
 
 void mal_set_object_add(MalSetObject *set, MalValue value) {
     mal_set_object_add_canonical(set, mal_collection_key_from_value(value).value);
-}
-
-static void mal_set_close_hole(MalSetStorage *storage, u32 hole) {
-    u32 mask = storage->slot_capacity - 1;
-    u32 scan = (hole + 1) & mask;
-    while (storage->slots[scan] != MAL_SET_EMPTY_SLOT) {
-        i32 index = storage->slots[scan];
-        u32 home = (u32) mal_key_hash_value(mal_set_key_at(storage, (u32) index)) & mask;
-        if (((hole - home) & mask) < ((scan - home) & mask)) {
-            storage->slots[hole] = index;
-            hole = scan;
-        }
-        scan = (scan + 1) & mask;
-    }
-    storage->slots[hole] = MAL_SET_EMPTY_SLOT;
 }
 
 bool mal_set_object_delete_canonical(MalSetObject *set, MalValue key) {
@@ -411,14 +413,14 @@ bool mal_set_object_delete_canonical(MalSetObject *set, MalValue key) {
         }
     } else {
         u32 slot = mal_set_find_slot(storage, key, mal_key_hash_value(key));
-        if (storage->slots[slot] == MAL_SET_EMPTY_SLOT) return false;
+        if (!mal_hash_slot_live(storage->slots, storage->slot_capacity, slot)) return false;
         index = (u32) storage->slots[slot];
-        mal_set_close_hole(storage, slot);
+        storage->deleted_slots += mal_hash_index_erase(storage->slots, storage->slot_capacity, slot);
     }
     if (index == storage->count) return false;
     if (!storage->weak) mal_gc_write_barrier(mal_set_key_at(storage, index));
     if (storage->payload == nullptr) storage->small[index] = MAL_VALUE_EMPTY;
-    else mal_set_controls(storage)[index] &= MAL_SET_FINGERPRINT;
+    else mal_set_controls(storage)[index] = 0;
     storage->size--;
     mal_perf_collection_mutation(set, storage->size);
     if (mal_set_should_compact(storage)) mal_set_compact(storage);
@@ -441,10 +443,11 @@ void mal_set_object_clear(MalSetObject *set) {
         if (!mal_set_is_live(storage, i)) continue;
         if (!storage->weak) mal_gc_write_barrier(mal_set_key_at(storage, i));
         if (storage->payload == nullptr) storage->small[i] = MAL_VALUE_EMPTY;
-        else mal_set_controls(storage)[i] &= MAL_SET_FINGERPRINT;
+        else mal_set_controls(storage)[i] = 0;
     }
     storage->size = 0;
-    for (u32 i = 0; i < storage->slot_capacity; i++) storage->slots[i] = MAL_SET_EMPTY_SLOT;
+    if (storage->slot_capacity != 0) mal_hash_index_reset(storage->slots, storage->slot_capacity);
+    storage->deleted_slots = 0;
     if (mal_set_should_compact(storage)) mal_set_compact(storage);
     if (mutated) mal_perf_collection_mutation(set, 0);
 }
@@ -514,7 +517,7 @@ usize mal_set_storage_retain(MalSetStorage *storage, bool (*keep)(MalValue)) {
         if (keep(key)) continue;
         if (!storage->weak) mal_gc_write_barrier(key);
         if (storage->payload == nullptr) storage->small[i] = MAL_VALUE_EMPTY;
-        else mal_set_controls(storage)[i] &= MAL_SET_FINGERPRINT;
+        else mal_set_controls(storage)[i] = 0;
         storage->size--;
         removed++;
     }
