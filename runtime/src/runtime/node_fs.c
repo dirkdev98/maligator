@@ -17,6 +17,7 @@
 #include "date_object.h"
 #include "function_object.h"
 #include "gc.h"
+#include "host.h"
 #include "heap.h"
 #include "heap_string.h"
 #include "intrinsics.h"
@@ -2255,6 +2256,185 @@ static MalValue node_fs_rm_promise(MalVm *vm, MalValue self, const MalValue *arg
     return promise;
 }
 
+static MalValue node_fs_errno_value(
+    MalVm *vm, int error, const char *syscall, const char *path);
+
+typedef struct NodeFsWriteJob {
+    char *path;
+    byte *bytes;
+    usize length;
+    int fd;
+    u32 flags;
+    u32 mode;
+    bool native_flags;
+    bool close_fd;
+    bool flush;
+    int error;
+    const char *syscall;
+} NodeFsWriteJob;
+
+typedef struct NodeFsAsyncWrite {
+    struct NodeFsAsyncWrite *next;
+    MalVm *vm;
+    MalHostHandle operation;
+    MalValue promise;
+#if MAL_REALMS
+    MalRealm *realm;
+#endif
+} NodeFsAsyncWrite;
+
+static NodeFsAsyncWrite *node_fs_async_writes;
+static bool node_fs_async_installed;
+
+static void node_fs_write_job_free(void *data) {
+    NodeFsWriteJob *job = data;
+    free(job->path);
+    free(job->bytes);
+    free(job);
+}
+
+static void node_fs_write_job_run(void *data) {
+    NodeFsWriteJob *job = data;
+    job->syscall = "open";
+    if (job->close_fd) {
+        job->error = mal_posix_fs_open(job->path, job->flags,
+            job->native_flags, job->mode, &job->fd);
+        if (job->error != 0) return;
+    }
+    job->syscall = "write";
+    usize written;
+    job->error = mal_posix_fs_write_fd(job->fd, job->bytes, job->length, &written);
+    if (job->error == 0 && job->flush) {
+        job->syscall = "fsync";
+        job->error = mal_posix_fs_sync_fd(job->fd);
+    }
+    int close_error = job->close_fd ? mal_posix_fs_close_fd(job->fd) : 0;
+    if (job->error == 0 && close_error != 0) {
+        job->syscall = "close";
+        job->error = close_error;
+    }
+}
+
+static void node_fs_async_scan_roots(MalVm *vm, void *data) {
+    (void) data;
+    for (NodeFsAsyncWrite *state = node_fs_async_writes;
+        state != nullptr; state = state->next) {
+        if (state->vm == vm) mal_gc_mark_value(state->promise);
+    }
+}
+
+static void node_fs_async_free(MalVm *vm) {
+    NodeFsAsyncWrite **link = &node_fs_async_writes;
+    while (*link != nullptr) {
+        NodeFsAsyncWrite *state = *link;
+        if (state->vm != vm) {
+            link = &state->next;
+            continue;
+        }
+        *link = state->next;
+        free(state);
+    }
+}
+
+static bool node_fs_async_drain(MalVm *vm) {
+    MalHost *host = mal_host(vm);
+    MalHostTask task;
+    if (host == nullptr || !mal_host_peek_task(&host->tasks, &task)) return false;
+    NodeFsAsyncWrite **link = &node_fs_async_writes;
+    while (*link != nullptr &&
+        ((*link)->vm != vm || (*link)->operation != task.operation)) {
+        link = &(*link)->next;
+    }
+    NodeFsAsyncWrite *state = *link;
+    if (state == nullptr || !mal_host_next_task(&host->tasks, &task)) return false;
+#if MAL_REALMS
+    MalRealm *saved_realm = vm->current_realm;
+    mal_realm_switch(vm, state->realm);
+#endif
+    NodeFsWriteJob *job = task.data;
+    MalPromiseObject *promise = mal_value_to_promise_object(state->promise);
+    if (task.result == MAL_HOST_TERMINAL_CANCELLED) {
+        MalValue error = node_fs_errno_value(vm, ECANCELED, "write", nullptr);
+        mal_promise_reject(vm, promise, error);
+    } else if (job->error != 0) {
+        MalValue error = node_fs_errno_value(vm, job->error, job->syscall,
+            strcmp(job->syscall, "close") == 0 ? nullptr : job->path);
+        mal_promise_reject(vm, promise, error);
+    } else {
+        mal_promise_fulfill(vm, promise, mal_value_new_undefined());
+    }
+    *link = state->next;
+    free(state);
+#if MAL_REALMS
+    mal_realm_switch(vm, saved_realm);
+#endif
+    mal_host_task_release(&host->tasks, &task);
+    return true;
+}
+
+static void node_fs_queue_write(
+    MalVm *vm, MalValue promise_value, const MalValue *args, i32 argc, u32 flags) {
+    NodeFsWriteJob *job = calloc(1, sizeof(*job));
+    NodeFsAsyncWrite *state = calloc(1, sizeof(*state));
+    if (job == nullptr || state == nullptr) {
+        free(job);
+        free(state);
+        mal_vm_throw_allocation_error(vm);
+        goto reject;
+    }
+    MalValue file = argc > 0 ? args[0] : mal_value_new_undefined();
+    job->close_fd = !mal_ops_is_number(file);
+    if (job->close_fd) {
+        job->path = node_fs_path_cstr(vm, file);
+        if (job->path == nullptr) goto failed;
+    } else if (!node_fs_fd(vm, file, &job->fd)) goto failed;
+    MalValue encoding = mal_value_new_undefined();
+    MalRootSpan encoding_root;
+    mal_gc_root(&encoding_root, &encoding, 1);
+    bool valid = node_fs_write_file_options(vm,
+        argc > 2 ? args[2] : mal_value_new_undefined(), !job->close_fd,
+        flags, &job->flags, &job->native_flags, &job->mode, &encoding, &job->flush);
+    const byte *bytes;
+    byte *owned = nullptr;
+    if (valid) valid = node_fs_write_bytes(vm,
+        argc > 1 ? args[1] : mal_value_new_undefined(), encoding,
+        &bytes, &job->length, &owned);
+    mal_gc_unroot(&encoding_root);
+    if (!valid) goto failed;
+    job->bytes = owned;
+    if (owned == nullptr && job->length > 0) {
+        // Workers cannot retain borrowed pointers into detachable or resizable VM buffers.
+        job->bytes = malloc(job->length);
+        if (job->bytes == nullptr) {
+            mal_vm_throw_allocation_error(vm);
+            goto failed;
+        }
+        memcpy(job->bytes, bytes, job->length);
+    }
+    state->vm = vm;
+    state->promise = promise_value;
+#if MAL_REALMS
+    state->realm = vm->current_realm;
+#endif
+    if (!mal_blocking_work_start(mal_host(vm), node_fs_write_job_run, job,
+            node_fs_write_job_free, &state->operation)) {
+        node_fs_throw_errno(vm, EAGAIN, "write", job->path);
+        goto failed;
+    }
+    state->next = node_fs_async_writes;
+    node_fs_async_writes = state;
+    return;
+failed:
+    node_fs_write_job_free(job);
+    free(state);
+reject:
+    {
+        MalValue error = vm->completion.value;
+        node_fs_clear_completion(vm);
+        mal_promise_reject(vm, mal_value_to_promise_object(promise_value), error);
+    }
+}
+
 enum {
     NODE_FS_PROMISE_TASK_PROMISE,
     NODE_FS_PROMISE_TASK_OPERATION,
@@ -2314,6 +2494,21 @@ static MalValue node_fs_promises_operation(
     };
     MalRootSpan root;
     mal_gc_root(&root, roots, countof(roots));
+    MalValue operation = roots[NODE_FS_PROMISE_TASK_OPERATION];
+    if (mal_value_is_native_function_object(operation)) {
+        MalNativeFunctionCallback callback = mal_native_function_object_callback(
+            mal_value_to_native_function_object(operation));
+        if (callback == node_fs_write_file_sync || callback == node_fs_append_file_sync) {
+            node_fs_queue_write(vm, roots[NODE_FS_PROMISE_TASK_PROMISE],
+                roots + NODE_FS_PROMISE_TASK_ARG0, argc < 3 ? argc : 3,
+                callback == node_fs_append_file_sync
+                    ? MAL_POSIX_OPEN_WRITE | MAL_POSIX_OPEN_CREATE | MAL_POSIX_OPEN_APPEND
+                    : MAL_POSIX_OPEN_WRITE | MAL_POSIX_OPEN_CREATE | MAL_POSIX_OPEN_TRUNCATE);
+            MalValue promise = roots[NODE_FS_PROMISE_TASK_PROMISE];
+            mal_gc_unroot(&root);
+            return promise;
+        }
+    }
     MalValue task = mal_value_from_native_function_object(
         mal_native_function_object_new_with_slots(
             &vm->heap,
@@ -3410,6 +3605,16 @@ void mal_host_install_node_fs(
     MalValue cached = vm->intrinsics[MAL_INTRINSIC_NODE_FS_MODULE];
     if (!mal_value_is_undefined(cached)) {
         mal_node_module_publish(vm, "node:fs", slots, count, cached);
+        return;
+    }
+    if (!node_fs_async_installed) {
+        mal_gc_register_root_source(node_fs_async_scan_roots, nullptr);
+        mal_host_register_macrotask_drain(node_fs_async_drain, false);
+        node_fs_async_installed = true;
+    }
+    if (!mal_vm_register_runtime_cleanup(vm, node_fs_async_free)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_ERROR_PROTOTYPE,
+            "Could not register node:fs runtime cleanup");
         return;
     }
     mal_host_install_node_stream(vm, nullptr, 0, launch);

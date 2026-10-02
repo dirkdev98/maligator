@@ -2,6 +2,7 @@
 
 #include "./defaults.h"
 #include "argon2.h"
+#include "blocking_work.h"
 #include "dns.h"
 #include "host_task.h"
 #include "reactor.h"
@@ -25,6 +26,7 @@ typedef struct MalHost {
     MalHostPostedTasks posted_tasks;
     MalDns dns;
     MalArgon2 argon2;
+    MalBlockingWork blocking_work;
     struct MalHttpClient *http_clients;
     struct MalTcpConnection *tcp_connections;
     struct MalHostTimer *timers;

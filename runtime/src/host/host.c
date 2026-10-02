@@ -65,6 +65,7 @@ void mal_host_free(MalHost *host) {
     mal_host_signal_reset();
     mal_reactor_set_waker(&host->reactor, (MalWaker) {0});
     mal_argon2_free(&host->argon2);
+    mal_blocking_work_free(&host->blocking_work);
     mal_dns_free(&host->dns);
     mal_host_posted_tasks_free(&host->posted_tasks);
     mal_host_tasks_free(&host->tasks);
@@ -116,6 +117,7 @@ bool mal_host_post_complete(
 usize mal_host_drain_posted(MalHost *host) {
     if (host == nullptr) return 0;
     usize drained = mal_host_posted_drain(&host->posted_tasks, &host->tasks);
+    mal_blocking_work_reap(&host->blocking_work);
     mal_dns_reap_completed(&host->dns);
     mal_argon2_reap_completed(&host->argon2);
     return drained;
@@ -127,6 +129,7 @@ void mal_host_shutdown(MalHost *host) {
         mal_http_client_shutdown(host);
         mal_dns_shutdown(&host->dns);
         mal_argon2_shutdown(&host->argon2);
+        mal_blocking_work_shutdown(&host->blocking_work);
         (void) mal_host_posted_shutdown(&host->posted_tasks, &host->tasks);
         mal_dns_reap_completed(&host->dns);
         mal_argon2_reap_completed(&host->argon2);

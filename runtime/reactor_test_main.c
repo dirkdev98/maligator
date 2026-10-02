@@ -1225,6 +1225,161 @@ static void pipe_writer(void *arg) {
     g_writer_done = true;
 }
 
+typedef struct BlockingGate {
+    pthread_mutex_t mutex;
+    pthread_cond_t ready;
+    bool release;
+    int entered;
+    int destroyed;
+} BlockingGate;
+
+typedef struct BlockingPayload {
+    BlockingGate *gate;
+    int value;
+} BlockingPayload;
+
+static void blocking_test_run(void *data) {
+    BlockingPayload *payload = data;
+    BlockingGate *gate = payload->gate;
+    pthread_mutex_lock(&gate->mutex);
+    gate->entered++;
+    pthread_cond_broadcast(&gate->ready);
+    while (!gate->release) pthread_cond_wait(&gate->ready, &gate->mutex);
+    pthread_mutex_unlock(&gate->mutex);
+    payload->value *= 3;
+}
+
+static void blocking_test_destroy(void *data) {
+    BlockingPayload *payload = data;
+    pthread_mutex_lock(&payload->gate->mutex);
+    payload->gate->destroyed++;
+    pthread_cond_broadcast(&payload->gate->ready);
+    pthread_mutex_unlock(&payload->gate->mutex);
+    free(payload);
+}
+
+static bool blocking_work_concurrency_and_ownership(void) {
+    MalHost host;
+    if (!mal_host_init(&host)) return false;
+    BlockingGate gate = {0};
+    pthread_mutex_init(&gate.mutex, nullptr);
+    pthread_cond_init(&gate.ready, nullptr);
+    bool ok = true;
+    int started = 0;
+    for (int i = 1; i <= 12; i++) {
+        BlockingPayload *payload = malloc(sizeof(*payload));
+        if (payload == nullptr) { ok = false; break; }
+        *payload = (BlockingPayload) {.gate = &gate, .value = i};
+        MalHostHandle operation;
+        if (!mal_blocking_work_start(&host, blocking_test_run, payload,
+                blocking_test_destroy, &operation)) {
+            free(payload);
+            ok = false;
+            break;
+        }
+        started++;
+    }
+    struct timespec deadline;
+    clock_gettime(CLOCK_REALTIME, &deadline);
+    deadline.tv_sec += 2;
+    pthread_mutex_lock(&gate.mutex);
+    while (ok && gate.entered < 2) {
+        if (pthread_cond_timedwait(&gate.ready, &gate.mutex, &deadline) != 0) ok = false;
+    }
+    ok = ok && mal_host_has_pending_work(&host) && gate.destroyed == 0;
+    gate.release = true;
+    pthread_cond_broadcast(&gate.ready);
+    pthread_mutex_unlock(&gate.mutex);
+    int count = 0;
+    int sum = 0;
+    while (count < started) {
+        mal_host_drain_posted(&host);
+        MalHostTask task;
+        while (mal_host_next_task(&host.tasks, &task)) {
+            BlockingPayload *payload = task.data;
+            ok = ok && task.result == MAL_HOST_TERMINAL_OK;
+            sum += payload->value;
+            count++;
+            mal_host_task_release(&host.tasks, &task);
+        }
+        if (count < started) mal_reactor_wait(&host.reactor);
+    }
+    ok = ok && count == 12 && sum == 234 && gate.destroyed == 12 &&
+        host_drain_reactor_and_is_idle(&host);
+    mal_host_shutdown(&host);
+    MalHostHandle rejected;
+    ok = ok && !mal_blocking_work_start(&host, blocking_test_run, nullptr,
+        blocking_test_destroy, &rejected);
+    mal_host_free(&host);
+    pthread_cond_destroy(&gate.ready);
+    pthread_mutex_destroy(&gate.mutex);
+    return ok;
+}
+
+static void *blocking_shutdown_release(void *data) {
+    BlockingGate *gate = data;
+    struct timespec deadline;
+    clock_gettime(CLOCK_REALTIME, &deadline);
+    deadline.tv_sec += 2;
+    pthread_mutex_lock(&gate->mutex);
+    while (gate->destroyed == 0) {
+        if (pthread_cond_timedwait(&gate->ready, &gate->mutex, &deadline) != 0) break;
+    }
+    gate->release = true;
+    pthread_cond_broadcast(&gate->ready);
+    pthread_mutex_unlock(&gate->mutex);
+    return nullptr;
+}
+
+static bool blocking_work_shutdown_ownership(bool reject_posts) {
+    MalHost host;
+    if (!mal_host_init(&host)) return false;
+    BlockingGate gate = {0};
+    pthread_mutex_init(&gate.mutex, nullptr);
+    pthread_cond_init(&gate.ready, nullptr);
+    int started = 0;
+    for (int i = 0; i < 12; i++) {
+        BlockingPayload *payload = malloc(sizeof(*payload));
+        if (payload == nullptr) break;
+        *payload = (BlockingPayload) {.gate = &gate, .value = i};
+        MalHostHandle operation;
+        if (!mal_blocking_work_start(&host, blocking_test_run, payload,
+                blocking_test_destroy, &operation)) {
+            free(payload);
+            break;
+        }
+        started++;
+    }
+    pthread_t releaser;
+    bool ok = pthread_create(&releaser, nullptr, blocking_shutdown_release, &gate) == 0;
+    if (!ok) {
+        pthread_mutex_lock(&gate.mutex);
+        gate.release = true;
+        pthread_cond_broadcast(&gate.ready);
+        pthread_mutex_unlock(&gate.mutex);
+    }
+    if (reject_posts) {
+        (void) mal_host_posted_shutdown(&host.posted_tasks, &host.tasks);
+    }
+    mal_host_shutdown(&host);
+    if (ok) pthread_join(releaser, nullptr);
+    int completed = 0;
+    int cancelled = 0;
+    MalHostTask task;
+    while (mal_host_next_task(&host.tasks, &task)) {
+        if (task.result == MAL_HOST_TERMINAL_CANCELLED) cancelled++;
+        else if (task.result != MAL_HOST_TERMINAL_OK) ok = false;
+        completed++;
+        mal_host_task_release(&host.tasks, &task);
+    }
+    ok = ok && started == 12 && completed == 12 && cancelled > 0 &&
+        gate.destroyed == 12 && host_drain_reactor_and_is_idle(&host);
+    mal_host_free(&host);
+    pthread_cond_destroy(&gate.ready);
+    pthread_mutex_destroy(&gate.mutex);
+    return ok;
+}
+
 int main(void) {
     MalVm vm;
     mal_vm_init(&vm, &mal_runtime_image);
@@ -1296,6 +1451,9 @@ int main(void) {
         {"DNS rejected posting preserves in-flight request ownership", dns_post_failure_preserves_request_ownership()},
         {"DNS shutdown joins queued/in-flight work and releases retains", dns_shutdown_joins_queued_and_inflight()},
         {"shutdown drains accepted posts, rejects new ownership, and idles", host_post_shutdown_and_idle()},
+        {"blocking jobs run concurrently and transfer payload ownership exactly once", blocking_work_concurrency_and_ownership()},
+        {"blocking shutdown releases queued and running payloads exactly once", blocking_work_shutdown_ownership(false)},
+        {"failed blocking posts retire operations and release payloads", blocking_work_shutdown_ownership(true)},
     };
     int total = (int) (sizeof(checks) / sizeof(checks[0]));
     int passed = 0;

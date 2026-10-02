@@ -82,5 +82,6 @@ tests/native/upm-crypto-compatibility.test.ts
 tests/native/upm-fetch-compatibility.test.ts
 tests/native/upm-https-compatibility.test.ts
 tests/native/upm-filesystem-compatibility.test.ts
+tests/native/node-fs-write-workers.test.ts
 tests/native/upm-process-commands.test.ts
 tests/native/upm-process-lifecycle.test.ts
