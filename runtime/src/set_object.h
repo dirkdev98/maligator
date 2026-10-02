@@ -25,6 +25,7 @@ typedef struct MalSetIter {
 } MalSetIter;
 
 MalSetObject *mal_set_object_new(MalHeap *heap, MalObject *prototype);
+// Insertion requires a JavaScript member, never the internal MAL_VALUE_EMPTY sentinel.
 void mal_set_object_add(MalSetObject *set, MalValue value);
 // Canonical inputs must come from collection normalization or Set iteration.
 void mal_set_object_add_canonical(MalSetObject *set, MalValue key);
@@ -37,7 +38,7 @@ void mal_set_object_clear(MalSetObject *set);
 void mal_set_object_compact(MalSetObject *set);
 
 // Empty/small storage realizes this capacity hint when it first needs a hash index.
-bool mal_set_object_reserve(MalSetObject *set, usize size);
+bool mal_set_object_reserve(MalSetObject *set, usize desired_size);
 MalSetStorage *mal_set_object_storage(MalSetObject *set);
 
 void mal_set_iter_init(MalSetIter *iter, MalSetStorage *storage);

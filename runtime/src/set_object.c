@@ -49,18 +49,20 @@ static MalSetKeyDomain mal_set_join_domain(MalSetKeyDomain left, MalSetKeyDomain
     return MAL_SET_KEYS_GENERIC;
 }
 
-static usize mal_set_key_width(MalSetKeyDomain domain) {
-    return domain == MAL_SET_KEYS_INT32 ? sizeof(i32) : sizeof(MalValue);
+static usize mal_set_row_width(MalSetKeyDomain domain) {
+    return domain == MAL_SET_KEYS_INT32 ? sizeof(i32) + sizeof(u8) : sizeof(MalValue);
 }
 
-static u8 *mal_set_controls(const MalSetStorage *storage) {
-    return (u8 *) storage->payload + storage->capacity * mal_set_key_width(storage->domain);
+static u8 *mal_set_int32_controls(const MalSetStorage *storage) {
+    return (u8 *) storage->payload + storage->capacity * sizeof(i32);
 }
 
 static bool mal_set_is_live(const MalSetStorage *storage, u32 index) {
-    return storage->payload == nullptr
-        ? storage->small[index] != MAL_VALUE_EMPTY
-        : (mal_set_controls(storage)[index] & MAL_SET_LIVE) != 0;
+    if (storage->payload == nullptr) return storage->small[index] != MAL_VALUE_EMPTY;
+    if (storage->domain == MAL_SET_KEYS_INT32) {
+        return (mal_set_int32_controls(storage)[index] & MAL_SET_LIVE) != 0;
+    }
+    return ((MalValue *) storage->payload)[index] != MAL_VALUE_EMPTY;
 }
 
 static MalValue mal_set_key_at(const MalSetStorage *storage, u32 index) {
@@ -79,6 +81,12 @@ static void mal_set_store_key(
     } else {
         ((MalValue *) payload)[index] = key;
     }
+}
+
+static void mal_set_mark_deleted(MalSetStorage *storage, u32 index) {
+    if (storage->payload == nullptr) storage->small[index] = MAL_VALUE_EMPTY;
+    else if (storage->domain == MAL_SET_KEYS_INT32) mal_set_int32_controls(storage)[index] = 0;
+    else ((MalValue *) storage->payload)[index] = MAL_VALUE_EMPTY;
 }
 
 static bool mal_set_accepts_domain(const MalSetStorage *storage, MalSetKeyDomain domain) {
@@ -172,25 +180,41 @@ static bool mal_set_slot_capacity(usize members, u32 *out) {
 static void mal_set_replace_payload(
     MalSetStorage *storage, MalSetKeyDomain domain, u32 capacity
 ) {
-    usize width = mal_set_key_width(domain);
-    if (capacity > SIZE_MAX / (width + sizeof(u8))) abort();
-    MAL_PERF_ADD(set_storage_payload_bytes, capacity * (width + sizeof(u8)));
+    usize width = mal_set_row_width(domain);
+    if (capacity > SIZE_MAX / width) abort();
+    MAL_PERF_ADD(set_storage_payload_bytes, capacity * width);
     void *payload = mal_heap_alloc_raw_profiled(
-        mal_gc_current_heap(), capacity * (width + sizeof(u8)),
+        mal_gc_current_heap(), capacity * width,
         MAL_PROFILE_ALLOCATION_FAMILY_COLLECTION);
-    u8 *controls = (u8 *) ((u8 *) payload + capacity * width);
-    if (storage->payload != nullptr && width == mal_set_key_width(storage->domain)) {
-        memcpy(payload, storage->payload, storage->count * width);
-        memcpy(controls, mal_set_controls(storage), storage->count * sizeof(u8));
-    } else {
+    u8 *controls = domain == MAL_SET_KEYS_INT32
+        ? (u8 *) payload + capacity * sizeof(i32) : nullptr;
+    if (storage->payload != nullptr && width == mal_set_row_width(storage->domain)) {
+        if (domain == MAL_SET_KEYS_INT32) {
+            memcpy(payload, storage->payload, storage->count * sizeof(i32));
+            memcpy(controls, mal_set_int32_controls(storage), storage->count * sizeof(u8));
+        } else {
+            memcpy(payload, storage->payload, storage->count * sizeof(MalValue));
+        }
+    } else if (controls != nullptr) {
+        // Domains never narrow, so packed promotion can only read inline storage.
         for (u32 i = 0; i < storage->count; i++) {
-            if (mal_set_is_live(storage, i)) {
-                MalValue key = mal_set_key_at(storage, i);
-                mal_set_store_key(payload, domain, i, key);
-                controls[i] = MAL_SET_LIVE;
-            } else {
+            MalValue key = storage->small[i];
+            if (key == MAL_VALUE_EMPTY) {
                 controls[i] = 0;
+            } else {
+                ((i32 *) payload)[i] = (i32) mal_value_to_f64(key);
+                controls[i] = MAL_SET_LIVE;
             }
+        }
+    } else if (storage->payload == nullptr) {
+        memcpy(payload, storage->small, storage->count * sizeof(MalValue));
+    } else {
+        const i32 *keys = storage->payload;
+        const u8 *old_controls = mal_set_int32_controls(storage);
+        MalValue *members = payload;
+        for (u32 i = 0; i < storage->count; i++) {
+            members[i] = (old_controls[i] & MAL_SET_LIVE) != 0
+                ? mal_value_from_f64((f64) keys[i]) : MAL_VALUE_EMPTY;
         }
     }
     void *old_payload = storage->payload;
@@ -222,21 +246,31 @@ static void mal_set_compact(MalSetStorage *storage) {
     if (storage->pins != 0) return;
     MAL_PERF_COUNT(set_storage_compactions);
     u32 count = 0;
-    for (u32 i = 0; i < storage->count; i++) {
-        if (!mal_set_is_live(storage, i)) continue;
-        if (storage->payload == nullptr) {
-            storage->small[count] = storage->small[i];
-        } else {
-            MalValue key = mal_set_key_at(storage, i);
-            u8 control = mal_set_controls(storage)[i];
-            mal_set_store_key(storage->payload, storage->domain, count, key);
-            mal_set_controls(storage)[count] = control;
+    if (storage->payload != nullptr && storage->domain == MAL_SET_KEYS_INT32) {
+        i32 *keys = storage->payload;
+        u8 *controls = mal_set_int32_controls(storage);
+        for (u32 i = 0; i < storage->count; i++) {
+            if ((controls[i] & MAL_SET_LIVE) == 0) continue;
+            keys[count] = keys[i];
+            controls[count++] = MAL_SET_LIVE;
         }
-        count++;
+    } else {
+        MalValue *keys = storage->payload == nullptr ? storage->small : storage->payload;
+        for (u32 i = 0; i < storage->count; i++) {
+            MalValue key = keys[i];
+            if (key != MAL_VALUE_EMPTY) keys[count++] = key;
+        }
     }
     storage->count = count;
     if (count <= MAL_SET_SMALL_CAPACITY) {
-        for (u32 i = 0; i < count; i++) storage->small[i] = mal_set_key_at(storage, i);
+        if (storage->payload != nullptr) {
+            if (storage->domain == MAL_SET_KEYS_INT32) {
+                const i32 *keys = storage->payload;
+                for (u32 i = 0; i < count; i++) storage->small[i] = mal_value_from_f64((f64) keys[i]);
+            } else {
+                memcpy(storage->small, storage->payload, count * sizeof(MalValue));
+            }
+        }
         gc_free_raw(mal_gc_current_heap(), storage->payload);
         gc_free_raw(mal_gc_current_heap(), storage->slots);
         storage->payload = nullptr;
@@ -351,8 +385,9 @@ void mal_set_object_add_canonical(MalSetObject *set, MalValue key) {
 #endif
     if (storage->payload == nullptr && storage->count < MAL_SET_SMALL_CAPACITY) {
         MAL_PERF_COUNT(set_storage_small_inserts);
-        storage->small[storage->count++] = key;
+        storage->small[storage->count] = key;
         storage->domain = domain;
+        storage->count++;
     } else {
         MAL_PERF_COUNT(set_storage_hashed_inserts);
         if (storage->payload == nullptr) MAL_PERF_COUNT(set_storage_promotions);
@@ -361,7 +396,7 @@ void mal_set_object_add_canonical(MalSetObject *set, MalValue key) {
         u32 capacity;
         if (!mal_set_capacity(desired, storage->payload == nullptr ? 8 : storage->capacity, &capacity)) abort();
         if (storage->payload == nullptr || capacity != storage->capacity ||
-            mal_set_key_width(domain) != mal_set_key_width(storage->domain)) {
+            mal_set_row_width(domain) != mal_set_row_width(storage->domain)) {
             mal_set_replace_payload(storage, domain, capacity);
         } else {
             storage->domain = domain;
@@ -379,9 +414,10 @@ void mal_set_object_add_canonical(MalSetObject *set, MalValue key) {
         }
         if (!known_slot) hash = mal_key_hash_value(key);
         u32 slot = known_slot ? missing_slot : mal_set_find_slot(storage, key, hash);
-        u32 index = storage->count++;
+        u32 index = storage->count;
         mal_set_store_key(storage->payload, storage->domain, index, key);
-        mal_set_controls(storage)[index] = MAL_SET_LIVE;
+        if (storage->domain == MAL_SET_KEYS_INT32) mal_set_int32_controls(storage)[index] = MAL_SET_LIVE;
+        storage->count++;
         if (mal_hash_controls(storage->slots, storage->slot_capacity)[slot] == MAL_HASH_DELETED) {
             storage->deleted_slots--;
         }
@@ -417,8 +453,7 @@ bool mal_set_object_delete_canonical(MalSetObject *set, MalValue key) {
     }
     if (index == storage->count) return false;
     mal_gc_write_barrier(mal_set_key_at(storage, index));
-    if (storage->payload == nullptr) storage->small[index] = MAL_VALUE_EMPTY;
-    else mal_set_controls(storage)[index] = 0;
+    mal_set_mark_deleted(storage, index);
     storage->size--;
     mal_perf_collection_mutation(set, storage->size);
     if (mal_set_should_compact(storage)) mal_set_compact(storage);
@@ -437,11 +472,17 @@ void mal_set_object_clear(MalSetObject *set) {
     MalSetStorage *storage = set->entries;
     if (storage == nullptr) return;
     bool mutated = storage->size != 0;
-    for (u32 i = 0; i < storage->count; i++) {
-        if (!mal_set_is_live(storage, i)) continue;
-        mal_gc_write_barrier(mal_set_key_at(storage, i));
-        if (storage->payload == nullptr) storage->small[i] = MAL_VALUE_EMPTY;
-        else mal_set_controls(storage)[i] = 0;
+    if (storage->payload != nullptr && storage->domain == MAL_SET_KEYS_INT32) {
+        // Packed Int32 keys carry no collector edges to shade.
+        memset(mal_set_int32_controls(storage), 0, storage->count * sizeof(u8));
+    } else {
+        MalValue *keys = storage->payload == nullptr ? storage->small : storage->payload;
+        for (u32 i = 0; i < storage->count; i++) {
+            MalValue key = keys[i];
+            if (key == MAL_VALUE_EMPTY) continue;
+            mal_gc_write_barrier(key);
+            keys[i] = MAL_VALUE_EMPTY;
+        }
     }
     storage->size = 0;
     if (storage->slot_capacity != 0) mal_hash_index_reset(storage->slots, storage->slot_capacity);
@@ -450,18 +491,20 @@ void mal_set_object_clear(MalSetObject *set) {
     if (mutated) mal_perf_collection_mutation(set, 0);
 }
 
-bool mal_set_object_reserve(MalSetObject *set, usize size) {
+bool mal_set_object_reserve(MalSetObject *set, usize desired_size) {
     u32 capacity;
     u32 slots;
-    if (!mal_set_capacity(size, 8, &capacity) || !mal_set_slot_capacity(size, &slots)) return false;
-    if (size <= mal_set_object_size(set)) return true;
+    if (!mal_set_capacity(desired_size, 8, &capacity) || !mal_set_slot_capacity(desired_size, &slots)) return false;
+    if (desired_size <= mal_set_object_size(set)) return true;
     MalSetStorage *storage = mal_set_object_storage(set);
+    if ((usize) capacity > SIZE_MAX / mal_set_row_width(storage->domain)) return false;
     if (storage->payload == nullptr) {
-        if (size > storage->reserve_size) storage->reserve_size = (u32) size;
+        if (desired_size > storage->reserve_size) storage->reserve_size = (u32) desired_size;
         return true;
     }
-    usize required = storage->count + size - storage->size;
+    usize required = storage->count + desired_size - storage->size;
     if (!mal_set_capacity(required, storage->capacity, &capacity)) return false;
+    if ((usize) capacity > SIZE_MAX / mal_set_row_width(storage->domain)) return false;
     if (capacity > storage->capacity) mal_set_replace_payload(storage, storage->domain, capacity);
     if (slots > storage->slot_capacity) mal_set_rehash(storage, slots);
     return true;
@@ -474,11 +517,23 @@ void mal_set_iter_init(MalSetIter *iter, MalSetStorage *storage) {
 bool mal_set_iter_next(MalSetIter *iter, MalValue *key) {
     MalSetStorage *storage = iter->storage;
     if (storage == nullptr) return false;
-    while (iter->index < storage->count) {
-        u32 index = (u32) iter->index++;
-        if (!mal_set_is_live(storage, index)) continue;
-        *key = mal_set_key_at(storage, index);
-        return true;
+    if (storage->payload != nullptr && storage->domain == MAL_SET_KEYS_INT32) {
+        const i32 *keys = storage->payload;
+        const u8 *controls = mal_set_int32_controls(storage);
+        while (iter->index < storage->count) {
+            u32 index = (u32) iter->index++;
+            if ((controls[index] & MAL_SET_LIVE) == 0) continue;
+            *key = mal_value_from_f64((f64) keys[index]);
+            return true;
+        }
+    } else {
+        const MalValue *keys = storage->payload == nullptr ? storage->small : storage->payload;
+        while (iter->index < storage->count) {
+            MalValue member = keys[iter->index++];
+            if (member == MAL_VALUE_EMPTY) continue;
+            *key = member;
+            return true;
+        }
     }
     return false;
 }

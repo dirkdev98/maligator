@@ -104,6 +104,133 @@ static int check_clusters(MalVm *vm) {
     return 0;
 }
 
+static int check_members(MalSetObject *set, const MalValue *expected, usize expected_count) {
+    CHECK(mal_set_object_size(set) == expected_count);
+    MalSetIter cursor;
+    mal_set_iter_init(&cursor, set->entries);
+    MalValue key;
+    for (usize i = 0; i < expected_count; i++) {
+        CHECK(mal_set_object_has(set, expected[i]));
+        CHECK(mal_set_iter_next(&cursor, &key) && key == expected[i]);
+    }
+    CHECK(!mal_set_iter_next(&cursor, &key));
+    return 0;
+}
+
+static int check_tagged_tombstones(MalVm *vm) {
+    MalSetObject *set = mal_set_object_new(&vm->heap, nullptr);
+    for (i32 i = 0; i < 4; i++) mal_set_object_add(set, mal_value_from_i32(i));
+    usize inline_bytes = mal_set_storage_allocation_bytes(set->entries);
+    MalSetIter cursor;
+    MalValue key;
+    mal_set_iter_init(&cursor, set->entries);
+    mal_set_storage_pin(set->entries);
+    CHECK(mal_set_iter_next(&cursor, &key) && key == mal_value_from_f64(0.0));
+    CHECK(mal_set_object_delete(set, mal_value_from_i32(1)));
+    CHECK(!mal_set_object_has(set, mal_value_from_i32(1)));
+    CHECK(mal_set_storage_order_length(set->entries) == 4);
+    mal_set_object_add(set, mal_value_from_i32(4));
+    CHECK(mal_set_storage_key_domain(set->entries) == MAL_SET_KEYS_INT32);
+    CHECK(mal_set_storage_allocation_bytes(set->entries) > inline_bytes);
+    CHECK(mal_set_object_reserve(set, 32));
+    for (i32 i = 5; i < 16; i++) mal_set_object_add(set, mal_value_from_i32(i));
+    mal_set_object_add(set, mal_value_from_i32(INT32_MIN));
+    mal_set_object_add(set, mal_value_from_i32(INT32_MAX));
+    mal_set_object_add(set, mal_value_from_i32(INT32_MIN));
+    mal_set_object_add(set, mal_value_from_i32(INT32_MAX));
+    CHECK(mal_set_object_size(set) == 17 && mal_set_storage_order_length(set->entries) == 18);
+    CHECK(mal_set_object_has(set, mal_value_from_i32(INT32_MIN)));
+    CHECK(mal_set_object_has(set, mal_value_from_i32(INT32_MAX)));
+    CHECK(mal_set_iter_next(&cursor, &key) && key == mal_value_from_f64(2.0));
+
+    mal_set_object_add(set, mal_value_from_f64(0.5));
+    mal_set_object_add(set, MAL_VALUE_NAN);
+    CHECK(mal_set_storage_key_domain(set->entries) == MAL_SET_KEYS_NUMBER);
+    CHECK(mal_set_storage_traced_slots(set->entries) == 0);
+    mal_set_object_add(set, MAL_VALUE_UNDEFINED);
+    mal_set_object_add(set, MAL_VALUE_NULL);
+    CHECK(mal_set_storage_key_domain(set->entries) == MAL_SET_KEYS_GENERIC);
+    mal_set_object_add(set, MAL_VALUE_NAN);
+    mal_set_object_add(set, MAL_VALUE_UNDEFINED);
+    usize tagged_bytes = mal_set_storage_allocation_bytes(set->entries);
+    CHECK(mal_set_object_reserve(set, 64));
+    CHECK(mal_set_storage_allocation_bytes(set->entries) > tagged_bytes);
+    MalValue expected[22];
+    usize expected_count = 0;
+    for (i32 i = 0; i < 16; i++) {
+        if (i != 1) expected[expected_count++] = mal_value_from_f64((f64) i);
+    }
+    expected[expected_count++] = mal_value_from_f64((f64) INT32_MIN);
+    expected[expected_count++] = mal_value_from_f64((f64) INT32_MAX);
+    expected[expected_count++] = mal_value_from_f64(0.5);
+    expected[expected_count++] = MAL_VALUE_NAN;
+    expected[expected_count++] = MAL_VALUE_UNDEFINED;
+    expected[expected_count++] = MAL_VALUE_NULL;
+    CHECK(mal_set_storage_order_length(set->entries) == expected_count + 1);
+    CHECK(mal_set_storage_traced_slots(set->entries) == expected_count);
+    CHECK(!mal_set_object_has(set, mal_value_from_i32(1)));
+    if (check_members(set, expected, expected_count)) return 1;
+    for (usize i = 2; i < expected_count; i++) {
+        CHECK(mal_set_iter_next(&cursor, &key) && key == expected[i]);
+    }
+
+    mal_set_object_clear(set);
+    CHECK(mal_set_storage_order_length(set->entries) == expected_count + 1);
+    CHECK(mal_set_storage_key_domain(set->entries) == MAL_SET_KEYS_GENERIC);
+    if (check_members(set, nullptr, 0)) return 1;
+    const MalValue survivors[] = {
+        MAL_VALUE_UNDEFINED, MAL_VALUE_NULL, MAL_VALUE_NAN,
+        mal_value_from_f64((f64) INT32_MIN)
+    };
+    for (usize i = 0; i < countof(survivors); i++) mal_set_object_add(set, survivors[i]);
+    for (usize i = 0; i < countof(survivors); i++) {
+        CHECK(mal_set_iter_next(&cursor, &key) && key == survivors[i]);
+    }
+    CHECK(!mal_set_iter_next(&cursor, &key));
+    if (check_members(set, survivors, countof(survivors))) return 1;
+    mal_set_storage_unpin(set->entries);
+    mal_set_object_compact(set);
+    CHECK(mal_set_storage_order_length(set->entries) == countof(survivors));
+    CHECK(mal_set_storage_allocation_bytes(set->entries) == inline_bytes);
+    CHECK(mal_set_storage_key_domain(set->entries) == MAL_SET_KEYS_GENERIC);
+    if (check_members(set, survivors, countof(survivors))) return 1;
+
+    expected_count = 0;
+    for (usize i = 0; i < countof(survivors); i++) expected[expected_count++] = survivors[i];
+    for (i32 i = 100; i < 116; i++) {
+        mal_set_object_add(set, mal_value_from_i32(i));
+        expected[expected_count++] = mal_value_from_f64((f64) i);
+    }
+    CHECK(mal_set_storage_allocation_bytes(set->entries) > inline_bytes);
+    CHECK(mal_set_storage_order_length(set->entries) == expected_count);
+    if (check_members(set, expected, expected_count)) return 1;
+
+    mal_set_object_clear(set);
+    CHECK(mal_set_storage_key_domain(set->entries) == MAL_SET_KEYS_EMPTY);
+    for (i32 i = 0; i < 32; i++) mal_set_object_add(set, mal_value_from_i32(i));
+    CHECK(mal_set_storage_key_domain(set->entries) == MAL_SET_KEYS_INT32);
+    mal_set_iter_init(&cursor, set->entries);
+    mal_set_storage_pin(set->entries);
+    CHECK(mal_set_iter_next(&cursor, &key) && key == mal_value_from_f64(0.0));
+    mal_set_object_clear(set);
+    CHECK(mal_set_storage_order_length(set->entries) == 32);
+    CHECK(mal_set_storage_key_domain(set->entries) == MAL_SET_KEYS_INT32);
+    mal_set_object_add(set, mal_value_from_i32(INT32_MAX));
+    mal_set_object_add(set, MAL_VALUE_NAN);
+    expected[0] = mal_value_from_f64((f64) INT32_MAX);
+    expected[1] = MAL_VALUE_NAN;
+    CHECK(mal_set_storage_key_domain(set->entries) == MAL_SET_KEYS_NUMBER);
+    CHECK(mal_set_storage_order_length(set->entries) == 34);
+    if (check_members(set, expected, 2)) return 1;
+    for (usize i = 0; i < 2; i++) CHECK(mal_set_iter_next(&cursor, &key) && key == expected[i]);
+    CHECK(!mal_set_iter_next(&cursor, &key));
+    mal_set_storage_unpin(set->entries);
+    mal_set_object_compact(set);
+    CHECK(mal_set_storage_allocation_bytes(set->entries) == inline_bytes);
+    if (check_members(set, expected, 2)) return 1;
+    return 0;
+}
+
 static int check_gc(MalVm *vm) {
     MalSetObject *strong = mal_set_object_new(&vm->heap, nullptr);
     MalWeakSetObject *weak = mal_weak_set_object_new(&vm->heap, nullptr);
@@ -199,7 +326,8 @@ int main(void) {
     MalVm vm;
     mal_vm_init(&vm, &mal_runtime_image);
     vm.heap.next_gc_at = (usize) -1;
-    if (check_storage(&vm) || check_clusters(&vm) || check_bytes(&vm) || check_gc(&vm)) return 1;
+    if (check_storage(&vm) || check_clusters(&vm) || check_tagged_tombstones(&vm) ||
+        check_bytes(&vm) || check_gc(&vm)) return 1;
     mal_vm_free(&vm);
     puts("set-storage ABI PASS");
     return 0;

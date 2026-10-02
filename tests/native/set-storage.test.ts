@@ -42,7 +42,7 @@ describe("specialized Set storage", () => {
 		}
 	}
 
-	it("preserves storage, collision, pin, weak fixpoint and memory contracts", () => {
+	it("preserves tagged tombstones, pins, weak fixpoints and memory contracts", () => {
 		const binary = buildNativeBinary({
 			fixture: "tests/local/fibertest_stub.js",
 			name: "set-storage-abi",

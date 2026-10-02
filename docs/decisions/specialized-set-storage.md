@@ -20,21 +20,24 @@ Small stores search linearly and allocate no hash index. Capacity hints from
 constructors, copying and algebra remain lazy, so reserving an empty Set cannot
 choose a generic domain before seeing its members.
 
-Hashed storage separates ordered keys, one-byte liveness and a grouped hash
-index. An index slot names an insertion-order position; it never exposes an entry
-pointer to consumers. Packed int32 keys use four bytes per position plus one byte
-of liveness. Other domains use an eight-byte canonical tagged key plus the same
-liveness. Index slots, capacity slack, the descriptor and allocator charges are
-additional costs. There is no duplicated value lane or accessor sidecar.
+Hashed storage separates ordered keys and a grouped hash index. An index slot
+names an insertion-order position; it never exposes an entry pointer to consumers.
+Packed int32 keys use four bytes per position plus one byte of liveness, because
+every signed int32 value is a legitimate member. Other domains use eight-byte
+canonical tagged keys with `MAL_VALUE_EMPTY` marking deleted rows, as inline
+storage does. The C insertion API excludes that internal sentinel; real
+`undefined`, `null`, NaN and infinities remain valid members. Index slots,
+capacity slack, the descriptor and allocator charges are additional costs.
+There is no duplicated value lane or accessor sidecar.
 
 | Domain   | Accepted inserted members                 | Query comparison              | Payload bytes per position |
 | -------- | ----------------------------------------- | ----------------------------- | -------------------------- |
 | Empty    | First member chooses the domain           | Always absent                 | Inline only                |
 | Int32    | Integral Numbers in signed 32-bit range   | Unboxed integer               | 5                          |
-| Number   | All Numbers, including NaN and infinities | Canonical bits                | 9                          |
-| String   | Strings                                   | Content equality              | 9                          |
-| Identity | Objects and symbols                       | Identity                      | 9                          |
-| Generic  | All members                               | Shared SameValueZero equality | 9                          |
+| Number   | All Numbers, including NaN and infinities | Canonical bits                | 8                          |
+| String   | Strings                                   | Content equality              | 8                          |
+| Identity | Objects and symbols                       | Identity                      | 8                          |
+| Generic  | All members                               | Shared SameValueZero equality | 8                          |
 
 A novel insertion joins the current domain with its member's domain. Int32 widens
 to Number, and incompatible domains widen to Generic. Queries and duplicate
@@ -42,11 +45,14 @@ insertions never widen. BigInts enter Generic even though the shared `MalKey` ki
 places them in its numeric equality category. Canonicalization unifies int32/f64
 Numbers, signed zero and NaN while keeping Number and BigInt distinct.
 
-Int32 widening decodes keys into a replacement lane. Other domains have the same
-physical width and can generalize without copying. Growth copies existing lanes
-and liveness rather than hashing every member again. Rehashing rebuilds index
-slots from live members. Insertions reuse their initial missing-slot probe unless
-rehashing invalidates it. Deletion changes bucket metadata without hashing neighboring members;
+Int32 widening decodes only live keys and initializes every dead tagged position
+below the order length with `MAL_VALUE_EMPTY`. Other domains have the same physical
+width and can generalize without copying. Growth copies the tagged lane, including
+tombstones, or both packed-int32 lanes rather than hashing every member again.
+Reserve checks physical payload bytes, including pinned dead positions, before
+allocating. Rehashing rebuilds index slots from live members. Insertions reuse
+their initial missing-slot probe unless rehashing invalidates it. Deletion changes
+bucket metadata without hashing neighboring members;
 ordered tombstones stay separate from hash tombstones. The shared index contract
 is described in [grouped hash indexing](grouped-hash-index.md).
 
