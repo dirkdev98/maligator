@@ -124,6 +124,127 @@ static int check_transitions(MalVm *vm) {
     return 0;
 }
 
+static int check_value_tombstones(MalVm *vm) {
+    MalMapObject *map = mal_map_object_new(&vm->heap, nullptr);
+    bool inserted = false;
+    u32 entry = mal_map_object_upsert_canonical(map, mal_value_from_f64(0.0), &inserted);
+    CHECK(inserted && mal_map_object_size(map) == 1);
+    CHECK(mal_map_object_has(map, mal_value_from_i32(0)));
+    CHECK(mal_map_storage_value(map->entries, entry) == MAL_VALUE_UNDEFINED);
+    mal_map_object_set(map, mal_value_from_i32(1), MAL_VALUE_NULL);
+    mal_map_object_set(map, mal_value_from_i32(2), MAL_VALUE_UNDEFINED);
+    mal_map_object_set(map, mal_value_from_i32(3), MAL_VALUE_TRUE);
+    usize inline_bytes = mal_map_storage_allocation_bytes(map->entries);
+    CHECK(inline_bytes <= 128);
+    entry = mal_map_object_find_canonical(map, mal_value_from_f64(1.0));
+    mal_map_object_remember_entry(map, entry);
+    CHECK(mal_map_object_entry_hint(map, mal_value_from_f64(1.0)) == entry);
+
+    MalMapIter cursor;
+    MalValue key, value;
+    mal_map_iter_init(&cursor, map->entries);
+    mal_map_storage_pin(map->entries);
+    CHECK(mal_map_iter_next(&cursor, &key, &value));
+    CHECK(key == mal_value_from_f64(0.0) && value == MAL_VALUE_UNDEFINED);
+    CHECK(mal_map_object_delete(map, mal_value_from_i32(1)));
+    CHECK(mal_map_object_entry_hint(map, mal_value_from_f64(1.0)) == 0);
+    CHECK(!mal_map_object_has(map, mal_value_from_i32(1)));
+    CHECK(mal_map_object_has(map, mal_value_from_i32(2)));
+    mal_map_object_set(map, mal_value_from_i32(4), MAL_VALUE_UNDEFINED);
+    CHECK(mal_map_storage_order_length(map->entries) == 5);
+    CHECK(mal_map_storage_allocation_bytes(map->entries) > inline_bytes);
+    CHECK(mal_map_storage_key_domain(map->entries) == MAL_MAP_KEYS_INT32);
+    CHECK(mal_map_object_reserve(map, 32));
+    for (i32 i = 5; i < 16; i++) mal_map_object_set(map, mal_value_from_i32(i), MAL_VALUE_UNDEFINED);
+    CHECK(mal_map_iter_next(&cursor, &key, &value));
+    CHECK(key == mal_value_from_f64(2.0) && value == MAL_VALUE_UNDEFINED);
+
+    mal_map_object_set(map, mal_value_from_f64(0.5), MAL_VALUE_UNDEFINED);
+    CHECK(mal_map_storage_key_domain(map->entries) == MAL_MAP_KEYS_NUMBER);
+    CHECK(!mal_map_object_has(map, mal_value_from_i32(1)));
+    mal_map_object_set(map, MAL_VALUE_TRUE, MAL_VALUE_UNDEFINED);
+    CHECK(mal_map_storage_key_domain(map->entries) == MAL_MAP_KEYS_GENERIC);
+    CHECK(mal_map_object_reserve(map, 64));
+    CHECK(mal_map_object_size(map) == 17);
+    CHECK(mal_map_storage_order_length(map->entries) == 18);
+    MalMapIter from_start;
+    mal_map_iter_init(&from_start, map->entries);
+    for (i32 i = 0; i < 16; i++) {
+        if (i == 1) continue;
+        CHECK(mal_map_iter_next(&from_start, &key, &value));
+        CHECK(key == mal_value_from_f64((f64) i));
+        CHECK(value == (i == 3 ? MAL_VALUE_TRUE : MAL_VALUE_UNDEFINED));
+    }
+    CHECK(mal_map_iter_next(&from_start, &key, &value));
+    CHECK(key == mal_value_from_f64(0.5) && value == MAL_VALUE_UNDEFINED);
+    CHECK(mal_map_iter_next(&from_start, &key, &value));
+    CHECK(key == MAL_VALUE_TRUE && value == MAL_VALUE_UNDEFINED);
+    CHECK(!mal_map_iter_next(&from_start, &key, &value));
+    for (i32 i = 3; i < 16; i++) {
+        CHECK(mal_map_iter_next(&cursor, &key, &value));
+        CHECK(key == mal_value_from_f64((f64) i));
+        CHECK(value == (i == 3 ? MAL_VALUE_TRUE : MAL_VALUE_UNDEFINED));
+    }
+    CHECK(mal_map_iter_next(&cursor, &key, &value));
+    CHECK(key == mal_value_from_f64(0.5) && value == MAL_VALUE_UNDEFINED);
+    CHECK(mal_map_iter_next(&cursor, &key, &value));
+    CHECK(key == MAL_VALUE_TRUE && value == MAL_VALUE_UNDEFINED);
+
+    mal_map_object_clear(map);
+    CHECK(mal_map_object_size(map) == 0 && mal_map_storage_order_length(map->entries) == 18);
+    CHECK(!mal_map_object_has(map, mal_value_from_i32(2)));
+    mal_map_object_set(map, mal_value_from_i32(2), MAL_VALUE_UNDEFINED);
+    mal_map_object_set(map, mal_value_from_f64(0.5), MAL_VALUE_UNDEFINED);
+    mal_map_object_set(map, MAL_VALUE_NULL, MAL_VALUE_FALSE);
+    mal_map_object_set(map, MAL_VALUE_TRUE, MAL_VALUE_UNDEFINED);
+    const MalValue survivors[] = {
+        mal_value_from_f64(2.0), mal_value_from_f64(0.5), MAL_VALUE_NULL, MAL_VALUE_TRUE
+    };
+    for (usize i = 0; i < countof(survivors); i++) {
+        CHECK(mal_map_iter_next(&cursor, &key, &value));
+        CHECK(key == survivors[i] && value == (i == 2 ? MAL_VALUE_FALSE : MAL_VALUE_UNDEFINED));
+    }
+    CHECK(!mal_map_iter_next(&cursor, &key, &value));
+    mal_map_iter_init(&from_start, map->entries);
+    for (usize i = 0; i < countof(survivors); i++) {
+        CHECK(mal_map_iter_next(&from_start, &key, &value));
+        CHECK(key == survivors[i] && value == (i == 2 ? MAL_VALUE_FALSE : MAL_VALUE_UNDEFINED));
+    }
+    CHECK(!mal_map_iter_next(&from_start, &key, &value));
+    entry = mal_map_object_find_canonical(map, survivors[0]);
+    mal_map_object_remember_entry(map, entry);
+    CHECK(mal_map_object_entry_hint(map, survivors[0]) == entry);
+    mal_map_storage_unpin(map->entries);
+    mal_map_object_compact(map);
+    CHECK(mal_map_storage_order_length(map->entries) == 4);
+    CHECK(mal_map_storage_allocation_bytes(map->entries) == inline_bytes);
+    CHECK(mal_map_object_entry_hint(map, survivors[0]) == 0);
+    for (usize i = 0; i < countof(survivors); i++) {
+        CHECK(mal_map_object_has(map, survivors[i]));
+        CHECK(mal_map_object_get(map, survivors[i]) == (i == 2 ? MAL_VALUE_FALSE : MAL_VALUE_UNDEFINED));
+    }
+
+    for (i32 i = 100; i < 113; i++) mal_map_object_set(map, mal_value_from_i32(i), MAL_VALUE_UNDEFINED);
+    CHECK(mal_map_storage_allocation_bytes(map->entries) > inline_bytes);
+    CHECK(mal_map_object_size(map) == 17 && mal_map_storage_order_length(map->entries) == 17);
+    mal_map_iter_init(&cursor, map->entries);
+    for (usize i = 0; i < countof(survivors); i++) {
+        CHECK(mal_map_iter_next(&cursor, &key, &value));
+        CHECK(key == survivors[i] && value == (i == 2 ? MAL_VALUE_FALSE : MAL_VALUE_UNDEFINED));
+    }
+    for (i32 i = 100; i < 113; i++) {
+        CHECK(mal_map_iter_next(&cursor, &key, &value));
+        CHECK(key == mal_value_from_f64((f64) i) && value == MAL_VALUE_UNDEFINED);
+    }
+    CHECK(!mal_map_iter_next(&cursor, &key, &value));
+    CHECK(!mal_map_object_has(map, mal_value_from_i32(1)));
+    CHECK(!mal_map_object_has(map, mal_value_from_i32(3)));
+    inserted = true;
+    entry = mal_map_object_upsert_canonical(map, MAL_VALUE_TRUE, &inserted);
+    CHECK(!inserted && mal_map_storage_value(map->entries, entry) == MAL_VALUE_UNDEFINED);
+    return 0;
+}
+
 static int check_gc(MalVm *vm) {
     MalMapObject *numeric = mal_map_object_new(&vm->heap, nullptr);
     MalWeakMapObject *weak = mal_weak_map_object_new(&vm->heap, nullptr);
@@ -164,7 +285,7 @@ int main(void) {
     MalVm vm;
     mal_vm_init(&vm, &mal_runtime_image);
     vm.heap.next_gc_at = SIZE_MAX;
-    if (check_storage(&vm) || check_transitions(&vm) || check_gc(&vm)) return 1;
+    if (check_storage(&vm) || check_transitions(&vm) || check_value_tombstones(&vm) || check_gc(&vm)) return 1;
     mal_vm_free(&vm);
     puts("map-storage ABI PASS");
     return 0;

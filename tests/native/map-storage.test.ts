@@ -37,7 +37,7 @@ describe("specialized Map storage", () => {
 			});
 		}
 	}
-	it("preserves packed keys, value roots, ordered pins and minor-owner cards", () => {
+	it("preserves packed keys, present undefined values, ordered pins and minor-owner cards", () => {
 		const binary = buildNativeBinary({
 			fixture: "tests/local/fibertest_stub.js",
 			name: "map-storage-abi",

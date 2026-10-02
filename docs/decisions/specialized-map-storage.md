@@ -7,19 +7,27 @@ Weak collections use distinct [unordered storage](specialized-weak-storage.md).
 
 An empty Map has no backing allocation. An insertion, iterator, or nonzero reserve
 hint creates a stable RAW descriptor with four inline key/value pairs. Larger Maps
-with int32 keys use coallocated packed-key, tagged-value, and byte-liveness lanes
-plus a grouped index. Other domains store contiguous 16-byte key/value pairs
-followed by a byte-liveness lane, placing the mapped value beside the key examined
-by a successful probe. The existing key domain selects the layout. Values always
-occupy eight bytes; the payload uses 13 or 17 bytes per order position, excluding
-index capacity, descriptor, and allocator rounding. Packed-key capacities preserve
-alignment of the value lane.
+with int32 keys use coallocated packed-key and tagged-value lanes plus a grouped
+index. Other domains store contiguous 16-byte key/value pairs, placing the mapped
+value beside the key examined by a successful probe. The existing key domain
+selects the layout. Values always occupy eight bytes; the payload uses 12 or 16
+bytes per order position, excluding index capacity, descriptor, and allocator
+rounding. Packed-key capacities preserve alignment of the value lane.
+
+Every layout uses the internal `MAL_VALUE_EMPTY` value as its deleted-row marker;
+the C insertion/update API excludes that sentinel. A present `undefined` value is
+live, including the initial value published by upsert before its caller supplies
+the mapped value. Iteration checks the value before reading a potentially dead
+key. Deletion and clear shade the old key and value before replacing the value
+with the sentinel. Numeric Maps therefore need no separate liveness lane, but
+numeric deletion writes the value lane instead of a separate byte lane.
 
 The descriptor fits the 128-byte allocation class. Its inline storage shares a
-union with cached hashed-payload pointers. Payload replacement copies keys, values,
-and liveness before publishing the new layout; demotion snapshots all live pairs
-before overwriting those pointers. Widening int32 keys creates paired storage,
-while transitions between other key domains preserve their pair layout.
+union with the cached packed-key value pointer. Payload replacement preserves live
+keys and every value below the order length, including deleted-row markers,
+before publishing the new layout; demotion snapshots all live pairs before
+overwriting that pointer. Widening int32 keys creates paired storage, while
+transitions between other key domains preserve their pair layout.
 
 The key domains are int32, Number, string, identity, and generic. Insertions widen
 when a novel key requires it; updates and incompatible queries never widen.

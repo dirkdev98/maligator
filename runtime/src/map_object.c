@@ -9,7 +9,6 @@
 #include "profile.h"
 
 #define MAL_MAP_SMALL_CAPACITY 4
-#define MAL_MAP_LIVE UINT8_C(1)
 
 typedef struct MalMapPair {
     MalValue key;
@@ -36,10 +35,7 @@ struct MalMapStorage {
             MalValue small[MAL_MAP_SMALL_CAPACITY];
             MalValue small_values[MAL_MAP_SMALL_CAPACITY];
         };
-        struct {
-            MalValue *int32_values;
-            u8 *live;
-        };
+        MalValue *int32_values;
     };
 };
 
@@ -71,26 +67,19 @@ static usize mal_map_row_width(MalMapKeyDomain domain) {
     return domain == MAL_MAP_KEYS_INT32 ? sizeof(i32) + sizeof(MalValue) : sizeof(MalMapPair);
 }
 
-static u8 *mal_map_controls(const MalMapStorage *storage) {
-    return storage->live;
+static MalValue *mal_map_value_slot(MalMapStorage *storage, u32 index) {
+    if (storage->payload == nullptr) return &storage->small_values[index];
+    if (storage->domain == MAL_MAP_KEYS_INT32) return &storage->int32_values[index];
+    return &((MalMapPair *) storage->payload)[index].value;
 }
 
 static MalValue mal_map_value_at(const MalMapStorage *storage, u32 index) {
-    if (storage->payload == nullptr) return storage->small_values[index];
-    if (storage->domain == MAL_MAP_KEYS_INT32) return storage->int32_values[index];
-    return ((MalMapPair *) storage->payload)[index].value;
+    return *mal_map_value_slot((MalMapStorage *) storage, index);
 }
 
-static void mal_map_store_value(MalMapStorage *storage, u32 index, MalValue value) {
-    if (storage->payload == nullptr) storage->small_values[index] = value;
-    else if (storage->domain == MAL_MAP_KEYS_INT32) storage->int32_values[index] = value;
-    else ((MalMapPair *) storage->payload)[index].value = value;
-}
-
+// Sequential scans must check values before reading stale or uninitialized dead keys.
 static bool mal_map_is_live(const MalMapStorage *storage, u32 index) {
-    return storage->payload == nullptr
-        ? storage->small[index] != MAL_VALUE_EMPTY
-        : (mal_map_controls(storage)[index] & MAL_MAP_LIVE) != 0;
+    return mal_map_value_at(storage, index) != MAL_VALUE_EMPTY;
 }
 
 static MalValue mal_map_key_at(const MalMapStorage *storage, u32 index) {
@@ -199,14 +188,13 @@ static void mal_map_replace_payload(
     MalMapStorage *storage, MalMapKeyDomain domain, u32 capacity
 ) {
     usize width = mal_map_row_width(domain);
-    if (capacity > SIZE_MAX / (width + sizeof(u8))) abort();
-    MAL_PERF_ADD(map_storage_payload_bytes, capacity * (width + sizeof(u8)));
+    if (capacity > SIZE_MAX / width) abort();
+    MAL_PERF_ADD(map_storage_payload_bytes, capacity * width);
     void *payload = mal_heap_alloc_raw_profiled(
-        mal_gc_current_heap(), capacity * (width + sizeof(u8)),
+        mal_gc_current_heap(), capacity * width,
         MAL_PROFILE_ALLOCATION_FAMILY_COLLECTION);
     MalValue *int32_values = domain == MAL_MAP_KEYS_INT32
         ? (MalValue *) ((u8 *) payload + capacity * sizeof(i32)) : nullptr;
-    u8 *controls = (u8 *) payload + capacity * width;
     if (storage->payload != nullptr && width == mal_map_row_width(storage->domain)) {
         if (domain == MAL_MAP_KEYS_INT32) {
             memcpy(payload, storage->payload, storage->count * sizeof(i32));
@@ -214,28 +202,20 @@ static void mal_map_replace_payload(
         } else {
             memcpy(payload, storage->payload, storage->count * sizeof(MalMapPair));
         }
-        memcpy(controls, mal_map_controls(storage), storage->count * sizeof(u8));
     } else {
         for (u32 i = 0; i < storage->count; i++) {
-            if (mal_map_is_live(storage, i)) {
+            MalValue value = mal_map_value_at(storage, i);
+            if (domain == MAL_MAP_KEYS_INT32) int32_values[i] = value;
+            else ((MalMapPair *) payload)[i].value = value;
+            if (value != MAL_VALUE_EMPTY) {
                 MalValue key = mal_map_key_at(storage, i);
-                MalValue value = mal_map_value_at(storage, i);
-                if (domain == MAL_MAP_KEYS_INT32) {
-                    ((i32 *) payload)[i] = (i32) mal_value_to_f64(key);
-                    int32_values[i] = value;
-                } else {
-                    ((MalMapPair *) payload)[i] = (MalMapPair) {.key = key, .value = value};
-                }
-                controls[i] = MAL_MAP_LIVE;
-            } else {
-                controls[i] = 0;
+                mal_map_store_key(payload, domain, i, key);
             }
         }
     }
     void *old_payload = storage->payload;
     storage->payload = payload;
     storage->int32_values = int32_values;
-    storage->live = controls;
     storage->capacity = capacity;
     storage->domain = domain;
     gc_free_raw(mal_gc_current_heap(), old_payload);
@@ -266,17 +246,15 @@ static void mal_map_compact(MalMapStorage *storage) {
     MAL_PERF_COUNT(map_storage_compactions);
     u32 count = 0;
     for (u32 i = 0; i < storage->count; i++) {
-        if (!mal_map_is_live(storage, i)) continue;
+        MalValue value = mal_map_value_at(storage, i);
+        if (value == MAL_VALUE_EMPTY) continue;
         if (storage->payload == nullptr) {
             storage->small[count] = storage->small[i];
-            storage->small_values[count] = storage->small_values[i];
         } else {
             MalValue key = mal_map_key_at(storage, i);
-            u8 control = mal_map_controls(storage)[i];
             mal_map_store_key(storage->payload, storage->domain, count, key);
-            mal_map_controls(storage)[count] = control;
-            mal_map_store_value(storage, count, mal_map_value_at(storage, i));
         }
+        *mal_map_value_slot(storage, count) = value;
         count++;
     }
     storage->count = count;
@@ -428,8 +406,10 @@ u32 mal_map_object_upsert_canonical(MalMapObject *map, MalValue key, bool *inser
     u32 index = storage->count;
     if (storage->payload == nullptr && storage->count < MAL_MAP_SMALL_CAPACITY) {
         MAL_PERF_COUNT(map_storage_small_inserts);
-        storage->small[storage->count++] = key;
+        storage->small[index] = key;
+        storage->small_values[index] = MAL_VALUE_UNDEFINED;
         storage->domain = domain;
+        storage->count++;
     } else {
         MAL_PERF_COUNT(map_storage_hashed_inserts);
         if (storage->payload == nullptr) MAL_PERF_COUNT(map_storage_promotions);
@@ -453,14 +433,13 @@ u32 mal_map_object_upsert_canonical(MalMapObject *map, MalValue key, bool *inser
         }
         if (!known_slot) hash = mal_key_hash_value(key);
         u32 slot = known_slot ? missing_slot : mal_map_find_slot(storage, key, hash);
-        storage->count++;
         mal_map_store_key(storage->payload, storage->domain, index, key);
-        mal_map_controls(storage)[index] = MAL_MAP_LIVE;
+        *mal_map_value_slot(storage, index) = MAL_VALUE_UNDEFINED;
+        storage->count++;
         if (mal_hash_controls(storage->slots, storage->slot_capacity)[slot] == MAL_HASH_DELETED) storage->deleted_slots--;
         mal_hash_index_insert(storage->slots, storage->slot_capacity, slot, index, hash);
         storage->reserve_size = 0;
     }
-    mal_map_store_value(storage, index, MAL_VALUE_UNDEFINED);
     storage->size++;
     mal_gc_card(&map->object.header, key);
     if (inserted != nullptr) *inserted = true;
@@ -470,8 +449,9 @@ u32 mal_map_object_upsert_canonical(MalMapObject *map, MalValue key, bool *inser
 void mal_map_object_update_entry(MalMapObject *map, u32 entry, MalValue key, MalValue value) {
     MalMapStorage *storage = map->entries;
     u32 index = entry - 1;
-    mal_gc_write_barrier(mal_map_value_at(storage, index));
-    mal_map_store_value(storage, index, value);
+    MalValue *value_slot = mal_map_value_slot(storage, index);
+    mal_gc_write_barrier(*value_slot);
+    *value_slot = value;
     if (mal_value_is_string(key)) {
         MalValue old_key = mal_map_key_at(storage, index);
         if (old_key != key) {
@@ -529,9 +509,9 @@ bool mal_map_object_delete_canonical(MalMapObject *map, MalValue key) {
         storage->hint_key = MAL_VALUE_EMPTY;
     }
     mal_gc_write_barrier(mal_map_key_at(storage, index));
-    mal_gc_write_barrier(mal_map_value_at(storage, index));
-    if (storage->payload == nullptr) storage->small[index] = MAL_VALUE_EMPTY;
-    else mal_map_controls(storage)[index] = 0;
+    MalValue *value_slot = mal_map_value_slot(storage, index);
+    mal_gc_write_barrier(*value_slot);
+    *value_slot = MAL_VALUE_EMPTY;
     storage->size--;
     mal_perf_collection_mutation(map, storage->size);
     if (mal_map_should_compact(storage)) mal_map_compact(storage);
@@ -553,11 +533,11 @@ void mal_map_object_clear(MalMapObject *map) {
     storage->hint_key = MAL_VALUE_EMPTY;
     bool mutated = storage->size != 0;
     for (u32 i = 0; i < storage->count; i++) {
-        if (!mal_map_is_live(storage, i)) continue;
+        MalValue *value_slot = mal_map_value_slot(storage, i);
+        if (*value_slot == MAL_VALUE_EMPTY) continue;
         mal_gc_write_barrier(mal_map_key_at(storage, i));
-        mal_gc_write_barrier(mal_map_value_at(storage, i));
-        if (storage->payload == nullptr) storage->small[i] = MAL_VALUE_EMPTY;
-        else mal_map_controls(storage)[i] = 0;
+        mal_gc_write_barrier(*value_slot);
+        *value_slot = MAL_VALUE_EMPTY;
     }
     storage->size = 0;
     if (storage->slot_capacity != 0) mal_hash_index_reset(storage->slots, storage->slot_capacity);
@@ -572,14 +552,14 @@ bool mal_map_object_reserve(MalMapObject *map, usize desired_size) {
     if (!mal_map_capacity(desired_size, 4, &capacity) || !mal_map_slot_capacity(desired_size, &slots)) return false;
     if (desired_size <= mal_map_object_size(map)) return true;
     MalMapStorage *storage = mal_map_object_storage(map);
-    if ((usize) capacity > SIZE_MAX / (mal_map_row_width(storage->domain) + sizeof(u8))) return false;
+    if ((usize) capacity > SIZE_MAX / mal_map_row_width(storage->domain)) return false;
     if (storage->payload == nullptr) {
         if (desired_size > storage->reserve_size) storage->reserve_size = (u32) desired_size;
         return true;
     }
     usize required = storage->count + desired_size - storage->size;
     if (!mal_map_capacity(required, storage->capacity, &capacity)) return false;
-    if ((usize) capacity > SIZE_MAX / (mal_map_row_width(storage->domain) + sizeof(u8))) return false;
+    if ((usize) capacity > SIZE_MAX / mal_map_row_width(storage->domain)) return false;
     if (capacity > storage->capacity) mal_map_replace_payload(storage, storage->domain, capacity);
     if (slots > storage->slot_capacity) mal_map_rehash(storage, slots);
     return true;
@@ -594,9 +574,10 @@ bool mal_map_iter_next(MalMapIter *iter, MalValue *key, MalValue *value) {
     if (storage == nullptr) return false;
     while (iter->index < storage->count) {
         u32 index = (u32) iter->index++;
-        if (!mal_map_is_live(storage, index)) continue;
+        MalValue mapped = *mal_map_value_slot(storage, index);
+        if (mapped == MAL_VALUE_EMPTY) continue;
         *key = mal_map_key_at(storage, index);
-        *value = mal_map_value_at(storage, index);
+        *value = mapped;
         return true;
     }
     return false;

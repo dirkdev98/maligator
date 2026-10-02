@@ -26,6 +26,7 @@ typedef struct MalMapIter {
 
 void mal_map_object_init(MalHeap *heap, MalMapObject *map, MalObject *prototype);
 MalMapObject *mal_map_object_new(MalHeap *heap, MalObject *prototype);
+// All insertion/update APIs require mapped values other than the internal MAL_VALUE_EMPTY sentinel.
 void mal_map_object_set(MalMapObject *map, MalValue key, MalValue value);
 // Canonical inputs come from collection normalization or Map/Set iteration.
 void mal_map_object_set_canonical(MalMapObject *map, MalValue key, MalValue value);
@@ -40,6 +41,7 @@ void mal_map_object_compact(MalMapObject *map);
 
 // One-based order handles survive growth/widening; pin across mutations that may compact. Zero is absent.
 u32 mal_map_object_find_canonical(const MalMapObject *map, MalValue key);
+// A newly inserted entry is live with an UNDEFINED value until updated.
 u32 mal_map_object_upsert_canonical(MalMapObject *map, MalValue key, bool *inserted);
 MalValue mal_map_storage_key(const MalMapStorage *storage, u32 entry);
 MalValue mal_map_storage_value(const MalMapStorage *storage, u32 entry);
