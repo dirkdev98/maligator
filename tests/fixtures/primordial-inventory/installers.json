@@ -645,7 +645,7 @@
 	},
 	{
 		"file": "runtime/node_zlib.c",
-		"sha256": "fc34e043db8ddf065a7c66713b7c85be154d5aae6d2942cf911efa35666d74d4"
+		"sha256": "e9ac4c401581cd6668e7be80d61c65c55fb467e2ad774bfb26a5e6016616b5b3"
 	},
 	{
 		"file": "runtime/node_zlib.h",

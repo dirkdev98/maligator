@@ -49,7 +49,7 @@ async function main() {
 	);
 	check(
 		Object.keys(zlib).sort().join(",") ===
-			"constants,createBrotliDecompress,createGunzip,createGzip,createInflate,deflate",
+			"constants,createBrotliDecompress,createGunzip,createGzip,createInflate,deflate,gunzipSync",
 		"declared compatibility exports",
 	);
 	check(
@@ -110,6 +110,61 @@ async function main() {
 	check(malformed.error instanceof Error, "malformed input emits an error");
 	const truncated = await decode(createBrotliDecompress, brotli.slice(0, -2), [5, 7]);
 	check(truncated.error instanceof Error, "truncated input emits an error");
+
+	const lifetimeGzip = [
+		31, 139, 8, 0, 0, 0, 0, 0, 0, 19, 237, 198, 49, 17, 0, 32, 12, 4, 48, 69, 149, 197,
+		212, 129, 14, 95, 255, 248, 224, 146, 41, 125, 38, 117, 55, 179, 169, 118, 119, 119,
+		119, 119, 119, 119, 119, 119, 119, 119, 247, 47, 254, 0, 159, 228, 103, 164, 0, 24, 0,
+		0,
+	];
+	const buffered = createGunzip({ chunkSize: 64, readableHighWaterMark: 128 });
+	let writeCompleted = 0;
+	buffered.write(Buffer.from(lifetimeGzip), () => writeCompleted++);
+	buffered.end();
+	const retained = [];
+	for await (const chunk of buffered) {
+		retained.push(chunk);
+		await Promise.resolve();
+	}
+	check(
+		Buffer.concat(retained).toString() === "kept-output-".repeat(512) &&
+			writeCompleted === 1 &&
+			retained.every((chunk) => chunk.length <= 128),
+		"paused decoder retains input, callback and output across collections",
+	);
+
+	const reentrant = createGunzip({ chunkSize: 64, readableHighWaterMark: 128 });
+	const reentrantChunks = [];
+	const reentrantDone = new Promise((resolve, reject) => {
+		reentrant.on("error", reject);
+		reentrant.on("end", resolve);
+	});
+	reentrant.on("data", (chunk) => reentrantChunks.push(chunk));
+	reentrant.write(Buffer.from(gzip.slice(0, 25)), () =>
+		reentrant.end(Buffer.from(gzip.slice(25))),
+	);
+	await reentrantDone;
+	check(
+		Buffer.concat(reentrantChunks).toString() === "alphabeta",
+		"write callback can enqueue the next gzip member",
+	);
+
+	const cancelled = createGunzip({ chunkSize: 64, readableHighWaterMark: 128 });
+	const cancellation = new Error("cancel inflate from data");
+	let cancelledChunks = 0;
+	let cancelledError;
+	const closed = new Promise((resolve) => cancelled.on("close", resolve));
+	cancelled.on("error", (error) => (cancelledError = error));
+	cancelled.on("data", () => {
+		cancelledChunks++;
+		cancelled.destroy(cancellation);
+	});
+	cancelled.end(Buffer.from(lifetimeGzip));
+	await closed;
+	check(
+		cancelledChunks === 1 && cancelledError === cancellation,
+		"destroy from a pushed chunk preserves error identity and stops pumping",
+	);
 
 	console.log("RESULT " + passed + "/" + total);
 }

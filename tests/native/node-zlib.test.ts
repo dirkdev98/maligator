@@ -1,7 +1,7 @@
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { beforeAll, describe, it } from "vitest";
+import { afterAll, beforeAll, describe, it } from "vitest";
 import {
 	assertResultPass,
 	buildNativeBinary,
@@ -12,12 +12,22 @@ import {
 
 const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-node-zlib-"));
 
+const nativeFeatures = {
+	evalEnabled: false,
+	realmsEnabled: false,
+	intlEnabled: false,
+	temporalEnabled: false,
+};
+
+afterAll(() => rmSync(outDir, { recursive: true, force: true }));
+
 describe("node:zlib decompression adapter", () => {
 	let compiled: string;
 	let interpreted: string;
 
 	beforeAll(() => {
 		compiled = buildNativeBinary({
+			...nativeFeatures,
 			fixture: "tests/local/node-zlib.mjs",
 			name: "node-zlib-compiled",
 			mainFile: HOST_MAIN,
@@ -25,6 +35,7 @@ describe("node:zlib decompression adapter", () => {
 			nodeEnabled: true,
 		});
 		interpreted = buildNativeBinary({
+			...nativeFeatures,
 			fixture: "tests/local/node-zlib.mjs",
 			name: "node-zlib-interpreted",
 			mainFile: HOST_MAIN,

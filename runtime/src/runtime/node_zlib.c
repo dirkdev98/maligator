@@ -36,6 +36,18 @@ static void zlib_finalize(MalHeapHeader *cell) {
     mal_zlib_free(&state->handle);
 }
 
+static void zlib_trace(MalHeapHeader *cell) {
+    MalNodeZlibObject *state = (MalNodeZlibObject *) cell;
+    mal_gc_mark_value(state->input);
+    mal_gc_mark_value(state->callback);
+}
+
+static void zlib_store(MalNodeZlibObject *state, MalValue *slot, MalValue value) {
+    mal_gc_write_barrier(*slot);
+    *slot = value;
+    mal_gc_card(&state->object.header, value);
+}
+
 static MalNodeZlibObject *zlib_state_from_callee(MalValue callee) {
     MalNativeFunctionObject *function = mal_value_to_native_function_object(callee);
     MalValue value = mal_native_function_object_get_slot(function, 0);
@@ -75,12 +87,13 @@ static void zlib_set(MalVm *vm, MalValue value, const char *name, MalValue item)
     mal_object_set(mal_value_to_object(value), zlib_key(vm, name), item);
 }
 
-static void zlib_complete(MalVm *vm, MalValue state, MalValue error) {
-    MalValue roots[] = {state, zlib_get(vm, state, "callback"), error};
+static void zlib_complete(MalVm *vm, MalValue state_value, MalValue error) {
+    MalNodeZlibObject *state = (MalNodeZlibObject *) mal_value_to_heap(state_value);
+    MalValue roots[] = {state_value, state->callback, error};
     MalRootSpan root;
     mal_gc_root(&root, roots, countof(roots));
-    zlib_set(vm, state, "input", mal_value_new_undefined());
-    zlib_set(vm, state, "callback", mal_value_new_undefined());
+    zlib_store(state, &state->input, mal_value_new_undefined());
+    zlib_store(state, &state->callback, mal_value_new_undefined());
     if (mal_value_is_callable(roots[1])) mal_vm_call_value(vm, roots[1],
         mal_value_new_undefined(), mal_value_is_nil(error) ? nullptr : roots + 2,
         mal_value_is_nil(error) ? 0 : 1);
@@ -88,11 +101,11 @@ static void zlib_complete(MalVm *vm, MalValue state, MalValue error) {
 }
 
 static void zlib_stream_pump(MalVm *vm, MalValue state_value, MalValue receiver) {
-    MalValue roots[] = {state_value, receiver, zlib_get(vm, state_value, "input"), mal_value_new_undefined()};
+    MalNodeZlibObject *state = (MalNodeZlibObject *) mal_value_to_heap(state_value);
+    MalValue roots[] = {state_value, receiver, state->input, mal_value_new_undefined()};
     MalRootSpan root;
     mal_gc_root(&root, roots, countof(roots));
-    MalNodeZlibObject *state = (MalNodeZlibObject *) mal_value_to_heap(state_value);
-    if (state->pumping || state->handle == nullptr || !mal_value_is_callable(zlib_get(vm, state_value, "callback"))) goto finished;
+    if (state->pumping || state->handle == nullptr || !mal_value_is_callable(state->callback)) goto finished;
     state->pumping = true;
     while (state->handle != nullptr && vm->completion.kind != MAL_COMPLETION_THROW) {
         i32 capacity = mal_node_stream_readable_capacity(vm, receiver);
@@ -144,8 +157,8 @@ static MalValue zlib_transform(MalVm *vm, MalValue receiver, const MalValue *arg
     MalValue state_value = zlib_state_value(callee);
     MalNodeZlibObject *state = zlib_state_from_callee(callee);
     state->input_offset = 0;
-    zlib_set(vm, state_value, "input", argc > 0 ? args[0] : mal_value_new_undefined());
-    zlib_set(vm, state_value, "callback", argc > 2 ? args[2] : mal_value_new_undefined());
+    zlib_store(state, &state->input, argc > 0 ? args[0] : mal_value_new_undefined());
+    zlib_store(state, &state->callback, argc > 2 ? args[2] : mal_value_new_undefined());
     zlib_stream_pump(vm, state_value, receiver);
     return mal_value_new_undefined();
 }
@@ -166,7 +179,7 @@ static MalValue zlib_flush(MalVm *vm, MalValue receiver, const MalValue *args,
     MalNodeZlibObject *state = zlib_state_from_callee(callee);
     state->finishing = true;
     state->input_offset = 0;
-    zlib_set(vm, state_value, "callback", argc > 0 ? args[0] : mal_value_new_undefined());
+    zlib_store(state, &state->callback, argc > 0 ? args[0] : mal_value_new_undefined());
     zlib_stream_pump(vm, state_value, receiver);
     return mal_value_new_undefined();
 }
@@ -180,9 +193,10 @@ static MalValue zlib_destroy(MalVm *vm, MalValue receiver, const MalValue *args,
         argc > 0 ? args[0] : mal_value_new_undefined()};
     MalRootSpan root;
     mal_gc_root(&root, roots, countof(roots));
-    mal_zlib_free(&zlib_state_from_callee(callee)->handle);
-    zlib_set(vm, roots[1], "input", mal_value_new_undefined());
-    zlib_set(vm, roots[1], "callback", mal_value_new_undefined());
+    MalNodeZlibObject *state = zlib_state_from_callee(callee);
+    mal_zlib_free(&state->handle);
+    zlib_store(state, &state->input, mal_value_new_undefined());
+    zlib_store(state, &state->callback, mal_value_new_undefined());
     if (mal_value_is_array_object(roots[2])) {
         MalArrayObject *array = mal_value_to_array_object(roots[2]);
         for (u32 i=0;i<mal_array_object_length(array);i++) {
@@ -280,6 +294,8 @@ static MalValue zlib_create_transform(MalVm *vm, u32 format, MalValue options) {
         &vm->heap, &state->object, MAL_HEAP_NODE_ZLIB_OBJECT,
         mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]));
     state->handle = handle;
+    state->input = mal_value_new_undefined();
+    state->callback = mal_value_new_undefined();
     state->chunk_size = chunk_size;
     state->input_offset = 0;
     state->finishing = false;
@@ -370,6 +386,7 @@ void mal_host_install_node_zlib(
         return;
     }
     mal_gc_register_finalizer(MAL_HEAP_NODE_ZLIB_OBJECT, zlib_finalize);
+    mal_gc_register_tracer(MAL_HEAP_NODE_ZLIB_OBJECT, zlib_trace);
     MalValue roots[3] = {
         mal_value_from_object(mal_intrinsic_new_object(vm)),
         mal_value_new_undefined(),
