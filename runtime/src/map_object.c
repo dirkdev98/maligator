@@ -77,9 +77,11 @@ static MalValue mal_map_value_at(const MalMapStorage *storage, u32 index) {
     return *mal_map_value_slot((MalMapStorage *) storage, index);
 }
 
-// Sequential scans must check values before reading stale or uninitialized dead keys.
+// Spilled scans check values before reading stale or uninitialized dead keys.
 static bool mal_map_is_live(const MalMapStorage *storage, u32 index) {
-    return mal_map_value_at(storage, index) != MAL_VALUE_EMPTY;
+    return storage->payload == nullptr
+        ? storage->small[index] != MAL_VALUE_EMPTY
+        : mal_map_value_at(storage, index) != MAL_VALUE_EMPTY;
 }
 
 static MalValue mal_map_key_at(const MalMapStorage *storage, u32 index) {
@@ -245,17 +247,19 @@ static void mal_map_compact(MalMapStorage *storage) {
     storage->hint_key = MAL_VALUE_EMPTY;
     MAL_PERF_COUNT(map_storage_compactions);
     u32 count = 0;
-    for (u32 i = 0; i < storage->count; i++) {
-        MalValue value = mal_map_value_at(storage, i);
-        if (value == MAL_VALUE_EMPTY) continue;
-        if (storage->payload == nullptr) {
-            storage->small[count] = storage->small[i];
-        } else {
-            MalValue key = mal_map_key_at(storage, i);
-            mal_map_store_key(storage->payload, storage->domain, count, key);
+    if (storage->size != 0) {
+        for (u32 i = 0; i < storage->count; i++) {
+            MalValue value = mal_map_value_at(storage, i);
+            if (value == MAL_VALUE_EMPTY) continue;
+            if (storage->payload == nullptr) {
+                storage->small[count] = storage->small[i];
+            } else {
+                MalValue key = mal_map_key_at(storage, i);
+                mal_map_store_key(storage->payload, storage->domain, count, key);
+            }
+            *mal_map_value_slot(storage, count) = value;
+            count++;
         }
-        *mal_map_value_slot(storage, count) = value;
-        count++;
     }
     storage->count = count;
     if (count <= MAL_MAP_SMALL_CAPACITY) {
@@ -323,7 +327,9 @@ MalMapObject *mal_map_object_new(MalHeap *heap, MalObject *prototype) {
 
 static u32 mal_map_small_find(const MalMapStorage *storage, MalValue key) {
     for (u32 i = 0; i < storage->count; i++) {
-        if (mal_map_is_live(storage, i) && mal_map_key_equals(storage, i, key)) return i + 1;
+        MalValue candidate = storage->small[i];
+        if (candidate != MAL_VALUE_EMPTY &&
+            (candidate == key || mal_map_key_equals_slow(storage->domain, candidate, key))) return i + 1;
     }
     return 0;
 }
@@ -511,6 +517,8 @@ bool mal_map_object_delete_canonical(MalMapObject *map, MalValue key) {
     mal_gc_write_barrier(mal_map_key_at(storage, index));
     MalValue *value_slot = mal_map_value_slot(storage, index);
     mal_gc_write_barrier(*value_slot);
+    // Inline keys mirror tombstones so linear misses need no value-lane load.
+    if (storage->payload == nullptr) storage->small[index] = MAL_VALUE_EMPTY;
     *value_slot = MAL_VALUE_EMPTY;
     storage->size--;
     mal_perf_collection_mutation(map, storage->size);
@@ -532,17 +540,33 @@ void mal_map_object_clear(MalMapObject *map) {
     storage->entry_hint = 0;
     storage->hint_key = MAL_VALUE_EMPTY;
     bool mutated = storage->size != 0;
-    for (u32 i = 0; i < storage->count; i++) {
-        MalValue *value_slot = mal_map_value_slot(storage, i);
-        if (*value_slot == MAL_VALUE_EMPTY) continue;
-        mal_gc_write_barrier(mal_map_key_at(storage, i));
-        mal_gc_write_barrier(*value_slot);
-        *value_slot = MAL_VALUE_EMPTY;
+    if (mal_gc_marking_active) {
+        for (u32 i = 0; i < storage->count; i++) {
+            MalValue value = mal_map_value_at(storage, i);
+            if (value == MAL_VALUE_EMPTY) continue;
+            mal_gc_write_barrier(mal_map_key_at(storage, i));
+            mal_gc_write_barrier(value);
+        }
     }
     storage->size = 0;
-    if (storage->slot_capacity != 0) mal_hash_index_reset(storage->slots, storage->slot_capacity);
-    storage->deleted_slots = 0;
-    if (mal_map_should_compact(storage)) mal_map_compact(storage);
+    if (storage->pins == 0 && storage->count != 0) {
+        // Unpinned clear discards every row, so no cursor needs tombstone writes or index reset.
+        mal_map_compact(storage);
+    } else {
+        if (storage->payload == nullptr) {
+            for (u32 i = 0; i < storage->count; i++) {
+                storage->small[i] = MAL_VALUE_EMPTY;
+                storage->small_values[i] = MAL_VALUE_EMPTY;
+            }
+        } else if (storage->domain == MAL_MAP_KEYS_INT32) {
+            for (u32 i = 0; i < storage->count; i++) storage->int32_values[i] = MAL_VALUE_EMPTY;
+        } else {
+            MalMapPair *pairs = storage->payload;
+            for (u32 i = 0; i < storage->count; i++) pairs[i].value = MAL_VALUE_EMPTY;
+        }
+        if (storage->slot_capacity != 0) mal_hash_index_reset(storage->slots, storage->slot_capacity);
+        storage->deleted_slots = 0;
+    }
     if (mutated) mal_perf_collection_mutation(map, 0);
 }
 

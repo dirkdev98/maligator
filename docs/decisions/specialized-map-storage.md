@@ -18,7 +18,8 @@ Every layout uses the internal `MAL_VALUE_EMPTY` value as its deleted-row marker
 the C insertion/update API excludes that sentinel. A present `undefined` value is
 live, including the initial value published by upsert before its caller supplies
 the mapped value. Iteration checks the value before reading a potentially dead
-key. Deletion and clear shade the old key and value before replacing the value
+key. Inline deleted keys also mirror the sentinel, letting tiny linear misses
+read only the key lane. Deletion and clear shade the old key and value before replacing the value
 with the sentinel. Numeric Maps therefore need no separate liveness lane, but
 numeric deletion writes the value lane instead of a separate byte lane.
 
@@ -37,7 +38,9 @@ Equal string updates can replace the stored representative only with inline or
 tightly owned backing, preserving the existing retention bound and SATB barrier.
 
 Order positions remain stable during growth, key widening, and index rebuilding.
-Pins prevent payload compaction; deletion and clear leave dead positions so live
+Unpinned clear shades live edges and discards the payload/index directly, without
+writing or scanning dead rows that are about to be freed. Empty compaction also
+skips the dead-row scan. Pins prevent payload compaction; deletion and clear leave dead positions so live
 iterators observe subsequent appends. Normal exhaustion may compact after dropping
 the pin. GC finalizers only release ownership or decrement pins, because member
 cells may already have been reclaimed. A Map's borrowed entry hint is validated

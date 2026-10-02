@@ -10,6 +10,61 @@
 extern const MalRuntimeImage mal_runtime_image;
 #define CHECK(test) do { if (!(test)) { fprintf(stderr, "map-storage:%d\n", __LINE__); return 1; } } while (0)
 
+static int check_clear_during_mark(MalVm *vm) {
+    MalMapObject *maps[4];
+    MalMapIter cursors[4];
+    MalWeakSetObject *observed = mal_weak_set_object_new(&vm->heap, nullptr);
+    MalValue roots[5] = {mal_value_from_weak_set_object(observed)};
+    MalRootSpan span;
+    mal_gc_root(&span, roots, countof(roots));
+    for (usize mode = 0; mode < countof(maps); mode++) {
+        maps[mode] = mal_map_object_new(&vm->heap, nullptr);
+        roots[mode + 1] = mal_value_from_map_object(maps[mode]);
+        for (i32 index = 0; index < 32; index++) {
+            MalValue key = mode < 2 ? mal_value_from_i32(index)
+                : mal_value_from_object(mal_object_new(&vm->heap, nullptr));
+            MalValue value = mal_value_from_object(mal_object_new(&vm->heap, nullptr));
+            mal_map_object_set(maps[mode], key, value);
+            mal_weak_set_object_add(observed, value);
+            if (mode >= 2) mal_weak_set_object_add(observed, key);
+        }
+        mal_map_object_remember_entry(maps[mode], 1);
+        mal_map_iter_init(&cursors[mode], maps[mode]->entries);
+        if ((mode & 1) != 0) mal_map_storage_pin(maps[mode]->entries);
+    }
+    // The first automatic major snapshots roots without tracing their Map entries yet.
+    vm->heap.next_gc_at = 1;
+    mal_gc_poll = true;
+    mal_gc_safepoint(vm);
+    CHECK(mal_gc_marking_active);
+    for (usize mode = 0; mode < countof(maps); mode++) {
+        mal_map_object_clear(maps[mode]);
+        CHECK(mal_map_object_size(maps[mode]) == 0);
+        CHECK(mal_map_object_entry_hint(maps[mode], mal_value_from_f64(0.0)) == 0);
+        CHECK(mal_map_storage_order_length(maps[mode]->entries) == ((mode & 1) != 0 ? 32 : 0));
+        if ((mode & 1) == 0) {
+            CHECK(mal_map_storage_key_domain(maps[mode]->entries) == MAL_MAP_KEYS_EMPTY);
+            CHECK(mal_map_storage_allocation_bytes(maps[mode]->entries) <= 128);
+        }
+        mal_map_object_set(maps[mode], mal_value_from_i32(7), MAL_VALUE_UNDEFINED);
+        MalValue key, value;
+        CHECK(mal_map_iter_next(&cursors[mode], &key, &value));
+        CHECK(key == mal_value_from_f64(7.0) && value == MAL_VALUE_UNDEFINED);
+        CHECK(!mal_map_iter_next(&cursors[mode], &key, &value));
+        if ((mode & 1) != 0) mal_map_storage_unpin(maps[mode]->entries);
+    }
+    CHECK(mal_gc_finish_pending_cycle(vm));
+    CHECK(mal_weak_set_object_size(observed) == 192);
+    mal_gc_collect(vm);
+    CHECK(mal_weak_set_object_size(observed) == 0);
+    for (usize mode = 0; mode < countof(maps); mode++) {
+        CHECK(mal_map_object_size(maps[mode]) == 1);
+        CHECK(mal_map_object_has(maps[mode], mal_value_from_i32(7)));
+    }
+    mal_gc_unroot(&span);
+    return 0;
+}
+
 static int check_storage(MalVm *vm) {
     MalMapObject *map = mal_map_object_new(&vm->heap, nullptr);
     CHECK(map->entries == nullptr);
@@ -285,7 +340,7 @@ int main(void) {
     MalVm vm;
     mal_vm_init(&vm, &mal_runtime_image);
     vm.heap.next_gc_at = SIZE_MAX;
-    if (check_storage(&vm) || check_transitions(&vm) || check_value_tombstones(&vm) || check_gc(&vm)) return 1;
+    if (check_clear_during_mark(&vm) || check_storage(&vm) || check_transitions(&vm) || check_value_tombstones(&vm) || check_gc(&vm)) return 1;
     mal_vm_free(&vm);
     puts("map-storage ABI PASS");
     return 0;
