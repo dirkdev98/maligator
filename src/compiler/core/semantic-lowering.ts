@@ -9325,6 +9325,7 @@ function compileChainElement(
 	shortCircuits: Array<Extract<CompilerInstruction, { type: "jumpIf" }>>,
 ): number {
 	if (node.type === "MemberExpression") {
+		retainHostMember(program, fn, node);
 		if (node.object.type === "Super") {
 			return compileMemberLoad(
 				fn,
@@ -9377,6 +9378,7 @@ function compileChainElement(
 		let callee: number;
 		let thisRegister: number;
 		if (calleeNode.type === "MemberExpression") {
+			retainHostMember(program, fn, calleeNode);
 			if (calleeNode.object.type === "Super") {
 				const member = compileMemberObjectAndKey(program, fn, cursor, calleeNode);
 				thisRegister = member.receiver!;
@@ -11435,6 +11437,7 @@ function compileMemberObjectAndKey(
 	cursor: CoreFrontendCursor,
 	memberExpression: ESTree.MemberExpression,
 ): CompiledMemberReference {
+	retainHostMember(program, fn, memberExpression);
 	let object = -1;
 	let receiver: number | undefined;
 	if (memberExpression.object.type === "Super") {
@@ -13038,15 +13041,32 @@ function loadLazyArgumentsObject(
 	return result;
 }
 
+function retainHostMember(
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	member: ESTree.MemberExpression,
+): void {
+	if (member.object.type !== "Identifier") return;
+	const binding = fn.semanticFile.nodeToBinding.get(member.object);
+	if (!binding?.undeclared || !["globalThis", "global"].includes(binding.name)) return;
+	const key =
+		!member.computed && member.property.type === "Identifier"
+			? member.property.name
+			: member.property.type === "Literal" && typeof member.property.value === "string"
+				? member.property.value
+				: undefined;
+	if (program.hostProcess && (key === undefined || key === "process" || key === "global"))
+		program.hostProcess.retained = true;
+	if (program.hostBuffer && (key === undefined || key === "Buffer"))
+		program.hostBuffer.retained = true;
+}
+
 /** Mark a reachable free Node global and keep it on globalThis storage. */
 function retainHostGlobal(program: CoreFrontendContext, binding: Binding): boolean {
 	if (
 		program.hostProcess &&
 		binding.undeclared &&
-		(binding.name === "process" ||
-			binding.name === "global" ||
-			binding.name === "TextEncoder" ||
-			binding.name === "TextDecoder")
+		(binding.name === "process" || binding.name === "global")
 	) {
 		program.hostProcess.retained = true;
 		return true;

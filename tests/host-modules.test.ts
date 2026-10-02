@@ -127,6 +127,7 @@ describe("host-install manifest", () => {
 			"posix",
 			"relative",
 			"resolve",
+			"matchesGlob",
 			"sep",
 			"toNamespacedPath",
 			"default",
@@ -415,6 +416,29 @@ describe("host-install manifest", () => {
 		expect(def.runtime.hostInstalls).toEqual([
 			{ installer: "mal_host_install_node_buffer", exports: [] },
 		]);
+	});
+
+	it.each(["globalThis.process", 'globalThis["process"]', "globalThis?.process"])(
+		"installs process through %s without a free process identifier",
+		(expression) => {
+			const def = compile(`globalThis.sink = ${expression}.argv;`, { node: true });
+			expect(def.runtime.hostInstalls).toEqual([
+				{ installer: "mal_host_install_process", exports: [] },
+			]);
+		},
+	);
+
+	it("installs Buffer through the global object while preserving shadowed globals", () => {
+		const def = compile(`globalThis.sink = globalThis.Buffer.from("x");`, { node: true });
+		expect(def.runtime.hostInstalls).toEqual([
+			{ installer: "mal_host_install_node_buffer", exports: [] },
+		]);
+		const shadowed = compile(
+			`function read(globalThis) { return globalThis.process; }
+globalThis.sink = read({process: 1});`,
+			{ node: true },
+		);
+		expect(shadowed.runtime.hostInstalls).toEqual([]);
 	});
 
 	it("retains the process installer for the free global alias", () => {

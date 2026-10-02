@@ -687,10 +687,34 @@ export function linkModules(program: SemanticProgram): ModuleLinkage {
 						binding.name === name && binding.undeclared && binding.usageNodes.length > 0,
 				),
 			);
-		if (freeGlobalUsed("process") || freeGlobalUsed("global")) {
+		const members = new Set<string>();
+		for (const file of program.files) {
+			traverseEstree(file.ast.body, (node) => {
+				if (node.type !== "MemberExpression" || node.object.type !== "Identifier") return;
+				const binding = file.nodeToBinding.get(node.object);
+				if (!binding?.undeclared || !["globalThis", "global"].includes(binding.name))
+					return;
+				const key =
+					!node.computed && node.property.type === "Identifier"
+						? node.property.name
+						: node.property.type === "Literal" && typeof node.property.value === "string"
+							? node.property.value
+							: undefined;
+				if (key === undefined) {
+					members.add("process");
+					members.add("Buffer");
+				} else members.add(key);
+			});
+		}
+		if (
+			freeGlobalUsed("process") ||
+			freeGlobalUsed("global") ||
+			members.has("process") ||
+			members.has("global")
+		) {
 			linkage.hostProcess = { installer: PROCESS_INSTALLER_SYMBOL };
 		}
-		if (freeGlobalUsed("Buffer")) {
+		if (freeGlobalUsed("Buffer") || members.has("Buffer")) {
 			linkage.hostBuffer = { installer: BUFFER_INSTALLER_SYMBOL };
 		}
 	}
