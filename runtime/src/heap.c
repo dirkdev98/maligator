@@ -252,6 +252,12 @@ static bool mal_gc_index_chunk(MalHeap *heap, MalGcChunk *chunk) {
 }
 
 static MalGcChunk *mal_gc_new_chunk(MalHeap *heap) {
+#if MAL_PERF_STATS
+    if (heap->fail_next_chunk_allocation) {
+        heap->fail_next_chunk_allocation = false;
+        return nullptr;
+    }
+#endif
     void *mmap_base;
     usize mmap_size;
     void *base = mal_gc_aligned_mmap(MAL_GC_CHUNK_SIZE, MAL_GC_BLOCK_SIZE, &mmap_base, &mmap_size);
@@ -279,10 +285,31 @@ static MalGcChunk *mal_gc_new_chunk(MalHeap *heap) {
     return chunk;
 }
 
+static void mal_gc_trim_empty_raw_blocks(MalHeap *heap);
+
+static void mal_gc_raw_partial_unlink(MalHeap *heap, MalGcBlock *block) {
+    if (!block->on_partial) return;
+    if (block->prev_free != nullptr) block->prev_free->next_free = block->next_free;
+    else heap->raw_partial[block->size_class] = block->next_free;
+    if (block->next_free != nullptr) block->next_free->prev_free = block->prev_free;
+    block->next_free = nullptr;
+    block->prev_free = nullptr;
+    block->on_partial = 0;
+}
+
 static MalGcBlock *mal_gc_new_block(MalHeap *heap, u16 size_class, u8 kind) {
-    // Reclaim a fully-empty block the sweep returned to the OS before carving a
-    // fresh one. A blank block can serve any size class / kind after re-init; its
-    // madvised pages refault on first write.
+    MalGcChunk *chunk = nullptr;
+    if (heap->free_blocks == nullptr) {
+        chunk = heap->chunks;
+        if (chunk == nullptr || chunk->next_block >= chunk->block_count) {
+            chunk = mal_gc_new_chunk(heap);
+            if (chunk == nullptr) {
+                // Idle reserves must not turn recoverable allocation pressure into OOM.
+                mal_gc_trim_empty_raw_blocks(heap);
+                if (heap->free_blocks == nullptr) return nullptr;
+            }
+        }
+    }
     MalGcBlock *recycled = heap->free_blocks;
     u8 *block_base;
     u64 sweep_epoch;
@@ -291,11 +318,6 @@ static MalGcBlock *mal_gc_new_block(MalHeap *heap, u16 size_class, u8 kind) {
         block_base = (u8 *) recycled;
         sweep_epoch = recycled->sweep_epoch;
     } else {
-        MalGcChunk *chunk = heap->chunks;
-        if (chunk == nullptr || chunk->next_block >= chunk->block_count) {
-            chunk = mal_gc_new_chunk(heap);
-            if (chunk == nullptr) return nullptr;
-        }
         block_base = (u8 *) chunk->base + chunk->next_block * MAL_GC_BLOCK_SIZE;
         chunk->next_block++;
         sweep_epoch = chunk->sweep_epoch;
@@ -459,23 +481,12 @@ static void *mal_gc_alloc(MalHeap *heap, usize size, u8 kind) {
         return cell;
     }
     if (kind == MAL_GC_BLOCK_RAW && heap->raw_partial[size_class] != nullptr) {
-        // Reuse a cell freed by an owner finalizer from a partially-empty RAW block
-        // (its OWN free list — RAW cells never mix into a global chain, so the block
-        // stays independently recyclable). The free link sits at offset 0.
         MalGcBlock *partial = heap->raw_partial[size_class];
         void *cell = partial->free_list;
         partial->free_list = *(void **) cell;
         partial->live++;
         if (partial->free_list == nullptr) {
-            // Exhausted this block's free cells: unlink it from the partial list. It
-            // is the list head (allocation only pops the head), so this is O(1). It
-            // may still be the current bump block; a later free re-adds it.
-            heap->raw_partial[size_class] = partial->next_free;
-            if (partial->next_free != nullptr) {
-                partial->next_free->prev_free = nullptr;
-            }
-            partial->next_free = nullptr;
-            partial->on_partial = 0;
+            mal_gc_raw_partial_unlink(heap, partial);
         }
         heap->bytes_allocated += g_class_cell_size[size_class];
         mal_heap_maybe_trigger_gc(heap);
@@ -542,6 +553,7 @@ void mal_heap_init(MalHeap *heap, usize capacity) {
 	heap->fail_next_cell_allocation = false;
 #if MAL_PERF_STATS
     heap->fail_next_raw_allocation = false;
+    heap->fail_next_chunk_allocation = false;
 #endif
 #if MAL_PROFILE
 	heap->profile_state = nullptr;
@@ -642,6 +654,7 @@ MalHeapUsage mal_heap_usage(const MalHeap *heap) {
         }
         const MalGcBlock *raw_block = heap->raw_blocks[size_class];
         if (raw_block != nullptr) {
+            if (raw_block->live == 0) usage.raw_warm_block_bytes += MAL_GC_BLOCK_SIZE;
             usage.bump_free_bytes +=
                 (usize) (raw_block->limit - raw_block->bump) / raw_block->cell_size *
                 raw_block->cell_size;
@@ -894,6 +907,16 @@ static void mal_gc_recycle_block(MalHeap *heap, MalGcBlock *block) {
     heap->free_blocks = block;
 }
 
+static void mal_gc_trim_empty_raw_blocks(MalHeap *heap) {
+    for (usize size_class = 0; size_class < MAL_GC_NUM_SIZE_CLASSES; size_class++) {
+        MalGcBlock *block = heap->raw_blocks[size_class];
+        if (block == nullptr || block->live != 0) continue;
+        heap->raw_blocks[size_class] = nullptr;
+        mal_gc_raw_partial_unlink(heap, block);
+        mal_gc_recycle_block(heap, block);
+    }
+}
+
 /* Stomp a reclaimed cell's payload past the free-list link with a recognizable
  * pattern. 0xDF bytes decode, as a
  * NaN-boxed MalValue, to a non-finite double far from any valid pointer or int,
@@ -1000,6 +1023,7 @@ void mal_heap_sweep(MalHeap *heap, MalHeapFinalizeFn finalize) {
     }
 
     heap->live_bytes = live_bytes;
+    mal_gc_trim_empty_raw_blocks(heap);
 }
 
 void mal_heap_sweep_minor(MalHeap *heap, MalHeapFinalizeFn finalize) {
@@ -1137,6 +1161,7 @@ bool mal_heap_sweep_step(MalHeap *heap, MalHeapFinalizeFn finalize, usize max_bl
     }
     // Cursor exhausted: the whole heap is swept.
     heap->live_bytes = heap->sweep_live_bytes;
+    mal_gc_trim_empty_raw_blocks(heap);
     heap->sweeping = false;
     return true;
 }
@@ -1182,35 +1207,15 @@ void gc_free_raw(MalHeap *heap, void *ptr) {
         return;
     }
     if (mal_gc_ptr_in_chunks(heap, ptr)) {
-        // In-block RAW cell: the block is recovered by masking to BLOCK_SIZE
-        // alignment. Decrement the block's live count; when it hits zero the whole
-        // block is empty and its pages go back to the OS (recycled for any
-        // class/kind) instead of pinning them on a free list forever.
         MalGcBlock *block = (MalGcBlock *) ((uptr) ptr & ~(uptr) (MAL_GC_BLOCK_SIZE - 1));
         block->live--;
-        if (block->live == 0) {
-            if (heap->raw_blocks[block->size_class] == block) {
-                heap->raw_blocks[block->size_class] = nullptr; // stop bumping into it
-            }
-            if (block->on_partial) {
-                // Unlink from the doubly-linked partial list (O(1); may be a middle
-                // node, hence the back-pointer rather than a global-list scan).
-                if (block->prev_free != nullptr) {
-                    block->prev_free->next_free = block->next_free;
-                } else {
-                    heap->raw_partial[block->size_class] = block->next_free;
-                }
-                if (block->next_free != nullptr) {
-                    block->next_free->prev_free = block->prev_free;
-                }
-                block->on_partial = 0;
-            }
+        if (block->live == 0 && heap->raw_blocks[block->size_class] != block) {
+            mal_gc_raw_partial_unlink(heap, block);
             mal_gc_recycle_block(heap, block);
             return;
         }
-        // Still has live cells: thread this cell onto the block's OWN free list (link
-        // at offset 0 — RAW cells carry no header) and put the block on its class's
-        // partial list so the allocator reuses the cell before bumping a fresh one.
+        // Only the current block can stay empty; free-list reuse precedes bump growth.
+        if (heap->poison_on_free) mal_gc_poison_cell(ptr, block->cell_size, 0);
         *(void **) ptr = block->free_list;
         block->free_list = ptr;
         if (!block->on_partial) {

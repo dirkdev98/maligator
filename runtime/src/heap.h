@@ -67,7 +67,7 @@ typedef struct MalHeap {
     MalGcLarge *young_large;
     /** Current bump block per size class for managed cells. */
     MalGcBlock *cell_blocks[MAL_GC_NUM_SIZE_CLASSES];
-    /** Current bump block per size class for owner-held raw buffers. */
+    // An empty current RAW block stays reusable until major completion or allocation pressure.
     MalGcBlock *raw_blocks[MAL_GC_NUM_SIZE_CLASSES];
     /** Fully-empty blocks reclaimed by the sweep (pages madvised to the OS),
      * recycled by mal_gc_new_block before carving a fresh block from a chunk.
@@ -79,16 +79,7 @@ typedef struct MalHeap {
     /** Managed blocks allocated into since the last sweep, including cell reuse.
      * Minor collections sweep only this list; old-only blocks need no visit. */
     MalGcBlock *young_blocks;
-    /** Per-size-class list of RAW blocks that hold at least one reclaimable cell
-     * (a doubly-linked intrusive list threaded through MalGcBlock.next_free /
-     * prev_free). Unlike cell_free this is NOT rebuilt by the sweep — RAW buffers
-     * have no per-cell mark; they are freed EXPLICITLY by owner finalizers
-     * (gc_free_raw) onto their OWN block's free list, never a global cell list.
-     * Keeping freed cells per-block (rather than on one global chain) is what lets
-     * a block whose every cell has been freed be handed back to the OS (madvised +
-     * recycled) like an empty CELL block, instead of pinning its pages forever. The
-     * allocator pops a cell from a partial block before bumping a fresh one, which
-     * bounds RAW footprint. */
+    // Per-block free chains permit O(1) recycling without scanning another block's cells.
     MalGcBlock *raw_partial[MAL_GC_NUM_SIZE_CLASSES];
     /** Monotonic total of handed-out cell sizes (never decremented). */
     usize bytes_allocated;
@@ -120,8 +111,9 @@ typedef struct MalHeap {
     /** Test-only one-shot failure consumed by mal_heap_try_alloc. */
 	bool fail_next_cell_allocation;
 #if MAL_PERF_STATS
-    /** Test-only one-shot failure consumed by mal_heap_try_alloc_raw. */
+    // RAW injection rejects reuse too; chunk injection permits recovery from warm reserves.
     bool fail_next_raw_allocation;
+    bool fail_next_chunk_allocation;
 #endif
 #if MAL_PROFILE
 	/** Opaque profile recorder; absent from ordinary heap layouts. */
@@ -163,6 +155,8 @@ typedef struct MalHeapUsage {
     usize raw_owned_bytes;
     usize managed_free_cell_bytes;
     usize raw_free_cell_bytes;
+    // Unowned reserve includes headers and overlaps the free-cell and bump-capacity totals.
+    usize raw_warm_block_bytes;
     usize bump_free_bytes;
     usize recycled_block_bytes;
     usize unclaimed_chunk_bytes;
@@ -514,12 +508,7 @@ usize mal_heap_allocation_charge(usize alloc_size);
 /** Actual payload capacity of a live buffer returned by mal_heap_alloc_raw. */
 usize mal_heap_raw_capacity(MalHeap *heap, const void *ptr);
 
-/**
- * Free a raw buffer previously returned by mal_heap_alloc_raw. Returns an
- * in-block cell to its block's free list, or releases its LOS record. Used by
- * the GC's owner finalizers. A RAW block whose every cell has been freed is
- * returned to the OS (madvised) and recycled for any size class / kind.
- */
+// Empty noncurrent blocks recycle immediately; one current reserve per class survives until major trim.
 void gc_free_raw(MalHeap *heap, void *ptr);
 
 /**

@@ -320,9 +320,13 @@ static bool incremental_major_accounts_a_new_block_in_a_completed_chunk(MalHeap 
 }
 
 static bool incremental_major_accounts_recycled_raw_blocks(MalHeap *heap) {
-    void *raw_behind = mal_heap_alloc_raw(heap, 2048);
+    void *raw_behind[16];
+    for (usize i = 0; i < countof(raw_behind); i++) raw_behind[i] = mal_heap_alloc_raw(heap, 2048);
     TestCell *old_behind = new_cell(heap, 512);
-    void *raw_ahead = mal_heap_alloc_raw(heap, 4096);
+    void *raw_ahead[8];
+    for (usize i = 0; i < countof(raw_ahead); i++) raw_ahead[i] = mal_heap_alloc_raw(heap, 4096);
+    memset(raw_behind[15], 0x51, 2048);
+    memset(raw_ahead[7], 0x62, 4096);
     TestCell *old_ahead = new_cell(heap, 1024);
     mal_heap_begin_major(heap);
     mark_live(old_behind);
@@ -330,10 +334,14 @@ static bool incremental_major_accounts_recycled_raw_blocks(MalHeap *heap) {
     mal_heap_sweep_begin(heap);
     mal_gc_black_alloc = true;
     CHECK(!mal_heap_sweep_step(heap, finalize_cell, 1));
-    gc_free_raw(heap, raw_behind);
+    for (usize i = 0; i < 15; i++) gc_free_raw(heap, raw_behind[i]);
+    CHECK(mal_heap_usage(heap).recycled_block_bytes == 32768);
     TestCell *reused_behind = new_cell(heap, 3072);
-    gc_free_raw(heap, raw_ahead);
+    CHECK((void *) reused_behind == raw_behind[0]);
+    for (usize i = 0; i < 7; i++) gc_free_raw(heap, raw_ahead[i]);
+    CHECK(mal_heap_usage(heap).recycled_block_bytes == 32768);
     TestCell *reused_ahead = new_cell(heap, 7168);
+    CHECK((void *) reused_ahead == raw_ahead[0]);
     CHECK(mal_heap_sweep_step(heap, finalize_cell, (usize) -1));
     mal_gc_black_alloc = false;
     usize live_bytes = mal_heap_allocation_charge(512) + mal_heap_allocation_charge(1024)
@@ -344,6 +352,50 @@ static bool incremental_major_accounts_recycled_raw_blocks(MalHeap *heap) {
     CHECK(heap->live_bytes == live_bytes);
     CHECK(live_cell(old_behind, 1) && live_cell(old_ahead, 2));
     CHECK(live_cell(reused_behind, 3) && live_cell(reused_ahead, 4));
+    for (usize i = 0; i < 2048; i++) CHECK(((u8 *) raw_behind[15])[i] == 0x51);
+    for (usize i = 0; i < 4096; i++) CHECK(((u8 *) raw_ahead[7])[i] == 0x62);
+    gc_free_raw(heap, raw_behind[15]);
+    gc_free_raw(heap, raw_ahead[7]);
+    return true;
+}
+
+static bool minor_keeps_warm_storage_until_major_completion(MalHeap *heap) {
+    TestCell *young = new_cell(heap, 512);
+    young->owned = mal_heap_alloc_raw(heap, 4096);
+    void *owned = young->owned;
+    u32 id = young->id;
+    mal_heap_sweep_minor(heap, finalize_cell);
+    CHECK(g_finalized[id] == 1 && mal_heap_usage(heap).raw_owned_bytes == 0);
+    CHECK(mal_heap_usage(heap).raw_warm_block_bytes == 32768);
+    void *reused = mal_heap_alloc_raw(heap, 4096);
+    CHECK(reused == owned);
+    memset(reused, 0x74, 4096);
+    mal_heap_begin_major(heap);
+    mal_heap_sweep(heap, finalize_cell);
+    for (usize i = 0; i < 4096; i++) CHECK(((u8 *) reused)[i] == 0x74);
+    CHECK(mal_heap_usage(heap).raw_owned_bytes == 4096);
+    gc_free_raw(heap, reused);
+
+    TestCell *large = new_cell(heap, 10000);
+    large->owned = mal_heap_alloc_raw(heap, 2048);
+    u32 large_id = large->id;
+    mal_heap_begin_major(heap);
+    mal_heap_sweep_begin(heap);
+    CHECK(!mal_heap_sweep_step(heap, finalize_cell, 1));
+    CHECK(mal_heap_sweep_step(heap, finalize_cell, (usize) -1));
+    CHECK(g_finalized[large_id] == 1 && g_finalized[id] == 1);
+    CHECK(mal_heap_usage(heap).raw_owned_bytes == 0);
+    CHECK(mal_heap_usage(heap).raw_warm_block_bytes == 0);
+    CHECK(mal_heap_sweep_step(heap, finalize_cell, 1));
+    CHECK(g_finalized[large_id] == 1);
+    large = new_cell(heap, 10000);
+    large->owned = mal_heap_alloc_raw(heap, 2048);
+    large_id = large->id;
+    mal_heap_begin_major(heap);
+    mal_heap_sweep(heap, finalize_cell);
+    CHECK(g_finalized[large_id] == 1);
+    CHECK(mal_heap_usage(heap).raw_owned_bytes == 0);
+    CHECK(mal_heap_usage(heap).raw_warm_block_bytes == 0);
     return true;
 }
 
@@ -613,6 +665,7 @@ int main(void) {
         incremental_major_keeps_allocations_after_a_block_was_swept,
         incremental_major_accounts_a_new_block_in_a_completed_chunk,
         incremental_major_accounts_recycled_raw_blocks,
+        minor_keeps_warm_storage_until_major_completion,
         incremental_major_charges_raw_block_traversal,
         minor_sweep_scans_one_old_block_for_three_new_cells,
         minor_sweep_scans_three_old_blocks_for_three_new_cells,

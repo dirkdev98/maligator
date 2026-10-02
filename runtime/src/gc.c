@@ -695,13 +695,14 @@ static void mal_gc_print_stats_now(void) {
 #endif
     fprintf(stderr,
         " heap_usage_at=%s raw_owned_bytes=%llu managed_free_cell_bytes=%llu "
-        "raw_free_cell_bytes=%llu bump_free_bytes=%llu recycled_block_bytes=%llu "
+        "raw_free_cell_bytes=%llu raw_warm_block_bytes=%llu bump_free_bytes=%llu recycled_block_bytes=%llu "
         "unclaimed_chunk_bytes=%llu chunk_mapped_bytes=%llu "
         "snapshot_reserved_bytes=%llu",
         live_heap ? "live" : "pre_teardown",
         (unsigned long long) usage.raw_owned_bytes,
         (unsigned long long) usage.managed_free_cell_bytes,
         (unsigned long long) usage.raw_free_cell_bytes,
+        (unsigned long long) usage.raw_warm_block_bytes,
         (unsigned long long) usage.bump_free_bytes,
         (unsigned long long) usage.recycled_block_bytes,
         (unsigned long long) usage.unclaimed_chunk_bytes,
