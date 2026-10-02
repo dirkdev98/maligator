@@ -10,25 +10,101 @@
 #include "./heap_symbol.h"
 #include "./perf_stats.h"
 #include "./profile.h"
+#include "./property_store.h"
 
 #define MAL_TABLE_SMALL_MIN_CAPACITY 4
 #define MAL_TABLE_EMPTY (-1)
 
+#define MAL_TABLE_KIND_SHIFT 48
+#define MAL_TABLE_KIND_MASK (UINT64_C(3) << MAL_TABLE_KIND_SHIFT)
+#define MAL_TABLE_INDEX (UINT64_C(1) << MAL_TABLE_KIND_SHIFT)
+#define MAL_TABLE_STRING (UINT64_C(2) << MAL_TABLE_KIND_SHIFT)
+#define MAL_TABLE_SYMBOL (UINT64_C(3) << MAL_TABLE_KIND_SHIFT)
+#define MAL_TABLE_IDENTITY_MASK (UINT64_C(0x0000ffffffffffff) | MAL_TABLE_KIND_MASK)
+#define MAL_TABLE_FLAGS_SHIFT 50
+#define MAL_TABLE_FLAGS_MASK (UINT64_C(0x7f) << MAL_TABLE_FLAGS_SHIFT)
+#define MAL_TABLE_OWNS_DATA (UINT64_C(1) << 57)
+#define MAL_TABLE_HASH_SHIFT 58
+#define MAL_TABLE_HASH_MASK (UINT64_C(0x3f) << MAL_TABLE_HASH_SHIFT)
+
 typedef struct MalTableEntry {
-    // The key's value only; the equality domain (MalKeyKind) is derived on read
-    // via mal_key_kind_of, so an entry needs no separate 4-byte kind field.
-    MalValue key;
+    // Kind zero is dead; ownership survives deletion until the RAW sidecar is freed.
+    u64 key;
     union {
         void *data;
         MalValue value;
     } payload;
-    u32 hash_fingerprint;
-    u8 property_flags;
-    bool live;
-    bool owns_data;
 } MalTableEntry;
 
-static_assert(sizeof(MalTableEntry) == 24, "MalTableEntry must stay densely packed");
+static_assert(sizeof(MalTableEntry) == 16, "property rows must occupy two words");
+static_assert(MAKS_PTR == UINT64_C(0x0000ffffffffffff), "property keys share the value pointer width");
+static_assert((MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE |
+    MAL_PROPERTY_ACCESSOR | MAL_PROPERTY_INTERNAL_FLAGS) == 0x7f, "property metadata needs seven bits");
+
+static inline bool mal_table_row_live(const MalTableEntry *entry) {
+    return (entry->key & MAL_TABLE_KIND_MASK) != 0;
+}
+
+static inline bool mal_table_row_owned(const MalTableEntry *entry) {
+    return (entry->key & MAL_TABLE_OWNS_DATA) != 0;
+}
+
+static u64 mal_table_encode_key(MalKey key) {
+    if (key.kind == MAL_KEY_INDEX) {
+        u32 index;
+        if (mal_value_is_int32(key.value)) {
+            i32 integer = mal_value_to_i32(key.value);
+            if (integer < 0) abort();
+            index = (u32) integer;
+        } else {
+            if (!mal_value_is_f64(key.value)) abort();
+            f64 number = mal_value_to_f64(key.value);
+            if (!(number >= 0 && number < (f64) UINT32_MAX) || (f64) (u32) number != number) abort();
+            index = (u32) number;
+        }
+        return MAL_TABLE_INDEX | index;
+    }
+    if (key.kind == MAL_KEY_STRING && mal_value_is_string(key.value)) {
+        return MAL_TABLE_STRING | (key.value & MAKS_PTR);
+    }
+    if (key.kind == MAL_KEY_SYMBOL && mal_value_is_symbol(key.value)) {
+        return MAL_TABLE_SYMBOL | (key.value & MAKS_PTR);
+    }
+    abort();
+}
+
+static inline MalValue mal_table_key_value(u64 key) {
+    switch (key & MAL_TABLE_KIND_MASK) {
+        case MAL_TABLE_INDEX: return mal_key_index((u32) key).value;
+        case MAL_TABLE_STRING: return MAL_VALUE_STRING | (key & MAKS_PTR);
+        case MAL_TABLE_SYMBOL: return MAL_VALUE_SYMBOL | (key & MAKS_PTR);
+        default: return MAL_VALUE_EMPTY;
+    }
+}
+
+static inline MalKey mal_table_decode_key(u64 key) {
+    MalValue value = mal_table_key_value(key);
+    return (MalKey) {.kind = (key & MAL_TABLE_KIND_MASK) == MAL_TABLE_INDEX ? MAL_KEY_INDEX :
+        (key & MAL_TABLE_KIND_MASK) == MAL_TABLE_STRING ? MAL_KEY_STRING : MAL_KEY_SYMBOL,
+        .value = value};
+}
+
+static bool mal_table_key_equals(const MalTableEntry *entry, u64 key, bool hashed) {
+    MAL_PERF_COUNT(key_equals_calls);
+    u64 candidate = entry->key & MAL_TABLE_IDENTITY_MASK;
+    if (candidate == key) {
+        MAL_PERF_COUNT(key_pointer_hits);
+        return true;
+    }
+    if ((candidate & MAL_TABLE_KIND_MASK) != MAL_TABLE_STRING ||
+        (key & MAL_TABLE_KIND_MASK) != MAL_TABLE_STRING) return false;
+    MalString *left = mal_value_to_string(mal_table_key_value(candidate));
+    MalString *right = mal_value_to_string(mal_table_key_value(key));
+    // Indexed queries and every insertion have cached content hashes; tiny probes need none.
+    if (hashed && left->hash != right->hash) return false;
+    MAL_PERF_COUNT(key_string_fallbacks);
+    return mal_string_equals(left, right);
+}
 
 // Ordered entry indices survive buffer growth; only unpinned compaction renumbers handles.
 typedef struct MalTable {
@@ -55,17 +131,18 @@ static inline u32 mal_table_handle_index(const void *handle) {
     return (u32) ((uptr) handle - 1);
 }
 
-static inline u32 mal_table_hash_fingerprint(u64 hash) {
-    return (u32) (hash >> 32);
+static inline u64 mal_table_hash_fingerprint(u64 hash) {
+    // Group tags use bits 57..63; these six independent bits reject candidates before pointer loads.
+    return ((hash >> 51) & UINT64_C(0x3f)) << MAL_TABLE_HASH_SHIFT;
 }
 
-static u32 mal_table_find_slot(const MalTable *table, MalValue key, u64 hash) {
+static u32 mal_table_find_slot(const MalTable *table, u64 key, u64 hash) {
     u32 result = table->entry_count;
     u64 probes = 0;
     if (table->slot_capacity == 0) {
         for (u32 i = 0; i < table->entry_count; i++) {
             probes++;
-            if (table->entries[i].live && mal_key_value_equals(table->entries[i].key, key)) {
+            if (mal_table_row_live(&table->entries[i]) && mal_table_key_equals(&table->entries[i], key, false)) {
                 result = i;
                 break;
             }
@@ -82,8 +159,8 @@ static u32 mal_table_find_slot(const MalTable *table, MalValue key, u64 hash) {
                 const MalTableEntry *entry = &table->entries[table->slots[slot]];
                 MAL_PERF_COUNT(hash_index_candidates);
                 probes++;
-                if (entry->hash_fingerprint == mal_table_hash_fingerprint(hash) &&
-                    mal_key_value_equals(entry->key, key)) {
+                if ((entry->key & MAL_TABLE_HASH_MASK) == mal_table_hash_fingerprint(hash) &&
+                    mal_table_key_equals(entry, key, true)) {
                     result = slot;
                     goto found;
                 }
@@ -107,7 +184,7 @@ found:
         stats->find_calls++;
         stats->probes += probes;
         if (probes > stats->max_probe) stats->max_probe = probes;
-        if (mal_value_is_string(key)) stats->string_queries++;
+        if ((key & MAL_TABLE_KIND_MASK) == MAL_TABLE_STRING) stats->string_queries++;
     }
     return result;
 }
@@ -141,8 +218,8 @@ static void mal_table_fill_slots(MalTable *table, i32 *slots, u32 capacity) {
     if (capacity == 0) return;
     mal_hash_index_reset(slots, capacity);
     for (u32 e = 0; e < table->entry_count; e++) {
-        if (!table->entries[e].live) continue;
-        u64 hash = mal_key_hash_value(table->entries[e].key);
+        if (!mal_table_row_live(&table->entries[e])) continue;
+        u64 hash = mal_key_hash_value(mal_table_key_value(table->entries[e].key));
         u32 slot = mal_hash_index_empty_slot(slots, capacity, hash);
         mal_hash_index_insert(slots, capacity, slot, e, hash);
     }
@@ -174,12 +251,7 @@ static bool mal_table_grow_slots_if_needed(MalTable *table, bool reuses_deleted)
     return true;
 }
 
-// Grows `entries` when the append cursor reaches capacity. The grow may move the
-// buffer, but handles/iterators are indices, so they stay valid. Routed through the
-// RAW space so the bytes count toward
-// the GC trigger; no safepoint runs inside the allocator, so the detached old buffer
-// is never observed by the collector (the entries it holds are copied forward and
-// traced via the owner at the new address).
+// RAW realloc has no safepoint; the owner publishes the copied rows before GC can observe them.
 static void mal_table_grow_entries_if_needed(MalTable *table) {
     if (table->entry_count < table->entry_capacity) {
         return;
@@ -217,10 +289,9 @@ MalTable *mal_table_new(void) {
 void mal_table_free(MalTable *table) {
     MalHeap *heap = mal_gc_current_heap();
 
-    // Owned descriptor data is held by occupied accessor cells, including tombstones,
-    // until compact/free.
+    // Dead rows still own sidecars; teardown must not dereference their reclaimed keys.
     for (u32 e = 0; e < table->entry_count; e++) {
-        if (table->entries[e].owns_data) {
+        if (mal_table_row_owned(&table->entries[e])) {
             gc_free_raw(heap, table->entries[e].payload.data);
         }
     }
@@ -274,11 +345,12 @@ bool mal_table_reserve(MalTable *table, usize desired_size) {
 bool mal_table_get_private_value(const MalTable *table, MalSymbol *symbol, MalValue *value) {
     if (table == nullptr) return false;
     MalValue key = mal_value_from_symbol(symbol);
+    u64 encoded = MAL_TABLE_SYMBOL | (key & MAKS_PTR);
     u32 index = symbol->private_entry_hint - 1;
     if (index < table->entry_count) {
         const MalTableEntry *entry = &table->entries[index];
         // Exact identity makes hints safe across receivers, growth, and compaction.
-        if (entry->live && entry->key == key) {
+        if (mal_table_row_live(entry) && (entry->key & MAL_TABLE_IDENTITY_MASK) == encoded) {
             *value = entry->payload.value;
             return true;
         }
@@ -291,6 +363,7 @@ bool mal_table_get_private_value(const MalTable *table, MalSymbol *symbol, MalVa
 }
 
 MalTableLookup mal_table_lookup(const MalTable *table, MalKey key) {
+    u64 encoded = mal_table_encode_key(key);
     MalPerfTableStats *stats = mal_perf_stats_enabled ? &mal_perf_stats.table : nullptr;
     if (stats != nullptr) {
         stats->lookups++;
@@ -300,18 +373,18 @@ MalTableLookup mal_table_lookup(const MalTable *table, MalKey key) {
         return (MalTableLookup) {.present = false, .entry = nullptr};
     }
     if (key.kind == MAL_KEY_INDEX) {
-        u32 index = mal_key_index_value(key);
+        u32 index = (u32) encoded;
         if (index < table->entry_count) {
             const MalTableEntry *entry = &table->entries[index];
             // Dense array deoptimization preserves index order; exact keys reject shifted entries.
-            if (entry->live && entry->key == key.value) {
+            if (mal_table_row_live(entry) && (entry->key & MAL_TABLE_IDENTITY_MASK) == encoded) {
                 if (stats != nullptr) stats->lookup_hits++;
                 return (MalTableLookup) {.present = true, .entry = mal_table_handle(index)};
             }
         }
     }
-    u64 hash = table->slot_capacity == 0 ? 0 : mal_key_hash_value(key.value);
-    u32 index = mal_table_find_slot(table, key.value, hash);
+    u64 hash = table->slot_capacity == 0 ? 0 : mal_key_hash_value(mal_table_key_value(encoded));
+    u32 index = mal_table_find_slot(table, encoded, hash);
     i32 entry = mal_table_slot_entry(table, index);
 
     if (entry == MAL_TABLE_EMPTY) {
@@ -328,13 +401,14 @@ MalTableLookup mal_table_lookup(const MalTable *table, MalKey key) {
 }
 
 void *mal_table_upsert_entry(MalTable *table, MalKey key, bool *inserted) {
+    u64 encoded = mal_table_encode_key(key);
     MalPerfTableStats *stats = mal_perf_stats_enabled ? &mal_perf_stats.table : nullptr;
     if (stats != nullptr) {
         stats->upserts++;
     }
     mal_table_allocate_storage(table);
-    u64 hash = table->slot_capacity == 0 ? 0 : mal_key_hash_value(key.value);
-    u32 index = mal_table_find_slot(table, key.value, hash);
+    u64 hash = table->slot_capacity == 0 ? 0 : mal_key_hash_value(mal_table_key_value(encoded));
+    u32 index = mal_table_find_slot(table, encoded, hash);
     if (mal_table_slot_entry(table, index) != MAL_TABLE_EMPTY) {
         if (stats != nullptr) {
             stats->upsert_hits++;
@@ -349,20 +423,16 @@ void *mal_table_upsert_entry(MalTable *table, MalKey key, bool *inserted) {
     bool reuses_deleted = table->slot_capacity != 0 &&
         mal_hash_controls(table->slots, table->slot_capacity)[index] == MAL_HASH_DELETED;
     if (mal_table_grow_slots_if_needed(table, reuses_deleted)) {
-        hash = mal_key_hash_value(key.value);
-        index = mal_table_find_slot(table, key.value, hash);
+        hash = mal_key_hash_value(mal_table_key_value(encoded));
+        index = mal_table_find_slot(table, encoded, hash);
     } else if (table->slot_capacity == 0) {
-        hash = mal_key_hash_value(key.value);
+        hash = mal_key_hash_value(mal_table_key_value(encoded));
     }
 
     u32 entry_index = table->entry_count++;
     MalTableEntry *entry = &table->entries[entry_index];
-    entry->key = key.value;
+    entry->key = encoded | mal_table_hash_fingerprint(hash);
     entry->payload.value = mal_value_new_undefined();
-    entry->hash_fingerprint = mal_table_hash_fingerprint(hash);
-    entry->property_flags = 0;
-    entry->live = true;
-    entry->owns_data = false;
 
     if (table->slot_capacity != 0) {
         if (mal_hash_controls(table->slots, table->slot_capacity)[index] == MAL_HASH_DELETED) {
@@ -380,13 +450,14 @@ void *mal_table_upsert_entry(MalTable *table, MalKey key, bool *inserted) {
 }
 
 bool mal_table_delete(MalTable *table, MalKey key) {
+    u64 encoded = mal_table_encode_key(key);
     MalPerfTableStats *stats = mal_perf_stats_enabled ? &mal_perf_stats.table : nullptr;
     if (stats != nullptr) {
         stats->deletes++;
     }
     if (table->size == 0) return false;
-    u64 hash = table->slot_capacity == 0 ? 0 : mal_key_hash_value(key.value);
-    u32 index = mal_table_find_slot(table, key.value, hash);
+    u64 hash = table->slot_capacity == 0 ? 0 : mal_key_hash_value(mal_table_key_value(encoded));
+    u32 index = mal_table_find_slot(table, encoded, hash);
     i32 entry_index = mal_table_slot_entry(table, index);
 
     if (entry_index == MAL_TABLE_EMPTY) {
@@ -399,14 +470,13 @@ bool mal_table_delete(MalTable *table, MalKey key) {
     MalTableEntry *entry = &table->entries[entry_index];
 
     // The property MOP shades accessor edges; this layer preserves keys and inline values for SATB.
-    mal_gc_write_barrier(entry->key);
-    if (!entry->owns_data) {
+    mal_gc_write_barrier(mal_table_key_value(entry->key));
+    if (!mal_table_row_owned(entry)) {
         mal_gc_write_barrier(entry->payload.value);
     }
 
-    // Tombstone the cell in place (keeps insertion order / outstanding indices
-    // valid); the sweep-out of dead cells happens in compact.
-    entry->live = false;
+    // Keep raw ownership on dead rows until compact/free; cursors retain their positions.
+    entry->key &= ~MAL_TABLE_KIND_MASK;
     table->size--;
     table->tombstone_count++;
 
@@ -422,8 +492,8 @@ usize mal_table_retain(MalTable *table, bool (*keep)(MalValue key)) {
     usize removed = 0;
     for (u32 e = 0; e < table->entry_count; ++e) {
         MalTableEntry *entry = &table->entries[e];
-        if (!entry->live || keep(entry->key)) continue;
-        if (removed < countof(rejected)) rejected[removed] = entry->key;
+        if (!mal_table_row_live(entry) || keep(mal_table_key_value(entry->key))) continue;
+        if (removed < countof(rejected)) rejected[removed] = mal_table_key_value(entry->key);
         removed++;
     }
     if (removed == 0) return 0;
@@ -441,8 +511,8 @@ usize mal_table_retain(MalTable *table, bool (*keep)(MalValue key)) {
         } else {
             for (u32 e = 0; e < table->entry_count; ++e) {
                 MalTableEntry *entry = &table->entries[e];
-                if (!entry->live || keep(entry->key)) continue;
-                mal_table_delete(table, mal_key_from_value(entry->key));
+                if (!mal_table_row_live(entry) || keep(mal_table_key_value(entry->key))) continue;
+                mal_table_delete(table, mal_table_decode_key(entry->key));
             }
         }
         return removed;
@@ -451,10 +521,10 @@ usize mal_table_retain(MalTable *table, bool (*keep)(MalValue key)) {
     // Dense filtering rebuilds only the index, preserving surviving handles.
     for (u32 e = 0; e < table->entry_count; ++e) {
         MalTableEntry *entry = &table->entries[e];
-        if (!entry->live || keep(entry->key)) continue;
-        mal_gc_write_barrier(entry->key);
-        if (!entry->owns_data) mal_gc_write_barrier(entry->payload.value);
-        entry->live = false;
+        if (!mal_table_row_live(entry) || keep(mal_table_key_value(entry->key))) continue;
+        mal_gc_write_barrier(mal_table_key_value(entry->key));
+        if (!mal_table_row_owned(entry)) mal_gc_write_barrier(entry->payload.value);
+        entry->key &= ~MAL_TABLE_KIND_MASK;
     }
     table->size -= (u32) removed;
     table->tombstone_count += (u32) removed;
@@ -480,13 +550,12 @@ void mal_table_clear(MalTable *table) {
         return;
     }
     for (u32 e = 0; e < table->entry_count; e++) {
-        if (table->entries[e].live) {
-            // SATB: shade each dropped key/value (see mal_table_delete).
-            mal_gc_write_barrier(table->entries[e].key);
-            if (!table->entries[e].owns_data) {
+        if (mal_table_row_live(&table->entries[e])) {
+            mal_gc_write_barrier(mal_table_key_value(table->entries[e].key));
+            if (!mal_table_row_owned(&table->entries[e])) {
                 mal_gc_write_barrier(table->entries[e].payload.value);
             }
-            table->entries[e].live = false;
+            table->entries[e].key &= ~MAL_TABLE_KIND_MASK;
             table->tombstone_count++;
         }
     }
@@ -508,8 +577,8 @@ void mal_table_compact(MalTable *table) {
     for (u32 read_index = 0; read_index < table->entry_count; read_index++) {
         MalTableEntry *entry = &table->entries[read_index];
 
-        if (!entry->live) {
-            if (entry->owns_data) {
+        if (!mal_table_row_live(entry)) {
+            if (mal_table_row_owned(entry)) {
                 gc_free_raw(mal_gc_current_heap(), entry->payload.data);
             }
             continue;
@@ -572,35 +641,37 @@ void mal_table_unpin(MalTable *table) {
 }
 
 MalKey mal_table_entry_key(const MalTable *table, void *entry) {
-    return mal_key_from_value(table->entries[mal_table_handle_index(entry)].key);
+    return mal_table_decode_key(table->entries[mal_table_handle_index(entry)].key);
 }
 
 void *mal_table_entry_data(const MalTable *table, void *entry) {
     const MalTableEntry *target = &table->entries[mal_table_handle_index(entry)];
-    return target->owns_data ? target->payload.data : nullptr;
+    return mal_table_row_owned(target) ? target->payload.data : nullptr;
 }
 
 void mal_table_entry_set_owned_data(MalTable *table, void *entry, void *data) {
     MalTableEntry *target = &table->entries[mal_table_handle_index(entry)];
-    if (!target->owns_data) {
+    if (!mal_table_row_owned(target)) {
         mal_gc_write_barrier(target->payload.value);
     }
     if (data != nullptr) {
         target->payload.data = data;
-        target->owns_data = true;
+        target->key |= MAL_TABLE_OWNS_DATA;
     } else {
         target->payload.value = mal_value_new_undefined();
-        target->owns_data = false;
+        target->key &= ~MAL_TABLE_OWNS_DATA;
     }
 }
 
 u8 mal_table_entry_property_flags(const MalTable *table, void *entry) {
-    return table->entries[mal_table_handle_index(entry)].property_flags;
+    return (u8) ((table->entries[mal_table_handle_index(entry)].key & MAL_TABLE_FLAGS_MASK) >> MAL_TABLE_FLAGS_SHIFT);
 }
 
 void mal_table_entry_set_property_flags(
     MalTable *table, void *entry, u8 flags) {
-    table->entries[mal_table_handle_index(entry)].property_flags = flags;
+    if ((flags & ~0x7f) != 0) abort();
+    MalTableEntry *target = &table->entries[mal_table_handle_index(entry)];
+    target->key = (target->key & ~MAL_TABLE_FLAGS_MASK) | ((u64) flags << MAL_TABLE_FLAGS_SHIFT);
 }
 
 MalValue mal_table_entry_value(const MalTable *table, void *entry) {
@@ -615,7 +686,8 @@ void mal_table_entry_set_value(MalTable *table, void *entry, MalValue value) {
 }
 
 bool mal_table_entry_is_live(const MalTable *table, const void *entry) {
-    return table->entries[mal_table_handle_index(entry)].live;
+    return entry != nullptr && (uptr) entry <= table->entry_count &&
+        mal_table_row_live(&table->entries[mal_table_handle_index(entry)]);
 }
 
 u64 mal_table_handle_epoch(const MalTable *table) {
@@ -633,10 +705,12 @@ bool mal_table_entry_matches(
         return false;
     }
     const MalTableEntry *candidate = &table->entries[index];
-    u64 hash = mal_key_hash_value(key.value);
-    return candidate->live &&
-        candidate->hash_fingerprint == mal_table_hash_fingerprint(hash) &&
-        mal_key_value_equals(candidate->key, key.value);
+    if (!mal_table_row_live(candidate)) return false;
+    u64 encoded = mal_table_encode_key(key);
+    if (table->slot_capacity == 0) return mal_table_key_equals(candidate, encoded, false);
+    u64 hash = mal_key_hash_value(mal_table_key_value(encoded));
+    return (candidate->key & MAL_TABLE_HASH_MASK) == mal_table_hash_fingerprint(hash) &&
+        mal_table_key_equals(candidate, encoded, true);
 }
 
 bool mal_table_read_entry_hint(
@@ -647,11 +721,13 @@ bool mal_table_read_entry_hint(
     u32 index = mal_table_handle_index(entry);
     if (index >= table->entry_count) return false;
     const MalTableEntry *candidate = &table->entries[index];
-    if (!candidate->live || candidate->key != key || candidate->owns_data) {
+    if (!mal_table_row_live(candidate) ||
+        (candidate->key & MAL_TABLE_IDENTITY_MASK) != mal_table_encode_key(mal_key_from_value(key)) ||
+        mal_table_row_owned(candidate)) {
         return false;
     }
     *value = candidate->payload.value;
-    *property_flags = candidate->property_flags;
+    *property_flags = (u8) ((candidate->key & MAL_TABLE_FLAGS_MASK) >> MAL_TABLE_FLAGS_SHIFT);
     return true;
 }
 
@@ -666,11 +742,11 @@ bool mal_table_iter_next(MalTableIter *iter, MalKey *key_out, void **entry_out) 
         u32 entry_index = (u32) iter->index++;
         MalTableEntry *entry = &iter->table->entries[entry_index];
 
-        if (!entry->live) {
+        if (!mal_table_row_live(entry)) {
             continue;
         }
 
-        *key_out = mal_key_from_value(entry->key);
+        *key_out = mal_table_decode_key(entry->key);
         *entry_out = mal_table_handle(entry_index);
 
         return true;

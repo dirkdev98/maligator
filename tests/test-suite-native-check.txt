@@ -75,3 +75,4 @@ tests/native/set-storage.test.ts
 
 tests/native/grouped-hash-index.test.ts
 tests/native/intern-stores.test.ts
+tests/native/property-storage.test.ts

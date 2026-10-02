@@ -19,7 +19,7 @@ typedef enum MalKeyKind {
     MAL_KEY_STATIC,
 } MalKeyKind;
 
-// Property entries store only value; their transient equality kind is derived on read.
+// Property storage preserves the explicit INDEX, STRING, or SYMBOL family.
 typedef struct MalKey {
     MalKeyKind kind;
     MalValue value;

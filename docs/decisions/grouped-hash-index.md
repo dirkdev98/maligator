@@ -29,7 +29,9 @@ Set retains its four-member inline scan. MalTable scans up to four physical
 entries without an index, then promotes; reserve can install an index earlier.
 This avoids a 16-bucket allocation for tiny dictionaries. Property flags, owned
 accessor data, private-symbol hints, entry handles, and collector barriers remain
-MalTable contracts. Map owns its packed payload and four-pair inline store; it
+MalTable contracts. Its [property rows](specialized-property-storage.md) encode
+key identity, flags, ownership, and a secondary tag in 16 bytes; candidate strings
+still compare by full content. Map owns its packed payload and four-pair inline store; it
 shares the index without carrying property metadata or accessor ownership.
 
 WeakMap and WeakSet use the same control/probe primitives with direct identity

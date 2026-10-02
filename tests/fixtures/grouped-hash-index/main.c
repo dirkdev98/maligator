@@ -37,9 +37,8 @@ static int check_masks(void) {
     return 0;
 }
 
-// Matching numeric bits makes property and Set probes exercise the same collided groups.
-static MalKey shared_index_key(u32 index) {
-    return mal_key_from_value(mal_value_from_f64((f64) index));
+static MalValue set_index_key(u32 index) {
+    return mal_collection_canonical_value(mal_value_from_u32(index));
 }
 
 static int check_churn(MalVm *vm) {
@@ -47,17 +46,20 @@ static int check_churn(MalVm *vm) {
     MalSetObject *set = mal_set_object_new(&vm->heap, nullptr);
     CHECK(mal_table_reserve(table, 128));
     CHECK(mal_set_object_reserve(set, 128));
-    i32 keys[128];
+    u32 keys[128];
+    u32 set_keys[128];
     u32 count = 0;
-    for (i32 value = 0; count < countof(keys); value++) {
-        MalValue key = shared_index_key(value).value;
-        if ((mal_key_hash_value(key) & 255) != 255) continue;
-        keys[count++] = value;
+    for (u32 value = 0; count < countof(keys); value++) {
+        if ((mal_key_hash_value(mal_key_index(value).value) & 255) == 255) keys[count++] = value;
     }
-    MalKey anchor_key = shared_index_key(keys[0]);
+    count = 0;
+    for (u32 value = 0; count < countof(set_keys); value++) {
+        if ((mal_key_hash_value(set_index_key(value)) & 255) == 255) set_keys[count++] = value;
+    }
+    MalKey anchor_key = mal_key_index(keys[0]);
     void *anchor = mal_table_upsert_entry(table, anchor_key, nullptr);
     mal_table_entry_set_value(table, anchor, MAL_VALUE_TRUE);
-    mal_set_object_add(set, anchor_key.value);
+    mal_set_object_add(set, set_index_key(set_keys[0]));
     mal_table_pin(table);
     mal_set_storage_pin(set->entries);
     u64 epoch = mal_table_handle_epoch(table);
@@ -66,17 +68,18 @@ static int check_churn(MalVm *vm) {
     for (u32 operation = 0; operation < 6000; operation++) {
         random = random * 1664525 + 1013904223;
         u32 index = 1 + (random >> 8) % 127;
-        MalKey key = shared_index_key(keys[index]);
+        MalKey key = mal_key_index(keys[index]);
+        MalValue set_key = set_index_key(set_keys[index]);
         if ((random & 3) == 0) {
             CHECK(mal_table_delete(table, key) == live[index]);
-            CHECK(mal_set_object_delete(set, key.value) == live[index]);
+            CHECK(mal_set_object_delete(set, set_key) == live[index]);
             live[index] = false;
         } else {
             bool inserted;
             void *entry = mal_table_upsert_entry(table, key, &inserted);
             CHECK(inserted == !live[index]);
             mal_table_entry_set_value(table, entry, mal_value_from_i32((i32) index));
-            mal_set_object_add(set, key.value);
+            mal_set_object_add(set, set_key);
             live[index] = true;
         }
         if (operation % 31 != 0) continue;
@@ -85,10 +88,10 @@ static int check_churn(MalVm *vm) {
         CHECK(mal_table_entry_value(table, anchor) == MAL_VALUE_TRUE);
         usize observed_size = 0;
         for (u32 i = 0; i < countof(keys); i++) {
-            MalKey query = shared_index_key(keys[i]);
+            MalKey query = mal_key_index(keys[i]);
             MalTableLookup lookup = mal_table_lookup(table, query);
             CHECK(lookup.present == live[i]);
-            CHECK(mal_set_object_has(set, query.value) == live[i]);
+            CHECK(mal_set_object_has(set, set_index_key(set_keys[i])) == live[i]);
             if (lookup.present && i != 0) CHECK(mal_value_to_i32(mal_table_entry_value(table, lookup.entry)) == (i32) i);
             observed_size += live[i];
         }
@@ -115,12 +118,12 @@ static int check_churn(MalVm *vm) {
 
 static int check_transitions(MalVm *vm) {
     MalTable *table = mal_table_new();
-    for (i32 i = 0; i < 4; i++) mal_table_upsert_entry(table, shared_index_key(i), nullptr);
-    for (i32 i = 1; i < 4; i++) CHECK(mal_table_delete(table, shared_index_key(i)));
+    for (i32 i = 0; i < 4; i++) mal_table_upsert_entry(table, mal_key_index(i), nullptr);
+    for (i32 i = 1; i < 4; i++) CHECK(mal_table_delete(table, mal_key_index(i)));
     mal_table_pin(table);
     CHECK(mal_table_reserve(table, 4));
     u64 rebuilds = mal_perf_stats.hash_index_rebuilds;
-    for (i32 i = 4; i < 7; i++) mal_table_upsert_entry(table, shared_index_key(i), nullptr);
+    for (i32 i = 4; i < 7; i++) mal_table_upsert_entry(table, mal_key_index(i), nullptr);
     CHECK(mal_perf_stats.hash_index_rebuilds == rebuilds);
     mal_table_unpin(table);
     mal_table_free(table);
@@ -129,48 +132,52 @@ static int check_transitions(MalVm *vm) {
     MalSetObject *set = mal_set_object_new(&vm->heap, nullptr);
     CHECK(mal_table_reserve(table, 28) && mal_set_object_reserve(set, 28));
     MalValue keys[29];
-    u32 count = 0;
-    for (i32 i = 0; count < 28; i++) {
-        MalValue key = shared_index_key(i).value;
-        if ((mal_key_hash_value(key) & 31) >= 16) continue;
-        keys[count++] = key;
-        mal_table_upsert_entry(table, mal_key_from_value(key), nullptr);
-        mal_set_object_add(set, key);
-    }
-    for (i32 i = 0;; i++) {
-        MalValue key = shared_index_key(i).value;
-        if ((mal_key_hash_value(key) & 31) < 16) continue;
-        keys[28] = key;
-        break;
+    MalValue set_keys[29];
+    for (u32 family = 0; family < 2; family++) {
+        MalValue *chosen = family == 0 ? keys : set_keys;
+        u32 count = 0;
+        for (u32 i = 0; count < 28; i++) {
+            MalValue key = family == 0 ? mal_key_index(i).value : set_index_key(i);
+            if ((mal_key_hash_value(key) & 31) >= 16) continue;
+            chosen[count++] = key;
+            if (family == 0) mal_table_upsert_entry(table, mal_key_from_value(key), nullptr);
+            else mal_set_object_add(set, key);
+        }
+        for (u32 i = 0;; i++) {
+            MalValue key = family == 0 ? mal_key_index(i).value : set_index_key(i);
+            if ((mal_key_hash_value(key) & 31) < 16) continue;
+            chosen[28] = key;
+            break;
+        }
     }
     mal_table_pin(table);
     mal_set_storage_pin(set->entries);
     void *anchor = mal_table_lookup(table, mal_key_from_value(keys[1])).entry;
     u64 epoch = mal_table_handle_epoch(table);
-    CHECK(mal_table_delete(table, mal_key_from_value(keys[0])) && mal_set_object_delete(set, keys[0]));
+    CHECK(mal_table_delete(table, mal_key_from_value(keys[0])) && mal_set_object_delete(set, set_keys[0]));
     rebuilds = mal_perf_stats.hash_index_rebuilds;
     u64 reuses = mal_perf_stats.hash_index_tombstone_reuses;
     mal_table_upsert_entry(table, mal_key_from_value(keys[0]), nullptr);
-    mal_set_object_add(set, keys[0]);
+    mal_set_object_add(set, set_keys[0]);
     CHECK(mal_perf_stats.hash_index_rebuilds == rebuilds);
     if (mal_perf_stats_enabled) CHECK(mal_perf_stats.hash_index_tombstone_reuses > reuses);
-    CHECK(mal_table_delete(table, mal_key_from_value(keys[0])) && mal_set_object_delete(set, keys[0]));
+    CHECK(mal_table_delete(table, mal_key_from_value(keys[0])) && mal_set_object_delete(set, set_keys[0]));
     mal_table_upsert_entry(table, mal_key_from_value(keys[28]), nullptr);
-    mal_set_object_add(set, keys[28]);
+    mal_set_object_add(set, set_keys[28]);
     if (mal_perf_stats_enabled) CHECK(mal_perf_stats.hash_index_rebuilds > rebuilds);
     CHECK(mal_table_entry_matches(table, anchor, epoch, mal_key_from_value(keys[1])));
     for (u32 i = 1; i < countof(keys); i++) {
         CHECK(mal_table_lookup(table, mal_key_from_value(keys[i])).present);
-        CHECK(mal_set_object_has(set, keys[i]));
+        CHECK(mal_set_object_has(set, set_keys[i]));
     }
     for (i32 i = 0; i < 300; i++) {
-        MalValue key = shared_index_key(100000 + i).value;
+        MalValue key = mal_key_index(100000 + i).value;
         mal_table_upsert_entry(table, mal_key_from_value(key), nullptr);
         mal_set_object_add(set, key);
     }
     CHECK(mal_table_entry_matches(table, anchor, epoch, mal_key_from_value(keys[1])));
     for (i32 i = 0; i < 300; i++) {
-        MalValue key = shared_index_key(100000 + i).value;
+        MalValue key = mal_key_index(100000 + i).value;
         CHECK(mal_table_lookup(table, mal_key_from_value(key)).present && mal_set_object_has(set, key));
     }
     mal_table_unpin(table);

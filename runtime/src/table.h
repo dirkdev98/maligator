@@ -24,6 +24,8 @@ typedef struct MalTableLookup {
     void *entry;
 } MalTableLookup;
 
+// Keys are INDEX (0..2^32-2), STRING, or SYMBOL. Borrowed query strings are never retained.
+// Inserted strings must outlive their entries; equal insertions preserve the stored representative.
 MalTable *mal_table_new(void);
 
 void mal_table_free(MalTable *table);
@@ -38,7 +40,7 @@ usize mal_table_size(const MalTable *table);
 bool mal_table_reserve(MalTable *table, usize desired_size);
 
 /**
- * Look up a key using the equality rule implied by key.kind.
+ * Numeric INDEX spellings normalize; STRING content and SYMBOL identity remain distinct.
  */
 MalTableLookup mal_table_lookup(const MalTable *table, MalKey key);
 
