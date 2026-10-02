@@ -263,6 +263,7 @@ typedef struct MalNodeHttpClientState {
     char *host;
     u16 port;
     bool secure;
+    bool keep_alive;
     char *method;
     usize method_len;
     char *path;
@@ -2221,7 +2222,7 @@ invalid_url:
 
 static bool http_client_serialize_headers(
     MalVm *vm, MalValue headers_value, char **out, usize *out_length,
-    bool *has_content_length, i64 *content_length) {
+    bool *has_content_length, i64 *content_length, bool *keep_alive) {
     *out = nullptr;
     *out_length = 0;
     *has_content_length = false;
@@ -2318,7 +2319,28 @@ static bool http_client_serialize_headers(
             *content_length = (i64) parsed;
             continue;
         }
-        if (host_managed || connection_header) {
+        if (connection_header) {
+            byte *bytes = nullptr;
+            usize value_length = 0;
+            ok = http_header_value_bytes(vm, roots[3], &bytes, &value_length);
+            for (usize j = 0; ok && j < value_length;) {
+                while (j < value_length && (bytes[j] == ' ' || bytes[j] == '\t' || bytes[j] == ',')) j++;
+                usize start = j;
+                while (j < value_length && bytes[j] != ',') j++;
+                usize end = j;
+                while (end > start && (bytes[end - 1] == ' ' || bytes[end - 1] == '\t')) end--;
+                if (end - start == 5 && (bytes[start] | 0x20) == 'c'
+                    && (bytes[start + 1] | 0x20) == 'l' && (bytes[start + 2] | 0x20) == 'o'
+                    && (bytes[start + 3] | 0x20) == 's' && (bytes[start + 4] | 0x20) == 'e') {
+                    *keep_alive = false;
+                }
+            }
+            free(bytes);
+            free(name);
+            if (!ok) break;
+            continue;
+        }
+        if (host_managed) {
             free(name);
             continue;
         }
@@ -2414,7 +2436,7 @@ static bool http_client_start_request(
     HTTP_CLIENT_COPY(host_header, (usize) host_header_length);
 #undef HTTP_CLIENT_COPY
     if (!mal_http_client_start(
-            mal_host(vm), state->host, state->port, state->secure, request, request_len,
+            mal_host(vm), state->host, state->port, state->secure, state->keep_alive, request, request_len,
             content_length,
             state->method_len == 4 && memcmp(state->method, "HEAD", 4) == 0,
             state->timeout_ms, &state->operation)) {
@@ -4729,6 +4751,7 @@ static MalValue http_request_common(
     state->destroy_error = mal_value_new_undefined();
     state->response_destroy_error = mal_value_new_undefined();
     state->next_write_token = 1;
+    state->keep_alive = true;
 #if MAL_REALMS
     state->realm = vm->current_realm;
 #endif
@@ -4838,10 +4861,12 @@ static MalValue http_request_common(
         && !http_client_timeout_ms(vm, roots[6], &state->timeout_ms)) {
         goto fail_state;
     }
+    if (!http_client_option(vm, roots[0], "agent", &roots[6])) goto fail_state;
+    if (!mal_value_is_undefined(roots[6])) state->keep_alive = false;
     if (!http_client_option(vm, roots[0], "headers", &roots[3])
         || !http_client_serialize_headers(
             vm, roots[3], &state->headers, &state->headers_len,
-            &state->has_content_length, &state->content_length)) {
+            &state->has_content_length, &state->content_length, &state->keep_alive)) {
         goto fail_state;
     }
     MalValue module = vm->intrinsics[MAL_INTRINSIC_NODE_HTTP_MODULE];
@@ -4951,7 +4976,7 @@ static MalValue http_agent_constructor(
 static MalValue http_agent_destroy(
     MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
     MalValue new_target, MalValue callee) {
-    (void) vm;
+    mal_http_client_close_idle(mal_host(vm));
     (void) args;
     (void) argc;
     (void) new_target;

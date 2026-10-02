@@ -28,6 +28,7 @@ typedef struct MalHost {
     MalArgon2 argon2;
     MalBlockingWork blocking_work;
     struct MalHttpClient *http_clients;
+    struct MalHttpClientIdle *http_idle_clients;
     struct MalTcpConnection *tcp_connections;
     struct MalHostTimer *timers;
     struct MalHostTimer *timers_tail;

@@ -37,7 +37,8 @@ typedef enum MalHttpClientWriteResult {
 
 /* Start one streamed HTTP/1.1 request; secure transport verifies the hostname. The host takes
  * ownership of request_head on success. A negative content length selects chunked
- * framing; nonnegative lengths are validated across accepted writes.
+ * framing; nonnegative lengths are validated across accepted writes. keep_alive
+ * permits bounded reuse only after a clean complete exchange; uploads are never replayed.
  *
  * timeout_ms bounds inactivity across connect, response headers, and every gap
  * between reads; zero selects the built-in default, so no request is unbounded. */
@@ -46,6 +47,7 @@ bool mal_http_client_start(
     const char *host_name,
     u16 port,
     bool secure,
+    bool keep_alive,
     byte *request_head,
     usize request_head_len,
     i64 content_length,
@@ -73,6 +75,7 @@ bool mal_http_client_response_complete_ack(
  * closed synchronously; its cancelled terminal task remains runtime-owned. */
 bool mal_http_client_cancel(MalHost *host, MalHostHandle operation);
 void mal_http_client_shutdown(MalHost *host);
+void mal_http_client_close_idle(MalHost *host);
 
 void mal_http_client_result_free(void *data);
 void mal_http_client_progress_free(void *data);

@@ -1,6 +1,8 @@
 #include "node_https.h"
 #include "node_http.h"
 #include "node_module.h"
+#include "http_client.h"
+#include "host.h"
 
 #if MAL_NODE
 
@@ -73,7 +75,7 @@ static MalValue node_https_agent(
 static MalValue node_https_agent_destroy(
     MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
     MalValue new_target, MalValue callee) {
-    (void) vm;
+    mal_http_client_close_idle(mal_host(vm));
     (void) args;
     (void) argc;
     (void) new_target;

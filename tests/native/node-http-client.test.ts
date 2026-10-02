@@ -25,6 +25,10 @@ describe("node:http outbound client", () => {
 				mainFile: HOST_MAIN,
 				outDir,
 				nodeEnabled: true,
+				evalEnabled: false,
+				realmsEnabled: false,
+				intlEnabled: false,
+				temporalEnabled: false,
 				compiled,
 			}),
 		);
@@ -37,6 +41,10 @@ describe("node:http outbound client", () => {
 				mainFile: HOST_MAIN,
 				outDir,
 				nodeEnabled: true,
+				evalEnabled: false,
+				realmsEnabled: false,
+				intlEnabled: false,
+				temporalEnabled: false,
 				compiled,
 			}),
 		);

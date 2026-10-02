@@ -405,7 +405,7 @@
 	},
 	{
 		"file": "runtime/node_crypto.c",
-		"sha256": "7a8f152b4d48b880c45fb832958123b6134001aaac299e5d1af8cf1ca65c5daf"
+		"sha256": "c82f4f7a11d003c8ef4fcc551d739d6b239f53105f8c293a3b78047efa411708"
 	},
 	{
 		"file": "runtime/node_crypto.h",
@@ -445,7 +445,7 @@
 	},
 	{
 		"file": "runtime/node_fs.c",
-		"sha256": "432a0939e6787684ee44a1335e4bd5cf8f0bb558fa63471aeff09a324a22dc85"
+		"sha256": "b82840d2d0f2ce3fc4f18321f70327e8d16fd7114be6e68dcc1313b60cf8ff43"
 	},
 	{
 		"file": "runtime/node_fs.h",
@@ -453,7 +453,7 @@
 	},
 	{
 		"file": "runtime/node_http.c",
-		"sha256": "36a113f55ee21057eaebefaba617c23c717726ca6d5a2f0868ffdb0dde5d6173"
+		"sha256": "6c96aaad5a789f7f4a2b1356afe5c7553b3bdd9e3d3f9c6abd5872f7a4121f2a"
 	},
 	{
 		"file": "runtime/node_http.h",
@@ -469,7 +469,7 @@
 	},
 	{
 		"file": "runtime/node_https.c",
-		"sha256": "70a09a331e10172d3ced5ec5df60f9879d7aea48a043724e0f641c2e06654922"
+		"sha256": "d7839db26854ce75a655f1d2e02ec5195b1aaca2e5b577a5bd6c4accdf25be3e"
 	},
 	{
 		"file": "runtime/node_https.h",

@@ -19,6 +19,8 @@
 #define MAL_HTTP_CLIENT_READ_MAX (256 * 1024)
 #define MAL_HTTP_CLIENT_WRITE_MAX (256 * 1024)
 #define MAL_HTTP_CLIENT_DEFAULT_TIMEOUT_MS 300000u
+#define MAL_HTTP_CLIENT_IDLE_MAX 16
+#define MAL_HTTP_CLIENT_IDLE_NS 5000000000LL
 
 typedef struct MalHttpClientWireWrite {
     byte prefix[32];
@@ -80,8 +82,19 @@ typedef struct MalHttpClient {
     bool response_complete;
     bool head_request;
     bool retained_work;
+    bool keep_alive;
+    bool response_reusable;
+    char *host_name;
+    u16 port;
     struct MalHttpClient *next;
 } MalHttpClient;
+
+typedef struct MalHttpClientIdle {
+    MalHttpClient transport;
+    u64 tls_config_id;
+    i64 expires_ns;
+    struct MalHttpClientIdle *next;
+} MalHttpClientIdle;
 
 struct MalHttpClientDns {
     MalHost *host;
@@ -95,6 +108,112 @@ static MalHttpClientDns *client_resolutions;
 static void client_read_ready(void *data);
 static void client_write_ready(void *data);
 static void client_process_response(MalHttpClient *client);
+static ssize_t client_transport_read(MalHttpClient *client, byte *bytes, usize length);
+
+static bool client_transport_clean(MalHttpClient *client) {
+    byte probe;
+    ssize_t count;
+    do { count = client_transport_read(client, &probe, 1); } while (count < 0 && errno == EINTR);
+    if (count >= 0 || (errno != EAGAIN && errno != EWOULDBLOCK)) return false;
+    if (client->tls_input_offset < client->tls_input_length || client->tls_ciphertext != nullptr) return false;
+#if MAL_NODE
+    if (client->tls != nullptr && (mal_tls_client_peer_closed(client->tls) != 0
+        || mal_tls_client_is_handshaking(client->tls) != 0
+        || mal_tls_client_has_pending_input(client->tls) != 0
+        || mal_tls_client_wants_write(client->tls) != 0)) return false;
+#endif
+    return true;
+}
+
+static void client_idle_free(MalHttpClientIdle *idle) {
+    mal_net_close(idle->transport.fd);
+#if MAL_NODE
+    mal_tls_client_free(&idle->transport.tls);
+#endif
+    free(idle->transport.tls_input);
+    free(idle->transport.host_name);
+    free(idle);
+}
+
+void mal_http_client_close_idle(MalHost *host) {
+    if (host == nullptr) return;
+    while (host->http_idle_clients != nullptr) {
+        MalHttpClientIdle *idle = host->http_idle_clients;
+        host->http_idle_clients = idle->next;
+        client_idle_free(idle);
+    }
+}
+
+static void client_idle_prune(MalHost *host) {
+    MalHttpClientIdle **link = &host->http_idle_clients;
+    i64 now = mal_reactor_now_ns();
+    usize count = 0;
+    while (*link != nullptr) {
+        MalHttpClientIdle *idle = *link;
+        if (idle->expires_ns <= now || count >= MAL_HTTP_CLIENT_IDLE_MAX
+            || !client_transport_clean(&idle->transport)) {
+            *link = idle->next;
+            client_idle_free(idle);
+        } else { count++; link = &idle->next; }
+    }
+}
+
+static bool client_idle_take(MalHttpClient *client) {
+    client_idle_prune(client->host);
+    u64 config_id = 0;
+#if MAL_NODE
+    config_id = mal_tls_client_config_id(client->tls);
+#endif
+    MalHttpClientIdle **link = &client->host->http_idle_clients;
+    while (*link != nullptr) {
+        MalHttpClientIdle *idle = *link;
+        if (idle->transport.port == client->port && idle->tls_config_id == config_id
+            && (idle->transport.tls != nullptr) == (client->tls != nullptr)
+            && strcmp(idle->transport.host_name, client->host_name) == 0) {
+            *link = idle->next;
+#if MAL_NODE
+            mal_tls_client_free(&client->tls);
+#endif
+            client->fd = idle->transport.fd;
+            client->tls = idle->transport.tls;
+            client->tls_input = idle->transport.tls_input;
+            client->tls_input_length = idle->transport.tls_input_length;
+            client->tls_input_offset = idle->transport.tls_input_offset;
+            free(idle->transport.host_name);
+            free(idle);
+            return true;
+        }
+        link = &idle->next;
+    }
+    return false;
+}
+
+static void client_idle_put(MalHttpClient *client) {
+    if (!client->keep_alive || !client->response_reusable || client->fd < 0
+        || client->read_length != 0 || client->read_ended || client->read_failed
+        || client->write_head != nullptr || !client_transport_clean(client)) return;
+    MalHttpClientIdle *idle = calloc(1, sizeof(*idle));
+    if (idle == nullptr) return;
+    idle->transport.host = client->host;
+    idle->transport.fd = client->fd;
+    idle->transport.tls = client->tls;
+    idle->transport.tls_input = client->tls_input;
+    idle->transport.tls_input_length = client->tls_input_length;
+    idle->transport.tls_input_offset = client->tls_input_offset;
+    idle->transport.host_name = client->host_name;
+    idle->transport.port = client->port;
+#if MAL_NODE
+    idle->tls_config_id = mal_tls_client_config_id(client->tls);
+#endif
+    idle->expires_ns = mal_reactor_now_ns() + MAL_HTTP_CLIENT_IDLE_NS;
+    client->fd = -1;
+    client->tls = nullptr;
+    client->tls_input = nullptr;
+    client->host_name = nullptr;
+    idle->next = client->host->http_idle_clients;
+    client->host->http_idle_clients = idle;
+    client_idle_prune(client->host);
+}
 
 static char *client_copy(const char *bytes, usize length) {
     char *copy = malloc(length + 1);
@@ -147,6 +266,7 @@ static void client_destroy(MalHttpClient *client) {
 #endif
     free(client->tls_input);
     free(client->tls_ciphertext);
+    free(client->host_name);
     mal_http_codec_free(&client->codec);
     free(client->read_buffer);
     MalHttpClientWireWrite *write = client->write_head;
@@ -186,6 +306,7 @@ static void client_fail(MalHttpClient *client, const char *message) {
  * alive while a peer that accepts the connection and then goes silent does not.
  */
 static void client_arm_timeout(MalHttpClient *client) {
+    if (client->operation == 0) return;
     mal_reactor_cancel_timer(&client->host->reactor, &client->timeout);
     i64 now = mal_reactor_now_ns();
     client->timeout.deadline_ns = client->timeout_ns > INT64_MAX - now
@@ -216,6 +337,7 @@ static bool client_progress(
 
 static void client_maybe_complete(MalHttpClient *client) {
     if (client->request_complete && client->response_complete) {
+        client_idle_put(client);
         client_complete(client, MAL_HOST_TERMINAL_OK, nullptr);
     }
 }
@@ -270,6 +392,8 @@ static bool client_publish_head(
     client->response_has_body = !client->head_request
         && !((head->status_code >= 100 && head->status_code < 200)
              || head->status_code == 204 || head->status_code == 304);
+    client->response_reusable = head->keep_alive && !head->upgrade
+        && (!client->response_has_body || head->chunked || head->content_length >= 0);
     return true;
 }
 
@@ -505,6 +629,7 @@ static void client_read_ready(void *data) {
         while (turn < MAL_HTTP_CLIENT_IO_TURN) {
             ssize_t count = client_transport_read(client, discard, sizeof(discard));
             if (count > 0) {
+                client->response_reusable = false;
                 turn += (usize) count;
                 client_arm_timeout(client);
                 continue;
@@ -688,7 +813,7 @@ static void client_write_ready(void *data) {
 }
 
 bool mal_http_client_start(
-    MalHost *host, const char *host_name, u16 port, bool secure, byte *request_head,
+    MalHost *host, const char *host_name, u16 port, bool secure, bool keep_alive, byte *request_head,
     usize request_head_len, i64 content_length, bool head_request,
     u32 timeout_ms, MalHostHandle *operation) {
     if (host == nullptr || host_name == nullptr || request_head == nullptr
@@ -702,6 +827,10 @@ bool mal_http_client_start(
     client->operation = *operation;
     client->fd = -1;
     client->timeout.heap_index = -1;
+    client->keep_alive = keep_alive;
+    client->port = port;
+    client->host_name = client_copy(host_name, strlen(host_name));
+    if (client->host_name == nullptr) goto fail_client;
     client->timeout.waker = (MalWaker) {.fn = client_timeout_cb, .data = client};
     client->timeout_ns = (i64) (timeout_ms == 0
         ? MAL_HTTP_CLIENT_DEFAULT_TIMEOUT_MS : timeout_ms) * 1000000;
@@ -718,16 +847,15 @@ bool mal_http_client_start(
     if (!mal_http_codec_init(&client->codec, HTTP_RESPONSE)) goto fail_client;
     mal_http_codec_set_skip_body(&client->codec, head_request);
 
-    const char *framing = client->request_chunked
-        ? "Transfer-Encoding: chunked\r\nConnection: close\r\n\r\n"
-        : nullptr;
-    char fixed_framing[128];
+    const char *connection = keep_alive ? "keep-alive" : "close";
+    char framing[128];
     int framing_length = client->request_chunked
-        ? (int) strlen(framing)
+        ? snprintf(framing, sizeof(framing),
+            "Transfer-Encoding: chunked\r\nConnection: %s\r\n\r\n", connection)
         : snprintf(
-            fixed_framing, sizeof(fixed_framing),
-            "Content-Length: %lld\r\nConnection: close\r\n\r\n",
-            (long long) content_length);
+            framing, sizeof(framing),
+            "Content-Length: %lld\r\nConnection: %s\r\n\r\n",
+            (long long) content_length, connection);
     if (framing_length < 0
         || request_head_len > SIZE_MAX - (usize) framing_length) {
         goto fail_client;
@@ -743,23 +871,26 @@ bool mal_http_client_start(
     memcpy(head_bytes, request_head, request_head_len);
     memcpy(
         head_bytes + request_head_len,
-        client->request_chunked ? framing : fixed_framing,
+        framing,
         (usize) framing_length);
     head->bytes = head_bytes;
     head->length = head_length;
     client_queue_write(client, head);
 
-    client->connecting = true;
+    bool reused = keep_alive && client_idle_take(client);
+    client->connecting = !reused;
     if (!mal_host_operation_bind(
             &host->tasks, *operation, client)) {
         goto fail_client;
     }
     client->next = host->http_clients;
     host->http_clients = client;
-    client_arm_timeout(client); // the connect handshake is already in flight
+    client_arm_timeout(client);
     struct sockaddr_storage address;
     socklen_t address_length;
-    if (mal_net_parse_ip(host_name, port, &address, &address_length)) {
+    if (reused) {
+        if (!client_arm_write(client) || !client_arm_read(client)) goto fail_linked;
+    } else if (mal_net_parse_ip(host_name, port, &address, &address_length)) {
         client->fd = mal_net_connect_address((const struct sockaddr *)&address, address_length);
         if (client->fd < 0 || !client_arm_write(client)) goto fail_linked;
     } else {
@@ -922,6 +1053,7 @@ bool mal_http_client_cancel(MalHost *host, MalHostHandle operation) {
 
 void mal_http_client_shutdown(MalHost *host) {
     if (host == nullptr) return;
+    mal_http_client_close_idle(host);
     while (host->http_clients != nullptr) {
         MalHttpClient *client = host->http_clients;
         (void) mal_host_operation_cancel(&host->tasks, client->operation);

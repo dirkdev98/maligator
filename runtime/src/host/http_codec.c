@@ -211,11 +211,11 @@ static int codec_headers_complete(llhttp_t *parser) {
     }
     head->content_length = (parser->flags & F_CONTENT_LENGTH) != 0
         ? (i64) parser->content_length : -1;
-    head->keep_alive = llhttp_should_keep_alive(parser) != 0;
     head->upgrade = parser->upgrade != 0;
     if (parser->type == HTTP_RESPONSE && codec->skip_body) {
         parser->flags |= F_SKIPBODY;
     }
+    head->keep_alive = llhttp_should_keep_alive(parser) != 0;
     for (usize i = 0; i < head->field_count; i++) {
         if (head->fields[i].value_offset == SIZE_MAX) {
             head->fields[i].value_offset = head->arena_length;

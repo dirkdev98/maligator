@@ -6,8 +6,10 @@ use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
 use rustls::{
     ClientConfig, ClientConnection, DigitallySignedStruct, RootCertStore, SignatureScheme,
 };
+use std::collections::VecDeque;
 use std::io::{self, Cursor, Read, Write};
-use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
 
 pub const MAL_TLS_STATUS_OK: i32 = 0;
 pub const MAL_TLS_STATUS_INVALID_ARGUMENT: i32 = -1;
@@ -64,6 +66,114 @@ impl ServerCertVerifier for NoCertificateVerification {
 pub struct MalTlsClient {
     connection: ClientConnection,
     peer_closed: bool,
+    config_id: u64,
+    record_header: [u8; 5],
+    record_header_length: usize,
+    record_remaining: usize,
+}
+
+impl MalTlsClient {
+    fn consumed_ciphertext(&mut self, mut bytes: &[u8]) {
+        // Rustls may retain a partial record after consuming every byte in the C staging buffer.
+        while !bytes.is_empty() {
+            if self.record_remaining > 0 {
+                let length = self.record_remaining.min(bytes.len());
+                self.record_remaining -= length;
+                bytes = &bytes[length..];
+            } else {
+                let length = (5 - self.record_header_length).min(bytes.len());
+                self.record_header[self.record_header_length..self.record_header_length + length]
+                    .copy_from_slice(&bytes[..length]);
+                self.record_header_length += length;
+                bytes = &bytes[length..];
+                if self.record_header_length == 5 {
+                    self.record_remaining =
+                        u16::from_be_bytes([self.record_header[3], self.record_header[4]]) as usize;
+                    self.record_header_length = 0;
+                }
+            }
+        }
+    }
+}
+
+struct CachedConfig {
+    ca_pem: Vec<u8>,
+    alpn: Vec<u8>,
+    config: Arc<ClientConfig>,
+    id: u64,
+}
+
+static CONFIGS: OnceLock<Mutex<VecDeque<CachedConfig>>> = OnceLock::new();
+static NEXT_CONFIG_ID: AtomicU64 = AtomicU64::new(1);
+
+fn client_config(
+    ca_pem: &[u8],
+    alpn: &[u8],
+    insecure: bool,
+) -> Result<(Arc<ClientConfig>, u64), i32> {
+    let cache = CONFIGS.get_or_init(|| Mutex::new(VecDeque::new()));
+    if !insecure {
+        let entries = cache.lock().map_err(|_| MAL_TLS_STATUS_ERROR)?;
+        if let Some(entry) = entries
+            .iter()
+            .find(|entry| entry.ca_pem == ca_pem && entry.alpn == alpn)
+        {
+            return Ok((entry.config.clone(), entry.id));
+        }
+    }
+    let provider = Arc::new(rustls::crypto::ring::default_provider());
+    let builder = ClientConfig::builder_with_provider(provider)
+        .with_safe_default_protocol_versions()
+        .map_err(|_| MAL_TLS_STATUS_ERROR)?;
+    let mut config = if insecure {
+        builder
+            .dangerous()
+            .with_custom_certificate_verifier(Arc::new(NoCertificateVerification))
+            .with_no_client_auth()
+    } else {
+        let mut roots = RootCertStore::empty();
+        let mut added = 0;
+        for certificate in rustls_pemfile::certs(&mut Cursor::new(ca_pem)) {
+            let certificate = certificate.map_err(|_| MAL_TLS_STATUS_INVALID_ARGUMENT)?;
+            if roots.add(certificate).is_ok() {
+                added += 1;
+            }
+        }
+        if added == 0 {
+            return Err(MAL_TLS_STATUS_INVALID_ARGUMENT);
+        }
+        builder.with_root_certificates(roots).with_no_client_auth()
+    };
+    if !alpn.is_empty() {
+        config.alpn_protocols.push(alpn.to_vec());
+    }
+    let config = Arc::new(config);
+    if insecure {
+        return Ok((config, 0));
+    }
+    let id = NEXT_CONFIG_ID
+        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
+        .map_err(|_| MAL_TLS_STATUS_ERROR)?;
+    // Exact trust bytes prevent a changed CA file from borrowing an older connection policy.
+    if ca_pem.len() <= 1024 * 1024 && alpn.len() <= 255 {
+        let mut entries = cache.lock().map_err(|_| MAL_TLS_STATUS_ERROR)?;
+        if let Some(entry) = entries
+            .iter()
+            .find(|entry| entry.ca_pem == ca_pem && entry.alpn == alpn)
+        {
+            return Ok((entry.config.clone(), entry.id));
+        }
+        if entries.len() == 4 {
+            entries.pop_front();
+        }
+        entries.push_back(CachedConfig {
+            ca_pem: ca_pem.to_vec(),
+            alpn: alpn.to_vec(),
+            config: config.clone(),
+            id,
+        });
+    }
+    Ok((config, id))
 }
 
 struct BoundedWriter<'a> {
@@ -134,54 +244,52 @@ pub unsafe extern "C" fn mal_tls_client_create(
     let Ok(server_name) = ServerName::try_from(server_name.to_owned()) else {
         return MAL_TLS_STATUS_INVALID_ARGUMENT;
     };
-    let provider = Arc::new(rustls::crypto::ring::default_provider());
-    let Ok(builder) =
-        ClientConfig::builder_with_provider(provider).with_safe_default_protocol_versions()
-    else {
-        return MAL_TLS_STATUS_ERROR;
-    };
-    let mut config = if insecure != 0 {
-        builder
-            .dangerous()
-            .with_custom_certificate_verifier(Arc::new(NoCertificateVerification))
-            .with_no_client_auth()
-    } else {
-        let Some(ca_pem) = (unsafe { input(ca_pem, ca_pem_len) }) else {
-            return MAL_TLS_STATUS_INVALID_ARGUMENT;
-        };
-        let mut roots = RootCertStore::empty();
-        let mut pem = Cursor::new(ca_pem);
-        let certificates = rustls_pemfile::certs(&mut pem);
-        let mut added = 0;
-        for certificate in certificates {
-            let Ok(certificate) = certificate else {
-                return MAL_TLS_STATUS_INVALID_ARGUMENT;
-            };
-            if roots.add(certificate).is_ok() {
-                added += 1;
-            }
-        }
-        if added == 0 {
-            return MAL_TLS_STATUS_INVALID_ARGUMENT;
-        }
-        builder.with_root_certificates(roots).with_no_client_auth()
+    let Some(ca_pem) = (unsafe { input(ca_pem, ca_pem_len) }) else {
+        return MAL_TLS_STATUS_INVALID_ARGUMENT;
     };
     let Some(alpn) = (unsafe { input(alpn, alpn_len) }) else {
         return MAL_TLS_STATUS_INVALID_ARGUMENT;
     };
-    if !alpn.is_empty() {
-        config.alpn_protocols.push(alpn.to_vec());
-    }
-    let Ok(connection) = ClientConnection::new(Arc::new(config), server_name) else {
+    let (config, config_id) = match client_config(ca_pem, alpn, insecure != 0) {
+        Ok(config) => config,
+        Err(status) => return status,
+    };
+    let Ok(connection) = ClientConnection::new(config, server_name) else {
         return MAL_TLS_STATUS_ERROR;
     };
     unsafe {
         *out_handle = Box::into_raw(Box::new(MalTlsClient {
             connection,
             peer_closed: false,
+            config_id,
+            record_header: [0; 5],
+            record_header_length: 0,
+            record_remaining: 0,
         }))
     };
     MAL_TLS_STATUS_OK
+}
+
+#[no_mangle]
+/// # Safety
+/// A non-null handle must remain valid for the duration of the call.
+pub unsafe extern "C" fn mal_tls_client_config_id(handle: *const MalTlsClient) -> u64 {
+    if handle.is_null() {
+        0
+    } else {
+        unsafe { (*handle).config_id }
+    }
+}
+
+#[no_mangle]
+/// # Safety
+/// A non-null handle must remain valid for the duration of the call.
+pub unsafe extern "C" fn mal_tls_client_has_pending_input(handle: *const MalTlsClient) -> i32 {
+    if handle.is_null() {
+        return 0;
+    }
+    let client = unsafe { &*handle };
+    i32::from(client.record_header_length != 0 || client.record_remaining != 0)
 }
 
 #[no_mangle]
@@ -206,6 +314,7 @@ pub unsafe extern "C" fn mal_tls_client_read_ciphertext(
     if client.connection.read_tls(&mut cursor).is_err() {
         return MAL_TLS_STATUS_ERROR;
     }
+    client.consumed_ciphertext(&input[..cursor.position() as usize]);
     unsafe { *consumed = cursor.position() as usize };
     match client.connection.process_new_packets() {
         Ok(state) => client.peer_closed = state.peer_has_closed(),

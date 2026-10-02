@@ -33,6 +33,9 @@ int32_t mal_tls_client_write_ciphertext(
     MalTlsClient *handle, uint8_t *output, size_t output_len,
     size_t *produced);
 int32_t mal_tls_client_peer_closed(const MalTlsClient *handle);
+/* Equal nonzero identities denote the same verified trust and ALPN policy. */
+uint64_t mal_tls_client_config_id(const MalTlsClient *handle);
+int32_t mal_tls_client_has_pending_input(const MalTlsClient *handle);
 int32_t mal_tls_client_is_handshaking(const MalTlsClient *handle);
 int32_t mal_tls_client_wants_write(const MalTlsClient *handle);
 void mal_tls_client_free(MalTlsClient **handle);
