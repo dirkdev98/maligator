@@ -40,4 +40,17 @@ const keyShapeMaps = [
 for (const shapedMap of keyShapeMaps) total += shapedMap.values().next().value;
 
 if (total !== 140_106) throw new Error(`unexpected collection checksum: ${total}`);
+const profiledSet = new Set([1, 2, 3, 4, 5, 6]);
+profiledSet.has("query-only");
+profiledSet.delete(null);
+profiledSet.add(0.5).add(true);
+const profiledStrings = new Set(["stored-string"]);
+const profiledIdentity = new Set([objectKey]);
+if (
+	!profiledSet.has(0.5) ||
+	!profiledStrings.has("stored-string") ||
+	!profiledIdentity.has(objectKey)
+) {
+	throw new Error("Set profiling changed membership");
+}
 console.log("collection-perf-stats PASS 1/1");

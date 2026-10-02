@@ -15,6 +15,7 @@
 #include "intrinsics.h"
 #include "iterator_object.h"
 #include "map_object.h"
+#include "set_object.h"
 #include "object.h"
 #include "object_ops.h"
 #include "property_iter.h"
@@ -709,11 +710,11 @@ UTIL_TYPE_PREDICATE(is_date, mal_value_is_date_object(value))
 UTIL_TYPE_PREDICATE(is_map,
     mal_value_is_map_object(value) && !mal_value_to_map_object(value)->weak)
 UTIL_TYPE_PREDICATE(is_set,
-    mal_value_is_set_object(value) && !mal_value_to_map_object(value)->weak)
+    mal_value_is_set_object(value) && !mal_value_to_set_object(value)->weak)
 UTIL_TYPE_PREDICATE(is_weak_map,
     mal_value_is_map_object(value) && mal_value_to_map_object(value)->weak)
 UTIL_TYPE_PREDICATE(is_weak_set,
-    mal_value_is_set_object(value) && mal_value_to_map_object(value)->weak)
+    mal_value_is_set_object(value) && mal_value_to_set_object(value)->weak)
 UTIL_TYPE_PREDICATE(is_reg_exp, mal_value_is_regexp_object(value))
 UTIL_TYPE_PREDICATE(is_typed_array, mal_value_is_typed_array_object(value))
 UTIL_TYPE_PREDICATE(is_boxed_primitive, mal_value_is_primitive_wrapper(value))

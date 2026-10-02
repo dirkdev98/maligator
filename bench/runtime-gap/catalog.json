@@ -176,6 +176,45 @@
 			"controls": []
 		},
 		{
+			"id": "set-small-lifecycle",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "Set specialized storage",
+			"category": "api-builtins",
+			"mechanisms": ["runtime-collections-properties"],
+			"inputShape": "zero to four integer, string, identity and mixed members",
+			"unit": "logical operation",
+			"sourceSeam": "runtime/src/set_object.c",
+			"fixture": "cases/set-small-lifecycle.mjs",
+			"controls": ["map-operations", "stable-shape-properties"]
+		},
+		{
+			"id": "set-string-operations",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "Set specialized storage",
+			"category": "api-builtins",
+			"mechanisms": ["runtime-collections-properties"],
+			"inputShape": "equal string content with distinct representations and delete/reinsert churn",
+			"unit": "logical operation",
+			"sourceSeam": "runtime/src/set_object.c",
+			"fixture": "cases/set-string-operations.mjs",
+			"controls": ["map-operations", "stable-shape-properties"]
+		},
+		{
+			"id": "set-generic-operations",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "Set specialized storage",
+			"category": "api-builtins",
+			"mechanisms": ["runtime-collections-properties"],
+			"inputShape": "mixed Number, String, object and BigInt members with pinned widening and churn",
+			"unit": "logical operation",
+			"sourceSeam": "runtime/src/set_object.c",
+			"fixture": "cases/set-generic-operations.mjs",
+			"controls": ["map-operations", "stable-shape-properties"]
+		},
+		{
 			"id": "stable-shape-properties",
 			"group": "primitive",
 			"suite": "runtime",

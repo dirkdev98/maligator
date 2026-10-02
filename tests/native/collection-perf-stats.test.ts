@@ -68,6 +68,24 @@ describe("collection performance statistics", () => {
 		for (const shape of ["int32", "f64", "string", "object"]) {
 			expect(field(keyShapes, shape)).toBeGreaterThan(0);
 		}
+		const setStorage = reportLine(result.stderr, "[perf-set-storage]");
+		for (const fieldName of [
+			"descriptors",
+			"promotions",
+			"small_inserts",
+			"hashed_inserts",
+			"payload_bytes",
+			"index_bytes",
+			"select_int32",
+			"select_string",
+			"select_identity",
+			"widen_number",
+			"widen_generic",
+			"query_string",
+			"query_static",
+		]) {
+			expect(field(setStorage, fieldName), fieldName).toBeGreaterThan(0);
+		}
 		const tracking = reportLine(result.stderr, "[perf-collection-tracking]");
 		expect(field(tracking, "overflows")).toBe(0);
 	}, 180_000);

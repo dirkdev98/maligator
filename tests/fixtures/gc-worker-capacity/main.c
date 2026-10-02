@@ -88,7 +88,7 @@ static int check_capacity(usize capacity, usize failure_index, bool start_parked
         env->slots[0] = mal_value_from_object(targets[i]);
         roots[i] = mal_value_from_heap(&env->header);
     }
-    MalMapObject *map = mal_map_object_new(&vm.heap, MAL_HEAP_MAP_OBJECT, nullptr, false);
+    MalMapObject *map = mal_map_object_new(&vm.heap, nullptr, false);
     map_target = mal_object_new(&vm.heap, nullptr);
     mal_map_object_set(map, mal_value_new_undefined(), mal_value_from_object(map_target));
     roots[GRAPH_WIDTH] = mal_value_from_map_object(map);

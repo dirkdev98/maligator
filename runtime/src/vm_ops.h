@@ -5,6 +5,7 @@
 #include "builtin_iterator.h"
 #include "function_object.h" // mal_function_object_function_index, for the call guard
 #include "map_object.h"
+#include "set_object.h"
 #include "object_ops.h"
 #include "perf_stats.h"
 #include "scalar_bits.h"
@@ -109,15 +110,16 @@ static inline bool mal_vm_try_capture_collection_method(
 ) {
     if (!mal_primitive_method_protector) return false;
 
-    MalMapObject *collection;
+    MalObject *collection;
     MalIntrinsic prototype_intrinsic;
     MalIntrinsic method_intrinsic;
     const byte *method_name;
     const bool map_receiver = mal_value_is_map_object(receiver);
     const bool set_receiver = mal_value_is_set_object(receiver);
     if (map_receiver) {
-        collection = mal_value_to_map_object(receiver);
-        if (collection->weak) return false;
+        MalMapObject *map = mal_value_to_map_object(receiver);
+        if (map->weak) return false;
+        collection = &map->object;
         prototype_intrinsic = MAL_INTRINSIC_MAP_PROTOTYPE;
         switch (operation) {
             case MAL_GUARDED_BUILTIN_MAP_GET:
@@ -142,8 +144,9 @@ static inline bool mal_vm_try_capture_collection_method(
                 return false;
         }
     } else if (set_receiver) {
-        collection = mal_value_to_map_object(receiver);
-        if (collection->weak) return false;
+        MalSetObject *set = mal_value_to_set_object(receiver);
+        if (set->weak) return false;
+        collection = &set->object;
         prototype_intrinsic = MAL_INTRINSIC_SET_PROTOTYPE;
         switch (operation) {
             case MAL_GUARDED_BUILTIN_SET_ADD:
@@ -167,15 +170,15 @@ static inline bool mal_vm_try_capture_collection_method(
         return false;
     }
 
-    if (mal_object_prototype(&collection->object) !=
+    if (mal_object_prototype(collection) !=
             mal_value_to_object(vm->intrinsics[prototype_intrinsic])) {
         return false;
     }
     // An empty own-property layout cannot shadow a prototype method.
-    if (((collection->object.shape != nullptr && collection->object.shape->inline_count != 0) ||
-         mal_object_has_public_overflow(&collection->object)) &&
+    if (((collection->shape != nullptr && collection->shape->inline_count != 0) ||
+         mal_object_has_public_overflow(collection)) &&
         mal_object_get_own(
-            &collection->object,
+            collection,
             mal_intrinsic_string_key(vm, method_name)).present) {
         return false;
     }

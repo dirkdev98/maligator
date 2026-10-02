@@ -3,7 +3,7 @@
 #include "./map_object.h"
 #include "./table.h"
 
-static bool mal_iterator_kind_uses_table(MalIteratorKind kind) {
+static bool mal_iterator_kind_uses_collection(MalIteratorKind kind) {
     return kind == MAL_ITERATOR_MAP_KEYS
         || kind == MAL_ITERATOR_MAP_VALUES
         || kind == MAL_ITERATOR_MAP_ENTRIES
@@ -23,8 +23,11 @@ void mal_iterator_object_init(
     iterator->target = target;
     iterator->index = 0;
     iterator->done = false;
-    iterator->table_pinned = mal_iterator_kind_uses_table(kind);
-    if (iterator->table_pinned) {
+    iterator->collection_pinned = mal_iterator_kind_uses_collection(kind);
+    if (kind == MAL_ITERATOR_SET_VALUES || kind == MAL_ITERATOR_SET_ENTRIES) {
+        iterator->pinned_set = mal_set_object_storage(mal_value_to_set_object(target));
+        mal_set_storage_pin(iterator->pinned_set);
+    } else if (iterator->collection_pinned) {
         iterator->pinned_table = mal_value_to_map_object(target)->entries;
         mal_table_pin(iterator->pinned_table);
     } else {
@@ -44,9 +47,21 @@ MalIteratorObject *mal_iterator_object_new(
     return iterator;
 }
 
-void mal_iterator_object_release_table_pin(MalIteratorObject *iterator) {
-    if (iterator == nullptr || !iterator->table_pinned) return;
-    mal_table_unpin(iterator->pinned_table);
+void mal_iterator_object_finalize_collection_pin(MalIteratorObject *iterator) {
+    if (iterator == nullptr || !iterator->collection_pinned) return;
+    if (iterator->kind == MAL_ITERATOR_SET_VALUES || iterator->kind == MAL_ITERATOR_SET_ENTRIES) {
+        mal_set_storage_unpin(iterator->pinned_set);
+    } else {
+        mal_table_unpin(iterator->pinned_table);
+    }
     iterator->pinned_table = nullptr;
-    iterator->table_pinned = false;
+    iterator->collection_pinned = false;
+}
+
+void mal_iterator_object_release_collection_pin(MalIteratorObject *iterator) {
+    if (iterator == nullptr || !iterator->collection_pinned) return;
+    bool set_cursor = iterator->kind == MAL_ITERATOR_SET_VALUES || iterator->kind == MAL_ITERATOR_SET_ENTRIES;
+    MalSetObject *set = set_cursor ? mal_value_to_set_object(iterator->target) : nullptr;
+    mal_iterator_object_finalize_collection_pin(iterator);
+    if (set != nullptr) mal_set_object_compact(set);
 }

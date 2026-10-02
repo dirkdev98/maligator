@@ -17,6 +17,7 @@ typedef struct MalNativeFunctionObject MalNativeFunctionObject;
 typedef struct MalBoundFunctionObject MalBoundFunctionObject;
 typedef struct MalArrayObject MalArrayObject;
 typedef struct MalMapObject MalMapObject;
+typedef struct MalSetObject MalSetObject;
 typedef struct MalIteratorObject MalIteratorObject;
 typedef struct MalModuleNamespaceObject MalModuleNamespaceObject;
 typedef struct MalPromiseObject MalPromiseObject;
@@ -571,6 +572,10 @@ static inline MalMapObject *mal_value_to_map_object(MalValue value) {
     return (MalMapObject *) mal_value_to_heap(value);
 }
 
+static inline MalSetObject *mal_value_to_set_object(MalValue value) {
+    return (MalSetObject *) mal_value_to_heap(value);
+}
+
 /**
  * Unbox a built-in iterator object.
  */
@@ -672,10 +677,14 @@ static inline MalValue mal_value_from_array_object(MalArrayObject *array) {
 }
 
 /**
- * Box a map/set object.
+ * Box a map object.
  */
 static inline MalValue mal_value_from_map_object(MalMapObject *map) {
     return MAL_VALUE_OBJECT | ((uptr) map & MAKS_PTR);
+}
+
+static inline MalValue mal_value_from_set_object(MalSetObject *set) {
+    return MAL_VALUE_OBJECT | ((uptr) set & MAKS_PTR);
 }
 
 /**

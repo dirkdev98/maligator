@@ -5,6 +5,7 @@
 #include "heap_string.h"
 #include "heap_symbol.h"
 #include "map_object.h"
+#include "set_object.h"
 #include "perf_stats.h"
 #include "value_ops.h"
 #include "vm.h"
@@ -80,7 +81,7 @@ static MalValue mal_builtin_map_construct(
         return mal_value_new_undefined();
     }
 
-    MalMapObject *map = mal_map_object_new(&vm->heap, MAL_HEAP_MAP_OBJECT, prototype, weak);
+    MalMapObject *map = mal_map_object_new(&vm->heap, prototype, weak);
     MalValue map_value = mal_value_from_map_object(map);
 
     if (arg_count < 1 || mal_value_is_nil(args[0])) {
@@ -246,7 +247,6 @@ static MalValue mal_builtin_map_group_by(MalVm *vm, MalValue this_value, const M
     MalValue roots[5] = {
         mal_value_from_map_object(mal_map_object_new(
             &vm->heap,
-            MAL_HEAP_MAP_OBJECT,
             mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_MAP_PROTOTYPE]),
             false)),
         args[1],
@@ -543,12 +543,12 @@ MalCompletion mal_builtin_collection_direct(
         } else if (operation == MAL_GUARDED_BUILTIN_SET_ADD &&
                    (exact_set ||
                     (unknown_receiver && mal_value_is_set_object(this_value)))) {
-            MalMapObject *set = mal_value_to_map_object(this_value);
+            MalSetObject *set = mal_value_to_set_object(this_value);
             if (exact_set || !set->weak) {
                 if (exact_set) MAL_PERF_COUNT(collection_exact_receiver_hits);
                 MalValue value =
                     arg_count >= 1 ? args[0] : mal_value_new_undefined();
-                mal_map_object_set(set, value, value);
+                mal_set_object_add(set, value);
                 MAL_PERF_COUNT(collection_direct_set_add_hits);
                 return (MalCompletion) {
                     .kind = MAL_COMPLETION_NORMAL,
@@ -559,13 +559,13 @@ MalCompletion mal_builtin_collection_direct(
                    callee == vm->intrinsics[MAL_INTRINSIC_SET_PROTOTYPE_HAS] &&
                    (exact_set ||
                     (unknown_receiver && mal_value_is_set_object(this_value)))) {
-            MalMapObject *set = mal_value_to_map_object(this_value);
+            MalSetObject *set = mal_value_to_set_object(this_value);
             if (exact_set || !set->weak) {
                 if (exact_set) MAL_PERF_COUNT(collection_exact_receiver_hits);
                 MAL_PERF_COUNT(collection_direct_set_has_hits);
                 return (MalCompletion) {
                     .kind = MAL_COMPLETION_NORMAL,
-                    .value = mal_value_new_boolean(mal_map_object_has(
+                    .value = mal_value_new_boolean(mal_set_object_has(
                         set, arg_count >= 1 ? args[0] : mal_value_new_undefined())),
                 };
             }
@@ -573,13 +573,13 @@ MalCompletion mal_builtin_collection_direct(
                    callee == vm->intrinsics[MAL_INTRINSIC_SET_PROTOTYPE_DELETE] &&
                    (exact_set ||
                     (unknown_receiver && mal_value_is_set_object(this_value)))) {
-            MalMapObject *set = mal_value_to_map_object(this_value);
+            MalSetObject *set = mal_value_to_set_object(this_value);
             if (exact_set || !set->weak) {
                 if (exact_set) MAL_PERF_COUNT(collection_exact_receiver_hits);
                 MAL_PERF_COUNT(collection_direct_set_delete_hits);
                 return (MalCompletion) {
                     .kind = MAL_COMPLETION_NORMAL,
-                    .value = mal_value_new_boolean(mal_map_object_delete(
+                    .value = mal_value_new_boolean(mal_set_object_delete(
                         set, arg_count >= 1 ? args[0] : mal_value_new_undefined())),
                 };
             }

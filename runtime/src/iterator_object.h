@@ -3,6 +3,7 @@
 #include "./defaults.h"
 #include "object.h"
 #include "heap_string.h"
+#include "set_object.h"
 
 /**
  * Iteration source + result shape for a built-in iterator instance.
@@ -21,7 +22,7 @@ typedef enum MalIteratorKind : u8 {
 
 /**
  * Built-in iterator instance produced by the Map/Set/Array/String iteration
- * methods. Map/Set iterators pin and walk the backing table's storage order,
+ * methods. Map/Set iterators pin their collection storage,
  * so compaction is deferred while entries inserted during iteration must
  * remain visible and deleted entries must be skipped.
  */
@@ -39,6 +40,7 @@ typedef struct MalIteratorObject {
     union {
         /** Raw table kept alive by its pin if owner and iterator die together. */
         MalTable *pinned_table;
+        MalSetStorage *pinned_set;
         /** Traced frontier allocated lazily for rope traversal. */
         MalStringCursor *string_cursor;
     };
@@ -50,7 +52,7 @@ typedef struct MalIteratorObject {
      */
     bool done;
     /** Map/Set storage cannot be renumbered while this iterator is live. */
-    bool table_pinned;
+    bool collection_pinned;
 } MalIteratorObject;
 
 static_assert(sizeof(MalIteratorObject) <= 80,
@@ -77,5 +79,6 @@ MalIteratorObject *mal_iterator_object_new(
     MalValue target
 );
 
-/** Release a Map/Set table pin on exhaustion or GC finalization. */
-void mal_iterator_object_release_table_pin(MalIteratorObject *iterator);
+// Normal exhaustion may compact the live owner; finalization may only drop its pin.
+void mal_iterator_object_release_collection_pin(MalIteratorObject *iterator);
+void mal_iterator_object_finalize_collection_pin(MalIteratorObject *iterator);

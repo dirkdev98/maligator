@@ -27,8 +27,8 @@ int main(void) {
     mal_vm_init(&vm, &mal_runtime_image);
     vm.heap.next_gc_at = (usize) -1;
 
-    MalMapObject *first = mal_map_object_new(&vm.heap, MAL_HEAP_MAP_OBJECT, nullptr, true);
-    MalMapObject *second = mal_map_object_new(&vm.heap, MAL_HEAP_MAP_OBJECT, nullptr, true);
+    MalMapObject *first = mal_map_object_new(&vm.heap, nullptr, true);
+    MalMapObject *second = mal_map_object_new(&vm.heap, nullptr, true);
     MalObject **keys = malloc(chain_count * sizeof(MalObject *));
     if (keys == nullptr) abort();
     for (usize i = 0; i < chain_count; ++i) {
@@ -60,7 +60,7 @@ int main(void) {
 
     MalObject *sentinel = mal_object_new(&vm.heap, nullptr);
     MalObject *marker = mal_object_new(&vm.heap, nullptr);
-    MalMapObject *late = mal_map_object_new(&vm.heap, MAL_HEAP_MAP_OBJECT, nullptr, true);
+    MalMapObject *late = mal_map_object_new(&vm.heap, nullptr, true);
     mal_map_object_set(first, mal_value_from_object(sentinel),
         mal_value_from_object(&late->object));
     mal_map_object_set(late, mal_value_from_object(keys[0]),

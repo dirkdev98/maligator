@@ -22,6 +22,8 @@
 #include "hex.h"
 #include "intrinsics.h"
 #include "map_object.h"
+#include "set_object.h"
+#include "rooted_collection.h"
 #include "microtask.h"
 #include "monotonic_clock.h"
 #include "object.h"
@@ -1129,41 +1131,59 @@ static MalValue mal_sc_clone(MalVm *vm, MalValue value, MalMapObject *memo) {
         return clone;
     }
 
-    // Map / Set (not the Weak variants): clone entries.
     if (mal_value_is_map_object(value) || mal_value_is_set_object(value)) {
-        MalMapObject *src = mal_value_to_map_object(value);
-        if (src->weak) {
+        bool is_set = mal_value_is_set_object(value);
+        bool weak = is_set ? mal_value_to_set_object(value)->weak : mal_value_to_map_object(value)->weak;
+        if (weak) {
             mal_dom_exception_throw(vm,
                 "structuredClone: a WeakMap/WeakSet cannot be cloned", "DataCloneError");
             return mal_value_new_undefined();
         }
-        bool is_set = mal_value_is_set_object(value);
-        MalHeapType type = is_set ? MAL_HEAP_SET_OBJECT : MAL_HEAP_MAP_OBJECT;
         MalObject *proto = mal_value_to_object(
             vm->intrinsics[is_set ? MAL_INTRINSIC_SET_PROTOTYPE : MAL_INTRINSIC_MAP_PROTOTYPE]);
-        MalMapObject *dst = mal_map_object_new(&vm->heap, type, proto, false);
-        MalValue clone = mal_value_from_map_object(dst);
+        MalValue clone = is_set
+            ? mal_value_from_set_object(mal_set_object_new(&vm->heap, proto, false))
+            : mal_value_from_map_object(mal_map_object_new(&vm->heap, proto, false));
         mal_map_object_set(memo, value, clone);
-        MalTableIter iter;
-        mal_table_iter_init(&iter, src->entries, MAL_TABLE_ITER_STORAGE);
-        MalKey k;
-        void *entry;
-        while (mal_table_iter_next(&iter, &k, &entry)) {
-            MalValue cloned_key = mal_sc_clone(vm, k.value, memo);
+        // Serialization snapshots entries before member getters can mutate their source.
+        MalRootedValueList entries;
+        mal_rooted_value_list_init(&entries);
+        if (is_set) {
+            MalValue key;
+            MalSetIter iter;
+            mal_set_iter_init(&iter, mal_value_to_set_object(value)->entries);
+            while (mal_set_iter_next(&iter, &key)) mal_rooted_value_list_append(&entries, key);
+            (void) mal_set_object_reserve(mal_value_to_set_object(clone), entries.count);
+        } else {
+            MalKey key;
+            MalTable *table = mal_value_to_map_object(value)->entries;
+            MalTableIter iter;
+            mal_table_iter_init(&iter, table, MAL_TABLE_ITER_STORAGE);
+            void *entry;
+            while (mal_table_iter_next(&iter, &key, &entry)) {
+                mal_rooted_value_list_append(&entries, key.value);
+                mal_rooted_value_list_append(&entries, mal_table_entry_value(table, entry));
+            }
+        }
+        usize stride = is_set ? 1 : 2;
+        for (usize i = 0; i < entries.count; i += stride) {
+            MalValue cloned_key = mal_sc_clone(vm, entries.values[i], memo);
             if (vm->completion.kind == MAL_COMPLETION_THROW) {
+                mal_rooted_value_list_dispose(&entries);
                 return mal_value_new_undefined();
             }
             if (is_set) {
-                mal_map_object_set(dst, cloned_key, cloned_key);
+                mal_set_object_add(mal_value_to_set_object(clone), cloned_key);
             } else {
-                MalValue cloned_val =
-                    mal_sc_clone(vm, mal_table_entry_value(src->entries, entry), memo);
+                MalValue cloned_value = mal_sc_clone(vm, entries.values[i + 1], memo);
                 if (vm->completion.kind == MAL_COMPLETION_THROW) {
+                    mal_rooted_value_list_dispose(&entries);
                     return mal_value_new_undefined();
                 }
-                mal_map_object_set(dst, cloned_key, cloned_val);
+                mal_map_object_set(mal_value_to_map_object(clone), cloned_key, cloned_value);
             }
         }
+        mal_rooted_value_list_dispose(&entries);
         return clone;
     }
 
@@ -1278,7 +1298,7 @@ static MalValue mal_web_structured_clone(
         return mal_value_new_undefined();
     }
     MalObject *map_proto = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_MAP_PROTOTYPE]);
-    MalMapObject *memo = mal_map_object_new(&vm->heap, MAL_HEAP_MAP_OBJECT, map_proto, false);
+    MalMapObject *memo = mal_map_object_new(&vm->heap, map_proto, false);
     roots[2] = mal_value_from_map_object(memo);
     if (!mal_sc_prepare_transfers(vm, roots[1], memo)) {
         mal_gc_unroot(&roots_span);

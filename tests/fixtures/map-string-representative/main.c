@@ -27,7 +27,7 @@ static MalValue flat(MalVm *vm, usize length) {
 }
 
 static MalMapObject *new_map(MalVm *vm, MalValue *root) {
-    MalMapObject *map = mal_map_object_new(&vm->heap, MAL_HEAP_MAP_OBJECT, nullptr, false);
+    MalMapObject *map = mal_map_object_new(&vm->heap, nullptr, false);
     *root = mal_value_from_object(&map->object);
     return map;
 }
@@ -93,7 +93,7 @@ static bool flat_representatives_and_old_keys(MalVm *vm) {
     roots[2] = flat(vm, 4096);
     CHECK(roots[1] != roots[2]);
     set(vm, roots[0], roots[1], 7);
-    MalTableLookup original = mal_table_lookup(map->entries, mal_map_key_from_value(roots[1]));
+    MalTableLookup original = mal_table_lookup(map->entries, mal_collection_key_from_value(roots[1]));
     CHECK(original.present);
     u64 epoch = mal_table_handle_epoch(map->entries);
     mal_perf_stats_reset();
@@ -124,7 +124,7 @@ static bool flat_representatives_and_old_keys(MalVm *vm) {
     CHECK(mal_table_entry_key(map->entries, original.entry).value == roots[2]);
     mal_map_object_clear(map);
     set(vm, roots[0], roots[1], 11);
-    original = mal_table_lookup(map->entries, mal_map_key_from_value(roots[1]));
+    original = mal_table_lookup(map->entries, mal_collection_key_from_value(roots[1]));
     set(vm, roots[0], roots[2], 13);
     CHECK(mal_table_entry_key(map->entries, original.entry).value == roots[2]);
     CHECK(get(vm, roots[0], roots[1]) == mal_value_from_i32(13));
@@ -152,7 +152,7 @@ static bool flat_representatives_and_old_keys(MalVm *vm) {
     CHECK(mal_value_to_string(roots[2])->storage == MAL_STRING_STORAGE_INLINE);
     set(vm, roots[0], roots[1], 19);
     set(vm, roots[0], roots[2], 23);
-    MalTableLookup small = mal_table_lookup(map->entries, mal_map_key_from_value(roots[1]));
+    MalTableLookup small = mal_table_lookup(map->entries, mal_collection_key_from_value(roots[1]));
     CHECK(small.present && mal_table_entry_key(map->entries, small.entry).value == roots[2]);
     CHECK(get(vm, roots[0], roots[1]) == mal_value_from_i32(23));
     mal_gc_unroot(&span);
@@ -167,7 +167,7 @@ static bool oversized_owned_queries_are_not_retained(MalVm *vm) {
     MalMapObject *map = new_map(vm, &roots[0]);
     roots[1] = flat(vm, 17);
     set(vm, roots[0], roots[1], 1);
-    MalTableLookup original = mal_table_lookup(map->entries, mal_map_key_from_value(roots[1]));
+    MalTableLookup original = mal_table_lookup(map->entries, mal_collection_key_from_value(roots[1]));
     mal_gc_collect(vm);
     mal_gc_collect(vm);
     usize raw_before = mal_heap_usage(&vm->heap).raw_owned_bytes;
@@ -199,7 +199,7 @@ static bool query_graphs_are_not_retained(MalVm *vm) {
     MalMapObject *map = new_map(vm, &roots[0]);
     roots[1] = flat(vm, 4096);
     set(vm, roots[0], roots[1], 1);
-    MalTableLookup original = mal_table_lookup(map->entries, mal_map_key_from_value(roots[1]));
+    MalTableLookup original = mal_table_lookup(map->entries, mal_collection_key_from_value(roots[1]));
     mal_gc_collect(vm);
     mal_gc_collect(vm);
     usize raw_before = mal_heap_usage(&vm->heap).raw_owned_bytes;

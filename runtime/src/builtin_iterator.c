@@ -11,6 +11,7 @@
 #include "gc.h"
 #include "heap_string.h"
 #include "map_object.h"
+#include "set_object.h"
 #include "perf_stats.h"
 #include "typed_array_object.h"
 #include "value_ops.h"
@@ -68,7 +69,7 @@ MalValue mal_vm_new_builtin_iterator(MalVm *vm, MalIteratorKind kind, MalValue t
     if (mal_value_is_array_object(target)) {
         mal_perf_collection_iteration_start(mal_value_to_array_object(target));
     } else if (mal_value_is_map_object(target) || mal_value_is_set_object(target)) {
-        mal_perf_collection_iteration_start(mal_value_to_map_object(target));
+        mal_perf_collection_iteration_start(mal_value_to_object(target));
     }
 
     return mal_value_from_iterator_object(iterator);
@@ -88,6 +89,27 @@ static MalValue mal_builtin_iterator_pair(MalVm *vm, MalValue first, MalValue se
 // access. The full advance runs with collection suppressed (see iterator_step), so
 // values held across an internal allocation (an entries pair) are not swept.
 
+static void mal_builtin_iterator_set_take_entry(
+    MalIteratorObject *iterator,
+    MalValue *key_out,
+    bool *done_out
+) {
+    MalSetObject *set = mal_value_to_set_object(iterator->target);
+    MalSetIter iter;
+    mal_set_iter_init(&iter, set->entries);
+    iter.index = (usize) iterator->index;
+    if (!mal_set_iter_next(&iter, key_out)) {
+        iterator->done = true;
+        mal_iterator_object_release_collection_pin(iterator);
+        *key_out = MAL_VALUE_UNDEFINED;
+        *done_out = true;
+        return;
+    }
+    iterator->index = (u64) iter.index;
+    mal_perf_collection_iteration_step(set);
+    *done_out = false;
+}
+
 static void mal_builtin_iterator_map_take_entry(
     MalIteratorObject *iterator,
     MalValue *key_out,
@@ -95,7 +117,6 @@ static void mal_builtin_iterator_map_take_entry(
     bool *done_out
 ) {
     MalMapObject *map = mal_value_to_map_object(iterator->target);
-
     MalTableIter table_iter;
     mal_table_iter_init(&table_iter, map->entries, MAL_TABLE_ITER_STORAGE);
     table_iter.index = (usize) iterator->index;
@@ -104,7 +125,7 @@ static void mal_builtin_iterator_map_take_entry(
     void *entry;
     if (!mal_table_iter_next(&table_iter, &key, &entry)) {
         iterator->done = true;
-        mal_iterator_object_release_table_pin(iterator);
+        mal_iterator_object_release_collection_pin(iterator);
         *key_out = mal_value_new_undefined();
         *mapped_out = mal_value_new_undefined();
         *done_out = true;
@@ -131,7 +152,6 @@ static bool mal_builtin_iterator_map_advance(
 
     switch (iterator->kind) {
         case MAL_ITERATOR_MAP_KEYS:
-        case MAL_ITERATOR_SET_VALUES:
             *value_out = key;
             return true;
         case MAL_ITERATOR_MAP_VALUES:
@@ -140,14 +160,21 @@ static bool mal_builtin_iterator_map_advance(
         case MAL_ITERATOR_MAP_ENTRIES:
             *value_out = mal_builtin_iterator_pair(vm, key, mapped);
             return true;
-        case MAL_ITERATOR_SET_ENTRIES:
-            *value_out = mal_builtin_iterator_pair(vm, key, key);
-            return true;
         default:
             *value_out = mal_value_new_undefined();
             *done_out = true;
             return true;
     }
+}
+
+static bool mal_builtin_iterator_set_advance(
+    MalVm *vm, MalIteratorObject *iterator, MalValue *value_out, bool *done_out
+) {
+    mal_builtin_iterator_set_take_entry(iterator, value_out, done_out);
+    if (!*done_out && iterator->kind == MAL_ITERATOR_SET_ENTRIES) {
+        *value_out = mal_builtin_iterator_pair(vm, *value_out, *value_out);
+    }
+    return true;
 }
 
 static bool mal_builtin_iterator_array_advance(
@@ -363,9 +390,10 @@ static bool mal_builtin_iterator_object_advance(
         case MAL_ITERATOR_MAP_KEYS:
         case MAL_ITERATOR_MAP_VALUES:
         case MAL_ITERATOR_MAP_ENTRIES:
+            return mal_builtin_iterator_map_advance(vm, iterator, value_out, done_out);
         case MAL_ITERATOR_SET_VALUES:
         case MAL_ITERATOR_SET_ENTRIES:
-            return mal_builtin_iterator_map_advance(vm, iterator, value_out, done_out);
+            return mal_builtin_iterator_set_advance(vm, iterator, value_out, done_out);
         case MAL_ITERATOR_ARRAY_KEYS:
         case MAL_ITERATOR_ARRAY_VALUES:
         case MAL_ITERATOR_ARRAY_ENTRIES:
@@ -545,8 +573,7 @@ void mal_vm_iterator_step_set_values_cursor(
         *done_out = true;
         return;
     }
-    MalValue mapped;
-    mal_builtin_iterator_map_take_entry(cursor, value_out, &mapped, done_out);
+    mal_builtin_iterator_set_take_entry(cursor, value_out, done_out);
 }
 
 bool mal_vm_iterator_step_entry_pair_protocol_cursor(
@@ -572,9 +599,12 @@ bool mal_vm_iterator_step_entry_pair_protocol_cursor(
             *done_out = true;
             return true;
         }
-        MalValue mapped;
-        mal_builtin_iterator_map_take_entry(cursor, first_out, &mapped, done_out);
-        *second_out = cursor->kind == MAL_ITERATOR_MAP_ENTRIES ? mapped : *first_out;
+        if (cursor->kind == MAL_ITERATOR_MAP_ENTRIES) {
+            mal_builtin_iterator_map_take_entry(cursor, first_out, second_out, done_out);
+        } else {
+            mal_builtin_iterator_set_take_entry(cursor, first_out, done_out);
+            *second_out = *first_out;
+        }
         return true;
     }
 
@@ -762,8 +792,8 @@ bool mal_vm_builtin_iterator_size_hint(
                 !mal_value_is_set_object(iterator->target)) {
                 return false;
             }
-            *size_out = mal_map_object_size(
-                mal_value_to_map_object(iterator->target));
+            *size_out = mal_set_object_size(
+                mal_value_to_set_object(iterator->target));
             return true;
         case MAL_ITERATOR_STRING_VALUES: {
             usize length = mal_string_length(
@@ -788,24 +818,22 @@ bool mal_vm_iterator_drain_set_values_to_fresh_dense_array(
         return false;
     }
 
-    MalMapObject *set = mal_value_to_map_object(cursor->target);
-    usize size = mal_map_object_size(set);
+    MalSetObject *set = mal_value_to_set_object(cursor->target);
+    usize size = mal_set_object_size(set);
     if (size > UINT32_MAX ||
         !mal_array_object_fresh_dense_reserve_exact(array, (u32) size)) {
         return false;
     }
 
-    MalTableIter iter;
-    mal_table_iter_init(&iter, set->entries, MAL_TABLE_ITER_STORAGE);
-    MalKey key;
-    void *entry;
-    while (mal_table_iter_next(&iter, &key, &entry)) {
-        (void) entry;
-        mal_array_object_fresh_dense_append_reserved(array, key.value);
+    MalSetIter iter;
+    mal_set_iter_init(&iter, set->entries);
+    MalValue key;
+    while (mal_set_iter_next(&iter, &key)) {
+        mal_array_object_fresh_dense_append_reserved(array, key);
         cursor->index = (u64) iter.index;
     }
     cursor->done = true;
-    mal_iterator_object_release_table_pin(cursor);
+    mal_iterator_object_release_collection_pin(cursor);
     return true;
 }
 

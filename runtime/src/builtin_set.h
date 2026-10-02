@@ -1,7 +1,7 @@
 #pragma once
 
 #include "./defaults.h"
-#include "value.h"
+#include "set_object.h"
 
 typedef struct MalVm MalVm;
 

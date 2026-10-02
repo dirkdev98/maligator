@@ -205,7 +205,7 @@ typedef enum MalHeapType : u8 {
      */
     MAL_HEAP_MAP_OBJECT,
     /**
-     * Set and WeakSet instances (MalMapObject with ignored entry values).
+     * Set and WeakSet instances (MalSetObject with key-only storage).
      */
     MAL_HEAP_SET_OBJECT,
     /**

@@ -808,6 +808,34 @@ static void mal_perf_stats_print(void) {
             (unsigned long long) mal_perf_stats.collection_key_shapes[i][8]
         );
     }
+    fprintf(stderr,
+        "[perf-set-storage] descriptors=%llu promotions=%llu small_inserts=%llu "
+        "hashed_inserts=%llu payload_bytes=%llu index_bytes=%llu compactions=%llu "
+        "select_int32=%llu select_number=%llu select_string=%llu select_identity=%llu "
+        "select_generic=%llu widen_number=%llu widen_generic=%llu "
+        "query_int32=%llu query_number=%llu query_string=%llu query_symbol=%llu "
+        "query_object=%llu query_bigint=%llu query_static=%llu\n",
+        (unsigned long long) mal_perf_stats.set_storage_descriptors,
+        (unsigned long long) mal_perf_stats.set_storage_promotions,
+        (unsigned long long) mal_perf_stats.set_storage_small_inserts,
+        (unsigned long long) mal_perf_stats.set_storage_hashed_inserts,
+        (unsigned long long) mal_perf_stats.set_storage_payload_bytes,
+        (unsigned long long) mal_perf_stats.set_storage_index_bytes,
+        (unsigned long long) mal_perf_stats.set_storage_compactions,
+        (unsigned long long) mal_perf_stats.set_storage_domain_selections[1],
+        (unsigned long long) mal_perf_stats.set_storage_domain_selections[2],
+        (unsigned long long) mal_perf_stats.set_storage_domain_selections[3],
+        (unsigned long long) mal_perf_stats.set_storage_domain_selections[4],
+        (unsigned long long) mal_perf_stats.set_storage_domain_selections[5],
+        (unsigned long long) mal_perf_stats.set_storage_domain_widenings[2],
+        (unsigned long long) mal_perf_stats.set_storage_domain_widenings[5],
+        (unsigned long long) mal_perf_stats.set_storage_query_kinds[0],
+        (unsigned long long) mal_perf_stats.set_storage_query_kinds[1],
+        (unsigned long long) mal_perf_stats.set_storage_query_kinds[2],
+        (unsigned long long) mal_perf_stats.set_storage_query_kinds[3],
+        (unsigned long long) mal_perf_stats.set_storage_query_kinds[4],
+        (unsigned long long) mal_perf_stats.set_storage_query_kinds[5],
+        (unsigned long long) mal_perf_stats.set_storage_query_kinds[6]);
     fprintf(
         stderr,
         "[perf-collection-tracking] overflows=%llu misses=%llu\n",

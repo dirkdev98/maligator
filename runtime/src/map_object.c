@@ -1,77 +1,26 @@
 #include "./map_object.h"
 
-#include <math.h>
-
 #include "./gc.h"
 #include "./perf_stats.h"
 
-void mal_map_object_init(MalHeap *heap, MalMapObject *map, MalHeapType type, MalObject *prototype, bool weak) {
-    mal_object_init(heap, &map->object, type, prototype);
+void mal_map_object_init(MalHeap *heap, MalMapObject *map, MalObject *prototype, bool weak) {
+    mal_object_init(heap, &map->object, MAL_HEAP_MAP_OBJECT, prototype);
     map->entries = mal_table_new(MAL_TABLE_MODE_GENERAL, MAL_TABLE_ROLE_MAP);
     map->weak = weak;
-    MalPerfCollectionKind kind = type == MAL_HEAP_SET_OBJECT
-        ? (weak ? MAL_PERF_COLLECTION_WEAK_SET : MAL_PERF_COLLECTION_SET)
-        : (weak ? MAL_PERF_COLLECTION_WEAK_MAP : MAL_PERF_COLLECTION_MAP);
+    MalPerfCollectionKind kind = weak ? MAL_PERF_COLLECTION_WEAK_MAP : MAL_PERF_COLLECTION_MAP;
     mal_perf_collection_new(map, kind, heap->epoch);
 }
 
-MalMapObject *mal_map_object_new(MalHeap *heap, MalHeapType type, MalObject *prototype, bool weak) {
-    MalMapObject *map = mal_heap_alloc(heap, sizeof(MalMapObject), type);
-    mal_map_object_init(heap, map, type, prototype, weak);
+MalMapObject *mal_map_object_new(MalHeap *heap, MalObject *prototype, bool weak) {
+    MalMapObject *map = mal_heap_alloc(heap, sizeof(MalMapObject), MAL_HEAP_MAP_OBJECT);
+    mal_map_object_init(heap, map, prototype, weak);
 
     return map;
 }
 
-MalKey mal_map_key_from_value(MalValue value) {
-    if (mal_value_is_string(value)) {
-        return (MalKey) {.kind = MAL_KEY_STRING, .value = value};
-    }
-
-    if (mal_value_is_symbol(value)) {
-        return (MalKey) {.kind = MAL_KEY_SYMBOL, .value = value};
-    }
-
-    if (mal_value_is_object(value)) {
-        return (MalKey) {.kind = MAL_KEY_OBJECT, .value = value};
-    }
-
-    if (mal_value_is_int32(value)) {
-        return (MalKey) {.kind = MAL_KEY_NUMBER, .value = mal_value_from_f64((f64) mal_value_to_i32(value))};
-    }
-
-    if (value == MAL_VALUE_NEGATIVE_ZERO) {
-        return (MalKey) {.kind = MAL_KEY_NUMBER, .value = mal_value_from_f64(0.0)};
-    }
-
-    if (mal_value_is_f64(value)) {
-        f64 number = mal_value_to_f64(value);
-
-        if (number == 0.0) {
-            return (MalKey) {.kind = MAL_KEY_NUMBER, .value = mal_value_from_f64(0.0)};
-        }
-
-        if (isnan(number)) {
-            return (MalKey) {.kind = MAL_KEY_NUMBER, .value = mal_value_new_nan()};
-        }
-
-        return (MalKey) {.kind = MAL_KEY_NUMBER, .value = value};
-    }
-
-    if (value == MAL_VALUE_NAN || value == MAL_VALUE_POSITIVE_INFINITY || value == MAL_VALUE_NEGATIVE_INFINITY) {
-        return (MalKey) {.kind = MAL_KEY_NUMBER, .value = value};
-    }
-
-    if (mal_value_is_bigint(value)) {
-        return (MalKey) {.kind = MAL_KEY_NUMBER, .value = value};
-    }
-
-    // true / false / null / undefined.
-    return (MalKey) {.kind = MAL_KEY_STATIC, .value = value};
-}
-
 MalKey mal_map_object_key_from_value(const MalMapObject *map, MalValue value) {
     mal_perf_collection_key_value(map, value);
-    return mal_map_key_from_value(value);
+    return mal_collection_key_from_value(value);
 }
 
 void mal_map_object_set_canonical(MalMapObject *map, MalKey key, MalValue value) {

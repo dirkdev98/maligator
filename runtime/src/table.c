@@ -82,35 +82,6 @@ static inline u32 mal_table_handle_index(const void *handle) {
     return (u32) ((uptr) handle - 1);
 }
 
-static u64 mal_table_hash_mix(u64 value) {
-    value ^= value >> 30;
-    value *= 0xbf58476d1ce4e5b9;
-    value ^= value >> 27;
-    value *= 0x94d049bb133111eb;
-    value ^= value >> 31;
-
-    return value;
-}
-
-// Hash and equality operate directly on the stored key value (kind-free): the
-// value's bits already encode its class (an int32 INDEX never bit-equals an
-// f64 NUMBER, etc.). Strings compare/hash by code units and BigInts by their
-// numeric backing value; all other canonicalized values use their bits. This
-// needs no separately stored kind.
-static u64 mal_table_hash_value(MalValue value) {
-    if (mal_value_is_string(value)) {
-        return mal_table_hash_mix(mal_string_hash(mal_value_to_string(value)));
-    }
-    if (mal_value_is_bigint(value)) {
-        u128 bits = (u128) mal_bigint_value(mal_value_to_bigint(value));
-        u64 low = (u64) bits;
-        u64 high = (u64) (bits >> 64);
-        return mal_table_hash_mix(low ^ mal_table_hash_mix(high ^ 0x9e3779b97f4a7c15ull));
-    }
-
-    return mal_table_hash_mix(value);
-}
-
 static inline u32 mal_table_hash_fingerprint(u64 hash) {
     return (u32) (hash >> 32);
 }
@@ -198,7 +169,7 @@ static void mal_table_close_delete_hole(MalTable *table, usize hole) {
     while (table->slots[scan] != MAL_TABLE_EMPTY) {
         MAL_PERF_COUNT(tables[table->role].delete_cluster_scans);
         i32 entry_index = table->slots[scan];
-        usize home = mal_table_hash_value(table->entries[entry_index].key) & mask;
+        usize home = mal_key_hash_value(table->entries[entry_index].key) & mask;
         if (((hole - home) & mask) < ((scan - home) & mask)) {
             table->slots[hole] = entry_index;
             hole = scan;
@@ -225,7 +196,7 @@ static void mal_table_fill_slots(MalTable *table, i32 *slots, u32 capacity) {
         if (!table->entries[e].live) {
             continue;
         }
-        usize index = mal_table_hash_value(table->entries[e].key) & mask;
+        usize index = mal_key_hash_value(table->entries[e].key) & mask;
         while (slots[index] != MAL_TABLE_EMPTY) {
             index = (index + 1) & mask;
         }
@@ -439,7 +410,7 @@ MalTableLookup mal_table_lookup(const MalTable *table, MalKey key) {
             }
         }
     }
-    u64 hash = mal_table_hash_value(key.value);
+    u64 hash = mal_key_hash_value(key.value);
     usize index = mal_table_find_slot(table, key.value, hash);
     i32 entry = table->slots[index];
 
@@ -463,7 +434,7 @@ void *mal_table_upsert_entry(MalTable *table, MalKey key, bool *inserted) {
     }
     if (mal_table_should_compact(table)) mal_table_compact(table);
     mal_table_allocate_storage(table);
-    u64 hash = mal_table_hash_value(key.value);
+    u64 hash = mal_key_hash_value(key.value);
     usize index = mal_table_find_slot(table, key.value, hash);
     if (table->slots[index] != MAL_TABLE_EMPTY) {
         if (stats != nullptr) {
@@ -505,7 +476,7 @@ bool mal_table_delete(MalTable *table, MalKey key) {
         stats->deletes++;
     }
     if (table->size == 0) return false;
-    u64 hash = mal_table_hash_value(key.value);
+    u64 hash = mal_key_hash_value(key.value);
     usize index = mal_table_find_slot(table, key.value, hash);
     i32 entry_index = table->slots[index];
 
@@ -798,7 +769,7 @@ bool mal_table_entry_matches(
         return false;
     }
     const MalTableEntry *candidate = &table->entries[index];
-    u64 hash = mal_table_hash_value(key.value);
+    u64 hash = mal_key_hash_value(key.value);
     return candidate->live &&
         candidate->hash_fingerprint == mal_table_hash_fingerprint(hash) &&
         mal_key_value_equals(candidate->key, key.value);
@@ -813,7 +784,7 @@ void *mal_table_map_entry_hint(const MalTable *table, MalKey key) {
     if (!mal_value_is_string(key.value) && !mal_value_is_bigint(key.value)) {
         return nullptr;
     }
-    u64 hash = mal_table_hash_value(key.value);
+    u64 hash = mal_key_hash_value(key.value);
     if (candidate->hash_fingerprint != mal_table_hash_fingerprint(hash) ||
         !mal_key_value_equals(candidate->key, key.value)) {
         return nullptr;

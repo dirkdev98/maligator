@@ -35,6 +35,7 @@
 #include "./intl_object.h"
 #include "./iterator_object.h"
 #include "./map_object.h"
+#include "./set_object.h"
 #include "./microtask.h"
 #include "./module_namespace_object.h"
 #include "./monotonic_clock.h"
@@ -248,9 +249,11 @@ struct MalGcState {
     bool worker_stop;
 #endif
 
-    // Weak collections (WeakMap/WeakSet) reached during the main mark. Their entry
-    // key/value edges are NOT traced there; the ephemeron pass after the mark marks
-    // each value whose key is live (a fixpoint) and drops entries with dead keys.
+    // WeakSet members are cleaned only after the WeakMap ephemeron fixpoint.
+    MalSetObject **weak_sets;
+    usize weak_sets_count;
+    usize weak_sets_capacity;
+
     MalMapObject **weak_maps;
     usize weak_maps_count;
     usize weak_maps_capacity;
@@ -466,6 +469,17 @@ static void mal_gc_register_weak_map(MalMapObject *map) {
         g_gc->weak_maps_capacity = capacity;
     }
     g_gc->weak_maps[g_gc->weak_maps_count++] = map;
+}
+
+static void mal_gc_register_weak_set(MalSetObject *set) {
+    if (g_gc->weak_sets_count == g_gc->weak_sets_capacity) {
+        usize capacity = g_gc->weak_sets_capacity == 0 ? 64 : g_gc->weak_sets_capacity * 2;
+        MalSetObject **sets = realloc(g_gc->weak_sets, capacity * sizeof(MalSetObject *));
+        if (sets == nullptr) abort();
+        g_gc->weak_sets = sets;
+        g_gc->weak_sets_capacity = capacity;
+    }
+    g_gc->weak_sets[g_gc->weak_sets_count++] = set;
 }
 
 static void mal_gc_register_weak_ref(MalWeakRefObject *ref) {
@@ -1336,7 +1350,7 @@ static void mal_gc_trace_cell(MalHeapHeader *cell) {
             break;
         }
         case MAL_HEAP_MAP_OBJECT:
-        case MAL_HEAP_SET_OBJECT: {
+        {
             MalMapObject *map = (MalMapObject *) cell;
             // A weak collection's entries are not strong edges: defer them to the
             // ephemeron pass (which marks values of live keys and drops the rest).
@@ -1346,6 +1360,18 @@ static void mal_gc_trace_cell(MalHeapHeader *cell) {
                 mal_gc_register_weak_map(map);
             } else {
                 mal_gc_trace_table(map->entries);
+            }
+            break;
+        }
+        case MAL_HEAP_SET_OBJECT: {
+            MalSetObject *set = (MalSetObject *) cell;
+            if (set->weak && !g_gc_verifying) {
+                mal_gc_register_weak_set(set);
+            } else if (set->weak || mal_set_storage_traced_slots(set->entries) != 0) {
+                MalSetIter iter;
+                mal_set_iter_init(&iter, set->entries);
+                MalValue key;
+                while (mal_set_iter_next(&iter, &key)) mal_gc_mark_value(key);
             }
             break;
         }
@@ -1782,12 +1808,11 @@ static void mal_gc_finalize_cell(MalHeapHeader *cell) {
             break;
         }
         case MAL_HEAP_MAP_OBJECT:
-        case MAL_HEAP_SET_OBJECT: {
+        {
             MalMapObject *map = (MalMapObject *) cell;
 #if MAL_PERF_STATS
-            MalPerfCollectionKind kind = cell->type == MAL_HEAP_SET_OBJECT
-                ? (map->weak ? MAL_PERF_COLLECTION_WEAK_SET : MAL_PERF_COLLECTION_SET)
-                : (map->weak ? MAL_PERF_COLLECTION_WEAK_MAP : MAL_PERF_COLLECTION_MAP);
+            MalPerfCollectionKind kind = map->weak
+                ? MAL_PERF_COLLECTION_WEAK_MAP : MAL_PERF_COLLECTION_MAP;
             mal_perf_collection_finalize(
                 map,
                 kind,
@@ -1801,6 +1826,18 @@ static void mal_gc_finalize_cell(MalHeapHeader *cell) {
                 mal_table_release_owner(map->entries);
                 map->entries = nullptr;
             }
+            break;
+        }
+        case MAL_HEAP_SET_OBJECT: {
+            MalSetObject *set = (MalSetObject *) cell;
+#if MAL_PERF_STATS
+            mal_perf_collection_finalize(
+                set, set->weak ? MAL_PERF_COLLECTION_WEAK_SET : MAL_PERF_COLLECTION_SET,
+                g_gc_vm->heap.epoch, mal_set_object_size(set), 0,
+                mal_set_object_perf_key_mask(set), false);
+#endif
+            mal_set_storage_release_owner(set->entries);
+            set->entries = nullptr;
             break;
         }
         case MAL_HEAP_ARRAY_BUFFER_OBJECT: {
@@ -1947,7 +1984,7 @@ static void mal_gc_finalize_cell(MalHeapHeader *cell) {
             break;
         }
         case MAL_HEAP_ITERATOR_OBJECT:
-            mal_iterator_object_release_table_pin((MalIteratorObject *) cell);
+            mal_iterator_object_finalize_collection_pin((MalIteratorObject *) cell);
             break;
         default:
             break;
@@ -2011,8 +2048,9 @@ static bool mal_gc_worker_can_trace(MalHeapHeader *cell) {
         case MAL_HEAP_ITERATOR_OBJECT:
             return true;
         case MAL_HEAP_MAP_OBJECT:
-        case MAL_HEAP_SET_OBJECT:
             return !((MalMapObject *) cell)->weak;
+        case MAL_HEAP_SET_OBJECT:
+            return !((MalSetObject *) cell)->weak;
         default:
             return false;
     }
@@ -2629,6 +2667,12 @@ static void mal_gc_weak_pass(void) {
         }
     }
 
+    for (usize i = 0; i < g_gc->weak_sets_count; i++) {
+        MalSetObject *set = g_gc->weak_sets[i];
+        if (g_gc->stats_enabled) g_gc->weak_cleanup_visits += mal_set_object_size(set);
+        mal_set_storage_retain(set->entries, mal_gc_is_marked);
+    }
+
     // WeakRef: null any target that did not otherwise survive, so a later deref()
     // sees undefined rather than a reclaimed cell.
     for (usize i = 0; i < g_gc->weak_refs_count; ++i) {
@@ -2780,6 +2824,7 @@ static void mal_gc_collect_sync(MalVm *vm, bool major) {
     u64 minor_mark_start = g_gc->stats_enabled && !major ? mal_monotonic_now_ns() : 0;
     g_gc->grey_count = 0;
     g_gc->weak_maps_count = 0;
+    g_gc->weak_sets_count = 0;
     g_gc->weak_refs_count = 0;
     g_gc->fin_regs_count = 0;
     g_gc->major_collection = major;
@@ -2820,11 +2865,18 @@ static void mal_gc_collect_sync(MalVm *vm, bool major) {
                     g_gc->minor_remembered_array_owners++;
                     g_gc->minor_remembered_array_slots += slots;
                     g_gc->minor_remembered_array_discoveries += discoveries;
-                } else if (owner->type == MAL_HEAP_MAP_OBJECT ||
-                           owner->type == MAL_HEAP_SET_OBJECT) {
+                } else if (owner->type == MAL_HEAP_MAP_OBJECT) {
                     MalMapObject *map = (MalMapObject *) owner;
                     u64 slots = mal_gc_remembered_object_slots(&map->object) +
                         (map->weak ? 0 : mal_gc_remembered_table_slots(map->entries));
+                    g_gc->minor_remembered_container_slots += slots;
+                    g_gc->minor_remembered_map_owners++;
+                    g_gc->minor_remembered_map_slots += slots;
+                    g_gc->minor_remembered_map_discoveries += discoveries;
+                } else if (owner->type == MAL_HEAP_SET_OBJECT) {
+                    MalSetObject *set = (MalSetObject *) owner;
+                    u64 slots = mal_gc_remembered_object_slots(&set->object) +
+                        (set->weak ? 0 : mal_set_storage_traced_slots(set->entries));
                     g_gc->minor_remembered_container_slots += slots;
                     g_gc->minor_remembered_map_owners++;
                     g_gc->minor_remembered_map_slots += slots;
@@ -2898,6 +2950,7 @@ static void mal_gc_cycle_begin(MalVm *vm) {
     u64 start_ns = g_gc->stats_enabled ? mal_monotonic_now_ns() : 0;
     g_gc->grey_count = 0;
     g_gc->weak_maps_count = 0;
+    g_gc->weak_sets_count = 0;
     g_gc->weak_refs_count = 0;
     g_gc->fin_regs_count = 0;
     g_gc->satb_count = 0;
@@ -3286,6 +3339,7 @@ void mal_gc_state_free(MalVm *vm) {
     }
 #endif
     free(g->weak_maps);
+    free(g->weak_sets);
     free(g->weak_refs);
     free(g->fin_regs);
     free(g->remembered);

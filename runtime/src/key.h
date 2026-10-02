@@ -1,5 +1,6 @@
 #pragma once
 
+#include <math.h>
 #include <stdlib.h>
 
 #include "defaults.h"
@@ -52,6 +53,54 @@ static inline MalKeyKind mal_key_kind_of(MalValue value) {
     }
     return MAL_KEY_NUMBER;
 }
+
+// Canonical bits implement SameValueZero while keeping Number and BigInt distinct.
+static inline MalKey mal_collection_key_from_value(MalValue value) {
+    if (mal_value_is_string(value)) {
+        return (MalKey) {.kind = MAL_KEY_STRING, .value = value};
+    }
+
+    if (mal_value_is_symbol(value)) {
+        return (MalKey) {.kind = MAL_KEY_SYMBOL, .value = value};
+    }
+
+    if (mal_value_is_object(value)) {
+        return (MalKey) {.kind = MAL_KEY_OBJECT, .value = value};
+    }
+
+    if (mal_value_is_int32(value)) {
+        return (MalKey) {.kind = MAL_KEY_NUMBER, .value = mal_value_from_f64((f64) mal_value_to_i32(value))};
+    }
+
+    if (value == MAL_VALUE_NEGATIVE_ZERO) {
+        return (MalKey) {.kind = MAL_KEY_NUMBER, .value = mal_value_from_f64(0.0)};
+    }
+
+    if (mal_value_is_f64(value)) {
+        f64 number = mal_value_to_f64(value);
+
+        if (number == 0.0) {
+            return (MalKey) {.kind = MAL_KEY_NUMBER, .value = mal_value_from_f64(0.0)};
+        }
+
+        if (isnan(number)) {
+            return (MalKey) {.kind = MAL_KEY_NUMBER, .value = mal_value_new_nan()};
+        }
+
+        return (MalKey) {.kind = MAL_KEY_NUMBER, .value = value};
+    }
+
+    if (value == MAL_VALUE_NAN || value == MAL_VALUE_POSITIVE_INFINITY || value == MAL_VALUE_NEGATIVE_INFINITY) {
+        return (MalKey) {.kind = MAL_KEY_NUMBER, .value = value};
+    }
+
+    if (mal_value_is_bigint(value)) {
+        return (MalKey) {.kind = MAL_KEY_NUMBER, .value = value};
+    }
+
+    return (MalKey) {.kind = MAL_KEY_STATIC, .value = value};
+}
+
 
 static inline MalKey mal_key_from_value(MalValue value) {
     return (MalKey) {.kind = mal_key_kind_of(value), .value = value};
@@ -117,4 +166,28 @@ static inline bool mal_key_value_equals(MalValue left, MalValue right) {
     }
     MAL_PERF_COUNT(key_non_string_misses);
     return false;
+}
+
+static inline u64 mal_key_hash_mix(u64 value) {
+    value ^= value >> 30;
+    value *= 0xbf58476d1ce4e5b9;
+    value ^= value >> 27;
+    value *= 0x94d049bb133111eb;
+    value ^= value >> 31;
+
+    return value;
+}
+
+static inline u64 mal_key_hash_value(MalValue value) {
+    if (mal_value_is_string(value)) {
+        return mal_key_hash_mix(mal_string_hash(mal_value_to_string(value)));
+    }
+    if (mal_value_is_bigint(value)) {
+        u128 bits = (u128) mal_bigint_value(mal_value_to_bigint(value));
+        u64 low = (u64) bits;
+        u64 high = (u64) (bits >> 64);
+        return mal_key_hash_mix(low ^ mal_key_hash_mix(high ^ 0x9e3779b97f4a7c15ull));
+    }
+
+    return mal_key_hash_mix(value);
 }

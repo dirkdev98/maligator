@@ -55,7 +55,7 @@ MalTable *mal_table_new(MalTableMode mode, MalTableRole role);
 void mal_table_free(MalTable *table);
 
 /**
- * Release a Map/Set's ownership. If a dead iterator is still pinned during the
+ * Release a Map's ownership. If a dead iterator is still pinned during the
  * same GC sweep, defer the raw-table free until its finalizer drops the last pin.
  */
 void mal_table_release_owner(MalTable *table);

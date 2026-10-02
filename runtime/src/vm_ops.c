@@ -3099,17 +3099,17 @@ bool mal_op_call_guarded_builtin(
         case MAL_GUARDED_BUILTIN_SET_ADD:
             expected = MAL_INTRINSIC_SET_PROTOTYPE_ADD;
             receiver_matches = mal_value_is_set_object(receiver) &&
-                !mal_value_to_map_object(receiver)->weak;
+                !mal_value_to_set_object(receiver)->weak;
             break;
         case MAL_GUARDED_BUILTIN_SET_HAS:
             expected = MAL_INTRINSIC_SET_PROTOTYPE_HAS;
             receiver_matches = mal_value_is_set_object(receiver) &&
-                !mal_value_to_map_object(receiver)->weak;
+                !mal_value_to_set_object(receiver)->weak;
             break;
         case MAL_GUARDED_BUILTIN_SET_DELETE:
             expected = MAL_INTRINSIC_SET_PROTOTYPE_DELETE;
             receiver_matches = mal_value_is_set_object(receiver) &&
-                !mal_value_to_map_object(receiver)->weak;
+                !mal_value_to_set_object(receiver)->weak;
             break;
         default:
             return false;
