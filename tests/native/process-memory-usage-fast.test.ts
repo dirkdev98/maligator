@@ -25,4 +25,24 @@ for (const compiled of [true, false]) {
 			rmSync(outDir, { recursive: true, force: true });
 		}
 	}, 300_000);
+
+	it(`moves backing ownership between isolates (${compiled ? "native" : "interpreted"})`, () => {
+		const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-process-memory-transfer-"));
+		try {
+			const binary = buildNativeBinary({
+				fixture: "tests/local/process-memory-usage-transfer/main.mjs",
+				name: `process-memory-usage-transfer-${compiled ? "native" : "interpreted"}`,
+				outDir,
+				compiled,
+				nodeEnabled: true,
+			});
+			for (const env of [{ MAL_HOST_GC: "1" }, { ...STRESS_ENV, MAL_HOST_GC: "1" }]) {
+				expect(runToStdout(binary, { env, timeoutMs: 30_000 })).toBe(
+					"process-memory-usage-transfer PASS\n",
+				);
+			}
+		} finally {
+			rmSync(outDir, { recursive: true, force: true });
+		}
+	}, 300_000);
 }

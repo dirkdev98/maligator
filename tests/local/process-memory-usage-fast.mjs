@@ -28,14 +28,20 @@ function exercise() {
 	);
 	const transferred = structuredClone(copied, { transfer: [copied] });
 	const usage = process.memoryUsage();
-	check(copied.byteLength === 0 && transferred.byteLength === 8, "clone transfer detached source");
+	check(
+		copied.byteLength === 0 && transferred.byteLength === 8,
+		"clone transfer detached source",
+	);
 	check(
 		usage.arrayBuffers === baseline + 136 &&
 			usage.external >= usage.arrayBuffers &&
 			usage.heapTotal >= usage.heapUsed,
 		"serialization moves the backing without changing total ownership",
 	);
-	check(moved.byteLength === 8 && new Uint8Array(moved)[0] === 0, "moved backing remains live");
+	check(
+		moved.byteLength === 8 && new Uint8Array(moved)[0] === 0,
+		"moved backing remains live",
+	);
 	check(transferred.byteLength === 8, "transferred backing remains live");
 }
 
@@ -43,5 +49,8 @@ exercise();
 const collect = globalThis.__mal_collect_garbage;
 check(typeof collect === "function", "host GC hook is available");
 collect();
-check(process.memoryUsage().arrayBuffers <= baseline, "collection releases ordinary backings");
+check(
+	process.memoryUsage().arrayBuffers <= baseline,
+	"collection releases ordinary backings",
+);
 console.log("process-memory-usage-fast PASS");
