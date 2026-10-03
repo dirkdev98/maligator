@@ -244,7 +244,8 @@ function fetchRequest(url, method, headers, body, signal, redirect, redirects) {
 				if (comma < 0) throw new TypeError("Invalid data URL");
 				const meta = url.href.slice(5, comma);
 				const data = decodeURIComponent(url.href.slice(comma + 1));
-				const bytes = Buffer.from(data, meta.endsWith(";base64") ? "base64" : "utf8");
+				const base64 = meta.endsWith(";base64");
+				const bytes = Buffer.from(data, base64 ? "base64" : "utf8");
 				finished = true;
 				cleanup();
 				resolve(
@@ -252,7 +253,7 @@ function fetchRequest(url, method, headers, body, signal, redirect, redirects) {
 						url: url.href,
 						headers: {
 							"content-type":
-								meta.replace(/;base64$/, "") || "text/plain;charset=US-ASCII",
+								(base64 ? meta.slice(0, -7) : meta) || "text/plain;charset=US-ASCII",
 						},
 					}),
 				);

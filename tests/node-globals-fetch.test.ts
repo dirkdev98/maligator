@@ -81,3 +81,20 @@ test("honors redirect modes, null bodies, timeout and one-time consumption", asy
 	expect(await data.text()).toBe("hello");
 	await expect(data.text()).rejects.toThrow(TypeError);
 });
+
+test.each([
+	["data:,hello%20world", "hello world", "text/plain;charset=US-ASCII"],
+	["data:;base64,aGVsbG8=", "hello", "text/plain;charset=US-ASCII"],
+	["data:text/plain;base64,aGVsbG8=", "hello", "text/plain"],
+	["data:text/plain;charset=utf-8;base64,aGVsbG8=", "hello", "text/plain;charset=utf-8"],
+	["data:text/plain,hello%20world", "hello world", "text/plain"],
+	[
+		"data:text/plain;base64;mode=plain,aGVsbG8=",
+		"aGVsbG8=",
+		"text/plain;base64;mode=plain",
+	],
+])("preserves data URL bytes and media type for %s", async (url, body, contentType) => {
+	const response = await fetch(url);
+	expect(response.headers.get("content-type")).toBe(contentType);
+	expect(await response.text()).toBe(body);
+});
