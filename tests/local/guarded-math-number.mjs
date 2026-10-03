@@ -16,7 +16,10 @@ function atan2(x, y) {
 function missingImul(x) {
 	return Math.imul(x);
 }
-Object.assign(globalThis, { imul, clz32, f16round, pow, atan2, missingImul });
+function extraImul(x, y) {
+	return Math.imul(x, y, ++effects);
+}
+Object.assign(globalThis, { imul, clz32, f16round, pow, atan2, missingImul, extraImul });
 const results = [];
 function record(value) {
 	results.push(Object.is(value, -0) ? "-0" : String(value));
@@ -82,7 +85,7 @@ for (const operation of [
 	}
 }
 let effects = 0;
-record(globalThis.imul(3, 7, ++effects));
+record(globalThis.extraImul(3, 7));
 record(effects);
 record(globalThis.pow(-0, 3));
 record(globalThis.pow(1, Infinity));

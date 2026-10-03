@@ -119611,12 +119611,12 @@
 					},
 					"positive": {
 						"file": "tests/core-primitive-operations.test.ts",
-						"test": "uses the numeric %s kernel only with proven inputs",
+						"test": "uses the numeric %s kernel with proven or guarded inputs",
 						"case": "atan2"
 					},
 					"negative": {
 						"file": "tests/core-primitive-operations.test.ts",
-						"test": "uses the numeric %s kernel only with proven inputs",
+						"test": "uses the numeric %s kernel with proven or guarded inputs",
 						"case": "atan2"
 					},
 					"lowering": "specialized"
@@ -122264,12 +122264,12 @@
 					},
 					"positive": {
 						"file": "tests/core-primitive-operations.test.ts",
-						"test": "uses the numeric %s kernel only with proven inputs",
+						"test": "uses the numeric %s kernel with proven or guarded inputs",
 						"case": "clz32"
 					},
 					"negative": {
 						"file": "tests/core-primitive-operations.test.ts",
-						"test": "uses the numeric %s kernel only with proven inputs",
+						"test": "uses the numeric %s kernel with proven or guarded inputs",
 						"case": "clz32"
 					},
 					"lowering": "specialized"
@@ -125539,12 +125539,12 @@
 					},
 					"positive": {
 						"file": "tests/core-primitive-operations.test.ts",
-						"test": "uses the numeric %s kernel only with proven inputs",
+						"test": "uses the numeric %s kernel with proven or guarded inputs",
 						"case": "f16round"
 					},
 					"negative": {
 						"file": "tests/core-primitive-operations.test.ts",
-						"test": "uses the numeric %s kernel only with proven inputs",
+						"test": "uses the numeric %s kernel with proven or guarded inputs",
 						"case": "f16round"
 					},
 					"lowering": "specialized"
@@ -127504,12 +127504,12 @@
 					},
 					"positive": {
 						"file": "tests/core-primitive-operations.test.ts",
-						"test": "uses the numeric %s kernel only with proven inputs",
+						"test": "uses the numeric %s kernel with proven or guarded inputs",
 						"case": "hypot"
 					},
 					"negative": {
 						"file": "tests/core-primitive-operations.test.ts",
-						"test": "uses the numeric %s kernel only with proven inputs",
+						"test": "uses the numeric %s kernel with proven or guarded inputs",
 						"case": "hypot"
 					},
 					"lowering": "specialized"
@@ -128212,12 +128212,12 @@
 					},
 					"positive": {
 						"file": "tests/core-primitive-operations.test.ts",
-						"test": "uses the numeric %s kernel only with proven inputs",
+						"test": "uses the numeric %s kernel with proven or guarded inputs",
 						"case": "imul"
 					},
 					"negative": {
 						"file": "tests/core-primitive-operations.test.ts",
-						"test": "uses the numeric %s kernel only with proven inputs",
+						"test": "uses the numeric %s kernel with proven or guarded inputs",
 						"case": "imul"
 					},
 					"lowering": "specialized"
@@ -131487,12 +131487,12 @@
 					},
 					"positive": {
 						"file": "tests/core-primitive-operations.test.ts",
-						"test": "uses the numeric %s kernel only with proven inputs",
+						"test": "uses the numeric %s kernel with proven or guarded inputs",
 						"case": "max"
 					},
 					"negative": {
 						"file": "tests/core-primitive-operations.test.ts",
-						"test": "uses the numeric %s kernel only with proven inputs",
+						"test": "uses the numeric %s kernel with proven or guarded inputs",
 						"case": "max"
 					},
 					"lowering": "specialized"
@@ -132195,12 +132195,12 @@
 					},
 					"positive": {
 						"file": "tests/core-primitive-operations.test.ts",
-						"test": "uses the numeric %s kernel only with proven inputs",
+						"test": "uses the numeric %s kernel with proven or guarded inputs",
 						"case": "min"
 					},
 					"negative": {
 						"file": "tests/core-primitive-operations.test.ts",
-						"test": "uses the numeric %s kernel only with proven inputs",
+						"test": "uses the numeric %s kernel with proven or guarded inputs",
 						"case": "min"
 					},
 					"lowering": "specialized"
@@ -132883,12 +132883,12 @@
 					},
 					"positive": {
 						"file": "tests/core-primitive-operations.test.ts",
-						"test": "uses the numeric %s kernel only with proven inputs",
+						"test": "uses the numeric %s kernel with proven or guarded inputs",
 						"case": "pow"
 					},
 					"negative": {
 						"file": "tests/core-primitive-operations.test.ts",
-						"test": "uses the numeric %s kernel only with proven inputs",
+						"test": "uses the numeric %s kernel with proven or guarded inputs",
 						"case": "pow"
 					},
 					"lowering": "specialized"
