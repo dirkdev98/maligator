@@ -39,7 +39,7 @@ export interface CoreProgramData {
 	readonly cjsModuleFunctionIndices: ReadonlyArray<number>;
 	readonly pureModuleInitializers?: ReadonlyArray<{
 		readonly functionIndex: number;
-		readonly exportSlots: ReadonlyArray<number>;
+		readonly bindingSlots: ReadonlyArray<number>;
 	}>;
 	readonly hostInstallCandidates: ReadonlyArray<CoreHostInstallCandidate>;
 	/** Source-immutable cells, plus graph-proven activation-private cells. */

@@ -970,15 +970,27 @@ function finishCoreProgram(program: CoreFrontendContext): ConstructedCoreCompila
 								"side-effect-free"
 						)
 							return [];
+						const file = program.semantic.files.find(
+							(entry) => entry.path === modulePath,
+						);
+						const defaultBinding = program.moduleDefaultBinding.get(modulePath);
+						const bindings = new Set([
+							...(
+								file?.scopes.find((scope) => scope.node === file.ast)?.bindings ?? []
+							).filter((binding) => !binding.imported),
+							...(defaultBinding ? [defaultBinding] : []),
+							...(program.namespaceImports.get(modulePath) ?? []).map(
+								({ binding }) => binding,
+							),
+							...(program.cjsImports.get(modulePath) ?? []).map(({ binding }) => binding),
+						]);
 						return [
 							{
 								functionIndex,
-								exportSlots: (program.moduleNamespaces.get(modulePath) ?? []).flatMap(
-									({ exporter }) => {
-										const location = program.bindingToStorage.get(exporter);
-										return location?.type === "global" ? [location.index] : [];
-									},
-								),
+								bindingSlots: [...bindings].flatMap((binding) => {
+									const location = program.bindingToStorage.get(binding);
+									return location?.type === "global" ? [location.index] : [];
+								}),
 							},
 						];
 					},

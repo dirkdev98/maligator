@@ -893,6 +893,12 @@ function analyzeFunctionTargets(
 						: CORE_CALLEE_TARGETS_OPEN;
 			} else if (opcode === "loadCallee") {
 				resultTargets = coreCalleeTargetsFunction(fn.id);
+			} else if (
+				opcode === "loadIntrinsic" &&
+				fn.instructionAttributes(instruction).intrinsic === "__evaluateModuleSync"
+			) {
+				// The evaluator is native; its slot arguments are never arguments to arbitrary JS functions.
+				resultTargets = CORE_CALLEE_TARGETS_OPAQUE;
 			} else if (opcode === "move") {
 				const operand = instructionOperand(fn, instruction, 0);
 				resultTargets =

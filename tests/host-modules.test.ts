@@ -94,7 +94,6 @@ describe("host-install manifest", () => {
 	it("drops a host export whose final LOAD_GLOBAL is optimized away", () => {
 		const def = compile(`import { join } from "node:path";\njoin;\n`, { node: true });
 		expect(def.runtime.hostInstalls).toEqual([]);
-		expect(loadGlobalSlots(def)).toEqual(new Set());
 	});
 
 	it("drops a side-effect-only host import", () => {

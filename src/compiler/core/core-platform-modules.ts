@@ -43,7 +43,7 @@ function eagerInitializer(
 	return typeof target === "number" ? target : undefined;
 }
 
-/** Public module evaluation is removable only while none of its export cells are observed. */
+/** Pure module evaluation and hoisted declarations are removable only while their cells are unobserved. */
 export function pruneUnusedPlatformModuleInitializers(
 	compilation: ConstructedCoreCompilation,
 ): void {
@@ -53,20 +53,62 @@ export function pruneUnusedPlatformModuleInitializers(
 	const initializers = new Set(candidates.map((entry) => entry.functionIndex));
 	const slotOwners = new Map(
 		candidates.flatMap((entry) =>
-			entry.exportSlots.map((slot) => [slot, entry.functionIndex] as const),
+			entry.bindingSlots.map((slot) => [slot, entry.functionIndex] as const),
 		),
 	);
 	const needed = new Set<number>();
+	const initializerParents = new Map<number, Set<number>>();
+	for (const owner of initializers) {
+		const fn = program.function(coreFunctionId(owner));
+		for (const instruction of fn.instructionIds()) {
+			if (fn.instructionKind(instruction) !== "operation") continue;
+			const target = eagerInitializer(fn, instruction);
+			if (target === undefined || !initializers.has(target)) continue;
+			const parents = initializerParents.get(target) ?? new Set<number>();
+			parents.add(owner);
+			initializerParents.set(target, parents);
+		}
+	}
+	const unusedModuleDeclaration = (
+		fn: CoreFunctionStore,
+		instruction: CoreInstructionId,
+	): boolean => {
+		if (fn.instructionOpcodeName(instruction) !== "createFunction") return false;
+		const value = fn.kernel.resultAt(fn.kernel.instructionResultStart(instruction));
+		if (fn.kernel.valueHandlerUseCount(value) !== 0 || fn.valueUseCount(value) === 0)
+			return false;
+		for (
+			let use = fn.kernel.valueFirstUse(value);
+			use >= 0;
+			use = fn.kernel.useNext(use)
+		) {
+			const store = fn.kernel.useInstruction(use);
+			if (
+				fn.instructionKind(store) !== "operation" ||
+				fn.instructionOpcodeName(store) !== "storeGlobal"
+			)
+				return false;
+			const slot = fn.instructionAttributes(store).index;
+			const owner = typeof slot === "number" ? slotOwners.get(slot) : undefined;
+			if (owner === undefined || needed.has(owner)) return false;
+		}
+		return true;
+	};
 	const visited = new Set<CoreFunctionId>();
 	const pending = [
 		coreFunctionId(0),
 		...compilation.context.data.cjsModuleFunctionIndices.map(coreFunctionId),
 	];
-	const demand = (slot: number) => {
-		const owner = slotOwners.get(slot);
-		if (owner === undefined || needed.has(owner)) return;
+	const demandInitializer = (owner: number) => {
+		if (needed.has(owner)) return;
 		needed.add(owner);
 		pending.push(coreFunctionId(owner));
+		// Re-export-only modules can be the sole evaluation path to a live dependency.
+		for (const parent of initializerParents.get(owner) ?? []) demandInitializer(parent);
+	};
+	const demand = (slot: number) => {
+		const owner = slotOwners.get(slot);
+		if (owner !== undefined) demandInitializer(owner);
 	};
 	while (pending.length > 0) {
 		const id = pending.pop()!;
@@ -80,6 +122,7 @@ export function pruneUnusedPlatformModuleInitializers(
 			const opcode = fn.instructionOpcodeName(instruction);
 			const attributes = fn.instructionAttributes(instruction);
 			if (eagerInitializer(fn, instruction) !== undefined) continue;
+			if (unusedModuleDeclaration(fn, instruction)) continue;
 			if (opcode === "loadGlobal" && typeof attributes.index === "number")
 				demand(attributes.index);
 			if (opcode === "createModuleNamespace" && Array.isArray(attributes.exports)) {
@@ -107,6 +150,13 @@ export function pruneUnusedPlatformModuleInitializers(
 		const editor = CoreEditor.open(program, id);
 		for (const instruction of fn.instructionIds()) {
 			if (fn.instructionKind(instruction) !== "operation") continue;
+			if (fn.instructionOpcodeName(instruction) === "storeGlobal") {
+				const slot = fn.instructionAttributes(instruction).index;
+				const owner = typeof slot === "number" ? slotOwners.get(slot) : undefined;
+				if (owner !== undefined && !needed.has(owner))
+					editor.removeInstruction(instruction);
+				continue;
+			}
 			const target = eagerInitializer(fn, instruction);
 			if (target === undefined || !initializers.has(target) || needed.has(target))
 				continue;

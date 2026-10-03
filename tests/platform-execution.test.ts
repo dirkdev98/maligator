@@ -113,7 +113,7 @@ describe("catalog platform constants", () => {
 					"maligator:test",
 					{
 						source:
-							'import { spawn } from "node:child_process"; export function test() { spawn("retained"); }',
+							'import { spawn } from "node:child_process"; function invoke() { spawn("retained"); } export function test() { invoke(); }',
 						goal: "module" as const,
 						platform: true,
 					},
@@ -126,9 +126,11 @@ describe("catalog platform constants", () => {
 			);
 			expect(dead.hostInstalls).toEqual([]);
 			expect(
-				dead.functions
-					.flatMap((fn) => fn.instructions)
-					.some((instruction) => instruction.opcode === "CALL"),
+				dead.functions.some(
+					(fn) =>
+						fn.nameStringIndex >= 0 &&
+						String.fromCharCode(...dead.stringConstants[fn.nameStringIndex]!) === "test",
+				),
 			).toBe(false);
 			const live = compile(
 				'import { test } from "maligator:test"; test();',
@@ -154,6 +156,91 @@ describe("catalog platform constants", () => {
 				]),
 			),
 		).toThrow("does not export");
+	});
+
+	it.each([
+		'import * as api from "maligator:test"; globalThis.api = api;',
+		'import { test } from "maligator:test"; globalThis.callback = test;',
+	])(
+		"retains pure dependency chains when module functions escape through %s",
+		(source) => {
+			const runtime = compile(
+				source,
+				"full",
+				new Map([
+					[
+						"maligator:test",
+						{
+							source:
+								'import { createPool } from "maligator:workers"; function invoke() { return createPool(); } export function test() { return invoke(); }',
+							goal: "module",
+							platform: true,
+						},
+					],
+					[
+						"maligator:workers",
+						{
+							source:
+								'import { spawn } from "node:child_process"; export function createPool() { return spawn("later"); }',
+							goal: "module",
+							platform: true,
+						},
+					],
+				]),
+			);
+			expect(runtime.hostInstalls.map((install) => install.installer)).toContain(
+				"mal_host_install_node_child_process",
+			);
+		},
+	);
+
+	it("retains ordinary module evaluation without live export reads", () => {
+		const runtime = compile(
+			'import { unused } from "ordinary"; globalThis.ok = 1;',
+			"full",
+			new Map([
+				[
+					"ordinary",
+					{
+						source:
+							'import { spawn } from "node:child_process"; spawn("startup"); export const unused = 1;',
+						goal: "module",
+					},
+				],
+			]),
+		);
+		expect(runtime.hostInstalls.map((install) => install.installer)).toContain(
+			"mal_host_install_node_child_process",
+		);
+	});
+
+	it("evaluates the declaring pure module when a const callback is re-exported", () => {
+		const runtime = compile(
+			'import { test } from "maligator:test"; globalThis.callback = test;',
+			"full",
+			new Map([
+				[
+					"maligator:test",
+					{
+						source: 'export { createPool as test } from "maligator:workers";',
+						goal: "module",
+						platform: true,
+					},
+				],
+				[
+					"maligator:workers",
+					{
+						source:
+							'import { spawn } from "node:child_process"; export const createPool = () => spawn("later");',
+						goal: "module",
+						platform: true,
+					},
+				],
+			]),
+		);
+		expect(runtime.hostInstalls.map((install) => install.installer)).toContain(
+			"mal_host_install_node_child_process",
+		);
 	});
 
 	it("specializes aliases across re-exports, namespace reads and switch cases", () => {
