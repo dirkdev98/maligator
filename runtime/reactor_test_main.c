@@ -1258,9 +1258,44 @@ static void blocking_test_destroy(void *data) {
     free(payload);
 }
 
+static bool blocking_work_process_payload_capacity(void) {
+    MalHost first;
+    MalHost second;
+    if (!mal_host_init(&first)) return false;
+    if (!mal_host_init(&second)) {
+        mal_host_free(&first);
+        return false;
+    }
+    usize baseline = mal_blocking_work_retained_bytes();
+    MalBlockingWorkReservation large = {0};
+    MalBlockingWorkReservation small = {0};
+    bool ok = baseline == 0 && mal_blocking_work_reserve(
+        &first, (usize) 512 * 1024 * 1024, &large);
+    ok = ok && large.active && mal_blocking_work_retained_bytes() == (usize) 512 * 1024 * 1024;
+    ok = ok && !mal_blocking_work_reserve(&second, 1, &small) && !small.active &&
+        mal_blocking_work_retained_bytes() == (usize) 512 * 1024 * 1024;
+    ok = ok && !mal_blocking_work_reserve(&second, 1, &large) && large.active &&
+        large.bytes == (usize) 512 * 1024 * 1024;
+    mal_blocking_work_reservation_release(&large);
+    mal_blocking_work_reservation_release(&large);
+    ok = ok && mal_blocking_work_retained_bytes() == baseline;
+    ok = ok && mal_blocking_work_reserve(&second, 1, &small);
+    ok = ok && small.active && mal_blocking_work_retained_bytes() == baseline + 1;
+    mal_host_shutdown(&second);
+    MalHostHandle operation;
+    ok = ok && !mal_blocking_work_start(&second, blocking_test_run, nullptr,
+        blocking_test_destroy, &small, &operation) && small.active &&
+        mal_blocking_work_retained_bytes() == baseline + 1;
+    mal_blocking_work_reservation_release(&small);
+    mal_host_free(&second);
+    mal_host_free(&first);
+    return ok && mal_blocking_work_retained_bytes() == baseline;
+}
+
 static bool blocking_work_concurrency_and_ownership(void) {
     MalHost host;
     if (!mal_host_init(&host)) return false;
+    usize baseline = mal_blocking_work_retained_bytes();
     BlockingGate gate = {0};
     pthread_mutex_init(&gate.mutex, nullptr);
     pthread_cond_init(&gate.ready, nullptr);
@@ -1271,12 +1306,16 @@ static bool blocking_work_concurrency_and_ownership(void) {
         if (payload == nullptr) { ok = false; break; }
         *payload = (BlockingPayload) {.gate = &gate, .value = i};
         MalHostHandle operation;
-        if (!mal_blocking_work_start(&host, blocking_test_run, payload,
-                blocking_test_destroy, &operation)) {
+        MalBlockingWorkReservation reservation = {0};
+        if (!mal_blocking_work_reserve(&host, sizeof(*payload), &reservation) ||
+            !mal_blocking_work_start(&host, blocking_test_run, payload,
+                blocking_test_destroy, &reservation, &operation)) {
+            mal_blocking_work_reservation_release(&reservation);
             free(payload);
             ok = false;
             break;
         }
+        if (reservation.active || reservation.bytes != 0) ok = false;
         started++;
     }
     struct timespec deadline;
@@ -1286,30 +1325,41 @@ static bool blocking_work_concurrency_and_ownership(void) {
     while (ok && gate.entered < 2) {
         if (pthread_cond_timedwait(&gate.ready, &gate.mutex, &deadline) != 0) ok = false;
     }
-    ok = ok && mal_host_has_pending_work(&host) && gate.destroyed == 0;
+    ok = ok && mal_host_has_pending_work(&host) && gate.destroyed == 0 &&
+        mal_blocking_work_retained_bytes() == baseline + (usize) started * sizeof(BlockingPayload);
     gate.release = true;
     pthread_cond_broadcast(&gate.ready);
     pthread_mutex_unlock(&gate.mutex);
+    while (ok && mal_host_posted_pending(&host.posted_tasks) == 0) {
+        mal_reactor_wait(&host.reactor);
+    }
+    ok = ok && mal_blocking_work_retained_bytes() ==
+        baseline + (usize) started * sizeof(BlockingPayload);
     int count = 0;
     int sum = 0;
     while (count < started) {
         mal_host_drain_posted(&host);
         MalHostTask task;
         while (mal_host_next_task(&host.tasks, &task)) {
-            BlockingPayload *payload = task.data;
+            BlockingPayload *payload = mal_blocking_work_result_data(task.data);
             ok = ok && task.result == MAL_HOST_TERMINAL_OK;
             sum += payload->value;
             count++;
             mal_host_task_release(&host.tasks, &task);
+            ok = ok && mal_blocking_work_retained_bytes() ==
+                baseline + (usize) (started - count) * sizeof(BlockingPayload);
         }
         if (count < started) mal_reactor_wait(&host.reactor);
     }
     ok = ok && count == 12 && sum == 234 && gate.destroyed == 12 &&
+        mal_blocking_work_retained_bytes() == baseline &&
         host_drain_reactor_and_is_idle(&host);
     mal_host_shutdown(&host);
     MalHostHandle rejected;
-    ok = ok && !mal_blocking_work_start(&host, blocking_test_run, nullptr,
-        blocking_test_destroy, &rejected);
+    MalBlockingWorkReservation reservation = {0};
+    ok = ok && !mal_blocking_work_reserve(&host, 0, &reservation) &&
+        !mal_blocking_work_start(&host, blocking_test_run, nullptr,
+            blocking_test_destroy, &reservation, &rejected);
     mal_host_free(&host);
     pthread_cond_destroy(&gate.ready);
     pthread_mutex_destroy(&gate.mutex);
@@ -1334,25 +1384,34 @@ static void *blocking_shutdown_release(void *data) {
 static bool blocking_work_shutdown_ownership(bool reject_posts) {
     MalHost host;
     if (!mal_host_init(&host)) return false;
+    usize baseline = mal_blocking_work_retained_bytes();
     BlockingGate gate = {0};
     pthread_mutex_init(&gate.mutex, nullptr);
     pthread_cond_init(&gate.ready, nullptr);
     int started = 0;
+    bool moved = true;
     for (int i = 0; i < 12; i++) {
         BlockingPayload *payload = malloc(sizeof(*payload));
         if (payload == nullptr) break;
         *payload = (BlockingPayload) {.gate = &gate, .value = i};
         MalHostHandle operation;
-        if (!mal_blocking_work_start(&host, blocking_test_run, payload,
-                blocking_test_destroy, &operation)) {
+        MalBlockingWorkReservation reservation = {0};
+        if (!mal_blocking_work_reserve(&host, sizeof(*payload), &reservation) ||
+            !mal_blocking_work_start(&host, blocking_test_run, payload,
+                blocking_test_destroy, &reservation, &operation)) {
+            mal_blocking_work_reservation_release(&reservation);
             free(payload);
             break;
         }
+        if (reservation.active || reservation.bytes != 0) moved = false;
         started++;
     }
+    bool ok = moved && mal_blocking_work_retained_bytes() ==
+        baseline + (usize) started * sizeof(BlockingPayload);
     pthread_t releaser;
-    bool ok = pthread_create(&releaser, nullptr, blocking_shutdown_release, &gate) == 0;
-    if (!ok) {
+    bool thread_started = pthread_create(&releaser, nullptr, blocking_shutdown_release, &gate) == 0;
+    ok = ok && thread_started;
+    if (!thread_started) {
         pthread_mutex_lock(&gate.mutex);
         gate.release = true;
         pthread_cond_broadcast(&gate.ready);
@@ -1362,7 +1421,8 @@ static bool blocking_work_shutdown_ownership(bool reject_posts) {
         (void) mal_host_posted_shutdown(&host.posted_tasks, &host.tasks);
     }
     mal_host_shutdown(&host);
-    if (ok) pthread_join(releaser, nullptr);
+    if (thread_started) pthread_join(releaser, nullptr);
+    if (reject_posts) ok = ok && mal_blocking_work_retained_bytes() == baseline;
     int completed = 0;
     int cancelled = 0;
     MalHostTask task;
@@ -1373,7 +1433,8 @@ static bool blocking_work_shutdown_ownership(bool reject_posts) {
         mal_host_task_release(&host.tasks, &task);
     }
     ok = ok && started == 12 && completed == 12 && cancelled > 0 &&
-        gate.destroyed == 12 && host_drain_reactor_and_is_idle(&host);
+        gate.destroyed == 12 && mal_blocking_work_retained_bytes() == baseline &&
+        host_drain_reactor_and_is_idle(&host);
     mal_host_free(&host);
     pthread_cond_destroy(&gate.ready);
     pthread_mutex_destroy(&gate.mutex);
@@ -1451,6 +1512,7 @@ int main(void) {
         {"DNS rejected posting preserves in-flight request ownership", dns_post_failure_preserves_request_ownership()},
         {"DNS shutdown joins queued/in-flight work and releases retains", dns_shutdown_joins_queued_and_inflight()},
         {"shutdown drains accepted posts, rejects new ownership, and idles", host_post_shutdown_and_idle()},
+        {"blocking payload reservations share a process cap across hosts", blocking_work_process_payload_capacity()},
         {"blocking jobs run concurrently and transfer payload ownership exactly once", blocking_work_concurrency_and_ownership()},
         {"blocking shutdown releases queued and running payloads exactly once", blocking_work_shutdown_ownership(false)},
         {"failed blocking posts retire operations and release payloads", blocking_work_shutdown_ownership(true)},

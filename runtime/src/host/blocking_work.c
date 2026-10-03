@@ -1,6 +1,7 @@
 #include "blocking_work.h"
 
 #include <pthread.h>
+#include <stdatomic.h>
 #include <stdlib.h>
 
 #include "executor.h"
@@ -15,7 +16,12 @@ typedef struct MalBlockingWorkJob {
     MalBlockingWorkRun run;
     MalHostTaskDestroy destroy;
     void *data;
+    MalBlockingWorkReservation reservation;
 } MalBlockingWorkJob;
+
+// Executor queue accounting ends at dequeue; this cap includes posted completions.
+#define MAL_BLOCKING_WORK_RETAINED_LIMIT ((usize) 512 * 1024 * 1024)
+static _Atomic usize g_blocking_work_retained_bytes;
 
 struct MalBlockingWorkState {
     MalHost *host;
@@ -25,6 +31,47 @@ struct MalBlockingWorkState {
     bool stopping;
 };
 
+bool mal_blocking_work_reserve(
+    MalHost *host, usize bytes, MalBlockingWorkReservation *reservation) {
+    if (host == nullptr || reservation == nullptr || reservation->active ||
+        !mal_host_posted_accepting(&host->posted_tasks) ||
+        bytes > MAL_BLOCKING_WORK_RETAINED_LIMIT) return false;
+    usize current = atomic_load_explicit(&g_blocking_work_retained_bytes, memory_order_relaxed);
+    do {
+        if (current > MAL_BLOCKING_WORK_RETAINED_LIMIT - bytes) return false;
+    } while (!atomic_compare_exchange_weak_explicit(
+        &g_blocking_work_retained_bytes, &current, current + bytes,
+        memory_order_relaxed, memory_order_relaxed));
+    *reservation = (MalBlockingWorkReservation) {.bytes = bytes, .active = true};
+    return true;
+}
+
+void mal_blocking_work_reservation_release(MalBlockingWorkReservation *reservation) {
+    if (reservation == nullptr || !reservation->active) return;
+    usize bytes = reservation->bytes;
+    *reservation = (MalBlockingWorkReservation) {0};
+    if (bytes != 0) {
+        usize previous = atomic_fetch_sub_explicit(
+            &g_blocking_work_retained_bytes, bytes, memory_order_relaxed);
+        if (previous < bytes) abort();
+    }
+}
+
+usize mal_blocking_work_retained_bytes(void) {
+    return atomic_load_explicit(&g_blocking_work_retained_bytes, memory_order_relaxed);
+}
+
+static void mal_blocking_work_job_destroy(void *data) {
+    MalBlockingWorkJob *job = data;
+    job->destroy(job->data);
+    mal_blocking_work_reservation_release(&job->reservation);
+    free(job);
+}
+
+void *mal_blocking_work_result_data(void *result) {
+    return result == nullptr ? nullptr : ((MalBlockingWorkJob *) result)->data;
+}
+
 static void mal_blocking_work_run(void *data) {
     MalBlockingWorkJob *job = data;
     MalBlockingWorkState *state = job->state;
@@ -33,23 +80,21 @@ static void mal_blocking_work_run(void *data) {
     pthread_mutex_unlock(&state->mutex);
     job->run(job->data);
     if (!mal_host_post_complete(state->host, job->operation,
-            MAL_HOST_TERMINAL_OK, job->data, job->destroy)) {
+            MAL_HOST_TERMINAL_OK, job, mal_blocking_work_job_destroy)) {
         pthread_mutex_lock(&state->mutex);
         job->next = state->failed;
         state->failed = job;
         pthread_mutex_unlock(&state->mutex);
-    } else {
-        free(job);
     }
     (void) mal_reactor_release_work(&state->host->reactor);
 }
 
 static void mal_blocking_work_discard(void *data) {
     MalBlockingWorkJob *job = data;
-    (void) mal_host_operation_cancel(&job->state->host->tasks, job->operation);
-    job->destroy(job->data);
-    (void) mal_reactor_release_work(&job->state->host->reactor);
-    free(job);
+    MalHost *host = job->state->host;
+    (void) mal_host_operation_cancel(&host->tasks, job->operation);
+    mal_blocking_work_job_destroy(job);
+    (void) mal_reactor_release_work(&host->reactor);
 }
 
 static bool mal_blocking_work_init(MalHost *host) {
@@ -72,9 +117,11 @@ static bool mal_blocking_work_init(MalHost *host) {
 
 bool mal_blocking_work_start(
     MalHost *host, MalBlockingWorkRun run, void *data,
-    MalHostTaskDestroy destroy, MalHostHandle *operation) {
+    MalHostTaskDestroy destroy, MalBlockingWorkReservation *reservation,
+    MalHostHandle *operation) {
     if (operation != nullptr) *operation = 0;
     if (host == nullptr || run == nullptr || destroy == nullptr || operation == nullptr ||
+        reservation == nullptr || !reservation->active ||
         !mal_host_posted_accepting(&host->posted_tasks)) return false;
     if (host->blocking_work.state == nullptr && !mal_blocking_work_init(host)) return false;
     MalBlockingWorkState *state = host->blocking_work.state;
@@ -95,6 +142,7 @@ bool mal_blocking_work_start(
     }
     *job = (MalBlockingWorkJob) {
         .state = state, .operation = *operation, .run = run, .data = data, .destroy = destroy,
+        .reservation = *reservation,
     };
     if (!mal_executor_submit(&state->executor, mal_blocking_work_run,
             mal_blocking_work_discard, job, sizeof(*job), 0)) {
@@ -106,6 +154,7 @@ bool mal_blocking_work_start(
         return false;
     }
     if (!mal_host_operation_activate(&host->tasks, *operation)) abort();
+    *reservation = (MalBlockingWorkReservation) {0};
     pthread_mutex_unlock(&state->mutex);
     return true;
 }
@@ -120,8 +169,7 @@ void mal_blocking_work_reap(MalBlockingWork *work) {
     while (failed != nullptr) {
         MalBlockingWorkJob *next = failed->next;
         (void) mal_host_operation_cancel(&state->host->tasks, failed->operation);
-        failed->destroy(failed->data);
-        free(failed);
+        mal_blocking_work_job_destroy(failed);
         failed = next;
     }
 }

@@ -470,7 +470,8 @@ static bool node_fs_open_flags(
 static bool node_fs_open_mode(MalVm *vm, MalValue value, u32 *mode);
 static bool node_fs_write_bytes(
     MalVm *vm, MalValue data, MalValue encoding,
-    const byte **bytes, usize *length, byte **owned);
+    const byte **bytes, usize *length, byte **owned,
+    MalBlockingWorkReservation *reservation);
 
 static bool node_fs_encoding_option(
     MalVm *vm, MalValue value, const char *operation, MalValue *encoding) {
@@ -672,7 +673,7 @@ static MalValue node_fs_write_file_impl(
     byte *owned;
     if (!node_fs_write_bytes(vm,
             argc >= 2 ? args[1] : mal_value_new_undefined(), encoding,
-            &bytes, &length, &owned)) {
+            &bytes, &length, &owned, nullptr)) {
         mal_gc_unroot(&encoding_root);
         free(path);
         return mal_value_new_undefined();
@@ -899,7 +900,8 @@ static MalValue node_fs_read_sync(
 
 static bool node_fs_write_bytes(
     MalVm *vm, MalValue data, MalValue encoding,
-    const byte **bytes, usize *length, byte **owned) {
+    const byte **bytes, usize *length, byte **owned,
+    MalBlockingWorkReservation *reservation) {
     *bytes = (const byte *) "";
     *length = 0;
     *owned = nullptr;
@@ -911,6 +913,11 @@ static bool node_fs_write_bytes(
             return false;
         }
         *length = span.length;
+        if (reservation != nullptr &&
+            !mal_blocking_work_reserve(mal_host(vm), span.length, reservation)) {
+            node_fs_throw_errno(vm, EAGAIN, "write", nullptr);
+            return false;
+        }
         const byte *data = mal_buffer_source_span_private(&span, owned);
         if (span.length > 0 && data == nullptr) {
             mal_vm_throw_allocation_error(vm);
@@ -926,6 +933,15 @@ static bool node_fs_write_bytes(
             mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
                 (const byte *) "write encoding must name a supported Buffer encoding");
             return false;
+        }
+        if (reservation != nullptr) {
+            usize units = mal_string_length(mal_value_to_string(data));
+            // All supported encoders allocate at most three bytes per UTF-16 unit plus padding.
+            if (units > (SIZE_MAX - 3) / 3 ||
+                !mal_blocking_work_reserve(mal_host(vm), units * 3 + 3, reservation)) {
+                node_fs_throw_errno(vm, EAGAIN, "write", nullptr);
+                return false;
+            }
         }
         *owned = mal_node_buffer_decode_string(vm, data, encoding, length);
         if (*owned == nullptr) {
@@ -1148,7 +1164,7 @@ static MalValue node_fs_write_sync(
     i64 position;
     if (mal_value_is_string(data)) {
         MalValue encoding = argc > 3 ? args[3] : mal_value_new_undefined();
-        if (!node_fs_write_bytes(vm, data, encoding, &bytes, &length, &owned)
+        if (!node_fs_write_bytes(vm, data, encoding, &bytes, &length, &owned, nullptr)
             || !node_fs_read_position(vm,
                 argc > 2 ? args[2] : mal_value_new_undefined(),
                 &has_position, &position)) {
@@ -2378,7 +2394,7 @@ static bool node_fs_async_drain(MalVm *vm) {
     MalRealm *saved_realm = vm->current_realm;
     mal_realm_switch(vm, state->realm);
 #endif
-    NodeFsWriteJob *job = task.data;
+    NodeFsWriteJob *job = mal_blocking_work_result_data(task.data);
     MalPromiseObject *promise = mal_value_to_promise_object(state->promise);
     if (task.result == MAL_HOST_TERMINAL_CANCELLED) {
         MalValue error = node_fs_errno_value(vm, ECANCELED, "write", nullptr);
@@ -2401,6 +2417,7 @@ static bool node_fs_async_drain(MalVm *vm) {
 
 static void node_fs_queue_write(
     MalVm *vm, MalValue promise_value, const MalValue *args, i32 argc, u32 flags) {
+    MalBlockingWorkReservation reservation = {0};
     NodeFsWriteJob *job = calloc(1, sizeof(*job));
     NodeFsAsyncWrite *state = calloc(1, sizeof(*state));
     if (job == nullptr || state == nullptr) {
@@ -2425,7 +2442,7 @@ static void node_fs_queue_write(
     byte *owned = nullptr;
     if (valid) valid = node_fs_write_bytes(vm,
         argc > 1 ? args[1] : mal_value_new_undefined(), encoding,
-        &bytes, &job->length, &owned);
+        &bytes, &job->length, &owned, &reservation);
     mal_gc_unroot(&encoding_root);
     if (!valid) goto failed;
     job->bytes = owned;
@@ -2444,7 +2461,7 @@ static void node_fs_queue_write(
     state->realm = vm->current_realm;
 #endif
     if (!mal_blocking_work_start(mal_host(vm), node_fs_write_job_run, job,
-            node_fs_write_job_free, &state->operation)) {
+            node_fs_write_job_free, &reservation, &state->operation)) {
         node_fs_throw_errno(vm, EAGAIN, "write", job->path);
         goto failed;
     }
@@ -2453,6 +2470,7 @@ static void node_fs_queue_write(
     return;
 failed:
     node_fs_write_job_free(job);
+    mal_blocking_work_reservation_release(&reservation);
     free(state);
 reject:
     {
@@ -2650,7 +2668,7 @@ static MalValue node_fs_write_task(
     int err = 0;
     if (!node_fs_fd(vm, roots[1], &fd)
         || !node_fs_write_bytes(vm, roots[2], mal_value_new_undefined(),
-            &bytes, &length, &owned)) {
+            &bytes, &length, &owned, nullptr)) {
         roots[3] = vm->completion.value;
         node_fs_clear_completion(vm);
         err = -1;

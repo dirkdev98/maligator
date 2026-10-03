@@ -97,5 +97,8 @@ tests/native/workers-closed-port.test.ts
 tests/native/node-worker-post-policy.test.ts
 tests/native/worker-transfer-failures.test.ts
 tests/native/workers.test.ts
+tests/native/worker-doc-examples.test.ts
+tests/native/worker-empty-transfers.test.ts
+tests/native/worker-ready-transfer.test.ts
 tests/native/guarded-math-number.test.ts
 tests/native/number-to-uint32-boundaries.test.ts
