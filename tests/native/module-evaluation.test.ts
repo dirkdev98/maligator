@@ -8,7 +8,7 @@ import {
 
 test("module evaluation shares initialization, async dependencies, cycles and failures in native and wire execution", () => {
 	const pair = buildBackendPairFromOneProgramImage({
-		fixture: "tests/fixtures/module-evaluation/entry.mjs",
+		fixture: "tests/local/module-evaluation/entry.mjs",
 		name: "module-evaluation",
 		mainFile: HOST_MAIN,
 	});
@@ -23,7 +23,7 @@ test.each(["ancestor-order", "sync-self", "deferred-entry", "for-await-entry"])(
 	"%s preserves module evaluation ordering in both backends",
 	(fixture) => {
 		const pair = buildBackendPairFromOneProgramImage({
-			fixture: `tests/fixtures/module-evaluation/${fixture}.mjs`,
+			fixture: `tests/local/module-evaluation/${fixture}.mjs`,
 			name: `module-evaluation-${fixture}`,
 			mainFile: HOST_MAIN,
 		});
@@ -38,7 +38,7 @@ test.each(["ancestor-order", "sync-self", "deferred-entry", "for-await-entry"])(
 
 test("a rejecting async dependency propagates while an earlier sibling remains pending", () => {
 	const pair = buildBackendPairFromOneProgramImage({
-		fixture: "tests/fixtures/module-evaluation/rejection-order.mjs",
+		fixture: "tests/local/module-evaluation/rejection-order.mjs",
 		name: "module-evaluation-rejection-order",
 		mainFile: HOST_MAIN,
 	});

@@ -17,7 +17,7 @@ it("adopts transferred stores once and retains ownership through failed decoding
 		const binary = buildNativeBinary({
 			fixture: "tests/local/fibertest_stub.js",
 			name: "clone-take",
-			mainFile: "tests/fixtures/shared-memory-atomics/clone-take.c",
+			mainFile: "tests/local/shared-memory-atomics/clone-take.c",
 			outDir,
 		});
 		expect(runToStdout(binary)).toBe("clone-take PASS\n");
@@ -35,7 +35,7 @@ describe("shared memory backing and waiter table", () => {
 		const binary = buildNativeBinary({
 			fixture: "tests/local/fibertest_stub.js",
 			name: "shared-memory-atomics",
-			mainFile: "tests/fixtures/shared-memory-atomics/main.c",
+			mainFile: "tests/local/shared-memory-atomics/main.c",
 			outDir,
 		});
 		invocation = resolveHarnessExecutionInvocation(binary);
@@ -112,7 +112,7 @@ describe("structured clone and shared typed-array semantics", () => {
 			const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-shared-memory-clone-"));
 			try {
 				const binary = buildNativeBinary({
-					fixture: "tests/fixtures/shared-memory-atomics/clone.js",
+					fixture: "tests/local/shared-memory-atomics/clone.js",
 					name: `shared-memory-clone-${compiled ? "native" : "interp"}`,
 					mainFile: HOST_MAIN,
 					outDir,
@@ -159,7 +159,7 @@ describe("structured clone data integrity", () => {
 			const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-clone-integrity-"));
 			try {
 				const binary = buildNativeBinary({
-					fixture: "tests/fixtures/shared-memory-atomics/clone-integrity.js",
+					fixture: "tests/local/shared-memory-atomics/clone-integrity.js",
 					name: `clone-integrity-${compiled ? "native" : "interp"}`,
 					mainFile: HOST_MAIN,
 					outDir,
@@ -198,7 +198,7 @@ describe("host BufferSource consumers over shared memory", () => {
 		const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-shared-buffer-consumers-"));
 		try {
 			const binary = buildNativeBinary({
-				fixture: "tests/fixtures/shared-memory-atomics/buffer-consumers.mjs",
+				fixture: "tests/local/shared-memory-atomics/buffer-consumers.mjs",
 				name: "shared-buffer-consumers",
 				mainFile: HOST_MAIN,
 				outDir,

@@ -130,14 +130,14 @@ it("streams verified HTTPS and cancels responses in both backends", async () => 
 		expect(await run(binary, "")).toContain("HTTPS STREAM ABORT PASS");
 });
 it("keeps TLS transport, response and abort state alive under GC stress", async () => {
-	expect(await run(binaries[0], "", true)).toContain("HTTPS STREAM ABORT PASS");
+	expect(await run(binaries[0]!, "", true)).toContain("HTTPS STREAM ABORT PASS");
 });
 it("rejects unknown roots, mismatched hostnames and malformed extra CA configuration", async () => {
 	for (const mode of ["trust", "hostname", "malformed"]) {
 		expect(await run(process.execPath, mode, false, [fixture])).toContain(
 			"HTTPS REJECTION PASS",
 		);
-		expect(await run(binaries[0], mode)).toContain("HTTPS REJECTION PASS");
+		expect(await run(binaries[0]!, mode)).toContain("HTTPS REJECTION PASS");
 	}
 });
 

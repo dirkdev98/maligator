@@ -35,7 +35,14 @@ export interface PlatformProperty extends PlatformDocumentation {
 	readonly type: PlatformType;
 }
 
-export type PlatformTypeDefinition = PlatformProperty;
+export type PlatformTypeDefinition = PlatformProperty &
+	(
+		| { readonly declaration?: "type" }
+		| {
+				readonly declaration: "interface";
+				readonly extends?: ReadonlyArray<string>;
+		  }
+	);
 
 export interface PlatformExport extends PlatformDocumentation {
 	readonly name: string;
@@ -57,6 +64,10 @@ interface PlatformModuleDefinition extends PlatformDocumentation {
 	readonly evaluation: "side-effect-free";
 	readonly declarationFile: string;
 	readonly internal?: true;
+	readonly typeImports?: ReadonlyArray<{
+		readonly namespace: string;
+		readonly from: string;
+	}>;
 	readonly types: ReadonlyArray<PlatformTypeDefinition>;
 	readonly exports: ReadonlyArray<PlatformExport>;
 }
@@ -397,7 +408,7 @@ const workerTypes: ReadonlyArray<PlatformTypeDefinition> = [
 	),
 	workerType(
 		"WorkerExit",
-		"{ readonly id: number; readonly code: number; readonly reason: 'completed' | 'terminated' | 'error'; readonly error?: Error }",
+		"{ readonly id: number; readonly code: number; readonly reason: 'completed' | 'terminated' | 'error'; readonly error?: unknown }",
 		"A terminal record published only after the native worker is joined and its slot is released.",
 	),
 	workerType(
@@ -410,11 +421,16 @@ const workerTypes: ReadonlyArray<PlatformTypeDefinition> = [
 		"{ maxQueuedMessages?: number; maxQueuedBytes?: number; maxMessageBytes?: number }",
 		"Each endpoint bounds its pending message count and bytes. Rejection leaves the sender's transferables unchanged.",
 	),
-	workerType(
-		"MessagePort<Send = unknown, Receive = unknown>",
-		"EventTarget & { postMessage(value: Send, transfer?: ReadonlyArray<Transferable>): void; onmessage: ((event: MessageEvent<Receive>) => void) | null; onmessageerror: ((event: MessageEvent<unknown>) => void) | null; start(): void; close(): void; ref(): MessagePort<Send, Receive>; unref(): MessagePort<Send, Receive>; hasRef(): boolean }",
-		"An ordered bidirectional endpoint with transactional transfer and bounded queues. Message listeners and values are owned by the receiving isolate.",
-	),
+	{
+		...workerType(
+			"MessagePort<Send = unknown, Receive = unknown>",
+			"{ postMessage(value: Send, transfer?: ReadonlyArray<Transferable>): void; onmessage: ((event: MessageEvent<Receive>) => void) | null; onmessageerror: ((event: MessageEvent<unknown>) => void) | null; start(): void; close(): void; ref(): MessagePort<Send, Receive>; unref(): MessagePort<Send, Receive>; hasRef(): boolean }",
+			"An ordered bidirectional endpoint with transactional transfer and bounded queues. Message listeners and values are owned by the receiving isolate.",
+		),
+		// An interface permits Transferable's recursion through this generic port contract.
+		declaration: "interface",
+		extends: ["EventTarget"],
+	},
 	workerType(
 		"MessageChannel",
 		"{ readonly port1: MessagePort; readonly port2: MessagePort }",
@@ -424,6 +440,39 @@ const workerTypes: ReadonlyArray<PlatformTypeDefinition> = [
 		"Worker<Send = unknown, Receive = unknown>",
 		"EventTarget & { readonly id: number; readonly ready: Promise<void>; readonly closed: Promise<WorkerExit>; readonly port: MessagePort<Send, Receive>; terminate(): Promise<WorkerExit>; ref(): Worker<Send, Receive>; unref(): Worker<Send, Receive>; hasRef(): boolean }",
 		"A long-lived isolated module and its parent communication port. Startup completes after module evaluation; shutdown completes after native thread reaping.",
+	),
+];
+
+const internalWorkerTypes: ReadonlyArray<PlatformTypeDefinition> = [
+	workerType(
+		"Transferable",
+		"Workers.Transferable",
+		"Values whose ownership moves when a message is admitted.",
+	),
+	workerType(
+		"WorkerExit",
+		"{ readonly id: number; readonly code: number; readonly reason: 'completed' | 'terminated' | 'error'; readonly error?: unknown }",
+		"A terminal record. The error is the uncaught value as thrown.",
+	),
+	workerType(
+		"WorkerErrorEvent",
+		"Event & { readonly error: unknown; readonly message: string }",
+		"A worker's uncaught value as thrown and its own string message, or the empty string.",
+	),
+	workerType(
+		"MessagePort<Send = unknown, Receive = unknown>",
+		"{ postMessage(value: Send, transfer?: ReadonlyArray<Transferable>): number | undefined; _discard(ticket: number): boolean; addEventListener(type: 'message', listener: (event: MessageEvent<Receive>) => void | Promise<void>, options?: AddEventListenerOptions | boolean): void; onmessage: ((event: MessageEvent<Receive>) => void) | null; onmessageerror: ((event: MessageEvent<unknown>) => void) | null; start(): void; close(): void; ref(): MessagePort<Send, Receive>; unref(): MessagePort<Send, Receive>; hasRef(): boolean } & EventTarget",
+		"A transactional endpoint. postMessage returns the admission ticket, or undefined when nothing was queued; _discard drops a posted message the peer has not received.",
+	),
+	workerType(
+		"MessageChannel<Forward = unknown, Backward = unknown>",
+		"{ readonly port1: MessagePort<Forward, Backward>; readonly port2: MessagePort<Backward, Forward> }",
+		"A channel whose first port sends Forward messages and receives Backward messages.",
+	),
+	workerType(
+		"Worker<Send = unknown, Receive = unknown>",
+		"{ readonly id: number; readonly ready: Promise<void>; readonly closed: Promise<WorkerExit>; readonly port: MessagePort<Send, Receive>; addEventListener(type: 'error', listener: (event: WorkerErrorEvent) => void, options?: AddEventListenerOptions | boolean): void; terminate(): Promise<WorkerExit>; ref(): Worker<Send, Receive>; unref(): Worker<Send, Receive>; hasRef(): boolean } & EventTarget",
+		"A source-API worker handle over a transactional parent port.",
 	),
 ];
 
@@ -455,7 +504,7 @@ export const PLATFORM_MODULES: ReadonlyArray<PlatformModule> = [
 		id: "maligator:workers",
 		stability: "experimental",
 		evaluation: "side-effect-free",
-		sourceFile: "workers/runtime.mjs",
+		sourceFile: "workers/runtime.ts",
 		declarationFile: "workers-api.d.ts",
 		description:
 			"Parallel computation and isolated event loops. Declared entries are bundled into the application image; workers do not compile or load source files at runtime. Native executors and GC helpers are shared across JavaScript isolates.",
@@ -534,23 +583,40 @@ export const PLATFORM_MODULES: ReadonlyArray<PlatformModule> = [
 		evaluation: "side-effect-free",
 		installer: "mal_host_install_maligator_internal_workers",
 		declarationFile: "workers-host-api.d.ts",
+		typeImports: [{ namespace: "Workers", from: "maligator:workers" }],
 		description:
 			"Toolchain-owned worker substrate used by the public source API and Node compatibility personality.",
-		types: [],
+		types: internalWorkerTypes,
 		exports: [
-			...[
+			workerExport(
 				"Worker",
+				"{ new <Send = unknown, Receive = unknown>(entry: { readonly href: string }, options?: Workers.WorkerOptions): Worker<Send, Receive> }",
+				"Start a declared isolated module with a transactional parent port.",
+			),
+			workerExport(
 				"MessageChannel",
+				"{ new <Forward = unknown, Backward = unknown>(options?: Workers.MessageChannelOptions): MessageChannel<Forward, Backward> }",
+				"Create two transactional endpoints.",
+			),
+			workerExport(
 				"MessagePort",
+				"{ readonly prototype: MessagePort }",
+				"The transactional port prototype.",
+			),
+			workerExport(
 				"receiveMessageOnPort",
+				"<Receive>(port: MessagePort<unknown, Receive>) => { readonly message: Receive } | undefined",
+				"Synchronously dequeue one pending message without running unrelated callbacks.",
+			),
+			workerExport(
 				"capabilities",
+				"typeof Workers.capabilities",
+				"Report the running host's worker facilities and capacity.",
+			),
+			workerExport(
 				"failCurrent",
-			].map((name) =>
-				workerExport(
-					name,
-					"(...args: Array<unknown>) => unknown",
-					"Internal host operation.",
-				),
+				"() => void",
+				"Fail the current worker after its outcome cannot be published.",
 			),
 			workerExport(
 				"createWorkerUrl",
@@ -558,9 +624,12 @@ export const PLATFORM_MODULES: ReadonlyArray<PlatformModule> = [
 				"Internal static entry declaration.",
 				true,
 			),
-			...["parentPort", "workerData"].map((name): PlatformExport => ({
+			...[
+				{ name: "parentPort", source: "MessagePort | null" },
+				{ name: "workerData", source: "unknown" },
+			].map(({ name, source }): PlatformExport => ({
 				name,
-				type: { kind: "signature", source: "unknown" },
+				type: { kind: "signature", source },
 				description: "Isolate-owned worker state.",
 				contract: {
 					phase: "runtime",
@@ -579,7 +648,7 @@ export const PLATFORM_MODULES: ReadonlyArray<PlatformModule> = [
 					identity: "module",
 					effects: NO_EFFECT_SUMMARY,
 					declaration: "worker-entry",
-					workerSource: "workers/pool-worker.mjs",
+					workerSource: "workers/pool-worker.ts",
 				},
 			},
 		],

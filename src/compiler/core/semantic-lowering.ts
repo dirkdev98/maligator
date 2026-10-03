@@ -30,10 +30,8 @@ import {
 	traverseEstree,
 } from "../frontend/estree-traversal.ts";
 import { linkModules } from "../frontend/linker.ts";
-import {
-	planModuleEvaluation,
-	type ModuleEvaluationPlan,
-} from "../frontend/module-evaluation-plan.ts";
+import { planModuleEvaluation } from "../frontend/module-evaluation-plan.ts";
+import type { ModuleEvaluationPlan } from "../frontend/module-evaluation-plan.ts";
 import { COMMONJS_BINDINGS } from "../frontend/semantic-analysis.ts";
 import { FUNCTION_UNIT_NODE_TYPES } from "../frontend/semantic-analysis.ts";
 import type {

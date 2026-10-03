@@ -15,7 +15,7 @@ describe("closed MessagePorts", () => {
 			const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-workers-closed-port-"));
 			try {
 				const binary = buildNativeBinary({
-					fixture: "tests/fixtures/workers-runtime/closed-port.mjs",
+					fixture: "tests/local/workers-runtime/closed-port.mjs",
 					name: `workers-closed-port-${compiled ? "native" : "interpreted"}`,
 					outDir,
 					compiled,

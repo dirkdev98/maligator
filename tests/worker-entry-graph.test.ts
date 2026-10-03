@@ -4,6 +4,7 @@ import * as path from "node:path";
 import { pathToFileURL } from "node:url";
 import { expect, test } from "vitest";
 import { resolveBuildConfig } from "../src/build-config.ts";
+import { stripCompactTypes } from "../src/compiler/frontend/compact-type-strip.ts";
 import { buildModuleGraph } from "../src/compiler/frontend/module-graph.ts";
 
 function fixture(files: Record<string, string>, run: (root: string) => void): void {
@@ -123,17 +124,18 @@ test("platform worker declarations through reexports add deferred roots and one 
 		(root) => {
 			const graph = buildModuleGraph(path.join(root, "main.mjs"), {
 				buildConfig: config,
+				stripTypes: stripCompactTypes,
 			});
 			const task = path.join(root, "task.mjs");
 			expect(graph.workerEntries?.some((entry) => entry.path === task)).toBe(true);
 			expect(graph.evaluationOrder).not.toContain(task);
 			const platformSources = [...graph.modules.values()].filter((record) =>
-				record.sourcePath?.endsWith("/workers/runtime.mjs"),
+				record.sourcePath?.endsWith("/workers/runtime.ts"),
 			);
 			expect(platformSources).toHaveLength(1);
 			expect(
 				graph.workerEntries?.some(
-					(entry) => entry.workerSource === "workers/pool-worker.mjs",
+					(entry) => entry.workerSource === "workers/pool-worker.ts",
 				),
 			).toBe(true);
 		},

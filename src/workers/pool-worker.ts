@@ -1,11 +1,17 @@
 import { parentPort, workerData, failCurrent } from "maligator:internal/workers";
-import { unwrapTransfer } from "./transfer.mjs";
+import type { MessagePort } from "maligator:internal/workers";
+import type { TaskContext, WorkerUrl } from "maligator:workers";
+import type { TaskRequest, TaskResponse } from "./runtime.ts";
+import { unwrapTransfer } from "./transfer.ts";
 
-const taskModule = await import(workerData.entry.href);
+// Only createPool launches this bootstrap and supplies its private request protocol.
+const data = workerData as { readonly entry: WorkerUrl };
+const port = parentPort as MessagePort<TaskResponse, TaskRequest>;
+const taskModule = (await import(data.entry.href)) as Record<string, unknown>;
 let active = false;
-let activeId;
+let activeId: number | undefined;
 
-parentPort.addEventListener("message", async (event) => {
+port.addEventListener("message", async (event) => {
 	const request = event.data;
 	if (active) throw new Error("Task executor received overlapping work");
 	active = true;
@@ -13,7 +19,7 @@ parentPort.addEventListener("message", async (event) => {
 	activeId = request.id;
 	const cancellation = Atomics.waitAsync(request.flag, 0, 0);
 	if (cancellation.async) {
-		cancellation.value.then(() => {
+		void cancellation.value.then(() => {
 			if (activeId === request.id) controller.abort();
 		});
 	}
@@ -30,19 +36,19 @@ parentPort.addEventListener("message", async (event) => {
 		if (typeof task !== "function")
 			throw new TypeError(`Worker export ${request.name} is not callable`);
 		const result = unwrapTransfer(
-			await task({ signal: controller.signal, throwIfCancelled }, ...request.args),
+			await (task as (context: TaskContext, ...args: Array<unknown>) => unknown)(
+				{ signal: controller.signal, throwIfCancelled },
+				...request.args,
+			),
 		);
 		throwIfCancelled();
-		parentPort.postMessage(
-			{ id: request.id, ok: true, value: result.value },
-			result.transfer,
-		);
+		port.postMessage({ id: request.id, ok: true, value: result.value }, result.transfer);
 	} catch (error) {
 		try {
-			parentPort.postMessage({ id: request.id, ok: false, value: error });
+			port.postMessage({ id: request.id, ok: false, value: error });
 		} catch {
 			try {
-				parentPort.postMessage({
+				port.postMessage({
 					id: request.id,
 					ok: false,
 					value: new Error("Worker task failed with an uncloneable value"),
@@ -58,4 +64,4 @@ parentPort.addEventListener("message", async (event) => {
 		activeId = undefined;
 	}
 });
-parentPort.start();
+port.start();

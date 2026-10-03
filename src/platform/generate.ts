@@ -1,6 +1,11 @@
 // TypeScript 7 exposes the CLI but not the compiler API used to render signatures.
 import ts from "typescript-v6-api";
-import type { PlatformDocumentation, PlatformModule, PlatformType } from "./catalog.ts";
+import type {
+	PlatformDocumentation,
+	PlatformModule,
+	PlatformType,
+	PlatformTypeDefinition,
+} from "./catalog.ts";
 
 function documentation(value: PlatformDocumentation, indent: string): string {
 	const lines: Array<string> = [];
@@ -46,14 +51,27 @@ export function renderPlatformType(type: PlatformType, indent = ""): string {
 	}
 }
 
+function renderTypeDeclaration(type: PlatformTypeDefinition, indent = ""): string {
+	const body = renderPlatformType(type.type, indent);
+	if (type.declaration === "interface") {
+		const heritage = type.extends?.length ? ` extends ${type.extends.join(", ")}` : "";
+		return `interface ${type.name}${heritage} ${body}`;
+	}
+	return `type ${type.name} = ${body};`;
+}
+
 export function generatePlatformDeclarations(platform: PlatformModule): string {
 	return [
 		"// Generated from src/platform/catalog.ts; edit the catalog and regenerate.",
 		documentation(platform, ""),
 		`declare module ${JSON.stringify(platform.id)} {`,
+		...(platform.typeImports ?? []).map(
+			(entry) =>
+				`\timport type * as ${entry.namespace} from ${JSON.stringify(entry.from)};`,
+		),
 		...platform.types.flatMap((type) => [
 			documentation(type, "\t"),
-			`\texport type ${type.name} = ${renderPlatformType(type.type, "\t")};`,
+			`\texport ${renderTypeDeclaration(type, "\t")}`,
 			"",
 		]),
 		...platform.exports.flatMap((entry) => [
@@ -177,7 +195,7 @@ export function generatePlatformReference(
 	const types = platform.types
 		.map((type) => {
 			const properties = propertyDocumentation(type.type, type.name);
-			const declaration = `<pre><code>${html(`type ${type.name} = ${renderPlatformType(type.type)};`)}</code></pre>`;
+			const declaration = `<pre><code>${html(renderTypeDeclaration(type))}</code></pre>`;
 			return `<section class="type-section"><h2 id="${html(type.name)}">${html(type.name)}</h2><p>${prose(type.description)}</p>${properties}${properties ? `<details class="declaration"><summary>TypeScript declaration</summary>${declaration}</details>` : declaration}</section>`;
 		})
 		.join("\n");

@@ -18,15 +18,32 @@ const errorName = (fn) => {
 		new Uint8Array(rab, 1),
 		new DataView(rab, 2),
 	]);
-	const before = [buffer.resizable, buffer.maxByteLength, buffer.byteLength, fixed.length, tracking.length, view.byteLength];
+	const before = [
+		buffer.resizable,
+		buffer.maxByteLength,
+		buffer.byteLength,
+		fixed.length,
+		tracking.length,
+		view.byteLength,
+	];
 	buffer.resize(8);
-	log("resizable-copy", [...before, fixed.length, tracking.length, view.byteLength, fixed.buffer === buffer, rab.byteLength]);
+	log("resizable-copy", [
+		...before,
+		fixed.length,
+		tracking.length,
+		view.byteLength,
+		fixed.buffer === buffer,
+		rab.byteLength,
+	]);
 }
 
 {
 	const rab = new ArrayBuffer(4, { maxByteLength: 32 });
 	new Uint8Array(rab).set([1, 2, 3, 4]);
-	const moved = structuredClone({ buffer: rab, tracking: new Uint8Array(rab) }, { transfer: [rab] });
+	const moved = structuredClone(
+		{ buffer: rab, tracking: new Uint8Array(rab) },
+		{ transfer: [rab] },
+	);
 	moved.buffer.resize(6);
 	log("resizable-transfer", [
 		rab.detached,
@@ -56,9 +73,17 @@ const errorName = (fn) => {
 
 {
 	const sab = new SharedArrayBuffer(4, { maxByteLength: 16 });
-	const [tracking, fixed] = structuredClone([new Uint8Array(sab), new Uint8Array(sab, 0, 2)]);
+	const [tracking, fixed] = structuredClone([
+		new Uint8Array(sab),
+		new Uint8Array(sab, 0, 2),
+	]);
 	sab.grow(8);
-	log("growable-views", [tracking.length, fixed.length, tracking.buffer.growable, tracking.buffer.maxByteLength]);
+	log("growable-views", [
+		tracking.length,
+		fixed.length,
+		tracking.buffer.growable,
+		tracking.buffer.maxByteLength,
+	]);
 }
 
 {
@@ -72,7 +97,12 @@ const errorName = (fn) => {
 		},
 	};
 	const name = errorName(() => structuredClone(value, { transfer: [listed, other] }));
-	log("getter-detach-transfer", [name, listed.detached, listed.byteLength, other.detached]);
+	log("getter-detach-transfer", [
+		name,
+		listed.detached,
+		listed.byteLength,
+		other.detached,
+	]);
 	const copied = new ArrayBuffer(4);
 	const late = {
 		get detach() {
@@ -81,7 +111,10 @@ const errorName = (fn) => {
 		},
 		copied,
 	};
-	log("getter-detach-copy", errorName(() => structuredClone(late)));
+	log(
+		"getter-detach-copy",
+		errorName(() => structuredClone(late)),
+	);
 	const listedFirst = new ArrayBuffer(4);
 	const swappedIn = new ArrayBuffer(8);
 	const transfer = [listedFirst];
@@ -93,7 +126,11 @@ const errorName = (fn) => {
 		swappedIn,
 	};
 	const swapped = structuredClone(swapping, { transfer });
-	log("transfer-list-snapshot", [listedFirst.detached, swappedIn.detached, swapped.swappedIn.byteLength]);
+	log("transfer-list-snapshot", [
+		listedFirst.detached,
+		swappedIn.detached,
+		swapped.swappedIn.byteLength,
+	]);
 }
 
 {
@@ -101,7 +138,13 @@ const errorName = (fn) => {
 	const error = new Error("outer", { cause: inner });
 	const clone = structuredClone(error);
 	const cause = Object.getOwnPropertyDescriptor(clone, "cause");
-	log("error-cause", [clone.cause instanceof TypeError, clone.cause.message, cause.enumerable, cause.writable, clone.cause !== inner]);
+	log("error-cause", [
+		clone.cause instanceof TypeError,
+		clone.cause.message,
+		cause.enumerable,
+		cause.writable,
+		clone.cause !== inner,
+	]);
 	const stack = Object.getOwnPropertyDescriptor(clone, "stack");
 	log("error-stack", [typeof clone.stack, clone.stack === error.stack, stack.enumerable]);
 	const self = new Error("self");
@@ -158,7 +201,12 @@ const errorName = (fn) => {
 {
 	const number = new Number(1);
 	number.extra = 1;
-	const [negativeZero, big, string, plain] = structuredClone([Object(-0), Object(-(2n ** 64n)), Object("é"), number]);
+	const [negativeZero, big, string, plain] = structuredClone([
+		Object(-0),
+		Object(-(2n ** 64n)),
+		Object("é"),
+		number,
+	]);
 	log("boxed-edge", [
 		Object.is(negativeZero.valueOf(), -0),
 		typeof big,
@@ -175,7 +223,15 @@ const errorName = (fn) => {
 	array.named = { deep: true };
 	Object.defineProperty(array, "hidden", { value: 1, enumerable: false });
 	const clone = structuredClone(array);
-	log("array-props", [clone.length, 0 in clone, clone[1], 3 in clone, clone.named.deep, "hidden" in clone, Object.keys(clone)]);
+	log("array-props", [
+		clone.length,
+		0 in clone,
+		clone[1],
+		3 in clone,
+		clone.named.deep,
+		"hidden" in clone,
+		Object.keys(clone),
+	]);
 	const growing = [1, 2];
 	Object.defineProperty(growing, 0, {
 		get() {

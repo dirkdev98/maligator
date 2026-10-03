@@ -9,6 +9,47 @@ import {
 	workerData,
 	poolEntry,
 } from "maligator:internal/workers";
+import type { Worker as NativeWorker } from "maligator:internal/workers";
+import type {
+	MapOptions,
+	PoolOptions,
+	RunOptions,
+	Transferable,
+	WorkerPool,
+	WorkerUrl,
+} from "maligator:workers";
+
+export interface TaskRequest {
+	readonly id: number;
+	readonly name: string;
+	readonly args: ReadonlyArray<unknown>;
+	readonly flag: Int32Array<SharedArrayBuffer>;
+	readonly transfer: ReadonlyArray<Transferable>;
+}
+
+export interface TaskResponse {
+	readonly id: number;
+	readonly ok: boolean;
+	readonly value: unknown;
+}
+
+interface WorkerSlot {
+	readonly handle: NativeWorker<TaskRequest, TaskResponse>;
+	job: Job | undefined;
+}
+
+interface Job {
+	readonly id: number;
+	readonly flag: Int32Array<SharedArrayBuffer>;
+	readonly resolve: (value: unknown) => void;
+	readonly reject: (reason: unknown) => void;
+	readonly signal: AbortSignal | undefined;
+	settled: boolean;
+	admitted: boolean;
+	worker: WorkerSlot | undefined;
+	abort: (() => void) | undefined;
+	ticket: number | undefined;
+}
 
 export {
 	Worker,
@@ -21,17 +62,29 @@ export {
 	workerData,
 };
 
-export { transfer } from "./transfer.mjs";
+export { transfer } from "./transfer.ts";
 
-const signalAborted = Object.getOwnPropertyDescriptor(
-	AbortSignal.prototype,
-	"aborted",
+const signalAborted = (
+	Object.getOwnPropertyDescriptor(AbortSignal.prototype, "aborted") as {
+		get: (this: AbortSignal) => boolean;
+	}
 ).get;
-const signalReason = Object.getOwnPropertyDescriptor(AbortSignal.prototype, "reason").get;
+const signalReason = (
+	Object.getOwnPropertyDescriptor(AbortSignal.prototype, "reason") as {
+		get: (this: AbortSignal) => unknown;
+	}
+).get;
+// oxlint-disable-next-line typescript/unbound-method -- Called with each submitted signal, bypassing overridable instance methods.
 const addAbortListener = EventTarget.prototype.addEventListener;
+// oxlint-disable-next-line typescript/unbound-method -- Called with each submitted signal, bypassing overridable instance methods.
 const removeAbortListener = EventTarget.prototype.removeEventListener;
 
-function positiveInteger(value, fallback, name, allowZero = false) {
+function positiveInteger(
+	value: number | undefined,
+	fallback: number,
+	name: string,
+	allowZero = false,
+): number {
 	const result = value === undefined ? fallback : value;
 	if (!Number.isSafeInteger(result) || result < (allowZero ? 0 : 1)) {
 		throw new RangeError(
@@ -41,20 +94,23 @@ function positiveInteger(value, fallback, name, allowZero = false) {
 	return result;
 }
 
-function namedError(name, message) {
+function namedError(name: string, message: string): Error {
 	const error = new Error(message);
 	error.name = name;
 	return error;
 }
 
-function abortReason(signal) {
+function abortReason(signal: AbortSignal): unknown {
 	const reason = signalReason.call(signal);
 	return reason === undefined
 		? namedError("AbortError", "Worker task was cancelled")
 		: reason;
 }
 
-export function createPool(entry, options = {}) {
+export function createPool<Module>(
+	entry: WorkerUrl<Module>,
+	options: PoolOptions = {},
+): WorkerPool<Module> {
 	const available = capabilities();
 	if (!available.threads)
 		throw namedError("NotSupportedError", "Workers require a threaded host");
@@ -75,16 +131,16 @@ export function createPool(entry, options = {}) {
 		maxQueuedBytes,
 		"maxMessageBytes",
 	);
-	const queue = new MessageChannel({
+	const queue = new MessageChannel<TaskRequest>({
 		maxQueuedMessages: maxQueuedTasks + size,
 		maxQueuedBytes,
 		maxMessageBytes,
 	});
 	queue.port1.unref();
 	queue.port2.unref();
-	const jobs = new Map();
-	const workers = [];
-	let state = "open";
+	const jobs = new Map<number, Job>();
+	const workers: Array<WorkerSlot> = [];
+	let state: "open" | "closing" | "terminating" | "closed" = "open";
 	let ready = false;
 	let nextId = 1;
 	let queued = 0;
@@ -94,9 +150,9 @@ export function createPool(entry, options = {}) {
 	let failed = 0;
 	let cancelled = 0;
 	let referenced = true;
-	let shutdown;
-	let shutdownResolve;
-	let shutdownReject;
+	let shutdown: Promise<void> | undefined;
+	let shutdownResolve: (() => void) | undefined;
+	let shutdownReject: ((reason: unknown) => void) | undefined;
 	let shuttingDown = false;
 
 	function updateReferences() {
@@ -106,12 +162,12 @@ export function createPool(entry, options = {}) {
 		}
 	}
 
-	function detachAbort(job) {
+	function detachAbort(job: Job): void {
 		if (job.signal !== undefined)
-			removeAbortListener.call(job.signal, "abort", job.abort);
+			removeAbortListener.call(job.signal, "abort", job.abort!);
 	}
 
-	function settle(job, ok, value) {
+	function settle(job: Job, ok: boolean, value: unknown): void {
 		if (job.settled) return;
 		job.settled = true;
 		detachAbort(job);
@@ -119,13 +175,13 @@ export function createPool(entry, options = {}) {
 		else job.reject(value);
 	}
 
-	function shutdownPromise() {
+	function shutdownPromise(): Promise<void> {
 		if (shutdown === undefined) {
-			shutdown = new Promise((resolve, reject) => {
+			shutdown = new Promise<void>((resolve, reject) => {
 				shutdownResolve = resolve;
 				shutdownReject = reject;
 			});
-			shutdown.catch(() => {});
+			void shutdown.catch(() => {});
 		}
 		return shutdown;
 	}
@@ -140,22 +196,22 @@ export function createPool(entry, options = {}) {
 		shuttingDown = true;
 		queue.port1.close();
 		queue.port2.close();
-		Promise.all(workers.map((worker) => worker.handle.terminate())).then(
+		void Promise.all(workers.map((worker) => worker.handle.terminate())).then(
 			() => {
 				state = "closed";
-				shutdownResolve();
+				shutdownResolve!();
 			},
-			(error) => {
+			(error: unknown) => {
 				state = "closed";
-				shutdownReject(error);
+				shutdownReject!(error);
 			},
 		);
 	}
 
-	function failPool(error) {
+	function failPool(error: unknown): void {
 		if (state === "closed" || state === "terminating") return;
 		state = "terminating";
-		shutdownPromise();
+		void shutdownPromise();
 		// A failed worker may have changed persistent module state; accepted tasks are never replayed.
 		for (const job of jobs.values()) {
 			Atomics.store(job.flag, 0, 1);
@@ -203,7 +259,7 @@ export function createPool(entry, options = {}) {
 		finishShutdown();
 	}
 
-	function onResponse(worker, response) {
+	function onResponse(worker: WorkerSlot, response: TaskResponse): void {
 		const job = worker.job;
 		if (job === undefined || response.id !== job.id) return;
 		worker.job = undefined;
@@ -219,14 +275,14 @@ export function createPool(entry, options = {}) {
 
 	try {
 		for (let index = 0; index < size; index++) {
-			const handle = new Worker(poolEntry, {
+			const handle = new Worker<TaskRequest, TaskResponse>(poolEntry, {
 				name: options.name === undefined ? undefined : `${options.name}-${index + 1}`,
 				data: { entry },
 				maxQueuedMessages: 2,
 				maxQueuedBytes,
 				maxMessageBytes,
 			});
-			const worker = { handle, job: undefined };
+			const worker: WorkerSlot = { handle, job: undefined };
 			workers.push(worker);
 			handle.port.addEventListener("message", (event) => onResponse(worker, event.data));
 			handle.port.start();
@@ -235,7 +291,7 @@ export function createPool(entry, options = {}) {
 					event.error ?? namedError("WorkerError", event.message ?? "Worker failed"),
 				),
 			);
-			handle.closed.then((exit) => {
+			void handle.closed.then((exit) => {
 				if (!shuttingDown && state !== "closed")
 					failPool(
 						exit.error ??
@@ -246,7 +302,7 @@ export function createPool(entry, options = {}) {
 	} catch (error) {
 		queue.port1.close();
 		queue.port2.close();
-		for (const worker of workers) worker.handle.terminate();
+		for (const worker of workers) void worker.handle.terminate();
 		throw error;
 	}
 
@@ -255,14 +311,18 @@ export function createPool(entry, options = {}) {
 			ready = true;
 			dispatch();
 		},
-		(error) => {
+		(error: unknown) => {
 			failPool(error);
 			throw error;
 		},
 	);
-	readyPromise.catch(() => {});
+	void readyPromise.catch(() => {});
 
-	function run(name, args = [], runOptions = {}) {
+	function run(
+		name: string,
+		args: ReadonlyArray<unknown> = [],
+		runOptions: RunOptions = {},
+	): Promise<unknown> {
 		if (state !== "open") throw namedError("InvalidStateError", "Worker pool is closed");
 		if (typeof name !== "string" || !Array.isArray(args))
 			throw new TypeError("run requires an export name and an argument array");
@@ -278,24 +338,28 @@ export function createPool(entry, options = {}) {
 		}
 	}
 
-	function submit(name, args, runOptions) {
+	function submit(
+		name: string,
+		args: ReadonlyArray<unknown>,
+		runOptions: RunOptions,
+	): Promise<unknown> {
 		const signal = runOptions.signal;
 		if (signal !== undefined && signalAborted.call(signal)) throw abortReason(signal);
 		const flag = new Int32Array(new SharedArrayBuffer(4));
 		if (nextId > Number.MAX_SAFE_INTEGER)
 			throw new RangeError("Worker task identifiers are exhausted");
 		const id = nextId++;
-		let resolve;
-		let reject;
-		const result = new Promise((resolveResult, rejectResult) => {
+		let resolve: ((value: unknown) => void) | undefined;
+		let reject: ((reason: unknown) => void) | undefined;
+		const result = new Promise<unknown>((resolveResult, rejectResult) => {
 			resolve = resolveResult;
 			reject = rejectResult;
 		});
-		const job = {
+		const job: Job = {
 			id,
 			flag,
-			resolve,
-			reject,
+			resolve: resolve!,
+			reject: reject!,
 			signal,
 			settled: false,
 			admitted: false,
@@ -309,9 +373,9 @@ export function createPool(entry, options = {}) {
 			Atomics.notify(flag, 0);
 			if (!job.admitted) return;
 			cancelled++;
-			settle(job, false, abortReason(signal));
+			settle(job, false, abortReason(signal!));
 			if (job.worker === undefined) {
-				queue.port1._discard(job.ticket);
+				queue.port1._discard(job.ticket!);
 				jobs.delete(id);
 				queued--;
 			}
@@ -343,17 +407,25 @@ export function createPool(entry, options = {}) {
 		return result;
 	}
 
-	async function* map(name, inputs, mapOptions = {}) {
+	async function* map(
+		name: string,
+		inputs: Iterable<ReadonlyArray<unknown>> | AsyncIterable<ReadonlyArray<unknown>>,
+		mapOptions: MapOptions<ReadonlyArray<unknown>> = {},
+	): AsyncGenerator<unknown, void, unknown> {
 		const window = positiveInteger(mapOptions.window, size, "window");
 		const controller = new AbortController();
 		const signal = mapOptions.signal;
-		const abort = () => controller.abort(signalReason.call(signal));
+		const abort = () => controller.abort(signalReason.call(signal!));
 		if (signal !== undefined) {
 			if (signalAborted.call(signal)) abort();
 			else addAbortListener.call(signal, "abort", abort, { once: true });
 		}
-		const iterator = inputs[Symbol.asyncIterator]?.() ?? inputs[Symbol.iterator]();
-		const pending = [];
+		const source = inputs as Partial<AsyncIterable<ReadonlyArray<unknown>>> &
+			Iterable<ReadonlyArray<unknown>>;
+		const iterator = (source[Symbol.asyncIterator]?.() ?? source[Symbol.iterator]()) as
+			| Iterator<ReadonlyArray<unknown>, unknown>
+			| AsyncIterator<ReadonlyArray<unknown>, unknown>;
+		const pending: Array<Promise<{ ok: boolean; value: unknown }>> = [];
 		let exhausted = false;
 		let inputIndex = 0;
 		try {
@@ -362,20 +434,22 @@ export function createPool(entry, options = {}) {
 					const item = await iterator.next();
 					exhausted = item.done === true;
 					if (exhausted) break;
-					const result = run(name, item.value, {
+					const result = run(name, item.value as ReadonlyArray<unknown>, {
 						signal: controller.signal,
-						transfer: mapOptions.transfer?.(item.value, inputIndex++) ?? [],
+						transfer:
+							mapOptions.transfer?.(item.value as ReadonlyArray<unknown>, inputIndex++) ??
+							[],
 					});
 					// Observe every rejection immediately while preserving ordered yields.
 					pending.push(
 						result.then(
 							(value) => ({ ok: true, value }),
-							(value) => ({ ok: false, value }),
+							(value: unknown) => ({ ok: false, value }),
 						),
 					);
 				}
 				if (pending.length > 0) {
-					const result = await pending.shift();
+					const result = await pending.shift()!;
 					if (!result.ok) throw result.value;
 					yield result.value;
 				}
@@ -389,8 +463,9 @@ export function createPool(entry, options = {}) {
 
 	return Object.freeze({
 		ready: readyPromise,
-		run,
-		map,
+		// The declared module type supplies the argument/result relationship erased by transport.
+		run: run as WorkerPool<Module>["run"],
+		map: map as WorkerPool<Module>["map"],
 		close() {
 			const result = shutdownPromise();
 			if (state === "open") state = "closing";

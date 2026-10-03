@@ -16,7 +16,7 @@ test.each([true, false])(
 		const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-node-post-policy-"));
 		try {
 			const binary = buildNativeBinary({
-				fixture: "tests/fixtures/node-worker-post-policy/main.mjs",
+				fixture: "tests/local/node-worker-post-policy/main.mjs",
 				name: `node-worker-post-policy-${compiled ? "compiled" : "interpreted"}`,
 				outDir,
 				compiled,

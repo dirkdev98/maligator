@@ -10,8 +10,8 @@ test.each([true, false])(
 		const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-module-gc-"));
 		try {
 			const binary = buildNativeBinary({
-				fixture: "tests/fixtures/module-evaluation-gc/entry.mjs",
-				mainFile: "tests/fixtures/module-evaluation-gc/main.c",
+				fixture: "tests/local/module-evaluation-gc/entry.mjs",
+				mainFile: "tests/local/module-evaluation-gc/main.c",
 				name: `module-evaluation-gc-${compiled ? "compiled" : "interpreted"}`,
 				outDir,
 				compiled,

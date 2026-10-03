@@ -180,6 +180,7 @@ export interface BuildModuleGraphOptions {
 	/**
 	 * Blank TypeScript syntax in place. Required when any `.ts`, `.mts`, or
 	 * `.cts` module is loaded; JavaScript-only graphs do not need a callback.
+	 * The callback receives the physical source path for catalog-backed modules.
 	 */
 	stripTypes?: (source: string, filePath: string) => string;
 
@@ -361,13 +362,13 @@ export function buildModuleGraph(
 			}
 			parseSource = `module.exports = JSON.parse(${JSON.stringify(source)});`;
 		}
-		if (TS_EXTENSIONS.has(path.extname(filePath))) {
+		if (TS_EXTENSIONS.has(path.extname(sourcePath ?? filePath))) {
 			if (!options.stripTypes) {
 				throw new Error(
 					`TypeScript module '${filePath}' requires BuildModuleGraphOptions.stripTypes`,
 				);
 			}
-			parseSource = options.stripTypes(parseSource, filePath);
+			parseSource = options.stripTypes(parseSource, sourcePath ?? filePath);
 		}
 		if (filePath === entry && options.entryPrelude !== undefined) {
 			const specifier = JSON.stringify(options.entryPrelude.specifier);
@@ -410,10 +411,10 @@ export function buildModuleGraph(
 			const catalogOwned =
 				lookupPlatformModule(filePath)?.kind === "source" ||
 				PLATFORM_MODULES.some(
-					(module) =>
-						(module.kind === "source" &&
-							path.resolve(sourceRoot, module.sourceFile) === filePath) ||
-						module.exports.some((entry) => {
+					(platformModule) =>
+						(platformModule.kind === "source" &&
+							path.resolve(sourceRoot, platformModule.sourceFile) === filePath) ||
+						platformModule.exports.some((entry) => {
 							const workerSource = (entry.contract as { workerSource?: string })
 								.workerSource;
 							return (

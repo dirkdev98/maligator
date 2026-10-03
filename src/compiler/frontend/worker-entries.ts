@@ -113,7 +113,7 @@ function importedIdentity(
 const moduleParents = new WeakMap<ModuleRecord, ReadonlyMap<ESTree.Node, ESTree.Node>>();
 
 function parentsFor(record: ModuleRecord): ReadonlyMap<ESTree.Node, ESTree.Node> {
-	let parents = moduleParents.get(record);
+	const parents = moduleParents.get(record);
 	if (parents !== undefined) return parents;
 	const result = new Map<ESTree.Node, ESTree.Node>();
 	traverseEstree(record.parsed.ast, (node, { parent }) => {

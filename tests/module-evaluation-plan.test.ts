@@ -19,7 +19,7 @@ test("async evaluation propagates through a static cycle and its parents but not
 test.each(["development", "full"] as const)(
 	"async module graphs and CommonJS candidates survive %s verification and wire roundtrip",
 	(optimization) => {
-		const image = compileEntrypoint("tests/fixtures/module-evaluation/entry.mjs", {
+		const image = compileEntrypoint("tests/local/module-evaluation/entry.mjs", {
 			optimization,
 			coreVerification: "per-pass",
 		});
@@ -39,7 +39,7 @@ test.each([
 ] as const)(
 	"%s retains its startup completion contract through Core and wire",
 	(fixture, asynchronous) => {
-		const image = compileEntrypoint(`tests/fixtures/module-evaluation/${fixture}.mjs`, {
+		const image = compileEntrypoint(`tests/local/module-evaluation/${fixture}.mjs`, {
 			optimization: "development",
 			coreVerification: "per-pass",
 		});

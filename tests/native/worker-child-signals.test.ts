@@ -9,7 +9,7 @@ for (const compiled of [true, false]) {
 		const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-worker-child-signals-"));
 		try {
 			const binary = buildNativeBinary({
-				fixture: "tests/fixtures/worker-child-signals/main.mjs",
+				fixture: "tests/local/worker-child-signals/main.mjs",
 				name: `worker-child-signals-${compiled ? "native" : "interpreted"}`,
 				outDir,
 				compiled,

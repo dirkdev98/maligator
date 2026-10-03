@@ -772,7 +772,7 @@
 					<div class="property" id="WorkerExit.error.3">
 						<dt>
 							<a class="member-signature" href="#WorkerExit.error.3"
-								><code>readonly error?: Error</code></a
+								><code>readonly error?: unknown</code></a
 							>
 						</dt>
 						<dd></dd>
@@ -780,7 +780,7 @@
 				</dl>
 				<details class="declaration">
 					<summary>TypeScript declaration</summary>
-					<pre><code>type WorkerExit = { readonly id: number; readonly code: number; readonly reason: 'completed' | 'terminated' | 'error'; readonly error?: Error };</code></pre>
+					<pre><code>type WorkerExit = { readonly id: number; readonly code: number; readonly reason: 'completed' | 'terminated' | 'error'; readonly error?: unknown };</code></pre>
 				</details>
 			</section>
 			<section class="type-section">
@@ -891,7 +891,125 @@
 					An ordered bidirectional endpoint with transactional transfer and bounded
 					queues. Message listeners and values are owned by the receiving isolate.
 				</p>
-				<pre><code>type MessagePort&lt;Send = unknown, Receive = unknown&gt; = EventTarget &amp; { postMessage(value: Send, transfer?: ReadonlyArray&lt;Transferable&gt;): void; onmessage: ((event: MessageEvent&lt;Receive&gt;) =&gt; void) | null; onmessageerror: ((event: MessageEvent&lt;unknown&gt;) =&gt; void) | null; start(): void; close(): void; ref(): MessagePort&lt;Send, Receive&gt;; unref(): MessagePort&lt;Send, Receive&gt;; hasRef(): boolean };</code></pre>
+				<dl class="properties">
+					<div
+						class="property"
+						id="MessagePort&lt;Send = unknown, Receive = unknown&gt;.postMessage.0"
+					>
+						<dt>
+							<a
+								class="member-signature"
+								href="#MessagePort&lt;Send = unknown, Receive = unknown&gt;.postMessage.0"
+								><code
+									>postMessage(value: Send, transfer?: ReadonlyArray&lt;Transferable&gt;):
+									void</code
+								></a
+							>
+						</dt>
+						<dd></dd>
+					</div>
+					<div
+						class="property"
+						id="MessagePort&lt;Send = unknown, Receive = unknown&gt;.onmessage.1"
+					>
+						<dt>
+							<a
+								class="member-signature"
+								href="#MessagePort&lt;Send = unknown, Receive = unknown&gt;.onmessage.1"
+								><code
+									>onmessage: ((event: MessageEvent&lt;Receive&gt;) =&gt; void) |
+									null</code
+								></a
+							>
+						</dt>
+						<dd></dd>
+					</div>
+					<div
+						class="property"
+						id="MessagePort&lt;Send = unknown, Receive = unknown&gt;.onmessageerror.2"
+					>
+						<dt>
+							<a
+								class="member-signature"
+								href="#MessagePort&lt;Send = unknown, Receive = unknown&gt;.onmessageerror.2"
+								><code
+									>onmessageerror: ((event: MessageEvent&lt;unknown&gt;) =&gt; void) |
+									null</code
+								></a
+							>
+						</dt>
+						<dd></dd>
+					</div>
+					<div
+						class="property"
+						id="MessagePort&lt;Send = unknown, Receive = unknown&gt;.start.3"
+					>
+						<dt>
+							<a
+								class="member-signature"
+								href="#MessagePort&lt;Send = unknown, Receive = unknown&gt;.start.3"
+								><code>start(): void</code></a
+							>
+						</dt>
+						<dd></dd>
+					</div>
+					<div
+						class="property"
+						id="MessagePort&lt;Send = unknown, Receive = unknown&gt;.close.4"
+					>
+						<dt>
+							<a
+								class="member-signature"
+								href="#MessagePort&lt;Send = unknown, Receive = unknown&gt;.close.4"
+								><code>close(): void</code></a
+							>
+						</dt>
+						<dd></dd>
+					</div>
+					<div
+						class="property"
+						id="MessagePort&lt;Send = unknown, Receive = unknown&gt;.ref.5"
+					>
+						<dt>
+							<a
+								class="member-signature"
+								href="#MessagePort&lt;Send = unknown, Receive = unknown&gt;.ref.5"
+								><code>ref(): MessagePort&lt;Send, Receive&gt;</code></a
+							>
+						</dt>
+						<dd></dd>
+					</div>
+					<div
+						class="property"
+						id="MessagePort&lt;Send = unknown, Receive = unknown&gt;.unref.6"
+					>
+						<dt>
+							<a
+								class="member-signature"
+								href="#MessagePort&lt;Send = unknown, Receive = unknown&gt;.unref.6"
+								><code>unref(): MessagePort&lt;Send, Receive&gt;</code></a
+							>
+						</dt>
+						<dd></dd>
+					</div>
+					<div
+						class="property"
+						id="MessagePort&lt;Send = unknown, Receive = unknown&gt;.hasRef.7"
+					>
+						<dt>
+							<a
+								class="member-signature"
+								href="#MessagePort&lt;Send = unknown, Receive = unknown&gt;.hasRef.7"
+								><code>hasRef(): boolean</code></a
+							>
+						</dt>
+						<dd></dd>
+					</div>
+				</dl>
+				<details class="declaration">
+					<summary>TypeScript declaration</summary>
+					<pre><code>interface MessagePort&lt;Send = unknown, Receive = unknown&gt; extends EventTarget { postMessage(value: Send, transfer?: ReadonlyArray&lt;Transferable&gt;): void; onmessage: ((event: MessageEvent&lt;Receive&gt;) =&gt; void) | null; onmessageerror: ((event: MessageEvent&lt;unknown&gt;) =&gt; void) | null; start(): void; close(): void; ref(): MessagePort&lt;Send, Receive&gt;; unref(): MessagePort&lt;Send, Receive&gt;; hasRef(): boolean }</code></pre>
+				</details>
 			</section>
 			<section class="type-section">
 				<h2 id="MessageChannel">MessageChannel</h2>

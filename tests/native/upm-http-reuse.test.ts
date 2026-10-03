@@ -163,14 +163,14 @@ async function run(binary: string, secure: boolean, stress = false, ttl = false)
 }
 
 it("reuses clean HTTP and verified TLS exchanges without retaining idle event-loop work", async () => {
-	for (const secure of [false, true]) await run(binaries[0], secure);
+	for (const secure of [false, true]) await run(binaries[0]!, secure);
 });
 it("preserves the transport lifecycle under GC stress and interpreted execution", async () => {
-	for (const secure of [false, true]) await run(binaries[0], secure, true);
-	await run(binaries[1], false);
+	for (const secure of [false, true]) await run(binaries[0]!, secure, true);
+	await run(binaries[1]!, false);
 });
 it("expires idle transports before checkout", async () => {
-	await run(binaries[0], false, false, true);
+	await run(binaries[0]!, false, false, true);
 });
 it("rejects partial ciphertext records and isolates exact verified TLS policies", () => {
 	assertResultPass(runToStdout(recordBinary));

@@ -366,6 +366,52 @@ export const value: Value = { name: "compact" };
 	expect(graph.modules.size).toBe(2);
 });
 
+test("strips catalog source types by physical path while preserving virtual module identity", () => {
+	write("typed-platform/workers/package.json", JSON.stringify({ type: "module" }));
+	write(
+		"typed-platform-entry.mjs",
+		`import { createPool } from "maligator:workers"; createPool({ value: 41 });`,
+	);
+	write(
+		"typed-platform/workers/runtime.ts",
+		`import type { PoolOptions } from "./types-only.ts";
+import { increment } from "./helper.ts";
+export function createPool(options: PoolOptions): number {
+	return increment(options.value);
+}
+`,
+	);
+	write(
+		"typed-platform/workers/helper.ts",
+		`export function increment(value: number): number { return value + 1; }`,
+	);
+	const entry = path.join(root, "typed-platform-entry.mjs");
+	const platformSourceRoot = path.join(root, "typed-platform");
+	const runtimePath = path.join(platformSourceRoot, "workers/runtime.ts");
+	const helperPath = path.join(platformSourceRoot, "workers/helper.ts");
+	expect(() => buildModuleGraph(entry, { platformSourceRoot })).toThrow(
+		/TypeScript module 'maligator:workers' requires BuildModuleGraphOptions\.stripTypes/,
+	);
+	const stripped: Array<string> = [];
+	const graph = buildModuleGraph(entry, {
+		platformSourceRoot,
+		stripTypes(source, filePath) {
+			stripped.push(filePath);
+			return stripCompactTypes(source, filePath);
+		},
+	});
+	expect(stripped).toEqual([runtimePath, helperPath]);
+	expect(graph.modules.get("maligator:workers")).toMatchObject({
+		path: "maligator:workers",
+		sourcePath: runtimePath,
+		dependencies: [
+			{ kind: "import", specifier: "./helper.ts", resolvedPath: helperPath },
+		],
+	});
+	expect(graph.modules.has(helperPath)).toBe(true);
+	expect(graph.modules.size).toBe(3);
+});
+
 test("records dependency specifiers, kinds, and resolutions", () => {
 	const graph = buildModuleGraph(path.join(root, "entry.mjs"));
 
@@ -918,8 +964,8 @@ test("links optional child-process backends while rejecting unknown unused impor
 
 test("links unmodified Tinypool's thread bootstrap and optional backend imports", () => {
 	const program = loadEntrypointAndRunSemanticAnalysis(
-		path.resolve("tests/fixtures/tinypool-workers/main.mjs"),
-		{ buildConfig: nodeOn },
+		path.resolve("tests/local/tinypool-workers/main.mjs"),
+		{ buildConfig: nodeOn, stripTypes: stripCompactTypes },
 	);
 	expect(() => linkModules(program)).not.toThrow();
 	expect(

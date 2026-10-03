@@ -37,10 +37,8 @@ import {
 	compileEntrypoint,
 	compileEntrypointToBuffer,
 } from "./compiler/pipeline/compile-program.ts";
-import {
-	compileWorkerImages,
-	type CompiledWorkerImage,
-} from "./compiler/pipeline/compile-worker-images.ts";
+import { compileWorkerImages } from "./compiler/pipeline/compile-worker-images.ts";
+import type { CompiledWorkerImage } from "./compiler/pipeline/compile-worker-images.ts";
 import { compilerProgramFactsFromConfig } from "./compiler/shared/compiler-facts.ts";
 import {
 	emitProgramImage,

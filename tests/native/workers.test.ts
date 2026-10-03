@@ -16,7 +16,7 @@ for (const compiled of [true, false]) {
 		const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-workers-"));
 		try {
 			const binary = buildNativeBinary({
-				fixture: "tests/fixtures/workers/main.mjs",
+				fixture: "tests/local/workers/main.mjs",
 				name: `workers-${compiled ? "native" : "interpreted"}`,
 				outDir,
 				compiled,
@@ -36,7 +36,7 @@ for (const compiled of [true, false]) {
 		const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-tinypool-"));
 		try {
 			const binary = buildNativeBinary({
-				fixture: "tests/fixtures/tinypool-workers/main.mjs",
+				fixture: "tests/local/tinypool-workers/main.mjs",
 				name: `tinypool-workers-${compiled ? "native" : "interpreted"}`,
 				outDir,
 				compiled,

@@ -23,18 +23,18 @@ describe("@maligator/cli public TypeScript API", () => {
 			path.resolve(import.meta.dirname, "../src/public-api.d.ts"),
 			path.join(packageDirectory, "index.d.ts"),
 		);
-		copyFileSync(
-			path.resolve(import.meta.dirname, "../src/test-api.d.ts"),
-			path.join(packageDirectory, "test-api.d.ts"),
-		);
-		copyFileSync(
-			path.resolve(import.meta.dirname, "../src/platform-api.d.ts"),
-			path.join(packageDirectory, "platform-api.d.ts"),
-		);
-		copyFileSync(
-			path.resolve(import.meta.dirname, "../src/process-api.d.ts"),
-			path.join(packageDirectory, "process-api.d.ts"),
-		);
+		for (const declaration of [
+			"test-api.d.ts",
+			"platform-api.d.ts",
+			"process-api.d.ts",
+			"workers-api.d.ts",
+			"workers-host-api.d.ts",
+		]) {
+			copyFileSync(
+				path.resolve(import.meta.dirname, "../src", declaration),
+				path.join(packageDirectory, declaration),
+			);
+		}
 		copyFileSync(
 			path.resolve(import.meta.dirname, "../npm/cli/index.js"),
 			path.join(packageDirectory, "index.js"),
@@ -109,6 +109,31 @@ import {
 	test,
 } from "maligator:test";
 import { execution } from "maligator:process";
+import { createPool, createWorkerUrl, transfer, Worker } from "maligator:workers";
+import type { TaskContext, TransferResult } from "maligator:workers";
+
+type Jobs = {
+	sum(context: TaskContext, left: number, right: number): number;
+	bytes(context: TaskContext): Promise<TransferResult<Uint8Array>>;
+	constant: number;
+};
+const workerEntry = createWorkerUrl<Jobs>("./jobs.ts", import.meta.url);
+const pool = createPool(workerEntry, { size: 2, maxQueuedTasks: 8 });
+const sum: Promise<number> = pool.run("sum", [1, 2]);
+const bytes: Promise<Uint8Array> = pool.run("bytes", []);
+const ordered: AsyncIterable<number> = pool.map("sum", [[1, 2], [3, 4]]);
+const envelope: TransferResult<Uint8Array> = transfer(new Uint8Array(4), []);
+// @ts-expect-error Pool tasks require callable context-first exports.
+pool.run("constant", []);
+// @ts-expect-error The declared task determines its argument tuple.
+pool.run("sum", ["1", 2]);
+// @ts-expect-error A transferred result unwraps its value in the returned promise.
+const wrongResult: Promise<string> = pool.run("bytes", []);
+const worker = new Worker<number, string>(workerEntry);
+worker.port.postMessage(3);
+// @ts-expect-error The send side retains its declared message type.
+worker.port.postMessage("3");
+void [sum, bytes, ordered, envelope, wrongResult];
 
 const command: "build" | "run" | "dev" | "test" = execution.command;
 const compiled: boolean = execution.compiled;

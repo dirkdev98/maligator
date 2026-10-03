@@ -147,7 +147,7 @@ declare module "maligator:workers" {
 		readonly id: number;
 		readonly code: number;
 		readonly reason: "completed" | "terminated" | "error";
-		readonly error?: Error;
+		readonly error?: unknown;
 	};
 
 	/**
@@ -177,7 +177,7 @@ declare module "maligator:workers" {
 	 * An ordered bidirectional endpoint with transactional transfer and bounded queues.
 	 * Message listeners and values are owned by the receiving isolate.
 	 */
-	export type MessagePort<Send = unknown, Receive = unknown> = EventTarget & {
+	export interface MessagePort<Send = unknown, Receive = unknown> extends EventTarget {
 		postMessage(value: Send, transfer?: ReadonlyArray<Transferable>): void;
 		onmessage: ((event: MessageEvent<Receive>) => void) | null;
 		onmessageerror: ((event: MessageEvent<unknown>) => void) | null;
@@ -186,7 +186,7 @@ declare module "maligator:workers" {
 		ref(): MessagePort<Send, Receive>;
 		unref(): MessagePort<Send, Receive>;
 		hasRef(): boolean;
-	};
+	}
 
 	/**
 	 * A standalone channel whose endpoints may be transferred to workers.

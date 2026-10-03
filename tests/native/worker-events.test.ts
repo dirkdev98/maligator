@@ -14,7 +14,7 @@ for (const compiled of [true, false]) {
 		const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-worker-events-"));
 		try {
 			const binary = buildNativeBinary({
-				fixture: "tests/fixtures/worker-events/main.mjs",
+				fixture: "tests/local/worker-events/main.mjs",
 				name: `worker-events-${compiled ? "native" : "interpreted"}`,
 				mainFile: HOST_MAIN,
 				outDir,

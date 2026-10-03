@@ -20,10 +20,8 @@ import {
 	collectDisallowedRegexpUsage,
 } from "../compiler/frontend/semantic-analysis.ts";
 import { compileSemanticProgramToProgramImage } from "../compiler/pipeline/compile-core.ts";
-import {
-	compileWorkerImages,
-	type CompiledWorkerImage,
-} from "../compiler/pipeline/compile-worker-images.ts";
+import { compileWorkerImages } from "../compiler/pipeline/compile-worker-images.ts";
+import type { CompiledWorkerImage } from "../compiler/pipeline/compile-worker-images.ts";
 import {
 	serializeRuntimeImage,
 	WIRE_VERSION,
@@ -44,8 +42,8 @@ import {
 	cacheWorkerImages,
 	restoreWorkerImages,
 	workerImageArtifactsUnchanged,
-	type WorkerImageArtifact,
 } from "../worker-image-cache.ts";
+import type { WorkerImageArtifact } from "../worker-image-cache.ts";
 
 const TEST_CACHE_SCHEMA = 2;
 const TEST_CACHE_DIRECTORY = path.join(maligatorCacheDirectory(), "test");

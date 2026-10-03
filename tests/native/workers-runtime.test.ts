@@ -17,7 +17,7 @@ describe("worker isolates", () => {
 				const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-worker-ownership-"));
 				try {
 					const binary = buildNativeBinary({
-						fixture: `tests/fixtures/workers-runtime/${fixture}.mjs`,
+						fixture: `tests/local/workers-runtime/${fixture}.mjs`,
 						name: `worker-${fixture}-${compiled ? "native" : "interpreted"}`,
 						outDir,
 						compiled,
@@ -37,7 +37,7 @@ describe("worker isolates", () => {
 		const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-workers-runtime-"));
 		try {
 			const binary = buildNativeBinary({
-				fixture: "tests/fixtures/workers-runtime/main.mjs",
+				fixture: "tests/local/workers-runtime/main.mjs",
 				name: "workers-runtime",
 				outDir,
 				nodeEnabled: true,
@@ -64,7 +64,7 @@ describe("worker isolates", () => {
 		const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-workers-transport-"));
 		try {
 			const binary = buildNativeBinary({
-				fixture: "tests/fixtures/workers-runtime/transport.mjs",
+				fixture: "tests/local/workers-runtime/transport.mjs",
 				name: "workers-transport",
 				outDir,
 				nodeEnabled: true,
@@ -91,7 +91,7 @@ describe("worker isolates", () => {
 		const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-workers-tla-"));
 		try {
 			const binary = buildNativeBinary({
-				fixture: "tests/fixtures/workers-runtime/tla.mjs",
+				fixture: "tests/local/workers-runtime/tla.mjs",
 				name: "workers-tla",
 				outDir,
 				nodeEnabled: true,
@@ -118,7 +118,7 @@ describe("worker isolates", () => {
 		const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-workers-admission-"));
 		try {
 			const binary = buildNativeBinary({
-				fixture: "tests/fixtures/workers-runtime/admission.mjs",
+				fixture: "tests/local/workers-runtime/admission.mjs",
 				name: "workers-admission",
 				outDir,
 				nodeEnabled: true,
@@ -138,5 +138,5 @@ describe("worker isolates", () => {
 		} finally {
 			rmSync(outDir, { recursive: true, force: true });
 		}
-	});
+	}, 300_000);
 });

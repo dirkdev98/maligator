@@ -5,15 +5,30 @@ const log = (label, value) => out.push(`${label}: ${JSON.stringify(value)}`);
 {
 	const buffer = new ArrayBuffer(8);
 	new Uint8Array(buffer).set([1, 2, 3, 4, 5, 6, 7, 8]);
-	const [view, bytes] = structuredClone([new DataView(buffer, 2, 4), new Uint8Array(buffer)]);
-	log("dataview", [view instanceof DataView, view.byteOffset, view.byteLength, view.getUint8(0), view.buffer === bytes.buffer]);
+	const [view, bytes] = structuredClone([
+		new DataView(buffer, 2, 4),
+		new Uint8Array(buffer),
+	]);
+	log("dataview", [
+		view instanceof DataView,
+		view.byteOffset,
+		view.byteLength,
+		view.getUint8(0),
+		view.buffer === bytes.buffer,
+	]);
 }
 
 {
 	const re = /a+b/giu;
 	re.lastIndex = 3;
 	const clone = structuredClone(re);
-	log("regexp", [clone instanceof RegExp, clone.source, clone.flags, clone.lastIndex, clone !== re]);
+	log("regexp", [
+		clone instanceof RegExp,
+		clone.source,
+		clone.flags,
+		clone.lastIndex,
+		clone !== re,
+	]);
 }
 
 {
@@ -33,14 +48,31 @@ const log = (label, value) => out.push(`${label}: ${JSON.stringify(value)}`);
 	const custom = new Error("x");
 	custom.name = "CustomError";
 	const customClone = structuredClone(custom);
-	log("error-name", [Object.getPrototypeOf(customClone) === Error.prototype, customClone.name, customClone.message]);
+	log("error-name", [
+		Object.getPrototypeOf(customClone) === Error.prototype,
+		customClone.name,
+		customClone.message,
+	]);
 	const silent = new TypeError();
 	log("error-no-message", Object.hasOwn(structuredClone(silent), "message"));
 }
 
 {
-	const [n, s, b, big] = structuredClone([new Number(3), new String("ab"), new Boolean(false), Object(5n)]);
-	log("boxed", [typeof n, n.valueOf(), s.valueOf(), s.length, b.valueOf(), typeof big, big.valueOf() === 5n]);
+	const [n, s, b, big] = structuredClone([
+		new Number(3),
+		new String("ab"),
+		new Boolean(false),
+		Object(5n),
+	]);
+	log("boxed", [
+		typeof n,
+		n.valueOf(),
+		s.valueOf(),
+		s.length,
+		b.valueOf(),
+		typeof big,
+		big.valueOf() === 5n,
+	]);
 	try {
 		structuredClone(Object(Symbol("s")));
 		log("boxed-symbol", "cloned");
@@ -73,7 +105,10 @@ const log = (label, value) => out.push(`${label}: ${JSON.stringify(value)}`);
 	delete Object.prototype.trap;
 	log("create-data-property", [Object.hasOwn(created, "trap"), created.trap]);
 	const proto = structuredClone(JSON.parse('{"__proto__": 5}'));
-	log("proto-key", [Object.hasOwn(proto, "__proto__"), Object.getPrototypeOf(proto) === Object.prototype]);
+	log("proto-key", [
+		Object.hasOwn(proto, "__proto__"),
+		Object.getPrototypeOf(proto) === Object.prototype,
+	]);
 }
 
 {
@@ -105,7 +140,12 @@ const log = (label, value) => out.push(`${label}: ${JSON.stringify(value)}`);
 	bytes.fill(0);
 	bytes.set([3, 1, 2]);
 	bytes.subarray(0, 3).sort();
-	log("sab-bytes", [Array.from(bytes.subarray(0, 4)), bytes.indexOf(2), bytes.lastIndexOf(0), bytes.includes(3)]);
+	log("sab-bytes", [
+		Array.from(bytes.subarray(0, 4)),
+		bytes.indexOf(2),
+		bytes.lastIndexOf(0),
+		bytes.includes(3),
+	]);
 	const data = new DataView(alias);
 	data.setUint16(4, 0x1234, true);
 	log("sab-dataview", [data.getUint16(4, true), bytes[4], bytes[5]]);
@@ -118,7 +158,12 @@ const log = (label, value) => out.push(`${label}: ${JSON.stringify(value)}`);
 	other.grow(12);
 	// Growth through another wrapper is visible to this wrapper's views.
 	tracking[10] = 5;
-	log("sab-grow", [tracking.length, growable.byteLength, new Uint8Array(other)[10], tracking[10]]);
+	log("sab-grow", [
+		tracking.length,
+		growable.byteLength,
+		new Uint8Array(other)[10],
+		tracking[10],
+	]);
 	try {
 		other.grow(8);
 	} catch (error) {
