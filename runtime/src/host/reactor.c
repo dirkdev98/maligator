@@ -803,7 +803,8 @@ bool mal_reactor_cancel_op(MalReactor *r, MalOp *op) {
     return cancelled;
 }
 
-void mal_reactor_wait(MalReactor *r) {
+static void mal_reactor_pump(MalReactor *r, bool blocking) {
+    // A waker may defer itself again; this pump owns only the initial ready batch.
     i32 ready_count = r->ready_op_count;
     for (i32 i = 0; i < ready_count && r->ready_ops != nullptr; i++) {
         MalOp *op = r->ready_ops;
@@ -820,12 +821,10 @@ void mal_reactor_wait(MalReactor *r) {
         MalWaker waker = op->waker;
         waker.fn(waker.data);
     }
-    if (ready_count > 0) {
-        return;
-    }
-
     i64 timeout;
-    if (r->timer_count > 0) {
+    if (!blocking || ready_count > 0) {
+        timeout = 0;
+    } else if (r->timer_count > 0) {
         i64 now = mal_reactor_now_ns();
         i64 deadline = r->timers[0]->deadline_ns;
         timeout = deadline > now ? deadline - now : 0;
@@ -837,12 +836,23 @@ void mal_reactor_wait(MalReactor *r) {
         return; // nothing pending
     }
 
-    mal_backend_wait(r, timeout);
+    if (timeout != 0 || r->pending_ops > 0 ||
+        atomic_load_explicit(&r->retained_work, memory_order_acquire) > 0 ||
+        atomic_load_explicit(&r->wake_pending, memory_order_acquire)) {
+        mal_backend_wait(r, timeout);
+    }
 
-    // Fire every timer whose deadline has now passed.
     i64 now = mal_reactor_now_ns();
     while (r->timer_count > 0 && r->timers[0]->deadline_ns <= now) {
         MalTimer *t = mal_timer_remove_at(r, 0);
         t->waker.fn(t->waker.data);
     }
+}
+
+void mal_reactor_wait(MalReactor *r) {
+    mal_reactor_pump(r, true);
+}
+
+void mal_reactor_poll(MalReactor *r) {
+    mal_reactor_pump(r, false);
 }

@@ -134,5 +134,8 @@ void mal_reactor_cancel_timer(MalReactor *r, MalTimer *t);
  * nothing is pending), firing wakers for everything that became ready. */
 void mal_reactor_wait(MalReactor *r);
 
+// Service a bounded ready-op snapshot, fd readiness and due timers without blocking.
+void mal_reactor_poll(MalReactor *r);
+
 /* CLOCK_MONOTONIC in nanoseconds. */
 i64 mal_reactor_now_ns(void);

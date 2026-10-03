@@ -21,10 +21,13 @@
 
 // A fixed set of runtime subsystems registers drains; overflow is a runtime bug.
 #define MAL_HOST_MAX_MACROTASK_DRAINS 16
+#define MAL_HOST_REACTOR_POLL_INTERVAL 32
 // Checkpoint hooks belong to the isolate whose mutator registered them.
 static MAL_ISOLATE_LOCAL MalHostMacrotaskDrain
     mal_host_macrotask_drains[MAL_HOST_MAX_MACROTASK_DRAINS];
 static MAL_ISOLATE_LOCAL i32 mal_host_macrotask_drain_count;
+static MAL_ISOLATE_LOCAL i32 mal_host_priority_drain_count;
+static MAL_ISOLATE_LOCAL i32 mal_host_macrotask_cursor;
 static MAL_ISOLATE_LOCAL MalHostIdleNotify mal_host_idle_notify;
 static MAL_ISOLATE_LOCAL MalHostExitNotify mal_host_exit_notify;
 static MAL_ISOLATE_LOCAL MalHostTerminationCheck mal_host_termination_check;
@@ -47,6 +50,7 @@ void mal_host_register_macrotask_drain(MalHostMacrotaskDrain drain, bool priorit
         }
         mal_host_macrotask_drains[0] = drain;
         mal_host_macrotask_drain_count++;
+        mal_host_priority_drain_count++;
         return;
     }
     mal_host_macrotask_drains[mal_host_macrotask_drain_count++] = drain;
@@ -68,9 +72,23 @@ int mal_host_finish_process(MalVm *vm, int default_code) {
     return code;
 }
 
-static bool mal_host_run_runtime_macrotask(MalVm *vm) {
-    for (i32 i = 0; i < mal_host_macrotask_drain_count; i++) {
+static bool mal_host_run_priority_macrotask(MalVm *vm) {
+    for (i32 i = 0; i < mal_host_priority_drain_count; i++) {
         if (mal_host_macrotask_drains[i](vm)) return true;
+    }
+    return false;
+}
+
+static bool mal_host_run_runtime_macrotask(MalVm *vm) {
+    i32 count = mal_host_macrotask_drain_count - mal_host_priority_drain_count;
+    if (count == 0) return false;
+    i32 start = mal_host_macrotask_cursor % count;
+    for (i32 offset = 0; offset < count; offset++) {
+        i32 index = (start + offset) % count;
+        if (mal_host_macrotask_drains[mal_host_priority_drain_count + index](vm)) {
+            mal_host_macrotask_cursor = (index + 1) % count;
+            return true;
+        }
     }
     return false;
 }
@@ -291,23 +309,50 @@ void mal_host_run_event_loop(MalVm *vm) {
     // the loop drains, while one that schedules nothing does not spin forever.
     // Seeded true so the first drain always notifies.
     bool progressed = true;
+    bool prefer_reactor = false;
+    i32 macrotasks_since_poll = MAL_HOST_REACTOR_POLL_INTERVAL;
+    MalHost *host = mal_host(vm);
     for (;;) {
         // A prior macrotask's uncaught throw must survive the next microtask checkpoint.
         if (vm->completion.kind == MAL_COMPLETION_THROW) break;
         if (mal_gc_terminating()) break;
         if (mal_host_termination_check != nullptr && mal_host_termination_check(vm)) break;
-        // Microtasks first (promise jobs), then one macrotask, then repeat.
         mal_vm_drain_microtasks(vm);
         if (!mal_vm_check_entry_evaluation(vm)) break;
         if (vm->completion.kind == MAL_COMPLETION_THROW) break;
         if (mal_host_termination_check != nullptr && mal_host_termination_check(vm)) break;
+        bool timer_due = host->reactor.timer_count > 0 &&
+            host->reactor.timers[0]->deadline_ns <= mal_reactor_now_ns();
+        if (macrotasks_since_poll >= MAL_HOST_REACTOR_POLL_INTERVAL || timer_due) {
+            mal_reactor_poll(&host->reactor);
+            macrotasks_since_poll = 0;
+            // Server wakers can enter JS, so their jobs precede the next macrotask.
+            continue;
+        }
+        if (mal_host_run_priority_macrotask(vm)) {
+            progressed = true;
+            macrotasks_since_poll++;
+            if (mal_gc_poll) mal_gc_safepoint(vm);
+            continue;
+        }
+        if (prefer_reactor && mal_host_has_referenced_work(vm) && mal_host_run_one_ready(vm)) {
+            progressed = true;
+            prefer_reactor = false;
+            macrotasks_since_poll++;
+            if (mal_gc_poll) mal_gc_safepoint(vm);
+            continue;
+        }
         if (mal_host_run_runtime_macrotask(vm)) {
             progressed = true;
+            prefer_reactor = true;
+            macrotasks_since_poll++;
             if (mal_gc_poll) mal_gc_safepoint(vm);
             continue;
         }
         if (mal_host_has_referenced_work(vm) && mal_host_run_one_ready(vm)) {
             progressed = true;
+            prefer_reactor = false;
+            macrotasks_since_poll++;
             if (mal_gc_poll) mal_gc_safepoint(vm);
             continue;
         }
@@ -320,6 +365,7 @@ void mal_host_run_event_loop(MalVm *vm) {
 			progressed = true;
             mal_gc_set_mutator_busy(vm, false);
 			mal_reactor_wait(&mal_host(vm)->reactor);
+            macrotasks_since_poll = 0;
             mal_gc_set_mutator_busy(vm, true);
 			if (mal_gc_poll) mal_gc_safepoint(vm);
 			continue;

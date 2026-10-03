@@ -1330,7 +1330,8 @@ static bool blocking_work_concurrency_and_ownership(void) {
     gate.release = true;
     pthread_cond_broadcast(&gate.ready);
     pthread_mutex_unlock(&gate.mutex);
-    while (ok && mal_host_posted_pending(&host.posted_tasks) == 0) {
+    while (ok && mal_host_posted_pending(&host.posted_tasks) == 0 &&
+        mal_host_tasks_pending(&host.tasks) == 0) {
         mal_reactor_wait(&host.reactor);
     }
     ok = ok && mal_blocking_work_retained_bytes() ==

@@ -36,6 +36,7 @@ tests/native/object-rest-shaped.test.ts
 tests/native/object-slot-coallocation.test.ts
 tests/native/own-table-property-cache.test.ts
 tests/native/node-scheduling.test.ts
+tests/native/host-fairness.test.ts
 tests/native/postgres-load.test.ts
 tests/native/runtime-mechanics.test.ts
 tests/native/platform-execution.test.ts
@@ -100,5 +101,7 @@ tests/native/workers.test.ts
 tests/native/worker-doc-examples.test.ts
 tests/native/worker-empty-transfers.test.ts
 tests/native/worker-ready-transfer.test.ts
+tests/native/worker-lazy-events.test.ts
+tests/native/worker-pool-private-ref.test.ts
 tests/native/guarded-math-number.test.ts
 tests/native/number-to-uint32-boundaries.test.ts
