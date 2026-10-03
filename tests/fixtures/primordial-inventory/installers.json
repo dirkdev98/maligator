@@ -665,7 +665,7 @@
 	},
 	{
 		"file": "runtime/web_globals.c",
-		"sha256": "a2306c51cb57ffaebe601f08b27d5675f7a004787af39d2e7506f76713cb0fdd"
+		"sha256": "7b3e041bf8207de9addbe744e69ae46b256d2dc86db19364dd3b43063f556407"
 	},
 	{
 		"file": "runtime/web_headers.c",
@@ -673,7 +673,7 @@
 	},
 	{
 		"file": "runtime/web_host_timer.c",
-		"sha256": "d4dc67c5c1f2fdf6028f473f9a479cf3e70276bc8746e3d47c3d7816b07bf1a0"
+		"sha256": "2323c0fa8f4d80d6a8ddbcf5ed067f8d13b05738ad0549852da3f62ed6263ed3"
 	},
 	{
 		"file": "runtime/web_readable_stream.c",
@@ -689,7 +689,7 @@
 	},
 	{
 		"file": "runtime/workers.c",
-		"sha256": "cac0fb5e2d6aa9ae0f5e87a05a92d114d3e90940231c634877d496634f8df958"
+		"sha256": "d12da80d76a3340f8beece1b43cadab84769980554683aa0748f106835ee79d5"
 	},
 	{
 		"file": "runtime/workers.h",
@@ -705,11 +705,11 @@
 	},
 	{
 		"file": "vm.c",
-		"sha256": "0741e2a9496d1c3057e46c056c487ef861c46af131986d7ad78f5bd229109544"
+		"sha256": "be91b44cb60ee50e38c89e9fa632291fa4c59c17771443305a36090a85db9e84"
 	},
 	{
 		"file": "vm.h",
-		"sha256": "ebbdff01c3b75c1b07704add75364c1d45c441d72459c8ceaeacb3c914e83cc4"
+		"sha256": "50bf596c2fe51d0a777d66dfbab85e0e4c06cedf009c4f886beab72bbd2b4a2d"
 	},
 	{
 		"file": "vm_ops.c",
