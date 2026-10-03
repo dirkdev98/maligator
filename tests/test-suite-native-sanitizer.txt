@@ -130,3 +130,5 @@ tests/native/module-evaluation-gc.test.ts
 tests/native/workers-closed-port.test.ts
 tests/native/node-worker-post-policy.test.ts
 tests/native/workers.test.ts
+tests/native/guarded-math-number.test.ts
+tests/native/number-to-uint32-boundaries.test.ts

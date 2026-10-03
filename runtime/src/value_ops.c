@@ -53,6 +53,10 @@ u64 mal_ops_number_to_uint_width(f64 number, u32 width) {
 }
 
 u32 mal_ops_number_to_uint32(f64 number) {
+    // The upper bound is exclusive because converting 2^63 to i64 is undefined.
+    if (number >= -0x1p63 && number < 0x1p63) {
+        return (u32) (i64) number;
+    }
     return (u32) mal_ops_number_to_uint_width(number, 32);
 }
 

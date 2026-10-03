@@ -7228,7 +7228,24 @@ function emitInstruction(
 					let direct: Array<string> | undefined;
 					const first = instruction.arguments[0];
 					const second = instruction.arguments[1];
-					if (
+					const numericKernel = MATH_NUMBER_KERNELS[instruction.operation];
+					if (numericKernel !== undefined) {
+						const guards: Array<string> = [];
+						const numbers = Array.from({ length: numericKernel[1] }, (_, index) => {
+							const operand = instruction.arguments[index];
+							if (operand === undefined) return "NAN";
+							const numeric = nativeNumberOperand(operand);
+							if (numeric !== null) return numeric;
+							const value = boxedOperand(operand);
+							guards.push(`mal_ops_is_number(${value})`);
+							return `mal_ops_number_as_f64(${value})`;
+						});
+						guard = guards.length === 0 ? "true" : guards.join(" && ");
+						direct = [
+							storeNumber(instruction.dst, `${numericKernel[0]}(${numbers.join(", ")})`),
+							poll,
+						];
+					} else if (
 						["parseInt", "parseFloat"].includes(instruction.operation) &&
 						first !== undefined
 					) {

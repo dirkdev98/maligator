@@ -14,6 +14,23 @@ import {
 import { inspectStaticValueFunction, staticValueCases } from "./helpers/static-values.ts";
 
 describe("partially static numeric call profiles", () => {
+	it.each([
+		["Math.clz32", "mal_builtin_math_clz32_number", "x"],
+		["Math.f16round", "mal_builtin_math_f16round_number", "x"],
+		["Math.imul", "mal_builtin_math_imul_number", "x,y"],
+		["Math.pow", "mal_builtin_math_pow_number", "x,y"],
+		["Math.atan2", "atan2", "x,y"],
+	])("guards unproved numeric operands in %s", (operation, kernel, args) => {
+		const source = `function probe(x,y){return ${operation}(${args});}globalThis.probe=probe;`;
+		const output = inspectStaticValueFunction(source, "probe");
+		expect(output.c.source).toContain("mal_ops_is_number(");
+		expect(output.c.source).toContain(`${kernel}(`);
+		expect(output.c.source).toContain("mal_vm_call_known_native(");
+		const mutable = inspectStaticValueFunction(source, "probe", { locked: false });
+		expect(mutable.structure.genericCalls).toBeGreaterThan(0);
+		expect(mutable.c.source).not.toContain(`${kernel}(`);
+	});
+
 	for (const profile of dynamicCallProfiles) {
 		describe(profile, () => {
 			it.each(
