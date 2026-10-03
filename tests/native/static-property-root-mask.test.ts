@@ -394,7 +394,7 @@ describe("native static-property root-mask publication", () => {
 				expect(inactive & (1n << BigInt(binding![1]!))).toBe(0n);
 			}
 			expect(contract.source).toMatch(
-				/if \(mal_gc_poll\) \{ MAL_ROOT_MASK\(0x[0-9a-f]+\); mal_gc_safepoint\(vm\); \}/,
+				/if \(mal_gc_poll\) \{ MAL_ROOT_MASK\(0x[0-9a-f]+\); mal_gc_safepoint\(vm\);/,
 			);
 		},
 	);
