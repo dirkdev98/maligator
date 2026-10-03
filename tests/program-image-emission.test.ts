@@ -1710,7 +1710,7 @@ describe("emit-program-image instruction packing", () => {
 		expect(output.match(/MAL_ROOT_MASK\(0x2\);/g)).toHaveLength(2);
 		expect(output).toMatch(/L4:;\n {4}MAL_ROOT_MASK\(0x4\);/);
 		expect(output).toMatch(
-			/if \(mal_gc_poll\) \{ MAL_ROOT_MASK\(0x2\); mal_gc_safepoint\(vm\); \} goto L4;/,
+			/if \(mal_gc_poll\) \{ MAL_ROOT_MASK\(0x2\); mal_gc_safepoint\(vm\); if \(mal_gc_poll_termination\(vm\)\) goto __throw_exit; \} goto L4;/,
 		);
 	});
 
@@ -1927,7 +1927,10 @@ describe("emit-program-image instruction packing", () => {
 
 		expect(output).toContain("#define r0 (__private_r0)");
 		const propertyStart = output.indexOf("if (mal_vm_property_try_load_static");
-		const propertyEnd = output.indexOf("static MalCallCache __cc_2", propertyStart);
+		const propertyEnd = output.indexOf(
+			"static MAL_ISOLATE_LOCAL MalCallCache __cc_2",
+			propertyStart,
+		);
 		expect(propertyStart).toBeGreaterThan(0);
 		expect(propertyEnd).toBeGreaterThan(propertyStart);
 		const property = output.slice(propertyStart, propertyEnd);
@@ -2729,7 +2732,7 @@ describe("native update-expression representation", () => {
 		expect(output).not.toContain("MAL_UNARY_TO_NUMERIC");
 		expect(output).not.toContain("MAL_UNARY_INCREMENT");
 		expect(output).toMatch(
-			/if \(mal_gc_poll\) \{ MAL_ROOT_MASK\(0x[0-9a-f]+\); mal_gc_safepoint\(vm\); \}/,
+			/if \(mal_gc_poll\) \{ MAL_ROOT_MASK\(0x[0-9a-f]+\); mal_gc_safepoint\(vm\); if \(mal_gc_poll_termination\(vm\)\) goto __throw_exit; \}/,
 		);
 	});
 
@@ -2772,7 +2775,9 @@ describe("native update-expression representation", () => {
 		expect(output).toContain("mal_vm_try_fresh_dense_indexed_fill_reserve(vm");
 		expect(output).toContain(", 1000);");
 		expect(output).toContain("mal_vm_array_try_store(");
-		expect(output).toContain("if (mal_gc_poll) mal_gc_safepoint(vm);");
+		expect(output).toContain(
+			"if (mal_gc_poll) { mal_gc_safepoint(vm); if (mal_gc_poll_termination(vm)) goto __throw_exit; }",
+		);
 	});
 
 	it.each([
@@ -3355,10 +3360,10 @@ describe("native update-expression representation", () => {
 			/MAL_ROOT_MASK\([^)]+\);\n\s+static MalMath(?:Unary|Binary)Op/,
 		);
 		expect(output).toMatch(
-			/if \(mal_builtin_math_unary_fast[^\n]+\) \{[\s\S]*?\} else \{\n\s+(MAL_ROOT_MASK\(0x[\da-f]+\));\n\s+static MalCallCache[\s\S]*?\n\s+\}\n\s+if \(mal_gc_poll\) \{ \1; mal_gc_safepoint\(vm\); \}/,
+			/if \(mal_builtin_math_unary_fast[^\n]+\) \{[\s\S]*?\} else \{\n\s+(MAL_ROOT_MASK\(0x[\da-f]+\));\n\s+static MAL_ISOLATE_LOCAL MalCallCache[\s\S]*?\n\s+\}\n\s+if \(mal_gc_poll\) \{ \1; mal_gc_safepoint\(vm\); if \(mal_gc_poll_termination\(vm\)\) goto __throw_exit; \}/,
 		);
 		expect(output).toMatch(
-			/if \(mal_builtin_math_binary_fast[^\n]+\) \{[\s\S]*?\} else \{\n\s+(MAL_ROOT_MASK\(0x[\da-f]+\));\n\s+static MalCallCache[\s\S]*?\n\s+\}\n\s+if \(mal_gc_poll\) \{ \1; mal_gc_safepoint\(vm\); \}/,
+			/if \(mal_builtin_math_binary_fast[^\n]+\) \{[\s\S]*?\} else \{\n\s+(MAL_ROOT_MASK\(0x[\da-f]+\));\n\s+static MAL_ISOLATE_LOCAL MalCallCache[\s\S]*?\n\s+\}\n\s+if \(mal_gc_poll\) \{ \1; mal_gc_safepoint\(vm\); if \(mal_gc_poll_termination\(vm\)\) goto __throw_exit; \}/,
 		);
 
 		const lockedOutput = emitLocked(source);
@@ -3452,7 +3457,7 @@ describe("native update-expression representation", () => {
 		const output = emitProgramImage(image, { compiled: true });
 
 		expect(output).toMatch(
-			/MAL_ROOT_MASK\(0x1\);[\s\S]*?r3 = floor\(r2\);\n\s+if \(mal_gc_poll\) \{ MAL_ROOT_MASK\(0x2\); mal_gc_safepoint\(vm\); \}\n\s+MAL_ROOT_MASK\(0x1\);/,
+			/MAL_ROOT_MASK\(0x1\);[\s\S]*?r3 = floor\(r2\);\n\s+if \(mal_gc_poll\) \{ MAL_ROOT_MASK\(0x2\); mal_gc_safepoint\(vm\); if \(mal_gc_poll_termination\(vm\)\) goto __throw_exit; \}\n\s+MAL_ROOT_MASK\(0x1\);/,
 		);
 	});
 
@@ -4879,7 +4884,8 @@ describe("native update-expression representation", () => {
 			globalThis.read = read;
 		`);
 		const lines = output.split("\n");
-		const poll = "if (mal_gc_poll) mal_gc_safepoint(vm);";
+		const poll =
+			"if (mal_gc_poll) { mal_gc_safepoint(vm); if (mal_gc_poll_termination(vm)) goto __throw_exit; }";
 		const constructLine = lines.findIndex((line) =>
 			line.includes("mal_vm_call_known_native"),
 		);

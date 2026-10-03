@@ -351,6 +351,8 @@ describe("npm launcher", () => {
 			"platform-api.d.ts",
 			"process-api.d.ts",
 			"test-api.d.ts",
+			"workers-api.d.ts",
+			"workers-host-api.d.ts",
 			"README.md",
 			"LICENSE",
 		]);
