@@ -240,10 +240,7 @@ function cacheRoot(input: CompilerBakeInput): string {
 	if (input.cacheRoot !== undefined) {
 		return requireAbsolute("compiler-wire cache root", input.cacheRoot);
 	}
-	if (input.kind === "source") {
-		return path.join(input.sourceDirectory, "..", COMPILER_WIRE_CACHE);
-	}
-	return path.resolve(COMPILER_WIRE_CACHE);
+	return COMPILER_WIRE_CACHE;
 }
 
 function cacheDirectory(root: string, key: string): string {

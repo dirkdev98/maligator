@@ -4,6 +4,7 @@ import {
 	mkdtempSync,
 	readFileSync,
 	readdirSync,
+	rmSync,
 	writeFileSync,
 } from "node:fs";
 import * as os from "node:os";
@@ -48,6 +49,46 @@ function compilerFixture(meriyah = "7.1.0"): {
 }
 
 describe("compiler wire provisioning", () => {
+	it("uses the configured user cache for source bakes without an explicit cache root", () => {
+		const fixture = compilerFixture();
+		const cacheDirectory = path.join(fixture.root, "user-cache");
+		const moduleUrl = pathToFileURL(path.resolve("src/compiler-bake.ts")).href;
+		try {
+			const wirePath = execFileSync(
+				process.execPath,
+				[
+					"--input-type=module",
+					"--eval",
+					`
+					import { ensureCompilerWire } from ${JSON.stringify(moduleUrl)};
+					process.stdout.write(ensureCompilerWire({
+						kind: "source",
+						sourceDirectory: process.env.SOURCE_DIRECTORY,
+						entrypoint: process.env.ENTRYPOINT,
+						bake: () => new Uint8Array([77, 65, 76]),
+					}));
+					`,
+				],
+				{
+					cwd: fixture.root,
+					encoding: "utf8",
+					env: {
+						...process.env,
+						MALIGATOR_CACHE_DIR: cacheDirectory,
+						SOURCE_DIRECTORY: fixture.sourceDirectory,
+						ENTRYPOINT: fixture.entrypoint,
+					},
+				},
+			);
+			const relative = path.relative(cacheDirectory, wirePath);
+			expect(path.isAbsolute(relative)).toBe(false);
+			expect(relative.startsWith(`..${path.sep}`)).toBe(false);
+			expect(readFileSync(wirePath)).toEqual(Buffer.from([77, 65, 76]));
+		} finally {
+			rmSync(fixture.root, { recursive: true, force: true });
+		}
+	});
+
 	it("uses only the explicit source root, independent of cwd", () => {
 		const fixture = compilerFixture();
 		const cacheRoot = path.join(fixture.root, "wire-cache");
