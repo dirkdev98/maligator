@@ -21,6 +21,10 @@ import {
 } from "../compiler/frontend/semantic-analysis.ts";
 import { compileSemanticProgramToProgramImage } from "../compiler/pipeline/compile-core.ts";
 import {
+	compileWorkerImages,
+	type CompiledWorkerImage,
+} from "../compiler/pipeline/compile-worker-images.ts";
+import {
 	serializeRuntimeImage,
 	WIRE_VERSION,
 } from "../compiler/target/program-image-codec.ts";
@@ -36,8 +40,14 @@ import {
 import type { FrontendDependencyIdentity } from "../frontend-cache.ts";
 import { executionIdentity } from "../platform/execution.ts";
 import type { Execution } from "../platform/execution.ts";
+import {
+	cacheWorkerImages,
+	restoreWorkerImages,
+	workerImageArtifactsUnchanged,
+	type WorkerImageArtifact,
+} from "../worker-image-cache.ts";
 
-const TEST_CACHE_SCHEMA = 1;
+const TEST_CACHE_SCHEMA = 2;
 const TEST_CACHE_DIRECTORY = path.join(maligatorCacheDirectory(), "test");
 const TEST_MODULE_ID = "maligator:test";
 const TEST_BOOTSTRAP_MODULE_ID = "maligator-internal:test-bootstrap";
@@ -51,10 +61,11 @@ export interface TestProcessRunner {
 }
 
 interface TestCacheManifest {
-	schema: 1;
+	schema: 2;
 	identity: string;
 	contentKey: string;
 	wireDigest: string;
+	workerArtifacts: Array<WorkerImageArtifact>;
 	entries: Array<string>;
 	dependencies: Array<DependencyIdentity>;
 }
@@ -66,6 +77,7 @@ interface CompileTestOptions {
 	stripperIdentity: string;
 	testModuleSource: string;
 	nodeGlobalsSource?: string;
+	platformSourceRoot?: string;
 	cacheDirectory?: string;
 	session?: FrontendCompilationSession;
 	/** Require an artifact with exactly these entries during failure containment. */
@@ -93,6 +105,7 @@ export interface TestFrontendPhases {
 }
 
 export interface CompiledTestImage {
+	workerImages: ReadonlyArray<CompiledWorkerImage>;
 	wire: Uint8Array;
 	cache: "hit" | "miss";
 	frontendMs: number;
@@ -137,6 +150,7 @@ function cacheIdentity(options: CompileTestOptions): string {
 				options.config.surface.node === true
 					? digest(options.nodeGlobalsSource ?? "")
 					: undefined,
+			platformSourceRoot: options.platformSourceRoot,
 			testImageTransform: TEST_IMAGE_TRANSFORM,
 			processRunner: options.processRunner,
 		}),
@@ -190,7 +204,8 @@ function cachedWire(
 		manifest.identity !== identity ||
 		!requestedEntries.every((entry) => manifest.entries.includes(entry)) ||
 		(!allowSuperset && manifest.entries.length !== requestedEntries.length) ||
-		!dependenciesUnchanged(manifest.dependencies, session)
+		!dependenciesUnchanged(manifest.dependencies, session) ||
+		!workerImageArtifactsUnchanged(manifest.workerArtifacts, artifactRoot)
 	) {
 		return undefined;
 	}
@@ -234,6 +249,7 @@ function buildTestGraph(
 		buildConfig: options.config,
 		execution: options.execution,
 		parseCache: session.moduleParses,
+		platformSourceRoot: options.platformSourceRoot,
 		virtualModules: new Map([
 			[
 				TEST_MODULE_ID,
@@ -262,6 +278,7 @@ function buildTestGraph(
 }
 
 export interface CompiledProfiledTestImage {
+	workerImages: ReadonlyArray<CompiledWorkerImage>;
 	programImage: ProgramImage;
 	optimizationReport: CoreOptimizationReport;
 	optimizationPlan: CoreOptimizationPlan;
@@ -322,6 +339,7 @@ export function compileProfiledTestImage(
 		throw new Error("profiled test compilation lost its Core optimization sidecar");
 	}
 	return {
+		workerImages: compileTestWorkerImages(graph, options, session, "full"),
 		programImage,
 		optimizationReport,
 		optimizationPlan,
@@ -342,14 +360,47 @@ export function compileIsolatedTestImage(
 	});
 }
 
+function compileTestWorkerImages(
+	graph: ModuleGraph,
+	options: CompileTestOptions,
+	session: FrontendCompilationSession,
+	optimization: "development" | "full",
+): Array<CompiledWorkerImage> {
+	return compileWorkerImages(graph, {
+		buildConfig: options.config,
+		execution: options.execution,
+		stripTypes: options.stripTypes,
+		parseCache: session.moduleParses,
+		platformSourceRoot: options.platformSourceRoot,
+		optimization,
+		entryPrelude: options.config.surface.node
+			? {
+					specifier: "maligator-internal:node-globals",
+					source: options.nodeGlobalsSource ?? "",
+				}
+			: undefined,
+		virtualModules: new Map([
+			[
+				TEST_MODULE_ID,
+				{ source: options.testModuleSource, goal: "module", platform: true },
+			],
+		]),
+	});
+}
+
 function dependencyIdentities(
 	graph: ModuleGraph,
 	session: FrontendCompilationSession,
 ): Array<DependencyIdentity> {
 	const dependencies: Array<DependencyIdentity> = [];
 	for (const record of graph.modules.values()) {
-		if (record.virtual || record.host || record.path === graph.entry) continue;
-		dependencies.push(session.snapshot(record.path, record.source));
+		if (
+			(record.virtual && record.sourcePath === undefined) ||
+			record.host ||
+			record.path === graph.entry
+		)
+			continue;
+		dependencies.push(session.snapshot(record.sourcePath ?? record.path, record.source));
 	}
 	dependencies.sort((left, right) =>
 		left.path < right.path ? -1 : left.path > right.path ? 1 : 0,
@@ -415,6 +466,7 @@ export function compileTestImage(options: CompileTestImageOptions): CompiledTest
 	if (hit !== undefined) {
 		session.flush();
 		return {
+			workerImages: restoreWorkerImages(manifest!.workerArtifacts, artifactRoot),
 			wire: hit,
 			cache: "hit",
 			frontendMs: Date.now() - startedAt,
@@ -484,16 +536,22 @@ export function compileTestImage(options: CompileTestImageOptions): CompiledTest
 			`${JSON.stringify({ digest: path.basename(cachedPath, ".malw") })}\n`,
 		);
 	}
+	const workerStartedAt = Date.now();
+	const workerImages = compileTestWorkerImages(graph, options, session, "development");
+	const workerArtifacts = cacheWorkerImages(workerImages, artifactRoot);
+	phases.workerMs = Date.now() - workerStartedAt;
 	const nextManifest: TestCacheManifest = {
 		schema: TEST_CACHE_SCHEMA,
 		identity,
 		contentKey,
 		wireDigest: digest(wire),
+		workerArtifacts,
 		entries,
 		dependencies,
 	};
 	publishManifest(root, nextManifest, entries);
 	return {
+		workerImages,
 		wire,
 		cache: "miss",
 		frontendMs: Date.now() - startedAt,

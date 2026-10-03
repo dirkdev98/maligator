@@ -1,5 +1,6 @@
 import { readFileSync, statSync } from "node:fs";
 import * as path from "node:path";
+import { fileURLToPath } from "node:url";
 import type { ESTree } from "meriyah";
 import type { ResolvedBuildConfig } from "../../build-config.ts";
 import type { PlatformModule } from "../../platform/catalog.ts";
@@ -18,6 +19,8 @@ import {
 import { parseModule, parseScript } from "./parser.ts";
 import type { SemanticFile } from "./semantic-analysis.ts";
 import { SyntaxDiagnostic } from "./syntax-diagnostic.ts";
+import { discoverWorkerEntries } from "./worker-entries.ts";
+import type { WorkerEntryDeclaration } from "./worker-entries.ts";
 
 /** TypeScript source extensions stripped to JS before parsing. */
 const TS_EXTENSIONS = new Set([".ts", ".mts", ".cts"]);
@@ -46,6 +49,7 @@ export type ModuleDependencyKind =
 	| "export"
 	// `import("x")`
 	| "dynamic"
+	| "worker"
 	// `require("x")` in a CommonJS module
 	| "require";
 
@@ -68,6 +72,7 @@ export interface ModuleDependency {
 }
 
 export interface ModuleRecord {
+	sourcePath?: string;
 	/**
 	 * Absolute, resolved path — or, for a host virtual module, its canonical
 	 * specifier (e.g. `"node:path"`).
@@ -90,6 +95,8 @@ export interface ModuleRecord {
 }
 
 export interface ModuleGraph {
+	workerEntries?: Array<WorkerEntryDeclaration>;
+	dynamicImportCandidates?: ReadonlyArray<string>;
 	execution?: Execution;
 	/** Absolute path of the entrypoint. */
 	entry: string;
@@ -218,6 +225,7 @@ export interface BuildModuleGraphOptions {
 	 * host supplies the finite candidate set that is bundled but not eagerly run.
 	 */
 	dynamicImportCandidates?: ReadonlyArray<string>;
+	platformSourceRoot?: string;
 
 	/**
 	 * The resolved build config, which gates surface-dependent resolution: the
@@ -292,11 +300,36 @@ export function buildModuleGraph(
 		packageJsonCache: new Map(),
 		packageTypeCache: new Map(),
 	};
-	const virtualModule = (specifier: string) =>
-		options.virtualModules?.get(specifier) ??
-		(options.entryPrelude?.specifier === specifier
-			? { source: options.entryPrelude.source, goal: "module" as const, platform: false }
-			: undefined);
+	const sourceRoot =
+		options.platformSourceRoot ?? fileURLToPath(new URL("../../", import.meta.url));
+	const catalogSources = new Map<
+		string,
+		{ source: string; goal: "module"; platform: true; sourcePath: string }
+	>();
+	const virtualModule = (specifier: string) => {
+		const supplied = options.virtualModules?.get(specifier);
+		if (supplied !== undefined) return supplied;
+		if (options.entryPrelude?.specifier === specifier)
+			return {
+				source: options.entryPrelude.source,
+				goal: "module" as const,
+				platform: false,
+			};
+		const module = lookupPlatformModule(specifier);
+		if (module?.kind !== "source" || specifier === "maligator:test") return undefined;
+		let source = catalogSources.get(specifier);
+		if (source === undefined) {
+			const sourcePath = path.resolve(sourceRoot, module.sourceFile);
+			source = {
+				source: readFileSync(sourcePath, "utf-8"),
+				goal: "module",
+				platform: true,
+				sourcePath,
+			};
+			catalogSources.set(specifier, source);
+		}
+		return source;
+	};
 
 	const load = (
 		filePath: string,
@@ -309,6 +342,7 @@ export function buildModuleGraph(
 		}
 
 		const source = sourceOverride ?? readFileSync(filePath, "utf-8");
+		const sourcePath = catalogSources.get(filePath)?.sourcePath;
 		let parseSource = blankHashbang(source);
 		if (path.extname(filePath) === ".json") {
 			// Validate with the JSON grammar now, then parse a CommonJS wrapper that
@@ -369,7 +403,35 @@ export function buildModuleGraph(
 				// graph. Preserve the edge for later lowering/runtime handling.
 				return { ...dependency, resolvedPath: null };
 			}
-			const toolchainModule = virtualModule(dependency.specifier);
+			const aliasedSpecifier =
+				options.buildConfig?.modules.aliases[dependency.specifier] ??
+				dependency.specifier;
+			const platform = lookupPlatformModule(aliasedSpecifier);
+			const catalogOwned =
+				lookupPlatformModule(filePath)?.kind === "source" ||
+				PLATFORM_MODULES.some(
+					(module) =>
+						(module.kind === "source" &&
+							path.resolve(sourceRoot, module.sourceFile) === filePath) ||
+						module.exports.some((entry) => {
+							const workerSource = (entry.contract as { workerSource?: string })
+								.workerSource;
+							return (
+								workerSource !== undefined &&
+								path.resolve(sourceRoot, workerSource) === filePath
+							);
+						}),
+				);
+			if (
+				(platform as { internal?: boolean } | undefined)?.internal === true &&
+				!catalogOwned
+			) {
+				throw new SyntaxDiagnostic(
+					"resolution",
+					`Internal module '${dependency.specifier}' is reserved for platform sources`,
+				);
+			}
+			const toolchainModule = virtualModule(aliasedSpecifier);
 			if (toolchainModule !== undefined) {
 				const entryPreludeRequire =
 					dependency.kind === "require" &&
@@ -378,7 +440,7 @@ export function buildModuleGraph(
 					(dependency.kind === "dynamic" &&
 						!(
 							toolchainModule.platform &&
-							lookupPlatformModule(dependency.specifier)?.kind === "source"
+							lookupPlatformModule(aliasedSpecifier)?.kind === "source"
 						)) ||
 					(dependency.kind === "require" && !entryPreludeRequire)
 				) {
@@ -387,16 +449,13 @@ export function buildModuleGraph(
 						`Toolchain module '${dependency.specifier}' supports static ESM imports only`,
 					);
 				}
-				return { ...dependency, resolvedPath: dependency.specifier };
+				return { ...dependency, resolvedPath: aliasedSpecifier };
 			}
-			const aliasedSpecifier =
-				options.buildConfig?.modules.aliases[dependency.specifier] ??
-				dependency.specifier;
 			const canonicalHostId = canonicalNodeHostModuleId(aliasedSpecifier);
 			const canonicalBuiltinId = canonicalNodeBuiltinId(aliasedSpecifier);
 			const resolved = resolveSpecifier(
 				canonicalHostId ?? canonicalBuiltinId ?? aliasedSpecifier,
-				filePath,
+				sourcePath ?? filePath,
 				{
 					...ctx,
 					conditions: exportConditions(
@@ -432,13 +491,21 @@ export function buildModuleGraph(
 				);
 			}
 
-			return { ...dependency, resolvedPath: resolved.path };
+			const catalogSource = PLATFORM_MODULES.find(
+				(module) =>
+					module.kind === "source" &&
+					module.id !== "maligator:test" &&
+					path.resolve(sourceRoot, module.sourceFile) === resolved.path,
+			);
+			if (catalogSource !== undefined) virtualModule(catalogSource.id);
+			return { ...dependency, resolvedPath: catalogSource?.id ?? resolved.path };
 		});
 
 		// Record before recursing so a cyclic back-import finds this module and
 		// stops, rather than looping forever.
 		modules.set(filePath, {
 			path: filePath,
+			...(sourcePath === undefined ? {} : { sourcePath }),
 			goal,
 			source,
 			parsed,
@@ -516,8 +583,43 @@ export function buildModuleGraph(
 			});
 		}
 	}
+	const declaredCandidates = new Set(
+		options.dynamicImportCandidates?.map((candidate) => path.resolve(candidate)),
+	);
+	let workerEntries: Array<WorkerEntryDeclaration> = [];
+	for (;;) {
+		workerEntries = discoverWorkerEntries(modules, sourceRoot);
+		let loaded = false;
+		for (const declaration of workerEntries) {
+			declaredCandidates.add(declaration.path);
+			const importer = modules.get(declaration.importer)!;
+			if (
+				!importer.dependencies.some(
+					(dependency) =>
+						dependency.kind === "worker" && dependency.resolvedPath === declaration.path,
+				)
+			) {
+				importer.dependencies.push({
+					kind: "worker",
+					specifier: declaration.href,
+					resolvedPath: declaration.path,
+				});
+			}
+			if (modules.has(declaration.path)) continue;
+			load(
+				declaration.path,
+				options.goalOverride ??
+					options.dependencyGoalOverride ??
+					detectDependencyGoal(declaration.path, ctx),
+			);
+			loaded = true;
+		}
+		if (!loaded) break;
+	}
 
 	return {
+		workerEntries,
+		dynamicImportCandidates: [...declaredCandidates].sort(),
 		entry,
 		execution: options.execution,
 		nodeEnabled: ctx.nodeEnabled,
@@ -717,17 +819,23 @@ type ResolveResult =
 function hostModuleRecord(host: HostModuleSpec, execution?: Execution): ModuleRecord {
 	if (host.platform !== undefined) {
 		const constants = Object.fromEntries(
-			host.platform.exports.map((entry) => {
-				if (entry.contract.provider === "execution") {
-					if (execution === undefined)
-						throw new SyntaxDiagnostic(
-							"resolution",
-							`${host.id} requires an application execution description`,
-						);
-					return [entry.name, executionData(execution)];
-				}
-				throw new Error(`Unknown platform provider for ${host.id}/${entry.name}`);
-			}),
+			host.platform.exports
+				.filter(
+					(entry) =>
+						entry.contract.phase === "preparation" &&
+						entry.contract.value === "deep-frozen-data",
+				)
+				.map((entry) => {
+					if (entry.contract.provider === "execution") {
+						if (execution === undefined)
+							throw new SyntaxDiagnostic(
+								"resolution",
+								`${host.id} requires an application execution description`,
+							);
+						return [entry.name, executionData(execution)];
+					}
+					throw new Error(`Unknown platform provider for ${host.id}/${entry.name}`);
+				}),
 		);
 		host = { ...host, constants };
 	}
@@ -1113,6 +1221,7 @@ function staticEdges(
 	for (const dependency of record.dependencies) {
 		if (
 			dependency.kind !== "dynamic" &&
+			dependency.kind !== "worker" &&
 			dependency.kind !== "deferred-import" &&
 			dependency.resolvedPath
 		) {

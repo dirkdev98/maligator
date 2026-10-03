@@ -122,3 +122,8 @@ tests/native/set-storage.test.ts
 tests/native/grouped-hash-index.test.ts
 tests/native/intern-stores.test.ts
 tests/native/property-storage.test.ts
+tests/native/executor.test.ts
+tests/native/gc-process.test.ts
+tests/native/shared-memory-atomics.test.ts
+tests/native/workers-runtime.test.ts
+tests/native/workers.test.ts

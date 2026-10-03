@@ -25,16 +25,23 @@ export async function generatePlatformApi(check = false): Promise<void> {
 		],
 		...PLATFORM_MODULES.flatMap((module): Array<readonly [string, string]> => [
 			[path.resolve("src", module.declarationFile), generatePlatformDeclarations(module)],
-			[
-				path.resolve("website", `${module.id.replace(":", "-")}.html`),
-				renderSiteTemplate(
-					generatePlatformReference(module, PLATFORM_MODULES).replace(
-						"__API_STYLES__",
-						`<style>${readFileSync("website/templates/api.css", "utf8")}</style>`,
-					),
-					"api",
-				),
-			],
+			...(module.internal === true
+				? []
+				: [
+						[
+							path.resolve("website", `${module.id.replace(":", "-")}.html`),
+							renderSiteTemplate(
+								generatePlatformReference(
+									module,
+									PLATFORM_MODULES.filter((entry) => entry.internal !== true),
+								).replace(
+									"__API_STYLES__",
+									`<style>${readFileSync("website/templates/api.css", "utf8")}</style>`,
+								),
+								"api",
+							),
+						] as const,
+					]),
 		]),
 	];
 	for (const [file, contents] of outputs) {

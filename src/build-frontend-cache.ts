@@ -40,6 +40,8 @@ import {
 } from "./compiler/frontend/semantic-analysis.ts";
 import { compileSemanticProgramToProgramImage } from "./compiler/pipeline/compile-core.ts";
 import type { CompileCorePhase } from "./compiler/pipeline/compile-core.ts";
+import { compileWorkerImages } from "./compiler/pipeline/compile-worker-images.ts";
+import type { CompiledWorkerImage } from "./compiler/pipeline/compile-worker-images.ts";
 import type { CompilerDiagnostic } from "./compiler/shared/compiler-diagnostics.ts";
 import {
 	compilerProgramFactsFromConfig,
@@ -73,9 +75,15 @@ import {
 import type { FrontendDependencyIdentity } from "./frontend-cache.ts";
 import { executionIdentity } from "./platform/execution.ts";
 import type { Execution } from "./platform/execution.ts";
+import {
+	cacheWorkerImages,
+	restoreWorkerImages,
+	workerImageArtifactsUnchanged,
+} from "./worker-image-cache.ts";
+import type { WorkerImageArtifact } from "./worker-image-cache.ts";
 
-const BUILD_FRONTEND_CACHE_SCHEMA = 4;
-const BUILD_FRONTEND_PIPELINE_VERSION = 4;
+const BUILD_FRONTEND_CACHE_SCHEMA = 5;
+const BUILD_FRONTEND_PIPELINE_VERSION = 5;
 const BUILD_FRONTEND_CACHE_DIRECTORY = path.join(
 	maligatorCacheDirectory(),
 	"build-frontend",
@@ -85,7 +93,8 @@ const NODE_GLOBALS_MODULE_ID = "maligator-internal:node-globals";
 export type BuildDependencyIdentity = FrontendDependencyIdentity;
 
 interface BuildFrontendManifest {
-	schema: 4;
+	schema: 5;
+	workerArtifacts: Array<WorkerImageArtifact>;
 	identity: string;
 	contentKey: string;
 	runtimeArtifacts: Array<BuildFrontendArtifactIdentity>;
@@ -121,6 +130,7 @@ export interface BuildFrontendPhases {
 }
 
 export interface CompiledBuildFrontend {
+	workerImages: ReadonlyArray<CompiledWorkerImage>;
 	programImage: ProgramImage;
 	wire: Uint8Array;
 	cache: "hit" | "miss";
@@ -143,6 +153,7 @@ export interface CompiledBuildFrontend {
 }
 
 export interface CompileBuildFrontendOptions {
+	platformSourceRoot?: string;
 	entrypoint: string;
 	config: ResolvedBuildConfig;
 	execution?: Execution;
@@ -206,6 +217,7 @@ function cacheIdentity(options: CompileBuildFrontendOptions): string {
 			),
 			compilerArtifactVersion: COMPILER_ARTIFACT_VERSION,
 			stripper: options.stripperIdentity,
+			platformSourceRoot: options.platformSourceRoot,
 			nodeGlobals:
 				nodeGlobalsSource === undefined ? undefined : digest(nodeGlobalsSource),
 			optimization: options.optimization ?? "full",
@@ -345,6 +357,7 @@ function loadCached(
 	session: FrontendCompilationSession,
 ):
 	| {
+			workerImages: ReadonlyArray<CompiledWorkerImage>;
 			programImage: ProgramImage;
 			wire: Uint8Array;
 			wires: Array<Uint8Array>;
@@ -363,6 +376,7 @@ function loadCached(
 		manifest.runtimeArtifacts.length === 0 ||
 		!manifest.runtimeArtifacts.every(validArtifactIdentity) ||
 		!validArtifactIdentity(manifest.compilerArtifact) ||
+		!workerImageArtifactsUnchanged(manifest.workerArtifacts, artifactRoot) ||
 		!validImageStats(manifest.imageStats) ||
 		!Array.isArray(manifest.diagnostics) ||
 		!Array.isArray(manifest.dependencies) ||
@@ -393,6 +407,7 @@ function loadCached(
 		const loadProgramImage = () =>
 			(programImage ??= deserializeCompilerArtifact(loadCompilerArtifact()));
 		return {
+			workerImages: restoreWorkerImages(manifest.workerArtifacts, artifactRoot),
 			get programImage() {
 				return loadProgramImage();
 			},
@@ -419,8 +434,8 @@ function loadCached(
 function packageResolutionInputs(graph: ModuleGraph): Array<string> {
 	const inputs = new Set<string>();
 	for (const record of graph.modules.values()) {
-		if (record.host || record.virtual) continue;
-		let directory = path.dirname(record.path);
+		if (record.host || (record.virtual && record.sourcePath === undefined)) continue;
+		let directory = path.dirname(record.sourcePath ?? record.path);
 		for (;;) {
 			const packagePath = path.join(directory, "package.json");
 			if (existsSync(packagePath)) inputs.add(packagePath);
@@ -438,8 +453,8 @@ function graphDependencies(
 ): Array<BuildDependencyIdentity> {
 	const dependencies = new Map<string, BuildDependencyIdentity>();
 	for (const record of graph.modules.values()) {
-		if (record.host || record.virtual) continue;
-		const snapshot = session.snapshot(record.path, record.source);
+		if (record.host || (record.virtual && record.sourcePath === undefined)) continue;
+		const snapshot = session.snapshot(record.sourcePath ?? record.path, record.source);
 		dependencies.set(snapshot.path, snapshot);
 	}
 	for (const packagePath of packageResolutionInputs(graph)) {
@@ -535,6 +550,7 @@ export function compileBuildFrontend(
 		if (cached !== undefined) {
 			session.flush();
 			return {
+				workerImages: cached.workerImages,
 				get programImage() {
 					return cached.programImage;
 				},
@@ -567,6 +583,7 @@ export function compileBuildFrontend(
 		stripTypes: options.stripTypes,
 		parseCache: session.moduleParses,
 		entryPrelude,
+		platformSourceRoot: options.platformSourceRoot,
 	});
 	phases.graphMs = Date.now() - graphStartedAt;
 	const facts = withProgramClosure(
@@ -609,7 +626,11 @@ export function compileBuildFrontend(
 	let fragmentFallback: string | undefined;
 	let optimizationReport: CoreOptimizationReport | undefined;
 	let optimizationPlan: CoreOptimizationPlan | undefined;
+	const hasWorkers = (graph.workerEntries?.length ?? 0) !== 0;
+	if (hasWorkers && options.relocatable)
+		fragmentFallback = "worker roots use independent whole-program images";
 	if (
+		!hasWorkers &&
 		options.relocatable === true &&
 		options.forceCompile !== true &&
 		options.optimization === "development" &&
@@ -708,6 +729,22 @@ export function compileBuildFrontend(
 		wires = [serializeRuntimeImage(programImage.runtime)];
 		phases.serializeMs = Date.now() - serializeStartedAt;
 	}
+	const workerStartedAt = Date.now();
+	const workerImages = compileWorkerImages(graph, {
+		enforcePolicies: options.enforcePolicies,
+		buildConfig: options.config,
+		execution: options.execution,
+		stripTypes: options.stripTypes,
+		parseCache: session.moduleParses,
+		entryPrelude,
+		platformSourceRoot: options.platformSourceRoot,
+		optimization: options.optimization,
+		coreVerification: options.coreVerification,
+		coreInstrumentation: options.coreInstrumentation,
+		onDiagnostic: (diagnostic) => diagnostics.push(diagnostic),
+	});
+	phases.workerMs += Date.now() - workerStartedAt;
+	const workerArtifacts = cacheWorkerImages(workerImages, artifactRoot);
 	const dependencies = graphDependencies(graph, session);
 	session.flush();
 	const key = contentKey(identity, entrypoint, dependencies);
@@ -744,6 +781,7 @@ export function compileBuildFrontend(
 			identity,
 			contentKey: key,
 			runtimeArtifacts,
+			workerArtifacts,
 			compilerArtifact,
 			imageStats,
 			entrypoint,
@@ -754,6 +792,7 @@ export function compileBuildFrontend(
 
 	const materializeWires = () => (wires ??= loadFragmentWires!());
 	return {
+		workerImages,
 		programImage,
 		get wire() {
 			return materializeWires().at(-1)!;

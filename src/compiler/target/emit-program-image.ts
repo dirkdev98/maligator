@@ -110,6 +110,7 @@ const MAL_FUNCTION_ROW_MACRO = [
 ].join("");
 
 export const NATIVE_C_HEADER_LINES = [
+	"#include <stdatomic.h>",
 	"#include <string.h>",
 	'#include "vm.h"',
 	'#include "vm_ops.h"',
@@ -149,6 +150,7 @@ export const NATIVE_C_HEADER_LINES = [
 ];
 
 export const GENERATED_DATA_C_HEADER_LINES = [
+	"#include <stdatomic.h>",
 	"#include <string.h>",
 	'#include "vm.h"',
 	"#define MAL_STRING_ROW(code_units_value, length_value) { .header = MAL_HEAP_HEADER_IMMORTAL(MAL_HEAP_STRING), .storage = MAL_STRING_STORAGE_EXTERNAL, .hash = 0, .length = length_value, .code_units = code_units_value }",
@@ -929,7 +931,16 @@ function externalizeDataArrays(source: string, maxCodeUnits: number): SplitDataS
 	if (splitInitializers.length > 0) {
 		output.unshift("static void mal_initialize_generated_data(void);");
 		output.push("static void mal_initialize_generated_data(void) {");
+		output.push(
+			"    static _Atomic unsigned char state = 0;",
+			"    unsigned char expected = 0;",
+			"    if (!atomic_compare_exchange_strong_explicit(&state, &expected, 1, memory_order_acquire, memory_order_acquire)) {",
+			"        while (atomic_load_explicit(&state, memory_order_acquire) != 2) {}",
+			"        return;",
+			"    }",
+		);
 		for (const initializer of splitInitializers) output.push(`    ${initializer}();`);
+		output.push("    atomic_store_explicit(&state, 2, memory_order_release);");
 		output.push("}");
 	}
 	let splitSource = output.join("\n");

@@ -42,9 +42,11 @@ export interface PlatformExport extends PlatformDocumentation {
 	readonly type: PlatformType;
 	readonly contract: {
 		readonly phase: "preparation" | "runtime";
-		readonly value: "deep-frozen-data" | "callable";
+		readonly value: "deep-frozen-data" | "callable" | "runtime-data";
 		readonly identity: "application-context" | "module";
 		readonly provider?: "execution";
+		readonly declaration?: "worker-entry";
+		readonly workerSource?: string;
 		readonly effects: EffectSummary;
 	};
 }
@@ -54,6 +56,7 @@ interface PlatformModuleDefinition extends PlatformDocumentation {
 	readonly stability: "experimental";
 	readonly evaluation: "side-effect-free";
 	readonly declarationFile: string;
+	readonly internal?: true;
 	readonly types: ReadonlyArray<PlatformTypeDefinition>;
 	readonly exports: ReadonlyArray<PlatformExport>;
 }
@@ -325,9 +328,262 @@ const executionTypes: ReadonlyArray<PlatformTypeDefinition> = [
 	),
 ];
 
-export const PLATFORM_CATALOG_VERSION = 1;
+const workerType = (
+	name: string,
+	source: string,
+	description: string,
+): PlatformTypeDefinition => property(name, { kind: "signature", source }, description);
+
+const workerTypes: ReadonlyArray<PlatformTypeDefinition> = [
+	workerType(
+		"WorkerUrl<Module = unknown>",
+		"{ readonly href: string; readonly __workerModule?: Module }",
+		"An immutable image-local worker entry declaration. The compiler resolves the declaration independently of how libraries pass the descriptor or its href onward. Erased module types express the caller's assertion; runtime entry identity is validated.",
+	),
+	workerType(
+		"Transferable",
+		"ArrayBuffer | MessagePort",
+		"ArrayBuffer stores move at admission. MessagePort endpoints transfer ownership. SharedArrayBuffer is cloned by sharing its backing and cannot be transferred.",
+	),
+	workerType(
+		"TaskContext",
+		"{ readonly signal: AbortSignal; throwIfCancelled(): void }",
+		"Cancellation is cooperative while a pool task runs. The worker remains occupied until the task's returned promise settles.",
+	),
+	workerType(
+		"TransferResult<Value>",
+		"{ readonly value: Value; readonly __transferResult: unique symbol }",
+		"An opaque result envelope. Constructing it does not detach buffers; publication commits transfers.",
+	),
+	workerType(
+		"TaskNames<Module>",
+		"{ [Key in keyof Module]-?: Module[Key] extends (context: TaskContext, ...args: infer Args) => unknown ? Key : never }[keyof Module] & string",
+		"Names of context-first exported task functions.",
+	),
+	workerType(
+		"TaskArgs<Function>",
+		"Function extends (context: TaskContext, ...args: infer Args) => unknown ? Args : never",
+		"The task's argument tuple, excluding its local cancellation context.",
+	),
+	workerType(
+		"TaskValue<Function>",
+		"Function extends (...args: Array<never>) => infer Result ? Awaited<Result> extends TransferResult<infer Value> ? Value : Awaited<Result> : never",
+		"The settled task result after unwrapping an explicit transfer envelope.",
+	),
+	workerType(
+		"PoolOptions",
+		"{ size?: number; maxQueuedTasks?: number; maxQueuedBytes?: number; maxMessageBytes?: number; name?: string }",
+		"Fixed persistent worker count and admission bounds. Every worker has independent module state. A size-one pool dispatches admitted tasks serially.",
+	),
+	workerType(
+		"RunOptions",
+		"{ signal?: AbortSignal; transfer?: ReadonlyArray<Transferable> }",
+		"The transfer list commits synchronously when run returns normally. Validation, saturation, closed pools and already-aborted signals throw before admission.",
+	),
+	workerType(
+		"MapOptions<Args>",
+		"{ signal?: AbortSignal; window?: number; transfer?: (args: Args, index: number) => ReadonlyArray<Transferable> }",
+		"The window bounds pulled inputs and buffered results together. Results are yielded in input order; iterator return cancels this map's work and closes its input.",
+	),
+	workerType(
+		"PoolStats",
+		"{ readonly size: number; readonly active: number; readonly queued: number; readonly completed: number; readonly failed: number; readonly cancelled: number }",
+		"A snapshot of this pool's scheduling and settled operations.",
+	),
+	workerType(
+		"WorkerPool<Module>",
+		"{ readonly ready: Promise<void>; run<Key extends TaskNames<Module>>(name: Key, args: TaskArgs<Module[Key]>, options?: RunOptions): Promise<TaskValue<Module[Key]>>; map<Key extends TaskNames<Module>>(name: Key, args: Iterable<TaskArgs<Module[Key]>> | AsyncIterable<TaskArgs<Module[Key]>>, options?: MapOptions<TaskArgs<Module[Key]>>): AsyncIterable<TaskValue<Module[Key]>>; close(): Promise<void>; terminate(): Promise<void>; stats(): PoolStats; ref(): WorkerPool<Module>; unref(): WorkerPool<Module>; hasRef(): boolean }",
+		"A bounded task scheduler over isolated persistent workers. Each worker executes one task through asynchronous settlement. No accepted task is replayed after worker failure.",
+	),
+	workerType(
+		"WorkerExit",
+		"{ readonly id: number; readonly code: number; readonly reason: 'completed' | 'terminated' | 'error'; readonly error?: Error }",
+		"A terminal record published only after the native worker is joined and its slot is released.",
+	),
+	workerType(
+		"WorkerOptions",
+		"{ name?: string; data?: unknown; transfer?: ReadonlyArray<Transferable>; maxQueuedMessages?: number; maxQueuedBytes?: number; maxMessageBytes?: number }",
+		"Worker data is snapshotted before startup. The native host bounds live workers and message admission process-wide.",
+	),
+	workerType(
+		"MessageChannelOptions",
+		"{ maxQueuedMessages?: number; maxQueuedBytes?: number; maxMessageBytes?: number }",
+		"Each endpoint bounds its pending message count and bytes. Rejection leaves the sender's transferables unchanged.",
+	),
+	workerType(
+		"MessagePort<Send = unknown, Receive = unknown>",
+		"EventTarget & { postMessage(value: Send, transfer?: ReadonlyArray<Transferable>): void; onmessage: ((event: MessageEvent<Receive>) => void) | null; onmessageerror: ((event: MessageEvent<unknown>) => void) | null; start(): void; close(): void; ref(): MessagePort<Send, Receive>; unref(): MessagePort<Send, Receive>; hasRef(): boolean }",
+		"An ordered bidirectional endpoint with transactional transfer and bounded queues. Message listeners and values are owned by the receiving isolate.",
+	),
+	workerType(
+		"MessageChannel",
+		"{ readonly port1: MessagePort; readonly port2: MessagePort }",
+		"A standalone channel whose endpoints may be transferred to workers.",
+	),
+	workerType(
+		"Worker<Send = unknown, Receive = unknown>",
+		"EventTarget & { readonly id: number; readonly ready: Promise<void>; readonly closed: Promise<WorkerExit>; readonly port: MessagePort<Send, Receive>; terminate(): Promise<WorkerExit>; ref(): Worker<Send, Receive>; unref(): Worker<Send, Receive>; hasRef(): boolean }",
+		"A long-lived isolated module and its parent communication port. Startup completes after module evaluation; shutdown completes after native thread reaping.",
+	),
+];
+
+function workerExport(
+	name: string,
+	source: string,
+	description: string,
+	declaration = false,
+): PlatformExport {
+	return {
+		name,
+		type: { kind: "signature", source },
+		description,
+		contract: {
+			phase: "runtime",
+			value: "callable",
+			identity: "module",
+			effects: EVERY_EFFECT_SUMMARY,
+			...(declaration ? { declaration: "worker-entry" as const } : {}),
+		},
+	};
+}
+
+export const PLATFORM_CATALOG_VERSION = 2;
 
 export const PLATFORM_MODULES: ReadonlyArray<PlatformModule> = [
+	{
+		kind: "source",
+		id: "maligator:workers",
+		stability: "experimental",
+		evaluation: "side-effect-free",
+		sourceFile: "workers/runtime.mjs",
+		declarationFile: "workers-api.d.ts",
+		description:
+			"Parallel computation and isolated event loops. Declared entries are bundled into the application image; workers do not compile or load source files at runtime. Native executors and GC helpers are shared across JavaScript isolates.",
+		types: workerTypes,
+		exports: [
+			workerExport(
+				"createWorkerUrl",
+				"<Module = unknown>(specifier: string, base: string) => WorkerUrl<Module>",
+				"Declare an entry using a statically resolved module specifier and explicit import.meta.url base. The immutable href projection can be passed to existing worker libraries.",
+				true,
+			),
+			workerExport(
+				"createPool",
+				"<Module>(entry: WorkerUrl<Module>, options?: PoolOptions) => WorkerPool<Module>",
+				"Create a persistent bounded pool. Submission failures throw synchronously; an admitted task settles asynchronously.",
+			),
+			workerExport(
+				"transfer",
+				"<Value>(value: Value, transfer: ReadonlyArray<Transferable>) => TransferResult<Value>",
+				"Wrap a result for transfer when the worker publishes it.",
+			),
+			workerExport(
+				"Worker",
+				"{ new<Send = unknown, Receive = unknown>(entry: WorkerUrl, options?: WorkerOptions): Worker<Send, Receive> }",
+				"Start a declared isolated module and expose its ordered port and complete lifecycle.",
+			),
+			workerExport(
+				"MessageChannel",
+				"{ new(options?: MessageChannelOptions): MessageChannel }",
+				"Create two transferable endpoints independently of worker startup.",
+			),
+			workerExport(
+				"MessagePort",
+				"{ readonly prototype: MessagePort }",
+				"The port prototype for type and identity checks. Ports are created by channels and workers.",
+			),
+			workerExport(
+				"receiveMessageOnPort",
+				"<Receive>(port: MessagePort<unknown, Receive>) => { message: Receive } | undefined",
+				"Synchronously dequeue one pending message without running unrelated callbacks.",
+			),
+			workerExport(
+				"capabilities",
+				"() => { readonly threads: boolean; readonly sharedMemory: boolean; readonly parallelism: number; readonly maxWorkers: number }",
+				"Report the running host's worker facilities and capacity.",
+			),
+			{
+				name: "parentPort",
+				type: { kind: "signature", source: "MessagePort | null" },
+				description: "The worker's parent endpoint; null in the main isolate.",
+				contract: {
+					phase: "runtime",
+					value: "runtime-data",
+					identity: "module",
+					effects: NO_EFFECT_SUMMARY,
+				},
+			},
+			{
+				name: "workerData",
+				type: { kind: "signature", source: "unknown" },
+				description: "The worker-owned clone of startup data.",
+				contract: {
+					phase: "runtime",
+					value: "runtime-data",
+					identity: "module",
+					effects: NO_EFFECT_SUMMARY,
+				},
+			},
+		],
+	},
+	{
+		kind: "native",
+		id: "maligator:internal/workers",
+		internal: true,
+		stability: "experimental",
+		evaluation: "side-effect-free",
+		installer: "mal_host_install_maligator_internal_workers",
+		declarationFile: "workers-host-api.d.ts",
+		description:
+			"Toolchain-owned worker substrate used by the public source API and Node compatibility personality.",
+		types: [],
+		exports: [
+			...[
+				"Worker",
+				"MessageChannel",
+				"MessagePort",
+				"receiveMessageOnPort",
+				"capabilities",
+				"failCurrent",
+			].map((name) =>
+				workerExport(
+					name,
+					"(...args: Array<unknown>) => unknown",
+					"Internal host operation.",
+				),
+			),
+			workerExport(
+				"createWorkerUrl",
+				"(specifier: string, base: string) => { readonly href: string }",
+				"Internal static entry declaration.",
+				true,
+			),
+			...["parentPort", "workerData"].map((name): PlatformExport => ({
+				name,
+				type: { kind: "signature", source: "unknown" },
+				description: "Isolate-owned worker state.",
+				contract: {
+					phase: "runtime",
+					value: "runtime-data",
+					identity: "module",
+					effects: NO_EFFECT_SUMMARY,
+				},
+			})),
+			{
+				name: "poolEntry",
+				type: { kind: "signature", source: "{ readonly href: string }" },
+				description: "The task-pool bootstrap entry.",
+				contract: {
+					phase: "runtime",
+					value: "runtime-data",
+					identity: "module",
+					effects: NO_EFFECT_SUMMARY,
+					declaration: "worker-entry",
+					workerSource: "workers/pool-worker.mjs",
+				},
+			},
+		],
+	},
 	{
 		kind: "native",
 		id: "maligator:process",

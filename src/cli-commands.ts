@@ -50,6 +50,7 @@ import {
 	compileEntrypointToBuffer,
 } from "./compiler/pipeline/compile-program.ts";
 import { emitProgramTranslationUnits } from "./compiler/target/emit-program-image.ts";
+import { emitWorkerImageTranslationUnits } from "./compiler/target/emit-worker-images.ts";
 import { compileDependencyFragmentRequest } from "./dependency-fragment-cache.ts";
 import type { DependencyFragmentWorker } from "./dependency-fragment-cache.ts";
 import { cacheDevelopmentAssets } from "./development-assets.ts";
@@ -89,6 +90,11 @@ import {
 } from "./toolchain.ts";
 import type { Toolchain } from "./toolchain.ts";
 import { debugEnabled, log } from "./utils.ts";
+import {
+	cacheDevelopmentWorkerManifest,
+	workerManifestArguments,
+	writeSerializedWorkerManifest,
+} from "./worker-image-cache.ts";
 
 export interface CommandContext {
 	stripTypes: BuildConfigTypeStripper;
@@ -124,6 +130,8 @@ export interface DevelopmentProcessHost {
 }
 
 export interface CompilerInstallation {
+	/** Installed source-module root used by the platform catalog. */
+	platformSourceRoot?: string;
 	/** Absolute runtime source tree owned by this compiler installation. */
 	runtimeDirectory: string;
 	/** License notice copied into deployable artifacts. */
@@ -158,6 +166,7 @@ export function developmentCompilerInstallation(
 ): CompilerInstallation {
 	const sourceDirectory = path.resolve(moduleDirectory);
 	return {
+		platformSourceRoot: sourceDirectory,
 		runtimeDirectory: path.resolve(sourceDirectory, "../runtime"),
 		licensePath: path.resolve(sourceDirectory, "../LICENSE"),
 		testModulePath: path.join(sourceDirectory, "testing/runtime.mjs"),
@@ -179,9 +188,13 @@ export function productCompilerInstallation(
 	developmentRunnerPath?: string,
 	nodeGlobalsPath?: string,
 	mutableDevelopmentRunnerPath?: string,
+	platformSourceRoot?: string,
 ): CompilerInstallation {
 	return {
 		runtimeDirectory: path.resolve(runtimeDirectory),
+		...(platformSourceRoot === undefined
+			? {}
+			: { platformSourceRoot: path.resolve(platformSourceRoot) }),
 		...(licensePath === undefined ? {} : { licensePath: path.resolve(licensePath) }),
 		testModulePath: path.resolve(testModulePath),
 		nodeGlobalsPath: path.resolve(
@@ -356,10 +369,11 @@ export function applicationDriverPath(
 	installation: CompilerInstallation,
 	webPlatform: boolean,
 	node = false,
+	workers = false,
 ): string {
 	return path.join(
 		installation.runtimeDirectory,
-		webPlatform || node ? "host_main.c" : "test262_main.c",
+		webPlatform || node || workers ? "host_main.c" : "test262_main.c",
 	);
 }
 
@@ -476,6 +490,9 @@ function compileAndBuild(
 		() => {
 			try {
 				return compileBuildFrontend({
+					platformSourceRoot:
+						context.installation.platformSourceRoot ??
+						path.dirname(context.installation.nodeGlobalsPath),
 					entrypoint: entrypointPath,
 					config: buildConfig,
 					execution,
@@ -585,6 +602,11 @@ function compileAndBuild(
 		reporter.phase("Write runtime image", () =>
 			writeFileSync(serializePath, frontend.wire),
 		);
+		const workerManifest = writeSerializedWorkerManifest(
+			frontend.workerImages,
+			serializePath,
+		);
+		if (workerManifest !== undefined) reporter.detail("Worker manifest", workerManifest);
 		reporter.detail("Serialized bytes", frontend.wire.length);
 		reporter.complete("Serialized", serializePath, true);
 		return { serializedPath: serializePath, dependencies };
@@ -594,13 +616,17 @@ function compileAndBuild(
 		command.kind !== "build" && !command.profile
 			? compatibleDevelopmentRunner(buildConfig, context)
 			: undefined;
+	const workerManifest =
+		command.kind === "build"
+			? undefined
+			: cacheDevelopmentWorkerManifest(frontend.workerImages);
 	if (command.kind !== "build" && packagedRunner !== undefined) {
 		const wirePaths = reporter.phase("Cache development image", () =>
 			frontend.runtimeArtifacts.map((artifact) => artifact.path),
 		);
 		const surfaceMask =
 			(buildConfig.surface.webPlatform ? 1 : 0) | (buildConfig.surface.node ? 2 : 0);
-		const runArguments =
+		const runArguments = workerManifestArguments(workerManifest).concat(
 			packagedRunner.wireProtocol === "product"
 				? [
 						assetManifest === undefined
@@ -622,7 +648,8 @@ function compileAndBuild(
 						entrypointPath,
 						...wirePaths,
 						...command.programArgs,
-					];
+					],
+		);
 		reporter.detail("Execution backend", "packaged development runtime");
 		reporter.detail("Development images", wirePaths.join(", "));
 		reporter.complete("Ready", packagedRunner.executablePath, false);
@@ -761,6 +788,7 @@ function compileAndBuild(
 		return {
 			binaryPath,
 			runArguments: [
+				...workerManifestArguments(workerManifest),
 				assetManifest === undefined
 					? "--maligator-internal-run-wires"
 					: "--maligator-internal-run-wires-assets",
@@ -775,14 +803,20 @@ function compileAndBuild(
 	}
 
 	const programImage = frontend.programImage;
-	const output = reporter.phase("Generate native code", () =>
-		emitProgramTranslationUnits(programImage, {
+	const output = reporter.phase("Generate native code", () => [
+		...emitProgramTranslationUnits(programImage, {
 			sourcePath: nativeSourcePath,
 			compiled: compiledNativeOutput,
 			assets,
 			maligatorSurface: buildConfig.surface.maligator,
 		}),
-	);
+		...emitWorkerImageTranslationUnits(frontend.workerImages, {
+			sourcePath: nativeSourcePath,
+			compiled: compiledNativeOutput,
+			assets,
+			maligatorSurface: buildConfig.surface.maligator,
+		}),
+	]);
 	if (command.kind === "build" && command.internal.emitC)
 		log.info(output.map((unit) => unit.source).join("\n"));
 	reporter.detail("Translation units", output.length);
@@ -837,6 +871,7 @@ function compileAndBuild(
 					context.installation,
 					buildConfig.surface.webPlatform,
 					buildConfig.surface.node,
+					frontend.workerImages.length > 0,
 				),
 				cacheSuffix: derivation.cacheSuffix,
 			}).binaryPath,
@@ -1275,7 +1310,11 @@ function executeIsolatedTests(
 	});
 	const assetManifest = cacheDevelopmentAssets(assets);
 	const entrypoint = compiled.files[0]!;
+	const workerManifest = cacheDevelopmentWorkerManifest(
+		"workerImages" in compiled ? compiled.workerImages : [],
+	);
 	const args = [
+		...workerManifestArguments(workerManifest),
 		assetManifest === undefined
 			? "--maligator-internal-run-wires"
 			: "--maligator-internal-run-wires-assets",
@@ -1393,12 +1432,16 @@ function executeProfiledTests(
 		cacheDirectory: maligatorCacheDirectory(),
 		session: new FrontendCompilationSession(),
 	});
-	const source = emitProgramTranslationUnits(compiled.programImage, {
+	const emitOptions = {
 		sourcePath: nativeSourcePath,
 		compiled: true,
 		assets,
 		maligatorSurface: config.surface.maligator,
-	});
+	};
+	const source = [
+		...emitProgramTranslationUnits(compiled.programImage, emitOptions),
+		...emitWorkerImageTranslationUnits(compiled.workerImages, emitOptions),
+	];
 	const binary = buildLocalBinary({
 		context: nativeContext,
 		name: "maligator-profile-test",
@@ -1408,6 +1451,7 @@ function executeProfiledTests(
 			context.installation,
 			config.surface.webPlatform,
 			config.surface.node,
+			compiled.workerImages.length > 0,
 		),
 		cacheSuffix: derivation.cacheSuffix,
 	}).binaryPath;

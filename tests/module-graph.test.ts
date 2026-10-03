@@ -844,6 +844,7 @@ test("canonicalizes the worker_threads main-thread identity", () => {
 	expect(graph.modules.get("node:worker_threads")?.host).toMatchObject({
 		named: [
 			"MessageChannel",
+			"MessagePort",
 			"SHARE_ENV",
 			"Worker",
 			"isMainThread",

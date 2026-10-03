@@ -17,6 +17,7 @@ export type CompileEntrypointToBufferPhase = CompileEntrypointPhase | "serialize
 export interface CompileEntrypointOptions extends BuildModuleGraphOptions {
 	/** Only for embedded engine code; user programs must resolve mutable realm globals. */
 	intrinsicGlobalReads?: boolean;
+	enforcePolicies?: boolean;
 	optimization?: CompileCoreOptions["optimization"];
 	coreVerification?: CompileCoreOptions["coreVerification"];
 	coreInstrumentation?: CompileCoreOptions["coreInstrumentation"];
@@ -58,7 +59,7 @@ export function analyzeEntrypoint(
 	if (facts !== undefined) options.onProgramFacts?.(facts);
 	const semantic = runPhase("semantic", () => {
 		const result = runSemanticAnalysisForGraph(graph);
-		if (options.buildConfig !== undefined) {
+		if (options.buildConfig !== undefined && options.enforcePolicies !== false) {
 			for (const diagnostic of validateSemanticBuildPolicy(
 				result,
 				options.buildConfig,

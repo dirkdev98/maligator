@@ -226,6 +226,7 @@ const WORKER_THREADS: HostModuleSpec = {
 	id: "node:worker_threads",
 	named: [
 		"MessageChannel",
+		"MessagePort",
 		"SHARE_ENV",
 		"Worker",
 		"isMainThread",
@@ -312,7 +313,7 @@ const TLS: HostModuleSpec = {
 
 const EVENTS: HostModuleSpec = {
 	id: "node:events",
-	named: ["EventEmitter", "errorMonitor"],
+	named: ["EventEmitter", "EventEmitterAsyncResource", "errorMonitor", "once"],
 	hasDefault: true,
 	installer: hostInstallerSymbol("node:events"),
 };

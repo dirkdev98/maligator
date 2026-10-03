@@ -45,7 +45,7 @@ import type {
 } from "./cache.ts";
 import { TestCompilationSession } from "./cache.ts";
 
-const FRAGMENT_SCHEMA = 1;
+const FRAGMENT_SCHEMA = 2;
 const TEST_MODULE_ID = "maligator:test";
 const NODE_GLOBALS_MODULE_ID = "maligator-internal:node-globals";
 const CACHE_DIRECTORY = path.join(maligatorCacheDirectory(), "test");
@@ -60,7 +60,7 @@ interface FragmentReference extends ArtifactReference {
 }
 
 interface FragmentManifest {
-	schema: 1;
+	schema: 2;
 	identity: string;
 	entries: Array<string>;
 	dependencies: Array<DependencyIdentity>;
@@ -524,6 +524,7 @@ function planningGraph(
 			.join("\n")}\n`,
 		stripTypes: options.stripTypes,
 		buildConfig: options.config,
+		platformSourceRoot: options.platformSourceRoot,
 		execution: options.execution,
 		parseCache,
 		virtualModules: new Map([
@@ -589,6 +590,7 @@ function fragmentGraph(
 	return buildModuleGraph(plan.file, {
 		stripTypes: options.stripTypes,
 		buildConfig: options.config,
+		platformSourceRoot: options.platformSourceRoot,
 		execution: options.execution,
 		parseCache,
 		virtualModules,
@@ -636,6 +638,7 @@ globalThis.__maligatorTestLinkedModules = __maligatorModules;
 		entrySource: source,
 		stripTypes: options.stripTypes,
 		buildConfig: options.config,
+		platformSourceRoot: options.platformSourceRoot,
 		execution: options.execution,
 		parseCache,
 		virtualModules: new Map([
@@ -676,6 +679,7 @@ console.log(${JSON.stringify(options.processRunner.resultPrefix)} + JSON.stringi
 		entrySource: source,
 		stripTypes: options.stripTypes,
 		buildConfig: options.config,
+		platformSourceRoot: options.platformSourceRoot,
 		execution: options.execution,
 		parseCache,
 	});
@@ -734,6 +738,10 @@ export function compileRelocatableTestImage(
 	const graphStartedAt = Date.now();
 	const selectedFiles = new Set(entries);
 	const planning = planningGraph(entries, options, session.moduleParses);
+	if (planning.workerEntries?.length)
+		throw new UnsupportedRelocatableTestImageError(
+			"worker roots require whole-program test images",
+		);
 	phases.graphMs = Date.now() - graphStartedAt;
 	const planningSemanticStartedAt = Date.now();
 	const planningSemantic = runSemanticAnalysisForGraph(planning);

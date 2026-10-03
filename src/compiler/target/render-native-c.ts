@@ -3357,6 +3357,11 @@ function emitBody(
 				if (target > branchIp) return `goto L${target};`;
 				if (gcSafepointKinds.get(branchIp) !== "loop-backedge")
 					throw new Error("Native switch backedge has no root plan");
+				const handler = handlerTargets[branchIp];
+				const onThrow =
+					handler !== undefined
+						? `goto L${handler};`
+						: `goto ${nativeBodyReference(resources, "throwExit")};`;
 				return `if (mal_gc_poll) { ${cPrivateRootPublication(
 					rootPublication,
 					branchIp,
@@ -3365,7 +3370,7 @@ function emitBody(
 					.map((line) => `${line} `)
 					.join(
 						"",
-					)}${mask === undefined ? "" : `${cInactiveRootMaskPublication(mask)}; `}mal_gc_safepoint(vm); } goto L${target};`;
+					)}${mask === undefined ? "" : `${cInactiveRootMaskPublication(mask)}; `}mal_gc_safepoint(vm); if (mal_gc_poll_termination(vm)) ${onThrow} } goto L${target};`;
 			};
 			if (literalSwitch.kind === "string") {
 				const emitted = emitStringSwitch(
@@ -4527,18 +4532,22 @@ function emitInstruction(
 		`if (vm->completion.kind == MAL_COMPLETION_THROW) ${onThrow()}`;
 	// A poll without corresponding exact-root metadata can expose dead slots or clear
 	// a just-produced result under the preceding instruction's mask.
+	// Isolate termination is sticky and re-arms mal_gc_poll, so it surfaces only at a
+	// poll; raising it there unwinds through the ordinary throw path.
+	const safepoint = (): string =>
+		`mal_gc_safepoint(vm); if (mal_gc_poll_termination(vm)) ${onThrow()}`;
 	const poll =
 		(context.outgoingRootPublication?.length ?? 0) > 0
-			? `if (mal_gc_poll) { ${context.outgoingRootPublication!.join(" ")} ${context.loopBackedgeInactiveRootMask === undefined ? "" : `${cInactiveRootMaskPublication(context.loopBackedgeInactiveRootMask)}; `}mal_gc_safepoint(vm); }`
+			? `if (mal_gc_poll) { ${context.outgoingRootPublication!.join(" ")} ${context.loopBackedgeInactiveRootMask === undefined ? "" : `${cInactiveRootMaskPublication(context.loopBackedgeInactiveRootMask)}; `}${safepoint()} }`
 			: context.loopBackedgeInactiveRootMask === undefined
 				? context.gcSafepoint
-					? "if (mal_gc_poll) mal_gc_safepoint(vm);"
+					? `if (mal_gc_poll) { ${safepoint()} }`
 					: ""
-				: `if (mal_gc_poll) { ${cInactiveRootMaskPublication(context.loopBackedgeInactiveRootMask)}; mal_gc_safepoint(vm); }`;
+				: `if (mal_gc_poll) { ${cInactiveRootMaskPublication(context.loopBackedgeInactiveRootMask)}; ${safepoint()} }`;
 	const mathPoll =
 		context.mathCallInactiveRootMask === undefined
 			? poll
-			: `if (mal_gc_poll) { ${(context.outgoingRootPublication ?? []).map((line) => `${line} `).join("")}${cInactiveRootMaskPublication(context.mathCallInactiveRootMask)}; mal_gc_safepoint(vm); }`;
+			: `if (mal_gc_poll) { ${(context.outgoingRootPublication ?? []).map((line) => `${line} `).join("")}${cInactiveRootMaskPublication(context.mathCallInactiveRootMask)}; ${safepoint()} }`;
 	const mathFallbackRootPublication =
 		context.mathCallInactiveRootMask === undefined
 			? []
@@ -5161,7 +5170,7 @@ function emitInstruction(
 			if (stringIndex !== undefined) {
 				const cache = `&__dpc_${ip}`;
 				return [
-					`static MalDefinePropertyCache __dpc_${ip};`,
+					`static MAL_ISOLATE_LOCAL MalDefinePropertyCache __dpc_${ip};`,
 					`if (!mal_vm_try_define_property_static_cached(vm, ${cache}, ${boxed(instruction.object)}, ${boxed(instruction.value)}, ${instruction.enumerable}, ${instruction.writable}, ${instruction.configurable})) {`,
 					`  mal_vm_op_define_property_static_cached(vm, ${cache}, ${boxed(instruction.object)}, ${relocation.stringIndex(stringIndex)}, ${boxed(instruction.value)}, ${instruction.enumerable}, ${instruction.writable}, ${instruction.configurable});`,
 					`  ${throwCheck()}`,
@@ -7909,7 +7918,7 @@ function emitInstruction(
 						`mal_builtin_string_char_code_at_in_bounds(${boxedOperand(instruction.thisValue)}, (usize) ${boundedPosition})`,
 					);
 					return [
-						`static MalCallCache __cc_${ip};`,
+						`static MAL_ISOLATE_LOCAL MalCallCache __cc_${ip};`,
 						`if (${captured}) {`,
 						`  r${instruction.dst} = ${callResult(direct)};`,
 						`} else {`,
@@ -7924,7 +7933,7 @@ function emitInstruction(
 				if (chain.methodIdentity === "authority-invariant") {
 					const value = `string_char_code_at_${ip}_value`;
 					return [
-						`static MalCallCache __cc_${ip};`,
+						`static MAL_ISOLATE_LOCAL MalCallCache __cc_${ip};`,
 						`if (${captured}) {`,
 						`  MalValue ${value} = ${profileCall("string", `mal_builtin_string_char_code_at_known(vm, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length})`)};`,
 						`  ${throwCheck()}`,
@@ -7940,7 +7949,7 @@ function emitInstruction(
 				}
 				context.stringLeafCaches.add(ip);
 				return [
-					`static MalCallCache __cc_${ip};`,
+					`static MAL_ISOLATE_LOCAL MalCallCache __cc_${ip};`,
 					`MalCompletion ${tmp};`,
 					`if (${captured}) {`,
 					`  ${tmp} = ${profileCall("string", `mal_builtin_string_char_code_at_direct(vm, &__cc_${ip}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length}, &__string_leaf_cache_${ip})`)};`,
@@ -7971,7 +7980,7 @@ function emitInstruction(
 						)
 					: `${admission} && ${trimIdentity} && ${profileCall("string", `mal_builtin_string_split_cursor_init(vm, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${boxedOperand(instruction.arguments[0]!)}, &__gc_slots[${site.subjectSlot}], &__gc_slots[${site.traversalSlot}], &__string_split_cursor_${id}_state)`)}`;
 				return [
-					`static MalCallCache __cc_${ip};`,
+					`static MAL_ISOLATE_LOCAL MalCallCache __cc_${ip};`,
 					`__string_split_cursor_${id}_active = ${initialize};`,
 					`if (__string_split_cursor_${id}_active) {`,
 					`  r${instruction.dst} = MAL_VALUE_UNDEFINED;`,
@@ -7992,7 +8001,7 @@ function emitInstruction(
 			if (nativeStringSplitCursorAction?.role === "trimCall") {
 				const id = nativeStringSplitCursorAction.site.callIp;
 				return [
-					`static MalCallCache __cc_${ip};`,
+					`static MAL_ISOLATE_LOCAL MalCallCache __cc_${ip};`,
 					`if (__string_split_cursor_${id}_active && __string_split_cursor_${id}_trim_fast) {`,
 					`  r${instruction.dst} = MAL_VALUE_UNDEFINED;`,
 					`} else {`,
@@ -8011,7 +8020,7 @@ function emitInstruction(
 				if (load?.consumer?.kind === "asciiCaseLength") {
 					const fast = `__regexp_exec_${site.projection.callIp}_case_${load.consumer.upperCallIp}_fast`;
 					return [
-						`static MalCallCache __cc_${ip};`,
+						`static MAL_ISOLATE_LOCAL MalCallCache __cc_${ip};`,
 						`if (${fast}) {`,
 						`  r${instruction.dst} = MAL_VALUE_UNDEFINED;`,
 						`} else {`,
@@ -8035,7 +8044,7 @@ function emitInstruction(
 							? `mal_ops_number_as_f64(${parsed})`
 							: parsed;
 					return [
-						`static MalCallCache __cc_${ip};`,
+						`static MAL_ISOLATE_LOCAL MalCallCache __cc_${ip};`,
 						`if (__regexp_iter_${site.projection.stepIp}_projected) {`,
 						`  r${instruction.dst} = ${start} < 0 ? ${reps[instruction.dst] === "number" ? "NAN" : "mal_value_new_nan()"} : ${direct};`,
 						`} else {`,
@@ -8059,7 +8068,7 @@ function emitInstruction(
 							? `mal_ops_number_as_f64(${parsed})`
 							: parsed;
 					return [
-						`static MalCallCache __cc_${ip};`,
+						`static MAL_ISOLATE_LOCAL MalCallCache __cc_${ip};`,
 						`if (__regexp_exec_${site.projection.callIp}_projected) {`,
 						`  r${instruction.dst} = ${start} < 0 ? ${reps[instruction.dst] === "number" ? "NAN" : "mal_value_new_nan()"} : ${direct};`,
 						`} else {`,
@@ -8094,7 +8103,7 @@ function emitInstruction(
 					const direct = `(${end} > ${start} ? ${value} : ${empty})`;
 					context.stringLeafCaches.add(ip);
 					return [
-						`static MalCallCache __cc_${ip};`,
+						`static MAL_ISOLATE_LOCAL MalCallCache __cc_${ip};`,
 						`if (${fast}) {`,
 						`  r${instruction.dst} = ${direct};`,
 						`} else {`,
@@ -8132,7 +8141,7 @@ function emitInstruction(
 					`mal_regexp_exec_capture_projection(vm, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${boxedOperand(instruction.arguments[0]!)}, (const u32[]){ ${indices} }, (MalValue *[]){ ${outputs} }, ${site.loads.length}, ${spanMask}, __regexp_exec_${projection.callIp}_starts, __regexp_exec_${projection.callIp}_ends, &__gc_slots[${site.subjectSlot}], &r${instruction.dst})`,
 				);
 				return [
-					`static MalCallCache __cc_${ip};`,
+					`static MAL_ISOLATE_LOCAL MalCallCache __cc_${ip};`,
 					`__regexp_exec_${projection.callIp}_projected = false;`,
 					`${fast} = ${project};`,
 					`if (${fast}) {`,
@@ -8162,7 +8171,7 @@ function emitInstruction(
 								`mal_builtin_string_slice_to_number_direct(vm, ${boxedOperand(instruction.callee)}, ${boxed(fusion.numberCallee)}, ${boxedOperand(instruction.thisValue)}, ${cF64Literal(fusion.sliceStart)}, &${value})`,
 							);
 					return [
-						`static MalCallCache __cc_${ip};`,
+						`static MAL_ISOLATE_LOCAL MalCallCache __cc_${ip};`,
 						`${fast} = ${convert};`,
 						`if (${fast}) {`,
 						`  r${instruction.dst} = MAL_VALUE_UNDEFINED;`,
@@ -8182,7 +8191,7 @@ function emitInstruction(
 					];
 				}
 				return [
-					`static MalCallCache __cc_${ip};`,
+					`static MAL_ISOLATE_LOCAL MalCallCache __cc_${ip};`,
 					`if (${fast}) {`,
 					`  r${instruction.dst} = ${reps[instruction.dst] === "number" ? value : profileCall("boxing", `mal_ops_number_value(${value})`)};`,
 					`  ${poll}`,
@@ -8212,7 +8221,7 @@ function emitInstruction(
 							`mal_builtin_string_split_projection(vm, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${boxedOperand(instruction.arguments[0]!)}, (const u32[]){ ${indices} }, (MalValue *[]){ ${outputs} }, ${site.elementLoads.length}, &__string_split_${projection.callIp}_length)`,
 						);
 				return [
-					`static MalCallCache __cc_${ip};`,
+					`static MAL_ISOLATE_LOCAL MalCallCache __cc_${ip};`,
 					`${fast} = ${project};`,
 					`if (${fast}) {`,
 					`  r${instruction.dst} = MAL_VALUE_UNDEFINED;`,
@@ -8248,7 +8257,7 @@ function emitInstruction(
 					entry.fieldParameters === undefined
 				) {
 					return [
-						`static MalCallCache __cc_${ip};`,
+						`static MAL_ISOLATE_LOCAL MalCallCache __cc_${ip};`,
 						`MalCompletion ${tmp} = mal_builtin_sort_numeric(vm, &__cc_${ip}, ${numericCallback.operation === "toSorted" ? "true" : "false"}, ${numericCallback.viaCall ? "true" : "false"}, ${relocation.functionIndex(numericCallback.functionIndex)}, mal_direct_${numericCallback.functionIndex}_${numericCallback.entryId}${suffix}, ${entry.leaf ? "true" : "false"}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
 						`if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow()}`,
 						`r${instruction.dst} = ${callResult(`${tmp}.value`)};`,
@@ -8286,7 +8295,7 @@ function emitInstruction(
 					`if (mal_builtin_boolean_callee_matches(${operation}, ${boxedOperand(instruction.callee)})${receiverGuard}) {`,
 					result,
 					`} else {`,
-					`static MalCallCache __cc_${ip};`,
+					`static MAL_ISOLATE_LOCAL MalCallCache __cc_${ip};`,
 					`MalCompletion ${tmp} = mal_vm_call_cached(vm, &__cc_${ip}, ${boxedOperand(instruction.callee)}, ${receiver}, ${argsExpr}, ${args.length});`,
 					`if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow()}`,
 					`r${instruction.dst} = ${callResult(`${tmp}.value`)};`,
@@ -8312,7 +8321,7 @@ function emitInstruction(
 					`if (mal_builtin_number_predicate_callee_matches(${numberPredicate}, ${boxedOperand(instruction.callee)})) {`,
 					storeBoolean(instruction.dst, test),
 					`} else {`,
-					`static MalCallCache __cc_${ip};`,
+					`static MAL_ISOLATE_LOCAL MalCallCache __cc_${ip};`,
 					`MalCompletion ${tmp} = mal_vm_call_cached(vm, &__cc_${ip}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
 					`if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow()}`,
 					`r${instruction.dst} = ${callResult(`${tmp}.value`)};`,
@@ -8361,7 +8370,7 @@ function emitInstruction(
 					throwCheck(),
 					`r${instruction.dst} = __number_format_${ip};`,
 					`} else {`,
-					`static MalCallCache __cc_${ip};`,
+					`static MAL_ISOLATE_LOCAL MalCallCache __cc_${ip};`,
 					`MalCompletion ${tmp} = mal_vm_call_cached(vm, &__cc_${ip}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
 					`if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow()}`,
 					`r${instruction.dst} = ${tmp}.value;`,
@@ -8437,7 +8446,7 @@ function emitInstruction(
 						? `mal_compiled_${callbackTarget}${suffix}`
 						: "nullptr";
 				return [
-					`static MalCallCache __cc_${ip};`,
+					`static MAL_ISOLATE_LOCAL MalCallCache __cc_${ip};`,
 					`MalCompletion ${tmp} = mal_builtin_array_iteration_direct(vm, &__cc_${ip}, ${arrayIterationOperation}, ${callPlan?.directCallbackFunctionIndex === undefined ? -1 : relocation.functionIndex(callPlan.directCallbackFunctionIndex)}, ${callbackSymbol}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
 					`if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow()}`,
 					`r${instruction.dst} = ${callResult(`${tmp}.value`)};`,
@@ -8461,7 +8470,7 @@ function emitInstruction(
 							? "MAL_BUILTIN_COLLECTION_RECEIVER_EXACT_SET"
 							: "MAL_BUILTIN_COLLECTION_RECEIVER_UNKNOWN";
 				return [
-					`static MalCallCache __cc_${ip};`,
+					`static MAL_ISOLATE_LOCAL MalCallCache __cc_${ip};`,
 					`MalCompletion ${tmp} = mal_builtin_collection_direct(vm, &__cc_${ip}, ${operation}, ${receiverFact}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
 					`if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow()}`,
 					`r${instruction.dst} = ${tmp}.value;`,
@@ -8470,7 +8479,7 @@ function emitInstruction(
 			}
 			if (vmCallProvesBuiltin(callPlan, "Array.prototype.push")) {
 				return [
-					`static MalCallCache __cc_${ip};`,
+					`static MAL_ISOLATE_LOCAL MalCallCache __cc_${ip};`,
 					`MalCompletion ${tmp} = mal_builtin_array_push_direct(vm, &__cc_${ip}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length}, nullptr);`,
 					`if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow()}`,
 					`r${instruction.dst} = ${tmp}.value;`,
@@ -8479,7 +8488,7 @@ function emitInstruction(
 			}
 			if (vmCallProvesBuiltin(callPlan, "Array.prototype.at")) {
 				return [
-					`static MalCallCache __cc_${ip};`,
+					`static MAL_ISOLATE_LOCAL MalCallCache __cc_${ip};`,
 					`MalCompletion ${tmp} = mal_builtin_array_at_direct(vm, &__cc_${ip}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
 					`if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow()}`,
 					`r${instruction.dst} = ${tmp}.value;`,
@@ -8493,9 +8502,9 @@ function emitInstruction(
 					const charPoll =
 						mask === undefined
 							? poll
-							: `if (mal_gc_poll) { ${(context.outgoingRootPublication ?? []).join(" ")} ${cInactiveRootMaskPublication(mask)}; mal_gc_safepoint(vm); }`;
+							: `if (mal_gc_poll) { ${(context.outgoingRootPublication ?? []).join(" ")} ${cInactiveRootMaskPublication(mask)}; ${safepoint()} }`;
 					return [
-						`static MalCallCache __cc_${ip};`,
+						`static MAL_ISOLATE_LOCAL MalCallCache __cc_${ip};`,
 						`MalValue __char_value_${ip};`,
 						`if (mal_builtin_string_char_code_at_try(vm, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length}, &__string_leaf_cache_${ip}, &__char_value_${ip})) {`,
 						`  r${instruction.dst} = ${callResult(`__char_value_${ip}`)};`,
@@ -8521,7 +8530,7 @@ function emitInstruction(
 				if (boundedPosition !== null) {
 					context.stringLeafCaches.add(ip);
 					return [
-						`static MalCallCache __cc_${ip};`,
+						`static MAL_ISOLATE_LOCAL MalCallCache __cc_${ip};`,
 						`MalCompletion ${tmp} = ${profileCall("string", `mal_builtin_string_char_code_at_direct_in_bounds(vm, &__cc_${ip}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length}, ${boundedPosition}, &__string_leaf_cache_${ip})`)};`,
 						`if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow()}`,
 						`r${instruction.dst} = ${tmp}.value;`,
@@ -8530,7 +8539,7 @@ function emitInstruction(
 				}
 				context.stringLeafCaches.add(ip);
 				return [
-					`static MalCallCache __cc_${ip};`,
+					`static MAL_ISOLATE_LOCAL MalCallCache __cc_${ip};`,
 					`MalCompletion ${tmp} = ${profileCall("string", `mal_builtin_string_char_code_at_direct(vm, &__cc_${ip}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length}, &__string_leaf_cache_${ip})`)};`,
 					`if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow()}`,
 					`r${instruction.dst} = ${tmp}.value;`,
@@ -8541,7 +8550,7 @@ function emitInstruction(
 				const target = callPlan.directCallTargetFunctionIndex;
 				const compiled = target !== undefined && directCompiledTargets.has(target);
 				return [
-					`static MalCallCache __cc_${ip};`,
+					`static MAL_ISOLATE_LOCAL MalCallCache __cc_${ip};`,
 					`MalCompletion ${tmp} = mal_vm_call_function_call_direct${compiled ? "_compiled" : ""}(vm, &__cc_${ip}, ${target === undefined ? -1 : relocation.functionIndex(target)}, ${compiled ? `mal_compiled_${target}${suffix}, ` : ""}${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
 					`if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow()}`,
 					`r${instruction.dst} = ${callResult(`${tmp}.value`)};`,
@@ -8672,7 +8681,7 @@ function emitInstruction(
 					];
 				});
 				return [
-					`static MalCallCache __cc_${ip};`,
+					`static MAL_ISOLATE_LOCAL MalCallCache __cc_${ip};`,
 					`MalValue ${guardedCallee} = ${boxedOperand(instruction.callee)};`,
 					`i32 ${guardedIndex} = mal_value_is_function_object(${guardedCallee}) ? mal_function_object_function_index(mal_value_to_function_object(${guardedCallee})) : -1;`,
 					`MalCompletion ${tmp};`,
@@ -8756,7 +8765,7 @@ function emitInstruction(
 					];
 				}
 				return [
-					`static MalCallCache __cc_${ip};`,
+					`static MAL_ISOLATE_LOCAL MalCallCache __cc_${ip};`,
 					`MalCompletion ${tmp} = ${profileCall("call", `mal_vm_call_direct(vm, &__cc_${ip}, ${relocation.functionIndex(callPlan.directFunctionIndex)}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length})`)};`,
 					`if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow()}`,
 					`r${instruction.dst} = ${callResult(`${tmp}.value`)};`,
@@ -8792,7 +8801,7 @@ function emitInstruction(
 					`  r${instruction.dst} = __math_result_${ip};`,
 					`} else {`,
 					...mathFallbackRootPublication,
-					`  static MalCallCache __cc_${ip};`,
+					`  static MAL_ISOLATE_LOCAL MalCallCache __cc_${ip};`,
 					`  MalCompletion ${tmp} = ${profileCall("call", `mal_vm_call_cached(vm, &__cc_${ip}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length})`)};`,
 					`  if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow()}`,
 					`  r${instruction.dst} = ${tmp}.value;`,
@@ -8832,7 +8841,7 @@ function emitInstruction(
 					`  r${instruction.dst} = __math_result_${ip};`,
 					`} else {`,
 					...mathFallbackRootPublication,
-					`  static MalCallCache __cc_${ip};`,
+					`  static MAL_ISOLATE_LOCAL MalCallCache __cc_${ip};`,
 					`  MalCompletion ${tmp} = ${profileCall("call", `mal_vm_call_cached(vm, &__cc_${ip}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length})`)};`,
 					`  if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow()}`,
 					`  r${instruction.dst} = ${tmp}.value;`,
@@ -8844,7 +8853,7 @@ function emitInstruction(
 			// closures sharing a function index skip the dispatch chain. Bound, proxy, and
 			// interpreted callees stay on the slow path.
 			return [
-				`static MalCallCache __cc_${ip};`,
+				`static MAL_ISOLATE_LOCAL MalCallCache __cc_${ip};`,
 				`MalCompletion ${tmp} = ${profileCall("call", `mal_vm_call_cached(vm, &__cc_${ip}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length})`)};`,
 				`if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow()}`,
 				`r${instruction.dst} = ${callResult(`${tmp}.value`)};`,
@@ -8902,7 +8911,9 @@ function emitInstruction(
 		case "CATCH":
 			// Handler entry: bind the pending thrown value and clear the completion,
 			// exactly as mal_op_catch does. The dst is boxed (any value can be caught).
+			// A terminating isolate's throw is uncatchable: keep propagating outward.
 			return [
+				`if (mal_gc_terminating()) ${onThrow()}`,
 				`r${instruction.dst} = vm->completion.value;`,
 				`vm->completion = (MalCompletion) { .kind = MAL_COMPLETION_NORMAL, .value = MAL_VALUE_UNDEFINED };`,
 			];

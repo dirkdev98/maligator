@@ -1,7 +1,7 @@
 # Generational GC workers
 
-Maligator has one non-moving generational collector. Native builds can trace on GC
-workers; the `wasm32-wasip1` reactor runs the same collection phases inline because
+Each Maligator isolate has a non-moving generational collector. Native builds can trace on GC
+helpers; the `wasm32-wasip1` reactor runs the same collection phases inline because
 its embedding has no Wasm threads. Worker capacity is selected from the target and
 available CPUs, with no user-selectable collector mode.
 
@@ -9,11 +9,11 @@ available CPUs, with no user-selectable collector mode.
 
 One JavaScript mutator owns a VM from initialization through disposal. The heap and
 collector cycle belong to that VM; native workers bind its context before tracing
-and join before the VM releases roots or tables. The process still has global root
-frame/span heads, root-source and type-hook registrations, allocation color, poll
-and barrier flags, and diagnostics. Thus only one active VM/mutator per process is
-supported. Thread-local worker attachment does not permit moving a live VM to
-another mutator thread or running multiple active isolates. Existing fork children
+and join before the VM releases roots or tables. Root frame/span heads, root-source
+and type-hook registrations, allocation color, poll and barrier flags, and
+diagnostics belong to the mutator thread. Concurrent isolates share no language
+heap pointers. Helper attachment binds only the owning collector context; it does
+not permit moving a live VM to another mutator thread. Existing fork children
 exec or exit without using the inherited VM; fork-and-continue with a live VM is
 unsupported.
 
@@ -63,23 +63,34 @@ behind the cursor contributes to survivor bytes immediately, while a cell ahead
 of it is counted when the cursor visits its block; both update the baseline used
 by the next minor collection exactly once.
 
-Native storage reserves room for two GC workers. At VM initialization, the active
-count is capped by online CPUs, Linux affinity, and commonly mounted cgroup v2/v1
-CPU quota files, reserving one visible CPU for the mutator. Zero capacity runs work
-inline. Quota discovery is best effort: nested or nonstandard mounts and hidden
+Native storage reserves room for two GC batch records per isolate. A process-owned
+executor supplies at most two helper threads across all isolates. Each batch also
+acquires a process grant bounded by available CPUs minus currently busy mutators.
+Available CPUs account for online CPUs, Linux affinity, and commonly mounted cgroup
+v2/v1 CPU quota files. A denied grant runs work inline. Waking mutators never wait
+for a helper already running a bounded quantum. Quota discovery is best effort:
+nested or nonstandard mounts and hidden
 ancestor limits may not be visible, so CPU-constrained deployments need a matched
-resource check. The pool starts on the first qualifying batch, parks while idle,
-and stops before VM teardown. Before the host loop or fiber scheduler waits or
+resource check. The shared pool starts on demand and parks while idle. Disposing an
+isolate waits for its own batches; the last client joins the pool. Before the host loop or fiber scheduler waits or
 exits with no runnable work, the mutator completes any active cycle and checks
 the task queues again. The Wasm reactor completes any active cycle before init
 or a call returns to its embedder. Wasm never starts a native pool.
-If an optional native worker cannot start, the VM retains any workers already
-started and reduces its effective capacity; a zero-worker VM traces inline.
+If the executor cannot start, marking runs inline.
 
-Root-source registrations remain process-wide across sequential VMs. Registration
-deduplicates identical callbacks, rejects capacity exhaustion, and callbacks
-tolerate a VM without the subsystem that originally installed them. The GC stats
+Root-source registrations belong to the current isolate thread. Registration
+deduplicates identical callbacks and rejects capacity exhaustion. The GC stats
 exit handler is registered once per process.
+
+The process coordinator accounts reserved heap mappings, ordinary and shared
+backing stores, and queued native serialization storage once per allocation. Its
+soft budget defaults to 256 MiB and may be changed with
+`MAL_GC_PROCESS_BUDGET_BYTES`. Crossing a pressure threshold requests safepoints
+and wakes every registered owner. Those owners start major work and increase
+their marking assists; sweep and finalization still run on each owner. The
+registry lock protects poll targets and reactor wakers through teardown. This
+budget paces collection rather than rejecting allocations. Shared memory has a
+separate hard reservation limit described in [parallel workers](10-parallel-workers.md).
 
 ## Weak collection storage
 
@@ -120,8 +131,8 @@ Large root scans, mutator-only traces, finalization, and synchronous completion
 can still create long pauses. Wasm parity and broad performance acceptance are
 tracked in [TODO.md](../../TODO.md).
 
-A copying nursery, simultaneous minor and major cycles, compaction, shared-heap
-mutators, and multiple active isolates require separate contracts. The compiled
+A copying nursery, simultaneous minor and major cycles, compaction, and shared-heap
+mutators require separate contracts. The compiled
 worker-boundary fixture combines merged PRs #65 and #66: a paused snapshot worker
 requests the next poll while a getter changes property storage, and that first
 poll sees the native callback's result in an active compiled root slot. It also

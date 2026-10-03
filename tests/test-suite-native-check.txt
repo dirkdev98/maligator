@@ -85,3 +85,11 @@ tests/native/upm-filesystem-compatibility.test.ts
 tests/native/node-fs-write-workers.test.ts
 tests/native/upm-process-commands.test.ts
 tests/native/upm-process-lifecycle.test.ts
+tests/native/executor.test.ts
+tests/native/gc-process.test.ts
+tests/native/module-evaluation.test.ts
+tests/native/shared-memory-atomics.test.ts
+tests/native/worker-events.test.ts
+tests/native/worker-child-signals.test.ts
+tests/native/workers-runtime.test.ts
+tests/native/workers.test.ts

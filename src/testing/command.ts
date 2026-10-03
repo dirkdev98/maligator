@@ -8,6 +8,7 @@ import type { TestCommand } from "../cli.ts";
 import { CommandProgress } from "../command-progress.ts";
 import { cacheDevelopmentAssets } from "../development-assets.ts";
 import { hostExecutionTarget, resolveExecution } from "../platform/execution.ts";
+import { cacheDevelopmentWorkerManifest } from "../worker-image-cache.ts";
 import {
 	compileIsolatedTestImage,
 	compileProfiledTestImage,
@@ -25,6 +26,7 @@ import type { TestEvent, TestFailure, TestRunResult } from "./protocol.ts";
 
 interface TestRuntimeBridge {
 	_runWire(wire: Uint8Array): unknown;
+	_registerWorkerManifest?(path: string): void;
 	_runWirePath?(path: string): unknown;
 	_setDevelopmentAssets?(manifestPath?: string): void;
 }
@@ -197,6 +199,9 @@ export function prepareProfiledTestCommand(
 			stripperIdentity: context.installation.frontendIdentity,
 			testModuleSource: moduleSource,
 			nodeGlobalsSource,
+			platformSourceRoot:
+				context.installation.platformSourceRoot ??
+				path.dirname(context.installation.nodeGlobalsPath),
 		},
 		runOptions,
 	);
@@ -241,6 +246,9 @@ export function prepareIsolatedTestCommand(
 		stripperIdentity: context.installation.frontendIdentity,
 		testModuleSource: moduleSource,
 		nodeGlobalsSource,
+		platformSourceRoot:
+			context.installation.platformSourceRoot ??
+			path.dirname(context.installation.nodeGlobalsPath),
 		session: new TestCompilationSession(),
 		dependencyWorker: context.dependencyWorker,
 	};
@@ -432,6 +440,9 @@ export async function executeTestCommand(
 				stripperIdentity: context.installation.frontendIdentity,
 				testModuleSource: moduleSource,
 				nodeGlobalsSource,
+				platformSourceRoot:
+					context.installation.platformSourceRoot ??
+					path.dirname(context.installation.nodeGlobalsPath),
 				session,
 				allowSupersetCache,
 				dependencyWorker: context.dependencyWorker,
@@ -492,6 +503,14 @@ export async function executeTestCommand(
 		globals.__maligatorTestOptions = { ...runOptions, files: group.files };
 		delete globals.__maligatorTestResult;
 		try {
+			const workerImages =
+				"workerImages" in group.compiled ? group.compiled.workerImages : [];
+			if (globals.mal._registerWorkerManifest !== undefined) {
+				const manifest = cacheDevelopmentWorkerManifest(workerImages, undefined, true)!;
+				globals.mal._registerWorkerManifest(manifest);
+			} else if (workerImages.length > 0) {
+				throw new Error("this test runtime does not support worker manifests");
+			}
 			if ("wires" in group.compiled && globals.mal._runWirePath !== undefined) {
 				for (const wire of group.compiled.wires) {
 					await globals.mal._runWirePath(wire.path);
@@ -516,6 +535,9 @@ export async function executeTestCommand(
 							stripperIdentity: context.installation.frontendIdentity,
 							testModuleSource: moduleSource,
 							nodeGlobalsSource,
+							platformSourceRoot:
+								context.installation.platformSourceRoot ??
+								path.dirname(context.installation.nodeGlobalsPath),
 							session,
 							allowSupersetCache: false,
 						});

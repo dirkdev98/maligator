@@ -1,7 +1,7 @@
 import type { ESTree } from "meriyah";
 import type { PlatformData } from "../../platform/catalog.ts";
 import { debugEnabled, log } from "../../utils.ts";
-import { isPureDataCjsModule } from "../frontend/cjs-exports.ts";
+import { detectCjsExports, isPureDataCjsModule } from "../frontend/cjs-exports.ts";
 import {
 	DIRECT_EVAL_PRIVATE_FIELD,
 	DIRECT_EVAL_PRIVATE_GETTER,
@@ -30,6 +30,10 @@ import {
 	traverseEstree,
 } from "../frontend/estree-traversal.ts";
 import { linkModules } from "../frontend/linker.ts";
+import {
+	planModuleEvaluation,
+	type ModuleEvaluationPlan,
+} from "../frontend/module-evaluation-plan.ts";
 import { COMMONJS_BINDINGS } from "../frontend/semantic-analysis.ts";
 import { FUNCTION_UNIT_NODE_TYPES } from "../frontend/semantic-analysis.ts";
 import type {
@@ -213,8 +217,15 @@ interface CoreFrontendContext {
 	moduleNamespaces: Map<string, Array<{ name: string; exporter: Binding }>>;
 	dynamicModuleStatusSlot: Map<string, number>;
 	moduleEvaluationErrorSlot: Map<string, number>;
+	moduleEvaluationRecordSlot: Map<string, number>;
+	moduleEvaluationContextSlot?: number;
+	moduleEvaluationPlan: ModuleEvaluationPlan;
 	deferredModuleNamespaceSlot: Map<string, number>;
 	moduleNamespaceSlot: Map<string, number>;
+	cjsDynamicNamespaces: Map<
+		string,
+		{ initializer: number; exports: Array<{ nameStringIndex: number; slot: number }> }
+	>;
 
 	/**
 	 * CommonJS modules, keyed by path to their integer module id. The id indexes
@@ -506,6 +517,7 @@ interface CoreFrontendFunction {
 	 * activation on a promise and resume via the same machinery as yield.
 	 */
 	isAsync?: boolean;
+	moduleInstantiated?: boolean;
 
 	/**
 	 * Number of boxed ABI parameters before evaluating and assigning destructured
@@ -828,8 +840,26 @@ export function constructSemanticProgramCore(
 		moduleNamespaces: new Map(),
 		dynamicModuleStatusSlot: new Map(),
 		moduleEvaluationErrorSlot: new Map(),
+		moduleEvaluationRecordSlot: new Map(),
+		moduleEvaluationPlan: planModuleEvaluation(
+			semantic.files
+				.filter((file) => !file.commonjs)
+				.map((file) => ({
+					path: file.path,
+					hasAwait: hasTopLevelAwait(file.ast),
+					dependencies: (semantic.graph?.modules.get(file.path)?.dependencies ?? [])
+						.filter(
+							(dependency) =>
+								dependency.kind === "import" || dependency.kind === "export",
+						)
+						.flatMap((dependency) =>
+							dependency.resolvedPath === null ? [] : [dependency.resolvedPath],
+						),
+				})),
+		),
 		deferredModuleNamespaceSlot: new Map(),
 		moduleNamespaceSlot: new Map(),
+		cjsDynamicNamespaces: new Map(),
 
 		cjsModuleId: new Map(),
 		cjsWrapperFunctionIndex: [],
@@ -885,10 +915,20 @@ export function constructSemanticProgramCore(
 	if (initFile.commonjs) {
 		// A CommonJS program: each module is a wrapper run lazily through require.
 		compileCjsProgram(program, initFile);
+	} else if (initFile.type === "module") {
+		assignCjsModuleIds(program);
+		classifyPureDataCjsModules(program);
+		classifyCommonJsHostModules(program);
+		compileModuleEntry(program, initFile);
+		compileCjsWrappers(program);
 	} else if (evaluationOrder.length <= 1) {
+		assignCjsModuleIds(program);
+		classifyPureDataCjsModules(program);
+		classifyCommonJsHostModules(program);
 		// Single module: the init is the entrypoint (function 0), exactly as a
 		// plain script compiles.
 		compileFileInit(program, initFile);
+		compileCjsWrappers(program);
 	} else {
 		// An ES module graph, possibly importing CommonJS modules. Assign CJS ids
 		// + pure-data slots first so the merged init can lower `import … from "cjs"`;
@@ -1188,6 +1228,8 @@ function emitRequiredEsmNamespaceInits(
  * entrypoint when there is only one module) into its own init function.
  */
 function compileFileInit(program: CoreFrontendContext, initFile: SemanticFile) {
+	if (initFile.type === "module" && !initFile.commonjs && !program.evalDirect)
+		return compileModuleGraphInit(program, initFile);
 	if (program.compiledModuleInitForPaths.has(initFile.path)) {
 		return program.compiledModuleInitForPaths.get(initFile.path) ?? -1;
 	}
@@ -1197,7 +1239,7 @@ function compileFileInit(program: CoreFrontendContext, initFile: SemanticFile) {
 		functionIndex: program.nextFunctionIndex,
 		nameStringIndex: getOrCreateStringConstant(program, ""),
 		blocks: [],
-		isAsync: hasTopLevelAwait(initFile.ast),
+		isAsync: program.moduleEvaluationPlan.asynchronous.has(initFile.path),
 
 		parameterCount: 0,
 		length: 0,
@@ -1217,23 +1259,26 @@ function compileFileInit(program: CoreFrontendContext, initFile: SemanticFile) {
 	if (program.evalCompletion) {
 		fn.completionRegister = nextCoreVariable(fn);
 	}
-	const evaluationDependencies = moduleSyncEvaluationDependencies(program, initFile);
+	const evaluationDependencies = moduleEvaluationDependencies(program, initFile);
 
 	// A prologue block (TDZ inits + namespace objects) only when needed, so a
 	// module with only var/function top-levels compiles exactly as before.
 	if (
+		initFile.type === "module" ||
 		moduleNeedsPrologue(program, initFile) ||
 		program.evalDirect ||
 		evaluationDependencies.length > 0
 	) {
 		const prologue: CoreFrontendBlock = { emitter: unboundCoreEmitter };
 		fn.blocks.push(prologue);
-		if (moduleNeedsPrologue(program, initFile)) {
+		const prologueCursor = { block: prologue };
+		if (initFile.type === "module") {
+			emitModuleInstantiationClosure(program, fn, prologueCursor, initFile);
+			fn.moduleInstantiated = true;
+		} else if (moduleNeedsPrologue(program, initFile))
 			emitModulePrologue(program, fn, prologue, initFile);
-		}
-		for (const dependency of evaluationDependencies) {
-			emitModuleSyncEvaluationCall(program, fn, prologue, dependency, false);
-		}
+
+		emitCjsImportInits(program, fn, prologueCursor, initFile);
 		if (program.evalDirect) {
 			const prologueCursor = { block: prologue };
 			emitDirectEvalContextBindings(
@@ -1248,7 +1293,7 @@ function compileFileInit(program: CoreFrontendContext, initFile: SemanticFile) {
 			prologueCursor.block.emitter.emit({ type: "jump", blocks: [bodyEntry] });
 		} else {
 			const bodyEntry = compileStatementsToBlock(program, fn, initFile.ast.body, true);
-			prologue.emitter.emit({ type: "jump", blocks: [bodyEntry] });
+			prologueCursor.block.emitter.emit({ type: "jump", blocks: [bodyEntry] });
 		}
 	} else {
 		compileStatementsToBlock(program, fn, initFile.ast.body, true);
@@ -1259,7 +1304,247 @@ function compileFileInit(program: CoreFrontendContext, initFile: SemanticFile) {
 	return fn.functionIndex;
 }
 
-function moduleSyncEvaluationDependencies(
+function compileModuleGraphInit(
+	program: CoreFrontendContext,
+	file: SemanticFile,
+): number {
+	const previous = program.compiledModuleInitForPaths.get(file.path);
+	if (previous !== undefined) return previous ?? -1;
+	const graph: CoreFrontendFunction = {
+		semanticFile: file,
+		functionIndex: program.nextFunctionIndex,
+		nameStringIndex: getOrCreateStringConstant(program, ""),
+		blocks: [],
+		parameterCount: 0,
+		length: 0,
+		nextCoreVariable: 0,
+		nextLocalIndex: 0,
+		nextCapturedIndex: 0,
+	};
+	registerCoreFunction(program, graph);
+	program.compiledModuleInitForPaths.set(file.path, graph.functionIndex);
+	const block: CoreFrontendBlock = { emitter: unboundCoreEmitter };
+	graph.blocks.push(block);
+	const cursor = { block };
+	emitModuleInstantiationClosure(program, graph, cursor, file);
+	for (const dependency of moduleEvaluationDependencies(program, file))
+		emitModuleEvaluationCall(
+			program,
+			graph,
+			cursor,
+			dependency,
+			getModuleEvaluationRecordSlot(program, file.path),
+		);
+	const body: CoreFrontendFunction = {
+		semanticFile: file,
+		functionIndex: program.nextFunctionIndex,
+		nameStringIndex: getOrCreateStringConstant(program, ""),
+		blocks: [],
+		isAsync: hasTopLevelAwait(file.ast),
+		moduleInstantiated: true,
+		parameterCount: 0,
+		length: 0,
+		nextCoreVariable: 0,
+		nextLocalIndex: 0,
+		nextCapturedIndex: 0,
+	};
+	registerCoreFunction(program, body);
+	const bodyBlock: CoreFrontendBlock = { emitter: unboundCoreEmitter };
+	body.blocks.push(bodyBlock);
+	const bodyCursor = { block: bodyBlock };
+	emitCjsImportInits(program, body, bodyCursor, file);
+	const statements = compileStatementsToBlock(program, body, file.ast.body, true);
+	bodyCursor.block.emitter.emit({ type: "jump", blocks: [statements] });
+	endFunction(program, body);
+	const callable = nextCoreVariable(graph);
+	cursor.block.emitter.emit({
+		type: "createFunction",
+		registers: [callable],
+		functionIndex: body.functionIndex,
+	});
+	emitReturn(program, graph, cursor.block, callable);
+	endFunction(program, graph);
+	return graph.functionIndex;
+}
+
+function emitModuleInstantiationClosure(
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	cursor: CoreFrontendCursor,
+	entry: SemanticFile,
+): void {
+	const files: Array<SemanticFile> = [];
+	const seen = new Set<string>();
+	const visit = (file: SemanticFile): void => {
+		if (
+			file.commonjs ||
+			seen.has(file.path) ||
+			program.compiledModuleInitForPaths.get(file.path) === null
+		)
+			return;
+		seen.add(file.path);
+		files.push(file);
+		for (const dependency of moduleEvaluationDependencies(program, file))
+			visit(dependency);
+	};
+	visit(entry);
+	const savedFile = fn.semanticFile;
+	for (const file of files) {
+		fn.semanticFile = file;
+		const slot = getDynamicModuleStatusSlot(program, `\0instantiated:${file.path}`);
+		const initialized = nextCoreVariable(fn);
+		cursor.block.emitter.emit({
+			type: "loadGlobal",
+			registers: [initialized],
+			index: slot,
+		});
+		const skip: Extract<CompilerInstruction, { type: "jumpIf" }> = {
+			type: "jumpIf",
+			registers: [initialized],
+			blocks: [-1],
+		};
+		cursor.block.emitter.emit(skip);
+		const initialize = fn.blocks.push({ emitter: unboundCoreEmitter }) - 1;
+		cursor.block.emitter.emit({ type: "jump", blocks: [initialize] });
+		cursor.block = fn.blocks[initialize]!;
+		const yes = nextCoreVariable(fn);
+		cursor.block.emitter.emit({ type: "createBoolean", registers: [yes], value: true });
+		cursor.block.emitter.emit({ type: "storeGlobal", registers: [yes], index: slot });
+		emitModulePrologue(program, fn, cursor.block, file);
+		for (const statement of file.ast.body) {
+			if (statement.type === "FunctionDeclaration")
+				compileFunctionDeclaration(program, fn, cursor.block, statement);
+			else if (
+				statement.type === "ExportNamedDeclaration" &&
+				statement.declaration?.type === "FunctionDeclaration"
+			)
+				compileFunctionDeclaration(program, fn, cursor.block, statement.declaration);
+			else if (
+				statement.type === "ExportDefaultDeclaration" &&
+				statement.declaration.type === "FunctionDeclaration"
+			)
+				compileExportDefault(program, fn, cursor.block, statement);
+		}
+		const join = fn.blocks.push({ emitter: unboundCoreEmitter }) - 1;
+		cursor.block.emitter.emit({ type: "jump", blocks: [join] });
+		skip.blocks[0] = join;
+		cursor.block = fn.blocks[join]!;
+	}
+	fn.semanticFile = savedFile;
+}
+
+function compileModuleEntry(program: CoreFrontendContext, file: SemanticFile): void {
+	const fn: CoreFrontendFunction = {
+		semanticFile: file,
+		functionIndex: program.nextFunctionIndex,
+		nameStringIndex: getOrCreateStringConstant(program, ""),
+		blocks: [],
+		isAsync: program.moduleEvaluationPlan.asynchronous.has(file.path),
+		parameterCount: 0,
+		length: 0,
+		nextCoreVariable: 0,
+		nextLocalIndex: 0,
+		nextCapturedIndex: 0,
+	};
+	registerCoreFunction(program, fn);
+	const block: CoreFrontendBlock = { emitter: unboundCoreEmitter };
+	fn.blocks.push(block);
+	const cursor = { block };
+	emitCommonJsHostInits(program, fn, cursor);
+	emitCjsEagerInits(program, fn, cursor);
+	emitDeferredModuleNamespaceInits(program, fn, cursor.block);
+	const evaluation = emitModuleEvaluationCall(
+		program,
+		fn,
+		cursor,
+		file,
+		fn.isAsync ? -1 : -2,
+	);
+	if (fn.isAsync) compileAwaitIfDefined(program, fn, cursor, evaluation);
+	endFunction(program, fn);
+}
+
+function compileAwaitIfDefined(
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	cursor: CoreFrontendCursor,
+	value: number,
+): void {
+	const defined = nextCoreVariable(fn);
+	cursor.block.emitter.emit({
+		type: "binary",
+		registers: [defined, value, compileUndefined(fn, cursor)],
+		operator: "!==",
+	});
+	const branch: Extract<CompilerInstruction, { type: "jumpIf" }> = {
+		type: "jumpIf",
+		registers: [defined],
+		blocks: [-1],
+	};
+	const skip: Extract<CompilerInstruction, { type: "jump" }> = {
+		type: "jump",
+		blocks: [-1],
+	};
+	cursor.block.emitter.emit(branch, skip);
+	const awaiting = fn.blocks.push({ emitter: unboundCoreEmitter }) - 1;
+	branch.blocks[0] = awaiting;
+	cursor.block = fn.blocks[awaiting]!;
+	compileAwaitRegister(program, fn, cursor, value);
+	const done: Extract<CompilerInstruction, { type: "jump" }> = {
+		type: "jump",
+		blocks: [-1],
+	};
+	cursor.block.emitter.emit(done);
+	const join = fn.blocks.push({ emitter: unboundCoreEmitter }) - 1;
+	skip.blocks[0] = join;
+	done.blocks[0] = join;
+	cursor.block = fn.blocks[join]!;
+}
+
+function emitModuleEvaluationCall(
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	cursor: CoreFrontendCursor,
+	target: SemanticFile,
+	parentRecord: number,
+): number {
+	const index = target.commonjs
+		? compileCjsDynamicInitializer(program, target)
+		: compileFileInit(program, target);
+	const init = index < 0 ? compileUndefined(fn, cursor) : nextCoreVariable(fn);
+	if (index >= 0)
+		cursor.block.emitter.emit({
+			type: "createFunction",
+			registers: [init],
+			functionIndex: index,
+		});
+	const callee = nextCoreVariable(fn);
+	cursor.block.emitter.emit({
+		type: "loadIntrinsic",
+		registers: [callee],
+		intrinsic: "__evaluateModuleSync",
+	});
+	const destination = nextCoreVariable(fn);
+	cursor.block.emitter.emit({
+		type: "call",
+		registers: [
+			destination,
+			callee,
+			compileUndefined(fn, cursor),
+			init,
+			compileGlobalIndex(fn, cursor, getDynamicModuleStatusSlot(program, target.path)),
+			compileGlobalIndex(fn, cursor, getModuleEvaluationErrorSlot(program, target.path)),
+			compileGlobalIndex(fn, cursor, getModuleEvaluationRecordSlot(program, target.path)),
+			compileGlobalIndex(fn, cursor, getModuleEvaluationContextSlot(program)),
+			parentRecord < 0
+				? compileNumberLiteral(fn, cursor, parentRecord)
+				: compileGlobalIndex(fn, cursor, parentRecord),
+		],
+	});
+	return destination;
+}
+
+function moduleEvaluationDependencies(
 	program: CoreFrontendContext,
 	file: SemanticFile,
 ): Array<SemanticFile> {
@@ -1279,7 +1564,7 @@ function moduleSyncEvaluationDependencies(
 			continue;
 		}
 		const target = files.get(dependency.resolvedPath);
-		if (!target || target.commonjs || hasTopLevelAwait(target.ast)) continue;
+		if (!target) continue;
 		seen.add(dependency.resolvedPath);
 		dependencies.push(target);
 	}
@@ -1293,42 +1578,7 @@ function emitModuleSyncEvaluationCall(
 	target: SemanticFile,
 	throwOnEvaluating: boolean,
 ): void {
-	const targetIndex = compileFileInit(program, target);
-	const initFn =
-		targetIndex >= 0 ? nextCoreVariable(fn) : compileUndefined(fn, { block });
-	if (targetIndex >= 0) {
-		block.emitter.emit({
-			type: "createFunction",
-			registers: [initFn],
-			functionIndex: targetIndex,
-		});
-	}
-	const callee = nextCoreVariable(fn);
-	block.emitter.emit({
-		type: "loadIntrinsic",
-		registers: [callee],
-		intrinsic: "__evaluateModuleSync",
-	});
-	const cursor = { block };
-	const destination = nextCoreVariable(fn);
-	const reentry = nextCoreVariable(fn);
-	block.emitter.emit({
-		type: "createBoolean",
-		registers: [reentry],
-		value: throwOnEvaluating,
-	});
-	block.emitter.emit({
-		type: "call",
-		registers: [
-			destination,
-			callee,
-			compileUndefined(fn, cursor),
-			initFn,
-			compileGlobalIndex(fn, cursor, getDynamicModuleStatusSlot(program, target.path)),
-			compileGlobalIndex(fn, cursor, getModuleEvaluationErrorSlot(program, target.path)),
-			reentry,
-		],
-	});
+	emitModuleEvaluationCall(program, fn, { block }, target, throwOnEvaluating ? -2 : -3);
 }
 
 function emitModuleEvaluationState(
@@ -1627,7 +1877,11 @@ function validateSynchronousCommonJsEsm(program: CoreFrontendContext) {
 		}
 		synchronousGraph.add(modulePath);
 		for (const dependency of graph.modules.get(modulePath)?.dependencies ?? []) {
-			if (dependency.kind !== "dynamic" && dependency.resolvedPath) {
+			if (
+				dependency.kind !== "dynamic" &&
+				dependency.kind !== "worker" &&
+				dependency.resolvedPath
+			) {
 				visit(dependency.resolvedPath);
 			}
 		}
@@ -2389,7 +2643,14 @@ function emitImportMetaInit(
 	const cursor = { block };
 	const object = nextCoreVariable(fn);
 	block.emitter.emit({ type: "createObject", registers: [object] });
-	for (const [name, value] of [["url", importMetaUrl(file.path)]] as const) {
+	for (const [name, value] of [
+		[
+			"url",
+			importMetaUrl(
+				program.semantic.graph?.modules.get(file.path)?.sourcePath ?? file.path,
+			),
+		],
+	] as const) {
 		emitStoreProperty(
 			program,
 			fn,
@@ -2466,13 +2727,6 @@ function emitModulePrologue(
 }
 
 /**
- * If any of the given modules has top-level await, make the init an async
- * function: it returns a promise and suspends on each top-level await,
- * resuming via the microtask queue. Because the merged init runs modules'
- * top-levels sequentially in evaluation order, a suspended await holds up the
- * dependents that follow it — the spec ordering falls out for free.
- */
-/**
  * Whether a module has top-level await: an AwaitExpression that is not nested
  * inside a function (so it runs as part of module evaluation).
  */
@@ -2480,6 +2734,7 @@ function hasTopLevelAwait(ast: ESTree.Program): boolean {
 	return (
 		traverseEstree(ast.body, (node) => {
 			if (node.type === "AwaitExpression") return ESTREE_STOP;
+			if (node.type === "ForOfStatement" && node.await) return ESTREE_STOP;
 			if (node.type === "VariableDeclaration" && node.kind === "await using") {
 				return ESTREE_STOP;
 			}
@@ -5645,8 +5900,9 @@ function compileStatementsToBlock(
 			}
 		}
 
-		for (const declaration of functionsToInitialize) {
-			compileFunctionDeclaration(program, fn, block, declaration);
+		if (!fn.moduleInstantiated || statements !== fn.semanticFile.ast.body) {
+			for (const declaration of functionsToInitialize)
+				compileFunctionDeclaration(program, fn, block, declaration);
 		}
 		for (const declaration of functionDeclarations) {
 			hoistedDeclarations.add(declaration);
@@ -5817,6 +6073,12 @@ function compileStatementsToBlock(
 				break;
 			}
 			case "ExportDefaultDeclaration": {
+				if (
+					fn.moduleInstantiated &&
+					statements === fn.semanticFile.ast.body &&
+					statement.declaration.type === "FunctionDeclaration"
+				)
+					break;
 				compileExportDefault(program, fn, block, statement);
 				break;
 			}
@@ -12286,14 +12548,20 @@ function dynamicImportCandidates(
 	const record = program.semantic.graph?.modules.get(fn.semanticFile.path);
 	const files = new Map(program.semantic.files.map((file) => [file.path, file]));
 	const candidates = new Map<string, DynamicImportCandidate>();
+	for (const targetPath of program.semantic.graph?.dynamicImportCandidates ?? []) {
+		const targetFile = files.get(targetPath);
+		if (targetFile === undefined) continue;
+		for (const specifier of [targetPath, importMetaUrl(targetPath)]) {
+			candidates.set(`${specifier}\0${targetPath}`, { specifier, targetPath });
+		}
+	}
 	for (const dependency of record?.dependencies ?? []) {
 		const targetFile =
 			dependency.resolvedPath === null ? undefined : files.get(dependency.resolvedPath);
 		if (
 			dependency.kind !== "dynamic" ||
 			dependency.resolvedPath === null ||
-			targetFile === undefined ||
-			targetFile.commonjs
+			targetFile === undefined
 		) {
 			continue;
 		}
@@ -12313,6 +12581,49 @@ function dynamicImportCandidates(
 	);
 }
 
+function compileCjsDynamicInitializer(
+	program: CoreFrontendContext,
+	file: SemanticFile,
+): number {
+	const existing = program.cjsDynamicNamespaces.get(file.path);
+	if (existing !== undefined) return existing.initializer;
+	const names = [...new Set(["default", ...detectCjsExports(file.ast).names])].sort();
+	const exports = names.map((name) => ({
+		nameStringIndex: getOrCreateStringConstant(program, name),
+		slot: program.nextGlobalIndex++,
+	}));
+	const fn: CoreFrontendFunction = {
+		semanticFile: file,
+		functionIndex: program.nextFunctionIndex,
+		nameStringIndex: getOrCreateStringConstant(program, ""),
+		blocks: [],
+		parameterCount: 0,
+		length: 0,
+		nextCoreVariable: 0,
+		nextLocalIndex: 0,
+		nextCapturedIndex: 0,
+	};
+	registerCoreFunction(program, fn);
+	program.cjsDynamicNamespaces.set(file.path, { initializer: fn.functionIndex, exports });
+	const block: CoreFrontendBlock = { emitter: unboundCoreEmitter };
+	fn.blocks.push(block);
+	const cursor = { block };
+	const value = emitCjsModuleExports(program, fn, cursor, file.path);
+	for (let index = 0; index < names.length; index++) {
+		const member =
+			names[index] === "default"
+				? value
+				: emitLoadProperty(program, fn, cursor, value, names[index]!);
+		cursor.block.emitter.emit({
+			type: "storeGlobal",
+			registers: [member],
+			index: exports[index]!.slot,
+		});
+	}
+	endFunction(program, fn);
+	return fn.functionIndex;
+}
+
 function emitDynamicImportCall(
 	program: CoreFrontendContext,
 	fn: CoreFrontendFunction,
@@ -12325,10 +12636,9 @@ function emitDynamicImportCall(
 		const targetFile = path
 			? program.semantic.files.find((file) => file.path === path)
 			: undefined;
-		// A self-import observes the active module; re-entering its init would recurse.
 		const targetInitIndex = targetFile?.commonjs
-			? -1
-			: targetFile && path !== fn.semanticFile.path
+			? compileCjsDynamicInitializer(program, targetFile)
+			: targetFile
 				? compileFileInit(program, targetFile)
 				: -1;
 		const namespaceExports = path ? program.moduleNamespaces.get(path) : undefined;
@@ -12341,9 +12651,25 @@ function emitDynamicImportCall(
 				functionIndex: targetInitIndex,
 			});
 		}
-		const namespace = namespaceExports
-			? emitNamespaceObjectRegister(program, fn, cursor.block, namespaceExports, path)
-			: compileUndefined(fn, cursor);
+		let namespace: number;
+		if (targetFile?.commonjs) {
+			const descriptor = program.cjsDynamicNamespaces.get(targetFile.path)!;
+			let cacheSlot = program.moduleNamespaceSlot.get(targetFile.path);
+			if (cacheSlot === undefined) {
+				cacheSlot = program.nextGlobalIndex++;
+				program.moduleNamespaceSlot.set(targetFile.path, cacheSlot);
+			}
+			namespace = nextCoreVariable(fn);
+			cursor.block.emitter.emit({
+				type: "createModuleNamespace",
+				registers: [namespace],
+				cacheSlot,
+				exports: descriptor.exports,
+			});
+		} else
+			namespace = namespaceExports
+				? emitNamespaceObjectRegister(program, fn, cursor.block, namespaceExports, path)
+				: compileUndefined(fn, cursor);
 		const statusSlot = path ? getDynamicModuleStatusSlot(program, path) : -1;
 		return [
 			initFn,
@@ -12351,6 +12677,15 @@ function emitDynamicImportCall(
 			statusSlot < 0
 				? compileNumberLiteral(fn, cursor, -1)
 				: compileGlobalIndex(fn, cursor, statusSlot),
+			...[
+				path ? getModuleEvaluationErrorSlot(program, path) : -1,
+				path ? getModuleEvaluationRecordSlot(program, path) : -1,
+				path ? getModuleEvaluationContextSlot(program) : -1,
+			].map((slot) =>
+				slot < 0
+					? compileNumberLiteral(fn, cursor, -1)
+					: compileGlobalIndex(fn, cursor, slot),
+			),
 		];
 	};
 
@@ -12430,6 +12765,21 @@ function getModuleEvaluationErrorSlot(
 		program.moduleEvaluationErrorSlot.set(modulePath, slot);
 	}
 	return slot;
+}
+
+function getModuleEvaluationRecordSlot(
+	program: CoreFrontendContext,
+	modulePath: string,
+): number {
+	let slot = program.moduleEvaluationRecordSlot.get(modulePath);
+	if (slot === undefined) {
+		slot = program.nextGlobalIndex++;
+		program.moduleEvaluationRecordSlot.set(modulePath, slot);
+	}
+	return slot;
+}
+function getModuleEvaluationContextSlot(program: CoreFrontendContext): number {
+	return (program.moduleEvaluationContextSlot ??= program.nextGlobalIndex++);
 }
 
 function getDeferredModuleNamespaceSlot(
@@ -13229,6 +13579,12 @@ function emitDeferredModuleNamespaceInits(
 						cursor,
 						getModuleEvaluationErrorSlot(program, namespaceImport.module),
 					),
+					compileGlobalIndex(
+						fn,
+						cursor,
+						getModuleEvaluationRecordSlot(program, namespaceImport.module),
+					),
+					compileGlobalIndex(fn, cursor, getModuleEvaluationContextSlot(program)),
 				],
 			});
 			block.emitter.emit({

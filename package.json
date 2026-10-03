@@ -95,6 +95,7 @@
 		"postgres": "3.4.9",
 		"rolldown": "1.2.11",
 		"supports-color": "11.0.0",
+		"tinypool": "2.1.2",
 		"typescript": "7.0.2",
 		"typescript-v6-api": "npm:typescript@6.0.3",
 		"valibot": "1.5.0",

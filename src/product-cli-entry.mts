@@ -44,6 +44,7 @@ await runCli(process.argv.slice(2), {
 		process.argv[0],
 		assets.materialize("nodeGlobals"),
 		mutableDevelopmentRunner,
+		assets.materialize("platformSources"),
 	),
 	developmentProcesses: {
 		spawn: (executablePath, args) => mal._spawnDevelopmentProcess(executablePath, args),

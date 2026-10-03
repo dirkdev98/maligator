@@ -29,6 +29,7 @@ import {
 	stripCompactTypes,
 	TYPE_STRIPPER_IDENTITY,
 } from "./compiler/frontend/compact-type-strip.ts";
+import { buildModuleGraph } from "./compiler/frontend/module-graph.ts";
 import type { ModuleGoal } from "./compiler/frontend/module-graph.ts";
 import { loadEntrypointAndRunSemanticAnalysis } from "./compiler/frontend/semantic-program.ts";
 import { compileSemanticProgramToProgramImage } from "./compiler/pipeline/compile-core.ts";
@@ -36,12 +37,17 @@ import {
 	compileEntrypoint,
 	compileEntrypointToBuffer,
 } from "./compiler/pipeline/compile-program.ts";
+import {
+	compileWorkerImages,
+	type CompiledWorkerImage,
+} from "./compiler/pipeline/compile-worker-images.ts";
 import { compilerProgramFactsFromConfig } from "./compiler/shared/compiler-facts.ts";
 import {
 	emitProgramImage,
 	emitProgramTranslationUnits,
 } from "./compiler/target/emit-program-image.ts";
 import type { TranslationUnitPolicy } from "./compiler/target/emit-program-image.ts";
+import { emitWorkerImageTranslationUnits } from "./compiler/target/emit-worker-images.ts";
 import { serializeRuntimeImage } from "./compiler/target/program-image-codec.ts";
 import type { ProgramImage } from "./compiler/target/program-image.ts";
 import { cacheFrontendWire } from "./frontend-cache.ts";
@@ -57,6 +63,10 @@ import type {
 import { nativeSourcePath } from "./native-source-path.ts";
 import type { MaligatorIntlFeature } from "./public-api.d.ts";
 import { recordTestTelemetry } from "./test-telemetry.ts";
+import {
+	cacheDevelopmentWorkerManifest,
+	workerManifestArguments,
+} from "./worker-image-cache.ts";
 
 /** Entry-point C drivers linked with the emitted runtime image. */
 export const HOST_MAIN = "runtime/host_main.c";
@@ -243,13 +253,14 @@ export function buildNativeBinary(options: BuildOptions): string {
 /** Compile and link a fixture, retaining the exact context and linked artifacts. */
 export function buildNativeBinaryResult(options: BuildOptions): BuildNativeBinaryResult {
 	const config = resolveHarnessBuildConfig(options);
-	const programImage = compileFixtureProgramImage(options, config);
+	const { programImage, workerImages } = compileFixtureProgramImage(options, config);
 	const linked = linkProgramImage(
 		options,
 		config,
 		programImage,
 		options.compiled ?? true,
 		options.name,
+		workerImages,
 	);
 	return { ...linked, programImage };
 }
@@ -313,7 +324,7 @@ function resolveHarnessBuildConfig(options: BuildOptions): ResolvedBuildConfig {
 function compileFixtureProgramImage(
 	options: BuildOptions,
 	config: ResolvedBuildConfig,
-): ProgramImage {
+): { programImage: ProgramImage; workerImages: ReadonlyArray<CompiledWorkerImage> } {
 	const entrypoint = path.resolve(options.fixture);
 	const startedAtMs = Date.now();
 	const startedAt = performance.now();
@@ -334,7 +345,7 @@ function compileFixtureProgramImage(
 			});
 			cache = frontend.cache;
 			options.onFrontendCacheEvent?.({ cache: frontend.cache, entrypoint });
-			return frontend.programImage;
+			return { programImage: frontend.programImage, workerImages: frontend.workerImages };
 		}
 		const semanticProgram = loadEntrypointAndRunSemanticAnalysis(entrypoint, {
 			buildConfig: config,
@@ -344,11 +355,23 @@ function compileFixtureProgramImage(
 		});
 		// Tests intentionally bypass build policy so disabled-feature fixtures can
 		// compile and assert the runtime behavior of the reduced engine.
-		return compileSemanticProgramToProgramImage(semanticProgram, {
+		const programImage = compileSemanticProgramToProgramImage(semanticProgram, {
 			facts: compilerProgramFactsFromConfig(config),
 			profile: options.profileEnabled,
 			coreOptimizationBenchmarkAblation: options.coreOptimizationBenchmarkAblation,
 		});
+		const workerOptions = {
+			buildConfig: config,
+			stripTypes: stripCompactTypes,
+			enforcePolicies: false,
+			coreOptimizationBenchmarkAblation: options.coreOptimizationBenchmarkAblation,
+		};
+		const graph = buildModuleGraph(entrypoint, {
+			...workerOptions,
+			entryGoal: options.entryGoal,
+			entryStrict: options.entryStrict,
+		});
+		return { programImage, workerImages: compileWorkerImages(graph, workerOptions) };
 	} finally {
 		recordTestTelemetry({
 			phase: "frontend",
@@ -367,6 +390,7 @@ function linkProgramImage(
 	image: ProgramImage,
 	compiled: boolean,
 	name: string,
+	workerImages: ReadonlyArray<CompiledWorkerImage> = [],
 ): LocalBuildResult {
 	const emitOptions = {
 		sourcePath: nativeSourcePath,
@@ -374,17 +398,22 @@ function linkProgramImage(
 		assets: includeConfiguredAssets(config.assets),
 		maligatorSurface: config.surface.maligator,
 	};
-	const cSource =
+	const mainSource =
 		options.translationUnits === false
 			? emitProgramImage(image, emitOptions)
 			: emitProgramTranslationUnits(image, emitOptions, options.translationUnitPolicy);
+	const workerUnits = emitWorkerImageTranslationUnits(workerImages, emitOptions);
+	const cSource = [
+		...(typeof mainSource === "string" ? [mainSource] : mainSource),
+		...workerUnits,
+	];
 	const { context, cacheSuffix } = resolveHarnessNativeContext(options, config, name);
 	return buildLocalBinary({
 		context,
 		name,
 		cSource,
 		verbose: false,
-		mainFile: options.mainFile,
+		mainFile: options.mainFile ?? (workerImages.length > 0 ? HOST_MAIN : undefined),
 		outDir: options.outDir ?? defaultHarnessArtifactDirectory(),
 		cacheSuffix,
 		objectCacheVariant: options.nativeObjectCacheVariant,
@@ -485,6 +514,7 @@ function registerWireExecution(
 	config: ResolvedBuildConfig,
 	image: ProgramImage,
 	name: string,
+	workerImages: ReadonlyArray<CompiledWorkerImage> = [],
 ): { target: string; context: NativeBuildContext } {
 	if (
 		options.mainFile !== undefined &&
@@ -500,7 +530,10 @@ function registerWireExecution(
 	const target = `maligator-wire:${name}:${registeredWireExecutions.size}`;
 	registeredWireExecutions.set(target, {
 		executable: runner.binaryPath,
-		args: [wirePath],
+		args: [
+			...workerManifestArguments(cacheDevelopmentWorkerManifest(workerImages)),
+			wirePath,
+		],
 	});
 	return { target, context: runner.context };
 }
@@ -530,19 +563,24 @@ export function buildBackendPairFromOneProgramImage(
 	options: Omit<BuildOptions, "compiled">,
 ): BackendPairResult {
 	const config = resolveHarnessBuildConfig(options);
-	const image = compileFixtureProgramImage(options, config);
+	const { programImage: image, workerImages } = compileFixtureProgramImage(
+		options,
+		config,
+	);
 	const compiled = linkProgramImage(
 		options,
 		config,
 		image,
 		true,
 		`${options.name}-compiled`,
+		workerImages,
 	);
 	const interpreted = registerWireExecution(
 		options,
 		config,
 		image,
 		`${options.name}-interpreted`,
+		workerImages,
 	);
 	if (
 		compiled.context.plan.mode !== interpreted.context.plan.mode ||
