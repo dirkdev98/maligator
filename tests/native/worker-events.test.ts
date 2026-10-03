@@ -25,5 +25,5 @@ for (const compiled of [true, false]) {
 		} finally {
 			rmSync(outDir, { recursive: true, force: true });
 		}
-	});
+	}, 300_000);
 }

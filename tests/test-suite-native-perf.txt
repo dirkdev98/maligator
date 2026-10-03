@@ -11,6 +11,7 @@ tests/native/direct-known-call.test.ts
 tests/native/error-capture-stack.test.ts
 tests/native/fresh-dense-indexed-reserve.test.ts
 tests/native/function-own-slot-cache.test.ts
+tests/native/gc-raw-realloc.test.ts
 tests/native/inherited-method-cache.test.ts
 tests/native/interpreter-property-ic.test.ts
 tests/native/interpreter-strict-equality.test.ts

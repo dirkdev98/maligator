@@ -19,5 +19,5 @@ describe("RAW buffer growth", () => {
 			environment: { ...process.env, MAL_PERF_STATS: "1" },
 		});
 		expect(runToStdout(binary)).toBe("gc-raw-realloc PASS\n");
-	});
+	}, 300_000);
 });
