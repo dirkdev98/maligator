@@ -4,6 +4,7 @@ import * as path from "node:path";
 import { artifactProducer } from "./artifact-store.ts";
 import type { ResolvedBuildConfig } from "./build-config.ts";
 import { maligatorCacheDirectory } from "./cache-root.ts";
+import { lexicalCodeMask } from "./compiler/frontend/compact-type-strip.ts";
 import { hashDirectoryTreesCached } from "./file-tree.ts";
 
 let implementationDigest: string | undefined;
@@ -37,21 +38,97 @@ interface SourceConeEntry {
 }
 
 interface SourceConeManifest {
-	schema: 1;
+	schema: 2;
 	entries: Record<string, SourceConeEntry>;
 }
 
 let installedProducerDigests: Record<CompilerProducerStage, string> | undefined;
 const producerImplementationDigests = new Map<CompilerProducerStage, string>();
 
-function relativeSourceImports(source: string): Array<string> {
+interface SourceToken {
+	kind: "word" | "string" | "punctuation";
+	text: string;
+}
+
+function sourceTokens(source: string, filePath: string): Array<SourceToken> {
+	const code = lexicalCodeMask(source, filePath);
+	const tokens: Array<SourceToken> = [];
+	for (let i = 0; i < source.length;) {
+		if (!code[i] || /\s/.test(source[i]!)) {
+			i++;
+			continue;
+		}
+		const start = i;
+		const char = source[i]!;
+		if (char === '"' || char === "'") {
+			i++;
+			while (i < source.length) {
+				if (source[i] === "\\") {
+					i += 2;
+					continue;
+				}
+				if (source[i++] === char) break;
+			}
+			tokens.push({ kind: "string", text: source.slice(start + 1, i - 1) });
+		} else if (/[A-Za-z_$]/.test(char)) {
+			i++;
+			while (i < source.length && code[i] && /[A-Za-z0-9_$]/.test(source[i]!)) i++;
+			tokens.push({ kind: "word", text: source.slice(start, i) });
+		} else {
+			i++;
+			tokens.push({ kind: "punctuation", text: char });
+		}
+	}
+	return tokens;
+}
+
+function afterBraces(tokens: Array<SourceToken>, start: number): number {
+	let depth = 0;
+	for (let i = start; i < tokens.length; i++) {
+		if (tokens[i]!.text === "{") depth++;
+		else if (tokens[i]!.text === "}" && --depth === 0) return i + 1;
+	}
+	return tokens.length;
+}
+
+function relativeSourceImports(source: string, filePath: string): Array<string> {
+	const tokens = sourceTokens(source, filePath);
 	const specifiers = new Set<string>();
-	for (const pattern of [
-		/^\s*(?:import|export)(?:\s+type)?[\s\S]*?\sfrom\s+["'](\.\.?\/[^"']+)["'];?\s*$/gm,
-		/^\s*import\s+["'](\.\.?\/[^"']+)["'];?\s*$/gm,
-		/\bimport\s*\(\s*["'](\.\.?\/[^"']+)["']\s*\)/g,
-	]) {
-		for (const match of source.matchAll(pattern)) specifiers.add(match[1]!);
+	const add = (token: SourceToken | undefined) => {
+		if (token?.kind === "string" && /^\.\.?\//.test(token.text))
+			specifiers.add(token.text);
+	};
+	for (let i = 0; i < tokens.length; i++) {
+		const token = tokens[i]!;
+		if (token.kind !== "word" || (token.text !== "import" && token.text !== "export"))
+			continue;
+		if (tokens[i - 1]?.text === ".") continue;
+		let next = i + 1;
+		if (token.text === "import" && tokens[next]?.text === "(") {
+			if (tokens[next + 2]?.text === ")" || tokens[next + 2]?.text === ",")
+				add(tokens[next + 1]);
+			continue;
+		}
+		if (token.text === "import" && tokens[next]?.kind === "string") {
+			add(tokens[next]);
+			continue;
+		}
+		if (tokens[next]?.text === "type" && tokens[next + 1]?.text !== "from") next++;
+		if (token.text === "export") {
+			if (tokens[next]?.text === "{") next = afterBraces(tokens, next);
+			else if (tokens[next]?.text === "*") {
+				next++;
+				if (tokens[next]?.text === "as") next += 2;
+			} else continue;
+		} else {
+			if (tokens[next]?.kind === "word") {
+				next++;
+				if (tokens[next]?.text === ",") next++;
+			}
+			if (tokens[next]?.text === "{") next = afterBraces(tokens, next);
+			else if (tokens[next]?.text === "*") next += 3;
+		}
+		if (tokens[next]?.text === "from") add(tokens[next + 1]);
 	}
 	return [...specifiers].sort();
 }
@@ -59,7 +136,7 @@ function relativeSourceImports(source: string): Array<string> {
 function readSourceConeManifest(file: string): SourceConeManifest | undefined {
 	try {
 		const manifest = JSON.parse(readFileSync(file, "utf8")) as SourceConeManifest;
-		return manifest.schema === 1 ? manifest : undefined;
+		return manifest.schema === 2 ? manifest : undefined;
 	} catch {
 		return undefined;
 	}
@@ -90,7 +167,7 @@ function sourceEntry(
 		ino: stats.ino,
 		dev: stats.dev,
 		digest: hash("sha256", source, "hex"),
-		imports: relativeSourceImports(source),
+		imports: relativeSourceImports(source, relativePath),
 	};
 }
 
@@ -138,7 +215,7 @@ export function compilerProducerImplementationDigestForRoot(
 	try {
 		mkdirSync(path.dirname(manifestPath), { recursive: true });
 		const temporary = `${manifestPath}.tmp-${process.pid}`;
-		writeFileSync(temporary, `${JSON.stringify({ schema: 1, entries })}\n`);
+		writeFileSync(temporary, `${JSON.stringify({ schema: 2, entries })}\n`);
 		renameSync(temporary, manifestPath);
 	} catch {
 		// A read-only cache must not make compilation unavailable.
@@ -149,7 +226,7 @@ export function compilerProducerImplementationDigestForRoot(
 	return hash(
 		"sha256",
 		JSON.stringify({
-			schema: 1,
+			schema: 2,
 			stage,
 			entries: Object.entries(entries)
 				.map(([file, entry]) => [file, entry.digest])

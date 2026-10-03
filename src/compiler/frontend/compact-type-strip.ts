@@ -109,7 +109,7 @@ function isIdentifierPart(char: string | undefined): boolean {
 	return isIdentifierStart(char) || (char !== undefined && char >= "0" && char <= "9");
 }
 
-function lexicalCodeMask(source: string, filePath: string): Array<boolean> {
+export function lexicalCodeMask(source: string, filePath: string): Array<boolean> {
 	const code = new Array<boolean>(source.length).fill(true);
 	const regexPrefixWords = new Set([
 		"await",

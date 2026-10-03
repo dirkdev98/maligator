@@ -288,6 +288,22 @@
 					worker libraries.
 				</p>
 				<p>Phase: runtime. Value: callable. Identity: module.</p>
+				<pre><code>// declaration.ts
+import { createWorkerUrl } from &quot;maligator:workers&quot;;
+
+export const tasks = createWorkerUrl&lt;typeof import(&quot;./sum.ts&quot;)&gt;(
+	&quot;./sum.ts&quot;,
+	import.meta.url,
+);
+
+console.log(Object.isFrozen(tasks), tasks.href.startsWith(&quot;file:&quot;));</code></pre>
+				<pre><code>// sum.ts
+import type { TaskContext } from &quot;maligator:workers&quot;;
+
+export function sum(context: TaskContext, values: Array&lt;number&gt;): number {
+	context.throwIfCancelled();
+	return values.reduce((total, value) =&gt; total + value, 0);
+}</code></pre>
 			</section>
 			<section>
 				<h2 id="createPool">createPool</h2>
@@ -296,11 +312,91 @@
 					admitted task settles asynchronously.
 				</p>
 				<p>Phase: runtime. Value: callable. Identity: module.</p>
+				<pre><code>// pool.ts
+import { createPool, createWorkerUrl } from &quot;maligator:workers&quot;;
+
+const tasks = createWorkerUrl&lt;typeof import(&quot;./tasks.ts&quot;)&gt;(
+	&quot;./tasks.ts&quot;,
+	import.meta.url,
+);
+const pool = createPool(tasks, { size: 2, maxQueuedTasks: 4 });
+
+try {
+	await pool.ready;
+	console.log(await pool.run(&quot;sum&quot;, [[1, 2, 3]]));
+
+	const inputs: Array&lt;[Array&lt;number&gt;]&gt; = [[[1, 2]], [[3, 4]]];
+	for await (const total of pool.map(&quot;sum&quot;, inputs, { window: 2 })) {
+		console.log(total);
+	}
+
+	const controller = new AbortController();
+	const pending = pool.run(&quot;waitForCancellation&quot;, [], {
+		signal: controller.signal,
+	});
+	const cancelled = pending.then(
+		() =&gt; false,
+		(reason: unknown) =&gt; reason === controller.signal.reason,
+	);
+	controller.abort();
+	console.log(await cancelled);
+} finally {
+	await pool.close();
+}</code></pre>
+				<pre><code>// tasks.ts
+import type { TaskContext } from &quot;maligator:workers&quot;;
+
+export function sum(context: TaskContext, values: Array&lt;number&gt;): number {
+	let total = 0;
+	for (const value of values) {
+		context.throwIfCancelled();
+		total += value;
+	}
+	return total;
+}
+
+export async function waitForCancellation(context: TaskContext): Promise&lt;void&gt; {
+	context.throwIfCancelled();
+	await new Promise&lt;void&gt;((resolve) =&gt; {
+		context.signal.addEventListener(&quot;abort&quot;, () =&gt; resolve(), { once: true });
+	});
+	context.throwIfCancelled();
+}</code></pre>
 			</section>
 			<section>
 				<h2 id="transfer">transfer</h2>
 				<p>Wrap a result for transfer when the worker publishes it.</p>
 				<p>Phase: runtime. Value: callable. Identity: module.</p>
+				<pre><code>// transfer-task.ts
+import { transfer } from &quot;maligator:workers&quot;;
+import type { TaskContext } from &quot;maligator:workers&quot;;
+
+export function reverse(context: TaskContext, buffer: ArrayBuffer) {
+	context.throwIfCancelled();
+	new Uint8Array(buffer).reverse();
+	return transfer(buffer, [buffer]);
+}</code></pre>
+				<pre><code>// transfer.ts
+import { createPool, createWorkerUrl } from &quot;maligator:workers&quot;;
+
+const tasks = createWorkerUrl&lt;typeof import(&quot;./transfer-task.ts&quot;)&gt;(
+	&quot;./transfer-task.ts&quot;,
+	import.meta.url,
+);
+const pool = createPool(tasks, { size: 1 });
+
+try {
+	await pool.ready;
+	const bytes = new Uint8Array([1, 2, 3]);
+	const pending = pool.run(&quot;reverse&quot;, [bytes.buffer], {
+		transfer: [bytes.buffer],
+	});
+	console.log(bytes.byteLength);
+	const result = new Uint8Array(await pending);
+	console.log(Array.from(result).join(&quot;,&quot;));
+} finally {
+	await pool.close();
+}</code></pre>
 			</section>
 			<section>
 				<h2 id="Worker">Worker</h2>
@@ -309,11 +405,54 @@
 					lifecycle.
 				</p>
 				<p>Phase: runtime. Value: callable. Identity: module.</p>
+				<pre><code>// worker.ts
+import { createWorkerUrl, Worker } from &quot;maligator:workers&quot;;
+
+const entry = createWorkerUrl(&quot;./echo.ts&quot;, import.meta.url);
+const worker = new Worker&lt;string, string&gt;(entry);
+
+try {
+	const reply = new Promise&lt;string&gt;((resolve) =&gt; {
+		worker.port.onmessage = (event) =&gt; resolve(event.data);
+	});
+	worker.port.start();
+	await worker.ready;
+	worker.port.postMessage(&quot;workers&quot;);
+	console.log(await reply);
+} finally {
+	const exit = await worker.terminate();
+	console.log(exit.reason);
+}</code></pre>
+				<pre><code>// echo.ts
+import { parentPort } from &quot;maligator:workers&quot;;
+
+if (parentPort === null) throw new Error(&quot;Run this module as a worker&quot;);
+const port = parentPort;
+port.onmessage = (event) =&gt; {
+	port.postMessage(String(event.data));
+};
+port.start();</code></pre>
 			</section>
 			<section>
 				<h2 id="MessageChannel">MessageChannel</h2>
 				<p>Create two transferable endpoints independently of worker startup.</p>
 				<p>Phase: runtime. Value: callable. Identity: module.</p>
+				<pre><code>// channel.ts
+import { MessageChannel, MessagePort } from &quot;maligator:workers&quot;;
+
+const channel = new MessageChannel();
+try {
+	console.log(channel.port1 instanceof MessagePort);
+	const received = new Promise&lt;unknown&gt;((resolve) =&gt; {
+		channel.port2.onmessage = (event) =&gt; resolve(event.data);
+	});
+	channel.port2.start();
+	channel.port1.postMessage({ answer: 42 });
+	console.log(JSON.stringify(await received));
+} finally {
+	channel.port1.close();
+	channel.port2.close();
+}</code></pre>
 			</section>
 			<section>
 				<h2 id="MessagePort">MessagePort</h2>
@@ -322,6 +461,22 @@
 					and workers.
 				</p>
 				<p>Phase: runtime. Value: callable. Identity: module.</p>
+				<pre><code>// channel.ts
+import { MessageChannel, MessagePort } from &quot;maligator:workers&quot;;
+
+const channel = new MessageChannel();
+try {
+	console.log(channel.port1 instanceof MessagePort);
+	const received = new Promise&lt;unknown&gt;((resolve) =&gt; {
+		channel.port2.onmessage = (event) =&gt; resolve(event.data);
+	});
+	channel.port2.start();
+	channel.port1.postMessage({ answer: 42 });
+	console.log(JSON.stringify(await received));
+} finally {
+	channel.port1.close();
+	channel.port2.close();
+}</code></pre>
 			</section>
 			<section>
 				<h2 id="receiveMessageOnPort">receiveMessageOnPort</h2>
@@ -329,21 +484,79 @@
 					Synchronously dequeue one pending message without running unrelated callbacks.
 				</p>
 				<p>Phase: runtime. Value: callable. Identity: module.</p>
+				<pre><code>// receive.ts
+import { MessageChannel, receiveMessageOnPort } from &quot;maligator:workers&quot;;
+
+const channel = new MessageChannel();
+try {
+	channel.port1.postMessage(&quot;first&quot;);
+	channel.port1.postMessage(&quot;second&quot;);
+	console.log(receiveMessageOnPort(channel.port2)?.message);
+	console.log(receiveMessageOnPort(channel.port2)?.message);
+	console.log(receiveMessageOnPort(channel.port2));
+} finally {
+	channel.port1.close();
+	channel.port2.close();
+}</code></pre>
 			</section>
 			<section>
 				<h2 id="capabilities">capabilities</h2>
 				<p>Report the running host's worker facilities and capacity.</p>
 				<p>Phase: runtime. Value: callable. Identity: module.</p>
+				<pre><code>// capabilities.ts
+import { capabilities } from &quot;maligator:workers&quot;;
+
+const host = capabilities();
+console.log(host.threads, host.sharedMemory);
+console.log(host.parallelism &gt;= 1, host.maxWorkers &gt;= 1);</code></pre>
 			</section>
 			<section>
 				<h2 id="parentPort">parentPort</h2>
 				<p>The worker's parent endpoint; null in the main isolate.</p>
 				<p>Phase: runtime. Value: runtime-data. Identity: module.</p>
+				<pre><code>// echo.ts
+import { parentPort } from &quot;maligator:workers&quot;;
+
+if (parentPort === null) throw new Error(&quot;Run this module as a worker&quot;);
+const port = parentPort;
+port.onmessage = (event) =&gt; {
+	port.postMessage(String(event.data));
+};
+port.start();</code></pre>
 			</section>
 			<section>
 				<h2 id="workerData">workerData</h2>
 				<p>The worker-owned clone of startup data.</p>
 				<p>Phase: runtime. Value: runtime-data. Identity: module.</p>
+				<pre><code>// worker-data.ts
+import { workerData } from &quot;maligator:workers&quot;;
+
+function readConfig(value: unknown): { label: string } {
+	if (
+		typeof value !== &quot;object&quot; ||
+		value === null ||
+		!(&quot;label&quot; in value) ||
+		typeof value.label !== &quot;string&quot;
+	) {
+		throw new TypeError(&quot;Expected worker data with a string label&quot;);
+	}
+	return { label: value.label };
+}
+
+const config = readConfig(workerData);
+console.log(config.label);</code></pre>
+				<pre><code>// configuration.ts
+import { createWorkerUrl, Worker } from &quot;maligator:workers&quot;;
+
+const entry = createWorkerUrl(&quot;./worker-data.ts&quot;, import.meta.url);
+const worker = new Worker(entry, { data: { label: &quot;thumbnail&quot; } });
+try {
+	await worker.ready;
+	const exit = await worker.closed;
+	if (exit.code !== 0) throw new Error(&quot;Worker failed&quot;);
+} finally {
+	await worker.terminate();
+}</code></pre>
 			</section>
 			<section class="type-section">
 				<h2 id="WorkerUrl&lt;Module = unknown&gt;">WorkerUrl&lt;Module = unknown&gt;</h2>

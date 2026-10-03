@@ -1,4 +1,11 @@
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+	mkdtempSync,
+	mkdirSync,
+	readFileSync,
+	readdirSync,
+	rmSync,
+	writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -167,6 +174,68 @@ describe("compiler cache identity", () => {
 				fixture.cacheDirectory,
 			),
 		).not.toBe(initial);
+	});
+
+	it("tracks real imports through templates while ignoring documentation and stale manifests", () => {
+		const fixture = compilerFixture();
+		const source = [
+			'import { n } from "./compiler/compile.ts";',
+			'import type { Shape } from "./types.ts";',
+			'import "./side.ts";',
+			'export { value } from "./exported.ts";',
+			'export const docs = `import "./missing-template.ts"; export { x } from "./missing-export.ts"; ${import("./dynamic.ts")}`;',
+			'const quoted = "import(\\"./missing-string.ts\\")";',
+			'const pattern = /import\\("\\.\\/missing-regex\\.ts"\\)/;',
+			'// import "./missing-comment.ts";',
+			'const object = { import: (value: string) => value }; object.import("./missing-property.ts");',
+		].join("\n");
+		writeFileSync(
+			path.join(fixture.sourceRoot, "build-frontend-cache.ts"),
+			`${source}\n`,
+		);
+		writeFileSync(
+			path.join(fixture.sourceRoot, "types.ts"),
+			"export type Shape = { count: 1 };\n",
+		);
+		for (const dependency of ["side.ts", "exported.ts", "dynamic.ts"]) {
+			writeFileSync(
+				path.join(fixture.sourceRoot, dependency),
+				"export const value = 1;\n",
+			);
+		}
+		const digest = () =>
+			compilerProducerImplementationDigestForRoot(
+				"build-frontend",
+				fixture.sourceRoot,
+				fixture.cacheDirectory,
+			);
+		let previous = digest();
+		const manifestDirectory = path.join(fixture.cacheDirectory, "source-digests");
+		const manifestPath = path.join(manifestDirectory, readdirSync(manifestDirectory)[0]!);
+		const stale = JSON.parse(readFileSync(manifestPath, "utf8")) as {
+			schema: number;
+			entries: Record<string, { imports: Array<string> }>;
+		};
+		stale.schema = 1;
+		stale.entries["build-frontend-cache.ts"]!.imports = ["./missing-stale.ts"];
+		writeFileSync(manifestPath, `${JSON.stringify(stale)}\n`);
+		expect(digest()).toBe(previous);
+		writeFileSync(
+			path.join(fixture.sourceRoot, "types.ts"),
+			"export type Shape = { count: 2 };\n",
+		);
+		const changedType = digest();
+		expect(changedType).not.toBe(previous);
+		previous = changedType;
+		for (const dependency of ["side.ts", "exported.ts", "dynamic.ts"]) {
+			writeFileSync(
+				path.join(fixture.sourceRoot, dependency),
+				"export const value = 2;\n",
+			);
+			const changed = digest();
+			expect(changed, dependency).not.toBe(previous);
+			previous = changed;
+		}
 	});
 
 	it("projects exactly the configuration consumed before native emission", () => {

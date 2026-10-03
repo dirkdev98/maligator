@@ -5,6 +5,13 @@ import type { ExplorerAsset, SiteResource } from "./responses.ts";
 const explorerRoot = mal.assets.materialize("explorer");
 const pages = new Map<string, SiteResource>([
 	[
+		"/api/workers",
+		{
+			body: readFileSync(mal.assets.materialize("workersApi"), "utf8"),
+			type: "text/html; charset=utf-8",
+		},
+	],
+	[
 		"/api/process",
 		{
 			body: readFileSync(mal.assets.materialize("processApi"), "utf8"),
