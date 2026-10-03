@@ -19,6 +19,7 @@ bool mal_blocking_work_reserve(
     MalHost *host, usize bytes, MalBlockingWorkReservation *reservation);
 void mal_blocking_work_reservation_release(MalBlockingWorkReservation *reservation);
 usize mal_blocking_work_retained_bytes(void);
+usize mal_blocking_work_retained_jobs(void);
 // Start and teardown run on the reactor thread; success moves the reservation and payload.
 bool mal_blocking_work_start(
     MalHost *host, MalBlockingWorkRun run, void *data,

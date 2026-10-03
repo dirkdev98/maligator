@@ -19,9 +19,11 @@ typedef struct MalBlockingWorkJob {
     MalBlockingWorkReservation reservation;
 } MalBlockingWorkJob;
 
-// Executor queue accounting ends at dequeue; this cap includes posted completions.
+// Executor queue accounting ends at dequeue; retained caps include reservations and posted completions.
 #define MAL_BLOCKING_WORK_RETAINED_LIMIT ((usize) 512 * 1024 * 1024)
+#define MAL_BLOCKING_WORK_RETAINED_JOB_LIMIT ((usize) 1024)
 static _Atomic usize g_blocking_work_retained_bytes;
+static _Atomic usize g_blocking_work_retained_jobs;
 
 struct MalBlockingWorkState {
     MalHost *host;
@@ -36,9 +38,18 @@ bool mal_blocking_work_reserve(
     if (host == nullptr || reservation == nullptr || reservation->active ||
         !mal_host_posted_accepting(&host->posted_tasks) ||
         bytes > MAL_BLOCKING_WORK_RETAINED_LIMIT) return false;
+    usize jobs = atomic_load_explicit(&g_blocking_work_retained_jobs, memory_order_relaxed);
+    do {
+        if (jobs >= MAL_BLOCKING_WORK_RETAINED_JOB_LIMIT) return false;
+    } while (!atomic_compare_exchange_weak_explicit(
+        &g_blocking_work_retained_jobs, &jobs, jobs + 1,
+        memory_order_relaxed, memory_order_relaxed));
     usize current = atomic_load_explicit(&g_blocking_work_retained_bytes, memory_order_relaxed);
     do {
-        if (current > MAL_BLOCKING_WORK_RETAINED_LIMIT - bytes) return false;
+        if (current > MAL_BLOCKING_WORK_RETAINED_LIMIT - bytes) {
+            atomic_fetch_sub_explicit(&g_blocking_work_retained_jobs, 1, memory_order_relaxed);
+            return false;
+        }
     } while (!atomic_compare_exchange_weak_explicit(
         &g_blocking_work_retained_bytes, &current, current + bytes,
         memory_order_relaxed, memory_order_relaxed));
@@ -55,10 +66,17 @@ void mal_blocking_work_reservation_release(MalBlockingWorkReservation *reservati
             &g_blocking_work_retained_bytes, bytes, memory_order_relaxed);
         if (previous < bytes) abort();
     }
+    usize previous = atomic_fetch_sub_explicit(
+        &g_blocking_work_retained_jobs, 1, memory_order_relaxed);
+    if (previous == 0) abort();
 }
 
 usize mal_blocking_work_retained_bytes(void) {
     return atomic_load_explicit(&g_blocking_work_retained_bytes, memory_order_relaxed);
+}
+
+usize mal_blocking_work_retained_jobs(void) {
+    return atomic_load_explicit(&g_blocking_work_retained_jobs, memory_order_relaxed);
 }
 
 static void mal_blocking_work_job_destroy(void *data) {
