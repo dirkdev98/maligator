@@ -635,20 +635,21 @@ static MalValue mal_dynamic_import_evaluate(MalVm *vm, MalValue receiver,
     const MalValue *args, i32 argc, MalValue new_target, MalValue callee) {
     (void) receiver; (void) args; (void) argc; (void) new_target;
     MalNativeFunctionObject *function = mal_value_to_native_function_object(callee);
-    MalValue roots[6] = {mal_native_function_object_get_slot(function, 0),
+    MalValue roots[7] = {mal_native_function_object_get_slot(function, 0),
         mal_native_function_object_get_slot(function, 2), mal_value_new_undefined(),
-        mal_value_new_undefined(), mal_value_new_undefined(), mal_value_new_undefined()};
+        mal_value_new_undefined(), mal_value_new_undefined(), mal_value_new_undefined(),
+        mal_native_function_object_get_slot(function, 1)};
     MalRootSpan span;
-    mal_gc_root(&span, roots, 6);
-    MalValue init = mal_native_function_object_get_slot(function, 1);
+    mal_gc_root(&span, roots, countof(roots));
     i32 cells[4];
     for (i32 i = 0; i < 4; i++) cells[i] = mal_value_to_i32(mal_native_function_object_get_slot(function, i + 3));
+    mal_gc_native_rooted_begin(vm);
     mal_promise_create_resolving(vm, roots[0], &roots[3], &roots[4]);
     if (cells[0] < 0) {
         MalCompletion completion = mal_vm_call_value(vm, roots[3], mal_value_new_undefined(), &roots[1], 1);
         if (completion.kind != MAL_COMPLETION_NORMAL) vm->completion = completion;
     } else {
-        roots[2] = mal_module_evaluate(vm, init, cells[0], cells[1], cells[2], cells[3], -1);
+        roots[2] = mal_module_evaluate(vm, roots[6], cells[0], cells[1], cells[2], cells[3], -1);
         if (vm->completion.kind == MAL_COMPLETION_NORMAL) {
             roots[5] = mal_value_from_native_function_object(mal_native_function_object_new_with_slots(
                 &vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
@@ -661,6 +662,7 @@ static MalValue mal_dynamic_import_evaluate(MalVm *vm, MalValue receiver,
         vm->completion = (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = mal_value_new_undefined()};
         mal_promise_reject(vm, mal_value_to_promise_object(roots[0]), roots[1]);
     }
+    mal_gc_native_rooted_end(vm);
     mal_gc_unroot(&span);
     return mal_value_new_undefined();
 }
@@ -773,9 +775,17 @@ static MalValue mal_builtin_evaluate_module_sync(
                 return mal_value_new_undefined();
             }
         }
-        return mal_module_evaluate(vm, args[0], mal_value_to_i32(args[1]),
+        MalValue init = args[0];
+        MalRootSpan span;
+        mal_gc_root(&span, &init, 1);
+        // Module initialization can run an arbitrarily long allocating body before returning.
+        mal_gc_native_rooted_begin(vm);
+        MalValue result = mal_module_evaluate(vm, init, mal_value_to_i32(args[1]),
             mal_value_to_i32(args[2]), mal_value_to_i32(args[3]),
             mal_value_to_i32(args[4]), mal_value_to_i32(args[5]));
+        mal_gc_native_rooted_end(vm);
+        mal_gc_unroot(&span);
+        return result;
     }
     mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
         "Invalid module evaluation request");

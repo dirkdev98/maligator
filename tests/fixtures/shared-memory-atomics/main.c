@@ -27,6 +27,12 @@ static i32 *slot(u32 index) {
     return (i32 *) (mal_shared_memory_data(g_memory) + index * 4);
 }
 
+static i64 monotonic_ns(void) {
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    return (i64) now.tv_sec * 1000000000ll + now.tv_nsec;
+}
+
 // Strict alternation through wait/notify: a lost wakeup hangs the run, which
 // the driver's timeout reports.
 static void *pingpong_peer(void *arg) {
@@ -184,8 +190,12 @@ int main(int argc, char **argv) {
     }
     CHECK(mal_shared_atomic_load((byte *) slot(1), 4) == (u64) ADDERS * ADDS_PER_THREAD);
 
+    // Offset 4 is the adders' counter, so a matching wait expects their total.
     CHECK(mal_shared_memory_wait_sync(g_memory, 4, 4, 7, 0, nullptr) == MAL_SHARED_WAIT_NOT_EQUAL);
-    CHECK(mal_shared_memory_wait_sync(g_memory, 4, 4, 0, 5, nullptr) == MAL_SHARED_WAIT_TIMED_OUT);
+    i64 wait_start = monotonic_ns();
+    CHECK(mal_shared_memory_wait_sync(g_memory, 4, 4, (u64) ADDERS * ADDS_PER_THREAD, 5, nullptr) ==
+          MAL_SHARED_WAIT_TIMED_OUT);
+    CHECK(monotonic_ns() - wait_start >= 5 * 1000 * 1000);
 
     g_interrupt = mal_shared_wait_interrupt_new();
     pthread_t interrupted;
@@ -309,7 +319,8 @@ int main(int argc, char **argv) {
     }
     mal_shared_bytes_fill(bytes + 4, 0xAA, 4);
     CHECK(mal_shared_unordered_load(bytes + 4, 4) == 0xAAAAAAAAu);
-    CHECK(mal_shared_unordered_load(bytes + 8, 1) == 8);
+    CHECK(mal_shared_unordered_load(bytes + 8, 1) == 6);
+    CHECK(mal_shared_unordered_load(bytes + 10, 1) == 10);
     byte snapshot[4];
     mal_shared_bytes_read(snapshot, bytes, 4);
     CHECK(snapshot[0] == 0 && snapshot[3] == 3);

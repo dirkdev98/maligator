@@ -74,8 +74,8 @@ void mal_host_install_node_worker_threads(
         };
         MalValue values[] = {
             mal_workers_node_worker_constructor(vm),
-            mal_workers_message_channel_constructor(vm),
-            mal_workers_message_port_constructor(vm),
+            mal_workers_node_message_channel_constructor(vm),
+            mal_workers_node_message_port_constructor(vm),
             mal_workers_parent_port(vm),
             roots[2],
             mal_value_from_i32((i32) mal_workers_thread_id()),

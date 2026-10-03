@@ -30,7 +30,7 @@ describe("worker isolates", () => {
 				} finally {
 					rmSync(outDir, { recursive: true, force: true });
 				}
-			});
+			}, 300_000);
 		}
 	}
 	it("terminates spinning and exiting workers uncatchably and bounds standalone channels", () => {

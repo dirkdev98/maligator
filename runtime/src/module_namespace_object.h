@@ -58,6 +58,7 @@ bool mal_module_namespace_ensure_evaluated(
     MalModuleNamespaceObject *ns
 );
 
+/* Calls JavaScript; native callers must root scratch and release only their own GC suppression. */
 MalValue mal_module_evaluate(
     MalVm *vm, MalValue init_fn, i32 status_slot, i32 error_slot,
     i32 record_slot, i32 context_slot, i32 parent_slot);

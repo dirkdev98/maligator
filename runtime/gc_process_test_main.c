@@ -32,6 +32,25 @@ static void *owner(void *data) {
     return nullptr;
 }
 
+static void check_pressure_after_released_peak(void) {
+    usize before = mal_gc_process_bytes();
+    usize budget = mal_gc_process_budget();
+    usize growth = budget / 16;
+    MalGcProcessParticipant *participant = mal_gc_process_register(mal_gc_current_poll_target());
+    mal_gc_process_charge(budget);
+    mal_gc_process_charge(budget * 4);
+    if (!mal_gc_process_take_pressure(participant)) abort();
+    mal_gc_process_release(budget * 4);
+    if (mal_gc_process_bytes() < budget) abort();
+    mal_gc_process_charge(growth);
+    if (!mal_gc_process_take_pressure(participant) ||
+        mal_gc_process_take_pressure(participant)) abort();
+    mal_gc_process_release(growth);
+    mal_gc_process_release(budget);
+    if (mal_gc_process_bytes() != before) abort();
+    mal_gc_process_unregister(participant);
+}
+
 int main(void) {
     MalVm vm;
     mal_vm_init(&vm, &mal_runtime_image);
@@ -51,6 +70,7 @@ int main(void) {
     if (atomic_load(&serviced) != countof(owners)) abort();
     mal_gc_process_release(reservation);
     if (mal_gc_process_bytes() != baseline) abort();
+    check_pressure_after_released_peak();
     usize helpers = 0;
     while (helpers < 3 && mal_gc_process_helper_acquire()) helpers++;
     if (helpers > 2) abort();

@@ -74,8 +74,13 @@ errors, buffers and views preserve their structured-clone identities and cycles.
 Functions and unsupported objects fail with `DataCloneError`.
 
 Transfer lists are captured once. All getters finish and every transferable is
-revalidated before admission and commit. Failure preserves every still-owned
-listed resource. ArrayBuffer ownership moves and the source detaches
+revalidated before admission and commit. Maligator admission failure preserves
+every still-owned listed resource. Node ports commit a successfully serialized
+transfer even if a getter closes the channel or moves the caller away, then drop
+the undeliverable snapshot. Clone errors and host quota failures preserve
+transfers on both surfaces. A port retains its posting policy when transferred,
+including through a channel or worker created by the other API.
+ArrayBuffer ownership moves and the source detaches
 synchronously; MessagePort ownership moves and the old wrapper loses access.
 SharedArrayBuffer clones retain the same backing and are never transferable.
 Receiving constructs heap-local wrappers. Port generations and native reference
@@ -83,7 +88,7 @@ counts protect close, transfer, delivery and isolate teardown races.
 
 Each endpoint has message-count, total-byte and per-message bounds. The process
 also bounds admitted data to 65,536 snapshots and 512 MiB. Reservations include
-in-flight delivery until native snapshot release. Rejected posts do not detach
+in-flight delivery until native snapshot release. Quota-rejected posts do not detach
 buffers. FIFO order applies to each endpoint. Termination and Atomics cancellation
 notification do not depend on room in a user-message queue.
 

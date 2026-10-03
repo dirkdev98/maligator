@@ -126,4 +126,7 @@ tests/native/executor.test.ts
 tests/native/gc-process.test.ts
 tests/native/shared-memory-atomics.test.ts
 tests/native/workers-runtime.test.ts
+tests/native/module-evaluation-gc.test.ts
+tests/native/workers-closed-port.test.ts
+tests/native/node-worker-post-policy.test.ts
 tests/native/workers.test.ts

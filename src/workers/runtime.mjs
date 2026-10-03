@@ -322,6 +322,9 @@ export function createPool(entry, options = {}) {
 			addAbortListener.call(signal, "abort", job.abort, { once: true });
 		try {
 			const transferList = Object.freeze(Array.from(runOptions.transfer ?? []));
+			if (state !== "open")
+				throw namedError("InvalidStateError", "Worker pool is closed");
+			if (signal !== undefined && signalAborted.call(signal)) throw abortReason(signal);
 			job.ticket = queue.port1.postMessage(
 				{ id, name, args, flag, transfer: transferList },
 				transferList,

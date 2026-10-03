@@ -176,10 +176,17 @@ static MalValue module_body_settled(MalVm *vm, MalValue receiver,
     const MalValue *args, i32 argc, MalValue new_target, MalValue callee) {
     (void) receiver; (void) new_target;
     MalNativeFunctionObject *function = mal_value_to_native_function_object(callee);
-    MalValue record = mal_native_function_object_get_slot(function, 0);
+    MalValue roots[2] = {mal_native_function_object_get_slot(function, 0),
+        argc > 0 ? args[0] : mal_value_new_undefined()};
     bool rejected = mal_value_to_boolean(mal_native_function_object_get_slot(function, 1));
-    if (rejected) module_reject(vm, record, argc > 0 ? args[0] : mal_value_new_undefined());
-    else module_fulfilled(vm, record);
+    MalRootSpan span;
+    mal_gc_root(&span, roots, countof(roots));
+    // Fulfilling a dependency can execute synchronous ancestor bodies in this callback.
+    mal_gc_native_rooted_begin(vm);
+    if (rejected) module_reject(vm, roots[0], roots[1]);
+    else module_fulfilled(vm, roots[0]);
+    mal_gc_native_rooted_end(vm);
+    mal_gc_unroot(&span);
     return mal_value_new_undefined();
 }
 static void module_execute_async(MalVm *vm, MalValue record) {

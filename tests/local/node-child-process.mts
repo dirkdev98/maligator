@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, fork } from "node:child_process";
 
 const results: Array<[string, boolean]> = [];
 
@@ -37,6 +37,18 @@ function throws(fn: () => unknown): boolean {
 }
 
 const encoding = { encoding: "utf-8" as const };
+
+let forkFailure: unknown;
+try {
+	fork("unused-child-entry.mjs");
+} catch (error) {
+	forkFailure = error;
+}
+check(
+	"fork imports but rejects unsupported subprocess IPC synchronously",
+	forkFailure instanceof Error &&
+		forkFailure.message === "child_process.fork IPC is not supported by this host",
+);
 
 const spaced = "a value with spaces;$(not-a-shell)";
 check(

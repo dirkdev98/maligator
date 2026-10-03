@@ -76,8 +76,8 @@ void mal_workers_mark_uncloneable(MalVm *vm, MalValue object);
 
 /* Node-flavoured surface shared with node:worker_threads. */
 MalValue mal_workers_node_worker_constructor(MalVm *vm);
-MalValue mal_workers_message_channel_constructor(MalVm *vm);
-MalValue mal_workers_message_port_constructor(MalVm *vm);
+MalValue mal_workers_node_message_channel_constructor(MalVm *vm);
+MalValue mal_workers_node_message_port_constructor(MalVm *vm);
 MalValue mal_workers_receive_message_function(MalVm *vm);
 MalValue mal_workers_parent_port(MalVm *vm);
 MalValue mal_workers_worker_data(MalVm *vm);

@@ -122,9 +122,9 @@ void mal_gc_process_charge(usize bytes) {
     if (bytes == 0) return;
     usize previous = atomic_fetch_add_explicit(&g_bytes, bytes, memory_order_relaxed);
     if (previous > SIZE_MAX - bytes) abort();
-    usize total = previous + bytes;
     LOCK();
     configure();
+    usize total = atomic_load_explicit(&g_bytes, memory_order_relaxed);
     if (total >= g_next_pressure) {
         usize step = g_budget / 16;
         g_next_pressure = total > SIZE_MAX - step ? SIZE_MAX : total + step;
@@ -143,7 +143,16 @@ void mal_gc_process_release(usize bytes) {
     usize previous = atomic_fetch_sub_explicit(&g_bytes, bytes, memory_order_relaxed);
     if (previous < bytes) abort();
     LOCK();
-    if (previous - bytes < g_budget - g_budget / 4) g_next_pressure = g_budget;
+    usize current = atomic_load_explicit(&g_bytes, memory_order_relaxed);
+    if (current < g_budget - g_budget / 4) {
+        g_next_pressure = g_budget;
+    } else {
+        usize step = g_budget / 16;
+        usize next = current > SIZE_MAX - step ? SIZE_MAX : current + step;
+        if (next < g_budget) next = g_budget;
+        // A released peak must not suppress pressure during later, smaller native growth.
+        if (next < g_next_pressure) g_next_pressure = next;
+    }
     UNLOCK();
 }
 

@@ -50,6 +50,7 @@ enum {
 };
 
 typedef enum WorkerReason { REASON_COMPLETED, REASON_TERMINATED, REASON_ERROR } WorkerReason;
+typedef enum PostingPolicy { POST_TRANSACTIONAL, POST_NODE } PostingPolicy;
 
 typedef struct Owner Owner;
 typedef struct Channel Channel;
@@ -65,6 +66,7 @@ typedef struct Message {
 
 typedef struct Endpoint {
     Channel *channel;
+    PostingPolicy posting_policy;
     Message *head;
     Message *tail;
     u32 count;
@@ -202,7 +204,8 @@ static void channel_release(Channel *channel) {
     free(channel);
 }
 
-static Channel *channel_new(u32 max_count, u64 max_bytes, u64 max_message_bytes) {
+static Channel *channel_new(u32 max_count, u64 max_bytes, u64 max_message_bytes,
+    PostingPolicy posting_policy) {
     Channel *channel = calloc(1, sizeof(Channel));
     if (channel == nullptr) return nullptr;
     // One reference per endpoint handle; the endpoint wrappers or snapshot
@@ -212,6 +215,7 @@ static Channel *channel_new(u32 max_count, u64 max_bytes, u64 max_message_bytes)
     for (int i = 0; i < 2; i++) {
         Endpoint *endpoint = &channel->side[i];
         endpoint->channel = channel;
+        endpoint->posting_policy = posting_policy;
         endpoint->max_count = max_count;
         endpoint->max_bytes = max_bytes;
         endpoint->max_message_bytes = max_message_bytes;
@@ -527,6 +531,7 @@ typedef struct PortRecord {
     // Node Worker whose emitter receives this port's events (internal port).
     MalValue forward;
     Endpoint *endpoint; // null once closed or transferred away
+    PostingPolicy posting_policy;
     Listeners listeners;
     // The isolate's port list plus each pending transfer descriptor (mutator-local).
     u32 refs;
@@ -567,10 +572,13 @@ typedef struct Isolate {
     WorkerRecord *workers;
     UrlRecord *urls;
     MalValue port_prototype;
+    MalValue node_port_prototype;
     MalValue worker_prototype;
     MalValue node_worker_prototype;
     MalValue port_constructor;
     MalValue channel_constructor;
+    MalValue node_port_constructor;
+    MalValue node_channel_constructor;
     MalValue worker_constructor;
     MalValue node_worker_constructor;
     MalValue receive_function;
@@ -614,8 +622,9 @@ static void workers_scan_roots(MalVm *vm, void *data) {
     Isolate *iso = g_isolate;
     if (iso == nullptr) return;
     MalValue fixed[] = {
-        iso->port_prototype, iso->worker_prototype, iso->node_worker_prototype,
+        iso->port_prototype, iso->node_port_prototype, iso->worker_prototype, iso->node_worker_prototype,
         iso->port_constructor, iso->channel_constructor, iso->worker_constructor,
+        iso->node_port_constructor, iso->node_channel_constructor,
         iso->node_worker_constructor, iso->receive_function, iso->capabilities_function,
         iso->create_url_function, iso->parent_port, iso->worker_data, iso->uncloneable,
     };
@@ -714,7 +723,7 @@ static PortRecord *port_record(MalValue value) {
     return object->native_ops == &g_port_ops ? object->native : nullptr;
 }
 
-// Detach a record from its live wrapper (closed or torn down); the wrapper stays an
+// Detach a record from its live wrapper at isolate teardown; the wrapper stays an
 // inert object whose methods reject it as a MessagePort.
 static void port_detach_wrapper(PortRecord *port) {
     if (!mal_value_is_object(port->wrapper)) return;
@@ -1078,9 +1087,12 @@ static bool event_target_emit(MalVm *vm, MalValue target, const char *name, MalV
     MalEventTargetObject *et = (MalEventTargetObject *) object;
     i32 count = et->count;
     if (count == 0) return true;
-    MalValue *callbacks = malloc((usize) count * sizeof(MalValue));
+    // Slots 0 and 1 keep target and event alive: a handleEvent getter runs JS between calls.
+    MalValue *callbacks = malloc(((usize) count + 2) * sizeof(MalValue));
     if (callbacks == nullptr) return true;
-    i32 n = 0;
+    callbacks[0] = target;
+    callbacks[1] = event;
+    i32 n = 2;
     for (i32 i = 0; i < count; i++) {
         MalEventListener *listener = &et->listeners[i];
         if (listener->removed || !mal_string_equals_ascii(listener->type, name)) continue;
@@ -1090,9 +1102,9 @@ static bool event_target_emit(MalVm *vm, MalValue target, const char *name, MalV
     MalRootSpan root;
     mal_gc_root(&root, callbacks, n);
     bool ok = true;
-    for (i32 i = 0; i < n && ok; i++) {
+    for (i32 i = 2; i < n && ok; i++) {
         MalValue callback = callbacks[i];
-        MalValue receiver = target;
+        MalValue receiver = callbacks[0];
         if (!mal_value_is_callable(callback)) {
             MalValue handle;
             if (!get_named(vm, callback, "handleEvent", &handle)) {
@@ -1103,7 +1115,7 @@ static bool event_target_emit(MalVm *vm, MalValue target, const char *name, MalV
             callback = handle;
             if (!mal_value_is_callable(callback)) continue;
         }
-        mal_vm_call_value(vm, callback, receiver, &event, 1);
+        mal_vm_call_value(vm, callback, receiver, &callbacks[1], 1);
         ok = !thrown(vm);
     }
     mal_gc_unroot(&root);
@@ -1221,8 +1233,10 @@ static MalValue port_wrapper_new(MalVm *vm, Endpoint *endpoint) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "MessagePort: out of memory");
         return mal_value_new_undefined();
     }
+    MalValue prototype = endpoint->posting_policy == POST_NODE
+        ? iso->node_port_prototype : iso->port_prototype;
     MalEventTargetObject *object = mal_event_target_object_new(
-        &vm->heap, mal_value_to_object(iso->port_prototype));
+        &vm->heap, mal_value_to_object(prototype));
     object->native = port;
     object->native_ops = &g_port_ops;
     port->wrapper = mal_value_from_object(&object->object);
@@ -1230,6 +1244,8 @@ static MalValue port_wrapper_new(MalVm *vm, Endpoint *endpoint) {
     port->onmessageerror = mal_value_new_null();
     port->forward = mal_value_new_undefined();
     port->endpoint = endpoint;
+    // The wrapper retains its policy after close or transfer removes the endpoint.
+    port->posting_policy = endpoint->posting_policy;
     port->refs = 1;
     port->referenced = true;
     port->next = iso->ports;
@@ -1269,6 +1285,35 @@ static void throw_admission_error(MalVm *vm, AdmitResult admit) {
         : "postMessage: out of memory");
 }
 
+static void commit_dropped_snapshot(MalVm *vm, MalSerializedValue *snapshot) {
+    if (mal_serialize_commit(vm, snapshot)) return;
+    const char *error = nullptr;
+    mal_serialized_value_validate(vm, snapshot, &error);
+    throw_clone_error(vm, error, "could not clone message");
+}
+
+// A port without a live peer (closed, peer closed or transferred away) still
+// serializes, as HTML's post message steps and Node require: clone errors throw and
+// transferred objects detach (transferred ports close), then the message is dropped.
+// Nothing is queued, so no slot or byte reservation is taken.
+static void post_unentangled(MalVm *vm, Endpoint *sender, MalValue value, MalValue transfer) {
+    const char *error = nullptr;
+    Isolate *iso = g_isolate;
+    Endpoint *previous = iso->sending;
+    // A getter may transfer the sending port away; `sending` must not dangle.
+    if (sender != nullptr) channel_retain(sender->channel);
+    iso->sending = sender;
+    MalSerializedValue *snapshot = mal_serialize(vm, value, transfer, nullptr, &g_hooks, &error);
+    iso->sending = previous;
+    if (sender != nullptr) channel_release(sender->channel);
+    if (snapshot == nullptr) {
+        if (!thrown(vm)) throw_clone_error(vm, error, "could not clone message");
+        return;
+    }
+    commit_dropped_snapshot(vm, snapshot);
+    mal_serialized_value_release(snapshot);
+}
+
 // Serialize, admit and publish one message from `from`'s endpoint to its peer.
 // Getters run inside mal_serialize; everything after it is native, so validation,
 // admission and commit see one consistent state. Every exit returns the slot and
@@ -1281,7 +1326,10 @@ static u64 endpoint_post(MalVm *vm, PortRecord *from, MalValue value, MalValue t
     Endpoint *receiver = endpoint_peer(sender);
     Channel *channel = sender->channel;
     AdmitResult admit = endpoint_reserve(receiver);
-    if (admit == ADMIT_CLOSED) return 0;
+    if (admit == ADMIT_CLOSED) {
+        post_unentangled(vm, sender, value, transfer);
+        return 0;
+    }
     if (admit != ADMIT_OK) {
         throw_admission_error(vm, admit);
         return 0;
@@ -1301,9 +1349,9 @@ static u64 endpoint_post(MalVm *vm, PortRecord *from, MalValue value, MalValue t
         endpoint_unreserve(receiver);
         if (!thrown(vm)) throw_clone_error(vm, error, "could not clone message");
     } else if (from->endpoint != sender) {
-        // Transferred away by a getter: the port no longer sends from this isolate.
-        // The uncommitted snapshot holds sender records, so it is released here.
         endpoint_unreserve(receiver);
+        // Node commits serialization even when a getter moves the caller away.
+        if (from->posting_policy == POST_NODE) commit_dropped_snapshot(vm, snapshot);
         mal_serialized_value_release(snapshot);
     } else {
         u64 bytes = mal_serialized_value_size(snapshot);
@@ -1318,8 +1366,9 @@ static u64 endpoint_post(MalVm *vm, PortRecord *from, MalValue value, MalValue t
                 error = nullptr;
                 mal_serialized_value_validate(vm, snapshot, &error);
                 throw_clone_error(vm, error, "could not clone message");
-            } else if (admit != ADMIT_CLOSED) {
-                // A getter that closed either port drops the post silently, as a closed port does.
+            } else if (admit == ADMIT_CLOSED) {
+                if (from->posting_policy == POST_NODE) commit_dropped_snapshot(vm, snapshot);
+            } else {
                 throw_admission_error(vm, admit);
             }
             free(message);
@@ -1361,10 +1410,15 @@ static MalValue port_post_message(MalVm *vm, MalValue receiver, const MalValue *
     PortRecord *port = this_port(vm, receiver);
     if (port == nullptr) return mal_value_new_undefined();
     MalValue transfer = transfer_argument(vm, args, argc);
-    if (thrown(vm) || port->endpoint == nullptr) return mal_value_new_undefined();
-    u64 ticket = endpoint_post(vm, port, argc > 0 ? args[0] : mal_value_new_undefined(), transfer);
-    // The ticket is an internal handle for _discard; the public contract stays void.
-    if (ticket == 0) return mal_value_new_undefined();
+    if (thrown(vm)) return mal_value_new_undefined();
+    MalValue value = argc > 0 ? args[0] : mal_value_new_undefined();
+    if (port->endpoint == nullptr) {
+        post_unentangled(vm, nullptr, value, transfer);
+        return mal_value_new_undefined();
+    }
+    u64 ticket = endpoint_post(vm, port, value, transfer);
+    // Only the transactional pool mailbox exposes an internal _discard ticket.
+    if (ticket == 0 || port->posting_policy == POST_NODE) return mal_value_new_undefined();
     return ticket <= INT32_MAX ? mal_value_from_i32((i32) ticket) : mal_value_from_f64((f64) ticket);
 }
 
@@ -1402,7 +1456,7 @@ static MalValue port_set_referenced(MalVm *vm, MalValue receiver, bool reference
     if (port == nullptr) return mal_value_new_undefined();
     port->referenced = referenced;
     port_update_work(vm, port);
-    return receiver;
+    return port->posting_policy == POST_NODE ? mal_value_new_undefined() : receiver;
 }
 
 static MalValue port_ref_method(MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
@@ -1580,9 +1634,8 @@ static MalValue new_message_port_illegal(MalVm *vm, MalValue receiver, const Mal
 
 static bool queue_limits(MalVm *vm, MalValue options, u32 *max_count, u64 *max_bytes, u64 *max_message);
 
-static MalValue channel_construct(MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
-    MalValue new_target, MalValue callee) {
-    (void) receiver; (void) args; (void) argc; (void) callee;
+static MalValue channel_construct_with_policy(MalVm *vm, const MalValue *args, i32 argc,
+    MalValue new_target, PostingPolicy posting_policy) {
     if (mal_value_is_undefined(new_target)) {
         throw_type(vm, "Class constructor MessageChannel cannot be invoked without 'new'");
         return mal_value_new_undefined();
@@ -1590,10 +1643,15 @@ static MalValue channel_construct(MalVm *vm, MalValue receiver, const MalValue *
     // Bounds apply to each direction of this channel, independent of any worker's options.
     u32 max_count;
     u64 max_bytes, max_message;
-    if (!queue_limits(vm, argc > 0 ? args[0] : mal_value_new_undefined(), &max_count, &max_bytes, &max_message)) {
+    MalValue options = posting_policy == POST_TRANSACTIONAL && argc > 0
+        ? args[0] : mal_value_new_undefined();
+    if (!queue_limits(vm, options, &max_count, &max_bytes, &max_message)) {
         return mal_value_new_undefined();
     }
-    Channel *channel = channel_new(max_count, max_bytes, max_message);
+    MalObject *prototype;
+    if (!mal_vm_get_prototype_from_constructor(vm, new_target,
+            MAL_INTRINSIC_OBJECT_PROTOTYPE, &prototype)) return mal_value_new_undefined();
+    Channel *channel = channel_new(max_count, max_bytes, max_message, posting_policy);
     if (channel == nullptr) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "MessageChannel: out of memory");
         return mal_value_new_undefined();
@@ -1603,7 +1661,7 @@ static MalValue channel_construct(MalVm *vm, MalValue receiver, const MalValue *
     mal_gc_root(&root, roots, countof(roots));
     roots[0] = port_wrapper_new(vm, &channel->side[0]);
     roots[1] = port_wrapper_new(vm, &channel->side[1]);
-    roots[2] = mal_value_from_object(mal_intrinsic_new_object(vm));
+    roots[2] = mal_value_from_object(mal_object_new(&vm->heap, prototype));
     mal_intrinsic_define_data(vm, mal_value_to_object(roots[2]), (const byte *) "port1", roots[0],
         MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE);
     mal_intrinsic_define_data(vm, mal_value_to_object(roots[2]), (const byte *) "port2", roots[1],
@@ -1611,6 +1669,18 @@ static MalValue channel_construct(MalVm *vm, MalValue receiver, const MalValue *
     MalValue result = roots[2];
     mal_gc_unroot(&root);
     return result;
+}
+
+static MalValue channel_construct(MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
+    MalValue new_target, MalValue callee) {
+    (void) receiver; (void) callee;
+    return channel_construct_with_policy(vm, args, argc, new_target, POST_TRANSACTIONAL);
+}
+
+static MalValue node_channel_construct(MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
+    MalValue new_target, MalValue callee) {
+    (void) receiver; (void) callee;
+    return channel_construct_with_policy(vm, args, argc, new_target, POST_NODE);
 }
 
 // receiveMessageOnPort(port) -> {message} | undefined, synchronous, unstarted ok.
@@ -2078,25 +2148,18 @@ static bool workers_drain(MalVm *vm) {
     bool closing = endpoint->close_pending && !port->closed_emitted;
     pthread_mutex_unlock(&channel->mutex);
     if (closing) {
+        // Rooted first: without its endpoint the port is no longer pinned.
+        MalValue wrapper = port->wrapper;
+        MalRootSpan root;
+        mal_gc_root(&root, &wrapper, 1);
         port->closed_emitted = true;
         endpoint_bind(endpoint, nullptr);
         port->endpoint = nullptr;
         port_update_work(vm, port);
-        MalValue wrapper = port->wrapper;
-        MalRootSpan root;
-        mal_gc_root(&root, &wrapper, 1);
-        port->refs++;
+        // The record stays linked and branded like a transferred-away port, so later
+        // close/ref/start/listener calls are no-ops rather than brand failures;
+        // port_finalize frees it with the wrapper.
         port_dispatch(vm, port, "close", mal_value_new_undefined(), mal_value_new_undefined());
-        // Closed ports drop their record; the wrapper stays a neutered object.
-        for (PortRecord **link = &iso->ports; *link != nullptr; link = &(*link)->next) {
-            if (*link == port) {
-                *link = port->next;
-                port_detach_wrapper(port);
-                port_record_release(port);
-                break;
-            }
-        }
-        port_record_release(port);
         mal_gc_unroot(&root);
         channel_release(channel); // the wrapper's endpoint handle
     }
@@ -2543,7 +2606,8 @@ static MalValue worker_construct(MalVm *vm, const MalValue *args, i32 argc, MalV
     const char *error = nullptr;
     MalSerializedValue *snapshot = mal_serialize(vm, data, transfer, &limits, &g_hooks, &error);
     WorkerThread *thread = snapshot != nullptr ? calloc(1, sizeof(WorkerThread)) : nullptr;
-    Channel *channel = thread != nullptr ? channel_new(max_count, max_bytes, max_message) : nullptr;
+    Channel *channel = thread != nullptr ? channel_new(max_count, max_bytes, max_message,
+        node ? POST_NODE : POST_TRANSACTIONAL) : nullptr;
     MalSharedWaitInterrupt *interrupt = channel != nullptr ? mal_shared_wait_interrupt_new() : nullptr;
     WorkerRecord *worker = interrupt != nullptr ? calloc(1, sizeof(WorkerRecord)) : nullptr;
     if (worker == nullptr) {
@@ -2830,6 +2894,25 @@ static void workers_cleanup(MalVm *vm) {
     mal_workers_shutdown(vm);
 }
 
+static void define_port_methods(MalVm *vm, MalObject *prototype, PostingPolicy posting_policy) {
+    define_method(vm, prototype, "postMessage", 1, port_post_message);
+    if (posting_policy == POST_TRANSACTIONAL) define_method(vm, prototype, "_discard", 1, port_discard_method);
+    define_method(vm, prototype, "start", 0, port_start_method);
+    define_method(vm, prototype, "close", 0, port_close_method);
+    define_method(vm, prototype, "ref", 0, port_ref_method);
+    define_method(vm, prototype, "unref", 0, port_unref_method);
+    define_method(vm, prototype, "hasRef", 0, port_has_ref_method);
+    define_emitter_methods(vm, prototype);
+    mal_intrinsic_define_accessor_n(vm, prototype, name_key(vm, "onmessage"),
+        (const byte *) "get onmessage", 0, port_onmessage_get,
+        (const byte *) "set onmessage", 1, port_onmessage_set,
+        MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE);
+    mal_intrinsic_define_accessor_n(vm, prototype, name_key(vm, "onmessageerror"),
+        (const byte *) "get onmessageerror", 0, port_onmessageerror_get,
+        (const byte *) "set onmessageerror", 1, port_onmessageerror_set,
+        MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE);
+}
+
 bool mal_workers_install(MalVm *vm) {
     if (g_isolate != nullptr) return true;
     MalHost *host = mal_host(vm);
@@ -2847,6 +2930,7 @@ bool mal_workers_install(MalVm *vm) {
     iso->owner = owner;
     MalValue undefined = mal_value_new_undefined();
     iso->port_prototype = iso->worker_prototype = iso->node_worker_prototype = undefined;
+    iso->node_port_prototype = iso->node_port_constructor = iso->node_channel_constructor = undefined;
     iso->port_constructor = iso->channel_constructor = iso->worker_constructor = undefined;
     iso->node_worker_constructor = iso->receive_function = iso->capabilities_function = undefined;
     iso->create_url_function = undefined;
@@ -2859,28 +2943,18 @@ bool mal_workers_install(MalVm *vm) {
     mal_host_register_macrotask_drain(workers_drain, false);
 
     iso->port_prototype = prototype_new(vm);
-    MalObject *port_proto = mal_value_to_object(iso->port_prototype);
-    mal_intrinsic_define_method_n(vm, port_proto, (const byte *) "postMessage", 1, port_post_message);
-    mal_intrinsic_define_method_n(vm, port_proto, (const byte *) "_discard", 1, port_discard_method);
-    mal_intrinsic_define_method_n(vm, port_proto, (const byte *) "start", 0, port_start_method);
-    mal_intrinsic_define_method_n(vm, port_proto, (const byte *) "close", 0, port_close_method);
-    define_method(vm, port_proto, "ref", 0, port_ref_method);
-    define_method(vm, port_proto, "unref", 0, port_unref_method);
-    mal_intrinsic_define_method_n(vm, port_proto, (const byte *) "hasRef", 0, port_has_ref_method);
-    define_emitter_methods(vm, port_proto);
-    mal_intrinsic_define_accessor_n(vm, port_proto, name_key(vm, "onmessage"),
-        (const byte *) "get onmessage", 0, port_onmessage_get,
-        (const byte *) "set onmessage", 1, port_onmessage_set,
-        MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE);
-    mal_intrinsic_define_accessor_n(vm, port_proto, name_key(vm, "onmessageerror"),
-        (const byte *) "get onmessageerror", 0, port_onmessageerror_get,
-        (const byte *) "set onmessageerror", 1, port_onmessageerror_set,
-        MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE);
+    define_port_methods(vm, mal_value_to_object(iso->port_prototype), POST_TRANSACTIONAL);
+    iso->node_port_prototype = prototype_new(vm);
+    define_port_methods(vm, mal_value_to_object(iso->node_port_prototype), POST_NODE);
     MalObject *function_prototype = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]);
     iso->port_constructor = define_constructor(vm, "MessagePort", 0, new_message_port_illegal, iso->port_prototype);
+    iso->node_port_constructor = define_constructor(vm, "MessagePort", 0, new_message_port_illegal, iso->node_port_prototype);
     MalValue channel_prototype = mal_value_from_object(mal_intrinsic_new_object(vm));
     iso->worker_prototype = channel_prototype; // rooted until replaced below
     iso->channel_constructor = define_constructor(vm, "MessageChannel", 0, channel_construct, channel_prototype);
+    channel_prototype = mal_value_from_object(mal_intrinsic_new_object(vm));
+    iso->worker_prototype = channel_prototype;
+    iso->node_channel_constructor = define_constructor(vm, "MessageChannel", 0, node_channel_construct, channel_prototype);
 
     iso->worker_prototype = prototype_new(vm);
     MalObject *worker_proto = mal_value_to_object(iso->worker_prototype);
@@ -2948,14 +3022,14 @@ MalValue mal_workers_node_worker_constructor(MalVm *vm) {
     return g_isolate != nullptr ? g_isolate->node_worker_constructor : mal_value_new_undefined();
 }
 
-MalValue mal_workers_message_channel_constructor(MalVm *vm) {
+MalValue mal_workers_node_message_channel_constructor(MalVm *vm) {
     (void) vm;
-    return g_isolate != nullptr ? g_isolate->channel_constructor : mal_value_new_undefined();
+    return g_isolate != nullptr ? g_isolate->node_channel_constructor : mal_value_new_undefined();
 }
 
-MalValue mal_workers_message_port_constructor(MalVm *vm) {
+MalValue mal_workers_node_message_port_constructor(MalVm *vm) {
     (void) vm;
-    return g_isolate != nullptr ? g_isolate->port_constructor : mal_value_new_undefined();
+    return g_isolate != nullptr ? g_isolate->node_port_constructor : mal_value_new_undefined();
 }
 
 MalValue mal_workers_receive_message_function(MalVm *vm) {

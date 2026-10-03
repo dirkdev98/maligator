@@ -3411,6 +3411,15 @@ static usize mal_gc_mark_budget(MalVm *vm) {
 
 static void mal_gc_incremental_safepoint(MalVm *vm) {
     if (g_gc_vm != vm) abort();
+    bool polled = mal_gc_poll;
+    if (g_gc->stress_interval == 0) {
+#if defined(__wasi__)
+        mal_gc_poll = false;
+#else
+        // Clear before taking pressure so a concurrent request keeps its next poll.
+        polled = atomic_exchange_explicit(&mal_gc_poll, false, memory_order_relaxed);
+#endif
+    }
     bool pressure = mal_gc_process_take_pressure(g_gc->process);
     if (pressure) g_gc->process_pressure = true;
 
@@ -3428,26 +3437,25 @@ static void mal_gc_incremental_safepoint(MalVm *vm) {
         return;
     }
 
-    // Auto mode.
     if (g_gc->phase != MAL_GC_PHASE_IDLE) {
-        // A cycle is in flight: advance it. Any auto-trigger poll raised meanwhile
-        // ADVANCES this cycle (a mark/sweep step) rather than starting a collection.
-#if defined(__wasi__)
-        mal_gc_poll = false;
-#else
-        atomic_exchange_explicit(&mal_gc_poll, false, memory_order_relaxed);
-#endif
         u64 start_ns = mal_gc_pause_begin(vm, true);
-        MalGcPauseReason reason = mal_gc_cycle_advance(vm, mal_gc_mark_budget(vm));
+        MalGcPauseReason reason;
+        if (pressure) {
+            // Native reservations can grow without reaching the heap's allocation backstop.
+            mal_gc_cycle_finish_sync(vm);
+            if (g_gc->stats_enabled) g_gc->sync_backstop++;
+            reason = MAL_GC_PAUSE_BACKSTOP;
+        } else {
+            reason = mal_gc_cycle_advance(vm, mal_gc_mark_budget(vm));
+        }
         if (g_gc->phase == MAL_GC_PHASE_IDLE) g_gc->process_pressure = false;
         mal_gc_pause_end(vm, true, reason, start_ns);
         return;
     }
 
-    if (!mal_gc_poll && !pressure) {
+    if (!polled && !pressure) {
         return;
     }
-    mal_gc_poll = false;
     if (!pressure && vm->heap.bytes_allocated < vm->heap.next_gc_at) {
         return; // polled for preemption only; nothing owed
     }

@@ -4,11 +4,13 @@ import * as path from "node:path";
 import { afterAll, beforeAll, expect, test } from "vitest";
 import { resolveBuildConfig } from "../src/build-config.ts";
 import { stripCompactTypes } from "../src/compiler/frontend/compact-type-strip.ts";
+import { linkModules } from "../src/compiler/frontend/linker.ts";
 import {
 	buildModuleGraph,
 	ModuleParseCache,
 } from "../src/compiler/frontend/module-graph.ts";
 import type { ModuleGraph } from "../src/compiler/frontend/module-graph.ts";
+import { loadEntrypointAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-program.ts";
 
 /** A resolved config with the node host surface enabled. */
 const nodeOn = resolveBuildConfig({ surface: { node: true } });
@@ -760,6 +762,8 @@ test("canonicalizes the promise-based filesystem submodule", () => {
 		named: [
 			"appendFile",
 			"copyFile",
+			"chmod",
+			"glob",
 			"link",
 			"lstat",
 			"mkdir",
@@ -768,10 +772,13 @@ test("canonicalizes the promise-based filesystem submodule", () => {
 			"readlink",
 			"readdir",
 			"rename",
+			"realpath",
+			"rmdir",
 			"rm",
 			"stat",
 			"symlink",
 			"unlink",
+			"utimes",
 			"writeFile",
 		],
 		hasDefault: true,
@@ -877,16 +884,47 @@ test("canonicalizes the CommonJS module API", () => {
 test("resolves asynchronous child process entrypoints", () => {
 	write(
 		"child-process.mjs",
-		`import { exec, spawn } from "node:child_process";\n` +
-			`globalThis.sink = [exec, spawn];\n`,
+		`import { exec, spawn, fork } from "node:child_process";\n` +
+			`globalThis.sink = [exec, spawn, fork];\n`,
 	);
 	const graph = buildModuleGraph(path.join(root, "child-process.mjs"), {
 		buildConfig: nodeOn,
 	});
 	expect(graph.modules.get("node:child_process")?.host).toMatchObject({
-		named: ["exec", "execFile", "execFileSync", "spawn"],
+		named: ["exec", "execFile", "execFileSync", "fork", "spawn"],
 		installer: "mal_host_install_node_child_process",
 	});
+});
+
+test("links optional child-process backends while rejecting unknown unused imports", () => {
+	write(
+		"optional-child-process.mjs",
+		`import { fork } from "node:child_process"; export function subprocess(file) { return fork(file); }`,
+	);
+	const supported = loadEntrypointAndRunSemanticAnalysis(
+		path.join(root, "optional-child-process.mjs"),
+		{ buildConfig: nodeOn },
+	);
+	expect(() => linkModules(supported)).not.toThrow();
+	write("unknown-child-process.mjs", `import { missing } from "node:child_process";`);
+	const unknown = loadEntrypointAndRunSemanticAnalysis(
+		path.join(root, "unknown-child-process.mjs"),
+		{ buildConfig: nodeOn },
+	);
+	expect(() => linkModules(unknown)).toThrow(
+		/node:child_process does not export 'missing'/,
+	);
+});
+
+test("links unmodified Tinypool's thread bootstrap and optional backend imports", () => {
+	const program = loadEntrypointAndRunSemanticAnalysis(
+		path.resolve("tests/fixtures/tinypool-workers/main.mjs"),
+		{ buildConfig: nodeOn },
+	);
+	expect(() => linkModules(program)).not.toThrow();
+	expect(
+		program.files.some((file) => file.path.endsWith("tinypool/dist/entry/worker.js")),
+	).toBe(true);
 });
 
 test("rejects a node:* import clearly when surface.node is off (the default)", () => {
@@ -914,6 +952,7 @@ test("canonicalizes bare zlib and exposes compression adapters", () => {
 			"createGzip",
 			"createInflate",
 			"deflate",
+			"gunzipSync",
 		],
 		hasDefault: true,
 	});

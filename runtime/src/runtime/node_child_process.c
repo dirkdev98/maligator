@@ -779,10 +779,6 @@ static MalValue mal_node_spawn_request(MalVm *vm, const MalProcRequest *request)
     return roots[0];
 }
 
-/* ---------------------------------------------------------------------------
- * Installation.
- * --------------------------------------------------------------------------- */
-
 static MalValue mal_node_async_child_process_unavailable(
     MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
     MalValue new_target, MalValue callee) {
@@ -792,7 +788,20 @@ static MalValue mal_node_async_child_process_unavailable(
     (void) new_target;
     (void) callee;
     mal_vm_throw_error(vm, MAL_INTRINSIC_ERROR_PROTOTYPE,
-        "Asynchronous child processes are not supported by this host");
+        "child_process.exec and child_process.execFile are not supported by this host");
+    return mal_value_new_undefined();
+}
+
+static MalValue mal_node_fork_unavailable(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
+    MalValue new_target, MalValue callee) {
+    (void) receiver;
+    (void) args;
+    (void) argc;
+    (void) new_target;
+    (void) callee;
+    mal_vm_throw_error(vm, MAL_INTRINSIC_ERROR_PROTOTYPE,
+        "child_process.fork IPC is not supported by this host");
     return mal_value_new_undefined();
 }
 
@@ -804,13 +813,21 @@ void mal_host_install_node_child_process(
     MalValue roots[2] = {mal_value_from_object(mal_intrinsic_new_object(vm)), mal_value_new_undefined()};
     MalRootSpan root;
     mal_gc_root(&root, roots, 2);
-    static const char *names[] = {"exec", "execFile", "spawn", "execFileSync"};
-    for (usize i = 0; i < countof(names); i++) {
+    static const struct {
+        const char *name;
+        MalNativeFunctionCallback callback;
+    } functions[] = {
+        {"exec", mal_node_async_child_process_unavailable},
+        {"execFile", mal_node_async_child_process_unavailable},
+        {"execFileSync", mal_node_exec_file_sync},
+        {"fork", mal_node_fork_unavailable},
+        {"spawn", mal_node_spawn},
+    };
+    for (usize i = 0; i < countof(functions); i++) {
         roots[1] = mal_value_from_native_function_object(mal_native_function_object_new_arity(
             &vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
-            mal_intrinsic_ascii(vm, (const byte *) names[i]), 3,
-            i == 3 ? mal_node_exec_file_sync : i == 2 ? mal_node_spawn : mal_node_async_child_process_unavailable));
-        mal_intrinsic_define_data(vm, mal_value_to_object(roots[0]), (const byte *) names[i], roots[1],
+            mal_intrinsic_ascii(vm, (const byte *) functions[i].name), 3, functions[i].callback));
+        mal_intrinsic_define_data(vm, mal_value_to_object(roots[0]), (const byte *) functions[i].name, roots[1],
             MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE);
     }
     mal_node_module_publish(vm, "node:child_process", slots, count, roots[0]);

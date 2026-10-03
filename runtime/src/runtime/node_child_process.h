@@ -2,7 +2,8 @@
 
 #include "./defaults.h"
 
-/* Node child processes support synchronous capture and asynchronous inherited/ignored stdio. */
+/* Synchronous capture and asynchronous spawn support inherited/ignored stdio;
+ * fork is importable but rejects calls because subprocess IPC is unavailable. */
 
 typedef struct MalVm MalVm;
 typedef struct MalHostInstallSlot MalHostInstallSlot;

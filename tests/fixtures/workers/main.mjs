@@ -183,6 +183,66 @@ check(
 	"reentrant getters reserve task capacity",
 );
 await zeroQueue.close();
+
+for (const closeDuring of ["signal", "transfer", "iterator"]) {
+	const closingPool = createPool(jobs, { size: 1 });
+	await closingPool.ready;
+	const buffer = new ArrayBuffer(8);
+	const options = {};
+	if (closeDuring === "signal") {
+		Object.defineProperty(options, "signal", {
+			get() {
+				closingPool.terminate();
+				return undefined;
+			},
+		});
+		options.transfer = [buffer];
+	} else if (closeDuring === "transfer") {
+		Object.defineProperty(options, "transfer", {
+			get() {
+				closingPool.close();
+				return [buffer];
+			},
+		});
+	} else {
+		options.transfer = {
+			*[Symbol.iterator]() {
+				closingPool.close();
+				yield buffer;
+			},
+		};
+	}
+	let rejected;
+	try {
+		closingPool.run("sum", [[1, 2]], options);
+	} catch (error) {
+		rejected = error;
+	}
+	check(
+		rejected?.name === "InvalidStateError" && buffer.byteLength === 8,
+		`closing during ${closeDuring} preserves submission ownership`,
+	);
+	await closingPool.close();
+}
+
+const abortBeforeAdmission = new AbortController();
+const abortedBuffer = new ArrayBuffer(8);
+let abortedSubmission;
+try {
+	pool.run("sum", [[1, 2]], {
+		signal: abortBeforeAdmission.signal,
+		get transfer() {
+			abortBeforeAdmission.abort();
+			return [abortedBuffer];
+		},
+	});
+} catch (error) {
+	abortedSubmission = error;
+}
+check(
+	abortedSubmission?.name === "AbortError" && abortedBuffer.byteLength === 8,
+	"abort during transfer options fails before native admission",
+);
 await pool.close();
 check(pool.stats().active === 0 && pool.stats().queued === 0, "drained close");
 console.log("workers PASS");

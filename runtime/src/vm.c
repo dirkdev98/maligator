@@ -3491,11 +3491,14 @@ void mal_vm_run(MalVm *vm, MalCallable *callable) {
     // the microtask queue to empty (promise reactions, await resumptions). The
     // drain happens at a baseline frame count so reaction handlers re-enter the
     // interpreter without nesting on a partial activation.
+    MalRootSpan script_result_root;
+    mal_gc_root(&script_result_root, &script_completion.value, 1);
     vm->completion = (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = mal_value_new_undefined()};
     if (vm->entry_errors_forwarded && mal_value_is_promise_object(vm->entry_async_promise)) {
         mal_value_to_promise_object(vm->entry_async_promise)->is_handled = true;
     }
     mal_vm_drain_microtasks(vm);
+    mal_gc_unroot(&script_result_root);
 
     if (script_completion.kind == MAL_COMPLETION_THROW) {
         vm->completion = script_completion;
@@ -4016,6 +4019,9 @@ MalValue mal_vm_interpret_function(
     const MalFunction *function = &vm->runtime_image->functions[function_index];
     bool returns_promise = function->kind == MAL_FUNCTION_KIND_ASYNC;
     MalValue saved_entry_async_promise = vm->entry_async_promise;
+    MalRootSpan entry_promise_root;
+    // ASYNC_START temporarily replaces the VM slot while this call can collect.
+    if (returns_promise) mal_gc_root(&entry_promise_root, &saved_entry_async_promise, 1);
 
 #if MAL_REALMS
     // Re-entrant / native->JS entry: this run loop has no caller frame to restore
@@ -4052,6 +4058,7 @@ MalValue mal_vm_interpret_function(
     if (returns_promise) {
         MalValue result_promise = vm->entry_async_promise;
         vm->entry_async_promise = saved_entry_async_promise;
+        mal_gc_unroot(&entry_promise_root);
         if (vm->completion.kind != MAL_COMPLETION_THROW) {
             // Callers read the result through vm->completion (mal_vm_call_value's
             // interpreted branch ignores this function's return value), so the
