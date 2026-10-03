@@ -645,6 +645,27 @@ try {
 	channel.port1.close();
 	channel.port2.close();
 }`,
+	port: `// port.ts
+import { MessageChannel, type MessagePort } from "maligator:workers";
+
+function installResponder(port: MessagePort): void {
+	port.onmessage = (event) => port.postMessage("reply:" + String(event.data));
+	port.start();
+}
+
+const { port1, port2 } = new MessageChannel();
+try {
+	installResponder(port2);
+	const reply = new Promise<unknown>((resolve) => {
+		port1.onmessage = (event) => resolve(event.data);
+	});
+	port1.start();
+	port1.postMessage("hello");
+	console.log(await reply);
+} finally {
+	port1.close();
+	port2.close();
+}`,
 	receive: `// receive.ts
 import { MessageChannel, receiveMessageOnPort } from "maligator:workers";
 
@@ -743,7 +764,7 @@ export const PLATFORM_MODULES: ReadonlyArray<PlatformModule> = [
 				"{ readonly prototype: MessagePort }",
 				"The port prototype for type and identity checks. Ports are created by channels and workers.",
 				false,
-				[workerExamples.channel],
+				[workerExamples.port],
 			),
 			workerExport(
 				"receiveMessageOnPort",

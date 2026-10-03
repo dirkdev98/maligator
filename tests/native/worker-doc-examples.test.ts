@@ -17,6 +17,7 @@ const examples = [
 	["worker", "workers\nterminated\n"],
 	["configuration", "thumbnail\n"],
 	["channel", 'true\n{"answer":42}\n'],
+	["port", "reply:hello\n"],
 	["receive", "first\nsecond\nundefined\n"],
 	["capabilities", "true true\ntrue true\n"],
 ] as const;

@@ -411,21 +411,26 @@ declare module "maligator:workers" {
 	 * workers.
 	 *
 	 * @example
-	 * // channel.ts
-	 * import { MessageChannel, MessagePort } from "maligator:workers";
+	 * // port.ts
+	 * import { MessageChannel, type MessagePort } from "maligator:workers";
 	 *
-	 * const channel = new MessageChannel();
+	 * function installResponder(port: MessagePort): void {
+	 * 	port.onmessage = (event) => port.postMessage("reply:" + String(event.data));
+	 * 	port.start();
+	 * }
+	 *
+	 * const { port1, port2 } = new MessageChannel();
 	 * try {
-	 * 	console.log(channel.port1 instanceof MessagePort);
-	 * 	const received = new Promise<unknown>((resolve) => {
-	 * 		channel.port2.onmessage = (event) => resolve(event.data);
+	 * 	installResponder(port2);
+	 * 	const reply = new Promise<unknown>((resolve) => {
+	 * 		port1.onmessage = (event) => resolve(event.data);
 	 * 	});
-	 * 	channel.port2.start();
-	 * 	channel.port1.postMessage({ answer: 42 });
-	 * 	console.log(JSON.stringify(await received));
+	 * 	port1.start();
+	 * 	port1.postMessage("hello");
+	 * 	console.log(await reply);
 	 * } finally {
-	 * 	channel.port1.close();
-	 * 	channel.port2.close();
+	 * 	port1.close();
+	 * 	port2.close();
 	 * }
 	 */
 	export const MessagePort: { readonly prototype: MessagePort };
