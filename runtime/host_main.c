@@ -29,7 +29,8 @@
 // isolate is idle. This is the entry a real host program / the Lambda bootstrap
 // uses, as opposed to test262_main which only runs the synchronous body.
 extern const MalRuntimeImage mal_runtime_image;
-extern void mal_register_compiled_worker_entries(void) __attribute__((weak));
+// Main images without workers omit this hook; generated registries override it.
+__attribute__((weak)) void mal_register_compiled_worker_entries(void) {}
 
 #if MAL_DEVELOPMENT_API
 static const char development_wire_command[] = "--maligator-internal-run-wire";
@@ -92,7 +93,7 @@ int main(int argc, char **argv) {
 
     MalVm vm;
     mal_vm_init(&vm, &mal_runtime_image);
-    if (mal_register_compiled_worker_entries != nullptr) mal_register_compiled_worker_entries();
+    mal_register_compiled_worker_entries();
 
     // Attach the host context (reactor + timers) — the platform layer the engine
     // runs on. Then install host globals (not in the shared intrinsics, so only

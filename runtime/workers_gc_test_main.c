@@ -7,12 +7,12 @@
 #include <stdlib.h>
 
 extern const MalRuntimeImage mal_runtime_image;
-extern void mal_register_compiled_worker_entries(void) __attribute__((weak));
+__attribute__((weak)) void mal_register_compiled_worker_entries(void) {}
 
 int main(void) {
     MalVm vm;
     mal_vm_init(&vm, &mal_runtime_image);
-    if (mal_register_compiled_worker_entries != nullptr) mal_register_compiled_worker_entries();
+    mal_register_compiled_worker_entries();
     if (mal_host_attach(&vm) == nullptr) abort();
     mal_runtime_personality_install(&vm, false, false);
     const MalHostLaunchContext launch = {.script_path = mal_runtime_image.entry_path};
