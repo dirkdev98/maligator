@@ -1,8 +1,12 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
+import { directBuiltinOperationIds } from "../src/compiler/shared/builtin-registry.ts";
 import {
+	knownOperationIndex,
 	knownOperations,
 	primordialBindings,
 } from "../src/compiler/shared/known-operations.ts";
+import type { PrimordialBinding } from "../src/compiler/shared/known-operations.ts";
 import {
 	primordialNode,
 	resolvePrimordialProperty,
@@ -14,6 +18,60 @@ import {
 import { inspectStaticValueFunction } from "./helpers/static-values.ts";
 
 describe("known-operation dispatch", () => {
+	it("keeps runtime primordial routes aligned with compiler catalog indices", () => {
+		const source = readFileSync("runtime/src/generated/known_primordials.inc", "utf8");
+		const routes = new Map<number, PrimordialBinding>();
+		for (const match of source.matchAll(
+			/^MAL_KNOWN_PRIMORDIAL\((\d+), (\d+), (-?\d+), (\w+), (.*), (-?\d+)\)$/gm,
+		)) {
+			const [, rawIndex, rawKind, rawParent, intrinsic, rawKey, rawSymbol] = match;
+			const kind = Number(rawKind);
+			if (kind === 0) continue;
+			const routeKind = (
+				["intrinsic", "prototype", "value", "getter", "setter"] as const
+			)[kind - 1];
+			if (routeKind === undefined) throw new Error(`Unknown primordial route ${kind}`);
+			const key: unknown =
+				kind === 1
+					? intrinsic
+					: Number(rawSymbol) >= 0
+						? { symbol: Number(rawSymbol) }
+						: JSON.parse(rawKey!);
+			if (typeof key !== "string" && !(key && typeof key === "object" && "symbol" in key))
+				throw new Error(`Invalid primordial route key ${rawKey}`);
+			routes.set(Number(rawIndex), {
+				parent: Number(rawParent),
+				kind: routeKind,
+				key: key as PrimordialBinding["key"],
+			});
+		}
+		const bindings = primordialBindings();
+		expect(Number(/MAL_KNOWN_PRIMORDIAL_COUNT (\d+)/.exec(source)?.[1])).toBe(
+			bindings.length,
+		);
+		expect(
+			Array.from({ length: bindings.length }, (_, index) => routes.get(index)),
+		).toEqual(bindings);
+	});
+
+	it("dispatches known operations and specializations to their current catalog nodes", () => {
+		const source = readFileSync("runtime/src/generated/known_primordials.inc", "utf8");
+		const operationRoutes = Array.from(
+			source.matchAll(/^MAL_KNOWN_OPERATION\((\d+), (\d+)\)$/gm),
+			([, index, node]) => [Number(index), Number(node)],
+		);
+		expect(operationRoutes).toEqual(
+			knownOperations().map((operation, index) => [index, operation.node]),
+		);
+		const specializationRoutes = Array.from(
+			source.matchAll(/^MAL_KNOWN_SPECIALIZATION\((\d+), (\d+)\)$/gm),
+			([, index, operation]) => [Number(index), Number(operation)],
+		);
+		expect(specializationRoutes).toEqual(
+			directBuiltinOperationIds.map((id, index) => [index, knownOperationIndex(id)]),
+		);
+	});
+
 	it("has a relocation-safe descriptor route for every admitted callable", () => {
 		const bindings = primordialBindings();
 		for (const operation of knownOperations()) {

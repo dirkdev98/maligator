@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import * as path from "node:path";
 import {
@@ -120,6 +121,18 @@ for (const { mode, phases } of matrix) {
 		}
 	}
 }
+// Fresh processes must read the newly written catalog, not an earlier cached module value.
+execFileSync(process.execPath, ["scripts/generate-known-operations.ts"], {
+	stdio: "inherit",
+});
+execFileSync(
+	process.execPath,
+	[
+		"scripts/generate-known-native-entries.ts",
+		path.join(directory, "native-bindings.json"),
+	],
+	{ stdio: "inherit" },
+);
 mkdirSync(fixtureDirectory, { recursive: true });
 writeFileSync(
 	`${fixtureDirectory}/installers.json`,
