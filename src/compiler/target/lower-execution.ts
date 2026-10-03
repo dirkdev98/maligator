@@ -577,9 +577,17 @@ function lowerCoreSpecializations(
 					materialization: "none",
 					admission: admission(row),
 				},
-				representation: "binary-pairs-f64",
+				representation:
+					coreSpecializationRecipeRepresentationAt(recipeTable, row) ===
+					"binary-pairs-truncating-i32"
+						? "binary-pairs-truncating-i32"
+						: "binary-pairs-f64",
 				composition: "overlay",
-				runtimeGuard: "number-operands",
+				runtimeGuard:
+					coreSpecializationRecipeRepresentationAt(recipeTable, row) ===
+					"binary-pairs-truncating-i32"
+						? "int32-operands"
+						: "number-operands",
 				pairs,
 			});
 			continue;

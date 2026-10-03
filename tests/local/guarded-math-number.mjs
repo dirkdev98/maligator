@@ -90,4 +90,71 @@ record(effects);
 record(globalThis.pow(-0, 3));
 record(globalThis.pow(1, Infinity));
 record(globalThis.atan2(-0, 0));
+
+function recurrence(seed, iterations) {
+	let value = seed;
+	for (let index = 0; index < iterations; index++)
+		value = (Math.imul(value, 1664525) + 1013904223) | 0;
+	return value;
+}
+function integerPairs(x, y) {
+	return [
+		(Math.imul(x, y) + 2147483647) | 0,
+		(Math.imul(x, y) - -2147483648) ^ Math.clz32(x),
+		(Math.imul(x, y) + Math.clz32(y)) << 31,
+		31 >> (Math.imul(x, y) - Math.clz32(y)),
+		(Math.imul(x, y) - Math.clz32(y)) & -1,
+	];
+}
+function escapingPair(x, y) {
+	const sum = Math.imul(x, y) + 2147483647;
+	return [sum, sum | 0];
+}
+function fractionalPair(x, y) {
+	return [(Math.pow(x, y) + 1.75) | 0, (x * y) | 0];
+}
+function interveningCallPair(x, y) {
+	return (Math.imul(x, y) + 2147483647) | Math.clz32(globalThis.allocate());
+}
+Object.assign(globalThis, {
+	recurrence,
+	integerPairs,
+	escapingPair,
+	fractionalPair,
+	interveningCallPair,
+	allocate() {
+		const values = Array.from({ length: 32 }, (_, index) => ({ value: index }));
+		return values.length;
+	},
+});
+for (const seed of [left, throwing, marker, Symbol(), 1n, undefined, NaN, -0]) {
+	record(Object.is(globalThis.recurrence(seed, 0), seed));
+}
+for (const value of [
+	-2147483648,
+	2147483647,
+	4294967295,
+	1.75,
+	NaN,
+	Infinity,
+	-0,
+	"7",
+	left,
+]) {
+	record(globalThis.integerPairs(value, 3).join(","));
+	record(globalThis.escapingPair(value, 3).join(","));
+	record(globalThis.fractionalPair(value, 2).join(","));
+	record(globalThis.recurrence(value, 1));
+	record(globalThis.recurrence(value, 50));
+	record(globalThis.interveningCallPair(value, 3));
+}
+record(globalThis.fractionalPair(4294967295, 4294967295).join(","));
+for (const seed of [throwing, Symbol(), 1n]) {
+	try {
+		globalThis.recurrence(seed, 1);
+		record("missing recurrence error");
+	} catch (error) {
+		record(error === marker || error instanceof TypeError);
+	}
+}
 console.log(JSON.stringify(results));

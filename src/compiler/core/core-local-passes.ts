@@ -908,6 +908,7 @@ const rewriteExactBuiltinCalls: CoreFunctionPass = {
 					for (const argument of copyInstructionOperands(fn, instruction).slice(1)) {
 						if (
 							fn.valueRepresentation(argument) !== "f64" &&
+							fn.valueRepresentation(argument) !== "i32" &&
 							canScalarizeNumber(argument)
 						) {
 							editor ??= CoreEditor.open(program, item.function);

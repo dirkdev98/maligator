@@ -800,7 +800,8 @@ function verifySpecialization(
 			selection.anchors.length !== 1 ||
 			selection.claimedInstructions.length !== 2 ||
 			selection.composition !== "overlay" ||
-			selection.representation !== "binary-pairs-f64" ||
+			(selection.representation !== "binary-pairs-f64" &&
+				selection.representation !== "binary-pairs-truncating-i32") ||
 			selection.targetFunctions.length !== 0 ||
 			selection.semanticProtectors.length !== 0
 		) {
@@ -845,6 +846,7 @@ function verifySpecialization(
 		}
 		if (
 			candidate?.kind !== "numeric-fusion" ||
+			selection.representation !== candidate.representation ||
 			selection.anchors[0] !== candidate.root ||
 			!sameNumbers(selection.claimedInstructions, candidate.instructions) ||
 			!sameNumbers(selection.ordinaryBlocks, expectedBlocks) ||

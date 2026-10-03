@@ -1,4 +1,5 @@
 import type { CorePropertyPlacement } from "../core/core-ir-regions.ts";
+import { builtinResultIsInt32 } from "../shared/builtin-semantics.ts";
 import {
 	COMPILER_VALUE_KIND_NUMBER,
 	COMPILER_VALUE_KIND_NULL,
@@ -2248,6 +2249,7 @@ function inheritedStackObjectProtectorGuard(site: StackObjectSite): string {
 
 interface NativeNumericFusionAction {
 	readonly role: "start" | "finish";
+	readonly truncating: boolean;
 	readonly id: number;
 	readonly first: Extract<BytecodeInstruction, { opcode: "BINARY" }>;
 }
@@ -2478,7 +2480,11 @@ function emitBody(
 			nativeInstructions[pair.finishIp]?.kind === "unsigned-arithmetic"
 		)
 			continue;
-		const common = { id: pair.firstIp, first };
+		const common = {
+			id: pair.firstIp,
+			first,
+			truncating: region.representation === "binary-pairs-truncating-i32",
+		};
 		numericFusionActionByIp.set(action.ip, { ...common, role: action.role });
 	}
 	const indexedLengthLoopActionByIp = new Map<number, IndexedLengthLoopAction>();
@@ -3165,16 +3171,19 @@ function emitBody(
 	}
 	// Pair-fusion temporaries live for the whole C function so intervening property
 	// loads retain their original position and control-flow labels never jump over a
-	// declaration. Only boxed first results benefit from avoiding the box/unbox.
+	// declaration.
 	for (let ip = 0; ip < fn.instructions.length; ip++) {
 		const instruction = fn.instructions[ip]!;
 		const fusion = numericFusionActionByIp.get(ip);
 		if (
 			instruction.opcode === "BINARY" &&
 			fusion?.role === "start" &&
-			reps[instruction.dst] !== "number"
+			(fusion.truncating || reps[instruction.dst] !== "number")
 		) {
 			const id = fusion.id;
+			if (fusion.truncating) {
+				lines.push(`i32 __nf_${id}_integer = 0;`);
+			}
 			lines.push(`bool __nf_${id}_ok = false;`);
 			lines.push(`f64 __nf_${id}_value = 0.0;`);
 		}
@@ -4379,6 +4388,10 @@ function emitInstruction(
 					: value;
 	const storeNumber = (dst: number, expression: string): string =>
 		`r${dst} = ${reps[dst] === "number" ? expression : reps[dst] === "int32" ? `mal_ops_number_to_i32(${expression})` : profileCall("boxing", `mal_ops_number_value(${expression})`)};`;
+	const storeMathNumber = (dst: number, operation: string, expression: string): string =>
+		builtinResultIsInt32(operation)
+			? `r${dst} = ${reps[dst] === "number" ? expression : reps[dst] === "int32" ? `(i32)(${expression})` : profileCall("boxing", `mal_value_from_i32((i32)(${expression}))`)};`
+			: storeNumber(dst, expression);
 	const storeBoolean = (dst: number, expression: string): string =>
 		`r${dst} = ${reps[dst] === "boolean" ? expression : profileCall("boxing", `mal_value_new_boolean(${expression})`)};`;
 	const fixedCollectionCall = (
@@ -6333,6 +6346,53 @@ function emitInstruction(
 					storeBoolean(instruction.dst, context.constantBoolean ? "true" : "false"),
 				];
 			const { dst, left, right, operator } = instruction;
+			if (numericFusionAction?.truncating) {
+				const fusion = numericFusionAction;
+				const integer = (register: number): string =>
+					reps[register] === "int32"
+						? `r${register}`
+						: reps[register] === "number"
+							? `(i32)(${num(register)})`
+							: `mal_value_to_i32(${boxed(register)})`;
+				const integerGuard = (register: number): string =>
+					reps[register] === "int32"
+						? "true"
+						: reps[register] === "number"
+							? `(r${register} >= -2147483648.0 && r${register} <= 2147483647.0 && r${register} == trunc(r${register}))`
+							: `mal_value_is_int32(${boxed(register)})`;
+				if (fusion.role === "start") {
+					const fallback = emitGenericInstruction();
+					if (fallback === null) return null;
+					// Retain the exact Number result for a failed finish guard, including restored artifacts.
+					return [
+						`__nf_${fusion.id}_ok = ${integerGuard(left)} && ${integerGuard(right)};`,
+						`if (__nf_${fusion.id}_ok) {`,
+						`  __nf_${fusion.id}_integer = mal_scalar_i32_from_bits((u32)(${integer(left)}) ${operator} (u32)(${integer(right)}));`,
+						`  __nf_${fusion.id}_value = (f64)(${integer(left)}) ${operator} (f64)(${integer(right)});`,
+						`} else {`,
+						...fallback.map((line) => `  ${line}`),
+						`}`,
+					];
+				}
+				const temporary = `__nf_${fusion.id}_integer`;
+				const expression = nativeInt32Expr(
+					operator,
+					left === fusion.first.dst ? temporary : integer(left),
+					right === fusion.first.dst ? temporary : integer(right),
+				);
+				if (expression === null) throw new Error("Invalid truncating integer fusion");
+				const external = left === fusion.first.dst ? right : left;
+				const fallback = emitGenericInstruction();
+				if (fallback === null) return null;
+				return [
+					`if (__nf_${fusion.id}_ok && ${integerGuard(external)}) {`,
+					`  r${dst} = ${reps[dst] === "int32" ? expression : reps[dst] === "number" ? `(f64)(${expression})` : profileCall("boxing", `mal_value_from_i32(${expression})`)};`,
+					`} else {`,
+					`  if (__nf_${fusion.id}_ok) ${storeNumber(fusion.first.dst, `__nf_${fusion.id}_value`)}`,
+					...fallback.map((line) => `  ${line}`),
+					`}`,
+				];
+			}
 			if (nativePlan?.kind === "unsigned-arithmetic") {
 				const number = (register: number) =>
 					isNumericRep(reps[register]!)
@@ -7164,8 +7224,9 @@ function emitInstruction(
 					});
 					if (arguments_.every((argument) => argument !== null)) {
 						return [
-							storeNumber(
+							storeMathNumber(
 								instruction.dst,
+								instruction.operation,
 								`${numericKernel[0]}(${arguments_.join(", ")})`,
 							),
 							poll,
@@ -7242,7 +7303,11 @@ function emitInstruction(
 						});
 						guard = guards.length === 0 ? "true" : guards.join(" && ");
 						direct = [
-							storeNumber(instruction.dst, `${numericKernel[0]}(${numbers.join(", ")})`),
+							storeMathNumber(
+								instruction.dst,
+								instruction.operation,
+								`${numericKernel[0]}(${numbers.join(", ")})`,
+							),
 							poll,
 						];
 					} else if (

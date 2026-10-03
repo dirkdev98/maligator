@@ -798,6 +798,32 @@ describe("late Core specialization plan", () => {
 		expect(planSpecializations(plan)).toEqual([]);
 	});
 
+	it("rejects upgrading a Core numeric pair without integer operand facts", () => {
+		const { program, function: functionId } = numericProgram("+", "|");
+		const fn = program.function(functionId);
+		const fractional = [...fn.instructionIds()].find(
+			(instruction) => fn.instructionOpcodeName(instruction) === "createF64",
+		)!;
+		const editor = CoreEditor.open(program, functionId);
+		editor.replaceInstruction(fractional, "createF64", [], {
+			attributes: { value: 1.75 },
+		});
+		editor.commit();
+		const { plan } = planning(program, [functionId]);
+		const selections = planSpecializations(plan);
+		expect(selections).toHaveLength(1);
+		const invalid = withPlanSpecializations(
+			plan,
+			selections.map((selection) => ({
+				...selection,
+				representation: "binary-pairs-truncating-i32",
+			})),
+		);
+		expect(() => verifyCoreOptimizationPlan(program.seal(), invalid)).toThrow(
+			/invalid numeric-fusion certificate/,
+		);
+	});
+
 	it("seals stack-object elision, direct slots, and return materialization", () => {
 		for (const [sourceMode, expectedMode, materializations] of [
 			["elided", "elided", 0],

@@ -591,11 +591,11 @@ export type VmStackObjectPlanRegion = VmRegionEnvelope<
 
 export type VmNumericFusionRegion = VmRegionEnvelope<
 	"numeric-fusion",
-	"binary-pairs-f64",
+	"binary-pairs-f64" | "binary-pairs-truncating-i32",
 	"none"
 > & {
 	readonly composition: "overlay";
-	readonly runtimeGuard: "number-operands";
+	readonly runtimeGuard: "number-operands" | "int32-operands";
 	readonly pairs: ReadonlyArray<{
 		readonly firstIp: number;
 		readonly finishIp: number;
@@ -2600,9 +2600,13 @@ function lowerExecutionFunctionToNativePlan(
 				region.license.guard !== "structural" ||
 				region.license.genericTwin !== "retained" ||
 				region.license.materialization !== "none" ||
-				region.representation !== "binary-pairs-f64" ||
+				(region.representation !== "binary-pairs-f64" &&
+					region.representation !== "binary-pairs-truncating-i32") ||
 				region.composition !== "overlay" ||
-				region.runtimeGuard !== "number-operands" ||
+				region.runtimeGuard !==
+					(region.representation === "binary-pairs-f64"
+						? "number-operands"
+						: "int32-operands") ||
 				region.controlFlow.ordinaryBlocks.length === 0 ||
 				region.controlFlow.exceptionalBlocks.length !== 0 ||
 				anchors.some((ip) => ip === undefined) ||
@@ -2661,6 +2665,9 @@ function lowerExecutionFunctionToNativePlan(
 					finish?.opcode !== "BINARY" ||
 					!startOperators.has(first.operator) ||
 					!finishOperators.has(finish.operator) ||
+					(region.representation === "binary-pairs-truncating-i32" &&
+						(!["+", "-"].includes(first.operator) ||
+							!["&", "|", "^", "<<", ">>"].includes(finish.operator))) ||
 					(pair.firstUsePosition !== 1 && pair.firstUsePosition !== 2) ||
 					(pair.firstUsePosition === 1 ? finish.left : finish.right) !== first.dst ||
 					pair.firstIp >= pair.finishIp
@@ -2678,7 +2685,7 @@ function lowerExecutionFunctionToNativePlan(
 					materialization: "none",
 					admission,
 				},
-				representation: "binary-pairs-f64",
+				representation: region.representation,
 				composition: "overlay",
 				anchors: resolvedAnchors,
 				claimedIps: resolvedClaimedIps,
@@ -2687,7 +2694,7 @@ function lowerExecutionFunctionToNativePlan(
 					exceptionalHandlerIps: [],
 				},
 				cost: { ...region.cost },
-				runtimeGuard: "number-operands",
+				runtimeGuard: region.runtimeGuard,
 				pairs: resolvedPairs.map((pair) => ({
 					firstIp: pair.firstIp,
 					finishIp: pair.finishIp,

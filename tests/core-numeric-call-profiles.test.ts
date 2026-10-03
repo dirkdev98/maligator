@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
+	deserializeCompilerArtifact,
+	serializeCompilerArtifact,
+} from "../src/compiler/target/compiler-artifact-codec.ts";
+import {
 	constantCallProfiles,
 	constantCallProfileSource,
 } from "./helpers/constant-call-profiles.ts";
@@ -14,6 +18,86 @@ import {
 import { inspectStaticValueFunction, staticValueCases } from "./helpers/static-values.ts";
 
 describe("partially static numeric call profiles", () => {
+	it.each([
+		["Math.imul(x,y)", "Math.imul", "int32"],
+		["Math.clz32(x)", "Math.clz32", "int32"],
+		["Math.pow(x,y)", "Math.pow", "number"],
+	])(
+		"keeps the successful result of %s scalar across arithmetic",
+		(call, operation, rep) => {
+			const output = inspectStaticValueFunction(
+				`function probe(x,y){return ${call}+1;}globalThis.probe=probe;`,
+				"probe",
+			);
+			const instruction = output.fn.instructions.find(
+				(instruction) =>
+					instruction.opcode === "CALL_KNOWN" && instruction.operation === operation,
+			);
+			if (instruction?.opcode !== "CALL_KNOWN") throw new Error("Expected Math call");
+			expect(output.native.registerRepresentations[instruction.dst]).toBe(rep);
+			expect(output.c.source).toContain("mal_vm_call_known_native(");
+		},
+	);
+
+	it.each(["+", "-"])(
+		"fuses truncated %s only after an exact integer proof",
+		(operator) => {
+			for (const finish of ["&", "|", "^", "<<", ">>"]) {
+				for (const position of ["left", "right"]) {
+					const expression = `(Math.imul(x,y) ${operator} Math.clz32(x))`;
+					const output = inspectStaticValueFunction(
+						`function probe(x,y){return ${position === "left" ? `${expression} ${finish} 1` : `1 ${finish} ${expression}`};}globalThis.probe=probe;`,
+						"probe",
+					);
+					const image = deserializeCompilerArtifact(
+						serializeCompilerArtifact(output.image),
+					);
+					expect(
+						image.native.functions.some((fn) =>
+							fn.specializations.some(
+								(region) => region.representation === "binary-pairs-truncating-i32",
+							),
+						),
+					).toBe(true);
+				}
+			}
+		},
+	);
+
+	it.each([
+		"(Math.pow(x,y)+1)|0",
+		"(1.75+Math.imul(x,y))|0",
+		"(Math.imul(x,y)+1)>>>0",
+		"(Math.imul(x,y)*Math.imul(y,x))|0",
+		"(Math.imul(x,y)+1)|x",
+		"[sum=(Math.imul(x,y)+1),sum|0]",
+	])("declines truncating integer fusion for %s", (expression) => {
+		const output = inspectStaticValueFunction(
+			`function probe(x,y){let sum;return ${expression};}globalThis.probe=probe;`,
+			"probe",
+		);
+		expect(
+			output.native.specializations.some(
+				(region) => region.representation === "binary-pairs-truncating-i32",
+			),
+		).toBe(false);
+	});
+
+	it.each([
+		"if (callback()) return sum|0; return sum;",
+		"try { callback(); return sum|0; } catch { return sum; }",
+	])("retains an intermediate observed by control or exception flow: %s", (tail) => {
+		const output = inspectStaticValueFunction(
+			`function probe(x,y,callback){const sum=Math.imul(x,y)+1;${tail}}globalThis.probe=probe;`,
+			"probe",
+		);
+		expect(
+			output.native.specializations.some(
+				(region) => region.representation === "binary-pairs-truncating-i32",
+			),
+		).toBe(false);
+	});
+
 	it.each([
 		["Math.clz32", "mal_builtin_math_clz32_number", "x"],
 		["Math.f16round", "mal_builtin_math_f16round_number", "x"],

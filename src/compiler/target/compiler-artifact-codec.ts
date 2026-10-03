@@ -43,7 +43,7 @@ import type {
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal artifacts are hard cut-overs: stale cache entries rebuild.
-export const COMPILER_ARTIFACT_VERSION = 93;
+export const COMPILER_ARTIFACT_VERSION = 94;
 
 function validateClosureCaptureOwners(
 	owners: ReadonlyArray<number>,
@@ -1291,7 +1291,7 @@ function writeCompilerArtifact(
 					}
 					break;
 				case "numeric-fusion":
-					w.u8(region.runtimeGuard === "number-operands" ? 1 : 0);
+					w.u8(region.runtimeGuard === "number-operands" ? 1 : 2);
 					w.u32(region.pairs.length);
 					for (const pair of region.pairs) {
 						w.i32(pair.firstIp);
@@ -1649,8 +1649,12 @@ function validateNumericFusionRegion(
 		region.license.guard.obligations[0] !== "fallback" ||
 		region.license.genericTwin !== "retained" ||
 		region.license.materialization !== "none" ||
-		region.representation !== "binary-pairs-f64" ||
-		region.runtimeGuard !== "number-operands" ||
+		(region.representation !== "binary-pairs-f64" &&
+			region.representation !== "binary-pairs-truncating-i32") ||
+		region.runtimeGuard !==
+			(region.representation === "binary-pairs-f64"
+				? "number-operands"
+				: "int32-operands") ||
 		region.pairs.length === 0 ||
 		region.pairs.length > 32 ||
 		region.anchors.length !== 2 ||
@@ -1669,6 +1673,9 @@ function validateNumericFusionRegion(
 				finish?.opcode !== "BINARY" ||
 				!startOperators.has(first.operator) ||
 				!finishOperators.has(finish.operator) ||
+				(region.representation === "binary-pairs-truncating-i32" &&
+					(!["+", "-"].includes(first.operator) ||
+						!["&", "|", "^", "<<", ">>"].includes(finish.operator))) ||
 				(pair.firstUsePosition !== 1 && pair.firstUsePosition !== 2) ||
 				(pair.firstUsePosition === 1 ? finish.left : finish.right) !== first.dst ||
 				pair.firstIp >= pair.finishIp
@@ -4288,7 +4295,7 @@ function readCompilerArtifact(r: Reader, runtimeImage: RuntimeImage): ProgramIma
 						}
 						pairs.push({ firstIp, finishIp, firstUsePosition });
 					}
-					if (runtimeGuardTag !== 1) {
+					if (runtimeGuardTag !== 1 && runtimeGuardTag !== 2) {
 						throw new RangeError("program-image-codec: invalid numeric-fusion guard");
 					}
 					region = {
@@ -4299,13 +4306,14 @@ function readCompilerArtifact(r: Reader, runtimeImage: RuntimeImage): ProgramIma
 							materialization: "none",
 							admission,
 						},
-						representation: "binary-pairs-f64",
+						representation:
+							runtimeGuardTag === 1 ? "binary-pairs-f64" : "binary-pairs-truncating-i32",
 						composition: "overlay",
 						anchors,
 						claimedIps,
 						controlFlow: { ordinaryBlockIps, exceptionalHandlerIps },
 						cost: { score, metadataOperations },
-						runtimeGuard: "number-operands",
+						runtimeGuard: runtimeGuardTag === 1 ? "number-operands" : "int32-operands",
 						pairs,
 					};
 				} else if (kindTag === 15) {

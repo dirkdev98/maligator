@@ -1098,7 +1098,9 @@ export interface CoreStringSplitCursorCandidate extends CoreLocalSpecializationC
 }
 
 export type CoreLocalSpecializationCandidate =
-	| CoreLocalSpecializationCandidateBase<"numeric-fusion">
+	| (CoreLocalSpecializationCandidateBase<"numeric-fusion"> & {
+			readonly representation: "binary-pairs-f64" | "binary-pairs-truncating-i32";
+	  })
 	| CoreStackObjectCandidate
 	| CoreDenseArrayCandidate
 	| CoreStringSplitProjectionCandidate
@@ -4165,6 +4167,7 @@ function discoverCandidates(
 	loops: () => CoreLoopInductionAnalysis,
 	roots: ReadonlyMap<CoreValueId, CoreValueId>,
 	index: CoreLocalFactIndex,
+	valueKinds: () => CoreValueKindAnalysis,
 	kinds?: ReadonlySet<CoreLocalSpecializationCandidate["kind"]>,
 ): CoreLocalSpecializationCandidates {
 	const fn = program.function(functionId);
@@ -4189,6 +4192,7 @@ function discoverCandidates(
 	const addNumeric = (
 		root: CoreInstructionId,
 		instructions: ReadonlyArray<CoreInstructionId>,
+		representation: "binary-pairs-f64" | "binary-pairs-truncating-i32",
 	): void => {
 		const stableInstructions = Object.freeze([...new Set(instructions)]);
 		const key = `numeric-fusion:${functionId}:${root}:${stableInstructions.join(",")}`;
@@ -4196,6 +4200,7 @@ function discoverCandidates(
 			Object.freeze({
 				key,
 				kind: "numeric-fusion",
+				representation,
 				function: functionId,
 				root,
 				instructions: stableInstructions,
@@ -4304,6 +4309,8 @@ function discoverCandidates(
 	const numericInstructions = requested("numeric-fusion")
 		? indexedOpcodeInstructions(fn, index, "binary")
 		: [];
+	const exactInt32 = (value: CoreValueId): boolean =>
+		valueKinds().exactScalar(value) === "int32";
 	for (const instruction of numericInstructions) {
 		if (
 			!control.reachable.has(fn.instructionBlock(instruction)) ||
@@ -4314,11 +4321,7 @@ function discoverCandidates(
 		)
 			continue;
 		const output = instructionResult(fn, instruction, 0);
-		if (
-			output === undefined ||
-			fn.valueRepresentation(output) !== "boxed" ||
-			index.controlUses.has(roots.get(output) ?? output)
-		)
+		if (output === undefined || index.controlUses.has(roots.get(output) ?? output))
 			continue;
 		const uses = index.uses.get(roots.get(output) ?? output) ?? [];
 		const user = uses.length === 1 ? uses[0]!.instruction : undefined;
@@ -4345,7 +4348,21 @@ function discoverCandidates(
 			)
 		)
 			continue;
-		addNumeric(instruction, [instruction, user]);
+		const truncating =
+			["+", "-"].includes(fn.instructionAttributes(instruction).operator as string) &&
+			["&", "|", "^", "<<", ">>"].includes(
+				fn.instructionAttributes(user).operator as string,
+			) &&
+			[0, 1].every((index) => exactInt32(instructionOperand(fn, instruction, index)!)) &&
+			exactInt32(
+				instructionOperand(fn, user, instructionOperand(fn, user, 0) === output ? 1 : 0)!,
+			);
+		if (!truncating && fn.valueRepresentation(output) !== "boxed") continue;
+		addNumeric(
+			instruction,
+			[instruction, user],
+			truncating ? "binary-pairs-truncating-i32" : "binary-pairs-f64",
+		);
 	}
 	const values = Object.freeze(candidates);
 	return Object.freeze({
@@ -4368,6 +4385,8 @@ export function discoverCoreLocalSpecializationCandidates(
 	const index = buildCoreLocalFactIndex(fn, roots);
 	let provenance: CoreProvenance | undefined;
 	let loops: CoreLoopInductionAnalysis | undefined;
+	let valueKinds: CoreValueKindAnalysis | undefined;
+	const getValueKinds = () => (valueKinds ??= analyzeCoreValueKinds(fn, control));
 	return discoverCandidates(
 		program,
 		functionId,
@@ -4379,13 +4398,13 @@ export function discoverCoreLocalSpecializationCandidates(
 		control,
 		() => {
 			if (loops !== undefined) return loops;
-			const valueKinds = analyzeCoreValueKinds(fn, control);
 			return (loops = analyzeCoreLoopInductions(fn, control, roots, (value) =>
-				valueKinds.exactScalar(value),
+				getValueKinds().exactScalar(value),
 			));
 		},
 		roots,
 		index,
+		getValueKinds,
 		kinds,
 	);
 }
@@ -4408,6 +4427,7 @@ export const CORE_LOCAL_SPECIALIZATION_CANDIDATES_ANALYSIS: CoreAnalysisDefiniti
 				() => get(CORE_LOOP_INDUCTION_ANALYSIS, request),
 				bundle.roots,
 				bundle.index,
+				() => get(CORE_LOCAL_VALUE_KIND_ANALYSIS, request),
 			);
 		},
 	};

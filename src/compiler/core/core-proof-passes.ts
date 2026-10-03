@@ -1,3 +1,4 @@
+import { builtinPrimitiveResult } from "../shared/builtin-semantics.ts";
 import {
 	COMPILER_VALUE_KIND_NUMBER,
 	COMPILER_VALUE_KIND_UNDEFINED,
@@ -723,6 +724,16 @@ const SCALAR_CONSUMERS: ReadonlySet<string> = new Set([
 
 function scalarProducer(fn: CoreFunctionStore, instruction: CoreInstructionId): boolean {
 	const opcode = fn.instructionOpcodeName(instruction);
+	if (opcode === "callKnown") {
+		const attributes = fn.instructionAttributes(instruction);
+		return (
+			!attributes.construct &&
+			attributes.argumentMode === undefined &&
+			typeof attributes.operation === "string" &&
+			attributes.operation.startsWith("Math.") &&
+			builtinPrimitiveResult(attributes.operation) === "number"
+		);
+	}
 	return (
 		SCALAR_PRODUCERS.has(opcode) ||
 		(opcode === "loadProperty" &&

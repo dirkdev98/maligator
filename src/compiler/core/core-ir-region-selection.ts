@@ -797,7 +797,7 @@ function pendingLocalCandidate(
 											? {
 													...common,
 													kind: "numeric-fusion",
-													representation: "binary-pairs-f64",
+													representation: candidate.representation,
 													composition: "overlay",
 												}
 											: candidate.kind === "string-split-cursor"

@@ -5,7 +5,12 @@ import * as path from "node:path";
 import { expect, it } from "vitest";
 import { resolveBuildConfig } from "../../src/build-config.ts";
 import {
+	deserializeCompilerArtifact,
+	serializeCompilerArtifact,
+} from "../../src/compiler/target/compiler-artifact-codec.ts";
+import {
 	buildBackendPairFromOneProgramImage,
+	buildNativeProgramImage,
 	runToStdout,
 	STRESS_ENV,
 } from "../../src/test-harness.ts";
@@ -22,6 +27,49 @@ it("preserves scalar Math coercion, errors and signed zeros through number guard
 			config: resolveBuildConfig({}),
 		});
 		expect(runToStdout(interpreted)).toBe(expected);
+		expect(runToStdout(compiled)).toBe(expected);
+		expect(runToStdout(compiled, { env: STRESS_ENV })).toBe(expected);
+	} finally {
+		rmSync(outDir, { recursive: true, force: true });
+	}
+}, 300_000);
+
+it("preserves generic observations when a restored integer fusion takes either fallback", () => {
+	const fixture = "tests/local/truncating-integer-fallback.mjs";
+	const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-integer-fallback-"));
+	try {
+		const expected = execFileSync(process.execPath, [fixture], { encoding: "utf8" });
+		const { programImage, interpreted } = buildBackendPairFromOneProgramImage({
+			fixture,
+			name: "integer-fallback-original",
+			outDir,
+		});
+		expect(runToStdout(interpreted)).toBe(expected);
+		let upgraded = 0;
+		const image = {
+			...programImage,
+			native: {
+				...programImage.native,
+				functions: programImage.native.functions.map((fn) => ({
+					...fn,
+					specializations: fn.specializations.map((region) => {
+						if (region.kind !== "numeric-fusion") return region;
+						upgraded++;
+						return {
+							...region,
+							representation: "binary-pairs-truncating-i32" as const,
+							runtimeGuard: "int32-operands" as const,
+						};
+					}),
+				})),
+			},
+		};
+		expect(upgraded).toBeGreaterThan(0);
+		const restored = deserializeCompilerArtifact(serializeCompilerArtifact(image));
+		const compiled = buildNativeProgramImage(restored, {
+			name: "integer-fallback-restored",
+			outDir,
+		});
 		expect(runToStdout(compiled)).toBe(expected);
 		expect(runToStdout(compiled, { env: STRESS_ENV })).toBe(expected);
 	} finally {

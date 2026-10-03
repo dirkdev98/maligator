@@ -151,6 +151,10 @@ export function builtinPrimitiveResult(
 	return primitiveResults.get(operation);
 }
 
+export function builtinResultIsInt32(operation: string): boolean {
+	return operation === "Math.imul" || operation === "Math.clz32";
+}
+
 export type SemanticCondition =
 	| "always"
 	| "object-receiver"

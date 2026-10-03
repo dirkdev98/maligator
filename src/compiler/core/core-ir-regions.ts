@@ -855,7 +855,7 @@ export interface CoreAllocatedStringSplitCursorRegion extends CoreAllocatedRegio
 /** Structural one-use binary pair after register allocation. */
 export interface CoreAllocatedNumericFusionRegion extends CoreAllocatedRegionEnvelope<
 	"numeric-fusion",
-	"binary-pairs-f64",
+	"binary-pairs-f64" | "binary-pairs-truncating-i32",
 	"none",
 	readonly [
 		Extract<CompilerInstruction, { type: "binary" }>,
@@ -864,7 +864,7 @@ export interface CoreAllocatedNumericFusionRegion extends CoreAllocatedRegionEnv
 	"structural"
 > {
 	readonly composition: "overlay";
-	readonly runtimeGuard: "number-operands";
+	readonly runtimeGuard: "number-operands" | "int32-operands";
 	readonly pairs: ReadonlyArray<{
 		readonly first: Extract<CompilerInstruction, { type: "binary" }>;
 		readonly finish: Extract<CompilerInstruction, { type: "binary" }>;

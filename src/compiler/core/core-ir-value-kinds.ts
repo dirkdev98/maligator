@@ -1,4 +1,7 @@
-import { builtinPrimitiveResult } from "../shared/builtin-semantics.ts";
+import {
+	builtinPrimitiveResult,
+	builtinResultIsInt32,
+} from "../shared/builtin-semantics.ts";
 import { compilerFactIsWorldInvariant } from "../shared/compiler-facts.ts";
 import {
 	COMPILER_VALUE_KIND_BIGINT,
@@ -885,11 +888,16 @@ function solveCoreValueKinds(
 		addOperationTransfer(transfers, masks, fn, instruction, output, inputs);
 		if (demandedValues !== undefined) return;
 		const opcode = fn.instructionOpcodeName(instruction);
-		const operator = fn.instructionAttributes(instruction).operator;
+		const attributes = fn.instructionAttributes(instruction);
+		const operator = attributes.operator;
 		if (
 			fn.valueRepresentation(output) === "i32" ||
 			((opcode === "createNumber" || opcode === "createF64") &&
-				numberIsExactInt32(fn.instructionAttributes(instruction).value))
+				numberIsExactInt32(attributes.value)) ||
+			(opcode === "callKnown" &&
+				!attributes.construct &&
+				typeof attributes.operation === "string" &&
+				builtinResultIsInt32(attributes.operation))
 		) {
 			integerRecipes[output] = INTEGER_PROOF_EXACT;
 		} else if (

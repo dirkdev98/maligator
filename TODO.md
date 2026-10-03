@@ -689,9 +689,10 @@ remains a Maligator extension and does not count as global fetch conformance.
       workloads after output parity; AOT does not need a V8 compile cache.
 
 - [ ] Reduce boxing and numeric conversion in loop recurrences whose initial
-      value is unknown, including persistent Tinypool task inputs. Guarded Math
-      calls avoid native dispatch, but specializing the recurrence must preserve
-      zero-trip behavior and coercion effects.
+      value is unknown, including persistent Tinypool task inputs. Scalar Math
+      results and [proved integer truncation](docs/decisions/11-truncating-integer-arithmetic.md)
+      remove intermediate conversions. The recurrence edge still boxes its value;
+      specializing it must preserve zero-trip behavior and coercion effects.
 
 - [x] Refresh all 20 native primordial descriptor configuration audits after the
       worker API changes. The generated catalog, coverage records and availability
