@@ -390,9 +390,7 @@ static bool endpoint_discard(Endpoint *receiver, const Endpoint *sender, u64 tic
 }
 
 // The popped message keeps its process charge until the receiver frees it.
-static Message *endpoint_pop(Endpoint *endpoint) {
-    Channel *channel = endpoint->channel;
-    pthread_mutex_lock(&channel->mutex);
+static Message *endpoint_pop_locked(Endpoint *endpoint) {
     Message *message = endpoint->head;
     if (message != nullptr) {
         endpoint->head = message->next;
@@ -400,6 +398,13 @@ static Message *endpoint_pop(Endpoint *endpoint) {
         endpoint->count--;
         endpoint->bytes -= message->bytes;
     }
+    return message;
+}
+
+static Message *endpoint_pop(Endpoint *endpoint) {
+    Channel *channel = endpoint->channel;
+    pthread_mutex_lock(&channel->mutex);
+    Message *message = endpoint_pop_locked(endpoint);
     pthread_mutex_unlock(&channel->mutex);
     return message;
 }
@@ -1155,6 +1160,16 @@ static bool event_target_emit(MalVm *vm, MalValue target, const char *name, MalV
     return ok;
 }
 
+static bool event_target_has_listener(MalValue target, const char *name) {
+    if (!mal_value_is_event_target_object(target)) return false;
+    MalEventTargetObject *et = mal_value_to_event_target_object(target);
+    for (i32 i = 0; i < et->count; i++) {
+        MalEventListener *listener = &et->listeners[i];
+        if (!listener->removed && mal_string_equals_ascii(listener->type, name)) return true;
+    }
+    return false;
+}
+
 static MalValue message_event_new(MalVm *vm, const char *type, MalValue data, MalValue target, MalValue ports) {
     MalValue roots[] = {data, target, mal_value_new_undefined(), ports};
     MalRootSpan root;
@@ -1227,17 +1242,24 @@ static bool port_dispatch(MalVm *vm, PortRecord *port, const char *name, MalValu
     }
     ok = listeners_emit(vm, &port->listeners, roots[0], name, &roots[1], is_close ? 0 : 1);
     if (ok) {
-        roots[3] = message_event_new(vm, name, roots[1], roots[0], roots[4]);
-        ok = event_target_emit(vm, roots[0], name, roots[3]);
-        // `port` may have been unlinked by a listener; recheck by identity.
         PortRecord *live = port_record(roots[0]);
         MalValue handler = live == nullptr ? mal_value_new_undefined()
             : strcmp(name, "message") == 0 ? live->onmessage
             : strcmp(name, "messageerror") == 0 ? live->onmessageerror
             : mal_value_new_undefined();
-        if (ok && mal_value_is_callable(handler)) {
-            mal_vm_call_value(vm, handler, roots[0], &roots[3], 1);
-            ok = !thrown(vm);
+        if (event_target_has_listener(roots[0], name) || mal_value_is_callable(handler)) {
+            roots[3] = message_event_new(vm, name, roots[1], roots[0], roots[4]);
+            ok = event_target_emit(vm, roots[0], name, roots[3]);
+            // EventTarget listeners may replace the handler before its turn.
+            live = port_record(roots[0]);
+            handler = live == nullptr ? mal_value_new_undefined()
+                : strcmp(name, "message") == 0 ? live->onmessage
+                : strcmp(name, "messageerror") == 0 ? live->onmessageerror
+                : mal_value_new_undefined();
+            if (ok && mal_value_is_callable(handler)) {
+                mal_vm_call_value(vm, handler, roots[0], &roots[3], 1);
+                ok = !thrown(vm);
+            }
         }
     }
     mal_gc_unroot(&root);
@@ -2168,12 +2190,15 @@ static bool workers_drain(MalVm *vm) {
         channel_release(channel);
         return true;
     }
-    Message *message = endpoint_pop(endpoint);
-    if (message != nullptr) {
+    pthread_mutex_lock(&channel->mutex);
+    Message *message = endpoint_pop_locked(endpoint);
+    if (message != nullptr && (endpoint->count > 0 || endpoint->close_pending)) {
         // One message per macrotask; requeue so other sources interleave fairly.
-        pthread_mutex_lock(&channel->mutex);
-        if (endpoint->count > 0 || endpoint->close_pending) endpoint_notify_locked(endpoint);
-        pthread_mutex_unlock(&channel->mutex);
+        endpoint_notify_locked(endpoint);
+    }
+    bool closing = message == nullptr && endpoint->close_pending && !port->closed_emitted;
+    pthread_mutex_unlock(&channel->mutex);
+    if (message != nullptr) {
         MalValue values[] = {mal_value_new_undefined(), mal_value_new_undefined()};
         MalRootSpan root;
         mal_gc_root(&root, values, countof(values));
@@ -2194,9 +2219,6 @@ static bool workers_drain(MalVm *vm) {
         channel_release(channel);
         return true;
     }
-    pthread_mutex_lock(&channel->mutex);
-    bool closing = endpoint->close_pending && !port->closed_emitted;
-    pthread_mutex_unlock(&channel->mutex);
     if (closing) {
         // Rooted first: without its endpoint the port is no longer pinned.
         MalValue wrapper = port->wrapper;
