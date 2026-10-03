@@ -1,8 +1,8 @@
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, realpathSync } from "node:fs";
+import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
 	assertResultPass,
 	buildNativeBinary,
@@ -19,6 +19,7 @@ import {
 
 const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-process-"));
 const FIXTURE = "tests/local/node-process.mts";
+afterAll(() => rmSync(outDir, { recursive: true, force: true }));
 
 interface Run {
 	status: number | null;
@@ -67,6 +68,12 @@ function argvItems(lines: Array<string>): Array<string | undefined> {
 describe("native process global", () => {
 	let bin: string;
 	let yamlBin: string;
+	it("accepts an integer string exit status after rejecting invalid argument types", () => {
+		const r = run(bin, [], { env: { NODE_PROCESS_EXIT: "numeric-string" } });
+		expect(r.status).toBe(7);
+		expect(field(r.lines, "EXIT_INVALID_CONTINUED")).toBe("true");
+		assertResultPass(r.stdout);
+	});
 	beforeAll(() => {
 		bin = buildNativeBinary({
 			fixture: FIXTURE,

@@ -117,8 +117,8 @@ check(
 );
 check("arch is supported", process.arch === "arm64" || process.arch === "x64");
 check(
-	"versions exposes a conservative Node compatibility level",
-	process.versions.node === "0.0.0",
+	"process identifies Maligator without advertising a Node version",
+	process.release.name === "maligator" && !Object.hasOwn(process.versions, "node"),
 );
 check("stdout fd", process.stdout.fd === 1);
 check("stderr fd", process.stderr.fd === 2);
@@ -148,10 +148,10 @@ checkExitRangeError("exit rejects negative infinity status", -Infinity);
 checkExitRangeError("exit rejects status above safe-integer range", 9007199254740992);
 checkExitRangeError("exit rejects status below safe-integer range", -9007199254740992);
 try {
-	process.exit("1" as unknown as number);
-	check("exit rejects non-number status", false);
+	process.exit(true as unknown as number);
+	check("exit rejects non-number and non-string status", false);
 } catch (error) {
-	check("exit rejects non-number status", error instanceof TypeError);
+	check("exit rejects non-number and non-string status", error instanceof TypeError);
 }
 console.log("EXIT_INVALID_CONTINUED true");
 
@@ -182,6 +182,8 @@ if (exitRequest !== undefined) {
 		process.exit();
 	} else if (exitRequest === "undefined") {
 		process.exit(undefined);
+	} else if (exitRequest === "numeric-string") {
+		process.exit("7");
 	} else {
 		process.exit(Number(exitRequest));
 	}
