@@ -120,7 +120,7 @@ void mal_gc_request_safepoint(MalGcPollTarget *target) {
 #if defined(__wasi__)
     *(bool *) target = true;
 #else
-    atomic_store_explicit((_Atomic bool *) target, true, memory_order_relaxed);
+    atomic_store_explicit((_Atomic bool *) target, true, memory_order_release);
 #endif
 }
 
@@ -3417,7 +3417,7 @@ static void mal_gc_incremental_safepoint(MalVm *vm) {
         mal_gc_poll = false;
 #else
         // Clear before taking pressure so a concurrent request keeps its next poll.
-        polled = atomic_exchange_explicit(&mal_gc_poll, false, memory_order_relaxed);
+        polled = atomic_exchange_explicit(&mal_gc_poll, false, memory_order_acquire);
 #endif
     }
     bool pressure = mal_gc_process_take_pressure(g_gc->process);
