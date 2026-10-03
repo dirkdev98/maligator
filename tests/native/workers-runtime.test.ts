@@ -12,7 +12,7 @@ import {
 
 describe("worker isolates", () => {
 	for (const compiled of [true, false]) {
-		for (const fixture of ["idle-pool", "node-unref", "port-gc"]) {
+		for (const fixture of ["idle-pool", "node-unref", "port-gc", "exit-order"]) {
 			it(`${fixture} releases native ownership (${compiled ? "native" : "interpreted"})`, () => {
 				const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-worker-ownership-"));
 				try {

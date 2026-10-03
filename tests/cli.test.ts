@@ -247,6 +247,7 @@ describe("command shell", () => {
 			licensePath: path.join(repoRoot, "LICENSE"),
 			testModulePath: path.join(repoRoot, "src/testing/runtime.mjs"),
 			nodeGlobalsPath: path.join(repoRoot, "src/node-globals.mjs"),
+			platformSourceRoot: path.join(repoRoot, "src"),
 			frontendIdentity: "compact-type-strip-v3",
 			evalCompiler: {
 				kind: "source",

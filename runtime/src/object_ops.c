@@ -19,14 +19,14 @@
  * resolve. Invalidated permanently (conservative) the first time that stops holding.
  * Read on the array index [[Set]] hot path (mal_vm_set_property).
  */
-bool mal_array_elements_protector = true;
+MAL_ISOLATE_LOCAL bool mal_array_elements_protector = true;
 
 /**
  * Holds while no watched built-in prototype/lookup object has been mutated. Property
  * inline caches retain resolved data values only while this is true; any
  * define/set/delete/reparent clears it (see `watched_method_proto`).
  */
-bool mal_primitive_method_protector = true;
+MAL_ISOLATE_LOCAL bool mal_primitive_method_protector = true;
 
 /** Zero is the permanently exhausted state, matching the prototype-chain epoch. */
 static void mal_semantic_epoch_bump(u64 *epoch) {
@@ -36,9 +36,7 @@ static void mal_semantic_epoch_bump(u64 *epoch) {
 
 void mal_invalidate_array_elements_protector(void) {
     mal_array_elements_protector = false;
-    // Like RAW allocation and every other MOP helper today, mutation runs on the
-    // process's one active VM. A future multi-VM scheduler must pass/activate the
-    // owning VM here before per-VM epochs can remain sound.
+    // Object mutation binds the owning mutator's heap before invalidating its epochs.
     MalSemanticEpochs *epochs = &mal_vm_from_heap(mal_gc_current_heap())->semantic_epochs;
     mal_semantic_epoch_bump(&epochs->activity);
     mal_semantic_epoch_bump(&epochs->array_elements);
@@ -46,7 +44,6 @@ void mal_invalidate_array_elements_protector(void) {
 
 void mal_invalidate_primitive_method_protector(void) {
     mal_primitive_method_protector = false;
-    // See the active-VM ownership invariant above.
     MalSemanticEpochs *epochs = &mal_vm_from_heap(mal_gc_current_heap())->semantic_epochs;
     mal_semantic_epoch_bump(&epochs->activity);
     mal_semantic_epoch_bump(&epochs->watched_methods);
@@ -59,8 +56,7 @@ static inline void mal_gc_card_desc(MalHeapHeader *owner, const MalPropertyDesc 
     mal_gc_card(owner, desc->setter);
 }
 
-/** %Array.prototype% (set at intrinsics init); see object_ops.h. */
-MalObject *mal_array_prototype_object = nullptr;
+MAL_ISOLATE_LOCAL MalObject *mal_array_prototype_object = nullptr;
 
 static bool mal_object_desc_is_accessor(MalPropertyDesc desc) {
     return (desc.flags & MAL_PROPERTY_ACCESSOR) != 0;

@@ -114,13 +114,13 @@ void mal_object_array_deoptimize(struct MalArrayObject *array);
  * array's inherited chain has no integer-index property, so a fresh-index store
  * cannot hit an inherited setter and may skip the prototype-chain resolve.
  */
-extern bool mal_array_elements_protector;
+extern MAL_ISOLATE_LOCAL bool mal_array_elements_protector;
 
 /**
  * Holds while no watched built-in prototype/lookup object has been mutated; gates
  * primitive, intrinsic-own, and inherited-method value caches.
  */
-extern bool mal_primitive_method_protector;
+extern MAL_ISOLATE_LOCAL bool mal_primitive_method_protector;
 
 /**
  * Permanently clear one legacy protector and advance the current VM's matching
@@ -136,4 +136,4 @@ void mal_invalidate_primitive_method_protector(void);
  * the inline array index store fast path can confirm an array is on the default
  * prototype without a vm handle.
  */
-extern MalObject *mal_array_prototype_object;
+extern MAL_ISOLATE_LOCAL MalObject *mal_array_prototype_object;

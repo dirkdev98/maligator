@@ -233,6 +233,86 @@ setTimeout(() => {
 	}
 	console.log("ok   packaged CLI ran Node and Web development code without a toolchain");
 
+	const workerConfig = "workers.build.mts";
+	const workerEntry = path.join(project, "workers.mts");
+	const workerJobs = path.join(project, "worker-jobs.mts");
+	writeFileSync(
+		path.join(project, workerConfig),
+		`export default {
+	entry: "workers.mts",
+	outputName: "selfhost-workers",
+	engine: { eval: false, regexp: false, intl: { enabled: false } },
+	surface: { webPlatform: false, node: true, maligator: true },
+};
+`,
+	);
+	writeFileSync(
+		workerJobs,
+		`import { transfer, type TaskContext } from "maligator:workers";
+export function change(context: TaskContext, buffer: ArrayBuffer, shared: SharedArrayBuffer) {
+	context.throwIfCancelled();
+	new Uint8Array(buffer)[0] = 42;
+	Atomics.add(new Int32Array(shared), 0, 1);
+	return transfer(buffer, [buffer]);
+}
+`,
+	);
+	writeFileSync(
+		workerEntry,
+		`import { createWorkerUrl, createPool } from "maligator:workers";
+const pool = createPool<typeof import("./worker-jobs.mts")>(createWorkerUrl("./worker-jobs.mts", import.meta.url), { size: 2 });
+try {
+	await pool.ready;
+	const buffer = new ArrayBuffer(8);
+	const shared = new SharedArrayBuffer(4);
+	const pending = pool.run("change", [buffer, shared], { transfer: [buffer] });
+	if (buffer.byteLength !== 0) throw new Error("worker transfer did not detach");
+	const result = await pending;
+	if (new Uint8Array(result)[0] !== 42 || Atomics.load(new Int32Array(shared), 0) !== 1) throw new Error("worker result mismatch");
+	console.log("selfhost-workers PASS");
+} finally {
+	await pool.close();
+}
+`,
+	);
+	const workerDevelopment = invoke(["run", "--config", workerConfig], testOnlyEnv);
+	if (workerDevelopment !== "selfhost-workers PASS\n") {
+		throw new Error(`packaged worker development failed:\n${workerDevelopment}`);
+	}
+	const workerBuild = invoke(["build", "--config", workerConfig]);
+	const workerBinary = path.resolve(project, workerBuild.trim());
+	const workerHidden = `${workerEntry}.source-hidden`;
+	const jobsHidden = `${workerJobs}.source-hidden`;
+	renameSync(workerEntry, workerHidden);
+	try {
+		renameSync(workerJobs, jobsHidden);
+		try {
+			const workerRun = spawnSync(workerBinary, [], {
+				cwd: project,
+				env: testOnlyEnv,
+				encoding: "utf8",
+				timeout: 30_000,
+			});
+			if (workerRun.error !== undefined) throw workerRun.error;
+			if (
+				workerRun.status !== 0 ||
+				workerRun.stderr !== "" ||
+				workerRun.stdout !== "selfhost-workers PASS\n"
+			) {
+				throw new Error(
+					`packaged worker build failed:\n${workerRun.stdout}\n${workerRun.stderr}`,
+				);
+			}
+		} finally {
+			renameSync(jobsHidden, workerJobs);
+		}
+	} finally {
+		renameSync(workerHidden, workerEntry);
+	}
+	console.log(
+		"ok   packaged CLI ran worker pools without a toolchain and embedded worker sources",
+	);
+
 	const watchEntry = path.join(project, "watch.mts");
 	const watchSource = (revision: number) =>
 		`console.log("watch revision ${revision}");\nsetInterval(() => {}, 1000);\n`;

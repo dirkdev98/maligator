@@ -16,7 +16,7 @@
 #include "typed_array_object.h"
 #include "value_ops.h"
 
-MalNativeFunctionCallback mal_array_iterator_next_callback = nullptr;
+MAL_ISOLATE_LOCAL MalNativeFunctionCallback mal_array_iterator_next_callback = nullptr;
 #include "vm.h"
 #include "vm_ops.h"
 #include "utf16.h"

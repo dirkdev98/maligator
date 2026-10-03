@@ -61,6 +61,70 @@ test("a shadowed Worker parameter does not declare a native worker entry", () =>
 	);
 });
 
+test.each([
+	'for (const createWorkerUrl of [(value) => value]) createWorkerUrl("ordinary call");',
+	'for (let createWorkerUrl = (value) => value; false;) createWorkerUrl("ordinary call");',
+	'for (const createWorkerUrl in {}) createWorkerUrl("ordinary call");',
+	'for (const { callback: createWorkerUrl } of []) createWorkerUrl("ordinary call");',
+])("loop bindings do not invoke a shadowed worker declaration: %s", (statement) => {
+	fixture(
+		{
+			"main.mjs": `import { createWorkerUrl } from "maligator:workers"; ${statement}`,
+		},
+		(root) => {
+			const graph = buildModuleGraph(path.join(root, "main.mjs"), {
+				buildConfig: config,
+				stripTypes: stripCompactTypes,
+			});
+			expect(
+				graph.workerEntries?.filter((entry) => entry.workerSource === undefined),
+			).toEqual([]);
+		},
+	);
+});
+
+test.each([
+	"api.declare = (value) => value;",
+	"const alias = api; alias.declare = (value) => value;",
+	"({ declare: api.declare } = { declare: (value) => value });",
+	'Object.defineProperty(api, "declare", { value: (value) => value });',
+	"function replace(value) { value.declare = (value) => value; } replace(api);",
+])("mutated or escaped aggregate fields are not static declarations: %s", (mutation) => {
+	fixture(
+		{
+			"main.mjs": `import { createWorkerUrl } from "maligator:workers"; const api = { declare: createWorkerUrl }; ${mutation} api.declare("ordinary call");`,
+		},
+		(root) => {
+			const graph = buildModuleGraph(path.join(root, "main.mjs"), {
+				buildConfig: config,
+				stripTypes: stripCompactTypes,
+			});
+			expect(
+				graph.workerEntries?.filter((entry) => entry.workerSource === undefined),
+			).toEqual([]);
+		},
+	);
+});
+
+test("stable aggregate aliases still declare deferred worker roots", () => {
+	fixture(
+		{
+			"main.mjs":
+				'import { createWorkerUrl } from "maligator:workers"; const api = { declare: createWorkerUrl }; const alias = api; alias.declare("./task.mjs", import.meta.url);',
+			"task.mjs": "export default () => 42;",
+		},
+		(root) => {
+			const graph = buildModuleGraph(path.join(root, "main.mjs"), {
+				buildConfig: config,
+				stripTypes: stripCompactTypes,
+			});
+			const target = path.join(root, "task.mjs");
+			expect(graph.workerEntries?.some((entry) => entry.path === target)).toBe(true);
+			expect(graph.evaluationOrder).not.toContain(target);
+		},
+	);
+});
+
 test("explicit computed-import candidates are available outside the importing entry", () => {
 	fixture(
 		{

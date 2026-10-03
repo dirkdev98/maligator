@@ -2067,6 +2067,16 @@ static void worker_requeue_exit(Owner *owner, WorkerThread *thread) {
     pthread_mutex_unlock(&owner->mutex);
 }
 
+static bool worker_has_pending_messages(WorkerRecord *worker) {
+    PortRecord *port = port_record(worker->port);
+    if (port == nullptr || port->endpoint == nullptr) return false;
+    Channel *channel = port->endpoint->channel;
+    pthread_mutex_lock(&channel->mutex);
+    bool pending = port->endpoint->count != 0;
+    pthread_mutex_unlock(&channel->mutex);
+    return pending;
+}
+
 static bool workers_drain(MalVm *vm) {
     Isolate *iso = g_isolate;
     if (iso == nullptr) return false;
@@ -2094,13 +2104,20 @@ static bool workers_drain(MalVm *vm) {
             worker->ready_settled = true;
             mal_promise_fulfill(vm, mal_value_to_promise_object(worker->ready), mal_value_new_undefined());
         }
+        bool deferred_exit = false;
         if (worker != nullptr && exited) {
             // A throwing 'online' listener must not lose the exit: finish on the next drain.
-            if (ok) worker_finish(vm, worker);
-            else worker_requeue_exit(owner, thread);
+            if (!ok || worker_has_pending_messages(worker)) {
+                worker_requeue_exit(owner, thread);
+                deferred_exit = ok;
+            } else {
+                worker_finish(vm, worker);
+            }
         }
         worker_thread_release(thread);
-        return true;
+        if (!deferred_exit) return true;
+        // Exit follows queued messages; falling through also prevents a requeued exit starving them.
+        pthread_mutex_lock(&owner->mutex);
     }
     Endpoint *endpoint = owner->ready_head;
     if (endpoint != nullptr) {

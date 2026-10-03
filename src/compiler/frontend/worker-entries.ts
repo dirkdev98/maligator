@@ -111,6 +111,42 @@ function importedIdentity(
 }
 
 const moduleParents = new WeakMap<ModuleRecord, ReadonlyMap<ESTree.Node, ESTree.Node>>();
+const stableAggregates = new WeakMap<
+	ModuleRecord,
+	WeakMap<ESTree.ObjectExpression, boolean>
+>();
+
+function bindsName(pattern: ESTree.Node | null, local: string): boolean {
+	if (pattern === null) return false;
+	switch (pattern.type) {
+		case "Identifier":
+			return pattern.name === local;
+		case "RestElement":
+			return bindsName(pattern.argument, local);
+		case "AssignmentPattern":
+			return bindsName(pattern.left, local);
+		case "ArrayPattern":
+			return pattern.elements.some((element) => bindsName(element, local));
+		case "ObjectPattern":
+			return pattern.properties.some((property) =>
+				property.type === "Property"
+					? bindsName(property.value, local)
+					: property.type === "RestElement" && bindsName(property.argument, local),
+			);
+		default:
+			return false;
+	}
+}
+
+function loopBinding(node: ESTree.Node): ESTree.VariableDeclaration | undefined {
+	const binding =
+		node.type === "ForStatement"
+			? node.init
+			: node.type === "ForInStatement" || node.type === "ForOfStatement"
+				? node.left
+				: undefined;
+	return binding?.type === "VariableDeclaration" ? binding : undefined;
+}
 
 function parentsFor(record: ModuleRecord): ReadonlyMap<ESTree.Node, ESTree.Node> {
 	const parents = moduleParents.get(record);
@@ -130,17 +166,14 @@ function constantInitializer(
 ): ESTree.Node | undefined {
 	const parents = parentsFor(record);
 	for (let scope = parents.get(node); scope !== undefined; scope = parents.get(scope)) {
+		if (loopBinding(scope)?.declarations.some((entry) => bindsName(entry.id, local)))
+			return undefined;
 		if (
 			scope.type === "FunctionDeclaration" ||
 			scope.type === "FunctionExpression" ||
 			scope.type === "ArrowFunctionExpression"
 		) {
-			let shadowed = false;
-			for (const parameter of scope.params)
-				traverseEstree(parameter, (part) => {
-					if (part.type === "Identifier" && part.name === local) shadowed = true;
-				});
-			if (shadowed) return undefined;
+			if (scope.params.some((parameter) => bindsName(parameter, local))) return undefined;
 		}
 		if (scope.type !== "Program" && scope.type !== "BlockStatement") continue;
 		for (const item of scope.body) {
@@ -156,22 +189,27 @@ function constantInitializer(
 }
 
 function aliasExpression(
+	modules: ReadonlyMap<string, ModuleRecord>,
 	record: ModuleRecord,
 	node: ESTree.Node,
 	seen = new Set<ESTree.Node>(),
+	checkAggregate = true,
 ): ESTree.Node {
 	if (seen.has(node)) return node;
 	seen.add(node);
 	if (node.type === "Identifier") {
 		const initializer = constantInitializer(record, node, node.name);
-		return initializer === undefined ? node : aliasExpression(record, initializer, seen);
+		return initializer === undefined
+			? node
+			: aliasExpression(modules, record, initializer, seen, checkAggregate);
 	}
 	if (
 		node.type === "MemberExpression" &&
 		(!node.computed || node.property.type === "Literal")
 	) {
-		const object = aliasExpression(record, node.object, seen);
+		const object = aliasExpression(modules, record, node.object, seen, checkAggregate);
 		if (object.type === "ObjectExpression") {
+			if (checkAggregate && !aggregateIsStable(modules, record, object)) return node;
 			const propertyName = name(node.property);
 			if (object.properties.some((property) => property.type === "SpreadElement"))
 				return node;
@@ -182,11 +220,108 @@ function aliasExpression(
 					!property.computed &&
 					name(property.key) === propertyName
 				)
-					return aliasExpression(record, property.value, seen);
+					return aliasExpression(modules, record, property.value, seen, checkAggregate);
 			}
 		}
 	}
 	return node;
+}
+
+function isWriteReference(
+	node: ESTree.Node,
+	parents: ReadonlyMap<ESTree.Node, ESTree.Node>,
+): boolean {
+	for (let parent = parents.get(node); parent !== undefined; parent = parents.get(node)) {
+		if (parent.type === "AssignmentExpression") return parent.left === node;
+		if (parent.type === "UpdateExpression") return parent.argument === node;
+		if (parent.type === "UnaryExpression") return parent.operator === "delete";
+		if (parent.type === "ForInStatement" || parent.type === "ForOfStatement")
+			return parent.left === node;
+		if (
+			(parent.type === "MemberExpression" && parent.object === node) ||
+			(parent.type === "Property" && parent.value === node) ||
+			parent.type === "ArrayPattern" ||
+			parent.type === "ObjectPattern" ||
+			parent.type === "RestElement" ||
+			(parent.type === "AssignmentPattern" && parent.left === node)
+		) {
+			node = parent;
+			continue;
+		}
+		return false;
+	}
+	return false;
+}
+
+function aggregateIsStable(
+	modules: ReadonlyMap<string, ModuleRecord>,
+	record: ModuleRecord,
+	object: ESTree.ObjectExpression,
+): boolean {
+	let cache = stableAggregates.get(record);
+	if (cache === undefined) {
+		cache = new WeakMap();
+		stableAggregates.set(record, cache);
+	}
+	const cached = cache.get(object);
+	if (cached !== undefined) return cached;
+	cache.set(object, false);
+	const parents = parentsFor(record);
+	let stable = true;
+	traverseEstree(record.parsed.ast, (node) => {
+		if (
+			!stable ||
+			(node.type !== "Identifier" &&
+				node.type !== "MemberExpression" &&
+				node.type !== "ObjectExpression")
+		)
+			return;
+		const parent = parents.get(node);
+		if (
+			(parent?.type === "VariableDeclarator" && parent.id === node) ||
+			(parent?.type === "MemberExpression" &&
+				parent.property === node &&
+				!parent.computed) ||
+			(parent?.type === "Property" &&
+				parent.key === node &&
+				!parent.computed &&
+				parent.value !== node)
+		)
+			return;
+		if (aliasExpression(modules, record, node, new Set(), false) !== object) return;
+		if (parent?.type === "MemberExpression" && parent.object === node) {
+			const use = parents.get(parent);
+			if (
+				isWriteReference(parent, parents) ||
+				(use?.type === "CallExpression" &&
+					use.callee === parent &&
+					!isDeclaration(calleeIdentity(modules, record, parent, new Set(), false)))
+			)
+				stable = false;
+			return;
+		}
+		if (parent?.type === "VariableDeclarator" && parent.init === node) {
+			const declaration = parents.get(parent);
+			if (
+				declaration?.type === "VariableDeclaration" &&
+				declaration.kind === "const" &&
+				parents.get(declaration)?.type !== "ExportNamedDeclaration"
+			)
+				return;
+		}
+		if (parent?.type === "Property" && parent.value === node) {
+			const container = parents.get(parent);
+			if (
+				container?.type === "ObjectExpression" &&
+				aggregateIsStable(modules, record, container)
+			)
+				return;
+		}
+		// A const binding does not freeze its object: escaped aliases can mutate fields.
+		stable = false;
+	});
+	cache.set(object, stable);
+	return stable;
 }
 
 function calleeIdentity(
@@ -194,8 +329,9 @@ function calleeIdentity(
 	record: ModuleRecord,
 	node: ESTree.Node,
 	seen = new Set<string>(),
+	checkAggregate = true,
 ): ExportIdentity | undefined {
-	const expression = aliasExpression(record, node);
+	const expression = aliasExpression(modules, record, node, new Set(), checkAggregate);
 	if (expression.type === "Identifier") {
 		if (shadowsImportedBinding(expression, parentsFor(record), expression.name))
 			return undefined;
@@ -206,7 +342,7 @@ function calleeIdentity(
 		(expression.computed && expression.property.type !== "Literal")
 	)
 		return undefined;
-	const base = calleeIdentity(modules, record, expression.object, seen);
+	const base = calleeIdentity(modules, record, expression.object, seen, checkAggregate);
 	const property = name(expression.property);
 	return base?.name === "*" && property !== undefined
 		? exportIdentity(modules, base.module, property, seen)
@@ -221,7 +357,7 @@ function staticUrlValue(
 ): string | undefined {
 	if (seen.has(node)) return undefined;
 	seen.add(node);
-	const alias = aliasExpression(record, node);
+	const alias = aliasExpression(modules, record, node);
 	if (alias !== node) return staticUrlValue(modules, record, alias, seen);
 	if (node.type === "Literal" && typeof node.value === "string") return node.value;
 	if (
@@ -276,13 +412,6 @@ function shadowsImportedBinding(
 	parents: ReadonlyMap<ESTree.Node, ESTree.Node>,
 	local: string,
 ): boolean {
-	const contains = (pattern: unknown): boolean => {
-		let found = false;
-		traverseEstree(pattern, (part) => {
-			if (part.type === "Identifier" && part.name === local) found = true;
-		});
-		return found;
-	};
 	for (
 		let parent = parents.get(node);
 		parent !== undefined;
@@ -292,16 +421,18 @@ function shadowsImportedBinding(
 			(parent.type === "FunctionDeclaration" ||
 				parent.type === "FunctionExpression" ||
 				parent.type === "ArrowFunctionExpression") &&
-			(parent.params.some(contains) ||
+			(parent.params.some((parameter) => bindsName(parameter, local)) ||
 				(parent.type !== "ArrowFunctionExpression" && parent.id?.name === local))
 		)
 			return true;
-		if (parent.type === "CatchClause" && contains(parent.param)) return true;
+		if (parent.type === "CatchClause" && bindsName(parent.param, local)) return true;
+		if (loopBinding(parent)?.declarations.some((entry) => bindsName(entry.id, local)))
+			return true;
 		if (parent.type === "BlockStatement") {
 			for (const statement of parent.body) {
 				if (
 					statement.type === "VariableDeclaration" &&
-					statement.declarations.some((entry) => contains(entry.id))
+					statement.declarations.some((entry) => bindsName(entry.id, local))
 				)
 					return true;
 				if (

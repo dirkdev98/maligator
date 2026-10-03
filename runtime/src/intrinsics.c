@@ -632,9 +632,7 @@ void mal_intrinsics_init(MalVm *vm) {
     // installing them below does not trip the protector.
     object_prototype->fast_elements_proto = true;
     array_prototype->fast_elements_proto = true;
-    // Cache %Array.prototype% for the inline array store fast path (default-proto
-    // check). The cache is process-global, so it cannot identify the default
-    // prototype after a second realm is initialized; disable that fast path then.
+    // A second realm has a different default prototype, so disable the mutator's cache.
 #if MAL_REALMS
     mal_array_prototype_object = vm->current_realm == vm->initial_realm ? array_prototype : nullptr;
 #else

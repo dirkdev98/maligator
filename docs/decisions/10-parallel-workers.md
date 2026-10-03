@@ -127,8 +127,9 @@ cancellations.
 Native blocking I/O, DNS, cryptographic work and GC each use process-owned
 executors. Clients have their own bounded queues and concurrency grants. Ready
 clients progress round-robin; disposing one client discards its queued work and
-waits for its own running callbacks. Native jobs contain no language pointers;
-completions return to the owning reactor. GC ownership and pressure pacing are
+waits for its own running callbacks. I/O, DNS and crypto jobs contain no language
+pointers; completions return to the owning reactor. GC jobs explicitly bind their
+owning collector and trace that isolate's heap. GC ownership and pressure pacing are
 described in [generational GC workers](09-generational-gc-workers.md).
 
 Shared memory reserves its full maximum capacity before allocation and never

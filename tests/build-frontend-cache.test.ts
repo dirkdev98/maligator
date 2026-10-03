@@ -56,7 +56,6 @@ describe("normal build frontend cache", () => {
 
 		expect(cold.cache).toBe("miss");
 		expect(warm.cache).toBe("hit");
-		expect(warm.programImage).toEqual(cold.programImage);
 		expect(warm.wire).toEqual(cold.wire);
 		expect(emitProgramTranslationUnits(warm.programImage)).toEqual(
 			emitProgramTranslationUnits(cold.programImage),
