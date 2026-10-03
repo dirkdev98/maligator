@@ -679,15 +679,18 @@ remains a Maligator extension and does not count as global fetch conformance.
 
 # Node and ecosystem compatibility
 
-- [ ] Implement UPM performance paths after the Node compatibility slice: compiled
-      worker entry graphs with messaging/transfers/lifecycle, off-loop filesystem
-      and decompression scheduling, and DNS/Agent dispatcher reuse. Measure matched
-      workloads only after output parity; AOT does not need a V8 compile cache.
+- [x] Implement compiled worker entry graphs, messaging, transactional transfers,
+      lifecycle, persistent task pools, shared memory and Atomics. Native and
+      interpreted workers support unmodified Tinypool through node:worker_threads;
+      [parallel workers](docs/decisions/10-parallel-workers.md) records the API.
 
-- [ ] Refresh the remaining primordial descriptor configuration audits after the
-      UPM API changes. The targeted full, node, diagnostic, and intl-collator
-      captures update the catalog; configurations.json lists pending modes whose
-      prior digests still need recapture. The full matrix continues checking them.
+- [ ] Measure remaining UPM performance paths: off-loop filesystem and
+      decompression scheduling, and DNS/Agent dispatcher reuse. Use matched
+      workloads after output parity; AOT does not need a V8 compile cache.
+
+- [x] Refresh all 20 native primordial descriptor configuration audits after the
+      worker API changes. The generated catalog, coverage records and availability
+      matrix use current captures with no pending modes.
 
 - [ ] Extend asynchronous child-process stdio to pipes and implement exec/execFile;
       inherited and ignored stdio cover UPM commands. Exercise active-child cleanup
@@ -785,19 +788,20 @@ remains a Maligator extension and does not count as global fetch conformance.
 
 ## SMP
 
-- [ ] Move fiber, scheduler, GC, root, hook, clock, and host state from process globals
-      into thread-local or isolate-owned structures. Preserve the single-isolate path.
+- [x] Move mutable fiber, scheduler, GC, root, hook, and host state into thread-local
+      or isolate-owned structures. Preserve the single-isolate path and share bounded
+      process executors and GC helper capacity.
 
-- [ ] Run one isolate and scheduler per OS thread. Keep heaps and language objects
+- [x] Run one isolate and scheduler per OS thread. Keep heaps and language objects
       isolated unless data is explicitly cloned or transferred.
 
-- [ ] Implement cross-isolate send as copy plus MPSC enqueue and backend wake. Make
+- [x] Implement cross-isolate send as copy plus MPSC enqueue and backend wake. Make
       queue ownership and shutdown races explicit.
 
 - [ ] Add work stealing only for work without isolate-local pointers. Measure fairness
       and cache effects before enabling it by default.
 
-- [ ] Verify independent per-isolate collection without cross-heap pointers or global
+- [x] Verify independent per-isolate collection without cross-heap pointers or global
       stop-the-world coordination. Stress simultaneous collection, messaging,
       cancellation, and shutdown.
 

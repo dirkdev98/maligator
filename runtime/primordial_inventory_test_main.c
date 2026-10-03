@@ -14,6 +14,7 @@
 #include "web_readable_stream_object.h"
 #include "web_url_object.h"
 #include "web_globals.h"
+#include "personality.h"
 
 #include <stdio.h>
 #include <inttypes.h>
@@ -184,7 +185,18 @@ int main(int argc, char **argv) {
         mal_gc_unroot(&getter_root);
     }
     inventory_snapshot(&vm, "language-initialized");
-    MAL_INVENTORY_HOST_INSTALLS
+    if (mal_host_attach(&vm) == nullptr) {
+        mal_gc_unroot(&sentinel_root);
+        mal_vm_free(&vm);
+        return 2;
+    }
+    mal_runtime_personality_install(&vm, MAL_WEB_PLATFORM != 0, MAL_NODE != 0);
+    MalHostLaunchContext launch = {
+        .argc = argc,
+        .argv = argv,
+        .script_path = mal_runtime_image.entry_path,
+    };
+    mal_vm_run_host_installs(&vm, &launch);
     inventory_snapshot(&vm, "host-installed");
     mal_host_timers_free(&vm);
     mal_host_detach(&vm);

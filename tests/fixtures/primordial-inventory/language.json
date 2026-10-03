@@ -12599,6 +12599,27 @@
 			["bits", "7ff8000000000003"]
 		],
 		["MAL_INTRINSIC_WRITABLE_STREAM_PROTOTYPE", ["bits", "7ff8000000000003"]],
+		[
+			"mal_host_install_maligator_internal_workers:MessageChannel",
+			["runtime", "primitive"]
+		],
+		["mal_host_install_maligator_internal_workers:MessagePort", ["runtime", "primitive"]],
+		["mal_host_install_maligator_internal_workers:Worker", ["runtime", "primitive"]],
+		[
+			"mal_host_install_maligator_internal_workers:capabilities",
+			["runtime", "primitive"]
+		],
+		[
+			"mal_host_install_maligator_internal_workers:createWorkerUrl",
+			["runtime", "primitive"]
+		],
+		["mal_host_install_maligator_internal_workers:parentPort", ["runtime", "primitive"]],
+		["mal_host_install_maligator_internal_workers:poolEntry", ["runtime", "primitive"]],
+		[
+			"mal_host_install_maligator_internal_workers:receiveMessageOnPort",
+			["runtime", "primitive"]
+		],
+		["mal_host_install_maligator_internal_workers:workerData", ["runtime", "primitive"]],
 		["mal_host_install_maligator_process:execution", ["runtime", "primitive"]],
 		["mal_host_install_node_assert:AssertionError", ["runtime", "primitive"]],
 		["mal_host_install_node_assert:deepEqual", ["runtime", "primitive"]],
@@ -12638,6 +12659,7 @@
 		["mal_host_install_node_child_process:exec", ["runtime", "primitive"]],
 		["mal_host_install_node_child_process:execFile", ["runtime", "primitive"]],
 		["mal_host_install_node_child_process:execFileSync", ["runtime", "primitive"]],
+		["mal_host_install_node_child_process:fork", ["runtime", "primitive"]],
 		["mal_host_install_node_child_process:spawn", ["runtime", "primitive"]],
 		["mal_host_install_node_cluster:default", ["runtime", "primitive"]],
 		["mal_host_install_node_cluster:fork", ["runtime", "primitive"]],
@@ -12693,8 +12715,10 @@
 		["mal_host_install_node_domain:create", ["runtime", "primitive"]],
 		["mal_host_install_node_domain:default", ["runtime", "primitive"]],
 		["mal_host_install_node_events:EventEmitter", ["runtime", "primitive"]],
+		["mal_host_install_node_events:EventEmitterAsyncResource", ["runtime", "primitive"]],
 		["mal_host_install_node_events:default", ["runtime", "primitive"]],
 		["mal_host_install_node_events:errorMonitor", ["runtime", "primitive"]],
+		["mal_host_install_node_events:once", ["runtime", "primitive"]],
 		["mal_host_install_node_fs:Stats", ["runtime", "primitive"]],
 		["mal_host_install_node_fs:accessSync", ["runtime", "primitive"]],
 		["mal_host_install_node_fs:appendFileSync", ["runtime", "primitive"]],
@@ -12901,6 +12925,7 @@
 		["mal_host_install_node_vm:default", ["runtime", "primitive"]],
 		["mal_host_install_node_vm:runInNewContext", ["runtime", "primitive"]],
 		["mal_host_install_node_worker_threads:MessageChannel", ["runtime", "primitive"]],
+		["mal_host_install_node_worker_threads:MessagePort", ["runtime", "primitive"]],
 		["mal_host_install_node_worker_threads:SHARE_ENV", ["runtime", "primitive"]],
 		["mal_host_install_node_worker_threads:Worker", ["runtime", "primitive"]],
 		["mal_host_install_node_worker_threads:default", ["runtime", "primitive"]],

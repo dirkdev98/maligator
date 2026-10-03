@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
 import * as path from "node:path";
 import { parseCliArgs } from "../src/cli.ts";
+import { stripCompactTypes } from "../src/compiler/frontend/compact-type-strip.ts";
 import { HOST_MODULES } from "../src/compiler/frontend/host-modules.ts";
 import { compileEntrypoint } from "../src/compiler/pipeline/compile-program.ts";
 import { PLATFORM_MODULES } from "../src/platform/catalog.ts";
@@ -16,9 +17,10 @@ export function capturePrimordialInventory(mode: string, outDir: string) {
 	const config = primordialInventoryConfig(mode);
 	const modules = [
 		...(config.surface.node ? HOST_MODULES.keys() : []),
-		...PLATFORM_MODULES.filter((module) => module.kind === "native").map(
-			(module) => module.id,
-		),
+		// Public source namespaces retain their private native substrate without exposing reserved imports.
+		...PLATFORM_MODULES.filter(
+			(module) => !module.internal && module.id !== "maligator:test",
+		).map((module) => module.id),
 	];
 	const fixture = path.join(outDir, `inventory-${mode}.mjs`);
 	writeFileSync(
@@ -35,6 +37,7 @@ export function capturePrimordialInventory(mode: string, outDir: string) {
 	if (command.kind !== "build") throw new Error("Expected build command");
 	const image = compileEntrypoint(fixture, {
 		buildConfig: config,
+		stripTypes: stripCompactTypes,
 		execution: resolveExecution(command, config, {
 			compiled: true,
 			optimization: "full",

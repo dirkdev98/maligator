@@ -88,6 +88,19 @@ not reconstruct its contents.
 Use `maligator --help` and `maligator --version` for command help and version output.
 Unknown options, missing option values, and extra positional arguments are errors.
 
+## Parallel workers
+
+`maligator:workers` provides isolated native threads, transferable messages, shared
+memory and Atomics, and persistent task pools. Declare entries with
+`createWorkerUrl("./jobs.ts", import.meta.url)` so the compiler bundles their graphs
+for native builds and interpreted development. The API needs no surface flag;
+enable `surface.node` for `node:worker_threads` and libraries such as Tinypool.
+
+Each worker owns its VM, heap and event loop. Blocking host executors and GC helper
+capacity are bounded across the process. See
+[parallel workers](docs/decisions/10-parallel-workers.md) for task signatures,
+scheduling, transfer admission, cancellation and lifecycle contracts.
+
 ## Application tests
 
 Ordinary `maligator test` is an interpreter-only toolchain path. It discovers
