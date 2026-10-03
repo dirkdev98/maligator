@@ -120,6 +120,11 @@ static MalValue mal_builtin_array_buffer_construct(MalVm *vm, const MalValue *ar
 
     MalArrayBufferObject *buffer = mal_array_buffer_object_new(
         &vm->heap, prototype, (u32) byte_length, (u32) max_byte_length, resizable, shared);
+    if (shared && buffer->shared_memory == nullptr) {
+        // The shared cap or OS refused the reservation; nothing was published.
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "SharedArrayBuffer allocation failed");
+        return mal_value_new_undefined();
+    }
     return mal_value_from_array_buffer_object(buffer);
 }
 
@@ -599,7 +604,7 @@ static MalValue mal_shared_array_buffer_byte_length_getter(MalVm *vm, MalValue t
     if (buffer == nullptr) {
         return mal_value_new_undefined();
     }
-    return mal_value_from_i32((i32) buffer->byte_length);
+    return mal_value_from_i32((i32) mal_array_buffer_object_refresh_shared_length(buffer));
 }
 
 static MalValue mal_shared_array_buffer_max_byte_length_getter(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
@@ -644,12 +649,15 @@ static MalValue mal_shared_array_buffer_grow(MalVm *vm, MalValue this_value, con
     if (!mal_array_buffer_to_index_u32(vm, arg_count >= 1 ? args[0] : mal_value_new_undefined(), &new_length)) {
         return mal_value_new_undefined();
     }
-    if (new_length < buffer->byte_length) {
-        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "SharedArrayBuffer cannot shrink");
+    if (new_length > buffer->max_byte_length) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Grow length exceeds maxByteLength");
         return mal_value_new_undefined();
     }
+    // Another agent may grow concurrently; the backing's CAS decides, and a
+    // failure below max can only mean the published length overtook new_length.
     if (!mal_array_buffer_object_resize(buffer, new_length)) {
-        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Grow length exceeds maxByteLength");
+        mal_array_buffer_object_refresh_shared_length(buffer);
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "SharedArrayBuffer cannot shrink");
         return mal_value_new_undefined();
     }
     return mal_value_new_undefined();
@@ -665,7 +673,7 @@ static MalValue mal_shared_array_buffer_slice(MalVm *vm, MalValue this_value, co
     if (buffer == nullptr) {
         return mal_value_new_undefined();
     }
-    u32 length = buffer->byte_length;
+    u32 length = mal_array_buffer_object_refresh_shared_length(buffer);
     u32 start;
     if (!mal_array_buffer_clamp(vm, arg_count >= 1 ? args[0] : mal_value_new_undefined(), length, 0, &start)) {
         return mal_value_new_undefined();
@@ -718,7 +726,9 @@ static MalValue mal_shared_array_buffer_slice(MalVm *vm, MalValue this_value, co
         u32 available = buffer->byte_length > start ? buffer->byte_length - start : 0;
         u32 copy = new_length < available ? new_length : available;
         if (copy > 0) {
-            memcpy(result->data, buffer->data + start, copy);
+            // Both stores may be written by other agents (or alias one backing
+            // through another wrapper), so plain memcpy would be a data race.
+            mal_shared_bytes_copy(result->data, buffer->data + start, copy);
         }
         if (direct_result && copy < new_length) {
             memset(result->data + copy, 0, new_length - copy);

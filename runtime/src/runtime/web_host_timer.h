@@ -10,6 +10,7 @@ typedef struct MalAsyncContext MalAsyncContext;
 typedef bool (*MalHostMacrotaskDrain)(MalVm *vm);
 typedef bool (*MalHostIdleNotify)(MalVm *vm);
 typedef int (*MalHostExitNotify)(MalVm *vm, int default_code);
+typedef bool (*MalHostTerminationCheck)(MalVm *vm);
 
 /*
  * Host timers (the JS-visible surface of the reactor).
@@ -77,6 +78,9 @@ void mal_host_register_macrotask_drain(MalHostMacrotaskDrain drain, bool priorit
  * the macrotask drains: the host loop must not name a runtime module. */
 void mal_host_register_idle_notify(MalHostIdleNotify notify);
 void mal_host_register_exit_notify(MalHostExitNotify notify);
+/* Isolate-local stop request (worker terminate / worker process.exit): the loop
+ * returns at its next checkpoint once `check` reports true. */
+void mal_host_set_termination_check(MalHostTerminationCheck check);
 int mal_host_finish_process(MalVm *vm, int default_code);
 
 /* Free all remaining timer tasks (teardown). */

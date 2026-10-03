@@ -6,17 +6,17 @@
 #include <unistd.h>
 
 /*
- * The running fiber (isolate-local). Set by mal_fiber_load_exec right before a
- * switch-in, so it is always the fiber about to run. SMP requires _Thread_local
- * once schedulers run on OS threads (TODO.md#smp).
+ * The running fiber of the isolate pinned to this mutator thread. Set by
+ * mal_fiber_load_exec right before a switch-in, so it is always the fiber about to
+ * run. Fibers never migrate between threads, so the storage stays valid across switches.
  */
-MalFiber *mal_current_fiber = nullptr;
+MAL_ISOLATE_LOCAL MalFiber *mal_current_fiber = nullptr;
 
 /*
- * Set by the scheduler; invoked by the bootstrap when a fiber's entry returns, to
- * switch control back to the scheduler. Never returns to the bootstrap.
+ * Set by this isolate's scheduler; invoked by the bootstrap when a fiber's entry
+ * returns, to switch control back to the scheduler. Never returns to the bootstrap.
  */
-void (*mal_fiber_exit_hook)(MalFiber *finished) = nullptr;
+MAL_ISOLATE_LOCAL void (*mal_fiber_exit_hook)(MalFiber *finished) = nullptr;
 
 // Wasm reactors retain the main-fiber GC roots but cannot switch native stacks.
 #if !defined(__wasm__)

@@ -5,15 +5,19 @@
 #include <string.h>
 #include <sys/mman.h>
 #include <unistd.h>
+#if !defined(__wasi__)
+#include <pthread.h>
+#endif
 
 #include "./gc.h"
+#include "./gc_process.h"
 #include "./perf_stats.h"
 #include "./profile.h"
 #include "./shape.h"
 
 static _Atomic(u64) g_next_heap_identity = 1;
-/* One active mutator binds header initialization to its heap's major color. */
-static u8 g_allocation_mark_color;
+/* Each pinned mutator binds header initialization to its own heap's major color. */
+static MAL_ISOLATE_LOCAL u8 g_allocation_mark_color;
 
 static inline u8 mal_heap_sweep_mark_load(const MalHeapHeader *header) {
 #if defined(__wasi__)
@@ -174,12 +178,10 @@ static_assert(MAL_GC_BLOCK_SIZE != 0 && (MAL_GC_BLOCK_SIZE & (MAL_GC_BLOCK_SIZE 
 /* size -> size-class index, O(1). Slot s covers requests in (16*(s-1), 16*s]. */
 #define MAL_GC_MAX_SLOT (MAL_GC_LARGE_THRESHOLD / MAL_GC_CELL_ALIGN)
 static u8 g_size_to_class[MAL_GC_MAX_SLOT + 1];
-static bool g_tables_ready = false;
+/* Concurrent isolates may allocate first at the same time; the table is published once. */
+static _Atomic bool g_tables_ready = false;
 
-static void mal_gc_ensure_tables(void) {
-    if (g_tables_ready) {
-        return;
-    }
+static void mal_gc_build_tables(void) {
     usize ci = 0;
     for (usize slot = 0; slot <= MAL_GC_MAX_SLOT; ++slot) {
         usize needed = slot * MAL_GC_CELL_ALIGN;
@@ -191,7 +193,17 @@ static void mal_gc_ensure_tables(void) {
         }
         g_size_to_class[slot] = (u8) ci;
     }
-    g_tables_ready = true;
+    atomic_store_explicit(&g_tables_ready, true, memory_order_release);
+}
+
+static void mal_gc_ensure_tables(void) {
+    if (atomic_load_explicit(&g_tables_ready, memory_order_acquire)) return;
+#if defined(__wasi__)
+    mal_gc_build_tables();
+#else
+    static pthread_once_t once = PTHREAD_ONCE_INIT;
+    if (pthread_once(&once, mal_gc_build_tables) != 0) abort();
+#endif
 }
 
 usize mal_heap_allocation_charge(usize alloc_size) {
@@ -282,6 +294,7 @@ static MalGcChunk *mal_gc_new_chunk(MalHeap *heap) {
     }
     chunk->next = heap->chunks;
     heap->chunks = chunk;
+    mal_gc_process_charge(mmap_size);
     return chunk;
 }
 
@@ -407,6 +420,7 @@ static bool mal_gc_sweep_large(MalHeap *heap, MalGcLarge *rec, MalHeapFinalizeFn
     mal_gc_untrack_young_large(heap, rec);
     mal_gc_unlink_large(&heap->large, rec);
     finalize(header);
+    mal_gc_process_release(mal_gc_large_data_offset() + rec->size);
     free(rec);
     return false;
 }
@@ -449,6 +463,7 @@ static void *mal_gc_alloc_large(MalHeap *heap, usize size, u8 kind) {
         }
     }
     heap->bytes_allocated += size;
+    mal_gc_process_charge(offset + size);
     mal_gc_count_black(heap, nullptr, kind, size);
     mal_heap_maybe_trigger_gc(heap);
     return (u8 *) rec + offset;
@@ -578,6 +593,7 @@ void mal_heap_free(MalHeap *heap) {
     while (chunk != nullptr) {
         MalGcChunk *next = chunk->next;
         munmap(chunk->mmap_base, chunk->mmap_size);
+        mal_gc_process_release(chunk->mmap_size);
         free(chunk);
         chunk = next;
     }
@@ -585,12 +601,14 @@ void mal_heap_free(MalHeap *heap) {
     MalGcLarge *large = heap->large;
     while (large != nullptr) {
         MalGcLarge *next = large->next;
+        mal_gc_process_release(mal_gc_large_data_offset() + large->size);
         free(large);
         large = next;
     }
     large = heap->raw_large;
     while (large != nullptr) {
         MalGcLarge *next = large->next;
+        mal_gc_process_release(mal_gc_large_data_offset() + large->size);
         free(large);
         large = next;
     }
@@ -1245,6 +1263,7 @@ void gc_free_raw(MalHeap *heap, void *ptr) {
     MalGcLarge *target = (MalGcLarge *) ((u8 *) ptr - mal_gc_large_data_offset());
     if (target->kind != MAL_GC_BLOCK_RAW) abort();
     mal_gc_unlink_large(&heap->raw_large, target);
+    mal_gc_process_release(mal_gc_large_data_offset() + target->size);
     free(target);
 }
 
@@ -1290,6 +1309,7 @@ void *mal_heap_try_realloc_raw_profiled(
         MalGcLarge *grown = realloc(large, offset + new_size);
         if (grown == nullptr) return nullptr;
         grown->size = new_size;
+        mal_gc_process_charge(new_size - old_size);
         if (previous != nullptr) previous->next = grown;
         else heap->raw_large = grown;
         if (next != nullptr) next->prev = grown;

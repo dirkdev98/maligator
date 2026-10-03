@@ -19,7 +19,8 @@
 #define PERF_HOOKS_VISIBLE \
     (MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE)
 
-static i64 node_perf_hooks_origin_ns;
+// Each isolate's timeOrigin starts with its own first use.
+static MAL_ISOLATE_LOCAL i64 node_perf_hooks_origin_ns;
 
 static MalValue node_performance_now(
     MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,

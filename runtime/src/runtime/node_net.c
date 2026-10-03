@@ -76,8 +76,9 @@ typedef struct MalNodeNetSocketState {
     struct MalNodeNetSocketState *next;
 } MalNodeNetSocketState;
 
-static MalNodeNetSocketState *net_sockets;
-static bool net_roots_installed;
+// Sockets and their root registration belong to this mutator's isolate.
+static MAL_ISOLATE_LOCAL MalNodeNetSocketState *net_sockets;
+static MAL_ISOLATE_LOCAL bool net_roots_installed;
 
 static void net_set(MalVm *vm, MalValue object, const char *name, MalValue value) {
     mal_object_set(mal_value_to_object(object),
@@ -374,7 +375,8 @@ static bool net_chunk_bytes(
         return false;
     }
     if (*length > 0) {
-        memcpy(*out, array->buffer->data + array->byte_offset, *length);
+        mal_typed_array_copy_bytes(*out, false, array->buffer->data + array->byte_offset,
+                                   array->buffer->shared_memory != nullptr, *length);
     }
     return true;
 }

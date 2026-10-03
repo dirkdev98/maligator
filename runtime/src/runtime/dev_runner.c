@@ -18,6 +18,9 @@
 #include "web_readable_stream_object.h"
 #include "web_url_object.h"
 #include "web_globals.h"
+#include "personality.h"
+#include "workers.h"
+#include "worker_manifest.h"
 
 static u8 *read_file(const char *path, usize *length_out) {
     FILE *file = fopen(path, "rb");
@@ -69,7 +72,8 @@ int mal_dev_run_wires(
     int argc,
     char **argv,
     bool web_platform,
-    bool node) {
+    bool node,
+    const char *worker_manifest_path) {
     setvbuf(stdout, nullptr, _IOLBF, 0);
     if (wire_count < 1) return 2;
     MalLoadedRuntimeImage *loaded = load_runtime_image(wire_paths[0]);
@@ -93,45 +97,20 @@ int mal_dev_run_wires(
 
     MalVm vm;
     mal_vm_init(&vm, &root_program);
-    mal_host_attach(&vm);
-#if MAL_WEB_PLATFORM || MAL_NODE
-    MalObject *global_this = mal_value_to_object(vm.intrinsics[MAL_INTRINSIC_GLOBAL_THIS]);
-    if (web_platform || node) {
-        if (node) mal_host_timers_install_node(&vm, global_this);
-        else mal_host_timers_install(&vm, global_this);
+    if (mal_host_attach(&vm) == nullptr) {
+        mal_vm_free(&vm);
+        mal_development_assets_free(development_assets);
+        mal_loaded_runtime_image_free(loaded);
+        return 2;
     }
-#endif
-#if MAL_NODE
-    if (node) {
-        mal_node_immediates_install(&vm, global_this);
-        // A universal development runtime may have web support compiled in while
-        // executing a Node-only image. Install the globals according to the
-        // requested runtime personality, not the binary's compile-time surface.
-        if (!web_platform) {
-            mal_text_encoding_globals_install(&vm, global_this);
-            mal_structured_clone_global_install(&vm, global_this);
-            mal_navigator_global_install(&vm, global_this);
-        }
+    if (worker_manifest_path != nullptr && !mal_worker_manifest_register(&vm, worker_manifest_path)) {
+        mal_host_detach(&vm);
+        mal_vm_free(&vm);
+        mal_development_assets_free(development_assets);
+        mal_loaded_runtime_image_free(loaded);
+        return 2;
     }
-#else
-    (void) node;
-#endif
-#if MAL_URL
-    if (web_platform || node) {
-        mal_url_install(&vm, global_this);
-    }
-#endif
-#if MAL_WEB_PLATFORM
-    if (web_platform) {
-        mal_fetch_install(&vm, global_this);
-        mal_events_install(&vm, global_this);
-        mal_web_globals_install(&vm, global_this);
-        mal_readable_stream_install(&vm, global_this);
-        mal_writable_stream_install(&vm, global_this);
-    }
-#else
-    (void) web_platform;
-#endif
+    mal_runtime_personality_install(&vm, web_platform, node);
 
     MalHostLaunchContext launch = {
         .argc = argc,
@@ -144,6 +123,8 @@ int mal_dev_run_wires(
     mal_perf_stats_reset();
     MalCallable **callables = calloc((usize) wire_count, sizeof(MalCallable *));
     if (callables == nullptr) {
+        mal_host_detach(&vm);
+        mal_vm_free(&vm);
         mal_development_assets_free(development_assets);
         mal_loaded_runtime_image_free(loaded);
         return 2;
@@ -174,6 +155,7 @@ int mal_dev_run_wires(
     }
     mal_host_run_event_loop(&vm);
     int code = mal_host_finish_process(&vm, vm.completion.kind == MAL_COMPLETION_THROW ? 1 : 0);
+    mal_workers_shutdown(&vm);
 
     if (getenv("MAL_GC_AT_EXIT") != nullptr) {
         mal_gc_collect(&vm);
@@ -194,6 +176,7 @@ int mal_dev_run_wires(
         mal_vm_free(&vm);
     }
     free(callables);
+    mal_worker_manifest_clear();
     mal_development_assets_free(development_assets);
     mal_loaded_runtime_image_free(loaded);
     return code;

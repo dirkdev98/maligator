@@ -5,6 +5,7 @@
 
 #include "array_buffer_object.h"
 #include "builtin_promise.h"
+#include "builtin_data_view.h"
 #include "builtin_eval.h"
 #include "builtin_regexp.h"
 #include "compiler_wire.h"
@@ -13,6 +14,7 @@
 #include "heap_string.h"
 #include "intrinsics.h"
 #include "module_namespace_object.h"
+#include "microtask.h"
 #include "promise_object.h"
 #include "typed_array_object.h"
 #include "value.h"
@@ -204,12 +206,24 @@ static i32 compile_source(MalVm *vm, MalValue source, bool direct, bool caller_s
         entry = buffer->runtime_image_entry;
         goto done;
     }
-    usize len = mal_typed_array_object_byte_length(buffer);
-    const u8 *data = (const u8 *) buffer->buffer->data + buffer->byte_offset;
+    MalBufferSourceSpan span;
+    if (mal_buffer_source_span(roots[6], &span) != MAL_BUFFER_SOURCE_SPAN_OK) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_EVAL_ERROR_PROTOTYPE,
+                            "eval: compiler returned a detached byte buffer");
+        goto done;
+    }
+    // The loader copies what it keeps, so a shared buffer only needs a snapshot here.
+    byte *owned;
+    const u8 *data = (const u8 *) mal_buffer_source_span_private(&span, &owned);
+    if (span.length > 0 && data == nullptr) {
+        mal_vm_throw_allocation_error(vm);
+        goto done;
+    }
     const char *err = "ok";
     // A parse error surfaces as a compiler throw above; a load failure here means
     // the wire buffer itself is malformed, which is an internal error.
-    MalLoadedRuntimeImage *loaded = mal_runtime_image_load(data, len, &err);
+    MalLoadedRuntimeImage *loaded = mal_runtime_image_load(data, span.length, &err);
+    free(owned);
     if (loaded == nullptr) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_SYNTAX_ERROR_PROTOTYPE, err);
         goto done;
@@ -612,87 +626,99 @@ static MalValue mal_dynamic_import_promise(MalVm *vm) {
 }
 
 static MalValue mal_dynamic_import_fulfill_module(MalVm *vm, MalValue this_value, const MalValue *args,
-                                                  i32 arg_count, MalValue new_target, MalValue callee) {
-    (void) this_value;
-    (void) args;
-    (void) arg_count;
-    (void) new_target;
-    MalNativeFunctionObject *fn = mal_value_to_native_function_object(callee);
-    MalValue namespace = mal_native_function_object_get_slot(fn, 0);
-    MalValue status = mal_native_function_object_get_slot(fn, 1);
-    if (mal_value_is_int32(status)) {
-        vm->globals[mal_value_to_i32(status)] = mal_value_new_boolean(true);
+    i32 arg_count, MalValue new_target, MalValue callee) {
+    (void) vm; (void) this_value; (void) args; (void) arg_count; (void) new_target;
+    return mal_native_function_object_get_slot(mal_value_to_native_function_object(callee), 0);
+}
+
+static MalValue mal_dynamic_import_evaluate(MalVm *vm, MalValue receiver,
+    const MalValue *args, i32 argc, MalValue new_target, MalValue callee) {
+    (void) receiver; (void) args; (void) argc; (void) new_target;
+    MalNativeFunctionObject *function = mal_value_to_native_function_object(callee);
+    MalValue roots[6] = {mal_native_function_object_get_slot(function, 0),
+        mal_native_function_object_get_slot(function, 2), mal_value_new_undefined(),
+        mal_value_new_undefined(), mal_value_new_undefined(), mal_value_new_undefined()};
+    MalRootSpan span;
+    mal_gc_root(&span, roots, 6);
+    MalValue init = mal_native_function_object_get_slot(function, 1);
+    i32 cells[4];
+    for (i32 i = 0; i < 4; i++) cells[i] = mal_value_to_i32(mal_native_function_object_get_slot(function, i + 3));
+    mal_promise_create_resolving(vm, roots[0], &roots[3], &roots[4]);
+    if (cells[0] < 0) {
+        MalCompletion completion = mal_vm_call_value(vm, roots[3], mal_value_new_undefined(), &roots[1], 1);
+        if (completion.kind != MAL_COMPLETION_NORMAL) vm->completion = completion;
+    } else {
+        roots[2] = mal_module_evaluate(vm, init, cells[0], cells[1], cells[2], cells[3], -1);
+        if (vm->completion.kind == MAL_COMPLETION_NORMAL) {
+            roots[5] = mal_value_from_native_function_object(mal_native_function_object_new_with_slots(
+                &vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
+                mal_intrinsic_ascii(vm, ""), mal_dynamic_import_fulfill_module, &roots[1], 1));
+            mal_promise_perform_then(vm, roots[2], roots[5], mal_value_new_undefined(), roots[3], roots[4]);
+        }
     }
-    return namespace;
+    if (vm->completion.kind != MAL_COMPLETION_NORMAL) {
+        roots[1] = vm->completion.value;
+        vm->completion = (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = mal_value_new_undefined()};
+        mal_promise_reject(vm, mal_value_to_promise_object(roots[0]), roots[1]);
+    }
+    mal_gc_unroot(&span);
+    return mal_value_new_undefined();
 }
 
 static MalValue mal_builtin_dynamic_import(MalVm *vm, MalValue this_value, const MalValue *args,
-                                           i32 arg_count, MalValue new_target, MalValue callee) {
-    (void) this_value;
-    (void) new_target;
-    (void) callee;
-
-    MalValue promise_value = mal_dynamic_import_promise(vm);
-    MalPromiseObject *promise = mal_value_to_promise_object(promise_value);
-
-    MalValue specifier = arg_count >= 1 ? args[0] : mal_value_new_undefined();
+    i32 arg_count, MalValue new_target, MalValue callee) {
+    (void) this_value; (void) new_target; (void) callee;
+    MalValue roots[6] = {mal_dynamic_import_promise(vm), mal_value_new_undefined(),
+        mal_value_new_undefined(), mal_value_new_undefined(), mal_value_new_undefined(),
+        mal_value_new_undefined()};
+    MalRootSpan span;
+    mal_gc_root(&span, roots, 6);
     MalString *specifier_string = nullptr;
-    if (!mal_vm_to_string(vm, specifier, &specifier_string)) {
-        MalValue reason = vm->completion.value;
-        vm->completion = (MalCompletion) { .kind = MAL_COMPLETION_NORMAL, .value = mal_value_new_undefined() };
-        mal_promise_reject(vm, promise, reason);
-        return promise_value;
-    }
-
-    MalValue init_fn = arg_count >= 2 ? args[1] : mal_value_new_undefined();
-    MalValue namespace = arg_count >= 3 ? args[2] : mal_value_new_undefined();
-    i32 status_slot = arg_count >= 4 && mal_value_is_int32(args[3]) ? mal_value_to_i32(args[3]) : -1;
-    for (i32 i = 4; i + 3 < arg_count; i += 4) {
-        if (mal_value_is_string(args[i]) &&
-            mal_string_equals(specifier_string, mal_value_to_string(args[i]))) {
-            init_fn = args[i + 1];
-            namespace = args[i + 2];
-            status_slot = mal_value_is_int32(args[i + 3]) ? mal_value_to_i32(args[i + 3]) : -1;
+    if (!mal_vm_to_string(vm, arg_count > 0 ? args[0] : mal_value_new_undefined(), &specifier_string))
+        goto reject_completion;
+    /* Each target has init, namespace, status, error, record and evaluation-context cells. */
+    i32 target = 1;
+    for (i32 index = 7; index + 6 < arg_count; index += 7) {
+        if (mal_value_is_string(args[index]) &&
+            mal_string_equals(specifier_string, mal_value_to_string(args[index]))) {
+            target = index + 1;
             break;
         }
     }
-    if (!mal_value_is_callable(init_fn) && mal_value_is_undefined(namespace)) {
+    if (target + 5 >= arg_count) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "Invalid dynamic import target");
+        goto reject_completion;
+    }
+    MalValue init_fn = args[target];
+    roots[1] = args[target + 1];
+    if (!mal_value_is_callable(init_fn) && mal_value_is_undefined(roots[1])) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
             "Cannot resolve dynamic import in the compiled module graph");
-        MalValue reason = vm->completion.value;
-        vm->completion = (MalCompletion) {
-            .kind = MAL_COMPLETION_NORMAL,
-            .value = mal_value_new_undefined(),
-        };
-        mal_promise_reject(vm, promise, reason);
-        return promise_value;
+        goto reject_completion;
     }
-    if (mal_value_is_callable(init_fn) && status_slot >= 0 && !mal_value_is_truthy(vm->globals[status_slot])) {
-        MalCompletion completion = mal_vm_call_value(vm, init_fn, mal_value_new_undefined(), nullptr, 0);
-        if (completion.kind != MAL_COMPLETION_NORMAL) {
-            mal_promise_reject(vm, promise, completion.value);
-            return promise_value;
-        }
-        if (mal_value_is_promise_object(completion.value)) {
-            MalValue resolve = mal_value_new_undefined();
-            MalValue reject = mal_value_new_undefined();
-            mal_promise_create_resolving(vm, promise_value, &resolve, &reject);
-            MalValue slots[2] = { namespace, mal_value_from_i32(status_slot) };
-            MalValue on_fulfilled = mal_value_from_native_function_object(
-                mal_native_function_object_new_with_slots(
-                    &vm->heap,
-                    mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
-                    mal_intrinsic_ascii(vm, ""),
-                    mal_dynamic_import_fulfill_module,
-                    slots,
-                    2));
-            mal_promise_perform_then(vm, completion.value, on_fulfilled, reject, resolve, reject);
-            return promise_value;
-        }
-        vm->globals[status_slot] = mal_value_new_boolean(true);
-    }
-    mal_promise_fulfill(vm, promise, namespace);
-    return promise_value;
+    i32 cells[4];
+    for (i32 index = 0; index < 4; index++)
+        cells[index] = mal_value_is_int32(args[target + 2 + index])
+            ? mal_value_to_i32(args[target + 2 + index]) : -1;
+    MalValue captured[7] = {roots[0], init_fn, roots[1], mal_value_from_i32(cells[0]),
+        mal_value_from_i32(cells[1]), mal_value_from_i32(cells[2]), mal_value_from_i32(cells[3])};
+    roots[2] = mal_value_from_native_function_object(mal_native_function_object_new_with_slots(
+        &vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
+        mal_intrinsic_ascii(vm, ""), mal_dynamic_import_evaluate, captured, 7));
+    /* Evaluation starts after the current module's DFS and synchronous body have completed. */
+    mal_vm_enqueue_reaction_job(vm, roots[2], false, mal_value_new_undefined(),
+        mal_value_new_undefined(), mal_value_new_undefined());
+    MalValue result = roots[0];
+    mal_gc_unroot(&span);
+    return result;
+reject_completion:;
+    roots[1] = vm->completion.value;
+    vm->completion = (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = mal_value_new_undefined()};
+    mal_promise_reject(vm, mal_value_to_promise_object(roots[0]), roots[1]);
+    result = roots[0];
+    mal_gc_unroot(&span);
+    return result;
 }
 
 static MalValue mal_builtin_configure_deferred_namespace(
@@ -706,11 +732,12 @@ static MalValue mal_builtin_configure_deferred_namespace(
     (void) this_value;
     (void) new_target;
     (void) callee;
-    if (arg_count < 4 ||
+    if (arg_count < 6 ||
         !mal_value_is_module_namespace_object(args[0]) ||
         (!mal_value_is_callable(args[1]) && !mal_value_is_undefined(args[1])) ||
         !mal_value_is_int32(args[2]) ||
-        !mal_value_is_int32(args[3])) {
+        !mal_value_is_int32(args[3]) || !mal_value_is_int32(args[4]) ||
+        !mal_value_is_int32(args[5])) {
         mal_vm_throw_error(
             vm,
             MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
@@ -722,7 +749,7 @@ static MalValue mal_builtin_configure_deferred_namespace(
         mal_value_to_module_namespace_object(args[0]),
         args[1],
         mal_value_to_i32(args[2]),
-        mal_value_to_i32(args[3])
+        mal_value_to_i32(args[3]), mal_value_to_i32(args[4]), mal_value_to_i32(args[5])
     );
     return args[0];
 }
@@ -738,25 +765,20 @@ static MalValue mal_builtin_evaluate_module_sync(
     (void) this_value;
     (void) new_target;
     (void) callee;
-    if (arg_count < 4 ||
-        (!mal_value_is_callable(args[0]) && !mal_value_is_undefined(args[0])) ||
-        !mal_value_is_int32(args[1]) ||
-        !mal_value_is_int32(args[2])) {
-        mal_vm_throw_error(
-            vm,
-            MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
-            "Invalid synchronous module evaluation request"
-        );
-        return mal_value_new_undefined();
+    if (arg_count == 6) {
+        for (i32 index = 1; index < 6; index++) {
+            if (!mal_value_is_int32(args[index])) {
+                mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+                    "Invalid asynchronous module evaluation request");
+                return mal_value_new_undefined();
+            }
+        }
+        return mal_module_evaluate(vm, args[0], mal_value_to_i32(args[1]),
+            mal_value_to_i32(args[2]), mal_value_to_i32(args[3]),
+            mal_value_to_i32(args[4]), mal_value_to_i32(args[5]));
     }
-    if (!mal_module_evaluate_sync(
-            vm,
-            args[0],
-            mal_value_to_i32(args[1]),
-            mal_value_to_i32(args[2]),
-            mal_value_is_truthy(args[3]))) {
-        return mal_value_new_undefined();
-    }
+    mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+        "Invalid module evaluation request");
     return mal_value_new_undefined();
 }
 

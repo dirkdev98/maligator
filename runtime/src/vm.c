@@ -33,15 +33,15 @@
 #include "vm_load.h"
 #include "vm_ops.h"
 
-static u64 g_coroutine_buffer_requests = 0;
-static u64 g_coroutine_buffer_allocations = 0;
-static u64 g_coroutine_buffer_reuses = 0;
-static u64 g_coroutine_buffer_releases = 0;
-static u64 g_coroutine_buffer_pooled = 0;
-static u64 g_coroutine_buffer_dropped = 0;
-static u64 g_coroutine_buffer_peak_retained_bytes = 0;
-static u64 g_loaded_instruction_count = 0;
-static u64 g_loaded_instruction_data_count = 0;
+static MAL_ISOLATE_LOCAL u64 g_coroutine_buffer_requests = 0;
+static MAL_ISOLATE_LOCAL u64 g_coroutine_buffer_allocations = 0;
+static MAL_ISOLATE_LOCAL u64 g_coroutine_buffer_reuses = 0;
+static MAL_ISOLATE_LOCAL u64 g_coroutine_buffer_releases = 0;
+static MAL_ISOLATE_LOCAL u64 g_coroutine_buffer_pooled = 0;
+static MAL_ISOLATE_LOCAL u64 g_coroutine_buffer_dropped = 0;
+static MAL_ISOLATE_LOCAL u64 g_coroutine_buffer_peak_retained_bytes = 0;
+static MAL_ISOLATE_LOCAL u64 g_loaded_instruction_count = 0;
+static MAL_ISOLATE_LOCAL u64 g_loaded_instruction_data_count = 0;
 
 static MalShape **mal_vm_ensure_literal_shape_cache(
     MalVm *vm, i32 function_index
@@ -713,6 +713,8 @@ static void mal_vm_init_execution_state(MalVm *vm, const MalRuntimeImage *progra
     vm->fibers_head = nullptr;
     // Host context (reactor/timers) is attached by the host layer, not the engine.
     vm->host = nullptr;
+    vm->host_web_platform = false;
+    vm->host_node = false;
     vm->prepared_values = nullptr;
     vm->runtime_cleanup_count = 0;
     vm->active_job = nullptr;
@@ -769,6 +771,7 @@ static void mal_vm_init_execution_state(MalVm *vm, const MalRuntimeImage *progra
     vm->unhandled_count = 0;
     vm->unhandled_capacity = 0;
 	vm->entry_async_promise = mal_value_new_undefined();
+    vm->entry_errors_forwarded = false;
 }
 
 /** Phase 4: create language heap roots, intrinsics, module state, and the main fiber. */
@@ -946,6 +949,14 @@ bool mal_vm_register_runtime_cleanup(MalVm *vm, void (*cleanup)(MalVm *vm)) {
     return true;
 }
 
+void mal_vm_run_runtime_cleanups(MalVm *vm) {
+    mal_gc_begin_teardown(vm);
+    while (vm->runtime_cleanup_count > 0) {
+        void (*cleanup)(MalVm *vm) = vm->runtime_cleanups[--vm->runtime_cleanup_count];
+        cleanup(vm);
+    }
+}
+
 void mal_vm_free(MalVm *vm) {
     mal_gc_begin_teardown(vm);
     while (vm->prepared_values != nullptr) {
@@ -956,10 +967,7 @@ void mal_vm_free(MalVm *vm) {
         free(entry);
     }
 	mal_profile_finish(vm);
-    for (usize i = vm->runtime_cleanup_count; i > 0; i--) {
-        vm->runtime_cleanups[i - 1](vm);
-    }
-    vm->runtime_cleanup_count = 0;
+    mal_vm_run_runtime_cleanups(vm);
     // Tear down fibers. Spawned fibers own their stack + exec buffers (freed by
     // mal_fiber_destroy); the main fiber adopted vm->value_stack / vm->frames, so
     // it only gets unlinked here and its struct freed — those buffers are released
@@ -2005,6 +2013,8 @@ bool mal_vm_push_function_frame(
  * own unwinding once the throw completion propagates to it.
  */
 static bool mal_vm_unwind_to_handler(MalVm *vm, i32 target_frame_count) {
+    // A terminating isolate's throw is uncatchable; no catch or finally runs.
+    if (mal_gc_terminating()) return false;
     for (i32 frame_index = vm->frame_count - 1; frame_index >= target_frame_count; frame_index--) {
         MalVmFrame *frame = &vm->frames[frame_index];
         // The instruction pointer was already advanced past the faulting
@@ -3137,6 +3147,7 @@ static void mal_vm_run_until_frame_count(
                     registers = frame->registers;
                     instruction_pointer = frame->instruction_pointer;
                     MAL_PERF_COUNT(interpreter_state_reloads);
+                    if (mal_gc_poll_termination(vm)) break;
                 }
                 continue;
             }
@@ -3160,6 +3171,7 @@ static void mal_vm_run_until_frame_count(
                     registers = frame->registers;
                     instruction_pointer = frame->instruction_pointer;
                     MAL_PERF_COUNT(interpreter_state_reloads);
+                    if (mal_gc_poll_termination(vm)) break;
                 }
                 continue;
             }
@@ -3480,26 +3492,30 @@ void mal_vm_run(MalVm *vm, MalCallable *callable) {
     // drain happens at a baseline frame count so reaction handlers re-enter the
     // interpreter without nesting on a partial activation.
     vm->completion = (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = mal_value_new_undefined()};
+    if (vm->entry_errors_forwarded && mal_value_is_promise_object(vm->entry_async_promise)) {
+        mal_value_to_promise_object(vm->entry_async_promise)->is_handled = true;
+    }
     mal_vm_drain_microtasks(vm);
 
     if (script_completion.kind == MAL_COMPLETION_THROW) {
         vm->completion = script_completion;
-        mal_vm_report_uncaught(vm);
+        if (!vm->entry_errors_forwarded) mal_vm_report_uncaught(vm);
         return;
     }
 
-    // An async entry (a top-level-await module) records its result promise at
-    // ASYNC_START. If that promise rejected, the module failed to evaluate;
-    // surface it as a throw so the process exits non-zero (the checkpoint
-    // already printed it). Stray unhandled rejections from *other* promises do
-    // not fail the run.
+    mal_vm_check_entry_evaluation(vm);
+}
+
+bool mal_vm_check_entry_evaluation(MalVm *vm) {
     if (mal_value_is_promise_object(vm->entry_async_promise)) {
         MalPromiseObject *result = mal_value_to_promise_object(vm->entry_async_promise);
         if (result->state == MAL_PROMISE_REJECTED) {
             vm->completion =
                 (MalCompletion) {.kind = MAL_COMPLETION_THROW, .value = result->result};
+            return false;
         }
     }
+    return true;
 }
 
 void mal_vm_resume_generator(MalVm *vm, MalGeneratorObject *generator, MalValue sent_value, i32 resume_mode) {

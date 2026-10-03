@@ -564,10 +564,11 @@ typedef struct MalPerfStats {
     u64 array_final_deoptimized;
 } MalPerfStats;
 
-extern MalPerfStats mal_perf_stats;
-
 #if MAL_PERF_STATS
-extern bool mal_perf_stats_enabled;
+/* Counters describe the isolate on the current mutator thread; the exit report
+ * prints the copy of the thread that exits the process. */
+extern MAL_ISOLATE_LOCAL MalPerfStats mal_perf_stats;
+extern MAL_ISOLATE_LOCAL bool mal_perf_stats_enabled;
 void mal_perf_stats_init(void);
 void mal_perf_stats_reset(void);
 void mal_perf_intrinsic_name(const byte *name, usize length);
@@ -603,6 +604,7 @@ void mal_perf_array_element_write(const void *array, u64 value);
         } \
     } while (0)
 #else
+extern MalPerfStats mal_perf_stats;
 #define mal_perf_stats_enabled false
 
 static inline void mal_perf_stats_init(void) {}

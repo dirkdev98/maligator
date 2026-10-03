@@ -2,17 +2,28 @@
 
 #include "./defaults.h"
 #include "object.h"
+#include "shared_memory.h"
 
 /**
  * ArrayBuffer / SharedArrayBuffer backing store.
  *
  * No GC: `data` is a plain malloc allocation released only by detach/transfer
  * or the GC sweep, both through mal_array_buffer_object_release_store.
+ * An ordinary store charges its allocation_capacity to the process budget
+ * (gc_process.h) once; the charge moves with the allocation (move_store,
+ * structured-clone transfer) and is released only where it is freed. Shared
+ * backings are charged by shared_memory.c instead.
  */
 typedef struct MalArrayBufferObject {
     MalObject object;
     MalObjectStorage object_storage;
+    // For a shared buffer: the retained process-global backing, and `data`
+    // aliases its stable bytes. Null for every ordinary ArrayBuffer.
+    MalSharedMemory *shared_memory;
     byte *data;
+    // Shared buffers: this wrapper's last observed published length. Another
+    // agent may grow the backing; the length only increases, so a stale value is
+    // a permitted Unordered read and refresh_shared_length catches it up.
     u32 byte_length;
     // For resizable/growable buffers; equals byte_length for fixed buffers.
     u32 max_byte_length;
@@ -82,7 +93,9 @@ MalArrayBufferObject *mal_array_buffer_object_new_sensitive(
 
 /**
  * Adopt a malloc-compatible allocation as a fixed-length backing store;
- * ownership transfers, including on the paths that release it. `data` may be
+ * ownership transfers, including on the paths that release it. The store
+ * charges `byte_length` to the process budget here, so `data` must not already
+ * carry a charge. `data` may be
  * null only when `byte_length` is zero. `sensitive` selects the
  * scrub-before-release contract; pass false for ordinary bytes.
  */
@@ -90,11 +103,22 @@ MalArrayBufferObject *mal_array_buffer_object_adopt(
     MalHeap *heap, MalObject *prototype, byte *data, u32 byte_length, bool sensitive
 );
 
+/**
+ * Wrap an existing shared backing in a fresh SharedArrayBuffer for this heap,
+ * taking one new retain. Each heap holds its own wrapper; wrappers never cross.
+ */
+MalArrayBufferObject *mal_array_buffer_object_wrap_shared(
+    MalHeap *heap, MalObject *prototype, MalSharedMemory *memory);
+
+/** Catch a shared wrapper up with the backing's published length; returns it. */
+u32 mal_array_buffer_object_refresh_shared_length(MalArrayBufferObject *buffer);
+
 u32 mal_array_buffer_object_byte_length(const MalArrayBufferObject *buffer);
 bool mal_array_buffer_object_is_detached(const MalArrayBufferObject *buffer);
 
 /**
  * Release the backing store, scrubbing it first when the buffer is sensitive.
+ * A shared buffer drops its retain instead; the last retain frees the bytes.
  * The single free path: detach/transfer and the GC sweep both come through
  * here, so neither can release a secret-bearing store unscrubbed. Idempotent,
  * and does not itself mark the buffer detached.
@@ -118,8 +142,9 @@ bool mal_array_buffer_object_resize(MalArrayBufferObject *buffer, u32 new_byte_l
  * still mapped, after any scrub and immediately before free(), so a driver can
  * prove a sensitive store was cleared on the exact path that released it — an
  * assertion that is impossible to make once the block is back with the
- * allocator. Null (the default) disables it. Not thread-safe; set it before the
- * isolate runs.
+ * allocator. Null (the default) disables it. Process-wide and published
+ * atomically, so it runs on whichever isolate thread releases a store and must
+ * be thread-safe itself. Shared backings never reach it.
  */
 typedef void (*MalArrayBufferReleaseObserver)(
     const MalArrayBufferObject *buffer, const byte *data, u32 capacity

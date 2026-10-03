@@ -18,8 +18,9 @@
 
 #define MAL_ASYNC_GENERATOR_REQUEST_POOL_LIMIT 4096
 
-static u64 g_request_allocations = 0;
-static u64 g_request_reuses = 0;
+// Diagnostic counters describe the isolate on the current mutator thread.
+static MAL_ISOLATE_LOCAL u64 g_request_allocations = 0;
+static MAL_ISOLATE_LOCAL u64 g_request_reuses = 0;
 
 u64 mal_async_generator_request_allocation_count(void) {
     return g_request_allocations;

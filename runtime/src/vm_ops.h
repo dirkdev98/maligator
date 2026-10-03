@@ -2254,6 +2254,9 @@ static inline MalValue mal_vm_exact_numeric_typed_array_load(
     if (buffer == nullptr || buffer->detached) {
         return MAL_VALUE_UNDEFINED;
     }
+    if (buffer->shared_memory != nullptr) {
+        return mal_typed_array_object_shared_numeric_load(array, index);
+    }
     u32 length;
     if (array->length_tracking) {
         if (array->byte_offset > buffer->byte_length) {

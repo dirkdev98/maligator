@@ -1,5 +1,6 @@
 #include "./gc.h"
 #include "./gc_cpu_linux.h"
+#include "./gc_process.h"
 
 #include <errno.h>
 #include <signal.h>
@@ -13,6 +14,7 @@
 #if defined(__linux__)
 #include <sched.h>
 #endif
+#include "./executor.h"
 #endif
 
 #include "./array_buffer_object.h"
@@ -66,41 +68,84 @@
 #include "temporal_rs/ZonedDateTime.h"
 #endif
 
-bool mal_gc_marking_active = false;
+MAL_ISOLATE_LOCAL bool mal_gc_marking_active = false;
 /* New cells take the active color and OLD bit through mark and sweep, so a
  * post-snapshot allocation cannot be reclaimed by the in-flight major. */
-bool mal_gc_black_alloc = false;
-/* Bytes promoted by allocation during a major since process start. */
-usize mal_gc_black_alloc_bytes = 0;
+MAL_ISOLATE_LOCAL bool mal_gc_black_alloc = false;
+/* Bytes promoted by allocation during this isolate's majors. */
+MAL_ISOLATE_LOCAL usize mal_gc_black_alloc_bytes = 0;
 
 #if defined(__wasi__)
 bool mal_gc_poll = false;
 #else
 static_assert(ATOMIC_BOOL_LOCK_FREE == 2, "GC poll must be signal-safe and lock-free");
-_Atomic bool mal_gc_poll = false;
+MAL_ISOLATE_LOCAL _Atomic bool mal_gc_poll = false;
 #endif
 
-MalRootFrame *mal_root_frame_head = nullptr;
-MalRootSpan *mal_root_span_head = nullptr;
+MalGcPollTarget *mal_gc_current_poll_target(void) {
+    return (MalGcPollTarget *) &mal_gc_poll;
+}
+
+#if defined(__wasi__)
+bool mal_gc_termination = false;
+#else
+MAL_ISOLATE_LOCAL _Atomic bool mal_gc_termination = false;
+#endif
+
+MalGcTerminationTarget *mal_gc_current_termination_target(void) {
+    return (MalGcTerminationTarget *) &mal_gc_termination;
+}
+
+void mal_gc_request_termination(MalGcTerminationTarget *termination, MalGcPollTarget *poll) {
+    if (termination == nullptr) return;
+#if defined(__wasi__)
+    *(bool *) termination = true;
+#else
+    // Release pairs with the mutator's poll: the flag is visible before the poll is.
+    atomic_store_explicit((_Atomic bool *) termination, true, memory_order_release);
+#endif
+    mal_gc_request_safepoint(poll);
+}
+
+bool mal_gc_poll_termination(MalVm *vm) {
+    if (!mal_gc_termination) return false;
+    if (vm->completion.kind != MAL_COMPLETION_THROW) {
+        vm->completion = (MalCompletion) { .kind = MAL_COMPLETION_THROW, .value = MAL_VALUE_UNDEFINED };
+    }
+    return true;
+}
+
+void mal_gc_request_safepoint(MalGcPollTarget *target) {
+    if (target == nullptr) return;
+#if defined(__wasi__)
+    *(bool *) target = true;
+#else
+    atomic_store_explicit((_Atomic bool *) target, true, memory_order_relaxed);
+#endif
+}
+
+MAL_ISOLATE_LOCAL MalRootFrame *mal_root_frame_head = nullptr;
+MAL_ISOLATE_LOCAL MalRootSpan *mal_root_span_head = nullptr;
 
 /* Preemption hook (docs/decisions/03-wave-0-host-architecture.md). Null in a plain
  * run; the scheduler installs one so a safepoint can yield the running fiber when its reduction
  * budget is exhausted. Called from mal_gc_safepoint, i.e. only where a context
  * switch is safe (roots precise, no un-rooted native frame). */
-void (*mal_gc_preempt_hook)(MalVm *vm) = nullptr;
+MAL_ISOLATE_LOCAL void (*mal_gc_preempt_hook)(MalVm *vm) = nullptr;
 
 /* External root sources: how the host/runtime layers contribute GC roots to the
  * engine without the engine knowing their types (e.g. pending setTimeout
  * callbacks). Each is invoked during root scanning and calls mal_gc_mark_value on
- * its live values. Process-global registrations persist across sequential VMs, so
- * each callback must tolerate an isolate without its host subsystem. SMP requires
- * a per-isolate registry once multiple isolates run at the same time. */
-#define MAL_GC_MAX_ROOT_SOURCES 8
-static struct {
+ * its live values. Registrations belong to the isolate on the registering mutator
+ * and persist across sequential VMs on that thread, so each callback must tolerate
+ * an isolate without its host subsystem. */
+#define MAL_GC_MAX_ROOT_SOURCES 16
+typedef struct MalGcRootSource {
     MalGcRootSourceFn fn;
     void *data;
-} g_root_sources[MAL_GC_MAX_ROOT_SOURCES];
-static i32 g_root_source_count = 0;
+} MalGcRootSource;
+static MAL_ISOLATE_LOCAL MalGcRootSource g_root_sources[MAL_GC_MAX_ROOT_SOURCES];
+static MAL_ISOLATE_LOCAL i32 g_root_source_count = 0;
 
 void mal_gc_register_root_source(MalGcRootSourceFn fn, void *data) {
     for (i32 i = 0; i < g_root_source_count; ++i) {
@@ -115,21 +160,31 @@ void mal_gc_register_root_source(MalGcRootSourceFn fn, void *data) {
     g_root_source_count++;
 }
 
-/* Per-type finalizers/tracers registered by the host/runtime for types they own.
- * Process-global (installed once), like the root sources above. */
+/* Per-type finalizers/tracers name code for a heap type, not isolate state, so the
+ * registry is process-wide. Every registration of a type installs the same function;
+ * relaxed atomics let another isolate's helper read a slot while a mutator installs it. */
+#if defined(__wasi__)
 static MalGcFinalizer g_type_finalizers[MAL_HEAP_TYPE_COUNT];
+static MalGcTracer g_type_tracers[MAL_HEAP_TYPE_COUNT];
+#define mal_gc_type_hook_load(slot) (slot)
+#define mal_gc_type_hook_store(slot, fn) ((slot) = (fn))
+#else
+static _Atomic(MalGcFinalizer) g_type_finalizers[MAL_HEAP_TYPE_COUNT];
+static _Atomic(MalGcTracer) g_type_tracers[MAL_HEAP_TYPE_COUNT];
+#define mal_gc_type_hook_load(slot) atomic_load_explicit(&(slot), memory_order_relaxed)
+#define mal_gc_type_hook_store(slot, fn) \
+    atomic_store_explicit(&(slot), (fn), memory_order_relaxed)
+#endif
 
 void mal_gc_register_finalizer(MalHeapType type, MalGcFinalizer fn) {
     if ((usize) type < (usize) MAL_HEAP_TYPE_COUNT) {
-        g_type_finalizers[type] = fn;
+        mal_gc_type_hook_store(g_type_finalizers[type], fn);
     }
 }
 
-static MalGcTracer g_type_tracers[MAL_HEAP_TYPE_COUNT];
-
 void mal_gc_register_tracer(MalHeapType type, MalGcTracer fn) {
     if ((usize) type < (usize) MAL_HEAP_TYPE_COUNT) {
-        g_type_tracers[type] = fn;
+        mal_gc_type_hook_store(g_type_tracers[type], fn);
     }
 }
 
@@ -169,14 +224,18 @@ static usize mal_gc_native_worker_limit(
     return spare < MAL_GC_WORKER_COUNT ? spare : MAL_GC_WORKER_COUNT;
 }
 
+/* One stride of a published batch. Each dispatch submits every slot as a bounded
+ * executor job on the process-shared GC helper pool, or traces it inline when the
+ * pool cannot accept it. The slot's queue is private until the batch is acknowledged. */
 typedef struct MalGcWorker {
     MalGcState *gc;
-    pthread_t thread;
     MalHeapHeader **discovered;
     usize discovered_count;
     usize discovered_capacity;
     usize index;
-    u64 observed_batch;
+    // Test overlap hooks observe helper threads only, never the owner tracing inline.
+    bool owner_inline;
+    bool helper_granted;
     u64 batch_cpu_ns;
     u64 batch_snapshot_discoveries;
     u64 batch_drain_traces;
@@ -219,6 +278,8 @@ static const char *const mal_gc_pause_reason_names[MAL_GC_PAUSE_REASON_COUNT] = 
 
 struct MalGcState {
     MalVm *vm;
+    MalGcProcessParticipant *process;
+    bool process_pressure;
     // Grey worklist (explicit, no recursion): shaded-but-not-yet-traced cells.
     MalHeapHeader **grey;
     usize grey_count;
@@ -234,20 +295,21 @@ struct MalGcState {
     usize *batch_edge_offsets;
     usize *batch_edge_counts;
     usize batch_edge_meta_capacity;
+    MalExecutorClient helpers;
+    // The owning mutator's poll flag; helpers request safepoints only through it.
+    MalGcPollTarget *poll_target;
     pthread_mutex_t worker_mutex;
-    pthread_cond_t worker_ready;
     pthread_cond_t worker_done;
     MalGcWorker workers[MAL_GC_WORKER_COUNT];
     usize worker_limit;
+    // Batch stride: slots admitted at first use, independent of helper thread count.
     usize workers_created;
     usize workers_pending;
     usize worker_batch_count;
-    u64 worker_batch_epoch;
     bool worker_batch_active;
     bool worker_batch_concurrent;
     bool worker_batch_drain;
     bool worker_sync_initialized;
-    bool worker_stop;
 #endif
 
     // WeakSet members are cleaned only after the WeakMap ephemeron fixpoint.
@@ -399,22 +461,29 @@ static MalGcState *g_gc = nullptr;
 static _Thread_local MalVm *g_gc_vm = nullptr;
 static _Thread_local MalGcState *g_gc = nullptr;
 #endif
-/* Captured for the atexit stats printer (which has no vm handle). Points at the
- * live vm->gc while the vm exists, and at g_gc_stats_snapshot after teardown so the
- * exit report survives an explicit mal_vm_free. The printer reads only scalar stat
- * fields, so the snapshot's stale buffer pointers are never dereferenced. */
+/* Process stats reporting (atexit printer, MAL_GC_CONTROL SIGUSR1) belongs to one
+ * stats owner: the first stats-enabled isolate, or a later one after the previous
+ * owner's teardown. Points at the owner's live vm->gc, and at g_gc_stats_snapshot
+ * after teardown so the exit report survives an explicit mal_vm_free. The printer
+ * reads only scalar stat fields, so the snapshot's stale buffer pointers are never
+ * dereferenced. Ownership changes under g_gc_stats_mutex. */
 static MalGcState g_gc_stats_snapshot;
 static MalGcState *g_gc_stats_state = nullptr;
 static volatile sig_atomic_t g_gc_stats_snapshot_requested = 0;
 static bool g_gc_stats_atexit_registered = false;
+static MAL_ISOLATE_LOCAL bool g_gc_stats_owner = false;
 #if !defined(__wasi__)
+static pthread_mutex_t g_gc_stats_mutex = PTHREAD_MUTEX_INITIALIZER;
 static bool g_gc_stats_signal_installed = false;
 static struct sigaction g_gc_stats_previous_signal_action;
+/* The process signal targets the stats owner's mutator, whichever thread receives it. */
+static MalGcPollTarget *_Atomic g_gc_stats_poll_target = nullptr;
 
 static void mal_gc_request_stats_snapshot(int signal_number) {
     (void) signal_number;
     g_gc_stats_snapshot_requested = 1;
-    mal_gc_poll = true;
+    mal_gc_request_safepoint(
+        atomic_load_explicit(&g_gc_stats_poll_target, memory_order_relaxed));
 }
 
 #endif
@@ -774,6 +843,59 @@ static void mal_gc_print_stats_at_exit(void) {
     mal_gc_print_stats_now();
 }
 
+static void mal_gc_stats_claim(MalGcState *g) {
+#if !defined(__wasi__)
+    pthread_mutex_lock(&g_gc_stats_mutex);
+#endif
+    if (g_gc_stats_state == nullptr || g_gc_stats_state == &g_gc_stats_snapshot) {
+        g_gc_stats_state = g;
+        g_gc_stats_owner = true;
+        if (!g_gc_stats_atexit_registered) {
+            if (atexit(mal_gc_print_stats_at_exit) != 0) abort();
+            g_gc_stats_atexit_registered = true;
+        }
+#if !defined(__wasi__)
+        atomic_store_explicit(&g_gc_stats_poll_target, g->poll_target, memory_order_relaxed);
+        if (getenv("MAL_GC_CONTROL") != nullptr && !g_gc_stats_signal_installed) {
+            struct sigaction action = {0};
+            action.sa_handler = mal_gc_request_stats_snapshot;
+            sigemptyset(&action.sa_mask);
+            action.sa_flags = SA_RESTART;
+            if (sigaction(SIGUSR1, &action, &g_gc_stats_previous_signal_action) == 0) {
+                g_gc_stats_signal_installed = true;
+            }
+        }
+#endif
+    }
+#if !defined(__wasi__)
+    pthread_mutex_unlock(&g_gc_stats_mutex);
+#endif
+}
+
+static void mal_gc_stats_release(MalVm *vm, MalGcState *g) {
+    if (!g_gc_stats_owner) return;
+#if !defined(__wasi__)
+    pthread_mutex_lock(&g_gc_stats_mutex);
+#endif
+    if (g_gc_stats_state == g) {
+        if (vm->heap.bytes_allocated > g->allocated_bytes) {
+            g->allocated_bytes = vm->heap.bytes_allocated;
+        }
+        g_gc_stats_snapshot = *g;
+        g_gc_stats_state = &g_gc_stats_snapshot;
+    }
+    g_gc_stats_owner = false;
+#if !defined(__wasi__)
+    atomic_store_explicit(&g_gc_stats_poll_target, nullptr, memory_order_relaxed);
+    if (g_gc_stats_signal_installed) {
+        sigaction(SIGUSR1, &g_gc_stats_previous_signal_action, nullptr);
+        g_gc_stats_signal_installed = false;
+        g_gc_stats_snapshot_requested = 0;
+    }
+    pthread_mutex_unlock(&g_gc_stats_mutex);
+#endif
+}
+
 u64 mal_gc_allocated_bytes(MalVm *vm) {
     return vm->heap.bytes_allocated;
 }
@@ -806,13 +928,14 @@ void mal_gc_init(MalVm *vm) {
     if (g == nullptr) abort();
     vm->gc = g;
     g->vm = vm;
+    g->process = mal_gc_process_register(mal_gc_current_poll_target());
 #if !defined(__wasi__)
     g->worker_limit = mal_gc_native_worker_limit(
         &g->worker_quota_status, &g->worker_quota_complete);
+    g->poll_target = mal_gc_current_poll_target();
 #endif
     g_gc = g;
     g_gc_vm = vm;
-    g_gc_stats_state = g;
     mal_gc_marking_active = false;
     mal_gc_black_alloc = false;
     mal_gc_poll = false;
@@ -839,21 +962,7 @@ void mal_gc_init(MalVm *vm) {
 
     if (getenv("MAL_GC_STATS") != nullptr) {
         g->stats_enabled = true;
-        if (!g_gc_stats_atexit_registered) {
-            if (atexit(mal_gc_print_stats_at_exit) != 0) abort();
-            g_gc_stats_atexit_registered = true;
-        }
-#if !defined(__wasi__)
-        if (getenv("MAL_GC_CONTROL") != nullptr) {
-            struct sigaction action = {0};
-            action.sa_handler = mal_gc_request_stats_snapshot;
-            sigemptyset(&action.sa_mask);
-            action.sa_flags = SA_RESTART;
-            if (sigaction(SIGUSR1, &action, &g_gc_stats_previous_signal_action) == 0) {
-                g_gc_stats_signal_installed = true;
-            }
-        }
-#endif
+        mal_gc_stats_claim(g);
     }
 
     const char *major_every = getenv("MAL_GC_MAJOR_EVERY");
@@ -890,6 +999,8 @@ void mal_gc_begin_teardown(MalVm *vm) {
 #if !defined(__wasi__)
     mal_gc_workers_stop(g);
 #endif
+    mal_gc_process_unregister(g->process);
+    g->process = nullptr;
     if (g->stats_enabled) g->heap_usage_before_teardown = mal_heap_usage(&vm->heap);
     // Teardown invalidates published roots, so abandon any unfinished snapshot.
     g->phase = MAL_GC_PHASE_IDLE;
@@ -900,6 +1011,14 @@ void mal_gc_begin_teardown(MalVm *vm) {
     mal_gc_black_alloc = false;
     mal_gc_poll = false;
     vm->heap.next_gc_at = (usize) -1;
+}
+
+void mal_gc_set_mutator_busy(MalVm *vm, bool busy) {
+    if (vm->gc != nullptr) mal_gc_process_set_busy(vm->gc->process, busy);
+}
+
+void mal_gc_set_mutator_waker(MalVm *vm, void (*wake)(void *), void *data) {
+    if (vm->gc != nullptr) mal_gc_process_set_waker(vm->gc->process, wake, data);
 }
 
 // ---------------------------------------------------------------------------
@@ -920,8 +1039,8 @@ void mal_gc_begin_teardown(MalVm *vm) {
 /* Type of the cell currently being re-traced by the verifier (diagnostic only):
  * lets a freed-target abort name the OWNER whose edge was missed, not just the
  * swept target. -1 while scanning roots (no owning cell). */
-static i32 g_gc_verify_source = -1;
-static bool g_gc_verifying = false;
+static MAL_ISOLATE_LOCAL i32 g_gc_verify_source = -1;
+static MAL_ISOLATE_LOCAL bool g_gc_verifying = false;
 
 static void mal_gc_shade(MalHeapHeader *cell) {
     if (cell == nullptr || cell->storage == MAL_HEAP_STORAGE_IMMORTAL) {
@@ -1212,8 +1331,8 @@ static void mal_gc_trace_cell(MalHeapHeader *cell) {
             // too).
             MalEnv *env = (MalEnv *) cell;
 #if !defined(__wasi__)
-            if (g_trace_worker != nullptr && g_gc->worker_batch_concurrent &&
-                mal_gc_test_trace_env_hook != nullptr) {
+            if (g_trace_worker != nullptr && !g_trace_worker->owner_inline &&
+                g_gc->worker_batch_concurrent && mal_gc_test_trace_env_hook != nullptr) {
                 mal_gc_test_trace_env_hook(env);
             }
 #endif
@@ -1265,9 +1384,8 @@ static void mal_gc_trace_cell(MalHeapHeader *cell) {
 
     // Host/runtime-registered per-type tracers (e.g. the fetch Headers name/value
     // list) — marks edges the engine has no type knowledge of.
-    if (g_type_tracers[cell->type] != nullptr) {
-        g_type_tracers[cell->type](cell);
-    }
+    MalGcTracer tracer = mal_gc_type_hook_load(g_type_tracers[cell->type]);
+    if (tracer != nullptr) tracer(cell);
 
     switch (cell->type) {
         case MAL_HEAP_ARGUMENTS_OBJECT: {
@@ -1823,9 +1941,8 @@ static void mal_gc_finalize_cell(MalHeapHeader *cell) {
     // Host/runtime-registered per-type finalizers (e.g. fetch Response/Request body
     // buffers) — frees their owned memory without an engine->runtime type dependency.
     // Runs before the common object cleanup below.
-    if (g_type_finalizers[cell->type] != nullptr) {
-        g_type_finalizers[cell->type](cell);
-    }
+    MalGcFinalizer finalizer = mal_gc_type_hook_load(g_type_finalizers[cell->type]);
+    if (finalizer != nullptr) finalizer(cell);
 
     // MalObject-based cell: free its type-specific owned memory, then the common
     // overflow table and inline-slots buffer. Idempotent (null after free).
@@ -2097,7 +2214,7 @@ static void mal_gc_verify(MalVm *vm) {
 }
 
 static bool mal_gc_worker_can_trace(MalHeapHeader *cell) {
-    if (g_type_tracers[cell->type] != nullptr) return false;
+    if (mal_gc_type_hook_load(g_type_tracers[cell->type]) != nullptr) return false;
     switch (cell->type) {
         case MAL_HEAP_STRING:
         case MAL_HEAP_SYMBOL:
@@ -2120,7 +2237,7 @@ static bool mal_gc_worker_can_trace(MalHeapHeader *cell) {
 }
 
 static bool mal_gc_worker_can_trace_during_mutation(MalHeapHeader *cell) {
-    if (g_type_tracers[cell->type] != nullptr) return false;
+    if (mal_gc_type_hook_load(g_type_tracers[cell->type]) != nullptr) return false;
     return cell->type == MAL_HEAP_SYMBOL || cell->type == MAL_HEAP_ASYNC_CONTEXT ||
         cell->type == MAL_HEAP_ENV;
 }
@@ -2132,7 +2249,7 @@ static bool mal_gc_worker_can_trace_during_mutation(MalHeapHeader *cell) {
 
 static bool mal_gc_snapshot_edge_count(MalHeapHeader *cell, usize *count) {
     if (cell->type != MAL_HEAP_OBJECT && cell->type != MAL_HEAP_ARRAY_OBJECT) return false;
-    if (g_type_tracers[cell->type] != nullptr) return false;
+    if (mal_gc_type_hook_load(g_type_tracers[cell->type]) != nullptr) return false;
     MalObject *object = (MalObject *) cell;
     if (object->shape == nullptr || mal_object_overflow(object) != nullptr ||
         object->shape->inline_count > MAL_GC_SNAPSHOT_INLINE_LIMIT ||
@@ -2189,116 +2306,133 @@ static void mal_gc_snapshot_edges(MalGcState *g, MalHeapHeader *cell, usize inde
     g->batch_edge_counts[index] = g->batch_edges_count - offset;
 }
 
-static void *mal_gc_worker_main(void *argument) {
-    MalGcWorker *worker = argument;
+// Bounds one drain slice so a parked major cannot monopolize a shared helper thread;
+// untraced discoveries merge into the grey queue for the next dispatch.
+#define MAL_GC_HELPER_DRAIN_QUANTUM 8192
+
+// Runs with g_gc, g_gc_vm and g_trace_worker bound to this slot's isolate.
+static void mal_gc_helper_trace_slice(MalGcWorker *worker) {
+    MalGcState *g = worker->gc;
+    usize count = g->worker_batch_count;
+    MalHeapHeader **batch = g->batch;
+    struct timespec cpu_start;
+    if (g->stats_enabled && clock_gettime(CLOCK_THREAD_CPUTIME_ID, &cpu_start) != 0) abort();
+    for (usize i = worker->index; i < count; i += g->workers_created) {
+        if (g->worker_batch_concurrent && g->batch_edge_counts[i] != SIZE_MAX) {
+            if (mal_gc_test_trace_snapshot_hook != nullptr && !worker->owner_inline) {
+                mal_gc_test_trace_snapshot_hook(batch[i]);
+            }
+            usize before = worker->discovered_count;
+            usize end = g->batch_edge_offsets[i] + g->batch_edge_counts[i];
+            for (usize edge = g->batch_edge_offsets[i]; edge < end; ++edge) {
+                mal_gc_mark_value(g->batch_edges[edge]);
+            }
+            worker->batch_snapshot_discoveries += worker->discovered_count - before;
+        } else {
+            mal_gc_trace_cell(batch[i]);
+        }
+    }
+    if (g->worker_batch_drain) {
+        usize deferred = 0;
+        while (worker->discovered_count > deferred &&
+               worker->batch_drain_traces < MAL_GC_HELPER_DRAIN_QUANTUM) {
+            usize last = worker->discovered_count - 1;
+            MalHeapHeader *cell = worker->discovered[last];
+            if (mal_gc_worker_can_trace(cell)) {
+                worker->discovered_count = last;
+                mal_gc_trace_cell(cell);
+                worker->batch_drain_traces++;
+            } else {
+                worker->discovered[last] = worker->discovered[deferred];
+                worker->discovered[deferred++] = cell;
+            }
+        }
+    }
+    if (g->stats_enabled) {
+        struct timespec cpu_end;
+        if (clock_gettime(CLOCK_THREAD_CPUTIME_ID, &cpu_end) != 0) abort();
+        i64 elapsed = (i64) (cpu_end.tv_sec - cpu_start.tv_sec) * 1000000000
+            + (i64) (cpu_end.tv_nsec - cpu_start.tv_nsec);
+        worker->batch_cpu_ns = (u64) elapsed;
+    }
+}
+
+// Acknowledges a slot. The last acknowledgement of a concurrent batch asks the owning
+// mutator to merge at its next safepoint; it never touches this thread's poll flag.
+static void mal_gc_helper_acknowledge(MalGcWorker *worker, bool traced) {
+    MalGcState *g = worker->gc;
+    if (worker->helper_granted) {
+        worker->helper_granted = false;
+        mal_gc_process_helper_release();
+    }
+    pthread_mutex_lock(&g->worker_mutex);
+    if (--g->workers_pending == 0) {
+        if (traced && g->worker_batch_concurrent) mal_gc_request_safepoint(g->poll_target);
+        pthread_cond_signal(&g->worker_done);
+    }
+    pthread_mutex_unlock(&g->worker_mutex);
+}
+
+// Collector jobs carry their isolate's collector context explicitly and may only read
+// the published batch, its snapshot edges, and the worker-safe trace classes.
+static void mal_gc_helper_run(void *data) {
+    MalGcWorker *worker = data;
     MalGcState *g = worker->gc;
     g_gc = g;
     g_gc_vm = g->vm;
     g_trace_worker = worker;
-    pthread_mutex_lock(&g->worker_mutex);
-    for (;;) {
-        while (!g->worker_stop && worker->observed_batch == g->worker_batch_epoch) {
-            pthread_cond_wait(&g->worker_ready, &g->worker_mutex);
-        }
-        if (g->worker_stop) break;
-        worker->observed_batch = g->worker_batch_epoch;
-        usize count = g->worker_batch_count;
-        MalHeapHeader **batch = g->batch;
-        bool drain = g->worker_batch_drain;
-        pthread_mutex_unlock(&g->worker_mutex);
-        struct timespec cpu_start;
-        if (g->stats_enabled && clock_gettime(CLOCK_THREAD_CPUTIME_ID, &cpu_start) != 0) abort();
-        for (usize i = worker->index; i < count; i += g->workers_created) {
-            if (g->worker_batch_concurrent && g->batch_edge_counts[i] != SIZE_MAX) {
-                if (mal_gc_test_trace_snapshot_hook != nullptr) {
-                    mal_gc_test_trace_snapshot_hook(batch[i]);
-                }
-                usize before = worker->discovered_count;
-                usize end = g->batch_edge_offsets[i] + g->batch_edge_counts[i];
-                for (usize edge = g->batch_edge_offsets[i]; edge < end; ++edge) {
-                    mal_gc_mark_value(g->batch_edges[edge]);
-                }
-                worker->batch_snapshot_discoveries += worker->discovered_count - before;
-            } else {
-                mal_gc_trace_cell(batch[i]);
-            }
-        }
-        if (drain) {
-            usize deferred = 0;
-            while (worker->discovered_count > deferred) {
-                usize last = worker->discovered_count - 1;
-                MalHeapHeader *cell = worker->discovered[last];
-                if (mal_gc_worker_can_trace(cell)) {
-                    worker->discovered_count = last;
-                    mal_gc_trace_cell(cell);
-                    worker->batch_drain_traces++;
-                } else {
-                    worker->discovered[last] = worker->discovered[deferred];
-                    worker->discovered[deferred++] = cell;
-                }
-            }
-        }
-        if (g->stats_enabled) {
-            struct timespec cpu_end;
-            if (clock_gettime(CLOCK_THREAD_CPUTIME_ID, &cpu_end) != 0) abort();
-            i64 elapsed = (i64) (cpu_end.tv_sec - cpu_start.tv_sec) * 1000000000
-                + (i64) (cpu_end.tv_nsec - cpu_start.tv_nsec);
-            worker->batch_cpu_ns = (u64) elapsed;
-        }
-        pthread_mutex_lock(&g->worker_mutex);
-        if (--g->workers_pending == 0) {
-            if (g->worker_batch_concurrent) mal_gc_poll = true;
-            pthread_cond_signal(&g->worker_done);
-        }
-    }
-    pthread_mutex_unlock(&g->worker_mutex);
+    mal_gc_helper_trace_slice(worker);
     g_trace_worker = nullptr;
     g_gc_vm = nullptr;
     g_gc = nullptr;
-    return nullptr;
+    mal_gc_helper_acknowledge(worker, true);
+}
+
+// Teardown discards queued slices; the abandoned batch is never merged.
+static void mal_gc_helper_discard(void *data) {
+    mal_gc_helper_acknowledge(data, false);
+}
+
+// The owning mutator traces a slot the pool could not take or had not started yet,
+// keeping the same private-queue merge contract as a helper.
+static void mal_gc_helper_run_inline(MalGcWorker *worker) {
+    if (g_gc != worker->gc || g_trace_worker != nullptr) abort();
+    g_trace_worker = worker;
+    worker->owner_inline = true;
+    mal_gc_helper_trace_slice(worker);
+    worker->owner_inline = false;
+    g_trace_worker = nullptr;
+    mal_gc_helper_acknowledge(worker, true);
 }
 
 static bool mal_gc_workers_start(MalGcState *g) {
     if (g->worker_sync_initialized) return g->workers_created > 0;
     if (g->worker_limit == 0) abort();
     if (pthread_mutex_init(&g->worker_mutex, nullptr) != 0 ||
-        pthread_cond_init(&g->worker_ready, nullptr) != 0 ||
         pthread_cond_init(&g->worker_done, nullptr) != 0) {
         fprintf(stderr, "[gc] failed to initialize native worker synchronization\n");
         abort();
     }
     g->worker_sync_initialized = true;
-    sigset_t worker_blocked;
-    sigset_t previous_mask;
-    sigemptyset(&worker_blocked);
-    sigaddset(&worker_blocked, SIGUSR1);
-    sigaddset(&worker_blocked, SIGPROF);
-    sigaddset(&worker_blocked, SIGINT);
-    sigaddset(&worker_blocked, SIGTERM);
-    int mask_result = pthread_sigmask(SIG_BLOCK, &worker_blocked, &previous_mask);
-    if (mask_result != 0) {
-        fprintf(stderr, "[gc] failed to mask signals during worker startup (%d)\n", mask_result);
-        abort();
-    }
     for (usize i = 0; i < g->worker_limit; ++i) {
         MalGcWorker *worker = &g->workers[i];
         worker->gc = g;
         worker->index = i;
-        int result = mal_gc_test_worker_start_failure_hook != nullptr &&
-            mal_gc_test_worker_start_failure_hook(i)
-            ? EAGAIN : pthread_create(&worker->thread, nullptr, mal_gc_worker_main, worker);
-        if (result != 0) {
+        if (mal_gc_test_worker_start_failure_hook != nullptr &&
+            mal_gc_test_worker_start_failure_hook(i)) {
             fprintf(stderr, "[gc] native worker start failed (%d); using %zu workers\n",
-                result, g->workers_created);
+                EAGAIN, g->workers_created);
             g->worker_limit = g->workers_created;
             break;
         }
         g->workers_created++;
     }
-    mask_result = pthread_sigmask(SIG_SETMASK, &previous_mask, nullptr);
-    if (mask_result != 0) {
-        fprintf(stderr, "[gc] failed to restore mutator signal mask (%d)\n", mask_result);
-        abort();
+    // Each dispatch has at most one queued job per slot, so slots bound the queue.
+    if (g->workers_created > 0 && !mal_executor_client_init(&g->helpers, MAL_EXECUTOR_GC,
+            g->workers_created, g->workers_created)) {
+        fprintf(stderr, "[gc] native worker pool unavailable; using 0 workers\n");
+        g->worker_limit = 0;
+        g->workers_created = 0;
     }
     if (g->workers_created > 0) mal_profile_mark_worker_cpu_possible();
     return g->workers_created > 0;
@@ -2306,26 +2440,20 @@ static bool mal_gc_workers_start(MalGcState *g) {
 
 static void mal_gc_workers_stop(MalGcState *g) {
     if (!g->worker_sync_initialized) return;
-    pthread_mutex_lock(&g->worker_mutex);
-    g->worker_stop = true;
-    pthread_cond_broadcast(&g->worker_ready);
-    pthread_mutex_unlock(&g->worker_mutex);
     if (mal_gc_test_before_worker_join_hook != nullptr) {
         mal_gc_test_before_worker_join_hook();
     }
-    for (usize i = 0; i < g->workers_created; ++i) {
-        pthread_join(g->workers[i].thread, nullptr);
-    }
+    // Discards queued slices and waits only for this isolate's running ones.
+    mal_executor_client_free(&g->helpers);
     g->workers_created = 0;
 }
 
 static void mal_gc_workers_start_batch(MalGcState *g, usize count,
         bool concurrent, bool drain) {
-    mal_gc_workers_start(g);
-    if (g->workers_created == 0) abort();
+    if (!mal_gc_workers_start(g)) abort();
     if (concurrent && drain) abort();
-    pthread_mutex_lock(&g->worker_mutex);
     if (g->worker_batch_active) abort();
+    // No slot of this isolate is outstanding, so these writes are published by submit.
     g->worker_batch_count = count;
     g->worker_batch_concurrent = concurrent;
     g->worker_batch_drain = drain;
@@ -2334,11 +2462,19 @@ static void mal_gc_workers_start_batch(MalGcState *g, usize count,
     for (usize i = 0; i < g->workers_created; ++i) {
         g->workers[i].batch_snapshot_discoveries = 0;
         g->workers[i].batch_drain_traces = 0;
+        g->workers[i].batch_cpu_ns = 0;
     }
     g->worker_batch_active = true;
-    g->worker_batch_epoch++;
-    pthread_cond_broadcast(&g->worker_ready);
-    pthread_mutex_unlock(&g->worker_mutex);
+    for (usize i = 0; i < g->workers_created; ++i) {
+        MalGcWorker *worker = &g->workers[i];
+        // Pool exhaustion must still progress: the owner traces the slot itself.
+        worker->helper_granted = mal_gc_process_helper_acquire();
+        if ((!worker->helper_granted && mal_gc_test_worker_limit_hook == nullptr) ||
+            !mal_executor_submit(&g->helpers, mal_gc_helper_run, mal_gc_helper_discard,
+                worker, 0, 0)) {
+            mal_gc_helper_run_inline(worker);
+        }
+    }
 }
 
 static void mal_gc_grey_reserve(MalGcState *g, usize required) {
@@ -2360,6 +2496,16 @@ static void mal_gc_grey_reserve(MalGcState *g, usize required) {
 static bool mal_gc_workers_collect_batch(MalGcState *g, bool wait) {
     if (!g->worker_batch_active) return true;
     u64 wait_start = g->stats_enabled && wait ? mal_monotonic_now_ns() : 0;
+    if (wait) {
+        // A blocked owner traces slices no helper has started, newest first, so a
+        // saturated shared pool cannot stall it while started or oldest slices stay
+        // on helpers.
+        for (usize i = g->workers_created; i > 0; --i) {
+            if (mal_executor_cancel(&g->helpers, &g->workers[i - 1])) {
+                mal_gc_helper_run_inline(&g->workers[i - 1]);
+            }
+        }
+    }
     pthread_mutex_lock(&g->worker_mutex);
     if (wait) {
         while (g->workers_pending != 0) {
@@ -3259,11 +3405,14 @@ static usize mal_gc_mark_budget(MalVm *vm) {
     if (budget < 4096) {
         budget = 4096; // floor: always make real progress per gated safepoint
     }
+    if (g_gc->process_pressure && budget <= SIZE_MAX / 2) budget *= 2;
     return budget;
 }
 
 static void mal_gc_incremental_safepoint(MalVm *vm) {
     if (g_gc_vm != vm) abort();
+    bool pressure = mal_gc_process_take_pressure(g_gc->process);
+    if (pressure) g_gc->process_pressure = true;
 
     // Stress collection completes at each selected safepoint, preserving the
     // diagnostic's ability to expose a missing root at that exact boundary.
@@ -3290,20 +3439,21 @@ static void mal_gc_incremental_safepoint(MalVm *vm) {
 #endif
         u64 start_ns = mal_gc_pause_begin(vm, true);
         MalGcPauseReason reason = mal_gc_cycle_advance(vm, mal_gc_mark_budget(vm));
+        if (g_gc->phase == MAL_GC_PHASE_IDLE) g_gc->process_pressure = false;
         mal_gc_pause_end(vm, true, reason, start_ns);
         return;
     }
 
-    if (!mal_gc_poll) {
+    if (!mal_gc_poll && !pressure) {
         return;
     }
     mal_gc_poll = false;
-    if (vm->heap.bytes_allocated < vm->heap.next_gc_at) {
+    if (!pressure && vm->heap.bytes_allocated < vm->heap.next_gc_at) {
         return; // polled for preemption only; nothing owed
     }
 
     // A collection is due. Decide minor vs. major by the generational cadence.
-    bool major = (g_gc->collection_index % g_gc->major_every) == 0;
+    bool major = pressure || (g_gc->collection_index % g_gc->major_every) == 0;
     if (!major) {
         // Minor: STW-inline, exactly as today (short by construction).
         g_gc->collection_index++;
@@ -3328,7 +3478,15 @@ static void mal_gc_incremental_safepoint(MalVm *vm) {
     mal_gc_pause_end(vm, true, MAL_GC_PAUSE_MAJOR_SLICE, start_ns);
 }
 
+static void gc_safepoint_step(MalVm *vm);
+
 void mal_gc_safepoint(MalVm *vm) {
+    gc_safepoint_step(vm);
+    // Every path through the step may consume the poll; termination must stay observable.
+    if (mal_gc_termination) mal_gc_poll = true;
+}
+
+static void gc_safepoint_step(MalVm *vm) {
     // Only safe to collect when no native builtin is active: its C-local scratch
     // is not enumerable as a root, so collecting inside one could free values it
     // still holds. Compiled frames are fine (they publish root frames); all other
@@ -3337,7 +3495,7 @@ void mal_gc_safepoint(MalVm *vm) {
 		return;
 	}
 	mal_profile_safepoint(vm);
-    if (g_gc_stats_snapshot_requested != 0) {
+    if (g_gc_stats_owner && g_gc_stats_snapshot_requested != 0) {
         g_gc_stats_snapshot_requested = 0;
         mal_gc_print_stats_now();
     }
@@ -3382,6 +3540,8 @@ void mal_gc_state_free(MalVm *vm) {
     if (g == nullptr) {
         return;
     }
+    mal_gc_process_unregister(g->process);
+    g->process = nullptr;
     free(g->grey);
     free(g->batch);
 #if !defined(__wasi__)
@@ -3389,11 +3549,12 @@ void mal_gc_state_free(MalVm *vm) {
     free(g->batch_edge_offsets);
     free(g->batch_edge_counts);
     if (g->worker_sync_initialized) {
+        // Idempotent after begin_teardown; required when teardown skipped it.
+        mal_executor_client_free(&g->helpers);
         for (usize i = 0; i < MAL_GC_WORKER_COUNT; ++i) {
             free(g->workers[i].discovered);
         }
         pthread_cond_destroy(&g->worker_done);
-        pthread_cond_destroy(&g->worker_ready);
         pthread_mutex_destroy(&g->worker_mutex);
     }
 #endif
@@ -3406,20 +3567,7 @@ void mal_gc_state_free(MalVm *vm) {
     // Snapshot the stats before freeing so the atexit printer (MAL_GC_STATS) still
     // reports after an explicit teardown; the snapshot's buffer pointers are stale
     // but the printer touches only scalar counters.
-    if (g_gc_stats_state == g) {
-        if (vm->heap.bytes_allocated > g->allocated_bytes) {
-            g->allocated_bytes = vm->heap.bytes_allocated;
-        }
-        g_gc_stats_snapshot = *g;
-        g_gc_stats_state = &g_gc_stats_snapshot;
-    }
-#if !defined(__wasi__)
-    if (g_gc_stats_signal_installed) {
-        sigaction(SIGUSR1, &g_gc_stats_previous_signal_action, nullptr);
-        g_gc_stats_signal_installed = false;
-        g_gc_stats_snapshot_requested = 0;
-    }
-#endif
+    mal_gc_stats_release(vm, g);
     free(g);
     vm->gc = nullptr;
     if (g_gc == g) {

@@ -35,10 +35,11 @@ enum {
     MAL_PROMISE_REJECT_SLOT_RESOLVE_FN = 1,
 };
 
-static u64 g_direct_capabilities = 0;
-static u64 g_direct_fallback_pairs = 0;
-static u64 g_direct_intrinsic_creations = 0;
-static u64 g_direct_async_results = 0;
+// Diagnostic counters describe the isolate on the current mutator thread.
+static MAL_ISOLATE_LOCAL u64 g_direct_capabilities = 0;
+static MAL_ISOLATE_LOCAL u64 g_direct_fallback_pairs = 0;
+static MAL_ISOLATE_LOCAL u64 g_direct_intrinsic_creations = 0;
+static MAL_ISOLATE_LOCAL u64 g_direct_async_results = 0;
 
 u64 mal_promise_direct_capability_count(void) {
     return g_direct_capabilities;

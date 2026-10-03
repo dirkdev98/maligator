@@ -24,10 +24,11 @@ typedef struct MalNodeImmediate {
     struct MalNodeImmediate *next;
 } MalNodeImmediate;
 
-static MalNodeImmediate *node_immediates;
-static MalNodeImmediate *node_immediates_tail;
-static i64 node_immediate_next_id = 1;
-static bool node_immediate_roots_installed;
+// The immediate queue and its root registration belong to this mutator's isolate.
+static MAL_ISOLATE_LOCAL MalNodeImmediate *node_immediates;
+static MAL_ISOLATE_LOCAL MalNodeImmediate *node_immediates_tail;
+static MAL_ISOLATE_LOCAL i64 node_immediate_next_id = 1;
+static MAL_ISOLATE_LOCAL bool node_immediate_roots_installed;
 
 static void node_immediate_unlink(MalNodeImmediate *immediate) {
     if (immediate->previous == nullptr) node_immediates = immediate->next;

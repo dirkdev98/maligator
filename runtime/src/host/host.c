@@ -11,6 +11,10 @@ static bool mal_host_wake(void *data) {
     return mal_reactor_wake(data);
 }
 
+static void mal_host_gc_wake(void *data) {
+    mal_reactor_wake(data);
+}
+
 static void mal_host_wake_drain(void *data) {
     (void) mal_host_drain_posted(data);
 }
@@ -62,7 +66,7 @@ void mal_host_free(MalHost *host) {
     }
     // Before the reactor goes: a POSIX handler still bridging into it would wake
     // freed memory on the next Ctrl-C.
-    mal_host_signal_reset();
+    mal_host_signal_reset(&host->reactor);
     mal_reactor_set_waker(&host->reactor, (MalWaker) {0});
     mal_argon2_free(&host->argon2);
     mal_blocking_work_free(&host->blocking_work);
@@ -82,6 +86,7 @@ MalHost *mal_host_attach(MalVm *vm) {
         return nullptr;
     }
     vm->host = host;
+    mal_gc_set_mutator_waker(vm, mal_host_gc_wake, &host->reactor);
     return host;
 }
 
@@ -90,6 +95,7 @@ void mal_host_detach(MalVm *vm) {
     if (host == nullptr) {
         return;
     }
+    mal_vm_run_runtime_cleanups(vm);
     mal_host_free(host);
     free(host);
     vm->host = nullptr;

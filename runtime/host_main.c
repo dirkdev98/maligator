@@ -20,18 +20,22 @@
 #include "web_readable_stream_object.h"
 #include "web_url_object.h"
 #include "web_globals.h"
+#include "personality.h"
+#include "workers.h"
+#include "worker_manifest.h"
 
 // Host entry: run the compiled program's synchronous phase, then drive the event
 // loop (setTimeout callbacks + pending I/O, interleaved with microtasks) until the
 // isolate is idle. This is the entry a real host program / the Lambda bootstrap
 // uses, as opposed to test262_main which only runs the synchronous body.
 extern const MalRuntimeImage mal_runtime_image;
+extern void mal_register_compiled_worker_entries(void) __attribute__((weak));
 
 #if MAL_DEVELOPMENT_API
 static const char development_wire_command[] = "--maligator-internal-run-wire";
 static const char development_wire_assets_command[] = "--maligator-internal-run-wire-assets";
 
-static int run_development_wire(int argc, char **argv, bool has_assets) {
+static int run_development_wire(int argc, char **argv, bool has_assets, const char *worker_manifest_path) {
     if (argc < 6 || strlen(argv[2]) != 1 ||
         argv[2][0] < '0' || argv[2][0] > '3') {
         fprintf(stderr, "invalid internal development wire invocation\n");
@@ -59,19 +63,26 @@ static int run_development_wire(int argc, char **argv, bool has_assets) {
         has_assets ? argv[4] : nullptr,
         argv[entry_offset],
         program_argc, program_argv,
-        (surface_mask & 1) != 0, (surface_mask & 2) != 0);
+        (surface_mask & 1) != 0, (surface_mask & 2) != 0, worker_manifest_path);
     free(program_argv);
     return code;
 }
 #endif
 
 int main(int argc, char **argv) {
+    const char *worker_manifest_path = nullptr;
+    if (argc >= 3 && strcmp(argv[1], "--maligator-internal-workers") == 0) {
+        worker_manifest_path = argv[2];
+        argv[2] = argv[0];
+        argv += 2;
+        argc -= 2;
+    }
 #if MAL_DEVELOPMENT_API
     if (argc >= 2 && strcmp(argv[1], development_wire_command) == 0) {
-        return run_development_wire(argc, argv, false);
+        return run_development_wire(argc, argv, false, worker_manifest_path);
     }
     if (argc >= 2 && strcmp(argv[1], development_wire_assets_command) == 0) {
-        return run_development_wire(argc, argv, true);
+        return run_development_wire(argc, argv, true, worker_manifest_path);
     }
 #endif
     // Line-buffer stdout: a server logs then blocks in the event loop indefinitely,
@@ -81,43 +92,21 @@ int main(int argc, char **argv) {
 
     MalVm vm;
     mal_vm_init(&vm, &mal_runtime_image);
+    if (mal_register_compiled_worker_entries != nullptr) mal_register_compiled_worker_entries();
 
     // Attach the host context (reactor + timers) — the platform layer the engine
     // runs on. Then install host globals (not in the shared intrinsics, so only
     // host programs see them): setTimeout / clearTimeout on globalThis.
-    mal_host_attach(&vm);
-#if MAL_WEB_PLATFORM || MAL_NODE
-    MalObject *global_this = mal_value_to_object(vm.intrinsics[MAL_INTRINSIC_GLOBAL_THIS]);
-#if MAL_NODE
-    mal_host_timers_install_node(&vm, global_this);
-#else
-    mal_host_timers_install(&vm, global_this);
-#endif
-#endif
-#if MAL_NODE
-    mal_node_immediates_install(&vm, global_this);
-#if !MAL_WEB_PLATFORM
-    // Node owns these globals too. The broader web installer below supplies
-    // them when that surface is present; otherwise install them here.
-    mal_text_encoding_globals_install(&vm, global_this);
-    mal_structured_clone_global_install(&vm, global_this);
-    mal_navigator_global_install(&vm, global_this);
-#endif
-#endif
-#if MAL_URL
-    mal_url_install(&vm, global_this);            // URL / URLSearchParams (ada)
-#endif
-#if MAL_WEB_PLATFORM
-    // The broader WinterTC web personality (surface.webPlatform). URL is installed
-    // separately because Node also owns that global. `Mal.serve` rides in with
-    // mal_fetch_install (web_fetch.c). The reactor (mal_host_attach) is a separate
-    // axis and stays: a non-web host program still gets the event loop.
-    mal_fetch_install(&vm, global_this);          // fetch / Response / Headers / Mal.serve
-    mal_events_install(&vm, global_this);         // EventTarget / Event
-    mal_web_globals_install(&vm, global_this);    // TextEncoder / TextDecoder / …
-    mal_readable_stream_install(&vm, global_this); // ReadableStream default mode
-    mal_writable_stream_install(&vm, global_this); // WritableStream default mode
-#endif
+    if (mal_host_attach(&vm) == nullptr) {
+        mal_vm_free(&vm);
+        return 2;
+    }
+    if (worker_manifest_path != nullptr && !mal_worker_manifest_register(&vm, worker_manifest_path)) {
+        mal_host_detach(&vm);
+        mal_vm_free(&vm);
+        return 2;
+    }
+    mal_runtime_personality_install(&vm, MAL_WEB_PLATFORM != 0, MAL_NODE != 0);
 
     // Fill the reached host built-in / `process` global slots before execution
     // (a no-op for a program that imports none). After host attach so an installer
@@ -137,6 +126,8 @@ int main(int argc, char **argv) {
 
 	int code = mal_host_finish_process(&vm, vm.completion.kind == MAL_COMPLETION_THROW ? 1 : 0);
 	mal_profile_finish(&vm);
+    mal_workers_shutdown(&vm);
+    mal_worker_manifest_clear();
 
     if (getenv("MAL_GC_AT_EXIT") != nullptr) {
         mal_gc_collect(&vm);

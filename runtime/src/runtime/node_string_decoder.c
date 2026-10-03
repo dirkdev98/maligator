@@ -151,15 +151,22 @@ static usize sd_pending_unpack(u32 packed, byte bytes[3]) {
     return count;
 }
 
+/* Shared input decodes from a private snapshot returned in *owned (caller frees). */
 static bool sd_byte_view(
-    MalVm *vm, MalValue value, const byte **data, usize *length
+    MalVm *vm, MalValue value, const byte **data, usize *length, byte **owned
 ) {
+    *owned = nullptr;
     if (!mal_value_is_typed_array_object(value) && !mal_value_is_data_view_object(value)) {
         goto invalid;
     }
     MalBufferSourceSpan span;
     if (mal_buffer_source_span(value, &span) != MAL_BUFFER_SOURCE_SPAN_OK) goto invalid;
-    *data = span.data == nullptr ? (const byte *) "" : span.data;
+    const byte *bytes = mal_buffer_source_span_private(&span, owned);
+    if (span.length > 0 && bytes == nullptr) {
+        mal_vm_throw_allocation_error(vm);
+        return false;
+    }
+    *data = bytes == nullptr ? (const byte *) "" : bytes;
     *length = span.length;
     return true;
 
@@ -510,10 +517,13 @@ static MalValue sd_write(
     }
     const byte *data;
     usize length;
-    if (argc < 1 || !sd_byte_view(vm, args[0], &data, &length)) {
+    byte *owned = nullptr;
+    if (argc < 1 || !sd_byte_view(vm, args[0], &data, &length, &owned)) {
         return mal_value_new_undefined();
     }
-    return sd_decode(vm, &state, data, length, false);
+    MalValue result = sd_decode(vm, &state, data, length, false);
+    free(owned);
+    return result;
 }
 
 static MalValue sd_end(
@@ -527,11 +537,13 @@ static MalValue sd_end(
     }
     const byte *data = (const byte *) "";
     usize length = 0;
+    byte *owned = nullptr;
     if (argc > 0 && !mal_value_is_undefined(args[0]) &&
-        !sd_byte_view(vm, args[0], &data, &length)) {
+        !sd_byte_view(vm, args[0], &data, &length, &owned)) {
         return mal_value_new_undefined();
     }
     MalValue result = sd_decode(vm, &state, data, length, true);
+    free(owned);
     if (vm->completion.kind != MAL_COMPLETION_THROW) {
         sd_write_pending(vm, &state, 0);
     }

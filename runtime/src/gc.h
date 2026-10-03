@@ -25,19 +25,52 @@ typedef struct MalGcState MalGcState;
 usize mal_gc_worker_limit(MalVm *vm);
 #endif
 
-/* Set during an incremental major mark cycle (init-mark → remark). */
-extern bool mal_gc_marking_active;
-/* Fresh cells remain live while an incremental sweep is in flight. */
-extern bool mal_gc_black_alloc;
-/* Bytes promoted immediately by allocation during a major cycle. */
-extern usize mal_gc_black_alloc_bytes;
+/* The flags, root chains, and hooks below belong to the isolate pinned to the current
+ * mutator thread. Collector helpers never read or write their own copies. */
 
-/* Workers can request a mutator safepoint after publishing a completed batch. */
+/* Set during an incremental major mark cycle (init-mark → remark). */
+extern MAL_ISOLATE_LOCAL bool mal_gc_marking_active;
+/* Fresh cells remain live while an incremental sweep is in flight. */
+extern MAL_ISOLATE_LOCAL bool mal_gc_black_alloc;
+/* Bytes promoted immediately by allocation during this isolate's major cycles. */
+extern MAL_ISOLATE_LOCAL usize mal_gc_black_alloc_bytes;
+
+/* The mutator's safepoint request. Helpers and process signal handlers set the owning
+ * mutator's flag through mal_gc_request_safepoint, never through their own copy. */
 #if defined(__wasi__)
 extern bool mal_gc_poll;
 #else
-extern _Atomic bool mal_gc_poll;
+extern MAL_ISOLATE_LOCAL _Atomic bool mal_gc_poll;
 #endif
+
+typedef struct MalGcPollTarget MalGcPollTarget;
+/* Async-signal-safe and thread-safe: request a safepoint on the isolate owning `target`. */
+void mal_gc_request_safepoint(MalGcPollTarget *target);
+/* The current mutator's target; stable for the isolate's lifetime on its pinned thread. */
+MalGcPollTarget *mal_gc_current_poll_target(void);
+
+void mal_gc_set_mutator_busy(MalVm *vm, bool busy);
+void mal_gc_set_mutator_waker(MalVm *vm, void (*wake)(void *), void *data);
+
+/* Sticky cooperative termination of the owning isolate (worker terminate/process.exit).
+ * Never cleared while the isolate runs. A safepoint re-arms mal_gc_poll while it is set,
+ * so every later poll observes it; loop/call poll sites then raise an uncatchable throw
+ * through mal_gc_poll_termination. */
+#if defined(__wasi__)
+extern bool mal_gc_termination;
+#else
+extern MAL_ISOLATE_LOCAL _Atomic bool mal_gc_termination;
+#endif
+typedef struct MalGcTerminationTarget MalGcTerminationTarget;
+MalGcTerminationTarget *mal_gc_current_termination_target(void);
+/* Thread-safe: set the sticky flag, then request a safepoint on the same isolate. */
+void mal_gc_request_termination(MalGcTerminationTarget *termination, MalGcPollTarget *poll);
+static inline bool mal_gc_terminating(void) {
+    return mal_gc_termination;
+}
+/* At a JS poll site after mal_gc_safepoint: when terminating, leave a throw completion
+ * and return true so the caller routes to its throw path. Catch entries refuse it. */
+bool mal_gc_poll_termination(MalVm *vm);
 
 /* Retain an overwritten heap edge until an incremental major reaches remark. */
 void mal_gc_satb_record(MalValue old_value);
@@ -61,7 +94,7 @@ void mal_gc_safepoint(MalVm *vm);
  * run; the scheduler installs one so a safepoint can yield the running fiber (a context switch is
  * safe exactly where a collection is — same gate). Called at the end of
  * mal_gc_safepoint. */
-extern void (*mal_gc_preempt_hook)(MalVm *vm);
+extern MAL_ISOLATE_LOCAL void (*mal_gc_preempt_hook)(MalVm *vm);
 
 /* Mark a value (and, transitively, everything it reaches) as a live root. The
  * public marking API for external root sources — the host/runtime layers call it
@@ -218,7 +251,7 @@ typedef struct MalRootFrame {
     MalEnv *env;
 } MalRootFrame;
 
-extern MalRootFrame *mal_root_frame_head;
+extern MAL_ISOLATE_LOCAL MalRootFrame *mal_root_frame_head;
 
 /*
  * Root span: makes a transient C buffer of live MalValues
@@ -231,7 +264,7 @@ typedef struct MalRootSpan {
     i32 count;
 } MalRootSpan;
 
-extern MalRootSpan *mal_root_span_head;
+extern MAL_ISOLATE_LOCAL MalRootSpan *mal_root_span_head;
 
 static inline void mal_gc_root(MalRootSpan *span, MalValue *slots, i32 count) {
     span->slots = slots;

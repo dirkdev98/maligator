@@ -17,6 +17,16 @@
  * remains safe when the parent entered with one or more standard fds closed.
  */
 
+/*
+ * fork() for a child that will exec; available without MAL_NODE. The calling
+ * thread blocks every signal across the fork, so no runtime handler runs in the
+ * child, and restores its own mask afterwards. The child returns 0 with every
+ * catchable signal at SIG_DFL and an empty mask whatever the spawning thread
+ * blocked, which is the state the exec'd program inherits. Returns the child PID
+ * in the parent, or -1 with errno set.
+ */
+int mal_proc_fork(void);
+
 /* How one of the child's standard streams is connected. */
 typedef enum MalProcStdio {
     MAL_PROC_STDIO_PIPE = 0, /* parent captures (out/err) or feeds (in) via a pipe */

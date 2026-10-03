@@ -1,6 +1,7 @@
 #include "builtin_data_view.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 
 #include "array_buffer_object.h"
 #include "builtin_bigint.h"
@@ -42,6 +43,14 @@ u32 mal_data_view_object_byte_length(const MalDataViewObject *view) {
     return mal_data_view_current_length(view);
 }
 
+bool mal_data_view_object_length_tracking(const MalDataViewObject *view) {
+    return view->length_tracking;
+}
+
+bool mal_data_view_object_is_out_of_bounds(const MalDataViewObject *view) {
+    return mal_data_view_is_out_of_bounds(view);
+}
+
 MalDataViewObject *mal_data_view_object_new(
     MalHeap *heap, MalObject *prototype, MalArrayBufferObject *buffer,
     u32 byte_offset, u32 byte_length, bool length_tracking) {
@@ -67,7 +76,7 @@ MalBufferSourceSpanStatus mal_buffer_source_span(
         if (buffer->detached) {
             return MAL_BUFFER_SOURCE_SPAN_DETACHED;
         }
-        byte_length = buffer->byte_length;
+        byte_length = mal_array_buffer_object_byte_length(buffer);
     } else if (mal_value_is_typed_array_object(value)) {
         MalTypedArrayObject *array = mal_value_to_typed_array_object(value);
         buffer = array->buffer;
@@ -98,7 +107,32 @@ MalBufferSourceSpanStatus mal_buffer_source_span(
     out->data = byte_length == 0 ? nullptr : buffer->data + byte_offset;
     out->length = byte_length;
     out->resizable = buffer->resizable;
+    out->shared = buffer->shared_memory != nullptr;
     return MAL_BUFFER_SOURCE_SPAN_OK;
+}
+
+void mal_buffer_source_span_read(
+    const MalBufferSourceSpan *span, usize offset, byte *dst, usize length) {
+    if (length == 0) return;
+    mal_typed_array_copy_bytes(dst, false, span->data + offset, span->shared, length);
+}
+
+void mal_buffer_source_span_write(
+    const MalBufferSourceSpan *span, usize offset, const byte *src, usize length) {
+    if (length == 0) return;
+    mal_typed_array_copy_bytes(span->data + offset, span->shared, src, false, length);
+}
+
+const byte *mal_buffer_source_span_private(
+    const MalBufferSourceSpan *span, byte **owned) {
+    *owned = nullptr;
+    if (span->length == 0) return nullptr;
+    if (!span->shared) return span->data;
+    byte *copy = malloc(span->length);
+    if (copy == nullptr) return nullptr;
+    mal_shared_bytes_read(copy, span->data, span->length);
+    *owned = copy;
+    return copy;
 }
 
 typedef enum MalDataViewType {
@@ -138,6 +172,9 @@ static bool mal_data_view_extent(
     if (view->buffer->detached) {
         *byte_length = 0;
         return false;
+    }
+    if (view->buffer->shared_memory != nullptr && view->buffer->resizable) {
+        mal_array_buffer_object_refresh_shared_length(view->buffer);
     }
     if (view->length_tracking) {
         if (view->byte_offset > view->buffer->byte_length) {
@@ -350,6 +387,13 @@ static MalValue mal_data_view_get(MalVm *vm, MalValue this_value, const MalValue
     }
 
     const byte *at = view->buffer->data + view->byte_offset + index;
+    // DataView accesses are byte-granular Unordered events on shared memory:
+    // read them race-free into a private window, then decode as usual.
+    byte shared_window[8];
+    if (view->buffer->shared_memory != nullptr) {
+        mal_shared_bytes_read(shared_window, at, size);
+        at = shared_window;
+    }
 
     switch (type) {
         case DV_INT8:
@@ -469,7 +513,10 @@ static MalValue mal_data_view_set(MalVm *vm, MalValue this_value, const MalValue
         return mal_value_new_undefined();
     }
 
-    byte *at = view->buffer->data + view->byte_offset + index;
+    byte *target = view->buffer->data + view->byte_offset + index;
+    byte shared_window[8];
+    bool shared = view->buffer->shared_memory != nullptr;
+    byte *at = shared ? shared_window : target;
     switch (size) {
         case 1:
             mal_scalar_store_native_u8(at, (u8) bits);
@@ -483,6 +530,9 @@ static MalValue mal_data_view_set(MalVm *vm, MalValue this_value, const MalValue
         case 8:
             mal_data_view_store_u64(at, bits, little_endian);
             break;
+    }
+    if (shared) {
+        mal_shared_bytes_write(target, shared_window, size);
     }
     return mal_value_new_undefined();
 }

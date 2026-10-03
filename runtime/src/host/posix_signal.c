@@ -140,7 +140,9 @@ bool mal_host_signal_listen(MalReactor *reactor, MalHostSignal signal) {
     if (reactor == nullptr || signal < 0 || signal >= MAL_HOST_SIGNAL_COUNT) {
         return false;
     }
-    atomic_store_explicit(&mal_host_signal_reactor, reactor, memory_order_release);
+    MalReactor *owner = nullptr;
+    if (!atomic_compare_exchange_strong_explicit(&mal_host_signal_reactor, &owner, reactor,
+            memory_order_acq_rel, memory_order_acquire) && owner != reactor) return false;
     if (mal_host_signal_installed[signal]) {
         return true;
     }
@@ -161,8 +163,9 @@ bool mal_host_signal_listen(MalReactor *reactor, MalHostSignal signal) {
     return true;
 }
 
-void mal_host_signal_unlisten(MalHostSignal signal) {
-    if (signal < 0 || signal >= MAL_HOST_SIGNAL_COUNT
+void mal_host_signal_unlisten(MalReactor *reactor, MalHostSignal signal) {
+    if (reactor != atomic_load_explicit(&mal_host_signal_reactor, memory_order_acquire)
+        || signal < 0 || signal >= MAL_HOST_SIGNAL_COUNT
         || !mal_host_signal_installed[signal]) {
         return;
     }
@@ -172,8 +175,9 @@ void mal_host_signal_unlisten(MalHostSignal signal) {
     atomic_store_explicit(&mal_host_signal_pending[signal], 0, memory_order_release);
 }
 
-bool mal_host_signal_take(MalHostSignal signal) {
-    if (signal < 0 || signal >= MAL_HOST_SIGNAL_COUNT) {
+bool mal_host_signal_take(MalReactor *reactor, MalHostSignal signal) {
+    if (reactor != atomic_load_explicit(&mal_host_signal_reactor, memory_order_acquire)
+        || signal < 0 || signal >= MAL_HOST_SIGNAL_COUNT) {
         return false;
     }
     // A single RMW, so a delivery racing the read cannot be dropped the way a
@@ -183,9 +187,10 @@ bool mal_host_signal_take(MalHostSignal signal) {
         != 0;
 }
 
-void mal_host_signal_reset(void) {
+void mal_host_signal_reset(MalReactor *reactor) {
+    if (reactor != atomic_load_explicit(&mal_host_signal_reactor, memory_order_acquire)) return;
     for (int i = 0; i < MAL_HOST_SIGNAL_COUNT; i++) {
-        mal_host_signal_unlisten((MalHostSignal) i);
+        mal_host_signal_unlisten(reactor, (MalHostSignal) i);
     }
     atomic_store_explicit(&mal_host_signal_reactor, nullptr, memory_order_release);
 }

@@ -15,11 +15,8 @@
  * the collector mid-mark or the allocator mid-splice, so anything else is a
  * latent crash rather than a rare one.
  *
- * Dispositions are process-wide, so the state below is file-static rather than
- * per-isolate; the single-isolate host entry is the only user. The reactor
- * pointer must be cleared before the reactor is destroyed (mal_host_free calls
- * mal_host_signal_reset), otherwise a signal arriving during teardown would wake
- * freed memory.
+ * Dispositions have one process owner. Worker isolates do not consume signals
+ * or change that owner's dispositions; teardown clears only its own reactor.
  */
 
 typedef enum MalHostSignal {
@@ -40,7 +37,7 @@ bool mal_host_signal_lookup(const char *name, MalHostSignal *out);
 
 /**
  * Install the bridging handler for `signal`, waking `reactor` on delivery.
- * Idempotent: re-listening only refreshes the reactor. Returns false when the
+ * A different reactor cannot replace the process owner. Returns false when the
  * disposition could not be installed, leaving the previous one in place.
  */
 bool mal_host_signal_listen(MalReactor *reactor, MalHostSignal signal);
@@ -50,10 +47,10 @@ bool mal_host_signal_listen(MalReactor *reactor, MalHostSignal signal);
  * normally SIG_DFL, so the signal's default action (terminating the process)
  * resumes once the last listener is gone. Idempotent.
  */
-void mal_host_signal_unlisten(MalHostSignal signal);
+void mal_host_signal_unlisten(MalReactor *reactor, MalHostSignal signal);
 
 /** Consume a pending delivery. Main-thread only; coalesces repeats. */
-bool mal_host_signal_take(MalHostSignal signal);
+bool mal_host_signal_take(MalReactor *reactor, MalHostSignal signal);
 
 /** Restore every bridged disposition and drop the reactor reference (teardown). */
-void mal_host_signal_reset(void);
+void mal_host_signal_reset(MalReactor *reactor);

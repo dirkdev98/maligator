@@ -40,7 +40,7 @@ typedef struct MalScheduler {
 
 /* The active scheduler (isolate-local). Read by the preempt hook and yield.
  * SMP requires _Thread_local storage per scheduler thread. */
-extern MalScheduler *mal_current_scheduler;
+extern MAL_ISOLATE_LOCAL MalScheduler *mal_current_scheduler;
 
 /* Initialize `s` over an already-initialized isolate `vm` (whose main fiber
  * exists), install the preemption + fiber-exit hooks, and make it current. */

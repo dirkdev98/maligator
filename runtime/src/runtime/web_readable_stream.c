@@ -140,6 +140,13 @@ static bool rs_byob_view_is_valid(MalVm *vm, MalValue view,
             "ReadableStreamBYOBReader.read requires an attached ArrayBufferView");
         return false;
     }
+    // WebIDL ArrayBufferView without [AllowShared]: stream buffers are always
+    // transferable private memory, so no stream path copies into shared bytes.
+    if (span_out->shared) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "ReadableStreamBYOBReader.read does not accept a SharedArrayBuffer view");
+        return false;
+    }
     if (span_out->length == 0) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
             "ReadableStreamBYOBReader.read requires a non-empty TypedArray");
@@ -544,6 +551,11 @@ static bool rs_chunk_size(MalVm *vm, MalReadableStreamObject *controller,
                 "ReadableByteStreamController.enqueue requires an attached ArrayBufferView");
             return false;
         }
+        if (span.shared) {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+                "ReadableByteStreamController.enqueue does not accept a SharedArrayBuffer view");
+            return false;
+        }
         *size_out = (f64) span.length;
         return true;
     }
@@ -607,6 +619,11 @@ static bool rs_copy_byte_chunk(MalVm *vm, MalValue chunk, MalValue *chunk_out) {
         source.length > UINT32_MAX) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
             "ReadableByteStreamController.enqueue requires an attached ArrayBufferView");
+        return false;
+    }
+    if (source.shared) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "ReadableByteStreamController.enqueue does not accept a SharedArrayBuffer view");
         return false;
     }
     if (source.length == 0) {
@@ -1828,6 +1845,11 @@ static MalValue rs_byob_request_respond_with_new_view(MalVm *vm, MalValue self,
     if (mal_buffer_source_span(view, &view_span) != MAL_BUFFER_SOURCE_SPAN_OK) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
             "ReadableStreamBYOBRequest.respondWithNewView requires an attached TypedArray");
+        return mal_value_new_undefined();
+    }
+    if (view_span.shared) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "ReadableStreamBYOBRequest.respondWithNewView does not accept a SharedArrayBuffer view");
         return mal_value_new_undefined();
     }
     MalReadableStreamObject *controller = mal_value_is_undefined(

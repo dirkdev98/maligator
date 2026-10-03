@@ -539,6 +539,25 @@ static bool sqlite_value_from_js(
         value->kind = MAL_SQLITE_VALUE_BLOB;
         value->as.bytes.data = span.data;
         value->as.bytes.length = span.length;
+        if (span.shared && span.length > 0) {
+            // Blob binds copy (SQLITE_TRANSIENT) from a snapshot in the inactive
+            // scratch slot, which therefore only has to live through the bind.
+            MalNodeSqliteBindScratch *scratch =
+                &statement->bind_scratch[index - 1];
+            scratch->pending = (u8) (scratch->active ^ 1u);
+            if (scratch->capacity[scratch->pending] < span.length) {
+                byte *data = realloc(scratch->data[scratch->pending], span.length);
+                if (data == nullptr) {
+                    mal_vm_throw_allocation_error(vm);
+                    return false;
+                }
+                scratch->data[scratch->pending] = data;
+                scratch->capacity[scratch->pending] = span.length;
+            }
+            mal_buffer_source_span_read(
+                &span, 0, scratch->data[scratch->pending], span.length);
+            value->as.bytes.data = scratch->data[scratch->pending];
+        }
         return true;
     }
     mal_vm_throw_error(

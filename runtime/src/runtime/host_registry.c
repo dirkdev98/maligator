@@ -4,6 +4,7 @@
 
 #include "mal_assets.h"
 #include "mal_process.h"
+#include "workers.h"
 
 #if MAL_NODE
 #include "node_assert_strict.h"
@@ -49,6 +50,7 @@
 MalHostInstaller mal_host_resolve_installer(const char *name, usize length) {
     MATCH_INSTALLER(mal_host_install_maligator);
     MATCH_INSTALLER(mal_host_install_maligator_process);
+    MATCH_INSTALLER(mal_host_install_maligator_internal_workers);
 #if MAL_NODE
     MATCH_INSTALLER(mal_host_install_process);
     MATCH_INSTALLER(mal_host_install_node_assert);

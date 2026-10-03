@@ -3,7 +3,7 @@
 #include "gc.h"
 #include "host.h"
 
-MalScheduler *mal_current_scheduler = nullptr;
+MAL_ISOLATE_LOCAL MalScheduler *mal_current_scheduler = nullptr;
 
 #define MAL_SCHED_DEFAULT_BUDGET 1000
 

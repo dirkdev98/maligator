@@ -4,9 +4,10 @@
 
 #include "array_buffer_object.h"
 #include "bigint128.h"
+#include "shared_memory.h"
 #include "builtin_bigint.h"
-#include "builtin_promise.h"
 #include "heap_bigint.h"
+#include "gc.h"
 #include "intrinsics.h"
 #include "object.h"
 #include "scalar_bits.h"
@@ -16,10 +17,14 @@
 #include "vm.h"
 #include "vm_ops.h"
 
-// The Atomics methods all operate on an integer TypedArray. Because the engine
-// is single-threaded, an "atomic" read-modify-write is just an ordinary
-// read-then-write; the value coercions and validation ordering still follow the
-// spec so the observable behavior (return values, error types/order) matches.
+// Every element access below is a sequentially consistent native atomic on the
+// element's address (shared_memory.h), for ordinary buffers too: one code path,
+// and an aligned atomic on unshared memory costs no more than a plain access.
+// Typed-array byte offsets are element-aligned, so every address is aligned.
+
+static byte *atomics_element_address(const MalTypedArraySpan *span, u32 index) {
+    return span->data + (size_t) index * span->element_size;
+}
 
 // ValidateIntegerTypedArray: a (non-out-of-bounds) TypedArray whose element type
 // is one of the integer kinds (Float/Uint8Clamped are rejected with a TypeError).
@@ -29,6 +34,8 @@ static MalTypedArrayObject *atomics_validate(MalVm *vm, MalValue value, bool wri
         return nullptr;
     }
     MalTypedArrayObject *array = mal_value_to_typed_array_object(value);
+    // A length-tracking view must see growth published by another agent.
+    mal_array_buffer_object_refresh_shared_length(array->buffer);
     if (writable && array->buffer->immutable) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Atomics: cannot write to an immutable buffer");
         return nullptr;
@@ -100,51 +107,6 @@ static bool atomics_revalidate(MalVm *vm, MalTypedArrayObject *array, u32 index)
     return true;
 }
 
-typedef enum {
-    ATOMICS_ADD,
-    ATOMICS_SUB,
-    ATOMICS_AND,
-    ATOMICS_OR,
-    ATOMICS_XOR,
-    ATOMICS_EXCHANGE,
-} AtomicsOp;
-
-static i64 atomics_apply_i64(AtomicsOp op, i64 old, i64 operand) {
-    switch (op) {
-    case ATOMICS_ADD:
-        return old + operand;
-    case ATOMICS_SUB:
-        return old - operand;
-    case ATOMICS_AND:
-        return old & operand;
-    case ATOMICS_OR:
-        return old | operand;
-    case ATOMICS_XOR:
-        return old ^ operand;
-    case ATOMICS_EXCHANGE:
-        return operand;
-    }
-    return operand;
-}
-
-static i128 atomics_apply_i128(AtomicsOp op, i128 old, i128 operand) {
-    switch (op) {
-    case ATOMICS_ADD:
-        return mal_bigint128_add(old, operand);
-    case ATOMICS_SUB:
-        return mal_bigint128_subtract(old, operand);
-    case ATOMICS_AND:
-        return mal_bigint128_bit_and(old, operand);
-    case ATOMICS_OR:
-        return mal_bigint128_bit_or(old, operand);
-    case ATOMICS_XOR:
-        return mal_bigint128_bit_xor(old, operand);
-    case ATOMICS_EXCHANGE:
-        return operand;
-    }
-    return operand;
-}
-
 static MalValue atomics_numeric_value_from_bits(
     MalTypedArrayKind kind,
     u64 bits
@@ -172,7 +134,7 @@ static MalValue atomics_numeric_value_from_bits(
 // Shared read-modify-write: AtomicReadModifyWrite(typedArray, index, value, op).
 // Reads the old element (the return value), computes the new value, stores it
 // (the store re-truncates to the element width), and returns the old value.
-static MalValue atomics_rmw(MalVm *vm, const MalValue *args, i32 arg_count, AtomicsOp op) {
+static MalValue atomics_rmw(MalVm *vm, const MalValue *args, i32 arg_count, MalSharedRmw op) {
     MalTypedArrayObject *array = atomics_validate(vm, arg_count >= 1 ? args[0] : mal_value_new_undefined(), true);
     if (array == nullptr) {
         return mal_value_new_undefined();
@@ -196,12 +158,13 @@ static MalValue atomics_rmw(MalVm *vm, const MalValue *args, i32 arg_count, Atom
         if (!mal_typed_array_object_span(array, &span)) {
             return mal_value_new_undefined();
         }
-        u64 old_bits = mal_typed_array_span_load_bits(&span, index);
+        // Modular 64-bit arithmetic on raw bits equals the BigInt op truncated
+        // to the element width, so the native RMW is exact.
+        u64 old_bits = mal_shared_atomic_rmw(
+            atomics_element_address(&span, index), 8, op, (u64) (u128) operand);
         i128 old = array->kind == MAL_TA_BIGINT64
             ? (i128) mal_scalar_i64_from_bits(old_bits)
             : (i128) (u128) old_bits;
-        i128 result = atomics_apply_i128(op, old, operand);
-        mal_typed_array_span_store_bits(&span, index, (u64) (u128) result);
         return mal_value_from_bigint(mal_bigint_new(&vm->heap, old));
     }
 
@@ -218,9 +181,8 @@ static MalValue atomics_rmw(MalVm *vm, const MalValue *args, i32 arg_count, Atom
     if (!mal_typed_array_object_span(array, &span)) {
         return mal_value_new_undefined();
     }
-    u64 old_bits = mal_typed_array_span_load_bits(&span, index);
-    i64 result = atomics_apply_i64(op, (i64) old_bits, operand);
-    mal_typed_array_span_store_bits(&span, index, (u64) result);
+    u64 old_bits = mal_shared_atomic_rmw(
+        atomics_element_address(&span, index), element_size, op, (u64) operand);
     return atomics_numeric_value_from_bits(array->kind, old_bits);
 }
 
@@ -228,42 +190,42 @@ static MalValue mal_atomics_add(MalVm *vm, MalValue this_value, const MalValue *
     (void) this_value;
     (void) new_target;
     (void) callee;
-    return atomics_rmw(vm, args, arg_count, ATOMICS_ADD);
+    return atomics_rmw(vm, args, arg_count, MAL_SHARED_RMW_ADD);
 }
 
 static MalValue mal_atomics_sub(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) this_value;
     (void) new_target;
     (void) callee;
-    return atomics_rmw(vm, args, arg_count, ATOMICS_SUB);
+    return atomics_rmw(vm, args, arg_count, MAL_SHARED_RMW_SUB);
 }
 
 static MalValue mal_atomics_and(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) this_value;
     (void) new_target;
     (void) callee;
-    return atomics_rmw(vm, args, arg_count, ATOMICS_AND);
+    return atomics_rmw(vm, args, arg_count, MAL_SHARED_RMW_AND);
 }
 
 static MalValue mal_atomics_or(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) this_value;
     (void) new_target;
     (void) callee;
-    return atomics_rmw(vm, args, arg_count, ATOMICS_OR);
+    return atomics_rmw(vm, args, arg_count, MAL_SHARED_RMW_OR);
 }
 
 static MalValue mal_atomics_xor(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) this_value;
     (void) new_target;
     (void) callee;
-    return atomics_rmw(vm, args, arg_count, ATOMICS_XOR);
+    return atomics_rmw(vm, args, arg_count, MAL_SHARED_RMW_XOR);
 }
 
 static MalValue mal_atomics_exchange(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) this_value;
     (void) new_target;
     (void) callee;
-    return atomics_rmw(vm, args, arg_count, ATOMICS_EXCHANGE);
+    return atomics_rmw(vm, args, arg_count, MAL_SHARED_RMW_EXCHANGE);
 }
 
 static MalValue mal_atomics_load(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
@@ -279,7 +241,21 @@ static MalValue mal_atomics_load(MalVm *vm, MalValue this_value, const MalValue 
                           mal_typed_array_object_length(array), &index)) {
         return mal_value_new_undefined();
     }
-    return mal_typed_array_object_get(vm, array, index);
+    if (!atomics_revalidate(vm, array, index)) {
+        return mal_value_new_undefined();
+    }
+    MalTypedArraySpan span;
+    if (!mal_typed_array_object_span(array, &span)) {
+        return mal_value_new_undefined();
+    }
+    u64 bits = mal_shared_atomic_load(atomics_element_address(&span, index), span.element_size);
+    if (array->kind == MAL_TA_BIGINT64) {
+        return mal_value_from_bigint(mal_bigint_new(&vm->heap, (i128) mal_scalar_i64_from_bits(bits)));
+    }
+    if (array->kind == MAL_TA_BIGUINT64) {
+        return mal_value_from_bigint(mal_bigint_new(&vm->heap, (i128) (u128) bits));
+    }
+    return atomics_numeric_value_from_bits(array->kind, bits);
 }
 
 static MalValue mal_atomics_store(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
@@ -313,7 +289,7 @@ static MalValue mal_atomics_store(MalVm *vm, MalValue this_value, const MalValue
         if (!mal_typed_array_object_span(array, &span)) {
             return mal_value_new_undefined();
         }
-        mal_typed_array_span_store_bits(&span, index, (u64) (u128) big);
+        mal_shared_atomic_store(atomics_element_address(&span, index), 8, (u64) (u128) big);
         return coerced;
     }
 
@@ -324,7 +300,12 @@ static MalValue mal_atomics_store(MalVm *vm, MalValue this_value, const MalValue
     if (!atomics_revalidate(vm, array, index)) {
         return mal_value_new_undefined();
     }
-    mal_typed_array_object_set(vm, array, index, mal_ops_number_value(number));
+    MalTypedArraySpan span;
+    if (!mal_typed_array_object_span(array, &span)) {
+        return mal_value_new_undefined();
+    }
+    mal_shared_atomic_store(atomics_element_address(&span, index), span.element_size,
+                            mal_ops_number_to_uint_width(number, span.element_size * 8));
     return mal_ops_number_value(number);
 }
 
@@ -356,13 +337,17 @@ static MalValue mal_atomics_compare_exchange(MalVm *vm, MalValue this_value, con
         if (!atomics_revalidate(vm, array, index)) {
             return mal_value_new_undefined();
         }
-        MalValue old_value = mal_typed_array_object_get(vm, array, index);
-        i128 old = mal_bigint_value(mal_value_to_bigint(old_value));
-        if ((u64) (u128) old == (u64) (u128) expected_big) {
-            mal_typed_array_object_set(vm, array, index,
-                                       mal_value_from_bigint(mal_bigint_new(&vm->heap, replacement_big)));
+        MalTypedArraySpan span;
+        if (!mal_typed_array_object_span(array, &span)) {
+            return mal_value_new_undefined();
         }
-        return old_value;
+        u64 old_bits = mal_shared_atomic_compare_exchange(
+            atomics_element_address(&span, index), 8,
+            (u64) (u128) expected_big, (u64) (u128) replacement_big);
+        i128 old = array->kind == MAL_TA_BIGINT64
+            ? (i128) mal_scalar_i64_from_bits(old_bits)
+            : (i128) (u128) old_bits;
+        return mal_value_from_bigint(mal_bigint_new(&vm->heap, old));
     }
 
     f64 expected_num;
@@ -381,13 +366,10 @@ static MalValue mal_atomics_compare_exchange(MalVm *vm, MalValue this_value, con
     if (!mal_typed_array_object_span(array, &span)) {
         return mal_value_new_undefined();
     }
-    u64 old_bits = mal_typed_array_span_load_bits(&span, index);
     u64 expected_bits = mal_ops_number_to_uint_width(expected_num, element_size * 8);
-    if (old_bits == expected_bits) {
-        u64 replacement_bits = mal_ops_number_to_uint_width(
-            replacement_num, element_size * 8);
-        mal_typed_array_span_store_bits(&span, index, replacement_bits);
-    }
+    u64 replacement_bits = mal_ops_number_to_uint_width(replacement_num, element_size * 8);
+    u64 old_bits = mal_shared_atomic_compare_exchange(
+        atomics_element_address(&span, index), element_size, expected_bits, replacement_bits);
     return atomics_numeric_value_from_bits(array->kind, old_bits);
 }
 
@@ -411,6 +393,7 @@ static MalTypedArrayObject *atomics_validate_waitable(MalVm *vm, MalValue value)
         return nullptr;
     }
     MalTypedArrayObject *array = mal_value_to_typed_array_object(value);
+    mal_array_buffer_object_refresh_shared_length(array->buffer);
     if (mal_typed_array_object_is_out_of_bounds(array)) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Atomics: TypedArray is out of bounds");
         return nullptr;
@@ -433,9 +416,39 @@ static MalValue atomics_wait_result(MalVm *vm, bool async, MalValue value) {
     return mal_value_from_object(result);
 }
 
-// Atomics.notify(typedArray, index, count): single-threaded, no agent is ever
-// waiting, so this validates + coerces (for the observable ordering/throws) and
-// returns +0.
+// Per-isolate agent record. Each isolate runs on one mutator thread, so
+// isolate-local storage is the agent's [[CanBlock]] and termination point.
+// Threadless WASI has no other agent that could ever notify, so it cannot block.
+#if defined(__wasi__)
+static MAL_ISOLATE_LOCAL bool g_atomics_can_block = false;
+#else
+static MAL_ISOLATE_LOCAL bool g_atomics_can_block = true;
+#endif
+static MAL_ISOLATE_LOCAL MalSharedWaitInterrupt *g_atomics_interrupt;
+// Per isolate: only an isolate whose event loop installed the hook can settle
+// its own waitAsync promises, and teardown clears it before the loop is freed.
+static MAL_ISOLATE_LOCAL MalAtomicsWaitAsyncHook g_atomics_wait_async_hook;
+
+void mal_atomics_set_agent(bool can_block, MalSharedWaitInterrupt *interrupt) {
+#if defined(__wasi__)
+    (void) can_block;
+#else
+    g_atomics_can_block = can_block;
+#endif
+    g_atomics_interrupt = interrupt;
+}
+
+void mal_atomics_set_wait_async_hook(MalAtomicsWaitAsyncHook hook) {
+    g_atomics_wait_async_hook = hook;
+}
+
+// Byte offset of element `index` inside the shared backing (not the view).
+static u32 atomics_backing_offset(const MalTypedArrayObject *array, u32 index) {
+    return array->byte_offset + index * mal_typed_array_element_size(array->kind);
+}
+
+// Atomics.notify(typedArray, index, count): wakes up to `count` waiters on the
+// shared backing at this element, FIFO. An unshared buffer has no waiters.
 static MalValue mal_atomics_notify(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) this_value;
     (void) new_target;
@@ -449,21 +462,57 @@ static MalValue mal_atomics_notify(MalVm *vm, MalValue this_value, const MalValu
                           mal_typed_array_object_length(array), &index)) {
         return mal_value_new_undefined();
     }
-    // count: undefined -> +Infinity; else max(ToIntegerOrInfinity, 0). Coerced for
-    // its observable side effects even though the woken count is always 0 here.
+    // count: undefined -> +Infinity; else max(ToIntegerOrInfinity, 0).
+    u32 count = UINT32_MAX;
     if (arg_count >= 3 && !mal_value_is_undefined(args[2])) {
-        f64 count;
-        if (!atomics_to_integer(vm, args[2], &count)) {
+        f64 number;
+        if (!atomics_to_integer(vm, args[2], &number)) {
             return mal_value_new_undefined();
         }
+        count = number <= 0 ? 0 : number >= (f64) UINT32_MAX ? UINT32_MAX : (u32) number;
     }
-    return mal_value_from_i32(0);
+    MalArrayBufferObject *buffer = array->buffer;
+    if (!buffer->shared || buffer->shared_memory == nullptr) {
+        return mal_value_from_i32(0);
+    }
+    u32 woken = mal_shared_memory_notify(buffer->shared_memory, atomics_backing_offset(array, index), count);
+    return mal_value_from_u32(woken);
 }
 
-// Atomics.wait(typedArray, index, value, timeout): requires a SharedArrayBuffer
-// and a blockable agent. This engine is single-threaded (the agent can never
-// suspend), so after validation + coercion it throws TypeError — matching a
-// host whose [[CanBlock]] is false.
+// DoWait step: coerce `value` (ToInt32 / ToBigInt64) to the raw element bits
+// compared inside the waiter-list critical section.
+static bool atomics_wait_operands(
+    MalVm *vm, MalTypedArrayObject *array, const MalValue *args, i32 arg_count, u64 *out_expected) {
+    MalValue value = arg_count >= 3 ? args[2] : mal_value_new_undefined();
+    if (mal_typed_array_is_bigint(array->kind)) {
+        i128 big;
+        if (!mal_bigint_to_bigint(vm, value, &big)) {
+            return false;
+        }
+        *out_expected = (u64) (u128) big;
+        return true;
+    }
+    f64 number;
+    if (!mal_vm_to_number(vm, value, &number)) {
+        return false;
+    }
+    *out_expected = mal_ops_number_to_uint_width(number, 32);
+    return true;
+}
+
+// timeout: NaN -> +Infinity, otherwise max(ToNumber(timeout), 0) milliseconds.
+static bool atomics_wait_timeout(MalVm *vm, const MalValue *args, i32 arg_count, f64 *out_timeout) {
+    f64 timeout;
+    if (!mal_vm_to_number(vm, arg_count >= 4 ? args[3] : mal_value_new_undefined(), &timeout)) {
+        return false;
+    }
+    *out_timeout = isnan(timeout) ? (f64) INFINITY : timeout < 0 ? 0 : timeout;
+    return true;
+}
+
+// Atomics.wait(typedArray, index, value, timeout): DoWait(sync). Blocks the
+// mutator thread on the shared waiter list; a host whose [[CanBlock]] is false
+// (threadless WASI, or an agent root marks non-blocking) throws TypeError.
 static MalValue mal_atomics_wait(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) this_value;
     (void) new_target;
@@ -484,32 +533,45 @@ static MalValue mal_atomics_wait(MalVm *vm, MalValue this_value, const MalValue 
     }
     // Coerce value (ToBigInt / ToNumber) then timeout (ToNumber) for their side
     // effects and possible throws, in spec order.
-    MalValue value = arg_count >= 3 ? args[2] : mal_value_new_undefined();
-    if (mal_typed_array_is_bigint(array->kind)) {
-        i128 big;
-        if (!mal_bigint_to_bigint(vm, value, &big)) {
-            return mal_value_new_undefined();
-        }
-    } else {
-        f64 number;
-        if (!mal_vm_to_number(vm, value, &number)) {
-            return mal_value_new_undefined();
-        }
-    }
-    f64 timeout;
-    if (!mal_vm_to_number(vm, arg_count >= 4 ? args[3] : mal_value_new_undefined(), &timeout)) {
+    u64 expected;
+    if (!atomics_wait_operands(vm, array, args, arg_count, &expected)) {
         return mal_value_new_undefined();
     }
-    mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
-                       "Atomics.wait: agent cannot be suspended");
+    f64 timeout;
+    if (!atomics_wait_timeout(vm, args, arg_count, &timeout)) {
+        return mal_value_new_undefined();
+    }
+    if (!g_atomics_can_block) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+                           "Atomics.wait: agent cannot be suspended");
+        return mal_value_new_undefined();
+    }
+    // A SharedArrayBuffer never detaches or shrinks, so the index validated
+    // before coercion still addresses the same element.
+    mal_gc_set_mutator_busy(vm, false);
+    MalSharedWaitResult result = mal_shared_memory_wait_sync(
+        array->buffer->shared_memory, atomics_backing_offset(array, index),
+        mal_typed_array_element_size(array->kind), expected, timeout, g_atomics_interrupt);
+    mal_gc_set_mutator_busy(vm, true);
+    switch (result) {
+    case MAL_SHARED_WAIT_OK:
+        return mal_value_from_string(mal_intrinsic_ascii(vm, "ok"));
+    case MAL_SHARED_WAIT_NOT_EQUAL:
+        return mal_value_from_string(mal_intrinsic_ascii(vm, "not-equal"));
+    case MAL_SHARED_WAIT_TIMED_OUT:
+        return mal_value_from_string(mal_intrinsic_ascii(vm, "timed-out"));
+    case MAL_SHARED_WAIT_INTERRUPTED:
+        break;
+    }
+    // Root's termination path must observe the still-signaled interrupt and
+    // unwind this exception without running user catch handlers.
+    mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Atomics.wait: agent terminated");
     return mal_value_new_undefined();
 }
 
-// Atomics.waitAsync(typedArray, index, value, timeout): does not require a
-// blockable agent. The synchronous outcomes — value mismatch ("not-equal") and
-// a zero timeout ("timed-out") — are returned directly; otherwise a pending
-// promise is returned that, single-threaded, never settles (no other agent can
-// notify it).
+// Atomics.waitAsync(typedArray, index, value, timeout): DoWait(async). Needs no
+// blockable agent and holds no thread: the waiter is a list entry whose notify
+// or timeout settles the promise on this isolate's event loop.
 static MalValue mal_atomics_wait_async(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) this_value;
     (void) new_target;
@@ -528,48 +590,49 @@ static MalValue mal_atomics_wait_async(MalVm *vm, MalValue this_value, const Mal
                           mal_typed_array_object_length(array), &index)) {
         return mal_value_new_undefined();
     }
-    MalValue value = arg_count >= 3 ? args[2] : mal_value_new_undefined();
-    bool matches;
-    if (mal_typed_array_is_bigint(array->kind)) {
-        i128 big;
-        if (!mal_bigint_to_bigint(vm, value, &big)) {
-            return mal_value_new_undefined();
-        }
-        i128 current = mal_bigint_value(mal_value_to_bigint(mal_typed_array_object_get(vm, array, index)));
-        matches = current == big;
-    } else {
-        f64 number;
-        if (!mal_vm_to_number(vm, value, &number)) {
-            return mal_value_new_undefined();
-        }
-        u32 element_size = mal_typed_array_element_size(array->kind);
-        u64 want = mal_ops_number_to_uint_width(number, element_size * 8);
-        u64 current = mal_ops_number_to_uint_width(
-            mal_ops_to_number(mal_typed_array_object_get(vm, array, index)), element_size * 8);
-        matches = current == want;
+    u64 expected;
+    if (!atomics_wait_operands(vm, array, args, arg_count, &expected)) {
+        return mal_value_new_undefined();
     }
     f64 timeout;
-    if (!mal_vm_to_number(vm, arg_count >= 4 ? args[3] : mal_value_new_undefined(), &timeout)) {
+    if (!atomics_wait_timeout(vm, args, arg_count, &timeout)) {
         return mal_value_new_undefined();
     }
-    if (isnan(timeout) || timeout < 0) {
-        timeout = isnan(timeout) ? (f64) INFINITY : 0;
-    }
-
-    if (!matches) {
-        return atomics_wait_result(vm, false, mal_value_from_string(mal_intrinsic_ascii(vm, "not-equal")));
-    }
+    MalSharedMemory *memory = array->buffer->shared_memory;
+    u32 offset = atomics_backing_offset(array, index);
+    u32 width = mal_typed_array_element_size(array->kind);
+    MalSharedWaitResult result;
+    MalValue promise = mal_value_new_undefined();
     if (timeout == 0) {
+        u64 mask = width == 8 ? ~0ull : 0xFFFFFFFFull;
+        u64 current = mal_shared_atomic_load(mal_shared_memory_data(memory) + offset, width);
+        result = (current & mask) == (expected & mask) ? MAL_SHARED_WAIT_TIMED_OUT : MAL_SHARED_WAIT_NOT_EQUAL;
+    } else if (g_atomics_wait_async_hook != nullptr) {
+        // The hook compares and enqueues inside one critical section and owns
+        // the promise's settlement on this isolate's event loop.
+        if (!g_atomics_wait_async_hook(vm, memory, offset, width, expected, timeout, &result, &promise)) {
+            return mal_value_new_undefined();
+        }
+    } else {
+        // Without an event loop (threadless WASI, a bare embedder) neither a
+        // notify nor a timer can settle a pending promise, so refuse to create one.
+        u64 mask = width == 8 ? ~0ull : 0xFFFFFFFFull;
+        u64 current = mal_shared_atomic_load(mal_shared_memory_data(memory) + offset, width);
+        if ((current & mask) == (expected & mask)) {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+                               "Atomics.waitAsync: no event loop can settle the wait");
+            return mal_value_new_undefined();
+        }
+        result = MAL_SHARED_WAIT_NOT_EQUAL;
+    }
+    switch (result) {
+    case MAL_SHARED_WAIT_NOT_EQUAL:
+        return atomics_wait_result(vm, false, mal_value_from_string(mal_intrinsic_ascii(vm, "not-equal")));
+    case MAL_SHARED_WAIT_TIMED_OUT:
         return atomics_wait_result(vm, false, mal_value_from_string(mal_intrinsic_ascii(vm, "timed-out")));
+    default:
+        return atomics_wait_result(vm, true, promise);
     }
-    // Would block: hand back a pending promise. With no other agent it never
-    // settles, which is the correct shape for the result record.
-    MalValue promise, resolve, reject;
-    if (!mal_promise_new_capability(vm, vm->intrinsics[MAL_INTRINSIC_PROMISE_CONSTRUCTOR], &promise, &resolve,
-                                    &reject)) {
-        return mal_value_new_undefined();
-    }
-    return atomics_wait_result(vm, true, promise);
 }
 
 // Atomics.pause(iterationNumber): a micro-pause hint. iterationNumber, if given,

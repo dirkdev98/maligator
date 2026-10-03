@@ -1,12 +1,26 @@
 #include "async_context.h"
 
 #include <limits.h>
+#include <stdatomic.h>
 
 #include "function_object.h"
 #include "intrinsics.h"
 #include "value_ops.h"
 #include "vm.h"
 #include "vm_ops.h"
+
+static _Atomic(u64) next_resource_id = 2;
+static MAL_ISOLATE_LOCAL u64 current_resource_id;
+
+u64 mal_async_resource_current_id(void) {
+    return current_resource_id;
+}
+
+u64 mal_async_resource_set_current_id(u64 id) {
+    u64 previous = current_resource_id;
+    current_resource_id = id;
+    return previous;
+}
 
 MalAsyncLocalStorageState *mal_async_local_storage_state_new(MalVm *vm) {
     MalAsyncLocalStorageState *state = mal_heap_alloc(
@@ -22,6 +36,8 @@ MalAsyncLocalStorageState *mal_async_local_storage_state_new(MalVm *vm) {
 MalAsyncResourceState *mal_async_resource_state_new(MalVm *vm) {
     MalAsyncResourceState *state = mal_heap_alloc(
         &vm->heap, sizeof(MalAsyncResourceState), MAL_HEAP_ASYNC_RESOURCE_STATE);
+    state->async_id = atomic_fetch_add_explicit(&next_resource_id, 1, memory_order_relaxed);
+    state->trigger_async_id = current_resource_id;
 #if MAL_NODE
     state->context = vm->async_context;
 #else

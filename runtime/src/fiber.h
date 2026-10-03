@@ -124,13 +124,13 @@ typedef struct MalFiber {
  * to improve a shallow benchmark. */
 #define MAL_FIBER_DEFAULT_VALUE_STACK 8192
 
-/* The running fiber (isolate-local; set on every switch-in). SMP must make
- * _Thread_local when schedulers run on OS threads. */
-extern MalFiber *mal_current_fiber;
+/* The running fiber of this mutator's isolate (set on every switch-in). Fibers
+ * are pinned to their isolate's thread and never migrate. */
+extern MAL_ISOLATE_LOCAL MalFiber *mal_current_fiber;
 
-/* Set by the scheduler: invoked by the bootstrap when a fiber's entry returns to
- * hand control back to the scheduler. Never returns to the bootstrap. */
-extern void (*mal_fiber_exit_hook)(MalFiber *finished);
+/* Set by this isolate's scheduler: invoked by the bootstrap when a fiber's entry
+ * returns to hand control back to the scheduler. Never returns to the bootstrap. */
+extern MAL_ISOLATE_LOCAL void (*mal_fiber_exit_hook)(MalFiber *finished);
 
 /* Raw stack switch (aarch64 / x86_64), defined in fiber.c module-level asm.
  * Saves callee-saved registers of the current context onto its stack, stores the

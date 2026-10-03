@@ -71,7 +71,8 @@ static bool mal_module_namespace_ensure_for_key(
 }
 static bool mal_vm_key_is_prototype(MalKey key);
 
-static u64 g_stack_object_materializations = 0;
+// Diagnostic counter for the isolate on the current mutator thread.
+static MAL_ISOLATE_LOCAL u64 g_stack_object_materializations = 0;
 
 u64 mal_vm_stack_object_materialization_count(void) {
     return g_stack_object_materializations;

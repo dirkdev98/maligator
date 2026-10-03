@@ -24,6 +24,12 @@ typedef struct MalEventListener {
     bool removed;
 } MalEventListener;
 
+// Custom tracers are mutator-owned; finalizers close native resources without entering JavaScript.
+typedef struct MalEventTargetNativeOps {
+    void (*trace)(void *native);
+    void (*finalize)(void *native);
+} MalEventTargetNativeOps;
+
 typedef struct MalEventTargetObject {
     MalObject object;
     MalObjectStorage object_storage;
@@ -40,6 +46,8 @@ typedef struct MalEventTargetObject {
     MalValue abort_reason;
     bool is_abort_signal;
     bool abort_pending;
+    void *native;
+    const MalEventTargetNativeOps *native_ops;
 } MalEventTargetObject;
 
 typedef struct MalVm MalVm;
@@ -61,3 +69,4 @@ void mal_dom_exception_throw(MalVm *vm, const byte *message, const byte *name);
 /* Install DOMException / Event / EventTarget / AbortController / AbortSignal on
  * globalThis (host entry only). */
 void mal_events_install(MalVm *vm, MalObject *global_this);
+MalValue mal_event_new(MalVm *vm, const char *type, bool trusted);

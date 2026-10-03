@@ -276,11 +276,18 @@ MalEventTargetObject *mal_event_target_object_new(MalHeap *heap, MalObject *prot
     t->abort_reason = mal_value_new_undefined();
     t->is_abort_signal = false;
     t->abort_pending = false;
+    t->native = nullptr;
+    t->native_ops = nullptr;
     return t;
 }
 
 static void event_target_finalize(MalHeapHeader *cell) {
     MalEventTargetObject *t = (MalEventTargetObject *) cell;
+    if (t->native != nullptr && t->native_ops != nullptr && t->native_ops->finalize != nullptr) {
+        void *native = t->native;
+        t->native = nullptr;
+        t->native_ops->finalize(native);
+    }
     free(t->listeners);
     free(t->dependents);
     free(t->abort_algorithms);
@@ -297,6 +304,9 @@ static void event_target_finalize(MalHeapHeader *cell) {
 
 static void event_target_trace(MalHeapHeader *cell) {
     MalEventTargetObject *t = (MalEventTargetObject *) cell;
+    if (t->native != nullptr && t->native_ops != nullptr && t->native_ops->trace != nullptr) {
+        t->native_ops->trace(t->native);
+    }
     for (i32 i = 0; i < t->count; i++) {
         mal_gc_mark_value(mal_value_from_string(t->listeners[i].type));
         mal_gc_mark_value(t->listeners[i].callback);
@@ -565,7 +575,7 @@ static void event_initialize(MalVm *vm, MalObject *event, MalValue type,
     event_define_trusted_state(vm, event, trusted);
 }
 
-static MalValue mal_event_new(MalVm *vm, const char *type, bool trusted) {
+MalValue mal_event_new(MalVm *vm, const char *type, bool trusted) {
     MalObject *ev = mal_object_new(&vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_EVENT_PROTOTYPE]));
     MalValue roots[2] = {
         mal_value_from_object(ev), mal_value_new_undefined(),

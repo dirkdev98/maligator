@@ -111,12 +111,14 @@ static NodeFsPathResult node_fs_path_bytes(
     if (mal_buffer_source_span(value, &span) != MAL_BUFFER_SOURCE_SPAN_OK) {
         return NODE_FS_PATH_INVALID_TYPE;
     }
-    if (span.length > 0 && memchr(span.data, 0, span.length) != nullptr) {
-        return NODE_FS_PATH_EMBEDDED_NUL;
-    }
     char *path = malloc(span.length + 1);
     if (path == nullptr) return NODE_FS_PATH_ALLOCATION_FAILED;
-    if (span.length > 0) memcpy(path, span.data, span.length);
+    // Validate the private copy so a shared source cannot change after the NUL check.
+    mal_buffer_source_span_read(&span, 0, (byte *) path, span.length);
+    if (span.length > 0 && memchr(path, 0, span.length) != nullptr) {
+        free(path);
+        return NODE_FS_PATH_EMBEDDED_NUL;
+    }
     path[span.length] = '\0';
     *out = path;
     return NODE_FS_PATH_OK;
@@ -875,9 +877,19 @@ static MalValue node_fs_read_sync(
         }
     }
     usize read_count;
+    // The kernel writes plain bytes; a shared destination receives them bytewise.
+    byte *staged = span.shared && length > 0 ? malloc(length) : nullptr;
+    if (span.shared && length > 0 && staged == nullptr) {
+        mal_vm_throw_allocation_error(vm);
+        return mal_value_new_undefined();
+    }
     int err = mal_posix_fs_read_fd(fd,
-        span.data == nullptr ? nullptr : span.data + offset,
+        staged != nullptr ? staged : span.data == nullptr ? nullptr : span.data + offset,
         length, has_position, position, &read_count);
+    if (staged != nullptr) {
+        if (err == 0) mal_buffer_source_span_write(&span, offset, staged, read_count);
+        free(staged);
+    }
     if (err != 0) {
         node_fs_throw_errno_with_dest(vm, err, "read", nullptr, nullptr);
         return mal_value_new_undefined();
@@ -899,7 +911,12 @@ static bool node_fs_write_bytes(
             return false;
         }
         *length = span.length;
-        *bytes = span.data == nullptr ? (const byte *) "" : span.data;
+        const byte *data = mal_buffer_source_span_private(&span, owned);
+        if (span.length > 0 && data == nullptr) {
+            mal_vm_throw_allocation_error(vm);
+            return false;
+        }
+        *bytes = data == nullptr ? (const byte *) "" : data;
         return true;
     }
     if (mal_value_is_string(data)) {
@@ -1174,6 +1191,15 @@ static MalValue node_fs_write_sync(
             return mal_value_new_undefined();
         }
         bytes = span.data == nullptr ? (const byte *) "" : span.data + offset;
+        if (span.shared && length > 0) {
+            owned = malloc(length);
+            if (owned == nullptr) {
+                mal_vm_throw_allocation_error(vm);
+                return mal_value_new_undefined();
+            }
+            mal_buffer_source_span_read(&span, offset, owned, length);
+            bytes = owned;
+        }
     }
     usize written;
     int err = mal_posix_fs_write_at_fd(
@@ -2283,8 +2309,9 @@ typedef struct NodeFsAsyncWrite {
 #endif
 } NodeFsAsyncWrite;
 
-static NodeFsAsyncWrite *node_fs_async_writes;
-static bool node_fs_async_installed;
+// Pending writes and their root registration belong to this mutator's isolate.
+static MAL_ISOLATE_LOCAL NodeFsAsyncWrite *node_fs_async_writes;
+static MAL_ISOLATE_LOCAL bool node_fs_async_installed;
 
 static void node_fs_write_job_free(void *data) {
     NodeFsWriteJob *job = data;

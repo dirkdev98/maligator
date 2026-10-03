@@ -1,5 +1,6 @@
 #include "perf_stats.h"
 
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -40,16 +41,18 @@ typedef struct MalPerfCollectionRecord {
     u8 collection_key_mask;
 } MalPerfCollectionRecord;
 
-static u32 mal_perf_collection_latest_epoch;
-static usize mal_perf_collection_record_capacity;
-static usize mal_perf_collection_record_live;
-static usize mal_perf_collection_record_occupied;
+// Diagnostic builds keep one report per mutator; helpers never record perf events.
+static MAL_ISOLATE_LOCAL u32 mal_perf_collection_latest_epoch;
+static MAL_ISOLATE_LOCAL usize mal_perf_collection_record_capacity;
+static MAL_ISOLATE_LOCAL usize mal_perf_collection_record_live;
+static MAL_ISOLATE_LOCAL usize mal_perf_collection_record_occupied;
 
-bool mal_perf_stats_enabled = false;
-MalPerfStats mal_perf_stats;
-static MalPerfIntrinsicName mal_perf_intrinsic_names[MAL_PERF_INTRINSIC_NAME_CAPACITY];
-static MalPerfNativeName mal_perf_native_names[MAL_PERF_NATIVE_NAME_CAPACITY];
-static MalPerfCollectionRecord *mal_perf_collection_records;
+MAL_ISOLATE_LOCAL bool mal_perf_stats_enabled = false;
+MAL_ISOLATE_LOCAL MalPerfStats mal_perf_stats;
+static MAL_ISOLATE_LOCAL MalPerfIntrinsicName
+    mal_perf_intrinsic_names[MAL_PERF_INTRINSIC_NAME_CAPACITY];
+static MAL_ISOLATE_LOCAL MalPerfNativeName mal_perf_native_names[MAL_PERF_NATIVE_NAME_CAPACITY];
+static MAL_ISOLATE_LOCAL MalPerfCollectionRecord *mal_perf_collection_records;
 
 static const char *const mal_perf_collection_kinds[MAL_PERF_COLLECTION_KIND_COUNT] = {
     "array",
@@ -1396,13 +1399,13 @@ static void mal_perf_stats_print(void) {
 }
 
 void mal_perf_stats_init(void) {
-    static bool registered = false;
+    static _Atomic bool registered = false;
     if (getenv("MAL_PERF_STATS") == nullptr) {
         return;
     }
     mal_perf_stats_enabled = true;
-    if (!registered && getenv("MAL_PROFILE_COMPILER") == nullptr) {
-        registered = true;
+    if (getenv("MAL_PROFILE_COMPILER") == nullptr &&
+        !atomic_exchange(&registered, true)) {
         atexit(mal_perf_stats_print);
     }
 }

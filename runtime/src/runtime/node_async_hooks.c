@@ -173,6 +173,22 @@ static MalValue async_resource_constructor(
     roots[0] = mal_value_from_object(prototype);
     roots[2] = mal_async_internal_value(
         (MalHeapHeader *) mal_async_resource_state_new(vm));
+    if (argc > 1 && mal_value_is_object(args[1])) {
+        MalValue trigger;
+        if (!mal_vm_get_property(vm, args[1], mal_intrinsic_string_key(vm, "triggerAsyncId"), &trigger)) {
+            mal_gc_unroot(&root);
+            return mal_value_new_undefined();
+        }
+        if (!mal_value_is_undefined(trigger)) {
+            f64 number = mal_ops_is_number(trigger) ? mal_ops_number_as_f64(trigger) : NAN;
+            if (!mal_ops_is_number(trigger) || !isfinite(number) || number < 0 || number > 9007199254740991.0 || floor(number) != number) {
+                mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "triggerAsyncId must be a nonnegative safe integer");
+                mal_gc_unroot(&root);
+                return mal_value_new_undefined();
+            }
+            ((MalAsyncResourceState *) mal_value_to_heap(roots[2]))->trigger_async_id = (u64) number;
+        }
+    }
     roots[3] = mal_value_from_object(
         mal_object_new(&vm->heap, mal_value_to_object(roots[0])));
     async_define_private_state(
@@ -200,11 +216,36 @@ static MalValue async_resource_run_in_async_scope(
     MalValue this_arg = argc > 1 ? args[1] : mal_value_new_undefined();
     MalAsyncContextScope scope;
     mal_async_context_scope_enter(vm, &scope, state->context);
+    u64 previous_id = mal_async_resource_set_current_id(state->async_id);
     MalCompletion completion = mal_vm_call_value(
         vm, callback, this_arg, argc > 2 ? args + 2 : nullptr,
         argc > 2 ? argc - 2 : 0);
+    mal_async_resource_set_current_id(previous_id);
     mal_async_context_scope_exit(vm, &scope);
     return completion.value;
+}
+
+static MalValue async_resource_id(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
+    MalValue new_target, MalValue callee) {
+    (void) args; (void) argc; (void) new_target;
+    MalAsyncResourceState *state = async_resource_require_receiver(vm, receiver, callee);
+    return state == nullptr ? mal_value_new_undefined() : mal_value_from_f64((f64) state->async_id);
+}
+
+static MalValue async_resource_trigger_id(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
+    MalValue new_target, MalValue callee) {
+    (void) args; (void) argc; (void) new_target;
+    MalAsyncResourceState *state = async_resource_require_receiver(vm, receiver, callee);
+    return state == nullptr ? mal_value_new_undefined() : mal_value_from_f64((f64) state->trigger_async_id);
+}
+
+static MalValue async_resource_emit_destroy(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
+    MalValue new_target, MalValue callee) {
+    (void) args; (void) argc; (void) new_target;
+    return async_resource_require_receiver(vm, receiver, callee) == nullptr ? mal_value_new_undefined() : receiver;
 }
 
 static MalValue async_resource_bind(
@@ -746,6 +787,15 @@ void mal_host_install_node_async_hooks(
     mal_intrinsic_define_data(
         vm, mal_value_to_object(roots[RESOURCE_PROTO]), (const byte *) "bind",
         roots[TEMP], MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
+    const char *resource_names[] = {"asyncId", "triggerAsyncId", "emitDestroy"};
+    MalNativeFunctionCallback resource_callbacks[] = {
+        async_resource_id, async_resource_trigger_id, async_resource_emit_destroy};
+    for (usize index = 0; index < countof(resource_names); index++) {
+        roots[TEMP] = mal_value_from_native_function_object(async_function_with_brand(
+            vm, resource_names[index], 0, resource_callbacks[index], roots[RESOURCE_BRAND]));
+        mal_intrinsic_define_data(vm, mal_value_to_object(roots[RESOURCE_PROTO]),
+            (const byte *) resource_names[index], roots[TEMP], MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
+    }
 
     roots[TEMP] = mal_value_from_native_function_object(
         async_function_with_slots(

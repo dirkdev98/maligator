@@ -8,6 +8,13 @@ static const char development_wires_command[] = "--maligator-internal-run-wires"
 static const char development_wires_assets_command[] = "--maligator-internal-run-wires-assets";
 
 int main(int argc, char **argv) {
+    const char *worker_manifest_path = nullptr;
+    if (argc >= 3 && strcmp(argv[1], "--maligator-internal-workers") == 0) {
+        worker_manifest_path = argv[2];
+        argv[2] = argv[0];
+        argv += 2;
+        argc -= 2;
+    }
     if (argc < 2) {
         fprintf(stderr, "usage: %s <program.malw> [program arguments...]\n", argv[0]);
         return 2;
@@ -48,7 +55,7 @@ int main(int argc, char **argv) {
         (const char *const *) &argv[wire_offset], wire_count,
         asset_manifest_path,
         entry_offset > 0 ? argv[entry_offset] : nullptr,
-        program_argc, program_argv, MAL_WEB_PLATFORM != 0, MAL_NODE != 0);
+        program_argc, program_argv, MAL_WEB_PLATFORM != 0, MAL_NODE != 0, worker_manifest_path);
     free(program_argv);
     return code;
 }

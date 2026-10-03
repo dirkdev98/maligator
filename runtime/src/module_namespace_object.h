@@ -31,6 +31,8 @@ typedef struct MalModuleNamespaceObject {
     MalValue init_fn;
     i32 status_slot;
     i32 error_slot;
+    i32 record_slot;
+    i32 context_slot;
     bool deferred;
 } MalModuleNamespaceObject;
 
@@ -48,21 +50,14 @@ MalModuleNamespaceObject *mal_module_namespace_object_new(
 );
 
 void mal_module_namespace_configure_deferred(
-    MalModuleNamespaceObject *ns,
-    MalValue init_fn,
-    i32 status_slot,
-    i32 error_slot
-);
-
-bool mal_module_evaluate_sync(
-    MalVm *vm,
-    MalValue init_fn,
-    i32 status_slot,
-    i32 error_slot,
-    bool throw_on_evaluating
-);
+    MalModuleNamespaceObject *ns, MalValue init_fn, i32 status_slot, i32 error_slot,
+    i32 record_slot, i32 context_slot);
 
 bool mal_module_namespace_ensure_evaluated(
     MalVm *vm,
     MalModuleNamespaceObject *ns
 );
+
+MalValue mal_module_evaluate(
+    MalVm *vm, MalValue init_fn, i32 status_slot, i32 error_slot,
+    i32 record_slot, i32 context_slot, i32 parent_slot);

@@ -1,21 +1,62 @@
 #ifndef _POSIX_C_SOURCE
 #define _POSIX_C_SOURCE 200809L
 #endif
+/* NSIG, and Darwin's F_SETNOSIGPIPE. */
+#if defined(__APPLE__) && !defined(_DARWIN_C_SOURCE)
+#define _DARWIN_C_SOURCE
+#endif
+#if !defined(__APPLE__) && !defined(_DEFAULT_SOURCE)
+#define _DEFAULT_SOURCE
+#endif
 
 #include "posix_process.h"
 
+#include <errno.h>
+#include <pthread.h>
+#include <signal.h>
+#include <string.h>
+#include <unistd.h>
+
+int mal_proc_fork(void) {
+    struct sigaction dfl;
+    memset(&dfl, 0, sizeof(dfl));
+    dfl.sa_handler = SIG_DFL;
+    sigemptyset(&dfl.sa_mask);
+    sigset_t all;
+    sigset_t none;
+    sigset_t previous;
+    sigfillset(&all);
+    sigemptyset(&none);
+    // A runtime handler running between fork and exec would swallow a signal
+    // meant to terminate the child.
+    int mask_error = pthread_sigmask(SIG_SETMASK, &all, &previous);
+    if (mask_error != 0) {
+        errno = mask_error;
+        return -1;
+    }
+    pid_t pid = fork();
+    if (pid == 0) {
+        // sigaction rejects SIGKILL, SIGSTOP and libc-reserved numbers harmlessly.
+        for (int sig = 1; sig < NSIG; sig++) {
+            (void) sigaction(sig, &dfl, nullptr);
+        }
+        (void) sigprocmask(SIG_SETMASK, &none, nullptr);
+        return 0;
+    }
+    int fork_errno = errno;
+    (void) pthread_sigmask(SIG_SETMASK, &previous, nullptr);
+    errno = fork_errno;
+    return (int) pid;
+}
+
 #if MAL_NODE
 
-#include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
 #include <poll.h>
-#include <pthread.h>
-#include <signal.h>
 #include <stdlib.h>
-#include <string.h>
 #include <sys/wait.h>
-#include <unistd.h>
+#include <time.h>
 
 #if defined(__APPLE__)
 #include <crt_externs.h>
@@ -246,13 +287,6 @@ static void mal_proc_child_exec(const MalProcRequest *req, char *const *envp) {
 static void mal_proc_child(
     const MalProcRequest *req, char *const *envp, int in_fd, int out_fd, int err_fd, int errpipe
 ) {
-    /* Undo any inherited SIG_IGN on SIGPIPE (the parent ignores it while pumping
-     * stdin) so the spawned program sees the default disposition. */
-    struct sigaction dfl;
-    memset(&dfl, 0, sizeof(dfl));
-    dfl.sa_handler = SIG_DFL;
-    sigaction(SIGPIPE, &dfl, NULL);
-
     if (!mal_proc_child_stream(req->stdin_mode, STDIN_FILENO, in_fd, O_RDONLY)
         || !mal_proc_child_stream(req->stdout_mode, STDOUT_FILENO, out_fd, O_WRONLY)
         || !mal_proc_child_stream(req->stderr_mode, STDERR_FILENO, err_fd, O_WRONLY)) {
@@ -290,7 +324,7 @@ int mal_proc_spawn(const MalProcRequest *req, MalProcChild *child) {
         mal_proc_close_pipe(pipe_fds);
         return -1;
     }
-    pid_t pid = fork();
+    pid_t pid = mal_proc_fork();
     if (pid == 0) {
         close(pipe_fds[0]);
         mal_proc_child(req, envp, -1, -1, -1, pipe_fds[1]);
@@ -449,9 +483,68 @@ static int mal_proc_read_into(int fd, byte **data, usize *len, usize *cap, int *
     }
 }
 
+/* The SIGPIPE disposition is process-wide and other isolates rely on it, so a
+ * write into a child's closed stdin must report EPIPE without changing it.
+ * Darwin raises that SIGPIPE at the process, where any thread leaving it
+ * unblocked can take it, so it is suppressed on the descriptor. Elsewhere it
+ * targets the writing thread, which blocks it for the pump and discards only an
+ * instance its own write raised. */
+typedef struct MalProcSigpipeGuard {
+    sigset_t previous;
+    bool blocked;
+    bool owns_pending;
+} MalProcSigpipeGuard;
+
+static bool mal_proc_sigpipe_begin(int fd, MalProcSigpipeGuard *guard) {
+    *guard = (MalProcSigpipeGuard) {0};
+#if defined(F_SETNOSIGPIPE)
+    return fcntl(fd, F_SETNOSIGPIPE, 1) == 0;
+#else
+    (void) fd;
+    sigset_t sigpipe;
+    sigset_t pending;
+    sigemptyset(&sigpipe);
+    sigaddset(&sigpipe, SIGPIPE);
+    if (sigpending(&pending) != 0) {
+        return false;
+    }
+    // Standard signals do not queue: one the caller already had pending absorbs ours.
+    guard->owns_pending = !sigismember(&pending, SIGPIPE);
+    int mask_error = pthread_sigmask(SIG_BLOCK, &sigpipe, &guard->previous);
+    if (mask_error != 0) {
+        errno = mask_error;
+        return false;
+    }
+    guard->blocked = true;
+    return true;
+#endif
+}
+
+static void mal_proc_sigpipe_end(MalProcSigpipeGuard *guard, bool broken_pipe) {
+#if defined(F_SETNOSIGPIPE)
+    (void) guard;
+    (void) broken_pipe;
+#else
+    if (!guard->blocked) {
+        return;
+    }
+    if (broken_pipe && guard->owns_pending) {
+        sigset_t sigpipe;
+        sigemptyset(&sigpipe);
+        sigaddset(&sigpipe, SIGPIPE);
+        struct timespec now = {0};
+        while (sigtimedwait(&sigpipe, nullptr, &now) < 0 && errno == EINTR) {}
+    }
+    (void) pthread_sigmask(SIG_SETMASK, &guard->previous, nullptr);
+    guard->blocked = false;
+#endif
+}
+
 /* Push the pending stdin bytes. Returns `fd` while more remains, -1 once done or
  * the child closed its read end (EPIPE is benign — the child simply ignored stdin). */
-static int mal_proc_write_from(int fd, const byte *buf, usize len, usize *off, int *io_errno) {
+static int mal_proc_write_from(
+    int fd, const byte *buf, usize len, usize *off, bool *broken_pipe, int *io_errno
+) {
     for (;;) {
         usize remain = len - *off;
         if (remain == 0) {
@@ -469,7 +562,9 @@ static int mal_proc_write_from(int fd, const byte *buf, usize len, usize *off, i
         if (errno == EAGAIN || errno == EWOULDBLOCK) {
             return fd;
         }
-        if (errno != EPIPE) {
+        if (errno == EPIPE) {
+            *broken_pipe = true;
+        } else {
             *io_errno = errno;
         }
         close(fd);
@@ -485,6 +580,12 @@ static void mal_proc_pump(
     if (in_fd >= 0 && (req->input == NULL || req->input_len == 0)) {
         close(in_fd); /* nothing to send: hand the child immediate EOF on stdin */
         in_fd = -1;
+    }
+    MalProcSigpipeGuard sigpipe = {0};
+    bool broken_pipe = false;
+    if (in_fd >= 0 && !mal_proc_sigpipe_begin(in_fd, &sigpipe)) {
+        out->io_errno = errno;
+        goto close_fds;
     }
     int fds[] = {in_fd, out_fd, err_fd, errpipe};
     for (usize i = 0; i < sizeof(fds) / sizeof(fds[0]); i++) {
@@ -540,7 +641,8 @@ static void mal_proc_pump(
             }
             switch (which[i]) {
                 case 0:
-                    in_fd = mal_proc_write_from(in_fd, req->input, req->input_len, &in_off, &out->io_errno);
+                    in_fd = mal_proc_write_from(
+                        in_fd, req->input, req->input_len, &in_off, &broken_pipe, &out->io_errno);
                     break;
                 case 1:
                     out_fd = mal_proc_read_into(out_fd, &out->stdout_data, &out->stdout_len, &out_cap, &out->io_errno);
@@ -603,6 +705,7 @@ close_fds:
     if (errpipe >= 0) {
         close(errpipe);
     }
+    mal_proc_sigpipe_end(&sigpipe, broken_pipe);
 }
 
 int mal_proc_run(const MalProcRequest *req, MalProcResult *out) {
@@ -639,24 +742,9 @@ int mal_proc_run(const MalProcRequest *req, MalProcResult *out) {
         return -1;
     }
 
-    /* Ignore SIGPIPE for the lifetime of the write pump: a child that exits
-     * without reading stdin would otherwise kill us. The child restores the
-     * default disposition before exec. */
-    struct sigaction ign;
-    struct sigaction prev;
-    bool restore_sigpipe = false;
-    memset(&ign, 0, sizeof(ign));
-    ign.sa_handler = SIG_IGN;
-    if (sigaction(SIGPIPE, &ign, &prev) == 0) {
-        restore_sigpipe = true;
-    }
-
-    pid_t pid = fork();
+    pid_t pid = mal_proc_fork();
     if (pid < 0) {
         out->io_errno = errno;
-        if (restore_sigpipe) {
-            sigaction(SIGPIPE, &prev, NULL);
-        }
         mal_proc_close_pipe(errp);
         mal_proc_close_pipe(in_pipe);
         mal_proc_close_pipe(out_pipe);
@@ -697,10 +785,6 @@ int mal_proc_run(const MalProcRequest *req, MalProcResult *out) {
     } while (w < 0 && errno == EINTR);
     if (w < 0 && out->io_errno == 0) {
         out->io_errno = errno;
-    }
-
-    if (restore_sigpipe) {
-        sigaction(SIGPIPE, &prev, NULL);
     }
 
     if (launch_errno != 0) {

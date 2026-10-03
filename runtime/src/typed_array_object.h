@@ -56,6 +56,9 @@ typedef struct MalTypedArraySpan {
     u32 length;
     MalTypedArrayKind kind;
     u32 element_size;
+    // Other agents may access the bytes concurrently: element access must use
+    // the span load/store helpers and byte moves mal_typed_array_copy_bytes.
+    bool shared;
 } MalTypedArraySpan;
 
 MalTypedArrayObject *mal_typed_array_object_new(
@@ -97,6 +100,20 @@ u32 mal_typed_array_object_byte_length(const MalTypedArrayObject *array);
 /** Acquire the receiver's current in-bounds extent for a leaf native kernel. */
 bool mal_typed_array_object_span(
     const MalTypedArrayObject *array, MalTypedArraySpan *out);
+
+/**
+ * memmove where either side may be shared memory. Shared ranges use relaxed
+ * per-unit atomics (no C data race) in the direction that keeps overlap exact.
+ */
+void mal_typed_array_copy_bytes(
+    byte *dst, bool dst_shared, const byte *src, bool src_shared, usize length);
+
+/**
+ * Numeric element read for a shared-backed view, out of line so inline VM fast
+ * paths refresh a growable backing's length and stay race-free.
+ */
+MalValue mal_typed_array_object_shared_numeric_load(
+    const MalTypedArrayObject *array, u32 index);
 
 /** Load/store an element's raw storage bits from a validated span. */
 u64 mal_typed_array_span_load_bits(const MalTypedArraySpan *span, u32 index);

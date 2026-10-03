@@ -1,6 +1,7 @@
 #include "typed_array_object.h"
 
 #include <math.h>
+#include <string.h>
 
 #include "builtin_bigint.h"
 #include "heap_bigint.h"
@@ -80,6 +81,12 @@ static bool mal_typed_array_object_extent(
         return false;
     }
 
+    // Another agent may have grown the shared backing; catch this wrapper up so
+    // length-tracking views and OOB checks observe the published length.
+    if (buffer->shared_memory != nullptr && buffer->resizable) {
+        mal_array_buffer_object_refresh_shared_length(buffer);
+    }
+
     u32 size = mal_typed_array_sizes[array->kind];
     if (array->length_tracking) {
         if (array->byte_offset > buffer->byte_length) {
@@ -128,12 +135,28 @@ bool mal_typed_array_object_span(
         .length = length,
         .kind = array->kind,
         .element_size = element_size,
+        .shared = array->buffer->shared_memory != nullptr,
     };
     return true;
 }
 
+void mal_typed_array_copy_bytes(
+    byte *dst, bool dst_shared, const byte *src, bool src_shared, usize length) {
+    if (length == 0) {
+        return;
+    }
+    if (!dst_shared && !src_shared) {
+        memmove(dst, src, length);
+        return;
+    }
+    mal_shared_bytes_move(dst, src, length);
+}
+
 u64 mal_typed_array_span_load_bits(const MalTypedArraySpan *span, u32 index) {
     const byte *at = span->data + (usize) index * span->element_size;
+    if (span->shared) {
+        return mal_shared_unordered_load(at, span->element_size);
+    }
     switch (span->element_size) {
         case 1:
             return mal_scalar_load_native_u8(at);
@@ -149,6 +172,10 @@ u64 mal_typed_array_span_load_bits(const MalTypedArraySpan *span, u32 index) {
 void mal_typed_array_span_store_bits(
     const MalTypedArraySpan *span, u32 index, u64 bits) {
     byte *at = span->data + (usize) index * span->element_size;
+    if (span->shared) {
+        mal_shared_unordered_store(at, span->element_size, bits);
+        return;
+    }
     switch (span->element_size) {
         case 1:
             mal_scalar_store_native_u8(at, (u8) bits);
@@ -165,6 +192,38 @@ void mal_typed_array_span_store_bits(
     }
 }
 
+
+MalValue mal_typed_array_object_shared_numeric_load(
+    const MalTypedArrayObject *array, u32 index) {
+    MalTypedArraySpan span;
+    if (!mal_typed_array_object_span(array, &span) || index >= span.length) {
+        return mal_value_new_undefined();
+    }
+    u64 bits = mal_typed_array_span_load_bits(&span, index);
+    switch (array->kind) {
+        case MAL_TA_INT8:
+            return mal_value_from_i32(mal_scalar_i8_from_bits((u8) bits));
+        case MAL_TA_UINT8:
+        case MAL_TA_UINT8_CLAMPED:
+            return mal_value_from_i32((u8) bits);
+        case MAL_TA_INT16:
+            return mal_value_from_i32(mal_scalar_i16_from_bits((u16) bits));
+        case MAL_TA_UINT16:
+            return mal_value_from_i32((u16) bits);
+        case MAL_TA_INT32:
+            return mal_value_from_i32(mal_scalar_i32_from_bits((u32) bits));
+        case MAL_TA_UINT32:
+            return (u32) bits <= INT32_MAX
+                ? mal_value_from_i32((i32) (u32) bits)
+                : mal_ops_number_value((f64) (u32) bits);
+        case MAL_TA_FLOAT32:
+            return mal_value_from_f64_convert_nan((f64) mal_scalar_f32_from_bits((u32) bits));
+        case MAL_TA_FLOAT64:
+            return mal_value_from_f64_convert_nan(mal_scalar_f64_from_bits(bits));
+        default:
+            return mal_value_new_undefined();
+    }
+}
 
 MalValue mal_typed_array_object_get(MalVm *vm, MalTypedArrayObject *array, u32 index) {
     MalTypedArraySpan span;

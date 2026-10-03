@@ -296,17 +296,18 @@ typedef struct MalNodeHttpClientState {
     struct MalNodeHttpClientState *next;
 } MalNodeHttpClientState;
 
-static MalNodeHttpServerState *http_servers;
-static MalNodeHttpRequestState *http_requests;
-static MalNodeHttpRequestState *http_requests_tail;
-static MalNodeHttpRequestState **http_response_index;
-static usize http_response_index_capacity;
-static usize http_response_index_count;
-static MalNodeHttpRequestState **http_request_index;
-static usize http_request_index_capacity;
-static usize http_request_index_count;
-static MalNodeHttpClientState *http_clients;
-static bool http_roots_installed;
+// Value-holding operation lists are rooted by, and mutated on, their isolate's mutator.
+static MAL_ISOLATE_LOCAL MalNodeHttpServerState *http_servers;
+static MAL_ISOLATE_LOCAL MalNodeHttpRequestState *http_requests;
+static MAL_ISOLATE_LOCAL MalNodeHttpRequestState *http_requests_tail;
+static MAL_ISOLATE_LOCAL MalNodeHttpRequestState **http_response_index;
+static MAL_ISOLATE_LOCAL usize http_response_index_capacity;
+static MAL_ISOLATE_LOCAL usize http_response_index_count;
+static MAL_ISOLATE_LOCAL MalNodeHttpRequestState **http_request_index;
+static MAL_ISOLATE_LOCAL usize http_request_index_capacity;
+static MAL_ISOLATE_LOCAL usize http_request_index_count;
+static MAL_ISOLATE_LOCAL MalNodeHttpClientState *http_clients;
+static MAL_ISOLATE_LOCAL bool http_roots_installed;
 static void http_response_complete(void *data, bool success);
 static void http_queue_request_body(void *data, byte *owned_bytes, usize length);
 static void http_queue_request_end(void *data, bool success);
@@ -1784,7 +1785,8 @@ static bool http_response_chunk_owned(
             return false;
         }
         if (length > 0) {
-            memcpy(owned, array->buffer->data + array->byte_offset, length);
+            mal_typed_array_copy_bytes(owned, false, array->buffer->data + array->byte_offset,
+                                       array->buffer->shared_memory != nullptr, length);
         }
     } else {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,

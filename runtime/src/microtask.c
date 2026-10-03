@@ -13,10 +13,11 @@
 #include "perf_stats.h"
 #include "vm.h"
 
-static u64 g_job_allocations = 0;
-static u64 g_reaction_allocations = 0;
-static u64 g_job_reuses = 0;
-static u64 g_reaction_reuses = 0;
+// Diagnostic counters describe the isolate on the current mutator thread.
+static MAL_ISOLATE_LOCAL u64 g_job_allocations = 0;
+static MAL_ISOLATE_LOCAL u64 g_reaction_allocations = 0;
+static MAL_ISOLATE_LOCAL u64 g_job_reuses = 0;
+static MAL_ISOLATE_LOCAL u64 g_reaction_reuses = 0;
 
 // Six blocks hold 4,092 jobs, matching the old 4,096-node pool's 192 KiB budget.
 #define MAL_PROMISE_JOB_BLOCK_SIZE 32768
@@ -755,7 +756,8 @@ void mal_vm_drain_microtasks(MalVm *vm) {
     MalAsyncContextScope async_scope;
     bool async_scope_active = false;
 #endif
-    while (vm->job_head != nullptr) {
+    // A terminating isolate runs no further JS; queued jobs are freed at teardown.
+    while (vm->job_head != nullptr && !mal_gc_terminating()) {
         MalJob *job = vm->job_head;
         vm->job_head = job->next;
         if (vm->job_head == nullptr) {

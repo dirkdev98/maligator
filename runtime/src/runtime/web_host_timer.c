@@ -1,5 +1,6 @@
 #include "web_host_timer.h"
 
+#include <stdio.h>
 #include <stdlib.h>
 #include <math.h>
 #include <stdatomic.h>
@@ -18,18 +19,27 @@
 #include "vm.h"
 #include "vm_ops.h"
 
-#define MAL_HOST_MAX_MACROTASK_DRAINS 8
-static MalHostMacrotaskDrain mal_host_macrotask_drains[MAL_HOST_MAX_MACROTASK_DRAINS];
-static i32 mal_host_macrotask_drain_count;
-static MalHostIdleNotify mal_host_idle_notify;
-static MalHostExitNotify mal_host_exit_notify;
+// A fixed set of runtime subsystems registers drains; overflow is a runtime bug.
+#define MAL_HOST_MAX_MACROTASK_DRAINS 16
+// Checkpoint hooks belong to the isolate whose mutator registered them.
+static MAL_ISOLATE_LOCAL MalHostMacrotaskDrain
+    mal_host_macrotask_drains[MAL_HOST_MAX_MACROTASK_DRAINS];
+static MAL_ISOLATE_LOCAL i32 mal_host_macrotask_drain_count;
+static MAL_ISOLATE_LOCAL MalHostIdleNotify mal_host_idle_notify;
+static MAL_ISOLATE_LOCAL MalHostExitNotify mal_host_exit_notify;
+static MAL_ISOLATE_LOCAL MalHostTerminationCheck mal_host_termination_check;
+
+void mal_host_set_termination_check(MalHostTerminationCheck check) {
+    mal_host_termination_check = check;
+}
 
 void mal_host_register_macrotask_drain(MalHostMacrotaskDrain drain, bool priority) {
     for (i32 i = 0; i < mal_host_macrotask_drain_count; i++) {
         if (mal_host_macrotask_drains[i] == drain) return;
     }
     if (mal_host_macrotask_drain_count >= MAL_HOST_MAX_MACROTASK_DRAINS) {
-        return;
+        fprintf(stderr, "maligator: too many host macrotask drains (max %d)\n", MAL_HOST_MAX_MACROTASK_DRAINS);
+        abort();
     }
     if (priority) {
         for (i32 i = mal_host_macrotask_drain_count; i > 0; i--) {
@@ -51,8 +61,11 @@ void mal_host_register_exit_notify(MalHostExitNotify notify) {
 }
 
 int mal_host_finish_process(MalVm *vm, int default_code) {
-    return mal_host_exit_notify != nullptr
+    mal_gc_set_mutator_busy(vm, true);
+    int code = mal_host_exit_notify != nullptr
         ? mal_host_exit_notify(vm, default_code) : default_code;
+    mal_gc_set_mutator_busy(vm, false);
+    return code;
 }
 
 static bool mal_host_run_runtime_macrotask(MalVm *vm) {
@@ -272,15 +285,20 @@ static bool mal_host_has_referenced_work(MalVm *vm) {
 }
 
 void mal_host_run_event_loop(MalVm *vm) {
+    mal_gc_set_mutator_busy(vm, true);
     // Tracks whether the loop did anything since the last idle notification, so a
     // `beforeExit` listener that schedules new work is notified again next time
     // the loop drains, while one that schedules nothing does not spin forever.
     // Seeded true so the first drain always notifies.
     bool progressed = true;
     for (;;) {
+        if (mal_gc_terminating()) break;
+        if (mal_host_termination_check != nullptr && mal_host_termination_check(vm)) break;
         // Microtasks first (promise jobs), then one macrotask, then repeat.
         mal_vm_drain_microtasks(vm);
+        if (!mal_vm_check_entry_evaluation(vm)) break;
         if (vm->completion.kind == MAL_COMPLETION_THROW) break;
+        if (mal_host_termination_check != nullptr && mal_host_termination_check(vm)) break;
         if (mal_host_run_runtime_macrotask(vm)) {
             progressed = true;
             if (mal_gc_poll) mal_gc_safepoint(vm);
@@ -298,7 +316,9 @@ void mal_host_run_event_loop(MalVm *vm) {
         // until the next fires; otherwise the isolate is idle.
 		if (mal_host_has_referenced_work(vm)) {
 			progressed = true;
+            mal_gc_set_mutator_busy(vm, false);
 			mal_reactor_wait(&mal_host(vm)->reactor);
+            mal_gc_set_mutator_busy(vm, true);
 			if (mal_gc_poll) mal_gc_safepoint(vm);
 			continue;
         }
@@ -311,6 +331,7 @@ void mal_host_run_event_loop(MalVm *vm) {
         }
         if (mal_gc_poll) mal_gc_safepoint(vm);
     }
+    mal_gc_set_mutator_busy(vm, false);
 }
 
 void mal_host_timers_free(MalVm *vm) {

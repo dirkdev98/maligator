@@ -373,7 +373,8 @@ static bool mal_ta_copy_elements(MalVm *vm, MalTypedArrayObject *dst, u32 dst_st
     byte *dst_at = dst_span.data + (usize) dst_start * dst_span.element_size;
     const byte *src_at = src_span.data + (usize) src_start * src_span.element_size;
     if (dst->kind == src->kind && dst->buffer != src->buffer) {
-        memcpy(dst_at, src_at, (usize) count * src_span.element_size);
+        mal_typed_array_copy_bytes(dst_at, dst_span.shared, src_at, src_span.shared,
+            (usize) count * src_span.element_size);
         return true;
     }
 
@@ -420,15 +421,17 @@ static bool mal_ta_set_from_same_buffer(
     byte *dst_at = dst_span.data + (usize) dst_start * dst_span.element_size;
     usize snapshot_size = (usize) count * src_span.element_size;
     if (dst->kind == src->kind) {
-        memmove(dst_at, src_span.data, snapshot_size);
+        mal_typed_array_copy_bytes(dst_at, dst_span.shared, src_span.data, src_span.shared,
+            snapshot_size);
         return true;
     }
 
     byte *snapshot = malloc(snapshot_size);
-    memcpy(snapshot, src_span.data, snapshot_size);
+    mal_typed_array_copy_bytes(snapshot, false, src_span.data, src_span.shared, snapshot_size);
     MalTypedArraySpan read_span = src_span;
     read_span.data = snapshot;
     read_span.length = count;
+    read_span.shared = false;
     bool bigint = mal_typed_array_is_bigint(src->kind);
     for (u32 i = 0; i < count; i++) {
         u64 bits = bigint
@@ -830,8 +833,10 @@ static MalValue mal_ta_fill(MalVm *vm, MalValue this_value, const MalValue *args
     u8 fill_byte;
     bool uniform_bytes = mal_ta_uniform_fill_byte(bits, span.element_size, &fill_byte);
     // Keep shared multi-byte stores element-sized; memset would change write granularity.
-    bool can_memset = uniform_bytes && (span.element_size == 1 || !array->buffer->shared);
-    if (start < end && can_memset) {
+    bool can_memset = uniform_bytes && (span.element_size == 1 || !span.shared);
+    if (start < end && can_memset && span.shared) {
+        mal_shared_bytes_fill(span.data + start, fill_byte, end - start);
+    } else if (start < end && can_memset) {
         memset(span.data + (usize) start * span.element_size, fill_byte,
             (usize) (end - start) * span.element_size);
     } else {
@@ -883,7 +888,11 @@ static MalValue mal_ta_set(MalVm *vm, MalValue this_value, const MalValue *args,
             mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Source is too large");
             return mal_value_new_undefined();
         }
-        if (array->buffer == src->buffer) {
+        // Distinct wrappers of one shared backing alias the same data block.
+        bool same_block = array->buffer == src->buffer ||
+            (array->buffer->shared_memory != nullptr &&
+                array->buffer->shared_memory == src->buffer->shared_memory);
+        if (same_block) {
             if (!mal_ta_set_from_same_buffer(vm, array, offset, src, src_length)) {
                 return mal_value_new_undefined();
             }
@@ -1059,9 +1068,11 @@ static MalValue mal_ta_copy_within(MalVm *vm, MalValue this_value, const MalValu
         count = live_count;
     }
     u32 element_size = mal_typed_array_element_size(array->kind);
-    // memmove handles overlap; the element bits move verbatim.
-    memmove(array->buffer->data + array->byte_offset + (usize) target * element_size,
-        array->buffer->data + array->byte_offset + (usize) start * element_size,
+    // Overlap-safe move; the element bits move verbatim.
+    bool shared = array->buffer->shared_memory != nullptr;
+    mal_typed_array_copy_bytes(
+        array->buffer->data + array->byte_offset + (usize) target * element_size, shared,
+        array->buffer->data + array->byte_offset + (usize) start * element_size, shared,
         (usize) count * element_size);
     return this_value;
 }
@@ -1274,6 +1285,14 @@ static MalValue mal_ta_index_of(MalVm *vm, MalValue this_value, const MalValue *
             from >= search_end) {
             return mal_value_from_i32(-1);
         }
+        if (span.shared) {
+            for (u32 i = from; i < search_end; i++) {
+                if ((u8) mal_typed_array_span_load_bits(&span, i) == needle) {
+                    return mal_value_from_i32((i32) i);
+                }
+            }
+            return mal_value_from_i32(-1);
+        }
         const byte *found = memchr(
             span.data + from, needle, search_end - from);
         return found == nullptr
@@ -1337,7 +1356,7 @@ static MalValue mal_ta_last_index_of(MalVm *vm, MalValue this_value, const MalVa
             return mal_value_from_i32(-1);
         }
         for (i64 i = from; i >= 0; i--) {
-            if (span.data[i] == needle) {
+            if ((u8) mal_typed_array_span_load_bits(&span, (u32) i) == needle) {
                 return mal_value_from_i32((i32) i);
             }
         }
@@ -1377,6 +1396,14 @@ static MalValue mal_ta_includes(MalVm *vm, MalValue this_value, const MalValue *
                     (from > span.length ? from : span.length) < length);
             }
             if (from >= present_end) {
+                return mal_value_new_boolean(false);
+            }
+            if (span.shared) {
+                for (u32 i = from; i < present_end; i++) {
+                    if ((u8) mal_typed_array_span_load_bits(&span, i) == needle) {
+                        return mal_value_new_boolean(true);
+                    }
+                }
                 return mal_value_new_boolean(false);
             }
             return mal_value_new_boolean(
@@ -1758,10 +1785,12 @@ static void mal_ta_sort_default(MalTypedArrayObject *array) {
     usize byte_length = (usize) target.length * target.element_size;
     byte *source_data = malloc(byte_length);
     byte *scratch_data = malloc(byte_length);
-    memcpy(source_data, target.data, byte_length);
+    mal_typed_array_copy_bytes(source_data, false, target.data, target.shared, byte_length);
 
     MalTypedArraySpan source = target;
     MalTypedArraySpan scratch = target;
+    source.shared = false;
+    scratch.shared = false;
     u32 width = 1;
     while (width < target.length) {
         source.data = source_data;
@@ -1791,7 +1820,7 @@ static void mal_ta_sort_default(MalTypedArrayObject *array) {
         width = width > target.length / 2 ? target.length : width * 2;
     }
 
-    memcpy(target.data, source_data, byte_length);
+    mal_typed_array_copy_bytes(target.data, target.shared, source_data, false, byte_length);
     free(source_data);
     free(scratch_data);
 }
@@ -2703,6 +2732,19 @@ static MalValue mal_ta_from_hex(MalVm *vm, MalValue this_value, const MalValue *
     return result;
 }
 
+// Encoders read every byte more than once; give them a private race-free copy.
+static byte *mal_ta_shared_byte_snapshot(
+    const MalTypedArrayObject *array, const byte *bytes, u32 length) {
+    if (array->buffer->shared_memory == nullptr || length == 0) {
+        return nullptr;
+    }
+    byte *snapshot = malloc(length);
+    if (snapshot != nullptr) {
+        mal_shared_bytes_read(snapshot, bytes, length);
+    }
+    return snapshot;
+}
+
 static MalValue mal_ta_to_base64(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) new_target;
     (void) callee;
@@ -2731,7 +2773,10 @@ static MalValue mal_ta_to_base64(MalVm *vm, MalValue this_value, const MalValue 
     const byte *bytes = length == 0
         ? nullptr
         : array->buffer->data + array->byte_offset;
-    return mal_b64_encode(vm, bytes, length, url, omit_padding);
+    byte *snapshot = mal_ta_shared_byte_snapshot(array, bytes, length);
+    MalValue result = mal_b64_encode(vm, snapshot != nullptr ? snapshot : bytes, length, url, omit_padding);
+    free(snapshot);
+    return result;
 }
 
 static MalValue mal_ta_to_hex(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
@@ -2751,7 +2796,10 @@ static MalValue mal_ta_to_hex(MalVm *vm, MalValue this_value, const MalValue *ar
     const byte *bytes = length == 0
         ? nullptr
         : array->buffer->data + array->byte_offset;
-    return mal_hex_encode(vm, bytes, length);
+    byte *snapshot = mal_ta_shared_byte_snapshot(array, bytes, length);
+    MalValue result = mal_hex_encode(vm, snapshot != nullptr ? snapshot : bytes, length);
+    free(snapshot);
+    return result;
 }
 
 /** Build the { read, written } result record for setFromBase64/setFromHex. */
@@ -2803,7 +2851,8 @@ static MalValue mal_ta_set_from_base64(MalVm *vm, MalValue this_value, const Mal
     bool ok = mal_b64_decode(vm, units, len, url, last_chunk, bytes, target_length, &read, &written);
     // Commit the successfully-decoded bytes even when a later chunk errors.
     if (written > 0) {
-        memcpy(array->buffer->data + array->byte_offset, bytes, written);
+        mal_typed_array_copy_bytes(array->buffer->data + array->byte_offset,
+            array->buffer->shared_memory != nullptr, bytes, false, written);
     }
     free(bytes);
     if (!ok) {
@@ -2839,7 +2888,8 @@ static MalValue mal_ta_set_from_hex(MalVm *vm, MalValue this_value, const MalVal
     usize written;
     bool ok = mal_hex_decode(vm, units, len, bytes, target_length, &read, &written);
     if (written > 0) {
-        memcpy(array->buffer->data + array->byte_offset, bytes, written);
+        mal_typed_array_copy_bytes(array->buffer->data + array->byte_offset,
+            array->buffer->shared_memory != nullptr, bytes, false, written);
     }
     free(bytes);
     if (!ok) {

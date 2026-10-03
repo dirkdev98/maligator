@@ -7,9 +7,10 @@
 #include "gc.h"
 #include "perf_stats.h"
 
-static u64 g_slot_coallocations = 0;
-static u64 g_slot_grow_migrations = 0;
-static u64 g_slot_dictionary_migrations = 0;
+// Diagnostic counters describe the isolate on the current mutator thread.
+static MAL_ISOLATE_LOCAL u64 g_slot_coallocations = 0;
+static MAL_ISOLATE_LOCAL u64 g_slot_grow_migrations = 0;
+static MAL_ISOLATE_LOCAL u64 g_slot_dictionary_migrations = 0;
 
 typedef struct MalPrototypeCacheDependency {
     MalObject *object;
@@ -39,7 +40,7 @@ static _Thread_local usize g_prototype_dependency_active = 0;
 
 void mal_vm_property_cache_invalidate(void *cache);
 
-u64 mal_prototype_chain_epoch = 1;
+MAL_ISOLATE_LOCAL u64 mal_prototype_chain_epoch = 1;
 
 static usize mal_prototype_dependency_hash(const void *pointer) {
     u64 hash = (u64) (uptr) pointer;

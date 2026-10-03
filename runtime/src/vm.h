@@ -1714,6 +1714,8 @@ typedef struct MalVm {
      * evaluate, which the entry turns into a non-zero exit. Undefined otherwise.
      */
     MalValue entry_async_promise;
+    // A worker forwards startup errors to its parent rather than printing them locally.
+    bool entry_errors_forwarded;
 
     MalSymbolRegistry symbol_registry;
     // Shapes and caches borrow these canonical pointers for the VM lifetime.
@@ -1849,12 +1851,14 @@ typedef struct MalVm {
      * the bare test262 runner). See host.h.
      */
     void *host;
+    bool host_web_platform;
+    bool host_node;
 
     // Application fragments share prepared exports for the lifetime of this isolate.
     MalPreparedValue *prepared_values;
 
     /** Runtime modules reached by this isolate register their teardown here. */
-    void (*runtime_cleanups[8])(MalVm *vm);
+    void (*runtime_cleanups[16])(MalVm *vm);
     usize runtime_cleanup_count;
 
     /**
@@ -2228,6 +2232,9 @@ void mal_vm_init(MalVm *vm, const MalRuntimeImage *program);
 /** Register one idempotent runtime-module teardown with the owning isolate. */
 bool mal_vm_register_runtime_cleanup(MalVm *vm, void (*cleanup)(MalVm *vm));
 
+// Close native producers while their reactor and mutator-owned roots still exist.
+void mal_vm_run_runtime_cleanups(MalVm *vm);
+
 /** Process-wide loaded bytecode footprint used by benchmark telemetry. */
 u64 mal_vm_loaded_instruction_count(void);
 u64 mal_vm_loaded_instruction_data_count(void);
@@ -2348,6 +2355,7 @@ bool mal_vm_push_function_frame(
 );
 
 void mal_vm_run(MalVm *vm, MalCallable *callable);
+bool mal_vm_check_entry_evaluation(MalVm *vm);
 
 /**
  * Resume a suspended generator: reattach its frame, deliver the sent value to

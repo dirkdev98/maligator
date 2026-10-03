@@ -75,9 +75,11 @@ typedef enum MalFetchBufferSourceResult {
 } MalFetchBufferSourceResult;
 
 /* Extract a validated BufferSource span. Detached and out-of-bounds views are
- * errors rather than empty bodies. */
+ * errors rather than empty bodies. Shared bytes come back as a private snapshot
+ * in *owned, which the caller frees. */
 static MalFetchBufferSourceResult mal_fetch_buffer_source(
-    MalVm *vm, MalValue v, const byte **out, usize *out_len) {
+    MalVm *vm, MalValue v, const byte **out, usize *out_len, byte **owned) {
+    *owned = nullptr;
     MalBufferSourceSpan span;
     MalBufferSourceSpanStatus status = mal_buffer_source_span(v, &span);
     if (status == MAL_BUFFER_SOURCE_SPAN_NOT_BUFFER_SOURCE) {
@@ -93,7 +95,11 @@ static MalFetchBufferSourceResult mal_fetch_buffer_source(
         }
         return MAL_FETCH_BUFFER_SOURCE_ERROR;
     }
-    *out = span.data;
+    *out = mal_buffer_source_span_private(&span, owned);
+    if (span.length > 0 && *out == nullptr) {
+        mal_vm_throw_allocation_error(vm);
+        return MAL_FETCH_BUFFER_SOURCE_ERROR;
+    }
     *out_len = span.length;
     return MAL_FETCH_BUFFER_SOURCE_OK;
 }
@@ -934,18 +940,19 @@ static MalValue mal_response_constructor(
         if (body == nullptr) goto response_error;
         content_type = "text/plain;charset=UTF-8";
     } else if (arg_count >= 1) {
+        byte *src_owned;
         MalFetchBufferSourceResult buffer_result =
-            mal_fetch_buffer_source(vm, args[0], &src_bytes, &src_len);
+            mal_fetch_buffer_source(vm, args[0], &src_bytes, &src_len, &src_owned);
         if (buffer_result == MAL_FETCH_BUFFER_SOURCE_ERROR) goto response_error;
         if (buffer_result == MAL_FETCH_BUFFER_SOURCE_OK) {
         // A BufferSource (ArrayBuffer / TypedArray) body: copy the raw bytes.
-            body = malloc(src_len == 0 ? 1 : src_len);
+            body = src_owned != nullptr ? src_owned : malloc(src_len == 0 ? 1 : src_len);
             if (body == nullptr) {
                 mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
                     "Response body allocation failed");
                 goto response_error;
             }
-            if (src_len > 0) {
+            if (src_owned == nullptr && src_len > 0) {
                 memcpy(body, src_bytes, src_len);
             }
             body_len = src_len;
@@ -1065,12 +1072,15 @@ static MalValue mal_blob_constructor(
             }
             const byte *source_bytes;
             usize source_length;
+            byte *source_owned;
             MalFetchBufferSourceResult source_result =
-                mal_fetch_buffer_source(vm, part, &source_bytes, &source_length);
+                mal_fetch_buffer_source(vm, part, &source_bytes, &source_length, &source_owned);
             if (source_result == MAL_FETCH_BUFFER_SOURCE_ERROR) break;
             if (source_result == MAL_FETCH_BUFFER_SOURCE_OK) {
-                if (!mal_blob_append_bytes(vm, &bytes, &length, &capacity,
-                        source_bytes, source_length)) break;
+                bool appended = mal_blob_append_bytes(vm, &bytes, &length, &capacity,
+                    source_bytes, source_length);
+                free(source_owned);
+                if (!appended) break;
                 continue;
             }
             MalString *string;
@@ -1706,10 +1716,8 @@ static MalValue mal_fetch_body_collect_fulfilled(
                 mal_fetch_collect_reject_completion(vm, function);
                 return mal_value_new_undefined();
             }
-            if (chunk_span.length > 0) {
-                memcpy(bytes + offset, chunk_span.data, chunk_span.length);
-                offset += chunk_span.length;
-            }
+            mal_buffer_source_span_read(&chunk_span, 0, bytes + offset, chunk_span.length);
+            offset += chunk_span.length;
         }
         MalValue body_self = mal_native_function_object_get_slot(
             function, MAL_FETCH_COLLECT_SELF);
@@ -1761,7 +1769,15 @@ static MalValue mal_fetch_body_collect_fulfilled(
         mal_fetch_collect_reject_completion(vm, function);
         return mal_value_new_undefined();
     }
-    MalValue copy = mal_fetch_new_uint8array(vm, chunk_span.data, chunk_span.length);
+    byte *owned_chunk;
+    const byte *chunk_bytes = mal_buffer_source_span_private(&chunk_span, &owned_chunk);
+    if (chunk_span.length > 0 && chunk_bytes == nullptr) {
+        mal_vm_throw_allocation_error(vm);
+        mal_fetch_collect_reject_completion(vm, function);
+        return mal_value_new_undefined();
+    }
+    MalValue copy = mal_fetch_new_uint8array(vm, chunk_bytes, chunk_span.length);
+    free(owned_chunk);
     if (vm->completion.kind == MAL_COMPLETION_THROW) {
         mal_fetch_collect_reject_completion(vm, function);
         return mal_value_new_undefined();
@@ -2749,18 +2765,19 @@ static MalValue mal_request_constructor(
     } else {
         const byte *sb;
         usize sl;
+        byte *sb_owned;
         MalFetchBufferSourceResult buffer_result =
-            mal_fetch_buffer_source(vm, slots[4], &sb, &sl);
+            mal_fetch_buffer_source(vm, slots[4], &sb, &sl, &sb_owned);
         if (buffer_result == MAL_FETCH_BUFFER_SOURCE_ERROR) goto request_error;
         if (buffer_result == MAL_FETCH_BUFFER_SOURCE_OK) {
             free(r->body);
-            r->body = malloc(sl == 0 ? 1 : sl);
+            r->body = sb_owned != nullptr ? sb_owned : malloc(sl == 0 ? 1 : sl);
             if (r->body == nullptr) {
                 mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
                     "Request body allocation failed");
                 goto request_error;
             }
-            if (sl > 0) {
+            if (sb_owned == nullptr && sl > 0) {
                 memcpy(r->body, sb, sl);
             }
             r->body_len = sl;

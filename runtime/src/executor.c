@@ -1,5 +1,7 @@
 #include "executor.h"
 
+#if !defined(__wasi__)
+
 #include <pthread.h>
 #include <signal.h>
 #include <stdlib.h>
@@ -122,8 +124,7 @@ static MalExecutorPool *mal_executor_pool_new(MalExecutorClass kind) {
     }
     // Native helpers must not inherit a mutator's sampling signal delivery.
     sigset_t blocked, previous;
-    sigemptyset(&blocked);
-    sigaddset(&blocked, SIGPROF);
+    sigfillset(&blocked);
     if (pthread_sigmask(SIG_BLOCK, &blocked, &previous) != 0) {
         pthread_cond_destroy(&pool->changed);
         pthread_mutex_destroy(&pool->mutex);
@@ -293,3 +294,26 @@ usize mal_executor_client_queued(MalExecutorClient *client) {
     pthread_mutex_unlock(&pool->mutex);
     return queued;
 }
+
+#else
+bool mal_executor_client_init(MalExecutorClient *client, MalExecutorClass kind,
+    usize concurrency, usize queue_capacity) {
+    (void) kind; (void) concurrency; (void) queue_capacity;
+    client->state = nullptr;
+    return false;
+}
+bool mal_executor_submit(MalExecutorClient *client, MalExecutorRun run,
+    MalExecutorDiscard discard, void *data, usize queued_bytes, usize working_bytes) {
+    (void) client; (void) run; (void) discard; (void) data;
+    (void) queued_bytes; (void) working_bytes;
+    return false;
+}
+bool mal_executor_cancel(MalExecutorClient *client, void *data) {
+    (void) client; (void) data;
+    return false;
+}
+void mal_executor_client_shutdown(MalExecutorClient *client) { (void) client; }
+void mal_executor_client_free(MalExecutorClient *client) { client->state = nullptr; }
+usize mal_executor_client_workers(MalExecutorClient *client) { (void) client; return 0; }
+usize mal_executor_client_queued(MalExecutorClient *client) { (void) client; return 0; }
+#endif

@@ -223,7 +223,7 @@ static inline bool mal_object_is_locked_primordial(const MalObject *object) {
  * Current process-wide prototype-chain validity epoch. Zero permanently disables
  * exact-chain caching after the theoretical u64 version space is exhausted.
  */
-extern u64 mal_prototype_chain_epoch;
+extern MAL_ISOLATE_LOCAL u64 mal_prototype_chain_epoch;
 
 /** Cold half of prototype-chain invalidation; callers use the inline flag guard. */
 void mal_object_bump_prototype_chain_epoch(void);

@@ -1,13 +1,16 @@
 #include "node_events.h"
 #include "node_module.h"
+#include "node_async_hooks.h"
 
 #if MAL_NODE
 
 #include <math.h>
 #include <string.h>
+#include <stdlib.h>
 
 #include "ascii.h"
 #include "array_object.h"
+#include "builtin_promise.h"
 #include "function_object.h"
 #include "gc.h"
 #include "heap_symbol.h"
@@ -24,7 +27,8 @@
 
 #define EE_WEC (MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE)
 
-static MalNodeEventsChangeHook ee_change_hook;
+// Installed by the isolate's process module; other isolates install their own.
+static MAL_ISOLATE_LOCAL MalNodeEventsChangeHook ee_change_hook;
 
 void mal_node_events_set_change_hook(MalNodeEventsChangeHook hook) {
     ee_change_hook = hook;
@@ -779,6 +783,189 @@ static MalValue ee_new_function(
         mal_intrinsic_ascii(vm, (const byte *) name), length, callback));
 }
 
+static MalValue ee_resource(MalVm *vm, MalValue receiver, MalValue callee) {
+    if (mal_value_is_object(receiver)) {
+        MalValue brand = mal_native_function_object_get_slot(mal_value_to_native_function_object(callee), 0);
+        MalPropertyLookup lookup = mal_object_get_own(mal_value_to_object(receiver), (MalKey){.kind = MAL_KEY_SYMBOL, .value = brand});
+        if (lookup.present) return lookup.desc.value;
+    }
+    mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "EventEmitterAsyncResource method called on incompatible receiver");
+    return mal_value_new_undefined();
+}
+
+static MalValue ee_resource_constructor(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc, MalValue new_target, MalValue callee) {
+    if (mal_value_is_undefined(new_target)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "EventEmitterAsyncResource requires new");
+        return mal_value_new_undefined();
+    }
+    MalValue roots[] = {ee_constructor(vm, receiver, args, argc, new_target, callee),
+        mal_value_new_undefined(), mal_value_new_undefined(), argc > 0 ? args[0] : mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    roots[1] = mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) "EventEmitterAsyncResource"));
+    if (mal_value_is_object(roots[3])) {
+        MalValue name;
+        if (!mal_vm_get_property(vm, roots[3], ee_name_key(vm, "name"), &name)) goto done;
+        if (!mal_value_is_undefined(name)) roots[1] = name;
+    }
+    MalNativeFunctionObject *function = mal_value_to_native_function_object(callee);
+    MalValue constructor = mal_native_function_object_get_slot(function, 1);
+    MalValue resource_args[] = {roots[1], roots[3]};
+    MalCompletion completion = mal_vm_construct_value(vm, constructor, resource_args, 2);
+    if (completion.kind == MAL_COMPLETION_THROW) goto done;
+    roots[2] = completion.value;
+    MalValue brand = mal_native_function_object_get_slot(function, 0);
+    MalPropertyDesc descriptor = mal_intrinsic_data_desc(roots[2], MAL_PROPERTY_NONE);
+    mal_object_define_own(mal_value_to_object(roots[0]), (MalKey){.kind = MAL_KEY_SYMBOL, .value = brand}, &descriptor);
+    mal_intrinsic_define_data(vm, mal_value_to_object(roots[2]), (const byte *) "eventEmitter", roots[0], MAL_PROPERTY_NONE);
+done:
+    mal_gc_unroot(&root);
+    return vm->completion.kind == MAL_COMPLETION_THROW ? mal_value_new_undefined() : roots[0];
+}
+
+static MalValue ee_resource_get(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc, MalValue new_target, MalValue callee) {
+    (void) args; (void) argc; (void) new_target;
+    return ee_resource(vm, receiver, callee);
+}
+
+static MalValue ee_resource_method(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc, MalValue new_target, MalValue callee) {
+    (void) args; (void) argc; (void) new_target;
+    MalValue resource = ee_resource(vm, receiver, callee);
+    if (vm->completion.kind == MAL_COMPLETION_THROW) return mal_value_new_undefined();
+    MalNativeFunctionObject *function = mal_value_to_native_function_object(callee);
+    MalValue method_name = mal_native_function_object_get_slot(function, 1);
+    MalRootSpan root;
+    mal_gc_root(&root, &resource, 1);
+    MalValue method;
+    MalKey method_key;
+    if (!mal_vm_to_property_key(vm, method_name, &method_key) || !mal_vm_get_property(vm, resource, method_key, &method)) {
+        mal_gc_unroot(&root);
+        return mal_value_new_undefined();
+    }
+    MalCompletion completion = mal_vm_call_value(vm, method, resource, nullptr, 0);
+    mal_gc_unroot(&root);
+    return completion.value;
+}
+
+static MalValue ee_resource_emit(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc, MalValue new_target, MalValue callee) {
+    (void) new_target;
+    MalValue resource = ee_resource(vm, receiver, callee);
+    if (vm->completion.kind == MAL_COMPLETION_THROW) return mal_value_new_undefined();
+    MalValue roots[] = {resource, mal_value_new_undefined(), mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    if (!mal_vm_get_property(vm, resource, ee_name_key(vm, "runInAsyncScope"), &roots[1])) goto done;
+    roots[2] = ee_new_function(vm, "emit", 1, ee_emit);
+    MalValue *call_args = malloc(((usize) argc + 2) * sizeof(MalValue));
+    if (call_args == nullptr) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_ERROR_PROTOTYPE, "Could not allocate event arguments");
+        goto done;
+    }
+    call_args[0] = roots[2];
+    call_args[1] = receiver;
+    if (argc > 0) memcpy(call_args + 2, args, (usize) argc * sizeof(MalValue));
+    MalCompletion completion = mal_vm_call_value(vm, roots[1], resource, call_args, argc + 2);
+    free(call_args);
+    roots[2] = completion.value;
+done:
+    mal_gc_unroot(&root);
+    return vm->completion.kind == MAL_COMPLETION_THROW ? mal_value_new_undefined() : roots[2];
+}
+
+static MalValue ee_once_property(MalVm *vm, MalValue state, const char *key) {
+    return mal_object_get_own(mal_value_to_object(state), ee_name_key(vm, key)).desc.value;
+}
+
+static void ee_once_remove(MalVm *vm, MalValue state, const char *event_key, const char *listener_key) {
+    MalValue receiver = ee_once_property(vm, state, "emitter");
+    MalValue method;
+    if (!mal_vm_get_property(vm, receiver, ee_name_key(vm, "removeListener"), &method)) return;
+    if (!mal_value_is_callable(method)) {
+        if (!mal_vm_get_property(vm, receiver, ee_name_key(vm, "off"), &method)) return;
+    }
+    if (!mal_value_is_callable(method)) return;
+    MalValue args[] = {ee_once_property(vm, state, event_key), ee_once_property(vm, state, listener_key)};
+    if (!mal_value_is_undefined(args[1])) mal_vm_call_value(vm, method, receiver, args, 2);
+}
+
+static MalValue ee_once_settle(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc, MalValue new_target, MalValue callee) {
+    (void) receiver; (void) new_target;
+    MalNativeFunctionObject *function = mal_value_to_native_function_object(callee);
+    MalValue roots[] = {mal_native_function_object_get_slot(function, 0), mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    if (mal_value_is_truthy(ee_once_property(vm, roots[0], "done"))) {
+        mal_gc_unroot(&root);
+        return mal_value_new_undefined();
+    }
+    mal_object_set(mal_value_to_object(roots[0]), ee_name_key(vm, "done"), mal_value_new_boolean(true));
+    bool rejected = mal_value_to_boolean(mal_native_function_object_get_slot(function, 1));
+    if (rejected) roots[1] = argc > 0 ? args[0] : mal_value_new_undefined();
+    else {
+        roots[1] = mal_value_from_array_object(mal_intrinsic_new_dense_array(vm, (u32) argc));
+        for (i32 index = 0; index < argc; index++) mal_array_object_store(mal_value_to_array_object(roots[1]), mal_key_index((u32) index), args[index]);
+    }
+    ee_once_remove(vm, roots[0], "event", "listener");
+    if (vm->completion.kind != MAL_COMPLETION_THROW) ee_once_remove(vm, roots[0], "error", "errorListener");
+    if (vm->completion.kind == MAL_COMPLETION_THROW) {
+        rejected = true;
+        roots[1] = vm->completion.value;
+        vm->completion = (MalCompletion){.kind = MAL_COMPLETION_NORMAL, .value = mal_value_new_undefined()};
+    }
+    mal_promise_settle_direct(vm, ee_once_property(vm, roots[0], "promise"), vm->intrinsics[MAL_INTRINSIC_PROMISE_CONSTRUCTOR], rejected, roots[1]);
+    mal_gc_unroot(&root);
+    return mal_value_new_undefined();
+}
+
+static MalValue ee_static_once(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc, MalValue new_target, MalValue callee) {
+    (void) receiver; (void) new_target; (void) callee;
+    MalValue roots[] = {argc > 0 ? args[0] : mal_value_new_undefined(), argc > 1 ? args[1] : mal_value_new_undefined(),
+        mal_value_new_undefined(), mal_value_new_undefined(), mal_value_new_undefined(), mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    MalValue resolve, reject;
+    mal_promise_new_direct_capability(vm, &roots[2], &resolve, &reject);
+    roots[3] = mal_value_from_object(mal_intrinsic_new_object(vm));
+    const char *names[] = {"emitter", "event", "promise", "error", "errorListener", "listener", "done"};
+    MalValue values[] = {roots[0], roots[1], roots[2], mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) "error")), mal_value_new_undefined(), mal_value_new_undefined(), mal_value_new_boolean(false)};
+    for (usize index = 0; index < countof(names); index++) mal_object_set(mal_value_to_object(roots[3]), ee_name_key(vm, names[index]), values[index]);
+    MalValue slots[] = {roots[3], mal_value_new_boolean(false)};
+    roots[4] = mal_value_from_native_function_object(mal_native_function_object_new_with_slots_arity(&vm->heap,
+        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]), mal_intrinsic_ascii(vm, (const byte *) "eventOnce"), 0, ee_once_settle, slots, 2));
+    mal_object_set(mal_value_to_object(roots[3]), ee_name_key(vm, "listener"), roots[4]);
+    if (!mal_vm_get_property(vm, roots[0], ee_name_key(vm, "once"), &roots[5])) goto failure;
+    if (!mal_value_is_callable(roots[5])) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "once requires an EventEmitter");
+        goto failure;
+    }
+    MalValue listener_args[] = {roots[1], roots[4]};
+    mal_vm_call_value(vm, roots[5], roots[0], listener_args, 2);
+    if (vm->completion.kind == MAL_COMPLETION_THROW) goto failure;
+    if (!ee_string_is(roots[1], "error")) {
+        slots[1] = mal_value_new_boolean(true);
+        roots[4] = mal_value_from_native_function_object(mal_native_function_object_new_with_slots_arity(&vm->heap,
+            mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]), mal_intrinsic_ascii(vm, (const byte *) "eventOnceError"), 1, ee_once_settle, slots, 2));
+        mal_object_set(mal_value_to_object(roots[3]), ee_name_key(vm, "errorListener"), roots[4]);
+        MalValue error_args[] = {ee_once_property(vm, roots[3], "error"), roots[4]};
+        mal_vm_call_value(vm, roots[5], roots[0], error_args, 2);
+        if (vm->completion.kind == MAL_COMPLETION_THROW) goto failure;
+    }
+    mal_gc_unroot(&root);
+    return roots[2];
+failure:
+    roots[4] = vm->completion.value;
+    vm->completion = (MalCompletion){.kind = MAL_COMPLETION_NORMAL, .value = mal_value_new_undefined()};
+    mal_promise_settle_direct(vm, roots[2], vm->intrinsics[MAL_INTRINSIC_PROMISE_CONSTRUCTOR], true, roots[4]);
+    mal_gc_unroot(&root);
+    return roots[2];
+}
+
 void mal_host_install_node_events(
     MalVm *vm, const MalHostInstallSlot *slots, i32 count,
     const MalHostLaunchContext *launch) {
@@ -798,10 +985,11 @@ void mal_host_install_node_events(
         {"setMaxListeners", 1, ee_set_max_listeners},
     };
 
-    MalValue roots[5] = {
+    MalValue roots[9] = {
         mal_value_new_undefined(), mal_value_new_undefined(),
         mal_value_new_undefined(), mal_value_new_undefined(),
-        mal_value_new_undefined(),
+        mal_value_new_undefined(), mal_value_new_undefined(), mal_value_new_undefined(),
+        mal_value_new_undefined(), mal_value_new_undefined(),
     };
     MalRootSpan root;
     mal_gc_root(&root, roots, countof(roots));
@@ -853,6 +1041,37 @@ void mal_host_install_node_events(
     mal_intrinsic_define_data(vm, (MalObject *) constructor,
                               (const byte *) "errorMonitor", roots[4], EE_WEC);
     mal_gc_unroot(&static_root);
+
+    mal_host_install_node_async_hooks(vm, nullptr, 0, launch);
+    MalValue async_module = mal_node_module_get_cached(vm, "node:async_hooks");
+    MalObject *function_prototype = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]);
+    MalPropertyLookup async_constructor = mal_object_get_own(mal_value_to_object(async_module), ee_name_key(vm, "AsyncResource"));
+    roots[5] = mal_value_from_symbol(mal_symbol_new(&vm->heap, mal_intrinsic_ascii(vm, (const byte *) "events.asyncResource")));
+    roots[6] = mal_value_from_object(mal_object_new(&vm->heap, prototype));
+    MalValue resource_slots[] = {roots[5], async_constructor.desc.value};
+    MalNativeFunctionObject *resource_constructor = mal_native_function_object_new_with_slots_arity(&vm->heap,
+        function_prototype, mal_intrinsic_ascii(vm, (const byte *) "EventEmitterAsyncResource"), 1, ee_resource_constructor, resource_slots, 2);
+    mal_native_function_object_set_constructor(resource_constructor);
+    roots[7] = mal_value_from_native_function_object(resource_constructor);
+    mal_intrinsic_define_data(vm, (MalObject *) resource_constructor, (const byte *) "prototype", roots[6], MAL_PROPERTY_NONE);
+    mal_intrinsic_define_data(vm, mal_value_to_object(roots[6]), (const byte *) "constructor", roots[7], MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
+    roots[8] = mal_value_from_native_function_object(mal_native_function_object_new_with_slots_arity(&vm->heap,
+        function_prototype, mal_intrinsic_ascii(vm, (const byte *) "emit"), 1, ee_resource_emit, resource_slots, 1));
+    mal_intrinsic_define_data(vm, mal_value_to_object(roots[6]), (const byte *) "emit", roots[8], MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
+    const char *resource_names[] = {"asyncResource", "asyncId", "triggerAsyncId", "emitDestroy"};
+    for (usize index = 0; index < countof(resource_names); index++) {
+        resource_slots[1] = mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) resource_names[index]));
+        roots[8] = mal_value_from_native_function_object(mal_native_function_object_new_with_slots_arity(&vm->heap,
+            function_prototype, mal_intrinsic_ascii(vm, (const byte *) resource_names[index]), 0,
+            index == 0 ? ee_resource_get : ee_resource_method, resource_slots, 2));
+        if (index < 3) {
+            MalPropertyDesc descriptor = mal_intrinsic_accessor_desc(roots[8], mal_value_new_undefined(), MAL_PROPERTY_CONFIGURABLE);
+            mal_object_define_own(mal_value_to_object(roots[6]), ee_name_key(vm, resource_names[index]), &descriptor);
+        } else mal_intrinsic_define_data(vm, mal_value_to_object(roots[6]), (const byte *) resource_names[index], roots[8], MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
+    }
+    mal_intrinsic_define_data(vm, (MalObject *) constructor, (const byte *) "EventEmitterAsyncResource", roots[7], EE_WEC);
+    roots[8] = ee_new_function(vm, "once", 2, ee_static_once);
+    mal_intrinsic_define_data(vm, (MalObject *) constructor, (const byte *) "once", roots[8], EE_WEC);
 
     mal_node_module_publish(vm, "node:events", slots, count, roots[1]);
     mal_gc_unroot(&root);

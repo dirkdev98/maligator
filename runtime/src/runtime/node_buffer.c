@@ -646,6 +646,40 @@ static byte *mal_buffer_view_data(MalTypedArrayObject *array) {
         : array->buffer->data + array->byte_offset;
 }
 
+// Buffer views may alias a SharedArrayBuffer (Buffer.from(sab)); every byte
+// access below goes through these so concurrent agents never race plain C.
+static bool mal_buffer_view_shared(const MalTypedArrayObject *array) {
+    return array->buffer->shared_memory != nullptr;
+}
+
+static void mal_buffer_view_read(
+    MalTypedArrayObject *array, u32 offset, byte *dst, usize length) {
+    if (length == 0) return;
+    mal_typed_array_copy_bytes(
+        dst, false, mal_buffer_view_data(array) + offset,
+        mal_buffer_view_shared(array), length);
+}
+
+static void mal_buffer_view_write(
+    MalTypedArrayObject *array, u32 offset, const byte *src, usize length) {
+    mal_typed_array_copy_bytes(
+        mal_buffer_view_data(array) + offset, mal_buffer_view_shared(array),
+        src, false, length);
+}
+
+/* Stable bytes for in-place readers; a shared view yields a private snapshot in *owned. */
+static const byte *mal_buffer_view_private(
+    MalTypedArrayObject *array, u32 offset, usize length, byte **owned) {
+    *owned = nullptr;
+    const byte *data = mal_buffer_view_data(array);
+    if (data == nullptr || length == 0) return nullptr;
+    if (!mal_buffer_view_shared(array)) return data + offset;
+    *owned = malloc(length);
+    if (*owned == nullptr) return nullptr;
+    mal_shared_bytes_read(*owned, data + offset, length);
+    return *owned;
+}
+
 static MalTypedArrayObject *mal_buffer_byte_view(MalVm *vm, MalValue value) {
     if (!mal_value_is_typed_array_object(value) ||
         mal_value_to_typed_array_object(value)->kind != MAL_TA_UINT8 ||
@@ -699,7 +733,8 @@ static bool mal_buffer_copy_typed_array(
         return false;
     }
     if (input_span.element_size == 1) {
-        memcpy(output_span.data, input_span.data, length);
+        mal_typed_array_copy_bytes(output_span.data, output_span.shared,
+                                   input_span.data, input_span.shared, length);
         return true;
     }
     if (mal_typed_array_is_bigint(input_span.kind)) {
@@ -1027,6 +1062,26 @@ static i32 mal_buffer_compare_bytes(
     return left_length < right_length ? -1 : left_length > right_length ? 1 : 0;
 }
 
+static MalValue mal_buffer_compare_views(
+    MalVm *vm, MalTypedArrayObject *left, u32 left_start, u32 left_length,
+    MalTypedArrayObject *right, u32 right_start, u32 right_length
+) {
+    byte *left_owned;
+    byte *right_owned;
+    const byte *left_data = mal_buffer_view_private(left, left_start, left_length, &left_owned);
+    const byte *right_data = mal_buffer_view_private(right, right_start, right_length, &right_owned);
+    if ((left_length > 0 && left_data == nullptr) || (right_length > 0 && right_data == nullptr)) {
+        free(left_owned);
+        free(right_owned);
+        mal_vm_throw_allocation_error(vm);
+        return mal_value_new_undefined();
+    }
+    i32 compared = mal_buffer_compare_bytes(left_data, left_length, right_data, right_length);
+    free(left_owned);
+    free(right_owned);
+    return mal_value_from_i32(compared);
+}
+
 static MalValue mal_buffer_compare(
     MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee
 ) {
@@ -1039,9 +1094,9 @@ static MalValue mal_buffer_compare(
     MalTypedArrayObject *right = mal_buffer_byte_view(
         vm, argc >= 2 ? args[1] : mal_value_new_undefined());
     if (right == nullptr) return mal_value_new_undefined();
-    return mal_value_from_i32(mal_buffer_compare_bytes(
-        mal_buffer_view_data(left), mal_typed_array_object_length(left),
-        mal_buffer_view_data(right), mal_typed_array_object_length(right)));
+    return mal_buffer_compare_views(
+        vm, left, 0, mal_typed_array_object_length(left),
+        right, 0, mal_typed_array_object_length(right));
 }
 
 static MalValue mal_buffer_concat(
@@ -1145,7 +1200,9 @@ static MalValue mal_buffer_concat(
         u32 available = mal_typed_array_object_length(view);
         u32 copy = available < total - written ? available : (u32) total - written;
         if (copy > 0) {
-            memmove(output->buffer->data + written, mal_buffer_view_data(view), copy);
+            mal_typed_array_copy_bytes(output->buffer->data + written, false,
+                                       mal_buffer_view_data(view),
+                                       mal_buffer_view_shared(view), copy);
         }
         written += copy;
     }
@@ -1184,9 +1241,15 @@ static MalValue mal_buffer_to_string(
         return mal_value_new_undefined();
     }
     if (end < start) end = start;
-    const byte *data = mal_buffer_view_data(array);
-    return mal_buffer_string_from_bytes(
-        vm, data == nullptr ? nullptr : data + start, end - start, encoding);
+    byte *owned;
+    const byte *data = mal_buffer_view_private(array, start, end - start, &owned);
+    if (end > start && data == nullptr) {
+        mal_vm_throw_allocation_error(vm);
+        return mal_value_new_undefined();
+    }
+    MalValue result = mal_buffer_string_from_bytes(vm, data, end - start, encoding);
+    free(owned);
+    return result;
 }
 
 static MalValue mal_buffer_equals(
@@ -1201,11 +1264,11 @@ static MalValue mal_buffer_equals(
     if (right == nullptr) return mal_value_new_undefined();
     u32 left_length = mal_typed_array_object_length(left);
     u32 right_length = mal_typed_array_object_length(right);
-    bool equal = left_length == right_length &&
-                  (left_length == 0 || memcmp(mal_buffer_view_data(left),
-                                              mal_buffer_view_data(right),
-                                              left_length) == 0);
-    return mal_value_new_boolean(equal);
+    if (left_length != right_length) return mal_value_new_boolean(false);
+    MalValue compared = mal_buffer_compare_views(
+        vm, left, 0, left_length, right, 0, right_length);
+    if (mal_value_is_undefined(compared)) return compared;
+    return mal_value_new_boolean(mal_value_to_i32(compared) == 0);
 }
 
 static MalValue mal_buffer_prototype_compare(
@@ -1233,11 +1296,9 @@ static MalValue mal_buffer_prototype_compare(
     }
     if (target_end < target_start) target_end = target_start;
     if (source_end < source_start) source_end = source_start;
-    const byte *source_data = mal_buffer_view_data(source);
-    const byte *target_data = mal_buffer_view_data(target);
-    return mal_value_from_i32(mal_buffer_compare_bytes(
-        source_data == nullptr ? nullptr : source_data + source_start, source_end - source_start,
-        target_data == nullptr ? nullptr : target_data + target_start, target_end - target_start));
+    return mal_buffer_compare_views(
+        vm, source, source_start, source_end - source_start,
+        target, target_start, target_end - target_start);
 }
 
 static MalValue mal_buffer_subarray_impl(
@@ -1318,8 +1379,20 @@ static MalValue mal_buffer_write(
     }
     byte *data = mal_buffer_view_data(array);
     byte *output = data == nullptr ? nullptr : data + offset;
+    if (output == nullptr || !mal_buffer_view_shared(array)) {
+        usize written = mal_buffer_write_string(
+            mal_value_to_string(args[0]), encoding, output, max_length);
+        return mal_value_from_i32((i32) written);
+    }
+    byte *staged = malloc(max_length == 0 ? 1 : max_length);
+    if (staged == nullptr) {
+        mal_vm_throw_allocation_error(vm);
+        return mal_value_new_undefined();
+    }
     usize written = mal_buffer_write_string(
-        mal_value_to_string(args[0]), encoding, output, max_length);
+        mal_value_to_string(args[0]), encoding, staged, max_length);
+    mal_buffer_view_write(array, offset, staged, written);
+    free(staged);
     return mal_value_from_i32((i32) written);
 }
 
@@ -1335,7 +1408,8 @@ static MalValue mal_buffer_read_uint16_le(
                            mal_typed_array_object_length(array), 2, &offset)) {
         return mal_value_new_undefined();
     }
-    const byte *data = mal_buffer_view_data(array) + offset;
+    byte data[2];
+    mal_buffer_view_read(array, offset, data, sizeof data);
     return mal_value_from_i32((i32) ((u8) data[0] | ((u16) (u8) data[1] << 8)));
 }
 
@@ -1351,7 +1425,8 @@ static MalValue mal_buffer_read_uint16_be(
                            mal_typed_array_object_length(array), 2, &offset)) {
         return mal_value_new_undefined();
     }
-    const byte *data = mal_buffer_view_data(array) + offset;
+    byte data[2];
+    mal_buffer_view_read(array, offset, data, sizeof data);
     return mal_value_from_i32((i32) (((u16) (u8) data[0] << 8) | (u8) data[1]));
 }
 
@@ -1367,7 +1442,8 @@ static MalValue mal_buffer_read_uint32_be(
                            mal_typed_array_object_length(array), 4, &offset)) {
         return mal_value_new_undefined();
     }
-    const byte *data = mal_buffer_view_data(array) + offset;
+    byte data[4];
+    mal_buffer_view_read(array, offset, data, sizeof data);
     u32 value = ((u32) (u8) data[0] << 24) | ((u32) (u8) data[1] << 16)
         | ((u32) (u8) data[2] << 8) | (u8) data[3];
     return mal_value_from_u32(value);
@@ -1396,7 +1472,8 @@ static MalValue mal_buffer_read_big_int64_be(
                            mal_typed_array_object_length(array), 8, &offset)) {
         return mal_value_new_undefined();
     }
-    const byte *data = mal_buffer_view_data(array) + offset;
+    byte data[8];
+    mal_buffer_view_read(array, offset, data, sizeof data);
     u64 bits = 0;
     for (u32 i = 0; i < 8; i++) bits = (bits << 8) | (u8) data[i];
     i128 value = (i128) bits;
@@ -1430,8 +1507,9 @@ static MalValue mal_buffer_copy(
     u32 count = source_end > source_start ? source_end - source_start : 0;
     if (count > target_length - target_start) count = target_length - target_start;
     if (count > 0) {
-        memmove(mal_buffer_view_data(target) + target_start,
-                mal_buffer_view_data(source) + source_start, count);
+        mal_typed_array_copy_bytes(
+            mal_buffer_view_data(target) + target_start, mal_buffer_view_shared(target),
+            mal_buffer_view_data(source) + source_start, mal_buffer_view_shared(source), count);
     }
     return mal_value_from_u32(count);
 }
@@ -1461,9 +1539,8 @@ static MalValue mal_buffer_write_uint16_be(
         return mal_value_new_undefined();
     }
     u16 value = (u16) number;
-    byte *data = mal_buffer_view_data(array) + offset;
-    data[0] = (byte) (value >> 8);
-    data[1] = (byte) value;
+    byte data[2] = {(byte) (value >> 8), (byte) value};
+    mal_buffer_view_write(array, offset, data, sizeof data);
     return mal_value_from_u32(offset + 2);
 }
 
@@ -1492,8 +1569,9 @@ static MalValue mal_buffer_write_big_int64_be(
         return mal_value_new_undefined();
     }
     u64 bits = (u64) value;
-    byte *data = mal_buffer_view_data(array) + offset;
+    byte data[8];
     for (u32 i = 0; i < 8; i++) data[i] = (byte) (bits >> ((7 - i) * 8));
+    mal_buffer_view_write(array, offset, data, sizeof data);
     return mal_value_from_u32(offset + 8);
 }
 
@@ -1520,11 +1598,12 @@ static MalValue mal_buffer_write_uint32(
         return mal_value_new_undefined();
     }
     u32 value = (u32) number;
-    byte *data = mal_buffer_view_data(array) + offset;
+    byte data[4];
     for (u32 i = 0; i < 4; i++) {
         u32 shift = (little_endian ? i : 3 - i) * 8;
         data[i] = (byte) (value >> shift);
     }
+    mal_buffer_view_write(array, offset, data, sizeof data);
     return mal_value_from_i32((i32) offset + 4);
 }
 

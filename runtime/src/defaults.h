@@ -36,6 +36,16 @@ typedef size_t usize;
 #define countof(a)  (sizeof(a) / sizeof(*(a)))
 #define lengthof(s) (countof(s) - 1)
 
+// Storage for state owned by the isolate pinned to the current mutator thread. Each
+// VM runs on exactly one native thread for its lifetime, so per-thread storage is
+// per-isolate storage. Helper threads see their own unused copies and must reach an
+// isolate's state through an explicit pointer (e.g. MalGcState). Wasm has one isolate.
+#if defined(__wasi__)
+#define MAL_ISOLATE_LOCAL
+#else
+#define MAL_ISOLATE_LOCAL _Thread_local
+#endif
+
 // Whether this build includes runtime `eval` / `new Function` and the embedded
 // baked compiler they need. Default on; the build config sets `-DMAL_EVAL=0`
 // (see build-flags.ts) when `engine.eval` is false, which drops the `#embed` of

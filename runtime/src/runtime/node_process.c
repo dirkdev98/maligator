@@ -33,6 +33,7 @@
 #include "node_events.h"
 #include "node_buffer.h"
 #include "node_module.h"
+#include "workers.h"
 #include "object.h"
 #include "object_ops.h"
 #include "posix_signal.h"
@@ -371,7 +372,10 @@ static MalValue mal_process_exit(
             mal_intrinsic_string_key(vm, (const byte *) "exitCode"),
             mal_value_from_f64(number), process);
     }
-    exit(mal_process_finish(vm, 0));
+    int code = mal_process_finish(vm, 0);
+    // A worker isolate stops only its own thread; exit(3) would end the process.
+    if (mal_workers_exit_current(vm, code)) return mal_value_new_undefined();
+    exit(code);
 }
 
 static int mal_process_signal_number(const MalString *signal) {
@@ -513,10 +517,14 @@ static MalValue mal_process_memory_rss(
 
 static _Thread_local usize mal_process_array_buffer_bytes;
 
+// Shared wrappers are skipped: a SharedArrayBuffer backing is counted once,
+// process-wide, by the shared-memory accounting rather than per wrapper.
 static void mal_process_count_array_buffers(MalHeapHeader *header) {
     if ((header->mark & MAL_MARK_FREE) == 0 && header->type == MAL_HEAP_ARRAY_BUFFER_OBJECT) {
         MalArrayBufferObject *buffer = (MalArrayBufferObject *) header;
-        if (!buffer->detached) mal_process_array_buffer_bytes += buffer->allocation_capacity;
+        if (!buffer->detached && buffer->shared_memory == nullptr) {
+            mal_process_array_buffer_bytes += buffer->allocation_capacity;
+        }
     }
 }
 
@@ -531,7 +539,13 @@ static MalValue mal_process_memory_usage(
     MalHeapUsage usage = mal_heap_usage(&vm->heap);
     mal_process_array_buffer_bytes = 0;
     mal_heap_walk_cells(&vm->heap, mal_process_count_array_buffers);
-    usize buffers = mal_process_array_buffer_bytes;
+    // heap*/external describe this isolate; arrayBuffers adds every live shared
+    // backing in the process (reservation size, freed on its last release on
+    // any thread), the same bytes the shared-memory cap admits.
+    u64 shared = mal_shared_memory_live_bytes();
+    usize buffers = mal_process_array_buffer_bytes
+        + (shared > SIZE_MAX - mal_process_array_buffer_bytes
+            ? SIZE_MAX - mal_process_array_buffer_bytes : (usize) shared);
     const usize values[] = {rss, usage.chunk_mapped_bytes + usage.managed_large_bytes,
         usage.managed_owned_bytes, usage.raw_owned_bytes + buffers, buffers};
     const char *names[] = {"rss", "heapTotal", "heapUsed", "external", "arrayBuffers"};
@@ -690,7 +704,7 @@ static MalValue mal_process_stdio_write(
             mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Invalid write buffer");
             return mal_value_new_undefined();
         }
-        bytes = span.data;
+        bytes = mal_buffer_source_span_private(&span, &owned);
         length = span.length;
     } else {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
@@ -771,7 +785,8 @@ static MalValue mal_process_emit_warning(
     return mal_value_new_undefined();
 }
 
-static bool mal_process_hooks_registered;
+// Checkpoint hooks are registered per isolate, matching web_host_timer's registry.
+static MAL_ISOLATE_LOCAL bool mal_process_hooks_registered;
 
 /* The installed process object. Read from the intrinsic rather than globalThis
  * so a program that reassigns the `process` global keeps its emitter identity. */
@@ -798,6 +813,7 @@ static void mal_process_emit(MalVm *vm, const char *event, MalValue argument) {
 }
 
 static void mal_process_sync_signal(MalVm *vm, MalHostSignal signal) {
+    if (mal_workers_is_worker()) return;
     MalHost *host = mal_host(vm);
     if (host == nullptr) {
         return;
@@ -807,7 +823,7 @@ static void mal_process_sync_signal(MalVm *vm, MalHostSignal signal) {
     if (listeners > 0) {
         (void) mal_host_signal_listen(&host->reactor, signal);
     } else {
-        mal_host_signal_unlisten(signal);
+        mal_host_signal_unlisten(&host->reactor, signal);
     }
 }
 
@@ -828,9 +844,11 @@ static void mal_process_listeners_changed(MalVm *vm, MalValue receiver) {
 /* Macrotask source: deliver at most one flagged signal per turn so microtasks
  * drain between deliveries, like any other macrotask. */
 static bool mal_process_drain_signals(MalVm *vm) {
+    MalHost *host = mal_host(vm);
+    if (host == nullptr || mal_workers_is_worker()) return false;
     for (int i = 0; i < MAL_HOST_SIGNAL_COUNT; i++) {
         MalHostSignal signal = (MalHostSignal) i;
-        if (!mal_host_signal_take(signal)) {
+        if (!mal_host_signal_take(&host->reactor, signal)) {
             continue;
         }
         const char *name = mal_host_signal_name(signal);

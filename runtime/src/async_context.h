@@ -33,6 +33,8 @@ typedef struct MalAsyncContext {
 typedef struct MalAsyncResourceState {
     MalHeapHeader header;
     MalAsyncContext *context;
+    u64 async_id;
+    u64 trigger_async_id;
 } MalAsyncResourceState;
 
 /** Mutable private state for the disposable object returned by withScope(). */
@@ -50,7 +52,7 @@ static_assert(
     sizeof(MalAsyncContext) == (sizeof(void *) == 8 ? 48 : 40),
     "AsyncLocalStorage context must retain its pointer-width-specific immutable GC cell layout");
 static_assert(
-    sizeof(MalAsyncResourceState) == (sizeof(void *) == 8 ? 16 : 8),
+    sizeof(MalAsyncResourceState) == (sizeof(void *) == 8 ? 32 : 24),
     "AsyncResource state must retain its pointer-width-specific GC cell layout");
 static_assert(
     sizeof(MalAsyncRunScopeState) == (sizeof(void *) == 8 ? 32 : 24),
@@ -69,6 +71,8 @@ typedef struct MalAsyncContextScope {
 
 MalAsyncLocalStorageState *mal_async_local_storage_state_new(MalVm *vm);
 MalAsyncResourceState *mal_async_resource_state_new(MalVm *vm);
+u64 mal_async_resource_current_id(void);
+u64 mal_async_resource_set_current_id(u64 id);
 MalAsyncRunScopeState *mal_async_run_scope_state_new(
     MalVm *vm,
     MalAsyncLocalStorageState *storage,

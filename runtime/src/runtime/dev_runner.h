@@ -11,4 +11,5 @@ int mal_dev_run_wires(
     int argc,
     char **argv,
     bool web_platform,
-    bool node);
+    bool node,
+    const char *worker_manifest_path);

@@ -16,6 +16,7 @@
 #endif
 
 #include "array_object.h"
+#include "builtin_data_view.h"
 #include "development_assets.h"
 #include "gc.h"
 #include "heap_string.h"
@@ -24,12 +25,14 @@
 #include "intrinsics.h"
 #include "object.h"
 #include "posix_fs.h"
+#include "posix_process.h"
 #include "profile.h"
 #include "typed_array_object.h"
 #include "utf8.h"
 #include "value.h"
 #include "vm_load.h"
 #include "vm_ops.h"
+#include "worker_manifest.h"
 
 #ifndef MAL_DEVELOPMENT_API
 #define MAL_DEVELOPMENT_API 0
@@ -95,6 +98,20 @@ static void mal_host_throw_errno(
 }
 
 #if MAL_DEVELOPMENT_API
+static MalValue mal_test_register_worker_manifest(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) self; (void) nt; (void) callee;
+    if (argc < 1) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "mal._registerWorkerManifest requires a path");
+        return mal_value_new_undefined();
+    }
+    char *path = mal_asset_to_cstr(vm, args[0], "path");
+    if (path == nullptr) return mal_value_new_undefined();
+    mal_worker_manifest_register(vm, path);
+    free(path);
+    return mal_value_new_undefined();
+}
+
 static MalValue mal_test_run_wire_bytes(MalVm *vm, const u8 *bytes, usize length) {
     const char *error = "invalid VM wire";
     MalLoadedRuntimeImage *loaded = mal_runtime_image_load_with_host_resolver(
@@ -136,10 +153,23 @@ static MalValue mal_test_run_wire(
         return mal_value_new_undefined();
     }
 
-    MalTypedArrayObject *wire = mal_value_to_typed_array_object(args[0]);
-    usize length = mal_typed_array_object_byte_length(wire);
-    const u8 *bytes = (const u8 *) wire->buffer->data + wire->byte_offset;
-    return mal_test_run_wire_bytes(vm, bytes, length);
+    MalBufferSourceSpan span;
+    if (mal_buffer_source_span(args[0], &span) != MAL_BUFFER_SOURCE_SPAN_OK) {
+        mal_vm_throw_error(
+            vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "mal._runWire requires an attached, in-bounds Uint8Array");
+        return mal_value_new_undefined();
+    }
+    // The loader parses in place; a shared wire is parsed from a private snapshot.
+    byte *owned;
+    const u8 *bytes = (const u8 *) mal_buffer_source_span_private(&span, &owned);
+    if (span.length > 0 && bytes == nullptr) {
+        mal_vm_throw_allocation_error(vm);
+        return mal_value_new_undefined();
+    }
+    MalValue result = mal_test_run_wire_bytes(vm, bytes, span.length);
+    free(owned);
+    return result;
 }
 
 static MalValue mal_test_run_wire_path(
@@ -250,7 +280,7 @@ static MalValue mal_dev_spawn(
         if (child_argv[i + 1] == nullptr) goto fail;
     }
 
-    pid_t pid = fork();
+    pid_t pid = mal_proc_fork();
     if (pid == 0) {
         (void) setpgid(0, 0);
         execv(executable, child_argv);
@@ -711,6 +741,7 @@ static MalValue mal_profile_phase_end(
 
 #if MAL_DEVELOPMENT_API
 static void mal_install_development_api(MalVm *vm, MalObject *mal) {
+    mal_intrinsic_define_method_n(vm, mal, (const byte *) "_registerWorkerManifest", 1, mal_test_register_worker_manifest);
     mal_intrinsic_define_method_n(
         vm, mal, (const byte *) "_runWire", 1, mal_test_run_wire);
     mal_intrinsic_define_method_n(

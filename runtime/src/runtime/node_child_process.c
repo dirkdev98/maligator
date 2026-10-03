@@ -602,7 +602,8 @@ typedef struct MalNodeChild {
     struct MalNodeChild *next;
 } MalNodeChild;
 
-static MalNodeChild *mal_node_children;
+// Child handles hold JS objects and are drained by the spawning isolate's mutator.
+static MAL_ISOLATE_LOCAL MalNodeChild *mal_node_children;
 
 static void mal_node_child_cleanup(MalVm *vm) {
     MalNodeChild **link = &mal_node_children;

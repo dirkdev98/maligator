@@ -1,13 +1,16 @@
 #include "array_buffer_object.h"
 
+#include <stdatomic.h>
 #include <stdlib.h>
 #include <string.h>
 
+#include "gc_process.h"
 #include "object_ops.h"
 #include "profile.h"
 #include "secure_scrub.h"
 
-static MalArrayBufferReleaseObserver g_release_observer;
+// Any isolate thread may release a store, so the seam is read atomically.
+static _Atomic(MalArrayBufferReleaseObserver) g_release_observer;
 
 static MalArrayBufferObject *mal_array_buffer_object_new_impl(
     MalHeap *heap,
@@ -24,7 +27,15 @@ static MalArrayBufferObject *mal_array_buffer_object_new_impl(
     // Resizable buffers reserve the maximum so the backing store never moves.
     u32 capacity = resizable ? max_byte_length : byte_length;
     buffer->data = nullptr;
-    if (capacity > 0) {
+    buffer->shared_memory = nullptr;
+    if (shared) {
+        // Even a zero-length SharedArrayBuffer needs a backing: its identity is
+        // what clones and wait/notify keys share across isolates.
+        buffer->shared_memory = mal_shared_memory_new(byte_length, max_byte_length, resizable);
+        if (buffer->shared_memory != nullptr) {
+            buffer->data = mal_shared_memory_data(buffer->shared_memory);
+        }
+    } else if (capacity > 0) {
         // Only currently exposed bytes require zero semantics. Reserving a much
         // larger resizable capacity must not eagerly dirty every future page;
         // resize zeroes each newly exposed range before publishing its length.
@@ -37,7 +48,8 @@ static MalArrayBufferObject *mal_array_buffer_object_new_impl(
             buffer->data = calloc(capacity, 1);
         }
     }
-    if (buffer->data != nullptr) {
+    if (buffer->data != nullptr && !shared) {
+        mal_gc_process_charge(capacity);
         mal_profile_native_allocation(
             heap, capacity, MAL_PROFILE_ALLOCATION_FAMILY_BUFFER);
     }
@@ -88,6 +100,8 @@ MalArrayBufferObject *mal_array_buffer_object_move_store(
         memset(source->data + source->byte_length, 0,
             byte_length - source->byte_length);
     }
+    // The process charge travels with the allocation: the empty header charged
+    // nothing, and the detached source no longer frees it.
     MalArrayBufferObject *result = mal_array_buffer_object_new_impl(
         heap, prototype, 0, 0, false, false, false);
     result->data = source->data;
@@ -128,10 +142,39 @@ MalArrayBufferObject *mal_array_buffer_object_adopt(
     buffer->max_byte_length = byte_length;
     buffer->allocation_capacity = byte_length;
     buffer->sensitive = sensitive;
+    if (data != nullptr) {
+        mal_gc_process_charge(byte_length);
+    }
     return buffer;
 }
 
+MalArrayBufferObject *mal_array_buffer_object_wrap_shared(
+    MalHeap *heap, MalObject *prototype, MalSharedMemory *memory) {
+    MalArrayBufferObject *buffer = mal_array_buffer_object_new_impl(
+        heap, prototype, 0, 0, false, false, false);
+    mal_shared_memory_retain(memory);
+    buffer->shared_memory = memory;
+    buffer->data = mal_shared_memory_data(memory);
+    buffer->byte_length = mal_shared_memory_byte_length(memory);
+    buffer->max_byte_length = mal_shared_memory_max_byte_length(memory);
+    buffer->allocation_capacity = buffer->max_byte_length;
+    buffer->resizable = mal_shared_memory_growable(memory);
+    buffer->shared = true;
+    return buffer;
+}
+
+u32 mal_array_buffer_object_refresh_shared_length(MalArrayBufferObject *buffer) {
+    if (buffer->shared_memory != nullptr) {
+        buffer->byte_length = mal_shared_memory_byte_length(buffer->shared_memory);
+    }
+    return buffer->byte_length;
+}
+
 u32 mal_array_buffer_object_byte_length(const MalArrayBufferObject *buffer) {
+    // Published length is monotonic, so it is never below the wrapper snapshot.
+    if (buffer->shared_memory != nullptr) {
+        return mal_shared_memory_byte_length(buffer->shared_memory);
+    }
     return buffer->byte_length;
 }
 
@@ -140,6 +183,13 @@ bool mal_array_buffer_object_is_detached(const MalArrayBufferObject *buffer) {
 }
 
 void mal_array_buffer_object_release_store(MalArrayBufferObject *buffer) {
+    if (buffer->shared_memory != nullptr) {
+        mal_shared_memory_release(buffer->shared_memory);
+        buffer->shared_memory = nullptr;
+        buffer->data = nullptr;
+        buffer->allocation_capacity = 0;
+        return;
+    }
     if (buffer->data == nullptr) {
         return;
     }
@@ -148,10 +198,13 @@ void mal_array_buffer_object_release_store(MalArrayBufferObject *buffer) {
         // still holds the bytes past its current length.
         mal_secure_scrub(buffer->data, buffer->allocation_capacity);
     }
-    if (g_release_observer != nullptr) {
-        g_release_observer(buffer, buffer->data, buffer->allocation_capacity);
+    MalArrayBufferReleaseObserver observer =
+        atomic_load_explicit(&g_release_observer, memory_order_acquire);
+    if (observer != nullptr) {
+        observer(buffer, buffer->data, buffer->allocation_capacity);
     }
     free(buffer->data);
+    mal_gc_process_release(buffer->allocation_capacity);
     buffer->data = nullptr;
     buffer->allocation_capacity = 0;
 }
@@ -166,10 +219,17 @@ void mal_array_buffer_object_detach(MalArrayBufferObject *buffer) {
 }
 
 void mal_array_buffer_object_set_release_observer(MalArrayBufferReleaseObserver observer) {
-    g_release_observer = observer;
+    atomic_store_explicit(&g_release_observer, observer, memory_order_release);
 }
 
 bool mal_array_buffer_object_resize(MalArrayBufferObject *buffer, u32 new_byte_length) {
+    if (buffer->shared_memory != nullptr) {
+        if (!mal_shared_memory_grow(buffer->shared_memory, new_byte_length)) {
+            return false;
+        }
+        mal_array_buffer_object_refresh_shared_length(buffer);
+        return true;
+    }
     if (!buffer->resizable || buffer->detached || new_byte_length > buffer->max_byte_length) {
         return false;
     }

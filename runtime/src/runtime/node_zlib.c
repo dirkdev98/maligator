@@ -26,6 +26,7 @@
 #define ZLIB_VISIBLE \
     (MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE)
 #define ZLIB_OUTPUT_CHUNK 16384u
+#define ZLIB_SHARED_INPUT_WINDOW 65536u
 
 static MalKey zlib_key(MalVm *vm, const char *name) {
     return mal_intrinsic_string_key(vm, (const byte *) name);
@@ -118,9 +119,21 @@ static void zlib_stream_pump(MalVm *vm, MalValue state_value, MalValue receiver)
             free(output); zlib_throw_status(vm, MAL_ZLIB_STATUS_INVALID_ARGUMENT); break;
         }
         usize consumed = 0, produced = 0;
-        i32 status = mal_zlib_pump(state->handle,
-            (const uint8_t *)(span.data == nullptr ? nullptr : span.data + state->input_offset),
-            span.length - state->input_offset, (uint8_t *)output, size, &consumed, &produced);
+        const byte *input = span.data == nullptr ? nullptr : span.data + state->input_offset;
+        usize input_length = span.length - state->input_offset;
+        // Inflate reads its input in place, so shared input is fed through a
+        // bounded private window; unconsumed bytes are re-read next step.
+        byte *window = nullptr;
+        if (span.shared && input_length > 0) {
+            if (input_length > ZLIB_SHARED_INPUT_WINDOW) input_length = ZLIB_SHARED_INPUT_WINDOW;
+            window = malloc(input_length);
+            if (window == nullptr) { free(output); zlib_throw_code(vm, "decompression allocation failed", "ERR_BUFFER_TOO_LARGE"); break; }
+            mal_buffer_source_span_read(&span, state->input_offset, window, input_length);
+            input = window;
+        }
+        i32 status = mal_zlib_pump(state->handle, (const uint8_t *)input,
+            input_length, (uint8_t *)output, size, &consumed, &produced);
+        free(window);
         state->input_offset += consumed;
         if (produced > 0) {
             roots[3] = mal_node_buffer_from_owned_bytes(vm, output, produced);
@@ -236,11 +249,14 @@ static MalValue zlib_gunzip_sync(MalVm *vm, MalValue receiver, const MalValue *a
     if (mal_buffer_source_span(args[0], &span)!=MAL_BUFFER_SOURCE_SPAN_OK) {
         mal_vm_throw_error(vm,MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,"gunzipSync input became detached or out of bounds"); return mal_value_new_undefined();
     }
+    byte *owned_input;
+    const byte *input=mal_buffer_source_span_private(&span,&owned_input);
+    if(span.length>0 && input==nullptr) { mal_vm_throw_allocation_error(vm); return mal_value_new_undefined(); }
     MalZlibStream *handle=nullptr;
     mal_zlib_create(MAL_ZLIB_FORMAT_GZIP,&handle);
     usize capacity=maximum<ZLIB_OUTPUT_CHUNK?maximum:ZLIB_OUTPUT_CHUNK, length=0, offset=0;
     byte *output=malloc(capacity);
-    if(output==nullptr) { mal_zlib_free(&handle); zlib_throw_code(vm,"decompression allocation failed","ERR_BUFFER_TOO_LARGE"); return mal_value_new_undefined(); }
+    if(output==nullptr) { free(owned_input); mal_zlib_free(&handle); zlib_throw_code(vm,"decompression allocation failed","ERR_BUFFER_TOO_LARGE"); return mal_value_new_undefined(); }
     while(true) {
         byte probe;
         if(length==capacity && capacity<maximum) {
@@ -250,7 +266,7 @@ static MalValue zlib_gunzip_sync(MalVm *vm, MalValue receiver, const MalValue *a
             output=grown; capacity=next;
         }
         usize consumed=0,produced=0;
-        i32 status=mal_zlib_pump(handle,(const uint8_t *)(span.data==nullptr?nullptr:span.data+offset),span.length-offset,
+        i32 status=mal_zlib_pump(handle,(const uint8_t *)(input==nullptr?nullptr:input+offset),span.length-offset,
             (uint8_t *)(length==maximum?&probe:output+length),length==maximum?1:capacity-length,&consumed,&produced);
         offset+=consumed;
         if(length==maximum && produced>0) { zlib_throw_code(vm,"Cannot create a Buffer larger than maxOutputLength","ERR_BUFFER_TOO_LARGE"); break; }
@@ -264,6 +280,7 @@ static MalValue zlib_gunzip_sync(MalVm *vm, MalValue receiver, const MalValue *a
         if(consumed==0 && produced==0) { zlib_throw_status(vm,MAL_ZLIB_STATUS_INVALID_ARGUMENT); break; }
     }
     mal_zlib_free(&handle);
+    free(owned_input);
     if(vm->completion.kind==MAL_COMPLETION_THROW) {free(output); return mal_value_new_undefined();}
     return mal_node_buffer_from_owned_bytes(vm,output,length);
 }

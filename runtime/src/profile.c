@@ -91,17 +91,28 @@ typedef struct MalProfileState {
     struct itimerval previous_timer;
 } MalProfileState;
 
-static MalProfileState *g_profile = nullptr;
+/* The process timer and its signals have one owner isolate. Only the owner's mutator
+ * sees its state; handlers request safepoints on that mutator whichever thread runs
+ * them, and other isolates leave pending ticks for the owner. */
+static MAL_ISOLATE_LOCAL MalProfileState *g_profile = nullptr;
+static _Atomic bool g_profile_claimed = false;
+static MalGcPollTarget *_Atomic g_profile_poll_target = nullptr;
 static volatile sig_atomic_t g_profile_pending_ticks = 0;
 static volatile sig_atomic_t g_profile_first_tick_cpu_seconds = -1;
 static volatile sig_atomic_t g_profile_first_tick_cpu_nanoseconds = 0;
 static volatile sig_atomic_t g_profile_termination_signal = 0;
-static volatile sig_atomic_t g_worker_cpu_possible_seen = 0;
+// Process CPU ticks include helper threads and every other isolate's mutator.
+static _Atomic bool g_worker_cpu_possible_seen = false;
 volatile sig_atomic_t mal_profile_poll_requested = 0;
 
 void mal_profile_mark_worker_cpu_possible(void) {
     g_worker_cpu_possible_seen = 1;
     if (g_profile != nullptr) g_profile->worker_cpu_possible = true;
+}
+
+static void mal_profile_request_owner_safepoint(void) {
+    mal_gc_request_safepoint(
+        atomic_load_explicit(&g_profile_poll_target, memory_order_relaxed));
 }
 
 static void mal_profile_signal(int signal_number) {
@@ -118,14 +129,14 @@ static void mal_profile_signal(int signal_number) {
     }
     if (g_profile_pending_ticks < 0x7fff) g_profile_pending_ticks++;
     mal_profile_poll_requested = 1;
-    mal_gc_poll = true;
+    mal_profile_request_owner_safepoint();
     errno = saved_errno;
 }
 
 static void mal_profile_terminate_signal(int signal_number) {
     g_profile_termination_signal = signal_number;
     mal_profile_poll_requested = 1;
-    mal_gc_poll = true;
+    mal_profile_request_owner_safepoint();
 }
 
 static i32 mal_profile_position_for(const MalFunction *function, i32 ip) {
@@ -338,6 +349,7 @@ static void mal_profile_record_cpu_ticks(
 
 void mal_profile_safepoint_slow(MalVm *vm) {
     MalProfileState *state = g_profile;
+    if (state == nullptr) return;
     sigset_t blocked;
     sigset_t previous;
     sigemptyset(&blocked);
@@ -354,7 +366,6 @@ void mal_profile_safepoint_slow(MalVm *vm) {
     g_profile_termination_signal = 0;
     mal_profile_poll_requested = 0;
     sigprocmask(SIG_SETMASK, &previous, nullptr);
-    if (state == nullptr) return;
     if (ticks > 0) {
         if (first_seconds < 0 || first_nanoseconds < 0 || first_nanoseconds >= 1000000000) {
             state->dropped_records += (u32) ticks;
@@ -649,8 +660,17 @@ static void mal_profile_publish_site_counters(MalProfileState *state) {
 void mal_profile_init(MalVm *vm) {
     const char *output_path = getenv("MAL_PROFILE_CAPTURE");
     if (output_path == nullptr || output_path[0] == '\0' || g_profile != nullptr) return;
+    bool unclaimed = false;
+    if (!atomic_compare_exchange_strong(&g_profile_claimed, &unclaimed, true)) {
+        // Another isolate's mutator shares the profiled process CPU clock.
+        g_worker_cpu_possible_seen = 1;
+        return;
+    }
     MalProfileState *state = calloc(1, sizeof(MalProfileState));
-    if (state == nullptr) return;
+    if (state == nullptr) {
+        atomic_store(&g_profile_claimed, false);
+        return;
+    }
     state->record_capacity = MAL_PROFILE_INITIAL_RECORDS;
     state->frame_capacity = MAL_PROFILE_INITIAL_FRAMES;
     state->records = calloc(state->record_capacity, sizeof(MalProfileRecord));
@@ -663,6 +683,7 @@ void mal_profile_init(MalVm *vm) {
         free(state->frames);
         free(state->output_path);
         free(state);
+        atomic_store(&g_profile_claimed, false);
         return;
     }
     state->vm = vm;
@@ -719,6 +740,8 @@ void mal_profile_init(MalVm *vm) {
     state->worker_cpu_possible = g_worker_cpu_possible_seen != 0;
     vm->heap.profile_state = state;
     g_profile = state;
+    atomic_store_explicit(&g_profile_poll_target, mal_gc_current_poll_target(),
+        memory_order_relaxed);
 
     struct sigaction action = {0};
     action.sa_handler = mal_profile_signal;
@@ -754,6 +777,8 @@ void mal_profile_finish(MalVm *vm) {
     vm->heap.profile_state = nullptr;
     vm->heap.profile_allocation_budget = 0;
     g_profile = nullptr;
+    atomic_store_explicit(&g_profile_poll_target, nullptr, memory_order_relaxed);
+    state->worker_cpu_possible = state->worker_cpu_possible || g_worker_cpu_possible_seen != 0;
     mal_profile_publish(state);
     mal_profile_publish_site_counters(state);
     free(state->records);
@@ -762,6 +787,7 @@ void mal_profile_finish(MalVm *vm) {
     free(state->allocation_counters);
     free(state->output_path);
     free(state);
+    atomic_store(&g_profile_claimed, false);
 }
 
 #endif
