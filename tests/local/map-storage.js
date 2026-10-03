@@ -164,6 +164,23 @@ check(
 	"clone snapshots rooted pairs and cycles",
 );
 
+const cloneStrings = [
+	"",
+	"marker",
+	"\u0100\ud800\udc00\udfff",
+	["longer", "\u1234", "payload"].join("-"),
+];
+for (const prefix of [[], [undefined], [true, 2]]) {
+	const values = prefix.concat(cloneStrings);
+	const clonedValues = structuredClone(values);
+	collect();
+	check(
+		clonedValues.length === values.length &&
+			clonedValues.every((value, index) => Object.is(value, values[index])),
+		"clone preserves string code units after mixed records",
+	);
+}
+
 const weakKeys = Array.from({ length: 80 }, () => ({}));
 const weak = new WeakMap();
 for (let i = 0; i < weakKeys.length; i++) weak.set(weakKeys[i], { index: i });

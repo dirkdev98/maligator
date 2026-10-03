@@ -697,7 +697,7 @@
 	},
 	{
 		"file": "serialize.c",
-		"sha256": "de13f042fa3c13080f30310f358d9c6e15f3e97503ab2d4a28710760c6806bb2"
+		"sha256": "8ad67b17b40d8289a2f70d740a0f0dbb2b1713f00d10ab3852020c0d4a71ad93"
 	},
 	{
 		"file": "test262_host.c",

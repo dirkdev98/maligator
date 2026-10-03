@@ -209,9 +209,14 @@ static bool enc_memoize(SerEncoder *enc, MalValue value) {
 
 static bool enc_string(SerEncoder *enc, MalString *string) {
     usize length = mal_string_length(string);
-    if (length > UINT32_MAX || !enc_u8(enc, SER_STRING) || !enc_u32(enc, (u32) length) ||
-        !enc_reserve(enc, length * sizeof(c16))) {
+    if (length > UINT32_MAX || length > SIZE_MAX / sizeof(c16) ||
+        !enc_u8(enc, SER_STRING) || !enc_u32(enc, (u32) length)) {
         return enc_fail(enc, "string too large to serialize");
+    }
+    // String helpers read and write c16 values, so packed payloads need alignment.
+    if ((enc->snap->length % sizeof(c16) != 0 && !enc_u8(enc, 0)) ||
+        !enc_reserve(enc, length * sizeof(c16))) {
+        return false;
     }
     mal_string_copy_range_to(string, 0, length, (c16 *) (enc->snap->bytes + enc->snap->length));
     enc->snap->length += length * sizeof(c16);
@@ -950,7 +955,16 @@ static bool dec_value(SerDecoder *dec, MalValue *out) {
     }
     case SER_STRING: {
         u32 length;
-        if (!dec_u32(dec, &length) || dec->cursor + (usize) length * sizeof(c16) > dec->snap->length) {
+        if (!dec_u32(dec, &length)) {
+            return false;
+        }
+        if (dec->cursor % sizeof(c16) != 0) {
+            u8 padding;
+            if (!dec_get(dec, &padding, 1) || padding != 0) {
+                return false;
+            }
+        }
+        if (length > (dec->snap->length - dec->cursor) / sizeof(c16)) {
             return false;
         }
         *out = mal_value_from_string(mal_string_new_copy(
