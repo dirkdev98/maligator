@@ -688,6 +688,10 @@ remains a Maligator extension and does not count as global fetch conformance.
       decompression scheduling, and DNS/Agent dispatcher reuse. Use matched
       workloads after output parity; AOT does not need a V8 compile cache.
 
+- [ ] Diagnose CPU task throughput with persistent Tinypool workers. Separate
+      numeric execution, serialization, scheduling and warmup costs; matched
+      consumer runs still lag Node with locked primordials and production linking.
+
 - [x] Refresh all 20 native primordial descriptor configuration audits after the
       worker API changes. The generated catalog, coverage records and availability
       matrix use current captures with no pending modes.
