@@ -771,7 +771,7 @@ static void mal_vm_init_execution_state(MalVm *vm, const MalRuntimeImage *progra
     vm->unhandled_count = 0;
     vm->unhandled_capacity = 0;
 	vm->entry_async_promise = mal_value_new_undefined();
-    vm->entry_errors_forwarded = false;
+    vm->errors_forwarded = false;
 }
 
 /** Phase 4: create language heap roots, intrinsics, module state, and the main fiber. */
@@ -3420,6 +3420,10 @@ void mal_vm_note_unhandled_rejection(MalVm *vm, MalValue promise) {
 }
 
 void mal_vm_report_unhandled_rejections(MalVm *vm) {
+    if (vm->errors_forwarded && vm->completion.kind == MAL_COMPLETION_THROW) {
+        vm->unhandled_count = 0;
+        return;
+    }
     for (i32 i = 0; i < vm->unhandled_count; i++) {
         MalValue promise_value = vm->unhandled_rejections[i];
         if (!mal_value_is_promise_object(promise_value)) {
@@ -3428,6 +3432,12 @@ void mal_vm_report_unhandled_rejections(MalVm *vm) {
         MalPromiseObject *promise = mal_value_to_promise_object(promise_value);
         // A handler attached between rejection and the checkpoint clears it.
         if (promise->state == MAL_PROMISE_REJECTED && !promise->is_handled) {
+            if (vm->errors_forwarded) {
+                // Completion roots the reason before the rejection candidates are released.
+                vm->completion = (MalCompletion) {
+                    .kind = MAL_COMPLETION_THROW, .value = promise->result};
+                break;
+            }
             mal_vm_print_thrown(vm, promise->result, "Uncaught (in promise) ");
         }
     }
@@ -3494,7 +3504,7 @@ void mal_vm_run(MalVm *vm, MalCallable *callable) {
     MalRootSpan script_result_root;
     mal_gc_root(&script_result_root, &script_completion.value, 1);
     vm->completion = (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = mal_value_new_undefined()};
-    if (vm->entry_errors_forwarded && mal_value_is_promise_object(vm->entry_async_promise)) {
+    if (vm->errors_forwarded && mal_value_is_promise_object(vm->entry_async_promise)) {
         mal_value_to_promise_object(vm->entry_async_promise)->is_handled = true;
     }
     mal_vm_drain_microtasks(vm);
@@ -3502,7 +3512,7 @@ void mal_vm_run(MalVm *vm, MalCallable *callable) {
 
     if (script_completion.kind == MAL_COMPLETION_THROW) {
         vm->completion = script_completion;
-        if (!vm->entry_errors_forwarded) mal_vm_report_uncaught(vm);
+        if (!vm->errors_forwarded) mal_vm_report_uncaught(vm);
         return;
     }
 

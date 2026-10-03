@@ -292,6 +292,8 @@ void mal_host_run_event_loop(MalVm *vm) {
     // Seeded true so the first drain always notifies.
     bool progressed = true;
     for (;;) {
+        // A prior macrotask's uncaught throw must survive the next microtask checkpoint.
+        if (vm->completion.kind == MAL_COMPLETION_THROW) break;
         if (mal_gc_terminating()) break;
         if (mal_host_termination_check != nullptr && mal_host_termination_check(vm)) break;
         // Microtasks first (promise jobs), then one macrotask, then repeat.

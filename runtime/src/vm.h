@@ -1714,8 +1714,8 @@ typedef struct MalVm {
      * evaluate, which the entry turns into a non-zero exit. Undefined otherwise.
      */
     MalValue entry_async_promise;
-    // A worker forwards startup errors to its parent rather than printing them locally.
-    bool entry_errors_forwarded;
+    // Workers fail on uncaught asynchronous errors and forward the reason to their parent.
+    bool errors_forwarded;
 
     MalSymbolRegistry symbol_registry;
     // Shapes and caches borrow these canonical pointers for the VM lifetime.

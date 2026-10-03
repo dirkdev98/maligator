@@ -88,9 +88,21 @@ counts protect close, transfer, delivery and isolate teardown races.
 
 Each endpoint has message-count, total-byte and per-message bounds. The process
 also bounds admitted data to 65,536 snapshots and 512 MiB. Reservations include
-in-flight delivery until native snapshot release. Quota-rejected posts do not detach
+in-flight delivery and workerData until native snapshot release. Quota-rejected posts do not detach
 buffers. FIFO order applies to each endpoint. Termination and Atomics cancellation
 notification do not depend on room in a user-message queue.
+
+Raw endpoints default to 4,096 messages, 64 MiB queued and 16 MiB per message;
+their options can override these limits. Node endpoints use the process bounds
+for each direction and ignore the raw quota options. Byte admission counts each
+unique ArrayBuffer backing once, including transferred allocation capacity;
+shared backings retain their separate process memory charge.
+
+An uncaught callback exception or a promise rejection still unhandled at the
+microtask checkpoint fails the worker. The parent receives the error before exit
+code 1, and teardown runs on the worker's owning thread. Attaching a promise catch
+before that checkpoint recovers normally. Node process recovery events such as
+`unhandledRejection` and `uncaughtException` are currently unsupported.
 
 Started referenced ports keep their event loop alive. Unreferenced ports remain
 usable while reachable; abandoned idle ports finalize and close their native

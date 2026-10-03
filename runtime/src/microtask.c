@@ -587,6 +587,13 @@ static void mal_vm_run_reaction_job(MalVm *vm, MalJob *job) {
     }
 
     if (result.kind == MAL_COMPLETION_THROW) {
+        // Capability-less observers may synthesize rejection; only an invoked callback can be uncaught.
+        if (vm->errors_forwarded && mal_value_is_callable(job->as.reaction.handler) &&
+            mal_value_is_undefined(job->as.reaction.cap_resolve) &&
+            mal_value_is_undefined(job->as.reaction.cap_reject)) {
+            vm->completion = result;
+            return;
+        }
         mal_vm_settle_reaction_capability(
             vm,
             job->as.reaction.cap_resolve,
@@ -797,6 +804,8 @@ void mal_vm_drain_microtasks(MalVm *vm) {
                 break;
         }
         mal_job_recycle(vm, job);
+
+        if (vm->errors_forwarded && vm->completion.kind == MAL_COMPLETION_THROW) break;
 
         // A job must not leave a pending throw behind to poison the next job's
         // calls; settlement of dependents has already captured anything it

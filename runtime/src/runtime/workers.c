@@ -133,7 +133,7 @@ static void channel_retain(Channel *channel) {
     atomic_fetch_add_explicit(&channel->refcount, 1, memory_order_relaxed);
 }
 
-// Process-wide bound on user messages across every channel and isolate, on top of each
+// Process-wide bound on user messages and workerData across every channel and isolate, on top of each
 // endpoint's own limits. A post reserves its slot before serialization runs getters
 // and admits its bytes before commit; the Message then holds both until message_free,
 // including while the receiver deserializes and dispatches it. Lock-free so producer,
@@ -432,6 +432,7 @@ struct WorkerThread {
     // Child-side endpoint handle (the worker's parentPort); moved into the thread.
     Endpoint *child_endpoint;
     MalSerializedValue *data;
+    u64 data_bytes;
     MalSharedWaitInterrupt *interrupt;
     pthread_t thread;
     pthread_mutex_t mutex;
@@ -459,9 +460,19 @@ struct WorkerThread {
     MalSerializedValue *error;
 };
 
+static void worker_data_release(WorkerThread *thread) {
+    if (thread->data != nullptr) mal_serialized_value_release(thread->data);
+    thread->data = nullptr;
+    if (thread->data_bytes != 0) {
+        process_release_bytes(thread->data_bytes);
+        process_release_message();
+        thread->data_bytes = 0;
+    }
+}
+
 static void worker_thread_release(WorkerThread *thread) {
     if (atomic_fetch_sub_explicit(&thread->refcount, 1, memory_order_acq_rel) != 1) return;
-    if (thread->data != nullptr) mal_serialized_value_release(thread->data);
+    worker_data_release(thread);
     if (thread->error != nullptr) mal_serialized_value_release(thread->error);
     if (thread->interrupt != nullptr) mal_shared_wait_interrupt_free(thread->interrupt);
     pthread_mutex_destroy(&thread->mutex);
@@ -1631,7 +1642,8 @@ static MalValue new_message_port_illegal(MalVm *vm, MalValue receiver, const Mal
     return mal_value_new_undefined();
 }
 
-static bool queue_limits(MalVm *vm, MalValue options, u32 *max_count, u64 *max_bytes, u64 *max_message);
+static bool queue_limits(MalVm *vm, MalValue options, PostingPolicy posting_policy,
+    u32 *max_count, u64 *max_bytes, u64 *max_message);
 
 static MalValue channel_construct_with_policy(MalVm *vm, const MalValue *args, i32 argc,
     MalValue new_target, PostingPolicy posting_policy) {
@@ -1644,7 +1656,7 @@ static MalValue channel_construct_with_policy(MalVm *vm, const MalValue *args, i
     u64 max_bytes, max_message;
     MalValue options = posting_policy == POST_TRANSACTIONAL && argc > 0
         ? args[0] : mal_value_new_undefined();
-    if (!queue_limits(vm, options, &max_count, &max_bytes, &max_message)) {
+    if (!queue_limits(vm, options, posting_policy, &max_count, &max_bytes, &max_message)) {
         return mal_value_new_undefined();
     }
     MalObject *prototype;
@@ -1856,7 +1868,7 @@ static void *worker_thread_main(void *arg) {
     g_self_thread = thread;
     if (vm != nullptr) {
         mal_vm_init(vm, image);
-        vm->entry_errors_forwarded = true;
+        vm->errors_forwarded = true;
         if (mal_host_attach(vm) == nullptr) {
             mal_vm_free(vm);
             free(vm);
@@ -2198,7 +2210,15 @@ static bool option_u64(MalVm *vm, MalValue options, const char *name, u64 fallba
     return true;
 }
 
-static bool queue_limits(MalVm *vm, MalValue options, u32 *max_count, u64 *max_bytes, u64 *max_message) {
+static bool queue_limits(MalVm *vm, MalValue options, PostingPolicy posting_policy,
+    u32 *max_count, u64 *max_bytes, u64 *max_message) {
+    if (posting_policy == POST_NODE) {
+        // Node has no endpoint quota options; admission remains bounded by the process budget.
+        *max_count = WORKERS_PROCESS_MAX_MESSAGES;
+        *max_bytes = WORKERS_PROCESS_MAX_BYTES;
+        *max_message = WORKERS_PROCESS_MAX_BYTES;
+        return true;
+    }
     u64 count;
     if (!option_u64(vm, options, "maxQueuedMessages", WORKERS_DEFAULT_MAX_MESSAGES, &count) ||
         !option_u64(vm, options, "maxQueuedBytes", WORKERS_DEFAULT_MAX_BYTES, max_bytes) ||
@@ -2594,7 +2614,8 @@ static MalValue worker_construct(MalVm *vm, const MalValue *args, i32 argc, MalV
     if (!option_named(vm, options, node ? "workerData" : "data", nullptr, &data) ||
         !option_named(vm, options, node ? "transferList" : "transfer", nullptr, &transfer) ||
         !get_named(vm, options, "name", &name) || !get_named(vm, options, "env", &env) ||
-        !queue_limits(vm, options, &max_count, &max_bytes, &max_message) ||
+        !queue_limits(vm, options, node ? POST_NODE : POST_TRANSACTIONAL,
+            &max_count, &max_bytes, &max_message) ||
         (node && !node_options_supported(vm, options))) {
         return mal_value_new_undefined();
     }
@@ -2618,10 +2639,31 @@ static MalValue worker_construct(MalVm *vm, const MalValue *args, i32 argc, MalV
         mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "worker thread limit reached");
         return mal_value_new_undefined();
     }
+    if (!process_reserve_message()) {
+        atomic_fetch_sub_explicit(&g_live_workers, 1, memory_order_acq_rel);
+        throw_admission_error(vm, ADMIT_PROCESS_FULL);
+        return mal_value_new_undefined();
+    }
     MalSerializeLimits limits = {.max_bytes = max_message, .max_objects = 0};
     const char *error = nullptr;
     MalSerializedValue *snapshot = mal_serialize(vm, data, transfer, &limits, &g_hooks, &error);
-    WorkerThread *thread = snapshot != nullptr ? calloc(1, sizeof(WorkerThread)) : nullptr;
+    if (snapshot == nullptr) {
+        process_release_message();
+        atomic_fetch_sub_explicit(&g_live_workers, 1, memory_order_acq_rel);
+        if (!thrown(vm)) throw_clone_error(vm, error, "could not clone workerData");
+        return mal_value_new_undefined();
+    }
+    u64 data_bytes = mal_serialized_value_size(snapshot);
+    AdmitResult admission = data_bytes > max_message ? ADMIT_TOO_LARGE
+        : process_admit_bytes(data_bytes) ? ADMIT_OK : ADMIT_PROCESS_BYTES;
+    if (admission != ADMIT_OK) {
+        mal_serialized_value_release(snapshot);
+        process_release_message();
+        atomic_fetch_sub_explicit(&g_live_workers, 1, memory_order_acq_rel);
+        throw_admission_error(vm, admission);
+        return mal_value_new_undefined();
+    }
+    WorkerThread *thread = calloc(1, sizeof(WorkerThread));
     Channel *channel = thread != nullptr ? channel_new(max_count, max_bytes, max_message,
         node ? POST_NODE : POST_TRANSACTIONAL) : nullptr;
     MalSharedWaitInterrupt *interrupt = channel != nullptr ? mal_shared_wait_interrupt_new() : nullptr;
@@ -2634,13 +2676,10 @@ static MalValue worker_construct(MalVm *vm, const MalValue *args, i32 argc, MalV
             channel_release(channel);
         }
         free(thread);
-        if (snapshot != nullptr) {
-            mal_serialized_value_release(snapshot);
-            mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Worker: out of memory");
-        } else if (!thrown(vm)) {
-            mal_dom_exception_throw(vm, (const byte *) (error != nullptr ? error : "could not clone workerData"),
-                (const byte *) "DataCloneError");
-        }
+        mal_serialized_value_release(snapshot);
+        process_release_bytes(data_bytes);
+        process_release_message();
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Worker: out of memory");
         return mal_value_new_undefined();
     }
     atomic_init(&thread->refcount, 2); // parent record + thread body
@@ -2651,6 +2690,7 @@ static MalValue worker_construct(MalVm *vm, const MalValue *args, i32 argc, MalV
     thread->name = value_to_cstring(name);
     thread->child_endpoint = &channel->side[1];
     thread->data = snapshot;
+    thread->data_bytes = data_bytes;
     thread->interrupt = interrupt;
     thread->parent = iso->owner;
     owner_retain(iso->owner);
@@ -3021,8 +3061,7 @@ MalValue mal_workers_worker_data(MalVm *vm) {
     mal_gc_root(&root, &value, 1);
     if (!mal_deserialize_take(vm, iso->self->data, &g_hooks, &value)) value = mal_value_new_undefined();
     else mal_workers_adopt_transferred(vm, iso->self->data);
-    mal_serialized_value_release(iso->self->data);
-    iso->self->data = nullptr;
+    worker_data_release(iso->self);
     iso->worker_data = value;
     mal_gc_unroot(&root);
     return value;

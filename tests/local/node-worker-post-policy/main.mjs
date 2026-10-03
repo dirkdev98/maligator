@@ -113,7 +113,7 @@ function failedSerializationPreservesTransfers(Channel) {
 
 function nodeQueueFailurePreservesTransfers() {
 	const { port1, port2 } = new NodeChannel();
-	for (let index = 0; index < 4096; index++) {
+	for (let index = 0; index < 65536; index++) {
 		check(port1.postMessage(index) === undefined, "Node post leaked its native ticket");
 	}
 	const buffer = new ArrayBuffer(8);
@@ -132,7 +132,7 @@ function nodeQueueFailurePreservesTransfers() {
 		"RangeError",
 	);
 	check(buffer.byteLength === 8 && getterCalls === 0, "quota rejection consumed input");
-	for (let index = 0; index < 4096; index++) {
+	for (let index = 0; index < 65536; index++) {
 		check(receiveMessageOnPort(port2).message === index, "queue ordering changed");
 	}
 	check(port1.postMessage(buffer, [buffer]) === undefined, "Node accepted post return");

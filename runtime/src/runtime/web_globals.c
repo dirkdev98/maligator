@@ -796,8 +796,6 @@ static MalValue mal_web_queue_microtask(
             "queueMicrotask requires a callable");
         return mal_value_new_undefined();
     }
-    // A reaction job with no capabilities runs the callback (arg undefined) and
-    // discards its result/throw — matching queueMicrotask's fire-and-forget shape.
     mal_vm_enqueue_reaction_job(vm, args[0], false, mal_value_new_undefined(),
         mal_value_new_undefined(), mal_value_new_undefined());
     return mal_value_new_undefined();
