@@ -2285,12 +2285,19 @@ describe("primitive operation results", () => {
 		["min", "+x, 3, 4", "mal_builtin_math_min_max_numbers"],
 		["max", "+x, 3, 4", "mal_builtin_math_min_max_numbers"],
 	])(
-		"uses the numeric %s kernel only with proven inputs",
+		"uses the numeric %s kernel with proven or guarded inputs",
 		(method, arguments_, kernel) => {
 			const output = inspect(`Math.${method}(${arguments_})`);
 			expect(output.c.source).toContain(`${kernel}(`);
 			expect(output.c.source).not.toContain("mal_vm_call_known_native(");
-			expect(inspect(`Math.${method}(x, x, x)`).c.source).not.toContain(`${kernel}(`);
+			const unknown = inspect(`Math.${method}(x, x, x)`).c.source;
+			expect(unknown).toContain("mal_vm_call_known_native(");
+			if (["hypot", "min", "max"].includes(method)) {
+				expect(unknown).not.toContain(`${kernel}(`);
+			} else {
+				expect(unknown).toContain("mal_ops_is_number(");
+				expect(unknown).toContain(`${kernel}(`);
+			}
 			expect(inspect(`Math.${method}(${arguments_})`, false).c.source).not.toContain(
 				`${kernel}(`,
 			);
