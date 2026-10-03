@@ -78,6 +78,11 @@ const signalReason = (
 const addAbortListener = EventTarget.prototype.addEventListener;
 // oxlint-disable-next-line typescript/unbound-method -- Called with each submitted signal, bypassing overridable instance methods.
 const removeAbortListener = EventTarget.prototype.removeEventListener;
+const workerPrototype = (Worker as typeof Worker & { prototype: NativeWorker }).prototype;
+// oxlint-disable-next-line typescript/unbound-method -- Called with each private worker handle, bypassing overridable instance methods.
+const refWorker = workerPrototype.ref;
+// oxlint-disable-next-line typescript/unbound-method -- Called with each private worker handle, bypassing overridable instance methods.
+const unrefWorker = workerPrototype.unref;
 
 function positiveInteger(
 	value: number | undefined,
@@ -150,16 +155,20 @@ export function createPool<Module>(
 	let failed = 0;
 	let cancelled = 0;
 	let referenced = true;
+	let workerHandlesReferenced: boolean | undefined;
 	let shutdown: Promise<void> | undefined;
 	let shutdownResolve: (() => void) | undefined;
 	let shutdownReject: ((reason: unknown) => void) | undefined;
 	let shuttingDown = false;
 
 	function updateReferences() {
+		const desired = referenced && (!ready || jobs.size > 0);
+		if (workerHandlesReferenced === desired) return;
 		for (const worker of workers) {
-			if (referenced && (!ready || jobs.size > 0)) worker.handle.ref();
-			else worker.handle.unref();
+			if (desired) refWorker.call(worker.handle);
+			else unrefWorker.call(worker.handle);
 		}
+		workerHandlesReferenced = desired;
 	}
 
 	function detachAbort(job: Job): void {
@@ -231,6 +240,7 @@ export function createPool<Module>(
 	function dispatch() {
 		if (!ready || state === "terminating" || state === "closed") return;
 		for (const worker of workers) {
+			if (queued === 0) break;
 			if (worker.job !== undefined) continue;
 			for (;;) {
 				const envelope = receiveMessageOnPort(queue.port2);
@@ -284,6 +294,7 @@ export function createPool<Module>(
 			});
 			const worker: WorkerSlot = { handle, job: undefined };
 			workers.push(worker);
+			workerHandlesReferenced = undefined;
 			handle.port.addEventListener("message", (event) => onResponse(worker, event.data));
 			handle.port.start();
 			handle.addEventListener("error", (event) =>
