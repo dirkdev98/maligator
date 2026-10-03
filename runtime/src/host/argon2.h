@@ -4,8 +4,7 @@
 #include "host_task.h"
 
 /*
- * Argon2 derivation (host layer). Structurally identical to dns.{c,h}: a bounded
- * worker pool doing blocking CPU work on plain host data, posting exactly one
+ * Argon2 derivation uses the process-shared crypto executor, posting exactly one
  * terminal task per operation back to the reactor thread.
  *
  * Ownership contract: mal_argon2_start copies every byte input into job-owned
@@ -20,9 +19,9 @@
  *     latency. Both factors are host policy (see MalArgon2Config); neither is
  *     left to the application, because an application that reads its cost
  *     parameters out of a stored credential record does not choose them either.
- *   * Peak footprint is worker_count x max_memory_kib, so the defaults below
- *     bound a two-worker pool at 512 MiB of Argon2 matrix. Raising the ceiling
- *     raises that product; an embedder that does so owns the consequence.
+ *   * The executor admits at most two running derivations process-wide and
+ *     charges their matrices against a shared 512 MiB working-byte ceiling.
+ *     worker_count limits one host's concurrency, not the process thread count.
  */
 
 typedef struct MalHost MalHost;
@@ -121,7 +120,7 @@ bool mal_argon2_init(MalArgon2 *argon2, MalHost *host);
 void mal_argon2_shutdown(MalArgon2 *argon2);
 void mal_argon2_free(MalArgon2 *argon2);
 
-/* Accepted only before the lazy worker pool has started. */
+/* Accepted before this host first acquires a shared executor client. */
 bool mal_argon2_configure(MalArgon2 *argon2, const MalArgon2Config *config);
 
 /* On MAL_ARGON2_START_OK, `operation` receives a live handle and exactly one

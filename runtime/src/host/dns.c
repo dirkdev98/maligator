@@ -1,6 +1,7 @@
 #include "dns.h"
 
 #include "host.h"
+#include "executor.h"
 #include "net.h"
 #include "profile.h"
 
@@ -28,6 +29,7 @@ struct MalDnsResult {
 typedef struct MalDnsRequest {
     struct MalDnsRequest *next;
     struct MalDnsRequest *all_next;
+    struct MalDnsState *state;
     MalHostHandle operation;
     MalDnsResult *result;
     bool cancelled;
@@ -36,12 +38,11 @@ typedef struct MalDnsRequest {
 
 typedef struct MalDnsState {
     pthread_mutex_t mutex;
-    pthread_cond_t ready;
     MalHost *host;
     MalDnsRequest *head;
     MalDnsRequest *tail;
     MalDnsRequest *requests;
-    pthread_t *threads;
+    MalExecutorClient executor;
     usize thread_limit;
     usize thread_count;
     usize queue_capacity;
@@ -217,90 +218,54 @@ static void mal_dns_resolve(MalDnsState *state, MalDnsResult *result) {
     state->resolver_release(resolved, state->resolver_data);
 }
 
-static void *mal_dns_worker(void *data) {
-    MalDnsState *state = data;
-    for (;;) {
-        pthread_mutex_lock(&state->mutex);
-        while (state->head == nullptr && !state->stopping) {
-            pthread_cond_wait(&state->ready, &state->mutex);
-        }
-        if (state->head == nullptr) {
-            pthread_mutex_unlock(&state->mutex);
-            return nullptr;
-        }
-        MalDnsRequest *request = state->head;
-        state->head = request->next;
-        if (state->head == nullptr) {
-            state->tail = nullptr;
-        }
+static void mal_dns_dequeue(MalDnsState *state, MalDnsRequest *request) {
+    MalDnsRequest *previous = nullptr;
+    for (MalDnsRequest *item = state->head; item != nullptr; previous = item, item = item->next) {
+        if (item != request) continue;
+        if (previous == nullptr) state->head = item->next;
+        else previous->next = item->next;
+        if (state->tail == item) state->tail = previous;
         state->queued--;
-        bool cancelled = request->cancelled;
-        pthread_mutex_unlock(&state->mutex);
-
-        MalHostHandle operation = request->operation;
-        MalDnsResult *result = request->result;
-        MalHostTerminalResult terminal = MAL_HOST_TERMINAL_ERROR;
-        if (!cancelled) {
-            mal_dns_resolve(state, result);
-            terminal = result->error.kind == MAL_DNS_ERROR_NONE
-                ? MAL_HOST_TERMINAL_OK
-                : MAL_HOST_TERMINAL_ERROR;
-        }
-
-        bool posted = !cancelled && mal_host_post_complete(
-            state->host, operation, terminal, result, mal_dns_result_destroy);
-        if (!posted) {
-            mal_dns_result_release(result);
-        }
-
-        pthread_mutex_lock(&state->mutex);
-        request->result = nullptr;
-        if (posted) {
-            // The reaper may take a completed request as soon as the operation stops being active.
-            request->completed = true;
-        } else {
-            mal_dns_remove_request(state, request);
-        }
-        pthread_mutex_unlock(&state->mutex);
-
-        (void) mal_reactor_release_work(&state->host->reactor);
-        if (!posted) {
-            free(request);
-        }
+        return;
     }
+    abort();
+}
+
+static void mal_dns_worker(void *data) {
+    MalDnsRequest *request = data;
+    MalDnsState *state = request->state;
+    pthread_mutex_lock(&state->mutex);
+    mal_dns_dequeue(state, request);
+    bool cancelled = request->cancelled;
+    pthread_mutex_unlock(&state->mutex);
+    MalHostHandle operation = request->operation;
+    MalDnsResult *result = request->result;
+    MalHostTerminalResult terminal = MAL_HOST_TERMINAL_ERROR;
+    if (!cancelled) {
+        mal_dns_resolve(state, result);
+        terminal = result->error.kind == MAL_DNS_ERROR_NONE
+            ? MAL_HOST_TERMINAL_OK : MAL_HOST_TERMINAL_ERROR;
+    }
+    bool posted = !cancelled && mal_host_post_complete(
+        state->host, operation, terminal, result, mal_dns_result_destroy);
+    if (!posted) mal_dns_result_release(result);
+    pthread_mutex_lock(&state->mutex);
+    request->result = nullptr;
+    if (posted) request->completed = true;
+    else mal_dns_remove_request(state, request);
+    pthread_mutex_unlock(&state->mutex);
+    (void) mal_reactor_release_work(&state->host->reactor);
+    if (!posted) free(request);
 }
 
 static bool mal_dns_start_pool(MalDnsState *state) {
-    if (state->pool_started) {
-        return state->thread_count > 0;
-    }
+    if (state->pool_started) return state->thread_count > 0;
+    if (!mal_executor_client_init(&state->executor, MAL_EXECUTOR_DNS,
+            state->thread_limit, state->queue_capacity)) return false;
+    state->thread_count = mal_executor_client_workers(&state->executor);
     state->pool_started = true;
-    state->threads = calloc(state->thread_limit, sizeof(pthread_t));
-    if (state->threads == nullptr) {
-        return false;
-    }
-#if MAL_PROFILE
-    sigset_t blocked, previous;
-    sigemptyset(&blocked);
-    sigaddset(&blocked, SIGPROF);
-    if (pthread_sigmask(SIG_BLOCK, &blocked, &previous) != 0) {
-        free(state->threads);
-        state->threads = nullptr;
-        return false;
-    }
-#endif
-    for (usize i = 0; i < state->thread_limit; i++) {
-        if (pthread_create(&state->threads[state->thread_count], nullptr, mal_dns_worker, state) !=
-            0) {
-            break;
-        }
-        state->thread_count++;
-    }
-    if (state->thread_count > 0) mal_profile_mark_worker_cpu_possible();
-#if MAL_PROFILE
-    pthread_sigmask(SIG_SETMASK, &previous, nullptr);
-#endif
-    return state->thread_count > 0;
+    mal_profile_mark_worker_cpu_possible();
+    return true;
 }
 
 bool mal_dns_init(MalDns *dns, MalHost *host) {
@@ -313,11 +278,6 @@ bool mal_dns_init(MalDns *dns, MalHost *host) {
         return false;
     }
     if (pthread_mutex_init(&state->mutex, nullptr) != 0) {
-        free(state);
-        return false;
-    }
-    if (pthread_cond_init(&state->ready, nullptr) != 0) {
-        pthread_mutex_destroy(&state->mutex);
         free(state);
         return false;
     }
@@ -396,6 +356,18 @@ static MalDnsResult *mal_dns_literal_result(const char *hostname, const char *se
     result->addresses[0].storage = address;
     result->addresses[0].length = length;
     return result;
+}
+
+static void mal_dns_discard(void *data) {
+    MalDnsRequest *request = data;
+    MalDnsState *state = request->state;
+    pthread_mutex_lock(&state->mutex);
+    (void) mal_dns_remove_queued(state, request);
+    pthread_mutex_unlock(&state->mutex);
+    (void) mal_host_operation_cancel(&state->host->tasks, request->operation);
+    mal_dns_result_release(request->result);
+    free(request);
+    (void) mal_reactor_release_work(&state->host->reactor);
 }
 
 MalDnsStartResult mal_dns_start(
@@ -486,15 +458,8 @@ MalDnsStartResult mal_dns_start(
         free(request);
         return MAL_DNS_START_SYSTEM_ERROR;
     }
-    if (!mal_host_operation_activate(&host->tasks, *operation)) {
-        (void) mal_reactor_release_work(&host->reactor);
-        (void) mal_host_operation_abort_start(&host->tasks, *operation);
-        *operation = 0;
-        pthread_mutex_unlock(&state->mutex);
-        mal_dns_result_release(result);
-        free(request);
-        return MAL_DNS_START_SYSTEM_ERROR;
-    }
+
+    request->state = state;
     request->operation = *operation;
     if (state->tail == nullptr) {
         state->head = request;
@@ -505,7 +470,18 @@ MalDnsStartResult mal_dns_start(
     request->all_next = state->requests;
     state->requests = request;
     state->queued++;
-    pthread_cond_signal(&state->ready);
+    if (!mal_executor_submit(&state->executor, mal_dns_worker,
+            mal_dns_discard, request, sizeof(*request) + strlen(hostname) + 1 + (service == nullptr ? 0 : strlen(service) + 1), 0)) {
+        (void) mal_dns_remove_queued(state, request);
+        (void) mal_reactor_release_work(&host->reactor);
+        (void) mal_host_operation_abort_start(&host->tasks, *operation);
+        *operation = 0;
+        pthread_mutex_unlock(&state->mutex);
+        mal_dns_result_release(result);
+        free(request);
+        return MAL_DNS_START_SATURATED;
+    }
+    if (!mal_host_operation_activate(&host->tasks, *operation)) abort();
     pthread_mutex_unlock(&state->mutex);
     return MAL_DNS_START_OK;
 }
@@ -524,7 +500,8 @@ bool mal_dns_cancel(MalHost *host, MalHostHandle operation) {
         if (request->operation == operation) {
             request->cancelled = true;
             matched = request;
-            queued = mal_dns_remove_queued(state, request);
+            queued = mal_executor_cancel(&state->executor, request) &&
+                mal_dns_remove_queued(state, request);
             break;
         }
     }
@@ -561,49 +538,17 @@ void mal_dns_reap_completed(MalDns *dns) {
 }
 
 void mal_dns_shutdown(MalDns *dns) {
-    if (dns == nullptr || dns->state == nullptr) {
-        return;
-    }
+    if (dns == nullptr || dns->state == nullptr) return;
     MalDnsState *state = dns->state;
     pthread_mutex_lock(&state->mutex);
     state->accepting = false;
-    if (state->stopping) {
-        pthread_mutex_unlock(&state->mutex);
-        return;
-    }
     state->stopping = true;
-    MalDnsRequest *queued = state->head;
-    state->head = nullptr;
-    state->tail = nullptr;
-    state->queued = 0;
-    for (MalDnsRequest *request = queued; request != nullptr; request = request->next) {
-        mal_dns_remove_request(state, request);
-    }
-    for (MalDnsRequest *request = state->requests;
-        request != nullptr;
-        request = request->all_next) {
+    for (MalDnsRequest *request = state->requests; request != nullptr; request = request->all_next) {
         request->cancelled = true;
         (void) mal_host_operation_cancel(&state->host->tasks, request->operation);
     }
-    for (MalDnsRequest *request = queued; request != nullptr; request = request->next) {
-        request->cancelled = true;
-        (void) mal_host_operation_cancel(&state->host->tasks, request->operation);
-    }
-    usize thread_count = state->thread_count;
-    pthread_cond_broadcast(&state->ready);
     pthread_mutex_unlock(&state->mutex);
-
-    while (queued != nullptr) {
-        MalDnsRequest *next = queued->next;
-        mal_dns_result_release(queued->result);
-        (void) mal_reactor_release_work(&state->host->reactor);
-        free(queued);
-        queued = next;
-    }
-
-    for (usize i = 0; i < thread_count; i++) {
-        (void) pthread_join(state->threads[i], nullptr);
-    }
+    mal_executor_client_shutdown(&state->executor);
     pthread_mutex_lock(&state->mutex);
     state->thread_count = 0;
     pthread_mutex_unlock(&state->mutex);
@@ -622,8 +567,7 @@ void mal_dns_free(MalDns *dns) {
         free(request);
         request = next;
     }
-    free(state->threads);
-    pthread_cond_destroy(&state->ready);
+    mal_executor_client_free(&state->executor);
     pthread_mutex_destroy(&state->mutex);
     free(state);
     dns->state = nullptr;

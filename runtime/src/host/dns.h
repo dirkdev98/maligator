@@ -56,8 +56,8 @@ bool mal_dns_init(MalDns *dns, MalHost *host);
 void mal_dns_shutdown(MalDns *dns);
 void mal_dns_free(MalDns *dns);
 
-/* Configuration is accepted only before the lazy worker pool has started. A
- * null resolver pair selects the platform getaddrinfo/freeaddrinfo implementation. */
+/* Configuration precedes the first request. worker_count limits this host's
+ * concurrency in the process-shared executor; a null resolver pair selects libc. */
 bool mal_dns_configure(MalDns *dns, const MalDnsConfig *config);
 
 /* On MAL_DNS_START_OK, operation receives a live integer handle and exactly one

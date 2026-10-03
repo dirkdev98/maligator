@@ -1,6 +1,7 @@
 #include "argon2.h"
 
 #include "host.h"
+#include "executor.h"
 #include "profile.h"
 #include "secure_scrub.h"
 
@@ -44,6 +45,7 @@ struct MalArgon2Result {
 typedef struct MalArgon2Job {
     struct MalArgon2Job *next;
     struct MalArgon2Job *all_next;
+    struct MalArgon2State *state;
     MalHostHandle operation;
     MalArgon2Params params;
     MalArgon2Inputs inputs;
@@ -81,12 +83,11 @@ typedef struct MalArgon2Runtime {
 
 typedef struct MalArgon2State {
     pthread_mutex_t mutex;
-    pthread_cond_t ready;
     MalHost *host;
     MalArgon2Job *head;
     MalArgon2Job *tail;
     MalArgon2Job *requests;
-    pthread_t *threads;
+    MalExecutorClient executor;
     usize thread_limit;
     usize thread_count;
     usize queue_capacity;
@@ -306,137 +307,90 @@ static void mal_argon2_request_free(MalArgon2Job *request) {
     free(request);
 }
 
-static void *mal_argon2_worker(void *data) {
-    MalArgon2State *state = data;
-    for (;;) {
-        pthread_mutex_lock(&state->mutex);
-        while (state->head == nullptr && !state->stopping) {
-            pthread_cond_wait(&state->ready, &state->mutex);
-        }
-        if (state->head == nullptr) {
-            pthread_mutex_unlock(&state->mutex);
-            return nullptr;
-        }
-        MalArgon2Job *request = state->head;
-        state->head = request->next;
-        if (state->head == nullptr) {
-            state->tail = nullptr;
-        }
+static void mal_argon2_dequeue(MalArgon2State *state, MalArgon2Job *request) {
+    MalArgon2Job *previous = nullptr;
+    for (MalArgon2Job *item = state->head; item != nullptr; previous = item, item = item->next) {
+        if (item != request) continue;
+        if (previous == nullptr) state->head = item->next;
+        else previous->next = item->next;
+        if (state->tail == item) state->tail = previous;
         state->queued--;
-        bool cancelled = request->cancelled;
-        // Claimed: from here until the worker publishes a decision, this record
-        // belongs to this thread and nothing on the reactor side may free it.
-        // Without the claim the reaper could take the record between the
-        // "completed" publication below and the worker's own free — the record
-        // is completed, and a concurrent cancel leaves the operation no longer
-        // ACTIVE, which is exactly the reaper's condition.
-        request->worker_owned = true;
-        MalArgon2Runtime runtime = {
-            .limits = state->limits,
-            .derive = state->derive,
-            .derive_data = state->derive_data,
-        };
-        pthread_mutex_unlock(&state->mutex);
+        return;
+    }
+    abort();
+}
 
-        MalHostHandle operation = request->operation;
-        MalArgon2Result *result = request->result;
-        MalHostTerminalResult terminal = MAL_HOST_TERMINAL_ERROR;
-        if (!cancelled) {
-            result->status = mal_argon2_run(
-                &runtime, &request->params, result->tag, result->tag_length);
-            terminal = result->status == MAL_ARGON2_STATUS_OK
-                ? MAL_HOST_TERMINAL_OK
-                : MAL_HOST_TERMINAL_ERROR;
-            if (result->status != MAL_ARGON2_STATUS_OK) {
-                mal_secure_scrub(result->tag, result->tag_length);
-            }
-        }
-        // The inputs carry the password, pepper, and nonce; they are done the
-        // moment the derivation is, so scrub them here rather than at reap.
-        mal_argon2_inputs_free(&request->inputs);
+static void mal_argon2_worker(void *data) {
+    MalArgon2Job *request = data;
+    MalArgon2State *state = request->state;
+    pthread_mutex_lock(&state->mutex);
+    mal_argon2_dequeue(state, request);
+    bool cancelled = request->cancelled;
+    // The reactor cannot reclaim a record until its worker releases this claim.
+    request->worker_owned = true;
+    MalArgon2Runtime runtime = {
+        .limits = state->limits,
+        .derive = state->derive,
+        .derive_data = state->derive_data,
+    };
+    pthread_mutex_unlock(&state->mutex);
 
-        pthread_mutex_lock(&state->mutex);
-        request->completed = true;
-        request->result = nullptr;
-        if (cancelled) {
-            mal_argon2_remove_request(state, request);
+    MalHostHandle operation = request->operation;
+    MalArgon2Result *result = request->result;
+    MalHostTerminalResult terminal = MAL_HOST_TERMINAL_ERROR;
+    if (!cancelled) {
+        result->status = mal_argon2_run(
+            &runtime, &request->params, result->tag, result->tag_length);
+        terminal = result->status == MAL_ARGON2_STATUS_OK
+            ? MAL_HOST_TERMINAL_OK
+            : MAL_HOST_TERMINAL_ERROR;
+        if (result->status != MAL_ARGON2_STATUS_OK) {
+            mal_secure_scrub(result->tag, result->tag_length);
         }
-        pthread_mutex_unlock(&state->mutex);
+    }
+    // The inputs carry the password, pepper, and nonce; they are done the
+    // moment the derivation is, so scrub them here rather than at reap.
+    mal_argon2_inputs_free(&request->inputs);
 
-        bool posted = !cancelled && mal_host_post_complete(
-            state->host, operation, terminal, result, mal_argon2_result_destroy);
-        if (!posted) {
-            mal_argon2_result_release(result);
-        }
+    pthread_mutex_lock(&state->mutex);
+    request->completed = true;
+    request->result = nullptr;
+    if (cancelled) {
+        mal_argon2_remove_request(state, request);
+    }
+    pthread_mutex_unlock(&state->mutex);
 
-        // One release of the claim, and it decides the owner. A posted record
-        // stays on the list for the reaper; anything else leaves the list here
-        // and is freed by this thread. Either way `request` is untouched after
-        // the unlock.
-        pthread_mutex_lock(&state->mutex);
-        if (!posted && !cancelled) {
-            mal_argon2_remove_request(state, request);
-        }
-        request->worker_owned = false;
-        pthread_mutex_unlock(&state->mutex);
+    bool posted = !cancelled && mal_host_post_complete(
+        state->host, operation, terminal, result, mal_argon2_result_destroy);
+    if (!posted) {
+        mal_argon2_result_release(result);
+    }
 
-        (void) mal_reactor_release_work(&state->host->reactor);
-        if (!posted) {
-            free(request);
-        }
+    // A successful post transfers payload ownership; the reaper owns only the record.
+    pthread_mutex_lock(&state->mutex);
+    if (!posted && !cancelled) {
+        mal_argon2_remove_request(state, request);
+    }
+    request->worker_owned = false;
+    pthread_mutex_unlock(&state->mutex);
+
+    (void) mal_reactor_release_work(&state->host->reactor);
+    if (!posted) {
+        free(request);
     }
 }
 
-/*
- * Bring the lazy worker pool up, under the state mutex.
- *
- * The latch is set only once at least one worker exists. A start that produces
- * no workers at all leaves the pool exactly as it found it — no thread array, no
- * latch — so the transient condition that caused it (a failed allocation, a
- * process at its thread limit) does not permanently wedge every later
- * derivation against an empty pool that can never be retried or reconfigured.
- * A partial pool is a success: the workers that did start drain the queue.
- */
 static bool mal_argon2_start_pool(MalArgon2State *state) {
-    if (state->pool_started) {
-        return state->thread_count > 0;
-    }
-    pthread_t *threads = calloc(state->thread_limit, sizeof(pthread_t));
-    if (threads == nullptr) {
+    if (state->pool_started) return state->thread_count > 0;
+    if (state->fail_next_pool_start) {
+        state->fail_next_pool_start = false;
         return false;
     }
-#if MAL_PROFILE
-    // Workers inherit blocked SIGPROF so they cannot race the VM sampler's signal state.
-    sigset_t blocked, previous;
-    sigemptyset(&blocked);
-    sigaddset(&blocked, SIGPROF);
-    if (pthread_sigmask(SIG_BLOCK, &blocked, &previous) != 0) {
-        free(threads);
-        return false;
-    }
-#endif
-    usize started = 0;
-    for (usize i = 0; i < state->thread_limit; i++) {
-        if (state->fail_next_pool_start
-            || pthread_create(&threads[started], nullptr, mal_argon2_worker, state) != 0) {
-            break;
-        }
-        started++;
-    }
-    if (started > 0) mal_profile_mark_worker_cpu_possible();
-#if MAL_PROFILE
-    pthread_sigmask(SIG_SETMASK, &previous, nullptr);
-#endif
-    state->fail_next_pool_start = false;
-    if (started == 0) {
-        free(threads);
-        return false;
-    }
-    // Published after the loop: a worker blocks on this mutex until the caller
-    // releases it, so it observes a fully-formed pool or none.
-    state->threads = threads;
-    state->thread_count = started;
+    if (!mal_executor_client_init(&state->executor, MAL_EXECUTOR_CRYPTO,
+            state->thread_limit, state->queue_capacity)) return false;
+    state->thread_count = mal_executor_client_workers(&state->executor);
     state->pool_started = true;
+    mal_profile_mark_worker_cpu_possible();
     return true;
 }
 
@@ -458,11 +412,6 @@ bool mal_argon2_init(MalArgon2 *argon2, MalHost *host) {
         return false;
     }
     if (pthread_mutex_init(&state->mutex, nullptr) != 0) {
-        free(state);
-        return false;
-    }
-    if (pthread_cond_init(&state->ready, nullptr) != 0) {
-        pthread_mutex_destroy(&state->mutex);
         free(state);
         return false;
     }
@@ -534,6 +483,17 @@ static MalArgon2Limits mal_argon2_state_limits(MalArgon2State *state) {
     return limits;
 }
 
+static void mal_argon2_discard(void *data) {
+    MalArgon2Job *request = data;
+    MalArgon2State *state = request->state;
+    pthread_mutex_lock(&state->mutex);
+    (void) mal_argon2_remove_queued(state, request);
+    pthread_mutex_unlock(&state->mutex);
+    (void) mal_host_operation_cancel(&state->host->tasks, request->operation);
+    mal_argon2_request_free(request);
+    (void) mal_reactor_release_work(&state->host->reactor);
+}
+
 MalArgon2StartResult mal_argon2_start(
     MalHost *host, const MalArgon2Params *params, MalHostHandle *operation) {
     if (operation != nullptr) {
@@ -603,14 +563,8 @@ MalArgon2StartResult mal_argon2_start(
         mal_argon2_request_free(request);
         return MAL_ARGON2_START_SYSTEM_ERROR;
     }
-    if (!mal_host_operation_activate(&host->tasks, *operation)) {
-        (void) mal_reactor_release_work(&host->reactor);
-        (void) mal_host_operation_abort_start(&host->tasks, *operation);
-        *operation = 0;
-        pthread_mutex_unlock(&state->mutex);
-        mal_argon2_request_free(request);
-        return MAL_ARGON2_START_SYSTEM_ERROR;
-    }
+
+    request->state = state;
     request->operation = *operation;
     if (state->tail == nullptr) {
         state->head = request;
@@ -621,7 +575,17 @@ MalArgon2StartResult mal_argon2_start(
     request->all_next = state->requests;
     state->requests = request;
     state->queued++;
-    pthread_cond_signal(&state->ready);
+    if (!mal_executor_submit(&state->executor, mal_argon2_worker,
+            mal_argon2_discard, request, sizeof(*request) + request->inputs.message_len + request->inputs.nonce_len + request->inputs.secret_len + request->inputs.associated_data_len + request->result->tag_length, (usize) request->params.memory_kib * 1024)) {
+        (void) mal_argon2_remove_queued(state, request);
+        (void) mal_reactor_release_work(&host->reactor);
+        (void) mal_host_operation_abort_start(&host->tasks, *operation);
+        *operation = 0;
+        pthread_mutex_unlock(&state->mutex);
+        mal_argon2_request_free(request);
+        return MAL_ARGON2_START_SATURATED;
+    }
+    if (!mal_host_operation_activate(&host->tasks, *operation)) abort();
     pthread_mutex_unlock(&state->mutex);
     return MAL_ARGON2_START_OK;
 }
@@ -639,7 +603,8 @@ bool mal_argon2_cancel(MalHost *host, MalHostHandle operation) {
         if (request->operation == operation) {
             request->cancelled = true;
             matched = request;
-            queued = mal_argon2_remove_queued(state, request);
+            queued = mal_executor_cancel(&state->executor, request) &&
+                mal_argon2_remove_queued(state, request);
             break;
         }
     }
@@ -678,49 +643,17 @@ void mal_argon2_reap_completed(MalArgon2 *argon2) {
 }
 
 void mal_argon2_shutdown(MalArgon2 *argon2) {
-    if (argon2 == nullptr || argon2->state == nullptr) {
-        return;
-    }
+    if (argon2 == nullptr || argon2->state == nullptr) return;
     MalArgon2State *state = argon2->state;
     pthread_mutex_lock(&state->mutex);
     state->accepting = false;
-    if (state->stopping) {
-        pthread_mutex_unlock(&state->mutex);
-        return;
-    }
     state->stopping = true;
-    MalArgon2Job *queued = state->head;
-    state->head = nullptr;
-    state->tail = nullptr;
-    state->queued = 0;
-    for (MalArgon2Job *request = queued; request != nullptr; request = request->next) {
-        mal_argon2_remove_request(state, request);
-    }
-    for (MalArgon2Job *request = state->requests; request != nullptr;
-        request = request->all_next) {
+    for (MalArgon2Job *request = state->requests; request != nullptr; request = request->all_next) {
         request->cancelled = true;
         (void) mal_host_operation_cancel(&state->host->tasks, request->operation);
     }
-    for (MalArgon2Job *request = queued; request != nullptr; request = request->next) {
-        request->cancelled = true;
-        (void) mal_host_operation_cancel(&state->host->tasks, request->operation);
-    }
-    usize thread_count = state->thread_count;
-    pthread_cond_broadcast(&state->ready);
     pthread_mutex_unlock(&state->mutex);
-
-    while (queued != nullptr) {
-        MalArgon2Job *next = queued->next;
-        mal_argon2_request_free(queued);
-        (void) mal_reactor_release_work(&state->host->reactor);
-        queued = next;
-    }
-
-    // A derivation already on a worker has no cancellation point, so this joins
-    // for up to one full derivation per worker.
-    for (usize i = 0; i < thread_count; i++) {
-        (void) pthread_join(state->threads[i], nullptr);
-    }
+    mal_executor_client_shutdown(&state->executor);
     pthread_mutex_lock(&state->mutex);
     state->thread_count = 0;
     pthread_mutex_unlock(&state->mutex);
@@ -738,8 +671,7 @@ void mal_argon2_free(MalArgon2 *argon2) {
         mal_argon2_request_free(request);
         request = next;
     }
-    free(state->threads);
-    pthread_cond_destroy(&state->ready);
+    mal_executor_client_free(&state->executor);
     pthread_mutex_destroy(&state->mutex);
     free(state);
     argon2->state = nullptr;
