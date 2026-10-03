@@ -245,12 +245,33 @@ static void endpoint_bind(Endpoint *endpoint, Owner *owner) {
     Channel *channel = endpoint->channel;
     pthread_mutex_lock(&channel->mutex);
     Owner *previous = endpoint->owner;
+    bool removed_ready = false;
+    if (previous != nullptr && previous != owner) {
+        pthread_mutex_lock(&previous->mutex);
+        if (endpoint->ready_queued) {
+            Endpoint *before = nullptr;
+            Endpoint *queued = previous->ready_head;
+            while (queued != nullptr && queued != endpoint) {
+                before = queued;
+                queued = queued->ready_next;
+            }
+            if (queued == nullptr) abort();
+            if (before != nullptr) before->ready_next = endpoint->ready_next;
+            else previous->ready_head = endpoint->ready_next;
+            if (previous->ready_tail == endpoint) previous->ready_tail = before;
+            endpoint->ready_next = nullptr;
+            endpoint->ready_queued = false;
+            removed_ready = true;
+        }
+        pthread_mutex_unlock(&previous->mutex);
+    }
     if (owner != nullptr) owner_retain(owner);
     endpoint->owner = owner;
     if (owner != nullptr && (endpoint->count > 0 || endpoint->close_pending)) {
         endpoint_notify_locked(endpoint);
     }
     pthread_mutex_unlock(&channel->mutex);
+    if (removed_ready) channel_release(channel);
     owner_release(previous);
 }
 
@@ -974,7 +995,8 @@ const MalSerializeHooks *mal_workers_get_serialize_hooks(MalVm *vm) {
 // reply port) are adopted here instead of closing when the snapshot is released.
 static MalValue transferred_ports(MalVm *vm, MalSerializedValue *snapshot) {
     u32 count = mal_serialized_value_transfer_count(snapshot);
-    MalValue *ports = malloc((count == 0 ? 1 : count) * sizeof(MalValue));
+    if (count == 0) return mal_value_new_undefined();
+    MalValue *ports = malloc(count * sizeof(MalValue));
     if (ports == nullptr) {
         mal_vm_throw_allocation_error(vm);
         return mal_value_new_undefined();
