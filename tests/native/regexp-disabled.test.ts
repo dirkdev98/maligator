@@ -1,7 +1,7 @@
-import { mkdtempSync, statSync } from "node:fs";
+import { mkdtempSync, rmSync, statSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
 	assertResultPass,
 	buildNativeBinary,
@@ -10,15 +10,8 @@ import {
 	STRESS_ENV,
 } from "../../src/test-harness.ts";
 
-// The runtime half of `engine.regexp: false` (the compile-time regex-literal check
-// is covered by tests/build-config.test.ts). Builds the fixture into the regexp-off
-// archive: `-DMAL_REGEXP=0` compiles builtin_regexp.c / regexp_object.c away and the
-// Rust crate is built without the `regexp` feature, so the regress engine + its
-// Unicode tables are dropped. That this binary LINKS at all — no `mal_regexp_*`
-// symbols in the archive, gc.c's finalizer guarded — is the core assertion; the
-// fixture then confirms RegExp is absent, regex String methods throw, and pure
-// string ops still work. Builds its own archive under a `-<hash>` suffixed dir.
 const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-regexp-off-"));
+afterAll(() => rmSync(outDir, { recursive: true, force: true }));
 
 describe("engine.regexp: false runtime gate", () => {
 	let regexpOffBin: string;

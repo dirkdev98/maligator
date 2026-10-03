@@ -1117,6 +1117,7 @@ static bool dec_value(SerDecoder *dec, MalValue *out) {
         return ok;
     }
     case SER_REGEXP: {
+#if MAL_REGEXP
         MalValue strings[2] = {mal_value_new_undefined(), mal_value_new_undefined()};
         MalRootSpan span;
         mal_gc_root(&span, strings, 2);
@@ -1131,6 +1132,10 @@ static bool dec_value(SerDecoder *dec, MalValue *out) {
             dec_record(dec, *out);
         }
         return ok;
+#else
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "RegExp cloning is disabled by this build");
+        return false;
+#endif
     }
     case SER_ERROR: {
         u8 kind;

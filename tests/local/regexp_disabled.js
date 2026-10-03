@@ -30,6 +30,17 @@ results.push(["replace works", "abc".replace("b", "X") === "aXc"]);
 results.push(["includes works", "abc".includes("b") === true]);
 results.push(["startsWith works", "abc".startsWith("ab") === true]);
 
+const original = { text: "clone", bytes: new ArrayBuffer(4) };
+original.self = original;
+new Uint8Array(original.bytes)[0] = 42;
+const cloned = structuredClone(original, { transfer: [original.bytes] });
+results.push(["clone preserves cycles", cloned !== original && cloned.self === cloned]);
+results.push(["clone preserves data", cloned.text === "clone"]);
+results.push([
+	"clone transfers bytes",
+	original.bytes.byteLength === 0 && new Uint8Array(cloned.bytes)[0] === 42,
+]);
+
 let passed = 0;
 for (const [name, ok] of results) {
 	if (ok) passed++;
