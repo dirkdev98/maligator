@@ -28,7 +28,6 @@
 #include "vm_load.h"
 #include "vm_ops.h"
 #include "atomics_async.h"
-#include "host_registry.h"
 #include "personality.h"
 #include "web_events_object.h"
 #include "web_globals.h"
@@ -1850,7 +1849,7 @@ static void *worker_thread_main(void *arg) {
         // Splicing mutates loaded wire data, so each isolate loads its own copy.
         const char *error = "ok";
         loaded = mal_runtime_image_load_with_host_resolver(
-            (const u8 *) thread->entry->wire, thread->entry->wire_size, &error, mal_host_resolve_installer);
+            (const u8 *) thread->entry->wire, thread->entry->wire_size, &error, thread->entry->resolve_installer);
         image = loaded != nullptr ? mal_loaded_runtime_image_get(loaded) : nullptr;
     }
     MalVm *vm = cancelled || image == nullptr ? nullptr : calloc(1, sizeof(MalVm));

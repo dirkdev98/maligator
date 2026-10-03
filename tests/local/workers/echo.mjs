@@ -1,3 +1,4 @@
+import { basename } from "node:path";
 import { parentPort, workerData } from "maligator:workers";
 
 parentPort.addEventListener("message", (event) => {
@@ -14,6 +15,8 @@ parentPort.addEventListener("message", (event) => {
 		Atomics.store(view, 0, 1);
 		Atomics.notify(view, 0);
 		parentPort.postMessage({ shared: true });
+	} else if (message.filename !== undefined) {
+		parentPort.postMessage(basename(message.filename));
 	} else {
 		parentPort.postMessage(
 			message,

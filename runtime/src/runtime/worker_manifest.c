@@ -9,6 +9,7 @@
 #include "gc.h"
 #include "heap_string.h"
 #include "hex.h"
+#include "host_registry.h"
 #include "intrinsics.h"
 #include "object.h"
 #include "sha256.h"
@@ -150,6 +151,7 @@ bool mal_worker_manifest_register(MalVm *vm, const char *path) {
         if (wire == nullptr) { free(digest); goto failed; }
         manifest->entries[index].wire = wire;
         manifest->entries[index].wire_size = wire_size;
+        manifest->entries[index].resolve_installer = mal_host_resolve_installer;
         total_bytes += wire_size;
         if (total_bytes > 512ull * 1024 * 1024) { free(digest); goto failed; }
         MalSha256 hash;

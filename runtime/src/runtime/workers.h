@@ -1,6 +1,7 @@
 #pragma once
 
 #include "vm.h"
+#include "vm_load.h"
 
 /*
  * JavaScript worker isolates and MessagePort transport.
@@ -18,6 +19,8 @@ typedef struct MalWorkerEntry {
     const MalRuntimeImage *image;
     const byte *wire;
     usize wire_size;
+    // Wire hosts supply their registry; baked images retain only reached installers.
+    MalHostInstallerResolver resolve_installer;
 } MalWorkerEntry;
 
 /* Process-wide registry, set once before the first JS runs. The array and its

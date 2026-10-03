@@ -689,11 +689,11 @@
 	},
 	{
 		"file": "runtime/workers.c",
-		"sha256": "76ab42668033964b40baf268a1f962389ad39e2858085b0e34c998c28ab006ca"
+		"sha256": "cac0fb5e2d6aa9ae0f5e87a05a92d114d3e90940231c634877d496634f8df958"
 	},
 	{
 		"file": "runtime/workers.h",
-		"sha256": "25a62656941efc8f1a72a54b1e1c9bf40fa1376d18ba34d709a4bc3f8f79655a"
+		"sha256": "52c12a41064aa95bd4b523debcac4f256aa9ee121c953a86b99107fc71706d33"
 	},
 	{
 		"file": "serialize.c",

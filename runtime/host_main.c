@@ -71,6 +71,7 @@ static int run_development_wire(int argc, char **argv, bool has_assets, const ch
 #endif
 
 int main(int argc, char **argv) {
+#if MAL_DEVELOPMENT_API
     const char *worker_manifest_path = nullptr;
     if (argc >= 3 && strcmp(argv[1], "--maligator-internal-workers") == 0) {
         worker_manifest_path = argv[2];
@@ -78,7 +79,6 @@ int main(int argc, char **argv) {
         argv += 2;
         argc -= 2;
     }
-#if MAL_DEVELOPMENT_API
     if (argc >= 2 && strcmp(argv[1], development_wire_command) == 0) {
         return run_development_wire(argc, argv, false, worker_manifest_path);
     }
@@ -102,11 +102,13 @@ int main(int argc, char **argv) {
         mal_vm_free(&vm);
         return 2;
     }
+#if MAL_DEVELOPMENT_API
     if (worker_manifest_path != nullptr && !mal_worker_manifest_register(&vm, worker_manifest_path)) {
         mal_host_detach(&vm);
         mal_vm_free(&vm);
         return 2;
     }
+#endif
     mal_runtime_personality_install(&vm, MAL_WEB_PLATFORM != 0, MAL_NODE != 0);
 
     // Fill the reached host built-in / `process` global slots before execution
@@ -128,7 +130,9 @@ int main(int argc, char **argv) {
 	int code = mal_host_finish_process(&vm, vm.completion.kind == MAL_COMPLETION_THROW ? 1 : 0);
 	mal_profile_finish(&vm);
     mal_workers_shutdown(&vm);
+#if MAL_DEVELOPMENT_API
     mal_worker_manifest_clear();
+#endif
 
     if (getenv("MAL_GC_AT_EXIT") != nullptr) {
         mal_gc_collect(&vm);

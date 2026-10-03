@@ -22,7 +22,7 @@ export function emitWorkerImageTranslationUnits(
 		lines.push("static const MalWorkerEntry mal_compiled_worker_entries[] = {");
 		for (const worker of workers)
 			lines.push(
-				`    { .href = "${cEscapeString(worker.entry.href)}", .image = &mal_runtime_image_worker_${worker.id}, .wire = nullptr, .wire_size = 0 },`,
+				`    { .href = "${cEscapeString(worker.entry.href)}", .image = &mal_runtime_image_worker_${worker.id}, .wire = nullptr, .wire_size = 0, .resolve_installer = nullptr },`,
 			);
 		lines.push("};");
 	}
