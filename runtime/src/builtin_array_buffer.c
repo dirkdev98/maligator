@@ -457,7 +457,7 @@ static MalValue mal_builtin_array_buffer_transfer_impl(MalVm *vm, MalValue this_
     if (new_length > copy) {
         memset(result->data + copy, 0, new_length - copy);
     }
-    mal_array_buffer_object_detach(buffer);
+    mal_array_buffer_object_detach(&vm->heap, buffer);
     return mal_value_from_array_buffer_object(result);
 }
 
@@ -532,7 +532,7 @@ static MalValue mal_builtin_array_buffer_transfer_to_immutable(MalVm *vm, MalVal
     if (new_length > copy) {
         memset(result->data + copy, 0, new_length - copy);
     }
-    mal_array_buffer_object_detach(buffer);
+    mal_array_buffer_object_detach(&vm->heap, buffer);
     return mal_value_from_array_buffer_object(result);
 }
 

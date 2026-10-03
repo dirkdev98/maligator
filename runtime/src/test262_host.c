@@ -148,7 +148,7 @@ static MalValue mal_test262_detach_array_buffer(
         return mal_value_new_undefined();
     }
 
-    mal_array_buffer_object_detach(buffer);
+    mal_array_buffer_object_detach(&vm->heap, buffer);
     return mal_value_new_null();
 }
 

@@ -769,10 +769,13 @@ bool mal_serialize_commit(MalVm *vm, MalSerializedValue *snap) {
         resource->data = source->data;
         resource->length = source->byte_length;
         resource->sensitive = source->sensitive;
+        if (source->data != nullptr) {
+            mal_heap_array_buffer_release(&vm->heap, source->allocation_capacity);
+        }
         source->data = nullptr;
         source->allocation_capacity = 0;
         source->sensitive = false;
-        mal_array_buffer_object_detach(source);
+        mal_array_buffer_object_detach(&vm->heap, source);
     }
     for (u32 i = 0; i < snap->resource_count; i++) {
         SerResource *resource = &snap->resources[i];
@@ -913,6 +916,9 @@ static MalArrayBufferObject *dec_buffer(SerDecoder *dec, SerResource *resource) 
         buffer->allocation_capacity = resource->capacity;
         buffer->resizable = resource->resizable;
         buffer->sensitive = resource->sensitive;
+        if (buffer->data != nullptr) {
+            mal_heap_array_buffer_acquire(&vm->heap, buffer->allocation_capacity);
+        }
         resource->data = nullptr;
         return buffer;
     }

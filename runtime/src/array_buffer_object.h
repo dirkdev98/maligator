@@ -123,12 +123,12 @@ bool mal_array_buffer_object_is_detached(const MalArrayBufferObject *buffer);
  * here, so neither can release a secret-bearing store unscrubbed. Idempotent,
  * and does not itself mark the buffer detached.
  */
-void mal_array_buffer_object_release_store(MalArrayBufferObject *buffer);
+void mal_array_buffer_object_release_store(MalHeap *heap, MalArrayBufferObject *buffer);
 
 /**
  * Detach the buffer: drop and free its backing store. Idempotent.
  */
-void mal_array_buffer_object_detach(MalArrayBufferObject *buffer);
+void mal_array_buffer_object_detach(MalHeap *heap, MalArrayBufferObject *buffer);
 
 /**
  * Resize a resizable buffer to new_byte_length (<= max_byte_length). Growth

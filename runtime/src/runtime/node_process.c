@@ -515,19 +515,6 @@ static MalValue mal_process_memory_rss(
     return mal_value_from_f64((f64) bytes);
 }
 
-static _Thread_local usize mal_process_array_buffer_bytes;
-
-// Shared wrappers are skipped: a SharedArrayBuffer backing is counted once,
-// process-wide, by the shared-memory accounting rather than per wrapper.
-static void mal_process_count_array_buffers(MalHeapHeader *header) {
-    if ((header->mark & MAL_MARK_FREE) == 0 && header->type == MAL_HEAP_ARRAY_BUFFER_OBJECT) {
-        MalArrayBufferObject *buffer = (MalArrayBufferObject *) header;
-        if (!buffer->detached && buffer->shared_memory == nullptr) {
-            mal_process_array_buffer_bytes += buffer->allocation_capacity;
-        }
-    }
-}
-
 static MalValue mal_process_memory_usage(
     MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
     (void) self; (void) args; (void) argc; (void) nt; (void) callee;
@@ -536,16 +523,14 @@ static MalValue mal_process_memory_usage(
         mal_vm_throw_error(vm, MAL_INTRINSIC_ERROR_PROTOTYPE, "Current RSS measurement is unavailable");
         return mal_value_new_undefined();
     }
-    MalHeapUsage usage = mal_heap_usage(&vm->heap);
-    mal_process_array_buffer_bytes = 0;
-    mal_heap_walk_cells(&vm->heap, mal_process_count_array_buffers);
+    MalHeapCurrentUsage usage = mal_heap_current_usage(&vm->heap);
     // heap*/external describe this isolate; arrayBuffers adds every live shared
     // backing in the process (reservation size, freed on its last release on
     // any thread), the same bytes the shared-memory cap admits.
     u64 shared = mal_shared_memory_live_bytes();
-    usize buffers = mal_process_array_buffer_bytes
-        + (shared > SIZE_MAX - mal_process_array_buffer_bytes
-            ? SIZE_MAX - mal_process_array_buffer_bytes : (usize) shared);
+    usize buffers = usage.array_buffer_bytes
+        + (shared > SIZE_MAX - usage.array_buffer_bytes
+            ? SIZE_MAX - usage.array_buffer_bytes : (usize) shared);
     const usize values[] = {rss, usage.chunk_mapped_bytes + usage.managed_large_bytes,
         usage.managed_owned_bytes, usage.raw_owned_bytes + buffers, buffers};
     const char *names[] = {"rss", "heapTotal", "heapUsed", "external", "arrayBuffers"};

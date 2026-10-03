@@ -294,6 +294,7 @@ static MalGcChunk *mal_gc_new_chunk(MalHeap *heap) {
     }
     chunk->next = heap->chunks;
     heap->chunks = chunk;
+    heap->current_usage.chunk_mapped_bytes += mmap_size;
     mal_gc_process_charge(mmap_size);
     return chunk;
 }
@@ -420,6 +421,10 @@ static bool mal_gc_sweep_large(MalHeap *heap, MalGcLarge *rec, MalHeapFinalizeFn
     mal_gc_untrack_young_large(heap, rec);
     mal_gc_unlink_large(&heap->large, rec);
     finalize(header);
+    if (heap->current_usage.managed_owned_bytes < rec->size ||
+        heap->current_usage.managed_large_bytes < rec->size) abort();
+    heap->current_usage.managed_owned_bytes -= rec->size;
+    heap->current_usage.managed_large_bytes -= rec->size;
     mal_gc_process_release(mal_gc_large_data_offset() + rec->size);
     free(rec);
     return false;
@@ -463,6 +468,12 @@ static void *mal_gc_alloc_large(MalHeap *heap, usize size, u8 kind) {
         }
     }
     heap->bytes_allocated += size;
+    if (kind == MAL_GC_BLOCK_CELL) {
+        heap->current_usage.managed_owned_bytes += size;
+        heap->current_usage.managed_large_bytes += size;
+    } else {
+        heap->current_usage.raw_owned_bytes += size;
+    }
     mal_gc_process_charge(offset + size);
     mal_gc_count_black(heap, nullptr, kind, size);
     mal_heap_maybe_trigger_gc(heap);
@@ -491,6 +502,7 @@ static void *mal_gc_alloc(MalHeap *heap, usize size, u8 kind) {
         MalGcBlock *block = (MalGcBlock *) ((uptr) cell & ~(uptr) (MAL_GC_BLOCK_SIZE - 1));
         mal_gc_track_young_block(heap, block, cell);
         heap->bytes_allocated += g_class_cell_size[size_class];
+        heap->current_usage.managed_owned_bytes += g_class_cell_size[size_class];
         mal_gc_count_black(heap, block, kind, g_class_cell_size[size_class]);
         mal_heap_maybe_trigger_gc(heap);
         return cell;
@@ -504,6 +516,7 @@ static void *mal_gc_alloc(MalHeap *heap, usize size, u8 kind) {
             mal_gc_raw_partial_unlink(heap, partial);
         }
         heap->bytes_allocated += g_class_cell_size[size_class];
+        heap->current_usage.raw_owned_bytes += g_class_cell_size[size_class];
         mal_heap_maybe_trigger_gc(heap);
         return cell;
     }
@@ -527,6 +540,8 @@ static void *mal_gc_alloc(MalHeap *heap, usize size, u8 kind) {
         mal_gc_track_young_block(heap, block, cell);
     }
     heap->bytes_allocated += block->cell_size;
+    if (kind == MAL_GC_BLOCK_CELL) heap->current_usage.managed_owned_bytes += block->cell_size;
+    else heap->current_usage.raw_owned_bytes += block->cell_size;
     mal_gc_count_black(heap, block, kind, block->cell_size);
     mal_heap_maybe_trigger_gc(heap);
     return cell;
@@ -552,6 +567,7 @@ void mal_heap_init(MalHeap *heap, usize capacity) {
     heap->free_blocks = nullptr;
     heap->young_blocks = nullptr;
     heap->bytes_allocated = 0;
+    heap->current_usage = (MalHeapCurrentUsage) {0};
     heap->next_gc_at = (usize) -1;
     heap->poison_on_free = false;
     heap->live_bytes = 0;
@@ -628,6 +644,7 @@ void mal_heap_free(MalHeap *heap) {
     heap->free_blocks = nullptr; // the blocks themselves are freed via the chunks above
     heap->young_blocks = nullptr;
     heap->bytes_allocated = 0;
+    heap->current_usage = (MalHeapCurrentUsage) {0};
     heap->next_gc_at = (usize) -1;
     heap->poison_on_free = false;
     heap->live_bytes = 0;
@@ -695,6 +712,20 @@ MalHeapUsage mal_heap_usage(const MalHeap *heap) {
         usage.recycled_block_bytes += MAL_GC_BLOCK_SIZE;
     }
     return usage;
+}
+
+MalHeapCurrentUsage mal_heap_current_usage(const MalHeap *heap) {
+    return heap->current_usage;
+}
+
+void mal_heap_array_buffer_acquire(MalHeap *heap, usize bytes) {
+    if (bytes > SIZE_MAX - heap->current_usage.array_buffer_bytes) abort();
+    heap->current_usage.array_buffer_bytes += bytes;
+}
+
+void mal_heap_array_buffer_release(MalHeap *heap, usize bytes) {
+    if (bytes > heap->current_usage.array_buffer_bytes) abort();
+    heap->current_usage.array_buffer_bytes -= bytes;
 }
 
 void mal_heap_header_init(MalHeapHeader *header, MalHeapType type) {
@@ -990,6 +1021,8 @@ static void mal_heap_sweep_block(
             // Unreached: dead. Finalize (frees its owned side allocations), then
             // tombstone so a later sweep does not finalize it again.
             finalize(header);
+            if (heap->current_usage.managed_owned_bytes < block->cell_size) abort();
+            heap->current_usage.managed_owned_bytes -= block->cell_size;
             mal_heap_sweep_mark_store(header, MAL_MARK_FREE);
             if (heap->poison_on_free) {
                 mal_gc_poison_cell(cell, block->cell_size, free_offset);
@@ -1086,6 +1119,8 @@ void mal_heap_sweep_minor(MalHeap *heap, MalHeapFinalizeFn finalize) {
                     block_live++;
                 } else if ((mark & MAL_MARK_FREE) == 0) {
                     finalize(header);
+                    if (heap->current_usage.managed_owned_bytes < block->cell_size) abort();
+                    heap->current_usage.managed_owned_bytes -= block->cell_size;
                     mal_heap_sweep_mark_store(header, MAL_MARK_FREE);
                     if (heap->poison_on_free) {
                         mal_gc_poison_cell(cell, block->cell_size, free_offset);
@@ -1238,6 +1273,8 @@ void gc_free_raw(MalHeap *heap, void *ptr) {
     }
     if (mal_gc_ptr_in_chunks(heap, ptr)) {
         MalGcBlock *block = (MalGcBlock *) ((uptr) ptr & ~(uptr) (MAL_GC_BLOCK_SIZE - 1));
+        if (heap->current_usage.raw_owned_bytes < block->cell_size) abort();
+        heap->current_usage.raw_owned_bytes -= block->cell_size;
         block->live--;
         if (block->live == 0 && heap->raw_blocks[block->size_class] != block) {
             mal_gc_raw_partial_unlink(heap, block);
@@ -1262,6 +1299,8 @@ void gc_free_raw(MalHeap *heap, void *ptr) {
     // Large-object buffer: unlink its record from the LOS list and free it.
     MalGcLarge *target = (MalGcLarge *) ((u8 *) ptr - mal_gc_large_data_offset());
     if (target->kind != MAL_GC_BLOCK_RAW) abort();
+    if (heap->current_usage.raw_owned_bytes < target->size) abort();
+    heap->current_usage.raw_owned_bytes -= target->size;
     mal_gc_unlink_large(&heap->raw_large, target);
     mal_gc_process_release(mal_gc_large_data_offset() + target->size);
     free(target);
@@ -1309,6 +1348,7 @@ void *mal_heap_try_realloc_raw_profiled(
         MalGcLarge *grown = realloc(large, offset + new_size);
         if (grown == nullptr) return nullptr;
         grown->size = new_size;
+        heap->current_usage.raw_owned_bytes += new_size - old_size;
         mal_gc_process_charge(new_size - old_size);
         if (previous != nullptr) previous->next = grown;
         else heap->raw_large = grown;

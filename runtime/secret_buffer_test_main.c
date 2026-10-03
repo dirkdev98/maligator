@@ -78,9 +78,9 @@ static bool secret_detach_scrubs_the_store(MalVm *vm) {
     secret_observation_reset();
     MalArrayBufferObject *buffer = secret_buffer_new(vm, true);
     if (buffer == nullptr) return false;
-    mal_array_buffer_object_detach(buffer);
+    mal_array_buffer_object_detach(&vm->heap, buffer);
     // Detaching twice must not release a second time.
-    mal_array_buffer_object_detach(buffer);
+    mal_array_buffer_object_detach(&vm->heap, buffer);
     return g_observed.releases == 1 && !g_observed.residue && g_observed.sensitive
         && g_observed.capacity == SECRET_LENGTH
         && mal_array_buffer_object_is_detached(buffer) && buffer->data == nullptr;
@@ -105,7 +105,7 @@ static bool plain_stores_are_not_scrubbed(MalVm *vm) {
     secret_observation_reset();
     MalArrayBufferObject *buffer = secret_buffer_new(vm, false);
     if (buffer == nullptr) return false;
-    mal_array_buffer_object_detach(buffer);
+    mal_array_buffer_object_detach(&vm->heap, buffer);
     return g_observed.releases == 1 && g_observed.residue && !g_observed.sensitive;
 }
 
@@ -140,7 +140,7 @@ static bool a_shrunken_store_is_scrubbed_to_its_capacity(MalVm *vm) {
     memset(buffer->data, SECRET_BYTE, SECRET_LENGTH);
     g_observed.target = buffer;
     bool shrunk = mal_array_buffer_object_resize(buffer, 8);
-    mal_array_buffer_object_detach(buffer);
+    mal_array_buffer_object_detach(&vm->heap, buffer);
     return shrunk && g_observed.releases == 1 && !g_observed.residue
         && g_observed.capacity == SECRET_LENGTH;
 }
@@ -183,7 +183,7 @@ static bool a_transferred_store_stays_sensitive(MalVm *vm) {
         && mal_array_buffer_object_is_detached(source);
     if (ok) {
         g_observed.target = result;
-        mal_array_buffer_object_detach(result);
+        mal_array_buffer_object_detach(&vm->heap, result);
     }
     mal_gc_unroot(&root);
     vm->completion.kind = MAL_COMPLETION_NORMAL;

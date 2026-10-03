@@ -212,7 +212,7 @@ static MalValue rs_transfer_byob_view(
         memcpy(transferred->data, source_buffer->data,
             source_buffer->byte_length);
     }
-    mal_array_buffer_object_detach(source_buffer);
+    mal_array_buffer_object_detach(&vm->heap, source_buffer);
     MalValue result = mal_value_from_typed_array_object(
         mal_typed_array_object_new(&vm->heap,
             mal_value_to_object(vm->intrinsics[
@@ -252,7 +252,7 @@ static MalValue rs_transfer_typed_array_view(MalVm *vm, MalValue view) {
     if (source_buffer->byte_length > 0) {
         memcpy(transferred->data, source_buffer->data, source_buffer->byte_length);
     }
-    mal_array_buffer_object_detach(source_buffer);
+    mal_array_buffer_object_detach(&vm->heap, source_buffer);
     roots[2] = mal_value_from_typed_array_object(mal_typed_array_object_new(
         &vm->heap, mal_object_prototype(&source->object), transferred, source->kind,
         source->byte_offset, source->length, source->length_tracking));

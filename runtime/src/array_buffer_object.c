@@ -49,6 +49,7 @@ static MalArrayBufferObject *mal_array_buffer_object_new_impl(
         }
     }
     if (buffer->data != nullptr && !shared) {
+        mal_heap_array_buffer_acquire(heap, capacity);
         mal_gc_process_charge(capacity);
         mal_profile_native_allocation(
             heap, capacity, MAL_PROFILE_ALLOCATION_FAMILY_BUFFER);
@@ -143,6 +144,7 @@ MalArrayBufferObject *mal_array_buffer_object_adopt(
     buffer->allocation_capacity = byte_length;
     buffer->sensitive = sensitive;
     if (data != nullptr) {
+        mal_heap_array_buffer_acquire(heap, byte_length);
         mal_gc_process_charge(byte_length);
     }
     return buffer;
@@ -182,7 +184,7 @@ bool mal_array_buffer_object_is_detached(const MalArrayBufferObject *buffer) {
     return buffer->detached;
 }
 
-void mal_array_buffer_object_release_store(MalArrayBufferObject *buffer) {
+void mal_array_buffer_object_release_store(MalHeap *heap, MalArrayBufferObject *buffer) {
     if (buffer->shared_memory != nullptr) {
         mal_shared_memory_release(buffer->shared_memory);
         buffer->shared_memory = nullptr;
@@ -205,15 +207,16 @@ void mal_array_buffer_object_release_store(MalArrayBufferObject *buffer) {
     }
     free(buffer->data);
     mal_gc_process_release(buffer->allocation_capacity);
+    mal_heap_array_buffer_release(heap, buffer->allocation_capacity);
     buffer->data = nullptr;
     buffer->allocation_capacity = 0;
 }
 
-void mal_array_buffer_object_detach(MalArrayBufferObject *buffer) {
+void mal_array_buffer_object_detach(MalHeap *heap, MalArrayBufferObject *buffer) {
     if (buffer->detached) {
         return;
     }
-    mal_array_buffer_object_release_store(buffer);
+    mal_array_buffer_object_release_store(heap, buffer);
     buffer->byte_length = 0;
     buffer->detached = true;
 }

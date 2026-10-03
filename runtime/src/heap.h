@@ -31,6 +31,14 @@ typedef struct MalGcLarge MalGcLarge;
 typedef struct MalShape MalShape;
 typedef struct MalString MalString;
 
+typedef struct MalHeapCurrentUsage {
+    usize managed_owned_bytes;
+    usize raw_owned_bytes;
+    usize managed_large_bytes;
+    usize chunk_mapped_bytes;
+    usize array_buffer_bytes;
+} MalHeapCurrentUsage;
+
 #if MAL_REALMS
 /* Realm metadata is defined in vm.h; the heap caches only a back-pointer to the
  * current realm so function-object init can stamp the active realm without
@@ -83,6 +91,8 @@ typedef struct MalHeap {
     MalGcBlock *raw_partial[MAL_GC_NUM_SIZE_CLASSES];
     /** Monotonic total of handed-out cell sizes (never decremented). */
     usize bytes_allocated;
+    /** Mutator-owned occupancy; valid until finalize-all begins teardown. */
+    MalHeapCurrentUsage current_usage;
     /** Automatic collection is disabled while this is SIZE_MAX. */
     usize next_gc_at;
     /** Poison reclaimed payloads when verification is enabled. */
@@ -470,6 +480,9 @@ void mal_heap_begin_major(MalHeap *heap);
  */
 void mal_heap_free(MalHeap *heap);
 MalHeapUsage mal_heap_usage(const MalHeap *heap);
+MalHeapCurrentUsage mal_heap_current_usage(const MalHeap *heap);
+void mal_heap_array_buffer_acquire(MalHeap *heap, usize bytes);
+void mal_heap_array_buffer_release(MalHeap *heap, usize bytes);
 
 /**
  * Initialize a heap header in place.

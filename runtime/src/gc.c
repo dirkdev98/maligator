@@ -2027,7 +2027,7 @@ static void mal_gc_finalize_cell(MalHeapHeader *cell) {
                 // Shared with detach so a sensitive store is scrubbed on the
                 // sweep too — the path most secret-bearing buffers actually take,
                 // since nothing detaches a digest state or a derived tag.
-                mal_array_buffer_object_release_store(buffer);
+                mal_array_buffer_object_release_store(&g_gc_vm->heap, buffer);
                 buffer->detached = true;
             }
             break;
