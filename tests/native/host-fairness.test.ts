@@ -33,7 +33,7 @@ for (const compiled of [true, false]) {
 					"host-fairness PASS\n",
 				);
 				await withServer(server, env, async (base) => {
-					const response = await fetch(base);
+					const response = await fetch(base, { signal: AbortSignal.timeout(5000) });
 					expect(await response.text()).toBe("checkpoint");
 				});
 			}

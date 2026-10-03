@@ -8877,7 +8877,7 @@ function emitInstruction(
 					return [storeNumber(instruction.dst, nativeExpression), mathPoll];
 				}
 				return [
-					`static MalMathUnaryOp __math_${ip};`,
+					`static MAL_ISOLATE_LOCAL MalMathUnaryOp __math_${ip};`,
 					`MalValue __math_result_${ip};`,
 					`if (mal_builtin_math_unary_fast(${boxedOperand(instruction.callee)}, &__math_${ip}, ${boxedOperand(argument)}, &__math_result_${ip})) {`,
 					`  r${instruction.dst} = __math_result_${ip};`,
@@ -8917,7 +8917,7 @@ function emitInstruction(
 					return [storeNumber(instruction.dst, nativeExpression), mathPoll];
 				}
 				return [
-					`static MalMathBinaryOp __math_${ip};`,
+					`static MAL_ISOLATE_LOCAL MalMathBinaryOp __math_${ip};`,
 					`MalValue __math_result_${ip};`,
 					`if (mal_builtin_math_binary_fast(${boxedOperand(instruction.callee)}, &__math_${ip}, ${boxedOperand(left)}, ${boxedOperand(right)}, &__math_result_${ip})) {`,
 					`  r${instruction.dst} = __math_result_${ip};`,

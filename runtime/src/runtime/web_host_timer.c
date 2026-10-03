@@ -321,18 +321,18 @@ void mal_host_run_event_loop(MalVm *vm) {
         if (!mal_vm_check_entry_evaluation(vm)) break;
         if (vm->completion.kind == MAL_COMPLETION_THROW) break;
         if (mal_host_termination_check != nullptr && mal_host_termination_check(vm)) break;
+        if (mal_host_run_priority_macrotask(vm)) {
+            progressed = true;
+            macrotasks_since_poll++;
+            if (mal_gc_poll) mal_gc_safepoint(vm);
+            continue;
+        }
         bool timer_due = host->reactor.timer_count > 0 &&
             host->reactor.timers[0]->deadline_ns <= mal_reactor_now_ns();
         if (macrotasks_since_poll >= MAL_HOST_REACTOR_POLL_INTERVAL || timer_due) {
             mal_reactor_poll(&host->reactor);
             macrotasks_since_poll = 0;
             // Server wakers can enter JS, so their jobs precede the next macrotask.
-            continue;
-        }
-        if (mal_host_run_priority_macrotask(vm)) {
-            progressed = true;
-            macrotasks_since_poll++;
-            if (mal_gc_poll) mal_gc_safepoint(vm);
             continue;
         }
         if (prefer_reactor && mal_host_has_referenced_work(vm) && mal_host_run_one_ready(vm)) {

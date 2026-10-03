@@ -15,6 +15,7 @@ tests/native/gc.test.ts
 tests/native/gc-cgroup-capacity.test.ts
 tests/native/gc-dense-card-moves.test.ts
 tests/native/gc-heap-usage.test.ts
+tests/native/gc-current-usage.test.ts
 tests/native/gc-mark-step-scaling.test.ts
 tests/native/gc-minor-sweep.test.ts
 tests/native/gc-raw-realloc.test.ts
@@ -103,5 +104,7 @@ tests/native/worker-empty-transfers.test.ts
 tests/native/worker-ready-transfer.test.ts
 tests/native/worker-lazy-events.test.ts
 tests/native/worker-pool-private-ref.test.ts
+tests/native/process-memory-usage-fast.test.ts
+tests/native/worker-math-cache.test.ts
 tests/native/guarded-math-number.test.ts
 tests/native/number-to-uint32-boundaries.test.ts

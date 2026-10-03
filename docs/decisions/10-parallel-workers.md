@@ -109,6 +109,14 @@ usable while reachable; abandoned idle ports finalize and close their native
 endpoint. A live worker remains rooted until joined. Teardown closes native
 producers and joins owned work before freeing the reactor or language heap.
 
+The event loop rotates ordinary ready sources and alternates them with ready
+timers. It polls native readiness after at most 32 ordinary macrotasks, or when a
+timer becomes due, so a continuously replenished message queue does not starve
+network or timer work. Priority notifications run after the microtask checkpoint.
+Reactor callbacks that enter JavaScript receive another checkpoint before the
+next macrotask. This bounds callback count between polls; a blocking JavaScript
+callback can still delay the loop.
+
 ## Pool scheduling
 
 A pool uses a fixed number of persistent module instances, with one active task
@@ -137,12 +145,29 @@ cancellations.
 ## Process resources and shared memory
 
 Native blocking I/O, DNS, cryptographic work and GC each use process-owned
-executors. Clients have their own bounded queues and concurrency grants. Ready
+executors, created on demand: at most four I/O helpers and two helpers each for
+DNS, cryptographic work and GC across all isolates. Clients have their own bounded
+queues and concurrency grants. Ready
 clients progress round-robin; disposing one client discards its queued work and
 waits for its own running callbacks. I/O, DNS and crypto jobs contain no language
 pointers; completions return to the owning reactor. GC jobs explicitly bind their
 owning collector and trace that isolate's heap. GC ownership and pressure pacing are
 described in [generational GC workers](09-generational-gc-workers.md).
+
+Copied blocking-I/O payloads reserve process capacity before allocation. The
+process retains at most 512 MiB of these payloads and 1,024 jobs, including
+zero-byte jobs. Both charges survive executor dequeue and completion posting
+until final disposal. Failed admission leaves the caller's input owned; disposal
+and shutdown release each reservation once. These limits cover copied payloads
+and retained jobs, rather than total process memory.
+
+`process.memoryUsage()` reads mutator-owned occupancy counters without walking
+the heap. Allocation, actual reclamation, raw-buffer growth and backing-store
+ownership changes update those counters. Concurrent tracing does not mutate
+them; sweeping and finalization remain with the owning isolate. Heap and ordinary
+buffer fields describe that isolate, while `rss` measures the process and
+`arrayBuffers` also includes each live shared backing once across the process.
+The detailed heap walk remains available for independent accounting checks.
 
 Shared memory reserves its full maximum capacity before allocation and never
 moves while growing. Published growth is zero-filled. Element Atomics use real
