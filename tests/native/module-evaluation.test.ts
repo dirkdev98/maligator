@@ -19,7 +19,13 @@ test("module evaluation shares initialization, async dependencies, cycles and fa
 	}
 }, 300_000);
 
-test.each(["ancestor-order", "sync-self", "deferred-entry", "for-await-entry"])(
+test.each([
+	"ancestor-order",
+	"sync-self",
+	"deferred-entry",
+	"for-await-entry",
+	"captured-local-entry",
+])(
 	"%s preserves module evaluation ordering in both backends",
 	(fixture) => {
 		const pair = buildBackendPairFromOneProgramImage({

@@ -47,3 +47,29 @@ test.each([
 		expect(restored.functions[0]!.isAsync).toBe(asynchronous);
 	},
 );
+
+test.each(["development", "full"] as const)(
+	"recursive module instantiation preserves function capture ownership under %s optimization",
+	(optimization) => {
+		const { runtime } = compileEntrypoint(
+			"tests/local/module-evaluation/captured-local-entry.mjs",
+			{ optimization, coreVerification: "per-pass" },
+		);
+		const declarations = runtime.functions.flatMap((fn, index) =>
+			String.fromCharCode(...(runtime.stringConstants[fn.nameStringIndex] ?? [])) ===
+			"makeLookup"
+				? [{ fn, index }]
+				: [],
+		);
+		expect(declarations).toHaveLength(1);
+		const { fn, index } = declarations[0]!;
+		expect(fn.capturedCount).toBeGreaterThan(0);
+		const stores = fn.instructions.filter(
+			(instruction) => instruction.opcode === "STORE_CAPTURED",
+		);
+		expect(stores.length).toBeGreaterThan(0);
+		expect(stores.every((instruction) => instruction.ownerFunctionIndex === index)).toBe(
+			true,
+		);
+	},
+);

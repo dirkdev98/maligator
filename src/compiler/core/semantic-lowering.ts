@@ -2873,8 +2873,6 @@ function compileNewFunction(
 		return cached.fnIndex;
 	}
 
-	// Brute-force find the file. We should do the linkup earlier, so we have / know which file
-	// it is.
 	let foundFile: SemanticFile | undefined = undefined;
 	for (const file of program.semantic.files) {
 		if (file.nodeToBinding.get(functionNode)) {
@@ -2883,6 +2881,9 @@ function compileNewFunction(
 			break;
 		}
 	}
+	// Module instantiation can recursively compile this declaration and claim its captures.
+	const instantiated = program.nodeToFunctionCache.get(functionNode);
+	if (instantiated) return instantiated.fnIndex;
 
 	const fnFile = foundFile ?? program.semantic.files[0]!;
 	const fn: CoreFrontendFunction = {
