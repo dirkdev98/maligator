@@ -145,7 +145,7 @@ export interface BuildOptions {
 	entryGoal?: ModuleGoal;
 	/** Initial script strictness; explicit source directives still take effect. */
 	entryStrict?: boolean;
-	/** C driver to link; defaults to the test262 harness main. */
+	/** C driver override; Node and worker programs default to the host event loop. */
 	mainFile?: string;
 	/** Artifact directory; defaults to process-scoped shared-cache work space. */
 	outDir?: string;
@@ -411,7 +411,9 @@ function linkProgramImage(
 		name,
 		cSource,
 		verbose: false,
-		mainFile: options.mainFile ?? (workerImages.length > 0 ? HOST_MAIN : undefined),
+		mainFile:
+			options.mainFile ??
+			(config.surface.node || workerImages.length > 0 ? HOST_MAIN : undefined),
 		outDir: options.outDir ?? defaultHarnessArtifactDirectory(),
 		cacheSuffix,
 		objectCacheVariant: options.nativeObjectCacheVariant,

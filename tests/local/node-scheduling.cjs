@@ -2,10 +2,12 @@
 
 /* oxlint-disable -- This compatibility fixture intentionally uses untyped CommonJS. */
 
+const nodeProcess = require("node:process");
 const checks = [];
 const events = ["sync"];
 let pending = 3;
 
+checks.push(nodeProcess === process && process.pid > 0);
 checks.push(typeof setTimeout === "function");
 checks.push(typeof clearTimeout === "function");
 checks.push(typeof setImmediate === "function");

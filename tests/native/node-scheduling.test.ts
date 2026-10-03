@@ -5,14 +5,13 @@ import { beforeAll, describe, it } from "vitest";
 import {
 	assertResultPass,
 	buildNativeBinary,
-	HOST_MAIN,
 	runToStdout,
 	STRESS_ENV,
 } from "../../src/test-harness.ts";
 
 const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-node-scheduling-"));
 
-describe("Node scheduling globals", () => {
+describe("default Node-only host driver", () => {
 	let binaries: Array<string>;
 
 	beforeAll(() => {
@@ -20,7 +19,6 @@ describe("Node scheduling globals", () => {
 			buildNativeBinary({
 				fixture: "tests/local/node-scheduling.cjs",
 				name: `node-scheduling-${compiled ? "compiled" : "interpreted"}`,
-				mainFile: HOST_MAIN,
 				outDir,
 				nodeEnabled: true,
 				webPlatformEnabled: false,
