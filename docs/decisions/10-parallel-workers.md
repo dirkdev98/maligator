@@ -73,8 +73,10 @@ Ordinary objects, arrays, maps, sets, dates, regular expressions, boxed values,
 errors, buffers and views preserve their structured-clone identities and cycles.
 Functions and unsupported objects fail with `DataCloneError`.
 
-Transfer lists are captured once. All getters finish and every transferable is
-revalidated before admission and commit. Maligator admission failure preserves
+Transfer lists are captured once. Count capacity is reserved before cloning, so
+initial saturation rejects a post without invoking its getters. After getters
+finish, every transferable is revalidated and byte capacity is admitted before
+commit. Maligator admission failure preserves
 every still-owned listed resource. Node ports commit a successfully serialized
 transfer even if a getter closes the channel or moves the caller away, then drop
 the undeliverable snapshot. Clone errors and host quota failures preserve
