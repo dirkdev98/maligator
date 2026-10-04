@@ -6,13 +6,10 @@ import type { CoreFunctionPassContext } from "./core-pass.ts";
 import type { CoreStaticValueAnalysis } from "./core-static-values.ts";
 
 function symbolStringIndex(editor: CoreEditor, text: string): number {
+	const found = editor.program.stringConstantSlot(text, "first");
+	if (found !== undefined) return found;
 	const units = Array.from({ length: text.length }, (_, index) => text.charCodeAt(index));
-	const found = editor.program.stringConstants.findIndex(
-		(value) =>
-			value.length === units.length &&
-			value.every((unit, index) => unit === units[index]),
-	);
-	return found >= 0 ? found : editor.appendStringConstants([units]);
+	return editor.appendStringConstants([units]);
 }
 
 function replaceSymbolText(

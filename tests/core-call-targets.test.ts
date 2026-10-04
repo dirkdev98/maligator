@@ -8,11 +8,14 @@ import {
 	CORE_CALLEE_TARGETS_OPAQUE,
 	CORE_CALLEE_TARGET_CAP,
 	coreCalleeTargetsAreOpen,
+	coreCalleeTargetsEqual,
 	coreCalleeTargetsFunction,
 	coreCalleeTargetsIsBottom,
 	coreCalleeTargetsSingleFunction,
 	joinCoreCalleeTargets,
 } from "../src/compiler/core/core-ir-call-targets.ts";
+import type { CoreCalleeTargets } from "../src/compiler/core/core-ir-call-targets.ts";
+import { coreFunctionId } from "../src/compiler/core/core-ir.ts";
 import { CoreOptimizationReportBuilder } from "../src/compiler/core/core-optimization-report.ts";
 import { CORE_CALL_GRAPH_ANALYSIS } from "../src/compiler/core/core-program-flow-analysis.ts";
 import {
@@ -47,6 +50,62 @@ describe("Core callee-target lattice", () => {
 		expect(coreCalleeTargetsAreOpen(CORE_CALLEE_TARGETS_OPAQUE)).toBe(true);
 		expect(coreCalleeTargetsAreOpen(CORE_CALLEE_TARGETS_ANY_SCRIPT)).toBe(true);
 		expect(coreCalleeTargetsSingleFunction(coreCalleeTargetsFunction(2))).toBe(2);
+	});
+
+	it("unions overlapping finite sets without changing independent callable flags", () => {
+		const sets = [[], [0], [1, 3], [0, 2, 3], [0, 1, 2, 3], [1, 2, 3, 4]];
+		const targets: Array<CoreCalleeTargets> = [];
+		for (const functions of sets)
+			for (const opaque of [false, true])
+				for (const nonCallable of [false, true])
+					targets.push(
+						Object.freeze({
+							functions: Object.freeze(functions.map(coreFunctionId)),
+							anyScript: false,
+							opaque,
+							nonCallable,
+						}),
+					);
+		for (const left of targets)
+			for (const right of targets) {
+				const functions = [...new Set([...left.functions, ...right.functions])].sort(
+					(first, second) => first - second,
+				);
+				const anyScript = functions.length > CORE_CALLEE_TARGET_CAP;
+				const expected = {
+					functions: anyScript ? [] : functions,
+					anyScript,
+					opaque: left.opaque || right.opaque,
+					nonCallable: left.nonCallable || right.nonCallable,
+				};
+				const joined = joinCoreCalleeTargets(left, right);
+				expect(joined).toEqual(expected);
+				expect(coreCalleeTargetsEqual(joined, expected)).toBe(true);
+				expect(coreCalleeTargetsEqual(left, right)).toBe(
+					left.opaque === right.opaque &&
+						left.nonCallable === right.nonCallable &&
+						JSON.stringify(left.functions) === JSON.stringify(right.functions),
+				);
+			}
+	});
+
+	it("retains open return provenance through equal and bottom joins", () => {
+		const returned = Object.freeze({
+			...coreCalleeTargetsFunction(3),
+			anyScript: true,
+			opaque: true,
+			nonCallable: true,
+		});
+		expect(joinCoreCalleeTargets(returned, { ...returned })).toBe(returned);
+		expect(joinCoreCalleeTargets(CORE_CALLEE_TARGETS_BOTTOM, returned)).toBe(returned);
+		expect(joinCoreCalleeTargets(returned, CORE_CALLEE_TARGETS_BOTTOM)).toBe(returned);
+		expect(joinCoreCalleeTargets(returned, coreCalleeTargetsFunction(2))).toEqual({
+			functions: [],
+			anyScript: true,
+			opaque: true,
+			nonCallable: true,
+		});
+		expect(returned.functions).toEqual([3]);
 	});
 });
 

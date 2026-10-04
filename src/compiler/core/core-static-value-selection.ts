@@ -82,11 +82,7 @@ export function coreStaticConstantOperation(
 			};
 		}
 		case "string": {
-			let index = program.stringConstants.findIndex(
-				(units) =>
-					units.length === constant.codeUnits.length &&
-					units.every((unit, index) => unit === constant.codeUnits[index]),
-			);
+			let index = program.stringConstantSlot(constant.codeUnits, "first") ?? -1;
 			if (index < 0 && editor !== undefined)
 				index = editor.appendStringConstants([constant.codeUnits]);
 			return index < 0

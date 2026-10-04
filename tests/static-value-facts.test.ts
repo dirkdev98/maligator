@@ -5,6 +5,7 @@ import { buildCoreControlFlow } from "../src/compiler/core/core-ir-control-flow.
 import { analyzeCoreMemoryVersions } from "../src/compiler/core/core-ir-memory.ts";
 import { coreOpcodeRegistry } from "../src/compiler/core/core-ir-opcodes.ts";
 import { coreInstructionId } from "../src/compiler/core/core-ir.ts";
+import { coreStaticConstantOperation } from "../src/compiler/core/core-static-value-selection.ts";
 import { CoreStaticValueAnalysis } from "../src/compiler/core/core-static-values.ts";
 import { CoreProgram } from "../src/compiler/core/core-store.ts";
 import {
@@ -14,6 +15,46 @@ import {
 import { inspectCoreBlockParameters } from "./helpers/core-inspection.ts";
 
 describe("static descriptions and allocation identities", () => {
+	it.each(
+		[[], [0], [0xd800], [0xdc00], [0xd83d, 0xde00]].map((codeUnits) => ({ codeUnits })),
+	)(
+		"selects the first identical string constant and observes pool updates for $codeUnits",
+		({ codeUnits }) => {
+			const program = new CoreProgram(coreOpcodeRegistry, {
+				stringConstants: [[120], codeUnits, codeUnits],
+			});
+			const builder = new CoreFunctionBuilder(program);
+			const entry = builder.createBlock();
+			const [value] = builder.appendInstruction(entry, "createUndefined", []);
+			builder.setTerminator(entry, { kind: "return", value: value! });
+			const fn = builder.finish(entry).function;
+			const description = program.staticDescriptions.intern({
+				kind: "string",
+				codeUnits,
+			});
+			expect(coreStaticConstantOperation(program, description)?.attributes).toEqual({
+				stringIndex: 1,
+			});
+			const missing = program.staticDescriptions.intern({
+				kind: "string",
+				codeUnits: [121],
+			});
+			expect(coreStaticConstantOperation(program, missing)).toBeUndefined();
+			const editor = CoreEditor.open(program, fn);
+			expect(coreStaticConstantOperation(program, missing, editor)?.attributes).toEqual({
+				stringIndex: 3,
+			});
+			expect(coreStaticConstantOperation(program, missing)?.attributes).toEqual({
+				stringIndex: 3,
+			});
+			editor.commit();
+			CoreEditor.configureProgram(program, { stringConstants: [codeUnits] });
+			expect(coreStaticConstantOperation(program, description)?.attributes).toEqual({
+				stringIndex: 0,
+			});
+		},
+	);
+
 	it("preserves UTF-16 strings across repeated queries, pool appends and replacement", () => {
 		const texts = [
 			"",

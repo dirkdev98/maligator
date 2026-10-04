@@ -511,11 +511,7 @@ const foldExactAllocationObservations: CoreFunctionPass = {
 		const { program, item } = context;
 		const fn = program.function(item.function);
 		const provenance = context.analysis(CORE_LOCAL_FACT_BUNDLE_ANALYSIS).provenance;
-		const objectStringIndex = program.stringConstants.findIndex(
-			(units) =>
-				units.length === 6 &&
-				units.every((unit, index) => unit === "object".charCodeAt(index)),
-		);
+		const objectStringIndex = program.stringConstantSlot("object", "first") ?? -1;
 		let editor: CoreEditor | undefined;
 		for (const instruction of fn.instructionIds()) {
 			if (fn.instructionKind(instruction) !== "operation") continue;

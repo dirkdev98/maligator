@@ -1884,6 +1884,8 @@ export class CoreProgramFlowEngine {
 		let exactReverseCallerVisits = 0;
 		let wildcardReverseCallerVisits = 0;
 		const affectedCallers = new Set<CoreFunctionId>();
+		// Each SCC drains its queue and clears membership before the next SCC runs.
+		const memberQueued = new Uint8Array(this.#program.functionCapacity);
 		this.solveSccs(topology, initialSccs, (sccIndex, dimensions, enqueue) => {
 			if ((dimensions & CORE_PROGRAM_FLOW_SUMMARIES) === 0) return;
 			const scc = sccs[sccIndex]!;
@@ -1905,7 +1907,6 @@ export class CoreProgramFlowEngine {
 				);
 			}
 			const memberQueue: Array<CoreCallGraphNode> = [];
-			const memberQueued = new Uint8Array(this.#program.functionCapacity);
 			let aggregateQueued = false;
 			const enqueueMember = (node: CoreCallGraphNode): void => {
 				if (node === CORE_ANY_SCRIPT_AGGREGATE) {

@@ -923,11 +923,7 @@ export const materializeVirtualState: CoreFunctionPass = {
 					});
 				editor.moveInstruction(root, block, boundary);
 				for (const [key, cell] of cells) {
-					const keyIndex = program.stringConstants.findIndex(
-						(units) =>
-							units.length === key.length &&
-							units.every((unit, index) => unit === key.charCodeAt(index)),
-					);
+					const keyIndex = program.stringConstantSlot(key, "first") ?? -1;
 					const stringIndex =
 						keyIndex >= 0
 							? keyIndex

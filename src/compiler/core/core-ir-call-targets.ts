@@ -64,6 +64,7 @@ class CoreGraphIdentityTable {
 }
 
 export interface CoreCalleeTargets {
+	// Finite provenance remains sorted and unique even when anyScript is set.
 	readonly functions: ReadonlyArray<CoreFunctionId>;
 	readonly anyScript: boolean;
 	readonly opaque: boolean;
@@ -141,13 +142,17 @@ export function coreCalleeTargetsEqual(
 	left: CoreCalleeTargets,
 	right: CoreCalleeTargets,
 ): boolean {
-	return (
-		left.anyScript === right.anyScript &&
-		left.opaque === right.opaque &&
-		left.nonCallable === right.nonCallable &&
-		left.functions.length === right.functions.length &&
-		left.functions.every((target, index) => target === right.functions[index])
-	);
+	if (left === right) return true;
+	if (
+		left.anyScript !== right.anyScript ||
+		left.opaque !== right.opaque ||
+		left.nonCallable !== right.nonCallable ||
+		left.functions.length !== right.functions.length
+	)
+		return false;
+	for (let index = 0; index < left.functions.length; index++)
+		if (left.functions[index] !== right.functions[index]) return false;
+	return true;
 }
 
 export function joinCoreCalleeTargets(
@@ -157,13 +162,34 @@ export function joinCoreCalleeTargets(
 	if (left === right || coreCalleeTargetsEqual(left, right)) return left;
 	if (coreCalleeTargetsIsBottom(left)) return right;
 	if (coreCalleeTargetsIsBottom(right)) return left;
-	const functions = [...new Set([...left.functions, ...right.functions])].sort(
-		(first, second) => first - second,
-	);
-	const anyScript =
-		left.anyScript || right.anyScript || functions.length > CORE_CALLEE_TARGET_CAP;
+	const functions: Array<CoreFunctionId> = [];
+	let anyScript = left.anyScript || right.anyScript;
+	if (!anyScript) {
+		let leftIndex = 0,
+			rightIndex = 0;
+		while (leftIndex < left.functions.length || rightIndex < right.functions.length) {
+			const leftFunction = left.functions[leftIndex];
+			const rightFunction = right.functions[rightIndex];
+			if (
+				rightFunction === undefined ||
+				(leftFunction !== undefined && leftFunction < rightFunction)
+			) {
+				functions.push(leftFunction!);
+				leftIndex++;
+			} else {
+				functions.push(rightFunction);
+				rightIndex++;
+				if (leftFunction === rightFunction) leftIndex++;
+			}
+			if (functions.length > CORE_CALLEE_TARGET_CAP) {
+				anyScript = true;
+				functions.length = 0;
+				break;
+			}
+		}
+	}
 	return Object.freeze({
-		functions: Object.freeze(anyScript ? [] : functions),
+		functions: Object.freeze(functions),
 		anyScript,
 		opaque: left.opaque || right.opaque,
 		nonCallable: left.nonCallable || right.nonCallable,
