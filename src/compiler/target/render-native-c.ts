@@ -710,11 +710,16 @@ function cInactiveRootMaskPublication(mask: bigint): string {
 
 interface NativeRootPublication {
 	readonly privateCallResultIps: ReadonlySet<number>;
-	readonly entryStableRegisters: ReadonlySet<number>;
+	readonly entryStableMask: number;
+	readonly bits: ReadonlyMap<number, number>;
 	readonly slots: Map<number, number>;
 	readonly safepoints: ReadonlyMap<
 		number,
-		NativeFunctionPlan["gc"]["safepoints"][number]
+		{
+			readonly incoming: number;
+			readonly outgoing: number;
+			readonly active: number;
+		}
 	>;
 }
 
@@ -722,21 +727,19 @@ function cPrivateRootPublication(
 	plan: NativeRootPublication | undefined,
 	ip: number,
 	edge: "incoming" | "outgoing",
-	knownPublished?: ReadonlySet<number>,
+	knownPublished = 0,
 ): Array<string> {
 	const point = plan?.safepoints.get(ip);
 	if (plan === undefined || plan.slots.size === 0 || point === undefined) return [];
-	const live = new Set(
-		edge === "incoming" ? point.incomingRootRegisters : point.outgoingRootRegisters,
-	);
-	const active = new Set(point.rootRegisters);
+	const live = edge === "incoming" ? point.incoming : point.outgoing;
+	const published = plan.entryStableMask | knownPublished;
 	const stores: Array<string> = [];
 	for (const [register, slot] of plan.slots) {
-		if (live.has(register)) {
-			if (plan.entryStableRegisters.has(register) || knownPublished?.has(register))
-				continue;
+		const liveBit = plan.bits.get(register)!;
+		if ((live & liveBit) !== 0) {
+			if ((published & liveBit) !== 0) continue;
 			stores.push(`__gc_slots[${slot}] = r${register};`);
-		} else if (slot >= 64 || active.has(register)) {
+		} else if (slot >= 64 || (point.active & liveBit) !== 0) {
 			// A dead private local can still contain a reclaimed pointer. In particular,
 			// an output-only root must stay empty until the helper returns its value.
 			stores.push(`__gc_slots[${slot}] = MAL_VALUE_UNDEFINED;`);
@@ -883,13 +886,38 @@ function emitCompiledVariant(
 		rootRegisters,
 		privateCallResultIps,
 	);
+	const privateSlots = new Map(
+		[...slotOf].filter(([register]) => privateCandidates.has(register)),
+	);
+	// Private-root selection bounds the publication mask to 32 registers.
+	if (privateSlots.size > 32)
+		throw new Error("Native private-root mask exceeds 32 registers");
+	const privateBits = new Map<number, number>();
+	for (const register of privateSlots.keys())
+		privateBits.set(register, 1 << privateBits.size);
+	const privateMask = (registers: Iterable<number>): number => {
+		let mask = 0;
+		for (const register of registers) mask |= privateBits.get(register) ?? 0;
+		return mask;
+	};
 	const rootPublication: NativeRootPublication = {
 		privateCallResultIps,
-		entryStableRegisters: nativeEntryStableRootRegisters(fn, privateCandidates),
-		slots: new Map([...slotOf].filter(([register]) => privateCandidates.has(register))),
-		safepoints: new Map(
-			nativeContract.gc.safepoints.map((point) => [point.instructionIp, point]),
-		),
+		entryStableMask: privateMask(nativeEntryStableRootRegisters(fn, privateCandidates)),
+		bits: privateBits,
+		slots: privateSlots,
+		safepoints:
+			privateSlots.size === 0
+				? new Map()
+				: new Map(
+						nativeContract.gc.safepoints.map((point) => [
+							point.instructionIp,
+							{
+								incoming: privateMask(point.incomingRootRegisters),
+								outgoing: privateMask(point.outgoingRootRegisters),
+								active: privateMask(point.rootRegisters),
+							},
+						]),
+					),
 	};
 	const slotCount = valueRegs.length;
 	const inactiveRootMasks = nativeInactiveRootMasks(nativeContract.gc.safepoints, slotOf);
@@ -3365,11 +3393,92 @@ function emitBody(
 			? literalSwitches?.map((site) => [site.instructionIp, site])
 			: [],
 	);
+	// Instruction emission consumes the context synchronously; fallbacks copy it.
+	const instructionContext: {
+		-readonly [Key in keyof NativeInstructionContext]: NativeInstructionContext[Key];
+	} = {
+		nativePlan: undefined,
+		stringConstants,
+		staticDefineStringIndexByIp,
+		iterationEligibilityRegisters,
+		resources,
+		directEntryCalls,
+		stringLeafCaches,
+		profileSiteId: undefined,
+		profile: undefined,
+		gcSafepoint: false,
+		incomingRootPublication: undefined,
+		eagerIncomingRootPublication: undefined,
+		onIncomingRootPublication: undefined,
+		outgoingRootPublication: undefined,
+		rootedOutputReloads: undefined,
+		loopBackedgeInactiveRootMask: undefined,
+		mathCallInactiveRootMask: undefined,
+		tdzInactiveRootMask: undefined,
+		knownOwnSlotLoadInactiveRootMask: undefined,
+		staticPropertyLoadInactiveRootMask: undefined,
+		indexedPropertyLoadInactiveRootMask: undefined,
+		staticPropertyStoreInactiveRootMask: undefined,
+		charCodeAtCallRootPublication: undefined,
+		charCodeAtCallInactiveRootMask: undefined,
+		iteratorStepRootPublication: undefined,
+		iteratorStepInactiveRootMask: undefined,
+		stackObjectSite: undefined,
+		stackObjectAccess: undefined,
+		stackObjectMaterialization: undefined,
+		stackObjectInheritedAccess: undefined,
+		directCompiledTargets,
+		directCompiledEntries,
+		ownedCaptureFunctionIndex: ownsCaptureEnvironment ? functionIndex : undefined,
+		fixedCaptureOwners: stableCaptureOwners,
+		requiredCaptureOwners,
+		copiedCaptures,
+		strictCompiledTargets,
+		directResultRepresentation,
+		directArgumentRepresentations,
+		constantBoolean: undefined,
+		fieldLoad: undefined,
+		fieldAllocation: undefined,
+		fieldCall: undefined,
+		mathUnaryCall: false,
+		mathBinaryCall: false,
+		mappedArguments: fn.mappedArguments,
+		mappedArgumentSlots: fn.mappedArgumentSlots,
+		hasPrototype: fn.hasPrototype,
+		indexedLengthLoopAction: undefined,
+		nativeArrayPresenceProjectionAction: undefined,
+		pairedArrayLoopAction: undefined,
+		pairedArrayLoopPresence: undefined,
+		nativeStringSplitProjectionAction: undefined,
+		nativeStringSplitCursorAction: undefined,
+		stringSplitTrimLengthSite: undefined,
+		nativeRegExpExecProjectionAction: undefined,
+		nativeRegExpIteratorProjectionAction: undefined,
+		nativeStringSliceNumberFusionAction: undefined,
+		nativeStringCharCodeAtChainAction: undefined,
+		nativeBuiltinCollectionCallChainAction: undefined,
+		nativeIteratorCursorAction: undefined,
+		nativeArrayPairDestructureAction: undefined,
+		nativeIteratorResultVirtualizationAction: undefined,
+		nativeIteratorEntryPairVirtualizationAction: undefined,
+		numericFusionAction: undefined,
+		staticPropertyProjectionAction: undefined,
+		staticPropertyNumericAction: undefined,
+		propertyNumericUpdateAction: undefined,
+		propertyReadRegionAction: undefined,
+		constructorInitializationAction: undefined,
+		privateFieldReserveCount: undefined,
+		relocation,
+	};
 	let lastPublishedPos = -1;
 	let lastPublishedSite = -1;
 	let lastPublishedInactiveRootMask: bigint | undefined;
 	// Entry initialization copies every private value into its shadow slot.
-	let knownPublishedPrivateRoots = new Set(rootPublication?.slots.keys());
+	let knownPublishedPrivateRoots = 0;
+	if (rootPublication !== undefined) {
+		for (const register of rootPublication.slots.keys())
+			knownPublishedPrivateRoots |= rootPublication.bits.get(register)!;
+	}
 	const hasPrivateRoots = (rootPublication?.slots.size ?? 0) > 0;
 	for (let ip = 0; ip < fn.instructions.length; ip++) {
 		if (jumpTargets.has(ip)) {
@@ -3378,11 +3487,11 @@ function emitBody(
 			lastPublishedPos = -1;
 			lastPublishedSite = -1;
 			lastPublishedInactiveRootMask = undefined;
-			knownPublishedPrivateRoots.clear();
+			knownPublishedPrivateRoots = 0;
 		}
 		const literalSwitch = switches.get(ip);
 		if (literalSwitch !== undefined) {
-			knownPublishedPrivateRoots.clear();
+			knownPublishedPrivateRoots = 0;
 			const branch = (target: number, branchIp: number) => {
 				const mask = inactiveRootMasks.get(branchIp);
 				if (target > branchIp) return `goto L${target};`;
@@ -3552,31 +3661,18 @@ function emitBody(
 			!deferredIteratorRoots &&
 			!deferredCharCodeAtRoots &&
 			(effects.collection || effects.reentry);
-		// Derive fallthrough equality without changing the current incoming state.
-		const nextPublishedPrivateRoots = hasPrivateRoots
-			? new Set(knownPublishedPrivateRoots)
-			: knownPublishedPrivateRoots;
+		let nextPublishedPrivateRoots = knownPublishedPrivateRoots;
 		if (rootPublication !== undefined && hasPrivateRoots) {
 			const point = rootPublication.safepoints.get(ip);
-			if (publishesIncomingRoots) {
-				for (const register of point?.incomingRootRegisters ?? []) {
-					if (rootPublication.slots.has(register))
-						nextPublishedPrivateRoots.add(register);
-				}
-			}
-			// Refined GC maps, not broad opcode effects, identify possible shadow clearing.
-			if (point !== undefined) {
-				const incoming = new Set(point.incomingRootRegisters);
-				const outgoing = new Set(point.outgoingRootRegisters);
-				for (const register of nextPublishedPrivateRoots) {
-					if (!incoming.has(register) || !outgoing.has(register))
-						nextPublishedPrivateRoots.delete(register);
-				}
-			}
+			if (publishesIncomingRoots) nextPublishedPrivateRoots |= point?.incoming ?? 0;
+			// Refined GC maps identify possible shadow clearing on either edge.
+			if (point !== undefined)
+				nextPublishedPrivateRoots &= point.incoming & point.outgoing;
 			for (const register of vmInstructionWriteRegisters(fn.instructions[ip]!))
-				nextPublishedPrivateRoots.delete(register);
+				nextPublishedPrivateRoots &= ~(rootPublication.bits.get(register) ?? 0);
 			// Polls read the shadow alias; the final reload establishes private equality.
-			for (const register of rootedOutputs) nextPublishedPrivateRoots.add(register);
+			for (const register of rootedOutputs)
+				nextPublishedPrivateRoots |= rootPublication.bits.get(register) ?? 0;
 		}
 		const outgoingRootPublication = cPrivateRootPublication(
 			rootPublication,
@@ -3683,6 +3779,101 @@ function emitBody(
 		const arrayPresenceAction = nativeArrayPresenceProjectionActionByIp.get(ip);
 		emittedInstructions.add(ip);
 		let operatorMaskEmitted = false;
+		instructionContext.nativePlan = nativeInstructions[ip];
+		instructionContext.profileSiteId = fn.profileSiteIds?.[ip];
+		instructionContext.profile = instructionProfile;
+		instructionContext.gcSafepoint = safepointKind !== undefined;
+		instructionContext.incomingRootPublication =
+			deferredPropertyRoots ||
+			deferredIndexedPropertyRoots ||
+			deferredPropertyStoreRoots ||
+			deferredOperatorRoots ||
+			deferredTdzRoots ||
+			deferredIteratorRoots ||
+			deferredCharCodeAtRoots
+				? operatorInactiveRootMask === undefined
+					? incomingRootPublication
+					: [
+							...incomingRootPublication,
+							`${cInactiveRootMaskPublication(operatorInactiveRootMask)};`,
+						]
+				: [];
+		instructionContext.eagerIncomingRootPublication = eagerOperatorRootPublication;
+		instructionContext.onIncomingRootPublication =
+			operatorInactiveRootMask === undefined
+				? undefined
+				: () => {
+						operatorMaskEmitted = true;
+					};
+		instructionContext.outgoingRootPublication = outgoingRootPublication;
+		instructionContext.rootedOutputReloads = rootedOutputReloads;
+		instructionContext.loopBackedgeInactiveRootMask = loopBackedgeInactiveRootMask;
+		instructionContext.mathCallInactiveRootMask = mathCallInactiveRootMask;
+		instructionContext.tdzInactiveRootMask = tdzInactiveRootMask;
+		instructionContext.knownOwnSlotLoadInactiveRootMask =
+			knownOwnSlotLoadInactiveRootMask;
+		instructionContext.staticPropertyLoadInactiveRootMask =
+			staticPropertyLoadInactiveRootMask;
+		instructionContext.indexedPropertyLoadInactiveRootMask =
+			indexedPropertyLoadInactiveRootMask;
+		instructionContext.staticPropertyStoreInactiveRootMask =
+			staticPropertyStoreInactiveRootMask;
+		instructionContext.charCodeAtCallRootPublication = deferredCharCodeAtRoots;
+		instructionContext.charCodeAtCallInactiveRootMask = charCodeAtCallInactiveRootMask;
+		instructionContext.iteratorStepRootPublication = deferredIteratorRoots;
+		instructionContext.iteratorStepInactiveRootMask = iteratorStepInactiveRootMask;
+		instructionContext.stackObjectSite = stackObjectSites.get(ip);
+		instructionContext.stackObjectAccess = stackObjectAccesses.get(ip);
+		instructionContext.stackObjectMaterialization = stackObjectMaterializations.get(ip);
+		instructionContext.stackObjectInheritedAccess = stackObjectInheritedAccesses.get(ip);
+		instructionContext.constantBoolean = directConstantBooleans.get(ip);
+		instructionContext.fieldLoad = fieldLoads.get(ip);
+		instructionContext.fieldAllocation = fieldAllocations.get(ip);
+		instructionContext.fieldCall = fieldCallSites.get(ip);
+		instructionContext.mathUnaryCall = mathUnaryCalls.has(ip);
+		instructionContext.mathBinaryCall = mathBinaryCalls.has(ip);
+		instructionContext.indexedLengthLoopAction = indexedLengthLoopActionByIp.get(ip);
+		instructionContext.nativeArrayPresenceProjectionAction = arrayPresenceAction;
+		instructionContext.pairedArrayLoopAction = pairedArrayLoopActionByIp.get(ip);
+		instructionContext.pairedArrayLoopPresence =
+			arrayPresenceAction === undefined
+				? undefined
+				: pairedArrayLoopByLengthLoad.get(arrayPresenceAction.indexed.loadIp);
+		instructionContext.nativeStringSplitProjectionAction =
+			nativeStringSplitProjectionActionByIp.get(ip);
+		instructionContext.nativeStringSplitCursorAction =
+			nativeStringSplitCursorActionByIp.get(ip);
+		instructionContext.stringSplitTrimLengthSite = stringSplitTrimLengthSiteByIp.get(ip);
+		instructionContext.nativeRegExpExecProjectionAction =
+			nativeRegExpExecProjectionActionByIp.get(ip);
+		instructionContext.nativeRegExpIteratorProjectionAction =
+			nativeRegExpIteratorProjectionActionByIp.get(ip);
+		instructionContext.nativeStringSliceNumberFusionAction =
+			nativeStringSliceNumberFusionActionByIp.get(ip);
+		instructionContext.nativeStringCharCodeAtChainAction =
+			nativeStringCharCodeAtChainActionByIp.get(ip);
+		instructionContext.nativeBuiltinCollectionCallChainAction =
+			nativeBuiltinCollectionCallChainActionByIp.get(ip);
+		instructionContext.nativeIteratorCursorAction =
+			nativeIteratorCursorActionByIp.get(ip);
+		instructionContext.nativeArrayPairDestructureAction =
+			nativeArrayPairDestructureActionByIp.get(ip);
+		instructionContext.nativeIteratorResultVirtualizationAction =
+			nativeIteratorResultVirtualizationActionByIp.get(ip);
+		instructionContext.nativeIteratorEntryPairVirtualizationAction =
+			nativeIteratorEntryPairVirtualizationActionByIp.get(ip);
+		instructionContext.numericFusionAction = numericFusionActionByIp.get(ip);
+		instructionContext.staticPropertyProjectionAction =
+			staticPropertyProjectionActionByIp.get(ip);
+		instructionContext.staticPropertyNumericAction =
+			staticPropertyNumericActionByIp.get(ip);
+		instructionContext.propertyNumericUpdateAction =
+			propertyNumericUpdateActionByIp.get(ip);
+		instructionContext.propertyReadRegionAction = propertyReadRegionActionByIp.get(ip);
+		instructionContext.constructorInitializationAction =
+			constructorInitializationActionByIp.get(ip);
+		instructionContext.privateFieldReserveCount =
+			privateFieldReserve?.id === ip ? privateFieldReserve.count : undefined;
 		const emitted = emitInstruction(
 			fn.instructions[ip]!,
 			ip,
@@ -3693,108 +3884,7 @@ function emitBody(
 			gcUnlink,
 			thisSlot,
 			coro,
-			{
-				nativePlan: nativeInstructions[ip],
-				stringConstants,
-				staticDefineStringIndexByIp,
-				iterationEligibilityRegisters,
-				resources,
-				directEntryCalls,
-				stringLeafCaches,
-				profileSiteId: fn.profileSiteIds?.[ip],
-				profile: instructionProfile,
-				gcSafepoint: safepointKind !== undefined,
-				incomingRootPublication:
-					deferredPropertyRoots ||
-					deferredIndexedPropertyRoots ||
-					deferredPropertyStoreRoots ||
-					deferredOperatorRoots ||
-					deferredTdzRoots ||
-					deferredIteratorRoots ||
-					deferredCharCodeAtRoots
-						? operatorInactiveRootMask === undefined
-							? incomingRootPublication
-							: [
-									...incomingRootPublication,
-									`${cInactiveRootMaskPublication(operatorInactiveRootMask)};`,
-								]
-						: [],
-				eagerIncomingRootPublication: eagerOperatorRootPublication,
-				onIncomingRootPublication:
-					operatorInactiveRootMask === undefined
-						? undefined
-						: () => {
-								operatorMaskEmitted = true;
-							},
-				outgoingRootPublication,
-				rootedOutputReloads,
-				loopBackedgeInactiveRootMask,
-				mathCallInactiveRootMask,
-				tdzInactiveRootMask,
-				knownOwnSlotLoadInactiveRootMask,
-				staticPropertyLoadInactiveRootMask,
-				indexedPropertyLoadInactiveRootMask,
-				staticPropertyStoreInactiveRootMask,
-				charCodeAtCallRootPublication: deferredCharCodeAtRoots,
-				charCodeAtCallInactiveRootMask,
-				iteratorStepRootPublication: deferredIteratorRoots,
-				iteratorStepInactiveRootMask,
-				stackObjectSite: stackObjectSites.get(ip),
-				stackObjectAccess: stackObjectAccesses.get(ip),
-				stackObjectMaterialization: stackObjectMaterializations.get(ip),
-				stackObjectInheritedAccess: stackObjectInheritedAccesses.get(ip),
-				directCompiledTargets,
-				directCompiledEntries,
-				ownedCaptureFunctionIndex: ownsCaptureEnvironment ? functionIndex : undefined,
-				fixedCaptureOwners: stableCaptureOwners,
-				requiredCaptureOwners,
-				copiedCaptures,
-				strictCompiledTargets,
-				directResultRepresentation,
-				directArgumentRepresentations,
-				constantBoolean: directConstantBooleans.get(ip),
-				fieldLoad: fieldLoads.get(ip),
-				fieldAllocation: fieldAllocations.get(ip),
-				fieldCall: fieldCallSites.get(ip),
-				mathUnaryCall: mathUnaryCalls.has(ip),
-				mathBinaryCall: mathBinaryCalls.has(ip),
-				mappedArguments: fn.mappedArguments,
-				mappedArgumentSlots: fn.mappedArgumentSlots,
-				hasPrototype: fn.hasPrototype,
-				indexedLengthLoopAction: indexedLengthLoopActionByIp.get(ip),
-				nativeArrayPresenceProjectionAction: arrayPresenceAction,
-				pairedArrayLoopAction: pairedArrayLoopActionByIp.get(ip),
-				pairedArrayLoopPresence:
-					arrayPresenceAction === undefined
-						? undefined
-						: pairedArrayLoopByLengthLoad.get(arrayPresenceAction.indexed.loadIp),
-				nativeStringSplitProjectionAction: nativeStringSplitProjectionActionByIp.get(ip),
-				nativeStringSplitCursorAction: nativeStringSplitCursorActionByIp.get(ip),
-				stringSplitTrimLengthSite: stringSplitTrimLengthSiteByIp.get(ip),
-				nativeRegExpExecProjectionAction: nativeRegExpExecProjectionActionByIp.get(ip),
-				nativeRegExpIteratorProjectionAction:
-					nativeRegExpIteratorProjectionActionByIp.get(ip),
-				nativeStringSliceNumberFusionAction:
-					nativeStringSliceNumberFusionActionByIp.get(ip),
-				nativeStringCharCodeAtChainAction: nativeStringCharCodeAtChainActionByIp.get(ip),
-				nativeBuiltinCollectionCallChainAction:
-					nativeBuiltinCollectionCallChainActionByIp.get(ip),
-				nativeIteratorCursorAction: nativeIteratorCursorActionByIp.get(ip),
-				nativeArrayPairDestructureAction: nativeArrayPairDestructureActionByIp.get(ip),
-				nativeIteratorResultVirtualizationAction:
-					nativeIteratorResultVirtualizationActionByIp.get(ip),
-				nativeIteratorEntryPairVirtualizationAction:
-					nativeIteratorEntryPairVirtualizationActionByIp.get(ip),
-				numericFusionAction: numericFusionActionByIp.get(ip),
-				staticPropertyProjectionAction: staticPropertyProjectionActionByIp.get(ip),
-				staticPropertyNumericAction: staticPropertyNumericActionByIp.get(ip),
-				propertyNumericUpdateAction: propertyNumericUpdateActionByIp.get(ip),
-				propertyReadRegionAction: propertyReadRegionActionByIp.get(ip),
-				constructorInitializationAction: constructorInitializationActionByIp.get(ip),
-				privateFieldReserveCount:
-					privateFieldReserve?.id === ip ? privateFieldReserve.count : undefined,
-				relocation,
-			},
+			instructionContext,
 		);
 		if (emitted === null) {
 			return null;
@@ -4310,7 +4400,7 @@ function emitInstruction(
 			? expression
 			: `(${publication.map((store) => store.slice(0, -1)).join(", ")}, ${expression})`;
 	};
-	const genericContext: NativeInstructionContext = {
+	const genericContext = (): NativeInstructionContext => ({
 		stringConstants: context.stringConstants,
 		staticDefineStringIndexByIp: context.staticDefineStringIndexByIp,
 		iterationEligibilityRegisters: context.iterationEligibilityRegisters,
@@ -4355,7 +4445,7 @@ function emitInstruction(
 		mappedArgumentSlots,
 		hasPrototype,
 		relocation,
-	};
+	});
 	const emitGenericInstruction = (): Array<string> | null =>
 		emitInstruction(
 			instruction,
@@ -4367,7 +4457,7 @@ function emitInstruction(
 			gcUnlink,
 			thisSlot,
 			coro,
-			genericContext,
+			genericContext(),
 		);
 	const boxed = (r: number): string =>
 		reps[r] === "int32"
@@ -6392,7 +6482,7 @@ function emitInstruction(
 							gcUnlink,
 							thisSlot,
 							coro,
-							{ ...genericContext, numericFusionAction },
+							{ ...genericContext(), numericFusionAction },
 						)
 					: emitGenericInstruction();
 				if (fallback === null) return null;

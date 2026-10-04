@@ -65,6 +65,7 @@ function emit(
 		handlers?: Array<BytecodeExceptionHandler>;
 		nativeInstructions?: ReadonlyMap<number, NativeInstructionPlan>;
 		capturedCount?: number;
+		registerCount?: number;
 	} = {},
 ): string {
 	const fn: BytecodeFunction = {
@@ -75,7 +76,7 @@ function emit(
 		mappedArguments: false,
 		mappedArgumentSlots: [],
 		length: 2,
-		registerCount: 6,
+		registerCount: options.registerCount ?? 6,
 		capturedCount: options.capturedCount ?? 0,
 		strict: true,
 		needsArguments: false,
@@ -97,7 +98,9 @@ function emit(
 		{
 			...native,
 			instructions: instructions.map((_, ip) => options.nativeInstructions?.get(ip)),
-			registerRepresentations: ["boxed", "boxed", "boxed", "boxed", "boxed", "boolean"],
+			registerRepresentations: Array.from({ length: fn.registerCount }, (_, register) =>
+				fn.registerCount === 6 && register === 5 ? "boolean" : "boxed",
+			),
 			gc: { safepoints },
 		},
 		0,
@@ -132,6 +135,47 @@ function hasIncomingCopy(source: string, publication: string): boolean {
 }
 
 describe("private-root publication state at collecting edges", () => {
+	it("tracks the final private root through the full 32-register publication mask", () => {
+		const registers = Array.from({ length: 32 }, (_, index) => index + 2);
+		const instructions: Array<BytecodeInstruction> = [
+			{ opcode: "MOVE", dst: 2, src: 0 },
+			...registers.slice(1).map((dst, index): BytecodeInstruction => ({
+				opcode: "LOAD_PROPERTY_STATIC",
+				object: dst - 1,
+				dst,
+				stringIndex: 0,
+				icIndex: index,
+			})),
+			call(34, registers),
+			call(34, registers),
+			{ opcode: "MOVE", dst: 33, src: 0 },
+			call(34, registers),
+			{ opcode: "RETURN", value: 33 },
+		];
+		const roots = [0, 1, ...registers];
+		const source = emit(
+			instructions,
+			instructions.flatMap((instruction, ip) =>
+				instruction.opcode === "CALL" || instruction.opcode === "LOAD_PROPERTY_STATIC"
+					? [point(ip, roots, roots)]
+					: [],
+			),
+			{ registerCount: 35 },
+		);
+		expect(source.match(/MalValue __private_r\d+;/g)).toHaveLength(32);
+		const publication = privatePublication(source, 33);
+		const first = 32;
+		expect(hasIncomingCopy(beforeCall(source, first), publication)).toBe(true);
+		expect(beforeCall(source, first + 1, afterCallResult(source, first))).not.toContain(
+			publication,
+		);
+		const replacement = source.indexOf("r33 = r0;", afterCallResult(source, first + 1));
+		expect(replacement).toBeGreaterThan(0);
+		expect(hasIncomingCopy(beforeCall(source, first + 3, replacement), publication)).toBe(
+			true,
+		);
+	});
+
 	it("reuses an unchanged published heap value across consecutive collecting calls", () => {
 		const source = emit(
 			[load, call(), call(), returned],

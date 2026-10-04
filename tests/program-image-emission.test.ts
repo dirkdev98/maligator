@@ -2139,6 +2139,78 @@ describe("emit-program-image instruction packing", () => {
 		);
 	});
 
+	it("publishes a surviving private root after numeric projections remove earlier slots", () => {
+		const loadFunction: BytecodeFunction = {
+			...fn,
+			capturedCount: 0,
+			parameterCount: 1,
+			registerCount: 7,
+			instructions: [
+				{ opcode: "CREATE_NUMBER", dst: 1, value: 7 },
+				{ opcode: "LOAD_PROPERTY_STATIC", object: 1, dst: 2, stringIndex: 0, icIndex: 0 },
+				{ opcode: "LOAD_PROPERTY_STATIC", object: 1, dst: 3, stringIndex: 1, icIndex: 1 },
+				{ opcode: "BINARY", dst: 4, left: 2, right: 3, operator: "+" },
+				{ opcode: "LOAD_PROPERTY_STATIC", object: 0, dst: 6, stringIndex: 2, icIndex: 2 },
+				{ opcode: "MOVE", dst: 6, src: 0 },
+				{
+					opcode: "CALL",
+					dst: 5,
+					callee: 0,
+					thisValue: 1,
+					argumentCount: 1,
+					arguments: [6],
+				},
+				{ opcode: "RETURN", value: 5 },
+			],
+		};
+		const native = createConservativeNativePlan([loadFunction]).functions[0]!;
+		const output = emitCompiledFunction(
+			loadFunction,
+			{
+				...native,
+				registerRepresentations: [
+					"boxed",
+					"number",
+					"boxed",
+					"boxed",
+					"boxed",
+					"boxed",
+					"boxed",
+				],
+				gc: {
+					safepoints: [
+						...[1, 2, 3, 4].map((instructionIp) => ({
+							kind: "operation" as const,
+							instructionIp,
+							rootRegisters: [0, 2, 3, 4, 5, 6],
+							incomingRootRegisters: [0, 2, 3, 4, 5, 6],
+							outgoingRootRegisters: [0, 2, 3, 4, 5, 6],
+						})),
+						{
+							kind: "operation",
+							instructionIp: 6,
+							rootRegisters: [0, 5, 6],
+							incomingRootRegisters: [0, 6],
+							outgoingRootRegisters: [0, 5, 6],
+						},
+					],
+				},
+			},
+			0,
+			"",
+			false,
+		)!.source;
+		expect(output).toContain("mal_vm_property_try_load_static_number_pair(");
+		expect(output).not.toContain("__private_r2");
+		expect(output).not.toContain("__private_r3");
+		expect(output).toContain("#define r6 (__private_r6)");
+		const replacement = output.indexOf("r6 = r0;");
+		const call = output.indexOf("MalCompletion call_result_6 = mal_vm_call_cached");
+		expect(replacement).toBeGreaterThan(0);
+		expect(call).toBeGreaterThan(replacement);
+		expect(output.slice(replacement, call)).toMatch(/\n {4}__gc_slots\[\d+\] = r6;\n/);
+	});
+
 	it("publishes live private roots and clears dead private slots beyond the root mask", () => {
 		const allRoots = Array.from({ length: 67 }, (_, register) => register);
 		const loadFunction: BytecodeFunction = {
