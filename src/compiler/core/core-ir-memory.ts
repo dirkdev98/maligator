@@ -884,10 +884,12 @@ function prepareMemoryVersions(
 	);
 	const hasSinglePredecessorFlow = cfg.reversePostorder.every((block) => {
 		if (block === fn.entry) return true;
-		const incoming = (cfg.predecessors[block] ?? []).filter((edge) =>
-			cfg.reachable.has(edge.from),
-		);
-		return incoming.length === 1 && incoming[0]!.kind === "ordinary";
+		let incoming = 0;
+		for (const edge of cfg.predecessors[block] ?? []) {
+			if (!cfg.reachable.has(edge.from)) continue;
+			if (edge.kind !== "ordinary" || ++incoming > 1) return false;
+		}
+		return incoming === 1;
 	});
 	let dominance:
 		| {
@@ -919,7 +921,8 @@ function prepareMemoryVersions(
 		for (const [position, block] of dominanceOrder.entries())
 			dominancePosition.set(block, position);
 		const dominanceFrontiers = new Map<CoreBlockId, Set<CoreBlockId>>();
-		for (const block of dominanceOrder) dominanceFrontiers.set(block, new Set());
+		if (!hasSinglePredecessorFlow)
+			for (const block of dominanceOrder) dominanceFrontiers.set(block, new Set());
 		for (
 			let index = hasSinglePredecessorFlow ? -1 : dominanceOrder.length - 1;
 			index >= 0;

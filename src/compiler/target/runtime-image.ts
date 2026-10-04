@@ -2620,7 +2620,8 @@ export interface RuntimeFunctionLoweringPlan {
 }
 
 export interface RuntimeProgramLoweringPlan {
-	readonly runtime: RuntimeImage;
+	readonly compacted: RuntimeImageConstantCompactionResult;
+	/** Native materialization still uses the original Core constant indexes. */
 	readonly functions: ReadonlyArray<RuntimeFunctionLoweringPlan>;
 }
 
@@ -2726,19 +2727,17 @@ export function lowerVerifiedExecutionToRuntimePlan(
 		files,
 		sourcePositions,
 	};
-	validateRuntimeImageMetadata(runtime);
-	// These functions remain private until source relocation and validation finish.
-	for (const fn of functions) {
+	const compacted = compactRuntimeImageConstants(runtime);
+	// No function escapes before relocation, compaction and validation finish.
+	for (const fn of compacted.runtime.functions) {
 		trustedVmSafepointRootMaps.set(fn, vmSafepointRootMapTrustFingerprint(fn));
 	}
-	return { runtime, functions: functionPlans };
+	return { compacted, functions: functionPlans };
 }
 
 export function lowerExecutionToRuntimeImage(program: ExecutionProgram): RuntimeImage {
 	verifyExecutionProgram(program);
-	return compactRuntimeImageConstants(
-		lowerVerifiedExecutionToRuntimePlan(program).runtime,
-	).runtime;
+	return lowerVerifiedExecutionToRuntimePlan(program).compacted.runtime;
 }
 
 function buildHostInstalls(

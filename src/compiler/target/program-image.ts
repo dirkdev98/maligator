@@ -33,6 +33,7 @@ import {
 	compactRuntimeImageConstants,
 	decodeVmValueOperand,
 	lowerVerifiedExecutionToRuntimePlan,
+	validateRuntimeImageMetadata,
 } from "./runtime-image.ts";
 import type {
 	BytecodeExceptionHandler,
@@ -40,6 +41,7 @@ import type {
 	BytecodeInstruction,
 	RuntimeFunctionLoweringPlan,
 	RuntimeImage,
+	RuntimeImageConstantCompactionResult,
 	RuntimeImageConstantRetentionReport,
 } from "./runtime-image.ts";
 
@@ -1670,7 +1672,23 @@ export function compactProgramImageConstants(
 	if (!compacted.changed) {
 		return { definition, changed: false, report: compacted.report };
 	}
-	const functions = definition.native.functions.map((fn) => ({
+	return {
+		definition: {
+			...definition,
+			runtime: compacted.runtime,
+			native: remapNativeConstants(definition.native, compacted),
+		},
+		changed: true,
+		report: compacted.report,
+	};
+}
+
+function remapNativeConstants(
+	native: NativePlan,
+	compacted: RuntimeImageConstantCompactionResult,
+): NativePlan {
+	if (!compacted.changed) return native;
+	const functions = native.functions.map((fn) => ({
 		...fn,
 		...(fn.literalSwitches === undefined
 			? {}
@@ -1720,15 +1738,7 @@ export function compactProgramImageConstants(
 			return { ...region, separatorStringIndex };
 		}),
 	}));
-	return {
-		definition: {
-			...definition,
-			runtime: compacted.runtime,
-			native: { ...definition.native, functions },
-		},
-		changed: true,
-		report: compacted.report,
-	};
+	return { ...native, functions };
 }
 
 /** Materialize the native product after its terminal has verified every ABI variant. */
@@ -1737,13 +1747,13 @@ export function lowerVerifiedExecutionToProgramImage(
 	profile = false,
 ): ProgramImage {
 	const runtimePlan = lowerVerifiedExecutionToRuntimePlan(program);
-	const runtime = runtimePlan.runtime;
+	const runtime = runtimePlan.compacted.runtime;
 	const context = program.context;
 	const nativeFunctions = program.functions.map((fn, functionIndex) =>
 		lowerExecutionFunctionToNativePlan(
 			fn,
 			runtimePlan.functions[functionIndex]!,
-			runtime.stringConstants,
+			program.core.stringConstants,
 			profile ? context.facts.instructionSites : undefined,
 		),
 	);
@@ -1768,10 +1778,10 @@ export function lowerVerifiedExecutionToProgramImage(
 	});
 	const definition: ProgramImage = {
 		runtime,
-		native: {
-			semanticProtectors,
-			functions: nativeFunctions,
-		},
+		native: remapNativeConstants(
+			{ semanticProtectors, functions: nativeFunctions },
+			runtimePlan.compacted,
+		),
 		diagnostics: {},
 	};
 	if (profile) {
@@ -1786,10 +1796,11 @@ export function lowerVerifiedExecutionToProgramImage(
 			context.facts,
 			program.functionMap,
 			runtime,
-			nativeFunctions,
+			definition.native.functions,
 		);
+		validateRuntimeImageMetadata(runtime);
 	}
-	return compactProgramImageConstants(definition).definition;
+	return definition;
 }
 
 /**

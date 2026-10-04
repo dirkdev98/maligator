@@ -8,6 +8,7 @@ import {
 	compactRuntimeImageConstants,
 	decodeVmValueOperand,
 	encodeVmValueOperand,
+	vmSafepointRootMapsAreTrusted,
 } from "../src/compiler/target/runtime-image.ts";
 import type {
 	BytecodeFunction,
@@ -133,6 +134,55 @@ function runtimeFixture(): RuntimeImage {
 }
 
 describe("RuntimeImage constant compaction", () => {
+	it.each([false, true])(
+		"preserves published root trust through compaction with mutated roots: %s",
+		(mutated) => {
+			const source = `
+				function* keep(value) {
+					const live = { value };
+					yield live;
+					return live.value;
+				}
+				globalThis.keep = keep;
+			`;
+			const semantic = analyzeSourceAndRunSemanticAnalysis(
+				source,
+				"compaction-root-trust.js",
+				parseScript(source, { strict: false }),
+			);
+			const runtime = compileSemanticProgramToRuntimeImage(semantic);
+			const index = runtime.functions.findIndex((fn) => fn.isGenerator);
+			const fn = runtime.functions[index]!;
+			expect(fn.gcSafepoints?.length).toBeGreaterThan(0);
+			expect(vmSafepointRootMapsAreTrusted(fn)).toBe(true);
+			if (mutated) {
+				const safepoint = fn.gcSafepoints!.find((site) => site.rootRegisters.length > 0);
+				expect(safepoint).toBeDefined();
+				safepoint!.rootRegisters = [];
+				delete safepoint!.clearRegisters;
+			}
+			expect(vmSafepointRootMapsAreTrusted(fn)).toBe(!mutated);
+			const unchanged = compactRuntimeImageConstants(runtime);
+			expect(unchanged.changed).toBe(false);
+			expect(unchanged.runtime).toBe(runtime);
+			expect(vmSafepointRootMapsAreTrusted(unchanged.runtime.functions[index]!)).toBe(
+				!mutated,
+			);
+			runtime.stringConstants.push(units("unreferenced-after-publication"));
+			const compacted = compactRuntimeImageConstants(runtime);
+			expect(compacted.changed).toBe(true);
+			expect(compacted.runtime.functions[index]).not.toBe(fn);
+			expect(vmSafepointRootMapsAreTrusted(compacted.runtime.functions[index]!)).toBe(
+				!mutated,
+			);
+			expect(
+				vmSafepointRootMapsAreTrusted(
+					structuredClone(compacted.runtime.functions[index]!),
+				),
+			).toBe(false);
+		},
+	);
+
 	it("retains only final VM consumers and densely rebases every pool", () => {
 		const result = compactRuntimeImageConstants(runtimeFixture());
 		expect(result.changed).toBe(true);

@@ -537,7 +537,9 @@ describe("Core IR lowering", () => {
 			globalThis.keep = keep;
 		`);
 		const execution = lowerCoreCompilationToExecution(compilation);
-		const { runtime } = lowerVerifiedExecutionToRuntimePlan(execution);
+		const {
+			compacted: { runtime },
+		} = lowerVerifiedExecutionToRuntimePlan(execution);
 		const generator = runtime.functions.find((fn) => fn.isGenerator)!;
 		expect(generator.gcSafepoints?.length).toBeGreaterThan(0);
 		expect(generator.positions.some((position) => position >= 0)).toBe(true);
@@ -545,6 +547,23 @@ describe("Core IR lowering", () => {
 		expect(vmSafepointRootMapsAreTrusted(structuredClone(generator))).toBe(false);
 		const ip = generator.positions.findIndex((position) => position >= 0);
 		generator.positions[ip] = -1;
+		expect(vmSafepointRootMapsAreTrusted(generator)).toBe(false);
+	});
+
+	it("revokes root trust when profiling attaches metadata after final compaction", () => {
+		const compilation = optimize(`
+			function* keep(value) {
+				const live = { value };
+				yield live;
+				return live.value;
+			}
+			globalThis.keep = keep;
+		`);
+		const execution = lowerCoreCompilationToExecution(compilation);
+		const image = lowerExecutionToProgramImage(execution, true);
+		const generator = image.runtime.functions.find((fn) => fn.isGenerator)!;
+		expect(generator.profileSiteIds).toHaveLength(generator.instructions.length);
+		expect(image.diagnostics.profileSites?.length).toBeGreaterThan(0);
 		expect(vmSafepointRootMapsAreTrusted(generator)).toBe(false);
 	});
 
