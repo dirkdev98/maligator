@@ -428,6 +428,55 @@ describe("Core IR lowering", () => {
 		expect(register(left!)).toBe(register(rightValue!));
 	});
 
+	it.each([false, true])(
+		"preserves overlapping ranges across blocks when exit is visited first: %s",
+		(exitFirst) => {
+			const program = new CoreProgram(coreOpcodeRegistry);
+			const builder = new CoreFunctionBuilder(program);
+			const entry = builder.createBlock();
+			const middle = builder.createBlock();
+			const exit = builder.createBlock();
+			const [carried] = builder.appendInstruction(entry, "createF64", [], {
+				attributes: { value: 10 },
+				outputRepresentations: ["f64"],
+			});
+			builder.setTerminator(entry, {
+				kind: "jump",
+				edge: { block: middle, arguments: [] },
+			});
+			const [temporary] = builder.appendInstruction(middle, "createF64", [], {
+				attributes: { value: 2 },
+				outputRepresentations: ["f64"],
+			});
+			const [sum] = builder.appendInstruction(middle, "binary", [carried!, temporary!], {
+				attributes: { operator: "+" },
+				outputRepresentations: ["f64"],
+			});
+			builder.setTerminator(middle, {
+				kind: "jump",
+				edge: { block: exit, arguments: [] },
+			});
+			const [result] = builder.appendInstruction(exit, "binary", [carried!, sum!], {
+				attributes: { operator: "+" },
+				outputRepresentations: ["f64"],
+			});
+			builder.setTerminator(exit, { kind: "return", value: result! });
+			const { function: functionId } = builder.finish(entry);
+			verifyCoreFunction(program, functionId);
+			const allocation = coreRegisterClasses(
+				program.function(functionId),
+				true,
+				new Set(),
+				exitFirst ? [entry, exit, middle] : [entry, middle, exit],
+			);
+			const register = (value: CoreValueId): number => allocation.registers.get(value)!;
+			expect(register(carried!)).not.toBe(register(temporary!));
+			expect(register(carried!)).not.toBe(register(sum!));
+			expect(register(temporary!)).toBe(register(sum!));
+			expect(register(result!)).toBe(register(carried!));
+		},
+	);
+
 	it("reuses a dying input register for a same-representation result", () => {
 		const program = new CoreProgram(coreOpcodeRegistry);
 		const builder = new CoreFunctionBuilder(program);

@@ -1557,11 +1557,17 @@ export function coreRegisterClasses(
 		}
 	}
 
+	interface BlockRange {
+		start: number;
+		end: number;
+	}
 	interface LiveInterval {
 		readonly value: CoreValueId;
 		start: number;
 		end: number;
-		readonly blockRanges: Map<CoreBlockId, { start: number; end: number }>;
+		readonly firstBlock: CoreBlockId;
+		readonly firstRange: BlockRange;
+		additionalRanges: Map<CoreBlockId, BlockRange> | undefined;
 	}
 	const intervals = new Array<LiveInterval | undefined>(fn.valueCapacity);
 	const touch = (
@@ -1576,16 +1582,21 @@ export function coreRegisterClasses(
 				value,
 				start: position,
 				end: position,
-				blockRanges: new Map(),
+				firstBlock: block,
+				firstRange: { start: blockPosition, end: blockPosition },
+				additionalRanges: undefined,
 			};
 			intervals[value] = interval;
-		} else {
-			interval.start = Math.min(interval.start, position);
-			interval.end = Math.max(interval.end, position);
+			return;
 		}
-		const range = interval.blockRanges.get(block);
+		interval.start = Math.min(interval.start, position);
+		interval.end = Math.max(interval.end, position);
+		const range =
+			block === interval.firstBlock
+				? interval.firstRange
+				: interval.additionalRanges?.get(block);
 		if (range === undefined) {
-			interval.blockRanges.set(block, {
+			(interval.additionalRanges ??= new Map()).set(block, {
 				start: blockPosition,
 				end: blockPosition,
 			});
@@ -1683,37 +1694,53 @@ export function coreRegisterClasses(
 	const variantClasses = new Map<number, string>();
 	const variantClass = (value: CoreValueId): string =>
 		variantRepresentations.map((representations) => representations[value]).join(",");
-	const rangesByRegister = new Map<
-		number,
-		Map<CoreBlockId, Array<{ start: number; end: number }>>
-	>();
+	const rangesByRegister = new Map<number, Map<CoreBlockId, Array<BlockRange>>>();
+	const addRange = (
+		byBlock: Map<CoreBlockId, Array<BlockRange>>,
+		block: CoreBlockId,
+		range: BlockRange,
+	): void => {
+		const ranges = byBlock.get(block) ?? [];
+		let low = 0;
+		let high = ranges.length;
+		while (low < high) {
+			const middle = Math.floor((low + high) / 2);
+			if (ranges[middle]!.start <= range.start) low = middle + 1;
+			else high = middle;
+		}
+		ranges.splice(low, 0, range);
+		byBlock.set(block, ranges);
+	};
 	const addRanges = (register: number, interval: LiveInterval): void => {
 		const byBlock =
-			rangesByRegister.get(register) ??
-			new Map<CoreBlockId, Array<{ start: number; end: number }>>();
-		for (const [block, range] of interval.blockRanges) {
-			const ranges = byBlock.get(block) ?? [];
-			let low = 0;
-			let high = ranges.length;
-			while (low < high) {
-				const middle = Math.floor((low + high) / 2);
-				if (ranges[middle]!.start <= range.start) low = middle + 1;
-				else high = middle;
-			}
-			ranges.splice(low, 0, range);
-			byBlock.set(block, ranges);
-		}
+			rangesByRegister.get(register) ?? new Map<CoreBlockId, Array<BlockRange>>();
+		addRange(byBlock, interval.firstBlock, interval.firstRange);
+		if (interval.additionalRanges !== undefined)
+			for (const [block, range] of interval.additionalRanges)
+				addRange(byBlock, block, range);
 		rangesByRegister.set(register, byBlock);
+	};
+	const blockRangeOverlaps = (
+		byBlock: ReadonlyMap<CoreBlockId, ReadonlyArray<BlockRange>>,
+		block: CoreBlockId,
+		range: BlockRange,
+	): boolean => {
+		const candidates = byBlock.get(block);
+		if (candidates === undefined) return false;
+		for (const candidate of candidates) {
+			if (candidate.start > range.end) break;
+			if (range.start <= candidate.end) return true;
+		}
+		return false;
 	};
 	const overlaps = (register: number, interval: LiveInterval): boolean => {
 		const byBlock = rangesByRegister.get(register);
 		if (byBlock === undefined) return false;
-		for (const [block, range] of interval.blockRanges) {
-			for (const candidate of byBlock.get(block) ?? []) {
-				if (candidate.start > range.end) break;
-				if (range.start <= candidate.end) return true;
-			}
-		}
+		if (blockRangeOverlaps(byBlock, interval.firstBlock, interval.firstRange))
+			return true;
+		if (interval.additionalRanges !== undefined)
+			for (const [block, range] of interval.additionalRanges)
+				if (blockRangeOverlaps(byBlock, block, range)) return true;
 		return false;
 	};
 	const assign = (interval: LiveInterval, register: number, variantKey: string): void => {
@@ -2190,15 +2217,17 @@ function lowerFunctionToTarget(
 			if (lowered.type === "unary" && inputMasks?.length === 1)
 				lowered = { ...lowered, exactInputKindMasks: inputMasks };
 			loweredInstructions.set(instruction, lowered);
-			const site = siteFacts.get(
-				coreCompilerSiteId(
-					coreFunction.id,
-					blockId,
-					instruction,
-					coreFunction.instructionOpcodeName(instruction),
-				),
-			);
-			if (site !== undefined) instructionSites.set(lowered, site);
+			if (siteFacts.size > 0) {
+				const site = siteFacts.get(
+					coreCompilerSiteId(
+						coreFunction.id,
+						blockId,
+						instruction,
+						coreFunction.instructionOpcodeName(instruction),
+					),
+				);
+				if (site !== undefined) instructionSites.set(lowered, site);
+			}
 			let resultMove: CompilerInstruction | undefined;
 			const twoAddress = COMPILER_TWO_ADDRESS_OPERANDS[lowered.type];
 			if (twoAddress !== undefined) {
