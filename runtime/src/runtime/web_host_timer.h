@@ -64,6 +64,8 @@ bool mal_host_timers_are_node(MalVm *vm);
 /* Drive the event loop until the isolate is idle (no timers, fd ops, or
  * microtasks). Runs after the top-level program's synchronous phase. */
 void mal_host_run_event_loop(MalVm *vm);
+/* Stops after a microtask checkpoint; intermediate module evaluation skips beforeExit. */
+void mal_host_run_event_loop_until(MalVm *vm, bool (*stop)(MalVm *, void *), void *data);
 
 /* Register an optional runtime macrotask source without making the host loop
  * reference that runtime directly. Duplicate function pointers are ignored.

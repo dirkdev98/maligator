@@ -33,6 +33,7 @@
 #include "vm_load.h"
 #include "vm_ops.h"
 #include "worker_manifest.h"
+#include "workers.h"
 
 #ifndef MAL_DEVELOPMENT_API
 #define MAL_DEVELOPMENT_API 0
@@ -741,6 +742,7 @@ static MalValue mal_profile_phase_end(
 
 #if MAL_DEVELOPMENT_API
 static void mal_install_development_api(MalVm *vm, MalObject *mal) {
+    mal_workers_install_application_api(vm, mal);
     mal_intrinsic_define_method_n(vm, mal, (const byte *) "_registerWorkerManifest", 1, mal_test_register_worker_manifest);
     mal_intrinsic_define_method_n(
         vm, mal, (const byte *) "_runWire", 1, mal_test_run_wire);

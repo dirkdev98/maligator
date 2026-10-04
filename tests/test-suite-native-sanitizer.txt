@@ -140,3 +140,5 @@ tests/native/process-memory-usage-fast.test.ts
 tests/native/worker-math-cache.test.ts
 tests/native/guarded-math-number.test.ts
 tests/native/number-to-uint32-boundaries.test.ts
+tests/native/image-domains.test.ts
+tests/native/application-images.test.ts

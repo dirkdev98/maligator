@@ -103,3 +103,9 @@ MalValue mal_workers_node_message_port_constructor(MalVm *vm);
 MalValue mal_workers_receive_message_function(MalVm *vm);
 MalValue mal_workers_parent_port(MalVm *vm);
 MalValue mal_workers_worker_data(MalVm *vm);
+
+bool mal_workers_is_application(void);
+bool mal_workers_application_ready(MalVm *vm);
+#if MAL_DEVELOPMENT_API
+void mal_workers_install_application_api(MalVm *vm, MalObject *mal);
+#endif

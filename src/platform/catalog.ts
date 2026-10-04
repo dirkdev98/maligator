@@ -714,6 +714,34 @@ export const PLATFORM_CATALOG_VERSION = 2;
 
 export const PLATFORM_MODULES: ReadonlyArray<PlatformModule> = [
 	{
+		kind: "native",
+		id: "maligator:application",
+		stability: "experimental",
+		evaluation: "side-effect-free",
+		installer: "mal_host_install_maligator_application",
+		declarationFile: "application-api.d.ts",
+		description:
+			"Runtime lifecycle notifications for supervised applications. Module evaluation and application readiness are separate events; readiness means the application has finished its own startup work.",
+		types: [],
+		exports: [
+			{
+				name: "ready",
+				type: { kind: "signature", source: "() => boolean" },
+				description:
+					"Notify the development supervisor that this application is ready. Repeated calls are harmless. Returns true in a supervised application and false in a standalone application or ordinary worker. Call after resources such as a server listener are accepting work; this does not reserve ports or transfer traffic.",
+				examples: [
+					'import { ready } from "maligator:application";\nimport { createServer } from "node:http";\n\ncreateServer((_request, response) => response.end("hello")).listen(3000, () => ready());',
+				],
+				contract: {
+					phase: "runtime",
+					value: "callable",
+					identity: "module",
+					effects: EVERY_EFFECT_SUMMARY,
+				},
+			},
+		],
+	},
+	{
 		kind: "source",
 		id: "maligator:workers",
 		stability: "experimental",

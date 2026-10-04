@@ -11,3 +11,7 @@ const MalAsset *mal_development_assets_get(
     const MalDevelopmentAssets *assets, i32 *out_count);
 
 void mal_development_assets_free(MalDevelopmentAssets *assets);
+
+void mal_development_assets_retain(MalDevelopmentAssets *assets);
+/* Copies external files once so a retained image survives artifact unlink. */
+bool mal_development_assets_snapshot(MalDevelopmentAssets *assets);

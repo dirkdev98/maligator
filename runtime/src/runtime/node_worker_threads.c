@@ -58,7 +58,7 @@ void mal_host_install_node_worker_threads(
         module = roots[0];
         // SHARE_ENV must be published before workerData decoding or Worker use.
         vm->intrinsics[MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE] = module;
-        roots[2] = mal_workers_worker_data(vm);
+        roots[2] = mal_workers_is_application() ? mal_value_new_undefined() : mal_workers_worker_data(vm);
         MalObject *function_prototype =
             mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]);
         roots[3] = mal_value_from_native_function_object(
@@ -66,7 +66,7 @@ void mal_host_install_node_worker_threads(
                 &vm->heap, function_prototype,
                 mal_intrinsic_ascii(vm, (const byte *) "markAsUncloneable"), 1,
                 node_worker_threads_mark_uncloneable));
-        bool main_thread = !mal_workers_is_worker();
+        bool main_thread = !mal_workers_is_worker() || mal_workers_is_application();
         const char *names[] = {
             "Worker", "MessageChannel", "MessagePort", "parentPort", "workerData",
             "threadId", "receiveMessageOnPort", "markAsUncloneable", "isMainThread",
@@ -76,9 +76,9 @@ void mal_host_install_node_worker_threads(
             mal_workers_node_worker_constructor(vm),
             mal_workers_node_message_channel_constructor(vm),
             mal_workers_node_message_port_constructor(vm),
-            mal_workers_parent_port(vm),
+            main_thread ? mal_value_new_null() : mal_workers_parent_port(vm),
             roots[2],
-            mal_value_from_i32((i32) mal_workers_thread_id()),
+            mal_value_from_i32(main_thread ? 0 : (i32) mal_workers_thread_id()),
             mal_workers_receive_message_function(vm),
             roots[3],
             mal_value_new_boolean(main_thread),

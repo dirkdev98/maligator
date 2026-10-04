@@ -13,6 +13,12 @@
 #include "builtin_promise.h"
 #include "builtin_weak_ref.h"
 #include "function_object.h"
+#include "development_assets.h"
+#include "mal_assets.h"
+#include "host_registry.h"
+#include "hex.h"
+#include "sha256.h"
+#include "worker_manifest.h"
 #include "gc.h"
 #include "gc_process.h"
 #include "host.h"
@@ -417,6 +423,10 @@ struct MalWorkerDomain {
     char *pool_entry;
     u64 wire_bytes;
     bool counted;
+    MalDevelopmentAssets *assets;
+    bool has_context;
+    bool web_platform;
+    bool node;
 };
 
 static pthread_mutex_t g_startup_domain_mutex = PTHREAD_MUTEX_INITIALIZER;
@@ -439,6 +449,7 @@ void mal_worker_domain_release(MalWorkerDomain *domain) {
     }
     free(domain->entries);
     free(domain->pool_entry);
+    mal_development_assets_free(domain->assets);
     if (domain->counted) {
         atomic_fetch_sub_explicit(&g_domain_wire_bytes, domain->wire_bytes, memory_order_relaxed);
         atomic_fetch_sub_explicit(&g_live_domains, 1, memory_order_relaxed);
@@ -550,11 +561,50 @@ static u32 workers_max(void) {
     return cap < 16 ? 16 : cap > 256 ? 256 : cap;
 }
 
+typedef struct ApplicationImage {
+    _Atomic(u32) refs;
+    MalWorkerEntry *entries;
+    u32 count;
+    char *entry_path;
+    MalWorkerDomain *domain;
+    bool web_platform;
+    bool node;
+} ApplicationImage;
+
+typedef struct ApplicationLaunch {
+    _Atomic(u32) refs;
+    ApplicationImage *image;
+    char **argv;
+    i32 argc;
+    bool exit_on_result;
+} ApplicationLaunch;
+
+static void application_image_release(ApplicationImage *image) {
+    if (image == nullptr || atomic_fetch_sub_explicit(&image->refs, 1, memory_order_acq_rel) != 1) return;
+    for (u32 index = 0; index < image->count; index++) free((void *) image->entries[index].wire);
+    free(image->entries);
+    free(image->entry_path);
+    mal_worker_domain_release(image->domain);
+    free(image);
+}
+
+static void application_launch_release(ApplicationLaunch *launch) {
+    if (launch == nullptr || atomic_fetch_sub_explicit(&launch->refs, 1, memory_order_acq_rel) != 1) return;
+    for (i32 index = 0; index < launch->argc; index++) free(launch->argv[index]);
+    free(launch->argv);
+    application_image_release(launch->image);
+    free(launch);
+}
+
 struct WorkerThread {
     _Atomic(u32) refcount;
     u32 id;
     const MalWorkerEntry *entry;
     MalWorkerDomain *domain;
+    ApplicationLaunch *application;
+    MalSerializedValue *result;
+    bool application_ready;
+    bool application_ready_pending;
     char *name;
     // The parent's host personality, applied to the worker isolate.
     bool web_platform;
@@ -609,11 +659,13 @@ static void worker_thread_release(WorkerThread *thread) {
     pthread_cond_destroy(&thread->start_cond);
     free(thread->name);
     mal_worker_domain_release(thread->domain);
+    application_launch_release(thread->application);
+    if (thread->result != nullptr) mal_serialized_value_release(thread->result);
     free(thread);
 }
 
 // Producer side: worker thread -> parent mailbox.
-typedef enum ThreadEvent { THREAD_ONLINE, THREAD_READY, THREAD_EXIT } ThreadEvent;
+typedef enum ThreadEvent { THREAD_ONLINE, THREAD_READY, THREAD_APPLICATION_READY, THREAD_EXIT } ThreadEvent;
 
 static void worker_post_event(WorkerThread *thread, ThreadEvent event) {
     Owner *owner = thread->parent;
@@ -621,6 +673,7 @@ static void worker_post_event(WorkerThread *thread, ThreadEvent event) {
     if (owner->reactor != nullptr) {
         if (event == THREAD_EXIT) thread->exit_pending = true;
         else if (event == THREAD_READY) thread->ready_pending = true;
+        else if (event == THREAD_APPLICATION_READY) thread->application_ready_pending = true;
         else thread->online_pending = true;
         if (!thread->event_queued) {
             thread->event_queued = true;
@@ -689,6 +742,8 @@ typedef struct WorkerRecord {
     MalValue port;
     MalValue ready;
     MalValue closed;
+    MalValue application_ready;
+    bool application_ready_settled;
     MalValue terminations;
     WorkerThread *thread;
     Listeners listeners;
@@ -707,6 +762,12 @@ typedef struct UrlRecord {
     MalWorkerDomain *domain;
 } UrlRecord;
 
+typedef struct ApplicationHandle {
+    struct ApplicationHandle *next;
+    MalValue weak;
+    ApplicationImage *image;
+} ApplicationHandle;
+
 typedef struct Isolate {
     MalVm *vm;
     Owner *owner;
@@ -714,6 +775,7 @@ typedef struct Isolate {
     PortRecord *ports;
     WorkerRecord *workers;
     UrlRecord *urls;
+    ApplicationHandle *applications;
     MalValue port_prototype;
     MalValue node_port_prototype;
     MalValue worker_prototype;
@@ -780,11 +842,15 @@ static void workers_scan_roots(MalVm *vm, void *data) {
         mal_gc_mark_value(worker->port);
         mal_gc_mark_value(worker->ready);
         mal_gc_mark_value(worker->closed);
+        mal_gc_mark_value(worker->application_ready);
         mal_gc_mark_value(worker->terminations);
         listeners_mark(&worker->listeners);
     }
     for (UrlRecord *url = iso->urls; url != nullptr; url = url->next) {
         mal_gc_mark_value(url->weak_descriptor);
+    }
+    for (ApplicationHandle *handle = iso->applications; handle != nullptr; handle = handle->next) {
+        mal_gc_mark_value(handle->weak);
     }
 }
 
@@ -900,6 +966,16 @@ static UrlRecord *url_record(MalValue value) {
 }
 
 static void urls_prune(Isolate *iso) {
+    for (ApplicationHandle **link = &iso->applications; *link != nullptr;) {
+        ApplicationHandle *handle = *link;
+        if (!mal_value_is_undefined(mal_value_to_weak_ref_object(handle->weak)->target)) {
+            link = &handle->next;
+            continue;
+        }
+        *link = handle->next;
+        application_image_release(handle->image);
+        free(handle);
+    }
     for (UrlRecord **link = &iso->urls; *link != nullptr;) {
         UrlRecord *url = *link;
         if (!mal_value_is_undefined(mal_value_to_weak_ref_object(url->weak_descriptor)->target)) {
@@ -1995,6 +2071,39 @@ static void worker_thread_finish(WorkerThread *thread) {
     worker_thread_release(thread);
 }
 
+static bool application_entry_settled(MalVm *vm, void *data) {
+    (void) data;
+    if (!mal_value_is_promise_object(vm->entry_async_promise)) return true;
+    MalPromiseObject *promise = mal_value_to_promise_object(vm->entry_async_promise);
+    promise->is_handled = true;
+    return promise->state != MAL_PROMISE_PENDING;
+}
+
+static bool application_entry_fulfilled(MalVm *vm) {
+    return !mal_value_is_promise_object(vm->entry_async_promise)
+        || mal_value_to_promise_object(vm->entry_async_promise)->state == MAL_PROMISE_FULFILLED;
+}
+
+static bool application_result_exit(MalVm *vm, void *data) {
+    (void) data;
+    return g_self_thread->application->exit_on_result && g_self_thread->result != nullptr
+        && application_entry_fulfilled(vm);
+}
+
+bool mal_workers_is_application(void) {
+    return g_self_thread != nullptr && g_self_thread->application != nullptr;
+}
+
+bool mal_workers_application_ready(MalVm *vm) {
+    (void) vm;
+    if (!mal_workers_is_application()) return false;
+    if (!g_self_thread->application_ready) {
+        g_self_thread->application_ready = true;
+        worker_post_event(g_self_thread, THREAD_APPLICATION_READY);
+    }
+    return true;
+}
+
 static void *worker_thread_main(void *arg) {
     WorkerThread *thread = arg;
     sigset_t all;
@@ -2042,6 +2151,9 @@ static void *worker_thread_main(void *arg) {
         worker_thread_finish(thread);
         return nullptr;
     }
+    if (thread->domain != nullptr && thread->domain->assets != nullptr) {
+        vm->live_runtime_image.assets = mal_development_assets_get(thread->domain->assets, &vm->live_runtime_image.asset_count);
+    }
     mal_runtime_personality_install(vm, thread->web_platform, thread->node);
     mal_atomics_set_agent(true, thread->interrupt);
     bool installed = mal_workers_install(vm);
@@ -2051,8 +2163,13 @@ static void *worker_thread_main(void *arg) {
     pthread_mutex_unlock(&thread->mutex);
 
     char *argv0 = "maligator-worker";
-    MalHostLaunchContext launch = {.argc = 1, .argv = &argv0, .script_path = thread->entry->href};
+    MalHostLaunchContext launch = thread->application != nullptr
+        ? (MalHostLaunchContext) {.argc = thread->application->argc, .argv = thread->application->argv, .script_path = thread->application->image->entry_path}
+        : (MalHostLaunchContext) {.argc = 1, .argv = &argv0, .script_path = thread->entry->href};
     if (installed) {
+        if (thread->application != nullptr || (thread->domain != nullptr && thread->domain->assets != nullptr)) {
+            mal_host_install_maligator(vm, nullptr, 0, &launch);
+        }
         mal_vm_run_host_installs(vm, &launch);
     } else {
         worker_drop_child_endpoint(thread);
@@ -2064,7 +2181,33 @@ static void *worker_thread_main(void *arg) {
         worker_post_event(thread, THREAD_ONLINE);
         callable = mal_vm_create_callable(vm, 0);
         mal_vm_run(vm, callable);
-        if (!thrown(vm) && !worker_termination_check(vm)) {
+        if (thread->application != nullptr) {
+            ApplicationImage *bundle = thread->application->image;
+            for (u32 index = 0; !thrown(vm) && !worker_termination_check(vm); index++) {
+                mal_host_run_event_loop_until(vm, application_entry_settled, nullptr);
+                if (!application_entry_fulfilled(vm) || index + 1 == bundle->count) break;
+                MalWorkerEntry *fragment = &bundle->entries[index + 1];
+                const char *error = "invalid application fragment";
+                MalLoadedRuntimeImage *next = mal_runtime_image_load_with_host_resolver(
+                    fragment->wire, fragment->wire_size, &error, mal_host_resolve_installer);
+                if (next == nullptr) { mal_vm_throw_error(vm, MAL_INTRINSIC_ERROR_PROTOTYPE, error); break; }
+                const MalRuntimeImage *program = mal_loaded_runtime_image_get(next);
+                i32 entry_index = mal_vm_splice_runtime_image(vm, program);
+                if (entry_index < 0) { mal_loaded_runtime_image_free(next); break; }
+                mal_vm_retain_loaded_runtime_image(vm, next);
+                mal_vm_run_program_host_installs(vm, program, &launch);
+                if (thrown(vm)) break;
+                mal_vm_free_callable(callable);
+                callable = mal_vm_create_callable(vm, entry_index);
+                vm->entry_async_promise = mal_value_new_undefined();
+                mal_vm_run(vm, callable);
+            }
+            if (!thrown(vm) && application_entry_fulfilled(vm) && !worker_termination_check(vm)) {
+                worker_post_event(thread, THREAD_READY);
+                if (!thread->application->exit_on_result) mal_host_run_event_loop(vm);
+                else if (!application_result_exit(vm, nullptr)) mal_host_run_event_loop_until(vm, application_result_exit, nullptr);
+            }
+        } else if (!thrown(vm) && !worker_termination_check(vm)) {
             worker_observe_startup(vm);
             mal_host_run_event_loop(vm);
         }
@@ -2141,6 +2284,20 @@ static MalValue worker_exit_value(MalVm *vm, WorkerRecord *worker, MalValue erro
     if (has_error) {
         mal_intrinsic_define_data(vm, exit, (const byte *) "error", roots[0], MAL_PROPERTY_ENUMERABLE);
     }
+    if (thread->application != nullptr) {
+        MalValue value = mal_value_new_undefined();
+        MalRootSpan result_root;
+        mal_gc_root(&result_root, &value, 1);
+        bool has_result = thread->result != nullptr;
+        if (has_result && !mal_deserialize_take(vm, thread->result, &g_hooks, &value)) {
+            mal_gc_unroot(&result_root);
+            mal_gc_unroot(&root);
+            return mal_value_new_undefined();
+        }
+        mal_intrinsic_define_data(vm, exit, "hasResult", mal_value_new_boolean(has_result), MAL_PROPERTY_ENUMERABLE);
+        if (has_result) mal_intrinsic_define_data(vm, exit, "result", value, MAL_PROPERTY_ENUMERABLE);
+        mal_gc_unroot(&result_root);
+    }
     mal_object_set_integrity_level(exit, true);
     MalValue result = roots[1];
     mal_gc_unroot(&root);
@@ -2166,7 +2323,7 @@ static bool worker_finish(MalVm *vm, WorkerRecord *worker) {
     worker->joined = true;
     worker_update_work(vm, worker);
     MalValue roots[] = {worker->wrapper, mal_value_new_undefined(), mal_value_new_undefined(),
-        worker->closed, worker->terminations, worker->port, worker->ready};
+        worker->closed, worker->terminations, worker->port, worker->ready, worker->application_ready};
     MalRootSpan root;
     mal_gc_root(&root, roots, countof(roots));
     // Close the parent side so the internal port does not keep the loop alive.
@@ -2191,6 +2348,12 @@ static bool worker_finish(MalVm *vm, WorkerRecord *worker) {
         MalPromiseObject *ready = mal_value_to_promise_object(roots[6]);
         ready->is_handled = true;
         mal_promise_reject(vm, ready, reason);
+    }
+    if (thread->application != nullptr && !worker->application_ready_settled) {
+        worker->application_ready_settled = true;
+        MalPromiseObject *pending = mal_value_to_promise_object(roots[7]);
+        pending->is_handled = true;
+        mal_promise_reject(vm, pending, has_error ? roots[1] : str_value(vm, "application exited before signaling readiness"));
     }
     bool ok = true;
     if (worker->node) {
@@ -2258,9 +2421,11 @@ static bool workers_drain(MalVm *vm) {
         thread->event_queued = false;
         bool online = thread->online_pending;
         bool ready = thread->ready_pending;
+        bool application_ready = thread->application_ready_pending;
         bool exited = thread->exit_pending;
         thread->online_pending = false;
         thread->ready_pending = false;
+        thread->application_ready_pending = false;
         thread->exit_pending = false;
         pthread_mutex_unlock(&owner->mutex);
         WorkerRecord *worker = iso->workers;
@@ -2273,6 +2438,10 @@ static bool workers_drain(MalVm *vm) {
         if (worker != nullptr && ready && !worker->ready_settled) {
             worker->ready_settled = true;
             mal_promise_fulfill(vm, mal_value_to_promise_object(worker->ready), mal_value_new_undefined());
+        }
+        if (worker != nullptr && application_ready && !worker->application_ready_settled) {
+            worker->application_ready_settled = true;
+            mal_promise_fulfill(vm, mal_value_to_promise_object(worker->application_ready), mal_value_new_undefined());
         }
         bool deferred_exit = false;
         if (worker != nullptr && exited) {
@@ -2757,7 +2926,7 @@ static bool node_options_supported(MalVm *vm, MalValue options) {
 }
 
 static MalValue worker_construct_entry(MalVm *vm, const MalValue *args, i32 argc, bool node,
-    MalWorkerDomain *domain, const MalWorkerEntry *entry) {
+    MalWorkerDomain *domain, const MalWorkerEntry *entry, ApplicationLaunch *application) {
     Isolate *iso = g_isolate;
     MalValue options = argc > 1 ? args[1] : mal_value_new_undefined();
     MalValue data = mal_value_new_undefined();
@@ -2772,6 +2941,10 @@ static MalValue worker_construct_entry(MalVm *vm, const MalValue *args, i32 argc
         !queue_limits(vm, options, node ? POST_NODE : POST_TRANSACTIONAL,
             &max_count, &max_bytes, &max_message) ||
         (node && !node_options_supported(vm, options))) {
+        return mal_value_new_undefined();
+    }
+    if (application != nullptr && !mal_value_is_undefined(name) && !mal_value_is_string(name)) {
+        throw_type(vm, "application name must be a string");
         return mal_value_new_undefined();
     }
     if (node && !mal_value_is_undefined(env)) {
@@ -2842,8 +3015,10 @@ static MalValue worker_construct_entry(MalVm *vm, const MalValue *args, i32 argc
     thread->entry = entry;
     thread->domain = domain;
     mal_worker_domain_retain(domain);
-    thread->web_platform = vm->host_web_platform;
-    thread->node = vm->host_node;
+    thread->application = application;
+    if (application != nullptr) atomic_fetch_add_explicit(&application->refs, 1, memory_order_relaxed);
+    thread->web_platform = domain != nullptr && domain->has_context ? domain->web_platform : vm->host_web_platform;
+    thread->node = domain != nullptr && domain->has_context ? domain->node : vm->host_node;
     thread->name = value_to_cstring(name);
     thread->child_endpoint = &channel->side[1];
     thread->data = snapshot;
@@ -2855,7 +3030,7 @@ static MalValue worker_construct_entry(MalVm *vm, const MalValue *args, i32 argc
     pthread_cond_init(&thread->start_cond, nullptr);
 
     MalValue roots[] = {mal_value_new_undefined(), mal_value_new_undefined(), mal_value_new_undefined(),
-        mal_value_new_undefined()};
+        mal_value_new_undefined(), mal_value_new_undefined()};
     MalRootSpan root;
     mal_gc_root(&root, roots, countof(roots));
     MalValue proto = node ? iso->node_worker_prototype : iso->worker_prototype;
@@ -2867,6 +3042,8 @@ static MalValue worker_construct_entry(MalVm *vm, const MalValue *args, i32 argc
     worker->port = roots[1];
     worker->ready = roots[2];
     worker->closed = roots[3];
+    roots[4] = application != nullptr ? promise_new(vm) : mal_value_new_undefined();
+    worker->application_ready = roots[4];
     worker->terminations = mal_value_new_undefined();
     worker->thread = thread;
     worker->node = node;
@@ -2951,6 +3128,7 @@ static MalValue worker_construct_entry(MalVm *vm, const MalValue *args, i32 argc
         mal_intrinsic_define_data(vm, object, (const byte *) "id", mal_value_from_i32((i32) thread->id), MAL_PROPERTY_ENUMERABLE);
         mal_intrinsic_define_data(vm, object, (const byte *) "ready", roots[2], MAL_PROPERTY_ENUMERABLE);
         mal_intrinsic_define_data(vm, object, (const byte *) "closed", roots[3], MAL_PROPERTY_ENUMERABLE);
+        if (application != nullptr) mal_intrinsic_define_data(vm, object, (const byte *) "applicationReady", roots[4], MAL_PROPERTY_ENUMERABLE);
         mal_intrinsic_define_data(vm, object, (const byte *) "port", roots[1], MAL_PROPERTY_ENUMERABLE);
     }
     MalValue result = roots[0];
@@ -2975,7 +3153,7 @@ static MalValue worker_construct(MalVm *vm, const MalValue *args, i32 argc, MalV
     }
     // Option getters may install another domain before admission commits.
     mal_worker_domain_retain(domain);
-    MalValue result = worker_construct_entry(vm, args, argc, node, domain, entry);
+    MalValue result = worker_construct_entry(vm, args, argc, node, domain, entry, nullptr);
     mal_worker_domain_release(domain);
     return result;
 }
@@ -3345,6 +3523,12 @@ void mal_workers_shutdown(MalVm *vm) {
         mal_worker_domain_release(url->domain);
         free(url);
     }
+    while (iso->applications != nullptr) {
+        ApplicationHandle *handle = iso->applications;
+        iso->applications = handle->next;
+        application_image_release(handle->image);
+        free(handle);
+    }
     mal_worker_domain_release(iso->domain);
     owner_release(owner);
     g_isolate = nullptr;
@@ -3397,3 +3581,261 @@ void mal_host_install_maligator_internal_workers(
         vm->globals[slots[i].slot] = value;
     }
 }
+
+#if MAL_DEVELOPMENT_API
+static char *application_string(MalValue value) {
+    char *text = nullptr;
+    usize length;
+    if (!mal_value_is_string(value)
+        || mal_string_to_utf8_c_string(mal_value_to_string(value), &text, &length) != MAL_UTF8_C_STRING_OK) return nullptr;
+    return text;
+}
+
+static bool application_property(MalVm *vm, MalValue object, const char *name, MalValue *out) {
+    return get_named(vm, object, name, out);
+}
+
+static bool application_boolean(MalVm *vm, MalValue object, const char *name, bool *out) {
+    MalValue value;
+    if (!application_property(vm, object, name, &value)) return false;
+    if (!mal_value_is_boolean(value)) { throw_type(vm, "application descriptor requires boolean capabilities"); return false; }
+    *out = mal_value_to_boolean(value);
+    return true;
+}
+
+static byte *application_read_wire(const char *path, usize *length) {
+    FILE *file = fopen(path, "rb");
+    if (file == nullptr) return nullptr;
+    if (fseek(file, 0, SEEK_END) != 0) { fclose(file); return nullptr; }
+    long size = ftell(file);
+    if (size <= 0 || size > (256l << 20) || fseek(file, 0, SEEK_SET) != 0) { fclose(file); return nullptr; }
+    byte *bytes = malloc((usize) size);
+    if (bytes == nullptr || fread(bytes, 1, (usize) size, file) != (usize) size) {
+        free(bytes); fclose(file); return nullptr;
+    }
+    fclose(file);
+    *length = (usize) size;
+    return bytes;
+}
+
+static ApplicationHandle *application_handle(MalValue value) {
+    if (g_isolate == nullptr || !mal_value_is_object(value)) return nullptr;
+    for (ApplicationHandle *handle = g_isolate->applications; handle != nullptr; handle = handle->next) {
+        if (mal_value_to_weak_ref_object(handle->weak)->target == value) return handle;
+    }
+    return nullptr;
+}
+
+static MalValue application_load(MalVm *vm, MalValue self, const MalValue *args, i32 argc,
+    MalValue nt, MalValue callee) {
+    (void) self; (void) nt; (void) callee;
+    if (argc < 1 || !mal_value_is_object(args[0])) { throw_type(vm, "application descriptor must be an object"); return mal_value_new_undefined(); }
+    MalValue roots[] = {args[0], mal_value_new_undefined(), mal_value_new_undefined(), mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    ApplicationImage *image = nullptr;
+    bool web, node;
+    if (!get_named(vm, roots[0], "schema", &roots[1]) || !mal_value_is_int32(roots[1]) || mal_value_to_i32(roots[1]) != 1
+        || !application_boolean(vm, roots[0], "webPlatform", &web)
+        || !application_boolean(vm, roots[0], "node", &node)
+        || !get_named(vm, roots[0], "engine", &roots[1]) || !mal_value_is_object(roots[1])) goto failed;
+    if (!get_named(vm, roots[1], "primordials", &roots[2]) || !mal_value_is_string(roots[2])) goto failed;
+    char *policy = application_string(roots[2]);
+    bool compatible = policy != nullptr && strcmp(policy, MAL_PRIMORDIALS_LOCKED ? "locked" : "mutable") == 0;
+    free(policy);
+    const char *features[] = {"eval", "realms", "regexp", "temporal", "intl"};
+    const bool available[] = {MAL_EVAL, MAL_REALMS, MAL_REGEXP, MAL_TEMPORAL, MAL_INTL};
+    for (usize index = 0; index < countof(features); index++) {
+        bool required;
+        if (!application_boolean(vm, roots[1], features[index], &required)) goto failed;
+        if (required && !available[index]) compatible = false;
+    }
+    if (!compatible || (web && !MAL_WEB_PLATFORM) || (node && !MAL_NODE)) {
+        throw_type(vm, "application image requires incompatible runtime capabilities or primordial policy"); goto failed;
+    }
+    image = calloc(1, sizeof(ApplicationImage));
+    if (image == nullptr) { mal_vm_throw_allocation_error(vm); goto failed; }
+    atomic_init(&image->refs, 1);
+    image->web_platform = web;
+    image->node = node;
+    if (!get_named(vm, roots[0], "entryPath", &roots[1]) || !mal_value_is_string(roots[1])) goto failed;
+    image->entry_path = application_string(roots[1]);
+    if (image->entry_path == nullptr || image->entry_path[0] == 0) goto failed;
+    if (!get_named(vm, roots[0], "workerManifestPath", &roots[1])) goto failed;
+    if (!mal_value_is_undefined(roots[1])) {
+        if (!mal_value_is_string(roots[1])) goto failed;
+        char *path = application_string(roots[1]);
+        if (path == nullptr) goto failed;
+        image->domain = mal_worker_manifest_load(vm, path);
+        free(path);
+    } else image->domain = mal_worker_domain_new(nullptr, 0, nullptr);
+    if (image->domain == nullptr) goto failed;
+    image->domain->has_context = true;
+    image->domain->web_platform = web;
+    image->domain->node = node;
+    if (!get_named(vm, roots[0], "assetManifestPath", &roots[1])) goto failed;
+    if (!mal_value_is_undefined(roots[1])) {
+        if (!mal_value_is_string(roots[1])) goto failed;
+        char *path = application_string(roots[1]);
+        if (path == nullptr) goto failed;
+        const char *error = "invalid assets";
+        image->domain->assets = mal_development_assets_load(path, &error);
+        free(path);
+        if (image->domain->assets == nullptr || !mal_development_assets_snapshot(image->domain->assets)) goto failed;
+    }
+    if (!get_named(vm, roots[0], "wires", &roots[1]) || !mal_value_is_array_object(roots[1])) goto failed;
+    u32 count = mal_array_object_length(mal_value_to_array_object(roots[1]));
+    if (count == 0 || count > 4096) goto failed;
+    image->entries = calloc(count, sizeof(MalWorkerEntry));
+    if (image->entries == nullptr) { mal_vm_throw_allocation_error(vm); goto failed; }
+    image->count = count;
+    u64 total = 0;
+    for (u32 index = 0; index < count; index++) {
+        if (!mal_vm_get_property(vm, roots[1], mal_key_index(index), &roots[2]) || !mal_value_is_object(roots[2])) goto failed;
+        if (!get_named(vm, roots[2], "path", &roots[3]) || !mal_value_is_string(roots[3])) goto failed;
+        char *path = application_string(roots[3]);
+        if (path == nullptr) goto failed;
+        MalWorkerEntry *entry = &image->entries[index];
+        entry->wire = application_read_wire(path, &entry->wire_size);
+        free(path);
+        if (entry->wire == nullptr) goto failed;
+        total += entry->wire_size;
+        if (total > (512ull << 20)) goto failed;
+        if (!get_named(vm, roots[2], "sha256", &roots[3]) || !mal_value_is_string(roots[3])) goto failed;
+        char *digest = application_string(roots[3]);
+        MalSha256 hash;
+        u8 actual[32]; byte hex[64];
+        mal_sha256_init(&hash);
+        mal_sha256_update(&hash, entry->wire, entry->wire_size);
+        mal_sha256_final(&hash, actual);
+        mal_hex_encode_lower(actual, sizeof(actual), hex);
+        bool matches = digest != nullptr && strlen(digest) == 64 && memcmp(digest, hex, 64) == 0;
+        free(digest);
+        if (!matches) goto failed;
+        const char *error = "invalid wire";
+        MalLoadedRuntimeImage *check = mal_runtime_image_load_with_host_resolver(entry->wire, entry->wire_size, &error, mal_host_resolve_installer);
+        if (check == nullptr) goto failed;
+        mal_loaded_runtime_image_free(check);
+        entry->href = image->entry_path;
+        entry->resolve_installer = mal_host_resolve_installer;
+    }
+    if (!mal_workers_install(vm) || thrown(vm)) goto failed;
+    urls_prune(g_isolate);
+    ApplicationHandle *handle = calloc(1, sizeof(ApplicationHandle));
+    if (handle == nullptr) { mal_vm_throw_allocation_error(vm); goto failed; }
+    roots[3] = mal_value_from_object(mal_object_new(&vm->heap, nullptr));
+    mal_object_set_integrity_level(mal_value_to_object(roots[3]), true);
+    MalWeakRefObject *weak = mal_heap_alloc(&vm->heap, sizeof(MalWeakRefObject), MAL_HEAP_WEAK_REF_OBJECT);
+    mal_object_init(&vm->heap, &weak->object, MAL_HEAP_WEAK_REF_OBJECT, nullptr);
+    weak->target = roots[3];
+    handle->weak = mal_value_from_weak_ref_object(weak);
+    handle->image = image;
+    handle->next = g_isolate->applications;
+    g_isolate->applications = handle;
+    MalValue result = roots[3];
+    mal_gc_unroot(&root);
+    return result;
+failed:
+    application_image_release(image);
+    if (!thrown(vm)) mal_vm_throw_error(vm, MAL_INTRINSIC_SYNTAX_ERROR_PROTOTYPE, "Invalid application image descriptor, artifact or digest");
+    mal_gc_unroot(&root);
+    return mal_value_new_undefined();
+}
+
+static MalValue application_release(MalVm *vm, MalValue self, const MalValue *args, i32 argc,
+    MalValue nt, MalValue callee) {
+    (void) self; (void) nt; (void) callee;
+    ApplicationHandle *handle = argc > 0 ? application_handle(args[0]) : nullptr;
+    if (handle == nullptr) { throw_type(vm, "invalid application image handle for this isolate"); return mal_value_new_undefined(); }
+    ApplicationImage *image = handle->image;
+    handle->image = nullptr;
+    application_image_release(image);
+    return mal_value_new_undefined();
+}
+
+static MalValue application_launch(MalVm *vm, MalValue self, const MalValue *args, i32 argc,
+    MalValue nt, MalValue callee) {
+    (void) self; (void) nt; (void) callee;
+    ApplicationHandle *handle = argc > 0 ? application_handle(args[0]) : nullptr;
+    if (handle == nullptr || handle->image == nullptr) { throw_type(vm, "application image is closed or belongs to another isolate"); return mal_value_new_undefined(); }
+    ApplicationLaunch *launch = calloc(1, sizeof(ApplicationLaunch));
+    if (launch == nullptr) { mal_vm_throw_allocation_error(vm); return mal_value_new_undefined(); }
+    atomic_init(&launch->refs, 1);
+    launch->image = handle->image;
+    atomic_fetch_add_explicit(&launch->image->refs, 1, memory_order_relaxed);
+    MalValue options = argc > 1 ? args[1] : mal_value_new_undefined();
+    MalValue argv = mal_value_new_undefined();
+    MalRootSpan root;
+    mal_gc_root(&root, &argv, 1);
+    if (!get_named(vm, options, "argv", &argv) || !mal_value_is_array_object(argv)) goto failed;
+    u32 count = mal_array_object_length(mal_value_to_array_object(argv));
+    if (count > INT32_MAX) goto failed;
+    launch->argv = calloc((usize) count + 1, sizeof(char *));
+    if (launch->argv == nullptr) { mal_vm_throw_allocation_error(vm); goto failed; }
+    launch->argc = (i32) count;
+    for (u32 index = 0; index < count; index++) {
+        MalValue value;
+        if (!mal_vm_get_property(vm, argv, mal_key_index(index), &value) || !mal_value_is_string(value)) goto failed;
+        launch->argv[index] = application_string(value);
+        if (launch->argv[index] == nullptr) goto failed;
+    }
+    // The Node installer inserts script_path itself; omit conventional argv[1].
+    if (launch->argc >= 2) {
+        free(launch->argv[1]);
+        for (i32 index = 1; index + 1 < launch->argc; index++) launch->argv[index] = launch->argv[index + 1];
+        launch->argc--;
+        launch->argv[launch->argc] = nullptr;
+    }
+    MalValue value;
+    if (!get_named(vm, options, "exitOnResult", &value)) goto failed;
+    if (!mal_value_is_undefined(value)) {
+        if (!mal_value_is_boolean(value)) goto failed;
+        launch->exit_on_result = mal_value_to_boolean(value);
+    }
+    MalValue worker_args[] = {mal_value_new_undefined(), options};
+    MalValue result = worker_construct_entry(vm, worker_args, 2, false, launch->image->domain, &launch->image->entries[0], launch);
+    application_launch_release(launch);
+    mal_gc_unroot(&root);
+    return result;
+failed:
+    application_launch_release(launch);
+    if (!thrown(vm)) throw_type(vm, "application launch requires string argv and boolean exitOnResult");
+    mal_gc_unroot(&root);
+    return mal_value_new_undefined();
+}
+
+static MalValue application_data(MalVm *vm, MalValue self, const MalValue *args, i32 argc,
+    MalValue nt, MalValue callee) {
+    (void) self; (void) args; (void) argc; (void) nt; (void) callee;
+    return mal_workers_is_application() ? mal_workers_worker_data(vm) : mal_value_new_undefined();
+}
+
+static MalValue application_result(MalVm *vm, MalValue self, const MalValue *args, i32 argc,
+    MalValue nt, MalValue callee) {
+    (void) self; (void) nt; (void) callee;
+    if (!mal_workers_is_application()) { throw_type(vm, "application result requires a supervised application"); return mal_value_new_undefined(); }
+    if (g_self_thread->result != nullptr) { throw_type(vm, "application result already reported"); return mal_value_new_undefined(); }
+    const char *error = nullptr;
+    MalSerializeLimits limits = {.max_bytes = WORKERS_DEFAULT_MAX_MESSAGE_BYTES};
+    MalSerializedValue *snapshot = mal_serialize(vm, argc > 0 ? args[0] : mal_value_new_undefined(), mal_value_new_undefined(), &limits, &g_hooks, &error);
+    if (snapshot == nullptr) { if (!thrown(vm)) throw_clone_error(vm, error, "could not clone application result"); return mal_value_new_undefined(); }
+    if (!mal_serialize_commit(vm, snapshot)) { mal_serialized_value_release(snapshot); return mal_value_new_undefined(); }
+    g_self_thread->result = snapshot;
+    return mal_value_new_undefined();
+}
+
+static MalValue application_ready(MalVm *vm, MalValue self, const MalValue *args, i32 argc,
+    MalValue nt, MalValue callee) {
+    (void) self; (void) args; (void) argc; (void) nt; (void) callee;
+    return mal_value_new_boolean(mal_workers_application_ready(vm));
+}
+
+void mal_workers_install_application_api(MalVm *vm, MalObject *mal) {
+    mal_intrinsic_define_method_n(vm, mal, "_loadApplicationImage", 1, application_load);
+    mal_intrinsic_define_method_n(vm, mal, "_launchApplicationImage", 2, application_launch);
+    mal_intrinsic_define_method_n(vm, mal, "_releaseApplicationImage", 1, application_release);
+    mal_intrinsic_define_method_n(vm, mal, "_applicationData", 0, application_data);
+    mal_intrinsic_define_method_n(vm, mal, "_applicationResult", 1, application_result);
+    mal_intrinsic_define_method_n(vm, mal, "_applicationReady", 0, application_ready);
+}
+#endif

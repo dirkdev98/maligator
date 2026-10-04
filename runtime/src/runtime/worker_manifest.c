@@ -82,21 +82,21 @@ static char *manifest_wire_path(const char *manifest_path, const char *wire_path
     return result;
 }
 
-bool mal_worker_manifest_register(MalVm *vm, const char *path) {
+MalWorkerDomain *mal_worker_manifest_load(MalVm *vm, const char *path) {
     usize length = 0;
     byte *bytes = manifest_read(path, 16 * 1024 * 1024, &length);
     if (bytes == nullptr) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_ERROR_PROTOTYPE, "Could not read worker manifest");
-        return false;
+        return nullptr;
     }
     MalString *text = mal_string_from_utf8(&vm->heap, bytes, length);
     free(bytes);
-    if (text == nullptr) { mal_vm_throw_allocation_error(vm); return false; }
+    if (text == nullptr) { mal_vm_throw_allocation_error(vm); return nullptr; }
     MalValue roots[] = {mal_value_from_string(text), mal_value_new_undefined(), mal_value_new_undefined()};
     MalRootSpan root;
     mal_gc_root(&root, roots, countof(roots));
     roots[0] = mal_builtin_json_parse_intrinsic(vm, roots[0]);
-    if (vm->completion.kind == MAL_COMPLETION_THROW) { mal_gc_unroot(&root); return false; }
+    if (vm->completion.kind == MAL_COMPLETION_THROW) { mal_gc_unroot(&root); return nullptr; }
     MalValue schema = manifest_property(vm, roots[0], "schema");
     roots[1] = manifest_property(vm, roots[0], "entries");
     if (!mal_value_is_int32(schema) || mal_value_to_i32(schema) != 1 || !mal_value_is_array_object(roots[1])) goto invalid;
@@ -158,17 +158,23 @@ bool mal_worker_manifest_register(MalVm *vm, const char *path) {
         manifest_free(manifest);
         mal_vm_throw_allocation_error(vm);
         mal_gc_unroot(&root);
-        return false;
+        return nullptr;
     }
-    bool bound = mal_workers_bind_domain(vm, domain);
-    mal_worker_domain_release(domain);
     manifest_free(manifest);
     mal_gc_unroot(&root);
-    return bound;
+    return domain;
 failed:
     manifest_free(manifest);
 invalid:
     mal_vm_throw_error(vm, MAL_INTRINSIC_SYNTAX_ERROR_PROTOTYPE, "Invalid worker manifest or worker wire digest");
     mal_gc_unroot(&root);
-    return false;
+    return nullptr;
+}
+
+bool mal_worker_manifest_register(MalVm *vm, const char *path) {
+    MalWorkerDomain *domain = mal_worker_manifest_load(vm, path);
+    if (domain == nullptr) return false;
+    bool bound = mal_workers_bind_domain(vm, domain);
+    mal_worker_domain_release(domain);
+    return bound;
 }

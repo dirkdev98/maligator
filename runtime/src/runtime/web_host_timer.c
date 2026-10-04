@@ -302,7 +302,7 @@ static bool mal_host_has_referenced_work(MalVm *vm) {
         || atomic_load_explicit(&host->reactor.wake_pending, memory_order_acquire);
 }
 
-void mal_host_run_event_loop(MalVm *vm) {
+void mal_host_run_event_loop_until(MalVm *vm, bool (*stop)(MalVm *, void *), void *data) {
     mal_gc_set_mutator_busy(vm, true);
     // Tracks whether the loop did anything since the last idle notification, so a
     // `beforeExit` listener that schedules new work is notified again next time
@@ -318,6 +318,7 @@ void mal_host_run_event_loop(MalVm *vm) {
         if (mal_gc_terminating()) break;
         if (mal_host_termination_check != nullptr && mal_host_termination_check(vm)) break;
         mal_vm_drain_microtasks(vm);
+        if (stop != nullptr && stop(vm, data)) break;
         if (!mal_vm_check_entry_evaluation(vm)) break;
         if (vm->completion.kind == MAL_COMPLETION_THROW) break;
         if (mal_host_termination_check != nullptr && mal_host_termination_check(vm)) break;
@@ -370,7 +371,7 @@ void mal_host_run_event_loop(MalVm *vm) {
 			if (mal_gc_poll) mal_gc_safepoint(vm);
 			continue;
         }
-        if (!progressed || mal_host_idle_notify == nullptr) {
+        if (stop != nullptr || !progressed || mal_host_idle_notify == nullptr) {
             break;
         }
         progressed = false;
@@ -380,6 +381,10 @@ void mal_host_run_event_loop(MalVm *vm) {
         if (mal_gc_poll) mal_gc_safepoint(vm);
     }
     mal_gc_set_mutator_busy(vm, false);
+}
+
+void mal_host_run_event_loop(MalVm *vm) {
+    mal_host_run_event_loop_until(vm, nullptr, nullptr);
 }
 
 void mal_host_timers_free(MalVm *vm) {

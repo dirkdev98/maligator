@@ -24,6 +24,7 @@ describe("@maligator/cli public TypeScript API", () => {
 			path.join(packageDirectory, "index.d.ts"),
 		);
 		for (const declaration of [
+			"application-api.d.ts",
 			"test-api.d.ts",
 			"platform-api.d.ts",
 			"process-api.d.ts",

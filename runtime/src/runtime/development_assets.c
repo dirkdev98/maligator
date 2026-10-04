@@ -2,6 +2,7 @@
 
 #include <limits.h>
 #include <stdio.h>
+#include <stdatomic.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -12,6 +13,7 @@ typedef struct AssetReader {
 } AssetReader;
 
 struct MalDevelopmentAssets {
+    _Atomic(u32) refs;
     i32 count;
     MalAsset *assets;
 };
@@ -76,7 +78,7 @@ static u8 *asset_read_file(const char *path, usize *out_length) {
         fclose(file);
         return nullptr;
     }
-    u8 *bytes = malloc((usize) length);
+    u8 *bytes = malloc(length == 0 ? 1 : (usize) length);
     if (bytes == nullptr || fread(bytes, 1, (usize) length, file) != (usize) length) {
         free(bytes);
         fclose(file);
@@ -88,7 +90,7 @@ static u8 *asset_read_file(const char *path, usize *out_length) {
 }
 
 void mal_development_assets_free(MalDevelopmentAssets *assets) {
-    if (assets == nullptr) return;
+    if (assets == nullptr || atomic_fetch_sub_explicit(&assets->refs, 1, memory_order_acq_rel) != 1) return;
     for (i32 asset_index = 0; asset_index < assets->count; asset_index++) {
         MalAsset *asset = &assets->assets[asset_index];
         free((void *) asset->name);
@@ -98,6 +100,7 @@ void mal_development_assets_free(MalDevelopmentAssets *assets) {
             const MalAssetFile *file = &asset->files[file_index];
             free((void *) file->path);
             free((void *) file->source_path);
+            free((void *) file->data);
         }
         free((void *) asset->files);
     }
@@ -125,10 +128,11 @@ MalDevelopmentAssets *mal_development_assets_load(const char *path, const char *
 
     MalDevelopmentAssets *result = calloc(1, sizeof(MalDevelopmentAssets));
     if (result == nullptr) reader.failed = true;
+    else atomic_init(&result->refs, 1);
     if (!reader.failed) {
-        result->count = (i32) count;
         result->assets = calloc(count, sizeof(MalAsset));
         if (count != 0 && result->assets == nullptr) reader.failed = true;
+        else result->count = (i32) count;
     }
     for (u32 asset_index = 0; !reader.failed && asset_index < count; asset_index++) {
         MalAsset *asset = &result->assets[asset_index];
@@ -139,10 +143,10 @@ MalDevelopmentAssets *mal_development_assets_load(const char *path, const char *
         u32 file_count = asset_u32(&reader);
         if (directory > 1 || file_count > INT32_MAX) reader.failed = true;
         asset->directory = directory != 0;
-        asset->file_count = (i32) file_count;
         MalAssetFile *files = calloc(file_count, sizeof(MalAssetFile));
         asset->files = files;
         if (file_count != 0 && files == nullptr) reader.failed = true;
+        else asset->file_count = (i32) file_count;
         for (u32 file_index = 0; !reader.failed && file_index < file_count; file_index++) {
             files[file_index].path = asset_string(&reader);
             files[file_index].source_path = asset_string(&reader);
@@ -164,4 +168,25 @@ const MalAsset *mal_development_assets_get(
     const MalDevelopmentAssets *assets, i32 *out_count) {
     *out_count = assets->count;
     return assets->assets;
+}
+
+void mal_development_assets_retain(MalDevelopmentAssets *assets) {
+    if (assets != nullptr) atomic_fetch_add_explicit(&assets->refs, 1, memory_order_relaxed);
+}
+
+bool mal_development_assets_snapshot(MalDevelopmentAssets *assets) {
+    for (i32 index = 0; index < assets->count; index++) {
+        MalAsset *asset = &assets->assets[index];
+        MalAssetFile *files = (MalAssetFile *) asset->files;
+        for (i32 file = 0; file < asset->file_count; file++) {
+            if (files[file].data != nullptr) continue;
+            usize length = 0;
+            u8 *bytes = asset_read_file(files[file].source_path, &length);
+            if (bytes == nullptr || length != files[file].length) { free(bytes); return false; }
+            files[file].data = bytes;
+            free((void *) files[file].source_path);
+            files[file].source_path = nullptr;
+        }
+    }
+    return true;
 }
