@@ -1,20 +1,27 @@
+import type { WorkerUrl, Worker as WorkerInstance } from "maligator:workers";
+import type { DomainGlobals, GenerationResult } from "./types.ts";
+const globals = globalThis as typeof globalThis & DomainGlobals;
 import { createWorkerUrl, Worker } from "maligator:workers";
 
-function check(value, message) {
+function check(value: unknown, message: string) {
 	if (!value) throw new Error(message);
 }
 
-function request(worker, command) {
-	const response = new Promise((resolve) => {
-		worker.port.addEventListener("message", (event) => resolve(event.data), {
-			once: true,
-		});
+function request(worker: WorkerInstance, command: unknown) {
+	const response = new Promise<GenerationResult>((resolve) => {
+		worker.port.addEventListener(
+			"message",
+			(event) => resolve((event as MessageEvent<GenerationResult>).data),
+			{
+				once: true,
+			},
+		);
 	});
 	worker.port.postMessage(command);
 	return response;
 }
 
-async function inspect(url, expected) {
+async function inspect(url: WorkerUrl, expected: string) {
 	const worker = new Worker(url);
 	await worker.ready;
 	const result = await request(worker, "leaf");
@@ -25,17 +32,17 @@ async function inspect(url, expected) {
 	await worker.terminate();
 }
 
-if (globalThis.savedPhase) {
-	await inspect(globalThis.takeDomainUrl(), "first");
-	globalThis.domainPassed();
+if (globals.savedPhase) {
+	await inspect(globals.takeDomainUrl(), "first");
+	globals.domainPassed();
 } else {
-	const first = globalThis.initialGeneration;
+	const first = globals.initialGeneration;
 	const second = first === "first" ? "second" : "first";
-	const oldUrl = createWorkerUrl("./worker.mjs", import.meta.url);
+	const oldUrl = createWorkerUrl("./worker.mts", import.meta.url);
 	const oldWorker = new Worker(oldUrl);
 	await oldWorker.ready;
-	globalThis.switchImageDomain();
-	const nextUrl = createWorkerUrl("./worker.mjs", import.meta.url);
+	globals.switchImageDomain();
+	const nextUrl = createWorkerUrl("./worker.mts", import.meta.url);
 	check(
 		nextUrl.href === oldUrl.href && nextUrl !== oldUrl,
 		"same href has distinct generations",
@@ -52,7 +59,7 @@ if (globalThis.savedPhase) {
 		"live worker retains its child domain",
 	);
 
-	const receiver = new Worker(createWorkerUrl("./receiver.mjs", import.meta.url));
+	const receiver = new Worker(createWorkerUrl("./receiver.mts", import.meta.url));
 	await receiver.ready;
 	const transported = await request(receiver, oldUrl);
 	check(
@@ -61,9 +68,9 @@ if (globalThis.savedPhase) {
 	);
 	await receiver.terminate();
 
-	const getterWorker = new Worker(nextUrl.href, {
+	const getterWorker = new Worker(nextUrl.href as unknown as WorkerUrl, {
 		get data() {
-			globalThis.switchImageDomain();
+			globals.switchImageDomain();
 			return null;
 		},
 	});
@@ -75,12 +82,12 @@ if (globalThis.savedPhase) {
 	);
 	await getterWorker.terminate();
 	await oldWorker.terminate();
-	if (globalThis.savePhase) globalThis.saveDomainUrl(oldUrl);
-	for (let index = 0; index < 16; index++) globalThis.switchImageDomain();
+	if (globals.savePhase) globals.saveDomainUrl(oldUrl);
+	for (let index = 0; index < 16; index++) globals.switchImageDomain();
 
 	const ownedTree = new Worker(oldUrl);
 	await ownedTree.ready;
 	await request(ownedTree, "park-child");
 	ownedTree.unref();
-	globalThis.domainPassed();
+	globals.domainPassed();
 }

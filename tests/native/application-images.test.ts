@@ -11,6 +11,7 @@ import {
 import * as path from "node:path";
 import { pathToFileURL } from "node:url";
 import { expect, it } from "vitest";
+import type { ApplicationImageDescriptor } from "../../src/application-images.ts";
 import { buildDerivationFromConfig, resolveBuildConfig } from "../../src/build-config.ts";
 import type { MaligatorBuildConfig } from "../../src/build-config.ts";
 import { stripCompactTypes } from "../../src/compiler/frontend/compact-type-strip.ts";
@@ -44,7 +45,7 @@ const nodeOnlyConfig = resolveBuildConfig({
 	engine,
 });
 function image(name: string, generation = "first", buildConfig = config) {
-	const entrypoint = path.join(fixtures, `${name}.mjs`);
+	const entrypoint = path.join(fixtures, `${name}.mts`);
 	return compileEntrypoint(entrypoint, {
 		buildConfig,
 		stripTypes: stripCompactTypes,
@@ -98,19 +99,19 @@ function descriptor(directory: string, generation: string) {
 			schema: 1,
 			entries: [
 				{
-					href: pathToFileURL(path.join(fixtures, "worker.mjs")).href,
+					href: pathToFileURL(path.join(fixtures, "worker.mts")).href,
 					wirePath: child.path,
 					sha256: child.sha256,
 				},
 			],
 		}),
 	);
-	const descriptor = {
+	const descriptor: ApplicationImageDescriptor = {
 		schema: 1,
 		wires: [wire(directory, "fragment", generation), wire(directory, "app", generation)],
 		workerManifestPath,
 		assetManifestPath: assetManifest(directory, generation),
-		entryPath: path.join(fixtures, "app.mjs"),
+		entryPath: path.join(fixtures, "app.mts"),
 		webPlatform: true,
 		node: true,
 		engine: {
@@ -137,7 +138,9 @@ for (const compiled of [true, false]) {
 				descriptor(directory, "first"),
 				descriptor(directory, "second"),
 			];
-			const unresolved = JSON.parse(readFileSync(descriptors[0]!, "utf8"));
+			const unresolved = JSON.parse(
+				readFileSync(descriptors[0]!, "utf8"),
+			) as ApplicationImageDescriptor;
 			unresolved.wires = [wire(directory, "unresolved", "third")];
 			delete unresolved.workerManifestPath;
 			delete unresolved.assetManifestPath;
@@ -147,7 +150,7 @@ for (const compiled of [true, false]) {
 			const nodeOnly = {
 				...unresolved,
 				wires: [wire(directory, "node-only", "node-only", nodeOnlyConfig)],
-				entryPath: path.join(fixtures, "node-only.mjs"),
+				entryPath: path.join(fixtures, "node-only.mts"),
 				webPlatform: false,
 			};
 			const nodeOnlyPath = path.join(directory, "node-only.json");
@@ -214,7 +217,7 @@ for (const compiled of [true, false]) {
 			passed = true;
 		} finally {
 			if (passed) rmSync(directory, { recursive: true, force: true });
-			else console.error(`Application image failure evidence: ${directory}`);
+			else process.stderr.write(`Application image failure evidence: ${directory}\n`);
 		}
 	}, 300_000);
 }

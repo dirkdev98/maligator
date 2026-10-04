@@ -28,7 +28,7 @@ const config = resolveBuildConfig({ surface: { webPlatform: true, node: false } 
 
 function writeDomain(directory: string, generation: "first" | "second"): string {
 	const entries = ["worker", "leaf", "receiver"].map((name) => {
-		const entrypoint = path.join(fixtures, `${name}.mjs`);
+		const entrypoint = path.join(fixtures, `${name}.mts`);
 		const source = readFileSync(entrypoint, "utf8").replace(
 			'const generation = "first";',
 			`const generation = "${generation}";`,
@@ -61,7 +61,7 @@ for (const compiled of [true, false]) {
 				writeDomain(directory, "second"),
 			];
 			const binary = buildNativeBinary({
-				fixture: path.join(fixtures, "main.mjs"),
+				fixture: path.join(fixtures, "main.mts"),
 				mainFile: path.join(fixtures, "main.c"),
 				name: `image-domains-${compiled ? "native" : "interpreted"}`,
 				outDir: directory,
@@ -85,7 +85,7 @@ for (const compiled of [true, false]) {
 				);
 				mkdirSync(evidence, { recursive: true });
 				cpSync(directory, evidence, { recursive: true });
-				console.error(`Image domain failure evidence: ${evidence}`);
+				process.stderr.write(`Image domain failure evidence: ${evidence}\n`);
 			}
 			if (result.error !== undefined) throw result.error;
 			expect(

@@ -1,31 +1,39 @@
+import type { FixtureBridge } from "./types.ts";
+const bridge = mal as unknown as FixtureBridge;
 import process from "node:process";
 import { isMainThread, threadId, parentPort, workerData } from "node:worker_threads";
 import { ready } from "maligator:application";
 import { createWorkerUrl, Worker } from "maligator:workers";
+import type { ApplicationData, ChildResult, FixtureGlobals } from "./types.ts";
 const generation = "first";
 
-const data = mal._applicationData();
+const data = bridge._applicationData() as ApplicationData;
+const globals = globalThis as typeof globalThis & FixtureGlobals;
 if (data.mode === "reject") await Promise.reject(new Error("application TLA rejected"));
 if (data.mode === "unresolved") await new Promise(() => {});
 if (data.mode === "exit") process.exit(7);
 if (data.mode === "throw-result") {
-	mal._applicationResult("before throw");
+	bridge._applicationResult("before throw");
 	throw new Error("after result");
 }
-globalThis.launchCount = (globalThis.launchCount || 0) + 1;
-const url = createWorkerUrl("./worker.mjs", import.meta.url);
+globals.launchCount = (globals.launchCount || 0) + 1;
+const url = createWorkerUrl("./worker.mts", import.meta.url);
 const child = new Worker(url);
 await child.ready;
-const childResult = new Promise((resolve) =>
-	child.port.addEventListener("message", (event) => resolve(event.data), { once: true }),
-);
+const childResult = new Promise<ChildResult>((resolve) => {
+	child.port.addEventListener(
+		"message",
+		(event) => resolve((event as MessageEvent<ChildResult>).data),
+		{ once: true },
+	);
+});
 child.port.postMessage(null);
 const response = await Promise.race([
 	childResult,
 	child.closed.then((exit) => {
-		throw (
-			exit.error || new Error(`child exited without a response ${JSON.stringify(exit)}`)
-		);
+		throw exit.error instanceof Error
+			? exit.error
+			: new Error(`child exited without a response ${JSON.stringify(exit)}`);
 	}),
 ]);
 setInterval(() => {}, 1000);
@@ -34,7 +42,7 @@ setInterval(() => {
 	if (ready() !== true || ready() !== true)
 		throw new Error("application readiness must be idempotent");
 	if (data.mode === "park") return;
-	mal._applicationResult(
+	bridge._applicationResult(
 		data.mode === "undefined"
 			? undefined
 			: {
@@ -43,12 +51,12 @@ setInterval(() => {
 					main: isMainThread,
 					threadId,
 					parentPort,
-					workerData,
+					workerData: workerData as unknown,
 					argv: process.argv,
-					count: globalThis.launchCount,
-					order: globalThis.fragmentOrder,
+					count: globals.launchCount,
+					order: globals.fragmentOrder,
 					data,
-					resources: mal._applicationResources(),
+					resources: bridge._applicationResources(),
 					url,
 				},
 	);
