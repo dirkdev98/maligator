@@ -12608,6 +12608,7 @@
 			["bits", "7ff8000000000003"]
 		],
 		["MAL_INTRINSIC_WRITABLE_STREAM_PROTOTYPE", ["bits", "7ff8000000000003"]],
+		["mal_host_install_maligator_application:ready", ["runtime", "primitive"]],
 		[
 			"mal_host_install_maligator_internal_workers:MessageChannel",
 			["runtime", "primitive"]

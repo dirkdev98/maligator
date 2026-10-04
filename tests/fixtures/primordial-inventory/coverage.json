@@ -22290,6 +22290,32 @@
 			"decisions": []
 		},
 		{
+			"id": "[\"%mal_host_install_maligator_application:ready%\",\"length\"]",
+			"owner": "%mal_host_install_maligator_application:ready%",
+			"ownerPaths": [
+				"%mal_host_install_maligator_application:ready%",
+				"mal_host_install_maligator_application:ready"
+			],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%mal_host_install_maligator_application:ready%\",\"name\"]",
+			"owner": "%mal_host_install_maligator_application:ready%",
+			"ownerPaths": [
+				"%mal_host_install_maligator_application:ready%",
+				"mal_host_install_maligator_application:ready"
+			],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
 			"id": "[\"%mal_host_install_maligator_internal_workers:MessageChannel%\",\"length\"]",
 			"owner": "%mal_host_install_maligator_internal_workers:MessageChannel%",
 			"ownerPaths": [
@@ -101200,6 +101226,32 @@
 			"kind": "construct",
 			"operations": ["%MAL_INTRINSIC_URL_SEARCH_PARAMS_ITERATOR_PROTOTYPE%.next"],
 			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%mal_host_install_maligator_application:ready%\",\"<call>\"]",
+			"owner": "%mal_host_install_maligator_application:ready%",
+			"ownerPaths": [
+				"%mal_host_install_maligator_application:ready%",
+				"mal_host_install_maligator_application:ready"
+			],
+			"key": "<call>",
+			"kind": "call",
+			"operations": ["%mal_host_install_maligator_application:ready%"],
+			"task": "N-05",
+			"decisions": []
+		},
+		{
+			"id": "[\"%mal_host_install_maligator_application:ready%\",\"<construct>\"]",
+			"owner": "%mal_host_install_maligator_application:ready%",
+			"ownerPaths": [
+				"%mal_host_install_maligator_application:ready%",
+				"mal_host_install_maligator_application:ready"
+			],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": ["%mal_host_install_maligator_application:ready%"],
+			"task": "N-05",
 			"decisions": []
 		},
 		{
@@ -214154,6 +214206,16 @@
 			"decisions": []
 		},
 		{
+			"id": "[\"[[roots]]\",\"mal_host_install_maligator_application:ready\"]",
+			"owner": "[[roots]]",
+			"ownerPaths": ["[[roots]]"],
+			"key": "mal_host_install_maligator_application:ready",
+			"kind": "binding",
+			"operations": ["%mal_host_install_maligator_application:ready%"],
+			"task": "N-05",
+			"decisions": []
+		},
+		{
 			"id": "[\"[[roots]]\",\"mal_host_install_maligator_internal_workers:MessageChannel\"]",
 			"owner": "[[roots]]",
 			"ownerPaths": ["[[roots]]"],
@@ -219591,6 +219653,10 @@
 		{
 			"id": "%MAL_INTRINSIC_URL_SEARCH_PARAMS_ITERATOR_PROTOTYPE%.next",
 			"identities": ["%MAL_INTRINSIC_URL_SEARCH_PARAMS_ITERATOR_PROTOTYPE%.next"]
+		},
+		{
+			"id": "%mal_host_install_maligator_application:ready%",
+			"identities": ["%mal_host_install_maligator_application:ready%"]
 		},
 		{
 			"id": "%mal_host_install_maligator_internal_workers:MessageChannel%",
