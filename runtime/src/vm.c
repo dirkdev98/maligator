@@ -1013,7 +1013,6 @@ void mal_vm_free(MalVm *vm) {
         }
         free(vm->property_cache);
     }
-    mal_object_release_idle_prototype_dependencies();
     if (vm->literal_shape_cache != nullptr) {
         for (i32 i = 0; i < vm->runtime_image->function_count; i++) {
             free(vm->literal_shape_cache[i]);
@@ -1099,6 +1098,8 @@ void mal_vm_free(MalVm *vm) {
     // so a teardown leaves no shutdown leak (mal_heap_free only munmaps the
     // chunks + frees LOS records; it does not run per-cell finalizers).
     mal_gc_finalize_all(vm);
+    // Other VMs on this thread may still own dependency rows; release only after all of ours are detached.
+    mal_object_release_idle_prototype_dependencies();
     mal_vm_free_job_pool(vm);
     mal_promise_free_reaction_pool(vm);
     mal_vm_free_coroutine_buffer_pool(vm);

@@ -1,6 +1,7 @@
 import type { FixtureBridge } from "./types.ts";
 const bridge = mal as unknown as FixtureBridge;
 import { readFileSync, unlinkSync } from "node:fs";
+import { createServer } from "node:http";
 import process from "node:process";
 import { ready } from "maligator:application";
 import { Worker } from "maligator:workers";
@@ -99,11 +100,35 @@ check(
 bridge._releaseApplicationImage(unresolvedHandle);
 scopedResources(0, 0, 0);
 const nodeOnlyHandle = load(nodeOnly);
-const nodeOnlyExit = await launch(nodeOnlyHandle).closed;
+for (let iteration = 0; iteration < 3; iteration++) {
+	const nodeOnlyExit = await launch(nodeOnlyHandle).closed;
+	check(
+		nodeOnlyExit.reason === "completed" &&
+			(nodeOnlyExit.result as { answer: number }).answer === 42,
+		`Node-only fetch uses fresh stream globals: ${(nodeOnlyExit.error as Error | undefined)?.stack || JSON.stringify(nodeOnlyExit)}`,
+	);
+}
+const liveHttpExit = await launch(nodeOnlyHandle, "http-live-result").closed;
+check(liveHttpExit.reason === "completed", "result closes live HTTP server");
+const liveHttpResult = liveHttpExit.result as {
+	result: { answer: number };
+	port: number;
+};
+check(liveHttpResult.result.answer === 42, "live server reports response snapshot");
+const reboundServer = createServer();
+await new Promise<void>((resolve) => {
+	reboundServer.listen(liveHttpResult.port, "127.0.0.1", resolve);
+});
+await new Promise<void>((resolve) => {
+	reboundServer.close(() => resolve());
+});
+const parkedHttp = launch(nodeOnlyHandle, "http-park");
+await parkedHttp.applicationReady;
+await parkedHttp.ready;
+const parkedHttpExit = await parkedHttp.terminate();
 check(
-	nodeOnlyExit.reason === "completed" &&
-		(nodeOnlyExit.result as { answer: number }).answer === 42,
-	`Node-only fetch uses fresh stream globals: ${(nodeOnlyExit.error as Error | undefined)?.stack || JSON.stringify(nodeOnlyExit)}`,
+	parkedHttpExit.reason === "terminated" && !parkedHttpExit.hasResult,
+	"terminate closes active HTTP client, server and uncompleted request",
 );
 bridge._releaseApplicationImage(nodeOnlyHandle);
 scopedResources(0, 0, 0);

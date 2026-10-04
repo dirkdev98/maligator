@@ -2065,6 +2065,60 @@ static void http_client_free(MalNodeHttpClientState *state) {
     free(state);
 }
 
+static void http_cleanup(MalVm *vm) {
+    MalHost *host = mal_host(vm);
+    MalNodeHttpServerState **server_link = &http_servers;
+    while (*server_link != nullptr) {
+        MalNodeHttpServerState *state = *server_link;
+        if (state->vm != vm) {
+            server_link = &state->next;
+            continue;
+        }
+        // Transport callbacks retain request/server state until every connection is closed.
+        if (state->native != nullptr) {
+            mal_http_server_close_connections(state->native, false);
+            if (state->native != nullptr) {
+                mal_http_server_close(state->native, http_native_close_complete, state);
+            }
+        }
+        *server_link = state->next;
+        free(state);
+    }
+    if (host != nullptr) {
+        host->ready_http_requests = nullptr;
+        host->ready_http_requests_tail = nullptr;
+        host->pending_http_completions = 0;
+    }
+    MalNodeHttpRequestState *request = http_requests;
+    while (request != nullptr) {
+        MalNodeHttpRequestState *next = request->next;
+        if (request->vm == vm) http_request_remove(request);
+        request = next;
+    }
+    MalNodeHttpClientState **client_link = &http_clients;
+    while (*client_link != nullptr) {
+        MalNodeHttpClientState *state = *client_link;
+        if (state->vm != vm) {
+            client_link = &state->next;
+            continue;
+        }
+        (void) mal_http_client_cancel(host, state->operation);
+        *client_link = state->next;
+        http_client_free(state);
+    }
+    // The indices are shared by VMs on this mutator; live rows keep their storage.
+    if (http_response_index_count == 0) {
+        free(http_response_index);
+        http_response_index = nullptr;
+        http_response_index_capacity = 0;
+    }
+    if (http_request_index_count == 0) {
+        free(http_request_index);
+        http_request_index = nullptr;
+        http_request_index_capacity = 0;
+    }
+}
+
 static bool http_client_ascii_string(
     MalVm *vm, MalValue value, char **out, usize *length) {
     MalString *string;
@@ -5030,6 +5084,10 @@ static void http_install_exports(
 void mal_host_install_node_http(
     MalVm *vm, const MalHostInstallSlot *slots, i32 count,
     const MalHostLaunchContext *launch) {
+    if (!mal_vm_register_runtime_cleanup(vm, http_cleanup)) {
+        mal_vm_throw_allocation_error(vm);
+        return;
+    }
     MalValue cached = vm->intrinsics[MAL_INTRINSIC_NODE_HTTP_MODULE];
     if (!mal_value_is_undefined(cached)) {
         http_install_exports(vm, slots, count, cached);
