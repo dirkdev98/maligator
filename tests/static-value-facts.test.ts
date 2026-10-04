@@ -417,6 +417,33 @@ describe("static descriptions and allocation identities", () => {
 		},
 	);
 
+	it("retains operand proof budget when a specialized producer is unsupported", () => {
+		const program = new CoreProgram(coreOpcodeRegistry);
+		const builder = new CoreFunctionBuilder(program);
+		const entry = builder.createBlock();
+		const [value] = builder.appendInstruction(entry, "createNumber", [], {
+			attributes: { value: 7 },
+		});
+		const [result] = builder.appendInstruction(entry, "typeofCompare", [value!], {
+			attributes: { expected: "number", negated: false },
+		});
+		builder.setTerminator(entry, { kind: "return", value: result! });
+		const fn = program.function(builder.finish(entry).function);
+		const facts = new CoreStaticValueAnalysis(
+			program,
+			fn,
+			() => buildCoreControlFlow(program, fn.id),
+			2,
+		);
+		expect(facts.query(result!)).toEqual({
+			kind: "unknown",
+			reason: "unsupported-producer",
+		});
+		expect(facts.statistics.visits).toBe(1);
+		expect(facts.constant(value!)).toEqual({ kind: "number", value: 7 });
+		expect(facts.statistics.budgetBailouts).toBe(0);
+	});
+
 	it("still infers a string addition result when its first operand is unknown", () => {
 		const program = new CoreProgram(coreOpcodeRegistry, { stringConstants: [[120]] });
 		const builder = new CoreFunctionBuilder(program, { parameterCount: 1 });

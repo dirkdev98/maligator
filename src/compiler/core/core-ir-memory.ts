@@ -518,7 +518,7 @@ function prepareMemoryVersions(
 	const locationTable = new CoreMemoryLocationTable();
 	const rawAccesses = new Map<CoreInstructionId, ReadonlyArray<CoreMemoryAccess>>();
 	const resolvedAccesses = new Map<CoreInstructionId, ReadonlyArray<CoreMemoryAccess>>();
-	const instructionOrder = new Map<CoreInstructionId, number>();
+	let instructionOrder: Int32Array;
 	const exactInstructions = new Map<CoreMemoryLocationId, Set<CoreInstructionId>>();
 	const exactReads = new Set<CoreMemoryLocationId>();
 	const familyCheckpoints = new Map<CoreMemoryFamily, Set<CoreInstructionId>>();
@@ -543,6 +543,8 @@ function prepareMemoryVersions(
 	const ensureIndex = (): void => {
 		if (indexed) return;
 		runOwner(CORE_OPTIMIZATION_OWNER.memoryEventExtraction, () => {
+			instructionOrder = new Int32Array(fn.instructionCapacity);
+			instructionOrder.fill(-1);
 			let indexedInstructions = 0,
 				accesses = 0;
 			for (const block of fn.blockIds()) {
@@ -558,7 +560,7 @@ function prepareMemoryVersions(
 						!descriptor.effects.maySuspend
 					)
 						continue;
-					instructionOrder.set(instruction, order);
+					instructionOrder[instruction] = order;
 					const effects = coreInstructionEffects(fn, instruction);
 					const raw =
 						(descriptor.accesses?.length ?? 0) === 0
@@ -766,11 +768,13 @@ function prepareMemoryVersions(
 			let events = 0,
 				compactedEvents = 0,
 				familyWidenings = 0;
-			const ordered = [...instructions].sort(
-				(left, right) => instructionOrder.get(left)! - instructionOrder.get(right)!,
-			);
+			const ordered = [...instructions].sort((left, right) => {
+				const leftOrder = instructionOrder[left]!,
+					rightOrder = instructionOrder[right]!;
+				return leftOrder < 0 || rightOrder < 0 ? NaN : leftOrder - rightOrder;
+			});
 			for (const instruction of ordered) {
-				if (!instructionOrder.has(instruction)) continue;
+				if ((instructionOrder[instruction] ?? -1) < 0) continue;
 				const raw = rawAccesses.get(instruction) ?? [];
 				let reads = false,
 					defines = false,
@@ -1036,51 +1040,55 @@ function prepareMemoryVersions(
 					transfers++;
 				}
 			}
-			const aliases = new Map<number, number>();
-			const resolveVersion = (version: number): number => {
-				let resolved = version;
-				while (aliases.has(resolved)) resolved = aliases.get(resolved)!;
-				let current = version;
-				while (aliases.has(current) && aliases.get(current) !== resolved) {
-					const next = aliases.get(current)!;
-					aliases.set(current, resolved);
-					current = next;
-				}
-				return resolved;
-			};
-			const dependentPhis = new Map<number, Set<number>>();
-			for (const [phi, operands] of phiOperands) {
-				for (const operand of operands) {
-					const dependents = dependentPhis.get(operand) ?? new Set<number>();
-					dependents.add(phi);
-					dependentPhis.set(operand, dependents);
-				}
-			}
-			const trivialPhiPending = [...phiOperands.keys()];
-			for (let next = 0; next < trivialPhiPending.length; next++) {
-				const phi = trivialPhiPending[next]!;
-				if (aliases.has(phi)) continue;
-				let replacement: number | undefined;
-				let conflicting = false;
-				for (const operand of phiOperands.get(phi)!) {
-					const resolved = resolveVersion(operand);
-					if (resolved === phi) continue;
-					if (replacement === undefined) replacement = resolved;
-					else if (replacement !== resolved) {
-						conflicting = true;
-						break;
+			let collapsedPhis = 0;
+			if (phiOperands.size > 0) {
+				const aliases = new Map<number, number>();
+				const resolveVersion = (version: number): number => {
+					let resolved = version;
+					while (aliases.has(resolved)) resolved = aliases.get(resolved)!;
+					let current = version;
+					while (aliases.has(current) && aliases.get(current) !== resolved) {
+						const next = aliases.get(current)!;
+						aliases.set(current, resolved);
+						current = next;
+					}
+					return resolved;
+				};
+				const dependentPhis = new Map<number, Set<number>>();
+				for (const [phi, operands] of phiOperands) {
+					for (const operand of operands) {
+						const dependents = dependentPhis.get(operand) ?? new Set<number>();
+						dependents.add(phi);
+						dependentPhis.set(operand, dependents);
 					}
 				}
-				if (replacement === undefined || conflicting) continue;
-				aliases.set(phi, replacement);
-				trivialPhiPending.push(...(dependentPhis.get(phi) ?? []));
+				const trivialPhiPending = [...phiOperands.keys()];
+				for (let next = 0; next < trivialPhiPending.length; next++) {
+					const phi = trivialPhiPending[next]!;
+					if (aliases.has(phi)) continue;
+					let replacement: number | undefined;
+					let conflicting = false;
+					for (const operand of phiOperands.get(phi)!) {
+						const resolved = resolveVersion(operand);
+						if (resolved === phi) continue;
+						if (replacement === undefined) replacement = resolved;
+						else if (replacement !== resolved) {
+							conflicting = true;
+							break;
+						}
+					}
+					if (replacement === undefined || conflicting) continue;
+					aliases.set(phi, replacement);
+					trivialPhiPending.push(...(dependentPhis.get(phi) ?? []));
+				}
+				collapsedPhis = aliases.size;
+				if (collapsedPhis > 0)
+					for (const [instruction, version] of readVersions)
+						readVersions.set(instruction, resolveVersion(version));
 			}
 
 			const previousRows = solvedReads.size;
-			for (const [instruction, version] of readVersions) {
-				readVersions.set(instruction, resolveVersion(version));
-				solvedReads.add(instruction);
-			}
+			for (const instruction of readVersions.keys()) solvedReads.add(instruction);
 			const delta = {
 				solvedPartitions: 1,
 				stateRows: solvedReads.size - previousRows + phiOperands.size,
@@ -1090,7 +1098,7 @@ function prepareMemoryVersions(
 						(total, operands) => total + operands.length,
 						0,
 					),
-				phis: phiOperands.size - aliases.size,
+				phis: phiOperands.size - collapsedPhis,
 				transfers,
 				blockUpdates: phiOperands.size,
 			};

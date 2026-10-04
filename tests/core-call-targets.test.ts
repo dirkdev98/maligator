@@ -15,6 +15,7 @@ import {
 	joinCoreCalleeTargets,
 } from "../src/compiler/core/core-ir-call-targets.ts";
 import type { CoreCalleeTargets } from "../src/compiler/core/core-ir-call-targets.ts";
+import { verifyCoreProgram } from "../src/compiler/core/core-ir-verifier.ts";
 import { coreFunctionId } from "../src/compiler/core/core-ir.ts";
 import { CoreOptimizationReportBuilder } from "../src/compiler/core/core-optimization-report.ts";
 import { CORE_CALL_GRAPH_ANALYSIS } from "../src/compiler/core/core-program-flow-analysis.ts";
@@ -315,6 +316,73 @@ describe("incremental Core call graph", () => {
 
 		expect(afterRepresentation).toBe(first);
 		expect(afterSource).toBe(first);
+	});
+
+	it("propagates forward uses and self-loop targets into ordinary and exceptional successors", () => {
+		const program = analysisProgram();
+		const builder = new CoreFunctionBuilder(program);
+		const entry = builder.createBlock();
+		const loop = builder.createBlock([{}]);
+		const exit = builder.createBlock([{}]);
+		const handler = builder.createBlock([{ role: "exception" }, {}]);
+		const [initial] = builder.appendInstruction(entry, "createFunction", [], {
+			attributes: { functionIndex: 1 },
+		});
+		const [receiver] = builder.appendInstruction(entry, "createUndefined", []);
+		const [condition] = builder.appendInstruction(entry, "createBoolean", [], {
+			attributes: { value: true },
+		});
+		builder.setTerminator(entry, {
+			kind: "jump",
+			edge: { block: loop, arguments: [initial!] },
+		});
+		const callee = builder.blockParameterValue(loop, 0);
+		const [copy] = builder.appendInstruction(loop, "move", [callee]);
+		const [alias] = builder.appendInstruction(loop, "move", [copy!]);
+		builder.appendInstruction(loop, "call", [alias!, receiver!]);
+		const loopCall = builder.bodyInstructionIds(loop).at(-1)!;
+		const [backedge] = builder.appendInstruction(loop, "createFunction", [], {
+			attributes: { functionIndex: 2 },
+		});
+		builder.setHandler(loop, handler, [callee]);
+		builder.setTerminator(loop, {
+			kind: "branch",
+			condition: condition!,
+			consequent: { block: loop, arguments: [backedge!] },
+			alternate: { block: exit, arguments: [alias!] },
+		});
+		const [exitResult] = builder.appendInstruction(exit, "call", [
+			builder.blockParameterValue(exit, 0),
+			receiver!,
+		]);
+		const exitCall = builder.bodyInstructionIds(exit).at(-1)!;
+		builder.setTerminator(exit, { kind: "return", value: exitResult! });
+		const [handlerAlias] = builder.appendInstruction(handler, "move", [
+			builder.blockParameterValue(handler, 1),
+		]);
+		const [handlerResult] = builder.appendInstruction(handler, "call", [
+			handlerAlias!,
+			receiver!,
+		]);
+		const handlerCall = builder.bodyInstructionIds(handler).at(-1)!;
+		builder.setTerminator(handler, { kind: "return", value: handlerResult! });
+		const caller = builder.finish(entry).function;
+		appendLeaf(program);
+		appendLeaf(program);
+		verifyCoreProgram(program);
+		const manager = new CoreAnalysisManager(
+			program,
+			programAnalysisContext(),
+			new CoreOptimizationReportBuilder(program),
+		);
+		const targets = manager.get(CORE_CALL_GRAPH_ANALYSIS, { scope: "program" });
+		for (const call of [loopCall, exitCall, handlerCall])
+			expect(targets.site(caller, call)?.targets).toEqual({
+				functions: [1, 2],
+				anyScript: false,
+				opaque: false,
+				nonCallable: false,
+			});
 	});
 
 	it("revisits only dependent blocks when a loop adds a callee target", () => {

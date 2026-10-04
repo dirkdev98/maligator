@@ -119,17 +119,15 @@ export function normalizeEffectDomains(
 	domains: ReadonlyArray<EffectDomain>,
 ): ReadonlyArray<EffectDomain> {
 	if (domains.length <= 1) return domains.length === 0 ? NO_DOMAINS : domains;
-	const seen = new Set(domains);
-	if (seen.size === domains.length) {
-		let ordered = true;
-		for (let index = 1; index < domains.length; index += 1) {
-			if (DOMAIN_ORDER.get(domains[index - 1]!)! >= DOMAIN_ORDER.get(domains[index]!)!) {
-				ordered = false;
-				break;
-			}
+	let ordered = true;
+	for (let index = 1; index < domains.length; index += 1) {
+		if (DOMAIN_ORDER.get(domains[index - 1]!)! >= DOMAIN_ORDER.get(domains[index]!)!) {
+			ordered = false;
+			break;
 		}
-		if (ordered) return domains;
 	}
+	if (ordered) return domains;
+	const seen = new Set(domains);
 	return EFFECT_DOMAINS.filter((domain) => seen.has(domain));
 }
 

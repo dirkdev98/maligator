@@ -291,8 +291,11 @@ export class CoreFunctionPassScheduler {
 			}
 			const remainingEdits = pass.budget.maxEdits - used.edits;
 			const owner = passOwner(pass);
-			const runPass = () => pass.run(passContext.prepare(remainingEdits));
-			const changes = this.#report.measureOwner(owner, runPass);
+			const changes = this.#report.collectsDetails
+				? this.#report.measureOwner(owner, () =>
+						pass.run(passContext.prepare(remainingEdits)),
+					)
+				: pass.run(passContext.prepare(remainingEdits));
 			this.#report.recordOwnerWork(owner, 1);
 			const elapsedMs = this.#report.collectsDetails ? Date.now() - passStartedAt : 0;
 			const edits = changes?.edits ?? 0;

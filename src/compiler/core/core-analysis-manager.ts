@@ -85,16 +85,20 @@ function sortedFunctions(
 	return [...new Set(functions)].sort((left, right) => left - right);
 }
 
+const runWithoutOwner: CoreOptimizationOwnerRunner = (_owner, run) => run();
+
 // Deferred results must not retain the manager's analysis cache through instrumentation callbacks.
 function analysisInstrumentation(
 	report: CoreOptimizationReportBuilder,
 	key: string,
 ): Pick<CoreAnalysisComputation, "runOwner" | "recordResult"> {
 	return {
-		runOwner: (owner, run) => {
-			report.recordOwnerWork(owner, 1);
-			return report.measureOwner(owner, run);
-		},
+		runOwner: report.collectsDetails
+			? (owner, run) => {
+					report.recordOwnerWork(owner, 1);
+					return report.measureOwner(owner, run);
+				}
+			: runWithoutOwner,
 		...(report.collectsCounters
 			? { recordResult: (result: unknown) => report.recordAnalysisResult(key, result) }
 			: {}),

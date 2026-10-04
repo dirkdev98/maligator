@@ -933,6 +933,7 @@ export function coreCanonicalValueRoots(
 		fn.valueCapacity,
 	);
 	const nodes: Array<CoreValueId> = [];
+	const moveOpcode = fn.registry.get("move")?.id;
 	for (const block of fn.blockIds()) {
 		const incoming = cfg.predecessors[block] ?? [];
 		if (incoming.length === 0) continue;
@@ -951,11 +952,7 @@ export function coreCanonicalValueRoots(
 		}
 	}
 	for (const instruction of fn.instructionIds()) {
-		if (
-			fn.instructionKind(instruction) !== "operation" ||
-			fn.instructionOpcodeName(instruction) !== "move"
-		)
-			continue;
+		if (fn.kernel.instructionOpcode(instruction) !== moveOpcode) continue;
 		if (
 			fn.kernel.instructionOperandCount(instruction) !== 1 ||
 			fn.kernel.instructionResultCount(instruction) !== 1

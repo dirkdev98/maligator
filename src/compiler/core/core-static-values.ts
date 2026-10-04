@@ -364,6 +364,23 @@ export interface CoreStaticProperty {
 	readonly operands: ReadonlyArray<CoreValueId>;
 }
 
+function immutableStaticValue(
+	value: CoreValueId,
+	description: StaticDescriptionId,
+	brand: CoreStaticValue["brand"],
+): CoreStaticValue {
+	return {
+		kind: "known",
+		value,
+		description,
+		brand,
+		prototype: { kind: "unknown" },
+		state: "immutable-value",
+		operands: [],
+		environmentDependencies: [],
+	};
+}
+
 export class CoreStaticValueAnalysis {
 	readonly #program: CoreProgram;
 	readonly #fn: CoreFunctionStore;
@@ -1444,27 +1461,14 @@ export class CoreStaticValueAnalysis {
 					: "call"
 				: originalOpcode;
 
-		const prototype: StaticPrototype = { kind: "unknown" };
-		const primitive = (
-			description: StaticDescriptionId,
-			brand: CoreStaticValue["brand"],
-		): CoreStaticValue => ({
-			kind: "known",
-			value,
-			description,
-			brand,
-			prototype,
-			state: "immutable-value",
-			operands: [],
-			environmentDependencies: [],
-		});
 		const intern = program.staticDescriptions;
 		if (opcode === "createFunction") {
 			const functionIndex = attributes.functionIndex;
 			if (typeof functionIndex !== "number")
 				return { kind: "unknown", reason: "unsupported-producer" };
 			return {
-				...primitive(
+				...immutableStaticValue(
+					value,
 					intern.intern({
 						kind: "function",
 						codeIdentity: String(functionIndex),
@@ -1479,23 +1483,30 @@ export class CoreStaticValueAnalysis {
 		}
 		switch (opcode) {
 			case "createUndefined":
-				return primitive(intern.intern({ kind: "undefined" }), "undefined");
+				return immutableStaticValue(
+					value,
+					intern.intern({ kind: "undefined" }),
+					"undefined",
+				);
 			case "createNull":
-				return primitive(intern.intern({ kind: "null" }), "null");
+				return immutableStaticValue(value, intern.intern({ kind: "null" }), "null");
 			case "createBoolean":
-				return primitive(
+				return immutableStaticValue(
+					value,
 					intern.intern({ kind: "boolean", value: attributes.value === true }),
 					"boolean",
 				);
 			case "createI32":
 			case "createF64":
 			case "createNumber":
-				return primitive(
+				return immutableStaticValue(
+					value,
 					intern.intern(staticNumberDescription(attributes.value as number)),
 					"number",
 				);
 			case "createString":
-				return primitive(
+				return immutableStaticValue(
+					value,
 					intern.intern({
 						kind: "string",
 						codeUnits: program.stringConstants[attributes.stringIndex as number]!,
@@ -1503,7 +1514,8 @@ export class CoreStaticValueAnalysis {
 					"string",
 				);
 			case "createBigint":
-				return primitive(
+				return immutableStaticValue(
+					value,
 					intern.intern({
 						kind: "bigint",
 						decimal: String(program.bigintConstants[attributes.bigintIndex as number]!),
@@ -1512,7 +1524,8 @@ export class CoreStaticValueAnalysis {
 				);
 		}
 		if (opcode === "preparedStringCompare" || opcode === "preciseNumberSum")
-			return primitive(
+			return immutableStaticValue(
+				value,
 				intern.intern({
 					kind: "engine-payload",
 					format: "dynamic-result",
@@ -1529,7 +1542,8 @@ export class CoreStaticValueAnalysis {
 			opcode === "loadIntrinsic" &&
 			(attributes.intrinsic === "NaN" || attributes.intrinsic === "Infinity")
 		)
-			return primitive(
+			return immutableStaticValue(
+				value,
 				intern.intern(
 					staticNumberDescription(attributes.intrinsic === "NaN" ? NaN : Infinity),
 				),
@@ -1572,6 +1586,25 @@ export class CoreStaticValueAnalysis {
 			return { kind: "unknown", reason: "unsupported-producer" };
 		}
 
+		switch (opcode) {
+			case "binary":
+			case "unary":
+			case "loadIntrinsic":
+			case "loadGlobalProperty":
+			case "loadPrimordial":
+			case "loadPropertyStatic":
+			case "loadProperty":
+			case "call":
+			case "construct":
+			case "createObject":
+			case "createObjectShaped":
+			case "createArray":
+			case "instantiateLiteralTemplate":
+				break;
+			default:
+				return { kind: "unknown", reason: "unsupported-producer" };
+		}
+
 		const operandStart = fn.kernel.instructionOperandStart(instruction);
 		const operands = Array.from(
 			{ length: fn.kernel.instructionOperandCount(instruction) },
@@ -1600,17 +1633,19 @@ export class CoreStaticValueAnalysis {
 					if (evaluated.kind === "value") {
 						const constant = evaluated.value;
 						if (constant.kind === "number")
-							return primitive(
+							return immutableStaticValue(
+								value,
 								intern.intern(staticNumberDescription(constant.value)),
 								"number",
 							);
 						if (constant.kind === "bigint")
-							return primitive(
+							return immutableStaticValue(
+								value,
 								intern.intern({ kind: "bigint", decimal: String(constant.value) }),
 								"bigint",
 							);
 						if (constant.kind === "boolean")
-							return primitive(intern.intern(constant), "boolean");
+							return immutableStaticValue(value, intern.intern(constant), "boolean");
 					}
 				}
 			}
@@ -1667,7 +1702,8 @@ export class CoreStaticValueAnalysis {
 			}
 		}
 		if (operatorBrand !== undefined)
-			return primitive(
+			return immutableStaticValue(
+				value,
 				intern.intern({
 					kind: "engine-payload",
 					format: "dynamic-result",
@@ -1734,7 +1770,8 @@ export class CoreStaticValueAnalysis {
 					? node[5].find((alias) => /^Symbol\.[A-Za-z]+$/.test(alias))
 					: undefined;
 				return {
-					...primitive(
+					...immutableStaticValue(
+						value,
 						intern.intern(
 							symbol
 								? {
@@ -1816,7 +1853,8 @@ export class CoreStaticValueAnalysis {
 							: undefined;
 					const description = !registered && input?.kind === "undefined" ? null : key;
 					return {
-						...primitive(
+						...immutableStaticValue(
+							value,
 							intern.intern({
 								kind: "symbol",
 								registered,
@@ -1882,7 +1920,8 @@ export class CoreStaticValueAnalysis {
 					primitiveBrand !== "number-or-undefined" &&
 					primitiveBrand !== "string-or-undefined"
 				)
-					return primitive(
+					return immutableStaticValue(
+						value,
 						intern.intern({
 							kind: "engine-payload",
 							format: "dynamic-result",

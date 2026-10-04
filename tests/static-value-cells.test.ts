@@ -147,6 +147,7 @@ function fixture(scenario: Scenario) {
 	);
 	return {
 		program,
+		index,
 		writerFn,
 		readerFn,
 		entry,
@@ -235,5 +236,36 @@ describe("demanded private-cell contents", () => {
 		editor.commit();
 		expect(() => f.readerFacts.verifyProperty(property, f.consumer)).toThrow("not owned");
 		expect(f.readerFacts.queryPropertyAt(f.loaded, "x", f.consumer)).toBeUndefined();
+	});
+
+	it("refreshes cell descriptors after a data-only revision", () => {
+		const f = fixture("private");
+		const before = f.readerFacts.queryAt(f.loaded, f.consumer);
+		if (before.kind !== "known") throw new Error("Expected initial cell contents");
+		const original = f.program.staticDescriptions.description(before.description);
+		if (original.kind !== "object") throw new Error("Expected object cell");
+		expect(original.properties.map((property) => property.key)).toEqual(["x", "y"]);
+		const flowRevision = f.program.programFlowRevision;
+		CoreEditor.configureProgram(f.program, {
+			globalCount: 1,
+			stringConstants: [[122], [121], [115, 101, 108, 102]],
+		});
+		expect(f.program.programFlowRevision).toBe(flowRevision);
+		expect(() => f.readerFacts.verify(before, f.consumer)).toThrow("Stale");
+		const after = f.index.query(
+			f.readerFn,
+			coreInstructionId(f.readerFn.kernel.valueDefinitionOwner(f.loaded)),
+			f.loaded,
+			f.consumer,
+			(functionId) =>
+				new CoreStaticValueAnalysis(f.program, f.program.function(functionId), () =>
+					buildCoreControlFlow(f.program, functionId),
+				),
+			() => buildCoreControlFlow(f.program, f.readerFn.id),
+		);
+		if (after === undefined) throw new Error("Expected revised cell contents");
+		const revised = f.program.staticDescriptions.description(after.description);
+		if (revised.kind !== "object") throw new Error("Expected revised object cell");
+		expect(revised.properties.map((property) => property.key)).toEqual(["z", "y"]);
 	});
 });

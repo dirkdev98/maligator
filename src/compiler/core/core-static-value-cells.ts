@@ -87,6 +87,11 @@ export class CoreStaticCellIndex {
 		]);
 	}
 	#refresh(): void {
+		if (
+			this.#revision === this.#program.programFlowRevision &&
+			this.#dataVersion === this.#program.programVersion("data")
+		)
+			return;
 		const dirty = new Set<CoreFunctionId>();
 		if (this.#revision < 0) for (const fn of this.#program.functionIds()) dirty.add(fn);
 		else

@@ -2616,11 +2616,9 @@ function isImportMeta(node: ESTree.Node): node is ESTree.MetaProperty {
 }
 
 function fileUsesImportMeta(file: SemanticFile): boolean {
-	return (
-		traverseEstree(file.ast.body, (node) =>
-			isImportMeta(node) ? ESTREE_STOP : undefined,
-		) === ESTREE_STOP
-	);
+	// Semantic analysis indexes every AST node before this lowering begins.
+	for (const node of file.nodeToScope.keys()) if (isImportMeta(node)) return true;
+	return false;
 }
 
 function importMetaSlot(program: CoreFrontendContext, file: SemanticFile): number {

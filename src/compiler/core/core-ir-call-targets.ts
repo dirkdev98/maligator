@@ -842,14 +842,16 @@ function analyzeFunctionTargets(
 	);
 	const queue: Array<CoreBlockId> = [];
 	const queued = new Uint8Array(fn.blockCapacity);
+	let activeBlock: CoreBlockId | undefined;
 	const returnTargetDependencies = new Map<
 		CoreFunctionId,
 		readonly [body: number, cfg: number]
 	>();
-	const enqueue = (block: CoreBlockId): void => {
-		if (queued[block] !== 0) return;
-		queued[block] = 1;
-		queue.push(block);
+	const enqueue = (block: CoreBlockId, needsTransfer = true): void => {
+		if (queued[block] === 2) return;
+		// Clean revisits retain their queue position for later phi or handler wakeups.
+		if (queued[block] === 0) queue.push(block);
+		queued[block] = needsTransfer ? 2 : 1;
 	};
 	const raise = (value: CoreValueId, incoming: CoreCalleeTargets): boolean => {
 		const current = values[value] ?? CORE_CALLEE_TARGETS_BOTTOM;
@@ -864,7 +866,8 @@ function analyzeFunctionTargets(
 			const instruction = fn.kernel.useInstruction(use);
 			const block = fn.instructionBlock(instruction);
 			if (fn.instructionKind(instruction) === "operation") {
-				enqueue(block);
+				// Reachable SSA uses follow their definition in the active forward scan.
+				enqueue(block, block !== activeBlock);
 				continue;
 			}
 			for (const edge of cfg.successors[block] ?? []) enqueue(edge.to);
@@ -885,7 +888,10 @@ function analyzeFunctionTargets(
 	for (const block of cfg.reversePostorder) enqueue(block);
 	for (let cursor = 0; cursor < queue.length; cursor++) {
 		const block = queue[cursor]!;
+		const needsTransfer = queued[block] === 2;
 		queued[block] = 0;
+		if (!needsTransfer) continue;
+		activeBlock = cfg.reachable.has(block) ? block : undefined;
 		const parameterStart = fn.kernel.blockParameterStart(block);
 		const parameterCount = fn.kernel.blockParameterCount(block);
 		for (let index = 0; index < parameterCount; index++) {
