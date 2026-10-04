@@ -130,9 +130,6 @@ int main(int argc, char **argv) {
 	int code = mal_host_finish_process(&vm, vm.completion.kind == MAL_COMPLETION_THROW ? 1 : 0);
 	mal_profile_finish(&vm);
     mal_workers_shutdown(&vm);
-#if MAL_DEVELOPMENT_API
-    mal_worker_manifest_clear();
-#endif
 
     if (getenv("MAL_GC_AT_EXIT") != nullptr) {
         mal_gc_collect(&vm);

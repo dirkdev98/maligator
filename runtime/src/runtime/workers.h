@@ -12,8 +12,8 @@
  * isolate's mutator. No language value is ever reachable from another thread.
  */
 
-/* One statically compiled worker entry. `image` (baked, immutable, process life)
- * or `wire` (copied and loaded fresh per isolate, since splicing mutates it). */
+/* Baked images are immutable for the process lifetime; wire images are decoded
+ * separately for each isolate because splicing mutates their decoded data. */
 typedef struct MalWorkerEntry {
     const char *href;
     const MalRuntimeImage *image;
@@ -23,15 +23,34 @@ typedef struct MalWorkerEntry {
     MalHostInstallerResolver resolve_installer;
 } MalWorkerEntry;
 
-/* Process-wide registry, set once before the first JS runs. The array and its
- * strings/images must stay valid for the process lifetime. */
+typedef struct MalWorkerDomain MalWorkerDomain;
+
+/* Copies names and wire bytes; only baked images and installer functions remain
+ * borrowed. A domain is immutable and may be retained across isolate threads. */
+MalWorkerDomain *mal_worker_domain_new(
+    const MalWorkerEntry *entries, usize count, const char *pool_entry);
+void mal_worker_domain_retain(MalWorkerDomain *domain);
+void mal_worker_domain_release(MalWorkerDomain *domain);
+
+typedef struct MalWorkerDomainUsage {
+    u32 live_domains;
+    u64 wire_bytes;
+} MalWorkerDomainUsage;
+
+/* Native host diagnostics; fields are sampled independently during activity. */
+MalWorkerDomainUsage mal_worker_domain_usage(void);
+
+/* Owner-mutator only, after host attach. Existing descriptors and children retain
+ * their original domain when this isolate installs a different generation. */
+bool mal_workers_bind_domain(MalVm *vm, MalWorkerDomain *domain);
+
+/* Startup-only default for compiled programs, sealed at the first worker install. */
 void mal_workers_register_entries(const MalWorkerEntry *entries, usize count);
 
-/* Canonical file URL of the pool helper entry (`poolEntry`); null when unset. */
+/* Startup-only canonical pool helper URL, belonging to the compiled default. */
 void mal_workers_set_pool_entry(const char *href);
 
-/* Worker threads in this process not yet joined. Zero means no isolate can read the
- * registry, so mal_workers_register_entries may replace it. */
+/* Worker threads in this process not yet joined, including every image domain. */
 u32 mal_workers_live_count(void);
 
 /* maligator:internal/workers native exports (Worker, MessageChannel, MessagePort,

@@ -157,26 +157,19 @@ int mal_dev_run_wires(
     int code = mal_host_finish_process(&vm, vm.completion.kind == MAL_COMPLETION_THROW ? 1 : 0);
     mal_workers_shutdown(&vm);
 
-    if (getenv("MAL_GC_AT_EXIT") != nullptr) {
-        mal_gc_collect(&vm);
-        for (int index = 0; index < wire_count; index++) {
-            if (callables[index] != nullptr) mal_vm_free_callable(callables[index]);
-        }
+    if (getenv("MAL_GC_AT_EXIT") != nullptr) mal_gc_collect(&vm);
+    for (int index = 0; index < wire_count; index++) {
+        if (callables[index] != nullptr) mal_vm_free_callable(callables[index]);
+    }
 #if MAL_NODE
-        if (node) {
-            mal_node_immediates_free(&vm);
-        }
+    if (node) mal_node_immediates_free(&vm);
 #endif
 #if MAL_WEB_PLATFORM || MAL_NODE
-        if (web_platform || node) {
-            mal_host_timers_free(&vm);
-        }
+    if (web_platform || node) mal_host_timers_free(&vm);
 #endif
-        mal_host_detach(&vm);
-        mal_vm_free(&vm);
-    }
+    mal_host_detach(&vm);
+    mal_vm_free(&vm);
     free(callables);
-    mal_worker_manifest_clear();
     mal_development_assets_free(development_assets);
     mal_loaded_runtime_image_free(loaded);
     return code;

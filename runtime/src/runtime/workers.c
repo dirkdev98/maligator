@@ -11,6 +11,7 @@
 #include "ascii.h"
 #include "builtin_atomics.h"
 #include "builtin_promise.h"
+#include "builtin_weak_ref.h"
 #include "function_object.h"
 #include "gc.h"
 #include "gc_process.h"
@@ -409,15 +410,108 @@ static Message *endpoint_pop(Endpoint *endpoint) {
     return message;
 }
 
-static const MalWorkerEntry *g_entries;
-static usize g_entry_count;
-static const char *g_pool_entry;
+struct MalWorkerDomain {
+    _Atomic(u32) refcount;
+    MalWorkerEntry *entries;
+    usize count;
+    char *pool_entry;
+    u64 wire_bytes;
+    bool counted;
+};
+
+static pthread_mutex_t g_startup_domain_mutex = PTHREAD_MUTEX_INITIALIZER;
+static MalWorkerDomain *g_startup_domain;
+static bool g_startup_domain_sealed;
+static _Atomic(u32) g_live_domains;
+static _Atomic(u64) g_domain_wire_bytes;
 static _Atomic(u32) g_live_workers;
 static _Atomic(u32) g_next_thread_id = 1;
 
+void mal_worker_domain_retain(MalWorkerDomain *domain) {
+    if (domain != nullptr) atomic_fetch_add_explicit(&domain->refcount, 1, memory_order_relaxed);
+}
+
+void mal_worker_domain_release(MalWorkerDomain *domain) {
+    if (domain == nullptr || atomic_fetch_sub_explicit(&domain->refcount, 1, memory_order_acq_rel) != 1) return;
+    for (usize index = 0; index < domain->count; index++) {
+        free((void *) domain->entries[index].href);
+        free((void *) domain->entries[index].wire);
+    }
+    free(domain->entries);
+    free(domain->pool_entry);
+    if (domain->counted) {
+        atomic_fetch_sub_explicit(&g_domain_wire_bytes, domain->wire_bytes, memory_order_relaxed);
+        atomic_fetch_sub_explicit(&g_live_domains, 1, memory_order_relaxed);
+    }
+    free(domain);
+}
+
+MalWorkerDomainUsage mal_worker_domain_usage(void) {
+    return (MalWorkerDomainUsage) {
+        .live_domains = atomic_load_explicit(&g_live_domains, memory_order_relaxed),
+        .wire_bytes = atomic_load_explicit(&g_domain_wire_bytes, memory_order_relaxed),
+    };
+}
+
+static const MalWorkerEntry *domain_lookup(const MalWorkerDomain *domain, const char *href) {
+    if (domain == nullptr || href == nullptr) return nullptr;
+    for (usize index = 0; index < domain->count; index++) {
+        if (strcmp(domain->entries[index].href, href) == 0) return &domain->entries[index];
+    }
+    return nullptr;
+}
+
+MalWorkerDomain *mal_worker_domain_new(
+    const MalWorkerEntry *entries, usize count, const char *pool_entry) {
+    if ((count != 0 && entries == nullptr) || count > SIZE_MAX / sizeof(MalWorkerEntry)) return nullptr;
+    MalWorkerDomain *domain = calloc(1, sizeof(MalWorkerDomain));
+    if (domain == nullptr) return nullptr;
+    atomic_init(&domain->refcount, 1);
+    domain->entries = calloc(count == 0 ? 1 : count, sizeof(MalWorkerEntry));
+    if (domain->entries == nullptr) goto failed;
+    for (usize index = 0; index < count; index++) {
+        const MalWorkerEntry *source = &entries[index];
+        if (source->href == nullptr || domain_lookup(domain, source->href) != nullptr
+            || (source->image == nullptr && (source->wire == nullptr || source->wire_size == 0))
+            || (source->image != nullptr && source->wire != nullptr)) goto failed;
+        MalWorkerEntry *entry = &domain->entries[index];
+        domain->count++;
+        entry->href = strdup(source->href);
+        if (entry->href == nullptr) goto failed;
+        entry->image = source->image;
+        entry->resolve_installer = source->resolve_installer;
+        if (source->wire != nullptr) {
+            if (source->wire_size > UINT64_MAX - domain->wire_bytes) goto failed;
+            byte *wire = malloc(source->wire_size);
+            if (wire == nullptr) goto failed;
+            memcpy(wire, source->wire, source->wire_size);
+            entry->wire = wire;
+            entry->wire_size = source->wire_size;
+            domain->wire_bytes += source->wire_size;
+        }
+    }
+    if (pool_entry != nullptr) {
+        if (domain_lookup(domain, pool_entry) == nullptr) goto failed;
+        domain->pool_entry = strdup(pool_entry);
+        if (domain->pool_entry == nullptr) goto failed;
+    }
+    domain->counted = true;
+    atomic_fetch_add_explicit(&g_domain_wire_bytes, domain->wire_bytes, memory_order_relaxed);
+    atomic_fetch_add_explicit(&g_live_domains, 1, memory_order_relaxed);
+    return domain;
+failed:
+    mal_worker_domain_release(domain);
+    return nullptr;
+}
+
 void mal_workers_register_entries(const MalWorkerEntry *entries, usize count) {
-    g_entries = entries;
-    g_entry_count = count;
+    MalWorkerDomain *domain = mal_worker_domain_new(entries, count, nullptr);
+    pthread_mutex_lock(&g_startup_domain_mutex);
+    if (domain == nullptr || g_startup_domain_sealed) abort();
+    MalWorkerDomain *previous = g_startup_domain;
+    g_startup_domain = domain;
+    pthread_mutex_unlock(&g_startup_domain_mutex);
+    mal_worker_domain_release(previous);
 }
 
 u32 mal_workers_live_count(void) {
@@ -425,14 +519,23 @@ u32 mal_workers_live_count(void) {
 }
 
 void mal_workers_set_pool_entry(const char *href) {
-    g_pool_entry = href;
+    pthread_mutex_lock(&g_startup_domain_mutex);
+    MalWorkerDomain *previous = g_startup_domain;
+    MalWorkerDomain *domain = mal_worker_domain_new(
+        previous != nullptr ? previous->entries : nullptr, previous != nullptr ? previous->count : 0, href);
+    if (domain == nullptr || g_startup_domain_sealed) abort();
+    g_startup_domain = domain;
+    pthread_mutex_unlock(&g_startup_domain_mutex);
+    mal_worker_domain_release(previous);
 }
 
-static const MalWorkerEntry *entry_lookup(const char *href) {
-    for (usize i = 0; i < g_entry_count; i++) {
-        if (strcmp(g_entries[i].href, href) == 0) return &g_entries[i];
-    }
-    return nullptr;
+static MalWorkerDomain *startup_domain_acquire(void) {
+    pthread_mutex_lock(&g_startup_domain_mutex);
+    g_startup_domain_sealed = true;
+    MalWorkerDomain *domain = g_startup_domain;
+    mal_worker_domain_retain(domain);
+    pthread_mutex_unlock(&g_startup_domain_mutex);
+    return domain;
 }
 
 // CPUs this process may use (affinity and cgroup quota), clamped so 4x cannot wrap.
@@ -451,6 +554,7 @@ struct WorkerThread {
     _Atomic(u32) refcount;
     u32 id;
     const MalWorkerEntry *entry;
+    MalWorkerDomain *domain;
     char *name;
     // The parent's host personality, applied to the worker isolate.
     bool web_platform;
@@ -504,6 +608,7 @@ static void worker_thread_release(WorkerThread *thread) {
     pthread_mutex_destroy(&thread->mutex);
     pthread_cond_destroy(&thread->start_cond);
     free(thread->name);
+    mal_worker_domain_release(thread->domain);
     free(thread);
 }
 
@@ -597,13 +702,15 @@ typedef struct WorkerRecord {
 
 typedef struct UrlRecord {
     struct UrlRecord *next;
-    MalValue descriptor;
+    MalValue weak_descriptor;
     const MalWorkerEntry *entry;
+    MalWorkerDomain *domain;
 } UrlRecord;
 
 typedef struct Isolate {
     MalVm *vm;
     Owner *owner;
+    MalWorkerDomain *domain;
     PortRecord *ports;
     WorkerRecord *workers;
     UrlRecord *urls;
@@ -677,7 +784,7 @@ static void workers_scan_roots(MalVm *vm, void *data) {
         listeners_mark(&worker->listeners);
     }
     for (UrlRecord *url = iso->urls; url != nullptr; url = url->next) {
-        mal_gc_mark_value(url->descriptor);
+        mal_gc_mark_value(url->weak_descriptor);
     }
 }
 
@@ -787,9 +894,22 @@ static WorkerRecord *worker_record(MalValue value) {
 static UrlRecord *url_record(MalValue value) {
     if (g_isolate == nullptr || !mal_value_is_object(value)) return nullptr;
     for (UrlRecord *url = g_isolate->urls; url != nullptr; url = url->next) {
-        if (url->descriptor == value) return url;
+        if (mal_value_to_weak_ref_object(url->weak_descriptor)->target == value) return url;
     }
     return nullptr;
+}
+
+static void urls_prune(Isolate *iso) {
+    for (UrlRecord **link = &iso->urls; *link != nullptr;) {
+        UrlRecord *url = *link;
+        if (!mal_value_is_undefined(mal_value_to_weak_ref_object(url->weak_descriptor)->target)) {
+            link = &url->next;
+            continue;
+        }
+        *link = url->next;
+        mal_worker_domain_release(url->domain);
+        free(url);
+    }
 }
 
 static MalReactor *isolate_reactor(MalVm *vm) {
@@ -814,7 +934,8 @@ static void worker_update_work(MalVm *vm, WorkerRecord *worker) {
 }
 
 typedef struct UrlDescriptor {
-    char *href;
+    const MalWorkerEntry *entry;
+    MalWorkerDomain *domain;
 } UrlDescriptor;
 
 // A transferred MessagePort. While PENDING it retains the sender record and a
@@ -829,7 +950,7 @@ typedef struct PortTransfer {
     PortRecord *adopted;
 } PortTransfer;
 
-static MalValue url_descriptor_for(MalVm *vm, const MalWorkerEntry *entry);
+static MalValue url_descriptor_for(MalVm *vm, MalWorkerDomain *domain, const MalWorkerEntry *entry);
 static MalValue port_wrapper_new(MalVm *vm, Endpoint *endpoint);
 static void port_record_release(PortRecord *port);
 
@@ -863,11 +984,9 @@ static bool hooks_encode(void *data, MalVm *vm, MalValue value, bool transfer,
     if (url != nullptr && !transfer) {
         UrlDescriptor *descriptor = malloc(sizeof(UrlDescriptor));
         if (descriptor == nullptr) return false;
-        descriptor->href = strdup(url->entry->href);
-        if (descriptor->href == nullptr) {
-            free(descriptor);
-            return false;
-        }
+        descriptor->entry = url->entry;
+        descriptor->domain = url->domain;
+        mal_worker_domain_retain(descriptor->domain);
         out->kind = DESCRIPTOR_URL;
         out->resource = descriptor;
         return true;
@@ -947,12 +1066,7 @@ static bool hooks_decode(void *data, MalVm *vm, MalSerializeHostDescriptor *desc
     }
     if (descriptor->kind == DESCRIPTOR_URL) {
         UrlDescriptor *url = descriptor->resource;
-        const MalWorkerEntry *entry = entry_lookup(url->href);
-        if (entry == nullptr) {
-            throw_type(vm, "worker URL is not registered in this process");
-            return false;
-        }
-        *out = url_descriptor_for(vm, entry);
+        *out = url_descriptor_for(vm, url->domain, url->entry);
         return !thrown(vm);
     }
     throw_type(vm, "MessagePort in message is no longer transferable");
@@ -965,7 +1079,7 @@ static void hooks_release(MalSerializeHostDescriptor *descriptor) {
     if (descriptor->resource == nullptr) return;
     if (descriptor->kind == DESCRIPTOR_URL) {
         UrlDescriptor *url = descriptor->resource;
-        free(url->href);
+        mal_worker_domain_release(url->domain);
         free(url);
     } else {
         PortTransfer *moving = descriptor->resource;
@@ -2135,6 +2249,7 @@ static bool worker_has_pending_messages(WorkerRecord *worker) {
 static bool workers_drain(MalVm *vm) {
     Isolate *iso = g_isolate;
     if (iso == nullptr) return false;
+    urls_prune(iso);
     Owner *owner = iso->owner;
     pthread_mutex_lock(&owner->mutex);
     WorkerThread *thread = owner->events_head;
@@ -2508,10 +2623,11 @@ static char *canonical_href(MalVm *vm, MalValue specifier) {
     return url;
 }
 
-static MalValue url_descriptor_for(MalVm *vm, const MalWorkerEntry *entry) {
+static MalValue url_descriptor_for(MalVm *vm, MalWorkerDomain *domain, const MalWorkerEntry *entry) {
     Isolate *iso = g_isolate;
+    urls_prune(iso);
     for (UrlRecord *url = iso->urls; url != nullptr; url = url->next) {
-        if (url->entry == entry) return url->descriptor;
+        if (url->entry == entry) return mal_value_to_weak_ref_object(url->weak_descriptor)->target;
     }
     UrlRecord *record = calloc(1, sizeof(UrlRecord));
     if (record == nullptr) {
@@ -2524,8 +2640,14 @@ static MalValue url_descriptor_for(MalVm *vm, const MalWorkerEntry *entry) {
     mal_intrinsic_define_data(vm, mal_value_to_object(descriptor), (const byte *) "href",
         str_value(vm, entry->href), MAL_PROPERTY_ENUMERABLE);
     mal_object_set_integrity_level(mal_value_to_object(descriptor), true);
-    record->descriptor = descriptor;
+    // The registry must not pin every old generation in a long-lived isolate.
+    MalWeakRefObject *weak = mal_heap_alloc(&vm->heap, sizeof(MalWeakRefObject), MAL_HEAP_WEAK_REF_OBJECT);
+    mal_object_init(&vm->heap, &weak->object, MAL_HEAP_WEAK_REF_OBJECT, nullptr);
+    weak->target = descriptor;
+    record->weak_descriptor = mal_value_from_weak_ref_object(weak);
     record->entry = entry;
+    record->domain = domain;
+    mal_worker_domain_retain(domain);
     record->next = iso->urls;
     iso->urls = record;
     mal_gc_unroot(&root);
@@ -2550,13 +2672,13 @@ static MalValue create_worker_url(MalVm *vm, MalValue receiver, const MalValue *
     char *resolved = base == nullptr || file_base ? file_url_resolve(specifier, base) : nullptr;
     free(specifier);
     free(base);
-    const MalWorkerEntry *entry = resolved != nullptr ? entry_lookup(resolved) : nullptr;
+    const MalWorkerEntry *entry = domain_lookup(g_isolate->domain, resolved);
     free(resolved);
     if (entry == nullptr) {
         throw_type(vm, "createWorkerUrl: entry is not a statically registered worker module");
         return mal_value_new_undefined();
     }
-    return url_descriptor_for(vm, entry);
+    return url_descriptor_for(vm, g_isolate->domain, entry);
 }
 
 static MalValue capabilities_function(MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
@@ -2634,21 +2756,10 @@ static bool node_options_supported(MalVm *vm, MalValue options) {
     return true;
 }
 
-static MalValue worker_construct(MalVm *vm, const MalValue *args, i32 argc, MalValue new_target, bool node) {
+static MalValue worker_construct_entry(MalVm *vm, const MalValue *args, i32 argc, bool node,
+    MalWorkerDomain *domain, const MalWorkerEntry *entry) {
     Isolate *iso = g_isolate;
-    if (mal_value_is_undefined(new_target)) {
-        throw_type(vm, "Class constructor Worker cannot be invoked without 'new'");
-        return mal_value_new_undefined();
-    }
     MalValue options = argc > 1 ? args[1] : mal_value_new_undefined();
-    char *href = canonical_href(vm, argc > 0 ? args[0] : mal_value_new_undefined());
-    if (href == nullptr) return mal_value_new_undefined();
-    const MalWorkerEntry *entry = entry_lookup(href);
-    free(href);
-    if (entry == nullptr) {
-        throw_type(vm, "Worker entry is not a statically registered worker module");
-        return mal_value_new_undefined();
-    }
     MalValue data = mal_value_new_undefined();
     MalValue transfer = mal_value_new_undefined();
     MalValue name = mal_value_new_undefined();
@@ -2729,6 +2840,8 @@ static MalValue worker_construct(MalVm *vm, const MalValue *args, i32 argc, MalV
     atomic_init(&thread->refcount, 2); // parent record + thread body
     thread->id = atomic_fetch_add_explicit(&g_next_thread_id, 1, memory_order_relaxed);
     thread->entry = entry;
+    thread->domain = domain;
+    mal_worker_domain_retain(domain);
     thread->web_platform = vm->host_web_platform;
     thread->node = vm->host_node;
     thread->name = value_to_cstring(name);
@@ -2842,6 +2955,28 @@ static MalValue worker_construct(MalVm *vm, const MalValue *args, i32 argc, MalV
     }
     MalValue result = roots[0];
     mal_gc_unroot(&root);
+    return result;
+}
+
+static MalValue worker_construct(MalVm *vm, const MalValue *args, i32 argc, MalValue new_target, bool node) {
+    if (mal_value_is_undefined(new_target)) {
+        throw_type(vm, "Class constructor Worker cannot be invoked without 'new'");
+        return mal_value_new_undefined();
+    }
+    char *href = canonical_href(vm, argc > 0 ? args[0] : mal_value_new_undefined());
+    if (href == nullptr) return mal_value_new_undefined();
+    UrlRecord *url = argc > 0 ? url_record(args[0]) : nullptr;
+    MalWorkerDomain *domain = url != nullptr ? url->domain : g_isolate->domain;
+    const MalWorkerEntry *entry = url != nullptr ? url->entry : domain_lookup(domain, href);
+    free(href);
+    if (entry == nullptr) {
+        throw_type(vm, "Worker entry is not a statically registered worker module");
+        return mal_value_new_undefined();
+    }
+    // Option getters may install another domain before admission commits.
+    mal_worker_domain_retain(domain);
+    MalValue result = worker_construct_entry(vm, args, argc, node, domain, entry);
+    mal_worker_domain_release(domain);
     return result;
 }
 
@@ -3014,7 +3149,7 @@ static void define_port_methods(MalVm *vm, MalObject *prototype, PostingPolicy p
 }
 
 bool mal_workers_install(MalVm *vm) {
-    if (g_isolate != nullptr) return true;
+    if (g_isolate != nullptr) return g_isolate->vm == vm;
     MalHost *host = mal_host(vm);
     if (host == nullptr) return false;
     // Ports and workers are EventTargets even when no personality installed events.
@@ -3028,6 +3163,8 @@ bool mal_workers_install(MalVm *vm) {
     }
     iso->vm = vm;
     iso->owner = owner;
+    iso->domain = g_self_thread != nullptr ? g_self_thread->domain : startup_domain_acquire();
+    if (g_self_thread != nullptr) mal_worker_domain_retain(iso->domain);
     MalValue undefined = mal_value_new_undefined();
     iso->port_prototype = iso->worker_prototype = iso->node_worker_prototype = undefined;
     iso->node_port_prototype = iso->node_port_constructor = iso->node_channel_constructor = undefined;
@@ -3092,6 +3229,21 @@ bool mal_workers_install(MalVm *vm) {
     return true;
 }
 
+bool mal_workers_bind_domain(MalVm *vm, MalWorkerDomain *domain) {
+    if (!mal_workers_install(vm)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_ERROR_PROTOTYPE,
+            "Worker domain requires an attached host and its own isolate mutator");
+        return false;
+    }
+    if (thrown(vm)) return false;
+    urls_prune(g_isolate);
+    mal_worker_domain_retain(domain);
+    MalWorkerDomain *previous = g_isolate->domain;
+    g_isolate->domain = domain;
+    mal_worker_domain_release(previous);
+    return true;
+}
+
 MalValue mal_workers_worker_data(MalVm *vm) {
     Isolate *iso = g_isolate;
     if (iso == nullptr || iso->worker_data_ready) return iso != nullptr ? iso->worker_data : mal_value_new_undefined();
@@ -3138,7 +3290,7 @@ MalValue mal_workers_receive_message_function(MalVm *vm) {
 
 void mal_workers_shutdown(MalVm *vm) {
     Isolate *iso = g_isolate;
-    if (iso == nullptr) return;
+    if (iso == nullptr || iso->vm != vm) return;
     // Children first: terminate, then join each (their final posts may race the
     // mailbox teardown below and only drop references).
     for (WorkerRecord *worker = iso->workers; worker != nullptr; worker = worker->next) {
@@ -3190,8 +3342,10 @@ void mal_workers_shutdown(MalVm *vm) {
     while (iso->urls != nullptr) {
         UrlRecord *url = iso->urls;
         iso->urls = url->next;
+        mal_worker_domain_release(url->domain);
         free(url);
     }
+    mal_worker_domain_release(iso->domain);
     owner_release(owner);
     g_isolate = nullptr;
     free(iso);
@@ -3235,8 +3389,9 @@ void mal_host_install_maligator_internal_workers(
                 mal_intrinsic_ascii(vm, (const byte *) "failCurrent"), 0, worker_fail_current));
         }
         else if (strcmp(name, "poolEntry") == 0) {
-            const MalWorkerEntry *entry = g_pool_entry != nullptr ? entry_lookup(g_pool_entry) : nullptr;
-            value = entry != nullptr ? url_descriptor_for(vm, entry) : mal_value_new_null();
+            MalWorkerDomain *domain = g_isolate->domain;
+            const MalWorkerEntry *entry = domain != nullptr ? domain_lookup(domain, domain->pool_entry) : nullptr;
+            value = entry != nullptr ? url_descriptor_for(vm, domain, entry) : mal_value_new_null();
         }
         if (thrown(vm)) return;
         vm->globals[slots[i].slot] = value;

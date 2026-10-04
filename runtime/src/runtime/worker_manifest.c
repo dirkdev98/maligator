@@ -18,13 +18,10 @@
 
 
 typedef struct WorkerManifest {
-    struct WorkerManifest *next;
     MalWorkerEntry *entries;
     usize count;
     char *pool_entry;
 } WorkerManifest;
-
-static WorkerManifest *manifests;
 
 static void manifest_free(WorkerManifest *manifest) {
     if (manifest == nullptr) return;
@@ -35,21 +32,6 @@ static void manifest_free(WorkerManifest *manifest) {
     free(manifest->entries);
     free(manifest->pool_entry);
     free(manifest);
-}
-
-void mal_worker_manifest_clear(void) {
-    mal_workers_register_entries(nullptr, 0);
-    mal_workers_set_pool_entry(nullptr);
-    while (manifests != nullptr) {
-        WorkerManifest *manifest = manifests;
-        manifests = manifest->next;
-        manifest_free(manifest);
-    }
-}
-
-static void manifest_cleanup(MalVm *vm) {
-    mal_workers_shutdown(vm);
-    mal_worker_manifest_clear();
 }
 
 static byte *manifest_read(const char *path, usize limit, usize *length) {
@@ -101,10 +83,6 @@ static char *manifest_wire_path(const char *manifest_path, const char *wire_path
 }
 
 bool mal_worker_manifest_register(MalVm *vm, const char *path) {
-    if (mal_workers_live_count() != 0) {
-        mal_vm_throw_error(vm, MAL_INTRINSIC_ERROR_PROTOTYPE, "Worker manifest cannot change while workers are live");
-        return false;
-    }
     usize length = 0;
     byte *bytes = manifest_read(path, 16 * 1024 * 1024, &length);
     if (bytes == nullptr) {
@@ -175,14 +153,18 @@ bool mal_worker_manifest_register(MalVm *vm, const char *path) {
         }
         if (!found) goto failed;
     }
-    if (!mal_vm_register_runtime_cleanup(vm, manifest_cleanup)) goto failed;
-    // Existing descriptors retain their registry entry even after a test installs a new image.
-    manifest->next = manifests;
-    manifests = manifest;
-    mal_workers_register_entries(manifest->entries, manifest->count);
-    mal_workers_set_pool_entry(manifest->pool_entry);
+    MalWorkerDomain *domain = mal_worker_domain_new(manifest->entries, manifest->count, manifest->pool_entry);
+    if (domain == nullptr) {
+        manifest_free(manifest);
+        mal_vm_throw_allocation_error(vm);
+        mal_gc_unroot(&root);
+        return false;
+    }
+    bool bound = mal_workers_bind_domain(vm, domain);
+    mal_worker_domain_release(domain);
+    manifest_free(manifest);
     mal_gc_unroot(&root);
-    return true;
+    return bound;
 failed:
     manifest_free(manifest);
 invalid:
