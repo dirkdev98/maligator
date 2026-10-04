@@ -195,6 +195,50 @@ ok("own Set.add fallback", ownSet.add(3) === "own-add" && ownSet.own === 3);
 ok("own Set.has fallback", ownSet.has(3) === "own-has-3");
 ok("own Set.delete fallback", ownSet.delete(3) === "own-delete-3");
 
+// One `size` site sees intrinsic receivers and every shape that must not share their cache.
+// It precedes the prototype overrides below, which retire the watched-prototype protector.
+function readSize(collection) {
+	return collection.size;
+}
+class SizedMap extends Map {
+	get size() {
+		return -1;
+	}
+}
+const shadowedSet = new Set([1, 2]);
+Object.defineProperty(shadowedSet, "size", { value: 42 });
+const sizeMap = new Map();
+const sizeSet = new Set();
+let sizeTotal = 0;
+for (let i = 0; i < 128; i++) {
+	sizeMap.set(i & 15, i);
+	sizeSet.add(i & 7);
+	if ((i & 3) === 0) sizeSet.delete(i & 7);
+	sizeTotal += readSize(sizeMap) + readSize(sizeSet);
+}
+let expectedTotal = 0;
+const present = [false, false, false, false, false, false, false, false];
+let presentCount = 0;
+for (let i = 0; i < 128; i++) {
+	if (!present[i & 7]) {
+		present[i & 7] = true;
+		presentCount++;
+	}
+	if ((i & 3) === 0) {
+		present[i & 7] = false;
+		presentCount--;
+	}
+	expectedTotal += Math.min(i + 1, 16) + presentCount;
+}
+ok("collection size tracks mutations", sizeTotal === expectedTotal);
+ok("subclass size getter wins", readSize(new SizedMap([[1, 1]])) === -1);
+ok("own size shadows prototype", readSize(shadowedSet) === 42);
+ok("plain object size", readSize({ size: 7 }) === 7);
+ok(
+	"collection size after misses",
+	readSize(sizeMap) === 16 && readSize(sizeSet) === presentCount,
+);
+
 const intrinsicGet = Map.prototype.get;
 Map.prototype.get = function (key) {
 	return "prototype-" + key;

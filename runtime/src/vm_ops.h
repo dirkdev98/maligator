@@ -785,7 +785,17 @@ void mal_op_env_pop(MalCallable *callable);
  * Read/write a captured binding by walking the environment chain to the owning
  * activation. Shared by the load/store-captured ops and the compiled backend.
  */
-MalValue mal_vm_load_captured(MalEnv *env, i32 owner_function_index, i32 index);
+MalValue mal_vm_load_captured_slow(MalEnv *env, i32 owner_function_index, i32 index);
+
+/** A hit in the nearest (possibly single-owner) scope stays inline; other layouts walk out of line. */
+static inline MalValue mal_vm_load_captured(MalEnv *env, i32 owner_function_index, i32 index) {
+    const MalEnv *scope = mal_env_untag_single_owner(env);
+    if (scope != nullptr && scope->function_index == owner_function_index &&
+        index >= 0 && index < scope->slot_count) {
+        return scope->slots[index];
+    }
+    return mal_vm_load_captured_slow(env, owner_function_index, index);
+}
 
 static inline MalValue mal_vm_load_captured_value_at(
     MalEnv *env, i32 owner_function_index, i32 index, i32 capture_index
@@ -804,7 +814,20 @@ static inline MalValue mal_vm_load_captured_value_at(
     return mal_vm_load_captured(env, owner_function_index, index);
 }
 
-void mal_vm_store_captured(MalEnv *env, i32 owner_function_index, i32 index, MalValue value);
+void mal_vm_store_captured_slow(MalEnv *env, i32 owner_function_index, i32 index, MalValue value);
+
+static inline void mal_vm_store_captured(
+    MalEnv *env, i32 owner_function_index, i32 index, MalValue value
+) {
+    MalEnv *scope = mal_env_untag_single_owner(env);
+    if (scope != nullptr && scope->function_index == owner_function_index) {
+        mal_gc_write_barrier(scope->slots[index]);
+        scope->slots[index] = value;
+        mal_gc_card(&scope->header, value);
+        return;
+    }
+    mal_vm_store_captured_slow(env, owner_function_index, index, value);
+}
 
 void mal_op_load_property(MalCallable *callable, const MalInstruction *instruction);
 void mal_op_load_property_static(MalCallable *callable, const MalInstruction *instruction);
@@ -978,6 +1001,7 @@ static inline void mal_ic_set_recorded_prototype_epoch(MalInlineCache *ic, u64 e
 #define MAL_IC_MODE_OWN_TABLE 9u
 #define MAL_IC_MODE_TYPED_ARRAY_LENGTH 10u
 #define MAL_IC_MODE_CONSTRUCTOR_LAYOUT 11u
+#define MAL_IC_MODE_COLLECTION_SIZE 12u
 
 #define MAL_IC_MISSING_SHAPE_CHAIN 0u
 #define MAL_IC_MISSING_EXACT_CHAIN 1u
@@ -1301,24 +1325,40 @@ static inline bool mal_vm_object_try_load_monomorphic(
     return false;
 }
 
+/**
+ * Read an alternate-shape entry in place. Promoting it to the primary entry would
+ * make receivers that alternate between shapes rewrite the cache on every access.
+ */
+static inline MalValue mal_vm_object_poly_load(
+    const MalObject *object, const MalInlineCache *ic, u8 index
+) {
+    return mal_object_field_load_token(
+        object, object->shape->props[mal_ic_poly_slot(ic, index)].field);
+}
+
+static inline __attribute__((always_inline)) bool mal_vm_object_try_load_polymorphic(
+    const MalObject *object, MalValue key, MalInlineCache *ic, MalValue *out
+) {
+    if (ic->mode == MAL_IC_MODE_SHAPE && ic->poly_count > 0 && key == ic->key &&
+        ic->slot != MAL_IC_VALUE_SLOT) {
+        for (u8 i = 0; i < ic->poly_count; i++) {
+            if (object->shape == ic->poly_shape[i]) {
+                MAL_PERF_COUNT(ic_load_poly_hits);
+                *out = mal_vm_object_poly_load(object, ic, i);
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 static inline bool mal_vm_object_try_load_remaining(
     const MalObject *object, MalValue key, MalInlineCache *ic, MalValue *out
 ) {
     if (ic->mode == MAL_IC_MODE_OWN_TABLE) {
         return mal_vm_own_table_try_load(object, key, ic, out);
     }
-    if (ic->mode == MAL_IC_MODE_SHAPE && ic->poly_count > 0 && key == ic->key &&
-        ic->slot != MAL_IC_VALUE_SLOT) {
-        for (u8 i = 0; i < ic->poly_count; i++) {
-            if (object->shape == ic->poly_shape[i]) {
-                MAL_PERF_COUNT(ic_load_poly_hits);
-                mal_ic_promote_poly_slot(ic, i);
-                *out = mal_object_field_load_token(object, ic->field);
-                return true;
-            }
-        }
-    }
-    return false;
+    return mal_vm_object_try_load_polymorphic(object, key, ic, out);
 }
 
 static inline bool mal_vm_object_try_load(const MalObject *object, MalValue key, MalInlineCache *ic,
@@ -1410,7 +1450,42 @@ static inline bool mal_vm_local_watched_primitive_value_try_load_static(
     return true;
 }
 
-/** Guarded inherited data-property slot/entry hit, plus the watched-value fallback. */
+/** An INHERITED_VALUE row's hit: a prototype data value proven by shape and chain identity. */
+static inline bool mal_vm_inherited_value_try_load(MalValue receiver, const MalInlineCache *ic,
+                                                   MalValue *out) {
+    if (ic->poly_count > 0) {
+        u8 receiver_type = ic->receiver_type == MAL_IC_RECEIVER_DICTIONARY
+            ? MAL_HEAP_OBJECT : ic->receiver_type;
+        if (!mal_value_is_heap_type(receiver, receiver_type)) {
+            return false;
+        }
+        const MalObject *object = (const MalObject *) mal_value_to_heap(receiver);
+        bool dictionary_receiver =
+            ic->receiver_type == MAL_IC_RECEIVER_DICTIONARY;
+        if (object->shape != ic->shape ||
+            mal_object_prototype(object) != ic->proto_object[0] ||
+            (dictionary_receiver
+                 ? object != ic->obj || !mal_object_has_public_overflow(object)
+                 : mal_object_has_public_overflow(object))) {
+            return false;
+        }
+        *out = ic->value;
+        mal_perf_ic_load_inherited_hit();
+        return true;
+    }
+    if (!mal_primitive_method_protector || !mal_value_is_object(receiver)) {
+        return false;
+    }
+    const MalObject *object = (const MalObject *) mal_value_to_heap(receiver);
+    if ((u8) object->header.type != ic->receiver_type || object->shape != ic->shape ||
+        mal_object_prototype(object) != ic->obj || mal_object_has_public_overflow(object)) {
+        return false;
+    }
+    *out = ic->value;
+    mal_perf_ic_load_inherited_hit();
+    return true;
+}
+
 static inline bool mal_vm_inherited_try_load(MalValue receiver, MalValue key,
                                               const MalInlineCache *ic, MalValue *out) {
     if (key != ic->key) {
@@ -1418,37 +1493,7 @@ static inline bool mal_vm_inherited_try_load(MalValue receiver, MalValue key,
     }
 
     if (ic->mode == MAL_IC_MODE_INHERITED_VALUE) {
-        if (ic->poly_count > 0) {
-            u8 receiver_type = ic->receiver_type == MAL_IC_RECEIVER_DICTIONARY
-                ? MAL_HEAP_OBJECT : ic->receiver_type;
-            if (!mal_value_is_heap_type(receiver, receiver_type)) {
-                return false;
-            }
-            const MalObject *object = (const MalObject *) mal_value_to_heap(receiver);
-            bool dictionary_receiver =
-                ic->receiver_type == MAL_IC_RECEIVER_DICTIONARY;
-            if (object->shape != ic->shape ||
-                mal_object_prototype(object) != ic->proto_object[0] ||
-                (dictionary_receiver
-                     ? object != ic->obj || !mal_object_has_public_overflow(object)
-                     : mal_object_has_public_overflow(object))) {
-                return false;
-            }
-            *out = ic->value;
-            mal_perf_ic_load_inherited_hit();
-            return true;
-        }
-        if (!mal_primitive_method_protector || !mal_value_is_object(receiver)) {
-            return false;
-        }
-        const MalObject *object = (const MalObject *) mal_value_to_heap(receiver);
-        if ((u8) object->header.type != ic->receiver_type || object->shape != ic->shape ||
-            mal_object_prototype(object) != ic->obj || mal_object_has_public_overflow(object)) {
-            return false;
-        }
-        *out = ic->value;
-        mal_perf_ic_load_inherited_hit();
-        return true;
+        return mal_vm_inherited_value_try_load(receiver, ic, out);
     }
 
     if (ic->mode == MAL_IC_MODE_MISSING) {
@@ -1568,6 +1613,33 @@ static inline bool mal_vm_try_typed_array_length(
 );
 
 /**
+ * A Map or Set whose `size` resolves to the intact intrinsic getter: the watched
+ * prototype protector holds, the receiver uses its intrinsic prototype, and an
+ * empty own-property layout cannot shadow the accessor.
+ */
+static inline bool mal_vm_admit_collection_size(MalVm *vm, MalValue receiver, usize *size) {
+    if (!mal_primitive_method_protector) return false;
+    const MalObject *collection;
+    MalIntrinsic prototype;
+    if (mal_value_is_map_object(receiver)) {
+        const MalMapObject *map = mal_value_to_map_object(receiver);
+        collection = &map->object;
+        prototype = MAL_INTRINSIC_MAP_PROTOTYPE;
+        *size = mal_map_object_size(map);
+    } else if (mal_value_is_set_object(receiver)) {
+        const MalSetObject *set = mal_value_to_set_object(receiver);
+        collection = &set->object;
+        prototype = MAL_INTRINSIC_SET_PROTOTYPE;
+        *size = mal_set_object_size(set);
+    } else {
+        return false;
+    }
+    return mal_object_prototype(collection) == mal_value_to_object(vm->intrinsics[prototype]) &&
+        (collection->shape == nullptr || collection->shape->inline_count == 0) &&
+        !mal_object_has_public_overflow(collection);
+}
+
+/**
  * Protector/type-gated value and exotic-length entries. Fill sites admit only
  * VM-lifetime canonical string atoms, so identity is stable and a computed-key
  * site cannot use a result cached for an alternating key. Length is read from
@@ -1616,6 +1688,14 @@ static inline bool mal_vm_special_try_load(MalVm *vm, MalValue receiver, MalValu
             return true;
         }
     }
+    if (ic->mode == MAL_IC_MODE_COLLECTION_SIZE) {
+        usize size;
+        if (mal_vm_admit_collection_size(vm, receiver, &size)) {
+            *out = mal_value_from_i32((i32) size);
+            MAL_PERF_COUNT(ic_load_collection_size_hits);
+            return true;
+        }
+    }
     return false;
 }
 
@@ -1657,19 +1737,72 @@ static inline __attribute__((always_inline)) bool mal_vm_property_try_load_stati
     MalVm *vm, MalValue receiver, MalInlineCache *ic, MalValue *out
 ) {
     const MalObject *object = mal_vm_as_object(receiver);
-    if (object != nullptr && ic->mode == MAL_IC_MODE_SHAPE &&
-        object->shape == ic->shape && ic->slot != MAL_IC_VALUE_SLOT) {
-        mal_perf_ic_load_mono_hit();
-        *out = mal_object_field_load_token(object, ic->field);
-        return true;
+    if (object != nullptr && ic->mode == MAL_IC_MODE_SHAPE && ic->slot != MAL_IC_VALUE_SLOT) {
+        if (object->shape == ic->shape) {
+            mal_perf_ic_load_mono_hit();
+            *out = mal_object_field_load_token(object, ic->field);
+            return true;
+        }
+        if (ic->poly_count > 0 && object->shape == ic->poly_shape[0]) {
+            MAL_PERF_COUNT(ic_load_poly_hits);
+            *out = mal_vm_object_poly_load(object, ic, 0);
+            return true;
+        }
     }
     if (ic->mode == MAL_IC_MODE_SHAPE &&
         mal_vm_watched_try_load_static(receiver, ic, out)) return true;
+    // Prototype methods (`array.pop`, class methods) would otherwise pay the out-of-line probe.
+    if (ic->mode == MAL_IC_MODE_INHERITED_VALUE) {
+        return mal_vm_inherited_value_try_load(receiver, ic, out);
+    }
+    // String length is a non-writable own property no prototype can shadow.
+    if (ic->mode == MAL_IC_MODE_STRING_LENGTH && mal_value_is_string(receiver)) {
+        mal_perf_ic_load_string_length_hit();
+        *out = mal_value_from_i32((i32) mal_value_to_string(receiver)->length);
+        return true;
+    }
     MalStaticPropertyProbeResult result =
         mal_vm_property_try_load_static_remaining(vm, receiver, object, ic);
     if (!result.hit) return false;
     *out = result.value;
     return true;
+}
+
+/**
+ * Static `.length` loads. Arrays, and typed arrays whose prototype is the kind
+ * prototype or this site's registered intermediate prototype, answer inline when
+ * the view has no own named properties.
+ */
+static inline bool mal_vm_property_try_load_length_static(
+    MalVm *vm, MalValue receiver, MalInlineCache *ic, MalValue *out
+) {
+    if (ic->mode == MAL_IC_MODE_ARRAY_LENGTH &&
+        mal_value_is_heap_type(receiver, MAL_HEAP_ARRAY_OBJECT)) {
+        *out = mal_ops_number_value(
+            (f64) ((const MalArrayObject *) mal_value_to_heap(receiver))->length);
+        mal_perf_ic_load_array_length_hit();
+        return true;
+    }
+    if (ic->mode == MAL_IC_MODE_TYPED_ARRAY_LENGTH && mal_primitive_method_protector &&
+        mal_value_is_typed_array_object(receiver)) {
+        const MalTypedArrayObject *array = mal_value_to_typed_array_object(receiver);
+        const MalObject *prototype = mal_object_prototype(&array->object);
+        const MalArrayBufferObject *buffer = array->buffer;
+        if (prototype != nullptr &&
+            (prototype == ic->proto_object[0] ||
+             prototype == mal_value_to_object(
+                 vm->intrinsics[MAL_INTRINSIC_TYPED_ARRAY_KIND_PROTOTYPE_BASE + array->kind])) &&
+            array->object.shape->inline_count == 0 &&
+            !mal_object_has_public_overflow(&array->object) &&
+            // A fixed view over a fixed buffer keeps its validated extent until detached.
+            !array->length_tracking && buffer != nullptr && !buffer->detached &&
+            !buffer->resizable && !buffer->shared) {
+            *out = mal_value_from_u32(array->length);
+            mal_perf_ic_load_typed_array_length_hit();
+            return true;
+        }
+    }
+    return mal_vm_property_try_load_static(vm, receiver, ic, out);
 }
 
 /** Captured storage is usable only before the region's first generic continuation. */
@@ -2286,7 +2419,7 @@ static inline MalValue mal_vm_contained_fixed_numeric_typed_array_load(
         kind);
 }
 
-static inline MalValue mal_vm_indexed_fast_load(MalVm *vm, MalValue object_value, MalValue key_value, MalInlineCache *ic) {
+static inline MalValue mal_vm_indexed_fast_load_full(MalVm *vm, MalValue object_value, MalValue key_value, MalInlineCache *ic) {
     if (mal_ops_is_number(key_value)) {
         f64 index = mal_ops_number_as_f64(key_value);
         if (mal_value_is_heap_type(object_value, MAL_HEAP_ARRAY_OBJECT)) {
@@ -2307,6 +2440,15 @@ static inline MalValue mal_vm_indexed_fast_load(MalVm *vm, MalValue object_value
                     array, element, array->kind, mal_typed_array_element_size(array->kind));
             }
             return mal_typed_array_object_get(vm, array, element);
+        } else if (mal_value_is_string(object_value)) {
+            // An integer index below the length is an own property of the String
+            // exotic object, so no prototype property can shadow its code unit.
+            MalString *string = mal_value_to_string(object_value);
+            if (index >= 0.0 && index < (f64) mal_string_length(string) && index == (f64) (u32) index) {
+                c16 unit = mal_string_code_unit_at(string, (usize) index);
+                MalString *cached = unit <= UINT8_MAX ? vm->code_unit_strings[unit] : nullptr;
+                return mal_value_from_string(cached != nullptr ? cached : mal_intrinsic_code_unit(vm, unit));
+            }
         }
     }
     // Inline the monomorphic object-shape hit so a repeat `o.k` read is a shape +
@@ -2322,6 +2464,40 @@ static inline MalValue mal_vm_indexed_fast_load(MalVm *vm, MalValue object_value
     // keeping this inline fast path tiny stops the poly/mega logic from bloating
     // every compiled property site (which regressed the monomorphic hot path).
     return mal_vm_op_load_property_ic(vm, object_value, key_value, ic);
+}
+
+/** Byte reads from Uint8Array and Buffer views and Latin-1 character reads from
+ * flat strings drive text loops; test them before the complete keyed load.
+ * Forcing this inline at every keyed-load site grew large generated programs
+ * by several percent. */
+static inline MalValue mal_vm_indexed_fast_load(
+    MalVm *vm, MalValue object_value, MalValue key_value, MalInlineCache *ic
+) {
+    if (mal_ops_is_number(key_value) && mal_value_is_string(object_value)) {
+        const MalString *string = mal_value_to_string(object_value);
+        f64 index = mal_ops_number_as_f64(key_value);
+        if (string->storage < MAL_STRING_STORAGE_DEPENDENT && index >= 0 &&
+            index < (f64) string->length) {
+            usize position = (usize) index;
+            c16 unit = (f64) position == index
+                ? mal_string_flat_code_unit_at(string, position) : UINT16_MAX;
+            MalString *character = unit <= UINT8_MAX ? vm->code_unit_strings[unit] : nullptr;
+            if (character != nullptr) return mal_value_from_string(character);
+        }
+    } else if (mal_ops_is_number(key_value) && mal_value_is_typed_array_object(object_value)) {
+        const MalTypedArrayObject *array = mal_value_to_typed_array_object(object_value);
+        const MalArrayBufferObject *buffer = array->buffer;
+        f64 index = mal_ops_number_as_f64(key_value);
+        if (array->kind == MAL_TA_UINT8 && !array->length_tracking && buffer != nullptr &&
+            !buffer->detached && index >= 0 && index < (f64) array->length &&
+            (u64) array->byte_offset + array->length <= buffer->byte_length) {
+            u32 element = (u32) index;
+            if ((f64) element == index) {
+                return mal_value_from_i32((u8) buffer->data[array->byte_offset + element]);
+            }
+        }
+    }
+    return mal_vm_indexed_fast_load_full(vm, object_value, key_value, ic);
 }
 
 static inline void mal_vm_indexed_fast_store(MalVm *vm, MalValue object_value, MalValue key_value, MalValue value, bool strict, MalInlineCache *ic) {
@@ -2499,6 +2675,25 @@ static inline bool mal_vm_array_try_store(MalArrayObject *arr, f64 index, MalVal
     return false;
 }
 
+/**
+ * CreateDataProperty of a default element through the dense vector, mirroring
+ * mal_array_object_store's fast arm; false defers to the generic define.
+ */
+static inline bool mal_vm_array_try_define_index(MalArrayObject *arr, f64 index, MalValue value) {
+    if (!(index >= 0 && index < (f64) UINT32_MAX)) return false;
+    u32 k = (u32) index;
+    if ((f64) k != index) return false;
+    if (arr->dense_deopted || !arr->object.extensible || arr->object.is_prototype ||
+        (k >= arr->length && !arr->length_writable) ||
+        mal_array_object_dense_element_flags(arr) !=
+            (MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE) ||
+        mal_array_object_dense_store(arr, k, value) != MAL_ARRAY_DENSE_APPLIED) {
+        return false;
+    }
+    if (k >= arr->length) arr->length = k + 1;
+    return true;
+}
+
 /** Reserve the final capacity of a compiler-proven pristine indexed-fill Array. */
 bool mal_vm_try_fresh_dense_indexed_fill_reserve(MalVm *vm, MalValue array_value, u32 needed);
 
@@ -2628,44 +2823,48 @@ static inline bool mal_vm_iterator_try_dense_array_cursor_step(
     return false;
 }
 
+/** Done states and entry into the next flat rope leaf; like the inline path, never allocates. */
+bool mal_vm_iterator_try_string_cursor_step_full(
+    MalVm *vm, MalIteratorObject *iterator, MalValue *value_out, bool *done_out
+);
+
 // Caller validates the captured String protocol; misses cannot advance the frontier.
+// Cached Latin-1 characters within the current leaf stay inline in generated loops.
 static inline bool mal_vm_iterator_try_string_cursor_step(
     MalVm *vm, MalIteratorObject *iterator, MalValue *value_out, bool *done_out
 ) {
-    if (iterator->done) {
-        *value_out = MAL_VALUE_UNDEFINED;
-        *done_out = true;
-        return true;
-    }
-    MalString *string = mal_value_to_string(iterator->target);
-    MalStringCursor *cursor = iterator->string_cursor;
-    if (iterator->index >= string->length) {
-        if (cursor != nullptr) return false;
-        iterator->done = true;
-        *value_out = MAL_VALUE_UNDEFINED;
-        *done_out = true;
-        return true;
-    }
-    c16 unit;
-    if (cursor != nullptr) {
-        if (cursor->iterator == nullptr || cursor->local >= cursor->iterator->current.length) {
-            return false;
+    if (!iterator->done) {
+        const MalString *string = mal_value_to_string(iterator->target);
+        const MalStringCursor *cursor = iterator->string_cursor;
+        u64 index = iterator->index;
+        const MalString *leaf = nullptr;
+        usize offset = 0;
+        if (cursor == nullptr) {
+            if (index < string->length && string->storage < MAL_STRING_STORAGE_DEPENDENT) {
+                leaf = string;
+                offset = (usize) index;
+            }
+        } else if (cursor->iterator != nullptr &&
+                   cursor->local < cursor->iterator->current.length) {
+            leaf = cursor->iterator->current.string;
+            offset = cursor->iterator->current.offset + cursor->local;
         }
-        MalStringIteratorPart *part = &cursor->iterator->current;
-        unit = mal_string_flat_code_unit_at(part->string, part->offset + cursor->local);
-    } else {
-        if (string->storage == MAL_STRING_STORAGE_CONS) return false;
-        unit = mal_string_code_unit_at(string, (usize) iterator->index);
+        if (leaf != nullptr) {
+            c16 unit = mal_string_flat_code_unit_at(leaf, offset);
+            MalString *character = unit <= UINT8_MAX ? vm->code_unit_strings[unit] : nullptr;
+            if (character != nullptr) {
+                iterator->index = index + 1;
+                if (cursor != nullptr) {
+                    iterator->string_cursor->local++;
+                    iterator->string_cursor->position++;
+                }
+                *value_out = mal_value_from_string(character);
+                *done_out = false;
+                return true;
+            }
+        }
     }
-    if (unit > UINT8_MAX || vm->code_unit_strings[unit] == nullptr) return false;
-    iterator->index++;
-    if (cursor != nullptr) {
-        cursor->local++;
-        cursor->position++;
-    }
-    *value_out = mal_value_from_string(vm->code_unit_strings[unit]);
-    *done_out = false;
-    return true;
+    return mal_vm_iterator_try_string_cursor_step_full(vm, iterator, value_out, done_out);
 }
 
 static inline bool mal_vm_iterator_try_string_step(

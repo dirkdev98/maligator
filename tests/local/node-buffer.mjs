@@ -318,6 +318,70 @@ throws("write rejects fractional offsets", RangeError, () =>
 	Buffer.alloc(1).write("x", 0.5),
 );
 
+function lengthSum(view, rounds) {
+	let total = 0;
+	for (let round = 0; round < rounds; round++) {
+		for (let index = 0; index < view.length; index++) total += view[index];
+	}
+	return total;
+}
+check(
+	"buffer length loop reads every byte",
+	lengthSum(Buffer.from("abc"), 50) === 50 * (97 + 98 + 99),
+);
+class ShortView extends Uint8Array {}
+Object.defineProperty(ShortView.prototype, "length", { get: () => 1 });
+check(
+	"subclass prototype length getter is observed",
+	lengthSum(new ShortView([5, 6, 7]), 3) === 15,
+);
+check("plain views keep their exotic length", lengthSum(new Uint8Array([1, 2]), 2) === 6);
+check(
+	"high bytes read unsigned through indexed loads",
+	lengthSum(Buffer.from([0x80, 0xff, 0x7f, 0x01]), 2) === 2 * (0x80 + 0xff + 0x7f + 0x01),
+);
+const offsetView = new Uint8Array(new Uint8Array([9, 200, 7, 250, 5]).buffer, 1, 3);
+check(
+	"offset views read their own window",
+	lengthSum(offsetView, 1) === 200 + 7 + 250 &&
+		offsetView[3] === undefined &&
+		offsetView[1.5] === undefined &&
+		offsetView[-0] === 200,
+);
+function lengthOf(view) {
+	return view.length;
+}
+for (let round = 0; round < 4; round++) lengthOf(new Uint8Array(3));
+const orphan = new Uint8Array(3);
+Object.setPrototypeOf(orphan, null);
+check("null-prototype views have no inherited length", lengthOf(orphan) === undefined);
+if (typeof ArrayBuffer.prototype.resize === "function") {
+	const resizable = new ArrayBuffer(4, { maxByteLength: 8 });
+	const fixedView = new Uint8Array(resizable, 0, 2);
+	const trackingView = new Uint8Array(resizable);
+	const lengthsBefore = lengthOf(fixedView) + lengthOf(trackingView);
+	resizable.resize(1);
+	check(
+		"resized buffers update view lengths",
+		lengthsBefore === 6 && lengthOf(fixedView) === 0 && lengthOf(trackingView) === 1,
+	);
+}
+if (typeof ArrayBuffer.prototype.transfer === "function") {
+	const detachable = new Uint8Array([1, 2, 3]);
+	const before = lengthSum(detachable, 1);
+	detachable.buffer.transfer();
+	check("detached views read undefined", before === 6 && detachable[0] === undefined);
+}
+const warmed = Buffer.from([1, 2, 3]);
+const warmedTotal = lengthSum(warmed, 4);
+Object.defineProperty(Buffer.prototype, "length", { configurable: true, get: () => 2 });
+check(
+	"Buffer.prototype length getter defined after warmup is observed",
+	warmedTotal === 24 && lengthSum(warmed, 4) === 12,
+);
+delete Buffer.prototype.length;
+check("deleting the override restores the exotic length", lengthSum(warmed, 1) === 6);
+
 let passed = 0;
 for (const [name, ok] of results) {
 	if (ok) passed++;

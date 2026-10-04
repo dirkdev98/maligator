@@ -433,7 +433,7 @@ interface NativeRelocationExpressions {
 	bigintIndex(index: number): string;
 	templateOffset(index: number): string;
 	sourcePosition(index: number): string;
-	stringValue(index: number, suffix: string): string;
+	stringValue(index: number): string;
 	bigintValue(index: number, suffix: string): string;
 }
 
@@ -450,10 +450,9 @@ function nativeRelocationExpressions(enabled: boolean): NativeRelocationExpressi
 		bigintIndex: (index) => indexed("bigint_base", index),
 		templateOffset: (index) => indexed("literal_template_base", index),
 		sourcePosition: (index) => indexed("source_position_base", index),
-		stringValue: (index, suffix) =>
-			enabled
-				? `mal_value_from_string(&vm->runtime_image->string_constants[${indexed("string_base", index)}])`
-				: `mal_value_from_string(&mal_strings${suffix}[${index}])`,
+		// Widening mutates the row, so literals must use the current VM's copy.
+		stringValue: (index) =>
+			`mal_value_from_string(&vm->runtime_image->string_constants[${indexed("string_base", index)}])`,
 		bigintValue: (index, suffix) =>
 			enabled
 				? `mal_value_from_bigint(&vm->runtime_image->bigint_constants[${indexed("bigint_base", index)}])`
@@ -626,6 +625,16 @@ function nativeInt32Expr(operator: string, left: string, right: string): string 
 	}
 	const right32 = operator === ">>" ? `(${right} & 0x1F)` : right;
 	return `${left} ${bitwise} ${right32}`;
+}
+
+const LENGTH_PROPERTY_UNITS = [..."length"].map((character) => character.charCodeAt(0));
+
+function isLengthPropertyName(units: ReadonlyArray<number> | undefined): boolean {
+	return (
+		units !== undefined &&
+		units.length === LENGTH_PROPERTY_UNITS.length &&
+		units.every((unit, index) => unit === LENGTH_PROPERTY_UNITS[index])
+	);
 }
 
 function nativeNumberExpr(operator: string, left: string, right: string): string | null {
@@ -2360,7 +2369,7 @@ function emitStringSwitch(
 		lines.push(`if (!mal_value_is_string(r${site.selector})) { ${fallback} }`);
 	lines.push(`MalString *${value} = mal_value_to_string(r${site.selector});`);
 	const compare = (label: (typeof labels)[number]) =>
-		`if (mal_string_equals(${value}, mal_value_to_string(${relocation.stringValue(label.stringIndex, suffix)}))) { ${branch(label.targetIp, label.branchIp)} }`;
+		`if (mal_string_equals(${value}, mal_value_to_string(${relocation.stringValue(label.stringIndex)}))) { ${branch(label.targetIp, label.branchIp)} }`;
 	if (strategy === "direct") {
 		for (const label of labels) lines.push(compare(label));
 	} else {
@@ -2843,6 +2852,14 @@ function emitBody(
 		jumpTargets.add(handler.handlerIp);
 	}
 	const staticDefineStringIndexByIp = new Map<number, number>();
+	const iterationEligibilityRegisters = new Set<number>();
+	for (const instruction of fn.instructions) {
+		if (
+			instruction.opcode === "LOAD_INTRINSIC" &&
+			instruction.intrinsic === "__arrayIterationEligible"
+		)
+			iterationEligibilityRegisters.add(instruction.dst);
+	}
 	for (let ip = 1; ip < fn.instructions.length; ip++) {
 		const instruction = fn.instructions[ip]!;
 		const prior = fn.instructions[ip - 1]!;
@@ -3046,6 +3063,11 @@ function emitBody(
 		lines.push(
 			`MalIteratorObject *__iter_cursor_${action.cursor.initializeIp} = nullptr;`,
 		);
+		if (action.cursor.protocol === "array-values") {
+			lines.push(
+				`MalIteratorObject *__iter_string_cursor_${action.cursor.initializeIp} = nullptr;`,
+			);
+		}
 	}
 	for (const action of nativeArrayPairDestructureActionByIp.values()) {
 		if (action.role !== "initialize") continue;
@@ -3675,6 +3697,7 @@ function emitBody(
 				nativePlan: nativeInstructions[ip],
 				stringConstants,
 				staticDefineStringIndexByIp,
+				iterationEligibilityRegisters,
 				resources,
 				directEntryCalls,
 				stringLeafCaches,
@@ -4172,6 +4195,8 @@ interface NativeInstructionContext {
 	readonly relocation: NativeRelocationExpressions;
 	readonly stringConstants: ReadonlyArray<ReadonlyArray<number>>;
 	readonly staticDefineStringIndexByIp: ReadonlyMap<number, number>;
+	// Registers loaded from the Array iteration guard; a call through one checks identity first.
+	readonly iterationEligibilityRegisters?: ReadonlySet<number>;
 }
 
 type NativeTypedArrayElementKind = Extract<
@@ -4288,6 +4313,7 @@ function emitInstruction(
 	const genericContext: NativeInstructionContext = {
 		stringConstants: context.stringConstants,
 		staticDefineStringIndexByIp: context.staticDefineStringIndexByIp,
+		iterationEligibilityRegisters: context.iterationEligibilityRegisters,
 		directEntryCalls: context.directEntryCalls,
 		stringLeafCaches: context.stringLeafCaches,
 		profileSiteId: context.profileSiteId,
@@ -4365,7 +4391,7 @@ function emitInstruction(
 			case "number":
 				return `mal_value_from_i32(${decoded.value})`;
 			case "string":
-				return relocation.stringValue(decoded.index, suffix);
+				return relocation.stringValue(decoded.index);
 		}
 	};
 	const operandRep = (operand: number): RegisterRep => {
@@ -4394,33 +4420,69 @@ function emitInstruction(
 			: storeNumber(dst, expression);
 	const storeBoolean = (dst: number, expression: string): string =>
 		`r${dst} = ${reps[dst] === "boolean" ? expression : profileCall("boxing", `mal_value_new_boolean(${expression})`)};`;
+	// Exact-receiver collection builtin body. Keys already held as Numbers use the
+	// unboxed entries, which canonicalize the f64 directly instead of boxing it first.
+	const collectionBuiltinCall = (
+		operation: string,
+		receiver: string,
+		args: ReadonlyArray<number>,
+	): { readonly call: string; readonly boolean: boolean } | undefined => {
+		const numberKey = args[0] === undefined ? null : nativeNumberOperand(args[0]);
+		const key =
+			numberKey ??
+			(args[0] === undefined ? "MAL_VALUE_UNDEFINED" : boxedOperand(args[0]));
+		const value = args[1] === undefined ? "MAL_VALUE_UNDEFINED" : boxedOperand(args[1]);
+		const entry = (boxed: string, number: string): string =>
+			`${numberKey === null ? boxed : number}(vm, ${receiver}, ${key}`;
+		switch (operation) {
+			case "Map.prototype.get":
+				return {
+					call: `${entry("mal_builtin_map_get_key", "mal_builtin_map_get_number")})`,
+					boolean: false,
+				};
+			case "Map.prototype.set":
+				return {
+					call: `${entry("mal_builtin_map_set_key_value", "mal_builtin_map_set_number")}, ${value})`,
+					boolean: false,
+				};
+			case "Map.prototype.has":
+				return {
+					call: `${entry("mal_builtin_map_has_key", "mal_builtin_map_has_number")})`,
+					boolean: true,
+				};
+			case "Map.prototype.delete":
+				return {
+					call: `${entry("mal_builtin_map_delete_key", "mal_builtin_map_delete_number")})`,
+					boolean: true,
+				};
+			case "Set.prototype.add":
+				return {
+					call: `${entry("mal_builtin_set_add_value", "mal_builtin_set_add_number")})`,
+					boolean: false,
+				};
+			case "Set.prototype.has":
+				return {
+					call: `${entry("mal_builtin_set_has_value", "mal_builtin_set_has_number")})`,
+					boolean: true,
+				};
+			case "Set.prototype.delete":
+				return {
+					call: `${entry("mal_builtin_set_delete_value", "mal_builtin_set_delete_number")})`,
+					boolean: true,
+				};
+			default:
+				return undefined;
+		}
+	};
 	const fixedCollectionCall = (
 		operation: string,
 		dst: number,
 		receiver: number,
 		args: ReadonlyArray<number>,
 	): string | null => {
-		const key = args[0] === undefined ? "MAL_VALUE_UNDEFINED" : boxedOperand(args[0]);
-		const value = args[1] === undefined ? "MAL_VALUE_UNDEFINED" : boxedOperand(args[1]);
-		const parameters = `vm, ${boxedOperand(receiver)}, ${key}`;
-		switch (operation) {
-			case "Map.prototype.get":
-				return `r${dst} = mal_builtin_map_get_key(${parameters});`;
-			case "Map.prototype.set":
-				return `r${dst} = mal_builtin_map_set_key_value(${parameters}, ${value});`;
-			case "Map.prototype.has":
-				return storeBoolean(dst, `mal_builtin_map_has_key(${parameters})`);
-			case "Map.prototype.delete":
-				return storeBoolean(dst, `mal_builtin_map_delete_key(${parameters})`);
-			case "Set.prototype.add":
-				return `r${dst} = mal_builtin_set_add_value(${parameters});`;
-			case "Set.prototype.has":
-				return storeBoolean(dst, `mal_builtin_set_has_value(${parameters})`);
-			case "Set.prototype.delete":
-				return storeBoolean(dst, `mal_builtin_set_delete_value(${parameters})`);
-			default:
-				return null;
-		}
+		const body = collectionBuiltinCall(operation, boxedOperand(receiver), args);
+		if (body === undefined) return null;
+		return body.boolean ? storeBoolean(dst, body.call) : `r${dst} = ${body.call};`;
 	};
 	const builtinOperandKind = (operand: number): CompilerValueKindMask | undefined => {
 		if (
@@ -5058,7 +5120,7 @@ function emitInstruction(
 			];
 		case "CREATE_STRING":
 			return [
-				`r${instruction.dst} = ${relocation.stringValue(instruction.stringIndex, suffix)};`,
+				`r${instruction.dst} = ${relocation.stringValue(instruction.stringIndex)};`,
 			];
 		case "CREATE_BIGINT":
 			return [
@@ -5190,10 +5252,24 @@ function emitInstruction(
 					`}`,
 				];
 			}
-			return [
-				`mal_vm_op_define_property(vm, ${boxed(instruction.object)}, ${boxed(instruction.key)}, ${boxed(instruction.value)}, ${instruction.enumerable}, ${instruction.writable}, ${instruction.configurable});`,
-				throwCheck(),
-			];
+			const define = `mal_vm_op_define_property(vm, ${boxed(instruction.object)}, ${boxed(instruction.key)}, ${boxed(instruction.value)}, ${instruction.enumerable}, ${instruction.writable}, ${instruction.configurable});`;
+			const keyRepresentation = reps[instruction.key];
+			if (
+				(keyRepresentation === "number" || keyRepresentation === "int32") &&
+				instruction.enumerable &&
+				instruction.writable &&
+				instruction.configurable
+			) {
+				const array = `__define_array_${ip}`;
+				return [
+					`MalArrayObject *${array} = mal_vm_as_array(${boxed(instruction.object)});`,
+					`if (!(${array} && mal_vm_array_try_define_index(${array}, ${num(instruction.key)}, ${boxed(instruction.value)}))) {`,
+					`  ${define}`,
+					`  ${throwCheck()}`,
+					`}`,
+				];
+			}
+			return [define, throwCheck()];
 		}
 		case "DEFINE_ACCESSOR":
 			// Object-literal / class getter or setter; no user code run.
@@ -5860,17 +5936,13 @@ function emitInstruction(
 				}
 				return ordinary();
 			}
-			const name = context.stringConstants[instruction.stringIndex];
-			const lengthName =
-				name?.length === 6 &&
-				name.every((unit, index) => unit === [108, 101, 110, 103, 116, 104][index]);
-			const probe = (): string => {
-				const cache = `&${nativeBodyReference(resources, "propertyCache")}[${instruction.icIndex}]`;
-				const ordinary = `mal_vm_property_try_load_static(vm, ${boxed(instruction.object)}, ${cache}, &__v_${ip})`;
-				return lengthName
-					? `mal_vm_special_try_load_static(vm, ${boxed(instruction.object)}, ${cache}, &__v_${ip}) || ${ordinary}`
-					: ordinary;
-			};
+			const probeHelper = isLengthPropertyName(
+				context.stringConstants[instruction.stringIndex],
+			)
+				? "mal_vm_property_try_load_length_static"
+				: "mal_vm_property_try_load_static";
+			const probe = (): string =>
+				`${probeHelper}(vm, ${boxed(instruction.object)}, &${nativeBodyReference(resources, "propertyCache")}[${instruction.icIndex}], &__v_${ip})`;
 			const ordinary = (): Array<string> => [
 				`MalObject *${receiverName} = mal_vm_as_object(${boxed(instruction.object)});`,
 				`MalValue __v_${ip};`,
@@ -7140,8 +7212,9 @@ function emitInstruction(
 					const position =
 						positionOperand === undefined ? "0.0" : nativeNumberOperand(positionOperand);
 					if (operandIsString(instruction.thisValue) && position !== null) {
+						context.stringLeafCaches.add(ip);
 						return [
-							`r${instruction.dst} = ${profileCall("string", `mal_builtin_string_char_code_at_number(${boxedOperand(instruction.thisValue)}, ${position})`)};`,
+							`r${instruction.dst} = ${profileCall("string", `mal_builtin_string_char_code_at_cached_number(vm, &__string_leaf_cache_${ip}, ${boxedOperand(instruction.thisValue)}, ${position})`)};`,
 							poll,
 						];
 					}
@@ -7828,8 +7901,9 @@ function emitInstruction(
 				];
 			}
 			if (instruction.operation === "String.prototype.charCodeAt") {
+				context.stringLeafCaches.add(ip);
 				return [
-					`r${instruction.dst} = ${profileCall("string", `mal_builtin_string_char_code_at_known(vm, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${instruction.arguments.length})`)};`,
+					`r${instruction.dst} = ${profileCall("string", `mal_builtin_string_char_code_at_known(vm, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${instruction.arguments.length}, &__string_leaf_cache_${ip})`)};`,
 					throwCheck(),
 					poll,
 				];
@@ -7983,6 +8057,25 @@ function emitInstruction(
 					: `((MalValue[]){ ${args.map(boxedOperand).join(", ")} })`;
 			const tmp = `call_result_${ip}`;
 			const callResult = (value: string): string => callValue(instruction.dst, value);
+			const calleeOperand = decodeVmValueOperand(instruction.callee);
+			if (
+				calleeOperand.kind === "register" &&
+				context.iterationEligibilityRegisters?.has(calleeOperand.register) === true &&
+				args.length === 4
+			) {
+				const callee = boxedOperand(instruction.callee);
+				return [
+					`if (${callee} == vm->intrinsics[MAL_INTRINSIC_ARRAY_ITERATION_ELIGIBLE]) {`,
+					`  r${instruction.dst} = ${callResult(`mal_value_new_boolean(mal_builtin_array_iteration_eligible_values(vm, ${argsExpr}))`)};`,
+					`} else {`,
+					`  static MAL_ISOLATE_LOCAL MalCallCache __cc_${ip};`,
+					`  MalCompletion ${tmp} = mal_vm_call_cached(vm, &__cc_${ip}, ${callee}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
+					`  if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow()}`,
+					`  r${instruction.dst} = ${callResult(`${tmp}.value`)};`,
+					`}`,
+					poll,
+				];
+			}
 			if (nativeStringCharCodeAtChainAction?.role === "call") {
 				const { chain } = nativeStringCharCodeAtChainAction;
 				const captured = `__string_char_code_at_${chain.callIp}_captured`;
@@ -7995,9 +8088,10 @@ function emitInstruction(
 						? num(boundedArgument.register)
 						: undefined;
 				if (boundedPosition !== undefined) {
+					context.stringLeafCaches.add(ip);
 					const direct = profileCall(
 						"string",
-						`mal_builtin_string_char_code_at_in_bounds(${boxedOperand(instruction.thisValue)}, (usize) ${boundedPosition})`,
+						`mal_builtin_string_char_code_at_cached_in_bounds(vm, &__string_leaf_cache_${ip}, ${boxedOperand(instruction.thisValue)}, (usize) ${boundedPosition})`,
 					);
 					return [
 						`static MAL_ISOLATE_LOCAL MalCallCache __cc_${ip};`,
@@ -8014,10 +8108,11 @@ function emitInstruction(
 				}
 				if (chain.methodIdentity === "authority-invariant") {
 					const value = `string_char_code_at_${ip}_value`;
+					context.stringLeafCaches.add(ip);
 					return [
 						`static MAL_ISOLATE_LOCAL MalCallCache __cc_${ip};`,
 						`if (${captured}) {`,
-						`  MalValue ${value} = ${profileCall("string", `mal_builtin_string_char_code_at_known(vm, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length})`)};`,
+						`  MalValue ${value} = ${profileCall("string", `mal_builtin_string_char_code_at_known(vm, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length}, &__string_leaf_cache_${ip})`)};`,
 						`  ${throwCheck()}`,
 						`  r${instruction.dst} = ${callResult(value)};`,
 						`} else {`,
@@ -8169,7 +8264,7 @@ function emitInstruction(
 					const fast = `__regexp_exec_${site.projection.callIp}_char_${ip}_fast`;
 					const start = `__regexp_exec_${site.projection.callIp}_starts[${slot}]`;
 					const end = `__regexp_exec_${site.projection.callIp}_ends[${slot}]`;
-					const codeUnit = `mal_string_code_units(mal_value_to_string(__gc_slots[${site.subjectSlot}]))[${start}]`;
+					const codeUnit = `mal_string_code_unit_at(mal_value_to_string(__gc_slots[${site.subjectSlot}]), (usize) ${start})`;
 					const value =
 						reps[instruction.dst] === "number"
 							? `(f64) ${codeUnit}`
@@ -8545,17 +8640,65 @@ function emitInstruction(
 				guardedBuiltinOperation === "Set.prototype.delete"
 			) {
 				const operation = nativeBuiltinCollectionOperation(guardedBuiltinOperation);
+				const exactReceiver = callPlan?.exactCollectionReceiver;
 				const receiverFact =
-					callPlan?.exactCollectionReceiver === "Map"
+					exactReceiver === "Map"
 						? "MAL_BUILTIN_COLLECTION_RECEIVER_EXACT_MAP"
-						: callPlan?.exactCollectionReceiver === "Set"
+						: exactReceiver === "Set"
 							? "MAL_BUILTIN_COLLECTION_RECEIVER_EXACT_SET"
 							: "MAL_BUILTIN_COLLECTION_RECEIVER_UNKNOWN";
+				const callee = boxedOperand(instruction.callee);
+				const receiver = boxedOperand(instruction.thisValue);
+				// The runtime dispatcher accepts has/delete from either brand, so the arms do too.
+				const method = guardedBuiltinOperation.slice(
+					guardedBuiltinOperation.lastIndexOf(".") + 1,
+				);
+				const arms = (["Map", "Set"] as const).flatMap((brand) => {
+					const builtin = collectionBuiltinCall(
+						`${brand}.prototype.${method}`,
+						receiver,
+						args,
+					);
+					if (
+						builtin === undefined ||
+						(exactReceiver !== undefined && exactReceiver !== brand)
+					)
+						return [];
+					const body = builtin.boolean
+						? `mal_value_new_boolean(${builtin.call})`
+						: builtin.call;
+					const intrinsic = `MAL_INTRINSIC_${brand.toUpperCase()}_PROTOTYPE_${method.toUpperCase()}`;
+					const brandCheck =
+						exactReceiver === brand
+							? ""
+							: ` && mal_value_is_${brand.toLowerCase()}_object(${receiver})`;
+					// Arms keep the dispatcher's direct-hit counters, so either route reports the same hits.
+					const counters = [
+						...(exactReceiver === brand ? ["collection_exact_receiver_hits"] : []),
+						`collection_direct_${brand.toLowerCase()}_${method}_hits`,
+					];
+					return [
+						{
+							guard: `${callee} == vm->intrinsics[${intrinsic}]${brandCheck}`,
+							body,
+							counters,
+						},
+					];
+				});
+				// An intrinsic callee on its own brand runs the builtin body without a call frame;
+				// those bodies never complete abruptly, so only the dispatcher needs a throw check.
 				return [
 					`static MAL_ISOLATE_LOCAL MalCallCache __cc_${ip};`,
-					`MalCompletion ${tmp} = mal_builtin_collection_direct(vm, &__cc_${ip}, ${operation}, ${receiverFact}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
-					`if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow()}`,
-					`r${instruction.dst} = ${tmp}.value;`,
+					...arms.flatMap((arm, index) => [
+						`${index === 0 ? "if" : "} else if"} (${arm.guard}) {`,
+						...arm.counters.map((counter) => `  MAL_PERF_COUNT(${counter});`),
+						`  r${instruction.dst} = ${callResult(arm.body)};`,
+					]),
+					...(arms.length === 0 ? ["{"] : ["} else {"]),
+					`  MalCompletion ${tmp} = mal_builtin_collection_direct(vm, &__cc_${ip}, ${operation}, ${receiverFact}, ${callee}, ${receiver}, ${argsExpr}, ${args.length});`,
+					`  if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow()}`,
+					`  r${instruction.dst} = ${callResult(`${tmp}.value`)};`,
+					`}`,
 					poll,
 				];
 			}
@@ -8563,6 +8706,18 @@ function emitInstruction(
 				return [
 					`static MAL_ISOLATE_LOCAL MalCallCache __cc_${ip};`,
 					`MalCompletion ${tmp} = mal_builtin_array_push_direct(vm, &__cc_${ip}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length}, nullptr);`,
+					`if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow()}`,
+					`r${instruction.dst} = ${tmp}.value;`,
+					poll,
+				];
+			}
+			const dequeMethod = (["pop", "shift", "unshift"] as const).find((method) =>
+				vmCallProvesBuiltin(callPlan, `Array.prototype.${method}`),
+			);
+			if (dequeMethod !== undefined) {
+				return [
+					`static MAL_ISOLATE_LOCAL MalCallCache __cc_${ip};`,
+					`MalCompletion ${tmp} = mal_builtin_array_deque_direct(vm, &__cc_${ip}, MAL_GUARDED_BUILTIN_ARRAY_${dequeMethod.toUpperCase()}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
 					`if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow()}`,
 					`r${instruction.dst} = ${tmp}.value;`,
 					poll,
@@ -9018,6 +9173,13 @@ function emitInstruction(
 				lines.push(
 					`__iter_cursor_${cursor.initializeIp} = mal_vm_iterator_protocol_cursor(&${rec}, ${nativeIteratorCursorProtocol(cursor)});`,
 				);
+				// The array speculation has no proof; a String source resolves its
+				// protocol once here instead of revalidating it on every step.
+				if (cursor.protocol === "array-values") {
+					lines.push(
+						`__iter_string_cursor_${cursor.initializeIp} = __iter_cursor_${cursor.initializeIp} == nullptr ? mal_vm_iterator_protocol_cursor(&${rec}, MAL_ITERATOR_CURSOR_STRING_VALUES) : nullptr;`,
+					);
+				}
 			}
 			if (nativeArrayPairDestructureAction?.role === "initialize") {
 				const id = nativeArrayPairDestructureAction.cursor.initializeIp;
@@ -9027,6 +9189,10 @@ function emitInstruction(
 					`  r${instruction.iteratorDst} = MAL_VALUE_UNDEFINED;`,
 					`  r${instruction.nextDst} = MAL_VALUE_UNDEFINED;`,
 					`  __iter_cursor_${id} = nullptr;`,
+					...(nativeIteratorCursorAction?.role === "initialize" &&
+					nativeIteratorCursorAction.cursor.protocol === "array-values"
+						? [`  __iter_string_cursor_${id} = nullptr;`]
+						: []),
 					`} else {`,
 					...lines.map((line) => `  ${line}`),
 					`}`,
@@ -9145,14 +9311,19 @@ function emitInstruction(
 						: `r${instruction.doneDst} = ${profileCall("boxing", `mal_value_new_boolean(${done})`)};`,
 				];
 			}
+			const denseArrayProbe = `mal_vm_iterator_try_dense_array_step(&${rec}, &${val}, &${done})`;
+			const denseArrayCursorProbe = `mal_vm_iterator_try_dense_array_cursor_step(__iter_cursor_${cursorInitializeIp}, &${val}, &${done})`;
 			const denseProbe =
 				cursorInitializeIp === undefined
-					? `mal_vm_iterator_try_dense_array_step(&${rec}, &${val}, &${done})`
-					: `(__iter_cursor_${cursorInitializeIp} != nullptr ? mal_vm_iterator_try_dense_array_cursor_step(__iter_cursor_${cursorInitializeIp}, &${val}, &${done}) : mal_vm_iterator_try_dense_array_step(&${rec}, &${val}, &${done}))`;
+					? denseArrayProbe
+					: `(__iter_cursor_${cursorInitializeIp} != nullptr ? ${denseArrayCursorProbe} : ${denseArrayProbe})`;
 			const iteratorProbe =
 				nativeIteratorCursorAction?.cursor.protocol === "string"
 					? `(__iter_cursor_${cursorInitializeIp} != nullptr && mal_vm_iterator_try_string_cursor_step(vm, __iter_cursor_${cursorInitializeIp}, &${val}, &${done}))`
-					: `(${denseProbe} || mal_vm_iterator_try_string_step(vm, &${rec}, &${val}, &${done}))`;
+					: nativeIteratorCursorAction?.cursor.protocol === "array-values" &&
+						  cursorInitializeIp !== undefined
+						? `(__iter_cursor_${cursorInitializeIp} != nullptr ? ${denseArrayCursorProbe} : (__iter_string_cursor_${cursorInitializeIp} != nullptr ? mal_vm_iterator_try_string_cursor_step(vm, __iter_string_cursor_${cursorInitializeIp}, &${val}, &${done}) : (${denseArrayProbe} || mal_vm_iterator_try_string_step(vm, &${rec}, &${val}, &${done}))))`
+						: `(${denseProbe} || mal_vm_iterator_try_string_step(vm, &${rec}, &${val}, &${done}))`;
 			const iteratorFallback =
 				nativeIteratorCursorAction?.cursor.protocol === "string"
 					? step

@@ -50,6 +50,28 @@ check(
 );
 RegExp.$_ = { toString: () => "assigned input" };
 check("legacy RegExp input setter coerces its value", RegExp.input === "assigned input");
+check(
+	"assigning legacy RegExp input keeps the match-derived statics",
+	RegExp.lastMatch === "ab" &&
+		RegExp.leftContext === "prefix-" &&
+		RegExp.rightContext === "-suffix" &&
+		RegExp.$2 === "b",
+);
+
+/x(ā)|(y)/.test("Ā-yĂ");
+check(
+	"legacy RegExp statics follow test() on wide subjects",
+	RegExp.input === "Ā-yĂ" &&
+		RegExp.lastMatch === "y" &&
+		RegExp.$1 === "" &&
+		RegExp.$2 === "y" &&
+		RegExp.$3 === "" &&
+		RegExp.lastParen === "y" &&
+		RegExp.leftContext === "Ā-" &&
+		RegExp.rightContext === "Ă",
+);
+/z/.test("no match");
+check("a failed match leaves the legacy RegExp statics", RegExp.lastMatch === "y");
 
 check(
 	"different flags do not alias",

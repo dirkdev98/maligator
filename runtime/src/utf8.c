@@ -164,6 +164,26 @@ typedef struct MalUtf8StringCursor {
     usize offset;
 } MalUtf8StringCursor;
 
+/** First index in [start, end) whose byte is not ASCII, or `end`. Word tests only
+ * pay off for long runs, so callers keep byte loops for the short runs between
+ * multi-byte sequences. */
+static usize mal_utf8_ascii_run_end(const u8 *bytes, usize start, usize end) {
+    const u64 high_bits = UINT64_C(0x8080808080808080);
+    usize i = start;
+    for (; end - i >= 32; i += 32) {
+        u64 words[4];
+        memcpy(words, bytes + i, sizeof(words));
+        if (((words[0] | words[1] | words[2] | words[3]) & high_bits) != 0) break;
+    }
+    for (; end - i >= 8; i += 8) {
+        u64 word;
+        memcpy(&word, bytes + i, sizeof(word));
+        if ((word & high_bits) != 0) break;
+    }
+    while (i < end && bytes[i] < 0x80) i++;
+    return i;
+}
+
 static bool mal_utf8_string_cursor_ready(MalUtf8StringCursor *cursor) {
     if (cursor->offset < cursor->segment.length) return true;
     cursor->offset = 0;
@@ -210,7 +230,11 @@ static void mal_string_utf8_process(
             usize available = cursor.segment.length - start;
             if (!all_fits && available > capacity - written) available = capacity - written;
             usize end = start + available;
-            while (cursor.offset < end && units[cursor.offset] < 0x80) cursor.offset++;
+            if (start == 0) {
+                cursor.offset = mal_utf8_ascii_run_end(units, 0, end);
+            } else {
+                while (cursor.offset < end && units[cursor.offset] < 0x80) cursor.offset++;
+            }
             usize count = cursor.offset - start;
             if (count != 0) {
                 if (output != nullptr) memcpy(output + written, units + start, count);
@@ -329,32 +353,79 @@ usize mal_string_utf8_length(const MalString *string) {
     return length > SIZE_MAX ? SIZE_MAX : (usize) length;
 }
 
-// Keep the bulk path outside the scalar decoder's inlining budget.
+static inline usize mal_utf8_ascii_count(const byte *bytes, usize start, usize stop) {
+    usize end = start;
+    while (end < stop && (u8) bytes[end] < 0x80) end++;
+    return end - start;
+}
+
+// Decodes well-formed sequences that fit the buffer's encoding without growth;
+// everything else stops the run so the scalar path classifies it. Kept out of
+// line so the scalar decoder stays within its inlining budget.
 __attribute__((noinline))
-static usize mal_utf8_decode_latin1_prefix(MalTextBuffer *buffer, const byte *bytes, usize len, usize i) {
-    if (!(len - i >= 4 && ((u8) bytes[i] == 0xc2 || (u8) bytes[i] == 0xc3) &&
-        (u8) bytes[i + 1] >= 0x80 && (u8) bytes[i + 1] <= 0xbf &&
-        ((u8) bytes[i + 2] == 0xc2 || (u8) bytes[i + 2] == 0xc3) &&
-        (u8) bytes[i + 3] >= 0x80 && (u8) bytes[i + 3] <= 0xbf)) return i;
-    usize run_end = i + 4;
-    while (len - run_end >= 2 &&
-        ((u8) bytes[run_end] == 0xc2 || (u8) bytes[run_end] == 0xc3) &&
-        (u8) bytes[run_end + 1] >= 0x80 && (u8) bytes[run_end + 1] <= 0xbf) run_end += 2;
-    usize count = (run_end - i) / 2;
-    mal_text_buffer_reserve(buffer, count);
-    if (buffer->status != MAL_TEXT_BUFFER_OK) return i;
+static usize mal_utf8_decode_run(MalTextBuffer *buffer, const byte *bytes, usize len, usize i) {
     usize output = buffer->length;
+    // A sequence never yields more units than bytes, so this byte budget fits the capacity.
+    usize stop = len - i > buffer->capacity - output ? i + (buffer->capacity - output) : len;
     if (buffer->utf16) {
-        while (i < run_end) {
-            ((c16 *) buffer->data)[output++] = (c16)
-                ((((u8) bytes[i] & 3) << 6) | ((u8) bytes[i + 1] & 0x3f));
-            i += 2;
+        c16 *units = buffer->data;
+        while (i < stop) {
+            u8 lead = (u8) bytes[i];
+            if (lead < 0x80) {
+                usize run = mal_utf8_ascii_count(bytes, i, stop);
+                for (usize k = 0; k < run; k++) units[output + k] = (u8) bytes[i + k];
+                output += run;
+                i += run;
+            } else if (lead >= 0xc2 && lead <= 0xdf) {
+                if (stop - i < 2 || ((u8) bytes[i + 1] & 0xc0) != 0x80) break;
+                units[output++] = (c16) (((lead & 0x1fu) << 6) | ((u8) bytes[i + 1] & 0x3fu));
+                i += 2;
+            } else if (lead >= 0xe0 && lead <= 0xef) {
+                if (stop - i < 3 || ((u8) bytes[i + 1] & 0xc0) != 0x80 ||
+                    ((u8) bytes[i + 2] & 0xc0) != 0x80) break;
+                u32 cp = ((lead & 0x0fu) << 12) | (((u8) bytes[i + 1] & 0x3fu) << 6) |
+                    ((u8) bytes[i + 2] & 0x3fu);
+                if (cp < 0x800 || (cp >= 0xd800 && cp <= 0xdfff)) break;
+                units[output++] = (c16) cp;
+                i += 3;
+            } else if (lead >= 0xf0 && lead <= 0xf4) {
+                if (stop - i < 4 || ((u8) bytes[i + 1] & 0xc0) != 0x80 ||
+                    ((u8) bytes[i + 2] & 0xc0) != 0x80 || ((u8) bytes[i + 3] & 0xc0) != 0x80) break;
+                u32 cp = ((lead & 0x07u) << 18) | (((u8) bytes[i + 1] & 0x3fu) << 12) |
+                    (((u8) bytes[i + 2] & 0x3fu) << 6) | ((u8) bytes[i + 3] & 0x3fu);
+                if (cp < 0x10000 || cp > 0x10ffff) break;
+                mal_utf16_emit_pair(cp, units + output);
+                output += 2;
+                i += 4;
+            } else {
+                break;
+            }
         }
     } else {
-        while (i < run_end) {
-            ((u8 *) buffer->data)[output++] = (u8)
-                ((((u8) bytes[i] & 3) << 6) | ((u8) bytes[i + 1] & 0x3f));
-            i += 2;
+        u8 *units = buffer->data;
+        while (i < stop) {
+            u8 lead = (u8) bytes[i];
+            if (lead < 0x80) {
+                usize run = mal_utf8_ascii_count(bytes, i, stop);
+                memcpy(units + output, bytes + i, run);
+                output += run;
+                i += run;
+            } else if ((lead & 0xfe) == 0xc2) {
+                // Validate the whole pair run first so the decode loop stays branch-free.
+                usize run_end = i;
+                while (stop - run_end >= 2 && ((u8) bytes[run_end] & 0xfe) == 0xc2 &&
+                    ((u8) bytes[run_end + 1] & 0xc0) == 0x80) run_end += 2;
+                if (run_end == i) break;
+                usize count = (run_end - i) / 2;
+                for (usize k = 0; k < count; k++) {
+                    units[output + k] = (u8)
+                        ((((u8) bytes[i + 2 * k] & 3u) << 6) | ((u8) bytes[i + 2 * k + 1] & 0x3fu));
+                }
+                output += count;
+                i = run_end;
+            } else {
+                break;
+            }
         }
     }
     buffer->length = output;
@@ -368,8 +439,7 @@ MalString *mal_string_from_utf8_report(
     bool had_error = false;
     MalUtf8DecodeStatus status = MAL_UTF8_DECODE_OK;
     MalString *string = nullptr;
-    usize prefix = 0;
-    while (prefix < len && (u8) bytes[prefix] < 0x80) prefix++;
+    usize prefix = mal_utf8_ascii_run_end((const u8 *) bytes, 0, len);
     if (prefix == len) {
         if (len > MAL_STRING_MAX_CODE_UNITS) status = MAL_UTF8_DECODE_LENGTH_OVERFLOW;
         else string = mal_string_new_ascii(heap, bytes, len);
@@ -383,8 +453,11 @@ MalString *mal_string_from_utf8_report(
     mal_text_buffer_hint_capacity(&buffer, hint);
     mal_text_buffer_append_latin1(&buffer, (const u8 *) bytes, prefix);
     usize i = prefix;
-    if (((u8) bytes[i] & 0xfe) == 0xc2) i = mal_utf8_decode_latin1_prefix(&buffer, bytes, len, i);
     while (i < len && buffer.status == MAL_TEXT_BUFFER_OK) {
+        if (buffer.data != nullptr) {
+            i = mal_utf8_decode_run(&buffer, bytes, len, i);
+            if (i == len) break;
+        }
         usize start = i;
         while (i < len && (u8) bytes[i] < 0x80) i++;
         if (i != start) {

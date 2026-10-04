@@ -190,6 +190,36 @@ function sameHandler(
 	return true;
 }
 
+// Construction isolates non-throwing instructions, such as constants, in handler-less
+// blocks. An effect-free block can run under its predecessor's handler unobservably;
+// absorbing it keeps same-block fusions available inside try regions. Allocations stay
+// outside so handler scoping cannot block their sinking.
+function absorbableUnderHandler(
+	fn: CoreFunctionStore,
+	predecessor: CoreBlockId,
+	target: CoreBlockId,
+): boolean {
+	if (sameHandler(fn, predecessor, target)) return true;
+	if (fn.kernel.blockHandlerBlock(target) !== undefined) return false;
+	const terminatorKind = fn.instructionKind(fn.blockTerminator(target));
+	if (terminatorKind !== "jump" && terminatorKind !== "branch") return false;
+	for (const instruction of fn.bodyInstructionIds(target)) {
+		const effects =
+			fn.instructionEffectRefinement(instruction)?.effects ??
+			fn.registry.byId(fn.instructionOpcode(instruction)).effects;
+		if (
+			effects.mayThrow ||
+			effects.maySuspend ||
+			effects.mayGc ||
+			effects.callsUserCode ||
+			effects.reads.length > 0 ||
+			effects.writes.length > 0
+		)
+			return false;
+	}
+	return true;
+}
+
 function useOutsideBlock(
 	fn: CoreFunctionStore,
 	value: CoreValueId,
@@ -2005,7 +2035,7 @@ const mergeLinearBlocks: CoreFunctionPass = {
 				target === fn.entry ||
 				target === fn.bodyEntry ||
 				!fn.isBlockLive(target) ||
-				!sameHandler(fn, predecessor, target)
+				!absorbableUnderHandler(fn, predecessor, target)
 			)
 				continue;
 			const incoming = control.predecessors[target] ?? [];

@@ -67,6 +67,9 @@ typedef enum MalGuardedBuiltinCallOp {
     MAL_GUARDED_BUILTIN_BOOLEAN_CALL,
     MAL_GUARDED_BUILTIN_BOOLEAN_VALUE_OF,
     MAL_GUARDED_BUILTIN_BOOLEAN_TO_STRING,
+    MAL_GUARDED_BUILTIN_ARRAY_POP,
+    MAL_GUARDED_BUILTIN_ARRAY_SHIFT,
+    MAL_GUARDED_BUILTIN_ARRAY_UNSHIFT,
 } MalGuardedBuiltinCallOp;
 
 /** Packed literal-template tags; mirrored by src/compiler/core/semantic-lowering.ts. */

@@ -792,26 +792,33 @@ static f64 date_parse_legacy(const c16 *u, usize len) {
 }
 
 /** Parse a date string: ISO 8601 first, then the legacy toString/toUTCString
- * forms. Returns the (un-clipped) time value, or NaN. */
-static f64 date_parse_units(const c16 *u, usize len) {
-    f64 t = date_parse_iso(u, len);
-    if (!isnan(t)) {
-        return t;
-    }
-    return date_parse_legacy(u, len);
-}
-
-/** Flatten and parse a string while keeping a newly coerced/constructed cons
- * string alive across the flatten allocation. */
+ * forms. Flat UTF-16 text is read in place because parsing neither allocates nor
+ * collects; Latin-1 text is widened on the stack, which parses faster than
+ * reading it through an encoding-dispatching accessor. */
 static f64 date_parse_string_value(MalString *string) {
-    MalValue string_root = mal_value_from_string(string);
-    MalRootSpan root_span;
-    mal_gc_root(&root_span, &string_root, 1);
-    (void) mal_string_code_units(string);
-    string = mal_value_to_string(string_root);
-    f64 parsed = date_parse_units(
-        mal_string_code_units(string), mal_string_length(string));
-    mal_gc_unroot(&root_span);
+    usize length = mal_string_length(string);
+    c16 stack_units[64];
+    c16 *units = stack_units;
+    const c16 *source;
+    MalStringSegment text;
+    bool flat = mal_string_try_get_segment(string, 0, length, &text);
+    if (flat && !text.latin1) {
+        source = text.utf16_units;
+    } else {
+        if (length > countof(stack_units)) {
+            units = malloc(sizeof(c16) * length);
+            if (units == nullptr) abort();
+        }
+        if (flat) {
+            for (usize i = 0; i < length; i++) units[i] = text.latin1_units[i];
+        } else {
+            mal_string_copy_range_to(string, 0, length, units);
+        }
+        source = units;
+    }
+    f64 parsed = date_parse_iso(source, length);
+    if (isnan(parsed)) parsed = date_parse_legacy(source, length);
+    if (units != stack_units) free(units);
     return date_time_clip(parsed);
 }
 

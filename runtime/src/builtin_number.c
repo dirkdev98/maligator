@@ -3,27 +3,33 @@
 #include <float.h>
 #include <math.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include "builtin_intl.h"
 #include "ecma_whitespace.h"
 #include "gc.h"
 #include "heap_string.h"
 #include "mal_number_format.h"
+#include "number_text.h"
 #include "primitive_wrapper_object.h"
 #include "value_ops.h"
 #include "vm.h"
 #include "vm_ops.h"
 
-static f64 mal_builtin_parse_int_units(const c16 *code_units, usize length, f64 raw_radix) {
+static f64 mal_builtin_parse_int_units(const MalStringSegment *units, f64 raw_radix) {
+    usize length = units->length;
     usize i = 0;
-    while (i < length && mal_ecma_is_string_whitespace(code_units[i])) {
+    while (i < length && mal_ecma_is_string_whitespace(mal_string_segment_code_unit_at(units, i))) {
         i++;
     }
 
     f64 sign = 1;
-    if (i < length && (code_units[i] == '+' || code_units[i] == '-')) {
-        sign = code_units[i] == '-' ? -1 : 1;
-        i++;
+    if (i < length) {
+        c16 unit = mal_string_segment_code_unit_at(units, i);
+        if (unit == '+' || unit == '-') {
+            sign = unit == '-' ? -1 : 1;
+            i++;
+        }
     }
 
     i32 radix = mal_ops_number_to_i32(raw_radix);
@@ -37,16 +43,23 @@ static f64 mal_builtin_parse_int_units(const c16 *code_units, usize length, f64 
         radix = 10;
     }
 
-    if (strip_prefix && i + 1 < length && code_units[i] == '0' &&
-        (code_units[i + 1] == 'x' || code_units[i + 1] == 'X')) {
-        i += 2;
-        radix = 16;
+    if (strip_prefix && i + 1 < length && mal_string_segment_code_unit_at(units, i) == '0') {
+        c16 marker = mal_string_segment_code_unit_at(units, i + 1);
+        if (marker == 'x' || marker == 'X') {
+            i += 2;
+            radix = 16;
+        }
     }
 
+    // Exact integer accumulation rounds once on conversion; only magnitudes
+    // beyond it continue in binary floating point.
+    const u64 exact_limit = (UINT64_MAX - 35) / 36;
+    u64 exact = 0;
     f64 value = 0;
+    bool overflowed = false;
     bool any_digit = false;
     for (; i < length; i++) {
-        c16 code_unit = code_units[i];
+        c16 code_unit = mal_string_segment_code_unit_at(units, i);
         i32 digit;
         if (code_unit >= '0' && code_unit <= '9') {
             digit = code_unit - '0';
@@ -62,90 +75,79 @@ static f64 mal_builtin_parse_int_units(const c16 *code_units, usize length, f64 
             break;
         }
 
-        value = value * radix + digit;
+        if (!overflowed && exact <= exact_limit) {
+            exact = exact * (u64) radix + (u64) digit;
+        } else {
+            if (!overflowed) value = (f64) exact;
+            overflowed = true;
+            value = value * radix + digit;
+        }
         any_digit = true;
     }
 
-    return any_digit ? sign * value : NAN;
+    return any_digit ? sign * (overflowed ? value : (f64) exact) : NAN;
 }
 
-static f64 mal_builtin_parse_float_units(const c16 *code_units, usize length) {
+static f64 mal_builtin_parse_float_units(const MalStringSegment *units) {
+    usize length = units->length;
     usize start = 0;
-    while (start < length && mal_ecma_is_string_whitespace(code_units[start])) {
+    while (start < length && mal_ecma_is_string_whitespace(mal_string_segment_code_unit_at(units, start))) {
         start++;
     }
+    if (start == length) return NAN;
 
     usize cursor = start;
-    if (cursor < length &&
-        (code_units[cursor] == '+' || code_units[cursor] == '-')) {
-        cursor++;
+    if (cursor < length) {
+        c16 unit = mal_string_segment_code_unit_at(units, cursor);
+        if (unit == '+' || unit == '-') cursor++;
     }
 
     static const byte infinity[] = "Infinity";
     if (length - cursor >= sizeof(infinity) - 1) {
         bool matches = true;
         for (usize i = 0; i < sizeof(infinity) - 1; i++) {
-            if (code_units[cursor + i] != infinity[i]) {
+            if (mal_string_segment_code_unit_at(units, cursor + i) != (c16) infinity[i]) {
                 matches = false;
                 break;
             }
         }
         if (matches) {
-            return cursor > start && code_units[start] == '-'
+            return cursor > start && mal_string_segment_code_unit_at(units, start) == '-'
                 ? -INFINITY
                 : INFINITY;
         }
     }
 
-    bool any_digit = false;
-    while (cursor < length &&
-           code_units[cursor] >= '0' && code_units[cursor] <= '9') {
-        any_digit = true;
-        cursor++;
-    }
-    if (cursor < length && code_units[cursor] == '.') {
-        cursor++;
-        while (cursor < length &&
-               code_units[cursor] >= '0' && code_units[cursor] <= '9') {
-            any_digit = true;
-            cursor++;
-        }
-    }
-    if (!any_digit) {
-        return NAN;
+    if (units->latin1) {
+        const byte *text = (const byte *) units->latin1_units + start;
+        usize prefix = mal_number_decimal_prefix_length(text, length - start);
+        return prefix == 0 ? NAN : mal_number_parse_decimal(text, prefix);
     }
 
-    if (cursor < length &&
-        (code_units[cursor] == 'e' || code_units[cursor] == 'E')) {
-        usize exponent_start = cursor++;
-        if (cursor < length &&
-            (code_units[cursor] == '+' || code_units[cursor] == '-')) {
-            cursor++;
-        }
-        usize exponent_digits = cursor;
-        while (cursor < length &&
-               code_units[cursor] >= '0' && code_units[cursor] <= '9') {
-            cursor++;
-        }
-        if (cursor == exponent_digits) {
-            cursor = exponent_start;
-        }
-    }
-
-    // Copy only the grammar-recognized prefix. Trailing ASCII text used to
-    // force a proportional allocation even though strtod immediately ignored
-    // it; ordinary source tokens stay on this local buffer.
-    usize token_length = cursor - start;
+    // Stage only the ASCII grammar characters; any other unit ends the prefix.
     byte stack_buffer[64];
-    bool heap_allocated = token_length >= sizeof(stack_buffer);
-    byte *buffer = heap_allocated ? malloc(token_length + 1) : stack_buffer;
-    for (usize i = 0; i < token_length; i++) {
-        buffer[i] = (byte) code_units[start + i];
+    byte *buffer = stack_buffer;
+    usize capacity = sizeof(stack_buffer);
+    usize token_length = 0;
+    for (usize i = start; i < length; i++) {
+        c16 unit = mal_string_segment_code_unit_at(units, i);
+        if (!((unit >= '0' && unit <= '9') || unit == '.' || unit == 'e' || unit == 'E' ||
+              unit == '+' || unit == '-')) {
+            break;
+        }
+        if (token_length == capacity) {
+            usize grown = capacity * 2;
+            byte *next = buffer == stack_buffer ? malloc(grown) : realloc(buffer, grown);
+            if (next == nullptr) abort();
+            if (buffer == stack_buffer) memcpy(next, stack_buffer, token_length);
+            buffer = next;
+            capacity = grown;
+        }
+        buffer[token_length++] = (byte) unit;
     }
-    buffer[token_length] = '\0';
-
-    f64 value = strtod(buffer, nullptr);
-    if (heap_allocated) {
+    usize prefix = mal_number_decimal_prefix_length(buffer, token_length);
+    f64 value = prefix == 0 ? NAN : mal_number_parse_decimal(buffer, prefix);
+    if (buffer != stack_buffer) {
         free(buffer);
     }
     return value;
@@ -303,10 +305,8 @@ bool mal_builtin_number_predicate_try_direct(
 f64 mal_builtin_parse_int_string(MalValue source, f64 radix) {
     MalRootSpan root;
     mal_gc_root(&root, &source, 1);
-    MalString *string = mal_value_to_string(source);
-    usize length = mal_string_length(string);
-    const c16 *units = mal_string_code_units(string);
-    f64 result = mal_builtin_parse_int_units(units, length, radix);
+    MalStringSegment units = mal_string_flat_segment(mal_value_to_string(source));
+    f64 result = mal_builtin_parse_int_units(&units, radix);
     mal_gc_unroot(&root);
     return result;
 }
@@ -314,10 +314,8 @@ f64 mal_builtin_parse_int_string(MalValue source, f64 radix) {
 f64 mal_builtin_parse_float_string(MalValue source) {
     MalRootSpan root;
     mal_gc_root(&root, &source, 1);
-    MalString *string = mal_value_to_string(source);
-    usize length = mal_string_length(string);
-    const c16 *units = mal_string_code_units(string);
-    f64 result = mal_builtin_parse_float_units(units, length);
+    MalStringSegment units = mal_string_flat_segment(mal_value_to_string(source));
+    f64 result = mal_builtin_parse_float_units(&units);
     mal_gc_unroot(&root);
     return result;
 }

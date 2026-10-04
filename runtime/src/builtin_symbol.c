@@ -2,10 +2,10 @@
 
 #include <string.h>
 
-#include "checked_size.h"
 #include "gc.h"
 #include "heap_string.h"
 #include "primitive_wrapper_object.h"
+#include "text_buffer.h"
 #include "heap_symbol.h"
 #include "vm.h"
 #include "vm_ops.h"
@@ -48,55 +48,35 @@ static MalSymbol *mal_builtin_symbol_this(MalVm *vm, MalValue this_value) {
     return nullptr;
 }
 
+MalValue mal_builtin_symbol_descriptive_string(MalVm *vm, MalValue symbol_value) {
+    MalString *description = mal_symbol_description(mal_value_to_symbol(symbol_value));
+    if (description == nullptr) return mal_value_from_string(mal_intrinsic_ascii(vm, "Symbol()"));
+    // Appending the description by segment keeps Latin-1 text compact; the UTF-16
+    // bridge would widen the symbol's description permanently.
+    MalTextBuffer buffer = {.heap = &vm->heap};
+    mal_text_buffer_hint_capacity(&buffer, mal_string_length(description) + 8);
+    mal_text_buffer_append_ascii(&buffer, (const byte *) "Symbol(");
+    mal_text_buffer_append_string(&buffer, description);
+    mal_text_buffer_push(&buffer, ')');
+    if (buffer.status != MAL_TEXT_BUFFER_OK) {
+        MalTextBufferStatus status = buffer.status;
+        mal_text_buffer_dispose(&buffer);
+        if (status == MAL_TEXT_BUFFER_LENGTH_OVERFLOW) {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Invalid string length");
+        } else {
+            mal_vm_throw_allocation_error(vm);
+        }
+        return mal_value_new_undefined();
+    }
+    return mal_value_from_string(mal_text_buffer_finish(&vm->heap, &buffer));
+}
+
 static MalValue mal_builtin_symbol_prototype_to_string(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) args;
     (void) arg_count;
-
-    MalValue symbol_root = this_value;
-    MalRootSpan root_span;
-    mal_gc_root(&root_span, &symbol_root, 1);
-
-    MalSymbol *symbol = mal_builtin_symbol_this(vm, symbol_root);
-    if (symbol == nullptr) {
-        mal_gc_unroot(&root_span);
-        return mal_value_new_undefined();
-    }
-
-    MalString *description = mal_symbol_description(symbol);
-    if (description == nullptr) {
-        MalValue result = mal_value_from_string(mal_intrinsic_ascii(vm, "Symbol()"));
-        mal_gc_unroot(&root_span);
-        return result;
-    }
-
-    usize description_length = mal_string_length(description);
-    usize length;
-    if (!mal_checked_size_add(
-            description_length, 8, MAL_STRING_MAX_CODE_UNITS, &length)) {
-        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Invalid string length");
-        mal_gc_unroot(&root_span);
-        return mal_value_new_undefined();
-    }
-
-    c16 *code_units = mal_heap_alloc_raw_profiled(
-        &vm->heap, sizeof(c16) * length,
-        MAL_PROFILE_ALLOCATION_FAMILY_STRING);
-    static const byte prefix[] = "Symbol(";
-    for (usize i = 0; i < sizeof(prefix) - 1; i++) {
-        code_units[i] = prefix[i];
-    }
-    symbol = mal_builtin_symbol_this(vm, symbol_root);
-    description = mal_symbol_description(symbol);
-    memcpy(
-        code_units + sizeof(prefix) - 1,
-        mal_string_code_units(description),
-        sizeof(c16) * description_length);
-    code_units[length - 1] = ')';
-
-    MalValue result = mal_value_from_string(
-        mal_string_new_owned(&vm->heap, code_units, length));
-    mal_gc_unroot(&root_span);
-    return result;
+    MalSymbol *symbol = mal_builtin_symbol_this(vm, this_value);
+    if (symbol == nullptr) return mal_value_new_undefined();
+    return mal_builtin_symbol_descriptive_string(vm, mal_value_from_symbol(symbol));
 }
 
 static MalValue mal_builtin_symbol_prototype_value_of(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {

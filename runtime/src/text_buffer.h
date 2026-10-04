@@ -1,5 +1,7 @@
 #pragma once
 
+#include <string.h>
+
 #include "heap_string.h"
 #include "value.h"
 
@@ -31,14 +33,59 @@ MalTextBufferStatus mal_text_buffer_reserve_utf16(MalTextBuffer *buffer, usize e
  * encoding. With existing storage this has the same contract as reserve. */
 MalTextBufferStatus mal_text_buffer_hint_capacity(MalTextBuffer *buffer, usize extra);
 
-MalTextBufferStatus mal_text_buffer_push(MalTextBuffer *buffer, c16 code_unit);
+/** Whether `extra` code units fit the current storage without growth. Allocated
+ * storage never exceeds the engine length limit, so a fit cannot overflow it. */
+static inline bool mal_text_buffer_fits(const MalTextBuffer *buffer, usize extra) {
+    return buffer->status == MAL_TEXT_BUFFER_OK && buffer->data != nullptr &&
+        extra <= buffer->capacity - buffer->length;
+}
 
-/** Source ranges must not alias buffer storage. Use append_buffer for self-copy. */
-MalTextBufferStatus mal_text_buffer_append_units(
+MalTextBufferStatus mal_text_buffer_push_slow(MalTextBuffer *buffer, c16 code_unit);
+
+static inline MalTextBufferStatus mal_text_buffer_push(MalTextBuffer *buffer, c16 code_unit) {
+    if (mal_text_buffer_fits(buffer, 1)) {
+        if (buffer->utf16) {
+            ((c16 *) buffer->data)[buffer->length++] = code_unit;
+            return MAL_TEXT_BUFFER_OK;
+        }
+        if (code_unit <= UINT8_MAX) {
+            ((u8 *) buffer->data)[buffer->length++] = (u8) code_unit;
+            return MAL_TEXT_BUFFER_OK;
+        }
+    }
+    return mal_text_buffer_push_slow(buffer, code_unit);
+}
+
+MalTextBufferStatus mal_text_buffer_append_units_slow(
     MalTextBuffer *buffer, const c16 *code_units, usize length);
 
-MalTextBufferStatus mal_text_buffer_append_latin1(
+/** Source ranges must not alias buffer storage. Use append_buffer for self-copy. */
+static inline MalTextBufferStatus mal_text_buffer_append_units(
+    MalTextBuffer *buffer, const c16 *code_units, usize length
+) {
+    if (buffer->utf16 && mal_text_buffer_fits(buffer, length)) {
+        if (length != 0) {
+            memcpy((c16 *) buffer->data + buffer->length, code_units, sizeof(c16) * length);
+        }
+        buffer->length += length;
+        return MAL_TEXT_BUFFER_OK;
+    }
+    return mal_text_buffer_append_units_slow(buffer, code_units, length);
+}
+
+MalTextBufferStatus mal_text_buffer_append_latin1_slow(
     MalTextBuffer *buffer, const u8 *code_units, usize length);
+
+static inline MalTextBufferStatus mal_text_buffer_append_latin1(
+    MalTextBuffer *buffer, const u8 *code_units, usize length
+) {
+    if (!buffer->utf16 && mal_text_buffer_fits(buffer, length)) {
+        if (length != 0) memcpy((u8 *) buffer->data + buffer->length, code_units, length);
+        buffer->length += length;
+        return MAL_TEXT_BUFFER_OK;
+    }
+    return mal_text_buffer_append_latin1_slow(buffer, code_units, length);
+}
 
 MalTextBufferStatus mal_text_buffer_append_string(
     MalTextBuffer *buffer, const MalString *string);

@@ -21976,6 +21976,123 @@
 			"decisions": []
 		},
 		{
+			"id": "[\"%MAL_INTRINSIC_REGEXP_LEGACY_STATE%\",\"14\"]",
+			"owner": "%MAL_INTRINSIC_REGEXP_LEGACY_STATE%",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_REGEXP_LEGACY_STATE%",
+				"MAL_INTRINSIC_REGEXP_LEGACY_STATE"
+			],
+			"key": "14",
+			"kind": "data",
+			"operations": [],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_REGEXP_LEGACY_STATE%\",\"15\"]",
+			"owner": "%MAL_INTRINSIC_REGEXP_LEGACY_STATE%",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_REGEXP_LEGACY_STATE%",
+				"MAL_INTRINSIC_REGEXP_LEGACY_STATE"
+			],
+			"key": "15",
+			"kind": "data",
+			"operations": [],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_REGEXP_LEGACY_STATE%\",\"16\"]",
+			"owner": "%MAL_INTRINSIC_REGEXP_LEGACY_STATE%",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_REGEXP_LEGACY_STATE%",
+				"MAL_INTRINSIC_REGEXP_LEGACY_STATE"
+			],
+			"key": "16",
+			"kind": "data",
+			"operations": [],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_REGEXP_LEGACY_STATE%\",\"17\"]",
+			"owner": "%MAL_INTRINSIC_REGEXP_LEGACY_STATE%",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_REGEXP_LEGACY_STATE%",
+				"MAL_INTRINSIC_REGEXP_LEGACY_STATE"
+			],
+			"key": "17",
+			"kind": "data",
+			"operations": [],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_REGEXP_LEGACY_STATE%\",\"18\"]",
+			"owner": "%MAL_INTRINSIC_REGEXP_LEGACY_STATE%",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_REGEXP_LEGACY_STATE%",
+				"MAL_INTRINSIC_REGEXP_LEGACY_STATE"
+			],
+			"key": "18",
+			"kind": "data",
+			"operations": [],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_REGEXP_LEGACY_STATE%\",\"19\"]",
+			"owner": "%MAL_INTRINSIC_REGEXP_LEGACY_STATE%",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_REGEXP_LEGACY_STATE%",
+				"MAL_INTRINSIC_REGEXP_LEGACY_STATE"
+			],
+			"key": "19",
+			"kind": "data",
+			"operations": [],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_REGEXP_LEGACY_STATE%\",\"20\"]",
+			"owner": "%MAL_INTRINSIC_REGEXP_LEGACY_STATE%",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_REGEXP_LEGACY_STATE%",
+				"MAL_INTRINSIC_REGEXP_LEGACY_STATE"
+			],
+			"key": "20",
+			"kind": "data",
+			"operations": [],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_REGEXP_LEGACY_STATE%\",\"21\"]",
+			"owner": "%MAL_INTRINSIC_REGEXP_LEGACY_STATE%",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_REGEXP_LEGACY_STATE%",
+				"MAL_INTRINSIC_REGEXP_LEGACY_STATE"
+			],
+			"key": "21",
+			"kind": "data",
+			"operations": [],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_REGEXP_LEGACY_STATE%\",\"22\"]",
+			"owner": "%MAL_INTRINSIC_REGEXP_LEGACY_STATE%",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_REGEXP_LEGACY_STATE%",
+				"MAL_INTRINSIC_REGEXP_LEGACY_STATE"
+			],
+			"key": "22",
+			"kind": "data",
+			"operations": [],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
 			"id": "[\"%MAL_INTRINSIC_REGEXP_LEGACY_STATE%\",\"length\"]",
 			"owner": "%MAL_INTRINSIC_REGEXP_LEGACY_STATE%",
 			"ownerPaths": [

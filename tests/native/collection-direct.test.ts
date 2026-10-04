@@ -65,5 +65,10 @@ describe("guarded direct Map and Set dispatch", () => {
 		expect(field(line ?? "", "direct_fallbacks")).toBeGreaterThanOrEqual(8);
 		expect(field(line ?? "", "entry_pair_hits")).toBeGreaterThanOrEqual(3);
 		expect(field(line ?? "", "entry_pair_fallbacks")).toBeGreaterThanOrEqual(1);
+		const icLine = result.stderr
+			.split("\n")
+			.find((candidate) => candidate.startsWith("[perf-ic-stats]"));
+		// The shared size site alternates Map and Set; each intrinsic read after the fill hits.
+		expect(field(icLine ?? "", "load_collection_size_hits")).toBeGreaterThanOrEqual(200);
 	});
 });

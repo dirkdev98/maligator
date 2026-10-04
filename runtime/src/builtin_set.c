@@ -52,7 +52,12 @@ static MalValue mal_builtin_set_construct(
     }
 
     MalObject *prototype;
-    if (!mal_vm_get_prototype_from_constructor(vm, new_target, prototype_slot, &prototype)) {
+    MalIntrinsic constructor_slot =
+        weak ? MAL_INTRINSIC_WEAK_SET_CONSTRUCTOR : MAL_INTRINSIC_SET_CONSTRUCTOR;
+    // An intrinsic constructor's own `prototype` is non-writable and non-configurable.
+    if (new_target == vm->intrinsics[constructor_slot]) {
+        prototype = mal_value_to_object(vm->intrinsics[prototype_slot]);
+    } else if (!mal_vm_get_prototype_from_constructor(vm, new_target, prototype_slot, &prototype)) {
         return mal_value_new_undefined();
     }
 
@@ -247,6 +252,25 @@ bool mal_builtin_set_delete_value(MalVm *vm, MalValue this_value, MalValue value
     return mal_set_object_delete(mal_value_to_set_object(this_value), value);
 }
 
+MalValue mal_builtin_set_add_number(MalVm *vm, MalValue this_value, f64 value) {
+    (void) vm;
+    mal_set_object_add_canonical(
+        mal_value_to_set_object(this_value), mal_collection_canonical_number(value));
+    return this_value;
+}
+
+bool mal_builtin_set_has_number(MalVm *vm, MalValue this_value, f64 value) {
+    (void) vm;
+    return mal_set_object_has_canonical(
+        mal_value_to_set_object(this_value), mal_collection_canonical_number(value));
+}
+
+bool mal_builtin_set_delete_number(MalVm *vm, MalValue this_value, f64 value) {
+    (void) vm;
+    return mal_set_object_delete_canonical(
+        mal_value_to_set_object(this_value), mal_collection_canonical_number(value));
+}
+
 MalValue mal_builtin_set_delete_known(
     MalVm *vm,
     MalValue this_value,
@@ -305,9 +329,12 @@ static MalValue mal_builtin_set_prototype_for_each(MalVm *vm, MalValue this_valu
     mal_gc_root(&span, callback_args, countof(callback_args));
     mal_gc_native_rooted_begin(vm);
     MalValue key;
+    // Compiled callbacks dispatch directly; every other callable keeps generic [[Call]].
+    MalCallCache callback_cache = {0};
     while (mal_set_iter_next(&iter, &key)) {
         callback_args[0] = callback_args[1] = key;
-        MalCompletion completion = mal_vm_call_value(vm, args[0], this_arg, callback_args, 3);
+        MalCompletion completion = mal_vm_call_cached(
+            vm, &callback_cache, args[0], this_arg, callback_args, 3);
         if (completion.kind != MAL_COMPLETION_NORMAL) break;
     }
     mal_gc_native_rooted_end(vm);

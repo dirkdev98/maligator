@@ -138,6 +138,7 @@ export const NATIVE_C_HEADER_LINES = [
 	'#include "generator_object.h"',
 	"#define MAL_ROOT_MASK(mask) (__gc_frame.inactive_slots = UINT64_C(mask))",
 	"#define MAL_STRING_ROW(code_units_value, length_value) { .header = MAL_HEAP_HEADER_IMMORTAL(MAL_HEAP_STRING), .storage = MAL_STRING_STORAGE_EXTERNAL, .hash = 0, .length = length_value, .code_units = code_units_value }",
+	"#define MAL_LATIN1_STRING_ROW(units_value, length_value) { .header = MAL_HEAP_HEADER_IMMORTAL(MAL_HEAP_STRING), .storage = MAL_STRING_STORAGE_EXTERNAL, .latin1 = 1, .hash = 0, .length = length_value, .latin1_units = units_value }",
 	"#define MAL_LINE_ENTRY(start_ip_value, pos_id_value) { .start_ip = start_ip_value, .pos_id = pos_id_value }",
 	"#define MAL_SOURCE_POS(line_value, column_value, inlined_function_index_value, caller_pos_id_value) { .line = line_value, .column = column_value, .inlined_function_index = inlined_function_index_value, .caller_pos_id = caller_pos_id_value }",
 	"#if MAL_PROFILE",
@@ -154,6 +155,7 @@ export const GENERATED_DATA_C_HEADER_LINES = [
 	"#include <string.h>",
 	'#include "vm.h"',
 	"#define MAL_STRING_ROW(code_units_value, length_value) { .header = MAL_HEAP_HEADER_IMMORTAL(MAL_HEAP_STRING), .storage = MAL_STRING_STORAGE_EXTERNAL, .hash = 0, .length = length_value, .code_units = code_units_value }",
+	"#define MAL_LATIN1_STRING_ROW(units_value, length_value) { .header = MAL_HEAP_HEADER_IMMORTAL(MAL_HEAP_STRING), .storage = MAL_STRING_STORAGE_EXTERNAL, .latin1 = 1, .hash = 0, .length = length_value, .latin1_units = units_value }",
 	"#define MAL_LINE_ENTRY(start_ip_value, pos_id_value) { .start_ip = start_ip_value, .pos_id = pos_id_value }",
 	"#define MAL_SOURCE_POS(line_value, column_value, inlined_function_index_value, caller_pos_id_value) { .line = line_value, .column = column_value, .inlined_function_index = inlined_function_index_value, .caller_pos_id = caller_pos_id_value }",
 	"#if MAL_PROFILE",
@@ -220,10 +222,22 @@ function stringCodeUnitsBody(constant: Array<number>): string {
 	return `{ ${constant.length > 0 ? constant.join(", ") : "0"} }`;
 }
 
-function malStringRow(symbol: string, length: number): string {
+/** Constants whose units fit one byte use the runtime's compact Latin-1 storage. */
+function stringConstantIsLatin1(constant: Array<number>): boolean {
+	return constant.every((unit) => unit <= 0xff);
+}
+
+function stringUnitType(constant: Array<number>): string {
+	return stringConstantIsLatin1(constant) ? "u8" : "c16";
+}
+
+function malStringRow(symbol: string, constant: Array<number>): string {
 	// Immortal string constant. The row stays mutable because its hash is cached
 	// lazily on first use (a static initializer cannot compute it).
-	return `    MAL_STRING_ROW(${symbol}, ${length}),`;
+	const row = stringConstantIsLatin1(constant)
+		? "MAL_LATIN1_STRING_ROW"
+		: "MAL_STRING_ROW";
+	return `    ${row}(${symbol}, ${constant.length}),`;
 }
 
 function malFunctionKind(fn: RuntimeImage["functions"][number]): string {
@@ -971,7 +985,7 @@ function emitProgramImageSource(
 	for (let i = 0; i < runtime.stringConstants.length; ++i) {
 		const constant = runtime.stringConstants[i]!;
 		lines.push(
-			`static const c16 mal_string_${i}_code_units${suffix}[] = ${stringCodeUnitsBody(constant)};`,
+			`static const ${stringUnitType(constant)} mal_string_${i}_code_units${suffix}[] = ${stringCodeUnitsBody(constant)};`,
 		);
 	}
 
@@ -982,7 +996,7 @@ function emitProgramImageSource(
 		);
 		for (let i = 0; i < runtime.stringConstants.length; ++i) {
 			const constant = runtime.stringConstants[i]!;
-			lines.push(malStringRow(`mal_string_${i}_code_units${suffix}`, constant.length));
+			lines.push(malStringRow(`mal_string_${i}_code_units${suffix}`, constant));
 		}
 		lines.push("};", "");
 	}
@@ -1944,14 +1958,18 @@ export function emitBatch(
 				: undefined;
 
 		const stringSymbols = runtime.stringConstants.map((constant) =>
-			intern("cu", "c16", `    ${constant.length > 0 ? constant.join(", ") : "0"}`),
+			intern(
+				stringConstantIsLatin1(constant) ? "l1" : "cu",
+				stringUnitType(constant),
+				`    ${constant.length > 0 ? constant.join(", ") : "0"}`,
+			),
 		);
 		if (stringSymbols.length > 0) {
 			// MalString rows are mutable (hashes are cached lazily), so each runtime
 			// keeps its own table; only the code-unit arrays are shared.
 			lines.push(`static MalString mal_strings${suffix}[] = {`);
 			for (let i = 0; i < stringSymbols.length; ++i) {
-				lines.push(malStringRow(stringSymbols[i]!, runtime.stringConstants[i]!.length));
+				lines.push(malStringRow(stringSymbols[i]!, runtime.stringConstants[i]!));
 			}
 			lines.push("};", "");
 		}

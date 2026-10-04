@@ -126,7 +126,9 @@ describe("opt-in performance statistics", () => {
 		expect(field(regexp, "fast_exec_calls")).toBeGreaterThan(0);
 		expect(field(regexp, "ascii_exec_calls")).toBeGreaterThan(0);
 		expect(field(regexp, "ascii_cache_fills")).toBeGreaterThan(0);
-		expect(field(regexp, "utf16_exec_calls")).toBe(1);
+		expect(field(regexp, "ascii_cache_hits")).toBeGreaterThan(0);
+		expect(field(regexp, "latin1_exec_calls")).toBe(field(regexp, "exec_calls"));
+		expect(field(regexp, "utf16_exec_calls")).toBe(0);
 
 		const stringAllocations = reportLine(result.stderr, "[perf-string-allocation-stats]");
 		expect(

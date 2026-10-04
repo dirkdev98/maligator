@@ -27,6 +27,9 @@ function dynamicAt(s, x) {
 function dynamicPoint(s, x) {
 	return String(s).codePointAt(+x);
 }
+function dynamicIndex(s, x) {
+	return String(s)[x];
+}
 function makeRope(s) {
 	return s.repeat(1024) + s.repeat(1024);
 }
@@ -37,6 +40,7 @@ globalThis.cellPoint = cellPoint;
 globalThis.dynamicCharAt = dynamicCharAt;
 globalThis.dynamicAt = dynamicAt;
 globalThis.dynamicPoint = dynamicPoint;
+globalThis.dynamicIndex = dynamicIndex;
 const positions = [
 	-Infinity,
 	-10,
@@ -66,6 +70,7 @@ for (const sample of ["", "a", text, "\ud83d\ude00", "\ud800", "\udc00"]) {
 		record("dynamicCharAt", () => globalThis.dynamicCharAt(sample, position));
 		record("dynamicAt", () => globalThis.dynamicAt(sample, position));
 		record("dynamicPoint", () => globalThis.dynamicPoint(sample, position));
+		record("dynamicIndex", () => globalThis.dynamicIndex(sample, position));
 	}
 	if (sample.length) {
 		const lazy = globalThis.makeRope(sample);
@@ -81,9 +86,34 @@ for (const sample of ["", "a", text, "\ud83d\ude00", "\ud800", "\udc00"]) {
 			record("lazyCharAt", () => globalThis.dynamicCharAt(lazy, position));
 			record("lazyAt", () => globalThis.dynamicAt(lazy, position));
 			record("lazyPoint", () => globalThis.dynamicPoint(lazy, position));
+			record("lazyIndex", () => globalThis.dynamicIndex(lazy, position));
 		}
 	}
 }
+function iterated(s) {
+	let count = 0;
+	let checksum = 0;
+	for (const character of s) {
+		count++;
+		checksum = (checksum * 31 + character.length * 65536 + character.charCodeAt(0)) | 0;
+		if (character.length === 2) checksum = (checksum * 31 + character.charCodeAt(1)) | 0;
+	}
+	return count + ":" + checksum;
+}
+function appendedRope(pieces) {
+	let rope = "";
+	for (let index = 0; index < 256; index++) rope += pieces[index % pieces.length];
+	return rope;
+}
+for (const sample of [text, "\u6771\u4eac-\u0100\u00ff", "\ud800\ud800\udc00\udc00"]) {
+	record("iterated", () => iterated(sample));
+	record("lazyIterated", () => iterated(globalThis.makeRope(sample)));
+}
+record("appendedIterated", () =>
+	iterated(
+		appendedRope(["ab\ud83d", "\ude00\u6771", "\udc00", "\ud800x", "\u00e9\ud834"]),
+	),
+);
 if (results.some((row) => row[1] === "error"))
 	throw new Error("Unexpected positive character failure");
 function tdz(x) {

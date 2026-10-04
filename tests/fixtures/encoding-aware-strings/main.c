@@ -2,7 +2,9 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "array_object.h"
 #include "builtin_json.h"
+#include "builtin_regexp.h"
 #include "builtin_string.h"
 #include "gc.h"
 #include "heap_string.h"
@@ -11,6 +13,7 @@
 #include "value.h"
 #include "value_ops.h"
 #include "vm.h"
+#include "vm_ops.h"
 
 extern const MalRuntimeImage mal_runtime_image;
 
@@ -591,6 +594,279 @@ static bool compact_parse_lookup_build_serialize(MalVm *vm) {
     return true;
 }
 
+static MalCompletion call_named(
+    MalVm *vm, MalValue receiver, const char *name, const MalValue *args, i32 count
+) {
+    MalValue method;
+    if (!mal_vm_get_property(vm, receiver, mal_intrinsic_string_key(vm, name), &method)) {
+        return vm->completion;
+    }
+    return mal_vm_call_value(vm, method, receiver, args, count);
+}
+
+static bool string_equals_latin1(const MalString *string, const char *expected) {
+    usize length = strlen(expected);
+    if (string->length != length) return false;
+    for (usize i = 0; i < length; i++) {
+        if (mal_string_code_unit_at((MalString *) string, i) != (u8) expected[i]) return false;
+    }
+    return true;
+}
+
+static MalValue latin1_value(MalVm *vm, const char *units) {
+    return mal_value_from_string(
+        mal_string_new_latin1_copy(&vm->heap, (const u8 *) units, strlen(units)));
+}
+
+static MalValue latin1_regexp(MalVm *vm, const char *pattern, const char *flags) {
+    MalValue strings[2] = {latin1_value(vm, pattern), mal_value_new_undefined()};
+    MalRootSpan span;
+    mal_gc_root(&span, strings, countof(strings));
+    strings[1] = latin1_value(vm, flags);
+    MalValue regexp = mal_regexp_create(
+        vm, mal_value_to_string(strings[0]), mal_value_to_string(strings[1]));
+    mal_gc_unroot(&span);
+    return regexp;
+}
+
+static bool regexp_subjects_stay_compact(MalVm *vm) {
+    MalValue roots[6];
+    for (usize i = 0; i < countof(roots); i++) roots[i] = mal_value_new_undefined();
+    MalRootSpan span;
+    mal_gc_root(&span, roots, countof(roots));
+
+    u8 long_units[320];
+    memset(long_units, 'a', sizeof(long_units));
+    memcpy(long_units + 200, "id=42;", 6);
+    memcpy(long_units + 300, "id=7;", 5);
+    roots[0] = mal_value_from_string(
+        mal_string_new_latin1_copy(&vm->heap, long_units, sizeof(long_units)));
+    roots[1] = latin1_regexp(vm, "id=(\\d+);", "g");
+    roots[2] = latin1_value(vm, "<$1:$$:$&>");
+    MalCompletion result = call_named(vm, roots[0], "replace", &roots[1], 2);
+    CHECK(result.kind == MAL_COMPLETION_NORMAL && mal_value_is_string(result.value));
+    roots[5] = result.value;
+    MalString *replaced = mal_value_to_string(result.value);
+    CHECK(mal_value_to_string(roots[0])->latin1 && replaced->latin1);
+    CHECK(replaced->length == sizeof(long_units) - 11 + 13 + 11);
+    CHECK(mal_string_code_unit_at(replaced, 199) == 'a' && mal_string_code_unit_at(replaced, 200) == '<');
+    MalString *first = mal_string_new_slice(&vm->heap, replaced, 200, 13);
+    CHECK(string_equals_latin1(first, "<42:$:id=42;>"));
+
+    roots[0] = latin1_value(vm, "caf\xe9 x=1, caf\xe8 x=2");
+    roots[1] = latin1_regexp(vm, "caf(.) x=(\\d)", "g");
+    roots[2] = latin1_value(vm, "$2$1");
+    result = call_named(vm, roots[0], "replace", &roots[1], 2);
+    CHECK(result.kind == MAL_COMPLETION_NORMAL && mal_value_is_string(result.value));
+    CHECK(mal_value_to_string(roots[0])->latin1);
+    CHECK(string_equals_latin1(mal_value_to_string(result.value), "1\xe9, 2\xe8"));
+
+    roots[0] = latin1_value(vm, "un caf\xe9");
+    roots[1] = latin1_regexp(vm, "CAF\xc9", "i");
+    result = call_named(vm, roots[1], "exec", &roots[0], 1);
+    CHECK(result.kind == MAL_COMPLETION_NORMAL && mal_value_is_object(result.value));
+    roots[3] = result.value;
+    MalValue index;
+    CHECK(mal_vm_get_property(vm, roots[3], mal_intrinsic_string_key(vm, "index"), &index));
+    CHECK(mal_ops_is_number(index) && mal_ops_number_as_f64(index) == 3);
+    CHECK(mal_value_to_string(roots[0])->latin1);
+
+    u8 halves[2][64];
+    memset(halves[0], 'a', sizeof(halves[0]));
+    memset(halves[1], 'c', sizeof(halves[1]));
+    halves[0][63] = 'b';
+    halves[1][0] = 'b';
+    roots[3] = mal_value_from_string(mal_string_new_latin1_copy(&vm->heap, halves[0], 64));
+    roots[4] = mal_value_from_string(mal_string_new_latin1_copy(&vm->heap, halves[1], 64));
+    MalString *rope;
+    CHECK(mal_string_new_cons_checked(&vm->heap, mal_value_to_string(roots[3]),
+        mal_value_to_string(roots[4]), &rope));
+    roots[0] = mal_value_from_string(rope);
+    roots[1] = latin1_regexp(vm, "b+", "");
+    result = call_named(vm, roots[1], "exec", &roots[0], 1);
+    CHECK(result.kind == MAL_COMPLETION_NORMAL && mal_value_is_object(result.value));
+    roots[5] = result.value;
+    CHECK(mal_vm_get_property(vm, roots[5], mal_intrinsic_string_key(vm, "index"), &index));
+    CHECK(mal_ops_number_as_f64(index) == 63);
+    CHECK(rope->storage == MAL_STRING_STORAGE_OWNED && rope->latin1);
+
+    roots[0] = latin1_value(vm, "ab12cd");
+    roots[1] = latin1_regexp(vm, "(?<num>[0-9]+)", "");
+    roots[2] = latin1_value(vm, "[$`|$'|$<num>|$9|$<x]");
+    result = call_named(vm, roots[0], "replace", &roots[1], 2);
+    CHECK(result.kind == MAL_COMPLETION_NORMAL && mal_value_is_string(result.value));
+    CHECK(string_equals_latin1(mal_value_to_string(result.value), "ab[ab|cd|12|$9|$<x]cd"));
+
+    MalValue escape;
+    CHECK(mal_vm_get_property(vm, vm->intrinsics[MAL_INTRINSIC_REGEXP_CONSTRUCTOR],
+        mal_intrinsic_string_key(vm, "escape"), &escape));
+    roots[0] = latin1_value(vm, "a.b-c\xe9 d");
+    result = mal_vm_call_value(vm, escape, mal_value_new_undefined(), &roots[0], 1);
+    CHECK(result.kind == MAL_COMPLETION_NORMAL && mal_value_is_string(result.value));
+    CHECK(mal_value_to_string(roots[0])->latin1);
+    CHECK(string_equals_latin1(mal_value_to_string(result.value), "\\x61\\.b\\x2dc\xe9\\x20d"));
+
+    mal_gc_collect(vm);
+    mal_gc_unroot(&span);
+    return true;
+}
+
+static bool string_is_utf16_units(const MalString *string, const c16 *expected, usize length) {
+    if (string->length != length) return false;
+    for (usize i = 0; i < length; i++) {
+        if (mal_string_code_unit_at((MalString *) string, i) != expected[i]) return false;
+    }
+    return true;
+}
+
+static bool latin1_case_and_normalization_stay_compact(MalVm *vm) {
+    MalValue roots[4];
+    for (usize i = 0; i < countof(roots); i++) roots[i] = mal_value_new_undefined();
+    MalRootSpan span;
+    mal_gc_root(&span, roots, countof(roots));
+
+    roots[0] = latin1_value(vm, "Caf\xe9 \xd1o\xf1o \xd7\xf7 \xaa\xba long enough");
+    MalCompletion result = call_named(vm, roots[0], "toUpperCase", nullptr, 0);
+    CHECK(result.kind == MAL_COMPLETION_NORMAL && mal_value_is_string(result.value));
+    CHECK(mal_value_to_string(result.value)->latin1);
+    CHECK(string_equals_latin1(mal_value_to_string(result.value), "CAF\xc9 \xd1O\xd1O \xd7\xf7 \xaa\xba LONG ENOUGH"));
+    roots[1] = result.value;
+    result = call_named(vm, roots[1], "toLowerCase", nullptr, 0);
+    CHECK(result.kind == MAL_COMPLETION_NORMAL && mal_value_is_string(result.value));
+    CHECK(string_equals_latin1(mal_value_to_string(result.value), "caf\xe9 \xf1o\xf1o \xd7\xf7 \xaa\xba long enough"));
+    CHECK(mal_value_to_string(roots[0])->latin1 && mal_value_to_string(roots[1])->latin1);
+
+    roots[0] = latin1_value(vm, "stra\xdf" "e \xb5 \xff and more text");
+    result = call_named(vm, roots[0], "toUpperCase", nullptr, 0);
+    CHECK(result.kind == MAL_COMPLETION_NORMAL && mal_value_is_string(result.value));
+    const c16 expanded[] = {'S', 'T', 'R', 'A', 'S', 'S', 'E', ' ', 0x39c, ' ', 0x178,
+        ' ', 'A', 'N', 'D', ' ', 'M', 'O', 'R', 'E', ' ', 'T', 'E', 'X', 'T'};
+    CHECK(string_is_utf16_units(mal_value_to_string(result.value), expanded, countof(expanded)));
+    CHECK(mal_value_to_string(roots[0])->latin1);
+    result = call_named(vm, roots[0], "toLowerCase", nullptr, 0);
+    CHECK(result.kind == MAL_COMPLETION_NORMAL && result.value == roots[0]);
+
+    roots[0] = latin1_value(vm, "Stra\xdf" "e und Fu\xdf");
+    result = call_named(vm, roots[0], "toUpperCase", nullptr, 0);
+    CHECK(result.kind == MAL_COMPLETION_NORMAL && mal_value_is_string(result.value));
+    CHECK(mal_value_to_string(result.value)->latin1);
+    CHECK(string_equals_latin1(mal_value_to_string(result.value), "STRASSE UND FUSS"));
+
+    MalString *rope;
+    roots[1] = latin1_value(vm, "first \xe9l\xe9ment, ");
+    roots[2] = latin1_value(vm, "second \xc9L\xc9MENT");
+    CHECK(mal_string_new_cons_checked(&vm->heap, mal_value_to_string(roots[1]),
+        mal_value_to_string(roots[2]), &rope));
+    roots[0] = mal_value_from_string(rope);
+    result = call_named(vm, roots[0], "toLowerCase", nullptr, 0);
+    CHECK(result.kind == MAL_COMPLETION_NORMAL && mal_value_is_string(result.value));
+    CHECK(mal_value_to_string(result.value)->latin1);
+    CHECK(string_equals_latin1(mal_value_to_string(result.value), "first \xe9l\xe9ment, second \xe9l\xe9ment"));
+    CHECK(rope->storage == MAL_STRING_STORAGE_CONS);
+
+    roots[0] = latin1_value(vm, "na\xefve r\xe9sum\xe9 with \xa0 spacing");
+    result = call_named(vm, roots[0], "normalize", nullptr, 0);
+    CHECK(result.kind == MAL_COMPLETION_NORMAL && result.value == roots[0]);
+    roots[1] = latin1_value(vm, "NFD");
+    result = call_named(vm, roots[0], "normalize", &roots[1], 1);
+    CHECK(result.kind == MAL_COMPLETION_NORMAL && mal_value_is_string(result.value));
+    MalString *decomposed = mal_value_to_string(result.value);
+    CHECK(decomposed->length == mal_value_to_string(roots[0])->length + 3);
+    CHECK(mal_string_code_unit_at(decomposed, 2) == 'i' && mal_string_code_unit_at(decomposed, 3) == 0x308);
+    roots[1] = latin1_value(vm, "NFKC");
+    result = call_named(vm, roots[0], "normalize", &roots[1], 1);
+    CHECK(result.kind == MAL_COMPLETION_NORMAL && mal_value_is_string(result.value));
+    CHECK(string_equals_latin1(mal_value_to_string(result.value), "na\xefve r\xe9sum\xe9 with   spacing"));
+    CHECK(mal_value_to_string(roots[0])->latin1);
+
+    roots[1] = mal_value_from_i32(3);
+    result = call_named(vm, roots[0], "codePointAt", &roots[1], 1);
+    CHECK(result.kind == MAL_COMPLETION_NORMAL && result.value == mal_value_from_i32('v'));
+    CHECK(mal_value_to_string(roots[0])->latin1);
+
+    mal_gc_collect(vm);
+    mal_gc_unroot(&span);
+    return true;
+}
+
+static bool uri_coding_keeps_compact_storage(MalVm *vm) {
+    MalValue roots[2];
+    for (usize i = 0; i < countof(roots); i++) roots[i] = mal_value_new_undefined();
+    MalRootSpan span;
+    mal_gc_root(&span, roots, countof(roots));
+    MalValue encode = vm->intrinsics[MAL_INTRINSIC_ENCODE_URI_COMPONENT];
+    MalValue decode = vm->intrinsics[MAL_INTRINSIC_DECODE_URI_COMPONENT];
+
+    roots[0] = latin1_value(vm, "caf\xe9 & co/\xff");
+    MalCompletion result = mal_vm_call_value(vm, encode, mal_value_new_undefined(), &roots[0], 1);
+    CHECK(result.kind == MAL_COMPLETION_NORMAL && mal_value_is_string(result.value));
+    CHECK(mal_value_to_string(result.value)->latin1 && mal_value_to_string(roots[0])->latin1);
+    CHECK(string_equals_latin1(mal_value_to_string(result.value), "caf%C3%A9%20%26%20co%2F%C3%BF"));
+    roots[1] = result.value;
+    result = mal_vm_call_value(vm, decode, mal_value_new_undefined(), &roots[1], 1);
+    CHECK(result.kind == MAL_COMPLETION_NORMAL && mal_value_is_string(result.value));
+    CHECK(mal_value_to_string(result.value)->latin1);
+    CHECK(mal_string_equals(mal_value_to_string(result.value), mal_value_to_string(roots[0])));
+
+    roots[0] = latin1_value(vm, "price%20%E2%82%AC5");
+    result = mal_vm_call_value(vm, decode, mal_value_new_undefined(), &roots[0], 1);
+    CHECK(result.kind == MAL_COMPLETION_NORMAL && mal_value_is_string(result.value));
+    const c16 euro[] = {'p', 'r', 'i', 'c', 'e', ' ', 0x20ac, '5'};
+    CHECK(string_is_utf16_units(mal_value_to_string(result.value), euro, countof(euro)));
+    CHECK(mal_value_to_string(roots[0])->latin1);
+
+    roots[0] = latin1_value(vm, "%E9%");
+    result = mal_vm_call_value(vm, decode, mal_value_new_undefined(), &roots[0], 1);
+    CHECK(result.kind == MAL_COMPLETION_THROW);
+    vm->completion = (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = mal_value_new_undefined()};
+
+    mal_gc_unroot(&span);
+    return true;
+}
+
+static bool dense_joins_write_compact_results(MalVm *vm) {
+    MalValue roots[4];
+    for (usize i = 0; i < countof(roots); i++) roots[i] = mal_value_new_undefined();
+    MalRootSpan span;
+    mal_gc_root(&span, roots, countof(roots));
+    roots[0] = mal_value_from_array_object(mal_intrinsic_new_dense_array(vm, 0));
+    MalArrayObject *array = mal_value_to_array_object(roots[0]);
+    const char *parts[] = {"caf\xe9", "", "na\xefve-and-longer-than-inline", "x"};
+    for (u32 i = 0; i < countof(parts); i++) {
+        roots[1] = latin1_value(vm, parts[i]);
+        CHECK(mal_array_object_store(array, mal_key_index(i), roots[1]));
+    }
+    CHECK(mal_array_object_store(array, mal_key_index(4), mal_value_new_null()));
+    CHECK(mal_array_object_store(array, mal_key_index(5), mal_value_from_i32(-1234)));
+
+    roots[1] = latin1_value(vm, ",");
+    MalCompletion result = call_named(vm, roots[0], "join", &roots[1], 1);
+    CHECK(result.kind == MAL_COMPLETION_NORMAL && mal_value_is_string(result.value));
+    CHECK(mal_value_to_string(result.value)->latin1);
+    CHECK(string_equals_latin1(mal_value_to_string(result.value),
+        "caf\xe9,,na\xefve-and-longer-than-inline,x,,-1234"));
+
+    roots[1] = latin1_value(vm, " | ");
+    result = call_named(vm, roots[0], "join", &roots[1], 1);
+    CHECK(result.kind == MAL_COMPLETION_NORMAL && mal_value_is_string(result.value));
+    CHECK(string_equals_latin1(mal_value_to_string(result.value),
+        "caf\xe9 |  | na\xefve-and-longer-than-inline | x |  | -1234"));
+
+    const c16 wide[] = {'p', 0x3c0};
+    roots[2] = mal_value_from_string(mal_string_new_copy(&vm->heap, wide, countof(wide)));
+    CHECK(mal_array_object_store(array, mal_key_index(1), roots[2]));
+    roots[1] = latin1_value(vm, "/");
+    result = call_named(vm, roots[0], "join", &roots[1], 1);
+    CHECK(result.kind == MAL_COMPLETION_NORMAL && mal_value_is_string(result.value));
+    MalString *joined = mal_value_to_string(result.value);
+    CHECK(!joined->latin1 && joined->length == 4 + 1 + 2 + 1 + 28 + 1 + 1 + 1 + 0 + 1 + 5);
+    CHECK(mal_string_code_unit_at(joined, 3) == 0xe9 && mal_string_code_unit_at(joined, 6) == 0x3c0);
+    CHECK(mal_string_code_unit_at(joined, joined->length - 5) == '-');
+
+    mal_gc_unroot(&span);
+    return true;
+}
+
 int main(void) {
     MalVm vm;
     mal_vm_init(&vm, &mal_runtime_image);
@@ -610,7 +886,11 @@ int main(void) {
         && sliding_slices_release_previous_windows(&vm, 17, true)
         && sliding_slices_release_previous_windows(&vm, 4097, false)
         && sliding_slices_release_previous_windows(&vm, 4097, true)
-        && compact_parse_lookup_build_serialize(&vm);
+        && compact_parse_lookup_build_serialize(&vm)
+        && regexp_subjects_stay_compact(&vm)
+        && latin1_case_and_normalization_stay_compact(&vm)
+        && uri_coding_keeps_compact_storage(&vm)
+        && dense_joins_write_compact_results(&vm);
     mal_vm_free(&vm);
     if (!passed) return 1;
     puts("encoding-aware-strings PASS");

@@ -57,7 +57,7 @@ static bool regexp_throw_string_length(MalVm *vm) {
 static MalValue regexp_substring(MalVm *vm, MalString *s, i32 start, i32 end) {
     if (end - start == 1) {
         return mal_value_from_string(
-            mal_intrinsic_code_unit(vm, mal_string_code_units(s)[(usize) start])
+            mal_intrinsic_code_unit(vm, mal_string_code_unit_at(s, (usize) start))
         );
     }
     return mal_value_from_string(
@@ -65,71 +65,128 @@ static MalValue regexp_substring(MalVm *vm, MalString *s, i32 start, i32 end) {
     );
 }
 
-typedef enum RegexpLegacyStateIndex {
+typedef enum RegexpLegacyField {
     REGEXP_LEGACY_INPUT,
     REGEXP_LEGACY_LAST_MATCH,
     REGEXP_LEGACY_LAST_PAREN,
     REGEXP_LEGACY_LEFT_CONTEXT,
     REGEXP_LEGACY_RIGHT_CONTEXT,
     REGEXP_LEGACY_PAREN_1,
-    REGEXP_LEGACY_STATE_COUNT = REGEXP_LEGACY_PAREN_1 + 9,
-} RegexpLegacyStateIndex;
+} RegexpLegacyField;
+
+enum { REGEXP_LEGACY_PAREN_COUNT = 9 };
+
+// Matches record positions only; the getters slice SUBJECT on demand, so exec and
+// test() allocate nothing for the statics. SUBJECT is separate because `input` is settable.
+typedef enum RegexpLegacySlot {
+    REGEXP_LEGACY_SLOT_INPUT,
+    REGEXP_LEGACY_SLOT_SUBJECT,
+    REGEXP_LEGACY_SLOT_MATCH_START,
+    REGEXP_LEGACY_SLOT_MATCH_END,
+    /** Recorded paren pairs; later pairs read as non-participating. */
+    REGEXP_LEGACY_SLOT_PAREN_RECORDED,
+    REGEXP_LEGACY_SLOT_PAREN_START,
+    REGEXP_LEGACY_SLOT_COUNT =
+        REGEXP_LEGACY_SLOT_PAREN_START + 2 * REGEXP_LEGACY_PAREN_COUNT,
+} RegexpLegacySlot;
 
 static MalArrayObject *regexp_legacy_state(MalVm *vm) {
     return mal_value_to_array_object(
         vm->intrinsics[MAL_INTRINSIC_REGEXP_LEGACY_STATE]);
 }
 
-static void regexp_legacy_store(
-    MalVm *vm, RegexpLegacyStateIndex index, MalValue value
-) {
+static void regexp_legacy_store(MalVm *vm, RegexpLegacySlot slot, MalValue value) {
     MalArrayObject *state = regexp_legacy_state(vm);
     // This private intrinsic stays dense; no property descriptor can intercept replacement.
-    assert((u32) index < state->dense_count);
-    MalArrayDenseStore stored = mal_array_object_dense_store(state, (u32) index, value);
+    assert((u32) slot < state->dense_count);
+    MalArrayDenseStore stored = mal_array_object_dense_store(state, (u32) slot, value);
     assert(stored == MAL_ARRAY_DENSE_APPLIED);
     (void) stored;
 }
 
-static MalValue regexp_legacy_load(MalVm *vm, RegexpLegacyStateIndex index) {
+static MalValue regexp_legacy_load(MalVm *vm, RegexpLegacySlot slot) {
     MalValue value;
     bool present = mal_array_object_dense_get(
-        regexp_legacy_state(vm), (u32) index, &value);
+        regexp_legacy_state(vm), (u32) slot, &value);
     assert(present);
     return value;
+}
+
+static i32 regexp_legacy_load_position(MalVm *vm, RegexpLegacySlot slot) {
+    return mal_value_to_i32(regexp_legacy_load(vm, slot));
+}
+
+// Position slots only ever hold Numbers: replacing one shades no reference and
+// publishes no young edge, so neither the SATB barrier nor a card mark applies.
+static void regexp_legacy_store_position(MalVm *vm, RegexpLegacySlot slot, i32 position) {
+    MalArrayObject *state = regexp_legacy_state(vm);
+    assert((u32) slot < state->dense_count && mal_value_is_int32(state->elements[slot]));
+    state->elements[slot] = mal_value_from_i32(position);
+}
+
+static RegexpLegacySlot regexp_legacy_paren_start_slot(i32 group) {
+    return (RegexpLegacySlot) (REGEXP_LEGACY_SLOT_PAREN_START + 2 * (group - 1));
 }
 
 static void regexp_legacy_update(
     MalVm *vm, MalString *subject, const int32_t *captures, int32_t group_count
 ) {
-    int32_t match_start = captures[0];
-    int32_t match_end = captures[1];
-    regexp_legacy_store(
-        vm, REGEXP_LEGACY_INPUT, mal_value_from_string(subject));
-    regexp_legacy_store(
-        vm, REGEXP_LEGACY_LAST_MATCH,
-        regexp_substring(vm, subject, match_start, match_end));
-    regexp_legacy_store(
-        vm, REGEXP_LEGACY_LEFT_CONTEXT,
-        regexp_substring(vm, subject, 0, match_start));
-    regexp_legacy_store(
-        vm, REGEXP_LEGACY_RIGHT_CONTEXT,
-        regexp_substring(vm, subject, match_end, (i32) mal_string_length(subject)));
-
-    MalValue empty = mal_value_from_string(mal_intrinsic_ascii(vm, ""));
-    MalValue last_paren = empty;
-    for (int32_t index = 1; index <= 9; index++) {
-        MalValue value = empty;
-        if (index < group_count && captures[2 * index] >= 0) {
-            value = regexp_substring(
-                vm, subject, captures[2 * index], captures[2 * index + 1]);
-            last_paren = value;
-        }
-        regexp_legacy_store(
-            vm, (RegexpLegacyStateIndex) (REGEXP_LEGACY_PAREN_1 + index - 1),
-            value);
+    MalValue subject_value = mal_value_from_string(subject);
+    regexp_legacy_store(vm, REGEXP_LEGACY_SLOT_INPUT, subject_value);
+    regexp_legacy_store(vm, REGEXP_LEGACY_SLOT_SUBJECT, subject_value);
+    regexp_legacy_store_position(vm, REGEXP_LEGACY_SLOT_MATCH_START, captures[0]);
+    regexp_legacy_store_position(vm, REGEXP_LEGACY_SLOT_MATCH_END, captures[1]);
+    i32 recorded = group_count - 1 < REGEXP_LEGACY_PAREN_COUNT
+        ? group_count - 1 : REGEXP_LEGACY_PAREN_COUNT;
+    regexp_legacy_store_position(vm, REGEXP_LEGACY_SLOT_PAREN_RECORDED, recorded);
+    for (i32 group = 1; group <= recorded; group++) {
+        RegexpLegacySlot start = regexp_legacy_paren_start_slot(group);
+        regexp_legacy_store_position(vm, start, captures[2 * group]);
+        regexp_legacy_store_position(vm, (RegexpLegacySlot) (start + 1), captures[2 * group + 1]);
     }
-    regexp_legacy_store(vm, REGEXP_LEGACY_LAST_PAREN, last_paren);
+}
+
+static bool regexp_legacy_paren_participated(MalVm *vm, i32 group) {
+    return group <= regexp_legacy_load_position(vm, REGEXP_LEGACY_SLOT_PAREN_RECORDED) &&
+        regexp_legacy_load_position(vm, regexp_legacy_paren_start_slot(group)) >= 0;
+}
+
+static MalValue regexp_legacy_paren(MalVm *vm, MalString *subject, i32 group) {
+    if (!regexp_legacy_paren_participated(vm, group)) {
+        return mal_value_from_string(mal_intrinsic_ascii(vm, ""));
+    }
+    RegexpLegacySlot start = regexp_legacy_paren_start_slot(group);
+    return regexp_substring(
+        vm, subject, regexp_legacy_load_position(vm, start),
+        regexp_legacy_load_position(vm, (RegexpLegacySlot) (start + 1)));
+}
+
+static MalValue regexp_legacy_read(MalVm *vm, RegexpLegacyField field) {
+    if (field == REGEXP_LEGACY_INPUT) {
+        return regexp_legacy_load(vm, REGEXP_LEGACY_SLOT_INPUT);
+    }
+    MalString *subject =
+        mal_value_to_string(regexp_legacy_load(vm, REGEXP_LEGACY_SLOT_SUBJECT));
+    i32 match_start = regexp_legacy_load_position(vm, REGEXP_LEGACY_SLOT_MATCH_START);
+    i32 match_end = regexp_legacy_load_position(vm, REGEXP_LEGACY_SLOT_MATCH_END);
+    switch (field) {
+    case REGEXP_LEGACY_LAST_MATCH:
+        return regexp_substring(vm, subject, match_start, match_end);
+    case REGEXP_LEGACY_LEFT_CONTEXT:
+        return regexp_substring(vm, subject, 0, match_start);
+    case REGEXP_LEGACY_RIGHT_CONTEXT:
+        return regexp_substring(
+            vm, subject, match_end, (i32) mal_string_length(subject));
+    case REGEXP_LEGACY_LAST_PAREN:
+        for (i32 group = REGEXP_LEGACY_PAREN_COUNT; group >= 1; group--) {
+            if (regexp_legacy_paren_participated(vm, group)) {
+                return regexp_legacy_paren(vm, subject, group);
+            }
+        }
+        return mal_value_from_string(mal_intrinsic_ascii(vm, ""));
+    default:
+        return regexp_legacy_paren(vm, subject, (i32) (field - REGEXP_LEGACY_PAREN_1) + 1);
+    }
 }
 
 // Decode UTF-8 (regress group names) into a heap MalString of UTF-16 units.
@@ -194,13 +251,12 @@ static MalString *regexp_string_from_utf8(MalVm *vm, const uint8_t *bytes, usize
 
 // ParseFlags: validate the flags string and produce the MalRegExpFlag bitmask.
 // Rejects duplicates, unknown letters, and `u` together with `v`.
-static bool regexp_parse_flags(const MalString *flags, u32 *out_bits) {
-    const c16 *u = mal_string_code_units(flags);
+static bool regexp_parse_flags(MalString *flags, u32 *out_bits) {
     usize n = mal_string_length(flags);
     u32 bits = 0;
     for (usize i = 0; i < n; i++) {
         u32 bit;
-        switch (u[i]) {
+        switch (mal_string_code_unit_at(flags, i)) {
             case 'd': bit = MAL_REGEXP_JS_HAS_INDICES; break;
             case 'g': bit = MAL_REGEXP_JS_GLOBAL; break;
             case 'i': bit = MAL_REGEXP_JS_IGNORE_CASE; break;
@@ -276,9 +332,8 @@ static MalString *regexp_canonical_flags_string(MalVm *vm, MalRegExpObject *re) 
         }
     }
     if (mal_string_length(re->flags) == length) {
-        const c16 *original = mal_string_code_units(re->flags);
         usize i = 0;
-        while (i < length && original[i] == units[i]) {
+        while (i < length && mal_string_code_unit_at(re->flags, i) == units[i]) {
             i++;
         }
         if (i == length) {
@@ -307,12 +362,11 @@ static MalValue regexp_escape_pattern(MalVm *vm, MalString *src) {
     if (n == 0) {
         return mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) "(?:)"));
     }
-    const c16 *u = mal_string_code_units(src);
     usize capacity = 0;
     usize bytes;
     bool prev_backslash = false;
     for (usize i = 0; i < n; i++) {
-        c16 c = u[i];
+        c16 c = mal_string_code_unit_at(src, i);
         usize extra = (c == 0x2028 || c == 0x2029) ? 6 :
             (c == '\n' || c == '\r' || (c == '/' && !prev_backslash)) ? 2 : 1;
         if (!mal_checked_size_add(capacity, extra, MAL_STRING_MAX_CODE_UNITS, &capacity)) {
@@ -336,7 +390,7 @@ static MalValue regexp_escape_pattern(MalVm *vm, MalString *src) {
     usize out = 0;
     prev_backslash = false;
     for (usize i = 0; i < n; i++) {
-        c16 c = u[i];
+        c16 c = mal_string_code_unit_at(src, i);
         if (c == '\n') {
             buf[out++] = '\\';
             buf[out++] = 'n';
@@ -372,9 +426,18 @@ static bool regexp_initialize(MalVm *vm, MalRegExpObject *re, MalString *pattern
         mal_vm_throw_error(vm, MAL_INTRINSIC_SYNTAX_ERROR_PROTOTYPE, "invalid regular expression flags");
         return false;
     }
+    // Copy instead of bridging: widening would permanently double the storage
+    // of a compact pattern string that the engine only reads during compilation.
+    usize pattern_length = mal_string_length(pattern);
+    c16 stack_units[256];
+    c16 *pattern_units = pattern_length <= countof(stack_units)
+        ? stack_units : malloc(sizeof(c16) * pattern_length);
+    if (pattern_units == nullptr) abort();
+    mal_string_copy_range_to(pattern, 0, pattern_length, pattern_units);
     void *matcher = mal_regexp_compile(
-        (const uint16_t *) mal_string_code_units(pattern), mal_string_length(pattern), regexp_regress_flags(bits)
+        (const uint16_t *) pattern_units, pattern_length, regexp_regress_flags(bits)
     );
+    if (pattern_units != stack_units) free(pattern_units);
     if (matcher == nullptr) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_SYNTAX_ERROR_PROTOTYPE, "invalid regular expression");
         return false;
@@ -633,19 +696,16 @@ static MalValue regexp_builtin_exec(
     int32_t stack_caps[64];
     int32_t *caps = stack_caps;
     u32 execution_flags = 0;
-    int32_t ngroups = mal_regexp_exec(
-        re->matcher,
-        (const uint16_t *) mal_string_code_units(s),
-        length,
-        (size_t) last_index,
-        s,
-        vm->heap.identity,
-        vm->heap.epoch,
-        caps,
-        64,
-        &execution_flags
-    );
+    MalStringSegment subject = mal_string_flat_segment(s);
+    int32_t ngroups = subject.latin1
+        ? mal_regexp_exec_latin1(
+            re->matcher, subject.latin1_units, length, (size_t) last_index, s,
+            vm->heap.identity, vm->heap.epoch, caps, 64, &execution_flags)
+        : mal_regexp_exec(
+            re->matcher, (const uint16_t *) subject.utf16_units, length, (size_t) last_index, s,
+            vm->heap.identity, vm->heap.epoch, caps, 64, &execution_flags);
     MAL_PERF_COUNT(regexp_exec_calls);
+    if ((execution_flags & MAL_REGEXP_EXEC_LATIN1) != 0) MAL_PERF_COUNT(regexp_latin1_exec_calls);
     if ((execution_flags & MAL_REGEXP_EXEC_FAST) != 0) {
         MAL_PERF_COUNT(regexp_fast_exec_calls);
     } else if ((execution_flags & MAL_REGEXP_EXEC_ASCII) != 0) {
@@ -952,7 +1012,11 @@ static MalValue regexp_constructor(MalVm *vm, MalValue this_value, const MalValu
     }
 
     MalObject *prototype;
-    if (!mal_vm_get_prototype_from_constructor(
+    // %RegExp%.prototype is non-writable and non-configurable, so the intrinsic
+    // constructor (every regex literal) needs no observable property read.
+    if (used_new_target == vm->intrinsics[MAL_INTRINSIC_REGEXP_CONSTRUCTOR]) {
+        prototype = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_REGEXP_PROTOTYPE]);
+    } else if (!mal_vm_get_prototype_from_constructor(
             vm, used_new_target, MAL_INTRINSIC_REGEXP_PROTOTYPE, &prototype)) {
         return mal_value_new_undefined();
     }
@@ -1175,13 +1239,11 @@ static MalValue regexp_proto_to_string(MalVm *vm, MalValue this_value, const Mal
     flags = mal_value_to_string(string_roots[1]);
     usize out = 0;
     buf[out++] = '/';
-    for (usize i = 0; i < source_len; i++) {
-        buf[out++] = mal_string_code_units(source)[i];
-    }
+    mal_string_copy_range_to(source, 0, source_len, buf + out);
+    out += source_len;
     buf[out++] = '/';
-    for (usize i = 0; i < flags_len; i++) {
-        buf[out++] = mal_string_code_units(flags)[i];
-    }
+    mal_string_copy_range_to(flags, 0, flags_len, buf + out);
+    out += flags_len;
     MalValue result = mal_value_from_string(
         mal_string_new_owned(&vm->heap, buf, out));
     mal_gc_unroot(&root_span);
@@ -1204,6 +1266,13 @@ static bool regexp_builder_append_string(MalVm *vm, RegexpBuilder *b, const MalS
         regexp_throw_string_length(vm);
 }
 
+static bool regexp_builder_append_range(
+    MalVm *vm, RegexpBuilder *b, const MalString *s, usize offset, usize length
+) {
+    return mal_text_buffer_append_range(b, s, offset, length) == MAL_TEXT_BUFFER_OK ||
+        regexp_throw_string_length(vm);
+}
+
 static MalValue regexp_builder_finish(MalVm *vm, RegexpBuilder *b) {
     return mal_value_from_string(mal_text_buffer_finish(&vm->heap, b));
 }
@@ -1218,8 +1287,8 @@ static i64 regexp_advance_string_index(MalString *s, i64 index, bool unicode) {
     if (index + 1 >= (i64) length) {
         return index + 1;
     }
-    const c16 *u = mal_string_code_units(s);
-    return index + (i64) mal_utf16_code_point_width(u, length, (usize) index);
+    return mal_utf16_is_pair(mal_string_code_unit_at(s, (usize) index),
+        mal_string_code_unit_at(s, (usize) index + 1)) ? index + 2 : index + 1;
 }
 
 static bool regexp_flags_string(MalVm *vm, MalValue rx, MalString **out) {
@@ -1230,11 +1299,10 @@ static bool regexp_flags_string(MalVm *vm, MalValue rx, MalString **out) {
     return mal_vm_to_string(vm, value, out);
 }
 
-static bool regexp_flags_has(const MalString *flags, c16 ch) {
-    const c16 *u = mal_string_code_units(flags);
+static bool regexp_flags_has(MalString *flags, c16 ch) {
     usize n = mal_string_length(flags);
     for (usize i = 0; i < n; i++) {
-        if (u[i] == ch) {
+        if (mal_string_code_unit_at(flags, i) == ch) {
             return true;
         }
     }
@@ -1472,44 +1540,54 @@ static bool regexp_get_substitution(
     MalVm *vm, MalString *matched, MalString *str, i64 position, const MalValue *captures, i64 capture_count,
     MalValue named, MalString *replacement, RegexpBuilder *out
 ) {
-    const c16 *r = mal_string_code_units(replacement);
     usize rlen = mal_string_length(replacement);
     usize match_len = mal_string_length(matched);
     usize str_len = mal_string_length(str);
 
+    // Units outside recognized `$` forms, including unrecognized `$`, copy as runs.
+    usize literal_start = 0;
     usize i = 0;
     while (i < rlen) {
-        c16 c = r[i];
-        if (c != '$' || i + 1 >= rlen) {
-            if (!regexp_builder_append_units(vm, out, &r[i], 1)) return false;
+        if (mal_string_code_unit_at(replacement, i) != '$' || i + 1 >= rlen) {
             i++;
             continue;
         }
-        c16 next = r[i + 1];
+        c16 next = mal_string_code_unit_at(replacement, i + 1);
+        usize consumed = 0;
+        MalString *inserted = nullptr;
+        usize inserted_offset = 0;
+        usize inserted_length = 0;
         if (next == '$') {
-            if (!regexp_builder_append_units(vm, out, &(c16){'$'}, 1)) return false;
-            i += 2;
-        } else if (next == '&') {
-            if (!regexp_builder_append_string(vm, out, matched)) return false;
-            i += 2;
-        } else if (next == '`') {
-            if (!regexp_builder_append_units(vm, out, mal_string_code_units(str), (usize) position)) return false;
-            i += 2;
-        } else if (next == '\'') {
-            usize tail = (usize) position + match_len;
-            if (tail < str_len) {
-                if (!regexp_builder_append_units(vm, out, mal_string_code_units(str) + tail, str_len - tail)) return false;
+            // Keep the first `$` as the end of the literal run; skip the second.
+            if (!regexp_builder_append_range(vm, out, replacement, literal_start, i + 1 - literal_start)) {
+                return false;
             }
             i += 2;
+            literal_start = i;
+            continue;
+        } else if (next == '&') {
+            inserted = matched;
+            inserted_length = match_len;
+            consumed = 2;
+        } else if (next == '`') {
+            inserted = str;
+            inserted_length = (usize) position;
+            consumed = 2;
+        } else if (next == '\'') {
+            usize tail = (usize) position + match_len;
+            inserted = str;
+            inserted_offset = tail;
+            inserted_length = tail < str_len ? str_len - tail : 0;
+            consumed = 2;
         } else if (next >= '0' && next <= '9') {
             // $n or $nn (1..99); prefer two digits when in range.
             i64 one = next - '0';
             i64 two = -1;
-            if (i + 2 < rlen && r[i + 2] >= '0' && r[i + 2] <= '9') {
-                two = one * 10 + (r[i + 2] - '0');
+            if (i + 2 < rlen) {
+                c16 second = mal_string_code_unit_at(replacement, i + 2);
+                if (second >= '0' && second <= '9') two = one * 10 + (second - '0');
             }
             i64 n = -1;
-            usize consumed = 0;
             if (two >= 1 && two <= capture_count) {
                 n = two;
                 consumed = 3;
@@ -1518,51 +1596,61 @@ static bool regexp_get_substitution(
                 consumed = 2;
             }
             if (n < 0) {
-                if (!regexp_builder_append_units(vm, out, &r[i], 1)) return false;
                 i++;
-            } else {
-                MalValue capture = captures[n - 1];
-                if (!mal_value_is_undefined(capture)) {
-                    if (!regexp_builder_append_string(vm, out, mal_value_to_string(capture))) return false;
-                }
-                i += consumed;
+                continue;
+            }
+            MalValue capture = captures[n - 1];
+            if (!mal_value_is_undefined(capture)) {
+                inserted = mal_value_to_string(capture);
+                inserted_length = mal_string_length(inserted);
             }
         } else if (next == '<' && !mal_value_is_undefined(named)) {
             // $<name>
-            usize close = 0;
-            bool found = false;
-            for (usize j = i + 2; j < rlen; j++) {
-                if (r[j] == '>') {
-                    close = j;
-                    found = true;
-                    break;
-                }
-            }
-            if (!found) {
-                if (!regexp_builder_append_units(vm, out, &r[i], 1)) return false;
+            usize close = i + 2;
+            while (close < rlen && mal_string_code_unit_at(replacement, close) != '>') close++;
+            if (close == rlen) {
                 i++;
-            } else {
-                MalString *name = mal_property_atomize_string(
-                    vm, mal_string_new_copy(&vm->heap, &r[i + 2], close - (i + 2)));
-                MalValue value;
-                if (!mal_vm_get_property(vm, named, (MalKey){.kind = MAL_KEY_STRING, .value = mal_value_from_string(name)}, &value)) {
+                continue;
+            }
+            if (!regexp_builder_append_range(vm, out, replacement, literal_start, i - literal_start)) {
+                return false;
+            }
+            usize name_length = close - (i + 2);
+            c16 stack_name[64];
+            c16 *name_units = name_length <= countof(stack_name)
+                ? stack_name : malloc(sizeof(c16) * name_length);
+            if (name_units == nullptr) abort();
+            mal_string_copy_range_to(replacement, i + 2, name_length, name_units);
+            MalString *name = mal_property_atomize_string(
+                vm, mal_string_new_copy(&vm->heap, name_units, name_length));
+            if (name_units != stack_name) free(name_units);
+            MalValue value;
+            if (!mal_vm_get_property(vm, named, (MalKey){.kind = MAL_KEY_STRING, .value = mal_value_from_string(name)}, &value)) {
+                return false;
+            }
+            if (!mal_value_is_undefined(value)) {
+                MalString *value_str;
+                if (!mal_vm_to_string(vm, value, &value_str)) {
                     return false;
                 }
-                if (!mal_value_is_undefined(value)) {
-                    MalString *value_str;
-                    if (!mal_vm_to_string(vm, value, &value_str)) {
-                        return false;
-                    }
-                    if (!regexp_builder_append_string(vm, out, value_str)) return false;
-                }
-                i = close + 1;
+                if (!regexp_builder_append_string(vm, out, value_str)) return false;
             }
+            i = close + 1;
+            literal_start = i;
+            continue;
         } else {
-            if (!regexp_builder_append_units(vm, out, &r[i], 1)) return false;
             i++;
+            continue;
         }
+        if (!regexp_builder_append_range(vm, out, replacement, literal_start, i - literal_start) ||
+            (inserted != nullptr &&
+             !regexp_builder_append_range(vm, out, inserted, inserted_offset, inserted_length))) {
+            return false;
+        }
+        i += consumed;
+        literal_start = i;
     }
-    return true;
+    return regexp_builder_append_range(vm, out, replacement, literal_start, rlen - literal_start);
 }
 
 static MalValue regexp_proto_replace(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
@@ -1797,8 +1885,8 @@ static MalValue regexp_proto_replace(MalVm *vm, MalValue this_value, const MalVa
         }
 
         if (position >= next_source_position) {
-            if (!regexp_builder_append_units(
-                    vm, &accumulated, mal_string_code_units(s) + next_source_position,
+            if (!regexp_builder_append_range(
+                    vm, &accumulated, s, (usize) next_source_position,
                     (usize) (position - next_source_position))) {
                 goto done;
             }
@@ -1821,8 +1909,8 @@ static MalValue regexp_proto_replace(MalVm *vm, MalValue this_value, const MalVa
     }
 
     if (next_source_position < (i64) length_s) {
-        if (!regexp_builder_append_units(
-                vm, &accumulated, mal_string_code_units(s) + next_source_position,
+        if (!regexp_builder_append_range(
+                vm, &accumulated, s, (usize) next_source_position,
                 length_s - (usize) next_source_position)) {
             goto done;
         }
@@ -1885,9 +1973,7 @@ static MalValue regexp_proto_split(MalVm *vm, MalValue this_value, const MalValu
             regexp_throw_string_length(vm);
             return mal_value_new_undefined();
         }
-        for (usize i = 0; i < fl; i++) {
-            buf[i] = mal_string_code_units(flags)[i];
-        }
+        mal_string_copy_range_to(flags, 0, fl, buf);
         buf[fl] = 'y';
         new_flags = mal_string_new_copy(&vm->heap, buf, new_length);
         free(buf);
@@ -2312,11 +2398,12 @@ static MalValue regexp_escape(MalVm *vm, MalValue this_value, const MalValue *ar
         return mal_value_new_undefined();
     }
     MalString *s = mal_value_to_string(s_value);
-    const c16 *u = mal_string_code_units(s);
     usize n = mal_string_length(s);
     RegexpBuilder builder = {0};
+    mal_text_buffer_hint_capacity(&builder, n);
+    usize plain_start = 0;
     for (usize i = 0; i < n; i++) {
-        c16 c = u[i];
+        c16 c = mal_string_code_unit_at(s, i);
         // The first code point, if an ASCII alphanumeric, is hex-escaped so the
         // result can't combine with a preceding character into an identifier.
         if (i == 0 && mal_ascii_is_alphanumeric(c)) {
@@ -2324,8 +2411,14 @@ static MalValue regexp_escape(MalVm *vm, MalValue this_value, const MalValue *ar
                 mal_text_buffer_dispose(&builder);
                 return mal_value_new_undefined();
             }
+            plain_start = 1;
             continue;
         }
+        bool escaped = regexp_is_syntax_char(c) || c == '/' || (c >= 0x09 && c <= 0x0D) ||
+            regexp_is_punctuator_or_space(c);
+        if (!escaped) continue;
+        if (!regexp_builder_append_range(vm, &builder, s, plain_start, i - plain_start)) goto fail;
+        plain_start = i + 1;
         if (regexp_is_syntax_char(c) || c == '/') {
             c16 units[2] = {'\\', c};
             if (!regexp_builder_append_units(vm, &builder, units, 2)) goto fail;
@@ -2333,12 +2426,11 @@ static MalValue regexp_escape(MalVm *vm, MalValue this_value, const MalValue *ar
             char letter = c == 0x09 ? 't' : c == 0x0A ? 'n' : c == 0x0B ? 'v' : c == 0x0C ? 'f' : 'r';
             c16 units[2] = {'\\', (c16) letter};
             if (!regexp_builder_append_units(vm, &builder, units, 2)) goto fail;
-        } else if (regexp_is_punctuator_or_space(c)) {
-            if (!regexp_escape_hex(vm, &builder, c)) goto fail;
         } else {
-            if (!regexp_builder_append_units(vm, &builder, &c, 1)) goto fail;
+            if (!regexp_escape_hex(vm, &builder, c)) goto fail;
         }
     }
+    if (!regexp_builder_append_range(vm, &builder, s, plain_start, n - plain_start)) goto fail;
     return regexp_builder_finish(vm, &builder);
 
 fail:
@@ -2356,10 +2448,10 @@ static bool regexp_legacy_require_constructor(MalVm *vm, MalValue receiver) {
     return false;
 }
 
-static RegexpLegacyStateIndex regexp_legacy_accessor_index(MalValue callee) {
+static RegexpLegacyField regexp_legacy_accessor_field(MalValue callee) {
     MalValue slot = mal_native_function_object_get_slot(
         mal_value_to_native_function_object(callee), 0);
-    return (RegexpLegacyStateIndex) mal_value_to_i32(slot);
+    return (RegexpLegacyField) mal_value_to_i32(slot);
 }
 
 static MalValue regexp_legacy_getter(
@@ -2372,7 +2464,7 @@ static MalValue regexp_legacy_getter(
     if (!regexp_legacy_require_constructor(vm, this_value)) {
         return mal_value_new_undefined();
     }
-    return regexp_legacy_load(vm, regexp_legacy_accessor_index(callee));
+    return regexp_legacy_read(vm, regexp_legacy_accessor_field(callee));
 }
 
 static MalValue regexp_legacy_input_setter(
@@ -2390,16 +2482,16 @@ static MalValue regexp_legacy_input_setter(
         return mal_value_new_undefined();
     }
     regexp_legacy_store(
-        vm, REGEXP_LEGACY_INPUT, mal_value_from_string(input));
+        vm, REGEXP_LEGACY_SLOT_INPUT, mal_value_from_string(input));
     return mal_value_new_undefined();
 }
 
 static void regexp_define_legacy_accessor(
     MalVm *vm, MalObject *constructor, const byte *name,
     const byte *getter_name, const byte *setter_name,
-    RegexpLegacyStateIndex index, bool writable
+    RegexpLegacyField field, bool writable
 ) {
-    MalValue slot = mal_value_from_i32((i32) index);
+    MalValue slot = mal_value_from_i32((i32) field);
     MalValue accessors[] = {mal_value_new_undefined(), mal_value_new_undefined()};
     MalRootSpan root;
     mal_gc_root(&root, accessors, countof(accessors));
@@ -2439,12 +2531,15 @@ void mal_builtin_regexp_install(MalVm *vm) {
     vm->intrinsics[MAL_INTRINSIC_REGEXP_PROTOTYPE] = mal_value_from_object(prototype);
 
     MalArrayObject *legacy_state =
-        mal_intrinsic_new_dense_array(vm, REGEXP_LEGACY_STATE_COUNT);
+        mal_intrinsic_new_dense_array(vm, REGEXP_LEGACY_SLOT_COUNT);
     vm->intrinsics[MAL_INTRINSIC_REGEXP_LEGACY_STATE] =
         mal_value_from_array_object(legacy_state);
     MalValue empty = mal_value_from_string(mal_intrinsic_ascii(vm, ""));
-    for (i32 index = 0; index < REGEXP_LEGACY_STATE_COUNT; index++) {
-        mal_array_object_store(legacy_state, mal_key_index(index), empty);
+    for (i32 index = 0; index < REGEXP_LEGACY_SLOT_COUNT; index++) {
+        MalValue initial = index < REGEXP_LEGACY_SLOT_MATCH_START ? empty
+            : index < REGEXP_LEGACY_SLOT_PAREN_START ? mal_value_from_i32(0)
+            : mal_value_from_i32(-1);
+        mal_array_object_store(legacy_state, mal_key_index(index), initial);
     }
     mal_intrinsic_define_data(vm, constructor_object, (const byte *) "prototype", vm->intrinsics[MAL_INTRINSIC_REGEXP_PROTOTYPE], MAL_PROPERTY_NONE);
     mal_intrinsic_define_data(vm, prototype, (const byte *) "constructor", vm->intrinsics[MAL_INTRINSIC_REGEXP_CONSTRUCTOR], MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
@@ -2464,10 +2559,10 @@ void mal_builtin_regexp_install(MalVm *vm) {
     regexp_define_legacy_accessor(vm, constructor_object, "$'", "get $'", nullptr, REGEXP_LEGACY_RIGHT_CONTEXT, false);
     static const byte *paren_names[] = {"$1", "$2", "$3", "$4", "$5", "$6", "$7", "$8", "$9"};
     static const byte *paren_getter_names[] = {"get $1", "get $2", "get $3", "get $4", "get $5", "get $6", "get $7", "get $8", "get $9"};
-    for (i32 index = 0; index < 9; index++) {
+    for (i32 index = 0; index < REGEXP_LEGACY_PAREN_COUNT; index++) {
         regexp_define_legacy_accessor(
             vm, constructor_object, paren_names[index], paren_getter_names[index],
-            nullptr, (RegexpLegacyStateIndex) (REGEXP_LEGACY_PAREN_1 + index),
+            nullptr, (RegexpLegacyField) (REGEXP_LEGACY_PAREN_1 + index),
             false);
     }
 

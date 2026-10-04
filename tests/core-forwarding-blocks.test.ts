@@ -521,6 +521,62 @@ describe("Core empty forwarding blocks", () => {
 		expect(inspectCoreBlockParameters(result_.fn, result_.fn.entry)).toHaveLength(1);
 	});
 
+	function protectedCallsAroundBlock(
+		between: (builder: CoreFunctionBuilder, block: CoreBlockId) => CoreValueId,
+	) {
+		const { program, builder } = fixture(1);
+		const entry = builder.createBlock([{}]);
+		const callee = parameters(builder, entry)[0]!;
+		const handler = builder.createBlock([{ role: "exception" }]);
+		const middle = builder.createBlock();
+		const tail = builder.createBlock();
+		builder.appendInstruction(entry, "call", [callee, callee]);
+		builder.setHandler(entry, handler);
+		builder.setTerminator(entry, {
+			kind: "jump",
+			edge: { block: middle, arguments: [] },
+		});
+		const value = between(builder, middle);
+		builder.setTerminator(middle, { kind: "jump", edge: { block: tail, arguments: [] } });
+		builder.appendInstruction(tail, "call", [callee, callee, value]);
+		builder.setHandler(tail, handler);
+		builder.setTerminator(tail, { kind: "return", value });
+		builder.setTerminator(handler, {
+			kind: "throw",
+			value: parameters(builder, handler)[0]!,
+		});
+		const result = optimized({ program, function: builder.finish(entry).function });
+		return new Set(
+			[...result.fn.instructionIds()]
+				.filter(
+					(instruction) =>
+						result.fn.instructionKind(instruction) === "operation" &&
+						result.fn.instructionOpcodeName(instruction) === "call",
+				)
+				.map((instruction) => result.fn.instructionBlock(instruction)),
+		);
+	}
+
+	it("runs an effect-free block under its predecessor's handler", () => {
+		const callBlocks = protectedCallsAroundBlock((builder, block) => {
+			const [value] = builder.appendInstruction(block, "createNumber", [], {
+				attributes: { value: 7 },
+			});
+			return value!;
+		});
+		expect(callBlocks.size).toBe(1);
+	});
+
+	it("keeps an allocating block outside a handler", () => {
+		const callBlocks = protectedCallsAroundBlock((builder, block) => {
+			const [value] = builder.appendInstruction(block, "createArray", [], {
+				attributes: { length: 0 },
+			});
+			return value!;
+		});
+		expect(callBlocks.size).toBe(2);
+	});
+
 	it("leaves no forwarding candidates at the optimizer boundary", () => {
 		const result = optimized(functionWithForwardedArguments());
 		const { fn } = result;

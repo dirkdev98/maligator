@@ -1141,6 +1141,32 @@ describe("bounded Core cross-call transforms", () => {
 		).toBe(true);
 	});
 
+	it("defines expanded map results at a scalar index beside a captured loop counter", () => {
+		const core = lowerSemanticProgramToCore(
+			analyzeSourceAndRunSemanticAnalysis(
+				`
+			function shifted(values, rounds) {
+				let checksum = 0;
+				for (let round = 0; round < rounds; round++) {
+					const mapped = values.map((value) => value + round);
+					checksum += mapped[round & 7];
+				}
+				return checksum;
+			}
+			globalThis.shifted = shifted;
+		`,
+				"captured-array-map.js",
+			),
+		);
+		const { compilation } = optimizeCore(core, { verification: "per-pass" });
+		const fn = coreFunctionNamed(compilation.program, "shifted")!;
+		const defines = coreOperations(fn).filter(
+			({ opcode }) => opcode === "defineProperty",
+		);
+		expect(defines).toHaveLength(1);
+		expect(fn.valueRepresentation(defines[0]!.inputs[1]!)).toBe("f64");
+	});
+
 	it("guards and inlines hot global rest argument snapshots", () => {
 		let optimized: CoreProgram | undefined;
 		compileSemanticProgramToProgramImage(

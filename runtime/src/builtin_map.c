@@ -33,25 +33,6 @@ static MalValue mal_builtin_weak_map_prototype_set(
     MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count,
     MalValue new_target, MalValue callee);
 
-static u32 mal_builtin_map_cached_entry(
-    MalMapObject *map, MalValue key
-) {
-    MAL_PERF_COUNT(map_get_set_cache_checks);
-    u32 entry = mal_map_object_entry_hint(map, key);
-    if (entry != 0) {
-        MAL_PERF_COUNT(map_get_set_cache_hits);
-        return entry;
-    }
-    MAL_PERF_COUNT(map_get_set_cache_misses);
-    return 0;
-}
-
-static void mal_builtin_map_cache_entry(
-    MalMapObject *map, u32 entry
-) {
-    mal_map_object_remember_entry(map, entry);
-}
-
 /**
  * Shared Map/WeakMap constructor tail: populate the fresh map from an
  * optional iterable of [key, value] entries through this.set, closing the
@@ -72,7 +53,12 @@ static MalValue mal_builtin_map_construct(
     }
 
     MalObject *prototype;
-    if (!mal_vm_get_prototype_from_constructor(vm, new_target, prototype_slot, &prototype)) {
+    MalIntrinsic constructor_slot =
+        weak ? MAL_INTRINSIC_WEAK_MAP_CONSTRUCTOR : MAL_INTRINSIC_MAP_CONSTRUCTOR;
+    // An intrinsic constructor's own `prototype` is non-writable and non-configurable.
+    if (new_target == vm->intrinsics[constructor_slot]) {
+        prototype = mal_value_to_object(vm->intrinsics[prototype_slot]);
+    } else if (!mal_vm_get_prototype_from_constructor(vm, new_target, prototype_slot, &prototype)) {
         return mal_value_new_undefined();
     }
 
@@ -325,18 +311,7 @@ static MalValue mal_builtin_map_get_value(
 ) {
     (void) vm;
     (void) this_value;
-    MalValue key = mal_collection_canonical_value(key_value);
-    u32 entry = mal_builtin_map_cached_entry(map, key);
-    if (entry != 0) {
-        return mal_map_storage_value(map->entries, entry);
-    }
-    u32 found = mal_map_object_find_canonical(map, key);
-    if (found == 0) {
-        return mal_value_new_undefined();
-    }
-
-    mal_builtin_map_cache_entry(map, found);
-    return mal_map_storage_value(map->entries, found);
+    return mal_map_object_get_hinted(map, mal_collection_canonical_value(key_value));
 }
 
 static bool mal_builtin_map_has_value(
@@ -344,29 +319,18 @@ static bool mal_builtin_map_has_value(
 ) {
     (void) vm;
     (void) this_value;
-    MalValue key = mal_collection_canonical_value(key_value);
-    if (mal_builtin_map_cached_entry(map, key) != 0) {
-        return true;
-    }
-    u32 found = mal_map_object_find_canonical(map, key);
-    if (found == 0) return false;
-    mal_builtin_map_cache_entry(map, found);
-    return true;
+    return mal_map_object_find_hinted(map, mal_collection_canonical_value(key_value)) != 0;
+}
+
+static void mal_builtin_map_set_canonical(MalMapObject *map, MalValue key, MalValue value) {
+    mal_map_object_set_hinted(map, key, value);
 }
 
 static MalValue mal_builtin_map_set_value(
     MalVm *vm, MalValue this_value, MalMapObject *map, MalValue key, MalValue value
 ) {
     (void) vm;
-    MalValue canonical_key = mal_collection_canonical_value(key);
-    u32 entry = mal_builtin_map_cached_entry(map, canonical_key);
-
-    if (entry == 0) {
-        entry = mal_map_object_upsert_canonical(map, canonical_key, nullptr);
-    }
-    mal_map_object_update_entry(map, entry, canonical_key, value);
-    mal_builtin_map_cache_entry(map, entry);
-
+    mal_builtin_map_set_canonical(map, mal_collection_canonical_value(key), value);
     return this_value;
 }
 
@@ -408,6 +372,31 @@ static MalValue mal_builtin_map_prototype_set(MalVm *vm, MalValue this_value, co
 
 MalValue mal_builtin_map_set_key_value(MalVm *vm, MalValue this_value, MalValue key, MalValue value) {
     return mal_builtin_map_set_value(vm, this_value, mal_value_to_map_object(this_value), key, value);
+}
+
+MalValue mal_builtin_map_get_number(MalVm *vm, MalValue this_value, f64 key) {
+    (void) vm;
+    return mal_map_object_get_hinted(
+        mal_value_to_map_object(this_value), mal_collection_canonical_number(key));
+}
+
+MalValue mal_builtin_map_set_number(MalVm *vm, MalValue this_value, f64 key, MalValue value) {
+    (void) vm;
+    mal_builtin_map_set_canonical(
+        mal_value_to_map_object(this_value), mal_collection_canonical_number(key), value);
+    return this_value;
+}
+
+bool mal_builtin_map_has_number(MalVm *vm, MalValue this_value, f64 key) {
+    (void) vm;
+    return mal_map_object_find_hinted(
+        mal_value_to_map_object(this_value), mal_collection_canonical_number(key)) != 0;
+}
+
+bool mal_builtin_map_delete_number(MalVm *vm, MalValue this_value, f64 key) {
+    (void) vm;
+    return mal_map_object_delete_canonical(
+        mal_value_to_map_object(this_value), mal_collection_canonical_number(key));
 }
 
 MalValue mal_builtin_map_set_known(
@@ -742,8 +731,11 @@ static MalValue mal_builtin_map_prototype_for_each(MalVm *vm, MalValue this_valu
     MalRootSpan callback_span;
     mal_gc_root(&callback_span, callback_args, countof(callback_args));
     mal_gc_native_rooted_begin(vm);
+    // Compiled callbacks dispatch directly; every other callable keeps generic [[Call]].
+    MalCallCache callback_cache = {0};
     while (mal_map_iter_next(&iter, &callback_args[1], &callback_args[0])) {
-        MalCompletion completion = mal_vm_call_value(vm, args[0], this_arg, callback_args, 3);
+        MalCompletion completion = mal_vm_call_cached(
+            vm, &callback_cache, args[0], this_arg, callback_args, 3);
         if (completion.kind != MAL_COMPLETION_NORMAL) break;
     }
     mal_gc_native_rooted_end(vm);

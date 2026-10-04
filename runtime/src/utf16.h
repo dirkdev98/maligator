@@ -22,6 +22,20 @@ static inline u32 mal_utf16_compose_pair(c16 lead, c16 trail) {
     return 0x10000u + (((u32) lead - 0xD800u) << 10) + ((u32) trail - 0xDC00u);
 }
 
+/* Whether every unit fits Latin-1. Fixed-width blocks OR-reduce with vector
+ * loads; an early exit per unit would keep the scan scalar. */
+static inline bool mal_utf16_units_fit_latin1(const c16 *units, usize length) {
+    usize index = 0;
+    for (; length - index >= 32; index += 32) {
+        c16 aggregate = 0;
+        for (usize lane = 0; lane < 32; lane++) aggregate |= units[index + lane];
+        if (aggregate > 0xFF) return false;
+    }
+    c16 aggregate = 0;
+    for (; index < length; index++) aggregate |= units[index];
+    return aggregate <= 0xFF;
+}
+
 /* Emit a non-BMP scalar as its lead/trail pair. */
 static inline void mal_utf16_emit_pair(u32 scalar, c16 out[2]) {
     u32 adjusted = scalar - 0x10000u;

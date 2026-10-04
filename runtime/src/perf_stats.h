@@ -2,6 +2,8 @@
 
 #include "defaults.h"
 
+struct MalString;
+
 #ifndef MAL_PERF_STATS
 #define MAL_PERF_STATS 0
 #endif
@@ -203,6 +205,7 @@ typedef struct MalPerfStats {
     u64 regexp_utf16_exec_calls;
     u64 regexp_utf16_cache_hits;
     u64 regexp_utf16_cache_fills;
+    u64 regexp_latin1_exec_calls;
 
     u64 intrinsic_ascii_calls;
     u64 intrinsic_ascii_bytes;
@@ -358,6 +361,8 @@ typedef struct MalPerfStats {
     u64 array_indexed_fill_guard_fallbacks;
 	u64 array_push_direct_hits;
     u64 array_push_direct_fallbacks;
+    u64 array_deque_direct_hits;
+    u64 array_deque_direct_fallbacks;
 	u64 array_contained_pushes;
 	u64 array_contained_push_overflows;
 	u64 array_contained_pops;
@@ -468,6 +473,9 @@ typedef struct MalPerfStats {
     u64 ic_load_string_length_hits;
     u64 ic_load_array_length_hits;
     u64 ic_load_typed_array_length_hits;
+    u64 ic_load_collection_size_hits;
+    u64 ic_load_dictionary_direct_hits;
+    u64 ic_store_dictionary_direct_hits;
     u64 ic_load_watched_hits;
     u64 ic_load_watched_fills;
     u64 ic_load_other_generic;
@@ -572,7 +580,7 @@ extern MAL_ISOLATE_LOCAL bool mal_perf_stats_enabled;
 void mal_perf_stats_init(void);
 void mal_perf_stats_reset(void);
 void mal_perf_intrinsic_name(const byte *name, usize length);
-void mal_perf_native_call_name(const c16 *name, usize length);
+void mal_perf_native_call_name(const struct MalString *name);
 void mal_perf_collection_new(const void *collection, MalPerfCollectionKind kind, u32 epoch);
 void mal_perf_collection_mutation(const void *collection, usize size);
 void mal_perf_collection_iteration_start(const void *collection);
@@ -613,9 +621,8 @@ static inline void mal_perf_intrinsic_name(const byte *name, usize length) {
     (void) name;
     (void) length;
 }
-static inline void mal_perf_native_call_name(const c16 *name, usize length) {
+static inline void mal_perf_native_call_name(const struct MalString *name) {
     (void) name;
-    (void) length;
 }
 static inline void mal_perf_collection_new(
     const void *collection, MalPerfCollectionKind kind, u32 epoch

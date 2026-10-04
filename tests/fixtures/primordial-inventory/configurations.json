@@ -23,36 +23,36 @@
 		},
 		{
 			"mode": "full",
-			"sha256": "218357b166ae4d80be4865c51b1b01c6accbccf162f7c05cc5b4490e4d400768",
+			"sha256": "8a7a7f72b5de5213fe239e5f17f107e440510bf656c82e73cc9593425151147f",
 			"phases": [
 				{
 					"phase": "language-initialized",
 					"nodes": 997,
-					"descriptors": 2983,
+					"descriptors": 2992,
 					"repeatedOwnKeys": [{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }]
 				},
 				{
 					"phase": "host-installed",
 					"nodes": 1877,
-					"descriptors": 5733,
+					"descriptors": 5742,
 					"repeatedOwnKeys": [{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }]
 				}
 			]
 		},
 		{
 			"mode": "mutable",
-			"sha256": "32a76aee8714132f89932fb9150ad4f7e7ac28d67d54f6bb31b8458326dcef25",
+			"sha256": "bf2438cee3b81c759dc85bde36921a4083a8e37dd683b6220adfc385aa6e9438",
 			"phases": [
 				{
 					"phase": "language-initialized",
 					"nodes": 993,
-					"descriptors": 2974,
+					"descriptors": 2983,
 					"repeatedOwnKeys": []
 				},
 				{
 					"phase": "host-installed",
 					"nodes": 1873,
-					"descriptors": 5724,
+					"descriptors": 5733,
 					"repeatedOwnKeys": []
 				}
 			]
@@ -95,54 +95,54 @@
 		},
 		{
 			"mode": "diagnostic",
-			"sha256": "1609b892f97a09af7775fec8d651d84c1cae446ff73b49eee3107523e51dc016",
+			"sha256": "b67cc2acd555bc55e0fe8f131aa37caa36fcd76537858d2f76ad075e3700e2e7",
 			"phases": [
 				{
 					"phase": "language-initialized",
 					"nodes": 1003,
-					"descriptors": 3001,
+					"descriptors": 3010,
 					"repeatedOwnKeys": [{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }]
 				},
 				{
 					"phase": "host-installed",
 					"nodes": 1885,
-					"descriptors": 5763,
+					"descriptors": 5772,
 					"repeatedOwnKeys": [{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }]
 				}
 			]
 		},
 		{
 			"mode": "no-eval",
-			"sha256": "218357b166ae4d80be4865c51b1b01c6accbccf162f7c05cc5b4490e4d400768",
+			"sha256": "8a7a7f72b5de5213fe239e5f17f107e440510bf656c82e73cc9593425151147f",
 			"phases": [
 				{
 					"phase": "language-initialized",
 					"nodes": 997,
-					"descriptors": 2983,
+					"descriptors": 2992,
 					"repeatedOwnKeys": [{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }]
 				},
 				{
 					"phase": "host-installed",
 					"nodes": 1877,
-					"descriptors": 5733,
+					"descriptors": 5742,
 					"repeatedOwnKeys": [{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }]
 				}
 			]
 		},
 		{
 			"mode": "no-realms",
-			"sha256": "66fbbec67a34ab33fe740357081c771a68f0b9afa6b8997bf6f83f29db0d3213",
+			"sha256": "085550a0e2050d1f3b19135202d3593cdf946b3def7df8e497d2b21f15e64d9f",
 			"phases": [
 				{
 					"phase": "language-initialized",
 					"nodes": 993,
-					"descriptors": 2971,
+					"descriptors": 2980,
 					"repeatedOwnKeys": [{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }]
 				},
 				{
 					"phase": "host-installed",
 					"nodes": 1873,
-					"descriptors": 5721,
+					"descriptors": 5730,
 					"repeatedOwnKeys": [{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }]
 				}
 			]
@@ -167,198 +167,198 @@
 		},
 		{
 			"mode": "no-temporal",
-			"sha256": "9e1ea696dac08f930fb1e63f1e9fadbc65accfefd6b8cd0bd60a8b909b13c92e",
+			"sha256": "be9be4e90f92e7e9c96431fd3a4475c4b0776d325c462689df1f24fbc7055263",
 			"phases": [
 				{
 					"phase": "language-initialized",
 					"nodes": 754,
-					"descriptors": 2256,
+					"descriptors": 2265,
 					"repeatedOwnKeys": [{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }]
 				},
 				{
 					"phase": "host-installed",
 					"nodes": 1634,
-					"descriptors": 5006,
+					"descriptors": 5015,
 					"repeatedOwnKeys": [{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }]
 				}
 			]
 		},
 		{
 			"mode": "no-intl",
-			"sha256": "d6fd437bae4d73279592ab8a3be5be48dbb6db1a09b514e6a133401f573f607c",
+			"sha256": "ce37303f60eb6e1420a65702bbad82e2b9a9652381edc6b45af5bc01ed34f687",
 			"phases": [
 				{
 					"phase": "language-initialized",
 					"nodes": 924,
-					"descriptors": 2771,
+					"descriptors": 2780,
 					"repeatedOwnKeys": [{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }]
 				},
 				{
 					"phase": "host-installed",
 					"nodes": 1804,
-					"descriptors": 5521,
+					"descriptors": 5530,
 					"repeatedOwnKeys": [{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }]
 				}
 			]
 		},
 		{
 			"mode": "intl-collator",
-			"sha256": "5de281b5913013b7050ffd3813c0d99a61c2415bc7fb2e276273ff066c7ac2d8",
+			"sha256": "0b7465779f2d865be736283f96c456923f07d85d82d3e8842cd1f6a1a4c22123",
 			"phases": [
 				{
 					"phase": "language-initialized",
 					"nodes": 947,
-					"descriptors": 2838,
+					"descriptors": 2847,
 					"repeatedOwnKeys": [{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }]
 				},
 				{
 					"phase": "host-installed",
 					"nodes": 1827,
-					"descriptors": 5589,
+					"descriptors": 5598,
 					"repeatedOwnKeys": [{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }]
 				}
 			]
 		},
 		{
 			"mode": "intl-number-format",
-			"sha256": "204344edd993f06117b39ce0d5e3d3863e2fd73b9b8980493af7a66c2e3fa88d",
+			"sha256": "4b9943a8acf99fec007d1e28a86b29e62c21002bcfe24a131da842416766a5a6",
 			"phases": [
 				{
 					"phase": "language-initialized",
 					"nodes": 947,
-					"descriptors": 2838,
+					"descriptors": 2847,
 					"repeatedOwnKeys": [{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }]
 				},
 				{
 					"phase": "host-installed",
 					"nodes": 1827,
-					"descriptors": 5589,
+					"descriptors": 5598,
 					"repeatedOwnKeys": [{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }]
 				}
 			]
 		},
 		{
 			"mode": "intl-date-time-format",
-			"sha256": "7a6b12d32018f5cbe3f17c88807f99eafec99c29e63ab728e39c21b5f49d7190",
+			"sha256": "03123acca82e08ddb2478c42fdce23a2ae5d73e0363ea1fa5dd48596c2101bb5",
 			"phases": [
 				{
 					"phase": "language-initialized",
 					"nodes": 949,
-					"descriptors": 2844,
+					"descriptors": 2853,
 					"repeatedOwnKeys": [{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }]
 				},
 				{
 					"phase": "host-installed",
 					"nodes": 1829,
-					"descriptors": 5595,
+					"descriptors": 5604,
 					"repeatedOwnKeys": [{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }]
 				}
 			]
 		},
 		{
 			"mode": "intl-plural-rules",
-			"sha256": "1aa9e78fd7e16d4ca6dc301a844e900d2e3b59d1804fd090a0dee5f720627694",
+			"sha256": "e02f311135106191eec896a36f04c9b102550db9d029622d09070797849a87dc",
 			"phases": [
 				{
 					"phase": "language-initialized",
 					"nodes": 947,
-					"descriptors": 2838,
+					"descriptors": 2847,
 					"repeatedOwnKeys": [{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }]
 				},
 				{
 					"phase": "host-installed",
 					"nodes": 1827,
-					"descriptors": 5589,
+					"descriptors": 5598,
 					"repeatedOwnKeys": [{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }]
 				}
 			]
 		},
 		{
 			"mode": "intl-list-format",
-			"sha256": "63c87cecb15c50b5d01cf0ad3944866104582b15652f3f376dbf01f2a59c6b1b",
+			"sha256": "ad37be84489beb558487a7689dae92a43b7ebbac021df11ca02033fb4778c36b",
 			"phases": [
 				{
 					"phase": "language-initialized",
 					"nodes": 948,
-					"descriptors": 2841,
+					"descriptors": 2850,
 					"repeatedOwnKeys": [{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }]
 				},
 				{
 					"phase": "host-installed",
 					"nodes": 1828,
-					"descriptors": 5592,
+					"descriptors": 5601,
 					"repeatedOwnKeys": [{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }]
 				}
 			]
 		},
 		{
 			"mode": "intl-segmenter",
-			"sha256": "a8e20bab80dc8af3b2ff3301b369e3d5a6936dae4cb392ce824a107eb84952bd",
+			"sha256": "4bca7257277cecde60d58da99c99ec3f1848e2fa95cd795152fe0940073b7835",
 			"phases": [
 				{
 					"phase": "language-initialized",
 					"nodes": 952,
-					"descriptors": 2848,
+					"descriptors": 2857,
 					"repeatedOwnKeys": [{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }]
 				},
 				{
 					"phase": "host-installed",
 					"nodes": 1832,
-					"descriptors": 5599,
+					"descriptors": 5608,
 					"repeatedOwnKeys": [{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }]
 				}
 			]
 		},
 		{
 			"mode": "intl-display-names",
-			"sha256": "8d7227a8660c8fc4039bd45ad1e3dff538d27af2fb6f075075d7126fb694b0c2",
+			"sha256": "1b87bbc0cc21108889260c5df1186a104d99e8b89756314f8b59e1957da786db",
 			"phases": [
 				{
 					"phase": "language-initialized",
 					"nodes": 947,
-					"descriptors": 2838,
+					"descriptors": 2847,
 					"repeatedOwnKeys": [{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }]
 				},
 				{
 					"phase": "host-installed",
 					"nodes": 1827,
-					"descriptors": 5589,
+					"descriptors": 5598,
 					"repeatedOwnKeys": [{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }]
 				}
 			]
 		},
 		{
 			"mode": "intl-relative-time-format",
-			"sha256": "2e008a8ef7078601bb72d2073fcdd66539967539960c604d096153a633291e26",
+			"sha256": "13eb5925fbd8fec9d6c63fd95082fb5f6b4a08b0d2881f20141910611891f1f5",
 			"phases": [
 				{
 					"phase": "language-initialized",
 					"nodes": 948,
-					"descriptors": 2841,
+					"descriptors": 2850,
 					"repeatedOwnKeys": [{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }]
 				},
 				{
 					"phase": "host-installed",
 					"nodes": 1828,
-					"descriptors": 5592,
+					"descriptors": 5601,
 					"repeatedOwnKeys": [{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }]
 				}
 			]
 		},
 		{
 			"mode": "intl-duration-format",
-			"sha256": "62fa882f12c05aea7d193361c34207d80bccb264c4142ae17cdf632f7878088c",
+			"sha256": "7bc5dee6f1dfbf67e28a3cc8db7da9c4b29eb35246292eb1c37fa8b19264c892",
 			"phases": [
 				{
 					"phase": "language-initialized",
 					"nodes": 948,
-					"descriptors": 2841,
+					"descriptors": 2850,
 					"repeatedOwnKeys": [{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }]
 				},
 				{
 					"phase": "host-installed",
 					"nodes": 1828,
-					"descriptors": 5592,
+					"descriptors": 5601,
 					"repeatedOwnKeys": [{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }]
 				}
 			]
@@ -40954,6 +40954,204 @@
 		[
 			"%MAL_INTRINSIC_REGEXP_LEGACY_STATE%",
 			{ "string": "13" },
+			[
+				"full",
+				"mutable",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"%MAL_INTRINSIC_REGEXP_LEGACY_STATE%",
+			{ "string": "14" },
+			[
+				"full",
+				"mutable",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"%MAL_INTRINSIC_REGEXP_LEGACY_STATE%",
+			{ "string": "15" },
+			[
+				"full",
+				"mutable",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"%MAL_INTRINSIC_REGEXP_LEGACY_STATE%",
+			{ "string": "16" },
+			[
+				"full",
+				"mutable",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"%MAL_INTRINSIC_REGEXP_LEGACY_STATE%",
+			{ "string": "17" },
+			[
+				"full",
+				"mutable",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"%MAL_INTRINSIC_REGEXP_LEGACY_STATE%",
+			{ "string": "18" },
+			[
+				"full",
+				"mutable",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"%MAL_INTRINSIC_REGEXP_LEGACY_STATE%",
+			{ "string": "19" },
+			[
+				"full",
+				"mutable",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"%MAL_INTRINSIC_REGEXP_LEGACY_STATE%",
+			{ "string": "20" },
+			[
+				"full",
+				"mutable",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"%MAL_INTRINSIC_REGEXP_LEGACY_STATE%",
+			{ "string": "21" },
+			[
+				"full",
+				"mutable",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"%MAL_INTRINSIC_REGEXP_LEGACY_STATE%",
+			{ "string": "22" },
 			[
 				"full",
 				"mutable",

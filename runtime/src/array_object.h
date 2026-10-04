@@ -59,13 +59,23 @@ typedef struct MalArrayObject {
 static_assert(sizeof(MalArrayObject) <= 64, "MalArrayObject outgrew its 64-byte size class");
 
 /** Whether the array uses the dense element fast path (vs. legacy table storage). */
-bool mal_array_object_is_dense(const MalArrayObject *array);
+static inline bool mal_array_object_is_dense(const MalArrayObject *array) {
+    return array->elements != nullptr;
+}
 
 /**
  * Read a dense element. Returns true and writes *out when `index` is in the dense
  * region and not a hole; false otherwise (caller falls back to the table / proto).
  */
-bool mal_array_object_dense_get(const MalArrayObject *array, u32 index, MalValue *out);
+static inline bool mal_array_object_dense_get(
+    const MalArrayObject *array, u32 index, MalValue *out
+) {
+    if (array->elements == nullptr || index >= array->dense_count) return false;
+    MalValue value = array->elements[index];
+    if (mal_value_is_array_hole(value)) return false;
+    *out = value;
+    return true;
+}
 
 /** Exact numeric [[Get]] for a compiler-proven private dense Array. Its complete
  * lifetime permits only dense push/pop, length, and numeric reads, while locked
@@ -87,7 +97,10 @@ bool mal_array_object_dense_pair(
     const MalArrayObject *array, MalValue *first_out, MalValue *second_out);
 
 /** Whether `index` is a present (non-hole) own element in the dense region. */
-bool mal_array_object_dense_has(const MalArrayObject *array, u32 index);
+static inline bool mal_array_object_dense_has(const MalArrayObject *array, u32 index) {
+    MalValue ignored;
+    return mal_array_object_dense_get(array, index, &ignored);
+}
 
 /** Descriptor flags shared by every present dense element. */
 static inline MalPropertyFlags mal_array_object_dense_element_flags(

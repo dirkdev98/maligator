@@ -62,6 +62,11 @@ static inline MalValue mal_collection_canonical_value(MalValue value) {
     return value;
 }
 
+// Equals mal_collection_canonical_value of the boxed Number without boxing it first.
+static inline MalValue mal_collection_canonical_number(f64 number) {
+    return mal_value_from_f64_convert_nan(number == 0.0 ? 0.0 : number);
+}
+
 static inline MalKey mal_collection_key_from_value(MalValue value) {
     value = mal_collection_canonical_value(value);
     MalKeyKind kind = MAL_KEY_STATIC;

@@ -196,6 +196,53 @@ found:
     return result;
 }
 
+// Lookups never reuse tombstones, so unlike insertion they track no DELETED bucket.
+static i32 mal_table_lookup_entry(const MalTable *table, u64 key, u64 hash) {
+    i32 result = MAL_TABLE_EMPTY;
+    u64 probes = 0;
+    if (table->slot_capacity == 0) {
+        for (u32 i = 0; i < table->entry_count; i++) {
+            probes++;
+            if (mal_table_row_live(&table->entries[i]) && mal_table_key_equals(&table->entries[i], key, false)) {
+                result = (i32) i;
+                break;
+            }
+        }
+    } else {
+        const u8 *controls = mal_hash_controls(table->slots, table->slot_capacity);
+        MalHashProbe probe = mal_hash_probe(hash, table->slot_capacity);
+        u8 tag = mal_hash_tag(hash);
+        u64 fingerprint = mal_table_hash_fingerprint(hash);
+        for (;;) {
+            MAL_PERF_COUNT(hash_index_groups);
+            MalHashMask matches = mal_hash_group_match(controls + probe.group, tag);
+            while (matches != 0) {
+                i32 index = table->slots[probe.group + mal_hash_mask_first(matches)];
+                const MalTableEntry *entry = &table->entries[index];
+                MAL_PERF_COUNT(hash_index_candidates);
+                probes++;
+                if ((entry->key & MAL_TABLE_HASH_MASK) == fingerprint &&
+                    mal_table_key_equals(entry, key, true)) {
+                    result = index;
+                    goto found;
+                }
+                matches &= matches - 1;
+            }
+            if (mal_hash_group_match(controls + probe.group, MAL_HASH_EMPTY) != 0) break;
+            mal_hash_probe_next(&probe);
+        }
+    }
+found:
+    if (mal_perf_stats_enabled) {
+        MalPerfTableStats *stats = &mal_perf_stats.table;
+        stats->find_calls++;
+        stats->probes += probes;
+        if (probes > stats->max_probe) stats->max_probe = probes;
+        if ((key & MAL_TABLE_KIND_MASK) == MAL_TABLE_STRING) stats->string_queries++;
+    }
+    return result;
+}
+
 static i32 mal_table_slot_entry(const MalTable *table, u32 slot) {
     if (table->slot_capacity == 0) {
         return slot < table->entry_count ? (i32) slot : MAL_TABLE_EMPTY;
@@ -391,8 +438,7 @@ MalTableLookup mal_table_lookup(const MalTable *table, MalKey key) {
         }
     }
     u64 hash = table->slot_capacity == 0 ? 0 : mal_table_key_hash(encoded);
-    u32 index = mal_table_find_slot(table, encoded, hash);
-    i32 entry = mal_table_slot_entry(table, index);
+    i32 entry = mal_table_lookup_entry(table, encoded, hash);
 
     if (entry == MAL_TABLE_EMPTY) {
         if (stats != nullptr) {

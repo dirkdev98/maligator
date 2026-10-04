@@ -22,8 +22,20 @@ MalValue mal_ops_string_range_to_number(MalString *string, usize offset, usize l
 #define MAL_NUMBER_MIN_SAFE_INTEGER (-MAL_NUMBER_MAX_SAFE_INTEGER)
 
 /** Pure-number tails; callers perform observable ToNumber coercion separately. */
-f64 mal_ops_number_to_integer_or_infinity(f64 number);
-f64 mal_ops_number_to_length(f64 number);
+static inline f64 mal_ops_number_to_integer_or_infinity(f64 number) {
+    if (isnan(number) || number == 0.0) {
+        return 0.0;
+    }
+    return trunc(number);
+}
+
+static inline f64 mal_ops_number_to_length(f64 number) {
+    f64 integer = mal_ops_number_to_integer_or_infinity(number);
+    if (integer <= 0.0) {
+        return 0.0;
+    }
+    return integer > MAL_NUMBER_MAX_SAFE_INTEGER ? MAL_NUMBER_MAX_SAFE_INTEGER : integer;
+}
 /** ToIntegerOrInfinity followed by relative indexing and a [0, length] clamp. */
 f64 mal_ops_number_clamp_relative(f64 number, f64 length);
 /** Unsigned modulo 2^width conversion; width must be in [1, 32]. */
@@ -141,6 +153,10 @@ static inline i32 mal_ops_number_to_i32(f64 number) {
     if (number >= -2147483648.0 && number <= 2147483647.0) {
         return (i32) number;
     }
+    // Wider integers wrap exactly through i64, e.g. hash loops such as `h * 33 | 0`.
+    if (number > -0x1p63 && number < 0x1p63) {
+        return mal_ops_u32_to_i32((u32) (u64) (i64) number);
+    }
     return mal_ops_u32_to_i32(mal_ops_number_to_uint32(number));
 }
 
@@ -186,31 +202,21 @@ static inline MalValue mal_ops_add_numbers(MalValue left, MalValue right) {
         mal_ops_number_as_f64(left) + mal_ops_number_as_f64(right));
 }
 
-/** Canonical Strict Equality Comparison (7.2.15). String comparison may flatten. */
+/** Strict equality of two distinct heap words: only String or BigInt contents can match. */
+bool mal_ops_strict_equal_heap_contents(MalValue left, MalValue right);
+
+/**
+ * Canonical Strict Equality Comparison (7.2.15). String comparison may flatten.
+ * Kept small enough to inline; content comparison stays out of line.
+ */
 static inline bool mal_ops_strict_equal_bool(MalValue left, MalValue right) {
-    // NaN must precede bit identity because every NaN has one canonical encoding.
-    if (mal_value_is_nan(left) || mal_value_is_nan(right)) {
-        return false;
-    }
-
-    if (left == right) {
-        return true;
-    }
-
-    if (mal_value_is_string(left) && mal_value_is_string(right)) {
-        return mal_string_equals(mal_value_to_string(left), mal_value_to_string(right));
-    }
-
-    if (mal_value_is_bigint(left) || mal_value_is_bigint(right)) {
-        return mal_value_is_bigint(left) && mal_value_is_bigint(right) &&
-            mal_bigint_value(mal_value_to_bigint(left)) == mal_bigint_value(mal_value_to_bigint(right));
-    }
-
+    // Numbers compare by value (NaN and signed zeros); every other kind has one encoding per identity.
     if (mal_ops_is_number(left) && mal_ops_is_number(right)) {
         return mal_ops_number_as_f64(left) == mal_ops_number_as_f64(right);
     }
-
-    return false;
+    if (left == right) return true;
+    return mal_value_is_heap(left) && mal_value_is_heap(right) &&
+        mal_ops_strict_equal_heap_contents(left, right);
 }
 
 /** Returns false without allocating when string concatenation exceeds the engine limit. */

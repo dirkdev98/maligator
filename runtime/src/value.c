@@ -18,14 +18,6 @@ MalValue mal_value_from_module_namespace_object(MalModuleNamespaceObject *ns) {
     return mal_value_from_heap((MalHeapHeader *) ns);
 }
 
-bool mal_value_is_map_object(MalValue value) {
-    return mal_value_is_heap_type(value, MAL_HEAP_MAP_OBJECT);
-}
-
-bool mal_value_is_set_object(MalValue value) {
-    return mal_value_is_heap_type(value, MAL_HEAP_SET_OBJECT);
-}
-
 bool mal_value_is_weak_map_object(MalValue value) {
     return mal_value_is_heap_type(value, MAL_HEAP_WEAK_MAP_OBJECT);
 }
@@ -200,10 +192,6 @@ MalIntlObject *mal_value_to_intl_object(MalValue value) {
 
 MalValue mal_value_from_intl_object(MalIntlObject *intl) {
     return mal_value_from_heap((MalHeapHeader *) intl);
-}
-
-bool mal_value_is_iterator_object(MalValue value) {
-    return mal_value_is_heap_type(value, MAL_HEAP_ITERATOR_OBJECT);
 }
 
 bool mal_value_is_generator_object(MalValue value) {

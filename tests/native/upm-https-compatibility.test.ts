@@ -16,7 +16,7 @@ const outDir = mkdtempSync(join(tmpdir(), "mal-upm-https-"));
 const fixture = "tests/local/upm-https-compatibility.mjs";
 const ca = resolve("tests/fixtures/tls/localhost-cert.pem");
 const malformed = join(outDir, "malformed.pem");
-let binaries: Array<string>;
+let binaries: readonly [compiled: string, interpreted: string];
 let optionsBinary: string;
 beforeAll(() => {
 	writeFileSync(malformed, "not a certificate");
@@ -27,7 +27,7 @@ beforeAll(() => {
 		outDir,
 		nodeEnabled: true,
 	});
-	binaries = [true, false].map((compiled) =>
+	const build = (compiled: boolean): string =>
 		buildNativeBinary({
 			fixture,
 			name: compiled ? "compiled" : "interpreted",
@@ -36,9 +36,9 @@ beforeAll(() => {
 			nodeEnabled: true,
 			webPlatformEnabled: true,
 			compiled,
-		}),
-	);
-}, 180000);
+		});
+	binaries = [build(true), build(false)];
+}, 600_000);
 afterAll(() => rmSync(outDir, { recursive: true, force: true }));
 async function run(
 	binary: string,
@@ -130,14 +130,14 @@ it("streams verified HTTPS and cancels responses in both backends", async () => 
 		expect(await run(binary, "")).toContain("HTTPS STREAM ABORT PASS");
 });
 it("keeps TLS transport, response and abort state alive under GC stress", async () => {
-	expect(await run(binaries[0]!, "", true)).toContain("HTTPS STREAM ABORT PASS");
+	expect(await run(binaries[0], "", true)).toContain("HTTPS STREAM ABORT PASS");
 });
 it("rejects unknown roots, mismatched hostnames and malformed extra CA configuration", async () => {
 	for (const mode of ["trust", "hostname", "malformed"]) {
 		expect(await run(process.execPath, mode, false, [fixture])).toContain(
 			"HTTPS REJECTION PASS",
 		);
-		expect(await run(binaries[0]!, mode)).toContain("HTTPS REJECTION PASS");
+		expect(await run(binaries[0], mode)).toContain("HTTPS REJECTION PASS");
 	}
 });
 

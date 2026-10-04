@@ -89,7 +89,7 @@ describe("native process global", () => {
 			outDir,
 			nodeEnabled: true,
 		});
-	}, 300_000);
+	}, 600_000);
 
 	it("forwards OS argv with the compiled source entry", () => {
 		const r = run(bin, ["alpha", "beta gamma"], { env: { NODE_PROCESS_MARKER: "m" } });
@@ -187,5 +187,23 @@ describe("native process global", () => {
 	it("passes under MAL_GC_STRESS + MAL_GC_VERIFY", () => {
 		const r = run(bin, [], { env: { ...STRESS_ENV, NODE_PROCESS_MARKER: "m" } });
 		assertResultPass(r.stdout);
+	});
+});
+
+describe("process on an entry without a host reactor", () => {
+	let bin: string;
+	beforeAll(() => {
+		bin = buildNativeBinary({
+			fixture: "tests/local/node-process-hostless.mjs",
+			name: "node-process-hostless",
+			outDir,
+			nodeEnabled: true,
+		});
+	}, 600_000);
+
+	it("installs process without rebinding host timers", () => {
+		const r = run(bin, ["hostless-argument"]);
+		expect(r.status).toBe(0);
+		expect(r.stdout).toContain("PROCESS HOSTLESS PASS");
 	});
 });

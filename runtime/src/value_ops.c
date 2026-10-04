@@ -10,22 +10,8 @@
 #include "heap_bigint.h"
 #include "heap_string.h"
 #include "mal_number_format.h"
+#include "number_text.h"
 #include "vm.h"
-
-f64 mal_ops_number_to_integer_or_infinity(f64 number) {
-    if (isnan(number) || number == 0.0) {
-        return 0.0;
-    }
-    return trunc(number);
-}
-
-f64 mal_ops_number_to_length(f64 number) {
-    f64 integer = mal_ops_number_to_integer_or_infinity(number);
-    if (integer <= 0.0) {
-        return 0.0;
-    }
-    return integer > MAL_NUMBER_MAX_SAFE_INTEGER ? MAL_NUMBER_MAX_SAFE_INTEGER : integer;
-}
 
 f64 mal_ops_number_clamp_relative(f64 number, f64 length) {
     f64 relative = mal_ops_number_to_integer_or_infinity(number);
@@ -41,6 +27,11 @@ f64 mal_ops_number_clamp_relative(f64 number, f64 length) {
 u64 mal_ops_number_to_uint_width(f64 number, u32 width) {
     if (!isfinite(number) || number == 0.0) {
         return 0;
+    }
+    // Truncation toward zero to an exact i64 followed by two's-complement
+    // wrapping is the modulo-2^width reduction, without the software fmod.
+    if (number > -0x1p63 && number < 0x1p63) {
+        return (u64) (i64) number & ((width >= 64 ? 0 : (u64) 1 << width) - 1);
     }
     // Callers use integer element widths no larger than 32 bits, for which both
     // the modulus and every remainder are represented exactly by f64.
@@ -92,11 +83,11 @@ static int mal_ops_string_number_digit(char c) {
     return -1;
 }
 
-// The staging buffer is NUL-terminated; token_length still distinguishes an
-// embedded U+0000 from the terminator when checking the numeric grammar.
-static MalValue mal_ops_ascii_to_number(byte *bytes, usize token_length) {
-    char *start = bytes;
-    char *end = bytes + token_length;
+// Units outside ASCII, including Latin-1 bytes and U+0000, fail every grammar
+// form below, so a trimmed compact segment needs no ASCII pre-scan or copy.
+static MalValue mal_ops_ascii_to_number(const byte *bytes, usize token_length) {
+    const char *start = bytes;
+    const char *end = bytes + token_length;
 
     // Empty (or all-whitespace) string is +0.
     if (token_length == 0) {
@@ -124,7 +115,7 @@ static MalValue mal_ops_ascii_to_number(byte *bytes, usize token_length) {
         }
         if (base != 0) {
             f64 number = 0;
-            for (char *p = start + 2; p < end; p++) {
+            for (const char *p = start + 2; p < end; p++) {
                 int digit = mal_ops_string_number_digit(*p);
                 if (digit < 0 || digit >= base) {
                     return mal_value_new_nan();
@@ -138,7 +129,7 @@ static MalValue mal_ops_ascii_to_number(byte *bytes, usize token_length) {
     // The common structured-data case is a short signed decimal integer. Parse
     // it directly while every decimal step is exact; larger magnitudes and all
     // other grammar forms retain the correctly-rounded strtod path below.
-    char *digits = start;
+    const char *digits = start;
     bool negative = false;
     if (digits < end && (*digits == '+' || *digits == '-')) {
         negative = *digits == '-';
@@ -147,7 +138,7 @@ static MalValue mal_ops_ascii_to_number(byte *bytes, usize token_length) {
     if (digits < end) {
         bool decimal_integer = true;
         u64 magnitude = 0;
-        for (char *p = digits; p < end; p++) {
+        for (const char *p = digits; p < end; p++) {
             if (*p < '0' || *p > '9') {
                 decimal_integer = false;
                 break;
@@ -165,22 +156,10 @@ static MalValue mal_ops_ascii_to_number(byte *bytes, usize token_length) {
         }
     }
 
-    // StrDecimalLiteral: restrict to its character set so strtod cannot fall back
-    // to recognizing "inf"/"nan" (a genuine overflow like "1e400" stays Infinity).
-    for (char *p = start; p < end; p++) {
-        char c = *p;
-        if (!((c >= '0' && c <= '9') || c == '.' || c == 'e' || c == 'E' || c == '+' || c == '-')) {
-            return mal_value_new_nan();
-        }
-    }
-
-    char *parsed_end = start;
-    f64 number = strtod(start, &parsed_end);
-    if (parsed_end != end) {
+    if (mal_number_decimal_prefix_length(start, token_length) != token_length) {
         return mal_value_new_nan();
     }
-
-    return mal_ops_number_value(number);
+    return mal_ops_number_value(mal_number_parse_decimal(start, token_length));
 }
 
 MalValue mal_ops_string_units_to_number(const c16 *code_units, usize length) {
@@ -190,14 +169,13 @@ MalValue mal_ops_string_units_to_number(const c16 *code_units, usize length) {
     while (end > start && mal_ecma_is_string_whitespace(code_units[end - 1])) end--;
     usize token_length = end - start;
     byte stack_bytes[64];
-    byte *bytes = token_length < sizeof(stack_bytes) ? stack_bytes : malloc(token_length + 1);
+    byte *bytes = token_length <= sizeof(stack_bytes) ? stack_bytes : malloc(token_length);
     if (bytes == nullptr) abort();
     MalValue result = mal_value_new_nan();
     for (usize i = 0; i < token_length; i++) {
         if (code_units[start + i] > 0x7F) goto done;
         bytes[i] = (byte) code_units[start + i];
     }
-    bytes[token_length] = '\0';
     result = mal_ops_ascii_to_number(bytes, token_length);
 done:
     if (bytes != stack_bytes) free(bytes);
@@ -214,18 +192,7 @@ MalValue mal_ops_string_range_to_number(MalString *string, usize offset, usize c
         usize end = count;
         while (start < end && mal_ecma_is_string_whitespace(segment.latin1_units[start])) start++;
         while (end > start && mal_ecma_is_string_whitespace(segment.latin1_units[end - 1])) end--;
-        usize length = end - start;
-        u8 aggregate = 0;
-        for (usize i = start; i < end; i++) aggregate |= segment.latin1_units[i];
-        if (aggregate > 0x7f) return mal_value_new_nan();
-        byte stack_bytes[64];
-        byte *bytes = length < sizeof(stack_bytes) ? stack_bytes : malloc(length + 1);
-        if (bytes == nullptr) abort();
-        memcpy(bytes, segment.latin1_units + start, length);
-        bytes[length] = '\0';
-        MalValue result = mal_ops_ascii_to_number(bytes, length);
-        if (bytes != stack_bytes) free(bytes);
-        return result;
+        return mal_ops_ascii_to_number((const byte *) segment.latin1_units + start, end - start);
     }
     MalStringIterator iterator;
     mal_string_iterator_init(&iterator, string, offset, count);
@@ -243,7 +210,7 @@ MalValue mal_ops_string_range_to_number(MalString *string, usize offset, usize c
                 continue;
             }
             if (trailing_whitespace || unit > 0x7F) goto done;
-            if (length + 1 == capacity) {
+            if (length == capacity) {
                 usize next_capacity = capacity * 2;
                 byte *grown = bytes == stack_bytes
                     ? malloc(next_capacity) : realloc(bytes, next_capacity);
@@ -255,7 +222,6 @@ MalValue mal_ops_string_range_to_number(MalString *string, usize offset, usize c
             bytes[length++] = (byte) unit;
         }
     }
-    bytes[length] = '\0';
     result = mal_ops_ascii_to_number(bytes, length);
 done:
     mal_string_iterator_dispose(&iterator);
@@ -356,7 +322,9 @@ MalString *mal_ops_to_string(MalHeap *heap, MalValue value) {
             return mal_ops_string_from_ascii(heap, "0");
         }
         byte buffer[32];
-        i32 length = mal_number_format_shortest(number, buffer, (i32) sizeof(buffer));
+        usize plain = mal_number_format_shortest_plain(number, buffer);
+        if (plain != 0) return mal_string_new_ascii(heap, buffer, plain);
+        i32 length = mal_number_format_shortest(number, (u8 *) buffer, (i32) sizeof(buffer));
         if (length <= 0 || length > (i32) sizeof(buffer)) {
             abort();
         }
@@ -556,6 +524,14 @@ static bool mal_ops_relational_bool(MalValue left, MalValue right, i32 compariso
     }
 
     return false;
+}
+
+bool mal_ops_strict_equal_heap_contents(MalValue left, MalValue right) {
+    if (mal_value_is_string(left) && mal_value_is_string(right)) {
+        return mal_string_equals(mal_value_to_string(left), mal_value_to_string(right));
+    }
+    return mal_value_is_bigint(left) && mal_value_is_bigint(right) &&
+        mal_bigint_value(mal_value_to_bigint(left)) == mal_bigint_value(mal_value_to_bigint(right));
 }
 
 MalValue mal_ops_less_than(MalValue left, MalValue right) {

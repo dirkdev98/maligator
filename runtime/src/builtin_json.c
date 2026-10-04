@@ -10,6 +10,7 @@
 #include "function_object.h"
 #include "gc.h"
 #include "heap_string.h"
+#include "number_text.h"
 #include "object_ops.h"
 #include "perf_stats.h"
 #include "primitive_wrapper_object.h"
@@ -1932,10 +1933,7 @@ static MalValue mal_json_parse_number(MalJsonParser *parser) {
         value = negative && magnitude == 0 ? MAL_VALUE_NEGATIVE_ZERO
             : mal_ops_number_value(negative ? -number : number);
     } else {
-        // This scratch terminator does not consume a JS string code unit, even
-        // when the numeric token reaches the engine's full source-length limit.
-        mal_json_number_token_push(&token, '\0');
-        value = mal_ops_number_value(strtod(token.data, nullptr));
+        value = mal_ops_number_value(mal_number_parse_decimal(token.data, token.length));
     }
     if (token.data != token.inline_data) free(token.data);
     return value;

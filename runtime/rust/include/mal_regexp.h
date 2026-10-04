@@ -7,9 +7,10 @@
  * Symbol.* protocol, $-substitution, the d-flag indices array); this header
  * exposes only flat match primitives.
  *
- * Patterns and subjects are UTF-16 (`const uint16_t *` + length) — MalString's
- * native storage — so they cross zero-copy. All offsets are u16 code-unit
- * indices, i.e. JS string indices directly.
+ * Patterns and subjects are UTF-16 (`const uint16_t *` + length); subjects may
+ * also cross as compact Latin-1 bytes. Both are MalString leaf storage, so they
+ * cross zero-copy. All offsets are u16 code-unit indices, i.e. JS string
+ * indices directly.
  */
 #pragma once
 
@@ -23,8 +24,9 @@ extern "C" {
 /* Bump alongside MAL_REGEXP_ABI_VERSION in regexp.rs on breaking changes.
  * v2: added mal_regexp_free (GC finalization).
  * v3: added immutable-subject identity and execution-path reporting.
- * v4: added conservative allocation-free literal/class execution plans. */
-#define MAL_REGEXP_ABI_VERSION 4u
+ * v4: added conservative allocation-free literal/class execution plans.
+ * v5: added compact Latin-1 subject execution. */
+#define MAL_REGEXP_ABI_VERSION 5u
 
 /* Returns the ABI version compiled into the linked archive. */
 uint32_t mal_regexp_abi_version(void);
@@ -43,6 +45,7 @@ uint32_t mal_regexp_abi_version(void);
 #define MAL_REGEXP_EXEC_CACHE_FILL  (1u << 2)
 #define MAL_REGEXP_EXEC_NON_ASCII   (1u << 3)
 #define MAL_REGEXP_EXEC_FAST        (1u << 4)
+#define MAL_REGEXP_EXEC_LATIN1      (1u << 5)
 
 /* Compile `pattern` (UTF-16) with `flags`. Returns an opaque, leaked handle, or
  * NULL when the pattern is invalid (the C side throws SyntaxError). The handle
@@ -67,6 +70,15 @@ int32_t mal_regexp_exec(void *handle, const uint16_t *subject, size_t subject_le
                         uint64_t heap_identity, uint32_t heap_epoch,
                         int32_t *caps_out, int32_t caps_cap,
                         uint32_t *execution_flags_out);
+
+/* mal_regexp_exec over compact Latin-1 bytes, one byte per UTF-16 code unit.
+ * The subject string itself is never widened: ASCII text is matched in place
+ * and other subjects through a widened copy cached for the same identity. */
+int32_t mal_regexp_exec_latin1(void *handle, const uint8_t *subject, size_t subject_len,
+                               size_t start, const void *subject_identity,
+                               uint64_t heap_identity, uint32_t heap_epoch,
+                               int32_t *caps_out, int32_t caps_cap,
+                               uint32_t *execution_flags_out);
 
 /* Copy the most recent successful match's capture pairs into caps_out without
  * re-matching; returns the group count, or 0 if no match is retained. */

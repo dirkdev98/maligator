@@ -115,40 +115,109 @@ static bool mal_map_key_equals_slow(MalMapKeyDomain domain, MalValue candidate, 
     return domain == MAL_MAP_KEYS_GENERIC && mal_key_value_equals(candidate, key);
 }
 
-static inline bool mal_map_key_equals(const MalMapStorage *storage, u32 index, MalValue key) {
-    MalValue candidate;
-    if (storage->payload == nullptr) {
-        candidate = storage->small[index];
-    } else if (storage->domain == MAL_MAP_KEYS_INT32) {
-        return mal_value_from_f64((f64) ((i32 *) storage->payload)[index]) == key;
-    } else {
-        candidate = ((MalMapPair *) storage->payload)[index].key;
-    }
-    return candidate == key || mal_map_key_equals_slow(storage->domain, candidate, key);
-}
-
-static u32 mal_map_find_slot(const MalMapStorage *storage, MalValue key, u64 hash) {
-    u8 *controls = mal_hash_controls(storage->slots, storage->slot_capacity);
+/*
+ * Hashed-storage probe specialized by the constant `domain`. A hit returns the
+ * index bucket holding an equal live key. A miss returns UINT32_MAX for lookups;
+ * insertion instead returns the first reusable DELETED bucket, or the EMPTY bucket
+ * that ended the search. Packed int32 storage compares `int_key`.
+ */
+static inline __attribute__((always_inline)) u32 mal_map_probe_in(
+    const MalMapStorage *storage, MalMapKeyDomain domain, MalValue key, i32 int_key,
+    u64 hash, bool insert
+) {
+    const u8 *controls = mal_hash_controls(storage->slots, storage->slot_capacity);
     MalHashProbe probe = mal_hash_probe(hash, storage->slot_capacity);
+    u8 tag = mal_hash_tag(hash);
     u32 available = UINT32_MAX;
     for (;;) {
         MAL_PERF_COUNT(hash_index_groups);
-        MalHashMask matches = mal_hash_group_match(controls + probe.group, mal_hash_tag(hash));
+        MalHashMask matches = mal_hash_group_match(controls + probe.group, tag);
         while (matches != 0) {
             u32 slot = probe.group + mal_hash_mask_first(matches);
+            u32 index = (u32) storage->slots[slot];
             MAL_PERF_COUNT(hash_index_candidates);
-            if (mal_map_key_equals(storage, (u32) storage->slots[slot], key)) return slot;
+            if (domain == MAL_MAP_KEYS_INT32) {
+                if (((const i32 *) storage->payload)[index] == int_key) return slot;
+            } else {
+                MalValue candidate = ((const MalMapPair *) storage->payload)[index].key;
+                if (candidate == key) return slot;
+                if (domain == MAL_MAP_KEYS_STRING &&
+                    mal_string_equals(mal_value_to_string(candidate), mal_value_to_string(key))) {
+                    return slot;
+                }
+                if (domain == MAL_MAP_KEYS_GENERIC && mal_key_value_equals(candidate, key)) return slot;
+            }
             matches &= matches - 1;
         }
-        if (available == UINT32_MAX) {
+        if (insert && available == UINT32_MAX) {
             MalHashMask deleted = mal_hash_group_match(controls + probe.group, MAL_HASH_DELETED);
             if (deleted != 0) available = probe.group + mal_hash_mask_first(deleted);
         }
         MalHashMask empty = mal_hash_group_match(controls + probe.group, MAL_HASH_EMPTY);
-        if (empty != 0) return available == UINT32_MAX
-            ? probe.group + mal_hash_mask_first(empty) : available;
+        if (empty != 0) {
+            if (!insert) return UINT32_MAX;
+            return available == UINT32_MAX ? probe.group + mal_hash_mask_first(empty) : available;
+        }
         mal_hash_probe_next(&probe);
     }
+}
+
+static inline __attribute__((always_inline)) u32 mal_map_probe(
+    const MalMapStorage *storage, MalValue key, i32 int_key, u64 hash, bool insert
+) {
+    switch (storage->domain) {
+        case MAL_MAP_KEYS_INT32:
+            return mal_map_probe_in(storage, MAL_MAP_KEYS_INT32, key, int_key, hash, insert);
+        case MAL_MAP_KEYS_STRING:
+            return mal_map_probe_in(storage, MAL_MAP_KEYS_STRING, key, 0, hash, insert);
+        case MAL_MAP_KEYS_GENERIC:
+            return mal_map_probe_in(storage, MAL_MAP_KEYS_GENERIC, key, 0, hash, insert);
+        default:
+            // Canonical Number bits and identities are equal exactly when their tagged words are.
+            return mal_map_probe_in(storage, MAL_MAP_KEYS_IDENTITY, key, 0, hash, insert);
+    }
+}
+
+// The key must already be accepted by the storage domain.
+static u32 mal_map_find_slot(const MalMapStorage *storage, MalValue key, u64 hash) {
+    i32 int_key = storage->domain == MAL_MAP_KEYS_INT32 ? (i32) mal_value_to_f64(key) : 0;
+    return mal_map_probe(storage, key, int_key, hash, true);
+}
+
+// A query outside the stored domain cannot equal a stored key, so it needs no hash or probe.
+static inline bool mal_map_query_in_domain(
+    const MalMapStorage *storage, MalValue key, i32 *int_key
+) {
+    switch (storage->domain) {
+        case MAL_MAP_KEYS_INT32: {
+            if (!mal_value_is_f64(key)) return false;
+            f64 number = mal_value_to_f64(key);
+            if (!(number >= INT32_MIN && number <= INT32_MAX)) return false;
+            *int_key = (i32) number;
+            return (f64) *int_key == number;
+        }
+        case MAL_MAP_KEYS_NUMBER:
+            return mal_value_is_f64(key) || key == MAL_VALUE_NAN ||
+                key == MAL_VALUE_POSITIVE_INFINITY || key == MAL_VALUE_NEGATIVE_INFINITY;
+        case MAL_MAP_KEYS_STRING:
+            return mal_value_is_string(key);
+        case MAL_MAP_KEYS_IDENTITY:
+            return mal_value_is_object(key) || mal_value_is_symbol(key);
+        case MAL_MAP_KEYS_GENERIC:
+            return true;
+        case MAL_MAP_KEYS_EMPTY:
+            return false;
+    }
+    abort();
+}
+
+// Returns the index bucket of an equal live key in hashed storage, or UINT32_MAX.
+static inline __attribute__((always_inline)) u32 mal_map_lookup_slot(
+    const MalMapStorage *storage, MalValue key
+) {
+    i32 int_key = 0;
+    if (!mal_map_query_in_domain(storage, key, &int_key)) return UINT32_MAX;
+    return mal_map_probe(storage, key, int_key, mal_key_hash_value(key), false);
 }
 
 static void mal_map_fill_slots(MalMapStorage *storage, i32 *slots, u32 capacity) {
@@ -334,13 +403,17 @@ static u32 mal_map_small_find(const MalMapStorage *storage, MalValue key) {
     return 0;
 }
 
-u32 mal_map_object_find_canonical(const MalMapObject *map, MalValue key) {
-    const MalMapStorage *storage = map->entries;
+static inline __attribute__((always_inline)) u32 mal_map_storage_find(
+    const MalMapStorage *storage, MalValue key
+) {
     if (storage == nullptr || storage->size == 0) return 0;
     if (storage->payload == nullptr) return mal_map_small_find(storage, key);
-    u32 slot = mal_map_find_slot(storage, key, mal_key_hash_value(key));
-    return mal_hash_slot_live(storage->slots, storage->slot_capacity, slot)
-        ? (u32) storage->slots[slot] + 1 : 0;
+    u32 slot = mal_map_lookup_slot(storage, key);
+    return slot == UINT32_MAX ? 0 : (u32) storage->slots[slot] + 1;
+}
+
+u32 mal_map_object_find_canonical(const MalMapObject *map, MalValue key) {
+    return mal_map_storage_find(map->entries, key);
 }
 
 bool mal_map_object_has_canonical(const MalMapObject *map, MalValue key) {
@@ -364,19 +437,57 @@ MalValue mal_map_storage_value(const MalMapStorage *storage, u32 entry) {
     return mal_map_value_at(storage, entry - 1);
 }
 
-u32 mal_map_object_entry_hint(const MalMapObject *map, MalValue key) {
-    const MalMapStorage *storage = map->entries;
+static u32 mal_map_storage_entry_hint(const MalMapStorage *storage, MalValue key) {
     if (storage == nullptr || storage->entry_hint == 0) return 0;
     if (storage->hint_key == key) return storage->entry_hint;
     if (!mal_value_is_string(key) && !mal_value_is_bigint(key)) return 0;
     return mal_key_value_equals(storage->hint_key, key) ? storage->entry_hint : 0;
 }
 
-void mal_map_object_remember_entry(MalMapObject *map, u32 entry) {
-    MalMapStorage *storage = map->entries;
+static inline __attribute__((always_inline)) u32 mal_map_storage_counted_hint(
+    const MalMapStorage *storage, MalValue key
+) {
+    MAL_PERF_COUNT(map_get_set_cache_checks);
+    u32 entry = mal_map_storage_entry_hint(storage, key);
+    if (entry != 0) MAL_PERF_COUNT(map_get_set_cache_hits);
+    else MAL_PERF_COUNT(map_get_set_cache_misses);
+    return entry;
+}
+
+u32 mal_map_object_entry_hint(const MalMapObject *map, MalValue key) {
+    return mal_map_storage_counted_hint(map->entries, key);
+}
+
+// The hint keeps the Map's own key: the Map, not the caller, keeps that value alive.
+static inline void mal_map_storage_remember_entry(MalMapStorage *storage, u32 entry) {
     if (storage == nullptr || storage->entry_hint == entry) return;
     storage->hint_key = entry == 0 ? MAL_VALUE_EMPTY : mal_map_key_at(storage, entry - 1);
     storage->entry_hint = entry;
+}
+
+void mal_map_object_remember_entry(MalMapObject *map, u32 entry) {
+    mal_map_storage_remember_entry(map->entries, entry);
+}
+
+// Get, has and set run this for every call; keep the hint, probe and refresh in one frame.
+static inline __attribute__((always_inline)) u32 mal_map_storage_find_hinted(
+    MalMapStorage *storage, MalValue key
+) {
+    u32 entry = mal_map_storage_counted_hint(storage, key);
+    if (entry != 0) return entry;
+    entry = mal_map_storage_find(storage, key);
+    if (entry != 0) mal_map_storage_remember_entry(storage, entry);
+    return entry;
+}
+
+u32 mal_map_object_find_hinted(MalMapObject *map, MalValue key) {
+    return mal_map_storage_find_hinted(map->entries, key);
+}
+
+MalValue mal_map_object_get_hinted(MalMapObject *map, MalValue key) {
+    MalMapStorage *storage = map->entries;
+    u32 entry = mal_map_storage_find_hinted(storage, key);
+    return entry == 0 ? MAL_VALUE_UNDEFINED : mal_map_value_at(storage, entry - 1);
 }
 
 u32 mal_map_object_upsert_canonical(MalMapObject *map, MalValue key, bool *inserted) {
@@ -483,6 +594,13 @@ void mal_map_object_update_entry(MalMapObject *map, u32 entry, MalValue key, Mal
     mal_perf_collection_mutation(map, storage->size);
 }
 
+void mal_map_object_set_hinted(MalMapObject *map, MalValue key, MalValue value) {
+    u32 entry = mal_map_storage_counted_hint(map->entries, key);
+    if (entry == 0) entry = mal_map_object_upsert_canonical(map, key, nullptr);
+    mal_map_object_update_entry(map, entry, key, value);
+    mal_map_storage_remember_entry(map->entries, entry);
+}
+
 void mal_map_object_set_canonical(MalMapObject *map, MalValue key, MalValue value) {
     u32 entry = mal_map_object_upsert_canonical(map, key, nullptr);
     mal_map_object_update_entry(map, entry, key, value);
@@ -495,21 +613,17 @@ void mal_map_object_set(MalMapObject *map, MalValue key, MalValue value) {
 bool mal_map_object_delete_canonical(MalMapObject *map, MalValue key) {
     MalMapStorage *storage = map->entries;
     if (storage == nullptr || storage->size == 0) return false;
-    u32 index = storage->count;
+    u32 index;
     if (storage->payload == nullptr) {
-        for (u32 i = 0; i < storage->count; i++) {
-            if (mal_map_is_live(storage, i) && mal_map_key_equals(storage, i, key)) {
-                index = i;
-                break;
-            }
-        }
+        u32 entry = mal_map_small_find(storage, key);
+        if (entry == 0) return false;
+        index = entry - 1;
     } else {
-        u32 slot = mal_map_find_slot(storage, key, mal_key_hash_value(key));
-        if (!mal_hash_slot_live(storage->slots, storage->slot_capacity, slot)) return false;
+        u32 slot = mal_map_lookup_slot(storage, key);
+        if (slot == UINT32_MAX) return false;
         index = (u32) storage->slots[slot];
         storage->deleted_slots += mal_hash_index_erase(storage->slots, storage->slot_capacity, slot);
     }
-    if (index == storage->count) return false;
     if (storage->entry_hint == index + 1) {
         storage->entry_hint = 0;
         storage->hint_key = MAL_VALUE_EMPTY;
@@ -594,16 +708,41 @@ void mal_map_iter_init(MalMapIter *iter, MalMapStorage *storage) {
 }
 
 bool mal_map_iter_next(MalMapIter *iter, MalValue *key, MalValue *value) {
-    MalMapStorage *storage = iter->storage;
+    const MalMapStorage *storage = iter->storage;
     if (storage == nullptr) return false;
-    while (iter->index < storage->count) {
-        u32 index = (u32) iter->index++;
-        MalValue mapped = *mal_map_value_slot(storage, index);
-        if (mapped == MAL_VALUE_EMPTY) continue;
-        *key = mal_map_key_at(storage, index);
-        *value = mapped;
-        return true;
+    usize index = iter->index;
+    usize count = storage->count;
+    if (storage->payload == nullptr) {
+        for (; index < count; index++) {
+            MalValue mapped = storage->small_values[index];
+            if (mapped == MAL_VALUE_EMPTY) continue;
+            *key = storage->small[index];
+            *value = mapped;
+            iter->index = index + 1;
+            return true;
+        }
+    } else if (storage->domain == MAL_MAP_KEYS_INT32) {
+        const i32 *keys = storage->payload;
+        for (; index < count; index++) {
+            MalValue mapped = storage->int32_values[index];
+            if (mapped == MAL_VALUE_EMPTY) continue;
+            *key = mal_value_from_f64((f64) keys[index]);
+            *value = mapped;
+            iter->index = index + 1;
+            return true;
+        }
+    } else {
+        const MalMapPair *pairs = storage->payload;
+        for (; index < count; index++) {
+            MalValue mapped = pairs[index].value;
+            if (mapped == MAL_VALUE_EMPTY) continue;
+            *key = pairs[index].key;
+            *value = mapped;
+            iter->index = index + 1;
+            return true;
+        }
     }
+    iter->index = index;
     return false;
 }
 

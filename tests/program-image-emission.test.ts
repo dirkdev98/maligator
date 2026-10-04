@@ -1148,7 +1148,7 @@ describe("emit-program-image instruction packing", () => {
 		expect(metadataUnits.length).toBeGreaterThan(0);
 		expect(
 			metadataUnits.some(
-				(unit) => !unit.includes("extern const c16 mal_string_0_code_units[];"),
+				(unit) => !unit.includes("extern const u8 mal_string_0_code_units[];"),
 			),
 		).toBe(true);
 	});
@@ -3739,7 +3739,7 @@ describe("native update-expression representation", () => {
 			}
 			globalThis.checksum = checksum;
 		`);
-		expect(output).toContain("mal_builtin_string_char_code_at_in_bounds(");
+		expect(output).toContain("mal_builtin_string_char_code_at_cached_in_bounds(");
 		expect(output).not.toContain("mal_builtin_string_char_code_at_direct_in_bounds(");
 		expect(output).toContain(
 			"mal_value_from_i32((i32) mal_string_length(mal_value_to_string(",

@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "heap_string.h"
 #include "value.h"
 
 #if MAL_PERF_STATS
@@ -415,10 +416,13 @@ void mal_perf_intrinsic_name(const byte *name, usize length) {
     }
 }
 
-void mal_perf_native_call_name(const c16 *name, usize length) {
+void mal_perf_native_call_name(const MalString *string) {
+    usize length = mal_string_length(string);
     if (!mal_perf_stats_enabled || length > MAL_PERF_NATIVE_NAME_MAX_LENGTH) {
         return;
     }
+    c16 name[MAL_PERF_NATIVE_NAME_MAX_LENGTH];
+    mal_string_copy_range_to((MalString *) string, 0, length, name);
     u64 hash = 1469598103934665603ULL;
     for (usize i = 0; i < length; i++) {
         hash ^= name[i];
@@ -604,7 +608,7 @@ static void mal_perf_stats_print(void) {
         stderr,
         "[perf-regexp-stats] exec_calls=%llu fast_exec_calls=%llu ascii_exec_calls=%llu "
         "ascii_cache_hits=%llu ascii_cache_fills=%llu utf16_exec_calls=%llu "
-        "utf16_cache_hits=%llu utf16_cache_fills=%llu\n",
+        "utf16_cache_hits=%llu utf16_cache_fills=%llu latin1_exec_calls=%llu\n",
         (unsigned long long) mal_perf_stats.regexp_exec_calls,
         (unsigned long long) mal_perf_stats.regexp_fast_exec_calls,
         (unsigned long long) mal_perf_stats.regexp_ascii_exec_calls,
@@ -612,7 +616,8 @@ static void mal_perf_stats_print(void) {
         (unsigned long long) mal_perf_stats.regexp_ascii_cache_fills,
         (unsigned long long) mal_perf_stats.regexp_utf16_exec_calls,
         (unsigned long long) mal_perf_stats.regexp_utf16_cache_hits,
-        (unsigned long long) mal_perf_stats.regexp_utf16_cache_fills
+        (unsigned long long) mal_perf_stats.regexp_utf16_cache_fills,
+        (unsigned long long) mal_perf_stats.regexp_latin1_exec_calls
     );
     fprintf(
         stderr,
@@ -1012,6 +1017,7 @@ static void mal_perf_stats_print(void) {
 		"indexed_fill_allocations_avoided=%llu indexed_fill_raw_bytes_avoided=%llu "
 		"indexed_fill_guard_fallbacks=%llu "
 		"push_direct_hits=%llu push_direct_fallbacks=%llu "
+		"deque_direct_hits=%llu deque_direct_fallbacks=%llu "
 		"contained_pushes=%llu contained_push_overflows=%llu "
 		"contained_pops=%llu contained_empty_pops=%llu contained_element_reads=%llu "
         "iteration_direct_hits=%llu iteration_direct_fallbacks=%llu "
@@ -1030,6 +1036,8 @@ static void mal_perf_stats_print(void) {
 		(unsigned long long) mal_perf_stats.array_indexed_fill_guard_fallbacks,
 		(unsigned long long) mal_perf_stats.array_push_direct_hits,
         (unsigned long long) mal_perf_stats.array_push_direct_fallbacks,
+        (unsigned long long) mal_perf_stats.array_deque_direct_hits,
+        (unsigned long long) mal_perf_stats.array_deque_direct_fallbacks,
 		(unsigned long long) mal_perf_stats.array_contained_pushes,
 		(unsigned long long) mal_perf_stats.array_contained_push_overflows,
 		(unsigned long long) mal_perf_stats.array_contained_pops,
@@ -1279,6 +1287,8 @@ static void mal_perf_stats_print(void) {
         "load_plain_generic=%llu load_primitive_hits=%llu load_primitive_fills=%llu "
         "load_primitive_uncacheable=%llu load_string_length_hits=%llu "
         "load_array_length_hits=%llu load_typed_array_length_hits=%llu "
+        "load_collection_size_hits=%llu load_dictionary_direct_hits=%llu "
+        "store_dictionary_direct_hits=%llu "
         "load_watched_hits=%llu load_watched_fills=%llu "
         "load_other_generic=%llu inherited_fills=%llu inherited_reject_basic=%llu "
         "inherited_reject_key=%llu inherited_reject_receiver=%llu "
@@ -1315,6 +1325,9 @@ static void mal_perf_stats_print(void) {
         (unsigned long long) mal_perf_stats.ic_load_string_length_hits,
         (unsigned long long) mal_perf_stats.ic_load_array_length_hits,
         (unsigned long long) mal_perf_stats.ic_load_typed_array_length_hits,
+        (unsigned long long) mal_perf_stats.ic_load_collection_size_hits,
+        (unsigned long long) mal_perf_stats.ic_load_dictionary_direct_hits,
+        (unsigned long long) mal_perf_stats.ic_store_dictionary_direct_hits,
         (unsigned long long) mal_perf_stats.ic_load_watched_hits,
         (unsigned long long) mal_perf_stats.ic_load_watched_fills,
         (unsigned long long) mal_perf_stats.ic_load_other_generic,

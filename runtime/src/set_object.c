@@ -106,40 +106,97 @@ static bool mal_set_key_equals_slow(MalSetKeyDomain domain, MalValue candidate, 
     return domain == MAL_SET_KEYS_GENERIC && mal_key_value_equals(candidate, key);
 }
 
-static inline bool mal_set_key_equals(const MalSetStorage *storage, u32 index, MalValue key) {
-    MalValue candidate;
-    if (storage->payload == nullptr) {
-        candidate = storage->small[index];
-    } else if (storage->domain == MAL_SET_KEYS_INT32) {
-        return ((i32 *) storage->payload)[index] == (i32) mal_value_to_f64(key);
-    } else {
-        candidate = ((MalValue *) storage->payload)[index];
-    }
+static inline bool mal_set_small_key_equals(const MalSetStorage *storage, u32 index, MalValue key) {
+    MalValue candidate = storage->small[index];
     return candidate == key || mal_set_key_equals_slow(storage->domain, candidate, key);
 }
 
-static u32 mal_set_find_slot(const MalSetStorage *storage, MalValue key, u64 hash) {
-    u8 *controls = mal_hash_controls(storage->slots, storage->slot_capacity);
+/*
+ * Hashed-storage probe specialized by the constant `domain`. A hit returns the
+ * index bucket holding an equal live member. A miss returns UINT32_MAX for
+ * lookups; insertion instead returns the first reusable DELETED bucket, or the
+ * EMPTY bucket that ended the search. Packed int32 storage compares `int_key`.
+ */
+static inline __attribute__((always_inline)) u32 mal_set_probe_in(
+    const MalSetStorage *storage, MalSetKeyDomain domain, MalValue key, i32 int_key,
+    u64 hash, bool insert
+) {
+    const u8 *controls = mal_hash_controls(storage->slots, storage->slot_capacity);
     MalHashProbe probe = mal_hash_probe(hash, storage->slot_capacity);
+    u8 tag = mal_hash_tag(hash);
     u32 available = UINT32_MAX;
     for (;;) {
         MAL_PERF_COUNT(hash_index_groups);
-        MalHashMask matches = mal_hash_group_match(controls + probe.group, mal_hash_tag(hash));
+        MalHashMask matches = mal_hash_group_match(controls + probe.group, tag);
         while (matches != 0) {
             u32 slot = probe.group + mal_hash_mask_first(matches);
+            u32 index = (u32) storage->slots[slot];
             MAL_PERF_COUNT(hash_index_candidates);
-            if (mal_set_key_equals(storage, (u32) storage->slots[slot], key)) return slot;
+            if (domain == MAL_SET_KEYS_INT32) {
+                if (((const i32 *) storage->payload)[index] == int_key) return slot;
+            } else {
+                MalValue candidate = ((const MalValue *) storage->payload)[index];
+                if (candidate == key) return slot;
+                if (domain == MAL_SET_KEYS_STRING &&
+                    mal_string_equals(mal_value_to_string(candidate), mal_value_to_string(key))) {
+                    return slot;
+                }
+                if (domain == MAL_SET_KEYS_GENERIC && mal_key_value_equals(candidate, key)) return slot;
+            }
             matches &= matches - 1;
         }
-        if (available == UINT32_MAX) {
+        if (insert && available == UINT32_MAX) {
             MalHashMask deleted = mal_hash_group_match(controls + probe.group, MAL_HASH_DELETED);
             if (deleted != 0) available = probe.group + mal_hash_mask_first(deleted);
         }
         MalHashMask empty = mal_hash_group_match(controls + probe.group, MAL_HASH_EMPTY);
-        if (empty != 0) return available == UINT32_MAX
-            ? probe.group + mal_hash_mask_first(empty) : available;
+        if (empty != 0) {
+            if (!insert) return UINT32_MAX;
+            return available == UINT32_MAX ? probe.group + mal_hash_mask_first(empty) : available;
+        }
         mal_hash_probe_next(&probe);
     }
+}
+
+static inline __attribute__((always_inline)) u32 mal_set_probe(
+    const MalSetStorage *storage, MalValue key, i32 int_key, u64 hash, bool insert
+) {
+    switch (storage->domain) {
+        case MAL_SET_KEYS_INT32:
+            return mal_set_probe_in(storage, MAL_SET_KEYS_INT32, key, int_key, hash, insert);
+        case MAL_SET_KEYS_STRING:
+            return mal_set_probe_in(storage, MAL_SET_KEYS_STRING, key, 0, hash, insert);
+        case MAL_SET_KEYS_GENERIC:
+            return mal_set_probe_in(storage, MAL_SET_KEYS_GENERIC, key, 0, hash, insert);
+        default:
+            // Canonical Number bits and identities are equal exactly when their tagged words are.
+            return mal_set_probe_in(storage, MAL_SET_KEYS_IDENTITY, key, 0, hash, insert);
+    }
+}
+
+// The member must already be accepted by the storage domain.
+static u32 mal_set_find_slot(const MalSetStorage *storage, MalValue key, u64 hash) {
+    i32 int_key = storage->domain == MAL_SET_KEYS_INT32 ? (i32) mal_value_to_f64(key) : 0;
+    return mal_set_probe(storage, key, int_key, hash, true);
+}
+
+// Returns the index bucket of an equal live member in hashed storage, or UINT32_MAX.
+static inline __attribute__((always_inline)) u32 mal_set_lookup_slot(
+    const MalSetStorage *storage, MalValue key
+) {
+    i32 int_key = 0;
+    if (storage->domain == MAL_SET_KEYS_INT32) {
+        if (!mal_value_is_f64(key)) return UINT32_MAX;
+        f64 number = mal_value_to_f64(key);
+        if (!(number >= INT32_MIN && number <= INT32_MAX)) return UINT32_MAX;
+        int_key = (i32) number;
+        if ((f64) int_key != number) return UINT32_MAX;
+    } else if (storage->domain == MAL_SET_KEYS_STRING) {
+        if (!mal_value_is_string(key)) return UINT32_MAX;
+    } else if (!mal_set_accepts_query(storage, key)) {
+        return UINT32_MAX;
+    }
+    return mal_set_probe(storage, key, int_key, mal_key_hash_value(key), false);
 }
 
 static void mal_set_fill_slots(MalSetStorage *storage, i32 *slots, u32 capacity) {
@@ -324,16 +381,19 @@ MalSetObject *mal_set_object_new(MalHeap *heap, MalObject *prototype) {
 
 static bool mal_set_small_has(const MalSetStorage *storage, MalValue key) {
     for (u32 i = 0; i < storage->count; i++) {
-        if (mal_set_is_live(storage, i) && mal_set_key_equals(storage, i, key)) return true;
+        if (mal_set_is_live(storage, i) && mal_set_small_key_equals(storage, i, key)) return true;
     }
     return false;
 }
 
-static bool mal_set_storage_has(const MalSetStorage *storage, MalValue key) {
-    if (storage == nullptr || storage->size == 0 || !mal_set_accepts_query(storage, key)) return false;
-    if (storage->payload == nullptr) return mal_set_small_has(storage, key);
-    return mal_hash_slot_live(storage->slots, storage->slot_capacity,
-        mal_set_find_slot(storage, key, mal_key_hash_value(key)));
+static inline __attribute__((always_inline)) bool mal_set_storage_has(
+    const MalSetStorage *storage, MalValue key
+) {
+    if (storage == nullptr || storage->size == 0) return false;
+    if (storage->payload == nullptr) {
+        return mal_set_accepts_query(storage, key) && mal_set_small_has(storage, key);
+    }
+    return mal_set_lookup_slot(storage, key) != UINT32_MAX;
 }
 
 static void mal_set_perf_query(MalValue key) {
@@ -436,18 +496,19 @@ void mal_set_object_add(MalSetObject *set, MalValue value) {
 bool mal_set_object_delete_canonical(MalSetObject *set, MalValue key) {
     mal_set_perf_query(key);
     MalSetStorage *storage = set->entries;
-    if (storage == nullptr || storage->size == 0 || !mal_set_accepts_query(storage, key)) return false;
+    if (storage == nullptr || storage->size == 0) return false;
     u32 index = storage->count;
     if (storage->payload == nullptr) {
+        if (!mal_set_accepts_query(storage, key)) return false;
         for (u32 i = 0; i < storage->count; i++) {
-            if (mal_set_is_live(storage, i) && mal_set_key_equals(storage, i, key)) {
+            if (mal_set_is_live(storage, i) && mal_set_small_key_equals(storage, i, key)) {
                 index = i;
                 break;
             }
         }
     } else {
-        u32 slot = mal_set_find_slot(storage, key, mal_key_hash_value(key));
-        if (!mal_hash_slot_live(storage->slots, storage->slot_capacity, slot)) return false;
+        u32 slot = mal_set_lookup_slot(storage, key);
+        if (slot == UINT32_MAX) return false;
         index = (u32) storage->slots[slot];
         storage->deleted_slots += mal_hash_index_erase(storage->slots, storage->slot_capacity, slot);
     }

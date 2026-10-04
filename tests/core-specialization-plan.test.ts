@@ -35,6 +35,7 @@ import {
 	projectCoreSpecializationRecipes,
 } from "../src/compiler/core/core-specialization-recipes.ts";
 import { CoreProgram } from "../src/compiler/core/core-store.ts";
+import { DEFAULT_CORE_SPECIALIZATION_BUDGETS } from "../src/compiler/core/core-transform-candidates.ts";
 import { parseScript } from "../src/compiler/frontend/parser.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
 import { optimizeSemanticProgramToCore } from "../src/compiler/pipeline/compile-core-common.ts";
@@ -628,9 +629,9 @@ describe("late Core specialization plan", () => {
 		).toEqual([]);
 	});
 
-	it.each([0, 1])(
-		"pulls optional bounds only for admitted recipes with expansion limit %s",
-		(limit) => {
+	it.each([1, DEFAULT_CORE_SPECIALIZATION_BUDGETS.perCallerGeneratedCode])(
+		"pulls optional bounds only for admitted recipes with generated-code budget %s",
+		(generatedCode) => {
 			const { program, function: functionId } = charCodeAtProgram();
 			const context = programAnalysisContext();
 			const report = new CoreOptimizationReportBuilder(program, "full");
@@ -640,17 +641,21 @@ describe("late Core specialization plan", () => {
 			});
 			const plan = buildCoreOptimizationPlan(program, analyses, summaries, [functionId], {
 				context,
-				perFunctionExpansions: limit,
+				budgets: {
+					...DEFAULT_CORE_SPECIALIZATION_BUDGETS,
+					perCallerGeneratedCode: generatedCode,
+				},
 			});
+			const admitted = generatedCode > 1;
 			expect(plan.statistics.considered).toBe(1);
 			expect(planSpecializations(plan).map(({ kind }) => kind)).toEqual(
-				limit === 0 ? [] : ["string-char-code-at-chain"],
+				admitted ? ["string-char-code-at-chain"] : [],
 			);
 			expect(
 				report
 					.finish(program, plan)
 					.analyses.some(({ analysis }) => analysis === "loop-induction-and-path-ranges"),
-			).toBe(limit !== 0);
+			).toBe(admitted);
 			verifyCoreOptimizationPlan(program.seal(), plan);
 		},
 	);

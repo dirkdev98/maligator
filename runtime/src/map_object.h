@@ -47,8 +47,12 @@ MalValue mal_map_storage_key(const MalMapStorage *storage, u32 entry);
 MalValue mal_map_storage_value(const MalMapStorage *storage, u32 entry);
 // A validated entry for an equal key may adopt a compact string representative.
 void mal_map_object_update_entry(MalMapObject *map, u32 entry, MalValue key, MalValue value);
+// Canonical lookups that consult and refresh the entry hint shared with get/set call sequences.
 u32 mal_map_object_entry_hint(const MalMapObject *map, MalValue key);
 void mal_map_object_remember_entry(MalMapObject *map, u32 entry);
+u32 mal_map_object_find_hinted(MalMapObject *map, MalValue key);
+MalValue mal_map_object_get_hinted(MalMapObject *map, MalValue key);
+void mal_map_object_set_hinted(MalMapObject *map, MalValue key, MalValue value);
 
 // Empty/small storage realizes the hint on its first spill.
 bool mal_map_object_reserve(MalMapObject *map, usize desired_size);

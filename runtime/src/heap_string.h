@@ -196,6 +196,12 @@ void mal_string_get_leaf_range(
     const MalString *string, usize offset, const MalString **leaf_out,
     usize *leaf_offset_out, usize *available_out);
 
+/** Return the whole string as one borrowed leaf segment. A rope spanning leaves
+ * is flattened in place in its compact encoding; Latin-1 content is never
+ * widened. Root the string first: flattening allocates. The segment remains
+ * valid while the string is rooted and not materialized by a UTF-16 bridge. */
+MalStringSegment mal_string_flat_segment(MalString *string);
+
 typedef struct MalStringIteratorPart {
     const MalString *string;
     usize offset;
@@ -251,6 +257,10 @@ static inline c16 mal_string_segment_code_unit_at(const MalStringSegment *segmen
 /** Copy a valid range without flattening a lazy concatenation; destination holds length units. */
 void mal_string_copy_range_to(
     MalString *string, usize offset, usize length, c16 *destination);
+
+/** Copy a string whose Latin-1 bit is set into one byte per unit without
+ * flattening; leaves widened in place still narrow exactly. */
+void mal_string_copy_latin1_to(const MalString *string, u8 *destination);
 
 /**
  * Return the string UTF-16 code unit length.

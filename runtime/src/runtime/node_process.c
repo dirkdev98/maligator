@@ -917,7 +917,8 @@ void mal_host_install_process(
     mal_gc_root(&root, &process_val, 1);
     MalObject *process = mal_value_to_object(process_val);
     MalObject *global_this = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_GLOBAL_THIS]);
-    mal_host_timers_install_node(vm, global_this);
+    // Node timers live on the host reactor; host-less harness entries install `process` without one.
+    if (mal_host(vm) != nullptr) mal_host_timers_install_node(vm, global_this);
     struct sigaction ignored = {.sa_handler = SIG_IGN};
     sigemptyset(&ignored.sa_mask);
     sigaction(SIGPIPE, &ignored, nullptr);

@@ -195,7 +195,14 @@ static inline void mal_gc_write_barrier_env(struct MalEnv *env) {
  * fast path.
  */
 void mal_gc_remember(MalHeapHeader *owner);
-void mal_gc_array_card(MalHeapHeader *owner, u32 index, MalValue value);
+void mal_gc_array_card_slow(MalHeapHeader *owner, u32 index, MalValue value);
+
+/* Indexed card barrier for an Array element store. Primitive elements and young
+ * owners, the common dense-store cases, never reach the out-of-line range update. */
+static inline void mal_gc_array_card(MalHeapHeader *owner, u32 index, MalValue value) {
+    if (!mal_value_is_heap(value) || !mal_heap_mark_is_old(owner->mark)) return;
+    mal_gc_array_card_slow(owner, index, value);
+}
 
 /* Remember `owner` if it is old and not already on the set. Used
  * for aggregate payloads (a generator frame, a promise's reaction list) where the

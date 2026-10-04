@@ -305,7 +305,7 @@ static MalValue mal_builtin_function_prototype_to_string(MalVm *vm, MalValue thi
         code_units[offset++] = (c16) prefix[i];
     }
     if (name != nullptr) {
-        memcpy(code_units + offset, mal_string_code_units(name), (usize) sizeof(c16) * name_length);
+        mal_string_copy_range_to(name, 0, name_length, code_units + offset);
         offset += name_length;
     }
     for (usize i = 0; i < lengthof(suffix); i++) {

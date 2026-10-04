@@ -122,12 +122,16 @@ if (consProbe.slice(1, 5) !== "erf-") throw new Error("broken inline slice");
 if (consProbe.slice(1, 8) !== "erf-sta") throw new Error("broken dependent slice");
 if (consProbe.slice(1, consProbe.length - 1) !== "erf-stats-abcdefghijklmnopqrstuvw")
 	throw new Error("broken large dependent slice");
+const flatProbe = Array.from({ length: 20 }, () => "dependent-").join("");
+if (flatProbe.slice(10, 190) !== "dependent-".repeat(18))
+	throw new Error("broken flat dependent slice");
 if (
 	consProbe.lastIndexOf("stats") !== 5 ||
 	consProbe.lastIndexOf("s", 8) !== 5 ||
 	consProbe.lastIndexOf("missing") !== -1 ||
 	"\u0100abcdef\u0100ghijkl\u0100".lastIndexOf("\u0100") !== 14 ||
-	"abcdef".indexOf("z") !== -1
+	"abcdef".indexOf("z") !== -1 ||
+	"\u0100abcdef".indexOf("z") !== -1
 ) {
 	throw new Error("broken reverse string search");
 }

@@ -1106,6 +1106,7 @@ const LOOP_SCALAR_CONSUMERS: ReadonlySet<string> = new Set([
 	"loadProperty",
 	"storeProperty",
 	"storePropertyStatic",
+	"storeCaptured",
 	"throwIfTdz",
 ]);
 

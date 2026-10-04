@@ -62,10 +62,9 @@ static MalLoadedRuntimeImage *load(const char *path) {
 static void dump_loaded_scalars(const MalRuntimeImage *program) {
     for (i32 i = 0; i < program->string_constant_count; i++) {
         const MalString *string = &program->string_constants[i];
-        const c16 *units = mal_string_code_units(string);
         printf("string[%d]", i);
         for (usize j = 0; j < mal_string_length(string); j++) {
-            printf(" %04x", (unsigned) units[j]);
+            printf(" %04x", (unsigned) mal_string_flat_code_unit_at(string, j));
         }
         putchar('\n');
     }

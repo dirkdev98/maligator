@@ -297,6 +297,43 @@ static bool cached_append_hash_and_terminal_weight(MalVm *vm) {
     return true;
 }
 
+static bool cached_piece_prepends_keep_hashing_bounded(MalVm *vm) {
+    enum { PREPENDS = 1024, CHUNK = 17, LENGTH = (PREPENDS + 1) * CHUNK };
+    c16 *expected = malloc(LENGTH * sizeof(c16));
+    CHECK(expected != nullptr);
+    MalValue roots[2] = {MAL_VALUE_UNDEFINED, MAL_VALUE_UNDEFINED};
+    MalRootSpan span;
+    mal_gc_root(&span, roots, countof(roots));
+    for (usize encoding = 0; encoding < 2; encoding++) {
+        c16 units[CHUNK];
+        for (usize i = 0; i < CHUNK; i++) units[i] = (c16) ('a' + i % 23);
+        units[CHUNK - 1] = encoding == 0 ? 0xe9 : 0x100;
+        for (usize i = 0; i <= PREPENDS; i++) {
+            memcpy(expected + i * CHUNK, units, sizeof(units));
+        }
+        roots[0] = mal_value_from_string(mal_string_new_copy(&vm->heap, units, CHUNK));
+        CHECK(mal_string_hash(mal_value_to_string(roots[0])) == reference_hash(units, CHUNK));
+        roots[1] = roots[0];
+        u64 hashed_before = mal_perf_stats.string_hash_code_units;
+        for (usize i = 0; i < PREPENDS; i++) {
+            MalString *rope;
+            CHECK(mal_string_new_cons_checked(&vm->heap,
+                mal_value_to_string(roots[0]), mal_value_to_string(roots[1]), &rope));
+            roots[1] = mal_value_from_string(rope);
+        }
+        MalString *rope = mal_value_to_string(roots[1]);
+        CHECK(mal_string_hash(rope) == reference_hash(expected, LENGTH));
+        if (mal_perf_stats_enabled) {
+            CHECK(mal_perf_stats.string_hash_code_units - hashed_before <= LENGTH * 8);
+        }
+        mal_gc_collect(vm);
+        CHECK(check_range(rope, expected, 0, LENGTH));
+    }
+    mal_gc_unroot(&span);
+    free(expected);
+    return true;
+}
+
 static bool alternating_sides_of_a_large_leaf(MalVm *vm) {
     enum { PREFIX = 32768, APPENDS = 384, CHUNK = 17 };
     c16 *expected = malloc((PREFIX + APPENDS * CHUNK) * sizeof(c16));
@@ -461,6 +498,7 @@ int main(void) {
             && traversal_and_balancing(&vm, 1024, construction);
     }
     passed = passed && cached_append_hash_and_terminal_weight(&vm)
+        && cached_piece_prepends_keep_hashing_bounded(&vm)
         && alternating_sides_of_a_large_leaf(&vm)
         && rope_shape_keys_share_and_survive_collection(&vm, 1024)
         && full_hash_collisions_preserve_key_identity(&vm)

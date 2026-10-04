@@ -260,6 +260,9 @@ export const VM_GUARDED_BUILTIN_CALL_OPERATIONS = [
 	"Boolean",
 	"Boolean.prototype.valueOf",
 	"Boolean.prototype.toString",
+	"Array.prototype.pop",
+	"Array.prototype.shift",
+	"Array.prototype.unshift",
 ] as const;
 
 export interface VmKnownOwnSlotCandidate {

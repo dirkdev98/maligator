@@ -22,7 +22,7 @@ describe("shared UTF codecs", () => {
 			outDir,
 			nodeEnabled: true,
 		});
-	});
+	}, 600_000);
 
 	it("preserves replacement, NUL, empty, and allocation-boundary behavior", () => {
 		assertResultPass(runToStdout(binary));

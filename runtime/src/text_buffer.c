@@ -8,12 +8,15 @@
 #include "checked_size.h"
 #include "gc.h"
 #include "mal_number_format.h"
+#include "number_text.h"
 #include "profile.h"
+#include "utf16.h"
 #include "value_ops.h"
 
 #define MAL_TEXT_BUFFER_INITIAL_CAPACITY ((usize) 16)
 
-static MalTextBufferStatus mal_text_buffer_prepare(
+__attribute__((noinline))
+static MalTextBufferStatus mal_text_buffer_grow(
     MalTextBuffer *buffer, usize extra, bool utf16
 ) {
     if (buffer->status != MAL_TEXT_BUFFER_OK) return buffer->status;
@@ -59,6 +62,13 @@ static MalTextBufferStatus mal_text_buffer_prepare(
     return MAL_TEXT_BUFFER_OK;
 }
 
+static inline MalTextBufferStatus mal_text_buffer_prepare(
+    MalTextBuffer *buffer, usize extra, bool utf16
+) {
+    if (mal_text_buffer_fits(buffer, extra) && (!utf16 || buffer->utf16)) return MAL_TEXT_BUFFER_OK;
+    return mal_text_buffer_grow(buffer, extra, utf16);
+}
+
 MalTextBufferStatus mal_text_buffer_reserve(MalTextBuffer *buffer, usize extra) {
     return mal_text_buffer_prepare(buffer, extra, false);
 }
@@ -82,7 +92,7 @@ MalTextBufferStatus mal_text_buffer_hint_capacity(MalTextBuffer *buffer, usize e
     return MAL_TEXT_BUFFER_OK;
 }
 
-MalTextBufferStatus mal_text_buffer_push(MalTextBuffer *buffer, c16 code_unit) {
+MalTextBufferStatus mal_text_buffer_push_slow(MalTextBuffer *buffer, c16 code_unit) {
     MalTextBufferStatus status = mal_text_buffer_prepare(buffer, 1, code_unit > UINT8_MAX);
     if (status == MAL_TEXT_BUFFER_OK) {
         if (buffer->utf16) ((c16 *) buffer->data)[buffer->length++] = code_unit;
@@ -91,22 +101,14 @@ MalTextBufferStatus mal_text_buffer_push(MalTextBuffer *buffer, c16 code_unit) {
     return status;
 }
 
-MalTextBufferStatus mal_text_buffer_append_units(
+MalTextBufferStatus mal_text_buffer_append_units_slow(
     MalTextBuffer *buffer, const c16 *code_units, usize length
 ) {
     if (length == 0 || buffer->status != MAL_TEXT_BUFFER_OK) return buffer->status;
     if (length > MAL_STRING_MAX_CODE_UNITS - buffer->length) {
         return buffer->status = MAL_TEXT_BUFFER_LENGTH_OVERFLOW;
     }
-    bool utf16 = buffer->utf16;
-    if (!utf16) {
-        for (usize i = 0; i < length; i++) {
-            if (code_units[i] > UINT8_MAX) {
-                utf16 = true;
-                break;
-            }
-        }
-    }
+    bool utf16 = buffer->utf16 || !mal_utf16_units_fit_latin1(code_units, length);
     MalTextBufferStatus status = mal_text_buffer_prepare(buffer, length, utf16);
     if (status == MAL_TEXT_BUFFER_OK) {
         if (buffer->utf16) {
@@ -120,7 +122,7 @@ MalTextBufferStatus mal_text_buffer_append_units(
     return status;
 }
 
-MalTextBufferStatus mal_text_buffer_append_latin1(
+MalTextBufferStatus mal_text_buffer_append_latin1_slow(
     MalTextBuffer *buffer, const u8 *code_units, usize length
 ) {
     if (length == 0) return buffer->status;
@@ -231,10 +233,12 @@ MalTextBufferStatus mal_text_buffer_append_number(MalTextBuffer *buffer, MalValu
     if (isinf(number)) {
         return mal_text_buffer_append_ascii(buffer, number < 0 ? "-Infinity" : "Infinity");
     }
-    u8 digits[32];
-    i32 length = mal_number_format_shortest(number, digits, (i32) sizeof(digits));
+    byte digits[32];
+    usize plain = mal_number_format_shortest_plain(number, digits);
+    if (plain != 0) return mal_text_buffer_append_latin1(buffer, (const u8 *) digits, plain);
+    i32 length = mal_number_format_shortest(number, (u8 *) digits, (i32) sizeof(digits));
     if (length <= 0 || length > (i32) sizeof(digits)) abort();
-    return mal_text_buffer_append_latin1(buffer, digits, (usize) length);
+    return mal_text_buffer_append_latin1(buffer, (const u8 *) digits, (usize) length);
 }
 
 void mal_text_buffer_truncate(MalTextBuffer *buffer, usize length) {

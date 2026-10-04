@@ -2937,7 +2937,7 @@ void mal_gc_remember(MalHeapHeader *owner) {
     g_gc->remembered[g_gc->remembered_count++] = owner;
 }
 
-void mal_gc_array_card(MalHeapHeader *owner, u32 index, MalValue value) {
+void mal_gc_array_card_slow(MalHeapHeader *owner, u32 index, MalValue value) {
     if (!mal_heap_mark_is_old(owner->mark) || owner->dirty == MAL_REMEMBERED_FULL ||
         !mal_value_is_heap(value) || mal_heap_mark_is_old(mal_value_to_heap(value)->mark)) return;
     MalArrayObject *array = (MalArrayObject *) owner;

@@ -17,7 +17,7 @@
  */
 
 #define WIRE_MAGIC 0x574c414du // "MALW" little-endian
-#define WIRE_VERSION 65u
+#define WIRE_VERSION 66u
 #define WIRE_FLAG_HAS_DEBUG 1u
 
 typedef enum WireOp {
@@ -97,6 +97,9 @@ static const MalGuardedBuiltinCallOp wire_guarded_builtin_call_ops[] = {
     MAL_GUARDED_BUILTIN_BOOLEAN_CALL,
     MAL_GUARDED_BUILTIN_BOOLEAN_VALUE_OF,
     MAL_GUARDED_BUILTIN_BOOLEAN_TO_STRING,
+    MAL_GUARDED_BUILTIN_ARRAY_POP,
+    MAL_GUARDED_BUILTIN_ARRAY_SHIFT,
+    MAL_GUARDED_BUILTIN_ARRAY_UNSHIFT,
 };
 
 static_assert(
@@ -109,7 +112,7 @@ static_assert(
 );
 static_assert(
     MAL_GUARDED_BUILTIN_MAP_GET == 0 &&
-        MAL_GUARDED_BUILTIN_BOOLEAN_TO_STRING + 1 ==
+        MAL_GUARDED_BUILTIN_ARRAY_UNSHIFT + 1 ==
             countof(wire_guarded_builtin_call_ops),
     "guarded builtin call side tags must stay contiguous"
 );
@@ -1608,7 +1611,7 @@ static bool mal_loaded_static_property_matches(
     usize length = strlen(name);
     if (string->length != length) return false;
     for (usize index = 0; index < length; index++) {
-        if (string->code_units[index] != (u8) name[index]) return false;
+        if (mal_string_flat_code_unit_at(string, index) != (u8) name[index]) return false;
     }
     return true;
 }
@@ -2047,7 +2050,7 @@ static bool mal_loaded_shape_key_is_named(const MalString *string) {
     if (string->length == sizeof(proto) - 1) {
         bool equal = true;
         for (usize index = 0; index < sizeof(proto) - 1; index++) {
-            if (string->code_units[index] != (u8) proto[index]) {
+            if (mal_string_flat_code_unit_at(string, index) != (u8) proto[index]) {
                 equal = false;
                 break;
             }
@@ -2055,12 +2058,12 @@ static bool mal_loaded_shape_key_is_named(const MalString *string) {
         if (equal) return false;
     }
     if (string->length == 0 ||
-        (string->length > 1 && string->code_units[0] == (c16) '0')) {
+        (string->length > 1 && mal_string_flat_code_unit_at(string, 0) == (c16) '0')) {
         return true;
     }
     u64 value = 0;
     for (usize index = 0; index < string->length; index++) {
-        c16 unit = string->code_units[index];
+        c16 unit = mal_string_flat_code_unit_at(string, index);
         if (unit < (c16) '0' || unit > (c16) '9') return true;
         value = value * 10 + (u64) (unit - (c16) '0');
         if (value > UINT32_MAX) return true;
@@ -2071,7 +2074,9 @@ static bool mal_loaded_shape_key_is_named(const MalString *string) {
 static bool mal_loaded_strings_equal(const MalString *left, const MalString *right) {
     if (left->length != right->length) return false;
     for (usize index = 0; index < left->length; index++) {
-        if (left->code_units[index] != right->code_units[index]) return false;
+        if (mal_string_flat_code_unit_at(left, index) != mal_string_flat_code_unit_at(right, index)) {
+            return false;
+        }
     }
     return true;
 }
@@ -2107,7 +2112,7 @@ static bool mal_loaded_exact_array_length_valid(
     const MalString *key = &strings[string_index];
     if (key->length != countof(length_key)) return false;
     for (usize index = 0; index < countof(length_key); index++) {
-        if (key->code_units[index] != length_key[index]) return false;
+        if (mal_string_flat_code_unit_at(key, index) != length_key[index]) return false;
     }
     return true;
 }
@@ -2352,12 +2357,11 @@ MalLoadedRuntimeImage *mal_runtime_image_load_with_host_resolver(
             err = "string constant exceeds engine limit";
             goto fail;
         }
-        c16 *units = arena_array(L, &r, length, sizeof(c16), alignof(c16));
-        for (u32 u = 0; r.ok && u < length; u++) {
-            units[u] = rd_u16(&r);
-        }
-        if (!r.ok) {
-            break;
+        // rd_count bounded the length by the remaining input, so the units can
+        // be classified in place before choosing their arena encoding.
+        bool latin1 = true;
+        for (u32 u = 0; latin1 && u < length; u++) {
+            latin1 = mal_load_u16_le(r.buf + r.pos + (usize) u * sizeof(c16)) <= 0xFF;
         }
         strings[s].header.type = MAL_HEAP_STRING;
         strings[s].header.storage = MAL_HEAP_STORAGE_IMMORTAL;
@@ -2365,10 +2369,25 @@ MalLoadedRuntimeImage *mal_runtime_image_load_with_host_resolver(
         strings[s].hash_valid = false;
         strings[s].array_index_impossible = false;
         strings[s].property_atom = false;
-        strings[s].latin1 = false;
+        strings[s].latin1 = latin1;
         strings[s].hash = 0;
         strings[s].length = length;
-        strings[s].code_units = units;
+        if (latin1) {
+            u8 *units = arena_array(L, &r, length, sizeof(u8), alignof(u8));
+            for (u32 u = 0; r.ok && u < length; u++) {
+                units[u] = (u8) rd_u16(&r);
+            }
+            strings[s].latin1_units = units;
+        } else {
+            c16 *units = arena_array(L, &r, length, sizeof(c16), alignof(c16));
+            for (u32 u = 0; r.ok && u < length; u++) {
+                units[u] = rd_u16(&r);
+            }
+            strings[s].code_units = units;
+        }
+        if (!r.ok) {
+            break;
+        }
     }
 
     // BigInts: immortal, 128-bit value (low u64 then high u64).
@@ -2490,7 +2509,7 @@ MalLoadedRuntimeImage *mal_runtime_image_load_with_host_resolver(
                 if ((guarded_tag > 0 &&
                      ((guarded_tag <= MAL_MATH_UNARY_ROUND && argument_count != 1) ||
                       guarded_tag > MAL_MATH_UNARY_ROUND + 1 +
-                          MAL_GUARDED_BUILTIN_BOOLEAN_TO_STRING ||
+                          MAL_GUARDED_BUILTIN_ARRAY_UNSHIFT ||
                       (guarded_tag == MAL_MATH_UNARY_ROUND + 1 +
                           MAL_GUARDED_BUILTIN_ARRAY_PUSH && argument_count > 4))) ||
                     (guarded_tag < 0 &&
@@ -2561,8 +2580,9 @@ MalLoadedRuntimeImage *mal_runtime_image_load_with_host_resolver(
                     MalString *locale = &strings[locale_index];
                     usize length = mal_string_length(locale);
                     if (length > 128) r.ok = false;
-                    const c16 *units = mal_string_code_units(locale);
-                    for (usize i = 0; r.ok && i < length; i++) if (units[i] > 127) r.ok = false;
+                    for (usize i = 0; r.ok && i < length; i++) {
+                        if (mal_string_flat_code_unit_at(locale, i) > 127) r.ok = false;
+                    }
                 }
             } else if ((instruction->opcode == MAL_OP_CALL_KNOWN)) {
                 const i32 *data =

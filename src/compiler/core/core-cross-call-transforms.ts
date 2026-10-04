@@ -1,9 +1,9 @@
 import { COMPILER_VALUE_KIND_TOP } from "../shared/compiler-value-kinds.ts";
 import type { CoreAnalysisManager } from "./core-analysis-manager.ts";
 import {
-	coreArrayPredicateCall,
-	expandCoreArrayPredicateCall,
-} from "./core-array-predicates.ts";
+	coreArrayIterationCall,
+	expandCoreArrayIterationCall,
+} from "./core-array-iteration.ts";
 import { coreConstructorSlotReserve } from "./core-constructor-layout.ts";
 import { CoreEditor } from "./core-editor.ts";
 import type { CoreCrossCallFunctionOptimizationResult } from "./core-function-optimization-session.ts";
@@ -1185,24 +1185,24 @@ function offerFunctionCandidates(
 		}
 		const inLoop = loopFrequency > 1;
 		const exposure = loopFrequency;
-		const predicate = inLoop
-			? coreArrayPredicateCall(program, fn, site.instruction)
+		const iteration = inLoop
+			? coreArrayIterationCall(program, fn, site.instruction)
 			: undefined;
 		const callback =
-			predicate === undefined
+			iteration === undefined
 				? undefined
-				: coreDirectCreatedFunction(fn, predicate.callback);
-		if (predicate !== undefined && callback !== undefined && callback !== functionId) {
+				: coreDirectCreatedFunction(fn, iteration.callback);
+		if (iteration !== undefined && callback !== undefined && callback !== functionId) {
 			const inline = inlineTarget(
 				program,
 				callback,
 				"call",
-				directCaptureContext(fn, predicate.callback, site.instruction, callback),
+				directCaptureContext(fn, iteration.callback, site.instruction, callback),
 			);
 			if (inline?.linear) {
 				const generatedCodeCost = 32 + inline.instructions.length;
 				service.offer({
-					kind: "array-predicate-inline",
+					kind: "array-iteration-inline",
 					caller: functionId,
 					site: site.instruction,
 					revision: summaries.version(callback),
@@ -2289,29 +2289,29 @@ function applyCandidate(
 	editor: CoreEditor,
 ): AppliedTransform | undefined {
 	switch (candidate.kind) {
-		case "array-predicate-inline": {
+		case "array-iteration-inline": {
 			const fn = program.function(candidate.caller);
 			if (!fn.isInstructionLive(candidate.site)) return undefined;
-			const predicate = coreArrayPredicateCall(program, fn, candidate.site);
+			const iteration = coreArrayIterationCall(program, fn, candidate.site);
 			const target = candidate.targets[0];
 			if (
-				predicate === undefined ||
+				iteration === undefined ||
 				target === undefined ||
-				coreDirectCreatedFunction(fn, predicate.callback) !== target
+				coreDirectCreatedFunction(fn, iteration.callback) !== target
 			)
 				return undefined;
 			const inline = inlineTarget(
 				program,
 				target,
 				"call",
-				directCaptureContext(fn, predicate.callback, candidate.site, target),
+				directCaptureContext(fn, iteration.callback, candidate.site, target),
 			);
 			if (!inline?.linear) return undefined;
-			const expanded = expandCoreArrayPredicateCall(
+			const expanded = expandCoreArrayIterationCall(
 				fn,
 				editor,
 				candidate.site,
-				predicate,
+				iteration,
 			);
 			const applied = applyLinearInline(
 				program,
@@ -2319,7 +2319,7 @@ function applyCandidate(
 				editor,
 			);
 			if (applied === undefined)
-				throw new Error("Admitted array predicate callback lost its inline proof");
+				throw new Error("Admitted array iteration callback lost its inline proof");
 			return {
 				instructionsIntroduced:
 					expanded.instructionsIntroduced + applied.instructionsIntroduced,
@@ -2558,7 +2558,7 @@ export function runCoreCrossCallTransforms(
 			if (
 				candidate.kind === "inline" ||
 				candidate.kind === "guarded-inline" ||
-				candidate.kind === "array-predicate-inline"
+				candidate.kind === "array-iteration-inline"
 			) {
 				published = true;
 			}

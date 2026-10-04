@@ -505,10 +505,10 @@ static MalValue mal_builtin_error_prototype_to_string(MalVm *vm, MalValue this_v
 
     name = mal_value_to_string(roots[1]);
     message = mal_value_to_string(roots[2]);
-    memcpy(code_units, mal_string_code_units(name), (usize) sizeof(c16) * name_length);
+    mal_string_copy_range_to(name, 0, name_length, code_units);
     code_units[name_length] = ':';
     code_units[name_length + 1] = ' ';
-    memcpy(code_units + name_length + 2, mal_string_code_units(message), (usize) sizeof(c16) * message_length);
+    mal_string_copy_range_to(message, 0, message_length, code_units + name_length + 2);
 
     MalString *result = inline_result
         ? mal_string_new_copy(&vm->heap, code_units, total_length)

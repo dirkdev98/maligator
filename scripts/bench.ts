@@ -334,6 +334,7 @@ function benchmarkSource(): NonNullable<BenchmarkSnapshot["source"]> {
 		archivedCommit === undefined
 			? execFileSync("git", ["diff", "--binary", "HEAD"], {
 					encoding: "utf8",
+					maxBuffer: 32 * 1024 * 1024,
 				})
 			: "";
 	const benchmarkFiles = [

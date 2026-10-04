@@ -63,32 +63,11 @@ void mal_array_object_init(MalHeap *heap, MalArrayObject *array, MalObject *prot
     mal_perf_collection_new(array, MAL_PERF_COLLECTION_ARRAY, heap->epoch);
 }
 
-bool mal_array_object_is_dense(const MalArrayObject *array) {
-    return array->elements != nullptr;
-}
-
-bool mal_array_object_dense_get(const MalArrayObject *array, u32 index, MalValue *out) {
-    if (array->elements == nullptr || index >= array->dense_count) {
-        return false;
-    }
-    MalValue value = array->elements[index];
-    if (mal_value_is_array_hole(value)) {
-        return false;
-    }
-    *out = value;
-    return true;
-}
-
 bool mal_array_object_dense_pair(
     const MalArrayObject *array, MalValue *first_out, MalValue *second_out
 ) {
     return mal_array_object_dense_get(array, 0, first_out) &&
         mal_array_object_dense_get(array, 1, second_out);
-}
-
-bool mal_array_object_dense_has(const MalArrayObject *array, u32 index) {
-    MalValue ignored;
-    return mal_array_object_dense_get(array, index, &ignored);
 }
 
 bool mal_array_object_dense_reserve_exact(MalArrayObject *array, u32 needed) {
@@ -670,6 +649,11 @@ static u32 mal_array_object_shrink(MalArrayObject *array, u32 new_length) {
     if (array->elements != nullptr && !array->dense_elements_configurable &&
         new_length < array->dense_count) {
         return array->dense_count;
+    }
+    // Index keys reach the property table only after deoptimization; the caller
+    // truncates the dense region. Viewing the table would dictionarize the Array.
+    if (!array->dense_deopted) {
+        return new_length;
     }
     MalTable *properties = mal_object_properties(&array->object);
 

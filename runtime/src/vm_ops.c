@@ -1952,13 +1952,13 @@ MalEnv *mal_vm_capture_owner(MalEnv *env, i32 owner_function_index) {
     return nullptr;
 }
 
-MalValue mal_vm_load_captured(MalEnv *env, i32 owner_function_index, i32 index) {
+MalValue mal_vm_load_captured_slow(MalEnv *env, i32 owner_function_index, i32 index) {
     MalValue value;
     return mal_vm_capture_value(env, owner_function_index, index, &value)
         ? value : mal_value_new_undefined();
 }
 
-void mal_vm_store_captured(MalEnv *env, i32 owner_function_index, i32 index, MalValue value) {
+void mal_vm_store_captured_slow(MalEnv *env, i32 owner_function_index, i32 index, MalValue value) {
     MalEnv *owner = mal_vm_capture_owner(env, owner_function_index);
     if (owner == nullptr) return;
     mal_gc_write_barrier(owner->slots[index]);
@@ -2384,6 +2384,13 @@ mal_vm_property_try_load_static_remaining(
     MalVm *vm, MalValue receiver, const MalObject *object,
     MalInlineCache *ic
 ) {
+    // Alternate shapes are the hottest miss of the inline monomorphic probe; the
+    // special modes below never coexist with a shape-mode cache.
+    MalValue polymorphic_value;
+    if (object != nullptr &&
+        mal_vm_object_try_load_polymorphic(object, ic->key, ic, &polymorphic_value)) {
+        return (MalStaticPropertyProbeResult) { .hit = true, .value = polymorphic_value };
+    }
     if (ic->mode == MAL_IC_MODE_ARRAY_LENGTH &&
         mal_value_is_heap_type(receiver, MAL_HEAP_ARRAY_OBJECT)) {
         const MalArrayObject *array = (const MalArrayObject *) mal_value_to_heap(receiver);
@@ -2400,6 +2407,14 @@ mal_vm_property_try_load_static_remaining(
             return (MalStaticPropertyProbeResult) { .hit = true, .value = value };
         }
     }
+    if (ic->mode == MAL_IC_MODE_COLLECTION_SIZE) {
+        usize size;
+        if (mal_vm_admit_collection_size(vm, receiver, &size)) {
+            MAL_PERF_COUNT(ic_load_collection_size_hits);
+            return (MalStaticPropertyProbeResult) {
+                .hit = true, .value = mal_value_from_i32((i32) size)};
+        }
+    }
     MalValue value;
     bool hit;
     if (ic->mode == MAL_IC_MODE_INHERITED_VALUE && ic->poly_count > 0 &&
@@ -2411,7 +2426,8 @@ mal_vm_property_try_load_static_remaining(
         ic->mode == MAL_IC_MODE_MISSING) {
         hit = mal_vm_inherited_try_load_static(receiver, ic, &value);
     } else {
-        hit = (object != nullptr && mal_vm_object_try_load_remaining(object, ic->key, ic, &value)) ||
+        hit = (object != nullptr && ic->mode == MAL_IC_MODE_OWN_TABLE &&
+               mal_vm_own_table_try_load(object, ic->key, ic, &value)) ||
             mal_vm_watched_try_load_static(receiver, ic, &value) ||
             mal_vm_special_try_load_static(vm, receiver, ic, &value) ||
             mal_vm_inherited_stub_try_load_static(vm, receiver, object, ic, &value);
@@ -3055,6 +3071,33 @@ bool mal_op_call_guarded_builtin(
             return false;
         }
         MAL_PERF_COUNT(array_push_direct_hits);
+        callable->registers[instruction->as.call.dst] = result;
+        return true;
+    }
+    if (operation == MAL_GUARDED_BUILTIN_ARRAY_POP ||
+        operation == MAL_GUARDED_BUILTIN_ARRAY_SHIFT ||
+        operation == MAL_GUARDED_BUILTIN_ARRAY_UNSHIFT) {
+        if (argument_count > 4) {
+            MAL_PERF_COUNT(array_deque_direct_fallbacks);
+            return false;
+        }
+        MalValue arguments[4];
+        for (i32 i = 0; i < argument_count; i++) {
+            arguments[i] = mal_op_value_operand(callable, argument_operands[i]);
+        }
+        MalValue result;
+        if (!mal_builtin_array_deque_try_direct(
+                vm,
+                (MalGuardedBuiltinCallOp) operation,
+                mal_op_value_operand(callable, instruction->as.call.callee),
+                receiver,
+                arguments,
+                argument_count,
+                &result)) {
+            MAL_PERF_COUNT(array_deque_direct_fallbacks);
+            return false;
+        }
+        MAL_PERF_COUNT(array_deque_direct_hits);
         callable->registers[instruction->as.call.dst] = result;
         return true;
     }
@@ -5832,6 +5875,18 @@ static MalValue mal_vm_op_load_property_ic_keyed(
             return mal_value_from_u32(length);
         }
     }
+    usize collection_size;
+    if ((mal_value_is_map_object(object_value) || mal_value_is_set_object(object_value)) &&
+        mal_value_is_string(key_value) &&
+        mal_string_equals_ascii(mal_value_to_string(key_value), "size") &&
+        mal_vm_admit_collection_size(vm, object_value, &collection_size)) {
+        if (mal_ic_key_is_stable_string(key_value)) {
+            mal_ic_record_special(
+                vm, ic, MAL_IC_MODE_COLLECTION_SIZE, 0, key_value,
+                mal_value_new_undefined(), nullptr);
+        }
+        return mal_value_from_i32((i32) collection_size);
+    }
     MalObject *slot_object = mal_vm_as_own_slot_object(object_value);
     if (slot_object != nullptr) {
         MalObject *object = slot_object;
@@ -5871,8 +5926,7 @@ static MalValue mal_vm_op_load_property_ic_keyed(
             for (u8 i = 0; i < ic->poly_count; i++) {
                 if (object->shape == ic->poly_shape[i]) {
                     MAL_PERF_COUNT(ic_load_poly_hits);
-                    mal_ic_promote_poly_slot(ic, i);
-                    return mal_object_field_load_token(object, ic->field);
+                    return mal_vm_object_poly_load(object, ic, i);
                 }
             }
         }
@@ -6067,16 +6121,53 @@ static MalValue mal_vm_op_load_property_ic_impl(
         // A coercion-created query has no atom root. Keep it alive through
         // getters/proxies and the subsequent cache-admission checks.
         roots[1] = key.value;
+        // A baked string constant queries through this VM's atom, but the caller's
+        // inline probe compares the constant itself. Both name the same property,
+        // so the row speaks the atom inside the slow path and the constant outside.
+        bool retarget = !static_probe_missed && key.kind == MAL_KEY_STRING &&
+            key.value != key_value && mal_value_is_string(key_value) &&
+            mal_value_to_string(key_value)->header.storage == MAL_HEAP_STORAGE_IMMORTAL;
+        if (retarget && ic->key == key_value) ic->key = key.value;
         result = mal_vm_op_load_property_ic_keyed(
             vm, object_value, key, ic, static_probe_missed);
+        if (retarget && ic->key == key.value) ic->key = key_value;
     }
     mal_gc_unroot(&span);
     return result;
 }
 
+/*
+ * Dictionary receivers addressed by varying string keys defeat per-site caches.
+ * A STRING probe of the own table is exact for these keys: canonical index
+ * strings live in INDEX rows, so they miss here and keep the generic path, as do
+ * accessors, absent keys and every non-dictionary receiver.
+ */
+static MalTable *mal_vm_dictionary_receiver_table(MalValue object_value, MalValue key_value) {
+    if (!mal_value_is_string(key_value) ||
+        !mal_value_is_heap_type(object_value, MAL_HEAP_OBJECT)) {
+        return nullptr;
+    }
+    const MalObject *object = (const MalObject *) mal_value_to_heap(object_value);
+    return object->shape->inline_count == 0 && mal_object_has_public_overflow(object)
+        ? mal_object_overflow(object) : nullptr;
+}
+
 MalValue mal_vm_op_load_property_ic(
     MalVm *vm, MalValue object_value, MalValue key_value, MalInlineCache *ic
 ) {
+    // A cacheable key at a cold or same-key site fills and keeps the entry-hinted
+    // own-table row; keys the site cannot cache, or one varying past its row, probe directly.
+    bool cacheable = mal_ic_key_is_stable_string(key_value) &&
+        (ic->mode != MAL_IC_MODE_OWN_TABLE || ic->key == key_value);
+    MalTable *table = cacheable ? nullptr : mal_vm_dictionary_receiver_table(object_value, key_value);
+    if (table != nullptr) {
+        MalPropertyRead read = mal_property_read(
+            table, (MalKey) {.kind = MAL_KEY_STRING, .value = key_value});
+        if (read.kind == MAL_PROPERTY_READ_DATA) {
+            MAL_PERF_COUNT(ic_load_dictionary_direct_hits);
+            return read.value;
+        }
+    }
     return mal_vm_op_load_property_ic_impl(
         vm, object_value, key_value, ic, false);
 }
@@ -6088,142 +6179,188 @@ MalValue mal_vm_op_load_property_ic_static_miss(
         vm, object_value, key_value, ic, true);
 }
 
+/*
+ * Overwrite an existing plain writable data property of a dictionary receiver.
+ * Prototypes, watched or locked primordials and the global object keep the
+ * generic path because their stores carry cache invalidation duties.
+ */
+static bool mal_vm_dictionary_try_overwrite(
+    MalVm *vm, MalValue object_value, MalValue key_value, MalValue value
+) {
+    MalTable *table = mal_vm_dictionary_receiver_table(object_value, key_value);
+    if (table == nullptr) return false;
+    MalObject *object = (MalObject *) mal_value_to_heap(object_value);
+    if (object->is_prototype || object->watched_method_proto || object->primordial_locked ||
+        object_value == vm->intrinsics[MAL_INTRINSIC_GLOBAL_THIS]) {
+        return false;
+    }
+    MalTableLookup lookup = mal_table_lookup(
+        table, (MalKey) {.kind = MAL_KEY_STRING, .value = key_value});
+    if (!lookup.present) return false;
+    u8 flags = mal_table_entry_property_flags(table, lookup.entry);
+    if ((flags & (MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ACCESSOR | MAL_PROPERTY_INTERNAL_FLAGS)) !=
+        MAL_PROPERTY_WRITABLE) {
+        return false;
+    }
+    mal_table_entry_set_value(table, lookup.entry, value);
+    mal_gc_card(&object->header, value);
+    MAL_PERF_COUNT(ic_store_dictionary_direct_hits);
+    return true;
+}
+
+static void mal_vm_op_store_object_property_ic(
+    MalVm *vm, MalValue object_value, MalValue key_value, const MalKey *converted_key,
+    MalValue value, bool strict, MalInlineCache *ic
+) {
+    MalObject *object = (MalObject *) mal_value_to_heap(object_value);
+    if (ic->mode == MAL_IC_MODE_SHAPE && object->shape == ic->shape &&
+        key_value == ic->key && ic->slot != MAL_IC_VALUE_SLOT) {
+        MAL_PERF_COUNT(ic_store_slow_mono_hits);
+        // hit: overwrite an existing shaped data slot (shape + key unchanged).
+        // (A value-sentinel entry is a load-only cache — never index slots with it.)
+        mal_object_field_store_token(object, ic->slot, ic->field, value);
+        return;
+    }
+    if (ic->mode == MAL_IC_MODE_SHAPE && ic->shape != nullptr &&
+        ic->slot != MAL_IC_VALUE_SLOT && key_value == ic->key &&
+        mal_shape_same_logical(object->shape, ic->shape)) {
+        MAL_PERF_COUNT(ic_store_poly_hits);
+        ic->shape = object->shape;
+        ic->field = object->shape->props[ic->slot].field;
+        mal_object_field_store_token(object, ic->slot, ic->field, value);
+        return;
+    }
+    // Polymorphic overflow: an alternate shape for the same key. Entries are only
+    // added for default-writable data slots (below), so this overwrite is sound.
+    if (ic->mode == MAL_IC_MODE_SHAPE && ic->poly_count > 0 && key_value == ic->key) {
+        for (u8 i = 0; i < ic->poly_count; i++) {
+            if (object->shape == ic->poly_shape[i]) {
+                MAL_PERF_COUNT(ic_store_poly_hits);
+                u8 slot = mal_ic_poly_slot(ic, i);
+                mal_object_field_store(object, slot, value);
+                return;
+            }
+        }
+    }
+    // Once the inline four-way cache overflows, share the VM-wide shaped
+    // property stub with loads. The attribute guard is part of the entry:
+    // a load may have warmed a read-only slot, which must never become a
+    // store hit.
+    if (ic->mode == MAL_IC_MODE_SHAPE && ic->megamorphic) {
+        const MalPropertyStubEntry *stub =
+            &mal_vm_property_stub_cache(vm)[
+                mal_stub_hash(object->shape, key_value)];
+        if (stub->shape == object->shape && stub->key == key_value &&
+            mal_shape_attrs_are_default(stub->attrs)) {
+            MAL_PERF_COUNT(ic_store_mega_hits);
+            mal_object_field_store_token(object, stub->slot, stub->field, value);
+            return;
+        }
+        MAL_PERF_COUNT(ic_store_mega_misses);
+    }
+    // Convert the key ONCE (running any user toString/valueOf once) and reuse
+    // it for the cache fill and the slow path — never re-convert via the
+    // generic op (that would fire the key's side effect a second time).
+    MalKey key;
+    if (converted_key != nullptr) {
+        key = *converted_key;
+    } else if (!mal_vm_value_to_property_key(vm, key_value, &key)) {
+        return;
+    }
+    if (key.kind == MAL_KEY_STRING) {
+        i32 idx = mal_shape_find(object->shape, key, MAL_SHAPE_FIND_STORE_IC);
+        // Cache only a default (writable, enumerable, configurable) data slot;
+        // a store to such a property cannot run a setter or change the shape.
+        if (idx >= 0 && mal_shape_attrs_are_default(object->shape->props[idx].attrs)) {
+            MAL_PERF_COUNT(ic_store_shape_hits);
+            const MalShapeProp *prop = &object->shape->props[idx];
+            // Canonical string atoms share the VM/cache lifetime. Accumulate
+            // alternate shapes (polymorphic sites) like the load path.
+            if (mal_ic_key_is_stable_string(key_value)) {
+                mal_vm_record_own_slot(ic, object->shape, key_value, prop->slot);
+                MalPropertyStubEntry *stub =
+                    &mal_vm_property_stub_cache(vm)[
+                        mal_stub_hash(object->shape, key_value)];
+                stub->shape = object->shape;
+                stub->key = key_value;
+                stub->slot = prop->slot;
+                stub->attrs = prop->attrs;
+                stub->field = prop->field;
+                MAL_PERF_COUNT(ic_store_shape_fills);
+            } else {
+                MAL_PERF_COUNT(ic_store_shape_uncacheable);
+            }
+            if (mal_object_note_prototype_mutation(object)) {
+                MAL_PERF_COUNT(prototype_epoch_define_invalidations);
+            }
+            mal_object_field_store(object, prop->slot, value);
+            return;
+        }
+        if (idx < 0 && !mal_object_has_public_overflow(object) && object->extensible &&
+            mal_shape_can_add_property(object->shape, key) &&
+            mal_ic_key_is_stable_string(key_value) &&
+            mal_ic_can_apply_transition_store(object, key)) {
+            MalShape *source = object->shape;
+            MalShape *child = mal_shape_add_property(
+                object->shape, key,
+                (u8) (MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE |
+                      MAL_PROPERTY_CONFIGURABLE));
+            if (object->watched_method_proto) {
+                mal_invalidate_primitive_method_protector();
+            }
+            if (mal_object_note_prototype_mutation(object)) {
+                MAL_PERF_COUNT(prototype_epoch_define_invalidations);
+            }
+            mal_object_grow_slots(
+                object, source->inline_count, child->inline_count);
+            mal_object_field_initialize(object, child, child->inline_count - 1, value);
+            object->shape = child;
+            mal_gc_card(&object->header, value);
+            mal_gc_card(&object->header, key.value);
+            if (mal_ic_record_transition(
+                    object, source, key_value, child, ic)) {
+                MAL_PERF_COUNT(ic_store_transition_fills);
+            }
+            return;
+        }
+    }
+    // Prototype setter / overflow / index / symbol key: store with the
+    // converted key (no re-conversion).
+    MAL_PERF_COUNT(ic_store_plain_generic);
+    mal_vm_op_store_property_keyed(vm, object_value, key, value, strict);
+}
+
 void mal_vm_op_store_property_ic(
     MalVm *vm, MalValue object_value, MalValue key_value, MalValue value, bool strict, MalInlineCache *ic
 ) {
+    if (mal_vm_dictionary_try_overwrite(vm, object_value, key_value, value)) return;
     MAL_PERF_COUNT(ic_store_fallbacks);
-    if (mal_value_is_heap_type(object_value, MAL_HEAP_OBJECT)) {
-        MalObject *object = (MalObject *) mal_value_to_heap(object_value);
-        MalKey converted_key;
-        bool key_converted = false;
-        if (mal_value_is_string(key_value)) {
-            if (!mal_vm_string_to_property_key(vm, key_value, &converted_key)) {
-                return;
-            }
-            key_converted = true;
-            if (converted_key.kind == MAL_KEY_STRING) {
-                key_value = converted_key.value;
-            }
-        }
-        if (ic->mode == MAL_IC_MODE_SHAPE && object->shape == ic->shape &&
-            key_value == ic->key && ic->slot != MAL_IC_VALUE_SLOT) {
-            MAL_PERF_COUNT(ic_store_slow_mono_hits);
-            // hit: overwrite an existing shaped data slot (shape + key unchanged).
-            // (A value-sentinel entry is a load-only cache — never index slots with it.)
-            mal_object_field_store_token(object, ic->slot, ic->field, value);
-            return;
-        }
-        if (ic->mode == MAL_IC_MODE_SHAPE && ic->shape != nullptr &&
-            ic->slot != MAL_IC_VALUE_SLOT && key_value == ic->key &&
-            mal_shape_same_logical(object->shape, ic->shape)) {
-            MAL_PERF_COUNT(ic_store_poly_hits);
-            ic->shape = object->shape;
-            ic->field = object->shape->props[ic->slot].field;
-            mal_object_field_store_token(object, ic->slot, ic->field, value);
-            return;
-        }
-        // Polymorphic overflow: an alternate shape for the same key. Entries are only
-        // added for default-writable data slots (below), so this overwrite is sound.
-        if (ic->mode == MAL_IC_MODE_SHAPE && ic->poly_count > 0 && key_value == ic->key) {
-            for (u8 i = 0; i < ic->poly_count; i++) {
-                if (object->shape == ic->poly_shape[i]) {
-                    MAL_PERF_COUNT(ic_store_poly_hits);
-                    u8 slot = mal_ic_poly_slot(ic, i);
-                    mal_object_field_store(object, slot, value);
-                    return;
-                }
-            }
-        }
-        // Once the inline four-way cache overflows, share the VM-wide shaped
-        // property stub with loads. The attribute guard is part of the entry:
-        // a load may have warmed a read-only slot, which must never become a
-        // store hit.
-        if (ic->mode == MAL_IC_MODE_SHAPE && ic->megamorphic) {
-            const MalPropertyStubEntry *stub =
-                &mal_vm_property_stub_cache(vm)[
-                    mal_stub_hash(object->shape, key_value)];
-            if (stub->shape == object->shape && stub->key == key_value &&
-                mal_shape_attrs_are_default(stub->attrs)) {
-                MAL_PERF_COUNT(ic_store_mega_hits);
-                mal_object_field_store_token(object, stub->slot, stub->field, value);
-                return;
-            }
-            MAL_PERF_COUNT(ic_store_mega_misses);
-        }
-        // Convert the key ONCE (running any user toString/valueOf once) and reuse
-        // it for the cache fill and the slow path — never re-convert via the
-        // generic op (that would fire the key's side effect a second time).
-        MalKey key;
-        if (key_converted) {
-            key = converted_key;
-        } else if (!mal_vm_value_to_property_key(vm, key_value, &key)) {
-            return;
-        }
-        if (key.kind == MAL_KEY_STRING) {
-            i32 idx = mal_shape_find(object->shape, key, MAL_SHAPE_FIND_STORE_IC);
-            // Cache only a default (writable, enumerable, configurable) data slot;
-            // a store to such a property cannot run a setter or change the shape.
-            if (idx >= 0 && mal_shape_attrs_are_default(object->shape->props[idx].attrs)) {
-                MAL_PERF_COUNT(ic_store_shape_hits);
-                const MalShapeProp *prop = &object->shape->props[idx];
-                // Canonical string atoms share the VM/cache lifetime. Accumulate
-                // alternate shapes (polymorphic sites) like the load path.
-                if (mal_ic_key_is_stable_string(key_value)) {
-                    mal_vm_record_own_slot(ic, object->shape, key_value, prop->slot);
-                    MalPropertyStubEntry *stub =
-                        &mal_vm_property_stub_cache(vm)[
-                            mal_stub_hash(object->shape, key_value)];
-                    stub->shape = object->shape;
-                    stub->key = key_value;
-                    stub->slot = prop->slot;
-                    stub->attrs = prop->attrs;
-                    stub->field = prop->field;
-                    MAL_PERF_COUNT(ic_store_shape_fills);
-                } else {
-                    MAL_PERF_COUNT(ic_store_shape_uncacheable);
-                }
-                if (mal_object_note_prototype_mutation(object)) {
-                    MAL_PERF_COUNT(prototype_epoch_define_invalidations);
-                }
-                mal_object_field_store(object, prop->slot, value);
-                return;
-            }
-            if (idx < 0 && !mal_object_has_public_overflow(object) && object->extensible &&
-                mal_shape_can_add_property(object->shape, key) &&
-                mal_ic_key_is_stable_string(key_value) &&
-                mal_ic_can_apply_transition_store(object, key)) {
-                MalShape *source = object->shape;
-                MalShape *child = mal_shape_add_property(
-                    object->shape, key,
-                    (u8) (MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE |
-                          MAL_PROPERTY_CONFIGURABLE));
-                if (object->watched_method_proto) {
-                    mal_invalidate_primitive_method_protector();
-                }
-                if (mal_object_note_prototype_mutation(object)) {
-                    MAL_PERF_COUNT(prototype_epoch_define_invalidations);
-                }
-                mal_object_grow_slots(
-                    object, source->inline_count, child->inline_count);
-                mal_object_field_initialize(object, child, child->inline_count - 1, value);
-                object->shape = child;
-                mal_gc_card(&object->header, value);
-                mal_gc_card(&object->header, key.value);
-                if (mal_ic_record_transition(
-                        object, source, key_value, child, ic)) {
-                    MAL_PERF_COUNT(ic_store_transition_fills);
-                }
-                return;
-            }
-        }
-        // Prototype setter / overflow / index / symbol key: store with the
-        // converted key (no re-conversion).
-        MAL_PERF_COUNT(ic_store_plain_generic);
-        mal_vm_op_store_property_keyed(vm, object_value, key, value, strict);
+    if (!mal_value_is_heap_type(object_value, MAL_HEAP_OBJECT)) {
+        MAL_PERF_COUNT(ic_store_other_generic);
+        mal_vm_op_store_property(vm, object_value, key_value, value, strict);
         return;
     }
-    MAL_PERF_COUNT(ic_store_other_generic);
-    mal_vm_op_store_property(vm, object_value, key_value, value, strict);
+    if (!mal_value_is_string(key_value)) {
+        mal_vm_op_store_object_property_ic(
+            vm, object_value, key_value, nullptr, value, strict, ic);
+        return;
+    }
+    MalKey key;
+    if (!mal_vm_string_to_property_key(vm, key_value, &key)) return;
+    if (key.kind != MAL_KEY_STRING) {
+        mal_vm_op_store_object_property_ic(
+            vm, object_value, key_value, &key, value, strict, ic);
+        return;
+    }
+    // A baked string constant stores through this VM's atom, but the caller's
+    // inline probe compares the constant itself. Both name the same property,
+    // so the row speaks the atom inside the slow path and the constant outside.
+    bool retarget = key.value != key_value &&
+        mal_value_to_string(key_value)->header.storage == MAL_HEAP_STORAGE_IMMORTAL;
+    if (retarget && ic->key == key_value) ic->key = key.value;
+    mal_vm_op_store_object_property_ic(
+        vm, object_value, key.value, &key, value, strict, ic);
+    if (retarget && ic->key == key.value) ic->key = key_value;
 }
 
 void mal_op_load_property(MalCallable *callable, const MalInstruction *instruction) {
@@ -8468,4 +8605,55 @@ MalCompletion mal_builtin_sort_numeric(
     MalCompletion completion = mal_vm_call_exact_native(vm, expected, callee, receiver, args, arg_count);
     vm->exact_script_call = exact.previous;
     return completion;
+}
+
+bool mal_vm_iterator_try_string_cursor_step_full(
+    MalVm *vm, MalIteratorObject *iterator, MalValue *value_out, bool *done_out
+) {
+    if (iterator->done) {
+        *value_out = MAL_VALUE_UNDEFINED;
+        *done_out = true;
+        return true;
+    }
+    MalString *string = mal_value_to_string(iterator->target);
+    MalStringCursor *cursor = iterator->string_cursor;
+    if (iterator->index >= string->length) {
+        if (cursor != nullptr) return false;
+        iterator->done = true;
+        *value_out = MAL_VALUE_UNDEFINED;
+        *done_out = true;
+        return true;
+    }
+    c16 unit;
+    if (cursor != nullptr) {
+        MalStringIterator *frontier = cursor->iterator;
+        if (frontier == nullptr) return false;
+        if (cursor->local >= frontier->current.length) {
+            // Enter only a flat leaf whose first unit hits: popping it pushes nothing, so
+            // hits stay allocation-free and misses leave the frontier untouched.
+            if (frontier->count == 0) return false;
+            const MalStringIteratorPart *next = &frontier->stack[frontier->count - 1];
+            if (next->string->storage >= MAL_STRING_STORAGE_DEPENDENT) return false;
+            c16 first = mal_string_flat_code_unit_at(next->string, next->offset);
+            if (first > UINT8_MAX || vm->code_unit_strings[first] == nullptr) return false;
+            MalStringSegment segment;
+            if (!mal_string_cursor_segment(cursor, &segment)) return false;
+        }
+        MalStringIteratorPart *part = &frontier->current;
+        unit = mal_string_flat_code_unit_at(part->string, part->offset + cursor->local);
+    } else {
+        if (string->storage == MAL_STRING_STORAGE_CONS) return false;
+        unit = mal_string_code_unit_at(string, (usize) iterator->index);
+    }
+    if (unit > UINT8_MAX) return false;
+    MalString *character = vm->code_unit_strings[unit];
+    if (character == nullptr) return false;
+    iterator->index++;
+    if (cursor != nullptr) {
+        cursor->local++;
+        cursor->position++;
+    }
+    *value_out = mal_value_from_string(character);
+    *done_out = false;
+    return true;
 }

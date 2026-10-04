@@ -366,16 +366,23 @@ bool mal_value_is_module_namespace_object(MalValue value);
 MalModuleNamespaceObject *mal_value_to_module_namespace_object(MalValue value);
 MalValue mal_value_from_module_namespace_object(MalModuleNamespaceObject *ns);
 
-bool mal_value_is_map_object(MalValue value);
+static inline bool mal_value_is_map_object(MalValue value) {
+    return mal_value_is_heap_type(value, MAL_HEAP_MAP_OBJECT);
+}
 
-bool mal_value_is_set_object(MalValue value);
+static inline bool mal_value_is_set_object(MalValue value) {
+    return mal_value_is_heap_type(value, MAL_HEAP_SET_OBJECT);
+}
+
 bool mal_value_is_weak_map_object(MalValue value);
 bool mal_value_is_weak_set_object(MalValue value);
 
 /**
  * Check if the value is a built-in iterator instance.
  */
-bool mal_value_is_iterator_object(MalValue value);
+static inline bool mal_value_is_iterator_object(MalValue value) {
+    return mal_value_is_heap_type(value, MAL_HEAP_ITERATOR_OBJECT);
+}
 
 /**
  * Check if the value is a generator instance.

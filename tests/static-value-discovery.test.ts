@@ -1423,7 +1423,7 @@ const primitiveCellParameters = [
 		"String.prototype.charCodeAt",
 		"'abcdefgh'",
 		"value.charCodeAt(+x)",
-		"mal_builtin_string_char_code_at_number",
+		"mal_builtin_string_char_code_at_cached_number",
 		0,
 	],
 	[

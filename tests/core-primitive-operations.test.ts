@@ -2399,7 +2399,7 @@ describe("primitive operation results", () => {
 		"x + String(x)",
 	])("preserves the String result of %s for chained consumers", (expression) => {
 		const output = inspect(`(${expression}).charCodeAt(+x)`);
-		expect(output.c.source).toContain("mal_builtin_string_char_code_at_number(");
+		expect(output.c.source).toContain("mal_builtin_string_char_code_at_cached_number(");
 		expect(
 			output.core.some(
 				(operation) => operation.attributes.operation === "String.prototype.charCodeAt",
@@ -2411,7 +2411,9 @@ describe("primitive operation results", () => {
 		"keeps custom String %s protocol results untyped",
 		(method) => {
 			const output = inspect(`String(x).${method}(x).charCodeAt(0)`);
-			expect(output.c.source).not.toContain("mal_builtin_string_char_code_at_number(");
+			expect(output.c.source).not.toContain(
+				"mal_builtin_string_char_code_at_cached_number(",
+			);
 			expect(output.structure.genericCalls).toBeGreaterThan(0);
 		},
 	);

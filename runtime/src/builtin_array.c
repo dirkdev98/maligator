@@ -2186,10 +2186,15 @@ bool mal_builtin_array_push_virtual_guard(MalVm *vm) {
         !mal_array_elements_protector) {
         return false;
     }
+#if MAL_PRIMORDIALS_LOCKED
+    // The locked primordial graph cannot replace Array.prototype.push.
+    return true;
+#else
     MalPropertyLookup live = mal_object_get_own(
         mal_value_to_object(prototype_value), mal_intrinsic_string_key(vm, "push"));
     return live.present && !(live.desc.flags & MAL_PROPERTY_ACCESSOR) &&
         live.desc.value == callee;
+#endif
 }
 
 bool mal_builtin_array_push_try_direct(
@@ -2207,10 +2212,14 @@ bool mal_builtin_array_push_try_direct(
     }
     MalValue prototype_value = vm->intrinsics[MAL_INTRINSIC_ARRAY_PROTOTYPE];
     MalArrayObject *array = mal_value_to_array_object(this_value);
+    // An empty own-property layout cannot shadow the inherited method.
+    bool may_shadow =
+        (array->object.shape != nullptr && array->object.shape->inline_count != 0) ||
+        mal_object_has_public_overflow(&array->object);
     if (!mal_value_is_array_object(prototype_value) ||
         mal_object_prototype(&array->object) != mal_value_to_object(prototype_value) ||
-        mal_object_get_own(
-            &array->object, mal_intrinsic_string_key(vm, "push")).present ||
+        (may_shadow && mal_object_get_own(
+            &array->object, mal_intrinsic_string_key(vm, "push")).present) ||
         !mal_array_object_dense_append_many(array, args, (u32) arg_count)) {
         return false;
     }
@@ -2508,6 +2517,85 @@ done:
     return ret;
 }
 
+static bool mal_builtin_array_is_method(MalValue callee, MalNativeFunctionCallback method) {
+    return mal_value_is_native_function_object(callee) &&
+        mal_native_function_object_callback(mal_value_to_native_function_object(callee)) == method;
+}
+
+// Each arm repeats its builtin's dense fast path; an empty Array with a writable length is unchanged.
+bool mal_builtin_array_deque_try_direct(
+    MalVm *vm,
+    MalGuardedBuiltinCallOp operation,
+    MalValue callee,
+    MalValue this_value,
+    const MalValue *args,
+    i32 arg_count,
+    MalValue *result_out
+) {
+    MalArrayObject *dense = mal_builtin_array_clean_dense(vm, this_value);
+    if (dense == nullptr || !dense->length_writable) return false;
+    switch (operation) {
+        case MAL_GUARDED_BUILTIN_ARRAY_POP: {
+            if (!mal_builtin_array_is_method(callee, mal_builtin_array_pop) ||
+                !dense->dense_elements_configurable) {
+                return false;
+            }
+            MalValue element = mal_value_new_undefined();
+            if (dense->length != 0) {
+                mal_array_object_dense_get(dense, dense->length - 1, &element);
+                mal_array_object_set_length(dense, dense->length - 1);
+            }
+            *result_out = element;
+            return true;
+        }
+        case MAL_GUARDED_BUILTIN_ARRAY_SHIFT: {
+            if (!mal_builtin_array_is_method(callee, mal_builtin_array_shift) ||
+                !dense->dense_elements_writable || !dense->dense_elements_configurable) {
+                return false;
+            }
+            MalValue first = mal_value_new_undefined();
+            if (dense->length != 0) {
+                if (!mal_builtin_array_dense_shift_compatible(dense)) return false;
+                mal_array_object_dense_get(dense, 0, &first);
+                mal_array_object_dense_shift(dense);
+            }
+            *result_out = first;
+            return true;
+        }
+        case MAL_GUARDED_BUILTIN_ARRAY_UNSHIFT: {
+            u64 new_length = (u64) dense->length + (u64) arg_count;
+            if (arg_count < 0 || !mal_builtin_array_is_method(callee, mal_builtin_array_unshift) ||
+                new_length > UINT32_MAX || (arg_count != 0 && !dense->object.extensible) ||
+                !mal_array_object_dense_unshift_many(dense, args, (u32) arg_count)) {
+                return false;
+            }
+            *result_out = mal_ops_number_value((f64) new_length);
+            return true;
+        }
+        default:
+            return false;
+    }
+}
+
+MalCompletion mal_builtin_array_deque_direct(
+    MalVm *vm,
+    MalCallCache *fallback_cache,
+    MalGuardedBuiltinCallOp operation,
+    MalValue callee,
+    MalValue this_value,
+    const MalValue *args,
+    i32 arg_count
+) {
+    MalValue result;
+    if (mal_builtin_array_deque_try_direct(
+            vm, operation, callee, this_value, args, arg_count, &result)) {
+        MAL_PERF_COUNT(array_deque_direct_hits);
+        return (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = result};
+    }
+    MAL_PERF_COUNT(array_deque_direct_fallbacks);
+    return mal_vm_call_cached(vm, fallback_cache, callee, this_value, args, arg_count);
+}
+
 static MalValue mal_builtin_array_slice(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     // Intentionally generic: O = ToObject(this), len = LengthOfArrayLike(O).
     if (!mal_builtin_array_to_object(vm, &this_value)) {
@@ -2684,6 +2772,71 @@ static bool mal_builtin_array_join_remaining_primitives(
     return true;
 }
 
+static usize mal_builtin_array_join_i32_digits(i32 value, u8 digits[11], usize *start) {
+    usize cursor = 11;
+    bool negative = value < 0;
+    u32 magnitude = negative ? (u32) -(i64) value : (u32) value;
+    do {
+        digits[--cursor] = (u8) ('0' + magnitude % 10);
+        magnitude /= 10;
+    } while (magnitude != 0);
+    if (negative) digits[--cursor] = '-';
+    *start = cursor;
+    return 11 - cursor;
+}
+
+/** Write a validated dense join into one exact allocation. Strings, int32s and
+ * holes or nullish elements (empty) were sized by the caller; `latin1` holds
+ * when the separator and every string part have compact content. Returns null
+ * with a pending allocation error. Writing allocates nothing until the result
+ * string itself, so element storage stays stable throughout. */
+static MalString *mal_builtin_array_join_write(
+    MalVm *vm, MalArrayObject *array, MalString *separator, usize result_length, bool latin1
+) {
+    usize separator_length = mal_string_length(separator);
+    void *units = mal_heap_try_alloc_raw_profiled(
+        &vm->heap, result_length * (latin1 ? sizeof(u8) : sizeof(c16)),
+        MAL_PROFILE_ALLOCATION_FAMILY_STRING);
+    if (units == nullptr) {
+        mal_vm_throw_allocation_error(vm);
+        return nullptr;
+    }
+    u8 *bytes = units;
+    c16 *wide = units;
+    u8 separator_unit = separator_length == 1 && latin1
+        ? (u8) mal_string_code_unit_at(separator, 0) : 0;
+    usize position = 0;
+    for (u32 index = 0; index < array->length; index++) {
+        if (index != 0 && separator_length != 0) {
+            if (separator_length == 1 && latin1) bytes[position] = separator_unit;
+            else if (latin1) mal_string_copy_latin1_to(separator, bytes + position);
+            else mal_string_copy_range_to(separator, 0, separator_length, wide + position);
+            position += separator_length;
+        }
+        MalValue element;
+        if (!mal_array_object_dense_get(array, index, &element) || mal_value_is_nil(element)) continue;
+        if (mal_value_is_string(element)) {
+            MalString *part = mal_value_to_string(element);
+            if (latin1) mal_string_copy_latin1_to(part, bytes + position);
+            else mal_string_copy_range_to(part, 0, mal_string_length(part), wide + position);
+            position += mal_string_length(part);
+        } else {
+            u8 digits[11];
+            usize start;
+            usize count = mal_builtin_array_join_i32_digits(mal_value_to_i32(element), digits, &start);
+            for (usize i = 0; i < count; i++) {
+                if (latin1) bytes[position + i] = digits[start + i];
+                else wide[position + i] = digits[start + i];
+            }
+            position += count;
+        }
+    }
+    if (position != result_length) abort();
+    return latin1
+        ? mal_string_new_latin1_owned(&vm->heap, bytes, result_length)
+        : mal_string_new_owned(&vm->heap, wide, result_length);
+}
+
 /** Join an exact clean dense Array when every present non-nullish element is
  * already a string primitive. Returns 1 with *out set, 0 for the observable
  * generic fallback, and -1 with a pending length/allocation throw. */
@@ -2705,6 +2858,7 @@ static i32 mal_builtin_array_join_dense_strings(
     }
     MalString *sole_part = nullptr;
     usize nonempty_parts = 0;
+    bool latin1 = separator->latin1;
     for (u32 index = 0; index < array->length; index++) {
         MalValue element;
         if (!mal_array_object_dense_get(array, index, &element) ||
@@ -2714,6 +2868,7 @@ static i32 mal_builtin_array_join_dense_strings(
         if (!mal_value_is_string(element)) return 0;
         MalString *part = mal_value_to_string(element);
         usize part_length = mal_string_length(part);
+        latin1 &= part->latin1;
         if (!mal_checked_size_add(
                 result_length, part_length, MAL_STRING_MAX_CODE_UNITS,
                 &result_length)) {
@@ -2739,27 +2894,10 @@ static i32 mal_builtin_array_join_dense_strings(
     MalValue roots[] = {mal_value_from_array_object(array), mal_value_from_string(separator)};
     MalRootSpan span;
     mal_gc_root(&span, roots, 2);
-    MalTextBuffer buffer = {.heap = &vm->heap};
-    mal_text_buffer_reserve(&buffer, result_length);
-    for (u32 index = 0; index < length && buffer.status == MAL_TEXT_BUFFER_OK; index++) {
-        if (index != 0) mal_text_buffer_append_string(&buffer, mal_value_to_string(roots[1]));
-        MalValue element;
-        if (mal_array_object_dense_get(mal_value_to_array_object(roots[0]), index, &element) && !mal_value_is_nil(element)) {
-            mal_text_buffer_append_string(&buffer, mal_value_to_string(element));
-        }
-    }
-    bool success = buffer.status == MAL_TEXT_BUFFER_OK;
-    if (success) {
-        assert(buffer.length == result_length);
-        *out = mal_value_from_string(mal_text_buffer_finish(&vm->heap, &buffer));
-    } else if (buffer.status == MAL_TEXT_BUFFER_LENGTH_OVERFLOW) {
-        mal_builtin_array_throw_string_length(vm);
-    } else {
-        mal_vm_throw_allocation_error(vm);
-    }
-    mal_text_buffer_dispose(&buffer);
+    MalString *result = mal_builtin_array_join_write(vm, array, separator, result_length, latin1);
+    if (result != nullptr) *out = mal_value_from_string(result);
     mal_gc_unroot(&span);
-    return success ? 1 : -1;
+    return result != nullptr ? 1 : -1;
 }
 
 static usize mal_builtin_array_i32_decimal_length(i32 value) {
@@ -2811,34 +2949,12 @@ static i32 mal_builtin_array_join_dense_int32s(
     MalRootSpan roots_span;
     mal_gc_root(&roots_span, roots, 2);
     mal_gc_native_rooted_begin(vm);
-    MalTextBuffer buffer = {.heap = &vm->heap};
-    MalTextBufferStatus status = mal_text_buffer_reserve(&buffer, result_length);
-    for (u32 index = 0; status == MAL_TEXT_BUFFER_OK && index < length; index++) {
-        if (index != 0) {
-            status = mal_text_buffer_append_string(
-                &buffer, mal_value_to_string(roots[1]));
-        }
-        if (status == MAL_TEXT_BUFFER_OK) {
-            MalValue element;
-            bool present = mal_array_object_dense_get(
-                mal_value_to_array_object(roots[0]), index, &element);
-            assert(present && mal_value_is_int32(element));
-            status = mal_text_buffer_append_i32(
-                &buffer, mal_value_to_i32(element));
-        }
-    }
-    if (status == MAL_TEXT_BUFFER_OK) {
-        assert(buffer.length == result_length);
-        *out = mal_value_from_string(mal_text_buffer_finish(&vm->heap, &buffer));
-    } else if (status == MAL_TEXT_BUFFER_LENGTH_OVERFLOW) {
-        mal_builtin_array_throw_string_length(vm);
-    } else {
-        mal_vm_throw_allocation_error(vm);
-    }
-    mal_text_buffer_dispose(&buffer);
+    MalString *result = mal_builtin_array_join_write(
+        vm, array, separator, result_length, separator->latin1);
+    if (result != nullptr) *out = mal_value_from_string(result);
     mal_gc_native_rooted_end(vm);
     mal_gc_unroot(&roots_span);
-    return status == MAL_TEXT_BUFFER_OK ? 1 : -1;
+    return result != nullptr ? 1 : -1;
 }
 
 static i32 mal_builtin_array_join_dense_primitives(
@@ -2855,6 +2971,7 @@ static i32 mal_builtin_array_join_dense_primitives(
         MAL_STRING_MAX_CODE_UNITS, &result_length);
     MalString *sole_part = nullptr;
     usize nonempty_parts = 0;
+    bool latin1 = separator->latin1;
     for (u32 index = 0; index < array->length; index++) {
         MalValue element;
         if (!mal_array_object_dense_get(array, index, &element) ||
@@ -2866,6 +2983,7 @@ static i32 mal_builtin_array_join_dense_primitives(
         if (mal_value_is_string(element)) {
             part = mal_value_to_string(element);
             part_length = mal_string_length(part);
+            latin1 &= part->latin1;
         } else if (mal_value_is_int32(element)) {
             part_length = mal_builtin_array_i32_decimal_length(mal_value_to_i32(element));
         } else return 0;
@@ -2895,32 +3013,11 @@ static i32 mal_builtin_array_join_dense_primitives(
     MalRootSpan span;
     mal_gc_root(&span, roots, 2);
     mal_gc_native_rooted_begin(vm);
-    MalTextBuffer buffer = {.heap = &vm->heap};
-    mal_text_buffer_reserve(&buffer, result_length);
-    for (u32 index = 0; index < length && buffer.status == MAL_TEXT_BUFFER_OK; index++) {
-        if (index != 0) mal_text_buffer_append_string(&buffer, mal_value_to_string(roots[1]));
-        MalValue element;
-        if (mal_array_object_dense_get(mal_value_to_array_object(roots[0]), index, &element) && !mal_value_is_nil(element)) {
-            if (mal_value_is_string(element)) {
-                mal_text_buffer_append_string(&buffer, mal_value_to_string(element));
-            } else {
-                mal_text_buffer_append_i32(&buffer, mal_value_to_i32(element));
-            }
-        }
-    }
-    bool success = buffer.status == MAL_TEXT_BUFFER_OK;
-    if (success) {
-        assert(buffer.length == result_length);
-        *out = mal_value_from_string(mal_text_buffer_finish(&vm->heap, &buffer));
-    } else if (buffer.status == MAL_TEXT_BUFFER_LENGTH_OVERFLOW) {
-        mal_builtin_array_throw_string_length(vm);
-    } else {
-        mal_vm_throw_allocation_error(vm);
-    }
-    mal_text_buffer_dispose(&buffer);
+    MalString *result = mal_builtin_array_join_write(vm, array, separator, result_length, latin1);
+    if (result != nullptr) *out = mal_value_from_string(result);
     mal_gc_native_rooted_end(vm);
     mal_gc_unroot(&span);
-    return success ? 1 : -1;
+    return result != nullptr ? 1 : -1;
 }
 
 static MalValue mal_builtin_array_join_active(
@@ -3614,7 +3711,10 @@ done:
  * SortCompare without the undefined handling: callers partition undefined
  * elements and holes up front. A NaN comparator result counts as equal.
  */
-static bool mal_builtin_array_sort_order(MalVm *vm, MalValue comparator, MalValue left, MalValue right, f64 *order_out) {
+static bool mal_builtin_array_sort_order(
+    MalVm *vm, MalCallCache *comparator_cache, MalValue comparator, MalValue left, MalValue right,
+    f64 *order_out
+) {
     // Both sort entry points validate the comparator once before collecting elements.
     if (!mal_value_is_undefined(comparator)) {
         MalNumericSortComparison direct = mal_vm_try_numeric_sort_comparison(
@@ -3623,7 +3723,8 @@ static bool mal_builtin_array_sort_order(MalVm *vm, MalValue comparator, MalValu
         MalValue args[] = {left, right};
         MalRootSpan args_span;
         mal_gc_root(&args_span, args, 2);
-        MalCompletion completion = mal_vm_call_value(vm, comparator, mal_value_new_undefined(), args, 2);
+        MalCompletion completion = mal_vm_call_cached(
+            vm, comparator_cache, comparator, mal_value_new_undefined(), args, 2);
         if (completion.kind != MAL_COMPLETION_NORMAL) {
             mal_gc_unroot(&args_span);
             vm->completion = completion;
@@ -3749,6 +3850,8 @@ static bool mal_builtin_array_sort_values(
     MalValue *key_from = default_keys;
     MalValue *key_to = key_scratch;
     bool ok = true;
+    // Compiled comparators dispatch directly; every other callable keeps generic [[Call]].
+    MalCallCache comparator_cache = {0};
 
     MalExactScriptCall *numeric_leaf = vm->exact_script_call;
     if (numeric_leaf == nullptr || numeric_leaf->callee != comparator ||
@@ -3788,7 +3891,7 @@ static bool mal_builtin_array_sort_values(
                         mal_value_to_string(key_from[right]));
                 } else {
                     ok = mal_builtin_array_sort_order(
-                        vm, comparator, from[left], from[right], &order);
+                        vm, &comparator_cache, comparator, from[left], from[right], &order);
                 }
                 if (ok) {
                     u32 source = order <= 0 ? left++ : right++;
@@ -5107,10 +5210,20 @@ static bool mal_array_default_species(MalVm *vm, MalValue recv) {
     MalObject *array_prototype = mal_value_to_object(array_proto_value);
     MalObject *array_constructor = mal_value_to_object(array_ctor_value);
 
+    // Callers have matched the receiver's prototype to %Array.prototype%. An empty
+    // own layout holds no `constructor` that could redirect species.
+    bool may_shadow = (receiver->shape != nullptr && receiver->shape->inline_count != 0) ||
+        mal_object_has_public_overflow(receiver);
     MalKey ctor_key = mal_intrinsic_string_key(vm, (const byte *) "constructor");
-    if (mal_object_get_own(receiver, ctor_key).present) {
-        return false; // own constructor could redirect species
+    if (may_shadow && mal_object_get_own(receiver, ctor_key).present) {
+        return false;
     }
+#if MAL_PRIMORDIALS_LOCKED
+    // The locked primordial graph keeps %Array.prototype%.constructor and %Array%[@@species].
+    (void) array_prototype;
+    (void) array_constructor;
+    return true;
+#else
     MalPropertyLookup ctor_lookup = mal_object_get_own(array_prototype, ctor_key);
     if (!ctor_lookup.present || (ctor_lookup.desc.flags & MAL_PROPERTY_ACCESSOR) ||
         !mal_value_is_object(ctor_lookup.desc.value) ||
@@ -5125,6 +5238,7 @@ static bool mal_array_default_species(MalVm *vm, MalValue recv) {
     }
     return mal_native_function_object_callback(mal_value_to_native_function_object(species_lookup.desc.getter)) ==
            mal_intrinsic_species_getter;
+#endif
 }
 
 bool mal_builtin_array_exact_map_guard(
@@ -5253,14 +5367,11 @@ MalCompletion mal_builtin_array_iteration_direct(
  * avoids a second property lookup. map/filter/flatMap additionally require a default
  * @@species because their fast paths build a plain Array. Side-effect-free.
  */
-static MalValue mal_builtin_array_iteration_eligible(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
-    (void) this_value;
-    (void) new_target;
-    (void) callee;
-    if (arg_count < 4 || !mal_value_is_array_object(args[1]) ||
+bool mal_builtin_array_iteration_eligible_values(MalVm *vm, const MalValue *args) {
+    if (!mal_value_is_array_object(args[1]) ||
 		!mal_value_is_native_function_object(args[0]) ||
 		!mal_value_is_callable(args[3])) {
-        return mal_value_new_boolean(false);
+        return false;
     }
     MalValue loaded_method = args[0];
     MalValue recv = args[1];
@@ -5269,7 +5380,7 @@ static MalValue mal_builtin_array_iteration_eligible(MalVm *vm, MalValue this_va
     MalValue prototype_value = vm->intrinsics[MAL_INTRINSIC_ARRAY_PROTOTYPE];
     if (!mal_value_is_object(prototype_value) ||
         mal_object_prototype(receiver) != mal_value_to_object(prototype_value)) {
-        return mal_value_new_boolean(false);
+        return false;
     }
 
     MalNativeFunctionCallback expected = nullptr;
@@ -5286,7 +5397,7 @@ static MalValue mal_builtin_array_iteration_eligible(MalVm *vm, MalValue this_va
         case 9: expected = mal_builtin_array_find_last; break;
         case 10: expected = mal_builtin_array_find_last_index; break;
         case 11: expected = mal_builtin_array_flat_map; break;
-        default: return mal_value_new_boolean(false);
+        default: return false;
     }
     bool eligible =
         mal_native_function_object_callback(
@@ -5297,7 +5408,15 @@ static MalValue mal_builtin_array_iteration_eligible(MalVm *vm, MalValue this_va
     if (eligible && (method_id == 5 || method_id == 6 || method_id == 11)) {
         eligible = mal_array_default_species(vm, recv);
     }
-    return mal_value_new_boolean(eligible);
+    return eligible;
+}
+
+static MalValue mal_builtin_array_iteration_eligible(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
+    (void) this_value;
+    (void) new_target;
+    (void) callee;
+    return mal_value_new_boolean(
+        arg_count >= 4 && mal_builtin_array_iteration_eligible_values(vm, args));
 }
 
 /**

@@ -4307,11 +4307,12 @@ MalCompletion mal_vm_call_cached(
                 mal_native_function_object_callback(native_function);
             MAL_PERF_COUNT(call_cache_exact_identity_hits);
             MAL_PERF_COUNT(call_cache_native_exact_hits);
-            MalString *native_name = mal_native_function_object_name(
-                mal_value_to_native_function_object(callee));
-            if (native_name != nullptr) {
-                mal_perf_native_call_name(
-                    mal_string_code_units(native_name), mal_string_length(native_name));
+            if (mal_perf_stats_enabled) {
+                MalString *native_name = mal_native_function_object_name(native_function);
+                if (native_name != nullptr) {
+                    mal_perf_native_call_name(
+                        native_name);
+                }
             }
 #if MAL_REALMS
             MalRealm *saved_realm = vm->current_realm;
@@ -4466,10 +4467,12 @@ MalCompletion mal_vm_call_exact_native(
     MalNativeFunctionObject *native_function =
         mal_value_to_native_function_object(callee);
     MAL_PROFILE_NATIVE_CALL(vm, native_function);
-    MalString *native_name = mal_native_function_object_name(native_function);
-    if (native_name != nullptr) {
-        mal_perf_native_call_name(
-            mal_string_code_units(native_name), mal_string_length(native_name));
+    if (mal_perf_stats_enabled) {
+        MalString *native_name = mal_native_function_object_name(native_function);
+        if (native_name != nullptr) {
+            mal_perf_native_call_name(
+                native_name);
+        }
     }
     MalCalleeRoots roots;
     mal_gc_callee_roots_begin(

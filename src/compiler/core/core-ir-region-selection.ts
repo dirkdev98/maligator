@@ -1044,6 +1044,7 @@ function pendingLocalCandidate(
 			compilerWorkCost: cost.compileScore,
 			expansive:
 				candidate.kind !== "builtin-collection-call-chain" &&
+				candidate.kind !== "string-char-code-at-chain" &&
 				candidate.kind !== "iterator-entry-pair-virtualization",
 			...(!coreTargetSupportsSpecialization(kind)
 				? { unsupportedReason: "target-support" as const }

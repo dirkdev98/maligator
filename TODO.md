@@ -440,6 +440,39 @@ contracts or investigates costs still visible after the string follow-ups.
       The rooted dynamic-key miss case in `property-transition-cache.test.ts` still
       performs 16,384 comparisons against its 1,026 bound.
 
+- [ ] Extend the inline Array iteration expansion to flatMap, findLast,
+      findLastIndex and unseeded reduce, each with fixture coverage of holes,
+      receiver mutation and fallback receivers. Expanded sites still run the
+      eligibility guard on non-Array receivers with the same method names (Map and
+      Set `forEach`, user `find` methods); measure that tax before widening.
+
+- [ ] Cut the per-element cost of expanded Array iteration loops: `array-map`
+      still spends about 24 ns per element against Node's 2.5 ns. The HasProperty
+      test and element load stay separate because the array presence projection
+      does not fire on these loops, and a callback's loop-invariant captured read
+      (`value + round`) reloads and rechecks TDZ every element.
+
+- [ ] Explain the per-iteration cost of `map-get-hit-*-selected` loops, about
+      40 ns regardless of size or key domain. At bf289f61 the compiled loop itself
+      held 54% of samples against 26% for the hashed probe. Get line-level samples
+      before changing the guarded collection arm or method capture.
+- [ ] Reduce rope construction cost in append and prepend loops. Balanced joins
+      split and rebuild O(log n) nodes per piece; `string-rope-access` still spends
+      about 20% in join, split, node allocation and sweep. Copying short pieces into
+      the adjacent edge leaf was measured and rejected: it slowed short
+      concatenations by about 20% without improving rope access. Preserve the
+      bounded-traversal, append-hash continuation and encoding-aware rope fixtures.
+
+- [ ] Hash string keys faster than byte-serial FNV-1a without losing encoding
+      independence or the leaf-streaming continuation that append hashing and the
+      rope fixtures rely on. Long Map, Set and property keys pay roughly one
+      dependent multiply per code unit.
+
+- [ ] Remove per-match allocations from RegExp execution. regress builds a fresh
+      backtracking executor for every exec, and each RegExp literal evaluation
+      allocates a compiled-pattern handle freed at finalization; together with
+      result arrays they dominate `primordial-string-regexp-projections`.
+
 - [ ] Investigate full-output checksum traversal and construction/replacement in
       the complete mixed-text pipeline. Use `scripts/profile-text-pipeline.ts`
       with its encoding, escape, and surrogate controls, then confirm candidate
@@ -482,6 +515,19 @@ contracts or investigates costs still visible after the string follow-ups.
 
 - [ ] Fix remaining RegExp @@replace protocol and coercion cases. Prefer shared
       replacement semantics over case-specific branches.
+
+- [ ] Set `RegExp.lastParen` from the last capture group. The legacy-features
+      proposal and V8 use the last element of the captured values, an empty String
+      when that group did not participate, for any group count; the runtime returns
+      the highest participating group up to `$9`, and `tests/local/regexp_cache.js`
+      asserts that (`/(a)(b)(c)?/` yields "b" instead of "").
+
+- [ ] Throw catchably when an inlined escaping stack object fails to materialize
+      inside `try`. In `tests/local/stack-object.js`, `failConditionalReturn` inlined
+      into the top-level `try` emits `mal_vm_create_object_shaped` without a throw
+      check, so the armed allocation failure surfaces later as an uncaught
+      "Out of memory" and both compiled cases of `tests/native/stack-object.test.ts`
+      fail.
 
 - [ ] Fix remaining arguments-object legacy caller and parameter-expression behavior.
       Cover strict, sloppy, mapped, and unmapped forms.

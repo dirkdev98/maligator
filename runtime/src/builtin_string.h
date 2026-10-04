@@ -48,29 +48,81 @@ typedef struct MalStringLeafReadCache {
     usize end;
     usize leaf_offset;
     u32 heap_epoch;
+    /** Consecutive leaf misses on `source` within one heap epoch. */
+    u32 misses;
 } MalStringLeafReadCache;
 
-static inline MalValue mal_builtin_string_char_code_at_cached_in_bounds(
+#define MAL_STRING_LEAF_READ_FLATTEN_MISSES 16u
+#define MAL_STRING_LEAF_READ_FLATTEN_CODE_UNITS ((usize) 1 << 20)
+
+/** Rope and slice tail of `mal_builtin_string_char_code_at_cached_in_bounds`. */
+MalValue mal_builtin_string_char_code_at_rope_in_bounds(
+    MalVm *vm, MalStringLeafReadCache *cache, MalValue this_value, usize position
+);
+
+/** Flat in-range reads stay in generated code, which compilers otherwise call out
+ * of line once a kernel carries its rope and conversion paths inline. */
+static inline __attribute__((always_inline)) bool mal_builtin_string_char_code_at_flat(
+    MalValue this_value, f64 position, MalValue *out
+) {
+    const MalString *string = mal_value_to_string(this_value);
+    // Truncating a non-negative in-range position is its ToIntegerOrInfinity.
+    if (string->storage < MAL_STRING_STORAGE_DEPENDENT && position >= 0 &&
+        position < (f64) string->length) {
+        MAL_PERF_COUNT(string_char_code_at_direct_hits);
+        *out = mal_value_from_i32(mal_string_flat_code_unit_at(string, (usize) position));
+        return true;
+    }
+    return false;
+}
+
+/** A read within the rope leaf the site's cache last resolved. */
+static inline __attribute__((always_inline)) bool mal_builtin_string_char_code_at_cached_leaf(
+    const MalVm *vm, const MalStringLeafReadCache *cache, MalValue this_value, usize position,
+    MalValue *out
+) {
+    // Sweep epochs protect unrooted leaf identities; payload addresses are reacquired each read.
+    if (cache->source != mal_value_to_string(this_value) || cache->heap_epoch != vm->heap.epoch ||
+        position < cache->start || position >= cache->end) {
+        return false;
+    }
+    MAL_PERF_COUNT(string_char_code_at_direct_hits);
+    *out = mal_value_from_i32(mal_string_flat_code_unit_at(
+        cache->leaf, cache->leaf_offset + position - cache->start));
+    return true;
+}
+
+static inline __attribute__((always_inline)) MalValue mal_builtin_string_char_code_at_cached_in_bounds(
     MalVm *vm, MalStringLeafReadCache *cache, MalValue this_value, usize position
 ) {
-    MalString *string = mal_value_to_string(this_value);
-    if (string->storage != MAL_STRING_STORAGE_CONS) {
-        return mal_builtin_string_char_code_at_in_bounds(this_value, position);
+    MalValue result;
+    if (mal_builtin_string_char_code_at_flat(this_value, (f64) position, &result) ||
+        mal_builtin_string_char_code_at_cached_leaf(vm, cache, this_value, position, &result)) {
+        return result;
     }
-    // Sweep epochs protect unrooted leaf identities; payload addresses are reacquired each read.
-    if (cache->heap_epoch != vm->heap.epoch || cache->source != string ||
-        position < cache->start || position >= cache->end) {
-        usize available;
-        mal_string_get_leaf_range(string, position, &cache->leaf, &cache->leaf_offset, &available);
-        cache->source = string;
-        cache->start = position;
-        cache->end = position + available;
-        cache->heap_epoch = vm->heap.epoch;
+    return mal_builtin_string_char_code_at_rope_in_bounds(vm, cache, this_value, position);
+}
+
+/** Every `mal_builtin_string_char_code_at_cached_number` case off the flat path. */
+MalValue mal_builtin_string_char_code_at_cached_number_slow(
+    MalVm *vm, MalStringLeafReadCache *cache, MalValue this_value, f64 position
+);
+
+/** `mal_builtin_string_char_code_at_number` for generated sites, which keep a leaf
+ * cache so repeated reads of one rope do not walk it from the root. */
+static inline __attribute__((always_inline)) MalValue mal_builtin_string_char_code_at_cached_number(
+    MalVm *vm, MalStringLeafReadCache *cache, MalValue this_value, f64 position
+) {
+    MalValue result;
+    if (mal_builtin_string_char_code_at_flat(this_value, position, &result)) return result;
+    // Cached leaves only cover in-range positions, so a hit needs no conversion.
+    if (position >= 0 && position < (f64) mal_string_length(mal_value_to_string(this_value))) {
+        if (mal_builtin_string_char_code_at_cached_leaf(vm, cache, this_value, (usize) position, &result)) {
+            return result;
+        }
+        return mal_builtin_string_char_code_at_rope_in_bounds(vm, cache, this_value, (usize) position);
     }
-    MalValue result = mal_value_from_i32(mal_string_flat_code_unit_at(
-        cache->leaf, cache->leaf_offset + position - cache->start));
-    MAL_PERF_COUNT(string_char_code_at_direct_hits);
-    return result;
+    return mal_builtin_string_char_code_at_cached_number_slow(vm, cache, this_value, position);
 }
 
 // Hits cannot allocate or reenter; misses leave output untouched without coercion.
@@ -110,12 +162,28 @@ MalCompletion mal_builtin_string_char_code_at_direct_in_bounds(
     MalStringLeafReadCache *leaf_cache
 );
 
-/** Exact %String.prototype.charCodeAt% invocation after locked primitive-String
- * property resolution was erased. Numeric positions use the semantic kernel;
- * coercive positions retain the complete builtin algorithm. */
-MalValue mal_builtin_string_char_code_at_known(
+MalValue mal_builtin_string_char_code_at_known_generic(
     MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count
 );
+
+/** Exact %String.prototype.charCodeAt% invocation after locked primitive-String
+ * property resolution was erased. Numeric positions use the semantic kernel inline;
+ * coercive positions retain the complete builtin algorithm. */
+static inline __attribute__((always_inline)) MalValue mal_builtin_string_char_code_at_known(
+    MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count,
+    MalStringLeafReadCache *leaf_cache
+) {
+    if (arg_count >= 1 && mal_value_is_string(this_value) && mal_ops_is_number(args[0])) {
+        return mal_builtin_string_char_code_at_cached_number(
+            vm, leaf_cache, this_value, mal_ops_number_as_f64(args[0]));
+    }
+    if (arg_count >= 0 && mal_value_is_string(this_value) &&
+        (arg_count == 0 || mal_ops_is_number(args[0]))) {
+        return mal_builtin_string_char_code_at_cached_number_slow(
+            vm, leaf_cache, this_value, arg_count == 0 ? 0 : mal_ops_number_as_f64(args[0]));
+    }
+    return mal_builtin_string_char_code_at_known_generic(vm, this_value, args, arg_count);
+}
 
 typedef enum MalStringSearchOp {
     MAL_STRING_SEARCH_INDEX_OF,

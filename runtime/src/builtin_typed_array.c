@@ -2441,7 +2441,7 @@ static bool mal_b64_read_last_chunk(MalVm *vm, MalValue options, MalB64LastChunk
  * illegal character / bad padding / extra bits (strict). When max_out is reached
  * mid-stream, decoding stops cleanly (for setFromBase64).
  */
-static bool mal_b64_decode(MalVm *vm, const c16 *s, usize len, bool url, MalB64LastChunk last_chunk, byte *out, usize max_out, usize *read_out, usize *written_out) {
+static bool mal_b64_decode(MalVm *vm, const MalStringSegment *s, usize len, bool url, MalB64LastChunk last_chunk, byte *out, usize max_out, usize *read_out, usize *written_out) {
     usize i = 0;
     usize written = 0;
     usize read = 0;
@@ -2456,7 +2456,7 @@ static bool mal_b64_decode(MalVm *vm, const c16 *s, usize len, bool url, MalB64L
     }
 
     while (i < len) {
-        c16 c = s[i];
+        c16 c = mal_string_segment_code_unit_at(s, i);
         if (mal_base64_is_ascii_whitespace(c)) {
             i++;
             continue;
@@ -2502,7 +2502,7 @@ static bool mal_b64_decode(MalVm *vm, const c16 *s, usize len, bool url, MalB64L
     if (nsext == 0) {
         // Only whitespace may remain (stray '=' is malformed).
         while (i < len) {
-            if (!mal_base64_is_ascii_whitespace(s[i])) {
+            if (!mal_base64_is_ascii_whitespace(mal_string_segment_code_unit_at(s, i))) {
                 *read_out = read;
                 *written_out = written;
                 mal_vm_throw_error(vm, MAL_INTRINSIC_SYNTAX_ERROR_PROTOTYPE, "Unexpected base64 padding");
@@ -2515,7 +2515,7 @@ static bool mal_b64_decode(MalVm *vm, const c16 *s, usize len, bool url, MalB64L
         return true;
     }
 
-    bool has_padding = i < len && s[i] == '=';
+    bool has_padding = i < len && mal_string_segment_code_unit_at(s, i) == '=';
     i32 produced = nsext == 2 ? 1 : 2;  // bytes a 2/3-sextet partial chunk yields
     i32 used_bits = produced * 8;
     u32 extra_mask = nsext == 1 ? 0 : (1u << (nsext * 6 - used_bits)) - 1;
@@ -2558,10 +2558,10 @@ static bool mal_b64_decode(MalVm *vm, const c16 *s, usize len, bool url, MalB64L
         }
         i32 needed_padding = 4 - nsext;
         i32 seen = 0;
-        while (seen < needed_padding && i < len && s[i] == '=') {
+        while (seen < needed_padding && i < len && mal_string_segment_code_unit_at(s, i) == '=') {
             i++;
             seen++;
-            while (i < len && mal_base64_is_ascii_whitespace(s[i])) i++;
+            while (i < len && mal_base64_is_ascii_whitespace(mal_string_segment_code_unit_at(s, i))) i++;
         }
         if (seen < needed_padding) {
             // Incomplete padding: stop-before-partial stops here; others error.
@@ -2577,7 +2577,7 @@ static bool mal_b64_decode(MalVm *vm, const c16 *s, usize len, bool url, MalB64L
         }
         // Exactly the needed padding: only whitespace may follow.
         while (i < len) {
-            if (!mal_base64_is_ascii_whitespace(s[i])) {
+            if (!mal_base64_is_ascii_whitespace(mal_string_segment_code_unit_at(s, i))) {
                 *read_out = read;
                 *written_out = written;
                 mal_vm_throw_error(vm, MAL_INTRINSIC_SYNTAX_ERROR_PROTOTYPE, "Unexpected character after base64 padding");
@@ -2607,7 +2607,7 @@ static bool mal_b64_decode(MalVm *vm, const c16 *s, usize len, bool url, MalB64L
 
 /** Decode hex `s` into `out` (cap max_out). Throws SyntaxError on a non-hex
  * character or odd length. */
-static bool mal_hex_decode(MalVm *vm, const c16 *s, usize len, byte *out, usize max_out, usize *read_out, usize *written_out) {
+static bool mal_hex_decode(MalVm *vm, const MalStringSegment *s, usize len, byte *out, usize max_out, usize *read_out, usize *written_out) {
     if (len % 2 != 0) {
         *read_out = 0;
         *written_out = 0;
@@ -2620,8 +2620,8 @@ static bool mal_hex_decode(MalVm *vm, const c16 *s, usize len, byte *out, usize 
         if (written + 1 > max_out) {
             break;
         }
-        i32 hi = mal_hex_decode_digit(s[i]);
-        i32 lo = mal_hex_decode_digit(s[i + 1]);
+        i32 hi = mal_hex_decode_digit(mal_string_segment_code_unit_at(s, i));
+        i32 lo = mal_hex_decode_digit(mal_string_segment_code_unit_at(s, i + 1));
         if (hi < 0 || lo < 0) {
             // Commit the bytes decoded so far (setFromHex writes up to the error).
             *read_out = i;
@@ -2692,12 +2692,12 @@ static MalValue mal_ta_from_base64(MalVm *vm, MalValue this_value, const MalValu
     }
 
     usize len = mal_string_length(string);
-    const c16 *units = mal_string_code_units(string);
+    MalStringSegment units = mal_string_flat_segment(string);
     usize cap = len / 4 * 3 + 3;
     byte *bytes = malloc(cap);
     usize read;
     usize written;
-    if (!mal_b64_decode(vm, units, len, url, last_chunk, bytes, cap, &read, &written)) {
+    if (!mal_b64_decode(vm, &units, len, url, last_chunk, bytes, cap, &read, &written)) {
         free(bytes);
         return mal_value_new_undefined();
     }
@@ -2717,11 +2717,11 @@ static MalValue mal_ta_from_hex(MalVm *vm, MalValue this_value, const MalValue *
         return mal_value_new_undefined();
     }
     usize len = mal_string_length(string);
-    const c16 *units = mal_string_code_units(string);
+    MalStringSegment units = mal_string_flat_segment(string);
     byte *bytes = malloc(len / 2 + 1);
     usize read;
     usize written;
-    if (!mal_hex_decode(vm, units, len, bytes, len / 2 + 1, &read, &written)) {
+    if (!mal_hex_decode(vm, &units, len, bytes, len / 2 + 1, &read, &written)) {
         free(bytes);
         return mal_value_new_undefined();
     }
@@ -2843,12 +2843,12 @@ static MalValue mal_ta_set_from_base64(MalVm *vm, MalValue this_value, const Mal
 
     u32 target_length = mal_typed_array_object_length(array);
     usize len = mal_string_length(string);
-    const c16 *units = mal_string_code_units(string);
+    MalStringSegment units = mal_string_flat_segment(string);
     usize cap = len / 4 * 3 + 3;
     byte *bytes = malloc(cap);
     usize read;
     usize written;
-    bool ok = mal_b64_decode(vm, units, len, url, last_chunk, bytes, target_length, &read, &written);
+    bool ok = mal_b64_decode(vm, &units, len, url, last_chunk, bytes, target_length, &read, &written);
     // Commit the successfully-decoded bytes even when a later chunk errors.
     if (written > 0) {
         mal_typed_array_copy_bytes(array->buffer->data + array->byte_offset,
@@ -2882,11 +2882,11 @@ static MalValue mal_ta_set_from_hex(MalVm *vm, MalValue this_value, const MalVal
     }
     u32 target_length = mal_typed_array_object_length(array);
     usize len = mal_string_length(string);
-    const c16 *units = mal_string_code_units(string);
+    MalStringSegment units = mal_string_flat_segment(string);
     byte *bytes = malloc(len / 2 + 1);
     usize read;
     usize written;
-    bool ok = mal_hex_decode(vm, units, len, bytes, target_length, &read, &written);
+    bool ok = mal_hex_decode(vm, &units, len, bytes, target_length, &read, &written);
     if (written > 0) {
         mal_typed_array_copy_bytes(array->buffer->data + array->byte_offset,
             array->buffer->shared_memory != nullptr, bytes, false, written);

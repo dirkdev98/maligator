@@ -52,6 +52,38 @@ MalCompletion mal_builtin_array_push_direct(
     bool *exact_hit_out
 );
 
+/**
+ * Guarded dispatch for a direct `.pop()`, `.shift()` or `.unshift(...)` site.
+ * The intrinsic method on an ordinary dense Array whose prototype chain holds no
+ * indexed properties applies its dense fast path; any other case returns false
+ * without mutating, and the `_direct` entry then makes the ordinary cached call.
+ */
+bool mal_builtin_array_deque_try_direct(
+    MalVm *vm,
+    MalGuardedBuiltinCallOp operation,
+    MalValue callee,
+    MalValue this_value,
+    const MalValue *args,
+    i32 arg_count,
+    MalValue *result_out
+);
+
+MalCompletion mal_builtin_array_deque_direct(
+    MalVm *vm,
+    MalCallCache *fallback_cache,
+    MalGuardedBuiltinCallOp operation,
+    MalValue callee,
+    MalValue this_value,
+    const MalValue *args,
+    i32 arg_count
+);
+
+/**
+ * The `__arrayIterationEligible` guard over its four arguments: the loaded
+ * method, the receiver, the method id and a callable. Side-effect free.
+ */
+bool mal_builtin_array_iteration_eligible_values(MalVm *vm, const MalValue *args);
+
 bool mal_builtin_array_at_try_direct(
     MalVm *vm,
     MalValue callee,
