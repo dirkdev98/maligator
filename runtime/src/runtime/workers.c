@@ -424,6 +424,8 @@ struct MalWorkerDomain {
     u64 wire_bytes;
     bool counted;
     MalDevelopmentAssets *assets;
+    // Dynamic domains retain their host initializer without retaining it in static workers.
+    MalHostInstaller initialize_host;
     bool has_context;
     bool web_platform;
     bool node;
@@ -2167,8 +2169,9 @@ static void *worker_thread_main(void *arg) {
         ? (MalHostLaunchContext) {.argc = thread->application->argc, .argv = thread->application->argv, .script_path = thread->application->image->entry_path}
         : (MalHostLaunchContext) {.argc = 1, .argv = &argv0, .script_path = thread->entry->href};
     if (installed) {
-        if (thread->application != nullptr || (thread->domain != nullptr && thread->domain->assets != nullptr)) {
-            mal_host_install_maligator(vm, nullptr, 0, &launch);
+        if (thread->domain != nullptr && thread->domain->initialize_host != nullptr
+            && (thread->application != nullptr || thread->domain->assets != nullptr)) {
+            thread->domain->initialize_host(vm, nullptr, 0, &launch);
         }
         mal_vm_run_host_installs(vm, &launch);
     } else {
@@ -2189,7 +2192,7 @@ static void *worker_thread_main(void *arg) {
                 MalWorkerEntry *fragment = &bundle->entries[index + 1];
                 const char *error = "invalid application fragment";
                 MalLoadedRuntimeImage *next = mal_runtime_image_load_with_host_resolver(
-                    (const u8 *) fragment->wire, fragment->wire_size, &error, mal_host_resolve_installer);
+                    (const u8 *) fragment->wire, fragment->wire_size, &error, fragment->resolve_installer);
                 if (next == nullptr) { mal_vm_throw_error(vm, MAL_INTRINSIC_ERROR_PROTOTYPE, error); break; }
                 const MalRuntimeImage *program = mal_loaded_runtime_image_get(next);
                 i32 entry_index = mal_vm_splice_runtime_image(vm, program);
@@ -3670,6 +3673,7 @@ static MalValue application_load(MalVm *vm, MalValue self, const MalValue *args,
         free(path);
     } else image->domain = mal_worker_domain_new(nullptr, 0, nullptr);
     if (image->domain == nullptr) goto failed;
+    image->domain->initialize_host = mal_host_install_maligator;
     image->domain->has_context = true;
     image->domain->web_platform = web;
     image->domain->node = node;

@@ -697,7 +697,7 @@
 	},
 	{
 		"file": "runtime/workers.c",
-		"sha256": "c00b4b13de69b12986c70d8c276f0e0d7ba23d58918dffab047d1f5120464d81"
+		"sha256": "c356bc1455d6b999ccb4f6384fdb688a00bc6648c6df012cc564611cf89362af"
 	},
 	{
 		"file": "runtime/workers.h",

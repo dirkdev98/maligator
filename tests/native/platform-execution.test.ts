@@ -1,8 +1,10 @@
 import { spawnSync } from "node:child_process";
+import { hash } from "node:crypto";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import type { ApplicationImageDescriptor } from "../../src/application-images.ts";
 import { buildDerivationFromConfig, resolveBuildConfig } from "../../src/build-config.ts";
 import { parseCliArgs } from "../../src/cli.ts";
 import { compileEntrypoint } from "../../src/compiler/pipeline/compile-program.ts";
@@ -32,7 +34,9 @@ let deadBinary: string;
 beforeAll(() => {
 	const derivation = buildDerivationFromConfig(config);
 	runner = buildDevelopmentRunner(
-		resolveNativeBuildContext({ features: derivation.features }),
+		resolveNativeBuildContext({
+			features: { ...derivation.features, developmentApiEnabled: true },
+		}),
 		false,
 		derivation.cacheSuffix,
 	).binaryPath;
@@ -141,5 +145,68 @@ describe("prepared platform execution data", () => {
 		expect(result.signal, result.stderr).toBeNull();
 		expect(result.status, result.stderr || result.stdout).toBe(0);
 		expect(result.stdout).toContain("CONTEXTS dev/test");
+	});
+
+	it("installs the process context in each fragment of a supervised application", () => {
+		const entryPath = path.join(root, "supervised.mjs");
+		const sources = [
+			'import { execution } from "maligator:process"; globalThis.first = execution;',
+			'import { execution } from "maligator:process"; if (execution !== globalThis.first || !Object.isFrozen(execution.config.engine)) throw new Error("supervised context changed"); mal._applicationResult(execution);',
+		];
+		const descriptor: ApplicationImageDescriptor = {
+			schema: 1,
+			entryPath,
+			webPlatform: config.surface.webPlatform,
+			node: config.surface.node,
+			engine: {
+				primordials: config.engine.primordials,
+				eval: config.engine.eval === true,
+				realms: config.engine.realms,
+				regexp: config.engine.regexp,
+				temporal: config.engine.temporal,
+				intl: config.engine.intl.enabled,
+			},
+			wires: sources.map((entrySource, index) => {
+				const image = compileEntrypoint(path.join(root, `supervised-${index}.mjs`), {
+					entrySource,
+					entryGoal: "module",
+					buildConfig: config,
+					execution: snapshots[0],
+				});
+				const bytes = serializeRuntimeImage(image.runtime);
+				const wire = path.join(root, `supervised-${index}.wire`);
+				writeFileSync(wire, bytes);
+				return { path: wire, sha256: hash("sha256", bytes, "hex") };
+			}),
+		};
+		const control = compileEntrypoint(path.join(root, "supervisor.mjs"), {
+			entrySource: `const handle = mal._loadApplicationImage(${JSON.stringify(descriptor)}); const app = mal._launchApplicationImage(handle, {argv: ["host", ${JSON.stringify(entryPath)}], exitOnResult: true}); const exit = await app.closed; mal._releaseApplicationImage(handle); if (exit.reason !== "completed" || !exit.hasResult) throw new Error("supervised application failed"); console.log("SUPERVISED " + JSON.stringify(exit.result));`,
+			entryGoal: "module",
+			buildConfig: config,
+		});
+		const wire = path.join(root, "supervisor.wire");
+		writeFileSync(wire, serializeRuntimeImage(control.runtime));
+		const assets = path.join(root, "supervisor.mala");
+		const emptyManifest = Buffer.alloc(12);
+		emptyManifest.write("MALA");
+		emptyManifest.writeUInt32LE(1, 4);
+		writeFileSync(assets, emptyManifest);
+		const result = spawnSync(
+			runner,
+			["--maligator-internal-run-wires-assets", "1", assets, entryPath, wire],
+			{
+				encoding: "utf8",
+				timeout: 30_000,
+				killSignal: "SIGKILL",
+				env: { ...process.env, ...STRESS_ENV },
+			},
+		);
+		expect(result.signal, result.stderr).toBeNull();
+		expect(result.status, result.stderr || result.stdout).toBe(0);
+		const line = result.stdout
+			.split("\n")
+			.find((entry) => entry.startsWith("SUPERVISED "));
+		expect(line).toBeDefined();
+		expect(JSON.parse(line!.slice("SUPERVISED ".length))).toEqual(snapshots[0]);
 	});
 });
