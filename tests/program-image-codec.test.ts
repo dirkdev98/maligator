@@ -7,9 +7,12 @@ import {
 } from "../src/compiler/target/compiler-artifact-codec.ts";
 import {
 	MAX_STRING_CODE_UNITS,
+	deserializeRuntimeImage,
 	readRuntimeImage,
+	serializeRuntimeImage,
 	Writer,
 	WIRE_OPCODES,
+	WIRE_VERSION,
 } from "../src/compiler/target/program-image-codec.ts";
 import { VM_GUARDED_BUILTIN_OPERATIONS } from "../src/compiler/target/program-image.ts";
 import type {
@@ -2044,7 +2047,7 @@ describe("program-image-codec", () => {
 		expect(Array.from(buf2)).toEqual(Array.from(buf1));
 	});
 
-	it("rejects stale wire versions", () => {
+	it("rejects stale compiler artifacts before interpreting primordial indices", () => {
 		const buffer = serializeCompilerArtifact(definition);
 		new DataView(buffer.buffer, buffer.byteOffset, buffer.byteLength).setUint32(
 			4,
@@ -2053,6 +2056,17 @@ describe("program-image-codec", () => {
 		);
 		expect(() => deserializeCompilerArtifact(buffer)).toThrow(
 			`version ${COMPILER_ARTIFACT_VERSION - 1}, expected ${COMPILER_ARTIFACT_VERSION}`,
+		);
+	});
+	it("rejects stale runtime wires before interpreting primordial indices", () => {
+		const buffer = serializeRuntimeImage(definition.runtime);
+		new DataView(buffer.buffer, buffer.byteOffset, buffer.byteLength).setUint32(
+			4,
+			WIRE_VERSION - 1,
+			true,
+		);
+		expect(() => deserializeRuntimeImage(buffer)).toThrow(
+			`version ${WIRE_VERSION - 1}, expected ${WIRE_VERSION}`,
 		);
 	});
 

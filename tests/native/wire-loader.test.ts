@@ -14,6 +14,7 @@ import { knownBuiltinErrorNames } from "../../src/compiler/shared/known-builtin-
 import {
 	serializeRuntimeImage,
 	WIRE_OPCODES,
+	WIRE_VERSION,
 } from "../../src/compiler/target/program-image-codec.ts";
 import {
 	encodeVmValueOperand,
@@ -147,6 +148,15 @@ describe("wire loader side-data validation", () => {
 		expect(bytes.indexOf(payload, offset + payload.length)).toBe(-1);
 		return offset;
 	}
+	it("rejects runtime wires from the previous primordial index ABI", () => {
+		const wire = serializeRuntimeImage(definition, { debugInfo: false });
+		new DataView(wire.buffer, wire.byteOffset, wire.byteLength).setUint32(
+			4,
+			WIRE_VERSION - 1,
+			true,
+		);
+		rejectsWire("stale-primordial-abi", wire);
+	});
 	it("interns empty wire strings before installing language intrinsics", () => {
 		acceptsWire(
 			"empty-string-constant",
