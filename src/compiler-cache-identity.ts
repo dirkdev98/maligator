@@ -1,7 +1,8 @@
 import { hash } from "node:crypto";
-import { mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 import * as path from "node:path";
 import { artifactProducer } from "./artifact-store.ts";
+import { writeFileAtomically } from "./atomic-file.ts";
 import type { ResolvedBuildConfig } from "./build-config.ts";
 import { maligatorCacheDirectory } from "./cache-root.ts";
 import { lexicalCodeMask } from "./compiler/frontend/compact-type-strip.ts";
@@ -213,10 +214,7 @@ export function compilerProducerImplementationDigestForRoot(
 		}
 	}
 	try {
-		mkdirSync(path.dirname(manifestPath), { recursive: true });
-		const temporary = `${manifestPath}.tmp-${process.pid}`;
-		writeFileSync(temporary, `${JSON.stringify({ schema: 2, entries })}\n`);
-		renameSync(temporary, manifestPath);
+		writeFileAtomically(manifestPath, `${JSON.stringify({ schema: 2, entries })}\n`);
 	} catch {
 		// A read-only cache must not make compilation unavailable.
 	}

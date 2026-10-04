@@ -1,6 +1,7 @@
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import * as path from "node:path";
 import type { ESTree } from "meriyah";
+import { writeFileAtomically } from "../atomic-file.ts";
 import type { ResolvedBuildConfig } from "../build-config.ts";
 import { assertEvalPolicy, assertRegexpPolicy } from "../build-config.ts";
 import { maligatorCacheDirectory } from "../cache-root.ts";
@@ -147,13 +148,6 @@ function readManifest(file: string): FragmentManifest | undefined {
 	} catch {
 		return undefined;
 	}
-}
-
-function publish(file: string, contents: string | Uint8Array): void {
-	mkdirSync(path.dirname(file), { recursive: true });
-	const temporary = `${file}.tmp-${process.pid}`;
-	writeFileSync(temporary, contents);
-	renameSync(temporary, file);
 }
 
 function sameEntries(left: Array<string>, right: Array<string>): boolean {
@@ -420,7 +414,7 @@ function compileArtifact(
 	if (artifact === undefined) {
 		throw new Error(`test artifact is missing after publication: ${wireDigest}`);
 	}
-	publish(file, `${JSON.stringify({ schema: 1, artifact })}\n`);
+	writeFileAtomically(file, `${JSON.stringify({ schema: 1, artifact })}\n`);
 	return { key, ...artifact, wire, cache: "miss" };
 }
 
@@ -691,7 +685,7 @@ function publishManifest(
 	requested: Array<string>,
 ): void {
 	const contents = `${JSON.stringify(manifest)}\n`;
-	publish(manifestPath(root, requested, manifest.identity), contents);
+	writeFileAtomically(manifestPath(root, requested, manifest.identity), contents);
 	if (manifest.entries.length === 1) return;
 	for (const entry of manifest.entries) {
 		const alias = manifestPath(root, [entry], manifest.identity);
@@ -699,7 +693,7 @@ function publishManifest(
 		if (existing?.schema === FRAGMENT_SCHEMA && existing.entries.length === 1) {
 			continue;
 		}
-		publish(alias, contents);
+		writeFileAtomically(alias, contents);
 	}
 }
 

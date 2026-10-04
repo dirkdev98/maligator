@@ -10,6 +10,7 @@ import {
 	writeFileSync,
 } from "node:fs";
 import * as path from "node:path";
+import { writeFileAtomically } from "./atomic-file.ts";
 import { BuildConfigError } from "./build-config.ts";
 import type { AssetInclusion } from "./build-config.ts";
 import { legacyLocaleNameComparator, walkDirectoryTree } from "./file-tree.ts";
@@ -180,11 +181,9 @@ function fileRow(
 	const size = snapshot?.size ?? bytes!.length;
 	let snapshotPath: string;
 	if (options === undefined) {
-		mkdirSync(stagingDirectory, { recursive: true });
-		// A PID-qualified snapshot avoids concurrent writers while guaranteeing that
-		// #embed later observes the exact bytes whose digest and length were recorded.
+		// #embed must observe the complete bytes whose digest and length were recorded.
 		snapshotPath = path.join(stagingDirectory, `${digest}-${process.pid}`);
-		writeFileSync(snapshotPath, bytes!);
+		writeFileAtomically(snapshotPath, bytes!);
 	} else {
 		snapshotPath = cachedSnapshot(sourcePath, digest, size, options.cacheDirectory);
 	}

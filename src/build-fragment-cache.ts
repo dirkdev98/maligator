@@ -1,13 +1,7 @@
-import {
-	existsSync,
-	mkdirSync,
-	readFileSync,
-	renameSync,
-	statSync,
-	writeFileSync,
-} from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import * as path from "node:path";
 import type { ESTree } from "meriyah";
+import { writeFileAtomically } from "./atomic-file.ts";
 import type { ResolvedBuildConfig } from "./build-config.ts";
 import { assertEvalPolicy, assertRegexpPolicy } from "./build-config.ts";
 import type { BuildFrontendPhases } from "./build-frontend-cache.ts";
@@ -157,13 +151,6 @@ export interface CompileBuildFragmentsOptions {
 
 function cacheRoot(override: string | undefined): string {
 	return path.resolve(override ?? CACHE_DIRECTORY);
-}
-
-function publish(file: string, contents: string): void {
-	mkdirSync(path.dirname(file), { recursive: true });
-	const temporary = `${file}.tmp-${process.pid}`;
-	writeFileSync(temporary, contents);
-	renameSync(temporary, file);
 }
 
 function importedName(specifier: ESTree.ImportSpecifier): string {
@@ -554,7 +541,7 @@ function compileArtifact(
 	if (runtimeArtifact === undefined || compilerArtifact === undefined) {
 		throw new Error("fragment artifacts are missing after publication");
 	}
-	publish(
+	writeFileAtomically(
 		mappingPath,
 		`${JSON.stringify({ schema: 3, runtimeArtifact, compilerArtifact, diagnostics })}\n`,
 	);
@@ -720,7 +707,7 @@ function validateLinkage(
 	assertEvalPolicy(options.config, collectDisallowedEvalUsage(semantic));
 	assertRegexpPolicy(options.config, collectDisallowedRegexpUsage(semantic));
 	options.phases.semanticMs += Date.now() - startedAt;
-	publish(marker, `${key}\n`);
+	writeFileAtomically(marker, `${key}\n`);
 }
 
 function prepareParallelLinkageValidation(
@@ -746,7 +733,7 @@ function prepareParallelLinkageValidation(
 		resultPath,
 	};
 	const requestPath = path.join(root, "requests", `${key}.linkage-request.json`);
-	publish(requestPath, `${JSON.stringify(request)}\n`);
+	writeFileAtomically(requestPath, `${JSON.stringify(request)}\n`);
 	return {
 		task: ["--maligator-internal-linkage-validation", requestPath],
 		resultPath,
@@ -818,13 +805,13 @@ export function validateBuildFragmentRequest(
 			options,
 			plans,
 		);
-		publish(
+		writeFileAtomically(
 			request.resultPath,
 			`${JSON.stringify({ schema: 1, ok: true } satisfies LinkageValidationResult)}\n`,
 		);
 	} catch (error) {
 		if (!(error instanceof UnsupportedBuildFragmentsError)) throw error;
-		publish(
+		writeFileAtomically(
 			request.resultPath,
 			`${JSON.stringify({ schema: 1, ok: false, error: error.message } satisfies LinkageValidationResult)}\n`,
 		);

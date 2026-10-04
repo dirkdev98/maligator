@@ -1,11 +1,11 @@
 import { execFileSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { readFileSync, rmSync } from "node:fs";
 import * as path from "node:path";
 import type { NativeBuildContext } from "./native-build-context.ts";
 import { buildWorkerCount } from "./worker-budget.ts";
 
 const DEFAULT_NATIVE_BUILD_JOBS = 8;
-let resourceReportSerial = 0;
 
 export interface NativeCommandOptions {
 	cwd?: string;
@@ -57,7 +57,7 @@ function parallelShellScript(
 function resourceReportPath(context: NativeBuildContext): string {
 	return path.join(
 		context.cacheDirectory,
-		`.native-resource-${process.pid}-${resourceReportSerial++}.txt`,
+		`.native-resource-${process.pid}-${randomUUID()}.txt`,
 	);
 }
 

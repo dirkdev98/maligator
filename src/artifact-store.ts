@@ -12,6 +12,7 @@ import {
 	writeFileSync,
 } from "node:fs";
 import * as path from "node:path";
+import { writeFileAtomically } from "./atomic-file.ts";
 import { processIsAlive } from "./process-state.ts";
 import { MALIGATOR_VERSION } from "./version.ts";
 
@@ -151,18 +152,6 @@ function publishFileAtomically(source: string, destination: string): void {
 	}
 }
 
-function publishTextAtomically(contents: string, destination: string): void {
-	const directory = path.dirname(destination);
-	mkdirSync(directory, { recursive: true });
-	const temporary = path.join(directory, `.publish-${process.pid}-${randomUUID()}`);
-	try {
-		writeFileSync(temporary, contents, { flag: "wx" });
-		renameSync(temporary, destination);
-	} finally {
-		rmSync(temporary, { force: true });
-	}
-}
-
 export function readArtifactAction(
 	root: string,
 	stage: string,
@@ -255,9 +244,9 @@ export function publishArtifactAction(
 		createdAt: Date.now(),
 		outputs,
 	};
-	publishTextAtomically(
-		`${JSON.stringify(manifest)}\n`,
+	writeFileAtomically(
 		actionManifestPath(root, stage, producer, action),
+		`${JSON.stringify(manifest)}\n`,
 	);
 	const published = readArtifactAction(root, stage, producer, action);
 	if (published === undefined)

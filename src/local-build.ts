@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import {
 	constants,
 	copyFileSync,
@@ -40,6 +41,7 @@ import { generatedHeaderDependencyHash, runtimeHeaderHash } from "./runtime-buil
 import { toolArguments } from "./toolchain.ts";
 
 const BUILD_DIRECTORY = maligatorBuildDirectory();
+const RUNNER_WORK_ID = randomUUID();
 const GENERATED_OBJECT_PRODUCER = artifactProducer("generated-object", 4, "cc");
 const GENERATED_OBJECT_COST_PRODUCER = artifactProducer(
 	"generated-object-cost",
@@ -53,7 +55,7 @@ function runnerWorkDirectory(context: NativeBuildContext): string {
 		context.cacheDirectory,
 		"work",
 		"local-runner",
-		String(process.pid),
+		`${process.pid}-${RUNNER_WORK_ID}`,
 		...(context.toolchain.cross === true ? [context.toolchain.rustTarget] : []),
 	);
 }

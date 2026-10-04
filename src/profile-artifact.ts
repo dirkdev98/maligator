@@ -1,6 +1,7 @@
 import { hash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import * as path from "node:path";
+import { writeFileAtomically } from "./atomic-file.ts";
 import type { CoreOptimizationPlan } from "./compiler/core/core-ir-regions.ts";
 import type { CoreOptimizationReport } from "./compiler/core/core-optimization-report.ts";
 import type { CompilerFactFlowReport } from "./compiler/shared/compiler-diagnostics.ts";
@@ -930,12 +931,10 @@ function findings(
 }
 
 function atomicJson(file: string, value: unknown, compact = false): void {
-	const temporary = `${file}.tmp-${process.pid}`;
-	writeFileSync(
-		temporary,
+	writeFileAtomically(
+		file,
 		`${JSON.stringify(value, undefined, compact ? undefined : 2)}\n`,
 	);
-	renameSync(temporary, file);
 }
 
 function profileQuality(

@@ -1,5 +1,6 @@
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import * as path from "node:path";
+import { writeFileAtomically } from "../atomic-file.ts";
 import type { ResolvedBuildConfig } from "../build-config.ts";
 import { assertEvalPolicy, assertRegexpPolicy } from "../build-config.ts";
 import { maligatorCacheDirectory } from "../cache-root.ts";
@@ -406,20 +407,13 @@ function dependencyIdentities(
 	return dependencies;
 }
 
-function publish(filePath: string, contents: string | Uint8Array): void {
-	mkdirSync(path.dirname(filePath), { recursive: true });
-	const temporary = `${filePath}.tmp-${process.pid}`;
-	writeFileSync(temporary, contents);
-	renameSync(temporary, filePath);
-}
-
 function publishManifest(
 	root: string,
 	manifest: TestCacheManifest,
 	requestedEntries: Array<string>,
 ): void {
 	const contents = `${JSON.stringify(manifest)}\n`;
-	publish(manifestPath(root, requestedEntries, manifest.identity), contents);
+	writeFileAtomically(manifestPath(root, requestedEntries, manifest.identity), contents);
 	if (manifest.entries.length === 1) return;
 	for (const entry of manifest.entries) {
 		const aliasPath = manifestPath(root, [entry], manifest.identity);
@@ -427,7 +421,7 @@ function publishManifest(
 		if (existing?.schema === TEST_CACHE_SCHEMA && existing.entries.length === 1) {
 			continue;
 		}
-		publish(aliasPath, contents);
+		writeFileAtomically(aliasPath, contents);
 	}
 }
 
@@ -529,7 +523,7 @@ export function compileTestImage(options: CompileTestImageOptions): CompiledTest
 		wire = serializeRuntimeImage(programImage.runtime);
 		phases.serializeMs = Date.now() - serializeStartedAt;
 		const cachedPath = cacheFrontendWire(wire, artifactRoot);
-		publish(
+		writeFileAtomically(
 			referencePath,
 			`${JSON.stringify({ digest: path.basename(cachedPath, ".malw") })}\n`,
 		);

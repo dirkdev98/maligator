@@ -1,5 +1,6 @@
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import * as path from "node:path";
+import { writeFileAtomically } from "./atomic-file.ts";
 import type { ResolvedBuildConfig } from "./build-config.ts";
 import { assertEvalPolicy, assertRegexpPolicy } from "./build-config.ts";
 import { maligatorCacheDirectory } from "./cache-root.ts";
@@ -102,13 +103,6 @@ function cacheRoot(override: string | undefined): string {
 	return override === undefined
 		? path.resolve(CACHE_DIRECTORY)
 		: path.resolve(override, "dependency-fragments");
-}
-
-function publish(file: string, contents: string): void {
-	mkdirSync(path.dirname(file), { recursive: true });
-	const temporary = `${file}.tmp-${process.pid}`;
-	writeFileSync(temporary, contents);
-	renameSync(temporary, file);
 }
 
 export function isExternalModule(file: string): boolean {
@@ -352,7 +346,10 @@ function compileIsland(
 	if (artifact === undefined) {
 		throw new Error(`dependency artifact is missing after publication: ${wireDigest}`);
 	}
-	publish(mappingPath, `${JSON.stringify({ schema: 2, artifact, diagnostics })}\n`);
+	writeFileAtomically(
+		mappingPath,
+		`${JSON.stringify({ schema: 2, artifact, diagnostics })}\n`,
+	);
 	return { key, targets, ...artifact, wire, diagnostics, cache: "miss" };
 }
 
@@ -369,7 +366,7 @@ function compileWithWorkers(
 	const startedAt = Date.now();
 	const commands = requests.map((request) => {
 		const file = requestPath(root, request);
-		publish(file, `${JSON.stringify(request)}\n`);
+		writeFileAtomically(file, `${JSON.stringify(request)}\n`);
 		return {
 			tool: worker.tool,
 			args: [...worker.args, "--maligator-internal-dependency-fragment", file],
