@@ -2189,7 +2189,7 @@ static void *worker_thread_main(void *arg) {
                 MalWorkerEntry *fragment = &bundle->entries[index + 1];
                 const char *error = "invalid application fragment";
                 MalLoadedRuntimeImage *next = mal_runtime_image_load_with_host_resolver(
-                    fragment->wire, fragment->wire_size, &error, mal_host_resolve_installer);
+                    (const u8 *) fragment->wire, fragment->wire_size, &error, mal_host_resolve_installer);
                 if (next == nullptr) { mal_vm_throw_error(vm, MAL_INTRINSIC_ERROR_PROTOTYPE, error); break; }
                 const MalRuntimeImage *program = mal_loaded_runtime_image_get(next);
                 i32 entry_index = mal_vm_splice_runtime_image(vm, program);
@@ -3706,14 +3706,14 @@ static MalValue application_load(MalVm *vm, MalValue self, const MalValue *args,
         MalSha256 hash;
         u8 actual[32]; byte hex[64];
         mal_sha256_init(&hash);
-        mal_sha256_update(&hash, entry->wire, entry->wire_size);
+        mal_sha256_update(&hash, (const u8 *) entry->wire, entry->wire_size);
         mal_sha256_final(&hash, actual);
-        mal_hex_encode_lower(actual, sizeof(actual), hex);
+        mal_hex_encode_lower((const byte *) actual, sizeof(actual), hex);
         bool matches = digest != nullptr && strlen(digest) == 64 && memcmp(digest, hex, 64) == 0;
         free(digest);
         if (!matches) goto failed;
         const char *error = "invalid wire";
-        MalLoadedRuntimeImage *check = mal_runtime_image_load_with_host_resolver(entry->wire, entry->wire_size, &error, mal_host_resolve_installer);
+        MalLoadedRuntimeImage *check = mal_runtime_image_load_with_host_resolver((const u8 *) entry->wire, entry->wire_size, &error, mal_host_resolve_installer);
         if (check == nullptr) goto failed;
         mal_loaded_runtime_image_free(check);
         entry->href = image->entry_path;
@@ -3830,6 +3830,44 @@ static MalValue application_ready(MalVm *vm, MalValue self, const MalValue *args
     return mal_value_new_boolean(mal_workers_application_ready(vm));
 }
 
+static MalValue application_resources(MalVm *vm, MalValue self, const MalValue *args, i32 argc,
+    MalValue nt, MalValue callee) {
+    (void) self; (void) args; (void) argc; (void) nt; (void) callee;
+    if (!mal_workers_install(vm)) {
+        throw_type(vm, "application resources require this isolate's attached host");
+        return mal_value_new_undefined();
+    }
+    if (thrown(vm)) return mal_value_new_undefined();
+    Isolate *iso = g_isolate;
+    urls_prune(iso);
+    u32 loaded = 0, applications = 0, workers = 0;
+    for (ApplicationHandle *handle = iso->applications; handle != nullptr; handle = handle->next) {
+        if (handle->image != nullptr) loaded++;
+    }
+    for (WorkerRecord *worker = iso->workers; worker != nullptr; worker = worker->next) {
+        if (worker->joined) continue;
+        if (worker->thread->application != nullptr) applications++;
+        else workers++;
+    }
+    // Process fields are independent atomic samples; bytes exclude root wires and assets.
+    MalWorkerDomainUsage process = mal_worker_domain_usage();
+    const char *names[] = {"loadedImages", "runningApplications", "ownedWorkers",
+        "processWorkers", "processImageDomains", "processWorkerWireBytes"};
+    f64 values[] = {loaded, applications, workers, mal_workers_live_count(),
+        process.live_domains, (f64) process.wire_bytes};
+    MalValue result = mal_value_from_object(mal_intrinsic_new_object(vm));
+    MalRootSpan root;
+    mal_gc_root(&root, &result, 1);
+    MalObject *object = mal_value_to_object(result);
+    for (usize index = 0; index < countof(names); index++) {
+        mal_intrinsic_define_data(vm, object, names[index],
+            mal_value_from_f64(values[index]), MAL_PROPERTY_ENUMERABLE);
+    }
+    mal_object_set_integrity_level(object, true);
+    mal_gc_unroot(&root);
+    return result;
+}
+
 void mal_workers_install_application_api(MalVm *vm, MalObject *mal) {
     mal_intrinsic_define_method_n(vm, mal, "_loadApplicationImage", 1, application_load);
     mal_intrinsic_define_method_n(vm, mal, "_launchApplicationImage", 2, application_launch);
@@ -3837,5 +3875,6 @@ void mal_workers_install_application_api(MalVm *vm, MalObject *mal) {
     mal_intrinsic_define_method_n(vm, mal, "_applicationData", 0, application_data);
     mal_intrinsic_define_method_n(vm, mal, "_applicationResult", 1, application_result);
     mal_intrinsic_define_method_n(vm, mal, "_applicationReady", 0, application_ready);
+    mal_intrinsic_define_method_n(vm, mal, "_applicationResources", 0, application_resources);
 }
 #endif

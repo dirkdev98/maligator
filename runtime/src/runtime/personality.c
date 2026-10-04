@@ -66,6 +66,10 @@ void mal_runtime_personality_install(MalVm *vm, bool web_platform, bool node) {
         mal_fetch_install(vm, global_this);
         mal_events_install(vm, global_this);
         mal_web_globals_install(vm, global_this);
+    }
+#endif
+#if MAL_WEB_PLATFORM || MAL_NODE
+    if (web_platform || node) {
         mal_readable_stream_install(vm, global_this);
         mal_writable_stream_install(vm, global_this);
     }

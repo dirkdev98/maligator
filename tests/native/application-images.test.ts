@@ -12,6 +12,7 @@ import * as path from "node:path";
 import { pathToFileURL } from "node:url";
 import { expect, it } from "vitest";
 import { buildDerivationFromConfig, resolveBuildConfig } from "../../src/build-config.ts";
+import type { MaligatorBuildConfig } from "../../src/build-config.ts";
 import { stripCompactTypes } from "../../src/compiler/frontend/compact-type-strip.ts";
 import { compileEntrypoint } from "../../src/compiler/pipeline/compile-program.ts";
 import { emitProgramTranslationUnits } from "../../src/compiler/target/emit-program-image.ts";
@@ -26,21 +27,26 @@ import {
 } from "../../src/test-harness.ts";
 
 const fixtures = path.resolve("tests/fixtures/application-images");
+const engine: NonNullable<MaligatorBuildConfig["engine"]> = {
+	primordials: "locked",
+	eval: false,
+	realms: false,
+	regexp: true,
+	temporal: false,
+	intl: { enabled: false },
+};
 const config = resolveBuildConfig({
 	surface: { webPlatform: true, node: true, maligator: true },
-	engine: {
-		primordials: "locked",
-		eval: false,
-		realms: false,
-		regexp: true,
-		temporal: false,
-		intl: { enabled: false },
-	},
+	engine,
 });
-function image(name: string, generation = "first") {
+const nodeOnlyConfig = resolveBuildConfig({
+	surface: { webPlatform: false, node: true, maligator: true },
+	engine,
+});
+function image(name: string, generation = "first", buildConfig = config) {
 	const entrypoint = path.join(fixtures, `${name}.mjs`);
 	return compileEntrypoint(entrypoint, {
-		buildConfig: config,
+		buildConfig,
 		stripTypes: stripCompactTypes,
 		entrySource: readFileSync(entrypoint, "utf8").replace(
 			'const generation = "first";',
@@ -48,8 +54,8 @@ function image(name: string, generation = "first") {
 		),
 	});
 }
-function wire(directory: string, name: string, generation: string) {
-	const bytes = serializeRuntimeImage(image(name, generation).runtime);
+function wire(directory: string, name: string, generation: string, buildConfig = config) {
+	const bytes = serializeRuntimeImage(image(name, generation, buildConfig).runtime);
 	const filename = path.join(directory, `${name}-${generation}.malw`);
 	writeFileSync(filename, bytes);
 	return { path: filename, sha256: hash("sha256", bytes, "hex") };
@@ -138,6 +144,15 @@ for (const compiled of [true, false]) {
 			const unresolvedPath = path.join(directory, "unresolved.json");
 			writeFileSync(unresolvedPath, JSON.stringify(unresolved));
 			descriptors.push(unresolvedPath);
+			const nodeOnly = {
+				...unresolved,
+				wires: [wire(directory, "node-only", "node-only", nodeOnlyConfig)],
+				entryPath: path.join(fixtures, "node-only.mjs"),
+				webPlatform: false,
+			};
+			const nodeOnlyPath = path.join(directory, "node-only.json");
+			writeFileSync(nodeOnlyPath, JSON.stringify(nodeOnly));
+			descriptors.push(nodeOnlyPath);
 			const definition = image("main");
 			const derivation = buildDerivationFromConfig(config);
 			const context = resolveNativeBuildContext({

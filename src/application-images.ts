@@ -52,6 +52,17 @@ export interface ApplicationImage {
 
 export interface ApplicationImageHost {
 	load(descriptor: ApplicationImageDescriptor): ApplicationImage;
+	resources?(): ApplicationResources;
+}
+
+export interface ApplicationResources {
+	loadedImages: number;
+	runningApplications: number;
+	ownedWorkers: number;
+	processWorkers: number;
+	processImageDomains: number;
+	/** Copied worker-domain wires, excluding application roots, assets and baked code. */
+	processWorkerWireBytes: number;
 }
 
 export interface NativeApplicationBridge {
@@ -61,12 +72,14 @@ export interface NativeApplicationBridge {
 		options: ApplicationLaunchOptions,
 	): ApplicationInstance;
 	_releaseApplicationImage(handle: object): void;
+	_applicationResources(): ApplicationResources;
 }
 
 export function createApplicationImageHost(
 	bridge: NativeApplicationBridge,
 ): ApplicationImageHost {
 	return {
+		resources: () => bridge._applicationResources(),
 		load(descriptor) {
 			const handle = bridge._loadApplicationImage(descriptor);
 			let closed = false;

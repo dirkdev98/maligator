@@ -5,11 +5,25 @@ import { Worker } from "maligator:workers";
 function check(value, message) {
 	if (!value) throw new Error(message);
 }
+function scopedResources(loadedImages, runningApplications, ownedWorkers) {
+	const resources = mal._applicationResources();
+	check(resources.loadedImages === loadedImages, "open image handle count");
+	check(resources.runningApplications === runningApplications, "owned application count");
+	check(resources.ownedWorkers === ownedWorkers, "owned ordinary worker count");
+	return resources;
+}
 check(ready() === false, "standalone readiness returns false");
+const initialResources = scopedResources(0, 0, 0);
+check(
+	initialResources.processWorkers === 0 &&
+		initialResources.processImageDomains === 0 &&
+		initialResources.processWorkerWireBytes === 0,
+	"initial process counts",
+);
 const descriptors = process.argv
 	.slice(2)
 	.map((filename) => JSON.parse(readFileSync(filename, "utf8")));
-const [first, second, unresolvedDescriptor] = descriptors;
+const [first, second, unresolvedDescriptor, nodeOnly] = descriptors;
 function rejected(callback, message) {
 	let threw = false;
 	try {
@@ -67,8 +81,22 @@ check(
 	"unresolved TLA failure",
 );
 mal._releaseApplicationImage(unresolvedHandle);
+scopedResources(0, 0, 0);
+const nodeOnlyHandle = load(nodeOnly);
+const nodeOnlyExit = await launch(nodeOnlyHandle).closed;
+check(
+	nodeOnlyExit.reason === "completed" && nodeOnlyExit.result.answer === 42,
+	`Node-only fetch uses fresh stream globals: ${nodeOnlyExit.error?.stack || JSON.stringify(nodeOnlyExit)}`,
+);
+mal._releaseApplicationImage(nodeOnlyHandle);
+scopedResources(0, 0, 0);
 const a = load(first);
 const b = load(second);
+const loadedResources = scopedResources(2, 0, 0);
+check(
+	loadedResources.processImageDomains === 2 && loadedResources.processWorkerWireBytes > 0,
+	"loaded worker domain ownership",
+);
 for (const descriptor of [first, second]) {
 	for (const entry of JSON.parse(readFileSync(descriptor.workerManifestPath, "utf8"))
 		.entries)
@@ -81,11 +109,22 @@ for (const descriptor of descriptors)
 	for (const wire of descriptor.wires) unlinkSync(wire.path);
 const startupGate = new SharedArrayBuffer(4);
 const one = launch(a, "gated", startupGate);
-const two = launch(b);
+const secondGate = new SharedArrayBuffer(4);
+const two = launch(b, "gated", secondGate);
 mal._releaseApplicationImage(b);
 mal._releaseApplicationImage(b);
 rejected(() => launch(b), "closed handle rejected");
-await one.ready;
+await Promise.all([one.ready, two.ready]);
+const concurrentResources = scopedResources(1, 2, 0);
+check(
+	concurrentResources.processWorkers === 4,
+	"two app roots and two descendant workers",
+);
+check(
+	concurrentResources.processImageDomains === 2 &&
+		concurrentResources.processWorkerWireBytes === loadedResources.processWorkerWireBytes,
+	"launches share retained worker bytes",
+);
 let signaled = false;
 one.applicationReady.then(() => {
 	signaled = true;
@@ -94,9 +133,12 @@ await Promise.resolve();
 await Promise.resolve();
 check(!signaled, "evaluation precedes gated application readiness");
 Atomics.store(new Int32Array(startupGate), 0, 1);
+Atomics.store(new Int32Array(secondGate), 0, 1);
 await one.applicationReady;
 check(signaled, "application readiness observed");
 const results = await Promise.all([one.closed, two.closed]);
+const joinedResources = scopedResources(1, 0, 0);
+check(joinedResources.processWorkers === 0, "result joins all descendant workers");
 for (let index = 0; index < results.length; index++) {
 	const exit = results[index];
 	const expected = index === 0 ? "first" : "second";
@@ -132,6 +174,12 @@ for (let index = 0; index < results.length; index++) {
 		"owned argv and script slot",
 	);
 	check(result.data.nested.join() === "1,2", "application data snapshot");
+	check(
+		result.resources.loadedImages === 0 &&
+			result.resources.runningApplications === 0 &&
+			result.resources.ownedWorkers === 1,
+		"application sees only its direct child",
+	);
 }
 const repeated = await launch(a).closed;
 check(repeated.result.count === 1, "repeated module state fresh");
@@ -154,8 +202,17 @@ check(
 );
 check((await launch(a, "exit").closed).code === 7, "application local process exit");
 mal._releaseApplicationImage(a);
+const closedResources = scopedResources(0, 0, 0);
+check(
+	closedResources.processImageDomains === 2 && closedResources.processWorkerWireBytes > 0,
+	"escaped URLs retain domains after image close",
+);
 const escaped = new Worker(results[0].result.url);
 await escaped.ready;
+check(
+	scopedResources(0, 0, 1).processWorkers === 1,
+	"escaped worker belongs to receiving isolate",
+);
 const answer = new Promise((resolve) =>
 	escaped.port.addEventListener("message", (event) => resolve(event.data), {
 		once: true,
@@ -164,4 +221,5 @@ const answer = new Promise((resolve) =>
 escaped.port.postMessage(null);
 check((await answer).asset === "first", "escaped URL retains assets");
 await escaped.terminate();
+check(scopedResources(0, 0, 0).processWorkers === 0, "escaped worker joined");
 console.log("application images PASS");

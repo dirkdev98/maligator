@@ -48,6 +48,7 @@ setInterval(() => {
 					count: globalThis.launchCount,
 					order: globalThis.fragmentOrder,
 					data,
+					resources: mal._applicationResources(),
 					url,
 				},
 	);
