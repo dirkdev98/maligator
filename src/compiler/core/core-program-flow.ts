@@ -1209,6 +1209,33 @@ export class CoreProgramFlowEpoch {
 	}
 }
 
+function mutableCallTargetWriters<Targets>(
+	index: Map<number, ReadonlyMap<CoreFunctionId, Targets>>,
+	previous: ReadonlyMap<number, ReadonlyMap<CoreFunctionId, Targets>> | undefined,
+	key: number,
+): Map<CoreFunctionId, Targets> {
+	const writers = index.get(key);
+	// Rows borrowed from the preceding solve stay immutable; all other rows are ours.
+	if (writers !== undefined && writers !== previous?.get(key))
+		return writers as Map<CoreFunctionId, Targets>;
+	const owned = new Map(writers);
+	index.set(key, owned);
+	return owned;
+}
+
+function mutableCallTargetReaders(
+	index: Map<number, ReadonlySet<CoreFunctionId>>,
+	previous: ReadonlyMap<number, ReadonlySet<CoreFunctionId>> | undefined,
+	key: number,
+): Set<CoreFunctionId> {
+	const readers = index.get(key);
+	if (readers !== undefined && readers !== previous?.get(key))
+		return readers as Set<CoreFunctionId>;
+	const owned = new Set(readers);
+	index.set(key, owned);
+	return owned;
+}
+
 export class CoreProgramFlowEngine {
 	readonly #program: CoreProgram;
 	readonly #report: CoreOptimizationReportBuilder | undefined;
@@ -1351,11 +1378,10 @@ export class CoreProgramFlowEngine {
 			const nextAccess = semantics.collectCellAccesses(fn, transfers, identities);
 			cellAccesses.set(functionId, nextAccess);
 			for (const key of new Set([...(oldAccess?.reads ?? []), ...nextAccess.reads])) {
-				const readers = new Set(cellReaders.get(key) ?? []);
+				const readers = mutableCallTargetReaders(cellReaders, previous?.cellReaders, key);
 				readers.delete(functionId);
 				if (nextAccess.reads.has(key)) readers.add(functionId);
 				if (readers.size === 0) cellReaders.delete(key);
-				else cellReaders.set(key, readers);
 			}
 
 			const oldWrites = propertyWrites.get(functionId) ?? new Map<number, Targets>();
@@ -1368,29 +1394,34 @@ export class CoreProgramFlowEngine {
 			propertyWrites.set(functionId, nextWrites);
 			for (const key of new Set([...oldWrites.keys(), ...nextWrites.keys()])) {
 				propertyKeys.add(key);
-				const writers = new Map(propertyWriters.get(key) ?? []);
+				const writers = mutableCallTargetWriters(
+					propertyWriters,
+					previous?.propertyWriters,
+					key,
+				);
 				writers.delete(functionId);
 				const next = nextWrites.get(key);
 				if (next !== undefined) writers.set(functionId, next);
 				if (writers.size === 0) propertyWriters.delete(key);
-				else propertyWriters.set(key, writers);
 			}
 		}
 		for (const functionId of previous?.local.keys() ?? []) {
 			if (functionSet.has(functionId)) continue;
 			const access = cellAccesses.get(functionId);
 			for (const key of access?.reads ?? []) {
-				const readers = new Set(cellReaders.get(key) ?? []);
+				const readers = mutableCallTargetReaders(cellReaders, previous?.cellReaders, key);
 				readers.delete(functionId);
 				if (readers.size === 0) cellReaders.delete(key);
-				else cellReaders.set(key, readers);
 			}
 			for (const key of propertyWrites.get(functionId)?.keys() ?? []) {
 				propertyKeys.add(key);
-				const writers = new Map(propertyWriters.get(key) ?? []);
+				const writers = mutableCallTargetWriters(
+					propertyWriters,
+					previous?.propertyWriters,
+					key,
+				);
 				writers.delete(functionId);
 				if (writers.size === 0) propertyWriters.delete(key);
-				else propertyWriters.set(key, writers);
 			}
 			cellAccesses.delete(functionId);
 			propertyWrites.delete(functionId);
@@ -1463,23 +1494,28 @@ export class CoreProgramFlowEngine {
 			if (entry === undefined) return;
 			for (const key of entry.cellWrites.keys()) {
 				cellKeys.add(key);
-				const writers = new Map(cellWriters.get(key) ?? []);
+				const writers = mutableCallTargetWriters(cellWriters, previous?.cellWriters, key);
 				writers.delete(functionId);
 				if (writers.size === 0) cellWriters.delete(key);
-				else cellWriters.set(key, writers);
 			}
 			for (const slot of entry.globalWrites.keys()) {
 				globalSlots.add(slot);
-				const writers = new Map(globalStoreWriters.get(slot) ?? []);
+				const writers = mutableCallTargetWriters(
+					globalStoreWriters,
+					previous?.globalStoreWriters,
+					slot,
+				);
 				writers.delete(functionId);
 				if (writers.size === 0) globalStoreWriters.delete(slot);
-				else globalStoreWriters.set(slot, writers);
 			}
 			for (const key of entry.propertyInputs.keys()) {
-				const readers = new Set(propertyReaders.get(key) ?? []);
+				const readers = mutableCallTargetReaders(
+					propertyReaders,
+					previous?.propertyReaders,
+					key,
+				);
 				readers.delete(functionId);
 				if (readers.size === 0) propertyReaders.delete(key);
-				else propertyReaders.set(key, readers);
 			}
 		};
 		for (const functionId of affectedFunctions) {
@@ -1519,10 +1555,11 @@ export class CoreProgramFlowEngine {
 		this.solveFunctions(
 			[...affectedFunctions].sort((left, right) => left - right),
 			(functionId, enqueue) => {
+				const currentLocal = local.get(functionId);
 				const previousLocal =
-					local.get(functionId) ??
+					currentLocal ??
 					(analyzed.has(functionId) ? undefined : previous?.local.get(functionId));
-				removeLocalContributions(functionId, previousLocal);
+				removeLocalContributions(functionId, currentLocal);
 				const next = semantics.analyzeLocal(
 					this.#program,
 					this.#program.function(functionId),
@@ -1535,20 +1572,29 @@ export class CoreProgramFlowEngine {
 				);
 				for (const [key, targets] of next.cellWrites) {
 					cellKeys.add(key);
-					const writers = new Map(cellWriters.get(key) ?? []);
+					const writers = mutableCallTargetWriters(
+						cellWriters,
+						previous?.cellWriters,
+						key,
+					);
 					writers.set(functionId, targets);
-					cellWriters.set(key, writers);
 				}
 				for (const [slot, targets] of next.globalWrites) {
 					globalSlots.add(slot);
-					const writers = new Map(globalStoreWriters.get(slot) ?? []);
+					const writers = mutableCallTargetWriters(
+						globalStoreWriters,
+						previous?.globalStoreWriters,
+						slot,
+					);
 					writers.set(functionId, targets);
-					globalStoreWriters.set(slot, writers);
 				}
 				for (const key of next.propertyInputs.keys()) {
-					const readers = new Set(propertyReaders.get(key) ?? []);
+					const readers = mutableCallTargetReaders(
+						propertyReaders,
+						previous?.propertyReaders,
+						key,
+					);
 					readers.add(functionId);
-					propertyReaders.set(key, readers);
 				}
 				local.set(functionId, next);
 				analyzed.add(functionId);

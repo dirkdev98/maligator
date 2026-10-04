@@ -454,6 +454,108 @@ describe("incremental Core call graph", () => {
 		expect(second.statistics.globalStoreAggregateUpdates).toBeLessThanOrEqual(3);
 	});
 
+	it("preserves prior contribution snapshots through writer replacement and removal", () => {
+		const program = analysisProgram();
+		const targets = [appendLeaf(program), appendLeaf(program), appendLeaf(program)];
+		const appendWriter = (slot: number, target: number) => {
+			const builder = new CoreFunctionBuilder(program);
+			const entry = builder.createBlock();
+			const [value] = builder.appendInstruction(entry, "createFunction", [], {
+				attributes: { functionIndex: target },
+			});
+			builder.appendInstruction(entry, "storeGlobal", [value!], {
+				attributes: { index: slot },
+			});
+			const [create, store] = builder.bodyInstructionIds(entry);
+			builder.setTerminator(entry, { kind: "return", value: value! });
+			return {
+				function: builder.finish(entry).function,
+				entry,
+				value: value!,
+				create: create!,
+				store: store!,
+			};
+		};
+		const firstWriter = appendWriter(0, targets[0]!.function);
+		const secondWriter = appendWriter(0, targets[1]!.function);
+		appendWriter(1, targets[0]!.function);
+		const forwarder = new CoreFunctionBuilder(program);
+		const entry = forwarder.createBlock();
+		const [loaded] = forwarder.appendInstruction(entry, "loadGlobal", [], {
+			attributes: { index: 0 },
+		});
+		forwarder.appendInstruction(entry, "storeGlobal", [loaded!], {
+			attributes: { index: 2 },
+		});
+		const [receiver] = forwarder.appendInstruction(entry, "createUndefined", []);
+		const [result] = forwarder.appendInstruction(entry, "call", [loaded!, receiver!]);
+		const call = forwarder.bodyInstructionIds(entry)[3]!;
+		forwarder.setTerminator(entry, { kind: "return", value: result! });
+		const caller = forwarder.finish(entry).function;
+		const context = programAnalysisContext();
+		const manager = new CoreAnalysisManager(
+			program,
+			context,
+			new CoreOptimizationReportBuilder(program),
+		);
+		const first = manager.get(CORE_CALL_GRAPH_ANALYSIS, { scope: "program" });
+		const indexes = (state: typeof first) => ({
+			cellWriters: state.cellWriters,
+			globalStoreWriters: state.globalStoreWriters,
+			cellReaders: state.cellReaders,
+		});
+		const firstSnapshot = structuredClone(indexes(first));
+		expect(first.globalStoreTargets(0).functions).toEqual([0, 1]);
+		expect(first.site(caller, call)?.targets.functions).toEqual([0, 1]);
+		const checkFresh = (state: typeof first) => {
+			const fresh = new CoreAnalysisManager(
+				program,
+				context,
+				new CoreOptimizationReportBuilder(program),
+			).get(CORE_CALL_GRAPH_ANALYSIS, { scope: "program" });
+			expect(state.globalStores).toEqual(fresh.globalStores);
+			expect(state.site(caller, call)).toEqual(fresh.site(caller, call));
+			expect(indexes(first)).toEqual(firstSnapshot);
+		};
+
+		const replace = CoreEditor.open(program, secondWriter.function);
+		replace.replaceInstruction(secondWriter.create, "createFunction", [], {
+			attributes: { functionIndex: targets[2]!.function },
+		});
+		replace.commit();
+		const second = manager.get(CORE_CALL_GRAPH_ANALYSIS, { scope: "program" });
+		const secondSnapshot = structuredClone(indexes(second));
+		expect(second.globalStoreTargets(0).functions).toEqual([0, 2]);
+		expect(second.site(caller, call)?.targets.functions).toEqual([0, 2]);
+		expect(second.globalStoreWriters.get(1)).toBe(first.globalStoreWriters.get(1));
+		checkFresh(second);
+
+		for (const writer of [firstWriter, secondWriter]) {
+			const remove = CoreEditor.open(program, writer.function);
+			remove.removeInstruction(writer.store);
+			remove.commit();
+			const next = manager.get(CORE_CALL_GRAPH_ANALYSIS, { scope: "program" });
+			checkFresh(next);
+			expect(indexes(second)).toEqual(secondSnapshot);
+		}
+		const removed = manager.get(CORE_CALL_GRAPH_ANALYSIS, { scope: "program" });
+		expect(removed.globalStoreTargets(0)).toEqual(CORE_CALLEE_TARGETS_BOTTOM);
+		expect(removed.globalStoreWriters.has(0)).toBe(false);
+		expect(removed.site(caller, call)?.targets.functions).toEqual([]);
+		const removedSnapshot = structuredClone(indexes(removed));
+		const restore = CoreEditor.open(program, secondWriter.function);
+		restore.appendInstruction(secondWriter.entry, "storeGlobal", [secondWriter.value], {
+			attributes: { index: 0 },
+		});
+		restore.commit();
+		const restored = manager.get(CORE_CALL_GRAPH_ANALYSIS, { scope: "program" });
+		expect(restored.globalStoreTargets(0).functions).toEqual([2]);
+		expect(restored.site(caller, call)?.targets.functions).toEqual([2]);
+		checkFresh(restored);
+		expect(indexes(second)).toEqual(secondSnapshot);
+		expect(indexes(removed)).toEqual(removedSnapshot);
+	});
+
 	it("keeps a guarded target for a known function-object property", () => {
 		const program = analysisProgram();
 		const setup = new CoreFunctionBuilder(program);
@@ -512,6 +614,8 @@ describe("incremental Core call graph", () => {
 		);
 		const first = manager.get(CORE_CALL_GRAPH_ANALYSIS, { scope: "program" });
 		const targets = first.site(callerFunction, call)?.targets;
+		const priorWriters = structuredClone(first.propertyWriters);
+		const priorReaders = structuredClone(first.propertyReaders);
 		expect(targets).toMatchObject({
 			functions: [3],
 			anyScript: false,
@@ -536,6 +640,8 @@ describe("incremental Core call graph", () => {
 		});
 		expect(second.graph.exactCallers(3 as never)).toEqual([]);
 		expect(second.graph.exactCallers(4 as never)).toEqual([callerFunction]);
+		expect(first.propertyWriters).toEqual(priorWriters);
+		expect(first.propertyReaders).toEqual(priorReaders);
 	});
 
 	it("tracks guarded global function properties through static method writes", () => {

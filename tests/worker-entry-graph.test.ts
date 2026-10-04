@@ -61,6 +61,44 @@ test("a shadowed Worker parameter does not declare a native worker entry", () =>
 	);
 });
 
+test("namespace reexport cycles retain a worker API origin", () => {
+	fixture(
+		{
+			"main.mjs":
+				'import * as threads from "./exports.mjs"; new threads.Worker(new URL("./worker.mjs", import.meta.url));',
+			"exports.mjs":
+				'export * from "./cycle.mjs"; export { Worker } from "node:worker_threads";',
+			"cycle.mjs": 'export * from "./exports.mjs";',
+			"worker.mjs": "globalThis.started = true;",
+		},
+		(root) => {
+			const graph = buildModuleGraph(path.join(root, "main.mjs"), {
+				buildConfig: config,
+			});
+			const worker = path.join(root, "worker.mjs");
+			expect(graph.workerEntries?.map((entry) => entry.path)).toEqual([worker]);
+			expect(graph.modules.has(worker)).toBe(true);
+			expect(graph.evaluationOrder).not.toContain(worker);
+		},
+	);
+});
+
+test("ordinary URL constructor aliases do not declare worker entries", () => {
+	fixture(
+		{
+			"main.mjs":
+				'import { URL } from "node:url"; const api = { Worker: URL }; new api.Worker("./missing.mjs", import.meta.url);',
+		},
+		(root) => {
+			const graph = buildModuleGraph(path.join(root, "main.mjs"), {
+				buildConfig: config,
+			});
+			expect(graph.workerEntries).toEqual([]);
+			expect(graph.dynamicImportCandidates).toEqual([]);
+		},
+	);
+});
+
 test.each([
 	'for (const createWorkerUrl of [(value) => value]) createWorkerUrl("ordinary call");',
 	'for (let createWorkerUrl = (value) => value; false;) createWorkerUrl("ordinary call");',

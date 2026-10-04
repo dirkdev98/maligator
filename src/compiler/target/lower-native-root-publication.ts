@@ -119,6 +119,7 @@ export function nativePrivateRootRegisters(
 			candidates.add(instruction.object);
 		}
 	}
+	if (candidates.size === 0) return candidates;
 	const actionsByIp = new Map<
 		number,
 		Array<NativeFunctionPlan["regionActions"][number]>
@@ -139,7 +140,9 @@ export function nativePrivateRootRegisters(
 		))
 			candidates.delete(register);
 	}
+	if (candidates.size === 0) return candidates;
 	for (const [ip, instruction] of fn.instructions.entries()) {
+		if (candidates.size === 0) break;
 		const writes = vmInstructionWriteRegisters(instruction);
 		// Exact operator kinds refine ordinary final-value expressions, not storage.
 		const hasStorageSpecialization =
@@ -148,13 +151,28 @@ export function nativePrivateRootRegisters(
 		const rootedOutputs =
 			nativeRootedOutputRegisters(instruction, ip, privateCallResultIps).length > 0 &&
 			safepointIps.has(ip);
+		const actions = actionsByIp.get(ip);
+		if (
+			!hasStorageSpecialization &&
+			actions === undefined &&
+			instruction.opcode !== "LOAD_ARGUMENT"
+		) {
+			if (
+				!PRIVATE_RESULT_OPCODES.has(instruction.opcode) &&
+				!privateCallResultIps.has(ip) &&
+				!rootedOutputs
+			) {
+				for (const register of writes) candidates.delete(register);
+			}
+			continue;
+		}
 		for (const register of candidates) {
 			const writesRegister = writes.includes(register);
 			// Every iterator-step variant writes its final VM outputs only after
 			// internally rooted runtime temporaries have returned successfully.
 			const finalIteratorOutput =
 				instruction.opcode === "ITERATOR_STEP" && writesRegister;
-			const regionRequiresContinuousRoot = (actionsByIp.get(ip) ?? []).some((action) => {
+			const regionRequiresContinuousRoot = actions?.some((action) => {
 				const region = native.specializations[action.regionIndex];
 				if (region?.kind === "numeric-fusion") {
 					// The start can elide a boxed intermediate; the finish always writes

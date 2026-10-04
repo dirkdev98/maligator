@@ -816,9 +816,13 @@ describe("Core IR", () => {
 		},
 	);
 
-	it.each([false, true])(
-		"keeps read/write checkpoints before an unknown exact writer=%s",
-		(unknown) => {
+	it.each(
+		[false, true].flatMap((unknown) =>
+			[false, true].map((initialized) => ({ unknown, initialized })),
+		),
+	)(
+		"keeps read/write checkpoints with initial store=$initialized and unknown writer=$unknown",
+		({ unknown, initialized }) => {
 			const opcodes = new CoreOpcodeRegistry();
 			for (const opcode of CORE_OPCODES)
 				opcodes.define(coreOpcodeRegistry.require(opcode));
@@ -857,7 +861,7 @@ describe("Core IR", () => {
 			const [second] = builder.appendInstruction(entry, "createNumber", [], {
 				attributes: { value: 2 },
 			});
-			for (const value of [first!, second!])
+			for (const value of initialized ? [first!, second!] : [])
 				builder.appendInstruction(entry, "storeGlobal", [value], {
 					attributes: { index: 0 },
 				});
@@ -879,11 +883,78 @@ describe("Core IR", () => {
 			builder.setTerminator(entry, { kind: "return", value: first! });
 			const memory = analyzeCoreMemoryVersions(program, builder.finish(entry).function);
 			const location = { kind: "global-slot", slot: 0 } as const;
-			expect(memory.valueForRead(exchange, location)).toBe(second);
+			memory.readHash(exchange);
+			expect(memory.valueForRead(exchange, location)).toBe(
+				initialized ? second : undefined,
+			);
 			expect(memory.valueForRead(afterExchange, location)).toBe(first);
 			expect(memory.valueForRead(final, location)).toBe(unknown ? undefined : second);
 			memory.readHash(final);
-			expect(memory.statistics.compactedEvents).toBeGreaterThan(0);
+			if (initialized) expect(memory.statistics.compactedEvents).toBeGreaterThan(0);
+		},
+	);
+
+	it.each(["loop", "handler"] as const)(
+		"keeps local overwrites independent of incoming %s versions",
+		(flow) => {
+			const program = new CoreProgram(coreOpcodeRegistry, { globalCount: 1 });
+			const builder = new CoreFunctionBuilder(program, { parameterCount: 1 });
+			const entry = builder.createBlock([{ representation: "boxed" }]);
+			const body = builder.createBlock();
+			const exit = builder.createBlock(
+				flow === "handler" ? [{ role: "exception", representation: "boxed" }] : [],
+			);
+			const [initial] = builder.appendInstruction(entry, "createNumber", [], {
+				attributes: { value: 1 },
+			});
+			const [replacement] = builder.appendInstruction(entry, "createNumber", [], {
+				attributes: { value: 2 },
+			});
+			builder.appendInstruction(entry, "storeGlobal", [initial!], {
+				attributes: { index: 0 },
+			});
+			builder.setTerminator(entry, {
+				kind: "jump",
+				edge: { block: body, arguments: [] },
+			});
+			builder.appendInstruction(body, "call", [initial!, initial!]);
+			builder.appendInstruction(body, "storeGlobal", [replacement!], {
+				attributes: { index: 0 },
+			});
+			builder.appendInstruction(body, "loadGlobal", [], { attributes: { index: 0 } });
+			const firstRead = builder.bodyInstructionIds(body).at(-1)!;
+			const [loaded] = builder.appendInstruction(body, "loadGlobal", [], {
+				attributes: { index: 0 },
+			});
+			const secondRead = builder.bodyInstructionIds(body).at(-1)!;
+			if (flow === "loop")
+				builder.setTerminator(body, {
+					kind: "branch",
+					condition: builder.blockParameterValue(entry, 0),
+					consequent: { block: body, arguments: [] },
+					alternate: { block: exit, arguments: [] },
+				});
+			else {
+				builder.setHandler(body, exit, []);
+				builder.setTerminator(body, { kind: "return", value: loaded! });
+			}
+			builder.appendInstruction(exit, "storeGlobal", [initial!], {
+				attributes: { index: 0 },
+			});
+			const [result] = builder.appendInstruction(exit, "loadGlobal", [], {
+				attributes: { index: 0 },
+			});
+			const finalRead = builder.bodyInstructionIds(exit).at(-1)!;
+			builder.setTerminator(exit, { kind: "return", value: result! });
+			const memory = analyzeCoreMemoryVersions(program, builder.finish(entry).function);
+			const hash = memory.readHash(firstRead);
+			const location = { kind: "global-slot", slot: 0 } as const;
+			expect(memory.valueForRead(firstRead, location)).toBe(replacement);
+			expect(memory.valueForRead(secondRead, location)).toBe(replacement);
+			expect(memory.valueForRead(finalRead, location)).toBe(initial);
+			expect(memory.readsEquivalent(firstRead, secondRead)).toBe(true);
+			expect(memory.readsEquivalent(firstRead, finalRead)).toBe(false);
+			expect(memory.readHash(firstRead)).toBe(hash);
 		},
 	);
 

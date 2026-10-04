@@ -451,6 +451,32 @@ export function discoverWorkerEntries(
 	modules: ReadonlyMap<string, ModuleRecord>,
 	sourceRoot: string,
 ): Array<WorkerEntryDeclaration> {
+	const suppliesWorkerEntries = (module: string): boolean =>
+		module === "node:worker_threads" ||
+		(lookupPlatformModule(module)?.exports.some((entry) => {
+			const contract = entry.contract as
+				| { declaration?: string; workerSource?: string }
+				| undefined;
+			return (
+				contract?.declaration === "worker-entry" || contract?.workerSource !== undefined
+			);
+		}) ??
+			false);
+	// Alias and reexport resolution can only recognize entries from these API origins.
+	let hasWorkerOrigin = false;
+	for (const record of modules.values()) {
+		if (
+			suppliesWorkerEntries(record.path) ||
+			record.dependencies.some(
+				({ resolvedPath }) =>
+					resolvedPath !== null && suppliesWorkerEntries(resolvedPath),
+			)
+		) {
+			hasWorkerOrigin = true;
+			break;
+		}
+	}
+	if (!hasWorkerOrigin) return [];
 	const entries = new Map<string, WorkerEntryDeclaration>();
 	for (const record of modules.values()) {
 		if (record.host !== undefined) continue;

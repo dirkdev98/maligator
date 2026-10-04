@@ -951,6 +951,17 @@ function prepareMemoryVersions(
 				for (const instruction of readers)
 					readVersions.set(instruction, entryIdentity(slot));
 				transfers = readBlocks.size;
+			} else if (readBlocks.size > 0 && upwardExposedReadBlocks.size === 0) {
+				// Every read follows a local definition, so incoming loop and handler versions are irrelevant.
+				const entry = entryIdentity(slot);
+				for (const block of readBlocks) {
+					let version = entry;
+					for (const event of eventsByBlock.get(block)!) {
+						if (event.reads) readVersions.set(event.instruction, version);
+						version = event.definition ?? version;
+					}
+					transfers++;
+				}
 			} else if (readBlocks.size > 0) {
 				const { dominancePosition, dominanceFrontiers } = getDominance();
 				const phiBlocks = new Set<CoreBlockId>();

@@ -156,7 +156,7 @@ export function executionSafepointRoots(
 	});
 	const transfer = (block: number, out: Uint32Array): Uint32Array => {
 		const { generated, killed } = transfers[block]!;
-		// The union buffer belongs to this visit; no successor's live-in set is mutated.
+		// The scratch buffer never aliases a published live-in set, including self-loops.
 		for (let word = 0; word < wordCount; word++) {
 			out[word] = (out[word]! & ~killed[word]!) | generated[word]!;
 		}
@@ -165,15 +165,18 @@ export function executionSafepointRoots(
 	const liveIn: Array<Uint32Array> = fn.blocks.map(() => new Uint32Array(wordCount));
 	const worklist = fn.blocks.map((_, block) => block);
 	const queued = new Uint8Array(fn.blocks.length).fill(1);
+	let scratch: Uint32Array = new Uint32Array(wordCount);
 	while (worklist.length > 0) {
 		const block = worklist.pop()!;
 		queued[block] = 0;
-		const out = new Uint32Array(wordCount);
+		const out = scratch;
+		out.fill(0);
 		for (const successor of successors[block]!) {
 			unionInto(out, liveIn[successor]!);
 		}
 		const live = transfer(block, out);
 		if (sameRegisters(live, liveIn[block]!)) continue;
+		scratch = liveIn[block]!;
 		liveIn[block] = live;
 		for (const predecessor of predecessors[block]!) {
 			if (queued[predecessor] !== 0) continue;
@@ -183,6 +186,9 @@ export function executionSafepointRoots(
 	}
 
 	const roots = new Map<CompilerInstruction, ExecutionSafepointRoots>();
+	const incoming = new Uint32Array(wordCount);
+	const outgoing = new Uint32Array(wordCount);
+	const combined = new Uint32Array(wordCount);
 	for (const [block, { instructions }] of fn.blocks.entries()) {
 		const firstSafepoint = firstSafepoints[block]!;
 		if (firstSafepoint < 0) continue;
@@ -194,12 +200,12 @@ export function executionSafepointRoots(
 			const instruction = instructions[index]!;
 			const instructionOperands = operands[block]![index]!;
 			if (safepoints.has(instruction)) {
-				const incoming = live.slice();
+				incoming.set(live);
 				for (const register of instructionOperands.writes) remove(incoming, register);
 				for (const register of instructionOperands.reads) add(incoming, register);
-				const outgoing = live.slice();
+				outgoing.set(live);
 				for (const register of instructionOperands.writes) add(outgoing, register);
-				const combined = incoming.slice();
+				combined.set(incoming);
 				unionInto(combined, outgoing);
 				roots.set(instruction, {
 					rootRegisters: rootRegisters(combined),

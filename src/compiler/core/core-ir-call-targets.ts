@@ -476,8 +476,11 @@ function privateFunctionArrayLoadTargets(
 	cfg: CoreControlFlow,
 	localTransfers: CoreProgramFlowLocalTransfers,
 ): ReadonlyMap<CoreInstructionId, CoreCalleeTargets> {
-	const roots = coreCanonicalValueRoots(fn, cfg);
-	const root = (value: CoreValueId): CoreValueId => roots.get(value) ?? value;
+	let roots: ReadonlyMap<CoreValueId, CoreValueId> | undefined;
+	const root = (value: CoreValueId): CoreValueId => {
+		roots ??= coreCanonicalValueRoots(fn, cfg);
+		return roots.get(value) ?? value;
+	};
 	interface Candidate {
 		readonly length: number;
 		readonly definitions: Map<number, CoreInstructionId>;
