@@ -2157,34 +2157,30 @@ const simplifyBlockParameters: CoreFunctionPass = {
 				continue;
 			}
 			const parameterStart = fn.kernel.blockParameterStart(block);
-			const parameters = Array.from({ length: parameterCount }, (_, index) => {
-				const row = parameterStart + index;
-				const value = fn.kernel.blockParameterValue(row);
-				return {
-					value,
-					representation: fn.valueRepresentation(value),
-					role: fn.kernel.blockParameterRole(row) === 1 ? "exception" : "value",
-				} as const;
-			});
 			const predecessors = [...new Set(incoming.map(({ from }) => from))];
 			let argumentRows:
 				| Array<{ readonly start: number; readonly count: number }>
 				| undefined;
 			const removable: Array<{
 				readonly index: number;
-				readonly parameter: (typeof parameters)[number];
+				readonly parameter: {
+					readonly value: CoreValueId;
+					readonly representation: CoreRepresentation;
+				};
 				readonly replacement: CoreValueId | undefined;
 				readonly replacementConstant: LocalConstant | undefined;
 				readonly sameValue: boolean;
 				readonly unused: boolean;
 			}> = [];
-			for (let index = parameters.length - 1; index >= 0; index--) {
-				if (parameters[index]!.role !== "value") continue;
-				const unused = !valueHasUses(fn, parameters[index]!.value);
+			for (let index = parameterCount - 1; index >= 0; index--) {
+				const row = parameterStart + index;
+				if (fn.kernel.blockParameterRole(row) !== 0) continue;
+				const value = fn.kernel.blockParameterValue(row);
+				const unused = !valueHasUses(fn, value);
 				if (unused) {
 					removable.push({
 						index,
-						parameter: parameters[index]!,
+						parameter: { value, representation: fn.valueRepresentation(value) },
 						replacement: undefined,
 						replacementConstant: undefined,
 						sameValue: false,
@@ -2208,13 +2204,22 @@ const simplifyBlockParameters: CoreFunctionPass = {
 						}
 					}
 				}
-				const arguments_ = argumentRows.map(({ start, count }) =>
-					index < count ? fn.kernel.operandAt(start + index) : undefined,
-				);
-				const replacement = arguments_[0];
-				if (replacement === undefined || replacement === parameters[index]!.value)
-					continue;
-				const sameValue = arguments_.every((argument) => argument === replacement);
+				const firstRow = argumentRows[0];
+				const replacement =
+					firstRow !== undefined && index < firstRow.count
+						? fn.kernel.operandAt(firstRow.start + index)
+						: undefined;
+				if (replacement === undefined || replacement === value) continue;
+				let sameValue = true;
+				for (const row of argumentRows) {
+					if (
+						index >= row.count ||
+						fn.kernel.operandAt(row.start + index) !== replacement
+					) {
+						sameValue = false;
+						break;
+					}
+				}
 				const replacementConstant = sameValue
 					? undefined
 					: constantForValue(fn, replacement);
@@ -2231,22 +2236,31 @@ const simplifyBlockParameters: CoreFunctionPass = {
 									block,
 								);
 					if (!dominates) continue;
-				} else if (
-					replacementConstant === undefined ||
-					fn.kernel.valueHandlerUseCount(parameters[index]!.value) !== 0 ||
-					!arguments_.every((argument) => {
-						if (argument === undefined) return false;
-						const constant = constantForValue(fn, argument);
-						return (
-							constant !== undefined &&
-							constantsAreInterchangeable(program, replacementConstant, constant)
-						);
-					})
-				)
-					continue;
+				} else {
+					if (
+						replacementConstant === undefined ||
+						fn.kernel.valueHandlerUseCount(value) !== 0
+					)
+						continue;
+					let interchangeable = true;
+					for (const row of argumentRows) {
+						const argument =
+							index < row.count ? fn.kernel.operandAt(row.start + index) : undefined;
+						const constant =
+							argument === undefined ? undefined : constantForValue(fn, argument);
+						if (
+							constant === undefined ||
+							!constantsAreInterchangeable(program, replacementConstant, constant)
+						) {
+							interchangeable = false;
+							break;
+						}
+					}
+					if (!interchangeable) continue;
+				}
 				removable.push({
 					index,
-					parameter: parameters[index]!,
+					parameter: { value, representation: fn.valueRepresentation(value) },
 					replacement,
 					replacementConstant,
 					sameValue,

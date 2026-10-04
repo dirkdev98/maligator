@@ -271,8 +271,56 @@ describe("static descriptions and allocation identities", () => {
 		);
 	});
 
-	it("binds property proofs to their observation before or after a mutation", () => {
-		const program = new CoreProgram(coreOpcodeRegistry, { stringConstants: [[120]] });
+	it.each(["x", "", "12:34"])(
+		"binds %j proofs to observations across mutations",
+		(key) => {
+			const program = new CoreProgram(coreOpcodeRegistry, {
+				stringConstants: [
+					Array.from({ length: key.length }, (_, index) => key.charCodeAt(index)),
+				],
+			});
+			const builder = new CoreFunctionBuilder(program),
+				entry = builder.createBlock();
+			const [seven] = builder.appendInstruction(entry, "createNumber", [], {
+				attributes: { value: 7 },
+			});
+			const [nine] = builder.appendInstruction(entry, "createNumber", [], {
+				attributes: { value: 9 },
+			});
+			const [object] = builder.appendInstruction(entry, "createObjectShaped", [seven!], {
+				attributes: { keyStringIndices: [0] },
+			});
+			const [read] = builder.appendInstruction(entry, "loadPropertyStatic", [object!], {
+				attributes: { stringIndex: 0 },
+			});
+			builder.appendInstruction(entry, "storePropertyStatic", [object!, nine!], {
+				attributes: { stringIndex: 0 },
+			});
+			builder.setTerminator(entry, { kind: "return", value: object! });
+			const fn = program.function(builder.finish(entry).function);
+			const facts = new CoreStaticValueAnalysis(program, fn, () =>
+				buildCoreControlFlow(program, fn.id),
+			);
+			const before = coreInstructionId(fn.kernel.valueDefinitionOwner(read!)),
+				after = fn.blockTerminator(entry);
+			const property = facts.queryPropertyAt(object!, key, before);
+			if (property === undefined) throw new Error("Expected initial property");
+			facts.verifyProperty(property, before);
+			expect(() => facts.verifyProperty(property, after)).toThrow(
+				"different observation",
+			);
+			const updated = facts.queryPropertyAt(object!, key, after);
+			if (updated?.member.kind !== "constant")
+				throw new Error("Expected updated property");
+			expect(facts.descriptionConstant(updated.member.description)).toEqual({
+				kind: "number",
+				value: 9,
+			});
+		},
+	);
+
+	it("keeps observation identities separate as an uncommitted editor appends instructions", () => {
+		const program = new CoreProgram(coreOpcodeRegistry);
 		const builder = new CoreFunctionBuilder(program),
 			entry = builder.createBlock();
 		const [seven] = builder.appendInstruction(entry, "createNumber", [], {
@@ -281,32 +329,65 @@ describe("static descriptions and allocation identities", () => {
 		const [nine] = builder.appendInstruction(entry, "createNumber", [], {
 			attributes: { value: 9 },
 		});
-		const [object] = builder.appendInstruction(entry, "createObjectShaped", [seven!], {
-			attributes: { keyStringIndices: [0] },
-		});
-		const [read] = builder.appendInstruction(entry, "loadPropertyStatic", [object!], {
-			attributes: { stringIndex: 0 },
-		});
-		builder.appendInstruction(entry, "storePropertyStatic", [object!, nine!], {
-			attributes: { stringIndex: 0 },
-		});
-		builder.setTerminator(entry, { kind: "return", value: object! });
+		builder.setTerminator(entry, { kind: "return", value: nine! });
 		const fn = program.function(builder.finish(entry).function);
 		const facts = new CoreStaticValueAnalysis(program, fn, () =>
 			buildCoreControlFlow(program, fn.id),
 		);
-		const before = coreInstructionId(fn.kernel.valueDefinitionOwner(read!)),
-			after = fn.blockTerminator(entry);
-		const property = facts.queryPropertyAt(object!, "x", before);
-		if (property === undefined) throw new Error("Expected initial property");
-		facts.verifyProperty(property, before);
-		expect(() => facts.verifyProperty(property, after)).toThrow("different observation");
-		const updated = facts.queryPropertyAt(object!, "x", after);
-		if (updated?.member.kind !== "constant") throw new Error("Expected updated property");
-		expect(facts.descriptionConstant(updated.member.description)).toEqual({
+		const consumer = fn.blockTerminator(entry);
+		const prior = facts.queryAt(nine!, consumer);
+		const editor = CoreEditor.open(program, fn.id);
+		for (let index = 0; index < 3; index++)
+			editor.insertInstruction(entry, consumer, "createNull", []);
+		const appended = [...fn.bodyInstructionIds(entry)].at(-1)!;
+		const next = facts.queryAt(seven!, appended);
+		if (next.kind !== "known") throw new Error("Expected literal proof");
+		expect(facts.descriptionConstant(next.description)).toEqual({
 			kind: "number",
-			value: 9,
+			value: 7,
 		});
+		facts.verify(next, appended);
+		expect(facts.queryAt(nine!, consumer)).toBe(prior);
+		expect(facts.queryAt(seven!, appended)).toBe(next);
+		editor.commit();
+		expect(() => facts.queryAt(seven!, appended)).toThrow("Stale static-value facts");
+	});
+
+	it("preserves a cycle-widened observation after its producer acquires an immutable brand", () => {
+		const program = new CoreProgram(coreOpcodeRegistry);
+		const builder = new CoreFunctionBuilder(program),
+			entry = builder.createBlock(),
+			loop = builder.createBlock([{ representation: "boxed" }]);
+		const phi = builder.blockParameterValue(loop, 0);
+		const [initial] = builder.appendInstruction(entry, "createNumber", [], {
+			attributes: { value: 1 },
+		});
+		const [converted] = builder.appendInstruction(loop, "unary", [phi], {
+			attributes: { operator: "+" },
+		});
+		builder.setTerminator(entry, {
+			kind: "jump",
+			edge: { block: loop, arguments: [initial!] },
+		});
+		builder.setTerminator(loop, {
+			kind: "jump",
+			edge: { block: loop, arguments: [converted!] },
+		});
+		const fn = program.function(builder.finish(entry).function);
+		const facts = new CoreStaticValueAnalysis(program, fn, () =>
+			buildCoreControlFlow(program, fn.id),
+		);
+		expect(facts.query(converted!)).toMatchObject({
+			kind: "known",
+			brand: "number",
+			state: "immutable-value",
+		});
+		const before = { ...facts.statistics };
+		expect(facts.queryAt(converted!, fn.blockTerminator(loop))).toEqual({
+			kind: "unknown",
+			reason: "cycle-widening",
+		});
+		expect(facts.statistics).toEqual(before);
 	});
 
 	it.each(["typeof", "tostring", "void"])(

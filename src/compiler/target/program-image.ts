@@ -1541,26 +1541,38 @@ export function nativeFrameRootRegisters(
 			previousRegister = register;
 			frameRoots.add(register);
 		}
-		const combinedRoots = new Set<number>();
-		const declaredRoots = new Set(safepoint.rootRegisters);
 		for (const boundary of ["incomingRootRegisters", "outgoingRootRegisters"] as const) {
 			let previousBoundaryRegister = -1;
+			let declaredIndex = 0;
 			for (const register of safepoint[boundary]) {
+				while (
+					declaredIndex < safepoint.rootRegisters.length &&
+					safepoint.rootRegisters[declaredIndex]! < register
+				)
+					declaredIndex++;
 				if (
 					!Number.isSafeInteger(register) ||
 					register <= previousBoundaryRegister ||
-					!declaredRoots.has(register)
+					safepoint.rootRegisters[declaredIndex] !== register
 				) {
 					throw new RangeError(
 						`native ${boundary} must be unique ordered subsets of GC roots`,
 					);
 				}
 				previousBoundaryRegister = register;
-				combinedRoots.add(register);
 			}
 		}
-		if (combinedRoots.size !== safepoint.rootRegisters.length) {
-			throw new RangeError("native GC roots must equal the incoming/outgoing root union");
+		let incomingIndex = 0,
+			outgoingIndex = 0;
+		for (const register of safepoint.rootRegisters) {
+			const incoming = safepoint.incomingRootRegisters[incomingIndex] === register;
+			const outgoing = safepoint.outgoingRootRegisters[outgoingIndex] === register;
+			if (!incoming && !outgoing)
+				throw new RangeError(
+					"native GC roots must equal the incoming/outgoing root union",
+				);
+			if (incoming) incomingIndex++;
+			if (outgoing) outgoingIndex++;
 		}
 	}
 	for (const [instructionIp, instruction] of fn.instructions.entries()) {

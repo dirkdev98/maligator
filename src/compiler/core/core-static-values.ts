@@ -373,6 +373,7 @@ export class CoreStaticValueAnalysis {
 	readonly #limit: number;
 	readonly #context: CoreCompilationContext | undefined;
 	readonly #memory: () => CoreMemoryVersions;
+	readonly #observationWidth: number;
 	#memorySources: CoreMemoryValueSources | undefined;
 	readonly #cells:
 		| ((
@@ -386,10 +387,13 @@ export class CoreStaticValueAnalysis {
 	#cellRevision: number | undefined;
 	readonly #cache = new Map<CoreValueId, CoreStaticValueResult>();
 	readonly #visiting = new Set<CoreValueId>();
-	readonly #observations = new Map<string, CoreStaticValueResult>();
+	readonly #observations = new Map<number | string, CoreStaticValueResult>();
 	// Descriptor metadata stays complete; demanded payloads never enter the full-value caches.
-	readonly #propertyCache = new Map<string, CoreStaticValueResult>();
-	readonly #propertyObservations = new Map<string, CoreStaticValueResult>();
+	readonly #propertyCache = new Map<string, Map<CoreValueId, CoreStaticValueResult>>();
+	readonly #propertyObservations = new Map<
+		string,
+		Map<number | string, CoreStaticValueResult>
+	>();
 	#propertyProofs = new WeakMap<CoreStaticProperty, CoreInstructionId>();
 	#proofs = new WeakSet<CoreStaticValue>();
 	readonly statistics: CoreStaticValueStatistics = {
@@ -419,6 +423,7 @@ export class CoreStaticValueAnalysis {
 		this.#fn = fn;
 		this.#versions = fn.versions;
 		this.#dataVersion = program.programVersion("data");
+		this.#observationWidth = fn.instructionCapacity;
 		this.#cfg = cfg;
 		this.#limit = limit;
 		this.#context = context;
@@ -454,6 +459,35 @@ export class CoreStaticValueAnalysis {
 		}
 	}
 
+	#propertyCacheFor(key: string): Map<CoreValueId, CoreStaticValueResult> {
+		let cache = this.#propertyCache.get(key);
+		if (cache === undefined) {
+			cache = new Map();
+			this.#propertyCache.set(key, cache);
+		}
+		return cache;
+	}
+
+	#propertyObservationsFor(key: string): Map<number | string, CoreStaticValueResult> {
+		let cache = this.#propertyObservations.get(key);
+		if (cache === undefined) {
+			cache = new Map();
+			this.#propertyObservations.set(key, cache);
+		}
+		return cache;
+	}
+
+	#observationKey(value: CoreValueId, consumer: CoreInstructionId): number | string {
+		const key = value * this.#observationWidth + consumer;
+		// The captured stride stays fixed, including during an uncommitted editor transaction.
+		return value >= 0 &&
+			consumer >= 0 &&
+			consumer < this.#observationWidth &&
+			Number.isSafeInteger(key)
+			? key
+			: `${value}:${consumer}`;
+	}
+
 	query(value: CoreValueId): CoreStaticValueResult {
 		return this.#query(value);
 	}
@@ -464,10 +498,11 @@ export class CoreStaticValueAnalysis {
 		this.statistics.queries++;
 		if (!this.#fn.isValueLive(value))
 			throw new Error("Static-value query references a dead SSA value");
-		const key = requestedKey === undefined ? "" : `${value}:${requestedKey}`;
 		const full = this.#cache.get(value);
 		const property =
-			requestedKey === undefined ? undefined : this.#propertyCache.get(key);
+			requestedKey === undefined
+				? undefined
+				: this.#propertyCache.get(requestedKey)?.get(value);
 		const cached =
 			property?.kind === "known"
 				? property
@@ -495,7 +530,7 @@ export class CoreStaticValueAnalysis {
 			this.#visiting.delete(value);
 		}
 		if (requestedKey === undefined) this.#cache.set(value, result);
-		else this.#propertyCache.set(key, result);
+		else this.#propertyCacheFor(requestedKey).set(value, result);
 		if (result.kind === "known") this.#proofs.add(result);
 		return result;
 	}
@@ -515,19 +550,25 @@ export class CoreStaticValueAnalysis {
 	): CoreStaticValueResult {
 		this.assertCurrent();
 		this.#refreshCells();
-		const fullKey = `${value}:${consumer}`;
-		const key = requestedKey === undefined ? fullKey : `${fullKey}:${requestedKey}`;
-		const cache =
-			requestedKey === undefined ? this.#observations : this.#propertyObservations;
-		const full = this.#observations.get(fullKey);
-		const property = cache.get(key);
+		const key = this.#observationKey(value, consumer);
+		const full = this.#observations.get(key);
+		const property =
+			requestedKey === undefined
+				? full
+				: this.#propertyObservations.get(requestedKey)?.get(key);
 		const cached =
 			property?.kind === "known" ? property : full?.kind === "known" ? full : property;
 		if (cached !== undefined) return cached;
 		// Recursive control flow widens before following backedges.
-		cache.set(key, { kind: "unknown", reason: "cycle-widening" });
+		(requestedKey === undefined
+			? this.#observations
+			: this.#propertyObservationsFor(requestedKey)
+		).set(key, { kind: "unknown", reason: "cycle-widening" });
 		const result = this.#observe(value, consumer, requestedKey);
-		cache.set(key, result);
+		(requestedKey === undefined
+			? this.#observations
+			: this.#propertyObservationsFor(requestedKey)
+		).set(key, result);
 		if (result.kind === "known") this.#proofs.add(result);
 		return result;
 	}
@@ -1402,12 +1443,7 @@ export class CoreStaticValueAnalysis {
 					? "construct"
 					: "call"
 				: originalOpcode;
-		const operandStart = fn.kernel.instructionOperandStart(instruction);
-		const operands = Array.from(
-			{ length: fn.kernel.instructionOperandCount(instruction) },
-			(_, index) => fn.kernel.operandAt(operandStart + index),
-		);
-		if (knownOperation !== undefined && opcode === "call") operands.unshift(operands[0]!);
+
 		const prototype: StaticPrototype = { kind: "unknown" };
 		const primitive = (
 			description: StaticDescriptionId,
@@ -1423,6 +1459,58 @@ export class CoreStaticValueAnalysis {
 			environmentDependencies: [],
 		});
 		const intern = program.staticDescriptions;
+		if (opcode === "createFunction") {
+			const functionIndex = attributes.functionIndex;
+			if (typeof functionIndex !== "number")
+				return { kind: "unknown", reason: "unsupported-producer" };
+			return {
+				...primitive(
+					intern.intern({
+						kind: "function",
+						codeIdentity: String(functionIndex),
+						captures: [],
+						capturesComplete: false,
+					}),
+					"function",
+				),
+				state: "initial-allocation",
+				identity: { kind: "fresh-per-evaluation", function: fn.id, value },
+			};
+		}
+		switch (opcode) {
+			case "createUndefined":
+				return primitive(intern.intern({ kind: "undefined" }), "undefined");
+			case "createNull":
+				return primitive(intern.intern({ kind: "null" }), "null");
+			case "createBoolean":
+				return primitive(
+					intern.intern({ kind: "boolean", value: attributes.value === true }),
+					"boolean",
+				);
+			case "createI32":
+			case "createF64":
+			case "createNumber":
+				return primitive(
+					intern.intern(staticNumberDescription(attributes.value as number)),
+					"number",
+				);
+			case "createString":
+				return primitive(
+					intern.intern({
+						kind: "string",
+						codeUnits: program.stringConstants[attributes.stringIndex as number]!,
+					}),
+					"string",
+				);
+			case "createBigint":
+				return primitive(
+					intern.intern({
+						kind: "bigint",
+						decimal: String(program.bigintConstants[attributes.bigintIndex as number]!),
+					}),
+					"bigint",
+				);
+		}
 		if (opcode === "preparedStringCompare" || opcode === "preciseNumberSum")
 			return primitive(
 				intern.intern({
@@ -1448,7 +1536,10 @@ export class CoreStaticValueAnalysis {
 				"number",
 			);
 		if (opcode === "move") {
-			const input = this.#query(operands[0]!, requestedKey);
+			const input = this.#query(
+				fn.kernel.operandAt(fn.kernel.instructionOperandStart(instruction)),
+				requestedKey,
+			);
 			return input.kind === "known" ? { ...input, value } : input;
 		}
 		if (["loadLocal", "loadGlobal", "loadCaptured"].includes(opcode)) {
@@ -1478,8 +1569,15 @@ export class CoreStaticValueAnalysis {
 				const fact = this.#cells(this.#fn, instruction, value, instruction, requestedKey);
 				if (fact !== undefined) return fact;
 			}
+			return { kind: "unknown", reason: "unsupported-producer" };
 		}
 
+		const operandStart = fn.kernel.instructionOperandStart(instruction);
+		const operands = Array.from(
+			{ length: fn.kernel.instructionOperandCount(instruction) },
+			(_, index) => fn.kernel.operandAt(operandStart + index),
+		);
+		if (knownOperation !== undefined && opcode === "call") operands.unshift(operands[0]!);
 		if (
 			opcode === "binary" ||
 			(opcode === "unary" &&
@@ -2034,58 +2132,13 @@ export class CoreStaticValueAnalysis {
 			}
 		}
 
-		if (opcode === "createFunction") {
-			const functionIndex = attributes.functionIndex;
-			if (typeof functionIndex !== "number")
-				return { kind: "unknown", reason: "unsupported-producer" };
-			return {
-				...primitive(
-					intern.intern({
-						kind: "function",
-						codeIdentity: String(functionIndex),
-						captures: [],
-						capturesComplete: false,
-					}),
-					"function",
-				),
-				state: "initial-allocation",
-				identity: { kind: "fresh-per-evaluation", function: fn.id, value },
-			};
-		}
-		switch (opcode) {
-			case "createUndefined":
-				return primitive(intern.intern({ kind: "undefined" }), "undefined");
-			case "createNull":
-				return primitive(intern.intern({ kind: "null" }), "null");
-			case "createBoolean":
-				return primitive(
-					intern.intern({ kind: "boolean", value: attributes.value === true }),
-					"boolean",
-				);
-			case "createI32":
-			case "createF64":
-			case "createNumber":
-				return primitive(
-					intern.intern(staticNumberDescription(attributes.value as number)),
-					"number",
-				);
-			case "createString":
-				return primitive(
-					intern.intern({
-						kind: "string",
-						codeUnits: program.stringConstants[attributes.stringIndex as number]!,
-					}),
-					"string",
-				);
-			case "createBigint":
-				return primitive(
-					intern.intern({
-						kind: "bigint",
-						decimal: String(program.bigintConstants[attributes.bigintIndex as number]!),
-					}),
-					"bigint",
-				);
-		}
+		if (
+			opcode !== "createObject" &&
+			opcode !== "createObjectShaped" &&
+			opcode !== "createArray" &&
+			opcode !== "instantiateLiteralTemplate"
+		)
+			return { kind: "unknown", reason: "unsupported-producer" };
 		const bindings: Array<CoreValueId> = [];
 		const member = (input: CoreValueId): StaticMember => {
 			const fact = requestedKey === undefined ? this.query(input) : undefined;
