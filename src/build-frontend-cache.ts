@@ -551,6 +551,7 @@ export async function compileBuildFrontendAsync(
 	compiler: BuildRootCompiler,
 	controls: { concurrency: number; signal?: AbortSignal; beforePublication?: () => void },
 ): Promise<CompiledBuildFrontend> {
+	controls.signal?.throwIfAborted();
 	if (
 		controls.concurrency <= 1 ||
 		options.stripTypes !== stripCompactTypes ||
@@ -558,7 +559,6 @@ export async function compileBuildFrontendAsync(
 		options.optimization !== "full"
 	)
 		return compileBuildFrontend(options);
-	controls.signal?.throwIfAborted();
 	const prepared = prepareBuildFrontend(options);
 	if (prepared.kind === "cached") return prepared.value;
 	prepared.prepareMain();

@@ -152,6 +152,50 @@ test("cache hits and graphs without roots admit no transport jobs", async () => 
 	assert.equal(noRoots.workerImages.length, 0);
 });
 
+for (const mode of ["serial", "custom-strip"] as const)
+	for (const cached of [false, true])
+		test(`precancelled ${mode} fallback rejects before ${cached ? "warm cache return" : "compilation or cache publication"}`, async () => {
+			let strips = 0;
+			let phases = 0;
+			let admissions = 0;
+			const options = fixture();
+			if (mode === "custom-strip")
+				options.stripTypes = (...args: Parameters<typeof stripCompactTypes>) => {
+					strips++;
+					return stripCompactTypes(...args);
+				};
+			options.onCompilePhase = () => {
+				phases++;
+			};
+			if (cached) assert.equal(compileBuildFrontend(options).cache, "miss");
+			strips = 0;
+			phases = 0;
+			const compiler: BuildRootCompiler = {
+				validateInputs: validateRootInputs,
+				start() {
+					admissions++;
+					assert.fail("precancelled compilation admitted root helpers");
+				},
+			};
+			const controller = new AbortController();
+			const reason = Object.freeze({ cancelled: mode, cached });
+			controller.abort(reason);
+			await assert.rejects(
+				compileBuildFrontendAsync(options, compiler, {
+					concurrency: mode === "serial" ? 1 : 3,
+					signal: controller.signal,
+				}),
+				(error: unknown) => {
+					assert.equal(error, reason);
+					return true;
+				},
+			);
+			assert.equal(strips, 0);
+			assert.equal(phases, 0);
+			assert.equal(admissions, 0);
+			assert.equal(existsSync(options.cacheDirectory!), cached);
+		});
+
 for (const error of [new Error("owner failed"), undefined])
 	test(`owner failure ${String(error)} wins after result and close drain`, async () => {
 		const options = fixture();

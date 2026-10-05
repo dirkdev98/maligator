@@ -16,18 +16,25 @@ owner's unchanged full optimizer, then join before ordered publication. Cache hi
 and graphs without worker roots admit no helpers. Native-function rendering stays
 serial: that finer seam did not earn its startup and program-cloning costs.
 
-Three interleaved Node CLI pairs on October 5, 2026, using the dependency-heavy
-Express worker application
-on an M3 Pro measured whole build wall time of 19.99–20.53 seconds serial versus
-14.75–15.35 seconds with two helpers, a 24–26% reduction. Generated C and executed
-native output matched in every pair. These were forced frontend compilations with
-warm native runtime, object and binary caches, not cold native builds or ordinary
-cache hits. Whole-command CPU increased from 36.22–36.63 to 53.15–53.84 seconds.
-Node process peak RSS, including its helper threads but excluding external native
-compiler children, ranged from 2.27–2.40 GiB serial and 2.20–2.48 GiB parallel.
-Ordinary unchanged builds reused the frontend cache and admitted no root helpers;
-that path has no demonstrated root-overlap gain. The compiler holdout and native
-transport require their own acceptance.
+Three interleaved Node CLI pairs per workload on October 5, 2026, on an M3 Pro
+measured mean whole build wall time of 19.87 to 14.89 seconds for a dependency-heavy
+Express worker application and 112.53 to 66.51 seconds for the compiler holdout,
+reductions of 25.0% and 40.9%. Median compiler time was 112.83 to 59.46 seconds;
+the first parallel sample's longer cached native-binary phase remains included in
+the mean. All 88 application and 400 compiler translation units, native binaries
+and executed output matched. These were forced frontend compilations with seeded
+warm native runtime, object and binary caches behind identical lexical paths,
+not cold native builds or ordinary frontend cache hits.
+
+Mean whole-command CPU increased 48.5% for the application and 16.5% for the
+compiler. Application mean Node peak RSS increased 9.5%; compiler median Node
+peak RSS increased 32%. Node process peak RSS includes helper threads and excludes
+external native compiler children. It is separate from whole-command CPU and is
+not an aggregate process-tree memory peak. Ordinary unchanged builds reused the
+frontend cache and admitted no helpers; that path has no demonstrated root-overlap
+gain. Default and explicit-budget-one controls retained serial timing. Native
+transport has focused correctness acceptance; its speed and the rebuilt packaged
+CLI require separate acceptance.
 
 Root overlap applies only to this opt-in production build. Non-production builds
 prepare in a background compiler; run joins preparation before a fresh application;
