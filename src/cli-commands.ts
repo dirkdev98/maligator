@@ -22,7 +22,15 @@ import {
 } from "./build-flags.ts";
 import type { NativeBuildPlan } from "./build-flags.ts";
 import { validateBuildFragmentRequest } from "./build-fragment-cache.ts";
-import { compileBuildFrontend } from "./build-frontend-cache.ts";
+import {
+	compileBuildFrontend,
+	compileBuildFrontendAsync,
+} from "./build-frontend-cache.ts";
+import type {
+	BuildRootCompiler,
+	CompileBuildFrontendOptions,
+	CompiledBuildFrontend,
+} from "./build-frontend-cache.ts";
 import { BuildReporter } from "./build-progress.ts";
 import {
 	clearAllMaligatorCaches,
@@ -50,7 +58,10 @@ import { compilerEntrypointSourceFiles } from "./compiler-bake.ts";
 import type { CompilationPhase, CompilerService } from "./compiler-service.ts";
 import { formatCoreProgram } from "./compiler/core/core-ir.ts";
 import { formatCoreOptimizationReport } from "./compiler/core/core-optimization-report.ts";
-import { TYPE_STRIPPER_IDENTITY } from "./compiler/frontend/compact-type-strip.ts";
+import {
+	TYPE_STRIPPER_IDENTITY,
+	stripCompactTypes,
+} from "./compiler/frontend/compact-type-strip.ts";
 import {
 	compileEntrypoint,
 	compileEntrypointToBuffer,
@@ -118,6 +129,9 @@ export interface CommandContext {
 	developmentCache?: DevelopmentBuildCache;
 	dependencyWorker?: DependencyFragmentWorker;
 	compiler?: CompilerService;
+	rootCompiler?: BuildRootCompiler;
+	availableCompileConcurrency?: number;
+	rootCompilationSignal?: AbortSignal;
 	applications?: ApplicationImageHost;
 	checkpoint?: () => void;
 	onCompilationPhase?: (event: CompilationPhase) => void;
@@ -408,12 +422,83 @@ export function applicationDriverPath(
 	);
 }
 
+interface PreparedCommand {
+	compile(): CompiledBuildFrontend;
+	compileAsync(
+		compiler: BuildRootCompiler,
+		concurrency: number,
+	): Promise<CompiledBuildFrontend>;
+	finish(frontend: CompiledBuildFrontend): BuildCommandResult;
+}
+
 export function prepareCommand(
 	command: BuildCommand | RunCommand | DevCommand,
 	context: CommandContext,
 	compact = false,
 ): BuildCommandResult {
+	const prepared = prepareCommandState(command, context, compact);
+	return prepared.finish(prepared.compile());
+}
+
+export async function prepareCommandAsync(
+	command: BuildCommand,
+	context: CommandContext,
+): Promise<BuildCommandResult> {
+	const requested = command.compileConcurrency ?? 1;
+	const fallback =
+		context.rootCompiler === undefined
+			? "root transport unavailable"
+			: context.stripTypes !== stripCompactTypes
+				? "custom type stripper"
+				: !command.production || command.profile
+					? "serial build policy"
+					: undefined;
+	const concurrency =
+		fallback === undefined
+			? Math.max(1, Math.min(requested, context.availableCompileConcurrency ?? 1))
+			: 1;
+	const reason =
+		fallback ?? (concurrency < requested ? "available job budget" : undefined);
+	if (command.compileConcurrency !== undefined)
+		writeStderr(
+			`Compile concurrency: ${concurrency} total jobs maximum (${concurrency > 1 ? "parallel roots" : `serial${reason === undefined ? "" : `: ${reason}`}`}; requested ${requested})`,
+		);
+	const prepared = prepareCommandState(command, context, false, true);
+	const frontend =
+		concurrency > 1 && context.rootCompiler !== undefined
+			? await prepared.compileAsync(context.rootCompiler, concurrency)
+			: prepared.compile();
+	return prepared.finish(frontend);
+}
+
+function prepareCommandState(
+	command: BuildCommand | RunCommand | DevCommand,
+	context: CommandContext,
+	compact = false,
+	validateConfiguration = false,
+): PreparedCommand {
+	const configPath = path.resolve(command.configPath ?? BUILD_CONFIG_NAME);
+	const configurationRevision = () => {
+		if (!existsSync(configPath)) return undefined;
+		const stat = statSync(configPath);
+		return JSON.stringify([
+			stat.size,
+			stat.mtimeMs,
+			stat.ctimeMs,
+			stat.ino,
+			stat.dev,
+			readFileSync(configPath, "utf8"),
+		]);
+	};
+	const revision = validateConfiguration ? configurationRevision() : undefined;
+	const validateConfig = () => {
+		if (validateConfiguration && configurationRevision() !== revision)
+			throw new BuildConfigError(
+				`configuration changed before build publication: ${configPath}`,
+			);
+	};
 	const buildConfig = loadCommandConfig(command, context.stripTypes);
+	validateConfig();
 	const entrypointPath = resolveEntrypoint(command, buildConfig);
 	const name =
 		command.kind === "build"
@@ -487,6 +572,19 @@ export function prepareCommand(
 			throw error;
 		}
 	});
+	const assetIdentities = frontendSession.dependencyIdentities(
+		assets.flatMap((asset) => asset.files.map((file) => file.inputPath)),
+	);
+	const validatePreparedInputs = () => {
+		validateConfig();
+		if (!validateConfiguration) return;
+		for (const identity of assetIdentities) {
+			if (!frontendDependencyUnchanged(identity))
+				throw new BuildConfigError(
+					`asset changed before build publication: ${identity.path}`,
+				);
+		}
+	};
 	const assetManifest = reporter.phase("Prepare development assets", () =>
 		command.kind === "build" ? undefined : cacheDevelopmentAssets(assets),
 	);
@@ -521,325 +619,453 @@ export function prepareCommand(
 	});
 	const compilerDiagnostics = command.kind === "build" && command.internal.dumpCore;
 	const compilerPhases: Array<{ phase: string; durationMs: number }> = [];
-	const frontend = reporter.phase(
-		"Compile modules",
-		() => {
-			try {
-				return compileBuildFrontend({
-					platformSourceRoot:
-						context.installation.platformSourceRoot ??
-						path.dirname(context.installation.nodeGlobalsPath),
-					entrypoint: entrypointPath,
-					config: buildConfig,
-					execution,
-					...(buildConfig.surface.node
-						? {
-								nodeGlobalsSource: readFileSync(
-									context.installation.nodeGlobalsPath,
-									"utf-8",
-								),
-							}
-						: {}),
-					stripTypes: context.stripTypes,
-					stripperIdentity: context.installation.frontendIdentity,
-					session: frontendSession,
-					optimization: production ? "full" : "development",
-					// Debug builds pay per-pass Core verification so a broken transform
-					// names its own pass instead of surfacing at a later boundary.
-					...(debugEnabled ? { coreVerification: "per-pass" as const } : {}),
-					profile: command.profile,
-					coreInstrumentation:
-						command.kind === "build" ? command.internal.coreReport : undefined,
-					enforcePolicies: !(
-						command.kind === "build" && command.internal.serializePath !== undefined
-					),
-					// Profile metadata is derived from the optimized semantic program and is
-					// not part of the portable wire schema yet. Do not accept a definition-only
-					// frontend cache hit that would discard its source-site identities.
-					forceCompile:
-						debugEnabled || compilerDiagnostics || command.profile || reporter.verbose,
-					relocatable: command.kind !== "build" && !command.profile,
-					onCompilePhase: (phase, durationMs) => {
-						context.checkpoint?.();
-						compilerPhases.push({ phase, durationMs });
-					},
-					dependencyWorker: context.dependencyWorker,
-					afterCoreOptimization: (core) => {
-						if (command.kind === "build" && compilerDiagnostics) {
-							log.info(formatCoreProgram(core));
-						}
-					},
-				});
-			} catch (error) {
-				if (error instanceof BuildConfigError) commandError(`error: ${error.message}`);
-				throw error;
-			}
-		},
-		(result) => `frontend cache ${result.cache}`,
-	);
-	reporter.detail("Frontend cache", `${frontend.cache} (${frontend.frontendMs}ms)`);
-	for (const diagnostic of frontend.diagnostics) {
-		reporter.warning(
-			`${diagnostic.path}:${diagnostic.line}:${diagnostic.column} ` +
-				`[${diagnostic.code}] ${diagnostic.message}`,
-		);
-	}
-	reporter.detail(
-		"Module parses",
-		`${frontend.moduleParses.hits} reused, ${frontend.moduleParses.misses} parsed`,
-	);
-	reporter.detail(
-		"File digests",
-		`${frontend.fileDigests.hits} reused, ${frontend.fileDigests.misses} hashed`,
-	);
-	reporter.detail(
-		"Frontend phases",
-		`validation ${frontend.phases.validationMs}ms, graph ${frontend.phases.graphMs}ms, ` +
-			`semantic ${frontend.phases.semanticMs}ms, compile ${frontend.phases.compileMs}ms, ` +
-			`serialize ${frontend.phases.serializeMs}ms, workers ${frontend.phases.workerMs}ms`,
-	);
-	if (frontend.fragmentArtifacts !== undefined) {
-		reporter.detail(
-			"Development fragments",
-			`${frontend.fragmentArtifacts.hits} reused, ${frontend.fragmentArtifacts.misses} compiled`,
-		);
-	}
-	if (frontend.fragmentFallback !== undefined) {
-		reporter.detail(
-			"Development fragments",
-			`whole-image fallback · ${frontend.fragmentFallback}`,
-		);
-	}
-	for (const phase of compilerPhases) {
-		reporter.timing(`Compiler phase · ${phase.phase}`, phase.durationMs);
-	}
-	if (frontend.optimizationReport !== undefined) {
-		for (const { label, value } of formatCoreOptimizationReport(
-			frontend.optimizationReport,
-		)) {
-			reporter.detail(label, value);
-		}
-	}
-	const dependencies = [
-		...new Set([
-			...frontend.dependencies,
-			...assets.flatMap((asset) => asset.files.map((file) => file.inputPath)),
-		]),
-	].sort();
-	const dependencyIdentities = frontendSession.dependencyIdentities(dependencies);
-	reporter.detail("Dependencies", dependencies.length);
-	for (const dependency of dependencies) reporter.detail("Dependency", dependency);
-
-	const stats = frontend.imageStats;
-	reporter.detail("Functions", stats.functionCount);
-	reporter.detail("Instructions", stats.instructionCount);
-
-	const serializePath =
-		command.kind === "build" ? command.internal.serializePath : undefined;
-	if (serializePath !== undefined) {
-		reporter.phase("Write runtime image", () =>
-			writeFileSync(serializePath, frontend.wire),
-		);
-		const workerManifest = writeSerializedWorkerManifest(
-			frontend.workerImages,
-			serializePath,
-		);
-		if (workerManifest !== undefined) reporter.detail("Worker manifest", workerManifest);
-		reporter.detail("Serialized bytes", frontend.wire.length);
-		reporter.complete("Serialized", serializePath, true);
-		return { serializedPath: serializePath, dependencies, dependencyIdentities };
-	}
-
-	const packagedRunner =
-		command.kind !== "build" && !command.profile
-			? compatibleDevelopmentRunner(buildConfig, context)
-			: undefined;
-	const workerManifest =
-		command.kind === "build"
-			? undefined
-			: cacheDevelopmentWorkerManifest(frontend.workerImages);
-	if (command.kind !== "build" && packagedRunner !== undefined) {
-		const wirePaths = reporter.phase("Cache development image", () =>
-			frontend.runtimeArtifacts.map((artifact) => artifact.path),
-		);
-		const surfaceMask =
-			(buildConfig.surface.webPlatform ? 1 : 0) | (buildConfig.surface.node ? 2 : 0);
-		const runArguments = workerManifestArguments(workerManifest).concat(
-			packagedRunner.wireProtocol === "product"
-				? [
-						assetManifest === undefined
-							? "--maligator-internal-run-wire"
-							: "--maligator-internal-run-wire-assets",
-						String(surfaceMask),
-						String(wirePaths.length),
-						...(assetManifest === undefined ? [] : [assetManifest]),
-						entrypointPath,
-						...wirePaths,
-						...command.programArgs,
-					]
-				: [
-						assetManifest === undefined
-							? "--maligator-internal-run-wires"
-							: "--maligator-internal-run-wires-assets",
-						String(wirePaths.length),
-						...(assetManifest === undefined ? [] : [assetManifest]),
-						entrypointPath,
-						...wirePaths,
-						...command.programArgs,
-					],
-		);
-		reporter.detail("Execution backend", "packaged development runtime");
-		reporter.detail("Development images", wirePaths.join(", "));
-		reporter.complete("Ready", packagedRunner.executablePath, false);
-		return {
-			...(packagedRunner.inProcess
-				? {
-						applicationImage: {
-							schema: 1 as const,
-							wires: frontend.runtimeArtifacts.map((artifact) => ({
-								path: artifact.path,
-								sha256: artifact.digest,
-							})),
-							entryPath: entrypointPath,
-							...(workerManifest === undefined
-								? {}
-								: { workerManifestPath: workerManifest }),
-							...(assetManifest === undefined
-								? {}
-								: { assetManifestPath: assetManifest }),
-							webPlatform: buildConfig.surface.webPlatform,
-							node: buildConfig.surface.node,
-							engine: {
-								primordials: buildConfig.engine.primordials,
-								eval: buildConfig.engine.eval === true,
-								realms: buildConfig.engine.realms,
-								regexp: buildConfig.engine.regexp,
-								temporal: buildConfig.engine.temporal,
-								intl: buildConfig.engine.intl.enabled,
-							},
-						},
-					}
-				: {}),
-			binaryPath: packagedRunner.executablePath,
-			runArguments,
-			dependencies,
-			dependencyIdentities,
-		};
-	}
-
-	const evalCompiler = context.installation.evalCompiler;
-	const compilerBake =
-		evalCompiler.kind === "source"
+	const frontendOptions: CompileBuildFrontendOptions = {
+		platformSourceRoot:
+			context.installation.platformSourceRoot ??
+			path.dirname(context.installation.nodeGlobalsPath),
+		entrypoint: entrypointPath,
+		config: buildConfig,
+		execution,
+		...(buildConfig.surface.node
 			? {
-					kind: "source" as const,
-					sourceDirectory: evalCompiler.sourceDirectory,
-					entrypoint: evalCompiler.entrypoint,
-					sourceFiles: compilerEntrypointSourceFiles(
-						evalCompiler.sourceDirectory,
-						evalCompiler.entrypoint,
-						context.stripTypes,
-					),
-					bake: () =>
-						compileEntrypointToBuffer(evalCompiler.entrypoint, {
-							intrinsicGlobalReads: true,
-							stripTypes: context.stripTypes,
-						}),
-					bakeProgram: () =>
-						compileEntrypoint(evalCompiler.entrypoint, {
-							intrinsicGlobalReads: true,
-							stripTypes: context.stripTypes,
-						}),
+					nodeGlobalsSource: readFileSync(context.installation.nodeGlobalsPath, "utf-8"),
 				}
-			: { kind: "prebuilt" as const, path: evalCompiler.wirePath };
-	const baseDerivation = buildDerivationFromConfig(buildConfig);
-	const derivation = command.profile
-		? {
-				features: normalizeNativeFeatures({
-					...baseDerivation.features,
-					profileEnabled: command.profile,
-				}),
-				cacheSuffix: [
-					baseDerivation.cacheSuffix,
-					"profile",
-					command.profileCompiler ? "compiler" : "",
-				]
-					.filter((part) => part !== "")
-					.join("-"),
-			}
-		: baseDerivation;
-	reporter.detail(
-		"Rust features",
-		derivation.features.cargoFeatures.length === 0
-			? "(none)"
-			: derivation.features.cargoFeatures.join(", "),
-	);
-	const nativeEnvironment = compilerProfileBuildEnvironment(command);
-	reporter.detail("Native compile jobs", nativeBuildJobs(nativeEnvironment));
-	const nativeCache = new Map<"runtime" | "rust" | "binary", boolean>();
-	let generatedObjects = 0;
-	let generatedObjectHits = 0;
-	const nativeContext = resolveNativeBuildContext({
-		environment: nativeEnvironment,
-		toolchain,
-		plan,
-		runtimeDirectory: context.installation.runtimeDirectory,
-		features: derivation.features,
-		compilerBake,
-		onCacheEvent: (event) => {
-			nativeCache.set(event.artifact, event.hit);
-			reporter.detail(
-				`${event.artifact === "rust" ? "Rust" : event.artifact === "runtime" ? "Runtime" : "Binary"} cache`,
-				`${event.hit ? "hit" : "miss"} (${event.path})`,
-			);
+			: {}),
+		stripTypes: context.stripTypes,
+		stripperIdentity: context.installation.frontendIdentity,
+		session: frontendSession,
+		optimization: production ? "full" : "development",
+		// Debug builds pay per-pass Core verification so a broken transform
+		// names its own pass instead of surfacing at a later boundary.
+		...(debugEnabled ? { coreVerification: "per-pass" as const } : {}),
+		profile: command.profile,
+		coreInstrumentation:
+			command.kind === "build" ? command.internal.coreReport : undefined,
+		enforcePolicies: !(
+			command.kind === "build" && command.internal.serializePath !== undefined
+		),
+		// Profile metadata is derived from the optimized semantic program and is
+		// not part of the portable wire schema yet. Do not accept a definition-only
+		// frontend cache hit that would discard its source-site identities.
+		forceCompile:
+			debugEnabled || compilerDiagnostics || command.profile || reporter.verbose,
+		relocatable: command.kind !== "build" && !command.profile,
+		onCompilePhase: (phase, durationMs) => {
+			context.checkpoint?.();
+			compilerPhases.push({ phase, durationMs });
 		},
-		onBuildPhase: (event) => {
-			reporter.timing(
-				`Native phase · ${event.phase}`,
-				event.durationMs,
-				[
-					event.cache === undefined ? undefined : `cache ${event.cache}`,
-					event.units === undefined ? undefined : `${event.units} units`,
-					event.path,
-				]
-					.filter((value) => value !== undefined)
-					.join(" · ") || undefined,
-			);
-		},
-		onCommand: (event) => {
-			const commandLine = [event.tool, ...event.args]
-				.map((argument) =>
-					/^[A-Za-z0-9_./:@%+=,-]+$/.test(argument) ? argument : JSON.stringify(argument),
-				)
-				.join(" ");
-			reporter.detail(
-				"Command",
-				event.cwd === undefined ? commandLine : `(cd ${event.cwd}) ${commandLine}`,
-			);
-		},
-	});
-	if (command.kind !== "build" && !command.profile) {
-		const wirePaths = reporter.phase("Cache development image", () =>
-			frontend.runtimeArtifacts.map((artifact) => artifact.path),
-		);
-		reporter.detail("Execution backend", "interpreted development image");
-		reporter.detail("Development images", wirePaths.join(", "));
-		const runnerKey = `${toolchain!.fingerprint}:${derivation.cacheSuffix}`;
-		const retainedRunner = context.developmentCache?.runners.get(runnerKey);
-		const binaryPath = reporter.phase(
-			"Prepare development runtime",
+		dependencyWorker: context.dependencyWorker,
+		afterCoreOptimization: compilerDiagnostics
+			? (core) => {
+					if (command.kind === "build" && compilerDiagnostics) {
+						log.info(formatCoreProgram(core));
+					}
+				}
+			: undefined,
+	};
+	const normalizeCompileError = (error: unknown): never => {
+		if (error instanceof BuildConfigError) commandError(`error: ${error.message}`);
+		throw error;
+	};
+	const compile = () =>
+		reporter.phase(
+			"Compile modules",
 			() => {
-				if (retainedRunner !== undefined && existsSync(retainedRunner)) {
-					reporter.detail("Development runtime cache", "retained");
-					return retainedRunner;
+				try {
+					return compileBuildFrontend(frontendOptions);
+				} catch (error) {
+					return normalizeCompileError(error);
 				}
-				const built = buildDevelopmentRunner(
-					nativeContext,
-					verbose,
-					derivation.cacheSuffix,
-				).binaryPath;
-				context.developmentCache?.runners.set(runnerKey, built);
-				return built;
 			},
+			(result) => `frontend cache ${result.cache}`,
+		);
+	const compileAsync = async (compiler: BuildRootCompiler, concurrency: number) =>
+		reporter.phaseAsync(
+			"Compile modules",
+			async () => {
+				try {
+					return await compileBuildFrontendAsync(frontendOptions, compiler, {
+						concurrency,
+						signal: context.rootCompilationSignal,
+						beforePublication: validatePreparedInputs,
+					});
+				} catch (error) {
+					return normalizeCompileError(error);
+				}
+			},
+			(result) => `frontend cache ${result.cache}`,
+		);
+	const finish = (frontend: CompiledBuildFrontend): BuildCommandResult => {
+		validatePreparedInputs();
+		reporter.detail("Frontend cache", `${frontend.cache} (${frontend.frontendMs}ms)`);
+		for (const diagnostic of frontend.diagnostics) {
+			reporter.warning(
+				`${diagnostic.path}:${diagnostic.line}:${diagnostic.column} ` +
+					`[${diagnostic.code}] ${diagnostic.message}`,
+			);
+		}
+		reporter.detail(
+			frontend.phases.workerOverlap ? "Owner module parses" : "Module parses",
+			`${frontend.moduleParses.hits} reused, ${frontend.moduleParses.misses} parsed`,
+		);
+		reporter.detail(
+			"File digests",
+			`${frontend.fileDigests.hits} reused, ${frontend.fileDigests.misses} hashed`,
+		);
+		reporter.detail(
+			"Frontend phases",
+			`validation ${frontend.phases.validationMs}ms, graph ${frontend.phases.graphMs}ms, ` +
+				`semantic ${frontend.phases.semanticMs}ms, compile ${frontend.phases.compileMs}ms, ` +
+				`serialize ${frontend.phases.serializeMs}ms, workers ${frontend.phases.workerMs}ms${frontend.phases.workerOverlap ? " overlapping root window" : ""}`,
+		);
+		if (frontend.fragmentArtifacts !== undefined) {
+			reporter.detail(
+				"Development fragments",
+				`${frontend.fragmentArtifacts.hits} reused, ${frontend.fragmentArtifacts.misses} compiled`,
+			);
+		}
+		if (frontend.fragmentFallback !== undefined) {
+			reporter.detail(
+				"Development fragments",
+				`whole-image fallback · ${frontend.fragmentFallback}`,
+			);
+		}
+		for (const phase of compilerPhases) {
+			reporter.timing(`Compiler phase · ${phase.phase}`, phase.durationMs);
+		}
+		if (frontend.optimizationReport !== undefined) {
+			for (const { label, value } of formatCoreOptimizationReport(
+				frontend.optimizationReport,
+			)) {
+				reporter.detail(label, value);
+			}
+		}
+		const dependencies = [
+			...new Set([
+				...frontend.dependencies,
+				...assets.flatMap((asset) => asset.files.map((file) => file.inputPath)),
+			]),
+		].sort();
+		const dependencyIdentities = frontendSession.dependencyIdentities(dependencies);
+		reporter.detail("Dependencies", dependencies.length);
+		for (const dependency of dependencies) reporter.detail("Dependency", dependency);
+
+		const stats = frontend.imageStats;
+		reporter.detail("Functions", stats.functionCount);
+		reporter.detail("Instructions", stats.instructionCount);
+
+		const serializePath =
+			command.kind === "build" ? command.internal.serializePath : undefined;
+		if (serializePath !== undefined) {
+			reporter.phase("Write runtime image", () =>
+				writeFileSync(serializePath, frontend.wire),
+			);
+			const workerManifest = writeSerializedWorkerManifest(
+				frontend.workerImages,
+				serializePath,
+			);
+			if (workerManifest !== undefined)
+				reporter.detail("Worker manifest", workerManifest);
+			reporter.detail("Serialized bytes", frontend.wire.length);
+			reporter.complete("Serialized", serializePath, true);
+			return { serializedPath: serializePath, dependencies, dependencyIdentities };
+		}
+
+		const packagedRunner =
+			command.kind !== "build" && !command.profile
+				? compatibleDevelopmentRunner(buildConfig, context)
+				: undefined;
+		const workerManifest =
+			command.kind === "build"
+				? undefined
+				: cacheDevelopmentWorkerManifest(frontend.workerImages);
+		if (command.kind !== "build" && packagedRunner !== undefined) {
+			const wirePaths = reporter.phase("Cache development image", () =>
+				frontend.runtimeArtifacts.map((artifact) => artifact.path),
+			);
+			const surfaceMask =
+				(buildConfig.surface.webPlatform ? 1 : 0) | (buildConfig.surface.node ? 2 : 0);
+			const runArguments = workerManifestArguments(workerManifest).concat(
+				packagedRunner.wireProtocol === "product"
+					? [
+							assetManifest === undefined
+								? "--maligator-internal-run-wire"
+								: "--maligator-internal-run-wire-assets",
+							String(surfaceMask),
+							String(wirePaths.length),
+							...(assetManifest === undefined ? [] : [assetManifest]),
+							entrypointPath,
+							...wirePaths,
+							...command.programArgs,
+						]
+					: [
+							assetManifest === undefined
+								? "--maligator-internal-run-wires"
+								: "--maligator-internal-run-wires-assets",
+							String(wirePaths.length),
+							...(assetManifest === undefined ? [] : [assetManifest]),
+							entrypointPath,
+							...wirePaths,
+							...command.programArgs,
+						],
+			);
+			reporter.detail("Execution backend", "packaged development runtime");
+			reporter.detail("Development images", wirePaths.join(", "));
+			reporter.complete("Ready", packagedRunner.executablePath, false);
+			return {
+				...(packagedRunner.inProcess
+					? {
+							applicationImage: {
+								schema: 1 as const,
+								wires: frontend.runtimeArtifacts.map((artifact) => ({
+									path: artifact.path,
+									sha256: artifact.digest,
+								})),
+								entryPath: entrypointPath,
+								...(workerManifest === undefined
+									? {}
+									: { workerManifestPath: workerManifest }),
+								...(assetManifest === undefined
+									? {}
+									: { assetManifestPath: assetManifest }),
+								webPlatform: buildConfig.surface.webPlatform,
+								node: buildConfig.surface.node,
+								engine: {
+									primordials: buildConfig.engine.primordials,
+									eval: buildConfig.engine.eval === true,
+									realms: buildConfig.engine.realms,
+									regexp: buildConfig.engine.regexp,
+									temporal: buildConfig.engine.temporal,
+									intl: buildConfig.engine.intl.enabled,
+								},
+							},
+						}
+					: {}),
+				binaryPath: packagedRunner.executablePath,
+				runArguments,
+				dependencies,
+				dependencyIdentities,
+			};
+		}
+
+		const evalCompiler = context.installation.evalCompiler;
+		const compilerBake =
+			evalCompiler.kind === "source"
+				? {
+						kind: "source" as const,
+						sourceDirectory: evalCompiler.sourceDirectory,
+						entrypoint: evalCompiler.entrypoint,
+						sourceFiles: compilerEntrypointSourceFiles(
+							evalCompiler.sourceDirectory,
+							evalCompiler.entrypoint,
+							context.stripTypes,
+						),
+						bake: () =>
+							compileEntrypointToBuffer(evalCompiler.entrypoint, {
+								intrinsicGlobalReads: true,
+								stripTypes: context.stripTypes,
+							}),
+						bakeProgram: () =>
+							compileEntrypoint(evalCompiler.entrypoint, {
+								intrinsicGlobalReads: true,
+								stripTypes: context.stripTypes,
+							}),
+					}
+				: { kind: "prebuilt" as const, path: evalCompiler.wirePath };
+		const baseDerivation = buildDerivationFromConfig(buildConfig);
+		const derivation = command.profile
+			? {
+					features: normalizeNativeFeatures({
+						...baseDerivation.features,
+						profileEnabled: command.profile,
+					}),
+					cacheSuffix: [
+						baseDerivation.cacheSuffix,
+						"profile",
+						command.profileCompiler ? "compiler" : "",
+					]
+						.filter((part) => part !== "")
+						.join("-"),
+				}
+			: baseDerivation;
+		reporter.detail(
+			"Rust features",
+			derivation.features.cargoFeatures.length === 0
+				? "(none)"
+				: derivation.features.cargoFeatures.join(", "),
+		);
+		const nativeEnvironment = compilerProfileBuildEnvironment(command);
+		reporter.detail("Native compile jobs", nativeBuildJobs(nativeEnvironment));
+		const nativeCache = new Map<"runtime" | "rust" | "binary", boolean>();
+		let generatedObjects = 0;
+		let generatedObjectHits = 0;
+		const nativeContext = resolveNativeBuildContext({
+			environment: nativeEnvironment,
+			toolchain,
+			plan,
+			runtimeDirectory: context.installation.runtimeDirectory,
+			features: derivation.features,
+			compilerBake,
+			onCacheEvent: (event) => {
+				nativeCache.set(event.artifact, event.hit);
+				reporter.detail(
+					`${event.artifact === "rust" ? "Rust" : event.artifact === "runtime" ? "Runtime" : "Binary"} cache`,
+					`${event.hit ? "hit" : "miss"} (${event.path})`,
+				);
+			},
+			onBuildPhase: (event) => {
+				reporter.timing(
+					`Native phase · ${event.phase}`,
+					event.durationMs,
+					[
+						event.cache === undefined ? undefined : `cache ${event.cache}`,
+						event.units === undefined ? undefined : `${event.units} units`,
+						event.path,
+					]
+						.filter((value) => value !== undefined)
+						.join(" · ") || undefined,
+				);
+			},
+			onCommand: (event) => {
+				const commandLine = [event.tool, ...event.args]
+					.map((argument) =>
+						/^[A-Za-z0-9_./:@%+=,-]+$/.test(argument)
+							? argument
+							: JSON.stringify(argument),
+					)
+					.join(" ");
+				reporter.detail(
+					"Command",
+					event.cwd === undefined ? commandLine : `(cd ${event.cwd}) ${commandLine}`,
+				);
+			},
+		});
+		if (command.kind !== "build" && !command.profile) {
+			const wirePaths = reporter.phase("Cache development image", () =>
+				frontend.runtimeArtifacts.map((artifact) => artifact.path),
+			);
+			reporter.detail("Execution backend", "interpreted development image");
+			reporter.detail("Development images", wirePaths.join(", "));
+			const runnerKey = `${toolchain!.fingerprint}:${derivation.cacheSuffix}`;
+			const retainedRunner = context.developmentCache?.runners.get(runnerKey);
+			const binaryPath = reporter.phase(
+				"Prepare development runtime",
+				() => {
+					if (retainedRunner !== undefined && existsSync(retainedRunner)) {
+						reporter.detail("Development runtime cache", "retained");
+						return retainedRunner;
+					}
+					const built = buildDevelopmentRunner(
+						nativeContext,
+						verbose,
+						derivation.cacheSuffix,
+					).binaryPath;
+					context.developmentCache?.runners.set(runnerKey, built);
+					return built;
+				},
+				() => {
+					const caches = (["runtime", "rust", "binary"] as const)
+						.map((artifact) =>
+							nativeCache.has(artifact)
+								? `${artifact} ${nativeCache.get(artifact) ? "hit" : "miss"}`
+								: undefined,
+						)
+						.filter((value) => value !== undefined);
+					return caches.join(" · ");
+				},
+			);
+			reporter.complete("Ready", binaryPath, false);
+			return {
+				binaryPath,
+				runArguments: [
+					...workerManifestArguments(workerManifest),
+					assetManifest === undefined
+						? "--maligator-internal-run-wires"
+						: "--maligator-internal-run-wires-assets",
+					String(wirePaths.length),
+					...(assetManifest === undefined ? [] : [assetManifest]),
+					entrypointPath,
+					...wirePaths,
+					...command.programArgs,
+				],
+				dependencies,
+				dependencyIdentities,
+			};
+		}
+
+		const programImage = frontend.programImage;
+		const output = reporter.phase("Generate native code", () => [
+			...emitProgramTranslationUnits(programImage, {
+				sourcePath: nativeSourcePath,
+				compiled: compiledNativeOutput,
+				assets,
+				maligatorSurface: buildConfig.surface.maligator,
+			}),
+			...emitWorkerImageTranslationUnits(frontend.workerImages, {
+				sourcePath: nativeSourcePath,
+				compiled: compiledNativeOutput,
+				assets,
+				maligatorSurface: buildConfig.surface.maligator,
+			}),
+		]);
+		if (command.kind === "build" && command.internal.emitC)
+			log.info(output.map((unit) => unit.source).join("\n"));
+		reporter.detail("Translation units", output.length);
+		reporter.detail(
+			"Generated C bytes",
+			output.reduce((total, unit) => total + unit.source.length, 0),
+		);
+		const binaryPath = reporter.phase(
+			"Build native binary",
+			() =>
+				buildLocalBinary({
+					context: nativeContext,
+					name,
+					cSource: output,
+					verbose,
+					onWarning: (warning) => reporter.warning(warning),
+					onGeneratedObject: (event) => {
+						generatedObjects++;
+						if (event.cache === "hit") generatedObjectHits++;
+						const largestDefinitions = [...(event.definitions ?? [])]
+							.sort((left, right) => right.sourceCodeUnits - left.sourceCodeUnits)
+							.slice(0, 3)
+							.map(
+								(definition) =>
+									`${definition.symbol} ${formatCacheBytes(definition.sourceCodeUnits)}`,
+							);
+						reporter.detail(
+							`Generated C object · ${event.generatedKind ?? event.role} · ${event.unit}`,
+							[
+								`${event.cache} · source ${formatCacheBytes(event.sourceBytes)} · object ${formatCacheBytes(event.objectBytes)}`,
+								event.compileDurationMs === null
+									? undefined
+									: `compile ${event.compileDurationMs.toFixed(1)} ms · CPU ${(
+											event.userCpuMs! + event.systemCpuMs!
+										).toFixed(1)} ms`,
+								event.peakRssBytes === undefined
+									? undefined
+									: `peak RSS ${formatCacheBytes(event.peakRssBytes)}`,
+								event.scheduledCompileDurationMs === undefined
+									? undefined
+									: `scheduled from ${event.scheduledCompileDurationMs.toFixed(1)} ms estimate`,
+								largestDefinitions.length === 0
+									? undefined
+									: `largest definitions ${largestDefinitions.join(", ")}`,
+								event.path,
+							]
+								.filter((part) => part !== undefined)
+								.join(" · "),
+						);
+					},
+					mainFile: applicationDriverPath(
+						context.installation,
+						buildConfig.surface.webPlatform,
+						buildConfig.surface.node,
+						frontend.workerImages.length > 0,
+					),
+					cacheSuffix: derivation.cacheSuffix,
+				}).binaryPath,
 			() => {
 				const caches = (["runtime", "rust", "binary"] as const)
 					.map((artifact) =>
@@ -848,176 +1074,75 @@ export function prepareCommand(
 							: undefined,
 					)
 					.filter((value) => value !== undefined);
+				caches.push(`${generatedObjectHits}/${generatedObjects} objects cached`);
 				return caches.join(" · ");
 			},
 		);
-		reporter.complete("Ready", binaryPath, false);
-		return {
-			binaryPath,
-			runArguments: [
-				...workerManifestArguments(workerManifest),
-				assetManifest === undefined
-					? "--maligator-internal-run-wires"
-					: "--maligator-internal-run-wires-assets",
-				String(wirePaths.length),
-				...(assetManifest === undefined ? [] : [assetManifest]),
-				entrypointPath,
-				...wirePaths,
-				...command.programArgs,
-			],
-			dependencies,
-			dependencyIdentities,
-		};
-	}
-
-	const programImage = frontend.programImage;
-	const output = reporter.phase("Generate native code", () => [
-		...emitProgramTranslationUnits(programImage, {
-			sourcePath: nativeSourcePath,
-			compiled: compiledNativeOutput,
-			assets,
-			maligatorSurface: buildConfig.surface.maligator,
-		}),
-		...emitWorkerImageTranslationUnits(frontend.workerImages, {
-			sourcePath: nativeSourcePath,
-			compiled: compiledNativeOutput,
-			assets,
-			maligatorSurface: buildConfig.surface.maligator,
-		}),
-	]);
-	if (command.kind === "build" && command.internal.emitC)
-		log.info(output.map((unit) => unit.source).join("\n"));
-	reporter.detail("Translation units", output.length);
-	reporter.detail(
-		"Generated C bytes",
-		output.reduce((total, unit) => total + unit.source.length, 0),
-	);
-	const binaryPath = reporter.phase(
-		"Build native binary",
-		() =>
-			buildLocalBinary({
-				context: nativeContext,
-				name,
-				cSource: output,
-				verbose,
-				onWarning: (warning) => reporter.warning(warning),
-				onGeneratedObject: (event) => {
-					generatedObjects++;
-					if (event.cache === "hit") generatedObjectHits++;
-					const largestDefinitions = [...(event.definitions ?? [])]
-						.sort((left, right) => right.sourceCodeUnits - left.sourceCodeUnits)
-						.slice(0, 3)
-						.map(
-							(definition) =>
-								`${definition.symbol} ${formatCacheBytes(definition.sourceCodeUnits)}`,
-						);
-					reporter.detail(
-						`Generated C object · ${event.generatedKind ?? event.role} · ${event.unit}`,
-						[
-							`${event.cache} · source ${formatCacheBytes(event.sourceBytes)} · object ${formatCacheBytes(event.objectBytes)}`,
-							event.compileDurationMs === null
-								? undefined
-								: `compile ${event.compileDurationMs.toFixed(1)} ms · CPU ${(
-										event.userCpuMs! + event.systemCpuMs!
-									).toFixed(1)} ms`,
-							event.peakRssBytes === undefined
-								? undefined
-								: `peak RSS ${formatCacheBytes(event.peakRssBytes)}`,
-							event.scheduledCompileDurationMs === undefined
-								? undefined
-								: `scheduled from ${event.scheduledCompileDurationMs.toFixed(1)} ms estimate`,
-							largestDefinitions.length === 0
-								? undefined
-								: `largest definitions ${largestDefinitions.join(", ")}`,
-							event.path,
-						]
-							.filter((part) => part !== undefined)
-							.join(" · "),
-					);
-				},
-				mainFile: applicationDriverPath(
-					context.installation,
-					buildConfig.surface.webPlatform,
-					buildConfig.surface.node,
-					frontend.workerImages.length > 0,
-				),
-				cacheSuffix: derivation.cacheSuffix,
-			}).binaryPath,
-		() => {
-			const caches = (["runtime", "rust", "binary"] as const)
-				.map((artifact) =>
-					nativeCache.has(artifact)
-						? `${artifact} ${nativeCache.get(artifact) ? "hit" : "miss"}`
-						: undefined,
+		const preparedProfile = command.profile
+			? reporter.phase("Prepare profile metadata", () =>
+					prepareProfile(
+						binaryPath,
+						frontend.programImage,
+						command.profileCompiler === true ? "compiler" : "sampling",
+						{
+							coreOptimizationReport: frontend.optimizationReport,
+							coreOptimizationPlan: frontend.optimizationPlan,
+						},
+					),
 				)
-				.filter((value) => value !== undefined);
-			caches.push(`${generatedObjectHits}/${generatedObjects} objects cached`);
-			return caches.join(" · ");
-		},
-	);
-	const preparedProfile = command.profile
-		? reporter.phase("Prepare profile metadata", () =>
-				prepareProfile(
-					binaryPath,
-					frontend.programImage,
-					command.profileCompiler === true ? "compiler" : "sampling",
-					{
-						coreOptimizationReport: frontend.optimizationReport,
-						coreOptimizationPlan: frontend.optimizationPlan,
-					},
-				),
-			)
-		: undefined;
-	let resultPath = binaryPath;
-	if (command.kind === "build" && command.artifactDirectory !== undefined) {
-		const artifactDirectory = command.artifactDirectory;
-		const artifact = reporter.phase("Create artifact", () => {
-			try {
-				return createBuildArtifact({
-					binaryPath,
-					directory: artifactDirectory,
-					executableName: name,
-					licensePath: context.installation.licensePath,
-					version: MALIGATOR_VERSION,
-					target: nativeContext.toolchain.rustTarget,
-					production: true,
-					additionalFiles:
-						preparedProfile === undefined
-							? undefined
-							: [
-									{
-										sourcePath: `${binaryPath}.profile.json`,
-										path: "profile.json",
-									},
-								],
-				});
-			} catch (error) {
-				commandError(
-					`error: could not create artifact: ${error instanceof Error ? error.message : String(error)}`,
-				);
-			}
-		});
-		resultPath = artifact.directory;
-		reporter.complete("Built", resultPath, true);
+			: undefined;
+		let resultPath = binaryPath;
+		if (command.kind === "build" && command.artifactDirectory !== undefined) {
+			const artifactDirectory = command.artifactDirectory;
+			const artifact = reporter.phase("Create artifact", () => {
+				try {
+					return createBuildArtifact({
+						binaryPath,
+						directory: artifactDirectory,
+						executableName: name,
+						licensePath: context.installation.licensePath,
+						version: MALIGATOR_VERSION,
+						target: nativeContext.toolchain.rustTarget,
+						production: true,
+						additionalFiles:
+							preparedProfile === undefined
+								? undefined
+								: [
+										{
+											sourcePath: `${binaryPath}.profile.json`,
+											path: "profile.json",
+										},
+									],
+					});
+				} catch (error) {
+					commandError(
+						`error: could not create artifact: ${error instanceof Error ? error.message : String(error)}`,
+					);
+				}
+			});
+			resultPath = artifact.directory;
+			reporter.complete("Built", resultPath, true);
+			return {
+				binaryPath,
+				artifactDirectory: artifact.directory,
+				dependencies,
+				dependencyIdentities,
+				...(preparedProfile === undefined ? {} : { profile: preparedProfile }),
+			};
+		}
+		reporter.complete(
+			command.kind !== "build" ? "Ready" : "Built",
+			resultPath,
+			command.kind === "build",
+		);
 		return {
 			binaryPath,
-			artifactDirectory: artifact.directory,
 			dependencies,
 			dependencyIdentities,
 			...(preparedProfile === undefined ? {} : { profile: preparedProfile }),
 		};
-	}
-	reporter.complete(
-		command.kind !== "build" ? "Ready" : "Built",
-		resultPath,
-		command.kind === "build",
-	);
-	return {
-		binaryPath,
-		dependencies,
-		dependencyIdentities,
-		...(preparedProfile === undefined ? {} : { profile: preparedProfile }),
 	};
+	return { compile, compileAsync, finish };
 }
 
 /** Compile and link one parsed `build` command without owning process dispatch. */
@@ -2055,6 +2180,8 @@ export async function runCli(
 		if (command.kind === "build") {
 			if (!command.production && context.compiler !== undefined) {
 				await context.compiler.prepare(command);
+			} else if (command.production && command.compileConcurrency !== undefined) {
+				await prepareCommandAsync(command, context);
 			} else buildCommand(command, context);
 		} else if (command.kind === "run") {
 			const outcome = await runCommand(command, context);

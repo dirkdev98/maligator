@@ -21,7 +21,12 @@ export const COMPILER_PRODUCER_STAGES = [
 export type CompilerProducerStage = (typeof COMPILER_PRODUCER_STAGES)[number];
 
 const PRODUCER_ROOTS: Record<CompilerProducerStage, Array<string>> = {
-	"build-frontend": ["build-frontend-cache.ts"],
+	// Worker URL construction is outside the import source cone.
+	"build-frontend": [
+		"build-frontend-cache.ts",
+		"node-root-compiler-worker.ts",
+		"native-root-compiler-worker.ts",
+	],
 	"build-fragment": ["build-fragment-cache.ts"],
 	"dependency-fragment": ["dependency-fragment-cache.ts"],
 	"test-frontend": ["testing/cache.ts"],

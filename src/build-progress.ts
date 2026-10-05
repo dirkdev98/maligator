@@ -40,6 +40,28 @@ export class BuildReporter {
 		run: () => Result,
 		detail?: (result: Result) => string | undefined,
 	): Result {
+		const startedAt = this.#startPhase(label);
+		try {
+			return this.#completePhase(label, startedAt, run(), detail);
+		} catch (error) {
+			return this.#failPhase(label, startedAt, error);
+		}
+	}
+
+	async phaseAsync<Result>(
+		label: string,
+		run: () => Promise<Result>,
+		detail?: (result: Result) => string | undefined,
+	): Promise<Result> {
+		const startedAt = this.#startPhase(label);
+		try {
+			return this.#completePhase(label, startedAt, await run(), detail);
+		} catch (error) {
+			return this.#failPhase(label, startedAt, error);
+		}
+	}
+
+	#startPhase(label: string): number {
 		this.#checkpoint?.();
 		const startedAt = performance.now();
 		this.#onPhase?.({ label, state: "started" });
@@ -51,46 +73,54 @@ export class BuildReporter {
 		} else if (!this.compact) {
 			process.stderr.write(`  ${label}... `);
 		}
-		try {
-			const result = run();
-			this.#checkpoint?.();
-			this.#onPhase?.({
-				label,
-				state: "completed",
-				durationMs: performance.now() - startedAt,
-			});
-			if (this.compact) return result;
-			const elapsed = formatCommandDuration(performance.now() - startedAt);
-			const suffix = detail?.(result);
-			if (this.verbose) {
-				writeLine(
-					process.stderr,
-					`[+${formatCommandDuration(performance.now() - this.#startedAt)}] ${label} completed in ${elapsed}${suffix === undefined ? "" : ` · ${suffix}`}`,
-				);
-			} else {
-				process.stderr.write(
-					`done in ${elapsed}${suffix === undefined ? "" : ` · ${suffix}`}\n`,
-				);
-			}
-			return result;
-		} catch (error) {
-			this.#onPhase?.({
-				label,
-				state: "failed",
-				durationMs: performance.now() - startedAt,
-			});
-			if (this.compact) throw error;
-			const elapsed = formatCommandDuration(performance.now() - startedAt);
-			if (this.verbose) {
-				writeLine(
-					process.stderr,
-					`[+${formatCommandDuration(performance.now() - this.#startedAt)}] ${label} failed after ${elapsed}`,
-				);
-			} else {
-				process.stderr.write(`failed after ${elapsed}\n`);
-			}
-			throw error;
+		return startedAt;
+	}
+
+	#completePhase<Result>(
+		label: string,
+		startedAt: number,
+		result: Result,
+		detail?: (result: Result) => string | undefined,
+	): Result {
+		this.#checkpoint?.();
+		this.#onPhase?.({
+			label,
+			state: "completed",
+			durationMs: performance.now() - startedAt,
+		});
+		if (this.compact) return result;
+		const elapsed = formatCommandDuration(performance.now() - startedAt);
+		const suffix = detail?.(result);
+		if (this.verbose) {
+			writeLine(
+				process.stderr,
+				`[+${formatCommandDuration(performance.now() - this.#startedAt)}] ${label} completed in ${elapsed}${suffix === undefined ? "" : ` · ${suffix}`}`,
+			);
+		} else {
+			process.stderr.write(
+				`done in ${elapsed}${suffix === undefined ? "" : ` · ${suffix}`}\n`,
+			);
 		}
+		return result;
+	}
+
+	#failPhase(label: string, startedAt: number, error: unknown): never {
+		this.#onPhase?.({
+			label,
+			state: "failed",
+			durationMs: performance.now() - startedAt,
+		});
+		if (this.compact) throw error;
+		const elapsed = formatCommandDuration(performance.now() - startedAt);
+		if (this.verbose) {
+			writeLine(
+				process.stderr,
+				`[+${formatCommandDuration(performance.now() - this.#startedAt)}] ${label} failed after ${elapsed}`,
+			);
+		} else {
+			process.stderr.write(`failed after ${elapsed}\n`);
+		}
+		throw error;
 	}
 
 	detail(label: string, value: string | number): void {

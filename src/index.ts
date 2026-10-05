@@ -5,6 +5,8 @@ import { stripCompactTypes } from "./compiler/frontend/compact-type-strip.ts";
 import { createNodeCompilerService } from "./node-compiler-service.ts";
 import { nodeDevelopmentProcessHost } from "./node-development-process.ts";
 import { nodeDevelopmentWatchHost } from "./node-development-watch.ts";
+import { startNodeRootCompilation, validateRootInputs } from "./node-root-compiler.ts";
+import { workerBudget } from "./worker-budget.ts";
 
 const installation = developmentCompilerInstallation(import.meta.dirname);
 
@@ -12,7 +14,14 @@ await runCli(process.argv.slice(2), {
 	stripTypes: stripCompactTypes,
 	installation,
 	...(process.argv[2] === "build"
-		? { compiler: createNodeCompilerService(installation) }
+		? {
+				compiler: createNodeCompilerService(installation),
+				rootCompiler: {
+					start: startNodeRootCompilation,
+					validateInputs: validateRootInputs,
+				},
+				availableCompileConcurrency: workerBudget(process.env.MALIGATOR_WORKERS),
+			}
 		: {}),
 	developmentProcesses: nodeDevelopmentProcessHost,
 	developmentWatcher: nodeDevelopmentWatchHost,

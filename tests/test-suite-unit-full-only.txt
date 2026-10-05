@@ -14,3 +14,5 @@ tests/bench-http-comparison-runner.test.ts
 tests/bench-http-ordinary.test.ts
 tests/node-compiler-cancellation.test.ts
 tests/development-driver.test.ts
+tests/compiler-root-common-flow.test.ts
+tests/root-compiler-transport.test.ts

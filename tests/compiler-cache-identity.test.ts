@@ -40,6 +40,8 @@ function compilerFixture(): { sourceRoot: string; cacheDirectory: string } {
 		path.join(sourceRoot, "build-frontend-cache.ts"),
 		'import { n } from "./compiler/compile.ts";\nexport const build = n;\n',
 	);
+	for (const file of ["node-root-compiler-worker.ts", "native-root-compiler-worker.ts"])
+		writeFileSync(path.join(sourceRoot, file), "export const worker = 1;\n");
 	writeFileSync(
 		path.join(sourceRoot, "testing", "cache.ts"),
 		'export const test = "test-only";\n',

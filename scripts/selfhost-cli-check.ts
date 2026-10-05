@@ -8,6 +8,7 @@ import {
 	existsSync,
 	mkdirSync,
 	readFileSync,
+	readdirSync,
 	renameSync,
 	rmSync,
 	symlinkSync,
@@ -785,6 +786,127 @@ try {
 		}
 		console.log(
 			"ok   packaged CLI ran worker pools without a toolchain and embedded worker sources",
+		);
+
+		const rootsConfig = "production-roots.build.mts";
+		writeFileSync(
+			path.join(project, rootsConfig),
+			'export default {entry:"production-roots.mts",outputName:"selfhost-production-roots",surface:{node:false,webPlatform:false,maligator:true},engine:{eval:false,regexp:false,intl:{enabled:false}}};\n',
+		);
+		for (const [name, increment] of [
+			["first", 38],
+			["second", 39],
+		] as const)
+			writeFileSync(
+				path.join(project, `production-root-${name}.mts`),
+				`import type {TaskContext} from "maligator:workers";\nexport function calculate(context: TaskContext, value: number) { context.throwIfCancelled(); return value + ${increment}; }\n`,
+			);
+		writeFileSync(
+			path.join(project, "production-roots.mts"),
+			`import {createPool,createWorkerUrl} from "maligator:workers";
+const first = createPool<typeof import("./production-root-first.mts")>(createWorkerUrl("./production-root-first.mts",import.meta.url),{size:1});
+const second = createPool<typeof import("./production-root-second.mts")>(createWorkerUrl("./production-root-second.mts",import.meta.url),{size:1});
+try {
+	await first.ready;
+	await second.ready;
+	console.log(JSON.stringify([await first.run("calculate",[2]),await second.run("calculate",[3])]));
+} finally {
+	await first.close();
+	await second.close();
+}
+`,
+		);
+		const rootBuilds = [];
+		for (const concurrency of [1, 3]) {
+			const build = invokeCaptured(
+				[
+					"build",
+					"--production",
+					"--config",
+					rootsConfig,
+					"--compile-concurrency",
+					String(concurrency),
+					"--verbose",
+				],
+				{ MALIGATOR_WORKERS: "3" },
+			);
+			if (build.status !== 0 || build.signal !== null)
+				throw new Error(
+					`production roots build failed:\n${build.stdout}\n${build.stderr}`,
+				);
+			if (
+				concurrency === 3 &&
+				(!/Compile concurrency: [23] total jobs maximum \(parallel roots/.test(
+					build.stderr,
+				) ||
+					!build.stderr.includes("Owner module parses:"))
+			)
+				throw new Error(`production roots transport was not selected:\n${build.stderr}`);
+			const binary = path.resolve(project, build.stdout.trim());
+			const name = path.basename(binary);
+			const units = readdirSync(path.dirname(binary))
+				.filter(
+					(file) =>
+						file === `${name}.c` || (file.startsWith(`${name}.`) && file.endsWith(".c")),
+				)
+				.sort()
+				.map((file) => ({
+					name: file.slice(name.length),
+					sha256: createHash("sha256")
+						.update(readFileSync(path.join(path.dirname(binary), file)))
+						.digest("hex"),
+				}));
+			const emittedCount = /Translation units: (\d+)/.exec(build.stderr)?.[1];
+			if (emittedCount === undefined || units.length !== Number(emittedCount))
+				throw new Error(
+					"production roots C capture did not match emitted translation units",
+				);
+			const execution = spawnSync(binary, [], {
+				cwd: project,
+				encoding: "utf8",
+				timeout: 30_000,
+				killSignal: "SIGKILL",
+			});
+			if (execution.error !== undefined) throw execution.error;
+			if (
+				execution.status !== 0 ||
+				execution.signal !== null ||
+				execution.stderr !== "" ||
+				execution.stdout !== "[40,42]\n"
+			)
+				throw new Error(
+					`production root execution failed:\n${execution.stdout}\n${execution.stderr}`,
+				);
+			rootBuilds.push({
+				concurrency,
+				binary,
+				units,
+				commandPid: build.pid,
+				status: execution.status,
+				stdout: execution.stdout,
+				stderr: build.stderr,
+			});
+		}
+		if (JSON.stringify(rootBuilds[0]!.units) !== JSON.stringify(rootBuilds[1]!.units))
+			throw new Error("serial and parallel production roots emitted different C");
+		const rootWarm = invokeCaptured(
+			["build", "--production", "--config", rootsConfig, "--compile-concurrency", "3"],
+			{ MALIGATOR_WORKERS: "3" },
+		);
+		if (
+			rootWarm.status !== 0 ||
+			rootWarm.signal !== null ||
+			!/frontend cache hit/.test(rootWarm.stderr)
+		)
+			throw new Error(
+				`unchanged production roots did not reuse frontend cache:\n${rootWarm.stdout}\n${rootWarm.stderr}`,
+			);
+		writeFileSync(
+			path.join(reports, "production-roots.json"),
+			`${JSON.stringify({ cacheCondition: "serial and parallel forced frontend compilation; unchanged warm rerun", builds: rootBuilds, warm: { pid: rootWarm.pid, status: rootWarm.status, stdout: rootWarm.stdout, stderr: rootWarm.stderr }, parity: "generated C and native output; binary byte identity not asserted" }, null, 2)}\n`,
+		);
+		console.log(
+			"ok   serial and parallel production roots matched C and native output, then reused frontend cache",
 		);
 	}
 

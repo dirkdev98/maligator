@@ -177,6 +177,14 @@ Runtime eval may remove source closure without invalidating authority closure.
 
 ## P1: compiler throughput and analysis scalability
 
+- [ ] Invalidate warm frontend caches when module-resolution topology changes.
+      The original serial cache can retain a resolved `.mjs` target after a preferred
+      extensionless file appears, or retain a package target after a nearer package
+      is added. An unchanged warm build then reuses the old wire while forced
+      compilation selects different code. Track the resolver's absent candidates
+      or equivalent selection identities, including worker roots; test edit-free
+      warm invalidation without clearing caches or reparsing every graph on a hit.
+
 - [ ] Reduce the largest measured Core planning/optimization costs on both hosts.
       Attribute candidate discovery, shared-fact/transfer construction, CFG and
       dominance work, fixed-point iterations, invalidations, and materialization of

@@ -1,17 +1,42 @@
 # Supervised application images
 
 The native CLI owns compiler workers and application generations for the lifetime
-of a command. Compilation runs in persistent `maligator:workers` executors;
+of a command. Ordinary development compilation runs in persistent
+`maligator:workers` executors;
 ordinary compatible run, dev and test images execute in fresh application
 isolates. Each launch owns its VM, heap, module instances, event loop and child
 workers. A new generation never inherits JavaScript state from the previous one.
 
 The source CLI keeps Node support for `build`. Its development build transport
 uses a Node worker around the same compilation kernel. The exported synchronous
-build API and production build path stay synchronous. Parallel native-function
-rendering has not earned a production implementation: adding executors also adds
-startup, program cloning and memory costs. Production parallelism requires
-matched Node-hosted measurements before a native transport is added.
+build API remains serial. Production CLI builds can opt into independent root
+compilation with `--compile-concurrency 1..3`, a total CPU-job budget including the
+owner. The default is one. Two helpers overlap worker-image compilation with the
+owner's unchanged full optimizer, then join before ordered publication. Cache hits
+and graphs without worker roots admit no helpers. Native-function rendering stays
+serial: that finer seam did not earn its startup and program-cloning costs.
+
+Three interleaved Node CLI pairs on October 5, 2026, using the dependency-heavy
+Express worker application
+on an M3 Pro measured whole build wall time of 19.99–20.53 seconds serial versus
+14.75–15.35 seconds with two helpers, a 24–26% reduction. Generated C and executed
+native output matched in every pair. These were forced frontend compilations with
+warm native runtime, object and binary caches, not cold native builds or ordinary
+cache hits. Whole-command CPU increased from 36.22–36.63 to 53.15–53.84 seconds.
+Node process peak RSS, including its helper threads but excluding external native
+compiler children, ranged from 2.27–2.40 GiB serial and 2.20–2.48 GiB parallel.
+Ordinary unchanged builds reused the frontend cache and admitted no root helpers;
+that path has no demonstrated root-overlap gain. The compiler holdout and native
+transport require their own acceptance.
+
+Root overlap applies only to this opt-in production build. Non-production builds
+prepare in a background compiler; run joins preparation before a fresh application;
+dev overlaps compilation with its last good application and responsive watcher.
+Test file isolation uses separate bounded compile and execution queues while the
+default suite remains one shared application. Roots inside those existing service
+and test jobs stay serial to avoid unmeasured nested oversubscription. Parallel
+frontend diagnostics label owner parse counts separately; the overlapping root
+window includes owner work and must not be added to owner compile time.
 
 ## Image and registry ownership
 

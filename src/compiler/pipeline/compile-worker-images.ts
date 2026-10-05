@@ -23,18 +23,22 @@ export interface DevelopmentWorkerManifest {
 	}>;
 }
 
-export function compileWorkerImages(
-	graph: ModuleGraph,
-	options: CompileEntrypointOptions = {},
-): Array<CompiledWorkerImage> {
-	const candidates = graph.dynamicImportCandidates ?? [];
+export function workerRootEntries(graph: ModuleGraph): Array<WorkerEntryDeclaration> {
 	const entries = new Map<string, WorkerEntryDeclaration>();
 	for (const entry of graph.workerEntries ?? []) {
 		const previous = entries.get(entry.href);
 		entries.set(entry.href, previous?.workerSource === undefined ? entry : previous);
 	}
+	return [...entries.values()];
+}
+
+export function compileWorkerImages(
+	graph: ModuleGraph,
+	options: CompileEntrypointOptions = {},
+): Array<CompiledWorkerImage> {
+	const candidates = graph.dynamicImportCandidates ?? [];
 	const workers: Array<CompiledWorkerImage> = [];
-	for (const entry of entries.values()) {
+	for (const entry of workerRootEntries(graph)) {
 		// A fresh lowering context gives this root its own merged module initialization.
 		const image = compileEntrypoint(entry.path, {
 			...options,

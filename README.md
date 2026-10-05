@@ -31,7 +31,7 @@ the command layer; native stages do not infer runtime ownership from the applica
 ```text
 maligator init
 maligator doctor [--verbose] [--target rust-triple]
-maligator build [entry] [--production] [--profile[=compiler]] [--artifact directory] [--target rust-triple] [--config path]
+maligator build [entry] [--production [--compile-concurrency 1..3]] [--profile[=compiler]] [--artifact directory] [--target rust-triple] [--config path]
 maligator run [entry] [--profile[=compiler]] [--config path] [-- args...]
 maligator dev [entry] [--profile[=compiler]] [--config path] [-- args...]
 maligator test [path ...] [--profile[=compiler]] [--run name] [--shuffle [seed]] [--repeat count] [--bail]
@@ -42,6 +42,12 @@ paths are resolved from it; Maligator does not search ancestor directories. An
 explicit entry overrides `config.entry`. Without a config, an explicit entry uses
 the conservative product defaults. `build` and `run` fail with an `init` suggestion
 when neither source supplies an entry.
+
+Production builds default to serial compilation. `--compile-concurrency 3` allows
+the owner and up to two independent worker-image compilers to overlap, bounded by
+the host's CPU budget. Cache hits and applications without worker roots start no
+root helpers. The public synchronous build API remains serial. This flag requires
+`--production`; profiling remains serial.
 
 `run` compiles to a portable development image and executes it in a fresh VM using a
 matching compile-time-specialized runtime embedded in the distributed platform CLI.
@@ -55,7 +61,8 @@ status or terminating signal.
 and restarts a fresh VM after each successful rebuild. Project files are checked
 at interactive cadence while dependencies under `node_modules` are checked less
 frequently. A compilation error leaves the watcher running so the next edit can
-recover. This is process restart, not in-process hot-module replacement.
+recover. Each replacement gets fresh module instances; compatible applications
+run in supervised isolates and unsupported runtime policies use a process runner.
 
 Add `--profile` to any of these four commands for a separately compiled,
 production-optimized image with bounded CPU, Poisson-sampled charged allocation,

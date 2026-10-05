@@ -1,5 +1,6 @@
 import { chmodSync, readFileSync } from "node:fs";
 import { dirname } from "node:path";
+import { capabilities } from "maligator:workers";
 import { createApplicationImageHost } from "./application-images.ts";
 import type { NativeApplicationBridge } from "./application-images.ts";
 import { productCompilerInstallation, runCli } from "./cli-commands.ts";
@@ -7,6 +8,11 @@ import { installCompilerProducerDigests } from "./compiler-cache-identity.ts";
 import type { CompilerProducerStage } from "./compiler-cache-identity.ts";
 import { stripCompactTypes } from "./compiler/frontend/compact-type-strip.ts";
 import { createNativeCompilerService } from "./native-compiler-service.ts";
+import {
+	startNativeRootCompilation,
+	validateRootInputs,
+} from "./native-root-compiler.ts";
+import { workerBudget } from "./worker-budget.ts";
 
 const { assets } = Reflect.get(globalThis, "mal") as {
 	assets: { materialize(name: string): string };
@@ -51,6 +57,11 @@ await runCli(process.argv.slice(2), {
 	stripTypes: stripCompactTypes,
 	installation,
 	compiler: createNativeCompilerService(installation, producerDigests),
+	rootCompiler: { start: startNativeRootCompilation, validateInputs: validateRootInputs },
+	availableCompileConcurrency: Math.min(
+		workerBudget(process.env.MALIGATOR_WORKERS),
+		capabilities().parallelism,
+	),
 	applications: createApplicationImageHost(mal),
 	developmentProcesses: {
 		spawn: (executablePath, args) => mal._spawnDevelopmentProcess(executablePath, args),

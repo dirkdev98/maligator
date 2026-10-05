@@ -19,6 +19,7 @@ export interface BuildCommand {
 	target?: string;
 	artifactDirectory?: string;
 	production: boolean;
+	compileConcurrency?: number;
 	profile: boolean;
 	profileCompiler?: boolean;
 	internal: InternalBuildOptions;
@@ -116,7 +117,7 @@ Options:
   --run <name>                 Filter tests by hierarchical name
   --isolate                    Run each selected test file in a fresh application
   --concurrency <count>        Bound isolated test executions (requires --isolate)
-  --compile-concurrency <n>    Bound independent test compilation jobs
+  --compile-concurrency <n>    Bound production build total jobs or test compilation jobs
   --watch                      Retain native test images; SIGHUP reruns on POSIX hosts
   --watch-failed               Select failed files on unchanged SIGHUP reruns
   --shuffle [seed]             Shuffle deterministically and print the seed
@@ -203,6 +204,16 @@ function parseBuild(args: Array<string>): CliCommand {
 			index++;
 			continue;
 		}
+		if (argument === "--compile-concurrency") {
+			const value = Number(optionValue(args, index, argument));
+			if (!Number.isSafeInteger(value) || value < 1 || value > 3)
+				throw new CliUsageError(
+					"build --compile-concurrency requires an integer from 1 through 3",
+				);
+			command.compileConcurrency = value;
+			index++;
+			continue;
+		}
 		if (argument === "--production") {
 			command.production = true;
 			continue;
@@ -269,6 +280,12 @@ function parseBuild(args: Array<string>): CliCommand {
 		command.entry = argument;
 	}
 
+	if (command.compileConcurrency !== undefined && !command.production)
+		throw new CliUsageError("build --compile-concurrency requires --production");
+	if ((command.compileConcurrency ?? 1) > 1 && (!command.production || command.profile))
+		throw new CliUsageError(
+			"parallel build compilation requires --production without --profile",
+		);
 	return command;
 }
 

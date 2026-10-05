@@ -28,6 +28,7 @@ import type { CoreOptimizationReport } from "./compiler/core/core-optimization-r
 import type { CoreInstrumentationMode } from "./compiler/core/core-optimization-report.ts";
 import { runSemanticAnalysisForGraph } from "./compiler/frontend/analyze-module-graph.ts";
 import { certifyProgramClosure } from "./compiler/frontend/certify-closure.ts";
+import { stripCompactTypes } from "./compiler/frontend/compact-type-strip.ts";
 import type {
 	BuildModuleGraphOptions,
 	ModuleGraph,
@@ -40,8 +41,17 @@ import {
 } from "./compiler/frontend/semantic-analysis.ts";
 import { compileSemanticProgramToProgramImage } from "./compiler/pipeline/compile-core.ts";
 import type { CompileCorePhase } from "./compiler/pipeline/compile-core.ts";
+import type { CompileEntrypointOptions } from "./compiler/pipeline/compile-program-common.ts";
 import { compileWorkerImages } from "./compiler/pipeline/compile-worker-images.ts";
 import type { CompiledWorkerImage } from "./compiler/pipeline/compile-worker-images.ts";
+import {
+	captureRootPackageAbsences,
+	validateRootPackageAbsences,
+} from "./compiler/root-compilation.ts";
+import type {
+	StartRootCompilation,
+	validateRootInputs,
+} from "./compiler/root-compilation.ts";
 import type { CompilerDiagnostic } from "./compiler/shared/compiler-diagnostics.ts";
 import {
 	compilerProgramFactsFromConfig,
@@ -82,8 +92,8 @@ import {
 } from "./worker-image-cache.ts";
 import type { WorkerImageArtifact } from "./worker-image-cache.ts";
 
-const BUILD_FRONTEND_CACHE_SCHEMA = 5;
-const BUILD_FRONTEND_PIPELINE_VERSION = 5;
+const BUILD_FRONTEND_CACHE_SCHEMA = 6;
+const BUILD_FRONTEND_PIPELINE_VERSION = 6;
 const BUILD_FRONTEND_CACHE_DIRECTORY = path.join(
 	maligatorCacheDirectory(),
 	"build-frontend",
@@ -93,7 +103,8 @@ const NODE_GLOBALS_MODULE_ID = "maligator-internal:node-globals";
 export type BuildDependencyIdentity = FrontendDependencyIdentity;
 
 interface BuildFrontendManifest {
-	schema: 5;
+	schema: 6;
+	packageAbsences: Array<string>;
 	workerArtifacts: Array<WorkerImageArtifact>;
 	identity: string;
 	contentKey: string;
@@ -127,6 +138,7 @@ export interface BuildFrontendPhases {
 	compileMs: number;
 	serializeMs: number;
 	workerMs: number;
+	workerOverlap?: boolean;
 }
 
 export interface CompiledBuildFrontend {
@@ -380,6 +392,10 @@ function loadCached(
 		!validImageStats(manifest.imageStats) ||
 		!Array.isArray(manifest.diagnostics) ||
 		!Array.isArray(manifest.dependencies) ||
+		!Array.isArray(manifest.packageAbsences) ||
+		manifest.packageAbsences.some(
+			(file) => typeof file !== "string" || existsSync(file),
+		) ||
 		!artifactsUnchanged(manifest.runtimeArtifacts, artifactRoot) ||
 		!compilerArtifactUnchanged(manifest.compilerArtifact, artifactRoot) ||
 		!dependenciesUnchanged(manifest.dependencies, session)
@@ -496,17 +512,116 @@ function publish(file: string, contents: string | Uint8Array): void {
 	}
 }
 
-/**
- * Compile or restore the normal-build frontend program image.
- *
- * The artifact is the same relocatable VM wire consumed by the interpreter, now
- * including native-code generation metadata. Cache hits therefore skip parsing,
- * graph construction, semantic analysis, Core optimization/allocation, and
- * lowering without changing the generated C contract.
- */
+export interface BuildRootCompiler {
+	start: StartRootCompilation;
+	validateInputs: typeof validateRootInputs;
+}
+
+type PreparedBuildFrontend =
+	| { kind: "cached"; value: CompiledBuildFrontend }
+	| {
+			kind: "compile";
+			graph: ModuleGraph;
+			workerOptions: CompileEntrypointOptions;
+			prepareMain(): void;
+			captureInputs(): Array<BuildDependencyIdentity>;
+			compileMain(): void;
+			compileWorkers(): ReadonlyArray<CompiledWorkerImage>;
+			recordWorkerMs(durationMs: number): void;
+			publish(
+				workers: ReadonlyArray<CompiledWorkerImage>,
+				diagnostics?: ReadonlyArray<CompilerDiagnostic>,
+				dependencies?: ReadonlyArray<BuildDependencyIdentity>,
+				packageAbsences?: ReadonlyArray<string>,
+			): CompiledBuildFrontend;
+	  };
+
+/** Cache misses synchronously compile the owner and each worker root in declaration order. */
 export function compileBuildFrontend(
 	options: CompileBuildFrontendOptions,
 ): CompiledBuildFrontend {
+	const prepared = prepareBuildFrontend(options);
+	if (prepared.kind === "cached") return prepared.value;
+	prepared.compileMain();
+	return prepared.publish(prepared.compileWorkers());
+}
+
+export async function compileBuildFrontendAsync(
+	options: CompileBuildFrontendOptions,
+	compiler: BuildRootCompiler,
+	controls: { concurrency: number; signal?: AbortSignal; beforePublication?: () => void },
+): Promise<CompiledBuildFrontend> {
+	if (
+		controls.concurrency <= 1 ||
+		options.stripTypes !== stripCompactTypes ||
+		options.relocatable ||
+		options.optimization !== "full"
+	)
+		return compileBuildFrontend(options);
+	controls.signal?.throwIfAborted();
+	const prepared = prepareBuildFrontend(options);
+	if (prepared.kind === "cached") return prepared.value;
+	prepared.prepareMain();
+	if ((prepared.graph.workerEntries?.length ?? 0) === 0) {
+		prepared.compileMain();
+		controls.beforePublication?.();
+		return prepared.publish(prepared.compileWorkers());
+	}
+	controls.signal?.throwIfAborted();
+	const inputs = prepared.captureInputs();
+	const workerStartedAt = Date.now();
+	const compilation = compiler.start(prepared.graph, prepared.workerOptions, inputs, {
+		signal: controls.signal,
+		concurrency: controls.concurrency - 1,
+	});
+	let mainFailed = false;
+	let mainError: unknown;
+	try {
+		prepared.compileMain();
+	} catch (error) {
+		mainFailed = true;
+		mainError = error;
+		try {
+			compilation.cancel(error);
+		} catch {
+			/* Main failure still owns the result while close drains admitted jobs. */
+		}
+	}
+	let result: Awaited<typeof compilation.result> | undefined;
+	let workerFailed = false;
+	let workerError: unknown;
+	try {
+		result = await compilation.result;
+	} catch (error) {
+		workerFailed = true;
+		workerError = error;
+	} finally {
+		try {
+			await compilation.close();
+		} catch (error) {
+			if (!workerFailed) {
+				workerFailed = true;
+				workerError = error;
+			}
+		}
+	}
+	prepared.recordWorkerMs(Date.now() - workerStartedAt);
+	if (mainFailed) throw mainError;
+	if (workerFailed) throw workerError;
+	compiler.validateInputs([...inputs, ...result!.dependencies]);
+	controls.signal?.throwIfAborted();
+	controls.beforePublication?.();
+	return prepared.publish(
+		result!.workers,
+		result!.diagnostics,
+		result!.dependencies,
+		result!.packageAbsences,
+	);
+}
+
+function prepareBuildFrontend(
+	options: CompileBuildFrontendOptions,
+): PreparedBuildFrontend {
 	const startedAt = Date.now();
 	const phases: BuildFrontendPhases = {
 		validationMs: 0,
@@ -550,28 +665,31 @@ export function compileBuildFrontend(
 		if (cached !== undefined) {
 			session.flush();
 			return {
-				workerImages: cached.workerImages,
-				get programImage() {
-					return cached.programImage;
+				kind: "cached",
+				value: {
+					workerImages: cached.workerImages,
+					get programImage() {
+						return cached.programImage;
+					},
+					get wire() {
+						return cached.wire;
+					},
+					get wires() {
+						return cached.runtimeArtifacts.length > 1 ? cached.wires : undefined;
+					},
+					cache: "hit",
+					closure: unanalyzedProgramClosure(
+						"a frontend cache hit restores a program image without inspecting a module graph",
+					),
+					frontendMs: Date.now() - startedAt,
+					phases,
+					dependencies: cached.dependencies.map((dependency) => dependency.path),
+					moduleParses: moduleParseStats(),
+					fileDigests: fileDigestStats(),
+					runtimeArtifacts: cached.runtimeArtifacts,
+					imageStats: cached.imageStats,
+					diagnostics: cached.diagnostics,
 				},
-				get wire() {
-					return cached.wire;
-				},
-				get wires() {
-					return cached.runtimeArtifacts.length > 1 ? cached.wires : undefined;
-				},
-				cache: "hit",
-				closure: unanalyzedProgramClosure(
-					"a frontend cache hit restores a program image without inspecting a module graph",
-				),
-				frontendMs: Date.now() - startedAt,
-				phases,
-				dependencies: cached.dependencies.map((dependency) => dependency.path),
-				moduleParses: moduleParseStats(),
-				fileDigests: fileDigestStats(),
-				runtimeArtifacts: cached.runtimeArtifacts,
-				imageStats: cached.imageStats,
-				diagnostics: cached.diagnostics,
 			};
 		}
 	}
@@ -586,6 +704,7 @@ export function compileBuildFrontend(
 		platformSourceRoot: options.platformSourceRoot,
 	});
 	phases.graphMs = Date.now() - graphStartedAt;
+	const ownerPackageAbsences = captureRootPackageAbsences(graph);
 	const facts = withProgramClosure(
 		compilerProgramFactsFromConfig(options.config),
 		// A relocatable request selects the packaged development runner, which both
@@ -626,72 +745,102 @@ export function compileBuildFrontend(
 	let fragmentFallback: string | undefined;
 	let optimizationReport: CoreOptimizationReport | undefined;
 	let optimizationPlan: CoreOptimizationPlan | undefined;
-	const hasWorkers = (graph.workerEntries?.length ?? 0) !== 0;
-	if (hasWorkers && options.relocatable)
-		fragmentFallback = "worker roots use independent whole-program images";
-	if (
-		!hasWorkers &&
-		options.relocatable === true &&
-		options.forceCompile !== true &&
-		options.optimization === "development" &&
-		options.enforcePolicies !== false
-	) {
-		try {
-			const fragments = compileBuildFragments({
-				graph,
-				config: options.config,
-				execution: options.execution,
-				facts,
-				semantic: sharedSemantic,
-				stripTypes: options.stripTypes,
-				stripperIdentity: options.stripperIdentity,
-				cacheDirectory: options.cacheDirectory,
-				session,
-				phases,
-				onCompilePhase: options.onCompilePhase,
-				dependencyWorker: options.dependencyWorker,
-				entryPrelude,
-			});
-			programImage = fragments.programImage;
-			diagnostics = fragments.diagnostics;
-			runtimeArtifactIdentities = fragments.runtimeArtifacts.map(
-				({ digest: artifactDigest, size, mtimeMs, ctimeMs, ino, dev }) => ({
-					digest: artifactDigest,
+	let policiesPrepared = false;
+	const prepareMain = () => {
+		if (policiesPrepared) return;
+		const semantic = semanticForGraph();
+		if (options.enforcePolicies !== false) {
+			assertEvalPolicy(options.config, collectDisallowedEvalUsage(semantic));
+			assertRegexpPolicy(options.config, collectDisallowedRegexpUsage(semantic));
+		}
+		diagnostics = diagnosticsForSemantic(semantic);
+		policiesPrepared = true;
+	};
+	const compileMain = () => {
+		const hasWorkers = (graph.workerEntries?.length ?? 0) !== 0;
+		if (hasWorkers && options.relocatable)
+			fragmentFallback = "worker roots use independent whole-program images";
+		if (
+			!hasWorkers &&
+			options.relocatable === true &&
+			options.forceCompile !== true &&
+			options.optimization === "development" &&
+			options.enforcePolicies !== false
+		) {
+			try {
+				const fragments = compileBuildFragments({
+					graph,
+					config: options.config,
+					execution: options.execution,
+					facts,
+					semantic: sharedSemantic,
+					stripTypes: options.stripTypes,
+					stripperIdentity: options.stripperIdentity,
+					cacheDirectory: options.cacheDirectory,
+					session,
+					phases,
+					onCompilePhase: options.onCompilePhase,
+					dependencyWorker: options.dependencyWorker,
+					entryPrelude,
+				});
+				programImage = fragments.programImage;
+				diagnostics = fragments.diagnostics;
+				runtimeArtifactIdentities = fragments.runtimeArtifacts.map(
+					({ digest: artifactDigest, size, mtimeMs, ctimeMs, ino, dev }) => ({
+						digest: artifactDigest,
+						size,
+						mtimeMs,
+						ctimeMs,
+						ino,
+						dev,
+					}),
+				);
+				const {
+					digest: compilerDigest,
 					size,
 					mtimeMs,
 					ctimeMs,
 					ino,
 					dev,
-				}),
-			);
-			const {
-				digest: compilerDigest,
-				size,
-				mtimeMs,
-				ctimeMs,
-				ino,
-				dev,
-			} = fragments.compilerArtifact;
-			compilerArtifactIdentity = {
-				digest: compilerDigest,
-				size,
-				mtimeMs,
-				ctimeMs,
-				ino,
-				dev,
-			};
-			loadFragmentWires = () => fragments.wires;
-			fragmentArtifacts = {
-				hits: fragments.artifactHits,
-				misses: fragments.artifactMisses,
-			};
-		} catch (error) {
-			if (!(error instanceof UnsupportedBuildFragmentsError)) throw error;
-			fragmentFallback = error.message;
+				} = fragments.compilerArtifact;
+				compilerArtifactIdentity = {
+					digest: compilerDigest,
+					size,
+					mtimeMs,
+					ctimeMs,
+					ino,
+					dev,
+				};
+				loadFragmentWires = () => fragments.wires;
+				fragmentArtifacts = {
+					hits: fragments.artifactHits,
+					misses: fragments.artifactMisses,
+				};
+			} catch (error) {
+				if (!(error instanceof UnsupportedBuildFragmentsError)) throw error;
+				fragmentFallback = error.message;
+				const semantic = semanticForGraph();
+				assertEvalPolicy(options.config, collectDisallowedEvalUsage(semantic));
+				assertRegexpPolicy(options.config, collectDisallowedRegexpUsage(semantic));
+				diagnostics = diagnosticsForSemantic(semantic);
+				programImage = compileProgramImage(
+					semantic,
+					facts,
+					options,
+					phases,
+					(report, plan) => {
+						optimizationReport = report;
+						optimizationPlan = plan;
+					},
+				);
+				const serializeStartedAt = Date.now();
+				compilerWire = serializeCompilerArtifact(programImage);
+				wires = [serializeRuntimeImage(programImage.runtime)];
+				phases.serializeMs += Date.now() - serializeStartedAt;
+			}
+		} else {
+			prepareMain();
 			const semantic = semanticForGraph();
-			assertEvalPolicy(options.config, collectDisallowedEvalUsage(semantic));
-			assertRegexpPolicy(options.config, collectDisallowedRegexpUsage(semantic));
-			diagnostics = diagnosticsForSemantic(semantic);
 			programImage = compileProgramImage(
 				semantic,
 				facts,
@@ -705,32 +854,10 @@ export function compileBuildFrontend(
 			const serializeStartedAt = Date.now();
 			compilerWire = serializeCompilerArtifact(programImage);
 			wires = [serializeRuntimeImage(programImage.runtime)];
-			phases.serializeMs += Date.now() - serializeStartedAt;
+			phases.serializeMs = Date.now() - serializeStartedAt;
 		}
-	} else {
-		const semantic = semanticForGraph();
-		if (options.enforcePolicies !== false) {
-			assertEvalPolicy(options.config, collectDisallowedEvalUsage(semantic));
-			assertRegexpPolicy(options.config, collectDisallowedRegexpUsage(semantic));
-		}
-		diagnostics = diagnosticsForSemantic(semantic);
-		programImage = compileProgramImage(
-			semantic,
-			facts,
-			options,
-			phases,
-			(report, plan) => {
-				optimizationReport = report;
-				optimizationPlan = plan;
-			},
-		);
-		const serializeStartedAt = Date.now();
-		compilerWire = serializeCompilerArtifact(programImage);
-		wires = [serializeRuntimeImage(programImage.runtime)];
-		phases.serializeMs = Date.now() - serializeStartedAt;
-	}
-	const workerStartedAt = Date.now();
-	const workerImages = compileWorkerImages(graph, {
+	};
+	const workerOptions: CompileEntrypointOptions = {
 		enforcePolicies: options.enforcePolicies,
 		buildConfig: options.config,
 		execution: options.execution,
@@ -742,82 +869,122 @@ export function compileBuildFrontend(
 		coreVerification: options.coreVerification,
 		coreInstrumentation: options.coreInstrumentation,
 		onDiagnostic: (diagnostic) => diagnostics.push(diagnostic),
-	});
-	phases.workerMs += Date.now() - workerStartedAt;
-	const workerArtifacts = cacheWorkerImages(workerImages, artifactRoot);
-	const dependencies = graphDependencies(graph, session);
-	session.flush();
-	const key = contentKey(identity, entrypoint, dependencies);
-	const runtimeArtifacts =
-		runtimeArtifactIdentities ??
-		wires!.map((runtimeWire) => {
-			const wireDigest = digest(runtimeWire);
-			cacheFrontendWire(runtimeWire, artifactRoot);
-			const artifact = artifactIdentity(wireDigest, artifactRoot);
-			if (artifact === undefined) {
-				throw new Error(`frontend artifact is missing after publication: ${wireDigest}`);
-			}
-			return artifact;
-		});
-	const compilerArtifact =
-		compilerArtifactIdentity ??
-		(() => {
-			const compilerDigest = digest(compilerWire!);
-			cacheFrontendCompilerArtifact(compilerWire!, artifactRoot);
-			const artifact = frontendCompilerArtifactIdentity(compilerDigest, artifactRoot);
-			if (artifact === undefined) {
-				throw new Error(
-					`frontend compiler artifact is missing after publication: ${compilerDigest}`,
-				);
-			}
-			const { digest: artifactDigest, size, mtimeMs, ctimeMs, ino, dev } = artifact;
-			return { digest: artifactDigest, size, mtimeMs, ctimeMs, ino, dev };
-		})();
-	const imageStats = programImageStats(programImage);
-	publish(
-		manifestPath(root, entrypoint, identity),
-		`${JSON.stringify({
-			schema: BUILD_FRONTEND_CACHE_SCHEMA,
-			identity,
-			contentKey: key,
-			runtimeArtifacts,
-			workerArtifacts,
-			compilerArtifact,
-			imageStats,
-			entrypoint,
-			dependencies,
-			diagnostics,
-		} satisfies BuildFrontendManifest)}\n`,
-	);
+	};
+	const compileWorkers = () => {
+		const workerStartedAt = Date.now();
+		const result = compileWorkerImages(graph, workerOptions);
+		phases.workerMs += Date.now() - workerStartedAt;
+		return result;
+	};
+	const publishFrontend = (
+		workerImages: ReadonlyArray<CompiledWorkerImage>,
+		workerDiagnostics: ReadonlyArray<CompilerDiagnostic> = [],
+		workerDependencies: ReadonlyArray<BuildDependencyIdentity> = [],
+		workerPackageAbsences: ReadonlyArray<string> = [],
+	): CompiledBuildFrontend => {
+		const packageAbsences = [
+			...new Set([...ownerPackageAbsences, ...workerPackageAbsences]),
+		].sort();
+		validateRootPackageAbsences(packageAbsences);
+		diagnostics.push(...workerDiagnostics);
+		const workerArtifacts = cacheWorkerImages(workerImages, artifactRoot);
+		const dependenciesByPath = new Map(
+			graphDependencies(graph, session).map((input) => [input.path, input]),
+		);
+		for (const input of workerDependencies) dependenciesByPath.set(input.path, input);
+		const dependencies = [...dependenciesByPath.values()].sort((left, right) =>
+			left.path < right.path ? -1 : left.path > right.path ? 1 : 0,
+		);
+		session.flush();
+		const key = contentKey(identity, entrypoint, dependencies);
+		const runtimeArtifacts =
+			runtimeArtifactIdentities ??
+			wires!.map((runtimeWire) => {
+				const wireDigest = digest(runtimeWire);
+				cacheFrontendWire(runtimeWire, artifactRoot);
+				const artifact = artifactIdentity(wireDigest, artifactRoot);
+				if (artifact === undefined) {
+					throw new Error(
+						`frontend artifact is missing after publication: ${wireDigest}`,
+					);
+				}
+				return artifact;
+			});
+		const compilerArtifact =
+			compilerArtifactIdentity ??
+			(() => {
+				const compilerDigest = digest(compilerWire!);
+				cacheFrontendCompilerArtifact(compilerWire!, artifactRoot);
+				const artifact = frontendCompilerArtifactIdentity(compilerDigest, artifactRoot);
+				if (artifact === undefined) {
+					throw new Error(
+						`frontend compiler artifact is missing after publication: ${compilerDigest}`,
+					);
+				}
+				const { digest: artifactDigest, size, mtimeMs, ctimeMs, ino, dev } = artifact;
+				return { digest: artifactDigest, size, mtimeMs, ctimeMs, ino, dev };
+			})();
+		const imageStats = programImageStats(programImage);
+		publish(
+			manifestPath(root, entrypoint, identity),
+			`${JSON.stringify({
+				schema: BUILD_FRONTEND_CACHE_SCHEMA,
+				identity,
+				contentKey: key,
+				runtimeArtifacts,
+				workerArtifacts,
+				compilerArtifact,
+				imageStats,
+				entrypoint,
+				packageAbsences,
+				dependencies,
+				diagnostics,
+			} satisfies BuildFrontendManifest)}\n`,
+		);
 
-	const materializeWires = () => (wires ??= loadFragmentWires!());
+		const materializeWires = () => (wires ??= loadFragmentWires!());
+		return {
+			workerImages,
+			programImage,
+			get wire() {
+				return materializeWires().at(-1)!;
+			},
+			get wires() {
+				return runtimeArtifacts.length > 1 ? materializeWires() : undefined;
+			},
+			cache: "miss",
+			closure: facts.closure,
+			frontendMs: Date.now() - startedAt,
+			phases,
+			dependencies: dependencies.map((dependency) => dependency.path),
+			moduleParses: moduleParseStats(),
+			fileDigests: fileDigestStats(),
+			runtimeArtifacts: runtimeArtifacts.map((artifact) => ({
+				digest: artifact.digest,
+				path: frontendWirePath(artifact.digest, artifactRoot),
+				size: artifact.size,
+			})),
+			imageStats,
+			diagnostics,
+			...(optimizationReport === undefined ? {} : { optimizationReport }),
+			...(optimizationPlan === undefined ? {} : { optimizationPlan }),
+			fragmentArtifacts,
+			fragmentFallback,
+		};
+	};
 	return {
-		workerImages,
-		programImage,
-		get wire() {
-			return materializeWires().at(-1)!;
+		kind: "compile",
+		graph,
+		workerOptions,
+		prepareMain,
+		captureInputs: () => graphDependencies(graph, session),
+		recordWorkerMs: (durationMs) => {
+			phases.workerMs += durationMs;
+			phases.workerOverlap = true;
 		},
-		get wires() {
-			return runtimeArtifacts.length > 1 ? materializeWires() : undefined;
-		},
-		cache: "miss",
-		closure: facts.closure,
-		frontendMs: Date.now() - startedAt,
-		phases,
-		dependencies: dependencies.map((dependency) => dependency.path),
-		moduleParses: moduleParseStats(),
-		fileDigests: fileDigestStats(),
-		runtimeArtifacts: runtimeArtifacts.map((artifact) => ({
-			digest: artifact.digest,
-			path: frontendWirePath(artifact.digest, artifactRoot),
-			size: artifact.size,
-		})),
-		imageStats,
-		diagnostics,
-		...(optimizationReport === undefined ? {} : { optimizationReport }),
-		...(optimizationPlan === undefined ? {} : { optimizationPlan }),
-		fragmentArtifacts,
-		fragmentFallback,
+		compileMain,
+		compileWorkers,
+		publish: publishFrontend,
 	};
 }
 
