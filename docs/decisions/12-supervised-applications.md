@@ -32,9 +32,23 @@ peak RSS increased 32%. Node process peak RSS includes helper threads and exclud
 external native compiler children. It is separate from whole-command CPU and is
 not an aggregate process-tree memory peak. Ordinary unchanged builds reused the
 frontend cache and admitted no helpers; that path has no demonstrated root-overlap
-gain. Default and explicit-budget-one controls retained serial timing. Native
-transport has focused correctness acceptance; its speed and the rebuilt packaged
-CLI require separate acceptance.
+gain. Default and explicit-budget-one controls retained serial timing.
+
+Three interleaved pairs using the rebuilt native CLI on the worker application
+measured mean whole build wall time of 107.87 to 69.65 seconds with budgets one
+and three, a 35.4% reduction. Mean CPU increased 15.4% and Darwin maximum RSS
+increased 2.9%. All 89 generated translation units, eight compiler/runtime images,
+native binaries, ordered worker roots, diagnostics and executed output matched.
+These runs also forced the full frontend with identical seeded warm native caches;
+they compare budgets within the same current binary. Darwin maximum RSS is a
+command resource statistic, not a simultaneous aggregate process-tree peak.
+
+The rebuilt package passes the full build/run/dev/test command checks, including
+production root parity and cache reuse, actual profiling captures, thread/process
+selection, served development revisions and test-watch cancellation. Native
+transport lifetime and large-message checks also pass Linux ASan/UBSan. Adding the
+root compiler entry increased the packaged executable from 261.1 to 317.4 MB
+(21.5%); the budget comparison does not measure this package-size cost.
 
 Root overlap applies only to this opt-in production build. Non-production builds
 prepare in a background compiler; run joins preparation before a fresh application;
