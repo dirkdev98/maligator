@@ -1192,7 +1192,7 @@
 						>
 							<div class="inventory-heading">
 								<h3 id="node:child_process"><code>node:child_process</code></h3>
-								<span>4 recognized APIs</span>
+								<span>5 recognized APIs</span>
 							</div>
 							<div class="table-wrap">
 								<table>
@@ -1215,6 +1215,10 @@
 											<td>
 												<code class="api-name">node:child_process#execFileSync</code>
 											</td>
+											<td><span class="status partial">Partial implementation</span></td>
+										</tr>
+										<tr>
+											<td><code class="api-name">node:child_process#fork</code></td>
 											<td><span class="status partial">Partial implementation</span></td>
 										</tr>
 										<tr>
@@ -1507,7 +1511,7 @@
 						<section class="inventory-group module-group" aria-labelledby="node:events">
 							<div class="inventory-heading">
 								<h3 id="node:events"><code>node:events</code></h3>
-								<span>2 recognized APIs · default export</span>
+								<span>4 recognized APIs · default export</span>
 							</div>
 							<div class="table-wrap">
 								<table>
@@ -1523,7 +1527,19 @@
 											<td><span class="status partial">Partial implementation</span></td>
 										</tr>
 										<tr>
+											<td>
+												<code class="api-name"
+													>node:events#EventEmitterAsyncResource</code
+												>
+											</td>
+											<td><span class="status partial">Partial implementation</span></td>
+										</tr>
+										<tr>
 											<td><code class="api-name">node:events#errorMonitor</code></td>
+											<td><span class="status partial">Partial implementation</span></td>
+										</tr>
+										<tr>
+											<td><code class="api-name">node:events#once</code></td>
 											<td><span class="status partial">Partial implementation</span></td>
 										</tr>
 									</tbody>
@@ -1533,7 +1549,7 @@
 						<section class="inventory-group module-group" aria-labelledby="node:fs">
 							<div class="inventory-heading">
 								<h3 id="node:fs"><code>node:fs</code></h3>
-								<span>37 recognized APIs · default export</span>
+								<span>38 recognized APIs · default export</span>
 							</div>
 							<div class="table-wrap">
 								<table>
@@ -1657,6 +1673,10 @@
 											<td><span class="status partial">Partial implementation</span></td>
 										</tr>
 										<tr>
+											<td><code class="api-name">node:fs#rmdirSync</code></td>
+											<td><span class="status partial">Partial implementation</span></td>
+										</tr>
+										<tr>
 											<td><code class="api-name">node:fs#statSync</code></td>
 											<td><span class="status partial">Partial implementation</span></td>
 										</tr>
@@ -1702,7 +1722,7 @@
 						>
 							<div class="inventory-heading">
 								<h3 id="node:fs/promises"><code>node:fs/promises</code></h3>
-								<span>15 recognized APIs · default export</span>
+								<span>20 recognized APIs · default export</span>
 							</div>
 							<div class="table-wrap">
 								<table>
@@ -1719,6 +1739,14 @@
 										</tr>
 										<tr>
 											<td><code class="api-name">node:fs/promises#copyFile</code></td>
+											<td><span class="status partial">Partial implementation</span></td>
+										</tr>
+										<tr>
+											<td><code class="api-name">node:fs/promises#chmod</code></td>
+											<td><span class="status partial">Partial implementation</span></td>
+										</tr>
+										<tr>
+											<td><code class="api-name">node:fs/promises#glob</code></td>
 											<td><span class="status partial">Partial implementation</span></td>
 										</tr>
 										<tr>
@@ -1754,6 +1782,14 @@
 											<td><span class="status partial">Partial implementation</span></td>
 										</tr>
 										<tr>
+											<td><code class="api-name">node:fs/promises#realpath</code></td>
+											<td><span class="status partial">Partial implementation</span></td>
+										</tr>
+										<tr>
+											<td><code class="api-name">node:fs/promises#rmdir</code></td>
+											<td><span class="status partial">Partial implementation</span></td>
+										</tr>
+										<tr>
 											<td><code class="api-name">node:fs/promises#rm</code></td>
 											<td><span class="status partial">Partial implementation</span></td>
 										</tr>
@@ -1767,6 +1803,10 @@
 										</tr>
 										<tr>
 											<td><code class="api-name">node:fs/promises#unlink</code></td>
+											<td><span class="status partial">Partial implementation</span></td>
+										</tr>
+										<tr>
+											<td><code class="api-name">node:fs/promises#utimes</code></td>
 											<td><span class="status partial">Partial implementation</span></td>
 										</tr>
 										<tr>
@@ -2101,7 +2141,7 @@
 						<section class="inventory-group module-group" aria-labelledby="node:path">
 							<div class="inventory-heading">
 								<h3 id="node:path"><code>node:path</code></h3>
-								<span>14 recognized APIs · default export</span>
+								<span>15 recognized APIs · default export</span>
 							</div>
 							<div class="table-wrap">
 								<table>
@@ -2158,6 +2198,10 @@
 										</tr>
 										<tr>
 											<td><code class="api-name">node:path#resolve</code></td>
+											<td><span class="status partial">Partial implementation</span></td>
+										</tr>
+										<tr>
+											<td><code class="api-name">node:path#matchesGlob</code></td>
 											<td><span class="status partial">Partial implementation</span></td>
 										</tr>
 										<tr>
@@ -2684,7 +2728,7 @@
 						<section class="inventory-group module-group" aria-labelledby="node:util">
 							<div class="inventory-heading">
 								<h3 id="node:util"><code>node:util</code></h3>
-								<span>21 recognized APIs · default export</span>
+								<span>22 recognized APIs · default export</span>
 							</div>
 							<div class="table-wrap">
 								<table>
@@ -2776,6 +2820,10 @@
 											<td><span class="status partial">Partial implementation</span></td>
 										</tr>
 										<tr>
+											<td><code class="api-name">node:util#styleText</code></td>
+											<td><span class="status partial">Partial implementation</span></td>
+										</tr>
+										<tr>
 											<td><code class="api-name">node:util#types</code></td>
 											<td><span class="status partial">Partial implementation</span></td>
 										</tr>
@@ -2833,7 +2881,7 @@
 						>
 							<div class="inventory-heading">
 								<h3 id="node:worker_threads"><code>node:worker_threads</code></h3>
-								<span>9 recognized APIs · default export</span>
+								<span>10 recognized APIs · default export</span>
 							</div>
 							<div class="table-wrap">
 								<table>
@@ -2847,6 +2895,12 @@
 										<tr>
 											<td>
 												<code class="api-name">node:worker_threads#MessageChannel</code>
+											</td>
+											<td><span class="status stub">Shape-only stub</span></td>
+										</tr>
+										<tr>
+											<td>
+												<code class="api-name">node:worker_threads#MessagePort</code>
 											</td>
 											<td><span class="status stub">Shape-only stub</span></td>
 										</tr>
@@ -2903,7 +2957,7 @@
 						<section class="inventory-group module-group" aria-labelledby="node:zlib">
 							<div class="inventory-heading">
 								<h3 id="node:zlib"><code>node:zlib</code></h3>
-								<span>6 recognized APIs · default export</span>
+								<span>7 recognized APIs · default export</span>
 							</div>
 							<div class="table-wrap">
 								<table>
@@ -2939,6 +2993,10 @@
 										<tr>
 											<td><code class="api-name">node:zlib#deflate</code></td>
 											<td><span class="status stub">Shape-only stub</span></td>
+										</tr>
+										<tr>
+											<td><code class="api-name">node:zlib#gunzipSync</code></td>
+											<td><span class="status partial">Partial implementation</span></td>
 										</tr>
 									</tbody>
 								</table>
