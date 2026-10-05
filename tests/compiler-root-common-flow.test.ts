@@ -598,3 +598,41 @@ test("a consumed asset edit across root join drains helpers and prevents native 
 		cwd.mockRestore();
 	}
 });
+
+for (const budget of [1, 3])
+	test(`production CLI defaults respect the ${budget}-job allocation`, async () => {
+		const options = fixture();
+		const root = path.dirname(options.entrypoint);
+		const output = path.join(root, "default.malw");
+		const base = immediateCompiler();
+		let helpers = 0;
+		const rootCompiler: BuildRootCompiler = {
+			validateInputs: validateRootInputs,
+			start(graph, workerOptions, inputs, controls) {
+				helpers = controls.concurrency;
+				return base.start(graph, workerOptions, inputs, controls);
+			},
+		};
+		const command = parseCliArgs([
+			"build",
+			options.entrypoint,
+			"--production",
+			"--serialize",
+			output,
+		]) as BuildCommand;
+		const cwd = vi.spyOn(process, "cwd").mockReturnValue(root);
+		try {
+			await prepareCommandAsync(command, {
+				stripTypes: stripCompactTypes,
+				installation: developmentCompilerInstallation(
+					path.resolve(import.meta.dirname, "../src"),
+				),
+				rootCompiler,
+				availableCompileConcurrency: budget,
+			});
+			assert.equal(helpers, budget - 1);
+			assert.ok(existsSync(output));
+		} finally {
+			cwd.mockRestore();
+		}
+	});

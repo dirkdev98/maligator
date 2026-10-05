@@ -9,11 +9,12 @@ workers. A new generation never inherits JavaScript state from the previous one.
 
 The source CLI keeps Node support for `build`. Its development build transport
 uses a Node worker around the same compilation kernel. The exported synchronous
-build API remains serial. Production CLI builds can opt into independent root
-compilation with `--compile-concurrency 1..3`, a total CPU-job budget including the
-owner. The default is one. Two helpers overlap worker-image compilation with the
-owner's unchanged full optimizer, then join before ordered publication. Cache hits
-and graphs without worker roots admit no helpers. Native-function rendering stays
+build API remains serial. Production CLI builds default to independent root
+compilation with up to three total CPU jobs including the owner, bounded by the
+host allocation. `--compile-concurrency 1..3` can lower that limit; one retains
+serial compilation. Two helpers overlap worker-image compilation with the owner's
+unchanged full optimizer, then join before ordered publication. Cache hits and
+graphs without worker roots admit no helpers. Native-function rendering stays
 serial: that finer seam did not earn its startup and program-cloning costs.
 
 Three interleaved Node CLI pairs per workload on October 5, 2026, on an M3 Pro
@@ -50,7 +51,7 @@ transport lifetime and large-message checks also pass Linux ASan/UBSan. Adding t
 root compiler entry increased the packaged executable from 261.1 to 317.4 MB
 (21.5%); the budget comparison does not measure this package-size cost.
 
-Root overlap applies only to this opt-in production build. Non-production builds
+Root overlap applies to eligible production builds. Non-production builds
 prepare in a background compiler; run joins preparation before a fresh application;
 dev overlaps compilation with its last good application and responsive watcher.
 Test file isolation uses separate bounded compile and execution queues while the

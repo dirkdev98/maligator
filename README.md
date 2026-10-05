@@ -43,11 +43,11 @@ explicit entry overrides `config.entry`. Without a config, an explicit entry use
 the conservative product defaults. `build` and `run` fail with an `init` suggestion
 when neither source supplies an entry.
 
-Production builds default to serial compilation. `--compile-concurrency 3` allows
-the owner and up to two independent worker-image compilers to overlap, bounded by
-the host's CPU budget. Cache hits and applications without worker roots start no
-root helpers. The public synchronous build API remains serial. This flag requires
-`--production`; profiling remains serial.
+Production builds overlap the owner and up to two independent worker-image
+compilers, bounded by the host's CPU budget. `--compile-concurrency 1` selects serial
+compilation; `--compile-concurrency 2..3` can lower the total job limit. Cache hits
+and applications without worker roots start no root helpers. The public synchronous
+build API remains serial. This flag requires `--production`; profiling remains serial.
 
 `run` compiles to a portable development image and executes it in a fresh VM using a
 matching compile-time-specialized runtime embedded in the distributed platform CLI.

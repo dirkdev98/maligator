@@ -444,7 +444,8 @@ export async function prepareCommandAsync(
 	command: BuildCommand,
 	context: CommandContext,
 ): Promise<BuildCommandResult> {
-	const requested = command.compileConcurrency ?? 1;
+	const requested =
+		command.compileConcurrency ?? Math.min(3, context.availableCompileConcurrency ?? 1);
 	const fallback =
 		context.rootCompiler === undefined
 			? "root transport unavailable"
@@ -2180,7 +2181,7 @@ export async function runCli(
 		if (command.kind === "build") {
 			if (!command.production && context.compiler !== undefined) {
 				await context.compiler.prepare(command);
-			} else if (command.production && command.compileConcurrency !== undefined) {
+			} else if (command.production) {
 				await prepareCommandAsync(command, context);
 			} else buildCommand(command, context);
 		} else if (command.kind === "run") {
