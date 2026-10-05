@@ -5,6 +5,27 @@ import type { ExplorerAsset, SiteResource } from "./responses.ts";
 const explorerRoot = mal.assets.materialize("explorer");
 const pages = new Map<string, SiteResource>([
 	[
+		"/favicon.ico",
+		{
+			body: readFileSync(mal.assets.materialize("favicon")),
+			type: "image/vnd.microsoft.icon",
+		},
+	],
+	[
+		"/favicon-32x32.png",
+		{
+			body: readFileSync(mal.assets.materialize("faviconPng")),
+			type: "image/png",
+		},
+	],
+	[
+		"/apple-touch-icon.png",
+		{
+			body: readFileSync(mal.assets.materialize("appleTouchIcon")),
+			type: "image/png",
+		},
+	],
+	[
 		"/api/workers",
 		{
 			body: readFileSync(mal.assets.materialize("workersApi"), "utf8"),

@@ -28,6 +28,9 @@ export function renderSiteTemplate(template: string, page: SitePage): string {
 		})
 		.join("\n");
 	const regions = {
+		__SITE_ICONS__: `<link rel="icon" href="/favicon.ico" type="image/vnd.microsoft.icon" sizes="16x16 32x32 48x48 256x256">
+<link rel="icon" href="/favicon-32x32.png" type="image/png" sizes="32x32">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png" sizes="180x180">`,
 		__SITE_STYLES__:
 			page === "explorer"
 				? ""

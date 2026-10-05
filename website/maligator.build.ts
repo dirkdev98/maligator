@@ -6,6 +6,9 @@ export default defineBuild({
 	entry: "website/server.mts",
 	outputName: "maligator-site",
 	assets: {
+		favicon: { type: "file", path: "website/favicon.ico" },
+		faviconPng: { type: "file", path: "website/favicon-32x32.png" },
+		appleTouchIcon: { type: "file", path: "website/apple-touch-icon.png" },
 		site: { type: "file", path: "website/index.html" },
 		processApi: { type: "file", path: "website/maligator-process.html" },
 		workersApi: { type: "file", path: "website/maligator-workers.html" },

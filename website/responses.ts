@@ -55,8 +55,8 @@ export function siteResponse(
 		"Referrer-Policy": "no-referrer",
 		"X-Content-Type-Options": "nosniff",
 		"Content-Security-Policy": resource.explorer
-			? "default-src 'none'; img-src data:; style-src 'self'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
-			: "default-src 'none'; img-src data:; style-src 'unsafe-inline'; script-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+			? "default-src 'none'; img-src 'self' data:; style-src 'self'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+			: "default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'; script-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
 	});
 	if (resource.encoding !== undefined) {
 		headers.set("Vary", "Accept-Encoding");

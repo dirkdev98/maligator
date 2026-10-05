@@ -202,6 +202,7 @@ export function generatePlatformReference(
 	return `<!doctype html>
 <html lang="en">
 <head>
+__SITE_ICONS__
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${html(platform.id)} — Maligator API reference</title>

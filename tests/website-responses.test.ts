@@ -3,6 +3,7 @@ import { acceptsBrotli, siteResponse } from "../website/responses.ts";
 import type { SiteResource } from "../website/responses.ts";
 
 const resources = new Map<string, SiteResource>([
+	["/", { body: "<h1>Overview</h1>", type: "text/html" }],
 	["/explorer", { body: "<h1>Explorer</h1>", type: "text/html", explorer: true }],
 	[
 		"/explorer/assets/compiler.abc.wasm",
@@ -73,5 +74,14 @@ describe("website asset responses", () => {
 		expect(page.headers.get("Content-Security-Policy")).toContain("'wasm-unsafe-eval'");
 		expect(page.headers.get("Content-Security-Policy")).not.toContain("'unsafe-eval'");
 		expect(page.headers.get("Content-Security-Policy")).not.toContain("'unsafe-inline'");
+		for (const pathname of ["/", "/explorer"]) {
+			const response = siteResponse(
+				new Request(`http://localhost${pathname}`),
+				resources,
+			);
+			expect(response.headers.get("Content-Security-Policy")).toContain(
+				"img-src 'self' data:",
+			);
+		}
 	});
 });
