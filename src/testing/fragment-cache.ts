@@ -44,9 +44,9 @@ import type {
 	DependencyIdentity,
 	TestFrontendPhases,
 } from "./cache.ts";
-import { TestCompilationSession } from "./cache.ts";
+import { TestCompilationSession, testRunnerSource } from "./cache.ts";
 
-const FRAGMENT_SCHEMA = 2;
+const FRAGMENT_SCHEMA = 3;
 const TEST_MODULE_ID = "maligator:test";
 const NODE_GLOBALS_MODULE_ID = "maligator-internal:node-globals";
 const CACHE_DIRECTORY = path.join(maligatorCacheDirectory(), "test");
@@ -61,7 +61,7 @@ interface FragmentReference extends ArtifactReference {
 }
 
 interface FragmentManifest {
-	schema: 2;
+	schema: 3;
 	identity: string;
 	entries: Array<string>;
 	dependencies: Array<DependencyIdentity>;
@@ -176,9 +176,9 @@ function environmentIdentity(options: CompileTestImageOptions): string {
 }
 
 function requestIdentity(environment: string, options: CompileTestImageOptions): string {
-	return options.processRunner === undefined
+	return options.runner === undefined
 		? environment
-		: digest(JSON.stringify({ environment, processRunner: options.processRunner }));
+		: digest(JSON.stringify({ environment, runner: options.runner }));
 }
 
 function dependenciesUnchanged(
@@ -658,16 +658,11 @@ function runnerGraph(
 	parseCache: ModuleParseCache,
 ): ModuleGraph {
 	const entry = path.join(path.dirname(entries[0]!), ".maligator-test-runner.mts");
-	const source =
-		options.processRunner === undefined
-			? "globalThis.__maligatorTestResult = await " +
-				"globalThis.__maligatorTestApi.__run(globalThis.__maligatorTestOptions);\n"
-			: `const __result = await globalThis.__maligatorTestApi.__run(${JSON.stringify({
-					...options.processRunner.runOptions,
-					files: entries,
-				})});
-console.log(${JSON.stringify(options.processRunner.resultPrefix)} + JSON.stringify(__result));
-`;
+	const source = testRunnerSource(
+		"globalThis.__maligatorTestApi.__run",
+		entries,
+		options.runner,
+	);
 	return buildModuleGraph(entry, {
 		entryGoal: "module",
 		entrySource: source,

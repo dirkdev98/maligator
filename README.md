@@ -101,13 +101,26 @@ capacity are bounded across the process. See
 [parallel workers](docs/decisions/10-parallel-workers.md) for task signatures,
 scheduling, transfer admission, cancellation and lifecycle contracts.
 
+The native CLI retains compiler workers while fresh application threads run.
+Ordinary compatible `run` and `dev` images use separate VMs and heaps inside the
+supervisor. Dev keeps the last successful application during compilation and
+replaces it only with the newest valid generation. `dev --status` streams
+generation, compilation and application states, plus retained image/worker counts.
+Applications can call
+`ready()` from `maligator:application` after startup; this is distinct from module
+evaluation and does not transfer listening sockets. Profiled builds and
+incompatible runtime policies use a process runner. See
+[supervised applications](docs/decisions/12-supervised-applications.md) for
+ownership, cancellation and process resource limits.
+
 ## Application tests
 
 Ordinary `maligator test` is an interpreter-only toolchain path. It discovers
 `*.test.{js,mjs,ts,mts}` and `*.spec.{js,mjs,ts,mts}`, loads a shared dependency
-base plus independently cached registration fragments, and runs them in the
-interpreter already embedded in the Maligator executable. It never emits C or
-invokes a native compiler/linker. The content-addressed cache stores frontend
+base plus independently cached registration fragments, and runs them in a fresh
+application isolate using the interpreter embedded in the Maligator executable.
+Compatible ordinary tests do not emit C or invoke a native compiler/linker.
+The content-addressed cache stores frontend
 wire artifacts, not successful results; every selected test executes on every
 command.
 
@@ -147,10 +160,25 @@ asymmetric matchers. A focused `.only` run prints a warning.
 
 Selections are stable and serial by default. `--run` filters hierarchical names,
 `--shuffle` reports its reproducible seed, `--repeat` reruns the registered suite
-without recompiling, and `--bail` opts out of the default complete policy. The MVP
-uses one shared Realm/isolate across files; globals, intrinsic prototypes, host
-state, and uncancelled async resources are therefore shared. Per-file Realm
-isolation and worker scheduling are deferred rather than simulated.
+without recompiling, and `--bail` opts out of the default complete policy. Selected
+files share one application isolate by default, preserving module singletons,
+globals and ordering. The supervisor joins the application and its descendants
+after each run, including resources left open by tests.
+
+`test --isolate --compile-concurrency 2 --concurrency 2` opts into independent
+file applications, with separate compilation and execution budgets. Each file
+gets fresh module state; completion reports remain in selection order. Bail stops
+new admissions and joins work already started. More compiler workers retain more
+frontend memory, so ordinary shared-suite compilation uses one worker. Isolated
+scheduling currently requires a compatible native runtime policy.
+
+`test --watch` retains compiled images and launches a fresh application on every
+rerun. Source and configuration edits rebuild the affected graph. On POSIX,
+`kill -HUP <printed-pid>` reruns unchanged inputs from the retained image;
+`--watch-failed` restricts that unchanged rerun to previously failing files while
+preserving the original shared graph. The compiled filter, repeat, timeout, bail
+and shuffle seed remain fixed for the watch session. `--status` streams generation,
+compilation and resource snapshots; Ctrl+C joins active work before exiting.
 
 ## Configuration
 
@@ -210,6 +238,10 @@ All fields are optional. Product defaults are:
 | `surface.webPlatform`   | `false`  | Include the WinterTC/web host surface                                                           |
 | `surface.node`          | `false`  | Include Maligator's curated `node:*` compatibility surface                                      |
 | `surface.maligator`     | `true`   | Include the Maligator host surface                                                              |
+
+Standalone runtime eval currently also requires `engine.regexp: true`: the baked
+compiler uses RegExp internally. Separating those capabilities is
+[unfinished work](TODO.md#realm-correctness-and-runtime-capabilities).
 
 Supported Intl feature names are `collator`, `number-format`, `date-time-format`,
 `plural-rules`, `list-format`, `segmenter`, `display-names`,

@@ -123,12 +123,16 @@ describe("wire loader side-data validation", () => {
 		rejectsWire(name, wire);
 	}
 
-	function rejectsWire(name: string, wire: Uint8Array): void {
+	function rejectsWire(
+		name: string,
+		wire: Uint8Array,
+		error = "truncated or corrupt buffer",
+	): void {
 		const wirePath = path.join(directory, `${name}.malw`);
 		writeFileSync(wirePath, wire);
 		const result = spawnSync(driver, [wirePath], { encoding: "utf8" });
 		expect(result.status).toBe(2);
-		expect(result.stderr).toContain("truncated or corrupt buffer");
+		expect(result.stderr).toContain(error);
 	}
 
 	function acceptsWire(name: string, wire: Uint8Array): void {
@@ -155,7 +159,7 @@ describe("wire loader side-data validation", () => {
 			WIRE_VERSION - 1,
 			true,
 		);
-		rejectsWire("stale-primordial-abi", wire);
+		rejectsWire("stale-primordial-abi", wire, "version mismatch");
 	});
 	it("interns empty wire strings before installing language intrinsics", () => {
 		acceptsWire(

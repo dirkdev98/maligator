@@ -46,7 +46,7 @@ import {
 } from "../worker-image-cache.ts";
 import type { WorkerImageArtifact } from "../worker-image-cache.ts";
 
-const TEST_CACHE_SCHEMA = 2;
+const TEST_CACHE_SCHEMA = 3;
 const TEST_CACHE_DIRECTORY = path.join(maligatorCacheDirectory(), "test");
 const TEST_MODULE_ID = "maligator:test";
 const TEST_BOOTSTRAP_MODULE_ID = "maligator-internal:test-bootstrap";
@@ -54,13 +54,12 @@ const TEST_IMAGE_TRANSFORM = 1;
 
 export type DependencyIdentity = FrontendDependencyIdentity;
 
-export interface TestProcessRunner {
-	runOptions: object;
-	resultPrefix: string;
-}
+export type TestImageRunner =
+	| { kind: "application" }
+	| { kind: "process"; runOptions: object; resultPrefix: string };
 
 interface TestCacheManifest {
-	schema: 2;
+	schema: 3;
 	identity: string;
 	contentKey: string;
 	wireDigest: string;
@@ -82,8 +81,7 @@ interface CompileTestOptions {
 	/** Require an artifact with exactly these entries during failure containment. */
 	allowSupersetCache?: boolean;
 	dependencyWorker?: DependencyFragmentWorker;
-	/** Execute and report inside a child runner instead of publishing a global result. */
-	processRunner?: TestProcessRunner;
+	runner?: TestImageRunner;
 }
 
 export interface CompileTestFileOptions extends CompileTestOptions {
@@ -151,7 +149,7 @@ function cacheIdentity(options: CompileTestOptions): string {
 					: undefined,
 			platformSourceRoot: options.platformSourceRoot,
 			testImageTransform: TEST_IMAGE_TRANSFORM,
-			processRunner: options.processRunner,
+			runner: options.runner,
 		}),
 	);
 }
@@ -218,13 +216,32 @@ function cachedWire(
 	}
 }
 
-function syntheticEntry(entries: Array<string>, node: boolean): string {
+function syntheticEntry(
+	entries: Array<string>,
+	node: boolean,
+	runner?: TestImageRunner,
+): string {
 	const imports = entries.map((file) => `import ${JSON.stringify(file)};`).join("\n");
 	return `${node ? 'import "maligator-internal:node-globals";\n' : ""}import ${JSON.stringify(TEST_BOOTSTRAP_MODULE_ID)};
 import { __run } from ${JSON.stringify(TEST_MODULE_ID)};
 ${imports}
-globalThis.__maligatorTestResult = await __run(globalThis.__maligatorTestOptions);
+${testRunnerSource("__run", entries, runner)}
 `;
+}
+
+export function testRunnerSource(
+	callee: string,
+	entries: Array<string>,
+	runner: TestImageRunner | undefined,
+): string {
+	if (runner?.kind === "application") {
+		return `globalThis.mal._applicationResult(await ${callee}(globalThis.mal._applicationData()));\n`;
+	}
+	if (runner?.kind === "process") {
+		return `const __result = await ${callee}(${JSON.stringify({ ...runner.runOptions, files: entries })});
+console.log(${JSON.stringify(runner.resultPrefix)} + JSON.stringify(__result));\n`;
+	}
+	return `globalThis.__maligatorTestResult = await ${callee}(globalThis.__maligatorTestOptions);\n`;
 }
 
 function wrapTestEntry(source: string, file: string): string {
@@ -293,13 +310,7 @@ function testProcessEntrySource(
 	runOptions: object,
 	resultPrefix: string,
 ): string {
-	const imports = entries.map((file) => `import ${JSON.stringify(file)};`).join("\n");
-	return `${node ? 'import "maligator-internal:node-globals";\n' : ""}import ${JSON.stringify(TEST_BOOTSTRAP_MODULE_ID)};
-import { __run } from ${JSON.stringify(TEST_MODULE_ID)};
-${imports}
-const __result = await __run(${JSON.stringify({ ...runOptions, files: entries })});
-console.log(${JSON.stringify(resultPrefix)} + JSON.stringify(__result));
-`;
+	return syntheticEntry(entries, node, { kind: "process", runOptions, resultPrefix });
 }
 
 /** Cold, production-optimized test image used only by `test --profile`. Ordinary
@@ -355,7 +366,7 @@ export function compileIsolatedTestImage(
 ): CompiledIsolatedTestImage {
 	return compileTestImage({
 		...options,
-		processRunner: { runOptions, resultPrefix },
+		runner: { kind: "process", runOptions, resultPrefix },
 	});
 }
 
@@ -469,15 +480,11 @@ export function compileTestImage(options: CompileTestImageOptions): CompiledTest
 	}
 
 	const graphStartedAt = Date.now();
-	const entrySource =
-		options.processRunner === undefined
-			? syntheticEntry(entries, options.config.surface.node)
-			: testProcessEntrySource(
-					entries,
-					options.config.surface.node,
-					options.processRunner.runOptions,
-					options.processRunner.resultPrefix,
-				);
+	const entrySource = syntheticEntry(
+		entries,
+		options.config.surface.node,
+		options.runner,
+	);
 	const graph = buildTestGraph(options, entries, session, entrySource);
 	phases.graphMs = Date.now() - graphStartedAt;
 	const dependencies = dependencyIdentities(graph, session);

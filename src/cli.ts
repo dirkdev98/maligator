@@ -39,6 +39,7 @@ export interface DevCommand {
 	entry?: string;
 	configPath?: string;
 	verbose: boolean;
+	status?: boolean;
 	profile: boolean;
 	profileCompiler?: boolean;
 	programArgs: Array<string>;
@@ -54,6 +55,11 @@ export interface TestCommand {
 	bail: boolean;
 	timeoutMs: number;
 	compileConcurrency: number;
+	isolation?: "file";
+	executionConcurrency?: number;
+	watch?: boolean;
+	watchFailed?: boolean;
+	status?: boolean;
 	profile: boolean;
 	profileCompiler?: boolean;
 }
@@ -106,7 +112,13 @@ Options:
   --profile[=compiler]         Sample production code, or add exact compiler counters
   --artifact <directory>       Create a deployable production artifact
   --verbose                    Show build diagnostics or every pruned cache entry
+  --status                     Stream generation and resource states (dev or test --watch)
   --run <name>                 Filter tests by hierarchical name
+  --isolate                    Run each selected test file in a fresh application
+  --concurrency <count>        Bound isolated test executions (requires --isolate)
+  --compile-concurrency <n>    Bound independent test compilation jobs
+  --watch                      Retain native test images; SIGHUP reruns on POSIX hosts
+  --watch-failed               Select failed files on unchanged SIGHUP reruns
   --shuffle [seed]             Shuffle deterministically and print the seed
   --repeat <count>             Repeat selected tests without recompiling
   --bail                       Stop after the first failure
@@ -286,6 +298,10 @@ function parseRun(args: Array<string>, kind: "run" | "dev"): CliCommand {
 			command.verbose = true;
 			continue;
 		}
+		if (argument === "--status" && command.kind === "dev") {
+			command.status = true;
+			continue;
+		}
 		if (argument === "--profile" || argument === "--profile=compiler") {
 			command.profile = true;
 			if (argument === "--profile=compiler") command.profileCompiler = true;
@@ -423,6 +439,30 @@ function parseTest(args: Array<string>): CliCommand {
 			index++;
 			continue;
 		}
+		if (argument === "--isolate") {
+			command.isolation = "file";
+			continue;
+		}
+		if (argument === "--watch") {
+			command.watch = true;
+			continue;
+		}
+		if (argument === "--status") {
+			command.status = true;
+			continue;
+		}
+		if (argument === "--watch-failed") {
+			command.watchFailed = true;
+			continue;
+		}
+		if (argument === "--concurrency") {
+			command.executionConcurrency = positiveInteger(
+				optionValue(args, index, argument),
+				argument,
+			);
+			index++;
+			continue;
+		}
 		if (argument === "--bail") {
 			command.bail = true;
 			continue;
@@ -435,6 +475,18 @@ function parseTest(args: Array<string>): CliCommand {
 		if (argument.startsWith("-")) return unexpectedArgument("test", argument);
 		command.paths.push(argument);
 	}
+	if ((command.executionConcurrency ?? 1) > 1 && command.isolation === undefined) {
+		throw new CliUsageError("--concurrency greater than 1 requires --isolate");
+	}
+	if (command.isolation !== undefined && command.profile) {
+		throw new CliUsageError("--isolate cannot be combined with --profile");
+	}
+	if (command.watch && command.profile)
+		throw new CliUsageError("--watch cannot be combined with --profile");
+	if (command.watchFailed && !command.watch)
+		throw new CliUsageError("--watch-failed requires --watch");
+	if (command.status && !command.watch)
+		throw new CliUsageError("test --status requires --watch");
 	return command;
 }
 

@@ -1,5 +1,10 @@
 import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import * as path from "node:path";
+import type {
+	ApplicationExit,
+	ApplicationImageDescriptor,
+	ApplicationImageHost,
+} from "./application-images.ts";
 import { includeConfiguredAssets } from "./assets.ts";
 import { createBuildArtifact } from "./build-artifact.ts";
 import {
@@ -42,6 +47,7 @@ import type {
 } from "./cli.ts";
 import { CommandProgress, formatCommandDuration } from "./command-progress.ts";
 import { compilerEntrypointSourceFiles } from "./compiler-bake.ts";
+import type { CompilationPhase, CompilerService } from "./compiler-service.ts";
 import { formatCoreProgram } from "./compiler/core/core-ir.ts";
 import { formatCoreOptimizationReport } from "./compiler/core/core-optimization-report.ts";
 import { TYPE_STRIPPER_IDENTITY } from "./compiler/frontend/compact-type-strip.ts";
@@ -54,7 +60,13 @@ import { emitWorkerImageTranslationUnits } from "./compiler/target/emit-worker-i
 import { compileDependencyFragmentRequest } from "./dependency-fragment-cache.ts";
 import type { DependencyFragmentWorker } from "./dependency-fragment-cache.ts";
 import { cacheDevelopmentAssets } from "./development-assets.ts";
-import { cacheFrontendWire, FrontendCompilationSession } from "./frontend-cache.ts";
+import { createDevelopmentSession } from "./development-session.ts";
+import {
+	cacheFrontendWire,
+	frontendDependencyUnchanged,
+	FrontendCompilationSession,
+} from "./frontend-cache.ts";
+import type { FrontendDependencyIdentity } from "./frontend-cache.ts";
 import { buildDevelopmentRunner, buildLocalBinary } from "./local-build.ts";
 import { resolveNativeBuildContext } from "./native-build-context.ts";
 import { nativeBuildJobs } from "./native-command.ts";
@@ -81,6 +93,7 @@ import {
 } from "./testing/command.ts";
 import type { TestCommandSummary } from "./testing/command.ts";
 import type { TestRunResult } from "./testing/protocol.ts";
+import { watchTestCommand } from "./testing/watch.ts";
 import {
 	formatToolchainReport,
 	formatToolCommand,
@@ -104,6 +117,10 @@ export interface CommandContext {
 	frontendSession?: FrontendCompilationSession;
 	developmentCache?: DevelopmentBuildCache;
 	dependencyWorker?: DependencyFragmentWorker;
+	compiler?: CompilerService;
+	applications?: ApplicationImageHost;
+	checkpoint?: () => void;
+	onCompilationPhase?: (event: CompilationPhase) => void;
 }
 
 export interface DevelopmentWatchHost {
@@ -150,7 +167,10 @@ export interface CompilerInstallation {
 		primordials: "locked" | "mutable";
 		webPlatform: boolean;
 		node: boolean;
+		eval: boolean;
 		realms: boolean;
+		regexp: boolean;
+		temporal: boolean;
 		intl: boolean;
 		externalAssets: boolean;
 	}>;
@@ -212,7 +232,10 @@ export function productCompilerInstallation(
 							primordials: "locked" as const,
 							webPlatform: true,
 							node: true,
+							eval: true,
 							realms: true,
+							regexp: true,
+							temporal: false,
 							intl: false,
 							externalAssets: true,
 						},
@@ -226,7 +249,10 @@ export function productCompilerInstallation(
 										primordials: "mutable" as const,
 										webPlatform: true,
 										node: true,
+										eval: true,
 										realms: true,
+										regexp: true,
+										temporal: false,
 										intl: false,
 										externalAssets: true,
 									},
@@ -238,11 +264,13 @@ export function productCompilerInstallation(
 }
 
 export interface BuildCommandResult {
+	applicationImage?: ApplicationImageDescriptor;
 	binaryPath?: string;
 	serializedPath?: string;
 	artifactDirectory?: string;
 	runArguments?: Array<string>;
 	dependencies?: Array<string>;
+	dependencyIdentities?: Array<FrontendDependencyIdentity>;
 	profile?: PreparedProfile;
 }
 
@@ -360,7 +388,10 @@ function compatibleDevelopmentRunner(
 			config.engine.primordials === runner.primordials &&
 			(!config.surface.webPlatform || runner.webPlatform) &&
 			(!config.surface.node || runner.node) &&
+			(config.engine.eval !== true || runner.eval) &&
 			(!config.engine.realms || runner.realms) &&
+			(!config.engine.regexp || runner.regexp) &&
+			(!config.engine.temporal || runner.temporal) &&
 			(!config.engine.intl.enabled || runner.intl),
 	);
 }
@@ -377,7 +408,7 @@ export function applicationDriverPath(
 	);
 }
 
-function compileAndBuild(
+export function prepareCommand(
 	command: BuildCommand | RunCommand | DevCommand,
 	context: CommandContext,
 	compact = false,
@@ -389,7 +420,12 @@ function compileAndBuild(
 			? (command.internal.name ?? resolveOutputName(buildConfig))
 			: resolveOutputName(buildConfig);
 	const verbose = command.kind === "build" ? command.internal.verbose : command.verbose;
-	const reporter = new BuildReporter(verbose, compact && !verbose);
+	const reporter = new BuildReporter(
+		verbose,
+		compact && !verbose,
+		context.checkpoint,
+		context.onCompilationPhase,
+	);
 	const production = command.profile || (command.kind === "build" && command.production);
 	reporter.start(
 		name,
@@ -524,6 +560,7 @@ function compileAndBuild(
 						debugEnabled || compilerDiagnostics || command.profile || reporter.verbose,
 					relocatable: command.kind !== "build" && !command.profile,
 					onCompilePhase: (phase, durationMs) => {
+						context.checkpoint?.();
 						compilerPhases.push({ phase, durationMs });
 					},
 					dependencyWorker: context.dependencyWorker,
@@ -589,6 +626,7 @@ function compileAndBuild(
 			...assets.flatMap((asset) => asset.files.map((file) => file.inputPath)),
 		]),
 	].sort();
+	const dependencyIdentities = frontendSession.dependencyIdentities(dependencies);
 	reporter.detail("Dependencies", dependencies.length);
 	for (const dependency of dependencies) reporter.detail("Dependency", dependency);
 
@@ -609,7 +647,7 @@ function compileAndBuild(
 		if (workerManifest !== undefined) reporter.detail("Worker manifest", workerManifest);
 		reporter.detail("Serialized bytes", frontend.wire.length);
 		reporter.complete("Serialized", serializePath, true);
-		return { serializedPath: serializePath, dependencies };
+		return { serializedPath: serializePath, dependencies, dependencyIdentities };
 	}
 
 	const packagedRunner =
@@ -654,9 +692,38 @@ function compileAndBuild(
 		reporter.detail("Development images", wirePaths.join(", "));
 		reporter.complete("Ready", packagedRunner.executablePath, false);
 		return {
+			...(packagedRunner.inProcess
+				? {
+						applicationImage: {
+							schema: 1 as const,
+							wires: frontend.runtimeArtifacts.map((artifact) => ({
+								path: artifact.path,
+								sha256: artifact.digest,
+							})),
+							entryPath: entrypointPath,
+							...(workerManifest === undefined
+								? {}
+								: { workerManifestPath: workerManifest }),
+							...(assetManifest === undefined
+								? {}
+								: { assetManifestPath: assetManifest }),
+							webPlatform: buildConfig.surface.webPlatform,
+							node: buildConfig.surface.node,
+							engine: {
+								primordials: buildConfig.engine.primordials,
+								eval: buildConfig.engine.eval === true,
+								realms: buildConfig.engine.realms,
+								regexp: buildConfig.engine.regexp,
+								temporal: buildConfig.engine.temporal,
+								intl: buildConfig.engine.intl.enabled,
+							},
+						},
+					}
+				: {}),
 			binaryPath: packagedRunner.executablePath,
 			runArguments,
 			dependencies,
+			dependencyIdentities,
 		};
 	}
 
@@ -799,6 +866,7 @@ function compileAndBuild(
 				...command.programArgs,
 			],
 			dependencies,
+			dependencyIdentities,
 		};
 	}
 
@@ -935,6 +1003,7 @@ function compileAndBuild(
 			binaryPath,
 			artifactDirectory: artifact.directory,
 			dependencies,
+			dependencyIdentities,
 			...(preparedProfile === undefined ? {} : { profile: preparedProfile }),
 		};
 	}
@@ -946,6 +1015,7 @@ function compileAndBuild(
 	return {
 		binaryPath,
 		dependencies,
+		dependencyIdentities,
 		...(preparedProfile === undefined ? {} : { profile: preparedProfile }),
 	};
 }
@@ -955,10 +1025,20 @@ export function buildCommand(
 	command: BuildCommand,
 	context: CommandContext,
 ): BuildCommandResult {
-	return compileAndBuild(command, context);
+	return prepareCommand(command, context);
 }
 
-function reportRunOutcome(outcome: RunOutcome): void {
+interface ApplicationRunOutcome extends RunOutcome {
+	applicationExit?: ApplicationExit;
+}
+
+function reportRunOutcome(outcome: ApplicationRunOutcome): void {
+	if (outcome.applicationExit?.reason === "error") {
+		const error = outcome.applicationExit.error;
+		writeStderr(
+			`Application error: ${error instanceof Error ? error.message : String(error)}`,
+		);
+	}
 	if (outcome.status === 0) {
 		writeStderr("Exited with code 0");
 		return;
@@ -966,14 +1046,33 @@ function reportRunOutcome(outcome: RunOutcome): void {
 	writeStderr(
 		`Exited with ${outcome.signal ? `signal ${outcome.signal}` : `code ${outcome.status ?? "unknown"}`}`,
 	);
-	if (outcome.signal !== undefined) process.kill(process.pid, outcome.signal);
-	process.exit(outcome.status ?? 1);
 }
 
 /** Compile, link, and execute one parsed `run` command. */
-export function runCommand(command: RunCommand, context: CommandContext): void {
-	const result = compileAndBuild(command, context);
+export async function runCommand(
+	command: RunCommand,
+	context: CommandContext,
+): Promise<ApplicationRunOutcome> {
+	const result =
+		context.compiler === undefined
+			? prepareCommand(command, context)
+			: await context.compiler.prepare(command);
 	const binaryPath = result.binaryPath!;
+	if (
+		!command.profile &&
+		result.applicationImage !== undefined &&
+		context.applications !== undefined
+	) {
+		const application = launchApplication(result, command.programArgs, context);
+		try {
+			await application.evaluated;
+			const outcome = await application.closed!;
+			reportRunOutcome(outcome);
+			return outcome;
+		} finally {
+			await application.stop();
+		}
+	}
 	const capture =
 		command.profile && result.profile !== undefined
 			? createProfileCapture("run", result.profile)
@@ -1005,6 +1104,128 @@ export function runCommand(command: RunCommand, context: CommandContext): void {
 		}
 	}
 	reportRunOutcome(outcome);
+	return outcome;
+}
+
+interface LaunchedApplication {
+	backend: "thread" | "process";
+	evaluated: Promise<void>;
+	applicationReady?: Promise<void>;
+	closed?: Promise<ApplicationRunOutcome>;
+	exit?(): ApplicationExit | undefined;
+	status(): number | undefined;
+	stop(): Promise<void>;
+}
+
+function launchApplication(
+	build: BuildCommandResult,
+	programArgs: Array<string>,
+	context: CommandContext,
+	environment?: NodeJS.ProcessEnv,
+): LaunchedApplication {
+	if (
+		build.profile === undefined &&
+		build.applicationImage !== undefined &&
+		context.applications !== undefined
+	) {
+		const image = context.applications.load(build.applicationImage);
+		try {
+			const instance = image.launch({
+				argv: [
+					build.binaryPath ?? process.execPath,
+					build.applicationImage.entryPath,
+					...programArgs,
+				],
+				name: build.applicationImage.entryPath,
+			});
+			void instance.applicationReady.catch(() => {});
+			let status: number | undefined;
+			let applicationExit: ApplicationExit | undefined;
+			const closed = instance.closed.then((exit) => {
+				status = exit.code;
+				applicationExit = exit;
+				return { status: exit.code, applicationExit: exit };
+			});
+			void closed.catch(() => {});
+			let stopping: Promise<void> | undefined;
+			return {
+				backend: "thread",
+				evaluated: instance.ready,
+				applicationReady: instance.applicationReady,
+				closed,
+				status: () => status,
+				exit: () => applicationExit,
+				stop() {
+					return (stopping ??= (async () => {
+						const failures: Array<unknown> = [];
+						try {
+							await instance.terminate();
+						} catch (error) {
+							failures.push(error);
+						}
+						try {
+							await closed;
+						} catch (error) {
+							failures.push(error);
+						}
+						try {
+							image.close();
+						} catch (error) {
+							failures.push(error);
+						}
+						if (failures.length === 1) throw failures[0];
+						if (failures.length > 1)
+							throw new AggregateError(failures, "application shutdown failed");
+					})());
+				},
+			};
+		} catch (error) {
+			image.close();
+			throw error;
+		}
+	}
+	const host = context.developmentProcesses;
+	if (host === undefined)
+		commandError(
+			"error: this Maligator installation does not provide application processes",
+		);
+	const handle = host.spawn(
+		build.binaryPath!,
+		build.runArguments ?? programArgs,
+		environment,
+	);
+	let stopping: Promise<void> | undefined;
+	return {
+		backend: "process",
+		evaluated: Promise.resolve(),
+		status: () => host.status(handle),
+		stop() {
+			return (stopping ??=
+				host.status(handle) === undefined
+					? stopDevelopmentProcess(host, handle)
+					: Promise.resolve());
+		},
+	};
+}
+
+async function awaitApplicationEvaluation(
+	application: LaunchedApplication,
+	signal: AbortSignal,
+): Promise<void> {
+	let abort!: () => void;
+	const canceled = new Promise<never>((_resolve, reject) => {
+		abort = () =>
+			reject(
+				signal.reason instanceof Error ? signal.reason : new Error(String(signal.reason)),
+			);
+		signal.addEventListener("abort", abort, { once: true });
+	});
+	try {
+		signal.throwIfAborted();
+		await Promise.race([application.evaluated, canceled]);
+	} finally {
+		signal.removeEventListener("abort", abort);
+	}
 }
 
 interface WatchedFileState {
@@ -1016,7 +1237,9 @@ interface WatchedFileState {
 function watchIdentity(file: string): string | undefined {
 	try {
 		const stats = statSync(file);
-		return stats.isFile() ? `${stats.size}:${stats.mtimeMs}` : undefined;
+		return stats.isFile()
+			? `${stats.size}:${stats.mtimeMs}:${stats.ctimeMs}:${stats.ino}:${stats.dev}`
+			: undefined;
 	} catch {
 		return undefined;
 	}
@@ -1028,7 +1251,8 @@ function watchedFiles(
 ): Array<WatchedFileState> {
 	const configPath = path.resolve(command.configPath ?? BUILD_CONFIG_NAME);
 	const files = new Set(dependencies);
-	if (existsSync(configPath) || command.configPath !== undefined) files.add(configPath);
+	files.add(configPath);
+	if (command.entry !== undefined) files.add(path.resolve(command.entry));
 	return [...files].sort().map((file) => ({
 		file,
 		identity: watchIdentity(file),
@@ -1082,8 +1306,8 @@ export async function devCommand(
 	context: CommandContext,
 ): Promise<void> {
 	const processHost = context.developmentProcesses;
-	if (processHost === undefined) {
-		commandError("error: this Maligator installation does not provide watch processes");
+	if (processHost === undefined && context.applications === undefined) {
+		commandError("error: this Maligator installation does not provide application hosts");
 	}
 	const session = context.frontendSession ?? new FrontendCompilationSession();
 	const retainedContext = {
@@ -1095,7 +1319,6 @@ export async function devCommand(
 		},
 	};
 	const initialBuildStartedAt = Date.now();
-	let result = compileAndBuild(command, retainedContext, true);
 	let profileGeneration = 0;
 	let activeProfile:
 		| {
@@ -1137,112 +1360,351 @@ export async function devCommand(
 		}
 		activeProfile = undefined;
 	};
-	let states = watchedFiles(command, result.dependencies ?? []);
+	let initialDependencies: Array<string> = [];
+	if (command.entry === undefined) {
+		try {
+			initialDependencies = [
+				resolveEntrypoint(command, loadCommandConfig(command, context.stripTypes)),
+			];
+		} catch {
+			initialDependencies = [];
+		}
+	}
+	let states = watchedFiles(command, initialDependencies);
 	const watchHost = context.developmentWatcher;
 	const watchHandle = watchHost?.create(states.map((state) => state.file));
-	activeProfile = nextProfile(result);
-	let child: unknown = processHost.spawn(
-		result.binaryPath!,
-		result.runArguments ?? command.programArgs,
-		activeProfile === undefined
-			? undefined
-			: {
-					...activeProfile.environment,
-					...compilerProfileRuntimeEnvironment(command),
-				},
-	);
+	const shutdown = new AbortController();
+	const restorations = new Set<Promise<void>>();
+	const restorationFailures: Array<unknown> = [];
+	let child: LaunchedApplication | undefined;
+	let childGeneration = 0;
+	let activeBuild: BuildCommandResult | undefined;
+	let activeGeneration = 0;
+	const spawnApplication = (build: BuildCommandResult, generation: number) => {
+		activeProfile = nextProfile(build);
+		const launched = launchApplication(
+			build,
+			command.programArgs,
+			context,
+			activeProfile === undefined
+				? undefined
+				: {
+						...activeProfile.environment,
+						...compilerProfileRuntimeEnvironment(command),
+					},
+		);
+		child = launched;
+		childGeneration = generation;
+		development.observeApplication({
+			generation,
+			backend: launched.backend,
+			state: "started",
+		});
+		if (launched.applicationReady !== undefined)
+			void Promise.all([launched.evaluated, launched.applicationReady])
+				.then(() => {
+					if (child === launched && !stopping) {
+						development.observeApplication({
+							generation,
+							backend: launched.backend,
+							state: "ready",
+						});
+					}
+				})
+				.catch(() => {});
+		return launched;
+	};
+	const stopApplication = async (current = child) => {
+		if (current === undefined) return;
+		const generation = childGeneration;
+		await current.stop();
+		if (child !== current) return;
+		const exit = current.exit?.();
+		development.observeApplication({
+			generation,
+			backend: current.backend,
+			state: "closed",
+			...(current.status() === undefined ? {} : { exitCode: current.status() }),
+			...(exit === undefined
+				? {}
+				: {
+						reason: exit.reason,
+						...(exit.reason === "error" ? { error: String(exit.error) } : {}),
+					}),
+		});
+		child = undefined;
+		finalizeActiveProfile();
+	};
+	const restoreActiveApplication = () => {
+		if (!stopping && activeBuild !== undefined) {
+			const generation = activeGeneration;
+			const restored = spawnApplication(activeBuild, activeGeneration);
+			const task = awaitApplicationEvaluation(restored, shutdown.signal)
+				.then(() => {
+					if (child !== restored || stopping) return;
+					if (
+						restored.backend === "thread" &&
+						development.snapshot().application?.state !== "ready"
+					)
+						development.observeApplication({
+							generation,
+							backend: restored.backend,
+							state: "evaluated",
+						});
+				})
+				.catch(async (error: unknown) => {
+					if (child !== restored || stopping) return;
+					try {
+						writeStderr(
+							`Application restoration failed for generation ${generation}: ${error instanceof Error ? error.message : String(error)}`,
+						);
+					} catch (reportError) {
+						restorationFailures.push(
+							new AggregateError(
+								[error, reportError],
+								`application restoration error could not be reported for generation ${generation}`,
+							),
+						);
+					}
+					try {
+						await stopApplication(restored);
+					} catch (cleanupError) {
+						restorationFailures.push(
+							new AggregateError(
+								[error, cleanupError],
+								`application restoration cleanup failed for generation ${generation}`,
+							),
+						);
+					}
+				})
+				.finally(() => {
+					restorations.delete(task);
+				});
+			restorations.add(task);
+		}
+	};
+	const compiler: Pick<CompilerService, "prepare"> = context.compiler ?? {
+		prepare(_command, options = {}) {
+			for (const file of options.invalidatedPaths ?? []) session.invalidate(file);
+			if (options.invalidateAll) session.invalidate();
+			options.signal?.throwIfAborted();
+			return Promise.resolve(prepareCommand(command, retainedContext, true));
+		},
+	};
+	let buildStartedAt = initialBuildStartedAt;
+	const development = createDevelopmentSession(command, compiler, {
+		async publish(build, generation, isCurrent, signal) {
+			if (!isCurrent()) return false;
+			const validate = () => [
+				...new Set([
+					...changedFiles(states, true),
+					...(build.dependencyIdentities ?? [])
+						.filter((identity) => !frontendDependencyUnchanged(identity))
+						.map((identity) => identity.path),
+				]),
+			];
+			let changed = validate();
+			if (changed.length > 0) {
+				queueChanges(changed);
+				return false;
+			}
+			const previousStates = new Map(states.map((state) => [state.file, state]));
+			const identities = new Map(
+				(build.dependencyIdentities ?? []).map((identity) => [identity.path, identity]),
+			);
+			states = watchedFiles(command, [
+				...previousStates.keys(),
+				...(build.dependencies ?? []),
+			]).map((state) => {
+				const identity = identities.get(state.file);
+				return identity === undefined
+					? (previousStates.get(state.file) ?? state)
+					: {
+							...state,
+							identity: `${identity.size}:${identity.mtimeMs}:${identity.ctimeMs}:${identity.ino}:${identity.dev}`,
+						};
+			});
+			watchHost?.update(
+				watchHandle,
+				states.map((state) => state.file),
+			);
+			if (child !== undefined) {
+				await stopApplication();
+			}
+			changed = validate();
+			if (changed.length > 0 && isCurrent()) queueChanges(changed);
+			if (!isCurrent() || changed.length > 0) {
+				restoreActiveApplication();
+				return false;
+			}
+			let launched: LaunchedApplication | undefined;
+			try {
+				launched = spawnApplication(build, generation);
+				await awaitApplicationEvaluation(launched, signal);
+			} catch (error) {
+				if (launched !== undefined) await stopApplication();
+				restoreActiveApplication();
+				if (!isCurrent()) return false;
+				throw error;
+			}
+			changed = validate();
+			if (changed.length > 0 && isCurrent()) queueChanges(changed);
+			if (!isCurrent() || changed.length > 0) {
+				await stopApplication();
+				restoreActiveApplication();
+				return false;
+			}
+			if (
+				launched.backend === "thread" &&
+				development.snapshot().application?.state !== "ready"
+			)
+				development.observeApplication({
+					generation,
+					backend: launched.backend,
+					state: "evaluated",
+				});
+			writeStderr(
+				activeBuild === undefined
+					? `${launched.backend === "thread" ? "Evaluated" : "Started"} in ${formatDevelopmentDuration(Date.now() - initialBuildStartedAt)} · watching ${states.length} files · press Ctrl+C to stop`
+					: `Compiled in ${formatDevelopmentDuration(Date.now() - buildStartedAt)} · restarted`,
+			);
+			activeBuild = build;
+			activeGeneration = generation;
+			return true;
+		},
+		failed(error) {
+			writeStderr(
+				`Rebuild failed: ${error instanceof Error ? error.message : String(error)}${
+					child === undefined
+						? "; waiting for changes"
+						: "; last successful application is still running"
+				}`,
+			);
+		},
+		async stop() {
+			const failures: Array<unknown> = [];
+			try {
+				await stopApplication();
+			} catch (error) {
+				failures.push(error);
+			}
+			await Promise.all(restorations);
+			try {
+				finalizeActiveProfile();
+			} catch (error) {
+				failures.push(error);
+			}
+			failures.push(...restorationFailures);
+			if (failures.length === 1) throw failures[0];
+			if (failures.length > 1)
+				throw new AggregateError(failures, "development application cleanup failed");
+		},
+		event(event) {
+			if (
+				event.application === undefined &&
+				event.compilation === undefined &&
+				event.phase === "running"
+			)
+				buildStartedAt = event.at;
+			if (command.status) {
+				const resources = context.applications?.resources?.();
+				writeStderr(
+					`Session ${JSON.stringify({ ...development.snapshot(), ...(resources === undefined ? {} : { resources }) })}`,
+				);
+			}
+			if (command.verbose) {
+				if (event.compilation !== undefined) {
+					writeStderr(
+						`Generation ${event.generation}: ${event.compilation.label} ${event.compilation.state}`,
+					);
+					return;
+				}
+				writeStderr(
+					`Generation ${event.generation}: ${event.application === undefined ? event.phase : `${event.application.backend} ${event.application.state}`}`,
+				);
+			}
+		},
+	});
 	let stopping = false;
 	const stop = () => {
 		stopping = true;
+		shutdown.abort();
+		void development.close().catch(() => {});
 	};
-	process.once("SIGINT", stop);
-	process.once("SIGTERM", stop);
-	writeStderr(
-		`Ready in ${formatDevelopmentDuration(Date.now() - initialBuildStartedAt)} · watching ${states.length} files · press Ctrl+C to stop`,
-	);
-	if (command.verbose) {
+	function queueChanges(changedPaths: Array<string>): void {
 		writeStderr(
-			`Watcher: ${watchHost === undefined ? "polling fallback" : "filesystem events"}`,
+			`Changed ${changedPaths.map((file) => path.relative(process.cwd(), file)).join(", ")}`,
+		);
+		const changed = new Set(changedPaths);
+		const previous = new Map(states.map((state) => [state.file, state]));
+		states = watchedFiles(command, [...previous.keys(), ...changedPaths]).map((state) =>
+			changed.has(state.file) ? state : (previous.get(state.file) ?? state),
+		);
+		watchHost?.update(
+			watchHandle,
+			states.map((state) => state.file),
+		);
+		development.request(
+			changedPaths,
+			changedPaths.includes(path.resolve(command.configPath ?? BUILD_CONFIG_NAME)),
 		);
 	}
+	process.once("SIGINT", stop);
+	process.once("SIGTERM", stop);
 	let poll = 0;
-
+	let loopFailure: { error: unknown } | undefined;
+	const failures: Array<unknown> = [];
 	try {
+		development.request();
+		if (command.verbose) {
+			writeStderr(
+				`Watcher: ${watchHost === undefined ? "polling fallback" : "filesystem events"}`,
+			);
+		}
 		while (!stopping) {
 			if (watchHost === undefined) await delay(75);
 			else await watchHost.wait(watchHandle, 50);
+			if (stopping) break;
 			const changed = changedFiles(states, watchHost !== undefined || poll++ % 14 === 0);
 			if (changed.length === 0) {
-				const status = child === undefined ? undefined : processHost.status(child);
-				if (child !== undefined && status !== undefined) {
+				const current = child;
+				const status = current?.status();
+				if (current !== undefined && status !== undefined) {
 					writeStderr(
 						`Application ${status === 0 ? "stopped" : "crashed"} with code ${status}; waiting for changes.`,
 					);
-					finalizeActiveProfile();
-					child = undefined;
+					const exit = current.exit?.();
+					if (exit?.reason === "error")
+						reportRunOutcome({ status, applicationExit: exit });
+					await stopApplication(current);
 				}
 				continue;
 			}
 
-			await delay(25);
-			const settledChanges = new Set(changed);
-			for (const file of changedFiles(states, true)) settledChanges.add(file);
-			const changedPaths = [...settledChanges];
-			writeStderr(
-				`Changed ${changedPaths.map((file) => path.relative(process.cwd(), file)).join(", ")}`,
-			);
-			for (const file of changedPaths) session.invalidate(file);
-			if (changedPaths.includes(path.resolve(command.configPath ?? BUILD_CONFIG_NAME))) {
-				session.invalidate();
-			}
-			states = states.map((state) => ({
-				...state,
-				identity: watchIdentity(state.file),
-			}));
-			try {
-				const rebuildStartedAt = Date.now();
-				result = compileAndBuild(command, retainedContext, true);
-				states = watchedFiles(command, result.dependencies ?? []);
-				watchHost?.update(
-					watchHandle,
-					states.map((state) => state.file),
-				);
-				if (child !== undefined) {
-					await stopDevelopmentProcess(processHost, child);
-					finalizeActiveProfile();
-					child = undefined;
-				}
-				activeProfile = nextProfile(result);
-				child = processHost.spawn(
-					result.binaryPath!,
-					result.runArguments ?? command.programArgs,
-					activeProfile === undefined
-						? undefined
-						: {
-								...activeProfile.environment,
-								...compilerProfileRuntimeEnvironment(command),
-							},
-				);
-				writeStderr(
-					`Compiled in ${formatDevelopmentDuration(Date.now() - rebuildStartedAt)} · restarted`,
-				);
-			} catch (error) {
-				writeStderr(
-					`Rebuild failed: ${error instanceof Error ? error.message : String(error)}${
-						child === undefined ? "" : "; last successful application is still running"
-					}`,
-				);
-			}
+			queueChanges(changed);
 		}
+	} catch (error) {
+		loopFailure = { error };
 	} finally {
+		stopping = true;
+		shutdown.abort();
 		process.removeListener("SIGINT", stop);
 		process.removeListener("SIGTERM", stop);
-		watchHost?.close(watchHandle);
-		if (child !== undefined && processHost.status(child) === undefined) {
-			await stopDevelopmentProcess(processHost, child);
+		if (loopFailure !== undefined) failures.push(loopFailure.error);
+		try {
+			watchHost?.close(watchHandle);
+		} catch (error) {
+			failures.push(error);
 		}
-		finalizeActiveProfile();
+		try {
+			await development.close();
+		} catch (error) {
+			failures.push(error);
+		}
 	}
+	if (failures.length === 1) throw failures[0];
+	if (failures.length > 1)
+		throw new AggregateError(failures, "development shutdown failed");
 }
 
 const PROFILED_TEST_RESULT_PREFIX = "__MALIGATOR_TEST_RESULT__";
@@ -1524,6 +1986,8 @@ export async function runCli(
 ): Promise<void> {
 	let verbose = false;
 	let cacheLease: ReturnType<typeof createCacheLease> | undefined;
+	let exitCode: number | undefined;
+	let exitSignal: NodeJS.Signals | undefined;
 	try {
 		if (args[0] === "--maligator-internal-dependency-fragment") {
 			if (args.length !== 2) {
@@ -1581,7 +2045,7 @@ export async function runCli(
 					command.verbose,
 				),
 			);
-			if (report.toolchain === undefined) process.exit(1);
+			if (report.toolchain === undefined) exitCode = 1;
 			return;
 		}
 		if (command.kind === "cache") {
@@ -1589,16 +2053,52 @@ export async function runCli(
 			return;
 		}
 		if (command.kind === "build") {
-			buildCommand(command, context);
+			if (!command.production && context.compiler !== undefined) {
+				await context.compiler.prepare(command);
+			} else buildCommand(command, context);
 		} else if (command.kind === "run") {
-			runCommand(command, context);
+			const outcome = await runCommand(command, context);
+			if (outcome.status !== 0) exitCode = outcome.status ?? 1;
+			exitSignal = outcome.signal;
 		} else if (command.kind === "dev") {
 			await devCommand(command, context);
 		} else {
 			let result: Awaited<ReturnType<typeof executeTestCommand>>;
 			try {
+				if (command.watch) {
+					if (context.applications === undefined) {
+						commandError(
+							"error: test --watch requires a compatible native application host",
+						);
+					}
+					const watchConfig = () => {
+						const current = loadCommandConfig(command, context.stripTypes);
+						if (
+							compatibleDevelopmentRunner(current, context)?.inProcess !== true ||
+							context.applications === undefined
+						) {
+							commandError(
+								"error: test --watch requires a compatible native application host",
+							);
+						}
+						return current;
+					};
+					await watchTestCommand(command, context, watchConfig);
+					return;
+				}
 				const config = loadCommandConfig(command, context.stripTypes);
 				const developmentRunner = compatibleDevelopmentRunner(config, context);
+				if (
+					!command.profile &&
+					developmentRunner?.inProcess !== true &&
+					(command.isolation !== undefined ||
+						(command.executionConcurrency ?? 1) > 1 ||
+						command.compileConcurrency > 1)
+				) {
+					commandError(
+						"error: this runtime policy requires a shared test subprocess; isolated or concurrent test sessions are unavailable",
+					);
+				}
 				result = command.profile
 					? executeProfiledTests(command, context, config)
 					: developmentRunner?.inProcess === true
@@ -1607,31 +2107,36 @@ export async function runCli(
 			} catch (error) {
 				commandError(`error: ${error instanceof Error ? error.message : String(error)}`);
 			}
-			if (result.exitCode !== 0) process.exit(result.exitCode);
+			if (result.exitCode !== 0) exitCode = result.exitCode;
 		}
 	} catch (error) {
 		if (error instanceof CliUsageError) {
 			writeStderr(`error: ${error.message}`);
 			writeStderr("Run 'maligator --help' for usage.");
-			process.exit(2);
-		}
-		if (error instanceof CommandError) {
+			exitCode = 2;
+		} else if (error instanceof CommandError) {
 			writeStderr(error.message);
-			process.exit(error.exitCode);
-		}
-		if (error instanceof MaligatorCacheRootError) {
+			exitCode = error.exitCode;
+		} else if (error instanceof MaligatorCacheRootError) {
 			writeStderr(`error: ${error.message}`);
-			process.exit(1);
-		}
-		if (verbose && error instanceof Error && error.stack !== undefined) {
-			writeStderr(error.stack);
+			exitCode = 1;
 		} else {
-			writeStderr(`error: ${error instanceof Error ? error.message : String(error)}`);
-			writeStderr("Run again with '--verbose' for diagnostic details.");
+			if (verbose && error instanceof Error && error.stack !== undefined) {
+				writeStderr(error.stack);
+			} else {
+				writeStderr(`error: ${error instanceof Error ? error.message : String(error)}`);
+				writeStderr("Run again with '--verbose' for diagnostic details.");
+			}
+			exitCode = 1;
 		}
-		process.exit(1);
 	} finally {
-		cacheLease?.release();
+		try {
+			await context.compiler?.close();
+		} finally {
+			cacheLease?.release();
+		}
+		if (exitSignal !== undefined) process.kill(process.pid, exitSignal);
+		if (exitCode !== undefined) process.exit(exitCode);
 	}
 }
 

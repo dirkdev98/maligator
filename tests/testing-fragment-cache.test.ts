@@ -66,21 +66,24 @@ describe("relocatable test fragment cache", () => {
 		};
 		const first = compileRelocatableTestImage({
 			...shared,
-			processRunner: {
+			runner: {
+				kind: "process",
 				runOptions: { repeat: 1, bail: false, timeoutMs: 1000 },
 				resultPrefix: "__ISOLATED_RESULT__",
 			},
 		});
 		const changedOptions = compileRelocatableTestImage({
 			...shared,
-			processRunner: {
+			runner: {
+				kind: "process",
 				runOptions: { repeat: 2, bail: false, timeoutMs: 1000 },
 				resultPrefix: "__ISOLATED_RESULT__",
 			},
 		});
 		const restored = compileRelocatableTestImage({
 			...shared,
-			processRunner: {
+			runner: {
+				kind: "process",
 				runOptions: { repeat: 1, bail: false, timeoutMs: 1000 },
 				resultPrefix: "__ISOLATED_RESULT__",
 			},

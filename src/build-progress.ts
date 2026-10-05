@@ -1,5 +1,6 @@
 import { performance } from "node:perf_hooks";
 import { formatCommandDuration } from "./command-progress.ts";
+import type { CompilationPhase } from "./compiler-service.ts";
 
 function writeLine(stream: NodeJS.WriteStream, message: string): void {
 	stream.write(`${message}\n`);
@@ -10,10 +11,19 @@ export class BuildReporter {
 	readonly verbose: boolean;
 	readonly compact: boolean;
 	readonly #startedAt = performance.now();
+	readonly #checkpoint: (() => void) | undefined;
+	readonly #onPhase: ((phase: CompilationPhase) => void) | undefined;
 
-	constructor(verbose: boolean, compact = false) {
+	constructor(
+		verbose: boolean,
+		compact = false,
+		checkpoint?: () => void,
+		onPhase?: (phase: CompilationPhase) => void,
+	) {
 		this.verbose = verbose;
 		this.compact = compact;
+		this.#checkpoint = checkpoint;
+		this.#onPhase = onPhase;
 	}
 
 	start(
@@ -30,18 +40,26 @@ export class BuildReporter {
 		run: () => Result,
 		detail?: (result: Result) => string | undefined,
 	): Result {
+		this.#checkpoint?.();
 		const startedAt = performance.now();
-		if (this.compact) return run();
-		if (this.verbose) {
+		this.#onPhase?.({ label, state: "started" });
+		if (!this.compact && this.verbose) {
 			writeLine(
 				process.stderr,
 				`[+${formatCommandDuration(startedAt - this.#startedAt)}] ${label} started`,
 			);
-		} else {
+		} else if (!this.compact) {
 			process.stderr.write(`  ${label}... `);
 		}
 		try {
 			const result = run();
+			this.#checkpoint?.();
+			this.#onPhase?.({
+				label,
+				state: "completed",
+				durationMs: performance.now() - startedAt,
+			});
+			if (this.compact) return result;
 			const elapsed = formatCommandDuration(performance.now() - startedAt);
 			const suffix = detail?.(result);
 			if (this.verbose) {
@@ -56,6 +74,12 @@ export class BuildReporter {
 			}
 			return result;
 		} catch (error) {
+			this.#onPhase?.({
+				label,
+				state: "failed",
+				durationMs: performance.now() - startedAt,
+			});
+			if (this.compact) throw error;
 			const elapsed = formatCommandDuration(performance.now() - startedAt);
 			if (this.verbose) {
 				writeLine(

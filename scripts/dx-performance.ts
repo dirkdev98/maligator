@@ -1,4 +1,4 @@
-import { spawn, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import {
 	mkdirSync,
 	mkdtempSync,
@@ -11,12 +11,14 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { performance } from "node:perf_hooks";
 import { CommandProgress } from "../src/command-progress.ts";
+import { startDevelopmentDriver } from "./development-driver.ts";
 
 interface Sample {
 	name: string;
 	durationMs: number;
 	stdout: string;
 	stderr: string;
+	servedRevision?: number;
 }
 
 const repositoryRoot = path.resolve(import.meta.dirname, "..");
@@ -92,6 +94,8 @@ function invoke(name: string, args: Array<string>): Sample {
 		encoding: "utf-8",
 		env: childEnvironment,
 		maxBuffer: 32 * 1024 * 1024,
+		timeout: 180_000,
+		killSignal: "SIGKILL",
 	});
 	const durationMs = performance.now() - startedAt;
 	if (result.status !== 0) {
@@ -107,91 +111,68 @@ function invoke(name: string, args: Array<string>): Sample {
 	return sample;
 }
 
-function waitFor(
-	read: () => string,
-	needle: string,
-	timeoutMs = 120_000,
-): Promise<number> {
-	const startedAt = performance.now();
-	return new Promise((resolve, reject) => {
-		const interval = setInterval(() => {
-			if (read().includes(needle)) {
-				clearInterval(interval);
-				clearTimeout(timeout);
-				resolve(performance.now() - startedAt);
-			}
-		}, 2);
-		const timeout = setTimeout(() => {
-			clearInterval(interval);
-			reject(new Error(`timed out waiting for ${JSON.stringify(needle)}:\n${read()}`));
-		}, timeoutMs);
-	});
-}
-
 async function developmentSamples(
-	name: "dev cold ready" | "dev cached ready",
+	name: "dev cold served revision" | "dev cached served revision",
 	measureEdit: boolean,
 ): Promise<Array<Sample>> {
 	progress.detail(`${name} started`);
-	let output = "";
-	const child = spawn(
+	const driver = startDevelopmentDriver(
 		binary,
-		[
-			...argumentPrefix,
-			"dev",
-			"dev-app.mts",
-			"--config",
-			"maligator.build.mts",
-			"--verbose",
-		],
-		{
-			cwd: project,
-			detached: process.platform !== "win32",
-			env: childEnvironment,
-			stdio: ["ignore", "pipe", "pipe"],
-		},
+		[...argumentPrefix, "dev", "dev-app.mts", "--config", "maligator.build.mts"],
+		{ cwd: project, env: childEnvironment },
 	);
-	child.stdout.setEncoding("utf-8");
-	child.stderr.setEncoding("utf-8");
-	child.stdout.on("data", (chunk: string) => {
-		output += chunk;
-	});
-	child.stderr.on("data", (chunk: string) => {
-		output += chunk;
-	});
+	let result: Array<Sample> | undefined;
+	let failed: { error: unknown } | undefined;
 	try {
-		const readyMs = await waitFor(() => output, "Ready in");
+		const readyMs = await driver.waitForRevision(0);
 		progress.detail(`${name} completed in ${(readyMs / 1000).toFixed(1)}s`);
-		const ready = { name, durationMs: readyMs, stdout: "", stderr: output };
-		if (!measureEdit) return [ready];
-		const beforeEdit = output;
-		write("local.mts", "export const localRevision = 1;\n");
-		const rebuildMs = await waitFor(() => output.slice(beforeEdit.length), "Compiled in");
-		progress.detail(
-			`development leaf edit completed in ${(rebuildMs / 1000).toFixed(1)}s`,
-		);
-		return [
-			ready,
+		result = [
 			{
-				name: "dev leaf edit",
-				durationMs: rebuildMs,
-				stdout: "",
-				stderr: output.slice(beforeEdit.length),
+				name,
+				durationMs: readyMs,
+				stdout: driver.stdout,
+				stderr: driver.stderr,
+				servedRevision: 0,
 			},
 		];
-	} finally {
-		if (child.exitCode === null) {
-			if (process.platform !== "win32" && child.pid !== undefined) {
-				process.kill(-child.pid, "SIGTERM");
-			} else {
-				child.kill("SIGTERM");
-			}
+		if (measureEdit) {
+			const beforeStdout = driver.stdout.length;
+			const beforeStderr = driver.stderr.length;
+			write("local.mts", "export const localRevision = 1;\n");
+			const rebuildMs = await driver.waitForRevision(1);
+			progress.detail(
+				`development leaf edit completed in ${(rebuildMs / 1000).toFixed(1)}s`,
+			);
+			result.push({
+				name: "dev leaf edit",
+				durationMs: rebuildMs,
+				stdout: driver.stdout.slice(beforeStdout),
+				stderr: driver.stderr.slice(beforeStderr),
+				servedRevision: 1,
+			});
 		}
-		await new Promise<void>((resolve) => {
-			if (child.exitCode !== null) resolve();
-			else child.once("exit", () => resolve());
-		});
+	} catch (error) {
+		failed = { error };
 	}
+	try {
+		await driver.stop();
+	} catch (error) {
+		failed = {
+			error:
+				failed === undefined
+					? error
+					: new AggregateError(
+							[failed.error, error],
+							"development probe and cleanup failed",
+						),
+		};
+	}
+	if (failed !== undefined)
+		throw new Error(
+			`${failed.error instanceof Error ? failed.error.message : String(failed.error)}\n${driver.output}`,
+			{ cause: failed.error },
+		);
+	return result!;
 }
 
 function report(sample: Sample): void {
@@ -238,7 +219,19 @@ console.log(typeof express(), response.status, localRevision);
 		"maligator.build.mts",
 		`export default { entry: "app.mts", surface: { node: true, webPlatform: true } };\n`,
 	);
-	write("dev-app.mts", `import "./app.mts";\nsetInterval(() => {}, 1000);\n`);
+	write(
+		"dev-app.mts",
+		`import "./app.mts";
+import { createServer } from "node:http";
+import { ready } from "maligator:application";
+import { localRevision } from "./local.mts";
+const server = createServer((_request, response) => { response.end(String(localRevision)); });
+server.listen(0, "127.0.0.1", () => {
+	console.log("DX_HTTP_PORT " + server.address().port);
+	ready();
+});
+`,
+	);
 	for (let index = 0; index < 100; index++) {
 		write(`public/asset-${String(index).padStart(3, "0")}.txt`, `asset ${index}\n`);
 	}
@@ -277,11 +270,11 @@ test("representative graph", () => {
 		invoke("test hot", ["test", "app.test.mts", "--config", "maligator.build.mts"]);
 	}
 	if (selectedLane === undefined || selectedLane === "dev") {
-		for (const sample of await developmentSamples("dev cold ready", false)) {
+		for (const sample of await developmentSamples("dev cold served revision", false)) {
 			samples.push(sample);
 			persist();
 		}
-		for (const sample of await developmentSamples("dev cached ready", true)) {
+		for (const sample of await developmentSamples("dev cached served revision", true)) {
 			samples.push(sample);
 			persist();
 		}

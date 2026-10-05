@@ -1,18 +1,32 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import {
+	existsSync,
+	mkdirSync,
+	mkdtempSync,
+	readFileSync,
+	rmSync,
+	utimesSync,
+	writeFileSync,
+} from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import * as cacheManagement from "../src/cache-management.ts";
 import {
 	applicationDriverPath,
 	devCommand,
 	developmentCompilerInstallation,
 	productCompilerInstallation,
+	runCli,
+	runCommand,
 } from "../src/cli-commands.ts";
+import type { BuildCommandResult } from "../src/cli-commands.ts";
 import { BUILD_CONFIG_NAME, detectInitialEntry, initProject } from "../src/cli-init.ts";
 import { executeBinary, executeBinaryCaptured } from "../src/cli-run.ts";
 import { CLI_HELP, CliUsageError, MALIGATOR_VERSION, parseCliArgs } from "../src/cli.ts";
+import type { CompilationOptions } from "../src/compiler-service.ts";
 import { stripCompactTypes } from "../src/compiler/frontend/compact-type-strip.ts";
+import { FrontendCompilationSession } from "../src/frontend-cache.ts";
 import {
 	PRODUCT_RUNTIME_ASSET_INCLUDE,
 	productCliConfig,
@@ -38,6 +52,41 @@ function tmpdir(): string {
 }
 
 describe("parseCliArgs", () => {
+	it("streams dev status and requires explicit test isolation for parallel execution", () => {
+		expect(parseCliArgs(["dev", "--status"])).toMatchObject({
+			kind: "dev",
+			status: true,
+		});
+		expect(
+			parseCliArgs([
+				"test",
+				"--concurrency",
+				"3",
+				"--isolate",
+				"--compile-concurrency",
+				"2",
+			]),
+		).toMatchObject({
+			isolation: "file",
+			executionConcurrency: 3,
+			compileConcurrency: 2,
+		});
+		expect(() => parseCliArgs(["run", "--status"])).toThrow("unknown option");
+		expect(() => parseCliArgs(["test", "--concurrency", "2"])).toThrow(
+			"requires --isolate",
+		);
+		expect(() => parseCliArgs(["test", "--isolate", "--profile"])).toThrow(
+			"cannot be combined",
+		);
+		expect(parseCliArgs(["test", "--watch", "--watch-failed", "--status"])).toMatchObject(
+			{ watch: true, watchFailed: true, status: true },
+		);
+		expect(() => parseCliArgs(["test", "--watch", "--profile"])).toThrow(
+			"cannot be combined",
+		);
+		expect(() => parseCliArgs(["test", "--watch-failed"])).toThrow("requires --watch");
+		expect(() => parseCliArgs(["test", "--status"])).toThrow("requires --watch");
+	});
 	it("parses build options around an optional entry", () => {
 		const command = parseCliArgs([
 			"build",
@@ -289,7 +338,10 @@ describe("command shell", () => {
 				primordials: "locked",
 				webPlatform: true,
 				node: true,
+				eval: true,
 				realms: true,
+				regexp: true,
+				temporal: false,
 				intl: false,
 			},
 			{
@@ -300,7 +352,10 @@ describe("command shell", () => {
 				primordials: "mutable",
 				webPlatform: true,
 				node: true,
+				eval: true,
 				realms: true,
+				regexp: true,
+				temporal: false,
 				intl: false,
 			},
 		]);
@@ -505,6 +560,274 @@ describe("executeBinary", () => {
 });
 
 describe("development coordinator", () => {
+	it("rejects a changed newly imported dependency before replacing the application", async () => {
+		const directory = tmpdir();
+		const entry = path.join(directory, "entry.mts");
+		const leaf = path.join(directory, "leaf.mts");
+		writeFileSync(entry, 'import "./leaf.mts";\n');
+		writeFileSync(leaf, "export const value = 1;\n");
+		const original = new FrontendCompilationSession().snapshot(leaf);
+		let finishFirst!: (result: BuildCommandResult) => void;
+		let beginFirst!: () => void;
+		const firstStarted = new Promise<void>((resolve) => {
+			beginFirst = resolve;
+		});
+		let wakeWatcher!: () => void;
+		const preparedOptions: Array<CompilationOptions> = [];
+		const spawned: Array<string> = [];
+		const watched: Array<Array<string>> = [];
+		let running = false;
+		const dev = devCommand(
+			{ kind: "dev", entry, verbose: false, profile: false, programArgs: [] },
+			{
+				stripTypes: stripCompactTypes,
+				installation: productCompilerInstallation(
+					directory,
+					"compiler.malw",
+					"test-runtime.mjs",
+				),
+				compiler: {
+					async prepare(_command, options = {}) {
+						preparedOptions.push(options);
+						if (preparedOptions.length === 1) {
+							beginFirst();
+							return new Promise<BuildCommandResult>((resolve) => {
+								finishFirst = resolve;
+							});
+						}
+						return {
+							binaryPath: "current",
+							dependencies: [entry, leaf],
+							dependencyIdentities: [new FrontendCompilationSession().snapshot(leaf)],
+						};
+					},
+					async close() {},
+				},
+				developmentWatcher: {
+					create(files) {
+						watched.push(files);
+						return {};
+					},
+					update(_handle, files) {
+						watched.push(files);
+						wakeWatcher();
+					},
+					wait() {
+						return new Promise<void>((resolve) => {
+							wakeWatcher = resolve;
+						});
+					},
+					close() {},
+				},
+				developmentProcesses: {
+					spawn(binaryPath) {
+						spawned.push(binaryPath);
+						running = true;
+						process.emit("SIGINT");
+						wakeWatcher();
+						return {};
+					},
+					kill() {
+						running = false;
+					},
+					status() {
+						return running ? undefined : 0;
+					},
+				},
+			},
+		);
+		try {
+			await firstStarted;
+			expect(watched[0]).not.toContain(leaf);
+			writeFileSync(leaf, "export const value = 2;\n");
+			utimesSync(leaf, new Date(original.mtimeMs), new Date(original.mtimeMs));
+			finishFirst({
+				binaryPath: "stale",
+				dependencies: [entry, leaf],
+				dependencyIdentities: [original],
+			});
+			await dev;
+			expect(spawned).toEqual(["current"]);
+			expect(preparedOptions[1]?.invalidatedPaths).toEqual([leaf]);
+			expect(watched.some((files) => files.includes(leaf))).toBe(true);
+			expect(running).toBe(false);
+		} finally {
+			rmSync(directory, { recursive: true, force: true });
+		}
+	});
+
+	it("waits for asynchronous run preparation before executing the result", async () => {
+		const directory = tmpdir();
+		const marker = path.join(directory, "executed");
+		let prepared!: (result: BuildCommandResult) => void;
+		const preparation = new Promise<BuildCommandResult>((resolve) => {
+			prepared = resolve;
+		});
+		const running = runCommand(
+			{ kind: "run", verbose: false, profile: false, programArgs: [] },
+			{
+				stripTypes: stripCompactTypes,
+				installation: productCompilerInstallation(
+					directory,
+					"compiler.malw",
+					"test-runtime.mjs",
+				),
+				compiler: { prepare: () => preparation, async close() {} },
+			},
+		);
+		try {
+			expect(existsSync(marker)).toBe(false);
+			prepared({
+				binaryPath: process.execPath,
+				runArguments: [
+					"-e",
+					`require("node:fs").writeFileSync(${JSON.stringify(marker)}, "done")`,
+				],
+			});
+			expect(await running).toEqual({ status: 0, signal: undefined });
+			expect(readFileSync(marker, "utf8")).toBe("done");
+		} finally {
+			rmSync(directory, { recursive: true, force: true });
+		}
+	});
+
+	it("drains the compiler before releasing its cache lease or exiting after preparation failure", async () => {
+		let finishClosing!: () => void;
+		let startClosing!: () => void;
+		const closing = new Promise<void>((resolve) => {
+			finishClosing = resolve;
+		});
+		const closeStarted = new Promise<void>((resolve) => {
+			startClosing = resolve;
+		});
+		const release = vi.fn();
+		const lease = vi
+			.spyOn(cacheManagement, "createCacheLease")
+			.mockReturnValue({ release });
+		const exit = vi.spyOn(process, "exit").mockImplementation(() => undefined as never);
+		const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+		try {
+			const running = runCli(["run", "app.mts"], {
+				stripTypes: stripCompactTypes,
+				installation: productCompilerInstallation(
+					"/runtime",
+					"/compiler.malw",
+					"/test-runtime.mjs",
+				),
+				compiler: {
+					prepare() {
+						return Promise.reject(new Error("preparation failed"));
+					},
+					async close() {
+						startClosing();
+						await closing;
+					},
+				},
+			});
+			await closeStarted;
+			expect(release).not.toHaveBeenCalled();
+			expect(exit).not.toHaveBeenCalled();
+			finishClosing();
+			await running;
+			expect(release).toHaveBeenCalledOnce();
+			expect(exit).toHaveBeenCalledWith(1);
+		} finally {
+			lease.mockRestore();
+			exit.mockRestore();
+			stderr.mockRestore();
+		}
+	});
+
+	it("observes an edit during an unresolved initial prepare and launches only the newest result", async () => {
+		const directory = tmpdir();
+		const entry = path.join(directory, "entry.mts");
+		writeFileSync(entry, "console.log(1);\n");
+		let finishFirst!: (result: BuildCommandResult) => void;
+		let beginFirst!: (options: CompilationOptions) => void;
+		const firstStarted = new Promise<CompilationOptions>((resolve) => {
+			beginFirst = resolve;
+		});
+		let noticeEdit!: () => void;
+		const edited = new Promise<void>((resolve) => {
+			noticeEdit = resolve;
+		});
+		let wakeWatcher!: () => void;
+		const preparedOptions: Array<CompilationOptions> = [];
+		const spawned: Array<string> = [];
+		let running = false;
+		let watcherClosed = false;
+		const dev = devCommand(
+			{ kind: "dev", entry, verbose: false, profile: false, programArgs: [] },
+			{
+				stripTypes: stripCompactTypes,
+				installation: productCompilerInstallation(
+					directory,
+					"compiler.malw",
+					"test-runtime.mjs",
+				),
+				compiler: {
+					async prepare(_command, options = {}) {
+						preparedOptions.push(options);
+						if (preparedOptions.length === 1) {
+							options.signal?.addEventListener("abort", noticeEdit, { once: true });
+							beginFirst(options);
+							return new Promise<BuildCommandResult>((resolve) => {
+								finishFirst = resolve;
+							});
+						}
+						return { binaryPath: "newest", dependencies: [entry] };
+					},
+					async close() {},
+				},
+				developmentWatcher: {
+					create() {
+						return {};
+					},
+					update() {},
+					wait() {
+						return new Promise<void>((resolve) => {
+							wakeWatcher = resolve;
+						});
+					},
+					close() {
+						watcherClosed = true;
+					},
+				},
+				developmentProcesses: {
+					spawn(binaryPath) {
+						spawned.push(binaryPath);
+						running = true;
+						process.emit("SIGINT");
+						wakeWatcher();
+						return {};
+					},
+					kill() {
+						running = false;
+					},
+					status() {
+						return running ? undefined : 0;
+					},
+				},
+			},
+		);
+		try {
+			const first = await firstStarted;
+			writeFileSync(entry, "console.log(222);\n");
+			wakeWatcher();
+			await edited;
+			expect(first.signal?.aborted).toBe(true);
+			finishFirst({ binaryPath: "stale", dependencies: [entry] });
+			await dev;
+			expect(spawned).toEqual(["newest"]);
+			expect(preparedOptions).toHaveLength(2);
+			expect(preparedOptions[1]?.invalidatedPaths).toEqual([entry]);
+			expect(watcherClosed).toBe(true);
+			expect(running).toBe(false);
+		} finally {
+			rmSync(directory, { recursive: true, force: true });
+		}
+	});
+
 	it("invalidates an edited file and restarts a fresh application process", async () => {
 		const directory = tmpdir();
 		const entry = path.join(directory, "entry.ts");

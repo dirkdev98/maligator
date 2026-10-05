@@ -11,8 +11,10 @@ import { stripCompactTypes } from "./compiler/frontend/compact-type-strip.ts";
 import { loadEntrypointAndRunSemanticAnalysis } from "./compiler/frontend/semantic-program.ts";
 import { compileSemanticProgramToProgramImage } from "./compiler/pipeline/compile-core.ts";
 import { compileEntrypointToBuffer } from "./compiler/pipeline/compile-program.ts";
+import { compileWorkerImages } from "./compiler/pipeline/compile-worker-images.ts";
 import { compilerProgramFactsFromConfig } from "./compiler/shared/compiler-facts.ts";
 import { emitProgramTranslationUnits } from "./compiler/target/emit-program-image.ts";
+import { emitWorkerImageTranslationUnits } from "./compiler/target/emit-worker-images.ts";
 import { buildDevelopmentRunner, buildLocalBinary } from "./local-build.ts";
 import { resolveNativeBuildContext } from "./native-build-context.ts";
 import { nativeSourcePath } from "./native-source-path.ts";
@@ -175,6 +177,13 @@ export function buildProductCli(options: BuildProductCliOptions): string {
 			return result;
 		},
 	});
+	const workerImages =
+		semanticProgram.graph === undefined
+			? []
+			: compileWorkerImages(semanticProgram.graph, {
+					buildConfig: config,
+					stripTypes: stripCompactTypes,
+				});
 	progress("embedding product CLI assets");
 	const assets = includeConfiguredAssets(config.assets, repositoryRoot);
 	const compilerWire = assets.find((asset) => asset.name === "compilerWire");
@@ -183,12 +192,21 @@ export function buildProductCli(options: BuildProductCliOptions): string {
 	}
 	compilerWire.files[0]!.embeddedSymbol = "mal_compiler_wire_data";
 	progress("emitting the product CLI translation units");
-	const cSource = emitProgramTranslationUnits(definition, {
-		sourcePath: nativeSourcePath,
-		compiled: true,
-		assets,
-		maligatorSurface: config.surface.maligator,
-	});
+	const cSource = [
+		...emitProgramTranslationUnits(definition, {
+			sourcePath: nativeSourcePath,
+			compiled: true,
+			assets,
+			maligatorSurface: config.surface.maligator,
+		}),
+		...(workerImages.length === 0
+			? []
+			: emitWorkerImageTranslationUnits(workerImages, {
+					sourcePath: nativeSourcePath,
+					compiled: true,
+					maligatorSurface: config.surface.maligator,
+				})),
+	];
 	progress("product CLI translation units ready");
 	const derivation = buildDerivationFromConfig(config);
 	const context = resolveNativeBuildContext({

@@ -1,4 +1,11 @@
-import { mkdtempSync, readFileSync, statSync, utimesSync, writeFileSync } from "node:fs";
+import {
+	mkdtempSync,
+	readFileSync,
+	rmSync,
+	statSync,
+	utimesSync,
+	writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -6,12 +13,48 @@ import {
 	cacheFrontendCompilerArtifact,
 	cacheFrontendWire,
 	frontendCompilerArtifactPath,
+	frontendDependencyUnchanged,
 	frontendDigest,
 	frontendWirePath,
 	FrontendCompilationSession,
 } from "../src/frontend-cache.ts";
 
 describe("shared frontend artifact cache", () => {
+	it("returns the compiled dependency revision even after its file changes", () => {
+		const root = mkdtempSync(path.join(tmpdir(), "mal-frontend-revision-"));
+		const file = path.join(root, "leaf.mts");
+		try {
+			writeFileSync(file, "export const value = 1;\n");
+			const session = new FrontendCompilationSession();
+			const original = session.snapshot(file);
+			writeFileSync(file, "export const value = 222;\n");
+			const [compiled] = session.dependencyIdentities([file]);
+			expect(compiled).toEqual(original);
+			expect(frontendDependencyUnchanged(compiled!)).toBe(false);
+			session.invalidate(file);
+			expect(frontendDependencyUnchanged(session.snapshot(file))).toBe(true);
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("detects source-content mismatch when graph text predates its recorded stat identity", () => {
+		const root = mkdtempSync(path.join(tmpdir(), "mal-frontend-source-revision-"));
+		const file = path.join(root, "leaf.mts");
+		try {
+			const original = "export const value = 1;\n";
+			writeFileSync(file, "export const value = 2;\n");
+			const session = new FrontendCompilationSession();
+			const compiled = session.snapshot(file, original);
+			expect(compiled.mtimeMs).toBe(statSync(file).mtimeMs);
+			expect(frontendDependencyUnchanged(compiled)).toBe(false);
+			rmSync(file);
+			expect(frontendDependencyUnchanged(compiled)).toBe(false);
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
 	it("publishes wire images by content and repairs corrupt artifacts", () => {
 		const root = mkdtempSync(path.join(tmpdir(), "mal-frontend-cache-"));
 		const wire = Uint8Array.from([1, 2, 3, 4]);

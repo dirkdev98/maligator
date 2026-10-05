@@ -79,6 +79,22 @@ function sameFileIdentity(
 	);
 }
 
+export function frontendDependencyUnchanged(
+	identity: FrontendDependencyIdentity,
+): boolean {
+	try {
+		const before = statSync(identity.path);
+		if (!before.isFile() || !sameFileIdentity(identity, before)) return false;
+		// Graph text can predate snapshot metadata, so matching stats do not prove the compiled revision.
+		return (
+			frontendDigest(new Uint8Array(readFileSync(identity.path))) === identity.digest &&
+			sameFileIdentity(identity, statSync(identity.path))
+		);
+	} catch {
+		return false;
+	}
+}
+
 export function frontendDigest(contents: string | Uint8Array): string {
 	return hash("sha256", contents, "hex");
 }
@@ -266,6 +282,17 @@ export class FrontendCompilationSession {
 			}
 		}
 		return identity;
+	}
+
+	dependencyIdentities(files: ReadonlyArray<string>): Array<FrontendDependencyIdentity> {
+		return files.map((file) => {
+			const resolved = path.resolve(file);
+			const identity = this.#snapshots.get(resolved);
+			if (identity === undefined) {
+				throw new Error(`frontend dependency has no compilation snapshot: ${resolved}`);
+			}
+			return { ...identity };
+		});
 	}
 
 	/** Atomically publish file digests learned during this compilation. */

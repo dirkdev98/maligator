@@ -9,9 +9,9 @@ exhaustive rather than interactive.
 
 `npm run bench:dx -- <maligator-binary>` creates an isolated representative
 Express, Drizzle, Valibot, SQLite, and TypeScript project. It reports cold and
-warm `run` and `test` latency plus cold and cached `dev` readiness and a leaf-edit
-recompile message. The development measurement currently waits for compiler log
-markers; it does not assert that the restarted application serves the edited revision.
+warm `run` and `test` latency plus cold and cached `dev` startup and a leaf-edit
+restart. Development measurements check the application's served revision before
+and after the edit; a compiler restart message alone cannot satisfy the check.
 Use `--only run`, `--only test`, or `--only dev` for independent lanes,
 and `--fresh-cache` to give the selected project a disposable empty user cache.
 The generated project and optional fresh cache are removed afterward. Add
@@ -22,6 +22,26 @@ toolchain.
 The exercise records measurements rather than enforcing machine-specific timing
 thresholds. Performance changes should compare the same binary, host, and cache
 scenario before and after the change.
+
+The development driver rejects child exits while waiting for readiness and checks
+the complete HTTP response body. Readiness is bounded to two minutes; shutdown
+allows 1.5 seconds for SIGTERM before SIGKILL and waits for stdio to close within
+five seconds. Retained diagnostics include final stdout and stderr. Run
+`npm run test:unit:full-only -- --run tests/development-driver.test.ts` for the
+controlled stale-revision, unfinished-response, early-exit, and ignored-SIGTERM cases.
+
+## Supervisor integration
+
+`npm run selfhost:cli` builds and exercises the packaged compiler outside the
+checkout with Node absent from its PATH. It covers build/cache restoration, run,
+dev replacement, application tests and native worker packaging. For focused
+supervisor checks against an explicitly selected existing binary, use
+`npm run selfhost:cli -- --cli /absolute/path/maligator --supervisor-only`.
+This skips the bootstrap/native-build checks and exercises toolchain-free run,
+served dev revisions, last-good behavior, cached test-watch reruns, failed-file
+selection and concurrent isolated tests. It prints the selected binary's digest
+and saves command/watch evidence under `.cache/selfhost-cli/<pid>`; the caller
+must establish which source produced that binary.
 
 Every tier also writes its latest machine-readable gate report to
 `.cache/mal-build/test-suite/report-<tier>.json`. It records exact stage wall times,

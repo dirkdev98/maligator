@@ -12,3 +12,5 @@ tests/compiler-scale-runner.test.ts
 tests/bench-compare-runner.test.ts
 tests/bench-http-comparison-runner.test.ts
 tests/bench-http-ordinary.test.ts
+tests/node-compiler-cancellation.test.ts
+tests/development-driver.test.ts

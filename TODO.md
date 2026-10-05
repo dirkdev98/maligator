@@ -48,14 +48,6 @@ rooting, and resource-safety defects can interrupt that order.
       current 128-bit storage, and input-size scaling. Keep conversion costs separate
       from traversal and checksum work.
 
-- [ ] Make `scripts/dx-performance.ts` verify the running application's revision
-      before and after a dependency edit. A controlled driver that keeps reporting
-      revision 0 after the source changes to 1 currently passes on compiler log markers.
-      Bound invocation, readiness, and shutdown; a child ignoring SIGTERM currently
-      hangs cleanup. Require prompt failure on child exit, forced termination after
-      a grace period, and retained diagnostics. Verify stale-output and stuck-child
-      failures alongside a real successful development restart.
-
 - [ ] Retain gate reports per run with source revision/content identity. The current
       `scripts/test-suite.ts` overwrites `report-<tier>.json` and cannot associate its
       stage verdicts with a specific source snapshot. Preserve a discoverable latest
@@ -65,6 +57,11 @@ rooting, and resource-safety defects can interrupt that order.
       and quality plans declare no user-cache writes, while their `CommandProgress`
       wrappers create leases there. Verify the declared capabilities against the
       command lifecycle so restricted execution retains cache coordination.
+
+- [ ] Track configured asset-directory topology in `dev`. Publication validates
+      consumed file identities, but adding a file or renaming a previously unwatched
+      path does not change that file set. Capture recursive directory membership and
+      exercise add/remove changes without editing an existing source dependency.
 
 # Compiler and Core IR
 
@@ -602,6 +599,14 @@ contracts or investigates costs still visible after the string follow-ups.
 
 ## Realm correctness and runtime capabilities
 
+- [ ] Decouple the baked eval compiler from the application's RegExp capability.
+      Standalone builds with `engine.eval: true` and `engine.regexp: false` fail
+      during compiler initialization even for `eval("20 + 22")`, in both source
+      and packaged compiler paths. Remove the compiler cone's implicit RegExp
+      dependencies or separate private compiler capabilities from application
+      capabilities. Preserve the disabled public constructor, throwing regex
+      methods, and omitted engine; cover native and interpreted compiler images.
+
 - [ ] Preserve the iterator creation Realm when bypassing builtin `next` dispatch.
       On checkpoint `48aa2375`, a foreign Map's direct `entries().next().value` has
       the foreign Array prototype, while the same pair obtained through `for...of`
@@ -789,12 +794,13 @@ remains a Maligator extension and does not count as global fetch conformance.
 
 ## First-class testing
 
-- [ ] Add watch mode, snapshots, fake timers, and mocking when their semantics can
-      remain deterministic in compiled and interpreted tests. Keep the unit loop fast.
+- [ ] Add snapshots, fake timers, and mocking when their semantics can remain
+      deterministic in compiled and interpreted tests. Keep the unit loop fast.
 
-- [ ] Add coverage, browser environments, parallel workers, and process-per-file
-      isolation independently. Define cache, port, temporary-directory, and
-      failure-reporting behavior for each.
+- [ ] Add coverage, browser environments, and process-per-file isolation
+      independently. Fresh-isolate watch reruns and explicit file scheduling are
+      available; define cache, port, temporary-directory, and failure-reporting
+      behavior for the remaining modes.
 
 - [ ] Add benchmark, fuzzing, and test-plugin support after stable extension points
       exist. Plugins must not silently broaden sandbox, host, or network capabilities.

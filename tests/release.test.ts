@@ -349,6 +349,7 @@ describe("npm launcher", () => {
 			"index.js",
 			"index.d.ts",
 			"platform-api.d.ts",
+			"application-api.d.ts",
 			"process-api.d.ts",
 			"test-api.d.ts",
 			"workers-api.d.ts",
