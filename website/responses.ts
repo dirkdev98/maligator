@@ -15,6 +15,7 @@ export interface SiteResource {
 	bytes?: number;
 	immutable?: boolean;
 	explorer?: boolean;
+	documentation?: boolean;
 }
 
 export function acceptsBrotli(header: string | null): boolean {
@@ -39,6 +40,17 @@ export function siteResponse(
 	if (pathname === "/index.html") pathname = "/";
 	if (pathname === "/compatibility.html") pathname = "/compatibility";
 	if (pathname === "/explorer.html" || pathname === "/explorer/") pathname = "/explorer";
+	if (pathname.endsWith("/") && pathname !== "/") pathname = pathname.slice(0, -1);
+	if (
+		pathname.endsWith(".html") &&
+		(pathname === "/docs.html" ||
+			pathname === "/api.html" ||
+			pathname === "/guides.html" ||
+			pathname.startsWith("/docs/") ||
+			pathname.startsWith("/api/") ||
+			pathname.startsWith("/guides/"))
+	)
+		pathname = pathname.slice(0, -5);
 	const resource = resources.get(pathname);
 	if (resource === undefined)
 		return new Response(request.method === "HEAD" ? null : "Not found", { status: 404 });
@@ -56,7 +68,9 @@ export function siteResponse(
 		"X-Content-Type-Options": "nosniff",
 		"Content-Security-Policy": resource.explorer
 			? "default-src 'none'; img-src 'self' data:; style-src 'self'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
-			: "default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'; script-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+			: resource.documentation
+				? "default-src 'none'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self' 'wasm-unsafe-eval'; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+				: "default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'; script-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
 	});
 	if (resource.encoding !== undefined) {
 		headers.set("Vary", "Accept-Encoding");

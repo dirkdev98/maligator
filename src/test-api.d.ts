@@ -9,16 +9,22 @@ declare module "maligator:test" {
 	/**
 	 * A test or hook body. Maligator waits for a returned promise or thenable before
 	 * advancing the lifecycle.
+	 *
+	 * @see https://maligator.ddv.tools/api/test#TestCallback
 	 */
 	export type TestCallback = () => unknown;
 
 	/**
 	 * A lifecycle hook body, with the same async completion contract as a test.
+	 *
+	 * @see https://maligator.ddv.tools/api/test#HookCallback
 	 */
 	export type HookCallback = TestCallback;
 
 	/**
 	 * A constructable value accepted by {@link expect.any}.
+	 *
+	 * @see https://maligator.ddv.tools/api/test#Constructor
 	 */
 	export type Constructor = abstract new (...args: Array<never>) => unknown;
 
@@ -26,6 +32,8 @@ declare module "maligator:test" {
 	 * Opaque partial-match value produced by helpers such as {@link
 	 * expect.objectContaining}. It may be nested inside `toEqual`, `toStrictEqual`, and
 	 * `toMatchObject` expectations.
+	 *
+	 * @see https://maligator.ddv.tools/api/test#AsymmetricMatcher
 	 */
 	export type AsymmetricMatcher = {
 		readonly __maligator_asymmetric__: string;
@@ -33,6 +41,8 @@ declare module "maligator:test" {
 
 	/**
 	 * Matchers for a synchronously received value.
+	 *
+	 * @see https://maligator.ddv.tools/api/test#Matchers
 	 */
 	export type Matchers = {
 		/** Negate the following matcher. */
@@ -86,6 +96,8 @@ declare module "maligator:test" {
 	 * Promise-returning matcher surface exposed by {@link Matchers.resolves} and {@link
 	 * Matchers.rejects}. Await these calls so the test cannot finish before the
 	 * assertion.
+	 *
+	 * @see https://maligator.ddv.tools/api/test#AsyncMatchers
 	 */
 	export type AsyncMatchers = {
 		/** Negate the following asynchronous matcher. */
@@ -113,6 +125,8 @@ declare module "maligator:test" {
 
 	/**
 	 * Assertion entrypoint and Maligator-owned asymmetric matcher factories.
+	 *
+	 * @see https://maligator.ddv.tools/api/test#ExpectFunction
 	 */
 	export type ExpectFunction = {
 		/** Create matchers for `received`. The assertion position is captured here. */
@@ -131,6 +145,8 @@ declare module "maligator:test" {
 
 	/**
 	 * Register tests in the current suite during module evaluation.
+	 *
+	 * @see https://maligator.ddv.tools/api/test#TestFunction
 	 */
 	export type TestFunction = {
 		/** Register a test. Returned promises are awaited by the runner. */
@@ -155,6 +171,8 @@ declare module "maligator:test" {
 
 	/**
 	 * Register nested suites synchronously during module evaluation.
+	 *
+	 * @see https://maligator.ddv.tools/api/test#DescribeFunction
 	 */
 	export type DescribeFunction = {
 		/** Register a suite. Suite callbacks must not return a promise. */
@@ -167,32 +185,46 @@ declare module "maligator:test" {
 
 	/**
 	 * Register a test in the current suite.
+	 *
+	 * @see https://maligator.ddv.tools/api/test#test
 	 */
 	export const test: TestFunction;
 	/**
 	 * Register a nested suite in the current suite.
+	 *
+	 * @see https://maligator.ddv.tools/api/test#describe
 	 */
 	export const describe: DescribeFunction;
 	/**
 	 * Create fluent matchers for a received value.
+	 *
+	 * @see https://maligator.ddv.tools/api/test#expect
 	 */
 	export const expect: ExpectFunction;
 	/**
 	 * Run once before tests in the current suite.
+	 *
+	 * @see https://maligator.ddv.tools/api/test#beforeAll
 	 */
 	export const beforeAll: (callback: HookCallback) => void;
 	/**
 	 * Run once after tests in the current suite, including after test failures.
+	 *
+	 * @see https://maligator.ddv.tools/api/test#afterAll
 	 */
 	export const afterAll: (callback: HookCallback) => void;
 	/**
 	 * Run before every selected descendant test. Ancestor hooks run before hooks
 	 * declared by a nested suite.
+	 *
+	 * @see https://maligator.ddv.tools/api/test#beforeEach
 	 */
 	export const beforeEach: (callback: HookCallback) => void;
 	/**
 	 * Run after every selected descendant test. Nested-suite hooks run before ancestor
 	 * hooks.
+	 *
+	 * @see https://maligator.ddv.tools/api/test#afterEach
 	 */
 	export const afterEach: (callback: HookCallback) => void;
 }

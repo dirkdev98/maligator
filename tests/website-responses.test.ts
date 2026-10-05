@@ -5,6 +5,11 @@ import type { SiteResource } from "../website/responses.ts";
 const resources = new Map<string, SiteResource>([
 	["/", { body: "<h1>Overview</h1>", type: "text/html" }],
 	["/explorer", { body: "<h1>Explorer</h1>", type: "text/html", explorer: true }],
+	["/api/application", { body: "ready()", type: "text/html", documentation: true }],
+	[
+		"/api/application.md",
+		{ body: "# ready", type: "text/markdown", documentation: true },
+	],
 	[
 		"/explorer/assets/compiler.abc.wasm",
 		{
@@ -21,6 +26,27 @@ const resources = new Map<string, SiteResource>([
 const wasm = "http://localhost/explorer/assets/compiler.abc.wasm";
 
 describe("website asset responses", () => {
+	it("serves documentation aliases, Markdown, and same-origin search with a narrow CSP", async () => {
+		for (const route of [
+			"/api/application",
+			"/api/application/",
+			"/api/application.html",
+		]) {
+			const response = siteResponse(new Request(`http://localhost${route}`), resources);
+			expect(await response.text()).toBe("ready()");
+			const policy = response.headers.get("Content-Security-Policy")!;
+			expect(policy).toContain("script-src 'self' 'wasm-unsafe-eval'");
+			expect(policy).toContain("connect-src 'self'");
+			expect(policy).not.toContain("script-src 'unsafe-inline'");
+			expect(policy).not.toContain("'unsafe-eval'");
+		}
+		const markdown = siteResponse(
+			new Request("http://localhost/api/application.md"),
+			resources,
+		);
+		expect(markdown.headers.get("Content-Type")).toBe("text/markdown");
+		expect(await markdown.text()).toBe("# ready");
+	});
 	it("negotiates Brotli with explicit exclusions taking precedence", () => {
 		for (const header of [null, "br", "gzip, br;q=0.5", "*;q=1"])
 			expect(acceptsBrotli(header)).toBe(true);

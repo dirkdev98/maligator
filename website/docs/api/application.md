@@ -1,0 +1,1 @@
+Call `ready()` when your application has completed startup. Use it in [development](/guides/development#report-readiness) after opening the listener or other resource you own. Readiness and module evaluation are separate events. The supervisor notification does not perform a port reservation or traffic handoff.

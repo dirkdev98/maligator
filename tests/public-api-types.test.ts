@@ -1,4 +1,4 @@
-import { copyFileSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import * as ts from "typescript-v6-api";
@@ -15,54 +15,55 @@ function formatDiagnostics(diagnostics: ReadonlyArray<ts.Diagnostic>): string {
 describe("@maligator/cli public TypeScript API", () => {
 	it("types build configuration, assets, and Mal.serve in a consumer project", () => {
 		const project = mkdtempSync(path.join(os.tmpdir(), "maligator-public-types-"));
-		const packageDirectory = path.join(project, "node_modules/@maligator/cli");
-		const sourceDirectory = path.join(project, "src");
-		mkdirSync(packageDirectory, { recursive: true });
-		mkdirSync(sourceDirectory);
-		copyFileSync(
-			path.resolve(import.meta.dirname, "../src/public-api.d.ts"),
-			path.join(packageDirectory, "index.d.ts"),
-		);
-		for (const declaration of [
-			"application-api.d.ts",
-			"test-api.d.ts",
-			"platform-api.d.ts",
-			"process-api.d.ts",
-			"workers-api.d.ts",
-			"workers-host-api.d.ts",
-		]) {
+		try {
+			const packageDirectory = path.join(project, "node_modules/@maligator/cli");
+			const sourceDirectory = path.join(project, "src");
+			mkdirSync(packageDirectory, { recursive: true });
+			mkdirSync(sourceDirectory);
 			copyFileSync(
-				path.resolve(import.meta.dirname, "../src", declaration),
-				path.join(packageDirectory, declaration),
+				path.resolve(import.meta.dirname, "../src/public-api.d.ts"),
+				path.join(packageDirectory, "index.d.ts"),
 			);
-		}
-		copyFileSync(
-			path.resolve(import.meta.dirname, "../npm/cli/index.js"),
-			path.join(packageDirectory, "index.js"),
-		);
-		writeFileSync(
-			path.join(packageDirectory, "package.json"),
-			JSON.stringify({
-				name: "@maligator/cli",
-				version: "0.1.0-alpha.2",
-				type: "module",
-				types: "./index.d.ts",
-				exports: {
-					".": {
-						types: "./index.d.ts",
-						import: "./index.js",
+			for (const declaration of [
+				"application-api.d.ts",
+				"test-api.d.ts",
+				"platform-api.d.ts",
+				"process-api.d.ts",
+				"workers-api.d.ts",
+				"workers-host-api.d.ts",
+			]) {
+				copyFileSync(
+					path.resolve(import.meta.dirname, "../src", declaration),
+					path.join(packageDirectory, declaration),
+				);
+			}
+			copyFileSync(
+				path.resolve(import.meta.dirname, "../npm/cli/index.js"),
+				path.join(packageDirectory, "index.js"),
+			);
+			writeFileSync(
+				path.join(packageDirectory, "package.json"),
+				JSON.stringify({
+					name: "@maligator/cli",
+					version: "0.1.0-alpha.2",
+					type: "module",
+					types: "./index.d.ts",
+					exports: {
+						".": {
+							types: "./index.d.ts",
+							import: "./index.js",
+						},
 					},
-				},
-			}),
-		);
-		writeFileSync(
-			path.join(project, "package.json"),
-			JSON.stringify({ name: "consumer", private: true, type: "module" }),
-		);
-		const configPath = path.join(project, "maligator.build.ts");
-		writeFileSync(
-			configPath,
-			`import { defineBuild } from "@maligator/cli";
+				}),
+			);
+			writeFileSync(
+				path.join(project, "package.json"),
+				JSON.stringify({ name: "consumer", private: true, type: "module" }),
+			);
+			const configPath = path.join(project, "maligator.build.ts");
+			writeFileSync(
+				configPath,
+				`import { defineBuild } from "@maligator/cli";
 
 export default defineBuild({
 	entry: "src/index.ts",
@@ -91,11 +92,11 @@ defineBuild({
 	},
 });
 `,
-		);
-		const entryPath = path.join(sourceDirectory, "index.ts");
-		writeFileSync(
-			entryPath,
-			`import type {
+			);
+			const entryPath = path.join(sourceDirectory, "index.ts");
+			writeFileSync(
+				entryPath,
+				`import type {
 	MaligatorMaterializeOptions,
 	MaligatorServeOptions,
 	MaligatorServer,
@@ -194,6 +195,10 @@ const globalAssetPath: string = globalThis.mal.assets.materialize("templates");
 const serveOptions: MaligatorServeOptions = {
 	hostname: "127.0.0.1",
 	port: 3000,
+	headersTimeout: 60000,
+	requestTimeout: 300000,
+	keepAliveTimeout: 5000,
+	maxConnections: 1024,
 	async fetch(request) {
 		return new Response(request.url);
 	},
@@ -202,20 +207,40 @@ const server: MaligatorServer = Mal.serve(serveOptions);
 const port: number = server.port;
 console.log(assetPath, globalAssetPath, port);
 `,
-		);
+			);
 
-		const program = ts.createProgram({
-			rootNames: [configPath, entryPath],
-			options: {
-				strict: true,
-				noEmit: true,
-				target: ts.ScriptTarget.ESNext,
-				module: ts.ModuleKind.NodeNext,
-				moduleResolution: ts.ModuleResolutionKind.NodeNext,
-				lib: ["lib.esnext.d.ts"],
-			},
-		});
-		const diagnostics = ts.getPreEmitDiagnostics(program);
-		expect(formatDiagnostics(diagnostics)).toBe("");
+			const program = ts.createProgram({
+				rootNames: [configPath, entryPath],
+				options: {
+					strict: true,
+					noEmit: true,
+					target: ts.ScriptTarget.ESNext,
+					module: ts.ModuleKind.NodeNext,
+					moduleResolution: ts.ModuleResolutionKind.NodeNext,
+					lib: ["lib.esnext.d.ts"],
+				},
+			});
+			const diagnostics = ts.getPreEmitDiagnostics(program);
+			expect(formatDiagnostics(diagnostics)).toBe("");
+			const checker = program.getTypeChecker();
+			const entry = program.getSourceFile(entryPath)!;
+			let poolSymbol: ts.Symbol | undefined;
+			const visit = (node: ts.Node): void => {
+				if (ts.isImportSpecifier(node) && node.name.text === "createPool") {
+					poolSymbol = checker.getAliasedSymbol(checker.getSymbolAtLocation(node.name)!);
+				}
+				ts.forEachChild(node, visit);
+			};
+			visit(entry);
+			expect(
+				ts.displayPartsToString(poolSymbol!.getDocumentationComment(checker)),
+			).not.toBe("");
+			const tags = poolSymbol!.getJsDocTags(checker);
+			expect(ts.displayPartsToString(tags.find((tag) => tag.name === "see")?.text)).toBe(
+				"https://maligator.ddv.tools/api/workers#createPool",
+			);
+		} finally {
+			rmSync(project, { recursive: true, force: true });
+		}
 	});
 });

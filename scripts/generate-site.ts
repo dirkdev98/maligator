@@ -2,6 +2,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { renderSiteTemplate } from "../website/templates/layout.ts";
+import { generateDocumentation } from "./generate-documentation.ts";
 import { generatePlatformApi } from "./generate-platform-api.ts";
 import { formatSiteFiles, updateSite } from "./site-data.ts";
 
@@ -16,8 +17,9 @@ export async function generateSite(): Promise<void> {
 	);
 	formatSiteFiles(["website/explorer.html"]);
 	await generatePlatformApi();
+	await generateDocumentation();
 	console.log(
-		"[site-update] Generated Overview, Explorer, Compatibility and platform API pages.",
+		"[site-update] Generated Overview, Explorer, Compatibility and plain documentation.",
 	);
 }
 

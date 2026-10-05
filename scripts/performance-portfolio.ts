@@ -479,9 +479,9 @@ function writeJson(file: string, value: unknown): void {
 	renameSync(`${file}.tmp`, file);
 }
 
-function git(args: ReadonlyArray<string>): string {
+function git(args: ReadonlyArray<string>, repositoryRoot = REPOSITORY_ROOT): string {
 	const result = spawnSync("git", [...args], {
-		cwd: REPOSITORY_ROOT,
+		cwd: repositoryRoot,
 		encoding: "utf8",
 	});
 	if (result.error !== undefined) throw result.error;
@@ -489,21 +489,27 @@ function git(args: ReadonlyArray<string>): string {
 	return String(result.stdout).trim();
 }
 
-export function materializePortfolioBaseline(ref: string, directory: string): string {
-	const commit = git(["rev-parse", `${ref}^{commit}`]);
+export function materializePortfolioBaseline(
+	ref: string,
+	directory: string,
+	repositoryRoot = REPOSITORY_ROOT,
+): string {
+	const commit = git(["rev-parse", `${ref}^{commit}`], repositoryRoot);
 	const currentLock = readFileSync(
-		path.join(REPOSITORY_ROOT, "package-lock.json"),
+		path.join(repositoryRoot, "package-lock.json"),
 		"utf8",
 	);
-	if (git(["show", `${ref}:package-lock.json`]) !== currentLock.trimEnd()) {
+	if (
+		git(["show", `${commit}:package-lock.json`], repositoryRoot) !== currentLock.trimEnd()
+	) {
 		throw new Error("baseline and candidate dependency lockfiles differ");
 	}
 	const archive = path.join(directory, "baseline.tar");
 	const baseline = path.join(directory, "baseline");
 	const descriptor = openSync(archive, "w");
 	try {
-		const result = spawnSync("git", ["archive", "--format=tar", ref], {
-			cwd: REPOSITORY_ROOT,
+		const result = spawnSync("git", ["archive", "--format=tar", commit], {
+			cwd: repositoryRoot,
 			stdio: ["ignore", descriptor, "pipe"],
 			encoding: "utf8",
 		});
@@ -525,12 +531,10 @@ export function materializePortfolioBaseline(ref: string, directory: string): st
 		return String(result.stdout).trim();
 	};
 	initialize(["init", "-q"]);
-	const objectDirectory = git([
-		"rev-parse",
-		"--path-format=absolute",
-		"--git-path",
-		"objects",
-	]);
+	const objectDirectory = git(
+		["rev-parse", "--path-format=absolute", "--git-path", "objects"],
+		repositoryRoot,
+	);
 	mkdirSync(path.join(baseline, ".git/objects/info"), { recursive: true });
 	writeFileSync(
 		path.join(baseline, ".git/objects/info/alternates"),
@@ -543,9 +547,9 @@ export function materializePortfolioBaseline(ref: string, directory: string): st
 	if (initialize(["status", "--porcelain=v1"]) !== "") {
 		throw new Error("materialized baseline differs from its Git source");
 	}
-	if (existsSync(path.join(REPOSITORY_ROOT, "node_modules"))) {
+	if (existsSync(path.join(repositoryRoot, "node_modules"))) {
 		symlinkSync(
-			path.join(REPOSITORY_ROOT, "node_modules"),
+			path.join(repositoryRoot, "node_modules"),
 			path.join(baseline, "node_modules"),
 		);
 	}

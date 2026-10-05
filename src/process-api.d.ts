@@ -1,20 +1,23 @@
 // Generated from src/platform/catalog.ts; edit the catalog and regenerate.
 /**
- * Application execution context. Importing this module has no externally observable
- * effects and requires no configuration switch. Unused exports and native
- * implementation dependencies are eliminated. Process arguments, environment, working
- * directory, and PID are runtime concerns outside execution.
+ * Read the compile-time command, target, and resolved application configuration. No
+ * surface flag is required. Runtime arguments, environment, working directory, and
+ * PID are separate process values.
  */
 declare module "maligator:process" {
 	/**
 	 * Profiling instrumentation: none by default; sampling for --profile; compiler for
 	 * --profile=compiler. Both profiling modes select full optimization without
 	 * selecting production application behavior.
+	 *
+	 * @see https://maligator.ddv.tools/api/process#ExecutionProfile
 	 */
 	export type ExecutionProfile = "none" | "sampling" | "compiler";
 
 	/**
 	 * The fixed platform contract of the application image.
+	 *
+	 * @see https://maligator.ddv.tools/api/process#ExecutionTarget
 	 */
 	export type ExecutionTarget = {
 		/**
@@ -36,6 +39,8 @@ declare module "maligator:process" {
 	/**
 	 * Options shared by build, run, and dev. Output paths, verbosity, and compiler
 	 * scheduling are tool settings and are not exposed.
+	 *
+	 * @see https://maligator.ddv.tools/api/process#ExecutionOptions
 	 */
 	export type ExecutionOptions = {
 		/**
@@ -48,6 +53,8 @@ declare module "maligator:process" {
 	/**
 	 * Normalized test settings, fixed for the application image. Changing these values
 	 * invalidates specialized test artifacts.
+	 *
+	 * @see https://maligator.ddv.tools/api/process#TestExecutionOptions
 	 */
 	export type TestExecutionOptions = {
 		/**
@@ -70,8 +77,7 @@ declare module "maligator:process" {
 		 */
 		readonly bail: boolean;
 		/**
-		 * Default test timeout in milliseconds from --timeout. Defaults to 5000; individual
-		 * test APIs can select a different timeout.
+		 * Test callback timeout in milliseconds from --timeout. Defaults to 5000.
 		 */
 		readonly timeoutMs: number;
 		/**
@@ -85,6 +91,8 @@ declare module "maligator:process" {
 	/**
 	 * Resolved engine policies. These describe build inputs, never post-DCE native
 	 * feature inclusion.
+	 *
+	 * @see https://maligator.ddv.tools/api/process#ExecutionEngineConfig
 	 */
 	export type ExecutionEngineConfig = {
 		/**
@@ -133,9 +141,10 @@ declare module "maligator:process" {
 	};
 
 	/**
-	 * Public application policies from the selected build configuration. Excludes
-	 * build-host paths, asset declarations, output controls, and the obsolete Maligator
-	 * surface switch.
+	 * Resolved application engine, Web/Node surface, and module policies. Excludes
+	 * build-host paths, asset declarations, and output controls.
+	 *
+	 * @see https://maligator.ddv.tools/api/process#ExecutionConfig
 	 */
 	export type ExecutionConfig = {
 		/**
@@ -173,6 +182,8 @@ declare module "maligator:process" {
 	/**
 	 * Fields shared by every execution workflow. All nested objects and arrays are
 	 * deeply frozen at runtime.
+	 *
+	 * @see https://maligator.ddv.tools/api/process#ExecutionCommon
 	 */
 	export type ExecutionCommon = {
 		/**
@@ -208,6 +219,8 @@ declare module "maligator:process" {
 	/**
 	 * An immutable application-image description, discriminated by command. The command
 	 * describes the workflow that prepared the image, not a transient process phase.
+	 *
+	 * @see https://maligator.ddv.tools/api/process#Execution
 	 */
 	export type Execution = ExecutionCommon &
 		(
@@ -249,16 +262,11 @@ declare module "maligator:process" {
 		);
 
 	/**
-	 * The canonical execution description, fixed before application compilation. Reads
-	 * of known own properties, import aliases and re-exports, immutable aliases and
-	 * destructuring, primitive comparisons, boolean expressions, and if/switch branches
-	 * specialize in development and full compilation. Dynamic keys and opaque calls
-	 * remain ordinary JavaScript and may retain the runtime object. The snapshot has
-	 * stable identity within an application context and deeply frozen own data
-	 * properties; reflection sees the complete shape. Static and dynamic imports return
-	 * the same export. A different command, option, configuration, target, or backend
-	 * creates a different compilation context. Profiling does not change production
-	 * intent. Importing the module does not keep unused native code alive.
+	 * An immutable snapshot of the workflow, target, and resolved configuration, fixed
+	 * before compilation. Known property reads can specialize application branches.
+	 * Runtime arguments, environment, working directory, and PID are outside this
+	 * snapshot. Profiling does not change production intent. Static and dynamic imports
+	 * share its identity, and reflection sees the complete deeply frozen shape.
 	 *
 	 * @example
 	 * import { execution } from "maligator:process";
@@ -267,12 +275,7 @@ declare module "maligator:process" {
 	 *   console.log("native production application");
 	 * }
 	 *
-	 * @example
-	 * import { execution } from "maligator:process";
-	 *
-	 * if (execution.command === "test") {
-	 *   console.log(execution.options.repeat);
-	 * }
+	 * @see https://maligator.ddv.tools/api/process#execution
 	 */
 	export const execution: Execution;
 }

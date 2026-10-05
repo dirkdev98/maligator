@@ -4,11 +4,7 @@ import { fileURLToPath } from "node:url";
 import { format } from "oxfmt";
 import type { FormatConfig } from "oxfmt";
 import { PLATFORM_MODULES } from "../src/platform/catalog.ts";
-import {
-	generatePlatformDeclarations,
-	generatePlatformReference,
-} from "../src/platform/generate.ts";
-import { renderSiteTemplate } from "../website/templates/layout.ts";
+import { generatePlatformDeclarations } from "../src/platform/generate.ts";
 
 export async function generatePlatformApi(check = false): Promise<void> {
 	const formatOptions = JSON.parse(readFileSync(".oxfmtrc.json", "utf8")) as FormatConfig;
@@ -23,25 +19,9 @@ export async function generatePlatformApi(check = false): Promise<void> {
 				"",
 			].join("\n"),
 		],
-		...PLATFORM_MODULES.flatMap((module): Array<readonly [string, string]> => [
-			[path.resolve("src", module.declarationFile), generatePlatformDeclarations(module)],
-			...(module.internal === true
-				? []
-				: [
-						[
-							path.resolve("website", `${module.id.replace(":", "-")}.html`),
-							renderSiteTemplate(
-								generatePlatformReference(
-									module,
-									PLATFORM_MODULES.filter((entry) => entry.internal !== true),
-								).replace(
-									"__API_STYLES__",
-									`<style>${readFileSync("website/templates/api.css", "utf8")}</style>`,
-								),
-								"api",
-							),
-						] as const,
-					]),
+		...PLATFORM_MODULES.map((module): readonly [string, string] => [
+			path.resolve("src", module.declarationFile),
+			generatePlatformDeclarations(module),
 		]),
 	];
 	for (const [file, contents] of outputs) {

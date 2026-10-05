@@ -1,6 +1,6 @@
 {
-	"binaryBytes": 17643784,
-	"binaryPlatform": "aarch64-apple-darwin",
+	"binaryBytes": 21488160,
+	"binaryPlatform": "x86_64-unknown-linux-gnu",
 	"binaryProfile": "production",
-	"embeddedAssetBytes": 11047691
+	"embeddedAssetBytes": 13322188
 }

@@ -10,9 +10,14 @@ export default defineBuild({
 		faviconPng: { type: "file", path: "website/favicon-32x32.png" },
 		appleTouchIcon: { type: "file", path: "website/apple-touch-icon.png" },
 		site: { type: "file", path: "website/index.html" },
-		processApi: { type: "file", path: "website/maligator-process.html" },
-		workersApi: { type: "file", path: "website/maligator-workers.html" },
-		testApi: { type: "file", path: "website/maligator-test.html" },
+		documentation: {
+			type: "directory",
+			path:
+				process.env.MALIGATOR_SITE_CONTAINER === "1"
+					? ".cache/documentation/container"
+					: ".cache/documentation/plain",
+			include: ["**"],
+		},
 		compatibility: { type: "file", path: "website/compatibility.html" },
 		explorer: {
 			type: "directory",

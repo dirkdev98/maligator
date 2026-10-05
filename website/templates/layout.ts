@@ -5,7 +5,7 @@ export type SitePage = "overview" | "explorer" | "api" | "compatibility";
 const navigation = [
 	{ page: "overview", href: "/", label: "Overview" },
 	{ page: "explorer", href: "/explorer", label: "Explorer" },
-	{ page: "api", href: "/api/process", label: "API" },
+	{ page: "api", href: "/docs", label: "Docs" },
 	{ page: "compatibility", href: "/compatibility", label: "Compatibility" },
 	{ page: "github", href: "https://github.com/dirkdev98/maligator", label: "GitHub" },
 ] as const;

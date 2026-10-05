@@ -281,6 +281,12 @@
 			"rules": {
 				"import/no-default-export": "off"
 			}
+		},
+		{
+			"files": ["website/docs/examples/*.ts"],
+			"rules": {
+				"no-console": "off"
+			}
 		}
 	],
 	"categories": {

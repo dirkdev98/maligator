@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -374,14 +374,34 @@ describe("performance portfolio decisions", () => {
 		expect(plan.families.map(({ id }) => id)).toEqual(["javascript"]);
 	});
 
-	it("materializes a baseline with its own exact Git identity", () => {
+	it("materializes exact Git identity and rejects different candidate dependencies", () => {
 		const directory = mkdtempSync(path.join(os.tmpdir(), "mal-portfolio-baseline-"));
 		try {
-			const baseline = materializePortfolioBaseline("HEAD", directory);
-			const expected = execFileSync("git", ["rev-parse", "HEAD"], {
-				cwd: path.resolve(import.meta.dirname, ".."),
-				encoding: "utf8",
-			}).trim();
+			const repository = path.join(directory, "source");
+			mkdirSync(repository);
+			writeFileSync(
+				path.join(repository, "package-lock.json"),
+				'{"lockfileVersion":3,"packages":{}}\n',
+			);
+			const git = (args: Array<string>) =>
+				execFileSync("git", args, { cwd: repository, encoding: "utf8" }).trim();
+			git(["init", "-q"]);
+			git(["add", "package-lock.json"]);
+			git([
+				"-c",
+				"user.name=Test",
+				"-c",
+				"user.email=test@example.invalid",
+				"-c",
+				"commit.gpgsign=false",
+				"-c",
+				"core.hooksPath=/dev/null",
+				"commit",
+				"-qm",
+				"baseline fixture",
+			]);
+			const baseline = materializePortfolioBaseline("HEAD", directory, repository);
+			const expected = git(["rev-parse", "HEAD"]);
 			expect(
 				execFileSync("git", ["rev-parse", "HEAD"], {
 					cwd: baseline,
@@ -394,6 +414,13 @@ describe("performance portfolio decisions", () => {
 					encoding: "utf8",
 				}),
 			).toBe("");
+			writeFileSync(
+				path.join(repository, "package-lock.json"),
+				'{"lockfileVersion":3,"packages":{"changed":{}}}\n',
+			);
+			expect(() => materializePortfolioBaseline("HEAD", directory, repository)).toThrow(
+				"baseline and candidate dependency lockfiles differ",
+			);
 		} finally {
 			rmSync(directory, { recursive: true, force: true });
 		}

@@ -1,8 +1,9 @@
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { expect, it } from "vitest";
+import { workerExamples } from "../../src/platform/catalog.ts";
 import {
 	buildNativeBinary,
 	resolveHarnessExecutionInvocation,
@@ -27,8 +28,13 @@ for (const compiled of [true, false]) {
 		it(`runs the ${entry} documentation example (${compiled ? "native" : "interpreted"})`, () => {
 			const outDir = mkdtempSync(path.join(tmpdir(), "mal-worker-doc-example-"));
 			try {
+				writeFileSync(path.join(outDir, "package.json"), '{"type":"module"}\n');
+				for (const source of Object.values(workerExamples)) {
+					const filename = source.match(/^\/\/ (.+)\n/)![1]!;
+					writeFileSync(path.join(outDir, filename), source);
+				}
 				const binary = buildNativeBinary({
-					fixture: `tests/local/worker-doc-examples/${entry}.ts`,
+					fixture: path.join(outDir, `${entry}.ts`),
 					name: `worker-doc-${entry}-${compiled ? "native" : "interpreted"}`,
 					outDir,
 					compiled,

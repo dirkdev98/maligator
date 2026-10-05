@@ -26,27 +26,6 @@ const pages = new Map<string, SiteResource>([
 		},
 	],
 	[
-		"/api/workers",
-		{
-			body: readFileSync(mal.assets.materialize("workersApi"), "utf8"),
-			type: "text/html; charset=utf-8",
-		},
-	],
-	[
-		"/api/process",
-		{
-			body: readFileSync(mal.assets.materialize("processApi"), "utf8"),
-			type: "text/html; charset=utf-8",
-		},
-	],
-	[
-		"/api/test",
-		{
-			body: readFileSync(mal.assets.materialize("testApi"), "utf8"),
-			type: "text/html; charset=utf-8",
-		},
-	],
-	[
 		"/",
 		{
 			body: readFileSync(mal.assets.materialize("site"), "utf8"),
@@ -81,6 +60,19 @@ for (const asset of assets) {
 		encoding: asset.encoding,
 		immutable: true,
 		explorer: true,
+	});
+}
+const documentationRoot = mal.assets.materialize("documentation");
+const documentation = JSON.parse(
+	readFileSync(`${documentationRoot}/manifest.json`, "utf8"),
+) as Array<ExplorerAsset>;
+for (const asset of documentation) {
+	pages.set(asset.url, {
+		body: readFileSync(`${documentationRoot}/${asset.file}`),
+		type: asset.type,
+		bytes: asset.bytes,
+		etag: `"${asset.digest}"`,
+		documentation: true,
 	});
 }
 const hostname = process.env.SITE_HOST ?? "0.0.0.0";

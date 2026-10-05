@@ -16,6 +16,8 @@ declare module "maligator:application" {
 	 * import { createServer } from "node:http";
 	 *
 	 * createServer((_request, response) => response.end("hello")).listen(3000, () => ready());
+	 *
+	 * @see https://maligator.ddv.tools/api/application#ready
 	 */
 	export const ready: () => boolean;
 }

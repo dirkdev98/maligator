@@ -8,10 +8,7 @@ import {
 	executionTarget,
 	resolveExecution,
 } from "../src/platform/execution.ts";
-import {
-	generatePlatformDeclarations,
-	generatePlatformReference,
-} from "../src/platform/generate.ts";
+import { generatePlatformDeclarations } from "../src/platform/generate.ts";
 
 const plan = {
 	compiled: true,
@@ -130,13 +127,11 @@ describe("platform execution catalog", () => {
 		).toBe(false);
 	});
 
-	it("generates declarations and HTML from the same public contracts", () => {
+	it("generates the public module declaration and canonical reference link", () => {
 		const platform = lookupPlatformModule("maligator:process")!;
 		const declarations = generatePlatformDeclarations(platform);
-		const reference = generatePlatformReference(platform);
 		expect(declarations).toContain('declare module "maligator:process"');
 		expect(declarations).toContain("export const execution: Execution;");
-		expect(reference).toContain("nameFilter");
-		expect(reference).toContain('&lt;reference types="@maligator/cli" /&gt;');
+		expect(declarations).toContain("https://maligator.ddv.tools/api/process#execution");
 	});
 });

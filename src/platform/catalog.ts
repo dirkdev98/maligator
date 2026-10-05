@@ -162,7 +162,7 @@ const executionTypes: ReadonlyArray<PlatformTypeDefinition> = [
 			property(
 				"timeoutMs",
 				number,
-				"Default test timeout in milliseconds from --timeout. Defaults to 5000; individual test APIs can select a different timeout.",
+				"Test callback timeout in milliseconds from --timeout. Defaults to 5000.",
 			),
 			property(
 				"shuffleSeed",
@@ -256,7 +256,7 @@ const executionTypes: ReadonlyArray<PlatformTypeDefinition> = [
 				"Resolved module-resolution policy.",
 			),
 		]),
-		"Public application policies from the selected build configuration. Excludes build-host paths, asset declarations, output controls, and the obsolete Maligator surface switch.",
+		"Resolved application engine, Web/Node surface, and module policies. Excludes build-host paths, asset declarations, and output controls.",
 	),
 	property(
 		"ExecutionCommon",
@@ -358,7 +358,7 @@ const workerTypes: ReadonlyArray<PlatformTypeDefinition> = [
 	),
 	workerType(
 		"TaskContext",
-		"{ readonly signal: AbortSignal; throwIfCancelled(): void }",
+		"{\n /** Worker-local cancellation signal. Cancellation does not preempt JavaScript. */\n readonly signal: AbortSignal;\n /** Throws if cancelled. Check between bounded pieces of work. */\n throwIfCancelled(): void;\n}",
 		"Cancellation is cooperative while a pool task runs. The worker remains occupied until the task's returned promise settles.",
 	),
 	workerType(
@@ -383,17 +383,17 @@ const workerTypes: ReadonlyArray<PlatformTypeDefinition> = [
 	),
 	workerType(
 		"PoolOptions",
-		"{ size?: number; maxQueuedTasks?: number; maxQueuedBytes?: number; maxMessageBytes?: number; name?: string }",
+		"{\n /** Positive safe integer; defaults to host parallelism, falling back to 1. */\n size?: number;\n /** Nonnegative safe integer; defaults to four times size. Zero disables the waiting queue. */\n maxQueuedTasks?: number;\n /** Positive safe integer in bytes; defaults to 67108864 (64 MiB). */\n maxQueuedBytes?: number;\n /** Positive safe integer in bytes; defaults to maxQueuedBytes. */\n maxMessageBytes?: number;\n /** Worker name prefix; each worker receives a one-based suffix. */\n name?: string;\n}",
 		"Fixed persistent worker count and admission bounds. Every worker has independent module state. A size-one pool dispatches admitted tasks serially.",
 	),
 	workerType(
 		"RunOptions",
-		"{ signal?: AbortSignal; transfer?: ReadonlyArray<Transferable> }",
+		"{\n /** Already-aborted signals throw before admission. Running cancellation is cooperative. */\n signal?: AbortSignal;\n /** Ownership moves synchronously on successful admission; rejection leaves values unchanged. */\n transfer?: ReadonlyArray<Transferable>;\n}",
 		"The transfer list commits synchronously when run returns normally. Validation, saturation, closed pools and already-aborted signals throw before admission.",
 	),
 	workerType(
 		"MapOptions<Args>",
-		"{ signal?: AbortSignal; window?: number; transfer?: (args: Args, index: number) => ReadonlyArray<Transferable> }",
+		"{\n /** Cancels only work owned by this map; running tasks must cooperate. */\n signal?: AbortSignal;\n /** Positive safe integer; defaults to pool size. Bounds pulled inputs and buffered results together. */\n window?: number;\n /** Called for each input before admission to choose values whose ownership moves. */\n transfer?: (args: Args, index: number) => ReadonlyArray<Transferable>;\n}",
 		"The window bounds pulled inputs and buffered results together. Results are yielded in input order; iterator return cancels this map's work and closes its input.",
 	),
 	workerType(
@@ -403,7 +403,7 @@ const workerTypes: ReadonlyArray<PlatformTypeDefinition> = [
 	),
 	workerType(
 		"WorkerPool<Module>",
-		"{ readonly ready: Promise<void>; run<Key extends TaskNames<Module>>(name: Key, args: TaskArgs<Module[Key]>, options?: RunOptions): Promise<TaskValue<Module[Key]>>; map<Key extends TaskNames<Module>>(name: Key, args: Iterable<TaskArgs<Module[Key]>> | AsyncIterable<TaskArgs<Module[Key]>>, options?: MapOptions<TaskArgs<Module[Key]>>): AsyncIterable<TaskValue<Module[Key]>>; close(): Promise<void>; terminate(): Promise<void>; stats(): PoolStats; ref(): WorkerPool<Module>; unref(): WorkerPool<Module>; hasRef(): boolean }",
+		"{\n /** Resolves after every worker evaluates the entry; rejects on startup failure. */\n readonly ready: Promise<void>;\n /** Throws on failed admission; returns a promise for the accepted task's result or failure. */\n run<Key extends TaskNames<Module>>(name: Key, args: TaskArgs<Module[Key]>, options?: RunOptions): Promise<TaskValue<Module[Key]>>;\n /** Yields in input order. Returning from the iterator cancels its work and closes its input. */\n map<Key extends TaskNames<Module>>(name: Key, args: Iterable<TaskArgs<Module[Key]>> | AsyncIterable<TaskArgs<Module[Key]>>, options?: MapOptions<TaskArgs<Module[Key]>>): AsyncIterable<TaskValue<Module[Key]>>;\n /** Stops admission, drains accepted tasks, then joins every worker. Idempotent. */\n close(): Promise<void>;\n /** Rejects outstanding tasks with AbortError; joins workers after running tasks cooperate and settle. */\n terminate(): Promise<void>;\n /** Returns a scheduling snapshot; counts are not a subscription. */\n stats(): PoolStats;\n /** Keeps the process alive while pool workers exist; returns this pool. */\n ref(): WorkerPool<Module>;\n /** Allows the process to exit without waiting for this pool; returns this pool. */\n unref(): WorkerPool<Module>;\n /** Reports whether this pool currently keeps the process alive. */\n hasRef(): boolean;\n}",
 		"A bounded task scheduler over isolated persistent workers. Each worker executes one task through asynchronous settlement. No accepted task is replayed after worker failure.",
 	),
 	workerType(
@@ -413,18 +413,18 @@ const workerTypes: ReadonlyArray<PlatformTypeDefinition> = [
 	),
 	workerType(
 		"WorkerOptions",
-		"{ name?: string; data?: unknown; transfer?: ReadonlyArray<Transferable>; maxQueuedMessages?: number; maxQueuedBytes?: number; maxMessageBytes?: number }",
+		"{\n name?: string;\n /** Cloned into workerData before startup; later caller mutations are not shared. */\n data?: unknown;\n /** Values moved as part of startup-data admission. */\n transfer?: ReadonlyArray<Transferable>;\n /** Positive safe integer, at most 4294967295; defaults to 4096 messages per endpoint. */\n maxQueuedMessages?: number;\n /** Positive safe integer in bytes; defaults to 67108864 (64 MiB) per endpoint. */\n maxQueuedBytes?: number;\n /** Positive safe integer in bytes; defaults to 16777216 (16 MiB) per message. */\n maxMessageBytes?: number;\n}",
 		"Worker data is snapshotted before startup. The native host bounds live workers and message admission process-wide.",
 	),
 	workerType(
 		"MessageChannelOptions",
-		"{ maxQueuedMessages?: number; maxQueuedBytes?: number; maxMessageBytes?: number }",
+		"{\n /** Positive safe integer, at most 4294967295; defaults to 4096 messages per endpoint. */\n maxQueuedMessages?: number;\n /** Positive safe integer in bytes; defaults to 67108864 (64 MiB) per endpoint. */\n maxQueuedBytes?: number;\n /** Positive safe integer in bytes; defaults to 16777216 (16 MiB) per message. */\n maxMessageBytes?: number;\n}",
 		"Each endpoint bounds its pending message count and bytes. Rejection leaves the sender's transferables unchanged.",
 	),
 	{
 		...workerType(
 			"MessagePort<Send = unknown, Receive = unknown>",
-			"{ postMessage(value: Send, transfer?: ReadonlyArray<Transferable>): void; onmessage: ((event: MessageEvent<Receive>) => void) | null; onmessageerror: ((event: MessageEvent<unknown>) => void) | null; start(): void; close(): void; ref(): MessagePort<Send, Receive>; unref(): MessagePort<Send, Receive>; hasRef(): boolean }",
+			"{\n /** Clones and admits a message synchronously. Transfer commits only after successful validation/admission. */\n postMessage(value: Send, transfer?: ReadonlyArray<Transferable>): void;\n /** Setting this handler starts delivery. addEventListener listeners need start(). */\n onmessage: ((event: MessageEvent<Receive>) => void) | null;\n /** Receives message decoding failures in the receiving isolate. */\n onmessageerror: ((event: MessageEvent<unknown>) => void) | null;\n /** Enables delivery to event listeners; repeated calls are harmless. */\n start(): void;\n /** Discards queued messages and closes this endpoint. */\n close(): void;\n /** Keeps the receiving isolate alive; returns this port. */\n ref(): MessagePort<Send, Receive>;\n /** Allows the receiving isolate to exit; returns this port. */\n unref(): MessagePort<Send, Receive>;\n hasRef(): boolean;\n}",
 			"An ordered bidirectional endpoint with transactional transfer and bounded queues. Message listeners and values are owned by the receiving isolate.",
 		),
 		// An interface permits Transferable's recursion through this generic port contract.
@@ -438,7 +438,7 @@ const workerTypes: ReadonlyArray<PlatformTypeDefinition> = [
 	),
 	workerType(
 		"Worker<Send = unknown, Receive = unknown>",
-		"EventTarget & { readonly id: number; readonly ready: Promise<void>; readonly closed: Promise<WorkerExit>; readonly port: MessagePort<Send, Receive>; terminate(): Promise<WorkerExit>; ref(): Worker<Send, Receive>; unref(): Worker<Send, Receive>; hasRef(): boolean }",
+		"EventTarget & {\n readonly id: number;\n /** Resolves after entry evaluation; rejects on startup failure. */\n readonly ready: Promise<void>;\n /** Resolves with a terminal record after the native thread is joined and its slot released. */\n readonly closed: Promise<WorkerExit>;\n readonly port: MessagePort<Send, Receive>;\n /** Requests shutdown and resolves after thread reaping. */\n terminate(): Promise<WorkerExit>;\n ref(): Worker<Send, Receive>;\n unref(): Worker<Send, Receive>;\n hasRef(): boolean;\n}",
 		"A long-lived isolated module and its parent communication port. Startup completes after module evaluation; shutdown completes after native thread reaping.",
 	),
 ];
@@ -476,7 +476,7 @@ const internalWorkerTypes: ReadonlyArray<PlatformTypeDefinition> = [
 	),
 ];
 
-const workerExamples = {
+export const workerExamples = {
 	sum: `// sum.ts
 import type { TaskContext } from "maligator:workers";
 
@@ -755,14 +755,14 @@ export const PLATFORM_MODULES: ReadonlyArray<PlatformModule> = [
 			workerExport(
 				"createWorkerUrl",
 				"<Module = unknown>(specifier: string, base: string) => WorkerUrl<Module>",
-				"Declare an entry using a statically resolved module specifier and explicit import.meta.url base. The immutable href projection can be passed to existing worker libraries.",
+				"Declare an entry using a static string literal and explicit import.meta.url base. The immutable href projection can be passed to existing worker libraries.",
 				true,
 				[workerExamples.declaration, workerExamples.sum],
 			),
 			workerExport(
 				"createPool",
 				"<Module>(entry: WorkerUrl<Module>, options?: PoolOptions) => WorkerPool<Module>",
-				"Create a persistent bounded pool. Submission failures throw synchronously; an admitted task settles asynchronously.",
+				"Create a bounded pool of persistent workers for a declared entry. Submission failures throw synchronously; admitted tasks settle asynchronously. Await ready before submitting startup-dependent work and close the pool when finished. Throws NotSupportedError without threads and RangeError for invalid bounds.",
 				false,
 				[workerExamples.pool, workerExamples.tasks],
 			),
@@ -920,14 +920,14 @@ export const PLATFORM_MODULES: ReadonlyArray<PlatformModule> = [
 		installer: "mal_host_install_maligator_process",
 		declarationFile: "process-api.d.ts",
 		description:
-			"Application execution context. Importing this module has no externally observable effects and requires no configuration switch. Unused exports and native implementation dependencies are eliminated. Process arguments, environment, working directory, and PID are runtime concerns outside execution.",
+			"Read the compile-time command, target, and resolved application configuration. No surface flag is required. Runtime arguments, environment, working directory, and PID are separate process values.",
 		types: executionTypes,
 		exports: [
 			{
 				name: "execution",
 				type: reference("Execution"),
 				description:
-					"The canonical execution description, fixed before application compilation. Reads of known own properties, import aliases and re-exports, immutable aliases and destructuring, primitive comparisons, boolean expressions, and if/switch branches specialize in development and full compilation. Dynamic keys and opaque calls remain ordinary JavaScript and may retain the runtime object. The snapshot has stable identity within an application context and deeply frozen own data properties; reflection sees the complete shape. Static and dynamic imports return the same export. A different command, option, configuration, target, or backend creates a different compilation context. Profiling does not change production intent. Importing the module does not keep unused native code alive.",
+					"An immutable snapshot of the workflow, target, and resolved configuration, fixed before compilation. Known property reads can specialize application branches. Runtime arguments, environment, working directory, and PID are outside this snapshot. Profiling does not change production intent. Static and dynamic imports share its identity, and reflection sees the complete deeply frozen shape.",
 				examples: [
 					'import { execution } from "maligator:process";\n\nif (execution.compiled && execution.production) {\n  console.log("native production application");\n}',
 					'import { execution } from "maligator:process";\n\nif (execution.command === "test") {\n  console.log(execution.options.repeat);\n}',

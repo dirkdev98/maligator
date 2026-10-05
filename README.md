@@ -26,278 +26,33 @@ working directory remains the application project root for config, entries, asse
 and output caches. Compiler installation roots are explicit absolute paths passed into
 the command layer; native stages do not infer runtime ownership from the application.
 
-## Commands
+## Documentation
 
-```text
-maligator init
-maligator doctor [--verbose] [--target rust-triple]
-maligator build [entry] [--production [--compile-concurrency 1..3]] [--profile[=compiler]] [--artifact directory] [--target rust-triple] [--config path]
-maligator run [entry] [--profile[=compiler]] [--config path] [-- args...]
-maligator dev [entry] [--profile[=compiler]] [--config path] [-- args...]
-maligator test [path ...] [--profile[=compiler]] [--run name] [--shuffle [seed]] [--repeat count] [--bail]
-```
+Start with the [documentation home](https://maligator.ddv.tools/docs). Guides cover
+application tasks; the API reference lists signatures, defaults, and failure behavior.
 
-The working directory is always the project root. Relative entries and `--config`
-paths are resolved from it; Maligator does not search ancestor directories. An
-explicit entry overrides `config.entry`. Without a config, an explicit entry uses
-the conservative product defaults. `build` and `run` fail with an `init` suggestion
-when neither source supplies an entry.
+- [Develop an application](https://maligator.ddv.tools/guides/development) and
+  [load TypeScript declarations](https://maligator.ddv.tools/guides/typescript).
+- [Test an application](https://maligator.ddv.tools/guides/testing).
+- [Run tasks in workers](https://maligator.ddv.tools/guides/workers),
+  [transfer values](https://maligator.ddv.tools/guides/workers/messages), and
+  [cancel work](https://maligator.ddv.tools/guides/workers/cancellation).
+- [Configure a build](https://maligator.ddv.tools/guides/build-configuration),
+  [embed files](https://maligator.ddv.tools/guides/assets), and
+  [serve HTTP](https://maligator.ddv.tools/guides/http).
+- [Build for production](https://maligator.ddv.tools/guides/production) and
+  [profile an application](https://maligator.ddv.tools/guides/profiling).
+- [Look up the API](https://maligator.ddv.tools/api),
+  [CLI flags](https://maligator.ddv.tools/api/cli), or
+  [compatibility](https://maligator.ddv.tools/compatibility).
 
-Production builds overlap the owner and up to two independent worker-image
-compilers, bounded by the host's CPU budget. `--compile-concurrency 1` selects serial
-compilation; `--compile-concurrency 2..3` can lower the total job limit. Cache hits
-and applications without worker roots start no root helpers. The public synchronous
-build API remains serial. This flag requires `--production`; profiling remains serial.
+Every documentation page has a Markdown copy. The
+[public symbol index](https://maligator.ddv.tools/reference.json) includes direct
+links, signatures, and availability.
 
-`run` compiles to a portable development image and executes it in a fresh VM using a
-matching compile-time-specialized runtime embedded in the distributed platform CLI.
-Locked and mutable primordial profiles with configured assets, the Web and Node
-surfaces, and Realm support do not require a C or Rust toolchain when Intl is
-disabled. It forwards every
-argument after `--` without re-parsing it and propagates the application's exit
-status or terminating signal.
-
-`dev` keeps the compiler session alive, watches the application dependency graph,
-and restarts a fresh VM after each successful rebuild. Project files are checked
-at interactive cadence while dependencies under `node_modules` are checked less
-frequently. A compilation error leaves the watcher running so the next edit can
-recover. Each replacement gets fresh module instances; compatible applications
-run in supervised isolates and unsupported runtime policies use a process runner.
-
-Add `--profile` to any of these four commands for a separately compiled,
-production-optimized image with bounded CPU, Poisson-sampled charged allocation,
-and GC-pause evidence. `run`, `dev`, and `test` turn the capture into source-ranked
-findings and standard profile
-artifacts without introducing a separate profiling command. Use
-`--profile=compiler` for the separately instrumented exact source-site census of
-executions, fallbacks, allocation, boxing, safepoints, and GC. See
-[`docs/profiling.md`](docs/profiling.md) for workflows, artifact formats, quality
-signals, overhead policy, and current limitations.
-
-Use `build --production` and launch the reported binary directly for production.
-Adding `--artifact <directory>` creates a deployable artifact and therefore requires
-`--production`. The destination must be absent or empty. Its build-owned layout is:
-
-```text
-artifact/
-├── artifact.json
-├── LICENSE
-├── profile.json          # only with --profile
-├── SHA256SUMS
-└── bin/
-    └── <application>
-```
-
-The manifest records the Maligator version, Rust target triple, production status,
-binary size, and SHA-256 digest. Release tooling may archive this directory but does
-not reconstruct its contents.
-
-Use `maligator --help` and `maligator --version` for command help and version output.
-Unknown options, missing option values, and extra positional arguments are errors.
-
-## Parallel workers
-
-`maligator:workers` provides isolated native threads, transferable messages, shared
-memory and Atomics, and persistent task pools. Declare entries with
-`createWorkerUrl("./jobs.ts", import.meta.url)` so the compiler bundles their graphs
-for native builds and interpreted development. The API needs no surface flag;
-enable `surface.node` for `node:worker_threads` and libraries such as Tinypool.
-
-Each worker owns its VM, heap and event loop. Blocking host executors and GC helper
-capacity are bounded across the process. See
-[parallel workers](docs/decisions/10-parallel-workers.md) for task signatures,
-scheduling, transfer admission, cancellation and lifecycle contracts.
-
-The native CLI retains compiler workers while fresh application threads run.
-Ordinary compatible `run` and `dev` images use separate VMs and heaps inside the
-supervisor. Dev keeps the last successful application during compilation and
-replaces it only with the newest valid generation. `dev --status` streams
-generation, compilation and application states, plus retained image/worker counts.
-Applications can call
-`ready()` from `maligator:application` after startup; this is distinct from module
-evaluation and does not transfer listening sockets. Profiled builds and
-incompatible runtime policies use a process runner. See
-[supervised applications](docs/decisions/12-supervised-applications.md) for
-ownership, cancellation and process resource limits.
-
-## Application tests
-
-Ordinary `maligator test` is an interpreter-only toolchain path. It discovers
-`*.test.{js,mjs,ts,mts}` and `*.spec.{js,mjs,ts,mts}`, loads a shared dependency
-base plus independently cached registration fragments, and runs them in a fresh
-application isolate using the interpreter embedded in the Maligator executable.
-Compatible ordinary tests do not emit C or invoke a native compiler/linker.
-The content-addressed cache stores frontend
-wire artifacts, not successful results; every selected test executes on every
-command.
-
-`test --profile` is the explicit exception: it compiles the selected graph as one
-production AOT image so the profiler observes the code users ship. It retains test
-selection and reporting behavior but is intentionally a cold, toolchain-backed
-diagnostic path.
-
-```typescript
-import { beforeEach, describe, expect, test } from "maligator:test";
-import { createStore } from "./store.ts";
-
-describe("store", () => {
-	let store: ReturnType<typeof createStore>;
-
-	beforeEach(() => {
-		store = createStore();
-	});
-
-	test("returns inserted values", () => {
-		store.set("answer", 42);
-		expect(store.get("answer")).toBe(42);
-	});
-
-	test("loads asynchronously", async () => {
-		store.set("answer", 42);
-		await expect(store.load("answer")).resolves.toEqual(42);
-	});
-});
-```
-
-The initial API includes nested suites; `beforeAll`, `afterAll`, `beforeEach`, and
-`afterEach`; synchronous and async callbacks; `skip`, `todo`, `only`, and `each`;
-scalar/structural/throw matchers; `.not`, `.resolves`, `.rejects`; and the
-`any`, `anything`, `stringMatching`, `objectContaining`, and `arrayContaining`
-asymmetric matchers. A focused `.only` run prints a warning.
-
-Selections are stable and serial by default. `--run` filters hierarchical names,
-`--shuffle` reports its reproducible seed, `--repeat` reruns the registered suite
-without recompiling, and `--bail` opts out of the default complete policy. Selected
-files share one application isolate by default, preserving module singletons,
-globals and ordering. The supervisor joins the application and its descendants
-after each run, including resources left open by tests.
-
-`test --isolate --compile-concurrency 2 --concurrency 2` opts into independent
-file applications, with separate compilation and execution budgets. Each file
-gets fresh module state; completion reports remain in selection order. Bail stops
-new admissions and joins work already started. More compiler workers retain more
-frontend memory, so ordinary shared-suite compilation uses one worker. Isolated
-scheduling currently requires a compatible native runtime policy.
-
-`test --watch` retains compiled images and launches a fresh application on every
-rerun. Source and configuration edits rebuild the affected graph. On POSIX,
-`kill -HUP <printed-pid>` reruns unchanged inputs from the retained image;
-`--watch-failed` restricts that unchanged rerun to previously failing files while
-preserving the original shared graph. The compiled filter, repeat, timeout, bail
-and shuffle seed remain fixed for the watch session. `--status` streams generation,
-compilation and resource snapshots; Ctrl+C joins active work before exiting.
-
-## Configuration
-
-`maligator.build.ts` is executable, trusted TypeScript configuration. It is stripped
-in place, evaluated on every command invocation, and strictly validated after
-evaluation. Ordinary locals, functions, conditions, and environment reads are
-allowed. The only supported import is `defineBuild` from `@maligator/cli`:
-
-```typescript
-import { defineBuild } from "@maligator/cli";
-
-const productionNodeSurface = process.env.MAL_NODE === "1";
-
-export default defineBuild({
-	entry: "src/index.ts",
-	outputName: "example",
-	engine: {
-		eval: false,
-		realms: false,
-		regexp: true,
-		temporal: false,
-		intl: {
-			enabled: false,
-			features: [],
-			languages: [],
-		},
-	},
-	surface: {
-		webPlatform: false,
-		node: productionNodeSurface,
-		maligator: true,
-	},
-});
-```
-
-The npm package ships TypeScript declarations for this configuration and for
-Maligator's runtime globals. Including `maligator.build.ts` in the TypeScript project
-loads the global `mal.assets` and `Mal.serve` types. Projects that exclude the build
-file can add `@maligator/cli` to `compilerOptions.types` instead. The declarations
-describe optional surfaces even when a particular build disables them; the
-configuration remains the runtime authority.
-
-All fields are optional. Product defaults are:
-
-| Field                   | Default  | Meaning                                                                                         |
-| ----------------------- | -------- | ----------------------------------------------------------------------------------------------- |
-| `entry`                 | none     | Project-relative entry module                                                                   |
-| `outputName`            | inferred | Safe single-component executable name                                                           |
-| `assets`                | `{}`     | Unconditionally embedded file and directory resources                                           |
-| `engine.eval`           | `false`  | Runtime-disabled by default; `true` embeds the compiler; `"compile-check"` rejects visible uses |
-| `engine.realms`         | `false`  | Include Realm support                                                                           |
-| `engine.regexp`         | `true`   | Include the RegExp engine                                                                       |
-| `engine.temporal`       | `false`  | Include Temporal plus calendar and time-zone data                                               |
-| `engine.intl.enabled`   | `false`  | Include Intl and ICU4X data                                                                     |
-| `engine.intl.features`  | `[]`     | All Intl services when Intl is enabled; a non-empty list selects services                       |
-| `engine.intl.languages` | `[]`     | All locales; locale subsetting is not implemented yet                                           |
-| `surface.webPlatform`   | `false`  | Include the WinterTC/web host surface                                                           |
-| `surface.node`          | `false`  | Include Maligator's curated `node:*` compatibility surface                                      |
-| `surface.maligator`     | `true`   | Include the Maligator host surface                                                              |
-
-Standalone runtime eval currently also requires `engine.regexp: true`: the baked
-compiler uses RegExp internally. Separating those capabilities is
-[unfinished work](TODO.md#realm-correctness-and-runtime-capabilities).
-
-Supported Intl feature names are `collator`, `number-format`, `date-time-format`,
-`plural-rules`, `list-format`, `segmenter`, `display-names`,
-`relative-time-format`, and `duration-format`. Unknown fields and values fail rather
-than being ignored. A non-empty `engine.intl.languages` currently fails with an
-actionable unsupported-feature diagnostic.
-
-Configured assets are captured unconditionally in the native executable after the
-trusted configuration has run. File paths resolve from the project root; directory
-assets require explicit include patterns (`*`, `?`, and whole-segment `**`):
-
-```typescript
-export default defineBuild({
-	assets: {
-		compilerWire: { type: "file", path: "compiler.malw" },
-		runtime: {
-			type: "directory",
-			path: "runtime",
-			include: [
-				"host_main.c",
-				"test262_main.c",
-				"src/**",
-				"rust/Cargo.toml",
-				"rust/Cargo.lock",
-				"rust/rust-toolchain.toml",
-				"rust/src/**",
-				"rust/include/**",
-				"vendor/llhttp/include/**",
-				"vendor/llhttp/src/**",
-			],
-		},
-	},
-});
-```
-
-Every include pattern must match at least one regular file; symlinks and other
-non-regular entries are rejected. At runtime, `mal.assets.materialize(name,
-{ baseDirectory? })` writes the captured file or tree atomically and returns its
-absolute path. `baseDirectory` defaults to the operating-system temporary directory.
-The immediate child is `<content-hash>-<asset-format-version>` and a completion
-marker makes repeat calls a cheap cache hit. A configured file returns its path
-inside that directory; a configured directory returns the directory itself.
-
-Assets require `surface.maligator` (enabled by default). They are native-executable
-resources and are intentionally unsupported by portable `--serialize` output.
-
-The output name is selected from `outputName`, then the unscoped portion of
-`package.json#name`, then the working-directory basename. Names cannot be empty,
-`.`/`..`, or contain path separators.
+For source-checkout workflows, use the repository sections below and
+[docs/testing.md](docs/testing.md). Application tests use `maligator test`;
+repository tests use the npm commands in Development.
 
 ## Native Toolchain
 
