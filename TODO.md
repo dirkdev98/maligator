@@ -267,13 +267,6 @@ iterator cursor is not, by itself, permission to delete its language object.
 
 ## P2: source closure and generated-code profitability
 
-- [x] Make cross-call value-kind propagation consumer-driven: collect foldable
-      observations first and request global types only when their unresolved inputs
-      depend on call results, parameters or receivers. Preserve local folds and
-      conservative fallback through moves, block parameters and later edits.
-- [x] Restrict global type transfers to the dependencies of return values, consumed
-      call inputs and type observations. Keep local integer proofs complete and
-      distinguish unrequested values from lattice bottom in published snapshots.
 - [ ] Reduce remaining execution-liveness work where saved analysis outweighs demand
       bookkeeping. Sharing across verification or frame-exit consumers requires an
       explicit body-ownership contract; mutable function identity is insufficient.
@@ -302,12 +295,6 @@ iterator cursor is not, by itself, permission to delete its language object.
 
 ## Compiler infrastructure
 
-- [ ] Preserve conditional iterable expressions in compact type stripping.
-      `for (const item of condition ? items : [])` currently loses the ternary's
-      colon and following code during compiler-source baking. Cover this syntax
-      at the stripper boundary; the demand-driven discovery loops use named
-      iterable locals in the meantime.
-
 - [ ] Extend the shared bytecode-operation and builtin descriptors to generate operand
       schemas, lowering completeness, effects, representation constraints, safepoint
       policy, and GC declarations. Adding an operation must not leave compiler, wire,
@@ -315,12 +302,6 @@ iterator cursor is not, by itself, permission to delete its language object.
       semantics are owned by the P1 callback work above, not a second descriptor set.
 
 ## Compiler measurement and diagnostics
-
-- [ ] Make the current-checkpoint paired workflow retain and compare local evidence
-      without requiring a published baseline update. Preserve historical architecture
-      snapshots separately. Refresh published JavaScript, HTTP/Express, and
-      self-compile baselines only through an explicitly authorized update after
-      acceptance; do not rank current work against an unrelated old checkpoint.
 
 - [ ] Close gaps in the existing report's end-to-end cost accounting: cold process
       versus warm kernel time; complete analysis discovery/planning; register
@@ -389,9 +370,6 @@ only reproducible input.
       production building, and execution outside the repository.
 
 ## Release operations
-
-- [ ] Move publishing to a tag-driven GitHub workflow using npm trusted publishing.
-      Keep prereleases on SemVer alpha versions and the npm alpha dist-tag.
 
 - [ ] Run npm run test:full:report for release candidates and resolve or record every
       result. This gate and the full Test262 corpus remain approval-only.
@@ -570,9 +548,6 @@ contracts or investigates costs still visible after the string follow-ups.
       Remove width approximations from arithmetic, parsing, formatting, comparison,
       typed operations, and serialization.
 
-- [ ] Implement Unicode case mapping beyond the ASCII fallback. Use versioned data and
-      cover context-sensitive and multi-code-point mappings.
-
 - [ ] Work Intl from generated failure clusters covering supported values, locale
       options, NumberFormat, DateTimeFormat, and interval collapsing. Keep data
       availability distinct from algorithmic correctness.
@@ -631,9 +606,6 @@ contracts or investigates costs still visible after the string follow-ups.
 - [ ] Accept erasable TypeScript syntax in runtime eval using a native
       blank-space-preserving stripper. Re-evaluate the compact implementation before
       selecting a larger dependency.
-
-- [ ] Cache compiled runtime-eval wire buffers by source and compilation context.
-      Include world policy, Realm, host capabilities, and format identity.
 
 - [ ] Optionally tier hot eval-created functions through native C compilation when a
       toolchain is available. Preserve interpreter fallback.
@@ -738,11 +710,6 @@ remains a Maligator extension and does not count as global fetch conformance.
 
 # Node and ecosystem compatibility
 
-- [x] Implement compiled worker entry graphs, messaging, transactional transfers,
-      lifecycle, persistent task pools, shared memory and Atomics. Native and
-      interpreted workers support unmodified Tinypool through node:worker_threads;
-      [parallel workers](docs/decisions/10-parallel-workers.md) records the API.
-
 - [ ] Measure remaining UPM performance paths: off-loop filesystem and
       decompression scheduling, and DNS/Agent dispatcher reuse. Use matched
       workloads after output parity; AOT does not need a V8 compile cache.
@@ -752,10 +719,6 @@ remains a Maligator extension and does not count as global fetch conformance.
       results and [proved integer truncation](docs/decisions/11-truncating-integer-arithmetic.md)
       remove intermediate conversions. The recurrence edge still boxes its value;
       specializing it must preserve zero-trip behavior and coercion effects.
-
-- [x] Refresh all 20 native primordial descriptor configuration audits after the
-      worker API changes. The generated catalog, coverage records and availability
-      matrix use current captures with no pending modes.
 
 - [ ] Extend asynchronous child-process stdio to pipes and implement exec/execFile;
       inherited and ignored stdio cover UPM commands. Exercise active-child cleanup
@@ -854,22 +817,8 @@ remains a Maligator extension and does not count as global fetch conformance.
 
 ## SMP
 
-- [x] Move mutable fiber, scheduler, GC, root, hook, and host state into thread-local
-      or isolate-owned structures. Preserve the single-isolate path and share bounded
-      process executors and GC helper capacity.
-
-- [x] Run one isolate and scheduler per OS thread. Keep heaps and language objects
-      isolated unless data is explicitly cloned or transferred.
-
-- [x] Implement cross-isolate send as copy plus MPSC enqueue and backend wake. Make
-      queue ownership and shutdown races explicit.
-
 - [ ] Add work stealing only for work without isolate-local pointers. Measure fairness
       and cache effects before enabling it by default.
-
-- [x] Verify independent per-isolate collection without cross-heap pointers or global
-      stop-the-world coordination. Stress simultaneous collection, messaging,
-      cancellation, and shutdown.
 
 - [ ] Validate the x86_64 fiber switch on Linux. Retain ABI and sanitizer coverage.
 
@@ -892,16 +841,6 @@ remains a Maligator extension and does not count as global fetch conformance.
 
 ## Generational GC workers
 
-- [x] Verify the merged #65/#66 compiler contracts with the worker collector:
-      the compiled worker-boundary fixture covers a worker-triggered poll,
-      private call result publication, property-region fallback, and reclamation.
-      Native property-region coverage checks more than 64 shadow slots; the
-      generator-overlap fixture resumes and completes a suspended compiled frame
-      while its only tracing worker is paused, then checks later reclamation.
-- [x] Verify the selected source with Wasm parity and embedding lifecycle,
-      the normal gate, focused GC sanitizer and standards runs, and an
-      enabled-worker ThreadSanitizer lane. The five-family portfolio also
-      completed with its required output checks.
 - [ ] Resolve the native performance trade-off: the historical five-family
       portfolio found a 1.15% aggregate cost against `40063120`, while the current
       retained source estimates a 0.82% gain against `d149ffe6` with a 95% interval
@@ -999,17 +938,6 @@ remains a Maligator extension and does not count as global fetch conformance.
       unmeasured. The prior app diagnostic allocated only 32,800 bytes during major
       sweep; establish representative long-sweep exposure before adding per-block
       free lists.
-- [x] Complete the cadence-four resource control and primitive-filter HTTP
-      ablation; record per-candidate and combined decisions. The retained-source
-      five-family portfolio completed with matching output checks and an inconclusive
-      0.82% aggregate gain estimate. The separate 30-second HTTP diagnostic is
-      complete but does not attribute the routes regression. The 15-pair fixed
-      cadence-16 experiment was rejected for its consistent RSS cost; a 2,000-
-      iteration control confirms a higher mapped/RSS plateau and more minor
-      sweep work. Cadence four reduces minor scanning but adds major work with
-      no established ordinary throughput benefit, so cadence eight remains.
-      Filter removal also failed to recover routes throughput. Linux gate,
-      Wasm parity, and the final benchmark harness gate passed.
 
 # Triggered work
 
