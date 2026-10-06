@@ -75,7 +75,8 @@ function scalarLeaf(condition, left, right) {
 	return left / right + 1;
 }
 function scalarSort(left, right) {
-	return (left - right) * 0.5;
+	if (left < right) return (left - right) * 0.5;
+	return (left - right) * 0.25;
 }
 function sortScalarInput(values) {
 	return values.sort(scalarSort);
@@ -84,14 +85,11 @@ console.log("scalar-sort", sortScalarInput([12, 3, 8, -5]).join(","));
 globalThis.scalarLeaf = scalarLeaf;
 const leafResults = [];
 for (let index = 0; index < 3; index++) {
-	leafResults.push(globalThis.scalarLeaf(index > 0, index + 3, 4));
+	leafResults.push(scalarLeaf(index > 0, index + 3, 4));
 	gc();
 }
 console.log("scalar-leaf", leafResults.join(","));
-console.log(
-	"leaf-rounding",
-	Object.is(globalThis.scalarLeaf(true, 1 + 2 ** -27, 1 - 2 ** -27), 0),
-);
+console.log("leaf-rounding", Object.is(scalarLeaf(true, 1 + 2 ** -27, 1 - 2 ** -27), 0));
 
 const constantEffects = [];
 globalThis.observeConstants = (mask, offset) => {

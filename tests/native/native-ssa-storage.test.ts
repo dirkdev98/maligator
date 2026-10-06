@@ -80,11 +80,16 @@ describe("independent native SSA storage", () => {
 			.find((plan) => plan?.kind === "call" && plan.numericSortCallback !== undefined);
 		if (numericSort?.kind !== "call" || numericSort.numericSortCallback === undefined)
 			throw new Error("Scalar sort fixture lacks its numeric leaf callback selection");
-		expect(
-			image.native.functions[numericSort.numericSortCallback.functionIndex]!
-				.directEntries[numericSort.numericSortCallback.entryId]!.storage?.numericLeaf
-				?.expressionIps.length,
-		).toBeGreaterThan(0);
+		const sort = image.native.functions[numericSort.numericSortCallback.functionIndex]!;
+		const sortLeaf =
+			sort.directEntries[numericSort.numericSortCallback.entryId]!.storage!.numericLeaf!;
+		expect(sortLeaf.expressionIps.length).toBeGreaterThan(0);
+		const sortTargets = new Set(
+			sort.body.instructions.flatMap((op) =>
+				op.opcode === "JUMP" || op.opcode === "JUMP_IF" ? [op.targetIp] : [],
+			),
+		);
+		expect(sortLeaf.expressionIps.some((ip) => sortTargets.has(ip))).toBe(true);
 		expect(suspended.length).toBeGreaterThanOrEqual(2);
 		const regionTail = image.native.functions.find(
 			(fn) =>
