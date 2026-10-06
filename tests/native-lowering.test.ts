@@ -12,12 +12,17 @@ import { emitProgramImage } from "../src/compiler/target/emit-program-image.ts";
 import { nativeLoopBackedgeInstructions } from "../src/compiler/target/execution-liveness.ts";
 import { lowerCoreCompilationToExecutionProgram } from "../src/compiler/target/lower-execution.ts";
 import { lowerExecutionToProgramImage } from "../src/compiler/target/lower-native-program-image.ts";
+import {
+	lowerNativeFunctionStorage,
+	validateNativeStorage,
+} from "../src/compiler/target/lower-native-storage.ts";
 import { lowerCoreCompilationToNativeProgram } from "../src/compiler/target/lower-native.ts";
 import {
 	createConservativeNativePlan,
 	nativeFrameRootRegisters,
 } from "../src/compiler/target/program-image.ts";
 import { emitCompiledFunction } from "../src/compiler/target/render-native-c.ts";
+import type { BytecodeInstruction } from "../src/compiler/target/runtime-image.ts";
 
 const source = `
 function calculate(value) {
@@ -451,6 +456,8 @@ describe("SSA native lowering", () => {
 		)!;
 		const leaf = entry.storage!.numericLeaf!;
 		expect(leaf.expressionIps.length).toBeGreaterThan(0);
+		expect(native.storage!.rematerializedConstantIps.length).toBeGreaterThan(0);
+		expect(leaf.rematerializedConstantIps.length).toBeGreaterThan(0);
 		const targets = new Set(
 			native.body.instructions.flatMap((op) =>
 				op.opcode === "JUMP" || op.opcode === "JUMP_IF" ? [op.targetIp] : [],
@@ -481,6 +488,97 @@ describe("SSA native lowering", () => {
 		);
 	});
 
+	it("rematerializes repeated scalar constants across calls and dominated branches", () => {
+		const image = scalarImage(
+			"const mask = 17; const offset = 1.25; globalThis.observe(mask, offset); if (globalThis.condition) return ((a & mask) + mask) * offset; return (a + mask) / offset;",
+		);
+		const native = image.native.functions[1]!;
+		const constants = native.body.instructions.flatMap((op, ip) =>
+			(op.opcode === "CREATE_NUMBER" && op.value === 17) ||
+			(op.opcode === "CREATE_F64" && op.value === 1.25)
+				? [ip]
+				: [],
+		);
+		expect(constants).toHaveLength(2);
+		expect(native.storage!.rematerializedConstantIps).toEqual(
+			expect.arrayContaining(constants),
+		);
+		const integer = native.body.instructions[constants[0]!]!;
+		if (!("dst" in integer)) throw new Error("Missing constant destination");
+		expect(native.registerRepresentations[integer.dst]).toBe("int32");
+		const restored = deserializeCompilerArtifact(serializeCompilerArtifact(image));
+		expect(restored.native.functions[1]!.storage).toEqual(native.storage);
+		expect(() => emitProgramImage(restored, { compiled: true })).not.toThrow();
+	});
+
+	it("rejects constant rematerialization without immutable dominated SSA storage", () => {
+		const template = scalarImage("return a + subtract;").native.functions[1]!.body;
+		const cases: Array<{
+			instructions: Array<BytecodeInstruction>;
+			parameterCount?: number;
+			argumentSnapshotCount?: number;
+			storageValues?: Array<number>;
+		}> = [
+			{
+				instructions: [
+					{ opcode: "JUMP_IF", cond: 0, targetIp: 2 },
+					{ opcode: "CREATE_NUMBER", dst: 1, value: 7 },
+					{ opcode: "RETURN", value: 1 },
+				],
+			},
+			{
+				instructions: [
+					{ opcode: "BINARY", dst: 2, left: 1, right: 1, operator: "+" },
+					{ opcode: "CREATE_NUMBER", dst: 1, value: 7 },
+					{ opcode: "RETURN", value: 2 },
+				],
+			},
+			{
+				instructions: [
+					{ opcode: "CREATE_NUMBER", dst: 1, value: 7 },
+					{ opcode: "CREATE_NUMBER", dst: 1, value: 9 },
+					{ opcode: "RETURN", value: 1 },
+				],
+			},
+			{
+				instructions: [
+					{ opcode: "CREATE_NUMBER", dst: 0, value: 7 },
+					{ opcode: "RETURN", value: 0 },
+				],
+			},
+			...[{ argumentSnapshotCount: 1 }, { storageValues: [0, -1, 2] }].map((options) => ({
+				...options,
+				instructions: [
+					{ opcode: "CREATE_NUMBER", dst: 1, value: 7 },
+					{ opcode: "RETURN", value: 1 },
+				] satisfies Array<BytecodeInstruction>,
+			})),
+		];
+		for (const options of cases) {
+			const body = {
+				...template,
+				registerCount: 3,
+				parameterCount: options.parameterCount ?? 1,
+				argumentSnapshotCount: options.argumentSnapshotCount ?? 0,
+				instructions: options.instructions,
+			};
+			const native = lowerNativeFunctionStorage({
+				...createConservativeNativePlan([body]).functions[0]!,
+				gc: { safepoints: [] },
+				storageValues: options.storageValues ?? [0, 1, 2],
+				registerRepresentations: ["number", "int32", "number"],
+			});
+			expect(native.storage!.rematerializedConstantIps).toEqual([]);
+			const constant = body.instructions.findIndex((op) => op.opcode === "CREATE_NUMBER");
+			expect(() =>
+				validateNativeStorage({
+					...native,
+					storage: { ...native.storage!, rematerializedConstantIps: [constant] },
+				}),
+			).toThrow(/invalid or stale storage plan/);
+		}
+	});
+
 	it("retains producers around effects, repeated uses, and profiling", () => {
 		for (const body of [
 			"const product = a * b; globalThis.observe(); return product - subtract;",
@@ -495,6 +593,16 @@ describe("SSA native lowering", () => {
 		expect(profiled.native.functions[1]!.storage!.expressionIps).toEqual([]);
 		const restored = deserializeCompilerArtifact(serializeCompilerArtifact(profiled));
 		expect(restored.native.functions[1]!.storage!.expressionIps).toEqual([]);
+		const constants =
+			"const mask = 17; globalThis.observe(mask); return (a & mask) + mask;";
+		expect(
+			scalarImage(constants).native.functions[1]!.storage!.rematerializedConstantIps
+				.length,
+		).toBeGreaterThan(0);
+		expect(
+			scalarImage(constants, true).native.functions[1]!.storage!
+				.rematerializedConstantIps,
+		).toEqual([]);
 	});
 
 	it("rejects an expression choice that crosses an observable call", () => {

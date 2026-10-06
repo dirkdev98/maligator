@@ -58,7 +58,7 @@ import type {
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal artifacts are hard cut-overs: stale cache entries rebuild.
-export const COMPILER_ARTIFACT_VERSION = 102;
+export const COMPILER_ARTIFACT_VERSION = 103;
 
 function validateClosureCaptureOwners(
 	owners: ReadonlyArray<number>,
@@ -668,12 +668,14 @@ function writeNativeStorage(w: Writer, storage: NativeStoragePlan | undefined): 
 		storage.entryStableRootRegisters,
 		storage.expressionIps,
 		storage.definitionInitializedRegisters,
+		storage.rematerializedConstantIps,
 	])
 		w.i32Array([...values]);
 	w.u8(storage.numericLeaf === undefined ? 0 : 1);
 	if (storage.numericLeaf !== undefined) {
 		w.i32Array([...storage.numericLeaf.expressionIps]);
 		w.i32Array([...storage.numericLeaf.definitionInitializedRegisters]);
+		w.i32Array([...storage.numericLeaf.rematerializedConstantIps]);
 	}
 }
 
@@ -685,6 +687,7 @@ function readNativeStorage(r: Reader): NativeStoragePlan {
 		entryStableRootRegisters: r.i32Array(),
 		expressionIps: r.i32Array(),
 		definitionInitializedRegisters: r.i32Array(),
+		rematerializedConstantIps: r.i32Array(),
 	};
 	const numericLeaf = r.u8();
 	if (numericLeaf > 1) throw new RangeError("Invalid native numeric leaf selection");
@@ -696,6 +699,7 @@ function readNativeStorage(r: Reader): NativeStoragePlan {
 				: {
 						expressionIps: r.i32Array(),
 						definitionInitializedRegisters: r.i32Array(),
+						rematerializedConstantIps: r.i32Array(),
 					},
 	};
 }

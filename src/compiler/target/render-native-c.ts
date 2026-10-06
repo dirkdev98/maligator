@@ -1143,8 +1143,12 @@ function emitCompiledVariant(
 		(needsRootFrame ? "mal_root_frame_head = __gc_frame.prev; " : "");
 
 	const profileDecisions: Array<BackendProfileDecision> = [];
+	const expressionIps = new Set([
+		...storage.expressionIps,
+		...storage.rematerializedConstantIps,
+	]);
 	const expressionRegisters = new Map<number, string>(
-		storage.expressionIps.map((ip) => {
+		[...expressionIps].map((ip) => {
 			const op = fn.instructions[ip]!;
 			if (!("dst" in op)) throw new Error("Native expression lacks a destination");
 			return [op.dst, renderScalarExpression(op, reps)];
@@ -1192,7 +1196,7 @@ function emitCompiledVariant(
 		nativeContract.literalSwitches,
 		stringConstants,
 		rootPublication,
-		new Set(storage.expressionIps),
+		expressionIps,
 	);
 	if (body === null) {
 		return null;
@@ -1430,7 +1434,9 @@ function renderScalarExpression(
 	switch (op.opcode) {
 		case "CREATE_NUMBER":
 		case "CREATE_F64":
-			return cF64Literal(op.value);
+			return reps[op.dst] === "int32"
+				? `(i32) (${cF64Literal(op.value)})`
+				: cF64Literal(op.value);
 		case "CREATE_BOOLEAN":
 			return String(op.value);
 		case "MOVE":
@@ -1463,9 +1469,12 @@ function renderNumericLeafWorker(
 	const reps = entry.registerRepresentations;
 	const scalar = (r: number) => ["number", "int32", "boolean"].includes(reps[r]!);
 	const number = (r: number) => `(f64) r${r}`;
-	const expressionIps = new Set(leaf.expressionIps);
+	const expressionIps = new Set([
+		...leaf.expressionIps,
+		...leaf.rematerializedConstantIps,
+	]);
 	const expressions = new Map(
-		leaf.expressionIps.map((ip) => {
+		[...expressionIps].map((ip) => {
 			const op = fn.instructions[ip]!;
 			if (!("dst" in op)) throw new Error("Native expression lacks a destination");
 			return [op.dst, renderScalarExpression(op, reps)];

@@ -93,6 +93,36 @@ console.log(
 	Object.is(globalThis.scalarLeaf(true, 1 + 2 ** -27, 1 - 2 ** -27), 0),
 );
 
+const constantEffects = [];
+globalThis.observeConstants = (mask, offset) => {
+	gc();
+	constantEffects.push(`${mask}:${offset}`);
+};
+globalThis.scalarConstants = (input, condition) => {
+	const mask = 17;
+	const offset = 1.25;
+	globalThis.observeConstants(mask, offset);
+	if (condition) return ((+input & mask) + mask) * offset;
+	return (+input + mask) / offset;
+};
+console.log(
+	"scalar-constants",
+	globalThis.scalarConstants(31, true),
+	globalThis.scalarConstants(31, false),
+	constantEffects.join(","),
+);
+globalThis.scalarConstantZero = (condition) => {
+	const value = -0;
+	gc();
+	if (condition) return value * 2;
+	return value / 2;
+};
+console.log(
+	"constant-zero",
+	Object.is(globalThis.scalarConstantZero(true), -0),
+	Object.is(globalThis.scalarConstantZero(false), -0),
+);
+
 globalThis.shiftStorage = (values, selected) => {
 	values.pop();
 	for (let index = values.length; index > selected; index--) {

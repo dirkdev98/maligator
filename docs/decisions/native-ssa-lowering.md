@@ -41,6 +41,16 @@ preserves branch targets before eliding producers and confines expression macros
 to the helper. The runtime observation guard still selects the ordinary typed body
 when required.
 
+Immutable numeric and boolean SSA constants use a separate rematerialization plan,
+so repeated uses and intervening effects do not force a C local. Selection requires
+one explicit definition outside argument and synthetic storage, with every use
+dominated by that definition in the ordinary control-flow graph. Handler and
+resumable functions conservatively retain their constants. Scalar region inputs
+can be read early; overlays may only write explicit outputs or boxed materialization
+storage. Constants preserve their declared C representation, including int32 casts
+and negative zero. Profiling retains their producer sites. The artifact stores and
+validates this plan independently for ordinary bodies and numeric leaf helpers.
+
 Native loop polls cut cycles in the explicit target block graph, including
 exceptional paths through handlers. Phi-copy blocks can jump backward in physical order
 without closing a cycle; those transfers require no native loop poll. The native

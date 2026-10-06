@@ -23,6 +23,7 @@ import type { BytecodeInstruction } from "./runtime-image.ts";
 export interface NativeScalarStoragePlan {
 	readonly expressionIps: ReadonlyArray<number>;
 	readonly definitionInitializedRegisters: ReadonlyArray<number>;
+	readonly rematerializedConstantIps: ReadonlyArray<number>;
 }
 
 export interface NativeStoragePlan extends NativeScalarStoragePlan {
@@ -151,6 +152,90 @@ function definitionInitializedRegisters(
 			uses[local]!.every((ip) => ip > definition && blocks[ip] === blocks[definition])
 			? [local]
 			: [];
+	});
+}
+
+function rematerializedConstantIps(
+	native: NativeFunctionPlan,
+	jumpTargets: ReadonlySet<number>,
+	preserveProfileSites: boolean,
+): ReadonlyArray<number> {
+	const fn = native.body;
+	if (
+		native.storageValues === undefined ||
+		fn.isAsync ||
+		fn.isGenerator ||
+		fn.handlers.length > 0 ||
+		(preserveProfileSites && fn.profileSiteIds !== undefined)
+	)
+		return [];
+	const writes = new Uint32Array(fn.registerCount);
+	const uses: Array<Array<number>> = Array.from({ length: fn.registerCount }, () => []);
+	const blocks = new Uint32Array(fn.instructions.length);
+	const ends: Array<number> = [];
+	let block = 0;
+	let startsBlock = false;
+	for (const [ip, op] of fn.instructions.entries()) {
+		if (ip > 0 && (startsBlock || jumpTargets.has(ip))) {
+			ends.push(ip - 1);
+			block++;
+		}
+		blocks[ip] = block;
+		for (const local of vmInstructionWriteRegisters(op)) writes[local]!++;
+		for (const local of vmInstructionReadRegisters(op)) uses[local]!.push(ip);
+		startsBlock = ["JUMP", "JUMP_IF", "RETURN", "THROW", "TERMINAL_YIELD"].includes(
+			op.opcode,
+		);
+	}
+	if (fn.instructions.length === 0) return [];
+	ends.push(fn.instructions.length - 1);
+	const successors = ends.map((ip, index) => {
+		const op = fn.instructions[ip]!;
+		if (op.opcode === "JUMP") return [blocks[op.targetIp]!];
+		const next = index + 1 < ends.length ? [index + 1] : [];
+		if (op.opcode === "JUMP_IF") return [...next, blocks[op.targetIp]!];
+		return ["RETURN", "THROW", "TERMINAL_YIELD"].includes(op.opcode) ? [] : next;
+	});
+	const reachable = (skippedBlock = -1): Uint8Array => {
+		const visited = new Uint8Array(ends.length);
+		const pending = [0];
+		while (pending.length > 0) {
+			const current = pending.pop()!;
+			if (current === skippedBlock || visited[current] !== 0) continue;
+			visited[current] = 1;
+			pending.push(...successors[current]!);
+		}
+		return visited;
+	};
+	const live = reachable();
+	const withoutDefinition = new Map<number, Uint8Array>();
+	return fn.instructions.flatMap((op, ip) => {
+		if (
+			!["CREATE_NUMBER", "CREATE_F64", "CREATE_BOOLEAN"].includes(op.opcode) ||
+			!("dst" in op) ||
+			op.dst < fn.parameterCount + fn.argumentSnapshotCount ||
+			!(native.storageValues![op.dst]! >= 0) ||
+			writes[op.dst] !== 1 ||
+			(op.opcode === "CREATE_BOOLEAN"
+				? native.registerRepresentations[op.dst] !== "boolean"
+				: !["number", "int32"].includes(native.registerRepresentations[op.dst]!))
+		)
+			return [];
+		const definitionBlock = blocks[ip]!;
+		if (live[definitionBlock] === 0) return [];
+		// Scalar region inputs are immutable; overlays only write explicit outputs or boxed storage.
+		const dominates = uses[op.dst]!.every((useIp) => {
+			const useBlock = blocks[useIp]!;
+			if (live[useBlock] === 0) return false;
+			if (useBlock === definitionBlock) return useIp > ip;
+			let bypass = withoutDefinition.get(definitionBlock);
+			if (bypass === undefined) {
+				bypass = reachable(definitionBlock);
+				withoutDefinition.set(definitionBlock, bypass);
+			}
+			return bypass[useBlock] === 0;
+		});
+		return dominates ? [ip] : [];
 	});
 }
 
@@ -310,6 +395,24 @@ function lowerStorage(
 	for (const op of fn.instructions) {
 		if (op.opcode === "JUMP" || op.opcode === "JUMP_IF") jumpTargets.add(op.targetIp);
 	}
+	const scalarStorage = (variant: NativeFunctionPlan): NativeScalarStoragePlan => {
+		const constants = rematerializedConstantIps(
+			variant,
+			jumpTargets,
+			preserveProfileSites,
+		);
+		const constantIps = new Set(constants);
+		return {
+			expressionIps: expressionIps(variant, jumpTargets, preserveProfileSites).filter(
+				(ip) => !constantIps.has(ip),
+			),
+			definitionInitializedRegisters: definitionInitializedRegisters(
+				variant,
+				jumpTargets,
+			),
+			rematerializedConstantIps: constants,
+		};
+	};
 	let numericLeaf: NativeScalarStoragePlan | undefined;
 	if (entry !== undefined && selectNumericLeaf(native, entry)) {
 		const leaf = {
@@ -320,10 +423,7 @@ function lowerStorage(
 			fieldCalls: [],
 			literalSwitches: [],
 		};
-		numericLeaf = {
-			expressionIps: expressionIps(leaf, jumpTargets, preserveProfileSites),
-			definitionInitializedRegisters: definitionInitializedRegisters(leaf, jumpTargets),
-		};
+		numericLeaf = scalarStorage(leaf);
 	}
 	const roots = nativeFrameRootRegisters(fn, native).filter((local) =>
 		["boxed", "string"].includes(native.registerRepresentations[local]!),
@@ -383,8 +483,7 @@ function lowerStorage(
 		privateRegisters: roots.filter((local) => privateLocals.has(local)),
 		privateCallResultIps: [...calls],
 		entryStableRootRegisters: [...nativeEntryStableRootRegisters(fn, privateLocals)],
-		expressionIps: expressionIps(native, jumpTargets, preserveProfileSites),
-		definitionInitializedRegisters: definitionInitializedRegisters(native, jumpTargets),
+		...scalarStorage(native),
 		numericLeaf,
 	};
 }
@@ -430,7 +529,15 @@ export function validateNativeStorage(native: NativeFunctionPlan): void {
 					selected.expressionIps.includes(ip) &&
 					(index === 0 || ip > stored.expressionIps[index - 1]!),
 			) &&
-			(native.body.profileSiteIds === undefined || stored.expressionIps.length === 0)
+			stored.rematerializedConstantIps.every(
+				(ip, index) =>
+					selected.rematerializedConstantIps.includes(ip) &&
+					!stored.expressionIps.includes(ip) &&
+					(index === 0 || ip > stored.rematerializedConstantIps[index - 1]!),
+			) &&
+			(native.body.profileSiteIds === undefined ||
+				(stored.expressionIps.length === 0 &&
+					stored.rematerializedConstantIps.length === 0))
 		);
 	};
 	const same = (
