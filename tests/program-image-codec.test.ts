@@ -697,6 +697,7 @@ function firstNativeSafepointReader(bytes: Uint8Array) {
 	expect(reader.u8()).toBe(0); // No immutable value captures.
 	expect(reader.i32Array()).toEqual([]);
 	for (let index = 0; index < 6; index++) reader.i32Array();
+	expect(reader.u8()).toBe(0);
 	expect(reader.u32()).toBe(2); // Ordinary-entry safepoints.
 	return reader;
 }

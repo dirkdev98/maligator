@@ -70,6 +70,29 @@ console.log(
 	scalarCallEffects.join(","),
 );
 
+function scalarLeaf(condition, left, right) {
+	if (condition) return left * right - 1;
+	return left / right + 1;
+}
+function scalarSort(left, right) {
+	return (left - right) * 0.5;
+}
+function sortScalarInput(values) {
+	return values.sort(scalarSort);
+}
+console.log("scalar-sort", sortScalarInput([12, 3, 8, -5]).join(","));
+globalThis.scalarLeaf = scalarLeaf;
+const leafResults = [];
+for (let index = 0; index < 3; index++) {
+	leafResults.push(globalThis.scalarLeaf(index > 0, index + 3, 4));
+	gc();
+}
+console.log("scalar-leaf", leafResults.join(","));
+console.log(
+	"leaf-rounding",
+	Object.is(globalThis.scalarLeaf(true, 1 + 2 ** -27, 1 - 2 ** -27), 0),
+);
+
 globalThis.shiftStorage = (values, selected) => {
 	values.pop();
 	for (let index = values.length; index > selected; index--) {

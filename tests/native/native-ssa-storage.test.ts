@@ -63,7 +63,28 @@ describe("independent native SSA storage", () => {
 		if (scalar === undefined)
 			throw new Error("Scalar rounding fixture lacks a native multiplication expression");
 		expect(emitCompiledFunction(scalar, scalar.functionIndex, "", false)).not.toBeNull();
+		const leaf = image.native.functions.find(
+			(fn) =>
+				String.fromCharCode(
+					...(image.runtime.stringConstants[fn.body.nameStringIndex] ?? []),
+				) === "scalarLeaf",
+		);
+		expect(
+			leaf?.directEntries.some(
+				(entry) => (entry.storage?.numericLeaf?.expressionIps.length ?? 0) > 0,
+			),
+		).toBe(true);
 		const suspended = image.native.functions.filter((fn) => fn.mode === "resumable");
+		const numericSort = image.native.functions
+			.flatMap((fn) => fn.instructions)
+			.find((plan) => plan?.kind === "call" && plan.numericSortCallback !== undefined);
+		if (numericSort?.kind !== "call" || numericSort.numericSortCallback === undefined)
+			throw new Error("Scalar sort fixture lacks its numeric leaf callback selection");
+		expect(
+			image.native.functions[numericSort.numericSortCallback.functionIndex]!
+				.directEntries[numericSort.numericSortCallback.entryId]!.storage?.numericLeaf
+				?.expressionIps.length,
+		).toBeGreaterThan(0);
 		expect(suspended.length).toBeGreaterThanOrEqual(2);
 		for (const fn of suspended) {
 			expect(emitCompiledFunction(fn, fn.functionIndex, "", false)).not.toBeNull();

@@ -3,6 +3,11 @@ import {
 	nativePrivateCallResultIps,
 	nativePrivateRootRegisters,
 } from "./lower-native-root-publication.ts";
+import {
+	NATIVE_ARITH,
+	NATIVE_BITWISE,
+	NATIVE_COMPARE,
+} from "./native-scalar-operators.ts";
 import { nativeFrameRootRegisters } from "./program-image.ts";
 import type {
 	NativeDirectEntryPlan,
@@ -15,13 +20,85 @@ import {
 } from "./runtime-image.ts";
 import type { BytecodeInstruction } from "./runtime-image.ts";
 
-export interface NativeStoragePlan {
+export interface NativeScalarStoragePlan {
+	readonly expressionIps: ReadonlyArray<number>;
+	readonly definitionInitializedRegisters: ReadonlyArray<number>;
+}
+
+export interface NativeStoragePlan extends NativeScalarStoragePlan {
 	readonly rootRegisters: ReadonlyArray<number>;
 	readonly privateRegisters: ReadonlyArray<number>;
 	readonly privateCallResultIps: ReadonlyArray<number>;
 	readonly entryStableRootRegisters: ReadonlyArray<number>;
-	readonly expressionIps: ReadonlyArray<number>;
-	readonly definitionInitializedRegisters: ReadonlyArray<number>;
+	readonly numericLeaf: NativeScalarStoragePlan | undefined;
+}
+
+function selectNumericLeaf(
+	native: NativeFunctionPlan,
+	entry: NativeDirectEntryPlan,
+): boolean {
+	const fn = native.body;
+	if (
+		fn.instructions.length > 48 ||
+		fn.handlers.length > 0 ||
+		fn.capturedCount > 0 ||
+		fn.isGenerator ||
+		fn.isAsync ||
+		fn.isClassConstructor ||
+		fn.mappedArguments ||
+		entry.argumentRepresentations !== undefined ||
+		entry.resultRepresentation !== "number" ||
+		fn.instructions.at(-1)?.opcode !== "RETURN"
+	)
+		return false;
+	const reps = entry.registerRepresentations;
+	const numeric = (local: number) => reps[local] === "number" || reps[local] === "int32";
+	return fn.instructions.every((op, ip) => {
+		switch (op.opcode) {
+			case "JUMP":
+			case "JUMP_IF":
+				return (
+					op.targetIp > ip &&
+					op.targetIp < fn.instructions.length &&
+					(op.opcode === "JUMP" || reps[op.cond] === "boolean")
+				);
+			case "CREATE_NUMBER":
+			case "CREATE_F64":
+				return numeric(op.dst);
+			case "CREATE_BOOLEAN":
+				return reps[op.dst] === "boolean";
+			case "MOVE":
+				return (
+					(numeric(op.dst) || reps[op.dst] === "boolean") && reps[op.dst] === reps[op.src]
+				);
+			case "LOAD_PROPERTY_STATIC":
+				return (
+					reps[op.dst] === "number" &&
+					entry.fieldParameters?.loads.some((load) => load.instructionIp === ip) === true
+				);
+			case "BINARY":
+				return (
+					numeric(op.left) &&
+					numeric(op.right) &&
+					((reps[op.dst] === "boolean" && NATIVE_COMPARE[op.operator] !== undefined) ||
+						(reps[op.dst] === "number" &&
+							(NATIVE_ARITH[op.operator] !== undefined ||
+								NATIVE_BITWISE[op.operator] !== undefined ||
+								op.operator === ">>>" ||
+								op.operator === "%")))
+				);
+			case "UNARY":
+				return (
+					numeric(op.src) &&
+					reps[op.dst] === "number" &&
+					["+", "-", "tonumeric"].includes(op.operator)
+				);
+			case "RETURN":
+				return numeric(op.value);
+			default:
+				return false;
+		}
+	});
 }
 
 function hasExplicitScalarUses(native: NativeFunctionPlan): boolean {
@@ -226,11 +303,27 @@ export function nativeVariantContract(
 function lowerStorage(
 	native: NativeFunctionPlan,
 	preserveProfileSites = true,
+	entry?: NativeDirectEntryPlan,
 ): NativeStoragePlan {
 	const fn = native.body;
 	const jumpTargets = new Set(fn.handlers.map((handler) => handler.handlerIp));
 	for (const op of fn.instructions) {
 		if (op.opcode === "JUMP" || op.opcode === "JUMP_IF") jumpTargets.add(op.targetIp);
+	}
+	let numericLeaf: NativeScalarStoragePlan | undefined;
+	if (entry !== undefined && selectNumericLeaf(native, entry)) {
+		const leaf = {
+			...native,
+			instructions: Array<undefined>(fn.instructions.length).fill(undefined),
+			specializations: [],
+			regionActions: [],
+			fieldCalls: [],
+			literalSwitches: [],
+		};
+		numericLeaf = {
+			expressionIps: expressionIps(leaf, jumpTargets, preserveProfileSites),
+			definitionInitializedRegisters: definitionInitializedRegisters(leaf, jumpTargets),
+		};
 	}
 	const roots = nativeFrameRootRegisters(fn, native).filter((local) =>
 		["boxed", "string"].includes(native.registerRepresentations[local]!),
@@ -292,6 +385,7 @@ function lowerStorage(
 		entryStableRootRegisters: [...nativeEntryStableRootRegisters(fn, privateLocals)],
 		expressionIps: expressionIps(native, jumpTargets, preserveProfileSites),
 		definitionInitializedRegisters: definitionInitializedRegisters(native, jumpTargets),
+		numericLeaf,
 	};
 }
 
@@ -303,7 +397,7 @@ export function lowerNativeFunctionStorage(
 		storage: lowerStorage(native),
 		directEntries: native.directEntries.map((entry) => ({
 			...entry,
-			storage: lowerStorage(nativeVariantContract(native, entry)),
+			storage: lowerStorage(nativeVariantContract(native, entry), true, entry),
 		})),
 	};
 }
@@ -319,37 +413,54 @@ export function lowerNativeStorage(image: ProgramImage): ProgramImage {
 }
 
 export function validateNativeStorage(native: NativeFunctionPlan): void {
+	const sameScalar = (
+		stored: NativeScalarStoragePlan | undefined,
+		selected: NativeScalarStoragePlan | undefined,
+	): boolean => {
+		if (stored === undefined || selected === undefined) return stored === selected;
+		return (
+			stored.definitionInitializedRegisters.length ===
+				selected.definitionInitializedRegisters.length &&
+			stored.definitionInitializedRegisters.every(
+				(value, index) => value === selected.definitionInitializedRegisters[index],
+			) &&
+			// Profiling can retain producers; persisted choices may use any safe subset.
+			stored.expressionIps.every(
+				(ip, index) =>
+					selected.expressionIps.includes(ip) &&
+					(index === 0 || ip > stored.expressionIps[index - 1]!),
+			) &&
+			(native.body.profileSiteIds === undefined || stored.expressionIps.length === 0)
+		);
+	};
 	const same = (
 		stored: NativeStoragePlan | undefined,
 		selected: NativeStoragePlan | undefined,
 	): boolean =>
 		stored !== undefined &&
 		selected !== undefined &&
+		sameScalar(stored, selected) &&
+		sameScalar(stored.numericLeaf, selected.numericLeaf) &&
 		(
 			[
 				"rootRegisters",
 				"privateRegisters",
 				"privateCallResultIps",
 				"entryStableRootRegisters",
-				"definitionInitializedRegisters",
 			] as const
 		).every(
 			(key) =>
 				stored[key].length === selected[key].length &&
 				stored[key].every((value, index) => value === selected[key][index]),
-		) &&
-		// Profiling can retain producers; persisted choices may use any safe subset.
-		stored.expressionIps.every(
-			(ip, index) =>
-				selected.expressionIps.includes(ip) &&
-				(index === 0 || ip > stored.expressionIps[index - 1]!),
-		) &&
-		(native.body.profileSiteIds === undefined || stored.expressionIps.length === 0);
+		);
 	if (
 		!same(native.storage, lowerStorage(native, false)) ||
 		native.directEntries.some(
 			(entry) =>
-				!same(entry.storage, lowerStorage(nativeVariantContract(native, entry), false)),
+				!same(
+					entry.storage,
+					lowerStorage(nativeVariantContract(native, entry), false, entry),
+				),
 		)
 	)
 		throw new Error("Native function has an invalid or stale storage plan");

@@ -42,6 +42,11 @@ import type {
 } from "./lower-native-fast-paths.ts";
 import { nativeRootedOutputRegisters } from "./lower-native-root-publication.ts";
 import { nativeVariantContract } from "./lower-native-storage.ts";
+import {
+	NATIVE_ARITH,
+	NATIVE_BITWISE,
+	NATIVE_COMPARE,
+} from "./native-scalar-operators.ts";
 import { profileOperationForInstruction } from "./profile-metadata.ts";
 import {
 	nativeFrameRootRegisters,
@@ -559,27 +564,6 @@ export function cF64Literal(value: number): string {
 const THROWING_UNARY_OPERATORS = new Set(["+", "tonumeric", "tostring"]);
 
 /**
- * Binary operators emitted as native C on two `number`-rep operands. Arithmetic
- * produces a `number`; comparison produces a boxed boolean.
- */
-const NATIVE_ARITH: Record<string, string> = {
-	"+": "+",
-	"-": "-",
-	"*": "*",
-	"/": "/",
-};
-const NATIVE_COMPARE: Record<string, string> = {
-	"<": "<",
-	"<=": "<=",
-	">": ">",
-	">=": ">=",
-	"===": "==",
-	"==": "==",
-	"!==": "!=",
-	"!=": "!=",
-};
-
-/**
  * The relational comparisons. When BOTH operands are boxed (no static proof
  * either is a number) the backend still speculates a numeric compare for these —
  * `a < b` is overwhelmingly numeric in hot code and relational comparison coerces
@@ -589,22 +573,6 @@ const NATIVE_COMPARE: Record<string, string> = {
  * speculates every comparison, equality included: there the numeric prior is real.
  */
 const RELATIONAL_COMPARE = new Set<string>(["<", "<=", ">", ">="]);
-
-/**
- * Bitwise/shift operators emitted as native C on two `number`-rep operands.
- * JS defines these over ToInt32 (mal_ops_number_to_i32), with the shift count
- * masked to 5 bits. The signed-32-bit result is held as a `number`-rep double
- * and boxed back to an int32 by mal_ops_number_value, behavior-identical to the
- * interpreter's mal_ops_bit_and / shift_left and friends. (`>>>` yields a uint32
- * and `%` a float remainder; both also produce `number`-rep, emitted bespoke.)
- */
-const NATIVE_BITWISE: Record<string, string> = {
-	"&": "&",
-	"|": "|",
-	"^": "^",
-	"<<": "<<",
-	">>": ">>",
-};
 
 // Exponentiation has a separate proven-input path because its target representation stays boxed.
 function producesNumberFromNumbers(operator: string): boolean {
@@ -1483,97 +1451,99 @@ function renderScalarExpression(
 	}
 }
 
-function numericLeafWorker(
+function renderNumericLeafWorker(
 	fn: BytecodeFunction,
 	entry: NativeDirectEntryPlan,
 ): Array<string> | null {
-	if (
-		fn.instructions.length > 48 ||
-		fn.handlers.length > 0 ||
-		fn.capturedCount > 0 ||
-		fn.isGenerator ||
-		fn.isAsync ||
-		fn.isClassConstructor ||
-		fn.mappedArguments ||
-		entry.argumentRepresentations !== undefined ||
-		entry.resultRepresentation !== "number"
-	)
-		return null;
+	const storage = entry.storage;
+	if (storage === undefined)
+		throw new Error("Numeric leaf rendering requires a storage plan");
+	const leaf = storage.numericLeaf;
+	if (leaf === undefined) return null;
 	const reps = entry.registerRepresentations;
-	const numeric = (r: number) => reps[r] === "number" || reps[r] === "int32";
-	const scalar = (r: number) => numeric(r) || reps[r] === "boolean";
+	const scalar = (r: number) => ["number", "int32", "boolean"].includes(reps[r]!);
 	const number = (r: number) => `(f64) r${r}`;
+	const expressionIps = new Set(leaf.expressionIps);
+	const expressions = new Map(
+		leaf.expressionIps.map((ip) => {
+			const op = fn.instructions[ip]!;
+			if (!("dst" in op)) throw new Error("Native expression lacks a destination");
+			return [op.dst, renderScalarExpression(op, reps)];
+		}),
+	);
+	const jumpTargets = new Set(
+		fn.instructions.flatMap((op) =>
+			op.opcode === "JUMP" || op.opcode === "JUMP_IF" ? [op.targetIp] : [],
+		),
+	);
 	const body: Array<string> = [];
 	for (const [ip, op] of fn.instructions.entries()) {
+		if (jumpTargets.has(ip)) body.push(`L${ip}:;`);
+		if (expressionIps.has(ip)) continue;
 		let line: string;
 		switch (op.opcode) {
 			case "JUMP":
 			case "JUMP_IF":
-				if (op.targetIp <= ip || op.targetIp >= fn.instructions.length) return null;
-				if (op.opcode === "JUMP_IF" && reps[op.cond] !== "boolean") return null;
 				line = `${op.opcode === "JUMP_IF" ? `if (r${op.cond}) ` : ""}goto L${op.targetIp};`;
 				break;
 			case "CREATE_NUMBER":
 			case "CREATE_F64":
-				if (!numeric(op.dst)) return null;
 				line = `r${op.dst} = ${cF64Literal(op.value)};`;
 				break;
 			case "CREATE_BOOLEAN":
-				if (reps[op.dst] !== "boolean") return null;
 				line = `r${op.dst} = ${op.value};`;
 				break;
 			case "MOVE":
-				if (!scalar(op.dst) || reps[op.dst] !== reps[op.src]) return null;
 				line = `r${op.dst} = r${op.src};`;
 				break;
 			case "LOAD_PROPERTY_STATIC": {
 				const field = entry.fieldParameters?.loads.find(
 					(load) => load.instructionIp === ip,
 				);
-				if (field === undefined || reps[op.dst] !== "number") return null;
+				if (field === undefined)
+					throw new Error("Numeric leaf lacks a selected field load");
 				line = `r${op.dst} = fp${field.field};`;
 				break;
 			}
 			case "BINARY": {
-				if (!numeric(op.left) || !numeric(op.right)) return null;
-				const compare = NATIVE_COMPARE[op.operator];
 				const expression =
-					compare !== undefined && reps[op.dst] === "boolean"
-						? `${number(op.left)} ${compare} ${number(op.right)}`
-						: reps[op.dst] === "number"
-							? nativeNumberExpr(op.operator, number(op.left), number(op.right))
-							: null;
-				if (expression === null) return null;
+					reps[op.dst] === "boolean"
+						? `${number(op.left)} ${NATIVE_COMPARE[op.operator]} ${number(op.right)}`
+						: nativeNumberExpr(op.operator, number(op.left), number(op.right));
+				if (expression === null)
+					throw new Error("Invalid selected numeric leaf operator");
 				line = `r${op.dst} = ${expression};`;
 				break;
 			}
 			case "UNARY":
-				if (
-					!numeric(op.src) ||
-					reps[op.dst] !== "number" ||
-					!["+", "-", "tonumeric"].includes(op.operator)
-				)
-					return null;
 				line = `r${op.dst} = ${op.operator === "-" ? "-" : ""}${number(op.src)};`;
 				break;
 			case "RETURN":
-				if (!numeric(op.value)) return null;
 				line = `return ${number(op.value)};`;
 				break;
 			default:
-				return null;
+				throw new Error("Invalid selected numeric leaf instruction");
 		}
-		body.push(`L${ip}:; ${line}`);
+		body.push(line);
 	}
-	if (fn.instructions.at(-1)?.opcode !== "RETURN") return null;
 	const declarations: Array<string> = [];
+	const definitionInitialized = new Set(leaf.definitionInitializedRegisters);
 	for (const [r, rep] of reps.entries()) {
 		if (!scalar(r)) continue;
-		declarations.push(
-			`${cTypeOf(rep)} r${r} = ${r < fn.parameterCount ? `p${r}` : "0"};`,
-		);
+		const expression = expressions.get(r);
+		if (expression !== undefined) {
+			declarations.push(`#define r${r} (${expression})`);
+		} else {
+			const initial =
+				r < fn.parameterCount ? ` = p${r}` : definitionInitialized.has(r) ? "" : " = 0";
+			declarations.push(`${cTypeOf(rep)} r${r}${initial};`);
+		}
 	}
-	return [...declarations, ...body];
+	return [
+		...declarations,
+		...body,
+		...[...expressions.keys()].map((r) => `#undef r${r}`),
+	];
 }
 
 /** Emit the canonical boxed entry and every independently lowerable typed sibling. */
@@ -1629,7 +1599,7 @@ export function emitCompiledFunction(
 			stringConstants,
 		);
 		if (emitted === null) return [];
-		const worker = numericLeafWorker(fn, entry);
+		const worker = renderNumericLeafWorker(fn, entry);
 		if (worker === null) return [{ entry, emitted, leaf: undefined }];
 		const parameters = entry.parameterRepresentations
 			.map((rep, i) => `${cTypeOf(rep)} p${i}`)

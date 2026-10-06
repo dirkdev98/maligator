@@ -424,6 +424,63 @@ describe("SSA native lowering", () => {
 		);
 	});
 
+	it("plans numeric leaf expressions independently of boxed-body overlays", () => {
+		const image = compileSemanticProgramToProgramImage(
+			analyzeSourceAndRunSemanticAnalysis(
+				`function calculate(condition, left, right) {
+					if (condition) return left * right - 1;
+					return left / right + 1;
+				}
+				globalThis.calculate = calculate;
+				for (let index = 0; index < 3; index++) {
+					globalThis.result = calculate(index > 0, index + 3, 4);
+				}`,
+				"/native-leaf-expression.js",
+			),
+			{ facts: compilerProgramFactsFromConfig(resolveBuildConfig({})) },
+		);
+		const native = image.native.functions.find((fn) =>
+			fn.directEntries.some((entry) => entry.storage?.numericLeaf !== undefined),
+		)!;
+		expect(native).toBeDefined();
+		expect(
+			native.specializations.some((region) => region.kind === "numeric-fusion"),
+		).toBe(true);
+		const entry = native.directEntries.find(
+			(entry) => entry.storage?.numericLeaf !== undefined,
+		)!;
+		const leaf = entry.storage!.numericLeaf!;
+		expect(leaf.expressionIps.length).toBeGreaterThan(0);
+		const targets = new Set(
+			native.body.instructions.flatMap((op) =>
+				op.opcode === "JUMP" || op.opcode === "JUMP_IF" ? [op.targetIp] : [],
+			),
+		);
+		expect(leaf.expressionIps.some((ip) => targets.has(ip))).toBe(true);
+		const restored = deserializeCompilerArtifact(serializeCompilerArtifact(image));
+		expect(restored.native.functions[native.functionIndex]!.directEntries).toEqual(
+			native.directEntries,
+		);
+		expect(() => emitProgramImage(restored, { compiled: true })).not.toThrow();
+		const invalid = {
+			...image,
+			native: {
+				...image.native,
+				functions: image.native.functions.map((fn) =>
+					fn !== native
+						? fn
+						: {
+								...fn,
+								storage: { ...fn.storage!, numericLeaf: leaf },
+							},
+				),
+			},
+		};
+		expect(() => serializeCompilerArtifact(invalid)).toThrow(
+			/invalid or stale storage plan/,
+		);
+	});
+
 	it("retains producers around effects, repeated uses, and profiling", () => {
 		for (const body of [
 			"const product = a * b; globalThis.observe(); return product - subtract;",

@@ -34,6 +34,12 @@ one definition and only later reads in the same straight-line block initialize a
 that definition. Roots, argument prefixes, synthetic temporaries, and opaque region
 storage retain initialization. This choice is persisted and checked independently
 of expression selection, including profiled artifacts.
+Numeric leaf helpers have their own selected scalar plan. Their eligibility is
+chosen upstream from the typed ABI, and their expressions and initialization
+choices are planned independently of ordinary boxed-body overlays. Rendering
+preserves branch targets before eliding producers and confines expression macros
+to the helper. The runtime observation guard still selects the ordinary typed body
+when required.
 
 Native loop polls cut cycles in the explicit target block graph, including
 exceptional paths through handlers. Phi-copy blocks can jump backward in physical order
