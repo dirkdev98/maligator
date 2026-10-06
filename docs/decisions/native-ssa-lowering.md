@@ -118,6 +118,16 @@ recomputes those obligations. Ordinary control entries and polling edges cut adm
 Functions with numeric fusion retain generic updates because a preceding RHS can
 reside in a fusion temporary instead of its semantic local.
 
+Bounded boxed property read regions are also selected per entry before rendering.
+Their persisted plans record receiver, load/cache references, the pure window's
+claims and borrowed locals, and the remaining-instructions continuation. Scalar
+expressions cannot borrow that window. Unlike numeric intermediates, read-region
+results are stored at every original load, so private root publication remains
+eligible. The first miss permanently ends that admission before user code or GC.
+Artifacts validate the selected window against each entry's body and representations.
+Numeric-fusion overlays cut read admission because their hidden temporaries and
+slow paths have no read-region cooperation contract.
+
 Resumable functions currently persist their complete boxed native local set. Their
 frame records a native local count and suspended source position independently of
 bytecode. Those fields share space with interpreter caller metadata because a

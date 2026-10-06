@@ -25,6 +25,7 @@ function lower(
 		jumpTargets?: ReadonlySet<number>;
 		conflicts?: (ip: number) => boolean;
 		handlers?: Array<BytecodeExceptionHandler>;
+		fusionIps?: ReadonlySet<number>;
 	} = {},
 ) {
 	const representations: Array<VmRegisterRepresentation> =
@@ -59,6 +60,8 @@ function lower(
 		options.jumpTargets ?? new Set(),
 		options.conflicts ?? (() => false),
 		{ kind: "select" },
+		[],
+		(ip) => (options.fusionIps?.has(ip) ? { id: ip, role: "start" } : undefined),
 	);
 }
 
@@ -250,6 +253,29 @@ describe("bounded native property read regions", () => {
 				representations: [...representations.slice(0, 4), "boolean", "number", "number"],
 			}).propertyReadRegions,
 		).toHaveLength(0);
+	});
+
+	it("does not carry captured storage through a numeric-fusion overlay", () => {
+		const instructions: Array<BytecodeInstruction> = [
+			load(1),
+			{ opcode: "BINARY", dst: 4, left: 5, right: 6, operator: "+" },
+			load(2),
+			load(3),
+		];
+		const representations: Array<VmRegisterRepresentation> = [
+			"boxed",
+			"boxed",
+			"boxed",
+			"boxed",
+			"number",
+			"number",
+			"number",
+		];
+		expect(lower(instructions, { representations }).propertyReadRegions).toHaveLength(1);
+		expect(
+			lower(instructions, { representations, fusionIps: new Set([1]) })
+				.propertyReadRegions,
+		).toEqual([]);
 	});
 
 	it("ends storage admission when a receiver register changes or a different receiver is read", () => {

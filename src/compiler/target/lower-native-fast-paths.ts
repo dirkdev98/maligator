@@ -101,8 +101,10 @@ export interface NativePropertyReadRegionPlan {
 	readonly endIp: number;
 	readonly loads: ReadonlyArray<{
 		readonly ip: number;
-		readonly instruction: StaticPropertyLoad;
+		readonly icIndex: number;
 	}>;
+	readonly claimedIps: ReadonlyArray<number>;
+	readonly borrowedRegisters: ReadonlyArray<number>;
 	readonly continuation: "remaining-instructions";
 }
 
@@ -699,7 +701,25 @@ function lowerPropertyReadRegion(
 		id: firstIp,
 		object: first.object,
 		endIp: loads.at(-1)!.ip,
-		loads: Object.freeze(loads.map((load) => Object.freeze(load))),
+		loads: Object.freeze(
+			loads.map(({ ip, instruction }) =>
+				Object.freeze({ ip, icIndex: instruction.icIndex }),
+			),
+		),
+		claimedIps: Array.from(
+			{ length: loads.at(-1)!.ip - firstIp + 1 },
+			(_, i) => firstIp + i,
+		),
+		borrowedRegisters: [
+			...new Set(
+				fn.instructions
+					.slice(firstIp, loads.at(-1)!.ip + 1)
+					.flatMap((op) => [
+						...vmInstructionReadRegisters(op),
+						...vmInstructionWriteRegisters(op),
+					]),
+			),
+		].sort((a, b) => a - b),
 		continuation: "remaining-instructions",
 	});
 }
@@ -889,12 +909,13 @@ export function lowerNativeFastPaths(
 	representations: ReadonlyArray<VmRegisterRepresentation>,
 	jumpTargets: ReadonlySet<number>,
 	conflicts: (ip: number) => boolean,
-	projections:
+	selection:
 		| { readonly kind: "select" }
 		| {
 				readonly kind: "render";
 				readonly plans: ReadonlyArray<NativePropertyProjectionPlan>;
 				readonly updates: ReadonlyArray<NativePropertyNumericUpdatePlan>;
+				readonly readRegions: ReadonlyArray<NativePropertyReadRegionPlan>;
 		  },
 	indexedLoops: ReadonlyArray<NativeIndexedLoopElement> = [],
 	terminalFusion: (
@@ -905,12 +926,14 @@ export function lowerNativeFastPaths(
 	materializeUpdateOutputs = true,
 	selectUpdates = true,
 ): NativeFastPathLowering {
-	const projectionClaims = new Set(
-		projections.kind === "render"
-			? [...projections.plans, ...projections.updates].flatMap((plan) => plan.claimedIps)
+	const suppliedClaims = new Set(
+		selection.kind === "render"
+			? [...selection.plans, ...selection.updates, ...selection.readRegions].flatMap(
+					(plan) => plan.claimedIps,
+				)
 			: [],
 	);
-	const otherConflicts = (ip: number) => conflicts(ip) || projectionClaims.has(ip);
+	const otherConflicts = (ip: number) => conflicts(ip) || suppliedClaims.has(ip);
 	const handlerTargets =
 		fn.handlers.length === 0
 			? []
@@ -944,7 +967,7 @@ export function lowerNativeFastPaths(
 			throw new Error("Invalid native property update references");
 		return { plan, role, load, store };
 	};
-	if (projections.kind === "render") propertyNumericUpdates.push(...projections.updates);
+	if (selection.kind === "render") propertyNumericUpdates.push(...selection.updates);
 	else
 		for (let ip = 0; selectUpdates && ip < fn.instructions.length; ip++) {
 			const plan = lowerPropertyNumericUpdate(
@@ -976,11 +999,7 @@ export function lowerNativeFastPaths(
 
 	const propertyProjections: Array<NativePropertyProjectionPlan> = [];
 	const propertyProjectionActions = new Map<number, NativePropertyProjectionAction>();
-	for (
-		let ip = 0;
-		projections.kind === "select" && ip + 1 < fn.instructions.length;
-		ip++
-	) {
+	for (let ip = 0; selection.kind === "select" && ip + 1 < fn.instructions.length; ip++) {
 		if (propertyProjectionActions.has(ip)) continue;
 		const plan = lowerPropertyProjection(
 			fn,
@@ -1001,7 +1020,7 @@ export function lowerNativeFastPaths(
 		for (const claimedIp of plan.claimedIps)
 			propertyProjectionActions.set(claimedIp, { role: "skip", plan });
 	}
-	if (projections.kind === "render") propertyProjections.push(...projections.plans);
+	if (selection.kind === "render") propertyProjections.push(...selection.plans);
 	propertyProjectionActions.clear();
 	for (const plan of propertyProjections) {
 		for (const [index, load] of plan.loads.entries()) {
@@ -1019,30 +1038,34 @@ export function lowerNativeFastPaths(
 	}
 	const propertyReadRegions: Array<NativePropertyReadRegionPlan> = [];
 	const propertyReadRegionActions = new Map<number, NativePropertyReadRegionAction>();
-	for (let ip = 0; ip < fn.instructions.length; ip++) {
-		const plan = lowerPropertyReadRegion(
-			fn,
-			ip,
-			representations,
-			jumpTargets,
-			(candidate) =>
-				conflicts(candidate) ||
-				pairedArrayLoopActions.has(candidate) ||
-				propertyNumericUpdateActions.has(candidate) ||
-				propertyProjectionActions.has(candidate),
-		);
-		if (plan === undefined) continue;
-		propertyReadRegions.push(plan);
-		for (const [index, load] of plan.loads.entries()) {
-			propertyReadRegionActions.set(load.ip, { plan, index });
+	if (selection.kind === "render") propertyReadRegions.push(...selection.readRegions);
+	else
+		for (let ip = 0; ip < fn.instructions.length; ip++) {
+			const plan = lowerPropertyReadRegion(
+				fn,
+				ip,
+				representations,
+				jumpTargets,
+				(candidate) =>
+					conflicts(candidate) ||
+					terminalFusion(candidate) !== undefined ||
+					pairedArrayLoopActions.has(candidate) ||
+					propertyNumericUpdateActions.has(candidate) ||
+					propertyProjectionActions.has(candidate),
+			);
+			if (plan === undefined) continue;
+			propertyReadRegions.push(plan);
+			ip = plan.endIp;
 		}
-		ip = plan.endIp;
-	}
+	for (const plan of propertyReadRegions)
+		for (const [index, load] of plan.loads.entries())
+			propertyReadRegionActions.set(load.ip, { plan, index });
+
 	const constructorInitialization = lowerConstructorInitialization(
 		fn,
 		jumpTargets,
 		(candidate) =>
-			conflicts(candidate) ||
+			otherConflicts(candidate) ||
 			pairedArrayLoopActions.has(candidate) ||
 			propertyNumericUpdateActions.has(candidate) ||
 			propertyProjectionActions.has(candidate),
@@ -1076,7 +1099,10 @@ export function lowerNativeFastPaths(
 export function selectNativePropertyFastPaths(
 	native: NativeFunctionPlan,
 	entry?: NativeDirectEntryPlan,
-): Pick<NativeFastPathLowering, "propertyProjections" | "propertyNumericUpdates"> {
+): Pick<
+	NativeFastPathLowering,
+	"propertyProjections" | "propertyNumericUpdates" | "propertyReadRegions"
+> {
 	const fn = native.body;
 	const handlerEntries = new Set(fn.handlers.map((handler) => handler.handlerIp));
 	const jumpTargets = new Set(handlerEntries);

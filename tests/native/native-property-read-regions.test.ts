@@ -69,6 +69,13 @@ describe("native property read region continuations", () => {
 				false,
 			)?.source;
 			expect(output).toBeDefined();
+			const native = image.native.functions[index]!;
+			const plan = native.storage!.propertyReadRegions[0]!;
+			expect(plan).toBeDefined();
+			expect(plan.loads).toHaveLength(
+				kernels.find((kernel) => kernel.name === name)!.loads,
+			);
+			expect(plan.continuation).toBe("remaining-instructions");
 			emittedKernels.set(name, output!);
 		}
 	}, 600_000);

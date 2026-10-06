@@ -41,6 +41,7 @@ import type {
 	NativePropertyProjectionOperand,
 	NativePropertyProjectionPlan,
 	NativePropertyReadRegionAction,
+	NativePropertyReadRegionPlan,
 } from "./lower-native-fast-paths.ts";
 import { nativeRootedOutputRegisters } from "./lower-native-root-publication.ts";
 import { nativeVariantContract } from "./lower-native-storage.ts";
@@ -1203,6 +1204,7 @@ function emitCompiledVariant(
 		new Set(storage.elidedTdzIps),
 		storage.propertyProjections,
 		storage.propertyNumericUpdates,
+		storage.propertyReadRegions,
 	);
 	if (body === null) {
 		return null;
@@ -1780,6 +1782,7 @@ function emitResumableFunction(
 		undefined,
 		native.storage!.propertyProjections,
 		native.storage!.propertyNumericUpdates,
+		native.storage!.propertyReadRegions,
 	);
 	if (body === null) {
 		return null;
@@ -2523,6 +2526,7 @@ function emitBody(
 	elidedTdzIps: ReadonlySet<number> = new Set(),
 	propertyProjections: ReadonlyArray<NativePropertyProjectionPlan> = [],
 	propertyNumericUpdates: ReadonlyArray<NativePropertyNumericUpdatePlan> = [],
+	propertyReadRegions: ReadonlyArray<NativePropertyReadRegionPlan> = [],
 ): EmittedBody | null {
 	if (!vmRegionActionsAreCurrent(specializations, regionActions)) {
 		throw new Error("Native function has stale region actions");
@@ -3340,7 +3344,12 @@ function emitBody(
 		reps,
 		jumpTargets,
 		staticPropertyProjectionConflicts,
-		{ kind: "render", plans: propertyProjections, updates: propertyNumericUpdates },
+		{
+			kind: "render",
+			plans: propertyProjections,
+			updates: propertyNumericUpdates,
+			readRegions: propertyReadRegions,
+		},
 		indexedLoopElements,
 		(ip) => numericFusionActionByIp.get(ip),
 		transparentJumpTargets,
