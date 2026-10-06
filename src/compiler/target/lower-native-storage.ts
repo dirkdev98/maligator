@@ -35,6 +35,7 @@ export interface NativeStoragePlan extends NativeScalarStoragePlan {
 	readonly privateRegisters: ReadonlyArray<number>;
 	readonly privateCallResultIps: ReadonlyArray<number>;
 	readonly entryStableRootRegisters: ReadonlyArray<number>;
+	readonly elidedTdzIps: ReadonlyArray<number>;
 	readonly numericLeaf: NativeNumericLeafPlan | undefined;
 }
 
@@ -123,6 +124,26 @@ function hasExplicitScalarUses(native: NativeFunctionPlan): boolean {
 		) &&
 		(native.fieldCalls?.length ?? 0) === 0 &&
 		(native.literalSwitches?.length ?? 0) === 0
+	);
+}
+
+function elidedTdzIps(native: NativeFunctionPlan): ReadonlyArray<number> {
+	if (!hasExplicitScalarUses(native)) return [];
+	// Renderer-selected property projections can borrow scalar aliases beyond their explicit loads.
+	if (
+		native.body.instructions.some(
+			(op) =>
+				op.opcode === "LOAD_PROPERTY" ||
+				op.opcode === "LOAD_PROPERTY_STATIC" ||
+				op.opcode === "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT",
+		)
+	)
+		return [];
+	return native.body.instructions.flatMap((op, ip) =>
+		op.opcode === "THROW_IF_TDZ" &&
+		["number", "int32", "boolean"].includes(native.registerRepresentations[op.src]!)
+			? [ip]
+			: [],
 	);
 }
 
@@ -517,6 +538,7 @@ function lowerStorage(
 		privateRegisters: roots.filter((local) => privateLocals.has(local)),
 		privateCallResultIps: [...calls],
 		entryStableRootRegisters: [...nativeEntryStableRootRegisters(fn, privateLocals)],
+		elidedTdzIps: elidedTdzIps(native),
 		...scalarStorage(native),
 		numericLeaf,
 	};
@@ -594,6 +616,7 @@ export function validateNativeStorage(native: NativeFunctionPlan): void {
 				"privateRegisters",
 				"privateCallResultIps",
 				"entryStableRootRegisters",
+				"elidedTdzIps",
 			] as const
 		).every(
 			(key) =>

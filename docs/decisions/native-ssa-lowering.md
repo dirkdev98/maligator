@@ -85,6 +85,15 @@ Each copy must define its scratch before reading it; scratch cannot be a semanti
 copy operand or escape the contiguous copy. The verifier symbolically checks every
 simultaneous assignment. VM temporary ownership remains confined to one block.
 
+Ordinary native storage plans also record TDZ checks whose final number, int32, or
+boolean source cannot hold the boxed hole sentinel. Selection is per canonical or
+typed entry after move representation propagation. The semantic body and GC maps
+retain those checks; rendering omits only their C statements while preserving
+labels, source/profile events, and conservative deferred-root bookkeeping. Artifacts
+persist and validate the selected IPs against each entry's final representations.
+Resumable, handler, selected-region, field-call, switch, and property-load functions
+retain their checks until plan composition covers their opaque uses.
+
 Resumable functions currently persist their complete boxed native local set. Their
 frame records a native local count and suspended source position independently of
 bytecode. Those fields share space with interpreter caller metadata because a

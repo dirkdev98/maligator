@@ -1198,6 +1198,7 @@ function emitCompiledVariant(
 		rootPublication,
 		new Set(storage.expressionIps),
 		new Set(storage.rematerializedConstantIps),
+		new Set(storage.elidedTdzIps),
 	);
 	if (body === null) {
 		return null;
@@ -2509,6 +2510,7 @@ function emitBody(
 	rootPublication?: NativeRootPublication,
 	expressionIps: ReadonlySet<number> = new Set(),
 	rematerializedConstantIps: ReadonlySet<number> = new Set(),
+	elidedTdzIps: ReadonlySet<number> = new Set(),
 ): EmittedBody | null {
 	if (!vmRegionActionsAreCurrent(specializations, regionActions)) {
 		throw new Error("Native function has stale region actions");
@@ -3903,18 +3905,20 @@ function emitBody(
 			constructorInitializationActionByIp.get(ip);
 		instructionContext.privateFieldReserveCount =
 			privateFieldReserve?.id === ip ? privateFieldReserve.count : undefined;
-		const emitted = emitInstruction(
-			fn.instructions[ip]!,
-			ip,
-			suffix,
-			reps,
-			fn.strict,
-			handlerTargets[ip],
-			gcUnlink,
-			thisSlot,
-			coro,
-			instructionContext,
-		);
+		const emitted = elidedTdzIps.has(ip)
+			? []
+			: emitInstruction(
+					fn.instructions[ip]!,
+					ip,
+					suffix,
+					reps,
+					fn.strict,
+					handlerTargets[ip],
+					gcUnlink,
+					thisSlot,
+					coro,
+					instructionContext,
+				);
 		if (emitted === null) {
 			return null;
 		}
@@ -5188,8 +5192,7 @@ function emitInstruction(
 		case "CREATE_NULL":
 			return [`r${instruction.dst} = MAL_VALUE_NULL;`];
 		case "CREATE_EMPTY":
-			// The TDZ hole sentinel. Target lowering always gives the destination a
-			// boxed representation, so a number/boolean register never holds it.
+			// The hole sentinel requires boxed storage; scalar locals cannot hold it.
 			return [`r${instruction.dst} = MAL_VALUE_EMPTY;`];
 		case "THROW_IF_TDZ": {
 			if (staticPropertyNumericAction?.role === "skip") {
@@ -5201,9 +5204,6 @@ function emitInstruction(
 					`}`,
 				];
 			}
-			// Read-before-initialization check on a let/const/class binding. The
-			// helper throws (setting the completion) only on the empty sentinel; a
-			// throw propagates out, exactly like the interpreter op.
 			return [
 				`if (mal_value_is_empty(${boxed(instruction.src)})) {`,
 				...(context.incomingRootPublication ?? []).map((line) => `  ${line}`),

@@ -51,6 +51,28 @@ describe("independent native SSA storage", () => {
 		)!;
 		expect(numericRotation).toBeDefined();
 		expect(numericRotation.registerRepresentations[cycleLocals[0]!]).toBe("number");
+		expect(numericRotation.storage!.elidedTdzIps.length).toBeGreaterThan(0);
+		expect(rotation.storage!.elidedTdzIps).toEqual([]);
+		const flags = image.native.functions.find(
+			(fn) =>
+				String.fromCharCode(
+					...(image.runtime.stringConstants[fn.body.nameStringIndex] ?? []),
+				) === "rotateFlags",
+		)!;
+		const booleanFlags = flags.directEntries.find((entry) =>
+			entry.parameterRepresentations.slice(0, 2).every((rep) => rep === "boolean"),
+		)!;
+		expect(booleanFlags.storage!.elidedTdzIps.length).toBeGreaterThan(0);
+		const early = image.native.functions.find(
+			(fn) =>
+				String.fromCharCode(
+					...(image.runtime.stringConstants[fn.body.nameStringIndex] ?? []),
+				) === "readEarly",
+		)!;
+		expect(early.body.instructions.some((op) => op.opcode === "CREATE_EMPTY")).toBe(true);
+		expect(early.storage!.elidedTdzIps).toEqual([]);
+		for (const entry of early.directEntries)
+			expect(entry.storage!.elidedTdzIps).toEqual([]);
 		const regions = image.native.functions.flatMap((fn) => fn.specializations);
 		expect(regions.some((region) => region.kind === "string-split-cursor")).toBe(true);
 		const regexp = regions.find((region) => region.kind === "regexp-iterator-projection");

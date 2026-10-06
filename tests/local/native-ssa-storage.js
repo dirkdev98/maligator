@@ -54,6 +54,33 @@ for (const count of [0, 1, 4]) {
 	);
 }
 
+function rotateFlags(left, right, count) {
+	for (let index = 0; index < count; index++) {
+		const saved = left;
+		left = right;
+		right = saved;
+	}
+	return left;
+}
+globalThis.rotateFlags = rotateFlags;
+for (const count of [0, 1, 4])
+	console.log("boolean-rotation", count, rotateFlags(true, false, count));
+
+function readEarly(early) {
+	if (early) return value;
+	let value = 17;
+	return value;
+}
+globalThis.readEarly = readEarly;
+for (const early of [false, true]) {
+	try {
+		console.log("tdz", early, readEarly(early));
+	} catch (error) {
+		gc();
+		console.log("tdz", early, error instanceof ReferenceError);
+	}
+}
+
 globalThis.retryStorage = (read, held) => {
 	for (;;) {
 		try {

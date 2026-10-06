@@ -58,7 +58,7 @@ import type {
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal artifacts are hard cut-overs: stale cache entries rebuild.
-export const COMPILER_ARTIFACT_VERSION = 106;
+export const COMPILER_ARTIFACT_VERSION = 107;
 
 function validateClosureCaptureOwners(
 	owners: ReadonlyArray<number>,
@@ -669,6 +669,7 @@ function writeNativeStorage(w: Writer, storage: NativeStoragePlan | undefined): 
 		storage.expressionIps,
 		storage.definitionInitializedRegisters,
 		storage.rematerializedConstantIps,
+		storage.elidedTdzIps,
 	])
 		w.i32Array([...values]);
 	w.u8(storage.numericLeaf === undefined ? 0 : 1);
@@ -689,6 +690,7 @@ function readNativeStorage(r: Reader): NativeStoragePlan {
 		expressionIps: r.i32Array(),
 		definitionInitializedRegisters: r.i32Array(),
 		rematerializedConstantIps: r.i32Array(),
+		elidedTdzIps: r.i32Array(),
 	};
 	const numericLeaf = r.u8();
 	if (numericLeaf > 1) throw new RangeError("Invalid native numeric leaf selection");
