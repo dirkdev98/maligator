@@ -21,6 +21,39 @@ for (const count of [0, 1, 4])
 		),
 	);
 
+function rotateScalars(left, right, third, fourth, count) {
+	for (let index = 0; index < count; index++) {
+		const first = left;
+		left = right;
+		right = first;
+		const second = third;
+		third = fourth;
+		fourth = second;
+	}
+	for (let index = 0; index < count - 1; index++) {
+		const first = left;
+		left = right;
+		right = first;
+		const second = third;
+		third = fourth;
+		fourth = second;
+	}
+	return [left, right, third, fourth];
+}
+globalThis.rotateScalars = rotateScalars;
+for (const count of [0, 1, 4]) {
+	const values = rotateScalars(-0, 0 / 0, 1 / 0, -1 / 0, count);
+	console.log(
+		"scalar-rotation",
+		count,
+		values
+			.map((value) =>
+				Object.is(value, -0) ? "-0" : Number.isNaN(value) ? "NaN" : String(value),
+			)
+			.join(":"),
+	);
+}
+
 globalThis.retryStorage = (read, held) => {
 	for (;;) {
 		try {

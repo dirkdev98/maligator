@@ -92,9 +92,8 @@ The independent target boundary and current storage contract are recorded in
 [native SSA lowering](docs/decisions/native-ssa-lowering.md).
 
 - [ ] Extend native control-flow layout beyond threading unconditional edge copies
-      into general block scheduling and independent merge assignments;
-      retain exceptional-edge value transport without inheriting shared terminal
-      copy schedules or argument staging.
+      into general block scheduling while preserving region and exceptional-edge
+      value transport contracts.
 - [ ] Persist only live suspension values in explicit per-suspension slots; keep
       ordinary scalar computation outside the current full boxed native buffer.
       Verify recursive async-generator resumes, throwing await resolution, eval

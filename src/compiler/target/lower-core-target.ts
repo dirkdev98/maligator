@@ -83,6 +83,12 @@ export type {
 
 export interface LowerCoreToCoreTargetOptions {
 	readonly assignStorage: CoreStorageAssigner;
+	readonly createParallelCopyLowerer?: (
+		nextRegister: { value: number },
+		representations: Map<number, CoreRepresentation>,
+		canonicalRepresentations: ReadonlyMap<number, CoreTargetRegisterRepresentation>,
+		variants: ReadonlyArray<ReadonlyMap<number, CoreTargetRegisterRepresentation>>,
+	) => CoreParallelCopyLowerer;
 	readonly layoutBlocks?: (
 		blocks: CoreTargetFunction["blocks"],
 		coreBlockCount: number,
@@ -104,9 +110,19 @@ export type CoreStorageAssigner = (
 	variantRepresentations: ReadonlyArray<ReadonlyArray<CorePlanRepresentation>>,
 ) => CoreStorageAssignment;
 
-interface LoweredParallelCopy {
+export interface LoweredParallelCopy {
 	readonly moves: Array<CoreTargetMove>;
 	readonly temporaries: Array<number>;
+}
+
+export interface CoreParallelCopyLowerer {
+	readonly lower: (
+		assignments: CoreTargetParallelCopy["assignments"],
+	) => LoweredParallelCopy;
+	readonly temporaryRepresentations: ReadonlyMap<
+		number,
+		ReadonlyArray<CoreTargetRegisterRepresentation>
+	>;
 }
 
 const REGISTERLESS_CORE_OPERATIONS: ReadonlySet<string> = new Set([
@@ -1475,6 +1491,7 @@ function lowerFunctionToTarget(
 	assignStorage: CoreStorageAssigner,
 	loopBackedgeInstructions: typeof executionLoopBackedgeInstructions,
 	layoutBlocks: LowerCoreToCoreTargetOptions["layoutBlocks"],
+	createParallelCopyLowerer: LowerCoreToCoreTargetOptions["createParallelCopyLowerer"],
 ): CoreTargetFunction {
 	const privatePackedRestElements = new Map(
 		privatePackedRestArrayElements.map((plan) => [plan.instruction, plan]),
@@ -1688,6 +1705,98 @@ function lowerFunctionToTarget(
 		return register;
 	};
 
+	const selectedInBoundsPackedRestElements = new Set<CoreInstructionId>();
+	for (const row of recipeRows) {
+		if (coreSpecializationRecipeKindAt(recipeTable, row) !== "indexed-length-loop")
+			continue;
+		const indexed = coreSpecializationRecipePayloadAt(
+			recipeTable,
+			row,
+			"indexed-length-loop",
+			"indexedLengthLoop",
+		);
+		for (const element of indexed.elements) {
+			if (
+				element.kind === "load" &&
+				element.arrayIndexIsUint32 &&
+				privatePackedRestElements.has(element.instruction)
+			)
+				selectedInBoundsPackedRestElements.add(element.instruction);
+		}
+	}
+	const canonicalRegisterRepresentations = new Map(
+		Array.from(
+			{ length: allocatedRegisterCount },
+			(_, register) =>
+				[
+					register,
+					coreFunction.isGenerator || coreFunction.isAsync
+						? ("boxed" as const)
+						: physicalRegisterClass(registerRepresentations.get(register)!),
+				] as const,
+		),
+	);
+	const entryRegisterRepresentations = directEntryPlans.map((entry) => {
+		const overriddenCalls = new Set(entry.callOverrides?.map((call) => call.instruction));
+		const representations = new Map(canonicalRegisterRepresentations);
+		if (entry.valueRepresentations !== undefined) {
+			const assigned = new Map<number, CoreTargetRegisterRepresentation>();
+			for (const [value, register] of allocation.registers) {
+				let representation = planCoreTargetRepresentation(
+					entry.valueRepresentations[value]!,
+				);
+				if (coreFunction.kernel.valueDefinitionKind(value) === 1) {
+					const instruction = coreInstructionId(
+						coreFunction.kernel.valueDefinitionOwner(value),
+					);
+					const opcode = coreFunction.instructionOpcodeName(instruction);
+					const directRestOperation =
+						(opcode === "loadProperty" &&
+							selectedInBoundsPackedRestElements.has(instruction)) ||
+						(opcode === "loadPropertyStatic" &&
+							privatePackedRestLengths.has(instruction));
+					if (
+						!directRestOperation &&
+						!overriddenCalls.has(instruction) &&
+						![
+							"binary",
+							"unary",
+							"move",
+							"createNumber",
+							"createBoolean",
+							"createString",
+							...(entry.fieldParameters === undefined
+								? []
+								: ["loadPropertyStatic", "call"]),
+							...(entry.argumentRepresentations === undefined
+								? []
+								: ["loadArgumentCount", "loadArgument", "loadStaticArgument"]),
+						].includes(opcode)
+					)
+						representation = representations.get(register)!;
+				}
+				const previous = assigned.get(register);
+				assigned.set(
+					register,
+					previous === undefined || previous === representation
+						? representation
+						: "boxed",
+				);
+			}
+			for (const [register, representation] of assigned) {
+				if (representations.get(register) === "boxed")
+					representations.set(register, representation);
+			}
+		}
+		return representations;
+	});
+	const copyLowerer = createParallelCopyLowerer?.(
+		nextRegister,
+		registerRepresentations,
+		canonicalRegisterRepresentations,
+		entryRegisterRepresentations,
+	);
+
 	const parallelCopies: Array<CoreTargetParallelCopy> = [];
 	const temporaryRegisters: Array<number> = [];
 	const kernel = coreFunction.kernel;
@@ -1720,7 +1829,9 @@ function lowerFunctionToTarget(
 				source: registerForValue(kernel.operandAt(argumentStart + index)),
 			};
 		}
-		const copy = parallelMoves(assignments, nextRegister, registerRepresentations);
+		const copy =
+			copyLowerer?.lower(assignments) ??
+			parallelMoves(assignments, nextRegister, registerRepresentations);
 		if (copy.moves.length === 0) return targetBlock;
 		parallelCopies.push({ kind: "edge", assignments, ...copy });
 		temporaryRegisters.push(...copy.temporaries);
@@ -1787,7 +1898,9 @@ function lowerFunctionToTarget(
 					source: registerForValue(kernel.handlerArgumentAt(argumentStart + index)),
 				};
 			}
-			const copy = parallelMoves(assignments, nextRegister, registerRepresentations);
+			const copy =
+				copyLowerer?.lower(assignments) ??
+				parallelMoves(assignments, nextRegister, registerRepresentations);
 			if (copy.moves.length > 0) {
 				parallelCopies.push({ kind: "handler-input", assignments, ...copy });
 				temporaryRegisters.push(...copy.temporaries);
@@ -2214,7 +2327,7 @@ function lowerFunctionToTarget(
 		constructorSlotReserve: coreConstructorSlotReserve(coreFunction),
 		hasPrototype: coreFunction.metadata.hasPrototype,
 		parallelCopies,
-		temporaryRegisters,
+		temporaryRegisters: [...new Set(temporaryRegisters)],
 	};
 	const analysisFunction: CoreTargetFunction = {
 		...fnWithoutGc,
@@ -2247,76 +2360,13 @@ function lowerFunctionToTarget(
 				instructionOrder.get(left.instruction)! -
 				instructionOrder.get(right.instruction)!,
 		);
-	const selectedInBoundsPackedRestElements = new Set<CoreInstructionId>();
-	for (const row of recipeRows) {
-		if (coreSpecializationRecipeKindAt(recipeTable, row) !== "indexed-length-loop")
-			continue;
-		const indexed = coreSpecializationRecipePayloadAt(
-			recipeTable,
-			row,
-			"indexed-length-loop",
-			"indexedLengthLoop",
-		);
-		for (const element of indexed.elements) {
-			if (
-				element.kind === "load" &&
-				element.arrayIndexIsUint32 &&
-				privatePackedRestElements.has(element.instruction)
-			)
-				selectedInBoundsPackedRestElements.add(element.instruction);
-		}
-	}
-	const directEntries = directEntryPlans.map((entry) => {
-		const overriddenCalls = new Set(entry.callOverrides?.map((call) => call.instruction));
+	const directEntries = directEntryPlans.map((entry, entryIndex) => {
 		const representations = [...physicalRepresentations];
+		for (const [register, representation] of entryRegisterRepresentations[entryIndex]!)
+			representations[register] = representation;
+		for (const [temporary, profile] of copyLowerer?.temporaryRepresentations ?? [])
+			representations[temporary] = profile[entryIndex]!;
 		if (entry.valueRepresentations !== undefined) {
-			const assigned = new Map<number, CoreTargetRegisterRepresentation>();
-			for (const [value, register] of allocation.registers) {
-				let representation = planCoreTargetRepresentation(
-					entry.valueRepresentations[value]!,
-				);
-				if (coreFunction.kernel.valueDefinitionKind(value) === 1) {
-					const instruction = coreInstructionId(
-						coreFunction.kernel.valueDefinitionOwner(value),
-					);
-					const opcode = coreFunction.instructionOpcodeName(instruction);
-					const directRestOperation =
-						(opcode === "loadProperty" &&
-							selectedInBoundsPackedRestElements.has(instruction)) ||
-						(opcode === "loadPropertyStatic" &&
-							privatePackedRestLengths.has(instruction));
-					if (
-						!directRestOperation &&
-						!overriddenCalls.has(instruction) &&
-						![
-							"binary",
-							"unary",
-							"move",
-							"createNumber",
-							"createBoolean",
-							"createString",
-							...(entry.fieldParameters === undefined
-								? []
-								: ["loadPropertyStatic", "call"]),
-							...(entry.argumentRepresentations === undefined
-								? []
-								: ["loadArgumentCount", "loadArgument", "loadStaticArgument"]),
-						].includes(opcode)
-					)
-						representation = physicalRepresentations[register]!;
-				}
-				const previous = assigned.get(register);
-				assigned.set(
-					register,
-					previous === undefined || previous === representation
-						? representation
-						: "boxed",
-				);
-			}
-			for (const [register, representation] of assigned) {
-				if (representations[register] === "boxed")
-					representations[register] = representation;
-			}
 			// A reused boxed source cannot be unboxed by an ordinary edge copy.
 			const outgoing = new Map<number, Array<number>>();
 			for (const block of blocks)
@@ -2623,6 +2673,7 @@ export function lowerCoreCompilationToTargetProgram(
 			options.assignStorage,
 			options.loopBackedgeInstructions ?? executionLoopBackedgeInstructions,
 			options.layoutBlocks,
+			options.createParallelCopyLowerer,
 		),
 	}));
 	return Object.freeze({

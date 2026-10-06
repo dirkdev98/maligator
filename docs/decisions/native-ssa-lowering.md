@@ -77,6 +77,14 @@ Explicit per-block source attribution prevents moved copies from inheriting an
 unrelated source position. The target keeps its explicit jumps and exception ranges;
 ordinary C rendering omits jumps to the immediately following instruction.
 
+Native merge copies use their own reader-count schedule and cycle scratch pool.
+A scratch can serve successive cycles and different blocks only when its canonical
+class and every selected typed entry class match. Typed entries seed that scratch
+from the saved SSA value before propagating representation conflicts through moves.
+Each copy must define its scratch before reading it; scratch cannot be a semantic
+copy operand or escape the contiguous copy. The verifier symbolically checks every
+simultaneous assignment. VM temporary ownership remains confined to one block.
+
 Resumable functions currently persist their complete boxed native local set. Their
 frame records a native local count and suspended source position independently of
 bytecode. Those fields share space with interpreter caller metadata because a
@@ -100,8 +108,7 @@ frames, whose GC maps are untrusted and whose full register buffer is traced.
 VM register reuse can alias an input with a resume destination; the captured root
 keeps that input alive across PromiseResolve or queued-request reentry.
 
-This boundary does not yet implement general native block scheduling or independent
-merge assignment schedules, compact suspension
+This boundary does not yet implement general native block scheduling, compact suspension
 slots, additional typed aggregate transport, or shared cold regions. It provides
 independent value and storage identities for those changes. Some fast-path and
 region discovery still occurs during rendering; the emitter is not yet solely a

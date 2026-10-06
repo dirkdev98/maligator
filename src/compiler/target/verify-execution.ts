@@ -583,13 +583,37 @@ function simulateParallelCopy(
 		}
 	}
 	const held = new Map<number, number>();
+	const definedTemporaries = new Set<number>();
+	for (const temporary of copy.temporaries) {
+		if (
+			copy.assignments.some(
+				({ destination, source }) => destination === temporary || source === temporary,
+			)
+		) {
+			fail("parallel-copy temporary must not be a semantic operand", {
+				...context,
+				register: temporary,
+			});
+		}
+	}
 	const entryValue = (register: number): number => held.get(register) ?? register;
 	for (const move of copy.moves) {
 		const site = model.sites.get(move);
 		if (site === undefined) {
 			fail("declared parallel-copy move is not present in this function", context);
 		}
+		if (
+			copy.temporaries.includes(move.registers[1]) &&
+			!definedTemporaries.has(move.registers[1])
+		) {
+			fail("parallel-copy temporary is read before its definition in this copy", {
+				...context,
+				register: move.registers[1],
+			});
+		}
 		held.set(move.registers[0], entryValue(move.registers[1]));
+		if (copy.temporaries.includes(move.registers[0]))
+			definedTemporaries.add(move.registers[0]);
 	}
 	for (const { destination, source } of copy.assignments) {
 		if (entryValue(destination) !== source) {
@@ -694,7 +718,7 @@ function verifyExceptionEntries(model: FunctionModel): void {
 	}
 }
 
-function verifyTemporaryRegisters(model: FunctionModel): void {
+function verifyTemporaryRegisters(model: FunctionModel, native: boolean): void {
 	const { fn, functionIndex } = model;
 	const seen = new Set<number>();
 	for (const temporary of fn.temporaryRegisters) {
@@ -734,8 +758,12 @@ function verifyTemporaryRegisters(model: FunctionModel): void {
 		}
 	}
 	if (seen.size === 0) return;
-	// Lowering introduces temporaries only inside the block that consumes them, so a
-	// definition must precede every read without relying on cross-block dataflow.
+	const reusable = new Set(
+		native ? fn.parallelCopies.flatMap((copy) => copy.temporaries) : [],
+	);
+	const copyByMove = new Map<CompilerInstruction, ExecutionParallelCopy>(
+		fn.parallelCopies.flatMap((copy) => copy.moves.map((move) => [move, copy] as const)),
+	);
 	const owner = new Map<number, number>();
 	for (const [block, { instructions }] of fn.blocks.entries()) {
 		const defined = new Set<number>();
@@ -747,6 +775,17 @@ function verifyTemporaryRegisters(model: FunctionModel): void {
 				instruction: index,
 				opcode: instruction.type,
 			};
+			for (const register of instructionRegisters(instruction) ?? []) {
+				if (
+					reusable.has(register) &&
+					!copyByMove.get(instruction)?.temporaries.includes(register)
+				) {
+					fail("native copy scratch escapes its declared parallel copy", {
+						...context,
+						register,
+					});
+				}
+			}
 			for (const register of reads(instruction, shape)) {
 				if (!seen.has(register) || defined.has(register)) continue;
 				fail("temporary register is read before its definition", {
@@ -757,7 +796,7 @@ function verifyTemporaryRegisters(model: FunctionModel): void {
 			for (const register of writes(instruction, shape)) {
 				if (!seen.has(register)) continue;
 				const existing = owner.get(register);
-				if (existing !== undefined && existing !== block) {
+				if (existing !== undefined && existing !== block && !reusable.has(register)) {
 					fail("temporary register is defined in more than one block", {
 						...context,
 						register,
@@ -1062,7 +1101,7 @@ export function verifyExecutionProgram(
 		verifyBlockStructure(model);
 		verifyParallelCopies(model);
 		verifyExceptionEntries(model);
-		verifyTemporaryRegisters(model);
+		verifyTemporaryRegisters(model, "kind" in program && program.kind === "native");
 		const coreFunction = program.functionMap.executionToCore[index];
 		if (coreFunction === undefined) {
 			fail("target function has no Core function identity", { functionIndex: index });

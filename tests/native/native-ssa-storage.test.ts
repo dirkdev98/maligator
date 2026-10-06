@@ -35,6 +35,22 @@ describe("independent native SSA storage", () => {
 	}, 600_000);
 
 	it("preserves scalar arithmetic, loop transport, and suspended heap locals", () => {
+		const rotation = image.native.functions.find(
+			(fn) =>
+				String.fromCharCode(
+					...(image.runtime.stringConstants[fn.body.nameStringIndex] ?? []),
+				) === "rotateScalars",
+		)!;
+		expect(rotation).toBeDefined();
+		const cycleLocals = rotation.storageValues!.flatMap((value, local) =>
+			value < 0 ? [local] : [],
+		);
+		expect(cycleLocals).toHaveLength(1);
+		const numericRotation = rotation.directEntries.find((entry) =>
+			entry.parameterRepresentations.slice(0, 4).every((rep) => rep === "number"),
+		)!;
+		expect(numericRotation).toBeDefined();
+		expect(numericRotation.registerRepresentations[cycleLocals[0]!]).toBe("number");
 		const regions = image.native.functions.flatMap((fn) => fn.specializations);
 		expect(regions.some((region) => region.kind === "string-split-cursor")).toBe(true);
 		const regexp = regions.find((region) => region.kind === "regexp-iterator-projection");
