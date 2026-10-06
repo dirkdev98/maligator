@@ -56,6 +56,12 @@ the coroutine and transferred value while routing the suspension or settlement.
 Completion shades and releases the activation before settlement can collect after
 the activation has left the heap graph.
 
+The interpreter also clears resume destinations when suspending, after capturing
+and rooting the transferred value. This remains necessary for portable wire
+frames, whose GC maps are untrusted and whose full register buffer is traced.
+VM register reuse can alias an input with a resume destination; the captured root
+keeps that input alive across PromiseResolve or queued-request reentry.
+
 This boundary does not yet implement native block scheduling, compact suspension
 slots, additional typed aggregate transport, or shared cold regions. It provides
 independent value and storage identities for those changes. Some fast-path and

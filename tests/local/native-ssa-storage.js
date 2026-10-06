@@ -172,3 +172,34 @@ setTimeout(() => {
 	globalThis.consumeResumeValue = () => {};
 	console.log("resume-output", globalThis.suspendedResumeIterator.next().value);
 }, 0);
+
+async function consumedAwaits() {
+	for (let index = 0; index < 2; index++) {
+		const value = await globalThis.awaitGates[index];
+		globalThis.consumeAwaitValue(value);
+	}
+	return "released";
+}
+globalThis.consumeAwaitValue = (value) => {
+	globalThis.awaitReference = new WeakRef(value);
+};
+globalThis.awaitGates = [
+	new Promise((resolve) => (globalThis.sendFirstAwaitValue = resolve)),
+	new Promise((resolve) => (globalThis.sendSecondAwaitValue = resolve)),
+];
+globalThis.suspendedAwaitResult = consumedAwaits();
+globalThis.sendFirstAwaitValue({ value: 456 });
+globalThis.sendFirstAwaitValue = undefined;
+setTimeout(() => {
+	globalThis.awaitGates[0] = undefined;
+	gc();
+	if (
+		typeof globalThis.__mal_collect_garbage === "function" &&
+		globalThis.awaitReference.deref() !== undefined
+	)
+		throw new Error("Suspended await output retained its previous input");
+	globalThis.consumeAwaitValue = () => {};
+	globalThis.sendSecondAwaitValue();
+	globalThis.sendSecondAwaitValue = undefined;
+	globalThis.suspendedAwaitResult.then((value) => console.log("await-output", value));
+}, 0);

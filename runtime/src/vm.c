@@ -2820,19 +2820,24 @@ static void mal_vm_run_until_frame_count(
             }
 
             case MAL_OP_YIELD: {
+                MalGeneratorObject *generator = frame->generator;
+                // Wire frames lack trusted liveness; capture before clearing aliased resume outputs.
+                MalValue transfer_roots[] = {
+                    mal_value_from_object((MalObject *) generator),
+                    frame->registers[instruction->as.yield.yielded_src],
+                };
+                MalRootSpan transfer_root_span;
+                mal_gc_root(&transfer_root_span, transfer_roots, 2);
                 MAL_VM_INTERPRETER_SYNC();
                 MAL_PERF_COUNT(interpreter_boundary_dispatches);
-                // Suspend the generator frame, leaving the yielded value on the
-                // generator and recording where the resume value/mode land. The
-                // instruction pointer was already advanced past the yield, so a
-                // resume continues with the dispatch that follows it.
-                MalGeneratorObject *generator = frame->generator;
                 // SATB: yielded_value + frame.env are traced heap fields overwritten
                 // here; shade the previous contents (a re-suspend replaces the env
                 // from the last suspend). The register buffer is mutated in place
                 // (root state until this suspend), so its slots need no shade.
                 mal_gc_write_barrier(generator->yielded_value);
-                generator->yielded_value = frame->registers[instruction->as.yield.yielded_src];
+                generator->yielded_value = transfer_roots[1];
+                frame->registers[instruction->as.yield.value_dst] = mal_value_new_undefined();
+                frame->registers[instruction->as.yield.mode_dst] = mal_value_new_undefined();
                 generator->resume_value_register = instruction->as.yield.value_dst;
                 generator->resume_mode_register = instruction->as.yield.mode_dst;
                 generator->state = MAL_GENERATOR_SUSPENDED_YIELD;
@@ -2856,6 +2861,7 @@ static void mal_vm_run_until_frame_count(
                 if (generator->is_async_generator) {
                     mal_async_generator_yield(vm, generator);
                 }
+                mal_gc_unroot(&transfer_root_span);
 #if MAL_REALMS
                 // Yield settlement and any queued-request drain are part of the
                 // suspended generator execution; leave its realm only afterwards.
@@ -2895,14 +2901,18 @@ static void mal_vm_run_until_frame_count(
             }
 
             case MAL_OP_AWAIT: {
+                MalGeneratorObject *state = frame->generator;
+                // PromiseResolve can collect after an aliased operand has left the frame.
+                MalValue transfer_roots[] = {
+                    mal_value_from_object((MalObject *) state),
+                    frame->registers[instruction->as.await.awaited_src],
+                };
+                MalRootSpan transfer_root_span;
+                mal_gc_root(&transfer_root_span, transfer_roots, 2);
                 MAL_VM_INTERPRETER_SYNC();
                 MAL_PERF_COUNT(interpreter_boundary_dispatches);
-                // Suspend the async frame on the awaited value (mirrors YIELD),
-                // then schedule its resumption when the value settles. The
-                // instruction pointer already points past the await, so a resume
-                // continues with the compiler-emitted resume dispatch.
-                MalGeneratorObject *state = frame->generator;
-                MalValue awaited = frame->registers[instruction->as.await.awaited_src];
+                frame->registers[instruction->as.await.value_dst] = mal_value_new_undefined();
+                frame->registers[instruction->as.await.mode_dst] = mal_value_new_undefined();
                 state->resume_value_register = instruction->as.await.value_dst;
                 state->resume_mode_register = instruction->as.await.mode_dst;
                 state->state = MAL_GENERATOR_SUSPENDED_YIELD;
@@ -2917,7 +2927,8 @@ static void mal_vm_run_until_frame_count(
 
                 vm->frame_count--;
                 vm->completion = (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = mal_value_new_undefined()};
-                mal_async_function_await(vm, state, awaited);
+                mal_async_function_await(vm, state, transfer_roots[1]);
+                mal_gc_unroot(&transfer_root_span);
 #if MAL_REALMS
                 // PromiseResolve and the await reactions belong to the suspended
                 // async execution; restore the resumer only after they are installed.
