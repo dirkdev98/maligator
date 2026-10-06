@@ -26,6 +26,25 @@ globalThis.calculate = calculate;
 `;
 
 describe("SSA native lowering", () => {
+	it("preserves wide root mask storage through property-region fallbacks", () => {
+		const parameters = Array.from({ length: 70 }, (_, index) => `value${index}`);
+		const source = `function wide(${parameters.join(", ")}) {
+			const pair = value0.a + value0.b;
+			globalThis.collect();
+			return pair + ${parameters
+				.slice(1)
+				.map((name) => `${name}.a`)
+				.join(" + ")};
+		} globalThis.wide = wide;`;
+		const image = compileSemanticProgramToProgramImage(
+			analyzeSourceAndRunSemanticAnalysis(source, "/wide-fallback.js"),
+		);
+		const native = image.native.functions[1]!;
+		expect(native.storage?.rootRegisters.length).toBeGreaterThan(64);
+		const output = emitCompiledFunction(native, 1, "", false)?.source;
+		expect(output).toContain("MAL_ROOT_MASK_WIDE(");
+		expect(output).toContain("mal_vm_property_try_load_static_number_pair(");
+	});
 	it("preserves certified region exits through native edge copies", () => {
 		const source = `globalThis.sum = function sum(value, regexp) {
 			let sum = 0;

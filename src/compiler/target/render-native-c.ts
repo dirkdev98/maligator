@@ -4428,6 +4428,7 @@ function emitInstruction(
 			: `(${publication.map((store) => store.slice(0, -1)).join(", ")}, ${expression})`;
 	};
 	const genericContext = (): NativeInstructionContext => ({
+		inactiveRootMaskTails: context.inactiveRootMaskTails,
 		stringConstants: context.stringConstants,
 		staticDefineStringIndexByIp: context.staticDefineStringIndexByIp,
 		iterationEligibilityRegisters: context.iterationEligibilityRegisters,
