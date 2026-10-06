@@ -1047,10 +1047,13 @@ export function verifyExecutionFunctionRepresentationVariant(
 
 export function verifyExecutionProgram(
 	program: ExecutionProgram,
-	loopBackedgeInstructions = "kind" in program && program.kind === "native"
-		? nativeLoopBackedgeInstructions
-		: executionLoopBackedgeInstructions,
+	loopBackedgeInstructions?: typeof executionLoopBackedgeInstructions,
 ): void {
+	const pollingEdges =
+		loopBackedgeInstructions ??
+		("kind" in program && program.kind === "native"
+			? nativeLoopBackedgeInstructions
+			: executionLoopBackedgeInstructions);
 	verifyProgramCardinality(program);
 	const models = program.functions.map((fn, index) => buildFunctionModel(fn, index));
 	for (const [index, model] of models.entries()) {
@@ -1064,7 +1067,7 @@ export function verifyExecutionProgram(
 		if (coreFunction === undefined) {
 			fail("target function has no Core function identity", { functionIndex: index });
 		}
-		verifyGcRoots(model, program.core.function(coreFunction), loopBackedgeInstructions);
+		verifyGcRoots(model, program.core.function(coreFunction), pollingEdges);
 		verifyRegions(model);
 	}
 }
