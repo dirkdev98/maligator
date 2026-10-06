@@ -111,6 +111,16 @@ console.log(
 	globalThis.scalarConstants(31, false),
 	constantEffects.join(","),
 );
+function scalarRegionTail(left, right, other) {
+	const product = left * right;
+	globalThis.observeConstants(product - 1, other);
+	return -(other * other);
+}
+const tailResults = [];
+for (let index = 0; index < 3; index++) {
+	tailResults.push(scalarRegionTail(index + 1, 4, 5));
+}
+console.log("region-tail", tailResults.join(","));
 globalThis.scalarConstantZero = (condition) => {
 	const value = -0;
 	gc();

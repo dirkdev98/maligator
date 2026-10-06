@@ -23,6 +23,7 @@ describe("native numeric switch certificate", () => {
 		expect(native.literalSwitches).toEqual(
 			image.native.functions[native.functionIndex]!.literalSwitches,
 		);
+		expect(native.storage!.rematerializedConstantIps.length).toBeGreaterThan(0);
 		const emitted = emitCompiledFunction(native, native.functionIndex, "", false)!;
 		expect(emitted.source).toContain("switch ((i32)");
 		const malformed = {

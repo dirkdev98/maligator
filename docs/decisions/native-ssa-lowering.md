@@ -50,6 +50,11 @@ can be read early; overlays may only write explicit outputs or boxed materializa
 storage. Constants preserve their declared C representation, including int32 casts
 and negative zero. Profiling retains their producer sites. The artifact stores and
 validates this plan independently for ordinary bodies and numeric leaf helpers.
+Selected switches and property fast paths retain priority over constant producer
+elision. Scalar expression selection protects opaque region IPs and their borrowed
+destinations, field-call spans, and literal-switch spans individually. Unrelated
+scalar tails can still fold; their full expression window must preserve effects,
+control flow, and the values of transitive input leaves.
 
 Native loop polls cut cycles in the explicit target block graph, including
 exceptional paths through handlers. Phi-copy blocks can jump backward in physical order

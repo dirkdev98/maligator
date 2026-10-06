@@ -1196,7 +1196,8 @@ function emitCompiledVariant(
 		nativeContract.literalSwitches,
 		stringConstants,
 		rootPublication,
-		expressionIps,
+		new Set(storage.expressionIps),
+		new Set(storage.rematerializedConstantIps),
 	);
 	if (body === null) {
 		return null;
@@ -2505,6 +2506,7 @@ function emitBody(
 	stringConstants: ReadonlyArray<ReadonlyArray<number>> = [],
 	rootPublication?: NativeRootPublication,
 	expressionIps: ReadonlySet<number> = new Set(),
+	rematerializedConstantIps: ReadonlySet<number> = new Set(),
 ): EmittedBody | null {
 	if (!vmRegionActionsAreCurrent(specializations, regionActions)) {
 		throw new Error("Native function has stale region actions");
@@ -3506,10 +3508,6 @@ function emitBody(
 			lastPublishedInactiveRootMask = undefined;
 			knownPublishedPrivateRoots = 0;
 		}
-		if (expressionIps.has(ip)) {
-			emittedInstructions.add(ip);
-			continue;
-		}
 		const literalSwitch = switches.get(ip);
 		if (literalSwitch !== undefined) {
 			knownPublishedPrivateRoots = 0;
@@ -3586,6 +3584,10 @@ function emitBody(
 				ip = literalSwitch.endIp;
 				continue;
 			}
+		}
+		if (expressionIps.has(ip) || rematerializedConstantIps.has(ip)) {
+			emittedInstructions.add(ip);
+			continue;
 		}
 		const safepointKind = gcSafepointKinds.get(ip);
 		const rootedOutputs =

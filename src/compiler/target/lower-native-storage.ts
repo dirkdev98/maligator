@@ -284,12 +284,34 @@ function expressionIps(
 	preserveProfileSites = true,
 ): ReadonlyArray<number> {
 	const fn = native.body;
-	// Region helpers can borrow storage beyond explicit operands; profiling retains producer sites.
 	if (
-		!hasExplicitScalarUses(native) ||
+		native.storageValues === undefined ||
+		fn.isAsync ||
+		fn.isGenerator ||
+		fn.handlers.length > 0 ||
 		(preserveProfileSites && fn.profileSiteIds !== undefined)
 	)
 		return [];
+	const blocked = new Set(native.specializations.flatMap((region) => region.claimedIps));
+	for (const action of native.regionActions) blocked.add(action.ip);
+	for (const site of native.fieldCalls ?? [])
+		for (let ip = site.allocationIp; ip <= site.callIp; ip++) blocked.add(ip);
+	for (const site of native.literalSwitches ?? [])
+		for (let ip = site.instructionIp; ip <= site.endIp; ip++) blocked.add(ip);
+	for (const [ip, plan] of native.instructions.entries()) {
+		if (
+			plan !== undefined &&
+			!["exact-operator-input-kinds", "call", "construct"].includes(plan.kind)
+		)
+			blocked.add(ip);
+	}
+	// Opaque helpers can borrow their operands beyond the explicit consumer instruction.
+	const borrowed = new Set(
+		[...blocked].flatMap((ip) => {
+			const op = fn.instructions[ip]!;
+			return [...vmInstructionReadRegisters(op), ...vmInstructionWriteRegisters(op)];
+		}),
+	);
 	const writes = new Uint32Array(fn.registerCount);
 	const uses: Array<Array<number>> = Array.from({ length: fn.registerCount }, () => []);
 	for (const [ip, op] of fn.instructions.entries()) {
@@ -301,8 +323,10 @@ function expressionIps(
 	const costs = new Map<number, number>();
 	for (const [ip, op] of fn.instructions.entries()) {
 		if (
+			blocked.has(ip) ||
 			!pureScalarOperation(op, native.registerRepresentations, native.instructions[ip]) ||
 			!("dst" in op) ||
+			borrowed.has(op.dst) ||
 			op.dst < fn.parameterCount + fn.argumentSnapshotCount ||
 			writes[op.dst] !== 1 ||
 			uses[op.dst]!.length !== 1
@@ -310,7 +334,7 @@ function expressionIps(
 			continue;
 		const consumerIp = uses[op.dst]![0]!;
 		// Bound expansion work and leave every throwing/control boundary in its original order.
-		if (consumerIp <= ip || consumerIp - ip > 16) continue;
+		if (consumerIp <= ip || consumerIp - ip > 16 || blocked.has(consumerIp)) continue;
 		const consumer = fn.instructions[consumerIp]!;
 		if (
 			!pureScalarOperation(
@@ -331,6 +355,7 @@ function expressionIps(
 		let safe = true;
 		for (let next = ip + 1; next <= consumerIp; next++) {
 			if (
+				blocked.has(next) ||
 				jumpTargets.has(next) ||
 				(next < consumerIp &&
 					(!pureScalarOperation(

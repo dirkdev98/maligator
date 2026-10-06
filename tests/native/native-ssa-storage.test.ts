@@ -86,6 +86,19 @@ describe("independent native SSA storage", () => {
 				?.expressionIps.length,
 		).toBeGreaterThan(0);
 		expect(suspended.length).toBeGreaterThanOrEqual(2);
+		const regionTail = image.native.functions.find(
+			(fn) =>
+				String.fromCharCode(
+					...(image.runtime.stringConstants[fn.body.nameStringIndex] ?? []),
+				) === "scalarRegionTail",
+		)!;
+		expect(regionTail).toBeDefined();
+		expect(
+			regionTail.specializations.some((region) => region.kind === "numeric-fusion"),
+		).toBe(true);
+		expect(
+			regionTail.directEntries.some((entry) => entry.storage!.expressionIps.length > 0),
+		).toBe(true);
 		for (const fn of suspended) {
 			expect(emitCompiledFunction(fn, fn.functionIndex, "", false)).not.toBeNull();
 		}

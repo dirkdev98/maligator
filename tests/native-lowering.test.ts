@@ -382,6 +382,60 @@ describe("SSA native lowering", () => {
 		).not.toThrow();
 	});
 
+	it("folds unrelated scalar tails while preserving selected region storage", () => {
+		const image = compileSemanticProgramToProgramImage(
+			analyzeSourceAndRunSemanticAnalysis(
+				`function calculate(left, right, other) {
+					const product = left * right;
+					globalThis.observe(product - 1);
+					return -(other * other);
+				}
+				globalThis.calculate = calculate;
+				for (let index = 0; index < 3; index++) calculate(index + 1, 4, 5);`,
+				"/native-expression-region.js",
+			),
+			{ facts: compilerProgramFactsFromConfig(resolveBuildConfig({})) },
+		);
+		const native = image.native.functions[1]!;
+		const claimed = new Set(
+			native.specializations.flatMap((region) => region.claimedIps),
+		);
+		expect(
+			native.specializations.some((region) => region.kind === "numeric-fusion"),
+		).toBe(true);
+		const tail = native.body.instructions.findIndex(
+			(op, ip) => op.opcode === "BINARY" && op.operator === "*" && !claimed.has(ip),
+		);
+		const entry = native.directEntries.find((entry) =>
+			entry.storage!.expressionIps.includes(tail),
+		)!;
+		expect(entry).toBeDefined();
+		expect(entry.storage!.expressionIps.every((ip) => !claimed.has(ip))).toBe(true);
+		const restored = deserializeCompilerArtifact(serializeCompilerArtifact(image));
+		expect(() => emitProgramImage(restored, { compiled: true })).not.toThrow();
+		const blocked = [...claimed].find(
+			(ip) => native.body.instructions[ip]?.opcode === "BINARY",
+		)!;
+		expect(() =>
+			validateNativeStorage({
+				...native,
+				directEntries: native.directEntries.map((candidate) =>
+					candidate !== entry
+						? candidate
+						: {
+								...entry,
+								storage: {
+									...entry.storage!,
+									expressionIps: [blocked, ...entry.storage!.expressionIps].sort(
+										(left, right) => left - right,
+									),
+								},
+							},
+				),
+			}),
+		).toThrow(/invalid or stale storage plan/);
+	});
+
 	it("initializes scalar locals at a dominating definition across ordinary effects", () => {
 		const image = scalarImage(
 			"const product = a * b; globalThis.observe(); return product - subtract;",
@@ -509,6 +563,19 @@ describe("SSA native lowering", () => {
 		const restored = deserializeCompilerArtifact(serializeCompilerArtifact(image));
 		expect(restored.native.functions[1]!.storage).toEqual(native.storage);
 		expect(() => emitProgramImage(restored, { compiled: true })).not.toThrow();
+	});
+
+	it("preserves numeric property projection admission beside rematerialized constants", () => {
+		const image = compileSemanticProgramToProgramImage(
+			analyzeSourceAndRunSemanticAnalysis(
+				"globalThis.total = object => object.left + object.right * 2;",
+				"/native-property-constant.js",
+			),
+		);
+		const native = image.native.functions[1]!;
+		expect(native.storage!.rematerializedConstantIps.length).toBeGreaterThan(0);
+		const emitted = emitCompiledFunction(native, native.functionIndex, "", false)!;
+		expect(emitted.source).toContain("mal_vm_property_try_load_static_number_pair(");
 	});
 
 	it("rejects constant rematerialization without immutable dominated SSA storage", () => {
