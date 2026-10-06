@@ -71,6 +71,71 @@ function readEarly(early) {
 	let value = 17;
 	return value;
 }
+
+function projectScalarStorage(value, left, right, count) {
+	const total = value.left + value.right;
+	for (let index = 0; index < count; index++) {
+		const saved = left;
+		left = right;
+		right = saved;
+	}
+	return [total, left, right];
+}
+globalThis.projectScalarStorage = projectScalarStorage;
+for (const count of [0, 1, 4])
+	console.log(
+		"project-scalars",
+		projectScalarStorage({ left: 3, right: 7 }, 2, 9, count).join(":"),
+	);
+const propertyOrder = [];
+const projectionAccessor = {
+	get left() {
+		propertyOrder.push("left");
+		gc();
+		return 11;
+	},
+	get right() {
+		propertyOrder.push("right");
+		gc();
+		return 13;
+	},
+};
+console.log(
+	"project-getters",
+	projectScalarStorage(projectionAccessor, 2, 9, 1).join(":"),
+);
+const projectionProxy = new Proxy(
+	{ left: 17, right: 19 },
+	{
+		get(target, key) {
+			propertyOrder.push(key);
+			gc();
+			return target[key];
+		},
+	},
+);
+console.log("project-proxy", projectScalarStorage(projectionProxy, 2, 9, 1).join(":"));
+try {
+	projectScalarStorage(
+		{
+			get left() {
+				propertyOrder.push("throw-left");
+				gc();
+				throw new Error("projection-throw");
+			},
+			get right() {
+				throw new Error("unexpected second getter");
+			},
+		},
+		2,
+		9,
+		1,
+	);
+	throw new Error("projection failed to throw");
+} catch (error) {
+	console.log("project-error", error.message);
+}
+console.log("project-order", propertyOrder.join(":"));
 globalThis.readEarly = readEarly;
 for (const early of [false, true]) {
 	try {

@@ -1,6 +1,11 @@
-import type { VmRegisterRepresentation } from "./program-image.ts";
+import type {
+	NativeDirectEntryPlan,
+	NativeFunctionPlan,
+	VmRegisterRepresentation,
+} from "./program-image.ts";
 import {
 	vmExceptionHandlerTargets,
+	vmInstructionReadRegisters,
 	vmInstructionUsesRegister,
 	vmInstructionWriteRegisters,
 } from "./runtime-image.ts";
@@ -18,7 +23,6 @@ export type NativePropertyProjectionOperand =
 
 export interface NativePropertyProjectionStep {
 	readonly ip: number;
-	readonly instruction: Extract<BytecodeInstruction, { opcode: "BINARY" }>;
 	readonly left: NativePropertyProjectionOperand;
 	readonly right: NativePropertyProjectionOperand;
 }
@@ -26,16 +30,15 @@ export interface NativePropertyProjectionStep {
 export interface NativePropertyProjectionPlan {
 	readonly id: number;
 	readonly object: number;
-	readonly loads: ReadonlyArray<{
-		readonly ip: number;
-		readonly instruction: StaticPropertyLoad;
-	}>;
+	readonly loads: ReadonlyArray<{ readonly ip: number; readonly icIndex: number }>;
 	readonly steps: ReadonlyArray<NativePropertyProjectionStep>;
 	readonly boxedRegisters: ReadonlyArray<number>;
-	readonly skippedIps: ReadonlySet<number>;
+	readonly skippedIps: ReadonlyArray<number>;
+	readonly claimedIps: ReadonlyArray<number>;
+	readonly borrowedRegisters: ReadonlyArray<number>;
+	readonly fallback: "original-instructions";
 	readonly terminalStore?: {
 		readonly ip: number;
-		readonly instruction: StaticPropertyStore;
 	};
 }
 
@@ -363,7 +366,11 @@ function lowerPropertyProjection(
 	const usedLoads = new Set<number>();
 	const boxedRegisters = new Map<number, number>();
 	const skippedIps = new Set<number>();
-	const steps: Array<NativePropertyProjectionStep> = [];
+	const steps: Array<
+		NativePropertyProjectionStep & {
+			instruction: Extract<BytecodeInstruction, { opcode: "BINARY" }>;
+		}
+	> = [];
 	let receiverClobbered = false;
 	const limit = Math.min(fn.instructions.length, firstIp + 20);
 	for (let ip = firstIp + 1; ip < limit; ip++) {
@@ -496,14 +503,32 @@ function lowerPropertyProjection(
 		!registerEscapesPlan(fn, finalRegister, storeIp + 1, handlerTargets)
 			? { ip: storeIp, instruction: store }
 			: undefined;
+	const skipped = [...skippedIps].filter((ip) => ip <= lastIp);
+	const claimedIps = [
+		...loads.filter((load) => load.ip <= lastIp).map((load) => load.ip),
+		...steps.map((step) => step.ip),
+		...skipped,
+		...(terminalStore === undefined ? [] : [terminalStore.ip]),
+	].sort((left, right) => left - right);
+	const borrowedRegisters = [
+		...new Set(
+			claimedIps.flatMap((ip) => [
+				...vmInstructionReadRegisters(fn.instructions[ip]!),
+				...vmInstructionWriteRegisters(fn.instructions[ip]!),
+			]),
+		),
+	].sort((left, right) => left - right);
 	return Object.freeze({
 		id: firstIp,
 		object: first.object,
-		loads: Object.freeze(loads.map((load) => Object.freeze(load))),
-		steps: Object.freeze(steps.map((step) => Object.freeze(step))),
+		loads: loads.map(({ ip, instruction }) => ({ ip, icIndex: instruction.icIndex })),
+		steps: steps.map(({ ip, left, right }) => ({ ip, left, right })),
 		boxedRegisters: Object.freeze([...boxedRegisters.keys()]),
-		skippedIps: new Set([...skippedIps].filter((ip) => ip <= lastIp)),
-		...(terminalStore === undefined ? {} : { terminalStore }),
+		skippedIps: skipped,
+		claimedIps,
+		borrowedRegisters,
+		fallback: "original-instructions",
+		...(terminalStore === undefined ? {} : { terminalStore: { ip: terminalStore.ip } }),
 	});
 }
 
@@ -802,6 +827,12 @@ export function lowerNativeFastPaths(
 	representations: ReadonlyArray<VmRegisterRepresentation>,
 	jumpTargets: ReadonlySet<number>,
 	conflicts: (ip: number) => boolean,
+	projections:
+		| { readonly kind: "select" }
+		| {
+				readonly kind: "render";
+				readonly plans: ReadonlyArray<NativePropertyProjectionPlan>;
+		  },
 	indexedLoops: ReadonlyArray<NativeIndexedLoopElement> = [],
 	terminalFusion: (
 		ip: number,
@@ -809,6 +840,12 @@ export function lowerNativeFastPaths(
 		undefined,
 	transparentJumpTargets: ReadonlySet<number> = new Set(),
 ): NativeFastPathLowering {
+	const projectionClaims = new Set(
+		projections.kind === "render"
+			? projections.plans.flatMap((plan) => plan.claimedIps)
+			: [],
+	);
+	const otherConflicts = (ip: number) => conflicts(ip) || projectionClaims.has(ip);
 	const handlerTargets =
 		fn.handlers.length === 0
 			? []
@@ -817,7 +854,7 @@ export function lowerNativeFastPaths(
 		fn,
 		indexedLoops,
 		jumpTargets,
-		conflicts,
+		otherConflicts,
 	);
 	const pairedArrayLoopActions = new Map<number, NativePairedArrayLoopAction>();
 	for (const plan of pairedArrayLoops) {
@@ -836,7 +873,7 @@ export function lowerNativeFastPaths(
 			representations,
 			jumpTargets,
 			(candidate) =>
-				conflicts(candidate) ||
+				otherConflicts(candidate) ||
 				pairedArrayLoopActions.has(candidate) ||
 				propertyNumericUpdateActions.has(candidate),
 		);
@@ -855,7 +892,11 @@ export function lowerNativeFastPaths(
 	}
 	const propertyProjections: Array<NativePropertyProjectionPlan> = [];
 	const propertyProjectionActions = new Map<number, NativePropertyProjectionAction>();
-	for (let ip = 0; ip + 1 < fn.instructions.length; ip++) {
+	for (
+		let ip = 0;
+		projections.kind === "select" && ip + 1 < fn.instructions.length;
+		ip++
+	) {
 		if (propertyProjectionActions.has(ip)) continue;
 		const plan = lowerPropertyProjection(
 			fn,
@@ -873,6 +914,12 @@ export function lowerNativeFastPaths(
 		);
 		if (plan === undefined) continue;
 		propertyProjections.push(plan);
+		for (const claimedIp of plan.claimedIps)
+			propertyProjectionActions.set(claimedIp, { role: "skip", plan });
+	}
+	if (projections.kind === "render") propertyProjections.push(...projections.plans);
+	propertyProjectionActions.clear();
+	for (const plan of propertyProjections) {
 		for (const [index, load] of plan.loads.entries()) {
 			propertyProjectionActions.set(load.ip, { role: "load", plan, index });
 		}
@@ -940,4 +987,100 @@ export function lowerNativeFastPaths(
 		constructorInitializationActions,
 		...(privateFieldReserve === undefined ? {} : { privateFieldReserve }),
 	});
+}
+
+export function selectNativePropertyProjections(
+	native: NativeFunctionPlan,
+	entry?: NativeDirectEntryPlan,
+): ReadonlyArray<NativePropertyProjectionPlan> {
+	const fn = native.body;
+	const handlerEntries = new Set(fn.handlers.map((handler) => handler.handlerIp));
+	const jumpTargets = new Set(handlerEntries);
+	const incoming = new Map<number, number>();
+	for (const [ip, op] of fn.instructions.entries()) {
+		if (op.opcode === "JUMP" || op.opcode === "JUMP_IF") {
+			jumpTargets.add(op.targetIp);
+			incoming.set(op.targetIp, (incoming.get(op.targetIp) ?? 0) + 1);
+		}
+		if (["GENERATOR_START", "YIELD", "AWAIT"].includes(op.opcode))
+			jumpTargets.add(ip + 1);
+	}
+	const transparent = new Set<number>();
+	if (native.mode === "direct" && (native.literalSwitches?.length ?? 0) === 0) {
+		for (const [ip, op] of fn.instructions.entries()) {
+			if (
+				op.opcode === "JUMP" &&
+				op.targetIp === ip + 1 &&
+				incoming.get(ip + 1) === 1 &&
+				!handlerEntries.has(ip + 1)
+			)
+				transparent.add(ip + 1);
+		}
+	}
+	const blocked = new Set(
+		entry?.fieldParameters?.loads.map((load) => load.instructionIp),
+	);
+	// A physically forward copy edge can still poll on a native or exceptional cycle.
+	for (const point of native.gc.safepoints)
+		if (point.kind === "loop-backedge") blocked.add(point.instructionIp);
+	for (const site of native.fieldCalls ?? [])
+		for (let ip = site.allocationIp; ip <= site.callIp; ip++) blocked.add(ip);
+	for (const site of native.literalSwitches ?? [])
+		for (let ip = site.instructionIp; ip <= site.endIp; ip++) blocked.add(ip);
+	const fusions = new Map<
+		number,
+		{ readonly id: number; readonly role: "start" | "finish" }
+	>();
+	const indexedLoops: Array<NativeIndexedLoopElement> = [];
+	for (const action of native.regionActions) {
+		const region = native.specializations[action.regionIndex]!;
+		if (region.kind !== "numeric-fusion") {
+			blocked.add(action.ip);
+			for (const ip of region.claimedIps) blocked.add(ip);
+		}
+		switch (region.kind) {
+			case "numeric-fusion": {
+				const pair = region.pairs[action.primaryIndex!]!;
+				if (
+					native.instructions[pair.firstIp]?.kind !== "unsigned-arithmetic" &&
+					native.instructions[pair.finishIp]?.kind !== "unsigned-arithmetic"
+				) {
+					if (action.role !== "start" && action.role !== "finish")
+						throw new Error("Invalid numeric-fusion action");
+					fusions.set(action.ip, { id: pair.firstIp, role: action.role });
+				}
+				break;
+			}
+			case "indexed-length-loop": {
+				blocked.add(action.ip);
+				const site = region.sites[action.primaryIndex!]!;
+				const element =
+					action.role === "element" ? site.elements[action.secondaryIndex!] : undefined;
+				const op = fn.instructions[action.ip]!;
+				if (
+					element?.kind === "load" &&
+					element.arrayIndexIsUint32 &&
+					op.opcode === "LOAD_PROPERTY"
+				)
+					indexedLoops.push({
+						lengthLoadIp: site.loadIp,
+						elementLoadIp: action.ip,
+						object: op.object,
+						key: op.key,
+						result: op.dst,
+					});
+				break;
+			}
+		}
+	}
+	return lowerNativeFastPaths(
+		fn,
+		native.registerRepresentations,
+		jumpTargets,
+		(ip) => blocked.has(ip) || native.instructions[ip] !== undefined,
+		{ kind: "select" },
+		indexedLoops,
+		(ip) => fusions.get(ip),
+		transparent,
+	).propertyProjections;
 }

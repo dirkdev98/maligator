@@ -10,6 +10,10 @@ import {
 } from "../shared/compiler-value-kinds.ts";
 import type { CompilerOperatorInputKindMasks } from "../shared/compiler-value-kinds.ts";
 import { getPrimordialCatalog } from "../shared/primordial-catalog-data.ts";
+import type {
+	NativePropertyProjectionPlan,
+	NativePropertyProjectionOperand,
+} from "./lower-native-fast-paths.ts";
 import type { NativeStoragePlan } from "./lower-native-storage.ts";
 import { validateNativeStorage } from "./lower-native-storage.ts";
 import type { Reader } from "./program-image-codec.ts";
@@ -58,7 +62,7 @@ import type {
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal artifacts are hard cut-overs: stale cache entries rebuild.
-export const COMPILER_ARTIFACT_VERSION = 107;
+export const COMPILER_ARTIFACT_VERSION = 108;
 
 function validateClosureCaptureOwners(
 	owners: ReadonlyArray<number>,
@@ -679,6 +683,30 @@ function writeNativeStorage(w: Writer, storage: NativeStoragePlan | undefined): 
 		w.i32Array([...storage.numericLeaf.rematerializedConstantIps]);
 		w.i32Array([...storage.numericLeaf.fallthroughJumpIps]);
 	}
+	w.u32(storage.propertyProjections.length);
+	for (const plan of storage.propertyProjections) {
+		w.i32(plan.id);
+		w.i32(plan.object);
+		w.u32(plan.loads.length);
+		for (const load of plan.loads) {
+			w.i32(load.ip);
+			w.i32(load.icIndex);
+		}
+		w.u32(plan.steps.length);
+		for (const step of plan.steps) {
+			w.i32(step.ip);
+			for (const operand of [step.left, step.right]) {
+				w.u8(operand.kind === "load" ? 0 : operand.kind === "step" ? 1 : 2);
+				w.i32(operand.kind === "register" ? operand.register : operand.index);
+			}
+		}
+		w.i32Array([...plan.boxedRegisters]);
+		w.i32Array([...plan.skippedIps]);
+		w.i32Array([...plan.claimedIps]);
+		w.i32Array([...plan.borrowedRegisters]);
+		w.u8(0);
+		w.i32(plan.terminalStore?.ip ?? -1);
+	}
 }
 
 function readNativeStorage(r: Reader): NativeStoragePlan {
@@ -694,17 +722,61 @@ function readNativeStorage(r: Reader): NativeStoragePlan {
 	};
 	const numericLeaf = r.u8();
 	if (numericLeaf > 1) throw new RangeError("Invalid native numeric leaf selection");
+	const leaf =
+		numericLeaf === 0
+			? undefined
+			: {
+					expressionIps: r.i32Array(),
+					definitionInitializedRegisters: r.i32Array(),
+					rematerializedConstantIps: r.i32Array(),
+					fallthroughJumpIps: r.i32Array(),
+				};
+	const propertyProjections: Array<NativePropertyProjectionPlan> = [];
+	const count = r.count(11);
+	for (let index = 0; index < count; index++) {
+		const id = r.i32();
+		const object = r.i32();
+		const loads = Array.from({ length: r.count(2) }, () => ({
+			ip: r.i32(),
+			icIndex: r.i32(),
+		}));
+		const operand = (): NativePropertyProjectionOperand => {
+			const tag = r.u8();
+			const value = r.i32();
+			if (tag > 2) throw new RangeError("Invalid native projection operand");
+			return tag === 2
+				? { kind: "register", register: value }
+				: { kind: tag === 0 ? "load" : "step", index: value };
+		};
+		const steps = Array.from({ length: r.count(5) }, () => ({
+			ip: r.i32(),
+			left: operand(),
+			right: operand(),
+		}));
+		const boxedRegisters = r.i32Array();
+		const skippedIps = r.i32Array();
+		const claimedIps = r.i32Array();
+		const borrowedRegisters = r.i32Array();
+		if (r.u8() !== 0) throw new RangeError("Invalid native projection fallback");
+		const storeIp = r.i32();
+		if (storeIp < -1) throw new RangeError("Invalid native projection terminal store");
+		propertyProjections.push({
+			id,
+			object,
+			loads,
+			steps,
+			boxedRegisters,
+			skippedIps,
+			claimedIps,
+			borrowedRegisters,
+			fallback: "original-instructions",
+			...(storeIp < 0 ? {} : { terminalStore: { ip: storeIp } }),
+		});
+	}
 	return {
 		...storage,
-		numericLeaf:
-			numericLeaf === 0
-				? undefined
-				: {
-						expressionIps: r.i32Array(),
-						definitionInitializedRegisters: r.i32Array(),
-						rematerializedConstantIps: r.i32Array(),
-						fallthroughJumpIps: r.i32Array(),
-					},
+		numericLeaf: leaf,
+		propertyProjections,
 	};
 }
 

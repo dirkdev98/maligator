@@ -1,3 +1,5 @@
+import { selectNativePropertyProjections } from "./lower-native-fast-paths.ts";
+import type { NativePropertyProjectionPlan } from "./lower-native-fast-paths.ts";
 import {
 	nativeEntryStableRootRegisters,
 	nativePrivateCallResultIps,
@@ -31,6 +33,7 @@ export interface NativeNumericLeafPlan extends NativeScalarStoragePlan {
 }
 
 export interface NativeStoragePlan extends NativeScalarStoragePlan {
+	readonly propertyProjections: ReadonlyArray<NativePropertyProjectionPlan>;
 	readonly rootRegisters: ReadonlyArray<number>;
 	readonly privateRegisters: ReadonlyArray<number>;
 	readonly privateCallResultIps: ReadonlyArray<number>;
@@ -127,20 +130,17 @@ function hasExplicitScalarUses(native: NativeFunctionPlan): boolean {
 	);
 }
 
-function elidedTdzIps(native: NativeFunctionPlan): ReadonlyArray<number> {
+function elidedTdzIps(
+	native: NativeFunctionPlan,
+	projections: ReadonlyArray<NativePropertyProjectionPlan>,
+): ReadonlyArray<number> {
 	if (!hasExplicitScalarUses(native)) return [];
-	// Renderer-selected property projections can borrow scalar aliases beyond their explicit loads.
-	if (
-		native.body.instructions.some(
-			(op) =>
-				op.opcode === "LOAD_PROPERTY" ||
-				op.opcode === "LOAD_PROPERTY_STATIC" ||
-				op.opcode === "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT",
-		)
-	)
-		return [];
+	const claimed = new Set(projections.flatMap((plan) => plan.claimedIps));
+	const borrowed = new Set(projections.flatMap((plan) => plan.borrowedRegisters));
 	return native.body.instructions.flatMap((op, ip) =>
 		op.opcode === "THROW_IF_TDZ" &&
+		!claimed.has(ip) &&
+		!borrowed.has(op.src) &&
 		["number", "int32", "boolean"].includes(native.registerRepresentations[op.src]!)
 			? [ip]
 			: [],
@@ -307,6 +307,7 @@ function expressionIps(
 	native: NativeFunctionPlan,
 	jumpTargets: ReadonlySet<number>,
 	preserveProfileSites = true,
+	projections: ReadonlyArray<NativePropertyProjectionPlan> = [],
 ): ReadonlyArray<number> {
 	const fn = native.body;
 	if (
@@ -318,6 +319,7 @@ function expressionIps(
 	)
 		return [];
 	const blocked = new Set(native.specializations.flatMap((region) => region.claimedIps));
+	for (const plan of projections) for (const ip of plan.claimedIps) blocked.add(ip);
 	for (const action of native.regionActions) blocked.add(action.ip);
 	for (const site of native.fieldCalls ?? [])
 		for (let ip = site.allocationIp; ip <= site.callIp; ip++) blocked.add(ip);
@@ -337,6 +339,8 @@ function expressionIps(
 			return [...vmInstructionReadRegisters(op), ...vmInstructionWriteRegisters(op)];
 		}),
 	);
+	for (const plan of projections)
+		for (const local of plan.borrowedRegisters) borrowed.add(local);
 	const writes = new Uint32Array(fn.registerCount);
 	const uses: Array<Array<number>> = Array.from({ length: fn.registerCount }, () => []);
 	for (const [ip, op] of fn.instructions.entries()) {
@@ -441,6 +445,7 @@ function lowerStorage(
 	entry?: NativeDirectEntryPlan,
 ): NativeStoragePlan {
 	const fn = native.body;
+	const propertyProjections = selectNativePropertyProjections(native, entry);
 	const jumpTargets = new Set(fn.handlers.map((handler) => handler.handlerIp));
 	for (const op of fn.instructions) {
 		if (op.opcode === "JUMP" || op.opcode === "JUMP_IF") jumpTargets.add(op.targetIp);
@@ -453,9 +458,12 @@ function lowerStorage(
 		);
 		const constantIps = new Set(constants);
 		return {
-			expressionIps: expressionIps(variant, jumpTargets, preserveProfileSites).filter(
-				(ip) => !constantIps.has(ip),
-			),
+			expressionIps: expressionIps(
+				variant,
+				jumpTargets,
+				preserveProfileSites,
+				propertyProjections,
+			).filter((ip) => !constantIps.has(ip)),
 			definitionInitializedRegisters: definitionInitializedRegisters(
 				variant,
 				jumpTargets,
@@ -493,52 +501,15 @@ function lowerStorage(
 	const privateLocals = new Set(
 		nativePrivateRootRegisters(fn, native, new Set(roots), calls),
 	);
-	// Every prefix is eligible independently; later unused loads must not hide an earlier projection.
-	for (const [start, first] of fn.instructions.entries()) {
-		if (first.opcode !== "LOAD_PROPERTY_STATIC") continue;
-		const aliases = new Set([first.dst]);
-		let loadCount = 1;
-		for (let ip = start + 1; ip < Math.min(start + 20, fn.instructions.length); ip++) {
-			const op = fn.instructions[ip]!;
-			if (op.opcode === "JUMP" && op.targetIp === ip + 1) continue;
-			if (op.opcode === "THROW_IF_TDZ" && aliases.has(op.src)) continue;
-			if (
-				(op.opcode === "LOAD_PROPERTY_STATIC" && op.object === first.object) ||
-				(op.opcode === "MOVE" && aliases.has(op.src))
-			) {
-				aliases.add(op.dst);
-				if (op.opcode === "LOAD_PROPERTY_STATIC") loadCount++;
-				continue;
-			}
-			if (
-				op.opcode === "BINARY" &&
-				["+", "-", "*", "/", "%", "&", "|", "^", "<<", ">>", ">>>"].includes(
-					op.operator,
-				) &&
-				(aliases.has(op.left) || aliases.has(op.right))
-			) {
-				aliases.add(op.dst);
-				if (loadCount >= 2) for (const local of aliases) privateLocals.delete(local);
-				continue;
-			}
-			if (
-				op.opcode === "CREATE_NUMBER" ||
-				op.opcode === "CREATE_F64" ||
-				op.opcode === "CREATE_BOOLEAN" ||
-				(op.opcode === "MOVE" &&
-					native.registerRepresentations[op.src] !== "boxed" &&
-					native.registerRepresentations[op.dst] !== "boxed")
-			)
-				continue;
-			break;
-		}
-	}
+	for (const plan of propertyProjections)
+		for (const local of plan.borrowedRegisters) privateLocals.delete(local);
 	return {
+		propertyProjections,
 		rootRegisters: roots,
 		privateRegisters: roots.filter((local) => privateLocals.has(local)),
 		privateCallResultIps: [...calls],
 		entryStableRootRegisters: [...nativeEntryStableRootRegisters(fn, privateLocals)],
-		elidedTdzIps: elidedTdzIps(native),
+		elidedTdzIps: elidedTdzIps(native, propertyProjections),
 		...scalarStorage(native),
 		numericLeaf,
 	};
@@ -568,6 +539,40 @@ export function lowerNativeStorage(image: ProgramImage): ProgramImage {
 }
 
 export function validateNativeStorage(native: NativeFunctionPlan): void {
+	const sameNumbers = (left: ReadonlyArray<number>, right: ReadonlyArray<number>) =>
+		left.length === right.length && left.every((value, index) => value === right[index]);
+	const sameProjections = (
+		stored: ReadonlyArray<NativePropertyProjectionPlan>,
+		selected: ReadonlyArray<NativePropertyProjectionPlan>,
+	): boolean =>
+		stored.length === selected.length &&
+		stored.every((plan, index) => {
+			const expected = selected[index]!;
+			const operand = (value: NativePropertyProjectionPlan["steps"][number]["left"]) =>
+				[value.kind, value.kind === "register" ? value.register : value.index].join(":");
+			return (
+				plan.id === expected.id &&
+				plan.object === expected.object &&
+				plan.fallback === expected.fallback &&
+				plan.terminalStore?.ip === expected.terminalStore?.ip &&
+				plan.loads.length === expected.loads.length &&
+				plan.loads.every(
+					(load, i) =>
+						load.ip === expected.loads[i]!.ip &&
+						load.icIndex === expected.loads[i]!.icIndex,
+				) &&
+				plan.steps.length === expected.steps.length &&
+				plan.steps.every(
+					(step, i) =>
+						step.ip === expected.steps[i]!.ip &&
+						operand(step.left) === operand(expected.steps[i]!.left) &&
+						operand(step.right) === operand(expected.steps[i]!.right),
+				) &&
+				(
+					["boxedRegisters", "skippedIps", "claimedIps", "borrowedRegisters"] as const
+				).every((key) => sameNumbers(plan[key], expected[key]))
+			);
+		});
 	const sameScalar = (
 		stored: NativeScalarStoragePlan | undefined,
 		selected: NativeScalarStoragePlan | undefined,
@@ -603,6 +608,7 @@ export function validateNativeStorage(native: NativeFunctionPlan): void {
 		stored !== undefined &&
 		selected !== undefined &&
 		sameScalar(stored, selected) &&
+		sameProjections(stored.propertyProjections, selected.propertyProjections) &&
 		sameScalar(stored.numericLeaf, selected.numericLeaf) &&
 		(stored.numericLeaf === undefined ||
 			(stored.numericLeaf.fallthroughJumpIps.length ===

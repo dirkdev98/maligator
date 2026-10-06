@@ -91,8 +91,20 @@ typed entry after move representation propagation. The semantic body and GC maps
 retain those checks; rendering omits only their C statements while preserving
 labels, source/profile events, and conservative deferred-root bookkeeping. Artifacts
 persist and validate the selected IPs against each entry's final representations.
-Resumable, handler, selected-region, field-call, switch, and property-load functions
-retain their checks until plan composition covers their opaque uses.
+Resumable, handler, selected-region, field-call, and switch functions retain their
+checks until plan composition covers their opaque uses.
+
+Static numeric property pair, triple, and quad projections are selected per native
+entry before scalar and root storage. Their plans retain instruction and cache
+references, load/step/register operands, claimed IPs, borrowed locals, and the
+original-instruction fallback. Storage excludes claimed sites and borrowed locals
+from delayed expressions, TDZ omissions, and private root aliases. Unrelated scalar
+storage remains eligible in property-load functions. Artifact validation recomputes
+each entry's selection; C rendering builds action maps from the stored plans.
+Other selected regions and native loop-poll sites are admission barriers; explicit
+numeric-fusion handoffs retain their existing contract. Projection misses execute
+the retained operations in their original order, including getter, coercion,
+exception, and GC behavior.
 
 Resumable functions currently persist their complete boxed native local set. Their
 frame records a native local count and suspended source position independently of

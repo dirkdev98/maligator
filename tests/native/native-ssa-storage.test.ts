@@ -73,6 +73,23 @@ describe("independent native SSA storage", () => {
 		expect(early.storage!.elidedTdzIps).toEqual([]);
 		for (const entry of early.directEntries)
 			expect(entry.storage!.elidedTdzIps).toEqual([]);
+		const projection = image.native.functions.find(
+			(fn) =>
+				String.fromCharCode(
+					...(image.runtime.stringConstants[fn.body.nameStringIndex] ?? []),
+				) === "projectScalarStorage",
+		)!;
+		expect(projection.storage!.propertyProjections).toHaveLength(1);
+		const scalarProjection = projection.directEntries.find((entry) =>
+			entry.parameterRepresentations.slice(1).every((rep) => rep === "number"),
+		)!;
+		expect(scalarProjection).toBeDefined();
+		expect(scalarProjection.storage!.propertyProjections).toHaveLength(1);
+		expect(scalarProjection.storage!.elidedTdzIps.length).toBeGreaterThan(0);
+		for (const ip of scalarProjection.storage!.elidedTdzIps)
+			expect(scalarProjection.storage!.propertyProjections[0]!.claimedIps).not.toContain(
+				ip,
+			);
 		const regions = image.native.functions.flatMap((fn) => fn.specializations);
 		expect(regions.some((region) => region.kind === "string-split-cursor")).toBe(true);
 		const regexp = regions.find((region) => region.kind === "regexp-iterator-projection");

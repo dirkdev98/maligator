@@ -170,7 +170,7 @@ describe("native TDZ emission plans", () => {
 		}
 	});
 
-	it("keeps property projection and selected-region functions outside guard omission", () => {
+	it("retains scalar TDZ checks in functions with selected numeric-fusion regions", () => {
 		const image = compile(`function project(value, left, right, count) {
 			const a = value.left; const b = value.right;
 			const total = a + b * 2;

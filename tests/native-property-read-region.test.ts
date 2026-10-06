@@ -58,6 +58,7 @@ function lower(
 		representations,
 		options.jumpTargets ?? new Set(),
 		options.conflicts ?? (() => false),
+		{ kind: "select" },
 	);
 }
 

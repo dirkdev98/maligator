@@ -38,6 +38,7 @@ import type {
 	NativePropertyNumericUpdateAction,
 	NativePropertyProjectionAction,
 	NativePropertyProjectionOperand,
+	NativePropertyProjectionPlan,
 	NativePropertyReadRegionAction,
 } from "./lower-native-fast-paths.ts";
 import { nativeRootedOutputRegisters } from "./lower-native-root-publication.ts";
@@ -1199,6 +1200,7 @@ function emitCompiledVariant(
 		new Set(storage.expressionIps),
 		new Set(storage.rematerializedConstantIps),
 		new Set(storage.elidedTdzIps),
+		storage.propertyProjections,
 	);
 	if (body === null) {
 		return null;
@@ -1770,6 +1772,11 @@ function emitResumableFunction(
 		undefined,
 		undefined,
 		stringConstants,
+		undefined,
+		undefined,
+		undefined,
+		undefined,
+		native.storage!.propertyProjections,
 	);
 	if (body === null) {
 		return null;
@@ -2511,6 +2518,7 @@ function emitBody(
 	expressionIps: ReadonlySet<number> = new Set(),
 	rematerializedConstantIps: ReadonlySet<number> = new Set(),
 	elidedTdzIps: ReadonlySet<number> = new Set(),
+	propertyProjections: ReadonlyArray<NativePropertyProjectionPlan> = [],
 ): EmittedBody | null {
 	if (!vmRegionActionsAreCurrent(specializations, regionActions)) {
 		throw new Error("Native function has stale region actions");
@@ -3328,6 +3336,7 @@ function emitBody(
 		reps,
 		jumpTargets,
 		staticPropertyProjectionConflicts,
+		{ kind: "render", plans: propertyProjections },
 		indexedLoopElements,
 		(ip) => numericFusionActionByIp.get(ip),
 		transparentJumpTargets,
@@ -5638,7 +5647,7 @@ function emitInstruction(
 							: "mal_vm_property_try_load_static_number_quad";
 				const cacheArguments = plan.loads.map(
 					(load) =>
-						`&${nativeBodyReference(resources, "propertyCache")}[${load.instruction.icIndex}]`,
+						`&${nativeBodyReference(resources, "propertyCache")}[${load.icIndex}]`,
 				);
 				const valueArguments = plan.loads.map(
 					(_load, valueIndex) => `&__property_projection_${plan.id}_value_${valueIndex}`,
