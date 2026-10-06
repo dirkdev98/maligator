@@ -36,6 +36,7 @@ import type {
 	NativePairedArrayLoopAction,
 	NativePairedArrayLoopPlan,
 	NativePropertyNumericUpdateAction,
+	NativePropertyNumericUpdatePlan,
 	NativePropertyProjectionAction,
 	NativePropertyProjectionOperand,
 	NativePropertyProjectionPlan,
@@ -1201,6 +1202,7 @@ function emitCompiledVariant(
 		new Set(storage.rematerializedConstantIps),
 		new Set(storage.elidedTdzIps),
 		storage.propertyProjections,
+		storage.propertyNumericUpdates,
 	);
 	if (body === null) {
 		return null;
@@ -1777,6 +1779,7 @@ function emitResumableFunction(
 		undefined,
 		undefined,
 		native.storage!.propertyProjections,
+		native.storage!.propertyNumericUpdates,
 	);
 	if (body === null) {
 		return null;
@@ -2519,6 +2522,7 @@ function emitBody(
 	rematerializedConstantIps: ReadonlySet<number> = new Set(),
 	elidedTdzIps: ReadonlySet<number> = new Set(),
 	propertyProjections: ReadonlyArray<NativePropertyProjectionPlan> = [],
+	propertyNumericUpdates: ReadonlyArray<NativePropertyNumericUpdatePlan> = [],
 ): EmittedBody | null {
 	if (!vmRegionActionsAreCurrent(specializations, regionActions)) {
 		throw new Error("Native function has stale region actions");
@@ -3336,7 +3340,7 @@ function emitBody(
 		reps,
 		jumpTargets,
 		staticPropertyProjectionConflicts,
-		{ kind: "render", plans: propertyProjections },
+		{ kind: "render", plans: propertyProjections, updates: propertyNumericUpdates },
 		indexedLoopElements,
 		(ip) => numericFusionActionByIp.get(ip),
 		transparentJumpTargets,
@@ -3354,7 +3358,7 @@ function emitBody(
 	for (const update of nativeFastPaths.propertyNumericUpdates) {
 		lines.push(`bool __property_numeric_update_${update.id}_fast = false;`);
 		lines.push(
-			`MalValue __property_numeric_update_${update.id}_result = MAL_VALUE_UNDEFINED;`,
+			`f64 __property_numeric_update_${update.id}_old = 0.0, __property_numeric_update_${update.id}_next = 0.0;`,
 		);
 	}
 	if (nativeFastPaths.constructorInitialization !== undefined) {
@@ -5106,13 +5110,28 @@ function emitInstruction(
 		];
 	}
 	if (propertyNumericUpdateAction !== undefined) {
-		const { plan, role } = propertyNumericUpdateAction;
+		const { plan, role, load, store } = propertyNumericUpdateAction;
 		const fallback = emitGenericInstruction();
 		if (fallback === null) return null;
+		if (role === "constant") return fallback;
 		const prefix = `__property_numeric_update_${plan.id}`;
-		if (role !== "load") {
-			return [`if (!${prefix}_fast) {`, ...fallback.map((line) => `  ${line}`), `}`];
-		}
+		const materializations = plan.materializations
+			.filter((value) => value.ip === ip)
+			.map((value) => {
+				const expression = `${prefix}_${value.value === "old" ? "old" : "next"}`;
+				return storeNumber(value.register, expression);
+			});
+		const dispatch =
+			materializations.length === 0
+				? [`if (!${prefix}_fast) {`, ...fallback.map((line) => `  ${line}`), `}`]
+				: [
+						`if (${prefix}_fast) {`,
+						...materializations.map((line) => `  ${line}`),
+						`} else {`,
+						...fallback.map((line) => `  ${line}`),
+						`}`,
+					];
+		if (role !== "load") return dispatch;
 		const operand = plan.operation;
 		let guard = "true";
 		let expression: string | null;
@@ -5120,16 +5139,13 @@ function emitInstruction(
 			expression = `${prefix}_old ${operand.operator === "increment" ? "+" : "-"} 1.0`;
 		} else {
 			let other: string;
-			if (operand.right.kind === "literal") {
-				other = cF64Literal(operand.right.value);
-			} else {
+			if (operand.right.kind === "literal") other = cF64Literal(operand.right.value);
+			else {
 				const register = operand.right.register;
 				if (reps[register] === "boxed") {
 					guard = `mal_ops_is_number(r${register})`;
 					other = `mal_ops_number_as_f64(r${register})`;
-				} else {
-					other = num(register);
-				}
+				} else other = num(register);
 			}
 			expression = nativeNumberExpr(
 				operand.operator,
@@ -5139,26 +5155,22 @@ function emitInstruction(
 		}
 		if (expression === null) return null;
 		const begin =
-			plan.load.stringIndex === plan.store.stringIndex
-				? `mal_vm_property_numeric_update_begin_same(${boxed(plan.load.object)}, &${nativeBodyReference(resources, "propertyCache")}[${plan.store.icIndex}], &${prefix}_state, &${prefix}_old)`
-				: `mal_vm_property_numeric_update_begin(${boxed(plan.load.object)}, &${nativeBodyReference(resources, "propertyCache")}[${plan.load.icIndex}], &${nativeBodyReference(resources, "propertyCache")}[${plan.store.icIndex}], &${prefix}_state, &${prefix}_old)`;
+			load.stringIndex === store.stringIndex
+				? `mal_vm_property_numeric_update_begin_same(${boxed(load.object)}, &${nativeBodyReference(resources, "propertyCache")}[${store.icIndex}], &${prefix}_state, &${prefix}_old)`
+				: `mal_vm_property_numeric_update_begin(${boxed(load.object)}, &${nativeBodyReference(resources, "propertyCache")}[${load.icIndex}], &${nativeBodyReference(resources, "propertyCache")}[${store.icIndex}], &${prefix}_state, &${prefix}_old)`;
 		return [
 			`${prefix}_fast = false;`,
 			`if (${guard}) {`,
 			`  MalNativeNumericFieldUpdate ${prefix}_state;`,
-			`  f64 ${prefix}_old;`,
 			`  if (${begin}) {`,
-			`    f64 ${prefix}_next = ${expression};`,
-			`    ${prefix}_fast = mal_vm_property_numeric_update_commit(&${prefix}_state, ${prefix}_next, &${prefix}_result);`,
+			`    ${prefix}_next = ${expression};`,
+			`    ${prefix}_fast = mal_vm_property_numeric_update_commit(&${prefix}_state, ${prefix}_next, nullptr);`,
 			`  }`,
 			`}`,
-			`if (${prefix}_fast) {`,
-			`  r${plan.load.dst} = ${prefix}_result;`,
-			`} else {`,
-			...fallback.map((line) => `  ${line}`),
-			`}`,
+			...dispatch,
 		];
 	}
+
 	switch (instruction.opcode) {
 		case "MOVE": {
 			if (staticPropertyNumericAction?.role === "skip") {

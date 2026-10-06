@@ -49,11 +49,18 @@ type StaticPropertyStore = Extract<
 
 export interface NativePropertyNumericUpdatePlan {
 	readonly id: number;
-	readonly load: StaticPropertyLoad;
-	readonly store: StaticPropertyStore;
+	readonly loadIp: number;
 	readonly storeIp: number;
 	readonly operationIp: number;
 	readonly constantIp?: number;
+	readonly claimedIps: ReadonlyArray<number>;
+	readonly borrowedRegisters: ReadonlyArray<number>;
+	readonly materializations: ReadonlyArray<{
+		readonly ip: number;
+		readonly register: number;
+		readonly value: "old" | "new";
+	}>;
+	readonly fallback: "original-instructions";
 	readonly operation:
 		| { readonly kind: "unary"; readonly operator: "increment" | "decrement" }
 		| {
@@ -68,7 +75,9 @@ export interface NativePropertyNumericUpdatePlan {
 
 export interface NativePropertyNumericUpdateAction {
 	readonly plan: NativePropertyNumericUpdatePlan;
-	readonly role: "load" | "operation" | "skip";
+	readonly role: "load" | "constant" | "skip";
+	readonly load: StaticPropertyLoad;
+	readonly store: StaticPropertyStore;
 }
 
 export type NativePropertyProjectionAction =
@@ -195,6 +204,12 @@ function harmlessScalarInstruction(
 	);
 }
 
+export const NATIVE_PROPERTY_UPDATE_OPERATORS = [
+	"increment",
+	"decrement",
+	...NATIVE_NUMBER_BINARY_OPERATORS,
+];
+
 function registerEscapesPlan(
 	fn: BytecodeFunction,
 	register: number,
@@ -238,101 +253,148 @@ function lowerPropertyNumericUpdate(
 	representations: ReadonlyArray<VmRegisterRepresentation>,
 	jumpTargets: ReadonlySet<number>,
 	conflicts: (ip: number) => boolean,
+	transparentJumpTargets: ReadonlySet<number>,
+	materializeAll: boolean,
 ): NativePropertyNumericUpdatePlan | undefined {
 	const load = fn.instructions[firstIp];
+	const numericOutput = (register: number) =>
+		representations[register] === "boxed" || representations[register] === "number";
 	if (
 		load?.opcode !== "LOAD_PROPERTY_STATIC" ||
 		load.object === load.dst ||
 		representations[load.object] !== "boxed" ||
-		representations[load.dst] !== "boxed" ||
+		!numericOutput(load.dst) ||
 		conflicts(firstIp)
 	)
 		return undefined;
-	let ip = firstIp + 1;
-	const admissible = () => !jumpTargets.has(ip) && !conflicts(ip);
-	if (!admissible()) return undefined;
-	const coercion = fn.instructions[ip];
-	if (
-		coercion?.opcode === "UNARY" &&
-		coercion.operator === "tonumeric" &&
-		coercion.src === load.dst &&
-		coercion.dst === load.dst
-	) {
-		ip++;
-		if (!admissible()) return undefined;
-	}
-	let literal: number | undefined;
-	let literalRegister: number | undefined;
+	const aliases = new Map<number, "old" | "new">([[load.dst, "old"]]);
+	const outputs: Array<NativePropertyNumericUpdatePlan["materializations"][number]> = [
+		{ ip: firstIp, register: load.dst, value: "old" },
+	];
 	let constantIp: number | undefined;
-	const constant = fn.instructions[ip];
-	if (
-		(constant?.opcode === "CREATE_NUMBER" || constant?.opcode === "CREATE_F64") &&
-		constant.dst !== load.object &&
-		constant.dst !== load.dst
-	) {
-		literal = constant.value;
-		literalRegister = constant.dst;
-		constantIp = ip;
-		ip++;
-		if (!admissible()) return undefined;
-	}
-	const operationIp = ip;
-	const instruction = fn.instructions[ip];
-	let operation: NativePropertyNumericUpdatePlan["operation"];
-	if (
-		instruction?.opcode === "UNARY" &&
-		(instruction.operator === "increment" || instruction.operator === "decrement") &&
-		instruction.src === load.dst &&
-		instruction.dst === load.dst
-	) {
-		operation = { kind: "unary", operator: instruction.operator };
-	} else if (
-		instruction?.opcode === "BINARY" &&
-		NATIVE_NUMBER_BINARY_OPERATORS.has(instruction.operator) &&
-		instruction.dst === load.dst &&
-		(instruction.left === load.dst || instruction.right === load.dst)
-	) {
-		const propertyIsLeft = instruction.left === load.dst;
-		const other = propertyIsLeft ? instruction.right : instruction.left;
-		if (other === load.object || other === load.dst) return undefined;
-		if (literalRegister !== undefined && other !== literalRegister) return undefined;
+	let literalRegister: number | undefined;
+	let literal: number | undefined;
+	let operationIp: number | undefined;
+	let operation: NativePropertyNumericUpdatePlan["operation"] | undefined;
+	const limit = Math.min(fn.instructions.length, firstIp + 24);
+	for (let ip = firstIp + 1; ip < limit; ip++) {
+		if ((jumpTargets.has(ip) && !transparentJumpTargets.has(ip)) || conflicts(ip))
+			return undefined;
+		const op = fn.instructions[ip]!;
+		if (op.opcode === "JUMP" && op.targetIp === ip + 1) continue;
+		if (op.opcode === "THROW_IF_TDZ" && aliases.has(op.src)) continue;
 		if (
-			literalRegister === undefined &&
-			representations[other] !== "boxed" &&
-			!isNumericRepresentation(representations[other]!)
+			op.opcode === "STORE_PROPERTY_STATIC" &&
+			op.object === load.object &&
+			aliases.get(op.value) === "new" &&
+			operation !== undefined
+		) {
+			const claimedIps = Array.from({ length: ip - firstIp + 1 }, (_, i) => firstIp + i);
+			const claims = new Set(claimedIps);
+			const externalUses = new Set(
+				fn.instructions.flatMap((instruction, useIp) =>
+					claims.has(useIp) ? [] : vmInstructionReadRegisters(instruction),
+				),
+			);
+			const borrowedRegisters = [
+				...new Set(
+					claimedIps.flatMap((claimedIp) => {
+						const instruction = fn.instructions[claimedIp]!;
+						return [
+							...vmInstructionReadRegisters(instruction),
+							...vmInstructionWriteRegisters(instruction),
+						];
+					}),
+				),
+			].sort((a, b) => a - b);
+			return Object.freeze({
+				id: firstIp,
+				loadIp: firstIp,
+				storeIp: ip,
+				operationIp: operationIp!,
+				...(constantIp === undefined ? {} : { constantIp }),
+				operation,
+				claimedIps,
+				borrowedRegisters,
+				materializations: outputs.filter(
+					({ register }) => materializeAll || externalUses.has(register),
+				),
+				fallback: "original-instructions",
+			});
+		}
+		if (
+			!("dst" in op) ||
+			op.dst === load.object ||
+			(!numericOutput(op.dst) &&
+				!(
+					(op.opcode === "CREATE_NUMBER" || op.opcode === "CREATE_F64") &&
+					representations[op.dst] === "int32"
+				))
 		)
 			return undefined;
-		operation = {
-			kind: "binary",
-			operator: instruction.operator,
-			propertyIsLeft,
-			right:
-				literalRegister === other
-					? { kind: "literal", value: literal! }
-					: { kind: "register", register: other },
-		};
-	} else {
-		return undefined;
+		let value: "old" | "new" | undefined;
+		if (op.opcode === "MOVE") value = aliases.get(op.src);
+		else if (
+			op.opcode === "UNARY" &&
+			op.operator === "tonumeric" &&
+			aliases.get(op.src) === "old" &&
+			operation === undefined
+		)
+			value = "old";
+		else if (
+			(op.opcode === "CREATE_NUMBER" || op.opcode === "CREATE_F64") &&
+			operation === undefined &&
+			literalRegister === undefined &&
+			!aliases.has(op.dst)
+		) {
+			constantIp = ip;
+			literalRegister = op.dst;
+			literal = op.value;
+			continue;
+		} else if (
+			operation === undefined &&
+			literalRegister === undefined &&
+			op.opcode === "UNARY" &&
+			(op.operator === "increment" || op.operator === "decrement") &&
+			aliases.get(op.src) === "old"
+		) {
+			operation = { kind: "unary", operator: op.operator };
+			operationIp = ip;
+			value = "new";
+		} else if (
+			operation === undefined &&
+			op.opcode === "BINARY" &&
+			NATIVE_NUMBER_BINARY_OPERATORS.has(op.operator) &&
+			(aliases.get(op.left) === "old" || aliases.get(op.right) === "old")
+		) {
+			const propertyIsLeft = aliases.get(op.left) === "old";
+			const other = propertyIsLeft ? op.right : op.left;
+			if (
+				aliases.has(other) ||
+				other === load.object ||
+				(literalRegister !== undefined && other !== literalRegister) ||
+				(literalRegister === undefined &&
+					representations[other] !== "boxed" &&
+					!isNumericRepresentation(representations[other]!))
+			)
+				return undefined;
+			operation = {
+				kind: "binary",
+				operator: op.operator,
+				propertyIsLeft,
+				right:
+					literalRegister === other
+						? { kind: "literal", value: literal! }
+						: { kind: "register", register: other },
+			};
+			operationIp = ip;
+			value = "new";
+		}
+		if (value === undefined || op.dst === literalRegister) return undefined;
+		aliases.set(op.dst, value);
+		outputs.push({ ip, register: op.dst, value });
 	}
-	if (literalRegister !== undefined && operation.kind !== "binary") return undefined;
-	ip++;
-	if (!admissible()) return undefined;
-	const store = fn.instructions[ip];
-	if (
-		store?.opcode !== "STORE_PROPERTY_STATIC" ||
-		store.object !== load.object ||
-		store.value !== load.dst
-	)
-		return undefined;
-	return Object.freeze({
-		id: firstIp,
-		load,
-		store,
-		storeIp: ip,
-		operationIp,
-		...(constantIp === undefined ? {} : { constantIp }),
-		operation,
-	});
+	return undefined;
 }
 
 function lowerPropertyProjection(
@@ -832,6 +894,7 @@ export function lowerNativeFastPaths(
 		| {
 				readonly kind: "render";
 				readonly plans: ReadonlyArray<NativePropertyProjectionPlan>;
+				readonly updates: ReadonlyArray<NativePropertyNumericUpdatePlan>;
 		  },
 	indexedLoops: ReadonlyArray<NativeIndexedLoopElement> = [],
 	terminalFusion: (
@@ -839,10 +902,12 @@ export function lowerNativeFastPaths(
 	) => { readonly id: number; readonly role: "start" | "finish" } | undefined = () =>
 		undefined,
 	transparentJumpTargets: ReadonlySet<number> = new Set(),
+	materializeUpdateOutputs = true,
+	selectUpdates = true,
 ): NativeFastPathLowering {
 	const projectionClaims = new Set(
 		projections.kind === "render"
-			? projections.plans.flatMap((plan) => plan.claimedIps)
+			? [...projections.plans, ...projections.updates].flatMap((plan) => plan.claimedIps)
 			: [],
 	);
 	const otherConflicts = (ip: number) => conflicts(ip) || projectionClaims.has(ip);
@@ -866,30 +931,49 @@ export function lowerNativeFastPaths(
 		number,
 		NativePropertyNumericUpdateAction
 	>();
-	for (let ip = 0; ip < fn.instructions.length; ip++) {
-		const plan = lowerPropertyNumericUpdate(
-			fn,
-			ip,
-			representations,
-			jumpTargets,
-			(candidate) =>
-				otherConflicts(candidate) ||
-				pairedArrayLoopActions.has(candidate) ||
-				propertyNumericUpdateActions.has(candidate),
-		);
-		if (plan === undefined) continue;
-		propertyNumericUpdates.push(plan);
-		propertyNumericUpdateActions.set(ip, { plan, role: "load" });
-		propertyNumericUpdateActions.set(plan.operationIp, {
-			plan,
-			role: "operation",
-		});
-		for (let skip = ip + 1; skip <= plan.storeIp; skip++) {
-			if (skip !== plan.constantIp && !propertyNumericUpdateActions.has(skip))
-				propertyNumericUpdateActions.set(skip, { plan, role: "skip" });
+	const updateAction = (
+		plan: NativePropertyNumericUpdatePlan,
+		role: NativePropertyNumericUpdateAction["role"],
+	): NativePropertyNumericUpdateAction => {
+		const load = fn.instructions[plan.loadIp]!,
+			store = fn.instructions[plan.storeIp]!;
+		if (
+			load.opcode !== "LOAD_PROPERTY_STATIC" ||
+			store.opcode !== "STORE_PROPERTY_STATIC"
+		)
+			throw new Error("Invalid native property update references");
+		return { plan, role, load, store };
+	};
+	if (projections.kind === "render") propertyNumericUpdates.push(...projections.updates);
+	else
+		for (let ip = 0; selectUpdates && ip < fn.instructions.length; ip++) {
+			const plan = lowerPropertyNumericUpdate(
+				fn,
+				ip,
+				representations,
+				jumpTargets,
+				(candidate) =>
+					otherConflicts(candidate) ||
+					pairedArrayLoopActions.has(candidate) ||
+					propertyNumericUpdateActions.has(candidate),
+				transparentJumpTargets,
+				materializeUpdateOutputs,
+			);
+			if (plan === undefined) continue;
+			propertyNumericUpdates.push(plan);
+			for (const claimedIp of plan.claimedIps)
+				propertyNumericUpdateActions.set(claimedIp, updateAction(plan, "skip"));
+			ip = plan.storeIp;
 		}
-		ip = plan.storeIp;
+	propertyNumericUpdateActions.clear();
+	for (const plan of propertyNumericUpdates) {
+		for (const ip of plan.claimedIps)
+			propertyNumericUpdateActions.set(ip, updateAction(plan, "skip"));
+		propertyNumericUpdateActions.set(plan.loadIp, updateAction(plan, "load"));
+		if (plan.constantIp !== undefined)
+			propertyNumericUpdateActions.set(plan.constantIp, updateAction(plan, "constant"));
 	}
+
 	const propertyProjections: Array<NativePropertyProjectionPlan> = [];
 	const propertyProjectionActions = new Map<number, NativePropertyProjectionAction>();
 	for (
@@ -989,10 +1073,10 @@ export function lowerNativeFastPaths(
 	});
 }
 
-export function selectNativePropertyProjections(
+export function selectNativePropertyFastPaths(
 	native: NativeFunctionPlan,
 	entry?: NativeDirectEntryPlan,
-): ReadonlyArray<NativePropertyProjectionPlan> {
+): Pick<NativeFastPathLowering, "propertyProjections" | "propertyNumericUpdates"> {
 	const fn = native.body;
 	const handlerEntries = new Set(fn.handlers.map((handler) => handler.handlerIp));
 	const jumpTargets = new Set(handlerEntries);
@@ -1082,5 +1166,12 @@ export function selectNativePropertyProjections(
 		indexedLoops,
 		(ip) => fusions.get(ip),
 		transparent,
-	).propertyProjections;
+		fn.profileSiteIds !== undefined ||
+			native.specializations.length > 0 ||
+			(native.fieldCalls?.length ?? 0) > 0 ||
+			(native.literalSwitches?.length ?? 0) > 0 ||
+			native.instructions.some((plan) => plan !== undefined),
+		// Fusion can keep a preceding RHS in its private temporary rather than the semantic local.
+		!native.specializations.some((region) => region.kind === "numeric-fusion"),
+	);
 }

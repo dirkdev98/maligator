@@ -10,8 +10,10 @@ import {
 } from "../shared/compiler-value-kinds.ts";
 import type { CompilerOperatorInputKindMasks } from "../shared/compiler-value-kinds.ts";
 import { getPrimordialCatalog } from "../shared/primordial-catalog-data.ts";
+import { NATIVE_PROPERTY_UPDATE_OPERATORS } from "./lower-native-fast-paths.ts";
 import type {
 	NativePropertyProjectionPlan,
+	NativePropertyNumericUpdatePlan,
 	NativePropertyProjectionOperand,
 } from "./lower-native-fast-paths.ts";
 import type { NativeStoragePlan } from "./lower-native-storage.ts";
@@ -62,7 +64,7 @@ import type {
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal artifacts are hard cut-overs: stale cache entries rebuild.
-export const COMPILER_ARTIFACT_VERSION = 108;
+export const COMPILER_ARTIFACT_VERSION = 109;
 
 function validateClosureCaptureOwners(
 	owners: ReadonlyArray<number>,
@@ -707,6 +709,31 @@ function writeNativeStorage(w: Writer, storage: NativeStoragePlan | undefined): 
 		w.u8(0);
 		w.i32(plan.terminalStore?.ip ?? -1);
 	}
+	w.u32(storage.propertyNumericUpdates.length);
+	for (const plan of storage.propertyNumericUpdates) {
+		w.i32(plan.id);
+		w.i32(plan.loadIp);
+		w.i32(plan.storeIp);
+		w.i32(plan.operationIp);
+		w.i32(plan.constantIp ?? -1);
+		w.i32Array([...plan.claimedIps]);
+		w.i32Array([...plan.borrowedRegisters]);
+		w.u32(plan.materializations.length);
+		for (const value of plan.materializations) {
+			w.i32(value.ip);
+			w.i32(value.register);
+			w.u8(value.value === "old" ? 0 : 1);
+		}
+		w.u8(0);
+		w.u8(plan.operation.kind === "unary" ? 0 : 1);
+		w.u8(NATIVE_PROPERTY_UPDATE_OPERATORS.indexOf(plan.operation.operator));
+		if (plan.operation.kind === "binary") {
+			w.u8(plan.operation.propertyIsLeft ? 1 : 0);
+			w.u8(plan.operation.right.kind === "literal" ? 0 : 1);
+			if (plan.operation.right.kind === "literal") w.f64(plan.operation.right.value);
+			else w.i32(plan.operation.right.register);
+		}
+	}
 }
 
 function readNativeStorage(r: Reader): NativeStoragePlan {
@@ -773,10 +800,65 @@ function readNativeStorage(r: Reader): NativeStoragePlan {
 			...(storeIp < 0 ? {} : { terminalStore: { ip: storeIp } }),
 		});
 	}
+	const propertyNumericUpdates: Array<NativePropertyNumericUpdatePlan> = [];
+	for (let i = 0, count = r.count(10); i < count; i++) {
+		const id = r.i32(),
+			loadIp = r.i32(),
+			storeIp = r.i32(),
+			operationIp = r.i32(),
+			constantIp = r.i32();
+		if (constantIp < -1) throw new RangeError("Invalid native update constant");
+		const claimedIps = r.i32Array(),
+			borrowedRegisters = r.i32Array();
+		const materializations = Array.from({ length: r.count(3) }, () => {
+			const ip = r.i32(),
+				register = r.i32(),
+				tag = r.u8();
+			if (tag > 1) throw new RangeError("Invalid native update materialization");
+			return { ip, register, value: tag === 0 ? ("old" as const) : ("new" as const) };
+		});
+		if (r.u8() !== 0) throw new RangeError("Invalid native update fallback");
+		const kind = r.u8(),
+			operator = NATIVE_PROPERTY_UPDATE_OPERATORS[r.u8()];
+		if (operator === undefined) throw new RangeError("Invalid native update operator");
+		let operation: NativePropertyNumericUpdatePlan["operation"];
+		if (kind === 0) {
+			if (operator !== "increment" && operator !== "decrement")
+				throw new RangeError("Invalid native update unary operation");
+			operation = { kind: "unary", operator };
+		} else if (kind === 1) {
+			const left = r.u8(),
+				right = r.u8();
+			if (left > 1 || right > 1) throw new RangeError("Invalid native update operand");
+			operation = {
+				kind: "binary",
+				operator,
+				propertyIsLeft: left === 1,
+				right:
+					right === 0
+						? { kind: "literal", value: r.f64() }
+						: { kind: "register", register: r.i32() },
+			};
+		} else throw new RangeError("Invalid native update operation");
+		propertyNumericUpdates.push({
+			id,
+			loadIp,
+			storeIp,
+			operationIp,
+			...(constantIp < 0 ? {} : { constantIp }),
+			claimedIps,
+			borrowedRegisters,
+			materializations,
+			operation,
+			fallback: "original-instructions",
+		});
+	}
+
 	return {
 		...storage,
 		numericLeaf: leaf,
 		propertyProjections,
+		propertyNumericUpdates,
 	};
 }
 

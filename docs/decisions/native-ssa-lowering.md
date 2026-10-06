@@ -106,6 +106,18 @@ numeric-fusion handoffs retain their existing contract. Projection misses execut
 the retained operations in their original order, including getter, coercion,
 exception, and GC behavior.
 
+Numeric property updates also have per-entry plans selected before storage. Admission
+follows distinct load, ToNumeric, arithmetic, and store values rather than requiring
+VM-style destructive register reuse. A successful Number admission computes and
+commits without user code; only old/new values with uses outside the claimed window
+are materialized at their original definitions. Opaque consumers and profiling
+conservatively retain all outputs. A failed admission or commit executes the original
+instructions in order, including BigInt, coercion, accessors, Proxy, and exceptions.
+The plan records claims, borrowed locals, and materialization sites; artifact validation
+recomputes those obligations. Ordinary control entries and polling edges cut admission.
+Functions with numeric fusion retain generic updates because a preceding RHS can
+reside in a fusion temporary instead of its semantic local.
+
 Resumable functions currently persist their complete boxed native local set. Their
 frame records a native local count and suspended source position independently of
 bytecode. Those fields share space with interpreter caller metadata because a

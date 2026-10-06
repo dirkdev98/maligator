@@ -90,6 +90,18 @@ describe("independent native SSA storage", () => {
 			expect(scalarProjection.storage!.propertyProjections[0]!.claimedIps).not.toContain(
 				ip,
 			);
+		for (const name of ["postProperty", "preProperty", "addProperty", "copyProperty"]) {
+			const fn = image.native.functions.find(
+				(candidate) =>
+					String.fromCharCode(
+						...(image.runtime.stringConstants[candidate.body.nameStringIndex] ?? []),
+					) === name,
+			)!;
+			expect(fn.storage!.propertyNumericUpdates).toHaveLength(1);
+			expect(emitCompiledFunction(fn, fn.functionIndex, "", false)!.source).toContain(
+				"mal_vm_property_numeric_update_commit(",
+			);
+		}
 		const regions = image.native.functions.flatMap((fn) => fn.specializations);
 		expect(regions.some((region) => region.kind === "string-split-cursor")).toBe(true);
 		const regexp = regions.find((region) => region.kind === "regexp-iterator-projection");

@@ -307,6 +307,157 @@ console.log("regexp-exit", globalThis.sumRegexStorage("3,4,8,99", /(\d+)/g));
 console.log("regexp-exhausted", globalThis.sumRegexStorage("3,4", /(\d+)/g));
 console.log("regexp-empty", globalThis.sumRegexStorage("", /(\d+)/g));
 
+function postProperty(value) {
+	return value.count++;
+}
+function preProperty(value) {
+	return --value.count;
+}
+function addProperty(value, delta) {
+	return (value.count += delta);
+}
+function copyProperty(value, delta) {
+	return (value.other = delta - value.count);
+}
+globalThis.postProperty = postProperty;
+globalThis.preProperty = preProperty;
+globalThis.addProperty = addProperty;
+globalThis.copyProperty = copyProperty;
+const updateNumber = (value) => (Object.is(value, -0) ? "-0" : String(value));
+for (const initial of [2, -0, 2147483647, NaN, Infinity, -Infinity, "4", 7n]) {
+	const value = { count: initial, other: 0 };
+	for (let i = 0; i < 3; i++) {
+		console.log(
+			"property-update",
+			updateNumber(postProperty(value)),
+			updateNumber(preProperty(value)),
+			updateNumber(value.count),
+		);
+		gc();
+	}
+}
+const updateOrder = [];
+let updateHeld = 11;
+const updateAccessor = {
+	get count() {
+		updateOrder.push("get");
+		gc();
+		return updateHeld;
+	},
+	set count(value) {
+		updateOrder.push(`set:${value}`);
+		gc();
+		updateHeld = value;
+	},
+};
+console.log("update-accessor", postProperty(updateAccessor), preProperty(updateAccessor));
+const updateProxy = new Proxy(
+	{ count: 17 },
+	{
+		get(target, key) {
+			updateOrder.push(`proxy-get:${key}`);
+			gc();
+			return target[key];
+		},
+		set(target, key, value) {
+			updateOrder.push(`proxy-set:${key}:${value}`);
+			gc();
+			target[key] = value;
+			return true;
+		},
+	},
+);
+console.log("update-proxy", addProperty(updateProxy, 3));
+const updateCoercion = {
+	count: {
+		valueOf() {
+			updateOrder.push("coerce");
+			gc();
+			updateCoercion.count = 100;
+			return 5;
+		},
+	},
+};
+console.log("update-coercion", postProperty(updateCoercion), updateCoercion.count);
+console.log(
+	"update-rhs",
+	addProperty(
+		{ count: 3 },
+		{
+			valueOf() {
+				updateOrder.push("rhs");
+				gc();
+				return 9;
+			},
+		},
+	),
+);
+console.log("update-string", addProperty({ count: "3" }, 4));
+console.log("update-bigint", String(addProperty({ count: 3n }, 4n)));
+const updatePair = { count: 5, other: 1 };
+for (let i = 0; i < 3; i++)
+	console.log(
+		"update-copy",
+		copyProperty(updatePair, 20),
+		updatePair.count,
+		updatePair.other,
+	);
+function strictProperty(value) {
+	"use strict";
+	return ++value.count;
+}
+for (const value of [
+	Object.freeze({ count: 9 }),
+	{
+		get count() {
+			updateOrder.push("throw-get");
+			gc();
+			throw new Error("update-getter");
+		},
+	},
+	{
+		get count() {
+			return 9;
+		},
+		set count(value) {
+			gc();
+			throw new Error(`update-setter:${value}`);
+		},
+	},
+]) {
+	try {
+		console.log("update-strict", strictProperty(value));
+	} catch (error) {
+		console.log("update-error", error instanceof TypeError ? "TypeError" : error.message);
+	}
+}
+const warmedUpdate = { count: 10 };
+for (let index = 0; index < 5; index++) strictProperty(warmedUpdate);
+Object.freeze(warmedUpdate);
+try {
+	strictProperty(warmedUpdate);
+} catch (error) {
+	console.log("update-frozen-cache", error instanceof TypeError, warmedUpdate.count);
+}
+try {
+	addProperty({ count: 3n }, 4);
+} catch (error) {
+	console.log("update-mixed", error instanceof TypeError);
+}
+try {
+	postProperty({
+		count: {
+			valueOf() {
+				gc();
+				throw new Error("update-coercion-throw");
+			},
+		},
+	});
+} catch (error) {
+	console.log("update-coercion-error", error.message);
+}
+console.log("update-order", updateOrder.join(":"));
+
 function* wideHolder() {
 	globalThis.makeStorageValue(1);
 	globalThis.makeStorageValue(2);
