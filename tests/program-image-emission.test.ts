@@ -28,6 +28,7 @@ import { createConservativeNativePlan } from "../src/compiler/target/program-ima
 import {
 	directCompiledEntryKey,
 	emitCompiledFunction,
+	nativeInactiveRootMasks,
 } from "../src/compiler/target/render-native-c.ts";
 import type {
 	BytecodeFunction,
@@ -1533,9 +1534,9 @@ describe("emit-program-image instruction packing", () => {
 	it.each([
 		{ rootCount: 64, liveCounts: [64, 60, 58], scannedSlots: 182 },
 		{ rootCount: 70, liveCounts: [70, 66, 64], scannedSlots: 200 },
-		{ rootCount: 130, liveCounts: [130, 66, 2], scannedSlots: 262 },
+		{ rootCount: 130, liveCounts: [130, 66, 2], scannedSlots: 198 },
 	])(
-		"uses the maskable slots for frequently dead roots in a $rootCount-root frame",
+		"publishes exact liveness across a $rootCount-root frame",
 		({ rootCount, liveCounts, scannedSlots }) => {
 			const call: BytecodeInstruction = {
 				opcode: "CALL",
@@ -1588,22 +1589,36 @@ describe("emit-program-image instruction packing", () => {
 				]),
 			);
 			const masks: Array<bigint> = [];
+			const tails = new Map(
+				[...output!.matchAll(/static const u64 (\w+)\[\] = \{ ([^}]+) \};/g)].map(
+					(match) => [
+						match[1]!,
+						[...match[2]!.matchAll(/UINT64_C\((0x[\da-f]+)\)/g)].reduce(
+							(mask, word, index) =>
+								mask | (BigInt(word[1]!) << BigInt(64 * (index + 1))),
+							0n,
+						),
+					],
+				),
+			);
 			let publishedMask = 0n;
 			for (const match of output!.matchAll(
-				/MAL_ROOT_MASK\((0x[\da-f]+)\);|mal_vm_call_cached\(/g,
+				/MAL_ROOT_MASK\((0x[\da-f]+)\);|MAL_ROOT_MASK_WIDE\((0x[\da-f]+), (\w+), countof\(\w+\)\);|mal_vm_call_cached\(/g,
 			)) {
 				if (match[1] !== undefined) publishedMask = BigInt(match[1]);
-				else masks.push(publishedMask);
+				else if (match[2] !== undefined) {
+					expect(tails.has(match[3]!)).toBe(true);
+					publishedMask = BigInt(match[2]) | tails.get(match[3]!)!;
+				} else masks.push(publishedMask);
 			}
 			expect(new Set(slots.keys())).toEqual(new Set(safepoints[0]!.rootRegisters));
 			expect(new Set(slots.values())).toEqual(new Set(safepoints[0]!.rootRegisters));
-			expect(slots.get(rootCount - 1)).toBeLessThan(64);
 			expect(masks).toHaveLength(safepoints.length);
 			let scanned = 0;
 			for (const [index, safepoint] of safepoints.entries()) {
 				const live = new Set(safepoint.rootRegisters);
 				for (const [register, slot] of slots) {
-					const inactive = slot < 64 && (masks[index]! & (1n << BigInt(slot))) !== 0n;
+					const inactive = (masks[index]! & (1n << BigInt(slot))) !== 0n;
 					if (!inactive) scanned++;
 					if (live.has(register)) expect(inactive).toBe(false);
 				}
@@ -1616,6 +1631,23 @@ describe("emit-program-image instruction packing", () => {
 			expect(output).toContain("__gc_frame.env = env;");
 		},
 	);
+
+	it("retains high-word inactivity when the inline root mask is zero", () => {
+		const roots = [0, 64, 128];
+		const masks = nativeInactiveRootMasks(
+			[
+				{
+					kind: "operation",
+					instructionIp: 0,
+					rootRegisters: [0],
+					incomingRootRegisters: [0],
+					outgoingRootRegisters: [0],
+				},
+			],
+			new Map(roots.map((register) => [register, register])),
+		);
+		expect(masks.get(0)).toBe((1n << 64n) | (1n << 128n));
+	});
 
 	it("coalesces straight-line native root masks and republishes them at joins", () => {
 		const call = (argument: number): BytecodeInstruction => ({
@@ -1701,9 +1733,11 @@ describe("emit-program-image instruction packing", () => {
 		const output = emitProgramImage(image, { compiled: true });
 
 		expect(output).toContain(
-			"#define MAL_ROOT_MASK(mask) (__gc_frame.inactive_slots = UINT64_C(mask))",
+			"#define MAL_ROOT_MASK(mask) mal_gc_root_frame_set_inactive(&__gc_frame, UINT64_C(mask), nullptr, 0)",
 		);
-		expect(output.match(/__gc_frame\.inactive_slots = UINT64_C/g)).toHaveLength(1);
+		expect(output).toContain(
+			"#define MAL_ROOT_MASK_WIDE(mask, words, count) mal_gc_root_frame_set_inactive(&__gc_frame, UINT64_C(mask), words, count)",
+		);
 		expect(output.match(/MAL_ROOT_MASK\(0x4\);/g)).toHaveLength(2);
 		expect(output.match(/MAL_ROOT_MASK\(0x2\);/g)).toHaveLength(2);
 		expect(output).toMatch(/L4:;\n {4}MAL_ROOT_MASK\(0x4\);/);

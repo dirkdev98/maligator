@@ -35,6 +35,39 @@ static MalValue tracked_object(MalVm *vm, usize index) {
     return mal_value_from_object(object);
 }
 
+static int check_wide_root_masks(const MalRuntimeImage *image) {
+    for (usize i = 0; i < countof(tracked); i++) tracked[i] = nullptr;
+    MalVm vm;
+    mal_vm_init(&vm, image);
+    MalValue slots[130];
+    for (usize i = 0; i < countof(slots); i++) slots[i] = MAL_VALUE_UNDEFINED;
+    const MalFrameDescriptor descriptor = { .function_index = 0, .slot_count = countof(slots) };
+    MalRootFrame frame = { .prev = mal_root_frame_head, .desc = &descriptor, .slots = slots };
+    mal_root_frame_head = &frame;
+    slots[64] = tracked_object(&vm, 0);
+    slots[127] = tracked_object(&vm, 1);
+    slots[129] = tracked_object(&vm, 2);
+    static const u64 first_tail[] = { UINT64_C(1) };
+    mal_gc_root_frame_set_inactive(&frame, 0, first_tail, countof(first_tail));
+    mal_gc_collect(&vm);
+    if (finalized[0] != 1 || slots[64] != MAL_VALUE_UNDEFINED ||
+        finalized[1] != 0 || finalized[2] != 0) return 80;
+    slots[64] = tracked_object(&vm, 3);
+    mal_gc_root_frame_set_inactive(&frame, 0, nullptr, 0);
+    mal_gc_collect(&vm);
+    if (finalized[3] != 0 || finalized[1] != 0 || finalized[2] != 0) return 81;
+    static const u64 second_tail[] = { UINT64_C(1) << 63, UINT64_C(1) << 1 };
+    mal_gc_root_frame_set_inactive(&frame, 0, second_tail, countof(second_tail));
+    mal_gc_collect(&vm);
+    if (finalized[1] != 1 || finalized[2] != 1 || finalized[3] != 0 ||
+        slots[127] != MAL_VALUE_UNDEFINED || slots[129] != MAL_VALUE_UNDEFINED) return 82;
+    mal_root_frame_head = frame.prev;
+    mal_gc_collect(&vm);
+    if (finalized[3] != 1) return 83;
+    mal_vm_free(&vm);
+    return 0;
+}
+
 static int check_retention(const MalRuntimeImage *image) {
     MalVm vm;
     mal_vm_init(&vm, image);
@@ -678,6 +711,7 @@ int main(void) {
     mal_gc_register_finalizer(MAL_HEAP_OBJECT, count_finalized);
     mal_gc_register_finalizer(MAL_HEAP_FUNCTION_OBJECT, count_vector_finalized);
     int result = check_retention(&image);
+    if (result == 0) result = check_wide_root_masks(&image);
     if (result == 0) result = check_single_owner_frame(&image);
     if (result == 0) result = check_consecutive_owners(&image);
     if (result == 0) result = check_lookup_and_reexport(&image);

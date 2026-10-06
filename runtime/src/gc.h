@@ -247,16 +247,32 @@ typedef struct MalRootFrame {
     const MalFrameDescriptor *desc;
     /* slot_count MalValues, owned by the compiled frame (a stack local there). */
     MalValue *slots;
-    /* The first 64 slots whose values are dead at the current compiler-certified
-     * safepoint. Zero deliberately means scan everything, preserving safety for
-     * frames that do not publish exact liveness. */
+    /* Uncovered slots remain active, including runtime-owned slots after the
+     * compiler's root set. Tail words have static storage across suspension. */
     u64 inactive_slots;
+    const u64 *inactive_slot_words;
+    i32 inactive_slot_word_count;
     /* This activation's own captured-slot env (the compiled analogue of the
      * interpreter frame's env), or null when the function captures nothing. Its
      * slots hold values not yet reachable through any live closure, so the
      * collector must trace it while the function runs. */
     MalEnv *env;
 } MalRootFrame;
+
+static inline void mal_gc_root_frame_set_inactive(
+    MalRootFrame *frame, u64 first_word, const u64 *tail_words, i32 tail_count) {
+    frame->inactive_slots = first_word;
+    frame->inactive_slot_words = tail_words;
+    frame->inactive_slot_word_count = tail_count;
+}
+
+static inline bool mal_gc_root_frame_slot_is_inactive(const MalRootFrame *frame, i32 slot) {
+    i32 word = slot / 64;
+    u64 inactive = word == 0 ? frame->inactive_slots :
+        frame->inactive_slot_words != nullptr && word <= frame->inactive_slot_word_count ?
+            frame->inactive_slot_words[word - 1] : 0;
+    return (inactive & (UINT64_C(1) << (slot % 64))) != 0;
+}
 
 extern MAL_ISOLATE_LOCAL MalRootFrame *mal_root_frame_head;
 

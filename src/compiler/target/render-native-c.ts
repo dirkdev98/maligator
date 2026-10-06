@@ -682,7 +682,6 @@ export function nativeInactiveRootMasks(
 	const slotBits = new Map<number, bigint>();
 	let allSlots = 0n;
 	for (const [register, slot] of slotOfRegister) {
-		if (slot >= 64) continue;
 		const bit = 1n << BigInt(slot);
 		slotBits.set(register, bit);
 		allSlots |= bit;
@@ -702,8 +701,36 @@ export function nativeInactiveRootMasks(
 	return removesAnyRoot ? masks : new Map();
 }
 
-function cInactiveRootMaskPublication(mask: bigint): string {
-	return `MAL_ROOT_MASK(0x${mask.toString(16)})`;
+const ROOT_MASK_WORD = (1n << 64n) - 1n;
+
+function nativeRootMaskTails(masks: ReadonlyMap<number, bigint>): {
+	readonly symbols: ReadonlyMap<bigint, string>;
+	readonly declarations: ReadonlyArray<string>;
+} {
+	const symbols = new Map<bigint, string>();
+	const declarations: Array<string> = [];
+	for (const mask of masks.values()) {
+		if (mask <= ROOT_MASK_WORD || symbols.has(mask)) continue;
+		const symbol = `__gc_inactive_tail_${symbols.size}`;
+		const words: Array<string> = [];
+		for (let tail = mask >> 64n; tail !== 0n; tail >>= 64n) {
+			words.push(`UINT64_C(0x${(tail & ROOT_MASK_WORD).toString(16)})`);
+		}
+		symbols.set(mask, symbol);
+		declarations.push(`    static const u64 ${symbol}[] = { ${words.join(", ")} };`);
+	}
+	return { symbols, declarations };
+}
+
+function cInactiveRootMaskPublication(
+	mask: bigint,
+	tails?: ReadonlyMap<bigint, string>,
+): string {
+	if (mask <= ROOT_MASK_WORD) return `MAL_ROOT_MASK(0x${mask.toString(16)})`;
+	const symbol = tails?.get(mask);
+	if (symbol === undefined)
+		throw new Error("Native wide root mask lacks static tail words");
+	return `MAL_ROOT_MASK_WIDE(0x${(mask & ROOT_MASK_WORD).toString(16)}, ${symbol}, countof(${symbol}))`;
 }
 
 interface NativeRootPublication {
@@ -859,6 +886,7 @@ function emitCompiledVariant(
 	};
 	const slotCount = valueRegs.length;
 	const inactiveRootMasks = nativeInactiveRootMasks(nativeContract.gc.safepoints, slotOf);
+	const rootMaskTails = nativeRootMaskTails(inactiveRootMasks);
 	const gcSafepointKinds = new Map(
 		nativeContract.gc.safepoints.map((safepoint) => [
 			safepoint.instructionIp,
@@ -1159,6 +1187,7 @@ function emitCompiledVariant(
 		nativeContract.regionActions,
 		nativeContract.instructions,
 		inactiveRootMasks,
+		rootMaskTails.symbols,
 		gcSafepointKinds,
 		suffix,
 		reps,
@@ -1231,6 +1260,7 @@ function emitCompiledVariant(
 	);
 	// Each JavaScript arithmetic operation rounds separately, including expression chains.
 	lines.push("#pragma STDC FP_CONTRACT OFF");
+	lines.push(...rootMaskTails.declarations);
 	lines.push(`    (void) this_value;`);
 	if (directEntry === undefined) lines.push(`    (void) new_target;`);
 	lines.push(`    (void) env;`);
@@ -1695,13 +1725,16 @@ function emitResumableFunction(
 	for (let register = 0; register < fn.registerCount; register++) {
 		registerSlots.set(register, register);
 	}
+	const inactiveRootMasks = nativeInactiveRootMasks(native.gc.safepoints, registerSlots);
+	const rootMaskTails = nativeRootMaskTails(inactiveRootMasks);
 	const body = emitBody(
 		fn,
 		index,
 		native.specializations,
 		native.regionActions,
 		native.instructions,
-		nativeInactiveRootMasks(native.gc.safepoints, registerSlots),
+		inactiveRootMasks,
+		rootMaskTails.symbols,
 		new Map(
 			native.gc.safepoints.map((safepoint) => [safepoint.instructionIp, safepoint.kind]),
 		),
@@ -1753,6 +1786,7 @@ function emitResumableFunction(
 	lines.push(
 		`${linkage === "static" ? "static " : ""}__attribute__((aligned(64))) MalValue ${symbol}(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalEnv *env, MalValue callee, void *entry_state) {`,
 	);
+	lines.push(...rootMaskTails.declarations);
 	lines.push(`    (void) this_value;`);
 	lines.push(`    (void) new_target;`);
 	if (body.resources.has("propertyCache") || body.resources.has("literalShapes")) {
@@ -2436,6 +2470,7 @@ function emitBody(
 	regionActions: ReadonlyArray<VmRegionAction>,
 	nativeInstructions: ReadonlyArray<NativeInstructionPlan | undefined>,
 	inactiveRootMasks: ReadonlyMap<number, bigint>,
+	inactiveRootMaskTails: ReadonlyMap<bigint, string>,
 	gcSafepointKinds: ReadonlyMap<
 		number,
 		NativeFunctionPlan["gc"]["safepoints"][number]["kind"]
@@ -3376,6 +3411,7 @@ function emitBody(
 	const instructionContext: {
 		-readonly [Key in keyof NativeInstructionContext]: NativeInstructionContext[Key];
 	} = {
+		inactiveRootMaskTails,
 		nativePlan: undefined,
 		stringConstants,
 		staticDefineStringIndexByIp,
@@ -3493,7 +3529,7 @@ function emitBody(
 					.map((line) => `${line} `)
 					.join(
 						"",
-					)}${mask === undefined ? "" : `${cInactiveRootMaskPublication(mask)}; `}mal_gc_safepoint(vm); if (mal_gc_poll_termination(vm)) ${onThrow} } goto L${target};`;
+					)}${mask === undefined ? "" : `${cInactiveRootMaskPublication(mask, inactiveRootMaskTails)}; `}mal_gc_safepoint(vm); if (mal_gc_poll_termination(vm)) ${onThrow} } goto L${target};`;
 			};
 			if (literalSwitch.kind === "string") {
 				const emitted = emitStringSwitch(
@@ -3743,7 +3779,9 @@ function emitBody(
 			charCodeAtCallInactiveRootMask === undefined &&
 			inactiveRootMask !== lastPublishedInactiveRootMask
 		) {
-			lines.push(`    ${cInactiveRootMaskPublication(inactiveRootMask)};`);
+			lines.push(
+				`    ${cInactiveRootMaskPublication(inactiveRootMask, inactiveRootMaskTails)};`,
+			);
 		}
 		if (
 			inactiveRootMask !== undefined &&
@@ -3781,7 +3819,7 @@ function emitBody(
 					? incomingRootPublication
 					: [
 							...incomingRootPublication,
-							`${cInactiveRootMaskPublication(operatorInactiveRootMask)};`,
+							`${cInactiveRootMaskPublication(operatorInactiveRootMask, inactiveRootMaskTails)};`,
 						]
 				: EMPTY_ROOT_PUBLICATION;
 		instructionContext.eagerIncomingRootPublication = eagerOperatorRootPublication;
@@ -3880,7 +3918,9 @@ function emitBody(
 			operatorMaskEmitted &&
 			operatorInactiveRootMask !== undefined
 		) {
-			lines.push(`    ${cInactiveRootMaskPublication(operatorInactiveRootMask)};`);
+			lines.push(
+				`    ${cInactiveRootMaskPublication(operatorInactiveRootMask, inactiveRootMaskTails)};`,
+			);
 			lastPublishedInactiveRootMask = operatorInactiveRootMask;
 		} else if (
 			operatorMaskEmitted ||
@@ -4199,6 +4239,7 @@ interface NativeStaticPropertyProjectionAction {
 }
 
 interface NativeInstructionContext {
+	readonly inactiveRootMaskTails?: ReadonlyMap<bigint, string>;
 	readonly ownedCaptureFunctionIndex?: number;
 	readonly fixedCaptureOwners?: ReadonlySet<number>;
 	readonly requiredCaptureOwners?: ReadonlySet<number>;
@@ -4689,20 +4730,22 @@ function emitInstruction(
 		`mal_gc_safepoint(vm); if (mal_gc_poll_termination(vm)) ${onThrow()}`;
 	const poll =
 		(context.outgoingRootPublication?.length ?? 0) > 0
-			? `if (mal_gc_poll) { ${context.outgoingRootPublication!.join(" ")} ${context.loopBackedgeInactiveRootMask === undefined ? "" : `${cInactiveRootMaskPublication(context.loopBackedgeInactiveRootMask)}; `}${safepoint()} }`
+			? `if (mal_gc_poll) { ${context.outgoingRootPublication!.join(" ")} ${context.loopBackedgeInactiveRootMask === undefined ? "" : `${cInactiveRootMaskPublication(context.loopBackedgeInactiveRootMask, context.inactiveRootMaskTails)}; `}${safepoint()} }`
 			: context.loopBackedgeInactiveRootMask === undefined
 				? context.gcSafepoint
 					? `if (mal_gc_poll) { ${safepoint()} }`
 					: ""
-				: `if (mal_gc_poll) { ${cInactiveRootMaskPublication(context.loopBackedgeInactiveRootMask)}; ${safepoint()} }`;
+				: `if (mal_gc_poll) { ${cInactiveRootMaskPublication(context.loopBackedgeInactiveRootMask, context.inactiveRootMaskTails)}; ${safepoint()} }`;
 	const mathPoll =
 		context.mathCallInactiveRootMask === undefined
 			? poll
-			: `if (mal_gc_poll) { ${(context.outgoingRootPublication ?? []).map((line) => `${line} `).join("")}${cInactiveRootMaskPublication(context.mathCallInactiveRootMask)}; ${safepoint()} }`;
+			: `if (mal_gc_poll) { ${(context.outgoingRootPublication ?? []).map((line) => `${line} `).join("")}${cInactiveRootMaskPublication(context.mathCallInactiveRootMask, context.inactiveRootMaskTails)}; ${safepoint()} }`;
 	const mathFallbackRootPublication =
 		context.mathCallInactiveRootMask === undefined
 			? []
-			: [`  ${cInactiveRootMaskPublication(context.mathCallInactiveRootMask)};`];
+			: [
+					`  ${cInactiveRootMaskPublication(context.mathCallInactiveRootMask, context.inactiveRootMaskTails)};`,
+				];
 	// Where `this` is stored: a derived constructor's is a mutable rooted slot
 	// (super() rebinds it); everything else reads the immutable `this_value` param.
 	const thisRef = thisSlot >= 0 ? `__gc_slots[${thisSlot}]` : "this_value";
@@ -5158,7 +5201,9 @@ function emitInstruction(
 				...(context.incomingRootPublication ?? []).map((line) => `  ${line}`),
 				...(context.tdzInactiveRootMask === undefined
 					? []
-					: [`  ${cInactiveRootMaskPublication(context.tdzInactiveRootMask)};`]),
+					: [
+							`  ${cInactiveRootMaskPublication(context.tdzInactiveRootMask, context.inactiveRootMaskTails)};`,
+						]),
 				`  mal_vm_op_throw_if_tdz(vm, ${boxed(instruction.src)}, ${relocation.stringIndex(instruction.nameStringIndex)});`,
 				`  ${throwCheck()}`,
 				`}`,
@@ -5491,7 +5536,7 @@ function emitInstruction(
 				...(context.knownOwnSlotLoadInactiveRootMask === undefined
 					? []
 					: [
-							`  ${cInactiveRootMaskPublication(context.knownOwnSlotLoadInactiveRootMask)};`,
+							`  ${cInactiveRootMaskPublication(context.knownOwnSlotLoadInactiveRootMask, context.inactiveRootMaskTails)};`,
 						]),
 				`  r${instruction.dst} = ${profileCall("property", `mal_vm_op_load_property_ic(vm, ${boxed(instruction.object)}, mal_value_from_string(vm->string_constant_atoms[${relocation.stringIndex(instruction.stringIndex)}]), &${nativeBodyReference(resources, "propertyCache")}[${instruction.icIndex}])`)};`,
 				`  ${throwCheck()}`,
@@ -5908,7 +5953,7 @@ function emitInstruction(
 								...(context.indexedPropertyLoadInactiveRootMask === undefined
 									? []
 									: [
-											`  ${cInactiveRootMaskPublication(context.indexedPropertyLoadInactiveRootMask)};`,
+											`  ${cInactiveRootMaskPublication(context.indexedPropertyLoadInactiveRootMask, context.inactiveRootMaskTails)};`,
 										]),
 								`  r${instruction.dst} = ${profileCall("property", `mal_vm_indexed_fast_load_index(vm, ${boxed(instruction.object)}, ${num(instruction.key)}, &${nativeBodyReference(resources, "propertyCache")}[${instruction.icIndex}])`)};`,
 								`  ${throwCheck()}`,
@@ -6029,7 +6074,7 @@ function emitInstruction(
 				...(context.staticPropertyLoadInactiveRootMask === undefined
 					? []
 					: [
-							`  ${cInactiveRootMaskPublication(context.staticPropertyLoadInactiveRootMask)};`,
+							`  ${cInactiveRootMaskPublication(context.staticPropertyLoadInactiveRootMask, context.inactiveRootMaskTails)};`,
 						]),
 				`  r${instruction.dst} = ${profileCall("property", `mal_vm_op_load_property_ic_static_miss(vm, ${boxed(instruction.object)}, ${key}, &${nativeBodyReference(resources, "propertyCache")}[${instruction.icIndex}])`)};`,
 				`  ${throwCheck()}`,
@@ -6242,7 +6287,7 @@ function emitInstruction(
 				...(context.staticPropertyStoreInactiveRootMask === undefined
 					? []
 					: [
-							`  ${cInactiveRootMaskPublication(context.staticPropertyStoreInactiveRootMask)};`,
+							`  ${cInactiveRootMaskPublication(context.staticPropertyStoreInactiveRootMask, context.inactiveRootMaskTails)};`,
 						]),
 				`  ${profileCall("property", `mal_vm_op_store_property_ic(vm, ${boxed(instruction.object)}, ${key}, ${boxed(instruction.value)}, ${strict}, &${nativeBodyReference(resources, "propertyCache")}[${instruction.icIndex}])`)};`,
 				`  ${throwCheck()}`,
@@ -8815,7 +8860,7 @@ function emitInstruction(
 					const charPoll =
 						mask === undefined
 							? poll
-							: `if (mal_gc_poll) { ${(context.outgoingRootPublication ?? []).join(" ")} ${cInactiveRootMaskPublication(mask)}; ${safepoint()} }`;
+							: `if (mal_gc_poll) { ${(context.outgoingRootPublication ?? []).join(" ")} ${cInactiveRootMaskPublication(mask, context.inactiveRootMaskTails)}; ${safepoint()} }`;
 					return [
 						`static MAL_ISOLATE_LOCAL MalCallCache __cc_${ip};`,
 						`MalValue __char_value_${ip};`,
@@ -8823,7 +8868,11 @@ function emitInstruction(
 						`  r${instruction.dst} = ${callResult(`__char_value_${ip}`)};`,
 						`} else {`,
 						...(context.incomingRootPublication ?? []).map((line) => `  ${line}`),
-						...(mask === undefined ? [] : [`  ${cInactiveRootMaskPublication(mask)};`]),
+						...(mask === undefined
+							? []
+							: [
+									`  ${cInactiveRootMaskPublication(mask, context.inactiveRootMaskTails)};`,
+								]),
 						`  MalCompletion ${tmp} = mal_builtin_string_char_code_at_direct(vm, &__cc_${ip}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length}, &__string_leaf_cache_${ip});`,
 						`  if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow()}`,
 						`  r${instruction.dst} = ${callResult(`${tmp}.value`)};`,
@@ -9411,7 +9460,7 @@ function emitInstruction(
 						...(context.iteratorStepInactiveRootMask === undefined
 							? []
 							: [
-									`  ${cInactiveRootMaskPublication(context.iteratorStepInactiveRootMask)};`,
+									`  ${cInactiveRootMaskPublication(context.iteratorStepInactiveRootMask, context.inactiveRootMaskTails)};`,
 								]),
 						`  if (!(${iteratorFallback})) ${onThrow()}`,
 						`}`,

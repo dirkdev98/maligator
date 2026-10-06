@@ -137,7 +137,8 @@ export const NATIVE_C_HEADER_LINES = [
 	'#include "builtin_async_iterator.h"',
 	// Compiled coroutines cast their backend entry state to MalGeneratorObject.
 	'#include "generator_object.h"',
-	"#define MAL_ROOT_MASK(mask) (__gc_frame.inactive_slots = UINT64_C(mask))",
+	"#define MAL_ROOT_MASK(mask) mal_gc_root_frame_set_inactive(&__gc_frame, UINT64_C(mask), nullptr, 0)",
+	"#define MAL_ROOT_MASK_WIDE(mask, words, count) mal_gc_root_frame_set_inactive(&__gc_frame, UINT64_C(mask), words, count)",
 	"#define MAL_STRING_ROW(code_units_value, length_value) { .header = MAL_HEAP_HEADER_IMMORTAL(MAL_HEAP_STRING), .storage = MAL_STRING_STORAGE_EXTERNAL, .hash = 0, .length = length_value, .code_units = code_units_value }",
 	"#define MAL_LATIN1_STRING_ROW(units_value, length_value) { .header = MAL_HEAP_HEADER_IMMORTAL(MAL_HEAP_STRING), .storage = MAL_STRING_STORAGE_EXTERNAL, .latin1 = 1, .hash = 0, .length = length_value, .latin1_units = units_value }",
 	"#define MAL_LINE_ENTRY(start_ip_value, pos_id_value) { .start_ip = start_ip_value, .pos_id = pos_id_value }",

@@ -377,12 +377,12 @@ describe("Core target construction", () => {
 			]),
 		);
 		expect([...masks]).toEqual([
-			[2, 0b010n],
-			[7, 0b001n],
+			[2, (1n << 64n) | 0b010n],
+			[7, (1n << 64n) | 0b001n],
 		]);
 	});
 
-	it("masks only assigned register slots within the 64-bit publication width", () => {
+	it("masks assigned root slots across word boundaries", () => {
 		const slots = new Map([
 			[2, 0],
 			[4, 63],
@@ -418,8 +418,8 @@ describe("Core target construction", () => {
 			),
 		]).toEqual([
 			[0, 0n],
-			[1, 1n << 63n],
-			[2, (1n << 63n) | 1n],
+			[1, (1n << 65n) | (1n << 63n)],
+			[2, (1n << 65n) | (1n << 64n) | (1n << 63n) | 1n],
 		]);
 		expect(
 			nativeInactiveRootMasks(
@@ -427,9 +427,9 @@ describe("Core target construction", () => {
 					{
 						kind: "operation",
 						instructionIp: 0,
-						rootRegisters: [2, 4],
-						incomingRootRegisters: [2, 4],
-						outgoingRootRegisters: [2, 4],
+						rootRegisters: [2, 4, 8, 9],
+						incomingRootRegisters: [2, 4, 8, 9],
+						outgoingRootRegisters: [2, 4, 8, 9],
 					},
 				],
 				slots,

@@ -56,8 +56,7 @@ static void observe_return_poll(MalVm *vm) {
     observed_return_poll = true;
     for (MalRootFrame *frame = mal_root_frame_head; frame != nullptr; frame = frame->prev) {
         for (i32 slot = 0; slot < frame->desc->slot_count; ++slot) {
-            bool active = slot >= 64 ||
-                (frame->inactive_slots & (UINT64_C(1) << slot)) == 0;
+            bool active = !mal_gc_root_frame_slot_is_inactive(frame, slot);
             if (active && frame->slots[slot] == returned_token) {
                 observed_publication = true;
             }

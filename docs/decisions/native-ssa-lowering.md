@@ -19,7 +19,9 @@ Native storage planning precedes C rendering. It chooses root slot order, privat
 boxed locals and their publication obligations, stable incoming roots, and bounded
 single-use scalar expressions separately for canonical and typed entries. Root
 slots differ from computational locals, and expression values have no local
-assignment. Expression selection admits only pure scalar operations whose
+assignment. Safepoint masks cover the entire native root set using an inline word
+and immutable tail words; uncovered runtime-owned slots remain active. Small-mask
+publication clears any previous tail. Expression selection admits only pure scalar operations whose
 representations or exact input facts prove numeric semantics. It preserves leaf
 values, effects, control boundaries, repeated uses, and profiling producer sites.
 Floating-point contraction is disabled so an expression tree keeps JavaScript's

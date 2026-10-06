@@ -212,8 +212,9 @@ describe("native static-property root-mask publication", () => {
 			),
 		);
 		genericStaticSafepointLoadCount = result.programImage.runtime.functions.reduce(
-			(count, fn, functionIndex) => {
+			(count, _fn, functionIndex) => {
 				const native = result.programImage.native.functions[functionIndex]!;
+				const fn = native.body;
 				const operationSafepoints = new Set(
 					native.gc.safepoints
 						.filter((safepoint) => safepoint.kind === "operation")
@@ -231,7 +232,8 @@ describe("native static-property root-mask publication", () => {
 			},
 			0,
 		);
-		for (const [index, fn] of result.programImage.runtime.functions.entries()) {
+		for (const [index, native] of result.programImage.native.functions.entries()) {
+			const fn = native.body;
 			const stringConstant = (stringIndex: number) =>
 				String.fromCharCode(
 					...(result.programImage.runtime.stringConstants[stringIndex] ?? []),
@@ -250,7 +252,6 @@ describe("native static-property root-mask publication", () => {
 				}
 				return load.dst;
 			});
-			const native = result.programImage.native.functions[index]!;
 			if ("numericOnly" in kernel) {
 				expect(fn.instructions.some((op) => op.opcode === "LOAD_PROPERTY_STATIC")).toBe(
 					false,

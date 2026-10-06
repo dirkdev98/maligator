@@ -159,8 +159,8 @@ describe("compiled roots during a concurrent object snapshot", () => {
 					) === "readReturnedToken",
 			);
 			expect(getterIndex).toBeGreaterThanOrEqual(0);
-			const fn = image.runtime.functions[getterIndex]!;
 			const native = image.native.functions[getterIndex]!;
+			const fn = native.body;
 			const privateCalls = nativePrivateCallResultIps(fn, native);
 			const frameRegisters = new Set(
 				native.gc.safepoints.flatMap((point) => point.rootRegisters),

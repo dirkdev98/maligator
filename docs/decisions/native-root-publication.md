@@ -55,8 +55,9 @@ the artifact reader also rejects invalid exclusions.
 Private locals and their published shadow slots are different storage. A dead
 private local can still contain a reclaimed pointer. Before a helper, publication
 copies only incoming values and empties any active output-only private slots.
-Unmasked slots beyond the first 64 are also emptied when dead. The existing
-union mask keeps continuously rooted helper outputs visible during execution.
+Dead private shadows are also emptied beyond the inline mask word. Exact masks
+use immutable tail words for larger frames; uncovered runtime-owned slots stay
+active. The union mask keeps continuously rooted helper outputs visible during execution.
 
 A returned private value is published inside a later collecting poll. Ordinary
 noncollecting code does not need to copy it to the shadow frame. Collection does
@@ -201,7 +202,7 @@ noncollecting operations.
 Boxed keys and specialized indexed/projection plans retain their existing
 publication because their conversion or intermediate-storage contracts differ.
 The returned heap value is published before a later collecting poll, including
-unmasked root slots beyond the first 64.
+root slots beyond the inline mask word.
 
 An ordinary indexed read with an int32 or Number key can itself nominate its
 receiver and result for private storage. Receiver candidates are appended after
