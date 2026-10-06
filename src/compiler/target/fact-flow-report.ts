@@ -81,18 +81,35 @@ export function collectCompilerFactFlowReport(
 	facts: CompilerProgramFacts,
 	functionMap: ExecutionFunctionMap,
 	runtime: RuntimeImage,
+	runtimeInstructionIndexes: ReadonlyArray<ReadonlyMap<object, number>>,
 	nativeFunctions: ReadonlyArray<NativeFunctionPlan>,
 ): CompilerFactFlowReport {
-	const locations = new Map<
-		string,
-		Array<{ readonly functionIndex: number; readonly instructionIndex: number }>
-	>();
+	type Location = { readonly functionIndex: number; readonly instructionIndex: number };
+	const runtimeLocations = new Map<string, Array<Location>>();
+	const nativeLocations = new Map<string, Array<Location>>();
+	const record = (
+		locations: Map<string, Array<Location>>,
+		siteId: string,
+		location: Location,
+	) => {
+		const found = locations.get(siteId) ?? [];
+		found.push(location);
+		locations.set(siteId, found);
+	};
+	for (const [functionIndex, indexes] of runtimeInstructionIndexes.entries()) {
+		for (const [instruction, instructionIndex] of indexes) {
+			const siteId = facts.instructionSites.get(instruction)?.id;
+			if (siteId !== undefined)
+				record(runtimeLocations, siteId, { functionIndex, instructionIndex });
+		}
+	}
 	for (const fn of nativeFunctions) {
 		for (const [instructionIndex, siteId] of (fn.compilerSiteIds ?? []).entries()) {
 			if (siteId === undefined) continue;
-			const found = locations.get(siteId) ?? [];
-			found.push({ functionIndex: fn.functionIndex, instructionIndex });
-			locations.set(siteId, found);
+			record(nativeLocations, siteId, {
+				functionIndex: fn.functionIndex,
+				instructionIndex,
+			});
 		}
 	}
 
@@ -112,76 +129,79 @@ export function collectCompilerFactFlowReport(
 				artifact: "callee-target-set",
 			},
 		];
-		const emitted = locations.get(site.id) ?? [];
-		if (emitted.length === 0) {
-			events.push({
-				phase: "core-to-execution",
-				disposition: "dropped",
-				artifact: "target-instruction",
-				reason: "instruction-elided",
-			});
-		}
-		for (const { functionIndex, instructionIndex } of emitted) {
-			const runtimeInstruction =
-				runtime.functions[functionIndex]?.instructions[instructionIndex];
-			const nativeInstruction =
-				nativeFunctions[functionIndex]?.instructions[instructionIndex];
-			const runtimeTargets = runtimeCallTargets(runtimeInstruction);
-			const nativeTargets = nativeCallTargets(nativeInstruction);
-			const selectedTargets = runtimeTargets ?? nativeTargets;
-			if (selectedTargets === undefined || !validNarrowing(functions, selectedTargets)) {
+		const appendOutput = (
+			locations: ReadonlyMap<string, ReadonlyArray<Location>>,
+			loweringPhase: "core-to-execution" | "core-to-native",
+			outputPhase: "runtime-output" | "native-output",
+			consumer: (location: Location) => {
+				readonly targets: ReadonlyArray<number> | undefined;
+				readonly artifact: string;
+			},
+		): void => {
+			const emitted = locations.get(site.id) ?? [];
+			if (emitted.length === 0) {
 				events.push({
-					phase: "core-to-execution",
+					phase: loweringPhase,
 					disposition: "dropped",
-					artifact: "callee-target-set",
-					functionIndex,
-					instructionIndex,
-					reason:
-						selectedTargets === undefined
-							? "unsupported-consumer"
-							: "representation-mismatch",
+					artifact: "target-instruction",
+					reason: "instruction-elided",
 				});
-				continue;
 			}
-			events.push({
-				phase: "core-to-execution",
-				disposition: sameTargets(functions, selectedTargets) ? "consumed" : "narrowed",
-				artifact:
-					nativeInstruction?.kind === "call" &&
-					nativeInstruction.guardedFunctionIndices !== undefined
-						? "guardedFunctionIndices"
-						: "directFunctionIndex",
-				functionIndex,
-				instructionIndex,
-				...(selectedTargets.length === 1
-					? { targetFunctionIndex: selectedTargets[0] }
-					: { targetFunctionIndices: [...selectedTargets] }),
-			});
-			events.push(
-				outputEvent(
-					"runtime-output",
-					runtimeInstruction?.opcode === "CALL" &&
-						runtimeInstruction.guardedFunctionIndices !== undefined
-						? "guardedFunctionIndices"
-						: "exactFunctionIndex",
-					functionIndex,
-					instructionIndex,
-					runtimeTargets,
+			for (const location of emitted) {
+				const { targets, artifact } = consumer(location);
+				const event = outputEvent(
+					outputPhase,
+					artifact,
+					location.functionIndex,
+					location.instructionIndex,
+					targets,
 					functions,
-				),
-				outputEvent(
-					"native-output",
-					nativeInstruction?.kind === "call" &&
-						nativeInstruction.guardedFunctionIndices !== undefined
-						? "guardedFunctionIndices"
-						: "directFunctionIndex",
-					functionIndex,
-					instructionIndex,
-					nativeTargets,
-					functions,
-				),
-			);
-		}
+				);
+				events.push(
+					{
+						...event,
+						phase: loweringPhase,
+						artifact:
+							artifact === "exactFunctionIndex" ? "directFunctionIndex" : artifact,
+					},
+					event,
+				);
+			}
+		};
+		appendOutput(
+			runtimeLocations,
+			"core-to-execution",
+			"runtime-output",
+			({ functionIndex, instructionIndex }) => {
+				const instruction =
+					runtime.functions[functionIndex]?.instructions[instructionIndex];
+				return {
+					targets: runtimeCallTargets(instruction),
+					artifact:
+						instruction?.opcode === "CALL" &&
+						instruction.guardedFunctionIndices !== undefined
+							? "guardedFunctionIndices"
+							: "exactFunctionIndex",
+				};
+			},
+		);
+		appendOutput(
+			nativeLocations,
+			"core-to-native",
+			"native-output",
+			({ functionIndex, instructionIndex }) => {
+				const instruction =
+					nativeFunctions[functionIndex]?.instructions[instructionIndex];
+				return {
+					targets: nativeCallTargets(instruction),
+					artifact:
+						instruction?.kind === "call" &&
+						instruction.guardedFunctionIndices !== undefined
+							? "guardedFunctionIndices"
+							: "directFunctionIndex",
+				};
+			},
+		);
 		entries.push({
 			family: "call-targets",
 			siteId: site.id,

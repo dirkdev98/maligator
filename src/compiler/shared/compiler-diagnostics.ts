@@ -9,6 +9,7 @@ export interface CompilerFactFlowEvent {
 	readonly phase:
 		| "core-optimization"
 		| "core-to-execution"
+		| "core-to-native"
 		| "runtime-output"
 		| "native-output";
 	readonly disposition: "produced" | "consumed" | "narrowed" | "dropped";

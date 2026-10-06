@@ -1952,7 +1952,8 @@ export function lowerVerifiedExecutionToProgramImage(
 		definition.diagnostics.factFlow = collectCompilerFactFlowReport(
 			context.facts,
 			program.functionMap,
-			{ ...runtime, functions: definition.native.functions.map((fn) => fn.body) },
+			runtime,
+			runtimePlan.functions.map((fn) => fn.instructionIndexByTargetInstruction),
 			definition.native.functions,
 		);
 		validateRuntimeImageMetadata(runtime);
