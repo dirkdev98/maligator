@@ -66,9 +66,17 @@ describe("independent native SSA storage", () => {
 		const suspended = image.native.functions.filter((fn) => fn.mode === "resumable");
 		expect(suspended.length).toBeGreaterThanOrEqual(2);
 		for (const fn of suspended) {
-			const vm = image.runtime.functions[fn.functionIndex]!;
-			const vmCount = vm.registerCount;
 			expect(emitCompiledFunction(fn, fn.functionIndex, "", false)).not.toBeNull();
+		}
+		for (const name of ["wideHolder", "wideAsync"]) {
+			const fn = suspended.find(
+				(candidate) =>
+					String.fromCharCode(
+						...(image.runtime.stringConstants[candidate.body.nameStringIndex] ?? []),
+					) === name,
+			);
+			if (fn === undefined) throw new Error(`Fixture lacks resumable ${name}`);
+			const vmCount = image.runtime.functions[fn.functionIndex]!.registerCount;
 			expect(
 				fn.gc.safepoints.some((point) => {
 					const op = fn.body.instructions[point.instructionIp];
