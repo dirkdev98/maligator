@@ -4806,6 +4806,12 @@ function readCompilerArtifact(
 	for (const [index, fn] of runtimeImage.functions.entries()) {
 		fn.closureCaptureOwners = functions[index]!.closureCaptureOwners;
 		fn.closureCaptureValues = functions[index]!.closureCaptureValues;
+		if (fn.closureCaptureValues !== undefined)
+			validateClosureCaptureValues(
+				fn.closureCaptureValues,
+				index,
+				runtimeImage.functions,
+			);
 	}
 	validateVmShapeCases(runtimeImage);
 	for (const native of definition.native.functions) validateNativeStorage(native);

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { BYTECODE_OPERATIONS } from "../src/compiler/target/bytecode-operation-spec.ts";
 import {
 	COMPILER_ARTIFACT_MAGIC,
 	COMPILER_ARTIFACT_VERSION,
@@ -151,6 +152,39 @@ const invalidLayouts: Array<[string, Array<ClosureCaptureValue>]> = [
 ];
 
 describe("immutable closure capture artifact transport", () => {
+	it("checks copied capture descriptors against both independently stored bodies", () => {
+		const bytes = Buffer.from(serializeCompilerArtifact(captureImage()));
+		const writer = new Writer();
+		writer.u8(BYTECODE_OPERATIONS.indexOf("LOAD_CAPTURED"));
+		writer.i32(0);
+		writer.i32(1);
+		writer.i32(0);
+		const payload = Buffer.from(writer.finish());
+		const following = new Writer();
+		following.u8(BYTECODE_OPERATIONS.indexOf("LOAD_CAPTURED"));
+		following.i32(1);
+		following.i32(1);
+		following.i32(1);
+		following.u8(BYTECODE_OPERATIONS.indexOf("RETURN"));
+		following.i32(1);
+		const body = Buffer.concat([payload, Buffer.from(following.finish())]);
+		const vm = bytes.indexOf(body);
+		const native = bytes.indexOf(body, vm + body.length);
+		expect(vm).toBeGreaterThanOrEqual(0);
+		expect(native).toBeGreaterThan(vm);
+		for (const offset of [vm, native]) {
+			const invalid = Buffer.from(bytes);
+			const replacement = new Writer();
+			replacement.u8(BYTECODE_OPERATIONS.indexOf("LOAD_CAPTURED"));
+			replacement.i32(0);
+			replacement.i32(1);
+			replacement.i32(2);
+			invalid.set(replacement.finish(), offset);
+			expect(() => deserializeCompilerArtifact(invalid)).toThrow(
+				/uncovered closure capture value load/,
+			);
+		}
+	});
 	it.each(["closureCaptureOwners", "closureCaptureValues"] as const)(
 		"rejects mismatched native and VM %s before caching or emitting C",
 		(key) => {
