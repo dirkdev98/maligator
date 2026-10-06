@@ -512,6 +512,13 @@ describe("SSA native lowering", () => {
 		expect(leaf.expressionIps.length).toBeGreaterThan(0);
 		expect(native.storage!.rematerializedConstantIps.length).toBeGreaterThan(0);
 		expect(leaf.rematerializedConstantIps.length).toBeGreaterThan(0);
+		expect(leaf.fallthroughJumpIps.length).toBeGreaterThan(0);
+		for (const ip of leaf.fallthroughJumpIps) {
+			expect(native.body.instructions[ip]).toMatchObject({
+				opcode: "JUMP",
+				targetIp: ip + 1,
+			});
+		}
 		const targets = new Set(
 			native.body.instructions.flatMap((op) =>
 				op.opcode === "JUMP" || op.opcode === "JUMP_IF" ? [op.targetIp] : [],
@@ -540,6 +547,30 @@ describe("SSA native lowering", () => {
 		expect(() => serializeCompilerArtifact(invalid)).toThrow(
 			/invalid or stale storage plan/,
 		);
+		const conditional = native.body.instructions.findIndex(
+			(op) => op.opcode === "JUMP_IF",
+		);
+		expect(() =>
+			validateNativeStorage({
+				...native,
+				directEntries: native.directEntries.map((candidate) =>
+					candidate !== entry
+						? candidate
+						: {
+								...entry,
+								storage: {
+									...entry.storage!,
+									numericLeaf: {
+										...leaf,
+										fallthroughJumpIps: [...leaf.fallthroughJumpIps, conditional].sort(
+											(left, right) => left - right,
+										),
+									},
+								},
+							},
+				),
+			}),
+		).toThrow(/invalid or stale storage plan/);
 	});
 
 	it("rematerializes repeated scalar constants across calls and dominated branches", () => {

@@ -1481,15 +1481,18 @@ function renderNumericLeafWorker(
 			return [op.dst, renderScalarExpression(op, reps)];
 		}),
 	);
+	const fallthroughJumps = new Set(leaf.fallthroughJumpIps);
 	const jumpTargets = new Set(
-		fn.instructions.flatMap((op) =>
-			op.opcode === "JUMP" || op.opcode === "JUMP_IF" ? [op.targetIp] : [],
+		fn.instructions.flatMap((op, ip) =>
+			(op.opcode === "JUMP" && !fallthroughJumps.has(ip)) || op.opcode === "JUMP_IF"
+				? [op.targetIp]
+				: [],
 		),
 	);
 	const body: Array<string> = [];
 	for (const [ip, op] of fn.instructions.entries()) {
 		if (jumpTargets.has(ip)) body.push(`L${ip}:;`);
-		if (expressionIps.has(ip)) continue;
+		if (expressionIps.has(ip) || fallthroughJumps.has(ip)) continue;
 		let line: string;
 		switch (op.opcode) {
 			case "JUMP":

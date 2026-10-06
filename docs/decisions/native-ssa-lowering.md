@@ -40,6 +40,9 @@ choices are planned independently of ordinary boxed-body overlays. Rendering
 preserves branch targets before eliding producers and confines expression macros
 to the helper. The runtime observation guard still selects the ordinary typed body
 when required.
+The leaf plan also records unconditional edges to the immediately following
+instruction as fallthroughs. Rendering retains only labels targeted by remaining
+branches; a selected expression producer can still be such a target.
 
 Immutable numeric and boolean SSA constants use a separate rematerialization plan,
 so repeated uses and intervening effects do not force a C local. Selection requires

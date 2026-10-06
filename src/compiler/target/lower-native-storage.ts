@@ -26,12 +26,16 @@ export interface NativeScalarStoragePlan {
 	readonly rematerializedConstantIps: ReadonlyArray<number>;
 }
 
+export interface NativeNumericLeafPlan extends NativeScalarStoragePlan {
+	readonly fallthroughJumpIps: ReadonlyArray<number>;
+}
+
 export interface NativeStoragePlan extends NativeScalarStoragePlan {
 	readonly rootRegisters: ReadonlyArray<number>;
 	readonly privateRegisters: ReadonlyArray<number>;
 	readonly privateCallResultIps: ReadonlyArray<number>;
 	readonly entryStableRootRegisters: ReadonlyArray<number>;
-	readonly numericLeaf: NativeScalarStoragePlan | undefined;
+	readonly numericLeaf: NativeNumericLeafPlan | undefined;
 }
 
 function selectNumericLeaf(
@@ -438,7 +442,7 @@ function lowerStorage(
 			rematerializedConstantIps: constants,
 		};
 	};
-	let numericLeaf: NativeScalarStoragePlan | undefined;
+	let numericLeaf: NativeNumericLeafPlan | undefined;
 	if (entry !== undefined && selectNumericLeaf(native, entry)) {
 		const leaf = {
 			...native,
@@ -448,7 +452,12 @@ function lowerStorage(
 			fieldCalls: [],
 			literalSwitches: [],
 		};
-		numericLeaf = scalarStorage(leaf);
+		numericLeaf = {
+			...scalarStorage(leaf),
+			fallthroughJumpIps: fn.instructions.flatMap((op, ip) =>
+				op.opcode === "JUMP" && op.targetIp === ip + 1 ? [ip] : [],
+			),
+		};
 	}
 	const roots = nativeFrameRootRegisters(fn, native).filter((local) =>
 		["boxed", "string"].includes(native.registerRepresentations[local]!),
@@ -573,6 +582,12 @@ export function validateNativeStorage(native: NativeFunctionPlan): void {
 		selected !== undefined &&
 		sameScalar(stored, selected) &&
 		sameScalar(stored.numericLeaf, selected.numericLeaf) &&
+		(stored.numericLeaf === undefined ||
+			(stored.numericLeaf.fallthroughJumpIps.length ===
+				selected.numericLeaf!.fallthroughJumpIps.length &&
+				stored.numericLeaf.fallthroughJumpIps.every(
+					(ip, index) => ip === selected.numericLeaf!.fallthroughJumpIps[index],
+				))) &&
 		(
 			[
 				"rootRegisters",

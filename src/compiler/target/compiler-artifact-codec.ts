@@ -58,7 +58,7 @@ import type {
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal artifacts are hard cut-overs: stale cache entries rebuild.
-export const COMPILER_ARTIFACT_VERSION = 103;
+export const COMPILER_ARTIFACT_VERSION = 104;
 
 function validateClosureCaptureOwners(
 	owners: ReadonlyArray<number>,
@@ -676,6 +676,7 @@ function writeNativeStorage(w: Writer, storage: NativeStoragePlan | undefined): 
 		w.i32Array([...storage.numericLeaf.expressionIps]);
 		w.i32Array([...storage.numericLeaf.definitionInitializedRegisters]);
 		w.i32Array([...storage.numericLeaf.rematerializedConstantIps]);
+		w.i32Array([...storage.numericLeaf.fallthroughJumpIps]);
 	}
 }
 
@@ -700,6 +701,7 @@ function readNativeStorage(r: Reader): NativeStoragePlan {
 						expressionIps: r.i32Array(),
 						definitionInitializedRegisters: r.i32Array(),
 						rematerializedConstantIps: r.i32Array(),
+						fallthroughJumpIps: r.i32Array(),
 					},
 	};
 }
