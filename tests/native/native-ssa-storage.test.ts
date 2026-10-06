@@ -35,6 +35,9 @@ describe("independent native SSA storage", () => {
 	it("preserves scalar arithmetic, loop transport, and suspended heap locals", () => {
 		const regions = image.native.functions.flatMap((fn) => fn.specializations);
 		expect(regions.some((region) => region.kind === "string-split-cursor")).toBe(true);
+		expect(regions.some((region) => region.kind === "regexp-iterator-projection")).toBe(
+			true,
+		);
 		expect(
 			regions.some(
 				(region) =>

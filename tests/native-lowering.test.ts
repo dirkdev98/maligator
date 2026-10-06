@@ -1,11 +1,14 @@
 import { describe, expect, it } from "vitest";
+import { resolveBuildConfig } from "../src/build-config.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
 import { optimizeSemanticProgramToCore } from "../src/compiler/pipeline/compile-core-common.ts";
 import { compileSemanticProgramToProgramImage } from "../src/compiler/pipeline/compile-core.ts";
+import { compilerProgramFactsFromConfig } from "../src/compiler/shared/compiler-facts.ts";
 import {
 	deserializeCompilerArtifact,
 	serializeCompilerArtifact,
 } from "../src/compiler/target/compiler-artifact-codec.ts";
+import { emitProgramImage } from "../src/compiler/target/emit-program-image.ts";
 import { lowerCoreCompilationToExecutionProgram } from "../src/compiler/target/lower-execution.ts";
 import { lowerExecutionToProgramImage } from "../src/compiler/target/lower-native-program-image.ts";
 import { lowerCoreCompilationToNativeProgram } from "../src/compiler/target/lower-native.ts";
@@ -23,6 +26,55 @@ globalThis.calculate = calculate;
 `;
 
 describe("SSA native lowering", () => {
+	it("preserves certified region exits through native edge copies", () => {
+		const source = `globalThis.sum = function sum(value, regexp) {
+			let sum = 0;
+			for (const match of value.matchAll(regexp)) {
+				sum += Number(match[1]);
+				if (sum > 10) break;
+			}
+			return sum;
+		};`;
+		const image = compileSemanticProgramToProgramImage(
+			analyzeSourceAndRunSemanticAnalysis(source, "/native-region-exit.js"),
+			{ facts: compilerProgramFactsFromConfig(resolveBuildConfig({})) },
+		);
+		const fn = image.native.functions[1]!;
+		const region = fn.specializations.find(
+			(region) => region.kind === "regexp-iterator-projection",
+		);
+		if (region?.kind !== "regexp-iterator-projection")
+			throw new Error("Missing RegExp iterator projection");
+		const branch = fn.body.instructions[region.doneBranchIp]!;
+		if (branch.opcode !== "JUMP_IF") throw new Error("Missing region exit branch");
+		expect(branch.targetIp).not.toBe(region.exitIp);
+		expect(emitCompiledFunction(fn.body, fn, fn.functionIndex, "", false)).not.toBeNull();
+		const restored = deserializeCompilerArtifact(serializeCompilerArtifact(image));
+		expect(() => emitProgramImage(restored, { compiled: true })).not.toThrow();
+		const invalid = {
+			...image,
+			native: {
+				...image.native,
+				functions: image.native.functions.map((native) =>
+					native !== fn
+						? native
+						: {
+								...fn,
+								body: {
+									...fn.body,
+									instructions: fn.body.instructions.map((op) =>
+										op !== branch ? op : { ...branch, targetIp: region.loads[0]!.ip },
+									),
+								},
+							},
+				),
+			},
+		};
+		expect(() => serializeCompilerArtifact(invalid)).toThrow(
+			/invalid RegExp iterator projection/,
+		);
+	});
+
 	const scalarImage = (body: string, profile = false) =>
 		compileSemanticProgramToProgramImage(
 			analyzeSourceAndRunSemanticAnalysis(

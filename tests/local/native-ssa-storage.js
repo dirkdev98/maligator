@@ -44,6 +44,18 @@ globalThis.splitStorage = (value, separator) => {
 };
 console.log("split", globalThis.splitStorage("a |bc| def ", "|"));
 
+globalThis.sumRegexStorage = (value, regexp) => {
+	let sum = 0;
+	for (const match of value.matchAll(regexp)) {
+		sum += Number(match[1]);
+		if (sum > 10) break;
+	}
+	return sum;
+};
+console.log("regexp-exit", globalThis.sumRegexStorage("3,4,8,99", /(\d+)/g));
+console.log("regexp-exhausted", globalThis.sumRegexStorage("3,4", /(\d+)/g));
+console.log("regexp-empty", globalThis.sumRegexStorage("", /(\d+)/g));
+
 function* wideHolder() {
 	globalThis.makeStorageValue(1);
 	globalThis.makeStorageValue(2);

@@ -23,6 +23,7 @@ import {
 import {
 	nativeFrameRootRegisters,
 	nativeLoopUpdateTransportsValue,
+	targetCopyEdgeReaches,
 	validateNativeBodyAbis,
 	validateNativeDirectEntry,
 	validateNativeFieldCalls,
@@ -2666,7 +2667,7 @@ function validateRegExpIteratorProjectionRegion(
 		// the branch as that block's terminator, so the pair is emitted back to back.
 		region.doneBranchIp === region.stepIp + 1 &&
 		doneBranch.cond === step.doneDst &&
-		doneBranch.targetIp === region.exitIp &&
+		targetCopyEdgeReaches(fn, doneBranch.targetIp, region.exitIp) &&
 		region.iterator === step.iterator &&
 		region.next === step.next &&
 		region.value === step.valueDst &&
@@ -3042,9 +3043,9 @@ function validateStringSplitCursorRegion(
 		headerBranchIp !== lengthIp + 2 ||
 		headerBranch?.opcode !== "JUMP_IF" ||
 		headerBranch.cond !== compare.dst ||
-		headerBranch.targetIp !== region.elementIp ||
+		!targetCopyEdgeReaches(fn, headerBranch.targetIp, region.elementIp) ||
 		exitJump?.opcode !== "JUMP" ||
-		exitJump.targetIp !== region.exitIp ||
+		!targetCopyEdgeReaches(fn, exitJump.targetIp, region.exitIp) ||
 		element?.opcode !== "LOAD_PROPERTY" ||
 		!resultRegisters.has(element.object) ||
 		element.key !== region.index ||

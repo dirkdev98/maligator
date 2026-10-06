@@ -1105,6 +1105,33 @@ export function nativeLoopUpdateTransportsValue(
 	return (backedgeIp < 0 || crossedBackedge) && aliases.has(index);
 }
 
+/** Ordinary edge copies can separate a lowered branch target from its certified Core successor. */
+export function targetCopyEdgeReaches(
+	fn: BytecodeFunction,
+	startIp: number,
+	endIp: number,
+): boolean {
+	if (
+		!Number.isInteger(startIp) ||
+		!Number.isInteger(endIp) ||
+		startIp < 0 ||
+		endIp < 0 ||
+		endIp > fn.instructions.length
+	)
+		return false;
+	const visited = new Set<number>();
+	let ip = startIp;
+	while (ip !== endIp) {
+		if (visited.has(ip)) return false;
+		visited.add(ip);
+		const op = fn.instructions[ip];
+		if (op?.opcode === "MOVE") ip++;
+		else if (op?.opcode === "JUMP") ip = op.targetIp;
+		else return false;
+	}
+	return true;
+}
+
 export interface NativeFunctionPlan {
 	readonly storage?: NativeStoragePlan;
 	readonly body: BytecodeFunction;
@@ -3582,7 +3609,7 @@ function lowerExecutionFunctionToNativePlan(
 					// instead of discovering the region from the distance.
 					doneBranchIp === stepIp! + 1 &&
 					doneBranch.cond === step.doneDst &&
-					doneBranch.targetIp === exitIp;
+					targetCopyEdgeReaches(bytecode, doneBranch.targetIp, exitIp);
 				for (const load of resolvedLoads) {
 					const capture = instructions[load.ip];
 					const key = instructions[load.keyIp];
@@ -4227,6 +4254,7 @@ function lowerExecutionFunctionToNativePlan(
 				}
 				const loweredCall = instructions[callIp!];
 				const loweredHeaderBranch = instructions[headerBranchIp!];
+				const loweredExitJump = instructions[headerBranchIp! + 1];
 				const loweredLength = instructions[lengthIp!];
 				const loweredCompare = instructions[compareIp];
 				const loweredElement = instructions[elementIp];
@@ -4258,6 +4286,9 @@ function lowerExecutionFunctionToNativePlan(
 							guard.dependencies[0]?.kind !== "world")) ||
 					(loweredCall.opcode === "CALL" && propertyIp < 0) ||
 					loweredHeaderBranch?.opcode !== "JUMP_IF" ||
+					!targetCopyEdgeReaches(bytecode, loweredHeaderBranch.targetIp, elementIp) ||
+					loweredExitJump?.opcode !== "JUMP" ||
+					!targetCopyEdgeReaches(bytecode, loweredExitJump.targetIp, exitIp) ||
 					loweredLength?.opcode !== "LOAD_PROPERTY_STATIC" ||
 					!resultRegisters.includes(loweredLength.object) ||
 					loweredCompare?.opcode !== "BINARY" ||
