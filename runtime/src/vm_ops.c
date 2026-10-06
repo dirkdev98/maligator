@@ -8340,7 +8340,7 @@ MalObject *mal_vm_generator_instance_prototype(
 
 MalGeneratorObject *mal_vm_op_generator_start_compiled(
     MalVm *vm, MalValue callee, i32 function_index, MalValue this_value, MalEnv *env,
-    MalValue *registers, const MalValue *arguments, i32 argument_count,
+    MalValue *registers, i32 register_count, const MalValue *arguments, i32 argument_count,
     bool retain_arguments, i32 resume_ip, bool is_async_generator) {
     MalValue *owned_arguments = mal_compiled_coroutine_arguments(
         vm, arguments, argument_count, retain_arguments
@@ -8361,6 +8361,8 @@ MalGeneratorObject *mal_vm_op_generator_start_compiled(
     generator->frame.function_index = function_index;
     generator->frame.function = &vm->live_runtime_image.functions[function_index];
     generator->frame.registers = registers;
+    generator->frame.compiled_register_count = register_count;
+    generator->frame.compiled_suspend_position = 0;
     generator->frame.arguments = owned_arguments;
     generator->frame.argument_count = generator->frame.function->needs_arguments
         ? argument_count
@@ -8390,7 +8392,7 @@ MalGeneratorObject *mal_vm_op_generator_start_compiled(
 
 void mal_vm_op_yield_compiled(
     MalVm *vm, MalGeneratorObject *generator, MalValue yielded, i32 value_dst,
-    i32 mode_dst, i32 resume_ip, MalEnv *env) {
+    i32 mode_dst, i32 resume_ip, i32 suspend_position, MalEnv *env) {
     // SATB: yielded_value + frame.env are traced heap fields being overwritten;
     // shade the previous contents (the register buffer is mutated in place, so its
     // slots are root state until suspend and need no shade here).
@@ -8402,6 +8404,7 @@ void mal_vm_op_yield_compiled(
     // The register buffer is mutated in place (it is gen->frame.registers), so only
     // the resume point and the current env need saving for a later resume.
     generator->frame.instruction_pointer = resume_ip;
+    generator->frame.compiled_suspend_position = suspend_position + 1;
     if (generator->frame.env != nullptr) {
         mal_gc_write_barrier_env(generator->frame.env);
     }
@@ -8490,7 +8493,7 @@ void mal_vm_op_coroutine_throw_compiled(MalVm *vm, MalGeneratorObject *generator
 
 MalGeneratorObject *mal_vm_op_async_start_compiled(
     MalVm *vm, MalValue callee, i32 function_index, MalValue this_value, MalEnv *env,
-    MalValue *registers, const MalValue *arguments, i32 argument_count,
+    MalValue *registers, i32 register_count, const MalValue *arguments, i32 argument_count,
     bool retain_arguments, MalValue *out_promise) {
     MalValue *owned_arguments = mal_compiled_coroutine_arguments(
         vm, arguments, argument_count, retain_arguments
@@ -8516,6 +8519,8 @@ MalGeneratorObject *mal_vm_op_async_start_compiled(
     state->frame.function_index = function_index;
     state->frame.function = &vm->live_runtime_image.functions[function_index];
     state->frame.registers = registers;
+    state->frame.compiled_register_count = register_count;
+    state->frame.compiled_suspend_position = 0;
     state->frame.arguments = owned_arguments;
     state->frame.argument_count = state->frame.function->needs_arguments
         ? argument_count
@@ -8545,11 +8550,12 @@ MalGeneratorObject *mal_vm_op_async_start_compiled(
 
 void mal_vm_op_await_compiled(
     MalVm *vm, MalGeneratorObject *state, MalValue awaited, i32 value_dst, i32 mode_dst,
-    i32 resume_ip, MalEnv *env) {
+    i32 resume_ip, i32 suspend_position, MalEnv *env) {
     state->resume_value_register = value_dst;
     state->resume_mode_register = mode_dst;
     state->state = MAL_GENERATOR_SUSPENDED_YIELD;
     state->frame.instruction_pointer = resume_ip;
+    state->frame.compiled_suspend_position = suspend_position + 1;
     // SATB: frame.env is a traced heap field being overwritten; shade the previous env.
     if (state->frame.env != nullptr) {
         mal_gc_write_barrier_env(state->frame.env);

@@ -16,7 +16,6 @@ import { optimizeCore } from "../src/compiler/core/optimize.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
 import { coreRegisterClasses } from "../src/compiler/target/lower-execution.ts";
 import { lowerCoreCompilationToExecution } from "../src/compiler/target/lower-native-execution.ts";
-import { lowerExecutionToProgramImage } from "../src/compiler/target/lower-native-program-image.ts";
 import {
 	lowerVerifiedExecutionToRuntimePlan,
 	vmSafepointRootMapsAreTrusted,
@@ -34,6 +33,7 @@ import {
 	coreFunctions,
 	coreOperations,
 } from "./helpers/core-inspection.ts";
+import { lowerExecutionFixtureToProgramImage as lowerExecutionToProgramImage } from "./helpers/native-program-image.ts";
 
 function construct(source: string) {
 	return lowerSemanticProgramToCore(

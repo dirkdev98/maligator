@@ -10,13 +10,13 @@ import type {
 	ExecutionProgram,
 } from "../src/compiler/target/lower-execution.ts";
 import { lowerCoreCompilationToExecution } from "../src/compiler/target/lower-native-execution.ts";
-import { lowerExecutionToProgramImage } from "../src/compiler/target/lower-native-program-image.ts";
 import { nativeInactiveRootMasks } from "../src/compiler/target/render-native-c.ts";
 import {
 	ExecutionVerificationError,
 	verifyExecutionProgram,
 } from "../src/compiler/target/verify-execution.ts";
 import { verifyNativeExecutionProgram } from "../src/compiler/target/verify-native-execution.ts";
+import { lowerExecutionFixtureToProgramImage as lowerExecutionToProgramImage } from "./helpers/native-program-image.ts";
 
 const BRANCH_SOURCE = `
 	function choose(flag, extra) {

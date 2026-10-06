@@ -2,6 +2,10 @@ import { describe, expect, it } from "vitest";
 import { parseScript } from "../src/compiler/frontend/parser.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
 import { compileSemanticProgramToRuntimeImage } from "../src/compiler/pipeline/compile-runtime-core.ts";
+import {
+	deserializeCompilerArtifact,
+	serializeCompilerArtifact,
+} from "../src/compiler/target/compiler-artifact-codec.ts";
 import type { VmStringSplitProjectionRegion } from "../src/compiler/target/program-image.ts";
 import { compactProgramImageConstants } from "../src/compiler/target/program-image.ts";
 import {
@@ -134,6 +138,38 @@ function runtimeFixture(): RuntimeImage {
 }
 
 describe("RuntimeImage constant compaction", () => {
+	it("retains constants used only by an independent native body", () => {
+		const image = testProgramImage(runtimeFixture());
+		const native = image.native.functions[0]!;
+		const body = {
+			...native.body,
+			instructions: [
+				{ opcode: "CREATE_STRING" as const, dst: 7, stringIndex: 0 },
+				...native.body.instructions,
+			],
+		};
+		const input = withNativeFunctionPlan(image, 0, () => ({
+			...native,
+			body,
+			instructions: [undefined, ...native.instructions],
+			gc: {
+				safepoints: native.gc.safepoints.map((point) => ({
+					...point,
+					instructionIp: point.instructionIp + 1,
+				})),
+			},
+		}));
+		const compacted = compactProgramImageConstants(input).definition;
+		const op = compacted.native.functions[0]!.body.instructions[0]!;
+		expect(op.opcode).toBe("CREATE_STRING");
+		if (op.opcode !== "CREATE_STRING") throw new Error("Missing native string");
+		expect(compacted.runtime.stringConstants[op.stringIndex]).toEqual(
+			units("dead-leading"),
+		);
+		const restored = deserializeCompilerArtifact(serializeCompilerArtifact(compacted));
+		expect(restored.native.functions[0]!.body.instructions[0]).toEqual(op);
+	});
+
 	it.each([false, true])(
 		"preserves published root trust through compaction with mutated roots: %s",
 		(mutated) => {

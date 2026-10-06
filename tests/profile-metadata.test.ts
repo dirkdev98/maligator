@@ -20,12 +20,12 @@ import {
 	emitProgramTranslationUnits,
 } from "../src/compiler/target/emit-program-image.ts";
 import { lowerCoreCompilationToExecution } from "../src/compiler/target/lower-native-execution.ts";
-import { lowerExecutionToProgramImage } from "../src/compiler/target/lower-native-program-image.ts";
 import { matchProfileSites } from "../src/compiler/target/profile-metadata.ts";
 import type { ProgramImage } from "../src/compiler/target/program-image.ts";
 import { validateRuntimeImageMetadata } from "../src/compiler/target/runtime-image.ts";
 import { prepareProfile } from "../src/profile-artifact.ts";
 import { programAnalysisContext } from "./helpers/core-program-analysis.ts";
+import { lowerExecutionFixtureToProgramImage as lowerExecutionToProgramImage } from "./helpers/native-program-image.ts";
 
 interface OptimizationSidecar {
 	readonly coreOptimizationReport: CoreOptimizationReport;

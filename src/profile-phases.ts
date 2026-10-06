@@ -6,6 +6,7 @@ export const PROFILE_PHASE_NAMES = [
 	"core to execution",
 	"execution to image",
 	"serialize",
+	"core to native",
 ] as const;
 
 export type ProfilePhaseName = (typeof PROFILE_PHASE_NAMES)[number];

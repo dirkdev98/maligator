@@ -88,6 +88,7 @@ interface CompilerScalePhases {
 	constructCoreMs: number;
 	optimizeCoreMs: number;
 	coreToExecutionMs: number;
+	coreToNativeMs: number;
 	executionToImageMs: number;
 	emitMs: number;
 	serializeMs: number;
@@ -628,6 +629,7 @@ function emptyPhases(): CompilerScalePhases {
 		constructCoreMs: 0,
 		optimizeCoreMs: 0,
 		coreToExecutionMs: 0,
+		coreToNativeMs: 0,
 		executionToImageMs: 0,
 		emitMs: 0,
 		serializeMs: 0,
@@ -687,6 +689,7 @@ async function compileSample(
 		"construct core ir": "constructCoreMs",
 		"optimize core ir": "optimizeCoreMs",
 		"core to execution": "coreToExecutionMs",
+		"core to native": "coreToNativeMs",
 		"execution to image": "executionToImageMs",
 	};
 	const wallStartedAt = performance.now();

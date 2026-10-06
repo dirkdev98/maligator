@@ -25,6 +25,7 @@ import type {
 } from "../compiler/target/execution-ir.ts";
 import { lowerCoreCompilationToExecution } from "../compiler/target/lower-native-execution.ts";
 import { lowerExecutionToProgramImage } from "../compiler/target/lower-native-program-image.ts";
+import { lowerCoreCompilationToNativeProgram } from "../compiler/target/lower-native.ts";
 import { serializeRuntimeImage } from "../compiler/target/program-image-codec.ts";
 import type {
 	NativeFunctionPlan,
@@ -407,7 +408,10 @@ export function compileMode(
 	const execution = lowerCoreCompilationToExecution(optimized, {
 		reuseRegisters: true,
 	});
-	const image = lowerExecutionToProgramImage(execution, false);
+	const image = lowerExecutionToProgramImage(
+		execution,
+		lowerCoreCompilationToNativeProgram(optimized),
+	);
 	const wire = serializeRuntimeImage(image.runtime, { debugInfo: true });
 	const c = emitProgramImage(image, { compiled: true, debugInfo: true });
 	return {

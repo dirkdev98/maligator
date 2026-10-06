@@ -2,6 +2,7 @@ import type { ConstructedCoreCompilation } from "../core/core-compilation.ts";
 import type { SemanticProgram } from "../frontend/semantic-analysis.ts";
 import { lowerCoreCompilationToExecution } from "../target/lower-native-execution.ts";
 import { lowerExecutionToProgramImage } from "../target/lower-native-program-image.ts";
+import { lowerCoreCompilationToNativeProgram } from "../target/lower-native.ts";
 import type { ProgramImage } from "../target/program-image.ts";
 import type { CompileCoreOptions, CompileCorePhase } from "./compile-core-common.ts";
 import {
@@ -44,7 +45,13 @@ function lowerOptimizedCoreToProgramImage(
 				options.coreOptimizationBenchmarkAblation?.family === "guarded-direct-call",
 		}),
 	);
+	const native = runPhase("core to native", () =>
+		lowerCoreCompilationToNativeProgram(optimized, {
+			excludeGuardedDirectCalls:
+				options.coreOptimizationBenchmarkAblation?.family === "guarded-direct-call",
+		}),
+	);
 	return runPhase("execution to image", () =>
-		lowerExecutionToProgramImage(lowered, options.profile === true),
+		lowerExecutionToProgramImage(lowered, native, options.profile === true),
 	);
 }

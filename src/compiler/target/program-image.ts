@@ -29,10 +29,12 @@ import type {
 import { collectCompilerFactFlowReport } from "./fact-flow-report.ts";
 import { buildProfileMetadata } from "./profile-metadata.ts";
 import type { CompilerRemark, ProfileSite } from "./profile-metadata.ts";
+import { remapRuntimeFunctionConstants } from "./runtime-image.ts";
 import {
 	compactRuntimeImageConstants,
+	countPropertyIcSites,
 	decodeVmValueOperand,
-	lowerVerifiedExecutionToRuntimePlan,
+	lowerVerifiedTargetsToRuntimePlans,
 	validateRuntimeImageMetadata,
 } from "./runtime-image.ts";
 import type {
@@ -1023,7 +1025,49 @@ export function nativeInstructionEffects(
 	}
 }
 
+export function validateNativeBodyAbis(
+	runtime: ReadonlyArray<BytecodeFunction>,
+	bodies: ReadonlyArray<BytecodeFunction>,
+): void {
+	if (runtime.length !== bodies.length) throw new RangeError("Invalid native body table");
+	for (const [index, body] of bodies.entries()) {
+		const vm = runtime[index]!;
+		if (countPropertyIcSites(vm.instructions) !== countPropertyIcSites(body.instructions))
+			throw new RangeError("Native body has incompatible property caches");
+		for (const key of [
+			"nameStringIndex",
+			"isGenerator",
+			"isAsync",
+			"parameterCount",
+			"length",
+			"capturedCount",
+			"strict",
+			"isClassConstructor",
+			"isDerivedConstructor",
+			"constructorSlotReserve",
+			"hasPrototype",
+			"needsArguments",
+			"mappedArguments",
+			"argumentSnapshotCount",
+			"literalShapeCount",
+			"fileIndex",
+		] as const) {
+			if (vm[key] !== body[key])
+				throw new RangeError(`Native body has an incompatible ${key}`);
+		}
+		if (
+			vm.mappedArgumentSlots.length !== body.mappedArgumentSlots.length ||
+			vm.mappedArgumentSlots.some(
+				(slot, index) => slot !== body.mappedArgumentSlots[index],
+			)
+		)
+			throw new RangeError("Native body has incompatible argument aliases");
+	}
+}
+
 export interface NativeFunctionPlan {
+	readonly body: BytecodeFunction;
+	readonly storageValues?: ReadonlyArray<number>;
 	readonly specializedOnly?: true;
 	readonly functionIndex: number;
 	readonly mode: "direct" | "resumable";
@@ -1455,6 +1499,7 @@ export function createConservativeNativePlan(
 	return {
 		semanticProtectors: [],
 		functions: functions.map((fn, functionIndex) => ({
+			body: fn,
 			functionIndex,
 			mode: fn.isGenerator || fn.isAsync ? "resumable" : "direct",
 
@@ -1668,14 +1713,27 @@ export interface ProgramImageConstantCompactionResult {
 export function compactProgramImageConstants(
 	definition: ProgramImage,
 ): ProgramImageConstantCompactionResult {
-	const compacted = compactRuntimeImageConstants(definition.runtime);
+	const vmCount = definition.runtime.functions.length;
+	const functions = [
+		...definition.runtime.functions,
+		...definition.native.functions.map((fn) => fn.body),
+	];
+	const compacted = compactRuntimeImageConstants({
+		...definition.runtime,
+		functionCount: functions.length,
+		functions,
+	});
 	if (!compacted.changed) {
 		return { definition, changed: false, report: compacted.report };
 	}
 	return {
 		definition: {
 			...definition,
-			runtime: compacted.runtime,
+			runtime: {
+				...compacted.runtime,
+				functionCount: vmCount,
+				functions: compacted.runtime.functions.slice(0, vmCount),
+			},
 			native: remapNativeConstants(definition.native, compacted),
 		},
 		changed: true,
@@ -1690,6 +1748,7 @@ function remapNativeConstants(
 	if (!compacted.changed) return native;
 	const functions = native.functions.map((fn) => ({
 		...fn,
+		body: remapRuntimeFunctionConstants(fn.body, compacted),
 		...(fn.literalSwitches === undefined
 			? {}
 			: {
@@ -1744,15 +1803,20 @@ function remapNativeConstants(
 /** Materialize the native product after its terminal has verified every ABI variant. */
 export function lowerVerifiedExecutionToProgramImage(
 	program: ExecutionProgram,
+	nativeProgram: ExecutionProgram,
 	profile = false,
 ): ProgramImage {
-	const runtimePlan = lowerVerifiedExecutionToRuntimePlan(program);
+	const plans = lowerVerifiedTargetsToRuntimePlans(
+		nativeProgram === program ? [program] : [program, nativeProgram],
+	);
+	const runtimePlan = plans[0]!;
+	const nativeRuntimePlan = plans[1] ?? runtimePlan;
 	const runtime = runtimePlan.compacted.runtime;
 	const context = program.context;
-	const nativeFunctions = program.functions.map((fn, functionIndex) =>
+	const nativeFunctions = nativeProgram.functions.map((fn, functionIndex) =>
 		lowerExecutionFunctionToNativePlan(
 			fn,
-			runtimePlan.functions[functionIndex]!,
+			nativeRuntimePlan.functions[functionIndex]!,
 			program.core.stringConstants,
 			profile ? context.facts.instructionSites : undefined,
 		),
@@ -1780,7 +1844,7 @@ export function lowerVerifiedExecutionToProgramImage(
 		runtime,
 		native: remapNativeConstants(
 			{ semanticProtectors, functions: nativeFunctions },
-			runtimePlan.compacted,
+			nativeRuntimePlan.compacted,
 		),
 		diagnostics: {},
 	};
@@ -1795,7 +1859,7 @@ export function lowerVerifiedExecutionToProgramImage(
 		definition.diagnostics.factFlow = collectCompilerFactFlowReport(
 			context.facts,
 			program.functionMap,
-			runtime,
+			{ ...runtime, functions: definition.native.functions.map((fn) => fn.body) },
 			definition.native.functions,
 		);
 		validateRuntimeImageMetadata(runtime);
@@ -4348,6 +4412,8 @@ function lowerExecutionFunctionToNativePlan(
 		},
 	}));
 	return {
+		body: bytecode,
+		...(fn.storageValues === undefined ? {} : { storageValues: fn.storageValues }),
 		functionIndex: fn.functionIndex,
 		mode: fn.isGenerator || fn.isAsync ? "resumable" : "direct",
 		...(fn.specializedOnly ? { specializedOnly: true as const } : {}),

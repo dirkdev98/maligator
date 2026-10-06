@@ -4,7 +4,7 @@ import { knownOperationIndex } from "../shared/known-operations.ts";
 import { staticDataQueryTag } from "../shared/static-data-query.ts";
 import { finalizeCompilerRemarks } from "./profile-metadata.ts";
 import type { ProgramImage } from "./program-image.ts";
-import { validateNativeDirectEntry } from "./program-image.ts";
+import { validateNativeBodyAbis, validateNativeDirectEntry } from "./program-image.ts";
 import { directCompiledEntryKey, emitCompiledFunction } from "./render-native-c.ts";
 import type { CompiledFunction } from "./render-native-c.ts";
 import {
@@ -725,11 +725,7 @@ function emitNativeFunctions(
 		const targets = new Set<number>();
 		const entries = new Set<string>();
 		for (const entry of native.directEntries) {
-			validateNativeDirectEntry(
-				image.runtime.functions[native.functionIndex]!,
-				entry,
-				image.native.functions,
-			);
+			validateNativeDirectEntry(native.body, entry, image.native.functions);
 			for (const call of entry.callOverrides ?? []) {
 				targets.add(call.functionIndex);
 				entries.add(directCompiledEntryKey(call.functionIndex, call.entryId));
@@ -973,6 +969,10 @@ function emitProgramImageSource(
 	splitCompiledFunctions: boolean,
 	maxCompiledFunctionCodeUnits?: number,
 ): EmittedProgramImageSource {
+	validateNativeBodyAbis(
+		image.runtime.functions,
+		image.native.functions.map((fn) => fn.body),
+	);
 	const runtime = image.runtime;
 	validateRuntimeImageMetadata(runtime);
 	const suffix = options.symbolSuffix ?? "";

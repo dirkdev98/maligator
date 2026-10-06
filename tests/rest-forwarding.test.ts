@@ -13,7 +13,6 @@ import {
 	serializeCompilerArtifact,
 } from "../src/compiler/target/compiler-artifact-codec.ts";
 import { lowerCoreCompilationToExecution } from "../src/compiler/target/lower-native-execution.ts";
-import { lowerExecutionToProgramImage } from "../src/compiler/target/lower-native-program-image.ts";
 import {
 	deserializeRuntimeImage,
 	serializeRuntimeImage,
@@ -23,6 +22,7 @@ import {
 	analysisProgram,
 	programAnalysisContext,
 } from "./helpers/core-program-analysis.ts";
+import { lowerExecutionFixtureToProgramImage as lowerExecutionToProgramImage } from "./helpers/native-program-image.ts";
 
 function compile(body: string, primordials: "locked" | "mutable" = "mutable") {
 	const source = `globalThis.forward = ${body};`;

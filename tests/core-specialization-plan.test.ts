@@ -46,9 +46,9 @@ import {
 	serializeCompilerArtifact,
 } from "../src/compiler/target/compiler-artifact-codec.ts";
 import { lowerCoreCompilationToExecution } from "../src/compiler/target/lower-native-execution.ts";
-import { lowerExecutionToProgramImage } from "../src/compiler/target/lower-native-program-image.ts";
 import { emitCompiledFunction } from "../src/compiler/target/render-native-c.ts";
 import { programAnalysisContext } from "./helpers/core-program-analysis.ts";
+import { lowerExecutionFixtureToProgramImage as lowerExecutionToProgramImage } from "./helpers/native-program-image.ts";
 
 function planSpecializations(
 	plan: CoreOptimizationPlan,

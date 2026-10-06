@@ -12,7 +12,7 @@ import type { CoreOptimizationReport } from "../src/compiler/core/core-optimizat
 import { projectCoreSpecializationRecipes } from "../src/compiler/core/core-specialization-recipes.ts";
 import { optimizeSemanticProgramToCore } from "../src/compiler/pipeline/compile-core-common.ts";
 import { analyzeEntrypoint } from "../src/compiler/pipeline/compile-program-common.ts";
-import { lowerCoreCompilationToExecution } from "../src/compiler/target/lower-native-execution.ts";
+import { lowerCoreCompilationToNativeProgram } from "../src/compiler/target/lower-native.ts";
 import {
 	prepareSelfCompileSource,
 	SELF_COMPILE_CONFIG,
@@ -92,7 +92,7 @@ try {
 		throw new Error("Core optimization did not publish its report and plan");
 	}
 	const native = process.argv.includes("--native")
-		? runPhase("lower native", () => lowerCoreCompilationToExecution(compilation))
+		? runPhase("lower native", () => lowerCoreCompilationToNativeProgram(compilation))
 		: undefined;
 	const filter = option("--filter");
 	if (process.argv.includes("--filter") && filter === undefined) {

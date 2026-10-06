@@ -9,6 +9,7 @@ import {
 	MAX_STRING_CODE_UNITS,
 	deserializeRuntimeImage,
 	readRuntimeImage,
+	readRuntimeFunction,
 	serializeRuntimeImage,
 	Writer,
 	WIRE_OPCODES,
@@ -356,7 +357,19 @@ function withRuntime(
 	image: ProgramImage,
 	overrides: Partial<ProgramImage["runtime"]>,
 ): ProgramImage {
-	return { ...image, runtime: { ...image.runtime, ...overrides } };
+	const runtime = { ...image.runtime, ...overrides };
+	return {
+		...image,
+		runtime,
+		native: {
+			...image.native,
+			functions: image.native.functions.map((fn, index) =>
+				fn.body === image.runtime.functions[index]
+					? { ...fn, body: runtime.functions[index]! }
+					: fn,
+			),
+		},
+	};
 }
 
 function withBytecodeFunctions(
@@ -676,10 +689,13 @@ function firstNativeSafepointReader(bytes: Uint8Array) {
 		COMPILER_ARTIFACT_MAGIC,
 		COMPILER_ARTIFACT_VERSION,
 	);
+	const bodyCount = reader.count(1);
+	for (let index = 0; index < bodyCount; index++) readRuntimeFunction(reader);
 	expect(reader.u32()).toBe(0); // Semantic protectors.
 	expect(reader.u32()).toBe(1); // Native functions.
 	expect(reader.u8()).toBe(0); // Unknown closure requirements retain the chain.
 	expect(reader.u8()).toBe(0); // No immutable value captures.
+	expect(reader.i32Array()).toEqual([]);
 	expect(reader.u32()).toBe(2); // Ordinary-entry safepoints.
 	return reader;
 }
@@ -726,8 +742,9 @@ describe("program-image-codec", () => {
 				})),
 			}),
 			0,
-			(plan) => ({
+			(plan, fn) => ({
 				...plan,
+				body: fn,
 				registerRepresentations,
 				gc,
 				directEntries: plan.directEntries.map((entry) => ({

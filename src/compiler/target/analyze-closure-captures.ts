@@ -61,6 +61,16 @@ export function analyzeClosureCaptures(
 	}
 	return {
 		...image,
+		native: {
+			...image.native,
+			functions: image.native.functions.map((fn, index) => ({
+				...fn,
+				body: withClosureCaptureOwners(
+					fn.body,
+					[...captures[index]!].sort((a, b) => a - b),
+				),
+			})),
+		},
 		runtime: {
 			...image.runtime,
 			functions: functions.map((fn, index) =>

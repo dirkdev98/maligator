@@ -49,6 +49,13 @@ function layoutImage(
 	const fn = image.runtime.functions[0]!;
 	return {
 		...image,
+		native: {
+			...image.native,
+			functions: image.native.functions.map((plan) => ({
+				...plan,
+				body: { ...fn, capturedCount: 3, instructions, mappedArgumentSlots },
+			})),
+		},
 		runtime: {
 			...image.runtime,
 			functions: [{ ...fn, capturedCount: 3, instructions, mappedArgumentSlots }],
@@ -118,7 +125,9 @@ describe("physical captured storage after function reachability", () => {
 			{ opcode: "MOVE", dst: 2, src: 2 },
 			image.runtime.functions[0]!.instructions[2],
 		]);
-		expect(compacted.native).toBe(image.native);
+		expect(compacted.native.functions[0]!.body.instructions).toEqual(
+			compacted.runtime.functions[0]!.instructions,
+		);
 	});
 
 	it("pins arguments aliases even without an explicit capture read", () => {

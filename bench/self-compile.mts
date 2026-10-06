@@ -74,6 +74,7 @@ const phases = {
 	constructCoreMs: 0,
 	optimizeCoreMs: 0,
 	coreToExecutionMs: 0,
+	coreToNativeMs: 0,
 	executionToImageMs: 0,
 	emitMs: 0,
 	writeMs: 0,
@@ -107,6 +108,7 @@ const compilePhases = {
 	"construct core ir": "constructCoreMs",
 	"optimize core ir": "optimizeCoreMs",
 	"core to execution": "coreToExecutionMs",
+	"core to native": "coreToNativeMs",
 	"execution to image": "executionToImageMs",
 } as const;
 let optimizationReport: CoreOptimizationReport | undefined;

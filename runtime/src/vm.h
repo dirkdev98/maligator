@@ -2209,6 +2209,9 @@ typedef struct MalVmFrame {
      */
     i32 stack_base;
 
+    // Compiled coroutine storage and instruction indexes are independent of bytecode.
+    i32 compiled_register_count;
+    i32 compiled_suspend_position;
     i32 instruction_pointer;
     /** Published operation IP while execution is inside a GC-capable boundary. */
     i32 gc_safepoint_ip;
@@ -2220,7 +2223,7 @@ typedef struct MalVmFrame {
     bool is_construct;
 } MalVmFrame;
 
-static_assert(sizeof(MalVmFrame) <= (MAL_REALMS ? 144 : 136),
+static_assert(sizeof(MalVmFrame) <= (MAL_REALMS ? 152 : 144),
               "interpreter frame outgrew its packed layout");
 
 typedef MalVmFrame MalCallable;

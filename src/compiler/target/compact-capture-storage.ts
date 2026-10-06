@@ -77,25 +77,30 @@ export function compactCaptureStorage(
 		}
 		return { ...operation, index: remap(operation.ownerFunctionIndex, operation.index) };
 	};
+	const transform = (fn: (typeof functions)[number], owner: number) => ({
+		...fn,
+		capturedCount: layouts[owner]?.size ?? fn.capturedCount,
+		mappedArgumentSlots: fn.mappedArgumentSlots.map((index) =>
+			index < 0 ? index : remap(owner, index),
+		),
+		...(fn.closureCaptureValues === undefined
+			? {}
+			: {
+					closureCaptureValues: fn.closureCaptureValues.map((capture) => ({
+						...capture,
+						capturedIndex: remap(capture.ownerFunctionIndex, capture.capturedIndex),
+					})),
+				}),
+		instructions: fn.instructions.map(instruction),
+	});
 	return {
 		...image,
-		runtime: {
-			...image.runtime,
-			functions: functions.map((fn, owner) => ({
+		runtime: { ...image.runtime, functions: functions.map(transform) },
+		native: {
+			...image.native,
+			functions: image.native.functions.map((fn, index) => ({
 				...fn,
-				capturedCount: layouts[owner]?.size ?? fn.capturedCount,
-				mappedArgumentSlots: fn.mappedArgumentSlots.map((index) =>
-					index < 0 ? index : remap(owner, index),
-				),
-				...(fn.closureCaptureValues === undefined
-					? {}
-					: {
-							closureCaptureValues: fn.closureCaptureValues.map((capture) => ({
-								...capture,
-								capturedIndex: remap(capture.ownerFunctionIndex, capture.capturedIndex),
-							})),
-						}),
-				instructions: fn.instructions.map(instruction),
+				body: transform(fn.body, index),
 			})),
 		},
 	};

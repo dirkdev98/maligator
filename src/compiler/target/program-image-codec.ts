@@ -570,7 +570,7 @@ export function writeRuntimeImage(
 	// Functions.
 	w.u32(def.functions.length);
 	for (const fn of def.functions) {
-		writeFunction(w, fn, debug);
+		writeRuntimeFunction(w, fn, debug);
 	}
 
 	// Portable rows that must be interned before guarded own-slot accesses run.
@@ -622,7 +622,11 @@ export function writeRuntimeImage(
 	}
 }
 
-function writeFunction(w: Writer, fn: BytecodeFunction, debug: boolean): void {
+export function writeRuntimeFunction(
+	w: Writer,
+	fn: BytecodeFunction,
+	debug: boolean,
+): void {
 	validateArgumentSnapshotPrefix(fn);
 	validateMappedArguments(fn);
 	validatePropertyIcIndices(fn);
@@ -1392,7 +1396,7 @@ export function readRuntimeImage(
 	const functionCount = r.count(1);
 	const functions: Array<BytecodeFunction> = [];
 	for (let f = 0; f < functionCount; ++f) {
-		functions.push(readFunction(r));
+		functions.push(readRuntimeFunction(r));
 	}
 	const precompiledLiteralShapeCount = r.count(3);
 	const precompiledLiteralShapes: RuntimeImage["precompiledLiteralShapes"] = [];
@@ -1479,7 +1483,7 @@ export function readRuntimeImage(
 	return { reader: r, runtime: runtimeImage };
 }
 
-function readFunction(r: Reader): BytecodeFunction {
+export function readRuntimeFunction(r: Reader): BytecodeFunction {
 	const nameStringIndex = r.i32();
 	const kind = r.u8();
 	const strict = r.u8() !== 0;

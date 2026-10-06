@@ -28,9 +28,9 @@ import {
 	serializeCompilerArtifact,
 } from "../src/compiler/target/compiler-artifact-codec.ts";
 import { lowerCoreCompilationToExecution } from "../src/compiler/target/lower-native-execution.ts";
-import { lowerExecutionToProgramImage } from "../src/compiler/target/lower-native-program-image.ts";
 import { vmRegionActions } from "../src/compiler/target/program-image.ts";
 import type { ProgramImage, VmRegion } from "../src/compiler/target/program-image.ts";
+import { lowerExecutionFixtureToProgramImage as lowerExecutionToProgramImage } from "./helpers/native-program-image.ts";
 
 const REGION_SOURCE = `globalThis.first = function first(value) {
 	const fields = value.split(";");

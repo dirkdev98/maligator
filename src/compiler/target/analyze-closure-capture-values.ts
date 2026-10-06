@@ -312,5 +312,23 @@ export function analyzeClosureCaptureValues(
 			),
 		);
 	});
-	return changed ? { ...image, runtime: { ...image.runtime, functions } } : image;
+	return changed
+		? {
+				...image,
+				runtime: { ...image.runtime, functions },
+				native: {
+					...image.native,
+					functions: image.native.functions.map((fn, index) => ({
+						...fn,
+						body:
+							functions[index]!.closureCaptureValues === undefined
+								? fn.body
+								: withClosureCaptureValues(
+										fn.body,
+										functions[index]!.closureCaptureValues,
+									),
+					})),
+				},
+			}
+		: image;
 }

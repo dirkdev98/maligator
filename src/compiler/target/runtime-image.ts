@@ -2327,7 +2327,40 @@ function remapRuntimeInstructionConstants(
 	}
 }
 
-/** Remove constants that no final portable VM consumer can observe. */
+export function remapRuntimeFunctionConstants(
+	fn: BytecodeFunction,
+	compacted: Pick<
+		RuntimeImageConstantCompactionResult,
+		"stringOldToNew" | "bigintOldToNew" | "templateOldToNew"
+	>,
+): BytecodeFunction {
+	const remapped = {
+		...fn,
+		nameStringIndex:
+			fn.nameStringIndex < 0
+				? fn.nameStringIndex
+				: remapRuntimeConstantRequired(
+						compacted.stringOldToNew,
+						fn.nameStringIndex,
+						"function nameStringIndex",
+					),
+		instructions: fn.instructions.map((instruction) =>
+			remapRuntimeInstructionConstants(
+				instruction,
+				compacted.stringOldToNew,
+				compacted.bigintOldToNew,
+				compacted.templateOldToNew,
+			),
+		),
+	};
+	if (vmSafepointRootMapsAreTrusted(fn))
+		trustedVmSafepointRootMaps.set(
+			remapped,
+			vmSafepointRootMapTrustFingerprint(remapped),
+		);
+	return remapped;
+}
+
 export function compactRuntimeImageConstants(
 	definition: RuntimeImage,
 ): RuntimeImageConstantCompactionResult {
@@ -2685,11 +2718,16 @@ function retainExecutionSourcePositions(
 	});
 }
 
-/** Lower an ExecutionProgram already verified by its terminal owner. */
-export function lowerVerifiedExecutionToRuntimePlan(
-	program: ExecutionProgram,
-): RuntimeProgramLoweringPlan {
+/** Both target bodies share runtime resources, even when their instruction layouts differ. */
+export function lowerVerifiedTargetsToRuntimePlans(
+	programs: ReadonlyArray<ExecutionProgram>,
+): ReadonlyArray<RuntimeProgramLoweringPlan> {
+	const program = programs[0];
+	if (program === undefined)
+		throw new Error("Runtime lowering requires a target program");
 	const { core, context } = program;
+	if (programs.some((target) => target.core !== core || target.context !== context))
+		throw new Error("Runtime targets must share the same Core compilation");
 	const files: Array<string> = [];
 	const fileToIndex = new Map<string, number>();
 	const fileIndexFor = (path: string): number => {
@@ -2699,16 +2737,36 @@ export function lowerVerifiedExecutionToRuntimePlan(
 		fileToIndex.set(path, index);
 		return index;
 	};
-	const knownShapeLayout = buildKnownShapeLayout(program.functions);
-	const functionPlans = program.functions.map((fn, index) =>
-		lowerExecutionFunctionToBytecode(
-			fn,
-			fileIndexFor(fn.sourcePath),
-			core.stringConstants,
-			knownShapeLayout.origins,
-			knownShapeLayout.literalShapeCounts[index]!,
-		),
-	);
+	const layouts = programs.map((target) => buildKnownShapeLayout(target.functions));
+	const shapeRows = new Map<string, VmPrecompiledLiteralShape>();
+	for (const layout of layouts) {
+		for (const row of layout.precompiledLiteralShapes) {
+			const key = `${row.functionIndex}:${row.shapeCacheIndex}`;
+			const previous = shapeRows.get(key);
+			if (
+				previous !== undefined &&
+				(previous.keyStringIndices.length !== row.keyStringIndices.length ||
+					previous.keyStringIndices.some(
+						(value, index) => value !== row.keyStringIndices[index],
+					))
+			)
+				throw new Error("Runtime targets disagree on a shared literal shape");
+			shapeRows.set(key, row);
+		}
+	}
+	const targetPlans = programs.map((target, targetIndex) => {
+		const layout = layouts[targetIndex]!;
+		return target.functions.map((fn, index) =>
+			lowerExecutionFunctionToBytecode(
+				fn,
+				fileIndexFor(fn.sourcePath),
+				core.stringConstants,
+				layout.origins,
+				layout.literalShapeCounts[index]!,
+			),
+		);
+	});
+	const functionPlans = targetPlans.flat();
 	const sourcePositions = retainExecutionSourcePositions(program, functionPlans);
 	const functions = functionPlans.map(({ bytecode }) => bytecode);
 	const runtime: RuntimeImage = {
@@ -2718,7 +2776,7 @@ export function lowerVerifiedExecutionToRuntimePlan(
 		stringConstants: core.stringConstants.map((units) => [...units]),
 		bigintConstants: [...core.bigintConstants],
 		literalTemplateData: copyLiteralTemplateData(core.literalTemplateData),
-		precompiledLiteralShapes: [...knownShapeLayout.precompiledLiteralShapes],
+		precompiledLiteralShapes: [...shapeRows.values()],
 		globalCount: core.globalCount,
 		cjsModuleFunctionIndices: context.data.cjsModuleFunctionIndices.map((coreFunction) =>
 			executionFunctionIndex(program.functionMap, coreFunction),
@@ -2732,7 +2790,24 @@ export function lowerVerifiedExecutionToRuntimePlan(
 	for (const fn of compacted.runtime.functions) {
 		trustedVmSafepointRootMaps.set(fn, vmSafepointRootMapTrustFingerprint(fn));
 	}
-	return { compacted, functions: functionPlans };
+	let offset = 0;
+	return targetPlans.map((plans) => {
+		const functions = compacted.runtime.functions.slice(offset, offset + plans.length);
+		offset += plans.length;
+		return {
+			compacted: {
+				...compacted,
+				runtime: { ...compacted.runtime, functionCount: functions.length, functions },
+			},
+			functions: plans,
+		};
+	});
+}
+
+export function lowerVerifiedExecutionToRuntimePlan(
+	program: ExecutionProgram,
+): RuntimeProgramLoweringPlan {
+	return lowerVerifiedTargetsToRuntimePlans([program])[0]!;
 }
 
 export function lowerExecutionToRuntimeImage(program: ExecutionProgram): RuntimeImage {

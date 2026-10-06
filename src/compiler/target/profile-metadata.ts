@@ -451,7 +451,11 @@ export function finalizeCompilerRemarks(
 	const sites = image.diagnostics.profileSites;
 	if (sites === undefined) return;
 	const remarks: Array<CompilerRemark> = [...(image.diagnostics.profileRemarks ?? [])];
-	for (const [functionIndex, fn] of image.runtime.functions.entries()) {
+	for (const [functionIndex, native] of image.native.functions.entries()) {
+		const fn =
+			compiled[functionIndex] === null || compiled[functionIndex] === undefined
+				? image.runtime.functions[functionIndex]!
+				: native.body;
 		const emitted = compiled[functionIndex];
 		if (emitted === null || emitted === undefined) {
 			for (const siteId of fn.profileSiteIds ?? []) {
@@ -501,6 +505,7 @@ export function buildProfileMetadata(
 		context.data.sourceFiles.map((file) => [normalizedPath(file.path), file] as const),
 	);
 	const sites: Array<ProfileSite> = [];
+	const siteByInstance = new Map<string, number>();
 	const remarks: Array<CompilerRemark> = [];
 	const remarkKeys = new Set<string>();
 	const addRemark = (siteId: number, remark: Omit<CompilerRemark, "siteId">): void => {
@@ -529,86 +534,93 @@ export function buildProfileMetadata(
 				: (runtime.files[candidate.fileIndex] ?? "<unknown>"),
 		);
 	};
-	for (const [functionIndex, fn] of runtime.functions.entries()) {
-		const physicalFile = normalizedPath(runtime.files[fn.fileIndex] ?? "<unknown>");
-		const siteIds = new Array<number>(fn.instructions.length).fill(-1);
-		const occurrenceByOrigin = new Map<string, number>();
+	for (const table of [runtime.functions, image.native.functions.map((fn) => fn.body)]) {
+		for (const [functionIndex, fn] of table.entries()) {
+			const physicalFile = normalizedPath(runtime.files[fn.fileIndex] ?? "<unknown>");
+			const siteIds = new Array<number>(fn.instructions.length).fill(-1);
+			const occurrenceByOrigin = new Map<string, number>();
 
-		for (const [instructionIndex, instruction] of fn.instructions.entries()) {
-			const positionId = fn.positions[instructionIndex] ?? -1;
-			if (positionId < 0) continue;
-			const position = runtime.sourcePositions[positionId];
-			if (position === undefined) continue;
-			const operation = profileOperationForInstruction(instruction);
-			const leafFunctionIndex = position.inlinedFunctionIndex ?? functionIndex;
-			const leafFile = functionFile(leafFunctionIndex);
-			const leafSource = fileByPath.get(leafFile)?.contents ?? "";
-			const anchor = (leafSource.split("\n")[position.line - 1] ?? "")
-				.trim()
-				.replaceAll(/\s+/g, " ");
-			const occurrenceKey = `${positionId}:${operation}`;
-			const occurrence = occurrenceByOrigin.get(occurrenceKey) ?? 0;
-			occurrenceByOrigin.set(occurrenceKey, occurrence + 1);
-			const originKey = `${relativeFile(leafFile)}\u0000${functionName(leafFunctionIndex)}\u0000${anchor}\u0000${position.column}\u0000${operation}\u0000${occurrence}`;
-			const inlineChain: Array<{ functionIndex: number; positionId: number }> = [];
-			let chainPositionId = positionId;
-			let guard = 0;
-			while (chainPositionId >= 0 && guard++ < 1024) {
-				const chainPosition = runtime.sourcePositions[chainPositionId];
-				if (chainPosition === undefined) break;
-				inlineChain.push({
-					functionIndex: chainPosition.inlinedFunctionIndex ?? functionIndex,
-					positionId: chainPositionId,
-				});
-				chainPositionId = chainPosition.callerPosId ?? -1;
+			for (const [instructionIndex, instruction] of fn.instructions.entries()) {
+				const positionId = fn.positions[instructionIndex] ?? -1;
+				if (positionId < 0) continue;
+				const position = runtime.sourcePositions[positionId];
+				if (position === undefined) continue;
+				const operation = profileOperationForInstruction(instruction);
+				const leafFunctionIndex = position.inlinedFunctionIndex ?? functionIndex;
+				const leafFile = functionFile(leafFunctionIndex);
+				const leafSource = fileByPath.get(leafFile)?.contents ?? "";
+				const anchor = (leafSource.split("\n")[position.line - 1] ?? "")
+					.trim()
+					.replaceAll(/\s+/g, " ");
+				const occurrenceKey = `${positionId}:${operation}`;
+				const occurrence = occurrenceByOrigin.get(occurrenceKey) ?? 0;
+				occurrenceByOrigin.set(occurrenceKey, occurrence + 1);
+				const originKey = `${relativeFile(leafFile)}\u0000${functionName(leafFunctionIndex)}\u0000${anchor}\u0000${position.column}\u0000${operation}\u0000${occurrence}`;
+				const inlineChain: Array<{ functionIndex: number; positionId: number }> = [];
+				let chainPositionId = positionId;
+				let guard = 0;
+				while (chainPositionId >= 0 && guard++ < 1024) {
+					const chainPosition = runtime.sourcePositions[chainPositionId];
+					if (chainPosition === undefined) break;
+					inlineChain.push({
+						functionIndex: chainPosition.inlinedFunctionIndex ?? functionIndex,
+						positionId: chainPositionId,
+					});
+					chainPositionId = chainPosition.callerPosId ?? -1;
+				}
+				const chainKey = inlineChain
+					.map((entry) => {
+						const chainPosition = runtime.sourcePositions[entry.positionId]!;
+						const chainFile = functionFile(entry.functionIndex);
+						const chainSource = fileByPath.get(chainFile)?.contents ?? "";
+						const chainAnchor = (chainSource.split("\n")[chainPosition.line - 1] ?? "")
+							.trim()
+							.replaceAll(/\s+/g, " ");
+						return `${relativeFile(chainFile)}:${functionName(entry.functionIndex)}:${chainAnchor}:${chainPosition.column}`;
+					})
+					.join("<-");
+				const originId = logicalId(originKey);
+				const instanceId = logicalId(`${originKey}\u0000${chainKey}`);
+				const regionId = logicalId(
+					`${relativeFile(physicalFile)}\u0000${functionName(functionIndex)}\u0000${chainKey}`,
+				);
+				const siteId = siteByInstance.get(instanceId) ?? sites.length;
+				if (!siteByInstance.has(instanceId)) {
+					siteByInstance.set(instanceId, siteId);
+					sites.push({
+						id: siteId,
+						logicalId: instanceId,
+						originId,
+						instanceId,
+						regionId,
+						functionIndex,
+						instructionIndex,
+						positionId,
+						file: relativeFile(leafFile),
+						line: position.line,
+						column: position.column,
+						operation,
+						inlineChain,
+					});
+				}
+				siteIds[instructionIndex] = siteId;
+				const compilerSiteId =
+					table === runtime.functions
+						? undefined
+						: image.native.functions[functionIndex]?.compilerSiteIds?.[instructionIndex];
+				const compilerSite =
+					compilerSiteId === undefined
+						? undefined
+						: context.facts.sites.get(compilerSiteId);
+				for (const remark of [
+					remarkForInstruction(instruction),
+					...factRemarks(compilerSite, operation),
+				]) {
+					if (remark !== undefined) addRemark(siteId, remark);
+				}
 			}
-			const chainKey = inlineChain
-				.map((entry) => {
-					const chainPosition = runtime.sourcePositions[entry.positionId]!;
-					const chainFile = functionFile(entry.functionIndex);
-					const chainSource = fileByPath.get(chainFile)?.contents ?? "";
-					const chainAnchor = (chainSource.split("\n")[chainPosition.line - 1] ?? "")
-						.trim()
-						.replaceAll(/\s+/g, " ");
-					return `${relativeFile(chainFile)}:${functionName(entry.functionIndex)}:${chainAnchor}:${chainPosition.column}`;
-				})
-				.join("<-");
-			const originId = logicalId(originKey);
-			const instanceId = logicalId(`${originKey}\u0000${chainKey}`);
-			const regionId = logicalId(
-				`${relativeFile(physicalFile)}\u0000${functionName(functionIndex)}\u0000${chainKey}`,
-			);
-			const siteId = sites.length;
-			sites.push({
-				id: siteId,
-				logicalId: instanceId,
-				originId,
-				instanceId,
-				regionId,
-				functionIndex,
-				instructionIndex,
-				positionId,
-				file: relativeFile(leafFile),
-				line: position.line,
-				column: position.column,
-				operation,
-				inlineChain,
-			});
-			siteIds[instructionIndex] = siteId;
-			const compilerSiteId =
-				image.native.functions[functionIndex]?.compilerSiteIds?.[instructionIndex];
-			const compilerSite =
-				compilerSiteId === undefined
-					? undefined
-					: context.facts.sites.get(compilerSiteId);
-			for (const remark of [
-				remarkForInstruction(instruction),
-				...factRemarks(compilerSite, operation),
-			]) {
-				if (remark !== undefined) addRemark(siteId, remark);
-			}
+			fn.profileSiteIds = siteIds;
 		}
-		fn.profileSiteIds = siteIds;
 	}
 
 	image.diagnostics.profileSites = sites;

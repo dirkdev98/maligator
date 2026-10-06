@@ -317,6 +317,8 @@ describe("compileSemanticProgramToProgramImage", () => {
 			"after optimization",
 			"start:core to execution",
 			"end:core to execution",
+			"start:core to native",
+			"end:core to native",
 			"start:execution to image",
 			"end:execution to image",
 		]);

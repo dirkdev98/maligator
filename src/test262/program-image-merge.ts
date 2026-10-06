@@ -664,6 +664,26 @@ export function mergeProgramImages(images: Array<ProgramImage>): MergedProgramIm
 		mergedNativeFunctions.push(
 			...programImage.native.functions.map((native, localFunctionIndex) => ({
 				...native,
+				body: {
+					...native.body,
+					closureCaptureOwners: native.body.closureCaptureOwners?.map((owner) =>
+						shifted(owner, base.function),
+					),
+					closureCaptureValues: native.body.closureCaptureValues?.map((capture) => ({
+						...capture,
+						ownerFunctionIndex: capture.ownerFunctionIndex + base.function,
+					})),
+					nameStringIndex: shifted(native.body.nameStringIndex, base.string),
+					instructions: native.body.instructions.map((instruction) =>
+						cloneInstruction(instruction, base),
+					),
+					handlers: native.body.handlers.map((handler) => ({ ...handler })),
+					fileIndex: shifted(native.body.fileIndex, base.file),
+					positions: native.body.positions.map((position) =>
+						shifted(position, base.position),
+					),
+					mappedArgumentSlots: [...native.body.mappedArgumentSlots],
+				},
 				functionIndex: base.function + localFunctionIndex,
 				mode: native.mode,
 				registerRepresentations: [...native.registerRepresentations],

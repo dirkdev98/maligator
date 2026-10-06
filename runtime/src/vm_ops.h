@@ -3266,7 +3266,7 @@ MalValue *mal_coroutine_alloc_registers(MalVm *vm, i32 slot_count);
 // generator; the compiled body hands it back to the caller.
 MalGeneratorObject *mal_vm_op_generator_start_compiled(
     MalVm *vm, MalValue callee, i32 function_index, MalValue this_value, MalEnv *env,
-    MalValue *registers, const MalValue *arguments, i32 argument_count,
+    MalValue *registers, i32 register_count, const MalValue *arguments, i32 argument_count,
     bool retain_arguments, i32 resume_ip, bool is_async_generator);
 
 /** Resolve the instance prototype used when a generator activation starts. */
@@ -3278,7 +3278,7 @@ MalObject *mal_vm_generator_instance_prototype(
 // generator) settle the front request. The compiled body then returns.
 void mal_vm_op_yield_compiled(
     MalVm *vm, MalGeneratorObject *generator, MalValue yielded, i32 value_dst,
-    i32 mode_dst, i32 resume_ip, MalEnv *env);
+    i32 mode_dst, i32 resume_ip, i32 suspend_position, MalEnv *env);
 
 // TERMINAL_YIELD (compiled): preserve a final done:false result while completing
 // the generator. The emitted caller unlinks its root frame, then releases storage.
@@ -3297,7 +3297,7 @@ void mal_vm_op_coroutine_return_compiled(MalVm *vm, MalGeneratorObject *generato
 // here — it keeps running until the first await / return / throw.
 MalGeneratorObject *mal_vm_op_async_start_compiled(
     MalVm *vm, MalValue callee, i32 function_index, MalValue this_value, MalEnv *env,
-    MalValue *registers, const MalValue *arguments, i32 argument_count,
+    MalValue *registers, i32 register_count, const MalValue *arguments, i32 argument_count,
     bool retain_arguments, MalValue *out_promise);
 
 // AWAIT (compiled): record the resume registers, resume point, and env on the
@@ -3306,7 +3306,7 @@ MalGeneratorObject *mal_vm_op_async_start_compiled(
 // generators; the compiled body returns immediately after.
 void mal_vm_op_await_compiled(
     MalVm *vm, MalGeneratorObject *state, MalValue awaited, i32 value_dst, i32 mode_dst,
-    i32 resume_ip, MalEnv *env);
+    i32 resume_ip, i32 suspend_position, MalEnv *env);
 
 // Coroutine uncaught throw (compiled): the body threw past its own handlers. Mark
 // COMPLETED and free the register buffer; a plain generator leaves the THROW

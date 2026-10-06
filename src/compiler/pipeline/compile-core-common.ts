@@ -23,6 +23,7 @@ export type CompileCorePhase =
 	| "construct core ir"
 	| "optimize core ir"
 	| "core to execution"
+	| "core to native"
 	| "execution to image";
 
 export interface CompileCoreOptions {

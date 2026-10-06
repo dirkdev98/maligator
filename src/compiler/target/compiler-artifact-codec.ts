@@ -11,9 +11,16 @@ import {
 import type { CompilerOperatorInputKindMasks } from "../shared/compiler-value-kinds.ts";
 import { getPrimordialCatalog } from "../shared/primordial-catalog-data.ts";
 import type { Reader } from "./program-image-codec.ts";
-import { readRuntimeImage, Writer, writeRuntimeImage } from "./program-image-codec.ts";
+import {
+	readRuntimeImage,
+	readRuntimeFunction,
+	writeRuntimeFunction,
+	Writer,
+	writeRuntimeImage,
+} from "./program-image-codec.ts";
 import {
 	nativeFrameRootRegisters,
+	validateNativeBodyAbis,
 	validateNativeDirectEntry,
 	validateNativeFieldCalls,
 	validateNativeLiteralSwitches,
@@ -32,7 +39,11 @@ import type {
 	VmRegion,
 	VmSemanticProtectorFact,
 } from "./program-image.ts";
-import { decodeVmValueOperand, validateVmShapeCases } from "./runtime-image.ts";
+import {
+	decodeVmValueOperand,
+	validateVmShapeCases,
+	validateRuntimeImageMetadata,
+} from "./runtime-image.ts";
 import type {
 	BytecodeFunction,
 	BytecodeInstruction,
@@ -43,7 +54,7 @@ import type {
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal artifacts are hard cut-overs: stale cache entries rebuild.
-export const COMPILER_ARTIFACT_VERSION = 97;
+export const COMPILER_ARTIFACT_VERSION = 98;
 
 function validateClosureCaptureOwners(
 	owners: ReadonlyArray<number>,
@@ -619,7 +630,13 @@ export function serializeCompilerArtifact(
 		COMPILER_ARTIFACT_VERSION,
 		options,
 	);
-	writeCompilerArtifact(writer, image.runtime, image);
+	const bodies = image.native.functions.map((fn) => fn.body);
+	validateRuntimeImageMetadata({ ...image.runtime, functions: bodies });
+	validateNativeBodyAbis(image.runtime.functions, bodies);
+	writer.u32(bodies.length);
+	for (const body of bodies)
+		writeRuntimeFunction(writer, body, options.debugInfo !== false);
+	writeCompilerArtifact(writer, { ...image.runtime, functions: bodies }, image);
 	return writer.finish();
 }
 
@@ -740,6 +757,7 @@ function writeCompilerArtifact(
 			throw new RangeError("program-image-codec: invalid register representations");
 		}
 		nativeFrameRootRegisters(fn, native);
+		w.i32Array(native.storageValues === undefined ? [] : [...native.storageValues]);
 		w.u32(native.gc.safepoints.length);
 		for (const safepoint of native.gc.safepoints) {
 			w.u8(
@@ -3045,11 +3063,21 @@ export function deserializeCompilerArtifact(bytes: Uint8Array): ProgramImage {
 		COMPILER_ARTIFACT_MAGIC,
 		COMPILER_ARTIFACT_VERSION,
 	);
-	return readCompilerArtifact(reader, runtime);
+	const count = reader.count(1);
+	if (count !== runtime.functions.length)
+		throw new RangeError("Invalid native body table");
+	const bodies = Array.from({ length: count }, () => readRuntimeFunction(reader));
+	validateNativeBodyAbis(runtime.functions, bodies);
+	validateRuntimeImageMetadata({ ...runtime, functions: bodies });
+	return readCompilerArtifact(reader, runtime, { ...runtime, functions: bodies });
 }
 
-function readCompilerArtifact(r: Reader, runtimeImage: RuntimeImage): ProgramImage {
-	const { functions, stringConstants } = runtimeImage;
+function readCompilerArtifact(
+	r: Reader,
+	runtimeImage: RuntimeImage,
+	nativeImage: RuntimeImage,
+): ProgramImage {
+	const { functions, stringConstants } = nativeImage;
 	const semanticProtectorCount = r.count(3);
 	if (semanticProtectorCount > 3) {
 		throw new RangeError("program-image-codec: too many semantic protector facts");
@@ -3121,6 +3149,9 @@ function readCompilerArtifact(r: Reader, runtimeImage: RuntimeImage): ProgramIma
 			validateClosureCaptureValues(values, functionIndex, functions);
 			fn.closureCaptureValues = values;
 		}
+		const storageValues = r.i32Array();
+		if (storageValues.length !== 0 && storageValues.length !== fn.registerCount)
+			throw new RangeError("Invalid native SSA storage identity");
 		const safepointCount = r.count(5);
 		const safepoints: Array<NativeFunctionPlan["gc"]["safepoints"][number]> = [];
 		for (let safepointIndex = 0; safepointIndex < safepointCount; safepointIndex++) {
@@ -4654,6 +4685,8 @@ function readCompilerArtifact(r: Reader, runtimeImage: RuntimeImage): ProgramIma
 			}
 		}
 		const nativeFunction: NativeFunctionPlan = {
+			body: fn,
+			...(storageValues.length === 0 ? {} : { storageValues }),
 			...(specializedOnly ? { specializedOnly: true as const } : {}),
 			functionIndex,
 			mode: fn.isGenerator || fn.isAsync ? "resumable" : "direct",
@@ -4705,6 +4738,10 @@ function readCompilerArtifact(r: Reader, runtimeImage: RuntimeImage): ProgramIma
 		native: { semanticProtectors, functions: nativeFunctions },
 		diagnostics: {},
 	};
+	for (const [index, fn] of runtimeImage.functions.entries()) {
+		fn.closureCaptureOwners = functions[index]!.closureCaptureOwners;
+		fn.closureCaptureValues = functions[index]!.closureCaptureValues;
+	}
 	validateVmShapeCases(runtimeImage);
 	return definition;
 }
