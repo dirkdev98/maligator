@@ -3,6 +3,7 @@ import type {
 	NativePropertyNumericUpdatePlan,
 	NativePropertyProjectionPlan,
 	NativePropertyReadRegionPlan,
+	NativePropertyReadPairPlan,
 } from "./lower-native-fast-paths.ts";
 import {
 	nativeEntryStableRootRegisters,
@@ -40,6 +41,7 @@ export interface NativeStoragePlan extends NativeScalarStoragePlan {
 	readonly propertyProjections: ReadonlyArray<NativePropertyProjectionPlan>;
 	readonly propertyNumericUpdates: ReadonlyArray<NativePropertyNumericUpdatePlan>;
 	readonly propertyReadRegions: ReadonlyArray<NativePropertyReadRegionPlan>;
+	readonly propertyReadPairs: ReadonlyArray<NativePropertyReadPairPlan>;
 	readonly rootRegisters: ReadonlyArray<number>;
 	readonly privateRegisters: ReadonlyArray<number>;
 	readonly privateCallResultIps: ReadonlyArray<number>;
@@ -455,10 +457,18 @@ function lowerStorage(
 	entry?: NativeDirectEntryPlan,
 ): NativeStoragePlan {
 	const fn = native.body;
-	const { propertyProjections, propertyNumericUpdates, propertyReadRegions } =
-		selectNativePropertyFastPaths(native, entry);
+	const {
+		propertyProjections,
+		propertyNumericUpdates,
+		propertyReadRegions,
+		propertyReadPairs,
+	} = selectNativePropertyFastPaths(native, entry);
 	const propertyWindows = [...propertyProjections, ...propertyNumericUpdates];
-	const expressionWindows = [...propertyWindows, ...propertyReadRegions];
+	const expressionWindows = [
+		...propertyWindows,
+		...propertyReadRegions,
+		...propertyReadPairs,
+	];
 	const jumpTargets = new Set(fn.handlers.map((handler) => handler.handlerIp));
 	for (const op of fn.instructions) {
 		if (op.opcode === "JUMP" || op.opcode === "JUMP_IF") jumpTargets.add(op.targetIp);
@@ -520,6 +530,7 @@ function lowerStorage(
 		propertyProjections,
 		propertyNumericUpdates,
 		propertyReadRegions,
+		propertyReadPairs,
 		rootRegisters: roots,
 		privateRegisters: roots.filter((local) => privateLocals.has(local)),
 		privateCallResultIps: [...calls],
@@ -688,6 +699,23 @@ export function validateNativeStorage(native: NativeFunctionPlan): void {
 		sameProjections(stored.propertyProjections, selected.propertyProjections) &&
 		sameUpdates(stored.propertyNumericUpdates, selected.propertyNumericUpdates) &&
 		sameReadRegions(stored.propertyReadRegions, selected.propertyReadRegions) &&
+		stored.propertyReadPairs.length === selected.propertyReadPairs.length &&
+		stored.propertyReadPairs.every((plan, index) => {
+			const expected = selected.propertyReadPairs[index]!;
+			return (
+				plan.id === expected.id &&
+				plan.object === expected.object &&
+				plan.fallback === expected.fallback &&
+				sameNumbers(plan.claimedIps, expected.claimedIps) &&
+				sameNumbers(plan.borrowedRegisters, expected.borrowedRegisters) &&
+				plan.loads.length === expected.loads.length &&
+				plan.loads.every(
+					(load, i) =>
+						load.ip === expected.loads[i]!.ip &&
+						load.icIndex === expected.loads[i]!.icIndex,
+				)
+			);
+		}) &&
 		sameScalar(stored.numericLeaf, selected.numericLeaf) &&
 		(stored.numericLeaf === undefined ||
 			(stored.numericLeaf.fallthroughJumpIps.length ===

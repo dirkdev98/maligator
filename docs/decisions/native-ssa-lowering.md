@@ -128,6 +128,11 @@ Artifacts validate the selected window against each entry's body and representat
 Numeric-fusion overlays cut read admission because their hidden temporaries and
 slow paths have no read-region cooperation contract.
 
+Adjacent boxed property reads also carry per-entry persisted plans. The receiver,
+cache sites, borrowed values, and two claimed instructions are selected before
+storage planning. Rendering consumes the pair admission and preserves a separate
+original-instruction fallback at each load, including its source and profile event.
+
 Resumable functions currently persist their complete boxed native local set. Their
 frame records a native local count and suspended source position independently of
 bytecode. Those fields share space with interpreter caller metadata because a

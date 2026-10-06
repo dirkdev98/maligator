@@ -42,6 +42,8 @@ import type {
 	NativePropertyProjectionPlan,
 	NativePropertyReadRegionAction,
 	NativePropertyReadRegionPlan,
+	NativePropertyReadPairPlan,
+	NativePropertyReadPairAction,
 } from "./lower-native-fast-paths.ts";
 import { nativeRootedOutputRegisters } from "./lower-native-root-publication.ts";
 import { nativeVariantContract } from "./lower-native-storage.ts";
@@ -1205,6 +1207,7 @@ function emitCompiledVariant(
 		storage.propertyProjections,
 		storage.propertyNumericUpdates,
 		storage.propertyReadRegions,
+		storage.propertyReadPairs,
 	);
 	if (body === null) {
 		return null;
@@ -1783,6 +1786,7 @@ function emitResumableFunction(
 		native.storage!.propertyProjections,
 		native.storage!.propertyNumericUpdates,
 		native.storage!.propertyReadRegions,
+		native.storage!.propertyReadPairs,
 	);
 	if (body === null) {
 		return null;
@@ -2527,6 +2531,7 @@ function emitBody(
 	propertyProjections: ReadonlyArray<NativePropertyProjectionPlan> = [],
 	propertyNumericUpdates: ReadonlyArray<NativePropertyNumericUpdatePlan> = [],
 	propertyReadRegions: ReadonlyArray<NativePropertyReadRegionPlan> = [],
+	propertyReadPairs: ReadonlyArray<NativePropertyReadPairPlan> = [],
 ): EmittedBody | null {
 	if (!vmRegionActionsAreCurrent(specializations, regionActions)) {
 		throw new Error("Native function has stale region actions");
@@ -3302,10 +3307,6 @@ function emitBody(
 	const fieldLoads = new Map(
 		directFields?.loads.map((load) => [load.instructionIp, load.field]),
 	);
-	const staticPropertyProjectionActionByIp = new Map<
-		number,
-		NativeStaticPropertyProjectionAction
-	>();
 	const staticPropertyProjectionConflicts = (ip: number): boolean =>
 		expressionIps.has(ip) ||
 		nativeInstructions[ip] !== undefined ||
@@ -3349,6 +3350,7 @@ function emitBody(
 			plans: propertyProjections,
 			updates: propertyNumericUpdates,
 			readRegions: propertyReadRegions,
+			readPairs: propertyReadPairs,
 		},
 		indexedLoopElements,
 		(ip) => numericFusionActionByIp.get(ip),
@@ -3391,45 +3393,13 @@ function emitBody(
 			`MalArrayObject *__paired_array_${paired.id}_secondary = nullptr;`,
 		);
 	}
-	for (let ip = 0; ip + 1 < fn.instructions.length; ip++) {
-		const first = fn.instructions[ip]!;
-		const second = fn.instructions[ip + 1]!;
-		if (
-			propertyNumericUpdateActionByIp.has(ip) ||
-			propertyNumericUpdateActionByIp.has(ip + 1) ||
-			staticPropertyNumericActionByIp.has(ip) ||
-			staticPropertyNumericActionByIp.has(ip + 1) ||
-			propertyReadRegionActionByIp.has(ip) ||
-			propertyReadRegionActionByIp.has(ip + 1) ||
-			first.opcode !== "LOAD_PROPERTY_STATIC" ||
-			second.opcode !== "LOAD_PROPERTY_STATIC" ||
-			first.object !== second.object ||
-			first.dst === first.object ||
-			reps[first.dst] !== "boxed" ||
-			reps[second.dst] !== "boxed" ||
-			jumpTargets.has(ip + 1) ||
-			staticPropertyProjectionConflicts(ip) ||
-			staticPropertyProjectionConflicts(ip + 1)
-		) {
-			continue;
-		}
-		const projection: NativeStaticPropertyProjection = {
-			firstIp: ip,
-			first,
-			secondIp: ip + 1,
-			second,
-		};
-		staticPropertyProjectionActionByIp.set(ip, { projection, role: "first" });
-		staticPropertyProjectionActionByIp.set(ip + 1, {
-			projection,
-			role: "second",
-		});
+	for (const pair of nativeFastPaths.propertyReadPairs) {
+		const ip = pair.id;
 		lines.push(`bool __property_projection_${ip}_fast = false;`);
 		lines.push(
 			`MalValue __property_projection_${ip}_first = MAL_VALUE_UNDEFINED;`,
 			`MalValue __property_projection_${ip}_second = MAL_VALUE_UNDEFINED;`,
 		);
-		ip++;
 	}
 	const switches = new Map(
 		fn.profileSiteIds === undefined
@@ -3917,7 +3887,7 @@ function emitBody(
 			nativeIteratorEntryPairVirtualizationActionByIp.get(ip);
 		instructionContext.numericFusionAction = numericFusionActionByIp.get(ip);
 		instructionContext.staticPropertyProjectionAction =
-			staticPropertyProjectionActionByIp.get(ip);
+			nativeFastPaths.propertyReadPairActions.get(ip);
 		instructionContext.staticPropertyNumericAction =
 			staticPropertyNumericActionByIp.get(ip);
 		instructionContext.propertyNumericUpdateAction =
@@ -4257,18 +4227,6 @@ interface NativeFieldCall {
 	}>;
 }
 
-interface NativeStaticPropertyProjection {
-	readonly firstIp: number;
-	readonly first: Extract<BytecodeInstruction, { opcode: "LOAD_PROPERTY_STATIC" }>;
-	readonly secondIp: number;
-	readonly second: Extract<BytecodeInstruction, { opcode: "LOAD_PROPERTY_STATIC" }>;
-}
-
-interface NativeStaticPropertyProjectionAction {
-	readonly projection: NativeStaticPropertyProjection;
-	readonly role: "first" | "second";
-}
-
 interface NativeInstructionContext {
 	readonly inactiveRootMaskTails?: ReadonlyMap<bigint, string>;
 	readonly ownedCaptureFunctionIndex?: number;
@@ -4335,7 +4293,7 @@ interface NativeInstructionContext {
 	readonly nativeIteratorResultVirtualizationAction?: NativeIteratorResultVirtualizationAction;
 	readonly nativeIteratorEntryPairVirtualizationAction?: NativeIteratorEntryPairVirtualizationAction;
 	readonly numericFusionAction?: NativeNumericFusionAction;
-	readonly staticPropertyProjectionAction?: NativeStaticPropertyProjectionAction;
+	readonly staticPropertyProjectionAction?: NativePropertyReadPairAction;
 	readonly staticPropertyNumericAction?: NativePropertyProjectionAction;
 	readonly propertyNumericUpdateAction?: NativePropertyNumericUpdateAction;
 	readonly propertyReadRegionAction?: NativePropertyReadRegionAction;
@@ -5712,8 +5670,8 @@ function emitInstruction(
 			) {
 				const fallback = emitGenericInstruction();
 				if (fallback === null) return null;
-				const { projection, role } = staticPropertyProjectionAction;
-				const id = projection.firstIp;
+				const { plan, role } = staticPropertyProjectionAction;
+				const id = plan.id;
 				const value = `__property_projection_${id}_${role}`;
 				if (role === "second") {
 					return [
@@ -5725,7 +5683,7 @@ function emitInstruction(
 					];
 				}
 				return [
-					`__property_projection_${id}_fast = mal_vm_property_try_load_static_pair(${boxed(instruction.object)}, &${nativeBodyReference(resources, "propertyCache")}[${projection.first.icIndex}], &${nativeBodyReference(resources, "propertyCache")}[${projection.second.icIndex}], &__property_projection_${id}_first, &__property_projection_${id}_second);`,
+					`__property_projection_${id}_fast = mal_vm_property_try_load_static_pair(${boxed(instruction.object)}, &${nativeBodyReference(resources, "propertyCache")}[${plan.loads[0]!.icIndex}], &${nativeBodyReference(resources, "propertyCache")}[${plan.loads[1]!.icIndex}], &__property_projection_${id}_first, &__property_projection_${id}_second);`,
 					`if (__property_projection_${id}_fast) {`,
 					`  r${instruction.dst} = ${value};`,
 					`} else {`,

@@ -15,6 +15,7 @@ import type {
 	NativePropertyProjectionPlan,
 	NativePropertyNumericUpdatePlan,
 	NativePropertyReadRegionPlan,
+	NativePropertyReadPairPlan,
 	NativePropertyProjectionOperand,
 } from "./lower-native-fast-paths.ts";
 import type { NativeStoragePlan } from "./lower-native-storage.ts";
@@ -65,7 +66,7 @@ import type {
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal artifacts are hard cut-overs: stale cache entries rebuild.
-export const COMPILER_ARTIFACT_VERSION = 110;
+export const COMPILER_ARTIFACT_VERSION = 111;
 
 function validateClosureCaptureOwners(
 	owners: ReadonlyArray<number>,
@@ -749,6 +750,19 @@ function writeNativeStorage(w: Writer, storage: NativeStoragePlan | undefined): 
 		w.i32Array([...plan.borrowedRegisters]);
 		w.u8(0);
 	}
+	w.u32(storage.propertyReadPairs.length);
+	for (const plan of storage.propertyReadPairs) {
+		w.i32(plan.id);
+		w.i32(plan.object);
+		w.u32(plan.loads.length);
+		for (const load of plan.loads) {
+			w.i32(load.ip);
+			w.i32(load.icIndex);
+		}
+		w.i32Array([...plan.claimedIps]);
+		w.i32Array([...plan.borrowedRegisters]);
+		w.u8(0);
+	}
 }
 
 function readNativeStorage(r: Reader): NativeStoragePlan {
@@ -892,12 +906,33 @@ function readNativeStorage(r: Reader): NativeStoragePlan {
 		});
 	}
 
+	const propertyReadPairs: Array<NativePropertyReadPairPlan> = [];
+	for (let i = 0, count = r.count(6); i < count; i++) {
+		const id = r.i32(),
+			object = r.i32();
+		const loads = Array.from({ length: r.count(2) }, () => ({
+			ip: r.i32(),
+			icIndex: r.i32(),
+		}));
+		const claimedIps = r.i32Array(),
+			borrowedRegisters = r.i32Array();
+		if (r.u8() !== 0) throw new RangeError("Invalid native read pair fallback");
+		propertyReadPairs.push({
+			id,
+			object,
+			loads,
+			claimedIps,
+			borrowedRegisters,
+			fallback: "original-instructions",
+		});
+	}
 	return {
 		...storage,
 		numericLeaf: leaf,
 		propertyProjections,
 		propertyNumericUpdates,
 		propertyReadRegions,
+		propertyReadPairs,
 	};
 }
 

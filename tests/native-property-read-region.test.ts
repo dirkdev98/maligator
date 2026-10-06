@@ -131,7 +131,28 @@ describe("bounded native property read regions", () => {
 		]);
 		expect(numeric.propertyProjections).toHaveLength(1);
 		expect(numeric.propertyReadRegions).toHaveLength(0);
-		expect(lower([load(1), load(2)]).propertyReadRegions).toHaveLength(0);
+		const pair = lower([load(1), load(2)]);
+		expect(pair.propertyReadRegions).toHaveLength(0);
+		expect(pair.propertyReadPairs).toHaveLength(1);
+		expect(pair.propertyReadPairs[0]!.fallback).toBe("original-instructions");
+	});
+
+	it("declines boxed pairs with an intervening entry, incompatible output or another owner", () => {
+		const instructions = [load(1), load(2)];
+		for (const options of [
+			{ jumpTargets: new Set([1]) },
+			{ conflicts: (ip: number) => ip === 0 },
+			{ conflicts: (ip: number) => ip === 1 },
+			{
+				representations: ["boxed", "number", "boxed"] as Array<VmRegisterRepresentation>,
+			},
+			{
+				representations: ["boxed", "boxed", "number"] as Array<VmRegisterRepresentation>,
+			},
+		])
+			expect(lower(instructions, options).propertyReadPairs).toEqual([]);
+		expect(lower([load(0), load(2)]).propertyReadPairs).toEqual([]);
+		expect(lower([load(1), load(2, 3)]).propertyReadPairs).toEqual([]);
 	});
 
 	it("keeps projected registers live across branches and exceptional definitions", () => {

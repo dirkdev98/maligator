@@ -113,6 +113,20 @@ export interface NativePropertyReadRegionAction {
 	readonly index: number;
 }
 
+export interface NativePropertyReadPairPlan {
+	readonly id: number;
+	readonly object: number;
+	readonly loads: ReadonlyArray<{ readonly ip: number; readonly icIndex: number }>;
+	readonly claimedIps: ReadonlyArray<number>;
+	readonly borrowedRegisters: ReadonlyArray<number>;
+	readonly fallback: "original-instructions";
+}
+
+export interface NativePropertyReadPairAction {
+	readonly plan: NativePropertyReadPairPlan;
+	readonly role: "first" | "second";
+}
+
 export interface NativeFastPathLowering {
 	readonly propertyNumericUpdates: ReadonlyArray<NativePropertyNumericUpdatePlan>;
 	readonly propertyNumericUpdateActions: ReadonlyMap<
@@ -123,6 +137,8 @@ export interface NativeFastPathLowering {
 	readonly propertyProjectionActions: ReadonlyMap<number, NativePropertyProjectionAction>;
 	readonly propertyReadRegions: ReadonlyArray<NativePropertyReadRegionPlan>;
 	readonly propertyReadRegionActions: ReadonlyMap<number, NativePropertyReadRegionAction>;
+	readonly propertyReadPairs: ReadonlyArray<NativePropertyReadPairPlan>;
+	readonly propertyReadPairActions: ReadonlyMap<number, NativePropertyReadPairAction>;
 	readonly pairedArrayLoops: ReadonlyArray<NativePairedArrayLoopPlan>;
 	readonly pairedArrayLoopActions: ReadonlyMap<number, NativePairedArrayLoopAction>;
 	readonly constructorInitialization?: NativeConstructorInitializationPlan;
@@ -916,6 +932,7 @@ export function lowerNativeFastPaths(
 				readonly plans: ReadonlyArray<NativePropertyProjectionPlan>;
 				readonly updates: ReadonlyArray<NativePropertyNumericUpdatePlan>;
 				readonly readRegions: ReadonlyArray<NativePropertyReadRegionPlan>;
+				readonly readPairs: ReadonlyArray<NativePropertyReadPairPlan>;
 		  },
 	indexedLoops: ReadonlyArray<NativeIndexedLoopElement> = [],
 	terminalFusion: (
@@ -928,9 +945,12 @@ export function lowerNativeFastPaths(
 ): NativeFastPathLowering {
 	const suppliedClaims = new Set(
 		selection.kind === "render"
-			? [...selection.plans, ...selection.updates, ...selection.readRegions].flatMap(
-					(plan) => plan.claimedIps,
-				)
+			? [
+					...selection.plans,
+					...selection.updates,
+					...selection.readRegions,
+					...selection.readPairs,
+				].flatMap((plan) => plan.claimedIps)
 			: [],
 	);
 	const otherConflicts = (ip: number) => conflicts(ip) || suppliedClaims.has(ip);
@@ -1060,6 +1080,55 @@ export function lowerNativeFastPaths(
 	for (const plan of propertyReadRegions)
 		for (const [index, load] of plan.loads.entries())
 			propertyReadRegionActions.set(load.ip, { plan, index });
+	const readRegionClaims = new Set(
+		propertyReadRegions.flatMap((plan) => plan.claimedIps),
+	);
+	const propertyReadPairs: Array<NativePropertyReadPairPlan> = [];
+	const propertyReadPairActions = new Map<number, NativePropertyReadPairAction>();
+	if (selection.kind === "render") propertyReadPairs.push(...selection.readPairs);
+	else
+		for (let ip = 0; ip + 1 < fn.instructions.length; ip++) {
+			const first = fn.instructions[ip]!,
+				second = fn.instructions[ip + 1]!;
+			if (
+				first.opcode !== "LOAD_PROPERTY_STATIC" ||
+				second.opcode !== "LOAD_PROPERTY_STATIC" ||
+				first.object !== second.object ||
+				first.dst === first.object ||
+				representations[first.dst] !== "boxed" ||
+				representations[second.dst] !== "boxed" ||
+				jumpTargets.has(ip + 1) ||
+				[ip, ip + 1].some(
+					(candidate) =>
+						conflicts(candidate) ||
+						pairedArrayLoopActions.has(candidate) ||
+						propertyNumericUpdateActions.has(candidate) ||
+						propertyProjectionActions.has(candidate) ||
+						readRegionClaims.has(candidate),
+				)
+			)
+				continue;
+			propertyReadPairs.push(
+				Object.freeze({
+					id: ip,
+					object: first.object,
+					loads: [
+						{ ip, icIndex: first.icIndex },
+						{ ip: ip + 1, icIndex: second.icIndex },
+					],
+					claimedIps: [ip, ip + 1],
+					borrowedRegisters: [...new Set([first.object, first.dst, second.dst])].sort(
+						(a, b) => a - b,
+					),
+					fallback: "original-instructions",
+				}),
+			);
+			ip++;
+		}
+	for (const plan of propertyReadPairs) {
+		propertyReadPairActions.set(plan.loads[0]!.ip, { plan, role: "first" });
+		propertyReadPairActions.set(plan.loads[1]!.ip, { plan, role: "second" });
+	}
 
 	const constructorInitialization = lowerConstructorInitialization(
 		fn,
@@ -1090,6 +1159,8 @@ export function lowerNativeFastPaths(
 		propertyProjectionActions,
 		propertyReadRegions: Object.freeze(propertyReadRegions),
 		propertyReadRegionActions,
+		propertyReadPairs: Object.freeze(propertyReadPairs),
+		propertyReadPairActions,
 		...(constructorInitialization === undefined ? {} : { constructorInitialization }),
 		constructorInitializationActions,
 		...(privateFieldReserve === undefined ? {} : { privateFieldReserve }),
@@ -1101,7 +1172,10 @@ export function selectNativePropertyFastPaths(
 	entry?: NativeDirectEntryPlan,
 ): Pick<
 	NativeFastPathLowering,
-	"propertyProjections" | "propertyNumericUpdates" | "propertyReadRegions"
+	| "propertyProjections"
+	| "propertyNumericUpdates"
+	| "propertyReadRegions"
+	| "propertyReadPairs"
 > {
 	const fn = native.body;
 	const handlerEntries = new Set(fn.handlers.map((handler) => handler.handlerIp));
