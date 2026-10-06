@@ -8295,6 +8295,13 @@ MalValue *mal_coroutine_alloc_registers(MalVm *vm, i32 slot_count) {
     return mal_vm_alloc_coroutine_buffer(vm, slot_count);
 }
 
+void mal_coroutine_clear_snapshot(MalValue *registers, i32 slot_count) {
+    for (i32 slot = 0; slot < slot_count; slot++) {
+        mal_gc_write_barrier(registers[slot]);
+        registers[slot] = MAL_VALUE_UNDEFINED;
+    }
+}
+
 static MalValue *mal_compiled_coroutine_arguments(
     MalVm *vm, const MalValue *arguments, i32 argument_count, bool retain_arguments
 ) {
@@ -8347,8 +8354,8 @@ MalGeneratorObject *mal_vm_op_generator_start_compiled(
     );
     // The instance inherits the generator function's own .prototype (which
     // inherits %GeneratorPrototype% / %AsyncGeneratorPrototype%), else the
-    // intrinsic prototype. `registers` is already published as a GC root by the
-    // caller, so a getter on .prototype cannot sweep the pending activation.
+    // intrinsic prototype. The caller roots each snapshot value until adoption,
+    // so a getter on .prototype cannot sweep the pending activation.
     MalObject *generator_prototype = mal_vm_generator_instance_prototype(
         vm, callee, is_async_generator);
 
@@ -8392,20 +8399,16 @@ MalGeneratorObject *mal_vm_op_generator_start_compiled(
 void mal_vm_op_yield_compiled(
     MalVm *vm, MalGeneratorObject *generator, MalValue yielded, i32 value_dst,
     i32 mode_dst, i32 resume_ip, i32 suspend_position, MalEnv *env) {
-    // The caller unlinks its buffer roots before a helper can resume that same buffer.
+    // The caller completes its snapshot and unlinks before this helper can resume or free it.
     MalValue roots[] = {mal_value_from_object((MalObject *) generator), yielded};
     MalRootSpan root_span;
     mal_gc_root(&root_span, roots, 2);
-    // SATB: yielded_value + frame.env are traced heap fields being overwritten;
-    // shade the previous contents (the register buffer is mutated in place, so its
-    // slots are root state until suspend and need no shade here).
+    // Snapshot replacement shades its old slots; these independently traced fields need barriers too.
     mal_gc_write_barrier(generator->yielded_value);
     generator->yielded_value = yielded;
     generator->resume_value_register = value_dst;
     generator->resume_mode_register = mode_dst;
     generator->state = MAL_GENERATOR_SUSPENDED_YIELD;
-    // The register buffer is mutated in place (it is gen->frame.registers), so only
-    // the resume point and the current env need saving for a later resume.
     generator->frame.instruction_pointer = resume_ip;
     generator->frame.compiled_suspend_position = suspend_position + 1;
     if (generator->frame.env != nullptr) {

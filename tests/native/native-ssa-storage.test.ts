@@ -6,6 +6,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { resolveBuildConfig } from "../../src/build-config.ts";
 import type { ProgramImage } from "../../src/compiler/target/program-image.ts";
 import { emitCompiledFunction } from "../../src/compiler/target/render-native-c.ts";
+import { vmInstructionReadRegisters } from "../../src/compiler/target/runtime-image.ts";
 import {
 	buildBackendPairFromOneProgramImage,
 	HOST_MAIN,
@@ -142,6 +143,64 @@ describe("independent native SSA storage", () => {
 			),
 		).toBe(true);
 		const suspended = image.native.functions.filter((fn) => fn.mode === "resumable");
+		const boxedPair = image.native.functions.find(
+			(fn) =>
+				String.fromCharCode(
+					...(image.runtime.stringConstants[fn.body.nameStringIndex] ?? []),
+				) === "boxedReadPair",
+		)!;
+		expect(boxedPair.storage!.propertyReadPairs).toHaveLength(1);
+		const compact = suspended.find(
+			(fn) =>
+				String.fromCharCode(
+					...(image.runtime.stringConstants[fn.body.nameStringIndex] ?? []),
+				) === "compactScalarAsync",
+		)!;
+		expect(compact.storage!.suspension!.slotCount).toBeLessThan(
+			compact.body.registerCount,
+		);
+		expect(compact.registerRepresentations).toContain("number");
+		for (const [name, rep] of [
+			["compactSpillNumber", "number"],
+			["compactSpillInteger", "int32"],
+			["compactSpillBoolean", "boolean"],
+		]) {
+			const spill = suspended.find(
+				(fn) =>
+					String.fromCharCode(
+						...(image.runtime.stringConstants[fn.body.nameStringIndex] ?? []),
+					) === name,
+			)!;
+			expect(
+				spill.storage!.suspension!.points.some((point) =>
+					point.registers.some((local) => spill.registerRepresentations[local] === rep),
+				),
+			).toBe(true);
+		}
+		const occupant = suspended.find(
+			(fn) =>
+				String.fromCharCode(
+					...(image.runtime.stringConstants[fn.body.nameStringIndex] ?? []),
+				) === "retainOccupant",
+		)!;
+		expect(
+			occupant.body.instructions.some((op) =>
+				["CREATE_OBJECT", "CREATE_OBJECT_SHAPED"].includes(op.opcode),
+			),
+		).toBe(false);
+		const occupantYield = occupant.body.instructions.findIndex(
+			(op) => op.opcode === "YIELD",
+		);
+		expect(
+			occupant.storage!.suspension!.points.find(
+				(point) => point.instructionIp === occupantYield,
+			)!.registers,
+		).toContain(0);
+		expect(
+			occupant.body.instructions
+				.slice(occupantYield + 1)
+				.flatMap(vmInstructionReadRegisters),
+		).not.toContain(0);
 		const numericSort = image.native.functions
 			.flatMap((fn) => fn.instructions)
 			.find((plan) => plan?.kind === "call" && plan.numericSortCallback !== undefined);
@@ -204,4 +263,33 @@ describe("independent native SSA storage", () => {
 			}
 		}
 	});
+
+	it("restores arguments, captures and this across direct eval and function splices", () => {
+		const evalFixture = "tests/local/native-compact-suspension-eval.js";
+		const evalExpected = execFileSync(process.execPath, [evalFixture], {
+			encoding: "utf8",
+		});
+		const pair = buildBackendPairFromOneProgramImage({
+			fixture: evalFixture,
+			name: "native-compact-suspension-eval",
+			mainFile: HOST_MAIN,
+			config: resolveBuildConfig({
+				engine: { eval: true },
+				surface: { webPlatform: true },
+			}),
+			outDir,
+		});
+		for (const fn of pair.programImage.native.functions.filter(
+			(fn) => fn.mode === "resumable",
+		))
+			expect(emitCompiledFunction(fn, fn.functionIndex, "", false)).not.toBeNull();
+		for (const binary of [pair.compiled, pair.interpreted])
+			for (const stress of [{}, STRESS_ENV])
+				expect(
+					runToStdout(binary, {
+						env: { ...stress, MAL_HOST_GC: "1" },
+						timeoutMs: 60_000,
+					}),
+				).toBe(evalExpected);
+	}, 600_000);
 });

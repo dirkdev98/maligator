@@ -63,6 +63,7 @@ export function lowerCoreCompilationToNativeProgram(
 		layoutBlocks: layoutNativeBlocks,
 		createParallelCopyLowerer: createNativeParallelCopyLowerer,
 		loopBackedgeInstructions: nativeLoopBackedgeInstructions,
+		preserveResumableRepresentations: true,
 	});
 	const functions = target.functions.map((fn) => {
 		if (fn.storageValues === undefined)

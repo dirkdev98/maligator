@@ -10,6 +10,8 @@ import {
 	nativePrivateCallResultIps,
 	nativePrivateRootRegisters,
 } from "./lower-native-root-publication.ts";
+import { lowerNativeSuspension } from "./lower-native-suspension.ts";
+import type { NativeSuspensionPlan } from "./lower-native-suspension.ts";
 import {
 	NATIVE_ARITH,
 	NATIVE_BITWISE,
@@ -38,6 +40,7 @@ export interface NativeNumericLeafPlan extends NativeScalarStoragePlan {
 }
 
 export interface NativeStoragePlan extends NativeScalarStoragePlan {
+	readonly suspension: NativeSuspensionPlan | undefined;
 	readonly propertyProjections: ReadonlyArray<NativePropertyProjectionPlan>;
 	readonly propertyNumericUpdates: ReadonlyArray<NativePropertyNumericUpdatePlan>;
 	readonly propertyReadRegions: ReadonlyArray<NativePropertyReadRegionPlan>;
@@ -531,6 +534,7 @@ function lowerStorage(
 		propertyNumericUpdates,
 		propertyReadRegions,
 		propertyReadPairs,
+		suspension: lowerNativeSuspension(native),
 		rootRegisters: roots,
 		privateRegisters: roots.filter((local) => privateLocals.has(local)),
 		privateCallResultIps: [...calls],
@@ -696,6 +700,18 @@ export function validateNativeStorage(native: NativeFunctionPlan): void {
 		stored !== undefined &&
 		selected !== undefined &&
 		sameScalar(stored, selected) &&
+		(stored.suspension === undefined || selected.suspension === undefined
+			? stored.suspension === selected.suspension
+			: stored.suspension.valueSlot === selected.suspension.valueSlot &&
+				stored.suspension.modeSlot === selected.suspension.modeSlot &&
+				stored.suspension.slotCount === selected.suspension.slotCount &&
+				sameNumbers(stored.suspension.registers, selected.suspension.registers) &&
+				stored.suspension.points.length === selected.suspension.points.length &&
+				stored.suspension.points.every(
+					(point, index) =>
+						point.instructionIp === selected.suspension!.points[index]!.instructionIp &&
+						sameNumbers(point.registers, selected.suspension!.points[index]!.registers),
+				)) &&
 		sameProjections(stored.propertyProjections, selected.propertyProjections) &&
 		sameUpdates(stored.propertyNumericUpdates, selected.propertyNumericUpdates) &&
 		sameReadRegions(stored.propertyReadRegions, selected.propertyReadRegions) &&

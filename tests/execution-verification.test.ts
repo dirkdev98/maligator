@@ -329,7 +329,7 @@ describe("Core target construction", () => {
 		).toThrow("GC safepoint roots do not match exact execution liveness");
 	});
 
-	it("models every resumable native register as a traced MalValue", () => {
+	it("keeps the generic VM execution ABI boxed for resumable registers", () => {
 		const program = optimizedTarget(
 			`
 				async function retain(value) { return await value; }

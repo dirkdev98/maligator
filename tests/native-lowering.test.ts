@@ -36,7 +36,7 @@ globalThis.calculate = calculate;
 `;
 
 describe("SSA native lowering", () => {
-	it("requires boxed locals and outgoing maps at every native suspension transfer", () => {
+	it("requires traced root representations and outgoing maps at every native suspension transfer", () => {
 		const image = compileSemanticProgramToProgramImage(
 			analyzeSourceAndRunSemanticAnalysis(
 				`globalThis.suspend = async function* (value) {
@@ -49,14 +49,15 @@ describe("SSA native lowering", () => {
 		);
 		const fn = image.native.functions.find((native) => native.mode === "resumable")!;
 		expect(() => nativeFrameRootRegisters(fn.body, fn)).not.toThrow();
+		const root = fn.gc.safepoints.flatMap((point) => point.rootRegisters)[0]!;
 		expect(() =>
 			nativeFrameRootRegisters(fn.body, {
 				...fn,
 				registerRepresentations: fn.registerRepresentations.map((rep, index) =>
-					index === 0 ? "number" : rep,
+					index === root ? "number" : rep,
 				),
 			}),
-		).toThrow("resumable native locals must retain boxed representations");
+		).toThrow("native GC roots must be unique ordered traced function registers");
 		for (const opcode of ["GENERATOR_START", "YIELD", "AWAIT"]) {
 			const ip = fn.body.instructions.findIndex((op) => op.opcode === opcode);
 			expect(ip).toBeGreaterThanOrEqual(0);

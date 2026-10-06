@@ -3254,11 +3254,11 @@ void mal_op_merge_data_properties(MalCallable *callable, const MalInstruction *i
 // C function that suspends by returning and resumes by re-entry.
 // ---------------------------------------------------------------------------
 
-// Allocate a compiled coroutine's heap register buffer (all undefined). Sized by
-// the backend to cover registers + the with-object stack + a self-reference slot;
-// owned by the coroutine object once GENERATOR_START/ASYNC_START adopts it, then
-// returned to the VM's bounded buffer pool on completion.
+// The native plan sizes this boxed suspension buffer independently of computational locals.
 MalValue *mal_coroutine_alloc_registers(MalVm *vm, i32 slot_count);
+
+// Replacing suspended heap edges must retain the marker's previous snapshot.
+void mal_coroutine_clear_snapshot(MalValue *registers, i32 slot_count);
 
 // GENERATOR_START: build the generator instance (prototype from callee.prototype,
 // else the intrinsic generator/async-generator prototype), adopt `registers` as

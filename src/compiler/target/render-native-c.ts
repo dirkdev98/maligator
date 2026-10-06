@@ -47,6 +47,7 @@ import type {
 } from "./lower-native-fast-paths.ts";
 import { nativeRootedOutputRegisters } from "./lower-native-root-publication.ts";
 import { nativeVariantContract } from "./lower-native-storage.ts";
+import type { NativeSuspensionPlan } from "./lower-native-suspension.ts";
 import {
 	NATIVE_ARITH,
 	NATIVE_BITWISE,
@@ -471,19 +472,10 @@ export function directCompiledEntryKey(functionIndex: number, entryId: number): 
 	return `${functionIndex}:${entryId}`;
 }
 
-/**
- * Threaded through the body emission for a resumable (generator/async) function.
- * A coroutine holds every register boxed in a heap buffer named `__gc_slots` (so
- * the existing register/with-object references work unchanged), indexed directly
- * by register number; `selfSlot` is the trailing buffer slot holding the
- * coroutine object (rooting its yielded value / async fields). GENERATOR_START,
- * YIELD, AWAIT and the coroutine RETURN forms consult this. Null for ordinary
- * straight-line functions.
- */
 interface CoroutineContext {
-	readonly registerCount: number;
+	readonly suspension: NativeSuspensionPlan;
+	readonly suspensionSlots: ReadonlyMap<number, number>;
 	readonly positions: ReadonlyArray<number>;
-	readonly suspensionInactiveMasks: ReadonlyMap<number, bigint>;
 	functionIndex: number;
 	selfSlot: number;
 	/** Runtime condition for copying call arguments into the suspended frame. */
@@ -1654,19 +1646,14 @@ export function emitCompiledFunction(
 	};
 }
 
-/**
- * Every local is boxed and persistent because resume dispatch bypasses the
- * parameter prologue and the runtime writes resume values by native local index.
- *
- * The activation lives in a heap MalValue buffer (named __gc_slots so the shared
- * register emission works unchanged): locals [0,registerCount), then a self slot
- * holding the coroutine object. A fresh
- * call allocates the buffer, runs the parameter prologue and body until the first
- * suspend; a resume restores the buffer + env from the coroutine and dispatches
- * to the saved resume label. Every register is boxed (no rep specialization: an
- * unboxed C local would not survive a suspend, and the resume ABI writes values
- * by register index).
- */
+function unboxedSnapshot(rep: RegisterRep, value: string): string {
+	if (rep === "number") return `mal_ops_number_as_f64(${value})`;
+	if (rep === "int32") return `(i32)mal_ops_number_as_f64(${value})`;
+	if (rep === "boolean") return `mal_value_to_boolean(${value})`;
+	return value;
+}
+
+// Each C invocation owns computational locals and roots; only the selected snapshot survives.
 function emitResumableFunction(
 	fn: BytecodeFunction,
 	native: NativeFunctionPlan,
@@ -1681,16 +1668,16 @@ function emitResumableFunction(
 	const isAsyncFunction = fn.isAsync && !fn.isGenerator;
 	const isAsyncGenerator = fn.isAsync && fn.isGenerator;
 
-	const reps: Array<RegisterRep> = new Array<RegisterRep>(fn.registerCount).fill("boxed");
-
-	// Buffer layout: registers | coroutine self-reference. A `with` scope lives on
-	// the env chain (gen->frame.env, saved/restored across suspend), not the buffer.
-	const selfSlot = fn.registerCount;
-	const totalSlots = fn.registerCount + 1;
+	const reps = [...native.registerRepresentations];
+	const suspension = native.storage!.suspension;
+	if (suspension === undefined)
+		throw new Error("Resumable native function lacks a suspension plan");
+	const rootRegisters = native.storage!.rootRegisters;
+	const selfSlot = rootRegisters.length;
+	const totalSlots = selfSlot + 1;
 
 	const capturesEnv = fn.capturedCount > 0;
-	// The root frame spans the whole buffer and is always published, so every exit
-	// past it must unlink it.
+	// Every exit after publishing the invocation's root frame must unlink it.
 	const gcUnlink = "mal_root_frame_head = __gc_frame.prev; ";
 	const argumentRetentionLimit = computeArgumentRetentionLimit(fn);
 	const retainArguments =
@@ -1704,37 +1691,15 @@ function emitResumableFunction(
 	// from the this_value parameter (which the resume path is invoked with from the
 	// saved frame), so no mutable this-slot is needed.
 	const profileDecisions: Array<BackendProfileDecision> = [];
-	const registerSlots = new Map<number, number>();
-	for (let register = 0; register < fn.registerCount; register++) {
-		registerSlots.set(register, register);
-	}
+	const registerSlots = new Map(rootRegisters.map((register, slot) => [register, slot]));
 	const inactiveRootMasks = nativeInactiveRootMasks(native.gc.safepoints, registerSlots);
-	const suspensionInactiveMasks = nativeInactiveRootMasks(
-		native.gc.safepoints.flatMap((point) => {
-			const op = fn.instructions[point.instructionIp]!;
-			if (op.opcode === "GENERATOR_START")
-				return [{ ...point, rootRegisters: point.outgoingRootRegisters }];
-			if (op.opcode !== "YIELD" && op.opcode !== "AWAIT") return [];
-			return [
-				{
-					...point,
-					// Resume outputs still hold the previous iteration's values while suspended.
-					rootRegisters: point.outgoingRootRegisters.filter(
-						(local) => local !== op.valueDst && local !== op.modeDst,
-					),
-				},
-			];
-		}),
-		registerSlots,
-	);
-	const rootMaskTails = nativeRootMaskTails([
-		...inactiveRootMasks.values(),
-		...suspensionInactiveMasks.values(),
-	]);
+	const rootMaskTails = nativeRootMaskTails(inactiveRootMasks.values());
 	const coro: CoroutineContext = {
-		registerCount: fn.registerCount,
+		suspension,
+		suspensionSlots: new Map(
+			suspension.registers.map((register, slot) => [register, slot]),
+		),
 		positions: fn.positions,
-		suspensionInactiveMasks,
 		functionIndex: index,
 		selfSlot,
 		retainArguments,
@@ -1794,10 +1759,7 @@ function emitResumableFunction(
 	if (body.lines.some((line) => /\br-\d/.test(line))) {
 		return null;
 	}
-	// A resume dispatch jumps directly into `body`, so any function-wide state
-	// declared at its head would otherwise be skipped and read uninitialized after
-	// an await/yield. Reacquire the semantic epoch on every C invocation before the
-	// dispatch; register-backed JavaScript state remains in the coroutine buffer.
+	// Resume dispatch bypasses body declarations; invocation state must precede it.
 	const resumablePreamble = body.invocationPreamble;
 
 	const resumePoints = resumePointsOf(fn);
@@ -1808,6 +1770,7 @@ function emitResumableFunction(
 	lines.push(
 		`${linkage === "static" ? "static " : ""}__attribute__((aligned(64))) MalValue ${symbol}(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalEnv *env, MalValue callee, void *entry_state) {`,
 	);
+	lines.push("#pragma STDC FP_CONTRACT OFF");
 	lines.push(...rootMaskTails.declarations);
 	lines.push(`    (void) this_value;`);
 	lines.push(`    (void) new_target;`);
@@ -1834,7 +1797,8 @@ function emitResumableFunction(
 	}
 	lines.push(...resumablePreamble);
 
-	lines.push(`    MalValue *__gc_slots;`);
+	lines.push(`    MalValue __gc_slots[${totalSlots}];`);
+	lines.push(`    MalValue *__suspend_slots = nullptr;`);
 	lines.push(
 		`    MalGeneratorObject *resume_state = (MalGeneratorObject *) entry_state;`,
 	);
@@ -1849,7 +1813,13 @@ function emitResumableFunction(
 		lines.push(`    MalValue __async_result_promise = MAL_VALUE_UNDEFINED;`);
 	}
 	for (let i = 0; i < fn.registerCount; i++) {
-		lines.push(`#define r${i} (__gc_slots[${i}])`);
+		const slot = registerSlots.get(i);
+		if (slot === undefined)
+			lines.push(`    ${cTypeOf(reps[i]!)} r${i} = ${zeroOf(reps[i]!)};`);
+		else {
+			lines.push(`#define r${i} (__gc_slots[${slot}])`);
+			lines.push(`    r${i} = ${zeroOf(reps[i]!)};`);
+		}
 	}
 
 	lines.push(
@@ -1857,15 +1827,15 @@ function emitResumableFunction(
 		`    MalRootFrame __gc_frame;`,
 	);
 
-	// RESUME: restore buffer + env, publish the root frame over the buffer, dispatch
-	// to the saved resume label. The sent value / resume mode were already written
-	// into the buffer by index; a `with` env is restored via resume_state->frame.env.
 	lines.push(`    if (resume_state != nullptr) {`);
-	lines.push(`        __gc_slots = resume_state->frame.registers;`);
+	lines.push(`        __suspend_slots = resume_state->frame.registers;`);
 	lines.push(`        env = resume_state->frame.env;`);
 	lines.push(`        args = resume_state->frame.arguments;`);
 	lines.push(`        arg_count = resume_state->frame.argument_count;`);
 	lines.push(`        callee = resume_state->frame.callee;`);
+	lines.push(
+		`        __gc_slots[${selfSlot}] = mal_value_from_object((MalObject *) __coro);`,
+	);
 	lines.push(
 		`        __gc_frame = (MalRootFrame){ .prev = mal_root_frame_head, .desc = &__gc_desc, .slots = __gc_slots, .inactive_slots = 0, .env = env };`,
 	);
@@ -1880,16 +1850,30 @@ function emitResumableFunction(
 	}
 	lines.push(`        switch (resume_state->frame.instruction_pointer) {`);
 	for (const resumeIp of resumePoints) {
-		lines.push(`        case ${resumeIp}: goto L${resumeIp};`);
+		const point = suspension.points.find(
+			(point) => point.instructionIp + 1 === resumeIp,
+		)!;
+		const op = fn.instructions[point.instructionIp]!;
+		const restore = (register: number, slot: number) =>
+			`r${register} = ${unboxedSnapshot(reps[register]!, `__suspend_slots[${slot}]`)};`;
+		lines.push(`        case ${resumeIp}:`);
+		for (const register of point.registers)
+			lines.push(`            ${restore(register, coro.suspensionSlots.get(register)!)}`);
+		if (op.opcode === "YIELD" || op.opcode === "AWAIT") {
+			lines.push(`            ${restore(op.valueDst, suspension.valueSlot)}`);
+			lines.push(`            ${restore(op.modeDst, suspension.modeSlot)}`);
+		}
+		lines.push(
+			`            mal_coroutine_clear_snapshot(__suspend_slots, ${suspension.slotCount});`,
+		);
+		lines.push(`            goto L${resumeIp};`);
 	}
 	// Unreachable: a saved resume IP is always one of the recorded points.
 	lines.push(`        default: break;`);
 	lines.push(`        }`);
 	lines.push(`    } else {`);
 
-	// FRESH: allocate the buffer (already all-undefined), publish the root frame,
-	// build the captured env, then load parameters boxed before falling into body.
-	lines.push(`        __gc_slots = mal_coroutine_alloc_registers(vm, ${totalSlots});`);
+	lines.push(`        __gc_slots[${selfSlot}] = MAL_VALUE_UNDEFINED;`);
 	lines.push(
 		`        __gc_frame = (MalRootFrame){ .prev = mal_root_frame_head, .desc = &__gc_desc, .slots = __gc_slots, .inactive_slots = 0, .env = ${fn.closureCaptureOwners?.length === 0 ? "nullptr" : "env"} };`,
 	);
@@ -1903,6 +1887,9 @@ function emitResumableFunction(
 	for (let i = 0; i < fn.parameterCount; i++) {
 		lines.push(`        r${i} = arg_count > ${i} ? args[${i}] : MAL_VALUE_UNDEFINED;`);
 	}
+	lines.push(
+		`        __suspend_slots = mal_coroutine_alloc_registers(vm, ${suspension.slotCount});`,
+	);
 	if (fn.argumentSnapshotCount > 0) {
 		lines.push(
 			`        MAL_PERF_ADD(argument_snapshot_logical_values, ${fn.argumentSnapshotCount});`,
@@ -1936,7 +1923,7 @@ function emitResumableFunction(
 	if (body.resources.has("throwExit")) {
 		lines.push(
 			`__throw_exit:;`,
-			`    ${gcUnlink}mal_vm_op_coroutine_throw_compiled(vm, __coro, __gc_slots); return ${fallReturn};`,
+			`    ${gcUnlink}mal_vm_op_coroutine_throw_compiled(vm, __coro, __suspend_slots); return ${fallReturn};`,
 		);
 	}
 	lines.push("}");
@@ -3495,6 +3482,7 @@ function emitBody(
 			knownPublishedPrivateRoots |= rootPublication.bits.get(register)!;
 	}
 	const hasPrivateRoots = (rootPublication?.slots.size ?? 0) > 0;
+	if (coro !== null) invocationPreamble.push(...lines.splice(0));
 	for (let ip = 0; ip < fn.instructions.length; ip++) {
 		if (jumpTargets.has(ip)) {
 			lines.push(`L${ip}:;`);
@@ -4703,6 +4691,18 @@ function emitInstruction(
 		coro !== null && coro.isAsyncFunction
 			? "__async_result_promise"
 			: "MAL_VALUE_UNDEFINED";
+	const suspendSnapshot = (): Array<string> => {
+		if (coro === null) throw new Error("Suspension outside a native coroutine");
+		const point = coro.suspension.points.find((point) => point.instructionIp === ip);
+		if (point === undefined) throw new Error("Native suspension lacks a spill plan");
+		return [
+			`mal_coroutine_clear_snapshot(__suspend_slots, ${coro.suspension.slotCount});`,
+			...point.registers.map(
+				(register) =>
+					`__suspend_slots[${coro.suspensionSlots.get(register)!}] = ${boxed(register)};`,
+			),
+		];
+	};
 	const onThrow = (): string => {
 		const jump =
 			handlerIp !== undefined
@@ -6352,7 +6352,7 @@ function emitInstruction(
 						String(context.directArgumentRepresentations.length),
 					),
 				];
-			return [`r${instruction.dst} = mal_value_from_i32(arg_count);`];
+			return [storeNumber(instruction.dst, "arg_count")];
 		case "LOAD_ARGUMENT":
 			if (context.directArgumentRepresentations !== undefined) {
 				const representation = context.directArgumentRepresentations[instruction.index];
@@ -9845,23 +9845,21 @@ function emitInstruction(
 				return null;
 			}
 			return [
-				`__coro = mal_vm_op_generator_start_compiled(vm, callee, ${coro.functionIndex}, this_value, env, __gc_slots, ${coro.registerCount}, args, arg_count, ${coro.retainArguments}, ${ip + 1}, ${coro.isAsyncGenerator});`,
+				...suspendSnapshot(),
+				`__coro = mal_vm_op_generator_start_compiled(vm, callee, ${coro.functionIndex}, this_value, env, __suspend_slots, ${coro.suspension.slotCount}, args, arg_count, ${coro.retainArguments}, ${ip + 1}, ${coro.isAsyncGenerator});`,
 				`__gc_slots[${coro.selfSlot}] = mal_value_from_object((MalObject *) __coro);`,
-				`${cInactiveRootMaskPublication(coro.suspensionInactiveMasks.get(ip) ?? 0n, context.inactiveRootMaskTails)};`,
-				"mal_gc_clear_inactive_root_frame_slots(&__gc_frame);",
 				`${gcUnlink}return mal_value_from_object((MalObject *) __coro);`,
 			];
 		}
 		case "YIELD": {
-			// Prune before unlinking: the helper can synchronously resume or free this buffer.
+			// Finish the snapshot before a helper can synchronously resume or free it.
 			if (coro === null) {
 				return null;
 			}
 			return [
 				`MalValue yielded_${ip} = ${boxed(instruction.yieldedSrc)};`,
-				`${cInactiveRootMaskPublication(coro.suspensionInactiveMasks.get(ip) ?? 0n, context.inactiveRootMaskTails)};`,
-				"mal_gc_clear_inactive_root_frame_slots(&__gc_frame);",
-				`${gcUnlink}mal_vm_op_yield_compiled(vm, __coro, yielded_${ip}, ${instruction.valueDst}, ${instruction.modeDst}, ${ip + 1}, ${coro.positions[ip] ?? -1}, env);`,
+				...suspendSnapshot(),
+				`${gcUnlink}mal_vm_op_yield_compiled(vm, __coro, yielded_${ip}, ${coro.suspension.valueSlot}, ${coro.suspension.modeSlot}, ${ip + 1}, ${coro.positions[ip] ?? -1}, env);`,
 				`return ${coroReturnValue};`,
 			];
 		}
@@ -9882,7 +9880,7 @@ function emitInstruction(
 				return null;
 			}
 			return [
-				`__coro = mal_vm_op_async_start_compiled(vm, callee, ${coro.functionIndex}, this_value, env, __gc_slots, ${coro.registerCount}, args, arg_count, ${coro.retainArguments}, &__async_result_promise);`,
+				`__coro = mal_vm_op_async_start_compiled(vm, callee, ${coro.functionIndex}, this_value, env, __suspend_slots, ${coro.suspension.slotCount}, args, arg_count, ${coro.retainArguments}, &__async_result_promise);`,
 				`__gc_slots[${coro.selfSlot}] = mal_value_from_object((MalObject *) __coro);`,
 			];
 		}
@@ -9892,9 +9890,8 @@ function emitInstruction(
 			}
 			return [
 				`MalValue awaited_${ip} = ${boxed(instruction.awaitedSrc)};`,
-				`${cInactiveRootMaskPublication(coro.suspensionInactiveMasks.get(ip) ?? 0n, context.inactiveRootMaskTails)};`,
-				"mal_gc_clear_inactive_root_frame_slots(&__gc_frame);",
-				`${gcUnlink}mal_vm_op_await_compiled(vm, __coro, awaited_${ip}, ${instruction.valueDst}, ${instruction.modeDst}, ${ip + 1}, ${coro.positions[ip] ?? -1}, env);`,
+				...suspendSnapshot(),
+				`${gcUnlink}mal_vm_op_await_compiled(vm, __coro, awaited_${ip}, ${coro.suspension.valueSlot}, ${coro.suspension.modeSlot}, ${ip + 1}, ${coro.positions[ip] ?? -1}, env);`,
 				`return ${coroReturnValue};`,
 			];
 		}

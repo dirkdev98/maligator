@@ -25,10 +25,11 @@ describe("suspended builtin input certificates", () => {
 			);
 			const restored = deserializeCompilerArtifact(serializeCompilerArtifact(out.image));
 			const index = out.image.runtime.functions.indexOf(out.fn);
-			const fn = restored.runtime.functions[index]!;
 			const native = restored.native.functions[index]!;
-			expect(native.registerRepresentations.every((rep) => rep === "boxed")).toBe(true);
-			const ip = fn.instructions.findIndex(
+			expect(native.storage!.suspension).toBeDefined();
+			for (const root of native.gc.safepoints.flatMap((point) => point.rootRegisters))
+				expect(["boxed", "string"]).toContain(native.registerRepresentations[root]);
+			const ip = native.body.instructions.findIndex(
 				(op) =>
 					op.opcode === "CALL_KNOWN" && op.operation === "String.prototype.includes",
 			);
@@ -57,7 +58,7 @@ describe("suspended builtin input certificates", () => {
 			`function* probe(x,y,flag){const s=String(x);${body}return s.includes(n,0);}globalThis.probe=probe;`,
 			"probe",
 		);
-		const ip = out.fn.instructions.findIndex(
+		const ip = out.native.body.instructions.findIndex(
 			(op) => op.opcode === "CALL_KNOWN" && op.operation === "String.prototype.includes",
 		);
 		expect(out.native.instructions[ip]).toEqual({

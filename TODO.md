@@ -94,10 +94,10 @@ The independent target boundary and current storage contract are recorded in
 - [ ] Extend native control-flow layout beyond threading unconditional edge copies
       into general block scheduling while preserving region and exceptional-edge
       value transport contracts.
-- [ ] Persist only live suspension values in explicit per-suspension slots; keep
-      ordinary scalar computation outside the current full boxed native buffer.
-      Verify recursive async-generator resumes, throwing await resolution, eval
-      splices, and concurrent-GC ownership transitions.
+- [x] Persist live suspension values in compact boxed slots with per-site save and
+      restore maps; keep scalar computation in typed C locals. Cover queued
+      async-generator resumes, throwing await resolution, eval splices, and
+      concurrent-GC ownership transitions.
 - [ ] Extend selected typed call/aggregate transport and expression regions using
       Core proofs, with bounded code-size decisions and matched runtime evidence.
       Move remaining emission-local selection into explicit native plans before

@@ -1640,11 +1640,6 @@ export function nativeFrameRootRegisters(
 	fn: BytecodeFunction,
 	native: Pick<NativeFunctionPlan, "registerRepresentations" | "gc">,
 ): ReadonlyArray<number> {
-	if (
-		(fn.isGenerator || fn.isAsync) &&
-		native.registerRepresentations.some((representation) => representation !== "boxed")
-	)
-		throw new RangeError("resumable native locals must retain boxed representations");
 	const seenIps = new Set<number>();
 	const frameRoots = new Set<number>();
 	const pollingIps = new Set<number>();

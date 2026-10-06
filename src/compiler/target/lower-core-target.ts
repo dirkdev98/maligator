@@ -95,6 +95,7 @@ export interface LowerCoreToCoreTargetOptions {
 	) => ReadonlyArray<number>;
 	readonly loopBackedgeInstructions?: typeof executionLoopBackedgeInstructions;
 	readonly excludeGuardedDirectCalls?: boolean;
+	readonly preserveResumableRepresentations?: boolean;
 }
 
 export interface CoreStorageAssignment {
@@ -1492,6 +1493,7 @@ function lowerFunctionToTarget(
 	loopBackedgeInstructions: typeof executionLoopBackedgeInstructions,
 	layoutBlocks: LowerCoreToCoreTargetOptions["layoutBlocks"],
 	createParallelCopyLowerer: LowerCoreToCoreTargetOptions["createParallelCopyLowerer"],
+	preserveResumableRepresentations: boolean,
 ): CoreTargetFunction {
 	const privatePackedRestElements = new Map(
 		privatePackedRestArrayElements.map((plan) => [plan.instruction, plan]),
@@ -1730,7 +1732,8 @@ function lowerFunctionToTarget(
 			(_, register) =>
 				[
 					register,
-					coreFunction.isGenerator || coreFunction.isAsync
+					(coreFunction.isGenerator || coreFunction.isAsync) &&
+					!preserveResumableRepresentations
 						? ("boxed" as const)
 						: physicalRegisterClass(registerRepresentations.get(register)!),
 				] as const,
@@ -2278,7 +2281,8 @@ function lowerFunctionToTarget(
 			if (representation === undefined) {
 				throw new Error(`CoreTarget register r${register} has no representation`);
 			}
-			return coreFunction.isGenerator || coreFunction.isAsync
+			return (coreFunction.isGenerator || coreFunction.isAsync) &&
+				!preserveResumableRepresentations
 				? "boxed"
 				: physicalRegisterClass(representation);
 		},
@@ -2674,6 +2678,7 @@ export function lowerCoreCompilationToTargetProgram(
 			options.loopBackedgeInstructions ?? executionLoopBackedgeInstructions,
 			options.layoutBlocks,
 			options.createParallelCopyLowerer,
+			options.preserveResumableRepresentations === true,
 		),
 	}));
 	return Object.freeze({

@@ -133,22 +133,31 @@ cache sites, borrowed values, and two claimed instructions are selected before
 storage planning. Rendering consumes the pair admission and preserves a separate
 original-instruction fallback at each load, including its source and profile event.
 
-Resumable functions currently persist their complete boxed native local set. Their
-frame records a native local count and suspended source position independently of
-bytecode. Those fields share space with interpreter caller metadata because a
-compiled coroutine has no interpreter caller frame. GC and SATB use the frame's
-explicit ownership tag rather than interpreting native indexes through VM maps.
+Resumable functions keep per-value representations in C locals. Each invocation
+publishes an active root array for traced locals and the coroutine itself. A separate
+boxed activation buffer holds the union of values needed at suspension sites, plus
+two resume mailboxes. Persisted per-site maps select which locals to save and restore.
+Full value liveness covers scalars, exceptional edges, and finally paths. Boxed and
+string spills come exclusively from trusted outgoing root obligations: conservative
+handler edges can name stale heap bits, and Core also retains scalar-replaced boxed
+occupants beyond their last executable read. Arguments and captured environments
+keep their existing ownership contracts.
+
+The frame records the compact slot count and suspended source position independently
+of bytecode. GC and SATB use its explicit ownership tag and compact count, rather than
+interpreting native indexes through VM maps. Artifact validation recomputes the
+suspension contract from the native body and trusted root obligations.
 
 A suspension or completion helper can synchronously resume the same coroutine.
-The outgoing C invocation captures the transferred operand and clears dead locals
-using its outgoing map before unlinking its root frame. Resume destinations are
-also cleared because their old values are overwritten by the next invocation.
-Generator-start clears after its helper adopts the buffer. No outgoing invocation
-may clear slots after a transfer, which can synchronously resume or free the buffer.
-Runtime helpers root
-the coroutine and transferred value while routing the suspension or settlement.
-Completion shades and releases the activation before settlement can collect after
-the activation has left the heap graph.
+The outgoing C invocation captures the transferred operand, replaces the snapshot
+with selected live values, then unlinks its active root frame before transferring.
+Resume destinations use dedicated mailboxes; their previous values are discarded.
+A resumed invocation restores locals and mailboxes into its published active frame,
+then clears the snapshot with SATB barriers. Generator-start saves before its helper
+adopts the buffer. No outgoing invocation may write slots after a transfer that can
+synchronously resume or free the buffer. Runtime helpers root the coroutine and
+transferred value while routing suspension or settlement. Completion shades and
+releases the activation before settlement can collect after it leaves the heap graph.
 
 The interpreter also clears resume destinations when suspending, after capturing
 and rooting the transferred value. This remains necessary for portable wire
@@ -156,8 +165,8 @@ frames, whose GC maps are untrusted and whose full register buffer is traced.
 VM register reuse can alias an input with a resume destination; the captured root
 keeps that input alive across PromiseResolve or queued-request reentry.
 
-This boundary does not yet implement general native block scheduling, compact suspension
-slots, additional typed aggregate transport, or shared cold regions. It provides
+This boundary does not yet implement general native block scheduling,
+additional typed aggregate transport, or shared cold regions. It provides
 independent value and storage identities for those changes. Some fast-path and
 region discovery still occurs during rendering; the emitter is not yet solely a
 renderer of upstream selections. Performance acceptance

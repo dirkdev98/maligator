@@ -584,3 +584,151 @@ setTimeout(() => {
 	globalThis.sendSecondAwaitValue = undefined;
 	globalThis.suspendedAwaitResult.then((value) => console.log("await-output", value));
 }, 0);
+
+function boxedReadPair(receiver) {
+	const left = receiver.left;
+	const right = receiver.right;
+	return [left, right];
+}
+const boxedPairReceiver = { left: { label: "left" }, right: { label: "right" } };
+for (let index = 0; index < 8; index++) boxedReadPair(boxedPairReceiver);
+console.log(
+	"boxed-pair",
+	boxedReadPair(boxedPairReceiver)
+		.map((value) => value.label)
+		.join(":"),
+);
+const pairOrder = [];
+const getterPair = {
+	get left() {
+		pairOrder.push("left");
+		gc();
+		this.right = { label: "changed" };
+		return { label: "getter" };
+	},
+	right: { label: "old" },
+};
+console.log(
+	"boxed-getter",
+	boxedReadPair(getterPair)
+		.map((value) => value.label)
+		.join(":"),
+);
+const proxyPair = new Proxy(boxedPairReceiver, {
+	get(target, key) {
+		pairOrder.push(key);
+		gc();
+		return target[key];
+	},
+});
+console.log(
+	"boxed-proxy",
+	boxedReadPair(proxyPair)
+		.map((value) => value.label)
+		.join(":"),
+	pairOrder.join(":"),
+);
+
+async function compactScalarAsync(input, gate) {
+	const value = +input;
+	const before = value * 1;
+	const flag = before < 0;
+	const integer = input | 0;
+	try {
+		await gate;
+		return [before, flag, Object.is(before, -0), integer];
+	} finally {
+		gc();
+	}
+}
+Promise.all(
+	[-0, NaN, Infinity, -4.5, 2147483648].map((value) =>
+		compactScalarAsync(value, Promise.resolve()),
+	),
+).then((values) => {
+	console.log(
+		"compact-numbers",
+		values
+			.map((value) => `${String(value[0])}:${value[1]}:${value[2]}:${value[3]}`)
+			.join("|"),
+	);
+});
+
+function* compactScalarSequence(seed) {
+	let value = +seed;
+	let flag = true;
+	try {
+		for (let index = 0; index < 3; index++) {
+			value = value * 1.5 + index;
+			flag = !flag;
+			yield [value, flag];
+		}
+	} finally {
+		console.log("compact-finally", value, flag);
+	}
+	return value;
+}
+const compactSequence = compactScalarSequence(2);
+console.log("compact-yield", JSON.stringify(compactSequence.next()));
+gc();
+console.log("compact-yield", JSON.stringify(compactSequence.next()));
+gc();
+console.log("compact-return", JSON.stringify(compactSequence.return("closed")));
+
+async function* compactAsyncSequence(seed) {
+	const before = +seed * 3.25;
+	try {
+		yield before;
+		yield before + 1;
+	} finally {
+		gc();
+	}
+}
+const compactAsyncIterator = compactAsyncSequence(4);
+Promise.all([
+	compactAsyncIterator.next(),
+	compactAsyncIterator.next(),
+	compactAsyncIterator.return("closed"),
+]).then((values) => console.log("compact-async-yields", JSON.stringify(values)));
+
+async function compactSpillNumber(input, gate) {
+	const value = +input;
+	const square = value * value;
+	const before = square + 1;
+	await gate;
+	return before + 2;
+}
+async function compactSpillInteger(input, gate) {
+	const integer = 17;
+	await gate;
+	return integer + input;
+}
+async function compactSpillBoolean(input, gate) {
+	const flag = input < 0;
+	await gate;
+	return !flag;
+}
+Promise.all([
+	compactSpillNumber(-4.5, Promise.resolve()),
+	compactSpillNumber(NaN, Promise.resolve()),
+	compactSpillNumber(Infinity, Promise.resolve()),
+	compactSpillInteger(-20, Promise.resolve()),
+	compactSpillBoolean(-4.5, Promise.resolve()),
+	compactSpillBoolean(-0, Promise.resolve()),
+]).then((values) => console.log("compact-spills", values.map(String).join(":")));
+
+function* retainOccupant(value) {
+	const object = { value };
+	globalThis.occupantReference = new WeakRef(value);
+	yield "parked";
+	object.value = 0;
+	return 1;
+}
+globalThis.occupantIterator = retainOccupant({ value: 789 });
+globalThis.occupantIterator.next();
+setTimeout(() => {
+	gc();
+	if (globalThis.occupantReference.deref() === undefined)
+		throw new Error("Suspension lost a scalar-replaced object's boxed occupant");
+	console.log("compact-occupant", globalThis.occupantIterator.next().value);
+}, 0);

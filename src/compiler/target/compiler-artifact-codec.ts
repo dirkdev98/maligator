@@ -20,6 +20,7 @@ import type {
 } from "./lower-native-fast-paths.ts";
 import type { NativeStoragePlan } from "./lower-native-storage.ts";
 import { validateNativeStorage } from "./lower-native-storage.ts";
+import type { NativeSuspensionPlan } from "./lower-native-suspension.ts";
 import type { Reader } from "./program-image-codec.ts";
 import {
 	readRuntimeImage,
@@ -66,7 +67,7 @@ import type {
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal artifacts are hard cut-overs: stale cache entries rebuild.
-export const COMPILER_ARTIFACT_VERSION = 111;
+export const COMPILER_ARTIFACT_VERSION = 112;
 
 function validateClosureCaptureOwners(
 	owners: ReadonlyArray<number>,
@@ -763,6 +764,19 @@ function writeNativeStorage(w: Writer, storage: NativeStoragePlan | undefined): 
 		w.i32Array([...plan.borrowedRegisters]);
 		w.u8(0);
 	}
+	w.u8(storage.suspension === undefined ? 0 : 1);
+	if (storage.suspension !== undefined) {
+		const plan = storage.suspension;
+		w.i32Array([...plan.registers]);
+		w.i32(plan.valueSlot);
+		w.i32(plan.modeSlot);
+		w.i32(plan.slotCount);
+		w.u32(plan.points.length);
+		for (const point of plan.points) {
+			w.i32(point.instructionIp);
+			w.i32Array([...point.registers]);
+		}
+	}
 }
 
 function readNativeStorage(r: Reader): NativeStoragePlan {
@@ -926,9 +940,24 @@ function readNativeStorage(r: Reader): NativeStoragePlan {
 			fallback: "original-instructions",
 		});
 	}
+	const suspensionTag = r.u8();
+	if (suspensionTag > 1) throw new RangeError("Invalid native suspension plan tag");
+	let suspension: NativeSuspensionPlan | undefined;
+	if (suspensionTag === 1) {
+		const registers = r.i32Array();
+		const valueSlot = r.i32(),
+			modeSlot = r.i32(),
+			slotCount = r.i32();
+		const points = Array.from({ length: r.count(2) }, () => ({
+			instructionIp: r.i32(),
+			registers: r.i32Array(),
+		}));
+		suspension = { registers, points, valueSlot, modeSlot, slotCount };
+	}
 	return {
 		...storage,
 		numericLeaf: leaf,
+		suspension,
 		propertyProjections,
 		propertyNumericUpdates,
 		propertyReadRegions,

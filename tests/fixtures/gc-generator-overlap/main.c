@@ -44,7 +44,7 @@ static bool frame_roots_token(const MalVmFrame *frame) {
     const MalFunction *function = frame->function;
     if (function == nullptr || function->compiled == nullptr ||
         frame->registers == nullptr || token == nullptr) return false;
-    for (i32 slot = 0; slot < function->register_count; slot++) {
+    for (i32 slot = 0; slot < frame->compiled_register_count; slot++) {
         if (frame->registers[slot] == mal_value_from_object(token)) return true;
     }
     return false;
