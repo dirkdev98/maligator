@@ -47,13 +47,7 @@ describe("numeric own-field native entry contracts", () => {
 			expect(calls).toHaveLength(1);
 			const target = calls[0]!.entries[0]!;
 			const native = image.native.functions[target.functionIndex]!;
-			const emitted = emitCompiledFunction(
-				image.runtime.functions[target.functionIndex]!,
-				native,
-				target.functionIndex,
-				"",
-				false,
-			)!;
+			const emitted = emitCompiledFunction(native, target.functionIndex, "", false)!;
 			expect(emitted.directEntries).toHaveLength(1);
 			expect(emitted.directEntries[0]!.source).not.toContain("mal_vm_binary_op");
 		}
@@ -99,13 +93,7 @@ describe("numeric own-field native entry contracts", () => {
 			const native = decoded.native.functions[selected.functionIndex]!;
 			const entry = native.directEntries[selected.entryId]!;
 			expect(entry.resultRepresentation).toBe("number");
-			const emitted = emitCompiledFunction(
-				decoded.runtime.functions[selected.functionIndex]!,
-				native,
-				selected.functionIndex,
-				"",
-				false,
-			)!;
+			const emitted = emitCompiledFunction(native, selected.functionIndex, "", false)!;
 			expect(emitted.directEntries).toHaveLength(1);
 			expect(emitted.directEntries[0]!.source).toContain("fp0");
 			expect(emitted.directEntries[0]!.source).not.toContain("mal_vm_binary_op");
@@ -124,7 +112,6 @@ describe("numeric own-field native entry contracts", () => {
 			} else expect(leaf.leaf).toBeUndefined();
 		}
 		const emitted = emitCompiledFunction(
-			decoded.runtime.functions[caller.functionIndex]!,
 			caller,
 			caller.functionIndex,
 			"",

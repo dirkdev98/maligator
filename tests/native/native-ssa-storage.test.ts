@@ -62,15 +62,13 @@ describe("independent native SSA storage", () => {
 		expect(scalar).toBeDefined();
 		if (scalar === undefined)
 			throw new Error("Scalar rounding fixture lacks a native multiplication expression");
-		expect(
-			emitCompiledFunction(scalar.body, scalar, scalar.functionIndex, "", false),
-		).not.toBeNull();
+		expect(emitCompiledFunction(scalar, scalar.functionIndex, "", false)).not.toBeNull();
 		const suspended = image.native.functions.filter((fn) => fn.mode === "resumable");
 		expect(suspended.length).toBeGreaterThanOrEqual(2);
 		for (const fn of suspended) {
 			const vm = image.runtime.functions[fn.functionIndex]!;
 			const vmCount = vm.registerCount;
-			expect(emitCompiledFunction(vm, fn, fn.functionIndex, "", false)).not.toBeNull();
+			expect(emitCompiledFunction(fn, fn.functionIndex, "", false)).not.toBeNull();
 			expect(
 				fn.gc.safepoints.some((point) => {
 					const op = fn.body.instructions[point.instructionIp];

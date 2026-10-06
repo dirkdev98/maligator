@@ -32,9 +32,8 @@ function dispatchFunction(image: ProgramImage) {
 }
 
 function emitDispatch(image: ProgramImage, relocatable = false) {
-	const { index, fn, native } = dispatchFunction(image);
+	const { index, native } = dispatchFunction(image);
 	return emitCompiledFunction(
-		fn,
 		native,
 		index,
 		"",

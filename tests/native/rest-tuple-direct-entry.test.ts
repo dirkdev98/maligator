@@ -37,13 +37,7 @@ it("carries exact four-number rest tuples through direct entries", () => {
 		);
 		expect(functions).toHaveLength(2);
 		for (const { entry, fn, functionIndex } of functions) {
-			const emitted = emitCompiledFunction(
-				pair.programImage.runtime.functions[functionIndex]!,
-				fn,
-				functionIndex,
-				"",
-				false,
-			);
+			const emitted = emitCompiledFunction(fn, functionIndex, "", false);
 			const direct = emitted?.directEntries.find(
 				(candidate) => candidate.id === entry.id,
 			);

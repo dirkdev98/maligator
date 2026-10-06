@@ -1417,7 +1417,6 @@ describe("late Core specialization plan", () => {
 			),
 		);
 		const histogramSource = emitCompiledFunction(
-			definition.runtime.functions[histogramIndex]!,
 			definition.native.functions[histogramIndex]!,
 			histogramIndex,
 			"",
@@ -1454,7 +1453,6 @@ describe("late Core specialization plan", () => {
 			},
 		]);
 		const emitted = emitCompiledFunction(
-			definition.runtime.functions[index]!,
 			definition.native.functions[index]!,
 			index,
 			"",

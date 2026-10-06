@@ -57,14 +57,12 @@ describe("native property read region continuations", () => {
 				wideRootCount = Math.max(
 					...native.gc.safepoints.map((point) => point.rootRegisters.length),
 				);
-				wideRegionSource =
-					emitCompiledFunction(fn, native, index, "", false)?.source ?? "";
+				wideRegionSource = emitCompiledFunction(native, index, "", false)?.source ?? "";
 			}
 			if (!kernels.some((kernel) => kernel.name === name)) {
 				continue;
 			}
 			const output = emitCompiledFunction(
-				fn,
 				image.native.functions[index]!,
 				index,
 				"",

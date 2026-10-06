@@ -42,7 +42,7 @@ describe("fresh allocation sinking", () => {
 		expect(index).toBeGreaterThanOrEqual(0);
 		const fn = programImage.runtime.functions[index]!;
 		expect(
-			emitCompiledFunction(fn, programImage.native.functions[index]!, index, "", false),
+			emitCompiledFunction(programImage.native.functions[index]!, index, "", false),
 		).not.toBeNull();
 		expect(fn.instructions).toContainEqual(
 			expect.objectContaining({

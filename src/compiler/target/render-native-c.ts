@@ -1548,7 +1548,6 @@ function numericLeafWorker(
 
 /** Emit the canonical boxed entry and every independently lowerable typed sibling. */
 export function emitCompiledFunction(
-	fn: BytecodeFunction,
 	native: NativeFunctionPlan,
 	index: number,
 	suffix: string,
@@ -1561,7 +1560,7 @@ export function emitCompiledFunction(
 	strictCompiledTargets: ReadonlySet<number> = new Set(),
 	stringConstants: ReadonlyArray<ReadonlyArray<number>> = [],
 ): CompiledFunction | null {
-	fn = native.body;
+	const fn = native.body;
 	const canonical = emitCompiledVariant(
 		fn,
 		native,

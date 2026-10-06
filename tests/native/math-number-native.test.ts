@@ -49,7 +49,6 @@ describe("native numeric Math emission", () => {
 			);
 			if (operations.length === 0) return;
 			const emitted = emitCompiledFunction(
-				fn,
 				pair.programImage.native.functions[index]!,
 				index,
 				"",

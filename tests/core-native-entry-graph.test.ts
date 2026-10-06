@@ -267,7 +267,6 @@ describe("connected native entry contracts", () => {
 				resultRepresentation: "number",
 			});
 			const emitted = emitCompiledFunction(
-				image.runtime.functions[index]!,
 				native,
 				index,
 				"",

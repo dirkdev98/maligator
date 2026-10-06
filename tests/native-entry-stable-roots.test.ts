@@ -49,7 +49,7 @@ const call: BytecodeInstruction = {
 };
 function emit(body: BytecodeFunction): string {
 	const native = createConservativeNativePlan([body]).functions[0]!;
-	return emitCompiledFunction(body, native, 0, "", false)!.source;
+	return emitCompiledFunction(native, 0, "", false)!.source;
 }
 describe("entry-stable private roots", () => {
 	it("recognizes unchanged private parameters, not locals or unpublished registers", () => {

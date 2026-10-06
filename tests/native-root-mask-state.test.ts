@@ -53,7 +53,6 @@ describe("native root-mask state after pure operators", () => {
 			outgoingRootRegisters: [0, 1, 2],
 		} as const;
 		const output = emitCompiledFunction(
-			fn,
 			lowerNativeFunctionStorage({
 				...native,
 				registerRepresentations: [

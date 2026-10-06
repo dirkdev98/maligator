@@ -73,14 +73,8 @@ describe("physical captured storage after function reachability", () => {
 		const decoded = deserializeCompilerArtifact(serializeCompilerArtifact(image));
 		expect(decoded.runtime.functions).toHaveLength(2);
 		expect(decoded.runtime.functions.every((fn) => fn.capturedCount === 0)).toBe(true);
-		for (const [index, fn] of decoded.runtime.functions.entries()) {
-			const emitted = emitCompiledFunction(
-				fn,
-				decoded.native.functions[index]!,
-				index,
-				"",
-				false,
-			)!;
+		for (const [index, native] of decoded.native.functions.entries()) {
+			const emitted = emitCompiledFunction(native, index, "", false)!;
 			expect(emitted.source).not.toContain("mal_env_new(");
 			for (const entry of emitted.directEntries) {
 				expect(entry.source).not.toContain("mal_env_new(");

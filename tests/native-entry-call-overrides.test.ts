@@ -99,7 +99,6 @@ function emit(available = true, guarded = false) {
 		],
 	};
 	const emitted = emitCompiledFunction(
-		fn,
 		lowerNativeFunctionStorage(native),
 		0,
 		"",

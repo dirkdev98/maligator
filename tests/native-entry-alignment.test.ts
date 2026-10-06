@@ -43,7 +43,6 @@ describe("native entry alignment contract", () => {
 			let resumable = 0;
 			for (const [index, fn] of image.runtime.functions.entries()) {
 				const emitted = emitCompiledFunction(
-					fn,
 					image.native.functions[index]!,
 					index,
 					"",

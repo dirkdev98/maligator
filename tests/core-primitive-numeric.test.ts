@@ -163,7 +163,7 @@ describe("certified primitive numeric lowering", () => {
 		expect(indexedLoop.sites[0]!.comparisonIp).toBeGreaterThan(
 			indexedLoop.sites[0]!.loadIp + 1,
 		);
-		const emitted = emitCompiledFunction(runtime, native, functionIndex, "", false)!;
+		const emitted = emitCompiledFunction(native, functionIndex, "", false)!;
 		expect(emitted).not.toBeNull();
 		expect(emitted.source).toContain("mal_vm_private_array_try_get_proven_index");
 		expect(emitted.source).toContain("mal_vm_indexed_fast_load_index");
@@ -252,13 +252,7 @@ describe("certified primitive numeric lowering", () => {
 					COMPILER_VALUE_KIND_NUMERIC_PRIMITIVE,
 				],
 			});
-			const emitted = emitCompiledFunction(
-				image.runtime.functions[index]!,
-				native,
-				index,
-				"",
-				false,
-			)!;
+			const emitted = emitCompiledFunction(native, index, "", false)!;
 			expect(emitted).not.toBeNull();
 			const operatorIp = native.instructions.findIndex(
 				(plan) =>
@@ -293,7 +287,6 @@ describe("certified primitive numeric lowering", () => {
 			);
 			expect(index).toBeGreaterThanOrEqual(0);
 			const emitted = emitCompiledFunction(
-				image.runtime.functions[index]!,
 				image.native.functions[index]!,
 				index,
 				"",
@@ -332,13 +325,7 @@ describe("certified primitive numeric lowering", () => {
 				);
 			}
 		}
-		const emitted = emitCompiledFunction(
-			image.runtime.functions[index]!,
-			native,
-			index,
-			"",
-			false,
-		)!;
+		const emitted = emitCompiledFunction(native, index, "", false)!;
 		expect(emitted.directEntries).toHaveLength(1);
 	});
 
@@ -361,13 +348,7 @@ describe("certified primitive numeric lowering", () => {
 					masks[0] === (COMPILER_VALUE_KIND_NUMBER | COMPILER_VALUE_KIND_UNDEFINED),
 			),
 		).toBe(true);
-		const emitted = emitCompiledFunction(
-			image.runtime.functions[index]!,
-			native,
-			index,
-			"",
-			false,
-		)!;
+		const emitted = emitCompiledFunction(native, index, "", false)!;
 		expect(emitted.directEntries).toHaveLength(1);
 		expect(emitted.directEntries[0]!.source).not.toMatch(/mal_vm_(unary|binary)_op/);
 		const badEntry = {
@@ -378,13 +359,7 @@ describe("certified primitive numeric lowering", () => {
 			})),
 		};
 		expect(() =>
-			emitCompiledFunction(
-				image.runtime.functions[index]!,
-				{ ...native, directEntries: [badEntry] },
-				index,
-				"",
-				false,
-			),
+			emitCompiledFunction({ ...native, directEntries: [badEntry] }, index, "", false),
 		).toThrow(/operator input/);
 	});
 

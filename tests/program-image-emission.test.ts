@@ -1363,7 +1363,6 @@ describe("emit-program-image instruction packing", () => {
 		const plan = { ...image.native.functions[0]!, body: caller };
 		const entry = image.native.functions[1]!.directEntries[0]!;
 		const compiled = emitCompiledFunction(
-			caller,
 			plan,
 			0,
 			"",
@@ -1380,7 +1379,7 @@ describe("emit-program-image instruction packing", () => {
 			outcome: "applied",
 			details: { opcode: "CALL" },
 		});
-		const fallback = emitCompiledFunction(caller, plan, 0, "", false);
+		const fallback = emitCompiledFunction(plan, 0, "", false);
 		expect(fallback?.profileDecisions).toContainEqual({
 			instructionIndex: 2,
 			operation: "call",
@@ -1576,7 +1575,6 @@ describe("emit-program-image instruction packing", () => {
 				}),
 			);
 			const output = emitCompiledFunction(
-				wideFunction,
 				image.native.functions[0]!,
 				0,
 				"",
@@ -2002,13 +2000,7 @@ describe("emit-program-image instruction packing", () => {
 				},
 			}),
 		);
-		const output = emitCompiledFunction(
-			loadFunction,
-			image.native.functions[0]!,
-			0,
-			"",
-			false,
-		)!.source;
+		const output = emitCompiledFunction(image.native.functions[0]!, 0, "", false)!.source;
 		for (const register of [0, 1, 2]) {
 			expect(output).toContain(`MalValue __private_r${register};`);
 			expect(output).toContain(`#define r${register} (__private_r${register})`);
@@ -2100,13 +2092,7 @@ describe("emit-program-image instruction packing", () => {
 				},
 			}),
 		);
-		const output = emitCompiledFunction(
-			loadFunction,
-			image.native.functions[0]!,
-			0,
-			"",
-			false,
-		)!.source;
+		const output = emitCompiledFunction(image.native.functions[0]!, 0, "", false)!.source;
 		expect(output.match(/mal_vm_property_read_region_begin\(/g)).toHaveLength(1);
 		expect(output.match(/mal_vm_property_read_region_try_load\(/g)).toHaveLength(3);
 		expect(output.match(/mal_vm_op_load_property_ic_static_miss\(/g)).toHaveLength(3);
@@ -2165,7 +2151,6 @@ describe("emit-program-image instruction packing", () => {
 		};
 		const native = createConservativeNativePlan([loadFunction]).functions[0]!;
 		const output = emitCompiledFunction(
-			loadFunction,
 			{
 				...native,
 				registerRepresentations: [
@@ -2271,13 +2256,7 @@ describe("emit-program-image instruction packing", () => {
 				},
 			}),
 		);
-		const output = emitCompiledFunction(
-			loadFunction,
-			image.native.functions[0]!,
-			0,
-			"",
-			false,
-		)!.source;
+		const output = emitCompiledFunction(image.native.functions[0]!, 0, "", false)!.source;
 		for (const register of [65, 66]) {
 			expect(output).toContain(`#define r${register} (__private_r${register})`);
 			expect(output).toContain(`__gc_slots[${register}] = r${register};`);
@@ -2958,13 +2937,7 @@ describe("native update-expression representation", () => {
 		expect(output).toContain("mal_vm_iterator_try_dense_array_cursor_step(");
 		expect(output).not.toContain("mal_vm_iterator_step_protocol_cursor(vm,");
 		expect(output).toContain("mal_vm_iterator_step(vm,");
-		const ownerOutput = emitCompiledFunction(
-			definition.runtime.functions[ownerIndex]!,
-			owner,
-			ownerIndex,
-			"",
-			false,
-		)!.source;
+		const ownerOutput = emitCompiledFunction(owner, ownerIndex, "", false)!.source;
 		expect(ownerOutput).not.toContain("__private_r");
 		const step = definition.runtime.functions[ownerIndex]!.instructions[stepIp];
 		if (step?.opcode !== "ITERATOR_STEP") throw new Error("missing iterator step");
@@ -3023,7 +2996,7 @@ describe("native update-expression representation", () => {
 		);
 		const store = fn.instructions[storeIp]!;
 		if (store.opcode !== "STORE_PROPERTY_STATIC") throw new Error("missing static store");
-		const output = emitCompiledFunction(fn, owner, ownerIndex, "", false)!.source;
+		const output = emitCompiledFunction(owner, ownerIndex, "", false)!.source;
 		expect(output).toContain(`#define r${store.object} (__private_r${store.object})`);
 		const probe = output.indexOf("mal_vm_object_try_store_static(");
 		expect(probe).toBeGreaterThan(0);
@@ -3080,7 +3053,7 @@ describe("native update-expression representation", () => {
 		const stepIp = cursor.stepIps[0]!;
 		const step = fn.instructions[stepIp]!;
 		if (step.opcode !== "ITERATOR_STEP") throw new Error("missing iterator step");
-		const output = emitCompiledFunction(fn, owner, ownerIndex, "", false)!.source;
+		const output = emitCompiledFunction(owner, ownerIndex, "", false)!.source;
 		expect(output).toContain(`#define r${step.valueDst} (__private_r${step.valueDst})`);
 		const probe = output.indexOf("mal_vm_iterator_try_dense_array_cursor_step(");
 		expect(probe).toBeGreaterThan(0);

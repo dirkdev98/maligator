@@ -316,7 +316,7 @@ describe("native static-property root-mask publication", () => {
 				});
 			}
 			publicationContracts.set(name, {
-				source: emitCompiledFunction(fn, native, index, "", false)?.source ?? "",
+				source: emitCompiledFunction(native, index, "", false)?.source ?? "",
 				retainedRegisters,
 				privateRegisters,
 				selectedPrivateCallIps: nativePrivateCallResultIps(fn, native),

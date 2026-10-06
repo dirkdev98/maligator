@@ -143,7 +143,6 @@ describe("compiled roots during a concurrent object snapshot", () => {
 			);
 			expect(regionIndex).toBeGreaterThanOrEqual(0);
 			const regionSource = emitCompiledFunction(
-				image.runtime.functions[regionIndex]!,
 				image.native.functions[regionIndex]!,
 				regionIndex,
 				"",

@@ -93,7 +93,7 @@ describe("contained numeric TypedArray stores", () => {
 					: [];
 			});
 			if (stores.length === 0) return;
-			const emitted = emitCompiledFunction(fn, plan, index, "", false);
+			const emitted = emitCompiledFunction(plan, index, "", false);
 			expect(emitted).not.toBeNull();
 			expect(emitted!.source).toContain("mal_scalar_store_native_");
 			for (const kind of stores) directKinds.add(kind);

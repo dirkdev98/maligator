@@ -24,15 +24,7 @@ describe("native operations selected by input representations", () => {
 				),
 			},
 		};
-		expect(
-			emitCompiledFunction(
-				image.runtime.functions[0]!,
-				image.native.functions[0]!,
-				0,
-				"",
-				false,
-			),
-		).not.toBeNull();
+		expect(emitCompiledFunction(image.native.functions[0]!, 0, "", false)).not.toBeNull();
 		const compiled = buildNativeProgramImage(image, {
 			name: "input-facts",
 			outDir,

@@ -95,7 +95,6 @@ function emit(
 	};
 	const native = createConservativeNativePlan([fn]).functions[0]!;
 	return emitCompiledFunction(
-		fn,
 		lowerNativeFunctionStorage({
 			...native,
 			instructions: instructions.map((_, ip) => options.nativeInstructions?.get(ip)),

@@ -35,7 +35,6 @@ describe("native binary root-mask edges", () => {
 		};
 		const native = createConservativeNativePlan([fn]).functions[0]!;
 		const output = emitCompiledFunction(
-			fn,
 			lowerNativeFunctionStorage({
 				...native,
 				gc: {

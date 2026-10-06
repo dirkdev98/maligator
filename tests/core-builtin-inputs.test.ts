@@ -41,7 +41,7 @@ describe("suspended builtin input certificates", () => {
 				],
 			});
 			expect(native.gc).toEqual(out.native.gc);
-			const emitted = emitCompiledFunction(fn, native, index, "", false)!;
+			const emitted = emitCompiledFunction(native, index, "", false)!;
 			expect(emitted.source).toContain("mal_builtin_string_search_strings(");
 			expect(emitted.source).not.toContain("mal_builtin_string_search_direct(");
 			expect(emitted.source.match(/mal_vm_call_known_native\(/g) ?? []).toHaveLength(2);

@@ -781,7 +781,6 @@ function emitNativeFunctions(
 	): CompiledFunction | null => {
 		if (!options.useCompiled) return null;
 		const emitted = emitCompiledFunction(
-			image.runtime.functions[functionIndex]!,
 			image.native.functions[functionIndex]!,
 			functionIndex,
 			options.suffix,

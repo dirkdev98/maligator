@@ -59,7 +59,7 @@ describe("native static-argument fallback storage", () => {
 	it("uses shadow storage across materialization and the following property helper", () => {
 		const fn = argumentCacheReceiver();
 		const native = createConservativeNativePlan([fn]).functions[0]!;
-		const source = emitCompiledFunction(fn, native, 0, "", false)!.source;
+		const source = emitCompiledFunction(native, 0, "", false)!.source;
 		expect(source).toContain("r0 = mal_create_arguments_object(");
 		expect(source).toContain("mal_vm_op_load_property(vm, r0,");
 		expect(source).toMatch(/#define r0 \(__gc_slots\[\d+\]\)/);

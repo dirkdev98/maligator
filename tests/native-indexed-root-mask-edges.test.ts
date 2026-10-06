@@ -100,7 +100,6 @@ function emit(
 ): string {
 	const native = createConservativeNativePlan([body]).functions[0]!;
 	return emitCompiledFunction(
-		body,
 		lowerNativeFunctionStorage({
 			...native,
 			registerRepresentations: native.registerRepresentations.map(

@@ -23,8 +23,7 @@ describe("native numeric switch certificate", () => {
 		expect(native.literalSwitches).toEqual(
 			image.native.functions[native.functionIndex]!.literalSwitches,
 		);
-		const fn = decoded.runtime.functions[native.functionIndex]!;
-		const emitted = emitCompiledFunction(fn, native, native.functionIndex, "", false)!;
+		const emitted = emitCompiledFunction(native, native.functionIndex, "", false)!;
 		expect(emitted.source).toContain("switch ((i32)");
 		const malformed = {
 			...native,
@@ -40,7 +39,7 @@ describe("native numeric switch certificate", () => {
 			),
 		};
 		expect(() =>
-			emitCompiledFunction(fn, malformed, native.functionIndex, "", false),
+			emitCompiledFunction(malformed, native.functionIndex, "", false),
 		).toThrow(/switch certificate/);
 		expect(() =>
 			serializeCompilerArtifact({

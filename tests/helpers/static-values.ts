@@ -86,7 +86,6 @@ export function inspectStaticValueFunctions(
 			const fn = image.runtime.functions[index]!;
 			const native = image.native.functions[index]!;
 			const c = emitCompiledFunction(
-				fn,
 				native,
 				index,
 				"",

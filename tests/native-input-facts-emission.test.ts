@@ -21,7 +21,6 @@ function emitInputContract(
 	};
 	const plan = createConservativeNativePlan([fn]).functions[0]!;
 	const emitted = emitCompiledFunction(
-		fn,
 		{
 			...plan,
 			registerRepresentations: representations,
@@ -210,7 +209,6 @@ function mathCallSource(stable: boolean, binary: boolean): string {
 		},
 	};
 	const emitted = emitCompiledFunction(
-		fn,
 		{
 			...plan,
 			registerRepresentations: ["number", "number", "boxed", "boxed", "boxed"],

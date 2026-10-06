@@ -52,7 +52,6 @@ function emit(
 	};
 	const native = createConservativeNativePlan([fn]).functions[0]!;
 	return emitCompiledFunction(
-		fn,
 		lowerNativeFunctionStorage({
 			...native,
 			registerRepresentations: representations,

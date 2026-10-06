@@ -39,7 +39,6 @@ function emit(
 	};
 	const native = createConservativeNativePlan([fn]).functions[0]!;
 	const emitted = emitCompiledFunction(
-		fn,
 		lowerNativeFunctionStorage({
 			...native,
 			directEntries:
