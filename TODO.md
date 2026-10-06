@@ -91,7 +91,8 @@ until the consumer admits real sites and measurements establish a benefit.
 The independent target boundary and current storage contract are recorded in
 [native SSA lowering](docs/decisions/native-ssa-lowering.md).
 
-- [ ] Give native control flow its own block scheduling and merge assignments;
+- [ ] Extend native control-flow layout beyond threading unconditional edge copies
+      into general block scheduling and independent merge assignments;
       retain exceptional-edge value transport without inheriting shared terminal
       copy schedules or argument staging.
 - [ ] Persist only live suspension values in explicit per-suspension slots; keep

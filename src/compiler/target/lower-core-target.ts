@@ -83,6 +83,10 @@ export type {
 
 export interface LowerCoreToCoreTargetOptions {
 	readonly assignStorage: CoreStorageAssigner;
+	readonly layoutBlocks?: (
+		blocks: CoreTargetFunction["blocks"],
+		coreBlockCount: number,
+	) => ReadonlyArray<number>;
 	readonly loopBackedgeInstructions?: typeof executionLoopBackedgeInstructions;
 	readonly excludeGuardedDirectCalls?: boolean;
 }
@@ -1470,6 +1474,7 @@ function lowerFunctionToTarget(
 	instructionSites: WeakMap<object, CompilerSiteFacts>,
 	assignStorage: CoreStorageAssigner,
 	loopBackedgeInstructions: typeof executionLoopBackedgeInstructions,
+	layoutBlocks: LowerCoreToCoreTargetOptions["layoutBlocks"],
 ): CoreTargetFunction {
 	const privatePackedRestElements = new Map(
 		privatePackedRestArrayElements.map((plan) => [plan.instruction, plan]),
@@ -1492,9 +1497,10 @@ function lowerFunctionToTarget(
 	const loweredBlockForCore = new Map<CoreBlockId, number>(
 		blockOrder.map((block, index) => [block, index]),
 	);
-	const blocks: Array<{ instructions: Array<CompilerInstruction> }> = blockOrder.map(
-		() => ({ instructions: [] }),
-	);
+	let blocks: Array<{
+		instructions: Array<CompilerInstruction>;
+		sourcePosition?: number;
+	}> = blockOrder.map(() => ({ instructions: [] }));
 	const literalSwitches: Array<
 		NonNullable<CoreTargetFunction["literalSwitches"]>[number]
 	> = [];
@@ -1689,6 +1695,7 @@ function lowerFunctionToTarget(
 		target: CoreBlockId,
 		argumentStart: number,
 		argumentCount: number,
+		sourcePosition: number | undefined,
 	): number => {
 		const targetBlock = loweredBlockForCore.get(target);
 		if (targetBlock === undefined) {
@@ -1720,14 +1727,21 @@ function lowerFunctionToTarget(
 		const block = blocks.length;
 		blocks.push({
 			instructions: [...copy.moves, { type: "jump", blocks: [targetBlock] }],
+			...(layoutBlocks === undefined || sourcePosition === undefined
+				? {}
+				: { sourcePosition }),
 		});
 		return block;
 	};
-	const lowerTerminatorEdge = (edge: number): number =>
+	const lowerTerminatorEdge = (
+		edge: number,
+		sourcePosition: number | undefined,
+	): number =>
 		edgeBlock(
 			kernel.terminatorEdgeBlock(edge),
 			kernel.terminatorEdgeArgumentStart(edge),
 			kernel.terminatorEdgeArgumentCount(edge),
+			sourcePosition,
 		);
 
 	const pendingOperationSafepoints: Array<
@@ -1736,6 +1750,7 @@ function lowerFunctionToTarget(
 			keyof CoreTargetSafepointRoots
 		>
 	> = [];
+	let edgeSourcePosition = -1;
 	for (const blockId of blockOrder) {
 		const loweredBlock = loweredBlockForCore.get(blockId)!;
 		const instructions = blocks[loweredBlock]!.instructions;
@@ -1944,14 +1959,17 @@ function lowerFunctionToTarget(
 		const terminatorOperandStart = kernel.instructionOperandStart(terminatorId);
 		const terminatorEdgeStart = kernel.terminatorEdgeStart(terminatorId);
 		const terminatorEdgeCount = kernel.terminatorEdgeCount(terminatorId);
-		instructions.push(
-			...sourcePositionMarker(coreFunction.instructionSourcePosition(terminatorId)),
-		);
+		const terminatorPosition = coreFunction.instructionSourcePosition(terminatorId);
+		edgeSourcePosition =
+			terminatorPosition ??
+			instructions.findLast((instruction) => instruction.type === "sourcePos")?.pos ??
+			edgeSourcePosition;
+		instructions.push(...sourcePositionMarker(terminatorPosition));
 		switch (terminatorKind) {
 			case "jump": {
 				const lowered: Extract<CompilerInstruction, { type: "jump" }> = {
 					type: "jump",
-					blocks: [lowerTerminatorEdge(terminatorEdgeStart)],
+					blocks: [lowerTerminatorEdge(terminatorEdgeStart, edgeSourcePosition)],
 				};
 				instructions.push(lowered);
 				loweredInstructions.set(terminatorId, lowered);
@@ -1961,11 +1979,11 @@ function lowerFunctionToTarget(
 				const lowered: Extract<CompilerInstruction, { type: "jumpIf" }> = {
 					type: "jumpIf",
 					registers: [registerForValue(kernel.operandAt(terminatorOperandStart))],
-					blocks: [lowerTerminatorEdge(terminatorEdgeStart)],
+					blocks: [lowerTerminatorEdge(terminatorEdgeStart, edgeSourcePosition)],
 				};
 				instructions.push(lowered, {
 					type: "jump",
-					blocks: [lowerTerminatorEdge(terminatorEdgeStart + 1)],
+					blocks: [lowerTerminatorEdge(terminatorEdgeStart + 1, edgeSourcePosition)],
 				});
 				loweredInstructions.set(terminatorId, lowered);
 				break;
@@ -1975,11 +1993,11 @@ function lowerFunctionToTarget(
 					{
 						type: "jumpIf",
 						registers: [registerForValue(kernel.operandAt(terminatorOperandStart))],
-						blocks: [lowerTerminatorEdge(terminatorEdgeStart)],
+						blocks: [lowerTerminatorEdge(terminatorEdgeStart, edgeSourcePosition)],
 					},
 					{
 						type: "jump",
-						blocks: [lowerTerminatorEdge(terminatorEdgeStart + 1)],
+						blocks: [lowerTerminatorEdge(terminatorEdgeStart + 1, edgeSourcePosition)],
 					},
 				);
 				break;
@@ -2009,7 +2027,7 @@ function lowerFunctionToTarget(
 					if (caseValue === undefined) {
 						throw new Error(`Core switch in b${blockId} has no case value`);
 					}
-					const targetBlock = lowerTerminatorEdge(edge);
+					const targetBlock = lowerTerminatorEdge(edge, edgeSourcePosition);
 					if (strings && caseValue.kind === "string")
 						stringCases.push({ stringIndex: caseValue.index, block: targetBlock });
 					else strings = false;
@@ -2064,6 +2082,7 @@ function lowerFunctionToTarget(
 				}
 				const defaultBlock = lowerTerminatorEdge(
 					terminatorEdgeStart + terminatorEdgeCount - 1,
+					edgeSourcePosition,
 				);
 				instructions.push({
 					type: "jump",
@@ -2088,6 +2107,55 @@ function lowerFunctionToTarget(
 				throw new Error(`Reachable Core block b${blockId} ends in unreachable`);
 		}
 		if (handler !== undefined) instructions.push({ type: "tryEnd" });
+	}
+	if (layoutBlocks !== undefined) {
+		const order = layoutBlocks(blocks, blockOrder.length);
+		if (
+			order.length !== blocks.length ||
+			order[0] !== 0 ||
+			new Set(order).size !== blocks.length ||
+			order.some(
+				(block) => !Number.isInteger(block) || block < 0 || block >= blocks.length,
+			)
+		)
+			throw new Error(
+				"Target block layout must be a permutation retaining entry block zero",
+			);
+		const relocated = new Map(order.map((block, index) => [block, index]));
+		let position = -1;
+		for (const block of blocks) {
+			block.sourcePosition ??= position;
+			position = block.sourcePosition;
+			for (const instruction of block.instructions) {
+				if (instruction.type === "sourcePos") position = instruction.pos;
+				if ("blocks" in instruction)
+					for (const [index, target] of instruction.blocks.entries())
+						instruction.blocks[index] = relocated.get(target)!;
+			}
+		}
+		for (const [core, block] of loweredBlockForCore)
+			loweredBlockForCore.set(core, relocated.get(block)!);
+		for (const [index, site] of literalSwitches.entries()) {
+			literalSwitches[index] =
+				site.kind === "number"
+					? {
+							...site,
+							cases: site.cases.map((label) => ({
+								...label,
+								block: relocated.get(label.block)!,
+							})),
+							defaultBlock: relocated.get(site.defaultBlock)!,
+						}
+					: {
+							...site,
+							cases: site.cases.map((label) => ({
+								...label,
+								block: relocated.get(label.block)!,
+							})),
+							defaultBlock: relocated.get(site.defaultBlock)!,
+						};
+		}
+		blocks = order.map((block) => blocks[block]!);
 	}
 
 	const physicalRepresentations = Array.from(
@@ -2554,6 +2622,7 @@ export function lowerCoreCompilationToTargetProgram(
 			compilation.context.facts.instructionSites,
 			options.assignStorage,
 			options.loopBackedgeInstructions ?? executionLoopBackedgeInstructions,
+			options.layoutBlocks,
 		),
 	}));
 	return Object.freeze({

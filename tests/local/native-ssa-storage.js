@@ -1,6 +1,26 @@
 const gc = globalThis.__mal_collect_garbage ?? (() => {});
 globalThis.makeStorageValue = (value) => ({ value, padding: new Array(300).fill(value) });
 
+globalThis.rotateStorage = (left, right, count) => {
+	for (let index = 0; index < count; index++) {
+		const saved = left;
+		left = right;
+		right = saved;
+		gc();
+	}
+	return `${left.value}:${right.value}`;
+};
+for (const count of [0, 1, 4])
+	console.log(
+		"rotate",
+		count,
+		globalThis.rotateStorage(
+			globalThis.makeStorageValue(2),
+			globalThis.makeStorageValue(9),
+			count,
+		),
+	);
+
 globalThis.retryStorage = (read, held) => {
 	for (;;) {
 		try {

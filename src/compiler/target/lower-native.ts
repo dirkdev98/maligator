@@ -4,6 +4,7 @@ import type { CoreFunctionStore } from "../core/core-store.ts";
 import { nativeLoopBackedgeInstructions } from "./execution-liveness.ts";
 import { lowerCoreCompilationToTargetProgram } from "./lower-core-target.ts";
 import type { CoreStorageAssignment } from "./lower-core-target.ts";
+import { layoutNativeBlocks } from "./lower-native-control-flow.ts";
 import type { NativeProgram } from "./native-ir.ts";
 import { verifyNativeExecutionProgram } from "./verify-native-execution.ts";
 
@@ -58,6 +59,7 @@ export function lowerCoreCompilationToNativeProgram(
 	const target = lowerCoreCompilationToTargetProgram(compilation, {
 		...options,
 		assignStorage: nativeValueStorage,
+		layoutBlocks: layoutNativeBlocks,
 		loopBackedgeInstructions: nativeLoopBackedgeInstructions,
 	});
 	const functions = target.functions.map((fn) => {

@@ -137,6 +137,8 @@ export interface CoreTargetFunction {
 	readonly nameStringIndex: number;
 	readonly blocks: ReadonlyArray<{
 		readonly instructions: ReadonlyArray<CompilerInstruction>;
+		/** Resets carried source attribution when native layout moves a block. */
+		readonly sourcePosition?: number;
 	}>;
 	readonly coreBlocks: ReadonlyArray<CoreBlockId>;
 	/** Typed Core decisions, already relocated to allocated registers and blocks. */

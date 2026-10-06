@@ -2936,6 +2936,7 @@ function lowerExecutionFunctionToBytecode(
 	const instructionIndexByTargetInstruction = new Map<CompilerInstruction, number>();
 	let currentPos = -1;
 	for (const block of fn.blocks) {
+		currentPos = block.sourcePosition ?? currentPos;
 		for (const instruction of block.instructions) {
 			if (instruction.type === "sourcePos") {
 				currentPos = instruction.pos;
