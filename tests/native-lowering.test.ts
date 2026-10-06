@@ -346,6 +346,84 @@ describe("SSA native lowering", () => {
 		);
 	});
 
+	it("folds scalar chains beside independently selected calls", () => {
+		const image = compileSemanticProgramToProgramImage(
+			analyzeSourceAndRunSemanticAnalysis(
+				`function observe(value) {
+					for (let index = 0; index < 2; index++) globalThis.observe(value, index);
+				}
+				globalThis.scalar = (left, right, one) => {
+					const a = +left;
+					const b = +right;
+					const subtract = +one;
+					observe(a);
+					return a * b - subtract;
+				};`,
+				"/native-expression-call.js",
+			),
+		);
+		const native = image.native.functions.find((fn) =>
+			fn.body.instructions.some((op) => op.opcode === "BINARY" && op.operator === "*"),
+		)!;
+		expect(native.instructions.some((plan) => plan?.kind === "call")).toBe(true);
+		const product = native.body.instructions.findIndex(
+			(op) => op.opcode === "BINARY" && op.operator === "*",
+		);
+		expect(native.storage!.expressionIps).toContain(product);
+		expect(() =>
+			emitProgramImage(deserializeCompilerArtifact(serializeCompilerArtifact(image)), {
+				compiled: true,
+			}),
+		).not.toThrow();
+	});
+
+	it("initializes scalar locals at a dominating definition across ordinary effects", () => {
+		const image = scalarImage(
+			"const product = a * b; globalThis.observe(); return product - subtract;",
+			true,
+		);
+		const native = image.native.functions[1]!;
+		const product = native.body.instructions[multiplicationIp(image)]!;
+		if (product.opcode !== "BINARY") throw new Error("Missing scalar product");
+		expect(native.storage!.expressionIps).toEqual([]);
+		expect(native.storage!.definitionInitializedRegisters).toContain(product.dst);
+		const restored = deserializeCompilerArtifact(serializeCompilerArtifact(image));
+		expect(restored.native.functions[1]!.storage).toEqual(native.storage);
+	});
+
+	it("retains initialization when scalar uses cross control-flow boundaries", () => {
+		const image = scalarImage(
+			"const product = a * b; if (globalThis.condition) globalThis.observe(product); return product - subtract;",
+		);
+		const native = image.native.functions[1]!;
+		const product = native.body.instructions[multiplicationIp(image)]!;
+		if (product.opcode !== "BINARY") throw new Error("Missing scalar product");
+		expect(native.storage!.definitionInitializedRegisters).not.toContain(product.dst);
+		const invalid = {
+			...image,
+			native: {
+				...image.native,
+				functions: image.native.functions.map((fn) =>
+					fn !== native
+						? fn
+						: {
+								...fn,
+								storage: {
+									...fn.storage!,
+									definitionInitializedRegisters: [
+										...fn.storage!.definitionInitializedRegisters,
+										product.dst,
+									].sort((left, right) => left - right),
+								},
+							},
+				),
+			},
+		};
+		expect(() => serializeCompilerArtifact(invalid)).toThrow(
+			/invalid or stale storage plan/,
+		);
+	});
+
 	it("retains producers around effects, repeated uses, and profiling", () => {
 		for (const body of [
 			"const product = a * b; globalThis.observe(); return product - subtract;",

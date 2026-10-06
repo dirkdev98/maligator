@@ -46,6 +46,30 @@ console.log(
 	coercions.join(""),
 );
 
+const scalarCallEffects = [];
+globalThis.recordScalarCall = (value, index) => {
+	gc();
+	scalarCallEffects.push(`${value}:${index}`);
+};
+function observeScalar(value) {
+	for (let index = 0; index < 2; index++) globalThis.recordScalarCall(value, index);
+}
+globalThis.scalarWithCalls = (left, right, one) => {
+	const a = +left;
+	const b = +right;
+	const subtract = +one;
+	observeScalar(a);
+	const product = a * b;
+	const difference = product - subtract;
+	observeScalar(difference);
+	return difference;
+};
+console.log(
+	"scalar-calls",
+	globalThis.scalarWithCalls(3, 4, 1),
+	scalarCallEffects.join(","),
+);
+
 globalThis.shiftStorage = (values, selected) => {
 	values.pop();
 	for (let index = values.length; index > selected; index--) {

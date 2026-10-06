@@ -1340,9 +1340,6 @@ function emitCompiledVariant(
 		}
 	}
 
-	// Parameters adopt either the canonical boxed slice or the selected typed ABI;
-	// non-parameter
-	// registers start at a rep-appropriate zero.
 	for (let i = 0; i < fn.parameterCount; i++) {
 		lines.push(
 			directEntry === undefined
@@ -1353,8 +1350,9 @@ function emitCompiledVariant(
 					: `    r${i} = p${i};`,
 		);
 	}
+	const definitionInitialized = new Set(storage.definitionInitializedRegisters);
 	for (let i = fn.parameterCount; i < fn.registerCount; i++) {
-		if (expressionRegisters.has(i)) continue;
+		if (expressionRegisters.has(i) || definitionInitialized.has(i)) continue;
 		lines.push(`    r${i} = ${zeroOf(reps[i]!)};`);
 	}
 	for (const register of privateRegisters) {

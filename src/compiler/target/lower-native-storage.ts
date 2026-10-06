@@ -21,6 +21,60 @@ export interface NativeStoragePlan {
 	readonly privateCallResultIps: ReadonlyArray<number>;
 	readonly entryStableRootRegisters: ReadonlyArray<number>;
 	readonly expressionIps: ReadonlyArray<number>;
+	readonly definitionInitializedRegisters: ReadonlyArray<number>;
+}
+
+function hasExplicitScalarUses(native: NativeFunctionPlan): boolean {
+	const fn = native.body;
+	return (
+		native.storageValues !== undefined &&
+		!fn.isAsync &&
+		!fn.isGenerator &&
+		fn.handlers.length === 0 &&
+		native.specializations.length === 0 &&
+		native.instructions.every(
+			(plan) =>
+				plan === undefined ||
+				plan.kind === "exact-operator-input-kinds" ||
+				plan.kind === "call" ||
+				plan.kind === "construct",
+		) &&
+		(native.fieldCalls?.length ?? 0) === 0 &&
+		(native.literalSwitches?.length ?? 0) === 0
+	);
+}
+
+function definitionInitializedRegisters(
+	native: NativeFunctionPlan,
+	jumpTargets: ReadonlySet<number>,
+): ReadonlyArray<number> {
+	if (!hasExplicitScalarUses(native)) return [];
+	const fn = native.body;
+	const writes = new Uint32Array(fn.registerCount);
+	const definitions = new Int32Array(fn.registerCount).fill(-1);
+	const uses: Array<Array<number>> = Array.from({ length: fn.registerCount }, () => []);
+	const blocks = new Uint32Array(fn.instructions.length);
+	let block = 0;
+	for (const [ip, op] of fn.instructions.entries()) {
+		if (jumpTargets.has(ip)) block++;
+		blocks[ip] = block;
+		for (const local of vmInstructionReadRegisters(op)) uses[local]!.push(ip);
+		for (const local of vmInstructionWriteRegisters(op)) {
+			writes[local]!++;
+			definitions[local] = ip;
+		}
+		if (["JUMP", "JUMP_IF", "RETURN", "THROW"].includes(op.opcode)) block++;
+	}
+	return native.registerRepresentations.flatMap((rep, local) => {
+		const definition = definitions[local]!;
+		return local >= fn.parameterCount + fn.argumentSnapshotCount &&
+			native.storageValues![local]! >= 0 &&
+			(rep === "number" || rep === "int32" || rep === "boolean") &&
+			writes[local] === 1 &&
+			uses[local]!.every((ip) => ip > definition && blocks[ip] === blocks[definition])
+			? [local]
+			: [];
+	});
 }
 
 function pureScalarOperation(
@@ -70,17 +124,8 @@ function expressionIps(
 	const fn = native.body;
 	// Region helpers can borrow storage beyond explicit operands; profiling retains producer sites.
 	if (
-		native.storageValues === undefined ||
-		fn.isAsync ||
-		fn.isGenerator ||
-		fn.handlers.length > 0 ||
-		(preserveProfileSites && fn.profileSiteIds !== undefined) ||
-		native.specializations.length > 0 ||
-		native.instructions.some(
-			(plan) => plan !== undefined && plan.kind !== "exact-operator-input-kinds",
-		) ||
-		(native.fieldCalls?.length ?? 0) > 0 ||
-		(native.literalSwitches?.length ?? 0) > 0
+		!hasExplicitScalarUses(native) ||
+		(preserveProfileSites && fn.profileSiteIds !== undefined)
 	)
 		return [];
 	const writes = new Uint32Array(fn.registerCount);
@@ -246,6 +291,7 @@ function lowerStorage(
 		privateCallResultIps: [...calls],
 		entryStableRootRegisters: [...nativeEntryStableRootRegisters(fn, privateLocals)],
 		expressionIps: expressionIps(native, jumpTargets, preserveProfileSites),
+		definitionInitializedRegisters: definitionInitializedRegisters(native, jumpTargets),
 	};
 }
 
@@ -285,6 +331,7 @@ export function validateNativeStorage(native: NativeFunctionPlan): void {
 				"privateRegisters",
 				"privateCallResultIps",
 				"entryStableRootRegisters",
+				"definitionInitializedRegisters",
 			] as const
 		).every(
 			(key) =>

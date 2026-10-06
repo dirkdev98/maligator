@@ -121,7 +121,7 @@ function firstOverrideOffset(bytes: Uint8Array): number {
 	expect(reader.u8()).toBe(0); // Unknown closure layout.
 	expect(reader.u8()).toBe(0); // No immutable value captures.
 	reader.i32Array();
-	for (let index = 0; index < 5; index++) reader.i32Array();
+	for (let index = 0; index < 6; index++) reader.i32Array();
 	const safepointCount = reader.u32();
 	for (let index = 0; index < safepointCount; index++) {
 		reader.u8();
@@ -136,7 +136,7 @@ function firstOverrideOffset(bytes: Uint8Array): number {
 	expect(reader.u32()).toBe(0); // Field calls.
 	expect(reader.u8()).toBe(0); // Canonical body retained.
 	expect(reader.u32()).toBe(1); // Direct entries.
-	for (let index = 0; index < 5; index++) reader.i32Array();
+	for (let index = 0; index < 6; index++) reader.i32Array();
 	expect(reader.u32()).toBe(0); // Entry identity.
 	reader.u8(); // Result representation.
 	expect(reader.u32()).toBe(1); // Parameter count.

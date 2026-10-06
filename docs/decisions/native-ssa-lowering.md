@@ -28,6 +28,12 @@ values, effects, control boundaries, repeated uses, and profiling producer sites
 Floating-point contraction is disabled so an expression tree keeps JavaScript's
 intermediate rounding. The artifact stores these choices; validation checks their
 safety without requiring profiled artifacts to reselect expressions after reading.
+Independent call and construction selections do not suppress unrelated scalar
+chains; an expression still cannot cross their effect boundary. Scalar locals with
+one definition and only later reads in the same straight-line block initialize at
+that definition. Roots, argument prefixes, synthetic temporaries, and opaque region
+storage retain initialization. This choice is persisted and checked independently
+of expression selection, including profiled artifacts.
 
 Native loop polls cut cycles in the explicit target block graph, including
 exceptional paths through handlers. Phi-copy blocks can jump backward in physical order
