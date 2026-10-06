@@ -1542,13 +1542,12 @@ function renderNumericLeafWorker(
 	const declarations: Array<string> = [];
 	const definitionInitialized = new Set(leaf.definitionInitializedRegisters);
 	for (const [r, rep] of reps.entries()) {
-		if (!scalar(r)) continue;
+		if (!scalar(r) || r < fn.parameterCount) continue;
 		const expression = expressions.get(r);
 		if (expression !== undefined) {
 			declarations.push(`#define r${r} (${expression})`);
 		} else {
-			const initial =
-				r < fn.parameterCount ? ` = p${r}` : definitionInitialized.has(r) ? "" : " = 0";
+			const initial = definitionInitialized.has(r) ? "" : " = 0";
 			declarations.push(`${cTypeOf(rep)} r${r}${initial};`);
 		}
 	}
@@ -1615,7 +1614,7 @@ export function emitCompiledFunction(
 		const worker = renderNumericLeafWorker(fn, entry);
 		if (worker === null) return [{ entry, emitted, leaf: undefined }];
 		const parameters = entry.parameterRepresentations
-			.map((rep, i) => `${cTypeOf(rep)} p${i}`)
+			.map((rep, i) => `${cTypeOf(rep)} r${i}`)
 			.concat(entry.fieldParameters?.keys.map((_, i) => `f64 fp${i}`) ?? []);
 		const args = entry.parameterRepresentations
 			.map((_, i) => `p${i}`)
