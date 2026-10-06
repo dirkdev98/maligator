@@ -1,5 +1,6 @@
 // Ready resolves after evaluation, so the spin starts from a macrotask.
 setTimeout(() => {
+	parentPort.postMessage("spinning");
 	let counter = 0;
 	for (;;) {
 		try {
@@ -9,3 +10,4 @@ setTimeout(() => {
 		}
 	}
 }, 0);
+import { parentPort } from "maligator:workers";

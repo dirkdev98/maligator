@@ -1,6 +1,27 @@
 const gc = globalThis.__mal_collect_garbage ?? (() => {});
 globalThis.makeStorageValue = (value) => ({ value, padding: new Array(300).fill(value) });
 
+globalThis.retryStorage = (read, held) => {
+	for (;;) {
+		try {
+			return read(held);
+		} catch (error) {
+			gc();
+			if (error !== held) throw error;
+		}
+	}
+};
+let attempts = 0;
+const retryValue = globalThis.makeStorageValue(17);
+console.log(
+	"retry",
+	globalThis.retryStorage((value) => {
+		if (++attempts < 4) throw value;
+		return value.value + value.padding.length;
+	}, retryValue),
+	attempts,
+);
+
 globalThis.scalarStorage = (left, right, one) => {
 	const a = +left;
 	const b = +right;

@@ -29,13 +29,14 @@ Floating-point contraction is disabled so an expression tree keeps JavaScript's
 intermediate rounding. The artifact stores these choices; validation checks their
 safety without requiring profiled artifacts to reselect expressions after reading.
 
-Native loop polls follow DFS cycle edges in the explicit target block graph,
-including handler components. Phi-copy blocks can jump backward in physical order
+Native loop polls cut cycles in the explicit target block graph, including
+exceptional paths through handlers. Phi-copy blocks can jump backward in physical order
 without closing a cycle; those transfers require no native loop poll. The native
-artifact records polling edges, and validation requires the remaining normal
+artifact records polling edges, and validation requires the remaining
 control-flow graph to be acyclic after those edges are removed. Rendering obeys
-that metadata even for physically forward transfers. Exception liveness includes
-handler edges independently. The VM retains its physical backward-branch polling
+that metadata even for physically forward transfers. An exceptional DFS cycle
+selects a normal branch on its path because exceptional transfers cannot poll.
+The VM retains its physical backward-branch polling
 contract and corresponding root maps.
 
 Resumable functions currently persist their complete boxed native local set. Their

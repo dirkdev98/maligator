@@ -6,17 +6,22 @@ import {
 } from "maligator:workers";
 
 const spinUrl = createWorkerUrl("./spin.mjs", import.meta.url);
+const exceptionSpinUrl = createWorkerUrl("./exception-spin.mjs", import.meta.url);
 const exitUrl = createWorkerUrl("./exit-catch.mjs", import.meta.url);
 const startupErrorUrl = createWorkerUrl("./startup-error.mjs", import.meta.url);
 
-async function nonAllocatingLoopTerminates() {
-	const worker = new Worker(spinUrl);
+async function nonAllocatingLoopTerminates(url = spinUrl, label = "spin:") {
+	const worker = new Worker(url);
+	const started = new Promise((resolve) => {
+		worker.port.onmessage = (event) => resolve(event.data);
+	});
 	await worker.ready;
+	if ((await started) !== "spinning") throw new Error("Worker did not enter its loop");
 	const first = await worker.terminate();
 	const second = await worker.terminate();
 	const closed = await worker.closed;
 	console.log(
-		"spin:",
+		label,
 		JSON.stringify([first.reason, first.code, first === second, first === closed]),
 	);
 }
@@ -81,5 +86,6 @@ function standaloneChannelBoundsAndDiscard() {
 
 standaloneChannelBoundsAndDiscard();
 await nonAllocatingLoopTerminates();
+await nonAllocatingLoopTerminates(exceptionSpinUrl, "exception-spin:");
 await caughtExitCannotContinue();
 await startupErrorRejectsReady();

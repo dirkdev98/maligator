@@ -90,6 +90,34 @@ describe("SSA native lowering", () => {
 		expect(restored.native.functions[1]!.gc).toEqual(fn.gc);
 	});
 
+	it.each([
+		"try { globalThis.thrower(); return; } catch { globalThis.observe(); }",
+		"try { throw globalThis.value; } catch (error) { globalThis.observe(error); }",
+	])("polls cycles through exception handlers: %s", (body) => {
+		const image = compileSemanticProgramToProgramImage(
+			analyzeSourceAndRunSemanticAnalysis(
+				`globalThis.retry = () => { while (true) { ${body} } };`,
+				"/exception-cycle.js",
+			),
+		);
+		const fn = image.native.functions[1]!;
+		expect(fn.body.handlers.length).toBeGreaterThan(0);
+		expect(fn.gc.safepoints.some((point) => point.kind === "loop-backedge")).toBe(true);
+		expect(() =>
+			nativeFrameRootRegisters(fn.body, {
+				...fn,
+				gc: {
+					safepoints: fn.gc.safepoints.filter((point) => point.kind !== "loop-backedge"),
+				},
+			}),
+		).toThrow("native control-flow cycle has no polling edge");
+		expect(() =>
+			emitProgramImage(deserializeCompilerArtifact(serializeCompilerArtifact(image)), {
+				compiled: true,
+			}),
+		).not.toThrow();
+	});
+
 	it("polls physically forward cycle edges and every handler component", () => {
 		const image = compileSemanticProgramToProgramImage(
 			analyzeSourceAndRunSemanticAnalysis("globalThis.value = 1;", "/cycle-layout.js"),
@@ -149,6 +177,41 @@ describe("SSA native lowering", () => {
 		expect(() => nativeFrameRootRegisters(body, native)).not.toThrow();
 		const output = emitCompiledFunction(native, 0, "", false)?.source;
 		expect(output).toMatch(/L1:;\s+if \(mal_gc_poll\)/);
+		const left = {
+			type: "jumpIf" as const,
+			registers: [0] as [number],
+			blocks: [2] as [number],
+		};
+		const right = { type: "jump" as const, blocks: [3] as [number] };
+		expect(
+			nativeLoopBackedgeInstructions({
+				...fn,
+				blocks: [
+					{
+						instructions: [
+							{ type: "tryBegin", blocks: [1, 0] },
+							{ type: "jump", blocks: [2] },
+							{ type: "tryEnd" },
+						],
+					},
+					{ instructions: [{ type: "catch", registers: [0] }, left, right] },
+					{
+						instructions: [
+							{ type: "tryBegin", blocks: [1, 2] },
+							{ type: "return", registers: [-1] },
+							{ type: "tryEnd" },
+						],
+					},
+					{
+						instructions: [
+							{ type: "tryBegin", blocks: [1, 3] },
+							{ type: "return", registers: [-1] },
+							{ type: "tryEnd" },
+						],
+					},
+				],
+			}),
+		).toEqual(new Set([left, right]));
 	});
 
 	it("preserves wide root mask storage through property-region fallbacks", () => {

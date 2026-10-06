@@ -52,6 +52,7 @@ describe("worker isolates", () => {
 			expect(result.stdout.trimEnd().split("\n")).toEqual([
 				'channel: ["number",true,"RangeError",false,true,false,"number",["b","d"],false]',
 				'spin: ["terminated",1,true,true]',
+				'exception-spin: ["terminated",1,true,true]',
 				'exit: ["completed",7,[]]',
 				'startup: ["startup boom","error",1]',
 			]);

@@ -38,6 +38,7 @@ import {
 	decodeVmValueOperand,
 	lowerVerifiedTargetsToRuntimePlans,
 	validateRuntimeImageMetadata,
+	vmExceptionHandlerTargets,
 } from "./runtime-image.ts";
 import type {
 	BytecodeExceptionHandler,
@@ -1601,10 +1602,10 @@ export function createConservativeNativePlan(
 				),
 				directEntries: [],
 				gc: {
+					// Without source CFG proofs, every taken branch must cover possible handler cycles.
 					safepoints: fn.instructions.map((instruction, instructionIp) => ({
 						kind:
-							(instruction.opcode === "JUMP" || instruction.opcode === "JUMP_IF") &&
-							instruction.targetIp <= instructionIp
+							instruction.opcode === "JUMP" || instruction.opcode === "JUMP_IF"
 								? ("loop-backedge" as const)
 								: ("conservative" as const),
 						instructionIp,
@@ -1721,13 +1722,14 @@ export function nativeFrameRootRegisters(
 			if (outgoing) outgoingIndex++;
 		}
 	}
+	const handlerTargets = vmExceptionHandlerTargets(fn.instructions.length, fn.handlers);
 	const successors = fn.instructions.map((instruction, ip) => {
 		const targets: Array<number> = [];
-		if (
-			(instruction.opcode === "JUMP" || instruction.opcode === "JUMP_IF") &&
-			!pollingIps.has(ip)
-		)
-			targets.push(instruction.targetIp);
+		const branch = instruction.opcode === "JUMP" || instruction.opcode === "JUMP_IF";
+		const handler = handlerTargets[ip];
+		// Branches only throw while polling; their taken polling edges already cut those paths.
+		if (!branch && handler !== undefined) targets.push(handler);
+		if (branch && !pollingIps.has(ip)) targets.push(instruction.targetIp);
 		if (
 			instruction.opcode !== "JUMP" &&
 			instruction.opcode !== "RETURN" &&

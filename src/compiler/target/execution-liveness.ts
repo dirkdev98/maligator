@@ -268,33 +268,61 @@ export function nativeLoopBackedgeInstructions(
 		if (fallsThrough(instructions))
 			throw new Error("Native Core target blocks require explicit control transfers");
 		return instructions.filter(
-			(instruction) => instruction.type === "jump" || instruction.type === "jumpIf",
+			(instruction) =>
+				instruction.type === "jump" ||
+				instruction.type === "jumpIf" ||
+				instruction.type === "tryBegin",
 		);
 	});
 	const state = new Uint8Array(edges.length);
 	const nextEdge = new Uint32Array(edges.length);
+	const incomingEdges = new Array<CompilerInstruction | undefined>(edges.length);
 	const backedges = new Set<CompilerInstruction>();
-	// Copy blocks can precede their destinations logically while following them physically.
-	for (let entry = 0; entry < edges.length; entry++) {
-		if (state[entry] !== 0) continue;
-		const stack = [entry];
-		state[entry] = 1;
-		while (stack.length > 0) {
-			const block = stack[stack.length - 1]!;
-			const instruction = edges[block]![nextEdge[block]!];
-			if (instruction === undefined) {
-				state[block] = 2;
-				stack.pop();
-				continue;
-			}
-			nextEdge[block]!++;
-			const target = instruction.blocks[0];
-			if (state[target] === 1) backedges.add(instruction);
-			else if (state[target] === 0) {
-				state[target] = 1;
-				stack.push(target);
+	let restart: boolean;
+	do {
+		restart = false;
+		state.fill(0);
+		nextEdge.fill(0);
+		incomingEdges.fill(undefined);
+		for (let entry = 0; entry < edges.length && !restart; entry++) {
+			if (state[entry] !== 0) continue;
+			const stack = [entry];
+			state[entry] = 1;
+			while (stack.length > 0 && !restart) {
+				const block = stack[stack.length - 1]!;
+				const instruction = edges[block]![nextEdge[block]!];
+				if (instruction === undefined) {
+					state[block] = 2;
+					stack.pop();
+					continue;
+				}
+				nextEdge[block]!++;
+				if (backedges.has(instruction)) continue;
+				const target = instruction.blocks[0];
+				if (state[target] === 1) {
+					if (instruction.type !== "tryBegin") backedges.add(instruction);
+					else {
+						let pollingEdge: CompilerInstruction | undefined;
+						for (let index = stack.length - 1; stack[index] !== target; index--) {
+							const incoming = incomingEdges[stack[index]!]!;
+							if (incoming.type !== "tryBegin") {
+								pollingEdge = incoming;
+								break;
+							}
+						}
+						if (pollingEdge === undefined)
+							throw new Error("Native exceptional cycle has no polling branch");
+						backedges.add(pollingEdge);
+						// Cutting a DFS tree edge invalidates the current ancestor/reachability state.
+						restart = true;
+					}
+				} else if (state[target] === 0) {
+					state[target] = 1;
+					incomingEdges[target] = instruction;
+					stack.push(target);
+				}
 			}
 		}
-	}
+	} while (restart);
 	return backedges;
 }
