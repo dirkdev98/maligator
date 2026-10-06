@@ -84,7 +84,12 @@ async function wideAsync(gate) {
 	globalThis.makeStorageValue(7);
 	globalThis.makeStorageValue(8);
 	const held = globalThis.makeStorageValue(77);
-	await gate;
+	try {
+		await gate;
+	} catch (error) {
+		console.log("await-constructor", error.kind, held.value, held.padding.length);
+		throw error;
+	}
 	return held.value + held.padding.length;
 }
 
@@ -104,6 +109,17 @@ console.log(suspended.next().done);
 let openGate;
 const gate = new Promise((resolve) => (openGate = resolve));
 wideAsync(gate).then((value) => console.log("async", value));
+const invalidAwait = Promise.resolve(1);
+Object.defineProperty(invalidAwait, "constructor", {
+	get() {
+		gc();
+		throw { kind: "throwing-getter" };
+	},
+});
+wideAsync(invalidAwait).then(
+	() => console.log("unexpected-await-success"),
+	(error) => console.log("await-rejected", error.kind),
+);
 setTimeout(() => {
 	gc();
 	openGate();

@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { resolveBuildConfig } from "../../src/build-config.ts";
 import type { ProgramImage } from "../../src/compiler/target/program-image.ts";
 import { emitCompiledFunction } from "../../src/compiler/target/render-native-c.ts";
 import {
@@ -27,6 +28,7 @@ describe("independent native SSA storage", () => {
 			fixture,
 			name: "native-ssa-storage",
 			mainFile: HOST_MAIN,
+			config: resolveBuildConfig({ surface: { webPlatform: true } }),
 			outDir,
 		});
 		({ compiled, interpreted, programImage: image } = pair);
@@ -35,9 +37,15 @@ describe("independent native SSA storage", () => {
 	it("preserves scalar arithmetic, loop transport, and suspended heap locals", () => {
 		const regions = image.native.functions.flatMap((fn) => fn.specializations);
 		expect(regions.some((region) => region.kind === "string-split-cursor")).toBe(true);
-		expect(regions.some((region) => region.kind === "regexp-iterator-projection")).toBe(
-			true,
-		);
+		const regexp = regions.find((region) => region.kind === "regexp-iterator-projection");
+		if (regexp?.kind !== "regexp-iterator-projection")
+			throw new Error("RegExp fixture lacks its certified iterator projection");
+		const regexpBody = image.native.functions.find((fn) =>
+			fn.specializations.includes(regexp),
+		)!.body;
+		const branch = regexpBody.instructions[regexp.doneBranchIp]!;
+		expect(branch.opcode).toBe("JUMP_IF");
+		if (branch.opcode === "JUMP_IF") expect(branch.targetIp).not.toBe(regexp.exitIp);
 		expect(
 			regions.some(
 				(region) =>
