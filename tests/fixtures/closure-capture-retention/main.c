@@ -52,15 +52,24 @@ static int check_wide_root_masks(const MalRuntimeImage *image) {
     mal_gc_collect(&vm);
     if (finalized[0] != 1 || slots[64] != MAL_VALUE_UNDEFINED ||
         finalized[1] != 0 || finalized[2] != 0) return 80;
+    slots[64] = tracked_object(&vm, 0);
+    mal_gc_collect(&vm);
+    if (finalized[0] != 1 || slots[64] != MAL_VALUE_UNDEFINED ||
+        finalized[1] != 0 || finalized[2] != 0) return 84;
     slots[64] = tracked_object(&vm, 3);
     mal_gc_root_frame_set_inactive(&frame, 0, nullptr, 0);
     mal_gc_collect(&vm);
     if (finalized[3] != 0 || finalized[1] != 0 || finalized[2] != 0) return 81;
-    static const u64 second_tail[] = { UINT64_C(1) << 63, UINT64_C(1) << 1 };
+    slots[0] = slots[64];
+    static const u64 second_tail[] = { UINT64_MAX, UINT64_C(1) << 1 };
     mal_gc_root_frame_set_inactive(&frame, 0, second_tail, countof(second_tail));
     mal_gc_collect(&vm);
     if (finalized[1] != 1 || finalized[2] != 1 || finalized[3] != 0 ||
-        slots[127] != MAL_VALUE_UNDEFINED || slots[129] != MAL_VALUE_UNDEFINED) return 82;
+        slots[64] != MAL_VALUE_UNDEFINED || slots[127] != MAL_VALUE_UNDEFINED ||
+        slots[129] != MAL_VALUE_UNDEFINED) return 82;
+    slots[127] = tracked_object(&vm, 1);
+    mal_gc_collect(&vm);
+    if (finalized[1] != 1 || slots[127] != MAL_VALUE_UNDEFINED || finalized[3] != 0) return 85;
     mal_root_frame_head = frame.prev;
     mal_gc_collect(&vm);
     if (finalized[3] != 1) return 83;

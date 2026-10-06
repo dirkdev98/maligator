@@ -21,12 +21,22 @@ single-use scalar expressions separately for canonical and typed entries. Root
 slots differ from computational locals, and expression values have no local
 assignment. Safepoint masks cover the entire native root set using an inline word
 and immutable tail words; uncovered runtime-owned slots remain active. Small-mask
-publication clears any previous tail. Expression selection admits only pure scalar operations whose
+publication clears any previous tail. Entire inactive words are cleared together;
+mixed words retain selective tracing. Expression selection admits only pure scalar operations whose
 representations or exact input facts prove numeric semantics. It preserves leaf
 values, effects, control boundaries, repeated uses, and profiling producer sites.
 Floating-point contraction is disabled so an expression tree keeps JavaScript's
 intermediate rounding. The artifact stores these choices; validation checks their
 safety without requiring profiled artifacts to reselect expressions after reading.
+
+Native loop polls follow DFS cycle edges in the explicit target block graph,
+including handler components. Phi-copy blocks can jump backward in physical order
+without closing a cycle; those transfers require no native loop poll. The native
+artifact records polling edges, and validation requires the remaining normal
+control-flow graph to be acyclic after those edges are removed. Rendering obeys
+that metadata even for physically forward transfers. Exception liveness includes
+handler edges independently. The VM retains its physical backward-branch polling
+contract and corresponding root maps.
 
 Resumable functions currently persist their complete boxed native local set. Their
 frame records a native local count and suspended source position independently of

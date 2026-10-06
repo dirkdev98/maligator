@@ -22,7 +22,7 @@ const publicationKernels = [
 		properties: [],
 		resultPrivate: true,
 		numericOnly: true,
-		closureDefinitionPrivate: true,
+		distinctClosureDefinition: true,
 	},
 	{
 		name: "numericOnlyIndexResult",
@@ -268,14 +268,25 @@ describe("native static-property root-mask publication", () => {
 				native.gc.safepoints.flatMap((safepoint) => safepoint.rootRegisters),
 			);
 			const privateRegisters = nativePrivateRootRegisters(fn, native, frameRegisters);
-			if ("closureDefinitionPrivate" in kernel) {
+			if ("distinctClosureDefinition" in kernel) {
+				const closure = fn.instructions.find((op) => op.opcode === "CREATE_FUNCTION");
+				const loadIp = fn.instructions.findIndex((op) => op.opcode === "LOAD_PROPERTY");
+				const load = fn.instructions[loadIp];
+				if (closure?.opcode !== "CREATE_FUNCTION" || load?.opcode !== "LOAD_PROPERTY")
+					throw new Error("Missing closure definition or indexed result");
+				expect(closure.dst).not.toBe(load.dst);
+				expect(privateRegisters.has(load.dst)).toBe(true);
+				const observeIp = fn.instructions.findIndex(
+					(op) => op.opcode === "CALL" && op.arguments.includes(closure.dst),
+				);
 				expect(
-					fn.instructions.some(
-						(instruction) =>
-							instruction.opcode === "CREATE_FUNCTION" &&
-							privateRegisters.has(instruction.dst),
-					),
-				).toBe(true);
+					native.gc.safepoints.find((point) => point.instructionIp === observeIp)
+						?.incomingRootRegisters,
+				).toContain(closure.dst);
+				expect(
+					native.gc.safepoints.find((point) => point.instructionIp === loadIp)
+						?.rootRegisters,
+				).not.toContain(closure.dst);
 			}
 			const boundarySafepoints = native.gc.safepoints
 				.filter(

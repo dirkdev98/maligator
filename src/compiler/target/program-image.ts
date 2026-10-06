@@ -1601,8 +1601,12 @@ export function createConservativeNativePlan(
 				),
 				directEntries: [],
 				gc: {
-					safepoints: fn.instructions.map((_, instructionIp) => ({
-						kind: "conservative" as const,
+					safepoints: fn.instructions.map((instruction, instructionIp) => ({
+						kind:
+							(instruction.opcode === "JUMP" || instruction.opcode === "JUMP_IF") &&
+							instruction.targetIp <= instructionIp
+								? ("loop-backedge" as const)
+								: ("conservative" as const),
 						instructionIp,
 						rootRegisters: Array.from(
 							{ length: fn.registerCount },
@@ -1637,6 +1641,7 @@ export function nativeFrameRootRegisters(
 ): ReadonlyArray<number> {
 	const seenIps = new Set<number>();
 	const frameRoots = new Set<number>();
+	const pollingIps = new Set<number>();
 	let previousIp = -1;
 	for (const safepoint of native.gc.safepoints) {
 		if (
@@ -1658,11 +1663,12 @@ export function nativeFrameRootRegisters(
 		previousIp = safepoint.instructionIp;
 		seenIps.add(safepoint.instructionIp);
 		const instruction = fn.instructions[safepoint.instructionIp]!;
-		const isBackedge =
-			(instruction.opcode === "JUMP" || instruction.opcode === "JUMP_IF") &&
-			instruction.targetIp <= safepoint.instructionIp;
-		if (safepoint.kind === "loop-backedge" && !isBackedge) {
-			throw new RangeError("native loop-backedge safepoint does not name a polling edge");
+		if (safepoint.kind === "loop-backedge") {
+			if (instruction.opcode !== "JUMP" && instruction.opcode !== "JUMP_IF")
+				throw new RangeError(
+					"native loop-backedge safepoint does not name a polling edge",
+				);
+			pollingIps.add(safepoint.instructionIp);
 		}
 		let previousRegister = -1;
 		for (const register of safepoint.rootRegisters) {
@@ -1715,15 +1721,36 @@ export function nativeFrameRootRegisters(
 			if (outgoing) outgoingIndex++;
 		}
 	}
-	for (const [instructionIp, instruction] of fn.instructions.entries()) {
+	const successors = fn.instructions.map((instruction, ip) => {
+		const targets: Array<number> = [];
 		if (
 			(instruction.opcode === "JUMP" || instruction.opcode === "JUMP_IF") &&
-			instruction.targetIp <= instructionIp &&
-			!seenIps.has(instructionIp)
-		) {
-			throw new RangeError("native polling edge has no GC safepoint");
+			!pollingIps.has(ip)
+		)
+			targets.push(instruction.targetIp);
+		if (
+			instruction.opcode !== "JUMP" &&
+			instruction.opcode !== "RETURN" &&
+			instruction.opcode !== "THROW" &&
+			ip + 1 < fn.instructions.length
+		)
+			targets.push(ip + 1);
+		return targets;
+	});
+	const incoming = new Uint32Array(successors.length);
+	for (const targets of successors) for (const target of targets) incoming[target]!++;
+	const pending: Array<number> = [];
+	for (let ip = 0; ip < incoming.length; ip++) if (incoming[ip] === 0) pending.push(ip);
+	let visited = 0;
+	while (pending.length > 0) {
+		const ip = pending.pop()!;
+		visited++;
+		for (const target of successors[ip]!) {
+			if (--incoming[target]! === 0) pending.push(target);
 		}
 	}
+	if (visited !== successors.length)
+		throw new RangeError("native control-flow cycle has no polling edge");
 	return [...frameRoots].sort((left, right) => left - right);
 }
 

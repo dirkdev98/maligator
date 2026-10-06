@@ -83,6 +83,7 @@ export type {
 
 export interface LowerCoreToCoreTargetOptions {
 	readonly assignStorage: CoreStorageAssigner;
+	readonly loopBackedgeInstructions?: typeof executionLoopBackedgeInstructions;
 	readonly excludeGuardedDirectCalls?: boolean;
 }
 
@@ -1468,6 +1469,7 @@ function lowerFunctionToTarget(
 	siteFacts: ReadonlyMap<string, CompilerSiteFacts>,
 	instructionSites: WeakMap<object, CompilerSiteFacts>,
 	assignStorage: CoreStorageAssigner,
+	loopBackedgeInstructions: typeof executionLoopBackedgeInstructions,
 ): CoreTargetFunction {
 	const privatePackedRestElements = new Map(
 		privatePackedRestArrayElements.map((plan) => [plan.instruction, plan]),
@@ -2152,7 +2154,7 @@ function lowerFunctionToTarget(
 	};
 	const pendingSafepoints = [
 		...pendingOperationSafepoints,
-		...[...executionLoopBackedgeInstructions(analysisFunction)].map((instruction) => ({
+		...[...loopBackedgeInstructions(analysisFunction)].map((instruction) => ({
 			kind: "loop-backedge" as const,
 			instruction,
 		})),
@@ -2551,6 +2553,7 @@ export function lowerCoreCompilationToTargetProgram(
 			compilation.context.facts.sites,
 			compilation.context.facts.instructionSites,
 			options.assignStorage,
+			options.loopBackedgeInstructions ?? executionLoopBackedgeInstructions,
 		),
 	}));
 	return Object.freeze({

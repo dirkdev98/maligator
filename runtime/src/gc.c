@@ -1749,16 +1749,28 @@ static void mal_gc_scan_fiber_exec(
             }
         } else {
             u64 scanned = 0;
-            for (i32 slot = 0; slot < slot_count; slot++) {
-                if (mal_gc_root_frame_slot_is_inactive(frame, slot)) {
-                    /* A dead physical register can be reused at a later safepoint;
-                     * clearing it prevents reactivation from tracing a pointer freed
-                     * while this slot was inactive. */
-                    frame->slots[slot] = MAL_VALUE_UNDEFINED;
-                    continue;
+            /* Clear on every scan: loops can rewrite inactive slots before a later mask reactivates them. */
+            for (i32 base = 0; base < slot_count;) {
+                i32 count = slot_count - base < 64 ? slot_count - base : 64;
+                u64 covered = count == 64 ? UINT64_MAX : (UINT64_C(1) << count) - 1;
+                u64 inactive = mal_gc_root_frame_inactive_word(frame, base / 64) & covered;
+                MalValue *slots = frame->slots + base;
+                if (inactive == 0) {
+                    mal_gc_mark_values(slots, count);
+                    scanned += (u64) count;
+                } else if (inactive == covered) {
+                    for (i32 slot = 0; slot < count; slot++) slots[slot] = MAL_VALUE_UNDEFINED;
+                } else {
+                    for (i32 slot = 0; slot < count; slot++) {
+                        if ((inactive & (UINT64_C(1) << slot)) != 0) {
+                            slots[slot] = MAL_VALUE_UNDEFINED;
+                        } else {
+                            mal_gc_mark_value(slots[slot]);
+                            scanned++;
+                        }
+                    }
                 }
-                mal_gc_mark_value(frame->slots[slot]);
-                scanned++;
+                base += count;
             }
             if (g_gc != nullptr && g_gc->stats_enabled) {
                 g_gc->compiled_root_slots_scanned += scanned;

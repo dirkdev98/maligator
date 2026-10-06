@@ -9,9 +9,14 @@ import {
 	serializeCompilerArtifact,
 } from "../src/compiler/target/compiler-artifact-codec.ts";
 import { emitProgramImage } from "../src/compiler/target/emit-program-image.ts";
+import { nativeLoopBackedgeInstructions } from "../src/compiler/target/execution-liveness.ts";
 import { lowerCoreCompilationToExecutionProgram } from "../src/compiler/target/lower-execution.ts";
 import { lowerExecutionToProgramImage } from "../src/compiler/target/lower-native-program-image.ts";
 import { lowerCoreCompilationToNativeProgram } from "../src/compiler/target/lower-native.ts";
+import {
+	createConservativeNativePlan,
+	nativeFrameRootRegisters,
+} from "../src/compiler/target/program-image.ts";
 import { emitCompiledFunction } from "../src/compiler/target/render-native-c.ts";
 
 const source = `
@@ -26,6 +31,126 @@ globalThis.calculate = calculate;
 `;
 
 describe("SSA native lowering", () => {
+	it("does not poll acyclic phi-copy transfers", () => {
+		const image = compileSemanticProgramToProgramImage(
+			analyzeSourceAndRunSemanticAnalysis(
+				`globalThis.choose = (condition, left, right) => {
+					let value;
+					if (condition) value = left; else value = right;
+					globalThis.observe(value);
+					return value;
+				};`,
+				"/acyclic-phi.js",
+			),
+		);
+		const native = image.native.functions[1]!;
+		expect(
+			native.body.instructions.some(
+				(instruction, ip) => instruction.opcode === "JUMP" && instruction.targetIp <= ip,
+			),
+		).toBe(true);
+		expect(
+			native.gc.safepoints.filter((point) => point.kind === "loop-backedge"),
+		).toEqual([]);
+		for (const [ip, instruction] of image.runtime.functions[1]!.instructions.entries()) {
+			if (
+				(instruction.opcode === "JUMP" || instruction.opcode === "JUMP_IF") &&
+				instruction.targetIp <= ip
+			)
+				expect(
+					image.runtime.functions[1]!.gcSafepoints?.map((point) => point.instructionIp),
+				).toContain(ip);
+		}
+		expect(() => emitProgramImage(image, { compiled: true })).not.toThrow();
+	});
+
+	it("requires cycle polling in native artifacts", () => {
+		const image = compileSemanticProgramToProgramImage(
+			analyzeSourceAndRunSemanticAnalysis(
+				`globalThis.repeat = (value, count) => {
+					while (count-- > 0) globalThis.observe(value);
+					return value;
+				};`,
+				"/cyclic-phi.js",
+			),
+		);
+		const fn = image.native.functions[1]!;
+		const polls = fn.gc.safepoints.filter((point) => point.kind === "loop-backedge");
+		expect(polls.length).toBeGreaterThan(0);
+		expect(polls.some((point) => point.rootRegisters.length > 0)).toBe(true);
+		expect(() =>
+			nativeFrameRootRegisters(fn.body, {
+				...fn,
+				gc: {
+					safepoints: fn.gc.safepoints.filter((point) => point.kind !== "loop-backedge"),
+				},
+			}),
+		).toThrow("native control-flow cycle has no polling edge");
+		const restored = deserializeCompilerArtifact(serializeCompilerArtifact(image));
+		expect(restored.native.functions[1]!.gc).toEqual(fn.gc);
+	});
+
+	it("polls physically forward cycle edges and every handler component", () => {
+		const image = compileSemanticProgramToProgramImage(
+			analyzeSourceAndRunSemanticAnalysis("globalThis.value = 1;", "/cycle-layout.js"),
+		);
+		const core = optimizeSemanticProgramToCore(
+			analyzeSourceAndRunSemanticAnalysis("globalThis.value = 1;", "/cycle-layout.js"),
+			{},
+			(_phase, run) => run(),
+		);
+		const fn = lowerCoreCompilationToNativeProgram(core).functions[0]!;
+		const forward = { type: "jump" as const, blocks: [2] as [number] };
+		const handlerLoop = { type: "jump" as const, blocks: [4] as [number] };
+		expect(
+			nativeLoopBackedgeInstructions({
+				...fn,
+				blocks: [
+					{
+						instructions: [
+							{ type: "tryBegin", blocks: [3, 0] },
+							{ type: "jump", blocks: [2] },
+							{ type: "tryEnd" },
+						],
+					},
+					{ instructions: [forward] },
+					{ instructions: [{ type: "jump", blocks: [1] }] },
+					{
+						instructions: [
+							{ type: "catch", registers: [0] },
+							{ type: "jump", blocks: [4] },
+						],
+					},
+					{ instructions: [handlerLoop] },
+				],
+			}),
+		).toEqual(new Set([forward, handlerLoop]));
+		const body = {
+			...image.native.functions[0]!.body,
+			instructions: [
+				{ opcode: "JUMP" as const, targetIp: 2 },
+				{ opcode: "JUMP" as const, targetIp: 2 },
+				{ opcode: "JUMP" as const, targetIp: 1 },
+			],
+		};
+		const conservative = createConservativeNativePlan([body]).functions[0]!;
+		const native = {
+			...conservative,
+			gc: {
+				safepoints: conservative.gc.safepoints.map((point) => ({
+					...point,
+					kind:
+						point.instructionIp === 1
+							? ("loop-backedge" as const)
+							: ("conservative" as const),
+				})),
+			},
+		};
+		expect(() => nativeFrameRootRegisters(body, native)).not.toThrow();
+		const output = emitCompiledFunction(native, 0, "", false)?.source;
+		expect(output).toMatch(/L1:;\s+if \(mal_gc_poll\)/);
+	});
+
 	it("preserves wide root mask storage through property-region fallbacks", () => {
 		const parameters = Array.from({ length: 70 }, (_, index) => `value${index}`);
 		const source = `function wide(${parameters.join(", ")}) {

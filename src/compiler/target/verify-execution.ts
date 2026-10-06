@@ -13,6 +13,7 @@ import type {
 import {
 	executionLoopBackedgeInstructions,
 	executionSafepointRoots,
+	nativeLoopBackedgeInstructions,
 } from "./execution-liveness.ts";
 
 export interface ExecutionVerificationContext {
@@ -774,7 +775,11 @@ function verifyTemporaryRegisters(model: FunctionModel): void {
 	}
 }
 
-function verifyGcRoots(model: FunctionModel, core: CoreFunctionStore): void {
+function verifyGcRoots(
+	model: FunctionModel,
+	core: CoreFunctionStore,
+	loopBackedgeInstructions: typeof executionLoopBackedgeInstructions,
+): void {
 	const { fn, functionIndex } = model;
 	const reachable = new Set(fn.coreBlocks);
 	const expected = new Set<CoreInstructionId>();
@@ -790,7 +795,7 @@ function verifyGcRoots(model: FunctionModel, core: CoreFunctionStore): void {
 		}
 	}
 	const safepoints = new Set<CompilerInstruction>();
-	const expectedBackedges = executionLoopBackedgeInstructions(fn);
+	const expectedBackedges = loopBackedgeInstructions(fn);
 	const recordedBackedges = new Set<CompilerInstruction>();
 	const recordedOrigins = new Set<number>();
 	const covered = new Set<number>();
@@ -1032,14 +1037,20 @@ export function verifyExecutionFunctionRepresentationVariant(
 	fn: ExecutionFunction,
 	core: CoreFunctionStore,
 	functionIndex: number,
+	loopBackedgeInstructions = executionLoopBackedgeInstructions,
 ): void {
 	const model = buildFunctionModel(fn, functionIndex);
 	verifyInstructionOperands(model);
 	verifyParallelCopies(model);
-	verifyGcRoots(model, core);
+	verifyGcRoots(model, core, loopBackedgeInstructions);
 }
 
-export function verifyExecutionProgram(program: ExecutionProgram): void {
+export function verifyExecutionProgram(
+	program: ExecutionProgram,
+	loopBackedgeInstructions = "kind" in program && program.kind === "native"
+		? nativeLoopBackedgeInstructions
+		: executionLoopBackedgeInstructions,
+): void {
 	verifyProgramCardinality(program);
 	const models = program.functions.map((fn, index) => buildFunctionModel(fn, index));
 	for (const [index, model] of models.entries()) {
@@ -1053,7 +1064,7 @@ export function verifyExecutionProgram(program: ExecutionProgram): void {
 		if (coreFunction === undefined) {
 			fail("target function has no Core function identity", { functionIndex: index });
 		}
-		verifyGcRoots(model, program.core.function(coreFunction));
+		verifyGcRoots(model, program.core.function(coreFunction), loopBackedgeInstructions);
 		verifyRegions(model);
 	}
 }

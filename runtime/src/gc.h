@@ -266,11 +266,14 @@ static inline void mal_gc_root_frame_set_inactive(
     frame->inactive_slot_word_count = tail_count;
 }
 
-static inline bool mal_gc_root_frame_slot_is_inactive(const MalRootFrame *frame, i32 slot) {
-    i32 word = slot / 64;
-    u64 inactive = word == 0 ? frame->inactive_slots :
+static inline u64 mal_gc_root_frame_inactive_word(const MalRootFrame *frame, i32 word) {
+    return word == 0 ? frame->inactive_slots :
         frame->inactive_slot_words != nullptr && word <= frame->inactive_slot_word_count ?
             frame->inactive_slot_words[word - 1] : 0;
+}
+
+static inline bool mal_gc_root_frame_slot_is_inactive(const MalRootFrame *frame, i32 slot) {
+    u64 inactive = mal_gc_root_frame_inactive_word(frame, slot / 64);
     return (inactive & (UINT64_C(1) << (slot % 64))) != 0;
 }
 

@@ -1,6 +1,10 @@
 import type { CompilerInstruction } from "../shared/compiler-instruction.ts";
 import type { ExecutionProgram } from "./execution-ir.ts";
 import {
+	executionLoopBackedgeInstructions,
+	nativeLoopBackedgeInstructions,
+} from "./execution-liveness.ts";
+import {
 	ExecutionVerificationError,
 	verifyExecutionFunctionRepresentationVariant,
 	verifyExecutionProgram,
@@ -11,7 +15,11 @@ const verifiedNativeExecutionPrograms = new WeakSet<ExecutionProgram>();
 /** Verify the generic target before native image planning consumes it. */
 export function verifyNativeExecutionProgram(program: ExecutionProgram): void {
 	if (verifiedNativeExecutionPrograms.has(program)) return;
-	verifyExecutionProgram(program);
+	const loopBackedgeInstructions =
+		"kind" in program && program.kind === "native"
+			? nativeLoopBackedgeInstructions
+			: executionLoopBackedgeInstructions;
+	verifyExecutionProgram(program, loopBackedgeInstructions);
 	for (const [functionIndex, fn] of program.functions.entries()) {
 		if (fn.directEntries.length > 4) {
 			throw new ExecutionVerificationError(
@@ -65,6 +73,7 @@ export function verifyNativeExecutionProgram(program: ExecutionProgram): void {
 				},
 				program.core.function(program.functionMap.executionToCore[functionIndex]!),
 				functionIndex,
+				loopBackedgeInstructions,
 			);
 		}
 	}

@@ -220,7 +220,7 @@ export function executionSafepointRoots(
 	return roots;
 }
 
-/** Native C polls exactly on transfers whose flattened target IP is not forward. */
+/** The VM polls transfers whose flattened target IP is not forward. */
 export function executionLoopBackedgeInstructions(
 	fn: ExecutionFunction,
 ): ReadonlySet<CompilerInstruction> {
@@ -256,6 +256,44 @@ export function executionLoopBackedgeInstructions(
 				if (targetIp !== undefined && targetIp <= ip) backedges.add(instruction);
 			}
 			ip++;
+		}
+	}
+	return backedges;
+}
+
+export function nativeLoopBackedgeInstructions(
+	fn: ExecutionFunction,
+): ReadonlySet<CompilerInstruction> {
+	const edges = fn.blocks.map(({ instructions }) => {
+		if (fallsThrough(instructions))
+			throw new Error("Native Core target blocks require explicit control transfers");
+		return instructions.filter(
+			(instruction) => instruction.type === "jump" || instruction.type === "jumpIf",
+		);
+	});
+	const state = new Uint8Array(edges.length);
+	const nextEdge = new Uint32Array(edges.length);
+	const backedges = new Set<CompilerInstruction>();
+	// Copy blocks can precede their destinations logically while following them physically.
+	for (let entry = 0; entry < edges.length; entry++) {
+		if (state[entry] !== 0) continue;
+		const stack = [entry];
+		state[entry] = 1;
+		while (stack.length > 0) {
+			const block = stack[stack.length - 1]!;
+			const instruction = edges[block]![nextEdge[block]!];
+			if (instruction === undefined) {
+				state[block] = 2;
+				stack.pop();
+				continue;
+			}
+			nextEdge[block]!++;
+			const target = instruction.blocks[0];
+			if (state[target] === 1) backedges.add(instruction);
+			else if (state[target] === 0) {
+				state[target] = 1;
+				stack.push(target);
+			}
 		}
 	}
 	return backedges;

@@ -3422,6 +3422,7 @@ function emitBody(
 		profileSiteId: undefined,
 		profile: undefined,
 		gcSafepoint: false,
+		loopPoll: false,
 		incomingRootPublication: undefined,
 		eagerIncomingRootPublication: undefined,
 		onIncomingRootPublication: undefined,
@@ -3513,9 +3514,7 @@ function emitBody(
 			knownPublishedPrivateRoots = 0;
 			const branch = (target: number, branchIp: number) => {
 				const mask = inactiveRootMasks.get(branchIp);
-				if (target > branchIp) return `goto L${target};`;
-				if (gcSafepointKinds.get(branchIp) !== "loop-backedge")
-					throw new Error("Native switch backedge has no root plan");
+				if (gcSafepointKinds.get(branchIp) !== "loop-backedge") return `goto L${target};`;
 				const handler = handlerTargets[branchIp];
 				const onThrow =
 					handler !== undefined
@@ -3807,6 +3806,7 @@ function emitBody(
 		instructionContext.profileSiteId = fn.profileSiteIds?.[ip];
 		instructionContext.profile = instructionProfile;
 		instructionContext.gcSafepoint = safepointKind !== undefined;
+		instructionContext.loopPoll = safepointKind === "loop-backedge";
 		instructionContext.incomingRootPublication =
 			deferredPropertyRoots ||
 			deferredIndexedPropertyRoots ||
@@ -4251,6 +4251,7 @@ interface NativeInstructionContext {
 	readonly profile?: NativeInstructionProfile;
 	readonly nativePlan?: NativeInstructionPlan;
 	readonly gcSafepoint: boolean;
+	readonly loopPoll: boolean;
 	readonly incomingRootPublication?: ReadonlyArray<string>;
 	readonly eagerIncomingRootPublication?: boolean;
 	readonly onIncomingRootPublication?: () => void;
@@ -4439,6 +4440,7 @@ function emitInstruction(
 		nativePlan,
 		resources,
 		gcSafepoint: context.gcSafepoint,
+		loopPoll: context.loopPoll,
 		incomingRootPublication: context.incomingRootPublication,
 		eagerIncomingRootPublication: context.eagerIncomingRootPublication,
 		onIncomingRootPublication: context.onIncomingRootPublication,
@@ -9530,17 +9532,12 @@ function emitInstruction(
 			];
 		}
 		case "JUMP":
-			if (instruction.targetIp === ip + 1) return [];
-			// A back-edge (target <= current ip) is a loop edge: poll there so an
-			// allocation-free loop is still interruptible for collection.
-			return instruction.targetIp <= ip
-				? [poll, `goto L${instruction.targetIp};`]
-				: [`goto L${instruction.targetIp};`];
+			return [
+				...(context.loopPoll ? [poll] : []),
+				...(instruction.targetIp === ip + 1 ? [] : [`goto L${instruction.targetIp};`]),
+			];
 		case "JUMP_IF":
-			// Branch on a raw bool / native truthiness test — no boxing when the
-			// condition is already a boolean-rep (typically a comparison result).
-			// Poll on a taken back-edge only.
-			return instruction.targetIp <= ip
+			return context.loopPoll
 				? [`if (${truthy(instruction.cond)}) { ${poll} goto L${instruction.targetIp}; }`]
 				: [`if (${truthy(instruction.cond)}) goto L${instruction.targetIp};`];
 		case "RETURN": {

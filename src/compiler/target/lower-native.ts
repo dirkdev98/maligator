@@ -1,6 +1,7 @@
 import type { CoreCompilation } from "../core/core-compilation.ts";
 import type { CoreBlockId, CoreRepresentation, CoreValueId } from "../core/core-ir.ts";
 import type { CoreFunctionStore } from "../core/core-store.ts";
+import { nativeLoopBackedgeInstructions } from "./execution-liveness.ts";
 import { lowerCoreCompilationToTargetProgram } from "./lower-core-target.ts";
 import type { CoreStorageAssignment } from "./lower-core-target.ts";
 import type { NativeProgram } from "./native-ir.ts";
@@ -57,6 +58,7 @@ export function lowerCoreCompilationToNativeProgram(
 	const target = lowerCoreCompilationToTargetProgram(compilation, {
 		...options,
 		assignStorage: nativeValueStorage,
+		loopBackedgeInstructions: nativeLoopBackedgeInstructions,
 	});
 	const functions = target.functions.map((fn) => {
 		if (fn.storageValues === undefined)
