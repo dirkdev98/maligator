@@ -1830,9 +1830,15 @@ describe("primitive operation results", () => {
 		const payload = Buffer.from(writer.finish());
 		const offset = bytes.indexOf(payload);
 		expect(offset).toBeGreaterThanOrEqual(0);
-		expect(bytes.indexOf(payload, offset + payload.length)).toBe(-1);
-		bytes[offset + payload.length - 1] = 255;
-		expect(() => deserializeCompilerArtifact(bytes)).toThrow(/invalid builtin error/);
+		for (
+			let current = offset;
+			current >= 0;
+			current = bytes.indexOf(payload, current + payload.length)
+		) {
+			const invalid = Buffer.from(bytes);
+			invalid[current + payload.length - 1] = 255;
+			expect(() => deserializeCompilerArtifact(invalid)).toThrow(/invalid builtin error/);
+		}
 	});
 	it.each([
 		"new Math.abs({value:x()})",

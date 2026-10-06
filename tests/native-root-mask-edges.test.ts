@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { lowerNativeFunctionStorage } from "../src/compiler/target/lower-native-storage.ts";
 import { createConservativeNativePlan } from "../src/compiler/target/program-image.ts";
 import { emitCompiledFunction } from "../src/compiler/target/render-native-c.ts";
 import type { BytecodeFunction } from "../src/compiler/target/runtime-image.ts";
@@ -35,7 +36,7 @@ describe("native binary root-mask edges", () => {
 		const native = createConservativeNativePlan([fn]).functions[0]!;
 		const output = emitCompiledFunction(
 			fn,
-			{
+			lowerNativeFunctionStorage({
 				...native,
 				gc: {
 					safepoints: [
@@ -55,7 +56,7 @@ describe("native binary root-mask edges", () => {
 						},
 					],
 				},
-			},
+			}),
 			0,
 			"",
 			false,

@@ -219,7 +219,7 @@ describe("connected native entry contracts", () => {
 				image.native.functions[visitor]!.instructions[call.instructionIp],
 			).not.toHaveProperty("directEntryId");
 			const instruction =
-				image.runtime.functions[visitor]!.instructions[call.instructionIp]!;
+				image.native.functions[visitor]!.body.instructions[call.instructionIp]!;
 			expect(instruction.opcode).toBe("CALL");
 			if (instruction.opcode === "CALL")
 				expect(entry.registerRepresentations[instruction.dst]).toBe("boxed");
@@ -287,8 +287,7 @@ describe("connected native entry contracts", () => {
 				expect(emitted.directEntries[0]!.source).toContain(
 					`mal_direct_${call.functionIndex}_${call.entryId}(`,
 				);
-				const instruction =
-					image.runtime.functions[index]!.instructions[call.instructionIp]!;
+				const instruction = native.body.instructions[call.instructionIp]!;
 				expect(instruction.opcode).toBe("CALL");
 				if (instruction.opcode === "CALL")
 					expect(native.directEntries[0]!.registerRepresentations[instruction.dst]).toBe(

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { lowerNativeFunctionStorage } from "../src/compiler/target/lower-native-storage.ts";
 import { createConservativeNativePlan } from "../src/compiler/target/program-image.ts";
 import { emitCompiledFunction } from "../src/compiler/target/render-native-c.ts";
 import type {
@@ -53,7 +54,7 @@ describe("native root-mask state after pure operators", () => {
 		} as const;
 		const output = emitCompiledFunction(
 			fn,
-			{
+			lowerNativeFunctionStorage({
 				...native,
 				registerRepresentations: [
 					"boxed",
@@ -76,7 +77,7 @@ describe("native root-mask state after pure operators", () => {
 						{ ...callPoint, instructionIp: 2 },
 					],
 				},
-			},
+			}),
 			0,
 			"",
 			false,

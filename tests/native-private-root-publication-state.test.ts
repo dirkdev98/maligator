@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { lowerNativeFunctionStorage } from "../src/compiler/target/lower-native-storage.ts";
 import { createConservativeNativePlan } from "../src/compiler/target/program-image.ts";
 import type {
 	NativeFunctionPlan,
@@ -95,14 +96,14 @@ function emit(
 	const native = createConservativeNativePlan([fn]).functions[0]!;
 	return emitCompiledFunction(
 		fn,
-		{
+		lowerNativeFunctionStorage({
 			...native,
 			instructions: instructions.map((_, ip) => options.nativeInstructions?.get(ip)),
 			registerRepresentations: Array.from({ length: fn.registerCount }, (_, register) =>
 				fn.registerCount === 6 && register === 5 ? "boolean" : "boxed",
 			),
 			gc: { safepoints },
-		},
+		}),
 		0,
 		"",
 		false,

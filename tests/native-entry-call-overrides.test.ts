@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { lowerNativeFunctionStorage } from "../src/compiler/target/lower-native-storage.ts";
 import { createConservativeNativePlan } from "../src/compiler/target/program-image.ts";
 import type {
 	NativeDirectEntryPlan,
@@ -99,7 +100,7 @@ function emit(available = true, guarded = false) {
 	};
 	const emitted = emitCompiledFunction(
 		fn,
-		native,
+		lowerNativeFunctionStorage(native),
 		0,
 		"",
 		false,

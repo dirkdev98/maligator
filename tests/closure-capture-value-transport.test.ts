@@ -5,9 +5,11 @@ import {
 	deserializeCompilerArtifact,
 	serializeCompilerArtifact,
 } from "../src/compiler/target/compiler-artifact-codec.ts";
+import { emitProgramImage } from "../src/compiler/target/emit-program-image.ts";
 import {
 	deserializeRuntimeImage,
 	readRuntimeImage,
+	readRuntimeFunction,
 	serializeRuntimeImage,
 	Writer,
 } from "../src/compiler/target/program-image-codec.ts";
@@ -85,6 +87,8 @@ function replaceFirstCaptureValues(bytes: Uint8Array, record: Uint8Array): Uint8
 		COMPILER_ARTIFACT_MAGIC,
 		COMPILER_ARTIFACT_VERSION,
 	);
+	const bodyCount = reader.count(1);
+	for (let index = 0; index < bodyCount; index++) readRuntimeFunction(reader);
 	expect(reader.u32()).toBe(0);
 	expect(reader.u32()).toBe(2);
 	expect(reader.u8()).toBe(1);
@@ -147,6 +151,27 @@ const invalidLayouts: Array<[string, Array<ClosureCaptureValue>]> = [
 ];
 
 describe("immutable closure capture artifact transport", () => {
+	it.each(["closureCaptureOwners", "closureCaptureValues"] as const)(
+		"rejects mismatched native and VM %s before caching or emitting C",
+		(key) => {
+			const image = captureImage();
+			const native = image.native.functions[0]!;
+			const invalid = {
+				...image,
+				native: {
+					...image.native,
+					functions: [
+						{ ...native, body: { ...native.body, [key]: undefined } },
+						...image.native.functions.slice(1),
+					],
+				},
+			};
+			expect(() => serializeCompilerArtifact(invalid)).toThrow(/closure capture .* ABI/);
+			expect(() => emitProgramImage(invalid, { compiled: true })).toThrow(
+				/closure capture .* ABI/,
+			);
+		},
+	);
 	it("round-trips shared descriptors while portable bytecode retains lexical lookup", () => {
 		const image = captureImage();
 		const bytes = serializeCompilerArtifact(image);

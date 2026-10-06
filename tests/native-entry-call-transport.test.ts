@@ -5,7 +5,10 @@ import {
 	deserializeCompilerArtifact,
 	serializeCompilerArtifact,
 } from "../src/compiler/target/compiler-artifact-codec.ts";
-import { readRuntimeImage } from "../src/compiler/target/program-image-codec.ts";
+import {
+	readRuntimeImage,
+	readRuntimeFunction,
+} from "../src/compiler/target/program-image-codec.ts";
 import type { NativeDirectEntryPlan } from "../src/compiler/target/program-image.ts";
 import type { BytecodeFunction } from "../src/compiler/target/runtime-image.ts";
 import { mergeProgramImages } from "../src/test262/program-image-merge.ts";
@@ -111,10 +114,14 @@ function firstOverrideOffset(bytes: Uint8Array): number {
 		COMPILER_ARTIFACT_MAGIC,
 		COMPILER_ARTIFACT_VERSION,
 	);
+	const bodyCount = reader.count(1);
+	for (let index = 0; index < bodyCount; index++) readRuntimeFunction(reader);
 	expect(reader.u32()).toBe(0); // Semantic protectors.
 	expect(reader.u32()).toBe(2); // Functions.
 	expect(reader.u8()).toBe(0); // Unknown closure layout.
 	expect(reader.u8()).toBe(0); // No immutable value captures.
+	reader.i32Array();
+	for (let index = 0; index < 5; index++) reader.i32Array();
 	const safepointCount = reader.u32();
 	for (let index = 0; index < safepointCount; index++) {
 		reader.u8();
@@ -129,6 +136,7 @@ function firstOverrideOffset(bytes: Uint8Array): number {
 	expect(reader.u32()).toBe(0); // Field calls.
 	expect(reader.u8()).toBe(0); // Canonical body retained.
 	expect(reader.u32()).toBe(1); // Direct entries.
+	for (let index = 0; index < 5; index++) reader.i32Array();
 	expect(reader.u32()).toBe(0); // Entry identity.
 	reader.u8(); // Result representation.
 	expect(reader.u32()).toBe(1); // Parameter count.

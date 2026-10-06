@@ -626,6 +626,20 @@ export function serializeCompilerArtifact(
 	image: ProgramImage,
 	options: { debugInfo?: boolean } = {},
 ): Uint8Array {
+	for (const [index, fn] of image.runtime.functions.entries()) {
+		if (fn.closureCaptureOwners !== undefined)
+			validateClosureCaptureOwners(
+				fn.closureCaptureOwners,
+				index,
+				image.runtime.functions.length,
+			);
+		if (fn.closureCaptureValues !== undefined)
+			validateClosureCaptureValues(
+				fn.closureCaptureValues,
+				index,
+				image.runtime.functions,
+			);
+	}
 	const writer = new Writer();
 	writeRuntimeImage(
 		writer,

@@ -43,6 +43,7 @@ describe("compileEntrypoint build policy", () => {
 			"construct core ir",
 			"optimize core ir",
 			"core to execution",
+			"core to native",
 			"execution to image",
 		]);
 	});

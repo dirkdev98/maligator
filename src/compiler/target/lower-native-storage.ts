@@ -204,6 +204,7 @@ function lowerStorage(
 	for (const [start, first] of fn.instructions.entries()) {
 		if (first.opcode !== "LOAD_PROPERTY_STATIC") continue;
 		const aliases = new Set([first.dst]);
+		let loadCount = 1;
 		for (let ip = start + 1; ip < Math.min(start + 20, fn.instructions.length); ip++) {
 			const op = fn.instructions[ip]!;
 			if (op.opcode === "JUMP" && op.targetIp === ip + 1) continue;
@@ -213,6 +214,7 @@ function lowerStorage(
 				(op.opcode === "MOVE" && aliases.has(op.src))
 			) {
 				aliases.add(op.dst);
+				if (op.opcode === "LOAD_PROPERTY_STATIC") loadCount++;
 				continue;
 			}
 			if (
@@ -223,7 +225,7 @@ function lowerStorage(
 				(aliases.has(op.left) || aliases.has(op.right))
 			) {
 				aliases.add(op.dst);
-				for (const local of aliases) privateLocals.delete(local);
+				if (loadCount >= 2) for (const local of aliases) privateLocals.delete(local);
 				continue;
 			}
 			if (

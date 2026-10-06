@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { lowerNativeFunctionStorage } from "../src/compiler/target/lower-native-storage.ts";
 import { createConservativeNativePlan } from "../src/compiler/target/program-image.ts";
 import { emitCompiledFunction } from "../src/compiler/target/render-native-c.ts";
 import type {
@@ -39,7 +40,7 @@ function emit(
 	const native = createConservativeNativePlan([fn]).functions[0]!;
 	const emitted = emitCompiledFunction(
 		fn,
-		{
+		lowerNativeFunctionStorage({
 			...native,
 			directEntries:
 				fn.isGenerator || fn.isAsync
@@ -53,7 +54,7 @@ function emit(
 								gc: native.gc,
 							},
 						],
-		},
+		}),
 		0,
 		"",
 		false,

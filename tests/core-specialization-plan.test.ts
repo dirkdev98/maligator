@@ -404,7 +404,7 @@ function admissionIntervalProgram(interiorCall: boolean) {
 
 describe("late Core specialization plan", () => {
 	it("keeps rich recipe projections out of production target lowering", () => {
-		const source = readFileSync("src/compiler/target/lower-execution.ts", "utf8");
+		const source = readFileSync("src/compiler/target/lower-core-target.ts", "utf8");
 
 		expect(source).not.toMatch(/CorePlanSpecialization|projectCoreSpecialization/u);
 		expect(source).not.toMatch(

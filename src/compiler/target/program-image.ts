@@ -1036,6 +1036,28 @@ export function validateNativeBodyAbis(
 	if (runtime.length !== bodies.length) throw new RangeError("Invalid native body table");
 	for (const [index, body] of bodies.entries()) {
 		const vm = runtime[index]!;
+		if (
+			(vm.closureCaptureOwners === undefined) !==
+				(body.closureCaptureOwners === undefined) ||
+			vm.closureCaptureOwners?.length !== body.closureCaptureOwners?.length ||
+			vm.closureCaptureOwners?.some(
+				(owner, index) => owner !== body.closureCaptureOwners?.[index],
+			)
+		)
+			throw new RangeError("Native body has invalid closure capture owners ABI");
+		if (
+			(vm.closureCaptureValues === undefined) !==
+				(body.closureCaptureValues === undefined) ||
+			vm.closureCaptureValues?.length !== body.closureCaptureValues?.length ||
+			vm.closureCaptureValues?.some((value, index) => {
+				const other = body.closureCaptureValues?.[index];
+				return (
+					value.ownerFunctionIndex !== other?.ownerFunctionIndex ||
+					value.capturedIndex !== other?.capturedIndex
+				);
+			})
+		)
+			throw new RangeError("Native body has invalid closure capture values ABI");
 		if (countPropertyIcSites(vm.instructions) !== countPropertyIcSites(body.instructions))
 			throw new RangeError("Native body has incompatible property caches");
 		for (const key of [
