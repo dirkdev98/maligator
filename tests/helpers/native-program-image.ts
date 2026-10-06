@@ -2,6 +2,7 @@ import { analyzeClosureCaptureValues } from "../../src/compiler/target/analyze-c
 import { analyzeClosureCaptures } from "../../src/compiler/target/analyze-closure-captures.ts";
 import { compactCaptureStorage } from "../../src/compiler/target/compact-capture-storage.ts";
 import type { ExecutionProgram } from "../../src/compiler/target/execution-ir.ts";
+import { lowerNativeStorage } from "../../src/compiler/target/lower-native-storage.ts";
 import { lowerVerifiedExecutionToProgramImage } from "../../src/compiler/target/program-image.ts";
 import { verifyNativeExecutionProgram } from "../../src/compiler/target/verify-native-execution.ts";
 
@@ -11,14 +12,16 @@ export function lowerExecutionFixtureToProgramImage(
 	profile = false,
 ) {
 	verifyNativeExecutionProgram(program);
-	return analyzeClosureCaptures(
-		compactCaptureStorage(
-			analyzeClosureCaptureValues(
-				lowerVerifiedExecutionToProgramImage(program, program, profile),
-				program,
+	return lowerNativeStorage(
+		analyzeClosureCaptures(
+			compactCaptureStorage(
+				analyzeClosureCaptureValues(
+					lowerVerifiedExecutionToProgramImage(program, program, profile),
+					program,
+				),
+				program.context,
 			),
 			program.context,
 		),
-		program.context,
 	);
 }

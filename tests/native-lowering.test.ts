@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
 import { optimizeSemanticProgramToCore } from "../src/compiler/pipeline/compile-core-common.ts";
+import { compileSemanticProgramToProgramImage } from "../src/compiler/pipeline/compile-core.ts";
 import {
 	deserializeCompilerArtifact,
 	serializeCompilerArtifact,
@@ -22,6 +23,75 @@ globalThis.calculate = calculate;
 `;
 
 describe("SSA native lowering", () => {
+	const scalarImage = (body: string, profile = false) =>
+		compileSemanticProgramToProgramImage(
+			analyzeSourceAndRunSemanticAnalysis(
+				`globalThis.scalar = (left, right, one) => {
+					const a = +left;
+					const b = +right;
+					const subtract = +one;
+					${body}
+				};`,
+				"/native-expression.js",
+			),
+			{ profile },
+		);
+	const multiplicationIp = (image: ReturnType<typeof scalarImage>) =>
+		image.native.functions[1]!.body.instructions.findIndex(
+			(op) => op.opcode === "BINARY" && op.operator === "*",
+		);
+
+	it("carries proven single-use scalar expressions through the artifact", () => {
+		const image = scalarImage("return a * b - subtract;");
+		const multiplication = multiplicationIp(image);
+		expect(multiplication).toBeGreaterThanOrEqual(0);
+		expect(image.native.functions[1]!.storage!.expressionIps).toContain(multiplication);
+		const restored = deserializeCompilerArtifact(serializeCompilerArtifact(image));
+		expect(restored.native.functions[1]!.storage).toEqual(
+			image.native.functions[1]!.storage,
+		);
+	});
+
+	it("retains producers around effects, repeated uses, and profiling", () => {
+		for (const body of [
+			"const product = a * b; globalThis.observe(); return product - subtract;",
+			"const product = a * b; return product + product;",
+		]) {
+			const image = scalarImage(body);
+			expect(image.native.functions[1]!.storage!.expressionIps).not.toContain(
+				multiplicationIp(image),
+			);
+		}
+		const profiled = scalarImage("return a * b - subtract;", true);
+		expect(profiled.native.functions[1]!.storage!.expressionIps).toEqual([]);
+		const restored = deserializeCompilerArtifact(serializeCompilerArtifact(profiled));
+		expect(restored.native.functions[1]!.storage!.expressionIps).toEqual([]);
+	});
+
+	it("rejects an expression choice that crosses an observable call", () => {
+		const image = scalarImage(
+			"const product = a * b; globalThis.observe(); return product - subtract;",
+		);
+		const native = image.native.functions[1]!;
+		const malformed = {
+			...image,
+			native: {
+				...image.native,
+				functions: image.native.functions.map((fn) =>
+					fn !== native
+						? fn
+						: {
+								...fn,
+								storage: { ...fn.storage!, expressionIps: [multiplicationIp(image)] },
+							},
+				),
+			},
+		};
+		expect(() => serializeCompilerArtifact(malformed)).toThrow(
+			/invalid or stale storage plan/,
+		);
+	});
+
 	it("owns value identities and a body independently of VM register coloring", () => {
 		const core = optimizeSemanticProgramToCore(
 			analyzeSourceAndRunSemanticAnalysis(source, "/native-storage.js"),

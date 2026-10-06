@@ -86,6 +86,23 @@ hot consumer needs a stronger proof. An analysis contract may land before its
 consumer with precision, invalidation, and cost tests; it is not a runtime speedup
 until the consumer admits real sites and measurements establish a benefit.
 
+## Native SSA storage
+
+The independent target boundary and current storage contract are recorded in
+[native SSA lowering](docs/decisions/native-ssa-lowering.md).
+
+- [ ] Give native control flow its own block scheduling and merge assignments;
+      retain exceptional-edge value transport without inheriting shared terminal
+      copy schedules or argument staging.
+- [ ] Persist only live suspension values in explicit per-suspension slots; keep
+      ordinary scalar computation outside the current full boxed native buffer.
+      Verify recursive async-generator resumes, throwing await resolution, eval
+      splices, and concurrent-GC ownership transitions.
+- [ ] Extend selected typed call/aggregate transport and expression regions using
+      Core proofs, with bounded code-size decisions and matched runtime evidence.
+      Move remaining emission-local selection into explicit native plans before
+      claiming the C emitter only renders selected decisions.
+
 ## World-knowledge ladder
 
 | Level             | Available knowledge                                                                   | Intended result                                                             |

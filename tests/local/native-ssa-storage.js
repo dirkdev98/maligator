@@ -1,6 +1,49 @@
 const gc = globalThis.__mal_collect_garbage ?? (() => {});
 globalThis.makeStorageValue = (value) => ({ value, padding: new Array(300).fill(value) });
 
+globalThis.scalarStorage = (left, right, one) => {
+	const a = +left;
+	const b = +right;
+	const subtract = +one;
+	return a * b - subtract;
+};
+const rounding = globalThis.scalarStorage(1 + 2 ** -27, 1 - 2 ** -27, 1);
+console.log("rounding", Object.is(rounding, 0));
+console.log("negative-zero", Object.is(globalThis.scalarStorage(-0, 2, 0), -0));
+console.log("nan", Number.isNaN(globalThis.scalarStorage(0, Infinity, 0)));
+console.log("infinity", globalThis.scalarStorage(Infinity, 2, 1));
+const coercions = [];
+const scalarInput = (value, label) => ({
+	valueOf() {
+		coercions.push(label);
+		return value;
+	},
+});
+console.log(
+	"coercions",
+	globalThis.scalarStorage(scalarInput(3, "a"), scalarInput(4, "b"), scalarInput(1, "c")),
+	coercions.join(""),
+);
+
+globalThis.shiftStorage = (values, selected) => {
+	values.pop();
+	for (let index = values.length; index > selected; index--) {
+		values[index] = values[index - 1];
+	}
+	return values.join(",");
+};
+console.log("reverse", globalThis.shiftStorage([5, 7, 11, 13], 1));
+
+globalThis.splitStorage = (value, separator) => {
+	const parts = value.split(separator);
+	let total = 0;
+	for (let index = 0; index < parts.length; index++) {
+		total += parts[index].trim().length;
+	}
+	return total;
+};
+console.log("split", globalThis.splitStorage("a |bc| def ", "|"));
+
 function* wideHolder() {
 	globalThis.makeStorageValue(1);
 	globalThis.makeStorageValue(2);

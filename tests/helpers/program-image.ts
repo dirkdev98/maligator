@@ -1,3 +1,4 @@
+import { lowerNativeFunctionStorage } from "../../src/compiler/target/lower-native-storage.ts";
 import {
 	createConservativeNativePlan,
 	vmRegionActions,
@@ -27,13 +28,12 @@ export function withNativeFunctionPlan(
 	update: (plan: NativeFunctionPlan, fn: BytecodeFunction) => NativeFunctionPlan,
 ): ProgramImage {
 	const functions = [...image.native.functions];
-	const updated = update(
-		functions[functionIndex]!,
-		image.runtime.functions[functionIndex]!,
-	);
-	functions[functionIndex] = {
-		...updated,
-		regionActions: vmRegionActions(updated.specializations),
-	};
+	const updated = update(functions[functionIndex]!, functions[functionIndex]!.body);
+	const next = { ...updated, regionActions: vmRegionActions(updated.specializations) };
+	try {
+		functions[functionIndex] = lowerNativeFunctionStorage(next);
+	} catch {
+		functions[functionIndex] = next;
+	}
 	return { ...image, native: { ...image.native, functions } };
 }

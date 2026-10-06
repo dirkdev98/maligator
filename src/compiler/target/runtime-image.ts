@@ -1433,9 +1433,34 @@ const VM_REGISTER_USE_ARRAY_FIELDS = [
 	"excluded",
 ] as const;
 
-/** Whether an instruction reads a physical register. Literal-bearing CREATE
- * instructions are excluded so equal numeric payloads cannot masquerade as a
- * register use. */
+/** Operand occurrences retain duplicates for native single-use expression planning. */
+export function vmInstructionReadRegisters(
+	instruction: BytecodeInstruction,
+): ReadonlyArray<number> {
+	if (
+		instruction.opcode === "CREATE_NUMBER" ||
+		instruction.opcode === "CREATE_F64" ||
+		instruction.opcode === "CREATE_BOOLEAN"
+	)
+		return [];
+	const row = instruction as unknown as Record<string, unknown>;
+	const registers: Array<number> = [];
+	for (const field of VM_REGISTER_USE_FIELDS) {
+		const value = row[field];
+		if (typeof value === "number" && value >= 0) registers.push(value);
+	}
+	for (const field of VM_REGISTER_USE_ARRAY_FIELDS) {
+		const values = row[field];
+		if (Array.isArray(values)) {
+			for (const value of values) {
+				if (typeof value === "number" && value >= 0) registers.push(value);
+			}
+		}
+	}
+	if (instruction.opcode === "CONSTRUCT_SUPER_EXPLICIT") registers.push(instruction.dst);
+	return registers;
+}
+
 export function vmInstructionUsesRegister(
 	instruction: BytecodeInstruction,
 	register: number,

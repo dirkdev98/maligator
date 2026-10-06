@@ -1678,6 +1678,7 @@ MalCallable *mal_vm_create_callable(MalVm *vm, i32 function_index) {
     callable->callee = mal_value_new_undefined();
     callable->generator = nullptr;
     callable->is_construct = false;
+    callable->is_compiled = false;
     callable->instruction_pointer = 0;
     callable->gc_safepoint_ip = -1;
     callable->return_register = -1;
@@ -1990,8 +1991,7 @@ bool mal_vm_push_function_frame(
     frame->generator = nullptr;
     frame->is_construct = false;
     frame->new_target = mal_value_new_undefined();
-    frame->compiled_register_count = 0;
-    frame->compiled_suspend_position = 0;
+    frame->is_compiled = false;
     frame->instruction_pointer = argument_snapshot_count;
     frame->gc_safepoint_ip = -1;
     frame->return_register = return_register;
@@ -3785,7 +3785,7 @@ MalStackTrace *mal_vm_capture_stack(MalVm *vm) {
         // The awaiter is suspended at its `await`; ip - 1 is that await's site.
         segment->frames[0] = (MalStackFrameRecord) {
             .function_index = parent->frame.function_index,
-            .pos_id = parent->frame.compiled_register_count > 0
+            .pos_id = parent->frame.is_compiled
                 ? parent->frame.compiled_suspend_position - 1
                 : mal_vm_position_for(function, parent->frame.instruction_pointer - 1),
         };

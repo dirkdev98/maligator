@@ -8363,6 +8363,7 @@ MalGeneratorObject *mal_vm_op_generator_start_compiled(
     generator->frame.registers = registers;
     generator->frame.compiled_register_count = register_count;
     generator->frame.compiled_suspend_position = 0;
+    generator->frame.is_compiled = true;
     generator->frame.arguments = owned_arguments;
     generator->frame.argument_count = generator->frame.function->needs_arguments
         ? argument_count
@@ -8377,8 +8378,6 @@ MalGeneratorObject *mal_vm_op_generator_start_compiled(
     generator->frame.new_target = mal_value_new_undefined();
     generator->frame.instruction_pointer = resume_ip;
     generator->frame.gc_safepoint_ip = -1;
-    generator->frame.return_register = -1;
-    generator->frame.caller_frame_index = -1;
 #if MAL_REALMS
     generator->frame.realm = vm->current_realm;
 #endif
@@ -8393,6 +8392,10 @@ MalGeneratorObject *mal_vm_op_generator_start_compiled(
 void mal_vm_op_yield_compiled(
     MalVm *vm, MalGeneratorObject *generator, MalValue yielded, i32 value_dst,
     i32 mode_dst, i32 resume_ip, i32 suspend_position, MalEnv *env) {
+    // The caller unlinks its buffer roots before a helper can resume that same buffer.
+    MalValue roots[] = {mal_value_from_object((MalObject *) generator), yielded};
+    MalRootSpan root_span;
+    mal_gc_root(&root_span, roots, 2);
     // SATB: yielded_value + frame.env are traced heap fields being overwritten;
     // shade the previous contents (the register buffer is mutated in place, so its
     // slots are root state until suspend and need no shade here).
@@ -8418,6 +8421,7 @@ void mal_vm_op_yield_compiled(
     if (generator->is_async_generator) {
         mal_async_generator_yield(vm, generator);
     }
+    mal_gc_unroot(&root_span);
 }
 
 void mal_vm_op_terminal_yield_compiled(
@@ -8431,10 +8435,15 @@ void mal_vm_op_terminal_yield_compiled(
 }
 
 void mal_vm_op_coroutine_return_compiled(MalVm *vm, MalGeneratorObject *generator, MalValue value) {
+    MalValue roots[] = {mal_value_from_object((MalObject *) generator), value};
+    MalRootSpan root_span;
+    mal_gc_root(&root_span, roots, 2);
     // COMPLETED before freeing: the finalizer frees the buffers only while
     // suspended, so marking first keeps a swept-after-completion object from
     // double-freeing (matching the interpreter's RETURN + finalizer contract).
     generator->state = MAL_GENERATOR_COMPLETED;
+    // Shade and release before settlement can collect after the activation leaves the graph.
+    mal_generator_release_frame(vm, generator);
 
     if (generator->is_async_generator) {
         // Completing the async generator settles the front request { value, done: true }.
@@ -8447,12 +8456,7 @@ void mal_vm_op_coroutine_return_compiled(MalVm *vm, MalGeneratorObject *generato
         vm->completion = (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = value};
     }
 
-    // Release after routing: settle_* re-enters the VM (mal_vm_call_value), and the
-    // compiled frame's root frame is still linked over this buffer until the caller
-    // unlinks it, so recycling first could expose cleared/reused storage there.
-    // SATB: the frame just went COMPLETED (tracer now skips it) and its buffer is
-    // released here, so shade the activation's live edges before they leave the graph.
-    mal_generator_release_frame(vm, generator);
+    mal_gc_unroot(&root_span);
 }
 
 void mal_vm_op_coroutine_throw_compiled(MalVm *vm, MalGeneratorObject *generator, MalValue *registers) {
@@ -8470,7 +8474,11 @@ void mal_vm_op_coroutine_throw_compiled(MalVm *vm, MalGeneratorObject *generator
     // must not run the reject reaction with a pending THROW (it would swallow it).
     // This mirrors the interpreter's async-uncaught-throw handler (vm.c).
     MalValue reason = vm->completion.value;
+    MalValue roots[] = {mal_value_from_object((MalObject *) generator), reason};
+    MalRootSpan root_span;
+    mal_gc_root(&root_span, roots, 2);
     generator->state = MAL_GENERATOR_COMPLETED;
+    mal_generator_release_frame(vm, generator);
 
     if (generator->is_async_generator) {
         // Reject the front request with the pending exception and settle the agen.
@@ -8485,10 +8493,7 @@ void mal_vm_op_coroutine_throw_compiled(MalVm *vm, MalGeneratorObject *generator
     // Plain generator: leave vm->completion == THROW(reason) for the .next() caller
     // to re-raise.
 
-    // Free after routing (see mal_vm_op_coroutine_return_compiled) — the root frame
-    // is still linked over this buffer during the settle above.
-    // SATB: shade the completed activation's edges before its buffer leaves the graph.
-    mal_generator_release_frame(vm, generator);
+    mal_gc_unroot(&root_span);
 }
 
 MalGeneratorObject *mal_vm_op_async_start_compiled(
@@ -8521,6 +8526,7 @@ MalGeneratorObject *mal_vm_op_async_start_compiled(
     state->frame.registers = registers;
     state->frame.compiled_register_count = register_count;
     state->frame.compiled_suspend_position = 0;
+    state->frame.is_compiled = true;
     state->frame.arguments = owned_arguments;
     state->frame.argument_count = state->frame.function->needs_arguments
         ? argument_count
@@ -8535,8 +8541,6 @@ MalGeneratorObject *mal_vm_op_async_start_compiled(
     state->frame.new_target = mal_value_new_undefined();
     state->frame.instruction_pointer = -1; // set at each await
     state->frame.gc_safepoint_ip = -1;
-    state->frame.return_register = -1;
-    state->frame.caller_frame_index = -1;
 #if MAL_REALMS
     state->frame.realm = vm->current_realm;
 #endif
@@ -8551,6 +8555,9 @@ MalGeneratorObject *mal_vm_op_async_start_compiled(
 void mal_vm_op_await_compiled(
     MalVm *vm, MalGeneratorObject *state, MalValue awaited, i32 value_dst, i32 mode_dst,
     i32 resume_ip, i32 suspend_position, MalEnv *env) {
+    MalValue roots[] = {mal_value_from_object((MalObject *) state), awaited};
+    MalRootSpan root_span;
+    mal_gc_root(&root_span, roots, 2);
     state->resume_value_register = value_dst;
     state->resume_mode_register = mode_dst;
     state->state = MAL_GENERATOR_SUSPENDED_YIELD;
@@ -8567,6 +8574,7 @@ void mal_vm_op_await_compiled(
     // resumes this state. (If PromiseResolve throws, this resumes synchronously with
     // a throw — a nested resume of the same compiled function, which then returns.)
     mal_async_function_await(vm, state, awaited);
+    mal_gc_unroot(&root_span);
 }
 
 MalCompletion mal_builtin_sort_numeric(

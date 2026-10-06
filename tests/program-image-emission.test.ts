@@ -1360,7 +1360,7 @@ describe("emit-program-image instruction packing", () => {
 	it("reports exact typed calls without inventing a callee identity guard", () => {
 		const image = nativeEntryBudgetImage();
 		const caller = { ...image.runtime.functions[0]!, profileSiteIds: [-1, -1, 0, -1] };
-		const plan = image.native.functions[0]!;
+		const plan = { ...image.native.functions[0]!, body: caller };
 		const entry = image.native.functions[1]!.directEntries[0]!;
 		const compiled = emitCompiledFunction(
 			caller,
@@ -3016,8 +3016,8 @@ describe("native update-expression representation", () => {
 				),
 		);
 		expect(ownerIndex).toBeGreaterThanOrEqual(0);
-		const fn = definition.runtime.functions[ownerIndex]!;
 		const owner = definition.native.functions[ownerIndex]!;
+		const fn = owner.body;
 		const storeIp = fn.instructions.findIndex(
 			(instruction) => instruction.opcode === "STORE_PROPERTY_STATIC",
 		);
@@ -3071,7 +3071,7 @@ describe("native update-expression representation", () => {
 			fn.specializations.some((region) => region.kind === "array-values-iterator-cursor"),
 		);
 		const owner = definition.native.functions[ownerIndex]!;
-		const fn = definition.runtime.functions[ownerIndex]!;
+		const fn = owner.body;
 		const cursor = owner.specializations.find(
 			(region) => region.kind === "array-values-iterator-cursor",
 		);
@@ -3317,7 +3317,7 @@ describe("native update-expression representation", () => {
 		const output = emit(
 			`"use strict"; function sum(count) { let total = 0; for (let index = 0; index < count; index++) total += (index & 31) - 16; return total; } globalThis.sum = sum;`,
 		);
-		expect(output).toMatch(/r\d+ -= r\d+;/);
+		expect(output).not.toContain("mal_vm_binary_op(vm, MAL_BIN_SUB");
 		expect(output).not.toMatch(/r\d+ = mal_ops_number_value\([^;]* - [^;]*\);/);
 	});
 
@@ -3335,7 +3335,7 @@ describe("native update-expression representation", () => {
 		);
 		expect(output).not.toContain("MAL_UNARY_TO_NUMERIC");
 		expect(output).not.toContain("MAL_UNARY_INCREMENT");
-		expect(output).toMatch(/r\d+ \+= 1\.0;/);
+		expect(output).toMatch(/r\d+ = [^;]+ \+ 1\.0;/);
 	});
 
 	it("takes a dense own-element fast path for the in operator", () => {
@@ -3355,7 +3355,7 @@ describe("native update-expression representation", () => {
 		expect(output).toMatch(boxedNativeDefinition(1, "static"));
 		expect(output).not.toContain("mal_vm_op_throw_if_tdz");
 		expect(output).not.toContain("mal_vm_binary_op(vm, MAL_BIN_ADD");
-		expect(output).toMatch(/r\d+ \+= r\d+;/);
+		expect(output).toMatch(/r\d+ = [^;]+ \+ [^;]+;/);
 	});
 
 	it("does not synthesize watched epochs for ordinary resumable property loads", () => {
@@ -4123,19 +4123,22 @@ describe("native update-expression representation", () => {
 		const ownerIndex = locked.native.functions.findIndex((fn) =>
 			fn.specializations.includes(lockedProjection.region),
 		);
-		const owner = locked.runtime.functions[ownerIndex]!;
+		const owner = locked.native.functions[ownerIndex]!.body;
 		const charCall = owner.instructions[charConsumer.callIp];
 		if (charCall?.opcode !== "CALL") throw new Error("missing projected char call");
 		const invalidZero: ProgramImage = {
 			...locked,
-			runtime: {
-				...locked.runtime,
-				functions: locked.runtime.functions.with(ownerIndex, {
-					...owner,
-					instructions: owner.instructions.with(charConsumer.callIp, {
-						...charCall,
-						arguments: [-4],
-					}),
+			native: {
+				...locked.native,
+				functions: locked.native.functions.with(ownerIndex, {
+					...locked.native.functions[ownerIndex]!,
+					body: {
+						...owner,
+						instructions: owner.instructions.with(charConsumer.callIp, {
+							...charCall,
+							arguments: [-4],
+						}),
+					},
 				}),
 			},
 		};
@@ -4160,14 +4163,17 @@ describe("native update-expression representation", () => {
 		}
 		const invalidCaseChain: ProgramImage = {
 			...locked,
-			runtime: {
-				...locked.runtime,
-				functions: locked.runtime.functions.with(ownerIndex, {
-					...owner,
-					instructions: owner.instructions.with(asciiConsumer.lowerPropertyIp, {
-						...lowerProperty,
-						stringIndex: upperProperty.stringIndex,
-					}),
+			native: {
+				...locked.native,
+				functions: locked.native.functions.with(ownerIndex, {
+					...locked.native.functions[ownerIndex]!,
+					body: {
+						...owner,
+						instructions: owner.instructions.with(asciiConsumer.lowerPropertyIp, {
+							...lowerProperty,
+							stringIndex: upperProperty.stringIndex,
+						}),
+					},
 				}),
 			},
 		};
@@ -4410,7 +4416,7 @@ describe("native update-expression representation", () => {
 			fn.specializations.some((region) => region.kind === "string-split-cursor"),
 		);
 		const owner = lowered.native.functions[functionIndex]!;
-		const bytecode = lowered.runtime.functions[functionIndex]!;
+		const bytecode = owner.body;
 		const cursor = owner.specializations.find(
 			(region) => region.kind === "string-split-cursor",
 		)!;
@@ -4997,7 +5003,7 @@ describe("native static typeof facts", () => {
 		// Both operators have fixed primitive result kinds on normal completion; their
 		// coercion and throwing effects remain in the preceding operations.
 		expect(output).not.toContain("mal_vm_typeof_compare");
-		expect(output).toContain("= true;");
+		expect(output).toMatch(/(?:= true;|#define r\d+ \(true\))/);
 		expect(output).not.toContain("MAL_TYPEOF_BOOLEAN");
 	});
 

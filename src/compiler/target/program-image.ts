@@ -27,6 +27,8 @@ import type {
 	ExecutionSafepointRoots,
 } from "./execution-ir.ts";
 import { collectCompilerFactFlowReport } from "./fact-flow-report.ts";
+import { lowerNativeFunctionStorage } from "./lower-native-storage.ts";
+import type { NativeStoragePlan } from "./lower-native-storage.ts";
 import { buildProfileMetadata } from "./profile-metadata.ts";
 import type { CompilerRemark, ProfileSite } from "./profile-metadata.ts";
 import { remapRuntimeFunctionConstants } from "./runtime-image.ts";
@@ -327,6 +329,8 @@ export type VmStringSplitCursorRegion = VmRegionEnvelope<
 	readonly separator: number;
 	readonly resultRegisters: ReadonlyArray<number>;
 	readonly index: number;
+	readonly incrementIp: number;
+	readonly advanceIp?: number;
 	readonly elementIp: number;
 	readonly trimPropertyIp: number;
 	readonly trimIcIndex: number;
@@ -1065,7 +1069,44 @@ export function validateNativeBodyAbis(
 	}
 }
 
+/** Edge copies may give the induction update and next header parameter distinct native locals. */
+export function nativeLoopUpdateTransportsValue(
+	fn: BytecodeFunction,
+	incrementIp: number,
+	backedgeIp: number,
+	headerIp: number,
+	index: number,
+): boolean {
+	const increment = fn.instructions[incrementIp];
+	if (
+		increment?.opcode !== "UNARY" ||
+		!["increment", "decrement"].includes(increment.operator)
+	)
+		return false;
+	const aliases = new Set([increment.dst]);
+	const visited = new Set<number>();
+	let crossedBackedge = false;
+	let ip = incrementIp + 1;
+	while (ip !== headerIp) {
+		if (visited.has(ip)) return false;
+		visited.add(ip);
+		const op = fn.instructions[ip];
+		if (ip === backedgeIp) crossedBackedge = true;
+		if (op?.opcode === "MOVE") {
+			if (aliases.has(op.src)) aliases.add(op.dst);
+			else aliases.delete(op.dst);
+			ip++;
+		} else if (op?.opcode === "THROW_IF_TDZ" && aliases.has(op.src)) {
+			// A successful increment/decrement cannot produce the uninitialized sentinel.
+			ip++;
+		} else if (op?.opcode === "JUMP") ip = op.targetIp;
+		else return false;
+	}
+	return (backedgeIp < 0 || crossedBackedge) && aliases.has(index);
+}
+
 export interface NativeFunctionPlan {
+	readonly storage?: NativeStoragePlan;
 	readonly body: BytecodeFunction;
 	readonly storageValues?: ReadonlyArray<number>;
 	readonly specializedOnly?: true;
@@ -1121,6 +1162,7 @@ export interface NativeFunctionPlan {
 }
 
 export interface NativeDirectEntryPlan {
+	readonly storage?: NativeStoragePlan;
 	readonly id: number;
 	readonly callOverrides?: ReadonlyArray<{
 		readonly instructionIp: number;
@@ -1498,38 +1540,40 @@ export function createConservativeNativePlan(
 ): NativePlan {
 	return {
 		semanticProtectors: [],
-		functions: functions.map((fn, functionIndex) => ({
-			body: fn,
-			functionIndex,
-			mode: fn.isGenerator || fn.isAsync ? "resumable" : "direct",
+		functions: functions.map((fn, functionIndex) =>
+			lowerNativeFunctionStorage({
+				body: fn,
+				functionIndex,
+				mode: fn.isGenerator || fn.isAsync ? "resumable" : "direct",
 
-			registerRepresentations: Array.from(
-				{ length: fn.registerCount },
-				() => "boxed" as const,
-			),
-			directEntries: [],
-			gc: {
-				safepoints: fn.instructions.map((_, instructionIp) => ({
-					kind: "conservative" as const,
-					instructionIp,
-					rootRegisters: Array.from(
-						{ length: fn.registerCount },
-						(_, register) => register,
-					),
-					incomingRootRegisters: Array.from(
-						{ length: fn.registerCount },
-						(_, register) => register,
-					),
-					outgoingRootRegisters: Array.from(
-						{ length: fn.registerCount },
-						(_, register) => register,
-					),
-				})),
-			},
-			instructions: Array.from({ length: fn.instructions.length }),
-			specializations: [],
-			regionActions: [],
-		})),
+				registerRepresentations: Array.from(
+					{ length: fn.registerCount },
+					() => "boxed" as const,
+				),
+				directEntries: [],
+				gc: {
+					safepoints: fn.instructions.map((_, instructionIp) => ({
+						kind: "conservative" as const,
+						instructionIp,
+						rootRegisters: Array.from(
+							{ length: fn.registerCount },
+							(_, register) => register,
+						),
+						incomingRootRegisters: Array.from(
+							{ length: fn.registerCount },
+							(_, register) => register,
+						),
+						outgoingRootRegisters: Array.from(
+							{ length: fn.registerCount },
+							(_, register) => register,
+						),
+					})),
+				},
+				instructions: Array.from({ length: fn.instructions.length }),
+				specializations: [],
+				regionActions: [],
+			}),
+		),
 	};
 }
 
@@ -2248,7 +2292,13 @@ function lowerExecutionFunctionToNativePlan(
 							update?.opcode !== "UNARY" ||
 							update.operator !== "decrement" ||
 							coercion.dst !== update.src ||
-							update.dst !== length) ||
+							!nativeLoopUpdateTransportsValue(
+								bytecode,
+								reverse.updateIp,
+								-1,
+								site.comparisonIp,
+								length,
+							)) ||
 					site.loadIp >= site.comparisonIp ||
 					site.elements.some(({ ip, kind, arrayIndexIsUint32, indexIp }) => {
 						const element = instructions[ip];
@@ -4230,7 +4280,13 @@ function lowerExecutionFunctionToNativePlan(
 						(loweredAdvance?.opcode === "UNARY"
 							? loweredAdvance.dst
 							: loweredCompare.left) ||
-					loweredIncrement.dst !== loweredCompare.left ||
+					!nativeLoopUpdateTransportsValue(
+						bytecode,
+						incrementIp,
+						backedgeIp!,
+						lengthIp!,
+						loweredCompare.left,
+					) ||
 					resultRegisters.length === 0 ||
 					!resultRegisters.includes(loweredCall.dst) ||
 					resultRegisters.some(
@@ -4310,6 +4366,8 @@ function lowerExecutionFunctionToNativePlan(
 					separator: loweredCall.arguments[0]!,
 					resultRegisters,
 					index: loweredCompare.left,
+					incrementIp,
+					...(advanceIp === undefined ? {} : { advanceIp }),
 					elementIp,
 					trimPropertyIp,
 					trimIcIndex,

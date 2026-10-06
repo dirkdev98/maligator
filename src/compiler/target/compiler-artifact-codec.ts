@@ -10,6 +10,8 @@ import {
 } from "../shared/compiler-value-kinds.ts";
 import type { CompilerOperatorInputKindMasks } from "../shared/compiler-value-kinds.ts";
 import { getPrimordialCatalog } from "../shared/primordial-catalog-data.ts";
+import type { NativeStoragePlan } from "./lower-native-storage.ts";
+import { validateNativeStorage } from "./lower-native-storage.ts";
 import type { Reader } from "./program-image-codec.ts";
 import {
 	readRuntimeImage,
@@ -20,6 +22,7 @@ import {
 } from "./program-image-codec.ts";
 import {
 	nativeFrameRootRegisters,
+	nativeLoopUpdateTransportsValue,
 	validateNativeBodyAbis,
 	validateNativeDirectEntry,
 	validateNativeFieldCalls,
@@ -54,7 +57,7 @@ import type {
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal artifacts are hard cut-overs: stale cache entries rebuild.
-export const COMPILER_ARTIFACT_VERSION = 98;
+export const COMPILER_ARTIFACT_VERSION = 99;
 
 function validateClosureCaptureOwners(
 	owners: ReadonlyArray<number>,
@@ -637,11 +640,35 @@ export function serializeCompilerArtifact(
 	for (const body of bodies)
 		writeRuntimeFunction(writer, body, options.debugInfo !== false);
 	writeCompilerArtifact(writer, { ...image.runtime, functions: bodies }, image);
+	for (const native of image.native.functions) validateNativeStorage(native);
 	return writer.finish();
 }
 
 // Exact phases are subsets of the sorted union, so only their excluded roots
 // need storage. The caller validates this contract before writing any phase.
+function writeNativeStorage(w: Writer, storage: NativeStoragePlan | undefined): void {
+	if (storage === undefined)
+		throw new Error("Compiler artifact requires native storage plans");
+	for (const values of [
+		storage.rootRegisters,
+		storage.privateRegisters,
+		storage.privateCallResultIps,
+		storage.entryStableRootRegisters,
+		storage.expressionIps,
+	])
+		w.i32Array([...values]);
+}
+
+function readNativeStorage(r: Reader): NativeStoragePlan {
+	return {
+		rootRegisters: r.i32Array(),
+		privateRegisters: r.i32Array(),
+		privateCallResultIps: r.i32Array(),
+		entryStableRootRegisters: r.i32Array(),
+		expressionIps: r.i32Array(),
+	};
+}
+
 function writeNativeRootExclusions(
 	w: Writer,
 	rootRegisters: ReadonlyArray<number>,
@@ -758,6 +785,7 @@ function writeCompilerArtifact(
 		}
 		nativeFrameRootRegisters(fn, native);
 		w.i32Array(native.storageValues === undefined ? [] : [...native.storageValues]);
+		writeNativeStorage(w, native.storage);
 		w.u32(native.gc.safepoints.length);
 		for (const safepoint of native.gc.safepoints) {
 			w.u8(
@@ -835,6 +863,7 @@ function writeCompilerArtifact(
 			}
 			validateNativeDirectEntry(fn, entry, compiler.native.functions);
 			nativeFrameRootRegisters(fn, entry);
+			writeNativeStorage(w, entry.storage);
 			w.u32(entry.id);
 			w.u8(representationTag(entry.resultRepresentation));
 			w.u32(entry.parameterRepresentations.length);
@@ -1282,6 +1311,8 @@ function writeCompilerArtifact(
 					w.i32(region.separator);
 					w.i32Array([...region.resultRegisters]);
 					w.i32(region.index);
+					w.i32(region.incrementIp);
+					w.i32(region.advanceIp ?? -1);
 					w.i32(region.elementIp);
 					w.i32(region.trimPropertyIp);
 					w.i32(region.trimIcIndex);
@@ -1826,7 +1857,13 @@ function validateIndexedLengthLoopRegion(
 						update?.opcode !== "UNARY" ||
 						update.operator !== "decrement" ||
 						coercion.dst !== update.src ||
-						update.dst !== length) ||
+						!nativeLoopUpdateTransportsValue(
+							fn,
+							reverseInduction.updateIp,
+							-1,
+							comparisonIp,
+							length,
+						)) ||
 				!bytecodeInstructionDominates(fn, loadIp, comparisonIp) ||
 				elements.length > 8 ||
 				elements.some(({ ip, kind, arrayIndexIsUint32, indexIp }) => {
@@ -2893,19 +2930,9 @@ function validateStringSplitCursorRegion(
 	const trimProperty = fn.instructions[region.trimPropertyIp];
 	const trimCall = fn.instructions[region.trimCallIp];
 	const trimCallPlan = nativeCallPlanAt(nativeInstructions, region.trimCallIp);
-	const increment = fn.instructions[backedgeIp - 1];
-	const possibleAdvance = fn.instructions[backedgeIp - 2];
-	const advance =
-		possibleAdvance?.opcode === "UNARY" && possibleAdvance.operator === "tonumeric"
-			? possibleAdvance
-			: undefined;
-	const advanceIp =
-		advance !== undefined &&
-		advance.src === region.index &&
-		increment?.opcode === "UNARY" &&
-		increment.src === advance.dst
-			? backedgeIp - 2
-			: undefined;
+	const increment = fn.instructions[region.incrementIp];
+	const advanceIp = region.advanceIp;
+	const advance = advanceIp === undefined ? undefined : fn.instructions[advanceIp];
 	const backedge = fn.instructions[backedgeIp];
 	const backedgeReachesHeader = (() => {
 		if (backedge?.opcode !== "JUMP") return false;
@@ -2935,7 +2962,7 @@ function validateStringSplitCursorRegion(
 		region.trimCallIp,
 		...region.primitiveStringLengthIps,
 		...(advanceIp === undefined ? [] : [advanceIp]),
-		backedgeIp - 1,
+		region.incrementIp,
 		backedgeIp,
 	];
 	const registerValid = (value: number) =>
@@ -3033,8 +3060,23 @@ function validateStringSplitCursorRegion(
 		trimCallPlan?.guardedBuiltinCall?.operation !== "String.prototype.trim" ||
 		increment?.opcode !== "UNARY" ||
 		increment.operator !== "increment" ||
-		increment.src !== (advanceIp === undefined ? region.index : advance!.dst) ||
-		increment.dst !== region.index ||
+		increment.src !==
+			(advanceIp === undefined
+				? region.index
+				: advance?.opcode === "UNARY"
+					? advance.dst
+					: -1) ||
+		(advanceIp !== undefined &&
+			(advance?.opcode !== "UNARY" ||
+				advance.operator !== "tonumeric" ||
+				advance.src !== region.index)) ||
+		!nativeLoopUpdateTransportsValue(
+			fn,
+			region.incrementIp,
+			backedgeIp,
+			lengthIp,
+			region.index,
+		) ||
 		!backedgeReachesHeader ||
 		backedgeIp <= region.trimCallIp ||
 		region.exitIp < 0 ||
@@ -3150,6 +3192,7 @@ function readCompilerArtifact(
 			fn.closureCaptureValues = values;
 		}
 		const storageValues = r.i32Array();
+		const storage = readNativeStorage(r);
 		if (storageValues.length !== 0 && storageValues.length !== fn.registerCount)
 			throw new RangeError("Invalid native SSA storage identity");
 		const safepointCount = r.count(5);
@@ -3257,6 +3300,7 @@ function readCompilerArtifact(
 			throw new Error("program-image-codec: invalid direct-entry representation tag");
 		};
 		for (let entryIndex = 0; entryIndex < directEntryCount; entryIndex++) {
+			const storage = readNativeStorage(r);
 			const id = r.u32();
 			const resultRepresentation = readRepresentation();
 			const parameterCount = r.count(1);
@@ -3362,6 +3406,7 @@ function readCompilerArtifact(
 				});
 			}
 			const entry = {
+				storage,
 				id,
 				parameterRepresentations,
 				resultRepresentation,
@@ -3836,6 +3881,8 @@ function readCompilerArtifact(
 					const separator = r.i32();
 					const resultRegisters = r.i32Array();
 					const index = r.i32();
+					const incrementIp = r.i32();
+					const advanceIp = r.i32();
 					const elementIp = r.i32();
 					const trimPropertyIp = r.i32();
 					const trimIcIndex = r.i32();
@@ -3891,6 +3938,8 @@ function readCompilerArtifact(
 						separator,
 						resultRegisters,
 						index,
+						incrementIp,
+						...(advanceIp < 0 ? {} : { advanceIp }),
 						elementIp,
 						trimPropertyIp,
 						trimIcIndex,
@@ -4685,6 +4734,7 @@ function readCompilerArtifact(
 			}
 		}
 		const nativeFunction: NativeFunctionPlan = {
+			storage,
 			body: fn,
 			...(storageValues.length === 0 ? {} : { storageValues }),
 			...(specializedOnly ? { specializedOnly: true as const } : {}),
@@ -4743,5 +4793,6 @@ function readCompilerArtifact(
 		fn.closureCaptureValues = functions[index]!.closureCaptureValues;
 	}
 	validateVmShapeCases(runtimeImage);
+	for (const native of definition.native.functions) validateNativeStorage(native);
 	return definition;
 }

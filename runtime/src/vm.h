@@ -2209,21 +2209,28 @@ typedef struct MalVmFrame {
      */
     i32 stack_base;
 
-    // Compiled coroutine storage and instruction indexes are independent of bytecode.
-    i32 compiled_register_count;
-    i32 compiled_suspend_position;
     i32 instruction_pointer;
     /** Published operation IP while execution is inside a GC-capable boundary. */
     i32 gc_safepoint_ip;
-    i32 return_register;
-    i32 caller_frame_index;
+    // Compiled coroutines have no interpreter caller; their storage/IP contract uses this space.
+    union {
+        struct {
+            i32 return_register;
+            i32 caller_frame_index;
+        };
+        struct {
+            i32 compiled_register_count;
+            i32 compiled_suspend_position;
+        };
+    };
+    bool is_compiled;
     /**
      * Construct frames replace non-object return values with this_value.
      */
     bool is_construct;
 } MalVmFrame;
 
-static_assert(sizeof(MalVmFrame) <= (MAL_REALMS ? 152 : 144),
+static_assert(sizeof(MalVmFrame) <= (MAL_REALMS ? 144 : 136),
               "interpreter frame outgrew its packed layout");
 
 typedef MalVmFrame MalCallable;

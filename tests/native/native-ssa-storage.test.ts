@@ -16,7 +16,7 @@ const fixture = "tests/local/native-ssa-storage.js";
 const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-native-ssa-storage-"));
 afterAll(() => rmSync(outDir, { recursive: true, force: true }));
 
-describe("independent native suspension storage", () => {
+describe("independent native SSA storage", () => {
 	let expected: string;
 	let compiled: string;
 	let interpreted: string;
@@ -32,7 +32,28 @@ describe("independent native suspension storage", () => {
 		({ compiled, interpreted, programImage: image } = pair);
 	}, 600_000);
 
-	it("traces heap locals beyond the VM frame through yield, throw, finally, and await", () => {
+	it("preserves scalar arithmetic, loop transport, and suspended heap locals", () => {
+		const regions = image.native.functions.flatMap((fn) => fn.specializations);
+		expect(regions.some((region) => region.kind === "string-split-cursor")).toBe(true);
+		expect(
+			regions.some(
+				(region) =>
+					region.kind === "indexed-length-loop" &&
+					region.sites.some((site) => site.reverseInduction !== undefined),
+			),
+		).toBe(true);
+		const scalar = image.native.functions.find((fn) =>
+			fn.storage?.expressionIps.some((ip) => {
+				const op = fn.body.instructions[ip];
+				return op?.opcode === "BINARY" && op.operator === "*";
+			}),
+		);
+		expect(scalar).toBeDefined();
+		if (scalar === undefined)
+			throw new Error("Scalar rounding fixture lacks a native multiplication expression");
+		expect(
+			emitCompiledFunction(scalar.body, scalar, scalar.functionIndex, "", false),
+		).not.toBeNull();
 		const suspended = image.native.functions.filter((fn) => fn.mode === "resumable");
 		expect(suspended.length).toBeGreaterThanOrEqual(2);
 		for (const fn of suspended) {

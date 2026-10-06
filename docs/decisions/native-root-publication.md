@@ -34,16 +34,17 @@ throwing, and invalidation. An allocation can request a later poll without
 collecting at the allocation itself. Only audited creation helpers receive that
 classification; unknown operations conservatively retain every effect.
 
-Execution lowering owns three exact register maps at each safepoint:
+Each target lowering owns three exact local maps at each safepoint:
 
 - `incomingRootRegisters`: values needed while the operation runs, including its
   operands and exceptional continuations, excluding output-only old values.
 - `outgoingRootRegisters`: values needed after the operation, including returned
   outputs before a call-return poll.
-- `rootRegisters`: their union, used by continuously rooted storage and the
-  portable VM root map.
+- `rootRegisters`: their union, used by that target's continuously rooted storage.
 
-The native backend consumes these maps without reconstructing liveness. The
+Native and VM maps use their respective bodies' independent local identities.
+The portable VM wire format retains its own union map.
+The native backend consumes its maps without reconstructing liveness. The
 compiler artifact stores the union once and each phase's sorted exclusions,
 then reconstructs independent exact phase arrays. The VM wire format retains
 its union map. Verification checks both phases independently and their union;

@@ -1231,11 +1231,11 @@ static void mal_gc_visit_frame_registers(
     if (frame->function == nullptr || frame->registers == nullptr) {
         return;
     }
-    if (frame->compiled_register_count == 0 && mal_gc_visit_exact_frame_registers(frame, visit)) {
+    if (!frame->is_compiled && mal_gc_visit_exact_frame_registers(frame, visit)) {
         return;
     }
     for (i32 register_index = 0;
-         register_index < (frame->compiled_register_count > 0
+         register_index < (frame->is_compiled
              ? frame->compiled_register_count : frame->function->register_count);
          register_index++) {
         visit(frame->registers[register_index]);

@@ -40,15 +40,11 @@ import type {
 	NativePropertyProjectionOperand,
 	NativePropertyReadRegionAction,
 } from "./lower-native-fast-paths.ts";
-import {
-	nativePrivateCallResultIps,
-	nativePrivateRootRegisters,
-	nativeEntryStableRootRegisters,
-	nativeRootedOutputRegisters,
-} from "./lower-native-root-publication.ts";
+import { nativeRootedOutputRegisters } from "./lower-native-root-publication.ts";
+import { nativeVariantContract } from "./lower-native-storage.ts";
 import { profileOperationForInstruction } from "./profile-metadata.ts";
 import {
-	nativeFrameRootRegisters,
+	nativeLoopUpdateTransportsValue,
 	nativeInstructionEffects,
 	vmCallProvesBuiltin,
 	validateNativeDirectEntry,
@@ -791,36 +787,11 @@ function emitCompiledVariant(
 	}
 	if (directEntry !== undefined) validateNativeDirectEntry(fn, directEntry);
 	validateNativeLiteralSwitches(fn, native);
-	const nativeContract: NativeFunctionPlan =
-		directEntry === undefined
-			? native
-			: {
-					...native,
-					registerRepresentations: directEntry.registerRepresentations,
-					gc: directEntry.gc,
-					instructions: (() => {
-						const instructions = [...native.instructions];
-						for (const { instructionIp, masks } of directEntry.operatorInputs ?? []) {
-							if (instructions[instructionIp]?.kind !== "unsigned-arithmetic")
-								instructions[instructionIp] = {
-									kind: "exact-operator-input-kinds",
-									inputKindMasks: masks,
-								};
-						}
-						// These calls depend on this entry's parameter proof. Keep them
-						// out of the canonical boxed entry and other typed siblings.
-						for (const call of directEntry.callOverrides ?? []) {
-							instructions[call.instructionIp] = {
-								kind: "call",
-								...(call.guarded
-									? { guardedFunctionIndices: [call.functionIndex] }
-									: { directFunctionIndex: call.functionIndex }),
-								directEntryId: call.entryId,
-							};
-						}
-						return instructions;
-					})(),
-				};
+	const nativeContract =
+		directEntry === undefined ? native : nativeVariantContract(native, directEntry);
+	const storage = nativeContract.storage;
+	if (storage === undefined)
+		throw new Error("Native rendering requires a lowered storage plan");
 
 	// A function with its own captured slots needs a per-activation MalEnv node
 	// (function_index == this function) for LOAD/STORE_CAPTURED(owner == self) and
@@ -849,49 +820,10 @@ function emitCompiledVariant(
 	const reps = [...nativeContract.registerRepresentations];
 	const relocation = nativeRelocationExpressions(relocatable);
 
-	// MalValue-typed registers can hold heap pointers, so they are GC roots: back
-	// them with a contiguous `__gc_slots` array published as a MalRootFrame, so a
-	// collection at a call/back-edge safepoint inside this function can mark them.
-	// (number/boolean-rep registers hold unboxed scalars — never heap pointers.)
-	// Audited property values can remain private between collecting edges. Other
-	// registers alias these slots, including compound helper outputs that must be
-	// visible throughout an operation. Every exit unlinks the frame (gcUnlink).
-	//
-	// Execution lowering owns precise per-safepoint physical-register liveness,
-	// including operation operands/results, exceptional exits, target temporaries,
-	// and native loop-backedge polls. This static-shadow-frame backend consumes that
-	// contract by allocating the union of its exact maps and publishing dead-slot
-	// masks at each individual site. Private publications consume its separate
-	// incoming/outgoing maps; dead private slots beyond the mask are cleared.
-	const rootRegisters = new Set(nativeFrameRootRegisters(fn, nativeContract));
-	const valueRegs: Array<number> = [];
-	for (let i = 0; i < fn.registerCount; i++) {
-		const isBoxed = !isNumericRep(reps[i]!) && reps[i] !== "boolean";
-		if (isBoxed && rootRegisters.has(i)) {
-			valueRegs.push(i);
-		}
-	}
-	if (valueRegs.length > 64) {
-		// Only the first 64 slots can be masked; prioritize registers dead at more
-		// certified safepoints over roots that the conservative tail would retain anyway.
-		const liveSafepointCounts = new Uint32Array(fn.registerCount);
-		for (const { rootRegisters } of nativeContract.gc.safepoints) {
-			for (const register of rootRegisters) liveSafepointCounts[register]!++;
-		}
-		valueRegs.sort(
-			(left, right) =>
-				liveSafepointCounts[left]! - liveSafepointCounts[right]! || left - right,
-		);
-	}
-	const slotOf = new Map<number, number>();
-	valueRegs.forEach((reg, slot) => slotOf.set(reg, slot));
-	const privateCallResultIps = nativePrivateCallResultIps(fn, nativeContract);
-	const privateCandidates = nativePrivateRootRegisters(
-		fn,
-		nativeContract,
-		rootRegisters,
-		privateCallResultIps,
-	);
+	const valueRegs = [...storage.rootRegisters];
+	const slotOf = new Map(valueRegs.map((local, slot) => [local, slot]));
+	const privateCallResultIps = new Set(storage.privateCallResultIps);
+	const privateCandidates = new Set(storage.privateRegisters);
 	const privateSlots = new Map(
 		[...slotOf].filter(([register]) => privateCandidates.has(register)),
 	);
@@ -908,7 +840,7 @@ function emitCompiledVariant(
 	};
 	const rootPublication: NativeRootPublication = {
 		privateCallResultIps,
-		entryStableMask: privateMask(nativeEntryStableRootRegisters(fn, privateCandidates)),
+		entryStableMask: privateMask(storage.entryStableRootRegisters),
 		bits: privateBits,
 		slots: privateSlots,
 		safepoints:
@@ -1213,6 +1145,13 @@ function emitCompiledVariant(
 		(needsRootFrame ? "mal_root_frame_head = __gc_frame.prev; " : "");
 
 	const profileDecisions: Array<BackendProfileDecision> = [];
+	const expressionRegisters = new Map<number, string>(
+		storage.expressionIps.map((ip) => {
+			const op = fn.instructions[ip]!;
+			if (!("dst" in op)) throw new Error("Native expression lacks a destination");
+			return [op.dst, renderScalarExpression(op, reps)];
+		}),
+	);
 	const body = emitBody(
 		fn,
 		index,
@@ -1254,6 +1193,7 @@ function emitCompiledVariant(
 		nativeContract.literalSwitches,
 		stringConstants,
 		rootPublication,
+		new Set(storage.expressionIps),
 	);
 	if (body === null) {
 		return null;
@@ -1289,6 +1229,8 @@ function emitCompiledVariant(
 			? `${linkage === "static" ? "static " : ""}__attribute__((aligned(64))) MalValue ${symbol}(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalEnv *env, MalValue callee, void *entry_state) {`
 			: `${linkage === "static" ? "static " : ""}__attribute__((aligned(64))) ${cTypeOf(directEntry.resultRepresentation)} ${symbol}(MalVm *vm, MalValue this_value${directParameters!.length === 0 ? "" : `, ${directParameters!.join(", ")}`}, MalEnv *env, MalValue callee) {`,
 	);
+	// Each JavaScript arithmetic operation rounds separately, including expression chains.
+	lines.push("#pragma STDC FP_CONTRACT OFF");
 	lines.push(`    (void) this_value;`);
 	if (directEntry === undefined) lines.push(`    (void) new_target;`);
 	lines.push(`    (void) env;`);
@@ -1353,7 +1295,10 @@ function emitCompiledVariant(
 	}
 	for (let i = 0; i < fn.registerCount; i++) {
 		const slot = slotOf.get(i);
-		if (privateRegisters.has(i)) {
+		const expression = expressionRegisters.get(i);
+		if (expression !== undefined) {
+			lines.push(`#define r${i} (${expression})`);
+		} else if (privateRegisters.has(i)) {
 			lines.push(`    MalValue __private_r${i};`);
 			lines.push(`#define r${i} (__private_r${i})`);
 		} else if (slot !== undefined) {
@@ -1377,6 +1322,7 @@ function emitCompiledVariant(
 		);
 	}
 	for (let i = fn.parameterCount; i < fn.registerCount; i++) {
+		if (expressionRegisters.has(i)) continue;
 		lines.push(`    r${i} = ${zeroOf(reps[i]!)};`);
 	}
 	for (const register of privateRegisters) {
@@ -1464,7 +1410,7 @@ function emitCompiledVariant(
 		);
 	}
 	lines.push("}");
-	for (const i of valueRegs) {
+	for (const i of [...valueRegs, ...expressionRegisters.keys()]) {
 		lines.push(`#undef r${i}`);
 	}
 	return {
@@ -1475,6 +1421,36 @@ function emitCompiledVariant(
 		directEntryCalls: body.directEntryCalls,
 		directEntries: [],
 	};
+}
+
+function renderScalarExpression(
+	op: BytecodeInstruction,
+	reps: ReadonlyArray<RegisterRep>,
+): string {
+	const number = (local: number) =>
+		reps[local] === "boxed" ? `mal_ops_number_as_f64(r${local})` : `(f64) r${local}`;
+	switch (op.opcode) {
+		case "CREATE_NUMBER":
+		case "CREATE_F64":
+			return cF64Literal(op.value);
+		case "CREATE_BOOLEAN":
+			return String(op.value);
+		case "MOVE":
+			return `r${op.src}`;
+		case "UNARY":
+			return `${op.operator === "-" ? "-" : ""}(${number(op.src)})`;
+		case "BINARY": {
+			const expression =
+				reps[op.dst] === "boolean"
+					? `${number(op.left)} ${NATIVE_COMPARE[op.operator]} ${number(op.right)}`
+					: nativeNumberExpr(op.operator, number(op.left), number(op.right));
+			if (expression === null)
+				throw new Error("Invalid lowered native scalar expression");
+			return expression;
+		}
+		default:
+			throw new Error("Invalid lowered native scalar opcode");
+	}
 }
 
 function numericLeafWorker(
@@ -1633,9 +1609,9 @@ export function emitCompiledFunction(
 			.map((_, i) => `p${i}`)
 			.concat(entry.fieldParameters?.keys.map((_, i) => `fp${i}`) ?? []);
 		const symbol = `${emitted.symbol}_leaf`;
-		const source = `static __attribute__((aligned(64))) f64 ${symbol}(${parameters.join(", ") || "void"}) {\n${worker.join("\n")}\n}\n${emitted.source.replace(
-			" {\n",
-			` {\n    if (mal_vm_leaf_unobserved(vm) || (vm->exact_script_call != nullptr && vm->exact_script_call->numeric_sort_leaf_active && vm->exact_script_call->callee == callee)) return ${symbol}(${args.join(", ")});\n`,
+		const source = `static __attribute__((aligned(64))) f64 ${symbol}(${parameters.join(", ") || "void"}) {\n#pragma STDC FP_CONTRACT OFF\n${worker.join("\n")}\n}\n${emitted.source.replace(
+			"#pragma STDC FP_CONTRACT OFF\n",
+			`#pragma STDC FP_CONTRACT OFF\n    if (mal_vm_leaf_unobserved(vm) || (vm->exact_script_call != nullptr && vm->exact_script_call->numeric_sort_leaf_active && vm->exact_script_call->callee == callee)) return ${symbol}(${args.join(", ")});\n`,
 		)}`;
 		return [{ entry, emitted: { ...emitted, source }, leaf: true as const }];
 	});
@@ -1658,13 +1634,12 @@ export function emitCompiledFunction(
 }
 
 /**
- * Emit a resumable C function for a generator/async `fn`, or null when its body
- * uses an opcode the backend cannot lower yet (e.g. ASYNC_START/AWAIT before the
- * async milestone → async functions and async generators bail).
+ * Every local is boxed and persistent because resume dispatch bypasses the
+ * parameter prologue and the runtime writes resume values by native local index.
  *
  * The activation lives in a heap MalValue buffer (named __gc_slots so the shared
- * register/with-object emission works unchanged): registers [0,registerCount),
- * the with-object stack, then a self slot holding the coroutine object. A fresh
+ * register emission works unchanged): locals [0,registerCount), then a self slot
+ * holding the coroutine object. A fresh
  * call allocates the buffer, runs the parameter prologue and body until the first
  * suspend; a resume restores the buffer + env from the coroutine and dispatches
  * to the saved resume label. Every register is boxed (no rep specialization: an
@@ -1896,8 +1871,8 @@ function emitResumableFunction(
 	// Falling off the end is an implicit `return undefined` — complete the coroutine.
 	const fallReturn = isAsyncFunction ? "__async_result_promise" : "MAL_VALUE_UNDEFINED";
 	lines.push(
-		`    mal_vm_op_coroutine_return_compiled(vm, __coro, MAL_VALUE_UNDEFINED);`,
-		`    ${gcUnlink}return ${fallReturn};`,
+		`    ${gcUnlink}mal_vm_op_coroutine_return_compiled(vm, __coro, MAL_VALUE_UNDEFINED);`,
+		`    return ${fallReturn};`,
 	);
 	// Shared throw-exit for a coroutine: complete the activation (free it, route the
 	// throw by kind) before leaving the frame. __coro is null if the parameter
@@ -1906,7 +1881,7 @@ function emitResumableFunction(
 	if (body.resources.has("throwExit")) {
 		lines.push(
 			`__throw_exit:;`,
-			`    mal_vm_op_coroutine_throw_compiled(vm, __coro, __gc_slots); ${gcUnlink}return ${fallReturn};`,
+			`    ${gcUnlink}mal_vm_op_coroutine_throw_compiled(vm, __coro, __gc_slots); return ${fallReturn};`,
 		);
 	}
 	lines.push("}");
@@ -2494,6 +2469,7 @@ function emitBody(
 	literalSwitches?: NativeFunctionPlan["literalSwitches"],
 	stringConstants: ReadonlyArray<ReadonlyArray<number>> = [],
 	rootPublication?: NativeRootPublication,
+	expressionIps: ReadonlySet<number> = new Set(),
 ): EmittedBody | null {
 	if (!vmRegionActionsAreCurrent(specializations, regionActions)) {
 		throw new Error("Native function has stale region actions");
@@ -2585,7 +2561,13 @@ function emitBody(
 					update?.opcode !== "UNARY" ||
 					update.operator !== "decrement" ||
 					coercion.dst !== update.src ||
-					update.dst !== length) ||
+					!nativeLoopUpdateTransportsValue(
+						fn,
+						reverse.updateIp,
+						-1,
+						site.comparisonIp,
+						length,
+					)) ||
 			(action.role === "element"
 				? element === undefined ||
 					typeof element.arrayIndexIsUint32 !== "boolean" ||
@@ -3268,6 +3250,7 @@ function emitBody(
 		NativeStaticPropertyProjectionAction
 	>();
 	const staticPropertyProjectionConflicts = (ip: number): boolean =>
+		expressionIps.has(ip) ||
 		nativeInstructions[ip] !== undefined ||
 		fieldLoads.has(ip) ||
 		stackObjectAccesses.has(ip) ||
@@ -3311,18 +3294,6 @@ function emitBody(
 	const propertyNumericUpdateActionByIp = nativeFastPaths.propertyNumericUpdateActions;
 	const staticPropertyNumericActionByIp = nativeFastPaths.propertyProjectionActions;
 	const propertyReadRegionActionByIp = nativeFastPaths.propertyReadRegionActions;
-	// Numeric projections can elide boxed writes entirely. Their dormant boxed
-	// temporaries must retain the collector-cleared storage used by the fallback.
-	for (const projection of nativeFastPaths.propertyProjections) {
-		for (const load of projection.loads)
-			rootPublication?.slots.delete(load.instruction.dst);
-		for (const step of projection.steps)
-			rootPublication?.slots.delete(step.instruction.dst);
-		for (const ip of projection.skippedIps) {
-			for (const register of vmInstructionWriteRegisters(fn.instructions[ip]!))
-				rootPublication?.slots.delete(register);
-		}
-	}
 	const pairedArrayLoopActionByIp = nativeFastPaths.pairedArrayLoopActions;
 	const pairedArrayLoopByLengthLoad = new Map(
 		nativeFastPaths.pairedArrayLoops.map((plan) => [plan.lengthLoadIp, plan]),
@@ -3497,6 +3468,10 @@ function emitBody(
 			lastPublishedSite = -1;
 			lastPublishedInactiveRootMask = undefined;
 			knownPublishedPrivateRoots = 0;
+		}
+		if (expressionIps.has(ip)) {
+			emittedInstructions.add(ip);
+			continue;
 		}
 		const literalSwitch = switches.get(ip);
 		if (literalSwitch !== undefined) {
@@ -9558,8 +9533,8 @@ function emitInstruction(
 			if (coro !== null) {
 				return [
 					...materialize,
-					`mal_vm_op_coroutine_return_compiled(vm, __coro, ${value});`,
-					`${gcUnlink}return ${coroReturnValue};`,
+					`${gcUnlink}mal_vm_op_coroutine_return_compiled(vm, __coro, ${value});`,
+					`return ${coroReturnValue};`,
 				];
 			}
 			// A derived constructor substitutes the super-bound `this` for a
@@ -9837,15 +9812,13 @@ function emitInstruction(
 			];
 		}
 		case "YIELD": {
-			// Record the yielded value, resume registers, and resume point on the
-			// coroutine, save the current env, then suspend (return). A resume
-			// re-enters at ip+1, where the front-end's inline dispatch reads the mode.
+			// Helpers can resume this buffer synchronously; only the new invocation may clear dead roots.
 			if (coro === null) {
 				return null;
 			}
 			return [
-				`mal_vm_op_yield_compiled(vm, __coro, ${boxed(instruction.yieldedSrc)}, ${instruction.valueDst}, ${instruction.modeDst}, ${ip + 1}, ${coro.positions[ip] ?? -1}, env);`,
-				`${gcUnlink}return ${coroReturnValue};`,
+				`${gcUnlink}mal_vm_op_yield_compiled(vm, __coro, ${boxed(instruction.yieldedSrc)}, ${instruction.valueDst}, ${instruction.modeDst}, ${ip + 1}, ${coro.positions[ip] ?? -1}, env);`,
+				`return ${coroReturnValue};`,
 			];
 		}
 		case "TERMINAL_YIELD": {
@@ -9870,15 +9843,12 @@ function emitInstruction(
 			];
 		}
 		case "AWAIT": {
-			// Suspend on the awaited value: record the resume registers/point + env,
-			// hook the settlement continuation, and return. A resume re-enters at ip+1
-			// where the front-end's inline dispatch reads the delivered value/mode.
 			if (coro === null) {
 				return null;
 			}
 			return [
-				`mal_vm_op_await_compiled(vm, __coro, ${boxed(instruction.awaitedSrc)}, ${instruction.valueDst}, ${instruction.modeDst}, ${ip + 1}, ${coro.positions[ip] ?? -1}, env);`,
-				`${gcUnlink}return ${coroReturnValue};`,
+				`${gcUnlink}mal_vm_op_await_compiled(vm, __coro, ${boxed(instruction.awaitedSrc)}, ${instruction.valueDst}, ${instruction.modeDst}, ${ip + 1}, ${coro.positions[ip] ?? -1}, env);`,
+				`return ${coroReturnValue};`,
 			];
 		}
 		default:
