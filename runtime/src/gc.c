@@ -1784,6 +1784,20 @@ static void mal_gc_scan_fiber_exec(
     }
 }
 
+void mal_gc_clear_inactive_root_frame_slots(MalRootFrame *frame) {
+    for (i32 base = 0; base < frame->desc->slot_count; base += 64) {
+        u64 inactive = mal_gc_root_frame_inactive_word(frame, base / 64);
+        if (inactive == 0) continue;
+        i32 count = frame->desc->slot_count - base;
+        if (count > 64) count = 64;
+        for (i32 slot = 0; slot < count; slot++) {
+            if ((inactive & (UINT64_C(1) << slot)) != 0) {
+                frame->slots[base + slot] = MAL_VALUE_UNDEFINED;
+            }
+        }
+    }
+}
+
 static void mal_gc_scan_roots(MalVm *vm) {
     // The heap-owned transition tree retains keys even when no live object
     // currently owns an intermediate shape.

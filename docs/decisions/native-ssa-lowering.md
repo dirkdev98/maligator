@@ -46,8 +46,12 @@ compiled coroutine has no interpreter caller frame. GC and SATB use the frame's
 explicit ownership tag rather than interpreting native indexes through VM maps.
 
 A suspension or completion helper can synchronously resume the same coroutine.
-The outgoing C invocation unlinks its root frame before that transfer, so its
-inactive mask cannot clear a newer invocation's live slots. Runtime helpers root
+The outgoing C invocation captures the transferred operand and clears dead locals
+using its outgoing map before unlinking its root frame. Resume destinations are
+also cleared because their old values are overwritten by the next invocation.
+Generator-start clears after its helper adopts the buffer. No outgoing invocation
+may clear slots after a transfer, which can synchronously resume or free the buffer.
+Runtime helpers root
 the coroutine and transferred value while routing the suspension or settlement.
 Completion shades and releases the activation before settlement can collect after
 the activation has left the heap graph.

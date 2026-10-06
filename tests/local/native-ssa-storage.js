@@ -145,3 +145,30 @@ setTimeout(() => {
 	gc();
 	openGate();
 }, 0);
+
+function* consumedResumes() {
+	for (let index = 0; index < 2; index++) {
+		const value = yield index;
+		globalThis.consumeResumeValue(value);
+	}
+	return "released";
+}
+globalThis.consumeResumeValue = (value) => {
+	globalThis.resumeReference = new WeakRef(value);
+};
+globalThis.suspendedResumeIterator = consumedResumes();
+globalThis.suspendedResumeIterator.next();
+function sendResumeValue() {
+	globalThis.suspendedResumeIterator.next({ value: 123 });
+}
+sendResumeValue();
+setTimeout(() => {
+	gc();
+	if (
+		typeof globalThis.__mal_collect_garbage === "function" &&
+		globalThis.resumeReference.deref() !== undefined
+	)
+		throw new Error("Suspended resume output retained its previous input");
+	globalThis.consumeResumeValue = () => {};
+	console.log("resume-output", globalThis.suspendedResumeIterator.next().value);
+}, 0);

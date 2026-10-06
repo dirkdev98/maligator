@@ -70,6 +70,15 @@ static int check_wide_root_masks(const MalRuntimeImage *image) {
     slots[127] = tracked_object(&vm, 1);
     mal_gc_collect(&vm);
     if (finalized[1] != 1 || slots[127] != MAL_VALUE_UNDEFINED || finalized[3] != 0) return 85;
+    slots[64] = slots[129] = mal_value_from_i32(7);
+    slots[128] = mal_value_from_i32(11);
+    mal_gc_clear_inactive_root_frame_slots(&frame);
+    if (slots[64] != MAL_VALUE_UNDEFINED || slots[129] != MAL_VALUE_UNDEFINED ||
+        mal_value_to_i32(slots[128]) != 11 || slots[0] == MAL_VALUE_UNDEFINED) return 92;
+    slots[64] = mal_value_from_i32(13);
+    mal_gc_root_frame_set_inactive(&frame, UINT64_C(1), nullptr, 0);
+    mal_gc_clear_inactive_root_frame_slots(&frame);
+    if (slots[0] != MAL_VALUE_UNDEFINED || mal_value_to_i32(slots[64]) != 13) return 93;
     mal_root_frame_head = frame.prev;
     mal_gc_collect(&vm);
     if (finalized[3] != 1) return 83;

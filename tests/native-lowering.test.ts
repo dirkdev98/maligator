@@ -31,6 +31,41 @@ globalThis.calculate = calculate;
 `;
 
 describe("SSA native lowering", () => {
+	it("requires boxed locals and outgoing maps at every native suspension transfer", () => {
+		const image = compileSemanticProgramToProgramImage(
+			analyzeSourceAndRunSemanticAnalysis(
+				`globalThis.suspend = async function* (value) {
+					await globalThis.gate;
+					yield value;
+					return value;
+				};`,
+				"/native-suspension-contract.js",
+			),
+		);
+		const fn = image.native.functions.find((native) => native.mode === "resumable")!;
+		expect(() => nativeFrameRootRegisters(fn.body, fn)).not.toThrow();
+		expect(() =>
+			nativeFrameRootRegisters(fn.body, {
+				...fn,
+				registerRepresentations: fn.registerRepresentations.map((rep, index) =>
+					index === 0 ? "number" : rep,
+				),
+			}),
+		).toThrow("resumable native locals must retain boxed representations");
+		for (const opcode of ["GENERATOR_START", "YIELD", "AWAIT"]) {
+			const ip = fn.body.instructions.findIndex((op) => op.opcode === opcode);
+			expect(ip).toBeGreaterThanOrEqual(0);
+			expect(() =>
+				nativeFrameRootRegisters(fn.body, {
+					...fn,
+					gc: {
+						safepoints: fn.gc.safepoints.filter((point) => point.instructionIp !== ip),
+					},
+				}),
+			).toThrow("native suspension transfer lacks an outgoing GC map");
+		}
+	});
+
 	it("does not poll acyclic phi-copy transfers", () => {
 		const image = compileSemanticProgramToProgramImage(
 			analyzeSourceAndRunSemanticAnalysis(

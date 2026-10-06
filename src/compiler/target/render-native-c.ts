@@ -44,6 +44,7 @@ import { nativeRootedOutputRegisters } from "./lower-native-root-publication.ts"
 import { nativeVariantContract } from "./lower-native-storage.ts";
 import { profileOperationForInstruction } from "./profile-metadata.ts";
 import {
+	nativeFrameRootRegisters,
 	nativeLoopUpdateTransportsValue,
 	nativeInstructionEffects,
 	vmCallProvesBuiltin,
@@ -472,6 +473,7 @@ export function directCompiledEntryKey(functionIndex: number, entryId: number): 
 interface CoroutineContext {
 	readonly registerCount: number;
 	readonly positions: ReadonlyArray<number>;
+	readonly suspensionInactiveMasks: ReadonlyMap<number, bigint>;
 	functionIndex: number;
 	selfSlot: number;
 	/** Runtime condition for copying call arguments into the suspended frame. */
@@ -703,13 +705,13 @@ export function nativeInactiveRootMasks(
 
 const ROOT_MASK_WORD = (1n << 64n) - 1n;
 
-function nativeRootMaskTails(masks: ReadonlyMap<number, bigint>): {
+function nativeRootMaskTails(masks: Iterable<bigint>): {
 	readonly symbols: ReadonlyMap<bigint, string>;
 	readonly declarations: ReadonlyArray<string>;
 } {
 	const symbols = new Map<bigint, string>();
 	const declarations: Array<string> = [];
-	for (const mask of masks.values()) {
+	for (const mask of masks) {
 		if (mask <= ROOT_MASK_WORD || symbols.has(mask)) continue;
 		const symbol = `__gc_inactive_tail_${symbols.size}`;
 		const words: Array<string> = [];
@@ -886,7 +888,7 @@ function emitCompiledVariant(
 	};
 	const slotCount = valueRegs.length;
 	const inactiveRootMasks = nativeInactiveRootMasks(nativeContract.gc.safepoints, slotOf);
-	const rootMaskTails = nativeRootMaskTails(inactiveRootMasks);
+	const rootMaskTails = nativeRootMaskTails(inactiveRootMasks.values());
 	const gcSafepointKinds = new Map(
 		nativeContract.gc.safepoints.map((safepoint) => [
 			safepoint.instructionIp,
@@ -1685,6 +1687,7 @@ function emitResumableFunction(
 	semanticProtectors: ReadonlyArray<VmSemanticProtectorFact>,
 	stringConstants: ReadonlyArray<ReadonlyArray<number>>,
 ): CompiledFunction | null {
+	nativeFrameRootRegisters(fn, native);
 	const isAsyncFunction = fn.isAsync && !fn.isGenerator;
 	const isAsyncGenerator = fn.isAsync && fn.isGenerator;
 
@@ -1707,16 +1710,6 @@ function emitResumableFunction(
 				? `arg_count > 0 && arg_count <= ${argumentRetentionLimit}`
 				: "false";
 
-	const coro: CoroutineContext = {
-		registerCount: fn.registerCount,
-		positions: fn.positions,
-		functionIndex: index,
-		selfSlot,
-		retainArguments,
-		isAsyncFunction,
-		isAsyncGenerator,
-	};
-
 	// thisSlot is -1: a coroutine is never a derived constructor, and `this` is read
 	// from the this_value parameter (which the resume path is invoked with from the
 	// saved frame), so no mutable this-slot is needed.
@@ -1726,7 +1719,38 @@ function emitResumableFunction(
 		registerSlots.set(register, register);
 	}
 	const inactiveRootMasks = nativeInactiveRootMasks(native.gc.safepoints, registerSlots);
-	const rootMaskTails = nativeRootMaskTails(inactiveRootMasks);
+	const suspensionInactiveMasks = nativeInactiveRootMasks(
+		native.gc.safepoints.flatMap((point) => {
+			const op = fn.instructions[point.instructionIp]!;
+			if (op.opcode === "GENERATOR_START")
+				return [{ ...point, rootRegisters: point.outgoingRootRegisters }];
+			if (op.opcode !== "YIELD" && op.opcode !== "AWAIT") return [];
+			return [
+				{
+					...point,
+					// Resume outputs still hold the previous iteration's values while suspended.
+					rootRegisters: point.outgoingRootRegisters.filter(
+						(local) => local !== op.valueDst && local !== op.modeDst,
+					),
+				},
+			];
+		}),
+		registerSlots,
+	);
+	const rootMaskTails = nativeRootMaskTails([
+		...inactiveRootMasks.values(),
+		...suspensionInactiveMasks.values(),
+	]);
+	const coro: CoroutineContext = {
+		registerCount: fn.registerCount,
+		positions: fn.positions,
+		suspensionInactiveMasks,
+		functionIndex: index,
+		selfSlot,
+		retainArguments,
+		isAsyncFunction,
+		isAsyncGenerator,
+	};
 	const body = emitBody(
 		fn,
 		index,
@@ -9854,16 +9878,21 @@ function emitInstruction(
 			return [
 				`__coro = mal_vm_op_generator_start_compiled(vm, callee, ${coro.functionIndex}, this_value, env, __gc_slots, ${coro.registerCount}, args, arg_count, ${coro.retainArguments}, ${ip + 1}, ${coro.isAsyncGenerator});`,
 				`__gc_slots[${coro.selfSlot}] = mal_value_from_object((MalObject *) __coro);`,
+				`${cInactiveRootMaskPublication(coro.suspensionInactiveMasks.get(ip) ?? 0n, context.inactiveRootMaskTails)};`,
+				"mal_gc_clear_inactive_root_frame_slots(&__gc_frame);",
 				`${gcUnlink}return mal_value_from_object((MalObject *) __coro);`,
 			];
 		}
 		case "YIELD": {
-			// Helpers can resume this buffer synchronously; only the new invocation may clear dead roots.
+			// Prune before unlinking: the helper can synchronously resume or free this buffer.
 			if (coro === null) {
 				return null;
 			}
 			return [
-				`${gcUnlink}mal_vm_op_yield_compiled(vm, __coro, ${boxed(instruction.yieldedSrc)}, ${instruction.valueDst}, ${instruction.modeDst}, ${ip + 1}, ${coro.positions[ip] ?? -1}, env);`,
+				`MalValue yielded_${ip} = ${boxed(instruction.yieldedSrc)};`,
+				`${cInactiveRootMaskPublication(coro.suspensionInactiveMasks.get(ip) ?? 0n, context.inactiveRootMaskTails)};`,
+				"mal_gc_clear_inactive_root_frame_slots(&__gc_frame);",
+				`${gcUnlink}mal_vm_op_yield_compiled(vm, __coro, yielded_${ip}, ${instruction.valueDst}, ${instruction.modeDst}, ${ip + 1}, ${coro.positions[ip] ?? -1}, env);`,
 				`return ${coroReturnValue};`,
 			];
 		}
@@ -9893,7 +9922,10 @@ function emitInstruction(
 				return null;
 			}
 			return [
-				`${gcUnlink}mal_vm_op_await_compiled(vm, __coro, ${boxed(instruction.awaitedSrc)}, ${instruction.valueDst}, ${instruction.modeDst}, ${ip + 1}, ${coro.positions[ip] ?? -1}, env);`,
+				`MalValue awaited_${ip} = ${boxed(instruction.awaitedSrc)};`,
+				`${cInactiveRootMaskPublication(coro.suspensionInactiveMasks.get(ip) ?? 0n, context.inactiveRootMaskTails)};`,
+				"mal_gc_clear_inactive_root_frame_slots(&__gc_frame);",
+				`${gcUnlink}mal_vm_op_await_compiled(vm, __coro, awaited_${ip}, ${instruction.valueDst}, ${instruction.modeDst}, ${ip + 1}, ${coro.positions[ip] ?? -1}, env);`,
 				`return ${coroReturnValue};`,
 			];
 		}

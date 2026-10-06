@@ -1640,6 +1640,11 @@ export function nativeFrameRootRegisters(
 	fn: BytecodeFunction,
 	native: Pick<NativeFunctionPlan, "registerRepresentations" | "gc">,
 ): ReadonlyArray<number> {
+	if (
+		(fn.isGenerator || fn.isAsync) &&
+		native.registerRepresentations.some((representation) => representation !== "boxed")
+	)
+		throw new RangeError("resumable native locals must retain boxed representations");
 	const seenIps = new Set<number>();
 	const frameRoots = new Set<number>();
 	const pollingIps = new Set<number>();
@@ -1721,6 +1726,13 @@ export function nativeFrameRootRegisters(
 			if (incoming) incomingIndex++;
 			if (outgoing) outgoingIndex++;
 		}
+	}
+	for (const [ip, instruction] of fn.instructions.entries()) {
+		if (
+			["GENERATOR_START", "YIELD", "AWAIT"].includes(instruction.opcode) &&
+			!seenIps.has(ip)
+		)
+			throw new RangeError("native suspension transfer lacks an outgoing GC map");
 	}
 	const handlerTargets = vmExceptionHandlerTargets(fn.instructions.length, fn.handlers);
 	const successors = fn.instructions.map((instruction, ip) => {
