@@ -156,7 +156,7 @@ describe("local native input admission", () => {
 		const boxed = emitInputContract(instructions, ["boxed", "boolean"]);
 		const coroutine = emitInputContract(
 			[{ opcode: "GENERATOR_START" }, ...instructions],
-			["string", "boolean"],
+			["boxed", "boxed"],
 			{ isGenerator: true },
 		);
 		for (const helper of [

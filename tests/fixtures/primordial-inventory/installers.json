@@ -713,7 +713,7 @@
 	},
 	{
 		"file": "vm.c",
-		"sha256": "bf72c19e39110d1bf3f2d07d0162aa88fa79fad85083c297f20b9c4a7cc5ef04"
+		"sha256": "5af2a1b759b07459b14e264db8430cca398bc762464050ed5d7f9d5619beace6"
 	},
 	{
 		"file": "vm.h",
