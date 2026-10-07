@@ -441,6 +441,19 @@ function scalarValueBoundary(op: BytecodeInstruction, local: number): boolean {
 			return op.value === local && op.object !== local && op.key !== local;
 		case "CALL":
 			return !isLocal(op.callee) && !isLocal(op.thisValue) && op.arguments.some(isLocal);
+		case "CALL_KNOWN":
+			return (
+				!op.construct &&
+				op.argumentMode === undefined &&
+				!isLocal(op.thisValue) &&
+				op.arguments.some(isLocal)
+			);
+		case "QUERY_STATIC_DATA":
+			return op.needle === local || op.fromIndex === local;
+		case "PREPARED_STRING_COMPARE":
+			return op.left === local || op.right === local;
+		case "PRECISE_NUMBER_SUM":
+			return op.arguments.includes(local);
 		default:
 			return false;
 	}

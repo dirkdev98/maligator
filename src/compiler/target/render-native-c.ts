@@ -2591,6 +2591,13 @@ function emitBody(
 	const callbackTransportByIp = new Map(
 		callbackTransports.map((plan) => [plan.instructionIp, plan]),
 	);
+	const expressionLocals = new Set(
+		[...expressionIps].map((ip) => {
+			const op = fn.instructions[ip]!;
+			if (!("dst" in op)) throw new Error("Native expression lacks a destination");
+			return op.dst;
+		}),
+	);
 	const stableCaptureOwners = new Set(fixedCaptureOwners(fn, functionIndex));
 	const copiedCaptures = copiedCaptureIndexes(fn);
 	// Closed-source layouts include every external lexical owner at creation,
@@ -3823,6 +3830,26 @@ function emitBody(
 			constructorInitializationActionByIp.get(ip);
 		instructionContext.privateFieldReserveCount =
 			privateFieldReserve?.id === ip ? privateFieldReserve.count : undefined;
+		const scalarArgumentDeclarations: Array<string> = [];
+		let scalarArgumentValues: Map<number, string> | undefined;
+		const instruction = fn.instructions[ip]!;
+		if (instruction.opcode === "CALL_KNOWN") {
+			for (const operand of instruction.arguments) {
+				const value = decodeVmValueOperand(operand);
+				if (
+					value.kind !== "register" ||
+					!expressionLocals.has(value.register) ||
+					scalarArgumentValues?.has(value.register)
+				)
+					continue;
+				const name = `__known_argument_${ip}_${value.register}`;
+				(scalarArgumentValues ??= new Map()).set(value.register, name);
+				scalarArgumentDeclarations.push(
+					`${cTypeOf(reps[value.register]!)} ${name} = r${value.register};`,
+				);
+			}
+		}
+		instructionContext.scalarArgumentValues = scalarArgumentValues;
 		const emitted = elidedTdzIps.has(ip)
 			? []
 			: emitInstruction(
@@ -3909,6 +3936,7 @@ function emitBody(
 				`#define r${register} (__gc_slots[${rootPublication!.slots.get(register)!}])`,
 			);
 		}
+		for (const line of scalarArgumentDeclarations) lines.push(`    ${line}`);
 		for (const line of emitted) {
 			lines.push(`    ${line}`);
 		}
@@ -4155,6 +4183,7 @@ interface NativeFieldCall {
 }
 
 interface NativeInstructionContext {
+	readonly scalarArgumentValues?: ReadonlyMap<number, string>;
 	readonly inactiveRootMaskTails?: ReadonlyMap<bigint, string>;
 	readonly ownedCaptureFunctionIndex?: number;
 	readonly fixedCaptureOwners?: ReadonlySet<number>;
@@ -4347,6 +4376,7 @@ function emitInstruction(
 			: `(${publication.map((store) => store.slice(0, -1)).join(", ")}, ${expression})`;
 	};
 	const genericContext = (): NativeInstructionContext => ({
+		scalarArgumentValues: context.scalarArgumentValues,
 		inactiveRootMaskTails: context.inactiveRootMaskTails,
 		stringConstants: context.stringConstants,
 		staticDefineStringIndexByIp: context.staticDefineStringIndexByIp,
@@ -4448,14 +4478,16 @@ function emitInstruction(
 	const stackStore = (site: StackObjectSite, slot: number, value: number): string =>
 		`${stackObjectSlotReference(site, slot)} = ${convertedValue(reps[value]!, stackSlotRep(site, slot), `r${value}`)};`;
 
+	const inputValue = (r: number): string =>
+		context.scalarArgumentValues?.get(r) ?? `r${r}`;
 	const boxed = (r: number): string =>
 		reps[r] === "int32"
-			? `mal_value_from_i32(r${r})`
+			? `mal_value_from_i32(${inputValue(r)})`
 			: reps[r] === "number"
-				? profileCall("boxing", `mal_ops_number_value(r${r})`)
+				? profileCall("boxing", `mal_ops_number_value(${inputValue(r)})`)
 				: reps[r] === "boolean"
-					? profileCall("boxing", `mal_value_new_boolean(r${r})`)
-					: `r${r}`;
+					? profileCall("boxing", `mal_value_new_boolean(${inputValue(r)})`)
+					: inputValue(r);
 	const boxedOperand = (operand: number): string => {
 		const decoded = decodeVmValueOperand(operand);
 		switch (decoded.kind) {
@@ -4596,9 +4628,9 @@ function emitInstruction(
 		const decoded = decodeVmValueOperand(operand);
 		if (decoded.kind === "register") {
 			return reps[decoded.register] === "int32"
-				? `r${decoded.register}`
+				? inputValue(decoded.register)
 				: reps[decoded.register] === "number"
-					? `mal_ops_number_to_i32(r${decoded.register})`
+					? `mal_ops_number_to_i32(${inputValue(decoded.register)})`
 					: null;
 		}
 		return decoded.kind === "number" ? String(decoded.value) : null;
@@ -4607,7 +4639,7 @@ function emitInstruction(
 		const decoded = decodeVmValueOperand(operand);
 		if (decoded.kind === "register") {
 			return reps[decoded.register] === "boolean"
-				? `r${decoded.register}`
+				? inputValue(decoded.register)
 				: builtinOperandKind(operand) === COMPILER_VALUE_KIND_BOOLEAN
 					? `mal_value_to_boolean(${boxedOperand(operand)})`
 					: null;
@@ -4618,7 +4650,8 @@ function emitInstruction(
 		const boolean = nativeBooleanOperand(operand);
 		return boolean === null ? nativeNumberOperand(operand) : `(${boolean} ? 1.0 : 0.0)`;
 	};
-	const num = (r: number): string => (reps[r] === "int32" ? `(f64) r${r}` : `r${r}`);
+	const num = (r: number): string =>
+		reps[r] === "int32" ? `(f64) ${inputValue(r)}` : inputValue(r);
 	// Typed Math operands remain numbers when coroutine storage boxes their registers.
 	const typedNumber = (r: number): string =>
 		reps[r] === "number" || reps[r] === "int32"

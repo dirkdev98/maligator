@@ -10,6 +10,7 @@ import {
 import { validateNativeStorage } from "../src/compiler/target/lower-native-storage.ts";
 import { emitCompiledFunction } from "../src/compiler/target/render-native-c.ts";
 import {
+	decodeVmValueOperand,
 	vmExceptionHandlerTargets,
 	vmInstructionReadRegisters,
 	vmInstructionWriteRegisters,
@@ -145,6 +146,117 @@ describe("native scalar plans around opaque and exceptional windows", () => {
 
 describe("existing-proof scalar expression consumers", () => {
 	it.each([
+		["String.fromCharCode((a-b)*2)", "CALL_KNOWN"],
+		["parseInt('111',(a-b)*2)", "CALL_KNOWN"],
+		["(1234n).toString((a-b)*2)", "CALL_KNOWN"],
+		["Number.isSafeInteger((a-b)*2)", "CALL_KNOWN"],
+		["[1,,undefined,NaN,-0,1,'equal',5n].indexOf((a-b)*2,left)", "QUERY_STATIC_DATA"],
+		["[1,,undefined,NaN,-0,1,'equal',5n].indexOf(left,(a-b)*2)", "QUERY_STATIC_DATA"],
+		["'a'.localeCompare((a-b)*2)", "PREPARED_STRING_COMPARE"],
+		["Math.sumPrecise([(a-b)*2,a+1.5,b/3])", "PRECISE_NUMBER_SUM"],
+	] as const)("composes arithmetic into %s", (expression, opcode) => {
+		const out = inspectStaticValueFunction(
+			`function probe(left,right){const a=+left;const b=+right;return ${expression};}globalThis.probe=probe;`,
+			"probe",
+		);
+		const product = out.native.body.instructions.findIndex(
+			(op) => op.opcode === "BINARY" && op.operator === "*",
+		);
+		expect(product).toBeGreaterThanOrEqual(0);
+		expect(out.native.storage!.expressionIps).toContain(product);
+		expect(out.native.body.instructions.some((op) => op.opcode === opcode)).toBe(true);
+		expect(deserializeCompilerArtifact(serializeCompilerArtifact(out.image))).toEqual(
+			out.image,
+		);
+	});
+
+	it("captures a composed Number predicate argument once before its repeated tests", () => {
+		const out = inspectStaticValueFunction(
+			"function probe(left,right){const a=+left;const b=+right;return Number.isSafeInteger((a-b)*2);}globalThis.probe=probe;",
+			"probe",
+		);
+		const callIp = out.native.body.instructions.findIndex(
+			(op) => op.opcode === "CALL_KNOWN" && op.operation === "Number.isSafeInteger",
+		);
+		const call = out.native.body.instructions[callIp]!;
+		if (call.opcode !== "CALL_KNOWN") throw new Error("Missing Number predicate");
+		const argument = decodeVmValueOperand(call.arguments[0]!);
+		if (argument.kind !== "register") throw new Error("Missing composed argument");
+		const declaration = out.c.source.match(
+			new RegExp(
+				`(?:double|f64) (__known_argument_${callIp}_\\d+) = r${argument.register};`,
+			),
+		);
+		expect(declaration).not.toBeNull();
+		const value = declaration![1]!;
+		expect(out.c.source).toContain(
+			`isfinite(${value}) && trunc(${value}) == ${value} && fabs(${value})`,
+		);
+	});
+
+	it("materializes a known-call argument whose transitive scalar leaf remains boxed", () => {
+		const out = inspectStaticValueFunction(
+			"let snapshot;function probe(left,right){const a=+left;snapshot=a;const b=+right;return String.fromCharCode((a-b)*2);}globalThis.probe=probe;",
+			"probe",
+		);
+		const product = out.native.body.instructions.findIndex(
+			(op) => op.opcode === "BINARY" && op.operator === "*",
+		);
+		expect(product).toBeGreaterThanOrEqual(0);
+		expect(out.native.storage!.expressionIps).not.toContain(product);
+		expect(() =>
+			validateNativeStorage({
+				...out.native,
+				storage: {
+					...out.native.storage!,
+					expressionIps: [...out.native.storage!.expressionIps, product].sort(
+						(left, right) => left - right,
+					),
+				},
+			}),
+		).toThrow(/invalid or stale storage plan/);
+	});
+
+	it.each([
+		"const x=(a-b)*2; return String.fromCharCode(x,x);",
+		"const x=(a-b)*2; return x.toFixed(x);",
+		"const x=(a-b)*2; callback(); return String.fromCharCode(x);",
+		"try { return String.fromCharCode((a-b)*2); } catch(error) { return error; }",
+	])(
+		"keeps known helper arguments materialized across aliases and effects: %s",
+		(tail) => {
+			const out = inspectStaticValueFunction(
+				`function probe(left,right,callback){const a=+left;const b=+right;${tail}}globalThis.probe=probe;`,
+				"probe",
+			);
+			const product = out.native.body.instructions.findIndex(
+				(op) => op.opcode === "BINARY" && op.operator === "*",
+			);
+			expect(product).toBeGreaterThanOrEqual(0);
+			expect(out.native.storage!.expressionIps).not.toContain(product);
+		},
+	);
+
+	it("preserves profiled known-helper execution sites without folding its argument", () => {
+		const out = inspectStaticValueFunction(
+			"function probe(left,right){const a=+left;const b=+right;return Number.isSafeInteger((a-b)*2);}globalThis.probe=probe;",
+			"probe",
+			{ profile: true },
+		);
+		expect(out.native.storage!.expressionIps).toEqual([]);
+		const callIp = out.native.body.instructions.findIndex(
+			(op) => op.opcode === "CALL_KNOWN" && op.operation === "Number.isSafeInteger",
+		);
+		expect(callIp).toBeGreaterThanOrEqual(0);
+		const site = out.native.body.profileSiteIds![callIp]!;
+		expect(out.c.source).toContain(`MAL_PROFILE_CURRENT_SITE(vm, ${site});`);
+		expect(out.c.source).toContain(
+			`MAL_PROFILE_SITE_EVENT(vm, ${site}, MAL_PROFILE_SITE_EXECUTION, 1);`,
+		);
+		expect(out.c.source).not.toContain("__known_argument_");
+	});
+
+	it.each([
 		["call", "callback(a-b); return 0;", "CALL"],
 		[
 			"shaped fields",
@@ -153,6 +265,7 @@ describe("existing-proof scalar expression consumers", () => {
 		],
 		["static store", "value.result=a-b; return 0;", "STORE_PROPERTY_STATIC"],
 		["dynamic store", "value[value.key]=a-1.5; return 0;", "STORE_PROPERTY"],
+		["array elements", "return [a-b,,a+1.5];", "DEFINE_PROPERTY"],
 	] as const)(
 		"composes a single-use proven scalar into a %s value boundary",
 		(_name, tail, opcode) => {

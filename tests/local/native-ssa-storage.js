@@ -1,5 +1,114 @@
 const gc = globalThis.__mal_collect_garbage ?? (() => {});
 
+function composedPredicateResult(left, right) {
+	const a = +left;
+	const b = +right;
+	return Number.isSafeInteger((a - b) * 2);
+}
+function composedCodesResult(left, right) {
+	const a = +left;
+	const b = +right;
+	return String.fromCharCode((a - b) * 2);
+}
+function composedRadixResult(left, right) {
+	const a = +left;
+	const b = +right;
+	return 1234n.toString((a - b) * 2);
+}
+function composedQueryNeedle(left, right, from) {
+	const a = +left;
+	const b = +right;
+	return [1, , undefined, NaN, -0, 1, "equal", 5n].indexOf((a - b) * 2, from);
+}
+function composedQueryFrom(left, right, input) {
+	const a = +left;
+	const b = +right;
+	return [1, , undefined, NaN, -0, 1, "equal", 5n].indexOf(input, (a - b) * 2);
+}
+function composedCompareResult(left, right) {
+	const a = +left;
+	const b = +right;
+	return "a".localeCompare((a - b) * 2);
+}
+function composedArrayElements(left, right) {
+	const a = +left;
+	const b = +right;
+	return [a - b, , a + 1.5];
+}
+globalThis.composedPredicateResult = composedPredicateResult;
+globalThis.composedCodesResult = composedCodesResult;
+globalThis.composedRadixResult = composedRadixResult;
+globalThis.composedQueryNeedle = composedQueryNeedle;
+globalThis.composedQueryFrom = composedQueryFrom;
+globalThis.composedCompareResult = composedCompareResult;
+globalThis.composedArrayElements = composedArrayElements;
+for (const [left, right] of [
+	[4, 1],
+	[-0, 0],
+	[1.75, 0.25],
+	[Infinity, 1],
+	[-Infinity, 1],
+	[NaN, 2],
+	[9007199254740991, 0],
+]) {
+	const values = composedArrayElements(left, right);
+	gc();
+	console.log(
+		"composed-helpers",
+		composedPredicateResult(left, right),
+		JSON.stringify(composedCodesResult(left, right)),
+		composedQueryNeedle(left, right, -8),
+		composedQueryFrom(left, right, 1),
+		composedCompareResult(left, right),
+		String(values[0]),
+		Object.is(values[0], -0),
+		String(values[2]),
+		values.length,
+		1 in values,
+		Object.hasOwn(values, 1),
+	);
+	try {
+		console.log("composed-radix", composedRadixResult(left, right));
+	} catch (error) {
+		console.log("composed-radix", error instanceof RangeError);
+	}
+}
+const composedOrder = [];
+const composedCoercible = (name, value) => ({
+	valueOf() {
+		composedOrder.push(name);
+		gc();
+		return value;
+	},
+});
+console.log(
+	"composed-coercion",
+	composedQueryNeedle(
+		composedCoercible("left", 3),
+		composedCoercible("right", 3),
+		composedCoercible("from", -8),
+	),
+	composedOrder.join(":"),
+);
+const composedSentinel = {};
+try {
+	composedPredicateResult(composedCoercible("before-throw", 3), {
+		valueOf() {
+			gc();
+			throw composedSentinel;
+		},
+	});
+} catch (error) {
+	console.log("composed-throw", error === composedSentinel);
+}
+for (const input of [1n, Symbol("composed")]) {
+	try {
+		composedCodesResult(input, 0);
+	} catch (error) {
+		console.log("composed-type-error", error instanceof TypeError);
+	}
+}
+
 let argumentDefaults = 0;
 function argumentCountResult(value = (++argumentDefaults, 7)) {
 	const count = arguments.length;

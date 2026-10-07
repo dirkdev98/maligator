@@ -37,6 +37,27 @@ describe("independent native SSA storage", () => {
 
 	it("preserves scalar arithmetic, loop transport, and suspended heap locals", () => {
 		for (const name of [
+			"composedPredicateResult",
+			"composedCodesResult",
+			"composedRadixResult",
+			"composedQueryNeedle",
+			"composedQueryFrom",
+			"composedCompareResult",
+		]) {
+			const native = image.native.functions.find(
+				(fn) =>
+					String.fromCharCode(
+						...(image.runtime.stringConstants[fn.body.nameStringIndex] ?? []),
+					) === name,
+			)!;
+			expect(native).toBeDefined();
+			const productIp = native.body.instructions.findIndex(
+				(op) => op.opcode === "BINARY" && op.operator === "*",
+			);
+			expect(productIp).toBeGreaterThanOrEqual(0);
+			expect(native.storage!.expressionIps).toContain(productIp);
+		}
+		for (const name of [
 			"argumentCountResult",
 			"restLengthResult",
 			"suspendedArgumentCount",

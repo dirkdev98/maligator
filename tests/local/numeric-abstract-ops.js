@@ -274,6 +274,20 @@ check(
 		Number.isNaN(preciseScalarResult(NaN, 1)) &&
 		preciseScalarResult(Infinity, 1) === Infinity,
 );
+function preciseComposedResult(left, right) {
+	const a = +left;
+	const b = +right;
+	return Math.sumPrecise([(a - b) * 2, 1e100, a + 1.5, -1e100]);
+}
+globalThis.preciseComposedResult = preciseComposedResult;
+check(
+	"precise sums consume composed scalars with cancellation and special values",
+	preciseComposedResult(4, 1) === 11.5 &&
+		Number.isNaN(preciseComposedResult(NaN, 1)) &&
+		preciseComposedResult(Infinity, 1) === Infinity &&
+		preciseComposedResult(-Infinity, 1) === -Infinity &&
+		Number.isNaN(preciseComposedResult(Infinity, Infinity)),
+);
 const minimumBinary = Number.MIN_VALUE.toString(2);
 check(
 	"Number arbitrary-radix formatting is shortest and covers binary boundaries",
