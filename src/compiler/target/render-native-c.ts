@@ -2550,6 +2550,8 @@ function emitBody(
 		propertyReadRegions: [],
 		propertyReadPairs: [],
 		pairedArrayLoops: [],
+		arrayPresence: [],
+		arrayPairDestructure: [],
 	},
 	callTransports: ReadonlyArray<NativeCallTransportPlan> = [],
 	callbackTransports: ReadonlyArray<NativeCallbackTransportPlan> = [],
@@ -2708,47 +2710,19 @@ function emitBody(
 		number,
 		NativeArrayPresenceProjectionAction
 	>();
-	for (const indexed of indexedLengthLoopActionByIp.values()) {
-		if (
-			indexed.role !== "element" ||
-			indexed.element?.kind !== "load" ||
-			indexed.element.arrayIndexIsUint32 !== true
-		)
-			continue;
-		const loadIp = indexed.element.ip;
-		const membershipIp = loadIp - 3;
-		const membership = fn.instructions[membershipIp];
-		const branch = fn.instructions[membershipIp + 1];
-		const skip = fn.instructions[membershipIp + 2];
-		const load = fn.instructions[loadIp];
-		if (
-			membership?.opcode !== "BINARY" ||
-			membership.operator !== "in" ||
-			branch?.opcode !== "JUMP_IF" ||
-			branch.cond !== membership.dst ||
-			branch.targetIp !== loadIp ||
-			skip?.opcode !== "JUMP" ||
-			load?.opcode !== "LOAD_PROPERTY" ||
-			membership.left !== load.key ||
-			membership.right !== load.object ||
-			fn.instructions.some(
-				(candidate) =>
-					(candidate.opcode === "JUMP" || candidate.opcode === "JUMP_IF") &&
-					(candidate.targetIp === membershipIp + 1 ||
-						candidate.targetIp === membershipIp + 2),
-			)
-		)
-			continue;
-		nativeArrayPresenceProjectionActionByIp.set(membershipIp, {
-			role: "membership",
-			membershipIp,
-			indexed,
-		});
-		nativeArrayPresenceProjectionActionByIp.set(loadIp, {
-			role: "load",
-			membershipIp,
-			indexed,
-		});
+	for (const plan of fastPathPlans.arrayPresence) {
+		const indexed = indexedLengthLoopActionByIp.get(plan.loadIp);
+		if (indexed === undefined || indexed.role !== "element")
+			throw new Error("Invalid native array presence reference");
+		for (const [ip, role] of [
+			[plan.membershipIp, "membership"],
+			[plan.loadIp, "load"],
+		] as const)
+			nativeArrayPresenceProjectionActionByIp.set(ip, {
+				role,
+				membershipIp: plan.membershipIp,
+				indexed,
+			});
 	}
 	const nativeStringCharCodeAtChainActionByIp = new Map<
 		number,
@@ -2849,61 +2823,25 @@ function emitBody(
 		number,
 		NativeArrayPairDestructureAction
 	>();
-	for (const action of nativeIteratorCursorActionByIp.values()) {
-		const cursor = action.cursor;
-		if (
-			action.role !== "initialize" ||
-			cursor.kind !== "array-values-iterator-cursor" ||
-			cursor.stepIps.length !== 2
-		) {
-			continue;
-		}
-		const [firstStepIp, secondStepIp] = cursor.stepIps as [number, number];
-		const firstStep = fn.instructions[firstStepIp];
-		const secondStep = fn.instructions[secondStepIp];
-		const branch = fn.instructions[secondStepIp + 1];
-		const closeJump = fn.instructions[secondStepIp + 2];
-		const closeIp = secondStepIp + 3;
-		const close = fn.instructions[closeIp];
-		const afterClose = fn.instructions[secondStepIp + 4];
-		const continuationIp = secondStepIp + 5;
-		if (
-			firstStepIp !== cursor.initializeIp + 1 ||
-			secondStepIp !== firstStepIp + 1 ||
-			firstStep?.opcode !== "ITERATOR_STEP" ||
-			secondStep?.opcode !== "ITERATOR_STEP" ||
-			branch?.opcode !== "JUMP_IF" ||
-			branch.cond !== secondStep.doneDst ||
-			branch.targetIp !== continuationIp ||
-			closeJump?.opcode !== "JUMP" ||
-			closeJump.targetIp !== closeIp ||
-			close?.opcode !== "ITERATOR_CLOSE" ||
-			!close.normal ||
-			close.iterator !== cursor.iterator ||
-			afterClose?.opcode !== "JUMP" ||
-			afterClose.targetIp !== continuationIp
-		) {
-			continue;
-		}
-		const common = { cursor } as const;
-		nativeArrayPairDestructureActionByIp.set(cursor.initializeIp, {
-			...common,
+	for (const plan of fastPathPlans.arrayPairDestructure) {
+		const cursor = specializations[plan.regionIndex];
+		if (cursor?.kind !== "array-values-iterator-cursor")
+			throw new Error("Invalid native array pair cursor reference");
+		nativeArrayPairDestructureActionByIp.set(plan.initializeIp, {
+			cursor,
 			role: "initialize",
 		});
-		nativeArrayPairDestructureActionByIp.set(firstStepIp, {
-			...common,
+		nativeArrayPairDestructureActionByIp.set(plan.firstStepIp, {
+			cursor,
 			role: "step",
 			index: 0,
 		});
-		nativeArrayPairDestructureActionByIp.set(secondStepIp, {
-			...common,
+		nativeArrayPairDestructureActionByIp.set(plan.secondStepIp, {
+			cursor,
 			role: "step",
 			index: 1,
 		});
-		nativeArrayPairDestructureActionByIp.set(closeIp, {
-			...common,
-			role: "close",
-		});
+		nativeArrayPairDestructureActionByIp.set(plan.closeIp, { cursor, role: "close" });
 	}
 	const jumpTargets = new Set<number>();
 	let ownsCaptureEnvironment = coro === null && fn.capturedCount > 0;

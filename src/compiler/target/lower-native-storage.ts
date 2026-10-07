@@ -523,6 +523,8 @@ function lowerStorage(
 	const propertyWindows = [...propertyProjections, ...propertyNumericUpdates];
 	const auxiliaryWindows = [
 		...fastPaths.pairedArrayLoops,
+		...fastPaths.arrayPresence,
+		...fastPaths.arrayPairDestructure,
 		...(fastPaths.constructorInitialization === undefined
 			? []
 			: [fastPaths.constructorInitialization]),
@@ -844,6 +846,43 @@ export function validateNativeStorage(
 			sameProjections(stored.propertyProjections, selected.propertyProjections) &&
 			sameUpdates(stored.propertyNumericUpdates, selected.propertyNumericUpdates) &&
 			sameReadRegions(stored.propertyReadRegions, selected.propertyReadRegions) &&
+			stored.arrayPresence.length === selected.arrayPresence.length &&
+			stored.arrayPresence.every((plan, index) => {
+				const expected = selected.arrayPresence[index]!;
+				return (
+					(
+						[
+							"regionIndex",
+							"siteIndex",
+							"elementIndex",
+							"membershipIp",
+							"loadIp",
+							"fallback",
+						] as const
+					).every((key) => plan[key] === expected[key]) &&
+					sameNumbers(plan.claimedIps, expected.claimedIps) &&
+					sameNumbers(plan.borrowedRegisters, expected.borrowedRegisters)
+				);
+			}) &&
+			stored.arrayPairDestructure.length === selected.arrayPairDestructure.length &&
+			stored.arrayPairDestructure.every((plan, index) => {
+				const expected = selected.arrayPairDestructure[index]!;
+				return (
+					(
+						[
+							"regionIndex",
+							"initializeIp",
+							"firstStepIp",
+							"secondStepIp",
+							"closeIp",
+							"continuationIp",
+							"fallback",
+						] as const
+					).every((key) => plan[key] === expected[key]) &&
+					sameNumbers(plan.claimedIps, expected.claimedIps) &&
+					sameNumbers(plan.borrowedRegisters, expected.borrowedRegisters)
+				);
+			}) &&
 			stored.pairedArrayLoops.length === selected.pairedArrayLoops.length &&
 			stored.pairedArrayLoops.every((plan, index) => {
 				const expected = selected.pairedArrayLoops[index]!;

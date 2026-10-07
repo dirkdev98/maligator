@@ -15,6 +15,8 @@ import { NATIVE_CALL_CONVERSIONS, nativeEntryLookup } from "./lower-native-calls
 import type { NativeCallTransportPlan } from "./lower-native-calls.ts";
 import { NATIVE_PROPERTY_UPDATE_OPERATORS } from "./lower-native-fast-paths.ts";
 import type {
+	NativeArrayPresencePlan,
+	NativeArrayPairDestructurePlan,
 	NativePropertyProjectionPlan,
 	NativePropertyNumericUpdatePlan,
 	NativePropertyReadRegionPlan,
@@ -74,7 +76,7 @@ import type {
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal artifacts are hard cut-overs: stale cache entries rebuild.
-export const COMPILER_ARTIFACT_VERSION = 128;
+export const COMPILER_ARTIFACT_VERSION = 129;
 
 function validateClosureCaptureOwners(
 	owners: ReadonlyArray<number>,
@@ -852,6 +854,33 @@ function writeNativeStorage(w: Writer, storage: NativeStoragePlan | undefined): 
 		for (const rep of [...plan.parameters, plan.resultRepresentation])
 			w.u8(["int32", "number", "boolean", "boxed", "string"].indexOf(rep));
 	}
+	w.u32(storage.arrayPresence.length);
+	for (const plan of storage.arrayPresence) {
+		for (const key of [
+			"regionIndex",
+			"siteIndex",
+			"elementIndex",
+			"membershipIp",
+			"loadIp",
+		] as const)
+			w.i32(plan[key]);
+		w.i32Array([...plan.claimedIps]);
+		w.i32Array([...plan.borrowedRegisters]);
+	}
+	w.u32(storage.arrayPairDestructure.length);
+	for (const plan of storage.arrayPairDestructure) {
+		for (const key of [
+			"regionIndex",
+			"initializeIp",
+			"firstStepIp",
+			"secondStepIp",
+			"closeIp",
+			"continuationIp",
+		] as const)
+			w.i32(plan[key]);
+		w.i32Array([...plan.claimedIps]);
+		w.i32Array([...plan.borrowedRegisters]);
+	}
 }
 
 function readNativeStorage(r: Reader): NativeStoragePlan {
@@ -1133,8 +1162,37 @@ function readNativeStorage(r: Reader): NativeStoragePlan {
 			};
 		},
 	);
+	const arrayPresence: Array<NativeArrayPresencePlan> = Array.from(
+		{ length: r.count(28) },
+		() => ({
+			regionIndex: r.i32(),
+			siteIndex: r.i32(),
+			elementIndex: r.i32(),
+			membershipIp: r.i32(),
+			loadIp: r.i32(),
+			claimedIps: r.i32Array(),
+			borrowedRegisters: r.i32Array(),
+			fallback: "original-instructions",
+		}),
+	);
+	const arrayPairDestructure: Array<NativeArrayPairDestructurePlan> = Array.from(
+		{ length: r.count(32) },
+		() => ({
+			regionIndex: r.i32(),
+			initializeIp: r.i32(),
+			firstStepIp: r.i32(),
+			secondStepIp: r.i32(),
+			closeIp: r.i32(),
+			continuationIp: r.i32(),
+			claimedIps: r.i32Array(),
+			borrowedRegisters: r.i32Array(),
+			fallback: "original-iterator-protocol",
+		}),
+	);
 	return {
 		...storage,
+		arrayPresence,
+		arrayPairDestructure,
 		callTransports,
 		callbackTransports,
 		stackObjects,

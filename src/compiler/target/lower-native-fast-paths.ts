@@ -127,12 +127,37 @@ export interface NativePropertyReadPairAction {
 	readonly role: "first" | "second";
 }
 
+export interface NativeArrayPresencePlan {
+	readonly regionIndex: number;
+	readonly siteIndex: number;
+	readonly elementIndex: number;
+	readonly membershipIp: number;
+	readonly loadIp: number;
+	readonly claimedIps: ReadonlyArray<number>;
+	readonly borrowedRegisters: ReadonlyArray<number>;
+	readonly fallback: "original-instructions";
+}
+
+export interface NativeArrayPairDestructurePlan {
+	readonly regionIndex: number;
+	readonly initializeIp: number;
+	readonly firstStepIp: number;
+	readonly secondStepIp: number;
+	readonly closeIp: number;
+	readonly continuationIp: number;
+	readonly claimedIps: ReadonlyArray<number>;
+	readonly borrowedRegisters: ReadonlyArray<number>;
+	readonly fallback: "original-iterator-protocol";
+}
+
 export interface NativeFastPathPlans {
 	readonly propertyNumericUpdates: ReadonlyArray<NativePropertyNumericUpdatePlan>;
 	readonly propertyProjections: ReadonlyArray<NativePropertyProjectionPlan>;
 	readonly propertyReadRegions: ReadonlyArray<NativePropertyReadRegionPlan>;
 	readonly propertyReadPairs: ReadonlyArray<NativePropertyReadPairPlan>;
 	readonly pairedArrayLoops: ReadonlyArray<NativePairedArrayLoopPlan>;
+	readonly arrayPresence: ReadonlyArray<NativeArrayPresencePlan>;
+	readonly arrayPairDestructure: ReadonlyArray<NativeArrayPairDestructurePlan>;
 	readonly constructorInitialization?: NativeConstructorInitializationPlan;
 	readonly privateFieldReserve?: NativePrivateFieldReservePlan;
 }
@@ -1221,6 +1246,9 @@ export function lowerNativeFastPaths(
 		});
 	}
 	return Object.freeze({
+		arrayPresence: selection.kind === "render" ? selection.plans.arrayPresence : [],
+		arrayPairDestructure:
+			selection.kind === "render" ? selection.plans.arrayPairDestructure : [],
 		pairedArrayLoops,
 		pairedArrayLoopActions,
 		propertyNumericUpdates: Object.freeze(propertyNumericUpdates),
@@ -1235,6 +1263,190 @@ export function lowerNativeFastPaths(
 		constructorInitializationActions,
 		...(privateFieldReserve === undefined ? {} : { privateFieldReserve }),
 	});
+}
+
+function selectArrayWindows(
+	native: NativeFunctionPlan,
+	reserved: ReadonlySet<number>,
+	pairedArrayLoops: ReadonlyArray<NativePairedArrayLoopPlan>,
+): Pick<NativeFastPathPlans, "arrayPresence" | "arrayPairDestructure"> {
+	const fn = native.body;
+	const entries = new Set(fn.handlers.map((handler) => handler.handlerIp));
+	for (const [ip, op] of fn.instructions.entries())
+		if (["GENERATOR_START", "YIELD", "AWAIT"].includes(op.opcode)) entries.add(ip + 1);
+	const polls = new Set(
+		native.gc.safepoints
+			.filter((point) => point.kind === "loop-backedge")
+			.map((point) => point.instructionIp),
+	);
+	const incoming = new Map<number, Array<number>>();
+	for (const [ip, op] of fn.instructions.entries()) {
+		if (op.opcode !== "JUMP" && op.opcode !== "JUMP_IF") continue;
+		const sources = incoming.get(op.targetIp) ?? [];
+		sources.push(ip);
+		incoming.set(op.targetIp, sources);
+	}
+	const owners = new Map<number, Array<number>>();
+	for (const [index, region] of native.specializations.entries())
+		for (const ip of region.claimedIps) {
+			const regions = owners.get(ip) ?? [];
+			regions.push(index);
+			owners.set(ip, regions);
+		}
+	const claimed = new Set(reserved);
+	const window = (
+		regionIndex: number,
+		start: number,
+		end: number,
+		sharedPrimaryLoad?: number,
+	) => {
+		const ips = Array.from({ length: end - start + 1 }, (_, index) => start + index);
+		if (
+			pairedArrayLoops.some((plan) =>
+				plan.claimedIps.some(
+					(ip) => ip >= start && ip <= end && ip !== sharedPrimaryLoad,
+				),
+			) ||
+			ips.some(
+				(ip) => claimed.has(ip) || polls.has(ip) || (ip > start && entries.has(ip)),
+			) ||
+			ips.some((ip) =>
+				(owners.get(ip) ?? []).some((index) => {
+					if (index === regionIndex) return false;
+					const parent = native.specializations[regionIndex]!,
+						region = native.specializations[index]!;
+					// Result virtualization is the cursor's noncollecting step overlay.
+					return !(
+						parent.kind === "array-values-iterator-cursor" &&
+						region.kind === "iterator-result-virtualization" &&
+						region.stepIps.every((step) => parent.stepIps.includes(step))
+					);
+				}),
+			) ||
+			ips.some(
+				(ip) =>
+					ip > start &&
+					(incoming.get(ip) ?? []).some((source) => source < start || source > end),
+			)
+		)
+			return undefined;
+		return ips;
+	};
+	const borrow = (ips: ReadonlyArray<number>) =>
+		[
+			...new Set(
+				ips.flatMap((ip) => [
+					...vmInstructionReadRegisters(fn.instructions[ip]!),
+					...vmInstructionWriteRegisters(fn.instructions[ip]!),
+				]),
+			),
+		].sort((left, right) => left - right);
+	const arrayPresence: Array<NativeArrayPresencePlan> = [];
+	const arrayPairDestructure: Array<NativeArrayPairDestructurePlan> = [];
+	for (const [regionIndex, region] of native.specializations.entries()) {
+		if (region.kind === "indexed-length-loop") {
+			for (const [siteIndex, site] of region.sites.entries())
+				for (const [elementIndex, element] of site.elements.entries()) {
+					if (element.kind !== "load" || element.arrayIndexIsUint32 !== true) continue;
+					const loadIp = element.ip,
+						membershipIp = loadIp - 3;
+					const membership = fn.instructions[membershipIp],
+						branch = fn.instructions[membershipIp + 1],
+						skip = fn.instructions[membershipIp + 2],
+						load = fn.instructions[loadIp];
+					if (
+						membership?.opcode !== "BINARY" ||
+						membership.operator !== "in" ||
+						branch?.opcode !== "JUMP_IF" ||
+						branch.cond !== membership.dst ||
+						branch.targetIp !== loadIp ||
+						skip?.opcode !== "JUMP" ||
+						skip.targetIp <= loadIp ||
+						load?.opcode !== "LOAD_PROPERTY" ||
+						membership.left !== load.key ||
+						membership.right !== load.object ||
+						!["boolean", "boxed"].includes(
+							native.registerRepresentations[membership.dst]!,
+						)
+					)
+						continue;
+					const paired = pairedArrayLoops.find(
+						(plan) => plan.lengthLoadIp === site.loadIp && plan.primaryLoadIp === loadIp,
+					);
+					const claimedIps = window(
+						regionIndex,
+						membershipIp,
+						loadIp,
+						paired?.primaryLoadIp,
+					);
+					if (claimedIps === undefined) continue;
+					arrayPresence.push({
+						regionIndex,
+						siteIndex,
+						elementIndex,
+						membershipIp,
+						loadIp,
+						claimedIps,
+						borrowedRegisters: borrow(claimedIps),
+						fallback: "original-instructions",
+					});
+					for (const ip of claimedIps) claimed.add(ip);
+				}
+		} else if (
+			region.kind === "array-values-iterator-cursor" &&
+			region.stepIps.length === 2
+		) {
+			const initializeIp = region.initializeIp,
+				[firstStepIp, secondStepIp] = region.stepIps as [number, number];
+			const first = fn.instructions[firstStepIp],
+				second = fn.instructions[secondStepIp],
+				branch = fn.instructions[secondStepIp + 1],
+				closeJump = fn.instructions[secondStepIp + 2],
+				closeIp = secondStepIp + 3,
+				close = fn.instructions[closeIp],
+				afterClose = fn.instructions[secondStepIp + 4],
+				continuationIp = secondStepIp + 5;
+			if (
+				fn.isAsync ||
+				fn.isGenerator ||
+				firstStepIp !== initializeIp + 1 ||
+				secondStepIp !== firstStepIp + 1 ||
+				first?.opcode !== "ITERATOR_STEP" ||
+				second?.opcode !== "ITERATOR_STEP" ||
+				branch?.opcode !== "JUMP_IF" ||
+				branch.cond !== second.doneDst ||
+				branch.targetIp !== continuationIp ||
+				closeJump?.opcode !== "JUMP" ||
+				closeJump.targetIp !== closeIp ||
+				close?.opcode !== "ITERATOR_CLOSE" ||
+				!close.normal ||
+				close.iterator !== region.iterator ||
+				afterClose?.opcode !== "JUMP" ||
+				afterClose.targetIp !== continuationIp ||
+				[first, second].some(
+					(step) =>
+						native.registerRepresentations[step.valueDst] !== "boxed" ||
+						!["boolean", "boxed"].includes(native.registerRepresentations[step.doneDst]!),
+				)
+			)
+				continue;
+			const claimedIps = window(regionIndex, initializeIp, continuationIp - 1);
+			if (claimedIps === undefined) continue;
+			arrayPairDestructure.push({
+				regionIndex,
+				initializeIp,
+				firstStepIp,
+				secondStepIp,
+				closeIp,
+				continuationIp,
+				claimedIps,
+				borrowedRegisters: borrow(claimedIps),
+				fallback: "original-iterator-protocol",
+			});
+			for (const ip of claimedIps) claimed.add(ip);
+		}
+	}
+	return { arrayPresence, arrayPairDestructure };
 }
 
 export function selectNativeFastPaths(
@@ -1339,6 +1551,37 @@ export function selectNativeFastPaths(
 		!native.specializations.some((region) => region.kind === "numeric-fusion"),
 	);
 	return {
+		...selectArrayWindows(
+			native,
+			new Set([
+				...(entry?.fieldParameters?.loads.map((load) => load.instructionIp) ?? []),
+				...(native.fieldCalls ?? []).flatMap((site) =>
+					Array.from(
+						{ length: site.callIp - site.allocationIp + 1 },
+						(_, index) => site.allocationIp + index,
+					),
+				),
+				...(native.literalSwitches ?? []).flatMap((site) =>
+					Array.from(
+						{ length: site.endIp - site.instructionIp + 1 },
+						(_, index) => site.instructionIp + index,
+					),
+				),
+				...[
+					...selected.propertyProjections,
+					...selected.propertyNumericUpdates,
+					...selected.propertyReadRegions,
+					...selected.propertyReadPairs,
+					...(selected.constructorInitialization === undefined
+						? []
+						: [selected.constructorInitialization]),
+					...(selected.privateFieldReserve === undefined
+						? []
+						: [selected.privateFieldReserve]),
+				].flatMap((plan) => plan.claimedIps),
+			]),
+			selected.pairedArrayLoops,
+		),
 		propertyProjections: selected.propertyProjections,
 		propertyNumericUpdates: selected.propertyNumericUpdates,
 		propertyReadRegions: selected.propertyReadRegions,

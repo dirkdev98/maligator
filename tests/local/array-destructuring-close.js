@@ -503,4 +503,52 @@ function iterableFrom(next, close) {
 	);
 }
 
+{
+	function pair(values) {
+		const [left, right] = values;
+		return [left, right];
+	}
+	const left = { value: "left" },
+		right = { value: "right" };
+	const dense = pair([left, right]);
+	ok("fixed pair preserves heap value identity", dense[0] === left && dense[1] === right);
+	const events = [];
+	const accessors = [];
+	for (let index = 0; index < 2; index++) {
+		Object.defineProperty(accessors, index, {
+			configurable: true,
+			get() {
+				events.push(index);
+				const allocation = Array.from({ length: 128 }, (_, i) => ({ i }));
+				return { index, allocation };
+			},
+		});
+	}
+	const result = pair(accessors);
+	ok(
+		"fixed pair falls back before collecting accessors",
+		events.join(",") === "0,1" &&
+			result[0].index === 0 &&
+			result[1].index === 1 &&
+			result[0].allocation[127].i === 127,
+	);
+	const failure = { original: true };
+	Object.defineProperty(accessors, 0, {
+		get() {
+			throw failure;
+		},
+	});
+	events.length = 0;
+	let thrown;
+	try {
+		pair(accessors);
+	} catch (error) {
+		thrown = error;
+	}
+	ok(
+		"fixed pair preserves first getter throw ordering",
+		thrown === failure && events.length === 0,
+	);
+}
+
 console.log("array-destructuring-close PASS " + passed + "/" + passed);
