@@ -36,6 +36,26 @@ describe("independent native SSA storage", () => {
 	}, 600_000);
 
 	it("preserves scalar arithmetic, loop transport, and suspended heap locals", () => {
+		for (const name of [
+			"argumentCountResult",
+			"restLengthResult",
+			"suspendedArgumentCount",
+		]) {
+			const native = image.native.functions.find(
+				(fn) =>
+					String.fromCharCode(
+						...(image.runtime.stringConstants[fn.body.nameStringIndex] ?? []),
+					) === name,
+			)!;
+			expect(native).toBeDefined();
+			const count = native.body.instructions.find(
+				(op) => op.opcode === "LOAD_ARGUMENT_COUNT",
+			)!;
+			if (count.opcode !== "LOAD_ARGUMENT_COUNT")
+				throw new Error("Missing count snapshot");
+			expect(native.registerRepresentations[count.dst]).toBe("number");
+			expect(native.storage!.rootRegisters).not.toContain(count.dst);
+		}
 		for (const [name, opcode, representation] of [
 			["staticIndexResult", "QUERY_STATIC_DATA", "number"],
 			["staticLastIndexResult", "QUERY_STATIC_DATA", "number"],

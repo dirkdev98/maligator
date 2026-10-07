@@ -1,5 +1,39 @@
 const gc = globalThis.__mal_collect_garbage ?? (() => {});
 
+let argumentDefaults = 0;
+function argumentCountResult(value = (++argumentDefaults, 7)) {
+	const count = arguments.length;
+	value = 99;
+	gc();
+	return [count + 1.5, value, arguments[0]];
+}
+function restLengthResult(left, right, ...rest) {
+	const length = rest.length;
+	gc();
+	return length + 1.5;
+}
+function* suspendedArgumentCount() {
+	const count = arguments.length;
+	yield count + 1.5;
+	gc();
+	return count + 2.5;
+}
+globalThis.argumentCountResult = argumentCountResult;
+globalThis.restLengthResult = restLengthResult;
+globalThis.suspendedArgumentCount = suspendedArgumentCount;
+for (const args of [[], [undefined], [3], [3, 4, 5, 6]]) {
+	console.log(
+		"argument-count",
+		JSON.stringify(argumentCountResult(...args)),
+		argumentDefaults,
+	);
+	console.log("rest-length", restLengthResult(...args));
+	const generator = suspendedArgumentCount(...args);
+	console.log("suspended-argument-count", JSON.stringify(generator.next()));
+	gc();
+	console.log("suspended-argument-count", JSON.stringify(generator.next()));
+}
+
 function staticIndexResult(input, from) {
 	const value = [1, , undefined, NaN, -0, 1, "equal", 5n].indexOf(input, from);
 	gc();

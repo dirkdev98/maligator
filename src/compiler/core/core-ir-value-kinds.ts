@@ -183,6 +183,9 @@ function staticOpcodeKind(opcode: string): CompilerValueKindMask | undefined {
 			return COMPILER_VALUE_KIND_BOOLEAN;
 		case "createF64":
 		case "createNumber":
+		case "loadArgumentCount":
+		case "mathUnaryNumber":
+		case "mathBinaryNumber":
 		case "preparedStringCompare":
 		case "preciseNumberSum":
 			return COMPILER_VALUE_KIND_NUMBER;

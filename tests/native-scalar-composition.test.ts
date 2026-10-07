@@ -470,6 +470,61 @@ describe("known builtin scalar result storage", () => {
 });
 
 describe("certified scalar operation results", () => {
+	it("keeps canonical argument count native without specializing its value", () => {
+		const out = inspectStaticValueFunction(
+			"function probe(value=7,collect){const count=arguments.length;collect();return count+1.5+arguments[0];}globalThis.probe=probe;",
+			"probe",
+		);
+		const count = out.native.body.instructions.find(
+			(op) => op.opcode === "LOAD_ARGUMENT_COUNT",
+		)!;
+		if (count.opcode !== "LOAD_ARGUMENT_COUNT") throw new Error("Missing count snapshot");
+		expect(out.native.registerRepresentations[count.dst]).toBe("number");
+		expect(out.c.source).toContain(`r${count.dst} = arg_count;`);
+		expect(out.native.storage!.rootRegisters).not.toContain(count.dst);
+		const argument = out.native.body.instructions.find(
+			(op) => op.opcode === "LOAD_ARGUMENT",
+		)!;
+		if (argument.opcode !== "LOAD_ARGUMENT")
+			throw new Error("Missing raw argument snapshot");
+		expect(out.native.registerRepresentations[argument.dst]).toBe("boxed");
+		expect(deserializeCompilerArtifact(serializeCompilerArtifact(out.image))).toEqual(
+			out.image,
+		);
+	});
+
+	it("carries rest-length clamp inputs and results as native Numbers", () => {
+		const out = inspectStaticValueFunction(
+			"function probe(left,right,...rest){return rest.length+1.5;}globalThis.probe=probe;",
+			"probe",
+		);
+		const clamp = out.native.body.instructions.find(
+			(op) => op.opcode === "MATH_BINARY_NUMBER",
+		)!;
+		if (clamp.opcode !== "MATH_BINARY_NUMBER")
+			throw new Error("Missing rest-length clamp");
+		expect(clamp.operation).toBe("Math.max");
+		expect(out.native.registerRepresentations[clamp.dst]).toBe("number");
+		expect(out.native.registerRepresentations[clamp.left]).toBe("number");
+		expect(out.native.registerRepresentations[clamp.right]).toBe("int32");
+		expect(out.c.source).not.toContain("mal_ops_number_as_f64(");
+	});
+
+	it("carries coerced precise-sum inputs in native scalar storage", () => {
+		const out = inspectStaticValueFunction(
+			"function probe(left,right){return Math.sumPrecise([+left,+right,+left])+1.5;}globalThis.probe=probe;",
+			"probe",
+		);
+		const sum = out.native.body.instructions.find(
+			(op) => op.opcode === "PRECISE_NUMBER_SUM",
+		)!;
+		if (sum.opcode !== "PRECISE_NUMBER_SUM") throw new Error("Missing precise sum");
+		expect(sum.arguments).toHaveLength(3);
+		for (const operand of sum.arguments)
+			expect(out.native.registerRepresentations[operand]).toBe("number");
+		expect(out.native.registerRepresentations[sum.dst]).toBe("number");
+	});
+
 	it("keeps a certified length native through its lexical check and collecting call", () => {
 		const out = inspectStaticValueFunction(
 			"function probe(left,collect){const length=String(left).length;collect();return length+1.5;}globalThis.probe=probe;",

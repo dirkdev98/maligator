@@ -30,5 +30,9 @@ for (let index = 0; index < 8; index++) {
 const fallback = [reduceRest, reduceRestCachedLength];
 check(fallback[0](2, 11, 13) === 48, "uncached generic arity");
 check(fallback[1](2, 11, 13) === 48, "cached generic arity");
+check(fallback[0]() === 0, "uncached missing fixed arguments");
+check(fallback[1]() === 0, "cached missing fixed arguments");
+check(fallback[0](2) === 0, "uncached empty rest");
+check(fallback[1](2) === 0, "cached empty rest");
 
 console.log(`rest-tuple-direct-entry PASS ${passed}`);

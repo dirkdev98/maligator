@@ -72,7 +72,6 @@ export function analyzeCoreNativeEntry(
 			)
 				return undefined;
 			const opcode = fn.instructionOpcodeName(instruction);
-			if (opcode === "loadArgumentCount") return COMPILER_VALUE_KIND_NUMBER;
 			if (opcode === "loadArgument" || opcode === "loadStaticArgument")
 				return mask(arguments_[fn.instructionAttributes(instruction).index as number]);
 			return undefined;

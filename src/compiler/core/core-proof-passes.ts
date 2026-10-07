@@ -716,6 +716,9 @@ const SCALAR_PRODUCERS: ReadonlySet<string> = new Set([
 	"preparedStringCompare",
 	"preciseNumberSum",
 	"queryStaticData",
+	"loadArgumentCount",
+	"mathUnaryNumber",
+	"mathBinaryNumber",
 ]);
 
 const SCALAR_CONSUMERS: ReadonlySet<string> = new Set([
@@ -725,6 +728,9 @@ const SCALAR_CONSUMERS: ReadonlySet<string> = new Set([
 	"typeofCompare",
 	"rootUse",
 	"throwIfTdz",
+	"mathUnaryNumber",
+	"mathBinaryNumber",
+	"preciseNumberSum",
 ]);
 
 function scalarProducer(fn: CoreFunctionStore, instruction: CoreInstructionId): boolean {
