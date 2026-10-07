@@ -103,6 +103,18 @@ describe("independent native SSA storage", () => {
 				"mal_vm_property_numeric_update_commit(",
 			);
 		}
+		const stackFields = image.native.functions.find(
+			(fn) =>
+				String.fromCharCode(
+					...(image.runtime.stringConstants[fn.body.nameStringIndex] ?? []),
+				) === "typedStackFields",
+		)!;
+		expect(stackFields.storage!.stackObjects).toHaveLength(1);
+		expect(stackFields.storage!.stackObjects[0]!.slotRepresentations).toEqual([
+			"number",
+			"int32",
+			"boolean",
+		]);
 		const regions = image.native.functions.flatMap((fn) => fn.specializations);
 		expect(regions.some((region) => region.kind === "string-split-cursor")).toBe(true);
 		const regexp = regions.find((region) => region.kind === "regexp-iterator-projection");

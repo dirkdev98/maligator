@@ -750,3 +750,20 @@ setTimeout(() => {
 		throw new Error("Suspension lost a scalar-replaced object's boxed occupant");
 	console.log("compact-occupant", globalThis.occupantIterator.next().value);
 }, 0);
+
+function typedStackFields(input) {
+	const object = { fraction: -0, integer: 2, flag: true };
+	object.integer = 3;
+	gc();
+	return object === input
+		? "identity"
+		: [Object.is(object.fraction, -0), object.integer, object.flag].join(":");
+}
+function typedStackNaN(input) {
+	const object = { fraction: NaN, integer: -2147483648, flag: false };
+	gc();
+	return object === input
+		? "identity"
+		: [String(object.fraction), object.integer, object.flag].join(":");
+}
+console.log("typed-stack-fields", typedStackFields(null), typedStackNaN(null));

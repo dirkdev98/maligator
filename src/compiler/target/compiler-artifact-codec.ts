@@ -18,6 +18,7 @@ import type {
 	NativePropertyReadPairPlan,
 	NativePropertyProjectionOperand,
 } from "./lower-native-fast-paths.ts";
+import type { NativeStackObjectStoragePlan } from "./lower-native-objects.ts";
 import type { NativeStoragePlan } from "./lower-native-storage.ts";
 import { validateNativeStorage } from "./lower-native-storage.ts";
 import type { NativeSuspensionPlan } from "./lower-native-suspension.ts";
@@ -67,7 +68,7 @@ import type {
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal artifacts are hard cut-overs: stale cache entries rebuild.
-export const COMPILER_ARTIFACT_VERSION = 113;
+export const COMPILER_ARTIFACT_VERSION = 114;
 
 function validateClosureCaptureOwners(
 	owners: ReadonlyArray<number>,
@@ -776,6 +777,13 @@ function writeNativeStorage(w: Writer, storage: NativeStoragePlan | undefined): 
 			w.i32Array([...point.registers]);
 		}
 	}
+	w.u32(storage.stackObjects.length);
+	for (const plan of storage.stackObjects) {
+		w.i32(plan.allocationIp);
+		w.u32(plan.slotRepresentations.length);
+		for (const rep of plan.slotRepresentations)
+			w.u8(["int32", "number", "boolean"].indexOf(rep));
+	}
 }
 
 function readNativeStorage(r: Reader): NativeStoragePlan {
@@ -952,8 +960,21 @@ function readNativeStorage(r: Reader): NativeStoragePlan {
 		}));
 		suspension = { points, valueSlot, modeSlot, slotCount };
 	}
+	const stackObjects: Array<NativeStackObjectStoragePlan> = Array.from(
+		{ length: r.count(2) },
+		() => ({
+			allocationIp: r.i32(),
+			slotRepresentations: Array.from({ length: r.count(1) }, () => {
+				const rep = (["int32", "number", "boolean"] as const)[r.u8()];
+				if (rep === undefined)
+					throw new RangeError("Invalid native stack field representation");
+				return rep;
+			}),
+		}),
+	);
 	return {
 		...storage,
+		stackObjects,
 		numericLeaf: leaf,
 		suspension,
 		propertyProjections,

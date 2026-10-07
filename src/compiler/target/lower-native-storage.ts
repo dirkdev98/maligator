@@ -5,6 +5,8 @@ import type {
 	NativePropertyReadRegionPlan,
 	NativePropertyReadPairPlan,
 } from "./lower-native-fast-paths.ts";
+import { selectNativeStackObjectStorage } from "./lower-native-objects.ts";
+import type { NativeStackObjectStoragePlan } from "./lower-native-objects.ts";
 import {
 	nativeEntryStableRootRegisters,
 	nativePrivateCallResultIps,
@@ -41,6 +43,7 @@ export interface NativeNumericLeafPlan extends NativeScalarStoragePlan {
 
 export interface NativeStoragePlan extends NativeScalarStoragePlan {
 	readonly suspension: NativeSuspensionPlan | undefined;
+	readonly stackObjects: ReadonlyArray<NativeStackObjectStoragePlan>;
 	readonly propertyProjections: ReadonlyArray<NativePropertyProjectionPlan>;
 	readonly propertyNumericUpdates: ReadonlyArray<NativePropertyNumericUpdatePlan>;
 	readonly propertyReadRegions: ReadonlyArray<NativePropertyReadRegionPlan>;
@@ -535,6 +538,7 @@ function lowerStorage(
 		propertyReadRegions,
 		propertyReadPairs,
 		suspension: lowerNativeSuspension(native),
+		stackObjects: selectNativeStackObjectStorage(native),
 		rootRegisters: roots,
 		privateRegisters: roots.filter((local) => privateLocals.has(local)),
 		privateCallResultIps: [...calls],
@@ -700,6 +704,16 @@ export function validateNativeStorage(native: NativeFunctionPlan): void {
 		stored !== undefined &&
 		selected !== undefined &&
 		sameScalar(stored, selected) &&
+		stored.stackObjects.length === selected.stackObjects.length &&
+		stored.stackObjects.every(
+			(plan, index) =>
+				plan.allocationIp === selected.stackObjects[index]!.allocationIp &&
+				plan.slotRepresentations.length ===
+					selected.stackObjects[index]!.slotRepresentations.length &&
+				plan.slotRepresentations.every(
+					(rep, slot) => rep === selected.stackObjects[index]!.slotRepresentations[slot],
+				),
+		) &&
 		(stored.suspension === undefined || selected.suspension === undefined
 			? stored.suspension === selected.suspension
 			: stored.suspension.valueSlot === selected.suspension.valueSlot &&
