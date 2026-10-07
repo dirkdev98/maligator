@@ -1,15 +1,15 @@
-import type * as fsModule from "node:fs";
 import {
 	chmodSync,
 	existsSync,
 	mkdtempSync,
 	readFileSync,
 	statSync,
+	utimesSync,
 	writeFileSync,
 } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
 	artifactActionKey,
 	artifactOutput,
@@ -19,11 +19,6 @@ import {
 	readArtifactAction,
 	withArtifactActionLock,
 } from "../src/artifact-store.ts";
-
-vi.mock("node:fs", async (importOriginal) => {
-	const fs = await importOriginal<typeof fsModule>();
-	return { ...fs, statSync: vi.fn(fs.statSync) };
-});
 
 describe("layered artifact store", () => {
 	it("publishes immutable blobs and materializes independent outputs", () => {
@@ -49,7 +44,7 @@ describe("layered artifact store", () => {
 		);
 	});
 
-	it.each(["observed timestamps", "unchanged timestamps"])(
+	it.each(["changed modification time", "restored modification time"])(
 		"rejects same-size corruption and rebuilds with %s",
 		(timestamps) => {
 			const root = mkdtempSync(path.join(os.tmpdir(), "maligator-corrupt-"));
@@ -63,8 +58,8 @@ describe("layered artifact store", () => {
 			const blob = artifactOutput(published, "object").path;
 			const beforeCorruption = statSync(blob);
 			writeFileSync(blob, "evil");
-			if (timestamps === "unchanged timestamps") {
-				vi.mocked(statSync).mockReturnValueOnce(beforeCorruption);
+			if (timestamps === "restored modification time") {
+				utimesSync(blob, beforeCorruption.atime, beforeCorruption.mtime);
 			}
 			expect(readArtifactAction(root, "example", producer, action)).toBeUndefined();
 			expect(existsSync(blob)).toBe(false);
