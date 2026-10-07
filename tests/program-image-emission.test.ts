@@ -2707,10 +2707,9 @@ describe("native update-expression representation", () => {
 			}
 			globalThis.result = sum();
 		`);
-		const loads = definition.runtime.functions.flatMap((fn, functionIndex) =>
-			fn.instructions.flatMap((instruction, instructionIndex) => {
-				const plan =
-					definition.native.functions[functionIndex]!.instructions[instructionIndex];
+		const loads = definition.native.functions.flatMap((fn) =>
+			fn.body.instructions.flatMap((instruction, instructionIndex) => {
+				const plan = fn.instructions[instructionIndex];
 				return instruction.opcode === "LOAD_PROPERTY" &&
 					plan?.kind === "contained-fixed-typed-array-element"
 					? [plan]
@@ -2973,7 +2972,7 @@ describe("native update-expression representation", () => {
 		expect(output).toContain("mal_vm_iterator_step(vm,");
 		const ownerOutput = emitCompiledFunction(owner, ownerIndex, "", false)!.source;
 		expect(ownerOutput).not.toContain("__private_r");
-		const step = definition.runtime.functions[ownerIndex]!.instructions[stepIp];
+		const step = owner.body.instructions[stepIp];
 		if (step?.opcode !== "ITERATOR_STEP") throw new Error("missing iterator step");
 		for (const register of [step.iterator, step.next, step.valueDst]) {
 			expect(ownerOutput).toContain(`#define r${register} (__gc_slots[`);
