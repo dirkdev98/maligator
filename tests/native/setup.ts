@@ -53,31 +53,35 @@ export function setup(project: TestProject): void {
 					MAL_BUILD_JOBS: preparationJobs,
 					CARGO_BUILD_JOBS: preparationJobs,
 				};
-	const config = resolveBuildConfig({
-		engine: {
-			primordials: "mutable",
-			eval: true,
-			regexp: true,
-			realms: true,
-			temporal: true,
-			intl: { enabled: true, features: [] },
-		},
-		surface: { webPlatform: true, node: false },
-	});
-	const environments = [environment];
+	// Both default surfaces must prepare their shared compiler before timed fixture builds.
+	const variants = [
+		{ environment, node: false },
+		{ environment, node: true },
+	];
 	// Vitest records selected paths before global setup; collected files are still empty.
 	if (
 		!perfStatsEnabled(environment) &&
 		project.vitest.state.getPaths().some((file) => perfTests.has(path.resolve(file)))
 	) {
-		environments.push({ ...environment, MAL_PERF_STATS: "1" });
+		variants.push({ environment: { ...environment, MAL_PERF_STATS: "1" }, node: false });
 	}
-	for (const buildEnvironment of environments) {
+	for (const variant of variants) {
+		const config = resolveBuildConfig({
+			engine: {
+				primordials: "mutable",
+				eval: true,
+				regexp: true,
+				realms: true,
+				temporal: true,
+				intl: { enabled: true, features: [] },
+			},
+			surface: { webPlatform: true, node: variant.node },
+		});
 		ensureNativeArtifacts(
 			resolveNativeBuildContext({
 				features: buildDerivationFromConfig(config).features,
 				compilerBake,
-				environment: buildEnvironment,
+				environment: variant.environment,
 			}),
 		);
 	}

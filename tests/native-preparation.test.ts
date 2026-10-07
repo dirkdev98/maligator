@@ -45,13 +45,19 @@ describe("native runtime preparation", () => {
 		"collection-direct.test.ts",
 		"object-rest-shaped.test.ts",
 		"own-table-property-cache.test.ts",
-	])("prepares both shared runtime variants for %s before its hooks", (file) => {
+	])("prepares default surfaces and instrumentation for %s before hooks", (file) => {
 		setup(selectedProject(file));
 		const contexts = preparedContexts();
-		expect(contexts).toHaveLength(2);
+		expect(contexts).toHaveLength(3);
 		expect(contexts.map((context) => perfStatsDefines(context.environment))).toEqual([
 			[],
+			[],
 			["-DMAL_PERF_STATS=1"],
+		]);
+		expect(contexts.map((context) => context.features?.nodeEnabled)).toEqual([
+			false,
+			true,
+			false,
 		]);
 		for (const [index, context] of contexts.entries()) {
 			expect(context.features).toMatchObject({
@@ -60,7 +66,6 @@ describe("native runtime preparation", () => {
 				intlEnabled: true,
 				temporalEnabled: true,
 				webPlatformEnabled: true,
-				nodeEnabled: false,
 				profileEnabled: false,
 			});
 			expect(context.environment).toMatchObject({
@@ -73,7 +78,7 @@ describe("native runtime preparation", () => {
 
 	it("prepares the instrumented archive once for multiple selected consumers", () => {
 		setup(selectedProject("map-get-set-cache.test.ts", "collection-direct.test.ts"));
-		expect(ensureNativeArtifacts).toHaveBeenCalledTimes(2);
+		expect(ensureNativeArtifacts).toHaveBeenCalledTimes(3);
 	});
 
 	it.each([
@@ -82,10 +87,19 @@ describe("native runtime preparation", () => {
 		"object-spread-shaped.test.ts",
 		"profile.test.ts",
 		"interpreter-dense-array.test.ts",
+		"worker-pool-private-ref.test.ts",
+		"worker-child-signals.test.ts",
 	])("keeps %s outside default instrumented preparation", (file) => {
 		setup(selectedProject(file));
-		expect(preparedContexts()).toHaveLength(1);
-		expect(perfStatsDefines(preparedContexts()[0]!.environment)).toEqual([]);
+		const contexts = preparedContexts();
+		expect(contexts.map((context) => context.features?.nodeEnabled)).toEqual([
+			false,
+			true,
+		]);
+		expect(contexts.map((context) => perfStatsDefines(context.environment))).toEqual([
+			[],
+			[],
+		]);
 	});
 
 	it("does not change the inherited runtime mode or worker allocation", () => {
@@ -93,11 +107,11 @@ describe("native runtime preparation", () => {
 		const inherited = { ...process.env };
 		setup(selectedProject("map-get-set-cache.test.ts"));
 		expect(process.env).toEqual(inherited);
-		const [ordinary, instrumented] = preparedContexts();
+		const [ordinary, node, instrumented] = preparedContexts();
 		expect(ordinary!.environment).not.toBe(instrumented!.environment);
 		expect(ordinary!.environment?.MAL_PERF_STATS).toBeUndefined();
 		expect(instrumented!.environment?.MAL_PERF_STATS).toBe("1");
-		for (const context of [ordinary!, instrumented!]) {
+		for (const context of [ordinary!, node!, instrumented!]) {
 			expect(context.environment?.MAL_UBSAN).toBe("1");
 		}
 	});
@@ -105,9 +119,14 @@ describe("native runtime preparation", () => {
 	it("retains inherited performance instrumentation without duplicate preparation", () => {
 		vi.stubEnv("MAL_PERF_STATS", "1");
 		setup(selectedProject("map-get-set-cache.test.ts"));
-		expect(preparedContexts()).toHaveLength(1);
-		expect(perfStatsDefines(preparedContexts()[0]!.environment)).toEqual([
-			"-DMAL_PERF_STATS=1",
+		const contexts = preparedContexts();
+		expect(contexts.map((context) => context.features?.nodeEnabled)).toEqual([
+			false,
+			true,
+		]);
+		expect(contexts.map((context) => perfStatsDefines(context.environment))).toEqual([
+			["-DMAL_PERF_STATS=1"],
+			["-DMAL_PERF_STATS=1"],
 		]);
 	});
 

@@ -10,8 +10,6 @@ import {
 	STRESS_ENV,
 } from "../../src/test-harness.ts";
 
-// node:crypto is behind surface.node, so these fixtures link against the node-on
-// artifacts (-DMAL_NODE=1) prewarmed by globalSetup.
 const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-node-crypto-"));
 
 describe("node:crypto (surface.node)", () => {

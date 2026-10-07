@@ -77,7 +77,9 @@ owns a shared runtime build from compiling on one core while every other core wa
 on its artifact lock. Native global setup and Test262 runtime preparation can use
 the full budget. Serial WPT and self-hosted checks can also use the full build
 allocation. Cargo compiles Rust tests before running the Rust test pool.
-Native global setup also prepares the instrumented default runtime when a selected
+Native global setup prepares both default Node surface variants before timed
+fixture builds, including their shared eval compiler and Rust dependencies.
+It also prepares the instrumented default runtime without Node when a selected
 file is listed in `tests/test-suite-native-perf.txt`. Keep that manifest in sync
 with tests using the default internal feature profile and `MAL_PERF_STATS=1`:
 compiling the shared native eval compiler belongs in preparation, before timed
