@@ -1,3 +1,9 @@
+import {
+	nativeCallTransportsMatch,
+	nativeEntryLookup,
+	selectNativeCallTransports,
+} from "./lower-native-calls.ts";
+import type { NativeCallTransportPlan, NativeEntryLookup } from "./lower-native-calls.ts";
 import { selectNativeFastPaths } from "./lower-native-fast-paths.ts";
 import type {
 	NativeFastPathPlans,
@@ -49,6 +55,7 @@ export interface NativeNumericLeafPlan extends NativeScalarStoragePlan {
 
 export interface NativeStoragePlan
 	extends NativeScalarStoragePlan, NativeRootStoragePlan, NativeFastPathPlans {
+	readonly callTransports: ReadonlyArray<NativeCallTransportPlan>;
 	readonly suspension: NativeSuspensionPlan | undefined;
 	readonly stackObjects: ReadonlyArray<NativeStackObjectStoragePlan>;
 	readonly rootRegisters: ReadonlyArray<number>;
@@ -496,6 +503,7 @@ function lowerStorage(
 	native: NativeFunctionPlan,
 	preserveProfileSites = true,
 	entry?: NativeDirectEntryPlan,
+	entries: NativeEntryLookup = new Map(),
 ): NativeStoragePlan {
 	const fn = native.body;
 	const fastPaths = selectNativeFastPaths(native, entry);
@@ -593,6 +601,7 @@ function lowerStorage(
 	const scalar = scalarStorage(native);
 	return {
 		...fastPaths,
+		callTransports: selectNativeCallTransports(native, entries),
 		suspension: compactNativeSuspension(
 			suspension,
 			new Set(
@@ -618,28 +627,35 @@ function lowerStorage(
 
 export function lowerNativeFunctionStorage(
 	native: NativeFunctionPlan,
+	entries: NativeEntryLookup = new Map(),
 ): NativeFunctionPlan {
 	return {
 		...native,
-		storage: lowerStorage(native),
+		storage: lowerStorage(native, true, undefined, entries),
 		directEntries: native.directEntries.map((entry) => ({
 			...entry,
-			storage: lowerStorage(nativeVariantContract(native, entry), true, entry),
+			storage: lowerStorage(nativeVariantContract(native, entry), true, entry, entries),
 		})),
 	};
 }
 
 export function lowerNativeStorage(image: ProgramImage): ProgramImage {
+	const entries = nativeEntryLookup(image.native.functions);
 	return {
 		...image,
 		native: {
 			...image.native,
-			functions: image.native.functions.map(lowerNativeFunctionStorage),
+			functions: image.native.functions.map((native) =>
+				lowerNativeFunctionStorage(native, entries),
+			),
 		},
 	};
 }
 
-export function validateNativeStorage(native: NativeFunctionPlan): void {
+export function validateNativeStorage(
+	native: NativeFunctionPlan,
+	entries: NativeEntryLookup = new Map(),
+): void {
 	const sameNumbers = (left: ReadonlyArray<number>, right: ReadonlyArray<number>) =>
 		left.length === right.length && left.every((value, index) => value === right[index]);
 	const sameProjections = (
@@ -784,6 +800,7 @@ export function validateNativeStorage(native: NativeFunctionPlan): void {
 			stored !== undefined &&
 			selected !== undefined &&
 			stored.rootSlotCount === selected.rootSlotCount &&
+			nativeCallTransportsMatch(stored.callTransports, selected.callTransports) &&
 			sameScalar(stored, selected) &&
 			stored.stackObjects.length === selected.stackObjects.length &&
 			stored.stackObjects.every(
@@ -899,12 +916,12 @@ export function validateNativeStorage(native: NativeFunctionPlan): void {
 		);
 	};
 	if (
-		!same(native.storage, lowerStorage(native, false)) ||
+		!same(native.storage, lowerStorage(native, false, undefined, entries)) ||
 		native.directEntries.some(
 			(entry) =>
 				!same(
 					entry.storage,
-					lowerStorage(nativeVariantContract(native, entry), false, entry),
+					lowerStorage(nativeVariantContract(native, entry), false, entry, entries),
 				),
 		)
 	)

@@ -4,6 +4,7 @@ import { createConservativeNativePlan } from "../src/compiler/target/program-ima
 import type {
 	NativeDirectEntryPlan,
 	NativeFunctionPlan,
+	VmRegisterRepresentation,
 } from "../src/compiler/target/program-image.ts";
 import {
 	directCompiledEntryKey,
@@ -55,13 +56,19 @@ const targetEntry: NativeDirectEntryPlan = {
 	gc: { safepoints: [] },
 };
 
-function emit(available = true, guarded = false) {
+function emit(
+	available = true,
+	guarded = false,
+	result: VmRegisterRepresentation = guarded ? "boxed" : "number",
+	targetResult: VmRegisterRepresentation = "number",
+) {
+	const selectedTarget = { ...targetEntry, resultRepresentation: targetResult };
 	const base = createConservativeNativePlan([fn]).functions[0]!;
 	const numeric: NativeDirectEntryPlan = {
 		id: 0,
 		parameterRepresentations: ["boxed", "number"],
-		resultRepresentation: guarded ? "boxed" : "number",
-		registerRepresentations: ["boxed", "number", guarded ? "boxed" : "number"],
+		resultRepresentation: result,
+		registerRepresentations: ["boxed", "number", result],
 		callOverrides: [
 			{
 				instructionIp: 0,
@@ -74,13 +81,13 @@ function emit(available = true, guarded = false) {
 			safepoints: base.gc.safepoints.map((point) => ({
 				...point,
 				rootRegisters: point.rootRegisters.filter(
-					(register) => register === 0 || (guarded && register === 2),
+					(register) => register === 0 || (result === "boxed" && register === 2),
 				),
 				incomingRootRegisters: point.incomingRootRegisters.filter(
-					(register) => register === 0 || (guarded && register === 2),
+					(register) => register === 0 || (result === "boxed" && register === 2),
 				),
 				outgoingRootRegisters: point.outgoingRootRegisters.filter(
-					(register) => register === 0 || (guarded && register === 2),
+					(register) => register === 0 || (result === "boxed" && register === 2),
 				),
 			})),
 		},
@@ -100,14 +107,17 @@ function emit(available = true, guarded = false) {
 		],
 	};
 	const emitted = emitCompiledFunction(
-		lowerNativeFunctionStorage(native),
+		lowerNativeFunctionStorage(
+			native,
+			new Map([[directCompiledEntryKey(1, 0), selectedTarget]]),
+		),
 		0,
 		"",
 		false,
 		"static",
 		new Set([1]),
 		[],
-		new Map(available ? [[directCompiledEntryKey(1, 0), targetEntry]] : []),
+		new Map(available ? [[directCompiledEntryKey(1, 0), selectedTarget]] : []),
 		false,
 		new Set([1]),
 	)!;
@@ -148,5 +158,25 @@ describe("native entry call overrides", () => {
 		expect(source).toContain("mal_direct_1_0(vm, MAL_VALUE_UNDEFINED, r1,");
 		expect(source).toContain("mal_vm_call_cached(vm,");
 		expect(emitted.source).not.toContain("__guarded_index_0");
+	});
+	it.each([
+		["number", "number", "__guarded_entry_value_0"],
+		["int32", "int32", "__guarded_entry_value_0"],
+		["boolean", "boolean", "__guarded_entry_value_0"],
+		["number", "int32", "(f64) __guarded_entry_value_0"],
+		["int32", "number", "mal_ops_number_to_i32(__guarded_entry_value_0)"],
+	] as const)(
+		"transports guarded %s destinations from %s results without a boxed completion",
+		(result, targetResult, value) => {
+			const source = emit(true, true, result, targetResult).directEntries[0]!.source;
+			expect(source).toContain(`r2 = ${value};`);
+			expect(source).not.toContain(".value = mal_");
+			expect(source).toContain("mal_vm_call_cached(vm,");
+			expect(source).toContain("mal_vm_realm_switch_to(vm, __entry_realm);");
+		},
+	);
+	it("uses defined Number-to-int32 conversion for an exact typed result", () => {
+		const source = emit(true, false, "int32").directEntries[0]!.source;
+		expect(source).toContain("r2 = mal_ops_number_to_i32(__direct_value_0);");
 	});
 });

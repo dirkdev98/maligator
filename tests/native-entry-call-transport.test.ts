@@ -117,6 +117,20 @@ function skipStorageWithoutFastPaths(reader: Reader): void {
 	for (let index = 0; index < 5; index++) expect(reader.u32()).toBe(0);
 	for (let index = 0; index < 3; index++) expect(reader.u8()).toBe(0);
 	expect(reader.u32()).toBe(0);
+	const transports = reader.u32();
+	for (let index = 0; index < transports; index++) {
+		reader.i32();
+		const targets = reader.u32();
+		for (let target = 0; target < targets; target++) {
+			reader.i32();
+			reader.i32();
+			const parameters = reader.u32();
+			for (let parameter = 0; parameter < parameters; parameter++) reader.u8();
+			reader.u8();
+			reader.u8();
+			reader.i32Array();
+		}
+	}
 }
 
 function firstOverrideOffset(bytes: Uint8Array): number {
@@ -175,6 +189,60 @@ describe("specialized call graph metadata transport", () => {
 		expect(serializeCompilerArtifact(restored)).toEqual(serializeCompilerArtifact(image));
 	});
 
+	it("persists argument and result conversion modes only in the selected caller entry", () => {
+		const image = callGraphImage();
+		expect(image.native.functions[0]!.storage!.callTransports).toEqual([]);
+		const plans = image.native.functions[0]!.directEntries[0]!.storage!.callTransports;
+		expect(plans).toEqual([
+			{
+				instructionIp: 2,
+				targets: [
+					{
+						functionIndex: 1,
+						entryId: 0,
+						arguments: ["identity"],
+						resultRepresentation: "number",
+						result: "identity",
+						fields: [],
+					},
+				],
+			},
+		]);
+		const restored = deserializeCompilerArtifact(serializeCompilerArtifact(image));
+		expect(
+			restored.native.functions[0]!.directEntries[0]!.storage!.callTransports,
+		).toEqual(plans);
+		const forged = {
+			...image,
+			native: {
+				...image.native,
+				functions: image.native.functions.map((fn, index) =>
+					index !== 0
+						? fn
+						: {
+								...fn,
+								directEntries: fn.directEntries.map((entry) => ({
+									...entry,
+									storage: {
+										...entry.storage!,
+										callTransports: plans.map((plan) => ({
+											...plan,
+											targets: plan.targets.map((target) => ({
+												...target,
+												result: "box-number" as const,
+											})),
+										})),
+									},
+								})),
+							},
+				),
+			},
+		};
+		expect(() => serializeCompilerArtifact(forged)).toThrow(
+			/invalid or stale storage plan/,
+		);
+	});
+
 	it("rebases outgoing target functions and preserves per-function entry identities", () => {
 		const image = callGraphImage();
 		const { image: merged } = mergeProgramImages([image, image]);
@@ -183,6 +251,10 @@ describe("specialized call graph metadata transport", () => {
 		expect(first).toEqual([{ instructionIp: 2, functionIndex: 1, entryId: 0 }]);
 		expect(second).toEqual([{ instructionIp: 2, functionIndex: 3, entryId: 0 }]);
 		expect(first).not.toBe(image.native.functions[0]!.directEntries[0]!.callOverrides);
+		expect(
+			merged.native.functions[2]!.directEntries[0]!.storage!.callTransports[0]!
+				.targets[0]!.functionIndex,
+		).toBe(3);
 		expect(
 			deserializeCompilerArtifact(serializeCompilerArtifact(merged)).native.functions[2]!
 				.directEntries[0]!.callOverrides,

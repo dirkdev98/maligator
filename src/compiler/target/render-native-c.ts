@@ -30,6 +30,11 @@ import {
 	emitTypeofResult,
 	emitUnaryOperator,
 } from "./emit-program-image.ts";
+import type {
+	NativeCallConversion,
+	NativeCallTargetTransport,
+	NativeCallTransportPlan,
+} from "./lower-native-calls.ts";
 import { lowerNativeFastPaths } from "./lower-native-fast-paths.ts";
 import type {
 	NativeConstructorInitializationAction,
@@ -1191,6 +1196,7 @@ function emitCompiledVariant(
 		new Set(storage.rematerializedConstantIps),
 		new Set(storage.elidedTdzIps),
 		storage,
+		storage.callTransports,
 	);
 	if (body === null) {
 		return null;
@@ -2474,10 +2480,14 @@ function emitBody(
 		propertyReadPairs: [],
 		pairedArrayLoops: [],
 	},
+	callTransports: ReadonlyArray<NativeCallTransportPlan> = [],
 ): EmittedBody | null {
 	if (!vmRegionActionsAreCurrent(specializations, regionActions)) {
 		throw new Error("Native function has stale region actions");
 	}
+	const callTransportByIp = new Map(
+		callTransports.map((plan) => [plan.instructionIp, plan]),
+	);
 	const stableCaptureOwners = new Set(fixedCaptureOwners(fn, functionIndex));
 	const copiedCaptures = copiedCaptureIndexes(fn);
 	// Closed-source layouts include every external lexical owner at creation,
@@ -3749,6 +3759,7 @@ function emitBody(
 		instructionContext.fieldLoad = fieldLoads.get(ip);
 		instructionContext.fieldAllocation = fieldAllocations.get(ip);
 		instructionContext.fieldCall = fieldCallSites.get(ip);
+		instructionContext.callTransport = callTransportByIp.get(ip);
 		instructionContext.mathUnaryCall = mathUnaryCalls.has(ip);
 		instructionContext.mathBinaryCall = mathBinaryCalls.has(ip);
 		instructionContext.indexedLengthLoopAction = indexedLengthLoopActionByIp.get(ip);
@@ -4164,6 +4175,7 @@ interface NativeInstructionContext {
 	readonly fieldAllocation?: NativeFieldCall;
 	readonly fieldCall?: NativeFieldCall;
 	readonly fieldEntryCall?: NativeFieldCall;
+	readonly callTransport?: NativeCallTransportPlan;
 	readonly mathUnaryCall: boolean;
 	readonly mathBinaryCall: boolean;
 	readonly mappedArguments: boolean;
@@ -4349,6 +4361,7 @@ function emitInstruction(
 		directArgumentRepresentations: context.directArgumentRepresentations,
 		constantBoolean: context.constantBoolean,
 		fieldEntryCall: context.fieldEntryCall,
+		callTransport: context.callTransport,
 		mathUnaryCall,
 		mathBinaryCall,
 		mappedArguments,
@@ -8809,47 +8822,53 @@ function emitInstruction(
 					poll,
 				];
 			}
-			const directEntryParameters = (directEntry: NativeDirectEntryPlan) =>
-				(directEntry.argumentRepresentations ?? directEntry.parameterRepresentations)
-					.map((representation, parameter): string | null => {
+			const convert = (mode: NativeCallConversion, value: string): string => {
+				switch (mode) {
+					case "identity":
+						return value;
+					case "box-number":
+						return profileCall("boxing", `mal_ops_number_value(${value})`);
+					case "box-int32":
+						return profileCall("boxing", `mal_value_from_i32(${value})`);
+					case "box-boolean":
+						return profileCall("boxing", `mal_value_new_boolean(${value})`);
+					case "unbox-number":
+						return `mal_ops_number_as_f64(${value})`;
+					case "unbox-int32":
+						return `mal_ops_number_to_i32(mal_ops_number_as_f64(${value}))`;
+					case "unbox-boolean":
+						return `mal_value_to_boolean(${value})`;
+					case "int32-to-number":
+						return `(f64) ${value}`;
+					case "number-to-int32":
+						return `mal_ops_number_to_i32(${value})`;
+				}
+			};
+			const directEntryParameters = (transport: NativeCallTargetTransport) =>
+				transport.arguments
+					.map((mode, parameter) => {
 						const operand = args[parameter];
-						if (operand === undefined) {
-							return representation === "boxed" ? "MAL_VALUE_UNDEFINED" : null;
-						}
-						const decoded = decodeVmValueOperand(operand);
-						const boxedScalar =
-							decoded?.kind === "register" && reps[decoded.register] === "boxed";
-						if (representation === "number") {
-							return (
-								nativeNumberOperand(operand) ??
-								(boxedScalar ? `mal_ops_number_as_f64(${boxedOperand(operand)})` : null)
-							);
-						}
-						if (representation === "int32") {
-							return (
-								nativeInt32Operand(operand) ??
-								(boxedScalar
-									? `mal_ops_number_to_i32(mal_ops_number_as_f64(${boxedOperand(operand)}))`
-									: null)
-							);
-						}
-						if (representation === "boolean") {
-							return (
-								nativeBooleanOperand(operand) ??
-								(boxedScalar ? `mal_value_to_boolean(${boxedOperand(operand)})` : null)
-							);
-						}
-						return boxedOperand(operand);
+						if (operand === undefined) return "MAL_VALUE_UNDEFINED";
+						const rep = operandRep(operand);
+						const value =
+							rep === "int32"
+								? nativeInt32Operand(operand)!
+								: rep === "number"
+									? nativeNumberOperand(operand)!
+									: rep === "boolean"
+										? nativeBooleanOperand(operand)!
+										: boxedOperand(operand);
+						return convert(mode, value);
 					})
 					.concat(
-						directEntry.fieldParameters?.keys.map((key) => {
+						transport.fields.map((slot) => {
 							const site = context.fieldEntryCall;
-							const slot = site?.allocation.keyStringIndices.indexOf(key) ?? -1;
-							return site === undefined || slot < 0
-								? null
-								: `__field_${site.allocationIp}_${slot}`;
-						}) ?? [],
+							if (site === undefined)
+								throw new Error("Native field call transport lacks an allocation");
+							return `__field_${site.allocationIp}_${slot}`;
+						}),
 					);
+
 			if (callPlan?.guardedFunctionIndices !== undefined) {
 				nativeCallDecision(
 					context.profile,
@@ -8866,61 +8885,52 @@ function emitInstruction(
 				const guardedIndex = `__guarded_index_${ip}`;
 				const branches = callPlan.guardedFunctionIndices.flatMap((target, index) => {
 					const exact = `__guarded_compiled_${ip}_${target}`;
-					const fieldEntry = context.fieldEntryCall?.entries.find(
-						(entry) => entry.functionIndex === target,
+					const transport = context.callTransport?.targets.find(
+						(candidate) => candidate.functionIndex === target,
 					);
-					const selectedEntryId =
-						fieldEntry?.entryId ??
-						(callPlan.guardedFunctionIndices!.length === 1
-							? callPlan.directEntryId
-							: undefined);
 					const entry =
-						selectedEntryId === undefined
+						transport === undefined
 							? undefined
 							: directCompiledEntries.get(
-									directCompiledEntryKey(target, selectedEntryId),
+									directCompiledEntryKey(target, transport.entryId),
 								);
-					const parameters =
-						entry === undefined ? undefined : directEntryParameters(entry);
-					if (
-						entry !== undefined &&
-						parameters?.every((parameter) => parameter !== null)
-					) {
+					if (entry !== undefined && transport !== undefined) {
+						const parameters = directEntryParameters(transport);
 						const covered = context.directEntryCalls.get(ip) ?? new Set<number>();
 						covered.add(target);
 						context.directEntryCalls.set(ip, covered);
 						const value = `__guarded_entry_value_${ip}`;
-						const result =
-							entry.resultRepresentation === "number"
-								? `mal_ops_number_value(${value})`
-								: entry.resultRepresentation === "int32"
-									? `mal_value_from_i32(${value})`
-									: entry.resultRepresentation === "boolean"
-										? `mal_value_new_boolean(${value})`
-										: value;
 						const receiver = context.strictCompiledTargets.has(target)
 							? boxedOperand(instruction.thisValue)
 							: `mal_vm_callee_this(vm, &vm->runtime_image->functions[${target}], ${boxedOperand(instruction.thisValue)})`;
+						const restoreRealm = [
+							"#if MAL_REALMS",
+							"  mal_vm_realm_switch_to(vm, __entry_realm);",
+							"#endif",
+						];
 						return [
-							`${index === 0 ? "if" : "else if"} (${guardedIndex} == ${target}) {`,
-							`#if MAL_REALMS`,
-							`  MalRealm *__entry_realm = vm->current_realm;`,
+							`${index === 0 ? "if" : "else if"} (${guardedIndex} == ${relocation.functionIndex(target)}) {`,
+							"#if MAL_REALMS",
+							"  MalRealm *__entry_realm = vm->current_realm;",
 							`  mal_vm_realm_switch_to(vm, mal_vm_callee_realm(vm, ${guardedCallee}));`,
-							`#endif`,
-							`  if (${entry.leaf ? "mal_vm_enter_leaf_checked" : "mal_vm_enter_compiled"}(vm, ${target})) {`,
-							`    MAL_PERF_COUNT(direct_entry_hits);`,
-							`    ${cTypeOf(entry.resultRepresentation)} ${value} = mal_direct_${target}_${entry.id}${suffix}(vm, ${receiver}${parameters.length === 0 ? "" : `, ${parameters.join(", ")}`}, mal_value_to_function_object(${guardedCallee})->creation_env, ${guardedCallee});`,
-							`    ${entry.leaf ? "mal_vm_leave_leaf_checked" : "mal_vm_leave_compiled"}(vm);`,
-							`    ${tmp} = vm->completion.kind == MAL_COMPLETION_THROW ? vm->completion : (MalCompletion) { .kind = MAL_COMPLETION_NORMAL, .value = ${result} };`,
-							`  } else { ${tmp} = vm->completion; }`,
-							`#if MAL_REALMS`,
-							`  mal_vm_realm_switch_to(vm, __entry_realm);`,
-							`#endif`,
-							`}`,
+							"#endif",
+							`  if (!${entry.leaf ? "mal_vm_enter_leaf_checked" : "mal_vm_enter_compiled"}(vm, ${target})) {`,
+							...restoreRealm,
+							`    ${onThrow()}`,
+							"  }",
+							"  MAL_PERF_COUNT(direct_entry_hits);",
+							`  ${cTypeOf(transport.resultRepresentation)} ${value} = mal_direct_${target}_${entry.id}${suffix}(vm, ${receiver}${parameters.length === 0 ? "" : `, ${parameters.join(", ")}`}, mal_value_to_function_object(${guardedCallee})->creation_env, ${guardedCallee});`,
+							`  ${entry.leaf ? "mal_vm_leave_leaf_checked" : "mal_vm_leave_compiled"}(vm);`,
+							...restoreRealm,
+							`  ${throwCheck()}`,
+							`  r${instruction.dst} = ${convert(transport.result, value)};`,
+							"}",
 						];
 					}
+
 					return [
 						`${index === 0 ? "if" : "else if"} (${guardedIndex} == ${relocation.functionIndex(target)}) {`,
+						`  MalCompletion ${tmp};`,
 						...(directCompiledTargets.has(target)
 							? [
 									`  const MalExactScriptCall ${exact} = { .callee = ${guardedCallee}, .function_index = ${target}, .compiled_callback = mal_compiled_${target}${suffix}, .function = &vm->runtime_image->functions[${target}], .env = mal_value_to_function_object(${guardedCallee})->creation_env };`,
@@ -8929,6 +8939,8 @@ function emitInstruction(
 							: [
 									`  ${tmp} = mal_vm_call_exact_script(vm, ${relocation.functionIndex(target)}, ${guardedCallee}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
 								]),
+						`  if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow()}`,
+						`  r${instruction.dst} = ${callResult(`${tmp}.value`)};`,
 						`}`,
 					];
 				});
@@ -8936,13 +8948,12 @@ function emitInstruction(
 					`static MAL_ISOLATE_LOCAL MalCallCache __cc_${ip};`,
 					`MalValue ${guardedCallee} = ${boxedOperand(instruction.callee)};`,
 					`i32 ${guardedIndex} = mal_value_is_function_object(${guardedCallee}) ? mal_function_object_function_index(mal_value_to_function_object(${guardedCallee})) : -1;`,
-					`MalCompletion ${tmp};`,
 					...branches,
 					`else {`,
-					`  ${tmp} = ${profileCall("call", `mal_vm_call_cached(vm, &__cc_${ip}, ${guardedCallee}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length})`)};`,
+					`  MalCompletion ${tmp} = ${profileCall("call", `mal_vm_call_cached(vm, &__cc_${ip}, ${guardedCallee}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length})`)};`,
+					`  if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow()}`,
+					`  r${instruction.dst} = ${callResult(`${tmp}.value`)};`,
 					`}`,
-					`if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow()}`,
-					`r${instruction.dst} = ${callResult(`${tmp}.value`)};`,
 					poll,
 				];
 			}
@@ -8958,48 +8969,33 @@ function emitInstruction(
 					: [
 							`const MalFunction *${directFunction} = &vm->runtime_image->functions[${target}];`,
 						];
-				const selectedEntryId =
-					context.fieldEntryCall?.entries.find((entry) => entry.functionIndex === target)
-						?.entryId ?? callPlan.directEntryId;
+				const transport = context.callTransport?.targets.find(
+					(candidate) => candidate.functionIndex === target,
+				);
 				const directEntry =
-					selectedEntryId === undefined
+					transport === undefined
 						? undefined
-						: directCompiledEntries.get(directCompiledEntryKey(target, selectedEntryId));
-				if (directEntry !== undefined) {
+						: directCompiledEntries.get(
+								directCompiledEntryKey(target, transport.entryId),
+							);
+				if (directEntry !== undefined && transport !== undefined) {
 					const directCallee = `__direct_callee_${ip}`;
 					const directValue = `__direct_value_${ip}`;
-					const parameters = directEntryParameters(directEntry);
-					if (parameters.every((parameter) => parameter !== null)) {
-						context.directEntryCalls.set(ip, new Set([target]));
-						nativeCallDecision(context.profile, ip, "call.direct-native", "applied");
-						const directResult =
-							directEntry.resultRepresentation === "int32"
-								? reps[instruction.dst] === "int32"
-									? directValue
-									: reps[instruction.dst] === "number"
-										? `(f64) ${directValue}`
-										: `mal_value_from_i32(${directValue})`
-								: directEntry.resultRepresentation === "number"
-									? reps[instruction.dst] === "number"
-										? directValue
-										: profileCall("boxing", `mal_ops_number_value(${directValue})`)
-									: directEntry.resultRepresentation === "boolean"
-										? reps[instruction.dst] === "boolean"
-											? directValue
-											: profileCall("boxing", `mal_value_new_boolean(${directValue})`)
-										: callResult(directValue);
-						return [
-							`MalValue ${directCallee} = ${boxedOperand(instruction.callee)};`,
-							`MAL_PERF_COUNT(direct_entry_hits);`,
-							`if (!${directEntry.leaf ? "mal_vm_enter_leaf_checked" : "mal_vm_enter_compiled"}(vm, ${target})) ${onThrow()}`,
-							...functionDeclaration,
-							`${cTypeOf(directEntry.resultRepresentation)} ${directValue} = mal_direct_${target}_${directEntry.id}${suffix}(vm, ${thisArgument}${parameters.length === 0 ? "" : `, ${parameters.join(", ")}`}, mal_value_to_function_object(${directCallee})->creation_env, ${directCallee});`,
-							`${directEntry.leaf ? "mal_vm_leave_leaf_checked" : "mal_vm_leave_compiled"}(vm);`,
-							`if (vm->completion.kind == MAL_COMPLETION_THROW) ${onThrow()}`,
-							`r${instruction.dst} = ${directResult};`,
-							poll,
-						];
-					}
+					const parameters = directEntryParameters(transport);
+					context.directEntryCalls.set(ip, new Set([target]));
+					nativeCallDecision(context.profile, ip, "call.direct-native", "applied");
+					const directResult = convert(transport.result, directValue);
+					return [
+						`MalValue ${directCallee} = ${boxedOperand(instruction.callee)};`,
+						`MAL_PERF_COUNT(direct_entry_hits);`,
+						`if (!${directEntry.leaf ? "mal_vm_enter_leaf_checked" : "mal_vm_enter_compiled"}(vm, ${target})) ${onThrow()}`,
+						...functionDeclaration,
+						`${cTypeOf(directEntry.resultRepresentation)} ${directValue} = mal_direct_${target}_${directEntry.id}${suffix}(vm, ${thisArgument}${parameters.length === 0 ? "" : `, ${parameters.join(", ")}`}, mal_value_to_function_object(${directCallee})->creation_env, ${directCallee});`,
+						`${directEntry.leaf ? "mal_vm_leave_leaf_checked" : "mal_vm_leave_compiled"}(vm);`,
+						`if (vm->completion.kind == MAL_COMPLETION_THROW) ${onThrow()}`,
+						`r${instruction.dst} = ${directResult};`,
+						poll,
+					];
 				}
 				if (directCompiledTargets.has(target)) {
 					nativeCallDecision(context.profile, ip, "call.direct-compiled", "applied");

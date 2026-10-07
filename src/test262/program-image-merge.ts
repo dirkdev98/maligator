@@ -1,3 +1,4 @@
+import type { NativeStoragePlan } from "../compiler/target/lower-native-storage.ts";
 import type {
 	ProgramImage,
 	NativeInstructionPlan,
@@ -9,6 +10,24 @@ import type { BytecodeInstruction } from "../compiler/target/runtime-image.ts";
 export interface MergedProgramImage {
 	image: ProgramImage;
 	functionBases: Array<number>;
+}
+
+function rebaseNativeStorage(
+	storage: NativeStoragePlan | undefined,
+	functionBase: number,
+): NativeStoragePlan | undefined {
+	return storage === undefined
+		? undefined
+		: {
+				...storage,
+				callTransports: storage.callTransports.map((plan) => ({
+					...plan,
+					targets: plan.targets.map((target) => ({
+						...target,
+						functionIndex: target.functionIndex + functionBase,
+					})),
+				})),
+			};
 }
 
 interface RebaseBases {
@@ -664,6 +683,7 @@ export function mergeProgramImages(images: Array<ProgramImage>): MergedProgramIm
 		mergedNativeFunctions.push(
 			...programImage.native.functions.map((native, localFunctionIndex) => ({
 				...native,
+				storage: rebaseNativeStorage(native.storage, base.function),
 				body: {
 					...native.body,
 					closureCaptureOwners: native.body.closureCaptureOwners?.map((owner) =>
@@ -689,6 +709,7 @@ export function mergeProgramImages(images: Array<ProgramImage>): MergedProgramIm
 				registerRepresentations: [...native.registerRepresentations],
 				directEntries: native.directEntries.map((entry) => ({
 					...entry,
+					storage: rebaseNativeStorage(entry.storage, base.function),
 					callOverrides: entry.callOverrides?.map((call) => ({
 						...call,
 						functionIndex: call.functionIndex + base.function,

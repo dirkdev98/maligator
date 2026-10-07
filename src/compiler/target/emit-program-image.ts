@@ -2,6 +2,7 @@ import type { IncludedAsset } from "../../assets.ts";
 import { knownOperationFlags } from "../shared/known-operations.ts";
 import { knownOperationIndex } from "../shared/known-operations.ts";
 import { staticDataQueryTag } from "../shared/static-data-query.ts";
+import { nativeEntryLookup } from "./lower-native-calls.ts";
 import { validateNativeStorage } from "./lower-native-storage.ts";
 import { finalizeCompilerRemarks } from "./profile-metadata.ts";
 import type { ProgramImage } from "./program-image.ts";
@@ -1283,7 +1284,8 @@ function emitProgramImageSource(
 		lines.push(line);
 	}
 
-	for (const native of image.native.functions) validateNativeStorage(native);
+	const entries = nativeEntryLookup(image.native.functions);
+	for (const native of image.native.functions) validateNativeStorage(native, entries);
 	return { source: lines.join("\n"), compiled };
 }
 

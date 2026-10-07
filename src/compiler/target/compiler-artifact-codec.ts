@@ -10,6 +10,8 @@ import {
 } from "../shared/compiler-value-kinds.ts";
 import type { CompilerOperatorInputKindMasks } from "../shared/compiler-value-kinds.ts";
 import { getPrimordialCatalog } from "../shared/primordial-catalog-data.ts";
+import { NATIVE_CALL_CONVERSIONS, nativeEntryLookup } from "./lower-native-calls.ts";
+import type { NativeCallTransportPlan } from "./lower-native-calls.ts";
 import { NATIVE_PROPERTY_UPDATE_OPERATORS } from "./lower-native-fast-paths.ts";
 import type {
 	NativePropertyProjectionPlan,
@@ -71,7 +73,7 @@ import type {
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal artifacts are hard cut-overs: stale cache entries rebuild.
-export const COMPILER_ARTIFACT_VERSION = 125;
+export const COMPILER_ARTIFACT_VERSION = 126;
 
 function validateClosureCaptureOwners(
 	owners: ReadonlyArray<number>,
@@ -668,7 +670,8 @@ export function serializeCompilerArtifact(
 	for (const body of bodies)
 		writeRuntimeFunction(writer, body, options.debugInfo !== false);
 	writeCompilerArtifact(writer, { ...image.runtime, functions: bodies }, image);
-	for (const native of image.native.functions) validateNativeStorage(native);
+	const entries = nativeEntryLookup(image.native.functions);
+	for (const native of image.native.functions) validateNativeStorage(native, entries);
 	return writer.finish();
 }
 function writeNativeStorage(w: Writer, storage: NativeStoragePlan | undefined): void {
@@ -819,6 +822,24 @@ function writeNativeStorage(w: Writer, storage: NativeStoragePlan | undefined): 
 		w.u32(plan.slotRepresentations.length);
 		for (const rep of plan.slotRepresentations)
 			w.u8(["int32", "number", "boolean", "boxed", "string"].indexOf(rep));
+	}
+	w.u32(storage.callTransports.length);
+	for (const plan of storage.callTransports) {
+		w.i32(plan.instructionIp);
+		w.u32(plan.targets.length);
+		for (const target of plan.targets) {
+			w.i32(target.functionIndex);
+			w.i32(target.entryId);
+			w.u32(target.arguments.length);
+			for (const mode of target.arguments) w.u8(NATIVE_CALL_CONVERSIONS.indexOf(mode));
+			w.u8(
+				["int32", "number", "boolean", "boxed", "string"].indexOf(
+					target.resultRepresentation,
+				),
+			);
+			w.u8(NATIVE_CALL_CONVERSIONS.indexOf(target.result));
+			w.i32Array([...target.fields]);
+		}
 	}
 }
 
@@ -1047,8 +1068,39 @@ function readNativeStorage(r: Reader): NativeStoragePlan {
 			}),
 		}),
 	);
+	const readConversion = () => {
+		const mode = NATIVE_CALL_CONVERSIONS[r.u8()];
+		if (mode === undefined) throw new RangeError("Invalid native call conversion");
+		return mode;
+	};
+	const callTransports: Array<NativeCallTransportPlan> = Array.from(
+		{ length: r.count(2) },
+		() => ({
+			instructionIp: r.i32(),
+			targets: Array.from({ length: r.count(6) }, () => {
+				const functionIndex = r.i32(),
+					entryId = r.i32();
+				const arguments_ = Array.from({ length: r.count(1) }, readConversion);
+				const resultRepresentation = (
+					["int32", "number", "boolean", "boxed", "string"] as const
+				)[r.u8()];
+				if (resultRepresentation === undefined)
+					throw new RangeError("Invalid native call result representation");
+				return {
+					functionIndex,
+					entryId,
+					arguments: arguments_,
+					resultRepresentation,
+					result: readConversion(),
+					fields: r.i32Array(),
+				};
+			}),
+		}),
+	);
+
 	return {
 		...storage,
+		callTransports,
 		stackObjects,
 		numericLeaf: leaf,
 		suspension,
@@ -5192,6 +5244,8 @@ function readCompilerArtifact(
 			);
 	}
 	validateVmShapeCases(runtimeImage);
-	for (const native of definition.native.functions) validateNativeStorage(native);
+	const entries = nativeEntryLookup(definition.native.functions);
+	for (const native of definition.native.functions)
+		validateNativeStorage(native, entries);
 	return definition;
 }
