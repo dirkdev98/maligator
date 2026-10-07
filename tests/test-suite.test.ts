@@ -331,7 +331,7 @@ describe("test suite planner", () => {
 		},
 	);
 
-	it("passes an explicit comparison baseline to every Test262 stage in the full plan", () => {
+	it("preserves explicit baselines in a full JSON plan captured through a pipe", () => {
 		const baseline = path.resolve(".cache/explicit-test262-baseline.json");
 		const plan = JSON.parse(
 			runSuite("full", "--test262-baseline", baseline, "--plan=json"),

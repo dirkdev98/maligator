@@ -674,16 +674,24 @@ const excludedStages = [...allSmokeCommands, ...allLaterCommands]
 	.map((command) => command.name);
 const scope = { coversEntireTier: excludedStages.length === 0, excludedStages };
 
-if (list) {
-	for (const command of [...smokeCommands, ...laterCommands]) {
-		console.log(`${command.name}:\n  ${formatCommand(command)}`);
-	}
+async function exitAfterPrinting(output: string): Promise<never> {
+	await new Promise<void>((resolve, reject) => {
+		process.stdout.write(`${output}\n`, (error) => (error ? reject(error) : resolve()));
+	});
 	process.exit(0);
+}
+
+if (list) {
+	await exitAfterPrinting(
+		[...smokeCommands, ...laterCommands]
+			.map((command) => `${command.name}:\n  ${formatCommand(command)}`)
+			.join("\n"),
+	);
 }
 
 if (jsonPlan) {
 	const commands = [...smokeCommands, ...laterCommands];
-	console.log(
+	await exitAfterPrinting(
 		JSON.stringify(
 			{
 				...commandEnvironmentPlan(
@@ -712,7 +720,6 @@ if (jsonPlan) {
 			2,
 		),
 	);
-	process.exit(0);
 }
 
 const sharedCache = maligatorCacheDirectory();
