@@ -289,6 +289,7 @@ function scalarWithHandler(left, observe) {
 globalThis.scalarWithRegion = scalarWithRegion;
 globalThis.scalarWithHandler = scalarWithHandler;
 for (const value of [-0, 7, Infinity, NaN]) {
+	const label = Object.is(value, -0) ? "-0" : String(value);
 	for (const fail of [false, true]) {
 		let called = false;
 		const observe = (input) => {
@@ -299,11 +300,11 @@ for (const value of [-0, 7, Infinity, NaN]) {
 			}
 			return input;
 		};
-		console.log("handler-scalars", value, fail, scalarWithHandler(value, observe));
+		console.log("handler-scalars", label, fail, scalarWithHandler(value, observe));
 	}
 	console.log(
 		"region-scalars",
-		value,
+		label,
 		scalarWithRegion(
 			{
 				get a() {
