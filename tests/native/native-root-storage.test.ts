@@ -3,6 +3,7 @@ import { emitCompiledFunction } from "../../src/compiler/target/render-native-c.
 import {
 	assertExactLines,
 	buildBackendPairFromOneProgramImage,
+	HOST_MAIN,
 	runToStdout,
 	STRESS_ENV,
 } from "../../src/test-harness.ts";
@@ -14,6 +15,7 @@ describe("compact native shadow roots", () => {
 		const pair = buildBackendPairFromOneProgramImage({
 			fixture: "tests/local/native-root-storage.js",
 			name: "native-root-storage",
+			mainFile: HOST_MAIN,
 		});
 		({ compiled, interpreted } = pair);
 		const kernel = pair.programImage.native.functions.find(
