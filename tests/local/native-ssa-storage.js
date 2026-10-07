@@ -264,6 +264,63 @@ for (let index = 0; index < 3; index++) {
 	tailResults.push(scalarRegionTail(index + 1, 4, 5));
 }
 console.log("region-tail", tailResults.join(","));
+
+function scalarWithRegion(value, left, right, observe) {
+	const fused = value.a + value.b * 2;
+	observe(fused);
+	const a = +left;
+	const b = +right;
+	const difference = a - b;
+	return difference < a;
+}
+function scalarWithHandler(left, observe) {
+	let result;
+	try {
+		const protectedValue = +left;
+		result = observe(protectedValue);
+	} catch (error) {
+		result = observe(error);
+	}
+	const a = +left;
+	const b = +result;
+	const difference = a - b;
+	return difference < a;
+}
+globalThis.scalarWithRegion = scalarWithRegion;
+globalThis.scalarWithHandler = scalarWithHandler;
+for (const value of [-0, 7, Infinity, NaN]) {
+	for (const fail of [false, true]) {
+		let called = false;
+		const observe = (input) => {
+			gc();
+			if (fail && !called) {
+				called = true;
+				throw input;
+			}
+			return input;
+		};
+		console.log("handler-scalars", value, fail, scalarWithHandler(value, observe));
+	}
+	console.log(
+		"region-scalars",
+		value,
+		scalarWithRegion(
+			{
+				get a() {
+					gc();
+					return 3;
+				},
+				get b() {
+					gc();
+					return 5;
+				},
+			},
+			value,
+			2,
+			gc,
+		),
+	);
+}
 globalThis.scalarConstantZero = (condition) => {
 	const value = -0;
 	gc();

@@ -3357,7 +3357,9 @@ describe("native update-expression representation", () => {
 		expect(output).toMatch(boxedNativeDefinition(1, "static"));
 		expect(output).not.toContain("mal_vm_op_throw_if_tdz");
 		expect(output).not.toContain("mal_vm_binary_op(vm, MAL_BIN_ADD");
-		expect(output).toMatch(/r\d+ = [^;]+ \+ [^;]+;/);
+		expect(output).toMatch(
+			/(?:#define r\d+ \([^\n]+ \+ [^\n]+\)|r\d+ = [^;]+ \+ [^;]+;)/,
+		);
 	});
 
 	it("does not synthesize watched epochs for ordinary resumable property loads", () => {

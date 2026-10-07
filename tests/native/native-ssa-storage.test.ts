@@ -184,6 +184,24 @@ describe("independent native SSA storage", () => {
 		if (scalar === undefined)
 			throw new Error("Scalar rounding fixture lacks a native multiplication expression");
 		expect(emitCompiledFunction(scalar, scalar.functionIndex, "", false)).not.toBeNull();
+		for (const name of ["scalarWithRegion", "scalarWithHandler"]) {
+			const composed = image.native.functions.find(
+				(fn) =>
+					String.fromCharCode(
+						...(image.runtime.stringConstants[fn.body.nameStringIndex] ?? []),
+					) === name,
+			)!;
+			if (name === "scalarWithRegion")
+				expect(
+					composed.specializations.some((region) => region.kind === "numeric-fusion"),
+				).toBe(true);
+			else expect(composed.body.handlers.length).toBeGreaterThan(0);
+			expect(composed.storage!.expressionIps.length).toBeGreaterThan(0);
+			expect(composed.storage!.definitionInitializedRegisters.length).toBeGreaterThan(0);
+			expect(
+				emitCompiledFunction(composed, composed.functionIndex, "", false),
+			).not.toBeNull();
+		}
 		const leaf = image.native.functions.find(
 			(fn) =>
 				String.fromCharCode(

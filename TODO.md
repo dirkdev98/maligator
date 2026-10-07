@@ -105,6 +105,9 @@ The independent target boundary and current storage contract are recorded in
       concurrent-GC ownership transitions.
 - [x] Reuse suspension slots per site and compose scalar expressions, constants,
       TDZ omission, and initialization in unprotected resumables.
+- [x] Compose scalar expressions, TDZ omission, and definition initialization in
+      independent numeric windows beside selected regions and exception handlers;
+      preserve borrowed operands and protected windows.
 - [x] Persist multi-field typed stack storage for direct activation-local objects
       with existing non-materializing certificates and stable scalar fields.
 - [ ] Extend selected typed call/aggregate transport and expression regions using

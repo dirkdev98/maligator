@@ -31,6 +31,7 @@ import type {
 	ProgramImage,
 } from "./program-image.ts";
 import {
+	vmExceptionHandlerTargets,
 	vmInstructionReadRegisters,
 	vmInstructionWriteRegisters,
 } from "./runtime-image.ts";
@@ -130,36 +131,71 @@ function selectNumericLeaf(
 	});
 }
 
-function hasExplicitScalarUses(native: NativeFunctionPlan): boolean {
-	const fn = native.body;
-	return (
-		native.storageValues !== undefined &&
-		fn.handlers.length === 0 &&
-		native.specializations.length === 0 &&
-		native.instructions.every(
-			(plan) =>
-				plan === undefined ||
-				plan.kind === "exact-operator-input-kinds" ||
-				plan.kind === "call" ||
-				plan.kind === "construct",
-		) &&
-		(native.fieldCalls?.length ?? 0) === 0 &&
-		(native.literalSwitches?.length ?? 0) === 0
-	);
+interface NativeScalarOwnership {
+	readonly blocked: ReadonlySet<number>;
+	readonly borrowed: ReadonlySet<number>;
 }
 
-function elidedTdzIps(
+function scalarStorageOwnership(
 	native: NativeFunctionPlan,
 	projections: ReadonlyArray<
 		Pick<NativePropertyProjectionPlan, "claimedIps" | "borrowedRegisters">
 	>,
+	suspension?: NativeSuspensionPlan,
+): NativeScalarOwnership {
+	const fn = native.body;
+	const blocked = new Set(native.specializations.flatMap((region) => region.claimedIps));
+	for (const plan of projections) for (const ip of plan.claimedIps) blocked.add(ip);
+	for (const action of native.regionActions) blocked.add(action.ip);
+	for (const site of native.fieldCalls ?? [])
+		for (let ip = site.allocationIp; ip <= site.callIp; ip++) blocked.add(ip);
+	for (const site of native.literalSwitches ?? [])
+		for (let ip = site.instructionIp; ip <= site.endIp; ip++) blocked.add(ip);
+	const handlers = vmExceptionHandlerTargets(fn.instructions.length, fn.handlers);
+	for (const handler of fn.handlers) {
+		blocked.add(handler.handlerIp);
+		blocked.add(handler.endIp);
+	}
+	for (const [ip, op] of fn.instructions.entries()) {
+		const plan = native.instructions[ip];
+		if (
+			handlers[ip] !== undefined ||
+			["CATCH", "TRY_BEGIN", "TRY_END"].includes(op.opcode) ||
+			(plan !== undefined &&
+				!["exact-operator-input-kinds", "call", "construct"].includes(plan.kind))
+		)
+			blocked.add(ip);
+	}
+	// Region operands may remain borrowed after their explicit instruction has finished.
+	const borrowed = new Set(
+		[...blocked].flatMap((ip) => {
+			const op = fn.instructions[ip];
+			return op === undefined
+				? []
+				: [...vmInstructionReadRegisters(op), ...vmInstructionWriteRegisters(op)];
+		}),
+	);
+	for (const plan of projections)
+		for (const register of plan.borrowedRegisters) borrowed.add(register);
+	for (const point of suspension?.points ?? []) {
+		blocked.add(point.instructionIp);
+		for (const register of point.registers) borrowed.add(register);
+		for (const register of vmInstructionWriteRegisters(
+			fn.instructions[point.instructionIp]!,
+		))
+			borrowed.add(register);
+	}
+	return { blocked, borrowed };
+}
+
+function elidedTdzIps(
+	native: NativeFunctionPlan,
+	{ blocked, borrowed }: NativeScalarOwnership,
 ): ReadonlyArray<number> {
-	if (!hasExplicitScalarUses(native)) return [];
-	const claimed = new Set(projections.flatMap((plan) => plan.claimedIps));
-	const borrowed = new Set(projections.flatMap((plan) => plan.borrowedRegisters));
+	if (native.storageValues === undefined) return [];
 	return native.body.instructions.flatMap((op, ip) =>
 		op.opcode === "THROW_IF_TDZ" &&
-		!claimed.has(ip) &&
+		!blocked.has(ip) &&
 		!borrowed.has(op.src) &&
 		["number", "int32", "boolean"].includes(native.registerRepresentations[op.src]!)
 			? [ip]
@@ -197,8 +233,9 @@ function definitionInitializedRegisters(
 	native: NativeFunctionPlan,
 	jumpTargets: ReadonlySet<number>,
 	reads: ReadonlyArray<ReadonlyArray<number>>,
+	{ blocked, borrowed }: NativeScalarOwnership,
 ): ReadonlyArray<number> {
-	if (!hasExplicitScalarUses(native)) return [];
+	if (native.storageValues === undefined) return [];
 	const fn = native.body;
 	const writes = new Uint32Array(fn.registerCount);
 	const definitions = new Int32Array(fn.registerCount).fill(-1);
@@ -206,19 +243,21 @@ function definitionInitializedRegisters(
 	const blocks = new Uint32Array(fn.instructions.length);
 	let block = 0;
 	for (const [ip, op] of fn.instructions.entries()) {
-		if (jumpTargets.has(ip)) block++;
+		if (jumpTargets.has(ip) || blocked.has(ip)) block++;
 		blocks[ip] = block;
 		for (const local of reads[ip]!) uses[local]!.push(ip);
 		for (const local of vmInstructionWriteRegisters(op)) {
 			writes[local]!++;
 			definitions[local] = ip;
 		}
-		if (scalarControlBoundary(op)) block++;
+		if (scalarControlBoundary(op) || blocked.has(ip)) block++;
 	}
 	return native.registerRepresentations.flatMap((rep, local) => {
 		const definition = definitions[local]!;
 		return local >= fn.parameterCount + fn.argumentSnapshotCount &&
 			native.storageValues![local]! >= 0 &&
+			!borrowed.has(local) &&
+			!blocked.has(definition) &&
 			(rep === "number" || rep === "int32" || rep === "boolean") &&
 			writes[local] === 1 &&
 			uses[local]!.every((ip) => ip > definition && blocks[ip] === blocks[definition])
@@ -350,51 +389,15 @@ function pureScalarOperation(
 function expressionIps(
 	native: NativeFunctionPlan,
 	jumpTargets: ReadonlySet<number>,
-	preserveProfileSites = true,
-	projections: ReadonlyArray<
-		Pick<NativePropertyProjectionPlan, "claimedIps" | "borrowedRegisters">
-	> = [],
-	suspension?: NativeSuspensionPlan,
+	preserveProfileSites: boolean,
+	{ blocked, borrowed }: NativeScalarOwnership,
 ): ReadonlyArray<number> {
 	const fn = native.body;
 	if (
 		native.storageValues === undefined ||
-		fn.handlers.length > 0 ||
 		(preserveProfileSites && fn.profileSiteIds !== undefined)
 	)
 		return [];
-	const blocked = new Set(native.specializations.flatMap((region) => region.claimedIps));
-	for (const plan of projections) for (const ip of plan.claimedIps) blocked.add(ip);
-	for (const action of native.regionActions) blocked.add(action.ip);
-	for (const site of native.fieldCalls ?? [])
-		for (let ip = site.allocationIp; ip <= site.callIp; ip++) blocked.add(ip);
-	for (const site of native.literalSwitches ?? [])
-		for (let ip = site.instructionIp; ip <= site.endIp; ip++) blocked.add(ip);
-	for (const [ip, plan] of native.instructions.entries()) {
-		if (
-			plan !== undefined &&
-			!["exact-operator-input-kinds", "call", "construct"].includes(plan.kind)
-		)
-			blocked.add(ip);
-	}
-	// Opaque helpers can borrow their operands beyond the explicit consumer instruction.
-	const borrowed = new Set(
-		[...blocked].flatMap((ip) => {
-			const op = fn.instructions[ip]!;
-			return [...vmInstructionReadRegisters(op), ...vmInstructionWriteRegisters(op)];
-		}),
-	);
-	for (const plan of projections)
-		for (const local of plan.borrowedRegisters) borrowed.add(local);
-	// Save/restore assignments cannot target expression macros.
-	for (const point of suspension?.points ?? []) {
-		blocked.add(point.instructionIp);
-		for (const local of point.registers) borrowed.add(local);
-		for (const local of vmInstructionWriteRegisters(
-			fn.instructions[point.instructionIp]!,
-		))
-			borrowed.add(local);
-	}
 	const writes = new Uint32Array(fn.registerCount);
 	const uses: Array<Array<number>> = Array.from({ length: fn.registerCount }, () => []);
 	for (const [ip, op] of fn.instructions.entries()) {
@@ -519,6 +522,7 @@ function lowerStorage(
 	}
 	const suspension = lowerNativeSuspension(native);
 	const reads = scalarStorageReads(native, suspension);
+	const ownership = scalarStorageOwnership(native, expressionWindows, suspension);
 	const scalarStorage = (variant: NativeFunctionPlan): NativeScalarStoragePlan => {
 		const constants = rematerializedConstantIps(
 			variant,
@@ -527,18 +531,22 @@ function lowerStorage(
 			reads,
 		);
 		const constantIps = new Set(constants);
+		const variantOwnership =
+			variant === native
+				? ownership
+				: scalarStorageOwnership(variant, expressionWindows, suspension);
 		return {
 			expressionIps: expressionIps(
 				variant,
 				jumpTargets,
 				preserveProfileSites,
-				expressionWindows,
-				suspension,
+				variantOwnership,
 			).filter((ip) => !constantIps.has(ip)),
 			definitionInitializedRegisters: definitionInitializedRegisters(
 				variant,
 				jumpTargets,
 				reads,
+				variantOwnership,
 			),
 			rematerializedConstantIps: constants,
 		};
@@ -598,7 +606,7 @@ function lowerStorage(
 		privateRegisters: roots.filter((local) => privateLocals.has(local)),
 		privateCallResultIps: [...calls],
 		entryStableRootRegisters: [...nativeEntryStableRootRegisters(fn, privateLocals)],
-		elidedTdzIps: elidedTdzIps(native, expressionWindows),
+		elidedTdzIps: elidedTdzIps(native, ownership),
 		...scalar,
 		numericLeaf,
 	};
