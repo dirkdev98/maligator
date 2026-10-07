@@ -11,12 +11,14 @@ import {
 	joinValueEscape,
 	moduleSummaryId,
 	normalizeRootReasons,
+	normalizeRelativeOwnSlotEffects,
 } from "../shared/effect-summary.ts";
 import type {
 	EffectSummary,
 	FunctionEffectSummary,
 	ModuleEffectSummary,
 	RelativeOwnSlotEffect,
+	RelativeOwnSlotEffectSummary,
 	ReturnProvenance,
 	ReturnRepresentation,
 	SummaryRootReason,
@@ -32,7 +34,13 @@ import type { CoreCallGraphIndex } from "./core-ir-call-targets.ts";
 import { buildCoreControlFlow } from "./core-ir-control-flow.ts";
 import type { CoreControlFlow } from "./core-ir-control-flow.ts";
 import { coreInstructionEffects } from "./core-ir-opcodes.ts";
-import type { CoreFunctionId, CoreRepresentation, CoreValueId } from "./core-ir.ts";
+import type {
+	CoreBlockId,
+	CoreFunctionId,
+	CoreInstructionId,
+	CoreRepresentation,
+	CoreValueId,
+} from "./core-ir.ts";
 import { CoreProgramFlowEngine } from "./core-program-flow.ts";
 import type {
 	CoreProgramFlowLocalTransfers,
@@ -70,6 +78,7 @@ export interface CoreLocalFunctionSummary {
 	readonly function: CoreFunctionId;
 	readonly bodyVersion: number;
 	readonly cfgVersion: number;
+	readonly exceptionFlowVersion: number;
 	readonly callsVersion: number;
 	readonly memoryEffectsVersion: number;
 	readonly representationsVersion: number;
@@ -77,6 +86,7 @@ export interface CoreLocalFunctionSummary {
 	readonly summaryId: string;
 	readonly moduleId: string;
 	readonly effects: EffectSummary;
+	readonly conditionalOwnSlotEffects?: RelativeOwnSlotEffectSummary;
 	readonly parameterEscape: ReadonlyArray<ValueEscapeFact>;
 	readonly receiverEscape: ValueEscapeFact;
 	readonly parameterContainment: ReadonlyArray<ValueContainmentFact>;
@@ -103,6 +113,7 @@ function localSummaryIsCurrent(
 		local !== undefined &&
 		local.bodyVersion === fn.version("body") &&
 		local.cfgVersion === fn.version("cfg") &&
+		local.exceptionFlowVersion === fn.version("exceptionFlow") &&
 		local.callsVersion === fn.version("calls") &&
 		local.memoryEffectsVersion === fn.version("memoryEffects") &&
 		local.representationsVersion === fn.version("representations")
@@ -216,6 +227,159 @@ function noteEscape(
 		receiver.escape = joinValueEscape(receiver.escape, escape);
 		receiver.containment = joinValueContainment(receiver.containment, containment);
 	}
+}
+
+const OWN_SLOT_LEAF_OPERATIONS = new Set([
+	"move",
+	"rootUse",
+	"loadThis",
+	"throwIfTdz",
+	"createBoolean",
+	"createEmpty",
+	"createF64",
+	"createNull",
+	"createNumber",
+	"createString",
+	"createUndefined",
+	"mathUnaryNumber",
+	"mathBinaryNumber",
+]);
+
+function conditionalOwnSlotEffects(
+	fn: CoreFunctionStore,
+	cfg: CoreControlFlow,
+	localTransfers: CoreProgramFlowLocalTransfers,
+	origins: ReadonlyArray<ValueOrigin>,
+): RelativeOwnSlotEffectSummary | undefined {
+	if (
+		fn.isAsync ||
+		fn.isGenerator ||
+		fn.handlerBlockCount > 0 ||
+		localTransfers.operationCount > 256
+	)
+		return undefined;
+	const accesses: Array<RelativeOwnSlotEffect> = [];
+	const parameterEscape = Array<ValueEscapeFact>(fn.parameterCount).fill("none");
+	const parameterContainment = Array<ValueContainmentFact>(fn.parameterCount).fill(
+		"preserved",
+	);
+	const receiver = {
+		escape: "none" as ValueEscapeFact,
+		containment: "preserved" as ValueContainmentFact,
+	};
+	const retain = (value: CoreValueId, escape: ValueEscapeFact): void => {
+		const pending = [value],
+			visited = new Set<CoreValueId>();
+		for (let next = 0; next < pending.length; next++) {
+			const candidate = pending[next]!;
+			if (visited.has(candidate)) continue;
+			visited.add(candidate);
+			const origin = origins[candidate] ?? ORIGIN_UNKNOWN;
+			noteEscape(
+				origin,
+				escape,
+				"preserved",
+				parameterEscape,
+				parameterContainment,
+				receiver,
+			);
+			if (origin.kind !== "unknown") continue;
+			const owner = fn.kernel.valueDefinitionOwner(candidate);
+			if (fn.kernel.valueDefinitionKind(candidate) === 0) {
+				const index = fn.kernel.valueDefinitionIndex(candidate);
+				for (const edge of cfg.predecessors[owner as CoreBlockId] ?? []) {
+					const incoming = edge.arguments[index];
+					if (edge.kind === "ordinary" && incoming !== undefined) pending.push(incoming);
+				}
+			} else if (
+				fn.kernel.valueDefinitionKind(candidate) === 1 &&
+				fn.instructionOpcodeName(owner as CoreInstructionId) === "move"
+			) {
+				pending.push(
+					fn.kernel.operandAt(
+						fn.kernel.instructionOperandStart(owner as CoreInstructionId),
+					),
+				);
+			}
+		}
+	};
+	let residualEffects = NO_EFFECT_SUMMARY;
+	for (let transfer = 0; transfer < localTransfers.operationCount; transfer++) {
+		const instruction = localTransfers.operationAt(transfer);
+		if (!cfg.reachable.has(fn.instructionBlock(instruction))) continue;
+		const opcode = fn.instructionOpcodeName(instruction);
+		const attributes = fn.instructionAttributes(instruction);
+		const effects = coreInstructionEffects(fn, instruction);
+		const start = fn.kernel.instructionOperandStart(instruction);
+		const count = fn.kernel.instructionOperandCount(instruction);
+		if (opcode === "loadPropertyStatic" || opcode === "storePropertyStatic") {
+			const base = origins[fn.kernel.operandAt(start)] ?? ORIGIN_UNKNOWN;
+			const key = attributes.stringIndex;
+			if (
+				(base.kind !== "parameter" && base.kind !== "receiver") ||
+				typeof key !== "number" ||
+				!Number.isSafeInteger(key) ||
+				key < 0 ||
+				accesses.length === 32
+			)
+				return undefined;
+			accesses.push(
+				Object.freeze({
+					base,
+					key,
+					mode: opcode === "loadPropertyStatic" ? "read" : "write",
+				}),
+			);
+			// Own data access removes getter/setter reentry, but collection and failure stay conservative.
+			residualEffects = joinEffectSummaries(residualEffects, {
+				...NO_EFFECT_SUMMARY,
+				mayThrow: effects.mayThrow,
+				mayGc: effects.mayGc,
+			});
+			for (let operand = 1; operand < count; operand++)
+				retain(fn.kernel.operandAt(start + operand), "retained");
+			continue;
+		}
+		const noncoerciveOperator =
+			(opcode === "binary" &&
+				(attributes.operator === "===" || attributes.operator === "!==")) ||
+			(opcode === "unary" &&
+				(attributes.operator === "typeof" ||
+					attributes.operator === "!" ||
+					attributes.operator === "void"));
+		if (!OWN_SLOT_LEAF_OPERATIONS.has(opcode) && !noncoerciveOperator) return undefined;
+		if (noncoerciveOperator) {
+			residualEffects = joinEffectSummaries(residualEffects, {
+				...NO_EFFECT_SUMMARY,
+				mayThrow: effects.mayThrow,
+				mayGc: effects.mayGc,
+			});
+		} else {
+			residualEffects = joinEffectSummaries(residualEffects, effects);
+		}
+	}
+	if (accesses.length === 0) return undefined;
+	for (const block of cfg.reachable) {
+		const terminator = fn.blockTerminator(block);
+		const kind = fn.instructionKind(terminator);
+		if (kind === "return" || kind === "throw") {
+			retain(
+				fn.kernel.operandAt(fn.kernel.instructionOperandStart(terminator)),
+				kind === "return" ? "returned" : "retained",
+			);
+			if (kind === "throw")
+				residualEffects = joinEffectSummaries(residualEffects, {
+					...NO_EFFECT_SUMMARY,
+					mayThrow: true,
+				});
+		}
+	}
+	return Object.freeze({
+		accesses: Object.freeze(normalizeRelativeOwnSlotEffects(accesses)),
+		residualEffects,
+		parameterEscape: Object.freeze(parameterEscape),
+		receiverEscape: receiver.escape,
+	});
 }
 
 function analyzeLocalSummary(
@@ -418,6 +582,7 @@ function analyzeLocalSummary(
 		function: fn.id,
 		bodyVersion: fn.version("body"),
 		cfgVersion: fn.version("cfg"),
+		exceptionFlowVersion: fn.version("exceptionFlow"),
 		callsVersion: fn.version("calls"),
 		memoryEffectsVersion: fn.version("memoryEffects"),
 		representationsVersion: fn.version("representations"),
@@ -425,6 +590,12 @@ function analyzeLocalSummary(
 		summaryId: functionSummaryId(fn.metadata.sourcePath, fn.id),
 		moduleId: moduleSummaryId(fn.metadata.sourcePath),
 		effects,
+		conditionalOwnSlotEffects: conditionalOwnSlotEffects(
+			fn,
+			cfg,
+			localTransfers,
+			origins,
+		),
 		parameterEscape: Object.freeze(parameterEscape),
 		receiverEscape: receiver.escape,
 		parameterContainment: Object.freeze(parameterContainment),
@@ -513,6 +684,18 @@ function relativeOwnSlotEffectsEqual(
 	return true;
 }
 
+function conditionalOwnSlotEffectsEqual(
+	left: RelativeOwnSlotEffectSummary | undefined,
+	right: RelativeOwnSlotEffectSummary | undefined,
+): boolean {
+	return left === undefined || right === undefined
+		? left === right
+		: relativeOwnSlotEffectsEqual(left.accesses, right.accesses) &&
+				effectSummariesEqual(left.residualEffects, right.residualEffects) &&
+				stringSlicesEqual(left.parameterEscape, right.parameterEscape) &&
+				left.receiverEscape === right.receiverEscape;
+}
+
 function returnProvenancesEqual(
 	left: ReturnProvenance,
 	right: ReturnProvenance,
@@ -534,9 +717,9 @@ function summariesEqual(
 			left.functionIndex === right.functionIndex &&
 			left.module === right.module &&
 			effectSummariesEqual(left.effects, right.effects) &&
-			relativeOwnSlotEffectsEqual(
-				left.relativeOwnSlotEffects,
-				right.relativeOwnSlotEffects,
+			conditionalOwnSlotEffectsEqual(
+				left.conditionalOwnSlotEffects,
+				right.conditionalOwnSlotEffects,
 			) &&
 			stringSlicesEqual(left.callees, right.callees) &&
 			left.openCallEdge === right.openCallEdge &&
@@ -708,7 +891,10 @@ function deriveSummary(
 		functionIndex: functionId,
 		module: local.moduleId,
 		effects,
-		relativeOwnSlotEffects: Object.freeze([]),
+		...(targets.outgoing(functionId).length === 0 &&
+		local.conditionalOwnSlotEffects !== undefined
+			? { conditionalOwnSlotEffects: local.conditionalOwnSlotEffects }
+			: {}),
 		callees: Object.freeze(
 			[
 				...new Set(

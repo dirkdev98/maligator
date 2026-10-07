@@ -74,6 +74,14 @@ export interface RelativeOwnSlotEffect {
 	readonly mode: "read" | "write";
 }
 
+export interface RelativeOwnSlotEffectSummary {
+	readonly accesses: ReadonlyArray<RelativeOwnSlotEffect>;
+	/** Unconditional effects left after every access resolves to an existing own data slot. */
+	readonly residualEffects: EffectSummary;
+	readonly parameterEscape: ReadonlyArray<ValueEscapeFact>;
+	readonly receiverEscape: ValueEscapeFact;
+}
+
 export function relativeOwnSlotEffectKey(effect: RelativeOwnSlotEffect): string {
 	const base =
 		effect.base.kind === "receiver" ? "receiver" : `parameter:${effect.base.index}`;
@@ -385,8 +393,8 @@ export interface FunctionEffectSummary {
 	/** Owning module summary id, so the two maps are navigable in both directions. */
 	readonly module: string;
 	readonly effects: EffectSummary;
-	/** Conditional exact accesses; consumers must substitute every entry atomically. */
-	readonly relativeOwnSlotEffects: ReadonlyArray<RelativeOwnSlotEffect>;
+	/** Consumers must resolve every access atomically before using the residual or escape facts. */
+	readonly conditionalOwnSlotEffects?: RelativeOwnSlotEffectSummary;
 	readonly callees: ReadonlyArray<string>;
 	readonly openCallEdge: boolean;
 	readonly externallyReachable: boolean;
