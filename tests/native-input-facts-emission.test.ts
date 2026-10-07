@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { lowerNativeFunctionStorage } from "../src/compiler/target/lower-native-storage.ts";
 import { createConservativeNativePlan } from "../src/compiler/target/program-image.ts";
 import type { VmRegisterRepresentation } from "../src/compiler/target/program-image.ts";
 import { emitCompiledFunction } from "../src/compiler/target/render-native-c.ts";
@@ -209,7 +210,7 @@ function mathCallSource(stable: boolean, binary: boolean): string {
 		},
 	};
 	const emitted = emitCompiledFunction(
-		{
+		lowerNativeFunctionStorage({
 			...plan,
 			registerRepresentations: ["number", "number", "boxed", "boxed", "boxed"],
 			instructions,
@@ -225,7 +226,7 @@ function mathCallSource(stable: boolean, binary: boolean): string {
 					),
 				})),
 			},
-		},
+		}),
 		0,
 		"",
 		false,
