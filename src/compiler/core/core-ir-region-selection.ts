@@ -67,9 +67,8 @@ import {
 } from "./core-native-entry-analysis.ts";
 import { connectCoreNativeEntries } from "./core-native-entry-graph.ts";
 import {
-	coreReadOnlyNumericParameterFields,
-	coreFieldEntryHasNumericComputations,
-	coreNumericFieldArgument,
+	coreReadOnlyParameterFields,
+	coreFieldArgument,
 } from "./core-native-field-analysis.ts";
 import {
 	coreOperatorInputPlans,
@@ -1524,7 +1523,7 @@ function directEntryOpportunities(
 							function: target,
 						})
 						.exceptional();
-					const fields = coreReadOnlyNumericParameterFields(fn, cfg);
+					const fields = coreReadOnlyParameterFields(fn, cfg);
 					if (fields !== undefined) {
 						const fieldCalls = callSites.flatMap((call) => {
 							const site = summaries.targets.site(call.caller, call.instruction);
@@ -1533,7 +1532,7 @@ function directEntryOpportunities(
 								scope: "function",
 								function: call.caller,
 							});
-							const fieldObject = coreNumericFieldArgument(
+							const fieldObject = coreFieldArgument(
 								program.function(call.caller),
 								facts,
 								call.instruction,
@@ -1542,30 +1541,45 @@ function directEntryOpportunities(
 							);
 							return fieldObject === undefined
 								? []
-								: [Object.freeze({ ...call, fieldObject })];
+								: [
+										{
+											site: Object.freeze({
+												...call,
+												fieldObject: fieldObject.instruction,
+												fieldValueRepresentations: fieldObject.valueRepresentations,
+											}),
+											fields: fieldObject.fields,
+										},
+									];
 						});
 						if (fieldCalls.length > 0) {
+							const joinedFields = Object.freeze({
+								...fields,
+								representations: Object.freeze(
+									fields.keys.map((_, index): CorePlanRepresentation => {
+										const rep = fieldCalls[0]!.fields.representations[index]!;
+										return fieldCalls.every(
+											(call) => call.fields.representations[index] === rep,
+										)
+											? rep
+											: "boxed";
+									}),
+								),
+							});
+							const calls = fieldCalls.map((call) => call.site);
 							const variant = analyzeCoreNativeEntry(
 								fn,
 								cfg,
 								parameterRepresentations,
 								undefined,
-								fieldCalls,
-								fields,
+								calls,
+								joinedFields,
 							);
-							if (
-								coreFieldEntryHasNumericComputations(
-									fn,
-									variant.valueRepresentations,
-									variant.operatorInputs,
-								)
-							) {
-								fieldParameters = fields;
-								selectedCalls = fieldCalls;
-								valueRepresentations = variant.valueRepresentations;
-								operatorInputs = variant.operatorInputs;
-								resultRepresentation = variant.resultRepresentation;
-							}
+							fieldParameters = joinedFields;
+							selectedCalls = calls;
+							valueRepresentations = variant.valueRepresentations;
+							operatorInputs = variant.operatorInputs;
+							resultRepresentation = variant.resultRepresentation;
 						}
 					}
 				}

@@ -26,7 +26,10 @@ export interface NativeCallTargetTransport {
 	readonly arguments: ReadonlyArray<NativeCallConversion>;
 	readonly resultRepresentation: VmRegisterRepresentation;
 	readonly result: NativeCallConversion;
-	readonly fields: ReadonlyArray<number>;
+	readonly fields: ReadonlyArray<{
+		readonly slot: number;
+		readonly conversion: NativeCallConversion;
+	}>;
 }
 
 export interface NativeCallTransportPlan {
@@ -134,12 +137,20 @@ export function selectNativeCallTransports(
 					? undefined
 					: native.body.instructions[fieldCall.allocationIp];
 			const fields =
-				entry.fieldParameters?.keys.map((key) =>
-					allocation?.opcode === "CREATE_OBJECT_SHAPED"
-						? allocation.keyStringIndices.indexOf(key)
-						: -1,
-				) ?? [];
-			if (fields.some((field) => field < 0)) continue;
+				entry.fieldParameters?.keys.flatMap((key, index) => {
+					const slot =
+						allocation?.opcode === "CREATE_OBJECT_SHAPED"
+							? allocation.keyStringIndices.indexOf(key)
+							: -1;
+					const source = fieldCall?.valueRepresentations[slot];
+					const target = entry.fieldParameters!.representations[index];
+					const mode =
+						source === undefined || target === undefined
+							? undefined
+							: conversion(source, target);
+					return slot < 0 || mode === undefined ? [] : [{ slot, conversion: mode }];
+				}) ?? [];
+			if (fields.length !== (entry.fieldParameters?.keys.length ?? 0)) continue;
 			targets.push({
 				functionIndex,
 				entryId,
@@ -175,7 +186,11 @@ export function nativeCallTransportsMatch(
 						target.arguments.length === other.arguments.length &&
 						target.arguments.every((mode, k) => mode === other.arguments[k]) &&
 						target.fields.length === other.fields.length &&
-						target.fields.every((field, k) => field === other.fields[k])
+						target.fields.every(
+							(field, k) =>
+								field.slot === other.fields[k]?.slot &&
+								field.conversion === other.fields[k]?.conversion,
+						)
 					);
 				})
 			);

@@ -1469,6 +1469,7 @@ function lowerCoreSpecializations(
 interface CoreFieldCall {
 	readonly allocation: CoreInstructionId;
 	readonly call: CoreInstructionId;
+	readonly valueRepresentations: ReadonlyArray<CorePlanRepresentation>;
 	readonly entries: Array<{ readonly functionIndex: number; readonly entryId: number }>;
 }
 
@@ -2460,6 +2461,9 @@ function lowerFunctionToTarget(
 				: {
 						fieldParameters: {
 							keys: entry.fieldParameters.keys,
+							representations: entry.fieldParameters.representations.map(
+								planCoreTargetRepresentation,
+							),
 							loads: entry.fieldParameters.loads.map(({ instruction, field }) => ({
 								instruction: loweredInstructions.get(instruction)!,
 								field,
@@ -2518,6 +2522,9 @@ function lowerFunctionToTarget(
 					fieldCalls: fieldCallPlans.map((site) => ({
 						allocation: loweredInstructions.get(site.allocation)!,
 						call: loweredInstructions.get(site.call)!,
+						valueRepresentations: site.valueRepresentations.map(
+							planCoreTargetRepresentation,
+						),
 						entries: site.entries,
 					})),
 				}),
@@ -2599,6 +2606,7 @@ export function lowerCoreCompilationToTargetProgram(
 				const call = calls.get(site.instruction) ?? {
 					allocation: site.fieldObject,
 					call: site.instruction,
+					valueRepresentations: site.fieldValueRepresentations!,
 					entries: [],
 				};
 				call.entries.push({

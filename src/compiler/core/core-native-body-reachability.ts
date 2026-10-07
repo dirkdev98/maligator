@@ -80,7 +80,8 @@ export function coreNativeBodyOmissionProofIsCurrent(
 						site.numericSortCallback === call.numericSortCallback &&
 						site.builtinCallbackOperation === call.builtinCallbackOperation &&
 						site.builtinCallbackNumbers === call.builtinCallbackNumbers &&
-						site.fieldObject === call.fieldObject
+						site.fieldObject === call.fieldObject &&
+						site.fieldValueRepresentations === call.fieldValueRepresentations
 					);
 				})
 			);

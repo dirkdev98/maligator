@@ -730,6 +730,7 @@ export function mergeProgramImages(images: Array<ProgramImage>): MergedProgramIm
 							? undefined
 							: {
 									keys: entry.fieldParameters.keys.map((key) => key + base.string),
+									representations: entry.fieldParameters.representations,
 									loads: entry.fieldParameters.loads.map((load) => ({ ...load })),
 								},
 					argumentRepresentations: entry.argumentRepresentations?.slice(),

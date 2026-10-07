@@ -47,14 +47,10 @@ import type {
 	CoreValueId,
 } from "./core-ir.ts";
 import { coreInstructionId } from "./core-ir.ts";
+import { coreArgumentObservation } from "./core-native-entry-analysis.ts";
 import {
-	analyzeCoreNativeEntry,
-	coreArgumentObservation,
-} from "./core-native-entry-analysis.ts";
-import {
-	coreFieldEntryHasNumericComputations,
-	coreNumericFieldArgument,
-	coreReadOnlyNumericParameterFields,
+	coreFieldArgument,
+	coreReadOnlyParameterFields,
 } from "./core-native-field-analysis.ts";
 import {
 	CORE_PROGRAM_FLOW_ANALYSIS,
@@ -1058,7 +1054,7 @@ function nativeFieldEntryMethodEligible(fn: CoreFunctionStore, name: number): bo
 	);
 }
 
-function prefersNumericFieldEntryDispatch(
+function prefersFieldEntryDispatch(
 	program: CoreProgram,
 	analyses: CoreAnalysisManager,
 	callerId: CoreFunctionId,
@@ -1067,6 +1063,7 @@ function prefersNumericFieldEntryDispatch(
 	arguments_: ReadonlyArray<CoreValueId> | undefined,
 	targets: ReadonlyArray<CoreFunctionId>,
 	liveFunctions: ReadonlySet<CoreFunctionId>,
+	heapFieldsOnly = false,
 ): boolean {
 	if (
 		arguments_?.length !== 1 ||
@@ -1104,28 +1101,12 @@ function prefersNumericFieldEntryDispatch(
 				function: target,
 			})
 			.exceptional();
-		const fields = coreReadOnlyNumericParameterFields(targetFn, cfg);
+		const fields = coreReadOnlyParameterFields(targetFn, cfg);
 		if (fields === undefined) return false;
-		const fieldObject = coreNumericFieldArgument(
-			caller,
-			facts,
-			call,
-			arguments_[0]!,
-			fields,
-		);
-		if (fieldObject === undefined) return false;
-		const variant = analyzeCoreNativeEntry(
-			targetFn,
-			cfg,
-			["boxed"],
-			undefined,
-			[{ caller: callerId, instruction: call, guarded: true, fieldObject }],
-			fields,
-		);
-		return coreFieldEntryHasNumericComputations(
-			targetFn,
-			variant.valueRepresentations,
-			variant.operatorInputs,
+		const fieldObject = coreFieldArgument(caller, facts, call, arguments_[0]!, fields);
+		return (
+			fieldObject !== undefined &&
+			(!heapFieldsOnly || fieldObject.valueRepresentations.includes("boxed"))
 		);
 	});
 }
@@ -1244,7 +1225,7 @@ function offerFunctionCandidates(
 		const openHintTargets =
 			hintedTargets !== undefined &&
 			hintedTargets.length > 1 &&
-			!prefersNumericFieldEntryDispatch(
+			!prefersFieldEntryDispatch(
 				program,
 				analyses,
 				functionId,
@@ -1332,6 +1313,24 @@ function offerFunctionCandidates(
 				: undefined;
 		const target = exactTarget ?? hintedTarget;
 		if (target === undefined) continue;
+		const open = hintedTarget !== undefined || coreCalleeTargetsAreOpen(site.targets);
+		// Primitive literals can sink into guarded misses; heap fields must retain their lifetime.
+		if (
+			open &&
+			inLoop &&
+			prefersFieldEntryDispatch(
+				program,
+				analyses,
+				functionId,
+				site.instruction,
+				site.callee,
+				site.arguments,
+				[target],
+				liveFunctions,
+				true,
+			)
+		)
+			continue;
 		const captureContext =
 			exactTarget === undefined
 				? undefined
@@ -1348,7 +1347,6 @@ function offerFunctionCandidates(
 		) {
 			continue;
 		}
-		const open = hintedTarget !== undefined || coreCalleeTargetsAreOpen(site.targets);
 		const consumerDuplication = open
 			? guardedConstructorConsumerDuplication(
 					program,

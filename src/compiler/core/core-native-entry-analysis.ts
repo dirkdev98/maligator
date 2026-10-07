@@ -57,13 +57,15 @@ export function analyzeCoreNativeEntry(
 		operationResultMask(instruction, result) {
 			const exact = exactOperationResultMasks.get(instruction);
 			if (exact !== undefined) return exact;
-			if (
-				fields !== undefined &&
-				(fields.loads.some((load) => load.instruction === instruction) ||
+			if (fields !== undefined) {
+				const field = fields.loads.find((load) => load.instruction === instruction);
+				if (field !== undefined) return mask(fields.representations[field.field]);
+				if (
 					fn.instructionOpcodeName(instruction) === "call" ||
-					fn.instructionOpcodeName(instruction) === "callKnown")
-			)
-				return COMPILER_VALUE_KIND_NUMBER;
+					fn.instructionOpcodeName(instruction) === "callKnown"
+				)
+					return COMPILER_VALUE_KIND_NUMBER;
+			}
 			if (
 				arguments_ === undefined ||
 				result !== fn.kernel.resultAt(fn.kernel.instructionResultStart(instruction))
@@ -138,7 +140,11 @@ export function analyzeCoreNativeEntry(
 		fields:
 			fields === undefined
 				? undefined
-				: { keys: [...fields.keys], loads: fields.loads.map((load) => ({ ...load })) },
+				: {
+						keys: [...fields.keys],
+						representations: [...fields.representations],
+						loads: fields.loads.map((load) => ({ ...load })),
+					},
 		calls: callSites.map((site) => ({ ...site })),
 		callOverrides: callOverrides?.map((site) => ({ ...site })),
 	});
@@ -193,6 +199,7 @@ export function coreNativeEntryProofIsCurrent(
 					);
 				})) &&
 		same(proof.fields?.keys, entry.fieldParameters?.keys) &&
+		same(proof.fields?.representations, entry.fieldParameters?.representations) &&
 		(proof.fields === undefined ||
 			(entry.fieldParameters !== undefined &&
 				proof.fields.loads.length === entry.fieldParameters.loads.length &&
@@ -209,6 +216,7 @@ export function coreNativeEntryProofIsCurrent(
 				site.instruction === current.instruction &&
 				(site.guarded === true) === (current.guarded === true) &&
 				site.fieldObject === current.fieldObject &&
+				site.fieldValueRepresentations === current.fieldValueRepresentations &&
 				site.builtinCallbackOperation === current.builtinCallbackOperation &&
 				site.builtinCallbackNumbers === current.builtinCallbackNumbers &&
 				site.numericSortCallback === current.numericSortCallback &&

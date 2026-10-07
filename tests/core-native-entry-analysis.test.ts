@@ -4,7 +4,7 @@ import { buildCoreControlFlow } from "../src/compiler/core/core-ir-control-flow.
 import { coreOpcodeRegistry } from "../src/compiler/core/core-ir-opcodes.ts";
 import type { CoreBlockId } from "../src/compiler/core/core-ir.ts";
 import { analyzeCoreNativeEntry } from "../src/compiler/core/core-native-entry-analysis.ts";
-import { coreReadOnlyNumericParameterFields } from "../src/compiler/core/core-native-field-analysis.ts";
+import { coreReadOnlyParameterFields } from "../src/compiler/core/core-native-field-analysis.ts";
 import { CoreProgram } from "../src/compiler/core/core-store.ts";
 import { COMPILER_VALUE_KIND_NUMBER } from "../src/compiler/shared/compiler-value-kinds.ts";
 
@@ -78,10 +78,14 @@ describe("reachable native-entry annotations", () => {
 		const liveLoad = load(entry, 1);
 		load(dead, 2);
 		const id = builder.finish(entry).function;
-		const fields = coreReadOnlyNumericParameterFields(
+		const fields = coreReadOnlyParameterFields(
 			program.function(id),
 			buildCoreControlFlow(program, id, { exceptions: true }),
 		);
-		expect(fields).toEqual({ keys: [1], loads: [{ instruction: liveLoad, field: 0 }] });
+		expect(fields).toEqual({
+			keys: [1],
+			representations: ["boxed"],
+			loads: [{ instruction: liveLoad, field: 0 }],
+		});
 	});
 });

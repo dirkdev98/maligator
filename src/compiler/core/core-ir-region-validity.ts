@@ -39,6 +39,7 @@ import {
 	coreArgumentObservation,
 	coreNativeEntryProofIsCurrent,
 } from "./core-native-entry-analysis.ts";
+import { coreFieldArgumentProofIsCurrent } from "./core-native-field-analysis.ts";
 import {
 	coreOperatorInputProofIsCurrent,
 	coreBuiltinInputProofIsCurrent,
@@ -1794,6 +1795,7 @@ function immutablePlanCopy(plan: CoreOptimizationPlan): CoreOptimizationPlan {
 			entry.operatorInputs,
 			entry.constantBooleans,
 			entry.callOverrides,
+			...entry.callSites.map((site) => site.fieldValueRepresentations),
 		]) {
 			if (payload !== undefined) proofPayloads.add(payload);
 		}
@@ -2198,6 +2200,13 @@ export function verifyCoreOptimizationPlan(
 			if (!plan.liveFunctions.includes(site.caller))
 				fail(`direct entry callsite ${key} is dead`);
 			const caller = program.function(site.caller);
+			if (
+				(site.fieldObject === undefined) !==
+					(site.fieldValueRepresentations === undefined) ||
+				(site.fieldObject !== undefined &&
+					!coreFieldArgumentProofIsCurrent(caller, site, entry.fieldParameters!))
+			)
+				fail(`direct entry callsite ${key} has no current field argument proof`);
 			requireInstruction(caller, site.instruction, "direct-entry callsite", key);
 			if (
 				!blockProofs

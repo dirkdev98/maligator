@@ -1084,12 +1084,7 @@ function emitCompiledVariant(
 		});
 		nextStackSlot += loads.length + 1;
 	}
-	const fieldCalls = renderFieldCallSlots(
-		fn,
-		nativeContract,
-		directCompiledEntries,
-		() => nextStackSlot++,
-	);
+	const fieldCalls = renderFieldCallSlots(fn, nativeContract, () => nextStackSlot++);
 	const totalSlots = nextStackSlot;
 
 	// `with` pushes an object environment record onto the `env` chain (WITH_ENTER),
@@ -1196,7 +1191,9 @@ function emitCompiledVariant(
 				);
 	if (directEntry?.fieldParameters !== undefined)
 		directParameters!.push(
-			...directEntry.fieldParameters.keys.map((_, field) => `f64 fp${field}`),
+			...directEntry.fieldParameters.representations.map(
+				(rep, field) => `${cTypeOf(rep)} fp${field}`,
+			),
 		);
 	// Keep native entries on 64-byte boundaries as neighboring generated code changes.
 	lines.push(
@@ -1612,7 +1609,11 @@ export function emitCompiledFunction(
 		if (worker === null) return [{ entry, emitted, leaf: undefined }];
 		const parameters = entry.parameterRepresentations
 			.map((rep, i) => `${cTypeOf(rep)} r${i}`)
-			.concat(entry.fieldParameters?.keys.map((_, i) => `f64 fp${i}`) ?? []);
+			.concat(
+				entry.fieldParameters?.representations.map(
+					(rep, i) => `${cTypeOf(rep)} fp${i}`,
+				) ?? [],
+			);
 		const args = entry.parameterRepresentations
 			.map((_, i) => `p${i}`)
 			.concat(entry.fieldParameters?.keys.map((_, i) => `fp${i}`) ?? []);
@@ -1641,7 +1642,7 @@ export function emitCompiledFunction(
 				: {}),
 			parameterRepresentations: [
 				...(entry.argumentRepresentations ?? entry.parameterRepresentations),
-				...(entry.fieldParameters?.keys.map(() => "number" as const) ?? []),
+				...(entry.fieldParameters?.representations ?? []),
 			],
 			resultRepresentation: entry.resultRepresentation,
 		})),
@@ -1707,23 +1708,14 @@ function unboxedSnapshot(rep: RegisterRep, value: string): string {
 function renderFieldCallSlots(
 	fn: BytecodeFunction,
 	native: NativeFunctionPlan,
-	directCompiledEntries: DirectCompiledEntries,
 	allocateSlot: () => number,
 ): ReadonlyArray<NativeFieldCall> | undefined {
 	return native.fieldCalls?.map((site): NativeFieldCall => {
 		const allocation = fn.instructions[site.allocationIp];
 		if (allocation?.opcode !== "CREATE_OBJECT_SHAPED")
 			throw new Error("Invalid field call allocation");
-		const numericKeys = new Set(
-			site.entries.flatMap(
-				(entry) =>
-					directCompiledEntries.get(
-						directCompiledEntryKey(entry.functionIndex, entry.entryId),
-					)?.fieldParameters?.keys ?? [],
-			),
-		);
-		const boxedSlots = allocation.keyStringIndices.map((key) =>
-			numericKeys.has(key) ? undefined : allocateSlot(),
+		const boxedSlots = site.valueRepresentations.map((rep) =>
+			rep === "boxed" || rep === "string" ? allocateSlot() : undefined,
 		);
 		return { ...site, allocation, boxedSlots };
 	});
@@ -1754,12 +1746,7 @@ function emitResumableFunction(
 	const rootRegisters = native.storage!.rootRegisters;
 	const selfSlot = rootRegisters.length;
 	let nextSlot = selfSlot + 1;
-	const fieldCalls = renderFieldCallSlots(
-		fn,
-		native,
-		directCompiledEntries,
-		() => nextSlot++,
-	);
+	const fieldCalls = renderFieldCallSlots(fn, native, () => nextSlot++);
 	const totalSlots = nextSlot;
 
 	const capturesEnv = fn.capturedCount > 0;
@@ -3229,13 +3216,16 @@ function emitBody(
 		for (let field = 0; field < site.allocation.count; field++) {
 			if (site.boxedSlots[field] === undefined)
 				(coro === null ? lines : invocationPreamble).push(
-					`f64 __field_${site.allocationIp}_${field} = 0;`,
+					`${cTypeOf(site.valueRepresentations[field]!)} __field_${site.allocationIp}_${field} = 0;`,
 				);
 		}
 	}
 
 	const fieldLoads = new Map(
-		directFields?.loads.map((load) => [load.instructionIp, load.field]),
+		directFields?.loads.map((load) => [
+			load.instructionIp,
+			{ field: load.field, representation: directFields.representations[load.field]! },
+		]),
 	);
 	const staticPropertyProjectionConflicts = (ip: number): boolean =>
 		expressionIps.has(ip) ||
@@ -4127,6 +4117,7 @@ function nativeProfileCall(
 interface NativeFieldCall {
 	readonly allocationIp: number;
 	readonly callIp: number;
+	readonly valueRepresentations: ReadonlyArray<VmRegisterRepresentation>;
 	readonly allocation: Extract<BytecodeInstruction, { opcode: "CREATE_OBJECT_SHAPED" }>;
 	readonly boxedSlots: ReadonlyArray<number | undefined>;
 	readonly entries: ReadonlyArray<{
@@ -4175,7 +4166,10 @@ interface NativeInstructionContext {
 	readonly directResultRepresentation?: VmRegisterRepresentation;
 	readonly directArgumentRepresentations?: ReadonlyArray<VmRegisterRepresentation>;
 	readonly constantBoolean?: boolean;
-	readonly fieldLoad?: number;
+	readonly fieldLoad?: {
+		readonly field: number;
+		readonly representation: VmRegisterRepresentation;
+	};
 	readonly fieldAllocation?: NativeFieldCall;
 	readonly fieldCall?: NativeFieldCall;
 	readonly fieldEntryCall?: NativeFieldCall;
@@ -4938,7 +4932,13 @@ function emitInstruction(
 		}
 	}
 	if (context.fieldLoad !== undefined && instruction.opcode === "LOAD_PROPERTY_STATIC")
-		return [storeNumber(instruction.dst, `fp${context.fieldLoad}`)];
+		return [
+			context.fieldLoad.representation === "number"
+				? storeNumber(instruction.dst, `fp${context.fieldLoad.field}`)
+				: context.fieldLoad.representation === "boolean"
+					? storeBoolean(instruction.dst, `fp${context.fieldLoad.field}`)
+					: `r${instruction.dst} = fp${context.fieldLoad.field};`,
+		];
 	if (
 		context.fieldAllocation !== undefined &&
 		instruction.opcode === "CREATE_OBJECT_SHAPED"
@@ -4947,9 +4947,16 @@ function emitInstruction(
 		return [
 			...instruction.valueRegisters.map((register, field) => {
 				const slot = site.boxedSlots[field];
-				return slot === undefined
-					? `__field_${ip}_${field} = ${isNumericRep(reps[register]!) ? num(register) : `mal_ops_number_as_f64(${boxed(register)})`};`
-					: `__gc_slots[${slot}] = ${boxed(register)};`;
+				if (slot !== undefined) return `__gc_slots[${slot}] = ${boxed(register)};`;
+				const value =
+					site.valueRepresentations[field] === "boolean"
+						? reps[register] === "boolean"
+							? `r${register}`
+							: `mal_value_to_boolean(${boxed(register)})`
+						: isNumericRep(reps[register]!)
+							? num(register)
+							: `mal_ops_number_as_f64(${boxed(register)})`;
+				return `__field_${ip}_${field} = ${value};`;
 			}),
 			`r${instruction.dst} = MAL_VALUE_UNDEFINED;`,
 		];
@@ -4976,7 +4983,9 @@ function emitInstruction(
 		const values = site.allocation.keyStringIndices
 			.map((_, field) =>
 				site.boxedSlots[field] === undefined
-					? `mal_ops_number_value(__field_${site.allocationIp}_${field})`
+					? site.valueRepresentations[field] === "boolean"
+						? `mal_value_new_boolean(__field_${site.allocationIp}_${field})`
+						: `mal_ops_number_value(__field_${site.allocationIp}_${field})`
 					: `__gc_slots[${site.boxedSlots[field]}]`,
 			)
 			.join(", ");
@@ -8879,11 +8888,16 @@ function emitInstruction(
 						return convert(mode, value);
 					})
 					.concat(
-						transport.fields.map((slot) => {
+						transport.fields.map(({ slot, conversion: mode }) => {
 							const site = context.fieldEntryCall;
 							if (site === undefined)
 								throw new Error("Native field call transport lacks an allocation");
-							return `__field_${site.allocationIp}_${slot}`;
+							return convert(
+								mode,
+								site.boxedSlots[slot] === undefined
+									? `__field_${site.allocationIp}_${slot}`
+									: `__gc_slots[${site.boxedSlots[slot]}]`,
+							);
 						}),
 					);
 

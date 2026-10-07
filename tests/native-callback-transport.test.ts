@@ -246,7 +246,10 @@ describe("native builtin callback transport", () => {
 		const transport = caller.storage!.callbackTransports[0]!;
 		const entries = new Map(nativeEntryLookup(image.native.functions));
 		const key = `${transport.functionIndex}:${transport.entryId}`;
-		entries.set(key, { ...entries.get(key)!, fieldParameters: { keys: [0], loads: [] } });
+		entries.set(key, {
+			...entries.get(key)!,
+			fieldParameters: { keys: [0], representations: ["number"], loads: [] },
+		});
 		expect(selectNativeCallbackTransports(caller, entries)).toEqual([]);
 	});
 });

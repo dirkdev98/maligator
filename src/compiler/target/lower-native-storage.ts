@@ -87,6 +87,7 @@ function selectNumericLeaf(
 		fn.mappedArguments ||
 		entry.argumentRepresentations !== undefined ||
 		entry.resultRepresentation !== "number" ||
+		entry.fieldParameters?.representations.some((rep) => rep !== "number") ||
 		fn.instructions.at(-1)?.opcode !== "RETURN"
 	)
 		return false;

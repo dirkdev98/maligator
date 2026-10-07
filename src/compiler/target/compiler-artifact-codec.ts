@@ -78,7 +78,7 @@ import type {
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal artifacts are hard cut-overs: stale cache entries rebuild.
-export const COMPILER_ARTIFACT_VERSION = 135;
+export const COMPILER_ARTIFACT_VERSION = 136;
 
 function validateClosureCaptureOwners(
 	owners: ReadonlyArray<number>,
@@ -844,7 +844,11 @@ function writeNativeStorage(w: Writer, storage: NativeStoragePlan | undefined): 
 				),
 			);
 			w.u8(NATIVE_CALL_CONVERSIONS.indexOf(target.result));
-			w.i32Array([...target.fields]);
+			w.u32(target.fields.length);
+			for (const field of target.fields) {
+				w.i32(field.slot);
+				w.u8(NATIVE_CALL_CONVERSIONS.indexOf(field.conversion));
+			}
 		}
 	}
 	w.u32(storage.callbackTransports.length);
@@ -1149,7 +1153,10 @@ function readNativeStorage(r: Reader): NativeStoragePlan {
 					arguments: arguments_,
 					resultRepresentation,
 					result: readConversion(),
-					fields: r.i32Array(),
+					fields: Array.from({ length: r.count(5) }, () => ({
+						slot: r.i32(),
+						conversion: readConversion(),
+					})),
 				};
 			}),
 		}),
@@ -1413,6 +1420,8 @@ function writeCompilerArtifact(
 		for (const site of native.fieldCalls ?? []) {
 			w.u32(site.allocationIp);
 			w.u32(site.callIp);
+			w.u32(site.valueRepresentations.length);
+			for (const rep of site.valueRepresentations) w.u8(representationTag(rep));
 			w.u32(site.entries.length);
 			for (const entry of site.entries) {
 				w.u32(entry.functionIndex);
@@ -1452,6 +1461,8 @@ function writeCompilerArtifact(
 				w.u8(representationTag(representation));
 			w.u32(entry.fieldParameters?.keys.length ?? 0);
 			for (const key of entry.fieldParameters?.keys ?? []) w.u32(key);
+			for (const rep of entry.fieldParameters?.representations ?? [])
+				w.u8(representationTag(rep));
 			w.u32(entry.fieldParameters?.loads.length ?? 0);
 			for (const load of entry.fieldParameters?.loads ?? []) {
 				w.u32(load.instructionIp);
@@ -3846,22 +3857,6 @@ function readCompilerArtifact(
 						})),
 					};
 		});
-		const fieldCallCount = r.count(12);
-		const fieldCalls = Array.from({ length: fieldCallCount }, () => ({
-			allocationIp: r.u32(),
-			callIp: r.u32(),
-			entries: Array.from({ length: r.count(8) }, () => ({
-				functionIndex: r.u32(),
-				entryId: r.u32(),
-			})),
-		}));
-		const specializedOnly = r.u8();
-		if (specializedOnly > 1) throw new RangeError("invalid native body reachability");
-		const directEntryCount = r.count(1);
-		if (directEntryCount > 4) {
-			throw new RangeError("program-image-codec: too many native direct entries");
-		}
-		const directEntries: Array<NativeFunctionPlan["directEntries"][number]> = [];
 		const readRepresentation = ():
 			| "boxed"
 			| "int32"
@@ -3876,6 +3871,24 @@ function readCompilerArtifact(
 			if (tag === 4) return "string";
 			throw new Error("program-image-codec: invalid direct-entry representation tag");
 		};
+		const fieldCallCount = r.count(12);
+		const fieldCalls = Array.from({ length: fieldCallCount }, () => ({
+			allocationIp: r.u32(),
+			callIp: r.u32(),
+			valueRepresentations: Array.from({ length: r.count(1) }, readRepresentation),
+			entries: Array.from({ length: r.count(8) }, () => ({
+				functionIndex: r.u32(),
+				entryId: r.u32(),
+			})),
+		}));
+		const specializedOnly = r.u8();
+		if (specializedOnly > 1) throw new RangeError("invalid native body reachability");
+		const directEntryCount = r.count(1);
+		if (directEntryCount > 4) {
+			throw new RangeError("program-image-codec: too many native direct entries");
+		}
+		const directEntries: Array<NativeFunctionPlan["directEntries"][number]> = [];
+
 		for (let entryIndex = 0; entryIndex < directEntryCount; entryIndex++) {
 			const storage = readNativeStorage(r);
 			const id = r.u32();
@@ -3898,6 +3911,10 @@ function readCompilerArtifact(
 			const fieldKeyCount = r.count(4);
 			if (fieldKeyCount > 4) throw new Error("program-image-codec: invalid field count");
 			const fieldKeys = Array.from({ length: fieldKeyCount }, () => r.u32());
+			const fieldRepresentations = Array.from(
+				{ length: fieldKeyCount },
+				readRepresentation,
+			);
 			const fieldLoads = Array.from({ length: r.count(8) }, () => ({
 				instructionIp: r.u32(),
 				field: r.u32(),
@@ -3905,7 +3922,9 @@ function readCompilerArtifact(
 			if (fieldKeyCount === 0 && fieldLoads.length > 0)
 				throw new Error("program-image-codec: field loads lack keys");
 			const fieldParameters =
-				fieldKeyCount === 0 ? undefined : { keys: fieldKeys, loads: fieldLoads };
+				fieldKeyCount === 0
+					? undefined
+					: { keys: fieldKeys, representations: fieldRepresentations, loads: fieldLoads };
 			const constantCount = r.count(5);
 			const constantBooleans = Array.from({ length: constantCount }, () => {
 				const instructionIp = r.i32();

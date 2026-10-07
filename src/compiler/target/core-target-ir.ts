@@ -127,6 +127,7 @@ export interface CoreTargetDirectEntry {
 	readonly resultRepresentation: CoreTargetRegisterRepresentation;
 	readonly fieldParameters?: {
 		readonly keys: ReadonlyArray<number>;
+		readonly representations: ReadonlyArray<CoreTargetRegisterRepresentation>;
 		readonly loads: ReadonlyArray<{
 			readonly instruction: CompilerInstruction;
 			readonly field: number;
@@ -203,6 +204,7 @@ export interface CoreTargetFunction {
 	readonly fieldCalls?: ReadonlyArray<{
 		readonly allocation: CompilerInstruction;
 		readonly call: CompilerInstruction;
+		readonly valueRepresentations: ReadonlyArray<CoreTargetRegisterRepresentation>;
 		readonly entries: ReadonlyArray<{
 			readonly functionIndex: number;
 			readonly entryId: number;

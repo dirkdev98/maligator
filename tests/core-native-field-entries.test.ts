@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { resolveBuildConfig } from "../src/build-config.ts";
+import { buildCoreControlFlow } from "../src/compiler/core/core-ir-control-flow.ts";
+import { verifyCoreOptimizationPlan } from "../src/compiler/core/core-ir-region-validity.ts";
+import { analyzeCoreNativeEntry } from "../src/compiler/core/core-native-entry-analysis.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
+import { optimizeSemanticProgramToCore } from "../src/compiler/pipeline/compile-core-common.ts";
 import { compileSemanticProgramToProgramImage } from "../src/compiler/pipeline/compile-core.ts";
 import { compilerProgramFactsFromConfig } from "../src/compiler/shared/compiler-facts.ts";
 import {
@@ -12,13 +16,152 @@ import { lowerNativeFunctionStorage } from "../src/compiler/target/lower-native-
 import {
 	compactProgramImageConstants,
 	validateNativeFieldCalls,
+	validateNativeDirectEntry,
 } from "../src/compiler/target/program-image.ts";
 import {
 	directCompiledEntryKey,
 	emitCompiledFunction,
 } from "../src/compiler/target/render-native-c.ts";
 
-describe("numeric own-field native entry contracts", () => {
+describe("own-field native entry contracts", () => {
+	it("retains origin proofs across verification and rejects incompatible field hypotheses", () => {
+		const core = optimizeSemanticProgramToCore(
+			analyzeSourceAndRunSemanticAnalysis(
+				`class Mix { read(order) { return +order.payload + order.net; } }
+				const rules = [new Mix()];
+				for (let i = 0; i < 3; i++) globalThis.result = rules[i % rules.length].read({
+					net:i * 7, payload:{valueOf(){return 2;}}
+				});`,
+				"field-origin-proof.js",
+			),
+			{ facts: compilerProgramFactsFromConfig(resolveBuildConfig({})) },
+			(_phase, run) => run(),
+		);
+		const entry = core.plan.directEntries.find(
+			(entry) => entry.fieldParameters !== undefined,
+		)!;
+		expect(entry).toBeDefined();
+		expect(() =>
+			verifyCoreOptimizationPlan(core.program, core.plan, core.context),
+		).not.toThrow();
+		const fields = {
+			...entry.fieldParameters!,
+			representations: entry.fieldParameters!.representations.map((rep) =>
+				rep === "boxed" ? ("f64" as const) : rep,
+			),
+		};
+		const fn = core.program.function(entry.function);
+		const variant = analyzeCoreNativeEntry(
+			fn,
+			buildCoreControlFlow(core.program, entry.function, { exceptions: true }),
+			entry.parameterRepresentations,
+			undefined,
+			entry.callSites,
+			fields,
+		);
+		const forged = { ...entry, ...variant, fieldParameters: fields };
+		expect(() =>
+			verifyCoreOptimizationPlan(
+				core.program,
+				{
+					...core.plan,
+					directEntries: core.plan.directEntries.map((current) =>
+						current === entry ? forged : current,
+					),
+				},
+				core.context,
+			),
+		).toThrow(/field argument proof/);
+	});
+
+	it("transports Boolean, String and boxed fields with their proven ABI", () => {
+		const image = compactProgramImageConstants(
+			compileSemanticProgramToProgramImage(
+				analyzeSourceAndRunSemanticAnalysis(
+					`class Mix { read(order) {
+						const base = +order.payload;
+						return order.active ? order.label + (order.net + base) : order.label;
+					} }
+					const rules = [new Mix()];
+					for (let i = 0; i < 3; i++) globalThis.result = rules[i % rules.length].read({
+						net: i * 7, active: i > 0, label: 'label-' + i, payload: {valueOf(){return 2;}}
+					});`,
+					"mixed-field-contract.js",
+				),
+				{ facts: compilerProgramFactsFromConfig(resolveBuildConfig({})) },
+			),
+		).definition;
+		const decoded = deserializeCompilerArtifact(serializeCompilerArtifact(image));
+		const caller = decoded.native.functions.find((fn) => fn.fieldCalls !== undefined)!;
+		expect(caller).toBeDefined();
+		const site = caller.fieldCalls![0]!;
+		expect(site.valueRepresentations).toEqual(["number", "boolean", "string", "boxed"]);
+		const selected = site.entries[0]!;
+		const target = decoded.native.functions[selected.functionIndex]!;
+		const entry = target.directEntries[selected.entryId]!;
+		expect(entry.fieldParameters!.representations).toEqual([
+			"boxed",
+			"boolean",
+			"string",
+			"number",
+		]);
+		const emitted = emitCompiledFunction(target, selected.functionIndex, "", false)!;
+		expect(emitted.directEntries[0]!.leaf).toBeUndefined();
+		expect(emitted.directEntries[0]!.source).toContain("MalValue fp0");
+		expect(emitted.directEntries[0]!.source).toContain("bool fp1");
+		expect(emitted.directEntries[0]!.source).toContain("mal_vm_unary_op");
+		const load = entry.fieldParameters!.loads.find((load) => load.field === 3)!;
+		const malformed = {
+			...entry,
+			fieldParameters: {
+				...entry.fieldParameters!,
+				representations: entry.fieldParameters!.representations.map((rep, index) =>
+					index === load.field ? ("boxed" as const) : rep,
+				),
+			},
+		};
+		expect(() => validateNativeDirectEntry(target.body, malformed)).toThrow(/field load/);
+		const forgedSource = {
+			...caller,
+			fieldCalls: [
+				{
+					...site,
+					valueRepresentations: ["boxed", "boolean", "string", "boxed"] as const,
+				},
+			],
+		};
+		expect(() =>
+			validateNativeFieldCalls(caller.body, forgedSource, decoded.native.functions),
+		).toThrow(/field entry target/);
+	});
+
+	it("joins disagreeing field facts and selects caller-specific boxing", () => {
+		const image = compactProgramImageConstants(
+			compileSemanticProgramToProgramImage(
+				analyzeSourceAndRunSemanticAnalysis(
+					`class Mix { read(order) { return order.value + order.net; } }
+					const rules = [new Mix()];
+					for (let i = 0; i < 3; i++) {
+						globalThis.first = rules[i % rules.length].read({value:i * 2, net:i * 7});
+						globalThis.second = rules[i % rules.length].read({value:'value-' + i, net:i * 7});
+					}`,
+					"mixed-field-join.js",
+				),
+				{ facts: compilerProgramFactsFromConfig(resolveBuildConfig({})) },
+			),
+		).definition;
+		const calls = image.native.functions
+			.flatMap((fn) => fn.storage!.callTransports)
+			.flatMap((plan) => plan.targets)
+			.filter((target) => target.fields.length > 0);
+		expect(calls).toHaveLength(2);
+		expect(new Set(calls.map((call) => call.entryId)).size).toBe(1);
+		expect(calls.map((call) => call.fields[0]!.conversion)).toEqual([
+			"box-number",
+			"identity",
+		]);
+	});
+
 	it("clears auxiliary field roots on every exceptional exit from a native window", () => {
 		const image = compactProgramImageConstants(
 			compileSemanticProgramToProgramImage(

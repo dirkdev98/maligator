@@ -146,4 +146,58 @@ for (let index = 0; index < 3; index++) {
 	broaderRules[index].calculate({ net: index, quantity: 1, metadata: { index } });
 }
 check(retained.metadata.index, 0);
+const collect = globalThis.__mal_collect_garbage;
+const failure = { message: "mixed field coercion" };
+class MixedFields {
+	format(order) {
+		const base = +order.payload;
+		return order.active ? order.label + (order.net + base) : order.label;
+	}
+}
+const mixedRules = [new MixedFields()];
+function mixedDrive(payload) {
+	let last;
+	for (let index = 0; index < 6; index++) {
+		last = mixedRules[index % mixedRules.length].format({
+			net: index * 7,
+			active: index > 0,
+			label: "mixed-" + index + ":",
+			payload,
+		});
+	}
+	return last;
+}
+let coercions = 0;
+const payload = {
+	fail: false,
+	valueOf() {
+		coercions++;
+		if (typeof collect === "function") collect();
+		if (this.fail) throw failure;
+		return 2;
+	},
+};
+check(mixedDrive(payload), "mixed-5:37");
+check(coercions, 6);
+payload.fail = true;
+let caught = false;
+try {
+	mixedDrive(payload);
+} catch (error) {
+	caught = error === failure;
+}
+check(caught, true);
+payload.fail = false;
+check(mixedDrive(payload), "mixed-5:37");
+let retainedMixed;
+MixedFields.prototype.format = function replacement(order) {
+	if (typeof collect === "function") collect();
+	retainedMixed = order;
+	return order.label + order.net;
+};
+check(mixedDrive(payload), "mixed-5:35");
+check(retainedMixed.payload, payload);
+check(retainedMixed.active, true);
+check(retainedMixed.net, 35);
+check(retainedMixed.label, "mixed-5:");
 console.log("read-only-field-entries PASS");

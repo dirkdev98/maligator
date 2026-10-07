@@ -102,7 +102,14 @@ describe("ordinary CALL final-output eligibility", () => {
 				safepoints: native.gc.safepoints.filter((point) => point.instructionIp !== 2),
 			},
 			regionActions: [{ ip: 4, regionIndex: 0, role: "call" as const }],
-			fieldCalls: [{ allocationIp: 5, callIp: 6, entries: [] }],
+			fieldCalls: [
+				{
+					allocationIp: 5,
+					callIp: 6,
+					valueRepresentations: ["boxed" as const],
+					entries: [],
+				},
+			],
 		};
 		const privateCalls = nativePrivateCallResultIps(body, plan);
 		expect([...privateCalls]).toEqual([1]);
@@ -208,7 +215,10 @@ describe("ordinary CALL final-output eligibility", () => {
 			[
 				{
 					...transport,
-					targets: transport.targets.map((target) => ({ ...target, fields: [0] })),
+					targets: transport.targets.map((target) => ({
+						...target,
+						fields: [{ slot: 0, conversion: "identity" as const }],
+					})),
 				},
 			],
 		])
@@ -221,8 +231,22 @@ describe("ordinary CALL final-output eligibility", () => {
 			),
 		]).toEqual([]);
 		for (const fieldCalls of [
-			[{ allocationIp: 0, callIp: 1, entries: [] }],
-			[{ allocationIp: 0, callIp: 2, entries: [] }],
+			[
+				{
+					allocationIp: 0,
+					callIp: 1,
+					valueRepresentations: ["boxed" as const],
+					entries: [],
+				},
+			],
+			[
+				{
+					allocationIp: 0,
+					callIp: 2,
+					valueRepresentations: ["boxed" as const],
+					entries: [],
+				},
+			],
 		])
 			expect([
 				...nativePrivateCallResultIps(body, { ...native, fieldCalls }, [transport]),

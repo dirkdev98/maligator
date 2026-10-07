@@ -13,8 +13,21 @@ import type {
 import { coreInstructionId } from "./core-ir.ts";
 import type { CoreInstructionId, CoreValueId } from "./core-ir.ts";
 import type { CoreFunctionStore } from "./core-store.ts";
+import { coreFunctionVersionsAreCurrent } from "./core-store.ts";
+import type { CoreFunctionVersions } from "./core-store.ts";
 
-export function coreReadOnlyNumericParameterFields(
+const argumentProofs = new WeakMap<
+	ReadonlyArray<CorePlanRepresentation>,
+	{
+		readonly fn: CoreFunctionStore;
+		readonly versions: CoreFunctionVersions;
+		readonly call: CoreInstructionId;
+		readonly allocation: CoreInstructionId;
+		readonly keys: ReadonlyArray<number>;
+	}
+>();
+
+export function coreReadOnlyParameterFields(
 	fn: CoreFunctionStore,
 	cfg: CoreControlFlow,
 ): CoreEntryFields | undefined {
@@ -90,6 +103,7 @@ export function coreReadOnlyNumericParameterFields(
 				"createBoolean",
 				"createUndefined",
 				"createNull",
+				"createString",
 				"binary",
 				"unary",
 				"move",
@@ -101,17 +115,24 @@ export function coreReadOnlyNumericParameterFields(
 		? undefined
 		: Object.freeze({
 				keys: Object.freeze(keys),
+				representations: Object.freeze(keys.map(() => "boxed" as const)),
 				loads: Object.freeze(loads.map((load) => Object.freeze(load))),
 			});
 }
 
-export function coreNumericFieldArgument(
+export function coreFieldArgument(
 	fn: CoreFunctionStore,
 	facts: CoreLocalFactBundle,
 	call: CoreInstructionId,
 	argument: CoreValueId,
 	fields: CoreEntryFields,
-): CoreInstructionId | undefined {
+):
+	| {
+			readonly instruction: CoreInstructionId;
+			readonly valueRepresentations: ReadonlyArray<CorePlanRepresentation>;
+			readonly fields: CoreEntryFields;
+	  }
+	| undefined {
 	const layout = facts.provenance.allocationOf(argument);
 	if (
 		layout?.kind !== "named-slots" ||
@@ -119,12 +140,7 @@ export function coreNumericFieldArgument(
 		fn.instructionOpcodeName(layout.instruction) !== "createObjectShaped" ||
 		layout.keys.length > 4 ||
 		layout.keys.length === 0 ||
-		fields.keys.some((key) => !layout.keys.includes(key)) ||
-		fields.keys.some(
-			(key) =>
-				facts.valueKinds.scalarKind(layout.initialValues[layout.keys.indexOf(key)]!) !==
-				"number",
-		)
+		fields.keys.some((key) => !layout.keys.includes(key))
 	)
 		return undefined;
 	// A single use keeps identity, aliases, and later mutation out of the deferred literal.
@@ -151,30 +167,53 @@ export function coreNumericFieldArgument(
 		)
 			return undefined;
 	}
-	return layout.instruction;
+	const valueRepresentations = Object.freeze(
+		layout.initialValues.map((value): CorePlanRepresentation => {
+			const kind = facts.valueKinds.scalarKind(value);
+			return kind === "number" ? "f64" : (kind ?? "boxed");
+		}),
+	);
+	argumentProofs.set(valueRepresentations, {
+		fn,
+		versions: fn.versions,
+		call,
+		allocation: layout.instruction,
+		keys: layout.keys,
+	});
+	return {
+		instruction: layout.instruction,
+		valueRepresentations,
+		fields: Object.freeze({
+			...fields,
+			representations: Object.freeze(
+				fields.keys.map((key) => valueRepresentations[layout.keys.indexOf(key)]!),
+			),
+		}),
+	};
 }
 
-export function coreFieldEntryHasNumericComputations(
+export function coreFieldArgumentProofIsCurrent(
 	fn: CoreFunctionStore,
-	representations: ReadonlyArray<CorePlanRepresentation>,
-	operatorInputs: CoreDirectEntryPlan["operatorInputs"],
+	site: CoreDirectEntryPlan["callSites"][number],
+	fields: CoreEntryFields,
 ): boolean {
-	const certified = new Set(operatorInputs?.map(({ instruction }) => instruction));
-	for (const instruction of fn.instructionIds()) {
-		if (fn.instructionKind(instruction) !== "operation") continue;
-		const opcode = fn.instructionOpcodeName(instruction);
-		if (!["binary", "unary", "call", "callKnown"].includes(opcode)) continue;
-		if (certified.has(instruction)) continue;
-		for (
-			let index = opcode === "call" ? 2 : opcode === "callKnown" ? 1 : 0;
-			index < fn.kernel.instructionOperandCount(instruction);
-			index++
-		) {
-			const value = fn.kernel.operandAt(
-				fn.kernel.instructionOperandStart(instruction) + index,
+	const proof =
+		site.fieldValueRepresentations === undefined
+			? undefined
+			: argumentProofs.get(site.fieldValueRepresentations);
+	return (
+		proof?.fn === fn &&
+		coreFunctionVersionsAreCurrent(fn, proof.versions) &&
+		proof.call === site.instruction &&
+		proof.allocation === site.fieldObject &&
+		fields.representations.length === fields.keys.length &&
+		fields.keys.every((key, index) => {
+			const slot = proof.keys.indexOf(key);
+			const target = fields.representations[index];
+			return (
+				slot >= 0 &&
+				(target === "boxed" || target === site.fieldValueRepresentations![slot])
 			);
-			if (representations[value] !== "f64") return false;
-		}
-	}
-	return true;
+		})
+	);
 }

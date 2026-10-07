@@ -1241,6 +1241,7 @@ export interface NativeFunctionPlan {
 	readonly fieldCalls?: ReadonlyArray<{
 		readonly allocationIp: number;
 		readonly callIp: number;
+		readonly valueRepresentations: ReadonlyArray<VmRegisterRepresentation>;
 		readonly entries: ReadonlyArray<{
 			readonly functionIndex: number;
 			readonly entryId: number;
@@ -1274,6 +1275,7 @@ export interface NativeDirectEntryPlan {
 	readonly resultRepresentation: VmRegisterRepresentation;
 	readonly fieldParameters?: {
 		readonly keys: ReadonlyArray<number>;
+		readonly representations: ReadonlyArray<VmRegisterRepresentation>;
 		readonly loads: ReadonlyArray<{
 			readonly instructionIp: number;
 			readonly field: number;
@@ -1344,6 +1346,10 @@ export function validateNativeDirectEntry(
 			entry.argumentRepresentations !== undefined ||
 			fields.keys.length === 0 ||
 			fields.keys.length > 4 ||
+			fields.representations.length !== fields.keys.length ||
+			fields.representations.some(
+				(rep) => !["boxed", "number", "boolean", "string"].includes(rep),
+			) ||
 			new Set(fields.keys).size !== fields.keys.length ||
 			fields.loads.length === 0 ||
 			fields.loads.length > 64
@@ -1356,7 +1362,10 @@ export function validateNativeDirectEntry(
 				seen.has(load.instructionIp) ||
 				instruction?.opcode !== "LOAD_PROPERTY_STATIC" ||
 				instruction.object !== 0 ||
-				fields.keys[load.field] !== instruction.stringIndex
+				fields.keys[load.field] !== instruction.stringIndex ||
+				(entry.registerRepresentations[instruction.dst] !== "boxed" &&
+					entry.registerRepresentations[instruction.dst] !==
+						fields.representations[load.field])
 			)
 				throw new RangeError("Invalid native entry field load");
 			seen.add(load.instructionIp);
@@ -1542,6 +1551,18 @@ export function validateNativeFieldCalls(
 			allocation?.opcode !== "CREATE_OBJECT_SHAPED" ||
 			allocation.count < 1 ||
 			allocation.count > 4 ||
+			site.valueRepresentations.length !== allocation.count ||
+			site.valueRepresentations.some(
+				(rep) => !["boxed", "number", "boolean", "string"].includes(rep),
+			) ||
+			site.valueRepresentations.some((rep, field) => {
+				const source = native.registerRepresentations[allocation.valueRegisters[field]!];
+				return (
+					rep !== "boxed" &&
+					source !== "boxed" &&
+					(source === "int32" ? "number" : source) !== rep
+				);
+			}) ||
 			call?.opcode !== "CALL" ||
 			call.arguments.length !== 1 ||
 			decodeVmValueOperand(call.arguments[0]!).kind !== "register"
@@ -1564,6 +1585,14 @@ export function validateNativeFieldCalls(
 				entry?.fieldParameters === undefined ||
 				entry.fieldParameters.keys.some(
 					(key) => !allocation.keyStringIndices.includes(key),
+				) ||
+				entry.fieldParameters.representations.some(
+					(rep, index) =>
+						rep !== "boxed" &&
+						rep !==
+							site.valueRepresentations[
+								allocation.keyStringIndices.indexOf(entry.fieldParameters!.keys[index]!)
+							],
 				) ||
 				plan?.kind !== "call" ||
 				(plan.directFunctionIndex !== selected.functionIndex &&
@@ -4598,6 +4627,7 @@ function lowerExecutionFunctionToNativePlan(
 			: {
 					fieldParameters: {
 						keys: entry.fieldParameters.keys,
+						representations: entry.fieldParameters.representations,
 						loads: entry.fieldParameters.loads.map(({ instruction, field }) => ({
 							instructionIp: instructionIndexByTargetInstruction.get(instruction)!,
 							field,
@@ -4681,6 +4711,7 @@ function lowerExecutionFunctionToNativePlan(
 					fieldCalls: fn.fieldCalls.map((site) => ({
 						allocationIp: instructionIndexByTargetInstruction.get(site.allocation)!,
 						callIp: instructionIndexByTargetInstruction.get(site.call)!,
+						valueRepresentations: site.valueRepresentations,
 						entries: site.entries,
 					})),
 				}),

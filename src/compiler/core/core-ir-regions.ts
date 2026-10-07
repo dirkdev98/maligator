@@ -376,6 +376,7 @@ export interface CoreDirectEntryCallSite {
 	readonly numericSortCallback?: "sort" | "toSorted";
 	readonly numericSortCallbackViaCall?: true;
 	readonly fieldObject?: CoreInstructionId;
+	readonly fieldValueRepresentations?: ReadonlyArray<CorePlanRepresentation>;
 }
 
 export interface CoreDirectBuiltinCallbackPlan {
@@ -386,6 +387,7 @@ export interface CoreDirectBuiltinCallbackPlan {
 
 export interface CoreEntryFields {
 	readonly keys: ReadonlyArray<number>;
+	readonly representations: ReadonlyArray<CorePlanRepresentation>;
 	readonly loads: ReadonlyArray<{
 		readonly instruction: CoreInstructionId;
 		readonly field: number;

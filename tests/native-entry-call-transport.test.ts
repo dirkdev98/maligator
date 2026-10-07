@@ -301,7 +301,7 @@ describe("specialized call graph metadata transport", () => {
 
 	it.each([
 		{ argumentRepresentations: ["number", "number"] as const },
-		{ fieldParameters: { keys: [0], loads: [] } },
+		{ fieldParameters: { keys: [0], representations: ["number" as const], loads: [] } },
 	])("rejects outgoing calls that cannot supply their target ABI: %j", (target) => {
 		const image = withNativeFunctionPlan(callGraphImage(), 1, (plan) => ({
 			...plan,
