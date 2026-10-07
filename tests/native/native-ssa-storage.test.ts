@@ -103,18 +103,40 @@ describe("independent native SSA storage", () => {
 				"mal_vm_property_numeric_update_commit(",
 			);
 		}
-		const stackFields = image.native.functions.find(
-			(fn) =>
-				String.fromCharCode(
-					...(image.runtime.stringConstants[fn.body.nameStringIndex] ?? []),
-				) === "typedStackFields",
-		)!;
-		expect(stackFields.storage!.stackObjects).toHaveLength(1);
-		expect(stackFields.storage!.stackObjects[0]!.slotRepresentations).toEqual([
-			"number",
-			"int32",
-			"boolean",
-		]);
+		for (const name of ["typedStackFields", "typedStackNaN"]) {
+			const stackFields = image.native.functions.find(
+				(fn) =>
+					String.fromCharCode(
+						...(image.runtime.stringConstants[fn.body.nameStringIndex] ?? []),
+					) === name,
+			)!;
+			expect(
+				emitCompiledFunction(stackFields, stackFields.functionIndex, "", false),
+			).not.toBeNull();
+			expect(stackFields.storage!.stackObjects).toHaveLength(1);
+			expect(stackFields.storage!.stackObjects[0]!.slotRepresentations).toEqual([
+				"number",
+				"int32",
+				"boolean",
+			]);
+			if (name === "typedStackFields") {
+				const slots = new Map<number, Set<string>>();
+				for (const region of stackFields.specializations) {
+					if (region.kind !== "stack-object-plan") continue;
+					for (const site of region.sites)
+						for (const access of site.accesses) {
+							const op = stackFields.body.instructions[access.ip]!;
+							const kind = op.opcode.startsWith("LOAD_") ? "load" : "store";
+							const uses = slots.get(access.slot) ?? new Set();
+							uses.add(kind);
+							slots.set(access.slot, uses);
+						}
+				}
+				for (const slot of [0, 1, 2])
+					expect(slots.get(slot)).toEqual(new Set(["load", "store"]));
+			}
+		}
+
 		const regions = image.native.functions.flatMap((fn) => fn.specializations);
 		expect(regions.some((region) => region.kind === "string-split-cursor")).toBe(true);
 		const regexp = regions.find((region) => region.kind === "regexp-iterator-projection");

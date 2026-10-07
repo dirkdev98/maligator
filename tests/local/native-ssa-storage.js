@@ -753,11 +753,25 @@ setTimeout(() => {
 
 function typedStackFields(input) {
 	const object = { fraction: -0, integer: 2, flag: true };
-	object.integer = 3;
+	gc();
+	if (input) {
+		object.fraction = 0 / 0;
+		object.integer = 3;
+		object.flag = false;
+	} else {
+		object.fraction = -0;
+		object.integer = 4;
+		object.flag = true;
+	}
 	gc();
 	return object === input
 		? "identity"
-		: [Object.is(object.fraction, -0), object.integer, object.flag].join(":");
+		: [
+				String(object.fraction),
+				Object.is(object.fraction, -0),
+				object.integer,
+				object.flag,
+			].join(":");
 }
 function typedStackNaN(input) {
 	const object = { fraction: 0 / 0, integer: -2147483648, flag: false };
@@ -766,4 +780,9 @@ function typedStackNaN(input) {
 		? "identity"
 		: [String(object.fraction), object.integer, object.flag].join(":");
 }
-console.log("typed-stack-fields", typedStackFields(null), typedStackNaN(null));
+console.log(
+	"typed-stack-fields",
+	typedStackFields(null),
+	typedStackFields(true),
+	typedStackNaN(null),
+);
