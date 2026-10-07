@@ -9504,7 +9504,13 @@ function emitInstruction(
 			// Register -1 is the "no value" sentinel (a synthesized empty return).
 			let value =
 				instruction.value < 0 ? "MAL_VALUE_UNDEFINED" : boxed(instruction.value);
-			if (directResultRepresentation !== undefined) {
+			if (
+				directResultRepresentation !== undefined &&
+				!(
+					directResultRepresentation === "boxed" &&
+					stackObjectMaterialization !== undefined
+				)
+			) {
 				if (stackObjectMaterialization !== undefined) return null;
 				if (instruction.value < 0) {
 					return [`${gcUnlink}return ${zeroOf(directResultRepresentation)};`];
@@ -9528,10 +9534,26 @@ function emitInstruction(
 			const materialize: Array<string> = [];
 			if (stackObjectMaterialization !== undefined) {
 				const materialized = `materialized_ret_${ip}`;
-				materialize.push(
-					`MalValue ${materialized} = mal_vm_materialize_stack_object(vm, &${stackObjectMaterialization.objectName}.object);`,
-					throwCheck(),
-				);
+				const fields = stackObjectMaterialization.fieldSlots;
+				const helper =
+					fields === undefined
+						? `mal_vm_materialize_stack_object(vm, &${stackObjectMaterialization.objectName}.object)`
+						: `mal_vm_materialize_stack_object_fields(vm, &${stackObjectMaterialization.objectName}.object, __stack_return_values_${ip}, ${fields.length})`;
+				if (fields !== undefined)
+					materialize.push(
+						`MalValue __stack_return_values_${ip}[${fields.length}] = { ${fields
+							.map((field) =>
+								field.representation === "int32"
+									? `mal_value_from_i32(${field.name})`
+									: field.representation === "number"
+										? profileCall("boxing", `mal_ops_number_value(${field.name})`)
+										: field.representation === "boolean"
+											? `mal_value_new_boolean(${field.name})`
+											: field.name,
+							)
+							.join(", ")} };`,
+					);
+				materialize.push(`MalValue ${materialized} = ${helper};`, throwCheck());
 				value = materialized;
 			}
 			// A coroutine body's return completes the activation: free its buffer and

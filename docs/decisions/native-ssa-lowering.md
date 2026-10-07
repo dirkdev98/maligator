@@ -142,15 +142,19 @@ cache sites, borrowed values, and two claimed instructions are selected before
 storage planning. Rendering consumes the pair admission and preserves a separate
 original-instruction fallback at each load, including its source and profile event.
 
-Direct activation-local stack objects with existing materialization:none certificates
+Direct activation-local stack objects with existing certificates
 can store several fields in independent number, int32, and boolean locals. Stable
 boxed and string fields occupy dedicated shadow slots initialized before frame
 publication and active throughout the invocation. Every field must retain its initial
-representation at all certified accesses; inherited, materializing, or changing fields
+representation at all certified accesses; inherited or changing fields
 keep whole-object boxed storage. All-boxed sites retain the existing contiguous layout.
 The persisted plan is selected and validated independently for each entry. The embedded
 header retains identity with a null field-storage pointer, so this layout cannot escape
-the certificate.
+the certificate. Existing certified returns can materialize a typed layout: rendering
+boxes the current fields into a bounded vector only on that edge, and the shared
+materializer roots the vector before allocating the managed cell. The clone preserves
+shape, prototype, and current values; allocation errors are checked before frame unlink.
+Boxed-result typed entries share this path. General escaping uses remain excluded.
 
 Literal-shape caches are shared by both target bodies. Their slot identities come
 from Core allocation origins, independently of physical block order. Both the wire

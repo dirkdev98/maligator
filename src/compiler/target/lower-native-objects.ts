@@ -18,14 +18,17 @@ export function selectNativeStackObjectStorage(
 	if (native.mode !== "direct") return [];
 	const plans: Array<NativeStackObjectStoragePlan> = [];
 	for (const region of native.specializations) {
-		if (region.kind !== "stack-object-plan" || region.license.materialization !== "none")
-			continue;
+		if (region.kind !== "stack-object-plan") continue;
 		for (const site of region.sites) {
 			if (
 				site.mode === "elided" ||
 				site.slotCount === 0 ||
 				site.inheritedAccessIp !== undefined ||
-				site.materializations.length !== 0
+				!site.materializations.every(
+					(materialization) =>
+						materialization.kind === "return" &&
+						native.body.instructions[materialization.ip]?.opcode === "RETURN",
+				)
 			)
 				continue;
 			const allocation = native.body.instructions[site.allocationIp];

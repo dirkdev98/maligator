@@ -889,6 +889,55 @@ function mixedStackFields(input) {
 globalThis.mixedStackFields = mixedStackFields;
 console.log("mixed-stack-fields", mixedStackFields(null), mixedStackFields(true));
 
+function typedReturnedFields(escape, fail) {
+	const object = {
+		fraction: -0,
+		integer: 2,
+		flag: true,
+		payload: globalThis.makeMixedValue(41),
+		label: globalThis.makeMixedString(43),
+	};
+	gc();
+	if (escape) {
+		object.fraction = 0 / 0;
+		object.integer = 3;
+		object.flag = false;
+		object.payload = globalThis.makeMixedValue(47);
+		object.label = globalThis.makeMixedString(53);
+	}
+	gc();
+	if (fail) globalThis.__mal_fail_next_cell_allocation();
+	if (escape) return object;
+	return 0;
+}
+globalThis.typedReturnedFields = typedReturnedFields;
+const returnedFields = typedReturnedFields(true, false);
+const returnedAgain = typedReturnedFields(true, false);
+gc();
+console.log(
+	"typed-return-fields",
+	Number.isNaN(returnedFields.fraction),
+	returnedFields.integer,
+	returnedFields.flag,
+	returnedFields.payload.marker,
+	returnedFields.label.length,
+	Object.getPrototypeOf(returnedFields) === Object.prototype,
+	returnedFields !== returnedAgain,
+	typedReturnedFields(false, false),
+);
+returnedFields.integer = 71;
+if (returnedAgain.integer !== 3)
+	throw new Error("materialized objects share field storage");
+if (typeof globalThis.__mal_fail_next_cell_allocation === "function") {
+	let caught = false;
+	try {
+		typedReturnedFields(true, true);
+	} catch (error) {
+		caught = error instanceof Error;
+	}
+	if (!caught) throw new Error("typed materialization failure was not catchable");
+}
+
 function shapeBranches(flag, input) {
 	let total = 0;
 	let object;

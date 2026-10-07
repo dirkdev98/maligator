@@ -2920,6 +2920,10 @@ MalValue mal_vm_op_create_base_construct_receiver(
  */
 MalValue mal_vm_materialize_stack_object(MalVm *vm, const struct MalObject *source);
 
+// Explicit fields may come from typed C storage; the helper roots them before allocation.
+MalValue mal_vm_materialize_stack_object_fields(
+    MalVm *vm, const struct MalObject *source, MalValue *values, u32 count);
+
 /** Successful stack-object return materializations (benchmark telemetry). */
 u64 mal_vm_stack_object_materialization_count(void);
 

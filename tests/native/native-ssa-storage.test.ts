@@ -176,6 +176,45 @@ describe("independent native SSA storage", () => {
 				),
 			).toBe(true);
 		}
+		const returned = image.native.functions.find(
+			(fn) =>
+				String.fromCharCode(
+					...(image.runtime.stringConstants[fn.body.nameStringIndex] ?? []),
+				) === "typedReturnedFields",
+		)!;
+		const returnRegion = returned.specializations.find(
+			(region) => region.kind === "stack-object-plan",
+		)!;
+		if (returnRegion.kind !== "stack-object-plan")
+			throw new Error("Return fixture lacks a stack certificate");
+		expect(returnRegion.license.materialization).toBe("on-demand");
+		expect(returnRegion.sites[0]!.materializations.length).toBeGreaterThan(0);
+		const returnedEntry = returned.directEntries.find(
+			(entry) => entry.storage!.stackObjects.length > 0,
+		)!;
+		expect(returnedEntry).toBeDefined();
+		expect(returnedEntry.resultRepresentation).toBe("boxed");
+		const emittedReturn = emitCompiledFunction(
+			returned,
+			returned.functionIndex,
+			"",
+			false,
+		)!;
+		expect(
+			emittedReturn.directEntries.find(
+				(entry) => entry.id === returnedEntry.id && !entry.leaf,
+			)!.source,
+		).toContain("mal_vm_materialize_stack_object_fields(vm,");
+		expect(
+			image.native.functions.some((fn) =>
+				fn.instructions.some(
+					(plan) =>
+						plan?.kind === "call" &&
+						plan.directEntryId === returnedEntry.id &&
+						plan.guardedFunctionIndices?.includes(returned.functionIndex),
+				),
+			),
+		).toBe(true);
 		expect(shapes).toBeDefined();
 		expect(emitCompiledFunction(shapes, shapes.functionIndex, "", false)).not.toBeNull();
 		const portableShapes = image.runtime.functions[
@@ -365,7 +404,11 @@ describe("independent native SSA storage", () => {
 			for (const stress of [{}, STRESS_ENV]) {
 				expect(
 					runToStdout(binary, {
-						env: { ...stress, MAL_HOST_GC: "1" },
+						env: {
+							...stress,
+							MAL_HOST_GC: "1",
+							...(binary === compiled ? { MAL_ALLOC_FAIL_TEST: "1" } : {}),
+						},
 						timeoutMs: 60_000,
 					}),
 				).toBe(expected);

@@ -107,7 +107,6 @@ describe("native typed stack fields", () => {
 
 	it.each([
 		"const o={x:1.5,y:2,flag:true}; o.y=input; return o===input?-1:o.y;",
-		"const o={x:1.5,y:2,flag:true}; return input?o:o.x;",
 		"const o={x:1.5,payload:input}; o.x=input; return o===input?-1:o.x;",
 		"const o={x:1.5,payload:input}; return o.x+o.missing;",
 		"const o={payload:input,label:input}; return o===input?0:o.payload;",
@@ -118,6 +117,38 @@ describe("native typed stack fields", () => {
 			expect(native.storage!.stackObjects).toEqual([]);
 		},
 	);
+
+	it("keeps stable fields typed until a certified partial return materializes them", () => {
+		const image = compile(
+			"const o={x:-0,y:2,flag:true}; if(input){o.x=0/0;o.y=3;o.flag=false;} if(input)return o;return 0;",
+		);
+		const native = image.native.functions[1]!;
+		const entry = native.directEntries.find(
+			(candidate) => candidate.storage!.stackObjects.length > 0,
+		)!;
+		expect(entry.resultRepresentation).toBe("boxed");
+		expect(entry.storage!.stackObjects[0]!.slotRepresentations).toEqual([
+			"boxed",
+			"number",
+			"boolean",
+		]);
+		const region = native.specializations.find(
+			(candidate) => candidate.kind === "stack-object-plan",
+		)!;
+		if (region.kind !== "stack-object-plan")
+			throw new Error("Missing return certificate");
+		expect(region.license.materialization).toBe("on-demand");
+		expect(region.sites[0]!.materializations.length).toBeGreaterThan(0);
+		const emitted = emitCompiledFunction(native, native.functionIndex, "", false)!;
+		const output = emitted.directEntries.find(
+			(candidate) => candidate.id === entry.id && !candidate.leaf,
+		)!.source;
+		expect(output).toContain("mal_vm_materialize_stack_object_fields(vm,");
+		expect(output).toMatch(
+			/MalValue __stack_return_values_\d+\[3\] = \{ __gc_slots\[\d+\], mal_ops_number_value\(/,
+		);
+		expect(deserializeCompilerArtifact(serializeCompilerArtifact(image))).toEqual(image);
+	});
 
 	it("keeps a numeric value with boxed transport rooted while retaining other scalar fields", () => {
 		const native = compile(

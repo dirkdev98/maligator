@@ -820,16 +820,24 @@ MalValue mal_vm_op_create_base_construct_receiver(
 }
 
 MalValue mal_vm_materialize_stack_object(MalVm *vm, const MalObject *source) {
-    assert(source->header.type == MAL_HEAP_OBJECT);
-    assert(source->header.storage == MAL_HEAP_STORAGE_IMMORTAL);
-    assert(mal_object_overflow(source) == nullptr);
+    assert((source->shape->inline_count == 0) == (mal_object_fields(source) == nullptr));
+    MalValue values[MAL_SHAPE_MAX_INLINE_SLOTS];
     u32 count = source->shape->inline_count;
     assert(count <= MAL_SHAPE_MAX_INLINE_SLOTS);
-    assert((count == 0) == (mal_object_fields(source) == nullptr));
-    MalValue values[MAL_SHAPE_MAX_INLINE_SLOTS];
     for (u32 i = 0; i < count; i++) {
         values[i] = mal_object_field_load(source, i);
     }
+    return mal_vm_materialize_stack_object_fields(vm, source, values, count);
+}
+
+MalValue mal_vm_materialize_stack_object_fields(
+    MalVm *vm, const MalObject *source, MalValue *values, u32 count) {
+    assert(source->header.type == MAL_HEAP_OBJECT);
+    assert(source->header.storage == MAL_HEAP_STORAGE_IMMORTAL);
+    assert(mal_object_overflow(source) == nullptr);
+    assert(count == source->shape->inline_count);
+    assert(count <= MAL_SHAPE_MAX_INLINE_SLOTS);
+    assert(count == 0 || values != nullptr);
     MalRootSpan roots;
     if (count > 0) mal_gc_root(&roots, values, (i32) count);
     MalObject *object = count == 0

@@ -112,6 +112,9 @@ The independent target boundary and current storage contract are recorded in
       with existing non-materializing certificates and stable scalar fields.
 - [x] Preserve scalar fields in mixed activation-local stack objects; root only
       stable boxed and string fields in dedicated active shadow slots.
+- [x] Keep stable fields typed through certified returns, boxing into a rooted
+      materialization vector only on the escaping edge, including boxed-result
+      typed entries.
 - [ ] Extend selected typed call/aggregate transport and expression regions using
       Core proofs, with bounded code-size decisions and matched runtime evidence.
       Move remaining emission-local selection into explicit native plans before
