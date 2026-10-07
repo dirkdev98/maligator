@@ -143,8 +143,49 @@ interface NativeScalarOwnership {
 	readonly borrowed: ReadonlySet<number>;
 }
 
+interface NativeStorageBodyFacts {
+	readonly reads: ReadonlyArray<ReadonlyArray<number>>;
+	readonly writes: ReadonlyArray<ReadonlyArray<number>>;
+	readonly writeCounts: Uint32Array;
+	readonly definitions: Int32Array;
+	readonly uses: ReadonlyArray<ReadonlyArray<number>>;
+	readonly jumpTargets: ReadonlySet<number>;
+	readonly handlerTargets: ReturnType<typeof vmExceptionHandlerTargets>;
+	readonly controlBoundaries: ReadonlyArray<boolean>;
+}
+
+function storageBodyFacts(fn: NativeFunctionPlan["body"]): NativeStorageBodyFacts {
+	const reads = fn.instructions.map(vmInstructionReadRegisters);
+	const writes = fn.instructions.map(vmInstructionWriteRegisters);
+	const writeCounts = new Uint32Array(fn.registerCount);
+	const definitions = new Int32Array(fn.registerCount).fill(-1);
+	const uses: Array<Array<number>> = Array.from({ length: fn.registerCount }, () => []);
+	const jumpTargets = new Set(fn.handlers.map((handler) => handler.handlerIp));
+	for (const [ip, op] of fn.instructions.entries()) {
+		for (const local of writes[ip]!) {
+			writeCounts[local]!++;
+			definitions[local] = ip;
+		}
+		for (const local of reads[ip]!) uses[local]!.push(ip);
+		if (op.opcode === "JUMP" || op.opcode === "JUMP_IF") jumpTargets.add(op.targetIp);
+		if (["GENERATOR_START", "YIELD", "AWAIT"].includes(op.opcode))
+			jumpTargets.add(ip + 1);
+	}
+	return {
+		reads,
+		writes,
+		writeCounts,
+		definitions,
+		uses,
+		jumpTargets,
+		handlerTargets: vmExceptionHandlerTargets(fn.instructions.length, fn.handlers),
+		controlBoundaries: fn.instructions.map(scalarControlBoundary),
+	};
+}
+
 function scalarStorageOwnership(
 	native: NativeFunctionPlan,
+	body: NativeStorageBodyFacts,
 	projections: ReadonlyArray<
 		Pick<NativePropertyProjectionPlan, "claimedIps" | "borrowedRegisters">
 	>,
@@ -158,7 +199,7 @@ function scalarStorageOwnership(
 		for (let ip = site.allocationIp; ip <= site.callIp; ip++) blocked.add(ip);
 	for (const site of native.literalSwitches ?? [])
 		for (let ip = site.instructionIp; ip <= site.endIp; ip++) blocked.add(ip);
-	const handlers = vmExceptionHandlerTargets(fn.instructions.length, fn.handlers);
+	const handlers = body.handlerTargets;
 	for (const handler of fn.handlers) {
 		blocked.add(handler.handlerIp);
 		blocked.add(handler.endIp);
@@ -182,9 +223,7 @@ function scalarStorageOwnership(
 	const borrowed = new Set(
 		[...blocked].flatMap((ip) => {
 			const op = fn.instructions[ip];
-			return op === undefined
-				? []
-				: [...vmInstructionReadRegisters(op), ...vmInstructionWriteRegisters(op)];
+			return op === undefined ? [] : [...body.reads[ip]!, ...body.writes[ip]!];
 		}),
 	);
 	for (const plan of projections)
@@ -192,10 +231,7 @@ function scalarStorageOwnership(
 	for (const point of suspension?.points ?? []) {
 		blocked.add(point.instructionIp);
 		for (const register of point.registers) borrowed.add(register);
-		for (const register of vmInstructionWriteRegisters(
-			fn.instructions[point.instructionIp]!,
-		))
-			borrowed.add(register);
+		for (const register of body.writes[point.instructionIp]!) borrowed.add(register);
 	}
 	return { blocked, borrowed };
 }
@@ -215,17 +251,15 @@ function elidedTdzIps(
 	);
 }
 
-function scalarStorageReads(
-	native: NativeFunctionPlan,
+function scalarStorageUses(
+	body: NativeStorageBodyFacts,
 	suspension: NativeSuspensionPlan | undefined,
 ): ReadonlyArray<ReadonlyArray<number>> {
-	const snapshots = new Map(
-		suspension?.points.map((point) => [point.instructionIp, point.registers]),
-	);
-	return native.body.instructions.map((op, ip) => [
-		...vmInstructionReadRegisters(op),
-		...(snapshots.get(ip) ?? []),
-	]);
+	if (suspension === undefined || suspension.points.length === 0) return body.uses;
+	const uses = body.uses.map((ips) => [...ips]);
+	for (const point of suspension.points)
+		for (const local of point.registers) uses[local]!.push(point.instructionIp);
+	return uses;
 }
 
 function scalarControlBoundary(op: BytecodeInstruction): boolean {
@@ -243,26 +277,20 @@ function scalarControlBoundary(op: BytecodeInstruction): boolean {
 
 function definitionInitializedRegisters(
 	native: NativeFunctionPlan,
+	body: NativeStorageBodyFacts,
 	jumpTargets: ReadonlySet<number>,
-	reads: ReadonlyArray<ReadonlyArray<number>>,
+	uses: ReadonlyArray<ReadonlyArray<number>>,
 	{ blocked, borrowed }: NativeScalarOwnership,
 ): ReadonlyArray<number> {
 	if (native.storageValues === undefined) return [];
 	const fn = native.body;
-	const writes = new Uint32Array(fn.registerCount);
-	const definitions = new Int32Array(fn.registerCount).fill(-1);
-	const uses: Array<Array<number>> = Array.from({ length: fn.registerCount }, () => []);
+	const { writeCounts: writes, definitions } = body;
 	const blocks = new Uint32Array(fn.instructions.length);
 	let block = 0;
-	for (const [ip, op] of fn.instructions.entries()) {
+	for (let ip = 0; ip < fn.instructions.length; ip++) {
 		if (jumpTargets.has(ip) || blocked.has(ip)) block++;
 		blocks[ip] = block;
-		for (const local of reads[ip]!) uses[local]!.push(ip);
-		for (const local of vmInstructionWriteRegisters(op)) {
-			writes[local]!++;
-			definitions[local] = ip;
-		}
-		if (scalarControlBoundary(op) || blocked.has(ip)) block++;
+		if (body.controlBoundaries[ip] || blocked.has(ip)) block++;
 	}
 	return native.registerRepresentations.flatMap((rep, local) => {
 		const definition = definitions[local]!;
@@ -280,9 +308,10 @@ function definitionInitializedRegisters(
 
 function rematerializedConstantIps(
 	native: NativeFunctionPlan,
+	body: NativeStorageBodyFacts,
 	jumpTargets: ReadonlySet<number>,
 	preserveProfileSites: boolean,
-	reads: ReadonlyArray<ReadonlyArray<number>>,
+	uses: ReadonlyArray<ReadonlyArray<number>>,
 ): ReadonlyArray<number> {
 	const fn = native.body;
 	if (
@@ -291,21 +320,18 @@ function rematerializedConstantIps(
 		(preserveProfileSites && fn.profileSiteIds !== undefined)
 	)
 		return [];
-	const writes = new Uint32Array(fn.registerCount);
-	const uses: Array<Array<number>> = Array.from({ length: fn.registerCount }, () => []);
+	const writes = body.writeCounts;
 	const blocks = new Uint32Array(fn.instructions.length);
 	const ends: Array<number> = [];
 	let block = 0;
 	let startsBlock = false;
-	for (const [ip, op] of fn.instructions.entries()) {
+	for (let ip = 0; ip < fn.instructions.length; ip++) {
 		if (ip > 0 && (startsBlock || jumpTargets.has(ip))) {
 			ends.push(ip - 1);
 			block++;
 		}
 		blocks[ip] = block;
-		for (const local of vmInstructionWriteRegisters(op)) writes[local]!++;
-		for (const local of reads[ip]!) uses[local]!.push(ip);
-		startsBlock = scalarControlBoundary(op);
+		startsBlock = body.controlBoundaries[ip]!;
 	}
 	if (fn.instructions.length === 0) return [];
 	ends.push(fn.instructions.length - 1);
@@ -461,6 +487,7 @@ function scalarValueBoundary(op: BytecodeInstruction, local: number): boolean {
 
 function expressionIps(
 	native: NativeFunctionPlan,
+	body: NativeStorageBodyFacts,
 	jumpTargets: ReadonlySet<number>,
 	preserveProfileSites: boolean,
 	{ blocked, borrowed }: NativeScalarOwnership,
@@ -471,12 +498,7 @@ function expressionIps(
 		(preserveProfileSites && fn.profileSiteIds !== undefined)
 	)
 		return [];
-	const writes = new Uint32Array(fn.registerCount);
-	const uses: Array<Array<number>> = Array.from({ length: fn.registerCount }, () => []);
-	for (const [ip, op] of fn.instructions.entries()) {
-		for (const local of vmInstructionWriteRegisters(op)) writes[local]!++;
-		for (const local of vmInstructionReadRegisters(op)) uses[local]!.push(ip);
-	}
+	const { writeCounts: writes, uses } = body;
 	const expressions: Array<number> = [];
 	const leavesByLocal = new Map<number, ReadonlySet<number>>();
 	const costs = new Map<number, number>();
@@ -506,7 +528,7 @@ function expressionIps(
 			!scalarValueBoundary(consumer, op.dst)
 		)
 			continue;
-		const inputs = vmInstructionReadRegisters(op);
+		const inputs = body.reads[ip]!;
 		const operands = new Set(
 			inputs.flatMap((local) => [...(leavesByLocal.get(local) ?? [local])]),
 		);
@@ -534,9 +556,7 @@ function expressionIps(
 						native.registerRepresentations,
 						native.instructions[next],
 					) ||
-						vmInstructionWriteRegisters(fn.instructions[next]!).some((local) =>
-							operands.has(local),
-						)))
+						body.writes[next]!.some((local) => operands.has(local))))
 			) {
 				safe = false;
 				break;
@@ -583,6 +603,7 @@ export function nativeVariantContract(
 
 function lowerStorage(
 	native: NativeFunctionPlan,
+	body: NativeStorageBodyFacts,
 	preserveProfileSites = true,
 	entry?: NativeDirectEntryPlan,
 	entries: NativeEntryLookup = new Map(),
@@ -615,37 +636,35 @@ function lowerStorage(
 		...propertyReadPairs,
 		...auxiliaryWindows,
 	];
-	const jumpTargets = new Set(fn.handlers.map((handler) => handler.handlerIp));
-	for (const [ip, op] of fn.instructions.entries()) {
-		if (op.opcode === "JUMP" || op.opcode === "JUMP_IF") jumpTargets.add(op.targetIp);
-		if (["GENERATOR_START", "YIELD", "AWAIT"].includes(op.opcode))
-			jumpTargets.add(ip + 1);
-	}
-	const reads = scalarStorageReads(native, suspension);
-	const ownership = scalarStorageOwnership(native, expressionWindows, suspension);
+	const jumpTargets = body.jumpTargets;
+	const uses = scalarStorageUses(body, suspension);
+	const ownership = scalarStorageOwnership(native, body, expressionWindows, suspension);
 	const scalarStorage = (variant: NativeFunctionPlan): NativeScalarStoragePlan => {
 		const constants = rematerializedConstantIps(
 			variant,
+			body,
 			jumpTargets,
 			preserveProfileSites,
-			reads,
+			uses,
 		);
 		const constantIps = new Set(constants);
 		const variantOwnership =
 			variant === native
 				? ownership
-				: scalarStorageOwnership(variant, expressionWindows, suspension);
+				: scalarStorageOwnership(variant, body, expressionWindows, suspension);
 		return {
 			expressionIps: expressionIps(
 				variant,
+				body,
 				jumpTargets,
 				preserveProfileSites,
 				variantOwnership,
 			).filter((ip) => !constantIps.has(ip)),
 			definitionInitializedRegisters: definitionInitializedRegisters(
 				variant,
+				body,
 				jumpTargets,
-				reads,
+				uses,
 				variantOwnership,
 			),
 			rematerializedConstantIps: constants,
@@ -721,13 +740,23 @@ export function lowerNativeFunctionStorage(
 	entries: NativeEntryLookup = new Map(),
 	stringConstants: ReadonlyArray<ReadonlyArray<number>> = [],
 ): NativeFunctionPlan {
+	const body = storageBodyFacts(native.body);
 	return {
 		...native,
-		storage: lowerStorage(native, true, undefined, entries, undefined, stringConstants),
+		storage: lowerStorage(
+			native,
+			body,
+			true,
+			undefined,
+			entries,
+			undefined,
+			stringConstants,
+		),
 		directEntries: native.directEntries.map((entry) => ({
 			...entry,
 			storage: lowerStorage(
 				nativeVariantContract(native, entry),
+				body,
 				true,
 				entry,
 				entries,
@@ -756,6 +785,8 @@ export function validateNativeStorage(
 	entries: NativeEntryLookup = new Map(),
 	stringConstants: ReadonlyArray<ReadonlyArray<number>> = [],
 ): void {
+	// Recompute body facts at this trust boundary; callers can replace or mutate an image.
+	const body = storageBodyFacts(native.body);
 	const sameNumbers = (left: ReadonlyArray<number>, right: ReadonlyArray<number>) =>
 		left.length === right.length && left.every((value, index) => value === right[index]);
 	const sameProjections = (
@@ -1085,7 +1116,7 @@ export function validateNativeStorage(
 		const suspension = lowerNativeSuspension(variant);
 		return same(
 			variant.storage,
-			lowerStorage(variant, false, entry, entries, suspension, stringConstants),
+			lowerStorage(variant, body, false, entry, entries, suspension, stringConstants),
 			suspension,
 		);
 	};

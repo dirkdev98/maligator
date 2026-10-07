@@ -194,6 +194,26 @@ describe("existing-proof scalar expression consumers", () => {
 		);
 	});
 
+	it("recomputes body uses when validating a mutated native image", () => {
+		const out = inspectStaticValueFunction(
+			"function probe(left,right){const a=+left;const b=+right;return Number.isSafeInteger((a-b)*2);}globalThis.probe=probe;",
+			"probe",
+		);
+		const instructions = [...out.native.body.instructions];
+		const native = { ...out.native, body: { ...out.native.body, instructions } };
+		validateNativeStorage(native);
+		const subtraction = instructions.find(
+			(op, ip) =>
+				op.opcode === "BINARY" &&
+				op.operator === "-" &&
+				native.storage!.expressionIps.includes(ip),
+		)!;
+		if (subtraction.opcode !== "BINARY") throw new Error("Missing expression");
+		const returnIp = instructions.findIndex((op) => op.opcode === "RETURN");
+		instructions[returnIp] = { opcode: "RETURN", value: subtraction.dst };
+		expect(() => validateNativeStorage(native)).toThrow(/invalid or stale storage plan/);
+	});
+
 	it("materializes a known-call argument whose transitive scalar leaf remains boxed", () => {
 		const out = inspectStaticValueFunction(
 			"let snapshot;function probe(left,right){const a=+left;snapshot=a;const b=+right;return String.fromCharCode((a-b)*2);}globalThis.probe=probe;",
