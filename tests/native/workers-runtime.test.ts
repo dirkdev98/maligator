@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
 	buildNativeBinary,
 	runToStdout,
@@ -33,15 +33,22 @@ describe("worker isolates", () => {
 			}, 300_000);
 		}
 	}
-	it("terminates spinning and exiting workers uncatchably and bounds standalone channels", () => {
-		const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-workers-runtime-"));
-		try {
-			const binary = buildNativeBinary({
+	describe("termination and standalone channels", () => {
+		let outDir: string | undefined;
+		let binary: string;
+		beforeAll(() => {
+			outDir = mkdtempSync(path.join(os.tmpdir(), "mal-workers-runtime-"));
+			binary = buildNativeBinary({
 				fixture: "tests/local/workers-runtime/main.mjs",
 				name: "workers-runtime",
 				outDir,
 				nodeEnabled: true,
 			});
+		});
+		afterAll(() => {
+			if (outDir !== undefined) rmSync(outDir, { recursive: true, force: true });
+		});
+		it("terminates spinning and exiting workers uncatchably and bounds standalone channels", () => {
 			const invocation = resolveHarnessExecutionInvocation(binary);
 			const result = spawnSync(invocation.executable, invocation.args, {
 				encoding: "utf8",
@@ -56,9 +63,7 @@ describe("worker isolates", () => {
 				'exit: ["completed",7,[]]',
 				'startup: ["startup boom","error",1]',
 			]);
-		} finally {
-			rmSync(outDir, { recursive: true, force: true });
-		}
+		});
 	});
 
 	it("validates transferred ports after getters and releases abandoned channels", () => {
@@ -88,15 +93,22 @@ describe("worker isolates", () => {
 		}
 	});
 
-	it("settles ready after top-level await and fails startup on rejected or unsettled evaluation", () => {
-		const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-workers-tla-"));
-		try {
-			const binary = buildNativeBinary({
+	describe("top-level await startup", () => {
+		let outDir: string | undefined;
+		let binary: string;
+		beforeAll(() => {
+			outDir = mkdtempSync(path.join(os.tmpdir(), "mal-workers-tla-"));
+			binary = buildNativeBinary({
 				fixture: "tests/local/workers-runtime/tla.mjs",
 				name: "workers-tla",
 				outDir,
 				nodeEnabled: true,
 			});
+		});
+		afterAll(() => {
+			if (outDir !== undefined) rmSync(outDir, { recursive: true, force: true });
+		});
+		it("settles ready after top-level await and fails startup on rejected or unsettled evaluation", () => {
 			const invocation = resolveHarnessExecutionInvocation(binary);
 			const result = spawnSync(invocation.executable, invocation.args, {
 				encoding: "utf8",
@@ -110,9 +122,7 @@ describe("worker isolates", () => {
 				'tla-undefined: [true,"error",true,true]',
 				'tla-pending: [true,"error",1]',
 			]);
-		} finally {
-			rmSync(outDir, { recursive: true, force: true });
-		}
+		});
 	});
 
 	it("shares a process queue limit, keeps buffers when a getter closes the channel, and rejects uncloneable objects", () => {
