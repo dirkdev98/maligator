@@ -1,5 +1,81 @@
 const gc = globalThis.__mal_collect_garbage ?? (() => {});
 
+function composedIncrement(left) {
+	let value = +left;
+	return ++value * 2;
+}
+function composedDecrement(left) {
+	let value = +left;
+	return --value * 2;
+}
+function composedPostfix(left) {
+	let value = +left;
+	const old = value++;
+	return old + value;
+}
+function genericUpdates(value) {
+	const old = value++;
+	const updated = --value;
+	return [old, updated, value];
+}
+globalThis.composedIncrement = composedIncrement;
+globalThis.composedDecrement = composedDecrement;
+globalThis.composedPostfix = composedPostfix;
+globalThis.genericUpdates = genericUpdates;
+for (const value of [
+	-0,
+	0,
+	NaN,
+	Infinity,
+	-Infinity,
+	Number.MAX_SAFE_INTEGER,
+	2147483647,
+	-2147483648,
+	Number.MIN_VALUE,
+	7,
+]) {
+	for (const update of [composedIncrement, composedDecrement, composedPostfix]) {
+		const result = update(value);
+		gc();
+		console.log("composed-update", String(result), Object.is(result, -0));
+	}
+}
+const composedUpdateOrder = [];
+for (const value of [
+	3n,
+	"4",
+	{
+		valueOf() {
+			composedUpdateOrder.push("coerce");
+			gc();
+			return 5;
+		},
+	},
+]) {
+	console.log("generic-update", genericUpdates(value).map(String).join(":"));
+}
+for (const value of [
+	Symbol("update"),
+	{
+		valueOf() {
+			composedUpdateOrder.push("throw");
+			gc();
+			throw composedUpdateOrder;
+		},
+	},
+]) {
+	try {
+		genericUpdates(value);
+	} catch (error) {
+		console.log(
+			"generic-update-throw",
+			error === composedUpdateOrder,
+			error instanceof TypeError,
+		);
+	}
+}
+console.log("generic-update-order", composedUpdateOrder.join(":"));
+
 function composedPhiArithmetic(condition, left, right) {
 	const a = +left;
 	const b = +right;

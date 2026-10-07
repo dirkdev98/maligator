@@ -656,6 +656,104 @@ describe("native scalar expressions across phi edge copies", () => {
 	});
 });
 
+describe("native Number update expressions", () => {
+	it.each([
+		["++", "increment", "+"],
+		["--", "decrement", "-"],
+	])(
+		"composes proven Number prefix %s into its arithmetic consumer",
+		(syntax, operator, sign) => {
+			const out = inspectStaticValueFunction(
+				`function update(left){let value=+left;return (${syntax}value)*2;}globalThis.update=update;`,
+				"update",
+			);
+			const ip = out.native.body.instructions.findIndex(
+				(op) => op.opcode === "UNARY" && op.operator === operator,
+			);
+			const update = out.native.body.instructions[ip]!;
+			if (update.opcode !== "UNARY") throw new Error("Missing Number update");
+			expect(out.native.registerRepresentations[update.dst]).toBe("number");
+			expect(out.native.storage!.expressionIps).toContain(ip);
+			expect(out.c.source).toContain(
+				`#define r${update.dst} ((f64) r${update.src} ${sign} 1.0)`,
+			);
+			expect(deserializeCompilerArtifact(serializeCompilerArtifact(out.image))).toEqual(
+				out.image,
+			);
+		},
+	);
+
+	it("preserves the old postfix value while folding the updated value", () => {
+		const out = inspectStaticValueFunction(
+			"function update(left){let value=+left;const old=value++;return old+value;}globalThis.update=update;",
+			"update",
+		);
+		const ip = out.native.body.instructions.findIndex(
+			(op) => op.opcode === "UNARY" && op.operator === "increment",
+		);
+		const update = out.native.body.instructions[ip]!;
+		if (update.opcode !== "UNARY") throw new Error("Missing postfix update");
+		const sum = out.native.body.instructions.find(
+			(op) => op.opcode === "BINARY" && op.operator === "+",
+		)!;
+		expect(sum).toMatchObject({ left: update.src, right: update.dst });
+		expect(out.native.storage!.expressionIps).toContain(ip);
+		expect(out.native.storage!.expressionIps).not.toContain(ip - 1);
+	});
+
+	it("folds arithmetic across an unrelated pure Number update", () => {
+		const out = inspectStaticValueFunction(
+			"function update(left){let value=+left;const product=value*2;++value;return product+value;}globalThis.update=update;",
+			"update",
+		);
+		const productIp = out.native.body.instructions.findIndex(
+			(op) => op.opcode === "BINARY" && op.operator === "*",
+		);
+		expect(out.native.storage!.expressionIps).toContain(productIp);
+	});
+
+	it("retains generic coercing updates and int32 result storage", () => {
+		const generic = inspectStaticValueFunction(
+			"function update(value){return ++value;}globalThis.update=update;",
+			"update",
+		);
+		const genericIp = generic.native.body.instructions.findIndex(
+			(op) => op.opcode === "UNARY" && op.operator === "increment",
+		);
+		expect(genericIp).toBeGreaterThanOrEqual(0);
+		expect(generic.native.storage!.expressionIps).not.toContain(genericIp);
+		const out = inspectStaticValueFunction(
+			"function update(left){let value=+left;return (++value)*2;}globalThis.update=update;",
+			"update",
+		);
+		const ip = out.native.body.instructions.findIndex(
+			(op) => op.opcode === "UNARY" && op.operator === "increment",
+		);
+		const update = out.native.body.instructions[ip]!;
+		if (update.opcode !== "UNARY") throw new Error("Missing Number update");
+		const registerRepresentations = [...out.native.registerRepresentations];
+		registerRepresentations[update.dst] = "int32";
+		const native = { ...out.native, registerRepresentations };
+		expect(lowerNativeFunctionStorage(native).storage!.expressionIps).not.toContain(ip);
+		expect(() => validateNativeStorage(native)).toThrow(/invalid or stale storage plan/);
+	});
+
+	it.each(["callback();", "callback(value);"])(
+		"keeps an update before an observable call: %s",
+		(call) => {
+			const out = inspectStaticValueFunction(
+				`function update(left,callback){let value=+left;const next=++value;${call}return next*2;}globalThis.update=update;`,
+				"update",
+			);
+			const ip = out.native.body.instructions.findIndex(
+				(op) => op.opcode === "UNARY" && op.operator === "increment",
+			);
+			expect(ip).toBeGreaterThanOrEqual(0);
+			expect(out.native.storage!.expressionIps).not.toContain(ip);
+		},
+	);
+});
+
 describe("native scalar definition initialization across control flow", () => {
 	it.each([
 		"return condition ? a-b : a+b;",

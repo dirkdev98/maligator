@@ -1433,6 +1433,8 @@ function renderScalarExpression(
 				return reps[op.dst] === "int32"
 					? `~${int32(op.src)}`
 					: `(f64) (~${int32(op.src)})`;
+			if (op.operator === "increment" || op.operator === "decrement")
+				return `${number(op.src)} ${op.operator === "increment" ? "+" : "-"} 1.0`;
 			return `${op.operator === "-" ? "-" : ""}(${number(op.src)})`;
 		case "BINARY": {
 			if (plan?.kind === "unsigned-arithmetic") {

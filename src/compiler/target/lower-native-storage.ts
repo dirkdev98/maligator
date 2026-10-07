@@ -469,7 +469,9 @@ function pureScalarOperation(
 					(reps[op.src] === "boolean" || numericInput(op.src, 0))) ||
 				(numericInput(op.src, 0) &&
 					((reps[op.dst] === "number" &&
-						["+", "-", "tonumeric", "~"].includes(op.operator)) ||
+						["+", "-", "tonumeric", "~", "increment", "decrement"].includes(
+							op.operator,
+						)) ||
 						(reps[op.dst] === "int32" && op.operator === "~")))
 			);
 		case "BINARY":
