@@ -4947,10 +4947,16 @@ function emitInstruction(
 	}
 	if (context.fieldCall !== undefined && instruction.opcode === "CALL") {
 		const site = context.fieldCall;
-		const targets = site.entries.filter((entry) =>
-			directCompiledEntries.has(
-				directCompiledEntryKey(entry.functionIndex, entry.entryId),
-			),
+		const targets = site.entries.filter(
+			(entry) =>
+				directCompiledEntries.has(
+					directCompiledEntryKey(entry.functionIndex, entry.entryId),
+				) &&
+				context.callTransport?.targets.some(
+					(target) =>
+						target.functionIndex === entry.functionIndex &&
+						target.entryId === entry.entryId,
+				),
 		);
 		const callee = boxedOperand(instruction.callee);
 		const index = `__field_target_${ip}`;
@@ -4984,6 +4990,7 @@ function emitInstruction(
 			`  MalShape *${shape} = ${nativeBodyReference(resources, "literalShapes")}[${site.allocation.shapeCacheIndex}];`,
 			`  if (${shape} == nullptr) { ${shape} = mal_shape_from_string_keys(&vm->heap,(MalString *[]){${keys}},${site.allocation.count}); ${nativeBodyReference(resources, "literalShapes")}[${site.allocation.shapeCacheIndex}] = ${shape}; }`,
 			`  r${site.allocation.dst} = mal_vm_create_object_shaped(vm,${shape},(MalValue[]){${values}},${site.allocation.count});`,
+			`  ${throwCheck()}`,
 			`}`,
 			...rest,
 			...site.boxedSlots.flatMap((slot) =>
@@ -8070,10 +8077,6 @@ function emitInstruction(
 		}
 		case "CALL": {
 			const callPlan = nativePlan?.kind === "call" ? nativePlan : undefined;
-			// Marshal argument registers into a temporary array (boxing numbers),
-			// then dispatch through mal_vm_call_value, which handles bound, native,
-			// compiled and interpreted callees and returns a completion. A throw
-			// propagates via vm->completion exactly as the boxed binary ops do.
 			const args = instruction.arguments;
 			const argsExpr =
 				args.length === 0

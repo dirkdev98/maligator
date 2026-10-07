@@ -118,6 +118,9 @@ The independent target boundary and current storage contract are recorded in
 - [x] Persist paired-array, constructor initialization, and private-field capacity
       plans per entry, including borrowed storage and original fallbacks. Recheck
       paired receivers at each read and reject effectful eager-shape windows.
+- [x] Persist typed call argument/result conversions per caller entry, validate
+      target ABIs across artifact and batch boundaries, and retain guarded fallback
+      and realm/exception/root behavior without boxed completion aggregates.
 - [ ] Extend selected typed call/aggregate transport and expression regions using
       Core proofs, with bounded code-size decisions and matched runtime evidence.
       Move remaining emission-local selection into explicit native plans before

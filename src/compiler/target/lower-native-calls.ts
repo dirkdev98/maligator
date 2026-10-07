@@ -75,14 +75,19 @@ export function selectNativeCallTransports(
 	native: NativeFunctionPlan,
 	entries: NativeEntryLookup,
 ): ReadonlyArray<NativeCallTransportPlan> {
+	if (entries.size === 0) return [];
 	const plans: Array<NativeCallTransportPlan> = [];
-	const fieldCalls = new Map(native.fieldCalls?.map((site) => [site.callIp, site]));
+	const fieldCalls =
+		native.fieldCalls === undefined
+			? undefined
+			: new Map(native.fieldCalls.map((site) => [site.callIp, site]));
 	for (const [instructionIp, call] of native.instructions.entries()) {
+		if (call?.kind !== "call" || call.directFunctionCall) continue;
+		const fieldCall = fieldCalls?.get(instructionIp);
+		if (call.directEntryId === undefined && fieldCall === undefined) continue;
 		const op = native.body.instructions[instructionIp];
-		if (op?.opcode !== "CALL" || call?.kind !== "call" || call.directFunctionCall)
-			continue;
+		if (op?.opcode !== "CALL") continue;
 		const targets: Array<NativeCallTargetTransport> = [];
-		const fieldCall = fieldCalls.get(instructionIp);
 		for (const functionIndex of call.guardedFunctionIndices ??
 			(call.directFunctionIndex === undefined ? [] : [call.directFunctionIndex])) {
 			const fieldEntry = fieldCall?.entries.find(

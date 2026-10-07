@@ -31,7 +31,8 @@ publication clears any previous tail. Entire inactive words are cleared together
 mixed words retain selective tracing. Expression selection admits only pure scalar operations whose
 representations or exact input facts prove numeric semantics. It preserves leaf
 values, effects, control boundaries, repeated uses, and profiling producer sites.
-Floating-point contraction is disabled so an expression tree keeps JavaScript's
+Exact Number inputs permit unary scalar expressions even when their input storage
+is boxed. Floating-point contraction is disabled so an expression tree keeps JavaScript's
 intermediate rounding. The artifact stores these choices; validation checks their
 safety without requiring profiled artifacts to reselect expressions after reading.
 Independent call and construction selections do not suppress unrelated scalar
@@ -157,6 +158,18 @@ publication requires every intervening operation to be pure under the selected
 representations, without overlays or polls. Private capacity planning preserves the
 original definition sites and their effects. Rendering only reconstructs action maps;
 artifact validation recomputes the selections and ownership contracts.
+
+Selected ordinary and guarded typed calls carry per-caller-entry transport plans.
+Existing callee signatures determine argument and result conversions, including
+certified field slots and rest argument slices. Whole-program validation checks
+those choices against the current target ABIs; artifact and batch relocation retain
+target identities. Rendering may fall back when an entry is unavailable, but does
+not choose new conversions. Guarded typed calls assign their result after leaving
+the callee and checking completion, with the caller realm restored before an
+exception transfer. They avoid a boxed completion aggregate; scalar destinations
+stay scalar only when the caller already proves that representation. Open guarded
+fallbacks generally retain boxed destinations. Number-to-int32 transport uses the
+runtime conversion rather than a C cast.
 
 Direct activation-local stack objects with existing certificates
 can store several fields in independent number, int32, and boolean locals. Stable

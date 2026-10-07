@@ -274,6 +274,22 @@ function catchOrdinaryAllocation(input, shaped) {
 	}
 }
 
+class DeferredFieldPricing {
+	quote(order) {
+		return order.net + order.quantity * 3;
+	}
+}
+const deferredPricing = new DeferredFieldPricing();
+let fieldFallbackEntered = 0;
+function deferredFieldCaller() {
+	try {
+		return deferredPricing.quote({ net: 17, quantity: 2 });
+	} catch (error) {
+		return error instanceof Error ? "oom" : "unexpected";
+	}
+}
+globalThis.deferredFieldCaller = deferredFieldCaller;
+
 let globalEscape;
 function returnEscape(seed) {
 	return { value: seed, text: "return:" + seed };
@@ -420,7 +436,17 @@ check(
 	partial.value === 99 && partialAgain.value === 23,
 );
 
+check("certified field call", deferredFieldCaller() === 23);
+deferredPricing.quote = function (order) {
+	fieldFallbackEntered++;
+	return typeof order === "object" ? order.net : -1;
+};
+check("field guard fallback", deferredFieldCaller() === 17);
+fieldFallbackEntered = 0;
 if (typeof __mal_fail_next_cell_allocation === "function") {
+	__mal_fail_next_cell_allocation();
+	check("field fallback allocation handler", deferredFieldCaller() === "oom");
+	check("field allocation failure prevents callee entry", fieldFallbackEntered === 0);
 	for (const shaped of [false, true]) {
 		__mal_fail_next_cell_allocation();
 		check("ordinary allocation failure handler", catchOrdinaryAllocation(17, shaped));
@@ -433,6 +459,7 @@ if (typeof __mal_fail_next_cell_allocation === "function") {
 	}
 	check("partial return allocation failure", materializeOom);
 }
+check("field fallback allocation recovery", deferredFieldCaller() === 17);
 const recoveredPartial = conditionalReturn(22, true);
 check("partial return allocation recovery", recoveredPartial.value === 24);
 

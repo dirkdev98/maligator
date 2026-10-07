@@ -5,6 +5,10 @@ import { optimizeSemanticProgramToCore } from "../src/compiler/pipeline/compile-
 import { compileSemanticProgramToProgramImage } from "../src/compiler/pipeline/compile-core.ts";
 import { compilerProgramFactsFromConfig } from "../src/compiler/shared/compiler-facts.ts";
 import {
+	COMPILER_VALUE_KIND_NUMBER,
+	COMPILER_VALUE_KIND_STRING,
+} from "../src/compiler/shared/compiler-value-kinds.ts";
+import {
 	deserializeCompilerArtifact,
 	serializeCompilerArtifact,
 } from "../src/compiler/target/compiler-artifact-codec.ts";
@@ -677,6 +681,57 @@ describe("SSA native lowering", () => {
 			).toThrow(/invalid or stale storage plan/);
 		}
 	});
+
+	it.each(["+", "-", "tonumeric"] as const)(
+		"folds %s from a boxed input only with an exact Number proof",
+		(operator) => {
+			const template = scalarImage("return a + subtract;").native.functions[1]!.body;
+			const body = {
+				...template,
+				parameterCount: 1,
+				registerCount: 4,
+				handlers: [],
+				instructions: [
+					{ opcode: "UNARY", operator, src: 0, dst: 1 },
+					{ opcode: "CREATE_NUMBER", dst: 2, value: 2 },
+					{ opcode: "BINARY", operator: "*", left: 1, right: 2, dst: 3 },
+					{ opcode: "RETURN", value: 3 },
+				] satisfies Array<BytecodeInstruction>,
+			};
+			const base = {
+				...createConservativeNativePlan([body]).functions[0]!,
+				storageValues: [0, 1, 2, 3],
+				registerRepresentations: ["boxed", "number", "number", "number"] as const,
+				gc: { safepoints: [] },
+			};
+			for (const mask of [
+				undefined,
+				COMPILER_VALUE_KIND_NUMBER,
+				COMPILER_VALUE_KIND_NUMBER | COMPILER_VALUE_KIND_STRING,
+			]) {
+				const native = lowerNativeFunctionStorage({
+					...base,
+					instructions: [
+						mask === undefined
+							? undefined
+							: { kind: "exact-operator-input-kinds", inputKindMasks: [mask] },
+						undefined,
+						undefined,
+						undefined,
+					],
+				});
+				expect(native.storage!.expressionIps.includes(0)).toBe(
+					mask === COMPILER_VALUE_KIND_NUMBER,
+				);
+				if (mask === COMPILER_VALUE_KIND_NUMBER) {
+					expect(() => validateNativeStorage(native)).not.toThrow();
+					expect(emitCompiledFunction(native, 0, "", false)!.source).toContain(
+						"mal_ops_number_as_f64(r0)",
+					);
+				}
+			}
+		},
+	);
 
 	it("retains producers around effects, repeated uses, and profiling", () => {
 		for (const body of [

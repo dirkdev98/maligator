@@ -22,13 +22,31 @@ describe("native direct-entry ABI", () => {
 
 	beforeAll(() => {
 		expected = execFileSync(process.execPath, [fixture], { encoding: "utf8" });
-		({ compiled, interpreted } = buildBackendPairFromOneProgramImage({
+		const pair = buildBackendPairFromOneProgramImage({
 			fixture,
 			name: "direct-entry-abi",
 			config: resolveBuildConfig({}),
 			outDir,
 			environment: { ...process.env, MAL_PERF_STATS: "1" },
-		}));
+		});
+		({ compiled, interpreted } = pair);
+		const guardedTransports = pair.programImage.native.functions.flatMap((fn) =>
+			fn.directEntries.flatMap((entry) =>
+				entry.storage!.callTransports.filter((plan) =>
+					entry.callOverrides?.some(
+						(call) => call.guarded && call.instructionIp === plan.instructionIp,
+					),
+				),
+			),
+		);
+		expect(
+			guardedTransports.some((plan) =>
+				plan.targets.some(
+					(target) =>
+						target.resultRepresentation === "number" && target.result === "box-number",
+				),
+			),
+		).toBe(true);
 	}, 600_000);
 
 	it("preserves calls, captures, arguments, exceptions, and GC behavior", () => {

@@ -372,7 +372,7 @@ function pureScalarOperation(
 			);
 		case "UNARY":
 			return (
-				numeric(op.src) &&
+				numericInput(op.src, 0) &&
 				reps[op.dst] === "number" &&
 				["+", "-", "tonumeric"].includes(op.operator)
 			);
@@ -504,6 +504,7 @@ function lowerStorage(
 	preserveProfileSites = true,
 	entry?: NativeDirectEntryPlan,
 	entries: NativeEntryLookup = new Map(),
+	suspension = lowerNativeSuspension(native),
 ): NativeStoragePlan {
 	const fn = native.body;
 	const fastPaths = selectNativeFastPaths(native, entry);
@@ -535,7 +536,6 @@ function lowerStorage(
 		if (["GENERATOR_START", "YIELD", "AWAIT"].includes(op.opcode))
 			jumpTargets.add(ip + 1);
 	}
-	const suspension = lowerNativeSuspension(native);
 	const reads = scalarStorageReads(native, suspension);
 	const ownership = scalarStorageOwnership(native, expressionWindows, suspension);
 	const scalarStorage = (variant: NativeFunctionPlan): NativeScalarStoragePlan => {
@@ -757,6 +757,10 @@ export function validateNativeStorage(
 		selected: NativeScalarStoragePlan | undefined,
 	): boolean => {
 		if (stored === undefined || selected === undefined) return stored === selected;
+		const selectedExpressions = new Set(selected.expressionIps);
+		const selectedConstants = new Set(selected.rematerializedConstantIps);
+		const storedExpressions = new Set(stored.expressionIps);
+
 		return (
 			stored.definitionInitializedRegisters.length ===
 				selected.definitionInitializedRegisters.length &&
@@ -766,13 +770,13 @@ export function validateNativeStorage(
 			// Profiling can retain producers; persisted choices may use any safe subset.
 			stored.expressionIps.every(
 				(ip, index) =>
-					selected.expressionIps.includes(ip) &&
+					selectedExpressions.has(ip) &&
 					(index === 0 || ip > stored.expressionIps[index - 1]!),
 			) &&
 			stored.rematerializedConstantIps.every(
 				(ip, index) =>
-					selected.rematerializedConstantIps.includes(ip) &&
-					!stored.expressionIps.includes(ip) &&
+					selectedConstants.has(ip) &&
+					!storedExpressions.has(ip) &&
 					(index === 0 || ip > stored.rematerializedConstantIps[index - 1]!),
 			) &&
 			(native.body.profileSiteIds === undefined ||
@@ -783,12 +787,13 @@ export function validateNativeStorage(
 	const same = (
 		stored: NativeStoragePlan | undefined,
 		selected: NativeStoragePlan | undefined,
+		baseSuspension: NativeSuspensionPlan | undefined,
 	): boolean => {
 		const suspension =
 			stored === undefined
 				? undefined
 				: compactNativeSuspension(
-						lowerNativeSuspension(native),
+						baseSuspension,
 						new Set(
 							stored.rematerializedConstantIps.flatMap((ip) => {
 								const op = native.body.instructions[ip];
@@ -915,14 +920,18 @@ export function validateNativeStorage(
 			)
 		);
 	};
+	const matches = (variant: NativeFunctionPlan, entry?: NativeDirectEntryPlan) => {
+		const suspension = lowerNativeSuspension(variant);
+		return same(
+			variant.storage,
+			lowerStorage(variant, false, entry, entries, suspension),
+			suspension,
+		);
+	};
 	if (
-		!same(native.storage, lowerStorage(native, false, undefined, entries)) ||
+		!matches(native) ||
 		native.directEntries.some(
-			(entry) =>
-				!same(
-					entry.storage,
-					lowerStorage(nativeVariantContract(native, entry), false, entry, entries),
-				),
+			(entry) => !matches(nativeVariantContract(native, entry), entry),
 		)
 	)
 		throw new Error("Native function has an invalid or stale storage plan");

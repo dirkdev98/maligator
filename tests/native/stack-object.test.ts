@@ -1,33 +1,36 @@
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { beforeAll, describe, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
 	assertPassLine,
-	buildNativeBinary,
+	buildBackendPairFromOneProgramImage,
 	runToStdout,
 	STRESS_ENV,
 } from "../../src/test-harness.ts";
 
 const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-stack-object-"));
+afterAll(() => rmSync(outDir, { recursive: true, force: true }));
 
 describe("compiled stack objects", () => {
 	let compiled: string;
 	let interpreted: string;
 
 	beforeAll(() => {
-		compiled = buildNativeBinary({
+		const pair = buildBackendPairFromOneProgramImage({
 			fixture: "tests/local/stack-object.js",
 			name: "stack-object",
-			compiled: true,
 			outDir,
 		});
-		interpreted = buildNativeBinary({
-			fixture: "tests/local/stack-object.js",
-			name: "stack-object-ni",
-			compiled: false,
-			outDir,
-		});
+		({ compiled, interpreted } = pair);
+		const caller = pair.programImage.native.functions.find(
+			(fn) =>
+				fn.body.nameStringIndex >= 0 &&
+				String.fromCharCode(
+					...pair.programImage.runtime.stringConstants[fn.body.nameStringIndex]!,
+				) === "deferredFieldCaller",
+		);
+		expect(caller?.fieldCalls).toHaveLength(1);
 	});
 
 	it("preserves compiled identity, slots, recursion, branches, materialization, and escapes", () => {

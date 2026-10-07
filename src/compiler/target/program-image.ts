@@ -1502,8 +1502,10 @@ export function validateNativeFieldCalls(
 	native: NativeFunctionPlan,
 	functions: ReadonlyArray<NativeFunctionPlan>,
 ): void {
+	if ((native.fieldCalls?.length ?? 0) === 0) return;
 	const seen = new Set<number>();
 	const allocations = new Set<number>();
+	const handlers = vmExceptionHandlerTargets(fn.instructions.length, fn.handlers);
 	for (const site of native.fieldCalls ?? []) {
 		const allocation = fn.instructions[site.allocationIp];
 		const call = fn.instructions[site.callIp];
@@ -1511,6 +1513,7 @@ export function validateNativeFieldCalls(
 			seen.has(site.callIp) ||
 			allocations.has(site.allocationIp) ||
 			site.allocationIp >= site.callIp ||
+			handlers[site.allocationIp] !== handlers[site.callIp] ||
 			allocation?.opcode !== "CREATE_OBJECT_SHAPED" ||
 			allocation.count < 1 ||
 			allocation.count > 4 ||

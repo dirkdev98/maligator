@@ -7,7 +7,10 @@ import {
 	deserializeCompilerArtifact,
 	serializeCompilerArtifact,
 } from "../src/compiler/target/compiler-artifact-codec.ts";
-import { compactProgramImageConstants } from "../src/compiler/target/program-image.ts";
+import {
+	compactProgramImageConstants,
+	validateNativeFieldCalls,
+} from "../src/compiler/target/program-image.ts";
 import {
 	directCompiledEntryKey,
 	emitCompiledFunction,
@@ -77,6 +80,16 @@ describe("numeric own-field native entry contracts", () => {
 		const caller = decoded.native.functions.find((fn) => fn.fieldCalls !== undefined)!;
 		expect(caller.fieldCalls).toHaveLength(1);
 		const call = caller.fieldCalls![0]!;
+		expect(() =>
+			validateNativeFieldCalls(
+				{
+					...caller.body,
+					handlers: [{ startIp: call.allocationIp, endIp: call.callIp, handlerIp: 0 }],
+				},
+				caller,
+				decoded.native.functions,
+			),
+		).toThrow(/Invalid native field call/);
 		expect(call.entries).toHaveLength(3);
 		expect(caller.body.instructions[call.allocationIp]).toMatchObject({
 			opcode: "CREATE_OBJECT_SHAPED",
