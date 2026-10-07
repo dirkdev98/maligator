@@ -16,6 +16,8 @@ function throws(errorType, fn) {
 function forceGc() {
 	if (typeof $262 !== "undefined") $262.gc();
 	else if (typeof gc === "function") gc();
+	else if (typeof globalThis.__mal_collect_garbage === "function")
+		globalThis.__mal_collect_garbage();
 }
 
 check("integer NaN", (12.4).toFixed(NaN) === "12");
@@ -259,6 +261,18 @@ check(
 	"Math sumPrecise keeps exact small accumulations",
 	Math.sumPrecise([1, 1e100, 1, -1e100, 3.5, -0]) === 5.5 &&
 		Object.is(Math.sumPrecise([]), -0),
+);
+function preciseScalarResult(left, right) {
+	const result = Math.sumPrecise([+left, 1e100, +right, -1e100]);
+	forceGc();
+	return result + 1.5;
+}
+globalThis.preciseScalarResult = preciseScalarResult;
+check(
+	"precise scalar results survive collection and preserve cancellation",
+	preciseScalarResult(1, 2) === 4.5 &&
+		Number.isNaN(preciseScalarResult(NaN, 1)) &&
+		preciseScalarResult(Infinity, 1) === Infinity,
 );
 const minimumBinary = Number.MIN_VALUE.toString(2);
 check(

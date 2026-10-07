@@ -650,7 +650,8 @@ function addOperationTransfer(
 	}
 	if (
 		opcode === "loadPropertyStatic" &&
-		fn.instructionAttributes(instruction).exactArrayLength === true
+		(fn.instructionAttributes(instruction).exactArrayLength === true ||
+			fn.instructionAttributes(instruction).primitiveStringLength === true)
 	) {
 		masks[output] = masks[output]! | COMPILER_VALUE_KIND_NUMBER;
 		return;

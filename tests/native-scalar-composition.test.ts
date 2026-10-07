@@ -468,3 +468,104 @@ describe("known builtin scalar result storage", () => {
 		expect(out.native.body.instructions.some((op) => op.opcode === "CALL")).toBe(true);
 	});
 });
+
+describe("certified scalar operation results", () => {
+	it("keeps a certified length native through its lexical check and collecting call", () => {
+		const out = inspectStaticValueFunction(
+			"function probe(left,collect){const length=String(left).length;collect();return length+1.5;}globalThis.probe=probe;",
+			"probe",
+		);
+		const op = out.native.body.instructions.find(
+			(op) => op.opcode === "LOAD_PROPERTY_STATIC",
+		)!;
+		if (op.opcode !== "LOAD_PROPERTY_STATIC") throw new Error("Missing length read");
+		expect(out.native.registerRepresentations[op.dst]).toBe("number");
+		expect(out.native.storage!.rootRegisters).not.toContain(op.dst);
+	});
+
+	it("preserves lexical checks for a length binding read before initialization", () => {
+		const out = inspectStaticValueFunction(
+			"function probe(left){if(left)return length+1.5;const length=String(left).length;return length+1.5;}globalThis.probe=probe;",
+			"probe",
+		);
+		const checks = out.native.body.instructions.filter(
+			(op) => op.opcode === "THROW_IF_TDZ",
+		);
+		expect(checks.length).toBeGreaterThan(0);
+		for (const op of checks) {
+			if (op.opcode !== "THROW_IF_TDZ") throw new Error("Missing lexical check");
+			expect(out.native.registerRepresentations[op.src]).toBe("boxed");
+		}
+	});
+
+	it.each([
+		["String(left).localeCompare(right)+1.5", "PREPARED_STRING_COMPARE", "number"],
+		["Math.sumPrecise([+left,+right,+left])+1.5", "PRECISE_NUMBER_SUM", "number"],
+		[
+			"[1,,undefined,NaN,-0,1,'equal',5n].indexOf(left,right)+1.5",
+			"QUERY_STATIC_DATA",
+			"number",
+		],
+		[
+			"[1,,undefined,NaN,-0,1,'equal',5n].lastIndexOf(left,right)+1.5",
+			"QUERY_STATIC_DATA",
+			"number",
+		],
+		[
+			"![1,,undefined,NaN,-0,1,'equal',5n].includes(left,right)",
+			"QUERY_STATIC_DATA",
+			"boolean",
+		],
+		["String(left).length+1.5", "LOAD_PROPERTY_STATIC", "number"],
+	] as const)("keeps the result of %s native", (expression, opcode, representation) => {
+		const out = inspectStaticValueFunction(
+			`function probe(left,right){return ${expression};}globalThis.probe=probe;`,
+			"probe",
+		);
+		const ip = out.native.body.instructions.findIndex((op) => op.opcode === opcode);
+		expect(ip).toBeGreaterThanOrEqual(0);
+		const op = out.native.body.instructions[ip]!;
+		if (!("dst" in op)) throw new Error("Missing scalar result");
+		expect(out.native.registerRepresentations[op.dst]).toBe(representation);
+		expect(out.native.storage!.expressionIps).not.toContain(ip);
+		expect(deserializeCompilerArtifact(serializeCompilerArtifact(out.image))).toEqual(
+			out.image,
+		);
+	});
+
+	it("checks static-query coercion completion before extracting its result", () => {
+		const out = inspectStaticValueFunction(
+			"function probe(left,right){return [1,,undefined,NaN,-0,1,'equal',5n].indexOf(left,right)+1.5;}globalThis.probe=probe;",
+			"probe",
+		);
+		const ip = out.native.body.instructions.findIndex(
+			(op) => op.opcode === "QUERY_STATIC_DATA",
+		);
+		const op = out.native.body.instructions[ip]!;
+		if (op.opcode !== "QUERY_STATIC_DATA") throw new Error("Missing static query");
+		const start = out.c.source.indexOf(`MalValue static_query_result_${ip} =`);
+		const check = out.c.source.indexOf(
+			"if (vm->completion.kind == MAL_COMPLETION_THROW)",
+			start,
+		);
+		const extract = out.c.source.indexOf(
+			`r${op.dst} = mal_ops_number_as_f64(static_query_result_${ip});`,
+			start,
+		);
+		expect(start).toBeGreaterThan(-1);
+		expect(check).toBeGreaterThan(start);
+		expect(extract).toBeGreaterThan(check);
+	});
+
+	it("retains boxed storage for a length read without a primitive brand certificate", () => {
+		const out = inspectStaticValueFunction(
+			"function probe(left){return left.length+1.5;}globalThis.probe=probe;",
+			"probe",
+		);
+		const op = out.native.body.instructions.find(
+			(op) => op.opcode === "LOAD_PROPERTY_STATIC",
+		)!;
+		if (op.opcode !== "LOAD_PROPERTY_STATIC") throw new Error("Missing length read");
+		expect(out.native.registerRepresentations[op.dst]).toBe("boxed");
+	});
+});

@@ -1214,6 +1214,16 @@ describe("Core control-flow analyses and passes", () => {
 				.flatMap((fn) => fn.instructions)
 				.filter((plan) => plan?.kind === "exact-array-length"),
 		).toHaveLength(1);
+		const native = image.native.functions.find((fn) =>
+			fn.instructions.some((plan) => plan?.kind === "exact-array-length"),
+		)!;
+		const lengthIp = native.instructions.findIndex(
+			(plan) => plan?.kind === "exact-array-length",
+		);
+		const lengthOp = native.body.instructions[lengthIp]!;
+		if (lengthOp.opcode !== "LOAD_PROPERTY_STATIC_ARRAY_LENGTH")
+			throw new Error("Missing proven length");
+		expect(native.registerRepresentations[lengthOp.dst]).toBe("number");
 	});
 
 	it("retains a private array length load when a mixed-root alias can shrink it", () => {

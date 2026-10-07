@@ -712,6 +712,10 @@ const SCALAR_PRODUCERS: ReadonlySet<string> = new Set([
 	"unary",
 	"binary",
 	"typeofCompare",
+	"isEmpty",
+	"preparedStringCompare",
+	"preciseNumberSum",
+	"queryStaticData",
 ]);
 
 const SCALAR_CONSUMERS: ReadonlySet<string> = new Set([
@@ -720,6 +724,7 @@ const SCALAR_CONSUMERS: ReadonlySet<string> = new Set([
 	"binary",
 	"typeofCompare",
 	"rootUse",
+	"throwIfTdz",
 ]);
 
 function scalarProducer(fn: CoreFunctionStore, instruction: CoreInstructionId): boolean {
@@ -736,7 +741,10 @@ function scalarProducer(fn: CoreFunctionStore, instruction: CoreInstructionId): 
 	return (
 		SCALAR_PRODUCERS.has(opcode) ||
 		(opcode === "loadProperty" &&
-			fn.instructionAttributes(instruction).containedFixedTypedArrayInBounds === true)
+			fn.instructionAttributes(instruction).containedFixedTypedArrayInBounds === true) ||
+		(opcode === "loadPropertyStatic" &&
+			(fn.instructionAttributes(instruction).exactArrayLength === true ||
+				fn.instructionAttributes(instruction).primitiveStringLength === true))
 	);
 }
 

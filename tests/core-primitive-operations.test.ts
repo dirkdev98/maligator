@@ -2019,11 +2019,14 @@ describe("primitive operation results", () => {
 		writer.u8(instruction.options);
 		const payload = Buffer.from(writer.finish());
 		const bytes = Buffer.from(serializeCompilerArtifact(output.image));
-		const offset = bytes.indexOf(payload);
+		let offset = bytes.indexOf(payload);
 		expect(offset).toBeGreaterThanOrEqual(0);
-		expect(bytes.indexOf(payload, offset + payload.length)).toBe(-1);
-		bytes[offset + payload.length - 1] = 255;
-		expect(() => deserializeCompilerArtifact(bytes)).toThrow(/string collation plan/);
+		while (offset >= 0) {
+			const corrupt = Buffer.from(bytes);
+			corrupt[offset + payload.length - 1] = 255;
+			expect(() => deserializeCompilerArtifact(corrupt)).toThrow(/string collation plan/);
+			offset = bytes.indexOf(payload, offset + payload.length);
+		}
 	});
 	it.each([
 		"String(x).localeCompare('a',x)",

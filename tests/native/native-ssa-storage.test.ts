@@ -36,6 +36,52 @@ describe("independent native SSA storage", () => {
 	}, 600_000);
 
 	it("preserves scalar arithmetic, loop transport, and suspended heap locals", () => {
+		for (const [name, opcode, representation] of [
+			["staticIndexResult", "QUERY_STATIC_DATA", "number"],
+			["staticLastIndexResult", "QUERY_STATIC_DATA", "number"],
+			["staticIncludesResult", "QUERY_STATIC_DATA", "boolean"],
+			["primitiveLengthResult", "LOAD_PROPERTY_STATIC", "number"],
+			["preparedCompareResult", "PREPARED_STRING_COMPARE", "number"],
+		] as const) {
+			const native = image.native.functions.find(
+				(fn) =>
+					String.fromCharCode(
+						...(image.runtime.stringConstants[fn.body.nameStringIndex] ?? []),
+					) === name,
+			)!;
+			expect(native).toBeDefined();
+			const op = native.body.instructions.find((op) => op.opcode === opcode)!;
+			if (!("dst" in op)) throw new Error("Missing certified scalar producer");
+			expect(native.registerRepresentations[op.dst]).toBe(representation);
+			expect(
+				emitCompiledFunction(
+					native,
+					native.functionIndex,
+					"",
+					false,
+					"static",
+					new Set(),
+					[],
+					new Map(),
+					false,
+					new Set(),
+					image.runtime.stringConstants,
+				),
+			).not.toBeNull();
+		}
+		const arrayLength = image.native.functions.find(
+			(fn) =>
+				String.fromCharCode(
+					...(image.runtime.stringConstants[fn.body.nameStringIndex] ?? []),
+				) === "certifiedArrayLengthResult",
+		)!;
+		const length = arrayLength.body.instructions.find(
+			(op) => op.opcode === "LOAD_PROPERTY_STATIC_ARRAY_LENGTH",
+		)!;
+		expect(length).toBeDefined();
+		if (length.opcode !== "LOAD_PROPERTY_STATIC_ARRAY_LENGTH")
+			throw new Error("Missing certified array length");
+		expect(arrayLength.registerRepresentations[length.dst]).toBe("number");
 		for (const [name, operation, representation] of [
 			["knownNumberResult", "Number", "number"],
 			["knownParseResult", "parseInt", "number"],

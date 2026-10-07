@@ -5360,11 +5360,14 @@ function emitInstruction(
 				];
 			return [instantiate, throwCheck()];
 		}
-		case "QUERY_STATIC_DATA":
+		case "QUERY_STATIC_DATA": {
+			const result = `static_query_result_${ip}`;
 			return [
-				`r${instruction.dst} = ${profileCall(instruction.queryKind === "has-own" ? "property" : "call", `mal_vm_query_static_data(vm, ${relocation.templateOffset(instruction.templateOffset)}, ${staticDataQueryTag(instruction.queryKind)}, ${boxed(instruction.needle)}, ${boxed(instruction.fromIndex)})`)};`,
+				`MalValue ${result} = ${profileCall(instruction.queryKind === "has-own" ? "property" : "call", `mal_vm_query_static_data(vm, ${relocation.templateOffset(instruction.templateOffset)}, ${staticDataQueryTag(instruction.queryKind)}, ${boxed(instruction.needle)}, ${boxed(instruction.fromIndex)})`)};`,
 				throwCheck(),
+				`r${instruction.dst} = ${callValue(instruction.dst, result)};`,
 			];
+		}
 		case "CREATE_FUNCTION":
 			return [
 				`r${instruction.dst} = mal_vm_op_create_function(vm, ${relocation.functionIndex(instruction.functionIndex)}, env);`,
@@ -5609,16 +5612,21 @@ function emitInstruction(
 			];
 		}
 		case "LOAD_PROPERTY_STATIC_ARRAY_LENGTH": {
-			const direct =
-				reps[instruction.dst] === "number"
-					? `(f64) mal_array_object_length(mal_value_to_array_object(${boxed(instruction.object)}))`
-					: `mal_value_from_u32(mal_array_object_length(mal_value_to_array_object(${boxed(instruction.object)})))`;
+			const direct = storeNumber(
+				instruction.dst,
+				`(f64) mal_array_object_length(mal_value_to_array_object(${boxed(instruction.object)}))`,
+			);
 			return [
 				`if (mal_value_is_heap_type(${boxed(instruction.object)}, MAL_HEAP_ARRAY_OBJECT)) {`,
-				`  r${instruction.dst} = ${direct};`,
+				`  ${direct}`,
 				`} else {`,
-				`  r${instruction.dst} = ${profileCall("property", `mal_vm_op_load_property_ic(vm, ${boxed(instruction.object)}, mal_value_from_string(vm->string_constant_atoms[${relocation.stringIndex(instruction.stringIndex)}]), &${nativeBodyReference(resources, "propertyCache")}[${instruction.icIndex}])`)};`,
-				`  ${throwCheck()}`,
+				...boxedLoad(
+					instruction.dst,
+					profileCall(
+						"property",
+						`mal_vm_op_load_property_ic(vm, ${boxed(instruction.object)}, mal_value_from_string(vm->string_constant_atoms[${relocation.stringIndex(instruction.stringIndex)}]), &${nativeBodyReference(resources, "propertyCache")}[${instruction.icIndex}])`,
+					),
+				).map((line) => `  ${line}`),
 				`}`,
 			];
 		}

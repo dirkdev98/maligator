@@ -1,5 +1,139 @@
 const gc = globalThis.__mal_collect_garbage ?? (() => {});
 
+function staticIndexResult(input, from) {
+	const value = [1, , undefined, NaN, -0, 1, "equal", 5n].indexOf(input, from);
+	gc();
+	return value + 1.5;
+}
+function staticLastIndexResult(input, from) {
+	const value = [1, , undefined, NaN, -0, 1, "equal", 5n].lastIndexOf(input, from);
+	gc();
+	return value + 1.5;
+}
+function staticIncludesResult(input, from) {
+	const value = [1, , undefined, NaN, -0, 1, "equal", 5n].includes(input, from);
+	gc();
+	return !value;
+}
+function primitiveLengthResult(input) {
+	const value = String(input).length;
+	gc();
+	return value + 1.5;
+}
+function preparedCompareResult(left, right) {
+	const value = String(left).localeCompare(right);
+	gc();
+	return value + 1.5;
+}
+function certifiedArrayLengthResult(rounds) {
+	const values = Array.from({ length: 64 }, (_, index) => index);
+	values[0] = "x";
+	let checksum = 0;
+	for (let round = 0; round < rounds; round++) {
+		for (let index = 0; index < values.length; index++) checksum += index;
+	}
+	return checksum;
+}
+globalThis.staticIndexResult = staticIndexResult;
+globalThis.staticLastIndexResult = staticLastIndexResult;
+globalThis.staticIncludesResult = staticIncludesResult;
+globalThis.primitiveLengthResult = primitiveLengthResult;
+globalThis.preparedCompareResult = preparedCompareResult;
+globalThis.certifiedArrayLengthResult = certifiedArrayLengthResult;
+for (const rounds of [0, 1, 3])
+	console.log("certified-array-length", certifiedArrayLengthResult(rounds));
+for (const input of [undefined, NaN, -0, 1, 5n, "equal", {}])
+	for (const from of [undefined, -0, -8, -1, 1.75, 100, Infinity, -Infinity, NaN])
+		console.log(
+			"static-query",
+			String(input),
+			String(from),
+			staticIndexResult(input, from),
+			staticLastIndexResult(input, from),
+			staticIncludesResult(input, from),
+		);
+for (const input of ["", "abc", "a😀b", "\ud800", -0, 5n, Symbol("length")])
+	console.log("primitive-length", primitiveLengthResult(input));
+for (const [left, right] of [
+	["a", "a"],
+	["a", "b"],
+	["b", "a"],
+])
+	console.log("prepared-compare", preparedCompareResult(left, right));
+const scalarResultOrder = [];
+const scalarResultFrom = {
+	valueOf() {
+		scalarResultOrder.push("from");
+		gc();
+		return -2;
+	},
+};
+console.log(
+	"static-query-coercion",
+	staticIndexResult(5n, scalarResultFrom),
+	staticLastIndexResult(1, scalarResultFrom),
+	staticIncludesResult(NaN, scalarResultFrom),
+	scalarResultOrder.join(":"),
+);
+const scalarResultSentinel = {};
+for (const operation of [
+	staticIndexResult,
+	staticLastIndexResult,
+	staticIncludesResult,
+]) {
+	try {
+		operation(1, {
+			valueOf() {
+				gc();
+				throw scalarResultSentinel;
+			},
+		});
+	} catch (error) {
+		console.log("static-query-throw", error === scalarResultSentinel);
+	}
+	for (const from of [1n, Symbol("from")]) {
+		try {
+			operation(1, from);
+		} catch (error) {
+			console.log("static-query-type-error", error instanceof TypeError);
+		}
+	}
+}
+for (const operation of [primitiveLengthResult, preparedCompareResult]) {
+	try {
+		operation(
+			{
+				toString() {
+					gc();
+					throw scalarResultSentinel;
+				},
+			},
+			"a",
+		);
+	} catch (error) {
+		console.log("string-result-throw", error === scalarResultSentinel);
+	}
+}
+console.log(
+	"prepared-right-coercion",
+	preparedCompareResult("a", {
+		toString() {
+			gc();
+			return "b";
+		},
+	}),
+);
+try {
+	preparedCompareResult("a", {
+		toString() {
+			gc();
+			throw scalarResultSentinel;
+		},
+	});
+} catch (error) {
+	console.log("prepared-right-throw", error === scalarResultSentinel);
+}
+
 function knownNumberResult(input) {
 	const value = Number(input);
 	gc();
