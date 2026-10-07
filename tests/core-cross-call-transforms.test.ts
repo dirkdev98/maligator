@@ -1751,10 +1751,10 @@ describe("bounded Core cross-call transforms", () => {
 			"",
 		],
 		[
-			"a representation-ineligible target",
+			"an identity-observed target",
 			"total += rules[index % rules.length].quote(order);",
 			"",
-			"return Math.abs(order.net > 0);",
+			"globalThis.observedOrder = order; return order.net + 1;",
 		],
 		[
 			"more than four live same-name methods",

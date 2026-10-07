@@ -240,7 +240,7 @@ describe("compileSemanticProgramToProgramImage", () => {
 		});
 		expect(Object.values(off.report.counters).every((value) => value === 0)).toBe(true);
 		expect(phases.report.instrumentation).toBe("phases");
-		expect(phases.report.phases.length).toBe(17);
+		expect(phases.report.phases.length).toBe(18);
 		expect(phases.report.checkpoints.length).toBe(8);
 		expect(phases.report.passes).toEqual([]);
 		expect(phases.report.analyses).toEqual([]);
@@ -381,6 +381,7 @@ describe("compileSemanticProgramToProgramImage", () => {
 			"late-local-cleanup",
 			"program-flow",
 			"cross-call-transforms",
+			"cross-call-memory-forwarding",
 			"specialization-discovery",
 			"specialization-selection",
 			"sealing",

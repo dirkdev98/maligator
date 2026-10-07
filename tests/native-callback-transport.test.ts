@@ -8,6 +8,7 @@ import {
 import {
 	emitProgramImage,
 	emitProgramTranslationUnits,
+	NATIVE_C_HEADER_LINES,
 } from "../src/compiler/target/emit-program-image.ts";
 import { selectNativeCallbackTransports } from "../src/compiler/target/lower-native-callbacks.ts";
 import { nativeEntryLookup } from "../src/compiler/target/lower-native-calls.ts";
@@ -88,7 +89,9 @@ describe("native builtin callback transport", () => {
 				`globalThis.run = () => {
 					const transform = function(value, index) {
 						for (let i = 0; i < 2; i++) globalThis.collect();
-						return { value, index };
+						const result = { value, index };
+						globalThis.collect();
+						return result;
 					};
 					transform(1, 2);
 					return [1, 2, 3].map(transform);
@@ -109,9 +112,26 @@ describe("native builtin callback transport", () => {
 				},
 			);
 		const symbol = `mal_callback_${transport.functionIndex}_${transport.entryId}`;
-		expect(emit(20_000).some((unit) => unit.source.includes(symbol))).toBe(true);
-		const bounded = emit(9_100);
-		expect(bounded.every((unit) => unit.source.length <= 9_100)).toBe(true);
+		const unbounded = emit(20_000);
+		expect(unbounded.some((unit) => unit.source.includes(symbol))).toBe(true);
+		const typed = unbounded
+			.flatMap((unit) => unit.definitions)
+			.find(
+				(definition) =>
+					definition.symbol ===
+					`mal_direct_${transport.functionIndex}_${transport.entryId}`,
+			)!;
+		expect(typed).toBeDefined();
+		const maximum = typed.sourceCodeUnits + NATIVE_C_HEADER_LINES.join("\n").length;
+		const bounded = emit(maximum);
+		expect(bounded.every((unit) => unit.source.length <= maximum)).toBe(true);
+		expect(
+			bounded
+				.flatMap((unit) => unit.definitions)
+				.some(
+					(definition) => definition.symbol === `mal_compiled_${transport.functionIndex}`,
+				),
+		).toBe(true);
 		const output = bounded.map((unit) => unit.source).join("\n");
 		expect(output).not.toContain(symbol);
 		expect(output).not.toContain(

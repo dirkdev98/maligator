@@ -800,9 +800,14 @@ describe("Core control-flow analyses and passes", () => {
 			({ opcode, attributes }) => opcode === "binary" && attributes.operator === "&",
 		);
 		expect(masks).toHaveLength(2);
+		const coercion = coreOperations(fn).find(
+			({ opcode, attributes }) => opcode === "unary" && attributes.operator === "+",
+		)!;
+		expect(coercion).toBeDefined();
+		expect(fn.valueRepresentation(coercion.inputs[0]!)).toBe("boxed");
 		for (const mask of masks) {
 			expect(fn.valueRepresentation(mask.outputs[0]!)).toBe("i32");
-			expect(fn.valueRepresentation(mask.inputs[0]!)).toBe("boxed");
+			expect(fn.valueRepresentation(mask.inputs[0]!)).toBe("f64");
 		}
 	});
 
