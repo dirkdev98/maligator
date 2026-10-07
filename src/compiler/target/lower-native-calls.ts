@@ -1,3 +1,5 @@
+import { nativeValueConversion } from "./native-value-transport.ts";
+import type { NativeValueConversion } from "./native-value-transport.ts";
 import type {
 	NativeDirectEntryPlan,
 	NativeFunctionPlan,
@@ -5,30 +7,17 @@ import type {
 } from "./program-image.ts";
 import { decodeVmValueOperand } from "./runtime-image.ts";
 
-export const NATIVE_CALL_CONVERSIONS = [
-	"identity",
-	"box-number",
-	"box-int32",
-	"box-boolean",
-	"unbox-number",
-	"unbox-int32",
-	"unbox-boolean",
-	"int32-to-number",
-	"number-to-int32",
-] as const;
-
-export type NativeCallConversion = (typeof NATIVE_CALL_CONVERSIONS)[number];
 export type NativeEntryLookup = ReadonlyMap<string, NativeDirectEntryPlan>;
 
 export interface NativeCallTargetTransport {
 	readonly functionIndex: number;
 	readonly entryId: number;
-	readonly arguments: ReadonlyArray<NativeCallConversion>;
+	readonly arguments: ReadonlyArray<NativeValueConversion>;
 	readonly resultRepresentation: VmRegisterRepresentation;
-	readonly result: NativeCallConversion;
+	readonly result: NativeValueConversion;
 	readonly fields: ReadonlyArray<{
 		readonly slot: number;
-		readonly conversion: NativeCallConversion;
+		readonly conversion: NativeValueConversion;
 	}>;
 }
 
@@ -47,31 +36,6 @@ export function nativeEntryLookup(
 			),
 		),
 	);
-}
-
-function conversion(
-	source: VmRegisterRepresentation,
-	target: VmRegisterRepresentation,
-): NativeCallConversion | undefined {
-	if (
-		source === target ||
-		((source === "boxed" || source === "string") &&
-			(target === "boxed" || target === "string"))
-	)
-		return "identity";
-	if (target === "boxed") {
-		if (source === "number") return "box-number";
-		if (source === "int32") return "box-int32";
-		if (source === "boolean") return "box-boolean";
-	}
-	if (source === "boxed") {
-		if (target === "number") return "unbox-number";
-		if (target === "int32") return "unbox-int32";
-		if (target === "boolean") return "unbox-boolean";
-	}
-	if (source === "int32" && target === "number") return "int32-to-number";
-	if (source === "number" && target === "int32") return "number-to-int32";
-	return undefined;
 }
 
 export function selectNativeCallTransports(
@@ -104,7 +68,7 @@ export function selectNativeCallTransports(
 			if (entryId === undefined) continue;
 			const entry = entries.get(`${functionIndex}:${entryId}`);
 			if (entry === undefined) continue;
-			const arguments_: Array<NativeCallConversion> = [];
+			const arguments_: Array<NativeValueConversion> = [];
 			const parameters = entry.argumentRepresentations ?? entry.parameterRepresentations;
 			for (const [parameter, target] of parameters.entries()) {
 				const operand = op.arguments[parameter];
@@ -122,12 +86,12 @@ export function selectNativeCallTransports(
 							: decoded.kind === "boolean" || decoded.kind === "string"
 								? decoded.kind
 								: "boxed";
-				const mode = conversion(source, target);
+				const mode = nativeValueConversion(source, target);
 				if (mode === undefined) break;
 				arguments_.push(mode);
 			}
 			if (arguments_.length !== parameters.length) continue;
-			const result = conversion(
+			const result = nativeValueConversion(
 				entry.resultRepresentation,
 				native.registerRepresentations[op.dst]!,
 			);
@@ -147,7 +111,7 @@ export function selectNativeCallTransports(
 					const mode =
 						source === undefined || target === undefined
 							? undefined
-							: conversion(source, target);
+							: nativeValueConversion(source, target);
 					return slot < 0 || mode === undefined ? [] : [{ slot, conversion: mode }];
 				}) ?? [];
 			if (fields.length !== (entry.fieldParameters?.keys.length ?? 0)) continue;

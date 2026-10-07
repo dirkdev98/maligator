@@ -1,3 +1,4 @@
+import { nativeValueConversion } from "./native-value-transport.ts";
 import type { NativeFunctionPlan } from "./program-image.ts";
 
 export type NativeStackFieldRepresentation =
@@ -49,26 +50,70 @@ export function selectNativeStackObjectStorage(
 				!reps.some((rep) => rep === "int32" || rep === "number" || rep === "boolean")
 			)
 				continue;
+			let valid = true;
+			for (const access of site.accesses) {
+				const op = native.body.instructions[access.ip];
+				if (access.slot < 0 || access.slot >= reps.length) {
+					valid = false;
+					break;
+				}
+				if (
+					op?.opcode === "STORE_PROPERTY_STATIC" ||
+					op?.opcode === "STORE_PROPERTY_STATIC_KNOWN_OWN_SLOT"
+				) {
+					const source = native.registerRepresentations[op.value];
+					const current = reps[access.slot]!;
+					if (source === undefined) {
+						valid = false;
+						break;
+					}
+					if (source !== current)
+						reps[access.slot] =
+							(source === "int32" || source === "number") &&
+							(current === "int32" || current === "number")
+								? "number"
+								: "boxed";
+				} else if (
+					op?.opcode !== "LOAD_PROPERTY_STATIC" &&
+					op?.opcode !== "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT"
+				) {
+					valid = false;
+					break;
+				}
+			}
+			if (
+				!valid ||
+				!reps.some((rep) => rep === "int32" || rep === "number" || rep === "boolean")
+			)
+				continue;
 			if (
 				!site.accesses.every((access) => {
-					const op = native.body.instructions[access.ip];
-					const register =
-						op?.opcode === "LOAD_PROPERTY_STATIC" ||
-						op?.opcode === "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT"
-							? op.dst
-							: op?.opcode === "STORE_PROPERTY_STATIC" ||
-								  op?.opcode === "STORE_PROPERTY_STATIC_KNOWN_OWN_SLOT"
-								? op.value
-								: undefined;
-					return (
-						register !== undefined &&
-						access.slot >= 0 &&
-						access.slot < reps.length &&
-						native.registerRepresentations[register] === reps[access.slot]
-					);
+					const op = native.body.instructions[access.ip]!;
+					if (
+						op.opcode === "LOAD_PROPERTY_STATIC" ||
+						op.opcode === "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT"
+					)
+						return (
+							nativeValueConversion(
+								reps[access.slot]!,
+								native.registerRepresentations[op.dst]!,
+							) !== undefined
+						);
+					if (
+						op.opcode === "STORE_PROPERTY_STATIC" ||
+						op.opcode === "STORE_PROPERTY_STATIC_KNOWN_OWN_SLOT"
+					)
+						return (
+							nativeValueConversion(
+								native.registerRepresentations[op.value]!,
+								reps[access.slot]!,
+							) !== undefined
+						);
+					return false;
 				})
 			)
 				continue;
+
 			plans.push({ allocationIp: site.allocationIp, slotRepresentations: reps });
 		}
 	}

@@ -1933,6 +1933,8 @@ function joinAggregateCellContent(
 ): CoreAggregateCellContent {
 	if (left === "uninitialized") return right;
 	if (right === "uninitialized" || left === right) return left;
+	if ((left === "i32" || left === "f64") && (right === "i32" || right === "f64"))
+		return "f64";
 	return "boxed";
 }
 

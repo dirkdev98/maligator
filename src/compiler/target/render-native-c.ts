@@ -32,7 +32,6 @@ import {
 } from "./emit-program-image.ts";
 import type { NativeCallbackTransportPlan } from "./lower-native-callbacks.ts";
 import type {
-	NativeCallConversion,
 	NativeCallTargetTransport,
 	NativeCallTransportPlan,
 } from "./lower-native-calls.ts";
@@ -59,6 +58,8 @@ import {
 	MATH_UNARY_NATIVE_CALL,
 	MATH_BINARY_OPERATIONS,
 } from "./native-scalar-operators.ts";
+import { nativeValueConversion } from "./native-value-transport.ts";
+import type { NativeValueConversion } from "./native-value-transport.ts";
 import { profileOperationForInstruction } from "./profile-metadata.ts";
 import {
 	nativeFrameRootRegisters,
@@ -4404,6 +4405,45 @@ function emitInstruction(
 			coro,
 			genericContext(),
 		);
+	const convert = (mode: NativeValueConversion, value: string): string => {
+		switch (mode) {
+			case "identity":
+				return value;
+			case "box-number":
+				return profileCall("boxing", `mal_ops_number_value(${value})`);
+			case "box-int32":
+				return profileCall("boxing", `mal_value_from_i32(${value})`);
+			case "box-boolean":
+				return profileCall("boxing", `mal_value_new_boolean(${value})`);
+			case "unbox-number":
+				return `mal_ops_number_as_f64(${value})`;
+			case "unbox-int32":
+				return `mal_ops_number_to_i32(mal_ops_number_as_f64(${value}))`;
+			case "unbox-boolean":
+				return `mal_value_to_boolean(${value})`;
+			case "int32-to-number":
+				return `(f64) ${value}`;
+			case "number-to-int32":
+				return `mal_ops_number_to_i32(${value})`;
+		}
+	};
+	const convertedValue = (
+		source: RegisterRep,
+		target: RegisterRep,
+		value: string,
+	): string => {
+		const mode = nativeValueConversion(source, target);
+		if (mode === undefined)
+			throw new Error(`Unsupported native value conversion ${source} to ${target}`);
+		return convert(mode, value);
+	};
+	const stackSlotRep = (site: StackObjectSite, slot: number): RegisterRep =>
+		site.fieldSlots?.[slot]?.representation ?? "boxed";
+	const stackLoad = (site: StackObjectSite, slot: number, dst: number): string =>
+		`r${dst} = ${convertedValue(stackSlotRep(site, slot), reps[dst]!, stackObjectSlotReference(site, slot))};`;
+	const stackStore = (site: StackObjectSite, slot: number, value: number): string =>
+		`${stackObjectSlotReference(site, slot)} = ${convertedValue(reps[value]!, stackSlotRep(site, slot), `r${value}`)};`;
+
 	const boxed = (r: number): string =>
 		reps[r] === "int32"
 			? `mal_value_from_i32(r${r})`
@@ -4440,13 +4480,17 @@ function emitInstruction(
 					: "boxed";
 	};
 	const callValue = (dst: number, value: string): string =>
-		reps[dst] === "int32"
-			? `mal_ops_number_to_i32(mal_ops_number_as_f64(${value}))`
-			: reps[dst] === "number"
-				? `mal_ops_number_as_f64(${value})`
-				: reps[dst] === "boolean"
-					? `mal_value_to_boolean(${value})`
-					: value;
+		convertedValue("boxed", reps[dst]!, value);
+	const boxedLoad = (dst: number, expression: string): Array<string> => {
+		if (reps[dst] === "boxed" || reps[dst] === "string")
+			return [`r${dst} = ${expression};`, throwCheck()];
+		const value = `__boxed_load_${ip}`;
+		return [
+			`MalValue ${value} = ${expression};`,
+			throwCheck(),
+			`r${dst} = ${callValue(dst, value)};`,
+		];
+	};
 	const storeNumber = (dst: number, expression: string): string =>
 		`r${dst} = ${reps[dst] === "number" ? expression : reps[dst] === "int32" ? `mal_ops_number_to_i32(${expression})` : profileCall("boxing", `mal_ops_number_value(${expression})`)};`;
 	const storeMathNumber = (dst: number, operation: string, expression: string): string =>
@@ -4726,7 +4770,7 @@ function emitInstruction(
 			case "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT":
 				return [
 					"MAL_PERF_COUNT(exact_own_slot_loads);",
-					`r${instruction.dst} = mal_object_field_load(mal_value_to_object(${boxed(instruction.object)}), ${nativePlan.slot});`,
+					`r${instruction.dst} = ${callValue(instruction.dst, `mal_object_field_load(mal_value_to_object(${boxed(instruction.object)}), ${nativePlan.slot})`)};`,
 				];
 			case "STORE_PROPERTY_STATIC":
 			case "STORE_PROPERTY_STATIC_KNOWN_OWN_SLOT":
@@ -5279,9 +5323,8 @@ function emitInstruction(
 				...shape,
 				"mal_perf_stack_object_init();",
 				`mal_object_init_embedded_stack(&vm->heap, &${objectName}, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]), __oshape_${ip}, ${stackObjectSite.fieldSlots === undefined ? `&__gc_slots[${slotsOffset!}]` : "nullptr"});`,
-				...instruction.valueRegisters.map(
-					(register, index) =>
-						`${stackObjectSlotReference(stackObjectSite, index)} = ${stackObjectSite.fieldSlots === undefined ? boxed(register) : `r${register}`};`,
+				...instruction.valueRegisters.map((register, index) =>
+					stackStore(stackObjectSite, index, register),
 				),
 				`r${instruction.dst} = mal_value_from_object(&${objectName}.object);`,
 			];
@@ -5481,7 +5524,7 @@ function emitInstruction(
 		case "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT": {
 			if (stackObjectAccess !== undefined) {
 				const { site, slot } = stackObjectAccess;
-				return [`r${instruction.dst} = ${stackObjectSlotReference(site, slot)};`];
+				return [stackLoad(site, slot, instruction.dst)];
 			}
 			const candidates = instruction.candidates.flatMap((candidate) => [
 				relocation.functionIndex(candidate.shapeFunctionIndex),
@@ -5492,15 +5535,20 @@ function emitInstruction(
 				`MalValue __known_own_slot_${ip};`,
 				`${relocation.enabled ? "" : "static "}const i32 __known_own_slot_candidates_${ip}[] = { ${candidates.join(", ")} };`,
 				`if (mal_vm_try_load_known_own_slots(vm, ${boxed(instruction.object)}, &${nativeBodyReference(resources, "propertyCache")}[${instruction.icIndex}], ${instruction.candidates.length}, __known_own_slot_candidates_${ip}, &__known_own_slot_${ip})) {`,
-				`  r${instruction.dst} = __known_own_slot_${ip};`,
+				`  r${instruction.dst} = ${callValue(instruction.dst, `__known_own_slot_${ip}`)};`,
 				`} else {`,
 				...(context.knownOwnSlotLoadInactiveRootMask === undefined
 					? []
 					: [
 							`  ${cInactiveRootMaskPublication(context.knownOwnSlotLoadInactiveRootMask, context.inactiveRootMaskTails)};`,
 						]),
-				`  r${instruction.dst} = ${profileCall("property", `mal_vm_op_load_property_ic(vm, ${boxed(instruction.object)}, mal_value_from_string(vm->string_constant_atoms[${relocation.stringIndex(instruction.stringIndex)}]), &${nativeBodyReference(resources, "propertyCache")}[${instruction.icIndex}])`)};`,
-				`  ${throwCheck()}`,
+				...boxedLoad(
+					instruction.dst,
+					profileCall(
+						"property",
+						`mal_vm_op_load_property_ic(vm, ${boxed(instruction.object)}, mal_value_from_string(vm->string_constant_atoms[${relocation.stringIndex(instruction.stringIndex)}]), &${nativeBodyReference(resources, "propertyCache")}[${instruction.icIndex}])`,
+					),
+				).map((line) => `  ${line}`),
 				`}`,
 			];
 		}
@@ -5526,19 +5574,22 @@ function emitInstruction(
 				`MalValue __shape_case_value_${ip};`,
 				`static const i32 __shape_case_slots_${ip}[] = { ${instruction.slots.join(", ")} };`,
 				`if (mal_vm_try_load_shape_case(${boxed(instruction.object)}, ${selected}, ${instruction.slots.length}, __shape_case_slots_${ip}, &__shape_case_value_${ip})) {`,
-				`  r${instruction.dst} = __shape_case_value_${ip};`,
+				`  r${instruction.dst} = ${callValue(instruction.dst, `__shape_case_value_${ip}`)};`,
 				`} else {`,
-				`  r${instruction.dst} = ${profileCall("property", `mal_vm_op_load_property_ic(vm, ${boxed(instruction.object)}, mal_value_from_string(vm->string_constant_atoms[${relocation.stringIndex(instruction.stringIndex)}]), &${nativeBodyReference(resources, "propertyCache")}[${instruction.icIndex}])`)};`,
-				`  ${throwCheck()}`,
+				...boxedLoad(
+					instruction.dst,
+					profileCall(
+						"property",
+						`mal_vm_op_load_property_ic(vm, ${boxed(instruction.object)}, mal_value_from_string(vm->string_constant_atoms[${relocation.stringIndex(instruction.stringIndex)}]), &${nativeBodyReference(resources, "propertyCache")}[${instruction.icIndex}])`,
+					),
+				).map((line) => `  ${line}`),
 				`}`,
 			];
 		}
 		case "STORE_PROPERTY_STATIC_KNOWN_OWN_SLOT": {
 			if (stackObjectAccess !== undefined) {
 				const { site, slot } = stackObjectAccess;
-				return [
-					`${stackObjectSlotReference(site, slot)} = ${site.fieldSlots === undefined ? boxed(instruction.value) : `r${instruction.value}`};`,
-				];
+				return [stackStore(site, slot, instruction.value)];
 			}
 			const candidates = instruction.candidates.flatMap((candidate) => [
 				relocation.functionIndex(candidate.shapeFunctionIndex),
@@ -5623,7 +5674,7 @@ function emitInstruction(
 						: []),
 					`MalValue ${value};`,
 					`if (mal_vm_property_read_region_try_load(&${region}, &${nativeBodyReference(resources, "propertyCache")}[${instruction.icIndex}], &${value})) {`,
-					`  r${instruction.dst} = ${value};`,
+					`  r${instruction.dst} = ${callValue(instruction.dst, value)};`,
 					`} else {`,
 					...fallback.map((line) => `  ${line}`),
 					`}`,
@@ -5641,7 +5692,7 @@ function emitInstruction(
 				if (role === "second") {
 					return [
 						`if (__property_projection_${id}_fast) {`,
-						`  r${instruction.dst} = ${value};`,
+						`  r${instruction.dst} = ${callValue(instruction.dst, value)};`,
 						`} else {`,
 						...fallback.map((line) => `  ${line}`),
 						`}`,
@@ -5650,7 +5701,7 @@ function emitInstruction(
 				return [
 					`__property_projection_${id}_fast = mal_vm_property_try_load_static_pair(${boxed(instruction.object)}, &${nativeBodyReference(resources, "propertyCache")}[${plan.loads[0]!.icIndex}], &${nativeBodyReference(resources, "propertyCache")}[${plan.loads[1]!.icIndex}], &__property_projection_${id}_first, &__property_projection_${id}_second);`,
 					`if (__property_projection_${id}_fast) {`,
-					`  r${instruction.dst} = ${value};`,
+					`  r${instruction.dst} = ${callValue(instruction.dst, value)};`,
 					`} else {`,
 					...fallback.map((line) => `  ${line}`),
 					`}`,
@@ -5867,7 +5918,7 @@ function emitInstruction(
 				if (fallback === null) return null;
 				return [
 					`if (${stackObjectInheritedAccess.inheritedFastName}) {`,
-					`  r${instruction.dst} = ${stackObjectInheritedAccess.inheritedValueName};`,
+					`  r${instruction.dst} = ${callValue(instruction.dst, stackObjectInheritedAccess.inheritedValueName!)};`,
 					`  mal_perf_ic_load_inherited_hit();`,
 					`  mal_perf_stack_object_inherited_direct_load();`,
 					`} else {`,
@@ -5878,13 +5929,13 @@ function emitInstruction(
 			if (stackObjectAccess !== undefined) {
 				const { site, slot } = stackObjectAccess;
 				if (site.inheritedLoadInstructionIndex === undefined) {
-					return [`r${instruction.dst} = ${stackObjectSlotReference(site, slot)};`];
+					return [stackLoad(site, slot, instruction.dst)];
 				}
 				const fallback = emitGenericInstruction();
 				if (fallback === null) return null;
 				return [
 					`if (${site.inheritedFastName}) {`,
-					`  r${instruction.dst} = ${stackObjectSlotReference(site, slot)};`,
+					`  ${stackLoad(site, slot, instruction.dst)}`,
 					`} else {`,
 					...fallback.map((line) => `  ${line}`),
 					`}`,
@@ -5908,7 +5959,7 @@ function emitInstruction(
 								`MalArrayObject *${receiverName} = mal_vm_as_array(${boxed(instruction.object)});`,
 								`MalValue __v_${ip};`,
 								`if (${receiverName} && mal_vm_array_try_get_index(${receiverName}, ${num(instruction.key)}, &__v_${ip})) {`,
-								`  r${instruction.dst} = __v_${ip};`,
+								`  r${instruction.dst} = ${callValue(instruction.dst, `__v_${ip}`)};`,
 								`} else {`,
 								...(context.incomingRootPublication ?? []).map((line) => `  ${line}`),
 								...(context.indexedPropertyLoadInactiveRootMask === undefined
@@ -6030,7 +6081,7 @@ function emitInstruction(
 				`MalObject *${receiverName} = mal_vm_as_object(${boxed(instruction.object)});`,
 				`MalValue __v_${ip};`,
 				`if (${probe()}) {`,
-				`  r${instruction.dst} = __v_${ip};`,
+				`  r${instruction.dst} = ${callValue(instruction.dst, `__v_${ip}`)};`,
 				`} else {`,
 				...(context.incomingRootPublication ?? []).map((line) => `  ${line}`),
 				...(context.staticPropertyLoadInactiveRootMask === undefined
@@ -6038,8 +6089,13 @@ function emitInstruction(
 					: [
 							`  ${cInactiveRootMaskPublication(context.staticPropertyLoadInactiveRootMask, context.inactiveRootMaskTails)};`,
 						]),
-				`  r${instruction.dst} = ${profileCall("property", `mal_vm_op_load_property_ic_static_miss(vm, ${boxed(instruction.object)}, ${key}, &${nativeBodyReference(resources, "propertyCache")}[${instruction.icIndex}])`)};`,
-				`  ${throwCheck()}`,
+				...boxedLoad(
+					instruction.dst,
+					profileCall(
+						"property",
+						`mal_vm_op_load_property_ic_static_miss(vm, ${boxed(instruction.object)}, ${key}, &${nativeBodyReference(resources, "propertyCache")}[${instruction.icIndex}])`,
+					),
+				).map((line) => `  ${line}`),
 				`}`,
 			];
 			if (nativeStringSplitCursorAction?.role === "length") {
@@ -6163,9 +6219,7 @@ function emitInstruction(
 			}
 			if (stackObjectAccess !== undefined) {
 				const { site, slot } = stackObjectAccess;
-				return [
-					`${stackObjectSlotReference(site, slot)} = ${site.fieldSlots === undefined ? boxed(instruction.value) : `r${instruction.value}`};`,
-				];
+				return [stackStore(site, slot, instruction.value)];
 			}
 			if (
 				instruction.opcode === "STORE_PROPERTY_STATIC" &&
@@ -8872,28 +8926,6 @@ function emitInstruction(
 					poll,
 				];
 			}
-			const convert = (mode: NativeCallConversion, value: string): string => {
-				switch (mode) {
-					case "identity":
-						return value;
-					case "box-number":
-						return profileCall("boxing", `mal_ops_number_value(${value})`);
-					case "box-int32":
-						return profileCall("boxing", `mal_value_from_i32(${value})`);
-					case "box-boolean":
-						return profileCall("boxing", `mal_value_new_boolean(${value})`);
-					case "unbox-number":
-						return `mal_ops_number_as_f64(${value})`;
-					case "unbox-int32":
-						return `mal_ops_number_to_i32(mal_ops_number_as_f64(${value}))`;
-					case "unbox-boolean":
-						return `mal_value_to_boolean(${value})`;
-					case "int32-to-number":
-						return `(f64) ${value}`;
-					case "number-to-int32":
-						return `mal_ops_number_to_i32(${value})`;
-				}
-			};
 			const directEntryParameters = (transport: NativeCallTargetTransport) =>
 				transport.arguments
 					.map((mode, parameter) => {
@@ -9499,15 +9531,7 @@ function emitInstruction(
 				if (fields !== undefined)
 					materialize.push(
 						`MalValue __stack_return_values_${ip}[${fields.length}] = { ${fields
-							.map((field) =>
-								field.representation === "int32"
-									? `mal_value_from_i32(${field.name})`
-									: field.representation === "number"
-										? profileCall("boxing", `mal_ops_number_value(${field.name})`)
-										: field.representation === "boolean"
-											? `mal_value_new_boolean(${field.name})`
-											: field.name,
-							)
+							.map((field) => convertedValue(field.representation, "boxed", field.name))
 							.join(", ")} };`,
 					);
 				materialize.push(`MalValue ${materialized} = ${helper};`, throwCheck());

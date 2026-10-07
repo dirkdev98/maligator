@@ -11,7 +11,7 @@ import {
 import type { CompilerOperatorInputKindMasks } from "../shared/compiler-value-kinds.ts";
 import { getPrimordialCatalog } from "../shared/primordial-catalog-data.ts";
 import type { NativeCallbackTransportPlan } from "./lower-native-callbacks.ts";
-import { NATIVE_CALL_CONVERSIONS, nativeEntryLookup } from "./lower-native-calls.ts";
+import { nativeEntryLookup } from "./lower-native-calls.ts";
 import type { NativeCallTransportPlan } from "./lower-native-calls.ts";
 import { NATIVE_PROPERTY_UPDATE_OPERATORS } from "./lower-native-fast-paths.ts";
 import type {
@@ -32,6 +32,7 @@ import type { NativeStackObjectStoragePlan } from "./lower-native-objects.ts";
 import type { NativeStoragePlan } from "./lower-native-storage.ts";
 import { validateNativeStorage } from "./lower-native-storage.ts";
 import type { NativeSuspensionPlan } from "./lower-native-suspension.ts";
+import { NATIVE_VALUE_CONVERSIONS } from "./native-value-transport.ts";
 import type { Reader } from "./program-image-codec.ts";
 import {
 	readRuntimeImage,
@@ -78,7 +79,7 @@ import type {
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal artifacts are hard cut-overs: stale cache entries rebuild.
-export const COMPILER_ARTIFACT_VERSION = 139;
+export const COMPILER_ARTIFACT_VERSION = 140;
 
 function validateClosureCaptureOwners(
 	owners: ReadonlyArray<number>,
@@ -837,17 +838,17 @@ function writeNativeStorage(w: Writer, storage: NativeStoragePlan | undefined): 
 			w.i32(target.functionIndex);
 			w.i32(target.entryId);
 			w.u32(target.arguments.length);
-			for (const mode of target.arguments) w.u8(NATIVE_CALL_CONVERSIONS.indexOf(mode));
+			for (const mode of target.arguments) w.u8(NATIVE_VALUE_CONVERSIONS.indexOf(mode));
 			w.u8(
 				["int32", "number", "boolean", "boxed", "string"].indexOf(
 					target.resultRepresentation,
 				),
 			);
-			w.u8(NATIVE_CALL_CONVERSIONS.indexOf(target.result));
+			w.u8(NATIVE_VALUE_CONVERSIONS.indexOf(target.result));
 			w.u32(target.fields.length);
 			for (const field of target.fields) {
 				w.i32(field.slot);
-				w.u8(NATIVE_CALL_CONVERSIONS.indexOf(field.conversion));
+				w.u8(NATIVE_VALUE_CONVERSIONS.indexOf(field.conversion));
 			}
 		}
 	}
@@ -1130,7 +1131,7 @@ function readNativeStorage(r: Reader): NativeStoragePlan {
 		}),
 	);
 	const readConversion = () => {
-		const mode = NATIVE_CALL_CONVERSIONS[r.u8()];
+		const mode = NATIVE_VALUE_CONVERSIONS[r.u8()];
 		if (mode === undefined) throw new RangeError("Invalid native call conversion");
 		return mode;
 	};

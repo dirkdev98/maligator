@@ -57,6 +57,133 @@ const context: CoreCompilationContext = {
 };
 
 describe("Core local proofs and representations", () => {
+	it("keeps independent proven fields scalar until a shaped allocation boundary", () => {
+		const program = new CoreProgram(coreOpcodeRegistry, {
+			stringConstants: [[120], [102], [116], [112]],
+		});
+		const builder = new CoreFunctionBuilder(program, { parameterCount: 2 });
+		const entry = builder.createBlock([
+			{ representation: "boxed" },
+			{ representation: "boxed" },
+		]);
+		const [input, unknown] = inspectCoreBlockParameters(builder, entry).map(
+			({ value }) => value,
+		);
+		const [number] = builder.appendInstruction(entry, "unary", [input!], {
+			attributes: { operator: "+" },
+		});
+		const [one] = builder.appendInstruction(entry, "createNumber", [], {
+			attributes: { value: 1.5 },
+		});
+		const [sum] = builder.appendInstruction(entry, "binary", [number!, one!], {
+			attributes: { operator: "+" },
+		});
+		const [flag] = builder.appendInstruction(entry, "binary", [sum!, one!], {
+			attributes: { operator: "<" },
+		});
+		const [text] = builder.appendInstruction(entry, "unary", [unknown!], {
+			attributes: { operator: "typeof" },
+		});
+		const [object] = builder.appendInstruction(
+			entry,
+			"createObjectShaped",
+			[sum!, flag!, text!, unknown!],
+			{
+				attributes: { keyStringIndices: [0, 1, 2, 3] },
+			},
+		);
+		builder.setTerminator(entry, { kind: "return", value: object! });
+		const fn = program.function(builder.finish(entry).function),
+			report = new CoreOptimizationReportBuilder(program),
+			analyses = new CoreAnalysisManager(program, context, report);
+		new CoreFunctionPassScheduler(program, context, analyses, report, fn.id).runComponent(
+			"proofs",
+			CORE_PROOF_PASSES,
+		);
+		expect(fn.valueRepresentation(sum!)).toBe("f64");
+		expect(fn.valueRepresentation(flag!)).toBe("boolean");
+		expect(fn.valueRepresentation(text!)).toBe("string");
+		expect(fn.valueRepresentation(unknown!)).toBe("boxed");
+		expect(fn.valueRepresentation(object!)).toBe("boxed");
+	});
+
+	it.each(["storePropertyStatic", "storeProperty", "defineProperty"] as const)(
+		"keeps a proven value scalar at a %s boundary without promoting its receiver or key",
+		(opcode) => {
+			const program = new CoreProgram(coreOpcodeRegistry, { stringConstants: [[120]] });
+			const builder = new CoreFunctionBuilder(program, { parameterCount: 3 });
+			const entry = builder.createBlock(
+				Array.from({ length: 3 }, () => ({ representation: "boxed" as const })),
+			);
+			const [receiver, input, key] = inspectCoreBlockParameters(builder, entry).map(
+				({ value }) => value,
+			);
+			const [number] = builder.appendInstruction(entry, "unary", [input!], {
+				attributes: { operator: "+" },
+			});
+			const [one] = builder.appendInstruction(entry, "createNumber", [], {
+				attributes: { value: 1.5 },
+			});
+			const [sum] = builder.appendInstruction(entry, "binary", [number!, one!], {
+				attributes: { operator: "+" },
+			});
+			builder.appendInstruction(
+				entry,
+				opcode,
+				opcode === "storePropertyStatic" ? [receiver!, sum!] : [receiver!, key!, sum!],
+				{
+					attributes:
+						opcode === "storePropertyStatic"
+							? { stringIndex: 0 }
+							: opcode === "defineProperty"
+								? { writable: true, enumerable: true, configurable: true }
+								: {},
+				},
+			);
+			builder.setTerminator(entry, { kind: "return", value: receiver! });
+			const fn = program.function(builder.finish(entry).function);
+			const report = new CoreOptimizationReportBuilder(program);
+			const analyses = new CoreAnalysisManager(program, context, report);
+			new CoreFunctionPassScheduler(
+				program,
+				context,
+				analyses,
+				report,
+				fn.id,
+			).runComponent("proofs", CORE_PROOF_PASSES);
+			expect(fn.valueRepresentation(sum!)).toBe("f64");
+			expect(fn.valueRepresentation(receiver!)).toBe("boxed");
+			expect(fn.valueRepresentation(key!)).toBe("boxed");
+		},
+	);
+
+	it("retains a coercive field expression when its numeric kind is unknown", () => {
+		const program = new CoreProgram(coreOpcodeRegistry, { stringConstants: [[120]] });
+		const builder = new CoreFunctionBuilder(program, { parameterCount: 2 });
+		const entry = builder.createBlock([
+			{ representation: "boxed" },
+			{ representation: "boxed" },
+		]);
+		const [left, right] = inspectCoreBlockParameters(builder, entry).map(
+			({ value }) => value,
+		);
+		const [sum] = builder.appendInstruction(entry, "binary", [left!, right!], {
+			attributes: { operator: "+" },
+		});
+		const [object] = builder.appendInstruction(entry, "createObjectShaped", [sum!], {
+			attributes: { keyStringIndices: [0] },
+		});
+		builder.setTerminator(entry, { kind: "return", value: object! });
+		const fn = program.function(builder.finish(entry).function),
+			report = new CoreOptimizationReportBuilder(program),
+			analyses = new CoreAnalysisManager(program, context, report);
+		new CoreFunctionPassScheduler(program, context, analyses, report, fn.id).runComponent(
+			"proofs",
+			CORE_PROOF_PASSES,
+		);
+		expect(fn.valueRepresentation(sum!)).toBe("boxed");
+	});
+
 	it.each([
 		{
 			mode: "locked",

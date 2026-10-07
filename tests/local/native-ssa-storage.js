@@ -49,6 +49,117 @@ for (const operation of [boundedUnsigned, composedSigned]) {
 	}
 }
 
+function joinedFieldStorage(input, replacement) {
+	const o = { numeric: 2, payload: input, label: "old", flag: true };
+	if (replacement) {
+		o.numeric = 1.5;
+		o.payload = replacement;
+		o.label = "new";
+		o.flag = false;
+	}
+	gc();
+	return o === input ? null : [o.numeric, o.payload.value, o.label, o.flag];
+}
+globalThis.joinedFieldStorage = joinedFieldStorage;
+console.log("joined-fields", JSON.stringify(joinedFieldStorage({ value: 3 }, null)));
+console.log(
+	"joined-fields",
+	JSON.stringify(joinedFieldStorage({ value: 3 }, { value: 9 })),
+);
+
+function materializeProvenFields(input, later) {
+	const value = +input;
+	return {
+		numeric: value + 1.5,
+		zero: value * 1,
+		flag: value < 1.5,
+		label: typeof input,
+		later: later(),
+	};
+}
+globalThis.materializeProvenFields = materializeProvenFields;
+for (const input of [-0, NaN, Infinity, -Infinity, 1.75]) {
+	const value = materializeProvenFields(input, () => {
+		gc();
+		return { value: 7 };
+	});
+	console.log(
+		"heap-fields",
+		String(value.numeric),
+		Object.is(value.zero, -0),
+		value.flag,
+		value.label,
+		value.later.value,
+	);
+}
+const fieldOrder = [];
+const fieldInput = {
+	valueOf() {
+		fieldOrder.push("coerce");
+		gc();
+		return 4;
+	},
+};
+console.log(
+	"field-order",
+	materializeProvenFields(fieldInput, () => {
+		fieldOrder.push("later");
+		gc();
+		return 8;
+	}).numeric,
+	fieldOrder.join(":"),
+);
+try {
+	materializeProvenFields(1n, () => {
+		fieldOrder.push("wrong");
+		return 0;
+	});
+} catch (error) {
+	console.log("field-bigint", error instanceof TypeError, fieldOrder.join(":"));
+}
+
+function storeProvenFields(object, input, key) {
+	const value = +input;
+	object.numeric = value + 1.5;
+	object[key] = value < 1.5;
+	return [object.numeric, object[key]];
+}
+globalThis.storeProvenFields = storeProvenFields;
+const storeOrder = [];
+const storeTarget = new Proxy(
+	{},
+	{
+		set(target, key, value) {
+			storeOrder.push(`${String(key)}:${String(value)}`);
+			gc();
+			target[key] = value;
+			return true;
+		},
+	},
+);
+console.log(
+	"scalar-field-stores",
+	JSON.stringify(storeProvenFields(storeTarget, fieldInput, "flag")),
+	storeOrder.join(":"),
+);
+const storeFailure = {};
+try {
+	storeProvenFields(
+		new Proxy(
+			{},
+			{
+				set() {
+					throw storeFailure;
+				},
+			},
+		),
+		3,
+		"flag",
+	);
+} catch (error) {
+	console.log("scalar-store-throw", error === storeFailure);
+}
+
 globalThis.makeStorageValue = (value) => ({ value, padding: new Array(300).fill(value) });
 
 globalThis.rotateStorage = (left, right, count) => {

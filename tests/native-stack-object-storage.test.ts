@@ -5,6 +5,8 @@ import {
 	deserializeCompilerArtifact,
 	serializeCompilerArtifact,
 } from "../src/compiler/target/compiler-artifact-codec.ts";
+import { lowerNativeFunctionStorage } from "../src/compiler/target/lower-native-storage.ts";
+import { vmRegionActions } from "../src/compiler/target/program-image.ts";
 import { emitCompiledFunction } from "../src/compiler/target/render-native-c.ts";
 
 function compile(body: string) {
@@ -47,7 +49,7 @@ describe("native typed stack fields", () => {
 		`);
 		const native = image.native.functions[1]!;
 		const plan = native.storage!.stackObjects[0]!;
-		expect(plan.slotRepresentations).toEqual(["number", "boxed", "boxed", "boolean"]);
+		expect(plan.slotRepresentations).toEqual(["number", "boxed", "string", "boolean"]);
 		const region = native.specializations.find(
 			(candidate) => candidate.kind === "stack-object-plan",
 		)!;
@@ -105,8 +107,46 @@ describe("native typed stack fields", () => {
 		).not.toBeNull();
 	});
 
+	it("joins numeric writes losslessly and downgrades only an independently unknown field", () => {
+		const image = compile(`
+			const o={x:2,y:1.5,flag:true};
+			if(input){o.x=1.5;o.y=input;}
+			return o===input?0:[o.x,o.y,o.flag];
+		`);
+		const native = image.native.functions[1]!;
+		const plan = native.storage!.stackObjects[0]!;
+		expect(plan.slotRepresentations).toEqual(["number", "boxed", "boolean"]);
+		const output = emitCompiledFunction(native, native.functionIndex, "", false)!.source;
+		expect(output).toContain(`__stack_object_${plan.allocationIp}_slot_0 = (f64)`);
+		expect(deserializeCompilerArtifact(serializeCompilerArtifact(image))).toEqual(image);
+	});
+
+	it("refines an all-writer numeric cell join while retaining integer write transport", () => {
+		const native = compile(`
+			const o={x:2,flag:true};
+			if(input)o.x=1.5;
+			return o===input?0:o.x+1;
+		`).native.functions[1]!;
+		const plan = native.storage!.stackObjects[0]!;
+		expect(plan.slotRepresentations).toEqual(["number", "boolean"]);
+		const region = native.specializations.find(
+			(candidate) => candidate.kind === "stack-object-plan",
+		)!;
+		if (region.kind !== "stack-object-plan") throw new Error("Missing stack certificate");
+		for (const access of region.sites[0]!.accesses.filter(
+			(access) => access.slot === 0,
+		)) {
+			const op = native.body.instructions[access.ip]!;
+			if (
+				op.opcode === "LOAD_PROPERTY_STATIC" ||
+				op.opcode === "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT"
+			)
+				expect(native.registerRepresentations[op.dst]).toBe("number");
+		}
+		expect(emitCompiledFunction(native, native.functionIndex, "", false)).not.toBeNull();
+	});
+
 	it.each([
-		"const o={x:1.5,y:2,flag:true}; o.y=input; return o===input?-1:o.y;",
 		"const o={x:1.5,payload:input}; o.x=input; return o===input?-1:o.x;",
 		"const o={x:1.5,payload:input}; return o.x+o.missing;",
 		"const o={payload:input,label:input}; return o===input?0:o.payload;",
@@ -128,8 +168,8 @@ describe("native typed stack fields", () => {
 		)!;
 		expect(entry.resultRepresentation).toBe("boxed");
 		expect(entry.storage!.stackObjects[0]!.slotRepresentations).toEqual([
-			"boxed",
 			"number",
+			"int32",
 			"boolean",
 		]);
 		const region = native.specializations.find(
@@ -145,7 +185,7 @@ describe("native typed stack fields", () => {
 		)!.source;
 		expect(output).toContain("mal_vm_materialize_stack_object_fields(vm,");
 		expect(output).toMatch(
-			/MalValue __stack_return_values_\d+\[3\] = \{ __gc_slots\[\d+\], mal_ops_number_value\(/,
+			/MalValue __stack_return_values_\d+\[3\] = \{ mal_ops_number_value\([^)]*\), mal_value_from_i32\(/,
 		);
 		expect(deserializeCompilerArtifact(serializeCompilerArtifact(image))).toEqual(image);
 	});
@@ -161,6 +201,64 @@ describe("native typed stack fields", () => {
 		]);
 		expect(emitCompiledFunction(native, native.functionIndex, "", false)).not.toBeNull();
 	});
+
+	it.each([false, true])(
+		"converts a proven scalar read after stack recipe rejection with generic=%s",
+		(generic) => {
+			const image = compile(
+				"const o={x:2,flag:true}; if(input)o.x=1.5; return o===input?0:o.x+1;",
+			);
+			const original = image.native.functions[1]!;
+			const loads = original.body.instructions.flatMap((op, ip) =>
+				(op.opcode === "LOAD_PROPERTY_STATIC" ||
+					op.opcode === "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT") &&
+				original.registerRepresentations[op.dst] === "number"
+					? [{ op, ip }]
+					: [],
+			);
+			expect(loads.length).toBeGreaterThan(0);
+			const loadIps = new Set(loads.map(({ ip }) => ip));
+			const regions = original.specializations.filter(
+				(region) => region.kind !== "stack-object-plan",
+			);
+			const native = lowerNativeFunctionStorage({
+				...original,
+				specializations: regions,
+				regionActions: vmRegionActions(regions),
+				instructions: generic
+					? original.instructions.map((plan, ip) => (loadIps.has(ip) ? undefined : plan))
+					: original.instructions,
+				directEntries: [],
+			});
+			expect(native.storage!.stackObjects).toEqual([]);
+			const output = emitCompiledFunction(
+				native,
+				native.functionIndex,
+				"",
+				false,
+			)!.source;
+			for (const { op, ip } of loads) {
+				if (!generic) {
+					expect(output).toContain(
+						`r${op.dst} = mal_ops_number_as_f64(mal_object_field_load(`,
+					);
+					continue;
+				}
+				const fallback = output.indexOf(`MalValue __boxed_load_${ip} =`);
+				expect(fallback).toBeGreaterThan(-1);
+				const check = output.indexOf(
+					"if (vm->completion.kind == MAL_COMPLETION_THROW)",
+					fallback,
+				);
+				const conversion = output.indexOf(
+					`r${op.dst} = mal_ops_number_as_f64(__boxed_load_${ip});`,
+					fallback,
+				);
+				expect(check).toBeGreaterThan(fallback);
+				expect(conversion).toBeGreaterThan(check);
+			}
+		},
+	);
 
 	it("rejects missing layouts, wrong field types and a forged allocation", () => {
 		const image = compile(
