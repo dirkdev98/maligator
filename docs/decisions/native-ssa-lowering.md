@@ -184,8 +184,9 @@ target. One guarded adapter per selected target entry retains the canonical call
 ABI and falls back on incompatible arguments. Snapshot and rest entries require the
 builtin invocation's exact arity. The adapter shares its entry's optional code-size
 budget, so rejection restores the canonical callback pointer. The existing exact
-script-call helper continues to own activation, realm, receiver adjustment, and
-boxed argument roots. Typed results are boxed without allocation at this boundary.
+script-call helper continues to own activation, realm, and receiver adjustment;
+the builtin algorithms retain boxed argument roots. Typed results are boxed
+without allocation at this boundary.
 This consumes existing entry contracts; it does not discover new callback-driven
 signatures or remove the builtin's boxed argument buffer.
 

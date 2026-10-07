@@ -1699,7 +1699,7 @@ function renderCallbackAdapter(
 				: entry.resultRepresentation === "boolean"
 					? "mal_value_new_boolean(value)"
 					: "value";
-	// The exact-script helper owns activation, realm, receiver adjustment, and argument roots.
+	// The runtime callback path owns activation, realm, receiver adjustment, and argument roots.
 	return [
 		`${linkage === "static" ? "static " : ""}MalValue ${nativeCallbackSymbol(index, entry.id, suffix)}${COMPILED_FUNCTION_DECLARATION} {`,
 		`    if (!(${guards.map((guard) => `(${guard})`).join(" && ")})) {`,
