@@ -145,6 +145,69 @@ describe("native scalar plans around opaque and exceptional windows", () => {
 });
 
 describe("existing-proof scalar expression consumers", () => {
+	it("captures a computed numeric key once for the indexed probe and fallback", () => {
+		const out = inspectStaticValueFunction(
+			"function lookup(values,left,right){const a=+left,b=+right;return values[(a-b)*2];}globalThis.lookup=lookup;",
+			"lookup",
+		);
+		const productIp = out.native.body.instructions.findIndex(
+			(op) => op.opcode === "BINARY" && op.operator === "*",
+		);
+		expect(productIp).toBeGreaterThanOrEqual(0);
+		expect(out.native.storage!.expressionIps).toContain(productIp);
+		const loadIp = out.native.body.instructions.findIndex(
+			(op) => op.opcode === "LOAD_PROPERTY",
+		);
+		const load = out.native.body.instructions[loadIp]!;
+		if (load.opcode !== "LOAD_PROPERTY") throw new Error("Missing indexed load");
+		const value = `__indexed_key_${loadIp}`;
+		expect(out.c.source).toMatch(new RegExp(`(?:double|f64) ${value} = r${load.key};`));
+		expect(out.c.source).toContain(
+			`mal_vm_array_try_get_index(__property_receiver_${loadIp}, ${value},`,
+		);
+		expect(out.c.source).toContain(
+			`mal_vm_indexed_fast_load_index(vm, r${load.object}, ${value},`,
+		);
+		expect(deserializeCompilerArtifact(serializeCompilerArtifact(out.image))).toEqual(
+			out.image,
+		);
+	});
+
+	it.each([
+		"const x=(a-b)*2; return [values[x],x];",
+		"const x=(a-b)*2; return x[x];",
+		"const x=(a-b)*2; callback(); return values[x];",
+		"try { return values[(a-b)*2]; } catch(error) { return error; }",
+		"snapshot=a; return values[(a-b)*2];",
+	])("retains an indexed key across aliases, effects and boxed leaves: %s", (tail) => {
+		const out = inspectStaticValueFunction(
+			`let snapshot;function lookup(values,left,right,callback){const a=+left,b=+right;${tail}}globalThis.lookup=lookup;`,
+			"lookup",
+		);
+		const productIp = out.native.body.instructions.findIndex(
+			(op) => op.opcode === "BINARY" && op.operator === "*",
+		);
+		expect(productIp).toBeGreaterThanOrEqual(0);
+		expect(out.native.storage!.expressionIps).not.toContain(productIp);
+		expect(out.c.source).not.toContain("__indexed_key_");
+	});
+
+	it("retains computed-key profile sites and forbids delayed indexed expressions", () => {
+		const out = inspectStaticValueFunction(
+			"function lookup(values,left,right){const a=+left,b=+right;return values[(a-b)*2];}globalThis.lookup=lookup;",
+			"lookup",
+			{ profile: true },
+		);
+		expect(out.native.storage!.expressionIps).toEqual([]);
+		const loadIp = out.native.body.instructions.findIndex(
+			(op) => op.opcode === "LOAD_PROPERTY",
+		);
+		expect(loadIp).toBeGreaterThanOrEqual(0);
+		const site = out.native.body.profileSiteIds![loadIp]!;
+		expect(out.c.source).toContain(`MAL_PROFILE_CURRENT_SITE(vm, ${site});`);
+		expect(out.c.source).not.toContain("__indexed_key_");
+	});
+
 	it.each([
 		["String.fromCharCode((a-b)*2)", "CALL_KNOWN"],
 		["parseInt('111',(a-b)*2)", "CALL_KNOWN"],

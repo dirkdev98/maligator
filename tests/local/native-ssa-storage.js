@@ -1,5 +1,91 @@
 const gc = globalThis.__mal_collect_garbage ?? (() => {});
 
+function composedIndexedLoad(values, left, right) {
+	const a = +left;
+	const b = +right;
+	return values[(a - b) * 2];
+}
+globalThis.composedIndexedLoad = composedIndexedLoad;
+const composedIndexedOrder = [];
+const composedIndexedSentinel = {};
+const composedIndexedObject = {
+	get 0() {
+		composedIndexedOrder.push("getter");
+		gc();
+		return { value: "getter-value" };
+	},
+	get 2() {
+		gc();
+		throw composedIndexedSentinel;
+	},
+	"-1": "negative",
+	0.5: "fractional",
+	NaN: "not-a-number",
+	Infinity: "positive-infinity",
+	"-Infinity": "negative-infinity",
+	4294967295: "not-an-array-index",
+};
+const composedIndexedProxy = new Proxy(composedIndexedObject, {
+	get(target, key, receiver) {
+		composedIndexedOrder.push(`proxy:${String(key)}`);
+		gc();
+		return Reflect.get(target, key, receiver);
+	},
+});
+const composedIndexedPrototype = Object.create(Array.prototype);
+Object.defineProperty(composedIndexedPrototype, "1", {
+	get() {
+		gc();
+		return { value: "inherited-hole" };
+	},
+});
+const composedInheritedHole = ["zero", , "two"];
+Object.setPrototypeOf(composedInheritedHole, composedIndexedPrototype);
+for (const values of [
+	["zero", "one", "two"],
+	["zero", , "two"],
+	composedInheritedHole,
+	composedIndexedObject,
+	composedIndexedProxy,
+	new Int16Array([7, -3, 9]),
+]) {
+	for (const left of [
+		-0,
+		0.25,
+		0.5,
+		-0.5,
+		1,
+		3,
+		NaN,
+		Infinity,
+		-Infinity,
+		2147483647.5,
+	]) {
+		try {
+			const value = composedIndexedLoad(values, left, 0);
+			gc();
+			console.log(
+				"composed-indexed-load",
+				typeof value === "object" && value !== null ? value.value : String(value),
+			);
+		} catch (error) {
+			console.log("composed-indexed-throw", error === composedIndexedSentinel);
+		}
+	}
+}
+console.log("composed-indexed-order", composedIndexedOrder.join(":"));
+const composedMutatedReceiver = ["before"];
+console.log(
+	"composed-indexed-coercion-mutation",
+	composedIndexedLoad(composedMutatedReceiver, 0, {
+		valueOf() {
+			gc();
+			composedMutatedReceiver[0] = "after";
+			return 0;
+		},
+	}),
+);
+
 function composedPredicateResult(left, right) {
 	const a = +left;
 	const b = +right;

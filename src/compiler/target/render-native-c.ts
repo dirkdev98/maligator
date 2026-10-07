@@ -3830,8 +3830,8 @@ function emitBody(
 			constructorInitializationActionByIp.get(ip);
 		instructionContext.privateFieldReserveCount =
 			privateFieldReserve?.id === ip ? privateFieldReserve.count : undefined;
-		const scalarArgumentDeclarations: Array<string> = [];
-		let scalarArgumentValues: Map<number, string> | undefined;
+		const scalarInputDeclarations: Array<string> = [];
+		let scalarInputValues: Map<number, string> | undefined;
 		const instruction = fn.instructions[ip]!;
 		if (instruction.opcode === "CALL_KNOWN") {
 			for (const operand of instruction.arguments) {
@@ -3839,17 +3839,26 @@ function emitBody(
 				if (
 					value.kind !== "register" ||
 					!expressionLocals.has(value.register) ||
-					scalarArgumentValues?.has(value.register)
+					scalarInputValues?.has(value.register)
 				)
 					continue;
 				const name = `__known_argument_${ip}_${value.register}`;
-				(scalarArgumentValues ??= new Map()).set(value.register, name);
-				scalarArgumentDeclarations.push(
+				(scalarInputValues ??= new Map()).set(value.register, name);
+				scalarInputDeclarations.push(
 					`${cTypeOf(reps[value.register]!)} ${name} = r${value.register};`,
 				);
 			}
+		} else if (
+			instruction.opcode === "LOAD_PROPERTY" &&
+			expressionLocals.has(instruction.key)
+		) {
+			const name = `__indexed_key_${ip}`;
+			scalarInputValues = new Map([[instruction.key, name]]);
+			scalarInputDeclarations.push(
+				`${cTypeOf(reps[instruction.key]!)} ${name} = r${instruction.key};`,
+			);
 		}
-		instructionContext.scalarArgumentValues = scalarArgumentValues;
+		instructionContext.scalarInputValues = scalarInputValues;
 		const emitted = elidedTdzIps.has(ip)
 			? []
 			: emitInstruction(
@@ -3936,7 +3945,7 @@ function emitBody(
 				`#define r${register} (__gc_slots[${rootPublication!.slots.get(register)!}])`,
 			);
 		}
-		for (const line of scalarArgumentDeclarations) lines.push(`    ${line}`);
+		for (const line of scalarInputDeclarations) lines.push(`    ${line}`);
 		for (const line of emitted) {
 			lines.push(`    ${line}`);
 		}
@@ -4183,7 +4192,7 @@ interface NativeFieldCall {
 }
 
 interface NativeInstructionContext {
-	readonly scalarArgumentValues?: ReadonlyMap<number, string>;
+	readonly scalarInputValues?: ReadonlyMap<number, string>;
 	readonly inactiveRootMaskTails?: ReadonlyMap<bigint, string>;
 	readonly ownedCaptureFunctionIndex?: number;
 	readonly fixedCaptureOwners?: ReadonlySet<number>;
@@ -4376,7 +4385,7 @@ function emitInstruction(
 			: `(${publication.map((store) => store.slice(0, -1)).join(", ")}, ${expression})`;
 	};
 	const genericContext = (): NativeInstructionContext => ({
-		scalarArgumentValues: context.scalarArgumentValues,
+		scalarInputValues: context.scalarInputValues,
 		inactiveRootMaskTails: context.inactiveRootMaskTails,
 		stringConstants: context.stringConstants,
 		staticDefineStringIndexByIp: context.staticDefineStringIndexByIp,
@@ -4478,8 +4487,7 @@ function emitInstruction(
 	const stackStore = (site: StackObjectSite, slot: number, value: number): string =>
 		`${stackObjectSlotReference(site, slot)} = ${convertedValue(reps[value]!, stackSlotRep(site, slot), `r${value}`)};`;
 
-	const inputValue = (r: number): string =>
-		context.scalarArgumentValues?.get(r) ?? `r${r}`;
+	const inputValue = (r: number): string => context.scalarInputValues?.get(r) ?? `r${r}`;
 	const boxed = (r: number): string =>
 		reps[r] === "int32"
 			? `mal_value_from_i32(${inputValue(r)})`

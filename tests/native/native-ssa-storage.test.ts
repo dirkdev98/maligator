@@ -37,6 +37,7 @@ describe("independent native SSA storage", () => {
 
 	it("preserves scalar arithmetic, loop transport, and suspended heap locals", () => {
 		for (const name of [
+			"composedIndexedLoad",
 			"composedPredicateResult",
 			"composedCodesResult",
 			"composedRadixResult",

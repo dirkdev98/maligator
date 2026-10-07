@@ -154,7 +154,8 @@ interface NativeStorageBodyFacts {
 	readonly controlBoundaries: ReadonlyArray<boolean>;
 }
 
-function storageBodyFacts(fn: NativeFunctionPlan["body"]): NativeStorageBodyFacts {
+function storageBodyFacts(native: NativeFunctionPlan): NativeStorageBodyFacts {
+	const fn = native.body;
 	const reads = fn.instructions.map(vmInstructionReadRegisters);
 	const writes = fn.instructions.map(vmInstructionWriteRegisters);
 	const writeCounts = new Uint32Array(fn.registerCount);
@@ -162,11 +163,14 @@ function storageBodyFacts(fn: NativeFunctionPlan["body"]): NativeStorageBodyFact
 	const uses: Array<Array<number>> = Array.from({ length: fn.registerCount }, () => []);
 	const jumpTargets = new Set(fn.handlers.map((handler) => handler.handlerIp));
 	for (const [ip, op] of fn.instructions.entries()) {
-		for (const local of writes[ip]!) {
-			writeCounts[local]!++;
-			definitions[local] = ip;
+		// Conservative images have no SSA locals and receive operand validation downstream.
+		if (native.storageValues !== undefined) {
+			for (const local of writes[ip]!) {
+				writeCounts[local]!++;
+				definitions[local] = ip;
+			}
+			for (const local of reads[ip]!) uses[local]!.push(ip);
 		}
-		for (const local of reads[ip]!) uses[local]!.push(ip);
 		if (op.opcode === "JUMP" || op.opcode === "JUMP_IF") jumpTargets.add(op.targetIp);
 		if (["GENERATOR_START", "YIELD", "AWAIT"].includes(op.opcode))
 			jumpTargets.add(ip + 1);
@@ -457,6 +461,8 @@ function scalarValueBoundary(op: BytecodeInstruction, local: number): boolean {
 		return value.kind === "register" && value.register === local;
 	};
 	switch (op.opcode) {
+		case "LOAD_PROPERTY":
+			return op.key === local && op.object !== local;
 		case "CREATE_OBJECT_SHAPED":
 			return op.valueRegisters.includes(local);
 		case "STORE_PROPERTY_STATIC":
@@ -740,7 +746,7 @@ export function lowerNativeFunctionStorage(
 	entries: NativeEntryLookup = new Map(),
 	stringConstants: ReadonlyArray<ReadonlyArray<number>> = [],
 ): NativeFunctionPlan {
-	const body = storageBodyFacts(native.body);
+	const body = storageBodyFacts(native);
 	return {
 		...native,
 		storage: lowerStorage(
@@ -786,7 +792,7 @@ export function validateNativeStorage(
 	stringConstants: ReadonlyArray<ReadonlyArray<number>> = [],
 ): void {
 	// Recompute body facts at this trust boundary; callers can replace or mutate an image.
-	const body = storageBodyFacts(native.body);
+	const body = storageBodyFacts(native);
 	const sameNumbers = (left: ReadonlyArray<number>, right: ReadonlyArray<number>) =>
 		left.length === right.length && left.every((value, index) => value === right[index]);
 	const sameProjections = (
