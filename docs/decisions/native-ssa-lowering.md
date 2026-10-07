@@ -47,8 +47,8 @@ branches; a selected expression producer can still be such a target.
 Immutable numeric and boolean SSA constants use a separate rematerialization plan,
 so repeated uses and intervening effects do not force a C local. Selection requires
 one explicit definition outside argument and synthetic storage, with every use
-dominated by that definition in the ordinary control-flow graph. Handler and
-resumable functions conservatively retain their constants. Scalar region inputs
+dominated by that definition in the logical control-flow graph, including snapshot
+saves. Handler-bearing functions conservatively retain their constants. Scalar region inputs
 can be read early; overlays may only write explicit outputs or boxed materialization
 storage. Constants preserve their declared C representation, including int32 casts
 and negative zero. Profiling retains their producer sites. The artifact stores and
@@ -69,9 +69,9 @@ selects a normal branch on its path because exceptional transfers cannot poll.
 The VM retains its physical backward-branch polling
 contract and corresponding root maps.
 
-Native layout places one-owner unconditional edge-copy blocks beside their
-predecessors, preserving the relative order of Core blocks required by current
-region contracts. Block references relocate before specialization and GC lowering;
+Native layout follows default-successor traces through functions without selected
+region or field-call contracts. Where those contracts require Core order, it only
+places one-owner unconditional edge-copy blocks beside their predecessors. Block references relocate before specialization and GC lowering;
 instruction identities and cycle-safe copy schedules survive that permutation.
 Explicit per-block source attribution prevents moved copies from inheriting an
 unrelated source position. The target keeps its explicit jumps and exception ranges;
@@ -91,8 +91,8 @@ typed entry after move representation propagation. The semantic body and GC maps
 retain those checks; rendering omits only their C statements while preserving
 labels, source/profile events, and conservative deferred-root bookkeeping. Artifacts
 persist and validate the selected IPs against each entry's final representations.
-Resumable, handler, selected-region, field-call, and switch functions retain their
-checks until plan composition covers their opaque uses.
+Handler, selected-region, field-call, and switch functions retain their checks until
+plan composition covers their opaque uses.
 
 Static numeric property pair, triple, and quad projections are selected per native
 entry before scalar and root storage. Their plans retain instruction and cache
@@ -133,6 +133,13 @@ cache sites, borrowed values, and two claimed instructions are selected before
 storage planning. Rendering consumes the pair admission and preserves a separate
 original-instruction fallback at each load, including its source and profile event.
 
+Direct activation-local stack objects with existing materialization:none certificates
+can store several fields in independent number, int32, and boolean locals. Every field
+must retain its initial representation at all certified accesses; boxed, inherited,
+materializing, or changing fields keep whole-object boxed storage. The persisted plan
+is selected and validated independently for each entry. The embedded header retains
+identity with a null field-storage pointer, so this layout cannot escape the certificate.
+
 Resumable functions keep per-value representations in C locals. Each invocation
 publishes an active root array for traced locals and the coroutine itself. A separate
 boxed activation buffer holds the largest individual suspension snapshot, plus
@@ -142,6 +149,14 @@ string spills come exclusively from trusted outgoing root obligations: conservat
 handler edges can name stale heap bits, and Core also retains scalar-replaced boxed
 occupants beyond their last executable read. Arguments and captured environments
 keep their existing ownership contracts.
+
+Unprotected resumables also compose scalar expressions, constant rematerialization,
+TDZ omission, and initialization plans. Suspension saves are explicit planning reads;
+resume entries cut straight-line windows. Saved locals and mailbox destinations cannot
+be expression macros. Admitted immutable constants need no snapshot slot, and validation
+derives the expected snapshot from the stored safe subset of rematerialized producers.
+Retaining a producer therefore also retains its required spill. Handler-bearing bodies
+retain conservative scalar motion.
 
 The frame records the compact slot count and suspended source position independently
 of bytecode. GC and SATB use its explicit ownership tag and compact count, rather than

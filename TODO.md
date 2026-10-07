@@ -91,13 +91,18 @@ until the consumer admits real sites and measurements establish a benefit.
 The independent target boundary and current storage contract are recorded in
 [native SSA lowering](docs/decisions/native-ssa-lowering.md).
 
-- [ ] Extend native control-flow layout beyond threading unconditional edge copies
-      into general block scheduling while preserving region and exceptional-edge
-      value transport contracts.
+- [x] Schedule default-successor traces for native functions without selected region
+      or field-call contracts; preserve source positions, handler transport, and polls.
+- [ ] Extend native scheduling to selected regions whose certificates currently
+      depend on Core block order.
 - [x] Persist live suspension values in compact boxed slots with per-site save and
       restore maps; keep scalar computation in typed C locals. Cover queued
       async-generator resumes, throwing await resolution, eval splices, and
       concurrent-GC ownership transitions.
+- [x] Reuse suspension slots per site and compose scalar expressions, constants,
+      TDZ omission, and initialization in unprotected resumables.
+- [x] Persist multi-field typed stack storage for direct activation-local objects
+      with existing non-materializing certificates and stable scalar fields.
 - [ ] Extend selected typed call/aggregate transport and expression regions using
       Core proofs, with bounded code-size decisions and matched runtime evidence.
       Move remaining emission-local selection into explicit native plans before

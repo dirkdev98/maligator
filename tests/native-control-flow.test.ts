@@ -45,7 +45,7 @@ describe("native block layout", () => {
 				],
 			},
 		];
-		expect(layoutNativeBlocks(blocks, 3)).toEqual([0, 3, 1, 5, 2, 4]);
+		expect(layoutNativeBlocks(blocks, 3, true)).toEqual([0, 3, 1, 5, 2, 4]);
 	});
 
 	it("leaves shared copies at the tail and keeps protected block markers intact", () => {
@@ -71,7 +71,23 @@ describe("native block layout", () => {
 				],
 			},
 		];
-		expect(layoutNativeBlocks(blocks, 3)).toEqual([0, 1, 2, 3]);
+		expect(layoutNativeBlocks(blocks, 3, true)).toEqual([0, 1, 2, 3]);
+	});
+
+	it("follows default traces through real blocks while leaving taken edges explicit", () => {
+		const blocks: CoreTargetFunction["blocks"] = [
+			{
+				instructions: [
+					{ type: "jumpIf", registers: [0], blocks: [1] },
+					{ type: "jump", blocks: [2] },
+				],
+			},
+			{ instructions: [{ type: "jump", blocks: [3] }] },
+			{ instructions: [{ type: "jump", blocks: [3] }] },
+			{ instructions: [{ type: "return", registers: [0] }] },
+		];
+		expect(layoutNativeBlocks(blocks, 4, false)).toEqual([0, 2, 3, 1]);
+		expect(layoutNativeBlocks(blocks, 4, true)).toEqual([0, 1, 2, 3]);
 	});
 
 	it("gives real native phi edges fallthrough while leaving VM layout alone", () => {

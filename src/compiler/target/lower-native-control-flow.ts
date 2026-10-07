@@ -3,7 +3,26 @@ import type { CoreTargetFunction } from "./core-target-ir.ts";
 export function layoutNativeBlocks(
 	blocks: CoreTargetFunction["blocks"],
 	coreBlockCount: number,
+	preserveCoreOrder: boolean,
 ): ReadonlyArray<number> {
+	if (!preserveCoreOrder) {
+		const order: Array<number> = [];
+		const placed = new Uint8Array(blocks.length);
+		for (let start = 0; start < blocks.length; start++) {
+			let block = start;
+			while (!placed[block]) {
+				order.push(block);
+				placed[block] = 1;
+				const last = blocks[block]!.instructions.findLast(
+					(instruction) =>
+						instruction.type !== "sourcePos" && instruction.type !== "tryEnd",
+				);
+				if (last?.type !== "jump") break;
+				block = last.blocks[0];
+			}
+		}
+		return order;
+	}
 	const predecessors = new Uint32Array(blocks.length);
 	for (const { instructions } of blocks)
 		for (const instruction of instructions)

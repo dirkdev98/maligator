@@ -92,6 +92,7 @@ export interface LowerCoreToCoreTargetOptions {
 	readonly layoutBlocks?: (
 		blocks: CoreTargetFunction["blocks"],
 		coreBlockCount: number,
+		preserveCoreOrder: boolean,
 	) => ReadonlyArray<number>;
 	readonly loopBackedgeInstructions?: typeof executionLoopBackedgeInstructions;
 	readonly excludeGuardedDirectCalls?: boolean;
@@ -2225,7 +2226,11 @@ function lowerFunctionToTarget(
 		if (handler !== undefined) instructions.push({ type: "tryEnd" });
 	}
 	if (layoutBlocks !== undefined) {
-		const order = layoutBlocks(blocks, blockOrder.length);
+		const order = layoutBlocks(
+			blocks,
+			blockOrder.length,
+			recipeRows.length > 0 || fieldCallPlans.length > 0,
+		);
 		if (
 			order.length !== blocks.length ||
 			order[0] !== 0 ||
