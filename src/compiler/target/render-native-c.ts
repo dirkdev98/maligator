@@ -700,15 +700,15 @@ function cInactiveRootMaskPublication(
 
 interface NativeRootPublication {
 	readonly privateCallResultIps: ReadonlySet<number>;
-	readonly entryStableMask: number;
-	readonly bits: ReadonlyMap<number, number>;
-	readonly slots: Map<number, number>;
+	readonly entryStableRegisters: ReadonlySet<number>;
+	readonly slots: ReadonlyMap<number, number>;
+	readonly slotRegisters: ReadonlyMap<number, ReadonlyArray<number>>;
 	readonly safepoints: ReadonlyMap<
 		number,
 		{
-			readonly incoming: number;
-			readonly outgoing: number;
-			readonly active: number;
+			readonly incoming: ReadonlySet<number>;
+			readonly outgoing: ReadonlySet<number>;
+			readonly active: ReadonlySet<number>;
 		}
 	>;
 }
@@ -720,20 +720,23 @@ function cPrivateRootPublication(
 	plan: NativeRootPublication | undefined,
 	ip: number,
 	edge: "incoming" | "outgoing",
-	knownPublished = 0,
+	knownPublished?: ReadonlyMap<number, number>,
 ): ReadonlyArray<string> {
 	const point = plan?.safepoints.get(ip);
 	if (plan === undefined || plan.slots.size === 0 || point === undefined)
 		return EMPTY_ROOT_PUBLICATION;
 	const live = edge === "incoming" ? point.incoming : point.outgoing;
-	const published = plan.entryStableMask | knownPublished;
 	let stores: Array<string> | undefined;
-	for (const [register, slot] of plan.slots) {
-		const liveBit = plan.bits.get(register)!;
-		if ((live & liveBit) !== 0) {
-			if ((published & liveBit) !== 0) continue;
+	for (const [slot, registers] of plan.slotRegisters) {
+		const register = registers.find((register) => live.has(register));
+		if (register !== undefined) {
+			if (
+				plan.entryStableRegisters.has(register) ||
+				knownPublished?.get(slot) === register
+			)
+				continue;
 			(stores ??= []).push(`__gc_slots[${slot}] = r${register};`);
-		} else if (slot >= 64 || (point.active & liveBit) !== 0) {
+		} else if (slot >= 64 || registers.some((register) => point.active.has(register))) {
 			// A dead private local can still contain a reclaimed pointer. In particular,
 			// an output-only root must stay empty until the helper returns its value.
 			(stores ??= []).push(`__gc_slots[${slot}] = MAL_VALUE_UNDEFINED;`);
@@ -813,28 +816,25 @@ function emitCompiledVariant(
 	const relocation = nativeRelocationExpressions(relocatable);
 
 	const valueRegs = [...storage.rootRegisters];
-	const slotOf = new Map(valueRegs.map((local, slot) => [local, slot]));
+	const slotOf = new Map(
+		valueRegs.map((local, index) => [local, storage.rootSlots[index]!]),
+	);
 	const privateCallResultIps = new Set(storage.privateCallResultIps);
 	const privateCandidates = new Set(storage.privateRegisters);
 	const privateSlots = new Map(
 		[...slotOf].filter(([register]) => privateCandidates.has(register)),
 	);
-	// Private-root selection bounds the publication mask to 32 registers.
-	if (privateSlots.size > 32)
-		throw new Error("Native private-root mask exceeds 32 registers");
-	const privateBits = new Map<number, number>();
-	for (const register of privateSlots.keys())
-		privateBits.set(register, 1 << privateBits.size);
-	const privateMask = (registers: Iterable<number>): number => {
-		let mask = 0;
-		for (const register of registers) mask |= privateBits.get(register) ?? 0;
-		return mask;
-	};
+	const slotRegisters = new Map<number, Array<number>>();
+	for (const [register, slot] of privateSlots) {
+		const registers = slotRegisters.get(slot) ?? [];
+		registers.push(register);
+		slotRegisters.set(slot, registers);
+	}
 	const rootPublication: NativeRootPublication = {
 		privateCallResultIps,
-		entryStableMask: privateMask(storage.entryStableRootRegisters),
-		bits: privateBits,
+		entryStableRegisters: new Set(storage.entryStableRootRegisters),
 		slots: privateSlots,
+		slotRegisters,
 		safepoints:
 			privateSlots.size === 0
 				? new Map()
@@ -842,14 +842,14 @@ function emitCompiledVariant(
 						nativeContract.gc.safepoints.map((point) => [
 							point.instructionIp,
 							{
-								incoming: privateMask(point.incomingRootRegisters),
-								outgoing: privateMask(point.outgoingRootRegisters),
-								active: privateMask(point.rootRegisters),
+								incoming: new Set(point.incomingRootRegisters),
+								outgoing: new Set(point.outgoingRootRegisters),
+								active: new Set(point.rootRegisters),
 							},
 						]),
 					),
 	};
-	const slotCount = valueRegs.length;
+	const slotCount = storage.rootSlotCount;
 	const inactiveRootMasks = nativeInactiveRootMasks(nativeContract.gc.safepoints, slotOf);
 	const rootMaskTails = nativeRootMaskTails(inactiveRootMasks.values());
 	const gcSafepointKinds = new Map(
@@ -1321,8 +1321,10 @@ function emitCompiledVariant(
 		if (expressionRegisters.has(i) || definitionInitialized.has(i)) continue;
 		lines.push(`    r${i} = ${zeroOf(reps[i]!)};`);
 	}
-	for (const register of privateRegisters) {
-		lines.push(`    __gc_slots[${slotOf.get(register)!}] = r${register};`);
+	for (const [slot, registers] of rootPublication.slotRegisters) {
+		lines.push(
+			`    __gc_slots[${slot}] = ${registers.length === 1 ? `r${registers[0]}` : "MAL_VALUE_UNDEFINED"};`,
+		);
 	}
 	if (fn.argumentSnapshotCount > 0) {
 		lines.push(
@@ -3430,11 +3432,10 @@ function emitBody(
 	let lastPublishedPos = -1;
 	let lastPublishedSite = -1;
 	let lastPublishedInactiveRootMask: bigint | undefined;
-	// Entry initialization copies every private value into its shadow slot.
-	let knownPublishedPrivateRoots = 0;
+	let knownPublishedPrivateRoots = new Map<number, number>();
 	if (rootPublication !== undefined) {
-		for (const register of rootPublication.slots.keys())
-			knownPublishedPrivateRoots |= rootPublication.bits.get(register)!;
+		for (const [slot, registers] of rootPublication.slotRegisters)
+			if (registers.length === 1) knownPublishedPrivateRoots.set(slot, registers[0]!);
 	}
 	const hasPrivateRoots = (rootPublication?.slots.size ?? 0) > 0;
 	if (coro !== null) invocationPreamble.push(...lines.splice(0));
@@ -3445,11 +3446,11 @@ function emitBody(
 			lastPublishedPos = -1;
 			lastPublishedSite = -1;
 			lastPublishedInactiveRootMask = undefined;
-			knownPublishedPrivateRoots = 0;
+			knownPublishedPrivateRoots = new Map();
 		}
 		const literalSwitch = switches.get(ip);
 		if (literalSwitch !== undefined) {
-			knownPublishedPrivateRoots = 0;
+			knownPublishedPrivateRoots = new Map();
 			const branch = (target: number, branchIp: number) => {
 				const mask = inactiveRootMasks.get(branchIp);
 				if (gcSafepointKinds.get(branchIp) !== "loop-backedge") return `goto L${target};`;
@@ -3624,18 +3625,25 @@ function emitBody(
 			!deferredIteratorRoots &&
 			!deferredCharCodeAtRoots &&
 			(effects.collection || effects.reentry);
-		let nextPublishedPrivateRoots = knownPublishedPrivateRoots;
+		const nextPublishedPrivateRoots = new Map(knownPublishedPrivateRoots);
 		if (rootPublication !== undefined && hasPrivateRoots) {
 			const point = rootPublication.safepoints.get(ip);
-			if (publishesIncomingRoots) nextPublishedPrivateRoots |= point?.incoming ?? 0;
+			if (publishesIncomingRoots && point !== undefined)
+				for (const [register, slot] of rootPublication.slots)
+					if (point.incoming.has(register)) nextPublishedPrivateRoots.set(slot, register);
 			// Refined GC maps identify possible shadow clearing on either edge.
 			if (point !== undefined)
-				nextPublishedPrivateRoots &= point.incoming & point.outgoing;
-			for (const register of vmInstructionWriteRegisters(fn.instructions[ip]!))
-				nextPublishedPrivateRoots &= ~(rootPublication.bits.get(register) ?? 0);
+				for (const [slot, register] of nextPublishedPrivateRoots)
+					if (!point.incoming.has(register) || !point.outgoing.has(register))
+						nextPublishedPrivateRoots.delete(slot);
+			for (const register of vmInstructionWriteRegisters(fn.instructions[ip]!)) {
+				const slot = rootPublication.slots.get(register);
+				if (slot !== undefined && nextPublishedPrivateRoots.get(slot) === register)
+					nextPublishedPrivateRoots.delete(slot);
+			}
 			// Polls read the shadow alias; the final reload establishes private equality.
 			for (const register of rootedOutputs)
-				nextPublishedPrivateRoots |= rootPublication.bits.get(register) ?? 0;
+				nextPublishedPrivateRoots.set(rootPublication.slots.get(register)!, register);
 		}
 		const outgoingRootPublication = cPrivateRootPublication(
 			rootPublication,

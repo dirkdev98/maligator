@@ -75,7 +75,7 @@ const PRIVATE_RESULT_OPCODES = new Set([
 ]);
 
 /**
- * Property receivers/results become private locals only when every definition
+ * Traced SSA values become private locals only when every definition
  * either assigns final values or has an explicit continuously rooted output
  * contract. Exact execution maps determine publication at collecting edges.
  * Unmodeled target-region intermediates keep continuously rooted storage.
@@ -87,7 +87,9 @@ export function nativePrivateRootRegisters(
 	privateCallResultIps = nativePrivateCallResultIps(fn, native),
 ): ReadonlySet<number> {
 	if (fn.isGenerator || fn.isAsync) return new Set();
-	const candidates = new Set<number>();
+	const candidates = new Set<number>(
+		native.storageValues === undefined ? [] : frameRegisters,
+	);
 	for (const [ip, instruction] of fn.instructions.entries()) {
 		if (
 			instruction.opcode === "LOAD_PROPERTY_STATIC" &&
@@ -198,12 +200,7 @@ export function nativePrivateRootRegisters(
 			}
 		}
 	}
-	// Bound native register pressure and slow-edge code size in large functions.
-	return nativeProfitablePrivateRootRegisters(
-		fn,
-		native,
-		new Set([...candidates].slice(0, 32)),
-	);
+	return nativeProfitablePrivateRootRegisters(fn, native, candidates);
 }
 
 /** Entry-published parameters need no recopy while their physical registers are unchanged. */

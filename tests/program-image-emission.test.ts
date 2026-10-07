@@ -19,7 +19,6 @@ import {
 	emitRelocatableNativeOverlayTranslationUnits,
 } from "../src/compiler/target/emit-program-image.ts";
 import {
-	vmRegionActions,
 	vmRegionLicense,
 	vmSemanticProtectorGuard,
 } from "../src/compiler/target/program-image.ts";
@@ -274,18 +273,10 @@ function withSpecializations(
 	functionIndex: number,
 	next: ProgramImage["native"]["functions"][number]["specializations"],
 ): ProgramImage {
-	const owner = definition.native.functions[functionIndex]!;
-	return {
-		...definition,
-		native: {
-			...definition.native,
-			functions: definition.native.functions.with(functionIndex, {
-				...owner,
-				specializations: next,
-				regionActions: vmRegionActions(next),
-			}),
-		},
-	};
+	return withNativeFunctionPlan(definition, functionIndex, (owner) => ({
+		...owner,
+		specializations: next,
+	}));
 }
 
 describe("emit-program-image instruction packing", () => {
@@ -2819,7 +2810,7 @@ describe("native update-expression representation", () => {
 		expect(output).not.toContain("MAL_UNARY_TO_NUMERIC");
 		expect(output).not.toContain("MAL_UNARY_INCREMENT");
 		expect(output).toMatch(
-			/if \(mal_gc_poll\) \{ MAL_ROOT_MASK\(0x[0-9a-f]+\); mal_gc_safepoint\(vm\); if \(mal_gc_poll_termination\(vm\)\) goto __throw_exit; \}/,
+			/if \(mal_gc_poll\) \{ (?:__gc_slots\[\d+\] = (?:r\d+|MAL_VALUE_UNDEFINED); )*MAL_ROOT_MASK\(0x[0-9a-f]+\); mal_gc_safepoint\(vm\); if \(mal_gc_poll_termination\(vm\)\) goto __throw_exit; \}/,
 		);
 	});
 
@@ -2974,12 +2965,14 @@ describe("native update-expression representation", () => {
 		expect(output).not.toContain("mal_vm_iterator_step_protocol_cursor(vm,");
 		expect(output).toContain("mal_vm_iterator_step(vm,");
 		const ownerOutput = emitCompiledFunction(owner, ownerIndex, "", false)!.source;
-		expect(ownerOutput).not.toContain("__private_r");
 		const step = owner.body.instructions[stepIp];
 		if (step?.opcode !== "ITERATOR_STEP") throw new Error("missing iterator step");
-		for (const register of [step.iterator, step.next, step.valueDst]) {
+		for (const register of [step.iterator, step.next])
 			expect(ownerOutput).toContain(`#define r${register} (__gc_slots[`);
-		}
+		expect(
+			owner.gc.safepoints.find((point) => point.instructionIp === stepIp)!
+				.outgoingRootRegisters,
+		).toContain(step.valueDst);
 		const cursorCall = ownerOutput.indexOf(
 			"mal_vm_iterator_try_dense_array_cursor_step(",
 		);
@@ -3441,10 +3434,10 @@ describe("native update-expression representation", () => {
 			/MAL_ROOT_MASK\([^)]+\);\n\s+static MalMath(?:Unary|Binary)Op/,
 		);
 		expect(output).toMatch(
-			/if \(mal_builtin_math_unary_fast[^\n]+\) \{[\s\S]*?\} else \{\n\s+(MAL_ROOT_MASK\(0x[\da-f]+\));\n\s+static MAL_ISOLATE_LOCAL MalCallCache[\s\S]*?\n\s+\}\n\s+if \(mal_gc_poll\) \{ \1; mal_gc_safepoint\(vm\); if \(mal_gc_poll_termination\(vm\)\) goto __throw_exit; \}/,
+			/if \(mal_builtin_math_unary_fast[^\n]+\) \{[\s\S]*?\} else \{\n\s+(MAL_ROOT_MASK\(0x[\da-f]+\));\n\s+static MAL_ISOLATE_LOCAL MalCallCache[\s\S]*?\n\s+\}\n\s+if \(mal_gc_poll\) \{ \1; mal_gc_safepoint\(vm\); if \(mal_gc_poll_termination\(vm\)\) (?:\{ (?:__private_r\d+ = __gc_slots\[\d+\]; )+)?goto __throw_exit; (?:\} )?\}/,
 		);
 		expect(output).toMatch(
-			/if \(mal_builtin_math_binary_fast[^\n]+\) \{[\s\S]*?\} else \{\n\s+(MAL_ROOT_MASK\(0x[\da-f]+\));\n\s+static MAL_ISOLATE_LOCAL MalCallCache[\s\S]*?\n\s+\}\n\s+if \(mal_gc_poll\) \{ \1; mal_gc_safepoint\(vm\); if \(mal_gc_poll_termination\(vm\)\) goto __throw_exit; \}/,
+			/if \(mal_builtin_math_binary_fast[^\n]+\) \{[\s\S]*?\} else \{\n\s+(MAL_ROOT_MASK\(0x[\da-f]+\));\n\s+static MAL_ISOLATE_LOCAL MalCallCache[\s\S]*?\n\s+\}\n\s+if \(mal_gc_poll\) \{ \1; mal_gc_safepoint\(vm\); if \(mal_gc_poll_termination\(vm\)\) (?:\{ (?:__private_r\d+ = __gc_slots\[\d+\]; )+)?goto __throw_exit; (?:\} )?\}/,
 		);
 
 		const lockedOutput = emitLocked(source);
@@ -4984,8 +4977,7 @@ describe("native update-expression representation", () => {
 			globalThis.read = read;
 		`);
 		const lines = output.split("\n");
-		const poll =
-			"if (mal_gc_poll) { mal_gc_safepoint(vm); if (mal_gc_poll_termination(vm)) goto __throw_exit; }";
+		const poll = /if \(mal_gc_poll\) \{[^\n]*mal_gc_safepoint\(vm\);/;
 		const constructLine = lines.findIndex((line) =>
 			line.includes("mal_vm_call_known_native"),
 		);
@@ -4993,12 +4985,12 @@ describe("native update-expression representation", () => {
 
 		expect(constructLine).toBeGreaterThanOrEqual(0);
 		expect(
-			lines.slice(constructLine + 1, constructLine + 5).map((line) => line.trim()),
-		).toContain(poll);
+			lines.slice(constructLine + 1, constructLine + 5).some((line) => poll.test(line)),
+		).toBe(true);
 		expect(getLine).toBeGreaterThanOrEqual(0);
-		expect(
-			lines.slice(getLine + 1, getLine + 4).map((line) => line.trim()),
-		).not.toContain(poll);
+		expect(lines.slice(getLine + 1, getLine + 4).some((line) => poll.test(line))).toBe(
+			false,
+		);
 	});
 });
 

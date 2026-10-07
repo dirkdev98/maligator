@@ -12,6 +12,8 @@ import {
 	nativePrivateCallResultIps,
 	nativePrivateRootRegisters,
 } from "./lower-native-root-publication.ts";
+import { selectNativeRootStorage } from "./lower-native-roots.ts";
+import type { NativeRootStoragePlan } from "./lower-native-roots.ts";
 import {
 	compactNativeSuspension,
 	lowerNativeSuspension,
@@ -44,7 +46,8 @@ export interface NativeNumericLeafPlan extends NativeScalarStoragePlan {
 	readonly fallthroughJumpIps: ReadonlyArray<number>;
 }
 
-export interface NativeStoragePlan extends NativeScalarStoragePlan {
+export interface NativeStoragePlan
+	extends NativeScalarStoragePlan, NativeRootStoragePlan {
 	readonly suspension: NativeSuspensionPlan | undefined;
 	readonly stackObjects: ReadonlyArray<NativeStackObjectStoragePlan>;
 	readonly propertyProjections: ReadonlyArray<NativePropertyProjectionPlan>;
@@ -591,6 +594,7 @@ function lowerStorage(
 		),
 		stackObjects: selectNativeStackObjectStorage(native),
 		rootRegisters: roots,
+		...selectNativeRootStorage(native, roots, privateLocals, calls),
 		privateRegisters: roots.filter((local) => privateLocals.has(local)),
 		privateCallResultIps: [...calls],
 		entryStableRootRegisters: [...nativeEntryStableRootRegisters(fn, privateLocals)],
@@ -767,6 +771,7 @@ export function validateNativeStorage(native: NativeFunctionPlan): void {
 		return (
 			stored !== undefined &&
 			selected !== undefined &&
+			stored.rootSlotCount === selected.rootSlotCount &&
 			sameScalar(stored, selected) &&
 			stored.stackObjects.length === selected.stackObjects.length &&
 			stored.stackObjects.every(
@@ -820,6 +825,7 @@ export function validateNativeStorage(native: NativeFunctionPlan): void {
 			(
 				[
 					"rootRegisters",
+					"rootSlots",
 					"privateRegisters",
 					"privateCallResultIps",
 					"entryStableRootRegisters",

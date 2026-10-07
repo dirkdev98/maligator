@@ -17,8 +17,14 @@ sites, test batch relocation, and compiler artifacts preserve both bodies.
 
 Native storage planning precedes C rendering. It chooses root slot order, private
 boxed locals and their publication obligations, stable incoming roots, and bounded
-single-use scalar expressions separately for canonical and typed entries. Root
-slots differ from computational locals, and expression values have no local
+single-use scalar expressions separately for canonical and typed entries. Direct
+SSA bodies persist a logical-root-to-physical-slot map. Audited private locals
+share slots only when their complete incoming/outgoing safepoint unions do not
+overlap; parameters, argument snapshots, continuously rooted locals, and helper
+output addresses retain dedicated slots. Publication tracks each slot's current
+occupant and forgets potentially cleared values at GC and control-flow boundaries.
+Shared slots initialize once before entry allocations; resumable invocation roots
+retain dedicated storage. Root slots differ from computational locals, and expression values have no local
 assignment. Safepoint masks cover the entire native root set using an inline word
 and immutable tail words; uncovered runtime-owned slots remain active. Small-mask
 publication clears any previous tail. Entire inactive words are cleared together;

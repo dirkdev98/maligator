@@ -1,8 +1,5 @@
 import { beforeAll, describe, expect, it } from "vitest";
-import {
-	nativePrivateCallResultIps,
-	nativePrivateRootRegisters,
-} from "../../src/compiler/target/lower-native-root-publication.ts";
+import { nativePrivateCallResultIps } from "../../src/compiler/target/lower-native-root-publication.ts";
 import { emitCompiledFunction } from "../../src/compiler/target/render-native-c.ts";
 import {
 	assertExactLines,
@@ -177,6 +174,7 @@ describe("native static-property root-mask publication", () => {
 			source: string;
 			retainedRegisters: Array<number>;
 			privateRegisters: ReadonlySet<number>;
+			rootSlots: ReadonlyMap<number, number>;
 			selectedPrivateCallIps: ReadonlySet<number>;
 			boundaryIncomingRoots: Array<ReadonlyArray<number>>;
 			indexedReceivers: Array<{
@@ -264,10 +262,13 @@ describe("native static-property root-mask publication", () => {
 					);
 				}
 			}
-			const frameRegisters = new Set(
-				native.gc.safepoints.flatMap((safepoint) => safepoint.rootRegisters),
+			const privateRegisters = new Set(native.storage!.privateRegisters);
+			const rootSlots = new Map(
+				native.storage!.rootRegisters.map((register, index) => [
+					register,
+					native.storage!.rootSlots[index]!,
+				]),
 			);
-			const privateRegisters = nativePrivateRootRegisters(fn, native, frameRegisters);
 			if ("distinctClosureDefinition" in kernel) {
 				const closure = fn.instructions.find((op) => op.opcode === "CREATE_FUNCTION");
 				const loadIp = fn.instructions.findIndex((op) => op.opcode === "LOAD_PROPERTY");
@@ -331,6 +332,7 @@ describe("native static-property root-mask publication", () => {
 				source: emitCompiledFunction(native, index, "", false)?.source ?? "",
 				retainedRegisters,
 				privateRegisters,
+				rootSlots,
 				selectedPrivateCallIps: nativePrivateCallResultIps(fn, native),
 				boundaryIncomingRoots: boundarySafepoints.map(
 					(safepoint) => safepoint.incomingRootRegisters ?? [],
@@ -371,18 +373,16 @@ describe("native static-property root-mask publication", () => {
 	}, 600_000);
 
 	it.each(publicationKernels.filter((kernel) => "rootedOnlyCursor" in kernel))(
-		"publishes collecting cursor fallbacks and loop roots without private slots in $name",
+		"publishes collecting cursor fallbacks and retains dedicated protocol storage in $name",
 		({ name, probe }) => {
 			const contract = publicationContracts.get(name)!;
 			const cursor = rootedCursorContracts.get(name)!;
-			expect(contract.privateRegisters.size).toBe(0);
-			expect(contract.source).not.toContain("__private_r");
 			expect(contract.boundaryIncomingRoots).toHaveLength(1);
 			for (const register of [cursor.retained, cursor.iterator, cursor.next]) {
 				expect(contract.boundaryIncomingRoots[0]).toContain(register);
 				expect(cursor.loopRoots).toContain(register);
 			}
-			for (const register of [cursor.iterator, cursor.next, cursor.value]) {
+			for (const register of [cursor.iterator, cursor.next]) {
 				expect(contract.source).toContain(`#define r${register} (__gc_slots[`);
 			}
 			const probeOffset = contract.source.indexOf(`${probe}(`);
@@ -399,14 +399,16 @@ describe("native static-property root-mask publication", () => {
 			expect(publication).not.toBeNull();
 			const inactive = BigInt(publication![1]!);
 			for (const register of contract.boundaryIncomingRoots[0]!) {
-				const binding = contract.source.match(
-					new RegExp(`#define r${register} \\(__gc_slots\\[(\\d+)\\]\\)`),
-				);
-				expect(binding).not.toBeNull();
-				expect(inactive & (1n << BigInt(binding![1]!))).toBe(0n);
+				const slot = contract.rootSlots.get(register);
+				expect(slot).toBeDefined();
+				expect(inactive & (1n << BigInt(slot!))).toBe(0n);
+				if (contract.privateRegisters.has(register))
+					expect(contract.source.slice(probeOffset, fallback)).toContain(
+						`__gc_slots[${slot}] = r${register};`,
+					);
 			}
 			expect(contract.source).toMatch(
-				/if \(mal_gc_poll\) \{ MAL_ROOT_MASK\(0x[0-9a-f]+\); mal_gc_safepoint\(vm\);/,
+				/if \(mal_gc_poll\) \{ (?:__gc_slots\[\d+\] = (?:r\d+|MAL_VALUE_UNDEFINED); )*MAL_ROOT_MASK\(0x[0-9a-f]+\); mal_gc_safepoint\(vm\);/,
 			);
 		},
 	);

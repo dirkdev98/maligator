@@ -68,7 +68,7 @@ import type {
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal artifacts are hard cut-overs: stale cache entries rebuild.
-export const COMPILER_ARTIFACT_VERSION = 118;
+export const COMPILER_ARTIFACT_VERSION = 119;
 
 function validateClosureCaptureOwners(
 	owners: ReadonlyArray<number>,
@@ -671,8 +671,10 @@ export function serializeCompilerArtifact(
 function writeNativeStorage(w: Writer, storage: NativeStoragePlan | undefined): void {
 	if (storage === undefined)
 		throw new Error("Compiler artifact requires native storage plans");
+	w.u32(storage.rootSlotCount);
 	for (const values of [
 		storage.rootRegisters,
+		storage.rootSlots,
 		storage.privateRegisters,
 		storage.privateCallResultIps,
 		storage.entryStableRootRegisters,
@@ -788,7 +790,9 @@ function writeNativeStorage(w: Writer, storage: NativeStoragePlan | undefined): 
 
 function readNativeStorage(r: Reader): NativeStoragePlan {
 	const storage = {
+		rootSlotCount: r.u32(),
 		rootRegisters: r.i32Array(),
+		rootSlots: r.i32Array(),
 		privateRegisters: r.i32Array(),
 		privateCallResultIps: r.i32Array(),
 		entryStableRootRegisters: r.i32Array(),

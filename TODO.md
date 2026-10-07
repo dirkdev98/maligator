@@ -91,6 +91,10 @@ until the consumer admits real sites and measurements establish a benefit.
 The independent target boundary and current storage contract are recorded in
 [native SSA lowering](docs/decisions/native-ssa-lowering.md).
 
+- [x] Persist compact physical shadow-root slots for audited direct SSA locals;
+      preserve dedicated entry, borrowed, and helper-output storage and publish
+      the current physical-slot occupant on collecting edges.
+
 - [x] Schedule default-successor traces for native functions without selected region
       or field-call contracts; preserve source positions, handler transport, and polls.
 - [ ] Extend native scheduling to selected regions whose certificates currently
