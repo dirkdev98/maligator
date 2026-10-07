@@ -9,6 +9,7 @@ import {
 	deserializeCompilerArtifact,
 } from "../src/compiler/target/compiler-artifact-codec.ts";
 import { Writer } from "../src/compiler/target/program-image-codec.ts";
+import { vmExceptionHandlerTargets } from "../src/compiler/target/runtime-image.ts";
 import { inspectStaticValueFunction, staticValueCases } from "./helpers/static-values.ts";
 
 describe("primitive constructor parameter conversion", () => {
@@ -941,9 +942,22 @@ describe("rejected primitive construction profiles", () => {
 					if (profile === "suspension") expect(output.structure.genericCalls).toBe(2);
 					if (profile === "separate-errors")
 						expect(output.structure.genericCalls).toBe(2);
+					const protectedAllocations =
+						profile === "loop" ? 1 : profile === "separate-errors" ? 2 : 0;
 					expect(output.structure.allocations).toBe(
-						profile === "escaped-argument" ? 1 : 0,
+						profile === "escaped-argument" ? 1 : protectedAllocations,
 					);
+					if (protectedAllocations > 0) {
+						const targets = vmExceptionHandlerTargets(
+							output.fn.instructions.length,
+							output.fn.handlers,
+						);
+						const allocations = output.fn.instructions.flatMap((instruction, ip) =>
+							instruction.opcode === "CREATE_OBJECT_SHAPED" ? [ip] : [],
+						);
+						expect(allocations).toHaveLength(protectedAllocations);
+						for (const ip of allocations) expect(targets[ip]).toBeDefined();
+					}
 					const mutable = inspectMutable();
 					expect(
 						mutable.core.some((operation) => operation.opcode === "builtinError"),

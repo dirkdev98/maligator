@@ -9,6 +9,7 @@ import {
 	readRuntimeImage,
 	readRuntimeFunction,
 } from "../src/compiler/target/program-image-codec.ts";
+import type { Reader } from "../src/compiler/target/program-image-codec.ts";
 import type { NativeDirectEntryPlan } from "../src/compiler/target/program-image.ts";
 import type { BytecodeFunction } from "../src/compiler/target/runtime-image.ts";
 import { mergeProgramImages } from "../src/test262/program-image-merge.ts";
@@ -109,6 +110,15 @@ function callGraphImage() {
 	}));
 }
 
+function skipStorageWithoutFastPaths(reader: Reader): void {
+	reader.u32();
+	for (let index = 0; index < 9; index++) reader.i32Array();
+	expect(reader.u8()).toBe(0);
+	for (let index = 0; index < 5; index++) expect(reader.u32()).toBe(0);
+	for (let index = 0; index < 3; index++) expect(reader.u8()).toBe(0);
+	expect(reader.u32()).toBe(0);
+}
+
 function firstOverrideOffset(bytes: Uint8Array): number {
 	const { reader } = readRuntimeImage(
 		bytes,
@@ -122,11 +132,7 @@ function firstOverrideOffset(bytes: Uint8Array): number {
 	expect(reader.u8()).toBe(0); // Unknown closure layout.
 	expect(reader.u8()).toBe(0); // No immutable value captures.
 	reader.i32Array();
-	for (let index = 0; index < 8; index++) reader.i32Array();
-	expect(reader.u8()).toBe(0);
-	for (let index = 0; index < 4; index++) expect(reader.u32()).toBe(0);
-	expect(reader.u8()).toBe(0);
-	expect(reader.u32()).toBe(0);
+	skipStorageWithoutFastPaths(reader);
 	const safepointCount = reader.u32();
 	for (let index = 0; index < safepointCount; index++) {
 		reader.u8();
@@ -141,11 +147,7 @@ function firstOverrideOffset(bytes: Uint8Array): number {
 	expect(reader.u32()).toBe(0); // Field calls.
 	expect(reader.u8()).toBe(0); // Canonical body retained.
 	expect(reader.u32()).toBe(1); // Direct entries.
-	for (let index = 0; index < 8; index++) reader.i32Array();
-	expect(reader.u8()).toBe(0);
-	for (let index = 0; index < 4; index++) expect(reader.u32()).toBe(0);
-	expect(reader.u8()).toBe(0);
-	expect(reader.u32()).toBe(0);
+	skipStorageWithoutFastPaths(reader);
 	expect(reader.u32()).toBe(0); // Entry identity.
 	reader.u8(); // Result representation.
 	expect(reader.u32()).toBe(1); // Parameter count.

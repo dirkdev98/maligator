@@ -459,7 +459,7 @@ describe("Core memory and escape parity", () => {
 		expect(operationCount(fn, "storePropertyStatic")).toBe(0);
 	});
 
-	it("prunes a handler after scalar replacement removes the last throwing access", () => {
+	it("retains allocation error handling after forwarding the only property read", () => {
 		const program = new CoreProgram(coreOpcodeRegistry, {
 			stringConstants: [[0x66]],
 		});
@@ -482,8 +482,19 @@ describe("Core memory and escape parity", () => {
 		const finished = builder.finish(entry);
 
 		const fn = optimize(program).function(finished.function);
-		expect([...fn.blockIds()]).toHaveLength(1);
-		expect(inspectCoreBlockHandler(fn, [...fn.blockIds()][0]!)).toBeUndefined();
+		const allocations = coreOperations(fn).filter(
+			(instruction) => instruction.opcode === "createObjectShaped",
+		);
+		expect(allocations).toHaveLength(1);
+		const retainedHandler = inspectCoreBlockHandler(fn, allocations[0]!.block);
+		expect(retainedHandler).toBeDefined();
+		expect(retainedHandler!.block).toBe(handler);
+		expect(
+			inspectCoreTerminatorPayload(fn, fn.blockTerminator(retainedHandler!.block)),
+		).toEqual({
+			kind: "throw",
+			value: inspectCoreBlockParameters(fn, retainedHandler!.block)[0]!.value,
+		});
 		expect(operationCount(fn, "loadPropertyStatic")).toBe(0);
 	});
 
