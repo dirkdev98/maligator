@@ -116,21 +116,13 @@ function selectNumericLeaf(
 					entry.fieldParameters?.loads.some((load) => load.instructionIp === ip) === true
 				);
 			case "BINARY":
-				return (
-					numeric(op.left) &&
-					numeric(op.right) &&
-					((reps[op.dst] === "boolean" && NATIVE_COMPARE[op.operator] !== undefined) ||
-						(reps[op.dst] === "number" &&
-							(NATIVE_ARITH[op.operator] !== undefined ||
-								NATIVE_BITWISE[op.operator] !== undefined ||
-								op.operator === ">>>" ||
-								op.operator === "%")))
-				);
 			case "UNARY":
+			case "MATH_UNARY_NUMBER":
+			case "MATH_BINARY_NUMBER":
 				return (
-					numeric(op.src) &&
-					reps[op.dst] === "number" &&
-					["+", "-", "tonumeric"].includes(op.operator)
+					vmInstructionReadRegisters(op).every(
+						(local) => numeric(local) || reps[local] === "boolean",
+					) && pureScalarOperation(op, reps)
 				);
 			case "RETURN":
 				return numeric(op.value);
@@ -378,17 +370,41 @@ function pureScalarOperation(
 			);
 		case "UNARY":
 			return (
-				numericInput(op.src, 0) &&
-				reps[op.dst] === "number" &&
-				["+", "-", "tonumeric"].includes(op.operator)
+				(op.operator === "!" &&
+					reps[op.dst] === "boolean" &&
+					(reps[op.src] === "boolean" || numericInput(op.src, 0))) ||
+				(numericInput(op.src, 0) &&
+					((reps[op.dst] === "number" &&
+						["+", "-", "tonumeric", "~"].includes(op.operator)) ||
+						(reps[op.dst] === "int32" && op.operator === "~")))
 			);
 		case "BINARY":
+			if (
+				reps[op.dst] === "boolean" &&
+				reps[op.left] === "boolean" &&
+				reps[op.right] === "boolean"
+			)
+				return ["===", "!=="].includes(op.operator);
 			return (
 				numericInput(op.left, 0) &&
 				numericInput(op.right, 1) &&
-				((reps[op.dst] === "number" && ["+", "-", "*", "/"].includes(op.operator)) ||
-					(reps[op.dst] === "boolean" &&
-						["<", "<=", ">", ">=", "===", "!=="].includes(op.operator)))
+				((reps[op.dst] === "number" &&
+					(NATIVE_ARITH[op.operator] !== undefined ||
+						NATIVE_BITWISE[op.operator] !== undefined ||
+						["%", ">>>"].includes(op.operator))) ||
+					(reps[op.dst] === "int32" && NATIVE_BITWISE[op.operator] !== undefined) ||
+					(reps[op.dst] === "boolean" && NATIVE_COMPARE[op.operator] !== undefined))
+			);
+		case "MATH_UNARY_NUMBER":
+			return (
+				reps[op.dst] === "number" && ["number", "int32", "boxed"].includes(reps[op.src]!)
+			);
+		case "MATH_BINARY_NUMBER":
+			return (
+				reps[op.dst] === "number" &&
+				[op.left, op.right].every((local) =>
+					["number", "int32", "boxed"].includes(reps[local]!),
+				)
 			);
 		default:
 			return false;

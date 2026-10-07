@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
+import { resolveBuildConfig } from "../src/build-config.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
 import { compileSemanticProgramToProgramImage } from "../src/compiler/pipeline/compile-core.ts";
+import { compilerProgramFactsFromConfig } from "../src/compiler/shared/compiler-facts.ts";
 import {
 	deserializeCompilerArtifact,
 	serializeCompilerArtifact,
@@ -137,5 +139,42 @@ describe("native scalar plans around opaque and exceptional windows", () => {
 			}),
 		).toThrow(/invalid or stale storage plan/);
 		expect(deserializeCompilerArtifact(serializeCompilerArtifact(image))).toEqual(image);
+	});
+});
+
+describe("existing-proof scalar expression consumers", () => {
+	it.each([
+		["return ((a % b) & 255) + 1;", "%"],
+		["return !((a < b) === (a !== b));", "==="],
+		["return Math.round(Math.min(a * b, b % 7));", "Math.min"],
+	] as const)("folds a bounded scalar chain: %s", (body, operation) => {
+		const image = compileSemanticProgramToProgramImage(
+			analyzeSourceAndRunSemanticAnalysis(
+				`globalThis.fold = function fold(left, right) { const a=+left; const b=+right; ${body} };`,
+				"/scalar-proof-chain.js",
+			),
+			{ facts: compilerProgramFactsFromConfig(resolveBuildConfig({})) },
+		);
+		const native = image.native.functions[1]!;
+		const producerIp = native.body.instructions.findIndex(
+			(op) =>
+				(op.opcode === "BINARY" && op.operator === operation) ||
+				(op.opcode === "MATH_BINARY_NUMBER" && op.operation === operation),
+		);
+		expect(producerIp).toBeGreaterThanOrEqual(0);
+		expect(native.storage!.expressionIps).toContain(producerIp);
+		const restored = deserializeCompilerArtifact(serializeCompilerArtifact(image));
+		expect(restored.native.functions[1]!.storage).toEqual(native.storage);
+		const source = emitCompiledFunction(
+			restored.native.functions[1]!,
+			1,
+			"",
+			false,
+		)!.source;
+		if (operation === "Math.min") {
+			expect(source).toContain("mal_number_round(");
+			expect(source).toContain("mal_number_min_max(");
+			expect(source.match(/mal_number_remainder\(/g)).toHaveLength(1);
+		}
 	});
 });

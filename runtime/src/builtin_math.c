@@ -58,7 +58,7 @@ MAL_BUILTIN_MATH_UNARY(ceil, ceil(x))
 MAL_BUILTIN_MATH_UNARY(trunc, trunc(x))
 MAL_BUILTIN_MATH_UNARY(sqrt, sqrt(x))
 MAL_BUILTIN_MATH_UNARY(cbrt, cbrt(x))
-MAL_BUILTIN_MATH_UNARY(sign, isnan(x) ? NAN : (x > 0 ? 1 : (x < 0 ? -1 : x)))
+MAL_BUILTIN_MATH_UNARY(sign, mal_number_sign(x))
 MAL_BUILTIN_MATH_UNARY(log, log(x))
 MAL_BUILTIN_MATH_UNARY(log2, log2(x))
 MAL_BUILTIN_MATH_UNARY(log10, log10(x))
@@ -87,14 +87,7 @@ static MalValue mal_builtin_math_round(
 );
 
 static MalValue mal_builtin_math_round_number(f64 x) {
-    if (!isfinite(x) || x == 0.0 || fabs(x) >= 4503599627370496.0 /* 2^52 */) {
-        return mal_ops_number_value(x);
-    }
-    if (x < 0.0 && x >= -0.5) {
-        return mal_value_from_f64(-0.0);
-    }
-    f64 lower = floor(x);
-    return mal_ops_number_value(x - lower < 0.5 ? lower : lower + 1.0);
+    return mal_ops_number_value(mal_number_round(x));
 }
 
 f64 mal_builtin_math_unary_number_known(MalMathUnaryOp operation, f64 x) {
@@ -105,7 +98,7 @@ f64 mal_builtin_math_unary_number_known(MalMathUnaryOp operation, f64 x) {
         case MAL_MATH_UNARY_TRUNC: return trunc(x);
         case MAL_MATH_UNARY_SQRT: return sqrt(x);
         case MAL_MATH_UNARY_CBRT: return cbrt(x);
-        case MAL_MATH_UNARY_SIGN: return isnan(x) ? NAN : (x > 0 ? 1 : (x < 0 ? -1 : x));
+        case MAL_MATH_UNARY_SIGN: return mal_number_sign(x);
         case MAL_MATH_UNARY_LOG: return log(x);
         case MAL_MATH_UNARY_LOG2: return log2(x);
         case MAL_MATH_UNARY_LOG10: return log10(x);
@@ -126,7 +119,7 @@ f64 mal_builtin_math_unary_number_known(MalMathUnaryOp operation, f64 x) {
         case MAL_MATH_UNARY_EXPM1: return expm1(x);
         case MAL_MATH_UNARY_FROUND: return (f64) (float) x;
         case MAL_MATH_UNARY_ROUND:
-            return mal_ops_number_as_f64(mal_builtin_math_round_number(x));
+            return mal_number_round(x);
         case MAL_MATH_UNARY_NONE: return NAN;
     }
     return NAN;
@@ -156,7 +149,7 @@ bool mal_builtin_math_unary_fast(
         MAL_MATH_UNARY_CASE(TRUNC, trunc, trunc(x))
         MAL_MATH_UNARY_CASE(SQRT, sqrt, sqrt(x))
         MAL_MATH_UNARY_CASE(CBRT, cbrt, cbrt(x))
-        MAL_MATH_UNARY_CASE(SIGN, sign, isnan(x) ? NAN : (x > 0 ? 1 : (x < 0 ? -1 : x)))
+        MAL_MATH_UNARY_CASE(SIGN, sign, mal_number_sign(x))
         MAL_MATH_UNARY_CASE(LOG, log, log(x))
         MAL_MATH_UNARY_CASE(LOG2, log2, log2(x))
         MAL_MATH_UNARY_CASE(LOG10, log10, log10(x))
@@ -198,7 +191,7 @@ bool mal_builtin_math_unary_fast(
     MAL_MATH_UNARY_RESOLVE(TRUNC, trunc, trunc(x))
     MAL_MATH_UNARY_RESOLVE(SQRT, sqrt, sqrt(x))
     MAL_MATH_UNARY_RESOLVE(CBRT, cbrt, cbrt(x))
-    MAL_MATH_UNARY_RESOLVE(SIGN, sign, isnan(x) ? NAN : (x > 0 ? 1 : (x < 0 ? -1 : x)))
+    MAL_MATH_UNARY_RESOLVE(SIGN, sign, mal_number_sign(x))
     MAL_MATH_UNARY_RESOLVE(LOG, log, log(x))
     MAL_MATH_UNARY_RESOLVE(LOG2, log2, log2(x))
     MAL_MATH_UNARY_RESOLVE(LOG10, log10, log10(x))
@@ -402,12 +395,7 @@ static MalValue mal_builtin_math_hypot(MalVm *vm, MalValue this_value, const Mal
 }
 
 static f64 mal_builtin_math_min_max_add(f64 result, f64 value, bool is_max) {
-    if (isnan(result) || isnan(value)) return NAN;
-    if (result == 0.0 && value == 0.0) {
-        bool negative = is_max ? signbit(result) && signbit(value) : signbit(result) || signbit(value);
-        return negative ? -0.0 : 0.0;
-    }
-    return is_max ? (value > result ? value : result) : (value < result ? value : result);
+    return mal_number_min_max(result, value, is_max);
 }
 
 f64 mal_builtin_math_min_max_numbers(const f64 *args, i32 arg_count, bool is_max) {
@@ -446,18 +434,12 @@ static MalValue mal_builtin_math_min_max_two(f64 left, f64 right, bool is_max) {
 }
 
 f64 mal_builtin_math_binary_number_known(MalMathBinaryOp operation, f64 left, f64 right) {
-    MalValue result;
     switch (operation) {
-        case MAL_MATH_BINARY_MIN:
-            result = mal_builtin_math_min_max_two(left, right, false);
-            break;
-        case MAL_MATH_BINARY_MAX:
-            result = mal_builtin_math_min_max_two(left, right, true);
-            break;
-        case MAL_MATH_BINARY_NONE:
-            return NAN;
+        case MAL_MATH_BINARY_MIN: return mal_number_min_max(left, right, false);
+        case MAL_MATH_BINARY_MAX: return mal_number_min_max(left, right, true);
+        case MAL_MATH_BINARY_NONE: return NAN;
     }
-    return mal_ops_number_as_f64(result);
+    return NAN;
 }
 
 bool mal_builtin_math_binary_fast(

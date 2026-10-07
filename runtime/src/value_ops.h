@@ -42,6 +42,32 @@ f64 mal_ops_number_clamp_relative(f64 number, f64 length);
 u64 mal_ops_number_to_uint_width(f64 number, u32 width);
 u32 mal_ops_number_to_uint32(f64 number);
 
+static inline bool mal_number_is_truthy(f64 value) {
+    return value != 0.0 && !isnan(value);
+}
+
+static inline f64 mal_number_sign(f64 value) {
+    return value > 0.0 ? 1.0 : (value < 0.0 ? -1.0 : value);
+}
+
+static inline f64 mal_number_round(f64 value) {
+    // Adding 0.5 first can round twice; preserve signed zero and integral large values.
+    if (!(fabs(value) < 0x1p52) || value == 0.0) return value;
+    if (value >= -0.5 && value < 0.0) return -0.0;
+    f64 lower = floor(value);
+    return value - lower < 0.5 ? lower : lower + 1.0;
+}
+
+static inline f64 mal_number_min_max(f64 left, f64 right, bool maximum) {
+    // C fmin/fmax can discard NaN and do not guarantee the required signed zero.
+    if (isnan(left) || isnan(right)) return NAN;
+    if (left == 0.0 && right == 0.0) {
+        bool negative = maximum ? signbit(left) && signbit(right) : signbit(left) || signbit(right);
+        return negative ? -0.0 : 0.0;
+    }
+    return maximum ? (left > right ? left : right) : (left < right ? left : right);
+}
+
 /**
  * Number::remainder (JS `%`). Semantically `fmod`, but libm `fmod` dominates any
  * modulo-heavy loop. A finite dividend smaller in magnitude than the divisor is

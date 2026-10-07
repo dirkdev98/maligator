@@ -286,3 +286,36 @@ function numericMath() {
 }
 exercise();
 console.log("round loop", numericMath());
+
+function scalarChains(left, right, shift) {
+	const a = +left,
+		b = +right;
+	return [
+		Math.round(Math.min(a * b, b % 7)),
+		((a % b) & 255) + ((a << shift) >>> 0),
+		!(a < b === (a !== b)),
+		Math.sign(Math.max(a, -0)),
+	];
+}
+for (const a of [
+	-2147483649,
+	-2147483648,
+	-5e-324,
+	-0,
+	0,
+	0.5,
+	2147483647,
+	2147483648,
+	NaN,
+	Infinity,
+	-Infinity,
+]) {
+	for (const shift of [0, 31, 32, -1]) {
+		console.log(
+			"round chain",
+			render(a),
+			shift,
+			scalarChains(a, 3, shift).map(render).join(","),
+		);
+	}
+}

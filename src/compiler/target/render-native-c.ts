@@ -306,12 +306,11 @@ function nativeMathUnaryExpr(operation: string, argument: string): string | null
 	if (nativeCall !== null) return `${nativeCall}(${argument})`;
 	switch (operation) {
 		case "Math.sign":
-			return `(${argument} > 0.0 ? 1.0 : (${argument} < 0.0 ? -1.0 : ${argument}))`;
+			return `mal_number_sign(${argument})`;
 		case "Math.fround":
 			return `(f64) (f32) ${argument}`;
 		case "Math.round":
-			// Adding 0.5 first can round twice; preserve signed zero and already-integral large values.
-			return `(${argument} == 0.0 || !(fabs(${argument}) < 0x1p52) ? ${argument} : (${argument} >= -0.5 && ${argument} < 0.0 ? -0.0 : (${argument} - floor(${argument}) < 0.5 ? floor(${argument}) : floor(${argument}) + 1.0)))`;
+			return `mal_number_round(${argument})`;
 		default:
 			return null;
 	}
@@ -394,11 +393,7 @@ function nativeMathBinaryExpr(
 	right: string,
 ): string | null {
 	if (!MATH_BINARY_OPERATIONS.has(operation)) return null;
-	const maximum = operation === "Math.max";
-	const compare = maximum ? ">" : "<";
-	const negativeZero = `signbit(${left}) ${maximum ? "&&" : "||"} signbit(${right})`;
-	// C fmin/fmax can discard a NaN operand and do not establish this signed-zero contract.
-	return `(isnan(${left}) || isnan(${right}) ? NAN : (${left} == 0.0 && ${right} == 0.0 ? (${negativeZero} ? -0.0 : 0.0) : (${left} ${compare} ${right} ? ${left} : ${right})))`;
+	return `mal_number_min_max(${left}, ${right}, ${operation === "Math.max"})`;
 }
 
 interface NativeCallCoverage {
@@ -1456,14 +1451,46 @@ function renderScalarExpression(
 		case "MOVE":
 			return `r${op.src}`;
 		case "UNARY":
+			if (op.operator === "!")
+				return reps[op.src] === "boolean"
+					? `!r${op.src}`
+					: `!mal_number_is_truthy(${number(op.src)})`;
+			if (op.operator === "~")
+				return reps[op.dst] === "int32"
+					? `~mal_ops_number_to_i32(${number(op.src)})`
+					: `(f64) (~mal_ops_number_to_i32(${number(op.src)}))`;
 			return `${op.operator === "-" ? "-" : ""}(${number(op.src)})`;
 		case "BINARY": {
+			const operand = (local: number) =>
+				reps[local] === "boolean" ? `r${local}` : number(local);
 			const expression =
 				reps[op.dst] === "boolean"
-					? `${number(op.left)} ${NATIVE_COMPARE[op.operator]} ${number(op.right)}`
-					: nativeNumberExpr(op.operator, number(op.left), number(op.right));
+					? `${operand(op.left)} ${NATIVE_COMPARE[op.operator]} ${operand(op.right)}`
+					: reps[op.dst] === "int32"
+						? nativeInt32Expr(
+								op.operator,
+								`mal_ops_number_to_i32(${number(op.left)})`,
+								`mal_ops_number_to_i32(${number(op.right)})`,
+							)
+						: nativeNumberExpr(op.operator, number(op.left), number(op.right));
 			if (expression === null)
 				throw new Error("Invalid lowered native scalar expression");
+			return expression;
+		}
+		case "MATH_UNARY_NUMBER": {
+			const expression = nativeMathUnaryExpr(op.operation, number(op.src));
+			if (expression === null)
+				throw new Error("Invalid lowered native unary Math expression");
+			return expression;
+		}
+		case "MATH_BINARY_NUMBER": {
+			const expression = nativeMathBinaryExpr(
+				op.operation,
+				number(op.left),
+				number(op.right),
+			);
+			if (expression === null)
+				throw new Error("Invalid lowered native binary Math expression");
 			return expression;
 		}
 		default:
@@ -1531,18 +1558,11 @@ function renderNumericLeafWorker(
 				line = `r${op.dst} = fp${field.field};`;
 				break;
 			}
-			case "BINARY": {
-				const expression =
-					reps[op.dst] === "boolean"
-						? `${number(op.left)} ${NATIVE_COMPARE[op.operator]} ${number(op.right)}`
-						: nativeNumberExpr(op.operator, number(op.left), number(op.right));
-				if (expression === null)
-					throw new Error("Invalid selected numeric leaf operator");
-				line = `r${op.dst} = ${expression};`;
-				break;
-			}
+			case "BINARY":
 			case "UNARY":
-				line = `r${op.dst} = ${op.operator === "-" ? "-" : ""}${number(op.src)};`;
+			case "MATH_UNARY_NUMBER":
+			case "MATH_BINARY_NUMBER":
+				line = `r${op.dst} = ${renderScalarExpression(op, reps)};`;
 				break;
 			case "RETURN":
 				line = `return ${number(op.value)};`;
