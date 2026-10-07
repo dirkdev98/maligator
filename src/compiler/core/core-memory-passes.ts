@@ -1,5 +1,9 @@
 import { CoreEditor } from "./core-editor.ts";
 import {
+	removeInstructionAndOwnedProof,
+	removeUnsharedProof,
+} from "./core-effect-proof-edits.ts";
+import {
 	CORE_FUNCTION_HAS_ALLOCATIONS,
 	CORE_FUNCTION_HAS_BRANCHES,
 	CORE_FUNCTION_HAS_MEMORY_ACCESSES,
@@ -58,7 +62,6 @@ import type {
 	CoreAttributeValue,
 	CoreBlockId,
 	CoreEdge,
-	CoreFactId,
 	CoreInstructionEffects,
 	CoreInstructionAttributes,
 	CoreInstructionId,
@@ -1434,30 +1437,6 @@ function effectsPermitRemoval(
 	return (
 		!effects.mayThrow && !effects.maySuspend && !effects.mayGc && !effects.callsUserCode
 	);
-}
-
-function removeInstructionAndOwnedProof(
-	editor: CoreEditor,
-	fn: CoreFunctionStore,
-	instruction: CoreInstructionId,
-): void {
-	const proof = fn.instructionEffectRefinement(instruction)?.proof;
-	editor.removeInstruction(instruction);
-	removeUnsharedProof(editor, fn, proof);
-}
-
-function removeUnsharedProof(
-	editor: CoreEditor,
-	fn: CoreFunctionStore,
-	proof: CoreFactId | undefined,
-): void {
-	if (proof === undefined || !fn.isFactLive(proof)) return;
-	const shared = [...fn.instructionIds()].some(
-		(candidate) =>
-			fn.instructionKind(candidate) === "operation" &&
-			fn.instructionEffectRefinement(candidate)?.proof === proof,
-	);
-	if (!shared) editor.removeFact(proof);
 }
 
 function hasShapedObjectStoreOpportunity(fn: CoreFunctionStore): boolean {

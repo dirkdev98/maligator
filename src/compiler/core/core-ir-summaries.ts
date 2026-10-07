@@ -255,6 +255,7 @@ function conditionalOwnSlotEffects(
 		fn.isAsync ||
 		fn.isGenerator ||
 		fn.handlerBlockCount > 0 ||
+		cfg.reachable.size > 256 ||
 		localTransfers.operationCount > 256
 	)
 		return undefined;
@@ -267,10 +268,12 @@ function conditionalOwnSlotEffects(
 		escape: "none" as ValueEscapeFact,
 		containment: "preserved" as ValueContainmentFact,
 	};
+	let remainingEscapeWork = 4_096;
 	const retain = (value: CoreValueId, escape: ValueEscapeFact): void => {
 		const pending = [value],
 			visited = new Set<CoreValueId>();
 		for (let next = 0; next < pending.length; next++) {
+			if (remainingEscapeWork-- <= 0) return;
 			const candidate = pending[next]!;
 			if (visited.has(candidate)) continue;
 			visited.add(candidate);
@@ -374,6 +377,7 @@ function conditionalOwnSlotEffects(
 				});
 		}
 	}
+	if (remainingEscapeWork < 0) return undefined;
 	return Object.freeze({
 		accesses: Object.freeze(normalizeRelativeOwnSlotEffects(accesses)),
 		residualEffects,

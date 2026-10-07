@@ -147,6 +147,23 @@ export interface CoreMemoryAccess {
 	readonly result?: CoreValueId;
 }
 
+export interface CoreMemoryInstructionTransfer {
+	readonly accesses: ReadonlyArray<CoreMemoryAccess>;
+	/** Coarse effects not represented by the exact accesses remain unconditional barriers. */
+	readonly residualEffects: CoreInstructionEffects;
+}
+
+export interface CoreMemoryVersionOptions {
+	readonly control?: CoreControlFlow;
+	readonly canonicalRoots?: ReadonlyMap<CoreValueId, CoreValueId>;
+	readonly provenance?: CoreProvenance;
+	readonly instructionTransfers?: ReadonlyMap<
+		CoreInstructionId,
+		CoreMemoryInstructionTransfer
+	>;
+	readonly assertCurrent?: () => void;
+}
+
 function integerAttribute(
 	fn: CoreFunctionStore,
 	instruction: CoreInstructionId,
@@ -318,8 +335,14 @@ function memoryFamilyIsKilled(
 	family: CoreMemoryFamily,
 	effects: CoreInstructionEffects,
 	accesses: ReadonlyArray<CoreMemoryAccess>,
+	residual = false,
 ): boolean {
 	if (effects.callsUserCode || effects.maySuspend) return true;
+	if (
+		residual &&
+		CORE_MEMORY_FAMILY_DOMAINS[family].some((domain) => effects.writes.includes(domain))
+	)
+		return true;
 	for (const domain of CORE_MEMORY_FAMILY_DOMAINS[family]) {
 		let covered = false;
 		for (const access of accesses) {
@@ -489,6 +512,7 @@ function prepareMemoryVersions(
 	roots: () => ReadonlyMap<CoreValueId, CoreValueId>,
 	runOwner: CoreOptimizationOwnerRunner,
 	recordResult: ((value: unknown) => void) | undefined,
+	instructionTransfers?: ReadonlyMap<CoreInstructionId, CoreMemoryInstructionTransfer>,
 ): CoreMemoryVersions {
 	const statistics = {
 		accesses: 0,
@@ -525,6 +549,7 @@ function prepareMemoryVersions(
 	const domainReaders = new Map<CoreEffectDomain, Set<CoreInstructionId>>();
 	const domainWriters = new Map<CoreEffectDomain, Set<CoreInstructionId>>();
 	const universalWriters = new Set<CoreInstructionId>();
+	const residualTransferWriters = new Set<CoreInstructionId>();
 	const heapInstructions = new Set<CoreInstructionId>();
 	const heapByRoot = new Map<CoreValueId, Set<CoreInstructionId>>();
 	let indexed = false,
@@ -561,16 +586,27 @@ function prepareMemoryVersions(
 					)
 						continue;
 					instructionOrder[instruction] = order;
-					const effects = coreInstructionEffects(fn, instruction);
+					const transfer = instructionTransfers?.get(instruction);
+					const effects =
+						transfer?.residualEffects ?? coreInstructionEffects(fn, instruction);
+					if (
+						transfer !== undefined &&
+						(effects.callsUserCode || effects.maySuspend || effects.writes.length > 0)
+					)
+						residualTransferWriters.add(instruction);
 					const raw =
-						(descriptor.accesses?.length ?? 0) === 0
+						transfer?.accesses ??
+						((descriptor.accesses?.length ?? 0) === 0
 							? []
-							: coreMemoryAccesses(fn, instruction);
+							: coreMemoryAccesses(fn, instruction));
 					if (raw.length > 0) rawAccesses.set(instruction, raw);
 					accesses += raw.length;
 					for (const access of raw) {
 						const family = coreMemoryLocationFamily(access.location);
-						if (family === "object-slot" && access.base !== undefined)
+						if (
+							(family === "object-slot" || family === "element") &&
+							access.base !== undefined
+						)
 							heapInstructions.add(instruction);
 						if (coreMemoryLocationIsExact(access.location)) {
 							const id = locationTable.id(access.location);
@@ -606,6 +642,7 @@ function prepareMemoryVersions(
 	): ReadonlyArray<CoreMemoryAccess> => {
 		ensureIndex();
 		const raw = rawAccesses.get(instruction) ?? [];
+		if (instructionTransfers?.has(instruction)) return raw;
 		if (!heapInstructions.has(instruction)) return raw;
 		const known = resolvedAccesses.get(instruction);
 		if (known !== undefined) return known;
@@ -623,7 +660,8 @@ function prepareMemoryVersions(
 				for (const access of rawAccesses.get(instruction) ?? []) {
 					if (
 						access.base !== undefined &&
-						coreMemoryLocationFamily(access.location) === "object-slot"
+						(coreMemoryLocationFamily(access.location) === "object-slot" ||
+							coreMemoryLocationFamily(access.location) === "element")
 					)
 						addTo(heapByRoot, canonical.get(access.base) ?? access.base, instruction);
 				}
@@ -733,6 +771,8 @@ function prepareMemoryVersions(
 						throw new Error("Expected heap location");
 					for (const instruction of heapStream(location.allocation))
 						instructions.add(instruction);
+					for (const instruction of residualTransferWriters)
+						instructions.add(instruction);
 					const layout = provenance().layout(location.allocation);
 					if (location.kind === "object-slot" && layout?.kind === "named-slots") {
 						const value = layout.initialValues[layout.keys.indexOf(location.key)];
@@ -800,8 +840,22 @@ function prepareMemoryVersions(
 						defines = true;
 						value = initial.value;
 					}
+					const residual = instructionTransfers?.get(instruction)?.residualEffects;
+					if (
+						residual !== undefined &&
+						(residual.callsUserCode ||
+							residual.maySuspend ||
+							CORE_MEMORY_FAMILY_DOMAINS[
+								coreMemoryLocationFamily(partition.location)
+							].some((domain) => residual.writes.includes(domain)))
+					) {
+						defines = true;
+						value = undefined;
+					}
 				} else {
-					const effects = coreInstructionEffects(fn, instruction);
+					const transfer = instructionTransfers?.get(instruction);
+					const effects =
+						transfer?.residualEffects ?? coreInstructionEffects(fn, instruction);
 					if (partition.kind === "domain") {
 						reads = domainReaders.get(partition.domain)?.has(instruction) ?? false;
 						const accesses =
@@ -825,7 +879,12 @@ function prepareMemoryVersions(
 								coreMemoryLocationFamily(access.location) === partition.family &&
 								exactReads.has(locationTable.id(access.location)),
 						);
-						defines = memoryFamilyIsKilled(partition.family, effects, raw);
+						defines = memoryFamilyIsKilled(
+							partition.family,
+							effects,
+							raw,
+							transfer !== undefined,
+						);
 						if (defines) familyWidenings++;
 					}
 				}
@@ -1257,6 +1316,7 @@ function memoryVersions(
 	},
 	runOwner: CoreOptimizationOwnerRunner = runWithoutOwner,
 	recordResult?: (value: unknown) => void,
+	options: CoreMemoryVersionOptions = {},
 ): CoreMemoryVersions {
 	const fn = program.function(functionId),
 		generation = program.generation,
@@ -1264,6 +1324,7 @@ function memoryVersions(
 		dataVersion = program.programVersion("data");
 	let prepared: CoreMemoryVersions | undefined;
 	const current = () => {
+		options.assertCurrent?.();
 		if (
 			program.generation !== generation ||
 			program.function(functionId) !== fn ||
@@ -1283,6 +1344,7 @@ function memoryVersions(
 					roots,
 					runOwner,
 					recordResult,
+					options.instructionTransfers,
 				);
 			});
 			recordResult?.({ statistics: prepared.statistics });
@@ -1309,22 +1371,33 @@ function memoryVersions(
 export function analyzeCoreMemoryVersions(
 	program: CoreProgram,
 	functionId: CoreFunctionId,
+	options: CoreMemoryVersionOptions = {},
 ): CoreMemoryVersions {
-	return memoryVersions(program, functionId, () => {
-		const fn = program.function(functionId),
-			control = buildCoreControlFlow(program, functionId);
-		let canonical: ReadonlyMap<CoreValueId, CoreValueId> | undefined,
-			provenance: CoreProvenance | undefined;
-		const roots = () => (canonical ??= coreCanonicalValueRoots(fn, control));
-		return {
-			control,
-			roots,
-			provenance: () =>
-				(provenance ??= buildCoreProvenance(program, fn, control, {
-					canonicalRoots: roots(),
-				})),
-		};
-	});
+	return memoryVersions(
+		program,
+		functionId,
+		() => {
+			const fn = program.function(functionId),
+				control = options.control ?? buildCoreControlFlow(program, functionId);
+			let canonical: ReadonlyMap<CoreValueId, CoreValueId> | undefined,
+				provenance: CoreProvenance | undefined;
+			const roots = () =>
+				(canonical ??= options.canonicalRoots ?? coreCanonicalValueRoots(fn, control));
+			return {
+				control,
+				roots,
+				provenance: () =>
+					(provenance ??=
+						options.provenance ??
+						buildCoreProvenance(program, fn, control, {
+							canonicalRoots: roots(),
+						})),
+			};
+		},
+		runWithoutOwner,
+		undefined,
+		options,
+	);
 }
 
 export const coreMemoryVersions = analyzeCoreMemoryVersions;

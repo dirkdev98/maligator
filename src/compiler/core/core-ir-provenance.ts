@@ -171,6 +171,8 @@ export interface CoreProvenanceOptions {
 	readonly index?: CoreLocalFactIndex | (() => CoreLocalFactIndex);
 	readonly runOwner?: CoreOptimizationOwnerRunner;
 	readonly onWork?: (kind: "layout" | "escape") => void;
+	/** Assumptions for an isolated caller analysis; all conditional accesses must subsequently resolve. */
+	readonly nonRetainingCallOperands?: ReadonlyMap<CoreInstructionId, ReadonlySet<number>>;
 }
 
 function numberArray(value: unknown): ReadonlyArray<number> | undefined {
@@ -633,7 +635,8 @@ export function buildCoreProvenance(
 					opcode === "move" ||
 					opcode === "throwIfTdz" ||
 					opcode === "rootUse" ||
-					observesWithoutRetention(fn, instruction)
+					observesWithoutRetention(fn, instruction) ||
+					options.nonRetainingCallOperands?.get(instruction)?.has(operand) === true
 				) {
 					continue;
 				}

@@ -351,6 +351,7 @@ const PHASE_KEYS = [
 	"late-local-cleanup",
 	"program-flow",
 	"cross-call-transforms",
+	"cross-call-memory-forwarding",
 	"specialization-discovery",
 	"specialization-selection",
 	"plan-verification",

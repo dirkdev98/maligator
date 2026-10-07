@@ -9,7 +9,10 @@ import {
 	CoreFunctionOptimizationSession,
 } from "./core-function-optimization-session.ts";
 import type { CoreFunctionOptimizationPhaseRunner } from "./core-function-optimization-session.ts";
-import { buildCoreOptimizationPlan } from "./core-ir-region-selection.ts";
+import {
+	buildCoreOptimizationPlan,
+	buildCoreLocalOptimizationPlanInput,
+} from "./core-ir-region-selection.ts";
 import type { CoreLocalOptimizationPlanInput } from "./core-ir-region-selection.ts";
 import { verifyCoreOptimizationPlan } from "./core-ir-region-validity.ts";
 import { verifyCoreProgram } from "./core-ir-verifier.ts";
@@ -28,6 +31,7 @@ import type {
 	CoreOptimizationPhase,
 	CoreOptimizationReport,
 } from "./core-optimization-report.ts";
+import { forwardCoreOwnSlotCallLoads } from "./core-own-slot-call-loads.ts";
 import { CoreFunctionPassScheduler } from "./core-pass-manager.ts";
 import {
 	specializeCorePlatformConstants,
@@ -342,10 +346,21 @@ export function optimizeCore(
 		crossCall.statistics.considered,
 	);
 	reportBuilder.recordCheckpoint("after-cross-call-transforms", compilation.program);
-	const summaries = crossCall.summaries;
-	const reachability = analyses.get(CORE_PROGRAM_FLOW_ANALYSIS, {
+	const memoryCallers = measurePhase(
+		"cross-call-memory-forwarding",
+		() =>
+			ablatedFamily === "memory-ssa-load-store" ||
+			ablatedFamily === "provenance-escape-scalar-replacement" ||
+			ablatedFamily === "program-flow"
+				? []
+				: forwardCoreOwnSlotCallLoads(compilation.program, analyses),
+		CORE_OPTIMIZATION_OWNER.memoryVersions,
+	);
+	const finalFlow = analyses.get(CORE_PROGRAM_FLOW_ANALYSIS, {
 		scope: "program",
-	}).reachability;
+	});
+	const summaries = finalFlow.summaries,
+		reachability = finalFlow.reachability;
 	reportBuilder.recordProgramWork(
 		summaries.targets.statistics,
 		summaries.statistics,
@@ -356,6 +371,19 @@ export function optimizeCore(
 	);
 	for (const input of crossCall.localPlanInputs) {
 		finalLocalPlanInputs.set(input.function, input);
+	}
+	for (const functionId of memoryCallers) {
+		finalLocalPlanInputs.set(
+			functionId,
+			buildCoreLocalOptimizationPlanInput(
+				compilation.program,
+				analyses,
+				functionResources.specializationFeatureIndex,
+				functionId,
+				compilation.context,
+				ablatedFamily !== "late-specialization-direct-entry",
+			),
+		);
 	}
 	const plan = buildCoreOptimizationPlan(
 		compilation.program,

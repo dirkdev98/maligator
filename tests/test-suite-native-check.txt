@@ -40,6 +40,7 @@ tests/native/object-has-own-known.test.ts
 tests/native/object-rest-shaped.test.ts
 tests/native/object-slot-coallocation.test.ts
 tests/native/own-table-property-cache.test.ts
+tests/native/own-slot-call-effects.test.ts
 tests/native/node-scheduling.test.ts
 tests/native/host-fairness.test.ts
 tests/native/postgres-load.test.ts
