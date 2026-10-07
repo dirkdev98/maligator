@@ -1,5 +1,6 @@
 import { nativeValueConversion } from "./native-value-transport.ts";
 import type { NativeFunctionPlan } from "./program-image.ts";
+import { vmExceptionHandlerTargets } from "./runtime-image.ts";
 
 export type NativeStackFieldRepresentation =
 	| "int32"
@@ -13,8 +14,58 @@ export interface NativeStackObjectStoragePlan {
 	readonly slotRepresentations: ReadonlyArray<NativeStackFieldRepresentation>;
 }
 
+export function selectNativeDirectHeapObjects(
+	native: NativeFunctionPlan,
+): ReadonlyArray<number> {
+	if (native.mode !== "direct") return [];
+	const handlers = vmExceptionHandlerTargets(
+		native.body.instructions.length,
+		native.body.handlers,
+	);
+	const points = new Map(
+		native.gc.safepoints.map((point) => [point.instructionIp, point]),
+	);
+	const allocations: Array<number> = [];
+	for (const region of native.specializations) {
+		if (region.kind !== "stack-object-plan") continue;
+		for (const site of region.sites) {
+			const allocation = native.body.instructions[site.allocationIp];
+			const returnIp = site.allocationIp + 1;
+			const returned = native.body.instructions[returnIp];
+			const point = points.get(site.allocationIp);
+			if (
+				site.mode !== "activation-local" ||
+				site.accesses.length !== 0 ||
+				site.inheritedAccessIp !== undefined ||
+				site.materializations.length !== 1 ||
+				site.materializations[0]!.ip !== returnIp ||
+				site.materializations[0]!.kind !== "return" ||
+				allocation?.opcode !== "CREATE_OBJECT_SHAPED" ||
+				returned?.opcode !== "RETURN" ||
+				returned.value !== allocation.dst ||
+				handlers[site.allocationIp] !== undefined ||
+				handlers[returnIp] !== undefined ||
+				point?.kind !== "operation" ||
+				!point.outgoingRootRegisters.includes(allocation.dst) ||
+				!allocation.valueRegisters.every((register) => {
+					const rep = native.registerRepresentations[register];
+					return (
+						(rep !== "boxed" && rep !== "string") ||
+						point.incomingRootRegisters.includes(register)
+					);
+				})
+			)
+				continue;
+			// The same certificate requires a heap result before any subsequent observation.
+			allocations.push(site.allocationIp);
+		}
+	}
+	return allocations;
+}
+
 export function selectNativeStackObjectStorage(
 	native: NativeFunctionPlan,
+	directHeapObjects: ReadonlySet<number>,
 ): ReadonlyArray<NativeStackObjectStoragePlan> {
 	if (native.mode !== "direct") return [];
 	const plans: Array<NativeStackObjectStoragePlan> = [];
@@ -22,6 +73,7 @@ export function selectNativeStackObjectStorage(
 		if (region.kind !== "stack-object-plan") continue;
 		for (const site of region.sites) {
 			if (
+				directHeapObjects.has(site.allocationIp) ||
 				site.mode === "elided" ||
 				site.slotCount === 0 ||
 				site.inheritedAccessIp !== undefined ||

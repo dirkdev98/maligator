@@ -55,7 +55,29 @@ describe("independent native SSA storage", () => {
 			)!;
 			if (call.opcode !== "CALL_KNOWN") throw new Error("Missing known result producer");
 			expect(native.registerRepresentations[call.dst]).toBe(representation);
+			expect(
+				emitCompiledFunction(native, native.functionIndex, "", false),
+			).not.toBeNull();
 		}
+		const immediate = image.native.functions.find(
+			(fn) =>
+				String.fromCharCode(
+					...(image.runtime.stringConstants[fn.body.nameStringIndex] ?? []),
+				) === "immediateReturnedFields",
+		)!;
+		expect(immediate).toBeDefined();
+		expect(immediate.storage!.directHeapObjectIps).toHaveLength(1);
+		expect(immediate.storage!.stackObjects).toEqual([]);
+		const immediateOutput = emitCompiledFunction(
+			immediate,
+			immediate.functionIndex,
+			"",
+			false,
+		)!;
+		expect(immediateOutput).not.toBeNull();
+		expect(immediateOutput.source).toContain("mal_vm_create_object_shaped(vm,");
+		expect(immediateOutput.source).not.toContain("mal_vm_materialize_stack_object");
+
 		const joined = image.native.functions.find(
 			(fn) =>
 				String.fromCharCode(

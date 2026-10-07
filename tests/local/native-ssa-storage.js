@@ -108,6 +108,33 @@ for (const operation of [knownCodeResult, cachedCodeResult]) {
 	}
 }
 
+function immediateReturnedFields(payload, numeric, label) {
+	return { numeric: numeric + 1.5, payload, label };
+}
+globalThis.immediateReturnedFields = immediateReturnedFields;
+for (let i = 0; i < 24; i++) {
+	const payload = { marker: i, text: `payload-${i}-${"x".repeat(80)}` };
+	const label = `label-${i}-${"y".repeat(80)}`;
+	const first = immediateReturnedFields(payload, i, label);
+	const second = immediateReturnedFields(payload, i, label);
+	gc();
+	first.numeric = -1;
+	const descriptor = Object.getOwnPropertyDescriptor(second, "payload");
+	console.log(
+		"immediate-fields",
+		first !== second,
+		second.numeric,
+		second.payload === payload,
+		second.payload.marker,
+		second.payload.text.length,
+		second.label === label,
+		Object.getPrototypeOf(second) === Object.prototype,
+		descriptor.writable,
+		descriptor.enumerable,
+		descriptor.configurable,
+	);
+}
+
 function boundedUnsigned(left) {
 	const value = left & 65535;
 	return (value * 3 + 1) % 101;

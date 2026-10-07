@@ -16,7 +16,10 @@ import type {
 	NativePropertyProjectionPlan,
 	NativePropertyReadRegionPlan,
 } from "./lower-native-fast-paths.ts";
-import { selectNativeStackObjectStorage } from "./lower-native-objects.ts";
+import {
+	selectNativeDirectHeapObjects,
+	selectNativeStackObjectStorage,
+} from "./lower-native-objects.ts";
 import type { NativeStackObjectStoragePlan } from "./lower-native-objects.ts";
 import {
 	nativeEntryStableRootRegisters,
@@ -65,6 +68,7 @@ export interface NativeStoragePlan
 	readonly callbackTransports: ReadonlyArray<NativeCallbackTransportPlan>;
 	readonly suspension: NativeSuspensionPlan | undefined;
 	readonly stackObjects: ReadonlyArray<NativeStackObjectStoragePlan>;
+	readonly directHeapObjectIps: ReadonlyArray<number>;
 	readonly rootRegisters: ReadonlyArray<number>;
 	readonly privateRegisters: ReadonlyArray<number>;
 	readonly privateCallResultIps: ReadonlyArray<number>;
@@ -670,6 +674,7 @@ function lowerStorage(
 	for (const plan of [...propertyWindows, ...auxiliaryWindows])
 		for (const local of plan.borrowedRegisters) privateLocals.delete(local);
 	const scalar = scalarStorage(native);
+	const directHeapObjectIps = selectNativeDirectHeapObjects(native);
 	return {
 		...fastPaths,
 		callTransports,
@@ -685,7 +690,8 @@ function lowerStorage(
 				}),
 			),
 		),
-		stackObjects: selectNativeStackObjectStorage(native),
+		directHeapObjectIps,
+		stackObjects: selectNativeStackObjectStorage(native, new Set(directHeapObjectIps)),
 		rootRegisters: roots,
 		...selectNativeRootStorage(native, roots, privateLocals, calls),
 		privateRegisters: roots.filter((local) => privateLocals.has(local)),
@@ -892,6 +898,7 @@ export function validateNativeStorage(
 				selected.callbackTransports,
 			) &&
 			sameScalar(stored, selected) &&
+			sameNumbers(stored.directHeapObjectIps, selected.directHeapObjectIps) &&
 			stored.stackObjects.length === selected.stackObjects.length &&
 			stored.stackObjects.every(
 				(plan, index) =>

@@ -857,6 +857,7 @@ function emitCompiledVariant(
 	// EMPTY parameter and read through the TDZ-checked LOAD_THIS / RETURN forms.
 	const thisSlot = fn.isDerivedConstructor ? slotCount : -1;
 	const stackSlotsBase = slotCount + (fn.isDerivedConstructor ? 1 : 0);
+	const directHeapObjectIps = new Set(storage.directHeapObjectIps);
 	const stackObjectSites = new Map<number, StackObjectSite>();
 	let nextStackSlot = stackSlotsBase;
 	for (const action of nativeContract.regionActions) {
@@ -879,6 +880,7 @@ function emitCompiledVariant(
 				`Invalid stack-object metadata at instruction ${site.allocationIp}`,
 			);
 		}
+		if (directHeapObjectIps.has(site.allocationIp)) continue;
 		const fieldRepresentations = nativeContract.storage!.stackObjects.find(
 			(plan) => plan.allocationIp === site.allocationIp,
 		)?.slotRepresentations;
@@ -909,6 +911,8 @@ function emitCompiledVariant(
 		const region = nativeContract.specializations[action.regionIndex];
 		if (region?.kind !== "stack-object-plan" || action.role === "allocate") continue;
 		const planSite = region.sites[action.primaryIndex ?? -1];
+		if (planSite !== undefined && directHeapObjectIps.has(planSite.allocationIp))
+			continue;
 		const site =
 			planSite === undefined ? undefined : stackObjectSites.get(planSite.allocationIp);
 		if (planSite === undefined || site === undefined) {

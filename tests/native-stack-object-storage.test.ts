@@ -5,6 +5,7 @@ import {
 	deserializeCompilerArtifact,
 	serializeCompilerArtifact,
 } from "../src/compiler/target/compiler-artifact-codec.ts";
+import { selectNativeDirectHeapObjects } from "../src/compiler/target/lower-native-objects.ts";
 import { lowerNativeFunctionStorage } from "../src/compiler/target/lower-native-storage.ts";
 import { vmRegionActions } from "../src/compiler/target/program-image.ts";
 import { emitCompiledFunction } from "../src/compiler/target/render-native-c.ts";
@@ -264,6 +265,98 @@ describe("native typed stack fields", () => {
 			}
 		},
 	);
+
+	it("allocates an immediately returned certificate directly on the heap in every native entry", () => {
+		const image = compile("return {numeric:input+1.5,payload:input,label:'ready'};");
+		const native = image.native.functions[1]!;
+		expect(native.directEntries.length).toBeGreaterThan(0);
+		const allocationIp = native.body.instructions.findIndex(
+			(op) => op.opcode === "CREATE_OBJECT_SHAPED",
+		);
+		expect(allocationIp).toBeGreaterThanOrEqual(0);
+		const allocation = native.body.instructions[allocationIp]!;
+		if (allocation.opcode !== "CREATE_OBJECT_SHAPED")
+			throw new Error("Missing shaped allocation");
+		for (const storage of [
+			native.storage!,
+			...native.directEntries.map((entry) => entry.storage!),
+		]) {
+			expect(storage.directHeapObjectIps).toEqual([allocationIp]);
+			expect(storage.stackObjects).toEqual([]);
+		}
+		const point = native.gc.safepoints.find(
+			(point) => point.instructionIp === allocationIp,
+		)!;
+		for (const register of allocation.valueRegisters)
+			if (["boxed", "string"].includes(native.registerRepresentations[register]!))
+				expect(point.incomingRootRegisters).toContain(register);
+		expect(point.outgoingRootRegisters).toContain(allocation.dst);
+		const emitted = emitCompiledFunction(native, native.functionIndex, "", false)!;
+		expect(emitted.directEntries.length).toBeGreaterThan(0);
+		for (const source of [
+			emitted.source,
+			...emitted.directEntries.map((entry) => entry.source),
+		]) {
+			expect(source).toContain("mal_vm_create_object_shaped(vm,");
+			expect(source).not.toContain("mal_object_init_embedded_stack(");
+			expect(source).not.toContain("mal_vm_materialize_stack_object");
+		}
+		expect(emitted.source).toContain(`.slot_count = ${native.storage!.rootSlotCount}`);
+		expect(deserializeCompilerArtifact(serializeCompilerArtifact(image))).toEqual(image);
+	});
+
+	it.each([
+		"const o={numeric:1.5,payload:input}; if(input)o.numeric=2; return o;",
+		"const o={numeric:1.5,payload:input}; globalThis.consume(input); return o;",
+		"try {return {numeric:1.5,payload:input};} catch(error){return error;}",
+	])(
+		"retains stack materialization outside the immediate unprotected window: %s",
+		(body) => {
+			const native = compile(body).native.functions[1]!;
+			expect(native.storage!.directHeapObjectIps).toEqual([]);
+			expect(
+				emitCompiledFunction(native, native.functionIndex, "", false),
+			).not.toBeNull();
+		},
+	);
+
+	it("declines direct heap selection without complete allocation roots or in resumable mode", () => {
+		const native = compile("return {numeric:1.5,payload:input};").native.functions[1]!;
+		const allocationIp = native.storage!.directHeapObjectIps[0]!;
+		expect(allocationIp).toBeDefined();
+		expect(selectNativeDirectHeapObjects({ ...native, mode: "resumable" })).toEqual([]);
+		for (const phase of ["incomingRootRegisters", "outgoingRootRegisters"] as const)
+			expect(
+				selectNativeDirectHeapObjects({
+					...native,
+					gc: {
+						safepoints: native.gc.safepoints.map((point) =>
+							point.instructionIp === allocationIp ? { ...point, [phase]: [] } : point,
+						),
+					},
+				}),
+			).toEqual([]);
+	});
+
+	it("rejects missing, duplicated and forged direct heap selections", () => {
+		const image = compile("return {numeric:1.5,payload:input};");
+		const native = image.native.functions[1]!;
+		const ip = native.storage!.directHeapObjectIps[0]!;
+		expect(ip).toBeDefined();
+		for (const directHeapObjectIps of [[], [ip, ip], [ip + 1]])
+			expect(() =>
+				serializeCompilerArtifact({
+					...image,
+					native: {
+						...image.native,
+						functions: image.native.functions.with(1, {
+							...native,
+							storage: { ...native.storage!, directHeapObjectIps },
+						}),
+					},
+				}),
+			).toThrow(/invalid or stale storage plan/);
+	});
 
 	it("rejects missing layouts, wrong field types and a forged allocation", () => {
 		const image = compile(

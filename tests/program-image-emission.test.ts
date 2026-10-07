@@ -2795,8 +2795,8 @@ describe("native update-expression representation", () => {
 			}
 			globalThis.result = read(globalThis.flag);
 		`);
-		expect(materialized).not.toMatch(/__stack_object_\d+_slot_0/);
-		expect(materialized).toContain("mal_vm_materialize_stack_object(");
+		expect(materialized).toMatch(/bool __stack_object_\d+_slot_0;/);
+		expect(materialized).toContain("mal_vm_materialize_stack_object_fields(");
 	});
 
 	it("proves numeric induction variables during direct Core construction", () => {

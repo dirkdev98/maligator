@@ -79,7 +79,7 @@ import type {
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal artifacts are hard cut-overs: stale cache entries rebuild.
-export const COMPILER_ARTIFACT_VERSION = 142;
+export const COMPILER_ARTIFACT_VERSION = 143;
 
 function validateClosureCaptureOwners(
 	owners: ReadonlyArray<number>,
@@ -823,6 +823,7 @@ function writeNativeStorage(w: Writer, storage: NativeStoragePlan | undefined): 
 			w.i32Array([...point.registers]);
 		}
 	}
+	w.i32Array([...storage.directHeapObjectIps]);
 	w.u32(storage.stackObjects.length);
 	for (const plan of storage.stackObjects) {
 		w.i32(plan.allocationIp);
@@ -1118,6 +1119,7 @@ function readNativeStorage(r: Reader): NativeStoragePlan {
 		}));
 		suspension = { points, valueSlot, modeSlot, slotCount };
 	}
+	const directHeapObjectIps = r.i32Array();
 	const stackObjects: Array<NativeStackObjectStoragePlan> = Array.from(
 		{ length: r.count(2) },
 		() => ({
@@ -1241,6 +1243,7 @@ function readNativeStorage(r: Reader): NativeStoragePlan {
 		arrayPairDestructure,
 		callTransports,
 		callbackTransports,
+		directHeapObjectIps,
 		stackObjects,
 		numericLeaf: leaf,
 		suspension,
