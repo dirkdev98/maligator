@@ -499,7 +499,7 @@ describe("independent native SSA storage", () => {
 		);
 		expect(
 			leaf?.directEntries.some(
-				(entry) => (entry.storage?.numericLeaf?.expressionIps.length ?? 0) > 0,
+				(entry) => (entry.storage?.numericWorker?.expressionIps.length ?? 0) > 0,
 			),
 		).toBe(true);
 		const suspended = image.native.functions.filter((fn) => fn.mode === "resumable");
@@ -572,7 +572,8 @@ describe("independent native SSA storage", () => {
 			throw new Error("Scalar sort fixture lacks its numeric leaf callback selection");
 		const sort = image.native.functions[numericSort.numericSortCallback.functionIndex]!;
 		const sortLeaf =
-			sort.directEntries[numericSort.numericSortCallback.entryId]!.storage!.numericLeaf!;
+			sort.directEntries[numericSort.numericSortCallback.entryId]!.storage!
+				.numericWorker!;
 		expect(sortLeaf.expressionIps.length).toBeGreaterThan(0);
 		const sortTargets = new Set(
 			sort.body.instructions.flatMap((op) =>

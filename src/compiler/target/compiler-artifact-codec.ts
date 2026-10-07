@@ -79,7 +79,7 @@ import type {
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal artifacts are hard cut-overs: stale cache entries rebuild.
-export const COMPILER_ARTIFACT_VERSION = 151;
+export const COMPILER_ARTIFACT_VERSION = 152;
 
 function validateClosureCaptureOwners(
 	owners: ReadonlyArray<number>,
@@ -697,12 +697,13 @@ function writeNativeStorage(w: Writer, storage: NativeStoragePlan | undefined): 
 		storage.elidedTdzIps,
 	])
 		w.i32Array([...values]);
-	w.u8(storage.numericLeaf === undefined ? 0 : 1);
-	if (storage.numericLeaf !== undefined) {
-		w.i32Array([...storage.numericLeaf.expressionIps]);
-		w.i32Array([...storage.numericLeaf.definitionInitializedRegisters]);
-		w.i32Array([...storage.numericLeaf.rematerializedConstantIps]);
-		w.i32Array([...storage.numericLeaf.fallthroughJumpIps]);
+	w.u8(storage.numericWorker === undefined ? 0 : 1);
+	if (storage.numericWorker !== undefined) {
+		w.i32Array([...storage.numericWorker.expressionIps]);
+		w.i32Array([...storage.numericWorker.definitionInitializedRegisters]);
+		w.i32Array([...storage.numericWorker.rematerializedConstantIps]);
+		w.i32Array([...storage.numericWorker.fallthroughJumpIps]);
+		w.i32Array([...storage.numericWorker.pollingIps]);
 	}
 	w.u32(storage.propertyProjections.length);
 	for (const plan of storage.propertyProjections) {
@@ -919,16 +920,17 @@ function readNativeStorage(r: Reader): NativeStoragePlan {
 		rematerializedConstantIps: r.i32Array(),
 		elidedTdzIps: r.i32Array(),
 	};
-	const numericLeaf = r.u8();
-	if (numericLeaf > 1) throw new RangeError("Invalid native numeric leaf selection");
-	const leaf =
-		numericLeaf === 0
+	const numericWorker = r.u8();
+	if (numericWorker > 1) throw new RangeError("Invalid native numeric worker selection");
+	const worker =
+		numericWorker === 0
 			? undefined
 			: {
 					expressionIps: r.i32Array(),
 					definitionInitializedRegisters: r.i32Array(),
 					rematerializedConstantIps: r.i32Array(),
 					fallthroughJumpIps: r.i32Array(),
+					pollingIps: r.i32Array(),
 				};
 	const propertyProjections: Array<NativePropertyProjectionPlan> = [];
 	const count = r.count(11);
@@ -1245,7 +1247,7 @@ function readNativeStorage(r: Reader): NativeStoragePlan {
 		callbackTransports,
 		directHeapObjectIps,
 		stackObjects,
-		numericLeaf: leaf,
+		numericWorker: worker,
 		suspension,
 		propertyProjections,
 		propertyNumericUpdates,

@@ -58,8 +58,9 @@ export interface NativeScalarStoragePlan {
 	readonly rematerializedConstantIps: ReadonlyArray<number>;
 }
 
-export interface NativeNumericLeafPlan extends NativeScalarStoragePlan {
+export interface NativeNumericWorkerPlan extends NativeScalarStoragePlan {
 	readonly fallthroughJumpIps: ReadonlyArray<number>;
+	readonly pollingIps: ReadonlyArray<number>;
 }
 
 export interface NativeStoragePlan
@@ -74,10 +75,10 @@ export interface NativeStoragePlan
 	readonly privateCallResultIps: ReadonlyArray<number>;
 	readonly entryStableRootRegisters: ReadonlyArray<number>;
 	readonly elidedTdzIps: ReadonlyArray<number>;
-	readonly numericLeaf: NativeNumericLeafPlan | undefined;
+	readonly numericWorker: NativeNumericWorkerPlan | undefined;
 }
 
-function selectNumericLeaf(
+function selectNumericWorker(
 	native: NativeFunctionPlan,
 	entry: NativeDirectEntryPlan,
 ): boolean {
@@ -93,7 +94,8 @@ function selectNumericLeaf(
 		entry.argumentRepresentations !== undefined ||
 		entry.resultRepresentation !== "number" ||
 		entry.fieldParameters?.representations.some((rep) => rep !== "number") ||
-		fn.instructions.at(-1)?.opcode !== "RETURN"
+		!["RETURN", "JUMP"].includes(fn.instructions.at(-1)?.opcode ?? "") ||
+		!fn.instructions.some((op) => op.opcode === "RETURN")
 	)
 		return false;
 	const reps = entry.registerRepresentations;
@@ -103,7 +105,7 @@ function selectNumericLeaf(
 			case "JUMP":
 			case "JUMP_IF":
 				return (
-					op.targetIp > ip &&
+					op.targetIp >= 0 &&
 					op.targetIp < fn.instructions.length &&
 					(op.opcode === "JUMP" || reps[op.cond] === "boolean")
 				);
@@ -793,8 +795,8 @@ function lowerStorage(
 			rematerializedConstantIps: constants,
 		};
 	};
-	let numericLeaf: NativeNumericLeafPlan | undefined;
-	if (entry !== undefined && selectNumericLeaf(native, entry)) {
+	let numericWorker: NativeNumericWorkerPlan | undefined;
+	if (entry !== undefined && selectNumericWorker(native, entry)) {
 		const leaf = {
 			...native,
 			instructions: native.instructions.map((plan) =>
@@ -805,10 +807,15 @@ function lowerStorage(
 			fieldCalls: [],
 			literalSwitches: [],
 		};
-		numericLeaf = {
+		const pollingIps = native.gc.safepoints.flatMap((point) =>
+			point.kind === "loop-backedge" ? [point.instructionIp] : [],
+		);
+		const polls = new Set(pollingIps);
+		numericWorker = {
 			...scalarStorage(leaf),
+			pollingIps,
 			fallthroughJumpIps: fn.instructions.flatMap((op, ip) =>
-				op.opcode === "JUMP" && op.targetIp === ip + 1 ? [ip] : [],
+				op.opcode === "JUMP" && op.targetIp === ip + 1 && !polls.has(ip) ? [ip] : [],
 			),
 		};
 	}
@@ -854,7 +861,7 @@ function lowerStorage(
 		entryStableRootRegisters: [...nativeEntryStableRootRegisters(fn, privateLocals)],
 		elidedTdzIps: elidedTdzIps(native, ownership),
 		...scalar,
-		numericLeaf,
+		numericWorker,
 	};
 }
 
@@ -1212,12 +1219,16 @@ export function validateNativeStorage(
 					)
 				);
 			}) &&
-			sameScalar(stored.numericLeaf, selected.numericLeaf) &&
-			(stored.numericLeaf === undefined ||
-				(stored.numericLeaf.fallthroughJumpIps.length ===
-					selected.numericLeaf!.fallthroughJumpIps.length &&
-					stored.numericLeaf.fallthroughJumpIps.every(
-						(ip, index) => ip === selected.numericLeaf!.fallthroughJumpIps[index],
+			sameScalar(stored.numericWorker, selected.numericWorker) &&
+			(stored.numericWorker === undefined ||
+				(sameNumbers(
+					stored.numericWorker.pollingIps,
+					selected.numericWorker!.pollingIps,
+				) &&
+					stored.numericWorker.fallthroughJumpIps.length ===
+						selected.numericWorker!.fallthroughJumpIps.length &&
+					stored.numericWorker.fallthroughJumpIps.every(
+						(ip, index) => ip === selected.numericWorker!.fallthroughJumpIps[index],
 					))) &&
 			(
 				[

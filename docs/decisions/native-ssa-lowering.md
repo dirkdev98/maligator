@@ -42,20 +42,37 @@ is boxed. Floating-point contraction is disabled so an expression tree keeps Jav
 intermediate rounding. The artifact stores these choices; validation checks their
 safety without requiring profiled artifacts to reselect expressions after reading.
 Independent call and construction selections do not suppress unrelated scalar
-chains; an expression still cannot cross their effect boundary. Scalar locals with
-one definition and only later reads in the same straight-line block initialize at
-that definition. Roots, argument prefixes, synthetic temporaries, and opaque region
-storage retain initialization. This choice is persisted and checked independently
-of expression selection, including profiled artifacts.
-Numeric leaf helpers have their own selected scalar plan. Their eligibility is
-chosen upstream from the typed ABI, and their expressions and initialization
-choices are planned independently of ordinary boxed-body overlays. Rendering
-preserves branch targets before eliding producers and confines expression macros
-to the helper. The runtime observation guard still selects the ordinary typed body
-when required.
-The leaf plan also records unconditional edges to the immediately following
-instruction as fallthroughs. Rendering retains only labels targeted by remaining
-branches; a selected expression producer can still be such a target.
+chains; an expression still cannot cross their effect boundary. Proven Number
+increment and decrement operations are pure scalar arithmetic. Single-owner,
+nonpolling fallthrough phi-copy edges can remain inside an expression window;
+transitive leaf overwrites still force materialization. Scalar call, shaped-field,
+store, helper and indexed-read boundaries admit expressions only when their
+transitive inputs already occupy scalar storage. Known helper arguments and indexed
+keys capture a delayed expression once before guards, probes and fallbacks reuse it.
+
+Scalar locals initialize at their definition when all reads follow it in the same
+straight-line block. Bounded direct bodies without handler or resume entries also
+consume normal CFG dominance across blocks. Multi-write phi locals whose writers
+are ordinary copies omit their defaults only when no entry path reads the value
+before its first write; a self-copy reads before defining its destination. Roots,
+argument prefixes, synthetic temporaries and borrowed region storage retain their
+defaults. These choices are persisted and validated independently of expression
+selection, including profiled artifacts. Decoded body facts are shared within a
+planning invocation; representations, ownership and suspension reads remain per
+variant, and validation rebuilds facts at the image trust boundary.
+
+Small numeric workers have their own selected scalar plan derived from the typed
+ABI, independently of ordinary boxed-body overlays. Rendering preserves branch
+targets and confines expression macros to the helper. Bounded workers retain the
+nonthrowing leaf activation and numeric-sort capability. Polling workers consume
+the variant's exact loop-backedge records, poll only on taken edges and propagate
+sticky termination through ordinary compiled activation and completion checks.
+They receive the VM explicitly and cannot use the sort leaf override. The runtime
+observation guard selects the ordinary typed body when required. Optional-entry
+budgets count both helper and retained body.
+Worker plans record nonpolling jumps to the immediately following instruction as
+fallthroughs. Rendering retains only labels targeted by remaining branches; a
+selected expression producer can still be such a target.
 
 Immutable numeric and boolean SSA constants use a separate rematerialization plan,
 so repeated uses and intervening effects do not force a C local. Selection requires

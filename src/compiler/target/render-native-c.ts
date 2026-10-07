@@ -1487,15 +1487,15 @@ function renderScalarExpression(
 	}
 }
 
-function renderNumericLeafWorker(
+function renderNumericWorker(
 	native: NativeFunctionPlan,
 	entry: NativeDirectEntryPlan,
 ): Array<string> | null {
 	const fn = native.body;
 	const storage = entry.storage;
 	if (storage === undefined)
-		throw new Error("Numeric leaf rendering requires a storage plan");
-	const leaf = storage.numericLeaf;
+		throw new Error("Numeric worker rendering requires a storage plan");
+	const leaf = storage.numericWorker;
 	if (leaf === undefined) return null;
 	const reps = entry.registerRepresentations;
 	const scalar = (r: number) => ["number", "int32", "boolean"].includes(reps[r]!);
@@ -1512,6 +1512,9 @@ function renderNumericLeafWorker(
 		}),
 	);
 	const fallthroughJumps = new Set(leaf.fallthroughJumpIps);
+	const pollingIps = new Set(leaf.pollingIps);
+	const poll =
+		"if (mal_gc_poll) { mal_gc_safepoint(vm); if (mal_gc_poll_termination(vm)) return 0.0; }";
 	const jumpTargets = new Set(
 		fn.instructions.flatMap((op, ip) =>
 			(op.opcode === "JUMP" && !fallthroughJumps.has(ip)) || op.opcode === "JUMP_IF"
@@ -1527,7 +1530,11 @@ function renderNumericLeafWorker(
 		switch (op.opcode) {
 			case "JUMP":
 			case "JUMP_IF":
-				line = `${op.opcode === "JUMP_IF" ? `if (r${op.cond}) ` : ""}goto L${op.targetIp};`;
+				line = pollingIps.has(ip)
+					? op.opcode === "JUMP_IF"
+						? `if (r${op.cond}) { ${poll} goto L${op.targetIp}; }`
+						: `${poll} goto L${op.targetIp};`
+					: `${op.opcode === "JUMP_IF" ? `if (r${op.cond}) ` : ""}goto L${op.targetIp};`;
 				break;
 			case "CREATE_NUMBER":
 			case "CREATE_F64":
@@ -1544,7 +1551,7 @@ function renderNumericLeafWorker(
 					(load) => load.instructionIp === ip,
 				);
 				if (field === undefined)
-					throw new Error("Numeric leaf lacks a selected field load");
+					throw new Error("Numeric worker lacks a selected field load");
 				line = `r${op.dst} = fp${field.field};`;
 				break;
 			}
@@ -1558,7 +1565,7 @@ function renderNumericLeafWorker(
 				line = `return ${number(op.value)};`;
 				break;
 			default:
-				throw new Error("Invalid selected numeric leaf instruction");
+				throw new Error("Invalid selected numeric worker instruction");
 		}
 		body.push(line);
 	}
@@ -1635,8 +1642,9 @@ export function emitCompiledFunction(
 			stringConstants,
 		);
 		if (emitted === null) return [];
-		const worker = renderNumericLeafWorker(nativeVariantContract(native, entry), entry);
+		const worker = renderNumericWorker(nativeVariantContract(native, entry), entry);
 		if (worker === null) return [{ entry, emitted, leaf: undefined }];
+		const bounded = entry.storage!.numericWorker!.pollingIps.length === 0;
 		const parameters = entry.parameterRepresentations
 			.map((rep, i) => `${cTypeOf(rep)} r${i}`)
 			.concat(
@@ -1647,12 +1655,25 @@ export function emitCompiledFunction(
 		const args = entry.parameterRepresentations
 			.map((_, i) => `p${i}`)
 			.concat(entry.fieldParameters?.keys.map((_, i) => `fp${i}`) ?? []);
-		const symbol = `${emitted.symbol}_leaf`;
+		if (!bounded) {
+			parameters.unshift("MalVm *vm");
+			args.unshift("vm");
+		}
+		const symbol = `${emitted.symbol}${bounded ? "_leaf" : "_worker"}`;
+		const sortAdmission = bounded
+			? " || (vm->exact_script_call != nullptr && vm->exact_script_call->numeric_sort_leaf_active && vm->exact_script_call->callee == callee)"
+			: "";
 		const source = `static __attribute__((aligned(64))) f64 ${symbol}(${parameters.join(", ") || "void"}) {\n#pragma STDC FP_CONTRACT OFF\n${worker.join("\n")}\n}\n${emitted.source.replace(
 			"#pragma STDC FP_CONTRACT OFF\n",
-			`#pragma STDC FP_CONTRACT OFF\n    if (mal_vm_leaf_unobserved(vm) || (vm->exact_script_call != nullptr && vm->exact_script_call->numeric_sort_leaf_active && vm->exact_script_call->callee == callee)) return ${symbol}(${args.join(", ")});\n`,
+			`#pragma STDC FP_CONTRACT OFF\n    if (mal_vm_leaf_unobserved(vm)${sortAdmission}) return ${symbol}(${args.join(", ")});\n`,
 		)}`;
-		return [{ entry, emitted: { ...emitted, source }, leaf: true as const }];
+		return [
+			{
+				entry,
+				emitted: { ...emitted, source },
+				leaf: bounded ? (true as const) : undefined,
+			},
+		];
 	});
 	return {
 		...canonical,

@@ -27,6 +27,7 @@ tests/native/global-property-cache.test.ts
 tests/native/literal-constants.test.ts
 tests/native/literal-materialization.test.ts
 tests/native/native-ssa-storage.test.ts
+tests/native/native-numeric-workers.test.ts
 tests/native/static-data-query.test.ts
 tests/native/static-primitive-operations.test.ts
 tests/native/static-property-root-mask.test.ts

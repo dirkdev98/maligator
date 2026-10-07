@@ -471,11 +471,11 @@ describe("existing-proof scalar expression consumers", () => {
 			true,
 		);
 		const entry = native.directEntries.find(
-			(entry) => entry.storage!.numericLeaf !== undefined,
+			(entry) => entry.storage!.numericWorker !== undefined,
 		)!;
 		expect(entry).toBeDefined();
 		for (const ip of unsignedIps)
-			expect(entry.storage!.numericLeaf!.expressionIps).toContain(ip);
+			expect(entry.storage!.numericWorker!.expressionIps).toContain(ip);
 		const restored = deserializeCompilerArtifact(serializeCompilerArtifact(image));
 		expect(restored).toEqual(image);
 		const emitted = emitCompiledFunction(restored.native.functions[1]!, 1, "", false)!;
@@ -499,13 +499,13 @@ describe("existing-proof scalar expression consumers", () => {
 		const native = image.native.functions[1]!;
 		const emitted = emitCompiledFunction(native, 1, "", false)!;
 		const entry = native.directEntries.find(
-			(entry) => entry.storage!.numericLeaf !== undefined,
+			(entry) => entry.storage!.numericWorker !== undefined,
 		)!;
 		expect(entry).toBeDefined();
 		const source = emitted.directEntries.find(
 			(candidate) => candidate.id === entry.id,
 		)!.source;
-		const inputs = entry.storage!.numericLeaf!.expressionIps.flatMap((ip) =>
+		const inputs = entry.storage!.numericWorker!.expressionIps.flatMap((ip) =>
 			vmInstructionReadRegisters(native.body.instructions[ip]!).filter(
 				(register) => entry.registerRepresentations[register] === "int32",
 			),
@@ -653,6 +653,93 @@ describe("native scalar expressions across phi edge copies", () => {
 	it("retains profiled phi arithmetic sites", () => {
 		const out = inspectStaticValueFunction(source, "choose", { profile: true });
 		expect(out.native.storage!.expressionIps).toEqual([]);
+	});
+});
+
+describe("native polling numeric worker plans", () => {
+	const source = `function loop(value,count){for(let index=0;index<count;index++)value=value*1.25-0.5;return value;}
+		globalThis.loop=loop;globalThis.result=loop(3,7);`;
+
+	it("keeps exact polling edges and completion-aware activation in a scalar loop worker", () => {
+		const out = inspectStaticValueFunction(source, "loop");
+		const entry = out.native.directEntries.find(
+			(entry) => entry.storage!.numericWorker !== undefined,
+		)!;
+		expect(entry).toBeDefined();
+		const worker = entry.storage!.numericWorker!;
+		expect(worker.pollingIps).toEqual(
+			entry.gc.safepoints.flatMap((point) =>
+				point.kind === "loop-backedge" ? [point.instructionIp] : [],
+			),
+		);
+		expect(worker.pollingIps.length).toBeGreaterThan(0);
+		for (const ip of worker.pollingIps)
+			expect(worker.fallthroughJumpIps).not.toContain(ip);
+		const emitted = out.c.directEntries.find((candidate) => candidate.id === entry.id)!;
+		expect(emitted.leaf).toBeUndefined();
+		expect(emitted.source).toContain(`${emitted.symbol}_worker(MalVm *vm,`);
+		expect(emitted.source).toContain(
+			"mal_gc_safepoint(vm); if (mal_gc_poll_termination(vm)) return 0.0;",
+		);
+		expect(emitted.source).not.toContain("numeric_sort_leaf_active");
+		expect(deserializeCompilerArtifact(serializeCompilerArtifact(out.image))).toEqual(
+			out.image,
+		);
+	});
+
+	it("rejects a stored polling worker that omits its edge", () => {
+		const out = inspectStaticValueFunction(source, "loop");
+		const native = {
+			...out.native,
+			directEntries: out.native.directEntries.map((entry) => ({
+				...entry,
+				storage: {
+					...entry.storage!,
+					numericWorker: { ...entry.storage!.numericWorker!, pollingIps: [] },
+				},
+			})),
+		};
+		expect(() => validateNativeStorage(native)).toThrow(/invalid or stale storage plan/);
+	});
+
+	it("rejects a body cycle after removing its underlying polling certificate", () => {
+		const out = inspectStaticValueFunction(source, "loop");
+		const native = {
+			...out.native,
+			gc: {
+				safepoints: out.native.gc.safepoints.filter(
+					(point) => point.kind !== "loop-backedge",
+				),
+			},
+			directEntries: out.native.directEntries.map((entry) => ({
+				...entry,
+				gc: {
+					safepoints: entry.gc.safepoints.filter(
+						(point) => point.kind !== "loop-backedge",
+					),
+				},
+			})),
+		};
+		expect(() => lowerNativeFunctionStorage(native)).toThrow(/cycle has no polling edge/);
+	});
+
+	it("declines a flattened worker body that can fall off its physical tail", () => {
+		const out = inspectStaticValueFunction(source, "loop");
+		const native = {
+			...out.native,
+			instructions: [...out.native.instructions, undefined],
+			body: {
+				...out.native.body,
+				instructions: [
+					...out.native.body.instructions,
+					{ opcode: "MOVE" as const, dst: 0, src: 0 },
+				],
+			},
+		};
+		const lowered = lowerNativeFunctionStorage(native);
+		for (const entry of lowered.directEntries)
+			expect(entry.storage!.numericWorker).toBeUndefined();
+		expect(() => validateNativeStorage(native)).toThrow(/invalid or stale storage plan/);
 	});
 });
 

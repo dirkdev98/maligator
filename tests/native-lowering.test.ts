@@ -504,16 +504,16 @@ describe("SSA native lowering", () => {
 			{ facts: compilerProgramFactsFromConfig(resolveBuildConfig({})) },
 		);
 		const native = image.native.functions.find((fn) =>
-			fn.directEntries.some((entry) => entry.storage?.numericLeaf !== undefined),
+			fn.directEntries.some((entry) => entry.storage?.numericWorker !== undefined),
 		)!;
 		expect(native).toBeDefined();
 		expect(
 			native.specializations.some((region) => region.kind === "numeric-fusion"),
 		).toBe(true);
 		const entry = native.directEntries.find(
-			(entry) => entry.storage?.numericLeaf !== undefined,
+			(entry) => entry.storage?.numericWorker !== undefined,
 		)!;
-		const leaf = entry.storage!.numericLeaf!;
+		const leaf = entry.storage!.numericWorker!;
 		expect(leaf.expressionIps.length).toBeGreaterThan(0);
 		expect(native.storage!.rematerializedConstantIps.length).toBeGreaterThan(0);
 		expect(leaf.rematerializedConstantIps.length).toBeGreaterThan(0);
@@ -544,7 +544,7 @@ describe("SSA native lowering", () => {
 						? fn
 						: {
 								...fn,
-								storage: { ...fn.storage!, numericLeaf: leaf },
+								storage: { ...fn.storage!, numericWorker: leaf },
 							},
 				),
 			},
@@ -565,7 +565,7 @@ describe("SSA native lowering", () => {
 								...entry,
 								storage: {
 									...entry.storage!,
-									numericLeaf: {
+									numericWorker: {
 										...leaf,
 										fallthroughJumpIps: [...leaf.fallthroughJumpIps, conditional].sort(
 											(left, right) => left - right,
