@@ -6,6 +6,7 @@ import { lowerCoreCompilationToExecutionProgram } from "../src/compiler/target/l
 import { layoutNativeBlocks } from "../src/compiler/target/lower-native-control-flow.ts";
 import { lowerCoreCompilationToNativeProgram } from "../src/compiler/target/lower-native.ts";
 import { lowerVerifiedTargetsToRuntimePlans } from "../src/compiler/target/runtime-image.ts";
+import { verifyCoreTargetBlockLayout } from "../src/compiler/target/verify-core-target-layout.ts";
 
 function compile(source: string) {
 	return optimizeSemanticProgramToCore(
@@ -16,6 +17,77 @@ function compile(source: string) {
 }
 
 describe("native block layout", () => {
+	it("traces between atomic spans and rejects split or reversed certificates", () => {
+		const blocks: CoreTargetFunction["blocks"] = [
+			{ instructions: [{ type: "jump", blocks: [4] }] },
+			{ instructions: [{ type: "jump", blocks: [2] }] },
+			{ instructions: [{ type: "jump", blocks: [5] }] },
+			{ instructions: [{ type: "return", registers: [0] }] },
+			{ instructions: [{ type: "jump", blocks: [1] }] },
+			{ instructions: [{ type: "return", registers: [0] }] },
+		];
+		const spans = [{ first: 1, last: 2 }];
+		const order = layoutNativeBlocks(blocks, 6, spans);
+		expect(order).toEqual([0, 4, 1, 2, 5, 3]);
+		expect(() => verifyCoreTargetBlockLayout(blocks, 6, spans, order)).not.toThrow();
+		for (const forged of [
+			[0, 4, 2, 1, 5, 3],
+			[0, 4, 1, 3, 2, 5],
+		])
+			expect(() => verifyCoreTargetBlockLayout(blocks, 6, spans, forged)).toThrow(
+				/reordered or split a certificate span/,
+			);
+		const overlaps = [...spans, { first: 2, last: 3 }];
+		expect(() =>
+			verifyCoreTargetBlockLayout(
+				blocks,
+				6,
+				overlaps,
+				layoutNativeBlocks(blocks, 6, overlaps),
+			),
+		).not.toThrow();
+	});
+
+	it("schedules a real branch tail beside a selected numeric region", () => {
+		const core =
+			compile(`globalThis.choose = function choose(input, condition, left, right) {
+			const fused = input.a + input.b * 2;
+			let value;
+			if(condition) { globalThis.take(left); value=left; }
+			else { globalThis.skip(right); value=right; }
+			globalThis.observe(fused, value); return value;
+		};`);
+		const native = lowerCoreCompilationToNativeProgram(core);
+		const fn = native.functions[1]!;
+		expect(fn.specializations.some((region) => region.kind === "numeric-fusion")).toBe(
+			true,
+		);
+		const source = core.program.function(native.functionMap.executionToCore[1]!);
+		const origins = fn.blocks.flatMap((block) => {
+			const point = fn.gc.safepoints.find(
+				(point) =>
+					point.kind === "operation" && block.instructions.includes(point.instruction),
+			);
+			return point?.kind === "operation"
+				? [source.kernel.instructionBlock(point.coreInstruction)]
+				: [];
+		});
+		const observed = new Set(origins);
+		expect(origins).not.toEqual(fn.coreBlocks.filter((block) => observed.has(block)));
+		const [plan] = lowerVerifiedTargetsToRuntimePlans([native]);
+		const bytecode = plan!.functions[1]!.bytecode;
+		expect(
+			bytecode.instructions.some(
+				(op, ip) => op.opcode === "JUMP" && op.targetIp === ip + 1,
+			),
+		).toBe(true);
+		for (const region of fn.specializations) {
+			const ips = region.claimedInstructions.map((instruction) =>
+				plan!.functions[1]!.instructionIndexByTargetInstruction.get(instruction)!,
+			);
+			expect(ips.every((ip, index) => index === 0 || ip > ips[index - 1]!)).toBe(true);
+		}
+	});
 	it("threads one-owner unconditional copies without changing Core block order", () => {
 		const blocks: CoreTargetFunction["blocks"] = [
 			{ instructions: [{ type: "jump", blocks: [3] }] },
@@ -45,7 +117,21 @@ describe("native block layout", () => {
 				],
 			},
 		];
-		expect(layoutNativeBlocks(blocks, 3, true)).toEqual([0, 3, 1, 5, 2, 4]);
+		expect(layoutNativeBlocks(blocks, 3, [{ first: 0, last: 2 }])).toEqual([
+			0, 3, 1, 5, 2, 4,
+		]);
+		const spans = [{ first: 0, last: 2 }];
+		const order = layoutNativeBlocks(blocks, 3, spans);
+		expect(() => verifyCoreTargetBlockLayout(blocks, 3, spans, order)).not.toThrow();
+		const forged = blocks.with(3, {
+			instructions: [
+				{ type: "createNumber", registers: [1], value: 5 },
+				{ type: "jump", blocks: [1] },
+			],
+		});
+		expect(() => verifyCoreTargetBlockLayout(forged, 3, spans, order)).toThrow(
+			/unrelated copy block/,
+		);
 	});
 
 	it("leaves shared copies at the tail and keeps protected block markers intact", () => {
@@ -71,7 +157,7 @@ describe("native block layout", () => {
 				],
 			},
 		];
-		expect(layoutNativeBlocks(blocks, 3, true)).toEqual([0, 1, 2, 3]);
+		expect(layoutNativeBlocks(blocks, 3, [{ first: 0, last: 2 }])).toEqual([0, 1, 2, 3]);
 	});
 
 	it("follows default traces through real blocks while leaving taken edges explicit", () => {
@@ -86,8 +172,8 @@ describe("native block layout", () => {
 			{ instructions: [{ type: "jump", blocks: [3] }] },
 			{ instructions: [{ type: "return", registers: [0] }] },
 		];
-		expect(layoutNativeBlocks(blocks, 4, false)).toEqual([0, 2, 3, 1]);
-		expect(layoutNativeBlocks(blocks, 4, true)).toEqual([0, 1, 2, 3]);
+		expect(layoutNativeBlocks(blocks, 4, [])).toEqual([0, 2, 3, 1]);
+		expect(layoutNativeBlocks(blocks, 4, [{ first: 0, last: 3 }])).toEqual([0, 1, 2, 3]);
 	});
 
 	it("gives real native phi edges fallthrough while leaving VM layout alone", () => {

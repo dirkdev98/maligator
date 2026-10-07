@@ -25,6 +25,13 @@ describe("guarded Array callback fast paths", () => {
 			outDir,
 		});
 		({ compiled, interpreted } = pair);
+		const paired = pair.programImage.native.functions.find(
+			(fn) =>
+				String.fromCharCode(
+					...(pair.programImage.runtime.stringConstants[fn.body.nameStringIndex] ?? []),
+				) === "comparePaired",
+		)!;
+		expect(paired.storage!.pairedArrayLoops.length).toBeGreaterThan(0);
 		source = emitProgramImage(pair.programImage, { compiled: true });
 	});
 

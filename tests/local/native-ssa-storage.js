@@ -265,6 +265,59 @@ for (let index = 0; index < 3; index++) {
 }
 console.log("region-tail", tailResults.join(","));
 
+function scheduledRegion(value, choose, left, right, observe) {
+	const fused = value.a + value.b * 2;
+	let result;
+	if (choose) {
+		observe("left", left);
+		result = left;
+	} else {
+		observe("right", right);
+		result = right;
+	}
+	try {
+		observe("join", result);
+	} catch (error) {
+		observe("catch", result);
+	}
+	return fused + result.value;
+}
+globalThis.scheduledRegion = scheduledRegion;
+for (const choose of [false, true])
+	for (const fail of [false, true]) {
+		const events = [];
+		const value = {
+			get a() {
+				events.push("a");
+				gc();
+				return 3;
+			},
+			get b() {
+				events.push("b");
+				gc();
+				return 7;
+			},
+		};
+		const observe = (stage, selected) => {
+			gc();
+			events.push(stage + ":" + selected.value);
+			if (fail && stage === "join") throw new Error("scheduled-join");
+		};
+		console.log(
+			"scheduled-region",
+			choose,
+			fail,
+			scheduledRegion(
+				value,
+				choose,
+				globalThis.makeStorageValue(2),
+				globalThis.makeStorageValue(9),
+				observe,
+			),
+			events.join(","),
+		);
+	}
+
 function scalarWithRegion(value, left, right, observe) {
 	const fused = value.a + value.b * 2;
 	observe(fused);

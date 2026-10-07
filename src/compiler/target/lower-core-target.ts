@@ -16,7 +16,7 @@ import type {
 	CoreDirectEntryPlan,
 	CorePlanRepresentation,
 } from "../core/core-ir-regions.ts";
-import { coreInstructionId } from "../core/core-ir.ts";
+import { coreBlockId, coreInstructionId } from "../core/core-ir.ts";
 import type {
 	CoreBlockId,
 	CoreAttributeValue,
@@ -58,6 +58,7 @@ import {
 	requireCoreTargetOperationContract,
 } from "./core-operation-contract.ts";
 import type {
+	CoreTargetBlockOrderSpan,
 	CoreTargetFunction,
 	CoreTargetFunctionMap,
 	CoreTargetMove,
@@ -75,6 +76,7 @@ import {
 	executionLoopBackedgeInstructions,
 	executionSafepointRoots,
 } from "./execution-liveness.ts";
+import { verifyCoreTargetBlockLayout } from "./verify-core-target-layout.ts";
 
 export type {
 	CoreTargetFunction,
@@ -95,7 +97,7 @@ export interface LowerCoreToCoreTargetOptions {
 	readonly layoutBlocks?: (
 		blocks: CoreTargetFunction["blocks"],
 		coreBlockCount: number,
-		preserveCoreOrder: boolean,
+		orderedSpans: ReadonlyArray<CoreTargetBlockOrderSpan>,
 	) => ReadonlyArray<number>;
 	readonly loopBackedgeInstructions?: typeof executionLoopBackedgeInstructions;
 	readonly excludeGuardedDirectCalls?: boolean;
@@ -2229,22 +2231,38 @@ function lowerFunctionToTarget(
 		if (handler !== undefined) instructions.push({ type: "tryEnd" });
 	}
 	if (layoutBlocks !== undefined) {
-		const order = layoutBlocks(
-			blocks,
-			blockOrder.length,
-			recipeRows.length > 0 || fieldCallPlans.length > 0,
-		);
-		if (
-			order.length !== blocks.length ||
-			order[0] !== 0 ||
-			new Set(order).size !== blocks.length ||
-			order.some(
-				(block) => !Number.isInteger(block) || block < 0 || block >= blocks.length,
-			)
-		)
-			throw new Error(
-				"Target block layout must be a permutation retaining entry block zero",
-			);
+		const orderedSpans: Array<CoreTargetBlockOrderSpan> = [];
+		const retainOrder = (coreBlocks: ReadonlyArray<CoreBlockId>): void => {
+			let first = blockOrder.length;
+			let last = -1;
+			for (const core of coreBlocks) {
+				const index = loweredBlockForCore.get(core);
+				if (index === undefined)
+					throw new Error(`Native layout lost Core block b${core}`);
+				first = Math.min(first, index);
+				last = Math.max(last, index);
+			}
+			if (last >= 0) orderedSpans.push({ first, last });
+		};
+		for (const row of recipeRows) {
+			const admission = coreSpecializationRecipeAdmissionAt(recipeTable, row);
+			retainOrder([
+				...coreSpecializationRecipeOrdinaryBlocksAt(recipeTable, row),
+				...coreSpecializationRecipeExceptionalBlocksAt(recipeTable, row),
+				...[
+					...coreSpecializationRecipeAnchorsAt(recipeTable, row),
+					...coreSpecializationRecipeClaimsAt(recipeTable, row),
+					...(admission === undefined ? [] : [admission.anchor]),
+				].map((instruction) => coreBlockId(kernel.instructionBlock(instruction))),
+			]);
+		}
+		for (const site of fieldCallPlans)
+			retainOrder([
+				coreBlockId(kernel.instructionBlock(site.allocation)),
+				coreBlockId(kernel.instructionBlock(site.call)),
+			]);
+		const order = layoutBlocks(blocks, blockOrder.length, orderedSpans);
+		verifyCoreTargetBlockLayout(blocks, blockOrder.length, orderedSpans, order);
 		const relocated = new Map(order.map((block, index) => [block, index]));
 		let position = -1;
 		for (const block of blocks) {

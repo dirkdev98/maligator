@@ -29,6 +29,19 @@ describe("shaped object slot coallocation", () => {
 			outDir,
 		});
 		compiled = result.binaryPath;
+		const constructor = (name: string) =>
+			result.programImage.native.functions.find(
+				(fn) =>
+					fn.body.isClassConstructor &&
+					String.fromCharCode(
+						...(result.programImage.runtime.stringConstants[fn.body.nameStringIndex] ??
+							[]),
+					) === name,
+			)!;
+		expect(constructor("CopiedRecord").storage!.constructorInitialization).toBeDefined();
+		expect(
+			constructor("CallbackRecord").storage!.constructorInitialization,
+		).toBeUndefined();
 		source = emitProgramImage(result.programImage, { compiled: true });
 		instrumented = buildNativeBinary({
 			fixture: "tests/local/object_slot_coallocation.js",

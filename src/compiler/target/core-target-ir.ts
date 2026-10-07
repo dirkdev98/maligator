@@ -66,6 +66,11 @@ export type CoreTargetRegisterRepresentation =
 	| "boolean"
 	| "string";
 
+export interface CoreTargetBlockOrderSpan {
+	readonly first: number;
+	readonly last: number;
+}
+
 /** A simultaneous assignment and its cycle-safe sequential realization. */
 export interface CoreTargetParallelCopy {
 	readonly kind: "edge" | "handler-input";

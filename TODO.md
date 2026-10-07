@@ -97,8 +97,8 @@ The independent target boundary and current storage contract are recorded in
 
 - [x] Schedule default-successor traces for native functions without selected region
       or field-call contracts; preserve source positions, handler transport, and polls.
-- [ ] Extend native scheduling to selected regions whose certificates currently
-      depend on Core block order.
+- [x] Schedule native default traces between selected region and field-call spans;
+      preserve their internal Core order and verify every moved copy independently.
 - [x] Persist live suspension values in compact boxed slots with per-site save and
       restore maps; keep scalar computation in typed C locals. Cover queued
       async-generator resumes, throwing await resolution, eval splices, and

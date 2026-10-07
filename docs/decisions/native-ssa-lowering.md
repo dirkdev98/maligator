@@ -75,9 +75,13 @@ selects a normal branch on its path because exceptional transfers cannot poll.
 The VM retains its physical backward-branch polling
 contract and corresponding root maps.
 
-Native layout follows default-successor traces through functions without selected
-region or field-call contracts. Where those contracts require Core order, it only
-places one-owner unconditional edge-copy blocks beside their predecessors. Block references relocate before specialization and GC lowering;
+Native layout follows default-successor traces between atomic block groups. Selected
+region anchors, claims, admission sites, and control-flow envelopes constrain the
+original Core-order span; field calls constrain allocation through call. Overlapping
+spans merge, and only one-owner default edge-copy blocks may intervene within a span.
+A separate verifier rejects reversed, split, or unrelated-copy layouts before
+relocation. Handler transport and suspension markers remain inside their original
+blocks. Block references relocate before specialization and GC lowering;
 instruction identities and cycle-safe copy schedules survive that permutation.
 Explicit per-block source attribution prevents moved copies from inheriting an
 unrelated source position. The target keeps its explicit jumps and exception ranges;
