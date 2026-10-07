@@ -12,6 +12,7 @@ import {
 	emitProgramImage,
 	emitProgramTranslationUnits,
 } from "../src/compiler/target/emit-program-image.ts";
+import { lowerNativeStorage } from "../src/compiler/target/lower-native-storage.ts";
 
 function compile(source: string) {
 	const dir = mkdtempSync(path.join(os.tmpdir(), "mal-native-body-"));
@@ -74,7 +75,9 @@ describe("native body reachability", () => {
 				})),
 			},
 		};
-		expect(emitProgramImage(withoutSelection)).toContain(`mal_compiled_${index}(`);
+		expect(emitProgramImage(lowerNativeStorage(withoutSelection))).toContain(
+			`mal_compiled_${index}(`,
+		);
 	});
 	it("retains bytecode when compilation is disabled", () => {
 		const image = compile(`${predicate} console.log(isNil(true));`);
@@ -93,6 +96,8 @@ describe("native body reachability", () => {
 				functions: image.native.functions.map((fn) => ({ ...fn, directEntries: [] })),
 			},
 		};
-		expect(emitProgramImage(withoutEntries)).toContain(`mal_compiled_${index}(`);
+		expect(emitProgramImage(lowerNativeStorage(withoutEntries))).toContain(
+			`mal_compiled_${index}(`,
+		);
 	});
 });
