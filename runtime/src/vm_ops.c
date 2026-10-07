@@ -878,8 +878,13 @@ MalValue mal_vm_create_object_shaped(MalVm *vm, MalShape *shape, const MalValue 
     MAL_PERF_COUNT(object_shaped_creations);
     MalObject *prototype =
         mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]);
-    return mal_value_from_object(
-        mal_object_new_shaped(&vm->heap, prototype, shape, values, count));
+    MalObject *object = mal_object_try_new_shaped(
+        &vm->heap, prototype, shape, values, count);
+    if (object == nullptr) {
+        mal_vm_throw_allocation_error(vm);
+        return MAL_VALUE_UNDEFINED;
+    }
+    return mal_value_from_object(object);
 }
 
 void mal_op_create_object(MalCallable *callable, const MalInstruction *instruction) {

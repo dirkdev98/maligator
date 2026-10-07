@@ -1020,8 +1020,8 @@ export function nativeInstructionEffects(
 		case "CREATE_BIGINT":
 			return nativeStaticPropertyEffects.probe;
 		case "CREATE_OBJECT":
-			return NATIVE_FALLIBLE_ALLOCATION_EFFECTS;
 		case "CREATE_OBJECT_SHAPED":
+			return NATIVE_FALLIBLE_ALLOCATION_EFFECTS;
 		case "CREATE_ARRAY":
 			return NATIVE_ALLOCATION_EFFECTS;
 		case "STORE_PROPERTY_STATIC":

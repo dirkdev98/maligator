@@ -220,8 +220,6 @@ const NO_THROW = new Set<CoreOpcode>([
 	"createBigint",
 	"createFunction",
 	"createModuleNamespace",
-	"createObject",
-	"createObjectShaped",
 	"createString",
 	"createTemplateObject",
 	"initGlobalVars",

@@ -539,12 +539,9 @@ contracts or investigates costs still visible after the string follow-ups.
       the highest participating group up to `$9`, and `tests/local/regexp_cache.js`
       asserts that (`/(a)(b)(c)?/` yields "b" instead of "").
 
-- [ ] Throw catchably when an inlined escaping stack object fails to materialize
-      inside `try`. In `tests/local/stack-object.js`, `failConditionalReturn` inlined
-      into the top-level `try` emits `mal_vm_create_object_shaped` without a throw
-      check, so the armed allocation failure surfaces later as an uncaught
-      "Out of memory" and both compiled cases of `tests/native/stack-object.test.ts`
-      fail.
+- [x] Propagate shaped allocation failures through the owning handler: use the
+      fallible shared helper, preserve allocation exception edges in Core, check
+      native completion, and unwind the interpreter before forward-jump fusion.
 
 - [ ] Fix remaining arguments-object legacy caller and parameter-expression behavior.
       Cover strict, sloppy, mapped, and unmapped forms.

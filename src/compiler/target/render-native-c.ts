@@ -5248,6 +5248,7 @@ function emitInstruction(
 				return [
 					...shape,
 					`r${instruction.dst} = ${profileCall("allocation", `mal_vm_create_object_shaped(vm, __oshape_${ip}, (MalValue[]){ ${values} }, ${instruction.count})`)};`,
+					throwCheck(),
 				];
 			}
 			const { objectName, slotsOffset } = stackObjectSite;
@@ -5274,6 +5275,7 @@ function emitInstruction(
 					`} else {`,
 					`  mal_perf_stack_object_inherited_heap_fallback();`,
 					`  r${instruction.dst} = ${profileCall("allocation", `mal_vm_create_object_shaped(vm, __oshape_${ip}, (MalValue[]){ ${values} }, ${instruction.count})`)};`,
+					`  ${throwCheck()}`,
 					`}`,
 				];
 			}

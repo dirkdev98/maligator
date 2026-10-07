@@ -2299,9 +2299,12 @@ static void mal_vm_run_until_frame_count(
                     mal_op_create_base_construct_receiver(frame, instruction));
                 break;
             case MAL_OP_CREATE_OBJECT_SHAPED:
-                // Shaped literal creation can only raise the deferred GC poll; it
-                // cannot collect, call JavaScript, or replace this activation.
+                // Successful creation cannot collect or replace this activation.
                 mal_op_create_object_shaped(frame, instruction);
+                if (vm->completion.kind == MAL_COMPLETION_THROW) {
+                    MAL_VM_INTERPRETER_SYNC();
+                    break;
+                }
                 if (instruction_pointer < frame->function->instruction_count) {
                     const MalInstruction *jump = &instructions[instruction_pointer];
                     if (jump->opcode == MAL_OP_JUMP &&

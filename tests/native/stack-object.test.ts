@@ -50,4 +50,11 @@ describe("compiled stack objects", () => {
 	it("retains interpreted semantic parity", () => {
 		assertPassLine(runToStdout(interpreted), "stack-object");
 	});
+
+	it("dispatches interpreted allocation failures before a fused continuation", () => {
+		assertPassLine(
+			runToStdout(interpreted, { env: { MAL_ALLOC_FAIL_TEST: "1" } }),
+			"stack-object",
+		);
+	});
 });

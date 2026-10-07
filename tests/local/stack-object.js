@@ -264,6 +264,16 @@ function failConditionalReturn(escape) {
 	return typeof o === "object" ? o.value : 0;
 }
 
+function catchOrdinaryAllocation(input, shaped) {
+	try {
+		const object = shaped ? { value: input, text: "allocation" } : {};
+		globalThis.savedAllocation = object;
+		return false;
+	} catch (error) {
+		return error instanceof Error;
+	}
+}
+
 let globalEscape;
 function returnEscape(seed) {
 	return { value: seed, text: "return:" + seed };
@@ -411,6 +421,10 @@ check(
 );
 
 if (typeof __mal_fail_next_cell_allocation === "function") {
+	for (const shaped of [false, true]) {
+		__mal_fail_next_cell_allocation();
+		check("ordinary allocation failure handler", catchOrdinaryAllocation(17, shaped));
+	}
 	let materializeOom = false;
 	try {
 		failConditionalReturn(true);
