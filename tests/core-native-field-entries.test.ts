@@ -7,6 +7,8 @@ import {
 	deserializeCompilerArtifact,
 	serializeCompilerArtifact,
 } from "../src/compiler/target/compiler-artifact-codec.ts";
+import { nativeEntryLookup } from "../src/compiler/target/lower-native-calls.ts";
+import { lowerNativeFunctionStorage } from "../src/compiler/target/lower-native-storage.ts";
 import {
 	compactProgramImageConstants,
 	validateNativeFieldCalls,
@@ -17,6 +19,70 @@ import {
 } from "../src/compiler/target/render-native-c.ts";
 
 describe("numeric own-field native entry contracts", () => {
+	it("clears auxiliary field roots on every exceptional exit from a native window", () => {
+		const image = compactProgramImageConstants(
+			compileSemanticProgramToProgramImage(
+				analyzeSourceAndRunSemanticAnalysis(
+					`class Quote { read(order) { return order.net + 7; } }
+					class Other { read(order) { return order.net + 8; } }
+					const rules = [new Quote(), new Other()];
+					for (let i = 0; i < 3; i++) {
+						const order = {net:i * 7, metadata:{i}};
+						globalThis.checkpoint();
+						globalThis.result = rules[i % 2].read(order);
+					}`,
+					"field-root-cleanup.js",
+				),
+				{ facts: compilerProgramFactsFromConfig(resolveBuildConfig({})) },
+			),
+		).definition;
+		const caller = image.native.functions.find((fn) => fn.fieldCalls !== undefined)!;
+		expect(caller).toBeDefined();
+		const site = caller.fieldCalls![0]!;
+		expect(
+			caller.body.instructions
+				.slice(site.allocationIp + 1, site.callIp)
+				.some((op) => op.opcode === "CALL"),
+		).toBe(true);
+		const handlerIp = caller.body.instructions.length - 1;
+		const body = {
+			...caller.body,
+			handlers: [{ startIp: site.allocationIp, endIp: site.callIp + 1, handlerIp }],
+		};
+		const native = { ...caller, body };
+		validateNativeFieldCalls(body, native, image.native.functions);
+		const entries = nativeEntryLookup(image.native.functions);
+		const lowered = lowerNativeFunctionStorage(
+			native,
+			entries,
+			image.runtime.stringConstants,
+		);
+		const emitted = emitCompiledFunction(
+			lowered,
+			caller.functionIndex,
+			"",
+			false,
+			"static",
+			new Set(image.native.functions.map((fn) => fn.functionIndex)),
+			image.native.semanticProtectors,
+			entries,
+		)!;
+		const fallback = emitted.source.slice(emitted.source.indexOf("__field_target_"));
+		const slot = fallback.match(/MalValue\[\]\)\{[^\n]*__gc_slots\[(\d+)\]/)?.[1];
+		expect(slot).toBeDefined();
+		const transfers = [
+			...emitted.source.matchAll(new RegExp(`goto L${handlerIp};`, "g")),
+		];
+		expect(transfers.length).toBeGreaterThan(1);
+		for (const transfer of transfers) {
+			const line = emitted.source.slice(
+				emitted.source.lastIndexOf("\n", transfer.index) + 1,
+				transfer.index,
+			);
+			expect(line).toContain(`__gc_slots[${slot}] = MAL_VALUE_UNDEFINED;`);
+		}
+	});
+
 	it.each([
 		"r.x + (r.y > 0)",
 		"r.x + (r.y > 0 ? null : undefined)",

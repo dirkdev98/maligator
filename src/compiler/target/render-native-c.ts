@@ -3354,6 +3354,7 @@ function emitBody(
 		fieldLoad: undefined,
 		fieldAllocation: undefined,
 		fieldCall: undefined,
+		fieldThrowSlots: undefined,
 		mathCall: undefined,
 		mappedArguments: fn.mappedArguments,
 		mappedArgumentSlots: fn.mappedArgumentSlots,
@@ -3391,8 +3392,13 @@ function emitBody(
 			if (registers.length === 1) knownPublishedPrivateRoots.set(slot, registers[0]!);
 	}
 	const hasPrivateRoots = (rootPublication?.slots.size ?? 0) > 0;
+	const activeFieldSlots = new Set<number>();
 	if (coro !== null) invocationPreamble.push(...lines.splice(0));
 	for (let ip = 0; ip < fn.instructions.length; ip++) {
+		for (const slot of fieldCallSites.get(ip - 1)?.boxedSlots ?? [])
+			if (slot !== undefined) activeFieldSlots.delete(slot);
+		for (const slot of fieldAllocations.get(ip - 1)?.boxedSlots ?? [])
+			if (slot !== undefined) activeFieldSlots.add(slot);
 		if (jumpTargets.has(ip)) {
 			lines.push(`L${ip}:;`);
 			// Control can arrive with different published frame metadata.
@@ -3756,6 +3762,7 @@ function emitBody(
 		instructionContext.fieldLoad = fieldLoads.get(ip);
 		instructionContext.fieldAllocation = fieldAllocations.get(ip);
 		instructionContext.fieldCall = fieldCallSites.get(ip);
+		instructionContext.fieldThrowSlots = [...activeFieldSlots];
 		instructionContext.callTransport = callTransportByIp.get(ip);
 		instructionContext.callbackTransport = callbackTransportByIp.get(ip);
 		instructionContext.mathCall = mathCalls.get(ip);
@@ -4172,6 +4179,7 @@ interface NativeInstructionContext {
 	readonly fieldAllocation?: NativeFieldCall;
 	readonly fieldCall?: NativeFieldCall;
 	readonly fieldEntryCall?: NativeFieldCall;
+	readonly fieldThrowSlots?: ReadonlyArray<number>;
 	readonly callTransport?: NativeCallTransportPlan;
 	readonly callbackTransport?: NativeCallbackTransportPlan;
 	readonly mathCall: NativeMathCallPlan | undefined;
@@ -4357,6 +4365,7 @@ function emitInstruction(
 		directArgumentRepresentations: context.directArgumentRepresentations,
 		constantBoolean: context.constantBoolean,
 		fieldEntryCall: context.fieldEntryCall,
+		fieldThrowSlots: context.fieldThrowSlots,
 		callTransport: context.callTransport,
 		callbackTransport: context.callbackTransport,
 		mathCall,
@@ -4619,9 +4628,13 @@ function emitInstruction(
 			handlerIp !== undefined
 				? `goto L${handlerIp};`
 				: `goto ${nativeBodyReference(resources, "throwExit")};`;
-		return (context.rootedOutputReloads?.length ?? 0) === 0
-			? jump
-			: `{ ${context.rootedOutputReloads!.join(" ")} ${jump} }`;
+		const cleanup = [
+			...(context.rootedOutputReloads ?? []),
+			...(context.fieldThrowSlots ?? []).map(
+				(slot) => `__gc_slots[${slot}] = MAL_VALUE_UNDEFINED;`,
+			),
+		];
+		return cleanup.length === 0 ? jump : `{ ${cleanup.join(" ")} ${jump} }`;
 	};
 	const throwCheck = (): string =>
 		`if (vm->completion.kind == MAL_COMPLETION_THROW) ${onThrow()}`;

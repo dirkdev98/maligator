@@ -34,10 +34,7 @@ describe("read-only parameter field entries", () => {
 			expect(
 				programImage.native.functions.some((fn) =>
 					fn.fieldCalls?.some((site) => {
-						const allocation =
-							programImage.runtime.functions[fn.functionIndex]!.instructions[
-								site.allocationIp
-							]!;
+						const allocation = fn.body.instructions[site.allocationIp]!;
 						return allocation.opcode === "CREATE_OBJECT_SHAPED" && allocation.count === 4;
 					}),
 				),
