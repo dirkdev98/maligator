@@ -4,13 +4,21 @@ function check(condition, message) {
 	if (!condition) throw new Error(message);
 }
 
-async function bounded(promise) {
+async function bounded(promise, progress) {
 	let timer;
 	try {
 		await Promise.race([
 			promise,
 			new Promise((_, reject) => {
-				timer = setTimeout(() => reject(new Error("host fairness timed out")), 3000);
+				timer = setTimeout(
+					() =>
+						reject(
+							new Error(
+								`host fairness timed out: ${progress()}; stress=${process.env.MAL_GC_STRESS ?? "0"}`,
+							),
+						),
+					3000,
+				);
 			}),
 		]);
 	} finally {
@@ -55,7 +63,11 @@ async function dueTimerDuringMessages() {
 		port1.postMessage(0);
 		const until = Date.now() + 3;
 		while (Date.now() < until) {}
-		await bounded(Promise.all([messages, timer]));
+		await bounded(
+			Promise.all([messages, timer]),
+			() =>
+				`dueTimerDuringMessages received=${received}/${limit} checkpoint=${checkpoint} timerFired=${timerFired} timerCheckpoint=${timerCheckpoint}`,
+		);
 	} finally {
 		port1.close();
 		port2.close();
@@ -105,7 +117,11 @@ async function competingSources() {
 			immediate = setImmediate(next);
 		});
 		port1.postMessage(0);
-		await bounded(Promise.all([messagesDone, immediatesDone]));
+		await bounded(
+			Promise.all([messagesDone, immediatesDone]),
+			() =>
+				`competingSources messages=${messages}/${limit} immediates=${immediates}/${limit} messageCheckpoint=${messageCheckpoint} immediateCheckpoint=${immediateCheckpoint}`,
+		);
 	} finally {
 		clearImmediate(immediate);
 		port1.close();

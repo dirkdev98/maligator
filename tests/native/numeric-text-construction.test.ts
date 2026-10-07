@@ -1,4 +1,4 @@
-import { describe, it } from "vitest";
+import { beforeAll, describe, it } from "vitest";
 import {
 	assertExactLines,
 	buildNativeBinary,
@@ -7,23 +7,27 @@ import {
 } from "../../src/test-harness.ts";
 
 describe("numeric text construction", () => {
-	it.each([
+	for (const [name, compiled] of [
 		["compiled", true],
 		["interpreted", false],
-	])(
-		"preserves numeric spelling and observable conversions in %s mode",
-		(_name, compiled) => {
-			const binary = buildNativeBinary({
-				fixture: "tests/local/numeric-text-construction.js",
-				name: `numeric-text-construction-${compiled ? "compiled" : "interpreted"}`,
-				compiled,
+	] as const) {
+		describe(`${name} mode`, () => {
+			let binary: string;
+			beforeAll(() => {
+				binary = buildNativeBinary({
+					fixture: "tests/local/numeric-text-construction.js",
+					name: `numeric-text-construction-${name}`,
+					compiled,
+				});
 			});
-			const expected = ["numeric-text-construction PASS"];
-			assertExactLines(runToStdout(binary, { env: { MAL_HOST_GC: "1" } }), expected);
-			assertExactLines(
-				runToStdout(binary, { env: { MAL_HOST_GC: "1", ...STRESS_ENV } }),
-				expected,
-			);
-		},
-	);
+			it(`preserves numeric spelling and observable conversions in ${name} mode`, () => {
+				const expected = ["numeric-text-construction PASS"];
+				assertExactLines(runToStdout(binary, { env: { MAL_HOST_GC: "1" } }), expected);
+				assertExactLines(
+					runToStdout(binary, { env: { MAL_HOST_GC: "1", ...STRESS_ENV } }),
+					expected,
+				);
+			});
+		});
+	}
 });
