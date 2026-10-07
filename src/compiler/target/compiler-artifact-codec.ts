@@ -15,6 +15,8 @@ import { NATIVE_CALL_CONVERSIONS, nativeEntryLookup } from "./lower-native-calls
 import type { NativeCallTransportPlan } from "./lower-native-calls.ts";
 import { NATIVE_PROPERTY_UPDATE_OPERATORS } from "./lower-native-fast-paths.ts";
 import type {
+	NativeLiteralPropertyDefinitionPlan,
+	NativeMathCallPlan,
 	NativeArrayPresencePlan,
 	NativeArrayPairDestructurePlan,
 	NativePropertyProjectionPlan,
@@ -76,7 +78,7 @@ import type {
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal artifacts are hard cut-overs: stale cache entries rebuild.
-export const COMPILER_ARTIFACT_VERSION = 131;
+export const COMPILER_ARTIFACT_VERSION = 132;
 
 function validateClosureCaptureOwners(
 	owners: ReadonlyArray<number>,
@@ -674,7 +676,8 @@ export function serializeCompilerArtifact(
 		writeRuntimeFunction(writer, body, options.debugInfo !== false);
 	writeCompilerArtifact(writer, { ...image.runtime, functions: bodies }, image);
 	const entries = nativeEntryLookup(image.native.functions);
-	for (const native of image.native.functions) validateNativeStorage(native, entries);
+	for (const native of image.native.functions)
+		validateNativeStorage(native, entries, image.runtime.stringConstants);
 	return writer.finish();
 }
 function writeNativeStorage(w: Writer, storage: NativeStoragePlan | undefined): void {
@@ -880,6 +883,20 @@ function writeNativeStorage(w: Writer, storage: NativeStoragePlan | undefined): 
 			w.i32(plan[key]);
 		w.i32Array([...plan.claimedIps]);
 		w.i32Array([...plan.borrowedRegisters]);
+	}
+	w.u32(storage.literalPropertyDefinitions.length);
+	for (const plan of storage.literalPropertyDefinitions) {
+		w.i32(plan.instructionIp);
+		w.i32(plan.stringIndex);
+	}
+	w.u32(storage.mathCalls.length);
+	for (const plan of storage.mathCalls) {
+		w.i32(plan.instructionIp);
+		w.u8(
+			(VM_GUARDED_BUILTIN_OPERATIONS as ReadonlyArray<string>).indexOf(plan.operation),
+		);
+		w.u8(plan.arity);
+		w.u8(plan.mode === "number" ? 0 : 1);
 	}
 }
 
@@ -1189,8 +1206,29 @@ function readNativeStorage(r: Reader): NativeStoragePlan {
 			fallback: "original-iterator-protocol",
 		}),
 	);
+	const literalPropertyDefinitions: Array<NativeLiteralPropertyDefinitionPlan> =
+		Array.from({ length: r.count(8) }, () => ({
+			instructionIp: r.i32(),
+			stringIndex: r.i32(),
+		}));
+	const mathCalls: Array<NativeMathCallPlan> = Array.from({ length: r.count(7) }, () => {
+		const instructionIp = r.i32(),
+			operation = VM_GUARDED_BUILTIN_OPERATIONS[r.u8()],
+			arity = r.u8(),
+			mode = r.u8();
+		if (operation === undefined || (arity !== 1 && arity !== 2) || mode > 1)
+			throw new Error("program-image-codec: invalid Math call plan");
+		return {
+			instructionIp,
+			operation,
+			arity,
+			mode: mode === 0 ? "number" : "guarded-boxed",
+		};
+	});
 	return {
 		...storage,
+		literalPropertyDefinitions,
+		mathCalls,
 		arrayPresence,
 		arrayPairDestructure,
 		callTransports,
@@ -5340,6 +5378,6 @@ function readCompilerArtifact(
 	validateVmShapeCases(runtimeImage);
 	const entries = nativeEntryLookup(definition.native.functions);
 	for (const native of definition.native.functions)
-		validateNativeStorage(native, entries);
+		validateNativeStorage(native, entries, runtimeImage.stringConstants);
 	return definition;
 }

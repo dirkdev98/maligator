@@ -15,11 +15,16 @@ export interface MergedProgramImage {
 function rebaseNativeStorage(
 	storage: NativeStoragePlan | undefined,
 	functionBase: number,
+	stringBase: number,
 ): NativeStoragePlan | undefined {
 	return storage === undefined
 		? undefined
 		: {
 				...storage,
+				literalPropertyDefinitions: storage.literalPropertyDefinitions.map((plan) => ({
+					...plan,
+					stringIndex: plan.stringIndex + stringBase,
+				})),
 				callbackTransports: storage.callbackTransports.map((plan) => ({
 					...plan,
 					functionIndex: plan.functionIndex + functionBase,
@@ -687,7 +692,7 @@ export function mergeProgramImages(images: Array<ProgramImage>): MergedProgramIm
 		mergedNativeFunctions.push(
 			...programImage.native.functions.map((native, localFunctionIndex) => ({
 				...native,
-				storage: rebaseNativeStorage(native.storage, base.function),
+				storage: rebaseNativeStorage(native.storage, base.function, base.string),
 				body: {
 					...native.body,
 					closureCaptureOwners: native.body.closureCaptureOwners?.map((owner) =>
@@ -713,7 +718,7 @@ export function mergeProgramImages(images: Array<ProgramImage>): MergedProgramIm
 				registerRepresentations: [...native.registerRepresentations],
 				directEntries: native.directEntries.map((entry) => ({
 					...entry,
-					storage: rebaseNativeStorage(entry.storage, base.function),
+					storage: rebaseNativeStorage(entry.storage, base.function, base.string),
 					callOverrides: entry.callOverrides?.map((call) => ({
 						...call,
 						functionIndex: call.functionIndex + base.function,

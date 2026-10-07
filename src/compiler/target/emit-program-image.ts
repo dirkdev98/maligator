@@ -1313,7 +1313,8 @@ function emitProgramImageSource(
 	}
 
 	const entries = nativeEntryLookup(image.native.functions);
-	for (const native of image.native.functions) validateNativeStorage(native, entries);
+	for (const native of image.native.functions)
+		validateNativeStorage(native, entries, image.runtime.stringConstants);
 	return { source: lines.join("\n"), compiled };
 }
 

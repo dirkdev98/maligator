@@ -18,7 +18,7 @@ import type {
 export function testProgramImage(runtime: RuntimeImage): ProgramImage {
 	return {
 		runtime,
-		native: createConservativeNativePlan(runtime.functions),
+		native: createConservativeNativePlan(runtime.functions, runtime.stringConstants),
 		diagnostics: {},
 	};
 }

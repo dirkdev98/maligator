@@ -527,9 +527,10 @@ function lowerStorage(
 	entry?: NativeDirectEntryPlan,
 	entries: NativeEntryLookup = new Map(),
 	suspension = lowerNativeSuspension(native),
+	stringConstants: ReadonlyArray<ReadonlyArray<number>> = [],
 ): NativeStoragePlan {
 	const fn = native.body;
-	const fastPaths = selectNativeFastPaths(native, entry);
+	const fastPaths = selectNativeFastPaths(native, entry, stringConstants);
 	const {
 		propertyProjections,
 		propertyNumericUpdates,
@@ -654,13 +655,21 @@ function lowerStorage(
 export function lowerNativeFunctionStorage(
 	native: NativeFunctionPlan,
 	entries: NativeEntryLookup = new Map(),
+	stringConstants: ReadonlyArray<ReadonlyArray<number>> = [],
 ): NativeFunctionPlan {
 	return {
 		...native,
-		storage: lowerStorage(native, true, undefined, entries),
+		storage: lowerStorage(native, true, undefined, entries, undefined, stringConstants),
 		directEntries: native.directEntries.map((entry) => ({
 			...entry,
-			storage: lowerStorage(nativeVariantContract(native, entry), true, entry, entries),
+			storage: lowerStorage(
+				nativeVariantContract(native, entry),
+				true,
+				entry,
+				entries,
+				undefined,
+				stringConstants,
+			),
 		})),
 	};
 }
@@ -672,7 +681,7 @@ export function lowerNativeStorage(image: ProgramImage): ProgramImage {
 		native: {
 			...image.native,
 			functions: image.native.functions.map((native) =>
-				lowerNativeFunctionStorage(native, entries),
+				lowerNativeFunctionStorage(native, entries, image.runtime.stringConstants),
 			),
 		},
 	};
@@ -681,6 +690,7 @@ export function lowerNativeStorage(image: ProgramImage): ProgramImage {
 export function validateNativeStorage(
 	native: NativeFunctionPlan,
 	entries: NativeEntryLookup = new Map(),
+	stringConstants: ReadonlyArray<ReadonlyArray<number>> = [],
 ): void {
 	const sameNumbers = (left: ReadonlyArray<number>, right: ReadonlyArray<number>) =>
 		left.length === right.length && left.every((value, index) => value === right[index]);
@@ -859,6 +869,25 @@ export function validateNativeStorage(
 							point.instructionIp === suspension.points[index]!.instructionIp &&
 							sameNumbers(point.registers, suspension.points[index]!.registers),
 					)) &&
+			stored.literalPropertyDefinitions.length ===
+				selected.literalPropertyDefinitions.length &&
+			stored.literalPropertyDefinitions.every((plan, index) => {
+				const expected = selected.literalPropertyDefinitions[index]!;
+				return (
+					plan.instructionIp === expected.instructionIp &&
+					plan.stringIndex === expected.stringIndex
+				);
+			}) &&
+			stored.mathCalls.length === selected.mathCalls.length &&
+			stored.mathCalls.every((plan, index) => {
+				const expected = selected.mathCalls[index]!;
+				return (
+					plan.instructionIp === expected.instructionIp &&
+					plan.operation === expected.operation &&
+					plan.arity === expected.arity &&
+					plan.mode === expected.mode
+				);
+			}) &&
 			sameProjections(stored.propertyProjections, selected.propertyProjections) &&
 			sameUpdates(stored.propertyNumericUpdates, selected.propertyNumericUpdates) &&
 			sameReadRegions(stored.propertyReadRegions, selected.propertyReadRegions) &&
@@ -991,7 +1020,7 @@ export function validateNativeStorage(
 		const suspension = lowerNativeSuspension(variant);
 		return same(
 			variant.storage,
-			lowerStorage(variant, false, entry, entries, suspension),
+			lowerStorage(variant, false, entry, entries, suspension, stringConstants),
 			suspension,
 		);
 	};

@@ -717,6 +717,8 @@ function firstNativeSafepointReader(bytes: Uint8Array) {
 	expect(reader.u32()).toBe(0);
 	expect(reader.u32()).toBe(0);
 	expect(reader.u32()).toBe(0);
+	expect(reader.u32()).toBe(0);
+	expect(reader.u32()).toBe(0);
 	expect(reader.u32()).toBe(2); // Ordinary-entry safepoints.
 	return reader;
 }

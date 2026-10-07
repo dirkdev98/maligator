@@ -452,7 +452,13 @@ describe("emit-program-image instruction packing", () => {
 				hostInstalls: [],
 			});
 			return emitProgramImage(
-				{ ...image, native: createConservativeNativePlan([defineFunction]) },
+				{
+					...image,
+					native: createConservativeNativePlan(
+						[defineFunction],
+						image.runtime.stringConstants,
+					),
+				},
 				{ compiled: true },
 			);
 		};
@@ -3530,6 +3536,9 @@ describe("native update-expression representation", () => {
 				}),
 			}),
 		);
+		expect(image.native.functions[0]!.storage!.mathCalls).toEqual([
+			{ instructionIp: 4, operation: "Math.floor", arity: 1, mode: "number" },
+		]);
 		const output = emitProgramImage(image, { compiled: true });
 
 		expect(output).toMatch(

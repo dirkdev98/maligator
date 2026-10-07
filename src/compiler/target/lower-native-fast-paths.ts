@@ -1,9 +1,14 @@
+import {
+	MATH_UNARY_NATIVE_CALL,
+	MATH_BINARY_OPERATIONS,
+} from "./native-scalar-operators.ts";
 import type {
 	NativeDirectEntryPlan,
 	NativeFunctionPlan,
 	VmRegisterRepresentation,
 } from "./program-image.ts";
 import {
+	decodeVmValueOperand,
 	vmExceptionHandlerTargets,
 	vmInstructionReadRegisters,
 	vmInstructionUsesRegister,
@@ -150,7 +155,21 @@ export interface NativeArrayPairDestructurePlan {
 	readonly fallback: "original-iterator-protocol";
 }
 
+export interface NativeLiteralPropertyDefinitionPlan {
+	readonly instructionIp: number;
+	readonly stringIndex: number;
+}
+
+export interface NativeMathCallPlan {
+	readonly instructionIp: number;
+	readonly operation: string;
+	readonly arity: 1 | 2;
+	readonly mode: "number" | "guarded-boxed";
+}
+
 export interface NativeFastPathPlans {
+	readonly literalPropertyDefinitions: ReadonlyArray<NativeLiteralPropertyDefinitionPlan>;
+	readonly mathCalls: ReadonlyArray<NativeMathCallPlan>;
 	readonly propertyNumericUpdates: ReadonlyArray<NativePropertyNumericUpdatePlan>;
 	readonly propertyProjections: ReadonlyArray<NativePropertyProjectionPlan>;
 	readonly propertyReadRegions: ReadonlyArray<NativePropertyReadRegionPlan>;
@@ -1246,6 +1265,9 @@ export function lowerNativeFastPaths(
 		});
 	}
 	return Object.freeze({
+		literalPropertyDefinitions:
+			selection.kind === "render" ? selection.plans.literalPropertyDefinitions : [],
+		mathCalls: selection.kind === "render" ? selection.plans.mathCalls : [],
 		arrayPresence: selection.kind === "render" ? selection.plans.arrayPresence : [],
 		arrayPairDestructure:
 			selection.kind === "render" ? selection.plans.arrayPairDestructure : [],
@@ -1449,9 +1471,23 @@ function selectArrayWindows(
 	return { arrayPresence, arrayPairDestructure };
 }
 
+function stringConstantIsArrayIndex(units: ReadonlyArray<number>): boolean {
+	if (units.length === 0) return false;
+	if (units[0] === 0x30) return units.length === 1;
+	if (units[0]! < 0x31 || units[0]! > 0x39) return false;
+	let index = 0;
+	for (const unit of units) {
+		if (unit < 0x30 || unit > 0x39) return false;
+		index = index * 10 + unit - 0x30;
+		if (index > 0xffff_fffe) return false;
+	}
+	return true;
+}
+
 export function selectNativeFastPaths(
 	native: NativeFunctionPlan,
 	entry?: NativeDirectEntryPlan,
+	stringConstants: ReadonlyArray<ReadonlyArray<number>> = [],
 ): NativeFastPathPlans {
 	const fn = native.body;
 	const handlerEntries = new Set(fn.handlers.map((handler) => handler.handlerIp));
@@ -1464,6 +1500,57 @@ export function selectNativeFastPaths(
 		}
 		if (["GENERATOR_START", "YIELD", "AWAIT"].includes(op.opcode))
 			jumpTargets.add(ip + 1);
+	}
+	const literalPropertyDefinitions: Array<NativeLiteralPropertyDefinitionPlan> = [];
+	const mathCalls: Array<NativeMathCallPlan> = [];
+	const numericOperand = (operand: number): boolean => {
+		const decoded = decodeVmValueOperand(operand);
+		return (
+			decoded.kind === "number" ||
+			(decoded.kind === "register" &&
+				isNumericRepresentation(native.registerRepresentations[decoded.register]!))
+		);
+	};
+	for (const [ip, op] of fn.instructions.entries()) {
+		const prior = fn.instructions[ip - 1];
+		if (
+			op.opcode === "DEFINE_PROPERTY" &&
+			prior?.opcode === "CREATE_STRING" &&
+			prior.dst === op.key &&
+			!jumpTargets.has(ip)
+		) {
+			const units = stringConstants[prior.stringIndex];
+			if (units !== undefined && !stringConstantIsArrayIndex(units)) {
+				literalPropertyDefinitions.push({
+					instructionIp: ip,
+					stringIndex: prior.stringIndex,
+				});
+			}
+		}
+		const plan = native.instructions[ip];
+		const builtin = plan?.kind === "call" ? plan.guardedBuiltinCall : undefined;
+		if (op.opcode !== "CALL" || builtin === undefined) continue;
+		const arity =
+			op.arguments.length === 1 && MATH_UNARY_NATIVE_CALL.has(builtin.operation)
+				? 1
+				: op.arguments.length === 2 && MATH_BINARY_OPERATIONS.has(builtin.operation)
+					? 2
+					: undefined;
+		if (arity === undefined) continue;
+		const numeric =
+			op.arguments.every(numericOperand) &&
+			(native.registerRepresentations[op.dst] === "number" ||
+				(builtin.guard.dependencies.length > 0 &&
+					builtin.guard.dependencies.every(
+						(dependency) =>
+							dependency.kind === "world" && dependency.fact === "primordials.locked",
+					)));
+		mathCalls.push({
+			instructionIp: ip,
+			operation: builtin.operation,
+			arity,
+			mode: numeric ? "number" : "guarded-boxed",
+		});
 	}
 	const transparent = new Set<number>();
 	if (native.mode === "direct" && (native.literalSwitches?.length ?? 0) === 0) {
@@ -1551,6 +1638,8 @@ export function selectNativeFastPaths(
 		!native.specializations.some((region) => region.kind === "numeric-fusion"),
 	);
 	return {
+		literalPropertyDefinitions,
+		mathCalls,
 		...selectArrayWindows(
 			native,
 			new Set([

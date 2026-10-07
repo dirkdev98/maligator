@@ -1665,46 +1665,51 @@ export type NativeInstructionPlan =
  */
 export function createConservativeNativePlan(
 	functions: ReadonlyArray<BytecodeFunction>,
+	stringConstants: ReadonlyArray<ReadonlyArray<number>> = [],
 ): NativePlan {
 	return {
 		semanticProtectors: [],
 		functions: functions.map((fn, functionIndex) =>
-			lowerNativeFunctionStorage({
-				body: fn,
-				functionIndex,
-				mode: fn.isGenerator || fn.isAsync ? "resumable" : "direct",
+			lowerNativeFunctionStorage(
+				{
+					body: fn,
+					functionIndex,
+					mode: fn.isGenerator || fn.isAsync ? "resumable" : "direct",
 
-				registerRepresentations: Array.from(
-					{ length: fn.registerCount },
-					() => "boxed" as const,
-				),
-				directEntries: [],
-				gc: {
-					// Without source CFG proofs, every taken branch must cover possible handler cycles.
-					safepoints: fn.instructions.map((instruction, instructionIp) => ({
-						kind:
-							instruction.opcode === "JUMP" || instruction.opcode === "JUMP_IF"
-								? ("loop-backedge" as const)
-								: ("conservative" as const),
-						instructionIp,
-						rootRegisters: Array.from(
-							{ length: fn.registerCount },
-							(_, register) => register,
-						),
-						incomingRootRegisters: Array.from(
-							{ length: fn.registerCount },
-							(_, register) => register,
-						),
-						outgoingRootRegisters: Array.from(
-							{ length: fn.registerCount },
-							(_, register) => register,
-						),
-					})),
+					registerRepresentations: Array.from(
+						{ length: fn.registerCount },
+						() => "boxed" as const,
+					),
+					directEntries: [],
+					gc: {
+						// Without source CFG proofs, every taken branch must cover possible handler cycles.
+						safepoints: fn.instructions.map((instruction, instructionIp) => ({
+							kind:
+								instruction.opcode === "JUMP" || instruction.opcode === "JUMP_IF"
+									? ("loop-backedge" as const)
+									: ("conservative" as const),
+							instructionIp,
+							rootRegisters: Array.from(
+								{ length: fn.registerCount },
+								(_, register) => register,
+							),
+							incomingRootRegisters: Array.from(
+								{ length: fn.registerCount },
+								(_, register) => register,
+							),
+							outgoingRootRegisters: Array.from(
+								{ length: fn.registerCount },
+								(_, register) => register,
+							),
+						})),
+					},
+					instructions: Array.from({ length: fn.instructions.length }),
+					specializations: [],
+					regionActions: [],
 				},
-				instructions: Array.from({ length: fn.instructions.length }),
-				specializations: [],
-				regionActions: [],
-			}),
+				undefined,
+				stringConstants,
+			),
 		),
 	};
 }

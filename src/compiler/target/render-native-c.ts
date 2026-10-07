@@ -40,6 +40,7 @@ import { lowerNativeFastPaths } from "./lower-native-fast-paths.ts";
 import type {
 	NativeConstructorInitializationAction,
 	NativeFastPathPlans,
+	NativeMathCallPlan,
 	NativePairedArrayLoopAction,
 	NativePropertyNumericUpdateAction,
 	NativePropertyProjectionAction,
@@ -55,6 +56,8 @@ import {
 	NATIVE_ARITH,
 	NATIVE_BITWISE,
 	NATIVE_COMPARE,
+	MATH_UNARY_NATIVE_CALL,
+	MATH_BINARY_OPERATIONS,
 } from "./native-scalar-operators.ts";
 import { profileOperationForInstruction } from "./profile-metadata.ts";
 import {
@@ -270,36 +273,6 @@ export interface BackendProfileDecision {
 	details?: Record<string, string | number | boolean>;
 }
 
-const MATH_UNARY_NATIVE_CALL: ReadonlyMap<string, string | null> = new Map([
-	["Math.abs", "fabs"],
-	["Math.floor", "floor"],
-	["Math.ceil", "ceil"],
-	["Math.round", null],
-	["Math.trunc", "trunc"],
-	["Math.sqrt", "sqrt"],
-	["Math.cbrt", "cbrt"],
-	["Math.sign", null],
-	["Math.log", "log"],
-	["Math.log2", "log2"],
-	["Math.log10", "log10"],
-	["Math.exp", "exp"],
-	["Math.sin", "sin"],
-	["Math.cos", "cos"],
-	["Math.tan", "tan"],
-	["Math.asin", "asin"],
-	["Math.acos", "acos"],
-	["Math.atan", "atan"],
-	["Math.sinh", "sinh"],
-	["Math.cosh", "cosh"],
-	["Math.tanh", "tanh"],
-	["Math.asinh", "asinh"],
-	["Math.acosh", "acosh"],
-	["Math.atanh", "atanh"],
-	["Math.log1p", "log1p"],
-	["Math.expm1", "expm1"],
-	["Math.fround", null],
-] as const);
-
 function nativeMathUnaryExpr(operation: string, argument: string): string | null {
 	const nativeCall = MATH_UNARY_NATIVE_CALL.get(operation);
 	if (nativeCall === undefined) return null;
@@ -384,8 +357,6 @@ const MATH_NUMBER_KERNELS: Readonly<Record<string, readonly [string, number]>> =
 	"Math.pow": ["mal_builtin_math_pow_number", 2],
 	"Math.atan2": ["atan2", 2],
 };
-
-const MATH_BINARY_OPERATIONS = new Set(["Math.min", "Math.max"]);
 
 function nativeMathBinaryExpr(
 	operation: string,
@@ -2535,19 +2506,6 @@ function emitStringSwitch(
 	return { lines, strategy };
 }
 
-function stringConstantIsArrayIndex(units: ReadonlyArray<number>): boolean {
-	if (units.length === 0) return false;
-	if (units[0] === 0x30) return units.length === 1;
-	if (units[0]! < 0x31 || units[0]! > 0x39) return false;
-	let index = 0;
-	for (const unit of units) {
-		if (unit < 0x30 || unit > 0x39) return false;
-		index = index * 10 + unit - 0x30;
-		if (index > 0xffff_fffe) return false;
-	}
-	return true;
-}
-
 /**
  * Emit the instruction body, with labels at jump targets and gotos for jumps.
  * Returns null if any instruction is not yet lowerable.
@@ -2596,6 +2554,8 @@ function emitBody(
 	rematerializedConstantIps: ReadonlySet<number> = new Set(),
 	elidedTdzIps: ReadonlySet<number> = new Set(),
 	fastPathPlans: NativeFastPathPlans = {
+		literalPropertyDefinitions: [],
+		mathCalls: [],
 		propertyProjections: [],
 		propertyNumericUpdates: [],
 		propertyReadRegions: [],
@@ -2927,7 +2887,15 @@ function emitBody(
 	for (const handler of fn.handlers) {
 		jumpTargets.add(handler.handlerIp);
 	}
-	const staticDefineStringIndexByIp = new Map<number, number>();
+	const staticDefineStringIndexByIp = new Map(
+		fastPathPlans.literalPropertyDefinitions.map((plan) => [
+			plan.instructionIp,
+			plan.stringIndex,
+		]),
+	);
+	const mathCalls = new Map(
+		fastPathPlans.mathCalls.map((plan) => [plan.instructionIp, plan]),
+	);
 	const iterationEligibilityRegisters = new Set<number>();
 	for (const instruction of fn.instructions) {
 		if (
@@ -2935,41 +2903,6 @@ function emitBody(
 			instruction.intrinsic === "__arrayIterationEligible"
 		)
 			iterationEligibilityRegisters.add(instruction.dst);
-	}
-	for (let ip = 1; ip < fn.instructions.length; ip++) {
-		const instruction = fn.instructions[ip]!;
-		const prior = fn.instructions[ip - 1]!;
-		if (
-			instruction.opcode === "DEFINE_PROPERTY" &&
-			prior.opcode === "CREATE_STRING" &&
-			prior.dst === instruction.key &&
-			!jumpTargets.has(ip) &&
-			!stringConstantIsArrayIndex(stringConstants[prior.stringIndex] ?? [])
-		) {
-			staticDefineStringIndexByIp.set(ip, prior.stringIndex);
-		}
-	}
-	const mathUnaryCalls = new Set<number>();
-	const mathBinaryCalls = new Set<number>();
-	for (let ip = 0; ip < fn.instructions.length; ip++) {
-		const instruction = fn.instructions[ip]!;
-		if (instruction.opcode !== "CALL") continue;
-		const plan = nativeInstructions[ip];
-		const operation =
-			plan?.kind === "call" ? plan.guardedBuiltinCall?.operation : undefined;
-		if (
-			operation !== undefined &&
-			instruction.arguments.length === 1 &&
-			MATH_UNARY_NATIVE_CALL.has(operation)
-		) {
-			mathUnaryCalls.add(ip);
-		} else if (
-			operation !== undefined &&
-			instruction.arguments.length === 2 &&
-			MATH_BINARY_OPERATIONS.has(operation)
-		) {
-			mathBinaryCalls.add(ip);
-		}
 	}
 	const nativeStringSplitProjectionActionByIp = new Map<
 		number,
@@ -3421,8 +3354,7 @@ function emitBody(
 		fieldLoad: undefined,
 		fieldAllocation: undefined,
 		fieldCall: undefined,
-		mathUnaryCall: false,
-		mathBinaryCall: false,
+		mathCall: undefined,
 		mappedArguments: fn.mappedArguments,
 		mappedArgumentSlots: fn.mappedArgumentSlots,
 		hasPrototype: fn.hasPrototype,
@@ -3626,8 +3558,7 @@ function emitBody(
 			) &&
 			charCodeAtPlan.numericSortCallback === undefined &&
 			!fieldCallSites.has(ip) &&
-			!mathUnaryCalls.has(ip) &&
-			!mathBinaryCalls.has(ip) &&
+			!mathCalls.has(ip) &&
 			!nativeStringCharCodeAtChainActionByIp.has(ip) &&
 			!nativeStringSplitCursorActionByIp.has(ip) &&
 			!nativeStringSplitProjectionActionByIp.has(ip) &&
@@ -3703,7 +3634,7 @@ function emitBody(
 				: undefined;
 		const mathCallInactiveRootMask =
 			safepointKind === "operation" &&
-			(mathUnaryCalls.has(ip) || mathBinaryCalls.has(ip)) &&
+			mathCalls.has(ip) &&
 			inactiveRootMask !== lastPublishedInactiveRootMask
 				? inactiveRootMask
 				: undefined;
@@ -3827,8 +3758,7 @@ function emitBody(
 		instructionContext.fieldCall = fieldCallSites.get(ip);
 		instructionContext.callTransport = callTransportByIp.get(ip);
 		instructionContext.callbackTransport = callbackTransportByIp.get(ip);
-		instructionContext.mathUnaryCall = mathUnaryCalls.has(ip);
-		instructionContext.mathBinaryCall = mathBinaryCalls.has(ip);
+		instructionContext.mathCall = mathCalls.get(ip);
 		instructionContext.indexedLengthLoopAction = indexedLengthLoopActionByIp.get(ip);
 		instructionContext.nativeArrayPresenceProjectionAction = arrayPresenceAction;
 		instructionContext.pairedArrayLoopAction = pairedArrayLoopActionByIp.get(ip);
@@ -4244,8 +4174,7 @@ interface NativeInstructionContext {
 	readonly fieldEntryCall?: NativeFieldCall;
 	readonly callTransport?: NativeCallTransportPlan;
 	readonly callbackTransport?: NativeCallbackTransportPlan;
-	readonly mathUnaryCall: boolean;
-	readonly mathBinaryCall: boolean;
+	readonly mathCall: NativeMathCallPlan | undefined;
 	readonly mappedArguments: boolean;
 	readonly mappedArgumentSlots: ReadonlyArray<number>;
 	readonly hasPrototype: boolean;
@@ -4346,8 +4275,7 @@ function emitInstruction(
 		directCompiledTargets,
 		directCompiledEntries,
 		directResultRepresentation,
-		mathUnaryCall,
-		mathBinaryCall,
+		mathCall,
 		mappedArguments,
 		mappedArgumentSlots,
 		hasPrototype,
@@ -4431,8 +4359,7 @@ function emitInstruction(
 		fieldEntryCall: context.fieldEntryCall,
 		callTransport: context.callTransport,
 		callbackTransport: context.callbackTransport,
-		mathUnaryCall,
-		mathBinaryCall,
+		mathCall,
 		mappedArguments,
 		mappedArgumentSlots,
 		hasPrototype,
@@ -9098,26 +9025,16 @@ function emitInstruction(
 					poll,
 				];
 			}
-			if (mathUnaryCall) {
+			if (mathCall?.arity === 1) {
 				const argument = instruction.arguments[0]!;
 				const nativeArgument = nativeNumberOperand(argument);
 				const nativeExpression =
 					nativeArgument === null
 						? null
-						: nativeMathUnaryExpr(
-								callPlan?.guardedBuiltinCall?.operation ?? "",
-								nativeArgument,
-							);
-				if (
-					nativeExpression !== null &&
-					(reps[instruction.dst] === "number" ||
-						(callPlan?.guardedBuiltinCall !== undefined &&
-							callPlan.guardedBuiltinCall.guard.dependencies.length > 0 &&
-							callPlan.guardedBuiltinCall.guard.dependencies.every(
-								(dependency) =>
-									dependency.kind === "world" && dependency.fact === "primordials.locked",
-							)))
-				) {
+						: nativeMathUnaryExpr(mathCall.operation, nativeArgument);
+				if (mathCall.mode === "number") {
+					if (nativeExpression === null)
+						throw new Error("Native Math plan lacks numeric operands");
 					return [storeNumber(instruction.dst, nativeExpression), mathPoll];
 				}
 				return [
@@ -9135,7 +9052,7 @@ function emitInstruction(
 					mathPoll,
 				];
 			}
-			if (mathBinaryCall) {
+			if (mathCall?.arity === 2) {
 				const left = instruction.arguments[0]!;
 				const right = instruction.arguments[1]!;
 				const nativeLeft = nativeNumberOperand(left);
@@ -9143,21 +9060,10 @@ function emitInstruction(
 				const nativeExpression =
 					nativeLeft === null || nativeRight === null
 						? null
-						: nativeMathBinaryExpr(
-								callPlan?.guardedBuiltinCall?.operation ?? "",
-								nativeLeft,
-								nativeRight,
-							);
-				if (
-					nativeExpression !== null &&
-					(reps[instruction.dst] === "number" ||
-						(callPlan?.guardedBuiltinCall !== undefined &&
-							callPlan.guardedBuiltinCall.guard.dependencies.length > 0 &&
-							callPlan.guardedBuiltinCall.guard.dependencies.every(
-								(dependency) =>
-									dependency.kind === "world" && dependency.fact === "primordials.locked",
-							)))
-				) {
+						: nativeMathBinaryExpr(mathCall.operation, nativeLeft, nativeRight);
+				if (mathCall.mode === "number") {
+					if (nativeExpression === null)
+						throw new Error("Native Math plan lacks numeric operands");
 					return [storeNumber(instruction.dst, nativeExpression), mathPoll];
 				}
 				return [
