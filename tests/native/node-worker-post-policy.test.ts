@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { expect, test } from "vitest";
+import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import {
 	buildNativeBinary,
 	resolveHarnessExecutionInvocation,
@@ -10,18 +10,24 @@ import {
 	STRESS_ENV,
 } from "../../src/test-harness.ts";
 
-test.each([true, false])(
-	"Node ports preserve their posting policy across transfer alongside transactional ports (compiled=%s)",
-	(compiled) => {
-		const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-node-post-policy-"));
-		try {
-			const binary = buildNativeBinary({
+for (const compiled of [true, false]) {
+	describe(`Node posting policy (compiled=${compiled})`, () => {
+		let outDir: string | undefined;
+		let binary: string;
+		beforeAll(() => {
+			outDir = mkdtempSync(path.join(os.tmpdir(), "mal-node-post-policy-"));
+			binary = buildNativeBinary({
 				fixture: "tests/local/node-worker-post-policy/main.mjs",
 				name: `node-worker-post-policy-${compiled ? "compiled" : "interpreted"}`,
 				outDir,
 				compiled,
 				nodeEnabled: true,
 			});
+		});
+		afterAll(() => {
+			if (outDir !== undefined) rmSync(outDir, { recursive: true, force: true });
+		});
+		test(`Node ports preserve their posting policy across transfer alongside transactional ports (compiled=${compiled})`, () => {
 			const invocation = resolveHarnessExecutionInvocation(binary);
 			for (const env of [{}, STRESS_ENV]) {
 				const result = spawnSync(invocation.executable, invocation.args, {
@@ -34,9 +40,6 @@ test.each([true, false])(
 				expect(result.stderr).toBe("");
 				expect(result.stdout).toBe("node-worker-post-policy PASS\n");
 			}
-		} finally {
-			rmSync(outDir, { recursive: true, force: true });
-		}
-	},
-	300_000,
-);
+		}, 300_000);
+	});
+}

@@ -194,26 +194,29 @@ const BUFFER_CONSUMERS_EXPECTED = [
 ].join("\n");
 
 describe("host BufferSource consumers over shared memory", () => {
+	let outDir: string | undefined;
+	let binary: string;
+	beforeAll(() => {
+		outDir = mkdtempSync(path.join(os.tmpdir(), "mal-shared-buffer-consumers-"));
+		binary = buildNativeBinary({
+			fixture: "tests/local/shared-memory-atomics/buffer-consumers.mjs",
+			name: "shared-buffer-consumers",
+			mainFile: HOST_MAIN,
+			outDir,
+			nodeEnabled: true,
+		});
+	});
+	afterAll(() => {
+		if (outDir !== undefined) rmSync(outDir, { recursive: true, force: true });
+	});
 	it("copies shared bytes through Buffer, text, crypto, fs and decoders", () => {
-		const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-shared-buffer-consumers-"));
-		try {
-			const binary = buildNativeBinary({
-				fixture: "tests/local/shared-memory-atomics/buffer-consumers.mjs",
-				name: "shared-buffer-consumers",
-				mainFile: HOST_MAIN,
-				outDir,
-				nodeEnabled: true,
-			});
-			const invocation = resolveHarnessExecutionInvocation(binary);
-			const result = spawnSync(invocation.executable, invocation.args, {
-				encoding: "utf8",
-				timeout: scaledNativeRunTimeoutMs(20_000),
-			});
-			if (result.error !== undefined) throw result.error;
-			expect(result.status, result.stderr || result.stdout).toBe(0);
-			expect(result.stdout).toBe(`${BUFFER_CONSUMERS_EXPECTED}\n`);
-		} finally {
-			rmSync(outDir, { recursive: true, force: true });
-		}
+		const invocation = resolveHarnessExecutionInvocation(binary);
+		const result = spawnSync(invocation.executable, invocation.args, {
+			encoding: "utf8",
+			timeout: scaledNativeRunTimeoutMs(20_000),
+		});
+		if (result.error !== undefined) throw result.error;
+		expect(result.status, result.stderr || result.stdout).toBe(0);
+		expect(result.stdout).toBe(`${BUFFER_CONSUMERS_EXPECTED}\n`);
 	});
 });
