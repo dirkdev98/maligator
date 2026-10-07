@@ -18,6 +18,7 @@ function runCaptured(values, offset) {
 		let total = value + index + offset;
 		for (let i = 0; i < 2; i++) total += value;
 		collect();
+		if (value === 101) throw new RangeError("typed callback");
 		if (index === 0) [4, 5].some((inner) => inner === 5);
 		return { total, index };
 	};
@@ -103,6 +104,13 @@ Object.defineProperty(accessorValues, 0, {
 	},
 });
 observations.push(runCaptured(accessorValues, 10));
+
+try {
+	runCaptured([101], 10);
+} catch (error) {
+	observations.push(error.name);
+}
+observations.push(runCaptured([3], 10));
 
 const overridden = [1];
 overridden.map = function (callback) {
