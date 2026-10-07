@@ -36,6 +36,21 @@ describe("independent native SSA storage", () => {
 	}, 600_000);
 
 	it("preserves scalar arithmetic, loop transport, and suspended heap locals", () => {
+		for (const name of ["composedPhiArithmetic", "composedPhiRotation"]) {
+			const native = image.native.functions.find(
+				(fn) =>
+					String.fromCharCode(
+						...(image.runtime.stringConstants[fn.body.nameStringIndex] ?? []),
+					) === name,
+			)!;
+			const copies = new Map<number, number>();
+			for (const op of native.body.instructions)
+				if (op.opcode === "MOVE") copies.set(op.dst, (copies.get(op.dst) ?? 0) + 1);
+			const phis = [...copies].filter(([, count]) => count > 1).map(([local]) => local);
+			expect(phis.length).toBeGreaterThan(0);
+			for (const local of phis)
+				expect(native.storage!.definitionInitializedRegisters).toContain(local);
+		}
 		for (const name of ["composedIncrement", "composedDecrement", "composedPostfix"]) {
 			const native = image.native.functions.find(
 				(fn) =>

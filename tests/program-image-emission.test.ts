@@ -3343,7 +3343,7 @@ describe("native update-expression representation", () => {
 		);
 		expect(output).not.toContain("MAL_UNARY_TO_NUMERIC");
 		expect(output).not.toContain("MAL_UNARY_INCREMENT");
-		expect(output).toMatch(/r\d+ = [^;]+ \+ 1\.0;/);
+		expect(output).toMatch(/(?:#define r\d+ \([^\n]+ \+ 1\.0\)|r\d+ = [^;]+ \+ 1\.0;)/);
 	});
 
 	it("takes a dense own-element fast path for the in operator", () => {

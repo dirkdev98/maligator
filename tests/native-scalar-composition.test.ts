@@ -756,6 +756,70 @@ describe("native Number update expressions", () => {
 
 describe("native scalar definition initialization across control flow", () => {
 	it.each([
+		"return condition ? (a-b)*2 : (a+b)*3;",
+		"return condition ? a<b : a>b;",
+		"return condition ? (a|0) : (b|0);",
+		"let total=a;for(let i=0;i<b;i++)total=total+a;return total;",
+		"let flag=false;for(let i=0;i<b;i++)flag=!flag;return flag;",
+	])("omits phi defaults when all paths write before reading: %s", (tail) => {
+		const out = inspectStaticValueFunction(
+			`function initialized(condition,left,right){const a=+left,b=+right;${tail}}globalThis.initialized=initialized;`,
+			"initialized",
+		);
+		const copies = new Map<number, number>();
+		for (const op of out.native.body.instructions)
+			if (op.opcode === "MOVE") copies.set(op.dst, (copies.get(op.dst) ?? 0) + 1);
+		const phis = [...copies].filter(([, count]) => count > 1).map(([local]) => local);
+		expect(phis.length).toBeGreaterThan(0);
+		for (const local of phis) {
+			expect(out.native.storageValues![local]).toBeGreaterThanOrEqual(0);
+			expect(out.native.storage!.definitionInitializedRegisters).toContain(local);
+			expect(out.c.source).not.toMatch(new RegExp(`r${local} = (?:0\\.0|0|false);`));
+		}
+		expect(deserializeCompilerArtifact(serializeCompilerArtifact(out.image))).toEqual(
+			out.image,
+		);
+	});
+
+	it.each(["bypass", "branch bypass", "self-copy", "synthetic"])(
+		"retains a phi default after a %s invalidates initialization",
+		(kind) => {
+			const out = inspectStaticValueFunction(
+				"function initialized(condition,left,right){const a=+left,b=+right;return condition?a-b:a+b;}globalThis.initialized=initialized;",
+				"initialized",
+			);
+			const instructions = [...out.native.body.instructions];
+			const returnIp = instructions.findIndex((op) => op.opcode === "RETURN");
+			const returned = instructions[returnIp]!;
+			if (returned.opcode !== "RETURN") throw new Error("Missing phi return");
+			const local = returned.value;
+			expect(out.native.storage!.definitionInitializedRegisters).toContain(local);
+			const storageValues = [...out.native.storageValues!];
+			if (kind === "bypass") instructions[0] = { opcode: "JUMP", targetIp: returnIp };
+			else if (kind === "self-copy" || kind === "branch bypass") {
+				const copyIp = instructions.findIndex(
+					(op) => op.opcode === "MOVE" && op.dst === local,
+				);
+				instructions[copyIp] =
+					kind === "self-copy"
+						? { opcode: "MOVE", dst: local, src: local }
+						: { opcode: "JUMP", targetIp: returnIp };
+			} else storageValues[local] = -1;
+			const native = {
+				...out.native,
+				storageValues,
+				body: { ...out.native.body, instructions },
+			};
+			expect(
+				lowerNativeFunctionStorage(native).storage!.definitionInitializedRegisters,
+			).not.toContain(local);
+			expect(() => validateNativeStorage(native)).toThrow(
+				/invalid or stale storage plan/,
+			);
+		},
+	);
+
+	it.each([
 		"return condition ? a-b : a+b;",
 		"let total=0;for(let i=0;i<3;i=i+1)total=total+a;return total+b;",
 	])("omits default scalar zeros when every read follows its definition: %s", (tail) => {

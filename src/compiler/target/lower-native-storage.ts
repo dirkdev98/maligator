@@ -161,6 +161,10 @@ interface NativeStorageControlFlow {
 	readonly blockCount: number;
 	readonly isReachable: (instructionIp: number) => boolean;
 	readonly dominates: (definitionIp: number, useIp: number) => boolean;
+	readonly isDefinedBeforeReads: (
+		readIps: ReadonlyArray<number>,
+		definitionIps: ReadonlyArray<number>,
+	) => boolean;
 }
 
 function storageControlFlow(
@@ -216,6 +220,30 @@ function storageControlFlow(
 				withoutDefinition.set(definitionBlock, bypass);
 			}
 			return bypass[useBlock] === 0;
+		},
+		isDefinedBeforeReads(readIps, definitionIps) {
+			if (!readIps.every((ip) => live[blocks[ip]!] === 1)) return false;
+			const reads = new Set(readIps);
+			const definitions = new Set(definitionIps);
+			const visited = new Uint8Array(ends.length);
+			const pending = [0];
+			while (pending.length > 0) {
+				const current = pending.pop()!;
+				if (visited[current] !== 0) continue;
+				visited[current] = 1;
+				const start = current === 0 ? 0 : ends[current - 1]! + 1;
+				let defined = false;
+				for (let ip = start; ip <= ends[current]!; ip++) {
+					// A self-copy reads the old value before defining its destination.
+					if (reads.has(ip)) return false;
+					if (definitions.has(ip)) {
+						defined = true;
+						break;
+					}
+				}
+				if (!defined) pending.push(...successors[current]!);
+			}
+			return true;
 		},
 	};
 }
@@ -383,6 +411,17 @@ function definitionInitializedRegisters(
 		(body.controlFlow?.blockCount ?? Infinity) <= 256
 			? body.controlFlow
 			: undefined;
+	const phiDefinitions =
+		controlFlow !== undefined && fn.registerCount <= 128 && fn.instructions.length <= 4096
+			? new Map<number, Array<number>>()
+			: undefined;
+	if (phiDefinitions !== undefined)
+		for (const [ip, op] of fn.instructions.entries())
+			if (op.opcode === "MOVE" && writes[op.dst]! > 1 && !blocked.has(ip)) {
+				const definitions = phiDefinitions.get(op.dst) ?? [];
+				definitions.push(ip);
+				phiDefinitions.set(op.dst, definitions);
+			}
 	const blocks = new Uint32Array(fn.instructions.length);
 	let block = 0;
 	for (let ip = 0; ip < fn.instructions.length; ip++) {
@@ -392,15 +431,26 @@ function definitionInitializedRegisters(
 	}
 	return native.registerRepresentations.flatMap((rep, local) => {
 		const definition = definitions[local]!;
-		return local >= fn.parameterCount + fn.argumentSnapshotCount &&
-			native.storageValues![local]! >= 0 &&
-			!borrowed.has(local) &&
-			!blocked.has(definition) &&
-			(rep === "number" || rep === "int32" || rep === "boolean") &&
-			writes[local] === 1 &&
-			(uses[local]!.every((ip) => ip > definition && blocks[ip] === blocks[definition]) ||
-				(controlFlow !== undefined &&
-					uses[local]!.every((ip) => controlFlow.dominates(definition, ip))))
+		if (
+			local < fn.parameterCount + fn.argumentSnapshotCount ||
+			!(native.storageValues![local]! >= 0) ||
+			borrowed.has(local) ||
+			!["number", "int32", "boolean"].includes(rep)
+		)
+			return [];
+		if (writes[local] === 1)
+			return !blocked.has(definition) &&
+				(uses[local]!.every(
+					(ip) => ip > definition && blocks[ip] === blocks[definition],
+				) ||
+					(controlFlow !== undefined &&
+						uses[local]!.every((ip) => controlFlow.dominates(definition, ip))))
+				? [local]
+				: [];
+		const copies = phiDefinitions?.get(local);
+		return copies !== undefined &&
+			copies.length === writes[local] &&
+			controlFlow!.isDefinedBeforeReads(uses[local]!, copies)
 			? [local]
 			: [];
 	});

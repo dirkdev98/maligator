@@ -455,14 +455,14 @@ describe("SSA native lowering", () => {
 		expect(restored.native.functions[1]!.storage).toEqual(native.storage);
 	});
 
-	it("retains initialization when scalar uses cross control-flow boundaries", () => {
+	it("initializes scalar locals at a dominating definition across branches", () => {
 		const image = scalarImage(
 			"const product = a * b; if (globalThis.condition) globalThis.observe(product); return product - subtract;",
 		);
 		const native = image.native.functions[1]!;
 		const product = native.body.instructions[multiplicationIp(image)]!;
 		if (product.opcode !== "BINARY") throw new Error("Missing scalar product");
-		expect(native.storage!.definitionInitializedRegisters).not.toContain(product.dst);
+		expect(native.storage!.definitionInitializedRegisters).toContain(product.dst);
 		const invalid = {
 			...image,
 			native: {
@@ -474,10 +474,10 @@ describe("SSA native lowering", () => {
 								...fn,
 								storage: {
 									...fn.storage!,
-									definitionInitializedRegisters: [
-										...fn.storage!.definitionInitializedRegisters,
-										product.dst,
-									].sort((left, right) => left - right),
+									definitionInitializedRegisters:
+										fn.storage!.definitionInitializedRegisters.filter(
+											(local) => local !== product.dst,
+										),
 								},
 							},
 				),
