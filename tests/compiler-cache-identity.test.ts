@@ -93,7 +93,7 @@ describe("compiler cache identity", () => {
 
 		writeFileSync(
 			path.join(fixture.sourceRoot, "compiler", "compile.ts"),
-			"export const n = 2;\n",
+			"export const n = 200;\n",
 		);
 		expect(
 			compilerImplementationDigestForRoot(fixture.sourceRoot, fixture.cacheDirectory),
@@ -167,7 +167,7 @@ describe("compiler cache identity", () => {
 
 		writeFileSync(
 			path.join(fixture.sourceRoot, "compiler", "compile.ts"),
-			"export const n = 2;\n",
+			"export const n = 200;\n",
 		);
 		expect(
 			compilerProducerImplementationDigestForRoot(
