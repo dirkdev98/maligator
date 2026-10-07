@@ -5,6 +5,7 @@ import type {
 	BytecodeFunction,
 	BytecodeInstruction,
 } from "../src/compiler/target/runtime-image.ts";
+import { testPropertyCacheCount } from "./helpers/program-image.ts";
 
 const retained = 2;
 const result = 3;
@@ -53,6 +54,7 @@ function select(
 		isClassConstructor: false,
 		constructorSlotReserve: 0,
 		hasPrototype: false,
+		propertyIcCount: testPropertyCacheCount(instructions),
 		literalShapeCount: 0,
 		instructions,
 		handlers: [],

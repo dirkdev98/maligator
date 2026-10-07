@@ -19,6 +19,7 @@ import {
 import { staticDataQueryKinds } from "../shared/static-data-query.ts";
 import type { StaticDataQueryKind } from "../shared/static-data-query.ts";
 import { isStringCollationPlan } from "../shared/string-collation-plan.ts";
+import { targetInstructionUsesPropertyCache } from "./core-target-ir.ts";
 import { executionFunctionIndex } from "./execution-ir.ts";
 import type { ExecutionFunction, ExecutionProgram } from "./execution-ir.ts";
 import { executionSafepointRoots } from "./execution-liveness.ts";
@@ -437,6 +438,12 @@ export interface ClosureCaptureValue {
 }
 
 /** Keep inline with the C struct. */
+export function vmInstructionUsesPropertyCache(
+	instruction: BytecodeInstruction,
+): instruction is Extract<BytecodeInstruction, { icIndex: number }> {
+	return "icIndex" in instruction;
+}
+
 export interface BytecodeFunction {
 	nameStringIndex: number;
 	isGenerator: boolean;
@@ -491,6 +498,7 @@ export interface BytecodeFunction {
 	 * runtime by kind.)
 	 */
 	hasPrototype: boolean;
+	propertyIcCount: number;
 
 	/** Number of VM-local entries in this function's literal-shape cache. */
 	literalShapeCount: number;
@@ -1511,6 +1519,28 @@ export function countPropertyIcSites(
 	return count;
 }
 
+export function validateVmPropertyCacheLayout(fn: BytecodeFunction): void {
+	if (
+		!Number.isSafeInteger(fn.propertyIcCount) ||
+		fn.propertyIcCount < 0 ||
+		fn.propertyIcCount > 0x7fffffff
+	)
+		throw new RangeError("invalid property IC count");
+	const seen = new Set<number>();
+	for (const instruction of fn.instructions) {
+		if (!vmInstructionUsesPropertyCache(instruction)) continue;
+		const index = instruction.icIndex;
+		if (
+			!Number.isSafeInteger(index) ||
+			index < 0 ||
+			index >= fn.propertyIcCount ||
+			seen.has(index)
+		)
+			throw new RangeError(`invalid property IC index ${index}`);
+		seen.add(index);
+	}
+}
+
 function isNonnegativeSafeInteger(value: unknown): value is number {
 	return (
 		typeof value === "number" &&
@@ -1581,6 +1611,7 @@ export function validateVmKnownOwnSlots(definition: RuntimeImage): void {
 		descriptors.set(identity, descriptor);
 	}
 	for (const [functionIndex, fn] of definition.functions.entries()) {
+		validateVmPropertyCacheLayout(fn);
 		const shapeIndices = new Set<number>();
 		for (const instruction of fn.instructions) {
 			if (instruction.opcode !== "CREATE_OBJECT_SHAPED") continue;
@@ -2582,6 +2613,82 @@ export function compactRuntimeImageConstants(
 	};
 }
 
+function buildPropertyCacheLayout(programs: ReadonlyArray<ExecutionProgram>) {
+	const origins: Array<Set<number>> = [];
+	const meanings: Array<Map<number, string>> = [];
+	const sites: Array<{
+		instruction: CompilerInstruction;
+		functionIndex: number;
+		origin: number;
+	}> = [];
+	for (const { functions } of programs) {
+		for (const fn of functions) {
+			const functionOrigins = origins[fn.functionIndex] ?? new Set<number>();
+			origins[fn.functionIndex] = functionOrigins;
+			const byInstruction = new Map(
+				fn.propertyCacheOrigins.map((site) => [site.instruction, site.coreInstruction]),
+			);
+			if (byInstruction.size !== fn.propertyCacheOrigins.length)
+				throw new Error(
+					`Duplicate property-cache instruction in function ${fn.functionIndex}`,
+				);
+			const functionMeanings = meanings[fn.functionIndex] ?? new Map<number, string>();
+			meanings[fn.functionIndex] = functionMeanings;
+			const seen = new Set<number>();
+			for (const { instructions } of fn.blocks) {
+				for (const instruction of instructions) {
+					if (!targetInstructionUsesPropertyCache(instruction)) continue;
+					const origin = byInstruction.get(instruction);
+					if (
+						origin === undefined ||
+						!Number.isSafeInteger(origin) ||
+						origin < 0 ||
+						seen.has(origin)
+					)
+						throw new Error(
+							`Invalid property-cache origin in function ${fn.functionIndex}`,
+						);
+					const meaning = JSON.stringify([
+						instruction.type,
+						"stringIndex" in instruction ? instruction.stringIndex : undefined,
+						instruction.type === "guardBaseConstructorLayout"
+							? [
+									instruction.functionIndex,
+									instruction.keyStringIndices,
+									instruction.methodStringIndex,
+									instruction.methodFunctionIndex,
+								]
+							: undefined,
+					]);
+					const previous = functionMeanings.get(origin);
+					if (previous !== undefined && previous !== meaning)
+						throw new Error("Runtime targets disagree on a shared property cache");
+					functionMeanings.set(origin, meaning);
+					seen.add(origin);
+					functionOrigins.add(origin);
+					sites.push({ instruction, functionIndex: fn.functionIndex, origin });
+				}
+			}
+			if (byInstruction.size !== seen.size)
+				throw new Error(`Unused property-cache origin in function ${fn.functionIndex}`);
+		}
+	}
+	// Static cache hits omit key checks, so seeding and both targets must share semantic site identities.
+	const indices = origins.map(
+		(origins) =>
+			new Map([...origins].sort((a, b) => a - b).map((origin, index) => [origin, index])),
+	);
+	return {
+		indexByInstruction: new Map(
+			sites.map((site) => [
+				site.instruction,
+				indices[site.functionIndex]!.get(site.origin)!,
+			]),
+		),
+		counts: origins.map((origins) => origins.size),
+	};
+}
+
 interface VmKnownShapeOrigin {
 	readonly keyStringIndices: ReadonlyArray<number>;
 	readonly shapeCacheIndex: number;
@@ -2805,6 +2912,7 @@ export function lowerVerifiedTargetsToRuntimePlans(
 		return index;
 	};
 	const layout = buildKnownShapeLayout(programs);
+	const propertyCaches = buildPropertyCacheLayout(programs);
 	const targetPlans = programs.map((target) => {
 		return target.functions.map((fn, index) =>
 			lowerExecutionFunctionToBytecode(
@@ -2814,6 +2922,8 @@ export function lowerVerifiedTargetsToRuntimePlans(
 				layout.origins,
 				layout.cacheIndexByInstruction,
 				layout.literalShapeCounts[index]!,
+				propertyCaches.indexByInstruction,
+				propertyCaches.counts[index]!,
 			),
 		);
 	});
@@ -2918,6 +3028,8 @@ function lowerExecutionFunctionToBytecode(
 	knownShapeOrigins: ReadonlyArray<ReadonlyMap<number, VmKnownShapeOrigin>>,
 	shapeCacheIndices: ReadonlyMap<CompilerInstruction, number>,
 	literalShapeCount: number,
+	propertyCacheIndices: ReadonlyMap<CompilerInstruction, number>,
+	propertyIcCount: number,
 ): RuntimeFunctionLoweringPlan {
 	// Compile-only reachability, source-position, and exception-range markers carry
 	// no executable opcode, so block start IPs count only instructions that survive
@@ -2940,19 +3052,14 @@ function lowerExecutionFunctionToBytecode(
 	}
 
 	const instructions: Array<BytecodeInstruction> = [];
-	let propertyIcCount = 0;
 	const propertyIcIndexByInstruction = new Map<CompilerInstruction, number>();
 	for (const block of fn.blocks) {
 		for (const instruction of block.instructions) {
-			if (
-				instruction.type === "loadProperty" ||
-				instruction.type === "loadPropertyStatic" ||
-				instruction.type === "loadPropertyStaticShapeCase" ||
-				instruction.type === "storeProperty" ||
-				instruction.type === "storePropertyStatic" ||
-				instruction.type === "guardBaseConstructorLayout"
-			) {
-				propertyIcIndexByInstruction.set(instruction, propertyIcCount++);
+			if (targetInstructionUsesPropertyCache(instruction)) {
+				propertyIcIndexByInstruction.set(
+					instruction,
+					propertyCacheIndices.get(instruction)!,
+				);
 			}
 		}
 	}
@@ -3171,6 +3278,7 @@ function lowerExecutionFunctionToBytecode(
 		isClassConstructor: fn.isClassConstructor,
 		constructorSlotReserve: fn.constructorSlotReserve,
 		hasPrototype: fn.hasPrototype,
+		propertyIcCount,
 		literalShapeCount,
 		instructions,
 		handlers,

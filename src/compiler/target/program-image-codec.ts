@@ -13,6 +13,8 @@ import {
 	buildArgumentSnapshotPlan,
 	compressPositions,
 	validateRuntimeImageMetadata,
+	validateVmPropertyCacheLayout,
+	vmInstructionUsesPropertyCache,
 	VM_DIRECT_BUILTIN_OPERATIONS,
 	VM_GUARDED_BUILTIN_CALL_OPERATIONS,
 	VM_MATH_BINARY_NUMBER_OPERATIONS,
@@ -33,7 +35,7 @@ import type {
 
 export const WIRE_MAGIC = 0x574c414d; // "MALW" little-endian
 // Runtime wires are hard cut-overs: stale cached buffers must rebuild.
-export const WIRE_VERSION = 68;
+export const WIRE_VERSION = 69;
 // Keep in sync with runtime/src/heap_string.h.
 export const MAX_STRING_CODE_UNITS = 16 * 1024 * 1024;
 
@@ -652,6 +654,7 @@ export function writeRuntimeFunction(
 	w.i32(fn.registerCount);
 	w.i32(fn.capturedCount);
 	w.i32(debug ? fn.fileIndex : 0);
+	w.u32(fn.propertyIcCount);
 	w.u32(fn.literalShapeCount);
 
 	w.u32(fn.instructions.length);
@@ -715,26 +718,10 @@ function validateMappedArguments(fn: BytecodeFunction): void {
 }
 
 function validatePropertyIcIndices(fn: BytecodeFunction): void {
-	let expected = 0;
+	validateVmPropertyCacheLayout(fn);
 	const literalShapes = new Set<number>();
 	for (const instruction of fn.instructions) {
 		switch (instruction.opcode) {
-			case "LOAD_PROPERTY":
-			case "LOAD_PROPERTY_STATIC":
-			case "LOAD_PROPERTY_STATIC_ARRAY_LENGTH":
-			case "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT":
-			case "LOAD_PROPERTY_STATIC_SHAPE_CASE":
-			case "STORE_PROPERTY":
-			case "STORE_PROPERTY_STATIC":
-			case "STORE_PROPERTY_STATIC_KNOWN_OWN_SLOT":
-			case "GUARD_BASE_CONSTRUCTOR_LAYOUT":
-				if (instruction.icIndex !== expected) {
-					throw new RangeError(
-						`program-image-codec: property IC index ${instruction.icIndex}, expected ${expected}`,
-					);
-				}
-				expected++;
-				break;
 			case "CREATE_OBJECT_SHAPED":
 				if (
 					!Number.isSafeInteger(instruction.shapeCacheIndex) ||
@@ -764,6 +751,11 @@ function opcodeTag(opcode: string): number {
 }
 
 function writeInstruction(w: Writer, i: BytecodeInstruction): void {
+	writeInstructionOperands(w, i);
+	if (vmInstructionUsesPropertyCache(i)) w.i32(i.icIndex);
+}
+
+function writeInstructionOperands(w: Writer, i: BytecodeInstruction): void {
 	w.u8(opcodeTag(i.opcode));
 	switch (i.opcode) {
 		case "PREPARED_STRING_COMPARE":
@@ -1513,26 +1505,13 @@ export function readRuntimeFunction(r: Reader): BytecodeFunction {
 	const registerCount = r.i32();
 	const capturedCount = r.i32();
 	const fileIndex = r.i32();
+	const propertyIcCount = r.count(1);
 	const literalShapeCount = r.count(1);
 
 	const instructionCount = r.count(1);
 	const instructions: Array<BytecodeInstruction> = [];
-	let propertyIcCount = 0;
 	for (let i = 0; i < instructionCount; ++i) {
 		const instruction = readInstruction(r);
-		switch (instruction.opcode) {
-			case "LOAD_PROPERTY":
-			case "LOAD_PROPERTY_STATIC":
-			case "LOAD_PROPERTY_STATIC_ARRAY_LENGTH":
-			case "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT":
-			case "LOAD_PROPERTY_STATIC_SHAPE_CASE":
-			case "STORE_PROPERTY":
-			case "STORE_PROPERTY_STATIC":
-			case "STORE_PROPERTY_STATIC_KNOWN_OWN_SLOT":
-			case "GUARD_BASE_CONSTRUCTOR_LAYOUT":
-				instruction.icIndex = propertyIcCount++;
-				break;
-		}
 		instructions.push(instruction);
 	}
 
@@ -1581,6 +1560,7 @@ export function readRuntimeFunction(r: Reader): BytecodeFunction {
 		isClassConstructor,
 		constructorSlotReserve,
 		hasPrototype,
+		propertyIcCount,
 		literalShapeCount,
 		instructions,
 		handlers,
@@ -1589,6 +1569,7 @@ export function readRuntimeFunction(r: Reader): BytecodeFunction {
 	};
 	validateArgumentSnapshotPrefix(fn);
 	validateMappedArguments(fn);
+	validatePropertyIcIndices(fn);
 	return fn;
 }
 
@@ -1612,6 +1593,12 @@ function expandPositions(
 }
 
 function readInstruction(r: Reader): BytecodeInstruction {
+	const instruction = readInstructionOperands(r);
+	if (vmInstructionUsesPropertyCache(instruction)) instruction.icIndex = r.i32();
+	return instruction;
+}
+
+function readInstructionOperands(r: Reader): BytecodeInstruction {
 	const opcode = WIRE_OPCODES[r.u8()];
 	switch (opcode) {
 		case "MOVE":

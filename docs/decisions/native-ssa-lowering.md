@@ -145,6 +145,15 @@ from Core allocation origins, independently of physical block order. Both the wi
 and compiler artifact persist those identities explicitly; validation rejects
 duplicate or out-of-range slots and descriptors whose keys disagree with an allocation.
 
+Property caches also use shared Core operation identities, retained independently
+of GC safepoints. Both targets reserve the same union of cache sites, and the wire
+persists each site's ID and the shared capacity. Compiler overlays keep canonical
+VM instructions while attaching native bodies; startup seeding and native reads
+therefore address the same semantic cache row even when block order differs.
+Validation rejects duplicate IDs, incompatible capacities, and shared rows whose
+property keys or operation contracts disagree. Static cache hits omit key checks,
+so physical instruction ordinals cannot identify these shared rows.
+
 Resumable functions keep per-value representations in C locals. Each invocation
 publishes an active root array for traced locals and the coroutine itself. A separate
 boxed activation buffer holds the largest individual suspension snapshot, plus

@@ -23,6 +23,7 @@ describe("native binary root-mask edges", () => {
 			isClassConstructor: false,
 			constructorSlotReserve: 0,
 			hasPrototype: false,
+			propertyIcCount: 1,
 			literalShapeCount: 0,
 			instructions: [
 				{ opcode: "LOAD_PROPERTY_STATIC", object: 0, dst: 1, stringIndex: 0, icIndex: 0 },

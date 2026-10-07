@@ -7,7 +7,9 @@ import type {
 	NativeFunctionPlan,
 	ProgramImage,
 } from "../../src/compiler/target/program-image.ts";
+import { vmInstructionUsesPropertyCache } from "../../src/compiler/target/runtime-image.ts";
 import type {
+	BytecodeInstruction,
 	BytecodeFunction,
 	RuntimeImage,
 } from "../../src/compiler/target/runtime-image.ts";
@@ -36,4 +38,16 @@ export function withNativeFunctionPlan(
 		functions[functionIndex] = next;
 	}
 	return { ...image, native: { ...image.native, functions } };
+}
+
+export function testPropertyCacheCount(
+	instructions: ReadonlyArray<BytecodeInstruction>,
+): number {
+	return instructions.reduce(
+		(count, instruction) =>
+			vmInstructionUsesPropertyCache(instruction)
+				? Math.max(count, instruction.icIndex + 1)
+				: count,
+		0,
+	);
 }

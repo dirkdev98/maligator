@@ -47,6 +47,7 @@ const fn: BytecodeFunction = {
 	isClassConstructor: false,
 	constructorSlotReserve: 0,
 	hasPrototype: false,
+	propertyIcCount: 0,
 	literalShapeCount: 1,
 	instructions: [
 		{
@@ -190,6 +191,7 @@ describe("wire loader side-data validation", () => {
 		const resultFn: BytecodeFunction = {
 			...fn,
 			registerCount: 3,
+			propertyIcCount: 0,
 			literalShapeCount: 0,
 			instructions: [
 				{ opcode: "CREATE_OBJECT", dst: 0 },
@@ -232,6 +234,7 @@ describe("wire loader side-data validation", () => {
 			functions: [
 				{
 					...fn,
+					propertyIcCount: 0,
 					literalShapeCount: 0,
 					instructions: [
 						{ opcode: "CREATE_UNDEFINED", dst: 0 },
@@ -240,6 +243,7 @@ describe("wire loader side-data validation", () => {
 				},
 				{
 					...fn,
+					propertyIcCount: 0,
 					literalShapeCount: 0,
 					instructions: [{ opcode: "PRECISE_NUMBER_SUM", dst: 0, arguments: [0, 0, 0] }],
 				},
@@ -299,6 +303,7 @@ describe("wire loader side-data validation", () => {
 			functions: [
 				{
 					...fn,
+					propertyIcCount: 0,
 					literalShapeCount: 0,
 					instructions: [
 						{ opcode: "CREATE_UNDEFINED", dst: 0 },
@@ -307,6 +312,7 @@ describe("wire loader side-data validation", () => {
 				},
 				{
 					...fn,
+					propertyIcCount: 0,
 					literalShapeCount: 0,
 					instructions: [
 						{
@@ -361,6 +367,7 @@ describe("wire loader side-data validation", () => {
 			functions: [
 				{
 					...fn,
+					propertyIcCount: 0,
 					literalShapeCount: 0,
 					instructions: [
 						{ opcode: "CREATE_UNDEFINED", dst: 0 },
@@ -369,6 +376,7 @@ describe("wire loader side-data validation", () => {
 				},
 				{
 					...fn,
+					propertyIcCount: 0,
 					literalShapeCount: 0,
 					instructions: [{ opcode: "BUILTIN_ERROR", dst: 0, error: "uri" }],
 				},
@@ -404,6 +412,7 @@ describe("wire loader side-data validation", () => {
 				{
 					...fn,
 					registerCount: 3,
+					propertyIcCount: 0,
 					literalShapeCount: 0,
 					instructions: [
 						{
@@ -500,6 +509,7 @@ describe("wire loader side-data validation", () => {
 			functions: [
 				{
 					...fn,
+					propertyIcCount: 0,
 					literalShapeCount: 0,
 					instructions: [
 						{
@@ -535,6 +545,7 @@ describe("wire loader side-data validation", () => {
 			functions: [
 				{
 					...fn,
+					propertyIcCount: 0,
 					literalShapeCount: 0,
 					registerCount: 7,
 					instructions: [{ opcode: "RETURN", value: 0 }],
@@ -558,6 +569,7 @@ describe("wire loader side-data validation", () => {
 			functions: [
 				{
 					...fn,
+					propertyIcCount: 0,
 					literalShapeCount: 0,
 					instructions: [{ opcode: "RETURN", value: 0 }],
 					gcSafepoints: [{ instructionIp: 0, rootRegisters: [0] }],
@@ -588,6 +600,7 @@ describe("wire loader side-data validation", () => {
 			functions: [
 				{
 					...fn,
+					propertyIcCount: 1,
 					literalShapeCount: 0,
 					registerCount: 2,
 					instructions: [
@@ -624,6 +637,7 @@ describe("wire loader side-data validation", () => {
 	it("rejects known-own-slot side data that disagrees with the source shape", () => {
 		const knownSlotFunction: BytecodeFunction = {
 			...fn,
+			propertyIcCount: 2,
 			literalShapeCount: 2,
 			registerCount: 2,
 			instructions: [
@@ -708,6 +722,7 @@ describe("wire loader side-data validation", () => {
 	it("rejects malformed shared shape-case selectors and slot tables", () => {
 		const shapeCaseFunction: BytecodeFunction = {
 			...fn,
+			propertyIcCount: 2,
 			literalShapeCount: 1,
 			registerCount: 6,
 			instructions: [
@@ -786,6 +801,16 @@ describe("wire loader side-data validation", () => {
 			encodedFirstLoad.every((byte, operand) => wire[index + operand] === byte),
 		);
 		expect(firstLoadOffset).toBeGreaterThanOrEqual(0);
+		const reorderedCaches = wire.slice();
+		reorderedCaches[firstLoadOffset + encodedFirstLoad.length] = 2;
+		reorderedCaches[loadOffset + encodedLoad.length] = 0;
+		acceptsWire("property-caches-independent-of-order", reorderedCaches);
+		const duplicateCache = wire.slice();
+		duplicateCache[loadOffset + encodedLoad.length] = 0;
+		rejectsWire("duplicate-property-cache", duplicateCache);
+		const invalidCache = wire.slice();
+		invalidCache[loadOffset + encodedLoad.length] = 4;
+		rejectsWire("out-of-range-property-cache", invalidCache);
 		const receiverClobber = wire.slice();
 		// The first load may not overwrite r2 while later loads still use the
 		// selector result for that receiver.
@@ -808,6 +833,7 @@ describe("wire loader side-data validation", () => {
 				{
 					...fn,
 					registerCount: 3,
+					propertyIcCount: 0,
 					literalShapeCount: 2,
 					instructions: [
 						{ opcode: "CREATE_UNDEFINED", dst: 0 },
@@ -858,6 +884,7 @@ describe("wire loader side-data validation", () => {
 			...fn,
 			// Row 2 has no CREATE_OBJECT_SHAPED instruction: it is a portable
 			// precompiled descriptor reserved for cross-function shape provenance.
+			propertyIcCount: 1,
 			literalShapeCount: 3,
 			registerCount: 3,
 			instructions: [
@@ -1195,6 +1222,7 @@ describe("wire loader side-data validation", () => {
 			functions: [
 				{
 					...fn,
+					propertyIcCount: 0,
 					literalShapeCount: 0,
 					instructions: [
 						guarded

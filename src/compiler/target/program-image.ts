@@ -34,10 +34,11 @@ import type { CompilerRemark, ProfileSite } from "./profile-metadata.ts";
 import { remapRuntimeFunctionConstants } from "./runtime-image.ts";
 import {
 	compactRuntimeImageConstants,
-	countPropertyIcSites,
 	decodeVmValueOperand,
 	lowerVerifiedTargetsToRuntimePlans,
 	validateRuntimeImageMetadata,
+	validateVmPropertyCacheLayout,
+	vmInstructionUsesPropertyCache,
 	vmExceptionHandlerTargets,
 } from "./runtime-image.ts";
 import type {
@@ -1030,6 +1031,43 @@ export function nativeInstructionEffects(
 	}
 }
 
+function propertyCacheMeaning(
+	instruction: Extract<BytecodeInstruction, { icIndex: number }>,
+): string {
+	switch (instruction.opcode) {
+		case "LOAD_PROPERTY":
+		case "STORE_PROPERTY":
+			return instruction.opcode;
+		case "GUARD_BASE_CONSTRUCTOR_LAYOUT":
+			return JSON.stringify([
+				instruction.opcode,
+				instruction.functionIndex,
+				instruction.keyStringIndices,
+				instruction.methodStringIndex,
+				instruction.methodFunctionIndex,
+			]);
+		case "LOAD_PROPERTY_STATIC_SHAPE_CASE":
+			return JSON.stringify([
+				instruction.opcode,
+				instruction.stringIndex,
+				instruction.slots,
+			]);
+		case "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT":
+		case "STORE_PROPERTY_STATIC_KNOWN_OWN_SLOT":
+			return JSON.stringify([
+				instruction.opcode,
+				instruction.stringIndex,
+				instruction.candidates.map(({ shapeFunctionIndex, shapeCacheIndex, slot }) => [
+					shapeFunctionIndex,
+					shapeCacheIndex,
+					slot,
+				]),
+			]);
+		default:
+			return JSON.stringify([instruction.opcode, instruction.stringIndex]);
+	}
+}
+
 export function validateNativeBodyAbis(
 	runtime: ReadonlyArray<BytecodeFunction>,
 	bodies: ReadonlyArray<BytecodeFunction>,
@@ -1059,8 +1097,19 @@ export function validateNativeBodyAbis(
 			})
 		)
 			throw new RangeError("Native body has invalid closure capture values ABI");
-		if (countPropertyIcSites(vm.instructions) !== countPropertyIcSites(body.instructions))
-			throw new RangeError("Native body has incompatible property caches");
+		validateVmPropertyCacheLayout(vm);
+		validateVmPropertyCacheLayout(body);
+		const meanings = new Map(
+			vm.instructions
+				.filter(vmInstructionUsesPropertyCache)
+				.map((op) => [op.icIndex, propertyCacheMeaning(op)]),
+		);
+		for (const instruction of body.instructions) {
+			if (!vmInstructionUsesPropertyCache(instruction)) continue;
+			const meaning = meanings.get(instruction.icIndex);
+			if (meaning !== undefined && meaning !== propertyCacheMeaning(instruction))
+				throw new RangeError("Native body has incompatible property cache identities");
+		}
 		for (const key of [
 			"nameStringIndex",
 			"isGenerator",
@@ -1077,6 +1126,7 @@ export function validateNativeBodyAbis(
 			"mappedArguments",
 			"argumentSnapshotCount",
 			"literalShapeCount",
+			"propertyIcCount",
 			"fileIndex",
 		] as const) {
 			if (vm[key] !== body[key])

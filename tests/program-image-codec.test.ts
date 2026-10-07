@@ -32,6 +32,7 @@ import type {
 	BytecodeFunction,
 	BytecodeInstruction,
 } from "../src/compiler/target/runtime-image.ts";
+import { testPropertyCacheCount } from "./helpers/program-image.ts";
 import { testProgramImage, withNativeFunctionPlan } from "./helpers/program-image.ts";
 
 // A definition exercising the tricky encodings: variable-length operand arrays
@@ -275,6 +276,7 @@ const mainFn: BytecodeFunction = {
 	isClassConstructor: false,
 	constructorSlotReserve: 0,
 	hasPrototype: true,
+	propertyIcCount: testPropertyCacheCount(instructions),
 	literalShapeCount: 1,
 	instructions,
 	handlers: [{ startIp: 10, endIp: 19, handlerIp: 20 }],
@@ -301,6 +303,7 @@ const genFn: BytecodeFunction = {
 	isClassConstructor: true,
 	constructorSlotReserve: 0,
 	hasPrototype: false,
+	propertyIcCount: 0,
 	literalShapeCount: 0,
 	instructions: [
 		{ opcode: "ASYNC_START" },
@@ -554,6 +557,7 @@ function knownOwnSlotDefinition(): ProgramImage {
 		[
 			{
 				...fn,
+				propertyIcCount: testPropertyCacheCount(instructions),
 				literalShapeCount: 2,
 				instructions,
 				positions: instructions.map(() => 0),
@@ -606,6 +610,7 @@ function shapeCaseDefinition(): ProgramImage {
 		{
 			...fn,
 			registerCount: 6,
+			propertyIcCount: testPropertyCacheCount(instructions),
 			literalShapeCount: 1,
 			instructions,
 			positions: instructions.map(() => 0),
@@ -1939,7 +1944,7 @@ describe("program-image-codec", () => {
 		).toThrow(/invalid CALL specialization metadata/);
 	});
 
-	it("requires dense property IC ordinals while keeping them implicit on the wire", () => {
+	it("rejects duplicate explicit property cache identities", () => {
 		expect(countPropertyIcSites(instructions)).toBe(3);
 		const invalidInstructions = instructions.map((instruction) =>
 			instruction.opcode === "LOAD_PROPERTY_STATIC"
@@ -1952,7 +1957,7 @@ describe("program-image-codec", () => {
 					functions: [{ ...mainFn, instructions: invalidInstructions }],
 				}),
 			),
-		).toThrow("property IC index 1, expected 0");
+		).toThrow("invalid property IC index 1");
 	});
 
 	it("rejects literal-shape cache indices outside the function cache", () => {

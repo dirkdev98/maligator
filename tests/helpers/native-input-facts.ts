@@ -8,6 +8,7 @@ import type {
 	BytecodeInstruction,
 } from "../../src/compiler/target/runtime-image.ts";
 import { encodeVmValueOperand } from "../../src/compiler/target/runtime-image.ts";
+import { testPropertyCacheCount } from "./program-image.ts";
 import { testProgramImage, withNativeFunctionPlan } from "./program-image.ts";
 
 export function inputFactsFixture(): { image: ProgramImage; expected: Array<string> } {
@@ -378,6 +379,7 @@ export function inputFactsFixture(): { image: ProgramImage; expected: Array<stri
 		isClassConstructor: false,
 		constructorSlotReserve: 0,
 		hasPrototype: false,
+		propertyIcCount: testPropertyCacheCount(instructions),
 		literalShapeCount: 0,
 		instructions,
 		handlers: [],

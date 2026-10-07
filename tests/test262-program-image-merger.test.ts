@@ -13,6 +13,7 @@ import {
 	encodeVmValueOperand,
 } from "../src/compiler/target/runtime-image.ts";
 import { mergeProgramImages } from "../src/test262/program-image-merge.ts";
+import { testPropertyCacheCount } from "./helpers/program-image.ts";
 import { testProgramImage, withNativeFunctionPlan } from "./helpers/program-image.ts";
 
 function vmFunction(instructions: Array<BytecodeInstruction>): BytecodeFunction {
@@ -34,6 +35,7 @@ function vmFunction(instructions: Array<BytecodeInstruction>): BytecodeFunction 
 		isClassConstructor: false,
 		constructorSlotReserve: 0,
 		hasPrototype: false,
+		propertyIcCount: testPropertyCacheCount(instructions),
 		literalShapeCount: instructions.filter(
 			(instruction) => instruction.opcode === "CREATE_OBJECT_SHAPED",
 		).length,

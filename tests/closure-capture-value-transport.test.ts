@@ -45,6 +45,7 @@ function captureImage() {
 		isClassConstructor: false,
 		constructorSlotReserve: 0,
 		hasPrototype: false,
+		propertyIcCount: 0,
 		literalShapeCount: 0,
 		instructions: [
 			{ opcode: "LOAD_CAPTURED", dst: 0, ownerFunctionIndex: 1, index: 0 },

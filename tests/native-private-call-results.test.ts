@@ -8,6 +8,7 @@ import type {
 	BytecodeFunction,
 	BytecodeInstruction,
 } from "../src/compiler/target/runtime-image.ts";
+import { testPropertyCacheCount } from "./helpers/program-image.ts";
 function fn(instructions: Array<BytecodeInstruction>): BytecodeFunction {
 	return {
 		nameStringIndex: -1,
@@ -27,6 +28,7 @@ function fn(instructions: Array<BytecodeInstruction>): BytecodeFunction {
 		isClassConstructor: false,
 		constructorSlotReserve: 0,
 		hasPrototype: false,
+		propertyIcCount: testPropertyCacheCount(instructions),
 		literalShapeCount: 0,
 		instructions,
 		handlers: [],

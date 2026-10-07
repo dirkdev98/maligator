@@ -7,6 +7,7 @@ import type {
 	BytecodeInstruction,
 } from "../src/compiler/target/runtime-image.ts";
 import { vmInstructionUsesRegister } from "../src/compiler/target/runtime-image.ts";
+import { testPropertyCacheCount } from "./helpers/program-image.ts";
 
 function load(dst: number, object = 0): BytecodeInstruction {
 	return {
@@ -48,6 +49,7 @@ function lower(
 		isClassConstructor: false,
 		constructorSlotReserve: 0,
 		hasPrototype: false,
+		propertyIcCount: testPropertyCacheCount(instructions),
 		literalShapeCount: 0,
 		instructions,
 		handlers: options.handlers ?? [],

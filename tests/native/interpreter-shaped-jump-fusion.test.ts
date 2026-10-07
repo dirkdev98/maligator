@@ -11,6 +11,7 @@ import type {
 } from "../../src/compiler/target/runtime-image.ts";
 import { parseCompilerCapture } from "../../src/profile-artifact.ts";
 import { buildNativeProgramImage, STRESS_ENV } from "../../src/test-harness.ts";
+import { testPropertyCacheCount } from "../helpers/program-image.ts";
 import { testProgramImage } from "../helpers/program-image.ts";
 
 const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-shaped-jump-fusion-"));
@@ -67,6 +68,7 @@ const fn: BytecodeFunction = {
 	isClassConstructor: false,
 	constructorSlotReserve: 0,
 	hasPrototype: false,
+	propertyIcCount: testPropertyCacheCount(instructions),
 	literalShapeCount: 1,
 	instructions,
 	handlers: [],

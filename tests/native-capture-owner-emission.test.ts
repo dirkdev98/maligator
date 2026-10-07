@@ -6,6 +6,7 @@ import type {
 	BytecodeFunction,
 	BytecodeInstruction,
 } from "../src/compiler/target/runtime-image.ts";
+import { testPropertyCacheCount } from "./helpers/program-image.ts";
 
 function emit(
 	instructions: Array<BytecodeInstruction>,
@@ -30,6 +31,7 @@ function emit(
 		isClassConstructor: false,
 		constructorSlotReserve: 0,
 		hasPrototype: false,
+		propertyIcCount: testPropertyCacheCount(instructions),
 		literalShapeCount: 0,
 		handlers: [],
 		fileIndex: -1,

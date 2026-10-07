@@ -35,6 +35,7 @@ import type {
 	BytecodeInstruction,
 } from "../src/compiler/target/runtime-image.ts";
 import { vmSafepointRootMapsAreTrusted } from "../src/compiler/target/runtime-image.ts";
+import { testPropertyCacheCount } from "./helpers/program-image.ts";
 import { testProgramImage, withNativeFunctionPlan } from "./helpers/program-image.ts";
 import { inspectStaticValueFunction } from "./helpers/static-values.ts";
 
@@ -169,6 +170,7 @@ const fn: BytecodeFunction = {
 	isClassConstructor: false,
 	constructorSlotReserve: 0,
 	hasPrototype: false,
+	propertyIcCount: testPropertyCacheCount(instructions),
 	literalShapeCount: 1,
 	instructions,
 	handlers: [],
@@ -439,6 +441,7 @@ describe("emit-program-image instruction packing", () => {
 				...fn,
 				capturedCount: 0,
 				registerCount: 3,
+				propertyIcCount: testPropertyCacheCount(defineInstructions),
 				literalShapeCount: 0,
 				instructions: defineInstructions,
 				positions: defineInstructions.map(() => 0),
@@ -564,6 +567,7 @@ describe("emit-program-image instruction packing", () => {
 		];
 		const specializedFunction: BytecodeFunction = {
 			...fn,
+			propertyIcCount: testPropertyCacheCount(specializedInstructions),
 			instructions: specializedInstructions,
 			positions: specializedInstructions.map(() => 0),
 		};
@@ -644,6 +648,7 @@ describe("emit-program-image instruction packing", () => {
 		];
 		const syntheticFunction: BytecodeFunction = {
 			...specialized.runtime.functions[0]!,
+			propertyIcCount: testPropertyCacheCount(syntheticInstructions),
 			literalShapeCount: 1,
 			instructions: syntheticInstructions,
 			positions: syntheticInstructions.map(() => 0),
@@ -664,24 +669,18 @@ describe("emit-program-image instruction packing", () => {
 			expect(output).toContain(".shape_cache_index = 0");
 		}
 
+		const malformedFunction: BytecodeFunction = {
+			...specializedFunction,
+			instructions: specializedInstructions.map((instruction) =>
+				instruction.opcode === "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT"
+					? { ...instruction, candidates: [{ ...instruction.candidates[0]!, slot: 0 }] }
+					: instruction,
+			),
+		};
 		const malformed: ProgramImage = {
 			...specialized,
-			runtime: {
-				...specialized.runtime,
-				functions: [
-					{
-						...specialized.runtime.functions[0]!,
-						instructions: specializedInstructions.map((instruction) =>
-							instruction.opcode === "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT"
-								? {
-										...instruction,
-										candidates: [{ ...instruction.candidates[0]!, slot: 0 }],
-									}
-								: instruction,
-						),
-					},
-				],
-			},
+			runtime: { ...specialized.runtime, functions: [malformedFunction] },
+			native: createConservativeNativePlan([malformedFunction]),
 		};
 		expect(() => emitProgramImage(malformed)).toThrow(/invalid known-own-slot access/);
 		expect(() => emitProgramTranslationUnitSources(malformed)).toThrow(
@@ -813,6 +812,7 @@ describe("emit-program-image instruction packing", () => {
 		const invalidLengthFunction: BytecodeFunction = {
 			...fn,
 			registerCount: 2,
+			propertyIcCount: testPropertyCacheCount(exactLengthInstructions),
 			literalShapeCount: 0,
 			instructions: exactLengthInstructions,
 			positions: [0, 0],
@@ -1826,6 +1826,7 @@ describe("emit-program-image instruction packing", () => {
 			...fn,
 			capturedCount: 0,
 			registerCount: 2,
+			propertyIcCount: 1,
 			literalShapeCount: 1,
 			instructions: [
 				call,
@@ -1902,6 +1903,7 @@ describe("emit-program-image instruction packing", () => {
 		};
 		const exactLoadFunction: BytecodeFunction = {
 			...fn,
+			propertyIcCount: 1,
 			capturedCount: 0,
 			registerCount: 2,
 			instructions: [
@@ -2458,6 +2460,7 @@ describe("native update-expression representation", () => {
 	] as const)("honors int32 index operands in %s native access", (kind) => {
 		const indexed: BytecodeFunction = {
 			...fn,
+			propertyIcCount: 2,
 			capturedCount: 0,
 			parameterCount: 1,
 			registerCount: 4,
@@ -4169,6 +4172,19 @@ describe("native update-expression representation", () => {
 		}
 		const invalidCaseChain: ProgramImage = {
 			...locked,
+			runtime: {
+				...locked.runtime,
+				functions: locked.runtime.functions.with(ownerIndex, {
+					...locked.runtime.functions[ownerIndex]!,
+					instructions: locked.runtime.functions[ownerIndex]!.instructions.map(
+						(instruction) =>
+							instruction.opcode === "LOAD_PROPERTY_STATIC" &&
+							instruction.icIndex === lowerProperty.icIndex
+								? { ...instruction, stringIndex: upperProperty.stringIndex }
+								: instruction,
+					),
+				}),
+			},
 			native: {
 				...locked.native,
 				functions: locked.native.functions.with(ownerIndex, {

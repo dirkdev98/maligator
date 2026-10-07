@@ -67,7 +67,10 @@ import type {
 	CoreTargetSafepoint,
 	CoreTargetSafepointRoots,
 } from "./core-target-ir.ts";
-import { coreTargetFunctionIndex } from "./core-target-ir.ts";
+import {
+	coreTargetFunctionIndex,
+	targetInstructionUsesPropertyCache,
+} from "./core-target-ir.ts";
 import {
 	executionLoopBackedgeInstructions,
 	executionSafepointRoots,
@@ -2317,6 +2320,12 @@ function lowerFunctionToTarget(
 		nameStringIndex: coreFunction.metadata.nameStringIndex,
 		blocks,
 		coreBlocks: Object.freeze([...blockOrder]),
+		propertyCacheOrigins: [...loweredInstructions].flatMap(
+			([coreInstruction, instruction]) =>
+				targetInstructionUsesPropertyCache(instruction)
+					? [{ instruction, coreInstruction }]
+					: [],
+		),
 		specializations,
 		isGenerator: coreFunction.isGenerator,
 		isAsync: coreFunction.isAsync,

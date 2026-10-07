@@ -27,6 +27,7 @@ function argumentCacheReceiver(): BytecodeFunction {
 		isClassConstructor: false,
 		constructorSlotReserve: 0,
 		hasPrototype: false,
+		propertyIcCount: 1,
 		literalShapeCount: 0,
 		instructions: [
 			{ opcode: "LOAD_STATIC_ARGUMENT", dst: 1, direct: -1, fallback: 0, index: 1 },

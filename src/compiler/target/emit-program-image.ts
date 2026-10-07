@@ -11,7 +11,6 @@ import type { CompiledFunction } from "./render-native-c.ts";
 import {
 	compressPositions,
 	computeArgumentRetentionLimit,
-	countPropertyIcSites,
 	validateRuntimeImageMetadata,
 	vmGuardedCallSideTag,
 	vmSafepointRootMapsAreTrusted,
@@ -310,7 +309,7 @@ function malFunctionRow(
 		fn.registerCount,
 		fn.capturedCount,
 		computeArgumentRetentionLimit(fn),
-		countPropertyIcSites(fn.instructions),
+		fn.propertyIcCount,
 		fn.literalShapeCount,
 		omitBytecode ? 0 : fn.instructions.length,
 		instructionDataCount,

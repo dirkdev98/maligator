@@ -34,6 +34,7 @@ describe("native root-mask state after pure operators", () => {
 			isClassConstructor: false,
 			constructorSlotReserve: 0,
 			hasPrototype: false,
+			propertyIcCount: 0,
 			literalShapeCount: 0,
 			instructions: [
 				call,

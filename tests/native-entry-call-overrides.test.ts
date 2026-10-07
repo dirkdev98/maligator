@@ -29,6 +29,7 @@ const fn: BytecodeFunction = {
 	isClassConstructor: false,
 	constructorSlotReserve: 0,
 	hasPrototype: false,
+	propertyIcCount: 0,
 	literalShapeCount: 0,
 	handlers: [],
 	fileIndex: -1,

@@ -12,6 +12,7 @@ import type {
 	BytecodeFunction,
 	BytecodeInstruction,
 } from "../src/compiler/target/runtime-image.ts";
+import { testPropertyCacheCount } from "./helpers/program-image.ts";
 
 const retained = 2;
 const live = [0, 1, retained];
@@ -87,6 +88,7 @@ function emit(
 		isClassConstructor: false,
 		constructorSlotReserve: 0,
 		hasPrototype: false,
+		propertyIcCount: testPropertyCacheCount(instructions),
 		literalShapeCount: 0,
 		instructions,
 		handlers: options.handlers ?? [],

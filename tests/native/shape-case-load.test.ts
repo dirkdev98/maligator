@@ -9,6 +9,7 @@ import type {
 	BytecodeInstruction,
 } from "../../src/compiler/target/runtime-image.ts";
 import { buildNativeProgramImage, STRESS_ENV } from "../../src/test-harness.ts";
+import { testPropertyCacheCount } from "../helpers/program-image.ts";
 import { testProgramImage, withNativeFunctionPlan } from "../helpers/program-image.ts";
 
 const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-shape-case-load-"));
@@ -130,6 +131,7 @@ const fn: BytecodeFunction = {
 	isClassConstructor: false,
 	constructorSlotReserve: 0,
 	hasPrototype: false,
+	propertyIcCount: testPropertyCacheCount(instructions),
 	literalShapeCount: 2,
 	instructions,
 	handlers: [],

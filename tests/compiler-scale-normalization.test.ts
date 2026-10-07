@@ -8,6 +8,7 @@ import { emitProgramTranslationUnits } from "../src/compiler/target/emit-program
 import { createConservativeNativePlan } from "../src/compiler/target/program-image.ts";
 import type { ProgramImage } from "../src/compiler/target/program-image.ts";
 import type { BytecodeFunction } from "../src/compiler/target/runtime-image.ts";
+import { testPropertyCacheCount } from "./helpers/program-image.ts";
 import { testProgramImage } from "./helpers/program-image.ts";
 
 function partitionedImage(sourceRoot: string, changed = false): ProgramImage {
@@ -44,6 +45,7 @@ function partitionedImage(sourceRoot: string, changed = false): ProgramImage {
 		isClassConstructor: false,
 		constructorSlotReserve: 0,
 		hasPrototype: false,
+		propertyIcCount: testPropertyCacheCount(instructions),
 		literalShapeCount: 0,
 		instructions,
 		handlers: [],

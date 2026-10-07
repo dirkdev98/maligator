@@ -17,7 +17,7 @@
  */
 
 #define WIRE_MAGIC 0x574c414du // "MALW" little-endian
-#define WIRE_VERSION 68u
+#define WIRE_VERSION 69u
 #define WIRE_FLAG_HAS_DEBUG 1u
 
 typedef enum WireOp {
@@ -599,7 +599,7 @@ static i32 rd_side_shape_case_load(Rd *r, I32Builder *builder) {
 
 // ---- instruction decode (mirrors writeInstruction in program-image-codec.ts) ----
 
-static void rd_instruction(Rd *r, MalInstruction *o, I32Builder *side_data) {
+static void rd_instruction_operands(Rd *r, MalInstruction *o, I32Builder *side_data) {
     u8 tag = rd_u8(r);
     if (!r->ok) {
         return;
@@ -1428,6 +1428,44 @@ static void rd_instruction(Rd *r, MalInstruction *o, I32Builder *side_data) {
     }
 }
 
+static i32 *rd_property_cache_index(Rd *r, MalInstruction *instruction, I32Builder *side_data) {
+    switch (instruction->opcode) {
+        case MAL_OP_LOAD_PROPERTY:
+            return &instruction->as.load_property.ic_index;
+        case MAL_OP_LOAD_PROPERTY_STATIC:
+        case MAL_OP_LOAD_PROPERTY_STATIC_ARRAY_LENGTH:
+            return &instruction->as.load_property_static.ic_index;
+        case MAL_OP_LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT:
+            return &instruction->as.load_property_static_known_own_slot.ic_index;
+        case MAL_OP_STORE_PROPERTY:
+            return &instruction->as.store_property.ic_index;
+        case MAL_OP_STORE_PROPERTY_STATIC:
+            return &instruction->as.store_property_static.ic_index;
+        case MAL_OP_STORE_PROPERTY_STATIC_KNOWN_OWN_SLOT:
+            return &instruction->as.store_property_static_known_own_slot.ic_index;
+        case MAL_OP_LOAD_PROPERTY_STATIC_SHAPE_CASE:
+        case MAL_OP_GUARD_BASE_CONSTRUCTOR_LAYOUT: {
+            i32 offset = instruction->opcode == MAL_OP_LOAD_PROPERTY_STATIC_SHAPE_CASE
+                ? instruction->as.load_property_static_shape_case.data_offset
+                : instruction->as.guard_base_constructor_layout.data_offset;
+            if (offset < 0 || offset > (i32) side_data->count - 2) {
+                r->ok = false;
+                return nullptr;
+            }
+            return &side_data->data[offset + 1];
+        }
+        default:
+            return nullptr;
+    }
+}
+
+static void rd_instruction(Rd *r, MalInstruction *instruction, I32Builder *side_data) {
+    rd_instruction_operands(r, instruction, side_data);
+    if (!r->ok) return;
+    i32 *index = rd_property_cache_index(r, instruction, side_data);
+    if (index != nullptr) *index = rd_i32(r);
+}
+
 static bool mal_loaded_static_query_valid(const MalRuntimeImage *image, const MalFunction *fn, const MalInstruction *instruction) {
     i32 side_offset = instruction->as.query_static_data.data_offset;
     if (side_offset < 0 || side_offset >= fn->instruction_data_count - 1) return false;
@@ -1715,6 +1753,7 @@ static void rd_function(MalLoadedRuntimeImage *L, Rd *r, MalFunction *fn, bool d
     fn->closure_captures = nullptr;
     fn->closure_capture_owner_count = -1;
     fn->file_index = rd_i32(r);
+    fn->property_ic_count = (i32) rd_count(r, 1);
     fn->literal_shape_count = (i32) rd_count(r, 1);
     if (fn->parameter_count < 0 || fn->register_count < fn->parameter_count ||
         fn->argument_snapshot_count > fn->register_count - fn->parameter_count ||
@@ -1744,67 +1783,36 @@ static void rd_function(MalLoadedRuntimeImage *L, Rd *r, MalFunction *fn, bool d
     for (u32 i = 0; r->ok && i < instruction_count; i++) {
         rd_instruction(r, &instructions[i], &side_data);
     }
-    fn->property_ic_count = 0;
+    bool *property_cache_seen = fn->property_ic_count > 0
+        ? calloc((usize) fn->property_ic_count, sizeof(bool))
+        : nullptr;
     bool *literal_shape_seen = fn->literal_shape_count > 0
         ? calloc((usize) fn->literal_shape_count, sizeof(bool))
         : nullptr;
-    if (fn->literal_shape_count > 0 && literal_shape_seen == nullptr) {
+    if ((fn->property_ic_count > 0 && property_cache_seen == nullptr) ||
+        (fn->literal_shape_count > 0 && literal_shape_seen == nullptr)) {
         r->ok = false;
     }
     for (u32 i = 0; r->ok && i < instruction_count; i++) {
-        switch (instructions[i].opcode) {
-            case MAL_OP_LOAD_PROPERTY:
-                instructions[i].as.load_property.ic_index = fn->property_ic_count++;
-                break;
-            case MAL_OP_LOAD_PROPERTY_STATIC:
-            case MAL_OP_LOAD_PROPERTY_STATIC_ARRAY_LENGTH:
-                instructions[i].as.load_property_static.ic_index = fn->property_ic_count++;
-                break;
-            case MAL_OP_LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT:
-                instructions[i].as.load_property_static_known_own_slot.ic_index =
-                    fn->property_ic_count++;
-                break;
-            case MAL_OP_LOAD_PROPERTY_STATIC_SHAPE_CASE: {
-                i32 offset = instructions[i].as.load_property_static_shape_case.data_offset;
-                if (offset < 0 || offset > (i32) side_data.count - 3) {
-                    r->ok = false;
-                    break;
-                }
-                side_data.data[offset + 1] = fn->property_ic_count++;
+        i32 *property_index = rd_property_cache_index(r, &instructions[i], &side_data);
+        if (property_index != nullptr) {
+            i32 index = *property_index;
+            if (index < 0 || index >= fn->property_ic_count || property_cache_seen[index]) {
+                r->ok = false;
                 break;
             }
-            case MAL_OP_STORE_PROPERTY:
-                instructions[i].as.store_property.ic_index = fn->property_ic_count++;
-                break;
-            case MAL_OP_STORE_PROPERTY_STATIC:
-                instructions[i].as.store_property_static.ic_index = fn->property_ic_count++;
-                break;
-            case MAL_OP_STORE_PROPERTY_STATIC_KNOWN_OWN_SLOT:
-                instructions[i].as.store_property_static_known_own_slot.ic_index =
-                    fn->property_ic_count++;
-                break;
-            case MAL_OP_GUARD_BASE_CONSTRUCTOR_LAYOUT: {
-                i32 offset = instructions[i].as.guard_base_constructor_layout.data_offset;
-                if (offset < 0 || offset > (i32) side_data.count - 4) {
-                    r->ok = false;
-                    break;
-                }
-                side_data.data[offset + 1] = fn->property_ic_count++;
+            property_cache_seen[index] = true;
+        }
+        if (instructions[i].opcode == MAL_OP_CREATE_OBJECT_SHAPED) {
+            i32 index = instructions[i].as.create_object_shaped.shape_cache_index;
+            if (index < 0 || index >= fn->literal_shape_count || literal_shape_seen[index]) {
+                r->ok = false;
                 break;
             }
-            case MAL_OP_CREATE_OBJECT_SHAPED: {
-                i32 index = instructions[i].as.create_object_shaped.shape_cache_index;
-                if (index < 0 || index >= fn->literal_shape_count || literal_shape_seen[index]) {
-                    r->ok = false;
-                    break;
-                }
-                literal_shape_seen[index] = true;
-                break;
-            }
-            default:
-                break;
+            literal_shape_seen[index] = true;
         }
     }
+    free(property_cache_seen);
     free(literal_shape_seen);
     fn->instructions = instructions;
     fn->argument_retention_limit = -1;

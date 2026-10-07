@@ -9,6 +9,19 @@ import type {
 import type { CompilerInstruction } from "../shared/compiler-instruction.ts";
 import type { CompilerOperatorInputKindMasks } from "../shared/compiler-value-kinds.ts";
 
+export function targetInstructionUsesPropertyCache(
+	instruction: CompilerInstruction,
+): boolean {
+	return (
+		instruction.type === "loadProperty" ||
+		instruction.type === "loadPropertyStatic" ||
+		instruction.type === "loadPropertyStaticShapeCase" ||
+		instruction.type === "storeProperty" ||
+		instruction.type === "storePropertyStatic" ||
+		instruction.type === "guardBaseConstructorLayout"
+	);
+}
+
 /**
  * Shared operation semantics relocated into a backend-owned storage namespace.
  *
@@ -141,6 +154,10 @@ export interface CoreTargetFunction {
 		readonly sourcePosition?: number;
 	}>;
 	readonly coreBlocks: ReadonlyArray<CoreBlockId>;
+	readonly propertyCacheOrigins: ReadonlyArray<{
+		readonly instruction: CompilerInstruction;
+		readonly coreInstruction: CoreInstructionId;
+	}>;
 	/** Typed Core decisions, already relocated to allocated registers and blocks. */
 	readonly specializations: ReadonlyArray<CoreAllocatedRegion>;
 	readonly isGenerator: boolean;

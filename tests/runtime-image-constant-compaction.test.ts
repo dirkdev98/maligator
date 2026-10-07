@@ -19,6 +19,7 @@ import type {
 	BytecodeInstruction,
 	RuntimeImage,
 } from "../src/compiler/target/runtime-image.ts";
+import { testPropertyCacheCount } from "./helpers/program-image.ts";
 import { testProgramImage, withNativeFunctionPlan } from "./helpers/program-image.ts";
 
 function units(value: string): Array<number> {
@@ -44,6 +45,7 @@ function vmFunction(instructions: Array<BytecodeInstruction>): BytecodeFunction 
 		isClassConstructor: false,
 		constructorSlotReserve: 0,
 		hasPrototype: false,
+		propertyIcCount: testPropertyCacheCount(instructions),
 		literalShapeCount: 1,
 		instructions,
 		handlers: [],

@@ -33,6 +33,7 @@ function callGraphImage() {
 		isClassConstructor: false,
 		constructorSlotReserve: 0,
 		hasPrototype: false,
+		propertyIcCount: 0,
 		literalShapeCount: 0,
 		instructions: [
 			{ opcode: "CREATE_FUNCTION", dst: 1, functionIndex: 1 },
