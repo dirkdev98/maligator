@@ -1,6 +1,11 @@
 import type { NativeFunctionPlan } from "./program-image.ts";
 
-export type NativeStackFieldRepresentation = "int32" | "number" | "boolean";
+export type NativeStackFieldRepresentation =
+	| "int32"
+	| "number"
+	| "boolean"
+	| "boxed"
+	| "string";
 
 export interface NativeStackObjectStoragePlan {
 	readonly allocationIp: number;
@@ -32,8 +37,13 @@ export function selectNativeStackObjectStorage(
 				reps.length !== site.slotCount ||
 				!reps.every(
 					(rep): rep is NativeStackFieldRepresentation =>
-						rep === "int32" || rep === "number" || rep === "boolean",
-				)
+						rep === "int32" ||
+						rep === "number" ||
+						rep === "boolean" ||
+						rep === "boxed" ||
+						rep === "string",
+				) ||
+				!reps.some((rep) => rep === "int32" || rep === "number" || rep === "boolean")
 			)
 				continue;
 			if (

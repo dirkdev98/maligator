@@ -844,6 +844,50 @@ console.log(
 	typedStackNaN(null),
 );
 
+globalThis.makeMixedValue = (marker) => ({
+	marker,
+	padding: new Array(300).fill(marker),
+});
+globalThis.makeMixedString = (marker) => `value-${marker}-${"x".repeat(80)}`;
+function mixedStackFields(input) {
+	const object = {
+		fraction: -0,
+		integer: 2,
+		flag: true,
+		payload: globalThis.makeMixedValue(11),
+		label: globalThis.makeMixedString(13),
+	};
+	gc();
+	if (input) {
+		object.fraction = 0 / 0;
+		object.integer = 3;
+		object.flag = false;
+		object.payload = globalThis.makeMixedValue(17);
+		object.label = globalThis.makeMixedString(19);
+	} else {
+		object.fraction = -0;
+		object.integer = 4;
+		object.flag = true;
+		object.payload = globalThis.makeMixedValue(23);
+		object.label = globalThis.makeMixedString(29);
+	}
+	gc();
+	return object === input
+		? "identity"
+		: [
+				String(object.fraction),
+				Object.is(object.fraction, -0),
+				object.integer,
+				object.flag,
+				object.payload.marker,
+				object.payload.padding.length,
+				object.label,
+				object.label.length,
+			].join(":");
+}
+globalThis.mixedStackFields = mixedStackFields;
+console.log("mixed-stack-fields", mixedStackFields(null), mixedStackFields(true));
+
 function shapeBranches(flag, input) {
 	let total = 0;
 	let object;

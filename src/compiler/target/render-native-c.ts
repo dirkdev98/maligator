@@ -45,6 +45,7 @@ import type {
 	NativePropertyReadPairPlan,
 	NativePropertyReadPairAction,
 } from "./lower-native-fast-paths.ts";
+import type { NativeStackFieldRepresentation } from "./lower-native-objects.ts";
 import { nativeRootedOutputRegisters } from "./lower-native-root-publication.ts";
 import { nativeVariantContract } from "./lower-native-storage.ts";
 import type { NativeSuspensionPlan } from "./lower-native-suspension.ts";
@@ -888,7 +889,7 @@ function emitCompiledVariant(
 				`Invalid stack-object metadata at instruction ${site.allocationIp}`,
 			);
 		}
-		const scalarRepresentations = nativeContract.storage!.stackObjects.find(
+		const fieldRepresentations = nativeContract.storage!.stackObjects.find(
 			(plan) => plan.allocationIp === site.allocationIp,
 		)?.slotRepresentations;
 		const elided = site.mode === "elided";
@@ -896,17 +897,20 @@ function emitCompiledVariant(
 			objectName: `__stack_object_${site.allocationIp}`,
 			...(elided
 				? { elided: true }
-				: scalarRepresentations === undefined
+				: fieldRepresentations === undefined
 					? { slotsOffset: nextStackSlot }
 					: {
-							scalarSlots: scalarRepresentations.map((representation, slot) => ({
-								name: `__stack_object_${site.allocationIp}_slot_${slot}`,
+							fieldSlots: fieldRepresentations.map((representation, slot) => ({
+								name:
+									representation === "boxed" || representation === "string"
+										? `__gc_slots[${nextStackSlot++}]`
+										: `__stack_object_${site.allocationIp}_slot_${slot}`,
 								representation,
 							})),
 						}),
 			slotCount: site.slotCount,
 		});
-		if (!elided && scalarRepresentations === undefined) nextStackSlot += site.slotCount;
+		if (!elided && fieldRepresentations === undefined) nextStackSlot += site.slotCount;
 	}
 	const stackObjectMaterializations = new Map<number, StackObjectSite>();
 	const stackObjectAccesses = new Map<number, { site: StackObjectSite; slot: number }>();
@@ -1284,8 +1288,9 @@ function emitCompiledVariant(
 	for (const site of stackObjectSites.values()) {
 		if (site.elided === true) continue;
 		lines.push(`    MalEmbeddedObject ${site.objectName};`);
-		for (const slot of site.scalarSlots ?? [])
-			lines.push(`    ${cTypeOf(slot.representation)} ${slot.name};`);
+		for (const slot of site.fieldSlots ?? [])
+			if (slot.representation !== "boxed" && slot.representation !== "string")
+				lines.push(`    ${cTypeOf(slot.representation)} ${slot.name};`);
 		if (site.inheritedLoadInstructionIndex !== undefined) {
 			lines.push(`    bool ${site.inheritedFastName} = false;`);
 			lines.push(`    MalValue ${site.inheritedValueName} = MAL_VALUE_UNDEFINED;`);
@@ -2166,9 +2171,9 @@ interface StackObjectSite {
 	elided?: true;
 	slotsOffset?: number;
 	slotCount: number;
-	scalarSlots?: ReadonlyArray<{
+	fieldSlots?: ReadonlyArray<{
 		readonly name: string;
-		readonly representation: "int32" | "number" | "boolean";
+		readonly representation: NativeStackFieldRepresentation;
 	}>;
 	inheritedLoadInstructionIndex?: number;
 	inheritedIcIndex?: number;
@@ -2178,8 +2183,8 @@ interface StackObjectSite {
 }
 
 function stackObjectSlotReference(site: StackObjectSite, slot: number): string {
-	if (site.scalarSlots !== undefined) {
-		const field = site.scalarSlots[slot];
+	if (site.fieldSlots !== undefined) {
+		const field = site.fieldSlots[slot];
 		if (field === undefined) throw new Error("Invalid typed stack-object field");
 		return field.name;
 	}
@@ -5275,10 +5280,10 @@ function emitInstruction(
 			return [
 				...shape,
 				"mal_perf_stack_object_init();",
-				`mal_object_init_embedded_stack(&vm->heap, &${objectName}, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]), __oshape_${ip}, ${stackObjectSite.scalarSlots === undefined ? `&__gc_slots[${slotsOffset!}]` : "nullptr"});`,
+				`mal_object_init_embedded_stack(&vm->heap, &${objectName}, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]), __oshape_${ip}, ${stackObjectSite.fieldSlots === undefined ? `&__gc_slots[${slotsOffset!}]` : "nullptr"});`,
 				...instruction.valueRegisters.map(
 					(register, index) =>
-						`${stackObjectSlotReference(stackObjectSite, index)} = ${stackObjectSite.scalarSlots === undefined ? boxed(register) : `r${register}`};`,
+						`${stackObjectSlotReference(stackObjectSite, index)} = ${stackObjectSite.fieldSlots === undefined ? boxed(register) : `r${register}`};`,
 				),
 				`r${instruction.dst} = mal_value_from_object(&${objectName}.object);`,
 			];
@@ -5534,7 +5539,7 @@ function emitInstruction(
 			if (stackObjectAccess !== undefined) {
 				const { site, slot } = stackObjectAccess;
 				return [
-					`${stackObjectSlotReference(site, slot)} = ${site.scalarSlots === undefined ? boxed(instruction.value) : `r${instruction.value}`};`,
+					`${stackObjectSlotReference(site, slot)} = ${site.fieldSlots === undefined ? boxed(instruction.value) : `r${instruction.value}`};`,
 				];
 			}
 			const candidates = instruction.candidates.flatMap((candidate) => [
@@ -6160,7 +6165,7 @@ function emitInstruction(
 			if (stackObjectAccess !== undefined) {
 				const { site, slot } = stackObjectAccess;
 				return [
-					`${stackObjectSlotReference(site, slot)} = ${site.scalarSlots === undefined ? boxed(instruction.value) : `r${instruction.value}`};`,
+					`${stackObjectSlotReference(site, slot)} = ${site.fieldSlots === undefined ? boxed(instruction.value) : `r${instruction.value}`};`,
 				];
 			}
 			if (

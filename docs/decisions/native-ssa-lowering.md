@@ -143,11 +143,14 @@ storage planning. Rendering consumes the pair admission and preserves a separate
 original-instruction fallback at each load, including its source and profile event.
 
 Direct activation-local stack objects with existing materialization:none certificates
-can store several fields in independent number, int32, and boolean locals. Every field
-must retain its initial representation at all certified accesses; boxed, inherited,
-materializing, or changing fields keep whole-object boxed storage. The persisted plan
-is selected and validated independently for each entry. The embedded header retains
-identity with a null field-storage pointer, so this layout cannot escape the certificate.
+can store several fields in independent number, int32, and boolean locals. Stable
+boxed and string fields occupy dedicated shadow slots initialized before frame
+publication and active throughout the invocation. Every field must retain its initial
+representation at all certified accesses; inherited, materializing, or changing fields
+keep whole-object boxed storage. All-boxed sites retain the existing contiguous layout.
+The persisted plan is selected and validated independently for each entry. The embedded
+header retains identity with a null field-storage pointer, so this layout cannot escape
+the certificate.
 
 Literal-shape caches are shared by both target bodies. Their slot identities come
 from Core allocation origins, independently of physical block order. Both the wire

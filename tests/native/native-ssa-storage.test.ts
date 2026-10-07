@@ -142,6 +142,40 @@ describe("independent native SSA storage", () => {
 					...(image.runtime.stringConstants[fn.body.nameStringIndex] ?? []),
 				) === "shapeBranches",
 		)!;
+		const mixed = image.native.functions.find(
+			(fn) =>
+				String.fromCharCode(
+					...(image.runtime.stringConstants[fn.body.nameStringIndex] ?? []),
+				) === "mixedStackFields",
+		)!;
+		expect(mixed.storage!.stackObjects[0]!.slotRepresentations).toEqual([
+			"number",
+			"int32",
+			"boolean",
+			"boxed",
+			"boxed",
+		]);
+		expect(emitCompiledFunction(mixed, mixed.functionIndex, "", false)).not.toBeNull();
+		const mixedRegion = mixed.specializations.find(
+			(region) => region.kind === "stack-object-plan",
+		)!;
+		if (mixedRegion.kind !== "stack-object-plan")
+			throw new Error("Mixed fixture lacks a stack certificate");
+		for (const slot of [3, 4]) {
+			const accesses = mixedRegion.sites[0]!.accesses.filter(
+				(access) => access.slot === slot,
+			);
+			expect(
+				accesses.some((access) =>
+					mixed.body.instructions[access.ip]!.opcode.startsWith("LOAD_"),
+				),
+			).toBe(true);
+			expect(
+				accesses.some((access) =>
+					mixed.body.instructions[access.ip]!.opcode.startsWith("STORE_"),
+				),
+			).toBe(true);
+		}
 		expect(shapes).toBeDefined();
 		expect(emitCompiledFunction(shapes, shapes.functionIndex, "", false)).not.toBeNull();
 		const portableShapes = image.runtime.functions[

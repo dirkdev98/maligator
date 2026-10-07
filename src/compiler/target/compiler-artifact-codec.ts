@@ -68,7 +68,7 @@ import type {
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal artifacts are hard cut-overs: stale cache entries rebuild.
-export const COMPILER_ARTIFACT_VERSION = 120;
+export const COMPILER_ARTIFACT_VERSION = 121;
 
 function validateClosureCaptureOwners(
 	owners: ReadonlyArray<number>,
@@ -784,7 +784,7 @@ function writeNativeStorage(w: Writer, storage: NativeStoragePlan | undefined): 
 		w.i32(plan.allocationIp);
 		w.u32(plan.slotRepresentations.length);
 		for (const rep of plan.slotRepresentations)
-			w.u8(["int32", "number", "boolean"].indexOf(rep));
+			w.u8(["int32", "number", "boolean", "boxed", "string"].indexOf(rep));
 	}
 }
 
@@ -969,7 +969,7 @@ function readNativeStorage(r: Reader): NativeStoragePlan {
 		() => ({
 			allocationIp: r.i32(),
 			slotRepresentations: Array.from({ length: r.count(1) }, () => {
-				const rep = (["int32", "number", "boolean"] as const)[r.u8()];
+				const rep = (["int32", "number", "boolean", "boxed", "string"] as const)[r.u8()];
 				if (rep === undefined)
 					throw new RangeError("Invalid native stack field representation");
 				return rep;

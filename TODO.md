@@ -110,6 +110,8 @@ The independent target boundary and current storage contract are recorded in
       preserve borrowed operands and protected windows.
 - [x] Persist multi-field typed stack storage for direct activation-local objects
       with existing non-materializing certificates and stable scalar fields.
+- [x] Preserve scalar fields in mixed activation-local stack objects; root only
+      stable boxed and string fields in dedicated active shadow slots.
 - [ ] Extend selected typed call/aggregate transport and expression regions using
       Core proofs, with bounded code-size decisions and matched runtime evidence.
       Move remaining emission-local selection into explicit native plans before
