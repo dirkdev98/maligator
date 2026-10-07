@@ -115,6 +115,9 @@ The independent target boundary and current storage contract are recorded in
 - [x] Keep stable fields typed through certified returns, boxing into a rooted
       materialization vector only on the escaping edge, including boxed-result
       typed entries.
+- [x] Persist paired-array, constructor initialization, and private-field capacity
+      plans per entry, including borrowed storage and original fallbacks. Recheck
+      paired receivers at each read and reject effectful eager-shape windows.
 - [ ] Extend selected typed call/aggregate transport and expression regions using
       Core proofs, with bounded code-size decisions and matched runtime evidence.
       Move remaining emission-local selection into explicit native plans before

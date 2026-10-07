@@ -142,6 +142,18 @@ cache sites, borrowed values, and two claimed instructions are selected before
 storage planning. Rendering consumes the pair admission and preserves a separate
 original-instruction fallback at each load, including its source and profile event.
 
+Paired indexed-array reads, constructor initialization, and private-field capacity
+also have persisted per-entry plans. Paired admission retains the existing indexed-loop
+certificate and pins borrowed receivers; each secondary read checks current receiver
+identity and indexed storage because the loop certificate permits intervening mutation.
+Presence probes retain their current prototype and hole checks. Each parent length
+site owns at most one paired admission. Constructor plans reference original store
+instructions and reserve the entire first-to-last store window. Eager final-shape
+publication requires every intervening operation to be pure under the selected
+representations, without overlays or polls. Private capacity planning preserves the
+original definition sites and their effects. Rendering only reconstructs action maps;
+artifact validation recomputes the selections and ownership contracts.
+
 Direct activation-local stack objects with existing certificates
 can store several fields in independent number, int32, and boolean locals. Stable
 boxed and string fields occupy dedicated shadow slots initialized before frame

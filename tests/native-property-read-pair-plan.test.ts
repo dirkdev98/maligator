@@ -39,7 +39,16 @@ describe("persisted native boxed property read pairs", () => {
 			fn.registerRepresentations,
 			new Set(plan.claimedIps),
 			() => true,
-			{ kind: "render", plans: [], updates: [], readRegions: [], readPairs: [plan] },
+			{
+				kind: "render",
+				plans: {
+					...fn.storage!,
+					propertyProjections: [],
+					propertyNumericUpdates: [],
+					propertyReadRegions: [],
+					propertyReadPairs: [plan],
+				},
+			},
 		);
 		expect([...supplied.propertyReadPairActions.keys()]).toEqual(
 			plan.loads.map((load) => load.ip),

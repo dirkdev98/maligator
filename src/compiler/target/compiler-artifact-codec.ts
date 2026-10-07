@@ -17,6 +17,9 @@ import type {
 	NativePropertyReadRegionPlan,
 	NativePropertyReadPairPlan,
 	NativePropertyProjectionOperand,
+	NativePairedArrayLoopPlan,
+	NativeConstructorInitializationPlan,
+	NativePrivateFieldReservePlan,
 } from "./lower-native-fast-paths.ts";
 import type { NativeStackObjectStoragePlan } from "./lower-native-objects.ts";
 import type { NativeStoragePlan } from "./lower-native-storage.ts";
@@ -68,7 +71,7 @@ import type {
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal artifacts are hard cut-overs: stale cache entries rebuild.
-export const COMPILER_ARTIFACT_VERSION = 123;
+export const COMPILER_ARTIFACT_VERSION = 124;
 
 function validateClosureCaptureOwners(
 	owners: ReadonlyArray<number>,
@@ -767,6 +770,37 @@ function writeNativeStorage(w: Writer, storage: NativeStoragePlan | undefined): 
 		w.i32Array([...plan.borrowedRegisters]);
 		w.u8(0);
 	}
+	w.u32(storage.pairedArrayLoops.length);
+	for (const plan of storage.pairedArrayLoops) {
+		for (const value of [
+			plan.id,
+			plan.lengthLoadIp,
+			plan.primaryLoadIp,
+			plan.primaryObject,
+			plan.secondaryLoadIp,
+			plan.secondaryObject,
+			plan.key,
+		])
+			w.i32(value);
+		w.i32Array([...plan.claimedIps]);
+		w.i32Array([...plan.borrowedRegisters]);
+	}
+	w.u8(storage.constructorInitialization === undefined ? 0 : 1);
+	if (storage.constructorInitialization !== undefined) {
+		const plan = storage.constructorInitialization;
+		w.i32(plan.id);
+		w.i32Array([...plan.stores]);
+		w.i32Array([...plan.claimedIps]);
+		w.i32Array([...plan.borrowedRegisters]);
+	}
+	w.u8(storage.privateFieldReserve === undefined ? 0 : 1);
+	if (storage.privateFieldReserve !== undefined) {
+		const plan = storage.privateFieldReserve;
+		w.i32(plan.id);
+		w.i32(plan.count);
+		w.i32Array([...plan.claimedIps]);
+		w.i32Array([...plan.borrowedRegisters]);
+	}
 	w.u8(storage.suspension === undefined ? 0 : 1);
 	if (storage.suspension !== undefined) {
 		const plan = storage.suspension;
@@ -951,6 +985,43 @@ function readNativeStorage(r: Reader): NativeStoragePlan {
 			fallback: "original-instructions",
 		});
 	}
+	const pairedArrayLoops: Array<NativePairedArrayLoopPlan> = Array.from(
+		{ length: r.count(9) },
+		() => ({
+			id: r.i32(),
+			lengthLoadIp: r.i32(),
+			primaryLoadIp: r.i32(),
+			primaryObject: r.i32(),
+			secondaryLoadIp: r.i32(),
+			secondaryObject: r.i32(),
+			key: r.i32(),
+			claimedIps: r.i32Array(),
+			borrowedRegisters: r.i32Array(),
+		}),
+	);
+	const constructorTag = r.u8();
+	if (constructorTag > 1)
+		throw new RangeError("Invalid native constructor initialization tag");
+	const constructorInitialization: NativeConstructorInitializationPlan | undefined =
+		constructorTag === 0
+			? undefined
+			: {
+					id: r.i32(),
+					stores: r.i32Array(),
+					claimedIps: r.i32Array(),
+					borrowedRegisters: r.i32Array(),
+				};
+	const privateTag = r.u8();
+	if (privateTag > 1) throw new RangeError("Invalid native private field reserve tag");
+	const privateFieldReserve: NativePrivateFieldReservePlan | undefined =
+		privateTag === 0
+			? undefined
+			: {
+					id: r.i32(),
+					count: r.i32(),
+					claimedIps: r.i32Array(),
+					borrowedRegisters: r.i32Array(),
+				};
 	const suspensionTag = r.u8();
 	if (suspensionTag > 1) throw new RangeError("Invalid native suspension plan tag");
 	let suspension: NativeSuspensionPlan | undefined;
@@ -985,6 +1056,9 @@ function readNativeStorage(r: Reader): NativeStoragePlan {
 		propertyNumericUpdates,
 		propertyReadRegions,
 		propertyReadPairs,
+		pairedArrayLoops,
+		...(constructorInitialization === undefined ? {} : { constructorInitialization }),
+		...(privateFieldReserve === undefined ? {} : { privateFieldReserve }),
 	};
 }
 

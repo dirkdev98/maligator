@@ -33,16 +33,12 @@ import {
 import { lowerNativeFastPaths } from "./lower-native-fast-paths.ts";
 import type {
 	NativeConstructorInitializationAction,
+	NativeFastPathPlans,
 	NativePairedArrayLoopAction,
-	NativePairedArrayLoopPlan,
 	NativePropertyNumericUpdateAction,
-	NativePropertyNumericUpdatePlan,
 	NativePropertyProjectionAction,
 	NativePropertyProjectionOperand,
-	NativePropertyProjectionPlan,
 	NativePropertyReadRegionAction,
-	NativePropertyReadRegionPlan,
-	NativePropertyReadPairPlan,
 	NativePropertyReadPairAction,
 } from "./lower-native-fast-paths.ts";
 import type { NativeStackFieldRepresentation } from "./lower-native-objects.ts";
@@ -1194,10 +1190,7 @@ function emitCompiledVariant(
 		new Set(storage.expressionIps),
 		new Set(storage.rematerializedConstantIps),
 		new Set(storage.elidedTdzIps),
-		storage.propertyProjections,
-		storage.propertyNumericUpdates,
-		storage.propertyReadRegions,
-		storage.propertyReadPairs,
+		storage,
 	);
 	if (body === null) {
 		return null;
@@ -1751,10 +1744,7 @@ function emitResumableFunction(
 		new Set(storage.expressionIps),
 		new Set(storage.rematerializedConstantIps),
 		new Set(storage.elidedTdzIps),
-		native.storage!.propertyProjections,
-		native.storage!.propertyNumericUpdates,
-		native.storage!.propertyReadRegions,
-		native.storage!.propertyReadPairs,
+		storage,
 	);
 	if (body === null) {
 		return null;
@@ -2477,10 +2467,13 @@ function emitBody(
 	expressionIps: ReadonlySet<number> = new Set(),
 	rematerializedConstantIps: ReadonlySet<number> = new Set(),
 	elidedTdzIps: ReadonlySet<number> = new Set(),
-	propertyProjections: ReadonlyArray<NativePropertyProjectionPlan> = [],
-	propertyNumericUpdates: ReadonlyArray<NativePropertyNumericUpdatePlan> = [],
-	propertyReadRegions: ReadonlyArray<NativePropertyReadRegionPlan> = [],
-	propertyReadPairs: ReadonlyArray<NativePropertyReadPairPlan> = [],
+	fastPathPlans: NativeFastPathPlans = {
+		propertyProjections: [],
+		propertyNumericUpdates: [],
+		propertyReadRegions: [],
+		propertyReadPairs: [],
+		pairedArrayLoops: [],
+	},
 ): EmittedBody | null {
 	if (!vmRegionActionsAreCurrent(specializations, regionActions)) {
 		throw new Error("Native function has stale region actions");
@@ -2843,27 +2836,6 @@ function emitBody(
 		}
 	}
 	const handlerTargets = exceptionHandlerTargets(fn.instructions.length, fn.handlers);
-	const handlerEntries = new Set(fn.handlers.map((handler) => handler.handlerIp));
-	const transparentJumpTargets = new Set<number>();
-	if (coro === null && (literalSwitches?.length ?? 0) === 0) {
-		const incoming = new Map<number, number>();
-		for (const instruction of fn.instructions) {
-			if (instruction.opcode === "JUMP" || instruction.opcode === "JUMP_IF") {
-				incoming.set(instruction.targetIp, (incoming.get(instruction.targetIp) ?? 0) + 1);
-			}
-		}
-		for (const [ip, instruction] of fn.instructions.entries()) {
-			// Cross-handler fallthrough is safe only because projection hits cannot throw and misses replay each original instruction.
-			if (
-				instruction.opcode === "JUMP" &&
-				instruction.targetIp === ip + 1 &&
-				incoming.get(ip + 1) === 1 &&
-				!handlerEntries.has(ip + 1)
-			) {
-				transparentJumpTargets.add(ip + 1);
-			}
-		}
-	}
 	// A coroutine resumes at the instruction after each suspend (GENERATOR_START/
 	// YIELD/AWAIT), so those need labels for the entry dispatch to jump to.
 	if (coro !== null) {
@@ -3270,48 +3242,17 @@ function emitBody(
 		nativeStringSliceNumberFusionActionByIp.has(ip) ||
 		nativeStringCharCodeAtChainActionByIp.has(ip) ||
 		nativeBuiltinCollectionCallChainActionByIp.has(ip);
-	const indexedLoopElements = [...indexedLengthLoopActionByIp.entries()].flatMap(
-		([ip, action]) => {
-			const instruction = fn.instructions[ip];
-			return action.role === "element" &&
-				action.element?.kind === "load" &&
-				action.element.arrayIndexIsUint32 &&
-				instruction?.opcode === "LOAD_PROPERTY"
-				? [
-						{
-							lengthLoadIp: action.loadIp,
-							elementLoadIp: ip,
-							object: instruction.object,
-							key: instruction.key,
-							result: instruction.dst,
-						},
-					]
-				: [];
-		},
-	);
 	const nativeFastPaths = lowerNativeFastPaths(
 		fn,
 		reps,
 		jumpTargets,
 		staticPropertyProjectionConflicts,
-		{
-			kind: "render",
-			plans: propertyProjections,
-			updates: propertyNumericUpdates,
-			readRegions: propertyReadRegions,
-			readPairs: propertyReadPairs,
-		},
-		indexedLoopElements,
-		(ip) => numericFusionActionByIp.get(ip),
-		transparentJumpTargets,
+		{ kind: "render", plans: fastPathPlans },
 	);
 	const propertyNumericUpdateActionByIp = nativeFastPaths.propertyNumericUpdateActions;
 	const staticPropertyNumericActionByIp = nativeFastPaths.propertyProjectionActions;
 	const propertyReadRegionActionByIp = nativeFastPaths.propertyReadRegionActions;
 	const pairedArrayLoopActionByIp = nativeFastPaths.pairedArrayLoopActions;
-	const pairedArrayLoopByLengthLoad = new Map(
-		nativeFastPaths.pairedArrayLoops.map((plan) => [plan.lengthLoadIp, plan]),
-	);
 	const constructorInitializationActionByIp =
 		nativeFastPaths.constructorInitializationActions;
 	const privateFieldReserve = nativeFastPaths.privateFieldReserve;
@@ -3412,7 +3353,6 @@ function emitBody(
 		indexedLengthLoopAction: undefined,
 		nativeArrayPresenceProjectionAction: undefined,
 		pairedArrayLoopAction: undefined,
-		pairedArrayLoopPresence: undefined,
 		nativeStringSplitProjectionAction: undefined,
 		nativeStringSplitCursorAction: undefined,
 		stringSplitTrimLengthSite: undefined,
@@ -3814,10 +3754,7 @@ function emitBody(
 		instructionContext.indexedLengthLoopAction = indexedLengthLoopActionByIp.get(ip);
 		instructionContext.nativeArrayPresenceProjectionAction = arrayPresenceAction;
 		instructionContext.pairedArrayLoopAction = pairedArrayLoopActionByIp.get(ip);
-		instructionContext.pairedArrayLoopPresence =
-			arrayPresenceAction === undefined
-				? undefined
-				: pairedArrayLoopByLengthLoad.get(arrayPresenceAction.indexed.loadIp);
+
 		instructionContext.nativeStringSplitProjectionAction =
 			nativeStringSplitProjectionActionByIp.get(ip);
 		instructionContext.nativeStringSplitCursorAction =
@@ -4235,7 +4172,6 @@ interface NativeInstructionContext {
 	readonly indexedLengthLoopAction?: IndexedLengthLoopAction;
 	readonly nativeArrayPresenceProjectionAction?: NativeArrayPresenceProjectionAction;
 	readonly pairedArrayLoopAction?: NativePairedArrayLoopAction;
-	readonly pairedArrayLoopPresence?: NativePairedArrayLoopPlan;
 	readonly nativeStringSplitProjectionAction?: NativeStringSplitProjectionAction;
 	readonly nativeStringSplitCursorAction?: NativeStringSplitCursorAction;
 	readonly stringSplitTrimLengthSite?: NativeStringSplitCursorSite;
@@ -4338,7 +4274,6 @@ function emitInstruction(
 		indexedLengthLoopAction,
 		nativeArrayPresenceProjectionAction,
 		pairedArrayLoopAction,
-		pairedArrayLoopPresence,
 		nativeStringSplitProjectionAction,
 		nativeStringSplitCursorAction,
 		nativeRegExpExecProjectionAction,
@@ -5944,8 +5879,9 @@ function emitInstruction(
 				if (pairedArrayLoopAction?.role === "load") {
 					const { plan } = pairedArrayLoopAction;
 					return [
-						`if (__paired_array_${plan.id}_fast) {`,
-						`  r${instruction.dst} = ${callValue(instruction.dst, `__paired_array_${plan.id}_secondary->elements[(u32) ${num(instruction.key)}]`)};`,
+						`MalValue __paired_element_${ip};`,
+						`if (__paired_array_${plan.id}_fast && __paired_array_${plan.id}_secondary == mal_vm_as_array(${boxed(instruction.object)}) && mal_vm_array_try_get_proven_index(__paired_array_${plan.id}_secondary, (u32) ${num(instruction.key)}, &__paired_element_${ip})) {`,
+						`  r${instruction.dst} = ${callValue(instruction.dst, `__paired_element_${ip}`)};`,
 						`} else {`,
 						...ordinary().map((line) => `  ${line}`),
 						`}`,
@@ -6184,7 +6120,7 @@ function emitInstruction(
 					index === 0
 						? [
 								`${object} = mal_vm_as_object(${boxed(instruction.object)});`,
-								`${fast} = ${object} != nullptr && mal_vm_constructor_try_begin_initialization(${object}, (const MalInlineCache *const[]){ ${plan.stores.map((store) => `&${nativeBodyReference(resources, "propertyCache")}[${store.instruction.icIndex}]`).join(", ")} }, ${plan.stores.length});`,
+								`${fast} = ${object} != nullptr && mal_vm_constructor_try_begin_initialization(${object}, (const MalInlineCache *const[]){ ${constructorInitializationAction.stores.map((store) => `&${nativeBodyReference(resources, "propertyCache")}[${store.icIndex}]`).join(", ")} }, ${plan.stores.length});`,
 							]
 						: [];
 				return [
@@ -6419,19 +6355,8 @@ function emitInstruction(
 				const loadIp = nativeArrayPresenceProjectionAction.indexed.loadIp;
 				const state = `__array_presence_${membershipIp}_state`;
 				const probe = `${state} = __indexed_length_${loadIp}_kind == 1 ? mal_vm_array_try_get_present_proven_index(__indexed_length_${loadIp}_array, (u32) ${num(instruction.left)}, &__array_presence_${membershipIp}_value) : -1;`;
-				const pairedProbe =
-					pairedArrayLoopPresence === undefined
-						? [probe]
-						: [
-								`if (__paired_array_${pairedArrayLoopPresence.id}_fast) {`,
-								`  ${state} = 1;`,
-								`  __array_presence_${membershipIp}_value = __indexed_length_${loadIp}_array->elements[(u32) ${num(instruction.left)}];`,
-								`} else {`,
-								`  ${probe}`,
-								`}`,
-							];
 				return [
-					...pairedProbe,
+					probe,
 					`if (${state} >= 0) {`,
 					reps[instruction.dst] === "boolean"
 						? `  r${instruction.dst} = ${state} != 0;`

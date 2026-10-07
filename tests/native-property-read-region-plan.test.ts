@@ -42,7 +42,16 @@ describe("persisted native property read regions", () => {
 				fn.registerRepresentations,
 				new Set(plan.claimedIps),
 				() => true,
-				{ kind: "render", plans: [], updates: [], readRegions: [plan], readPairs: [] },
+				{
+					kind: "render",
+					plans: {
+						...fn.storage!,
+						propertyProjections: [],
+						propertyNumericUpdates: [],
+						propertyReadRegions: [plan],
+						propertyReadPairs: [],
+					},
+				},
 			);
 			expect([...supplied.propertyReadRegionActions.keys()]).toEqual(
 				plan.loads.map((load) => load.ip),

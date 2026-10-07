@@ -10,6 +10,43 @@ function check(label, condition) {
 }
 
 const retained = [];
+
+class CopiedRecord {
+	constructor(value) {
+		this.a = value;
+		this.b = value;
+	}
+}
+let copiedRecord;
+for (let i = 0; i < 64; i++) copiedRecord = new CopiedRecord(10);
+check("effect-free constructor slots", copiedRecord.a === 10 && copiedRecord.b === 10);
+
+class CallbackRecord {
+	constructor(value, callback) {
+		this.callbackFirst = value;
+		callback();
+		this.callbackSecond = value;
+	}
+}
+for (let i = 0; i < 64; i++) new CallbackRecord(i, () => {});
+let setterCalls = 0;
+const callbackRecord = new CallbackRecord(17, () => {
+	gc();
+	Object.defineProperty(Object.prototype, "callbackSecond", {
+		configurable: true,
+		set(value) {
+			setterCalls += value;
+		},
+	});
+});
+delete Object.prototype.callbackSecond;
+check(
+	"constructor callback installs the later field setter",
+	setterCalls === 17 &&
+		callbackRecord.callbackFirst === 17 &&
+		!Object.hasOwn(callbackRecord, "callbackSecond"),
+);
+
 for (let i = 0; i < 2000; i++) retained.push({ value: "value:" + i });
 check("retained value", retained[1999].value === "value:1999");
 

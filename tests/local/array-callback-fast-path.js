@@ -4,6 +4,64 @@ function check(name, condition) {
 	results.push([name, condition]);
 }
 
+globalThis.comparePaired = function comparePaired(values, expected, callback) {
+	for (let i = 0; i < values.length; i++) {
+		callback(i, values, expected);
+		if (i in values) {
+			const same = values[i] === expected[i];
+			if (!same) return false;
+		}
+	}
+	return true;
+};
+
+check(
+	"paired reads recheck shortened receivers",
+	(() => {
+		const expected = [1, 2, 3];
+		return !comparePaired([1, 2, 3], expected, (i) => {
+			if (i === 0) expected.length = 1;
+		});
+	})(),
+);
+
+check(
+	"paired reads observe newly installed accessors",
+	(() => {
+		const expected = [1, 2, 3];
+		let reads = 0;
+		const result = comparePaired([1, 2, 3], expected, (i) => {
+			if (i === 0)
+				Object.defineProperty(expected, 1, {
+					get() {
+						reads++;
+						return 9;
+					},
+				});
+		});
+		return !result && reads === 1;
+	})(),
+);
+
+check(
+	"paired reads observe primary holes and secondary inherited values",
+	(() => {
+		const values = [1, 2, 3];
+		const expected = [1, 2, 3];
+		Array.prototype[1] = 2;
+		try {
+			return comparePaired(values, expected, (i) => {
+				if (i === 0) {
+					delete values[1];
+					delete expected[1];
+				}
+			});
+		} finally {
+			delete Array.prototype[1];
+		}
+	})(),
+);
+
 check(
 	"forEach mutable capture",
 	(() => {

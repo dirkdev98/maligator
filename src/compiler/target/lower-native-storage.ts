@@ -1,9 +1,9 @@
-import { selectNativePropertyFastPaths } from "./lower-native-fast-paths.ts";
+import { selectNativeFastPaths } from "./lower-native-fast-paths.ts";
 import type {
+	NativeFastPathPlans,
 	NativePropertyNumericUpdatePlan,
 	NativePropertyProjectionPlan,
 	NativePropertyReadRegionPlan,
-	NativePropertyReadPairPlan,
 } from "./lower-native-fast-paths.ts";
 import { selectNativeStackObjectStorage } from "./lower-native-objects.ts";
 import type { NativeStackObjectStoragePlan } from "./lower-native-objects.ts";
@@ -48,13 +48,9 @@ export interface NativeNumericLeafPlan extends NativeScalarStoragePlan {
 }
 
 export interface NativeStoragePlan
-	extends NativeScalarStoragePlan, NativeRootStoragePlan {
+	extends NativeScalarStoragePlan, NativeRootStoragePlan, NativeFastPathPlans {
 	readonly suspension: NativeSuspensionPlan | undefined;
 	readonly stackObjects: ReadonlyArray<NativeStackObjectStoragePlan>;
-	readonly propertyProjections: ReadonlyArray<NativePropertyProjectionPlan>;
-	readonly propertyNumericUpdates: ReadonlyArray<NativePropertyNumericUpdatePlan>;
-	readonly propertyReadRegions: ReadonlyArray<NativePropertyReadRegionPlan>;
-	readonly propertyReadPairs: ReadonlyArray<NativePropertyReadPairPlan>;
 	readonly rootRegisters: ReadonlyArray<number>;
 	readonly privateRegisters: ReadonlyArray<number>;
 	readonly privateCallResultIps: ReadonlyArray<number>;
@@ -502,17 +498,28 @@ function lowerStorage(
 	entry?: NativeDirectEntryPlan,
 ): NativeStoragePlan {
 	const fn = native.body;
+	const fastPaths = selectNativeFastPaths(native, entry);
 	const {
 		propertyProjections,
 		propertyNumericUpdates,
 		propertyReadRegions,
 		propertyReadPairs,
-	} = selectNativePropertyFastPaths(native, entry);
+	} = fastPaths;
 	const propertyWindows = [...propertyProjections, ...propertyNumericUpdates];
+	const auxiliaryWindows = [
+		...fastPaths.pairedArrayLoops,
+		...(fastPaths.constructorInitialization === undefined
+			? []
+			: [fastPaths.constructorInitialization]),
+		...(fastPaths.privateFieldReserve === undefined
+			? []
+			: [fastPaths.privateFieldReserve]),
+	];
 	const expressionWindows = [
 		...propertyWindows,
 		...propertyReadRegions,
 		...propertyReadPairs,
+		...auxiliaryWindows,
 	];
 	const jumpTargets = new Set(fn.handlers.map((handler) => handler.handlerIp));
 	for (const [ip, op] of fn.instructions.entries()) {
@@ -581,14 +588,11 @@ function lowerStorage(
 	const privateLocals = new Set(
 		nativePrivateRootRegisters(fn, native, new Set(roots), calls),
 	);
-	for (const plan of propertyWindows)
+	for (const plan of [...propertyWindows, ...auxiliaryWindows])
 		for (const local of plan.borrowedRegisters) privateLocals.delete(local);
 	const scalar = scalarStorage(native);
 	return {
-		propertyProjections,
-		propertyNumericUpdates,
-		propertyReadRegions,
-		propertyReadPairs,
+		...fastPaths,
 		suspension: compactNativeSuspension(
 			suspension,
 			new Set(
@@ -806,6 +810,54 @@ export function validateNativeStorage(native: NativeFunctionPlan): void {
 			sameProjections(stored.propertyProjections, selected.propertyProjections) &&
 			sameUpdates(stored.propertyNumericUpdates, selected.propertyNumericUpdates) &&
 			sameReadRegions(stored.propertyReadRegions, selected.propertyReadRegions) &&
+			stored.pairedArrayLoops.length === selected.pairedArrayLoops.length &&
+			stored.pairedArrayLoops.every((plan, index) => {
+				const expected = selected.pairedArrayLoops[index]!;
+				return (
+					(
+						[
+							"id",
+							"lengthLoadIp",
+							"primaryLoadIp",
+							"primaryObject",
+							"secondaryLoadIp",
+							"secondaryObject",
+							"key",
+						] as const
+					).every((key) => plan[key] === expected[key]) &&
+					sameNumbers(plan.claimedIps, expected.claimedIps) &&
+					sameNumbers(plan.borrowedRegisters, expected.borrowedRegisters)
+				);
+			}) &&
+			(stored.constructorInitialization === undefined ||
+			selected.constructorInitialization === undefined
+				? stored.constructorInitialization === selected.constructorInitialization
+				: stored.constructorInitialization.id === selected.constructorInitialization.id &&
+					sameNumbers(
+						stored.constructorInitialization.stores,
+						selected.constructorInitialization.stores,
+					) &&
+					sameNumbers(
+						stored.constructorInitialization.claimedIps,
+						selected.constructorInitialization.claimedIps,
+					) &&
+					sameNumbers(
+						stored.constructorInitialization.borrowedRegisters,
+						selected.constructorInitialization.borrowedRegisters,
+					)) &&
+			(stored.privateFieldReserve === undefined ||
+			selected.privateFieldReserve === undefined
+				? stored.privateFieldReserve === selected.privateFieldReserve
+				: stored.privateFieldReserve.id === selected.privateFieldReserve.id &&
+					stored.privateFieldReserve.count === selected.privateFieldReserve.count &&
+					sameNumbers(
+						stored.privateFieldReserve.claimedIps,
+						selected.privateFieldReserve.claimedIps,
+					) &&
+					sameNumbers(
+						stored.privateFieldReserve.borrowedRegisters,
+						selected.privateFieldReserve.borrowedRegisters,
+					)) &&
 			stored.propertyReadPairs.length === selected.propertyReadPairs.length &&
 			stored.propertyReadPairs.every((plan, index) => {
 				const expected = selected.propertyReadPairs[index]!;
