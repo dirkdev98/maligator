@@ -699,7 +699,7 @@ async function compactSpillNumber(input, gate) {
 	return before + 2;
 }
 async function compactSpillInteger(input, gate) {
-	const integer = 17;
+	const integer = input < 0 ? 17 : 18;
 	await gate;
 	return integer + input;
 }
@@ -760,7 +760,7 @@ function typedStackFields(input) {
 		: [Object.is(object.fraction, -0), object.integer, object.flag].join(":");
 }
 function typedStackNaN(input) {
-	const object = { fraction: NaN, integer: -2147483648, flag: false };
+	const object = { fraction: 0 / 0, integer: -2147483648, flag: false };
 	gc();
 	return object === input
 		? "identity"

@@ -183,6 +183,10 @@ describe("independent native SSA storage", () => {
 						...(image.runtime.stringConstants[fn.body.nameStringIndex] ?? []),
 					) === name,
 			)!;
+			if (name === "compactSpillNumber") {
+				expect(spill.storage!.expressionIps.length).toBeGreaterThan(0);
+				expect(spill.storage!.rematerializedConstantIps.length).toBeGreaterThan(0);
+			}
 			expect(
 				spill.storage!.suspension!.points.some((point) =>
 					point.registers.some((local) => spill.registerRepresentations[local] === rep),

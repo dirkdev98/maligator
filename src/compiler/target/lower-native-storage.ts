@@ -12,7 +12,10 @@ import {
 	nativePrivateCallResultIps,
 	nativePrivateRootRegisters,
 } from "./lower-native-root-publication.ts";
-import { lowerNativeSuspension } from "./lower-native-suspension.ts";
+import {
+	compactNativeSuspension,
+	lowerNativeSuspension,
+} from "./lower-native-suspension.ts";
 import type { NativeSuspensionPlan } from "./lower-native-suspension.ts";
 import {
 	NATIVE_ARITH,
@@ -128,8 +131,6 @@ function hasExplicitScalarUses(native: NativeFunctionPlan): boolean {
 	const fn = native.body;
 	return (
 		native.storageValues !== undefined &&
-		!fn.isAsync &&
-		!fn.isGenerator &&
 		fn.handlers.length === 0 &&
 		native.specializations.length === 0 &&
 		native.instructions.every(
@@ -163,9 +164,36 @@ function elidedTdzIps(
 	);
 }
 
+function scalarStorageReads(
+	native: NativeFunctionPlan,
+	suspension: NativeSuspensionPlan | undefined,
+): ReadonlyArray<ReadonlyArray<number>> {
+	const snapshots = new Map(
+		suspension?.points.map((point) => [point.instructionIp, point.registers]),
+	);
+	return native.body.instructions.map((op, ip) => [
+		...vmInstructionReadRegisters(op),
+		...(snapshots.get(ip) ?? []),
+	]);
+}
+
+function scalarControlBoundary(op: BytecodeInstruction): boolean {
+	return [
+		"JUMP",
+		"JUMP_IF",
+		"RETURN",
+		"THROW",
+		"GENERATOR_START",
+		"YIELD",
+		"AWAIT",
+		"TERMINAL_YIELD",
+	].includes(op.opcode);
+}
+
 function definitionInitializedRegisters(
 	native: NativeFunctionPlan,
 	jumpTargets: ReadonlySet<number>,
+	reads: ReadonlyArray<ReadonlyArray<number>>,
 ): ReadonlyArray<number> {
 	if (!hasExplicitScalarUses(native)) return [];
 	const fn = native.body;
@@ -177,12 +205,12 @@ function definitionInitializedRegisters(
 	for (const [ip, op] of fn.instructions.entries()) {
 		if (jumpTargets.has(ip)) block++;
 		blocks[ip] = block;
-		for (const local of vmInstructionReadRegisters(op)) uses[local]!.push(ip);
+		for (const local of reads[ip]!) uses[local]!.push(ip);
 		for (const local of vmInstructionWriteRegisters(op)) {
 			writes[local]!++;
 			definitions[local] = ip;
 		}
-		if (["JUMP", "JUMP_IF", "RETURN", "THROW"].includes(op.opcode)) block++;
+		if (scalarControlBoundary(op)) block++;
 	}
 	return native.registerRepresentations.flatMap((rep, local) => {
 		const definition = definitions[local]!;
@@ -200,12 +228,11 @@ function rematerializedConstantIps(
 	native: NativeFunctionPlan,
 	jumpTargets: ReadonlySet<number>,
 	preserveProfileSites: boolean,
+	reads: ReadonlyArray<ReadonlyArray<number>>,
 ): ReadonlyArray<number> {
 	const fn = native.body;
 	if (
 		native.storageValues === undefined ||
-		fn.isAsync ||
-		fn.isGenerator ||
 		fn.handlers.length > 0 ||
 		(preserveProfileSites && fn.profileSiteIds !== undefined)
 	)
@@ -223,10 +250,8 @@ function rematerializedConstantIps(
 		}
 		blocks[ip] = block;
 		for (const local of vmInstructionWriteRegisters(op)) writes[local]!++;
-		for (const local of vmInstructionReadRegisters(op)) uses[local]!.push(ip);
-		startsBlock = ["JUMP", "JUMP_IF", "RETURN", "THROW", "TERMINAL_YIELD"].includes(
-			op.opcode,
-		);
+		for (const local of reads[ip]!) uses[local]!.push(ip);
+		startsBlock = scalarControlBoundary(op);
 	}
 	if (fn.instructions.length === 0) return [];
 	ends.push(fn.instructions.length - 1);
@@ -326,12 +351,11 @@ function expressionIps(
 	projections: ReadonlyArray<
 		Pick<NativePropertyProjectionPlan, "claimedIps" | "borrowedRegisters">
 	> = [],
+	suspension?: NativeSuspensionPlan,
 ): ReadonlyArray<number> {
 	const fn = native.body;
 	if (
 		native.storageValues === undefined ||
-		fn.isAsync ||
-		fn.isGenerator ||
 		fn.handlers.length > 0 ||
 		(preserveProfileSites && fn.profileSiteIds !== undefined)
 	)
@@ -359,6 +383,15 @@ function expressionIps(
 	);
 	for (const plan of projections)
 		for (const local of plan.borrowedRegisters) borrowed.add(local);
+	// Save/restore assignments cannot target expression macros.
+	for (const point of suspension?.points ?? []) {
+		blocked.add(point.instructionIp);
+		for (const local of point.registers) borrowed.add(local);
+		for (const local of vmInstructionWriteRegisters(
+			fn.instructions[point.instructionIp]!,
+		))
+			borrowed.add(local);
+	}
 	const writes = new Uint32Array(fn.registerCount);
 	const uses: Array<Array<number>> = Array.from({ length: fn.registerCount }, () => []);
 	for (const [ip, op] of fn.instructions.entries()) {
@@ -476,14 +509,19 @@ function lowerStorage(
 		...propertyReadPairs,
 	];
 	const jumpTargets = new Set(fn.handlers.map((handler) => handler.handlerIp));
-	for (const op of fn.instructions) {
+	for (const [ip, op] of fn.instructions.entries()) {
 		if (op.opcode === "JUMP" || op.opcode === "JUMP_IF") jumpTargets.add(op.targetIp);
+		if (["GENERATOR_START", "YIELD", "AWAIT"].includes(op.opcode))
+			jumpTargets.add(ip + 1);
 	}
+	const suspension = lowerNativeSuspension(native);
+	const reads = scalarStorageReads(native, suspension);
 	const scalarStorage = (variant: NativeFunctionPlan): NativeScalarStoragePlan => {
 		const constants = rematerializedConstantIps(
 			variant,
 			jumpTargets,
 			preserveProfileSites,
+			reads,
 		);
 		const constantIps = new Set(constants);
 		return {
@@ -492,10 +530,12 @@ function lowerStorage(
 				jumpTargets,
 				preserveProfileSites,
 				expressionWindows,
+				suspension,
 			).filter((ip) => !constantIps.has(ip)),
 			definitionInitializedRegisters: definitionInitializedRegisters(
 				variant,
 				jumpTargets,
+				reads,
 			),
 			rematerializedConstantIps: constants,
 		};
@@ -532,19 +572,30 @@ function lowerStorage(
 	);
 	for (const plan of propertyWindows)
 		for (const local of plan.borrowedRegisters) privateLocals.delete(local);
+	const scalar = scalarStorage(native);
 	return {
 		propertyProjections,
 		propertyNumericUpdates,
 		propertyReadRegions,
 		propertyReadPairs,
-		suspension: lowerNativeSuspension(native),
+		suspension: compactNativeSuspension(
+			suspension,
+			new Set(
+				scalar.rematerializedConstantIps.map((ip) => {
+					const op = fn.instructions[ip]!;
+					if (!("dst" in op))
+						throw new Error("Rematerialized constant lacks a destination");
+					return op.dst;
+				}),
+			),
+		),
 		stackObjects: selectNativeStackObjectStorage(native),
 		rootRegisters: roots,
 		privateRegisters: roots.filter((local) => privateLocals.has(local)),
 		privateCallResultIps: [...calls],
 		entryStableRootRegisters: [...nativeEntryStableRootRegisters(fn, privateLocals)],
 		elidedTdzIps: elidedTdzIps(native, expressionWindows),
-		...scalarStorage(native),
+		...scalar,
 		numericLeaf,
 	};
 }
@@ -700,71 +751,87 @@ export function validateNativeStorage(native: NativeFunctionPlan): void {
 	const same = (
 		stored: NativeStoragePlan | undefined,
 		selected: NativeStoragePlan | undefined,
-	): boolean =>
-		stored !== undefined &&
-		selected !== undefined &&
-		sameScalar(stored, selected) &&
-		stored.stackObjects.length === selected.stackObjects.length &&
-		stored.stackObjects.every(
-			(plan, index) =>
-				plan.allocationIp === selected.stackObjects[index]!.allocationIp &&
-				plan.slotRepresentations.length ===
-					selected.stackObjects[index]!.slotRepresentations.length &&
-				plan.slotRepresentations.every(
-					(rep, slot) => rep === selected.stackObjects[index]!.slotRepresentations[slot],
-				),
-		) &&
-		(stored.suspension === undefined || selected.suspension === undefined
-			? stored.suspension === selected.suspension
-			: stored.suspension.valueSlot === selected.suspension.valueSlot &&
-				stored.suspension.modeSlot === selected.suspension.modeSlot &&
-				stored.suspension.slotCount === selected.suspension.slotCount &&
-				stored.suspension.points.length === selected.suspension.points.length &&
-				stored.suspension.points.every(
-					(point, index) =>
-						point.instructionIp === selected.suspension!.points[index]!.instructionIp &&
-						sameNumbers(point.registers, selected.suspension!.points[index]!.registers),
-				)) &&
-		sameProjections(stored.propertyProjections, selected.propertyProjections) &&
-		sameUpdates(stored.propertyNumericUpdates, selected.propertyNumericUpdates) &&
-		sameReadRegions(stored.propertyReadRegions, selected.propertyReadRegions) &&
-		stored.propertyReadPairs.length === selected.propertyReadPairs.length &&
-		stored.propertyReadPairs.every((plan, index) => {
-			const expected = selected.propertyReadPairs[index]!;
-			return (
-				plan.id === expected.id &&
-				plan.object === expected.object &&
-				plan.fallback === expected.fallback &&
-				sameNumbers(plan.claimedIps, expected.claimedIps) &&
-				sameNumbers(plan.borrowedRegisters, expected.borrowedRegisters) &&
-				plan.loads.length === expected.loads.length &&
-				plan.loads.every(
-					(load, i) =>
-						load.ip === expected.loads[i]!.ip &&
-						load.icIndex === expected.loads[i]!.icIndex,
-				)
-			);
-		}) &&
-		sameScalar(stored.numericLeaf, selected.numericLeaf) &&
-		(stored.numericLeaf === undefined ||
-			(stored.numericLeaf.fallthroughJumpIps.length ===
-				selected.numericLeaf!.fallthroughJumpIps.length &&
-				stored.numericLeaf.fallthroughJumpIps.every(
-					(ip, index) => ip === selected.numericLeaf!.fallthroughJumpIps[index],
-				))) &&
-		(
-			[
-				"rootRegisters",
-				"privateRegisters",
-				"privateCallResultIps",
-				"entryStableRootRegisters",
-				"elidedTdzIps",
-			] as const
-		).every(
-			(key) =>
-				stored[key].length === selected[key].length &&
-				stored[key].every((value, index) => value === selected[key][index]),
+	): boolean => {
+		const suspension =
+			stored === undefined
+				? undefined
+				: compactNativeSuspension(
+						lowerNativeSuspension(native),
+						new Set(
+							stored.rematerializedConstantIps.flatMap((ip) => {
+								const op = native.body.instructions[ip];
+								return op !== undefined && "dst" in op ? [op.dst] : [];
+							}),
+						),
+					);
+		return (
+			stored !== undefined &&
+			selected !== undefined &&
+			sameScalar(stored, selected) &&
+			stored.stackObjects.length === selected.stackObjects.length &&
+			stored.stackObjects.every(
+				(plan, index) =>
+					plan.allocationIp === selected.stackObjects[index]!.allocationIp &&
+					plan.slotRepresentations.length ===
+						selected.stackObjects[index]!.slotRepresentations.length &&
+					plan.slotRepresentations.every(
+						(rep, slot) =>
+							rep === selected.stackObjects[index]!.slotRepresentations[slot],
+					),
+			) &&
+			(stored.suspension === undefined || suspension === undefined
+				? stored.suspension === suspension
+				: stored.suspension.valueSlot === suspension.valueSlot &&
+					stored.suspension.modeSlot === suspension.modeSlot &&
+					stored.suspension.slotCount === suspension.slotCount &&
+					stored.suspension.points.length === suspension.points.length &&
+					stored.suspension.points.every(
+						(point, index) =>
+							point.instructionIp === suspension.points[index]!.instructionIp &&
+							sameNumbers(point.registers, suspension.points[index]!.registers),
+					)) &&
+			sameProjections(stored.propertyProjections, selected.propertyProjections) &&
+			sameUpdates(stored.propertyNumericUpdates, selected.propertyNumericUpdates) &&
+			sameReadRegions(stored.propertyReadRegions, selected.propertyReadRegions) &&
+			stored.propertyReadPairs.length === selected.propertyReadPairs.length &&
+			stored.propertyReadPairs.every((plan, index) => {
+				const expected = selected.propertyReadPairs[index]!;
+				return (
+					plan.id === expected.id &&
+					plan.object === expected.object &&
+					plan.fallback === expected.fallback &&
+					sameNumbers(plan.claimedIps, expected.claimedIps) &&
+					sameNumbers(plan.borrowedRegisters, expected.borrowedRegisters) &&
+					plan.loads.length === expected.loads.length &&
+					plan.loads.every(
+						(load, i) =>
+							load.ip === expected.loads[i]!.ip &&
+							load.icIndex === expected.loads[i]!.icIndex,
+					)
+				);
+			}) &&
+			sameScalar(stored.numericLeaf, selected.numericLeaf) &&
+			(stored.numericLeaf === undefined ||
+				(stored.numericLeaf.fallthroughJumpIps.length ===
+					selected.numericLeaf!.fallthroughJumpIps.length &&
+					stored.numericLeaf.fallthroughJumpIps.every(
+						(ip, index) => ip === selected.numericLeaf!.fallthroughJumpIps[index],
+					))) &&
+			(
+				[
+					"rootRegisters",
+					"privateRegisters",
+					"privateCallResultIps",
+					"entryStableRootRegisters",
+					"elidedTdzIps",
+				] as const
+			).every(
+				(key) =>
+					stored[key].length === selected[key].length &&
+					stored[key].every((value, index) => value === selected[key][index]),
+			)
 		);
+	};
 	if (
 		!same(native.storage, lowerStorage(native, false)) ||
 		native.directEntries.some(

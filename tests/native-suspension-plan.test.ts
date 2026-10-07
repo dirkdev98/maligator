@@ -19,6 +19,85 @@ function compile(prefix = "async function", transfer = "await gate") {
 }
 
 describe("native suspension storage", () => {
+	it("composes expressions and rematerialized constants without assigning to resumed expressions", () => {
+		const image = compile();
+		const native = image.native.functions[1]!;
+		const storage = native.storage!;
+		expect(storage.expressionIps.length).toBeGreaterThan(0);
+		expect(storage.rematerializedConstantIps.length).toBeGreaterThan(0);
+		const base = lowerNativeSuspension(native)!;
+		expect(storage.suspension!.slotCount).toBeLessThan(base.slotCount);
+		const saved = new Set(storage.suspension!.points.flatMap((point) => point.registers));
+		for (const point of storage.suspension!.points) {
+			const op = native.body.instructions[point.instructionIp]!;
+			if (op.opcode === "AWAIT" || op.opcode === "YIELD") {
+				saved.add(op.valueDst);
+				saved.add(op.modeDst);
+			}
+		}
+		for (const ip of [...storage.expressionIps, ...storage.rematerializedConstantIps]) {
+			const op = native.body.instructions[ip]!;
+			if (!("dst" in op)) throw new Error("Missing scalar destination");
+			expect(saved).not.toContain(op.dst);
+		}
+		for (const local of storage.definitionInitializedRegisters) {
+			const definition = native.body.instructions.findIndex(
+				(op) => "dst" in op && op.dst === local,
+			);
+			const afterResume = native.body.instructions.findIndex(
+				(op, ip) =>
+					ip > definition && ["GENERATOR_START", "YIELD", "AWAIT"].includes(op.opcode),
+			);
+			if (afterResume >= 0) expect(saved).not.toContain(local);
+		}
+		expect(deserializeCompilerArtifact(serializeCompilerArtifact(image))).toEqual(image);
+	});
+
+	it("couples a retained constant producer with its required suspension spill", () => {
+		const image = compile();
+		const native = image.native.functions[1]!;
+		const retained = {
+			...native,
+			storage: {
+				...native.storage!,
+				rematerializedConstantIps: [],
+				suspension: lowerNativeSuspension(native),
+			},
+		};
+		const withRetained = {
+			...image,
+			native: { ...image.native, functions: image.native.functions.with(1, retained) },
+		};
+		expect(deserializeCompilerArtifact(serializeCompilerArtifact(withRetained))).toEqual(
+			withRetained,
+		);
+		expect(() =>
+			serializeCompilerArtifact({
+				...withRetained,
+				native: {
+					...withRetained.native,
+					functions: image.native.functions.with(1, {
+						...retained,
+						storage: { ...retained.storage, suspension: native.storage!.suspension },
+					}),
+				},
+			}),
+		).toThrow(/invalid or stale storage plan/);
+	});
+
+	it("keeps handler-bearing resumables outside scalar motion", () => {
+		const native = compileSemanticProgramToProgramImage(
+			analyzeSourceAndRunSemanticAnalysis(
+				"globalThis.f = async function f(gate) { try { const one=1; await gate; return one+2; } catch (error) { return error; } };",
+				"/protected-resume.js",
+			),
+		).native.functions[1]!;
+		expect(native.body.handlers.length).toBeGreaterThan(0);
+		expect(native.storage!.expressionIps).toEqual([]);
+		expect(native.storage!.rematerializedConstantIps).toEqual([]);
+		expect(native.storage!.definitionInitializedRegisters).toEqual([]);
+	});
+
 	it("reuses snapshot slots for locals live at different suspension points", () => {
 		const image = compileSemanticProgramToProgramImage(
 			analyzeSourceAndRunSemanticAnalysis(

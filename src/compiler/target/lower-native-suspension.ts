@@ -98,6 +98,26 @@ export function lowerNativeSuspension(
 		const ordered = [...registers].sort((a, b) => a - b);
 		points.push({ instructionIp: ip, registers: ordered });
 	}
+	return suspensionLayout(points);
+}
+
+export function compactNativeSuspension(
+	plan: NativeSuspensionPlan | undefined,
+	rematerializedRegisters: ReadonlySet<number>,
+): NativeSuspensionPlan | undefined {
+	if (plan === undefined) return undefined;
+	const points = plan.points.map((point) => ({
+		...point,
+		registers: point.registers.filter(
+			(register) => !rematerializedRegisters.has(register),
+		),
+	}));
+	return suspensionLayout(points);
+}
+
+function suspensionLayout(
+	points: ReadonlyArray<NativeSuspensionPoint>,
+): NativeSuspensionPlan {
 	const valueSlot = points.reduce(
 		(count, point) => Math.max(count, point.registers.length),
 		0,

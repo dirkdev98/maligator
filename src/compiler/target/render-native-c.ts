@@ -1694,6 +1694,14 @@ function emitResumableFunction(
 		isAsyncFunction,
 		isAsyncGenerator,
 	};
+	const storage = native.storage!;
+	const expressions = new Map<number, string>(
+		[...storage.expressionIps, ...storage.rematerializedConstantIps].map((ip) => {
+			const op = fn.instructions[ip]!;
+			if (!("dst" in op)) throw new Error("Native expression lacks a destination");
+			return [op.dst, renderScalarExpression(op, reps)];
+		}),
+	);
 	const body = emitBody(
 		fn,
 		index,
@@ -1733,9 +1741,9 @@ function emitResumableFunction(
 		undefined,
 		stringConstants,
 		undefined,
-		undefined,
-		undefined,
-		undefined,
+		new Set(storage.expressionIps),
+		new Set(storage.rematerializedConstantIps),
+		new Set(storage.elidedTdzIps),
 		native.storage!.propertyProjections,
 		native.storage!.propertyNumericUpdates,
 		native.storage!.propertyReadRegions,
@@ -1800,10 +1808,15 @@ function emitResumableFunction(
 		// run and returned at every exit (ignored on a resume, where it is undefined).
 		lines.push(`    MalValue __async_result_promise = MAL_VALUE_UNDEFINED;`);
 	}
+	const definitionInitialized = new Set(storage.definitionInitializedRegisters);
 	for (let i = 0; i < fn.registerCount; i++) {
 		const slot = registerSlots.get(i);
-		if (slot === undefined)
-			lines.push(`    ${cTypeOf(reps[i]!)} r${i} = ${zeroOf(reps[i]!)};`);
+		const expression = expressions.get(i);
+		if (expression !== undefined) lines.push(`#define r${i} (${expression})`);
+		else if (slot === undefined)
+			lines.push(
+				`    ${cTypeOf(reps[i]!)} r${i}${definitionInitialized.has(i) ? "" : ` = ${zeroOf(reps[i]!)}`};`,
+			);
 		else {
 			lines.push(`#define r${i} (__gc_slots[${slot}])`);
 			lines.push(`    r${i} = ${zeroOf(reps[i]!)};`);
