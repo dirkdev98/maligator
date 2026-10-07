@@ -417,8 +417,6 @@ only reproducible input.
 - [ ] Complete recoverable allocation failure for CELL, RAW, LOS, GC-internal,
       runtime-helper, and direct-native allocations. OOM must remain catchable without
       corruption, lost roots, recursive failure, or partial observable objects.
-      Restore the partial-return allocation failure case in `stack-object.test.ts`
-      under both ordinary execution and GC stress/verification.
 
 - [ ] Deterministically release nonescaping RegExp and ICU handles at compiled scope
       end once ownership analysis proves their lifetime. Retain finalization for every
