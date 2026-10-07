@@ -30,6 +30,7 @@ import {
 	emitTypeofResult,
 	emitUnaryOperator,
 } from "./emit-program-image.ts";
+import type { NativeCallbackTransportPlan } from "./lower-native-callbacks.ts";
 import type {
 	NativeCallConversion,
 	NativeCallTargetTransport,
@@ -405,6 +406,17 @@ interface NativeCallCoverage {
 	readonly directEntryCalls: ReadonlyMap<number, ReadonlySet<number>>;
 }
 
+export const COMPILED_FUNCTION_DECLARATION =
+	"(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalEnv *env, MalValue callee, void *entry_state)";
+
+export function nativeCallbackSymbol(
+	index: number,
+	entryId: number,
+	suffix: string,
+): string {
+	return `mal_callback_${index}_${entryId}${suffix}`;
+}
+
 export interface CompiledFunction extends NativeCallCoverage {
 	/** The C symbol to install as MalFunction.compiled. */
 	symbol: string;
@@ -425,6 +437,7 @@ export interface CompiledFunction extends NativeCallCoverage {
 		parameterRepresentations: ReadonlyArray<VmRegisterRepresentation>;
 		resultRepresentation: VmRegisterRepresentation;
 		leaf?: true;
+		callbackSymbol?: string;
 	}>;
 }
 
@@ -1197,6 +1210,7 @@ function emitCompiledVariant(
 		new Set(storage.elidedTdzIps),
 		storage,
 		storage.callTransports,
+		storage.callbackTransports,
 	);
 	if (body === null) {
 		return null;
@@ -1570,6 +1584,7 @@ export function emitCompiledFunction(
 	relocatable = false,
 	strictCompiledTargets: ReadonlySet<number> = new Set(),
 	stringConstants: ReadonlyArray<ReadonlyArray<number>> = [],
+	callbackEntries: ReadonlySet<string> = new Set(),
 ): CompiledFunction | null {
 	const fn = native.body;
 	const canonical = emitCompiledVariant(
@@ -1633,7 +1648,14 @@ export function emitCompiledFunction(
 			directEntryCalls: emitted.directEntryCalls,
 			id: entry.id,
 			symbol: emitted.symbol,
-			source: emitted.source,
+			source:
+				emitted.source +
+				(callbackEntries.has(directCompiledEntryKey(index, entry.id))
+					? `\n${renderCallbackAdapter(entry, index, suffix, linkage)}`
+					: ""),
+			...(callbackEntries.has(directCompiledEntryKey(index, entry.id))
+				? { callbackSymbol: nativeCallbackSymbol(index, entry.id, suffix) }
+				: {}),
 			parameterRepresentations: [
 				...(entry.argumentRepresentations ?? entry.parameterRepresentations),
 				...(entry.fieldParameters?.keys.map(() => "number" as const) ?? []),
@@ -1641,6 +1663,55 @@ export function emitCompiledFunction(
 			resultRepresentation: entry.resultRepresentation,
 		})),
 	};
+}
+
+function renderCallbackAdapter(
+	entry: NativeDirectEntryPlan,
+	index: number,
+	suffix: string,
+	linkage: "static" | "external",
+): string {
+	const parameters = entry.argumentRepresentations ?? entry.parameterRepresentations;
+	const guards = [
+		entry.argumentRepresentations === undefined
+			? "arg_count >= 0"
+			: `arg_count == ${entry.argumentRepresentations.length}`,
+	];
+	const values = parameters.map((rep, parameter) => {
+		const value = `args[${parameter}]`;
+		if (rep === "boxed")
+			return `arg_count > ${parameter} ? ${value} : MAL_VALUE_UNDEFINED`;
+		const predicate = rep === "number" ? "mal_ops_is_number" : `mal_value_is_${rep}`;
+		guards.push(`arg_count > ${parameter} && ${predicate}(${value})`);
+		return rep === "number"
+			? `mal_ops_number_as_f64(${value})`
+			: rep === "int32"
+				? `mal_value_to_i32(${value})`
+				: rep === "boolean"
+					? `mal_value_to_boolean(${value})`
+					: value;
+	});
+	const result =
+		entry.resultRepresentation === "number"
+			? "mal_ops_number_value(value)"
+			: entry.resultRepresentation === "int32"
+				? "mal_value_from_i32(value)"
+				: entry.resultRepresentation === "boolean"
+					? "mal_value_new_boolean(value)"
+					: "value";
+	// The exact-script helper owns activation, realm, receiver adjustment, and argument roots.
+	return [
+		`${linkage === "static" ? "static " : ""}MalValue ${nativeCallbackSymbol(index, entry.id, suffix)}${COMPILED_FUNCTION_DECLARATION} {`,
+		`    if (!(${guards.map((guard) => `(${guard})`).join(" && ")})) {`,
+		"        MAL_PERF_COUNT(array_iteration_typed_callback_fallbacks);",
+		`        return mal_compiled_${index}${suffix}(vm, this_value, args, arg_count, new_target, env, callee, entry_state);`,
+		"    }",
+		"    MAL_PERF_COUNT(array_iteration_typed_callback_hits);",
+		`    ${cTypeOf(entry.resultRepresentation)} value = mal_direct_${index}_${entry.id}${suffix}(vm, this_value${values.length ? `, ${values.join(", ")}` : ""}, env, callee);`,
+		"    if (vm->completion.kind == MAL_COMPLETION_THROW) return MAL_VALUE_UNDEFINED;",
+		`    return ${result};`,
+		"}",
+	].join("\n");
 }
 
 function unboxedSnapshot(rep: RegisterRep, value: string): string {
@@ -2481,12 +2552,16 @@ function emitBody(
 		pairedArrayLoops: [],
 	},
 	callTransports: ReadonlyArray<NativeCallTransportPlan> = [],
+	callbackTransports: ReadonlyArray<NativeCallbackTransportPlan> = [],
 ): EmittedBody | null {
 	if (!vmRegionActionsAreCurrent(specializations, regionActions)) {
 		throw new Error("Native function has stale region actions");
 	}
 	const callTransportByIp = new Map(
 		callTransports.map((plan) => [plan.instructionIp, plan]),
+	);
+	const callbackTransportByIp = new Map(
+		callbackTransports.map((plan) => [plan.instructionIp, plan]),
 	);
 	const stableCaptureOwners = new Set(fixedCaptureOwners(fn, functionIndex));
 	const copiedCaptures = copiedCaptureIndexes(fn);
@@ -3760,6 +3835,7 @@ function emitBody(
 		instructionContext.fieldAllocation = fieldAllocations.get(ip);
 		instructionContext.fieldCall = fieldCallSites.get(ip);
 		instructionContext.callTransport = callTransportByIp.get(ip);
+		instructionContext.callbackTransport = callbackTransportByIp.get(ip);
 		instructionContext.mathUnaryCall = mathUnaryCalls.has(ip);
 		instructionContext.mathBinaryCall = mathBinaryCalls.has(ip);
 		instructionContext.indexedLengthLoopAction = indexedLengthLoopActionByIp.get(ip);
@@ -4176,6 +4252,7 @@ interface NativeInstructionContext {
 	readonly fieldCall?: NativeFieldCall;
 	readonly fieldEntryCall?: NativeFieldCall;
 	readonly callTransport?: NativeCallTransportPlan;
+	readonly callbackTransport?: NativeCallbackTransportPlan;
 	readonly mathUnaryCall: boolean;
 	readonly mathBinaryCall: boolean;
 	readonly mappedArguments: boolean;
@@ -4362,6 +4439,7 @@ function emitInstruction(
 		constantBoolean: context.constantBoolean,
 		fieldEntryCall: context.fieldEntryCall,
 		callTransport: context.callTransport,
+		callbackTransport: context.callbackTransport,
 		mathUnaryCall,
 		mathBinaryCall,
 		mappedArguments,
@@ -8645,9 +8723,15 @@ function emitInstruction(
 					"runtime-helper-owned-dispatch",
 				);
 				const callbackTarget = callPlan?.directCallbackFunctionIndex;
+				const callbackEntry = context.callbackTransport;
 				const callbackSymbol =
 					callbackTarget !== undefined && directCompiledTargets.has(callbackTarget)
-						? `mal_compiled_${callbackTarget}${suffix}`
+						? callbackEntry !== undefined &&
+							directCompiledEntries.has(
+								directCompiledEntryKey(callbackTarget, callbackEntry.entryId),
+							)
+							? nativeCallbackSymbol(callbackTarget, callbackEntry.entryId, suffix)
+							: `mal_compiled_${callbackTarget}${suffix}`
 						: "nullptr";
 				return [
 					`static MAL_ISOLATE_LOCAL MalCallCache __cc_${ip};`,

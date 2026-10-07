@@ -10,6 +10,7 @@ import {
 } from "../shared/compiler-value-kinds.ts";
 import type { CompilerOperatorInputKindMasks } from "../shared/compiler-value-kinds.ts";
 import { getPrimordialCatalog } from "../shared/primordial-catalog-data.ts";
+import type { NativeCallbackTransportPlan } from "./lower-native-callbacks.ts";
 import { NATIVE_CALL_CONVERSIONS, nativeEntryLookup } from "./lower-native-calls.ts";
 import type { NativeCallTransportPlan } from "./lower-native-calls.ts";
 import { NATIVE_PROPERTY_UPDATE_OPERATORS } from "./lower-native-fast-paths.ts";
@@ -73,7 +74,7 @@ import type {
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal artifacts are hard cut-overs: stale cache entries rebuild.
-export const COMPILER_ARTIFACT_VERSION = 127;
+export const COMPILER_ARTIFACT_VERSION = 128;
 
 function validateClosureCaptureOwners(
 	owners: ReadonlyArray<number>,
@@ -841,6 +842,16 @@ function writeNativeStorage(w: Writer, storage: NativeStoragePlan | undefined): 
 			w.i32Array([...target.fields]);
 		}
 	}
+	w.u32(storage.callbackTransports.length);
+	for (const plan of storage.callbackTransports) {
+		w.i32(plan.instructionIp);
+		w.i32(plan.functionIndex);
+		w.i32(plan.entryId);
+		w.i32(plan.argumentCount ?? -1);
+		w.u32(plan.parameters.length);
+		for (const rep of [...plan.parameters, plan.resultRepresentation])
+			w.u8(["int32", "number", "boolean", "boxed", "string"].indexOf(rep));
+	}
 }
 
 function readNativeStorage(r: Reader): NativeStoragePlan {
@@ -1098,9 +1109,34 @@ function readNativeStorage(r: Reader): NativeStoragePlan {
 		}),
 	);
 
+	const readCallbackRepresentation = () => {
+		const rep = (["int32", "number", "boolean", "boxed", "string"] as const)[r.u8()];
+		if (rep === undefined) throw new RangeError("Invalid native callback representation");
+		return rep;
+	};
+	const callbackTransports: Array<NativeCallbackTransportPlan> = Array.from(
+		{ length: r.count(6) },
+		() => {
+			const instructionIp = r.i32(),
+				functionIndex = r.i32(),
+				entryId = r.i32();
+			const argumentCount = r.i32();
+			if (argumentCount < -1)
+				throw new RangeError("Invalid native callback argument count");
+			return {
+				instructionIp,
+				functionIndex,
+				entryId,
+				...(argumentCount < 0 ? {} : { argumentCount }),
+				parameters: Array.from({ length: r.count(1) }, readCallbackRepresentation),
+				resultRepresentation: readCallbackRepresentation(),
+			};
+		},
+	);
 	return {
 		...storage,
 		callTransports,
+		callbackTransports,
 		stackObjects,
 		numericLeaf: leaf,
 		suspension,

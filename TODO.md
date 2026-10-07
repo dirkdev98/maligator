@@ -124,6 +124,9 @@ The independent target boundary and current storage contract are recorded in
 - [x] Use selected ordinary script-call transports to keep boxed final results in
       private locals, preserving GC publication, guard misses, exceptions, and
       disjoint heap lifetimes while retaining borrowed inputs and virtual fields.
+- [x] Reuse existing selected typed entries for exact Array callbacks through
+      guarded adapters, retaining canonical fallbacks, callback argument roots,
+      receiver/realm handling, and independently bounded optional entry code.
 - [ ] Extend selected typed call/aggregate transport and expression regions using
       Core proofs, with bounded code-size decisions and matched runtime evidence.
       Move remaining emission-local selection into explicit native plans before

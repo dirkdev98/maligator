@@ -1022,7 +1022,8 @@ static void mal_perf_stats_print(void) {
 		"contained_pops=%llu contained_empty_pops=%llu contained_element_reads=%llu "
         "iteration_direct_hits=%llu iteration_direct_fallbacks=%llu "
         "iteration_exact_callback_calls=%llu "
-        "iteration_exact_compiled_callback_calls=%llu\n",
+        "iteration_exact_compiled_callback_calls=%llu "
+        "iteration_typed_callback_hits=%llu iteration_typed_callback_fallbacks=%llu\n",
         (unsigned long long) mal_perf_stats.array_fresh_dense_stores,
         (unsigned long long) mal_perf_stats.array_fresh_dense_growths,
         (unsigned long long) mal_perf_stats.array_fresh_dense_fallbacks,
@@ -1046,7 +1047,9 @@ static void mal_perf_stats_print(void) {
         (unsigned long long) mal_perf_stats.array_iteration_direct_hits,
         (unsigned long long) mal_perf_stats.array_iteration_direct_fallbacks,
         (unsigned long long) mal_perf_stats.array_iteration_exact_callback_calls,
-        (unsigned long long) mal_perf_stats.array_iteration_exact_compiled_callback_calls
+        (unsigned long long) mal_perf_stats.array_iteration_exact_compiled_callback_calls,
+        (unsigned long long) mal_perf_stats.array_iteration_typed_callback_hits,
+        (unsigned long long) mal_perf_stats.array_iteration_typed_callback_fallbacks
     );
     fprintf(
         stderr,

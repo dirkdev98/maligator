@@ -20,6 +20,10 @@ function rebaseNativeStorage(
 		? undefined
 		: {
 				...storage,
+				callbackTransports: storage.callbackTransports.map((plan) => ({
+					...plan,
+					functionIndex: plan.functionIndex + functionBase,
+				})),
 				callTransports: storage.callTransports.map((plan) => ({
 					...plan,
 					targets: plan.targets.map((target) => ({

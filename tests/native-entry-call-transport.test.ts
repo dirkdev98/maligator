@@ -131,6 +131,7 @@ function skipStorageWithoutFastPaths(reader: Reader): void {
 			reader.i32Array();
 		}
 	}
+	expect(reader.u32()).toBe(0);
 }
 
 function firstOverrideOffset(bytes: Uint8Array): number {

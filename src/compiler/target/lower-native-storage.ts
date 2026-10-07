@@ -1,4 +1,9 @@
 import {
+	nativeCallbackTransportsMatch,
+	selectNativeCallbackTransports,
+} from "./lower-native-callbacks.ts";
+import type { NativeCallbackTransportPlan } from "./lower-native-callbacks.ts";
+import {
 	nativeCallTransportsMatch,
 	nativeEntryLookup,
 	selectNativeCallTransports,
@@ -56,6 +61,7 @@ export interface NativeNumericLeafPlan extends NativeScalarStoragePlan {
 export interface NativeStoragePlan
 	extends NativeScalarStoragePlan, NativeRootStoragePlan, NativeFastPathPlans {
 	readonly callTransports: ReadonlyArray<NativeCallTransportPlan>;
+	readonly callbackTransports: ReadonlyArray<NativeCallbackTransportPlan>;
 	readonly suspension: NativeSuspensionPlan | undefined;
 	readonly stackObjects: ReadonlyArray<NativeStackObjectStoragePlan>;
 	readonly rootRegisters: ReadonlyArray<number>;
@@ -603,6 +609,7 @@ function lowerStorage(
 	return {
 		...fastPaths,
 		callTransports,
+		callbackTransports: selectNativeCallbackTransports(native, entries),
 		suspension: compactNativeSuspension(
 			suspension,
 			new Set(
@@ -807,6 +814,10 @@ export function validateNativeStorage(
 			selected !== undefined &&
 			stored.rootSlotCount === selected.rootSlotCount &&
 			nativeCallTransportsMatch(stored.callTransports, selected.callTransports) &&
+			nativeCallbackTransportsMatch(
+				stored.callbackTransports,
+				selected.callbackTransports,
+			) &&
 			sameScalar(stored, selected) &&
 			stored.stackObjects.length === selected.stackObjects.length &&
 			stored.stackObjects.every(

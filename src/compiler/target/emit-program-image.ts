@@ -7,7 +7,11 @@ import { validateNativeStorage } from "./lower-native-storage.ts";
 import { finalizeCompilerRemarks } from "./profile-metadata.ts";
 import type { ProgramImage } from "./program-image.ts";
 import { validateNativeBodyAbis, validateNativeDirectEntry } from "./program-image.ts";
-import { directCompiledEntryKey, emitCompiledFunction } from "./render-native-c.ts";
+import {
+	COMPILED_FUNCTION_DECLARATION,
+	directCompiledEntryKey,
+	emitCompiledFunction,
+} from "./render-native-c.ts";
 import type { CompiledFunction } from "./render-native-c.ts";
 import {
 	compressPositions,
@@ -189,9 +193,6 @@ export interface TranslationUnitPolicy {
 	readonly targetCodeUnits: number;
 	readonly hardMaximumCodeUnits: number;
 }
-
-const COMPILED_FUNCTION_DECLARATION =
-	"(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalEnv *env, MalValue callee, void *entry_state)";
 
 function directEntryDeclaration(
 	entry: CompiledFunction["directEntries"][number],
@@ -671,6 +672,8 @@ function omitUnreachableCanonicalBodies(
 				: [emitted, ...emitted.directEntries];
 		for (const [ip, instruction] of native.instructions.entries()) {
 			if (instruction?.kind !== "call") continue;
+			if (instruction.directCallbackFunctionIndex !== undefined)
+				removable.delete(instruction.directCallbackFunctionIndex);
 			for (const target of [
 				instruction.directFunctionIndex,
 				...(instruction.guardedFunctionIndices ?? []),
@@ -723,9 +726,27 @@ function emitNativeFunctions(
 	const fits = (source: string): boolean =>
 		options.maxCodeUnits === undefined ||
 		source.length + headerCodeUnits <= options.maxCodeUnits;
+	const callbackEntries = new Set(
+		image.native.functions.flatMap((native) =>
+			[native.storage, ...native.directEntries.map((entry) => entry.storage)].flatMap(
+				(storage) =>
+					(storage?.callbackTransports ?? []).map((plan) =>
+						directCompiledEntryKey(plan.functionIndex, plan.entryId),
+					),
+			),
+		),
+	);
 	const references = image.native.functions.map((native) => {
 		const targets = new Set<number>();
 		const entries = new Set<string>();
+		for (const storage of [
+			native.storage,
+			...native.directEntries.map((entry) => entry.storage),
+		])
+			for (const plan of storage?.callbackTransports ?? []) {
+				targets.add(plan.functionIndex);
+				entries.add(directCompiledEntryKey(plan.functionIndex, plan.entryId));
+			}
 		for (const entry of native.directEntries) {
 			validateNativeDirectEntry(native.body, entry, image.native.functions);
 			for (const call of entry.callOverrides ?? []) {
@@ -793,6 +814,7 @@ function emitNativeFunctions(
 			options.relocatable === true,
 			strictCompiledTargets,
 			image.runtime.stringConstants,
+			callbackEntries,
 		);
 		if (emitted === null || !fits(emitted.source)) return null;
 		const entries = emitted.directEntries.filter((entry) => fits(entry.source));
@@ -1044,6 +1066,10 @@ function emitProgramImageSource(
 			for (const fn of compiled) {
 				for (const entry of fn?.directEntries ?? []) {
 					lines.push(`static ${directEntryDeclaration(entry)};`);
+					if (entry.callbackSymbol !== undefined)
+						lines.push(
+							`static MalValue ${entry.callbackSymbol}${COMPILED_FUNCTION_DECLARATION};`,
+						);
 				}
 			}
 		}
@@ -1070,6 +1096,8 @@ function emitProgramImageSource(
 		for (const fn of compiled) {
 			for (const entry of fn?.directEntries ?? []) {
 				lines.push(`${directEntryDeclaration(entry)};`);
+				if (entry.callbackSymbol !== undefined)
+					lines.push(`MalValue ${entry.callbackSymbol}${COMPILED_FUNCTION_DECLARATION};`);
 			}
 		}
 		if (compiled.some((fn) => fn !== null)) {
@@ -1381,10 +1409,17 @@ export function emitProgramTranslationUnits(
 		)
 		.concat(
 			emitted.compiled.flatMap((fn) =>
-				(fn?.directEntries ?? []).map((entry) => ({
-					symbol: entry.symbol,
-					source: `${directEntryDeclaration(entry)};`,
-				})),
+				(fn?.directEntries ?? []).flatMap((entry) => [
+					{ symbol: entry.symbol, source: `${directEntryDeclaration(entry)};` },
+					...(entry.callbackSymbol === undefined
+						? []
+						: [
+								{
+									symbol: entry.callbackSymbol,
+									source: `MalValue ${entry.callbackSymbol}${COMPILED_FUNCTION_DECLARATION};`,
+								},
+							]),
+				]),
 			),
 		);
 	const declarationIndicesBySymbol = new Map<string, Array<number>>();
@@ -2006,6 +2041,10 @@ export function emitBatch(
 		for (const fn of compiled) {
 			for (const entry of fn?.directEntries ?? []) {
 				lines.push(`static ${directEntryDeclaration(entry)};`);
+				if (entry.callbackSymbol !== undefined)
+					lines.push(
+						`static MalValue ${entry.callbackSymbol}${COMPILED_FUNCTION_DECLARATION};`,
+					);
 			}
 		}
 		if (
