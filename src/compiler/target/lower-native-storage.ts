@@ -152,6 +152,8 @@ interface NativeStorageBodyFacts {
 	readonly jumpTargets: ReadonlySet<number>;
 	readonly handlerTargets: ReturnType<typeof vmExceptionHandlerTargets>;
 	readonly controlBoundaries: ReadonlyArray<boolean>;
+	readonly predecessorCounts: Uint32Array;
+	readonly externalEntries: ReadonlySet<number>;
 }
 
 function storageBodyFacts(native: NativeFunctionPlan): NativeStorageBodyFacts {
@@ -162,6 +164,8 @@ function storageBodyFacts(native: NativeFunctionPlan): NativeStorageBodyFacts {
 	const definitions = new Int32Array(fn.registerCount).fill(-1);
 	const uses: Array<Array<number>> = Array.from({ length: fn.registerCount }, () => []);
 	const jumpTargets = new Set(fn.handlers.map((handler) => handler.handlerIp));
+	const externalEntries = new Set(fn.handlers.map((handler) => handler.handlerIp));
+	const predecessorCounts = new Uint32Array(fn.instructions.length);
 	for (const [ip, op] of fn.instructions.entries()) {
 		// Conservative images have no SSA locals and receive operand validation downstream.
 		if (native.storageValues !== undefined) {
@@ -171,9 +175,19 @@ function storageBodyFacts(native: NativeFunctionPlan): NativeStorageBodyFacts {
 			}
 			for (const local of reads[ip]!) uses[local]!.push(ip);
 		}
-		if (op.opcode === "JUMP" || op.opcode === "JUMP_IF") jumpTargets.add(op.targetIp);
-		if (["GENERATOR_START", "YIELD", "AWAIT"].includes(op.opcode))
+		if (op.opcode === "JUMP" || op.opcode === "JUMP_IF") {
+			jumpTargets.add(op.targetIp);
+			predecessorCounts[op.targetIp]!++;
+		}
+		if (
+			ip + 1 < fn.instructions.length &&
+			!["JUMP", "RETURN", "THROW", "TERMINAL_YIELD"].includes(op.opcode)
+		)
+			predecessorCounts[ip + 1]!++;
+		if (["GENERATOR_START", "YIELD", "AWAIT"].includes(op.opcode)) {
 			jumpTargets.add(ip + 1);
+			externalEntries.add(ip + 1);
+		}
 	}
 	return {
 		reads,
@@ -184,6 +198,8 @@ function storageBodyFacts(native: NativeFunctionPlan): NativeStorageBodyFacts {
 		jumpTargets,
 		handlerTargets: vmExceptionHandlerTargets(fn.instructions.length, fn.handlers),
 		controlBoundaries: fn.instructions.map(scalarControlBoundary),
+		predecessorCounts,
+		externalEntries,
 	};
 }
 
@@ -505,6 +521,19 @@ function expressionIps(
 	)
 		return [];
 	const { writeCounts: writes, uses } = body;
+	const safepoints = new Set(native.gc.safepoints.map((point) => point.instructionIp));
+	const fallthroughJumps = new Set<number>();
+	for (const [ip, op] of fn.instructions.entries())
+		if (
+			op.opcode === "JUMP" &&
+			op.targetIp === ip + 1 &&
+			!blocked.has(ip) &&
+			!blocked.has(ip + 1) &&
+			!safepoints.has(ip) &&
+			body.predecessorCounts[ip + 1] === 1 &&
+			!body.externalEntries.has(ip + 1)
+		)
+			fallthroughJumps.add(ip);
 	const expressions: Array<number> = [];
 	const leavesByLocal = new Map<number, ReadonlySet<number>>();
 	const costs = new Map<number, number>();
@@ -555,13 +584,14 @@ function expressionIps(
 		for (let next = ip + 1; next <= consumerIp; next++) {
 			if (
 				blocked.has(next) ||
-				jumpTargets.has(next) ||
+				(jumpTargets.has(next) && !fallthroughJumps.has(next - 1)) ||
 				(next < consumerIp &&
-					(!pureScalarOperation(
+					((!pureScalarOperation(
 						fn.instructions[next]!,
 						native.registerRepresentations,
 						native.instructions[next],
-					) ||
+					) &&
+						!fallthroughJumps.has(next)) ||
 						body.writes[next]!.some((local) => operands.has(local))))
 			) {
 				safe = false;

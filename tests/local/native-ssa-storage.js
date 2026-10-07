@@ -1,5 +1,45 @@
 const gc = globalThis.__mal_collect_garbage ?? (() => {});
 
+function composedPhiArithmetic(condition, left, right) {
+	const a = +left;
+	const b = +right;
+	return condition ? (a - b) * 2 : (a + b) * 3;
+}
+function composedPhiRotation(left, right, count) {
+	let a = +left;
+	let b = +right;
+	const rounds = +count;
+	for (let index = 0; index < rounds; index = index + 1) {
+		const next = (a - b) * 2;
+		a = b;
+		b = next;
+	}
+	return a + b;
+}
+globalThis.composedPhiArithmetic = composedPhiArithmetic;
+globalThis.composedPhiRotation = composedPhiRotation;
+for (const [left, right] of [
+	[-0, 0],
+	[-0, -0],
+	[0, -0],
+	[NaN, 1],
+	[Infinity, -Infinity],
+	[Number.MIN_VALUE, 0],
+	[1e308, -1e308],
+	[7, 3],
+]) {
+	for (const condition of [false, true]) {
+		const value = composedPhiArithmetic(condition, left, right);
+		gc();
+		console.log("composed-phi", String(value), Object.is(value, -0));
+	}
+	for (const rounds of [0, 1, 1.5, 2, 6]) {
+		const value = composedPhiRotation(left, right, rounds);
+		gc();
+		console.log("composed-phi-rotation", String(value), Object.is(value, -0));
+	}
+}
+
 function composedIndexedLoad(values, left, right) {
 	const a = +left;
 	const b = +right;

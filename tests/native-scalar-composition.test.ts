@@ -7,7 +7,10 @@ import {
 	deserializeCompilerArtifact,
 	serializeCompilerArtifact,
 } from "../src/compiler/target/compiler-artifact-codec.ts";
-import { validateNativeStorage } from "../src/compiler/target/lower-native-storage.ts";
+import {
+	lowerNativeFunctionStorage,
+	validateNativeStorage,
+} from "../src/compiler/target/lower-native-storage.ts";
 import { emitCompiledFunction } from "../src/compiler/target/render-native-c.ts";
 import {
 	decodeVmValueOperand,
@@ -545,6 +548,111 @@ describe("existing-proof scalar expression consumers", () => {
 			expect(source).toContain("mal_number_min_max(");
 			expect(source.match(/mal_number_remainder\(/g)).toHaveLength(1);
 		}
+	});
+});
+
+describe("native scalar expressions across phi edge copies", () => {
+	const source = `function choose(condition,left,right) {
+		const a=+left,b=+right;
+		return condition ? (a-b)*2 : (a+b)*3;
+	} globalThis.choose=choose;`;
+
+	it("assigns each phi input directly from its single-owner fallthrough expression", () => {
+		const out = inspectStaticValueFunction(source, "choose");
+		const products = out.native.body.instructions.flatMap((op, ip) =>
+			op.opcode === "BINARY" && op.operator === "*" ? [{ ip, op }] : [],
+		);
+		expect(products).toHaveLength(2);
+		for (const { ip, op } of products) {
+			const edge = out.native.body.instructions[ip + 1]!;
+			expect(edge.opcode).toBe("JUMP");
+			if (edge.opcode !== "JUMP") throw new Error("Missing phi edge");
+			expect(edge.targetIp).toBe(ip + 2);
+			const copy = out.native.body.instructions[edge.targetIp]!;
+			expect(copy).toMatchObject({ opcode: "MOVE", src: op.dst });
+			expect(out.native.storage!.expressionIps).toContain(ip);
+			expect(out.c.source).toContain(`#define r${op.dst} (`);
+		}
+		expect(deserializeCompilerArtifact(serializeCompilerArtifact(out.image))).toEqual(
+			out.image,
+		);
+	});
+
+	it.each(["poll", "second predecessor"])(
+		"rejects delayed phi arithmetic after adding a %s to its edge",
+		(kind) => {
+			const out = inspectStaticValueFunction(source, "choose");
+			const instructions = [...out.native.body.instructions];
+			const productIp = instructions.findIndex(
+				(op) => op.opcode === "BINARY" && op.operator === "*",
+			);
+			const jumpIp = productIp + 1;
+			const edge = instructions[jumpIp]!;
+			if (edge.opcode !== "JUMP") throw new Error("Missing phi edge");
+			let native = { ...out.native, body: { ...out.native.body, instructions } };
+			if (kind === "poll") {
+				const point = out.native.gc.safepoints[0]!;
+				native = {
+					...native,
+					gc: {
+						safepoints: [
+							...native.gc.safepoints,
+							{ ...point, instructionIp: jumpIp, kind: "loop-backedge" },
+						],
+					},
+				};
+			} else {
+				const lastIp = instructions.length - 1;
+				expect(instructions[lastIp]!.opcode).toBe("JUMP");
+				instructions[lastIp] = { opcode: "JUMP", targetIp: edge.targetIp };
+			}
+			expect(lowerNativeFunctionStorage(native).storage!.expressionIps).not.toContain(
+				productIp,
+			);
+			expect(() => validateNativeStorage(native)).toThrow(
+				/invalid or stale storage plan/,
+			);
+		},
+	);
+
+	it("materializes an expression before parallel copies overwrite its transitive input", () => {
+		const out = inspectStaticValueFunction(
+			`function rotate(left,right,count) {
+				let a=+left,b=+right; const rounds=+count;
+				for(let i=0;i<rounds;i=i+1){const next=(a-b)*2;a=b;b=next;}
+				return a+b;
+			} globalThis.rotate=rotate;`,
+			"rotate",
+		);
+		const instructions = out.native.body.instructions;
+		const productIp = instructions.findIndex(
+			(op) => op.opcode === "BINARY" && op.operator === "*",
+		);
+		const product = instructions[productIp]!;
+		if (product.opcode !== "BINARY") throw new Error("Missing product");
+		const difference = instructions.find(
+			(op) => op.opcode === "BINARY" && op.dst === product.left,
+		)!;
+		if (difference.opcode !== "BINARY") throw new Error("Missing difference");
+		const copyIp = instructions.findIndex(
+			(op) => op.opcode === "MOVE" && op.src === product.dst,
+		);
+		expect(copyIp).toBeGreaterThan(productIp);
+		expect(
+			instructions
+				.slice(productIp + 1, copyIp)
+				.some(
+					(op) =>
+						op.opcode === "MOVE" &&
+						(op.dst === difference.left || op.dst === difference.right),
+				),
+		).toBe(true);
+		expect(out.native.storage!.expressionIps).not.toContain(productIp);
+	});
+
+	it("retains profiled phi arithmetic sites", () => {
+		const out = inspectStaticValueFunction(source, "choose", { profile: true });
+		expect(out.native.storage!.expressionIps).toEqual([]);
 	});
 });
 
