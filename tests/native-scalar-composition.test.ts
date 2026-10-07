@@ -143,6 +143,67 @@ describe("native scalar plans around opaque and exceptional windows", () => {
 });
 
 describe("existing-proof scalar expression consumers", () => {
+	it("preserves selected unsigned operations in composed expressions and numeric leaves", () => {
+		const image = compileSemanticProgramToProgramImage(
+			analyzeSourceAndRunSemanticAnalysis(
+				`function bounded(left) { const a=left&65535; return (a*3+1)%101; }
+				globalThis.bounded=bounded; globalThis.result=bounded(3);`,
+				"/unsigned-composition.js",
+			),
+		);
+		const native = image.native.functions[1]!;
+		const unsignedIps = native.instructions.flatMap((plan, ip) =>
+			plan?.kind === "unsigned-arithmetic" ? [ip] : [],
+		);
+		expect(unsignedIps.length).toBeGreaterThan(0);
+		expect(native.storage!.expressionIps.some((ip) => unsignedIps.includes(ip))).toBe(
+			true,
+		);
+		const entry = native.directEntries.find(
+			(entry) => entry.storage!.numericLeaf !== undefined,
+		)!;
+		expect(entry).toBeDefined();
+		for (const ip of unsignedIps)
+			expect(entry.storage!.numericLeaf!.expressionIps).toContain(ip);
+		const restored = deserializeCompilerArtifact(serializeCompilerArtifact(image));
+		expect(restored).toEqual(image);
+		const emitted = emitCompiledFunction(restored.native.functions[1]!, 1, "", false)!;
+		for (const source of [
+			emitted.source,
+			...emitted.directEntries.map((entry) => entry.source),
+		]) {
+			expect(source).toContain("(u32)");
+			expect(source).not.toContain("mal_number_remainder(");
+		}
+	});
+
+	it("consumes int32 operands directly in bitwise expression chains", () => {
+		const image = compileSemanticProgramToProgramImage(
+			analyzeSourceAndRunSemanticAnalysis(
+				`function signed(left) { const a=left|0; return (~a>>3)^a; }
+				globalThis.signed=signed; globalThis.result=signed(3);`,
+				"/signed-composition.js",
+			),
+		);
+		const native = image.native.functions[1]!;
+		const emitted = emitCompiledFunction(native, 1, "", false)!;
+		const entry = native.directEntries.find(
+			(entry) => entry.storage!.numericLeaf !== undefined,
+		)!;
+		expect(entry).toBeDefined();
+		const source = emitted.directEntries.find(
+			(candidate) => candidate.id === entry.id,
+		)!.source;
+		const inputs = entry.storage!.numericLeaf!.expressionIps.flatMap((ip) =>
+			vmInstructionReadRegisters(native.body.instructions[ip]!).filter(
+				(register) => entry.registerRepresentations[register] === "int32",
+			),
+		);
+		expect(inputs.length).toBeGreaterThan(0);
+		for (const input of inputs)
+			expect(source).not.toContain(`mal_ops_number_to_i32((f64) r${input})`);
+	});
+
 	it.each([
 		["return ((a % b) & 255) + 1;", "%"],
 		["return !((a < b) === (a !== b));", "==="],

@@ -601,6 +601,12 @@ function nativeNumberExpr(operator: string, left: string, right: string): string
 	return null;
 }
 
+function nativeUnsignedExpr(operator: string, left: string, right: string): string {
+	if (!["+", "-", "*", "%"].includes(operator))
+		throw new Error("Invalid lowered native unsigned operation");
+	return `(u32)(${left}) ${operator} (u32)(${right})`;
+}
+
 /**
  * Operators whose fully-general op never sets a THROW completion, so a boxed
  * fallback can skip the check. Only the strict-equality operators qualify:
@@ -1113,7 +1119,7 @@ function emitCompiledVariant(
 		[...expressionIps].map((ip) => {
 			const op = fn.instructions[ip]!;
 			if (!("dst" in op)) throw new Error("Native expression lacks a destination");
-			return [op.dst, renderScalarExpression(op, reps)];
+			return [op.dst, renderScalarExpression(op, reps, nativeContract.instructions[ip])];
 		}),
 	);
 	const body = emitBody(
@@ -1397,9 +1403,12 @@ function emitCompiledVariant(
 function renderScalarExpression(
 	op: BytecodeInstruction,
 	reps: ReadonlyArray<RegisterRep>,
+	plan?: NativeInstructionPlan,
 ): string {
 	const number = (local: number) =>
 		reps[local] === "boxed" ? `mal_ops_number_as_f64(r${local})` : `(f64) r${local}`;
+	const int32 = (local: number) =>
+		reps[local] === "int32" ? `r${local}` : `mal_ops_number_to_i32(${number(local)})`;
 	switch (op.opcode) {
 		case "CREATE_NUMBER":
 		case "CREATE_F64":
@@ -1417,22 +1426,35 @@ function renderScalarExpression(
 					: `!mal_number_is_truthy(${number(op.src)})`;
 			if (op.operator === "~")
 				return reps[op.dst] === "int32"
-					? `~mal_ops_number_to_i32(${number(op.src)})`
-					: `(f64) (~mal_ops_number_to_i32(${number(op.src)}))`;
+					? `~${int32(op.src)}`
+					: `(f64) (~${int32(op.src)})`;
 			return `${op.operator === "-" ? "-" : ""}(${number(op.src)})`;
 		case "BINARY": {
+			if (plan?.kind === "unsigned-arithmetic") {
+				const expression = nativeUnsignedExpr(
+					op.operator,
+					number(op.left),
+					number(op.right),
+				);
+				return reps[op.dst] === "int32"
+					? `mal_ops_u32_to_i32(${expression})`
+					: `(f64) (${expression})`;
+			}
+			if (NATIVE_BITWISE[op.operator] !== undefined || op.operator === ">>>") {
+				const expression =
+					op.operator === ">>>"
+						? `(u32) ${int32(op.left)} >> (${int32(op.right)} & 0x1F)`
+						: nativeInt32Expr(op.operator, int32(op.left), int32(op.right));
+				if (expression === null)
+					throw new Error("Invalid lowered native bitwise expression");
+				return reps[op.dst] === "int32" ? expression : `(f64) (${expression})`;
+			}
 			const operand = (local: number) =>
 				reps[local] === "boolean" ? `r${local}` : number(local);
 			const expression =
 				reps[op.dst] === "boolean"
 					? `${operand(op.left)} ${NATIVE_COMPARE[op.operator]} ${operand(op.right)}`
-					: reps[op.dst] === "int32"
-						? nativeInt32Expr(
-								op.operator,
-								`mal_ops_number_to_i32(${number(op.left)})`,
-								`mal_ops_number_to_i32(${number(op.right)})`,
-							)
-						: nativeNumberExpr(op.operator, number(op.left), number(op.right));
+					: nativeNumberExpr(op.operator, number(op.left), number(op.right));
 			if (expression === null)
 				throw new Error("Invalid lowered native scalar expression");
 			return expression;
@@ -1459,9 +1481,10 @@ function renderScalarExpression(
 }
 
 function renderNumericLeafWorker(
-	fn: BytecodeFunction,
+	native: NativeFunctionPlan,
 	entry: NativeDirectEntryPlan,
 ): Array<string> | null {
+	const fn = native.body;
 	const storage = entry.storage;
 	if (storage === undefined)
 		throw new Error("Numeric leaf rendering requires a storage plan");
@@ -1478,7 +1501,7 @@ function renderNumericLeafWorker(
 		[...expressionIps].map((ip) => {
 			const op = fn.instructions[ip]!;
 			if (!("dst" in op)) throw new Error("Native expression lacks a destination");
-			return [op.dst, renderScalarExpression(op, reps)];
+			return [op.dst, renderScalarExpression(op, reps, native.instructions[ip])];
 		}),
 	);
 	const fallthroughJumps = new Set(leaf.fallthroughJumpIps);
@@ -1522,7 +1545,7 @@ function renderNumericLeafWorker(
 			case "UNARY":
 			case "MATH_UNARY_NUMBER":
 			case "MATH_BINARY_NUMBER":
-				line = `r${op.dst} = ${renderScalarExpression(op, reps)};`;
+				line = `r${op.dst} = ${renderScalarExpression(op, reps, native.instructions[ip])};`;
 				break;
 			case "RETURN":
 				line = `return ${number(op.value)};`;
@@ -1605,7 +1628,7 @@ export function emitCompiledFunction(
 			stringConstants,
 		);
 		if (emitted === null) return [];
-		const worker = renderNumericLeafWorker(fn, entry);
+		const worker = renderNumericLeafWorker(nativeVariantContract(native, entry), entry);
 		if (worker === null) return [{ entry, emitted, leaf: undefined }];
 		const parameters = entry.parameterRepresentations
 			.map((rep, i) => `${cTypeOf(rep)} r${i}`)
@@ -1781,7 +1804,7 @@ function emitResumableFunction(
 		[...storage.expressionIps, ...storage.rematerializedConstantIps].map((ip) => {
 			const op = fn.instructions[ip]!;
 			if (!("dst" in op)) throw new Error("Native expression lacks a destination");
-			return [op.dst, renderScalarExpression(op, reps)];
+			return [op.dst, renderScalarExpression(op, reps, native.instructions[ip])];
 		}),
 	);
 	const body = emitBody(
@@ -6522,7 +6545,7 @@ function emitInstruction(
 				return [
 					storeNumber(
 						dst,
-						`(f64)((u32)(${number(left)}) ${operator} (u32)(${number(right)}))`,
+						`(f64)(${nativeUnsignedExpr(operator, number(left), number(right))})`,
 					),
 				];
 			}

@@ -123,7 +123,7 @@ function selectNumericLeaf(
 				return (
 					vmInstructionReadRegisters(op).every(
 						(local) => numeric(local) || reps[local] === "boolean",
-					) && pureScalarOperation(op, reps)
+					) && pureScalarOperation(op, reps, native.instructions[ip])
 				);
 			case "RETURN":
 				return numeric(op.value);
@@ -164,7 +164,12 @@ function scalarStorageOwnership(
 			handlers[ip] !== undefined ||
 			["CATCH", "TRY_BEGIN", "TRY_END"].includes(op.opcode) ||
 			(plan !== undefined &&
-				!["exact-operator-input-kinds", "call", "construct"].includes(plan.kind))
+				![
+					"exact-operator-input-kinds",
+					"unsigned-arithmetic",
+					"call",
+					"construct",
+				].includes(plan.kind))
 		)
 			blocked.add(ip);
 	}
@@ -357,6 +362,7 @@ function pureScalarOperation(
 	const numeric = (local: number) => reps[local] === "number" || reps[local] === "int32";
 	const numericInput = (local: number, index: number) =>
 		numeric(local) ||
+		plan?.kind === "unsigned-arithmetic" ||
 		(plan?.kind === "exact-operator-input-kinds" &&
 			plan.inputKindMasks[index] === COMPILER_VALUE_KIND_NUMBER);
 	switch (op.opcode) {
@@ -380,6 +386,8 @@ function pureScalarOperation(
 						(reps[op.dst] === "int32" && op.operator === "~")))
 			);
 		case "BINARY":
+			if (plan?.kind === "unsigned-arithmetic")
+				return numeric(op.dst) && ["+", "-", "*", "%"].includes(op.operator);
 			if (
 				reps[op.dst] === "boolean" &&
 				reps[op.left] === "boolean" &&
@@ -596,7 +604,9 @@ function lowerStorage(
 	if (entry !== undefined && selectNumericLeaf(native, entry)) {
 		const leaf = {
 			...native,
-			instructions: Array<undefined>(fn.instructions.length).fill(undefined),
+			instructions: native.instructions.map((plan) =>
+				plan?.kind === "unsigned-arithmetic" ? plan : undefined,
+			),
 			specializations: [],
 			regionActions: [],
 			fieldCalls: [],

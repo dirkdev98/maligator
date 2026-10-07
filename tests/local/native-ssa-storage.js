@@ -1,4 +1,54 @@
 const gc = globalThis.__mal_collect_garbage ?? (() => {});
+
+function boundedUnsigned(left) {
+	const value = left & 65535;
+	return (value * 3 + 1) % 101;
+}
+function composedSigned(left) {
+	const value = left | 0;
+	return (~value >> 3) ^ value;
+}
+globalThis.boundedUnsigned = boundedUnsigned;
+globalThis.composedSigned = composedSigned;
+for (const input of [
+	-0,
+	NaN,
+	Infinity,
+	-Infinity,
+	-2147483648,
+	2147483647,
+	4294967295,
+	4294967296,
+	1.75,
+])
+	console.log(
+		"integer-expression",
+		String(input),
+		boundedUnsigned(input),
+		composedSigned(input),
+	);
+const numericModeOrder = [];
+const numericModeInput = {
+	valueOf() {
+		numericModeOrder.push("valueOf");
+		gc();
+		return -17;
+	},
+};
+console.log(
+	"integer-coercion",
+	boundedUnsigned(numericModeInput),
+	composedSigned(numericModeInput),
+	numericModeOrder.join(":"),
+);
+for (const operation of [boundedUnsigned, composedSigned]) {
+	try {
+		operation(1n);
+	} catch (error) {
+		console.log("integer-bigint", error instanceof TypeError);
+	}
+}
+
 globalThis.makeStorageValue = (value) => ({ value, padding: new Array(300).fill(value) });
 
 globalThis.rotateStorage = (left, right, count) => {
