@@ -28,7 +28,6 @@ async function bounded(promise, progress) {
 
 async function dueTimerDuringMessages() {
 	const { port1, port2 } = new MessageChannel();
-	const limit = 1024;
 	let received = 0;
 	let checkpoint = 0;
 	let timerFired = false;
@@ -44,14 +43,13 @@ async function dueTimerDuringMessages() {
 				received++;
 				Promise.resolve().then(() => {
 					checkpoint = received;
+					if (timerFired) resolve();
 				});
-				if (received === limit) resolve();
-				else port1.postMessage(received);
+				if (!timerFired) port1.postMessage(received);
 			});
 		});
 		const timer = new Promise((resolve) => {
 			setTimeout(() => {
-				check(received < limit, "a due timer runs before the message flood drains");
 				check(checkpoint === received, "message Promise precedes the timer");
 				timerFired = true;
 				Promise.resolve().then(() => {
@@ -66,7 +64,7 @@ async function dueTimerDuringMessages() {
 		await bounded(
 			Promise.all([messages, timer]),
 			() =>
-				`dueTimerDuringMessages received=${received}/${limit} checkpoint=${checkpoint} timerFired=${timerFired} timerCheckpoint=${timerCheckpoint}`,
+				`dueTimerDuringMessages received=${received} checkpoint=${checkpoint} timerFired=${timerFired} timerCheckpoint=${timerCheckpoint}`,
 		);
 	} finally {
 		port1.close();
@@ -76,51 +74,67 @@ async function dueTimerDuringMessages() {
 
 async function competingSources() {
 	const { port1, port2 } = new MessageChannel();
-	const limit = 1024;
 	let messages = 0;
 	let immediates = 0;
 	let messageCheckpoint = 0;
 	let immediateCheckpoint = 0;
+	let priorMessages;
+	let priorImmediates;
+	let messageRotated = false;
+	let immediateRotated = false;
 	let immediate;
 	try {
-		const messagesDone = new Promise((resolve) => {
+		const rotated = new Promise((resolve) => {
+			function complete() {
+				if (messageRotated && immediateRotated) resolve();
+			}
 			port2.on("message", () => {
 				check(
 					messageCheckpoint === messages,
 					"message checkpoints survive source rotation",
 				);
+				check(
+					immediateCheckpoint === immediates,
+					"immediate Promise precedes the next message",
+				);
+				if (priorImmediates !== undefined && immediates > priorImmediates) {
+					messageRotated = true;
+				}
+				priorImmediates = immediates;
 				messages++;
+				port1.postMessage(messages);
 				Promise.resolve().then(() => {
 					messageCheckpoint = messages;
+					complete();
 				});
-				if (messages === limit) {
-					check(immediates > 0, "immediates progress during continuous messages");
-					resolve();
-				} else port1.postMessage(messages);
 			});
-		});
-		const immediatesDone = new Promise((resolve) => {
 			function next() {
 				check(
 					immediateCheckpoint === immediates,
 					"immediate checkpoints survive source rotation",
 				);
+				check(
+					messageCheckpoint === messages,
+					"message Promise precedes the next immediate",
+				);
+				if (priorMessages !== undefined && messages > priorMessages) {
+					immediateRotated = true;
+				}
+				priorMessages = messages;
 				immediates++;
+				immediate = setImmediate(next);
 				Promise.resolve().then(() => {
 					immediateCheckpoint = immediates;
+					complete();
 				});
-				if (immediates === limit) {
-					check(messages > 0, "messages progress during continuous immediates");
-					resolve();
-				} else immediate = setImmediate(next);
 			}
 			immediate = setImmediate(next);
 		});
 		port1.postMessage(0);
 		await bounded(
-			Promise.all([messagesDone, immediatesDone]),
+			rotated,
 			() =>
-				`competingSources messages=${messages}/${limit} immediates=${immediates}/${limit} messageCheckpoint=${messageCheckpoint} immediateCheckpoint=${immediateCheckpoint}`,
+				`competingSources messages=${messages} immediates=${immediates} messageCheckpoint=${messageCheckpoint} immediateCheckpoint=${immediateCheckpoint} messageRotated=${messageRotated} immediateRotated=${immediateRotated}`,
 		);
 	} finally {
 		clearImmediate(immediate);
