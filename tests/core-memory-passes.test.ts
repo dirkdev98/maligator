@@ -78,6 +78,89 @@ function program(): CoreProgram {
 }
 
 describe("Core local memory, provenance, and escape optimization", () => {
+	it.each(["changed key order", "materialized object"] as const)(
+		"refreshes an existing own-slot cache hint after %s",
+		(change) => {
+			const core = program();
+			const builder = new CoreFunctionBuilder(core);
+			const entry = builder.createBlock();
+			const [value] = builder.appendInstruction(entry, "createNumber", [], {
+				attributes: { value: 7 },
+			});
+			const [object] = builder.appendInstruction(
+				entry,
+				"createObjectShaped",
+				[value!, value!],
+				{
+					attributes: { keyStringIndices: [0, 1] },
+				},
+			);
+			const [loaded] = builder.appendInstruction(entry, "loadPropertyStatic", [object!], {
+				attributes: { stringIndex: 0 },
+			});
+			builder.setTerminator(entry, { kind: "return", value: loaded! });
+			const fn = core.function(builder.finish(entry).function);
+			const allocation = inspectCoreValueDefinition(fn, object!),
+				load = inspectCoreValueDefinition(fn, loaded!);
+			if (allocation.kind !== "instruction" || load.kind !== "instruction")
+				throw new Error("Expected operation results");
+			const report = new CoreOptimizationReportBuilder(core),
+				analyses = new CoreAnalysisManager(core, context, report);
+			const annotate = CORE_MEMORY_PASSES.find(
+				({ name }) => name === "annotate-known-own-slots",
+			)!;
+			const refresh = () =>
+				new CoreFunctionPassScheduler(
+					core,
+					context,
+					analyses,
+					report,
+					fn.id,
+				).runComponent("memory", [annotate]);
+			refresh();
+			expect(fn.instructionAttributes(load.instruction).knownOwnSlot).toMatchObject({
+				candidates: [
+					{
+						shapeFunctionIndex: fn.id,
+						shapeInstruction: allocation.instruction,
+						slot: 0,
+					},
+				],
+			});
+			const editor = CoreEditor.open(core, fn.id);
+			if (change === "changed key order")
+				editor.replaceInstruction(
+					allocation.instruction,
+					"createObjectShaped",
+					[value!, value!],
+					{
+						attributes: { keyStringIndices: [1, 0] },
+					},
+				);
+			else
+				editor.replaceInstruction(allocation.instruction, "createObject", [], {
+					attributes: { virtualStateMaterialized: true },
+				});
+			editor.commit();
+			refresh();
+			if (change === "changed key order")
+				expect(fn.instructionAttributes(load.instruction).knownOwnSlot).toMatchObject({
+					candidates: [
+						{
+							shapeFunctionIndex: fn.id,
+							shapeInstruction: allocation.instruction,
+							slot: 1,
+						},
+					],
+				});
+			else
+				expect(fn.instructionAttributes(load.instruction).knownOwnSlot).toBeUndefined();
+			const versions = fn.versions;
+			refresh();
+			expect(fn.versions).toEqual(versions);
+		},
+	);
+
 	it("does not request memory versions for repeated memory-free operations", () => {
 		const core = program();
 		const builder = new CoreFunctionBuilder(core);

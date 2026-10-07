@@ -20,6 +20,7 @@ import {
 } from "./core-ir-control-flow.ts";
 import type { CoreControlFlow } from "./core-ir-control-flow.ts";
 import {
+	coreAttributeValuesEqual,
 	coreInstructionInputsEqual,
 	coreInstructionInputsHash,
 } from "./core-ir-equality.ts";
@@ -48,7 +49,6 @@ import {
 	CORE_EXACT_OWN_SLOT_ATTRIBUTE,
 	CORE_KNOWN_OWN_SLOT_ATTRIBUTE,
 	CORE_LOCAL_SHAPE_PROVENANCE_ANALYSIS,
-	coreKnownOwnSlotFromAttribute,
 } from "./core-ir-shape-provenance.ts";
 import {
 	CORE_EXACT_COLLECTION_BUILTIN_EFFECT_FACT,
@@ -351,16 +351,12 @@ const CONTAINED_PROPERTY_ACCESS_OPCODES = new Set([
 	"defineProperty",
 ]);
 
-function hasUnannotatedStaticOwnSlotConsumer(fn: CoreFunctionStore): boolean {
+function hasStaticOwnSlotConsumer(fn: CoreFunctionStore): boolean {
 	for (const instruction of fn.instructionIds()) {
 		if (fn.instructionKind(instruction) !== "operation") continue;
 		const opcode = fn.instructionOpcodeName(instruction);
 		if (opcode !== "loadPropertyStatic" && opcode !== "storePropertyStatic") continue;
-		const attributes = fn.instructionAttributes(instruction);
-		if (
-			typeof attributes.stringIndex === "number" &&
-			!coreKnownOwnSlotFromAttribute(attributes[CORE_KNOWN_OWN_SLOT_ATTRIBUTE])
-		)
+		if (typeof fn.instructionAttributes(instruction).stringIndex === "number")
 			return true;
 	}
 	return false;
@@ -657,9 +653,9 @@ const annotateKnownOwnSlots: CoreFunctionPass = {
 	stage: "memory",
 	requiredFunctionOpcodesAny: ["loadPropertyStatic", "storePropertyStatic"],
 	admission: {
-		predicate: "unannotated static property access with a named slot key",
+		predicate: "static property access with a named slot key",
 		hasOpportunity({ program, function: functionId }) {
-			return hasUnannotatedStaticOwnSlotConsumer(program.function(functionId));
+			return hasStaticOwnSlotConsumer(program.function(functionId));
 		},
 	},
 	requiredAnalyses: [CORE_LOCAL_SHAPE_PROVENANCE_ANALYSIS],
@@ -676,9 +672,6 @@ const annotateKnownOwnSlots: CoreFunctionPass = {
 			const opcode = fn.instructionOpcodeName(instruction);
 			if (opcode !== "loadPropertyStatic" && opcode !== "storePropertyStatic") continue;
 			const attributes = fn.instructionAttributes(instruction);
-			if (coreKnownOwnSlotFromAttribute(attributes[CORE_KNOWN_OWN_SLOT_ATTRIBUTE])) {
-				continue;
-			}
 			const stringIndex = attributes.stringIndex;
 			const base = instructionOperandAt(fn, instruction, 0);
 			if (typeof stringIndex !== "number" || base === undefined) continue;
@@ -686,7 +679,6 @@ const annotateKnownOwnSlots: CoreFunctionPass = {
 				base,
 				opcode === "loadPropertyStatic" ? "read" : "write",
 			);
-			if (shape.opaque || shape.origins.length === 0) continue;
 			const candidates = shape.origins.flatMap((origin) => {
 				const slot = origin.keys.indexOf(stringIndex);
 				return slot < 0
@@ -699,17 +691,29 @@ const annotateKnownOwnSlots: CoreFunctionPass = {
 							},
 						];
 			});
-			if (candidates.length !== shape.origins.length) continue;
+			const next =
+				!shape.opaque &&
+				shape.origins.length > 0 &&
+				candidates.length === shape.origins.length
+					? { candidates }
+					: undefined;
+			if (
+				coreAttributeValuesEqual(
+					attributes[CORE_KNOWN_OWN_SLOT_ATTRIBUTE] ?? null,
+					next ?? null,
+				)
+			)
+				continue;
+			const nextAttributes = { ...attributes };
+			delete nextAttributes[CORE_KNOWN_OWN_SLOT_ATTRIBUTE];
+			if (next !== undefined) nextAttributes[CORE_KNOWN_OWN_SLOT_ATTRIBUTE] = next;
 			editor ??= CoreEditor.open(program, item.function);
 			editor.replaceInstruction(
 				instruction,
 				opcode,
 				materializeInstructionOperands(fn, instruction),
 				{
-					attributes: {
-						...attributes,
-						[CORE_KNOWN_OWN_SLOT_ATTRIBUTE]: { candidates },
-					},
+					attributes: nextAttributes,
 					sourcePosition: fn.instructionSourcePosition(instruction),
 					effectRefinement: fn.instructionEffectRefinement(instruction),
 				},

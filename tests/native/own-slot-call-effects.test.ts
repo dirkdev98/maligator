@@ -36,7 +36,7 @@ describe("conditional own-slot call effects", () => {
 					});
 				if (mode === "separate calls") {
 					const name = (index: number) =>
-						String.fromCharCode(...programImage.runtime.stringConstants[index]!);
+						String.fromCharCode(...(programImage.runtime.stringConstants[index] ?? []));
 					const caller = programImage.native.functions.find(
 						(fn) => name(fn.body.nameStringIndex) === "untouched",
 					)!;
