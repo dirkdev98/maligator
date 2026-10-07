@@ -19,6 +19,25 @@ function compile(prefix = "async function", transfer = "await gate") {
 }
 
 describe("native suspension storage", () => {
+	it("reuses snapshot slots for locals live at different suspension points", () => {
+		const image = compileSemanticProgramToProgramImage(
+			analyzeSourceAndRunSemanticAnalysis(
+				`globalThis.phases = async function phases(gate, left, right) {
+					const first = +left; await gate; globalThis.first = first;
+					const second = +right; await gate; return second;
+				};`,
+				"/suspension-phases.js",
+			),
+		);
+		const plan = image.native.functions[1]!.storage!.suspension!;
+		const largest = Math.max(...plan.points.map((point) => point.registers.length));
+		const union = new Set(plan.points.flatMap((point) => point.registers));
+		expect(union.size).toBeGreaterThan(largest);
+		expect(plan.valueSlot).toBe(largest);
+		expect(plan.slotCount).toBe(largest + 2);
+		expect(deserializeCompilerArtifact(serializeCompilerArtifact(image))).toEqual(image);
+	});
+
 	it("does not spill stale heap bits from conservative pure handler-input copies", () => {
 		const original = compile().native.functions[1]!;
 		const plan = lowerNativeSuspension({
@@ -93,7 +112,6 @@ describe("native suspension storage", () => {
 			native = image.native.functions[1]!;
 		const plan = native.storage!.suspension!;
 		for (const forged of [
-			{ ...plan, registers: [] },
 			{ ...plan, points: plan.points.map((point) => ({ ...point, registers: [] })) },
 			{ ...plan, valueSlot: 0 },
 			{ ...plan, modeSlot: plan.valueSlot },

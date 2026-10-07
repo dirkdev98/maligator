@@ -705,7 +705,6 @@ export function validateNativeStorage(native: NativeFunctionPlan): void {
 			: stored.suspension.valueSlot === selected.suspension.valueSlot &&
 				stored.suspension.modeSlot === selected.suspension.modeSlot &&
 				stored.suspension.slotCount === selected.suspension.slotCount &&
-				sameNumbers(stored.suspension.registers, selected.suspension.registers) &&
 				stored.suspension.points.length === selected.suspension.points.length &&
 				stored.suspension.points.every(
 					(point, index) =>

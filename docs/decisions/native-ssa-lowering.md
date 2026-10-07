@@ -135,8 +135,8 @@ original-instruction fallback at each load, including its source and profile eve
 
 Resumable functions keep per-value representations in C locals. Each invocation
 publishes an active root array for traced locals and the coroutine itself. A separate
-boxed activation buffer holds the union of values needed at suspension sites, plus
-two resume mailboxes. Persisted per-site maps select which locals to save and restore.
+boxed activation buffer holds the largest individual suspension snapshot, plus
+two resume mailboxes. Each site's ordered map assigns its live locals to shared slots.
 Full value liveness covers scalars, exceptional edges, and finally paths. Boxed and
 string spills come exclusively from trusted outgoing root obligations: conservative
 handler edges can name stale heap bits, and Core also retains scalar-replaced boxed

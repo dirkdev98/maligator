@@ -708,6 +708,24 @@ async function compactSpillBoolean(input, gate) {
 	await gate;
 	return !flag;
 }
+
+async function compactPhases(gate, left, right) {
+	const first = +left;
+	await gate;
+	gc();
+	globalThis.compactPhaseFirst = first;
+	const second = +right;
+	await gate;
+	gc();
+	return second;
+}
+compactPhases(Promise.resolve(), -0, NaN).then((value) =>
+	console.log(
+		"compact-phases",
+		Object.is(globalThis.compactPhaseFirst, -0),
+		String(value),
+	),
+);
 Promise.all([
 	compactSpillNumber(-4.5, Promise.resolve()),
 	compactSpillNumber(NaN, Promise.resolve()),

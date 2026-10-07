@@ -474,7 +474,6 @@ export function directCompiledEntryKey(functionIndex: number, entryId: number): 
 
 interface CoroutineContext {
 	readonly suspension: NativeSuspensionPlan;
-	readonly suspensionSlots: ReadonlyMap<number, number>;
 	readonly positions: ReadonlyArray<number>;
 	functionIndex: number;
 	selfSlot: number;
@@ -1696,9 +1695,6 @@ function emitResumableFunction(
 	const rootMaskTails = nativeRootMaskTails(inactiveRootMasks.values());
 	const coro: CoroutineContext = {
 		suspension,
-		suspensionSlots: new Map(
-			suspension.registers.map((register, slot) => [register, slot]),
-		),
 		positions: fn.positions,
 		functionIndex: index,
 		selfSlot,
@@ -1857,8 +1853,8 @@ function emitResumableFunction(
 		const restore = (register: number, slot: number) =>
 			`r${register} = ${unboxedSnapshot(reps[register]!, `__suspend_slots[${slot}]`)};`;
 		lines.push(`        case ${resumeIp}:`);
-		for (const register of point.registers)
-			lines.push(`            ${restore(register, coro.suspensionSlots.get(register)!)}`);
+		for (const [slot, register] of point.registers.entries())
+			lines.push(`            ${restore(register, slot)}`);
 		if (op.opcode === "YIELD" || op.opcode === "AWAIT") {
 			lines.push(`            ${restore(op.valueDst, suspension.valueSlot)}`);
 			lines.push(`            ${restore(op.modeDst, suspension.modeSlot)}`);
@@ -4698,8 +4694,7 @@ function emitInstruction(
 		return [
 			`mal_coroutine_clear_snapshot(__suspend_slots, ${coro.suspension.slotCount});`,
 			...point.registers.map(
-				(register) =>
-					`__suspend_slots[${coro.suspensionSlots.get(register)!}] = ${boxed(register)};`,
+				(register, slot) => `__suspend_slots[${slot}] = ${boxed(register)};`,
 			),
 		];
 	};

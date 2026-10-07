@@ -7,11 +7,11 @@ import {
 
 export interface NativeSuspensionPoint {
 	readonly instructionIp: number;
+	// Array position is the persistent slot owned by this suspension point.
 	readonly registers: ReadonlyArray<number>;
 }
 
 export interface NativeSuspensionPlan {
-	readonly registers: ReadonlyArray<number>;
 	readonly points: ReadonlyArray<NativeSuspensionPoint>;
 	readonly valueSlot: number;
 	readonly modeSlot: number;
@@ -77,7 +77,6 @@ export function lowerNativeSuspension(
 		]),
 	);
 	const points: Array<NativeSuspensionPoint> = [];
-	const union = new Set<number>();
 	for (const [ip, op] of fn.instructions.entries()) {
 		if (op.opcode !== "GENERATOR_START" && op.opcode !== "YIELD" && op.opcode !== "AWAIT")
 			continue;
@@ -97,15 +96,16 @@ export function lowerNativeSuspension(
 			registers.delete(op.modeDst);
 		}
 		const ordered = [...registers].sort((a, b) => a - b);
-		for (const register of ordered) union.add(register);
 		points.push({ instructionIp: ip, registers: ordered });
 	}
-	const registers = [...union].sort((a, b) => a - b);
+	const valueSlot = points.reduce(
+		(count, point) => Math.max(count, point.registers.length),
+		0,
+	);
 	return {
-		registers,
 		points,
-		valueSlot: registers.length,
-		modeSlot: registers.length + 1,
-		slotCount: registers.length + 2,
+		valueSlot,
+		modeSlot: valueSlot + 1,
+		slotCount: valueSlot + 2,
 	};
 }
