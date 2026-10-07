@@ -7340,7 +7340,7 @@ function emitInstruction(
 					if (operandIsString(instruction.thisValue) && position !== null) {
 						context.stringLeafCaches.add(ip);
 						return [
-							`r${instruction.dst} = ${profileCall("string", `mal_builtin_string_char_code_at_cached_number(vm, &__string_leaf_cache_${ip}, ${boxedOperand(instruction.thisValue)}, ${position})`)};`,
+							`r${instruction.dst} = ${callValue(instruction.dst, profileCall("string", `mal_builtin_string_char_code_at_cached_number(vm, &__string_leaf_cache_${ip}, ${boxedOperand(instruction.thisValue)}, ${position})`))};`,
 							poll,
 						];
 					}
@@ -8028,9 +8028,11 @@ function emitInstruction(
 			}
 			if (instruction.operation === "String.prototype.charCodeAt") {
 				context.stringLeafCaches.add(ip);
+				const result = `char_code_result_${ip}`;
 				return [
-					`r${instruction.dst} = ${profileCall("string", `mal_builtin_string_char_code_at_known(vm, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${instruction.arguments.length}, &__string_leaf_cache_${ip})`)};`,
+					`MalValue ${result} = ${profileCall("string", `mal_builtin_string_char_code_at_known(vm, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${instruction.arguments.length}, &__string_leaf_cache_${ip})`)};`,
 					throwCheck(),
+					`r${instruction.dst} = ${callValue(instruction.dst, result)};`,
 					poll,
 				];
 			}
@@ -8081,36 +8083,36 @@ function emitInstruction(
 			}
 			if (instruction.operation === "Number.isNaN") {
 				return [
-					`r${instruction.dst} = mal_builtin_number_is_nan_known(${argsExpr}, ${instruction.arguments.length});`,
+					`r${instruction.dst} = ${callValue(instruction.dst, `mal_builtin_number_is_nan_known(${argsExpr}, ${instruction.arguments.length})`)};`,
 				];
 			}
 			if (instruction.operation === "Number.isFinite") {
 				return [
-					`r${instruction.dst} = mal_builtin_number_is_finite_known(${argsExpr}, ${instruction.arguments.length});`,
+					`r${instruction.dst} = ${callValue(instruction.dst, `mal_builtin_number_is_finite_known(${argsExpr}, ${instruction.arguments.length})`)};`,
 				];
 			}
 			if (instruction.operation === "Number.isInteger") {
 				return [
-					`r${instruction.dst} = mal_builtin_number_is_integer_known(${argsExpr}, ${instruction.arguments.length});`,
+					`r${instruction.dst} = ${callValue(instruction.dst, `mal_builtin_number_is_integer_known(${argsExpr}, ${instruction.arguments.length})`)};`,
 				];
 			}
 			if (instruction.operation === "Number.isSafeInteger") {
 				return [
-					`r${instruction.dst} = mal_builtin_number_is_safe_integer_known(${argsExpr}, ${instruction.arguments.length});`,
+					`r${instruction.dst} = ${callValue(instruction.dst, `mal_builtin_number_is_safe_integer_known(${argsExpr}, ${instruction.arguments.length})`)};`,
 				];
 			}
 			if (instruction.operation === "Number.prototype.valueOf") {
 				const value = nativeNumberOperand(instruction.thisValue);
 				if (value !== null) return [storeNumber(instruction.dst, value)];
 				return [
-					`r${instruction.dst} = mal_builtin_number_value_of_known(${boxedOperand(instruction.thisValue)});`,
+					`r${instruction.dst} = ${callValue(instruction.dst, `mal_builtin_number_value_of_known(${boxedOperand(instruction.thisValue)})`)};`,
 				];
 			}
 			if (instruction.operation === "Boolean.prototype.valueOf") {
 				const value = nativeBooleanOperand(instruction.thisValue);
 				if (value !== null) return [storeBoolean(instruction.dst, value)];
 				return [
-					`r${instruction.dst} = mal_builtin_boolean_value_of_known(${boxedOperand(instruction.thisValue)});`,
+					`r${instruction.dst} = ${callValue(instruction.dst, `mal_builtin_boolean_value_of_known(${boxedOperand(instruction.thisValue)})`)};`,
 				];
 			}
 			if (instruction.operation === "Date.now") {

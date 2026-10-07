@@ -14,6 +14,7 @@ import {
 	vmInstructionReadRegisters,
 	vmInstructionWriteRegisters,
 } from "../src/compiler/target/runtime-image.ts";
+import { inspectStaticValueFunction } from "./helpers/static-values.ts";
 
 function compile(body: string, preamble = "") {
 	return compileSemanticProgramToProgramImage(
@@ -367,4 +368,103 @@ it("evaluates a selected numeric condition through one truthiness helper", () =>
 	const source = emitCompiledFunction(native, 1, "", false)!.source;
 	expect(source).toMatch(/if \(mal_number_is_truthy\(r\d+\)\)/);
 	expect(source.match(/mal_number_round\(/g)).toHaveLength(1);
+});
+
+describe("known builtin scalar result storage", () => {
+	it.each([
+		["Number(left)", "Number", "number"],
+		["parseInt(left, right)", "parseInt", "number"],
+		["parseFloat(left)", "parseFloat", "number"],
+		["Number.parseInt(left, right)", "parseInt", "number"],
+		["'text'.charCodeAt(left)", "String.prototype.charCodeAt", "number"],
+		["String(left).charCodeAt(+right)", "String.prototype.charCodeAt", "number"],
+		["String(left).indexOf(right)", "String.prototype.indexOf", "number"],
+		["String(left).lastIndexOf(right)", "String.prototype.lastIndexOf", "number"],
+		["isNaN(left)", "isNaN", "boolean"],
+		["isFinite(left)", "isFinite", "boolean"],
+		["Number.isFinite(left)", "Number.isFinite", "boolean"],
+		["Number.isInteger(left)", "Number.isInteger", "boolean"],
+		["Number.isSafeInteger(left)", "Number.isSafeInteger", "boolean"],
+		["String(left).includes(right)", "String.prototype.includes", "boolean"],
+		["String(left).startsWith(right)", "String.prototype.startsWith", "boolean"],
+		["String(left).endsWith(right)", "String.prototype.endsWith", "boolean"],
+		["String(left).isWellFormed()", "String.prototype.isWellFormed", "boolean"],
+	] as const)(
+		"keeps %s native across its scalar consumer",
+		(call, operation, representation) => {
+			const out = inspectStaticValueFunction(
+				`function probe(left,right){const value=${call}; return ${representation === "number" ? "value+1.5" : "!value"};}globalThis.probe=probe;`,
+				"probe",
+			);
+			const ip = out.native.body.instructions.findIndex(
+				(op) => op.opcode === "CALL_KNOWN" && op.operation === operation,
+			);
+			expect(ip).toBeGreaterThanOrEqual(0);
+			const op = out.native.body.instructions[ip]!;
+			if (op.opcode !== "CALL_KNOWN") throw new Error("Missing known builtin call");
+			expect(out.native.registerRepresentations[op.dst]).toBe(representation);
+			expect(out.native.storage!.expressionIps).not.toContain(ip);
+			expect(deserializeCompilerArtifact(serializeCompilerArtifact(out.image))).toEqual(
+				out.image,
+			);
+		},
+	);
+
+	it("checks coercive charCodeAt completion before extracting a native result", () => {
+		const out = inspectStaticValueFunction(
+			"function probe(left){return 'text'.charCodeAt(left)+1.5;}globalThis.probe=probe;",
+			"probe",
+		);
+		const ip = out.native.body.instructions.findIndex(
+			(op) =>
+				op.opcode === "CALL_KNOWN" && op.operation === "String.prototype.charCodeAt",
+		);
+		const op = out.native.body.instructions[ip]!;
+		if (op.opcode !== "CALL_KNOWN") throw new Error("Missing charCodeAt call");
+		expect(out.native.registerRepresentations[op.dst]).toBe("number");
+		const start = out.c.source.indexOf(`MalValue char_code_result_${ip} =`);
+		const check = out.c.source.indexOf(
+			"if (vm->completion.kind == MAL_COMPLETION_THROW)",
+			start,
+		);
+		const extract = out.c.source.indexOf(
+			`r${op.dst} = mal_ops_number_as_f64(char_code_result_${ip});`,
+			start,
+		);
+		expect(start).toBeGreaterThan(-1);
+		expect(check).toBeGreaterThan(start);
+		expect(extract).toBeGreaterThan(check);
+	});
+
+	it.each([
+		"new Number(left)",
+		"new Boolean(left)",
+		"BigInt(left)",
+		"Symbol(left)",
+		"String(left).codePointAt(right)",
+	])("retains boxed storage for the unadmitted result of %s", (call) => {
+		const out = inspectStaticValueFunction(
+			`function probe(left,right){return ${call};}globalThis.probe=probe;`,
+			"probe",
+		);
+		const ops = out.native.body.instructions.filter((op) => op.opcode === "CALL_KNOWN");
+		expect(ops.length).toBeGreaterThan(0);
+		const op = ops.at(-1)!;
+		if (op.opcode !== "CALL_KNOWN") throw new Error("Missing builtin call");
+		expect(out.native.registerRepresentations[op.dst]).toBe("boxed");
+	});
+
+	it("retains dynamic identity when mutable primordials lack a known call proof", () => {
+		const out = inspectStaticValueFunction(
+			"function probe(left){return Number(left)+1.5;}globalThis.probe=probe;",
+			"probe",
+			{ locked: false },
+		);
+		expect(
+			out.native.body.instructions.some(
+				(op) => op.opcode === "CALL_KNOWN" && op.operation === "Number",
+			),
+		).toBe(false);
+		expect(out.native.body.instructions.some((op) => op.opcode === "CALL")).toBe(true);
+	});
 });

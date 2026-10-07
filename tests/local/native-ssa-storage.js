@@ -1,5 +1,113 @@
 const gc = globalThis.__mal_collect_garbage ?? (() => {});
 
+function knownNumberResult(input) {
+	const value = Number(input);
+	gc();
+	return [value + 1.5, Object.is(value, -0)];
+}
+function knownParseResult(input, radix) {
+	const value = parseInt(input, radix);
+	const fraction = Number.parseFloat(input);
+	gc();
+	return value + fraction;
+}
+function knownCodeResult(position) {
+	const value = "abc".charCodeAt(position);
+	gc();
+	return value + 1.5;
+}
+function cachedCodeResult(position) {
+	const value = "abc".charCodeAt(+position);
+	return value + 1.5;
+}
+function knownBooleanResults(input) {
+	const finite = Number.isFinite(input);
+	const integer = Number.isInteger(input);
+	const safe = Number.isSafeInteger(input);
+	gc();
+	return [!finite, !integer, !safe, !isFinite(input), !isNaN(input)];
+}
+globalThis.knownNumberResult = knownNumberResult;
+globalThis.knownParseResult = knownParseResult;
+globalThis.knownCodeResult = knownCodeResult;
+globalThis.cachedCodeResult = cachedCodeResult;
+globalThis.knownBooleanResults = knownBooleanResults;
+for (const input of [-0, NaN, Infinity, -Infinity, 1.75, 1n, "7.5"]) {
+	console.log("known-number", String(input), JSON.stringify(knownNumberResult(input)));
+	console.log("known-parse", String(input), String(knownParseResult(input, 10)));
+}
+for (const position of [undefined, -1, 0, 1.75, 100, NaN, Infinity])
+	console.log(
+		"known-code",
+		String(position),
+		String(knownCodeResult(position)),
+		String(cachedCodeResult(position)),
+	);
+for (const input of [-0, NaN, Infinity, 1.75, "7", {}, undefined])
+	console.log("known-boolean", String(input), JSON.stringify(knownBooleanResults(input)));
+const knownOrder = [];
+const knownCoercion = {
+	valueOf() {
+		knownOrder.push("number");
+		gc();
+		return -0;
+	},
+	toString() {
+		knownOrder.push("string");
+		gc();
+		return "7.5";
+	},
+};
+console.log(
+	"known-coercion",
+	JSON.stringify(knownNumberResult(knownCoercion)),
+	knownParseResult(knownCoercion, 10),
+	knownCodeResult(knownCoercion),
+	knownOrder.join(":"),
+);
+const knownSentinel = {};
+for (const operation of [
+	knownNumberResult,
+	knownParseResult,
+	knownCodeResult,
+	cachedCodeResult,
+	knownBooleanResults,
+]) {
+	try {
+		operation({
+			valueOf() {
+				gc();
+				throw knownSentinel;
+			},
+			toString() {
+				gc();
+				throw knownSentinel;
+			},
+		});
+	} catch (error) {
+		console.log("known-throw", error === knownSentinel);
+	}
+}
+for (const operation of [
+	knownNumberResult,
+	knownParseResult,
+	knownCodeResult,
+	cachedCodeResult,
+]) {
+	try {
+		operation(Symbol("known"));
+	} catch (error) {
+		console.log("known-symbol", error instanceof TypeError);
+	}
+}
+for (const operation of [knownCodeResult, cachedCodeResult]) {
+	try {
+		operation(1n);
+	} catch (error) {
+		console.log("known-code-bigint", error instanceof TypeError);
+	}
+}
+
 function boundedUnsigned(left) {
 	const value = left & 65535;
 	return (value * 3 + 1) % 101;

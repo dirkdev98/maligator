@@ -730,8 +730,7 @@ function scalarProducer(fn: CoreFunctionStore, instruction: CoreInstructionId): 
 			!attributes.construct &&
 			attributes.argumentMode === undefined &&
 			typeof attributes.operation === "string" &&
-			attributes.operation.startsWith("Math.") &&
-			builtinPrimitiveResult(attributes.operation) === "number"
+			["number", "boolean"].includes(builtinPrimitiveResult(attributes.operation) ?? "")
 		);
 	}
 	return (

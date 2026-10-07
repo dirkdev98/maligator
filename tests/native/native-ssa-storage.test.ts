@@ -36,6 +36,26 @@ describe("independent native SSA storage", () => {
 	}, 600_000);
 
 	it("preserves scalar arithmetic, loop transport, and suspended heap locals", () => {
+		for (const [name, operation, representation] of [
+			["knownNumberResult", "Number", "number"],
+			["knownParseResult", "parseInt", "number"],
+			["knownCodeResult", "String.prototype.charCodeAt", "number"],
+			["cachedCodeResult", "String.prototype.charCodeAt", "number"],
+			["knownBooleanResults", "Number.isFinite", "boolean"],
+		] as const) {
+			const native = image.native.functions.find(
+				(fn) =>
+					String.fromCharCode(
+						...(image.runtime.stringConstants[fn.body.nameStringIndex] ?? []),
+					) === name,
+			)!;
+			expect(native).toBeDefined();
+			const call = native.body.instructions.find(
+				(op) => op.opcode === "CALL_KNOWN" && op.operation === operation,
+			)!;
+			if (call.opcode !== "CALL_KNOWN") throw new Error("Missing known result producer");
+			expect(native.registerRepresentations[call.dst]).toBe(representation);
+		}
 		const joined = image.native.functions.find(
 			(fn) =>
 				String.fromCharCode(
