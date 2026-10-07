@@ -23,7 +23,9 @@ export interface DevelopmentWorkerManifest {
 	}>;
 }
 
-export function workerRootEntries(graph: ModuleGraph): Array<WorkerEntryDeclaration> {
+export function workerRootEntries(
+	graph: Pick<ModuleGraph, "workerEntries">,
+): Array<WorkerEntryDeclaration> {
 	const entries = new Map<string, WorkerEntryDeclaration>();
 	for (const entry of graph.workerEntries ?? []) {
 		const previous = entries.get(entry.href);
@@ -33,7 +35,7 @@ export function workerRootEntries(graph: ModuleGraph): Array<WorkerEntryDeclarat
 }
 
 export function compileWorkerImages(
-	graph: ModuleGraph,
+	graph: Pick<ModuleGraph, "workerEntries" | "dynamicImportCandidates">,
 	options: CompileEntrypointOptions = {},
 ): Array<CompiledWorkerImage> {
 	const candidates = graph.dynamicImportCandidates ?? [];
@@ -58,7 +60,7 @@ export function compileWorkerImages(
 }
 
 export function developmentWorkerManifest(
-	workers: ReadonlyArray<CompiledWorkerImage>,
+	workers: ReadonlyArray<Pick<CompiledWorkerImage, "entry" | "wire">>,
 	publishWire: (wire: Uint8Array, digest: string) => string,
 ): DevelopmentWorkerManifest {
 	return {

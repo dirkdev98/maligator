@@ -6,15 +6,18 @@ import { expect, it } from "vitest";
 import { buildDerivationFromConfig, resolveBuildConfig } from "../../src/build-config.ts";
 import { stripCompactTypes } from "../../src/compiler/frontend/compact-type-strip.ts";
 import { buildModuleGraph } from "../../src/compiler/frontend/module-graph.ts";
-import { compileEntrypoint } from "../../src/compiler/pipeline/compile-program.ts";
+import {
+	compileEntrypoint,
+	compileEntrypointToBuffer,
+} from "../../src/compiler/pipeline/compile-program.ts";
 import {
 	compileWorkerImages,
 	developmentWorkerManifest,
+	workerRootEntries,
 } from "../../src/compiler/pipeline/compile-worker-images.ts";
 import type { CompilerDiagnostic } from "../../src/compiler/shared/compiler-diagnostics.ts";
 import { serializeCompilerArtifact } from "../../src/compiler/target/compiler-artifact-codec.ts";
 import { emitProgramTranslationUnits } from "../../src/compiler/target/emit-program-image.ts";
-import { serializeRuntimeImage } from "../../src/compiler/target/program-image-codec.ts";
 import { buildLocalBinary } from "../../src/local-build.ts";
 import { resolveNativeBuildContext } from "../../src/native-build-context.ts";
 import { nativeSourcePath } from "../../src/native-source-path.ts";
@@ -36,6 +39,44 @@ const hostConfig = resolveBuildConfig({
 	surface: { node: true, webPlatform: true, maligator: true },
 });
 
+function fixtureWorkerDeclarations(entrypoint: string) {
+	const graph = buildModuleGraph(entrypoint, {
+		buildConfig: hostConfig,
+		stripTypes: stripCompactTypes,
+	});
+	// Worker root compilation must not retain the discovery graph's ASTs at its optimizer peak.
+	return {
+		workerEntries: graph.workerEntries,
+		dynamicImportCandidates: graph.dynamicImportCandidates,
+	};
+}
+
+function prepareFixtureWorkerManifest(
+	entrypoint: string,
+	directory: string,
+	runPhase: <T>(phase: string, run: () => T) => T,
+): string {
+	const declarations = fixtureWorkerDeclarations(entrypoint);
+	const workers = workerRootEntries(declarations).map((entry) => ({
+		entry,
+		wire: compileEntrypointToBuffer(entry.path, {
+			buildConfig: hostConfig,
+			stripTypes: stripCompactTypes,
+			entryStrict: true,
+			dynamicImportCandidates: declarations.dynamicImportCandidates ?? [],
+			runPhase: (phase, run) => runPhase(`${entry.path}: ${phase}`, run),
+		}),
+	}));
+	const manifest = developmentWorkerManifest(workers, (bytes, digest) => {
+		const file = path.join(directory, `${digest}.malw`);
+		writeFileSync(file, bytes);
+		return file;
+	});
+	const file = path.join(directory, "workers.json");
+	writeFileSync(file, JSON.stringify(manifest));
+	return file;
+}
+
 it(
 	"shares the native root kernel, transfers 35 MiB and joins every outcome",
 	() => {
@@ -44,6 +85,15 @@ it(
 		const directory = mkdtempSync(path.join(evidenceRoot, "run-"));
 		let failed = true;
 		try {
+			const phaseFor =
+				(product: string) =>
+				<T>(phase: string, run: () => T): T => {
+					writeFileSync(
+						path.join(directory, "phase.json"),
+						JSON.stringify({ product, phase, memory: process.memoryUsage() }),
+					);
+					return run();
+				};
 			const entry = path.join(directory, "application.mts");
 			writeFileSync(
 				entry,
@@ -78,32 +128,26 @@ it(
 				diagnostics,
 			});
 			const fixture = path.join(fixtures, "main.mts");
-			const ownerGraph = buildModuleGraph(fixture, {
-				buildConfig: hostConfig,
-				stripTypes: stripCompactTypes,
-			});
-			const owner = compileEntrypoint(fixture, {
-				buildConfig: hostConfig,
-				stripTypes: stripCompactTypes,
-			});
+			const workerManifest = prepareFixtureWorkerManifest(
+				fixture,
+				directory,
+				phaseFor("worker images"),
+			);
 			const ownerWire = path.join(directory, "owner.malw");
-			writeFileSync(ownerWire, serializeRuntimeImage(owner.runtime));
-			const workers = compileWorkerImages(ownerGraph, {
-				buildConfig: hostConfig,
-				stripTypes: stripCompactTypes,
-			});
-			const manifest = developmentWorkerManifest(workers, (bytes, digest) => {
-				const file = path.join(directory, `${digest}.malw`);
-				writeFileSync(file, bytes);
-				return file;
-			});
-			const workerManifest = path.join(directory, "workers.json");
-			writeFileSync(workerManifest, JSON.stringify(manifest));
+			writeFileSync(
+				ownerWire,
+				compileEntrypointToBuffer(fixture, {
+					buildConfig: hostConfig,
+					stripTypes: stripCompactTypes,
+					runPhase: phaseFor("owner wire"),
+				}),
+			);
 			const assets = path.join(directory, "empty.mala");
 			writeFileSync(assets, Buffer.from([77, 65, 76, 65, 1, 0, 0, 0, 0, 0, 0, 0]));
 			const bootstrap = compileEntrypoint(path.join(fixtures, "bootstrap.mts"), {
 				buildConfig: hostConfig,
 				stripTypes: stripCompactTypes,
+				runPhase: phaseFor("native bootstrap"),
 			});
 			const derivation = buildDerivationFromConfig(hostConfig);
 			const context = resolveNativeBuildContext({
