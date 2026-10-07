@@ -10,6 +10,7 @@ import type {
 	CoreEntryFields,
 	CorePlanRepresentation,
 } from "./core-ir-regions.ts";
+import { coreInstructionId } from "./core-ir.ts";
 import type { CoreInstructionId, CoreValueId } from "./core-ir.ts";
 import type { CoreFunctionStore } from "./core-store.ts";
 
@@ -136,9 +137,21 @@ export function coreNumericFieldArgument(
 		fn.kernel.useOperand(use) !== 2
 	)
 		return undefined;
-	return fn.instructionBlock(layout.instruction) === fn.instructionBlock(call)
-		? layout.instruction
-		: undefined;
+	if (fn.instructionBlock(layout.instruction) !== fn.instructionBlock(call))
+		return undefined;
+	for (
+		let cursor = fn.kernel.instructionNext(layout.instruction);
+		cursor >= 0 && cursor !== call;
+		cursor = fn.kernel.instructionNext(coreInstructionId(cursor))
+	) {
+		const instruction = coreInstructionId(cursor);
+		if (
+			fn.instructionKind(instruction) === "operation" &&
+			["yield", "await", "generatorStart"].includes(fn.instructionOpcodeName(instruction))
+		)
+			return undefined;
+	}
+	return layout.instruction;
 }
 
 export function coreFieldEntryHasNumericComputations(

@@ -1113,23 +1113,12 @@ function emitCompiledVariant(
 		});
 		nextStackSlot += loads.length + 1;
 	}
-	const fieldCalls = nativeContract.fieldCalls?.map((site): NativeFieldCall => {
-		const allocation = fn.instructions[site.allocationIp];
-		if (allocation?.opcode !== "CREATE_OBJECT_SHAPED")
-			throw new Error("Invalid field call allocation");
-		const numericKeys = new Set(
-			site.entries.flatMap(
-				(entry) =>
-					directCompiledEntries.get(
-						directCompiledEntryKey(entry.functionIndex, entry.entryId),
-					)?.fieldParameters?.keys ?? [],
-			),
-		);
-		const boxedSlots = allocation.keyStringIndices.map((key) =>
-			numericKeys.has(key) ? undefined : nextStackSlot++,
-		);
-		return { ...site, allocation, boxedSlots };
-	});
+	const fieldCalls = renderFieldCallSlots(
+		fn,
+		nativeContract,
+		directCompiledEntries,
+		() => nextStackSlot++,
+	);
 	const totalSlots = nextStackSlot;
 
 	// `with` pushes an object environment record onto the `env` chain (WITH_ENTER),
@@ -1744,6 +1733,31 @@ function unboxedSnapshot(rep: RegisterRep, value: string): string {
 	return value;
 }
 
+function renderFieldCallSlots(
+	fn: BytecodeFunction,
+	native: NativeFunctionPlan,
+	directCompiledEntries: DirectCompiledEntries,
+	allocateSlot: () => number,
+): ReadonlyArray<NativeFieldCall> | undefined {
+	return native.fieldCalls?.map((site): NativeFieldCall => {
+		const allocation = fn.instructions[site.allocationIp];
+		if (allocation?.opcode !== "CREATE_OBJECT_SHAPED")
+			throw new Error("Invalid field call allocation");
+		const numericKeys = new Set(
+			site.entries.flatMap(
+				(entry) =>
+					directCompiledEntries.get(
+						directCompiledEntryKey(entry.functionIndex, entry.entryId),
+					)?.fieldParameters?.keys ?? [],
+			),
+		);
+		const boxedSlots = allocation.keyStringIndices.map((key) =>
+			numericKeys.has(key) ? undefined : allocateSlot(),
+		);
+		return { ...site, allocation, boxedSlots };
+	});
+}
+
 // Each C invocation owns computational locals and roots; only the selected snapshot survives.
 function emitResumableFunction(
 	fn: BytecodeFunction,
@@ -1768,7 +1782,14 @@ function emitResumableFunction(
 		throw new Error("Resumable native function lacks a suspension plan");
 	const rootRegisters = native.storage!.rootRegisters;
 	const selfSlot = rootRegisters.length;
-	const totalSlots = selfSlot + 1;
+	let nextSlot = selfSlot + 1;
+	const fieldCalls = renderFieldCallSlots(
+		fn,
+		native,
+		directCompiledEntries,
+		() => nextSlot++,
+	);
+	const totalSlots = nextSlot;
 
 	const capturesEnv = fn.capturedCount > 0;
 	// Every exit after publishing the invocation's root frame must unlink it.
@@ -1840,7 +1861,7 @@ function emitResumableFunction(
 		undefined,
 		undefined,
 		undefined,
-		undefined,
+		fieldCalls,
 		undefined,
 		stringConstants,
 		undefined,
@@ -1896,6 +1917,8 @@ function emitResumableFunction(
 	lines.push(...resumablePreamble);
 
 	lines.push(`    MalValue __gc_slots[${totalSlots}];`);
+	for (let slot = selfSlot + 1; slot < totalSlots; slot++)
+		lines.push(`    __gc_slots[${slot}] = MAL_VALUE_UNDEFINED;`);
 	lines.push(`    MalValue *__suspend_slots = nullptr;`);
 	lines.push(
 		`    MalGeneratorObject *resume_state = (MalGeneratorObject *) entry_state;`,
@@ -3272,7 +3295,9 @@ function emitBody(
 		fieldCallSites.set(site.callIp, site);
 		for (let field = 0; field < site.allocation.count; field++) {
 			if (site.boxedSlots[field] === undefined)
-				lines.push(`f64 __field_${site.allocationIp}_${field} = 0;`);
+				(coro === null ? lines : invocationPreamble).push(
+					`f64 __field_${site.allocationIp}_${field} = 0;`,
+				);
 		}
 	}
 

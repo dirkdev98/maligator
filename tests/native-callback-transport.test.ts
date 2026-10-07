@@ -12,6 +12,7 @@ import {
 import { selectNativeCallbackTransports } from "../src/compiler/target/lower-native-callbacks.ts";
 import { nativeEntryLookup } from "../src/compiler/target/lower-native-calls.ts";
 import { validateNativeStorage } from "../src/compiler/target/lower-native-storage.ts";
+import { validateNativeFieldCalls } from "../src/compiler/target/program-image.ts";
 import { emitCompiledFunction } from "../src/compiler/target/render-native-c.ts";
 import { mergeProgramImages } from "../src/test262/program-image-merge.ts";
 
@@ -313,3 +314,75 @@ describe("resumable callers of selected native entries", () => {
 		},
 	);
 });
+
+it.each(["async function", "function*"])(
+	"renders invocation-owned fields after suspension in %s",
+	(kind) => {
+		const source = `class Pricing { quote(order) { return order.net+order.quantity*3; } }
+		const pricing=new Pricing(); globalThis.run=${kind} run(gate) {
+			${kind.startsWith("async") ? "await gate" : "yield gate"};
+			return pricing.quote({net:17,quantity:2,extra:globalThis.heap});
+		};`;
+		const image = compileSemanticProgramToProgramImage(
+			analyzeSourceAndRunSemanticAnalysis(source, "/resumable-fields.js"),
+		);
+		const caller = image.native.functions.find((native) => native.mode === "resumable")!;
+		expect(caller.fieldCalls).toHaveLength(1);
+		const site = caller.fieldCalls![0]!;
+		for (const forged of [
+			{
+				...caller,
+				body: {
+					...caller.body,
+					instructions: [
+						...caller.body.instructions,
+						{ opcode: "JUMP" as const, targetIp: site.callIp },
+					],
+				},
+			},
+			{
+				...caller,
+				body: {
+					...caller.body,
+					handlers: [
+						...caller.body.handlers,
+						{
+							startIp: 0,
+							endIp: caller.body.instructions.length,
+							handlerIp: site.callIp,
+						},
+					],
+				},
+			},
+		])
+			expect(() =>
+				validateNativeFieldCalls(forged.body, forged, image.native.functions),
+			).toThrow(/Invalid native field call/);
+		const restored = deserializeCompilerArtifact(serializeCompilerArtifact(image));
+		const emitted = emitCompiledFunction(
+			restored.native.functions[caller.functionIndex]!,
+			caller.functionIndex,
+			"",
+			false,
+			"static",
+			new Set(),
+			[],
+			nativeEntryLookup(restored.native.functions),
+		)!;
+		expect(emitted.directEntryCalls.size).toBe(1);
+		expect(emitted.source).toContain("__field_");
+		expect(emitProgramImage(restored, { compiled: true })).toContain("mal_direct_");
+		const retained = source.replace(
+			`${kind.startsWith("async") ? "await gate" : "yield gate"};
+			return pricing.quote({net:17,quantity:2,extra:globalThis.heap});`,
+			`const order={net:17,quantity:2,extra:globalThis.heap}; ${kind.startsWith("async") ? "await gate" : "yield gate"}; return pricing.quote(order);`,
+		);
+		const separate = compileSemanticProgramToProgramImage(
+			analyzeSourceAndRunSemanticAnalysis(retained, "/retained-fields.js"),
+		);
+		expect(
+			separate.native.functions.find((native) => native.mode === "resumable")!
+				.fieldCalls ?? [],
+		).toEqual([]);
+	},
+);

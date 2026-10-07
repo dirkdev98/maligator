@@ -12,7 +12,7 @@ function transform(value, index) {
 transform(1, 2);
 function* generator(values, payload) {
 	const callback = function callback(value, index) {
-		return transform(value, index);
+		return transform(value, index) + payload.value;
 	};
 	callback(1, 2);
 	const before = transform(+payload.value, 0);
@@ -26,7 +26,7 @@ function* generator(values, payload) {
 }
 async function asynchronous(values, payload) {
 	const callback = function callback(value, index) {
-		return transform(value, index);
+		return transform(value, index) + payload.value;
 	};
 	callback(1, 2);
 	const before = transform(+payload.value, 0);
@@ -65,11 +65,63 @@ const overridden = [2];
 overridden.map = function (callback) {
 	return [callback("override", 0, this)];
 };
+async function* stream(values, payload, ...rest) {
+	const callback = function captured(value, index) {
+		return transform(value, index) + payload.value;
+	};
+	const before = callback(1, 2);
+	await Promise.resolve(before);
+	yield { payload, first: rest[0] };
+	collect();
+	return [
+		values.map(callback),
+		callback(+before, 1),
+		arguments.length,
+		arguments[1] === payload,
+		rest[0].tag,
+	];
+}
+class Pricing {
+	quote(order) {
+		return order.net + order.quantity * 3;
+	}
+}
+const pricing = new Pricing();
+function* generatorFields(payload) {
+	yield payload;
+	return pricing.quote({ net: 17, quantity: 2, extra: { marker: payload } });
+}
+async function asynchronousFields(payload) {
+	await Promise.resolve(payload);
+	return pricing.quote({ net: 17, quantity: 2, extra: { marker: payload } });
+}
+const fieldIterator = generatorFields(payload);
+events.push(fieldIterator.next().value === payload);
+collect();
+events.push(fieldIterator.next().value);
 (async function main() {
 	for (const values of [[2, 4], ["2", 4], [101], accessor, overridden]) {
 		events.push(await asynchronous(values, payload));
 		collect();
 	}
+	const streamIterator = stream([2, "4"], payload, { tag: "rest" });
+	const streamFirst = await streamIterator.next();
+	collect();
+	events.push(
+		streamFirst.value.payload === payload,
+		streamFirst.value.first.tag,
+		(await streamIterator.next()).value,
+	);
+	events.push(await asynchronousFields(payload));
+	pricing.quote = function fallback(order) {
+		collect();
+		return [order.net, order.extra.marker === payload];
+	};
+	const fallbackIterator = generatorFields(payload);
+	fallbackIterator.next();
+	collect();
+	events.push(fallbackIterator.next().value);
+	events.push(await asynchronousFields(payload));
 	console.log(JSON.stringify(events));
 })().catch((error) => {
 	console.error(error.stack);

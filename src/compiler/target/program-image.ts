@@ -1514,6 +1514,31 @@ export function validateNativeFieldCalls(
 			allocations.has(site.allocationIp) ||
 			site.allocationIp >= site.callIp ||
 			handlers[site.allocationIp] !== handlers[site.callIp] ||
+			fn.handlers.some(
+				(handler) =>
+					handler.handlerIp > site.allocationIp && handler.handlerIp <= site.callIp,
+			) ||
+			fn.instructions.some(
+				(op, ip) =>
+					(op.opcode === "JUMP" || op.opcode === "JUMP_IF") &&
+					op.targetIp > site.allocationIp &&
+					op.targetIp <= site.callIp &&
+					(ip < site.allocationIp || ip > site.callIp),
+			) ||
+			fn.instructions
+				.slice(site.allocationIp + 1, site.callIp)
+				.some((op) =>
+					[
+						"GENERATOR_START",
+						"YIELD",
+						"AWAIT",
+						"TERMINAL_YIELD",
+						"JUMP",
+						"JUMP_IF",
+						"RETURN",
+						"THROW",
+					].includes(op.opcode),
+				) ||
 			allocation?.opcode !== "CREATE_OBJECT_SHAPED" ||
 			allocation.count < 1 ||
 			allocation.count > 4 ||

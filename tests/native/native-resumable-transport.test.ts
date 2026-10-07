@@ -4,6 +4,8 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { resolveBuildConfig } from "../../src/build-config.ts";
+import { nativeEntryLookup } from "../../src/compiler/target/lower-native-calls.ts";
+import { emitCompiledFunction } from "../../src/compiler/target/render-native-c.ts";
 import {
 	buildBackendPairFromOneProgramImage,
 	HOST_MAIN,
@@ -27,13 +29,64 @@ describe("selected native transports across coroutine suspension", () => {
 			mainFile: HOST_MAIN,
 		});
 		({ compiled, interpreted } = pair);
-		const callers = pair.programImage.native.functions.filter(
-			(native) =>
-				native.mode === "resumable" && native.storage!.callbackTransports.length > 0,
-		);
-		expect(callers).toHaveLength(2);
-		for (const caller of callers)
-			expect(caller.storage!.callTransports.length).toBeGreaterThan(0);
+		const image = pair.programImage;
+		const entries = nativeEntryLookup(image.native.functions);
+		const targets = new Set(image.native.functions.map((fn) => fn.functionIndex));
+		const named = (name: string) =>
+			image.native.functions.find(
+				(native) =>
+					String.fromCharCode(
+						...(image.runtime.stringConstants[native.body.nameStringIndex] ?? []),
+					) === name,
+			)!;
+		for (const name of ["generator", "asynchronous", "stream"]) {
+			const caller = named(name);
+			expect(caller, name).toBeDefined();
+			const transfer = caller.body.instructions.findIndex(
+				(op) => op.opcode === "YIELD" || op.opcode === "AWAIT",
+			);
+			expect(
+				caller.storage!.callTransports.some((plan) => plan.instructionIp > transfer),
+			).toBe(true);
+			expect(
+				caller.storage!.callbackTransports.some((plan) => plan.instructionIp > transfer),
+			).toBe(true);
+			expect(
+				emitCompiledFunction(
+					caller,
+					caller.functionIndex,
+					"",
+					false,
+					"static",
+					targets,
+					[],
+					entries,
+				),
+				name,
+			).not.toBeNull();
+		}
+		for (const name of ["generatorFields", "asynchronousFields"]) {
+			const caller = named(name);
+			expect(caller.fieldCalls, name).toHaveLength(1);
+			expect(
+				caller.storage!.callTransports.some((plan) =>
+					plan.targets.some((target) => target.fields.length > 0),
+				),
+			).toBe(true);
+			expect(
+				emitCompiledFunction(
+					caller,
+					caller.functionIndex,
+					"",
+					false,
+					"static",
+					targets,
+					[],
+					entries,
+				),
+				name,
+			).not.toBeNull();
+		}
 	}, 600_000);
 	it("preserves typed calls, callback misses, snapshots, collecting accessors and resumed throws", () => {
 		for (const binary of [compiled, interpreted])
