@@ -24,7 +24,7 @@ describe("conditional own-slot call effects", () => {
 						mainFile: HOST_MAIN,
 						outDir,
 						config: resolveBuildConfig({
-							engine: { primordials: "locked", eval: false, realms: false },
+							engine: { primordials: "mutable", eval: false, realms: false },
 						}),
 						...(mode === "separate calls"
 							? {

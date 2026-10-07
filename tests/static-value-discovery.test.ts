@@ -1536,8 +1536,8 @@ const primitiveCellParameters = [
 	["Math.pow", "2", "Math.pow(+x,value)", "mal_builtin_math_pow_number", 0],
 	["Math.atan2", "2", "Math.atan2(+x,value)", "atan2(", 0],
 	["Math.hypot", "3", "Math.hypot(+x,value)", "mal_builtin_math_hypot_numbers", 0],
-	["Math.max", "0", "Math.max(+x,value)", "isnan(", 0],
-	["Math.min", "0", "Math.min(+x,value)", "isnan(", 0],
+	["Math.max", "0", "Math.max(+x,value)", "mal_number_min_max(", 0],
+	["Math.min", "0", "Math.min(+x,value)", "mal_number_min_max(", 0],
 	[
 		"String.fromCharCode",
 		"65",
