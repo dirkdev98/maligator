@@ -29,7 +29,7 @@ export function selectNativeCallbackTransports(
 	native: NativeFunctionPlan,
 	entries: NativeEntryLookup,
 ): ReadonlyArray<NativeCallbackTransportPlan> {
-	if (native.mode !== "direct" || entries.size === 0) return [];
+	if (entries.size === 0) return [];
 	const claimed = new Set(native.specializations.flatMap((region) => region.claimedIps));
 	for (const action of native.regionActions) claimed.add(action.ip);
 	return native.instructions.flatMap((call, instructionIp) => {

@@ -788,6 +788,9 @@ function emitCompiledVariant(
 			linkage,
 			semanticProtectors,
 			stringConstants,
+			directCompiledTargets,
+			directCompiledEntries,
+			strictCompiledTargets,
 		);
 	}
 	if (directEntry !== undefined) validateNativeDirectEntry(fn, directEntry);
@@ -1751,6 +1754,9 @@ function emitResumableFunction(
 	linkage: "static" | "external",
 	semanticProtectors: ReadonlyArray<VmSemanticProtectorFact>,
 	stringConstants: ReadonlyArray<ReadonlyArray<number>>,
+	directCompiledTargets: ReadonlySet<number>,
+	directCompiledEntries: DirectCompiledEntries,
+	strictCompiledTargets: ReadonlySet<number>,
 ): CompiledFunction | null {
 	nativeFrameRootRegisters(fn, native);
 	const isAsyncFunction = fn.isAsync && !fn.isGenerator;
@@ -1824,13 +1830,13 @@ function emitResumableFunction(
 		new Map(),
 		new Map(),
 		new Map(),
-		new Set(),
-		new Map(),
+		directCompiledTargets,
+		directCompiledEntries,
 		undefined,
 		vmSemanticProtectorGuard(semanticProtectors, "watched-methods"),
 		profileDecisions,
 		undefined,
-		undefined,
+		strictCompiledTargets,
 		undefined,
 		undefined,
 		undefined,
@@ -1842,6 +1848,8 @@ function emitResumableFunction(
 		new Set(storage.rematerializedConstantIps),
 		new Set(storage.elidedTdzIps),
 		storage,
+		storage.callTransports,
+		storage.callbackTransports,
 	);
 	if (body === null) {
 		return null;
@@ -4622,7 +4630,7 @@ function emitInstruction(
 			: reps[r] === "int32"
 				? `(r${r} != 0)`
 				: reps[r] === "number"
-					? `(r${r} != 0.0 && r${r} == r${r})`
+					? `mal_number_is_truthy(r${r})`
 					: reps[r] === "string"
 						? `(mal_string_length(mal_value_to_string(r${r})) != 0)`
 						: `mal_value_is_truthy(r${r})`;

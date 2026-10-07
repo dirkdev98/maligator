@@ -178,3 +178,21 @@ describe("existing-proof scalar expression consumers", () => {
 		}
 	});
 });
+
+it("evaluates a selected numeric condition through one truthiness helper", () => {
+	const image = compileSemanticProgramToProgramImage(
+		analyzeSourceAndRunSemanticAnalysis(
+			`globalThis.test=function(left,right){const a=+left,b=+right; if(Math.round(a%b)) return 1; return 2;};`,
+			"/numeric-condition.js",
+		),
+		{ facts: compilerProgramFactsFromConfig(resolveBuildConfig({})) },
+	);
+	const native = image.native.functions[1]!;
+	const round = native.body.instructions.findIndex(
+		(op) => op.opcode === "MATH_UNARY_NUMBER" && op.operation === "Math.round",
+	);
+	expect(native.storage!.expressionIps).toContain(round);
+	const source = emitCompiledFunction(native, 1, "", false)!.source;
+	expect(source).toMatch(/if \(mal_number_is_truthy\(r\d+\)\)/);
+	expect(source.match(/mal_number_round\(/g)).toHaveLength(1);
+});

@@ -249,3 +249,67 @@ describe("native builtin callback transport", () => {
 		expect(selectNativeCallbackTransports(caller, entries)).toEqual([]);
 	});
 });
+
+describe("resumable callers of selected native entries", () => {
+	it.each(["function*", "async function", "async function*"])(
+		"uses typed call and callback transports in %s",
+		(kind) => {
+			const image = compileSemanticProgramToProgramImage(
+				analyzeSourceAndRunSemanticAnalysis(
+					`
+			function twice(value) { for(let i=0;i<2;i++)value+=1; return value; }
+			globalThis.seed=twice(2);
+			globalThis.resume=${kind} resume(start,values) {
+				const callback=function callback(value,index) { let result=value+index; for(let i=0;i<2;i++)result+=value; return result; };
+				callback(1,2);
+				const before=twice(+start); ${kind.startsWith("async") ? "await before" : "yield before"};
+				const mapped=values.map(callback); return twice(+before)+mapped.length;
+			};`,
+					"/resumable-transports.js",
+				),
+			);
+			const caller = image.native.functions.find(
+				(native) => native.mode === "resumable",
+			)!;
+			expect(caller.storage!.callTransports.length).toBeGreaterThan(0);
+			expect(caller.storage!.callbackTransports).toHaveLength(1);
+			const restored = deserializeCompilerArtifact(serializeCompilerArtifact(image));
+			expect(restored.native.functions[caller.functionIndex]!.storage).toEqual(
+				caller.storage,
+			);
+			const callback = caller.storage!.callbackTransports[0]!;
+			const emitted = emitCompiledFunction(
+				caller,
+				caller.functionIndex,
+				"",
+				false,
+				"static",
+				new Set([callback.functionIndex]),
+				[],
+				nativeEntryLookup(image.native.functions),
+				false,
+				new Set(),
+				image.runtime.stringConstants,
+			)!;
+			expect(emitted.source).toContain(
+				`mal_callback_${callback.functionIndex}_${callback.entryId}`,
+			);
+			for (const plan of caller.storage!.callTransports) {
+				const target = plan.targets[0]!;
+				expect(emitted.directEntryCalls.get(plan.instructionIp)).toContain(
+					target.functionIndex,
+				);
+			}
+			const fallback = emitCompiledFunction(caller, caller.functionIndex, "", false)!;
+			expect(fallback.directEntryCalls.size).toBe(0);
+			expect(fallback.source).not.toContain(
+				`mal_callback_${callback.functionIndex}_${callback.entryId}`,
+			);
+			expect(
+				emitProgramTranslationUnits(restored, { compiled: true })
+					.map((unit) => unit.source)
+					.join("\n"),
+			).toContain(`mal_callback_${callback.functionIndex}_${callback.entryId}`);
+		},
+	);
+});
