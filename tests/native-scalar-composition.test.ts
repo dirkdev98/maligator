@@ -656,6 +656,106 @@ describe("native scalar expressions across phi edge copies", () => {
 	});
 });
 
+describe("native scalar definition initialization across control flow", () => {
+	it.each([
+		"return condition ? a-b : a+b;",
+		"let total=0;for(let i=0;i<3;i=i+1)total=total+a;return total+b;",
+	])("omits default scalar zeros when every read follows its definition: %s", (tail) => {
+		const out = inspectStaticValueFunction(
+			`function initialized(condition,left,right){const a=+left,b=+right;${tail}}globalThis.initialized=initialized;`,
+			"initialized",
+		);
+		const numbers = out.native.body.instructions.filter(
+			(op) => op.opcode === "UNARY" && op.operator === "+",
+		);
+		expect(numbers).toHaveLength(2);
+		for (const op of numbers) {
+			if (op.opcode !== "UNARY") throw new Error("Missing Number definition");
+			expect(out.native.storage!.definitionInitializedRegisters).toContain(op.dst);
+			expect(out.c.source).not.toContain(`r${op.dst} = 0.0;`);
+		}
+		expect(deserializeCompilerArtifact(serializeCompilerArtifact(out.image))).toEqual(
+			out.image,
+		);
+	});
+
+	it("omits a boolean default when its comparison dominates both returned uses", () => {
+		const out = inspectStaticValueFunction(
+			"function initialized(condition,left,right){const a=+left,b=+right;const flag=a<b;if(condition)return flag;return !flag;}globalThis.initialized=initialized;",
+			"initialized",
+		);
+		const comparison = out.native.body.instructions.find(
+			(op) => op.opcode === "BINARY" && op.operator === "<",
+		)!;
+		if (comparison.opcode !== "BINARY") throw new Error("Missing comparison");
+		expect(out.native.storage!.definitionInitializedRegisters).toContain(comparison.dst);
+		expect(out.c.source).not.toContain(`r${comparison.dst} = false;`);
+	});
+
+	it("restores default initialization when a new entry bypasses the definition", () => {
+		const out = inspectStaticValueFunction(
+			"function initialized(condition,left,right){const a=+left,b=+right;return condition?a-b:a+b;}globalThis.initialized=initialized;",
+			"initialized",
+		);
+		const instructions = [...out.native.body.instructions];
+		const definitionIp = instructions.findIndex(
+			(op) => op.opcode === "UNARY" && op.operator === "+",
+		);
+		const definition = instructions[definitionIp]!;
+		if (definition.opcode !== "UNARY") throw new Error("Missing Number definition");
+		instructions[0] = { opcode: "JUMP", targetIp: definitionIp + 1 };
+		const native = { ...out.native, body: { ...out.native.body, instructions } };
+		expect(
+			lowerNativeFunctionStorage(native).storage!.definitionInitializedRegisters,
+		).not.toContain(definition.dst);
+		expect(() => validateNativeStorage(native)).toThrow(/invalid or stale storage plan/);
+	});
+
+	it.each([
+		"function guarded(condition,left,right,callback){const a=+left,b=+right;try{callback();return condition?a-b:a+b;}catch(error){return 0;}}",
+		"function* guarded(condition,left,right){const a=+left,b=+right;yield 0;return condition?a-b:a+b;}",
+	])("preserves initialization across exception and resume entries: %s", (source) => {
+		const out = inspectStaticValueFunction(
+			`${source}globalThis.guarded=guarded;`,
+			"guarded",
+		);
+		if (!out.native.body.isGenerator)
+			expect(out.native.body.handlers.length).toBeGreaterThan(0);
+		const numbers = out.native.body.instructions.filter(
+			(op) => op.opcode === "UNARY" && op.operator === "+",
+		);
+		expect(numbers).toHaveLength(2);
+		for (const op of numbers) {
+			if (op.opcode !== "UNARY") throw new Error("Missing Number definition");
+			expect(out.native.storage!.definitionInitializedRegisters).not.toContain(op.dst);
+		}
+	});
+
+	it("does not rematerialize an unreachable constant with no reads", () => {
+		const out = inspectStaticValueFunction(
+			"function initialized(left){return +left;}globalThis.initialized=initialized;",
+			"initialized",
+		);
+		const register = out.native.body.registerCount;
+		const ip = out.native.body.instructions.length;
+		const native = lowerNativeFunctionStorage({
+			...out.native,
+			body: {
+				...out.native.body,
+				registerCount: register + 1,
+				instructions: [
+					...out.native.body.instructions,
+					{ opcode: "CREATE_F64", dst: register, value: 17 },
+				],
+			},
+			registerRepresentations: [...out.native.registerRepresentations, "number"],
+			storageValues: [...out.native.storageValues!, 99],
+			instructions: [...out.native.instructions, undefined],
+		});
+		expect(native.storage!.rematerializedConstantIps).not.toContain(ip);
+	});
+});
+
 it("evaluates a selected numeric condition through one truthiness helper", () => {
 	const image = compileSemanticProgramToProgramImage(
 		analyzeSourceAndRunSemanticAnalysis(

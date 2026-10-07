@@ -53,11 +53,12 @@ describe("independent native SSA storage", () => {
 					) === name,
 			)!;
 			expect(native).toBeDefined();
-			const productIp = native.body.instructions.findIndex(
-				(op) => op.opcode === "BINARY" && op.operator === "*",
+			const productIps = native.body.instructions.flatMap((op, ip) =>
+				op.opcode === "BINARY" && op.operator === "*" ? [ip] : [],
 			);
-			expect(productIp).toBeGreaterThanOrEqual(0);
-			expect(native.storage!.expressionIps).toContain(productIp);
+			expect(productIps.length).toBeGreaterThan(0);
+			for (const productIp of productIps)
+				expect(native.storage!.expressionIps).toContain(productIp);
 		}
 		for (const name of [
 			"argumentCountResult",

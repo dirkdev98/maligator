@@ -154,6 +154,70 @@ interface NativeStorageBodyFacts {
 	readonly controlBoundaries: ReadonlyArray<boolean>;
 	readonly predecessorCounts: Uint32Array;
 	readonly externalEntries: ReadonlySet<number>;
+	readonly controlFlow: NativeStorageControlFlow | undefined;
+}
+
+interface NativeStorageControlFlow {
+	readonly blockCount: number;
+	readonly isReachable: (instructionIp: number) => boolean;
+	readonly dominates: (definitionIp: number, useIp: number) => boolean;
+}
+
+function storageControlFlow(
+	fn: NativeFunctionPlan["body"],
+	jumpTargets: ReadonlySet<number>,
+	controlBoundaries: ReadonlyArray<boolean>,
+): NativeStorageControlFlow | undefined {
+	if (fn.instructions.length === 0) return undefined;
+	const blocks = new Uint32Array(fn.instructions.length);
+	const ends: Array<number> = [];
+	let block = 0;
+	let startsBlock = false;
+	for (let ip = 0; ip < fn.instructions.length; ip++) {
+		if (ip > 0 && (startsBlock || jumpTargets.has(ip))) {
+			ends.push(ip - 1);
+			block++;
+		}
+		blocks[ip] = block;
+		startsBlock = controlBoundaries[ip]!;
+	}
+	ends.push(fn.instructions.length - 1);
+	const successors = ends.map((ip, index) => {
+		const op = fn.instructions[ip]!;
+		if (op.opcode === "JUMP") return [blocks[op.targetIp]!];
+		const next = index + 1 < ends.length ? [index + 1] : [];
+		if (op.opcode === "JUMP_IF") return [...next, blocks[op.targetIp]!];
+		return ["RETURN", "THROW", "TERMINAL_YIELD"].includes(op.opcode) ? [] : next;
+	});
+	const reachable = (skippedBlock = -1): Uint8Array => {
+		const visited = new Uint8Array(ends.length);
+		const pending = [0];
+		while (pending.length > 0) {
+			const current = pending.pop()!;
+			if (current === skippedBlock || visited[current] !== 0) continue;
+			visited[current] = 1;
+			pending.push(...successors[current]!);
+		}
+		return visited;
+	};
+	const live = reachable();
+	const withoutDefinition = new Map<number, Uint8Array>();
+	return {
+		blockCount: ends.length,
+		isReachable: (ip) => live[blocks[ip]!] === 1,
+		dominates(definitionIp, useIp) {
+			const definitionBlock = blocks[definitionIp]!;
+			const useBlock = blocks[useIp]!;
+			if (live[definitionBlock] === 0 || live[useBlock] === 0) return false;
+			if (useBlock === definitionBlock) return useIp > definitionIp;
+			let bypass = withoutDefinition.get(definitionBlock);
+			if (bypass === undefined) {
+				bypass = reachable(definitionBlock);
+				withoutDefinition.set(definitionBlock, bypass);
+			}
+			return bypass[useBlock] === 0;
+		},
+	};
 }
 
 function storageBodyFacts(native: NativeFunctionPlan): NativeStorageBodyFacts {
@@ -189,6 +253,7 @@ function storageBodyFacts(native: NativeFunctionPlan): NativeStorageBodyFacts {
 			externalEntries.add(ip + 1);
 		}
 	}
+	const controlBoundaries = fn.instructions.map(scalarControlBoundary);
 	return {
 		reads,
 		writes,
@@ -197,9 +262,13 @@ function storageBodyFacts(native: NativeFunctionPlan): NativeStorageBodyFacts {
 		uses,
 		jumpTargets,
 		handlerTargets: vmExceptionHandlerTargets(fn.instructions.length, fn.handlers),
-		controlBoundaries: fn.instructions.map(scalarControlBoundary),
+		controlBoundaries,
 		predecessorCounts,
 		externalEntries,
+		controlFlow:
+			native.storageValues === undefined || fn.handlers.length > 0
+				? undefined
+				: storageControlFlow(fn, jumpTargets, controlBoundaries),
 	};
 }
 
@@ -305,6 +374,15 @@ function definitionInitializedRegisters(
 	if (native.storageValues === undefined) return [];
 	const fn = native.body;
 	const { writeCounts: writes, definitions } = body;
+	// Limit added dominance work deterministically; exception/resume entries need a broader CFG.
+	const controlFlow =
+		native.mode === "direct" &&
+		!fn.isGenerator &&
+		!fn.isAsync &&
+		body.externalEntries.size === 0 &&
+		(body.controlFlow?.blockCount ?? Infinity) <= 256
+			? body.controlFlow
+			: undefined;
 	const blocks = new Uint32Array(fn.instructions.length);
 	let block = 0;
 	for (let ip = 0; ip < fn.instructions.length; ip++) {
@@ -320,7 +398,9 @@ function definitionInitializedRegisters(
 			!blocked.has(definition) &&
 			(rep === "number" || rep === "int32" || rep === "boolean") &&
 			writes[local] === 1 &&
-			uses[local]!.every((ip) => ip > definition && blocks[ip] === blocks[definition])
+			(uses[local]!.every((ip) => ip > definition && blocks[ip] === blocks[definition]) ||
+				(controlFlow !== undefined &&
+					uses[local]!.every((ip) => controlFlow.dominates(definition, ip))))
 			? [local]
 			: [];
 	});
@@ -329,52 +409,17 @@ function definitionInitializedRegisters(
 function rematerializedConstantIps(
 	native: NativeFunctionPlan,
 	body: NativeStorageBodyFacts,
-	jumpTargets: ReadonlySet<number>,
 	preserveProfileSites: boolean,
 	uses: ReadonlyArray<ReadonlyArray<number>>,
 ): ReadonlyArray<number> {
 	const fn = native.body;
 	if (
 		native.storageValues === undefined ||
-		fn.handlers.length > 0 ||
+		body.controlFlow === undefined ||
 		(preserveProfileSites && fn.profileSiteIds !== undefined)
 	)
 		return [];
 	const writes = body.writeCounts;
-	const blocks = new Uint32Array(fn.instructions.length);
-	const ends: Array<number> = [];
-	let block = 0;
-	let startsBlock = false;
-	for (let ip = 0; ip < fn.instructions.length; ip++) {
-		if (ip > 0 && (startsBlock || jumpTargets.has(ip))) {
-			ends.push(ip - 1);
-			block++;
-		}
-		blocks[ip] = block;
-		startsBlock = body.controlBoundaries[ip]!;
-	}
-	if (fn.instructions.length === 0) return [];
-	ends.push(fn.instructions.length - 1);
-	const successors = ends.map((ip, index) => {
-		const op = fn.instructions[ip]!;
-		if (op.opcode === "JUMP") return [blocks[op.targetIp]!];
-		const next = index + 1 < ends.length ? [index + 1] : [];
-		if (op.opcode === "JUMP_IF") return [...next, blocks[op.targetIp]!];
-		return ["RETURN", "THROW", "TERMINAL_YIELD"].includes(op.opcode) ? [] : next;
-	});
-	const reachable = (skippedBlock = -1): Uint8Array => {
-		const visited = new Uint8Array(ends.length);
-		const pending = [0];
-		while (pending.length > 0) {
-			const current = pending.pop()!;
-			if (current === skippedBlock || visited[current] !== 0) continue;
-			visited[current] = 1;
-			pending.push(...successors[current]!);
-		}
-		return visited;
-	};
-	const live = reachable();
-	const withoutDefinition = new Map<number, Uint8Array>();
 	return fn.instructions.flatMap((op, ip) => {
 		if (
 			!["CREATE_NUMBER", "CREATE_F64", "CREATE_BOOLEAN"].includes(op.opcode) ||
@@ -387,20 +432,11 @@ function rematerializedConstantIps(
 				: !["number", "int32"].includes(native.registerRepresentations[op.dst]!))
 		)
 			return [];
-		const definitionBlock = blocks[ip]!;
-		if (live[definitionBlock] === 0) return [];
+		if (!body.controlFlow!.isReachable(ip)) return [];
 		// Scalar region inputs are immutable; overlays only write explicit outputs or boxed storage.
-		const dominates = uses[op.dst]!.every((useIp) => {
-			const useBlock = blocks[useIp]!;
-			if (live[useBlock] === 0) return false;
-			if (useBlock === definitionBlock) return useIp > ip;
-			let bypass = withoutDefinition.get(definitionBlock);
-			if (bypass === undefined) {
-				bypass = reachable(definitionBlock);
-				withoutDefinition.set(definitionBlock, bypass);
-			}
-			return bypass[useBlock] === 0;
-		});
+		const dominates = uses[op.dst]!.every((useIp) =>
+			body.controlFlow!.dominates(ip, useIp),
+		);
 		return dominates ? [ip] : [];
 	});
 }
@@ -679,7 +715,6 @@ function lowerStorage(
 		const constants = rematerializedConstantIps(
 			variant,
 			body,
-			jumpTargets,
 			preserveProfileSites,
 			uses,
 		);
