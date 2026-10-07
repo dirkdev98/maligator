@@ -466,7 +466,7 @@ describe("CLI application images", () => {
 			const original = await images.launches.next();
 			original.evaluated.resolve();
 			expect(await active.next()).toBe(1);
-			writeFileSync(entry, "export const revision = 1;\n");
+			writeFileSync(entry, "export const revision = 100;\n");
 			wake();
 			const next = await requests.next();
 			const identity = new FrontendCompilationSession().snapshot(leaf);
@@ -504,7 +504,7 @@ describe("CLI application images", () => {
 				expect(images.released).toEqual([lastGood, stale]);
 				return;
 			}
-			writeFileSync(leaf, "export const value = 1;\n");
+			writeFileSync(leaf, "export const value = 100;\n");
 			original.stop.resolve(completed);
 			original.exit.resolve(completed);
 			const restored = await images.launches.next();

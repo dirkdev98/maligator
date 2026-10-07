@@ -1955,7 +1955,7 @@ describe("program-image-codec", () => {
 		).toThrow("property IC index 1, expected 0");
 	});
 
-	it("requires dense literal-shape ordinals while keeping them implicit on the wire", () => {
+	it("rejects literal-shape cache indices outside the function cache", () => {
 		const invalidInstructions = instructions.map((instruction) =>
 			instruction.opcode === "CREATE_OBJECT_SHAPED"
 				? { ...instruction, shapeCacheIndex: 1 }
@@ -1967,7 +1967,7 @@ describe("program-image-codec", () => {
 					functions: [{ ...mainFn, instructions: invalidInstructions }],
 				}),
 			),
-		).toThrow("literal shape index 1, expected 0");
+		).toThrow(/invalid literal shape index 1/);
 	});
 
 	it("round-trips and validates persisted argument snapshot prefixes", () => {

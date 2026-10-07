@@ -786,3 +786,32 @@ console.log(
 	typedStackFields(true),
 	typedStackNaN(null),
 );
+
+function shapeBranches(flag, input) {
+	let total = 0;
+	let object;
+	if (flag) {
+		object = { left: input };
+		globalThis.leftShape = object;
+		total = object.left;
+		if (input) {
+			object = { inner: input };
+			globalThis.innerShape = object;
+			total += object.inner;
+		}
+	} else {
+		object = { right: input };
+		globalThis.rightShape = object;
+		total = object.right;
+	}
+	const tail = { after: input };
+	globalThis.afterShape = tail;
+	return total + tail.after;
+}
+globalThis.shapeBranches = shapeBranches;
+console.log(
+	"shape-branches",
+	shapeBranches(false, 3),
+	shapeBranches(true, 0),
+	shapeBranches(true, 5),
+);

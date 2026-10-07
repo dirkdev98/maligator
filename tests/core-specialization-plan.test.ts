@@ -1399,9 +1399,9 @@ describe("late Core specialization plan", () => {
 			),
 			{ facts: compilerProgramFactsFromConfig(resolveBuildConfig({})) },
 		);
-		const boundedLoads = definition.native.functions.flatMap((fn, index) =>
+		const boundedLoads = definition.native.functions.flatMap((fn) =>
 			fn.instructions.flatMap((access, ip) => {
-				const instruction = definition.runtime.functions[index]!.instructions[ip]!;
+				const instruction = fn.body.instructions[ip]!;
 				return access?.kind === "contained-fixed-typed-array-element" &&
 					access.inBounds &&
 					instruction.opcode === "LOAD_PROPERTY"

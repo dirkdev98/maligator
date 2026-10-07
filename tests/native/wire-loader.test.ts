@@ -152,14 +152,14 @@ describe("wire loader side-data validation", () => {
 		expect(bytes.indexOf(payload, offset + payload.length)).toBe(-1);
 		return offset;
 	}
-	it("rejects runtime wires from the previous primordial index ABI", () => {
+	it("rejects runtime wires from the previous wire ABI", () => {
 		const wire = serializeRuntimeImage(definition, { debugInfo: false });
 		new DataView(wire.buffer, wire.byteOffset, wire.byteLength).setUint32(
 			4,
 			WIRE_VERSION - 1,
 			true,
 		);
-		rejectsWire("stale-primordial-abi", wire, "version mismatch");
+		rejectsWire("stale-wire-abi", wire, "version mismatch");
 	});
 	it("interns empty wire strings before installing language intrinsics", () => {
 		acceptsWire(
@@ -791,6 +791,66 @@ describe("wire loader side-data validation", () => {
 		// selector result for that receiver.
 		receiverClobber[firstLoadOffset + 1] = 4;
 		rejectsWire("shape-case-receiver", receiverClobber);
+	});
+
+	it("preserves nonordinal literal cache identities and rejects forged indices", () => {
+		const image: RuntimeImage = {
+			...definition,
+			stringConstants: [
+				[..."left"].map((unit) => unit.charCodeAt(0)),
+				[..."right"].map((unit) => unit.charCodeAt(0)),
+			],
+			precompiledLiteralShapes: [
+				{ functionIndex: 0, shapeCacheIndex: 0, keyStringIndices: [0] },
+				{ functionIndex: 0, shapeCacheIndex: 1, keyStringIndices: [1] },
+			],
+			functions: [
+				{
+					...fn,
+					registerCount: 3,
+					literalShapeCount: 2,
+					instructions: [
+						{ opcode: "CREATE_UNDEFINED", dst: 0 },
+						{
+							opcode: "CREATE_OBJECT_SHAPED",
+							dst: 1,
+							count: 1,
+							keyStringIndices: [1],
+							valueRegisters: [0],
+							shapeCacheIndex: 1,
+						},
+						{
+							opcode: "CREATE_OBJECT_SHAPED",
+							dst: 2,
+							count: 1,
+							keyStringIndices: [0],
+							valueRegisters: [0],
+							shapeCacheIndex: 0,
+						},
+						{ opcode: "RETURN", value: 2 },
+					],
+				},
+			],
+		};
+		const wire = serializeRuntimeImage(image, { debugInfo: false });
+		acceptsWire("literal-cache-permutation", wire);
+		const tag = WIRE_OPCODES.indexOf("CREATE_OBJECT_SHAPED");
+		const first =
+			uniquePayloadOffset(wire, Uint8Array.from([tag, 2, 2, 1, 2, 1, 0, 2])) + 7;
+		const second =
+			uniquePayloadOffset(wire, Uint8Array.from([tag, 4, 2, 1, 0, 1, 0, 0])) + 7;
+		for (const [name, index] of [
+			["duplicate", 2],
+			["outside", 4],
+		] as const) {
+			const malformed = wire.slice();
+			malformed[second] = index;
+			rejectsWire(`literal-cache-${name}`, malformed);
+		}
+		const swapped = wire.slice();
+		swapped[first] = 0;
+		swapped[second] = 2;
+		rejectsWire("literal-cache-descriptor", swapped);
 	});
 
 	it("pre-instantiates known literal shapes for initial and spliced runtime images", () => {

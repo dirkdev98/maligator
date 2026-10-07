@@ -78,9 +78,10 @@ describe("numeric own-field native entry contracts", () => {
 		expect(caller.fieldCalls).toHaveLength(1);
 		const call = caller.fieldCalls![0]!;
 		expect(call.entries).toHaveLength(3);
-		expect(
-			decoded.runtime.functions[caller.functionIndex]!.instructions[call.allocationIp],
-		).toMatchObject({ opcode: "CREATE_OBJECT_SHAPED", count: 2 });
+		expect(caller.body.instructions[call.allocationIp]).toMatchObject({
+			opcode: "CREATE_OBJECT_SHAPED",
+			count: 2,
+		});
 		const entries = new Map(
 			call.entries.map((selected) => [
 				directCompiledEntryKey(selected.functionIndex, selected.entryId),
@@ -99,7 +100,7 @@ describe("numeric own-field native entry contracts", () => {
 			expect(emitted.directEntries[0]!.source).not.toContain("mal_vm_binary_op");
 			const leaf = emitted.directEntries[0]!;
 			if (
-				decoded.runtime.functions[selected.functionIndex]!.instructions.every(
+				native.body.instructions.every(
 					(op) => op.opcode !== "CALL" && op.opcode !== "CALL_KNOWN",
 				)
 			) {

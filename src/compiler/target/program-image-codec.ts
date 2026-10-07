@@ -33,7 +33,7 @@ import type {
 
 export const WIRE_MAGIC = 0x574c414d; // "MALW" little-endian
 // Runtime wires are hard cut-overs: stale cached buffers must rebuild.
-export const WIRE_VERSION = 67;
+export const WIRE_VERSION = 68;
 // Keep in sync with runtime/src/heap_string.h.
 export const MAX_STRING_CODE_UNITS = 16 * 1024 * 1024;
 
@@ -716,7 +716,7 @@ function validateMappedArguments(fn: BytecodeFunction): void {
 
 function validatePropertyIcIndices(fn: BytecodeFunction): void {
 	let expected = 0;
-	let expectedLiteralShape = 0;
+	const literalShapes = new Set<number>();
 	for (const instruction of fn.instructions) {
 		switch (instruction.opcode) {
 			case "LOAD_PROPERTY":
@@ -736,16 +736,21 @@ function validatePropertyIcIndices(fn: BytecodeFunction): void {
 				expected++;
 				break;
 			case "CREATE_OBJECT_SHAPED":
-				if (instruction.shapeCacheIndex !== expectedLiteralShape) {
+				if (
+					!Number.isSafeInteger(instruction.shapeCacheIndex) ||
+					instruction.shapeCacheIndex < 0 ||
+					instruction.shapeCacheIndex >= fn.literalShapeCount ||
+					literalShapes.has(instruction.shapeCacheIndex)
+				) {
 					throw new RangeError(
-						`program-image-codec: literal shape index ${instruction.shapeCacheIndex}, expected ${expectedLiteralShape}`,
+						`program-image-codec: invalid literal shape index ${instruction.shapeCacheIndex}`,
 					);
 				}
-				expectedLiteralShape++;
+				literalShapes.add(instruction.shapeCacheIndex);
 				break;
 		}
 	}
-	if (expectedLiteralShape > fn.literalShapeCount) {
+	if (literalShapes.size > fn.literalShapeCount) {
 		throw new RangeError("program-image-codec: literal shape count is too small");
 	}
 }
@@ -870,6 +875,7 @@ function writeInstruction(w: Writer, i: BytecodeInstruction): void {
 			w.i32(i.count);
 			w.i32Array(i.keyStringIndices);
 			w.i32Array(i.valueRegisters);
+			w.i32(i.shapeCacheIndex);
 			return;
 		case "CREATE_ARRAY":
 			w.i32(i.dst);
@@ -1512,7 +1518,6 @@ export function readRuntimeFunction(r: Reader): BytecodeFunction {
 	const instructionCount = r.count(1);
 	const instructions: Array<BytecodeInstruction> = [];
 	let propertyIcCount = 0;
-	let physicalLiteralShapeCount = 0;
 	for (let i = 0; i < instructionCount; ++i) {
 		const instruction = readInstruction(r);
 		switch (instruction.opcode) {
@@ -1526,9 +1531,6 @@ export function readRuntimeFunction(r: Reader): BytecodeFunction {
 			case "STORE_PROPERTY_STATIC_KNOWN_OWN_SLOT":
 			case "GUARD_BASE_CONSTRUCTOR_LAYOUT":
 				instruction.icIndex = propertyIcCount++;
-				break;
-			case "CREATE_OBJECT_SHAPED":
-				instruction.shapeCacheIndex = physicalLiteralShapeCount++;
 				break;
 		}
 		instructions.push(instruction);
@@ -1704,7 +1706,7 @@ function readInstruction(r: Reader): BytecodeInstruction {
 				count: r.i32(),
 				keyStringIndices: r.i32Array(),
 				valueRegisters: r.i32Array(),
-				shapeCacheIndex: -1,
+				shapeCacheIndex: r.i32(),
 			};
 			if (
 				instruction.count < 1 ||

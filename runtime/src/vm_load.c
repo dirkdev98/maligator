@@ -17,7 +17,7 @@
  */
 
 #define WIRE_MAGIC 0x574c414du // "MALW" little-endian
-#define WIRE_VERSION 67u
+#define WIRE_VERSION 68u
 #define WIRE_FLAG_HAS_DEBUG 1u
 
 typedef enum WireOp {
@@ -686,6 +686,7 @@ static void rd_instruction(Rd *r, MalInstruction *o, I32Builder *side_data) {
                 return;
             }
             o->as.create_object_shaped.data_offset = rd_side_pair(r, side_data);
+            o->as.create_object_shaped.shape_cache_index = rd_i32(r);
             if (r->ok && side_data->data[o->as.create_object_shaped.data_offset] != count) {
                 r->ok = false;
             }
@@ -1744,7 +1745,12 @@ static void rd_function(MalLoadedRuntimeImage *L, Rd *r, MalFunction *fn, bool d
         rd_instruction(r, &instructions[i], &side_data);
     }
     fn->property_ic_count = 0;
-    i32 physical_literal_shape_count = 0;
+    bool *literal_shape_seen = fn->literal_shape_count > 0
+        ? calloc((usize) fn->literal_shape_count, sizeof(bool))
+        : nullptr;
+    if (fn->literal_shape_count > 0 && literal_shape_seen == nullptr) {
+        r->ok = false;
+    }
     for (u32 i = 0; r->ok && i < instruction_count; i++) {
         switch (instructions[i].opcode) {
             case MAL_OP_LOAD_PROPERTY:
@@ -1786,17 +1792,20 @@ static void rd_function(MalLoadedRuntimeImage *L, Rd *r, MalFunction *fn, bool d
                 side_data.data[offset + 1] = fn->property_ic_count++;
                 break;
             }
-            case MAL_OP_CREATE_OBJECT_SHAPED:
-                instructions[i].as.create_object_shaped.shape_cache_index =
-                    physical_literal_shape_count++;
+            case MAL_OP_CREATE_OBJECT_SHAPED: {
+                i32 index = instructions[i].as.create_object_shaped.shape_cache_index;
+                if (index < 0 || index >= fn->literal_shape_count || literal_shape_seen[index]) {
+                    r->ok = false;
+                    break;
+                }
+                literal_shape_seen[index] = true;
                 break;
+            }
             default:
                 break;
         }
     }
-    if (physical_literal_shape_count > fn->literal_shape_count) {
-        r->ok = false;
-    }
+    free(literal_shape_seen);
     fn->instructions = instructions;
     fn->argument_retention_limit = -1;
     if (r->ok) {
@@ -2478,7 +2487,18 @@ MalLoadedRuntimeImage *mal_runtime_image_load_with_host_resolver(
         const MalFunction *fn = &functions[f];
         for (i32 ip = 0; r.ok && ip < fn->instruction_count; ip++) {
             const MalInstruction *instruction = &fn->instructions[ip];
-            if (instruction->opcode == MAL_OP_QUERY_STATIC_DATA) {
+            if (instruction->opcode == MAL_OP_CREATE_OBJECT_SHAPED) {
+                const MalPrecompiledLiteralShape *shape = mal_loaded_literal_shape(
+                    def, (i32) f, instruction->as.create_object_shaped.shape_cache_index);
+                if (shape != nullptr) {
+                    const i32 *data = &fn->instruction_data[
+                        instruction->as.create_object_shaped.data_offset];
+                    if (data[0] != shape->key_count) r.ok = false;
+                    for (i32 key = 0; r.ok && key < shape->key_count; key++) {
+                        if (data[key + 1] != shape->key_string_indices[key]) r.ok = false;
+                    }
+                }
+            } else if (instruction->opcode == MAL_OP_QUERY_STATIC_DATA) {
                 if (!mal_loaded_static_query_valid(def, fn, instruction)) r.ok = false;
             } else if (instruction->opcode == MAL_OP_BASE_CONSTRUCT_RESULT) {
                 i32 registers[] = {

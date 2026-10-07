@@ -136,6 +136,25 @@ describe("independent native SSA storage", () => {
 					expect(slots.get(slot)).toEqual(new Set(["load", "store"]));
 			}
 		}
+		const shapes = image.native.functions.find(
+			(fn) =>
+				String.fromCharCode(
+					...(image.runtime.stringConstants[fn.body.nameStringIndex] ?? []),
+				) === "shapeBranches",
+		)!;
+		expect(shapes).toBeDefined();
+		expect(emitCompiledFunction(shapes, shapes.functionIndex, "", false)).not.toBeNull();
+		const portableShapes = image.runtime.functions[
+			shapes.functionIndex
+		]!.instructions.flatMap((instruction) =>
+			instruction.opcode === "CREATE_OBJECT_SHAPED" ? [instruction.shapeCacheIndex] : [],
+		);
+		const nativeShapes = shapes.body.instructions.flatMap((instruction) =>
+			instruction.opcode === "CREATE_OBJECT_SHAPED" ? [instruction.shapeCacheIndex] : [],
+		);
+		expect(portableShapes).toHaveLength(4);
+		expect(nativeShapes).toHaveLength(4);
+		expect(nativeShapes).not.toEqual(portableShapes);
 
 		const regions = image.native.functions.flatMap((fn) => fn.specializations);
 		expect(regions.some((region) => region.kind === "string-split-cursor")).toBe(true);

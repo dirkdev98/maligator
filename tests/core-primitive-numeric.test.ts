@@ -54,8 +54,8 @@ describe("certified primitive numeric lowering", () => {
 			);
 		});
 		expect(functionIndex).toBeGreaterThanOrEqual(0);
-		const runtime = image.runtime.functions[functionIndex]!;
 		const native = image.native.functions[functionIndex]!;
+		const body = native.body;
 		const indexedLoop = native.specializations.find(
 			(region) => region.kind === "indexed-length-loop",
 		);
@@ -66,7 +66,7 @@ describe("certified primitive numeric lowering", () => {
 		expect(indexedLoop.sites[0]!.comparisonIp).toBeGreaterThan(
 			indexedLoop.sites[0]!.loadIp + 1,
 		);
-		const elementLoads = runtime.instructions.flatMap((instruction, index) =>
+		const elementLoads = body.instructions.flatMap((instruction, index) =>
 			instruction.opcode === "LOAD_PROPERTY" ? [{ instruction, index }] : [],
 		);
 		expect(elementLoads.length).toBeGreaterThan(0);
@@ -112,9 +112,9 @@ describe("certified primitive numeric lowering", () => {
 			);
 		});
 		expect(functionIndex).toBeGreaterThanOrEqual(0);
-		const runtime = image.runtime.functions[functionIndex]!;
 		const native = image.native.functions[functionIndex]!;
-		const addition = runtime.instructions.findIndex(
+		const body = native.body;
+		const addition = body.instructions.findIndex(
 			(instruction, index) =>
 				instruction.opcode === "BINARY" &&
 				instruction.operator === "+" &&
@@ -123,7 +123,7 @@ describe("certified primitive numeric lowering", () => {
 				native.instructions[index].inputKindMasks[1] === COMPILER_VALUE_KIND_NUMBER,
 		);
 		expect(addition).toBeGreaterThanOrEqual(0);
-		const normalized = runtime.instructions.findIndex(
+		const normalized = body.instructions.findIndex(
 			(instruction, index) =>
 				instruction.opcode === "UNARY" &&
 				instruction.operator === "+" &&
@@ -132,25 +132,25 @@ describe("certified primitive numeric lowering", () => {
 					(COMPILER_VALUE_KIND_NUMBER | COMPILER_VALUE_KIND_UNDEFINED),
 		);
 		expect(normalized).toBeGreaterThanOrEqual(0);
-		if (runtime.instructions[normalized]?.opcode !== "UNARY") {
+		if (body.instructions[normalized]?.opcode !== "UNARY") {
 			throw new Error("expected numeric nullish normalization");
 		}
-		expect(native.registerRepresentations[runtime.instructions[normalized].src]).toBe(
+		expect(native.registerRepresentations[body.instructions[normalized].src]).toBe(
 			"boxed",
 		);
-		expect(native.registerRepresentations[runtime.instructions[normalized].dst]).toBe(
+		expect(native.registerRepresentations[body.instructions[normalized].dst]).toBe(
 			"number",
 		);
-		const privateLoad = runtime.instructions.findIndex(
+		const privateLoad = body.instructions.findIndex(
 			(instruction, index) =>
 				instruction.opcode === "LOAD_PROPERTY" &&
 				native.instructions[index]?.kind === "exact-contained-array-element",
 		);
 		expect(privateLoad).toBeGreaterThanOrEqual(0);
-		if (runtime.instructions[privateLoad]?.opcode !== "LOAD_PROPERTY") {
+		if (body.instructions[privateLoad]?.opcode !== "LOAD_PROPERTY") {
 			throw new Error("expected private array element load");
 		}
-		expect(native.registerRepresentations[runtime.instructions[privateLoad].dst]).toBe(
+		expect(native.registerRepresentations[body.instructions[privateLoad].dst]).toBe(
 			"boxed",
 		);
 		const indexedLoop = native.specializations.find(
@@ -189,10 +189,9 @@ describe("certified primitive numeric lowering", () => {
 	])("does not normalize nullish joins over %s", (_name, source) => {
 		const image = compile(source);
 		expect(
-			image.runtime.functions.some((fn, functionIndex) =>
-				fn.instructions.some((instruction, instructionIndex) => {
-					const plan =
-						image.native.functions[functionIndex]?.instructions[instructionIndex];
+			image.native.functions.some((fn) =>
+				fn.body.instructions.some((instruction, instructionIndex) => {
+					const plan = fn.instructions[instructionIndex];
 					return (
 						instruction.opcode === "UNARY" &&
 						instruction.operator === "+" &&
@@ -321,7 +320,7 @@ describe("certified primitive numeric lowering", () => {
 			expect(entry.operatorInputs?.length).toBeGreaterThan(0);
 			for (const { instructionIp } of entry.operatorInputs!) {
 				expect(["UNARY", "BINARY"]).toContain(
-					image.runtime.functions[index]!.instructions[instructionIp]?.opcode,
+					native.body.instructions[instructionIp]?.opcode,
 				);
 			}
 		}

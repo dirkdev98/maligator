@@ -140,6 +140,11 @@ materializing, or changing fields keep whole-object boxed storage. The persisted
 is selected and validated independently for each entry. The embedded header retains
 identity with a null field-storage pointer, so this layout cannot escape the certificate.
 
+Literal-shape caches are shared by both target bodies. Their slot identities come
+from Core allocation origins, independently of physical block order. Both the wire
+and compiler artifact persist those identities explicitly; validation rejects
+duplicate or out-of-range slots and descriptors whose keys disagree with an allocation.
+
 Resumable functions keep per-value representations in C locals. Each invocation
 publishes an active root array for traced locals and the coroutine itself. A separate
 boxed activation buffer holds the largest individual suspension snapshot, plus

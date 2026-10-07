@@ -1580,13 +1580,17 @@ export function validateVmKnownOwnSlots(definition: RuntimeImage): void {
 		}
 		descriptors.set(identity, descriptor);
 	}
-	for (const fn of definition.functions) {
-		let physicalShapeCount = 0;
+	for (const [functionIndex, fn] of definition.functions.entries()) {
+		const shapeIndices = new Set<number>();
 		for (const instruction of fn.instructions) {
 			if (instruction.opcode !== "CREATE_OBJECT_SHAPED") continue;
-			if (instruction.shapeCacheIndex !== physicalShapeCount) {
+			if (
+				!isNonnegativeSafeInteger(instruction.shapeCacheIndex) ||
+				instruction.shapeCacheIndex >= fn.literalShapeCount ||
+				shapeIndices.has(instruction.shapeCacheIndex)
+			) {
 				throw new RangeError(
-					`literal shape index ${instruction.shapeCacheIndex}, expected ${physicalShapeCount}`,
+					`invalid literal shape index ${instruction.shapeCacheIndex}`,
 				);
 			}
 			if (
@@ -1595,11 +1599,22 @@ export function validateVmKnownOwnSlots(definition: RuntimeImage): void {
 			) {
 				throw new RangeError("invalid shaped object operands");
 			}
-			physicalShapeCount++;
+			const descriptor = descriptors.get(
+				`${functionIndex}\0${instruction.shapeCacheIndex}`,
+			);
+			if (
+				descriptor !== undefined &&
+				(descriptor.keyStringIndices.length !== instruction.count ||
+					descriptor.keyStringIndices.some(
+						(key, index) => key !== instruction.keyStringIndices[index],
+					))
+			)
+				throw new RangeError("literal shape descriptor disagrees with allocation");
+			shapeIndices.add(instruction.shapeCacheIndex);
 		}
 		if (
 			!isNonnegativeSafeInteger(fn.literalShapeCount) ||
-			physicalShapeCount > fn.literalShapeCount
+			shapeIndices.size > fn.literalShapeCount
 		) {
 			throw new RangeError("invalid literal shape cache layout");
 		}
@@ -2574,14 +2589,17 @@ interface VmKnownShapeOrigin {
 
 interface VmKnownShapeLayout {
 	readonly origins: ReadonlyArray<ReadonlyMap<number, VmKnownShapeOrigin>>;
+	readonly cacheIndexByInstruction: ReadonlyMap<CompilerInstruction, number>;
 	readonly literalShapeCounts: ReadonlyArray<number>;
 	readonly precompiledLiteralShapes: ReadonlyArray<VmPrecompiledLiteralShape>;
 }
 
 function buildKnownShapeLayout(
-	functions: ReadonlyArray<ExecutionFunction>,
+	programs: ReadonlyArray<ExecutionProgram>,
 ): VmKnownShapeLayout {
+	const functions = programs.flatMap((program) => program.functions);
 	const origins: Array<Map<number, VmKnownShapeOrigin>> = [];
+	const cacheIndexByInstruction = new Map<CompilerInstruction, number>();
 	const literalShapeCounts: Array<number> = [];
 	const referencedOrigins = new Set<string>();
 	for (const fn of functions) {
@@ -2602,47 +2620,71 @@ function buildKnownShapeLayout(
 				}
 			}
 		}
-	}
-	const precompiledLiteralShapes: Array<VmPrecompiledLiteralShape> = [];
-	for (const fn of functions) {
-		const cacheIndexByInstruction = new Map<CompilerInstruction, number>();
-		let shapeCacheIndex = 0;
-		for (const block of fn.blocks) {
-			for (const instruction of block.instructions) {
-				if (instruction.type === "createObjectShaped") {
-					cacheIndexByInstruction.set(instruction, shapeCacheIndex);
-					shapeCacheIndex++;
-				}
-			}
-		}
-
-		const functionOrigins = new Map<number, VmKnownShapeOrigin>();
+		const functionOrigins =
+			origins[fn.functionIndex] ?? new Map<number, VmKnownShapeOrigin>();
+		origins[fn.functionIndex] = functionOrigins;
 		for (const safepoint of fn.gc.safepoints) {
-			if (safepoint.kind !== "operation") continue;
-			if (safepoint.instruction.type !== "createObjectShaped") continue;
-			const cacheIndex = cacheIndexByInstruction.get(safepoint.instruction);
-			if (cacheIndex === undefined || functionOrigins.has(safepoint.coreInstruction)) {
-				throw new Error(
-					`Invalid shaped-literal origin ${fn.functionIndex}:${safepoint.coreInstruction}`,
-				);
+			if (
+				safepoint.kind !== "operation" ||
+				safepoint.instruction.type !== "createObjectShaped"
+			)
+				continue;
+			const keys = safepoint.instruction.keyStringIndices;
+			const previous = functionOrigins.get(safepoint.coreInstruction);
+			if (
+				previous !== undefined &&
+				(previous.keyStringIndices.length !== keys.length ||
+					previous.keyStringIndices.some((key, index) => key !== keys[index]))
+			) {
+				throw new Error("Runtime targets disagree on a shared literal shape");
 			}
 			functionOrigins.set(safepoint.coreInstruction, {
-				keyStringIndices: safepoint.instruction.keyStringIndices,
-				shapeCacheIndex: cacheIndex,
+				keyStringIndices: keys,
+				shapeCacheIndex: -1,
 			});
-			if (referencedOrigins.has(`${fn.functionIndex}\0${safepoint.coreInstruction}`)) {
+		}
+	}
+	const precompiledLiteralShapes: Array<VmPrecompiledLiteralShape> = [];
+	// Both targets share the function cache, so allocation identity must survive block scheduling.
+	for (const [functionIndex, functionOrigins] of origins.entries()) {
+		for (const [shapeCacheIndex, [coreInstruction, origin]] of [
+			...functionOrigins.entries(),
+		]
+			.sort(([left], [right]) => left - right)
+			.entries()) {
+			functionOrigins.set(coreInstruction, { ...origin, shapeCacheIndex });
+			if (referencedOrigins.has(`${functionIndex}\0${coreInstruction}`)) {
 				precompiledLiteralShapes.push({
-					functionIndex: fn.functionIndex,
-					shapeCacheIndex: cacheIndex,
-					keyStringIndices: safepoint.instruction.keyStringIndices,
+					functionIndex,
+					shapeCacheIndex,
+					keyStringIndices: origin.keyStringIndices,
 				});
 			}
 		}
-		origins[fn.functionIndex] = functionOrigins;
-		literalShapeCounts[fn.functionIndex] = shapeCacheIndex;
+		literalShapeCounts[functionIndex] = functionOrigins.size;
+	}
+	for (const fn of functions) {
+		const seen = new Set<number>();
+		for (const safepoint of fn.gc.safepoints) {
+			if (
+				safepoint.kind !== "operation" ||
+				safepoint.instruction.type !== "createObjectShaped"
+			)
+				continue;
+			if (seen.has(safepoint.coreInstruction))
+				throw new Error(
+					`Duplicate shaped-literal origin ${fn.functionIndex}:${safepoint.coreInstruction}`,
+				);
+			seen.add(safepoint.coreInstruction);
+			cacheIndexByInstruction.set(
+				safepoint.instruction,
+				origins[fn.functionIndex]!.get(safepoint.coreInstruction)!.shapeCacheIndex,
+			);
+		}
 	}
 	return {
 		origins,
+		cacheIndexByInstruction,
 		literalShapeCounts,
 		precompiledLiteralShapes,
 	};
@@ -2762,31 +2804,15 @@ export function lowerVerifiedTargetsToRuntimePlans(
 		fileToIndex.set(path, index);
 		return index;
 	};
-	const layouts = programs.map((target) => buildKnownShapeLayout(target.functions));
-	const shapeRows = new Map<string, VmPrecompiledLiteralShape>();
-	for (const layout of layouts) {
-		for (const row of layout.precompiledLiteralShapes) {
-			const key = `${row.functionIndex}:${row.shapeCacheIndex}`;
-			const previous = shapeRows.get(key);
-			if (
-				previous !== undefined &&
-				(previous.keyStringIndices.length !== row.keyStringIndices.length ||
-					previous.keyStringIndices.some(
-						(value, index) => value !== row.keyStringIndices[index],
-					))
-			)
-				throw new Error("Runtime targets disagree on a shared literal shape");
-			shapeRows.set(key, row);
-		}
-	}
-	const targetPlans = programs.map((target, targetIndex) => {
-		const layout = layouts[targetIndex]!;
+	const layout = buildKnownShapeLayout(programs);
+	const targetPlans = programs.map((target) => {
 		return target.functions.map((fn, index) =>
 			lowerExecutionFunctionToBytecode(
 				fn,
 				fileIndexFor(fn.sourcePath),
 				core.stringConstants,
 				layout.origins,
+				layout.cacheIndexByInstruction,
 				layout.literalShapeCounts[index]!,
 			),
 		);
@@ -2801,7 +2827,7 @@ export function lowerVerifiedTargetsToRuntimePlans(
 		stringConstants: core.stringConstants.map((units) => [...units]),
 		bigintConstants: [...core.bigintConstants],
 		literalTemplateData: copyLiteralTemplateData(core.literalTemplateData),
-		precompiledLiteralShapes: [...shapeRows.values()],
+		precompiledLiteralShapes: [...layout.precompiledLiteralShapes],
 		globalCount: core.globalCount,
 		cjsModuleFunctionIndices: context.data.cjsModuleFunctionIndices.map((coreFunction) =>
 			executionFunctionIndex(program.functionMap, coreFunction),
@@ -2890,6 +2916,7 @@ function lowerExecutionFunctionToBytecode(
 	fileIndex: number,
 	stringConstants: ReadonlyArray<ReadonlyArray<number>>,
 	knownShapeOrigins: ReadonlyArray<ReadonlyMap<number, VmKnownShapeOrigin>>,
+	shapeCacheIndices: ReadonlyMap<CompilerInstruction, number>,
 	literalShapeCount: number,
 ): RuntimeFunctionLoweringPlan {
 	// Compile-only reachability, source-position, and exception-range markers carry
@@ -3039,7 +3066,15 @@ function lowerExecutionFunctionToBytecode(
 					vmInstruction.icIndex = propertyIcIndexByInstruction.get(instruction)!;
 					break;
 				case "CREATE_OBJECT_SHAPED":
-					vmInstruction.shapeCacheIndex = physicalLiteralShapeCount++;
+					{
+						const index = shapeCacheIndices.get(instruction);
+						if (index === undefined)
+							throw new Error(
+								`Missing shaped-literal origin in function ${fn.functionIndex}`,
+							);
+						vmInstruction.shapeCacheIndex = index;
+						physicalLiteralShapeCount++;
+					}
 					break;
 			}
 			instructions.push(vmInstruction);
