@@ -1,9 +1,13 @@
+import { builtinOperationDescriptor } from "../shared/builtin-registry.ts";
 import { knownBuiltinCallProves } from "../shared/compiler-facts.ts";
 import type { CompilerGuardPlan, KnownBuiltinCall } from "../shared/compiler-facts.ts";
 import type { FactDependency } from "../shared/fact-implication.ts";
 import { factDependencyArraysEqual } from "../shared/fact-implication.ts";
 import type { CoreCompilationContext } from "./core-compilation.ts";
-import { coreDirectBuiltinCallbackTarget } from "./core-ir-call-targets.ts";
+import {
+	coreDirectBuiltinCallbackTarget,
+	coreBuiltinCallbackOperation,
+} from "./core-ir-call-targets.ts";
 import { buildCoreControlFlow } from "./core-ir-control-flow.ts";
 import type { CoreControlFlow } from "./core-ir-control-flow.ts";
 import { coreInstructionEffects } from "./core-ir-opcodes.ts";
@@ -2094,7 +2098,52 @@ export function verifyCoreOptimizationPlan(
 		if (!reachableEntries.has(`${entry.function}:${entry.id}`)) {
 			fail(`direct entry ${entry.function}:${entry.id} has no reachable callsites`);
 		}
+		const callbackObservation = entry.callSites.some(
+			(site) => site.builtinCallbackOperation !== undefined,
+		)
+			? coreArgumentObservation(fn)
+			: undefined;
+		const callbackOrigins = new Set<string>();
 		for (const site of entry.callSites) {
+			if (site.builtinCallbackOperation !== undefined) {
+				const caller = program.function(site.caller);
+				const invocation = builtinOperationDescriptor(
+					site.builtinCallbackOperation,
+				)?.callback;
+				const origin = `${site.caller}:${site.instruction}`;
+				const observation = callbackObservation!;
+				if (
+					callbackOrigins.has(origin) ||
+					observation.kind === "general" ||
+					observation.readsCount ||
+					observation.indices.length > 0 ||
+					observation.restStarts.length > 0 ||
+					!plan.liveFunctions.includes(site.caller) ||
+					!caller.isInstructionLive(site.instruction) ||
+					!blockProofs
+						.get(site.caller)!
+						.included.has(caller.instructionBlock(site.instruction)) ||
+					coreBuiltinCallbackOperation(caller, site.instruction) !==
+						site.builtinCallbackOperation ||
+					coreDirectBuiltinCallbackTarget(caller, site.instruction) !== entry.function ||
+					invocation === undefined ||
+					site.guarded !== true ||
+					site.numericSortCallback !== undefined ||
+					site.numericSortCallbackViaCall !== undefined ||
+					site.fieldObject !== undefined ||
+					entry.fieldParameters !== undefined ||
+					entry.argumentRepresentations !== undefined ||
+					entry.parameterRepresentations.some(
+						(rep, index) =>
+							rep !== (invocation.argumentKinds[index] === "number" ? "f64" : "boxed"),
+					)
+				)
+					fail(
+						`direct entry ${entry.function}:${entry.id} has an invalid builtin callback contract`,
+					);
+				callbackOrigins.add(origin);
+				continue;
+			}
 			if (
 				site.numericSortCallbackViaCall !== undefined &&
 				(site.numericSortCallbackViaCall !== true ||

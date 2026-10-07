@@ -1,3 +1,4 @@
+import { builtinOperationDescriptor } from "../shared/builtin-registry.ts";
 import type { NativeEntryLookup } from "./lower-native-calls.ts";
 import type { NativeFunctionPlan, VmRegisterRepresentation } from "./program-image.ts";
 
@@ -9,21 +10,6 @@ export interface NativeCallbackTransportPlan {
 	readonly parameters: ReadonlyArray<VmRegisterRepresentation>;
 	readonly resultRepresentation: VmRegisterRepresentation;
 }
-
-const ARRAY_CALLBACK_ARITIES: Readonly<Record<string, number>> = {
-	"Array.prototype.forEach": 3,
-	"Array.prototype.some": 3,
-	"Array.prototype.every": 3,
-	"Array.prototype.find": 3,
-	"Array.prototype.findIndex": 3,
-	"Array.prototype.map": 3,
-	"Array.prototype.filter": 3,
-	"Array.prototype.reduce": 4,
-	"Array.prototype.reduceRight": 4,
-	"Array.prototype.findLast": 3,
-	"Array.prototype.findLastIndex": 3,
-	"Array.prototype.flatMap": 3,
-};
 
 export function selectNativeCallbackTransports(
 	native: NativeFunctionPlan,
@@ -40,7 +26,10 @@ export function selectNativeCallbackTransports(
 			call.directCallbackFunctionIndex === undefined
 		)
 			return [];
-		const arity = ARRAY_CALLBACK_ARITIES[call.guardedBuiltinCall?.operation ?? ""];
+		const invocation = builtinOperationDescriptor(
+			call.guardedBuiltinCall?.operation ?? "",
+		)?.callback;
+		const arity = invocation?.argumentKinds.length;
 		if (arity === undefined || native.body.instructions[instructionIp]?.opcode !== "CALL")
 			return [];
 		const functionIndex = call.directCallbackFunctionIndex;
@@ -57,7 +46,12 @@ export function selectNativeCallbackTransports(
 				continue;
 			const parameters = entry.argumentRepresentations ?? entry.parameterRepresentations;
 			if (parameters.some((rep, index) => index >= arity && rep !== "boxed")) continue;
-			const score = parameters.filter((rep) => rep !== "boxed").length;
+			const score =
+				parameters.filter((rep) => rep !== "boxed").length * (arity + 1) +
+				parameters.filter(
+					(rep, index) =>
+						rep === "number" && invocation!.argumentKinds[index] === "number",
+				).length;
 			if (score <= selectedScore) continue;
 			selectedScore = score;
 			selected = {

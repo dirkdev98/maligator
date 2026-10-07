@@ -1,3 +1,4 @@
+import { builtinOperationDescriptor } from "../shared/builtin-registry.ts";
 import type { CoreCallGraph } from "./core-call-graph.ts";
 import { coreClosedCapturedValueSlots } from "./core-compilation.ts";
 import type { CoreCompilationContext } from "./core-compilation.ts";
@@ -354,25 +355,10 @@ export function coreDirectCreatedFunction(
 		: undefined;
 }
 
-const DIRECT_CALLBACK_BUILTINS: ReadonlySet<string> = new Set([
-	"Array.prototype.forEach",
-	"Array.prototype.some",
-	"Array.prototype.every",
-	"Array.prototype.find",
-	"Array.prototype.findIndex",
-	"Array.prototype.map",
-	"Array.prototype.filter",
-	"Array.prototype.reduce",
-	"Array.prototype.reduceRight",
-	"Array.prototype.findLast",
-	"Array.prototype.findLastIndex",
-	"Array.prototype.flatMap",
-]);
-
-export function coreDirectBuiltinCallbackTarget(
+export function coreBuiltinCallbackOperation(
 	fn: CoreFunctionStore,
 	instruction: CoreInstructionId,
-): CoreFunctionId | undefined {
+): string | undefined {
 	if (fn.instructionKind(instruction) !== "operation") return undefined;
 	const opcode = fn.instructionOpcodeName(instruction);
 	const attributes = fn.instructionAttributes(instruction);
@@ -385,10 +371,21 @@ export function coreDirectBuiltinCallbackTarget(
 			: opcode === "call" && known !== undefined
 				? known.operation
 				: undefined;
-	if (typeof operation !== "string" || !DIRECT_CALLBACK_BUILTINS.has(operation)) {
-		return undefined;
-	}
-	const callback = instructionOperand(fn, instruction, opcode === "callKnown" ? 1 : 2);
+	return typeof operation === "string" &&
+		builtinOperationDescriptor(operation)?.callback !== undefined
+		? operation
+		: undefined;
+}
+
+export function coreDirectBuiltinCallbackTarget(
+	fn: CoreFunctionStore,
+	instruction: CoreInstructionId,
+): CoreFunctionId | undefined {
+	const operation = coreBuiltinCallbackOperation(fn, instruction);
+	if (operation === undefined) return undefined;
+	const descriptor = builtinOperationDescriptor(operation)!.callback!;
+	const offset = fn.instructionOpcodeName(instruction) === "callKnown" ? 1 : 2;
+	const callback = instructionOperand(fn, instruction, offset + descriptor.argumentIndex);
 	return callback === undefined ? undefined : coreDirectCreatedFunction(fn, callback);
 }
 

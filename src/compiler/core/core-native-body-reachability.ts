@@ -78,6 +78,7 @@ export function coreNativeBodyOmissionProofIsCurrent(
 						site.caller === call.caller &&
 						site.instruction === call.instruction &&
 						site.numericSortCallback === call.numericSortCallback &&
+						site.builtinCallbackOperation === call.builtinCallbackOperation &&
 						site.fieldObject === call.fieldObject
 					);
 				})
@@ -113,7 +114,11 @@ function findSpecializedOnlyFunctions(
 	const covered = new Map<CoreFunctionId, Map<CoreInstructionId, Set<CoreFunctionId>>>();
 	for (const entry of entries) {
 		for (const site of entry.callSites) {
-			if (site.numericSortCallback !== undefined || site.fieldObject !== undefined)
+			if (
+				site.numericSortCallback !== undefined ||
+				site.fieldObject !== undefined ||
+				site.builtinCallbackOperation !== undefined
+			)
 				continue;
 			const byInstruction =
 				covered.get(site.caller) ?? new Map<CoreInstructionId, Set<CoreFunctionId>>();

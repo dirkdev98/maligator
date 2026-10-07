@@ -2579,6 +2579,7 @@ export function lowerCoreCompilationToTargetProgram(
 		entries.push(entry);
 		directEntryPlans.set(entry.function, entries);
 		for (const site of entry.callSites) {
+			if (site.builtinCallbackOperation !== undefined) continue;
 			if (site.numericSortCallback !== undefined) {
 				const calls =
 					numericSortCallbacks.get(site.caller) ??

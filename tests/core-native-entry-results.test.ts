@@ -100,6 +100,7 @@ function resultGraph(
 		analyses,
 		new Set(program.functionIds()),
 		[initial],
+		[],
 		(target, _instruction, code, work) => {
 			admissions.push({ target, code, work });
 			return options.allowEntries !== false;

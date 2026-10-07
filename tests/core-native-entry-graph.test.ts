@@ -136,6 +136,7 @@ function graph(
 		analyses,
 		new Set(program.functionIds()),
 		initial,
+		[],
 		() => admitted++ < entryBudget,
 		() => {
 			analysesRun++;

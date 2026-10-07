@@ -371,6 +371,7 @@ export interface CoreDirectEntryCallSite {
 	readonly caller: CoreFunctionId;
 	readonly instruction: CoreInstructionId;
 	readonly guarded?: true;
+	readonly builtinCallbackOperation?: string;
 	readonly numericSortCallback?: "sort" | "toSorted";
 	readonly numericSortCallbackViaCall?: true;
 	readonly fieldObject?: CoreInstructionId;

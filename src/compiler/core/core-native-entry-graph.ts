@@ -1,3 +1,4 @@
+import { builtinOperationDescriptor } from "../shared/builtin-registry.ts";
 import {
 	COMPILER_VALUE_KIND_BOOLEAN,
 	COMPILER_VALUE_KIND_NUMBER,
@@ -5,8 +6,13 @@ import {
 } from "../shared/compiler-value-kinds.ts";
 import type { CoreAnalysisManager } from "./core-analysis-manager.ts";
 import { CORE_GUARDED_INLINE_FALLBACK_ATTRIBUTE } from "./core-internal-attributes.ts";
+import { coreBuiltinCallbackOperation } from "./core-ir-call-targets.ts";
 import { CORE_CONTROL_FLOW_BUNDLE_ANALYSIS } from "./core-ir-control-flow.ts";
-import type { CoreDirectEntryPlan, CorePlanRepresentation } from "./core-ir-regions.ts";
+import type {
+	CoreDirectBuiltinCallbackPlan,
+	CoreDirectEntryPlan,
+	CorePlanRepresentation,
+} from "./core-ir-regions.ts";
 import type { CoreProgramSummaries } from "./core-ir-summaries.ts";
 import type { CoreFunctionId, CoreInstructionId } from "./core-ir.ts";
 import {
@@ -50,6 +56,7 @@ export function connectCoreNativeEntries(
 	analyses: CoreAnalysisManager,
 	live: ReadonlySet<CoreFunctionId>,
 	initial: ReadonlyArray<CoreDirectEntryPlan>,
+	callbacks: ReadonlyArray<CoreDirectBuiltinCallbackPlan>,
 	admit: (
 		target: CoreFunctionId,
 		instruction: CoreInstructionId,
@@ -96,6 +103,7 @@ export function connectCoreNativeEntries(
 		target: CoreFunctionId,
 		instruction: CoreInstructionId,
 		parameters: ReadonlyArray<CorePlanRepresentation>,
+		callSites: CoreDirectEntryPlan["callSites"] = Object.freeze([]),
 	): EntryNode | undefined => {
 		const signature = signatureKey(parameters);
 		const entries = nodes.get(target) ?? [];
@@ -133,7 +141,6 @@ export function connectCoreNativeEntries(
 				: !admit(target, instruction, generatedCode, compilerWork)
 		)
 			return undefined;
-		const callSites = Object.freeze([]);
 		const variant = analyzeCoreNativeEntry(
 			fn,
 			cfg(target),
@@ -164,6 +171,70 @@ export function connectCoreNativeEntries(
 			}),
 		);
 	};
+	const callbackSeeds = new Map<
+		string,
+		{
+			target: CoreFunctionId;
+			parameters: ReadonlyArray<CorePlanRepresentation>;
+			calls: Array<CoreDirectEntryPlan["callSites"][number]>;
+		}
+	>();
+	for (const callback of callbacks) {
+		const caller = program.function(callback.caller);
+		const operation = coreBuiltinCallbackOperation(caller, callback.instruction);
+		const invocation =
+			operation === undefined
+				? undefined
+				: builtinOperationDescriptor(operation)?.callback;
+		if (invocation === undefined || operation === undefined) continue;
+		const fn = program.function(callback.target);
+		if (
+			(nodes.get(callback.target) ?? []).some(
+				({ entry }) =>
+					plain(entry) &&
+					entry.parameterRepresentations.some(
+						(rep, index) => rep !== "boxed" && index < invocation.argumentKinds.length,
+					),
+			)
+		)
+			continue;
+		const parameters = Array.from(
+			{ length: fn.parameterCount },
+			(_, index): CorePlanRepresentation =>
+				invocation.argumentKinds[index] === "number" ? "f64" : "boxed",
+		);
+		if (
+			!parameters.some(
+				(rep, index) =>
+					rep !== "boxed" && fn.valueUseCount(fn.kernel.functionParameter(index)) > 0,
+			)
+		)
+			continue;
+		const key = `${callback.target}:${signatureKey(parameters)}`;
+		const seed = callbackSeeds.get(key) ?? {
+			target: callback.target,
+			parameters,
+			calls: [],
+		};
+		seed.calls.push(
+			Object.freeze({
+				caller: callback.caller,
+				instruction: callback.instruction,
+				guarded: true,
+				builtinCallbackOperation: operation,
+			}),
+		);
+		callbackSeeds.set(key, seed);
+	}
+	for (const seed of callbackSeeds.values()) {
+		if (!admitAnalysis(seed.target, seed.parameters.length + seed.calls.length)) continue;
+		request(
+			seed.target,
+			seed.calls[0]!.instruction,
+			seed.parameters,
+			Object.freeze(seed.calls),
+		);
+	}
 	for (let cursor = 0; cursor < pending.length; cursor++) {
 		const node = pending[cursor]!;
 		queued.delete(node);

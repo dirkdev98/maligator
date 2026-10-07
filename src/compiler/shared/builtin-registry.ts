@@ -96,6 +96,10 @@ export interface BuiltinOperationDescriptor {
 	readonly lowerings: ReadonlyArray<string>;
 	/** Exact argument count currently accepted by the unboxed numeric lowering. */
 	readonly nativeNumberArity?: number;
+	readonly callback?: {
+		readonly argumentIndex: number;
+		readonly argumentKinds: ReadonlyArray<"any" | "number" | "object">;
+	};
 }
 
 export type ExactBuiltinReceiverProof =
@@ -448,6 +452,13 @@ const arrayIterationOperations: ReadonlyArray<BuiltinOperationDescriptor> = (
 	result,
 	realm: "semantic-identity",
 	lowerings: ["generic", "inlined-callback-loop"],
+	callback: {
+		argumentIndex: 0,
+		argumentKinds:
+			key === "reduce" || key === "reduceRight"
+				? ["any", "any", "number", "object"]
+				: ["any", "number", "object"],
+	},
 }));
 
 export const builtinOperations: ReadonlyArray<BuiltinOperationDescriptor> = [

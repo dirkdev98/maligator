@@ -2025,6 +2025,25 @@ export function buildCoreOptimizationPlan(
 			}
 		}
 	}
+	const directBuiltinCallbacks = Object.freeze(
+		resolvedLocalInputs.flatMap((input) => {
+			const fn = program.function(input.function);
+			return input.blocks.flatMap((block) =>
+				[...fn.bodyInstructionIds(block)].flatMap((instruction) => {
+					const target = coreDirectBuiltinCallbackTarget(fn, instruction);
+					return target === undefined || !live.has(target)
+						? []
+						: [
+								Object.freeze({
+									caller: input.function,
+									instruction,
+									target,
+								}),
+							];
+				}),
+			);
+		}),
+	);
 	const initialDirectEntries = [...directEntriesByFunction]
 		.sort(([left], [right]) => left - right)
 		.flatMap(([, entries]) => entries);
@@ -2037,6 +2056,7 @@ export function buildCoreOptimizationPlan(
 					analyses,
 					live,
 					initialDirectEntries,
+					directBuiltinCallbacks,
 					(target, instruction, generatedCode, compilerWork) => {
 						const budget: CoreTransformCandidate = {
 							kind: "direct-entry",
@@ -2117,25 +2137,7 @@ export function buildCoreOptimizationPlan(
 			),
 		),
 		directEntries: Object.freeze(directEntries),
-		directBuiltinCallbacks: Object.freeze(
-			resolvedLocalInputs.flatMap((input) => {
-				const fn = program.function(input.function);
-				return input.blocks.flatMap((block) =>
-					[...fn.bodyInstructionIds(block)].flatMap((instruction) => {
-						const target = coreDirectBuiltinCallbackTarget(fn, instruction);
-						return target === undefined || !live.has(target)
-							? []
-							: [
-									Object.freeze({
-										caller: input.function,
-										instruction,
-										target,
-									}),
-								];
-					}),
-				);
-			}),
-		),
+		directBuiltinCallbacks,
 		specializedOnlyFunctions: Object.freeze(
 			coreSpecializedOnlyFunctions(
 				program,
