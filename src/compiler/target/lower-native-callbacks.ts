@@ -47,11 +47,12 @@ export function selectNativeCallbackTransports(
 			const parameters = entry.argumentRepresentations ?? entry.parameterRepresentations;
 			if (parameters.some((rep, index) => index >= arity && rep !== "boxed")) continue;
 			const score =
-				parameters.filter((rep) => rep !== "boxed").length * (arity + 1) +
 				parameters.filter(
 					(rep, index) =>
 						rep === "number" && invocation!.argumentKinds[index] === "number",
-				).length;
+				).length *
+					(arity + 1) +
+				parameters.filter((rep) => rep !== "boxed").length;
 			if (score <= selectedScore) continue;
 			selectedScore = score;
 			selected = {

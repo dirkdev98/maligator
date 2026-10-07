@@ -99,11 +99,38 @@ export function connectCoreNativeEntries(
 	const signatureKey = (representations: ReadonlyArray<CorePlanRepresentation>) =>
 		representations.join(",");
 	const declined = new Set<string>();
+	const candidateCosts = new Map<
+		CoreFunctionId,
+		{ generatedCode: number; compilerWork: number } | undefined
+	>();
+	const candidateCost = (target: CoreFunctionId) => {
+		if (candidateCosts.has(target)) return candidateCosts.get(target);
+		const fn = program.function(target);
+		const instructionCount = [...fn.instructionIds()].length;
+		const observation = coreArgumentObservation(fn);
+		const eligible =
+			!fn.isGenerator &&
+			!fn.isAsync &&
+			!fn.metadata.isClassConstructor &&
+			!fn.metadata.isDerivedConstructor &&
+			instructionCount <= 512 &&
+			observation.kind !== "general" &&
+			!observation.readsCount &&
+			observation.indices.length === 0 &&
+			observation.restStarts.length === 0;
+		const generatedCode = Math.max(8, instructionCount);
+		const cost = eligible
+			? { generatedCode, compilerWork: generatedCode + fn.valueCapacity }
+			: undefined;
+		candidateCosts.set(target, cost);
+		return cost;
+	};
 	const request = (
 		target: CoreFunctionId,
 		instruction: CoreInstructionId,
 		parameters: ReadonlyArray<CorePlanRepresentation>,
 		callSites: CoreDirectEntryPlan["callSites"] = Object.freeze([]),
+		prepared?: ReturnType<typeof analyzeCoreNativeEntry>,
 	): EntryNode | undefined => {
 		const signature = signatureKey(parameters);
 		const entries = nodes.get(target) ?? [];
@@ -116,22 +143,10 @@ export function connectCoreNativeEntries(
 		if (declined.has(key) || entries.length >= 4) return undefined;
 		declined.add(key);
 		const fn = program.function(target);
-		const instructionCount = [...fn.instructionIds()].length;
-		const observation = coreArgumentObservation(fn);
-		if (
-			fn.isGenerator ||
-			fn.isAsync ||
-			fn.metadata.isClassConstructor ||
-			fn.metadata.isDerivedConstructor ||
-			instructionCount > 512 ||
-			observation.kind === "general" ||
-			observation.readsCount ||
-			observation.indices.length > 0 ||
-			observation.restStarts.length > 0
-		)
-			return undefined;
-		const generatedCode = Math.max(8, instructionCount);
-		const compilerWork = generatedCode + fn.valueCapacity;
+		const cost = candidateCost(target);
+		if (cost === undefined) return undefined;
+		const generatedCode = cost.generatedCode;
+		const compilerWork = prepared === undefined ? cost.compilerWork : 0;
 		const resultOnly = parameters.every((representation) => representation === "boxed");
 		// A boxed-input helper can still return a scalar. Charge its proof as
 		// discovery so a rejected result does not consume a generated sibling.
@@ -141,13 +156,9 @@ export function connectCoreNativeEntries(
 				: !admit(target, instruction, generatedCode, compilerWork)
 		)
 			return undefined;
-		const variant = analyzeCoreNativeEntry(
-			fn,
-			cfg(target),
-			parameters,
-			undefined,
-			callSites,
-		);
+		const variant =
+			prepared ??
+			analyzeCoreNativeEntry(fn, cfg(target), parameters, undefined, callSites);
 		if (
 			resultOnly &&
 			(variant.resultRepresentation === "boxed" ||
@@ -204,9 +215,11 @@ export function connectCoreNativeEntries(
 				invocation.argumentKinds[index] === "number" ? "f64" : "boxed",
 		);
 		if (
-			!parameters.some(
-				(rep, index) =>
-					rep !== "boxed" && fn.valueUseCount(fn.kernel.functionParameter(index)) > 0,
+			!invocation.argumentKinds.some(
+				(kind, index) =>
+					index < fn.parameterCount &&
+					kind !== "object" &&
+					fn.valueUseCount(fn.kernel.functionParameter(index)) > 0,
 			)
 		)
 			continue;
@@ -226,14 +239,76 @@ export function connectCoreNativeEntries(
 		);
 		callbackSeeds.set(key, seed);
 	}
+	const nominatedTargets = new Set<CoreFunctionId>();
 	for (const seed of callbackSeeds.values()) {
-		if (!admitAnalysis(seed.target, seed.parameters.length + seed.calls.length)) continue;
-		request(
-			seed.target,
-			seed.calls[0]!.instruction,
-			seed.parameters,
-			Object.freeze(seed.calls),
+		if ((nodes.get(seed.target)?.length ?? 0) >= 4) continue;
+		const cost = candidateCost(seed.target);
+		if (cost === undefined) continue;
+		const fn = program.function(seed.target);
+		const invocation = builtinOperationDescriptor(
+			seed.calls[0]!.builtinCallbackOperation!,
+		)!.callback!;
+		const nominated = seed.parameters.map((rep, index) =>
+			!nominatedTargets.has(seed.target) &&
+			invocation.argumentKinds[index] === "any" &&
+			fn.valueUseCount(fn.kernel.functionParameter(index)) > 0
+				? ("f64" as const)
+				: rep,
 		);
+		const triesNumbers = nominated.some((rep, index) => rep !== seed.parameters[index]);
+		if (triesNumbers) nominatedTargets.add(seed.target);
+		if (
+			!admitAnalysis(
+				seed.target,
+				cost.compilerWork * (triesNumbers ? 2 : 1) + seed.calls.length,
+			)
+		)
+			continue;
+		const control = cfg(seed.target);
+		const calls = Object.freeze(seed.calls);
+		const baseline = analyzeCoreNativeEntry(
+			fn,
+			control,
+			seed.parameters,
+			undefined,
+			calls,
+		);
+		let parameters = seed.parameters,
+			callSites = calls,
+			variant = baseline;
+		if (triesNumbers) {
+			const guardedCalls = Object.freeze(
+				calls.map((site) =>
+					Object.freeze({ ...site, builtinCallbackNumbers: true as const }),
+				),
+			);
+			const candidate = analyzeCoreNativeEntry(
+				fn,
+				control,
+				nominated,
+				undefined,
+				guardedCalls,
+			);
+			const baselineNumbers = new Set(
+				(baseline.operatorInputs ?? [])
+					.filter((site) =>
+						site.masks.every((mask) => mask === COMPILER_VALUE_KIND_NUMBER),
+					)
+					.map((site) => site.instruction),
+			);
+			const gain = (candidate.operatorInputs ?? []).some(
+				(site) =>
+					!baselineNumbers.has(site.instruction) &&
+					site.masks.every((mask) => mask === COMPILER_VALUE_KIND_NUMBER),
+			);
+			if (gain) {
+				parameters = nominated;
+				callSites = guardedCalls;
+				variant = candidate;
+			}
+		}
+		if (parameters.every((rep) => rep === "boxed")) continue;
+		request(seed.target, calls[0]!.instruction, parameters, callSites, variant);
 	}
 	for (let cursor = 0; cursor < pending.length; cursor++) {
 		const node = pending[cursor]!;

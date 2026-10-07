@@ -32,12 +32,22 @@ describe("builtin-only callback entry discovery", () => {
 			const transports = pair.programImage.native.functions.flatMap(
 				(fn) => fn.storage!.callbackTransports,
 			);
-			expect(new Set(transports.map((plan) => plan.functionIndex)).size).toBe(2);
+			expect(new Set(transports.map((plan) => plan.functionIndex)).size).toBe(3);
 			for (const transport of transports) {
 				const callback = pair.programImage.native.functions[transport.functionIndex]!;
 				expect(callback.specializedOnly).not.toBe(true);
 				expect(callback.directEntries).toHaveLength(1);
-				expect(transport.parameters.filter((rep) => rep === "number")).toHaveLength(1);
+				const name = String.fromCharCode(
+					...pair.programImage.runtime.stringConstants[callback.body.nameStringIndex]!,
+				);
+				expect(transport.parameters).toEqual(
+					name === "mapper"
+						? ["number", "number", "boxed"]
+						: name === "numericReducer"
+							? ["number", "number", "number", "boxed"]
+							: ["boxed", "boxed", "number", "boxed"],
+				);
+				expect(transport.parameters.at(-1)).toBe("boxed");
 			}
 			for (const binary of [pair.compiled, pair.interpreted])
 				for (const stress of [{}, STRESS_ENV])

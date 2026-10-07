@@ -79,6 +79,7 @@ export function coreNativeBodyOmissionProofIsCurrent(
 						site.instruction === call.instruction &&
 						site.numericSortCallback === call.numericSortCallback &&
 						site.builtinCallbackOperation === call.builtinCallbackOperation &&
+						site.builtinCallbackNumbers === call.builtinCallbackNumbers &&
 						site.fieldObject === call.fieldObject
 					);
 				})

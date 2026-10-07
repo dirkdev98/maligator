@@ -2105,6 +2105,14 @@ export function verifyCoreOptimizationPlan(
 			: undefined;
 		const callbackOrigins = new Set<string>();
 		for (const site of entry.callSites) {
+			if (
+				site.builtinCallbackNumbers !== undefined &&
+				(site.builtinCallbackNumbers !== true ||
+					site.builtinCallbackOperation === undefined)
+			)
+				fail(
+					`direct entry ${entry.function}:${entry.id} has an invalid guarded callback nomination`,
+				);
 			if (site.builtinCallbackOperation !== undefined) {
 				const caller = program.function(site.caller);
 				const invocation = builtinOperationDescriptor(
@@ -2133,10 +2141,14 @@ export function verifyCoreOptimizationPlan(
 					site.fieldObject !== undefined ||
 					entry.fieldParameters !== undefined ||
 					entry.argumentRepresentations !== undefined ||
-					entry.parameterRepresentations.some(
-						(rep, index) =>
-							rep !== (invocation.argumentKinds[index] === "number" ? "f64" : "boxed"),
-					)
+					entry.parameterRepresentations.some((rep, index) => {
+						const kind = invocation.argumentKinds[index];
+						return kind === "number"
+							? rep !== "f64"
+							: kind === "any" && site.builtinCallbackNumbers === true
+								? rep !== "boxed" && rep !== "f64"
+								: rep !== "boxed";
+					})
 				)
 					fail(
 						`direct entry ${entry.function}:${entry.id} has an invalid builtin callback contract`,
