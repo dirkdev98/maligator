@@ -58,8 +58,33 @@ for (const factory of [own, accessor]) {
 
 let displacedTarget = own(11);
 const displaced = new WeakRef(displacedTarget);
+let transportedTarget = own(11);
+const transportedWeak = new WeakRef(transportedTarget);
+
+const exactTransfer = function exactTransfer(value) {
+	let marker = value;
+	for (let index = 0; index < 24; index++) marker += 0;
+	if (value !== 11) {
+		gc();
+		return own(marker);
+	}
+	const object = transportedTarget;
+	transportedTarget = null;
+	gc();
+	return object;
+};
+
+function transportedRelease() {
+	const first = exactTransfer(11);
+	const marker = first.marker;
+	const second = exactTransfer(17);
+	gc();
+	if (transportedWeak.deref() !== undefined) throw new Error("transported root retained");
+	return marker + second.marker;
+}
 
 setTimeout(() => {
+	if (transportedRelease() !== 28) throw new Error("transported replacement lost");
 	function transfer(value) {
 		if (value !== 11) return own(value);
 		const object = displacedTarget;

@@ -1,4 +1,7 @@
-import { beforeAll, describe, expect, it } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { emitCompiledFunction } from "../../src/compiler/target/render-native-c.ts";
 import {
 	assertExactLines,
@@ -9,6 +12,8 @@ import {
 } from "../../src/test-harness.ts";
 
 describe("compact native shadow roots", () => {
+	const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-native-root-storage-"));
+	afterAll(() => rmSync(outDir, { recursive: true, force: true }));
 	let compiled: string;
 	let interpreted: string;
 	beforeAll(() => {
@@ -16,6 +21,7 @@ describe("compact native shadow roots", () => {
 			fixture: "tests/local/native-root-storage.js",
 			name: "native-root-storage",
 			mainFile: HOST_MAIN,
+			outDir,
 		});
 		({ compiled, interpreted } = pair);
 		const kernel = pair.programImage.native.functions.find(
@@ -29,10 +35,33 @@ describe("compact native shadow roots", () => {
 			kernel.storage!.rootRegisters.length,
 		);
 		expect(emitCompiledFunction(kernel, kernel.functionIndex, "", false)).not.toBeNull();
+		const selected = new Set<string>();
+		for (const fn of pair.programImage.native.functions) {
+			const name = String.fromCharCode(
+				...(pair.programImage.runtime.stringConstants[fn.body.nameStringIndex] ?? []),
+			);
+			if (name !== "transportedRelease") continue;
+			expect(emitCompiledFunction(fn, fn.functionIndex, "", false)).not.toBeNull();
+			for (const variant of [
+				fn.storage!,
+				...fn.directEntries.map((entry) => entry.storage!),
+			]) {
+				for (const plan of variant.callTransports) {
+					const op = fn.body.instructions[plan.instructionIp]!;
+					if (
+						op.opcode === "CALL" &&
+						variant.privateCallResultIps.includes(plan.instructionIp) &&
+						variant.privateRegisters.includes(op.dst)
+					)
+						selected.add(name);
+				}
+			}
+		}
+		expect(selected).toEqual(new Set(["transportedRelease"]));
 	}, 600_000);
 
 	it.each(["compiled", "interpreted"])(
-		"preserves disjoint, joined and exceptional roots with collecting accessors when %s",
+		"preserves private call results, exceptions, and disjoint lifetimes when %s",
 		(backend) => {
 			const binary = backend === "compiled" ? compiled : interpreted;
 			for (const mode of [{}, STRESS_ENV])

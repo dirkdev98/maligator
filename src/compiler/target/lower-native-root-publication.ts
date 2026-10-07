@@ -1,3 +1,4 @@
+import type { NativeCallTransportPlan } from "./lower-native-calls.ts";
 import { nativeProfitablePrivateRootRegisters } from "./lower-native-root-profitability.ts";
 import type { NativeFunctionPlan } from "./program-image.ts";
 import {
@@ -14,20 +15,46 @@ const ROOTED_OUTPUT_OPCODES = new Set([
 	"ITERATOR_NEXT",
 ]);
 
-/** Ordinary calls publish only their final returned value, after the helper and throw check. */
 export function nativePrivateCallResultIps(
 	fn: BytecodeFunction,
 	native: NativeFunctionPlan,
+	callTransports: ReadonlyArray<NativeCallTransportPlan> = [],
 ): ReadonlySet<number> {
 	if (fn.isGenerator || fn.isAsync) return new Set();
 	const conflicts = new Set(native.regionActions.map(({ ip }) => ip));
-	for (const call of native.fieldCalls ?? []) conflicts.add(call.callIp);
+	for (const region of native.specializations)
+		for (const ip of region.claimedIps) conflicts.add(ip);
+	for (const call of native.fieldCalls ?? [])
+		for (let ip = call.allocationIp; ip <= call.callIp; ip++) conflicts.add(ip);
+	const transportedCalls = new Set(
+		callTransports
+			.filter(
+				(plan) =>
+					plan.targets.length > 0 &&
+					plan.targets.every((target) => target.fields.length === 0),
+			)
+			.map((plan) => plan.instructionIp),
+	);
 	const privateResults = new Set<number>();
 	for (const { instructionIp } of native.gc.safepoints) {
+		const op = fn.instructions[instructionIp];
+		if (op?.opcode !== "CALL" || conflicts.has(instructionIp)) continue;
+		const call = native.instructions[instructionIp];
+		// Selected script transports assign only the final value, including guard misses.
 		if (
-			fn.instructions[instructionIp]?.opcode === "CALL" &&
-			native.instructions[instructionIp] === undefined &&
-			!conflicts.has(instructionIp)
+			call === undefined ||
+			(call.kind === "call" &&
+				native.registerRepresentations[op.dst] === "boxed" &&
+				transportedCalls.has(instructionIp) &&
+				(call.directFunctionIndex !== undefined ||
+					(call.guardedFunctionIndices?.length ?? 0) > 0) &&
+				call.directFunctionCall !== true &&
+				call.guardedBuiltinCall === undefined &&
+				call.numericSortCallback === undefined &&
+				call.exactCollectionReceiver === undefined &&
+				call.directStringCharCodeAtPosition === undefined &&
+				call.directCallTargetFunctionIndex === undefined &&
+				call.directCallbackFunctionIndex === undefined)
 		)
 			privateResults.add(instructionIp);
 	}
@@ -174,6 +201,10 @@ export function nativePrivateRootRegisters(
 			// internally rooted runtime temporaries have returned successfully.
 			const finalIteratorOutput =
 				instruction.opcode === "ITERATOR_STEP" && writesRegister;
+			const finalCallOutput =
+				privateCallResultIps.has(ip) &&
+				writesRegister &&
+				!vmInstructionUsesRegister(instruction, register);
 			const regionRequiresContinuousRoot = actions?.some((action) => {
 				const region = native.specializations[action.regionIndex];
 				if (region?.kind === "numeric-fusion") {
@@ -190,6 +221,7 @@ export function nativePrivateRootRegisters(
 					!rootedOutputs) ||
 				(!(rootedOutputs && writesRegister) &&
 					!finalIteratorOutput &&
+					!finalCallOutput &&
 					(regionRequiresContinuousRoot ||
 						(hasStorageSpecialization &&
 							(writesRegister || vmInstructionUsesRegister(instruction, register))))) ||

@@ -121,6 +121,9 @@ The independent target boundary and current storage contract are recorded in
 - [x] Persist typed call argument/result conversions per caller entry, validate
       target ABIs across artifact and batch boundaries, and retain guarded fallback
       and realm/exception/root behavior without boxed completion aggregates.
+- [x] Use selected ordinary script-call transports to keep boxed final results in
+      private locals, preserving GC publication, guard misses, exceptions, and
+      disjoint heap lifetimes while retaining borrowed inputs and virtual fields.
 - [ ] Extend selected typed call/aggregate transport and expression regions using
       Core proofs, with bounded code-size decisions and matched runtime evidence.
       Move remaining emission-local selection into explicit native plans before

@@ -94,6 +94,7 @@ function emit(
 	};
 	const native: NativeFunctionPlan = {
 		...base,
+		storageValues: [0, 1, 2],
 		instructions: [{ kind: "call", directFunctionIndex: 1 }, undefined],
 		directEntries: [
 			numeric,
@@ -159,6 +160,18 @@ describe("native entry call overrides", () => {
 		expect(source).toContain("mal_vm_call_cached(vm,");
 		expect(emitted.source).not.toContain("__guarded_index_0");
 	});
+	it.each([true, false])(
+		"publishes the private guarded boxed result when typed availability is %s",
+		(available) => {
+			const source = emit(available, true, "boxed", "boxed").directEntries[0]!.source;
+			expect(source).toContain("#define r2 (__private_r2)");
+			expect(source).toMatch(/if \(mal_gc_poll\) \{[^}]*__gc_slots\[\d+\] = r2;/);
+			expect(source).not.toContain("__private_r2 = __gc_slots[");
+			expect(source).toContain("mal_vm_call_cached(vm,");
+			if (available) expect(source).toContain("mal_direct_1_0(");
+			else expect(source).toContain("mal_vm_call_exact_script_compiled_callback(");
+		},
+	);
 	it.each([
 		["number", "number", "__guarded_entry_value_0"],
 		["int32", "int32", "__guarded_entry_value_0"],

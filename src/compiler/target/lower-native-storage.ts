@@ -592,7 +592,8 @@ function lowerStorage(
 			for (const local of point.rootRegisters) counts[local]!++;
 		roots.sort((left, right) => counts[left]! - counts[right]! || left - right);
 	}
-	const calls = nativePrivateCallResultIps(fn, native);
+	const callTransports = selectNativeCallTransports(native, entries);
+	const calls = nativePrivateCallResultIps(fn, native, callTransports);
 	const privateLocals = new Set(
 		nativePrivateRootRegisters(fn, native, new Set(roots), calls),
 	);
@@ -601,7 +602,7 @@ function lowerStorage(
 	const scalar = scalarStorage(native);
 	return {
 		...fastPaths,
-		callTransports: selectNativeCallTransports(native, entries),
+		callTransports,
 		suspension: compactNativeSuspension(
 			suspension,
 			new Set(

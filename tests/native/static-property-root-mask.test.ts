@@ -333,7 +333,11 @@ describe("native static-property root-mask publication", () => {
 				retainedRegisters,
 				privateRegisters,
 				rootSlots,
-				selectedPrivateCallIps: nativePrivateCallResultIps(fn, native),
+				selectedPrivateCallIps: nativePrivateCallResultIps(
+					fn,
+					native,
+					native.storage!.callTransports,
+				),
 				boundaryIncomingRoots: boundarySafepoints.map(
 					(safepoint) => safepoint.incomingRootRegisters ?? [],
 				),

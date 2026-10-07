@@ -161,7 +161,11 @@ describe("compiled roots during a concurrent object snapshot", () => {
 			expect(getterIndex).toBeGreaterThanOrEqual(0);
 			const native = image.native.functions[getterIndex]!;
 			const fn = native.body;
-			const privateCalls = nativePrivateCallResultIps(fn, native);
+			const privateCalls = nativePrivateCallResultIps(
+				fn,
+				native,
+				native.storage!.callTransports,
+			);
 			const frameRegisters = new Set(
 				native.gc.safepoints.flatMap((point) => point.rootRegisters),
 			);

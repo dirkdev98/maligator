@@ -23,6 +23,12 @@ share slots only when their complete incoming/outgoing safepoint unions do not
 overlap; parameters, argument snapshots, continuously rooted locals, and helper
 output addresses retain dedicated slots. Publication tracks each slot's current
 occupant and forgets potentially cleared values at GC and control-flow boundaries.
+Selected ordinary script-call transports also admit boxed final results to private
+locals: typed, unavailable-entry, and guard-miss branches check completion before
+assignment and publish the result before their outgoing GC poll. Region claims,
+field materialization spans, builtin overlays, and destinations aliasing call inputs
+retain continuously rooted storage. Transport selection precedes root selection;
+recomputation never consumes a caller's previous storage plan.
 Shared slots initialize once before entry allocations; resumable invocation roots
 retain dedicated storage. Root slots differ from computational locals, and expression values have no local
 assignment. Safepoint masks cover the entire native root set using an inline word

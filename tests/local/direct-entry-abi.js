@@ -64,10 +64,16 @@ function guardedHeap(value) {
 	return result;
 }
 
-function guardedCaller(value, mode) {
+function inspectGuardedResult(result) {
+	globalThis.__mal_collect_garbage?.();
+	if (typeof result === "object") return `heap:${result.value}`;
+	return Object.is(result, -0) ? "negative-zero" : String(result);
+}
+
+function guardedCaller(value, mode, inspect) {
 	try {
 		const result = guardedNumber(value, mode);
-		return Object.is(result, -0) ? "negative-zero" : String(result);
+		return inspect(result);
 	} catch (error) {
 		return error.message;
 	}
@@ -77,13 +83,17 @@ globalThis.guardedNumber = guardedNumber;
 globalThis.guardedHeap = guardedHeap;
 globalThis.guardedCaller = guardedCaller;
 const guardedResults = [];
-for (let mode = 0; mode < 6; mode++) guardedResults.push(guardedCaller(3, mode));
+for (let mode = 0; mode < 6; mode++)
+	guardedResults.push(guardedCaller(3, mode, inspectGuardedResult));
 guardedNumber = function guardedReplacement(value, mode) {
 	globalThis.gc?.();
 	if (mode === 4) throw new Error(`fallback:${value}`);
 	return { value };
 };
-const guardMissResults = [guardedCaller(3, 0), guardedCaller(3, 4)];
+const guardMissResults = [
+	guardedCaller(3, 0, inspectGuardedResult),
+	guardedCaller(3, 4, inspectGuardedResult),
+];
 
 const guardedObject = guardedHeap(3);
 

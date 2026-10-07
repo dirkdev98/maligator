@@ -4,8 +4,10 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { resolveBuildConfig } from "../../src/build-config.ts";
+import { emitCompiledFunction } from "../../src/compiler/target/render-native-c.ts";
 import {
 	buildBackendPairFromOneProgramImage,
+	HOST_MAIN,
 	runToStdout,
 	STRESS_ENV,
 } from "../../src/test-harness.ts";
@@ -27,6 +29,7 @@ describe("native direct-entry ABI", () => {
 			name: "direct-entry-abi",
 			config: resolveBuildConfig({}),
 			outDir,
+			mainFile: HOST_MAIN,
 			environment: { ...process.env, MAL_PERF_STATS: "1" },
 		});
 		({ compiled, interpreted } = pair);
@@ -47,12 +50,39 @@ describe("native direct-entry ABI", () => {
 				),
 			),
 		).toBe(true);
+		const caller = pair.programImage.native.functions.find(
+			(fn) =>
+				String.fromCharCode(
+					...(pair.programImage.runtime.stringConstants[fn.body.nameStringIndex] ?? []),
+				) === "guardedCaller",
+		)!;
+		expect(emitCompiledFunction(caller, caller.functionIndex, "", false)).not.toBeNull();
+		expect(
+			caller.directEntries.some((entry) =>
+				entry.storage!.callTransports.some((plan) => {
+					const op = caller.body.instructions[plan.instructionIp]!;
+					return (
+						op.opcode === "CALL" &&
+						entry.callOverrides?.some(
+							(call) => call.guarded && call.instructionIp === plan.instructionIp,
+						) &&
+						entry.storage!.privateCallResultIps.includes(plan.instructionIp) &&
+						entry.storage!.privateRegisters.includes(op.dst)
+					);
+				}),
+			),
+		).toBe(true);
 	}, 600_000);
 
 	it("preserves calls, captures, arguments, exceptions, and GC behavior", () => {
 		for (const binary of [compiled, interpreted]) {
-			expect(runToStdout(binary)).toBe(expected);
-			expect(runToStdout(binary, { env: STRESS_ENV, timeoutMs: 60_000 })).toBe(expected);
+			expect(runToStdout(binary, { env: { MAL_HOST_GC: "1" } })).toBe(expected);
+			expect(
+				runToStdout(binary, {
+					env: { MAL_HOST_GC: "1", ...STRESS_ENV },
+					timeoutMs: 60_000,
+				}),
+			).toBe(expected);
 		}
 	});
 
