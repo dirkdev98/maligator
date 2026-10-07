@@ -42,6 +42,7 @@ import type {
 	ProgramImage,
 } from "./program-image.ts";
 import {
+	decodeVmValueOperand,
 	vmExceptionHandlerTargets,
 	vmInstructionReadRegisters,
 	vmInstructionWriteRegisters,
@@ -420,6 +421,27 @@ function pureScalarOperation(
 	}
 }
 
+function scalarValueBoundary(op: BytecodeInstruction, local: number): boolean {
+	const isLocal = (operand: number): boolean => {
+		const value = decodeVmValueOperand(operand);
+		return value.kind === "register" && value.register === local;
+	};
+	switch (op.opcode) {
+		case "CREATE_OBJECT_SHAPED":
+			return op.valueRegisters.includes(local);
+		case "STORE_PROPERTY_STATIC":
+		case "STORE_PROPERTY_STATIC_KNOWN_OWN_SLOT":
+			return op.value === local && op.object !== local;
+		case "STORE_PROPERTY":
+		case "DEFINE_PROPERTY":
+			return op.value === local && op.object !== local && op.key !== local;
+		case "CALL":
+			return !isLocal(op.callee) && !isLocal(op.thisValue) && op.arguments.some(isLocal);
+		default:
+			return false;
+	}
+}
+
 function expressionIps(
 	native: NativeFunctionPlan,
 	jumpTargets: ReadonlySet<number>,
@@ -463,13 +485,25 @@ function expressionIps(
 				native.instructions[consumerIp],
 			) &&
 			consumer.opcode !== "RETURN" &&
-			consumer.opcode !== "JUMP_IF"
+			consumer.opcode !== "JUMP_IF" &&
+			!scalarValueBoundary(consumer, op.dst)
 		)
 			continue;
 		const inputs = vmInstructionReadRegisters(op);
 		const operands = new Set(
 			inputs.flatMap((local) => [...(leavesByLocal.get(local) ?? [local])]),
 		);
+		// Consumer preludes can clear boxed root slots before delayed argument/field evaluation.
+		if (
+			scalarValueBoundary(consumer, op.dst) &&
+			[...operands].some(
+				(local) =>
+					!["number", "int32", "boolean"].includes(
+						native.registerRepresentations[local]!,
+					),
+			)
+		)
+			continue;
 		const cost = 1 + inputs.reduce((sum, local) => sum + (costs.get(local) ?? 1), 0);
 		if (cost > 16) continue;
 		let safe = true;

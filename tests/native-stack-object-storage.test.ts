@@ -9,10 +9,10 @@ import { lowerNativeFunctionStorage } from "../src/compiler/target/lower-native-
 import { vmRegionActions } from "../src/compiler/target/program-image.ts";
 import { emitCompiledFunction } from "../src/compiler/target/render-native-c.ts";
 
-function compile(body: string) {
+function compile(body: string, preamble = "") {
 	return compileSemanticProgramToProgramImage(
 		analyzeSourceAndRunSemanticAnalysis(
-			`function test(input) { ${body} } globalThis.test=test; globalThis.result=test(12);`,
+			`${preamble} function test(input) { ${body} } globalThis.test=test; globalThis.result=test(12);`,
 			"/stack-fields.js",
 		),
 	);
@@ -133,9 +133,13 @@ describe("native typed stack fields", () => {
 			(candidate) => candidate.kind === "stack-object-plan",
 		)!;
 		if (region.kind !== "stack-object-plan") throw new Error("Missing stack certificate");
-		for (const access of region.sites[0]!.accesses.filter(
-			(access) => access.slot === 0,
-		)) {
+		const loads = region.sites[0]!.accesses.filter(
+			(access) =>
+				access.slot === 0 &&
+				native.body.instructions[access.ip]!.opcode.startsWith("LOAD_"),
+		);
+		expect(loads.length).toBeGreaterThan(0);
+		for (const access of loads) {
 			const op = native.body.instructions[access.ip]!;
 			if (
 				op.opcode === "LOAD_PROPERTY_STATIC" ||
@@ -192,7 +196,8 @@ describe("native typed stack fields", () => {
 
 	it("keeps a numeric value with boxed transport rooted while retaining other scalar fields", () => {
 		const native = compile(
-			"const n=+input; const o={x:n,y:2,flag:true}; return o===input?-1:o.x+o.y;",
+			"const n=+input; snapshot=n; const o={x:n,y:2,flag:true}; return o===input?-1:o.x+o.y;",
+			"let snapshot;",
 		).native.functions[1]!;
 		expect(native.storage!.stackObjects[0]!.slotRepresentations).toEqual([
 			"boxed",

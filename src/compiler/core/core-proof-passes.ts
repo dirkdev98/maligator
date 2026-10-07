@@ -804,6 +804,14 @@ function scalarProducerInputsSupportRepresentation(
 			(fn.valueRepresentation(source) === representation || belongsToComponent(source))
 		);
 	}
+	// Unary plus can call user code, but every normal completion is a Number.
+	if (
+		opcode === "unary" &&
+		representation === "f64" &&
+		fn.instructionAttributes(instruction).operator === "+"
+	)
+		return true;
+
 	if (
 		(opcode === "unary" || opcode === "binary") &&
 		(representation === "i32" || representation === "f64")

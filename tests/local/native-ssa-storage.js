@@ -160,6 +160,90 @@ try {
 	console.log("scalar-store-throw", error === storeFailure);
 }
 
+function composeBoundaryValues(left, right, callback, key) {
+	const a = +left;
+	const b = +right;
+	callback(a - b);
+	callback({ difference: a - b, flag: a < b });
+	const object = {};
+	object.numeric = a - b;
+	object[key] = a < b;
+	return object;
+}
+globalThis.composeBoundaryValues = composeBoundaryValues;
+const boundaryOrder = [];
+const boundaryResult = composeBoundaryValues(
+	{
+		valueOf() {
+			boundaryOrder.push("left");
+			gc();
+			return 3.5;
+		},
+	},
+	{
+		valueOf() {
+			boundaryOrder.push("right");
+			gc();
+			return 1;
+		},
+	},
+	(value) => {
+		boundaryOrder.push(typeof value === "number" ? String(value) : JSON.stringify(value));
+		gc();
+	},
+	"flag",
+);
+console.log(
+	"composed-boundaries",
+	JSON.stringify(boundaryResult),
+	boundaryOrder.join(":"),
+);
+
+const preservedBoundaryZero = composeBoundaryValues(
+	{
+		valueOf() {
+			gc();
+			return -0;
+		},
+	},
+	0,
+	(value) => {
+		gc();
+	},
+	"flag",
+);
+console.log("boundary-zero", Object.is(preservedBoundaryZero.numeric, -0));
+let boundaryConsumerRuns = 0;
+const boundaryFailure = {};
+for (const input of [
+	1n,
+	Symbol("input"),
+	{
+		valueOf() {
+			gc();
+			throw boundaryFailure;
+		},
+	},
+]) {
+	try {
+		composeBoundaryValues(
+			input,
+			0,
+			() => {
+				boundaryConsumerRuns++;
+			},
+			"flag",
+		);
+	} catch (error) {
+		console.log(
+			"boundary-coercion-throw",
+			error === boundaryFailure,
+			error instanceof TypeError,
+			boundaryConsumerRuns,
+		);
+	}
+}
+
 globalThis.makeStorageValue = (value) => ({ value, padding: new Array(300).fill(value) });
 
 globalThis.rotateStorage = (left, right, count) => {

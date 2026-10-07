@@ -100,6 +100,7 @@ describe("Core local proofs and representations", () => {
 			"proofs",
 			CORE_PROOF_PASSES,
 		);
+		expect(fn.valueRepresentation(number!)).toBe("f64");
 		expect(fn.valueRepresentation(sum!)).toBe("f64");
 		expect(fn.valueRepresentation(flag!)).toBe("boolean");
 		expect(fn.valueRepresentation(text!)).toBe("string");

@@ -15,10 +15,10 @@ import {
 	vmInstructionWriteRegisters,
 } from "../src/compiler/target/runtime-image.ts";
 
-function compile(body: string) {
+function compile(body: string, preamble = "") {
 	return compileSemanticProgramToProgramImage(
 		analyzeSourceAndRunSemanticAnalysis(
-			`globalThis.compose = function compose(value, left, right, callback) { ${body} };`,
+			`${preamble} globalThis.compose = function compose(value, left, right, callback) { ${body} };`,
 			"/scalar-composition.js",
 		),
 	);
@@ -143,6 +143,117 @@ describe("native scalar plans around opaque and exceptional windows", () => {
 });
 
 describe("existing-proof scalar expression consumers", () => {
+	it.each([
+		["call", "callback(a-b); return 0;", "CALL"],
+		[
+			"shaped fields",
+			"callback({difference:a-b,flag:a<b}); return 0;",
+			"CREATE_OBJECT_SHAPED",
+		],
+		["static store", "value.result=a-b; return 0;", "STORE_PROPERTY_STATIC"],
+		["dynamic store", "value[value.key]=a-1.5; return 0;", "STORE_PROPERTY"],
+	] as const)(
+		"composes a single-use proven scalar into a %s value boundary",
+		(_name, tail, opcode) => {
+			const image = compile(`const a=+left; const b=+right; ${tail}`);
+			const native = image.native.functions[1]!;
+			const boundary = native.body.instructions.find((op) => op.opcode === opcode)!;
+			expect(boundary).toBeDefined();
+			const scalarIps = native.body.instructions.flatMap((op, ip) =>
+				op.opcode === "BINARY" && op.operator === "-" ? [ip] : [],
+			);
+			expect(scalarIps.length).toBeGreaterThan(0);
+			for (const ip of scalarIps) expect(native.storage!.expressionIps).toContain(ip);
+			expect(deserializeCompilerArtifact(serializeCompilerArtifact(image))).toEqual(
+				image,
+			);
+			expect(
+				emitCompiledFunction(native, native.functionIndex, "", false),
+			).not.toBeNull();
+		},
+	);
+
+	it("materializes a composed boundary expression whose transitive leaf remains boxed", () => {
+		const native = compile(
+			"const a=+left; snapshot=a; const b=+right; callback((a-b)*2); return 0;",
+			"let snapshot;",
+		).native.functions[1]!;
+		const subtractIp = native.body.instructions.findIndex(
+			(op) => op.opcode === "BINARY" && op.operator === "-",
+		);
+		const productIp = native.body.instructions.findIndex(
+			(op) => op.opcode === "BINARY" && op.operator === "*",
+		);
+		expect(subtractIp).toBeGreaterThanOrEqual(0);
+		expect(productIp).toBeGreaterThan(subtractIp);
+		const subtract = native.body.instructions[subtractIp]!;
+		if (subtract.opcode !== "BINARY") throw new Error("Missing scalar subtraction");
+		expect(native.registerRepresentations[subtract.left]).toBe("boxed");
+		expect(native.storage!.expressionIps).toContain(subtractIp);
+		expect(native.storage!.expressionIps).not.toContain(productIp);
+	});
+
+	it("retains a boxed-input unary plus as an effectful producer with throw-before-extraction", () => {
+		const image = compile("const a=+left; callback(a-1.5); return 0;");
+		const native = image.native.functions[1]!;
+		const ip = native.body.instructions.findIndex(
+			(op) => op.opcode === "UNARY" && op.operator === "+",
+		);
+		expect(ip).toBeGreaterThanOrEqual(0);
+		const op = native.body.instructions[ip]!;
+		if (op.opcode !== "UNARY") throw new Error("Missing unary plus");
+		expect(native.registerRepresentations[op.src]).toBe("boxed");
+		expect(native.registerRepresentations[op.dst]).toBe("number");
+		expect(native.storage!.expressionIps).not.toContain(ip);
+		const output = emitCompiledFunction(native, native.functionIndex, "", false)!.source;
+		const helper = output.indexOf(`MalValue unary_number_${ip} =`);
+		const check = output.indexOf(
+			"if (vm->completion.kind == MAL_COMPLETION_THROW)",
+			helper,
+		);
+		const extract = output.indexOf(
+			`r${op.dst} = mal_ops_number_as_f64(unary_number_${ip});`,
+			helper,
+		);
+		expect(helper).toBeGreaterThan(-1);
+		expect(check).toBeGreaterThan(helper);
+		expect(extract).toBeGreaterThan(check);
+	});
+
+	it("preserves unary-plus site accounting while suppressing expression folding at profile sites", () => {
+		const image = compileSemanticProgramToProgramImage(
+			analyzeSourceAndRunSemanticAnalysis(
+				"globalThis.compose=function compose(input,callback){const number=+input; callback(number-1.5);};",
+				"/profiled-scalar-plus.js",
+			),
+			{ profile: true },
+		);
+		const native = image.native.functions[1]!;
+		expect(native.storage!.expressionIps).toEqual([]);
+		const output = emitCompiledFunction(native, native.functionIndex, "", false)!.source;
+		const ip = native.body.instructions.findIndex(
+			(op) => op.opcode === "UNARY" && op.operator === "+",
+		);
+		expect(ip).toBeGreaterThanOrEqual(0);
+		const site = native.body.profileSiteIds![ip]!;
+		expect(output).toContain(`MAL_PROFILE_CURRENT_SITE(vm, ${site});`);
+		expect(output).toContain(
+			`MAL_PROFILE_SITE_EVENT(vm, ${site}, MAL_PROFILE_SITE_EXECUTION, 1);`,
+		);
+		expect(output).toContain("mal_vm_unary_op_fast(vm, MAL_UNARY_PLUS,");
+	});
+
+	it("keeps a boundary value materialized across an intervening effect", () => {
+		const native = compile(
+			"const a=+left; const b=+right; const difference=a-b; callback(); value.result=difference; return 0;",
+		).native.functions[1]!;
+		const ip = native.body.instructions.findIndex(
+			(op) => op.opcode === "BINARY" && op.operator === "-",
+		);
+		expect(ip).toBeGreaterThanOrEqual(0);
+		expect(native.storage!.expressionIps).not.toContain(ip);
+	});
+
 	it("preserves selected unsigned operations in composed expressions and numeric leaves", () => {
 		const image = compileSemanticProgramToProgramImage(
 			analyzeSourceAndRunSemanticAnalysis(

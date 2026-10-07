@@ -36,6 +36,48 @@ describe("independent native SSA storage", () => {
 	}, 600_000);
 
 	it("preserves scalar arithmetic, loop transport, and suspended heap locals", () => {
+		const joined = image.native.functions.find(
+			(fn) =>
+				String.fromCharCode(
+					...(image.runtime.stringConstants[fn.body.nameStringIndex] ?? []),
+				) === "joinedFieldStorage",
+		)!;
+		expect(joined).toBeDefined();
+		expect(
+			joined.storage!.stackObjects.some(
+				(site) => site.slotRepresentations.join(",") === "number,boxed,string,boolean",
+			),
+		).toBe(true);
+
+		const boundary = image.native.functions.find(
+			(fn) =>
+				String.fromCharCode(
+					...(image.runtime.stringConstants[fn.body.nameStringIndex] ?? []),
+				) === "composeBoundaryValues",
+		)!;
+		expect(boundary).toBeDefined();
+		expect(
+			boundary.storage!.expressionIps.some((ip) => {
+				const op = boundary.body.instructions[ip]!;
+				if (!("dst" in op)) return false;
+				return boundary.body.instructions
+					.slice(ip + 1)
+					.some(
+						(consumer) =>
+							[
+								"CALL",
+								"CREATE_OBJECT_SHAPED",
+								"STORE_PROPERTY_STATIC",
+								"STORE_PROPERTY",
+							].includes(consumer.opcode) &&
+							vmInstructionReadRegisters(consumer).includes(op.dst),
+					);
+			}),
+		).toBe(true);
+		expect(
+			emitCompiledFunction(boundary, boundary.functionIndex, "", false),
+		).not.toBeNull();
+
 		const rotation = image.native.functions.find(
 			(fn) =>
 				String.fromCharCode(

@@ -7196,7 +7196,7 @@ function emitInstruction(
 			if (operator === "+" && reps[dst] === "number") {
 				const value = `unary_number_${ip}`;
 				return [
-					`MalValue ${value} = mal_vm_unary_op_fast(vm, MAL_UNARY_PLUS, ${boxed(src)});`,
+					`MalValue ${value} = ${profileCall("unary", `mal_vm_unary_op_fast(vm, MAL_UNARY_PLUS, ${boxed(src)})`)};`,
 					throwCheck(),
 					`r${dst} = ${callValue(dst, value)};`,
 				];
