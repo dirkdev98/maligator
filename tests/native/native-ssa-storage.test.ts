@@ -36,6 +36,33 @@ describe("independent native SSA storage", () => {
 	}, 600_000);
 
 	it("preserves scalar arithmetic, loop transport, and suspended heap locals", () => {
+		for (const name of [
+			"boxedBuiltinNumber",
+			"boxedBuiltinDateParse",
+			"boxedBuiltinHasOwn",
+		]) {
+			const native = image.native.functions.find(
+				(fn) =>
+					String.fromCharCode(
+						...(image.runtime.stringConstants[fn.body.nameStringIndex] ?? []),
+					) === name,
+			)!;
+			expect(native).toBeDefined();
+			const ip = native.body.instructions.findIndex((op) => op.opcode === "CALL_KNOWN");
+			const op = native.body.instructions[ip]!;
+			if (op?.opcode !== "CALL_KNOWN") throw new Error("Missing boxed immediate builtin");
+			expect(native.registerRepresentations[op.dst]).toBe("boxed");
+			expect(
+				native.gc.safepoints.some((point) =>
+					point.incomingRootRegisters.includes(op.dst),
+				),
+			).toBe(true);
+			expect(native.storage!.rootRegisters).not.toContain(op.dst);
+			expect(native.storage!.expressionIps).not.toContain(ip);
+			expect(
+				emitCompiledFunction(native, native.functionIndex, "", false),
+			).not.toBeNull();
+		}
 		for (const [name, rep] of [
 			["builtinDateNow", "number"],
 			["builtinDateParse", "number"],

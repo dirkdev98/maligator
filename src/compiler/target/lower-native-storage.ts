@@ -1,3 +1,4 @@
+import { builtinPrimitiveResult } from "../shared/builtin-registry.ts";
 import {
 	nativeCallbackTransportsMatch,
 	selectNativeCallbackTransports,
@@ -909,7 +910,7 @@ function immediateOperatorResult(
 	);
 }
 
-function untracedOperatorRegisters(
+function untracedPrimitiveResultRegisters(
 	native: NativeFunctionPlan,
 	body: NativeStorageBodyFacts,
 	{ blocked, borrowed }: NativeScalarOwnership,
@@ -917,7 +918,19 @@ function untracedOperatorRegisters(
 	const registers = new Set<number>();
 	if (native.storageValues === undefined) return registers;
 	for (const [ip, op] of native.body.instructions.entries()) {
-		if (op.opcode !== "UNARY" && op.opcode !== "BINARY") continue;
+		if (op.opcode !== "UNARY" && op.opcode !== "BINARY" && op.opcode !== "CALL_KNOWN")
+			continue;
+		const immediate =
+			op.opcode === "CALL_KNOWN"
+				? !op.construct &&
+					op.argumentMode === undefined &&
+					!body.reads[ip]!.includes(op.dst) &&
+					["number", "boolean"].includes(builtinPrimitiveResult(op.operation) ?? "")
+				: immediateOperatorResult(
+						op,
+						native.registerRepresentations,
+						native.instructions[ip],
+					);
 		if (
 			!blocked.has(ip) &&
 			!borrowed.has(op.dst) &&
@@ -925,7 +938,7 @@ function untracedOperatorRegisters(
 			native.storageValues[op.dst]! >= 0 &&
 			body.writeCounts[op.dst] === 1 &&
 			native.registerRepresentations[op.dst] === "boxed" &&
-			immediateOperatorResult(op, native.registerRepresentations, native.instructions[ip])
+			immediate
 		)
 			registers.add(op.dst);
 	}
@@ -939,11 +952,11 @@ function rootStorage(
 	callTransports: ReadonlyArray<NativeCallTransportPlan>,
 	rematerializedConstantIps: ReadonlyArray<number>,
 	expressionIps: ReadonlyArray<number>,
-	untracedOperators: ReadonlySet<number>,
+	untracedResults: ReadonlySet<number>,
 ) {
 	const fn = native.body;
 	// Admitted expressions produce untraced scalars; pooled literals have immortal addresses.
-	const rootFree = new Set(untracedOperators);
+	const rootFree = new Set(untracedResults);
 	for (const ip of [...rematerializedConstantIps, ...expressionIps]) {
 		const op = fn.instructions[ip]!;
 		if (!("dst" in op)) throw new Error("Native expression lacks a destination");
@@ -1127,7 +1140,7 @@ function lowerStorage(
 			callTransports,
 			scalar.rematerializedConstantIps,
 			scalar.expressionIps,
-			untracedOperatorRegisters(native, body, ownership),
+			untracedPrimitiveResultRegisters(native, body, ownership),
 		),
 		elidedTdzIps: elidedTdzIps(native, ownership),
 		...scalar,
@@ -1563,7 +1576,7 @@ export function validateNativeStorage(
 							selected.callTransports,
 							variant.storage!.rematerializedConstantIps,
 							variant.storage!.expressionIps,
-							untracedOperatorRegisters(
+							untracedPrimitiveResultRegisters(
 								variant,
 								body,
 								scalarStorageOwnership(

@@ -83,6 +83,113 @@ globalThis.builtinArrayEvery = builtinArrayEvery;
 globalThis.builtinArrayFindIndex = builtinArrayFindIndex;
 globalThis.builtinArrayFindLastIndex = builtinArrayFindLastIndex;
 
+function boxedBuiltinNumber(input, gate, condition) {
+	const value = Number(input);
+	gate();
+	return condition ? value : undefined;
+}
+function boxedBuiltinDateParse(input, gate, condition) {
+	const value = Date.parse(input);
+	gate();
+	return condition ? value : undefined;
+}
+function boxedBuiltinHasOwn(input, key, gate, condition) {
+	const value = Object.hasOwn(input, key);
+	gate();
+	return condition ? value : undefined;
+}
+globalThis.boxedBuiltinNumber = boxedBuiltinNumber;
+globalThis.boxedBuiltinDateParse = boxedBuiltinDateParse;
+globalThis.boxedBuiltinHasOwn = boxedBuiltinHasOwn;
+
+for (const condition of [true, false]) {
+	for (const input of [-0, NaN, Infinity, "42", undefined, null, 7n]) {
+		const order = [];
+		const value = boxedBuiltinNumber(
+			{
+				valueOf() {
+					gc();
+					order.push("value");
+					return input;
+				},
+			},
+			() => {
+				gc();
+				order.push("gate");
+			},
+			condition,
+		);
+		console.log(
+			"boxed-builtin-number",
+			condition,
+			String(value),
+			Object.is(value, -0),
+			order.join(","),
+		);
+	}
+	for (const input of ["2001-02-03T04:05:06.007Z", "invalid"]) {
+		const value = boxedBuiltinDateParse(
+			{
+				toString() {
+					gc();
+					return input;
+				},
+			},
+			gc,
+			condition,
+		);
+		console.log("boxed-builtin-date", condition, String(value));
+	}
+	const object = new Proxy(
+		{ field: { marker: "retained" } },
+		{
+			getOwnPropertyDescriptor(target, key) {
+				gc();
+				return Object.getOwnPropertyDescriptor(target, key);
+			},
+		},
+	);
+	console.log(
+		"boxed-builtin-own",
+		condition,
+		boxedBuiltinHasOwn(
+			object,
+			{
+				toString() {
+					gc();
+					return "field";
+				},
+			},
+			gc,
+			condition,
+		),
+	);
+	let gateCalled = false;
+	try {
+		boxedBuiltinNumber(
+			{
+				valueOf() {
+					gc();
+					throw { marker: "number-thrown" };
+				},
+			},
+			() => {
+				gateCalled = true;
+			},
+			condition,
+		);
+	} catch (error) {
+		gc();
+		console.log("boxed-builtin-throw", error.marker, gateCalled);
+	}
+	try {
+		boxedBuiltinNumber(Symbol("reject"), gc, condition);
+	} catch (error) {
+		gc();
+		console.log("boxed-builtin-reject", error instanceof TypeError);
+	}
+}
+
 const now = builtinDateNow(gc);
 console.log("builtin-clock-result", typeof now, Number.isFinite(now), now > 0);
 const order = [];

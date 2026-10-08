@@ -3,9 +3,97 @@ import {
 	deserializeCompilerArtifact,
 	serializeCompilerArtifact,
 } from "../src/compiler/target/compiler-artifact-codec.ts";
+import {
+	lowerNativeFunctionStorage,
+	validateNativeStorage,
+} from "../src/compiler/target/lower-native-storage.ts";
 import { inspectStaticValueFunction } from "./helpers/static-values.ts";
 
 describe("catalogued primitive builtin result storage", () => {
+	it.each([
+		["Number", "Number(input)"],
+		["Date.parse", "Date.parse(input)"],
+		["Object.hasOwn", "Object.hasOwn(input, other)"],
+		["Object.is", "Object.is(input, other)"],
+		["Map.prototype.has", "Map.prototype.has.call(input, other)"],
+	] as const)(
+		"omits the root for a boxed immediate %s result",
+		(operation, expression) => {
+			const out = inspectStaticValueFunction(
+				`function compute(input,other,gate,condition){const value=${expression};gate();return condition?value:undefined;}globalThis.compute=compute;`,
+				"compute",
+			);
+			const ip = out.native.body.instructions.findIndex(
+				(op) => op.opcode === "CALL_KNOWN" && op.operation === operation,
+			);
+			const op = out.native.body.instructions[ip]!;
+			if (op?.opcode !== "CALL_KNOWN") throw new Error("Missing exact builtin call");
+			expect(out.native.registerRepresentations[op.dst]).toBe("boxed");
+			expect(
+				out.native.gc.safepoints.some((point) =>
+					point.incomingRootRegisters.includes(op.dst),
+				),
+			).toBe(true);
+			expect(out.native.storage!.rootRegisters).not.toContain(op.dst);
+			expect(out.native.storage!.expressionIps).not.toContain(ip);
+			expect(deserializeCompilerArtifact(serializeCompilerArtifact(out.image))).toEqual(
+				out.image,
+			);
+		},
+	);
+
+	it.each([
+		"synthetic",
+		"raw storage",
+		"second writer",
+		"input alias",
+		"construct",
+		"spread",
+		"heap result",
+	])("retains a boxed builtin root after %s invalidates its certificate", (kind) => {
+		const out = inspectStaticValueFunction(
+			"function compute(input,gate,condition){const value=Number(input);gate();return condition?value:undefined;}globalThis.compute=compute;",
+			"compute",
+		);
+		const instructions = [...out.native.body.instructions];
+		const ip = instructions.findIndex(
+			(op) => op.opcode === "CALL_KNOWN" && op.operation === "Number",
+		);
+		const op = instructions[ip]!;
+		if (op?.opcode !== "CALL_KNOWN") throw new Error("Missing Number call");
+		const storageValues = [...out.native.storageValues!];
+		if (kind === "synthetic") storageValues[op.dst] = -1;
+		else if (kind === "second writer")
+			instructions.push({ opcode: "MOVE", dst: op.dst, src: op.dst });
+		else if (kind === "input alias") instructions[ip] = { ...op, arguments: [op.dst] };
+		else if (kind === "construct") instructions[ip] = { ...op, construct: true };
+		else if (kind === "spread") instructions[ip] = { ...op, argumentMode: "array" };
+		else instructions[ip] = { ...op, operation: "String" };
+		const native = {
+			...out.native,
+			storageValues: kind === "raw storage" ? undefined : storageValues,
+			body: { ...out.native.body, instructions },
+		};
+		expect(lowerNativeFunctionStorage(native).storage!.rootRegisters).toContain(op.dst);
+		expect(() => validateNativeStorage(native)).toThrow(/invalid or stale storage plan/);
+	});
+
+	it.each([
+		"function compute(input,gate,condition){try{const value=Number(input);gate();return condition?value:undefined;}catch(error){return error;}}",
+		"async function compute(input,gate,condition){const value=Number(input);await gate();return condition?value:undefined;}",
+	])("retains boxed roots in protected or suspended builtin storage", (source) => {
+		const out = inspectStaticValueFunction(
+			`${source}globalThis.compute=compute;`,
+			"compute",
+		);
+		const op = out.native.body.instructions.find(
+			(op) => op.opcode === "CALL_KNOWN" && op.operation === "Number",
+		)!;
+		if (op?.opcode !== "CALL_KNOWN") throw new Error("Missing Number call");
+		expect(out.native.registerRepresentations[op.dst]).toBe("boxed");
+		expect(out.native.storage!.rootRegisters).toContain(op.dst);
+	});
+
 	it.each([
 		["Date.now", "Date.now()", "number"],
 		["Date.parse", "Date.parse(input)", "number"],

@@ -66,6 +66,10 @@ leave coercion and throw checks in place. Repeated uses and intervening calls re
 ordinary boxed locals initialized to undefined. Logical GC liveness stays intact,
 and validation rederives the physical exclusion per variant. Parameters, raw
 storage, opaque or borrowed locals and suspension snapshots retain their roots.
+The same ownership check omits boxed roots for exact builtin calls whose catalogued
+normal result is Number or Boolean. Construction, spread arguments, destination/input
+aliases and heap-capable results retain roots; builtin identity and result kind do
+not authorize removing evaluation, coercion, completion checks or callback effects.
 An existing exact Number or int32 result proof also admits coercive binary producers
 into scalar storage without requiring their inputs to be scalar. Evaluation stays
 materialized; helper results are captured and checked for abrupt completion before
