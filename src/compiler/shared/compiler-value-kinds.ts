@@ -37,6 +37,39 @@ export type CompilerOperatorInputKindMasks =
 	| readonly [CompilerValueKindMask]
 	| readonly [CompilerValueKindMask, CompilerValueKindMask];
 
+// Describes normal completion only; coercion can still call user code, collect or throw.
+export function compilerOperatorFixedResultKind(
+	opcode: string,
+	operator: unknown,
+): CompilerValueKindMask | undefined {
+	if (opcode === "unary") {
+		switch (operator) {
+			case "+":
+				return COMPILER_VALUE_KIND_NUMBER;
+			case "!":
+				return COMPILER_VALUE_KIND_BOOLEAN;
+			case "typeof":
+			case "tostring":
+				return COMPILER_VALUE_KIND_STRING;
+			case "void":
+				return COMPILER_VALUE_KIND_UNDEFINED;
+		}
+	} else if (opcode === "binary") {
+		switch (operator) {
+			case "<":
+			case "<=":
+			case ">":
+			case ">=":
+			case "==":
+			case "!=":
+			case "===":
+			case "!==":
+				return COMPILER_VALUE_KIND_BOOLEAN;
+		}
+	}
+	return undefined;
+}
+
 export function compilerOperatorInputKindsHaveExactNativeSemantics(
 	opcode: string,
 	operator: unknown,

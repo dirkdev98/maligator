@@ -55,8 +55,10 @@ zero and signed or unsigned bitwise results. Selected expression destinations ha
 no physical root slot; validation rebuilds roots from the stored expression subset
 when an artifact retains a producer. Phi-copy consumers retain the same physical
 scalar leaf restriction as other value boundaries.
-Single-write boxed SSA operator results also omit roots when existing operand
-proofs guarantee an immediate Number or Boolean. This does not move their
+Single-write boxed SSA operator results also omit roots when existing operand or
+normal-result proofs guarantee an immediate Number or Boolean. Coercive unary
+plus and comparisons retain operand roots, safepoints and completion checks;
+an immediate result does not make evaluation pure. This does not move their
 evaluation or remove their assignment; repeated uses and intervening calls retain
 ordinary boxed locals initialized to undefined. Logical GC liveness stays intact,
 and validation rederives the physical exclusion per variant. Parameters, raw

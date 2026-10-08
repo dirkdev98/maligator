@@ -3795,17 +3795,11 @@ MalValue mal_vm_binary_op(MalVm *vm, MalBinaryOp op, MalValue left, MalValue rig
             return mal_value_new_undefined();
         }
     } else if (mal_vm_op_is_relational(op)) {
-        // Abstract relational comparison reduces both operands via ToPrimitive
-        // (number hint). `>`/`>=` evaluate the right operand's ToPrimitive before
-        // the left (spec LeftFirst=false), so a throwing valueOf surfaces in
-        // source order; `<`/`<=` go left-to-right.
-        bool left_first = !(op == MAL_BIN_GT || op == MAL_BIN_GTE);
-        MalValue *first = left_first ? &left : &right;
-        MalValue *second = left_first ? &right : &left;
-        if (mal_value_is_object(*first) && !mal_vm_to_primitive(vm, *first, MAL_TO_PRIMITIVE_NUMBER, first)) {
+        // IsLessThan's swapped arguments and LeftFirst flag preserve source operand order.
+        if (mal_value_is_object(left) && !mal_vm_to_primitive(vm, left, MAL_TO_PRIMITIVE_NUMBER, &left)) {
             return mal_value_new_undefined();
         }
-        if (mal_value_is_object(*second) && !mal_vm_to_primitive(vm, *second, MAL_TO_PRIMITIVE_NUMBER, second)) {
+        if (mal_value_is_object(right) && !mal_vm_to_primitive(vm, right, MAL_TO_PRIMITIVE_NUMBER, &right)) {
             return mal_value_new_undefined();
         }
         // Abstract relational comparison forbids Symbol operands (its ToNumeric

@@ -10,6 +10,7 @@ import {
 	COMPILER_VALUE_KIND_NUMBER,
 	COMPILER_VALUE_KIND_NUMERIC_PRIMITIVE,
 	compilerOperatorInputKindsHaveExactNativeSemantics,
+	compilerOperatorFixedResultKind,
 	COMPILER_VALUE_KIND_OBJECT,
 	COMPILER_VALUE_KIND_STRING,
 	COMPILER_VALUE_KIND_SYMBOL,
@@ -129,16 +130,6 @@ const SIGNED_INT32_BINARY_OPERATORS: ReadonlySet<string> = new Set([
 	"^",
 	"<<",
 	">>",
-]);
-const COMPARISON_OPERATORS: ReadonlySet<string> = new Set([
-	"<",
-	"<=",
-	">",
-	">=",
-	"==",
-	"!=",
-	"===",
-	"!==",
 ]);
 
 function numberIsExactInt32(value: unknown): boolean {
@@ -695,16 +686,7 @@ function addOperationTransfer(
 			? fn.instructionAttributes(instruction).operator
 			: undefined;
 	if (opcode === "unary" && operandCount === 1 && typeof operator === "string") {
-		const constant =
-			operator === "+"
-				? COMPILER_VALUE_KIND_NUMBER
-				: operator === "!"
-					? COMPILER_VALUE_KIND_BOOLEAN
-					: operator === "typeof" || operator === "tostring"
-						? COMPILER_VALUE_KIND_STRING
-						: operator === "void"
-							? COMPILER_VALUE_KIND_UNDEFINED
-							: undefined;
+		const constant = compilerOperatorFixedResultKind(opcode, operator);
 		if (constant !== undefined) {
 			masks[output] = masks[output]! | constant;
 		} else if (NUMERIC_UNARY_OPERATORS.has(operator)) {
@@ -721,7 +703,9 @@ function addOperationTransfer(
 		return;
 	}
 	if (opcode === "binary" && operandCount === 2 && typeof operator === "string") {
-		if (COMPARISON_OPERATORS.has(operator)) {
+		if (
+			compilerOperatorFixedResultKind(opcode, operator) === COMPILER_VALUE_KIND_BOOLEAN
+		) {
 			masks[output] = masks[output]! | COMPILER_VALUE_KIND_BOOLEAN;
 		} else if (operator === "+") {
 			addOperationKindTransfer(buffer, KIND_TRANSFER_ADD, output, fn, instruction);
@@ -1540,7 +1524,9 @@ export function corePrimitiveOperatorEffectRefinement(
 		gcFree =
 			["===", "!=="].includes(operator) ||
 			(numericPrimitives &&
-				(NUMERIC_BINARY_OPERATORS.has(operator) || COMPARISON_OPERATORS.has(operator)));
+				(NUMERIC_BINARY_OPERATORS.has(operator) ||
+					compilerOperatorFixedResultKind(opcode, operator) ===
+						COMPILER_VALUE_KIND_BOOLEAN));
 	}
 	if (!primitive) return undefined;
 	const baseline = fn.registry.byId(fn.instructionOpcode(instruction)).effects;

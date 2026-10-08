@@ -1,5 +1,180 @@
 const gc = globalThis.__mal_collect_garbage ?? (() => {});
 
+function coerciveImmediatePlus(input, gate, condition) {
+	const value = +input;
+	gate();
+	return condition ? value : undefined;
+}
+function coerciveImmediateLess(left, right, gate, condition) {
+	const value = left < right;
+	gate();
+	return condition ? value : undefined;
+}
+function coerciveImmediateEqual(left, right, gate, condition) {
+	const value = left == right;
+	gate();
+	return condition ? value : undefined;
+}
+function coerciveImmediateGreaterEqual(left, right, gate, condition) {
+	const value = left >= right;
+	gate();
+	return condition ? value : undefined;
+}
+function coerciveImmediateGreater(left, right, gate, condition) {
+	const value = left > right;
+	gate();
+	return condition ? value : undefined;
+}
+function nonCoerciveImmediateNot(input, gate, condition) {
+	const value = !input;
+	gate();
+	return condition ? value : undefined;
+}
+function nonCoerciveImmediateEqual(left, right, gate, condition) {
+	const value = left === right;
+	gate();
+	return condition ? value : undefined;
+}
+globalThis.coerciveImmediatePlus = coerciveImmediatePlus;
+globalThis.coerciveImmediateLess = coerciveImmediateLess;
+globalThis.coerciveImmediateEqual = coerciveImmediateEqual;
+globalThis.coerciveImmediateGreaterEqual = coerciveImmediateGreaterEqual;
+globalThis.coerciveImmediateGreater = coerciveImmediateGreater;
+globalThis.nonCoerciveImmediateNot = nonCoerciveImmediateNot;
+globalThis.nonCoerciveImmediateEqual = nonCoerciveImmediateEqual;
+const coercionOrder = [];
+function coercionInput(label, value) {
+	return {
+		marker: { label },
+		valueOf() {
+			gc();
+			coercionOrder.push(this.marker.label);
+			return value;
+		},
+	};
+}
+function coercionGate() {
+	gc();
+	coercionOrder.push("gate");
+}
+for (const input of [-0, NaN, Infinity, 3]) {
+	coercionOrder.length = 0;
+	const value = coerciveImmediatePlus(coercionInput("number", input), coercionGate, true);
+	console.log(
+		"coercive-immediate-plus",
+		String(value),
+		Object.is(value, -0),
+		coercionOrder.join(","),
+	);
+}
+for (const [left, right] of [
+	[2, 3],
+	["12", "3"],
+	[NaN, 1],
+	[2n, 3n],
+]) {
+	coercionOrder.length = 0;
+	const less = coerciveImmediateLess(
+		coercionInput("left", left),
+		coercionInput("right", right),
+		coercionGate,
+		true,
+	);
+	const equal = coerciveImmediateEqual(
+		coercionInput("equal", left),
+		right,
+		coercionGate,
+		true,
+	);
+	const greaterEqual = coerciveImmediateGreaterEqual(
+		coercionInput("ge-left", left),
+		coercionInput("ge-right", right),
+		coercionGate,
+		true,
+	);
+	const greater = coerciveImmediateGreater(
+		coercionInput("gt-left", left),
+		coercionInput("gt-right", right),
+		coercionGate,
+		true,
+	);
+	console.log(
+		"coercive-immediate-compare",
+		less,
+		equal,
+		greaterEqual,
+		greater,
+		coercionOrder.join(","),
+	);
+}
+coercionOrder.length = 0;
+console.log(
+	"noncoercive-immediate",
+	nonCoerciveImmediateNot(coercionInput("unused-not", 1), coercionGate, true),
+	nonCoerciveImmediateEqual(
+		coercionInput("unused-left", 1),
+		coercionInput("unused-right", 1),
+		coercionGate,
+		true,
+	),
+	coercionOrder.join(","),
+);
+for (const input of [1n, Symbol("unary-plus")]) {
+	coercionOrder.length = 0;
+	try {
+		coerciveImmediatePlus(input, coercionGate, true);
+	} catch (error) {
+		gc();
+		console.log(
+			"coercive-immediate-reject",
+			error instanceof TypeError,
+			coercionOrder.length,
+		);
+	}
+}
+for (const operation of [
+	coerciveImmediatePlus,
+	coerciveImmediateLess,
+	coerciveImmediateEqual,
+	coerciveImmediateGreaterEqual,
+	coerciveImmediateGreater,
+]) {
+	coercionOrder.length = 0;
+	const input = {
+		valueOf() {
+			gc();
+			throw { marker: "coercion-thrown" };
+		},
+	};
+	try {
+		if (operation === coerciveImmediatePlus) operation(input, coercionGate, true);
+		else operation(input, 1, coercionGate, true);
+	} catch (error) {
+		gc();
+		console.log("coercive-immediate-throw", error.marker, coercionOrder.length);
+	}
+}
+for (const operation of [coerciveImmediateGreater, coerciveImmediateGreaterEqual]) {
+	coercionOrder.length = 0;
+	try {
+		operation(
+			{
+				valueOf() {
+					gc();
+					coercionOrder.push("left");
+					throw { marker: "left-first" };
+				},
+			},
+			coercionInput("unreached-right", 1),
+			coercionGate,
+			true,
+		);
+	} catch (error) {
+		gc();
+		console.log("relational-left-throw", error.marker, coercionOrder.join(","));
+	}
+}
+
 let immediateSaved;
 let scalarModuleSaved = { old: true };
 function scalarModuleProduct(left, right, gate) {

@@ -871,7 +871,14 @@ function untracedOperatorRegisters(
 			native.storageValues[op.dst]! >= 0 &&
 			body.writeCounts[op.dst] === 1 &&
 			native.registerRepresentations[op.dst] === "boxed" &&
-			pureScalarOperation(op, native.registerRepresentations, native.instructions[ip])
+			(pureScalarOperation(op, native.registerRepresentations, native.instructions[ip]) ||
+				compilerValueKindMaskIsSubset(
+					compilerOperatorFixedResultKind(
+						op.opcode === "UNARY" ? "unary" : "binary",
+						op.operator,
+					) ?? 0,
+					COMPILER_VALUE_KIND_NUMBER | COMPILER_VALUE_KIND_BOOLEAN,
+				))
 		)
 			registers.add(op.dst);
 	}
@@ -1501,4 +1508,9 @@ export function validateNativeStorage(
 	)
 		throw new Error("Native function has an invalid or stale storage plan");
 }
-import { COMPILER_VALUE_KIND_NUMBER } from "../shared/compiler-value-kinds.ts";
+import {
+	COMPILER_VALUE_KIND_NUMBER,
+	COMPILER_VALUE_KIND_BOOLEAN,
+	compilerOperatorFixedResultKind,
+	compilerValueKindMaskIsSubset,
+} from "../shared/compiler-value-kinds.ts";

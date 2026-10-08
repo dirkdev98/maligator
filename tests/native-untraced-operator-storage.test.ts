@@ -31,6 +31,94 @@ function storedOperator(expression: string, profile = false) {
 }
 
 describe("untraced boxed operator storage", () => {
+	it.each([
+		"+left",
+		"!left",
+		"left<right",
+		"left<=right",
+		"left>right",
+		"left>=right",
+		"left==right",
+		"left!=right",
+		"left===right",
+		"left!==right",
+	])(
+		"keeps the fixed normal result of %s outside roots without delaying evaluation",
+		(expression) => {
+			const out = inspectStaticValueFunction(
+				`function compute(left,right,gate,condition){const value=${expression};gate();return condition?value:undefined;}globalThis.compute=compute;`,
+				"compute",
+			);
+			const ip = out.native.body.instructions.findIndex(
+				(op) => op.opcode === "UNARY" || op.opcode === "BINARY",
+			);
+			const op = out.native.body.instructions[ip]!;
+			if (op.opcode !== "UNARY" && op.opcode !== "BINARY")
+				throw new Error("Missing fixed-result operator");
+			expect(out.native.registerRepresentations[op.dst]).toBe("boxed");
+			expect(
+				out.native.gc.safepoints.some((point) =>
+					point.incomingRootRegisters.includes(op.dst),
+				),
+			).toBe(true);
+			expect(out.native.storage!.rootRegisters).not.toContain(op.dst);
+			expect(out.native.storage!.expressionIps).not.toContain(ip);
+			const operands = op.opcode === "UNARY" ? [op.src] : [op.left, op.right];
+			if (!["!", "===", "!=="].includes(op.operator))
+				for (const local of operands)
+					expect(out.native.storage!.rootRegisters).toContain(local);
+			expect(out.c.source).toContain(`MalValue r${op.dst};`);
+			expect(out.c.source).not.toContain(`#define r${op.dst} (`);
+			expect(deserializeCompilerArtifact(serializeCompilerArtifact(out.image))).toEqual(
+				out.image,
+			);
+		},
+	);
+
+	it("preserves profiling and completion checks for a coercive fixed result", () => {
+		const out = inspectStaticValueFunction(
+			"function compute(left,gate,condition){const value=+left;gate();return condition?value:undefined;}globalThis.compute=compute;",
+			"compute",
+			{ profile: true },
+		);
+		const op = out.native.body.instructions.find(
+			(op) => op.opcode === "UNARY" && op.operator === "+",
+		)!;
+		if (op.opcode !== "UNARY") throw new Error("Missing coercive plus");
+		expect(out.native.storage!.rootRegisters).not.toContain(op.dst);
+		expect(out.native.storage!.expressionIps).toEqual([]);
+		expect(out.c.source).toContain("MAL_PROFILE_SITE_EXECUTION");
+		expect(out.c.source).toContain("mal_vm_unary_op");
+		expect(out.c.source).toMatch(
+			/mal_vm_unary_op_fast[^;]+;\n\s+if \([^\n]+\) goto __throw_exit;/,
+		);
+	});
+
+	it("rejects a stale fixed-result root omission when the operator can return a BigInt", () => {
+		const out = inspectStaticValueFunction(
+			"function compute(left,gate,condition){const value=+left;gate();return condition?value:undefined;}globalThis.compute=compute;",
+			"compute",
+		);
+		const ip = out.native.body.instructions.findIndex(
+			(op) => op.opcode === "UNARY" && op.operator === "+",
+		);
+		const op = out.native.body.instructions[ip]!;
+		if (op.opcode !== "UNARY") throw new Error("Missing coercive plus");
+		const native = lowerNativeFunctionStorage({
+			...out.native,
+			body: {
+				...out.native.body,
+				instructions: out.native.body.instructions.map((op, index) =>
+					index === ip && op.opcode === "UNARY" ? { ...op, operator: "-" } : op,
+				),
+			},
+		});
+		expect(native.storage!.rootRegisters).toContain(op.dst);
+		expect(() =>
+			validateNativeStorage({ ...native, storage: out.native.storage }),
+		).toThrow(/invalid or stale storage plan/);
+	});
+
 	it.each(["a*b", "a/b", "a%b", "a>>>b", "a<<b", "a<b", "a===b", "!a", "-a", "~a"])(
 		"keeps %s materialized across a call without a shadow root",
 		(expression) => {
