@@ -336,7 +336,8 @@ function composedQueryFrom(left, right, input) {
 function composedCompareResult(left, right) {
 	const a = +left;
 	const b = +right;
-	return "a".localeCompare((a - b) * 2);
+	// A digit prefix keeps this conversion oracle independent of optional Intl collation.
+	return "0".localeCompare((a - b) * 2);
 }
 function composedArrayElements(left, right) {
 	const a = +left;
