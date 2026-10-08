@@ -781,10 +781,12 @@ static void mal_vm_init_language_state(MalVm *vm, const MalRuntimeImage *program
     vm->native_source_cache = (MalNativeSourceCache) {0};
 	mal_heap_init(&vm->heap, 0);
     mal_gc_configure_heap(vm);
+    // Interned so closures, natives, and program constants share one transition key;
+    // a private copy made every closure creation compare these names by content.
     vm->heap.native_function_length_key =
-        mal_string_new_ascii(&vm->heap, "length", 6);
+        mal_atom_store_intern(&vm->atoms, mal_string_new_ascii(&vm->heap, "length", 6));
     vm->heap.native_function_name_key =
-        mal_string_new_ascii(&vm->heap, "name", 4);
+        mal_atom_store_intern(&vm->atoms, mal_string_new_ascii(&vm->heap, "name", 4));
 #if MAL_REALMS
     // global_capacity is already established above, so the initial realm can own
     // both its absolute globals array and intrinsics before intrinsic initialization.
