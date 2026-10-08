@@ -1068,26 +1068,17 @@ export function lowerNativeFastPaths(
 	selectUpdates = true,
 	body?: NativeBodyFacts,
 ): NativeFastPathLowering {
-	const suppliedClaims = new Set(
-		selection.kind === "render"
-			? [
-					...selection.plans.propertyProjections,
-					...selection.plans.propertyNumericUpdates,
-					...selection.plans.propertyReadRegions,
-					...selection.plans.propertyReadPairs,
-				].flatMap((plan) => plan.claimedIps)
-			: [],
-	);
-	const otherConflicts = (ip: number) => conflicts(ip) || suppliedClaims.has(ip);
 	const handlerTargets =
-		body?.handlerTargets ??
-		(fn.handlers.length === 0
+		selection.kind === "render"
 			? []
-			: vmExceptionHandlerTargets(fn.instructions.length, fn.handlers));
+			: (body?.handlerTargets ??
+				(fn.handlers.length === 0
+					? []
+					: vmExceptionHandlerTargets(fn.instructions.length, fn.handlers)));
 	const pairedArrayLoops =
 		selection.kind === "render"
 			? selection.plans.pairedArrayLoops
-			: lowerPairedArrayLoops(fn, indexedLoops, jumpTargets, otherConflicts);
+			: lowerPairedArrayLoops(fn, indexedLoops, jumpTargets, conflicts);
 	const pairedArrayLoopActions = new Map<number, NativePairedArrayLoopAction>();
 	for (const plan of pairedArrayLoops) {
 		pairedArrayLoopActions.set(plan.lengthLoadIp, { role: "admit", plan });
@@ -1121,7 +1112,7 @@ export function lowerNativeFastPaths(
 				representations,
 				jumpTargets,
 				(candidate) =>
-					otherConflicts(candidate) ||
+					conflicts(candidate) ||
 					pairedArrayLoopActions.has(candidate) ||
 					propertyNumericUpdateActions.has(candidate),
 				transparentJumpTargets,
@@ -1209,7 +1200,9 @@ export function lowerNativeFastPaths(
 		for (const [index, load] of plan.loads.entries())
 			propertyReadRegionActions.set(load.ip, { plan, index });
 	const readRegionClaims = new Set(
-		propertyReadRegions.flatMap((plan) => plan.claimedIps),
+		selection.kind === "select"
+			? propertyReadRegions.flatMap((plan) => plan.claimedIps)
+			: [],
 	);
 	const propertyReadPairs: Array<NativePropertyReadPairPlan> = [];
 	const propertyReadPairActions = new Map<number, NativePropertyReadPairAction>();
@@ -1267,7 +1260,7 @@ export function lowerNativeFastPaths(
 					representations,
 					jumpTargets,
 					(candidate) =>
-						otherConflicts(candidate) ||
+						conflicts(candidate) ||
 						pairedArrayLoopActions.has(candidate) ||
 						propertyNumericUpdateActions.has(candidate) ||
 						propertyProjectionActions.has(candidate),

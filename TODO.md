@@ -144,11 +144,14 @@ The independent target boundary and current storage contract are recorded in
       workloads on both hosts. Exercise the complete self-hosted pipeline as well.
 - [ ] Share one invocation-local native analysis context across storage, expression,
       root, and fast-path planning. Native read/write, branch, handler, and lazy
-      root-cycle facts now share an invocation. Combine preserved Core identities with native
+      root-cycle facts now share an invocation; storage CFG analysis is lazy.
+      Combine preserved Core identities with native
       CFG, effects, ownership, and uses; invalidate facts after layout/copy changes
       and measure cost on both compiler hosts without another wholesale IR rewrite.
 - [ ] Finish remaining legality-affecting renderer selection in explicit native
       plans; capture-owner and String-transform strategies now persist and validate.
+      Exact String comparison operand proofs now select direct UTF-16 kernels
+      through boxed storage as well as physical String locals.
       Rendering may choose C syntax; semantic
       assumptions, specialization admission, and ownership obligations belong in
       planning and must retain validated fallbacks.

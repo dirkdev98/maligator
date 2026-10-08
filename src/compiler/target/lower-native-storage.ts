@@ -361,6 +361,8 @@ function storageBodyFacts(native: NativeFunctionPlan): NativeStorageBodyFacts {
 			predecessorCounts[ip + 1]!++;
 	}
 	const controlBoundaries = fn.instructions.map(scalarControlBoundary);
+	let controlFlow: NativeStorageControlFlow | undefined;
+	let controlFlowAnalyzed = false;
 	return {
 		...facts,
 		captures: selectNativeCaptureAccess(fn, native.functionIndex),
@@ -370,10 +372,14 @@ function storageBodyFacts(native: NativeFunctionPlan): NativeStorageBodyFacts {
 		iteratorDoneRegisters,
 		controlBoundaries,
 		predecessorCounts,
-		controlFlow:
-			native.storageValues === undefined || fn.handlers.length > 0
-				? undefined
-				: storageControlFlow(fn, jumpTargets, controlBoundaries),
+		get controlFlow() {
+			if (!controlFlowAnalyzed) {
+				controlFlowAnalyzed = true;
+				if (native.storageValues !== undefined && fn.handlers.length === 0)
+					controlFlow = storageControlFlow(fn, jumpTargets, controlBoundaries);
+			}
+			return controlFlow;
+		},
 	};
 }
 
@@ -479,8 +485,17 @@ function definitionInitializedRegisters(
 	if (native.storageValues === undefined) return [];
 	const fn = native.body;
 	const { writeCounts: writes, definitions } = body;
+	const eligible = native.registerRepresentations.flatMap((rep, local) =>
+		local >= fn.parameterCount + fn.argumentSnapshotCount &&
+		native.storageValues![local]! >= 0 &&
+		!borrowed.has(local) &&
+		["number", "int32", "boolean"].includes(rep)
+			? [local]
+			: [],
+	);
+	if (eligible.length === 0) return [];
 	// Limit added dominance work deterministically; exception/resume entries need a broader CFG.
-	const controlFlow =
+	const selectControlFlow = (): NativeStorageControlFlow | undefined =>
 		native.mode === "direct" &&
 		!fn.isGenerator &&
 		!fn.isAsync &&
@@ -488,10 +503,14 @@ function definitionInitializedRegisters(
 		(body.controlFlow?.blockCount ?? Infinity) <= 256
 			? body.controlFlow
 			: undefined;
-	const phiDefinitions =
-		controlFlow !== undefined && fn.registerCount <= 128 && fn.instructions.length <= 4096
-			? new Map<number, Array<number>>()
+	const phiControlFlow =
+		fn.registerCount <= 128 &&
+		fn.instructions.length <= 4096 &&
+		eligible.some((local) => writes[local]! > 1)
+			? selectControlFlow()
 			: undefined;
+	const phiDefinitions =
+		phiControlFlow !== undefined ? new Map<number, Array<number>>() : undefined;
 	if (phiDefinitions !== undefined)
 		for (const [ip, op] of fn.instructions.entries())
 			if (op.opcode === "MOVE" && writes[op.dst]! > 1 && !blocked.has(ip)) {
@@ -499,35 +518,35 @@ function definitionInitializedRegisters(
 				definitions.push(ip);
 				phiDefinitions.set(op.dst, definitions);
 			}
-	const blocks = new Uint32Array(fn.instructions.length);
-	let block = 0;
-	for (let ip = 0; ip < fn.instructions.length; ip++) {
-		if (jumpTargets.has(ip) || blocked.has(ip)) block++;
-		blocks[ip] = block;
-		if (body.controlBoundaries[ip] || blocked.has(ip)) block++;
-	}
-	return native.registerRepresentations.flatMap((rep, local) => {
+	let blocks: Uint32Array | undefined;
+	const sameBlock = (definition: number, use: number): boolean => {
+		if (blocks === undefined) {
+			blocks = new Uint32Array(fn.instructions.length);
+			let block = 0;
+			for (let ip = 0; ip < fn.instructions.length; ip++) {
+				if (jumpTargets.has(ip) || blocked.has(ip)) block++;
+				blocks[ip] = block;
+				if (body.controlBoundaries[ip] || blocked.has(ip)) block++;
+			}
+		}
+		return blocks[definition] === blocks[use];
+	};
+	return eligible.flatMap((local) => {
 		const definition = definitions[local]!;
-		if (
-			local < fn.parameterCount + fn.argumentSnapshotCount ||
-			!(native.storageValues![local]! >= 0) ||
-			borrowed.has(local) ||
-			!["number", "int32", "boolean"].includes(rep)
-		)
-			return [];
-		if (writes[local] === 1)
-			return !blocked.has(definition) &&
-				(uses[local]!.every(
-					(ip) => ip > definition && blocks[ip] === blocks[definition],
-				) ||
-					(controlFlow !== undefined &&
-						uses[local]!.every((ip) => controlFlow.dominates(definition, ip))))
+		if (writes[local] === 1) {
+			if (blocked.has(definition)) return [];
+			if (uses[local]!.every((ip) => ip > definition && sameBlock(definition, ip)))
+				return [local];
+			const controlFlow = selectControlFlow();
+			return controlFlow !== undefined &&
+				uses[local]!.every((ip) => controlFlow.dominates(definition, ip))
 				? [local]
 				: [];
+		}
 		const copies = phiDefinitions?.get(local);
 		return copies !== undefined &&
 			copies.length === writes[local] &&
-			controlFlow!.isDefinedBeforeReads(uses[local]!, copies)
+			phiControlFlow!.isDefinedBeforeReads(uses[local]!, copies)
 			? [local]
 			: [];
 	});
@@ -543,7 +562,7 @@ function rematerializedConstantIps(
 	const fn = native.body;
 	if (
 		native.storageValues === undefined ||
-		body.controlFlow === undefined ||
+		fn.handlers.length > 0 ||
 		(preserveProfileSites && fn.profileSiteIds !== undefined)
 	)
 		return [];
@@ -579,11 +598,10 @@ function rematerializedConstantIps(
 				immutableOwnership.borrowed.has(op.dst))
 		)
 			return [];
-		if (!body.controlFlow!.isReachable(ip)) return [];
+		const controlFlow = body.controlFlow;
+		if (controlFlow === undefined || !controlFlow.isReachable(ip)) return [];
 		// Scalar region inputs are immutable; overlays only write explicit outputs or boxed storage.
-		const dominates = uses[op.dst]!.every((useIp) =>
-			body.controlFlow!.dominates(ip, useIp),
-		);
+		const dominates = uses[op.dst]!.every((useIp) => controlFlow.dominates(ip, useIp));
 		return dominates ? [ip] : [];
 	});
 }
