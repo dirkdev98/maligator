@@ -114,11 +114,15 @@ describe("native root publication across ordinary continuations", () => {
 		expect(() =>
 			validateNativeStorage({ ...polling, storage: original.storage }),
 		).toThrow(/storage plan/);
+		const otherBranch = original.body.instructions.findIndex(
+			(op, ip) => op.opcode === "JUMP" && ip < target - 1 && op.targetIp !== target,
+		);
+		expect(otherBranch).toBeGreaterThanOrEqual(0);
 		const extraPredecessor = lowerNativeFunctionStorage({
 			...original,
 			body: {
 				...original.body,
-				instructions: original.body.instructions.with(-1, {
+				instructions: original.body.instructions.with(otherBranch, {
 					opcode: "JUMP",
 					targetIp: target,
 				}),
