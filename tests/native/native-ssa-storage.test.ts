@@ -36,6 +36,34 @@ describe("independent native SSA storage", () => {
 	}, 600_000);
 
 	it("preserves scalar arithmetic, loop transport, and suspended heap locals", () => {
+		for (const name of [
+			"boxedPhiProduct",
+			"boxedPhiCompare",
+			"boxedPhiEqual",
+			"boxedPhiNot",
+			"boxedPhiNegate",
+			"boxedPhiInvert",
+			"boxedPhiShift",
+			"boxedPhiUnsigned",
+			"boxedPhiRemainder",
+			"boxedPhiBoolean",
+			"boxedPhiBounded",
+		]) {
+			const native = image.native.functions.find(
+				(fn) =>
+					String.fromCharCode(
+						...(image.runtime.stringConstants[fn.body.nameStringIndex] ?? []),
+					) === name,
+			)!;
+			expect(native).toBeDefined();
+			const ip = native.body.instructions.findIndex(
+				(op) =>
+					(op.opcode === "BINARY" || op.opcode === "UNARY") &&
+					native.registerRepresentations[op.dst] === "boxed",
+			);
+			expect(ip).toBeGreaterThanOrEqual(0);
+			expect(native.storage!.expressionIps).toContain(ip);
+		}
 		for (const name of ["composedPhiArithmetic", "composedPhiRotation"]) {
 			const native = image.native.functions.find(
 				(fn) =>

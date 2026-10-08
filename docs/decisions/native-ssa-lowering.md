@@ -49,6 +49,12 @@ transitive leaf overwrites still force materialization. Scalar call, shaped-fiel
 store, helper and indexed-property boundaries admit expressions only when their
 transitive inputs already occupy scalar storage. Known helper arguments and indexed
 keys capture a delayed expression once before guards, probes and fallbacks reuse it.
+Mixed-type phi copies also admit proven Number and Boolean expressions whose
+result remains boxed. The operator determines the boxing, preserving NaN, signed
+zero and signed or unsigned bitwise results. Selected expression destinations have
+no physical root slot; validation rebuilds roots from the stored expression subset
+when an artifact retains a producer. Phi-copy consumers retain the same physical
+scalar leaf restriction as other value boundaries.
 
 Scalar locals initialize at their definition when all reads follow it in the same
 straight-line block. Bounded direct bodies without handler or resume entries also

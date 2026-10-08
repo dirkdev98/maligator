@@ -596,6 +596,10 @@ function pureScalarOperation(
 	plan?: NativeFunctionPlan["instructions"][number],
 ): boolean {
 	const numeric = (local: number) => reps[local] === "number" || reps[local] === "int32";
+	const numberResult = (local: number) =>
+		reps[local] === "number" || reps[local] === "boxed";
+	const booleanResult = (local: number) =>
+		reps[local] === "boolean" || reps[local] === "boxed";
 	const numericInput = (local: number, index: number) =>
 		numeric(local) ||
 		plan?.kind === "unsigned-arithmetic" ||
@@ -614,10 +618,10 @@ function pureScalarOperation(
 		case "UNARY":
 			return (
 				(op.operator === "!" &&
-					reps[op.dst] === "boolean" &&
+					booleanResult(op.dst) &&
 					(reps[op.src] === "boolean" || numericInput(op.src, 0))) ||
 				(numericInput(op.src, 0) &&
-					((reps[op.dst] === "number" &&
+					((numberResult(op.dst) &&
 						["+", "-", "tonumeric", "~", "increment", "decrement"].includes(
 							op.operator,
 						)) ||
@@ -625,9 +629,12 @@ function pureScalarOperation(
 			);
 		case "BINARY":
 			if (plan?.kind === "unsigned-arithmetic")
-				return numeric(op.dst) && ["+", "-", "*", "%"].includes(op.operator);
+				return (
+					(numberResult(op.dst) || reps[op.dst] === "int32") &&
+					["+", "-", "*", "%"].includes(op.operator)
+				);
 			if (
-				reps[op.dst] === "boolean" &&
+				booleanResult(op.dst) &&
 				reps[op.left] === "boolean" &&
 				reps[op.right] === "boolean"
 			)
@@ -635,12 +642,12 @@ function pureScalarOperation(
 			return (
 				numericInput(op.left, 0) &&
 				numericInput(op.right, 1) &&
-				((reps[op.dst] === "number" &&
+				((numberResult(op.dst) &&
 					(NATIVE_ARITH[op.operator] !== undefined ||
 						NATIVE_BITWISE[op.operator] !== undefined ||
 						["%", ">>>"].includes(op.operator))) ||
 					(reps[op.dst] === "int32" && NATIVE_BITWISE[op.operator] !== undefined) ||
-					(reps[op.dst] === "boolean" && NATIVE_COMPARE[op.operator] !== undefined))
+					(booleanResult(op.dst) && NATIVE_COMPARE[op.operator] !== undefined))
 			);
 		case "MATH_UNARY_NUMBER":
 			return (
@@ -664,6 +671,8 @@ function scalarValueBoundary(op: BytecodeInstruction, local: number): boolean {
 		return value.kind === "register" && value.register === local;
 	};
 	switch (op.opcode) {
+		case "MOVE":
+			return op.src === local && op.dst !== local;
 		case "LOAD_PROPERTY":
 			return op.key === local && op.object !== local;
 		case "CREATE_OBJECT_SHAPED":
@@ -705,6 +714,7 @@ function expressionIps(
 	jumpTargets: ReadonlySet<number>,
 	preserveProfileSites: boolean,
 	{ blocked, borrowed }: NativeScalarOwnership,
+	candidates?: ReadonlySet<number>,
 ): ReadonlyArray<number> {
 	const fn = native.body;
 	if (
@@ -731,6 +741,7 @@ function expressionIps(
 	const costs = new Map<number, number>();
 	for (const [ip, op] of fn.instructions.entries()) {
 		if (
+			(candidates !== undefined && !candidates.has(ip)) ||
 			blocked.has(ip) ||
 			!pureScalarOperation(op, native.registerRepresentations, native.instructions[ip]) ||
 			!("dst" in op) ||
@@ -849,13 +860,14 @@ function rootStorage(
 	fastPaths: NativeFastPathPlans,
 	callTransports: ReadonlyArray<NativeCallTransportPlan>,
 	rematerializedConstantIps: ReadonlyArray<number>,
+	expressionIps: ReadonlyArray<number>,
 ) {
 	const fn = native.body;
-	// Admitted literals are untraced tags or immortal rows with stable addresses.
+	// Admitted expressions produce untraced scalars; pooled literals have immortal addresses.
 	const rootFree = new Set(
-		rematerializedConstantIps.map((ip) => {
+		[...rematerializedConstantIps, ...expressionIps].map((ip) => {
 			const op = fn.instructions[ip]!;
-			if (!("dst" in op)) throw new Error("Rematerialized constant lacks a destination");
+			if (!("dst" in op)) throw new Error("Native expression lacks a destination");
 			return op.dst;
 		}),
 	);
@@ -898,6 +910,24 @@ function rootStorage(
 	};
 }
 
+function scalarStorageWindows(fastPaths: NativeFastPathPlans) {
+	return [
+		...fastPaths.propertyProjections,
+		...fastPaths.propertyNumericUpdates,
+		...fastPaths.propertyReadRegions,
+		...fastPaths.propertyReadPairs,
+		...fastPaths.pairedArrayLoops,
+		...fastPaths.arrayPresence,
+		...fastPaths.arrayPairDestructure,
+		...(fastPaths.constructorInitialization === undefined
+			? []
+			: [fastPaths.constructorInitialization]),
+		...(fastPaths.privateFieldReserve === undefined
+			? []
+			: [fastPaths.privateFieldReserve]),
+	];
+}
+
 function lowerStorage(
 	native: NativeFunctionPlan,
 	body: NativeStorageBodyFacts,
@@ -909,30 +939,7 @@ function lowerStorage(
 ): NativeStoragePlan {
 	const fn = native.body;
 	const fastPaths = selectNativeFastPaths(native, entry, stringConstants);
-	const {
-		propertyProjections,
-		propertyNumericUpdates,
-		propertyReadRegions,
-		propertyReadPairs,
-	} = fastPaths;
-	const propertyWindows = [...propertyProjections, ...propertyNumericUpdates];
-	const auxiliaryWindows = [
-		...fastPaths.pairedArrayLoops,
-		...fastPaths.arrayPresence,
-		...fastPaths.arrayPairDestructure,
-		...(fastPaths.constructorInitialization === undefined
-			? []
-			: [fastPaths.constructorInitialization]),
-		...(fastPaths.privateFieldReserve === undefined
-			? []
-			: [fastPaths.privateFieldReserve]),
-	];
-	const expressionWindows = [
-		...propertyWindows,
-		...propertyReadRegions,
-		...propertyReadPairs,
-		...auxiliaryWindows,
-	];
+	const expressionWindows = scalarStorageWindows(fastPaths);
 	const jumpTargets = body.jumpTargets;
 	const uses = scalarStorageUses(body, suspension);
 	const immutableOwnership = scalarStorageOwnership(native, body, expressionWindows);
@@ -1008,7 +1015,13 @@ function lowerStorage(
 		),
 		directHeapObjectIps,
 		stackObjects: selectNativeStackObjectStorage(native, new Set(directHeapObjectIps)),
-		...rootStorage(native, fastPaths, callTransports, scalar.rematerializedConstantIps),
+		...rootStorage(
+			native,
+			fastPaths,
+			callTransports,
+			scalar.rematerializedConstantIps,
+			scalar.expressionIps,
+		),
 		elidedTdzIps: elidedTdzIps(native, ownership),
 		...scalar,
 		numericWorker,
@@ -1408,20 +1421,42 @@ export function validateNativeStorage(
 			stringConstants,
 		);
 		if (!sameScalar(variant.storage, selected)) return false;
-		const retained = sameNumbers(
-			variant.storage!.rematerializedConstantIps,
-			selected.rematerializedConstantIps,
-		)
-			? selected
-			: {
-					...selected,
-					...rootStorage(
+		if (
+			!sameNumbers(variant.storage!.expressionIps, selected.expressionIps) &&
+			!sameNumbers(
+				variant.storage!.expressionIps,
+				expressionIps(
+					variant,
+					body,
+					body.jumpTargets,
+					false,
+					scalarStorageOwnership(
 						variant,
-						selected,
-						selected.callTransports,
-						variant.storage!.rematerializedConstantIps,
+						body,
+						scalarStorageWindows(selected),
+						suspension,
 					),
-				};
+					new Set(variant.storage!.expressionIps),
+				),
+			)
+		)
+			return false;
+		const retained =
+			sameNumbers(
+				variant.storage!.rematerializedConstantIps,
+				selected.rematerializedConstantIps,
+			) && sameNumbers(variant.storage!.expressionIps, selected.expressionIps)
+				? selected
+				: {
+						...selected,
+						...rootStorage(
+							variant,
+							selected,
+							selected.callTransports,
+							variant.storage!.rematerializedConstantIps,
+							variant.storage!.expressionIps,
+						),
+					};
 		return same(variant.storage, retained, suspension);
 	};
 	if (

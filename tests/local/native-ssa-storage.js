@@ -92,6 +92,125 @@ function composedPhiRotation(left, right, count) {
 	}
 	return a + b;
 }
+function boxedPhiProduct(condition, left, right) {
+	const a = +left,
+		b = +right;
+	return condition ? a * b : undefined;
+}
+function boxedPhiCompare(condition, left, right) {
+	const a = +left,
+		b = +right;
+	return condition ? a < b : undefined;
+}
+function boxedPhiEqual(condition, left, right) {
+	const a = +left,
+		b = +right;
+	return condition ? a === b : undefined;
+}
+function boxedPhiNot(condition, left, right) {
+	const a = +left,
+		b = +right;
+	return condition ? !a : undefined;
+}
+function boxedPhiNegate(condition, left, right) {
+	const a = +left,
+		b = +right;
+	return condition ? -a : undefined;
+}
+function boxedPhiInvert(condition, left, right) {
+	const a = +left,
+		b = +right;
+	return condition ? ~a : undefined;
+}
+function boxedPhiShift(condition, left, right) {
+	const a = +left,
+		b = +right;
+	return condition ? a << b : undefined;
+}
+function boxedPhiUnsigned(condition, left, right) {
+	const a = +left,
+		b = +right;
+	return condition ? a >>> b : undefined;
+}
+function boxedPhiRemainder(condition, left, right) {
+	const a = +left,
+		b = +right;
+	return condition ? a % b : undefined;
+}
+function boxedPhiBoolean(condition, left, right) {
+	const a = !!left,
+		b = !!right;
+	return condition ? a === b : undefined;
+}
+function boxedPhiBounded(condition, left, right) {
+	const n = +left;
+	const a = n & 65535;
+	return condition ? (a * 3 + 1) % 101 : undefined;
+}
+const boxedPhiKernels = [
+	boxedPhiProduct,
+	boxedPhiCompare,
+	boxedPhiEqual,
+	boxedPhiNot,
+	boxedPhiNegate,
+	boxedPhiInvert,
+	boxedPhiShift,
+	boxedPhiUnsigned,
+	boxedPhiRemainder,
+	boxedPhiBoolean,
+	boxedPhiBounded,
+];
+globalThis.boxedPhiKernels = boxedPhiKernels;
+for (const [left, right] of [
+	[-0, 0],
+	[-0, -0],
+	[0, -0],
+	[NaN, 1],
+	[Infinity, -Infinity],
+	[Number.MIN_VALUE, 0],
+	[1e308, -1e308],
+	[7, 3],
+	[-2147483648, 31],
+	[4294967295, 33],
+	[1.5, -1.5],
+]) {
+	for (const kernel of boxedPhiKernels) {
+		for (const condition of [false, true]) {
+			const value = kernel(condition, left, right);
+			gc();
+			console.log("boxed-phi", typeof value, String(value), Object.is(value, -0));
+		}
+	}
+}
+const boxedPhiOrder = [];
+for (const condition of [false, true]) {
+	const result = boxedPhiProduct(
+		condition,
+		{
+			valueOf() {
+				boxedPhiOrder.push("left");
+				gc();
+				return -0;
+			},
+		},
+		{
+			valueOf() {
+				boxedPhiOrder.push("right");
+				gc();
+				return 3;
+			},
+		},
+	);
+	console.log("boxed-phi-coerce", String(result), Object.is(result, -0));
+	for (const invalid of [1n, Symbol("phi")]) {
+		try {
+			boxedPhiProduct(condition, 1, invalid);
+		} catch (error) {
+			console.log("boxed-phi-throw", error instanceof TypeError);
+		}
+	}
+}
+console.log("boxed-phi-order", boxedPhiOrder.join(":"));
 globalThis.composedPhiArithmetic = composedPhiArithmetic;
 globalThis.composedPhiRotation = composedPhiRotation;
 for (const [left, right] of [

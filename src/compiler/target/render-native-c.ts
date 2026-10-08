@@ -1443,6 +1443,10 @@ function renderScalarExpression(
 		reps[local] === "boxed" ? `mal_ops_number_as_f64(r${local})` : `(f64) r${local}`;
 	const int32 = (local: number) =>
 		reps[local] === "int32" ? `r${local}` : `mal_ops_number_to_i32(${number(local)})`;
+	const numberResult = (dst: number, expression: string) =>
+		reps[dst] === "boxed" ? `mal_ops_number_value(${expression})` : expression;
+	const booleanResult = (dst: number, expression: string) =>
+		reps[dst] === "boxed" ? `mal_value_new_boolean(${expression})` : expression;
 	switch (op.opcode) {
 		case "CREATE_UNDEFINED":
 			return "MAL_VALUE_UNDEFINED";
@@ -1469,16 +1473,24 @@ function renderScalarExpression(
 			return `r${op.src}`;
 		case "UNARY":
 			if (op.operator === "!")
-				return reps[op.src] === "boolean"
-					? `!r${op.src}`
-					: `!mal_number_is_truthy(${number(op.src)})`;
+				return booleanResult(
+					op.dst,
+					reps[op.src] === "boolean"
+						? `!r${op.src}`
+						: `!mal_number_is_truthy(${number(op.src)})`,
+				);
 			if (op.operator === "~")
 				return reps[op.dst] === "int32"
 					? `~${int32(op.src)}`
-					: `(f64) (~${int32(op.src)})`;
+					: reps[op.dst] === "boxed"
+						? `mal_value_from_i32(~${int32(op.src)})`
+						: `(f64) (~${int32(op.src)})`;
 			if (op.operator === "increment" || op.operator === "decrement")
-				return `${number(op.src)} ${op.operator === "increment" ? "+" : "-"} 1.0`;
-			return `${op.operator === "-" ? "-" : ""}(${number(op.src)})`;
+				return numberResult(
+					op.dst,
+					`${number(op.src)} ${op.operator === "increment" ? "+" : "-"} 1.0`,
+				);
+			return numberResult(op.dst, `${op.operator === "-" ? "-" : ""}(${number(op.src)})`);
 		case "BINARY": {
 			if (plan?.kind === "unsigned-arithmetic") {
 				const expression = nativeUnsignedExpr(
@@ -1488,7 +1500,7 @@ function renderScalarExpression(
 				);
 				return reps[op.dst] === "int32"
 					? `mal_ops_u32_to_i32(${expression})`
-					: `(f64) (${expression})`;
+					: numberResult(op.dst, `(f64) (${expression})`);
 			}
 			if (NATIVE_BITWISE[op.operator] !== undefined || op.operator === ">>>") {
 				const expression =
@@ -1497,17 +1509,23 @@ function renderScalarExpression(
 						: nativeInt32Expr(op.operator, int32(op.left), int32(op.right));
 				if (expression === null)
 					throw new Error("Invalid lowered native bitwise expression");
-				return reps[op.dst] === "int32" ? expression : `(f64) (${expression})`;
+				return reps[op.dst] === "int32"
+					? expression
+					: reps[op.dst] === "boxed" && op.operator !== ">>>"
+						? `mal_value_from_i32(${expression})`
+						: numberResult(op.dst, `(f64) (${expression})`);
 			}
 			const operand = (local: number) =>
 				reps[local] === "boolean" ? `r${local}` : number(local);
-			const expression =
-				reps[op.dst] === "boolean"
-					? `${operand(op.left)} ${NATIVE_COMPARE[op.operator]} ${operand(op.right)}`
-					: nativeNumberExpr(op.operator, number(op.left), number(op.right));
+			if (NATIVE_COMPARE[op.operator] !== undefined)
+				return booleanResult(
+					op.dst,
+					`${operand(op.left)} ${NATIVE_COMPARE[op.operator]} ${operand(op.right)}`,
+				);
+			const expression = nativeNumberExpr(op.operator, number(op.left), number(op.right));
 			if (expression === null)
 				throw new Error("Invalid lowered native scalar expression");
-			return expression;
+			return numberResult(op.dst, expression);
 		}
 		case "MATH_UNARY_NUMBER": {
 			const expression = nativeMathUnaryExpr(op.operation, number(op.src));
