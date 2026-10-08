@@ -2993,7 +2993,7 @@ describe("native update-expression representation", () => {
 			},
 		};
 		expect(() => emitProgramImage(staleActions, { compiled: true })).toThrow(
-			/stale region actions/,
+			/invalid or stale storage plan/,
 		);
 		expect(() => serializeCompilerArtifact(staleActions)).toThrow(
 			/stale native region actions/,

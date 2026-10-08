@@ -23,6 +23,11 @@ share slots only when their complete incoming/outgoing safepoint unions do not
 overlap; parameters, argument snapshots, continuously rooted locals, and helper
 output addresses retain dedicated slots. Publication tracks each slot's current
 occupant and forgets potentially cleared values at GC and control-flow boundaries.
+Occupancy uses unsigned 32-bit words, so the allocator does not depend on the
+compiler host's BigInt width. Validation independently checks physical slot bounds,
+duplicate assignments, and simultaneous roots against each safepoint's complete
+incoming/outgoing union before comparing the selected storage contract. Values
+omitted from physical storage still require their separate ownership proof.
 Selected ordinary script-call transports also admit boxed final results to private
 locals: typed, unavailable-entry, and guard-miss branches check completion before
 assignment and publish the result before their outgoing GC poll. Region claims,
@@ -105,6 +110,20 @@ defaults. These choices are persisted and validated independently of expression
 selection, including profiled artifacts. Decoded body facts are shared within a
 planning invocation; representations, ownership and suspension reads remain per
 variant, and validation rebuilds facts at the image trust boundary.
+Read/write occurrences, branch sources, handler and resume entries, and handler
+targets are shared by storage and fast-path consumers. Root profitability builds
+ordinary-edge loop and cycle indexes lazily in the same invocation; incoming-root
+costs remain specific to each entry. C rendering shares immutable body analysis
+within one image emission and keeps entry representations and region overlays local.
+
+Capture-owner access is also a persisted native plan. It records external owner
+lookups, original copied-value descriptor ordinals, and eligibility for direct
+access to the function's own environment. Environment-stack operations disable
+that direct access. Small complete closure layouts can initialize owner pointers
+together; relocated images use owner lookup, and resumable callers perform it
+after restoring their actual environment. Environment allocation and rooting
+continue to follow captured storage ownership. All public program-image C-emission boundaries
+validate the body ABI and storage plans before rendering.
 
 Small numeric workers have their own selected scalar plan derived from the typed
 ABI, independently of ordinary boxed-body overlays. Polling workers render that
@@ -264,8 +283,13 @@ stay scalar only when the caller already proves that representation. Open guarde
 fallbacks generally retain boxed destinations. Number-to-int32 transport uses the
 runtime conversion rather than a C cast.
 
-Exact Array callback sites can reuse typed entries already selected from ordinary
-calls. Each caller storage plan records the chosen signature; validation recomputes
+Exact Array callback sites reuse the shared bounded typed-entry machinery, including
+discovery without an ordinary seed call. Builtin invocation descriptors supply
+known argument kinds, such as numeric indexes. At most one numeric hypothesis per
+callback target can specialize observed unknown values when the usual analysis
+proves an additional numeric operation; identity-only boxing gains do not qualify.
+Discovery shares compiler-work budgets and the four-entry target limit. Each caller
+storage plan records the chosen signature; validation recomputes
 it against the current entry table, and artifact/batch relocation preserves the
 target. One guarded adapter per selected target entry retains the canonical callback
 ABI and falls back on incompatible arguments. Snapshot and rest entries require the
@@ -274,15 +298,18 @@ budget, so rejection restores the canonical callback pointer. The existing exact
 script-call helper continues to own activation, realm, and receiver adjustment;
 the builtin algorithms retain boxed argument roots. Typed results are boxed
 without allocation at this boundary.
-This consumes existing entry contracts; it does not discover new callback-driven
-signatures or remove the builtin's boxed argument buffer.
+Map and reduce can therefore discover and transport useful entries from builtin
+calls alone. Their boxed argument buffer and canonical fallback remain necessary.
 
 Direct activation-local stack objects with existing certificates
 can store several fields in independent number, int32, and boolean locals. Stable
 boxed and string fields occupy dedicated shadow slots initialized before frame
-publication and active throughout the invocation. Every field must retain its initial
-representation at all certified accesses; inherited or changing fields
-keep whole-object boxed storage. All-boxed sites retain the existing contiguous layout.
+publication and active throughout the invocation. Each slot joins its initializer
+and certified stores: mixed int32/number values use number storage, and other
+mixtures use boxed storage. Certified loads and stores must admit the corresponding
+conversion. A site needs at least one scalar field to use this split layout;
+all-boxed sites retain the existing contiguous layout. Inherited and uncertified
+accesses keep whole-object boxed storage.
 The persisted plan is selected and validated independently for each entry. The embedded
 header retains identity with a null field-storage pointer, so this layout cannot escape
 the certificate. Existing certified returns can materialize a typed layout: rendering
@@ -314,6 +341,12 @@ string spills come exclusively from trusted outgoing root obligations: conservat
 handler edges can name stale heap bits, and Core also retains scalar-replaced boxed
 occupants beyond their last executable read. Arguments and captured environments
 keep their existing ownership contracts.
+Scalar liveness solves dense word sets at basic-block boundaries, with sparse
+read-before-write and kill summaries. Blocks split at handler changes and suspension
+continuations; snapshots read the continuation and handler sets. Handler-only
+values survive definitions along protected paths. Unreachable blocks still
+participate in the solver. This bounds dense live-state storage by block count
+instead of instruction count without changing outgoing heap-root ownership.
 
 Unprotected resumables also compose scalar expressions, constant rematerialization,
 TDZ omission, and initialization plans. Suspension saves are explicit planning reads;
@@ -344,6 +377,13 @@ and rooting the transferred value. This remains necessary for portable wire
 frames, whose GC maps are untrusted and whose full register buffer is traced.
 VM register reuse can alias an input with a resume destination; the captured root
 keeps that input alive across PromiseResolve or queued-request reentry.
+
+Image emission retains metadata as ordered source rows until the final translation
+units. Array externalization records declarations while writing them, and oversized
+tables become bounded initializer chunks without first constructing a discarded
+full table string. Debug position runs are compressed once and reused for their
+count and rows. Batch interning retains its exact content keys. These changes
+remove intermediate serialization work without changing the generated C contract.
 
 This boundary does not yet implement general native block scheduling,
 additional typed aggregate transport, or shared cold regions. It provides

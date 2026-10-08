@@ -347,10 +347,8 @@ function argumentSnapshotPlanRows(fn: BytecodeFunction): Array<string> {
 	);
 }
 
-function positionArrayRows(fn: BytecodeFunction): Array<string> {
-	return compressPositions(fn.positions).map(
-		(run) => `    MAL_LINE_ENTRY(${run.startIp}, ${run.posId}),`,
-	);
+function positionArrayRows(runs: ReturnType<typeof compressPositions>): Array<string> {
+	return runs.map((run) => `    MAL_LINE_ENTRY(${run.startIp}, ${run.posId}),`);
 }
 
 function instructionArrayRows(
@@ -924,13 +922,14 @@ function externalizeDataArrays(
 			definitionLines.push(lines[index]!);
 		}
 		definitionLines[0] = definitionLines[0]!.replace(/^static /, "");
-		const definitionSource = definitionLines.join("\n");
+		let definitionCodeUnits = definitionLines.length - 1;
+		for (const row of definitionLines) definitionCodeUnits += row.length;
 		if (
 			(symbol.startsWith("mal_functions") ||
 				symbol.startsWith("mal_source_positions") ||
 				symbol.startsWith("mal_strings") ||
 				(symbol.startsWith("mal_function_") && symbol.includes("_instructions"))) &&
-			definitionSource.length > Math.floor(maxCodeUnits / 2)
+			definitionCodeUnits > Math.floor(maxCodeUnits / 2)
 		) {
 			const rows = definitionLines.slice(1, -1);
 			const mutableType = type.replace(/^const /, "");
@@ -977,7 +976,7 @@ function externalizeDataArrays(
 			output.push("}");
 			continue;
 		}
-		definitions.push({ symbol, source: definitionSource });
+		definitions.push({ symbol, source: definitionLines.join("\n") });
 		declare(symbol, `extern ${type} ${symbol}[];`);
 	}
 	if (splitInitializers.length > 0) {
@@ -1269,7 +1268,7 @@ function emitProgramImageParts(
 		const runs = debug ? compressPositions(fn.positions) : [];
 		if (runs.length > 0) {
 			lines.push(`static const MalLineEntry mal_function_${i}_positions${suffix}[] = {`);
-			lines.push(positionArrayRows(fn));
+			lines.push(positionArrayRows(runs));
 			lines.push("};", "");
 			positionInfo.push({
 				symbol: `mal_function_${i}_positions${suffix}`,
