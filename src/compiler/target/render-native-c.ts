@@ -162,34 +162,79 @@ function copiedCaptureIndexes(fn: BytecodeFunction): ReadonlyMap<string, number>
 	);
 }
 
-function fixedCaptureOwners(fn: BytecodeFunction, functionIndex: number): Array<number> {
+interface NativeBodyAnalysis {
+	readonly captureOwners: ReadonlyArray<number>;
+	readonly stableCaptureOwners: ReadonlySet<number>;
+	readonly copiedCaptures: ReadonlyMap<string, number>;
+	readonly requiredCaptureOwners: ReadonlySet<number>;
+	readonly jumpTargets: ReadonlySet<number>;
+	readonly handlerTargets: ReadonlyArray<number | undefined>;
+	readonly ownsCaptureEnvironment: boolean;
+	readonly iterationEligibilityRegisters: ReadonlySet<number>;
+}
+
+function analyzeNativeBody(
+	fn: BytecodeFunction,
+	functionIndex: number,
+): NativeBodyAnalysis {
 	const owners = new Set<number>();
 	const copied = copiedCaptureIndexes(fn);
-	for (const instruction of fn.instructions) {
-		if (
-			instruction.opcode === "LOAD_CAPTURED" &&
-			copied.has(captureValueKey(instruction.ownerFunctionIndex, instruction.index))
-		)
-			continue;
+	const jumpTargets = new Set(fn.handlers.map((handler) => handler.handlerIp));
+	const iterationEligibilityRegisters = new Set<number>();
+	let ownsCaptureEnvironment = fn.capturedCount > 0;
+	for (const [ip, instruction] of fn.instructions.entries()) {
 		if (
 			(instruction.opcode === "LOAD_CAPTURED" ||
 				instruction.opcode === "STORE_CAPTURED") &&
 			instruction.ownerFunctionIndex >= 0 &&
-			instruction.ownerFunctionIndex !== functionIndex
-		) {
+			instruction.ownerFunctionIndex !== functionIndex &&
+			!(
+				instruction.opcode === "LOAD_CAPTURED" &&
+				copied.has(captureValueKey(instruction.ownerFunctionIndex, instruction.index))
+			)
+		)
 			owners.add(instruction.ownerFunctionIndex);
+		if (instruction.opcode === "JUMP" || instruction.opcode === "JUMP_IF")
+			jumpTargets.add(instruction.targetIp);
+		if (
+			(fn.isGenerator || fn.isAsync) &&
+			(instruction.opcode === "GENERATOR_START" ||
+				instruction.opcode === "YIELD" ||
+				instruction.opcode === "AWAIT")
+		)
+			jumpTargets.add(ip + 1);
+		if (
+			instruction.opcode === "LOAD_INTRINSIC" &&
+			instruction.intrinsic === "__arrayIterationEligible"
+		)
+			iterationEligibilityRegisters.add(instruction.dst);
+		switch (instruction.opcode) {
+			case "ENV_PUSH":
+			case "ENV_COPY":
+			case "ENV_POP":
+			case "WITH_ENTER":
+			case "WITH_EXIT":
+				ownsCaptureEnvironment = false;
 		}
 	}
-	return [...owners].sort((a, b) => a - b);
+	return {
+		captureOwners: [...owners].sort((a, b) => a - b),
+		stableCaptureOwners: owners,
+		copiedCaptures: copied,
+		requiredCaptureOwners: new Set(fn.closureCaptureOwners),
+		jumpTargets,
+		handlerTargets: exceptionHandlerTargets(fn.instructions.length, fn.handlers),
+		ownsCaptureEnvironment,
+		iterationEligibilityRegisters,
+	};
 }
 
 function initializeFixedCaptureOwners(
 	fn: BytecodeFunction,
-	functionIndex: number,
+	owners: ReadonlyArray<number>,
 	relocation: NativeRelocationExpressions,
 	declare: boolean,
 ): Array<string> {
-	const owners = fixedCaptureOwners(fn, functionIndex);
 	const binding = declare ? "MalEnv *const " : "";
 	const layout = fn.closureCaptureOwners;
 	// Native constructors encode these layouts as one tagged owner, a display,
@@ -740,6 +785,7 @@ function cPrivateRootPublication(
  */
 function emitCompiledVariant(
 	fn: BytecodeFunction,
+	analysis: NativeBodyAnalysis,
 	native: NativeFunctionPlan,
 	index: number,
 	suffix: string,
@@ -760,6 +806,7 @@ function emitCompiledVariant(
 		if (directEntry !== undefined || relocatable) return null;
 		return emitResumableFunction(
 			fn,
+			analysis,
 			native,
 			index,
 			suffix,
@@ -1152,6 +1199,7 @@ function emitCompiledVariant(
 	);
 	const body = emitBody(
 		fn,
+		analysis,
 		index,
 		nativeContract.specializations,
 		nativeContract.regionActions,
@@ -1380,7 +1428,12 @@ function emitCompiledVariant(
 		);
 	}
 
-	for (const line of initializeFixedCaptureOwners(fn, index, relocation, true)) {
+	for (const line of initializeFixedCaptureOwners(
+		fn,
+		analysis.captureOwners,
+		relocation,
+		true,
+	)) {
 		lines.push(`    ${line}`);
 	}
 	for (const line of initializeCopiedCaptureValues(fn, relocation)) {
@@ -1638,8 +1691,84 @@ function renderNumericLeaf(
 	];
 }
 
-/** Emit the canonical boxed entry and every independently lowerable typed sibling. */
 export function emitCompiledFunction(
+	native: NativeFunctionPlan,
+	index: number,
+	suffix: string,
+	debug: boolean,
+	linkage: "static" | "external" = "static",
+	directCompiledTargets: ReadonlySet<number> = new Set(),
+	semanticProtectors: ReadonlyArray<VmSemanticProtectorFact> = [],
+	directCompiledEntries: DirectCompiledEntries = new Map(),
+	relocatable = false,
+	strictCompiledTargets: ReadonlySet<number> = new Set(),
+	stringConstants: ReadonlyArray<ReadonlyArray<number>> = [],
+	callbackEntries: ReadonlySet<string> = new Set(),
+): CompiledFunction | null {
+	return renderCompiledFunction(
+		analyzeNativeBody(native.body, index),
+		native,
+		index,
+		suffix,
+		debug,
+		linkage,
+		directCompiledTargets,
+		semanticProtectors,
+		directCompiledEntries,
+		relocatable,
+		strictCompiledTargets,
+		stringConstants,
+		callbackEntries,
+	);
+}
+
+// The image is immutable during one emission; a fresh renderer rechecks later image mutations.
+export function createNativeFunctionRenderer(): typeof emitCompiledFunction {
+	const analyses = new Map<
+		number,
+		{ body: BytecodeFunction; analysis: NativeBodyAnalysis }
+	>();
+	return (
+		native: NativeFunctionPlan,
+		index: number,
+		suffix: string,
+		debug: boolean,
+		linkage: "static" | "external" = "static",
+		directCompiledTargets: ReadonlySet<number> = new Set(),
+		semanticProtectors: ReadonlyArray<VmSemanticProtectorFact> = [],
+		directCompiledEntries: DirectCompiledEntries = new Map(),
+		relocatable = false,
+		strictCompiledTargets: ReadonlySet<number> = new Set(),
+		stringConstants: ReadonlyArray<ReadonlyArray<number>> = [],
+		callbackEntries: ReadonlySet<string> = new Set(),
+	): CompiledFunction | null => {
+		const previous = analyses.get(index);
+		const analysis =
+			previous?.body === native.body
+				? previous.analysis
+				: analyzeNativeBody(native.body, index);
+		if (previous?.body !== native.body)
+			analyses.set(index, { body: native.body, analysis });
+		return renderCompiledFunction(
+			analysis,
+			native,
+			index,
+			suffix,
+			debug,
+			linkage,
+			directCompiledTargets,
+			semanticProtectors,
+			directCompiledEntries,
+			relocatable,
+			strictCompiledTargets,
+			stringConstants,
+			callbackEntries,
+		);
+	};
+}
+
+function renderCompiledFunction(
+	analysis: NativeBodyAnalysis,
 	native: NativeFunctionPlan,
 	index: number,
 	suffix: string,
@@ -1656,6 +1785,7 @@ export function emitCompiledFunction(
 	const fn = native.body;
 	const canonical = emitCompiledVariant(
 		fn,
+		analysis,
 		native,
 		index,
 		suffix,
@@ -1678,6 +1808,7 @@ export function emitCompiledFunction(
 	}>((entry) => {
 		const emitted = emitCompiledVariant(
 			fn,
+			analysis,
 			native,
 			index,
 			suffix,
@@ -1819,6 +1950,7 @@ function renderFieldCallSlots(
 // Each C invocation owns computational locals and roots; only the selected snapshot survives.
 function emitResumableFunction(
 	fn: BytecodeFunction,
+	analysis: NativeBodyAnalysis,
 	native: NativeFunctionPlan,
 	index: number,
 	suffix: string,
@@ -1890,6 +2022,7 @@ function emitResumableFunction(
 	);
 	const body = emitBody(
 		fn,
+		analysis,
 		index,
 		native.specializations,
 		native.regionActions,
@@ -1985,7 +2118,7 @@ function emitResumableFunction(
 	lines.push(
 		`    MalGeneratorObject *resume_state = (MalGeneratorObject *) entry_state;`,
 	);
-	for (const owner of fixedCaptureOwners(fn, index)) {
+	for (const owner of analysis.captureOwners) {
 		lines.push(`    MalEnv *__capture_owner_${owner};`);
 	}
 	lines.push(`    MalGeneratorObject *__coro = resume_state;`);
@@ -2030,7 +2163,7 @@ function emitResumableFunction(
 	lines.push(`        mal_root_frame_head = &__gc_frame;`);
 	for (const line of initializeFixedCaptureOwners(
 		fn,
-		index,
+		analysis.captureOwners,
 		nativeRelocationExpressions(false),
 		false,
 	)) {
@@ -2086,7 +2219,7 @@ function emitResumableFunction(
 	}
 	for (const line of initializeFixedCaptureOwners(
 		fn,
-		index,
+		analysis.captureOwners,
 		nativeRelocationExpressions(false),
 		false,
 	)) {
@@ -2603,6 +2736,7 @@ function emitStringSwitch(
  */
 function emitBody(
 	fn: BytecodeFunction,
+	analysis: NativeBodyAnalysis,
 	functionIndex: number,
 	specializations: ReadonlyArray<VmRegion>,
 	regionActions: ReadonlyArray<VmRegionAction>,
@@ -2675,11 +2809,7 @@ function emitBody(
 			return op.dst;
 		}),
 	);
-	const stableCaptureOwners = new Set(fixedCaptureOwners(fn, functionIndex));
-	const copiedCaptures = copiedCaptureIndexes(fn);
-	// Closed-source layouts include every external lexical owner at creation,
-	// and every entry receives that closure's state, including coroutine resumes.
-	const requiredCaptureOwners = new Set(fn.closureCaptureOwners);
+	const { stableCaptureOwners, copiedCaptures, requiredCaptureOwners } = analysis;
 	const numericFusionActionByIp = new Map<number, NativeNumericFusionAction>();
 	for (const action of regionActions) {
 		const region = specializations[action.regionIndex];
@@ -2953,39 +3083,8 @@ function emitBody(
 		});
 		nativeArrayPairDestructureActionByIp.set(plan.closeIp, { cursor, role: "close" });
 	}
-	const jumpTargets = new Set<number>();
-	let ownsCaptureEnvironment = coro === null && fn.capturedCount > 0;
-	for (const instruction of fn.instructions) {
-		switch (instruction.opcode) {
-			case "ENV_PUSH":
-			case "ENV_COPY":
-			case "ENV_POP":
-			case "WITH_ENTER":
-			case "WITH_EXIT":
-				ownsCaptureEnvironment = false;
-		}
-		if (instruction.opcode === "JUMP" || instruction.opcode === "JUMP_IF") {
-			jumpTargets.add(instruction.targetIp);
-		}
-	}
-	const handlerTargets = exceptionHandlerTargets(fn.instructions.length, fn.handlers);
-	// A coroutine resumes at the instruction after each suspend (GENERATOR_START/
-	// YIELD/AWAIT), so those need labels for the entry dispatch to jump to.
-	if (coro !== null) {
-		for (let ip = 0; ip < fn.instructions.length; ip++) {
-			const opcode = fn.instructions[ip]!.opcode;
-			if (opcode === "GENERATOR_START" || opcode === "YIELD" || opcode === "AWAIT") {
-				jumpTargets.add(ip + 1);
-			}
-		}
-	}
-	// Exception handlers are reached only via the on-throw goto, so their entry
-	// instructions also need labels. The active handler for an instruction is the
-	// innermost range covering it (smallest end-start), matching the interpreter's
-	// mal_vm_unwind_to_handler.
-	for (const handler of fn.handlers) {
-		jumpTargets.add(handler.handlerIp);
-	}
+	const { jumpTargets, handlerTargets } = analysis;
+	const ownsCaptureEnvironment = coro === null && analysis.ownsCaptureEnvironment;
 	const staticDefineStringIndexByIp = new Map(
 		fastPathPlans.literalPropertyDefinitions.map((plan) => [
 			plan.instructionIp,
@@ -2998,14 +3097,7 @@ function emitBody(
 	const numberPredicates = new Map(
 		fastPathPlans.numberPredicates.map((plan) => [plan.instructionIp, plan]),
 	);
-	const iterationEligibilityRegisters = new Set<number>();
-	for (const instruction of fn.instructions) {
-		if (
-			instruction.opcode === "LOAD_INTRINSIC" &&
-			instruction.intrinsic === "__arrayIterationEligible"
-		)
-			iterationEligibilityRegisters.add(instruction.dst);
-	}
+	const { iterationEligibilityRegisters } = analysis;
 	const nativeStringSplitProjectionActionByIp = new Map<
 		number,
 		NativeStringSplitProjectionAction

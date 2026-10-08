@@ -45,8 +45,8 @@ for (const ordinal of [31, 32, 127, 128, 129, 255, 256, 2048]) {
 			rootSlots: [slots[0], slots[1], slots[1], slots[3]],
 			rootSlotCount: storage.rootSlotCount,
 		});
-	} catch {
-		rejected = true;
+	} catch (error) {
+		rejected = error.message.includes("interfering GC roots");
 	}
 	if (!rejected) throw new Error(`physical collision accepted at ${ordinal}`);
 }

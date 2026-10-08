@@ -99,8 +99,9 @@ export function validateNativeRootStorage(
 			invalid("invalid root slot");
 		slots.set(register, slot);
 	}
+	const occupied = new Set<number>();
 	for (const point of native.gc.safepoints) {
-		const occupied = new Set<number>();
+		occupied.clear();
 		for (const register of point.rootRegisters) {
 			const slot = slots.get(register);
 			if (slot === undefined) continue;

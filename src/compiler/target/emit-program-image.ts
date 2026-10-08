@@ -10,7 +10,7 @@ import { validateNativeBodyAbis, validateNativeDirectEntry } from "./program-ima
 import {
 	COMPILED_FUNCTION_DECLARATION,
 	directCompiledEntryKey,
-	emitCompiledFunction,
+	createNativeFunctionRenderer,
 } from "./render-native-c.ts";
 import type { CompiledFunction } from "./render-native-c.ts";
 import {
@@ -794,6 +794,7 @@ function emitNativeFunctions(
 		return { targets: [...targets], entries: [...entries] };
 	});
 	const cached: Array<{ key: string; emitted: CompiledFunction | null } | undefined> = [];
+	const renderFunction = createNativeFunctionRenderer();
 	const strictCompiledTargets = new Set(
 		image.runtime.functions.flatMap((fn, index) => (fn.strict ? [index] : [])),
 	);
@@ -802,7 +803,7 @@ function emitNativeFunctions(
 		availability: NativeCompilationAvailability,
 	): CompiledFunction | null => {
 		if (!options.useCompiled) return null;
-		const emitted = emitCompiledFunction(
+		const emitted = renderFunction(
 			image.native.functions[functionIndex]!,
 			functionIndex,
 			options.suffix,
