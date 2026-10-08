@@ -737,23 +737,44 @@ function cInactiveRootMaskPublication(
 	return `MAL_ROOT_MASK_WIDE(0x${head}, ${symbol}, countof(${symbol}))`;
 }
 
+interface NativeRootPublicationPoint {
+	readonly incoming: ReadonlySet<number>;
+	readonly outgoing: ReadonlySet<number>;
+	/** Private slots with their active occupant, in slot encounter order. */
+	readonly active: ReadonlyArray<readonly [slot: number, register: number]>;
+}
+
 interface NativeRootPublication {
 	readonly privateCallResultIps: ReadonlySet<number>;
 	readonly entryStableRegisters: ReadonlySet<number>;
 	readonly slots: ReadonlyMap<number, number>;
 	readonly slotRegisters: ReadonlyMap<number, ReadonlyArray<number>>;
-	readonly safepoints: ReadonlyMap<
-		number,
-		{
-			readonly incoming: ReadonlySet<number>;
-			readonly outgoing: ReadonlySet<number>;
-			readonly active: ReadonlySet<number>;
-		}
-	>;
+	readonly safepoints: ReadonlyMap<number, NativeRootPublicationPoint>;
 }
 
 const EMPTY_ROOT_PUBLICATION: ReadonlyArray<string> = Object.freeze([]);
 const EMPTY_ROOTED_OUTPUTS: ReadonlyArray<number> = Object.freeze([]);
+
+function nativeRootPublicationPoint(
+	point: NativeFunctionPlan["gc"]["safepoints"][number],
+	slots: ReadonlyMap<number, number>,
+	slotOrder: ReadonlyMap<number, number>,
+): NativeRootPublicationPoint {
+	const active: Array<readonly [slot: number, register: number]> = [];
+	for (const register of point.rootRegisters) {
+		const slot = slots.get(register);
+		if (slot !== undefined) active.push([slot, register]);
+	}
+	active.sort((left, right) => slotOrder.get(left[0])! - slotOrder.get(right[0])!);
+	for (let index = 1; index < active.length; index++)
+		if (active[index]![0] === active[index - 1]![0])
+			throw new Error(`Native private roots interfere at ${point.instructionIp}`);
+	return {
+		incoming: new Set(point.incomingRootRegisters),
+		outgoing: new Set(point.outgoingRootRegisters),
+		active,
+	};
+}
 
 function cPrivateRootPublication(
 	plan: NativeRootPublication | undefined,
@@ -762,24 +783,19 @@ function cPrivateRootPublication(
 	knownPublished?: ReadonlyMap<number, number>,
 ): ReadonlyArray<string> {
 	const point = plan?.safepoints.get(ip);
-	if (plan === undefined || plan.slots.size === 0 || point === undefined)
-		return EMPTY_ROOT_PUBLICATION;
+	if (plan === undefined || point === undefined) return EMPTY_ROOT_PUBLICATION;
 	const live = edge === "incoming" ? point.incoming : point.outgoing;
 	let stores: Array<string> | undefined;
-	for (const [slot, registers] of plan.slotRegisters) {
-		const register = registers.find((register) => live.has(register));
-		if (register !== undefined) {
-			if (
-				plan.entryStableRegisters.has(register) ||
-				knownPublished?.get(slot) === register
-			)
-				continue;
-			(stores ??= []).push(`__gc_slots[${slot}] = r${register};`);
-		} else if (registers.some((register) => point.active.has(register))) {
-			// The inactive mask hides only slots without an active occupant, so an
-			// output-only root must stay empty until the helper returns its value.
+	// Slots without an active occupant are left to the inactive mask.
+	for (const [slot, register] of point.active) {
+		if (!live.has(register)) {
+			// An output-only root must stay empty until the helper returns its value.
 			(stores ??= []).push(`__gc_slots[${slot}] = MAL_VALUE_UNDEFINED;`);
-		}
+		} else if (
+			!plan.entryStableRegisters.has(register) &&
+			knownPublished?.get(slot) !== register
+		)
+			(stores ??= []).push(`__gc_slots[${slot}] = r${register};`);
 	}
 	return stores ?? EMPTY_ROOT_PUBLICATION;
 }
@@ -887,6 +903,9 @@ function emitCompiledVariant(
 		registers.push(register);
 		slotRegisters.set(slot, registers);
 	}
+	const slotOrder = new Map(
+		[...slotRegisters.keys()].map((slot, order) => [slot, order]),
+	);
 	const rootPublication: NativeRootPublication = {
 		privateCallResultIps,
 		entryStableRegisters: new Set(storage.entryStableRootRegisters),
@@ -898,11 +917,7 @@ function emitCompiledVariant(
 				: new Map(
 						nativeContract.gc.safepoints.map((point) => [
 							point.instructionIp,
-							{
-								incoming: new Set(point.incomingRootRegisters),
-								outgoing: new Set(point.outgoingRootRegisters),
-								active: new Set(point.rootRegisters),
-							},
+							nativeRootPublicationPoint(point, privateSlots, slotOrder),
 						]),
 					),
 	};
@@ -3909,7 +3924,7 @@ function emitBody(
 		if (rootPublication !== undefined && hasPrivateRoots) {
 			const point = rootPublication.safepoints.get(ip);
 			if (publishesIncomingRoots && point !== undefined)
-				for (const [register, slot] of rootPublication.slots)
+				for (const [slot, register] of point.active)
 					if (point.incoming.has(register))
 						knownPublishedPrivateRoots.set(slot, register);
 			// Refined GC maps identify possible shadow clearing on either edge.

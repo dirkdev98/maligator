@@ -217,6 +217,29 @@ describe("native physical root storage", () => {
 		expect(source).toContain(`MalValue __gc_slots[${fn.storage!.rootSlotCount}];`);
 	});
 
+	it("refuses to render a stale GC map that makes shared private occupants interfere", () => {
+		const fn = contract();
+		const [first, ...rest] = fn.gc.safepoints;
+		const roots = [0, 1, 2, 4];
+		const stale = {
+			...fn,
+			gc: {
+				safepoints: [
+					{
+						...first!,
+						rootRegisters: roots,
+						incomingRootRegisters: roots,
+						outgoingRootRegisters: roots,
+					},
+					...rest,
+				],
+			},
+		};
+		expect(() => emitCompiledFunction(stale, 0, "", false)).toThrow(
+			/private roots interfere at 0/,
+		);
+	});
+
 	it("round-trips the selected layout and rejects forged slot aliases and frame sizes", () => {
 		const image = compile();
 		const restored = deserializeCompilerArtifact(serializeCompilerArtifact(image));
