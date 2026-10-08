@@ -195,13 +195,13 @@ describe("native typed stack fields", () => {
 		expect(deserializeCompilerArtifact(serializeCompilerArtifact(image))).toEqual(image);
 	});
 
-	it("keeps a numeric value with boxed transport rooted while retaining other scalar fields", () => {
+	it("keeps a module-stored Number scalar inside stack fields", () => {
 		const native = compile(
 			"const n=+input; snapshot=n; const o={x:n,y:2,flag:true}; return o===input?-1:o.x+o.y;",
 			"let snapshot;",
 		).native.functions[1]!;
 		expect(native.storage!.stackObjects[0]!.slotRepresentations).toEqual([
-			"boxed",
+			"number",
 			"int32",
 			"boolean",
 		]);

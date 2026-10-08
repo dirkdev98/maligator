@@ -61,6 +61,11 @@ evaluation or remove their assignment; repeated uses and intervening calls retai
 ordinary boxed locals initialized to undefined. Logical GC liveness stays intact,
 and validation rederives the physical exclusion per variant. Parameters, raw
 storage, opaque or borrowed locals and suspension snapshots retain their roots.
+Captured and module cell stores consume existing scalar result proofs at operand
+zero without joining the cell's other writers into the producer's scalar component.
+Their values stay scalar until the store boxes them. Captured writes retain the
+old-slot barrier; only immediate Number and Boolean values skip new-value carding.
+Dynamic strings and generic arithmetic results keep traced storage and carding.
 
 Scalar locals initialize at their definition when all reads follow it in the same
 straight-line block. Bounded direct bodies without handler or resume entries also

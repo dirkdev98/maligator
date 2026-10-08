@@ -774,6 +774,7 @@ function scalarBoundaryConsumer(
 		opcode === "queryStaticData" ||
 		opcode === "preparedStringCompare" ||
 		(opcode === "storePropertyStatic" && operand === 1) ||
+		((opcode === "storeCaptured" || opcode === "storeGlobal") && operand === 0) ||
 		((opcode === "storeProperty" || opcode === "defineProperty") && operand === 2) ||
 		((opcode === "loadProperty" || opcode === "storeProperty") && operand === 1) ||
 		(opcode === "call" && operand >= 2) ||

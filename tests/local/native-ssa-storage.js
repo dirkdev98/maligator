@@ -1,23 +1,149 @@
 const gc = globalThis.__mal_collect_garbage ?? (() => {});
 
 let immediateSaved;
-function storedImmediateProduct(left, right, gate) {
+let scalarModuleSaved = { old: true };
+function scalarModuleProduct(left, right, gate) {
+	const a = +left,
+		b = +right;
+	const value = a * b;
+	scalarModuleSaved = value;
+	gate();
+	return value;
+}
+function scalarCellFactory() {
+	let number = { old: true },
+		flag = { old: true },
+		text = { old: true };
+	function scalarCaptureProduct(left, right, gate) {
+		const a = +left,
+			b = +right;
+		const value = a * b;
+		number = value;
+		gate();
+		return value;
+	}
+	function scalarCapturePredicate(left, right, gate) {
+		const a = +left,
+			b = +right;
+		const value = a < b;
+		flag = value;
+		gate();
+		return value;
+	}
+	function scalarCaptureString(input, gate) {
+		const value = "cell:" + input;
+		text = value;
+		gate();
+		return value;
+	}
+	async function scalarCaptureAwait(left, right, gate) {
+		const a = +left,
+			b = +right;
+		const value = a * b;
+		number = value;
+		await gate;
+		return value;
+	}
+	return {
+		product: scalarCaptureProduct,
+		predicate: scalarCapturePredicate,
+		string: scalarCaptureString,
+		await: scalarCaptureAwait,
+		read() {
+			return [number, flag, text];
+		},
+		reset() {
+			number = { old: true };
+			flag = { old: true };
+			text = { old: true };
+		},
+	};
+}
+globalThis.scalarModuleProduct = scalarModuleProduct;
+globalThis.scalarCellFactory = scalarCellFactory;
+const scalarCells = scalarCellFactory();
+for (const [left, right] of [
+	[-0, 3],
+	[NaN, 1],
+	[Infinity, 0],
+	[Number.MIN_VALUE, 2],
+	[1e308, 2],
+	[7, 3],
+]) {
+	scalarCells.reset();
+	gc();
+	const number = scalarCells.product(left, right, () => {
+		gc();
+		const cell = scalarCells.read()[0];
+		console.log("scalar-cell-number", String(cell), Object.is(cell, -0));
+		scalarCells.reset();
+		gc();
+	});
+	const flag = scalarCells.predicate(left, right, () => {
+		gc();
+		console.log("scalar-cell-flag", scalarCells.read()[1]);
+	});
+	const text = scalarCells.string(
+		{
+			toString() {
+				gc();
+				return String(left);
+			},
+		},
+		() => {
+			gc();
+			console.log("scalar-cell-text", scalarCells.read()[2]);
+		},
+	);
+	const module = scalarModuleProduct(left, right, () => {
+		gc();
+		console.log(
+			"scalar-module-cell",
+			String(scalarModuleSaved),
+			Object.is(scalarModuleSaved, -0),
+		);
+		scalarModuleSaved = { changed: true };
+		gc();
+	});
+	console.log(
+		"scalar-cell-values",
+		String(number),
+		Object.is(number, -0),
+		flag,
+		text,
+		String(module),
+		Object.is(module, -0),
+		scalarModuleSaved.changed,
+	);
+}
+const scalarAwait = scalarCells.await(-0, 3, Promise.resolve());
+scalarCells.reset();
+gc();
+scalarAwait.then((value) =>
+	console.log(
+		"scalar-cell-await",
+		String(value),
+		Object.is(value, -0),
+		scalarCells.read()[0].old,
+	),
+);
+function storedImmediateProduct(left, right, gate, condition) {
 	const a = +left,
 		b = +right;
 	const value = a * b;
 	immediateSaved = value;
 	gate();
-	return value;
+	return condition ? value : undefined;
 }
 function immediateCapture() {
 	let saved;
-	function storedCapturedProduct(left, right, gate) {
+	function storedCapturedProduct(left, right, gate, condition) {
 		const a = +left,
 			b = +right;
 		const value = a * b;
 		saved = value;
 		gate();
-		return value;
+		return condition ? value : undefined;
 	}
 	return {
 		compute: storedCapturedProduct,
@@ -38,15 +164,25 @@ for (const [left, right] of [
 	[1e308, 2],
 	[7, 3],
 ]) {
-	const first = storedImmediateProduct(left, right, () => {
-		immediateSaved = { marker: "replaced" };
-		gc();
-	});
-	const second = immediateClosure.compute(left, right, () => {
-		gc();
-		const cell = immediateClosure.read();
-		console.log("immediate-cell", String(cell), Object.is(cell, -0));
-	});
+	const first = storedImmediateProduct(
+		left,
+		right,
+		() => {
+			immediateSaved = { marker: "replaced" };
+			gc();
+		},
+		true,
+	);
+	const second = immediateClosure.compute(
+		left,
+		right,
+		() => {
+			gc();
+			const cell = immediateClosure.read();
+			console.log("immediate-cell", String(cell), Object.is(cell, -0));
+		},
+		true,
+	);
 	gc();
 	console.log(
 		"immediate-storage",

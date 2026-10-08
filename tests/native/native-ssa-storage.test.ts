@@ -36,6 +36,30 @@ describe("independent native SSA storage", () => {
 	}, 600_000);
 
 	it("preserves scalar arithmetic, loop transport, and suspended heap locals", () => {
+		for (const [name, rep] of [
+			["scalarModuleProduct", "number"],
+			["scalarCaptureProduct", "number"],
+			["scalarCapturePredicate", "boolean"],
+			["scalarCaptureAwait", "number"],
+		] as const) {
+			const native = image.native.functions.find(
+				(fn) =>
+					String.fromCharCode(
+						...(image.runtime.stringConstants[fn.body.nameStringIndex] ?? []),
+					) === name,
+			)!;
+			expect(native).toBeDefined();
+			const store = native.body.instructions.find(
+				(op) => op.opcode === "STORE_CAPTURED" || op.opcode === "STORE_GLOBAL",
+			)!;
+			if (store.opcode !== "STORE_CAPTURED" && store.opcode !== "STORE_GLOBAL")
+				throw new Error("Missing scalar cell store");
+			expect(native.registerRepresentations[store.src]).toBe(rep);
+			expect(native.storage!.rootRegisters).not.toContain(store.src);
+			expect(
+				emitCompiledFunction(native, native.functionIndex, "", false),
+			).not.toBeNull();
+		}
 		for (const name of ["storedImmediateProduct", "storedCapturedProduct"]) {
 			const native = image.native.functions.find(
 				(fn) =>

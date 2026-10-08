@@ -730,6 +730,10 @@ describe("Core local proofs and representations", () => {
 			attributes: { index: 0 },
 			outputCount: 0,
 		});
+		builder.appendInstruction(entry, "storeGlobalProperty", [source!], {
+			attributes: { nameStringIndex: 0 },
+			outputCount: 0,
+		});
 		builder.setTerminator(entry, { kind: "return", value: incremented! });
 		const finished = builder.finish(entry);
 		const fn = program.function(finished.function);

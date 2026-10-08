@@ -15,7 +15,7 @@ import { inspectStaticValueFunction } from "./helpers/static-values.ts";
 
 function storedOperator(expression: string, profile = false) {
 	const out = inspectStaticValueFunction(
-		`let saved;function compute(left,right,gate){const a=+left,b=+right;const value=${expression};saved=value;gate();return value;}globalThis.compute=compute;`,
+		`let saved;function compute(left,right,gate){const a=+left,b=+right;const value=${expression};saved=value;gate();return left?value:undefined;}globalThis.compute=compute;`,
 		"compute",
 		{ profile },
 	);
@@ -137,7 +137,7 @@ describe("untraced boxed operator storage", () => {
 
 	it("preserves suspended operator locals and their boxed snapshot contract", () => {
 		const out = inspectStaticValueFunction(
-			"let saved;async function compute(left,right,gate){const a=+left,b=+right;const value=a*b;saved=value;await gate;return value;}globalThis.compute=compute;",
+			"let saved;async function compute(left,right,gate){const a=+left,b=+right;const value=a*b;saved=value;await gate;return left?value:undefined;}globalThis.compute=compute;",
 			"compute",
 		);
 		const op = out.native.body.instructions.find(
@@ -155,7 +155,7 @@ describe("untraced boxed operator storage", () => {
 
 	it("retains protected operator storage borrowed by exception transport", () => {
 		const out = inspectStaticValueFunction(
-			"let saved;function compute(left,right,gate){try{const a=+left,b=+right;const value=a*b;saved=value;gate();return value;}catch(error){return error;}}globalThis.compute=compute;",
+			"let saved;function compute(left,right,gate){try{const a=+left,b=+right;const value=a*b;saved=value;gate();return left?value:undefined;}catch(error){return error;}}globalThis.compute=compute;",
 			"compute",
 		);
 		const op = out.native.body.instructions.find(

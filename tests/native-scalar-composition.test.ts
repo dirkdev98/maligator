@@ -29,6 +29,44 @@ function compile(body: string, preamble = "") {
 	);
 }
 
+function boxedNumericLeaf(out: ReturnType<typeof inspectStaticValueFunction>) {
+	const producer = out.native.body.instructions.find(
+		(op) => op.opcode === "UNARY" && op.operator === "+",
+	)!;
+	if (producer.opcode !== "UNARY") throw new Error("Missing numeric leaf");
+	const native = lowerNativeFunctionStorage({
+		...out.native,
+		gc: {
+			safepoints: out.native.gc.safepoints.map((point) => ({
+				...point,
+				rootRegisters: [...new Set([...point.rootRegisters, producer.dst])].sort(
+					(a, b) => a - b,
+				),
+				incomingRootRegisters: [
+					...new Set([...point.incomingRootRegisters, producer.dst]),
+				].sort((a, b) => a - b),
+				outgoingRootRegisters: [
+					...new Set([...point.outgoingRootRegisters, producer.dst]),
+				].sort((a, b) => a - b),
+			})),
+		},
+		registerRepresentations: out.native.registerRepresentations.map((rep, local) =>
+			local === producer.dst ? "boxed" : rep,
+		),
+	});
+	const c = emitCompiledFunction(native, native.functionIndex, "", false)!;
+	const image = {
+		...out.image,
+		native: {
+			...out.image.native,
+			functions: out.image.native.functions.map((fn) =>
+				fn.functionIndex === native.functionIndex ? native : fn,
+			),
+		},
+	};
+	return { ...out, image, native, c };
+}
+
 describe("native scalar plans around opaque and exceptional windows", () => {
 	it("composes an unrelated numeric tail with a real selected fusion region", () => {
 		const image = compile(`
@@ -148,6 +186,28 @@ describe("native scalar plans around opaque and exceptional windows", () => {
 });
 
 describe("existing-proof scalar expression consumers", () => {
+	it.each([
+		"values[(a-b)*2]=payload;",
+		"return values[(a-b)*2];",
+		"return String.fromCharCode((a-b)*2);",
+		"callback((a-b)*2);return 0;",
+	])("retains a validated boxed numeric leaf at %s", (tail) => {
+		const out = boxedNumericLeaf(
+			inspectStaticValueFunction(
+				`function probe(values,left,right,payload,callback){const a=+left,b=+right;${tail}}globalThis.probe=probe;`,
+				"probe",
+			),
+		);
+		const ip = out.native.body.instructions.findIndex(
+			(op) => op.opcode === "BINARY" && op.operator === "*",
+		);
+		expect(ip).toBeGreaterThanOrEqual(0);
+		expect(out.native.storage!.expressionIps).not.toContain(ip);
+		expect(() => validateNativeStorage(out.native)).not.toThrow();
+		expect(deserializeCompilerArtifact(serializeCompilerArtifact(out.image))).toEqual(
+			out.image,
+		);
+	});
 	it("preserves Boolean property-key conversion at a composed store boundary", () => {
 		const out = inspectStaticValueFunction(
 			"function write(values,left,right,payload){const a=+left,b=+right;values[a<b]=payload;}globalThis.write=write;",
@@ -200,7 +260,6 @@ describe("existing-proof scalar expression consumers", () => {
 		"values[(a-b)*2]=callback();",
 		"const x=(a-b)*2; callback(); values[x]=payload;",
 		"try { values[(a-b)*2]=payload; } catch(error) { return error; }",
-		"snapshot=a; values[(a-b)*2]=payload;",
 	])("retains a computed store key across aliases and effects: %s", (tail) => {
 		const out = inspectStaticValueFunction(
 			`let snapshot;function write(values,left,right,payload,callback){const a=+left,b=+right;${tail}}globalThis.write=write;`,
@@ -268,7 +327,6 @@ describe("existing-proof scalar expression consumers", () => {
 		"const x=(a-b)*2; return x[x];",
 		"const x=(a-b)*2; callback(); return values[x];",
 		"try { return values[(a-b)*2]; } catch(error) { return error; }",
-		"snapshot=a; return values[(a-b)*2];",
 	])("retains an indexed key across aliases, effects and boxed leaves: %s", (tail) => {
 		const out = inspectStaticValueFunction(
 			`let snapshot;function lookup(values,left,right,callback){const a=+left,b=+right;${tail}}globalThis.lookup=lookup;`,
@@ -368,9 +426,11 @@ describe("existing-proof scalar expression consumers", () => {
 	});
 
 	it("materializes a known-call argument whose transitive scalar leaf remains boxed", () => {
-		const out = inspectStaticValueFunction(
-			"let snapshot;function probe(left,right){const a=+left;snapshot=a;const b=+right;return String.fromCharCode((a-b)*2);}globalThis.probe=probe;",
-			"probe",
+		const out = boxedNumericLeaf(
+			inspectStaticValueFunction(
+				"let snapshot;function probe(left,right){const a=+left;snapshot=a;const b=+right;return String.fromCharCode((a-b)*2);}globalThis.probe=probe;",
+				"probe",
+			),
 		);
 		const product = out.native.body.instructions.findIndex(
 			(op) => op.opcode === "BINARY" && op.operator === "*",
@@ -461,10 +521,12 @@ describe("existing-proof scalar expression consumers", () => {
 	);
 
 	it("materializes a composed boundary expression whose transitive leaf remains boxed", () => {
-		const native = compile(
-			"const a=+left; snapshot=a; const b=+right; callback((a-b)*2); return 0;",
-			"let snapshot;",
-		).native.functions[1]!;
+		const native = boxedNumericLeaf(
+			inspectStaticValueFunction(
+				"let snapshot;function probe(left,right,callback){const a=+left;snapshot=a;const b=+right;callback((a-b)*2);return 0;}globalThis.probe=probe;",
+				"probe",
+			),
+		).native;
 		const subtractIp = native.body.instructions.findIndex(
 			(op) => op.opcode === "BINARY" && op.operator === "-",
 		);

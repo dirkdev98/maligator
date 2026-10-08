@@ -903,7 +903,7 @@ describe("Core local memory, provenance, and escape optimization", () => {
 		},
 	);
 
-	it("retains the boxing move when forwarding an unboxed slot value to global storage", () => {
+	it("forwards an unboxed slot value directly to its scalar global-store boundary", () => {
 		const core = program();
 		const builder = new CoreFunctionBuilder(core, { parameterCount: 1 });
 		const entry = builder.createBlock([{ representation: "boxed" }]);
@@ -927,16 +927,14 @@ describe("Core local memory, provenance, and escape optimization", () => {
 
 		const optimized = optimizeCore({ program: core, context });
 		const fn = optimized.compilation.program.function(finished.function);
-		const move = [...fn.instructionIds()].find(
+		const store = [...fn.instructionIds()].find(
 			(instruction) =>
 				fn.instructionKind(instruction) === "operation" &&
-				fn.instructionOpcodeName(instruction) === "move",
+				fn.instructionOpcodeName(instruction) === "storeGlobal",
 		);
-		expect(move).toBeDefined();
-		expect(fn.valueRepresentation(inspectCoreInstructionResults(fn, move!)[0]!)).toBe(
-			"boxed",
-		);
-		expect(fn.valueRepresentation(inspectCoreInstructionOperands(fn, move!)[0]!)).toBe(
+		expect(store).toBeDefined();
+		expect(inspectCoreInstructionOperands(fn, store!)[0]).toBe(one);
+		expect(fn.valueRepresentation(inspectCoreInstructionOperands(fn, store!)[0]!)).toBe(
 			"f64",
 		);
 	});

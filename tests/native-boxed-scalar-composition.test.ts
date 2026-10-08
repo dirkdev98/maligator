@@ -171,7 +171,34 @@ describe("boxed scalar expressions at phi boundaries", () => {
 	});
 
 	it("retains a phi producer whose exact Number input still occupies boxed storage", () => {
-		const out = conditional("a*b", false, "let saved;", "saved=a;");
+		const source = conditional("a*b", false, "let saved;", "saved=a;");
+		const leaf = source.native.body.instructions.find(
+			(op) => op.opcode === "UNARY" && op.operator === "+",
+		)!;
+		if (leaf.opcode !== "UNARY") throw new Error("Missing numeric leaf");
+		const out = {
+			...source,
+			native: lowerNativeFunctionStorage({
+				...source.native,
+				gc: {
+					safepoints: source.native.gc.safepoints.map((point) => ({
+						...point,
+						rootRegisters: [...new Set([...point.rootRegisters, leaf.dst])].sort(
+							(a, b) => a - b,
+						),
+						incomingRootRegisters: [
+							...new Set([...point.incomingRootRegisters, leaf.dst]),
+						].sort((a, b) => a - b),
+						outgoingRootRegisters: [
+							...new Set([...point.outgoingRootRegisters, leaf.dst]),
+						].sort((a, b) => a - b),
+					})),
+				},
+				registerRepresentations: source.native.registerRepresentations.map(
+					(rep, local) => (local === leaf.dst ? "boxed" : rep),
+				),
+			}),
+		};
 		const ip = out.native.body.instructions.findIndex(
 			(op) => op.opcode === "BINARY" && op.operator === "*",
 		);
