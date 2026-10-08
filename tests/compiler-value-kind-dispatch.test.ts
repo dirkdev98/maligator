@@ -29,7 +29,7 @@ describe("Compiler value-kind operator dispatch", () => {
 		const equality = ["==", "!=", "===", "!=="];
 		for (let mask = 0; mask <= 256; mask++) {
 			const numeric = mask > 0 && (mask & ~15) === 0;
-			const comparable = mask > 0 && (mask & ~9) === 0;
+			const comparable = mask > 0 && ((mask & ~9) === 0 || (mask & ~3) === 0);
 			for (const operator of unary) {
 				equal(exactNativeKinds("unary", operator, [mask]), numeric);
 			}
@@ -41,6 +41,23 @@ describe("Compiler value-kind operator dispatch", () => {
 			for (const operator of equality) {
 				equal(exactNativeKinds("binary", operator, [9, mask]), comparable);
 			}
+		}
+	});
+
+	it("admits equality against a proven nullish operand whatever the other operand", () => {
+		for (const operator of ["==", "!=", "===", "!=="]) {
+			for (let mask = 1; mask <= 255; mask++) {
+				for (const nullish of [1, 2, 3]) {
+					equal(exactNativeKinds("binary", operator, [mask, nullish]), true);
+					equal(exactNativeKinds("binary", operator, [nullish, mask]), true);
+				}
+			}
+			equal(exactNativeKinds("binary", operator, [255, 255]), false);
+			equal(exactNativeKinds("binary", operator, [255, 8]), false);
+			equal(exactNativeKinds("binary", operator, [0, 2]), false);
+		}
+		for (const operator of ["<", "+", "in"]) {
+			equal(exactNativeKinds("binary", operator, [255, 2]), false);
 		}
 	});
 

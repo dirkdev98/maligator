@@ -28,6 +28,9 @@ export const COMPILER_VALUE_KIND_TOP =
 export const COMPILER_VALUE_KIND_NUMBER_OR_UNDEFINED =
 	COMPILER_VALUE_KIND_NUMBER | COMPILER_VALUE_KIND_UNDEFINED;
 
+export const COMPILER_VALUE_KIND_NULLISH =
+	COMPILER_VALUE_KIND_NULL | COMPILER_VALUE_KIND_UNDEFINED;
+
 export const COMPILER_VALUE_KIND_NUMERIC_PRIMITIVE =
 	COMPILER_VALUE_KIND_NUMBER_OR_UNDEFINED |
 	COMPILER_VALUE_KIND_NULL |
@@ -124,11 +127,34 @@ export function compilerOperatorFixedResultKind(
 	return undefined;
 }
 
+/**
+ * Equality against a null or undefined operand needs no coercion: loose
+ * equality is a nullish test and strict equality an encoding compare, so the
+ * other operand may be unknown.
+ */
+export function compilerOperatorIsNullishEquality(
+	opcode: string,
+	operator: unknown,
+	masks: ReadonlyArray<CompilerValueKindMask>,
+): boolean {
+	return (
+		opcode === "binary" &&
+		masks.length === 2 &&
+		(operator === "==" ||
+			operator === "!=" ||
+			operator === "===" ||
+			operator === "!==") &&
+		masks.every((mask) => compilerValueKindMaskIsValid(mask, { allowTop: true })) &&
+		masks.some((mask) => compilerValueKindMaskIsSubset(mask, COMPILER_VALUE_KIND_NULLISH))
+	);
+}
+
 export function compilerOperatorInputKindsHaveExactNativeSemantics(
 	opcode: string,
 	operator: unknown,
 	masks: ReadonlyArray<CompilerValueKindMask>,
 ): masks is CompilerOperatorInputKindMasks {
+	if (compilerOperatorIsNullishEquality(opcode, operator, masks)) return true;
 	if (
 		typeof operator !== "string" ||
 		!masks.every((mask) => compilerValueKindMaskIsValid(mask))

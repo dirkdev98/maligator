@@ -10,6 +10,7 @@ import {
 	COMPILER_VALUE_KIND_NUMBER,
 	COMPILER_VALUE_KIND_NUMERIC_PRIMITIVE,
 	compilerOperatorInputKindsHaveExactNativeSemantics,
+	compilerOperatorIsNullishEquality,
 	compilerOperatorFixedResultKind,
 	compilerNumericResultKind,
 	COMPILER_NUMERIC_UNARY_OPERATORS as NUMERIC_UNARY_OPERATORS,
@@ -1448,7 +1449,7 @@ export function coreExactOperatorInputKindMasks(
 	const masks = fact.value;
 	return fact.kind === CORE_PRIMITIVE_OPERATOR_EFFECT_FACT &&
 		Array.isArray(masks) &&
-		masks.every((mask) => compilerValueKindMaskIsValid(mask)) &&
+		masks.every((mask) => compilerValueKindMaskIsValid(mask, { allowTop: true })) &&
 		compilerOperatorInputKindsHaveExactNativeSemantics(
 			fn.instructionOpcodeName(instruction),
 			fn.instructionAttributes(instruction).operator,
@@ -1493,6 +1494,7 @@ export function corePrimitiveOperatorEffectRefinement(
 			compilerOperatorInputKindsHaveExactNativeSemantics(opcode, operator, masks);
 		gcFree =
 			["===", "!=="].includes(operator) ||
+			compilerOperatorIsNullishEquality(opcode, operator, masks) ||
 			(numericPrimitives &&
 				(NUMERIC_BINARY_OPERATORS.has(operator) ||
 					compilerOperatorFixedResultKind(opcode, operator) ===

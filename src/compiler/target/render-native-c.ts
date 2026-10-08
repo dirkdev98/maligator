@@ -8,7 +8,9 @@ import {
 	COMPILER_VALUE_KIND_NUMERIC_PRIMITIVE,
 	compilerValueKindMaskIsSubset,
 	COMPILER_VALUE_KIND_NUMBER_OR_UNDEFINED,
+	COMPILER_VALUE_KIND_NULLISH,
 	COMPILER_VALUE_KIND_UNDEFINED,
+	compilerOperatorIsNullishEquality,
 } from "../shared/compiler-value-kinds.ts";
 import type { CompilerValueKindMask } from "../shared/compiler-value-kinds.ts";
 import {
@@ -7341,6 +7343,29 @@ function emitInstruction(
 					: reps[r] === "number"
 						? `r${r}`
 						: `mal_ops_number_as_f64(${boxed(r)})`;
+			if (
+				exactInputKinds !== undefined &&
+				compilerOperatorIsNullishEquality("binary", operator, exactInputKinds)
+			) {
+				const other = compilerValueKindMaskIsSubset(
+					exactInputKinds[1],
+					COMPILER_VALUE_KIND_NULLISH,
+				)
+					? left
+					: right;
+				const positive =
+					operator === "==" || operator === "!="
+						? isNumericRep(reps[other]!) || reps[other] === "boolean"
+							? "false"
+							: `mal_value_is_nil(${boxed(other)})`
+						: `${boxed(left)} == ${boxed(right)}`;
+				return [
+					storeBoolean(
+						dst,
+						operator === "!=" || operator === "!==" ? `!(${positive})` : positive,
+					),
+				];
+			}
 			// Exact Number/undefined domains require neither coercion nor a speculative fallback.
 			if (
 				exactInputKinds !== undefined &&
