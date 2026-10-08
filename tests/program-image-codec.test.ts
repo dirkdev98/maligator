@@ -1258,12 +1258,13 @@ describe("program-image-codec", () => {
 		const load = original[5]!;
 		if (load.opcode !== "LOAD_PROPERTY_STATIC_SHAPE_CASE")
 			throw new Error("expected shape load");
-		const finalLoad = { ...load, dst: load.shapeCase };
+		const finalLoad = { ...load, dst: load.shapeCase, icIndex: 2 };
 		const check = (middle: Array<BytecodeInstruction>, last = finalLoad) =>
 			validateVmShapeCases({
 				...image.runtime,
 				functions: image.runtime.functions.map((fn) => ({
 					...fn,
+					propertyIcCount: 3,
 					instructions: [
 						...original.slice(0, -1),
 						...middle,
