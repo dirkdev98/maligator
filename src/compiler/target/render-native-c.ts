@@ -6234,7 +6234,6 @@ function emitInstruction(
 			const probe = (): string =>
 				`${probeHelper}(vm, ${boxed(instruction.object)}, &${nativeBodyReference(resources, "propertyCache")}[${instruction.icIndex}], &__v_${ip})`;
 			const ordinary = (): Array<string> => [
-				`MalObject *${receiverName} = mal_vm_as_object(${boxed(instruction.object)});`,
 				`MalValue __v_${ip};`,
 				`if (${probe()}) {`,
 				`  r${instruction.dst} = ${callValue(instruction.dst, `__v_${ip}`)};`,

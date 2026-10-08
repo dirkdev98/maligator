@@ -68,7 +68,7 @@ describe("catalogued primitive builtin result storage", () => {
 		else if (kind === "input alias") instructions[ip] = { ...op, arguments: [op.dst] };
 		else if (kind === "construct") instructions[ip] = { ...op, construct: true };
 		else if (kind === "spread") instructions[ip] = { ...op, argumentMode: "array" };
-		else instructions[ip] = { ...op, operation: "String" };
+		else if (kind === "heap result") instructions[ip] = { ...op, operation: "String" };
 		const native = {
 			...out.native,
 			storageValues: kind === "raw storage" ? undefined : storageValues,
