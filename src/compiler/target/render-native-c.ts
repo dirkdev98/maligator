@@ -1140,7 +1140,10 @@ function emitCompiledVariant(
 		[...expressionIps].map((ip) => {
 			const op = fn.instructions[ip]!;
 			if (!("dst" in op)) throw new Error("Native expression lacks a destination");
-			return [op.dst, renderScalarExpression(op, reps, nativeContract.instructions[ip])];
+			return [
+				op.dst,
+				renderScalarExpression(op, reps, nativeContract.instructions[ip], relocation),
+			];
 		}),
 	);
 	const body = emitBody(
@@ -1425,12 +1428,15 @@ function renderScalarExpression(
 	op: BytecodeInstruction,
 	reps: ReadonlyArray<RegisterRep>,
 	plan?: NativeInstructionPlan,
+	relocation: NativeRelocationExpressions = nativeRelocationExpressions(false),
 ): string {
 	const number = (local: number) =>
 		reps[local] === "boxed" ? `mal_ops_number_as_f64(r${local})` : `(f64) r${local}`;
 	const int32 = (local: number) =>
 		reps[local] === "int32" ? `r${local}` : `mal_ops_number_to_i32(${number(local)})`;
 	switch (op.opcode) {
+		case "CREATE_STRING":
+			return relocation.stringValue(op.stringIndex);
 		case "CREATE_NUMBER":
 		case "CREATE_F64":
 			return reps[op.dst] === "int32"

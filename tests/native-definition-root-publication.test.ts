@@ -8,7 +8,7 @@ const source = `function define(first,key,value){return {[key]:first,fixed:value
 	globalThis.define=define;globalThis.result=define({},'dynamic',{});`;
 
 function definitionContract() {
-	const out = inspectStaticValueFunction(source, "define");
+	const out = inspectStaticValueFunction(source, "define", { profile: true });
 	const plan = out.native.storage!.literalPropertyDefinitions[0]!;
 	expect(plan).toBeDefined();
 	const instruction = out.native.body.instructions[plan.instructionIp]!;
@@ -29,6 +29,7 @@ describe("native cached-definition root publication", () => {
 			argumentSnapshotPlan: [],
 			registerCount: 6,
 			propertyIcCount: 2,
+			profileSiteIds: [-1, -1, -1, -1, -1],
 			instructions: [
 				{ opcode: "LOAD_PROPERTY_STATIC", dst: 3, object: 0, stringIndex: 0, icIndex: 0 },
 				{ opcode: "CREATE_STRING", dst: 4, stringIndex: 1 },
@@ -78,7 +79,7 @@ describe("native cached-definition root publication", () => {
 		expect(emitted.slice(probe, fallback)).toContain(publication);
 		expect(emitted.slice(fallback, call)).toContain(publication);
 	});
-	it("publishes private literal-key storage only after the cached shape transition misses", () => {
+	it("publishes a retained profiled literal-key producer only after the cached shape transition misses", () => {
 		const { out, instruction, publication } = definitionContract();
 		const emitted = out.c.source;
 		const key = emitted.indexOf(`r${instruction.key} = mal_value_from_string(`);

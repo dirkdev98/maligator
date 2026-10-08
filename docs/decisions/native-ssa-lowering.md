@@ -83,7 +83,13 @@ later collecting operations publish the current physical-slot occupant again.
 Claimed regions, typed-array paths, boxed keys and materialization sites retain
 their existing publication contract.
 
-Immutable numeric and boolean SSA constants use a separate rematerialization plan,
+Cached literal-name definitions with ordinary data-property attributes also
+publish private incoming roots only after a shape-transition miss. A successful
+transition may grow raw slot storage without collecting. Definitions owned by
+regions, constructor initialization or field-call spans retain their publication
+contracts; computed boxed keys keep the coercing fallback.
+
+Immutable numeric, boolean and string SSA constants use a separate rematerialization plan,
 so repeated uses and intervening effects do not force a C local. Selection requires
 one explicit definition outside argument and synthetic storage, with every use
 dominated by that definition in the logical control-flow graph, including snapshot
@@ -92,6 +98,12 @@ can be read early; overlays may only write explicit outputs or boxed materializa
 storage. Constants preserve their declared C representation, including int32 casts
 and negative zero. Profiling retains their producer sites. The artifact stores and
 validates this plan independently for ordinary bodies and numeric leaf helpers.
+String expressions reference the current VM's immortal literal row, including
+its relocation base, because UTF-16 widening mutates that row in place. Admitted
+strings need neither a physical shadow root nor a suspension slot. Opaque owners
+and borrowed locals retain their producer storage. Validation derives root layout
+and snapshots from the stored safe subset, so retaining a producer restores its
+required storage rather than inheriting the maximally elided layout.
 Selected switches and property fast paths retain priority over constant producer
 elision. Scalar expression selection protects opaque region IPs and their borrowed
 destinations, field-call spans, and literal-switch spans individually. Unrelated

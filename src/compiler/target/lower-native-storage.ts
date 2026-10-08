@@ -540,6 +540,7 @@ function rematerializedConstantIps(
 	body: NativeStorageBodyFacts,
 	preserveProfileSites: boolean,
 	uses: ReadonlyArray<ReadonlyArray<number>>,
+	immutableOwnership: NativeScalarOwnership,
 ): ReadonlyArray<number> {
 	const fn = native.body;
 	if (
@@ -551,14 +552,20 @@ function rematerializedConstantIps(
 	const writes = body.writeCounts;
 	return fn.instructions.flatMap((op, ip) => {
 		if (
-			!["CREATE_NUMBER", "CREATE_F64", "CREATE_BOOLEAN"].includes(op.opcode) ||
+			!["CREATE_NUMBER", "CREATE_F64", "CREATE_BOOLEAN", "CREATE_STRING"].includes(
+				op.opcode,
+			) ||
 			!("dst" in op) ||
 			op.dst < fn.parameterCount + fn.argumentSnapshotCount ||
 			!(native.storageValues![op.dst]! >= 0) ||
 			writes[op.dst] !== 1 ||
-			(op.opcode === "CREATE_BOOLEAN"
-				? native.registerRepresentations[op.dst] !== "boolean"
-				: !["number", "int32"].includes(native.registerRepresentations[op.dst]!))
+			(op.opcode === "CREATE_STRING"
+				? !["boxed", "string"].includes(native.registerRepresentations[op.dst]!) ||
+					immutableOwnership.blocked.has(ip) ||
+					immutableOwnership.borrowed.has(op.dst)
+				: op.opcode === "CREATE_BOOLEAN"
+					? native.registerRepresentations[op.dst] !== "boolean"
+					: !["number", "int32"].includes(native.registerRepresentations[op.dst]!))
 		)
 			return [];
 		if (!body.controlFlow!.isReachable(ip)) return [];
@@ -824,6 +831,59 @@ export function nativeVariantContract(
 	};
 }
 
+function rootStorage(
+	native: NativeFunctionPlan,
+	fastPaths: NativeFastPathPlans,
+	callTransports: ReadonlyArray<NativeCallTransportPlan>,
+	rematerializedConstantIps: ReadonlyArray<number>,
+) {
+	const fn = native.body;
+	// Literal rows are immortal and remain at their VM-owned address across eval splices.
+	const immortal = new Set(
+		rematerializedConstantIps.flatMap((ip) => {
+			const op = fn.instructions[ip]!;
+			return op.opcode === "CREATE_STRING" ? [op.dst] : [];
+		}),
+	);
+	const roots = nativeFrameRootRegisters(fn, native).filter(
+		(local) =>
+			["boxed", "string"].includes(native.registerRepresentations[local]!) &&
+			!immortal.has(local),
+	);
+	if (roots.length > 64) {
+		const counts = new Uint32Array(fn.registerCount);
+		for (const point of native.gc.safepoints)
+			for (const local of point.rootRegisters) counts[local]!++;
+		roots.sort((left, right) => counts[left]! - counts[right]! || left - right);
+	}
+	const calls = nativePrivateCallResultIps(fn, native, callTransports);
+	const privateLocals = new Set(
+		nativePrivateRootRegisters(fn, native, new Set(roots), calls),
+	);
+	const borrowedPlans = [
+		...fastPaths.propertyProjections,
+		...fastPaths.propertyNumericUpdates,
+		...fastPaths.pairedArrayLoops,
+		...fastPaths.arrayPresence,
+		...fastPaths.arrayPairDestructure,
+		...(fastPaths.constructorInitialization === undefined
+			? []
+			: [fastPaths.constructorInitialization]),
+		...(fastPaths.privateFieldReserve === undefined
+			? []
+			: [fastPaths.privateFieldReserve]),
+	];
+	for (const plan of borrowedPlans)
+		for (const local of plan.borrowedRegisters) privateLocals.delete(local);
+	return {
+		rootRegisters: roots,
+		...selectNativeRootStorage(native, roots, privateLocals, calls),
+		privateRegisters: roots.filter((local) => privateLocals.has(local)),
+		privateCallResultIps: [...calls],
+		entryStableRootRegisters: [...nativeEntryStableRootRegisters(fn, privateLocals)],
+	};
+}
+
 function lowerStorage(
 	native: NativeFunctionPlan,
 	body: NativeStorageBodyFacts,
@@ -861,13 +921,20 @@ function lowerStorage(
 	];
 	const jumpTargets = body.jumpTargets;
 	const uses = scalarStorageUses(body, suspension);
-	const ownership = scalarStorageOwnership(native, body, expressionWindows, suspension);
+	const immutableOwnership = scalarStorageOwnership(native, body, expressionWindows);
+	const ownership =
+		suspension === undefined
+			? immutableOwnership
+			: scalarStorageOwnership(native, body, expressionWindows, suspension);
 	const scalarStorage = (variant: NativeFunctionPlan): NativeScalarStoragePlan => {
 		const constants = rematerializedConstantIps(
 			variant,
 			body,
 			preserveProfileSites,
 			uses,
+			variant === native
+				? immutableOwnership
+				: scalarStorageOwnership(variant, body, expressionWindows),
 		);
 		const constantIps = new Set(constants);
 		const variantOwnership =
@@ -907,22 +974,7 @@ function lowerStorage(
 			),
 		};
 	}
-	const roots = nativeFrameRootRegisters(fn, native).filter((local) =>
-		["boxed", "string"].includes(native.registerRepresentations[local]!),
-	);
-	if (roots.length > 64) {
-		const counts = new Uint32Array(fn.registerCount);
-		for (const point of native.gc.safepoints)
-			for (const local of point.rootRegisters) counts[local]!++;
-		roots.sort((left, right) => counts[left]! - counts[right]! || left - right);
-	}
 	const callTransports = selectNativeCallTransports(native, entries);
-	const calls = nativePrivateCallResultIps(fn, native, callTransports);
-	const privateLocals = new Set(
-		nativePrivateRootRegisters(fn, native, new Set(roots), calls),
-	);
-	for (const plan of [...propertyWindows, ...auxiliaryWindows])
-		for (const local of plan.borrowedRegisters) privateLocals.delete(local);
 	const scalar = scalarStorage(native);
 	const directHeapObjectIps = selectNativeDirectHeapObjects(native);
 	return {
@@ -942,11 +994,7 @@ function lowerStorage(
 		),
 		directHeapObjectIps,
 		stackObjects: selectNativeStackObjectStorage(native, new Set(directHeapObjectIps)),
-		rootRegisters: roots,
-		...selectNativeRootStorage(native, roots, privateLocals, calls),
-		privateRegisters: roots.filter((local) => privateLocals.has(local)),
-		privateCallResultIps: [...calls],
-		entryStableRootRegisters: [...nativeEntryStableRootRegisters(fn, privateLocals)],
+		...rootStorage(native, fastPaths, callTransports, scalar.rematerializedConstantIps),
 		elidedTdzIps: elidedTdzIps(native, ownership),
 		...scalar,
 		numericWorker,
@@ -1336,11 +1384,31 @@ export function validateNativeStorage(
 	};
 	const matches = (variant: NativeFunctionPlan, entry?: NativeDirectEntryPlan) => {
 		const suspension = lowerNativeSuspension(variant);
-		return same(
-			variant.storage,
-			lowerStorage(variant, body, false, entry, entries, suspension, stringConstants),
+		const selected = lowerStorage(
+			variant,
+			body,
+			false,
+			entry,
+			entries,
 			suspension,
+			stringConstants,
 		);
+		if (!sameScalar(variant.storage, selected)) return false;
+		const retained = sameNumbers(
+			variant.storage!.rematerializedConstantIps,
+			selected.rematerializedConstantIps,
+		)
+			? selected
+			: {
+					...selected,
+					...rootStorage(
+						variant,
+						selected,
+						selected.callTransports,
+						variant.storage!.rematerializedConstantIps,
+					),
+				};
+		return same(variant.storage, retained, suspension);
 	};
 	if (
 		!matches(native) ||

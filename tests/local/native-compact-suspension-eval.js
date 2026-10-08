@@ -25,3 +25,46 @@ console.log(
 );
 gc();
 console.log("compact-eval", compactSpliced());
+
+function* immortalLiteralAcrossEval() {
+	const text = "'caf\u00e9'";
+	yield text;
+	const result = eval(text);
+	gc();
+	yield result;
+	return text;
+}
+const literalIterator = immortalLiteralAcrossEval();
+const literalSource = literalIterator.next().value;
+gc();
+const literalResult = literalIterator.next().value;
+eval("(function anotherLiteralSplice() { return 'new pool entry'; })");
+gc();
+const literalRestored = literalIterator.next();
+if (
+	literalResult !== "caf\u00e9" ||
+	literalRestored.value !== literalSource ||
+	!literalRestored.done
+)
+	throw new Error("immutable literal changed across widening, collection or eval splice");
+console.log("compact-immutable-literal", literalResult, literalRestored.done);
+
+async function immortalLiteralAcrossAwait(gate) {
+	const text = "caf\u00e9";
+	await gate;
+	gc();
+	return text;
+}
+let releaseLiteral;
+const literalGate = new Promise((resolve) => {
+	releaseLiteral = resolve;
+});
+const literalPromise = immortalLiteralAcrossAwait(literalGate);
+eval("(function pendingLiteralSplice() { return 'another pool entry'; })");
+gc();
+releaseLiteral();
+literalPromise.then((text) => {
+	if (text !== "caf\u00e9")
+		throw new Error("immutable literal changed across await or eval splice");
+	console.log("compact-immutable-await", text);
+});

@@ -633,7 +633,7 @@ describe("independent native SSA storage", () => {
 		}
 	});
 
-	it("restores arguments, captures and this across direct eval and function splices", () => {
+	it("restores arguments, captures, this and immutable literals across direct eval and function splices", () => {
 		const evalFixture = "tests/local/native-compact-suspension-eval.js";
 		const evalExpected = execFileSync(process.execPath, [evalFixture], {
 			encoding: "utf8",
@@ -652,6 +652,28 @@ describe("independent native SSA storage", () => {
 			(fn) => fn.mode === "resumable",
 		))
 			expect(emitCompiledFunction(fn, fn.functionIndex, "", false)).not.toBeNull();
+		for (const name of ["immortalLiteralAcrossEval", "immortalLiteralAcrossAwait"]) {
+			const literal = pair.programImage.native.functions.find(
+				(fn) =>
+					String.fromCharCode(
+						...(pair.programImage.runtime.stringConstants[fn.body.nameStringIndex] ?? []),
+					) === name,
+			)!;
+			expect(literal).toBeDefined();
+			const literalIp = literal.body.instructions.findIndex(
+				(op) => op.opcode === "CREATE_STRING",
+			);
+			const producer = literal.body.instructions[literalIp]!;
+			if (producer.opcode !== "CREATE_STRING")
+				throw new Error("Missing eval literal producer");
+			expect(literal.storage!.rematerializedConstantIps).toContain(literalIp);
+			expect(literal.storage!.rootRegisters).not.toContain(producer.dst);
+			expect(
+				literal.storage!.suspension!.points.every(
+					(point) => !point.registers.includes(producer.dst),
+				),
+			).toBe(true);
+		}
 		for (const binary of [pair.compiled, pair.interpreted])
 			for (const stress of [{}, STRESS_ENV])
 				expect(
