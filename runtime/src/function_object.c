@@ -142,10 +142,6 @@ MalFunctionObject *mal_function_object_new(
     return function;
 }
 
-i32 mal_function_object_function_index(const MalFunctionObject *function) {
-    return function->function_index;
-}
-
 void mal_native_function_object_init(
     MalHeap *heap,
     MalNativeFunctionObject *function,

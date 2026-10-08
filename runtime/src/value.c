@@ -280,23 +280,15 @@ bool mal_value_this_boolean_value(MalValue value, MalValue *out) {
     return false;
 }
 
-bool mal_value_is_callable(MalValue value) {
-    // Script/native/bound functions all carry the CALLABLE class — one compare,
-    // no dereference.
-    if ((value & MAL_VALUE_CLASS_MASK) == MAL_VALUE_CALLABLE) {
-        return true;
-    }
+bool mal_value_is_callable_proxy(MalValue value) {
     // A proxy (an OBJECT-class value) has the [[Call]] slot captured at creation.
-    if (mal_value_is_proxy_object(value)) {
-        return mal_proxy_target_is_callable(value);
-    }
-    return false;
+    return mal_value_is_proxy_object(value) && mal_proxy_target_is_callable(value);
 }
 
 // Common exact-type box/unbox helpers are static inline in value.h so emitted
 // C and runtime translation units avoid cross-TU calls and redundant type reads.
 
-bool mal_value_is_truthy(MalValue value) {
+bool mal_value_is_truthy_primitive(MalValue value) {
     if (mal_value_is_nil(value)) {
         return false;
     }

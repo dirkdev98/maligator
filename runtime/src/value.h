@@ -509,10 +509,17 @@ bool mal_value_this_string_value(MalValue value, MalValue *out);
 bool mal_value_this_number_value(MalValue value, MalValue *out);
 bool mal_value_this_boolean_value(MalValue value, MalValue *out);
 
+/** Proxy [[Call]] presence for an OBJECT-class value; use mal_value_is_callable. */
+bool mal_value_is_callable_proxy(MalValue value);
+
 /**
  * Check if the value is callable.
  */
-bool mal_value_is_callable(MalValue value);
+static inline bool mal_value_is_callable(MalValue value) {
+    MalValue value_class = value & MAL_VALUE_CLASS_MASK;
+    return value_class == MAL_VALUE_CALLABLE ||
+        (value_class == MAL_VALUE_OBJECT && mal_value_is_callable_proxy(value));
+}
 
 /**
  * Unbox a string.
@@ -738,10 +745,17 @@ static inline MalValue mal_value_from_iterator_helper_object(MalIteratorHelperOb
     return MAL_VALUE_OBJECT | ((uptr) helper & MAKS_PTR);
 }
 
+/** ToBoolean for numbers, strings, and bigints; use mal_value_is_truthy. */
+bool mal_value_is_truthy_primitive(MalValue value);
+
 /**
  * Check if the value is truthy.
  */
-bool mal_value_is_truthy(MalValue value);
+static inline bool mal_value_is_truthy(MalValue value) {
+    if (value == MAL_VALUE_TRUE || mal_value_is_object(value)) return true;
+    if (value == MAL_VALUE_FALSE || mal_value_is_nil(value)) return false;
+    return mal_value_is_truthy_primitive(value);
+}
 
 /**
  * Print a debug representation.

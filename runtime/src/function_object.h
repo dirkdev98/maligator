@@ -136,7 +136,9 @@ MalFunctionObject *mal_function_object_new(
 /**
  * Read the VM function definition index carried by a script function object.
  */
-i32 mal_function_object_function_index(const MalFunctionObject *function);
+static inline i32 mal_function_object_function_index(const MalFunctionObject *function) {
+    return function->function_index;
+}
 
 /**
  * Initialize native function object state and metadata in caller-provided storage.
