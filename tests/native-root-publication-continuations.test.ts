@@ -107,7 +107,7 @@ describe("native root publication across ordinary continuations", () => {
 				safepoints: [
 					...original.gc.safepoints,
 					{ ...original.gc.safepoints[0]!, instructionIp: target - 1 },
-				],
+				].sort((left, right) => left.instructionIp - right.instructionIp),
 			},
 		});
 		expect(polling.storage!.rootPublicationContinuations).not.toContain(target);
