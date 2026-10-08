@@ -3759,79 +3759,44 @@ static bool mal_vm_op_is_relational(MalBinaryOp op) {
     return op == MAL_BIN_LT || op == MAL_BIN_LTE || op == MAL_BIN_GT || op == MAL_BIN_GTE;
 }
 
-// The value-returning core of a binary operator, shared by the interpreter op
-// (mal_op_binary) and the compiled-function backend. On a throwing operator
-// (`in`/`instanceof` on bad operands, BigInt domain errors, a throwing valueOf/
-// toString) it sets the pending completion and returns undefined; callers
-// observe the throw via vm->completion.
-MalValue mal_vm_binary_op(MalVm *vm, MalBinaryOp op, MalValue left, MalValue right) {
-    // Fast path: when both operands are already numbers, ToPrimitive/ToNumeric
-    // are no-ops that cannot throw (numbers are primitive, never Symbol/BigInt/
-    // object), so skip the entire coercion preamble and dispatch straight to the
-    // numeric mal_ops_* below. This is the dominant case in arithmetic-heavy
-    // loops running on the interpreter and removes two non-inlined coercion calls
-    // per operation.
-    const bool both_numbers = mal_ops_is_number(left) && mal_ops_is_number(right);
-
-    // Coerce operands to primitives per the operator's abstract operation. This
-    // is the VM-aware ToPrimitive (valueOf/toString/@@toPrimitive) the VM-less
-    // mal_ops_* helpers cannot perform; primitives pass through unchanged.
-    if (both_numbers) {
-        // No coercion needed; fall through to the dispatch switch below.
-    } else if (op == MAL_BIN_ADD) {
-        // Spec EvaluateStringOrNumericBinaryExpression: ToPrimitive(no hint) on
-        // both, in order. mal_vm_add / mal_vm_bigint_arith then decide string
-        // concat vs numeric add on the resulting primitives.
-        if (!mal_vm_to_primitive(vm, left, MAL_TO_PRIMITIVE_DEFAULT, &left) ||
-            !mal_vm_to_primitive(vm, right, MAL_TO_PRIMITIVE_DEFAULT, &right)) {
-            return mal_value_new_undefined();
-        }
-        // After ToPrimitive a String on either side means concatenation, even
-        // when the other side is a BigInt (mal_vm_bigint_arith allows it).
+static bool mal_vm_binary_coerce_operands(MalVm *vm, MalBinaryOp op, MalValue *left, MalValue *right) {
+    if (op == MAL_BIN_ADD) {
+        // Addition uses the default hint; other coercive operators use the number hint.
+        return mal_vm_to_primitive(vm, *left, MAL_TO_PRIMITIVE_DEFAULT, left) &&
+            mal_vm_to_primitive(vm, *right, MAL_TO_PRIMITIVE_DEFAULT, right);
     } else if (mal_vm_op_is_numeric(op)) {
-        // ToNumeric on both: a Symbol throws, an object runs through valueOf/
-        // toString, a BigInt stays a BigInt for the bigint dispatch below.
-        if (!mal_vm_to_numeric(vm, left, &left) || !mal_vm_to_numeric(vm, right, &right)) {
-            return mal_value_new_undefined();
-        }
+        return mal_vm_to_numeric(vm, *left, left) && mal_vm_to_numeric(vm, *right, right);
     } else if (mal_vm_op_is_relational(op)) {
         // IsLessThan's swapped arguments and LeftFirst flag preserve source operand order.
-        if (mal_value_is_object(left) && !mal_vm_to_primitive(vm, left, MAL_TO_PRIMITIVE_NUMBER, &left)) {
-            return mal_value_new_undefined();
+        if (mal_value_is_object(*left) && !mal_vm_to_primitive(vm, *left, MAL_TO_PRIMITIVE_NUMBER, left)) {
+            return false;
         }
-        if (mal_value_is_object(right) && !mal_vm_to_primitive(vm, right, MAL_TO_PRIMITIVE_NUMBER, &right)) {
-            return mal_value_new_undefined();
+        if (mal_value_is_object(*right) && !mal_vm_to_primitive(vm, *right, MAL_TO_PRIMITIVE_NUMBER, right)) {
+            return false;
         }
-        // Abstract relational comparison forbids Symbol operands (its ToNumeric
-        // throws).
-        if (mal_value_is_symbol(left) || mal_value_is_symbol(right)) {
+        if (mal_value_is_symbol(*left) || mal_value_is_symbol(*right)) {
             mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot convert a Symbol value to a number");
-            return mal_value_new_undefined();
+            return false;
         }
     } else if (op == MAL_BIN_EQ || op == MAL_BIN_NEQ) {
-        // Abstract equality: an object operand is reduced via ToPrimitive ONLY
-        // when the other operand is a primitive other than null/undefined
-        // (Number/String/Boolean/BigInt/Symbol). An object-vs-null/undefined
-        // comparison short-circuits to "not equal" with no coercion (so a
-        // valueOf returning null does not make `obj == undefined` true), and an
-        // object-vs-object comparison is by reference. The number hint picks the
-        // valueOf-first order; a resulting Symbol stays a Symbol (identity-only).
-        bool left_object = mal_value_is_object(left);
-        bool right_object = mal_value_is_object(right);
-        bool left_coercible_primitive = !left_object && !mal_value_is_nil(left);
-        bool right_coercible_primitive = !right_object && !mal_value_is_nil(right);
+        // Equality skips ToPrimitive for object/object and object/nullish pairs.
+        bool left_object = mal_value_is_object(*left);
+        bool right_object = mal_value_is_object(*right);
+        bool left_coercible_primitive = !left_object && !mal_value_is_nil(*left);
+        bool right_coercible_primitive = !right_object && !mal_value_is_nil(*right);
         if (left_object && right_coercible_primitive &&
-            !mal_vm_to_primitive(vm, left, MAL_TO_PRIMITIVE_NUMBER, &left)) {
-            return mal_value_new_undefined();
+            !mal_vm_to_primitive(vm, *left, MAL_TO_PRIMITIVE_NUMBER, left)) {
+            return false;
         }
         if (right_object && left_coercible_primitive &&
-            !mal_vm_to_primitive(vm, right, MAL_TO_PRIMITIVE_NUMBER, &right)) {
-            return mal_value_new_undefined();
+            !mal_vm_to_primitive(vm, *right, MAL_TO_PRIMITIVE_NUMBER, right)) {
+            return false;
         }
     }
+    return true;
+}
 
-    // BigInt arithmetic/bitwise/shift is a separate domain (equality and
-    // relational comparison stay in the shared mal_ops_* path below).
+static MalValue mal_vm_binary_dispatch(MalVm *vm, MalBinaryOp op, MalValue left, MalValue right) {
     if ((mal_value_is_bigint(left) || mal_value_is_bigint(right)) && mal_vm_op_is_bigint_arith(op)) {
         return mal_vm_bigint_arith(vm, op, left, right);
     }
@@ -3933,6 +3898,22 @@ MalValue mal_vm_binary_op(MalVm *vm, MalBinaryOp op, MalValue left, MalValue rig
     }
 
     return mal_value_new_undefined();
+}
+
+MalValue mal_vm_binary_op(MalVm *vm, MalBinaryOp op, MalValue left, MalValue right) {
+    if (mal_ops_is_number(left) && mal_ops_is_number(right)) {
+        return mal_vm_binary_dispatch(vm, op, left, right);
+    }
+
+    // A fresh primitive from the first coercion must survive the second coercion's reentry.
+    MalValue operands[] = {left, right};
+    MalRootSpan span;
+    mal_gc_root(&span, operands, countof(operands));
+    MalValue result = mal_vm_binary_coerce_operands(vm, op, &operands[0], &operands[1])
+        ? mal_vm_binary_dispatch(vm, op, operands[0], operands[1])
+        : MAL_VALUE_UNDEFINED;
+    mal_gc_unroot(&span);
+    return result;
 }
 
 void mal_op_binary(MalCallable *callable, const MalInstruction *instruction) {

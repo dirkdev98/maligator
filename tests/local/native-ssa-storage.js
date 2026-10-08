@@ -176,6 +176,99 @@ for (const operation of [coerciveImmediateGreater, coerciveImmediateGreaterEqual
 }
 
 let immediateSaved;
+function freshCoercedAdd(left, right, gate) {
+	const value = left + right;
+	gate();
+	return value;
+}
+function freshCoercedMultiply(left, right, gate) {
+	const value = left * right;
+	gate();
+	return value;
+}
+globalThis.freshCoercedAdd = freshCoercedAdd;
+globalThis.freshCoercedMultiply = freshCoercedMultiply;
+function freshCoercionString(seed) {
+	return {
+		valueOf() {
+			delete this.valueOf;
+			return ("fresh:" + seed + ":").repeat(37);
+		},
+	};
+}
+function freshCoercionBigInt(seed) {
+	return {
+		valueOf() {
+			delete this.valueOf;
+			return BigInt(seed) + 3n;
+		},
+	};
+}
+function collectingCoercion(value) {
+	return {
+		valueOf() {
+			gc();
+			return value;
+		},
+	};
+}
+for (const seed of ["alpha", "beta"]) {
+	const string = freshCoercedAdd(
+		freshCoercionString(seed),
+		collectingCoercion(":right"),
+		gc,
+	);
+	const less = coerciveImmediateLess(
+		freshCoercionString(seed),
+		collectingCoercion("z"),
+		gc,
+		true,
+	);
+	const ge = coerciveImmediateGreaterEqual(
+		freshCoercionString(seed),
+		collectingCoercion("z"),
+		gc,
+		true,
+	);
+	console.log(
+		"fresh-coercion-string",
+		string.length,
+		string.slice(0, 20),
+		string.slice(-20),
+		less,
+		ge,
+	);
+}
+for (const seed of ["12345678901234567", "9876543210"]) {
+	const sum = freshCoercedAdd(freshCoercionBigInt(seed), collectingCoercion(7n), gc);
+	const product = freshCoercedMultiply(
+		freshCoercionBigInt(seed),
+		collectingCoercion(7n),
+		gc,
+	);
+	const less = coerciveImmediateLess(
+		freshCoercionBigInt(seed),
+		collectingCoercion(7n),
+		gc,
+		true,
+	);
+	console.log("fresh-coercion-bigint", String(sum), String(product), less);
+}
+try {
+	freshCoercedAdd(
+		freshCoercionString("throw"),
+		{
+			valueOf() {
+				gc();
+				throw { marker: "right-coercion-thrown" };
+			},
+		},
+		gc,
+	);
+} catch (error) {
+	gc();
+	console.log("fresh-coercion-right-throw", error.marker);
+}
 let scalarModuleSaved = { old: true };
 function scalarModuleProduct(left, right, gate) {
 	const a = +left,

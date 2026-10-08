@@ -36,6 +36,27 @@ describe("independent native SSA storage", () => {
 	}, 600_000);
 
 	it("preserves scalar arithmetic, loop transport, and suspended heap locals", () => {
+		for (const [name, operator] of [
+			["freshCoercedAdd", "+"],
+			["freshCoercedMultiply", "*"],
+		] as const) {
+			const native = image.native.functions.find(
+				(fn) =>
+					String.fromCharCode(
+						...(image.runtime.stringConstants[fn.body.nameStringIndex] ?? []),
+					) === name,
+			)!;
+			expect(native).toBeDefined();
+			const op = native.body.instructions.find(
+				(op) => op.opcode === "BINARY" && op.operator === operator,
+			)!;
+			if (op.opcode !== "BINARY") throw new Error("Missing generic coercive operator");
+			expect(native.registerRepresentations[op.dst]).toBe("boxed");
+			expect(native.storage!.rootRegisters).toContain(op.dst);
+			expect(
+				emitCompiledFunction(native, native.functionIndex, "", false),
+			).not.toBeNull();
+		}
 		for (const name of [
 			"coerciveImmediatePlus",
 			"coerciveImmediateLess",
