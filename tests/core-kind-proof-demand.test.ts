@@ -244,6 +244,35 @@ describe("heap containment demand", () => {
 		expect(classes.statistics.containmentChecks).toBe(0);
 	});
 
+	it("brands the receiver recorded by an exact access, not the element it reads", () => {
+		const program = new CoreProgram(coreOpcodeRegistry);
+		const builder = new CoreFunctionBuilder(program, { parameterCount: 2 });
+		const entry = builder.createBlock([
+			{ representation: "boxed" },
+			{ representation: "boxed" },
+		]);
+		const [receiver, key] = inspectCoreBlockParameters(builder, entry).map(
+			(parameter) => parameter.value,
+		);
+		const [element] = builder.appendInstruction(
+			entry,
+			"loadProperty",
+			[receiver!, key!],
+			{
+				attributes: { exactTypedArrayKind: "Uint8Array" },
+			},
+		);
+		const [entryValue] = builder.appendInstruction(entry, "callKnown", [element!, key!], {
+			attributes: { operation: "Map.prototype.get", exactCollectionReceiver: "Map" },
+		});
+		builder.setTerminator(entry, { kind: "return", value: entryValue! });
+		const fn = program.function(builder.finish(entry).function);
+		const classes = analyzeCoreValueClasses(program, fn.id, lockedContext());
+		expect(classes.exactNumericTypedArray(receiver!)).toBe("Uint8Array");
+		expect(classes.exactHeapBrand(element!)).toBe("Map");
+		expect(classes.exactHeapBrand(entryValue!)).toBeUndefined();
+	});
+
 	it.each(["Map", "Set"])("rejects retained mutator results for %s", (brand) => {
 		for (const retained of [false, true]) {
 			const program = new CoreProgram(coreOpcodeRegistry);

@@ -266,19 +266,17 @@ export function analyzeCoreValueClasses(
 			}
 		}
 	}
+	// These attributes record a proven receiver brand; an element or call result is unrelated.
 	for (const instruction of operations) {
 		const attributes = fn.instructionAttributes(instruction);
 		const brand =
 			coreNumericTypedArrayKind(attributes[CORE_EXACT_TYPED_ARRAY_KIND_ATTRIBUTE]) ??
 			coreExactCollectionBrand(attributes[CORE_EXACT_COLLECTION_RECEIVER_ATTRIBUTE]);
-		if (brand === undefined) continue;
-		const resultStart = fn.kernel.instructionResultStart(instruction);
-		const resultCount = fn.kernel.instructionResultCount(instruction);
-		for (let offset = 0; offset < resultCount; offset++) {
-			const output = fn.kernel.resultAt(resultStart + offset);
-			brands.set(roots.get(output) ?? output, brand);
-			seeded++;
-		}
+		if (brand === undefined || fn.kernel.instructionOperandCount(instruction) === 0)
+			continue;
+		const receiver = fn.kernel.operandAt(fn.kernel.instructionOperandStart(instruction));
+		brands.set(roots.get(receiver) ?? receiver, brand);
+		seeded++;
 	}
 	let propagated: number | undefined;
 	let containmentChecks = 0,
