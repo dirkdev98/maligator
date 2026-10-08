@@ -174,11 +174,13 @@ The independent target boundary and current storage contract are recorded in
       hosts. Bound instruction-by-value liveness storage and repeated variant/
       validation work. Block liveness and continuation snapshots now replace dense
       per-instruction state; quantify scaling before expanding coroutine specialization.
-- [ ] Pin native-emission acceptance to source identities and report emitted C size,
-      helper/root-publication counts, C compile time/peak memory, executable text
-      size, representative runtime behavior, and compiler phase time/memory on both
-      hosts. Select the next proof consumer from a measured hot path rather than
-      local-count or plan-kind totals.
+- [ ] Select the next proof consumer from a measured hot path rather than
+      local-count or plan-kind totals. Self-compile snapshots now report emitted C
+      size, static root-publication counts, C compile time and peak memory,
+      executable and code-section size, runtime GC behavior, and phase time on both
+      hosts. At `1cdf5c1c` the native self-compiler took 283 s against Node's 40 s
+      on one machine, 150 s of it in Core optimization; profile it with source-site
+      counters first. Paired comparisons need a baseline that reports these fields.
 
 ## World-knowledge ladder
 
