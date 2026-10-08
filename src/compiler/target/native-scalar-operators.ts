@@ -55,3 +55,28 @@ export const MATH_UNARY_NATIVE_CALL: ReadonlyMap<string, string | null> = new Ma
 ] as const);
 
 export const MATH_BINARY_OPERATIONS = new Set(["Math.min", "Math.max"]);
+
+export const NUMBER_PREDICATES: ReadonlyMap<string, string> = new Map([
+	["Number.isNaN", "MAL_NUMBER_PREDICATE_IS_NAN"],
+	["Number.isFinite", "MAL_NUMBER_PREDICATE_IS_FINITE"],
+	["Number.isInteger", "MAL_NUMBER_PREDICATE_IS_INTEGER"],
+	["Number.isSafeInteger", "MAL_NUMBER_PREDICATE_IS_SAFE_INTEGER"],
+]);
+
+export function nativeNumberPredicateExpression(
+	operation: string,
+	value: string,
+): string {
+	switch (operation) {
+		case "Number.isNaN":
+			return `isnan(${value})`;
+		case "Number.isFinite":
+			return `isfinite(${value})`;
+		case "Number.isInteger":
+			return `isfinite(${value}) && trunc(${value}) == ${value}`;
+		case "Number.isSafeInteger":
+			return `isfinite(${value}) && trunc(${value}) == ${value} && fabs(${value}) <= 9007199254740991.0`;
+		default:
+			throw new Error(`Invalid native Number predicate ${operation}`);
+	}
+}

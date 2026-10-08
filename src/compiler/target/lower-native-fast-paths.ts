@@ -5,6 +5,7 @@ import {
 import {
 	MATH_UNARY_NATIVE_CALL,
 	MATH_BINARY_OPERATIONS,
+	NUMBER_PREDICATES,
 } from "./native-scalar-operators.ts";
 import type {
 	NativeDirectEntryPlan,
@@ -1535,12 +1536,7 @@ export function selectNativeFastPaths(
 			op.opcode === "CALL_KNOWN" &&
 			!op.construct &&
 			op.argumentMode === undefined &&
-			[
-				"Number.isNaN",
-				"Number.isFinite",
-				"Number.isInteger",
-				"Number.isSafeInteger",
-			].includes(op.operation)
+			NUMBER_PREDICATES.has(op.operation)
 		) {
 			const first = op.arguments[0];
 			const input = first === undefined ? undefined : decodeVmValueOperand(first);

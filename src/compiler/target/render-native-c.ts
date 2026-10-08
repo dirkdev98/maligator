@@ -61,6 +61,8 @@ import {
 	NATIVE_COMPARE,
 	MATH_UNARY_NATIVE_CALL,
 	MATH_BINARY_OPERATIONS,
+	NUMBER_PREDICATES,
+	nativeNumberPredicateExpression,
 } from "./native-scalar-operators.ts";
 import { nativeValueConversion } from "./native-value-transport.ts";
 import type { NativeValueConversion } from "./native-value-transport.ts";
@@ -302,13 +304,6 @@ const NUMBER_FORMAT_KERNELS: Readonly<
 	"Number.prototype.toExponential": ["exponential", 0, 100, -1],
 	"Number.prototype.toPrecision": ["precision", 1, 100, -1],
 };
-
-const NUMBER_PREDICATES = new Map([
-	["Number.isNaN", "MAL_NUMBER_PREDICATE_IS_NAN"],
-	["Number.isFinite", "MAL_NUMBER_PREDICATE_IS_FINITE"],
-	["Number.isInteger", "MAL_NUMBER_PREDICATE_IS_INTEGER"],
-	["Number.isSafeInteger", "MAL_NUMBER_PREDICATE_IS_SAFE_INTEGER"],
-]);
 
 const STRING_SEARCH_KERNELS: Readonly<Record<string, readonly [string, string]>> = {
 	"String.prototype.indexOf": ["INDEX_OF", "0.0"],
@@ -7465,12 +7460,10 @@ function emitInstruction(
 						throw new Error("Missing planned Number predicate input");
 					const number =
 						nativeNumberOperand(input) ?? `mal_ops_number_as_f64(${boxedOperand(input)})`;
-					const predicate =
-						instruction.operation === "Number.isNaN"
-							? `isnan(${number})`
-							: instruction.operation === "Number.isFinite"
-								? `isfinite(${number})`
-								: `isfinite(${number}) && trunc(${number}) == ${number}${instruction.operation === "Number.isSafeInteger" ? ` && fabs(${number}) <= 9007199254740991.0` : ""}`;
+					const predicate = nativeNumberPredicateExpression(
+						instruction.operation,
+						number,
+					);
 					return [storeBoolean(instruction.dst, predicate), poll];
 				}
 				const predicate = NUMBER_PREDICATES.get(instruction.operation);
@@ -7649,20 +7642,26 @@ function emitInstruction(
 						return [storeNumber(instruction.dst, expression), poll];
 					}
 				}
-				const arguments_ = instruction.arguments.map(nativeNumberOperand);
-				const expression =
-					arguments_.length >= 1 && arguments_[0] !== null
-						? nativeMathUnaryExpr(instruction.operation, arguments_[0]!)
-						: arguments_.length === 2 &&
-							  arguments_.every((value) => value !== null) &&
-							  MATH_BINARY_OPERATIONS.has(instruction.operation)
-							? nativeMathBinaryExpr(
-									instruction.operation,
-									arguments_[0]!,
-									arguments_[1]!,
-								)
-							: null;
-				if (expression !== null) return [storeNumber(instruction.dst, expression), poll];
+				if (
+					MATH_UNARY_NATIVE_CALL.has(instruction.operation) ||
+					MATH_BINARY_OPERATIONS.has(instruction.operation)
+				) {
+					const arguments_ = instruction.arguments.map(nativeNumberOperand);
+					const expression =
+						arguments_.length >= 1 && arguments_[0] !== null
+							? nativeMathUnaryExpr(instruction.operation, arguments_[0]!)
+							: arguments_.length === 2 &&
+								  arguments_.every((value) => value !== null) &&
+								  MATH_BINARY_OPERATIONS.has(instruction.operation)
+								? nativeMathBinaryExpr(
+										instruction.operation,
+										arguments_[0]!,
+										arguments_[1]!,
+									)
+								: null;
+					if (expression !== null)
+						return [storeNumber(instruction.dst, expression), poll];
+				}
 			}
 			if (
 				instruction.specialized === undefined &&
@@ -8782,11 +8781,7 @@ function emitInstruction(
 						? "false"
 						: number === null
 							? `mal_builtin_number_value_${numberPredicate.slice("MAL_NUMBER_PREDICATE_".length).toLowerCase()}(${boxedOperand(argument)})`
-							: guardedBuiltinOperation === "Number.isNaN"
-								? `isnan(${number})`
-								: guardedBuiltinOperation === "Number.isFinite"
-									? `isfinite(${number})`
-									: `isfinite(${number}) && trunc(${number}) == ${number}${guardedBuiltinOperation === "Number.isSafeInteger" ? ` && fabs(${number}) <= 9007199254740991.0` : ""}`;
+							: nativeNumberPredicateExpression(guardedBuiltinOperation!, number);
 				return [
 					`if (mal_builtin_number_predicate_callee_matches(${numberPredicate}, ${boxedOperand(instruction.callee)})) {`,
 					storeBoolean(instruction.dst, test),
