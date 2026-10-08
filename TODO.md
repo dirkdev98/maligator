@@ -134,14 +134,26 @@ The independent target boundary and current storage contract are recorded in
 
 - [ ] Improve Node.js self-compile phase time and memory using the restored cold
       paired comparison. The protocol now requires strict emitted-C and runtime-image
-      byte parity; use matched before/after evidence for speedup claims.
+      byte parity; use matched before/after evidence for speedup claims. Compiling
+      the compiler itself peaks near 1.6 GB of live heap while its Core, execution,
+      native, and image forms coexist; Node 24's default 2 GB heap leaves little
+      margin for in-process native builds of the compiler.
 
-- [ ] Add compiler-host differential native-plan/output coverage and GC-stress
-      execution. Compiled/interpreted application parity from one Node-produced
-      image does not establish parity between Node and self-hosted compiler plans.
-      Word-based occupancy and independent physical-interference validation now
-      cover safepoint indices 127/128/129, 255/256, and growing actual planner
-      workloads on both hosts. Exercise the complete self-hosted pipeline as well.
+- [ ] Bound C size and C compile time for frames with many roots. Each deferred
+      probe miss republishes every live private root, because conditional
+      publication does not update the known-published state, so that C grows
+      quadratically with the live set; clang needs about 51 s at `-O2` for two
+      72-root frames and about 400 s near 140 roots. Inactive-mask tail tables grow
+      with safepoints times slots/64: `emitInstruction` (1,897 slots) emitted 8,170
+      of them, 44% of its C before all-inactive words were spelled compactly. Let a
+      miss path record what it published, and encode huge-frame masks sparsely.
+
+- [ ] Keep each compiled function's C below the 16 Mi code-unit string limit.
+      Native-hosted emission joins a function's lines into one string and renders
+      over-budget functions completely before discarding them; `emitInstruction`
+      reached 16.85 Mi and stopped native self-compilation until compact mask words
+      brought it to about 13 Mi. Reject or split oversized functions while rendering.
+
 - [ ] Share one invocation-local native analysis context across storage, expression,
       root, and fast-path planning. Native read/write, branch, handler, and lazy
       root-cycle facts now share an invocation; storage CFG analysis is lazy.
