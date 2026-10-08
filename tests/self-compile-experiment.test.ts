@@ -16,7 +16,9 @@ const script = path.resolve("scripts/self-compile-experiment.ts");
 const digest = (value: string | Buffer) =>
 	createHash("sha256").update(value).digest("hex");
 
-function fixture(options: { wrongCandidate?: boolean; hang?: string } = {}) {
+function fixture(
+	options: { wrongCandidate?: boolean; wrongRun?: string; hang?: string } = {},
+) {
 	const root = mkdtempSync(path.join(os.tmpdir(), "mal-self-compile-experiment-"));
 	onTestFinished(() => rmSync(root, { recursive: true, force: true }));
 	const capture = (label: string) => {
@@ -36,7 +38,7 @@ if (output.includes(${JSON.stringify(options.hang ?? "never-hang-here")})) {
   console.log('controlled unfinished compiler output');
   setInterval(() => {}, 1000);
 } else {
-  const text = ${options.wrongCandidate && label === "candidate" ? "'incorrect output'" : "readFileSync(target, 'utf8')"};
+  const text = output.includes(${JSON.stringify(options.wrongRun ?? "never-wrong-here")}) ? 'incorrect output' : ${options.wrongCandidate && label === "candidate" ? "'incorrect output'" : "readFileSync(target, 'utf8')"};
   mkdirSync(output, { recursive: true });
   writeFileSync(path.join(output, 'unit.c'), text);
   console.log(JSON.stringify({ units: 1, codeUnits: text.length, phases: {} }));
@@ -181,6 +183,71 @@ it("fails on a real output mismatch and preserves the failed output outside pair
 	expect(
 		readFileSync(path.join(test.output, "warm-candidate/output/unit.c"), "utf8"),
 	).toBe("incorrect output");
+});
+
+it("runs exactly three cold pairs with the first measured baseline as the frozen-input oracle", () => {
+	const test = fixture();
+	const result = test.run("--cold", "--pairs", "3");
+	expect(result.status, result.stderr).toBe(0);
+	const report = test.report();
+	expect(report).toMatchObject({
+		complete: true,
+		summary: { pairs: 3 },
+		options: { cold: true },
+	});
+	expect(report.samples.map((sample) => sample.label)).toEqual([
+		"pair-0-base",
+		"pair-0-candidate",
+		"pair-1-candidate",
+		"pair-1-base",
+		"pair-2-base",
+		"pair-2-candidate",
+	]);
+	expect(new Set(report.samples.map((sample) => sample.digest)).size).toBe(1);
+	expect(report.target).toBe(
+		path.join(test.base, "source/src/compiler/frontend/parser.ts"),
+	);
+	expect(
+		JSON.parse(readFileSync(path.join(test.output, "oracle.json"), "utf8")),
+	).toMatchObject(report.samples[0]!);
+	expect(existsSync(path.join(test.output, "node-reference"))).toBe(false);
+	expect(existsSync(path.join(test.output, "warm-base"))).toBe(false);
+	expect(existsSync(path.join(test.output, "warm-candidate"))).toBe(false);
+});
+
+it.each(["pair-0-candidate", "pair-1-base"])(
+	"rejects a cold output mismatch in %s",
+	(wrongRun) => {
+		const test = fixture({ wrongRun });
+		expect(test.run("--cold").status).toBe(2);
+		expect(test.report()).toMatchObject({ status: "failed", complete: false });
+		expect(readFileSync(path.join(test.output, "run.log"), "utf8")).toContain(
+			"output differs from the frozen Node oracle",
+		);
+		expect(readFileSync(path.join(test.output, wrongRun, "output/unit.c"), "utf8")).toBe(
+			"incorrect output",
+		);
+		expect(test.report().pairs).toHaveLength(wrongRun === "pair-0-candidate" ? 0 : 1);
+	},
+);
+
+it("plans cold work and rejects a native cold protocol before running any compiler", () => {
+	const test = fixture();
+	const result = test.run("--cold", "--pairs", "3", "--plan=json");
+	expect(result.status, result.stderr).toBe(0);
+	const plan = JSON.parse(result.stdout) as { work: Array<string> };
+	expect(plan.work).toEqual(
+		expect.arrayContaining([
+			"first measured baseline is the Node oracle",
+			"zero warmups",
+			"6 measured compiler runs",
+		]),
+	);
+	expect(existsSync(test.output)).toBe(false);
+	const native = test.run("--cold", "--host", "native");
+	expect(native.status).toBe(2);
+	expect(native.stderr).toContain("--cold requires --host node");
+	expect(existsSync(test.output)).toBe(false);
 });
 
 it.each(["compiler", "source/src/compiler/frontend/parser.ts"])(

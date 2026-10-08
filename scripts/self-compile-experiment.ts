@@ -44,6 +44,7 @@ Options:
   --host native|node                compiler host (default: native)
   --workload parser|shape|full       frozen input cone (default: parser)
   --pairs N                         alternating measured pairs (default: 5)
+  --cold                            Node fresh-process pairs without extra oracle or warmups
   --budget-seconds N                total command budget (default: 600)
   --plan=json                       show work without building or writing
 
@@ -51,6 +52,7 @@ Source-only captures contain no native executable or native closure certificate.
 Native capture uses a fresh module frontend and development O2/no-LTO closed native code
 without instrumentation, keeping portable GC-root trust independent of cache hits.
 Compare runs a BASE Node output oracle and one warmup per compiler before timing.
+With --cold, the first measured baseline is the oracle; filesystem caches are not cleared.
 Every output must match that oracle exactly. Use --program with the same capture
 before and after a code-generation change to measure its effect on one program.
 This measures JS-to-C execution, not C builds.
@@ -73,6 +75,7 @@ interface Options {
 	host: "native" | "node";
 	workload: keyof typeof TARGETS;
 	pairs: number;
+	cold: boolean;
 	budgetSeconds: number;
 	plan: boolean;
 	sourceOnly: boolean;
@@ -465,12 +468,19 @@ function compareCapturedCompilers(options: Options): void {
 				: { peakRssBytes: Number(rss) * (process.platform === "linux" ? 1024 : 1) }),
 		};
 	};
-	const reference = run("node-reference", baseDirectory, "node");
+	let reference: Sample | undefined;
+	if (!options.cold) {
+		reference = run("node-reference", baseDirectory, "node");
+		writeJson(path.join(options.output, "oracle.json"), reference);
+	}
 	const checked = (label: string, directory: string): Sample => {
 		const sample = run(label, directory, options.host);
 		samples.push(sample);
 		save();
-		if (
+		if (reference === undefined) {
+			reference = sample;
+			writeJson(path.join(options.output, "oracle.json"), reference);
+		} else if (
 			sample.digest !== reference.digest ||
 			sample.units !== reference.units ||
 			sample.codeUnits !== reference.codeUnits
@@ -480,9 +490,10 @@ function compareCapturedCompilers(options: Options): void {
 			);
 		return sample;
 	};
-	writeJson(path.join(options.output, "oracle.json"), reference);
-	checked("warm-base", baseDirectory);
-	checked("warm-candidate", candidateDirectory);
+	if (!options.cold) {
+		checked("warm-base", baseDirectory);
+		checked("warm-candidate", candidateDirectory);
+	}
 	for (let pair = 0; pair < options.pairs; pair++) {
 		let baseline: Sample;
 		let head: Sample;
@@ -523,6 +534,7 @@ function parseOptions(args: Array<string>): Options | undefined {
 		host: "native",
 		workload: "parser",
 		pairs: 5,
+		cold: false,
 		budgetSeconds: 600,
 		plan: false,
 		sourceOnly: false,
@@ -530,6 +542,7 @@ function parseOptions(args: Array<string>): Options | undefined {
 	while (args.length > 0) {
 		const option = args.shift();
 		if (option === "--plan=json") options.plan = true;
+		else if (option === "--cold" && command === "compare") options.cold = true;
 		else if (option === "--source-only" && command === "capture")
 			options.sourceOnly = true;
 		else if (option === "--program" && command === "capture")
@@ -571,6 +584,8 @@ function parseOptions(args: Array<string>): Options | undefined {
 		} else throw new Error(`unknown option: ${option}`);
 	}
 	if (!options.output) throw new Error("compare requires --output DIRECTORY");
+	if (options.cold && options.host !== "node")
+		throw new Error("--cold requires --host node");
 	return options;
 }
 
@@ -699,8 +714,9 @@ if (import.meta.main) {
 										]
 									: [
 											"verify capture integrity and compatibility",
-											"one Node oracle",
-											"two warmups",
+											...(options.cold
+												? ["first measured baseline is the Node oracle", "zero warmups"]
+												: ["one Node oracle", "two warmups"]),
 											`${2 * options.pairs} measured compiler runs`,
 											"verify capture integrity",
 										],
