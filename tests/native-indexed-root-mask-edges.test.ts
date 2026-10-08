@@ -398,18 +398,19 @@ describe("native numeric indexed-property root publication", () => {
 		},
 	);
 
-	it("keeps publication before the boxed-key helper that owns conversion and reentry", () => {
+	it("keeps publication before the boxed-key array probe and its reentrant helper", () => {
 		const source = ordinary("boxed");
 		const slot = privateSlot(source, retainedLoad.dst);
 		const start = source.indexOf(
 			`r${key.dst} =`,
 			source.indexOf("mal_vm_op_load_property_ic_static_miss("),
 		);
+		const probe = source.indexOf("mal_vm_array_try_get_index(", start);
 		const helper = source.indexOf("mal_vm_indexed_fast_load(", start);
-		expect(helper).toBeGreaterThan(start);
-		expect(source.slice(start, helper)).toContain(`__gc_slots[${slot}] = r1;`);
-		expect(source.slice(start, helper)).toContain("MAL_ROOT_MASK(");
-		expect(source).not.toContain("mal_vm_array_try_get_index(");
+		expect(probe).toBeGreaterThan(start);
+		expect(helper).toBeGreaterThan(probe);
+		expect(source.slice(start, probe)).toContain(`__gc_slots[${slot}] = r1;`);
+		expect(source.slice(start, probe)).toContain("MAL_ROOT_MASK(");
 	});
 
 	it("retains eager publication for specialized array plans with their own fallback", () => {

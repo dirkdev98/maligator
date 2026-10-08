@@ -6412,8 +6412,15 @@ function emitInstruction(
 								`}`,
 							]
 						: [
-								`r${instruction.dst} = mal_vm_indexed_fast_load(vm, ${boxed(instruction.object)}, ${boxed(instruction.key)}, &${nativeBodyReference(resources, "propertyCache")}[${instruction.icIndex}]);`,
-								throwCheck(),
+								// Dense Array element reads dominate boxed-key loads; other receivers keep the out-of-line helper.
+								`MalArrayObject *${receiverName} = mal_vm_as_array(${boxed(instruction.object)});`,
+								`MalValue __v_${ip};`,
+								`if (${receiverName} && mal_ops_is_number(${boxed(instruction.key)}) && mal_vm_array_try_get_index(${receiverName}, mal_ops_number_as_f64(${boxed(instruction.key)}), &__v_${ip})) {`,
+								`  r${instruction.dst} = ${callValue(instruction.dst, `__v_${ip}`)};`,
+								`} else {`,
+								`  r${instruction.dst} = mal_vm_indexed_fast_load(vm, ${boxed(instruction.object)}, ${boxed(instruction.key)}, &${nativeBodyReference(resources, "propertyCache")}[${instruction.icIndex}]);`,
+								`  ${throwCheck()}`,
+								`}`,
 							];
 				if (nativeArrayPresenceProjectionAction?.role === "load") {
 					const membershipIp = nativeArrayPresenceProjectionAction.membershipIp;
