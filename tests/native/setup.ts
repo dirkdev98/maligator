@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import * as path from "node:path";
 import type { TestProject } from "vitest/node";
-import { buildDerivationFromConfig, resolveBuildConfig } from "../../src/build-config.ts";
+import { buildDerivationFromConfig } from "../../src/build-config.ts";
 import { perfStatsEnabled } from "../../src/build-flags.ts";
 import { compilerEntrypointSourceFiles } from "../../src/compiler-bake.ts";
 import { stripCompactTypes } from "../../src/compiler/frontend/compact-type-strip.ts";
@@ -11,6 +11,7 @@ import {
 } from "../../src/compiler/pipeline/compile-program.ts";
 import { resolveNativeBuildContext } from "../../src/native-build-context.ts";
 import { ensureNativeArtifacts } from "../../src/runtime-build.ts";
+import { preparedNativeEvalConfig } from "../helpers/native-eval-config.ts";
 
 const compilerSourceDirectory = path.resolve("src");
 const compilerEntrypoint = path.resolve("src/compiler/pipeline/eval-compiler-entry.mts");
@@ -66,17 +67,7 @@ export function setup(project: TestProject): void {
 		variants.push({ environment: { ...environment, MAL_PERF_STATS: "1" }, node: false });
 	}
 	for (const variant of variants) {
-		const config = resolveBuildConfig({
-			engine: {
-				primordials: "mutable",
-				eval: true,
-				regexp: true,
-				realms: true,
-				temporal: true,
-				intl: { enabled: true, features: [] },
-			},
-			surface: { webPlatform: true, node: variant.node },
-		});
+		const config = preparedNativeEvalConfig(variant.node);
 		ensureNativeArtifacts(
 			resolveNativeBuildContext({
 				features: buildDerivationFromConfig(config).features,

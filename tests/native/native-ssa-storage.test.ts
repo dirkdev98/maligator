@@ -13,6 +13,7 @@ import {
 	runToStdout,
 	STRESS_ENV,
 } from "../../src/test-harness.ts";
+import { preparedNativeEvalConfig } from "../helpers/native-eval-config.ts";
 
 const fixture = "tests/local/native-ssa-storage.js";
 const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-native-ssa-storage-"));
@@ -938,10 +939,7 @@ describe("independent native SSA storage", () => {
 			fixture: evalFixture,
 			name: "native-compact-suspension-eval",
 			mainFile: HOST_MAIN,
-			config: resolveBuildConfig({
-				engine: { eval: true },
-				surface: { webPlatform: true },
-			}),
+			config: preparedNativeEvalConfig(false),
 			outDir,
 		});
 		for (const fn of pair.programImage.native.functions.filter(
