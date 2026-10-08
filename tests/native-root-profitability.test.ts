@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { nativeProfitablePrivateRootRegisters } from "../src/compiler/target/lower-native-root-profitability.ts";
 import { nativePrivateRootRegisters } from "../src/compiler/target/lower-native-root-publication.ts";
 import { analyzeNativeBodyFacts } from "../src/compiler/target/native-body-facts.ts";
 import { createConservativeNativePlan } from "../src/compiler/target/program-image.ts";
@@ -28,7 +29,7 @@ const load: BytecodeInstruction = {
 const initialize: BytecodeInstruction = { opcode: "MOVE", dst: retained, src: 1 };
 const backedge: BytecodeInstruction = { opcode: "JUMP_IF", cond: 1, targetIp: 1 };
 
-function select(
+function fixture(
 	instructions: Array<BytecodeInstruction>,
 	options: {
 		liveAtCalls?: boolean;
@@ -63,13 +64,13 @@ function select(
 		positions: [],
 	};
 	const native = createConservativeNativePlan([fn]).functions[0]!;
-	return nativePrivateRootRegisters(
+	return {
 		fn,
-		{
+		native: {
 			...native,
 			instructions: instructions.map((instruction) =>
 				options.guardedCalls && instruction.opcode === "CALL"
-					? { kind: "call", guardedFunctionIndices: [1] }
+					? { kind: "call" as const, guardedFunctionIndices: [1] }
 					: undefined,
 			),
 			gc: {
@@ -89,6 +90,17 @@ function select(
 				),
 			},
 		},
+	};
+}
+
+function select(
+	instructions: Array<BytecodeInstruction>,
+	options: Parameters<typeof fixture>[1] = {},
+) {
+	const { fn, native } = fixture(instructions, options);
+	return nativePrivateRootRegisters(
+		fn,
+		native,
 		new Set(options.candidates ?? [retained]),
 		undefined,
 		analyzeNativeBodyFacts(fn),
@@ -240,4 +252,34 @@ describe("private-root profitability across collecting loops", () => {
 	it("preserves the empty candidate set", () => {
 		expect(select([initialize, call, backedge, load], { candidates: [] }).size).toBe(0);
 	});
+});
+
+it("keeps call-root cost variant-local while reusing body cycles and rechecks mutated bodies", () => {
+	const instructions = [initialize, call, backedge, load];
+	const { fn, native } = fixture(instructions);
+	const facts = analyzeNativeBodyFacts(fn);
+	const candidates = new Set([retained]);
+	expect(
+		nativeProfitablePrivateRootRegisters(fn, native, candidates, facts),
+	).not.toContain(retained);
+	const uncharged = {
+		...native,
+		gc: {
+			safepoints: native.gc.safepoints.map((point) => ({
+				...point,
+				incomingRootRegisters: [0, 1],
+			})),
+		},
+	};
+	expect(
+		nativeProfitablePrivateRootRegisters(fn, uncharged, candidates, facts),
+	).toContain(retained);
+	expect(
+		nativeProfitablePrivateRootRegisters(fn, native, candidates, facts),
+	).not.toContain(retained);
+	instructions[2] = { opcode: "JUMP_IF", cond: 1, targetIp: 0 };
+	const updated = analyzeNativeBodyFacts(fn);
+	expect(nativeProfitablePrivateRootRegisters(fn, native, candidates, updated)).toContain(
+		retained,
+	);
 });
