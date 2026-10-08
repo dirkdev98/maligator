@@ -1249,6 +1249,70 @@ for (const proxy of [false, true]) {
 }
 
 globalThis.indexedStoreLifetimeReceiver = [{ marker: 389 }];
+function cachedLiteralDefinition(first, key, value) {
+	return { [key]: first, fixed: value };
+}
+globalThis.cachedLiteralDefinition = cachedLiteralDefinition;
+for (let index = 0; index < 16; index++) {
+	const first = { marker: 397 };
+	const value = { marker: 401 };
+	const defined = globalThis.cachedLiteralDefinition(first, "dynamic", value);
+	gc();
+	if (defined.dynamic !== first || defined.fixed !== value)
+		throw new Error("cached literal definition lost its heap values");
+}
+
+let definitionValue = { marker: 409 };
+const definitionOwner = { retained: { marker: 419 } };
+class DefinitionReceiver {
+	constructor(receiver) {
+		return receiver;
+	}
+}
+class CachedClassDefinition extends DefinitionReceiver {
+	fixed = definitionValue;
+	constructor(receiver, owner) {
+		const retained = owner.retained;
+		super(receiver);
+		gc();
+		if (retained.marker !== 419)
+			throw new Error("cached definition lost an unrelated private incoming root");
+	}
+}
+for (let index = 0; index < 16; index++) {
+	const defined = new CachedClassDefinition({}, definitionOwner);
+	if (defined.fixed !== definitionValue)
+		throw new Error("cached class definition warmup mismatch");
+}
+let definitionCalls = 0;
+const definedProxy = new Proxy(
+	{},
+	{
+		defineProperty(target, key, descriptor) {
+			definitionCalls++;
+			definitionValue = null;
+			definitionOwner.retained = null;
+			gc();
+			if (key !== "fixed" || descriptor.value.marker !== 409)
+				throw new Error("collecting definition trap lost its key or heap value");
+			return Reflect.defineProperty(target, key, descriptor);
+		},
+	},
+);
+if (
+	new CachedClassDefinition(definedProxy, definitionOwner).fixed.marker !== 409 ||
+	definitionCalls !== 1
+)
+	throw new Error("collecting definition trap did not finish exactly once");
+definitionOwner.retained = { marker: 419 };
+let rejectedDefinition = false;
+try {
+	new CachedClassDefinition(Object.preventExtensions({}), definitionOwner);
+} catch (error) {
+	rejectedDefinition = error instanceof TypeError;
+}
+if (!rejectedDefinition) throw new Error("nonextensible class receiver accepted a field");
+
 globalThis.indexedStoreLifetimeReference = new WeakRef(
 	globalThis.indexedStoreLifetimeReceiver[0],
 );

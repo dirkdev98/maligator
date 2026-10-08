@@ -132,6 +132,12 @@ const publicationKernels = [
 		numericOnly: true,
 	},
 	{
+		name: "CachedClassDefinition",
+		boundary: "DEFINE_PROPERTY",
+		probe: "mal_vm_try_define_property_static_cached",
+		properties: ["retained"],
+	},
+	{
 		name: "retainThroughThrowingSetter",
 		boundary: "STORE_PROPERTY_STATIC",
 		probe: "mal_vm_object_try_store_static",

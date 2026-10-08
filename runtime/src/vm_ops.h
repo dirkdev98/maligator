@@ -2943,8 +2943,8 @@ MalValue mal_vm_op_create_function(MalVm *vm, i32 function_index, MalEnv *creati
 
 /**
  * Define an own data property (the object-literal / define-semantics path),
- * shared by MAL_OP_DEFINE_PROPERTY and the compiled backend. Like the op, this
- * cannot run user code, so it never leaves a pending throw.
+ * shared by MAL_OP_DEFINE_PROPERTY and the compiled backend. Key coercion and
+ * Proxy traps can run user code; rejected definitions leave a pending throw.
  */
 void mal_vm_op_define_property(MalVm *vm, MalValue object_value, MalValue key_value,
                                MalValue value, bool enumerable, bool writable,

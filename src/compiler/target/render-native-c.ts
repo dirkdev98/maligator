@@ -3271,7 +3271,13 @@ function emitBody(
 	// this frame. Pure arithmetic/control-flow transitions need no native-frame write.
 	const fieldAllocations = new Map<number, NativeFieldCall>();
 	const fieldCallSites = new Map<number, NativeFieldCall>();
+	const definitionPublicationBarriers = new Set([
+		...specializations.flatMap((region) => region.claimedIps),
+		...regionActions.map((action) => action.ip),
+	]);
 	for (const site of fieldCalls ?? []) {
+		for (let ip = site.allocationIp; ip <= site.callIp; ip++)
+			definitionPublicationBarriers.add(ip);
 		fieldAllocations.set(site.allocationIp, site);
 		fieldCallSites.set(site.callIp, site);
 		for (let field = 0; field < site.allocation.count; field++) {
@@ -3383,7 +3389,7 @@ function emitBody(
 		knownOwnSlotLoadInactiveRootMask: undefined,
 		staticPropertyLoadInactiveRootMask: undefined,
 		indexedPropertyInactiveRootMask: undefined,
-		staticPropertyStoreInactiveRootMask: undefined,
+		staticPropertyWriteInactiveRootMask: undefined,
 		charCodeAtCallRootPublication: undefined,
 		charCodeAtCallInactiveRootMask: undefined,
 		iteratorStepRootPublication: undefined,
@@ -3582,8 +3588,16 @@ function emitBody(
 			!numericFusionActionByIp.has(ip) &&
 			!staticPropertyNumericActionByIp.has(ip) &&
 			!constructorInitializationActionByIp.has(ip);
-		const deferredPropertyStoreRoots =
-			fn.instructions[ip]!.opcode === "STORE_PROPERTY_STATIC" &&
+		const staticPropertyWriteInstruction = fn.instructions[ip]!;
+		const deferredStaticPropertyWriteRoots =
+			(staticPropertyWriteInstruction.opcode === "STORE_PROPERTY_STATIC" ||
+				(hasPrivateRoots &&
+					staticPropertyWriteInstruction.opcode === "DEFINE_PROPERTY" &&
+					staticPropertyWriteInstruction.enumerable &&
+					staticPropertyWriteInstruction.writable &&
+					staticPropertyWriteInstruction.configurable &&
+					staticDefineStringIndexByIp.has(ip) &&
+					!definitionPublicationBarriers.has(ip))) &&
 			nativeInstructions[ip] === undefined &&
 			!stackObjectAccesses.has(ip) &&
 			!stackObjectMaterializations.has(ip) &&
@@ -3630,7 +3644,7 @@ function emitBody(
 			safepointKind !== "loop-backedge" &&
 			!deferredPropertyRoots &&
 			!deferredIndexedPropertyRoots &&
-			!deferredPropertyStoreRoots &&
+			!deferredStaticPropertyWriteRoots &&
 			!deferredOperatorRoots &&
 			!deferredTdzRoots &&
 			!deferredIteratorRoots &&
@@ -3674,8 +3688,9 @@ function emitBody(
 			deferredIndexedPropertyRoots && inactiveRootMask !== lastPublishedInactiveRootMask
 				? inactiveRootMask
 				: undefined;
-		const staticPropertyStoreInactiveRootMask =
-			deferredPropertyStoreRoots && inactiveRootMask !== lastPublishedInactiveRootMask
+		const staticPropertyWriteInactiveRootMask =
+			deferredStaticPropertyWriteRoots &&
+			inactiveRootMask !== lastPublishedInactiveRootMask
 				? inactiveRootMask
 				: undefined;
 		const iteratorStepInactiveRootMask =
@@ -3734,7 +3749,7 @@ function emitBody(
 			knownOwnSlotLoadInactiveRootMask === undefined &&
 			staticPropertyLoadInactiveRootMask === undefined &&
 			indexedPropertyInactiveRootMask === undefined &&
-			staticPropertyStoreInactiveRootMask === undefined &&
+			staticPropertyWriteInactiveRootMask === undefined &&
 			iteratorStepInactiveRootMask === undefined &&
 			charCodeAtCallInactiveRootMask === undefined &&
 			inactiveRootMask !== lastPublishedInactiveRootMask
@@ -3752,7 +3767,7 @@ function emitBody(
 			knownOwnSlotLoadInactiveRootMask === undefined &&
 			staticPropertyLoadInactiveRootMask === undefined &&
 			indexedPropertyInactiveRootMask === undefined &&
-			staticPropertyStoreInactiveRootMask === undefined &&
+			staticPropertyWriteInactiveRootMask === undefined &&
 			iteratorStepInactiveRootMask === undefined &&
 			charCodeAtCallInactiveRootMask === undefined
 		) {
@@ -3771,7 +3786,7 @@ function emitBody(
 		instructionContext.incomingRootPublication =
 			deferredPropertyRoots ||
 			deferredIndexedPropertyRoots ||
-			deferredPropertyStoreRoots ||
+			deferredStaticPropertyWriteRoots ||
 			deferredOperatorRoots ||
 			deferredTdzRoots ||
 			deferredIteratorRoots ||
@@ -3800,8 +3815,8 @@ function emitBody(
 		instructionContext.staticPropertyLoadInactiveRootMask =
 			staticPropertyLoadInactiveRootMask;
 		instructionContext.indexedPropertyInactiveRootMask = indexedPropertyInactiveRootMask;
-		instructionContext.staticPropertyStoreInactiveRootMask =
-			staticPropertyStoreInactiveRootMask;
+		instructionContext.staticPropertyWriteInactiveRootMask =
+			staticPropertyWriteInactiveRootMask;
 		instructionContext.charCodeAtCallRootPublication = deferredCharCodeAtRoots;
 		instructionContext.charCodeAtCallInactiveRootMask = charCodeAtCallInactiveRootMask;
 		instructionContext.iteratorStepRootPublication = deferredIteratorRoots;
@@ -3920,7 +3935,7 @@ function emitBody(
 			knownOwnSlotLoadInactiveRootMask !== undefined ||
 			staticPropertyLoadInactiveRootMask !== undefined ||
 			indexedPropertyInactiveRootMask !== undefined ||
-			staticPropertyStoreInactiveRootMask !== undefined ||
+			staticPropertyWriteInactiveRootMask !== undefined ||
 			iteratorStepInactiveRootMask !== undefined ||
 			charCodeAtCallInactiveRootMask !== undefined
 		) {
@@ -4245,7 +4260,7 @@ interface NativeInstructionContext {
 	readonly knownOwnSlotLoadInactiveRootMask?: bigint;
 	readonly staticPropertyLoadInactiveRootMask?: bigint;
 	readonly indexedPropertyInactiveRootMask?: bigint;
-	readonly staticPropertyStoreInactiveRootMask?: bigint;
+	readonly staticPropertyWriteInactiveRootMask?: bigint;
 	readonly charCodeAtCallRootPublication?: boolean;
 	readonly charCodeAtCallInactiveRootMask?: bigint;
 	readonly iteratorStepRootPublication?: boolean;
@@ -4437,7 +4452,7 @@ function emitInstruction(
 		knownOwnSlotLoadInactiveRootMask: context.knownOwnSlotLoadInactiveRootMask,
 		staticPropertyLoadInactiveRootMask: context.staticPropertyLoadInactiveRootMask,
 		indexedPropertyInactiveRootMask: context.indexedPropertyInactiveRootMask,
-		staticPropertyStoreInactiveRootMask: context.staticPropertyStoreInactiveRootMask,
+		staticPropertyWriteInactiveRootMask: context.staticPropertyWriteInactiveRootMask,
 		charCodeAtCallRootPublication: context.charCodeAtCallRootPublication,
 		charCodeAtCallInactiveRootMask: context.charCodeAtCallInactiveRootMask,
 		iteratorStepRootPublication: context.iteratorStepRootPublication,
@@ -5448,6 +5463,12 @@ function emitInstruction(
 				return [
 					`static MAL_ISOLATE_LOCAL MalDefinePropertyCache __dpc_${ip};`,
 					`if (!mal_vm_try_define_property_static_cached(vm, ${cache}, ${boxed(instruction.object)}, ${boxed(instruction.value)}, ${instruction.enumerable}, ${instruction.writable}, ${instruction.configurable})) {`,
+					...(context.incomingRootPublication ?? []).map((line) => `  ${line}`),
+					...(context.staticPropertyWriteInactiveRootMask === undefined
+						? []
+						: [
+								`  ${cInactiveRootMaskPublication(context.staticPropertyWriteInactiveRootMask, context.inactiveRootMaskTails)};`,
+							]),
 					`  mal_vm_op_define_property_static_cached(vm, ${cache}, ${boxed(instruction.object)}, ${relocation.stringIndex(stringIndex)}, ${boxed(instruction.value)}, ${instruction.enumerable}, ${instruction.writable}, ${instruction.configurable});`,
 					`  ${throwCheck()}`,
 					`}`,
@@ -6387,10 +6408,10 @@ function emitInstruction(
 				`MalObject *${receiverName} = mal_vm_as_object(${boxed(instruction.object)});`,
 				`if (!(${probe()})) {`,
 				...(context.incomingRootPublication ?? []).map((line) => `  ${line}`),
-				...(context.staticPropertyStoreInactiveRootMask === undefined
+				...(context.staticPropertyWriteInactiveRootMask === undefined
 					? []
 					: [
-							`  ${cInactiveRootMaskPublication(context.staticPropertyStoreInactiveRootMask, context.inactiveRootMaskTails)};`,
+							`  ${cInactiveRootMaskPublication(context.staticPropertyWriteInactiveRootMask, context.inactiveRootMaskTails)};`,
 						]),
 				`  ${profileCall("property", `mal_vm_op_store_property_ic(vm, ${boxed(instruction.object)}, ${key}, ${boxed(instruction.value)}, ${strict}, &${nativeBodyReference(resources, "propertyCache")}[${instruction.icIndex}])`)};`,
 				`  ${throwCheck()}`,
