@@ -7185,13 +7185,22 @@ function emitInstruction(
 					return [storeBool(`${num(left)} ${compare} ${num(right)}`)];
 				}
 				if (
-					reps[left] === "string" &&
-					reps[right] === "string" &&
-					RELATIONAL_COMPARE.has(operator)
+					(reps[left] === "string" ||
+						exactInputKinds?.[0] === COMPILER_VALUE_KIND_STRING) &&
+					(reps[right] === "string" ||
+						exactInputKinds?.[1] === COMPILER_VALUE_KIND_STRING)
 				) {
+					const a = `mal_value_to_string(${boxed(left)})`,
+						b = `mal_value_to_string(${boxed(right)})`;
+					if (!RELATIONAL_COMPARE.has(operator)) {
+						const equal = profileCall("string", `mal_string_equals(${a}, ${b})`);
+						return [
+							storeBool(operator === "!=" || operator === "!==" ? `!${equal}` : equal),
+						];
+					}
 					return [
 						storeBool(
-							`${profileCall("string", `mal_string_compare(mal_value_to_string(r${left}), mal_value_to_string(r${right}))`)} ${compare} 0`,
+							`${profileCall("string", `mal_string_compare(${a}, ${b})`)} ${compare} 0`,
 						),
 					];
 				}
