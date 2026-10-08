@@ -354,7 +354,11 @@ Capture records HEAD plus a digest of pending changes, the tracked patch, exact
 prepared source and binary hashes, lockfile, Node/host identity, and native build
 plan/toolchain. Comparison refuses modified captures or different preparation,
 dependencies, hosts, and native plans. Every run compiles the baseline capture's
-input and must exactly match its Node output oracle.
+input and must exactly match its Node output oracle in both emitted C and stripped
+runtime-image bytes. Runtime serialization and file writes count toward `writeMs`;
+raw byte hashing happens after the measured compiler process exits. Capture schema 5
+requires fresh captures using this protocol; its timings include serialization and
+cannot be compared directly with historical C-only timings.
 
 To measure code-generation changes, first capture `.cache/compiler-program`, then
 capture both baseline and candidate with `--program .cache/compiler-program`.

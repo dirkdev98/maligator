@@ -20,6 +20,7 @@ import type {
 } from "../src/compiler/core/core-optimization-report.ts";
 import { compileEntrypoint } from "../src/compiler/pipeline/compile-program.ts";
 import { emitProgramTranslationUnits } from "../src/compiler/target/emit-program-image.ts";
+import { serializeRuntimeImage } from "../src/compiler/target/program-image-codec.ts";
 
 const inputPath = process.argv[2];
 const outputDirectory = process.argv[3];
@@ -128,8 +129,12 @@ const units = measure("emitMs", () =>
 	emitProgramTranslationUnits(image, { maligatorSurface: true }),
 );
 
+let wireBytes = 0;
 measure("writeMs", () => {
 	mkdirSync(outputDirectory, { recursive: true });
+	const wire = serializeRuntimeImage(image.runtime, { debugInfo: false });
+	wireBytes = wire.length;
+	writeFileSync(path.join(outputDirectory, "self-compile.malw"), wire);
 	for (let index = 0; index < units.length; index++) {
 		const unit = units[index]!;
 		writeFileSync(path.join(outputDirectory, `self-compile-${unit.id}.c`), unit.source);
@@ -139,6 +144,7 @@ measure("writeMs", () => {
 console.log(
 	JSON.stringify({
 		units: units.length,
+		wireBytes,
 		codeUnits: units.reduce((total, unit) => total + unit.source.length, 0),
 		phases,
 		optimizer: optimizationReport,

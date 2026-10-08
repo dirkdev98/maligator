@@ -22,6 +22,7 @@ export function digestSelfCompileOutput(
 ): string {
 	const digest = createHash("sha256");
 	for (const name of readdirSync(directory).sort()) {
+		if (name === "self-compile.malw") continue;
 		digest.update(name);
 		let source = readFileSync(path.join(directory, name), "utf8");
 		for (const normalizePath of normalizePaths) {

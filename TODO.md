@@ -133,8 +133,8 @@ The independent target boundary and current storage contract are recorded in
       claiming the C emitter only renders selected decisions.
 
 - [ ] Improve Node.js self-compile phase time and memory using the restored cold
-      paired comparison. Preserve strict emitted-C parity and add runtime-image
-      parity to that protocol; use matched before/after evidence for speedup claims.
+      paired comparison. The protocol now requires strict emitted-C and runtime-image
+      byte parity; use matched before/after evidence for speedup claims.
 
 - [ ] Add compiler-host differential native-plan/output coverage and GC-stress
       execution. Compiled/interpreted application parity from one Node-produced
@@ -150,8 +150,8 @@ The independent target boundary and current storage contract are recorded in
       and measure cost on both compiler hosts without another wholesale IR rewrite.
 - [ ] Finish remaining legality-affecting renderer selection in explicit native
       plans; capture-owner and String-transform strategies now persist and validate.
-      Exact String comparison operand proofs now select direct UTF-16 kernels
-      through boxed storage as well as physical String locals.
+      Exact String comparison and concatenation operand proofs now select direct
+      kernels through boxed storage as well as physical String locals.
       Rendering may choose C syntax; semantic
       assumptions, specialization admission, and ownership obligations belong in
       planning and must retain validated fallbacks.

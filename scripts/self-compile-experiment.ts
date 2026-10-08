@@ -53,7 +53,8 @@ Native capture uses a fresh module frontend and development O2/no-LTO closed nat
 without instrumentation, keeping portable GC-root trust independent of cache hits.
 Compare runs a BASE Node output oracle and one warmup per compiler before timing.
 With --cold, the first measured baseline is the oracle; filesystem caches are not cleared.
-Every output must match that oracle exactly. Use --program with the same capture
+Emitted C and stripped runtime-wire bytes must both match that oracle exactly.
+Use --program with the same capture
 before and after a code-generation change to measure its effect on one program.
 This measures JS-to-C execution, not C builds.
 Directories must be new. All logs, outputs, identities, and partial pairs are kept.
@@ -83,7 +84,7 @@ interface Options {
 }
 
 interface Capture {
-	schema: 4;
+	schema: 5;
 	kind: "native" | "node";
 	status: "complete";
 	capturedAt: string;
@@ -102,6 +103,8 @@ interface Sample {
 	label: string;
 	wallMs: number;
 	digest: string;
+	wireDigest: string;
+	wireBytes: number;
 	units: number;
 	codeUnits: number;
 	phases: Record<string, number>;
@@ -281,7 +284,7 @@ async function captureCompiler(options: Options): Promise<void> {
 		throw new Error("program capture changed during build");
 	}
 	const capture: Capture = {
-		schema: 4,
+		schema: 5,
 		kind: options.sourceOnly ? "node" : "native",
 		status: "complete",
 		capturedAt: new Date().toISOString(),
@@ -315,7 +318,7 @@ function readCapture(directory: string): Capture {
 		readFileSync(path.join(directory, "capture.json"), "utf8"),
 	) as Capture;
 	if (
-		capture.schema !== 4 ||
+		capture.schema !== 5 ||
 		capture.status !== "complete" ||
 		(capture.kind !== "native" && capture.kind !== "node")
 	) {
@@ -442,15 +445,20 @@ function compareCapturedCompilers(options: Options): void {
 			throw new Error(`${label} exited ${result.status}; see ${directory}`);
 		const summary = JSON.parse(readFileSync(stdoutPath, "utf8")) as Omit<
 			Sample,
-			"label" | "wallMs" | "digest"
+			"label" | "wallMs" | "digest" | "wireDigest"
 		>;
 		if (
 			!Number.isSafeInteger(summary.units) ||
 			summary.units <= 0 ||
 			!Number.isSafeInteger(summary.codeUnits) ||
-			summary.codeUnits <= 0
+			summary.codeUnits <= 0 ||
+			!Number.isSafeInteger(summary.wireBytes) ||
+			summary.wireBytes <= 0
 		)
 			throw new Error(`${label} emitted an invalid workload summary`);
+		const wire = readFileSync(path.join(output, "self-compile.malw"));
+		if (wire.length !== summary.wireBytes)
+			throw new Error(`${label} runtime image byte count differs from its summary`);
 		const resourceLog = readFileSync(stderrPath, "utf8");
 		const rss =
 			process.platform === "darwin"
@@ -463,6 +471,7 @@ function compareCapturedCompilers(options: Options): void {
 			label,
 			wallMs,
 			digest: digestSelfCompileOutput(output),
+			wireDigest: sha256(wire),
 			...(rss === undefined
 				? {}
 				: { peakRssBytes: Number(rss) * (process.platform === "linux" ? 1024 : 1) }),
@@ -487,6 +496,13 @@ function compareCapturedCompilers(options: Options): void {
 		)
 			throw new Error(
 				`${label} output differs from the frozen Node oracle; see ${options.output}`,
+			);
+		if (
+			sample.wireDigest !== reference.wireDigest ||
+			sample.wireBytes !== reference.wireBytes
+		)
+			throw new Error(
+				`${label} runtime image differs from the frozen Node oracle; see ${options.output}`,
 			);
 		return sample;
 	};
@@ -718,6 +734,7 @@ if (import.meta.main) {
 												? ["first measured baseline is the Node oracle", "zero warmups"]
 												: ["one Node oracle", "two warmups"]),
 											`${2 * options.pairs} measured compiler runs`,
+											"verify emitted C and stripped runtime-wire byte parity",
 											"verify capture integrity",
 										],
 							failureExitCode: 2,

@@ -11,13 +11,23 @@ import {
 import * as os from "node:os";
 import * as path from "node:path";
 import { expect, it, onTestFinished } from "vitest";
+import { digestSelfCompileOutput } from "../scripts/self-compile-workload.ts";
+import { deserializeRuntimeImage } from "../src/compiler/target/program-image-codec.ts";
 
 const script = path.resolve("scripts/self-compile-experiment.ts");
 const digest = (value: string | Buffer) =>
 	createHash("sha256").update(value).digest("hex");
 
 function fixture(
-	options: { wrongCandidate?: boolean; wrongRun?: string; hang?: string } = {},
+	options: {
+		wrongCandidate?: boolean;
+		wrongRun?: string;
+		hang?: string;
+		wrongWireRun?: string;
+		wireBytes?: number;
+		missingWire?: boolean;
+		truncatedWire?: boolean;
+	} = {},
 ) {
 	const root = mkdtempSync(path.join(os.tmpdir(), "mal-self-compile-experiment-"));
 	onTestFinished(() => rmSync(root, { recursive: true, force: true }));
@@ -41,7 +51,9 @@ if (output.includes(${JSON.stringify(options.hang ?? "never-hang-here")})) {
   const text = output.includes(${JSON.stringify(options.wrongRun ?? "never-wrong-here")}) ? 'incorrect output' : ${options.wrongCandidate && label === "candidate" ? "'incorrect output'" : "readFileSync(target, 'utf8')"};
   mkdirSync(output, { recursive: true });
   writeFileSync(path.join(output, 'unit.c'), text);
-  console.log(JSON.stringify({ units: 1, codeUnits: text.length, phases: {} }));
+  const wire = new Uint8Array(output.includes(${JSON.stringify(options.wrongWireRun ?? "never-wrong-wire")}) ? [0, 254, 128] : [0, 255, 128]);
+  if (!${options.missingWire ?? false}) writeFileSync(path.join(output, 'self-compile.malw'), ${options.truncatedWire ?? false} ? wire.subarray(0, 2) : wire);
+  console.log(JSON.stringify({ units: 1, codeUnits: text.length, wireBytes: ${options.wireBytes ?? 3}, phases: {} }));
 }
 `,
 			compiler: "unused native executable in a Node-hosted fixture",
@@ -51,7 +63,7 @@ if (output.includes(${JSON.stringify(options.hang ?? "never-hang-here")})) {
 			writeFileSync(path.join(directory, name), contents);
 		}
 		const manifest = {
-			schema: 4,
+			schema: 5,
 			kind: "native",
 			closure: {
 				scope: { kind: "whole-program", entry: "fixture" },
@@ -97,7 +109,12 @@ if (output.includes(${JSON.stringify(options.hang ?? "never-hang-here")})) {
 		});
 	const report = () =>
 		JSON.parse(readFileSync(path.join(output, "report.json"), "utf8")) as {
-			samples: Array<{ label: string; digest: string }>;
+			samples: Array<{
+				label: string;
+				digest: string;
+				wireDigest: string;
+				wireBytes: number;
+			}>;
 			pairs: Array<unknown>;
 			target: string;
 		};
@@ -204,6 +221,8 @@ it("runs exactly three cold pairs with the first measured baseline as the frozen
 		"pair-2-candidate",
 	]);
 	expect(new Set(report.samples.map((sample) => sample.digest)).size).toBe(1);
+	expect(new Set(report.samples.map((sample) => sample.wireDigest)).size).toBe(1);
+	expect(report.samples.every((sample) => sample.wireBytes === 3)).toBe(true);
 	expect(report.target).toBe(
 		path.join(test.base, "source/src/compiler/frontend/parser.ts"),
 	);
@@ -230,6 +249,83 @@ it.each(["pair-0-candidate", "pair-1-base"])(
 		expect(test.report().pairs).toHaveLength(wrongRun === "pair-0-candidate" ? 0 : 1);
 	},
 );
+
+it.each(["pair-0-candidate", "pair-1-base"])(
+	"rejects same-length binary runtime drift in %s even with identical C",
+	(wrongWireRun) => {
+		const test = fixture({ wrongWireRun });
+		expect(test.run("--cold").status).toBe(2);
+		const report = test.report();
+		expect(report).toMatchObject({ status: "failed", complete: false });
+		expect(new Set(report.samples.map((sample) => sample.digest)).size).toBe(1);
+		expect(new Set(report.samples.map((sample) => sample.wireDigest)).size).toBe(2);
+		expect(readFileSync(path.join(test.output, "run.log"), "utf8")).toContain(
+			"runtime image differs from the frozen Node oracle",
+		);
+	},
+);
+
+it.each([{ missingWire: true }, { truncatedWire: true }, { wireBytes: 7 }])(
+	"rejects incomplete or misreported runtime artifacts %j",
+	(options) => {
+		const test = fixture(options);
+		expect(test.run("--cold").status).toBe(2);
+		expect(test.report()).toMatchObject({ status: "failed", complete: false });
+		expect(test.report().pairs).toHaveLength(0);
+	},
+);
+
+it("rejects captures from the C-only protocol before running the compiler", () => {
+	const test = fixture();
+	const manifest = path.join(test.base, "capture.json");
+	const capture = JSON.parse(readFileSync(manifest, "utf8")) as Record<string, unknown>;
+	capture.schema = 4;
+	writeFileSync(manifest, JSON.stringify(capture));
+	expect(test.run("--cold").status).toBe(2);
+	expect(readFileSync(path.join(test.output, "run.log"), "utf8")).toContain(
+		"incomplete or unsupported capture",
+	);
+	expect(existsSync(path.join(test.output, "pair-0-base"))).toBe(false);
+});
+
+it("emits a decodable runtime image alongside C and keeps C-only hashing independent", () => {
+	const root = mkdtempSync(path.join(os.tmpdir(), "mal-self-compile-wire-"));
+	onTestFinished(() => rmSync(root, { recursive: true, force: true }));
+	const input = path.join(root, "input.mjs"),
+		output = path.join(root, "output");
+	writeFileSync(input, "export function add(a,b){return a+b;}");
+	const run = spawnSync(
+		process.execPath,
+		[path.resolve("bench/self-compile.mts"), input, output],
+		{
+			encoding: "utf8",
+			timeout: 20_000,
+			env: {
+				...process.env,
+				MAL_CORE_INSTRUMENTATION: "off",
+				MAL_CORE_BENCHMARK_ABLATION: undefined,
+			},
+		},
+	);
+	expect(run.status, run.stderr).toBe(0);
+	const summary = JSON.parse(run.stdout) as { wireBytes: number };
+	const wirePath = path.join(output, "self-compile.malw"),
+		bytes = readFileSync(wirePath);
+	expect(summary.wireBytes).toBe(bytes.length);
+	const image = deserializeRuntimeImage(bytes);
+	expect(image.entrypointPath).toBe(input);
+	expect(image.files).toEqual([]);
+	expect(
+		image.functions.some(
+			(fn) =>
+				fn.parameterCount === 2 &&
+				fn.instructions.some((op) => op.opcode === "BINARY" && op.operator === "+"),
+		),
+	).toBe(true);
+	const cDigest = digestSelfCompileOutput(output);
+	writeFileSync(wirePath, new Uint8Array([0, 255, 128]));
+	expect(digestSelfCompileOutput(output)).toBe(cDigest);
+});
 
 it("plans cold work and rejects a native cold protocol before running any compiler", () => {
 	const test = fixture();
