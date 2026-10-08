@@ -651,6 +651,11 @@ function scalarValueBoundary(op: BytecodeInstruction, local: number): boolean {
 		case "STORE_PROPERTY_STATIC_KNOWN_OWN_SLOT":
 			return op.value === local && op.object !== local;
 		case "STORE_PROPERTY":
+			return (
+				op.object !== local &&
+				((op.key === local && op.value !== local) ||
+					(op.value === local && op.key !== local))
+			);
 		case "DEFINE_PROPERTY":
 			return op.value === local && op.object !== local && op.key !== local;
 		case "CALL":

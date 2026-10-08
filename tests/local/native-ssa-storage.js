@@ -202,6 +202,112 @@ console.log(
 	}),
 );
 
+function composedIndexedStore(values, left, right, payload) {
+	"use strict";
+	const a = +left;
+	const b = +right;
+	values[(a - b) * 2] = payload;
+	return payload;
+}
+function composedIndexedStoreRhs(values, left, right, callback) {
+	const a = +left;
+	const b = +right;
+	values[(a - b) * 2] = callback();
+}
+function composedBooleanStore(values, left, right, payload) {
+	const a = +left,
+		b = +right;
+	values[a < b] = payload;
+}
+const composedBooleanStoreObject = {};
+composedBooleanStore(composedBooleanStoreObject, 1, 2, "less");
+composedBooleanStore(composedBooleanStoreObject, NaN, 2, "unordered");
+console.log(
+	"composed-boolean-store",
+	composedBooleanStoreObject.true,
+	composedBooleanStoreObject.false,
+);
+const composedStoreOrder = [];
+const composedStoreSentinel = {};
+const composedStoreProxy = new Proxy(
+	{},
+	{
+		set(target, key, payload, receiver) {
+			composedStoreOrder.push(`${String(key)}:${payload.label}`);
+			gc();
+			if (key === "2") throw composedStoreSentinel;
+			if (key === "6") return false;
+			return Reflect.set(target, key, payload, receiver);
+		},
+	},
+);
+const composedStorePrototype = Object.create(Array.prototype);
+Object.defineProperty(composedStorePrototype, "1", {
+	set(payload) {
+		gc();
+		composedStoreOrder.push(`setter:${payload.label}`);
+	},
+});
+const composedStoreHole = ["before", , "tail"];
+Object.setPrototypeOf(composedStoreHole, composedStorePrototype);
+for (const values of [["before"], composedStoreHole, {}, composedStoreProxy]) {
+	for (const left of [
+		-0,
+		0.25,
+		0.5,
+		-0.5,
+		1,
+		3,
+		NaN,
+		Infinity,
+		-Infinity,
+		2147483647.5,
+	]) {
+		const payload = { label: `payload:${String(left)}` };
+		try {
+			composedIndexedStore(values, left, 0, payload);
+			gc();
+			console.log(
+				"composed-indexed-store",
+				String(left),
+				values[(left - 0) * 2] === payload,
+				payload.label,
+			);
+		} catch (error) {
+			console.log(
+				"composed-indexed-store-throw",
+				error === composedStoreSentinel,
+				error instanceof TypeError,
+			);
+		}
+	}
+}
+for (const left of [-0, 0.25, 0.5, -0.5, 1, NaN, Infinity, -Infinity, 2147483647.5]) {
+	const values = new Float64Array([3, 4]);
+	const payload = {
+		valueOf() {
+			gc();
+			return 1.25;
+		},
+	};
+	composedIndexedStore(values, left, 0, payload);
+	console.log(
+		"composed-indexed-typed-store",
+		String(left),
+		values[0],
+		values[1],
+		Reflect.ownKeys(values).join(":"),
+	);
+}
+const composedStoreRhsReceiver = [];
+composedIndexedStoreRhs(composedStoreRhsReceiver, 0.5, 0, () => {
+	gc();
+	Object.setPrototypeOf(composedStoreRhsReceiver, composedStorePrototype);
+	composedStoreOrder.push("rhs");
+	return { label: "rhs-value" };
+});
+console.log("composed-indexed-store-order", composedStoreOrder.join(":"));
+
 function composedPredicateResult(left, right) {
 	const a = +left;
 	const b = +right;

@@ -3878,7 +3878,8 @@ function emitBody(
 				);
 			}
 		} else if (
-			instruction.opcode === "LOAD_PROPERTY" &&
+			(instruction.opcode === "LOAD_PROPERTY" ||
+				instruction.opcode === "STORE_PROPERTY") &&
 			expressionLocals.has(instruction.key)
 		) {
 			const name = `__indexed_key_${ip}`;

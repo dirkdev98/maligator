@@ -148,6 +148,93 @@ describe("native scalar plans around opaque and exceptional windows", () => {
 });
 
 describe("existing-proof scalar expression consumers", () => {
+	it("preserves Boolean property-key conversion at a composed store boundary", () => {
+		const out = inspectStaticValueFunction(
+			"function write(values,left,right,payload){const a=+left,b=+right;values[a<b]=payload;}globalThis.write=write;",
+			"write",
+		);
+		const compareIp = out.native.body.instructions.findIndex(
+			(op) => op.opcode === "BINARY" && op.operator === "<",
+		);
+		const storeIp = out.native.body.instructions.findIndex(
+			(op) => op.opcode === "STORE_PROPERTY",
+		);
+		const store = out.native.body.instructions[storeIp]!;
+		if (store.opcode !== "STORE_PROPERTY") throw new Error("Missing indexed store");
+		expect(out.native.storage!.expressionIps).toContain(compareIp);
+		expect(out.native.registerRepresentations[store.key]).toBe("boolean");
+		expect(out.c.source).toContain(`mal_value_new_boolean(__indexed_key_${storeIp})`);
+	});
+
+	it("captures a computed numeric store key once for the indexed probe and fallback", () => {
+		const out = inspectStaticValueFunction(
+			"function write(values,left,right,payload){const a=+left,b=+right;values[(a-b)*2]=payload;}globalThis.write=write;",
+			"write",
+		);
+		const productIp = out.native.body.instructions.findIndex(
+			(op) => op.opcode === "BINARY" && op.operator === "*",
+		);
+		expect(out.native.storage!.expressionIps).toContain(productIp);
+		const storeIp = out.native.body.instructions.findIndex(
+			(op) => op.opcode === "STORE_PROPERTY",
+		);
+		const store = out.native.body.instructions[storeIp]!;
+		if (store.opcode !== "STORE_PROPERTY") throw new Error("Missing indexed store");
+		expect(out.native.registerRepresentations[store.key]).toBe("number");
+		const key = `__indexed_key_${storeIp}`;
+		expect(out.c.source).toMatch(new RegExp(`(?:double|f64) ${key} = r${store.key};`));
+		expect(out.c.source).toContain(
+			`mal_vm_array_try_store(__property_receiver_${storeIp}, ${key},`,
+		);
+		expect(out.c.source).toContain(
+			`mal_vm_indexed_fast_store_index(vm, r${store.object}, ${key},`,
+		);
+		expect(deserializeCompilerArtifact(serializeCompilerArtifact(out.image))).toEqual(
+			out.image,
+		);
+	});
+
+	it.each([
+		"const x=(a-b)*2; values[x]=x;",
+		"const x=(a-b)*2; x[x]=payload;",
+		"values[(a-b)*2]=callback();",
+		"const x=(a-b)*2; callback(); values[x]=payload;",
+		"try { values[(a-b)*2]=payload; } catch(error) { return error; }",
+		"snapshot=a; values[(a-b)*2]=payload;",
+	])("retains a computed store key across aliases and effects: %s", (tail) => {
+		const out = inspectStaticValueFunction(
+			`let snapshot;function write(values,left,right,payload,callback){const a=+left,b=+right;${tail}}globalThis.write=write;`,
+			"write",
+		);
+		const productIp = out.native.body.instructions.findIndex(
+			(op) => op.opcode === "BINARY" && op.operator === "*",
+		);
+		expect(productIp).toBeGreaterThanOrEqual(0);
+		expect(out.native.storage!.expressionIps).not.toContain(productIp);
+		expect(out.c.source).not.toContain("__indexed_key_");
+		expect(() =>
+			validateNativeStorage({
+				...out.native,
+				storage: {
+					...out.native.storage!,
+					expressionIps: [...out.native.storage!.expressionIps, productIp].sort(
+						(a, b) => a - b,
+					),
+				},
+			}),
+		).toThrow(/invalid or stale storage plan/);
+	});
+
+	it("keeps computed store expressions materialized at profiled sites", () => {
+		const out = inspectStaticValueFunction(
+			"function write(values,left,right,payload){const a=+left,b=+right;values[(a-b)*2]=payload;}globalThis.write=write;",
+			"write",
+			{ profile: true },
+		);
+		expect(out.native.storage!.expressionIps).toEqual([]);
+		expect(out.c.source).not.toContain("__indexed_key_");
+	});
+
 	it("captures a computed numeric key once for the indexed probe and fallback", () => {
 		const out = inspectStaticValueFunction(
 			"function lookup(values,left,right){const a=+left,b=+right;return values[(a-b)*2];}globalThis.lookup=lookup;",
