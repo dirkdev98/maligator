@@ -690,9 +690,66 @@ static MalValue mal_builtin_iterator_prototype_dispose(
         : completion.value;
 }
 
+/**
+ * [[Get]] for an iteration-protocol key that a receiver inherits only through
+ * watched built-in prototypes. While the watched-method protector holds none of
+ * those prototypes has changed, so the resolved data value is a per-prototype
+ * constant. Returns false when the lookup needs the generic path.
+ */
+static bool mal_vm_watched_inherited_get(
+    MalVm *vm, MalValue receiver, MalKey key, MalValue *value_out
+) {
+    if (!mal_primitive_method_protector) return false;
+    const MalObject *prototype;
+    if (mal_value_is_string(receiver)) {
+        // String exotic own keys are indices and "length".
+        if (key.kind != MAL_KEY_SYMBOL) return false;
+        prototype = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_STRING_PROTOTYPE]);
+    } else {
+        if (!mal_value_is_heap_type(receiver, MAL_HEAP_ARRAY_OBJECT) &&
+            !mal_value_is_heap_type(receiver, MAL_HEAP_MAP_OBJECT) &&
+            !mal_value_is_heap_type(receiver, MAL_HEAP_SET_OBJECT) &&
+            !mal_value_is_heap_type(receiver, MAL_HEAP_ITERATOR_OBJECT) &&
+            !mal_value_is_heap_type(receiver, MAL_HEAP_OBJECT)) {
+            return false;
+        }
+        MalObject *object = mal_value_to_object(receiver);
+        // Named own properties live in shape slots or the overflow table.
+        if ((object->shape->inline_count != 0 || mal_object_overflow(object) != nullptr) &&
+            mal_object_get_own(object, key).present) {
+            return false;
+        }
+        prototype = mal_object_prototype(object);
+    }
+    if (prototype == nullptr || !prototype->watched_method_proto) return false;
+    u64 hash = ((u64) (uptr) prototype >> 4) ^ (key.value * UINT64_C(0x9e3779b97f4a7c15));
+    MalWatchedLookupEntry *entry = &vm->watched_lookup_cache[
+        (hash ^ (hash >> 32)) & (MAL_WATCHED_LOOKUP_CACHE_CAPACITY - 1)];
+    if (entry->prototype == prototype && entry->key == key.value) {
+        *value_out = entry->value;
+        return true;
+    }
+    MalValue value = mal_value_new_undefined();
+    for (MalObject *cursor = (MalObject *) prototype; cursor != nullptr;
+         cursor = mal_object_prototype(cursor)) {
+        if (!cursor->watched_method_proto) return false;
+        MalPropertyLookup own = mal_object_get_own(cursor, key);
+        if (own.present) {
+            if (own.desc.flags & MAL_PROPERTY_ACCESSOR) return false;
+            value = own.desc.value;
+            break;
+        }
+    }
+    *entry = (MalWatchedLookupEntry) {.prototype = prototype, .key = key.value, .value = value};
+    *value_out = value;
+    return true;
+}
+
 bool mal_vm_get_iterator(MalVm *vm, MalValue value, MalIteratorRecord *record_out) {
     MalValue method;
-    if (!mal_vm_get_property(vm, value, mal_intrinsic_symbol_key(vm, MAL_INTRINSIC_SYMBOL_ITERATOR), &method)) {
+    MalKey key = mal_intrinsic_symbol_key(vm, MAL_INTRINSIC_SYMBOL_ITERATOR);
+    if (!mal_vm_watched_inherited_get(vm, value, key, &method) &&
+        !mal_vm_get_property(vm, value, key, &method)) {
         return false;
     }
 
@@ -719,7 +776,9 @@ bool mal_vm_get_iterator_from_method(
     MalValue roots[2] = {completion.value, mal_value_new_undefined()};
     MalRootSpan roots_span;
     mal_gc_root(&roots_span, roots, 2);
-    if (!mal_vm_get_property(vm, roots[0], mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_NEXT), &roots[1])) {
+    MalKey next_key = mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_NEXT);
+    if (!mal_vm_watched_inherited_get(vm, roots[0], next_key, &roots[1]) &&
+        !mal_vm_get_property(vm, roots[0], next_key, &roots[1])) {
         mal_gc_unroot(&roots_span);
         return false;
     }
@@ -952,7 +1011,9 @@ bool mal_vm_iterator_close_normal(MalVm *vm, const MalIteratorRecord *record) {
 
 static bool mal_vm_iterator_close_normal_impl(MalVm *vm, const MalIteratorRecord *record) {
     MalValue return_method;
-    if (!mal_vm_get_property(vm, record->iterator, mal_intrinsic_string_key(vm, "return"), &return_method)) {
+    MalKey return_key = mal_intrinsic_string_key(vm, "return");
+    if (!mal_vm_watched_inherited_get(vm, record->iterator, return_key, &return_method) &&
+        !mal_vm_get_property(vm, record->iterator, return_key, &return_method)) {
         return false; // a throwing return getter propagates
     }
 

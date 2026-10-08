@@ -1404,6 +1404,14 @@ typedef struct MalGlobalPropertyCacheEntry {
  * ordinary accesses are sufficient. A future multi-mutator VM must make bumps
  * release operations and region snapshots acquire operations.
  */
+#define MAL_WATCHED_LOOKUP_CACHE_CAPACITY 16
+
+typedef struct MalWatchedLookupEntry {
+    const struct MalObject *prototype;
+    MalValue key;
+    MalValue value;
+} MalWatchedLookupEntry;
+
 typedef struct MalSemanticEpochs {
     /** Advanced by every semantic-family invalidation; future re-entry dirty test. */
     u64 activity;
@@ -1736,6 +1744,14 @@ typedef struct MalVm {
      * vocabulary. Entries are content-validated; the atom table owns the strings.
      */
     MalAsciiAtomCacheEntry ascii_atom_cache[MAL_ASCII_ATOM_CACHE_CAPACITY];
+
+    /**
+     * Data properties that iteration protocols inherit through watched built-in
+     * prototypes, keyed by the receiver's prototype. Entries are consulted only
+     * while mal_primitive_method_protector holds; the prototype keeps each value
+     * reachable.
+     */
+    MalWatchedLookupEntry watched_lookup_cache[MAL_WATCHED_LOOKUP_CACHE_CAPACITY];
 
     /**
      * Lazily interned Latin-1 one-code-unit strings. The atom table owns and roots
