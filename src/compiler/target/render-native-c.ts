@@ -150,8 +150,57 @@ function captureValueKey(ownerFunctionIndex: number, capturedIndex: number): str
 	return `${ownerFunctionIndex}:${capturedIndex}`;
 }
 
+interface NativeNumericFusionCandidate {
+	readonly instructionIp: number;
+	readonly finishIp: number;
+	readonly action: NativeNumericFusionAction;
+}
+
+interface NativeRegionTopology {
+	readonly actionsByKind: ReadonlyMap<VmRegion["kind"], ReadonlyArray<VmRegionAction>>;
+	readonly stringSplitProjections: ReadonlyArray<{
+		readonly projection: NativeStringSplitProjection;
+		readonly elementLoads: NativeStringSplitProjectionSite["elementLoads"];
+	}>;
+	readonly stringSplitCursors: ReadonlyArray<NativeStringSplitCursor>;
+	readonly regexpExecProjections: ReadonlyArray<{
+		readonly projection: NativeRegExpExecProjection;
+		readonly loads: NativeRegExpExecProjectionSite["loads"];
+	}>;
+	readonly regexpIteratorProjections: ReadonlyArray<{
+		readonly projection: NativeRegExpIteratorProjection;
+		readonly loads: NativeRegExpIteratorProjectionSite["loads"];
+	}>;
+	readonly numericFusionCandidates: ReadonlyArray<NativeNumericFusionCandidate>;
+	readonly indexedLengthLoopActionByIp: ReadonlyMap<number, IndexedLengthLoopAction>;
+	readonly nativeStringCharCodeAtChainActionByIp: ReadonlyMap<
+		number,
+		NativeStringCharCodeAtChainAction
+	>;
+	readonly nativeBuiltinCollectionCallChainActionByIp: ReadonlyMap<
+		number,
+		NativeBuiltinCollectionCallChainAction
+	>;
+	readonly nativeIteratorCursorActionByIp: ReadonlyMap<
+		number,
+		NativeIteratorCursorAction
+	>;
+	readonly nativeIteratorResultVirtualizationActionByIp: ReadonlyMap<
+		number,
+		NativeIteratorResultVirtualizationAction
+	>;
+	readonly nativeIteratorEntryPairVirtualizationActionByIp: ReadonlyMap<
+		number,
+		NativeIteratorEntryPairVirtualizationAction
+	>;
+}
+
 interface NativeBodyAnalysis {
 	readonly captures: NativeCaptureAccessPlan;
+	readonly regionTopology: (
+		specializations: ReadonlyArray<VmRegion>,
+		regionActions: ReadonlyArray<VmRegionAction>,
+	) => NativeRegionTopology;
 	readonly captureOwners: ReadonlyArray<number>;
 	readonly stableCaptureOwners: ReadonlySet<number>;
 	readonly copiedCaptures: ReadonlyMap<string, number>;
@@ -192,9 +241,27 @@ function analyzeNativeBody(
 		)
 			iterationEligibilityRegisters.add(instruction.dst);
 	}
+	const regionTopologies = new Map<
+		ReadonlyArray<VmRegionAction>,
+		{ specializations: ReadonlyArray<VmRegion>; topology: NativeRegionTopology }
+	>();
+	let emptyRegionTopology: NativeRegionTopology | undefined;
 	let writeRegistersByIp: Array<ReadonlyArray<number>> | undefined;
 	return {
 		captures,
+		regionTopology(specializations, regionActions) {
+			if (specializations.length === 0 && regionActions.length === 0)
+				return (emptyRegionTopology ??= analyzeNativeRegionTopology(
+					fn,
+					specializations,
+					regionActions,
+				));
+			const previous = regionTopologies.get(regionActions);
+			if (previous?.specializations === specializations) return previous.topology;
+			const topology = analyzeNativeRegionTopology(fn, specializations, regionActions);
+			regionTopologies.set(regionActions, { specializations, topology });
+			return topology;
+		},
 		writeRegistersAt: (ip) =>
 			((writeRegistersByIp ??= [])[ip] ??= vmInstructionWriteRegisters(
 				fn.instructions[ip]!,
@@ -856,10 +923,14 @@ function emitCompiledVariant(
 	// EMPTY parameter and read through the TDZ-checked LOAD_THIS / RETURN forms.
 	const thisSlot = fn.isDerivedConstructor ? slotCount : -1;
 	const stackSlotsBase = slotCount + (fn.isDerivedConstructor ? 1 : 0);
+	const topology = analysis.regionTopology(
+		nativeContract.specializations,
+		nativeContract.regionActions,
+	);
 	const directHeapObjectIps = new Set(storage.directHeapObjectIps);
 	const stackObjectSites = new Map<number, StackObjectSite>();
 	let nextStackSlot = stackSlotsBase;
-	for (const action of nativeContract.regionActions) {
+	for (const action of topology.actionsByKind.get("stack-object-plan") ?? []) {
 		const region = nativeContract.specializations[action.regionIndex];
 		if (region?.kind !== "stack-object-plan" || action.role !== "allocate") continue;
 		const site = region.sites[action.primaryIndex ?? -1];
@@ -906,7 +977,7 @@ function emitCompiledVariant(
 	const stackObjectMaterializations = new Map<number, StackObjectSite>();
 	const stackObjectAccesses = new Map<number, { site: StackObjectSite; slot: number }>();
 	const stackObjectInheritedAccesses = new Map<number, StackObjectSite>();
-	for (const action of nativeContract.regionActions) {
+	for (const action of topology.actionsByKind.get("stack-object-plan") ?? []) {
 		const region = nativeContract.specializations[action.regionIndex];
 		if (region?.kind !== "stack-object-plan" || action.role === "allocate") continue;
 		const planSite = region.sites[action.primaryIndex ?? -1];
@@ -973,29 +1044,7 @@ function emitCompiledVariant(
 		}
 	}
 	const stringSplitProjectionSites = new Map<number, NativeStringSplitProjectionSite>();
-	for (const projection of nativeContract.specializations.filter(
-		(region): region is NativeStringSplitProjection =>
-			region.kind === "string-split-projection",
-	)) {
-		const elementLoads = projection.loads
-			.filter(
-				(
-					load,
-				): load is NativeStringSplitProjection["loads"][number] & {
-					kind: "element";
-					index: number;
-				} => load.kind === "element" && load.index !== undefined,
-			)
-			.sort((left, right) => left.index - right.index);
-		if (
-			elementLoads.length === 0 ||
-			elementLoads.length > 8 ||
-			stringSplitProjectionSites.has(projection.callIp)
-		) {
-			throw new Error(
-				`Invalid Core string-split projection at instruction ${projection.callIp}`,
-			);
-		}
+	for (const { projection, elementLoads } of topology.stringSplitProjections) {
 		stringSplitProjectionSites.set(projection.callIp, {
 			projection,
 			slotsOffset: nextStackSlot,
@@ -1005,16 +1054,10 @@ function emitCompiledVariant(
 		nextStackSlot += elementLoads.length;
 	}
 	const stringSplitCursorSites = new Map<number, NativeStringSplitCursorSite>();
-	const stringSplitCursorRegions = nativeContract.specializations.filter(
-		(region): region is NativeStringSplitCursor => region.kind === "string-split-cursor",
-	);
-	for (const cursor of stringSplitCursorRegions) {
+	for (const cursor of topology.stringSplitCursors) {
 		const callIp = cursor.anchors[0]!;
 		const lengthIp = cursor.anchors[2]!;
 		const backedgeIp = cursor.anchors[3]!;
-		if (stringSplitCursorSites.has(callIp)) {
-			throw new Error(`Duplicate Core string-split cursor at instruction ${callIp}`);
-		}
 		const hoistTrimIdentity = cursor.trimIdentity === "runtime-guarded";
 		stringSplitCursorSites.set(callIp, {
 			cursor,
@@ -1032,27 +1075,7 @@ function emitCompiledVariant(
 		nextStackSlot += hoistTrimIdentity ? 3 : 2;
 	}
 	const regexpExecProjectionSites = new Map<number, NativeRegExpExecProjectionSite>();
-	for (const projection of nativeContract.specializations.filter(
-		(region): region is Extract<VmRegion, { kind: "regexp-exec-projection" }> =>
-			region.kind === "regexp-exec-projection",
-	)) {
-		const loads = [...projection.loads].sort(
-			(left, right) => left.captureIndex - right.captureIndex,
-		);
-		if (
-			loads.length === 0 ||
-			loads.length > 8 ||
-			regexpExecProjectionSites.has(projection.callIp) ||
-			loads.some(
-				(load, index) =>
-					load.captureIndex <= 0 ||
-					(index > 0 && loads[index - 1]!.captureIndex >= load.captureIndex),
-			)
-		) {
-			throw new Error(
-				`Invalid Core RegExp.exec projection at instruction ${projection.callIp}`,
-			);
-		}
+	for (const { projection, loads } of topology.regexpExecProjections) {
 		regexpExecProjectionSites.set(projection.callIp, {
 			projection,
 			subjectSlot: nextStackSlot,
@@ -1065,27 +1088,7 @@ function emitCompiledVariant(
 		number,
 		NativeRegExpIteratorProjectionSite
 	>();
-	for (const projection of nativeContract.specializations.filter(
-		(region): region is Extract<VmRegion, { kind: "regexp-iterator-projection" }> =>
-			region.kind === "regexp-iterator-projection",
-	)) {
-		const loads = [...projection.loads].sort(
-			(left, right) => left.captureIndex - right.captureIndex,
-		);
-		if (
-			loads.length === 0 ||
-			loads.length > 8 ||
-			regexpIteratorProjectionSites.has(projection.stepIp) ||
-			loads.some(
-				(load, index) =>
-					load.captureIndex <= 0 ||
-					(index > 0 && loads[index - 1]!.captureIndex >= load.captureIndex),
-			)
-		) {
-			throw new Error(
-				`Invalid Core RegExp iterator projection at instruction ${projection.stepIp}`,
-			);
-		}
+	for (const { projection, loads } of topology.regexpIteratorProjections) {
 		regexpIteratorProjectionSites.set(projection.stepIp, {
 			projection,
 			subjectSlot: nextStackSlot,
@@ -2248,7 +2251,7 @@ interface NativeStringSplitProjectionSite {
 	projection: NativeStringSplitProjection;
 	slotsOffset: number;
 	lockedIdentity: boolean;
-	elementLoads: Array<
+	elementLoads: ReadonlyArray<
 		NativeStringSplitProjection["loads"][number] & {
 			kind: "element";
 			index: number;
@@ -2292,7 +2295,7 @@ interface NativeRegExpExecProjectionSite {
 	projection: NativeRegExpExecProjection;
 	subjectSlot: number;
 	slotsOffset: number;
-	loads: Array<NativeRegExpExecProjection["loads"][number]>;
+	loads: ReadonlyArray<NativeRegExpExecProjection["loads"][number]>;
 }
 
 interface NativeRegExpExecProjectionAction {
@@ -2323,7 +2326,7 @@ interface NativeRegExpIteratorProjectionSite {
 	projection: NativeRegExpIteratorProjection;
 	subjectSlot: number;
 	slotsOffset: number;
-	loads: Array<NativeRegExpIteratorProjection["loads"][number]>;
+	loads: ReadonlyArray<NativeRegExpIteratorProjection["loads"][number]>;
 }
 
 interface NativeRegExpIteratorProjectionAction {
@@ -2682,89 +2685,110 @@ function emitStringSwitch(
 	return { lines, strategy };
 }
 
-/**
- * Emit the instruction body, with labels at jump targets and gotos for jumps.
- * Returns null if any instruction is not yet lowerable.
- */
-function emitBody(
+function analyzeNativeRegionTopology(
 	fn: BytecodeFunction,
-	analysis: NativeBodyAnalysis,
-	functionIndex: number,
 	specializations: ReadonlyArray<VmRegion>,
 	regionActions: ReadonlyArray<VmRegionAction>,
-	nativeInstructions: ReadonlyArray<NativeInstructionPlan | undefined>,
-	inactiveRootMasks: ReadonlyMap<number, NativeInactiveRootMask>,
-	inactiveRootMaskTails: ReadonlyMap<NativeInactiveRootMask, string>,
-	gcSafepointKinds: ReadonlyMap<
-		number,
-		NativeFunctionPlan["gc"]["safepoints"][number]["kind"]
-	>,
-	suffix: string,
-	reps: Array<RegisterRep>,
-	debug: boolean,
-	gcUnlink: string,
-	thisSlot: number,
-	coro: CoroutineContext | null,
-	stackObjectSites: ReadonlyMap<number, StackObjectSite>,
-	stackObjectAccesses: ReadonlyMap<number, { site: StackObjectSite; slot: number }>,
-	stackObjectMaterializations: ReadonlyMap<number, StackObjectSite>,
-	stackObjectInheritedAccesses: ReadonlyMap<number, StackObjectSite>,
-	stringSplitProjectionSites: ReadonlyMap<number, NativeStringSplitProjectionSite>,
-	stringSplitCursorSites: ReadonlyMap<number, NativeStringSplitCursorSite>,
-	regexpExecProjectionSites: ReadonlyMap<number, NativeRegExpExecProjectionSite>,
-	regexpIteratorProjectionSites: ReadonlyMap<number, NativeRegExpIteratorProjectionSite>,
-	directCompiledTargets: ReadonlySet<number>,
-	directCompiledEntries: DirectCompiledEntries,
-	directResultRepresentation: VmRegisterRepresentation | undefined,
-	watchedMethodsGuard: VmGuardPlan | undefined,
-	profileDecisions: Array<BackendProfileDecision>,
-	relocation: NativeRelocationExpressions = nativeRelocationExpressions(false),
-	strictCompiledTargets: ReadonlySet<number> = new Set(),
-	directArgumentRepresentations?: ReadonlyArray<VmRegisterRepresentation>,
-	directConstantBooleans: ReadonlyMap<number, boolean> = new Map(),
-	directFields?: NativeDirectEntryPlan["fieldParameters"],
-	fieldCalls?: ReadonlyArray<NativeFieldCall>,
-	literalSwitches?: NativeFunctionPlan["literalSwitches"],
-	stringConstants: ReadonlyArray<ReadonlyArray<number>> = [],
-	rootPublication?: NativeRootPublication,
-	expressionIps: ReadonlySet<number> = new Set(),
-	rematerializedConstantIps: ReadonlySet<number> = new Set(),
-	elidedTdzIps: ReadonlySet<number> = new Set(),
-	fastPathPlans: NativeFastPathPlans = {
-		literalPropertyDefinitions: [],
-		mathCalls: [],
-		numberPredicates: [],
-		stringTransforms: [],
-		propertyProjections: [],
-		propertyNumericUpdates: [],
-		propertyReadRegions: [],
-		propertyReadPairs: [],
-		pairedArrayLoops: [],
-		arrayPresence: [],
-		arrayPairDestructure: [],
-	},
-	callTransports: ReadonlyArray<NativeCallTransportPlan> = [],
-	callbackTransports: ReadonlyArray<NativeCallbackTransportPlan> = [],
-	rootPublicationContinuations: ReadonlySet<number> = new Set(),
-): EmittedBody | null {
+): NativeRegionTopology {
 	if (!vmRegionActionsAreCurrent(specializations, regionActions)) {
 		throw new Error("Native function has stale region actions");
 	}
-	const callTransportByIp = new Map(
-		callTransports.map((plan) => [plan.instructionIp, plan]),
-	);
-	const callbackTransportByIp = new Map(
-		callbackTransports.map((plan) => [plan.instructionIp, plan]),
-	);
-	const expressionLocals = new Set(
-		[...expressionIps].map((ip) => {
-			const op = fn.instructions[ip]!;
-			if (!("dst" in op)) throw new Error("Native expression lacks a destination");
-			return op.dst;
-		}),
-	);
-	const { stableCaptureOwners, copiedCaptures, requiredCaptureOwners } = analysis;
-	const numericFusionActionByIp = new Map<number, NativeNumericFusionAction>();
+	const actionsByKind = new Map<VmRegion["kind"], Array<VmRegionAction>>();
+	for (const action of regionActions) {
+		const kind = specializations[action.regionIndex]!.kind;
+		const actions = actionsByKind.get(kind) ?? [];
+		actions.push(action);
+		actionsByKind.set(kind, actions);
+	}
+	const stringSplitProjections: Array<
+		NativeRegionTopology["stringSplitProjections"][number]
+	> = [];
+	const stringSplitCursors: Array<NativeStringSplitCursor> = [];
+	const regexpExecProjections: Array<
+		NativeRegionTopology["regexpExecProjections"][number]
+	> = [];
+	const regexpIteratorProjections: Array<
+		NativeRegionTopology["regexpIteratorProjections"][number]
+	> = [];
+	const seenSplitCalls = new Set<number>();
+	const seenCursorCalls = new Set<number>();
+	const seenExecCalls = new Set<number>();
+	const seenIteratorSteps = new Set<number>();
+	for (const projection of specializations) {
+		if (projection.kind === "string-split-projection") {
+			const elementLoads = projection.loads
+				.filter(
+					(
+						load,
+					): load is NativeStringSplitProjection["loads"][number] & {
+						kind: "element";
+						index: number;
+					} => load.kind === "element" && load.index !== undefined,
+				)
+				.sort((left, right) => left.index - right.index);
+			if (
+				elementLoads.length === 0 ||
+				elementLoads.length > 8 ||
+				seenSplitCalls.has(projection.callIp)
+			) {
+				throw new Error(
+					`Invalid Core string-split projection at instruction ${projection.callIp}`,
+				);
+			}
+
+			seenSplitCalls.add(projection.callIp);
+			stringSplitProjections.push({ projection, elementLoads });
+		} else if (projection.kind === "string-split-cursor") {
+			const callIp = projection.anchors[0]!;
+			if (seenCursorCalls.has(callIp))
+				throw new Error(`Duplicate Core string-split cursor at instruction ${callIp}`);
+			seenCursorCalls.add(callIp);
+			stringSplitCursors.push(projection);
+		} else if (projection.kind === "regexp-exec-projection") {
+			const loads = [...projection.loads].sort(
+				(left, right) => left.captureIndex - right.captureIndex,
+			);
+			if (
+				loads.length === 0 ||
+				loads.length > 8 ||
+				seenExecCalls.has(projection.callIp) ||
+				loads.some(
+					(load, index) =>
+						load.captureIndex <= 0 ||
+						(index > 0 && loads[index - 1]!.captureIndex >= load.captureIndex),
+				)
+			) {
+				throw new Error(
+					`Invalid Core RegExp.exec projection at instruction ${projection.callIp}`,
+				);
+			}
+
+			seenExecCalls.add(projection.callIp);
+			regexpExecProjections.push({ projection, loads });
+		} else if (projection.kind === "regexp-iterator-projection") {
+			const loads = [...projection.loads].sort(
+				(left, right) => left.captureIndex - right.captureIndex,
+			);
+			if (
+				loads.length === 0 ||
+				loads.length > 8 ||
+				seenIteratorSteps.has(projection.stepIp) ||
+				loads.some(
+					(load, index) =>
+						load.captureIndex <= 0 ||
+						(index > 0 && loads[index - 1]!.captureIndex >= load.captureIndex),
+				)
+			) {
+				throw new Error(
+					`Invalid Core RegExp iterator projection at instruction ${projection.stepIp}`,
+				);
+			}
+
+			seenIteratorSteps.add(projection.stepIp);
+			regexpIteratorProjections.push({ projection, loads });
+		}
+	}
+	const numericFusionCandidates: Array<NativeNumericFusionCandidate> = [];
 	for (const action of regionActions) {
 		const region = specializations[action.regionIndex];
 		if (region?.kind !== "numeric-fusion") continue;
@@ -2777,22 +2801,20 @@ function emitBody(
 		if (
 			first?.opcode !== "BINARY" ||
 			finish?.opcode !== "BINARY" ||
-			action.ip !== (action.role === "start" ? pair.firstIp : pair.finishIp) ||
-			numericFusionActionByIp.has(action.ip)
+			action.ip !== (action.role === "start" ? pair.firstIp : pair.finishIp)
 		) {
 			throw new Error("Invalid numeric-fusion region");
 		}
-		if (
-			nativeInstructions[pair.firstIp]?.kind === "unsigned-arithmetic" ||
-			nativeInstructions[pair.finishIp]?.kind === "unsigned-arithmetic"
-		)
-			continue;
 		const common = {
 			id: pair.firstIp,
 			first,
 			truncating: region.representation === "binary-pairs-truncating-i32",
 		};
-		numericFusionActionByIp.set(action.ip, { ...common, role: action.role });
+		numericFusionCandidates.push({
+			instructionIp: action.ip,
+			finishIp: pair.finishIp,
+			action: { ...common, role: action.role },
+		});
 	}
 	const indexedLengthLoopActionByIp = new Map<number, IndexedLengthLoopAction>();
 	for (const action of regionActions) {
@@ -2900,24 +2922,6 @@ function emitBody(
 			...(element === undefined ? {} : { element }),
 		});
 	}
-	const nativeArrayPresenceProjectionActionByIp = new Map<
-		number,
-		NativeArrayPresenceProjectionAction
-	>();
-	for (const plan of fastPathPlans.arrayPresence) {
-		const indexed = indexedLengthLoopActionByIp.get(plan.loadIp);
-		if (indexed === undefined || indexed.role !== "element")
-			throw new Error("Invalid native array presence reference");
-		for (const [ip, role] of [
-			[plan.membershipIp, "membership"],
-			[plan.loadIp, "load"],
-		] as const)
-			nativeArrayPresenceProjectionActionByIp.set(ip, {
-				role,
-				membershipIp: plan.membershipIp,
-				indexed,
-			});
-	}
 	const nativeStringCharCodeAtChainActionByIp = new Map<
 		number,
 		NativeStringCharCodeAtChainAction
@@ -3013,6 +3017,135 @@ function emitBody(
 			});
 		}
 	}
+	return {
+		actionsByKind,
+		stringSplitProjections,
+		stringSplitCursors,
+		regexpExecProjections,
+		regexpIteratorProjections,
+		numericFusionCandidates,
+		indexedLengthLoopActionByIp,
+		nativeStringCharCodeAtChainActionByIp,
+		nativeBuiltinCollectionCallChainActionByIp,
+		nativeIteratorCursorActionByIp,
+		nativeIteratorResultVirtualizationActionByIp,
+		nativeIteratorEntryPairVirtualizationActionByIp,
+	};
+}
+
+function emitBody(
+	fn: BytecodeFunction,
+	analysis: NativeBodyAnalysis,
+	functionIndex: number,
+	specializations: ReadonlyArray<VmRegion>,
+	regionActions: ReadonlyArray<VmRegionAction>,
+	nativeInstructions: ReadonlyArray<NativeInstructionPlan | undefined>,
+	inactiveRootMasks: ReadonlyMap<number, NativeInactiveRootMask>,
+	inactiveRootMaskTails: ReadonlyMap<NativeInactiveRootMask, string>,
+	gcSafepointKinds: ReadonlyMap<
+		number,
+		NativeFunctionPlan["gc"]["safepoints"][number]["kind"]
+	>,
+	suffix: string,
+	reps: Array<RegisterRep>,
+	debug: boolean,
+	gcUnlink: string,
+	thisSlot: number,
+	coro: CoroutineContext | null,
+	stackObjectSites: ReadonlyMap<number, StackObjectSite>,
+	stackObjectAccesses: ReadonlyMap<number, { site: StackObjectSite; slot: number }>,
+	stackObjectMaterializations: ReadonlyMap<number, StackObjectSite>,
+	stackObjectInheritedAccesses: ReadonlyMap<number, StackObjectSite>,
+	stringSplitProjectionSites: ReadonlyMap<number, NativeStringSplitProjectionSite>,
+	stringSplitCursorSites: ReadonlyMap<number, NativeStringSplitCursorSite>,
+	regexpExecProjectionSites: ReadonlyMap<number, NativeRegExpExecProjectionSite>,
+	regexpIteratorProjectionSites: ReadonlyMap<number, NativeRegExpIteratorProjectionSite>,
+	directCompiledTargets: ReadonlySet<number>,
+	directCompiledEntries: DirectCompiledEntries,
+	directResultRepresentation: VmRegisterRepresentation | undefined,
+	watchedMethodsGuard: VmGuardPlan | undefined,
+	profileDecisions: Array<BackendProfileDecision>,
+	relocation: NativeRelocationExpressions = nativeRelocationExpressions(false),
+	strictCompiledTargets: ReadonlySet<number> = new Set(),
+	directArgumentRepresentations?: ReadonlyArray<VmRegisterRepresentation>,
+	directConstantBooleans: ReadonlyMap<number, boolean> = new Map(),
+	directFields?: NativeDirectEntryPlan["fieldParameters"],
+	fieldCalls?: ReadonlyArray<NativeFieldCall>,
+	literalSwitches?: NativeFunctionPlan["literalSwitches"],
+	stringConstants: ReadonlyArray<ReadonlyArray<number>> = [],
+	rootPublication?: NativeRootPublication,
+	expressionIps: ReadonlySet<number> = new Set(),
+	rematerializedConstantIps: ReadonlySet<number> = new Set(),
+	elidedTdzIps: ReadonlySet<number> = new Set(),
+	fastPathPlans: NativeFastPathPlans = {
+		literalPropertyDefinitions: [],
+		mathCalls: [],
+		numberPredicates: [],
+		stringTransforms: [],
+		propertyProjections: [],
+		propertyNumericUpdates: [],
+		propertyReadRegions: [],
+		propertyReadPairs: [],
+		pairedArrayLoops: [],
+		arrayPresence: [],
+		arrayPairDestructure: [],
+	},
+	callTransports: ReadonlyArray<NativeCallTransportPlan> = [],
+	callbackTransports: ReadonlyArray<NativeCallbackTransportPlan> = [],
+	rootPublicationContinuations: ReadonlySet<number> = new Set(),
+): EmittedBody | null {
+	const callTransportByIp = new Map(
+		callTransports.map((plan) => [plan.instructionIp, plan]),
+	);
+	const callbackTransportByIp = new Map(
+		callbackTransports.map((plan) => [plan.instructionIp, plan]),
+	);
+	const expressionLocals = new Set(
+		[...expressionIps].map((ip) => {
+			const op = fn.instructions[ip]!;
+			if (!("dst" in op)) throw new Error("Native expression lacks a destination");
+			return op.dst;
+		}),
+	);
+	const { stableCaptureOwners, copiedCaptures, requiredCaptureOwners } = analysis;
+	const topology = analysis.regionTopology(specializations, regionActions);
+	const {
+		indexedLengthLoopActionByIp,
+		nativeStringCharCodeAtChainActionByIp,
+		nativeBuiltinCollectionCallChainActionByIp,
+		nativeIteratorCursorActionByIp,
+		nativeIteratorResultVirtualizationActionByIp,
+		nativeIteratorEntryPairVirtualizationActionByIp,
+	} = topology;
+	const numericFusionActionByIp = new Map<number, NativeNumericFusionAction>();
+	for (const candidate of topology.numericFusionCandidates) {
+		if (numericFusionActionByIp.has(candidate.instructionIp))
+			throw new Error("Invalid numeric-fusion region");
+		if (
+			nativeInstructions[candidate.action.id]?.kind === "unsigned-arithmetic" ||
+			nativeInstructions[candidate.finishIp]?.kind === "unsigned-arithmetic"
+		)
+			continue;
+		numericFusionActionByIp.set(candidate.instructionIp, candidate.action);
+	}
+	const nativeArrayPresenceProjectionActionByIp = new Map<
+		number,
+		NativeArrayPresenceProjectionAction
+	>();
+	for (const plan of fastPathPlans.arrayPresence) {
+		const indexed = indexedLengthLoopActionByIp.get(plan.loadIp);
+		if (indexed === undefined || indexed.role !== "element")
+			throw new Error("Invalid native array presence reference");
+		for (const [ip, role] of [
+			[plan.membershipIp, "membership"],
+			[plan.loadIp, "load"],
+		] as const)
+			nativeArrayPresenceProjectionActionByIp.set(ip, {
+				role,
+				membershipIp: plan.membershipIp,
+				indexed,
+			});
+	}
 	const nativeArrayPairDestructureActionByIp = new Map<
 		number,
 		NativeArrayPairDestructureAction
@@ -3059,7 +3192,7 @@ function emitBody(
 		number,
 		NativeStringSplitProjectionAction
 	>();
-	for (const action of regionActions) {
+	for (const action of topology.actionsByKind.get("string-split-projection") ?? []) {
 		const projection = specializations[action.regionIndex];
 		if (projection?.kind !== "string-split-projection") continue;
 		const site = stringSplitProjectionSites.get(projection.callIp);
@@ -3096,7 +3229,7 @@ function emitBody(
 		number,
 		NativeStringSplitCursorAction
 	>();
-	for (const action of regionActions) {
+	for (const action of topology.actionsByKind.get("string-split-cursor") ?? []) {
 		const cursor = specializations[action.regionIndex];
 		if (cursor?.kind !== "string-split-cursor") continue;
 		const site = stringSplitCursorSites.get(cursor.anchors[0]!);
@@ -3130,7 +3263,7 @@ function emitBody(
 		number,
 		NativeRegExpExecProjectionAction
 	>();
-	for (const action of regionActions) {
+	for (const action of topology.actionsByKind.get("regexp-exec-projection") ?? []) {
 		const projection = specializations[action.regionIndex];
 		if (projection?.kind !== "regexp-exec-projection") continue;
 		const site = regexpExecProjectionSites.get(projection.callIp);
@@ -3159,7 +3292,7 @@ function emitBody(
 		number,
 		NativeRegExpIteratorProjectionAction
 	>();
-	for (const action of regionActions) {
+	for (const action of topology.actionsByKind.get("regexp-iterator-projection") ?? []) {
 		const projection = specializations[action.regionIndex];
 		if (projection?.kind !== "regexp-iterator-projection") continue;
 		const site = regexpIteratorProjectionSites.get(projection.stepIp);
@@ -3184,7 +3317,7 @@ function emitBody(
 		number,
 		NativeStringSliceNumberFusionAction
 	>();
-	for (const action of regionActions) {
+	for (const action of topology.actionsByKind.get("string-slice-number") ?? []) {
 		const fusion = specializations[action.regionIndex];
 		if (fusion?.kind !== "string-slice-number") continue;
 		const lockedIdentity = fusion.builtinIdentities === "authority-invariant";

@@ -119,7 +119,11 @@ Read/write occurrences, branch sources, handler and resume entries, and handler
 targets are shared by storage and fast-path consumers. Root profitability builds
 ordinary-edge loop and cycle indexes lazily in the same invocation; incoming-root
 costs remain specific to each entry. C rendering shares immutable body analysis
-within one image emission and keeps entry representations and region overlays local.
+within one image emission. Region topology, ordered actions and sorted projection
+loads are validated once for each body/region identity and reused by canonical
+entries, typed entries and availability passes. Physical slots, generated names,
+entry representations and unsigned-fusion suppression remain local to each variant.
+A fresh emission rebuilds this analysis after image mutation.
 
 Capture-owner access is also a persisted native plan. It records external owner
 lookups, original copied-value descriptor ordinals, and eligibility for direct
