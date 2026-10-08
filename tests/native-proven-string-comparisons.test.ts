@@ -69,12 +69,12 @@ describe("proven String comparisons in boxed storage", () => {
 				new Set(),
 				image.runtime.stringConstants,
 			)!;
-			expect(c).toContain(
+			expect(c.source).toContain(
 				["<", "<=", ">", ">="].includes(operator)
 					? "mal_string_compare("
 					: "mal_string_equals(",
 			);
-			expect(c).not.toContain("mal_ops_is_number(");
+			expect(c.source).not.toContain("mal_ops_is_number(");
 			const instructions = [...fn.instructions];
 			instructions[ip] = {
 				kind: "exact-operator-input-kinds",
@@ -105,8 +105,8 @@ describe("proven String comparisons in boxed storage", () => {
 				`function compute(left,right){return ${expression};}globalThis.compute=compute;`,
 				"compute",
 			);
-			expect(out.c).not.toContain("mal_string_compare(");
-			expect(out.c).not.toContain("mal_string_equals(");
+			expect(out.c.source).not.toContain("mal_string_compare(");
+			expect(out.c.source).not.toContain("mal_string_equals(");
 		}
 	});
 });

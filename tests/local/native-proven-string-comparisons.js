@@ -86,6 +86,23 @@ for (const [left, right] of pairs) {
 	for (const kernel of globalThis.stringKernels) results.push(kernel(a, b, gc));
 	console.log(results.join(","), trace.join(""));
 }
+globalThis.freshStringWidth = 257;
+for (let round = 0; round < 4; round++) {
+	const left = {
+		toString() {
+			return "fresh".repeat(globalThis.freshStringWidth) + round;
+		},
+	};
+	const right = {
+		toString() {
+			gc();
+			return "fresh".repeat(globalThis.freshStringWidth) + round;
+		},
+	};
+	console.log(
+		globalThis.stringKernels.map((kernel) => kernel(left, right, gc)).join(","),
+	);
+}
 const trace = [];
 function value(name, result) {
 	return {
