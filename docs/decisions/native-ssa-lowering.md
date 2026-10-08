@@ -55,6 +55,12 @@ zero and signed or unsigned bitwise results. Selected expression destinations ha
 no physical root slot; validation rebuilds roots from the stored expression subset
 when an artifact retains a producer. Phi-copy consumers retain the same physical
 scalar leaf restriction as other value boundaries.
+Single-write boxed SSA operator results also omit roots when existing operand
+proofs guarantee an immediate Number or Boolean. This does not move their
+evaluation or remove their assignment; repeated uses and intervening calls retain
+ordinary boxed locals initialized to undefined. Logical GC liveness stays intact,
+and validation rederives the physical exclusion per variant. Parameters, raw
+storage, opaque or borrowed locals and suspension snapshots retain their roots.
 
 Scalar locals initialize at their definition when all reads follow it in the same
 straight-line block. Bounded direct bodies without handler or resume entries also

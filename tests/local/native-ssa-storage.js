@@ -1,5 +1,63 @@
 const gc = globalThis.__mal_collect_garbage ?? (() => {});
 
+let immediateSaved;
+function storedImmediateProduct(left, right, gate) {
+	const a = +left,
+		b = +right;
+	const value = a * b;
+	immediateSaved = value;
+	gate();
+	return value;
+}
+function immediateCapture() {
+	let saved;
+	function storedCapturedProduct(left, right, gate) {
+		const a = +left,
+			b = +right;
+		const value = a * b;
+		saved = value;
+		gate();
+		return value;
+	}
+	return {
+		compute: storedCapturedProduct,
+		read() {
+			return saved;
+		},
+	};
+}
+globalThis.storedImmediateProduct = storedImmediateProduct;
+globalThis.immediateCapture = immediateCapture;
+const immediateClosure = immediateCapture();
+for (const [left, right] of [
+	[-0, 3],
+	[0, -0],
+	[NaN, 1],
+	[Infinity, 0],
+	[Number.MIN_VALUE, 2],
+	[1e308, 2],
+	[7, 3],
+]) {
+	const first = storedImmediateProduct(left, right, () => {
+		immediateSaved = { marker: "replaced" };
+		gc();
+	});
+	const second = immediateClosure.compute(left, right, () => {
+		gc();
+		const cell = immediateClosure.read();
+		console.log("immediate-cell", String(cell), Object.is(cell, -0));
+	});
+	gc();
+	console.log(
+		"immediate-storage",
+		String(first),
+		Object.is(first, -0),
+		String(second),
+		Object.is(second, -0),
+		immediateSaved.marker,
+	);
+}
+
 function composedIncrement(left) {
 	let value = +left;
 	return ++value * 2;

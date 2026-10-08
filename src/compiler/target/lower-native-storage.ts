@@ -855,22 +855,45 @@ export function nativeVariantContract(
 	};
 }
 
+function untracedOperatorRegisters(
+	native: NativeFunctionPlan,
+	body: NativeStorageBodyFacts,
+	{ blocked, borrowed }: NativeScalarOwnership,
+): ReadonlySet<number> {
+	const registers = new Set<number>();
+	if (native.storageValues === undefined) return registers;
+	for (const [ip, op] of native.body.instructions.entries()) {
+		if (op.opcode !== "UNARY" && op.opcode !== "BINARY") continue;
+		if (
+			!blocked.has(ip) &&
+			!borrowed.has(op.dst) &&
+			op.dst >= native.body.parameterCount + native.body.argumentSnapshotCount &&
+			native.storageValues[op.dst]! >= 0 &&
+			body.writeCounts[op.dst] === 1 &&
+			native.registerRepresentations[op.dst] === "boxed" &&
+			pureScalarOperation(op, native.registerRepresentations, native.instructions[ip])
+		)
+			registers.add(op.dst);
+	}
+	return registers;
+}
+
 function rootStorage(
 	native: NativeFunctionPlan,
 	fastPaths: NativeFastPathPlans,
 	callTransports: ReadonlyArray<NativeCallTransportPlan>,
 	rematerializedConstantIps: ReadonlyArray<number>,
 	expressionIps: ReadonlyArray<number>,
+	untracedOperators: ReadonlySet<number>,
 ) {
 	const fn = native.body;
 	// Admitted expressions produce untraced scalars; pooled literals have immortal addresses.
-	const rootFree = new Set(
-		[...rematerializedConstantIps, ...expressionIps].map((ip) => {
-			const op = fn.instructions[ip]!;
-			if (!("dst" in op)) throw new Error("Native expression lacks a destination");
-			return op.dst;
-		}),
-	);
+	const rootFree = new Set(untracedOperators);
+	for (const ip of [...rematerializedConstantIps, ...expressionIps]) {
+		const op = fn.instructions[ip]!;
+		if (!("dst" in op)) throw new Error("Native expression lacks a destination");
+		rootFree.add(op.dst);
+	}
 	const roots = nativeFrameRootRegisters(fn, native).filter(
 		(local) =>
 			["boxed", "string"].includes(native.registerRepresentations[local]!) &&
@@ -1021,6 +1044,7 @@ function lowerStorage(
 			callTransports,
 			scalar.rematerializedConstantIps,
 			scalar.expressionIps,
+			untracedOperatorRegisters(native, body, ownership),
 		),
 		elidedTdzIps: elidedTdzIps(native, ownership),
 		...scalar,
@@ -1455,6 +1479,16 @@ export function validateNativeStorage(
 							selected.callTransports,
 							variant.storage!.rematerializedConstantIps,
 							variant.storage!.expressionIps,
+							untracedOperatorRegisters(
+								variant,
+								body,
+								scalarStorageOwnership(
+									variant,
+									body,
+									scalarStorageWindows(selected),
+									suspension,
+								),
+							),
 						),
 					};
 		return same(variant.storage, retained, suspension);

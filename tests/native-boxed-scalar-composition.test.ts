@@ -121,7 +121,7 @@ describe("boxed scalar expressions at phi boundaries", () => {
 		},
 	);
 
-	it("rebuilds roots from a retained expression subset under conservative logical liveness", () => {
+	it("keeps proven immediate storage untraced when a conservative image retains its expression", () => {
 		const out = conditional("a*b");
 		const product = out.native.body.instructions.find(
 			(op) => op.opcode === "BINARY" && op.operator === "*",
@@ -152,7 +152,7 @@ describe("boxed scalar expressions at phi boundaries", () => {
 			...native,
 			body: { ...native.body, profileSiteIds: native.body.instructions.map(() => -1) },
 		});
-		expect(retained.storage!.rootRegisters).toContain(product.dst);
+		expect(retained.storage!.rootRegisters).not.toContain(product.dst);
 		const weaker = {
 			...native,
 			storage: {
@@ -167,7 +167,7 @@ describe("boxed scalar expressions at phi boundaries", () => {
 				...native,
 				storage: { ...native.storage!, expressionIps: [] },
 			}),
-		).toThrow(/invalid or stale storage plan/);
+		).not.toThrow();
 	});
 
 	it("retains a phi producer whose exact Number input still occupies boxed storage", () => {
