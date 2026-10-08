@@ -2,6 +2,7 @@ import type { IncludedAsset } from "../../assets.ts";
 import { knownOperationFlags } from "../shared/known-operations.ts";
 import { knownOperationIndex } from "../shared/known-operations.ts";
 import { staticDataQueryTag } from "../shared/static-data-query.ts";
+import { generatedDeclarationReferences } from "./generated-declaration-references.ts";
 import { nativeEntryLookup } from "./lower-native-calls.ts";
 import { validateNativeStorage } from "./lower-native-storage.ts";
 import { finalizeCompilerRemarks } from "./profile-metadata.ts";
@@ -1441,16 +1442,13 @@ export function emitProgramTranslationUnits(
 	const preparePart = (
 		part: Omit<TranslationUnitPart, "declarationIndices" | "partitionHashes">,
 	): TranslationUnitPart => {
-		const declarationIndices = new Set<number>();
-		for (const match of part.source.matchAll(/\bmal_[A-Za-z0-9_]+\b/g)) {
-			const indices = declarationIndicesBySymbol.get(match[0]);
-			if (indices === undefined) continue;
-			for (const index of indices) declarationIndices.add(index);
-		}
 		return {
 			...part,
 			partitionHashes: [],
-			declarationIndices: [...declarationIndices],
+			declarationIndices: generatedDeclarationReferences(
+				part.source,
+				declarationIndicesBySymbol,
+			),
 		};
 	};
 	const preparePartition = (
