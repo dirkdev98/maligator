@@ -440,7 +440,9 @@ corruption recovery, and concurrent publication. It is valuable infrastructure
 coverage but costs roughly 25 seconds and belongs in the full gate.
 
 The full gate runs the self-hosted frontend, native-build, and CLI checks before
-the broad native and standards matrices. The much slower whole-compiler
+the broad native and standards matrices. The native-build check requires the
+self-hosted compiler's serialized native plans and emitted C to match the Node-hosted
+compiler byte for byte, then runs each self-hosted binary normally and under GC stress. The much slower whole-compiler
 differential follows the regular check matrix, before the remaining exhaustive
 lanes. This keeps fast self-host transfer failures high in the fail-fast order.
 

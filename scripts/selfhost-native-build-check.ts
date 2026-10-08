@@ -1,5 +1,12 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+	mkdirSync,
+	readdirSync,
+	readFileSync,
+	rmSync,
+	symlinkSync,
+	writeFileSync,
+} from "node:fs";
 import * as path from "node:path";
 import { resolveBuildConfig } from "../src/build-config.ts";
 import { maligatorCacheDirectory } from "../src/cache-root.ts";
@@ -7,7 +14,11 @@ import { CommandProgress } from "../src/command-progress.ts";
 import { stripCompactTypes } from "../src/compiler/frontend/compact-type-strip.ts";
 import { compileEntrypointToBuffer } from "../src/compiler/pipeline/compile-program.ts";
 import { resolvePathExecutable } from "../src/rust-build.ts";
-import { buildNativeBinary } from "../src/test-harness.ts";
+import {
+	compileSelfhostNativeTarget,
+	selfhostNativeEvidence,
+} from "../src/selfhost-native-target.ts";
+import { buildNativeBinary, STRESS_ENV } from "../src/test-harness.ts";
 
 const root = path.join(
 	maligatorCacheDirectory(),
@@ -17,6 +28,8 @@ const root = path.join(
 );
 const tools = path.join(root, "tools");
 const fixture = path.resolve("tests/fixtures/selfhost-native/entry.mts");
+// Wide private roots, shared slots, collecting getters, exceptions and suspension.
+const storageFixture = path.resolve("tests/fixtures/selfhost-native/storage.mts");
 const progress = new CommandProgress("selfhost-native");
 progress.start("isolate tools, build the compiler, and compare native outputs");
 rmSync(root, { recursive: true, force: true });
@@ -96,8 +109,16 @@ const nativeOutput = execFileSync(compiler, [fixture, "native-output", root], {
 	timeout: 180000,
 }).trim();
 
-function run(binary: string): { status: number | null; stdout: string; stderr: string } {
-	const result = spawnSync(binary, [], { encoding: "utf-8", timeout: 20000 });
+function run(
+	binary: string,
+	args: ReadonlyArray<string> = [],
+	env?: NodeJS.ProcessEnv,
+): { status: number | null; stdout: string; stderr: string } {
+	const result = spawnSync(binary, args, {
+		encoding: "utf-8",
+		timeout: 120000,
+		...(env === undefined ? {} : { env: { ...process.env, ...env } }),
+	});
 	if (result.error !== undefined) throw result.error;
 	return { status: result.status, stdout: result.stdout, stderr: result.stderr };
 }
@@ -116,6 +137,54 @@ if (
 console.log(
 	`ok   self-hosted compiler linked and ran fixture (exit ${actual.status}, stdout ${JSON.stringify(actual.stdout.trim())})`,
 );
+
+for (const input of [fixture, storageFixture]) {
+	const name = path.basename(input, ".mts");
+	const evidence = path.join(root, "evidence", name);
+	const binary = execFileSync(
+		compiler,
+		[input, `selfhost-${name}`, root, "--evidence", evidence],
+		{
+			env: isolatedEnv,
+			encoding: "utf-8",
+			stdio: ["ignore", "pipe", "inherit"],
+			timeout: 180000,
+		},
+	).trim();
+	const expectedFiles = selfhostNativeEvidence(compileSelfhostNativeTarget(input, false));
+	const actualNames = readdirSync(evidence).sort();
+	const expectedNames = expectedFiles.map((file) => file.name).sort();
+	if (JSON.stringify(actualNames) !== JSON.stringify(expectedNames))
+		throw new Error(
+			`${name}: self-hosted evidence files ${JSON.stringify(actualNames)} != Node ${JSON.stringify(expectedNames)}`,
+		);
+	for (const file of expectedFiles) {
+		const expectedBytes =
+			typeof file.bytes === "string" ? Buffer.from(file.bytes) : Buffer.from(file.bytes);
+		if (!readFileSync(path.join(evidence, file.name)).equals(expectedBytes))
+			throw new Error(
+				`${name}: self-hosted ${file.name} differs from the Node-hosted compiler`,
+			);
+	}
+	const oracle = run(process.execPath, [input]);
+	for (const [mode, env] of [
+		["normal", {}],
+		["GC stress", { ...STRESS_ENV, MAL_HOST_GC: "1" }],
+	] as const) {
+		const result = run(binary, [], env);
+		if (
+			result.status !== oracle.status ||
+			result.stdout !== oracle.stdout ||
+			result.stderr !== oracle.stderr
+		)
+			throw new Error(
+				`${name}: self-hosted output under ${mode} differs\nexpected ${JSON.stringify(oracle)}\nactual   ${JSON.stringify(result)}`,
+			);
+	}
+	console.log(
+		`ok   ${name}: native plans and ${expectedFiles.length - 2} C units match Node; output matches under GC stress`,
+	);
+}
 
 const prebuiltWire = path.join(root, "compiler.malw");
 writeFileSync(
@@ -161,4 +230,6 @@ if (
 	);
 }
 console.log(`ok   eval-enabled self-host build consumed explicit prebuilt compiler wire`);
+// Failures exit above and keep this directory for diagnosis.
+rmSync(root, { recursive: true, force: true });
 progress.complete();

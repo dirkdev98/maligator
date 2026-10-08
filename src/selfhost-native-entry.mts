@@ -1,25 +1,26 @@
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import * as path from "node:path";
-import { buildDerivationFromConfig, resolveBuildConfig } from "./build-config.ts";
-import { stripCompactTypes } from "./compiler/frontend/compact-type-strip.ts";
-import { compileEntrypoint } from "./compiler/pipeline/compile-program.ts";
-import { emitProgramTranslationUnits } from "./compiler/target/emit-program-image.ts";
 import { buildLocalBinary } from "./local-build.ts";
 import { resolveNativeBuildContext } from "./native-build-context.ts";
-import { nativeSourcePath } from "./native-source-path.ts";
+import {
+	compileSelfhostNativeTarget,
+	selfhostNativeEvidence,
+} from "./selfhost-native-target.ts";
 
-const inputPath = process.argv[2];
-const outputName = process.argv[3];
-const outputDirectory = process.argv[4];
-const compilerWire = process.argv[5];
+const args = process.argv.slice(2);
+const evidenceFlag = args.indexOf("--evidence");
+const evidenceDirectory = evidenceFlag === -1 ? undefined : args[evidenceFlag + 1];
+if (evidenceFlag !== -1) args.splice(evidenceFlag, 2);
+const [inputPath, outputName, outputDirectory, compilerWire] = args;
 
 if (
 	inputPath === undefined ||
 	outputName === undefined ||
-	outputDirectory === undefined
+	outputDirectory === undefined ||
+	(evidenceFlag !== -1 && evidenceDirectory === undefined)
 ) {
 	throw new Error(
-		"usage: selfhost-native <input> <output-name> <output-directory> [prebuilt-compiler-wire]",
+		"usage: selfhost-native <input> <output-name> <output-directory> [prebuilt-compiler-wire] [--evidence <directory>]",
 	);
 }
 if (!existsSync(inputPath)) throw new Error(`entrypoint does not exist: ${inputPath}`);
@@ -27,23 +28,14 @@ if (compilerWire !== undefined && !existsSync(compilerWire)) {
 	throw new Error(`prebuilt compiler wire does not exist: ${compilerWire}`);
 }
 
-const targetConfig = resolveBuildConfig({
-	engine: {
-		eval: compilerWire !== undefined,
-		realms: false,
-		regexp: false,
-		intl: { enabled: false },
-	},
-	surface: { webPlatform: false, node: false, maligator: true },
-});
-const derivation = buildDerivationFromConfig(targetConfig);
-
-const definition = compileEntrypoint(path.resolve(inputPath), {
-	stripTypes: stripCompactTypes,
-	buildConfig: targetConfig,
-});
+const target = compileSelfhostNativeTarget(inputPath, compilerWire !== undefined);
+if (evidenceDirectory !== undefined) {
+	mkdirSync(evidenceDirectory, { recursive: true });
+	for (const { name, bytes } of selfhostNativeEvidence(target))
+		writeFileSync(path.join(evidenceDirectory, name), bytes);
+}
 const context = resolveNativeBuildContext({
-	features: derivation.features,
+	features: target.derivation.features,
 	compilerBake:
 		compilerWire === undefined
 			? undefined
@@ -53,12 +45,9 @@ const result = buildLocalBinary({
 	context,
 	name: outputName,
 	outDir: path.resolve(outputDirectory),
-	cSource: emitProgramTranslationUnits(definition, {
-		sourcePath: nativeSourcePath,
-		maligatorSurface: true,
-	}),
+	cSource: target.translationUnits,
 	verbose: true,
-	cacheSuffix: derivation.cacheSuffix,
+	cacheSuffix: target.derivation.cacheSuffix,
 });
 
 // oxlint-disable-next-line no-console -- CLI result consumed by the bootstrap check.
