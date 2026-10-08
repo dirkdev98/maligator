@@ -552,25 +552,20 @@ export function withClosureCaptureValues(
 export function computeArgumentRetentionLimit(
 	fn: Pick<BytecodeFunction, "argumentSnapshotCount" | "instructions">,
 ): number {
-	const argumentInstructions = fn.instructions.slice(fn.argumentSnapshotCount);
-	if (
-		argumentInstructions.some(
-			(instruction) =>
-				instruction.opcode === "CREATE_ARGUMENTS_OBJECT" ||
-				instruction.opcode === "CREATE_REST_ARGUMENTS" ||
-				instruction.opcode === "CALL_REST_ARGUMENTS" ||
-				instruction.opcode === "LOAD_ARGUMENT",
-		)
-	) {
-		return 0x7fffffff;
+	let maximum = -1;
+	for (let ip = fn.argumentSnapshotCount; ip < fn.instructions.length; ip++) {
+		const instruction = fn.instructions[ip]!;
+		switch (instruction.opcode) {
+			case "CREATE_ARGUMENTS_OBJECT":
+			case "CREATE_REST_ARGUMENTS":
+			case "CALL_REST_ARGUMENTS":
+			case "LOAD_ARGUMENT":
+				return 0x7fffffff;
+			case "LOAD_STATIC_ARGUMENT":
+				maximum = Math.max(maximum, instruction.index);
+		}
 	}
-	return argumentInstructions.reduce(
-		(maximum, instruction) =>
-			instruction.opcode === "LOAD_STATIC_ARGUMENT"
-				? Math.max(maximum, instruction.index)
-				: maximum,
-		-1,
-	);
+	return maximum;
 }
 
 /**

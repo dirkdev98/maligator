@@ -739,6 +739,18 @@ function expressionIps(
 	)
 		return [];
 	const { writeCounts: writes, uses } = body;
+	const purity = new Uint8Array(fn.instructions.length);
+	const pure = (ip: number): boolean => {
+		if (purity[ip] === 0)
+			purity[ip] = pureScalarOperation(
+				fn.instructions[ip]!,
+				native.registerRepresentations,
+				native.instructions[ip],
+			)
+				? 2
+				: 1;
+		return purity[ip] === 2;
+	};
 	const safepoints = new Set(native.gc.safepoints.map((point) => point.instructionIp));
 	const fallthroughJumps = new Set<number>();
 	for (const [ip, op] of fn.instructions.entries())
@@ -759,7 +771,7 @@ function expressionIps(
 		if (
 			(candidates !== undefined && !candidates.has(ip)) ||
 			blocked.has(ip) ||
-			!pureScalarOperation(op, native.registerRepresentations, native.instructions[ip]) ||
+			!pure(ip) ||
 			!("dst" in op) ||
 			borrowed.has(op.dst) ||
 			op.dst < fn.parameterCount + fn.argumentSnapshotCount ||
@@ -772,11 +784,7 @@ function expressionIps(
 		if (consumerIp <= ip || consumerIp - ip > 16 || blocked.has(consumerIp)) continue;
 		const consumer = fn.instructions[consumerIp]!;
 		if (
-			!pureScalarOperation(
-				consumer,
-				native.registerRepresentations,
-				native.instructions[consumerIp],
-			) &&
+			!pure(consumerIp) &&
 			consumer.opcode !== "RETURN" &&
 			consumer.opcode !== "JUMP_IF" &&
 			!scalarValueBoundary(consumer, op.dst)
@@ -805,12 +813,7 @@ function expressionIps(
 				blocked.has(next) ||
 				(jumpTargets.has(next) && !fallthroughJumps.has(next - 1)) ||
 				(next < consumerIp &&
-					((!pureScalarOperation(
-						fn.instructions[next]!,
-						native.registerRepresentations,
-						native.instructions[next],
-					) &&
-						!fallthroughJumps.has(next)) ||
+					((!pure(next) && !fallthroughJumps.has(next)) ||
 						body.writes[next]!.some((local) => operands.has(local))))
 			) {
 				safe = false;

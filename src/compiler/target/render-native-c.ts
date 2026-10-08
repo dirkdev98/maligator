@@ -202,7 +202,10 @@ function analyzeNativeBody(
 				.map((owner) => owner.ownerFunctionIndex),
 		),
 		jumpTargets,
-		handlerTargets: exceptionHandlerTargets(fn.instructions.length, fn.handlers),
+		handlerTargets:
+			fn.handlers.length === 0
+				? []
+				: exceptionHandlerTargets(fn.instructions.length, fn.handlers),
 		ownsCaptureEnvironment: captures.ownsEnvironment,
 		iterationEligibilityRegisters,
 	};

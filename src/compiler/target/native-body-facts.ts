@@ -46,6 +46,9 @@ export function analyzeNativeBodyFacts(fn: BytecodeFunction): NativeBodyFacts {
 		handlerEntries,
 		externalEntries,
 		jumpTargets,
-		handlerTargets: vmExceptionHandlerTargets(fn.instructions.length, fn.handlers),
+		handlerTargets:
+			fn.handlers.length === 0
+				? []
+				: vmExceptionHandlerTargets(fn.instructions.length, fn.handlers),
 	};
 }
