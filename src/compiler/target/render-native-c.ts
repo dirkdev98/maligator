@@ -4482,6 +4482,111 @@ function emitInstruction(
 	coro: CoroutineContext | null,
 	context: NativeInstructionContext,
 ): Array<string> | null {
+	// Resource discovery stays eager so unused poll text cannot change emitted epilogues.
+	if (
+		handlerIp === undefined &&
+		((context.outgoingRootPublication?.length ?? 0) > 0 ||
+			context.loopBackedgeInactiveRootMask !== undefined ||
+			context.gcSafepoint ||
+			context.mathCallInactiveRootMask !== undefined)
+	)
+		nativeBodyReference(context.resources, "throwExit");
+	if (context.propertyNumericUpdateAction === undefined) {
+		switch (instruction.opcode) {
+			case "CREATE_UNDEFINED":
+				return [`r${instruction.dst} = MAL_VALUE_UNDEFINED;`];
+			case "CREATE_NULL":
+				return [`r${instruction.dst} = MAL_VALUE_NULL;`];
+			case "CREATE_EMPTY":
+				// The hole sentinel requires boxed storage; scalar locals cannot hold it.
+				return [`r${instruction.dst} = MAL_VALUE_EMPTY;`];
+			case "CREATE_BOOLEAN":
+				return [
+					reps[instruction.dst] === "boolean"
+						? `r${instruction.dst} = ${instruction.value ? "true" : "false"};`
+						: `r${instruction.dst} = ${nativeProfileCall("boxing", `mal_value_new_boolean(${instruction.value ? "true" : "false"})`, context.profileSiteId ?? -1, profileDecisionOperation(instruction))};`,
+				];
+			case "CREATE_NUMBER":
+				return [
+					reps[instruction.dst] === "int32"
+						? `r${instruction.dst} = ${instruction.value};`
+						: reps[instruction.dst] === "number"
+							? `r${instruction.dst} = ${instruction.value};`
+							: `r${instruction.dst} = mal_value_from_i32(${instruction.value});`,
+				];
+			case "CREATE_F64":
+				return [
+					reps[instruction.dst] === "int32"
+						? `r${instruction.dst} = (i32) ${cF64Literal(instruction.value)};`
+						: reps[instruction.dst] === "number"
+							? `r${instruction.dst} = ${cF64Literal(instruction.value)};`
+							: `r${instruction.dst} = mal_value_from_f64_convert_nan(${cF64Literal(instruction.value)});`,
+				];
+			case "CREATE_STRING":
+				return [
+					`r${instruction.dst} = ${context.relocation.stringValue(instruction.stringIndex)};`,
+				];
+			case "CREATE_BIGINT":
+				return [
+					`r${instruction.dst} = ${context.relocation.bigintValue(instruction.bigintIndex, suffix)};`,
+				];
+		}
+	}
+	const profileSiteId = context.profileSiteId ?? -1;
+	const profileOperation =
+		profileSiteId < 0 ? undefined : profileDecisionOperation(instruction);
+	const profileCall = (kind: NativeProfileCallKind, expression: string): string =>
+		profileOperation === undefined
+			? expression
+			: nativeProfileCall(kind, expression, profileSiteId, profileOperation);
+	const inputValue = (r: number): string => context.scalarInputValues?.get(r) ?? `r${r}`;
+	const boxed = (r: number): string =>
+		reps[r] === "int32"
+			? `mal_value_from_i32(${inputValue(r)})`
+			: reps[r] === "number"
+				? profileCall("boxing", `mal_ops_number_value(${inputValue(r)})`)
+				: reps[r] === "boolean"
+					? profileCall("boxing", `mal_value_new_boolean(${inputValue(r)})`)
+					: inputValue(r);
+	const num = (r: number): string =>
+		reps[r] === "int32" ? `(f64) ${inputValue(r)}` : inputValue(r);
+	const truthy = (r: number): string =>
+		reps[r] === "boolean"
+			? `r${r}`
+			: reps[r] === "int32"
+				? `(r${r} != 0)`
+				: reps[r] === "number"
+					? `mal_number_is_truthy(r${r})`
+					: reps[r] === "string"
+						? `(mal_string_length(mal_value_to_string(r${r})) != 0)`
+						: `mal_value_is_truthy(r${r})`;
+	if (
+		instruction.opcode === "MOVE" &&
+		context.propertyNumericUpdateAction === undefined &&
+		context.staticPropertyNumericAction?.role !== "skip"
+	) {
+		// A move is also the explicit representation-conversion seam.
+		const dst = instruction.dst;
+		const read =
+			reps[dst] === "int32"
+				? reps[instruction.src] === "int32"
+					? `r${instruction.src}`
+					: reps[instruction.src] === "number"
+						? `mal_ops_number_to_i32(r${instruction.src})`
+						: `mal_ops_number_to_i32(mal_ops_number_as_f64(${boxed(instruction.src)}))`
+				: reps[dst] === "number"
+					? reps[instruction.src] === "number"
+						? num(instruction.src)
+						: reps[instruction.src] === "int32"
+							? num(instruction.src)
+							: `mal_ops_number_as_f64(${boxed(instruction.src)})`
+					: reps[dst] === "boolean"
+						? reps[instruction.src] === "boolean"
+							? truthy(instruction.src)
+							: `mal_value_to_boolean(${boxed(instruction.src)})`
+						: boxed(instruction.src);
+		return [`r${dst} = ${read};`];
+	}
 	const {
 		nativePlan,
 		resources,
@@ -4519,13 +4624,6 @@ function emitInstruction(
 		privateFieldReserveCount,
 		relocation,
 	} = context;
-	const profileSiteId = context.profileSiteId ?? -1;
-	const profileOperation =
-		profileSiteId < 0 ? undefined : profileDecisionOperation(instruction);
-	const profileCall = (kind: NativeProfileCallKind, expression: string): string =>
-		profileOperation === undefined
-			? expression
-			: nativeProfileCall(kind, expression, profileSiteId, profileOperation);
 	const reentrantValue = (expression: string): string => {
 		const publication = context.incomingRootPublication ?? [];
 		if (publication.length > 0) context.onIncomingRootPublication?.();
@@ -4638,15 +4736,6 @@ function emitInstruction(
 	const stackStore = (site: StackObjectSite, slot: number, value: number): string =>
 		`${stackObjectSlotReference(site, slot)} = ${convertedValue(reps[value]!, stackSlotRep(site, slot), `r${value}`)};`;
 
-	const inputValue = (r: number): string => context.scalarInputValues?.get(r) ?? `r${r}`;
-	const boxed = (r: number): string =>
-		reps[r] === "int32"
-			? `mal_value_from_i32(${inputValue(r)})`
-			: reps[r] === "number"
-				? profileCall("boxing", `mal_ops_number_value(${inputValue(r)})`)
-				: reps[r] === "boolean"
-					? profileCall("boxing", `mal_value_new_boolean(${inputValue(r)})`)
-					: inputValue(r);
 	const boxedOperand = (operand: number): string => {
 		const decoded = decodeVmValueOperand(operand);
 		switch (decoded.kind) {
@@ -4809,8 +4898,6 @@ function emitInstruction(
 		const boolean = nativeBooleanOperand(operand);
 		return boolean === null ? nativeNumberOperand(operand) : `(${boolean} ? 1.0 : 0.0)`;
 	};
-	const num = (r: number): string =>
-		reps[r] === "int32" ? `(f64) ${inputValue(r)}` : inputValue(r);
 	// Typed Math operands remain numbers when coroutine storage boxes their registers.
 	const typedNumber = (r: number): string =>
 		reps[r] === "number" || reps[r] === "int32"
@@ -4842,16 +4929,6 @@ function emitInstruction(
 			expression = `(${choice.test} ? ${choice.value} : ${expression})`;
 		return expression;
 	};
-	const truthy = (r: number): string =>
-		reps[r] === "boolean"
-			? `r${r}`
-			: reps[r] === "int32"
-				? `(r${r} != 0)`
-				: reps[r] === "number"
-					? `mal_number_is_truthy(r${r})`
-					: reps[r] === "string"
-						? `(mal_string_length(mal_value_to_string(r${r})) != 0)`
-						: `mal_value_is_truthy(r${r})`;
 	// Where control goes on a pending throw: into the innermost enclosing
 	// try/catch handler when this instruction is inside one (CATCH there reads
 	// vm->completion.value), otherwise out of the compiled frame (the dispatch
@@ -4901,15 +4978,6 @@ function emitInstruction(
 	// poll; raising it there unwinds through the ordinary throw path.
 	const safepoint = (): string =>
 		`mal_gc_safepoint(vm); if (mal_gc_poll_termination(vm)) ${onThrow()}`;
-	// Resource discovery stays eager so unused poll text cannot change emitted epilogues.
-	if (
-		handlerIp === undefined &&
-		((context.outgoingRootPublication?.length ?? 0) > 0 ||
-			context.loopBackedgeInactiveRootMask !== undefined ||
-			context.gcSafepoint ||
-			context.mathCallInactiveRootMask !== undefined)
-	)
-		nativeBodyReference(resources, "throwExit");
 	let pollText: string | undefined;
 	const poll = (): string =>
 		(pollText ??=
@@ -5358,48 +5426,20 @@ function emitInstruction(
 
 	switch (instruction.opcode) {
 		case "MOVE": {
-			if (staticPropertyNumericAction?.role === "skip") {
-				const fallback = emitGenericInstruction();
-				if (fallback === null) return null;
-				return [
-					`if (!__property_projection_${staticPropertyNumericAction.plan.id}_fast) {`,
-					...fallback.map((line) => `  ${line}`),
-					`}`,
-				];
-			}
-			// A move is also the explicit representation-conversion seam.
-			const dst = instruction.dst;
-			const read =
-				reps[dst] === "int32"
-					? reps[instruction.src] === "int32"
-						? `r${instruction.src}`
-						: reps[instruction.src] === "number"
-							? `mal_ops_number_to_i32(r${instruction.src})`
-							: `mal_ops_number_to_i32(mal_ops_number_as_f64(${boxed(instruction.src)}))`
-					: reps[dst] === "number"
-						? reps[instruction.src] === "number"
-							? num(instruction.src)
-							: reps[instruction.src] === "int32"
-								? num(instruction.src)
-								: `mal_ops_number_as_f64(${boxed(instruction.src)})`
-						: reps[dst] === "boolean"
-							? reps[instruction.src] === "boolean"
-								? truthy(instruction.src)
-								: `mal_value_to_boolean(${boxed(instruction.src)})`
-							: boxed(instruction.src);
-			return [`r${dst} = ${read};`];
+			if (staticPropertyNumericAction?.role !== "skip")
+				throw new Error("Native MOVE requires its property projection overlay");
+			const fallback = emitGenericInstruction();
+			if (fallback === null) return null;
+			return [
+				`if (!__property_projection_${staticPropertyNumericAction.plan.id}_fast) {`,
+				...fallback.map((line) => `  ${line}`),
+				`}`,
+			];
 		}
 		case "BASE_CONSTRUCT_RESULT":
 			return [
 				`r${instruction.dst} = mal_value_is_object(${boxed(instruction.value)}) ? ${boxed(instruction.value)} : ${boxed(instruction.receiver)};`,
 			];
-		case "CREATE_UNDEFINED":
-			return [`r${instruction.dst} = MAL_VALUE_UNDEFINED;`];
-		case "CREATE_NULL":
-			return [`r${instruction.dst} = MAL_VALUE_NULL;`];
-		case "CREATE_EMPTY":
-			// The hole sentinel requires boxed storage; scalar locals cannot hold it.
-			return [`r${instruction.dst} = MAL_VALUE_EMPTY;`];
 		case "THROW_IF_TDZ": {
 			if (staticPropertyNumericAction?.role === "skip") {
 				const fallback = emitGenericInstruction();
@@ -5430,36 +5470,6 @@ function emitInstruction(
 				reps[instruction.dst] === "boolean"
 					? `r${instruction.dst} = mal_value_is_empty(${boxed(instruction.src)});`
 					: `r${instruction.dst} = ${profileCall("boxing", `mal_value_new_boolean(mal_value_is_empty(${boxed(instruction.src)}))`)};`,
-			];
-		case "CREATE_BOOLEAN":
-			return [
-				reps[instruction.dst] === "boolean"
-					? `r${instruction.dst} = ${instruction.value ? "true" : "false"};`
-					: `r${instruction.dst} = ${profileCall("boxing", `mal_value_new_boolean(${instruction.value ? "true" : "false"})`)};`,
-			];
-		case "CREATE_NUMBER":
-			return [
-				reps[instruction.dst] === "int32"
-					? `r${instruction.dst} = ${instruction.value};`
-					: reps[instruction.dst] === "number"
-						? `r${instruction.dst} = ${instruction.value};`
-						: `r${instruction.dst} = mal_value_from_i32(${instruction.value});`,
-			];
-		case "CREATE_F64":
-			return [
-				reps[instruction.dst] === "int32"
-					? `r${instruction.dst} = (i32) ${cF64Literal(instruction.value)};`
-					: reps[instruction.dst] === "number"
-						? `r${instruction.dst} = ${cF64Literal(instruction.value)};`
-						: `r${instruction.dst} = mal_value_from_f64_convert_nan(${cF64Literal(instruction.value)});`,
-			];
-		case "CREATE_STRING":
-			return [
-				`r${instruction.dst} = ${relocation.stringValue(instruction.stringIndex)};`,
-			];
-		case "CREATE_BIGINT":
-			return [
-				`r${instruction.dst} = ${relocation.bigintValue(instruction.bigintIndex, suffix)};`,
 			];
 		case "CREATE_OBJECT":
 			if (stackObjectSite === undefined) {
