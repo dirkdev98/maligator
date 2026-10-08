@@ -12,13 +12,17 @@ import { emitCompiledFunction } from "../src/compiler/target/render-native-c.ts"
 import { inspectStaticValueFunction } from "./helpers/static-values.ts";
 
 describe("proven String comparisons in boxed storage", () => {
-	it.each(["<", "<=", ">", ">=", "==", "!=", "===", "!=="])(
-		"roundtrips and emits the exact String kernel for %s",
-		(operator) => {
+	it.each(
+		["<", "<=", ">", ">=", "==", "!=", "===", "!=="].flatMap((operator) =>
+			[false, true].map((profile) => [operator, profile] as const),
+		),
+	)(
+		"roundtrips and emits the exact String kernel for %s with profiling=%s",
+		(operator, profile) => {
 			const out = inspectStaticValueFunction(
 				`function compute(left,right,gate){const a=String(left);const b=String(right);gate();return a ${operator} b;}globalThis.compute=compute;`,
 				"compute",
-				{ profile: true },
+				{ profile },
 			);
 			const ip = out.native.body.instructions.findIndex(
 				(op) => op.opcode === "BINARY" && op.operator === operator,
@@ -47,12 +51,14 @@ describe("proven String comparisons in boxed storage", () => {
 					),
 				},
 			});
-			const restored = deserializeCompilerArtifact(serializeCompilerArtifact(image));
-			expect(restored).toEqual(image);
+			const encoded = serializeCompilerArtifact(image);
+			const restored = deserializeCompilerArtifact(encoded);
+			if (!profile) expect(restored).toEqual(image);
+			expect(serializeCompilerArtifact(restored)).toEqual(encoded);
 			const index = image.native.functions.indexOf(
 				image.native.functions.find((fn) => fn.body === out.native.body)!,
 			);
-			const fn = restored.native.functions[index]!;
+			const fn = (profile ? image : restored).native.functions[index]!;
 			expect(fn.storage!.rootRegisters).toEqual(
 				expect.arrayContaining([op.left, op.right]),
 			);
@@ -75,7 +81,9 @@ describe("proven String comparisons in boxed storage", () => {
 					: "mal_string_equals(",
 			);
 			expect(c.source).not.toContain("mal_ops_is_number(");
-			const instructions = [...fn.instructions];
+			expect(c.source.includes("MAL_PROFILE_SITE_RUNTIME_STRING")).toBe(profile);
+			const restoredFn = restored.native.functions[index]!;
+			const instructions = [...restoredFn.instructions];
 			instructions[ip] = {
 				kind: "exact-operator-input-kinds",
 				inputKindMasks: [
@@ -88,7 +96,10 @@ describe("proven String comparisons in boxed storage", () => {
 					...restored,
 					native: {
 						...restored.native,
-						functions: restored.native.functions.with(index, { ...fn, instructions }),
+						functions: restored.native.functions.with(index, {
+							...restoredFn,
+							instructions,
+						}),
 					},
 				}),
 			).toThrow(/invalid exact binary kind masks/);
