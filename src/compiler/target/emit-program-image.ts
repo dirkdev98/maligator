@@ -341,28 +341,25 @@ function safepointRootData(fn: BytecodeFunction): Array<number> {
 	]);
 }
 
-function argumentSnapshotPlanBody(fn: BytecodeFunction): string {
-	return fn.argumentSnapshotPlan
-		.map(
-			(move) => `    { .destination = ${move.destination}, .source = ${move.source} },`,
-		)
-		.join("\n");
+function argumentSnapshotPlanRows(fn: BytecodeFunction): Array<string> {
+	return fn.argumentSnapshotPlan.map(
+		(move) => `    { .destination = ${move.destination}, .source = ${move.source} },`,
+	);
 }
 
-/** The body (rows, no braces) of a function's MalLineEntry position table. */
-function positionArrayBody(fn: BytecodeFunction): string {
-	return compressPositions(fn.positions)
-		.map((run) => `    MAL_LINE_ENTRY(${run.startIp}, ${run.posId}),`)
-		.join("\n");
+function positionArrayRows(fn: BytecodeFunction): Array<string> {
+	return compressPositions(fn.positions).map(
+		(run) => `    MAL_LINE_ENTRY(${run.startIp}, ${run.posId}),`,
+	);
 }
 
-function instructionArrayBody(
+function instructionArrayRows(
 	fn: RuntimeImage["functions"][number],
 	dataOffsets: Array<number | undefined>,
-): string {
-	return fn.instructions
-		.map((instruction, i) => `    ${emitInstruction(instruction, dataOffsets[i])},`)
-		.join("\n");
+): Array<string> {
+	return fn.instructions.map(
+		(instruction, i) => `    ${emitInstruction(instruction, dataOffsets[i])},`,
+	);
 }
 
 function instructionData(fn: RuntimeImage["functions"][number]): {
@@ -527,24 +524,26 @@ function compiledKnownOwnSlotSeedData(
 	return data[0] === 0 ? [] : data;
 }
 
-function handlerArrayBody(fn: RuntimeImage["functions"][number]): string {
-	return fn.handlers
-		.map(
-			(handler) =>
-				`    { .start_ip = ${handler.startIp}, .end_ip = ${handler.endIp}, .handler_ip = ${handler.handlerIp} },`,
-		)
-		.join("\n");
+function handlerArrayRows(fn: RuntimeImage["functions"][number]): Array<string> {
+	return fn.handlers.map(
+		(handler) =>
+			`    { .start_ip = ${handler.startIp}, .end_ip = ${handler.endIp}, .handler_ip = ${handler.handlerIp} },`,
+	);
 }
 
 /**
  * Emit a C translation unit with the static MalRuntimeImage data.
  */
 export function emitProgramImage(image: ProgramImage, options: EmitOptions = {}) {
-	return emitProgramImageParts(image, options, false).parts.join("\n");
+	return emitProgramImageParts(image, options, false)
+		.parts.map((part) => (typeof part === "string" ? part : part.join("\n")))
+		.join("\n");
 }
 
+type ProgramSourcePart = string | ReadonlyArray<string>;
+
 interface EmittedProgramImageParts {
-	parts: ReadonlyArray<string>;
+	parts: ReadonlyArray<ProgramSourcePart>;
 	compiled: Array<CompiledFunction | null>;
 }
 
@@ -882,12 +881,17 @@ function emitNativeFunctions(
  * without charging unrelated declarations to every compiler input.
  */
 function externalizeDataArrays(
-	parts: ReadonlyArray<string>,
+	parts: ReadonlyArray<ProgramSourcePart>,
 	maxCodeUnits: number,
 ): SplitDataSource {
-	const lines = parts.flatMap((part) =>
-		part.includes("\n") ? part.split("\n") : [part],
-	);
+	const lines: Array<string> = [];
+	for (const part of parts) {
+		if (typeof part === "string") {
+			if (part.includes("\n")) for (const line of part.split("\n")) lines.push(line);
+			else lines.push(part);
+		} else if (part.length === 0) lines.push("");
+		else for (const line of part) lines.push(line);
+	}
 	const output: Array<string> = [];
 	const definitions: Array<ExternalDataDefinition> = [];
 	const declarations: Array<GeneratedDeclaration> = [];
@@ -1020,7 +1024,8 @@ function emitProgramImageParts(
 	const useCompiled = options.compiled !== false;
 	// Compiled functions call mal_vm_binary_op (vm_ops.h) and box unboxed doubles
 	// via mal_ops_number_value (value_ops.h); include both alongside vm.h.
-	const lines = options.includeHeader === false ? [] : [...NATIVE_C_HEADER_LINES];
+	const lines: Array<ProgramSourcePart> =
+		options.includeHeader === false ? [] : [...NATIVE_C_HEADER_LINES];
 
 	for (let i = 0; i < runtime.stringConstants.length; ++i) {
 		const constant = runtime.stringConstants[i]!;
@@ -1220,7 +1225,7 @@ function emitProgramImageParts(
 				lines.push(
 					`static const MalArgumentSnapshotMove mal_function_${i}_argument_snapshot_plan${suffix}[] = {`,
 				);
-				lines.push(argumentSnapshotPlanBody(fn));
+				lines.push(argumentSnapshotPlanRows(fn));
 				lines.push("};", "");
 			}
 		}
@@ -1242,14 +1247,14 @@ function emitProgramImageParts(
 			lines.push(
 				`static const MalInstruction mal_function_${i}_instructions${suffix}[] = {`,
 			);
-			lines.push(instructionArrayBody(fn, sideData.offsets));
+			lines.push(instructionArrayRows(fn, sideData.offsets));
 			lines.push("};", "");
 
 			if (fn.handlers.length > 0) {
 				lines.push(
 					`static const MalExceptionHandler mal_function_${i}_handlers${suffix}[] = {`,
 				);
-				lines.push(handlerArrayBody(fn));
+				lines.push(handlerArrayRows(fn));
 				lines.push("};", "");
 			}
 		}
@@ -1257,7 +1262,7 @@ function emitProgramImageParts(
 		const runs = debug ? compressPositions(fn.positions) : [];
 		if (runs.length > 0) {
 			lines.push(`static const MalLineEntry mal_function_${i}_positions${suffix}[] = {`);
-			lines.push(positionArrayBody(fn));
+			lines.push(positionArrayRows(fn));
 			lines.push("};", "");
 			positionInfo.push({
 				symbol: `mal_function_${i}_positions${suffix}`,
@@ -2143,7 +2148,11 @@ export function emitBatch(
 			}
 			const sideData = instructionData(fn);
 			instructionSymbols.push(
-				intern("insns", "MalInstruction", instructionArrayBody(fn, sideData.offsets)),
+				intern(
+					"insns",
+					"MalInstruction",
+					instructionArrayRows(fn, sideData.offsets).join("\n"),
+				),
 			);
 			instructionDataSymbols.push(
 				sideData.data.length > 0
@@ -2163,7 +2172,7 @@ export function emitBatch(
 					? intern(
 							"argument_snapshot_plan",
 							"MalArgumentSnapshotMove",
-							argumentSnapshotPlanBody(fn),
+							argumentSnapshotPlanRows(fn).join("\n"),
 						)
 					: "nullptr",
 			);
@@ -2179,7 +2188,7 @@ export function emitBatch(
 			);
 			handlerSymbols.push(
 				fn.handlers.length > 0
-					? intern("handlers", "MalExceptionHandler", handlerArrayBody(fn))
+					? intern("handlers", "MalExceptionHandler", handlerArrayRows(fn).join("\n"))
 					: "nullptr",
 			);
 		}
