@@ -56,6 +56,35 @@ function mixed(value) {
 			return 25;
 	}
 }
+function reorderedDispatch(first, second) {
+	switch (first) {
+		case "nested":
+			switch (second) {
+				case 0:
+					return 10;
+				case 1:
+					return 11;
+				case 2:
+					return 12;
+				case 3:
+					return 13;
+				default:
+					return 14;
+			}
+		case "direct":
+			return 20;
+		default:
+			break;
+	}
+	switch (second) {
+		case "a":
+			return 30;
+		case "b":
+			return 31;
+		default:
+			return 32;
+	}
+}
 function backedges(limit) {
 	let total = 0;
 	for (let i = 0; i < limit; i++) {
@@ -132,6 +161,14 @@ for (let round = 0; round < 20; round++) {
 	check(mixed(false), 23);
 	check(mixed(null), 24);
 	check(mixed(object), 25);
+	check(reorderedDispatch("nested", 0), 10);
+	check(reorderedDispatch("nested", 3), 13);
+	check(reorderedDispatch("nested", "0"), 14);
+	check(reorderedDispatch("nested", object), 14);
+	check(reorderedDispatch("direct", "a"), 20);
+	check(reorderedDispatch("other", "a"), 30);
+	check(reorderedDispatch("other", "b"), 31);
+	check(reorderedDispatch("other", object), 32);
 	const surrounding = { value: backedges(800) };
 	check(surrounding.value, 3000);
 }

@@ -4683,27 +4683,29 @@ function lowerExecutionFunctionToNativePlan(
 		...(fn.literalSwitches === undefined
 			? {}
 			: {
-					literalSwitches: fn.literalSwitches.map((site) => ({
-						instructionIp: instructionIndexByTargetInstruction.get(site.first)!,
-						endIp: instructionIndexByTargetInstruction.get(site.last)!,
-						selector: site.selector,
-						...(site.kind === "number"
-							? {
-									kind: "number" as const,
-									cases: site.cases.map((label) => ({
-										value: label.value,
-										targetIp: blockStartIps.get(label.block)!,
-									})),
-								}
-							: {
-									kind: "string" as const,
-									cases: site.cases.map((label) => ({
-										stringIndex: label.stringIndex,
-										targetIp: blockStartIps.get(label.block)!,
-									})),
-								}),
-						defaultIp: blockStartIps.get(site.defaultBlock)!,
-					})),
+					literalSwitches: fn.literalSwitches
+						.map((site) => ({
+							instructionIp: instructionIndexByTargetInstruction.get(site.first)!,
+							endIp: instructionIndexByTargetInstruction.get(site.last)!,
+							selector: site.selector,
+							...(site.kind === "number"
+								? {
+										kind: "number" as const,
+										cases: site.cases.map((label) => ({
+											value: label.value,
+											targetIp: blockStartIps.get(label.block)!,
+										})),
+									}
+								: {
+										kind: "string" as const,
+										cases: site.cases.map((label) => ({
+											stringIndex: label.stringIndex,
+											targetIp: blockStartIps.get(label.block)!,
+										})),
+									}),
+							defaultIp: blockStartIps.get(site.defaultBlock)!,
+						}))
+						.sort((left, right) => left.instructionIp - right.instructionIp),
 				}),
 		...(fn.fieldCalls === undefined
 			? {}

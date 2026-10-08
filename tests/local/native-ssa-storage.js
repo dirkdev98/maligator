@@ -2060,7 +2060,7 @@ for (let index = 0; index < 3; index++) {
 console.log("region-tail", tailResults.join(","));
 
 function scheduledRegion(value, choose, left, right, observe) {
-	const fused = value.a + value.b * 2;
+	const fused = value.a * value.b * 2;
 	let result;
 	if (choose) {
 		observe("left", left);
@@ -2113,7 +2113,7 @@ for (const choose of [false, true])
 	}
 
 function scalarWithRegion(value, left, right, observe) {
-	const fused = value.a + value.b * 2;
+	const fused = value.a * value.b * 2;
 	observe(fused);
 	const a = +left;
 	const b = +right;
