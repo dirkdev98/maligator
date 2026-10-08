@@ -252,10 +252,7 @@ describe("native typed stack fields", () => {
 				}
 				const fallback = output.indexOf(`MalValue __boxed_load_${ip} =`);
 				expect(fallback).toBeGreaterThan(-1);
-				const check = output.indexOf(
-					"if (vm->completion.kind == MAL_COMPLETION_THROW)",
-					fallback,
-				);
+				const check = output.indexOf("if (MAL_THREW())", fallback);
 				const conversion = output.indexOf(
 					`r${op.dst} = mal_ops_number_as_f64(__boxed_load_${ip});`,
 					fallback,

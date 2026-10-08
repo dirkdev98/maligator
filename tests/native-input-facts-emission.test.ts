@@ -137,7 +137,7 @@ describe("local native input admission", () => {
 		expect(proven).not.toContain("mal_vm_op_to_property_key(");
 		const guarded = emitInputContract(instructions, ["boxed", "string", "boxed"]);
 		expect(guarded).toMatch(
-			/if \(mal_value_is_nil\([^\n]+\)\) \{\s+[^\n]*mal_vm_op_to_property_key\([^\n]+\);\s+if \(vm->completion.kind == MAL_COMPLETION_THROW\)/,
+			/if \(mal_value_is_nil\([^\n]+\)\) \{\s+[^\n]*mal_vm_op_to_property_key\([^\n]+\);\s+if \(MAL_THREW\(\)\)/,
 		);
 		const coercive = emitInputContract(instructions, ["boxed", "boxed", "boxed"]);
 		expect(coercive).toContain("mal_vm_op_to_property_key(");

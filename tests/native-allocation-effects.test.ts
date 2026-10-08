@@ -42,7 +42,7 @@ describe("native fallible shaped allocation", () => {
 			const output = emitCompiledFunction(fn, fn.functionIndex, "", false)!.source;
 			expect(output).toMatch(
 				new RegExp(
-					`${kind === "empty" ? "mal_vm_op_create_object" : "mal_vm_create_object_shaped"}\\([^\\n]+;\\n\\s*if \\(vm->completion.kind == MAL_COMPLETION_THROW\\) goto L${handler};`,
+					`${kind === "empty" ? "mal_vm_op_create_object" : "mal_vm_create_object_shaped"}\\([^\\n]+;\\n\\s*if \\(MAL_THREW\\(\\)\\) goto L${handler};`,
 				),
 			);
 		},

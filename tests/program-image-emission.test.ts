@@ -1637,7 +1637,7 @@ describe("emit-program-image instruction packing", () => {
 			}
 			let publishedMask = 0n;
 			for (const match of output!.matchAll(
-				/MAL_ROOT_MASK\((0x[\da-f]+)\);|MAL_ROOT_MASK_WIDE\((0x[\da-f]+), (\w+), countof\(\w+\)\);|mal_vm_call_cached\(/g,
+				/MAL_ROOT_MASK\((0x[\da-f]+)\);|MAL_ROOT_MASK_WIDE\((0x[\da-f]+), (\w+)\);|mal_vm_call_cached\(/g,
 			)) {
 				if (match[1] !== undefined) publishedMask = BigInt(match[1]);
 				else if (match[2] !== undefined) {
@@ -1770,7 +1770,7 @@ describe("emit-program-image instruction packing", () => {
 			"#define MAL_ROOT_MASK(mask) mal_gc_root_frame_set_inactive(&__gc_frame, UINT64_C(mask), nullptr, 0)",
 		);
 		expect(output).toContain(
-			"#define MAL_ROOT_MASK_WIDE(mask, words, count) mal_gc_root_frame_set_inactive(&__gc_frame, UINT64_C(mask), words, count)",
+			"#define MAL_ROOT_MASK_WIDE(mask, words) mal_gc_root_frame_set_inactive(&__gc_frame, UINT64_C(mask), words, countof(words))",
 		);
 		expect(output.match(/MAL_ROOT_MASK\(0x4\);/g)).toHaveLength(2);
 		expect(output.match(/MAL_ROOT_MASK\(0x2\);/g)).toHaveLength(2);
@@ -2090,7 +2090,7 @@ describe("emit-program-image instruction packing", () => {
 		);
 		const allocationEnd = output.indexOf("r3 = mal_vm_op_create_object");
 		const secondMissEnd = output.indexOf(
-			"if (vm->completion.kind",
+			"if (MAL_THREW())",
 			output.indexOf("r2 = mal_vm_op_load_property_ic_static_miss"),
 		);
 		expect(output.slice(secondMissEnd, allocationEnd)).not.toContain("__gc_slots");
@@ -2266,7 +2266,7 @@ describe("emit-program-image instruction packing", () => {
 		expect(output.slice(replacement, call)).toMatch(/\n {4}__gc_slots\[\d+\] = r6;\n/);
 	});
 
-	it("publishes live private roots and clears dead private slots beyond the root mask", () => {
+	it("publishes live private roots and masks dead private slots beyond the inline root word", () => {
 		const allRoots = Array.from({ length: 67 }, (_, register) => register);
 		const loadFunction: BytecodeFunction = {
 			...fn,
@@ -2346,9 +2346,16 @@ describe("emit-program-image instruction packing", () => {
 			.slice(output.indexOf("r66 = mal_vm_op_load_property_ic_static_miss"))
 			.match(/if \(mal_gc_poll\) \{([^\n]*)mal_gc_safepoint\(vm\);/);
 		expect(poll).not.toBeNull();
-		expect(poll![1]).toContain("__gc_slots[65] = MAL_VALUE_UNDEFINED;");
 		expect(poll![1]).toContain("__gc_slots[66] = r66;");
-		expect(poll![1]).not.toContain("__gc_slots[65] = r65;");
+		expect(poll![1]).not.toContain("__gc_slots[65]");
+		const tail = poll![1]!.match(/MAL_ROOT_MASK_WIDE\(0x[\da-f]+, (\w+)\);/)?.[1];
+		expect(tail).toBeDefined();
+		const highWord = output.match(
+			new RegExp(`static const u64 ${tail}\\[\\] = \\{ UINT64_C\\((0x[\\da-f]+)\\)`),
+		)?.[1];
+		expect(highWord).toBeDefined();
+		expect((BigInt(highWord!) >> 1n) & 1n).toBe(1n);
+		expect((BigInt(highWord!) >> 2n) & 1n).toBe(0n);
 	});
 
 	it.each(["single", "batch"])(
@@ -3433,11 +3440,9 @@ describe("native update-expression representation", () => {
 			`"use strict"; function calculate(value) { return value + 1; } globalThis.calculate = calculate;`,
 		);
 		expect(output).toMatch(
-			/if \(mal_ops_is_number\([^\n]+\) \{[\s\S]*?\} else \{[\s\S]*?mal_vm_binary_op[\s\S]*?completion\.kind/,
+			/if \(mal_ops_is_number\([^\n]+\) \{[\s\S]*?\} else \{[\s\S]*?mal_vm_binary_op[\s\S]*?MAL_THREW\(\)/,
 		);
-		expect(output).not.toMatch(
-			/\?[^\n]*mal_vm_binary_op[^\n]*;\n\s+if \(vm->completion\.kind/,
-		);
+		expect(output).not.toMatch(/\?[^\n]*mal_vm_binary_op[^\n]*;\n\s+if \(MAL_THREW\(\)/);
 	});
 
 	it("returns directly from non-constructible functions", () => {
@@ -3701,7 +3706,7 @@ describe("native update-expression representation", () => {
 		const output = emit(
 			`"use strict"; globalThis.read = function read() { return value; }; let value = 1;`,
 		);
-		expect(output).toContain("vm->native_frames[vm->native_frame_count - 1].pos_id");
+		expect(output).toContain("MAL_FRAME_POS(");
 		expect(output).not.toContain("__current_pos_id");
 		expect(output).toContain("if (mal_value_is_empty(");
 		expect(output).toContain("mal_vm_op_throw_if_tdz");

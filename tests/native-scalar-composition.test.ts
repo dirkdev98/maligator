@@ -679,10 +679,7 @@ describe("existing-proof scalar expression consumers", () => {
 		expect(native.storage!.expressionIps).not.toContain(ip);
 		const output = emitCompiledFunction(native, native.functionIndex, "", false)!.source;
 		const helper = output.indexOf(`MalValue unary_number_${ip} =`);
-		const check = output.indexOf(
-			"if (vm->completion.kind == MAL_COMPLETION_THROW)",
-			helper,
-		);
+		const check = output.indexOf("if (MAL_THREW())", helper);
 		const extract = output.indexOf(
 			`r${op.dst} = mal_ops_number_as_f64(unary_number_${ip});`,
 			helper,
@@ -1394,10 +1391,7 @@ describe("known builtin scalar result storage", () => {
 		if (op.opcode !== "CALL_KNOWN") throw new Error("Missing charCodeAt call");
 		expect(out.native.registerRepresentations[op.dst]).toBe("number");
 		const start = out.c.source.indexOf(`MalValue char_code_result_${ip} =`);
-		const check = out.c.source.indexOf(
-			"if (vm->completion.kind == MAL_COMPLETION_THROW)",
-			start,
-		);
+		const check = out.c.source.indexOf("if (MAL_THREW())", start);
 		const extract = out.c.source.indexOf(
 			`r${op.dst} = mal_ops_number_as_f64(char_code_result_${ip});`,
 			start,
@@ -1570,10 +1564,7 @@ describe("certified scalar operation results", () => {
 		const op = out.native.body.instructions[ip]!;
 		if (op.opcode !== "QUERY_STATIC_DATA") throw new Error("Missing static query");
 		const start = out.c.source.indexOf(`MalValue static_query_result_${ip} =`);
-		const check = out.c.source.indexOf(
-			"if (vm->completion.kind == MAL_COMPLETION_THROW)",
-			start,
-		);
+		const check = out.c.source.indexOf("if (MAL_THREW())", start);
 		const extract = out.c.source.indexOf(
 			`r${op.dst} = mal_ops_number_as_f64(static_query_result_${ip});`,
 			start,

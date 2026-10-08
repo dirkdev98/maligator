@@ -393,7 +393,7 @@ describe("native numeric indexed-property root publication", () => {
 			expect(source.slice(fallback, miss)).toContain(`__gc_slots[${slot}] = r1;`);
 			expect(source.slice(fallback, miss)).toContain("MAL_ROOT_MASK(0x28)");
 			expect(source.slice(miss, source.indexOf("\n    }", miss))).toContain(
-				"vm->completion.kind == MAL_COMPLETION_THROW",
+				"MAL_THREW()",
 			);
 		},
 	);

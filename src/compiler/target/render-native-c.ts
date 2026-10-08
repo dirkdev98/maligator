@@ -724,7 +724,7 @@ function nativeRootMaskStatements(masks: Iterable<NativeInactiveRootMask>): {
 		for (let word = 2; word < mask.length; word += 2) {
 			words.push(`UINT64_C(0x${nativeRootMaskWordHex(mask, word)})`);
 		}
-		statements.set(mask, `MAL_ROOT_MASK_WIDE(0x${head}, ${symbol}, countof(${symbol}))`);
+		statements.set(mask, `MAL_ROOT_MASK_WIDE(0x${head}, ${symbol})`);
 		declarations.push(`    static const u64 ${symbol}[] = { ${words.join(", ")} };`);
 	}
 	return { statements, declarations };
@@ -1890,7 +1890,7 @@ function renderCallbackAdapter(
 		"    }",
 		"    MAL_PERF_COUNT(array_iteration_typed_callback_hits);",
 		`    ${cTypeOf(entry.resultRepresentation)} value = mal_direct_${index}_${entry.id}${suffix}(vm, this_value${values.length ? `, ${values.join(", ")}` : ""}, env, callee);`,
-		"    if (vm->completion.kind == MAL_COMPLETION_THROW) return MAL_VALUE_UNDEFINED;",
+		"    if (MAL_THREW()) return MAL_VALUE_UNDEFINED;",
 		`    return ${result};`,
 		"}",
 	].join("\n");
@@ -4222,9 +4222,7 @@ function emitBody(
 		if (debug && nativeInstructionMayCaptureStack(fn.instructions[ip]!, reps)) {
 			const pos = fn.positions[ip] ?? -1;
 			if (pos !== -1 && pos !== lastPublishedPos) {
-				lines.push(
-					`    vm->native_frames[vm->native_frame_count - 1].pos_id = ${relocation.sourcePosition(pos)};`,
-				);
+				lines.push(`    MAL_FRAME_POS(${relocation.sourcePosition(pos)});`);
 				lastPublishedPos = pos;
 			}
 		}
@@ -5159,8 +5157,7 @@ function emitInstruction(
 		];
 		return cleanup.length === 0 ? jump : `{ ${cleanup.join(" ")} ${jump} }`;
 	};
-	const throwCheck = (): string =>
-		`if (vm->completion.kind == MAL_COMPLETION_THROW) ${onThrow()}`;
+	const throwCheck = (): string => `if (MAL_THREW()) ${onThrow()}`;
 	// A poll without corresponding exact-root metadata can expose dead slots or clear
 	// a just-produced result under the preceding instruction's mask.
 	// Isolate termination is sticky and re-arms mal_gc_poll, so it surfaces only at a
@@ -9486,7 +9483,7 @@ function emitInstruction(
 						...functionDeclaration,
 						`${cTypeOf(directEntry.resultRepresentation)} ${directValue} = mal_direct_${target}_${directEntry.id}${suffix}(vm, ${thisArgument}${parameters.length === 0 ? "" : `, ${parameters.join(", ")}`}, mal_value_to_function_object(${directCallee})->creation_env, ${directCallee});`,
 						`${directEntry.leaf ? "mal_vm_leave_leaf_checked" : "mal_vm_leave_compiled"}(vm);`,
-						`if (vm->completion.kind == MAL_COMPLETION_THROW) ${onThrow()}`,
+						`if (MAL_THREW()) ${onThrow()}`,
 						`r${instruction.dst} = ${directResult};`,
 						poll(),
 					];
@@ -9501,7 +9498,7 @@ function emitInstruction(
 						...functionDeclaration,
 						`MalValue ${directValue} = mal_compiled_${target}${suffix}(vm, ${thisArgument}, ${argsExpr}, ${args.length}, MAL_VALUE_UNDEFINED, mal_value_to_function_object(${directCallee})->creation_env, ${directCallee}, nullptr);`,
 						`mal_vm_leave_compiled(vm);`,
-						`if (vm->completion.kind == MAL_COMPLETION_THROW) ${onThrow()}`,
+						`if (MAL_THREW()) ${onThrow()}`,
 						`r${instruction.dst} = ${callResult(directValue)};`,
 						poll(),
 					];
@@ -9716,7 +9713,7 @@ function emitInstruction(
 					`MalIteratorRecord ${rec} = { .iterator = ${boxed(instruction.iterator)}, .next_method = ${boxed(instruction.next)} };`,
 					`MalValue ${val} = MAL_VALUE_UNDEFINED; bool ${done};`,
 					`__iter_entry_pair_${ip}_fast = ${regionAdmissionGuard(region.license)} && mal_vm_iterator_step_entry_pair_protocol_cursor(vm, &${rec}, &__iter_entry_pair_${ip}_first, &__iter_entry_pair_${ip}_second, &${done});`,
-					`if (!__iter_entry_pair_${ip}_fast && vm->completion.kind == MAL_COMPLETION_THROW) ${onThrow()}`,
+					`if (!__iter_entry_pair_${ip}_fast && MAL_THREW()) ${onThrow()}`,
 					`if (__iter_entry_pair_${ip}_fast) { MAL_PERF_COUNT(iterator_entry_pair_hits); } else { MAL_PERF_COUNT(iterator_entry_pair_fallbacks); }`,
 					`if (!__iter_entry_pair_${ip}_fast && !mal_vm_iterator_step(vm, &${rec}, &${val}, &${done})) ${onThrow()}`,
 					`r${instruction.valueDst} = __iter_entry_pair_${ip}_fast ? MAL_VALUE_UNDEFINED : ${val};`,

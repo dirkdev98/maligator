@@ -90,9 +90,7 @@ describe("native cached-definition root publication", () => {
 		expect(fallback).toBeGreaterThan(probe);
 		expect(emitted.slice(key, probe)).not.toContain(publication);
 		expect(emitted.slice(probe, fallback)).toContain(publication);
-		expect(emitted.slice(fallback)).toContain(
-			"vm->completion.kind == MAL_COMPLETION_THROW",
-		);
+		expect(emitted.slice(fallback)).toContain("MAL_THREW()");
 	});
 
 	it.each(["enumerable", "writable", "configurable"] as const)(

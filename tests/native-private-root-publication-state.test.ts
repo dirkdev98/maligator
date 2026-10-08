@@ -195,9 +195,7 @@ function inactiveRootBits(source: string, start: number, end: number): bigint {
 	const statement = masks.at(-1)![0];
 	const narrow = /^MAL_ROOT_MASK\(0x([0-9a-f]+)\);$/.exec(statement);
 	if (narrow !== null) return BigInt(`0x${narrow[1]}`);
-	const wide = /^MAL_ROOT_MASK_WIDE\(0x([0-9a-f]+), (\w+), countof\(\2\)\);$/.exec(
-		statement,
-	);
+	const wide = /^MAL_ROOT_MASK_WIDE\(0x([0-9a-f]+), (\w+)\);$/.exec(statement);
 	expect(wide).not.toBeNull();
 	const tail = new RegExp(`static const u64 ${wide![2]}\\[\\] = \\{ ([^}]*) \\};`).exec(
 		source,
