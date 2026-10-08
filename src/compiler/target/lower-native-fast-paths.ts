@@ -610,6 +610,23 @@ function lowerPropertyProjection(
 			break;
 	}
 	if (steps.length === 0) return undefined;
+	// A fusion start leaves its result unmaterialized for its finish. Rendering
+	// publishes a start only from the final step, so every other fused step needs its
+	// partner inside this projection.
+	for (const [index, step] of steps.entries()) {
+		const fusion = terminalFusion(step.ip);
+		if (fusion === undefined || (fusion.role === "start" && index === steps.length - 1))
+			continue;
+		if (
+			!steps.some((other) => {
+				const partner = terminalFusion(other.ip);
+				return (
+					other !== step && partner?.id === fusion.id && partner.role !== fusion.role
+				);
+			})
+		)
+			return undefined;
+	}
 	const lastIp = steps.at(-1)!.ip;
 	if (loads.length < 2 || loads.some((_load, index) => !usedLoads.has(index))) {
 		return undefined;

@@ -136,4 +136,25 @@ if (projectFour(stable) !== 16) {
 	throw new Error("quad projection read a later property before numeric coercion");
 }
 
+// A fused operand chain that finishes inside the projection must still reach it.
+function measureFusedOperands(headerLines, groups) {
+	const header = headerLines.reduce((total, line) => total + line.length, 0);
+	const record = (parts) => ({
+		parts,
+		indices: parts.map((_, index) => index),
+		left: parts.reduce((total, part) => total + part.length, 0),
+		right: parts.reduce((total, part) => total + part.length * 2, 0),
+	});
+	const measure = (lines, part) => {
+		const lineCount = lines + part.indices.length + 1 + part.parts.length;
+		return header + part.left + part.right + lineCount - 1;
+	};
+	return groups.map((group) => measure(headerLines.length, record(group)));
+}
+if (
+	measureFusedOperands(["#a", "#bc"], [["x", "yz"], ["abc"], []]).join() !== "20,18,7"
+) {
+	throw new Error("projection dropped a fused numeric operand");
+}
+
 console.log("static-property-projection PASS");
