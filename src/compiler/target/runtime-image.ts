@@ -2312,7 +2312,7 @@ function remapRuntimeConstantReferences(
 
 function compactRuntimeConstantPool<T>(
 	values: ReadonlyArray<T>,
-	live: ReadonlyMap<number, ReadonlySet<string>>,
+	live: ReadonlySet<number>,
 	keyFor: (value: T) => string,
 ): { readonly values: ReadonlyArray<T>; readonly oldToNew: ReadonlyMap<number, number> } {
 	const compacted: Array<T> = [];
@@ -2458,16 +2458,22 @@ export function remapRuntimeFunctionConstants(
 	return remapped;
 }
 
-export function compactRuntimeImageConstants(
+interface RuntimeConstantRetentionReasons {
+	readonly strings: Map<number, Set<string>>;
+	readonly bigints: Map<number, Set<string>>;
+	readonly templates: Map<number, Set<string>>;
+}
+
+/** Name every retained constant reference; this walk also produces the precise range errors. */
+function runtimeConstantRetentionReasons(
 	definition: RuntimeImage,
-): RuntimeImageConstantCompactionResult {
-	validateRuntimeImageMetadata(definition);
-	const stringReasons = new Map<number, Set<string>>();
-	const bigintReasons = new Map<number, Set<string>>();
-	const templateReasons = new Map<number, Set<string>>();
+): RuntimeConstantRetentionReasons {
+	const strings = new Map<number, Set<string>>();
+	const bigints = new Map<number, Set<string>>();
+	const templates = new Map<number, Set<string>>();
 	const noteString = (index: number, reason: string): void =>
 		addRuntimeConstantRetentionReason(
-			stringReasons,
+			strings,
 			definition.stringConstants.length,
 			index,
 			reason,
@@ -2475,7 +2481,7 @@ export function compactRuntimeImageConstants(
 		);
 	const noteBigint = (index: number, reason: string): void =>
 		addRuntimeConstantRetentionReason(
-			bigintReasons,
+			bigints,
 			definition.bigintConstants.length,
 			index,
 			reason,
@@ -2483,7 +2489,7 @@ export function compactRuntimeImageConstants(
 		);
 	const noteTemplate = (offset: number, reason: string): void =>
 		addRuntimeConstantRetentionReason(
-			templateReasons,
+			templates,
 			definition.literalTemplateData.length,
 			offset,
 			reason,
@@ -2520,44 +2526,127 @@ export function compactRuntimeImageConstants(
 			noteTemplate,
 		);
 	}
-	const templates = compactLiteralTemplateSegments(
+	compactLiteralTemplateSegments(
 		definition.literalTemplateData,
-		new Set(templateReasons.keys()),
+		new Set(templates.keys()),
 		"RuntimeImage literal-template",
 		{
 			string: (index, offset) => noteString(index, `literal template ${offset} string`),
 			bigint: (index, offset) => noteBigint(index, `literal template ${offset} bigint`),
 		},
 	);
+	return { strings, bigints, templates };
+}
+
+function visitRuntimeConstantIndices(
+	value: unknown,
+	note: (kind: "string" | "bigint" | "template", index: number) => void,
+	key?: string,
+): void {
+	if (typeof value === "number") {
+		if (RUNTIME_STRING_INDEX_KEYS.has(key ?? "")) {
+			if (key !== "methodStringIndex" || value >= 0) note("string", value);
+		} else if (key === "bigintIndex") note("bigint", value);
+		else if (key === "templateOffset") note("template", value);
+		return;
+	}
+	if (value === null || typeof value !== "object") return;
+	if (Array.isArray(value)) {
+		if (RUNTIME_STRING_INDEX_ARRAY_KEYS.has(key ?? "")) {
+			for (const entry of value) {
+				if (typeof entry !== "number") note("string", Number.NaN);
+				else if (key !== "cookedIndices" || entry >= 0) note("string", entry);
+			}
+			return;
+		}
+		for (const entry of value) visitRuntimeConstantIndices(entry, note);
+		return;
+	}
+	for (const [entryKey, entry] of Object.entries(value))
+		visitRuntimeConstantIndices(entry, note, entryKey);
+}
+
+export function compactRuntimeImageConstants(
+	definition: RuntimeImage,
+): RuntimeImageConstantCompactionResult {
+	validateRuntimeImageMetadata(definition);
+	const liveStrings = new Set<number>();
+	const liveBigints = new Set<number>();
+	const liveTemplates = new Set<number>();
+	const pools = {
+		string: [liveStrings, definition.stringConstants.length],
+		bigint: [liveBigints, definition.bigintConstants.length],
+		template: [liveTemplates, definition.literalTemplateData.length],
+	} as const;
+	const note = (kind: "string" | "bigint" | "template", index: number): void => {
+		const [live, length] = pools[kind];
+		if (!Number.isSafeInteger(index) || index < 0 || index >= length) {
+			runtimeConstantRetentionReasons(definition);
+			throw new RangeError(`invalid RuntimeImage ${kind} index ${index}`);
+		}
+		live.add(index);
+	};
+	for (const fn of definition.functions) {
+		if (fn.nameStringIndex >= 0) note("string", fn.nameStringIndex);
+		for (const instruction of fn.instructions) {
+			visitRuntimeConstantIndices(instruction, note);
+			if (!isVmCallInstruction(instruction)) continue;
+			for (const { operand } of vmValueOperandEntries(instruction)) {
+				const decoded = decodeVmValueOperand(operand);
+				if (decoded.kind === "string") note("string", decoded.index);
+			}
+		}
+	}
+	for (const shape of definition.precompiledLiteralShapes)
+		visitRuntimeConstantIndices(shape, note);
+	const templates = compactLiteralTemplateSegments(
+		definition.literalTemplateData,
+		liveTemplates,
+		"RuntimeImage literal-template",
+		{
+			string: (index) => note("string", index),
+			bigint: (index) => note("bigint", index),
+		},
+	);
 	const stringPool = compactRuntimeConstantPool(
 		definition.stringConstants,
-		stringReasons,
+		liveStrings,
 		(value) => value.join(","),
 	);
 	const bigintPool = compactRuntimeConstantPool(
 		definition.bigintConstants,
-		bigintReasons,
+		liveBigints,
 		(value) => value.toString(),
 	);
 	const stringOldToNew = stringPool.oldToNew;
 	const bigintOldToNew = bigintPool.oldToNew;
+	// Reasons exist for diagnostics; compiling never needs to name each reference.
+	let reasons: RuntimeConstantRetentionReasons | undefined;
+	const retention = (): RuntimeConstantRetentionReasons =>
+		(reasons ??= runtimeConstantRetentionReasons(definition));
 	const report: RuntimeImageConstantRetentionReport = {
 		strings: {
 			originalCount: definition.stringConstants.length,
 			retainedCount: stringPool.values.length,
-			entries: runtimeConstantRetentionEntries(stringReasons),
+			get entries() {
+				return runtimeConstantRetentionEntries(retention().strings);
+			},
 		},
 		bigints: {
 			originalCount: definition.bigintConstants.length,
 			retainedCount: bigintPool.values.length,
-			entries: runtimeConstantRetentionEntries(bigintReasons),
+			get entries() {
+				return runtimeConstantRetentionEntries(retention().bigints);
+			},
 		},
 		literalTemplates: {
 			originalWordCount: definition.literalTemplateData.length,
 			retainedWordCount: templates.data.length,
-			entries: [...templateReasons.entries()]
-				.sort(([left], [right]) => left - right)
-				.map(([offset, reasons]) => ({ offset, reasons: [...reasons].sort() })),
+			get entries() {
+				return [...retention().templates.entries()]
+					.sort(([left], [right]) => left - right)
+					.map(([offset, reasons]) => ({ offset, reasons: [...reasons].sort() }));
+			},
 		},
 	};
 	const changed =
