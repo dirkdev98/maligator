@@ -1,12 +1,33 @@
 "use strict";
 
 // One static load site sees receivers that alternate between shapes placing
-// `value` at different slots with different field representations.
+// `value` at different slots with different field representations. Past four
+// shapes the site is megamorphic and also sees inherited, absent, and
+// dictionary-mode `value` properties.
+const inherited = { value: "inherited" };
 const makers = [
 	(index) => ({ value: index, left: 1 }),
 	(index) => ({ right: "r", value: index + 0.5 }),
 	(index) => ({ other: true, extra: null, value: "s" + index }),
 	(index) => ({ value: { index } }),
+	(index) => ({ a: 1, b: 2, c: 3, value: index * 2 }),
+	() => Object.create(inherited),
+	(index) => ({ absent: index }),
+	(index) => {
+		const row = { value: index - 1, removed: 0 };
+		delete row.removed;
+		return row;
+	},
+];
+const expectations = [
+	(value, index) => value === index,
+	(value, index) => value === index + 0.5,
+	(value, index) => value === "s" + index,
+	(value, index) => value.index === index,
+	(value, index) => value === index * 2,
+	(value) => value === "inherited",
+	(value) => value === undefined,
+	(value, index) => value === index - 1,
 ];
 
 function read(row) {
@@ -14,22 +35,12 @@ function read(row) {
 }
 
 const results = [];
-for (const width of [2, 3, 4]) {
+for (const width of [2, 3, 4, 8]) {
 	const rows = Array.from({ length: 4096 }, (_, index) => makers[index % width](index));
 	let matches = 0;
 	for (let round = 0; round < 4; round++) {
 		for (let index = 0; index < rows.length; index++) {
-			const value = read(rows[index]);
-			const kind = index % width;
-			const expected =
-				kind === 0
-					? value === index
-					: kind === 1
-						? value === index + 0.5
-						: kind === 2
-							? value === "s" + index
-							: value.index === index;
-			if (expected) matches++;
+			if (expectations[index % width](read(rows[index]), index)) matches++;
 		}
 	}
 	results.push([`${width} alternating shapes`, matches === 4 * 4096]);

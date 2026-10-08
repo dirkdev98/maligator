@@ -2404,6 +2404,22 @@ mal_vm_property_try_load_static_remaining(
         mal_vm_object_try_load_polymorphic(object, ic->key, ic, &polymorphic_value)) {
         return (MalStaticPropertyProbeResult) { .hit = true, .value = polymorphic_value };
     }
+    // A megamorphic site otherwise reaches this shared stub only after the collecting
+    // slow path has rooted its operands and re-derived the key.
+    if (object != nullptr && ic->mode == MAL_IC_MODE_SHAPE && ic->megamorphic &&
+        vm->property_stub != nullptr && mal_value_is_string(ic->key)) {
+        // Stub rows speak the VM atom; a site still holding its baked constant maps to it.
+        MalString *atom = mal_vm_string_constant_atom(vm, mal_value_to_string(ic->key));
+        MalValue key = atom == nullptr ? ic->key : mal_value_from_string(atom);
+        const MalPropertyStubEntry *entry =
+            &vm->property_stub[mal_stub_hash(object->shape, key)];
+        if (entry->shape == object->shape && entry->key == key) {
+            MAL_PERF_COUNT(ic_load_mega_hits);
+            mal_vm_record_own_slot(ic, object->shape, key, entry->slot);
+            return (MalStaticPropertyProbeResult) {
+                .hit = true, .value = mal_object_field_load_token(object, entry->field)};
+        }
+    }
     if (ic->mode == MAL_IC_MODE_ARRAY_LENGTH &&
         mal_value_is_heap_type(receiver, MAL_HEAP_ARRAY_OBJECT)) {
         const MalArrayObject *array = (const MalArrayObject *) mal_value_to_heap(receiver);
