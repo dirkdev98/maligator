@@ -35,6 +35,46 @@ export function digestSelfCompileOutput(
 	return digest.digest("hex");
 }
 
+/** Static counts of root publication and runtime work spelled in emitted C. */
+export interface EmittedCSummary {
+	readonly codeUnits: number;
+	readonly rootPublicationStores: number;
+	readonly rootClears: number;
+	readonly rootMasks: number;
+	readonly wideRootMasks: number;
+	readonly undefinedRegisterStores: number;
+	readonly throwChecks: number;
+	readonly runtimeCallSites: number;
+}
+
+const EMITTED_C_PATTERNS = {
+	rootPublicationStores: /__gc_slots\[\d+\] = r\d+;/g,
+	rootClears: /__gc_slots\[\d+\] = MAL_VALUE_UNDEFINED;/g,
+	rootMasks: /\bMAL_ROOT_MASK(?:_WIDE)?\(/g,
+	wideRootMasks: /\bMAL_ROOT_MASK_WIDE\(/g,
+	// Entry zeroing and CREATE_UNDEFINED share this spelling.
+	undefinedRegisterStores: /^ {4}r\d+ = MAL_VALUE_UNDEFINED;$/gm,
+	// Older emitters spell the completion test inline.
+	throwChecks: /MAL_THREW\(\)|vm->completion\.kind == MAL_COMPLETION_THROW/g,
+	runtimeCallSites: /\bmal_[a-z0-9_]+\(/g,
+} as const;
+
+export function summarizeEmittedC(directory: string): EmittedCSummary {
+	const counts = Object.fromEntries(
+		Object.keys(EMITTED_C_PATTERNS).map((name) => [name, 0]),
+	) as Record<keyof typeof EMITTED_C_PATTERNS, number>;
+	let codeUnits = 0;
+	for (const name of readdirSync(directory).sort()) {
+		if (!name.endsWith(".c")) continue;
+		const source = readFileSync(path.join(directory, name), "utf8");
+		codeUnits += source.length;
+		for (const [key, pattern] of Object.entries(EMITTED_C_PATTERNS))
+			counts[key as keyof typeof EMITTED_C_PATTERNS] +=
+				source.match(pattern)?.length ?? 0;
+	}
+	return { codeUnits, ...counts };
+}
+
 function copyStrippedTree(source: string, destination: string): void {
 	mkdirSync(destination, { recursive: true });
 	for (const entry of readdirSync(source, { withFileTypes: true })) {

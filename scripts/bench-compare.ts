@@ -163,7 +163,7 @@ function metricPolicy(
 		return { direction: "lower", thresholdPercent: 0 };
 	if (/(p99|rss|Pause)/i.test(metricPath))
 		return { direction: "lower", thresholdPercent: 5 };
-	if (/(binaryBytes|ArchiveBytes)$/i.test(metricPath)) {
+	if (/(binaryBytes|binaryTextBytes|ArchiveBytes)$/i.test(metricPath)) {
 		return { direction: "lower", thresholdPercent: 0.5, minimumAbsolute: 32 * 1024 };
 	}
 	if (/\.phaseMs\./.test(metricPath)) return { direction: "lower", thresholdPercent: 0 };

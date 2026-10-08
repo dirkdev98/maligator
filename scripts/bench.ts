@@ -65,11 +65,14 @@ import type {
 	CompilerOwnerCoverage,
 	CompilerOwnerLedgerRow,
 } from "./compiler-owner-ledger.ts";
+import { measureBinaryTextBytes } from "./native-binary-text.ts";
 import {
 	digestSelfCompileOutput,
 	prepareSelfCompileSource,
 	SELF_COMPILE_CONFIG,
+	summarizeEmittedC,
 } from "./self-compile-workload.ts";
+import type { EmittedCSummary } from "./self-compile-workload.ts";
 
 const BASELINE_FILE = "bench/baseline.json";
 type CoreOptimizationAblation = CoreOptimizationBenchmarkAblation["family"];
@@ -202,6 +205,8 @@ interface SelfCompileMetrics {
 	arch: string;
 	nodeVersion: string;
 	nativeBuild: NativeOutputBuildMetrics;
+	executable: SelfCompileExecutable;
+	emittedC: EmittedCSummary;
 	runtime: {
 		readonly maligator: NativeRuntimeMetrics;
 		readonly nodePeakRssBytes: number;
@@ -244,8 +249,13 @@ interface SelfCompileMetrics {
 	};
 }
 
+interface SelfCompileExecutable {
+	readonly binaryBytes: number;
+	readonly binaryTextBytes: number;
+}
+
 interface SelfCompileCheckpoint {
-	readonly schema: 2;
+	readonly schema: 3;
 	readonly source: NonNullable<BenchmarkSnapshot["source"]>;
 	readonly runs: number;
 	readonly nativeCacheDirectory?: string;
@@ -253,6 +263,7 @@ interface SelfCompileCheckpoint {
 	readonly root: string;
 	readonly binary: string;
 	readonly nativeBuild: NativeOutputBuildMetrics;
+	readonly executable: SelfCompileExecutable;
 	readonly coldSamples: {
 		node: Array<SelfCompileSample>;
 		maligator: Array<SelfCompileSample>;
@@ -744,6 +755,7 @@ interface SelfCompileRun {
 	phases: SelfCompilePhases;
 	optimizer: CoreOptimizationReport;
 	owners: ReadonlyArray<CoreOptimizationOwnerReport>;
+	emittedC?: EmittedCSummary;
 }
 
 type SelfCompileSample = Omit<SelfCompileRun, "optimizer" | "owners">;
@@ -755,6 +767,14 @@ function selfCompileSample(run: SelfCompileRun): SelfCompileSample {
 		codeUnits: run.codeUnits,
 		digest: run.digest,
 		phases: run.phases,
+		...(run.emittedC === undefined ? {} : { emittedC: run.emittedC }),
+	};
+}
+
+function selfCompileExecutable(binary: string): SelfCompileExecutable {
+	return {
+		binaryBytes: fileBytes(binary),
+		binaryTextBytes: measureBinaryTextBytes(binary),
 	};
 }
 
@@ -763,6 +783,7 @@ function runSelfCompile(
 	args: Array<string>,
 	output: string,
 	instrumentation: CoreInstrumentationMode = "off",
+	summarizeOutput = false,
 ): SelfCompileRun {
 	const start = process.hrtime.bigint();
 	const result = spawnSync(command, [...args, output], {
@@ -797,6 +818,7 @@ function runSelfCompile(
 		phases: summary.phases,
 		optimizer: summary.optimizer,
 		owners: summary.owners,
+		...(summarizeOutput ? { emittedC: summarizeEmittedC(output) } : {}),
 	};
 }
 
@@ -948,6 +970,8 @@ function medianPhases(values: ReadonlyArray<SelfCompilePhases>): SelfCompilePhas
 function assembleSelfCompileMetrics(input: {
 	readonly runs: number;
 	readonly nativeBuild: NativeOutputBuildMetrics;
+	readonly executable: SelfCompileExecutable;
+	readonly emittedC: EmittedCSummary;
 	readonly cold: SelfCompileMetrics["cold"];
 	readonly coldSamples: SelfCompileMetrics["coldSamples"];
 	readonly warm: SelfCompileMetrics["warm"];
@@ -975,6 +999,8 @@ function assembleSelfCompileMetrics(input: {
 		arch: process.arch,
 		nodeVersion: process.version,
 		nativeBuild: input.nativeBuild,
+		executable: input.executable,
+		emittedC: input.emittedC,
 		runtime: input.runtime,
 		cold: input.cold,
 		coldSamples: input.coldSamples,
@@ -1000,6 +1026,7 @@ function benchSelfCompile(
 		measureNativeBuildResources: true,
 		onNativeCommandResource: nativeBuild.observeResource,
 	});
+	const executable = selfCompileExecutable(binary);
 	const root = mkdtempSync(path.join(os.tmpdir(), "mal-self-compile-"));
 	const maligatorRuns: Array<SelfCompileRun> = [];
 	const nodeRuns: Array<SelfCompileRun> = [];
@@ -1039,6 +1066,8 @@ function benchSelfCompile(
 			binary,
 			[target],
 			path.join(root, "warmup-maligator"),
+			"off",
+			true,
 		);
 		assertComparableSelfCompile(warmupNode, warmupMaligator);
 		for (let index = 0; index < runs; index++) {
@@ -1135,6 +1164,8 @@ function benchSelfCompile(
 		return assembleSelfCompileMetrics({
 			runs,
 			nativeBuild: nativeBuild.metrics("bench-self-compile"),
+			executable,
+			emittedC: warmupMaligator.emittedC!,
 			cold: {
 				node: selfCompileSample(coldNode),
 				maligator: selfCompileSample(coldMaligator),
@@ -1214,6 +1245,7 @@ function runCheckpointSelfCompilePair(
 	label: string,
 	instrumentation: CoreInstrumentationMode = "off",
 	nodeFirst = false,
+	summarizeOutput = false,
 ): { readonly node: SelfCompileRun; readonly maligator: SelfCompileRun } {
 	const nodeOutput = path.join(checkpoint.root, `${label}-node`);
 	const maligatorOutput = path.join(checkpoint.root, `${label}-maligator`);
@@ -1221,7 +1253,13 @@ function runCheckpointSelfCompilePair(
 	rmSync(maligatorOutput, { recursive: true, force: true });
 	try {
 		const runMaligator = () =>
-			runSelfCompile(checkpoint.binary, [target], maligatorOutput, instrumentation);
+			runSelfCompile(
+				checkpoint.binary,
+				[target],
+				maligatorOutput,
+				instrumentation,
+				summarizeOutput,
+			);
 		const runNode = () =>
 			runSelfCompile(
 				process.execPath,
@@ -1250,6 +1288,7 @@ function checkpointSelfCompileMetrics(
 		checkpoint.countersSample === undefined ||
 		checkpoint.ownerSample === undefined ||
 		checkpoint.runtime === undefined ||
+		checkpoint.warmup?.maligator.emittedC === undefined ||
 		checkpoint.warm.node.length !== checkpoint.runs ||
 		checkpoint.warm.maligator.length !== checkpoint.runs
 	) {
@@ -1258,6 +1297,8 @@ function checkpointSelfCompileMetrics(
 	return assembleSelfCompileMetrics({
 		runs: checkpoint.runs,
 		nativeBuild: checkpoint.nativeBuild,
+		executable: checkpoint.executable,
+		emittedC: checkpoint.warmup.maligator.emittedC,
 		cold: {
 			node: checkpoint.coldSamples.node[0]!,
 			maligator: checkpoint.coldSamples.maligator[0]!,
@@ -1300,13 +1341,14 @@ function benchSelfCompileCheckpoint(
 			throw error;
 		}
 		checkpoint = {
-			schema: 2,
+			schema: 3,
 			source,
 			runs,
 			nativeCacheDirectory,
 			root,
 			binary,
 			nativeBuild: nativeBuild.metrics("bench-self-compile"),
+			executable: selfCompileExecutable(binary),
 			coreOptimizationAblation,
 			coldSamples: { node: [], maligator: [] },
 			warm: { node: [], maligator: [] },
@@ -1316,7 +1358,7 @@ function benchSelfCompileCheckpoint(
 	}
 
 	checkpoint = JSON.parse(readFileSync(checkpointPath, "utf8")) as SelfCompileCheckpoint;
-	if (checkpoint.schema !== 2) {
+	if (checkpoint.schema !== 3) {
 		throw new Error("unsupported self-compile checkpoint schema");
 	}
 	if (JSON.stringify(checkpoint.source) !== JSON.stringify(source)) {
@@ -1350,7 +1392,14 @@ function benchSelfCompileCheckpoint(
 	} else if (checkpoint.warmup === undefined) {
 		progress.detail("self-compile checkpoint stage: warmup pair");
 		const target = preparedCheckpointTarget(checkpoint.root, "source");
-		const pair = runCheckpointSelfCompilePair(checkpoint, target, "warmup");
+		const pair = runCheckpointSelfCompilePair(
+			checkpoint,
+			target,
+			"warmup",
+			"off",
+			false,
+			true,
+		);
 		checkpoint.warmup = {
 			node: selfCompileSample(pair.node),
 			maligator: selfCompileSample(pair.maligator),

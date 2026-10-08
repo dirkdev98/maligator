@@ -25,6 +25,7 @@ import type * as ArtifactCodec from "../src/compiler/target/compiler-artifact-co
 import type * as ProgramImage from "../src/compiler/target/program-image.ts";
 import type { NativeBuildPhaseEvent } from "../src/native-build-context.ts";
 import type * as Harness from "../src/test-harness.ts";
+import { measureBinaryTextBytes } from "./native-binary-text.ts";
 import {
 	collectNativeMicroDiagnostics,
 	copyBeforeNativeStrip,
@@ -395,28 +396,10 @@ async function buildWorker(request: BuildRequest): Promise<void> {
 	});
 	const buildMs = performance.now() - started;
 	const artifact = serializeCompilerArtifact(built.programImage, { debugInfo: false });
-	const size = spawnSync(
-		"size",
-		process.platform === "darwin"
-			? ["-m", built.binaryPath]
-			: ["--format=sysv", "--radix=10", built.binaryPath],
-		{
-			encoding: "utf8",
-			timeout: 10_000,
-			env: cleanTestEnvironment(),
-		},
-	);
-	writeFileSync(
-		path.join(path.dirname(request.output), "binary-size.log"),
-		`${size.stdout ?? ""}\n${size.stderr ?? ""}`,
-	);
-	if (size.error !== undefined) throw size.error;
-	const textBytes =
-		process.platform === "darwin"
-			? size.stdout.match(/^\s*Section __text: (\d+)\s/m)?.[1]
-			: size.stdout.match(/^\.text\s+(\d+)\s/m)?.[1];
-	if (size.status !== 0 || textBytes === undefined || !/^\d+$/.test(textBytes))
-		throw new Error("size did not produce a decimal .text section measurement");
+	const textBytes = measureBinaryTextBytes(built.binaryPath, {
+		env: cleanTestEnvironment(),
+		reportPath: path.join(path.dirname(request.output), "binary-size.log"),
+	});
 	const generated = phases.find((event) => event.phase === "write generated C");
 	if (generated?.bytes === undefined) throw new Error("build omitted generated C size");
 	const diagnostics = request.diagnostics
@@ -428,7 +411,7 @@ async function buildWorker(request: BuildRequest): Promise<void> {
 		buildMs,
 		executableBytes: statSync(built.binaryPath).size,
 		executableSha256: sha256(readFileSync(built.binaryPath)),
-		binaryTextBytes: Number(textBytes),
+		binaryTextBytes: textBytes,
 		generatedCBytes: generated.bytes,
 		compilerArtifactBytes: artifact.byteLength,
 		compilerArtifactSha256: sha256(artifact),

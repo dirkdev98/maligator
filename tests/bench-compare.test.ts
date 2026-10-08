@@ -110,6 +110,16 @@ test("binary size requires both percentage and practical byte movement", () => {
 	).toBe("unchanged");
 });
 
+test("self-compile executable text size uses the binary size policy", () => {
+	const grown = Array.from({ length: 7 }, () => ({ base: 10_000_000, head: 10_200_000 }));
+	expect(
+		classifyMetricSamples("selfCompile.executable.binaryTextBytes", grown)?.status,
+	).toBe("regression");
+	expect(
+		classifyMetricSamples("selfCompile.emittedC.rootPublicationStores", grown),
+	).toBeUndefined();
+});
+
 test("paired comparison ignores reference-engine timing noise", () => {
 	const samples = Array.from({ length: 7 }, () => ({ base: 100, head: 200 }));
 	expect(classifyMetricSamples("javascript.node.wallMs", samples)).toBeUndefined();

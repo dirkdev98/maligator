@@ -232,7 +232,10 @@ Remove `--plan=json` to execute. `--runs` counts measured pairs; each comparison
 also warms both sources. A self-compile snapshot includes a native build, three
 cold pairs, a warmup pair, the requested measured pairs, phase/counter/owner
 instrumentation, and a resource pair. A one-pair comparison can therefore exceed
-ten minutes. The plan reports this additional work explicitly.
+ten minutes. The plan reports this additional work explicitly. Each snapshot also
+records the self-compiler executable and code-section sizes, and static counts from
+the warmup pair's emitted C: root publication stores and clears, inactive-mask
+publications, register stores of undefined, throw checks, and runtime call sites.
 
 `--budget-seconds` bounds each comparison invocation, including preparation and
 warmup. The runner stops its child process group at the deadline and allows a short
