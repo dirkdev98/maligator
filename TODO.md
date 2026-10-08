@@ -154,7 +154,10 @@ The independent target boundary and current storage contract are recorded in
       kernels through boxed storage as well as physical String locals.
       Rendering may choose C syntax; semantic
       assumptions, specialization admission, and ownership obligations belong in
-      planning and must retain validated fallbacks.
+      planning and must retain validated fallbacks. Deferring incoming root
+      publication to a probe's collecting slow path stays renderer-local: eager
+      publication is always legal, and the deferral follows fixed render-form
+      rules over plan facts rather than a planning choice.
 - [ ] Measure suspension planning with growing resumable functions on both compiler
       hosts. Bound instruction-by-value liveness storage and repeated variant/
       validation work. Block liveness and continuation snapshots now replace dense
