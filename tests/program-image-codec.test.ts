@@ -26,6 +26,7 @@ import {
 	buildArgumentSnapshotPlan,
 	countPropertyIcSites,
 	encodeVmValueOperand,
+	validateVmShapeCases,
 	vmSafepointRootMapsAreTrusted,
 } from "../src/compiler/target/runtime-image.ts";
 import type {
@@ -1204,6 +1205,50 @@ describe("program-image-codec", () => {
 		receiverClobberWire[firstLoadOffset + 1] = 4;
 		expect(() => deserializeCompilerArtifact(receiverClobberWire)).toThrow(
 			/shape-case selector receiver is redefined/,
+		);
+	});
+
+	it("checks full shape-selector lifetimes with definitions preceding same-instruction uses", () => {
+		const image = shapeCaseDefinition();
+		const original = image.runtime.functions[0]!.instructions;
+		const runtime = (instructions: Array<BytecodeInstruction>) => ({
+			...image.runtime,
+			functions: image.runtime.functions.map((fn) => ({ ...fn, instructions })),
+		});
+		const padding: Array<BytecodeInstruction> = Array.from({ length: 1024 }, () => ({
+			opcode: "CREATE_NUMBER",
+			dst: 0,
+			value: 3,
+		}));
+		expect(() => validateVmShapeCases(runtime([...padding, ...original]))).not.toThrow();
+		expect(() =>
+			validateVmShapeCases(
+				runtime([...original.slice(0, -1), ...padding, { opcode: "RETURN", value: 3 }]),
+			),
+		).toThrow(/invalid shape-case selector use/);
+		expect(() =>
+			validateVmShapeCases(
+				runtime([
+					...original.slice(0, -1),
+					{ opcode: "MOVE", dst: 3, src: 3 },
+					original.at(-1)!,
+				]),
+			),
+		).not.toThrow();
+		expect(() =>
+			validateVmShapeCases(
+				runtime(
+					original.map((instruction, ip) =>
+						ip === 5 ? { ...instruction, dst: 3 } : instruction,
+					),
+				),
+			),
+		).toThrow(/shape-case selector use count/);
+		const mutable = runtime([...original]);
+		expect(() => validateVmShapeCases(mutable)).not.toThrow();
+		mutable.functions[0]!.instructions.push({ opcode: "RETURN", value: 3 });
+		expect(() => validateVmShapeCases(mutable)).toThrow(
+			/invalid shape-case selector use/,
 		);
 	});
 

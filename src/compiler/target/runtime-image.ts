@@ -1831,7 +1831,36 @@ export function validateVmExactArrayLengthLoads(definition: RuntimeImage): void 
 	}
 }
 
-/** Reject forged or stale shared shape-case certificates in a runtime image. */
+function vmShapeCaseUses(fn: BytecodeFunction): {
+	readonly selectorUses: ReadonlyMap<number, ReadonlyArray<number>>;
+	readonly ownedLoads: ReadonlySet<number>;
+} {
+	const selectorUses = new Map<number, Array<number>>();
+	const ownedLoads = new Set<number>();
+	const active = new Map<number, Array<number>>();
+	for (const [ip, instruction] of fn.instructions.entries()) {
+		if (
+			instruction.opcode === "LOAD_PROPERTY_STATIC_SHAPE_CASE" &&
+			active.has(instruction.shapeCase)
+		)
+			ownedLoads.add(ip);
+		// Load ownership observes the prior definition; a defining instruction ends prior uses.
+		for (const register of vmInstructionWriteRegisters(instruction))
+			active.delete(register);
+		if (active.size > 0)
+			for (const register of vmInstructionReadRegisters(instruction)) {
+				const uses = active.get(register);
+				if (uses !== undefined && uses.at(-1) !== ip) uses.push(ip);
+			}
+		if (instruction.opcode === "SELECT_SHAPE_CASE") {
+			const uses: Array<number> = [];
+			selectorUses.set(ip, uses);
+			active.set(instruction.dst, uses);
+		}
+	}
+	return { selectorUses, ownedLoads };
+}
+
 export function validateVmShapeCases(definition: RuntimeImage): void {
 	// Also validates the shared precompiled-shape table and physical cache layout.
 	validateVmKnownOwnSlots(definition);
@@ -1843,6 +1872,15 @@ export function validateVmShapeCases(definition: RuntimeImage): void {
 		);
 	}
 	for (const [functionIndex, fn] of definition.functions.entries()) {
+		if (
+			!fn.instructions.some(
+				(instruction) =>
+					instruction.opcode === "SELECT_SHAPE_CASE" ||
+					instruction.opcode === "LOAD_PROPERTY_STATIC_SHAPE_CASE",
+			)
+		)
+			continue;
+		const { selectorUses, ownedLoads } = vmShapeCaseUses(fn);
 		for (const [selectorIp, rawSelector] of fn.instructions.entries()) {
 			if (rawSelector.opcode !== "SELECT_SHAPE_CASE") continue;
 			const rawCandidates: unknown = rawSelector.candidates;
@@ -1892,10 +1930,8 @@ export function validateVmShapeCases(definition: RuntimeImage): void {
 					{ opcode: "LOAD_PROPERTY_STATIC_SHAPE_CASE" }
 				>;
 			}> = [];
-			for (let ip = selectorIp + 1; ip < fn.instructions.length; ip++) {
+			for (const ip of selectorUses.get(selectorIp)!) {
 				const instruction = fn.instructions[ip]!;
-				if (vmInstructionDefinesRegister(instruction, rawSelector.dst)) break;
-				if (!vmInstructionUsesRegister(instruction, rawSelector.dst)) continue;
 				if (
 					instruction.opcode !== "LOAD_PROPERTY_STATIC_SHAPE_CASE" ||
 					instruction.shapeCase !== rawSelector.dst ||
@@ -1963,14 +1999,7 @@ export function validateVmShapeCases(definition: RuntimeImage): void {
 		}
 		for (const [ip, instruction] of fn.instructions.entries()) {
 			if (instruction.opcode !== "LOAD_PROPERTY_STATIC_SHAPE_CASE") continue;
-			let producer: BytecodeInstruction | undefined;
-			for (let before = ip - 1; before >= 0; before--) {
-				const candidate = fn.instructions[before]!;
-				if (!vmInstructionDefinesRegister(candidate, instruction.shapeCase)) continue;
-				producer = candidate;
-				break;
-			}
-			if (producer?.opcode !== "SELECT_SHAPE_CASE") {
+			if (!ownedLoads.has(ip)) {
 				throw new RangeError("shape-case load has no selector");
 			}
 		}
