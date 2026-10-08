@@ -33,34 +33,79 @@ export function selectNativeRootStorage(
 			privateCallResultIps,
 		))
 			pinned.add(register);
+	const wordCount = Math.ceil(native.gc.safepoints.length / 32);
 	const occupancy = new Map(
 		registers
 			.filter((register) => !pinned.has(register))
-			.map((register) => [register, 0n]),
+			.map((register) => [register, new Uint32Array(wordCount)]),
 	);
 	for (const [index, point] of native.gc.safepoints.entries()) {
-		const bit = 1n << BigInt(index);
+		const word = Math.floor(index / 32);
+		const bit = 1 << (index & 31);
 		for (const register of point.rootRegisters) {
 			const occupied = occupancy.get(register);
-			if (occupied !== undefined) occupancy.set(register, occupied | bit);
+			if (occupied !== undefined) occupied[word]! |= bit;
 		}
 	}
 	const slots = new Map<number, number>();
 	for (const register of registers)
 		if (pinned.has(register)) slots.set(register, slots.size);
 	const base = slots.size;
-	const colors: Array<bigint> = [];
+	const colors: Array<Uint32Array> = [];
 	for (const [register, occupied] of occupancy) {
-		let color = colors.findIndex((points) => (points & occupied) === 0n);
+		let color = colors.findIndex((points) => {
+			for (let word = 0; word < wordCount; word++)
+				if ((points[word]! & occupied[word]!) !== 0) return false;
+			return true;
+		});
 		if (color === -1) {
 			color = colors.length;
-			colors.push(0n);
+			colors.push(new Uint32Array(wordCount));
 		}
-		colors[color] = colors[color]! | occupied;
+		for (let word = 0; word < wordCount; word++) colors[color]![word]! |= occupied[word]!;
 		slots.set(register, base + color);
 	}
 	return {
 		rootSlots: registers.map((register) => slots.get(register)!),
 		rootSlotCount: base + colors.length,
 	};
+}
+
+// Root omissions are checked by storage selection; interference checks only retained roots.
+export function validateNativeRootStorage(
+	native: NativeFunctionPlan,
+	registers: ReadonlyArray<number>,
+	storage: NativeRootStoragePlan,
+): void {
+	const invalid = (reason: string): never => {
+		throw new Error(`Native function has an invalid or stale storage plan: ${reason}`);
+	};
+	if (
+		storage.rootSlots.length !== registers.length ||
+		!Number.isSafeInteger(storage.rootSlotCount) ||
+		storage.rootSlotCount < 0 ||
+		storage.rootSlotCount > registers.length
+	)
+		invalid("invalid root frame size");
+	const slots = new Map<number, number>();
+	for (const [index, register] of registers.entries()) {
+		const slot = storage.rootSlots[index]!;
+		if (
+			slots.has(register) ||
+			!Number.isSafeInteger(slot) ||
+			slot < 0 ||
+			slot >= storage.rootSlotCount
+		)
+			invalid("invalid root slot");
+		slots.set(register, slot);
+	}
+	for (const point of native.gc.safepoints) {
+		const occupied = new Set<number>();
+		for (const register of point.rootRegisters) {
+			const slot = slots.get(register);
+			if (slot === undefined) continue;
+			if (occupied.has(slot)) invalid(`interfering GC roots at ${point.instructionIp}`);
+			occupied.add(slot);
+		}
+	}
 }

@@ -27,7 +27,10 @@ import {
 	nativePrivateCallResultIps,
 	nativePrivateRootRegisters,
 } from "./lower-native-root-publication.ts";
-import { selectNativeRootStorage } from "./lower-native-roots.ts";
+import {
+	selectNativeRootStorage,
+	validateNativeRootStorage,
+} from "./lower-native-roots.ts";
 import type { NativeRootStoragePlan } from "./lower-native-roots.ts";
 import {
 	compactNativeSuspension,
@@ -1536,6 +1539,8 @@ export function validateNativeStorage(
 		);
 	};
 	const matches = (variant: NativeFunctionPlan, entry?: NativeDirectEntryPlan) => {
+		if (variant.storage === undefined) return false;
+		validateNativeRootStorage(variant, variant.storage.rootRegisters, variant.storage);
 		const suspension = lowerNativeSuspension(variant);
 		const selected = lowerStorage(
 			variant,
@@ -1548,9 +1553,9 @@ export function validateNativeStorage(
 		);
 		if (!sameScalar(variant.storage, selected)) return false;
 		if (
-			!sameNumbers(variant.storage!.expressionIps, selected.expressionIps) &&
+			!sameNumbers(variant.storage.expressionIps, selected.expressionIps) &&
 			!sameNumbers(
-				variant.storage!.expressionIps,
+				variant.storage.expressionIps,
 				expressionIps(
 					variant,
 					body,
@@ -1562,16 +1567,16 @@ export function validateNativeStorage(
 						scalarStorageWindows(selected),
 						suspension,
 					),
-					new Set(variant.storage!.expressionIps),
+					new Set(variant.storage.expressionIps),
 				),
 			)
 		)
 			return false;
 		const retained =
 			sameNumbers(
-				variant.storage!.rematerializedConstantIps,
+				variant.storage.rematerializedConstantIps,
 				selected.rematerializedConstantIps,
-			) && sameNumbers(variant.storage!.expressionIps, selected.expressionIps)
+			) && sameNumbers(variant.storage.expressionIps, selected.expressionIps)
 				? selected
 				: {
 						...selected,
@@ -1580,8 +1585,8 @@ export function validateNativeStorage(
 							body,
 							selected,
 							selected.callTransports,
-							variant.storage!.rematerializedConstantIps,
-							variant.storage!.expressionIps,
+							variant.storage.rematerializedConstantIps,
+							variant.storage.expressionIps,
 							untracedPrimitiveResultRegisters(
 								variant,
 								body,

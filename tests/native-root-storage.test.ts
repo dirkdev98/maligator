@@ -6,6 +6,10 @@ import {
 	serializeCompilerArtifact,
 } from "../src/compiler/target/compiler-artifact-codec.ts";
 import {
+	selectNativeRootStorage,
+	validateNativeRootStorage,
+} from "../src/compiler/target/lower-native-roots.ts";
+import {
 	lowerNativeFunctionStorage,
 	validateNativeStorage,
 } from "../src/compiler/target/lower-native-storage.ts";
@@ -95,6 +99,84 @@ function contract(rootedOutput = false) {
 }
 
 describe("native physical root storage", () => {
+	it.each([31, 32, 127, 128, 129, 255, 256, 2048])(
+		"retains overlap and disjoint sharing at safepoint ordinal %i",
+		(ordinal) => {
+			const original = contract();
+			const native = {
+				...original,
+				gc: {
+					safepoints: Array.from({ length: ordinal + 2 }, (_, instructionIp) => {
+						const roots =
+							instructionIp < ordinal
+								? [0, 1]
+								: instructionIp === ordinal
+									? [0, 1, 2, 3]
+									: [0, 1, 4, 5];
+						return {
+							kind: "operation" as const,
+							instructionIp,
+							rootRegisters: roots,
+							incomingRootRegisters: roots,
+							outgoingRootRegisters: [],
+						};
+					}),
+				},
+			};
+			const registers = [0, 1, 2, 3, 4, 5];
+			const storage = selectNativeRootStorage(
+				native,
+				registers,
+				new Set([2, 3, 4, 5]),
+				new Set(original.storage!.privateCallResultIps),
+			);
+			expect(storage.rootSlotCount).toBe(4);
+			expect(storage.rootSlots[2]).not.toBe(storage.rootSlots[3]);
+			expect(storage.rootSlots[2]).toBe(storage.rootSlots[4]);
+			expect(storage.rootSlots[3]).toBe(storage.rootSlots[5]);
+			expect(() => validateNativeRootStorage(native, registers, storage)).not.toThrow();
+		},
+	);
+
+	it("checks supplied slot interference without reselecting the allocator", () => {
+		const native = contract();
+		const storage = native.storage!;
+		const slots = [...storage.rootSlots];
+		slots[storage.rootRegisters.indexOf(3)] = slots[storage.rootRegisters.indexOf(2)]!;
+		expect(() =>
+			validateNativeRootStorage(native, storage.rootRegisters, {
+				...storage,
+				rootSlots: slots,
+			}),
+		).toThrow(/interfering GC roots at 1/);
+	});
+
+	it("delegates root-omission legality to the full storage contract", () => {
+		const native = contract();
+		const storage = native.storage!;
+		const kept = storage.rootRegisters.filter((register) => register !== 2);
+		expect(() =>
+			validateNativeRootStorage(native, kept, {
+				rootSlots: kept.map(
+					(register) => storage.rootSlots[storage.rootRegisters.indexOf(register)]!,
+				),
+				rootSlotCount: storage.rootSlotCount,
+			}),
+		).not.toThrow();
+		expect(() =>
+			validateNativeStorage({
+				...native,
+				storage: {
+					...storage,
+					rootRegisters: kept,
+					rootSlots: kept.map(
+						(register) => storage.rootSlots[storage.rootRegisters.indexOf(register)]!,
+					),
+				},
+			}),
+		).toThrow(/invalid or stale storage plan/);
+	});
+
 	it("shares disjoint SSA roots while preserving helper input/output interference", () => {
 		const fn = contract();
 		const storage = fn.storage!;
