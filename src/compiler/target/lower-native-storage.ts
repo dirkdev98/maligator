@@ -296,6 +296,7 @@ function storageControlFlow(
 			const useBlock = blocks[useIp]!;
 			if (live[definitionBlock] === 0 || live[useBlock] === 0) return false;
 			if (useBlock === definitionBlock) return useIp > definitionIp;
+			if (definitionBlock === 0) return true;
 			dominatesBlock ??= blockDominators(successors);
 			return dominatesBlock(definitionBlock, useBlock);
 		},
