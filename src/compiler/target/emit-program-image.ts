@@ -696,16 +696,25 @@ function omitUnreachableCanonicalBodies(
 	);
 }
 
-function compiledAvailabilityKey(
-	compiled: ReadonlyArray<CompiledFunction | null>,
-): string {
-	return compiled
-		.map((fn) =>
-			fn === null
-				? "-"
-				: `${fn.source.length > 0 ? "c" : "s"}:${fn.directEntries.map((entry) => entry.id).join(",")}`,
+function compiledAvailabilityMatches(
+	left: ReadonlyArray<CompiledFunction | null>,
+	right: ReadonlyArray<CompiledFunction | null>,
+): boolean {
+	if (left.length !== right.length) return false;
+	for (let index = 0; index < left.length; index++) {
+		const a = left[index]!;
+		const b = right[index]!;
+		if (a === b) continue;
+		if (a === null || b === null) return false;
+		if (
+			(a.source.length === 0) !== (b.source.length === 0) ||
+			a.directEntries.length !== b.directEntries.length
 		)
-		.join(";");
+			return false;
+		for (let entry = 0; entry < a.directEntries.length; entry++)
+			if (a.directEntries[entry]!.id !== b.directEntries[entry]!.id) return false;
+	}
+	return true;
 }
 
 function emitNativeFunctions(
@@ -832,13 +841,11 @@ function emitNativeFunctions(
 		availability: NativeCompilationAvailability,
 	): CompiledFunction | null => {
 		const referenced = references[functionIndex]!;
-		const key =
-			referenced.targets
-				.map((target) => (availability.directCompiledTargets.has(target) ? "1" : "0"))
-				.join("") +
-			referenced.entries
-				.map((entry) => (availability.directCompiledEntries.has(entry) ? "1" : "0"))
-				.join("");
+		let key = "";
+		for (const target of referenced.targets)
+			key += availability.directCompiledTargets.has(target) ? "1" : "0";
+		for (const entry of referenced.entries)
+			key += availability.directCompiledEntries.has(entry) ? "1" : "0";
 		const previous = cached[functionIndex];
 		if (previous?.key === key) return previous.emitted;
 		const emitted = render(functionIndex, availability);
@@ -859,7 +866,7 @@ function emitNativeFunctions(
 		const next = image.runtime.functions.map((_fn, index) =>
 			compiled[index] === null ? null : emit(index, availability),
 		);
-		if (compiledAvailabilityKey(next) === compiledAvailabilityKey(compiled)) {
+		if (compiledAvailabilityMatches(next, compiled)) {
 			const stripped = omitUnreachableCanonicalBodies(image, next);
 			return {
 				compiled: stripped,
