@@ -111,6 +111,120 @@ function emit(
 	)!.source;
 }
 
+const wideWidth = 130;
+const wideFirst = Array.from({ length: wideWidth }, (_, index) => index + 2);
+const wideSecond = wideFirst.map((register) => register + wideWidth);
+const wideFirstCallIp = wideWidth;
+const wideSecondCallIp = 2 * wideWidth + 1;
+const wideFinalCallIp = wideSecondCallIp + 1;
+
+/** Two disjoint 130-value chains that share physical slots up to 131. */
+function wideSharedRoots(): { native: NativeFunctionPlan; source: string } {
+	const result = 2 * wideWidth + 2;
+	const loads = (chain: Array<number>, icBase: number): Array<BytecodeInstruction> =>
+		chain.map((dst, index) => ({
+			...load,
+			object: index === 0 ? 0 : dst - 1,
+			dst,
+			icIndex: icBase + index,
+		}));
+	const instructions: Array<BytecodeInstruction> = [
+		...loads(wideFirst, 0),
+		call(result, wideFirst),
+		...loads(wideSecond, wideWidth),
+		call(result, wideSecond),
+		call(result, []),
+		{ opcode: "RETURN", value: 0 },
+	];
+	const chainPoints = (chain: Array<number>, base: number) =>
+		chain.map((_, index) =>
+			point(
+				base + index,
+				[0, 1, ...chain.slice(0, index)],
+				[0, 1, ...chain.slice(0, index + 1)],
+			),
+		);
+	const body: BytecodeFunction = {
+		nameStringIndex: -1,
+		isGenerator: false,
+		isAsync: false,
+		parameterCount: 2,
+		mappedArguments: false,
+		mappedArgumentSlots: [],
+		length: 2,
+		registerCount: result + 1,
+		capturedCount: 0,
+		strict: true,
+		needsArguments: false,
+		argumentSnapshotCount: 0,
+		argumentSnapshotPlan: [],
+		isDerivedConstructor: false,
+		isClassConstructor: false,
+		constructorSlotReserve: 0,
+		hasPrototype: false,
+		propertyIcCount: testPropertyCacheCount(instructions),
+		literalShapeCount: 0,
+		instructions,
+		handlers: [],
+		fileIndex: -1,
+		positions: [],
+	};
+	const native = lowerNativeFunctionStorage({
+		...createConservativeNativePlan([body]).functions[0]!,
+		instructions: instructions.map(() => undefined),
+		storageValues: Array.from({ length: body.registerCount }, (_, register) => register),
+		registerRepresentations: Array.from({ length: body.registerCount }, () => "boxed"),
+		gc: {
+			safepoints: [
+				...chainPoints(wideFirst, 0),
+				point(wideFirstCallIp, [0, 1, ...wideFirst], [0, 1]),
+				...chainPoints(wideSecond, wideFirstCallIp + 1),
+				point(wideSecondCallIp, [0, 1, ...wideSecond], [0, 1]),
+				point(wideFinalCallIp, [0, 1], [0, 1]),
+			],
+		},
+	});
+	return { native, source: emitCompiledFunction(native, 0, "", false)!.source };
+}
+
+function inactiveRootBits(source: string, start: number, end: number): bigint {
+	const masks = [
+		...source.slice(start, end).matchAll(/MAL_ROOT_MASK(?:_WIDE)?\(.*?\);/g),
+	];
+	expect(masks.length).toBeGreaterThan(0);
+	const statement = masks.at(-1)![0];
+	const narrow = /^MAL_ROOT_MASK\(0x([0-9a-f]+)\);$/.exec(statement);
+	if (narrow !== null) return BigInt(`0x${narrow[1]}`);
+	const wide = /^MAL_ROOT_MASK_WIDE\(0x([0-9a-f]+), (\w+), countof\(\2\)\);$/.exec(
+		statement,
+	);
+	expect(wide).not.toBeNull();
+	const tail = new RegExp(`static const u64 ${wide![2]}\\[\\] = \\{ ([^}]*) \\};`).exec(
+		source,
+	);
+	expect(tail).not.toBeNull();
+	return tail![1]!
+		.split(", ")
+		.reduce(
+			(bits, word, index) =>
+				bits | (BigInt(word.slice("UINT64_C(".length, -1)) << BigInt(64 * (index + 1))),
+			BigInt(`0x${wide![1]}`),
+		);
+}
+
+function isInactive(bits: bigint, slot: number): boolean {
+	return ((bits >> BigInt(slot)) & 1n) === 1n;
+}
+
+function propertyMissPath(
+	source: string,
+	icIndex: number,
+): { start: number; end: number } {
+	const end = source.indexOf(`&__property_ic[${icIndex}]);`);
+	expect(end).toBeGreaterThan(0);
+	return { start: source.lastIndexOf("} else {", end), end };
+}
+
 function privatePublication(source: string, register = retained): string {
 	expect(source).toContain(`#define r${register} (__private_r${register})`);
 	const slot = source.match(new RegExp(`__gc_slots\\[(\\d+)\\] = r${register};`))?.[1];
@@ -494,5 +608,66 @@ describe("private-root publication state at collecting edges", () => {
 		const afterResult = beforeCall(source, 3, afterCallResult(source, 2));
 		expect(afterResult).toContain(`__private_r3 = ${resultSlot};`);
 		expect(hasIncomingCopy(afterResult, publication)).toBe(false);
+	});
+});
+
+describe("wide private-root publication", () => {
+	const { native, source } = wideSharedRoots();
+	const storage = native.storage!;
+
+	it.each([63, 64, 127, 128, 129])(
+		"masks dead occupants of shared slot %i and clears it only for an active output",
+		(slot) => {
+			const occupants = storage.rootRegisters.filter(
+				(_, index) => storage.rootSlots[index] === slot,
+			);
+			expect(occupants).toHaveLength(2);
+			const [dead, output] = occupants as [number, number];
+			expect(wideFirst).toContain(dead);
+			expect(wideSecond).toContain(output);
+			expect(storage.privateRegisters).toEqual(expect.arrayContaining(occupants));
+			const cleared = `__gc_slots[${slot}] = MAL_VALUE_UNDEFINED;`;
+
+			const inactiveMiss = propertyMissPath(source, wideWidth);
+			expect(output).not.toBe(wideSecond[0]);
+			expect(source.slice(inactiveMiss.start, inactiveMiss.end)).not.toContain(cleared);
+			expect(isInactive(inactiveRootBits(source, 0, inactiveMiss.end), slot)).toBe(true);
+
+			const outputMiss = propertyMissPath(source, output - 2);
+			expect(source.slice(outputMiss.start, outputMiss.end)).toContain(cleared);
+			expect(isInactive(inactiveRootBits(source, 0, outputMiss.end), slot)).toBe(false);
+
+			const lastSecondMiss = propertyMissPath(source, 2 * wideWidth - 1).end;
+			expect(
+				hasIncomingCopy(
+					beforeCall(source, wideSecondCallIp, lastSecondMiss),
+					`__gc_slots[${slot}] = r${output};`,
+				),
+			).toBe(true);
+
+			const secondResult = afterCallResult(source, wideSecondCallIp);
+			const finalStart = source.indexOf("\n", secondResult) + 1;
+			const secondPoll = source.slice(secondResult, finalStart);
+			expect(secondPoll).toContain("mal_gc_safepoint(vm)");
+			expect(secondPoll).toContain(cleared);
+			const finalCall = beforeCall(source, wideFinalCallIp, finalStart);
+			expect(finalCall).not.toContain(cleared);
+			expect(
+				isInactive(
+					inactiveRootBits(source, finalStart, finalStart + finalCall.length),
+					slot,
+				),
+			).toBe(true);
+			const finalResult = afterCallResult(source, wideFinalCallIp);
+			const finalPoll = source.slice(finalResult, source.indexOf("\n", finalResult));
+			expect(finalPoll).toContain("mal_gc_safepoint(vm)");
+			expect(finalPoll).not.toContain(`__gc_slots[${slot}]`);
+		},
+	);
+
+	it("resets a wide inactive mask to zero when every shared slot is occupied", () => {
+		const firstCall = beforeCall(source, wideFirstCallIp);
+		expect(firstCall).toContain("MAL_ROOT_MASK_WIDE(");
+		expect(inactiveRootBits(source, 0, firstCall.length)).toBe(0n);
 	});
 });

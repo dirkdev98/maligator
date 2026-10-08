@@ -45,7 +45,9 @@ retain dedicated storage. Root slots differ from computational locals, and expre
 assignment. Safepoint masks cover the entire native root set using an inline word
 and immutable tail words; uncovered runtime-owned slots remain active. Small-mask
 publication clears any previous tail. Entire inactive words are cleared together;
-mixed words retain selective tracing. Expression selection admits only pure scalar operations whose
+mixed words retain selective tracing. Private publication stores undefined only into
+slots with an active occupant that is not live on that edge; every scan clears masked
+slots, at any slot index. Expression selection admits only pure scalar operations whose
 representations or exact input facts prove numeric semantics. It preserves leaf
 values, effects, control boundaries, repeated uses, and profiling producer sites.
 Exact Number inputs permit unary scalar expressions even when their input storage

@@ -775,9 +775,9 @@ function cPrivateRootPublication(
 			)
 				continue;
 			(stores ??= []).push(`__gc_slots[${slot}] = r${register};`);
-		} else if (slot >= 64 || registers.some((register) => point.active.has(register))) {
-			// A dead private local can still contain a reclaimed pointer. In particular,
-			// an output-only root must stay empty until the helper returns its value.
+		} else if (registers.some((register) => point.active.has(register))) {
+			// The inactive mask hides only slots without an active occupant, so an
+			// output-only root must stay empty until the helper returns its value.
 			(stores ??= []).push(`__gc_slots[${slot}] = MAL_VALUE_UNDEFINED;`);
 		}
 	}
