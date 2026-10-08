@@ -392,17 +392,6 @@ function lowerPropertyNumericUpdate(
 								: (body?.reads[useIp] ?? vmInstructionReadRegisters(instruction)),
 						),
 					);
-			const borrowedRegisters = [
-				...new Set(
-					claimedIps.flatMap((claimedIp) => {
-						const instruction = fn.instructions[claimedIp]!;
-						return [
-							...vmInstructionReadRegisters(instruction),
-							...vmInstructionWriteRegisters(instruction),
-						];
-					}),
-				),
-			].sort((a, b) => a - b);
 			return Object.freeze({
 				id: firstIp,
 				loadIp: firstIp,
@@ -411,7 +400,7 @@ function lowerPropertyNumericUpdate(
 				...(constantIp === undefined ? {} : { constantIp }),
 				operation,
 				claimedIps,
-				borrowedRegisters,
+				borrowedRegisters: borrowedRegisters(fn, claimedIps, body),
 				materializations: outputs.filter(
 					({ register }) => externalUses === undefined || externalUses.has(register),
 				),
@@ -504,6 +493,7 @@ function lowerPropertyProjection(
 	) => { readonly id: number; readonly role: "start" | "finish" } | undefined,
 	transparentJumpTargets: ReadonlySet<number>,
 	handlerTargets: ReadonlyArray<number | undefined>,
+	body?: NativeBodyFacts,
 ): NativePropertyProjectionPlan | undefined {
 	const first = fn.instructions[firstIp];
 	if (
@@ -608,11 +598,13 @@ function lowerPropertyProjection(
 		const touchesProjection = [...aliases.keys()].some(
 			(register) =>
 				vmInstructionUsesRegister(instruction, register) ||
-				vmInstructionWriteRegisters(instruction).includes(register),
+				(body?.writes[ip] ?? vmInstructionWriteRegisters(instruction)).includes(register),
 		);
 		if (
 			touchesProjection ||
-			vmInstructionWriteRegisters(instruction).includes(first.object) ||
+			(body?.writes[ip] ?? vmInstructionWriteRegisters(instruction)).includes(
+				first.object,
+			) ||
 			!harmlessScalarInstruction(instruction, representations)
 		)
 			break;
@@ -626,7 +618,9 @@ function lowerPropertyProjection(
 		for (let ip = firstIp + 1; ip <= lastIp; ip++) {
 			if (
 				ip !== consumingIp &&
-				vmInstructionWriteRegisters(fn.instructions[ip]!).includes(register)
+				(body?.writes[ip] ?? vmInstructionWriteRegisters(fn.instructions[ip]!)).includes(
+					register,
+				)
 			)
 				return undefined;
 		}
@@ -668,14 +662,6 @@ function lowerPropertyProjection(
 		...skipped,
 		...(terminalStore === undefined ? [] : [terminalStore.ip]),
 	].sort((left, right) => left - right);
-	const borrowedRegisters = [
-		...new Set(
-			claimedIps.flatMap((ip) => [
-				...vmInstructionReadRegisters(fn.instructions[ip]!),
-				...vmInstructionWriteRegisters(fn.instructions[ip]!),
-			]),
-		),
-	].sort((left, right) => left - right);
 	return Object.freeze({
 		id: firstIp,
 		object: first.object,
@@ -684,7 +670,7 @@ function lowerPropertyProjection(
 		boxedRegisters: Object.freeze([...boxedRegisters.keys()]),
 		skippedIps: skipped,
 		claimedIps,
-		borrowedRegisters,
+		borrowedRegisters: borrowedRegisters(fn, claimedIps, body),
 		fallback: "original-instructions",
 		...(terminalStore === undefined ? {} : { terminalStore: { ip: terminalStore.ip } }),
 	});
@@ -753,6 +739,7 @@ function lowerPropertyReadRegion(
 	representations: ReadonlyArray<VmRegisterRepresentation>,
 	jumpTargets: ReadonlySet<number>,
 	conflicts: (ip: number) => boolean,
+	body?: NativeBodyFacts,
 ): NativePropertyReadRegionPlan | undefined {
 	const first = fn.instructions[firstIp];
 	if (
@@ -781,7 +768,9 @@ function lowerPropertyReadRegion(
 		// Captured storage is valid only while the receiver is unchanged and no
 		// operation can collect, reenter JavaScript, throw, or mutate its layout.
 		if (
-			vmInstructionWriteRegisters(instruction).includes(first.object) ||
+			(body?.writes[ip] ?? vmInstructionWriteRegisters(instruction)).includes(
+				first.object,
+			) ||
 			!propertyReadRegionPureInstruction(instruction, representations)
 		) {
 			break;
@@ -791,6 +780,10 @@ function lowerPropertyReadRegion(
 		// Preserve the smaller existing adjacent-pair admission.
 		return undefined;
 	}
+	const claimedIps = Array.from(
+		{ length: loads.at(-1)!.ip - firstIp + 1 },
+		(_, i) => firstIp + i,
+	);
 	return Object.freeze({
 		id: firstIp,
 		object: first.object,
@@ -800,20 +793,8 @@ function lowerPropertyReadRegion(
 				Object.freeze({ ip, icIndex: instruction.icIndex }),
 			),
 		),
-		claimedIps: Array.from(
-			{ length: loads.at(-1)!.ip - firstIp + 1 },
-			(_, i) => firstIp + i,
-		),
-		borrowedRegisters: [
-			...new Set(
-				fn.instructions
-					.slice(firstIp, loads.at(-1)!.ip + 1)
-					.flatMap((op) => [
-						...vmInstructionReadRegisters(op),
-						...vmInstructionWriteRegisters(op),
-					]),
-			),
-		].sort((a, b) => a - b),
+		claimedIps,
+		borrowedRegisters: borrowedRegisters(fn, claimedIps, body),
 		continuation: "remaining-instructions",
 	});
 }
@@ -947,15 +928,18 @@ function lowerPrivateFieldReserve(
 function borrowedRegisters(
 	fn: BytecodeFunction,
 	ips: ReadonlyArray<number>,
+	body?: NativeBodyFacts,
 ): ReadonlyArray<number> {
-	return [
-		...new Set(
-			ips.flatMap((ip) => [
-				...vmInstructionReadRegisters(fn.instructions[ip]!),
-				...vmInstructionWriteRegisters(fn.instructions[ip]!),
-			]),
-		),
-	].sort((a, b) => a - b);
+	const registers = new Set<number>();
+	for (const ip of ips) {
+		for (const register of body?.reads[ip] ??
+			vmInstructionReadRegisters(fn.instructions[ip]!))
+			registers.add(register);
+		for (const register of body?.writes[ip] ??
+			vmInstructionWriteRegisters(fn.instructions[ip]!))
+			registers.add(register);
+	}
+	return [...registers].sort((a, b) => a - b);
 }
 
 function lowerPairedArrayLoops(
@@ -1068,6 +1052,16 @@ export function lowerNativeFastPaths(
 	selectUpdates = true,
 	body?: NativeBodyFacts,
 ): NativeFastPathLowering {
+	let propertyLoadIps: ReadonlyArray<number> = [];
+	if (selection.kind === "select") {
+		if (body !== undefined) propertyLoadIps = body.staticPropertyLoadIps;
+		else {
+			const candidates: Array<number> = [];
+			for (const [ip, op] of fn.instructions.entries())
+				if (op.opcode === "LOAD_PROPERTY_STATIC") candidates.push(ip);
+			propertyLoadIps = candidates;
+		}
+	}
 	const handlerTargets =
 		selection.kind === "render"
 			? []
@@ -1104,8 +1098,11 @@ export function lowerNativeFastPaths(
 	};
 	if (selection.kind === "render")
 		propertyNumericUpdates.push(...selection.plans.propertyNumericUpdates);
-	else
-		for (let ip = 0; selectUpdates && ip < fn.instructions.length; ip++) {
+	else {
+		let nextUpdateIp = 0;
+		for (const ip of propertyLoadIps) {
+			if (!selectUpdates) break;
+			if (ip < nextUpdateIp) continue;
 			const plan = lowerPropertyNumericUpdate(
 				fn,
 				ip,
@@ -1123,8 +1120,9 @@ export function lowerNativeFastPaths(
 			propertyNumericUpdates.push(plan);
 			for (const claimedIp of plan.claimedIps)
 				propertyNumericUpdateActions.set(claimedIp, updateAction(plan, "skip"));
-			ip = plan.storeIp;
+			nextUpdateIp = plan.storeIp + 1;
 		}
+	}
 	propertyNumericUpdateActions.clear();
 	for (const plan of propertyNumericUpdates) {
 		for (const ip of plan.claimedIps)
@@ -1136,7 +1134,8 @@ export function lowerNativeFastPaths(
 
 	const propertyProjections: Array<NativePropertyProjectionPlan> = [];
 	const propertyProjectionActions = new Map<number, NativePropertyProjectionAction>();
-	for (let ip = 0; selection.kind === "select" && ip + 1 < fn.instructions.length; ip++) {
+	for (const ip of propertyLoadIps) {
+		if (ip + 1 >= fn.instructions.length) break;
 		if (propertyProjectionActions.has(ip)) continue;
 		const plan = lowerPropertyProjection(
 			fn,
@@ -1151,6 +1150,7 @@ export function lowerNativeFastPaths(
 			terminalFusion,
 			transparentJumpTargets,
 			handlerTargets,
+			body,
 		);
 		if (plan === undefined) continue;
 		propertyProjections.push(plan);
@@ -1178,8 +1178,10 @@ export function lowerNativeFastPaths(
 	const propertyReadRegionActions = new Map<number, NativePropertyReadRegionAction>();
 	if (selection.kind === "render")
 		propertyReadRegions.push(...selection.plans.propertyReadRegions);
-	else
-		for (let ip = 0; ip < fn.instructions.length; ip++) {
+	else {
+		let nextRegionIp = 0;
+		for (const ip of propertyLoadIps) {
+			if (ip < nextRegionIp) continue;
 			const plan = lowerPropertyReadRegion(
 				fn,
 				ip,
@@ -1191,11 +1193,13 @@ export function lowerNativeFastPaths(
 					pairedArrayLoopActions.has(candidate) ||
 					propertyNumericUpdateActions.has(candidate) ||
 					propertyProjectionActions.has(candidate),
+				body,
 			);
 			if (plan === undefined) continue;
 			propertyReadRegions.push(plan);
-			ip = plan.endIp;
+			nextRegionIp = plan.endIp + 1;
 		}
+	}
 	for (const plan of propertyReadRegions)
 		for (const [index, load] of plan.loads.entries())
 			propertyReadRegionActions.set(load.ip, { plan, index });
@@ -1208,8 +1212,11 @@ export function lowerNativeFastPaths(
 	const propertyReadPairActions = new Map<number, NativePropertyReadPairAction>();
 	if (selection.kind === "render")
 		propertyReadPairs.push(...selection.plans.propertyReadPairs);
-	else
-		for (let ip = 0; ip + 1 < fn.instructions.length; ip++) {
+	else {
+		let nextPairIp = 0;
+		for (const ip of propertyLoadIps) {
+			if (ip < nextPairIp) continue;
+			if (ip + 1 >= fn.instructions.length) break;
 			const first = fn.instructions[ip]!,
 				second = fn.instructions[ip + 1]!;
 			if (
@@ -1245,8 +1252,9 @@ export function lowerNativeFastPaths(
 					fallback: "original-instructions",
 				}),
 			);
-			ip++;
+			nextPairIp = ip + 2;
 		}
+	}
 	for (const plan of propertyReadPairs) {
 		propertyReadPairActions.set(plan.loads[0]!.ip, { plan, role: "first" });
 		propertyReadPairActions.set(plan.loads[1]!.ip, { plan, role: "second" });

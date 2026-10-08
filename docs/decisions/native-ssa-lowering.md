@@ -116,7 +116,10 @@ selection, including profiled artifacts. Decoded body facts are shared within a
 planning invocation; representations, ownership and suspension reads remain per
 variant, and validation rebuilds facts at the image trust boundary.
 Read/write occurrences, branch sources, handler and resume entries, and handler
-targets are shared by storage and fast-path consumers. Root profitability builds
+targets are shared by storage and fast-path consumers. Property-window selection
+visits the shared ordered static-load index; dense window scans still check every
+intervening instruction, and their borrowing/write checks consume the same body
+facts. Root profitability builds
 ordinary-edge loop and cycle indexes lazily in the same invocation; incoming-root
 costs remain specific to each entry. C rendering shares immutable body analysis
 within one image emission. Region topology, ordered actions and sorted projection

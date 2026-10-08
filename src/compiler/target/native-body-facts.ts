@@ -11,6 +11,7 @@ export interface NativeBodyFacts {
 	readonly rootProfitability: NativeRootProfitabilityContext;
 	readonly reads: ReadonlyArray<ReadonlyArray<number>>;
 	readonly writes: ReadonlyArray<ReadonlyArray<number>>;
+	readonly staticPropertyLoadIps: ReadonlyArray<number>;
 	readonly branchSources: ReadonlyMap<number, ReadonlyArray<number>>;
 	readonly handlerEntries: ReadonlySet<number>;
 	readonly externalEntries: ReadonlySet<number>;
@@ -26,7 +27,9 @@ export function analyzeNativeBodyFacts(fn: BytecodeFunction): NativeBodyFacts {
 	const externalEntries = new Set(handlerEntries);
 	const jumpTargets = new Set(handlerEntries);
 	const branchSources = new Map<number, Array<number>>();
+	const staticPropertyLoadIps: Array<number> = [];
 	for (const [ip, op] of fn.instructions.entries()) {
+		if (op.opcode === "LOAD_PROPERTY_STATIC") staticPropertyLoadIps.push(ip);
 		if (op.opcode === "JUMP" || op.opcode === "JUMP_IF") {
 			jumpTargets.add(op.targetIp);
 			const sources = branchSources.get(op.targetIp) ?? [];
@@ -42,6 +45,7 @@ export function analyzeNativeBodyFacts(fn: BytecodeFunction): NativeBodyFacts {
 		rootProfitability: createNativeRootProfitabilityContext(fn),
 		reads,
 		writes,
+		staticPropertyLoadIps,
 		branchSources,
 		handlerEntries,
 		externalEntries,
