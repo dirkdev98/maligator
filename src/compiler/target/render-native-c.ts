@@ -7082,72 +7082,15 @@ function emitInstruction(
 			if (operator === "**" && leftIsNum && rightIsNum) {
 				return [storeNumber(dst, `mal_number_exponentiate(${num(left)}, ${num(right)})`)];
 			}
-			const slow = (): string =>
-				profileCall(
-					"binary",
-					reentrantValue(
-						`mal_vm_binary_op(vm, ${emitBinaryOperator(operator)}, ${boxed(left)}, ${boxed(right)})`,
-					),
-				);
-			const completionCheck = throwCheck();
-			// Store a C bool into the dst: raw for a boolean-rep register, boxed
-			// otherwise. Comparisons (and the boolean cases below) flow through here.
-			const storeBool = (boolExpr: string): string =>
-				dstIsBool
-					? `r${dst} = ${boolExpr};`
-					: `r${dst} = ${profileCall("boxing", `mal_value_new_boolean(${boolExpr})`)};`;
-			// The numeric f64 of an operand: the raw double for a number-rep, else
-			// recovered from its boxed form (boxing a boolean-rep first, so we never
-			// feed a C bool to a MalValue helper).
+			// Retain the existing epilogue resource even when an exact comparison emits no throw check.
+			if (handlerIp === undefined) nativeBodyReference(resources, "throwExit");
 			const numericOf = (r: number): string =>
 				reps[r] === "int32"
 					? `(f64) r${r}`
 					: reps[r] === "number"
 						? `r${r}`
 						: `mal_ops_number_as_f64(${boxed(r)})`;
-			const exactUndefined = (r: number, mask: CompilerValueKindMask): string =>
-				mask === COMPILER_VALUE_KIND_UNDEFINED
-					? "true"
-					: mask === COMPILER_VALUE_KIND_NUMBER
-						? "false"
-						: `mal_value_is_undefined(${boxed(r)})`;
-			const exactNumberOrUndefined = (r: number, mask: CompilerValueKindMask): string =>
-				mask === COMPILER_VALUE_KIND_UNDEFINED
-					? '__builtin_nan("")'
-					: mask === COMPILER_VALUE_KIND_NUMBER
-						? numericOf(r)
-						: `(${exactUndefined(r, mask)} ? __builtin_nan("") : ${numericOf(r)})`;
-			const exactNumberOrUndefinedEquality = (
-				leftMask: CompilerValueKindMask,
-				rightMask: CompilerValueKindMask,
-			): string => {
-				if (leftMask === COMPILER_VALUE_KIND_UNDEFINED) {
-					return exactUndefined(right, rightMask);
-				}
-				if (rightMask === COMPILER_VALUE_KIND_UNDEFINED) {
-					return exactUndefined(left, leftMask);
-				}
-				if (
-					leftMask === COMPILER_VALUE_KIND_NUMBER &&
-					rightMask === COMPILER_VALUE_KIND_NUMBER
-				) {
-					return `${numericOf(left)} == ${numericOf(right)}`;
-				}
-				const leftUndefined = exactUndefined(left, leftMask);
-				const rightUndefined = exactUndefined(right, rightMask);
-				if (leftMask === COMPILER_VALUE_KIND_NUMBER) {
-					return `!(${rightUndefined}) && ${numericOf(left)} == ${numericOf(right)}`;
-				}
-				if (rightMask === COMPILER_VALUE_KIND_NUMBER) {
-					return `!(${leftUndefined}) && ${numericOf(left)} == ${numericOf(right)}`;
-				}
-				return `((${leftUndefined}) && (${rightUndefined})) || (!(${leftUndefined}) && !(${rightUndefined}) && ${numericOf(left)} == ${numericOf(right)})`;
-			};
-			// Core has proved that each operand is either Number or undefined. This
-			// closes the complete semantic domain: equality needs no coercion, while
-			// relational comparison converts undefined to NaN and cannot call user
-			// code or throw. Consume the proof directly instead of retaining a generic
-			// fallback behind speculative number guards.
+			// Exact Number/undefined domains require neither coercion nor a speculative fallback.
 			if (
 				exactInputKinds !== undefined &&
 				exactInputKinds.every(
@@ -7155,37 +7098,58 @@ function emitInstruction(
 				) &&
 				compare !== undefined
 			) {
+				const exactUndefined = (r: number, mask: CompilerValueKindMask): string =>
+					mask === COMPILER_VALUE_KIND_UNDEFINED
+						? "true"
+						: mask === COMPILER_VALUE_KIND_NUMBER
+							? "false"
+							: `mal_value_is_undefined(${boxed(r)})`;
+				const exactNumberOrUndefined = (
+					r: number,
+					mask: CompilerValueKindMask,
+				): string =>
+					mask === COMPILER_VALUE_KIND_UNDEFINED
+						? '__builtin_nan("")'
+						: mask === COMPILER_VALUE_KIND_NUMBER
+							? numericOf(r)
+							: `(${exactUndefined(r, mask)} ? __builtin_nan("") : ${numericOf(r)})`;
+				const exactNumberOrUndefinedEquality = (
+					leftMask: CompilerValueKindMask,
+					rightMask: CompilerValueKindMask,
+				): string => {
+					if (leftMask === COMPILER_VALUE_KIND_UNDEFINED) {
+						return exactUndefined(right, rightMask);
+					}
+					if (rightMask === COMPILER_VALUE_KIND_UNDEFINED) {
+						return exactUndefined(left, leftMask);
+					}
+					if (
+						leftMask === COMPILER_VALUE_KIND_NUMBER &&
+						rightMask === COMPILER_VALUE_KIND_NUMBER
+					) {
+						return `${numericOf(left)} == ${numericOf(right)}`;
+					}
+					const leftUndefined = exactUndefined(left, leftMask);
+					const rightUndefined = exactUndefined(right, rightMask);
+					if (leftMask === COMPILER_VALUE_KIND_NUMBER) {
+						return `!(${rightUndefined}) && ${numericOf(left)} == ${numericOf(right)}`;
+					}
+					if (rightMask === COMPILER_VALUE_KIND_NUMBER) {
+						return `!(${leftUndefined}) && ${numericOf(left)} == ${numericOf(right)}`;
+					}
+					return `((${leftUndefined}) && (${rightUndefined})) || (!(${leftUndefined}) && !(${rightUndefined}) && ${numericOf(left)} == ${numericOf(right)})`;
+				};
 				const equality = ["==", "!=", "===", "!=="].includes(operator);
 				const positive = equality
 					? exactNumberOrUndefinedEquality(exactInputKinds[0], exactInputKinds[1])
 					: `${exactNumberOrUndefined(left, exactInputKinds[0])} ${compare} ${exactNumberOrUndefined(right, exactInputKinds[1])}`;
 				const result =
 					operator === "!=" || operator === "!==" ? `!(${positive})` : positive;
-				return [storeBool(result)];
+				return [storeBoolean(dst, result)];
 			}
-			const guardIsNumber = (r: number): string => `mal_ops_is_number(${boxed(r)})`;
-			// The speculative guard for a native numeric path: the AND of an
-			// is-number test over each operand not already proven number-rep (0, 1,
-			// or 2 tests). Empty when both operands are proven numbers — then the
-			// native path is unconditional and the slow branch is never emitted.
-			const nonNumberOperands: Array<number> = [];
-			if (!leftIsNum) {
-				nonNumberOperands.push(left);
-			}
-			if (!rightIsNum) {
-				nonNumberOperands.push(right);
-			}
-			const numberGuard = nonNumberOperands.map(guardIsNumber).join(" && ");
-			const bothBoxed = !leftIsNum && !rightIsNum;
-			// Comparisons yield a boolean. The native compare over two numbers
-			// never throws; the fully-general op can, though — the relational and
-			// loose-equality operators run ToPrimitive (valueOf/toString) on an
-			// object operand and reject a Symbol — so any path that reaches `slow`
-			// propagates the completion. Strict equality never coerces, so
-			// binaryOpCanThrow leaves its check off.
 			if (compare !== undefined) {
 				if (leftIsNum && rightIsNum) {
-					return [storeBool(`${num(left)} ${compare} ${num(right)}`)];
+					return [storeBoolean(dst, `${num(left)} ${compare} ${num(right)}`)];
 				}
 				if (
 					(reps[left] === "string" ||
@@ -7198,20 +7162,42 @@ function emitInstruction(
 					if (!RELATIONAL_COMPARE.has(operator)) {
 						const equal = profileCall("string", `mal_string_equals(${a}, ${b})`);
 						return [
-							storeBool(operator === "!=" || operator === "!==" ? `!${equal}` : equal),
+							storeBoolean(
+								dst,
+								operator === "!=" || operator === "!==" ? `!${equal}` : equal,
+							),
 						];
 					}
 					return [
-						storeBool(
+						storeBoolean(
+							dst,
 							`${profileCall("string", `mal_string_compare(${a}, ${b})`)} ${compare} 0`,
 						),
 					];
 				}
+			}
+			const slow = (): string =>
+				profileCall(
+					"binary",
+					reentrantValue(
+						`mal_vm_binary_op(vm, ${emitBinaryOperator(operator)}, ${boxed(left)}, ${boxed(right)})`,
+					),
+				);
+			const bothBoxed = !leftIsNum && !rightIsNum;
+			const numberGuard = leftIsNum
+				? rightIsNum
+					? ""
+					: `mal_ops_is_number(${boxed(right)})`
+				: rightIsNum
+					? `mal_ops_is_number(${boxed(left)})`
+					: `mal_ops_is_number(${boxed(left)}) && mal_ops_is_number(${boxed(right)})`;
+			if (compare !== undefined) {
 				if (bothBoxed && (operator === "===" || operator === "!==")) {
 					const equal = `mal_ops_strict_equal_bool(${boxed(left)}, ${boxed(right)})`;
-					return [storeBool(operator === "!==" ? `!${equal}` : equal)];
+					return [storeBoolean(dst, operator === "!==" ? `!${equal}` : equal)];
 				}
-				const compareCheck = binaryOpCanThrow(operator) ? [completionCheck] : [];
+				const completionCheck = binaryOpCanThrow(operator) ? throwCheck() : undefined;
+				const compareCheck = completionCheck === undefined ? [] : [completionCheck];
 				// Speculate a numeric compare when there is a numeric prior: always in
 				// the mixed case (one operand proven number), and in the both-boxed
 				// case only for the relational operators (see RELATIONAL_COMPARE).
@@ -7283,7 +7269,7 @@ function emitInstruction(
 							`  r${dst} = ${fast};`,
 							`} else {`,
 							`  r${dst} = ${slow()};`,
-							`  ${completionCheck}`,
+							`  ${throwCheck()}`,
 							`}`,
 						];
 					}
@@ -7296,7 +7282,7 @@ function emitInstruction(
 			// silently swallowed BigInt TypeErrors/RangeErrors here.
 			const lowered = [`r${dst} = ${slow()};`];
 			if (binaryOpCanThrow(operator)) {
-				lowered.push(completionCheck);
+				lowered.push(throwCheck());
 			}
 			return lowered;
 		}
