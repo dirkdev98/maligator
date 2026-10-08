@@ -9,6 +9,7 @@ import {
 	serializeCompilerArtifact,
 } from "../../src/compiler/target/compiler-artifact-codec.ts";
 import { lowerNativeStorage } from "../../src/compiler/target/lower-native-storage.ts";
+import { emitCompiledFunction } from "../../src/compiler/target/render-native-c.ts";
 import {
 	buildNativeProgramImage,
 	buildBackendPairFromOneProgramImage,
@@ -55,21 +56,55 @@ console.log(used(long,long),discarded(long,long));
 				...pair.programImage,
 				native: {
 					...pair.programImage.native,
-					functions: pair.programImage.native.functions.map((fn) => ({
-						...fn,
-						registerRepresentations: fn.registerRepresentations.map((rep, local) =>
-							fn.body.instructions.some(
-								(op) =>
-									op.opcode === "BINARY" &&
-									op.operator === "+" &&
-									(op.left === local || op.right === local || op.dst === local),
+					functions: pair.programImage.native.functions.map((fn) => {
+						const inputs = new Set<number>();
+						for (const [ip, op] of fn.body.instructions.entries()) {
+							const proof = fn.instructions[ip];
+							if (
+								op.opcode !== "BINARY" ||
+								op.operator !== "+" ||
+								proof?.kind !== "exact-operator-input-kinds" ||
+								!proof.inputKindMasks.every((mask) => mask === 16)
 							)
-								? "boxed"
-								: rep,
-						),
-					})),
+								continue;
+							expect(op.left).toBeGreaterThanOrEqual(fn.body.parameterCount);
+							expect(op.right).toBeGreaterThanOrEqual(fn.body.parameterCount);
+							for (const local of [op.left, op.right, op.dst]) inputs.add(local);
+						}
+						if (inputs.size === 0) return fn;
+						return {
+							...fn,
+							registerRepresentations: fn.registerRepresentations.map((rep, local) =>
+								inputs.has(local) ? "boxed" : rep,
+							),
+							directEntries: fn.directEntries.map((entry) => ({
+								...entry,
+								registerRepresentations: entry.registerRepresentations.map(
+									(rep, local) => (inputs.has(local) ? "boxed" : rep),
+								),
+							})),
+						};
+					}),
 				},
 			});
+			let concatFunctions = 0;
+			for (const fn of image.native.functions) {
+				if (
+					!fn.body.instructions.some(
+						(op, ip) =>
+							op.opcode === "BINARY" &&
+							op.operator === "+" &&
+							fn.instructions[ip]?.kind === "exact-operator-input-kinds",
+					)
+				)
+					continue;
+				const emitted = emitCompiledFunction(fn, fn.functionIndex, "", false)!;
+				expect(emitted.source).toContain("mal_vm_concat_strings_known(");
+				for (const entry of emitted.directEntries)
+					expect(entry.source).toContain("mal_vm_concat_strings_known(");
+				concatFunctions++;
+			}
+			expect(concatFunctions).toBe(2);
 			const boxed = buildNativeProgramImage(
 				deserializeCompilerArtifact(serializeCompilerArtifact(image)),
 				{
