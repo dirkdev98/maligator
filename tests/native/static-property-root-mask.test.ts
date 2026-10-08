@@ -4,6 +4,7 @@ import { emitCompiledFunction } from "../../src/compiler/target/render-native-c.
 import {
 	assertExactLines,
 	buildBackendPairFromOneProgramImage,
+	HOST_MAIN,
 	runToStdout,
 	STRESS_ENV,
 } from "../../src/test-harness.ts";
@@ -207,6 +208,7 @@ describe("native static-property root-mask publication", () => {
 		const result = buildBackendPairFromOneProgramImage({
 			fixture,
 			name: "static-property-root-mask",
+			mainFile: HOST_MAIN,
 		});
 		binary = result.compiled;
 		interpreted = result.interpreted;

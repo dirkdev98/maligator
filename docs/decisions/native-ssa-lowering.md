@@ -46,7 +46,7 @@ chains; an expression still cannot cross their effect boundary. Proven Number
 increment and decrement operations are pure scalar arithmetic. Single-owner,
 nonpolling fallthrough phi-copy edges can remain inside an expression window;
 transitive leaf overwrites still force materialization. Scalar call, shaped-field,
-store, helper and indexed-read boundaries admit expressions only when their
+store, helper and indexed-property boundaries admit expressions only when their
 transitive inputs already occupy scalar storage. Known helper arguments and indexed
 keys capture a delayed expression once before guards, probes and fallbacks reuse it.
 
@@ -62,17 +62,26 @@ planning invocation; representations, ownership and suspension reads remain per
 variant, and validation rebuilds facts at the image trust boundary.
 
 Small numeric workers have their own selected scalar plan derived from the typed
-ABI, independently of ordinary boxed-body overlays. Rendering preserves branch
-targets and confines expression macros to the helper. Bounded workers retain the
-nonthrowing leaf activation and numeric-sort capability. Polling workers consume
-the variant's exact loop-backedge records, poll only on taken edges and propagate
-sticky termination through ordinary compiled activation and completion checks.
-They receive the VM explicitly and cannot use the sort leaf override. The runtime
-observation guard selects the ordinary typed body when required. Optional-entry
-budgets count both helper and retained body.
+ABI, independently of ordinary boxed-body overlays. Polling workers render that
+schedule directly in the ordinary typed entry, retaining its root storage,
+source and profile events, activation and completion checks. They consume the
+variant's exact loop-backedge records, poll only on taken edges and propagate
+sticky termination through the ordinary throw exit. The same computation body
+serves observed and stripped images. Bounded workers retain the nonthrowing leaf
+helper and numeric-sort capability; their optional-entry budgets count both helper
+and ordinary typed body.
 Worker plans record nonpolling jumps to the immediately following instruction as
 fallthroughs. Rendering retains only labels targeted by remaining branches; a
 selected expression producer can still be such a target.
+
+Ordinary numeric indexed reads and stores defer private-root publication until
+their dense probe misses. Dense growth may allocate raw storage but does not
+collect inside the probe. Generic fallbacks publish incoming private values and
+the safepoint union mask before entering helpers or user code. Conditional
+publication does not establish shadow-slot equality on the successful dense edge;
+later collecting operations publish the current physical-slot occupant again.
+Claimed regions, typed-array paths, boxed keys and materialization sites retain
+their existing publication contract.
 
 Immutable numeric and boolean SSA constants use a separate rematerialization plan,
 so repeated uses and intervening effects do not force a C local. Selection requires
