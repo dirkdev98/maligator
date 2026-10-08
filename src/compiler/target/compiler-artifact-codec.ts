@@ -13,6 +13,7 @@ import { getPrimordialCatalog } from "../shared/primordial-catalog-data.ts";
 import type { NativeCallbackTransportPlan } from "./lower-native-callbacks.ts";
 import { nativeEntryLookup } from "./lower-native-calls.ts";
 import type { NativeCallTransportPlan } from "./lower-native-calls.ts";
+import type { NativeCaptureAccessPlan } from "./lower-native-captures.ts";
 import {
 	NATIVE_PROPERTY_UPDATE_OPERATORS,
 	NATIVE_NUMBER_PREDICATE_MODES,
@@ -83,7 +84,7 @@ import type {
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal artifacts are hard cut-overs: stale cache entries rebuild.
-export const COMPILER_ARTIFACT_VERSION = 174;
+export const COMPILER_ARTIFACT_VERSION = 175;
 
 function validateClosureCaptureOwners(
 	owners: ReadonlyArray<number>,
@@ -688,6 +689,19 @@ export function serializeCompilerArtifact(
 function writeNativeStorage(w: Writer, storage: NativeStoragePlan | undefined): void {
 	if (storage === undefined)
 		throw new Error("Compiler artifact requires native storage plans");
+	w.u8(storage.captures.ownsEnvironment ? 1 : 0);
+	w.u8(storage.captures.initialization === "complete-layout" ? 1 : 0);
+	w.i32Array([...storage.captures.layout]);
+	w.u32(storage.captures.owners.length);
+	for (const owner of storage.captures.owners) {
+		w.i32(owner.ownerFunctionIndex);
+		w.i32(owner.lookupIndex);
+	}
+	w.u32(storage.captures.copiedValues.length);
+	for (const value of storage.captures.copiedValues) {
+		w.i32(value.ownerFunctionIndex);
+		w.i32(value.capturedIndex);
+	}
 	w.u32(storage.rootSlotCount);
 	for (const values of [
 		storage.rootRegisters,
@@ -917,7 +931,26 @@ function writeNativeStorage(w: Writer, storage: NativeStoragePlan | undefined): 
 }
 
 function readNativeStorage(r: Reader): NativeStoragePlan {
+	const ownsEnvironment = r.u8();
+	const initialization = r.u8();
+	if (ownsEnvironment > 1 || initialization > 1)
+		throw new RangeError("Invalid native capture access selection");
+	const captures: NativeCaptureAccessPlan = {
+		ownsEnvironment: ownsEnvironment === 1,
+		initialization: initialization === 1 ? "complete-layout" : "lookup",
+		layout: r.i32Array(),
+		owners: Array.from({ length: r.count(2) }, () => ({
+			ownerFunctionIndex: r.i32(),
+			lookupIndex: r.i32(),
+		})),
+		copiedValues: Array.from({ length: r.count(2) }, () => ({
+			ownerFunctionIndex: r.i32(),
+			capturedIndex: r.i32(),
+		})),
+		fallback: "owner-lookup",
+	};
 	const storage = {
+		captures,
 		rootSlotCount: r.u32(),
 		rootRegisters: r.i32Array(),
 		rootSlots: r.i32Array(),

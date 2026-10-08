@@ -7,6 +7,11 @@ import {
 	serializeCompilerArtifact,
 } from "../src/compiler/target/compiler-artifact-codec.ts";
 import { emitProgramImage } from "../src/compiler/target/emit-program-image.ts";
+import type { NativeCaptureAccessPlan } from "../src/compiler/target/lower-native-captures.ts";
+import {
+	lowerNativeStorage,
+	validateNativeStorage,
+} from "../src/compiler/target/lower-native-storage.ts";
 import {
 	deserializeRuntimeImage,
 	readRuntimeImage,
@@ -21,7 +26,7 @@ import type {
 } from "../src/compiler/target/runtime-image.ts";
 import { testProgramImage } from "./helpers/program-image.ts";
 
-function captureImage() {
+function captureImage(copied = true) {
 	const child: BytecodeFunction = {
 		nameStringIndex: -1,
 		isGenerator: false,
@@ -56,6 +61,7 @@ function captureImage() {
 		fileIndex: 0,
 		positions: [0, 0, 0],
 	};
+	if (!copied) child.closureCaptureValues = undefined;
 	const owner: BytecodeFunction = {
 		...child,
 		capturedCount: 2,
@@ -302,5 +308,82 @@ describe("immutable closure capture artifact transport", () => {
 		expect(() => serializeCompilerArtifact(image)).toThrow(
 			"invalid closure capture value body",
 		);
+	});
+});
+
+describe("persisted native capture access contract", () => {
+	it("round-trips canonical and typed entry choices while preserving copied display order", () => {
+		const image = captureImage();
+		const fn = image.native.functions[0]!;
+		const selected = lowerNativeStorage({
+			...image,
+			native: {
+				...image.native,
+				functions: [
+					{
+						...fn,
+						directEntries: [
+							{
+								id: 0,
+								parameterRepresentations: [],
+								resultRepresentation: "boxed",
+								registerRepresentations: fn.registerRepresentations,
+								gc: {
+									safepoints: fn.gc.safepoints.map((point) => ({
+										...point,
+										kind: "operation" as const,
+									})),
+								},
+							},
+						],
+					},
+					...image.native.functions.slice(1),
+				],
+			},
+		});
+		const restored = deserializeCompilerArtifact(serializeCompilerArtifact(selected));
+		const plan = restored.native.functions[0]!;
+		expect(plan.storage!.captures.copiedValues).toEqual([
+			{ ownerFunctionIndex: 1, capturedIndex: 0 },
+			{ ownerFunctionIndex: 1, capturedIndex: 1 },
+		]);
+		expect(plan.directEntries[0]!.storage!.captures).toEqual(plan.storage!.captures);
+	});
+
+	it.each([
+		["omitted owner", { owners: [] }],
+		["incorrect ordinal", { owners: [{ ownerFunctionIndex: 1, lookupIndex: -1 }] }],
+		["incorrect initializer", { initialization: "lookup" }],
+		["missing layout", { layout: [] }],
+		["forged environment ownership", { ownsEnvironment: true }],
+	] satisfies Array<[string, Partial<NativeCaptureAccessPlan>]>)(
+		"rejects %s independently of serialized renderer choices",
+		(_name, change) => {
+			const native = captureImage(false).native.functions[0]!;
+			const forged = {
+				...native,
+				storage: {
+					...native.storage!,
+					captures: { ...native.storage!.captures, ...change },
+				},
+			};
+			expect(() => validateNativeStorage(forged)).toThrow(
+				/invalid or stale storage plan/,
+			);
+		},
+	);
+
+	it("rejects stale copied values and rederives choices after capture metadata changes", () => {
+		const image = captureImage();
+		image.native.functions[0]!.body.closureCaptureValues = undefined;
+		expect(() => validateNativeStorage(image.native.functions[0]!)).toThrow(
+			/invalid or stale storage plan/,
+		);
+		const updated = lowerNativeStorage(image);
+		expect(() => validateNativeStorage(updated.native.functions[0]!)).not.toThrow();
+		expect(updated.native.functions[0]!.storage!.captures.owners).toEqual([
+			{ ownerFunctionIndex: 1, lookupIndex: 0 },
+		]);
+		expect(() => emitProgramImage(updated, { compiled: true })).not.toThrow();
 	});
 });

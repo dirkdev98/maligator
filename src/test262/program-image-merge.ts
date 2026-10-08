@@ -21,6 +21,18 @@ function rebaseNativeStorage(
 		? undefined
 		: {
 				...storage,
+				captures: {
+					...storage.captures,
+					owners: storage.captures.owners.map((owner) => ({
+						...owner,
+						ownerFunctionIndex: owner.ownerFunctionIndex + functionBase,
+					})),
+					layout: storage.captures.layout.map((owner) => shifted(owner, functionBase)),
+					copiedValues: storage.captures.copiedValues.map((value) => ({
+						...value,
+						ownerFunctionIndex: value.ownerFunctionIndex + functionBase,
+					})),
+				},
 				literalPropertyDefinitions: storage.literalPropertyDefinitions.map((plan) => ({
 					...plan,
 					stringIndex: plan.stringIndex + stringBase,

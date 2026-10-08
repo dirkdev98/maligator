@@ -35,6 +35,7 @@ import type {
 	NativeCallTargetTransport,
 	NativeCallTransportPlan,
 } from "./lower-native-calls.ts";
+import type { NativeCaptureAccessPlan } from "./lower-native-captures.ts";
 import { lowerNativeFastPaths } from "./lower-native-fast-paths.ts";
 import type {
 	NativeConstructorInitializationAction,
@@ -145,26 +146,12 @@ import type { BytecodeFunction, BytecodeInstruction } from "./runtime-image.ts";
  */
 type RegisterRep = VmRegisterRepresentation;
 
-function copiedCaptureValues(fn: BytecodeFunction) {
-	return fn.strict && !fn.isGenerator && !fn.isAsync && fn.capturedCount === 0
-		? (fn.closureCaptureValues ?? [])
-		: [];
-}
-
 function captureValueKey(ownerFunctionIndex: number, capturedIndex: number): string {
 	return `${ownerFunctionIndex}:${capturedIndex}`;
 }
 
-function copiedCaptureIndexes(fn: BytecodeFunction): ReadonlyMap<string, number> {
-	return new Map(
-		copiedCaptureValues(fn).map((capture, index) => [
-			captureValueKey(capture.ownerFunctionIndex, capture.capturedIndex),
-			index,
-		]),
-	);
-}
-
 interface NativeBodyAnalysis {
+	readonly captures: NativeCaptureAccessPlan;
 	readonly captureOwners: ReadonlyArray<number>;
 	readonly stableCaptureOwners: ReadonlySet<number>;
 	readonly copiedCaptures: ReadonlyMap<string, number>;
@@ -177,25 +164,18 @@ interface NativeBodyAnalysis {
 
 function analyzeNativeBody(
 	fn: BytecodeFunction,
-	functionIndex: number,
+	captures: NativeCaptureAccessPlan,
 ): NativeBodyAnalysis {
-	const owners = new Set<number>();
-	const copied = copiedCaptureIndexes(fn);
+	const owners = new Set(captures.owners.map((owner) => owner.ownerFunctionIndex));
+	const copied = new Map(
+		captures.copiedValues.map((capture, index) => [
+			captureValueKey(capture.ownerFunctionIndex, capture.capturedIndex),
+			index,
+		]),
+	);
 	const jumpTargets = new Set(fn.handlers.map((handler) => handler.handlerIp));
 	const iterationEligibilityRegisters = new Set<number>();
-	let ownsCaptureEnvironment = fn.capturedCount > 0;
 	for (const [ip, instruction] of fn.instructions.entries()) {
-		if (
-			(instruction.opcode === "LOAD_CAPTURED" ||
-				instruction.opcode === "STORE_CAPTURED") &&
-			instruction.ownerFunctionIndex >= 0 &&
-			instruction.ownerFunctionIndex !== functionIndex &&
-			!(
-				instruction.opcode === "LOAD_CAPTURED" &&
-				copied.has(captureValueKey(instruction.ownerFunctionIndex, instruction.index))
-			)
-		)
-			owners.add(instruction.ownerFunctionIndex);
 		if (instruction.opcode === "JUMP" || instruction.opcode === "JUMP_IF")
 			jumpTargets.add(instruction.targetIp);
 		if (
@@ -210,46 +190,36 @@ function analyzeNativeBody(
 			instruction.intrinsic === "__arrayIterationEligible"
 		)
 			iterationEligibilityRegisters.add(instruction.dst);
-		switch (instruction.opcode) {
-			case "ENV_PUSH":
-			case "ENV_COPY":
-			case "ENV_POP":
-			case "WITH_ENTER":
-			case "WITH_EXIT":
-				ownsCaptureEnvironment = false;
-		}
 	}
 	return {
-		captureOwners: [...owners].sort((a, b) => a - b),
+		captures,
+		captureOwners: captures.owners.map((owner) => owner.ownerFunctionIndex),
 		stableCaptureOwners: owners,
 		copiedCaptures: copied,
-		requiredCaptureOwners: new Set(fn.closureCaptureOwners),
+		requiredCaptureOwners: new Set(
+			captures.owners
+				.filter((owner) => owner.lookupIndex >= 0)
+				.map((owner) => owner.ownerFunctionIndex),
+		),
 		jumpTargets,
 		handlerTargets: exceptionHandlerTargets(fn.instructions.length, fn.handlers),
-		ownsCaptureEnvironment,
+		ownsCaptureEnvironment: captures.ownsEnvironment,
 		iterationEligibilityRegisters,
 	};
 }
 
 function initializeFixedCaptureOwners(
 	fn: BytecodeFunction,
-	owners: ReadonlyArray<number>,
+	captures: NativeCaptureAccessPlan,
 	relocation: NativeRelocationExpressions,
 	declare: boolean,
 ): Array<string> {
 	const binding = declare ? "MalEnv *const " : "";
-	const layout = fn.closureCaptureOwners;
+	const owners = captures.owners.map((owner) => owner.ownerFunctionIndex);
+	const layout = captures.layout;
 	// Native constructors encode these layouts as one tagged owner, a display,
 	// or an exact complete chain. Wire overlays and resumed scopes can differ.
-	if (
-		owners.length > 0 &&
-		layout !== undefined &&
-		layout.length <= 16 &&
-		!relocation.enabled &&
-		!fn.isGenerator &&
-		!fn.isAsync &&
-		owners.every((owner) => layout.includes(owner))
-	) {
+	if (captures.initialization === "complete-layout" && !relocation.enabled) {
 		const incoming = fn.capturedCount > 0 ? "env->parent" : "env";
 		if (layout.length === 1)
 			return [
@@ -292,23 +262,24 @@ function initializeFixedCaptureOwners(
 			),
 		];
 	}
-	return owners.map((owner) => {
-		const captureIndex = fn.closureCaptureOwners?.indexOf(owner) ?? -1;
-		const lookup =
-			captureIndex < 0
-				? `mal_vm_capture_owner(env, ${relocation.ownerFunctionIndex(owner)})`
-				: `mal_vm_capture_owner_at(env, ${relocation.ownerFunctionIndex(owner)}, ${captureIndex})`;
-		return `${binding}__capture_owner_${owner} = ${lookup};`;
-	});
+	return captures.owners.map(
+		({ ownerFunctionIndex: owner, lookupIndex: captureIndex }) => {
+			const lookup =
+				captureIndex < 0
+					? `mal_vm_capture_owner(env, ${relocation.ownerFunctionIndex(owner)})`
+					: `mal_vm_capture_owner_at(env, ${relocation.ownerFunctionIndex(owner)}, ${captureIndex})`;
+			return `${binding}__capture_owner_${owner} = ${lookup};`;
+		},
+	);
 }
 
 function initializeCopiedCaptureValues(
-	fn: BytecodeFunction,
+	captures: NativeCaptureAccessPlan,
 	relocation: NativeRelocationExpressions,
 ): Array<string> {
 	// A direct entry can receive an ordinary or foreign display. The inline
 	// accessor validates the tuple before reading its certified display ordinal.
-	return copiedCaptureValues(fn).map(
+	return captures.copiedValues.map(
 		(capture, index) =>
 			`const MalValue __capture_value_${index} = mal_vm_load_captured_value_at(env, ${relocation.ownerFunctionIndex(capture.ownerFunctionIndex)}, ${capture.capturedIndex}, ${index});`,
 	);
@@ -1142,7 +1113,7 @@ function emitCompiledVariant(
 	// `this`, this activation's captured env, and/or a reassigned `with` env; every
 	// exit past its link must unlink it.
 	const needsRootFrame =
-		totalSlots > 0 || capturesEnv || hasWith || copiedCaptureValues(fn).length > 0;
+		totalSlots > 0 || capturesEnv || hasWith || analysis.captures.copiedValues.length > 0;
 	const retainsForwardedArguments = fn.instructions.some(
 		(instruction) => instruction.opcode === "CALL_REST_ARGUMENTS",
 	);
@@ -1404,13 +1375,13 @@ function emitCompiledVariant(
 
 	for (const line of initializeFixedCaptureOwners(
 		fn,
-		analysis.captureOwners,
+		analysis.captures,
 		relocation,
 		true,
 	)) {
 		lines.push(`    ${line}`);
 	}
-	for (const line of initializeCopiedCaptureValues(fn, relocation)) {
+	for (const line of initializeCopiedCaptureValues(analysis.captures, relocation)) {
 		lines.push(`    ${line}`);
 	}
 
@@ -1679,8 +1650,10 @@ export function emitCompiledFunction(
 	stringConstants: ReadonlyArray<ReadonlyArray<number>> = [],
 	callbackEntries: ReadonlySet<string> = new Set(),
 ): CompiledFunction | null {
+	if (native.storage === undefined)
+		throw new Error("Native rendering requires a lowered storage plan");
 	return renderCompiledFunction(
-		analyzeNativeBody(native.body, index),
+		analyzeNativeBody(native.body, native.storage.captures),
 		native,
 		index,
 		suffix,
@@ -1700,7 +1673,11 @@ export function emitCompiledFunction(
 export function createNativeFunctionRenderer(): typeof emitCompiledFunction {
 	const analyses = new Map<
 		number,
-		{ body: BytecodeFunction; analysis: NativeBodyAnalysis }
+		{
+			body: BytecodeFunction;
+			captures: NativeCaptureAccessPlan;
+			analysis: NativeBodyAnalysis;
+		}
 	>();
 	return (
 		native: NativeFunctionPlan,
@@ -1716,13 +1693,19 @@ export function createNativeFunctionRenderer(): typeof emitCompiledFunction {
 		stringConstants: ReadonlyArray<ReadonlyArray<number>> = [],
 		callbackEntries: ReadonlySet<string> = new Set(),
 	): CompiledFunction | null => {
+		if (native.storage === undefined)
+			throw new Error("Native rendering requires a lowered storage plan");
 		const previous = analyses.get(index);
 		const analysis =
-			previous?.body === native.body
+			previous?.body === native.body && previous.captures === native.storage.captures
 				? previous.analysis
-				: analyzeNativeBody(native.body, index);
-		if (previous?.body !== native.body)
-			analyses.set(index, { body: native.body, analysis });
+				: analyzeNativeBody(native.body, native.storage.captures);
+		if (previous?.analysis !== analysis)
+			analyses.set(index, {
+				body: native.body,
+				captures: native.storage.captures,
+				analysis,
+			});
 		return renderCompiledFunction(
 			analysis,
 			native,
@@ -2137,7 +2120,7 @@ function emitResumableFunction(
 	lines.push(`        mal_root_frame_head = &__gc_frame;`);
 	for (const line of initializeFixedCaptureOwners(
 		fn,
-		analysis.captureOwners,
+		analysis.captures,
 		nativeRelocationExpressions(false),
 		false,
 	)) {
@@ -2193,7 +2176,7 @@ function emitResumableFunction(
 	}
 	for (const line of initializeFixedCaptureOwners(
 		fn,
-		analysis.captureOwners,
+		analysis.captures,
 		nativeRelocationExpressions(false),
 		false,
 	)) {

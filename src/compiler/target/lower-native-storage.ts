@@ -10,6 +10,11 @@ import {
 	selectNativeCallTransports,
 } from "./lower-native-calls.ts";
 import type { NativeCallTransportPlan, NativeEntryLookup } from "./lower-native-calls.ts";
+import {
+	selectNativeCaptureAccess,
+	nativeCaptureAccessPlansMatch,
+} from "./lower-native-captures.ts";
+import type { NativeCaptureAccessPlan } from "./lower-native-captures.ts";
 import { selectNativeFastPaths } from "./lower-native-fast-paths.ts";
 import type {
 	NativeFastPathPlans,
@@ -66,6 +71,7 @@ export interface NativeNumericWorkerPlan extends NativeScalarStoragePlan {
 
 export interface NativeStoragePlan
 	extends NativeScalarStoragePlan, NativeRootStoragePlan, NativeFastPathPlans {
+	readonly captures: NativeCaptureAccessPlan;
 	readonly callTransports: ReadonlyArray<NativeCallTransportPlan>;
 	readonly callbackTransports: ReadonlyArray<NativeCallbackTransportPlan>;
 	readonly suspension: NativeSuspensionPlan | undefined;
@@ -147,6 +153,7 @@ interface NativeScalarOwnership {
 }
 
 interface NativeStorageBodyFacts extends NativeBodyFacts {
+	readonly captures: NativeCaptureAccessPlan;
 	readonly writeCounts: Uint32Array;
 	readonly definitions: Int32Array;
 	readonly uses: ReadonlyArray<ReadonlyArray<number>>;
@@ -355,6 +362,7 @@ function storageBodyFacts(native: NativeFunctionPlan): NativeStorageBodyFacts {
 	const controlBoundaries = fn.instructions.map(scalarControlBoundary);
 	return {
 		...facts,
+		captures: selectNativeCaptureAccess(fn, native.functionIndex),
 		writeCounts,
 		definitions,
 		uses,
@@ -1108,6 +1116,7 @@ function lowerStorage(
 	const directHeapObjectIps = selectNativeDirectHeapObjects(native);
 	return {
 		...fastPaths,
+		captures: body.captures,
 		callTransports,
 		callbackTransports: selectNativeCallbackTransports(native, entries),
 		suspension: compactNativeSuspension(
@@ -1338,6 +1347,7 @@ export function validateNativeStorage(
 		return (
 			stored !== undefined &&
 			selected !== undefined &&
+			nativeCaptureAccessPlansMatch(stored.captures, selected.captures) &&
 			stored.rootSlotCount === selected.rootSlotCount &&
 			nativeCallTransportsMatch(stored.callTransports, selected.callTransports) &&
 			nativeCallbackTransportsMatch(

@@ -92,6 +92,10 @@ describe("Test262 VM image merger", () => {
 			{ ownerFunctionIndex: 1, capturedIndex: 2 },
 		]);
 		expect(relocated.closureCaptureOwners).toEqual([1]);
+		expect(merged.native.functions[2]!.storage!.captures.copiedValues).toEqual([
+			{ ownerFunctionIndex: 1, capturedIndex: 2 },
+		]);
+		expect(() => emitProgramImage(merged, {})).not.toThrow();
 		expect(relocated.instructions[0]).toMatchObject({ ownerFunctionIndex: 1, index: 2 });
 		expect(relocated.closureCaptureValues).not.toBe(child.closureCaptureValues);
 		expect(relocated.closureCaptureValues![0]).not.toBe(child.closureCaptureValues[0]);
@@ -129,6 +133,11 @@ describe("Test262 VM image merger", () => {
 			prefix,
 			image({ functions: [owner, child] }),
 		]);
+		expect(merged.native.functions[3]!.storage!.captures.owners).toEqual([
+			{ ownerFunctionIndex: 2, lookupIndex: 1 },
+		]);
+		expect(merged.native.functions[3]!.storage!.captures.layout).toEqual([-2, 2]);
+		expect(() => emitProgramImage(merged, {})).not.toThrow();
 		expect(merged.runtime.functions.map((fn) => fn.closureCaptureOwners)).toEqual([
 			undefined,
 			undefined,
