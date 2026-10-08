@@ -112,7 +112,7 @@ describe("wire loader side-data validation", () => {
 				}),
 		});
 		directory = mkdtempSync(path.join(tmpdir(), "mal-wire-loader-"));
-	});
+	}, 600_000);
 
 	afterAll(() => {
 		if (directory !== undefined) rmSync(directory, { recursive: true, force: true });
