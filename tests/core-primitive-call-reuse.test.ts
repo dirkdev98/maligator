@@ -36,6 +36,33 @@ function inspect(body: string, locked = true) {
 function calls(result: ReturnType<typeof inspect>, operation: string) {
 	return result.core.filter((item) => item.attributes.operation === operation);
 }
+
+it("retains separate clock reads even when their Number results match or are unused", () => {
+	const result = inspect(
+		"const first=Date.now();Date.now();const second=Date.now();return first-second;",
+	);
+	expect(calls(result, "Date.now")).toHaveLength(3);
+});
+
+it("keys both Object.is operands when reusing primitive comparisons", () => {
+	const result = inspect(
+		"const number=+x;const a=Object.is(number,0);const b=Object.is(number,1);const again=Object.is(number,0);return[a,b,again];",
+	);
+	expect(calls(result, "Object.is")).toHaveLength(2);
+});
+
+it("retains Date.UTC calls with different later components", () => {
+	const result = inspect("const year=+x;return[Date.UTC(year,0),Date.UTC(year,1)];");
+	expect(calls(result, "Date.UTC")).toHaveLength(2);
+});
+
+it("retains hasOwn checks around mutation despite their Boolean results", () => {
+	const result = inspect(
+		"const a=Object.hasOwn(x,'value');y(x);const b=Object.hasOwn(x,'value');return[a,b];",
+	);
+	expect(calls(result, "Object.hasOwn")).toHaveLength(2);
+});
+
 for (const [operation, method, args] of methods) {
 	describe(operation, () => {
 		it("reuses an immutable receiver slot across an effectful call", () => {

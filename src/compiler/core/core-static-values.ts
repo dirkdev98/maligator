@@ -1,5 +1,5 @@
 import { verifyBuiltinWorldAssumptions } from "../shared/builtin-assumptions.ts";
-import { builtinPrimitiveResult } from "../shared/builtin-semantics.ts";
+import { builtinPrimitiveResult } from "../shared/builtin-registry.ts";
 import { evaluateConstantBuiltin } from "../shared/constant-builtins.ts";
 import { evaluateConstantOperation } from "../shared/constant-evaluator.ts";
 import type { ConstantValue } from "../shared/constant-evaluator.ts";

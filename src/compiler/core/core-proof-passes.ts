@@ -1,4 +1,4 @@
-import { builtinPrimitiveResult } from "../shared/builtin-semantics.ts";
+import { builtinPrimitiveResult } from "../shared/builtin-registry.ts";
 import {
 	COMPILER_VALUE_KIND_NUMBER,
 	COMPILER_VALUE_KIND_UNDEFINED,

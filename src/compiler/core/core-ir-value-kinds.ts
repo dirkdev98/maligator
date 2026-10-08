@@ -1,7 +1,7 @@
 import {
 	builtinPrimitiveResult,
 	builtinResultIsInt32,
-} from "../shared/builtin-semantics.ts";
+} from "../shared/builtin-registry.ts";
 import { compilerFactIsWorldInvariant } from "../shared/compiler-facts.ts";
 import {
 	COMPILER_VALUE_KIND_BIGINT,

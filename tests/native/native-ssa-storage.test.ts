@@ -36,6 +36,36 @@ describe("independent native SSA storage", () => {
 	}, 600_000);
 
 	it("preserves scalar arithmetic, loop transport, and suspended heap locals", () => {
+		for (const [name, rep] of [
+			["builtinDateNow", "number"],
+			["builtinDateParse", "number"],
+			["builtinDateUTC", "number"],
+			["builtinObjectIs", "boolean"],
+			["builtinObjectHasOwn", "boolean"],
+			["builtinMapHas", "boolean"],
+			["builtinMapDelete", "boolean"],
+			["builtinSetHas", "boolean"],
+			["builtinSetDelete", "boolean"],
+			["builtinArraySome", "boolean"],
+			["builtinArrayEvery", "boolean"],
+			["builtinArrayFindIndex", "number"],
+			["builtinArrayFindLastIndex", "number"],
+		] as const) {
+			const native = image.native.functions.find(
+				(fn) =>
+					String.fromCharCode(
+						...(image.runtime.stringConstants[fn.body.nameStringIndex] ?? []),
+					) === name,
+			)!;
+			expect(native).toBeDefined();
+			const op = native.body.instructions.find((op) => op.opcode === "CALL_KNOWN")!;
+			if (op?.opcode !== "CALL_KNOWN") throw new Error("Missing primitive builtin");
+			expect(native.registerRepresentations[op.dst]).toBe(rep);
+			expect(native.storage!.rootRegisters).not.toContain(op.dst);
+			expect(
+				emitCompiledFunction(native, native.functionIndex, "", false),
+			).not.toBeNull();
+		}
 		for (const name of [
 			"coerciveScalarAnd",
 			"coerciveScalarOr",

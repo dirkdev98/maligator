@@ -1,5 +1,5 @@
 import type { CorePropertyPlacement } from "../core/core-ir-regions.ts";
-import { builtinResultIsInt32 } from "../shared/builtin-semantics.ts";
+import { builtinResultIsInt32 } from "../shared/builtin-registry.ts";
 import {
 	COMPILER_VALUE_KIND_NUMBER,
 	COMPILER_VALUE_KIND_NULL,
@@ -8149,8 +8149,10 @@ function emitInstruction(
 			}
 			if (instruction.operation === "Object.hasOwn") {
 				return [
-					`r${instruction.dst} = mal_builtin_object_has_own_known(vm, ${argsExpr}, ${instruction.arguments.length});`,
-					throwCheck(),
+					...boxedLoad(
+						instruction.dst,
+						`mal_builtin_object_has_own_known(vm, ${argsExpr}, ${instruction.arguments.length})`,
+					),
 					poll,
 				];
 			}
@@ -8172,7 +8174,7 @@ function emitInstruction(
 						return [storeBoolean(instruction.dst, `${aBool} == ${bBool}`)];
 				}
 				return [
-					`r${instruction.dst} = mal_builtin_object_is_known(${argsExpr}, ${instruction.arguments.length});`,
+					`r${instruction.dst} = ${callValue(instruction.dst, `mal_builtin_object_is_known(${argsExpr}, ${instruction.arguments.length})`)};`,
 				];
 			}
 			if (instruction.operation === "Object.keys") {
@@ -8279,19 +8281,25 @@ function emitInstruction(
 				];
 			}
 			if (instruction.operation === "Date.now") {
-				return [`r${instruction.dst} = mal_builtin_date_now_known();`];
+				return [
+					`r${instruction.dst} = ${callValue(instruction.dst, "mal_builtin_date_now_known()")};`,
+				];
 			}
 			if (instruction.operation === "Date.parse") {
 				return [
-					`r${instruction.dst} = mal_builtin_date_parse_known(vm, ${argsExpr}, ${instruction.arguments.length});`,
-					throwCheck(),
+					...boxedLoad(
+						instruction.dst,
+						`mal_builtin_date_parse_known(vm, ${argsExpr}, ${instruction.arguments.length})`,
+					),
 					poll,
 				];
 			}
 			if (instruction.operation === "Date.UTC") {
 				return [
-					`r${instruction.dst} = mal_builtin_date_utc_known(vm, ${argsExpr}, ${instruction.arguments.length});`,
-					throwCheck(),
+					...boxedLoad(
+						instruction.dst,
+						`mal_builtin_date_utc_known(vm, ${argsExpr}, ${instruction.arguments.length})`,
+					),
 					poll,
 				];
 			}

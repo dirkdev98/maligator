@@ -1,4 +1,4 @@
-import { builtinPrimitiveResult } from "../shared/builtin-semantics.ts";
+import { builtinPrimitiveResult } from "../shared/builtin-registry.ts";
 import { evaluateConstantBuiltin } from "../shared/constant-builtins.ts";
 import { PORTABLE_CONSTANT_TARGET } from "../shared/constant-evaluator.ts";
 import type { ConstantEvaluationTarget } from "../shared/constant-evaluator.ts";
@@ -56,6 +56,7 @@ const variadic = new Set([
 	"String.prototype.concat",
 ]);
 const binary = new Set([
+	"Object.is",
 	"Math.atan2",
 	"Math.pow",
 	"Math.imul",
@@ -125,6 +126,15 @@ const nonthrowingStrings = new Set([
 ]);
 
 function candidate(operation: string): boolean {
+	// Result kinds alone do not prove stable host reads or immutable collection state.
+	if (
+		operation.startsWith("Date.") ||
+		operation.startsWith("Map.prototype.") ||
+		operation.startsWith("Set.prototype.") ||
+		operation.startsWith("Array.prototype.") ||
+		operation === "Object.hasOwn"
+	)
+		return false;
 	return (
 		operation !== "Date" &&
 		operation !== "Math.random" &&

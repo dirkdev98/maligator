@@ -1,3 +1,5 @@
+import "./native-builtin-result-storage.js";
+
 const gc = globalThis.__mal_collect_garbage ?? (() => {});
 
 function coerciveImmediatePlus(input, gate, condition) {

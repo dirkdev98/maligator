@@ -1,9 +1,9 @@
 import {
 	builtinOperations,
+	builtinPrimitiveResult,
 	exactBuiltinCallDescriptor,
 	mathUnaryOperationKeys,
 } from "../shared/builtin-registry.ts";
-import { builtinPrimitiveResult } from "../shared/builtin-semantics.ts";
 import {
 	compilerFactIsWorldInvariant,
 	knownFact,
