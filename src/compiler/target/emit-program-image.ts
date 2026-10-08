@@ -540,11 +540,11 @@ function handlerArrayBody(fn: RuntimeImage["functions"][number]): string {
  * Emit a C translation unit with the static MalRuntimeImage data.
  */
 export function emitProgramImage(image: ProgramImage, options: EmitOptions = {}) {
-	return emitProgramImageSource(image, options, false).source;
+	return emitProgramImageParts(image, options, false).parts.join("\n");
 }
 
-interface EmittedProgramImageSource {
-	source: string;
+interface EmittedProgramImageParts {
+	parts: ReadonlyArray<string>;
 	compiled: Array<CompiledFunction | null>;
 }
 
@@ -554,8 +554,9 @@ interface ExternalDataDefinition {
 }
 
 interface SplitDataSource {
-	source: string;
+	lines: ReadonlyArray<string>;
 	definitions: Array<ExternalDataDefinition>;
+	declarations: Array<GeneratedDeclaration>;
 }
 
 interface GeneratedDeclaration {
@@ -880,16 +881,31 @@ function emitNativeFunctions(
  * array external lets large contiguous metadata tables retain their runtime ABI
  * without charging unrelated declarations to every compiler input.
  */
-function externalizeDataArrays(source: string, maxCodeUnits: number): SplitDataSource {
-	const lines = source.split("\n");
+function externalizeDataArrays(
+	parts: ReadonlyArray<string>,
+	maxCodeUnits: number,
+): SplitDataSource {
+	const lines = parts.flatMap((part) =>
+		part.includes("\n") ? part.split("\n") : [part],
+	);
 	const output: Array<string> = [];
 	const definitions: Array<ExternalDataDefinition> = [];
+	const declarations: Array<GeneratedDeclaration> = [];
+	const declare = (symbol: string, source: string) => {
+		output.push(source);
+		declarations.push({ symbol, source });
+	};
 	const splitInitializers: Array<string> = [];
 	for (let index = 0; index < lines.length; index++) {
 		const line = lines[index]!;
 		const match = /^(?:static )?(.+?) (mal_[A-Za-z0-9_]+)\[\] = (.*)$/.exec(line);
 		if (match === null) {
-			output.push(line);
+			if (line.startsWith("extern ")) {
+				const declaration = /\b(mal_[A-Za-z0-9_]+)(?=\[\]|\()/.exec(line);
+				if (declaration === null)
+					throw new Error(`cannot identify generated declaration '${line}'`);
+				declare(declaration[1]!, line);
+			} else output.push(line);
 			continue;
 		}
 		const type = match[1]!;
@@ -929,16 +945,14 @@ function externalizeDataArrays(source: string, maxCodeUnits: number): SplitDataS
 			}
 			if (chunk.length > 0) chunks.push(chunk);
 
-			output.push(
-				`extern ${mutableType} ${symbol}[];`,
-				`${mutableType} ${symbol}[${rows.length}];`,
-			);
+			declare(symbol, `extern ${mutableType} ${symbol}[];`);
+			output.push(`${mutableType} ${symbol}[${rows.length}];`);
 			let rowOffset = 0;
 			const initializer = `mal_initialize_${symbol}`;
 			splitInitializers.push(initializer);
 			for (const [chunkIndex, chunkRows] of chunks.entries()) {
 				const chunkSymbol = `${initializer}_chunk_${chunkIndex}`;
-				output.push(`extern void ${chunkSymbol}(${mutableType} *target);`);
+				declare(chunkSymbol, `extern void ${chunkSymbol}(${mutableType} *target);`);
 				definitions.push({
 					symbol: chunkSymbol,
 					source: [
@@ -960,7 +974,7 @@ function externalizeDataArrays(source: string, maxCodeUnits: number): SplitDataS
 			continue;
 		}
 		definitions.push({ symbol, source: definitionSource });
-		output.push(`extern ${type} ${symbol}[];`);
+		declare(symbol, `extern ${type} ${symbol}[];`);
 	}
 	if (splitInitializers.length > 0) {
 		output.unshift("static void mal_initialize_generated_data(void);");
@@ -977,22 +991,24 @@ function externalizeDataArrays(source: string, maxCodeUnits: number): SplitDataS
 		output.push("    atomic_store_explicit(&state, 2, memory_order_release);");
 		output.push("}");
 	}
-	let splitSource = output.join("\n");
 	if (splitInitializers.length > 0) {
-		splitSource = splitSource.replace(
-			"    .initialize_generated_data = nullptr,",
-			"    .initialize_generated_data = mal_initialize_generated_data,",
-		);
+		const placeholder = "    .initialize_generated_data = nullptr,";
+		const index = output.findIndex((line) => line.includes(placeholder));
+		if (index >= 0)
+			output[index] = output[index]!.replace(
+				placeholder,
+				"    .initialize_generated_data = mal_initialize_generated_data,",
+			);
 	}
-	return { source: splitSource, definitions };
+	return { lines: output, definitions, declarations };
 }
 
-function emitProgramImageSource(
+function emitProgramImageParts(
 	image: ProgramImage,
 	options: EmitOptions,
 	splitCompiledFunctions: boolean,
 	maxCompiledFunctionCodeUnits?: number,
-): EmittedProgramImageSource {
+): EmittedProgramImageParts {
 	validateNativeBodyAbis(
 		image.runtime.functions,
 		image.native.functions.map((fn) => fn.body),
@@ -1316,7 +1332,7 @@ function emitProgramImageSource(
 	const entries = nativeEntryLookup(image.native.functions);
 	for (const native of image.native.functions)
 		validateNativeStorage(native, entries, image.runtime.stringConstants);
-	return { source: lines.join("\n"), compiled };
+	return { parts: lines, compiled };
 }
 
 function generatedHeaderFiles(lines: ReadonlyArray<string>): Array<string> {
@@ -1372,14 +1388,14 @@ export function emitProgramTranslationUnits(
 			"translation-unit target and hard maximum must be positive integers with target <= maximum",
 		);
 	}
-	const emitted = emitProgramImageSource(
+	const emitted = emitProgramImageParts(
 		image,
 		{ ...options, includeHeader: false },
 		true,
 		hardMaximumCodeUnits,
 	);
-	const splitData = externalizeDataArrays(emitted.source, hardMaximumCodeUnits);
-	const runtimeSource = [...GENERATED_DATA_C_HEADER_LINES, splitData.source].join("\n");
+	const splitData = externalizeDataArrays(emitted.parts, hardMaximumCodeUnits);
+	const runtimeSource = [...GENERATED_DATA_C_HEADER_LINES, ...splitData.lines].join("\n");
 	if (runtimeSource.length > hardMaximumCodeUnits) {
 		throw new RangeError(
 			`generated runtime-image translation unit has ${runtimeSource.length} code units; ` +
@@ -1387,16 +1403,7 @@ export function emitProgramTranslationUnits(
 		);
 	}
 
-	const generatedDeclarations: Array<GeneratedDeclaration> = splitData.source
-		.split("\n")
-		.filter((line) => line.startsWith("extern "))
-		.map((source) => {
-			const match = /\b(mal_[A-Za-z0-9_]+)(?=\[\]|\()/.exec(source);
-			if (match === null) {
-				throw new Error(`cannot identify generated declaration '${source}'`);
-			}
-			return { symbol: match[1]!, source };
-		})
+	const generatedDeclarations: Array<GeneratedDeclaration> = splitData.declarations
 		.concat(
 			emitted.compiled.flatMap((fn): Array<GeneratedDeclaration> =>
 				fn === null || fn.source.length === 0
