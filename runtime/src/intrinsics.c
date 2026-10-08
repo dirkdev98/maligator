@@ -116,6 +116,8 @@ static const byte *const mal_hot_intrinsic_names[MAL_HOT_KEY_COUNT] = {
     [MAL_HOT_KEY_PROXY_PREVENT_EXTENSIONS] = (const byte *) "preventExtensions",
     [MAL_HOT_KEY_PROXY_APPLY] = (const byte *) "apply",
     [MAL_HOT_KEY_PROXY_CONSTRUCT] = (const byte *) "construct",
+    [MAL_HOT_KEY_RETURN] = (const byte *) "return",
+    [MAL_HOT_KEY_ADD] = (const byte *) "add",
 };
 
 static MalHotIntrinsicKey mal_hot_intrinsic_key(const byte *name, usize length) {
@@ -152,6 +154,10 @@ static MalHotIntrinsicKey mal_hot_intrinsic_key(const byte *name, usize length) 
             return memcmp(name, "then", 4) == 0 ? MAL_HOT_KEY_THEN : MAL_HOT_KEY_COUNT;
         case MAL_HOT_KEY_SIGNATURE(4, 'n', 't'):
             return memcmp(name, "next", 4) == 0 ? MAL_HOT_KEY_NEXT : MAL_HOT_KEY_COUNT;
+        case MAL_HOT_KEY_SIGNATURE(6, 'r', 'n'):
+            return memcmp(name, "return", 6) == 0 ? MAL_HOT_KEY_RETURN : MAL_HOT_KEY_COUNT;
+        case MAL_HOT_KEY_SIGNATURE(3, 'a', 'd'):
+            return memcmp(name, "add", 3) == 0 ? MAL_HOT_KEY_ADD : MAL_HOT_KEY_COUNT;
         case MAL_HOT_KEY_SIGNATURE(6, 'c', 'e'):
             return memcmp(name, "callee", 6) == 0 ? MAL_HOT_KEY_CALLEE : MAL_HOT_KEY_COUNT;
         case MAL_HOT_KEY_SIGNATURE(4, 'e', 'c'):

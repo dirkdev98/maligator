@@ -1306,7 +1306,7 @@ static bool mal_builtin_array_species_create(MalVm *vm, MalValue original, f64 l
         return false;
     }
     if (is_array) {
-        if (!mal_vm_get_property(vm, original, mal_intrinsic_string_key(vm, "constructor"), &constructor)) {
+        if (!mal_vm_get_property(vm, original, mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_CONSTRUCTOR), &constructor)) {
             return false;
         }
 #if MAL_REALMS

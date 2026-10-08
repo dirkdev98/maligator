@@ -72,7 +72,7 @@ static MalValue mal_builtin_set_construct(
     }
 
     MalValue adder;
-    if (!mal_vm_get_property(vm, set_value, mal_intrinsic_string_key(vm, "add"), &adder)) {
+    if (!mal_vm_get_property(vm, set_value, mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_ADD), &adder)) {
         return mal_value_new_undefined();
     }
 

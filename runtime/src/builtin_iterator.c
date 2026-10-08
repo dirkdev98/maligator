@@ -1011,7 +1011,7 @@ bool mal_vm_iterator_close_normal(MalVm *vm, const MalIteratorRecord *record) {
 
 static bool mal_vm_iterator_close_normal_impl(MalVm *vm, const MalIteratorRecord *record) {
     MalValue return_method;
-    MalKey return_key = mal_intrinsic_string_key(vm, "return");
+    MalKey return_key = mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_RETURN);
     if (!mal_vm_watched_inherited_get(vm, record->iterator, return_key, &return_method) &&
         !mal_vm_get_property(vm, record->iterator, return_key, &return_method)) {
         return false; // a throwing return getter propagates
