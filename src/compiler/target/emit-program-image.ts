@@ -723,8 +723,6 @@ function emitNativeFunctions(
 	availability: NativeCompilationAvailability;
 } {
 	const headerCodeUnits = NATIVE_C_HEADER_LINES.join("\n").length + 1;
-	// Polling workers require file_count == 0; bounded sort workers have a separate admission path.
-	const pollingWorkersAvailable = !(options.debug && image.runtime.files.length > 0);
 	const fits = (source: string): boolean =>
 		options.maxCodeUnits === undefined ||
 		source.length + headerCodeUnits <= options.maxCodeUnits;
@@ -817,7 +815,6 @@ function emitNativeFunctions(
 			strictCompiledTargets,
 			image.runtime.stringConstants,
 			callbackEntries,
-			pollingWorkersAvailable,
 		);
 		if (emitted === null || !fits(emitted.source)) return null;
 		const entries = emitted.directEntries.filter((entry) => fits(entry.source));

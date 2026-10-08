@@ -75,7 +75,7 @@ describe("polling numeric C workers", () => {
 				.join("\n");
 			expect(observed).not.toMatch(/mal_direct_\d+_\d+_worker\(/);
 			expect(emitted).toContain(`mal_direct_${spin.functionIndex}_${target.entryId}(vm,`);
-			expect(emitted).toMatch(/mal_direct_\d+_\d+_worker\(MalVm \*vm/);
+			expect(emitted).not.toMatch(/mal_direct_\d+_\d+_worker\(/);
 			const unobserved = buildLocalBinary({
 				context: built.context,
 				name: "numeric-workers-unobserved",

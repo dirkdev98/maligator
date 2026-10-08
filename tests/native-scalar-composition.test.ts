@@ -747,7 +747,7 @@ describe("native polling numeric worker plans", () => {
 	const source = `function loop(value,count){for(let index=0;index<count;index++)value=value*1.25-0.5;return value;}
 		globalThis.loop=loop;globalThis.result=loop(3,7);`;
 
-	it("keeps exact polling edges and completion-aware activation in a scalar loop worker", () => {
+	it("uses the selected scalar schedule in one completion-aware typed loop body", () => {
 		const out = inspectStaticValueFunction(source, "loop");
 		const entry = out.native.directEntries.find(
 			(entry) => entry.storage!.numericWorker !== undefined,
@@ -764,14 +764,60 @@ describe("native polling numeric worker plans", () => {
 			expect(worker.fallthroughJumpIps).not.toContain(ip);
 		const emitted = out.c.directEntries.find((candidate) => candidate.id === entry.id)!;
 		expect(emitted.leaf).toBeUndefined();
-		expect(emitted.source).toContain(`${emitted.symbol}_worker(MalVm *vm,`);
-		expect(emitted.source).toContain(
-			"mal_gc_safepoint(vm); if (mal_gc_poll_termination(vm)) return 0.0;",
-		);
+		expect(emitted.source).not.toContain(`${emitted.symbol}_worker(`);
+		expect(emitted.source).not.toContain("mal_vm_leaf_unobserved(vm)");
+		expect(worker.expressionIps.length).toBeGreaterThan(0);
+		for (const ip of worker.expressionIps) {
+			const instruction = out.native.body.instructions[ip]!;
+			if (!("dst" in instruction)) throw new Error("Missing expression destination");
+			expect(emitted.source).toContain(`#define r${instruction.dst} (`);
+		}
+		expect(emitted.source).toContain("mal_gc_safepoint(vm);");
+		expect(emitted.source).toMatch(/if \(mal_gc_poll_termination\(vm\)\) goto/);
 		expect(emitted.source).not.toContain("numeric_sort_leaf_active");
 		expect(deserializeCompilerArtifact(serializeCompilerArtifact(out.image))).toEqual(
 			out.image,
 		);
+	});
+
+	it("retains every profiled site in the selected typed loop body", () => {
+		const out = inspectStaticValueFunction(source, "loop", { profile: true });
+		const entry = out.native.directEntries.find(
+			(candidate) => (candidate.storage!.numericWorker?.pollingIps.length ?? 0) > 0,
+		)!;
+		expect(entry).toBeDefined();
+		expect(entry.storage!.numericWorker!.expressionIps).toEqual([]);
+		expect(entry.storage!.numericWorker!.rematerializedConstantIps).toEqual([]);
+		const emitted = out.c.directEntries.find((candidate) => candidate.id === entry.id)!;
+		for (const site of out.native.body.profileSiteIds!.filter((site) => site >= 0)) {
+			const event = `MAL_PROFILE_SITE_EVENT(vm, ${site}, MAL_PROFILE_SITE_EXECUTION, 1);`;
+			expect(emitted.source.split(event)).toHaveLength(2);
+		}
+	});
+
+	it("preserves the boxed argument ABI when selecting a scalar loop schedule", () => {
+		const out = inspectStaticValueFunction(
+			`function loop(metadata,value,count){for(let index=0;index<count;index++)value=value*1.25-0.5;return value;}
+			globalThis.loop=loop;globalThis.result=loop({label:'payload'},3,7);`,
+			"loop",
+		);
+		const entry = out.native.directEntries.find(
+			(candidate) => (candidate.storage!.numericWorker?.pollingIps.length ?? 0) > 0,
+		)!;
+		expect(entry).toBeDefined();
+		for (const key of [
+			"propertyProjections",
+			"propertyReadRegions",
+			"propertyReadPairs",
+			"pairedArrayLoops",
+			"arrayPresence",
+			"arrayPairDestructure",
+		] as const)
+			expect(entry.storage![key]).toEqual([]);
+		expect(entry.parameterRepresentations[0]).toBe("boxed");
+		const emitted = out.c.directEntries.find((candidate) => candidate.id === entry.id)!;
+		expect(emitted.source).toContain("MalValue p0");
+		expect(emitted.source).toContain("r0 = p0;");
 	});
 
 	it("rejects a stored polling worker that omits its edge", () => {

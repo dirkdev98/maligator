@@ -49,7 +49,10 @@ import type {
 } from "./lower-native-fast-paths.ts";
 import type { NativeStackFieldRepresentation } from "./lower-native-objects.ts";
 import { nativeRootedOutputRegisters } from "./lower-native-root-publication.ts";
-import { nativeVariantContract } from "./lower-native-storage.ts";
+import {
+	nativeNumericWorkerContract,
+	nativeVariantContract,
+} from "./lower-native-storage.ts";
 import type { NativeSuspensionPlan } from "./lower-native-suspension.ts";
 import {
 	NATIVE_ARITH,
@@ -773,11 +776,24 @@ function emitCompiledVariant(
 	}
 	if (directEntry !== undefined) validateNativeDirectEntry(fn, directEntry);
 	validateNativeLiteralSwitches(fn, native);
-	const nativeContract =
+	const variantContract =
 		directEntry === undefined ? native : nativeVariantContract(native, directEntry);
-	const storage = nativeContract.storage;
-	if (storage === undefined)
+	const variantStorage = variantContract.storage;
+	if (variantStorage === undefined)
 		throw new Error("Native rendering requires a lowered storage plan");
+	const worker = directEntry === undefined ? undefined : variantStorage.numericWorker;
+	const pollingWorker = worker !== undefined && worker.pollingIps.length > 0;
+	const nativeContract = pollingWorker
+		? nativeNumericWorkerContract(variantContract)
+		: variantContract;
+	const storage = pollingWorker
+		? {
+				...variantStorage,
+				expressionIps: worker.expressionIps,
+				definitionInitializedRegisters: worker.definitionInitializedRegisters,
+				rematerializedConstantIps: worker.rematerializedConstantIps,
+			}
+		: variantStorage;
 
 	// A function with its own captured slots needs a per-activation MalEnv node
 	// (function_index == this function) for LOAD/STORE_CAPTURED(owner == self) and
@@ -1487,7 +1503,7 @@ function renderScalarExpression(
 	}
 }
 
-function renderNumericWorker(
+function renderNumericLeaf(
 	native: NativeFunctionPlan,
 	entry: NativeDirectEntryPlan,
 ): Array<string> | null {
@@ -1496,7 +1512,7 @@ function renderNumericWorker(
 	if (storage === undefined)
 		throw new Error("Numeric worker rendering requires a storage plan");
 	const leaf = storage.numericWorker;
-	if (leaf === undefined) return null;
+	if (leaf === undefined || leaf.pollingIps.length > 0) return null;
 	const reps = entry.registerRepresentations;
 	const scalar = (r: number) => ["number", "int32", "boolean"].includes(reps[r]!);
 	const number = (r: number) => `(f64) r${r}`;
@@ -1512,9 +1528,6 @@ function renderNumericWorker(
 		}),
 	);
 	const fallthroughJumps = new Set(leaf.fallthroughJumpIps);
-	const pollingIps = new Set(leaf.pollingIps);
-	const poll =
-		"if (mal_gc_poll) { mal_gc_safepoint(vm); if (mal_gc_poll_termination(vm)) return 0.0; }";
 	const jumpTargets = new Set(
 		fn.instructions.flatMap((op, ip) =>
 			(op.opcode === "JUMP" && !fallthroughJumps.has(ip)) || op.opcode === "JUMP_IF"
@@ -1530,11 +1543,7 @@ function renderNumericWorker(
 		switch (op.opcode) {
 			case "JUMP":
 			case "JUMP_IF":
-				line = pollingIps.has(ip)
-					? op.opcode === "JUMP_IF"
-						? `if (r${op.cond}) { ${poll} goto L${op.targetIp}; }`
-						: `${poll} goto L${op.targetIp};`
-					: `${op.opcode === "JUMP_IF" ? `if (r${op.cond}) ` : ""}goto L${op.targetIp};`;
+				line = `${op.opcode === "JUMP_IF" ? `if (r${op.cond}) ` : ""}goto L${op.targetIp};`;
 				break;
 			case "CREATE_NUMBER":
 			case "CREATE_F64":
@@ -1602,7 +1611,6 @@ export function emitCompiledFunction(
 	strictCompiledTargets: ReadonlySet<number> = new Set(),
 	stringConstants: ReadonlyArray<ReadonlyArray<number>> = [],
 	callbackEntries: ReadonlySet<string> = new Set(),
-	pollingWorkersAvailable = true,
 ): CompiledFunction | null {
 	const fn = native.body;
 	const canonical = emitCompiledVariant(
@@ -1643,14 +1651,8 @@ export function emitCompiledFunction(
 			stringConstants,
 		);
 		if (emitted === null) return [];
-		if (
-			!pollingWorkersAvailable &&
-			(entry.storage?.numericWorker?.pollingIps.length ?? 0) > 0
-		)
-			return [{ entry, emitted, leaf: undefined }];
-		const worker = renderNumericWorker(nativeVariantContract(native, entry), entry);
+		const worker = renderNumericLeaf(nativeVariantContract(native, entry), entry);
 		if (worker === null) return [{ entry, emitted, leaf: undefined }];
-		const bounded = entry.storage!.numericWorker!.pollingIps.length === 0;
 		const parameters = entry.parameterRepresentations
 			.map((rep, i) => `${cTypeOf(rep)} r${i}`)
 			.concat(
@@ -1661,14 +1663,9 @@ export function emitCompiledFunction(
 		const args = entry.parameterRepresentations
 			.map((_, i) => `p${i}`)
 			.concat(entry.fieldParameters?.keys.map((_, i) => `fp${i}`) ?? []);
-		if (!bounded) {
-			parameters.unshift("MalVm *vm");
-			args.unshift("vm");
-		}
-		const symbol = `${emitted.symbol}${bounded ? "_leaf" : "_worker"}`;
-		const sortAdmission = bounded
-			? " || (vm->exact_script_call != nullptr && vm->exact_script_call->numeric_sort_leaf_active && vm->exact_script_call->callee == callee)"
-			: "";
+		const symbol = `${emitted.symbol}_leaf`;
+		const sortAdmission =
+			" || (vm->exact_script_call != nullptr && vm->exact_script_call->numeric_sort_leaf_active && vm->exact_script_call->callee == callee)";
 		const source = `static __attribute__((aligned(64))) f64 ${symbol}(${parameters.join(", ") || "void"}) {\n#pragma STDC FP_CONTRACT OFF\n${worker.join("\n")}\n}\n${emitted.source.replace(
 			"#pragma STDC FP_CONTRACT OFF\n",
 			`#pragma STDC FP_CONTRACT OFF\n    if (mal_vm_leaf_unobserved(vm)${sortAdmission}) return ${symbol}(${args.join(", ")});\n`,
@@ -1677,7 +1674,7 @@ export function emitCompiledFunction(
 			{
 				entry,
 				emitted: { ...emitted, source },
-				leaf: bounded ? (true as const) : undefined,
+				leaf: true as const,
 			},
 		];
 	});

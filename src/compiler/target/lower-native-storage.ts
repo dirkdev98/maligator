@@ -779,6 +779,21 @@ function expressionIps(
 	return expressions;
 }
 
+export function nativeNumericWorkerContract(
+	native: NativeFunctionPlan,
+): NativeFunctionPlan {
+	return {
+		...native,
+		instructions: native.instructions.map((plan) =>
+			plan?.kind === "unsigned-arithmetic" ? plan : undefined,
+		),
+		specializations: [],
+		regionActions: [],
+		fieldCalls: [],
+		literalSwitches: [],
+	};
+}
+
 export function nativeVariantContract(
 	native: NativeFunctionPlan,
 	entry: NativeDirectEntryPlan,
@@ -879,22 +894,13 @@ function lowerStorage(
 	};
 	let numericWorker: NativeNumericWorkerPlan | undefined;
 	if (entry !== undefined && selectNumericWorker(native, entry)) {
-		const leaf = {
-			...native,
-			instructions: native.instructions.map((plan) =>
-				plan?.kind === "unsigned-arithmetic" ? plan : undefined,
-			),
-			specializations: [],
-			regionActions: [],
-			fieldCalls: [],
-			literalSwitches: [],
-		};
+		const worker = nativeNumericWorkerContract(native);
 		const pollingIps = native.gc.safepoints.flatMap((point) =>
 			point.kind === "loop-backedge" ? [point.instructionIp] : [],
 		);
 		const polls = new Set(pollingIps);
 		numericWorker = {
-			...scalarStorage(leaf),
+			...scalarStorage(worker),
 			pollingIps,
 			fallthroughJumpIps: fn.instructions.flatMap((op, ip) =>
 				op.opcode === "JUMP" && op.targetIp === ip + 1 && !polls.has(ip) ? [ip] : [],
