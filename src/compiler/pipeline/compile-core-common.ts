@@ -54,12 +54,13 @@ export interface CompileCoreOptions {
 	runPhase?: <T>(phase: CompileCorePhase, run: () => T) => T;
 }
 
-export function optimizeSemanticProgramToCore(
+/** Construct Core; callers that drop the semantic program afterwards spare the optimizer's peak. */
+export function constructSemanticProgramCore(
 	semantic: SemanticProgram,
 	options: CompileCoreOptions,
 	runPhase: <T>(phase: CompileCorePhase, run: () => T) => T,
-): CoreCompilation {
-	const core = lowerSemanticProgramToCore(semantic, {
+): ConstructedCoreCompilation {
+	return lowerSemanticProgramToCore(semantic, {
 		...options.semanticLowering,
 		sourceOrigins:
 			options.profile === true ? { moduleKeys: options.profileModuleKeys } : undefined,
@@ -69,7 +70,18 @@ export function optimizeSemanticProgramToCore(
 		},
 		runPhase,
 	});
-	return optimizeConstructedCore(core, options, runPhase);
+}
+
+export function optimizeSemanticProgramToCore(
+	semantic: SemanticProgram,
+	options: CompileCoreOptions,
+	runPhase: <T>(phase: CompileCorePhase, run: () => T) => T,
+): CoreCompilation {
+	return optimizeConstructedCore(
+		constructSemanticProgramCore(semantic, options, runPhase),
+		options,
+		runPhase,
+	);
 }
 
 export function optimizeConstructedCore(

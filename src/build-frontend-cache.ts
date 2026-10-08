@@ -39,8 +39,13 @@ import {
 	collectDisallowedEvalUsage,
 	collectDisallowedRegexpUsage,
 } from "./compiler/frontend/semantic-analysis.ts";
-import { compileSemanticProgramToProgramImage } from "./compiler/pipeline/compile-core.ts";
-import type { CompileCorePhase } from "./compiler/pipeline/compile-core.ts";
+import type { SemanticProgram } from "./compiler/frontend/semantic-analysis.ts";
+import { constructSemanticProgramCore } from "./compiler/pipeline/compile-core-common.ts";
+import { compileConstructedCoreToProgramImage } from "./compiler/pipeline/compile-core.ts";
+import type {
+	CompileCoreOptions,
+	CompileCorePhase,
+} from "./compiler/pipeline/compile-core.ts";
 import type { CompileEntrypointOptions } from "./compiler/pipeline/compile-program-common.ts";
 import { compileWorkerImages } from "./compiler/pipeline/compile-worker-images.ts";
 import type { CompiledWorkerImage } from "./compiler/pipeline/compile-worker-images.ts";
@@ -447,11 +452,26 @@ function loadCached(
 	}
 }
 
-function packageResolutionInputs(graph: ModuleGraph): Array<string> {
-	const inputs = new Set<string>();
+interface GraphDependencyInputs {
+	readonly sources: ReadonlyArray<{ readonly path: string; readonly source: string }>;
+	readonly directories: ReadonlyArray<string>;
+}
+
+function graphDependencyInputs(graph: ModuleGraph): GraphDependencyInputs {
+	const sources: Array<{ path: string; source: string }> = [];
+	const directories: Array<string> = [];
 	for (const record of graph.modules.values()) {
 		if (record.host || (record.virtual && record.sourcePath === undefined)) continue;
-		let directory = path.dirname(record.sourcePath ?? record.path);
+		const file = record.sourcePath ?? record.path;
+		sources.push({ path: file, source: record.source });
+		directories.push(path.dirname(file));
+	}
+	return { sources, directories };
+}
+
+function packageResolutionInputs(directories: ReadonlyArray<string>): Array<string> {
+	const inputs = new Set<string>();
+	for (let directory of directories) {
 		for (;;) {
 			const packagePath = path.join(directory, "package.json");
 			if (existsSync(packagePath)) inputs.add(packagePath);
@@ -463,17 +483,16 @@ function packageResolutionInputs(graph: ModuleGraph): Array<string> {
 	return [...inputs];
 }
 
-function graphDependencies(
-	graph: ModuleGraph,
+function snapshotDependencies(
+	inputs: GraphDependencyInputs,
 	session: FrontendCompilationSession,
 ): Array<BuildDependencyIdentity> {
 	const dependencies = new Map<string, BuildDependencyIdentity>();
-	for (const record of graph.modules.values()) {
-		if (record.host || (record.virtual && record.sourcePath === undefined)) continue;
-		const snapshot = session.snapshot(record.sourcePath ?? record.path, record.source);
+	for (const input of inputs.sources) {
+		const snapshot = session.snapshot(input.path, input.source);
 		dependencies.set(snapshot.path, snapshot);
 	}
-	for (const packagePath of packageResolutionInputs(graph)) {
+	for (const packagePath of packageResolutionInputs(inputs.directories)) {
 		const snapshot = session.snapshot(packagePath);
 		dependencies.set(snapshot.path, snapshot);
 	}
@@ -695,7 +714,7 @@ function prepareBuildFrontend(
 	}
 
 	const graphStartedAt = Date.now();
-	const graph = buildModuleGraph(entrypoint, {
+	const builtGraph = buildModuleGraph(entrypoint, {
 		buildConfig: options.config,
 		execution: options.execution,
 		stripTypes: options.stripTypes,
@@ -704,14 +723,26 @@ function prepareBuildFrontend(
 		platformSourceRoot: options.platformSourceRoot,
 	});
 	phases.graphMs = Date.now() - graphStartedAt;
-	const ownerPackageAbsences = captureRootPackageAbsences(graph);
+	const ownerPackageAbsences = captureRootPackageAbsences(builtGraph);
+	const workerRoots = {
+		workerEntries: builtGraph.workerEntries,
+		dynamicImportCandidates: builtGraph.dynamicImportCandidates,
+	};
+	const dependencyInputs = graphDependencyInputs(builtGraph);
+	// Semantic analysis is the graph's last reader; its ASTs must not share the optimizer's peak.
+	let graph: ModuleGraph | undefined = builtGraph;
+	const currentGraph = (): ModuleGraph => {
+		if (graph === undefined)
+			throw new Error("build frontend already released its module graph");
+		return graph;
+	};
 	const facts = withProgramClosure(
 		compilerProgramFactsFromConfig(options.config),
 		// A relocatable request selects the packaged development runner, which both
 		// splices fragment islands and exposes `mal._runWire` to the program. It is
 		// the request, not the fragment outcome, that decides: a fragment fallback
 		// still compiles a whole image that the same runner can extend.
-		certifyProgramClosure(graph, options.config, {
+		certifyProgramClosure(builtGraph, options.config, {
 			relocatableArtifact: options.relocatable === true,
 			hostWireSplicing: options.relocatable === true,
 		}),
@@ -721,9 +752,17 @@ function prepareBuildFrontend(
 	const semanticForGraph = () => {
 		if (sharedSemantic !== undefined) return sharedSemantic;
 		const semanticStartedAt = Date.now();
-		sharedSemantic = runSemanticAnalysisForGraph(graph);
+		sharedSemantic = runSemanticAnalysisForGraph(currentGraph());
 		phases.semanticMs += Date.now() - semanticStartedAt;
 		return sharedSemantic;
+	};
+	// The main compile is the last consumer; ASTs and scopes must not share the optimizer's peak.
+	const takeSemantic = () => {
+		const semantic = semanticForGraph();
+		sharedSemantic = undefined;
+		graph = undefined;
+		if (options.session === undefined) session.moduleParses.invalidate();
+		return semantic;
 	};
 	const world = facts.world;
 	const diagnosticsForSemantic = (
@@ -757,7 +796,7 @@ function prepareBuildFrontend(
 		policiesPrepared = true;
 	};
 	const compileMain = () => {
-		const hasWorkers = (graph.workerEntries?.length ?? 0) !== 0;
+		const hasWorkers = (workerRoots.workerEntries?.length ?? 0) !== 0;
 		if (hasWorkers && options.relocatable)
 			fragmentFallback = "worker roots use independent whole-program images";
 		if (
@@ -769,7 +808,7 @@ function prepareBuildFrontend(
 		) {
 			try {
 				const fragments = compileBuildFragments({
-					graph,
+					graph: currentGraph(),
 					config: options.config,
 					execution: options.execution,
 					facts,
@@ -819,12 +858,9 @@ function prepareBuildFrontend(
 			} catch (error) {
 				if (!(error instanceof UnsupportedBuildFragmentsError)) throw error;
 				fragmentFallback = error.message;
-				const semantic = semanticForGraph();
-				assertEvalPolicy(options.config, collectDisallowedEvalUsage(semantic));
-				assertRegexpPolicy(options.config, collectDisallowedRegexpUsage(semantic));
-				diagnostics = diagnosticsForSemantic(semantic);
+				prepareMain();
 				programImage = compileProgramImage(
-					semantic,
+					takeSemantic,
 					facts,
 					options,
 					phases,
@@ -840,9 +876,8 @@ function prepareBuildFrontend(
 			}
 		} else {
 			prepareMain();
-			const semantic = semanticForGraph();
 			programImage = compileProgramImage(
-				semantic,
+				takeSemantic,
 				facts,
 				options,
 				phases,
@@ -872,7 +907,7 @@ function prepareBuildFrontend(
 	};
 	const compileWorkers = () => {
 		const workerStartedAt = Date.now();
-		const result = compileWorkerImages(graph, workerOptions);
+		const result = compileWorkerImages(workerRoots, workerOptions);
 		phases.workerMs += Date.now() - workerStartedAt;
 		return result;
 	};
@@ -889,7 +924,7 @@ function prepareBuildFrontend(
 		diagnostics.push(...workerDiagnostics);
 		const workerArtifacts = cacheWorkerImages(workerImages, artifactRoot);
 		const dependenciesByPath = new Map(
-			graphDependencies(graph, session).map((input) => [input.path, input]),
+			snapshotDependencies(dependencyInputs, session).map((input) => [input.path, input]),
 		);
 		for (const input of workerDependencies) dependenciesByPath.set(input.path, input);
 		const dependencies = [...dependenciesByPath.values()].sort((left, right) =>
@@ -974,10 +1009,12 @@ function prepareBuildFrontend(
 	};
 	return {
 		kind: "compile",
-		graph,
+		get graph() {
+			return currentGraph();
+		},
 		workerOptions,
 		prepareMain,
-		captureInputs: () => graphDependencies(graph, session),
+		captureInputs: () => snapshotDependencies(dependencyInputs, session),
 		recordWorkerMs: (durationMs) => {
 			phases.workerMs += durationMs;
 			phases.workerOverlap = true;
@@ -989,13 +1026,13 @@ function prepareBuildFrontend(
 }
 
 function compileProgramImage(
-	semantic: Parameters<typeof compileSemanticProgramToProgramImage>[0],
+	takeSemantic: () => SemanticProgram,
 	facts: CompilerProgramFacts,
 	options: CompileBuildFrontendOptions,
 	phases: BuildFrontendPhases,
 	onOptimization: (report: CoreOptimizationReport, plan: CoreOptimizationPlan) => void,
 ): ProgramImage {
-	return compileSemanticProgramToProgramImage(semantic, {
+	const coreOptions: CompileCoreOptions = {
 		facts,
 		optimization: options.optimization,
 		coreVerification: options.coreVerification,
@@ -1015,5 +1052,11 @@ function compileProgramImage(
 				options.onCompilePhase?.(phase, durationMs);
 			}
 		},
-	});
+	};
+	const runPhase = coreOptions.runPhase!;
+	return compileConstructedCoreToProgramImage(
+		constructSemanticProgramCore(takeSemantic(), coreOptions, runPhase),
+		coreOptions,
+		runPhase,
+	);
 }
