@@ -218,7 +218,7 @@ tier 19 requires --include-test-check unless --core-opt3-start selects the compl
 
   --list                       print the committed fixture manifest
   --tier N[,N...]              select one or more tiers
-  --warm-runs N                override warmed samples per case
+  --warm-runs N                override warmed samples per case (0 skips warmup; requires --no-profile)
   --cold-runs N                override cold samples per case
   --instrumentation MODE       off, phases, counters or full (default: counters)
   --compare-instrumentation    compare off, phases and counters on every selected tier
@@ -244,10 +244,15 @@ function readManifest(): CompilerScaleManifest {
 	return manifest;
 }
 
-function positiveInteger(raw: string | undefined, option: string): number {
+function sampleInteger(raw: string | undefined, option: string, minimum = 1): number {
 	const value = Number(raw);
-	if (!Number.isSafeInteger(value) || value < 1) {
-		throw new Error(`${option} requires a positive integer`);
+	if (
+		raw === undefined ||
+		raw.trim().length === 0 ||
+		!Number.isSafeInteger(value) ||
+		value < minimum
+	) {
+		throw new Error(`${option} requires an integer >= ${minimum}`);
 	}
 	return value;
 }
@@ -283,12 +288,12 @@ function parseOptions(
 		if (option === "--tier") {
 			selected ??= new Set();
 			for (const raw of (args[++index] ?? "").split(",")) {
-				selected.add(positiveInteger(raw, "--tier"));
+				selected.add(sampleInteger(raw, "--tier"));
 			}
 		} else if (option === "--warm-runs") {
-			warmRuns = positiveInteger(args[++index], option);
+			warmRuns = sampleInteger(args[++index], option, 0);
 		} else if (option === "--cold-runs") {
-			coldRuns = positiveInteger(args[++index], option);
+			coldRuns = sampleInteger(args[++index], option);
 		} else if (option === "--instrumentation") {
 			const value = args[++index];
 			if (
@@ -348,6 +353,21 @@ function parseOptions(
 	}
 	if (coreOpt3Start && coreOpt4Start) {
 		throw new Error("select only one exact start protocol");
+	}
+	if (
+		warmRuns === 0 &&
+		(profile ||
+			quick ||
+			compareInstrumentation ||
+			manifest.tiers.some(
+				(tier) =>
+					tiers.has(tier.tier) &&
+					(tier.kind === "paired-self-compile" || tier.kind === "command"),
+			))
+	) {
+		throw new Error(
+			"cold-only samples require --no-profile, no warm protocol, and tiers 1-17",
+		);
 	}
 	return {
 		tiers,
@@ -1163,6 +1183,9 @@ function syntheticScalingSummary(
 		readonly warm: {
 			readonly samples: ReadonlyArray<CompilerScaleSample>;
 		};
+		readonly cold: {
+			readonly samples: ReadonlyArray<CompilerScaleSample>;
+		};
 		readonly profile?: CompilerScaleSample;
 	};
 	const byId = new Map(
@@ -1179,11 +1202,13 @@ function syntheticScalingSummary(
 				if (result === undefined) {
 					throw new Error(`missing synthetic scaling result ${tier.id}-${scale}x`);
 				}
-				const offSamples = result.warm.samples.filter(
+				const samples =
+					result.warm.samples.length === 0 ? result.cold.samples : result.warm.samples;
+				const offSamples = samples.filter(
 					({ instrumentation }) => instrumentation === "off",
 				);
-				const timingSamples = offSamples.length === 0 ? result.warm.samples : offSamples;
-				const metricsSample = [result.profile, ...result.warm.samples].find(
+				const timingSamples = offSamples.length === 0 ? samples : offSamples;
+				const metricsSample = [result.profile, ...samples].find(
 					(sample) => sample !== undefined && sample.optimizer.input.instructions > 0,
 				);
 				if (timingSamples.length === 0) {
@@ -1309,7 +1334,6 @@ function runCoordinator(args: ReadonlyArray<string>): void {
 			path.join(temporaryRoot, "w000000000000000"),
 			manifest,
 		);
-		let coldSerial = 0;
 		for (const tier of manifest.tiers) {
 			if (!options.tiers.has(tier.tier)) continue;
 			if (tier.kind === "paired-self-compile") {
@@ -1454,23 +1478,25 @@ function runCoordinator(args: ReadonlyArray<string>): void {
 					console.error(
 						`[compiler-scale] tier ${tier.tier} ${benchmarkCase.id}: ${sequence.length} warm, ${coldRuns} cold`,
 					);
-					warmed = workerSamples(
-						{
-							benchmarkCase,
-							sequence,
-							discardFirst: true,
-							profileLast: false,
-						},
-						requestRoot,
-					);
+					warmed =
+						sequence.length === 0
+							? []
+							: workerSamples(
+									{
+										benchmarkCase,
+										sequence,
+										discardFirst: true,
+										profileLast: false,
+									},
+									requestRoot,
+								);
 				}
 				const cold: Array<CompilerScaleSample> = [];
 				for (let index = 0; index < coldRuns; index++) {
-					const coldDirectory = `c${String(coldSerial++).padStart(15, "0")}`;
-					const coldCases = prepareCases(
-						path.join(temporaryRoot, coldDirectory),
-						manifest,
-					);
+					// Fresh workers reset parse caches; source paths remain observable through import.meta.
+					const sourceDirectory = path.dirname(benchmarkCase.sourceRoot);
+					rmSync(sourceDirectory, { recursive: true, force: true });
+					const coldCases = prepareCases(sourceDirectory, manifest);
 					cold.push(
 						...workerSamples(
 							{
@@ -1531,20 +1557,25 @@ function runCoordinator(args: ReadonlyArray<string>): void {
 					offSamples.length === 0 || countersSamples.length === 0
 						? undefined
 						: instrumentationRatio(countersReference, countersSamples);
-				const metricsSample = [profile, ...warmed].find(
+				const metricsSample = [profile, ...warmed, ...cold].find(
 					(sample) => sample !== undefined && sample.optimizer.input.instructions > 0,
 				);
-				const timingSamples = offSamples.length === 0 ? warmed : offSamples;
+				const timingSamples =
+					warmed.length === 0 ? cold : offSamples.length === 0 ? warmed : offSamples;
 				results.push({
 					tier: tier.tier,
 					id: benchmarkCase.id,
 					description: benchmarkCase.description,
 					sourceDigest: benchmarkCase.sourceDigest,
 					protocol: {
-						warmDefinition: exactOpt4
-							? "one untimed process, then one fresh process per recorded sample"
-							: "one untimed compile then recorded samples in one Node process",
-						coldDefinition: "fresh stripped source tree and fresh Node process",
+						warmDefinition:
+							warmed.length === 0
+								? "no warm samples or untimed warmup"
+								: exactOpt4
+									? "one untimed process, then one fresh process per recorded sample"
+									: "one untimed compile then recorded samples in one Node process",
+						coldDefinition:
+							"fresh stripped source tree and fresh Node process at one stable source path",
 						peakRssSource: exactOpt4
 							? "external /usr/bin/time per measured process"
 							: "process.resourceUsage",
