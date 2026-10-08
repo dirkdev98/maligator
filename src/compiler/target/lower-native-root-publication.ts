@@ -1,8 +1,9 @@
 import type { NativeCallTransportPlan } from "./lower-native-calls.ts";
 import { nativeProfitablePrivateRootRegisters } from "./lower-native-root-profitability.ts";
+import type { NativeBodyFacts } from "./native-body-facts.ts";
 import type { NativeFunctionPlan } from "./program-image.ts";
 import {
-	vmInstructionUsesRegister,
+	vmInstructionReadRegisters,
 	vmInstructionWriteRegisters,
 } from "./runtime-image.ts";
 import type { BytecodeFunction, BytecodeInstruction } from "./runtime-image.ts";
@@ -112,6 +113,7 @@ export function nativePrivateRootRegisters(
 	native: NativeFunctionPlan,
 	frameRegisters: ReadonlySet<number>,
 	privateCallResultIps = nativePrivateCallResultIps(fn, native),
+	body?: Pick<NativeBodyFacts, "reads" | "writes">,
 ): ReadonlySet<number> {
 	if (fn.isGenerator || fn.isAsync) return new Set();
 	const candidates = new Set<number>(
@@ -164,15 +166,14 @@ export function nativePrivateRootRegisters(
 	for (const call of native.fieldCalls ?? []) {
 		// A virtual field argument materializes inside the call fallback, after its
 		// incoming publication and before the call can reenter JavaScript.
-		for (const register of vmInstructionWriteRegisters(
-			fn.instructions[call.allocationIp]!,
-		))
+		for (const register of body?.writes[call.allocationIp] ??
+			vmInstructionWriteRegisters(fn.instructions[call.allocationIp]!))
 			candidates.delete(register);
 	}
 	if (candidates.size === 0) return candidates;
 	for (const [ip, instruction] of fn.instructions.entries()) {
 		if (candidates.size === 0) break;
-		const writes = vmInstructionWriteRegisters(instruction);
+		const writes = body?.writes[ip] ?? vmInstructionWriteRegisters(instruction);
 		// Exact operator kinds refine ordinary final-value expressions, not storage.
 		const hasStorageSpecialization =
 			native.instructions[ip] !== undefined &&
@@ -195,6 +196,7 @@ export function nativePrivateRootRegisters(
 			}
 			continue;
 		}
+		const reads = body?.reads[ip] ?? vmInstructionReadRegisters(instruction);
 		for (const register of candidates) {
 			const writesRegister = writes.includes(register);
 			// Every iterator-step variant writes its final VM outputs only after
@@ -202,9 +204,7 @@ export function nativePrivateRootRegisters(
 			const finalIteratorOutput =
 				instruction.opcode === "ITERATOR_STEP" && writesRegister;
 			const finalCallOutput =
-				privateCallResultIps.has(ip) &&
-				writesRegister &&
-				!vmInstructionUsesRegister(instruction, register);
+				privateCallResultIps.has(ip) && writesRegister && !reads.includes(register);
 			const regionRequiresContinuousRoot = actions?.some((action) => {
 				const region = native.specializations[action.regionIndex];
 				if (region?.kind === "numeric-fusion") {
@@ -212,7 +212,7 @@ export function nativePrivateRootRegisters(
 					// its final value. Merely reading an operand does not expose storage.
 					return action.role === "start" && writesRegister;
 				}
-				return writesRegister || vmInstructionUsesRegister(instruction, register);
+				return writesRegister || reads.includes(register);
 			});
 			if (
 				(writesRegister &&
@@ -224,9 +224,8 @@ export function nativePrivateRootRegisters(
 					!finalCallOutput &&
 					(regionRequiresContinuousRoot ||
 						(hasStorageSpecialization &&
-							(writesRegister || vmInstructionUsesRegister(instruction, register))))) ||
-				(instruction.opcode === "LOAD_ARGUMENT" &&
-					vmInstructionUsesRegister(instruction, register))
+							(writesRegister || reads.includes(register))))) ||
+				(instruction.opcode === "LOAD_ARGUMENT" && reads.includes(register))
 			) {
 				candidates.delete(register);
 			}
@@ -239,10 +238,16 @@ export function nativePrivateRootRegisters(
 export function nativeEntryStableRootRegisters(
 	fn: BytecodeFunction,
 	privateRegisters: ReadonlySet<number>,
+	writeCounts?: Readonly<Uint32Array>,
 ): ReadonlySet<number> {
 	const stable = new Set(
-		[...privateRegisters].filter((register) => register < fn.parameterCount),
+		[...privateRegisters].filter(
+			(register) =>
+				register < fn.parameterCount &&
+				(writeCounts === undefined || writeCounts[register] === 0),
+		),
 	);
+	if (writeCounts !== undefined) return stable;
 	for (const instruction of fn.instructions) {
 		if (stable.size === 0) break;
 		for (const register of vmInstructionWriteRegisters(instruction))

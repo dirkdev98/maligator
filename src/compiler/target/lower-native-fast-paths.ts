@@ -2,6 +2,8 @@ import {
 	COMPILER_VALUE_KIND_NUMBER,
 	compilerBuiltinInputKindsAreValid,
 } from "../shared/compiler-value-kinds.ts";
+import { analyzeNativeBodyFacts } from "./native-body-facts.ts";
+import type { NativeBodyFacts } from "./native-body-facts.ts";
 import {
 	MATH_UNARY_NATIVE_CALL,
 	MATH_BINARY_OPERATIONS,
@@ -342,6 +344,7 @@ function lowerPropertyNumericUpdate(
 	conflicts: (ip: number) => boolean,
 	transparentJumpTargets: ReadonlySet<number>,
 	materializeAll: boolean,
+	body?: NativeBodyFacts,
 ): NativePropertyNumericUpdatePlan | undefined {
 	const load = fn.instructions[firstIp];
 	const numericOutput = (register: number) =>
@@ -377,12 +380,15 @@ function lowerPropertyNumericUpdate(
 			operation !== undefined
 		) {
 			const claimedIps = Array.from({ length: ip - firstIp + 1 }, (_, i) => firstIp + i);
-			const claims = new Set(claimedIps);
-			const externalUses = new Set(
-				fn.instructions.flatMap((instruction, useIp) =>
-					claims.has(useIp) ? [] : vmInstructionReadRegisters(instruction),
-				),
-			);
+			const externalUses = materializeAll
+				? undefined
+				: new Set(
+						fn.instructions.flatMap((instruction, useIp) =>
+							useIp >= firstIp && useIp <= ip
+								? []
+								: (body?.reads[useIp] ?? vmInstructionReadRegisters(instruction)),
+						),
+					);
 			const borrowedRegisters = [
 				...new Set(
 					claimedIps.flatMap((claimedIp) => {
@@ -404,7 +410,7 @@ function lowerPropertyNumericUpdate(
 				claimedIps,
 				borrowedRegisters,
 				materializations: outputs.filter(
-					({ register }) => materializeAll || externalUses.has(register),
+					({ register }) => externalUses === undefined || externalUses.has(register),
 				),
 				fallback: "original-instructions",
 			});
@@ -1057,6 +1063,7 @@ export function lowerNativeFastPaths(
 	transparentJumpTargets: ReadonlySet<number> = new Set(),
 	materializeUpdateOutputs = true,
 	selectUpdates = true,
+	body?: NativeBodyFacts,
 ): NativeFastPathLowering {
 	const suppliedClaims = new Set(
 		selection.kind === "render"
@@ -1070,9 +1077,10 @@ export function lowerNativeFastPaths(
 	);
 	const otherConflicts = (ip: number) => conflicts(ip) || suppliedClaims.has(ip);
 	const handlerTargets =
-		fn.handlers.length === 0
+		body?.handlerTargets ??
+		(fn.handlers.length === 0
 			? []
-			: vmExceptionHandlerTargets(fn.instructions.length, fn.handlers);
+			: vmExceptionHandlerTargets(fn.instructions.length, fn.handlers));
 	const pairedArrayLoops =
 		selection.kind === "render"
 			? selection.plans.pairedArrayLoops
@@ -1115,6 +1123,7 @@ export function lowerNativeFastPaths(
 					propertyNumericUpdateActions.has(candidate),
 				transparentJumpTargets,
 				materializeUpdateOutputs,
+				body,
 			);
 			if (plan === undefined) continue;
 			propertyNumericUpdates.push(plan);
@@ -1310,23 +1319,16 @@ function selectArrayWindows(
 	native: NativeFunctionPlan,
 	reserved: ReadonlySet<number>,
 	pairedArrayLoops: ReadonlyArray<NativePairedArrayLoopPlan>,
+	body: NativeBodyFacts,
 ): Pick<NativeFastPathPlans, "arrayPresence" | "arrayPairDestructure"> {
 	const fn = native.body;
-	const entries = new Set(fn.handlers.map((handler) => handler.handlerIp));
-	for (const [ip, op] of fn.instructions.entries())
-		if (["GENERATOR_START", "YIELD", "AWAIT"].includes(op.opcode)) entries.add(ip + 1);
+	const entries = body.externalEntries;
 	const polls = new Set(
 		native.gc.safepoints
 			.filter((point) => point.kind === "loop-backedge")
 			.map((point) => point.instructionIp),
 	);
-	const incoming = new Map<number, Array<number>>();
-	for (const [ip, op] of fn.instructions.entries()) {
-		if (op.opcode !== "JUMP" && op.opcode !== "JUMP_IF") continue;
-		const sources = incoming.get(op.targetIp) ?? [];
-		sources.push(ip);
-		incoming.set(op.targetIp, sources);
-	}
+	const incoming = body.branchSources;
 	const owners = new Map<number, Array<number>>();
 	for (const [index, region] of native.specializations.entries())
 		for (const ip of region.claimedIps) {
@@ -1374,14 +1376,9 @@ function selectArrayWindows(
 		return ips;
 	};
 	const borrow = (ips: ReadonlyArray<number>) =>
-		[
-			...new Set(
-				ips.flatMap((ip) => [
-					...vmInstructionReadRegisters(fn.instructions[ip]!),
-					...vmInstructionWriteRegisters(fn.instructions[ip]!),
-				]),
-			),
-		].sort((left, right) => left - right);
+		[...new Set(ips.flatMap((ip) => [...body.reads[ip]!, ...body.writes[ip]!]))].sort(
+			(left, right) => left - right,
+		);
 	const arrayPresence: Array<NativeArrayPresencePlan> = [];
 	const arrayPairDestructure: Array<NativeArrayPairDestructurePlan> = [];
 	for (const [regionIndex, region] of native.specializations.entries()) {
@@ -1507,19 +1504,10 @@ export function selectNativeFastPaths(
 	native: NativeFunctionPlan,
 	entry?: NativeDirectEntryPlan,
 	stringConstants: ReadonlyArray<ReadonlyArray<number>> = [],
+	body = analyzeNativeBodyFacts(native.body),
 ): NativeFastPathPlans {
 	const fn = native.body;
-	const handlerEntries = new Set(fn.handlers.map((handler) => handler.handlerIp));
-	const jumpTargets = new Set(handlerEntries);
-	const incoming = new Map<number, number>();
-	for (const [ip, op] of fn.instructions.entries()) {
-		if (op.opcode === "JUMP" || op.opcode === "JUMP_IF") {
-			jumpTargets.add(op.targetIp);
-			incoming.set(op.targetIp, (incoming.get(op.targetIp) ?? 0) + 1);
-		}
-		if (["GENERATOR_START", "YIELD", "AWAIT"].includes(op.opcode))
-			jumpTargets.add(ip + 1);
-	}
+	const { handlerEntries, jumpTargets, branchSources } = body;
 	const literalPropertyDefinitions: Array<NativeLiteralPropertyDefinitionPlan> = [];
 	const mathCalls: Array<NativeMathCallPlan> = [];
 	const numberPredicates: Array<NativeNumberPredicatePlan> = [];
@@ -1611,7 +1599,7 @@ export function selectNativeFastPaths(
 			if (
 				op.opcode === "JUMP" &&
 				op.targetIp === ip + 1 &&
-				incoming.get(ip + 1) === 1 &&
+				branchSources.get(ip + 1)?.length === 1 &&
 				!handlerEntries.has(ip + 1)
 			)
 				transparent.add(ip + 1);
@@ -1689,6 +1677,7 @@ export function selectNativeFastPaths(
 			native.instructions.some((plan) => plan !== undefined),
 		// Fusion can keep a preceding RHS in its private temporary rather than the semantic local.
 		!native.specializations.some((region) => region.kind === "numeric-fusion"),
+		body,
 	);
 	return {
 		literalPropertyDefinitions,
@@ -1724,6 +1713,7 @@ export function selectNativeFastPaths(
 				].flatMap((plan) => plan.claimedIps),
 			]),
 			selected.pairedArrayLoops,
+			body,
 		),
 		propertyProjections: selected.propertyProjections,
 		propertyNumericUpdates: selected.propertyNumericUpdates,

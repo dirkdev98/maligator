@@ -37,6 +37,8 @@ import {
 	lowerNativeSuspension,
 } from "./lower-native-suspension.ts";
 import type { NativeSuspensionPlan } from "./lower-native-suspension.ts";
+import { analyzeNativeBodyFacts } from "./native-body-facts.ts";
+import type { NativeBodyFacts } from "./native-body-facts.ts";
 import {
 	NATIVE_ARITH,
 	NATIVE_BITWISE,
@@ -48,12 +50,7 @@ import type {
 	NativeFunctionPlan,
 	ProgramImage,
 } from "./program-image.ts";
-import {
-	decodeVmValueOperand,
-	vmExceptionHandlerTargets,
-	vmInstructionReadRegisters,
-	vmInstructionWriteRegisters,
-} from "./runtime-image.ts";
+import { decodeVmValueOperand, vmInstructionReadRegisters } from "./runtime-image.ts";
 import type { BytecodeInstruction } from "./runtime-image.ts";
 
 export interface NativeScalarStoragePlan {
@@ -149,18 +146,13 @@ interface NativeScalarOwnership {
 	readonly borrowed: ReadonlySet<number>;
 }
 
-interface NativeStorageBodyFacts {
-	readonly reads: ReadonlyArray<ReadonlyArray<number>>;
-	readonly writes: ReadonlyArray<ReadonlyArray<number>>;
+interface NativeStorageBodyFacts extends NativeBodyFacts {
 	readonly writeCounts: Uint32Array;
 	readonly definitions: Int32Array;
 	readonly uses: ReadonlyArray<ReadonlyArray<number>>;
 	readonly iteratorDoneRegisters: ReadonlyArray<number>;
-	readonly jumpTargets: ReadonlySet<number>;
-	readonly handlerTargets: ReturnType<typeof vmExceptionHandlerTargets>;
 	readonly controlBoundaries: ReadonlyArray<boolean>;
 	readonly predecessorCounts: Uint32Array;
-	readonly externalEntries: ReadonlySet<number>;
 	readonly controlFlow: NativeStorageControlFlow | undefined;
 }
 
@@ -334,14 +326,12 @@ function storageControlFlow(
 
 function storageBodyFacts(native: NativeFunctionPlan): NativeStorageBodyFacts {
 	const fn = native.body;
-	const reads = fn.instructions.map(vmInstructionReadRegisters);
-	const writes = fn.instructions.map(vmInstructionWriteRegisters);
+	const facts = analyzeNativeBodyFacts(fn);
+	const { reads, writes, jumpTargets } = facts;
 	const writeCounts = new Uint32Array(fn.registerCount);
 	const definitions = new Int32Array(fn.registerCount).fill(-1);
 	const uses: Array<Array<number>> = Array.from({ length: fn.registerCount }, () => []);
 	const iteratorDoneRegisters: Array<number> = [];
-	const jumpTargets = new Set(fn.handlers.map((handler) => handler.handlerIp));
-	const externalEntries = new Set(fn.handlers.map((handler) => handler.handlerIp));
 	const predecessorCounts = new Uint32Array(fn.instructions.length);
 	for (const [ip, op] of fn.instructions.entries()) {
 		if (op.opcode === "ITERATOR_STEP") iteratorDoneRegisters.push(op.doneDst);
@@ -354,7 +344,6 @@ function storageBodyFacts(native: NativeFunctionPlan): NativeStorageBodyFacts {
 			for (const local of reads[ip]!) uses[local]!.push(ip);
 		}
 		if (op.opcode === "JUMP" || op.opcode === "JUMP_IF") {
-			jumpTargets.add(op.targetIp);
 			predecessorCounts[op.targetIp]!++;
 		}
 		if (
@@ -362,24 +351,16 @@ function storageBodyFacts(native: NativeFunctionPlan): NativeStorageBodyFacts {
 			!["JUMP", "RETURN", "THROW", "TERMINAL_YIELD"].includes(op.opcode)
 		)
 			predecessorCounts[ip + 1]!++;
-		if (["GENERATOR_START", "YIELD", "AWAIT"].includes(op.opcode)) {
-			jumpTargets.add(ip + 1);
-			externalEntries.add(ip + 1);
-		}
 	}
 	const controlBoundaries = fn.instructions.map(scalarControlBoundary);
 	return {
-		reads,
-		writes,
+		...facts,
 		writeCounts,
 		definitions,
 		uses,
 		iteratorDoneRegisters,
-		jumpTargets,
-		handlerTargets: vmExceptionHandlerTargets(fn.instructions.length, fn.handlers),
 		controlBoundaries,
 		predecessorCounts,
-		externalEntries,
 		controlFlow:
 			native.storageValues === undefined || fn.handlers.length > 0
 				? undefined
@@ -978,7 +959,7 @@ function rootStorage(
 	}
 	const calls = nativePrivateCallResultIps(fn, native, callTransports);
 	const privateLocals = new Set(
-		nativePrivateRootRegisters(fn, native, new Set(roots), calls),
+		nativePrivateRootRegisters(fn, native, new Set(roots), calls, body),
 	);
 	const borrowedPlans = [
 		...fastPaths.propertyProjections,
@@ -1027,7 +1008,13 @@ function rootStorage(
 		...selectNativeRootStorage(native, roots, privateLocals, calls),
 		privateRegisters: roots.filter((local) => privateLocals.has(local)),
 		privateCallResultIps: [...calls],
-		entryStableRootRegisters: [...nativeEntryStableRootRegisters(fn, privateLocals)],
+		entryStableRootRegisters: [
+			...nativeEntryStableRootRegisters(
+				fn,
+				privateLocals,
+				native.storageValues === undefined ? undefined : body.writeCounts,
+			),
+		],
 	};
 }
 
@@ -1059,7 +1046,7 @@ function lowerStorage(
 	stringConstants: ReadonlyArray<ReadonlyArray<number>> = [],
 ): NativeStoragePlan {
 	const fn = native.body;
-	const fastPaths = selectNativeFastPaths(native, entry, stringConstants);
+	const fastPaths = selectNativeFastPaths(native, entry, stringConstants, body);
 	const expressionWindows = scalarStorageWindows(fastPaths);
 	const jumpTargets = body.jumpTargets;
 	const uses = scalarStorageUses(body, suspension);
