@@ -106,6 +106,8 @@ export function coreReadOnlyParameterFields(
 				"createString",
 				"binary",
 				"unary",
+				"mathUnaryNumber",
+				"mathBinaryNumber",
 				"move",
 			].includes(opcode)
 		)

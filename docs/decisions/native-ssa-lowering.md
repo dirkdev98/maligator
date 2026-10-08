@@ -58,14 +58,18 @@ scalar leaf restriction as other value boundaries.
 Single-write boxed SSA operator results also omit roots when existing operand or
 normal-result proofs guarantee an immediate Number or Boolean. Coercive unary
 plus and comparisons retain operand roots, safepoints and completion checks;
-an immediate result does not make evaluation pure. This does not move their
-evaluation. The shared numeric result transfer also certifies Number results when
+an immediate result does not make evaluation pure. The shared numeric result
+transfer also certifies Number results when
 either operand of a non-additive numeric binary operation is numeric-primitive;
 addition requires both operands to exclude String results. These storage proofs
 leave coercion and throw checks in place. Repeated uses and intervening calls retain
 ordinary boxed locals initialized to undefined. Logical GC liveness stays intact,
 and validation rederives the physical exclusion per variant. Parameters, raw
 storage, opaque or borrowed locals and suspension snapshots retain their roots.
+An existing exact Number result proof also admits coercive binary producers into
+f64 storage without requiring their inputs to be scalar. Evaluation stays
+materialized; helper results are captured and checked for abrupt completion before
+conversion. Unknown addition and potential BigInt results remain boxed.
 Captured and module cell stores consume existing scalar result proofs at operand
 zero without joining the cell's other writers into the producer's scalar component.
 Their values stay scalar until the store boxes them. Captured writes retain the

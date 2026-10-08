@@ -3340,8 +3340,9 @@ describe("native update-expression representation", () => {
 		const output = emit(
 			`"use strict"; function divisible(value) { return value % 7 === 0; } globalThis.divisible = divisible;`,
 		);
-		expect(output).toMatch(/__nf_(\d+)_value = mal_number_remainder/);
-		expect(output).toMatch(/__nf_\d+_value == (?:r\d+|\(f64\) r\d+)/);
+		expect(output).toMatch(/r\d+ = mal_number_remainder/);
+		expect(output).toMatch(/\(f64\) r\d+ == \(f64\) r\d+/);
+		expect(output).toContain("mal_vm_binary_op(vm, MAL_BIN_REM");
 		expect(output).not.toContain("mal_ops_number_as_f64(mal_value_from_i32");
 	});
 

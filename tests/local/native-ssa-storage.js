@@ -11,6 +11,18 @@ function coerciveImmediateProduct(left, right, gate, condition) {
 	gate();
 	return condition ? value : undefined;
 }
+function coerciveScalarProduct(left, right, gate) {
+	const number = +right;
+	const value = left * number;
+	gate();
+	return value;
+}
+function coerciveScalarFusion(left, right, gate) {
+	const intermediate = left * right;
+	const value = intermediate * 3;
+	gate();
+	return value;
+}
 function coerciveImmediateLess(left, right, gate, condition) {
 	const value = left < right;
 	gate();
@@ -43,6 +55,8 @@ function nonCoerciveImmediateEqual(left, right, gate, condition) {
 }
 globalThis.coerciveImmediatePlus = coerciveImmediatePlus;
 globalThis.coerciveImmediateProduct = coerciveImmediateProduct;
+globalThis.coerciveScalarProduct = coerciveScalarProduct;
+globalThis.coerciveScalarFusion = coerciveScalarFusion;
 globalThis.coerciveImmediateLess = coerciveImmediateLess;
 globalThis.coerciveImmediateEqual = coerciveImmediateEqual;
 globalThis.coerciveImmediateGreaterEqual = coerciveImmediateGreaterEqual;
@@ -75,36 +89,48 @@ for (const input of [-0, NaN, Infinity, 3]) {
 	);
 }
 for (const input of [-0, NaN, Infinity, "3", null, undefined]) {
-	coercionOrder.length = 0;
-	const value = coerciveImmediateProduct(
-		coercionInput("left", input),
-		coercionInput("right", 2),
-		coercionGate,
-		true,
-	);
-	console.log(
-		"coercive-immediate-product",
-		String(value),
-		Object.is(value, -0),
-		coercionOrder.join(","),
-	);
-}
-for (const input of [1n, Symbol("numeric-product")]) {
-	coercionOrder.length = 0;
-	try {
-		coerciveImmediateProduct(
+	for (const operation of [
+		coerciveImmediateProduct,
+		coerciveScalarProduct,
+		coerciveScalarFusion,
+	]) {
+		coercionOrder.length = 0;
+		const value = operation(
 			coercionInput("left", input),
 			coercionInput("right", 2),
 			coercionGate,
 			true,
 		);
-	} catch (error) {
-		gc();
 		console.log(
-			"coercive-immediate-product-reject",
-			error instanceof TypeError,
+			"coercive-numeric-product",
+			String(value),
+			Object.is(value, -0),
 			coercionOrder.join(","),
 		);
+	}
+}
+for (const input of [1n, Symbol("numeric-product")]) {
+	for (const operation of [
+		coerciveImmediateProduct,
+		coerciveScalarProduct,
+		coerciveScalarFusion,
+	]) {
+		coercionOrder.length = 0;
+		try {
+			operation(
+				coercionInput("left", input),
+				coercionInput("right", 2),
+				coercionGate,
+				true,
+			);
+		} catch (error) {
+			gc();
+			console.log(
+				"coercive-numeric-product-reject",
+				error instanceof TypeError,
+				coercionOrder.join(","),
+			);
+		}
 	}
 }
 for (const [left, right] of [
@@ -175,6 +201,8 @@ for (const input of [1n, Symbol("unary-plus")]) {
 for (const operation of [
 	coerciveImmediatePlus,
 	coerciveImmediateProduct,
+	coerciveScalarProduct,
+	coerciveScalarFusion,
 	coerciveImmediateLess,
 	coerciveImmediateEqual,
 	coerciveImmediateGreaterEqual,

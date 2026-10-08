@@ -68,9 +68,86 @@ function boxedNumericLeaf(out: ReturnType<typeof inspectStaticValueFunction>) {
 }
 
 describe("native scalar plans around opaque and exceptional windows", () => {
+	it.each(["-", "*", "/", "%", "**"])(
+		"keeps the known Number result of coercive %s in scalar storage",
+		(operator) => {
+			const out = inspectStaticValueFunction(
+				`function compute(left,right,gate){const number=+right;const value=left${operator}number;gate();return value;}globalThis.compute=compute;`,
+				"compute",
+			);
+			const ip = out.native.body.instructions.findIndex(
+				(op) => op.opcode === "BINARY" && op.operator === operator,
+			);
+			const op = out.native.body.instructions[ip]!;
+			if (op.opcode !== "BINARY") throw new Error("Missing coercive scalar operator");
+			expect(out.native.registerRepresentations[op.left]).toBe("boxed");
+			expect(out.native.registerRepresentations[op.dst]).toBe("number");
+			expect(out.native.storage!.rootRegisters).toContain(op.left);
+			expect(out.native.storage!.rootRegisters).not.toContain(op.dst);
+			expect(out.native.storage!.expressionIps).not.toContain(ip);
+			expect(out.c.source).toMatch(
+				/MalValue __binary_result_\d+ = [^;]*mal_vm_binary_op[^;]*;\n\s+if \([^\n]+\) goto __throw_exit;\n\s+r\d+ = mal_ops_number_as_f64\(__binary_result_\d+\);/,
+			);
+			expect(deserializeCompilerArtifact(serializeCompilerArtifact(out.image))).toEqual(
+				out.image,
+			);
+		},
+	);
+
+	it.each(["left+3", "left*right", "left&right"])(
+		"keeps %s boxed when its normal result is not proved Number",
+		(expression) => {
+			const out = inspectStaticValueFunction(
+				`function compute(left,right,gate){const value=${expression};gate();return value;}globalThis.compute=compute;`,
+				"compute",
+			);
+			const op = out.native.body.instructions.find((op) => op.opcode === "BINARY")!;
+			if (op.opcode !== "BINARY") throw new Error("Missing unknown operator");
+			expect(out.native.registerRepresentations[op.dst]).toBe("boxed");
+			expect(out.native.storage!.rootRegisters).toContain(op.dst);
+		},
+	);
+
+	it("preserves profiled coercive scalar evaluation and completion checks", () => {
+		const out = inspectStaticValueFunction(
+			"function compute(left,right,gate){const number=+right;const value=left*number;gate();return value;}globalThis.compute=compute;",
+			"compute",
+			{ profile: true },
+		);
+		const op = out.native.body.instructions.find(
+			(op) => op.opcode === "BINARY" && op.operator === "*",
+		)!;
+		if (op.opcode !== "BINARY") throw new Error("Missing profiled product");
+		expect(out.native.registerRepresentations[op.dst]).toBe("number");
+		expect(out.native.storage!.expressionIps).toEqual([]);
+		expect(out.c.source).toContain("MAL_PROFILE_SITE_EXECUTION");
+		expect(out.c.source).toContain("mal_vm_binary_op");
+		expect(out.c.source).toContain(`mal_ops_number_as_f64(__binary_result_`);
+	});
+
+	it("checks a selected numeric fusion's coercive fallback before converting its result", () => {
+		const out = inspectStaticValueFunction(
+			"function compute(left,right,gate){const intermediate=left*right;const value=intermediate*3;gate();return value;}globalThis.compute=compute;",
+			"compute",
+		);
+		const fusion = out.native.specializations.find(
+			(region) => region.kind === "numeric-fusion",
+		)!;
+		expect(fusion).toBeDefined();
+		const op = out.native.body.instructions[fusion.claimedIps.at(-1)!]!;
+		if (op.opcode !== "BINARY") throw new Error("Missing fusion finish");
+		expect(out.native.registerRepresentations[op.dst]).toBe("number");
+		expect(out.c.source).toMatch(
+			/MalValue __binary_result_\d+ = [^;]*mal_vm_binary_op[^;]*;\n\s+if \([^\n]+\) goto __throw_exit;\n\s+r\d+ = mal_ops_number_as_f64\(__binary_result_\d+\);/,
+		);
+		expect(deserializeCompilerArtifact(serializeCompilerArtifact(out.image))).toEqual(
+			out.image,
+		);
+	});
+
 	it("composes an unrelated numeric tail with a real selected fusion region", () => {
 		const image = compile(`
-			const fused = value.a + value.b * 2;
+			const fused = value.a + value.b * value.scale;
 			callback(fused);
 			const a = +left;
 			const b = +right;
@@ -99,7 +176,7 @@ describe("native scalar plans around opaque and exceptional windows", () => {
 		const image = compileSemanticProgramToProgramImage(
 			analyzeSourceAndRunSemanticAnalysis(
 				`function project(value, left, right, count, callback) {
-					const total = value.left + value.right * 2;
+					const total = value.left + value.right * value.scale;
 					callback(total);
 					for (let i = 0; i < count; i++) {
 						const saved = left; left = right; right = saved;
@@ -107,7 +184,7 @@ describe("native scalar plans around opaque and exceptional windows", () => {
 					return left - right;
 				}
 				globalThis.project = project;
-				globalThis.result = project({left: 3, right: 7}, 3, 7, 4, (n) => n);`,
+				globalThis.result = project({left: 3, right: 7, scale: 2}, 3, 7, 4, (n) => n);`,
 				"/scalar-tdz-composition.js",
 			),
 		);

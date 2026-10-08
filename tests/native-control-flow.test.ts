@@ -51,7 +51,7 @@ describe("native block layout", () => {
 	it("schedules a real branch tail beside a selected numeric region", () => {
 		const core =
 			compile(`globalThis.choose = function choose(input, condition, left, right) {
-			const fused = input.a + input.b * 2;
+		const fused = input.a + input.b * input.scale;
 			let value;
 			if(condition) { globalThis.take(left); value=left; }
 			else { globalThis.skip(right); value=right; }
