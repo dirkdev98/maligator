@@ -160,6 +160,7 @@ interface NativeBodyAnalysis {
 	readonly handlerTargets: ReadonlyArray<number | undefined>;
 	readonly ownsCaptureEnvironment: boolean;
 	readonly iterationEligibilityRegisters: ReadonlySet<number>;
+	readonly writeRegistersAt: (instructionIp: number) => ReadonlyArray<number>;
 }
 
 function analyzeNativeBody(
@@ -191,8 +192,13 @@ function analyzeNativeBody(
 		)
 			iterationEligibilityRegisters.add(instruction.dst);
 	}
+	let writeRegistersByIp: Array<ReadonlyArray<number>> | undefined;
 	return {
 		captures,
+		writeRegistersAt: (ip) =>
+			((writeRegistersByIp ??= [])[ip] ??= vmInstructionWriteRegisters(
+				fn.instructions[ip]!,
+			)),
 		captureOwners: captures.owners.map((owner) => owner.ownerFunctionIndex),
 		stableCaptureOwners: owners,
 		copiedCaptures: copied,
@@ -3642,14 +3648,13 @@ function emitBody(
 			continue;
 		}
 		const safepointKind = gcSafepointKinds.get(ip);
-		const rootedOutputs =
-			rootPublication === undefined
-				? EMPTY_ROOTED_OUTPUTS
-				: nativeRootedOutputRegisters(
-						fn.instructions[ip]!,
-						ip,
-						rootPublication.privateCallResultIps,
-					).filter((register) => rootPublication.slots.has(register));
+		const rootedOutputs = !hasPrivateRoots
+			? EMPTY_ROOTED_OUTPUTS
+			: nativeRootedOutputRegisters(
+					fn.instructions[ip]!,
+					ip,
+					rootPublication!.privateCallResultIps,
+				).filter((register) => rootPublication!.slots.has(register));
 		const rootedOutputReloads =
 			rootedOutputs.length === 0
 				? EMPTY_ROOT_PUBLICATION
@@ -3758,7 +3763,7 @@ function emitBody(
 				for (const [slot, register] of knownPublishedPrivateRoots)
 					if (!point.incoming.has(register) || !point.outgoing.has(register))
 						knownPublishedPrivateRoots.delete(slot);
-			for (const register of vmInstructionWriteRegisters(fn.instructions[ip]!)) {
+			for (const register of analysis.writeRegistersAt(ip)) {
 				const slot = rootPublication.slots.get(register);
 				if (slot !== undefined && knownPublishedPrivateRoots.get(slot) === register)
 					knownPublishedPrivateRoots.delete(slot);
