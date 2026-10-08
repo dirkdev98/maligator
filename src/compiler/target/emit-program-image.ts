@@ -3,8 +3,7 @@ import { knownOperationFlags } from "../shared/known-operations.ts";
 import { knownOperationIndex } from "../shared/known-operations.ts";
 import { staticDataQueryTag } from "../shared/static-data-query.ts";
 import { generatedDeclarationReferences } from "./generated-declaration-references.ts";
-import { nativeEntryLookup } from "./lower-native-calls.ts";
-import { validateNativeStorage } from "./lower-native-storage.ts";
+import { validateNativeProgramStorage } from "./lower-native-storage.ts";
 import { finalizeCompilerRemarks } from "./profile-metadata.ts";
 import type { ProgramImage } from "./program-image.ts";
 import { validateNativeBodyAbis, validateNativeDirectEntry } from "./program-image.ts";
@@ -1023,9 +1022,7 @@ function validateImageForEmission(image: ProgramImage): void {
 		image.native.functions.map((fn) => fn.body),
 	);
 	validateRuntimeImageMetadata(image.runtime);
-	const entries = nativeEntryLookup(image.native.functions);
-	for (const native of image.native.functions)
-		validateNativeStorage(native, entries, image.runtime.stringConstants);
+	validateNativeProgramStorage(image.native, image.runtime.stringConstants);
 }
 
 function emitProgramImageParts(

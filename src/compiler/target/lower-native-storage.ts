@@ -1275,17 +1275,43 @@ export function lowerNativeFunctionStorage(
 	};
 }
 
+// Like verified execution programs, storage trust follows object identity: a replaced
+// program or string table revalidates, and frozen function lists reject in-place swaps.
+const certifiedNativeStorage = new WeakMap<
+	ProgramImage["native"],
+	ReadonlyArray<ReadonlyArray<number>>
+>();
+
+function certifyNativeStorage(
+	native: ProgramImage["native"],
+	stringConstants: ReadonlyArray<ReadonlyArray<number>>,
+): void {
+	Object.freeze(native.functions);
+	Object.freeze(native);
+	certifiedNativeStorage.set(native, stringConstants);
+}
+
 export function lowerNativeStorage(image: ProgramImage): ProgramImage {
 	const entries = nativeEntryLookup(image.native.functions);
-	return {
-		...image,
-		native: {
-			...image.native,
-			functions: image.native.functions.map((native) =>
-				lowerNativeFunctionStorage(native, entries, image.runtime.stringConstants),
-			),
-		},
+	const native = {
+		...image.native,
+		functions: image.native.functions.map((native) =>
+			lowerNativeFunctionStorage(native, entries, image.runtime.stringConstants),
+		),
 	};
+	certifyNativeStorage(native, image.runtime.stringConstants);
+	return { ...image, native };
+}
+
+/** Validate every storage plan of a program unless this exact program already passed. */
+export function validateNativeProgramStorage(
+	native: ProgramImage["native"],
+	stringConstants: ReadonlyArray<ReadonlyArray<number>>,
+): void {
+	if (certifiedNativeStorage.get(native) === stringConstants) return;
+	const entries = nativeEntryLookup(native.functions);
+	for (const fn of native.functions) validateNativeStorage(fn, entries, stringConstants);
+	certifyNativeStorage(native, stringConstants);
 }
 
 export function validateNativeStorage(

@@ -5,6 +5,7 @@ import {
 	deserializeCompilerArtifact,
 	serializeCompilerArtifact,
 } from "../src/compiler/target/compiler-artifact-codec.ts";
+import { emitProgramImage } from "../src/compiler/target/emit-program-image.ts";
 import {
 	selectNativeRootStorage,
 	validateNativeRootStorage,
@@ -14,6 +15,7 @@ import {
 	validateNativeStorage,
 } from "../src/compiler/target/lower-native-storage.ts";
 import { createConservativeNativePlan } from "../src/compiler/target/program-image.ts";
+import type { NativeFunctionPlan } from "../src/compiler/target/program-image.ts";
 import { emitCompiledFunction } from "../src/compiler/target/render-native-c.ts";
 import type { BytecodeInstruction } from "../src/compiler/target/runtime-image.ts";
 
@@ -282,6 +284,39 @@ describe("native physical root storage", () => {
 		expect(() => emitCompiledFunction(stale, 0, "", false)).toThrow(
 			/private roots interfere at 0/,
 		);
+	});
+
+	it("trusts only the exact lowered native program at emission and serialization", () => {
+		const image = compile();
+		expect(Object.isFrozen(image.native)).toBe(true);
+		expect(() => {
+			(image.native.functions as Array<NativeFunctionPlan>)[1] =
+				image.native.functions[0]!;
+		}).toThrow(TypeError);
+		expect(() => serializeCompilerArtifact(image)).not.toThrow();
+		const forged = {
+			...image,
+			native: {
+				...image.native,
+				functions: image.native.functions.map((plan, index) =>
+					index === 1
+						? {
+								...plan,
+								storage: {
+									...plan.storage!,
+									rootSlots: plan.storage!.rootSlots.map(() => 0),
+								},
+							}
+						: plan,
+				),
+			},
+		};
+		expect(() => emitProgramImage(forged)).toThrow(/invalid or stale storage plan/);
+		expect(() => serializeCompilerArtifact(forged)).toThrow(
+			/invalid or stale storage plan/,
+		);
+		const restored = deserializeCompilerArtifact(serializeCompilerArtifact(image));
+		expect(Object.isFrozen(restored.native)).toBe(true);
 	});
 
 	it("round-trips the selected layout and rejects forged slot aliases and frame sizes", () => {

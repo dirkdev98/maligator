@@ -11,7 +11,6 @@ import {
 import type { CompilerOperatorInputKindMasks } from "../shared/compiler-value-kinds.ts";
 import { getPrimordialCatalog } from "../shared/primordial-catalog-data.ts";
 import type { NativeCallbackTransportPlan } from "./lower-native-callbacks.ts";
-import { nativeEntryLookup } from "./lower-native-calls.ts";
 import type { NativeCallTransportPlan } from "./lower-native-calls.ts";
 import type { NativeCaptureAccessPlan } from "./lower-native-captures.ts";
 import {
@@ -35,7 +34,7 @@ import type {
 } from "./lower-native-fast-paths.ts";
 import type { NativeStackObjectStoragePlan } from "./lower-native-objects.ts";
 import type { NativeStoragePlan } from "./lower-native-storage.ts";
-import { validateNativeStorage } from "./lower-native-storage.ts";
+import { validateNativeProgramStorage } from "./lower-native-storage.ts";
 import {
 	NATIVE_STRING_TRANSFORM_KINDS,
 	NATIVE_STRING_NORMALIZATION_FORMS,
@@ -689,9 +688,7 @@ export function serializeCompilerArtifact(
 	for (const body of bodies)
 		writeRuntimeFunction(writer, body, options.debugInfo !== false);
 	writeCompilerArtifact(writer, { ...image.runtime, functions: bodies }, image);
-	const entries = nativeEntryLookup(image.native.functions);
-	for (const native of image.native.functions)
-		validateNativeStorage(native, entries, image.runtime.stringConstants);
+	validateNativeProgramStorage(image.native, image.runtime.stringConstants);
 	return writer.finish();
 }
 function writeNativeStorage(w: Writer, storage: NativeStoragePlan | undefined): void {
@@ -5544,8 +5541,6 @@ function readCompilerArtifact(
 			);
 	}
 	validateVmShapeCases(runtimeImage);
-	const entries = nativeEntryLookup(definition.native.functions);
-	for (const native of definition.native.functions)
-		validateNativeStorage(native, entries, runtimeImage.stringConstants);
+	validateNativeProgramStorage(definition.native, runtimeImage.stringConstants);
 	return definition;
 }
