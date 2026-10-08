@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
+	COMPILER_VALUE_KIND_NUMBER,
+	COMPILER_VALUE_KIND_TOP,
+} from "../src/compiler/shared/compiler-value-kinds.ts";
+import {
 	deserializeCompilerArtifact,
 	serializeCompilerArtifact,
 } from "../src/compiler/target/compiler-artifact-codec.ts";
@@ -10,6 +14,120 @@ import {
 import { inspectStaticValueFunction } from "./helpers/static-values.ts";
 
 describe("catalogued primitive builtin result storage", () => {
+	it("selects predicates independently for boxed canonical and typed Number entries", () => {
+		const out = inspectStaticValueFunction(
+			"function compute(input){return Number.isFinite(input);}globalThis.compute=compute;",
+			"compute",
+		);
+		const reps = [...out.native.registerRepresentations];
+		reps[0] = "number";
+		const keep = (roots: ReadonlyArray<number>) => roots.filter((local) => local !== 0);
+		const native = lowerNativeFunctionStorage({
+			...out.native,
+			directEntries: [
+				{
+					id: 0,
+					parameterRepresentations: ["number"],
+					resultRepresentation: "boolean",
+					registerRepresentations: reps,
+					gc: {
+						safepoints: out.native.gc.safepoints.map((point) => ({
+							...point,
+							rootRegisters: keep(point.rootRegisters),
+							incomingRootRegisters: keep(point.incomingRootRegisters),
+							outgoingRootRegisters: keep(point.outgoingRootRegisters),
+						})),
+					},
+				},
+			],
+		});
+		expect(native.storage!.numberPredicates[0]!.mode).toBe("boxed");
+		expect(native.directEntries[0]!.storage!.numberPredicates[0]!.mode).toBe("number");
+		const image = {
+			...out.image,
+			native: {
+				...out.image.native,
+				functions: out.image.native.functions.map((fn) =>
+					fn.functionIndex === native.functionIndex ? native : fn,
+				),
+			},
+		};
+		expect(deserializeCompilerArtifact(serializeCompilerArtifact(image))).toEqual(image);
+	});
+
+	it("validates an exact Number input certificate independently of boxed physical storage", () => {
+		const out = inspectStaticValueFunction(
+			"function compute(input,gate,condition){const value=+input;const finite=Number.isFinite(value);gate();return condition?value:finite;}globalThis.compute=compute;",
+			"compute",
+		);
+		const ip = out.native.storage!.numberPredicates[0]!.instructionIp;
+		const op = out.native.body.instructions[ip]!;
+		if (op.opcode !== "CALL_KNOWN") throw new Error("Missing predicate");
+		expect(out.native.registerRepresentations[op.arguments[0]!]).toBe("boxed");
+		const instructions = [...out.native.instructions];
+		instructions[ip] = {
+			kind: "exact-builtin-input-kinds",
+			inputKindMasks: [COMPILER_VALUE_KIND_TOP, COMPILER_VALUE_KIND_NUMBER],
+		};
+		const native = lowerNativeFunctionStorage({ ...out.native, instructions });
+		expect(native.storage!.numberPredicates[0]!.mode).toBe("number");
+		const image = {
+			...out.image,
+			native: {
+				...out.image.native,
+				functions: out.image.native.functions.map((fn) =>
+					fn.functionIndex === native.functionIndex ? native : fn,
+				),
+			},
+		};
+		expect(deserializeCompilerArtifact(serializeCompilerArtifact(image))).toEqual(image);
+		instructions[ip] = {
+			kind: "exact-builtin-input-kinds",
+			inputKindMasks: [COMPILER_VALUE_KIND_TOP, COMPILER_VALUE_KIND_TOP],
+		};
+		expect(() => validateNativeStorage({ ...native, instructions })).toThrow(
+			/invalid or stale storage plan/,
+		);
+	});
+
+	it.each(["isFinite", "isInteger", "isSafeInteger"])(
+		"persists Number.%s kernel modes and rejects stale choices",
+		(predicate) => {
+			for (const [expression, mode] of [
+				["input", "boxed"],
+				["+input", "number"],
+				["input|0", "int32"],
+				["String(input)", "non-number"],
+			] as const) {
+				const out = inspectStaticValueFunction(
+					`function compute(input){return Number.${predicate}(${expression});}globalThis.compute=compute;`,
+					"compute",
+				);
+				const plan = out.native.storage!.numberPredicates[0]!;
+				expect(plan?.mode).toBe(mode);
+				expect(deserializeCompilerArtifact(serializeCompilerArtifact(out.image))).toEqual(
+					out.image,
+				);
+				expect(() =>
+					validateNativeStorage({
+						...out.native,
+						storage: {
+							...out.native.storage!,
+							numberPredicates: [{ ...plan, mode: mode === "boxed" ? "int32" : "boxed" }],
+						},
+					}),
+				).toThrow(/invalid or stale storage plan/);
+				if (mode === "int32") {
+					const op = out.native.body.instructions[plan.instructionIp]!;
+					if (op.opcode !== "CALL_KNOWN") throw new Error("Missing planned predicate");
+					expect(out.c.source).toContain(
+						`r${op.dst} = ${predicate === "isNaN" ? "false" : "true"};`,
+					);
+				}
+			}
+		},
+	);
+
 	it.each([
 		["Number", "Number(input)"],
 		["Date.parse", "Date.parse(input)"],

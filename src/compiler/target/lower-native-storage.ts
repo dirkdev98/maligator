@@ -1397,6 +1397,12 @@ export function validateNativeStorage(
 					plan.mode === expected.mode
 				);
 			}) &&
+			stored.numberPredicates.length === selected.numberPredicates.length &&
+			stored.numberPredicates.every(
+				(plan, index) =>
+					plan.instructionIp === selected.numberPredicates[index]!.instructionIp &&
+					plan.mode === selected.numberPredicates[index]!.mode,
+			) &&
 			sameProjections(stored.propertyProjections, selected.propertyProjections) &&
 			sameUpdates(stored.propertyNumericUpdates, selected.propertyNumericUpdates) &&
 			sameReadRegions(stored.propertyReadRegions, selected.propertyReadRegions) &&

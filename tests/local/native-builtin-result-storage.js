@@ -102,6 +102,89 @@ globalThis.boxedBuiltinNumber = boxedBuiltinNumber;
 globalThis.boxedBuiltinDateParse = boxedBuiltinDateParse;
 globalThis.boxedBuiltinHasOwn = boxedBuiltinHasOwn;
 
+function predicateNumber(input, gate) {
+	const value = +input;
+	gate();
+	return [
+		Number.isNaN(value),
+		Number.isFinite(value),
+		Number.isInteger(value),
+		Number.isSafeInteger(value),
+	];
+}
+function predicateInt32(input, gate) {
+	const value = input | 0;
+	gate();
+	return [
+		Number.isNaN(value),
+		Number.isFinite(value),
+		Number.isInteger(value),
+		Number.isSafeInteger(value),
+	];
+}
+function predicateBoxed(input, extra) {
+	return Number.isFinite(input, extra());
+}
+function predicateText(input) {
+	const value = String(input);
+	return Number.isInteger(value);
+}
+globalThis.predicateNumber = predicateNumber;
+globalThis.predicateInt32 = predicateInt32;
+globalThis.predicateBoxed = predicateBoxed;
+globalThis.predicateText = predicateText;
+for (const input of [
+	-0,
+	NaN,
+	Infinity,
+	-Infinity,
+	0.25,
+	-1,
+	2147483648,
+	9007199254740991,
+	9007199254740992,
+]) {
+	console.log("predicate-number", String(input), predicateNumber(input, gc).join(","));
+	console.log("predicate-int32", String(input), predicateInt32(input, gc).join(","));
+}
+let predicateCoercions = 0;
+const nonCoercible = {
+	marker: "retained",
+	valueOf() {
+		predicateCoercions++;
+		throw new Error("unexpected predicate coercion");
+	},
+};
+console.log(
+	"predicate-boxed",
+	predicateBoxed(nonCoercible, () => {
+		gc();
+		return nonCoercible.marker;
+	}),
+	predicateCoercions,
+	nonCoercible.marker,
+);
+for (const input of [undefined, null, "4", true, 7n, Symbol("predicate")])
+	console.log("predicate-non-number", predicateBoxed(input, gc));
+console.log(
+	"predicate-text",
+	predicateText({
+		toString() {
+			gc();
+			return "42";
+		},
+	}),
+);
+try {
+	predicateBoxed(nonCoercible, () => {
+		gc();
+		throw { marker: "extra-thrown" };
+	});
+} catch (error) {
+	gc();
+	console.log("predicate-extra-throw", error.marker, predicateCoercions);
+}
+
 for (const condition of [true, false]) {
 	for (const input of [-0, NaN, Infinity, "42", undefined, null, 7n]) {
 		const order = [];

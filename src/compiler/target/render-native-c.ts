@@ -40,6 +40,7 @@ import type {
 	NativeConstructorInitializationAction,
 	NativeFastPathPlans,
 	NativeMathCallPlan,
+	NativeNumberPredicatePlan,
 	NativePairedArrayLoopAction,
 	NativePropertyNumericUpdateAction,
 	NativePropertyProjectionAction,
@@ -2651,6 +2652,7 @@ function emitBody(
 	fastPathPlans: NativeFastPathPlans = {
 		literalPropertyDefinitions: [],
 		mathCalls: [],
+		numberPredicates: [],
 		propertyProjections: [],
 		propertyNumericUpdates: [],
 		propertyReadRegions: [],
@@ -2997,6 +2999,9 @@ function emitBody(
 	);
 	const mathCalls = new Map(
 		fastPathPlans.mathCalls.map((plan) => [plan.instructionIp, plan]),
+	);
+	const numberPredicates = new Map(
+		fastPathPlans.numberPredicates.map((plan) => [plan.instructionIp, plan]),
 	);
 	const iterationEligibilityRegisters = new Set<number>();
 	for (const instruction of fn.instructions) {
@@ -3467,6 +3472,7 @@ function emitBody(
 		fieldCall: undefined,
 		fieldThrowSlots: undefined,
 		mathCall: undefined,
+		numberPredicate: undefined,
 		mappedArguments: fn.mappedArguments,
 		mappedArgumentSlots: fn.mappedArgumentSlots,
 		hasPrototype: fn.hasPrototype,
@@ -3887,6 +3893,7 @@ function emitBody(
 		instructionContext.callTransport = callTransportByIp.get(ip);
 		instructionContext.callbackTransport = callbackTransportByIp.get(ip);
 		instructionContext.mathCall = mathCalls.get(ip);
+		instructionContext.numberPredicate = numberPredicates.get(ip);
 		instructionContext.indexedLengthLoopAction = indexedLengthLoopActionByIp.get(ip);
 		instructionContext.nativeArrayPresenceProjectionAction = arrayPresenceAction;
 		instructionContext.pairedArrayLoopAction = pairedArrayLoopActionByIp.get(ip);
@@ -4340,6 +4347,7 @@ interface NativeInstructionContext {
 	readonly callTransport?: NativeCallTransportPlan;
 	readonly callbackTransport?: NativeCallbackTransportPlan;
 	readonly mathCall: NativeMathCallPlan | undefined;
+	readonly numberPredicate?: NativeNumberPredicatePlan;
 	readonly mappedArguments: boolean;
 	readonly mappedArgumentSlots: ReadonlyArray<number>;
 	readonly hasPrototype: boolean;
@@ -4527,6 +4535,7 @@ function emitInstruction(
 		callTransport: context.callTransport,
 		callbackTransport: context.callbackTransport,
 		mathCall,
+		numberPredicate: context.numberPredicate,
 		mappedArguments,
 		mappedArgumentSlots,
 		hasPrototype,
@@ -7438,6 +7447,42 @@ function emitInstruction(
 			];
 		}
 		case "CALL_KNOWN": {
+			const predicatePlan = context.numberPredicate;
+			if (predicatePlan !== undefined) {
+				const input = instruction.arguments[0];
+				if (predicatePlan.mode === "non-number")
+					return [storeBoolean(instruction.dst, "false")];
+				if (predicatePlan.mode === "int32")
+					return [
+						storeBoolean(
+							instruction.dst,
+							instruction.operation === "Number.isNaN" ? "false" : "true",
+						),
+						poll,
+					];
+				if (predicatePlan.mode === "number") {
+					if (input === undefined)
+						throw new Error("Missing planned Number predicate input");
+					const number =
+						nativeNumberOperand(input) ?? `mal_ops_number_as_f64(${boxedOperand(input)})`;
+					const predicate =
+						instruction.operation === "Number.isNaN"
+							? `isnan(${number})`
+							: instruction.operation === "Number.isFinite"
+								? `isfinite(${number})`
+								: `isfinite(${number}) && trunc(${number}) == ${number}${instruction.operation === "Number.isSafeInteger" ? ` && fabs(${number}) <= 9007199254740991.0` : ""}`;
+					return [storeBoolean(instruction.dst, predicate), poll];
+				}
+				const predicate = NUMBER_PREDICATES.get(instruction.operation);
+				if (predicate === undefined) throw new Error("Invalid planned Number predicate");
+				const helper = `mal_builtin_number_${predicate.slice("MAL_NUMBER_PREDICATE_".length).toLowerCase()}_known`;
+				const argsExpr = instruction.arguments.length
+					? `((MalValue[]){ ${instruction.arguments.map(boxedOperand).join(", ")} })`
+					: "nullptr";
+				return [
+					`r${instruction.dst} = ${callValue(instruction.dst, `${helper}(${argsExpr}, ${instruction.arguments.length})`)};`,
+				];
+			}
 			if (!instruction.construct && instruction.argumentMode === undefined) {
 				const character = STRING_CHARACTER_KERNELS[instruction.operation];
 				if (character !== undefined && operandIsString(instruction.thisValue)) {
@@ -7513,21 +7558,6 @@ function emitInstruction(
 							`r${instruction.dst} = ${callValue(instruction.dst, profileCall("string", `mal_builtin_string_char_code_at_cached_number(vm, &__string_leaf_cache_${ip}, ${boxedOperand(instruction.thisValue)}, ${position})`))};`,
 							poll,
 						];
-					}
-				}
-				if (
-					NUMBER_PREDICATES.has(instruction.operation) &&
-					instruction.arguments[0] !== undefined
-				) {
-					const number = nativeNumberOperand(instruction.arguments[0]);
-					if (number !== null) {
-						const predicate =
-							instruction.operation === "Number.isNaN"
-								? `isnan(${number})`
-								: instruction.operation === "Number.isFinite"
-									? `isfinite(${number})`
-									: `isfinite(${number}) && trunc(${number}) == ${number}${instruction.operation === "Number.isSafeInteger" ? ` && fabs(${number}) <= 9007199254740991.0` : ""}`;
-						return [storeBoolean(instruction.dst, predicate), poll];
 					}
 				}
 				const format = NUMBER_FORMAT_KERNELS[instruction.operation];
@@ -8136,10 +8166,9 @@ function emitInstruction(
 				return fallback;
 			}
 
-			const argsExpr =
-				instruction.arguments.length === 0
-					? "nullptr"
-					: `((MalValue[]){ ${instruction.arguments.map(boxedOperand).join(", ")} })`;
+			const argsExpr = instruction.arguments.length
+				? `((MalValue[]){ ${instruction.arguments.map(boxedOperand).join(", ")} })`
+				: "nullptr";
 			if (instruction.operation === "Array.prototype.push") {
 				return [
 					`r${instruction.dst} = mal_builtin_array_push_contained(vm, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${instruction.arguments.length});`,
@@ -8215,44 +8244,6 @@ function emitInstruction(
 				instruction.arguments,
 			);
 			if (collectionCall !== null) return [collectionCall, throwCheck(), poll];
-			if (
-				[
-					"Number.isNaN",
-					"Number.isFinite",
-					"Number.isInteger",
-					"Number.isSafeInteger",
-				].includes(instruction.operation)
-			) {
-				const argument = instruction.arguments[0];
-				const decoded =
-					argument === undefined ? undefined : decodeVmValueOperand(argument);
-				const representation = argument === undefined ? undefined : operandRep(argument);
-				if (
-					decoded === undefined ||
-					(decoded.kind !== "register" && decoded.kind !== "number") ||
-					representation === "string" ||
-					representation === "boolean"
-				) {
-					return [storeBoolean(instruction.dst, "false")];
-				}
-				if (representation === "int32")
-					return [
-						storeBoolean(
-							instruction.dst,
-							instruction.operation === "Number.isNaN" ? "false" : "true",
-						),
-					];
-				const value = nativeNumberOperand(argument!);
-				if (value !== null) {
-					const expression =
-						instruction.operation === "Number.isNaN"
-							? `isnan(${value})`
-							: instruction.operation === "Number.isFinite"
-								? `isfinite(${value})`
-								: `isfinite(${value}) && trunc(${value}) == ${value}${instruction.operation === "Number.isSafeInteger" ? ` && fabs(${value}) <= 9007199254740991.0` : ""}`;
-					return [storeBoolean(instruction.dst, expression)];
-				}
-			}
 			if (instruction.operation === "Number.isNaN") {
 				return [
 					`r${instruction.dst} = ${callValue(instruction.dst, `mal_builtin_number_is_nan_known(${argsExpr}, ${instruction.arguments.length})`)};`,

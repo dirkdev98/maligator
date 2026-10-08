@@ -78,6 +78,12 @@ Exact builtin calls consume the catalog's primitive result kinds as well as thei
 existing identity proof. Scalar Date and Object helpers capture and check throwing
 results before conversion. Clock reads and mutable collection queries retain
 their effects; primitive result kinds do not admit deterministic call reuse.
+Number predicates persist a boxed, non-number, int32 or Number kernel mode per
+native entry, consuming decoded constants, physical representations and exact
+builtin argument masks. Int32 predicates produce constant Booleans; Number kernels
+preserve NaN, infinity and signed-zero semantics. Ignored argument producers still
+execute, and rendering preserves each selected mode's original polling behavior.
+Artifact validation independently rederives ordinary and typed-entry choices.
 Captured and module cell stores consume existing scalar result proofs at operand
 zero without joining the cell's other writers into the producer's scalar component.
 Their values stay scalar until the store boxes them. Captured writes retain the

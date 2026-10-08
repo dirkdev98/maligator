@@ -36,6 +36,27 @@ describe("independent native SSA storage", () => {
 	}, 600_000);
 
 	it("preserves scalar arithmetic, loop transport, and suspended heap locals", () => {
+		for (const [name, mode, count] of [
+			["predicateNumber", "number", 3],
+			["predicateInt32", "int32", 3],
+			["predicateBoxed", "boxed", 1],
+			["predicateText", "non-number", 1],
+		] as const) {
+			const native = image.native.functions.find(
+				(fn) =>
+					String.fromCharCode(
+						...(image.runtime.stringConstants[fn.body.nameStringIndex] ?? []),
+					) === name,
+			)!;
+			expect(native).toBeDefined();
+			expect(native.storage!.numberPredicates).toHaveLength(count);
+			expect(native.storage!.numberPredicates.every((plan) => plan.mode === mode)).toBe(
+				true,
+			);
+			expect(
+				emitCompiledFunction(native, native.functionIndex, "", false),
+			).not.toBeNull();
+		}
 		for (const name of [
 			"boxedBuiltinNumber",
 			"boxedBuiltinDateParse",

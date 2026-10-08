@@ -1,4 +1,8 @@
 import {
+	COMPILER_VALUE_KIND_NUMBER,
+	compilerBuiltinInputKindsAreValid,
+} from "../shared/compiler-value-kinds.ts";
+import {
 	MATH_UNARY_NATIVE_CALL,
 	MATH_BINARY_OPERATIONS,
 } from "./native-scalar-operators.ts";
@@ -167,9 +171,22 @@ export interface NativeMathCallPlan {
 	readonly mode: "number" | "guarded-boxed";
 }
 
+export const NATIVE_NUMBER_PREDICATE_MODES = [
+	"boxed",
+	"non-number",
+	"int32",
+	"number",
+] as const;
+
+export interface NativeNumberPredicatePlan {
+	readonly instructionIp: number;
+	readonly mode: (typeof NATIVE_NUMBER_PREDICATE_MODES)[number];
+}
+
 export interface NativeFastPathPlans {
 	readonly literalPropertyDefinitions: ReadonlyArray<NativeLiteralPropertyDefinitionPlan>;
 	readonly mathCalls: ReadonlyArray<NativeMathCallPlan>;
+	readonly numberPredicates: ReadonlyArray<NativeNumberPredicatePlan>;
 	readonly propertyNumericUpdates: ReadonlyArray<NativePropertyNumericUpdatePlan>;
 	readonly propertyProjections: ReadonlyArray<NativePropertyProjectionPlan>;
 	readonly propertyReadRegions: ReadonlyArray<NativePropertyReadRegionPlan>;
@@ -1268,6 +1285,7 @@ export function lowerNativeFastPaths(
 		literalPropertyDefinitions:
 			selection.kind === "render" ? selection.plans.literalPropertyDefinitions : [],
 		mathCalls: selection.kind === "render" ? selection.plans.mathCalls : [],
+		numberPredicates: selection.kind === "render" ? selection.plans.numberPredicates : [],
 		arrayPresence: selection.kind === "render" ? selection.plans.arrayPresence : [],
 		arrayPairDestructure:
 			selection.kind === "render" ? selection.plans.arrayPairDestructure : [],
@@ -1503,6 +1521,7 @@ export function selectNativeFastPaths(
 	}
 	const literalPropertyDefinitions: Array<NativeLiteralPropertyDefinitionPlan> = [];
 	const mathCalls: Array<NativeMathCallPlan> = [];
+	const numberPredicates: Array<NativeNumberPredicatePlan> = [];
 	const numericOperand = (operand: number): boolean => {
 		const decoded = decodeVmValueOperand(operand);
 		return (
@@ -1512,6 +1531,44 @@ export function selectNativeFastPaths(
 		);
 	};
 	for (const [ip, op] of fn.instructions.entries()) {
+		if (
+			op.opcode === "CALL_KNOWN" &&
+			!op.construct &&
+			op.argumentMode === undefined &&
+			[
+				"Number.isNaN",
+				"Number.isFinite",
+				"Number.isInteger",
+				"Number.isSafeInteger",
+			].includes(op.operation)
+		) {
+			const first = op.arguments[0];
+			const input = first === undefined ? undefined : decodeVmValueOperand(first);
+			const rep =
+				input?.kind === "register"
+					? native.registerRepresentations[input.register]
+					: undefined;
+			const proof = native.instructions[ip];
+			const exactNumber =
+				proof?.kind === "exact-builtin-input-kinds" &&
+				compilerBuiltinInputKindsAreValid(
+					proof.inputKindMasks,
+					op.arguments.length + 1,
+				) &&
+				proof.inputKindMasks[1] === COMPILER_VALUE_KIND_NUMBER;
+			const mode =
+				input === undefined ||
+				(input.kind !== "register" && input.kind !== "number") ||
+				rep === "string" ||
+				rep === "boolean"
+					? "non-number"
+					: rep === "int32"
+						? "int32"
+						: input.kind === "number" || rep === "number" || exactNumber
+							? "number"
+							: "boxed";
+			numberPredicates.push({ instructionIp: ip, mode });
+		}
 		const prior = fn.instructions[ip - 1];
 		if (
 			op.opcode === "DEFINE_PROPERTY" &&
@@ -1640,6 +1697,7 @@ export function selectNativeFastPaths(
 	return {
 		literalPropertyDefinitions,
 		mathCalls,
+		numberPredicates,
 		...selectArrayWindows(
 			native,
 			new Set([

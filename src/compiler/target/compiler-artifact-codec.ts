@@ -13,10 +13,14 @@ import { getPrimordialCatalog } from "../shared/primordial-catalog-data.ts";
 import type { NativeCallbackTransportPlan } from "./lower-native-callbacks.ts";
 import { nativeEntryLookup } from "./lower-native-calls.ts";
 import type { NativeCallTransportPlan } from "./lower-native-calls.ts";
-import { NATIVE_PROPERTY_UPDATE_OPERATORS } from "./lower-native-fast-paths.ts";
+import {
+	NATIVE_PROPERTY_UPDATE_OPERATORS,
+	NATIVE_NUMBER_PREDICATE_MODES,
+} from "./lower-native-fast-paths.ts";
 import type {
 	NativeLiteralPropertyDefinitionPlan,
 	NativeMathCallPlan,
+	NativeNumberPredicatePlan,
 	NativeArrayPresencePlan,
 	NativeArrayPairDestructurePlan,
 	NativePropertyProjectionPlan,
@@ -79,7 +83,7 @@ import type {
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal artifacts are hard cut-overs: stale cache entries rebuild.
-export const COMPILER_ARTIFACT_VERSION = 171;
+export const COMPILER_ARTIFACT_VERSION = 172;
 
 function validateClosureCaptureOwners(
 	owners: ReadonlyArray<number>,
@@ -905,6 +909,11 @@ function writeNativeStorage(w: Writer, storage: NativeStoragePlan | undefined): 
 		w.u8(plan.arity);
 		w.u8(plan.mode === "number" ? 0 : 1);
 	}
+	w.u32(storage.numberPredicates.length);
+	for (const plan of storage.numberPredicates) {
+		w.i32(plan.instructionIp);
+		w.u8(NATIVE_NUMBER_PREDICATE_MODES.indexOf(plan.mode));
+	}
 }
 
 function readNativeStorage(r: Reader): NativeStoragePlan {
@@ -1237,10 +1246,21 @@ function readNativeStorage(r: Reader): NativeStoragePlan {
 			mode: mode === 0 ? "number" : "guarded-boxed",
 		};
 	});
+	const numberPredicates: Array<NativeNumberPredicatePlan> = Array.from(
+		{ length: r.count(5) },
+		() => {
+			const instructionIp = r.i32();
+			const mode = NATIVE_NUMBER_PREDICATE_MODES[r.u8()];
+			if (mode === undefined)
+				throw new RangeError("Invalid native Number predicate mode");
+			return { instructionIp, mode };
+		},
+	);
 	return {
 		...storage,
 		literalPropertyDefinitions,
 		mathCalls,
+		numberPredicates,
 		arrayPresence,
 		arrayPairDestructure,
 		callTransports,
