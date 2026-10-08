@@ -23,7 +23,6 @@ import {
 	nativeStringSwitchHash,
 } from "../shared/native-string-switch.ts";
 import { staticDataQueryTag } from "../shared/static-data-query.ts";
-import { stringCaseLocale } from "../shared/string-case-locale.ts";
 import {
 	emitBinaryOperator,
 	emitIntrinsic,
@@ -55,6 +54,7 @@ import {
 	nativeNumericWorkerContract,
 	nativeVariantContract,
 } from "./lower-native-storage.ts";
+import type { NativeStringTransformPlan } from "./lower-native-string-transforms.ts";
 import type { NativeSuspensionPlan } from "./lower-native-suspension.ts";
 import { nativeInactiveRootMasks, nativeRootMaskWordHex } from "./native-root-masks.ts";
 import type { NativeInactiveRootMask } from "./native-root-masks.ts";
@@ -329,22 +329,6 @@ const STRING_SEARCH_KERNELS: Readonly<Record<string, readonly [string, string]>>
 	"String.prototype.includes": ["INCLUDES", "0.0"],
 	"String.prototype.startsWith": ["STARTS_WITH", "0.0"],
 	"String.prototype.endsWith": ["ENDS_WITH", "INFINITY"],
-};
-
-const STRING_HTML_KERNELS: Readonly<Record<string, readonly [string, string?]>> = {
-	anchor: ["a", "name"],
-	big: ["big"],
-	blink: ["blink"],
-	bold: ["b"],
-	fixed: ["tt"],
-	fontcolor: ["font", "color"],
-	fontsize: ["font", "size"],
-	italics: ["i"],
-	link: ["a", "href"],
-	small: ["small"],
-	strike: ["strike"],
-	sub: ["sub"],
-	sup: ["sup"],
 };
 
 const URI_KERNELS: Readonly<Record<string, readonly [string, boolean?]>> = {
@@ -2739,6 +2723,7 @@ function emitBody(
 		literalPropertyDefinitions: [],
 		mathCalls: [],
 		numberPredicates: [],
+		stringTransforms: [],
 		propertyProjections: [],
 		propertyNumericUpdates: [],
 		propertyReadRegions: [],
@@ -3053,6 +3038,9 @@ function emitBody(
 	);
 	const numberPredicates = new Map(
 		fastPathPlans.numberPredicates.map((plan) => [plan.instructionIp, plan]),
+	);
+	const stringTransforms = new Map(
+		fastPathPlans.stringTransforms.map((plan) => [plan.instructionIp, plan]),
 	);
 	const { iterationEligibilityRegisters } = analysis;
 	const nativeStringSplitProjectionActionByIp = new Map<
@@ -3517,6 +3505,7 @@ function emitBody(
 		fieldThrowSlots: undefined,
 		mathCall: undefined,
 		numberPredicate: undefined,
+		stringTransform: undefined,
 		mappedArguments: fn.mappedArguments,
 		mappedArgumentSlots: fn.mappedArgumentSlots,
 		hasPrototype: fn.hasPrototype,
@@ -3939,6 +3928,7 @@ function emitBody(
 		instructionContext.callbackTransport = callbackTransportByIp.get(ip);
 		instructionContext.mathCall = mathCalls.get(ip);
 		instructionContext.numberPredicate = numberPredicates.get(ip);
+		instructionContext.stringTransform = stringTransforms.get(ip);
 		instructionContext.indexedLengthLoopAction = indexedLengthLoopActionByIp.get(ip);
 		instructionContext.nativeArrayPresenceProjectionAction = arrayPresenceAction;
 		instructionContext.pairedArrayLoopAction = pairedArrayLoopActionByIp.get(ip);
@@ -4392,6 +4382,7 @@ interface NativeInstructionContext {
 	readonly callbackTransport?: NativeCallbackTransportPlan;
 	readonly mathCall: NativeMathCallPlan | undefined;
 	readonly numberPredicate?: NativeNumberPredicatePlan;
+	readonly stringTransform?: NativeStringTransformPlan;
 	readonly mappedArguments: boolean;
 	readonly mappedArgumentSlots: ReadonlyArray<number>;
 	readonly hasPrototype: boolean;
@@ -4580,6 +4571,7 @@ function emitInstruction(
 		callbackTransport: context.callbackTransport,
 		mathCall,
 		numberPredicate: context.numberPredicate,
+		stringTransform: context.stringTransform,
 		mappedArguments,
 		mappedArgumentSlots,
 		hasPrototype,
@@ -7892,84 +7884,55 @@ function emitInstruction(
 						`}`,
 					];
 				}
-				if (
-					!instruction.construct &&
-					instruction.argumentMode === undefined &&
-					instruction.operation.startsWith("String.prototype.")
-				) {
-					const method = instruction.operation.slice("String.prototype.".length);
+				const transform = context.stringTransform;
+				if (transform !== undefined) {
 					const receiver = boxedOperand(instruction.thisValue);
 					const string = `mal_value_to_string(${receiver})`;
-					const first = instruction.arguments[0];
-					const decoded = first === undefined ? undefined : decodeVmValueOperand(first);
-					const units =
-						decoded?.kind === "string"
-							? context.stringConstants[decoded.index]
-							: undefined;
-					const parameter =
-						units === undefined || units.length > 16
-							? undefined
-							: String.fromCharCode(...units);
-					const absent = decoded === undefined || decoded.kind === "undefined";
-					let expression: string | undefined;
-					const html = Object.hasOwn(STRING_HTML_KERNELS, method)
-						? STRING_HTML_KERNELS[method]
-						: undefined;
-					if (html !== undefined) {
-						expression = `mal_builtin_string_html_known(vm, ${string}, ${first === undefined ? "MAL_VALUE_UNDEFINED" : boxedOperand(first)}, "${html[0]}", ${html[1] === undefined ? "nullptr" : `"${html[1]}"`})`;
-					} else if (
-						["trim", "trimStart", "trimLeft", "trimEnd", "trimRight"].includes(method)
-					) {
-						expression = `mal_builtin_string_trim_known(vm, ${string}, ${method !== "trimEnd" && method !== "trimRight"}, ${method !== "trimStart" && method !== "trimLeft"})`;
-					} else if (method === "isWellFormed")
-						expression = `mal_builtin_string_is_well_formed_known(${string})`;
-					else if (method === "toWellFormed")
-						expression = `mal_builtin_string_to_well_formed_known(vm, ${string})`;
-					else if (method === "normalize") {
-						const form = absent ? "NFC" : parameter;
-						if (form === "NFC" || form === "NFD" || form === "NFKC" || form === "NFKD")
-							expression = `mal_builtin_string_normalize_known(vm, ${string}, ${form.includes("K")}, ${form.endsWith("C")})`;
-					} else if (
-						[
-							"toUpperCase",
-							"toLowerCase",
-							"toLocaleUpperCase",
-							"toLocaleLowerCase",
-						].includes(method)
-					) {
-						const localized = method.includes("Locale");
-						let locale: string | undefined = "MAL_UNICODE_LOCALE_ROOT";
-						if (localized && !absent) {
-							const selected =
-								parameter === undefined ? undefined : stringCaseLocale(parameter);
-							if (selected === "tr")
-								locale =
-									"(MAL_INTL ? MAL_UNICODE_LOCALE_TURKIC : MAL_UNICODE_LOCALE_ROOT)";
-							else if (selected === "lt")
-								locale =
-									"(MAL_INTL ? MAL_UNICODE_LOCALE_LITHUANIAN : MAL_UNICODE_LOCALE_ROOT)";
-							else if (selected === undefined) locale = undefined;
+					let expression: string;
+					switch (transform.kind) {
+						case "html": {
+							const first = instruction.arguments[0];
+							expression = `mal_builtin_string_html_known(vm, ${string}, ${first === undefined ? "MAL_VALUE_UNDEFINED" : boxedOperand(first)}, "${transform.tag}", ${transform.attribute === undefined ? "nullptr" : `"${transform.attribute}"`})`;
+							break;
 						}
-						if (locale !== undefined)
-							expression = `mal_builtin_string_case_known(vm, ${string}, ${method.includes("Upper")}, ${locale})`;
+						case "trim":
+							expression = `mal_builtin_string_trim_known(vm, ${string}, ${transform.start}, ${transform.end})`;
+							break;
+						case "is-well-formed":
+							expression = `mal_builtin_string_is_well_formed_known(${string})`;
+							break;
+						case "to-well-formed":
+							expression = `mal_builtin_string_to_well_formed_known(vm, ${string})`;
+							break;
+						case "normalize":
+							expression = `mal_builtin_string_normalize_known(vm, ${string}, ${transform.form.includes("K")}, ${transform.form.endsWith("C")})`;
+							break;
+						case "case": {
+							const locale =
+								transform.locale === "turkic"
+									? "(MAL_INTL ? MAL_UNICODE_LOCALE_TURKIC : MAL_UNICODE_LOCALE_ROOT)"
+									: transform.locale === "lithuanian"
+										? "(MAL_INTL ? MAL_UNICODE_LOCALE_LITHUANIAN : MAL_UNICODE_LOCALE_ROOT)"
+										: "MAL_UNICODE_LOCALE_ROOT";
+							expression = `mal_builtin_string_case_known(vm, ${string}, ${transform.upper}, ${locale})`;
+							break;
+						}
 					}
-					if (expression !== undefined) {
-						const result = `string_transform_${ip}`;
-						const direct = [
-							`MalValue ${result} = ${expression};`,
-							throwCheck(),
-							`r${instruction.dst} = ${callValue(instruction.dst, result)};`,
-							poll,
-						];
-						if (operandIsString(instruction.thisValue)) return direct;
-						return [
-							`if (mal_value_is_string(${receiver})) {`,
-							...direct.map((line) => `  ${line}`),
-							`} else {`,
-							...fallback.map((line) => `  ${line}`),
-							`}`,
-						];
-					}
+					const result = `string_transform_${ip}`;
+					const direct = [
+						`MalValue ${result} = ${expression};`,
+						throwCheck(),
+						`r${instruction.dst} = ${callValue(instruction.dst, result)};`,
+						poll,
+					];
+					if (transform.receiver === "string") return direct;
+					return [
+						`if (mal_value_is_string(${receiver})) {`,
+						...direct.map((line) => `  ${line}`),
+						`} else {`,
+						...fallback.map((line) => `  ${line}`),
+						`}`,
+					];
 				}
 				if (
 					instruction.operation === "String.prototype.concat" &&

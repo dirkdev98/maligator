@@ -36,6 +36,14 @@ import type {
 import type { NativeStackObjectStoragePlan } from "./lower-native-objects.ts";
 import type { NativeStoragePlan } from "./lower-native-storage.ts";
 import { validateNativeStorage } from "./lower-native-storage.ts";
+import {
+	NATIVE_STRING_TRANSFORM_KINDS,
+	NATIVE_STRING_NORMALIZATION_FORMS,
+	NATIVE_STRING_CASE_LOCALES,
+	NATIVE_STRING_HTML_TAGS,
+	NATIVE_STRING_HTML_ATTRIBUTES,
+} from "./lower-native-string-transforms.ts";
+import type { NativeStringTransformPlan } from "./lower-native-string-transforms.ts";
 import type { NativeSuspensionPlan } from "./lower-native-suspension.ts";
 import { NATIVE_VALUE_CONVERSIONS } from "./native-value-transport.ts";
 import type { Reader } from "./program-image-codec.ts";
@@ -84,7 +92,7 @@ import type {
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal artifacts are hard cut-overs: stale cache entries rebuild.
-export const COMPILER_ARTIFACT_VERSION = 175;
+export const COMPILER_ARTIFACT_VERSION = 176;
 
 function validateClosureCaptureOwners(
 	owners: ReadonlyArray<number>,
@@ -928,6 +936,33 @@ function writeNativeStorage(w: Writer, storage: NativeStoragePlan | undefined): 
 		w.i32(plan.instructionIp);
 		w.u8(NATIVE_NUMBER_PREDICATE_MODES.indexOf(plan.mode));
 	}
+	w.u32(storage.stringTransforms.length);
+	for (const plan of storage.stringTransforms) {
+		w.i32(plan.instructionIp);
+		w.u8(NATIVE_STRING_TRANSFORM_KINDS.indexOf(plan.kind));
+		w.u8(plan.receiver === "string" ? 0 : 1);
+		switch (plan.kind) {
+			case "html":
+				w.u8(NATIVE_STRING_HTML_TAGS.indexOf(plan.tag));
+				w.u8(
+					plan.attribute === undefined
+						? 0
+						: NATIVE_STRING_HTML_ATTRIBUTES.indexOf(plan.attribute) + 1,
+				);
+				break;
+			case "trim":
+				w.u8(plan.start ? 1 : 0);
+				w.u8(plan.end ? 1 : 0);
+				break;
+			case "normalize":
+				w.u8(NATIVE_STRING_NORMALIZATION_FORMS.indexOf(plan.form));
+				break;
+			case "case":
+				w.u8(plan.upper ? 1 : 0);
+				w.u8(NATIVE_STRING_CASE_LOCALES.indexOf(plan.locale));
+				break;
+		}
+	}
 }
 
 function readNativeStorage(r: Reader): NativeStoragePlan {
@@ -1289,11 +1324,64 @@ function readNativeStorage(r: Reader): NativeStoragePlan {
 			return { instructionIp, mode };
 		},
 	);
+	const stringTransforms: Array<NativeStringTransformPlan> = Array.from(
+		{ length: r.count(6) },
+		() => {
+			const instructionIp = r.i32(),
+				kind = NATIVE_STRING_TRANSFORM_KINDS[r.u8()],
+				receiver = r.u8();
+			if (kind === undefined || receiver > 1)
+				throw new RangeError("Invalid native String transform selection");
+			const site = {
+				instructionIp,
+				receiver: receiver === 0 ? ("string" as const) : ("guarded" as const),
+				fallback: "original-call" as const,
+			};
+			const flag = () => {
+				const value = r.u8();
+				if (value > 1) throw new RangeError("Invalid native String transform flag");
+				return value === 1;
+			};
+			switch (kind) {
+				case "html": {
+					const tag = NATIVE_STRING_HTML_TAGS[r.u8()],
+						attributeIndex = r.u8();
+					const attribute = NATIVE_STRING_HTML_ATTRIBUTES[attributeIndex - 1];
+					if (tag === undefined || (attributeIndex > 0 && attribute === undefined))
+						throw new RangeError("Invalid native String HTML selection");
+					return {
+						...site,
+						kind,
+						tag,
+						...(attribute === undefined ? {} : { attribute }),
+					};
+				}
+				case "trim":
+					return { ...site, kind, start: flag(), end: flag() };
+				case "normalize": {
+					const form = NATIVE_STRING_NORMALIZATION_FORMS[r.u8()];
+					if (form === undefined)
+						throw new RangeError("Invalid native String normalization selection");
+					return { ...site, kind, form };
+				}
+				case "case": {
+					const upper = flag(),
+						locale = NATIVE_STRING_CASE_LOCALES[r.u8()];
+					if (locale === undefined)
+						throw new RangeError("Invalid native String case selection");
+					return { ...site, kind, upper, locale };
+				}
+				default:
+					return { ...site, kind };
+			}
+		},
+	);
 	return {
 		...storage,
 		literalPropertyDefinitions,
 		mathCalls,
 		numberPredicates,
+		stringTransforms,
 		arrayPresence,
 		arrayPairDestructure,
 		callTransports,

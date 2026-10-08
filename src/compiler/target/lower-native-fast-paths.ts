@@ -2,6 +2,8 @@ import {
 	COMPILER_VALUE_KIND_NUMBER,
 	compilerBuiltinInputKindsAreValid,
 } from "../shared/compiler-value-kinds.ts";
+import { selectNativeStringTransform } from "./lower-native-string-transforms.ts";
+import type { NativeStringTransformPlan } from "./lower-native-string-transforms.ts";
 import { analyzeNativeBodyFacts } from "./native-body-facts.ts";
 import type { NativeBodyFacts } from "./native-body-facts.ts";
 import {
@@ -190,6 +192,7 @@ export interface NativeFastPathPlans {
 	readonly literalPropertyDefinitions: ReadonlyArray<NativeLiteralPropertyDefinitionPlan>;
 	readonly mathCalls: ReadonlyArray<NativeMathCallPlan>;
 	readonly numberPredicates: ReadonlyArray<NativeNumberPredicatePlan>;
+	readonly stringTransforms: ReadonlyArray<NativeStringTransformPlan>;
 	readonly propertyNumericUpdates: ReadonlyArray<NativePropertyNumericUpdatePlan>;
 	readonly propertyProjections: ReadonlyArray<NativePropertyProjectionPlan>;
 	readonly propertyReadRegions: ReadonlyArray<NativePropertyReadRegionPlan>;
@@ -1296,6 +1299,7 @@ export function lowerNativeFastPaths(
 			selection.kind === "render" ? selection.plans.literalPropertyDefinitions : [],
 		mathCalls: selection.kind === "render" ? selection.plans.mathCalls : [],
 		numberPredicates: selection.kind === "render" ? selection.plans.numberPredicates : [],
+		stringTransforms: selection.kind === "render" ? selection.plans.stringTransforms : [],
 		arrayPresence: selection.kind === "render" ? selection.plans.arrayPresence : [],
 		arrayPairDestructure:
 			selection.kind === "render" ? selection.plans.arrayPairDestructure : [],
@@ -1511,6 +1515,7 @@ export function selectNativeFastPaths(
 	const literalPropertyDefinitions: Array<NativeLiteralPropertyDefinitionPlan> = [];
 	const mathCalls: Array<NativeMathCallPlan> = [];
 	const numberPredicates: Array<NativeNumberPredicatePlan> = [];
+	const stringTransforms: Array<NativeStringTransformPlan> = [];
 	const numericOperand = (operand: number): boolean => {
 		const decoded = decodeVmValueOperand(operand);
 		return (
@@ -1520,6 +1525,10 @@ export function selectNativeFastPaths(
 		);
 	};
 	for (const [ip, op] of fn.instructions.entries()) {
+		if (op.opcode === "CALL_KNOWN") {
+			const transform = selectNativeStringTransform(native, ip, stringConstants);
+			if (transform !== undefined) stringTransforms.push(transform);
+		}
 		if (
 			op.opcode === "CALL_KNOWN" &&
 			!op.construct &&
@@ -1683,6 +1692,7 @@ export function selectNativeFastPaths(
 		literalPropertyDefinitions,
 		mathCalls,
 		numberPredicates,
+		stringTransforms,
 		...selectArrayWindows(
 			native,
 			new Set([

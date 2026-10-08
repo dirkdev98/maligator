@@ -37,6 +37,7 @@ import {
 	validateNativeRootStorage,
 } from "./lower-native-roots.ts";
 import type { NativeRootStoragePlan } from "./lower-native-roots.ts";
+import { nativeStringTransformPlansMatch } from "./lower-native-string-transforms.ts";
 import {
 	compactNativeSuspension,
 	lowerNativeSuspension,
@@ -1402,6 +1403,10 @@ export function validateNativeStorage(
 				(plan, index) =>
 					plan.instructionIp === selected.numberPredicates[index]!.instructionIp &&
 					plan.mode === selected.numberPredicates[index]!.mode,
+			) &&
+			nativeStringTransformPlansMatch(
+				stored.stringTransforms,
+				selected.stringTransforms,
 			) &&
 			sameProjections(stored.propertyProjections, selected.propertyProjections) &&
 			sameUpdates(stored.propertyNumericUpdates, selected.propertyNumericUpdates) &&
