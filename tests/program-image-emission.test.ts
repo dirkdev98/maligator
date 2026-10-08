@@ -18,6 +18,7 @@ import {
 	emitProgramTranslationUnits,
 	emitRelocatableNativeOverlayTranslationUnits,
 } from "../src/compiler/target/emit-program-image.ts";
+import { nativeInactiveRootMasks } from "../src/compiler/target/native-root-masks.ts";
 import {
 	vmRegionLicense,
 	vmSemanticProtectorGuard,
@@ -27,7 +28,6 @@ import { createConservativeNativePlan } from "../src/compiler/target/program-ima
 import {
 	directCompiledEntryKey,
 	emitCompiledFunction,
-	nativeInactiveRootMasks,
 } from "../src/compiler/target/render-native-c.ts";
 import type {
 	BytecodeFunction,
@@ -1565,6 +1565,7 @@ describe("emit-program-image instruction packing", () => {
 		{ rootCount: 64, liveCounts: [64, 60, 58], scannedSlots: 182 },
 		{ rootCount: 70, liveCounts: [70, 66, 64], scannedSlots: 200 },
 		{ rootCount: 130, liveCounts: [130, 66, 2], scannedSlots: 198 },
+		{ rootCount: 130, liveCounts: [130, 2, 4, 130], scannedSlots: 266 },
 	])(
 		"publishes exact liveness across a $rootCount-root frame",
 		({ rootCount, liveCounts, scannedSlots }) => {
@@ -1581,7 +1582,7 @@ describe("emit-program-image instruction packing", () => {
 				capturedCount: 1,
 				parameterCount: 2,
 				registerCount: rootCount + 3,
-				instructions: [call, call, call, { opcode: "RETURN", value: 0 }],
+				instructions: [...liveCounts.map(() => call), { opcode: "RETURN", value: 0 }],
 			};
 			const safepoints = liveCounts.map((count, instructionIp) => ({
 				kind: "operation" as const,
@@ -1631,6 +1632,10 @@ describe("emit-program-image instruction packing", () => {
 					],
 				),
 			);
+			if (liveCounts.at(-1) === 130) {
+				expect(tails.size).toBe(2);
+				expect(new Set(tails.values()).size).toBe(1);
+			}
 			let publishedMask = 0n;
 			for (const match of output!.matchAll(
 				/MAL_ROOT_MASK\((0x[\da-f]+)\);|MAL_ROOT_MASK_WIDE\((0x[\da-f]+), (\w+), countof\(\w+\)\);|mal_vm_call_cached\(/g,
@@ -1676,7 +1681,7 @@ describe("emit-program-image instruction packing", () => {
 			],
 			new Map(roots.map((register) => [register, register])),
 		);
-		expect(masks.get(0)).toBe((1n << 64n) | (1n << 128n));
+		expect(masks.get(0)).toEqual([0, 0, 1, 0, 1]);
 	});
 
 	it("coalesces straight-line native root masks and republishes them at joins", () => {

@@ -55,6 +55,8 @@ import {
 	nativeVariantContract,
 } from "./lower-native-storage.ts";
 import type { NativeSuspensionPlan } from "./lower-native-suspension.ts";
+import { nativeInactiveRootMasks, nativeRootMaskWordHex } from "./native-root-masks.ts";
+import type { NativeInactiveRootMask } from "./native-root-masks.ts";
 import {
 	NATIVE_ARITH,
 	NATIVE_BITWISE,
@@ -673,47 +675,18 @@ function binaryOpCanThrow(operator: string): boolean {
 	return !NON_THROWING_BINARY.has(operator);
 }
 
-export function nativeInactiveRootMasks(
-	safepoints: NativeFunctionPlan["gc"]["safepoints"],
-	slotOfRegister: ReadonlyMap<number, number>,
-): ReadonlyMap<number, bigint> {
-	if (safepoints.length === 0) return new Map();
-	const slotBits = new Map<number, bigint>();
-	let allSlots = 0n;
-	for (const [register, slot] of slotOfRegister) {
-		const bit = 1n << BigInt(slot);
-		slotBits.set(register, bit);
-		allSlots |= bit;
-	}
-	if (allSlots === 0n) return new Map();
-	const masks = new Map<number, bigint>();
-	let removesAnyRoot = false;
-	for (const safepoint of safepoints) {
-		let liveSlots = 0n;
-		for (const register of safepoint.rootRegisters) {
-			liveSlots |= slotBits.get(register) ?? 0n;
-		}
-		const mask = allSlots & ~liveSlots;
-		masks.set(safepoint.instructionIp, mask);
-		removesAnyRoot ||= mask !== 0n;
-	}
-	return removesAnyRoot ? masks : new Map();
-}
-
-const ROOT_MASK_WORD = (1n << 64n) - 1n;
-
-function nativeRootMaskTails(masks: Iterable<bigint>): {
-	readonly symbols: ReadonlyMap<bigint, string>;
+function nativeRootMaskTails(masks: Iterable<NativeInactiveRootMask>): {
+	readonly symbols: ReadonlyMap<NativeInactiveRootMask, string>;
 	readonly declarations: ReadonlyArray<string>;
 } {
-	const symbols = new Map<bigint, string>();
+	const symbols = new Map<NativeInactiveRootMask, string>();
 	const declarations: Array<string> = [];
 	for (const mask of masks) {
-		if (mask <= ROOT_MASK_WORD || symbols.has(mask)) continue;
+		if (mask.length <= 2 || symbols.has(mask)) continue;
 		const symbol = `__gc_inactive_tail_${symbols.size}`;
 		const words: Array<string> = [];
-		for (let tail = mask >> 64n; tail !== 0n; tail >>= 64n) {
-			words.push(`UINT64_C(0x${(tail & ROOT_MASK_WORD).toString(16)})`);
+		for (let word = 2; word < mask.length; word += 2) {
+			words.push(`UINT64_C(0x${nativeRootMaskWordHex(mask, word)})`);
 		}
 		symbols.set(mask, symbol);
 		declarations.push(`    static const u64 ${symbol}[] = { ${words.join(", ")} };`);
@@ -722,14 +695,15 @@ function nativeRootMaskTails(masks: Iterable<bigint>): {
 }
 
 function cInactiveRootMaskPublication(
-	mask: bigint,
-	tails?: ReadonlyMap<bigint, string>,
+	mask: NativeInactiveRootMask,
+	tails?: ReadonlyMap<NativeInactiveRootMask, string>,
 ): string {
-	if (mask <= ROOT_MASK_WORD) return `MAL_ROOT_MASK(0x${mask.toString(16)})`;
+	const head = nativeRootMaskWordHex(mask, 0);
+	if (mask.length <= 2) return `MAL_ROOT_MASK(0x${head})`;
 	const symbol = tails?.get(mask);
 	if (symbol === undefined)
 		throw new Error("Native wide root mask lacks static tail words");
-	return `MAL_ROOT_MASK_WIDE(0x${(mask & ROOT_MASK_WORD).toString(16)}, ${symbol}, countof(${symbol}))`;
+	return `MAL_ROOT_MASK_WIDE(0x${head}, ${symbol}, countof(${symbol}))`;
 }
 
 interface NativeRootPublication {
@@ -2741,8 +2715,8 @@ function emitBody(
 	specializations: ReadonlyArray<VmRegion>,
 	regionActions: ReadonlyArray<VmRegionAction>,
 	nativeInstructions: ReadonlyArray<NativeInstructionPlan | undefined>,
-	inactiveRootMasks: ReadonlyMap<number, bigint>,
-	inactiveRootMaskTails: ReadonlyMap<bigint, string>,
+	inactiveRootMasks: ReadonlyMap<number, NativeInactiveRootMask>,
+	inactiveRootMaskTails: ReadonlyMap<NativeInactiveRootMask, string>,
 	gcSafepointKinds: ReadonlyMap<
 		number,
 		NativeFunctionPlan["gc"]["safepoints"][number]["kind"]
@@ -3589,7 +3563,7 @@ function emitBody(
 	};
 	let lastPublishedPos = -1;
 	let lastPublishedSite = -1;
-	let lastPublishedInactiveRootMask: bigint | undefined;
+	let lastPublishedInactiveRootMask: NativeInactiveRootMask | undefined;
 	const knownPublishedPrivateRoots = new Map<number, number>();
 	if (rootPublication !== undefined) {
 		for (const [slot, registers] of rootPublication.slotRegisters)
@@ -4384,7 +4358,7 @@ interface NativeFieldCall {
 
 interface NativeInstructionContext {
 	readonly scalarInputValues?: ReadonlyMap<number, string>;
-	readonly inactiveRootMaskTails?: ReadonlyMap<bigint, string>;
+	readonly inactiveRootMaskTails?: ReadonlyMap<NativeInactiveRootMask, string>;
 	readonly ownedCaptureFunctionIndex?: number;
 	readonly fixedCaptureOwners?: ReadonlySet<number>;
 	readonly requiredCaptureOwners?: ReadonlySet<number>;
@@ -4402,17 +4376,17 @@ interface NativeInstructionContext {
 	readonly onIncomingRootPublication?: () => void;
 	readonly outgoingRootPublication?: ReadonlyArray<string>;
 	readonly rootedOutputReloads?: ReadonlyArray<string>;
-	readonly loopBackedgeInactiveRootMask?: bigint;
-	readonly mathCallInactiveRootMask?: bigint;
-	readonly tdzInactiveRootMask?: bigint;
-	readonly knownOwnSlotLoadInactiveRootMask?: bigint;
-	readonly staticPropertyLoadInactiveRootMask?: bigint;
-	readonly indexedPropertyInactiveRootMask?: bigint;
-	readonly staticPropertyWriteInactiveRootMask?: bigint;
+	readonly loopBackedgeInactiveRootMask?: NativeInactiveRootMask;
+	readonly mathCallInactiveRootMask?: NativeInactiveRootMask;
+	readonly tdzInactiveRootMask?: NativeInactiveRootMask;
+	readonly knownOwnSlotLoadInactiveRootMask?: NativeInactiveRootMask;
+	readonly staticPropertyLoadInactiveRootMask?: NativeInactiveRootMask;
+	readonly indexedPropertyInactiveRootMask?: NativeInactiveRootMask;
+	readonly staticPropertyWriteInactiveRootMask?: NativeInactiveRootMask;
 	readonly charCodeAtCallRootPublication?: boolean;
-	readonly charCodeAtCallInactiveRootMask?: bigint;
+	readonly charCodeAtCallInactiveRootMask?: NativeInactiveRootMask;
 	readonly iteratorStepRootPublication?: boolean;
-	readonly iteratorStepInactiveRootMask?: bigint;
+	readonly iteratorStepInactiveRootMask?: NativeInactiveRootMask;
 	readonly stackObjectSite?: StackObjectSite;
 	readonly stackObjectAccess?: { site: StackObjectSite; slot: number };
 	readonly stackObjectMaterialization?: StackObjectSite;

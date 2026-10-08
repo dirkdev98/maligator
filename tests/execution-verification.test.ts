@@ -10,7 +10,7 @@ import type {
 	ExecutionProgram,
 } from "../src/compiler/target/lower-execution.ts";
 import { lowerCoreCompilationToExecution } from "../src/compiler/target/lower-native-execution.ts";
-import { nativeInactiveRootMasks } from "../src/compiler/target/render-native-c.ts";
+import { nativeInactiveRootMasks } from "../src/compiler/target/native-root-masks.ts";
 import {
 	ExecutionVerificationError,
 	verifyExecutionProgram,
@@ -377,8 +377,8 @@ describe("Core target construction", () => {
 			]),
 		);
 		expect([...masks]).toEqual([
-			[2, (1n << 64n) | 0b010n],
-			[7, (1n << 64n) | 0b001n],
+			[2, [2, 0, 1]],
+			[7, [1, 0, 1]],
 		]);
 	});
 
@@ -417,9 +417,9 @@ describe("Core target construction", () => {
 				slots,
 			),
 		]).toEqual([
-			[0, 0n],
-			[1, (1n << 65n) | (1n << 63n)],
-			[2, (1n << 65n) | (1n << 64n) | (1n << 63n) | 1n],
+			[0, []],
+			[1, [0, 0x80000000, 2]],
+			[2, [1, 0x80000000, 3]],
 		]);
 		expect(
 			nativeInactiveRootMasks(

@@ -24,21 +24,28 @@ describe("native-host physical root planner", () => {
 			outDir,
 		});
 		({ compiled, interpreted } = pair);
-		const planner = pair.programImage.native.functions.find(
-			(native) =>
-				String.fromCharCode(
-					...(pair.programImage.runtime.stringConstants[native.body.nameStringIndex] ??
-						[]),
-				) === "selectNativeRootStorage",
-		)!;
-		expect(planner).toBeDefined();
-		expect(
-			emitCompiledFunction(planner, planner.functionIndex, "", false),
-		).not.toBeNull();
+		for (const name of [
+			"selectNativeRootStorage",
+			"nativeInactiveRootMasks",
+			"nativeRootMaskWordHex",
+		]) {
+			const planner = pair.programImage.native.functions.find(
+				(native) =>
+					String.fromCharCode(
+						...(pair.programImage.runtime.stringConstants[native.body.nameStringIndex] ??
+							[]),
+					) === name,
+			)!;
+			expect(planner, name).toBeDefined();
+			expect(
+				emitCompiledFunction(planner, planner.functionIndex, "", false),
+				name,
+			).not.toBeNull();
+		}
 	}, 600_000);
 
 	it.each(["compiled", "interpreted"])(
-		"preserves late safepoint overlap and rejects forged collisions when %s",
+		"preserves late root overlap, physical mask bits and collision rejection when %s",
 		(backend) => {
 			const binary = backend === "compiled" ? compiled : interpreted;
 			for (const env of [{}, STRESS_ENV])
