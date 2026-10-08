@@ -59,7 +59,10 @@ Single-write boxed SSA operator results also omit roots when existing operand or
 normal-result proofs guarantee an immediate Number or Boolean. Coercive unary
 plus and comparisons retain operand roots, safepoints and completion checks;
 an immediate result does not make evaluation pure. This does not move their
-evaluation or remove their assignment; repeated uses and intervening calls retain
+evaluation. The shared numeric result transfer also certifies Number results when
+either operand of a non-additive numeric binary operation is numeric-primitive;
+addition requires both operands to exclude String results. These storage proofs
+leave coercion and throw checks in place. Repeated uses and intervening calls retain
 ordinary boxed locals initialized to undefined. Logical GC liveness stays intact,
 and validation rederives the physical exclusion per variant. Parameters, raw
 storage, opaque or borrowed locals and suspension snapshots retain their roots.

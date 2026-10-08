@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
 	COMPILER_VALUE_KIND_NUMBER,
 	COMPILER_VALUE_KIND_STRING,
+	COMPILER_VALUE_KIND_BIGINT,
 } from "../src/compiler/shared/compiler-value-kinds.ts";
 import {
 	deserializeCompilerArtifact,
@@ -31,6 +32,78 @@ function storedOperator(expression: string, profile = false) {
 }
 
 describe("untraced boxed operator storage", () => {
+	it.each(["-", "*", "/", "%", "**", "&", "|", "^", "<<", ">>", ">>>"])(
+		"omits a %s result root when only the right operand is a known Number",
+		(operator) => {
+			const out = inspectStaticValueFunction(
+				`function compute(left,right,gate,condition){const number=+right;const value=left${operator}number;gate();return condition?value:undefined;}globalThis.compute=compute;`,
+				"compute",
+			);
+			const ip = out.native.body.instructions.findIndex(
+				(op) => op.opcode === "BINARY" && op.operator === operator,
+			);
+			const op = out.native.body.instructions[ip]!;
+			if (op.opcode !== "BINARY") throw new Error("Missing numeric result");
+			expect(out.native.registerRepresentations[op.left]).toBe("boxed");
+			expect(["number", "int32"]).toContain(out.native.registerRepresentations[op.right]);
+			expect(out.native.registerRepresentations[op.dst]).toBe("boxed");
+			expect(out.native.storage!.rootRegisters).not.toContain(op.dst);
+			expect(out.native.storage!.expressionIps).not.toContain(ip);
+			expect(out.native.storage!.rootRegisters).toContain(op.left);
+			expect(out.c.source).toContain("mal_vm_binary_op");
+			expect(deserializeCompilerArtifact(serializeCompilerArtifact(out.image))).toEqual(
+				out.image,
+			);
+		},
+	);
+
+	it.each(["condition?true:null", "condition?+left:undefined"])(
+		"consumes the numeric primitive mask for %s without changing expression purity",
+		(input) => {
+			const out = inspectStaticValueFunction(
+				`function compute(left,gate,condition){const input=${input};const value=-input;gate();return condition?value:undefined;}globalThis.compute=compute;`,
+				"compute",
+			);
+			const ip = out.native.body.instructions.findIndex(
+				(op) => op.opcode === "UNARY" && op.operator === "-",
+			);
+			const op = out.native.body.instructions[ip]!;
+			if (op.opcode !== "UNARY") throw new Error("Missing numeric primitive unary");
+			expect(out.native.instructions[ip]?.kind).toBe("exact-operator-input-kinds");
+			expect(out.native.registerRepresentations[op.dst]).toBe("boxed");
+			expect(out.native.storage!.rootRegisters).not.toContain(op.dst);
+			expect(out.native.storage!.expressionIps).not.toContain(ip);
+			expect(deserializeCompilerArtifact(serializeCompilerArtifact(out.image))).toEqual(
+				out.image,
+			);
+		},
+	);
+
+	it("keeps unknown addition rooted even when its other operand is numeric", () => {
+		const out = inspectStaticValueFunction(
+			"function compute(left,gate,condition){const value=left+3;gate();return condition?value:undefined;}globalThis.compute=compute;",
+			"compute",
+		);
+		const op = out.native.body.instructions.find(
+			(op) => op.opcode === "BINARY" && op.operator === "+",
+		)!;
+		if (op.opcode !== "BINARY") throw new Error("Missing unknown addition");
+		expect(out.native.storage!.rootRegisters).toContain(op.dst);
+	});
+
+	it("keeps Boolean tostring results traced despite exact native input semantics", () => {
+		const out = inspectStaticValueFunction(
+			"function compute(input,gate){const flag=!input;const value=`${flag}`;gate();return value;}globalThis.compute=compute;",
+			"compute",
+		);
+		const ip = out.native.body.instructions.findIndex(
+			(op) => op.opcode === "UNARY" && op.operator === "tostring",
+		);
+		const op = out.native.body.instructions[ip]!;
+		if (op.opcode !== "UNARY") throw new Error("Missing tostring");
+		expect(out.native.storage!.rootRegisters).toContain(op.dst);
+	});
+
 	it.each([
 		"+left",
 		"!left",
@@ -164,21 +237,25 @@ describe("untraced boxed operator storage", () => {
 		);
 	});
 
-	it("restores a traced local when an operator's operand proof admits heap values", () => {
+	it("restores a traced local when both operands can produce a heap BigInt result", () => {
 		const out = storedOperator("a*b");
 		const instructions = out.native.instructions.map((plan, ip) =>
 			ip === out.ip
 				? {
 						kind: "exact-operator-input-kinds" as const,
 						inputKindMasks: [
-							COMPILER_VALUE_KIND_NUMBER | COMPILER_VALUE_KIND_STRING,
-							COMPILER_VALUE_KIND_NUMBER,
+							COMPILER_VALUE_KIND_NUMBER |
+								COMPILER_VALUE_KIND_STRING |
+								COMPILER_VALUE_KIND_BIGINT,
+							COMPILER_VALUE_KIND_NUMBER | COMPILER_VALUE_KIND_BIGINT,
 						] as const,
 					}
 				: plan,
 		);
 		const reps = out.native.registerRepresentations.map((rep, local) =>
-			local === (out.op.opcode === "BINARY" ? out.op.left : out.op.src)
+			(out.op.opcode === "BINARY" ? [out.op.left, out.op.right] : [out.op.src]).includes(
+				local,
+			)
 				? ("boxed" as const)
 				: rep,
 		);

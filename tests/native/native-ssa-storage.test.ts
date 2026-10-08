@@ -36,6 +36,26 @@ describe("independent native SSA storage", () => {
 	}, 600_000);
 
 	it("preserves scalar arithmetic, loop transport, and suspended heap locals", () => {
+		const product = image.native.functions.find(
+			(fn) =>
+				String.fromCharCode(
+					...(image.runtime.stringConstants[fn.body.nameStringIndex] ?? []),
+				) === "coerciveImmediateProduct",
+		)!;
+		expect(product).toBeDefined();
+		const productIp = product.body.instructions.findIndex(
+			(op) => op.opcode === "BINARY" && op.operator === "*",
+		);
+		const productOp = product.body.instructions[productIp]!;
+		if (productOp.opcode !== "BINARY") throw new Error("Missing coercive product");
+		expect(product.registerRepresentations[productOp.left]).toBe("boxed");
+		expect(product.registerRepresentations[productOp.dst]).toBe("boxed");
+		expect(product.storage!.rootRegisters).not.toContain(productOp.dst);
+		expect(product.storage!.rootRegisters).toContain(productOp.left);
+		expect(product.storage!.expressionIps).not.toContain(productIp);
+		expect(
+			emitCompiledFunction(product, product.functionIndex, "", false),
+		).not.toBeNull();
 		for (const name of ["iteratorDoneKernel", "iteratorDoneText"]) {
 			const native = image.native.functions.find(
 				(fn) =>

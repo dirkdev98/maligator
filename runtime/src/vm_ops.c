@@ -3761,7 +3761,6 @@ static bool mal_vm_op_is_relational(MalBinaryOp op) {
 
 static bool mal_vm_binary_coerce_operands(MalVm *vm, MalBinaryOp op, MalValue *left, MalValue *right) {
     if (op == MAL_BIN_ADD) {
-        // Addition uses the default hint; other coercive operators use the number hint.
         return mal_vm_to_primitive(vm, *left, MAL_TO_PRIMITIVE_DEFAULT, left) &&
             mal_vm_to_primitive(vm, *right, MAL_TO_PRIMITIVE_DEFAULT, right);
     } else if (mal_vm_op_is_numeric(op)) {

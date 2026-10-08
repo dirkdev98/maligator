@@ -37,6 +37,60 @@ export type CompilerOperatorInputKindMasks =
 	| readonly [CompilerValueKindMask]
 	| readonly [CompilerValueKindMask, CompilerValueKindMask];
 
+export const COMPILER_NUMERIC_UNARY_OPERATORS: ReadonlySet<string> = new Set([
+	"-",
+	"+",
+	"~",
+	"increment",
+	"decrement",
+	"tonumeric",
+]);
+export const COMPILER_NUMERIC_BINARY_OPERATORS: ReadonlySet<string> = new Set([
+	"+",
+	"-",
+	"*",
+	"/",
+	"%",
+	"**",
+	"&",
+	"|",
+	"^",
+	"<<",
+	">>",
+	">>>",
+]);
+
+// Transfers normal result kinds; zero denotes an unseeded lattice value, not an unknown kind.
+export function compilerNumericResultKind(
+	operation: "unary" | "binary" | "add",
+	left: CompilerValueKindMask,
+	right: CompilerValueKindMask = 0,
+): CompilerValueKindMask {
+	if (left === 0 || (operation !== "unary" && right === 0)) return 0;
+	const leftNumeric = compilerValueKindMaskIsSubset(
+		left,
+		COMPILER_VALUE_KIND_NUMERIC_PRIMITIVE,
+	);
+	if (operation === "unary")
+		return leftNumeric ? COMPILER_VALUE_KIND_NUMBER : COMPILER_VALUE_KIND_TOP;
+	const rightNumeric = compilerValueKindMaskIsSubset(
+		right,
+		COMPILER_VALUE_KIND_NUMERIC_PRIMITIVE,
+	);
+	if (operation === "binary")
+		return leftNumeric || rightNumeric
+			? COMPILER_VALUE_KIND_NUMBER
+			: COMPILER_VALUE_KIND_TOP;
+	if (
+		compilerValueKindMaskIsSubset(left, COMPILER_VALUE_KIND_STRING) ||
+		compilerValueKindMaskIsSubset(right, COMPILER_VALUE_KIND_STRING)
+	)
+		return COMPILER_VALUE_KIND_STRING;
+	return leftNumeric && rightNumeric
+		? COMPILER_VALUE_KIND_NUMBER
+		: COMPILER_VALUE_KIND_TOP;
+}
+
 // Describes normal completion only; coercion can still call user code, collect or throw.
 export function compilerOperatorFixedResultKind(
 	opcode: string,

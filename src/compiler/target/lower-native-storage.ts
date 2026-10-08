@@ -859,6 +859,56 @@ export function nativeVariantContract(
 	};
 }
 
+function immediateOperatorResult(
+	op: Extract<BytecodeInstruction, { opcode: "UNARY" | "BINARY" }>,
+	reps: NativeFunctionPlan["registerRepresentations"],
+	plan: NativeFunctionPlan["instructions"][number],
+): boolean {
+	if (pureScalarOperation(op, reps, plan)) return true;
+	const opcode = op.opcode === "UNARY" ? "unary" : "binary";
+	const fixed = compilerOperatorFixedResultKind(opcode, op.operator);
+	if (fixed !== undefined)
+		return compilerValueKindMaskIsSubset(
+			fixed,
+			COMPILER_VALUE_KIND_NUMBER | COMPILER_VALUE_KIND_BOOLEAN,
+		);
+	const masks =
+		plan?.kind === "exact-operator-input-kinds" &&
+		compilerOperatorInputKindsHaveExactNativeSemantics(
+			opcode,
+			op.operator,
+			plan.inputKindMasks,
+		)
+			? plan.inputKindMasks
+			: undefined;
+	const kind = (local: number, index: number): number => {
+		switch (reps[local]) {
+			case "number":
+			case "int32":
+				return COMPILER_VALUE_KIND_NUMBER;
+			case "boolean":
+				return COMPILER_VALUE_KIND_BOOLEAN;
+			case "string":
+				return COMPILER_VALUE_KIND_STRING;
+			default:
+				return masks?.[index] ?? COMPILER_VALUE_KIND_TOP;
+		}
+	};
+	if (op.opcode === "UNARY")
+		return (
+			COMPILER_NUMERIC_UNARY_OPERATORS.has(op.operator) &&
+			compilerNumericResultKind("unary", kind(op.src, 0)) === COMPILER_VALUE_KIND_NUMBER
+		);
+	return (
+		COMPILER_NUMERIC_BINARY_OPERATORS.has(op.operator) &&
+		compilerNumericResultKind(
+			op.operator === "+" ? "add" : "binary",
+			kind(op.left, 0),
+			kind(op.right, 1),
+		) === COMPILER_VALUE_KIND_NUMBER
+	);
+}
+
 function untracedOperatorRegisters(
 	native: NativeFunctionPlan,
 	body: NativeStorageBodyFacts,
@@ -875,14 +925,7 @@ function untracedOperatorRegisters(
 			native.storageValues[op.dst]! >= 0 &&
 			body.writeCounts[op.dst] === 1 &&
 			native.registerRepresentations[op.dst] === "boxed" &&
-			(pureScalarOperation(op, native.registerRepresentations, native.instructions[ip]) ||
-				compilerValueKindMaskIsSubset(
-					compilerOperatorFixedResultKind(
-						op.opcode === "UNARY" ? "unary" : "binary",
-						op.operator,
-					) ?? 0,
-					COMPILER_VALUE_KIND_NUMBER | COMPILER_VALUE_KIND_BOOLEAN,
-				))
+			immediateOperatorResult(op, native.registerRepresentations, native.instructions[ip])
 		)
 			registers.add(op.dst);
 	}
@@ -1547,4 +1590,10 @@ import {
 	COMPILER_VALUE_KIND_BOOLEAN,
 	compilerOperatorFixedResultKind,
 	compilerValueKindMaskIsSubset,
+	compilerOperatorInputKindsHaveExactNativeSemantics,
+	compilerNumericResultKind,
+	COMPILER_NUMERIC_UNARY_OPERATORS,
+	COMPILER_NUMERIC_BINARY_OPERATORS,
+	COMPILER_VALUE_KIND_STRING,
+	COMPILER_VALUE_KIND_TOP,
 } from "../shared/compiler-value-kinds.ts";

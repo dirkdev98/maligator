@@ -5,6 +5,12 @@ function coerciveImmediatePlus(input, gate, condition) {
 	gate();
 	return condition ? value : undefined;
 }
+function coerciveImmediateProduct(left, right, gate, condition) {
+	const number = +right;
+	const value = left * number;
+	gate();
+	return condition ? value : undefined;
+}
 function coerciveImmediateLess(left, right, gate, condition) {
 	const value = left < right;
 	gate();
@@ -36,6 +42,7 @@ function nonCoerciveImmediateEqual(left, right, gate, condition) {
 	return condition ? value : undefined;
 }
 globalThis.coerciveImmediatePlus = coerciveImmediatePlus;
+globalThis.coerciveImmediateProduct = coerciveImmediateProduct;
 globalThis.coerciveImmediateLess = coerciveImmediateLess;
 globalThis.coerciveImmediateEqual = coerciveImmediateEqual;
 globalThis.coerciveImmediateGreaterEqual = coerciveImmediateGreaterEqual;
@@ -66,6 +73,39 @@ for (const input of [-0, NaN, Infinity, 3]) {
 		Object.is(value, -0),
 		coercionOrder.join(","),
 	);
+}
+for (const input of [-0, NaN, Infinity, "3", null, undefined]) {
+	coercionOrder.length = 0;
+	const value = coerciveImmediateProduct(
+		coercionInput("left", input),
+		coercionInput("right", 2),
+		coercionGate,
+		true,
+	);
+	console.log(
+		"coercive-immediate-product",
+		String(value),
+		Object.is(value, -0),
+		coercionOrder.join(","),
+	);
+}
+for (const input of [1n, Symbol("numeric-product")]) {
+	coercionOrder.length = 0;
+	try {
+		coerciveImmediateProduct(
+			coercionInput("left", input),
+			coercionInput("right", 2),
+			coercionGate,
+			true,
+		);
+	} catch (error) {
+		gc();
+		console.log(
+			"coercive-immediate-product-reject",
+			error instanceof TypeError,
+			coercionOrder.join(","),
+		);
+	}
 }
 for (const [left, right] of [
 	[2, 3],
@@ -134,6 +174,7 @@ for (const input of [1n, Symbol("unary-plus")]) {
 }
 for (const operation of [
 	coerciveImmediatePlus,
+	coerciveImmediateProduct,
 	coerciveImmediateLess,
 	coerciveImmediateEqual,
 	coerciveImmediateGreaterEqual,

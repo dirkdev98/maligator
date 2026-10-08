@@ -11,6 +11,9 @@ import {
 	COMPILER_VALUE_KIND_NUMERIC_PRIMITIVE,
 	compilerOperatorInputKindsHaveExactNativeSemantics,
 	compilerOperatorFixedResultKind,
+	compilerNumericResultKind,
+	COMPILER_NUMERIC_UNARY_OPERATORS as NUMERIC_UNARY_OPERATORS,
+	COMPILER_NUMERIC_BINARY_OPERATORS as NUMERIC_BINARY_OPERATORS,
 	COMPILER_VALUE_KIND_OBJECT,
 	COMPILER_VALUE_KIND_STRING,
 	COMPILER_VALUE_KIND_SYMBOL,
@@ -97,32 +100,10 @@ export interface CoreValueKindInputs {
 	) => CompilerValueKindMask | undefined;
 }
 
-const NUMERIC_UNARY_OPERATORS: ReadonlySet<string> = new Set([
-	"-",
-	"+",
-	"~",
-	"increment",
-	"decrement",
-	"tonumeric",
-]);
 const NON_COERCING_UNARY_OPERATORS: ReadonlySet<string> = new Set([
 	"!",
 	"typeof",
 	"void",
-]);
-const NUMERIC_BINARY_OPERATORS: ReadonlySet<string> = new Set([
-	"+",
-	"-",
-	"*",
-	"/",
-	"%",
-	"**",
-	"&",
-	"|",
-	"^",
-	"<<",
-	">>",
-	">>>",
 ]);
 const SIGNED_INT32_BINARY_OPERATORS: ReadonlySet<string> = new Set([
 	"&",
@@ -229,27 +210,13 @@ function transferredKind(
 	const left = mask(inputs[start]! as CoreValueId);
 	if (kind === KIND_TRANSFER_COPY) return left;
 	if (kind === KIND_TRANSFER_NUMERIC_UNARY)
-		return left === 0
-			? 0
-			: compilerValueKindMaskIsSubset(left, COMPILER_VALUE_KIND_NUMERIC_PRIMITIVE)
-				? COMPILER_VALUE_KIND_NUMBER
-				: COMPILER_VALUE_KIND_TOP;
+		return compilerNumericResultKind("unary", left);
 	const right = mask(inputs[start + 1]! as CoreValueId);
-	if (left === 0 || right === 0) return 0;
-	if (kind === KIND_TRANSFER_BINARY)
-		return compilerValueKindMaskIsSubset(left, COMPILER_VALUE_KIND_NUMERIC_PRIMITIVE) ||
-			compilerValueKindMaskIsSubset(right, COMPILER_VALUE_KIND_NUMERIC_PRIMITIVE)
-			? COMPILER_VALUE_KIND_NUMBER
-			: COMPILER_VALUE_KIND_TOP;
-	if (
-		compilerValueKindMaskIsSubset(left, COMPILER_VALUE_KIND_STRING) ||
-		compilerValueKindMaskIsSubset(right, COMPILER_VALUE_KIND_STRING)
-	)
-		return COMPILER_VALUE_KIND_STRING;
-	return compilerValueKindMaskIsSubset(left, COMPILER_VALUE_KIND_NUMERIC_PRIMITIVE) &&
-		compilerValueKindMaskIsSubset(right, COMPILER_VALUE_KIND_NUMERIC_PRIMITIVE)
-		? COMPILER_VALUE_KIND_NUMBER
-		: COMPILER_VALUE_KIND_TOP;
+	return compilerNumericResultKind(
+		kind === KIND_TRANSFER_BINARY ? "binary" : "add",
+		left,
+		right,
+	);
 }
 
 function isNumberValue(fn: CoreFunctionStore, value: CoreValueId): boolean {
