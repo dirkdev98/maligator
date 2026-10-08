@@ -28,6 +28,7 @@ import type {
 	ClosureCaptureValue,
 	RuntimeImage,
 } from "./runtime-image.ts";
+import { stablePartitionHash } from "./stable-partition-hash.ts";
 
 type VmBinaryOperator = Extract<BytecodeInstruction, { opcode: "BINARY" }>["operator"];
 
@@ -1350,15 +1351,6 @@ function generatedHeaderFiles(lines: ReadonlyArray<string>): Array<string> {
 	});
 }
 
-function stablePartitionHash(value: string, round: number): number {
-	let hash = (0x811c9dc5 ^ Math.imul(round + 1, 0x9e3779b1)) >>> 0;
-	for (let index = 0; index < value.length; index++) {
-		hash ^= value.charCodeAt(index);
-		hash = Math.imul(hash, 0x01000193) >>> 0;
-	}
-	return hash;
-}
-
 const MAX_STABLE_PARTITION_HASH_BITS = 64;
 
 function compiledFunctionPartitionKeys(image: ProgramImage): Array<string> {
@@ -1572,8 +1564,10 @@ export function emitProgramTranslationUnits(
 				const hash =
 					part.partitionHashes[round] ??
 					(part.partitionHashes[round] = stablePartitionHash(
-						`${part.kind}:${part.partitionKey}`,
+						part.partitionKey,
 						round,
+						`${part.kind}:`,
+						part.kind === "data array" ? part.symbol : undefined,
 					));
 				const target = ((hash >>> bit) & 1) === 0 ? left : right;
 				target.push(part);
@@ -1591,7 +1585,7 @@ export function emitProgramTranslationUnits(
 	const dataParts = splitData.definitions.map((data) => ({
 		kind: "data array" as const,
 		symbol: data.symbol,
-		partitionKey: data.source.replaceAll(data.symbol, "<self>"),
+		partitionKey: data.source,
 		source: data.source,
 	}));
 	const codeParts: Array<
