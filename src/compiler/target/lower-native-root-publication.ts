@@ -197,7 +197,9 @@ export function nativePrivateRootRegisters(
 			continue;
 		}
 		const reads = body?.reads[ip] ?? vmInstructionReadRegisters(instruction);
-		for (const register of candidates) {
+		// Every exclusion below needs this instruction to read or write the register.
+		for (const register of [...writes, ...reads]) {
+			if (!candidates.has(register)) continue;
 			const writesRegister = writes.includes(register);
 			// Every iterator-step variant writes its final VM outputs only after
 			// internally rooted runtime temporaries have returned successfully.

@@ -3,34 +3,27 @@ import type { NativeFunctionPlan } from "./program-image.ts";
 import { vmInstructionWriteRegisters } from "./runtime-image.ts";
 import type { BytecodeFunction } from "./runtime-image.ts";
 
-function ordinarySuccessors(fn: BytecodeFunction, ip: number): ReadonlyArray<number> {
-	const instruction = fn.instructions[ip]!;
-	if (instruction.opcode === "JUMP") return [instruction.targetIp];
-	if (instruction.opcode === "JUMP_IF") return [instruction.targetIp, ip + 1];
-	if (
-		instruction.opcode === "RETURN" ||
-		instruction.opcode === "THROW" ||
-		instruction.opcode === "LOAD_UNDECLARED"
-	)
-		return [];
-	return [ip + 1];
-}
-
-function reachableWithin(
-	start: number,
-	low: number,
-	high: number,
-	successors: (ip: number) => ReadonlyArray<number>,
-): ReadonlySet<number> {
-	const reached = new Set<number>();
-	const pending = [start];
-	while (pending.length > 0) {
-		const ip = pending.pop()!;
-		if (ip < low || ip > high || reached.has(ip)) continue;
-		reached.add(ip);
-		pending.push(...successors(ip));
+/** Ordinary successors as two parallel tables; -1 marks an absent edge. */
+function ordinarySuccessorTables(
+	fn: BytecodeFunction,
+): readonly [Int32Array, Int32Array] {
+	const count = fn.instructions.length;
+	const first = new Int32Array(count).fill(-1);
+	const second = new Int32Array(count).fill(-1);
+	for (let ip = 0; ip < count; ip++) {
+		const instruction = fn.instructions[ip]!;
+		if (instruction.opcode === "JUMP") first[ip] = instruction.targetIp;
+		else if (instruction.opcode === "JUMP_IF") {
+			first[ip] = instruction.targetIp;
+			second[ip] = ip + 1;
+		} else if (
+			instruction.opcode !== "RETURN" &&
+			instruction.opcode !== "THROW" &&
+			instruction.opcode !== "LOAD_UNDECLARED"
+		)
+			first[ip] = ip + 1;
 	}
-	return reached;
+	return [first, second];
 }
 
 interface NativeRootProfitabilityLoop {
@@ -38,18 +31,30 @@ interface NativeRootProfitabilityLoop {
 	readonly end: number;
 }
 
+export interface NativeRootProfitabilityCycle {
+	has(ip: number): boolean;
+}
+
 export interface NativeRootProfitabilityContext {
 	readonly loops: () => ReadonlyArray<NativeRootProfitabilityLoop>;
-	readonly cycleIps: (loop: NativeRootProfitabilityLoop) => ReadonlySet<number>;
+	readonly cycleIps: (loop: NativeRootProfitabilityLoop) => NativeRootProfitabilityCycle;
 }
+
+const EMPTY_CYCLE: NativeRootProfitabilityCycle = { has: () => false };
+const FORWARD = 1;
+const BACKWARD = 2;
 
 // This policy excludes exceptional edges and throwing undeclared loads; other planners use different CFGs.
 export function createNativeRootProfitabilityContext(
 	fn: BytecodeFunction,
 ): NativeRootProfitabilityContext {
 	let loops: Array<NativeRootProfitabilityLoop> | undefined;
-	let predecessors: ReadonlyArray<ReadonlyArray<number>> | undefined;
-	const cycles = new Map<number, ReadonlySet<number>>();
+	let successors: readonly [Int32Array, Int32Array] | undefined;
+	let predecessors:
+		| { readonly offsets: Int32Array; readonly sources: Int32Array }
+		| undefined;
+	let pending: Int32Array | undefined;
+	const cycles = new Map<number, NativeRootProfitabilityCycle>();
 	return {
 		loops: () => {
 			loops ??= fn.instructions.flatMap((instruction, ip) =>
@@ -63,34 +68,64 @@ export function createNativeRootProfitabilityContext(
 		cycleIps: (loop) => {
 			const previous = cycles.get(loop.end);
 			if (previous !== undefined) return previous;
-			const forward = reachableWithin(loop.start, loop.start, loop.end, (ip) =>
-				ordinarySuccessors(fn, ip),
-			);
-			if (!forward.has(loop.end)) {
-				const empty = new Set<number>();
-				cycles.set(loop.end, empty);
-				return empty;
+			const { start, end } = loop;
+			const [first, second] = (successors ??= ordinarySuccessorTables(fn));
+			const stack = (pending ??= new Int32Array(fn.instructions.length));
+			const marks = new Uint8Array(end - start + 1);
+			let depth = 0;
+			const reach = (ip: number, mark: number): void => {
+				if (ip < start || ip > end || (marks[ip - start]! & mark) !== 0) return;
+				marks[ip - start]! |= mark;
+				stack[depth++] = ip;
+			};
+			reach(start, FORWARD);
+			while (depth > 0) {
+				const ip = stack[--depth]!;
+				reach(first[ip]!, FORWARD);
+				reach(second[ip]!, FORWARD);
 			}
-			if (predecessors === undefined) {
-				const reverse: Array<Array<number>> = Array.from(
-					{ length: fn.instructions.length },
-					() => [],
-				);
-				for (let ip = 0; ip < fn.instructions.length; ip++)
-					for (const target of ordinarySuccessors(fn, ip)) reverse[target]?.push(ip);
-				predecessors = reverse;
+			if ((marks[end - start]! & FORWARD) === 0) {
+				cycles.set(end, EMPTY_CYCLE);
+				return EMPTY_CYCLE;
 			}
-			const backward = reachableWithin(
-				loop.end,
-				loop.start,
-				loop.end,
-				(ip) => predecessors![ip]!,
-			);
-			const cycle = new Set([...forward].filter((ip) => backward.has(ip)));
-			cycles.set(loop.end, cycle);
+			predecessors ??= ordinaryPredecessors(first, second);
+			const { offsets, sources } = predecessors;
+			reach(end, BACKWARD);
+			while (depth > 0) {
+				const ip = stack[--depth]!;
+				for (let edge = offsets[ip]!; edge < offsets[ip + 1]!; edge++)
+					reach(sources[edge]!, BACKWARD);
+			}
+			const cycle: NativeRootProfitabilityCycle = {
+				has: (ip) =>
+					ip >= start && ip <= end && marks[ip - start] === (FORWARD | BACKWARD),
+			};
+			cycles.set(end, cycle);
 			return cycle;
 		},
 	};
+}
+
+function ordinaryPredecessors(
+	first: Int32Array,
+	second: Int32Array,
+): { readonly offsets: Int32Array; readonly sources: Int32Array } {
+	const count = first.length;
+	const offsets = new Int32Array(count + 1);
+	for (const targets of [first, second])
+		for (let ip = 0; ip < count; ip++) {
+			const target = targets[ip]!;
+			if (target >= 0 && target < count) offsets[target + 1]!++;
+		}
+	for (let ip = 0; ip < count; ip++) offsets[ip + 1]! += offsets[ip]!;
+	const cursor = offsets.slice(0, count);
+	const sources = new Int32Array(offsets[count]!);
+	for (const targets of [first, second])
+		for (let ip = 0; ip < count; ip++) {
+			const target = targets[ip]!;
+			if (target >= 0 && target < count) sources[cursor[target]!++] = ip;
+		}
+	return { offsets, sources };
 }
 
 function occursWithin(
