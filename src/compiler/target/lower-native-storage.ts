@@ -552,20 +552,33 @@ function rematerializedConstantIps(
 	const writes = body.writeCounts;
 	return fn.instructions.flatMap((op, ip) => {
 		if (
-			!["CREATE_NUMBER", "CREATE_F64", "CREATE_BOOLEAN", "CREATE_STRING"].includes(
-				op.opcode,
-			) ||
+			![
+				"CREATE_NUMBER",
+				"CREATE_F64",
+				"CREATE_BOOLEAN",
+				"CREATE_STRING",
+				"CREATE_BIGINT",
+				"CREATE_NULL",
+				"CREATE_UNDEFINED",
+			].includes(op.opcode) ||
 			!("dst" in op) ||
 			op.dst < fn.parameterCount + fn.argumentSnapshotCount ||
 			!(native.storageValues![op.dst]! >= 0) ||
-			writes[op.dst] !== 1 ||
-			(op.opcode === "CREATE_STRING"
-				? !["boxed", "string"].includes(native.registerRepresentations[op.dst]!) ||
-					immutableOwnership.blocked.has(ip) ||
-					immutableOwnership.borrowed.has(op.dst)
-				: op.opcode === "CREATE_BOOLEAN"
-					? native.registerRepresentations[op.dst] !== "boolean"
-					: !["number", "int32"].includes(native.registerRepresentations[op.dst]!))
+			writes[op.dst] !== 1
+		)
+			return [];
+		const rep = native.registerRepresentations[op.dst];
+		const scalar =
+			op.opcode === "CREATE_BOOLEAN"
+				? rep === "boolean"
+				: (op.opcode === "CREATE_NUMBER" || op.opcode === "CREATE_F64") &&
+					(rep === "number" || rep === "int32");
+		const boxed = rep === "boxed" || (op.opcode === "CREATE_STRING" && rep === "string");
+		if (
+			!scalar &&
+			(!boxed ||
+				immutableOwnership.blocked.has(ip) ||
+				immutableOwnership.borrowed.has(op.dst))
 		)
 			return [];
 		if (!body.controlFlow!.isReachable(ip)) return [];
@@ -838,17 +851,18 @@ function rootStorage(
 	rematerializedConstantIps: ReadonlyArray<number>,
 ) {
 	const fn = native.body;
-	// Literal rows are immortal and remain at their VM-owned address across eval splices.
-	const immortal = new Set(
-		rematerializedConstantIps.flatMap((ip) => {
+	// Admitted literals are untraced tags or immortal rows with stable addresses.
+	const rootFree = new Set(
+		rematerializedConstantIps.map((ip) => {
 			const op = fn.instructions[ip]!;
-			return op.opcode === "CREATE_STRING" ? [op.dst] : [];
+			if (!("dst" in op)) throw new Error("Rematerialized constant lacks a destination");
+			return op.dst;
 		}),
 	);
 	const roots = nativeFrameRootRegisters(fn, native).filter(
 		(local) =>
 			["boxed", "string"].includes(native.registerRepresentations[local]!) &&
-			!immortal.has(local),
+			!rootFree.has(local),
 	);
 	if (roots.length > 64) {
 		const counts = new Uint32Array(fn.registerCount);

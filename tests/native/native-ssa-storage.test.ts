@@ -652,7 +652,11 @@ describe("independent native SSA storage", () => {
 			(fn) => fn.mode === "resumable",
 		))
 			expect(emitCompiledFunction(fn, fn.functionIndex, "", false)).not.toBeNull();
-		for (const name of ["immortalLiteralAcrossEval", "immortalLiteralAcrossAwait"]) {
+		for (const [name, opcode] of [
+			["immortalLiteralAcrossEval", "CREATE_STRING"],
+			["immortalLiteralAcrossAwait", "CREATE_STRING"],
+			["immortalBigIntAcrossEval", "CREATE_BIGINT"],
+		]) {
 			const literal = pair.programImage.native.functions.find(
 				(fn) =>
 					String.fromCharCode(
@@ -660,11 +664,9 @@ describe("independent native SSA storage", () => {
 					) === name,
 			)!;
 			expect(literal).toBeDefined();
-			const literalIp = literal.body.instructions.findIndex(
-				(op) => op.opcode === "CREATE_STRING",
-			);
+			const literalIp = literal.body.instructions.findIndex((op) => op.opcode === opcode);
 			const producer = literal.body.instructions[literalIp]!;
-			if (producer.opcode !== "CREATE_STRING")
+			if (producer.opcode !== "CREATE_STRING" && producer.opcode !== "CREATE_BIGINT")
 				throw new Error("Missing eval literal producer");
 			expect(literal.storage!.rematerializedConstantIps).toContain(literalIp);
 			expect(literal.storage!.rootRegisters).not.toContain(producer.dst);

@@ -68,3 +68,20 @@ literalPromise.then((text) => {
 		throw new Error("immutable literal changed across await or eval splice");
 	console.log("compact-immutable-await", text);
 });
+
+function* immortalBigIntAcrossEval() {
+	const value = 123456789012345678901234567890n;
+	yield value;
+	eval("(function bigintPoolSplice() { return 9876543210987654321n; })");
+	gc();
+	return value;
+}
+const bigintIterator = immortalBigIntAcrossEval();
+const bigintLiteral = bigintIterator.next().value;
+gc();
+const bigintRestored = bigintIterator.next();
+if (!bigintRestored.done || bigintRestored.value !== bigintLiteral)
+	throw new Error(
+		"immutable BigInt changed across suspension, collection or eval splice",
+	);
+console.log("compact-immutable-bigint", String(bigintRestored.value));

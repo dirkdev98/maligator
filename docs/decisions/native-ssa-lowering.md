@@ -89,7 +89,7 @@ transition may grow raw slot storage without collecting. Definitions owned by
 regions, constructor initialization or field-call spans retain their publication
 contracts; computed boxed keys keep the coercing fallback.
 
-Immutable numeric, boolean and string SSA constants use a separate rematerialization plan,
+Immutable numeric, boolean, null, undefined, string and BigInt SSA constants use a separate rematerialization plan,
 so repeated uses and intervening effects do not force a C local. Selection requires
 one explicit definition outside argument and synthetic storage, with every use
 dominated by that definition in the logical control-flow graph, including snapshot
@@ -103,7 +103,11 @@ its relocation base, because UTF-16 widening mutates that row in place. Admitted
 strings need neither a physical shadow root nor a suspension slot. Opaque owners
 and borrowed locals retain their producer storage. Validation derives root layout
 and snapshots from the stored safe subset, so retaining a producer restores its
-required storage rather than inheriting the maximally elided layout.
+required storage rather than inheriting the maximally elided layout. Boxed
+primitives keep their MalValue tags and numeric boxing, including int32 payloads,
+NaN canonicalization and negative zero. Pooled BigInts retain the selected symbol
+namespace or relocation base; arithmetic and coercion keep their existing helpers.
+The TDZ hole sentinel remains in explicit storage.
 Selected switches and property fast paths retain priority over constant producer
 elision. Scalar expression selection protects opaque region IPs and their borrowed
 destinations, field-call spans, and literal-switch spans individually. Unrelated

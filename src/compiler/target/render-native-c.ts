@@ -456,6 +456,8 @@ export function directCompiledEntryKey(functionIndex: number, entryId: number): 
 	return `${functionIndex}:${entryId}`;
 }
 
+const UNRELOCATED_NATIVE_EXPRESSIONS = nativeRelocationExpressions(false);
+
 interface CoroutineContext {
 	readonly suspension: NativeSuspensionPlan;
 	readonly positions: ReadonlyArray<number>;
@@ -1142,7 +1144,13 @@ function emitCompiledVariant(
 			if (!("dst" in op)) throw new Error("Native expression lacks a destination");
 			return [
 				op.dst,
-				renderScalarExpression(op, reps, nativeContract.instructions[ip], relocation),
+				renderScalarExpression(
+					op,
+					reps,
+					nativeContract.instructions[ip],
+					relocation,
+					suffix,
+				),
 			];
 		}),
 	);
@@ -1428,22 +1436,35 @@ function renderScalarExpression(
 	op: BytecodeInstruction,
 	reps: ReadonlyArray<RegisterRep>,
 	plan?: NativeInstructionPlan,
-	relocation: NativeRelocationExpressions = nativeRelocationExpressions(false),
+	relocation: NativeRelocationExpressions = UNRELOCATED_NATIVE_EXPRESSIONS,
+	suffix = "",
 ): string {
 	const number = (local: number) =>
 		reps[local] === "boxed" ? `mal_ops_number_as_f64(r${local})` : `(f64) r${local}`;
 	const int32 = (local: number) =>
 		reps[local] === "int32" ? `r${local}` : `mal_ops_number_to_i32(${number(local)})`;
 	switch (op.opcode) {
+		case "CREATE_UNDEFINED":
+			return "MAL_VALUE_UNDEFINED";
+		case "CREATE_NULL":
+			return "MAL_VALUE_NULL";
+		case "CREATE_BIGINT":
+			return relocation.bigintValue(op.bigintIndex, suffix);
 		case "CREATE_STRING":
 			return relocation.stringValue(op.stringIndex);
 		case "CREATE_NUMBER":
 		case "CREATE_F64":
+			if (reps[op.dst] === "boxed")
+				return op.opcode === "CREATE_NUMBER"
+					? `mal_value_from_i32(${op.value})`
+					: `mal_value_from_f64_convert_nan(${cF64Literal(op.value)})`;
 			return reps[op.dst] === "int32"
 				? `(i32) (${cF64Literal(op.value)})`
 				: cF64Literal(op.value);
 		case "CREATE_BOOLEAN":
-			return String(op.value);
+			return reps[op.dst] === "boxed"
+				? `mal_value_new_boolean(${op.value})`
+				: String(op.value);
 		case "MOVE":
 			return `r${op.src}`;
 		case "UNARY":
@@ -1841,7 +1862,16 @@ function emitResumableFunction(
 		[...storage.expressionIps, ...storage.rematerializedConstantIps].map((ip) => {
 			const op = fn.instructions[ip]!;
 			if (!("dst" in op)) throw new Error("Native expression lacks a destination");
-			return [op.dst, renderScalarExpression(op, reps, native.instructions[ip])];
+			return [
+				op.dst,
+				renderScalarExpression(
+					op,
+					reps,
+					native.instructions[ip],
+					UNRELOCATED_NATIVE_EXPRESSIONS,
+					suffix,
+				),
+			];
 		}),
 	);
 	const body = emitBody(
