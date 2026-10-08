@@ -1,10 +1,15 @@
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import * as path from "node:path";
+import { buildDerivationFromConfig } from "./build-config.ts";
+import { compileEntrypoint } from "./compiler/pipeline/compile-program.ts";
+import { emitProgramTranslationUnits } from "./compiler/target/emit-program-image.ts";
 import { buildLocalBinary } from "./local-build.ts";
 import { resolveNativeBuildContext } from "./native-build-context.ts";
 import {
-	compileSelfhostNativeTarget,
+	SELFHOST_NATIVE_EMISSION,
+	SELFHOST_NATIVE_FRONTEND,
 	selfhostNativeEvidence,
+	selfhostNativeTargetConfig,
 } from "./selfhost-native-target.ts";
 
 const args = process.argv.slice(2);
@@ -28,14 +33,24 @@ if (compilerWire !== undefined && !existsSync(compilerWire)) {
 	throw new Error(`prebuilt compiler wire does not exist: ${compilerWire}`);
 }
 
-const target = compileSelfhostNativeTarget(inputPath, compilerWire !== undefined);
+const targetConfig = selfhostNativeTargetConfig(compilerWire !== undefined);
+const derivation = buildDerivationFromConfig(targetConfig);
+
+const definition = compileEntrypoint(path.resolve(inputPath), {
+	...SELFHOST_NATIVE_FRONTEND,
+	buildConfig: targetConfig,
+});
+const translationUnits = emitProgramTranslationUnits(
+	definition,
+	SELFHOST_NATIVE_EMISSION,
+);
 if (evidenceDirectory !== undefined) {
 	mkdirSync(evidenceDirectory, { recursive: true });
-	for (const { name, bytes } of selfhostNativeEvidence(target))
+	for (const { name, bytes } of selfhostNativeEvidence(definition, translationUnits))
 		writeFileSync(path.join(evidenceDirectory, name), bytes);
 }
 const context = resolveNativeBuildContext({
-	features: target.derivation.features,
+	features: derivation.features,
 	compilerBake:
 		compilerWire === undefined
 			? undefined
@@ -45,9 +60,9 @@ const result = buildLocalBinary({
 	context,
 	name: outputName,
 	outDir: path.resolve(outputDirectory),
-	cSource: target.translationUnits,
+	cSource: translationUnits,
 	verbose: true,
-	cacheSuffix: target.derivation.cacheSuffix,
+	cacheSuffix: derivation.cacheSuffix,
 });
 
 // oxlint-disable-next-line no-console -- CLI result consumed by the bootstrap check.

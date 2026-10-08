@@ -12,11 +12,17 @@ import { resolveBuildConfig } from "../src/build-config.ts";
 import { maligatorCacheDirectory } from "../src/cache-root.ts";
 import { CommandProgress } from "../src/command-progress.ts";
 import { stripCompactTypes } from "../src/compiler/frontend/compact-type-strip.ts";
-import { compileEntrypointToBuffer } from "../src/compiler/pipeline/compile-program.ts";
+import {
+	compileEntrypoint,
+	compileEntrypointToBuffer,
+} from "../src/compiler/pipeline/compile-program.ts";
+import { emitProgramTranslationUnits } from "../src/compiler/target/emit-program-image.ts";
 import { resolvePathExecutable } from "../src/rust-build.ts";
 import {
-	compileSelfhostNativeTarget,
+	SELFHOST_NATIVE_EMISSION,
+	SELFHOST_NATIVE_FRONTEND,
 	selfhostNativeEvidence,
+	selfhostNativeTargetConfig,
 } from "../src/selfhost-native-target.ts";
 import { buildNativeBinary, STRESS_ENV } from "../src/test-harness.ts";
 
@@ -151,7 +157,14 @@ for (const input of [fixture, storageFixture]) {
 			timeout: 180000,
 		},
 	).trim();
-	const expectedFiles = selfhostNativeEvidence(compileSelfhostNativeTarget(input, false));
+	const definition = compileEntrypoint(input, {
+		...SELFHOST_NATIVE_FRONTEND,
+		buildConfig: selfhostNativeTargetConfig(false),
+	});
+	const expectedFiles = selfhostNativeEvidence(
+		definition,
+		emitProgramTranslationUnits(definition, SELFHOST_NATIVE_EMISSION),
+	);
 	const actualNames = readdirSync(evidence).sort();
 	const expectedNames = expectedFiles.map((file) => file.name).sort();
 	if (JSON.stringify(actualNames) !== JSON.stringify(expectedNames))
@@ -159,9 +172,7 @@ for (const input of [fixture, storageFixture]) {
 			`${name}: self-hosted evidence files ${JSON.stringify(actualNames)} != Node ${JSON.stringify(expectedNames)}`,
 		);
 	for (const file of expectedFiles) {
-		const expectedBytes =
-			typeof file.bytes === "string" ? Buffer.from(file.bytes) : Buffer.from(file.bytes);
-		if (!readFileSync(path.join(evidence, file.name)).equals(expectedBytes))
+		if (!readFileSync(path.join(evidence, file.name)).equals(Buffer.from(file.bytes)))
 			throw new Error(
 				`${name}: self-hosted ${file.name} differs from the Node-hosted compiler`,
 			);
