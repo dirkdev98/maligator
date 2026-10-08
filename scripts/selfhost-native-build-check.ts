@@ -154,7 +154,8 @@ for (const input of [fixture, storageFixture]) {
 			env: isolatedEnv,
 			encoding: "utf-8",
 			stdio: ["ignore", "pipe", "inherit"],
-			timeout: 180000,
+			// The storage fixture's frames with 70+ live roots take about a minute to optimize in C.
+			timeout: 600000,
 		},
 	).trim();
 	const definition = compileEntrypoint(input, {
