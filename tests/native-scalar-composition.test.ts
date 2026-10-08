@@ -166,9 +166,26 @@ describe("native scalar plans around opaque and exceptional windows", () => {
 		const op = out.native.body.instructions[fusion.claimedIps.at(-1)!]!;
 		if (op.opcode !== "BINARY") throw new Error("Missing fusion finish");
 		expect(out.native.registerRepresentations[op.dst]).toBe("number");
+		expect(out.c.source).not.toMatch(
+			/if \(__nf_\d+_ok\) r\d+ = mal_ops_number_value\(__nf_/,
+		);
 		expect(out.c.source).toMatch(
 			/MalValue __binary_result_\d+ = [^;]*mal_vm_binary_op[^;]*;\n\s+if \([^\n]+\) goto __throw_exit;\n\s+r\d+ = mal_ops_number_as_f64\(__binary_result_\d+\);/,
 		);
+		expect(deserializeCompilerArtifact(serializeCompilerArtifact(out.image))).toEqual(
+			out.image,
+		);
+	});
+
+	it("materializes a fused first result when an unknown external operand misses its Number guard", () => {
+		const out = inspectStaticValueFunction(
+			"function compute(left,right,other,gate){const intermediate=left*right;const value=intermediate*other;gate();return value;}globalThis.compute=compute;",
+			"compute",
+		);
+		expect(
+			out.native.specializations.some((region) => region.kind === "numeric-fusion"),
+		).toBe(true);
+		expect(out.c.source).toMatch(/if \(__nf_\d+_ok\) r\d+ = mal_ops_number_value\(__nf_/);
 		expect(deserializeCompilerArtifact(serializeCompilerArtifact(out.image))).toEqual(
 			out.image,
 		);

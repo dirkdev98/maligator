@@ -6925,7 +6925,11 @@ function emitInstruction(
 								? `  r${dst} = ${fast};`
 								: `  r${dst} = ${profileCall("boxing", `mal_value_new_boolean(${fast})`)};`,
 							`} else {`,
-							`  if (__nf_${fusion.id}_ok) r${first.dst} = ${profileCall("boxing", `mal_ops_number_value(__nf_${fusion.id}_value)`)};`,
+							...(externalIsNum
+								? []
+								: [
+										`  if (__nf_${fusion.id}_ok) r${first.dst} = ${profileCall("boxing", `mal_ops_number_value(__nf_${fusion.id}_value)`)};`,
+									]),
 							reps[dst] === "boolean"
 								? `  r${dst} = mal_value_to_boolean(${slow});`
 								: `  r${dst} = ${slow};`,
@@ -6958,7 +6962,11 @@ function emitInstruction(
 							`if (${guard}) {`,
 							`  r${dst} = ${result};`,
 							`} else {`,
-							`  if (__nf_${fusion.id}_ok) r${first.dst} = ${profileCall("boxing", `mal_ops_number_value(__nf_${fusion.id}_value)`)};`,
+							...(externalIsNum
+								? []
+								: [
+										`  if (__nf_${fusion.id}_ok) r${first.dst} = ${profileCall("boxing", `mal_ops_number_value(__nf_${fusion.id}_value)`)};`,
+									]),
 							`  MalValue __binary_result_${ip} = ${slow};`,
 							`  ${throwCheck()}`,
 							`  r${dst} = ${callValue(dst, `__binary_result_${ip}`)};`,
