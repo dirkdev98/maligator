@@ -614,6 +614,130 @@ describe("SSA native lowering", () => {
 		expect(emitted.source).toContain("mal_vm_property_try_load_static_number_pair(");
 	});
 
+	it.each([
+		{
+			name: "irreducible loop with two entries",
+			constantIp: 0,
+			selected: true,
+			instructions: [
+				{ opcode: "CREATE_NUMBER", dst: 1, value: 7 },
+				{ opcode: "JUMP_IF", cond: 0, targetIp: 4 },
+				{ opcode: "JUMP_IF", cond: 0, targetIp: 5 },
+				{ opcode: "JUMP", targetIp: 4 },
+				{ opcode: "JUMP_IF", cond: 0, targetIp: 2 },
+				{ opcode: "RETURN", value: 1 },
+			],
+		},
+		{
+			name: "irreducible loop with a definition bypass",
+			constantIp: 1,
+			selected: false,
+			instructions: [
+				{ opcode: "JUMP_IF", cond: 0, targetIp: 3 },
+				{ opcode: "CREATE_NUMBER", dst: 1, value: 7 },
+				{ opcode: "JUMP_IF", cond: 0, targetIp: 4 },
+				{ opcode: "JUMP", targetIp: 2 },
+				{ opcode: "JUMP_IF", cond: 0, targetIp: 3 },
+				{ opcode: "RETURN", value: 1 },
+			],
+		},
+		{
+			name: "unreachable incoming edge",
+			constantIp: 0,
+			selected: true,
+			instructions: [
+				{ opcode: "CREATE_NUMBER", dst: 1, value: 7 },
+				{ opcode: "JUMP", targetIp: 4 },
+				{ opcode: "JUMP", targetIp: 4 },
+				{ opcode: "RETURN", value: 0 },
+				{ opcode: "RETURN", value: 1 },
+			],
+		},
+		{
+			name: "self-loop before the read",
+			constantIp: 0,
+			selected: true,
+			instructions: [
+				{ opcode: "CREATE_NUMBER", dst: 1, value: 7 },
+				{ opcode: "JUMP_IF", cond: 0, targetIp: 1 },
+				{ opcode: "RETURN", value: 1 },
+			],
+		},
+	] satisfies Array<{
+		name: string;
+		constantIp: number;
+		selected: boolean;
+		instructions: Array<BytecodeInstruction>;
+	}>)(
+		"preserves scalar dominance through $name",
+		({ instructions, constantIp, selected }) => {
+			const template = scalarImage("return a + subtract;").native.functions[1]!.body;
+			const body = {
+				...template,
+				parameterCount: 1,
+				argumentSnapshotCount: 0,
+				registerCount: 2,
+				instructions,
+			};
+			const native = lowerNativeFunctionStorage({
+				...createConservativeNativePlan([body]).functions[0]!,
+				gc: {
+					safepoints: instructions.flatMap((op, instructionIp) =>
+						op.opcode === "JUMP" || op.opcode === "JUMP_IF"
+							? [
+									{
+										kind: "loop-backedge" as const,
+										instructionIp,
+										rootRegisters: [],
+										incomingRootRegisters: [],
+										outgoingRootRegisters: [],
+									},
+								]
+							: [],
+					),
+				},
+				storageValues: [0, 1],
+				registerRepresentations: ["boolean", "int32"],
+			});
+			expect(native.storage!.rematerializedConstantIps.includes(constantIp)).toBe(
+				selected,
+			);
+			if (!selected)
+				expect(() =>
+					validateNativeStorage({
+						...native,
+						storage: { ...native.storage!, rematerializedConstantIps: [constantIp] },
+					}),
+				).toThrow(/invalid or stale storage plan/);
+		},
+	);
+
+	it("plans scalar dominance through a deep native graph without recursive traversal", () => {
+		const template = scalarImage("return a + subtract;").native.functions[1]!.body;
+		const instructions: Array<BytecodeInstruction> = [
+			{ opcode: "CREATE_NUMBER", dst: 1, value: 7 },
+			...Array.from({ length: 12000 }, (_, index): BytecodeInstruction => ({
+				opcode: "JUMP",
+				targetIp: index + 2,
+			})),
+			{ opcode: "RETURN", value: 1 },
+		];
+		const body = {
+			...template,
+			parameterCount: 1,
+			argumentSnapshotCount: 0,
+			registerCount: 2,
+			instructions,
+		};
+		const native = lowerNativeFunctionStorage({
+			...createConservativeNativePlan([body]).functions[0]!,
+			gc: { safepoints: [] },
+			storageValues: [0, 1],
+			registerRepresentations: ["boolean", "int32"],
+		});
+		expect(native.storage!.rematerializedConstantIps).toEqual([0]);
+	});
+
 	it("rejects constant rematerialization without immutable dominated SSA storage", () => {
 		const template = scalarImage("return a + subtract;").native.functions[1]!.body;
 		const cases: Array<{

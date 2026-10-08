@@ -169,6 +169,86 @@ interface NativeStorageControlFlow {
 	) => boolean;
 }
 
+function blockDominators(
+	successors: ReadonlyArray<ReadonlyArray<number>>,
+): (definitionBlock: number, useBlock: number) => boolean {
+	const visited = new Uint8Array(successors.length);
+	const postorder: Array<number> = [];
+	const pending = [{ block: 0, next: 0 }];
+	visited[0] = 1;
+	while (pending.length > 0) {
+		const frame = pending.at(-1)!;
+		const edges = successors[frame.block]!;
+		if (frame.next < edges.length) {
+			const next = edges[frame.next++]!;
+			if (visited[next] !== 0) continue;
+			visited[next] = 1;
+			pending.push({ block: next, next: 0 });
+		} else {
+			postorder.push(frame.block);
+			pending.pop();
+		}
+	}
+	const reversePostorder = postorder.reverse();
+	const order = new Int32Array(successors.length).fill(-1);
+	const parents = new Int32Array(successors.length).fill(-1);
+	const predecessors = successors.map(() => new Array<number>());
+	for (const [index, block] of reversePostorder.entries()) {
+		order[block] = index;
+		for (const next of successors[block]!) predecessors[next]!.push(block);
+	}
+	parents[0] = 0;
+	const intersect = (left: number, right: number): number => {
+		while (left !== right) {
+			while (order[left]! > order[right]!) left = parents[left]!;
+			while (order[right]! > order[left]!) right = parents[right]!;
+		}
+		return left;
+	};
+	const queue = reversePostorder.slice(1);
+	const queued = new Uint8Array(successors.length);
+	for (const block of queue) queued[block] = 1;
+	let cursor = 0;
+	while (cursor < queue.length) {
+		const block = queue[cursor++]!;
+		queued[block] = 0;
+		let parent: number | undefined;
+		for (const previous of predecessors[block]!) {
+			if (parents[previous]! < 0) continue;
+			parent = parent === undefined ? previous : intersect(parent, previous);
+		}
+		if (parent === undefined || parents[block] === parent) continue;
+		parents[block] = parent;
+		for (const next of successors[block]!) {
+			if (next === 0 || queued[next] !== 0) continue;
+			queued[next] = 1;
+			queue.push(next);
+		}
+	}
+	const children = successors.map(() => new Array<number>());
+	for (const block of reversePostorder.slice(1)) children[parents[block]!]!.push(block);
+	const entries = new Int32Array(successors.length).fill(-1);
+	const exits = new Int32Array(successors.length).fill(-1);
+	let clock = 0;
+	pending.push({ block: 0, next: 0 });
+	entries[0] = clock++;
+	while (pending.length > 0) {
+		const frame = pending.at(-1)!;
+		const descendants = children[frame.block]!;
+		if (frame.next < descendants.length) {
+			const child = descendants[frame.next++]!;
+			entries[child] = clock++;
+			pending.push({ block: child, next: 0 });
+		} else {
+			exits[frame.block] = clock++;
+			pending.pop();
+		}
+	}
+	return (definitionBlock, useBlock) =>
+		entries[useBlock]! >= entries[definitionBlock]! &&
+		exits[useBlock]! <= exits[definitionBlock]!;
+}
+
 function storageControlFlow(
 	fn: NativeFunctionPlan["body"],
 	jumpTargets: ReadonlySet<number>,
@@ -195,19 +275,19 @@ function storageControlFlow(
 		if (op.opcode === "JUMP_IF") return [...next, blocks[op.targetIp]!];
 		return ["RETURN", "THROW", "TERMINAL_YIELD"].includes(op.opcode) ? [] : next;
 	});
-	const reachable = (skippedBlock = -1): Uint8Array => {
+	const reachable = (): Uint8Array => {
 		const visited = new Uint8Array(ends.length);
 		const pending = [0];
 		while (pending.length > 0) {
 			const current = pending.pop()!;
-			if (current === skippedBlock || visited[current] !== 0) continue;
+			if (visited[current] !== 0) continue;
 			visited[current] = 1;
 			pending.push(...successors[current]!);
 		}
 		return visited;
 	};
 	const live = reachable();
-	const withoutDefinition = new Map<number, Uint8Array>();
+	let dominatesBlock: ReturnType<typeof blockDominators> | undefined;
 	return {
 		blockCount: ends.length,
 		isReachable: (ip) => live[blocks[ip]!] === 1,
@@ -216,12 +296,8 @@ function storageControlFlow(
 			const useBlock = blocks[useIp]!;
 			if (live[definitionBlock] === 0 || live[useBlock] === 0) return false;
 			if (useBlock === definitionBlock) return useIp > definitionIp;
-			let bypass = withoutDefinition.get(definitionBlock);
-			if (bypass === undefined) {
-				bypass = reachable(definitionBlock);
-				withoutDefinition.set(definitionBlock, bypass);
-			}
-			return bypass[useBlock] === 0;
+			dominatesBlock ??= blockDominators(successors);
+			return dominatesBlock(definitionBlock, useBlock);
 		},
 		isDefinedBeforeReads(readIps, definitionIps) {
 			if (!readIps.every((ip) => live[blocks[ip]!] === 1)) return false;
