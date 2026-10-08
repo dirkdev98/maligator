@@ -722,7 +722,15 @@ function nativeRootMaskStatements(masks: Iterable<NativeInactiveRootMask>): {
 		const symbol = `__gc_inactive_tail_${declarations.length}`;
 		const words: Array<string> = [];
 		for (let word = 2; word < mask.length; word += 2) {
-			words.push(`UINT64_C(0x${nativeRootMaskWordHex(mask, word)})`);
+			const hex = nativeRootMaskWordHex(mask, word);
+			// Huge frames repeat all-inactive words in thousands of masks; spell them compactly.
+			words.push(
+				hex === "ffffffffffffffff"
+					? "UINT64_MAX"
+					: hex === "0"
+						? "0"
+						: `UINT64_C(0x${hex})`,
+			);
 		}
 		statements.set(mask, `MAL_ROOT_MASK_WIDE(0x${head}, ${symbol})`);
 		declarations.push(`    static const u64 ${symbol}[] = { ${words.join(", ")} };`);

@@ -205,7 +205,11 @@ function inactiveRootBits(source: string, start: number, end: number): bigint {
 		.split(", ")
 		.reduce(
 			(bits, word, index) =>
-				bits | (BigInt(word.slice("UINT64_C(".length, -1)) << BigInt(64 * (index + 1))),
+				bits |
+				((word === "UINT64_MAX"
+					? (1n << 64n) - 1n
+					: BigInt(/^UINT64_C\((0x[\da-f]+)\)$/.exec(word)?.[1] ?? word)) <<
+					BigInt(64 * (index + 1))),
 			BigInt(`0x${wide![1]}`),
 		);
 }

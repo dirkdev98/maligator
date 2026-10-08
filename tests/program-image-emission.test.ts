@@ -279,6 +279,12 @@ function withSpecializations(
 	}));
 }
 
+function tailWordValue(word: string): bigint {
+	if (word === "UINT64_MAX") return (1n << 64n) - 1n;
+	const literal = /^UINT64_C\((0x[\da-f]+)\)$/.exec(word)?.[1] ?? word;
+	return BigInt(literal);
+}
+
 describe("emit-program-image instruction packing", () => {
 	it("uses one polling typed body across observation modes and preserves bounded sort helpers", () => {
 		const out = inspectStaticValueFunction(
@@ -1624,11 +1630,13 @@ describe("emit-program-image instruction packing", () => {
 				[...output!.matchAll(/static const u64 (\w+)\[\] = \{ ([^}]+) \};/g)].map(
 					(match) => [
 						match[1]!,
-						[...match[2]!.matchAll(/UINT64_C\((0x[\da-f]+)\)/g)].reduce(
-							(mask, word, index) =>
-								mask | (BigInt(word[1]!) << BigInt(64 * (index + 1))),
-							0n,
-						),
+						match[2]!
+							.split(", ")
+							.reduce(
+								(mask, word, index) =>
+									mask | (tailWordValue(word) << BigInt(64 * (index + 1))),
+								0n,
+							),
 					],
 				),
 			);
