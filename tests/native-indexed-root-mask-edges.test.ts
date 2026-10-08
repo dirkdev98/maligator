@@ -29,6 +29,13 @@ const indexedLoad = {
 	dst: 3,
 	icIndex: 1,
 } satisfies BytecodeInstruction;
+const indexedStore = {
+	opcode: "STORE_PROPERTY",
+	object: 0,
+	key: 2,
+	value: 1,
+	icIndex: 1,
+} satisfies BytecodeInstruction;
 const resultLoad = {
 	opcode: "LOAD_PROPERTY_STATIC",
 	object: 3,
@@ -109,7 +116,7 @@ function emit(
 					index === indexedLoad.key ? keyRepresentation : representation,
 			),
 			instructions: body.instructions.map((instruction) =>
-				instruction.opcode === "LOAD_PROPERTY"
+				instruction.opcode === "LOAD_PROPERTY" || instruction.opcode === "STORE_PROPERTY"
 					? plan
 					: instruction.opcode === "BINARY" || instruction.opcode === "UNARY"
 						? operatorPlan
@@ -154,7 +161,54 @@ function privateSlot(source: string, register: number): number {
 	return Number(store![1]);
 }
 
-describe("native numeric indexed-load root publication", () => {
+describe("native numeric indexed-property root publication", () => {
+	it.each(["int32", "number"] as const)(
+		"publishes private store inputs only when the %s dense probe misses",
+		(representation) => {
+			const source = emit(
+				fn([retainedLoad, key, indexedStore, call, { opcode: "RETURN", value: 6 }]),
+				[
+					point(0, [0, 5], [0, 1, 5]),
+					point(2, [0, 1, 5], [0, 1, 5]),
+					point(3, [0, 1, 3, 4, 5], [6]),
+				],
+				representation,
+			);
+			const slot = privateSlot(source, indexedStore.value);
+			const publication = `__gc_slots[${slot}] = r${indexedStore.value};`;
+			const probe = source.indexOf("mal_vm_array_try_store(");
+			const miss = source.indexOf("mal_vm_indexed_fast_store_index(", probe);
+			expect(probe).toBeGreaterThan(-1);
+			expect(miss).toBeGreaterThan(probe);
+			expect(source.slice(probe, miss)).toContain(publication);
+			expect(source.slice(probe, miss)).toContain("MAL_ROOT_MASK(");
+			const priorMiss = source.indexOf("mal_vm_op_load_property_ic_static_miss(");
+			const priorEnd = source.indexOf("\n    }", priorMiss);
+			expect(source.slice(priorEnd, probe)).not.toContain(publication);
+			const end = source.indexOf("\n    }", miss);
+			const nextCall = source.indexOf("mal_vm_call_cached(", end);
+			expect(nextCall).toBeGreaterThan(end);
+			expect(source.slice(end, nextCall)).toContain(publication);
+		},
+	);
+
+	it("keeps boxed store keys eagerly published before their coercing helper", () => {
+		const source = emit(
+			fn([retainedLoad, key, indexedStore, call, { opcode: "RETURN", value: 6 }]),
+			[
+				point(0, [0, 5], [0, 1, 5]),
+				point(2, [0, 1, 2, 5], [0, 1, 5]),
+				point(3, [0, 1, 3, 4, 5], [6]),
+			],
+			"boxed",
+		);
+		const slot = privateSlot(source, indexedStore.value);
+		const helper = source.indexOf("mal_vm_indexed_fast_store(");
+		expect(helper).toBeGreaterThan(0);
+		expect(source.slice(0, helper)).toContain(`__gc_slots[${slot}] = r1;`);
+		expect(source).not.toContain("mal_vm_array_try_store(");
+	});
+
 	it.each(["int32", "number"] as const)(
 		"keeps unchanged receivers and final results private on successful %s index probes",
 		(representation) => {

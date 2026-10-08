@@ -1190,4 +1190,79 @@ if (numericClosureObservations !== 2 || numericClosureResult(4) !== 363) {
 	);
 }
 
-console.log("static-property-root-mask PASS");
+function retainThroughIndexStore(owner, value) {
+	const retained = owner.value;
+	const receiver = owner.receiver;
+	receiver[1] = value;
+	gc();
+	return retained;
+}
+
+function detachedIndexStoreAcrossPoll(receiver, value) {
+	const retained = receiver[0];
+	receiver[0] = value;
+	gc();
+	return retained;
+}
+
+globalThis.staticPropertyIndexStores = [
+	retainThroughIndexStore,
+	detachedIndexStoreAcrossPoll,
+];
+for (const receiver of [[null, null], []]) {
+	const owner = { value: { marker: 367 }, receiver };
+	const value = { marker: 373 };
+	if (
+		globalThis.staticPropertyIndexStores[0](owner, value).marker !== 367 ||
+		receiver[1] !== value
+	)
+		throw new Error("dense numeric store lost its heap value or capacity-growth result");
+}
+
+for (const proxy of [false, true]) {
+	const owner = { value: { marker: 379 }, receiver: null };
+	let calls = 0;
+	let stored = 0;
+	const setter = function (value) {
+		calls++;
+		owner.value = null;
+		owner.receiver = null;
+		gc();
+		stored = value.marker;
+	};
+	if (proxy) {
+		owner.receiver = new Proxy([], {
+			set(_target, key, value) {
+				if (key !== "1") throw new Error("numeric store converted its key incorrectly");
+				setter(value);
+				return true;
+			},
+		});
+	} else {
+		const prototype = Object.create(Array.prototype);
+		Object.defineProperty(prototype, "1", { set: setter });
+		owner.receiver = Object.setPrototypeOf([], prototype);
+	}
+	const retained = globalThis.staticPropertyIndexStores[0](owner, { marker: 383 });
+	if (retained.marker !== 379 || stored !== 383 || calls !== 1)
+		throw new Error("collecting numeric store fallback lost an incoming heap root");
+}
+
+globalThis.indexedStoreLifetimeReceiver = [{ marker: 389 }];
+globalThis.indexedStoreLifetimeReference = new WeakRef(
+	globalThis.indexedStoreLifetimeReceiver[0],
+);
+setTimeout(() => {
+	const retained = globalThis.staticPropertyIndexStores[1](
+		globalThis.indexedStoreLifetimeReceiver,
+		null,
+	);
+	if (
+		retained.marker !== 389 ||
+		globalThis.indexedStoreLifetimeReference.deref() !== retained
+	)
+		throw new Error(
+			"dense numeric overwrite lost its detached heap value at the next collection",
+		);
+	console.log("static-property-root-mask PASS");
+}, 0);

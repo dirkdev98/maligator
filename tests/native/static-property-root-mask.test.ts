@@ -118,6 +118,19 @@ const publicationKernels = [
 		properties: ["value", "receiver"],
 	},
 	{
+		name: "retainThroughIndexStore",
+		boundary: "STORE_PROPERTY",
+		probe: "mal_vm_array_try_store",
+		properties: ["value", "receiver"],
+	},
+	{
+		name: "detachedIndexStoreAcrossPoll",
+		boundary: "STORE_PROPERTY",
+		probe: "mal_vm_array_try_store",
+		properties: [],
+		numericOnly: true,
+	},
+	{
 		name: "retainThroughThrowingSetter",
 		boundary: "STORE_PROPERTY_STATIC",
 		probe: "mal_vm_object_try_store_static",
@@ -343,7 +356,8 @@ describe("native static-property root-mask publication", () => {
 				),
 				indexedReceivers: boundarySafepoints.flatMap((safepoint) => {
 					const instruction = fn.instructions[safepoint.instructionIp];
-					return instruction?.opcode === "LOAD_PROPERTY"
+					return instruction?.opcode === "LOAD_PROPERTY" ||
+						instruction?.opcode === "STORE_PROPERTY"
 						? [
 								{
 									register: instruction.object,
