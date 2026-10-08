@@ -61,6 +61,7 @@ import type { BytecodeInstruction } from "./runtime-image.ts";
 
 export interface NativeScalarStoragePlan {
 	readonly expressionIps: ReadonlyArray<number>;
+	/** Registers whose every read follows a definition; slot-backed roots still start zeroed. */
 	readonly definitionInitializedRegisters: ReadonlyArray<number>;
 	readonly rematerializedConstantIps: ReadonlyArray<number>;
 }
@@ -486,11 +487,13 @@ function definitionInitializedRegisters(
 	if (native.storageValues === undefined) return [];
 	const fn = native.body;
 	const { writeCounts: writes, definitions } = body;
+	// TODO: admit boxed locals of resumable bodies once their suspension paths are covered by tests.
+	const boxedLocals = !fn.isGenerator && !fn.isAsync;
 	const eligible = native.registerRepresentations.flatMap((rep, local) =>
 		local >= fn.parameterCount + fn.argumentSnapshotCount &&
 		native.storageValues![local]! >= 0 &&
 		!borrowed.has(local) &&
-		["number", "int32", "boolean"].includes(rep)
+		(["number", "int32", "boolean"].includes(rep) || (boxedLocals && rep === "boxed"))
 			? [local]
 			: [],
 	);

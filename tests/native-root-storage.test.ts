@@ -217,6 +217,50 @@ describe("native physical root storage", () => {
 		expect(source).toContain(`MalValue __gc_slots[${fn.storage!.rootSlotCount}];`);
 	});
 
+	it("zeroes only entry storage that a fresh frame can observe before definition", () => {
+		const image = compileSemanticProgramToProgramImage(
+			analyzeSourceAndRunSemanticAnalysis(
+				`globalThis.kernel = function kernel(first, second, consume) {
+					let held = first();
+					consume(held);
+					if (consume()) held = second();
+					consume(held);
+					return consume(held);
+				};`,
+				"/definition-roots.js",
+			),
+		);
+		for (const fn of [image.native.functions[1]!, contract(true)]) {
+			const storage = fn.storage!;
+			const source = emitCompiledFunction(fn, fn.functionIndex, "", false)!.source;
+			const prologue = source.slice(
+				0,
+				source.indexOf("mal_root_frame_head = &__gc_frame;"),
+			);
+			const defined = new Set(storage.definitionInitializedRegisters);
+			const privateRegisters = new Set(storage.privateRegisters);
+			const privateDefined = storage.privateRegisters.filter((r) => defined.has(r));
+			expect(privateDefined.length).toBeGreaterThan(0);
+			for (const register of privateDefined) {
+				expect(prologue).not.toContain(`    r${register} = `);
+				expect(prologue).not.toMatch(new RegExp(`__gc_slots\\[\\d+\\] = r${register};`));
+			}
+			for (const register of storage.rootRegisters)
+				if (!privateRegisters.has(register) && register >= fn.body.parameterCount)
+					expect(prologue).toContain(`    r${register} = MAL_VALUE_UNDEFINED;`);
+		}
+		const rootedOutput = contract(true);
+		const slot =
+			rootedOutput.storage!.rootSlots[rootedOutput.storage!.rootRegisters.indexOf(2)]!;
+		expect(rootedOutput.storage!.definitionInitializedRegisters).toContain(2);
+		expect(
+			rootedOutput.storage!.rootSlots.filter((candidate) => candidate === slot),
+		).toHaveLength(1);
+		expect(emitCompiledFunction(rootedOutput, 0, "", false)!.source).toContain(
+			`    __gc_slots[${slot}] = MAL_VALUE_UNDEFINED;`,
+		);
+	});
+
 	it("refuses to render a stale GC map that makes shared private occupants interfere", () => {
 		const fn = contract();
 		const [first, ...rest] = fn.gc.safepoints;

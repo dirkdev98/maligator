@@ -752,6 +752,8 @@ interface NativeRootPublication {
 	readonly entryStableRegisters: ReadonlySet<number>;
 	readonly slots: ReadonlyMap<number, number>;
 	readonly slotRegisters: ReadonlyMap<number, ReadonlyArray<number>>;
+	/** Private slots initialized from their sole occupant's entry value. */
+	readonly entrySlotRegisters: ReadonlyMap<number, number>;
 	readonly safepoints: ReadonlyMap<number, NativeRootPublicationPoint>;
 }
 
@@ -909,11 +911,17 @@ function emitCompiledVariant(
 	const slotOrder = new Map(
 		[...slotRegisters.keys()].map((slot, order) => [slot, order]),
 	);
+	const definitionInitialized = new Set(storage.definitionInitializedRegisters);
+	const entrySlotRegisters = new Map<number, number>();
+	for (const [slot, registers] of slotRegisters)
+		if (registers.length === 1 && !definitionInitialized.has(registers[0]!))
+			entrySlotRegisters.set(slot, registers[0]!);
 	const rootPublication: NativeRootPublication = {
 		privateCallResultIps,
 		entryStableRegisters: new Set(storage.entryStableRootRegisters),
 		slots: privateSlots,
 		slotRegisters,
+		entrySlotRegisters,
 		safepoints:
 			privateSlots.size === 0
 				? new Map()
@@ -1331,14 +1339,17 @@ function emitCompiledVariant(
 					: `    r${i} = p${i};`,
 		);
 	}
-	const definitionInitialized = new Set(storage.definitionInitializedRegisters);
 	for (let i = fn.parameterCount; i < fn.registerCount; i++) {
-		if (expressionRegisters.has(i) || definitionInitialized.has(i)) continue;
+		if (expressionRegisters.has(i)) continue;
+		// A fresh frame scans every root slot until its first mask, so slot-backed roots start zeroed.
+		if (definitionInitialized.has(i) && (privateRegisters.has(i) || !slotOf.has(i)))
+			continue;
 		lines.push(`    r${i} = ${zeroOf(reps[i]!)};`);
 	}
-	for (const [slot, registers] of rootPublication.slotRegisters) {
+	for (const slot of rootPublication.slotRegisters.keys()) {
+		const register = rootPublication.entrySlotRegisters.get(slot);
 		lines.push(
-			`    __gc_slots[${slot}] = ${registers.length === 1 ? `r${registers[0]}` : "MAL_VALUE_UNDEFINED"};`,
+			`    __gc_slots[${slot}] = ${register === undefined ? "MAL_VALUE_UNDEFINED" : `r${register}`};`,
 		);
 	}
 	if (fn.argumentSnapshotCount > 0) {
@@ -3711,8 +3722,8 @@ function emitBody(
 		  >
 		| undefined;
 	if (rootPublication !== undefined) {
-		for (const [slot, registers] of rootPublication.slotRegisters)
-			if (registers.length === 1) knownPublishedPrivateRoots.set(slot, registers[0]!);
+		for (const [slot, register] of rootPublication.entrySlotRegisters)
+			knownPublishedPrivateRoots.set(slot, register);
 	}
 	const hasPrivateRoots = (rootPublication?.slots.size ?? 0) > 0;
 	const activeFieldSlots = new Set<number>();

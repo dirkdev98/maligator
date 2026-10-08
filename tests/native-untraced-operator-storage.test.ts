@@ -208,7 +208,8 @@ describe("untraced boxed operator storage", () => {
 			expect(out.native.storage!.expressionIps).not.toContain(out.ip);
 			expect(out.native.storage!.rootRegisters).not.toContain(out.op.dst);
 			expect(out.c.source).toContain(`MalValue r${out.op.dst};`);
-			expect(out.c.source).toContain(`r${out.op.dst} = MAL_VALUE_UNDEFINED;`);
+			expect(out.native.storage!.definitionInitializedRegisters).toContain(out.op.dst);
+			expect(out.c.source).not.toContain(`r${out.op.dst} = MAL_VALUE_UNDEFINED;`);
 			expect(out.c.source).toMatch(
 				new RegExp(
 					`r${out.op.dst} = (?:mal_ops_number_value|mal_value_new_boolean|mal_value_from_i32)\\(`,
