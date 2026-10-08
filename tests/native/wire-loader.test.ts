@@ -816,6 +816,57 @@ describe("wire loader side-data validation", () => {
 		// selector result for that receiver.
 		receiverClobber[firstLoadOffset + 1] = 4;
 		rejectsWire("shape-case-receiver", receiverClobber);
+
+		const finalLoad: BytecodeInstruction = {
+			opcode: "LOAD_PROPERTY_STATIC_SHAPE_CASE",
+			dst: 3,
+			object: 2,
+			shapeCase: 3,
+			stringIndex: 1,
+			icIndex: 2,
+			slots: [1],
+		};
+		const finalWire = serializeRuntimeImage(
+			{
+				...shapeCaseDefinition,
+				functions: [
+					{
+						...shapeCaseFunction,
+						propertyIcCount: 3,
+						instructions: [
+							...shapeCaseFunction.instructions.slice(0, -1),
+							{ opcode: "CREATE_UNDEFINED", dst: 0 },
+							finalLoad,
+							{ opcode: "RETURN", value: 3 },
+						],
+					},
+				],
+			},
+			{ debugInfo: false },
+		);
+		acceptsWire("shape-case-final-selector-reuse", finalWire);
+		const finalPayload = new Uint8Array([
+			WIRE_OPCODES.indexOf("CREATE_UNDEFINED"),
+			0,
+			loadTag,
+			6,
+			4,
+			6,
+			2,
+			1,
+			2,
+			4,
+		]);
+		const finalOffset = uniquePayloadOffset(finalWire, finalPayload);
+		const barrier = finalWire.slice();
+		barrier[finalOffset] = WIRE_OPCODES.indexOf("CREATE_OBJECT");
+		rejectsWire("shape-case-final-reuse-barrier", barrier);
+		const receiver = finalWire.slice();
+		receiver[finalOffset + 1] = 4;
+		rejectsWire("shape-case-final-reuse-receiver", receiver);
+		const finalSlot = finalWire.slice();
+		finalSlot[finalOffset + finalPayload.length - 2] = 0;
+		rejectsWire("shape-case-final-reuse-slot", finalSlot);
 	});
 
 	it("preserves nonordinal literal cache identities and rejects forged indices", () => {

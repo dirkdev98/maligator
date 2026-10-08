@@ -1208,7 +1208,7 @@ describe("program-image-codec", () => {
 		);
 	});
 
-	it("checks full shape-selector lifetimes with definitions preceding same-instruction uses", () => {
+	it("checks full shape-selector lifetimes including a final load reusing its selector", () => {
 		const image = shapeCaseDefinition();
 		const original = image.runtime.functions[0]!.instructions;
 		const runtime = (instructions: Array<BytecodeInstruction>) => ({
@@ -1243,13 +1243,53 @@ describe("program-image-codec", () => {
 					),
 				),
 			),
-		).toThrow(/shape-case selector use count/);
+		).not.toThrow();
 		const mutable = runtime([...original]);
 		expect(() => validateVmShapeCases(mutable)).not.toThrow();
 		mutable.functions[0]!.instructions.push({ opcode: "RETURN", value: 3 });
 		expect(() => validateVmShapeCases(mutable)).toThrow(
 			/invalid shape-case selector use/,
 		);
+	});
+
+	it("validates slots and lifetime certificates for a load overwriting its selector", () => {
+		const image = shapeCaseDefinition();
+		const original = image.runtime.functions[0]!.instructions;
+		const load = original[5]!;
+		if (load.opcode !== "LOAD_PROPERTY_STATIC_SHAPE_CASE")
+			throw new Error("expected shape load");
+		const finalLoad = { ...load, dst: load.shapeCase };
+		const check = (middle: Array<BytecodeInstruction>, last = finalLoad) =>
+			validateVmShapeCases({
+				...image.runtime,
+				functions: image.runtime.functions.map((fn) => ({
+					...fn,
+					instructions: [
+						...original.slice(0, -1),
+						...middle,
+						last,
+						{ opcode: "RETURN", value: 3 },
+					],
+				})),
+			});
+		expect(() => check([])).not.toThrow();
+		expect(() => check([], { ...finalLoad, slots: [0] })).toThrow(
+			/invalid shape-case load/,
+		);
+		expect(() => check([], { ...finalLoad, object: 0 })).toThrow(
+			/invalid shape-case selector use/,
+		);
+		expect(() => check([{ opcode: "CREATE_UNDEFINED", dst: 2 }])).toThrow(
+			/receiver is redefined/,
+		);
+		expect(() => check([{ opcode: "CREATE_OBJECT", dst: 0 }])).toThrow(
+			/crosses an invalid instruction/,
+		);
+		expect(() =>
+			check(
+				Array.from({ length: 65 }, () => ({ opcode: "CREATE_NUMBER", dst: 0, value: 3 })),
+			),
+		).toThrow(/use count or span/);
 	});
 
 	it("validates portable precompiled shape descriptors independently of bytecode", () => {

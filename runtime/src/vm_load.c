@@ -2295,7 +2295,7 @@ static bool mal_loaded_shape_case_selector_valid(
     bool receiver_redefined = false;
     for (i32 ip = selector_ip + 1; ip < fn->instruction_count; ip++) {
         const MalInstruction *instruction = &fn->instructions[ip];
-        if (mal_loaded_instruction_writes_register(instruction, dst)) break;
+        bool writes_selector = mal_loaded_instruction_writes_register(instruction, dst);
         if (instruction->opcode == MAL_OP_LOAD_PROPERTY_STATIC_SHAPE_CASE &&
             instruction->as.load_property_static_shape_case.shape_case == dst) {
             if (crossed_barrier || receiver_redefined ||
@@ -2307,8 +2307,10 @@ static bool mal_loaded_shape_case_selector_valid(
             last_ip = ip;
             receiver_redefined = mal_loaded_instruction_writes_register(
                 instruction, object);
+            if (writes_selector) break;
             continue;
         }
+        if (writes_selector) break;
         if (!mal_loaded_shape_case_transparent(instruction)) crossed_barrier = true;
         if (mal_loaded_instruction_writes_register(instruction, object)) {
             receiver_redefined = true;

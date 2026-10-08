@@ -1839,12 +1839,14 @@ function vmShapeCaseUses(fn: BytecodeFunction): {
 	const ownedLoads = new Set<number>();
 	const active = new Map<number, Array<number>>();
 	for (const [ip, instruction] of fn.instructions.entries()) {
-		if (
-			instruction.opcode === "LOAD_PROPERTY_STATIC_SHAPE_CASE" &&
-			active.has(instruction.shapeCase)
-		)
-			ownedLoads.add(ip);
-		// Load ownership observes the prior definition; a defining instruction ends prior uses.
+		if (instruction.opcode === "LOAD_PROPERTY_STATIC_SHAPE_CASE") {
+			const uses = active.get(instruction.shapeCase);
+			if (uses !== undefined) {
+				ownedLoads.add(ip);
+				// Register allocation may reuse the selector for this load's final result.
+				uses.push(ip);
+			}
+		}
 		for (const register of vmInstructionWriteRegisters(instruction))
 			active.delete(register);
 		if (active.size > 0)

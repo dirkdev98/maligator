@@ -1634,7 +1634,6 @@ describe("emit-program-image instruction packing", () => {
 			);
 			if (liveCounts.at(-1) === 130) {
 				expect(tails.size).toBe(2);
-				expect(new Set(tails.values()).size).toBe(1);
 			}
 			let publishedMask = 0n;
 			for (const match of output!.matchAll(

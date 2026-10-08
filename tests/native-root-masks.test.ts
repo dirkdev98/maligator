@@ -48,4 +48,21 @@ describe("native inactive-root masks", () => {
 		expect(masks.get(1)).toEqual([]);
 		expect(nativeRootMaskWordHex([0xffffffff, 0xffffffff], 0)).toBe("ffffffffffffffff");
 	});
+
+	it("keeps different full masks distinct when their wide tails match", () => {
+		const masks = nativeInactiveRootMasks(
+			points([[0], [1]]),
+			new Map([
+				[0, 0],
+				[1, 1],
+				[2, 128],
+			]),
+		);
+		expect(masks.get(0)).toEqual([2, 0, 0, 0, 1]);
+		expect(masks.get(1)).toEqual([1, 0, 0, 0, 1]);
+		expect(masks.get(0)).not.toBe(masks.get(1));
+		expect(nativeRootMaskWordHex(masks.get(0)!, 4)).toBe(
+			nativeRootMaskWordHex(masks.get(1)!, 4),
+		);
+	});
 });
