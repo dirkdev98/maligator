@@ -1043,15 +1043,30 @@ function guardedConstructorConsumerDuplication(
 }
 
 function nativeFieldEntryMethodEligible(fn: CoreFunctionStore, name: number): boolean {
-	return (
-		fn.parameterCount === 1 &&
+	return nativeFieldEntryMethodName(fn) === name;
+}
+
+function nativeFieldEntryMethodName(fn: CoreFunctionStore): number | undefined {
+	return fn.parameterCount === 1 &&
 		!fn.metadata.hasPrototype &&
 		!fn.metadata.isClassConstructor &&
 		!fn.metadata.isDerivedConstructor &&
 		!fn.isGenerator &&
-		!fn.isAsync &&
-		fn.metadata.nameStringIndex === name
-	);
+		!fn.isAsync
+		? fn.metadata.nameStringIndex
+		: undefined;
+}
+
+function nativeFieldEntryNominees(
+	program: CoreProgram,
+	liveFunctions: ReadonlySet<CoreFunctionId>,
+): ReadonlyMap<number, number> {
+	const nominees = new Map<number, number>();
+	for (const functionId of liveFunctions) {
+		const name = nativeFieldEntryMethodName(program.function(functionId));
+		if (name !== undefined) nominees.set(name, (nominees.get(name) ?? 0) + 1);
+	}
+	return nominees;
 }
 
 function prefersFieldEntryDispatch(
@@ -1062,7 +1077,7 @@ function prefersFieldEntryDispatch(
 	callee: CoreValueId,
 	arguments_: ReadonlyArray<CoreValueId> | undefined,
 	targets: ReadonlyArray<CoreFunctionId>,
-	liveFunctions: ReadonlySet<CoreFunctionId>,
+	fieldEntryNominees: ReadonlyMap<number, number>,
 	heapFieldsOnly = false,
 ): boolean {
 	if (
@@ -1075,10 +1090,7 @@ function prefersFieldEntryDispatch(
 	if (caller.instructionOpcodeName(load) !== "loadPropertyStatic") return false;
 	const name = caller.instructionAttributes(load).stringIndex;
 	if (typeof name !== "number") return false;
-	let nominees = 0;
-	for (const functionId of liveFunctions) {
-		if (nativeFieldEntryMethodEligible(program.function(functionId), name)) nominees++;
-	}
+	const nominees = fieldEntryNominees.get(name) ?? 0;
 	if (nominees === 0 || nominees > 4) return false;
 	const facts = analyses.get(CORE_LOCAL_FACT_BUNDLE_ANALYSIS, {
 		scope: "function",
@@ -1129,7 +1141,7 @@ function offerFunctionCandidates(
 	service: CoreTransformCandidateService,
 	functionId: CoreFunctionId,
 	instanceMethodHints: ReadonlyMap<number, ReadonlyArray<CoreFunctionId>>,
-	liveFunctions: ReadonlySet<CoreFunctionId>,
+	fieldEntryNominees: ReadonlyMap<number, number>,
 ): void {
 	const fn = program.function(functionId);
 	const outgoing = summaries.targets.outgoing(functionId);
@@ -1233,7 +1245,7 @@ function offerFunctionCandidates(
 				site.callee,
 				site.arguments,
 				hintedTargets,
-				liveFunctions,
+				fieldEntryNominees,
 			)
 				? hintedTargets
 				: undefined;
@@ -1326,7 +1338,7 @@ function offerFunctionCandidates(
 				site.callee,
 				site.arguments,
 				[target],
-				liveFunctions,
+				fieldEntryNominees,
 				true,
 			)
 		)
@@ -1423,6 +1435,7 @@ export function discoverCoreCrossCallCandidates(
 	functions: Iterable<CoreFunctionId> = program.functionIds(),
 ): void {
 	const instanceMethodHints = coreInstanceMethodHints(program);
+	const fieldEntryNominees = nativeFieldEntryNominees(program, liveFunctions);
 	for (const functionId of functions) {
 		offerFunctionCandidates(
 			program,
@@ -1431,7 +1444,7 @@ export function discoverCoreCrossCallCandidates(
 			service,
 			functionId,
 			instanceMethodHints,
-			liveFunctions,
+			fieldEntryNominees,
 		);
 	}
 }
