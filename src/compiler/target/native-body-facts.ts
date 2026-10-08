@@ -1,3 +1,5 @@
+import { createNativeRootProfitabilityContext } from "./lower-native-root-profitability.ts";
+import type { NativeRootProfitabilityContext } from "./lower-native-root-profitability.ts";
 import {
 	vmExceptionHandlerTargets,
 	vmInstructionReadRegisters,
@@ -6,6 +8,7 @@ import {
 import type { BytecodeFunction } from "./runtime-image.ts";
 
 export interface NativeBodyFacts {
+	readonly rootProfitability: NativeRootProfitabilityContext;
 	readonly reads: ReadonlyArray<ReadonlyArray<number>>;
 	readonly writes: ReadonlyArray<ReadonlyArray<number>>;
 	readonly branchSources: ReadonlyMap<number, ReadonlyArray<number>>;
@@ -36,6 +39,7 @@ export function analyzeNativeBodyFacts(fn: BytecodeFunction): NativeBodyFacts {
 		}
 	}
 	return {
+		rootProfitability: createNativeRootProfitabilityContext(fn),
 		reads,
 		writes,
 		branchSources,

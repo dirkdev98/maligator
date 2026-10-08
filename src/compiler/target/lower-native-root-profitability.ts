@@ -1,3 +1,4 @@
+import type { NativeBodyFacts } from "./native-body-facts.ts";
 import type { NativeFunctionPlan } from "./program-image.ts";
 import { vmInstructionWriteRegisters } from "./runtime-image.ts";
 import type { BytecodeFunction } from "./runtime-image.ts";
@@ -32,6 +33,66 @@ function reachableWithin(
 	return reached;
 }
 
+interface NativeRootProfitabilityLoop {
+	readonly start: number;
+	readonly end: number;
+}
+
+export interface NativeRootProfitabilityContext {
+	readonly loops: () => ReadonlyArray<NativeRootProfitabilityLoop>;
+	readonly cycleIps: (loop: NativeRootProfitabilityLoop) => ReadonlySet<number>;
+}
+
+// This policy excludes exceptional edges and throwing undeclared loads; other planners use different CFGs.
+export function createNativeRootProfitabilityContext(
+	fn: BytecodeFunction,
+): NativeRootProfitabilityContext {
+	let loops: Array<NativeRootProfitabilityLoop> | undefined;
+	let predecessors: ReadonlyArray<ReadonlyArray<number>> | undefined;
+	const cycles = new Map<number, ReadonlySet<number>>();
+	return {
+		loops: () => {
+			loops ??= fn.instructions.flatMap((instruction, ip) =>
+				(instruction.opcode === "JUMP" || instruction.opcode === "JUMP_IF") &&
+				instruction.targetIp <= ip
+					? [{ start: instruction.targetIp, end: ip }]
+					: [],
+			);
+			return loops;
+		},
+		cycleIps: (loop) => {
+			const previous = cycles.get(loop.end);
+			if (previous !== undefined) return previous;
+			const forward = reachableWithin(loop.start, loop.start, loop.end, (ip) =>
+				ordinarySuccessors(fn, ip),
+			);
+			if (!forward.has(loop.end)) {
+				const empty = new Set<number>();
+				cycles.set(loop.end, empty);
+				return empty;
+			}
+			if (predecessors === undefined) {
+				const reverse: Array<Array<number>> = Array.from(
+					{ length: fn.instructions.length },
+					() => [],
+				);
+				for (let ip = 0; ip < fn.instructions.length; ip++)
+					for (const target of ordinarySuccessors(fn, ip)) reverse[target]?.push(ip);
+				predecessors = reverse;
+			}
+			const backward = reachableWithin(
+				loop.end,
+				loop.start,
+				loop.end,
+				(ip) => predecessors![ip]!,
+			);
+			const cycle = new Set([...forward].filter((ip) => backward.has(ip)));
+			cycles.set(loop.end, cycle);
+			return cycle;
+		},
+	};
+}
+
 function occursWithin(
 	positions: ReadonlyArray<number>,
 	start: number,
@@ -52,6 +113,7 @@ export function nativeProfitablePrivateRootRegisters(
 	fn: BytecodeFunction,
 	native: NativeFunctionPlan,
 	candidates: ReadonlySet<number>,
+	body?: Pick<NativeBodyFacts, "writes" | "rootProfitability">,
 ): ReadonlySet<number> {
 	if (candidates.size === 0) return candidates;
 	const uses = new Map(
@@ -64,13 +126,12 @@ export function nativeProfitablePrivateRootRegisters(
 			},
 		]),
 	);
-	const loops: Array<{ start: number; end: number; ipsOnCycle?: ReadonlySet<number> }> =
-		[];
+	const context = body?.rootProfitability ?? createNativeRootProfitabilityContext(fn);
 	const points = new Map(
 		native.gc.safepoints.map((point) => [point.instructionIp, point]),
 	);
 	for (const [ip, instruction] of fn.instructions.entries()) {
-		for (const register of vmInstructionWriteRegisters(instruction))
+		for (const register of body?.writes[ip] ?? vmInstructionWriteRegisters(instruction))
 			uses.get(register)?.writes.push(ip);
 		if (native.instructions[ip] === undefined) {
 			if (instruction.opcode === "LOAD_PROPERTY_STATIC") {
@@ -91,40 +152,8 @@ export function nativeProfitablePrivateRootRegisters(
 					uses.get(register)?.calls.push(ip);
 			}
 		}
-		if (
-			(instruction.opcode === "JUMP" || instruction.opcode === "JUMP_IF") &&
-			instruction.targetIp <= ip
-		)
-			loops.push({ start: instruction.targetIp, end: ip });
 	}
-	let predecessors: ReadonlyArray<ReadonlyArray<number>> | undefined;
-	const cycleIps = (loop: (typeof loops)[number]): ReadonlySet<number> => {
-		if (loop.ipsOnCycle !== undefined) return loop.ipsOnCycle;
-		const forward = reachableWithin(loop.start, loop.start, loop.end, (ip) =>
-			ordinarySuccessors(fn, ip),
-		);
-		if (!forward.has(loop.end)) {
-			loop.ipsOnCycle = new Set();
-			return loop.ipsOnCycle;
-		}
-		if (predecessors === undefined) {
-			const reverse: Array<Array<number>> = Array.from(
-				{ length: fn.instructions.length },
-				() => [],
-			);
-			for (let ip = 0; ip < fn.instructions.length; ip++)
-				for (const target of ordinarySuccessors(fn, ip)) reverse[target]?.push(ip);
-			predecessors = reverse;
-		}
-		const backward = reachableWithin(
-			loop.end,
-			loop.start,
-			loop.end,
-			(ip) => predecessors![ip]!,
-		);
-		loop.ipsOnCycle = new Set([...forward].filter((ip) => backward.has(ip)));
-		return loop.ipsOnCycle;
-	};
+
 	const profitable = new Set(candidates);
 	for (const [register, use] of uses) {
 		// Unmodified parameters already have an entry-published shadow value.
@@ -132,10 +161,10 @@ export function nativeProfitablePrivateRootRegisters(
 		// Count costs and benefits on the same repeatable cycle. A one-way exit
 		// can define the next outer-loop value without helping the inner loop.
 		if (
-			loops.some((loop) => {
+			context.loops().some((loop) => {
 				const { start, end } = loop;
 				if (!occursWithin(use.calls, start, end)) return false;
-				const cycle = cycleIps(loop);
+				const cycle = context.cycleIps(loop);
 				return (
 					use.calls.some((ip) => cycle.has(ip)) &&
 					!use.writes.some((ip) => cycle.has(ip)) &&

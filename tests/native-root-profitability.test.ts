@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { nativePrivateRootRegisters } from "../src/compiler/target/lower-native-root-publication.ts";
+import { analyzeNativeBodyFacts } from "../src/compiler/target/native-body-facts.ts";
 import { createConservativeNativePlan } from "../src/compiler/target/program-image.ts";
 import type {
 	BytecodeFunction,
@@ -89,6 +90,8 @@ function select(
 			},
 		},
 		new Set(options.candidates ?? [retained]),
+		undefined,
+		analyzeNativeBodyFacts(fn),
 	);
 }
 

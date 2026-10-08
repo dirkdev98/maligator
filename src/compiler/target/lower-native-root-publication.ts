@@ -113,7 +113,7 @@ export function nativePrivateRootRegisters(
 	native: NativeFunctionPlan,
 	frameRegisters: ReadonlySet<number>,
 	privateCallResultIps = nativePrivateCallResultIps(fn, native),
-	body?: Pick<NativeBodyFacts, "reads" | "writes">,
+	body?: Pick<NativeBodyFacts, "reads" | "writes" | "rootProfitability">,
 ): ReadonlySet<number> {
 	if (fn.isGenerator || fn.isAsync) return new Set();
 	const candidates = new Set<number>(
@@ -231,7 +231,7 @@ export function nativePrivateRootRegisters(
 			}
 		}
 	}
-	return nativeProfitablePrivateRootRegisters(fn, native, candidates);
+	return nativeProfitablePrivateRootRegisters(fn, native, candidates, body);
 }
 
 /** Entry-published parameters need no recopy while their physical registers are unchanged. */
