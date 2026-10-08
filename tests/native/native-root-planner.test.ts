@@ -26,6 +26,7 @@ describe("native-host physical root planner", () => {
 		({ compiled, interpreted } = pair);
 		for (const name of [
 			"selectNativeRootStorage",
+			"lowerNativeSuspension",
 			"nativeInactiveRootMasks",
 			"nativeRootMaskWordHex",
 		]) {
@@ -45,7 +46,7 @@ describe("native-host physical root planner", () => {
 	}, 600_000);
 
 	it.each(["compiled", "interpreted"])(
-		"preserves late root overlap, physical mask bits and collision rejection when %s",
+		"preserves root boundaries, collision rejection and growing suspension transports when %s",
 		(backend) => {
 			const binary = backend === "compiled" ? compiled : interpreted;
 			for (const env of [{}, STRESS_ENV])

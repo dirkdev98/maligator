@@ -1,3 +1,4 @@
+import type { NativeBodyFacts } from "./native-body-facts.ts";
 import type { NativeFunctionPlan } from "./program-image.ts";
 import {
 	vmExceptionHandlerTargets,
@@ -20,51 +21,104 @@ export interface NativeSuspensionPlan {
 
 export function lowerNativeSuspension(
 	native: NativeFunctionPlan,
+	body?: Pick<NativeBodyFacts, "reads" | "writes" | "handlerTargets">,
 ): NativeSuspensionPlan | undefined {
 	if (native.mode !== "resumable") return undefined;
 	const fn = native.body;
-	const handlers = vmExceptionHandlerTargets(fn.instructions.length, fn.handlers);
-	const successors = fn.instructions.map((op, ip) => {
+	if (fn.instructions.length === 0) return suspensionLayout([]);
+	const handlers =
+		body?.handlerTargets ??
+		vmExceptionHandlerTargets(fn.instructions.length, fn.handlers);
+	const reads = body?.reads ?? fn.instructions.map(vmInstructionReadRegisters);
+	const writes = body?.writes ?? fn.instructions.map(vmInstructionWriteRegisters);
+	const starts = new Uint8Array(fn.instructions.length);
+	starts[0] = 1;
+	const mark = (ip: number) => {
+		if (!Number.isInteger(ip) || ip < 0 || ip >= starts.length)
+			throw new Error("Invalid suspension control-flow target");
+		starts[ip] = 1;
+	};
+	for (const [ip, op] of fn.instructions.entries()) {
+		if (op.opcode === "JUMP" || op.opcode === "JUMP_IF") mark(op.targetIp);
+		if (handlers[ip] !== undefined) mark(handlers[ip]);
+		if (ip > 0 && handlers[ip] !== handlers[ip - 1]) mark(ip);
+		if (
+			ip + 1 < starts.length &&
+			[
+				"JUMP",
+				"JUMP_IF",
+				"RETURN",
+				"THROW",
+				"TERMINAL_YIELD",
+				"GENERATOR_START",
+				"YIELD",
+				"AWAIT",
+			].includes(op.opcode)
+		)
+			mark(ip + 1);
+	}
+	const blockStarts = fn.instructions.flatMap((_, ip) => (starts[ip] ? [ip] : []));
+	const blockAt = new Int32Array(fn.instructions.length);
+	const blocks = blockStarts.map((start, index) => {
+		const end = blockStarts[index + 1] ?? fn.instructions.length;
+		blockAt.fill(index, start, end);
+		const generated = new Set<number>();
+		const killed = new Set<number>();
+		for (let ip = start; ip < end; ip++) {
+			for (const register of reads[ip]!)
+				if (register >= 0 && !killed.has(register)) generated.add(register);
+			for (const register of writes[ip]!) if (register >= 0) killed.add(register);
+		}
+		return { start, end, generated: [...generated], killed: [...killed] };
+	});
+	const successors = blocks.map(({ end }) => {
+		const ip = end - 1;
+		const op = fn.instructions[ip]!;
 		const next: Array<number> = [];
-		if (op.opcode === "JUMP" || op.opcode === "JUMP_IF") next.push(op.targetIp);
+		if (op.opcode === "JUMP" || op.opcode === "JUMP_IF") next.push(blockAt[op.targetIp]!);
 		if (
 			op.opcode !== "JUMP" &&
 			op.opcode !== "RETURN" &&
 			op.opcode !== "THROW" &&
 			op.opcode !== "TERMINAL_YIELD" &&
-			ip + 1 < fn.instructions.length
+			end < fn.instructions.length
 		)
-			next.push(ip + 1);
-		if (handlers[ip] !== undefined) next.push(handlers[ip]);
+			next.push(blockAt[end]!);
 		return [...new Set(next)];
 	});
-	const predecessors: Array<Array<number>> = fn.instructions.map(() => []);
-	for (const [ip, targets] of successors.entries())
-		for (const target of targets) predecessors[target]!.push(ip);
+	const handlerBlocks = blocks.map(({ start }) =>
+		handlers[start] === undefined ? undefined : blockAt[handlers[start]]!,
+	);
+	const predecessors: Array<Array<number>> = blocks.map(() => []);
+	for (const [block, targets] of successors.entries()) {
+		for (const target of targets) predecessors[target]!.push(block);
+		const handler = handlerBlocks[block];
+		if (handler !== undefined && !targets.includes(handler))
+			predecessors[handler]!.push(block);
+	}
 	const wordCount = Math.ceil(fn.registerCount / 32);
-	const live = fn.instructions.map(() => new Uint32Array(wordCount));
-	const reads = fn.instructions.map(vmInstructionReadRegisters);
-	const writes = fn.instructions.map(vmInstructionWriteRegisters);
-	const pending = fn.instructions.map((_, ip) => ip);
-	const queued = new Uint8Array(fn.instructions.length).fill(1);
+	const live = blocks.map(() => new Uint32Array(wordCount));
+	const pending = blocks.map((_, block) => block);
+	const queued = new Uint8Array(blocks.length).fill(1);
 	const scratch = new Uint32Array(wordCount);
 	while (pending.length > 0) {
-		const ip = pending.pop()!;
-		queued[ip] = 0;
+		const block = pending.pop()!;
+		queued[block] = 0;
 		scratch.fill(0);
-		for (const next of successors[ip]!)
+		for (const next of successors[block]!)
 			for (let word = 0; word < wordCount; word++) scratch[word]! |= live[next]![word]!;
-		for (const register of writes[ip]!)
-			if (register >= 0) scratch[register >>> 5]! &= ~(1 << (register & 31));
-		// A throwing definition leaves the handler's incoming value unchanged.
-		if (handlers[ip] !== undefined)
+		for (const register of blocks[block]!.killed)
+			scratch[register >>> 5]! &= ~(1 << (register & 31));
+		for (const register of blocks[block]!.generated)
+			scratch[register >>> 5]! |= 1 << (register & 31);
+		// Every instruction shares this handler, so its incoming values survive the whole block's definitions.
+		const handler = handlerBlocks[block];
+		if (handler !== undefined)
 			for (let word = 0; word < wordCount; word++)
-				scratch[word]! |= live[handlers[ip]]![word]!;
-		for (const register of reads[ip]!)
-			if (register >= 0) scratch[register >>> 5]! |= 1 << (register & 31);
-		if (scratch.every((value, word) => value === live[ip]![word])) continue;
-		live[ip]!.set(scratch);
-		for (const predecessor of predecessors[ip]!) {
+				scratch[word]! |= live[handler]![word]!;
+		if (scratch.every((value, word) => value === live[block]![word])) continue;
+		live[block]!.set(scratch);
+		for (const predecessor of predecessors[block]!) {
 			if (queued[predecessor] !== 0) continue;
 			queued[predecessor] = 1;
 			pending.push(predecessor);
@@ -81,14 +135,24 @@ export function lowerNativeSuspension(
 		if (op.opcode !== "GENERATOR_START" && op.opcode !== "YIELD" && op.opcode !== "AWAIT")
 			continue;
 		const registers = new Set<number>();
-		for (const next of successors[ip]!)
-			for (let register = 0; register < fn.registerCount; register++)
-				if (
-					native.registerRepresentations[register] !== "boxed" &&
-					native.registerRepresentations[register] !== "string" &&
-					(live[next]![register >>> 5]! & (1 << (register & 31))) !== 0
-				)
-					registers.add(register);
+		const block = blockAt[ip]!;
+		const nextBlocks = [...successors[block]!];
+		const handler = handlerBlocks[block];
+		if (handler !== undefined) nextBlocks.push(handler);
+		for (const next of nextBlocks)
+			for (let word = 0; word < wordCount; word++) {
+				let bits = live[next]![word]!;
+				while (bits !== 0) {
+					const register = word * 32 + 31 - Math.clz32(bits & -bits);
+					if (
+						register < fn.registerCount &&
+						native.registerRepresentations[register] !== "boxed" &&
+						native.registerRepresentations[register] !== "string"
+					)
+						registers.add(register);
+					bits = (bits & (bits - 1)) >>> 0;
+				}
+			}
 		// Only GC-owned heap locals are safe to copy; conservative handler edges can name stale bits.
 		for (const register of roots.get(ip) ?? []) registers.add(register);
 		if (op.opcode !== "GENERATOR_START") {

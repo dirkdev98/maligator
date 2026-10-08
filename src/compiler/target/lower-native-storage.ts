@@ -1050,7 +1050,7 @@ function lowerStorage(
 	preserveProfileSites = true,
 	entry?: NativeDirectEntryPlan,
 	entries: NativeEntryLookup = new Map(),
-	suspension = lowerNativeSuspension(native),
+	suspension = lowerNativeSuspension(native, body),
 	stringConstants: ReadonlyArray<ReadonlyArray<number>> = [],
 ): NativeStoragePlan {
 	const fn = native.body;
@@ -1538,7 +1538,7 @@ export function validateNativeStorage(
 	const matches = (variant: NativeFunctionPlan, entry?: NativeDirectEntryPlan) => {
 		if (variant.storage === undefined) return false;
 		validateNativeRootStorage(variant, variant.storage.rootRegisters, variant.storage);
-		const suspension = lowerNativeSuspension(variant);
+		const suspension = lowerNativeSuspension(variant, body);
 		const selected = lowerStorage(
 			variant,
 			body,

@@ -2,6 +2,7 @@ import {
 	selectNativeRootStorage,
 	validateNativeRootStorage,
 } from "../../src/compiler/target/lower-native-roots.ts";
+import { lowerNativeSuspension } from "../../src/compiler/target/lower-native-suspension.ts";
 import {
 	nativeInactiveRootMasks,
 	nativeRootMaskWordHex,
@@ -85,6 +86,54 @@ for (const [slot, hex] of [
 		if (nativeRootMaskWordHex(mask, word) !== expected)
 			throw new Error(`root mask word differs at ${slot}/${word}`);
 	}
+}
+
+for (const length of [32, 256, 2048]) {
+	const registerCount = length + 320;
+	const retained = registerCount - 1;
+	const saved = [31, 32, 127, 128, 129, 255, 256, 286, retained];
+	const transfer = { opcode: "AWAIT", awaitedSrc: 16, valueDst: 1, modeDst: 2 };
+	const instructions = [
+		transfer,
+		...Array.from({ length }, () => ({ opcode: "CREATE_NUMBER", dst: 16, value: 1 })),
+		transfer,
+		...saved
+			.filter((register) => register !== 286)
+			.map((register) => ({ opcode: "MOVE", dst: 16, src: register })),
+		{ opcode: "RETURN", value: 16 },
+		{ opcode: "RETURN", value: 286 },
+	];
+	const native = {
+		mode: "resumable",
+		body: {
+			registerCount,
+			handlers: [
+				{
+					startIp: 0,
+					endIp: instructions.length - 1,
+					handlerIp: instructions.length - 1,
+				},
+			],
+			instructions,
+		},
+		registerRepresentations: Array.from({ length: registerCount }, (_, register) =>
+			register === 3 ? "boxed" : "number",
+		),
+		gc: {
+			safepoints: [0, length + 1].map((instructionIp) => ({
+				instructionIp,
+				outgoingRootRegisters: [3],
+			})),
+		},
+	};
+	const plan = lowerNativeSuspension(native);
+	const expected = [3, ...saved].join(",");
+	if (
+		plan.slotCount !== saved.length + 3 ||
+		plan.points.length !== 2 ||
+		plan.points.some((point) => point.registers.join(",") !== expected)
+	)
+		throw new Error(`wrong scalar/heap suspension transport at ${length}`);
 }
 
 console.log("native-root-planner PASS");
