@@ -54,6 +54,37 @@ describe("compact native shadow roots", () => {
 				(ip) => handlerTargets[ip] !== undefined,
 			),
 		).toBe(true);
+		for (const name of ["forwardBranchRoots", "unpublishedBranchRoots"]) {
+			const branch = pair.programImage.native.functions.find(
+				(fn) =>
+					String.fromCharCode(
+						...(pair.programImage.runtime.stringConstants[fn.body.nameStringIndex] ?? []),
+					) === name,
+			)!;
+			expect(branch).toBeDefined();
+			const propertyResult = branch.body.instructions.find(
+				(op) =>
+					op.opcode === "LOAD_PROPERTY_STATIC" &&
+					String.fromCharCode(
+						...(pair.programImage.runtime.stringConstants[op.stringIndex] ?? []),
+					) === "item",
+			)!;
+			expect(propertyResult).toBeDefined();
+			if (propertyResult.opcode !== "LOAD_PROPERTY_STATIC")
+				throw new Error("Expected the holder property result");
+			expect(branch.storage!.privateRegisters).toContain(propertyResult.dst);
+			expect(
+				emitCompiledFunction(branch, branch.functionIndex, "", false),
+			).not.toBeNull();
+			expect(
+				branch.body.instructions.some(
+					(op, ip) =>
+						op.opcode === "JUMP_IF" &&
+						op.targetIp > ip + 1 &&
+						branch.storage!.rootPublicationContinuations.includes(op.targetIp),
+				),
+			).toBe(true);
+		}
 		const selected = new Set<string>();
 		for (const fn of pair.programImage.native.functions) {
 			const name = String.fromCharCode(

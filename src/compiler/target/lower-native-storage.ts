@@ -1081,16 +1081,24 @@ function rootPublicationContinuations(
 	)
 		return [];
 	const polls = new Set(native.gc.safepoints.map((point) => point.instructionIp));
+	const loopPolls = new Set(
+		native.gc.safepoints
+			.filter((point) => point.kind === "loop-backedge")
+			.map((point) => point.instructionIp),
+	);
 	const targets: Array<number> = [];
 	for (const [target, sources] of body.branchSources) {
-		const source = target - 1;
+		const source = sources[0]!;
+		const instruction = fn.instructions[source];
 		if (
 			sources.length === 1 &&
-			sources[0] === source &&
-			fn.instructions[source]?.opcode === "JUMP" &&
+			source < target &&
+			(instruction?.opcode === "JUMP" || instruction?.opcode === "JUMP_IF") &&
 			body.predecessorCounts[target] === 1 &&
+			!body.externalEntries.has(source) &&
 			!body.externalEntries.has(target) &&
-			!polls.has(source)
+			!polls.has(source) &&
+			!loopPolls.has(target)
 		)
 			targets.push(target);
 	}
@@ -1119,7 +1127,9 @@ function rootPublicationContinuations(
 	for (const site of native.fieldCalls ?? []) blockSpan([site.allocationIp, site.callIp]);
 	for (const site of native.literalSwitches ?? [])
 		blockSpan([site.instructionIp, site.endIp]);
-	return targets.filter((target) => !blocked.has(target - 1) && !blocked.has(target));
+	return targets.filter(
+		(target) => !blocked.has(body.branchSources.get(target)![0]!) && !blocked.has(target),
+	);
 }
 
 function lowerStorage(

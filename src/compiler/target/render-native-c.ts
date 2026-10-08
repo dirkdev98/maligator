@@ -3682,6 +3682,16 @@ function emitBody(
 	let lastPublishedSite = -1;
 	let lastPublishedInactiveRootMask: NativeInactiveRootMask | undefined;
 	const knownPublishedPrivateRoots = new Map<number, number>();
+	let adjacentRootContinuationIp = -1;
+	let rootContinuationSnapshots:
+		| Map<
+				number,
+				{
+					readonly roots: ReadonlyMap<number, number>;
+					readonly mask: NativeInactiveRootMask | undefined;
+				}
+		  >
+		| undefined;
 	if (rootPublication !== undefined) {
 		for (const [slot, registers] of rootPublication.slotRegisters)
 			if (registers.length === 1) knownPublishedPrivateRoots.set(slot, registers[0]!);
@@ -3699,9 +3709,15 @@ function emitBody(
 			// Control can arrive with different published frame metadata.
 			lastPublishedPos = -1;
 			lastPublishedSite = -1;
-			if (!rootPublicationContinuations.has(ip)) {
-				lastPublishedInactiveRootMask = undefined;
+			const snapshot = rootContinuationSnapshots?.get(ip);
+			if (adjacentRootContinuationIp !== ip) {
+				lastPublishedInactiveRootMask = snapshot?.mask;
 				knownPublishedPrivateRoots.clear();
+				if (snapshot !== undefined) {
+					for (const [slot, register] of snapshot.roots)
+						knownPublishedPrivateRoots.set(slot, register);
+					rootContinuationSnapshots!.delete(ip);
+				}
 			}
 		}
 		const literalSwitch = switches.get(ip);
@@ -4239,6 +4255,23 @@ function emitBody(
 		for (const register of rootedOutputs) {
 			lines.push(`#undef r${register}`);
 			lines.push(`#define r${register} (__private_r${register})`);
+		}
+		if (
+			(instruction.opcode === "JUMP" || instruction.opcode === "JUMP_IF") &&
+			rootPublicationContinuations.has(instruction.targetIp)
+		) {
+			if (instruction.targetIp === ip + 1)
+				adjacentRootContinuationIp = instruction.targetIp;
+			else if (
+				knownPublishedPrivateRoots.size > 0 ||
+				lastPublishedInactiveRootMask !== undefined
+			) {
+				// Skipped lexical blocks can change publication state before the taken target.
+				(rootContinuationSnapshots ??= new Map()).set(instruction.targetIp, {
+					roots: new Map(knownPublishedPrivateRoots),
+					mask: lastPublishedInactiveRootMask,
+				});
+			}
 		}
 	}
 

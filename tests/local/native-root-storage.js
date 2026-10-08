@@ -59,12 +59,59 @@ function continuationRoots(factory, collect, fail) {
 	}
 }
 
+function forwardBranchRoots(factory, collect, holder, choose) {
+	const held = factory(43);
+	collect(held);
+	const second = holder.item;
+	if (choose) {
+		collect(held, second);
+		return held.marker + second.marker;
+	}
+	const replacement = factory(47);
+	collect(replacement, second);
+	return replacement.marker + second.marker;
+}
+
+function unpublishedBranchRoots(factory, collect, holder, choose) {
+	const held = factory(43);
+	const second = holder.item;
+	if (choose) {
+		collect(held, second);
+		return held.marker + second.marker;
+	}
+	collect(held, second);
+	return held.marker + second.marker;
+}
+
 for (const factory of [own, accessor]) {
 	for (let iteration = 0; iteration < 8; iteration++) {
 		if (compactRoots(factory, visit) !== 51) throw new Error("disjoint root lost");
 		for (const fail of [false, true])
 			if (continuationRoots(factory, gc, fail) !== 41)
 				throw new Error("continuation root lost");
+		for (const choose of [
+			false,
+			true,
+			{
+				valueOf() {
+					throw new Error("truthiness coerced an object");
+				},
+			},
+		]) {
+			const holder = () => ({
+				value: factory(53),
+				get item() {
+					const result = this.value;
+					this.value = null;
+					gc();
+					return result;
+				},
+			});
+			if (forwardBranchRoots(factory, gc, holder(), choose) !== (choose ? 96 : 100))
+				throw new Error("forward branch root lost");
+			if (unpublishedBranchRoots(factory, gc, holder(), choose) !== 96)
+				throw new Error("unpublished branch root lost");
+		}
 		for (const choose of [false, true])
 			for (const fail of [false, true])
 				if (branchRoots(factory, visit, choose, fail) !== (choose ? 60 : 66))

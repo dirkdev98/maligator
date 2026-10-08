@@ -27,7 +27,124 @@ function compile(profile = false) {
 	);
 }
 
+function compileForwardBranch(profile: boolean, publishBeforeBranch: boolean) {
+	return compileSemanticProgramToProgramImage(
+		analyzeSourceAndRunSemanticAnalysis(
+			`function retained(factory, collect, holder, choose) {
+				const held = factory();
+				${publishBeforeBranch ? "collect(held);" : ""}
+				const second = holder.item;
+				if (choose) { collect(held, second); return second.marker; }
+				collect(held, second); return held.marker;
+			} globalThis.retained = retained;`,
+			"/forward-root-continuation.js",
+		),
+		{ profile },
+	);
+}
+
 describe("native root publication across ordinary continuations", () => {
+	it.each([false, true])(
+		"restores only the taken predecessor's publication with profiling=%s",
+		(profile) => {
+			for (const publishBeforeBranch of [false, true]) {
+				const image = compileForwardBranch(profile, publishBeforeBranch);
+				const fn = image.native.functions[1]!;
+				const branch = fn.body.instructions.find((op) => op.opcode === "JUMP_IF")!;
+				expect(branch.opcode).toBe("JUMP_IF");
+				if (branch.opcode !== "JUMP_IF") throw new Error("Expected a conditional branch");
+				const target = branch.targetIp;
+				const targetCall = fn.body.instructions.findIndex(
+					(op, ip) => ip >= target && op.opcode === "CALL",
+				);
+				expect(targetCall).toBeGreaterThanOrEqual(target);
+				expect(target).toBeGreaterThan(fn.body.instructions.indexOf(branch) + 1);
+				expect(fn.storage!.rootPublicationContinuations).toContain(target);
+				const selected = emitCompiledFunction(fn, fn.functionIndex, "", true)!;
+				const reset = emitCompiledFunction(
+					{
+						...fn,
+						storage: {
+							...fn.storage!,
+							rootPublicationContinuations:
+								fn.storage!.rootPublicationContinuations.filter((ip) => ip !== target),
+						},
+					},
+					fn.functionIndex,
+					"",
+					true,
+				)!;
+				const beforeTargetCall = (source: string) => {
+					const start = source.indexOf(`L${target}:;`);
+					const end = source.indexOf(`MalCompletion call_result_${targetCall}`, start);
+					expect(end).toBeGreaterThan(start);
+					return source.slice(start, end);
+				};
+				const copies = (source: string) =>
+					beforeTargetCall(source)
+						.split("\n")
+						.filter((line) => /^ {4}__gc_slots\[\d+\] = r\d+;$/.test(line));
+				const selectedCopies = copies(selected.source);
+				const resetCopies = copies(reset.source);
+				expect(selectedCopies.length).toBe(
+					resetCopies.length - (publishBeforeBranch ? 1 : 0),
+				);
+				const second = fn.body.instructions.find(
+					(op) => op.opcode === "LOAD_PROPERTY_STATIC",
+				)!;
+				if (second.opcode !== "LOAD_PROPERTY_STATIC")
+					throw new Error("Expected the deferred property result");
+				expect(selectedCopies.some((copy) => copy.endsWith(` = r${second.dst};`))).toBe(
+					true,
+				);
+				expect(selected.profileDecisions).toEqual(reset.profileDecisions);
+				const restored = deserializeCompilerArtifact(serializeCompilerArtifact(image));
+				expect(
+					restored.native.functions[1]!.storage!.rootPublicationContinuations,
+				).toEqual(fn.storage!.rootPublicationContinuations);
+			}
+		},
+	);
+
+	it("rejects a polling conditional source and a target with branch and fallthrough inputs", () => {
+		const fn = compileForwardBranch(false, true).native.functions[1]!;
+		const source = fn.body.instructions.findIndex((op) => op.opcode === "JUMP_IF");
+		const branch = fn.body.instructions[source]!;
+		if (branch.opcode !== "JUMP_IF") throw new Error("Expected a conditional branch");
+		const polling = lowerNativeFunctionStorage({
+			...fn,
+			gc: {
+				safepoints: [
+					...fn.gc.safepoints,
+					{ ...fn.gc.safepoints[0]!, instructionIp: source },
+				].sort((left, right) => left.instructionIp - right.instructionIp),
+			},
+		});
+		expect(polling.storage!.rootPublicationContinuations).not.toContain(branch.targetIp);
+		expect(() => validateNativeStorage({ ...polling, storage: fn.storage })).toThrow(
+			/storage plan/,
+		);
+		expect(fn.body.instructions[branch.targetIp - 1]!.opcode).toBe("RETURN");
+		const join = lowerNativeFunctionStorage({
+			...fn,
+			body: {
+				...fn.body,
+				instructions: fn.body.instructions.with(branch.targetIp - 1, {
+					opcode: "MOVE",
+					dst: branch.cond,
+					src: branch.cond,
+				}),
+			},
+		});
+		expect(
+			analyzeNativeBodyFacts(join.body).branchSources.get(branch.targetIp),
+		).toHaveLength(1);
+		expect(join.storage!.rootPublicationContinuations).not.toContain(branch.targetIp);
+		expect(() => validateNativeStorage({ ...join, storage: fn.storage })).toThrow(
+			/storage plan/,
+		);
+	});
+
 	it.each([false, true])(
 		"retains a published heap value across a normal try entry with profiling=%s",
 		(profile) => {
