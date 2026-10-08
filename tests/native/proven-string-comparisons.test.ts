@@ -45,7 +45,6 @@ describe("proven boxed String operations", () => {
 						...(pair.programImage.runtime.stringConstants[fn.body.nameStringIndex] ?? []),
 					);
 					if (!name.startsWith("boxed")) return fn;
-					expect(fn.directEntries).toHaveLength(0);
 					const op = fn.body.instructions.find((op) => op.opcode === "BINARY");
 					if (op?.opcode !== "BINARY") throw new Error("Missing String comparison");
 					const ip = fn.body.instructions.indexOf(op);
@@ -59,6 +58,14 @@ describe("proven boxed String operations", () => {
 						registerRepresentations: fn.registerRepresentations.map((rep, local) =>
 							local === op.left || local === op.right || local === op.dst ? "boxed" : rep,
 						),
+						directEntries: fn.directEntries.map((entry) => ({
+							...entry,
+							registerRepresentations: entry.registerRepresentations.map((rep, local) =>
+								local === op.left || local === op.right || local === op.dst
+									? "boxed"
+									: rep,
+							),
+						})),
 					};
 				}),
 			},
