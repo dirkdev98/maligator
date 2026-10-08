@@ -3498,7 +3498,7 @@ function emitBody(
 	let lastPublishedPos = -1;
 	let lastPublishedSite = -1;
 	let lastPublishedInactiveRootMask: bigint | undefined;
-	let knownPublishedPrivateRoots = new Map<number, number>();
+	const knownPublishedPrivateRoots = new Map<number, number>();
 	if (rootPublication !== undefined) {
 		for (const [slot, registers] of rootPublication.slotRegisters)
 			if (registers.length === 1) knownPublishedPrivateRoots.set(slot, registers[0]!);
@@ -3517,11 +3517,11 @@ function emitBody(
 			lastPublishedPos = -1;
 			lastPublishedSite = -1;
 			lastPublishedInactiveRootMask = undefined;
-			knownPublishedPrivateRoots = new Map();
+			knownPublishedPrivateRoots.clear();
 		}
 		const literalSwitch = switches.get(ip);
 		if (literalSwitch !== undefined) {
-			knownPublishedPrivateRoots = new Map();
+			knownPublishedPrivateRoots.clear();
 			const branch = (target: number, branchIp: number) => {
 				const mask = inactiveRootMasks.get(branchIp);
 				if (gcSafepointKinds.get(branchIp) !== "loop-backedge") return `goto L${target};`;
@@ -3705,31 +3705,32 @@ function emitBody(
 			!deferredIteratorRoots &&
 			!deferredCharCodeAtRoots &&
 			(effects.collection || effects.reentry);
-		const nextPublishedPrivateRoots = new Map(knownPublishedPrivateRoots);
+		// Only rendered strings escape this map, so the body can update it in place.
 		if (rootPublication !== undefined && hasPrivateRoots) {
 			const point = rootPublication.safepoints.get(ip);
 			if (publishesIncomingRoots && point !== undefined)
 				for (const [register, slot] of rootPublication.slots)
-					if (point.incoming.has(register)) nextPublishedPrivateRoots.set(slot, register);
+					if (point.incoming.has(register))
+						knownPublishedPrivateRoots.set(slot, register);
 			// Refined GC maps identify possible shadow clearing on either edge.
 			if (point !== undefined)
-				for (const [slot, register] of nextPublishedPrivateRoots)
+				for (const [slot, register] of knownPublishedPrivateRoots)
 					if (!point.incoming.has(register) || !point.outgoing.has(register))
-						nextPublishedPrivateRoots.delete(slot);
+						knownPublishedPrivateRoots.delete(slot);
 			for (const register of vmInstructionWriteRegisters(fn.instructions[ip]!)) {
 				const slot = rootPublication.slots.get(register);
-				if (slot !== undefined && nextPublishedPrivateRoots.get(slot) === register)
-					nextPublishedPrivateRoots.delete(slot);
+				if (slot !== undefined && knownPublishedPrivateRoots.get(slot) === register)
+					knownPublishedPrivateRoots.delete(slot);
 			}
 			// Polls read the shadow alias; the final reload establishes private equality.
 			for (const register of rootedOutputs)
-				nextPublishedPrivateRoots.set(rootPublication.slots.get(register)!, register);
+				knownPublishedPrivateRoots.set(rootPublication.slots.get(register)!, register);
 		}
 		const outgoingRootPublication = cPrivateRootPublication(
 			rootPublication,
 			ip,
 			"outgoing",
-			nextPublishedPrivateRoots,
+			knownPublishedPrivateRoots,
 		);
 		if (publishesIncomingRoots) {
 			for (const line of incomingRootPublication) lines.push(`    ${line}`);
@@ -4053,7 +4054,6 @@ function emitBody(
 			lines.push(`#undef r${register}`);
 			lines.push(`#define r${register} (__private_r${register})`);
 		}
-		knownPublishedPrivateRoots = nextPublishedPrivateRoots;
 	}
 
 	const leafCacheDeclarations = [...stringLeafCaches].map(
