@@ -280,6 +280,41 @@ function withSpecializations(
 }
 
 describe("emit-program-image instruction packing", () => {
+	it("omits unavailable polling helpers while preserving typed calls and bounded sort helpers", () => {
+		const out = inspectStaticValueFunction(
+			`function loop(value,count){for(let index=0;index<count;index++)value=value*1.25-0.5;return value;}
+			function add(left,right){return left+right;}
+			globalThis.loop=loop;globalThis.add=add;globalThis.result=loop(3,7);globalThis.other=add(1,2);`,
+			"loop",
+		);
+		const entry = out.native.directEntries.find(
+			(candidate) => (candidate.storage?.numericWorker?.pollingIps.length ?? 0) > 0,
+		)!;
+		expect(entry).toBeDefined();
+		expect(out.image.runtime.files.length).toBeGreaterThan(0);
+		const observed = emitProgramTranslationUnitSources(out.image, {
+			compiled: true,
+		}).join("\n");
+		const stripped = emitProgramTranslationUnitSources(out.image, {
+			compiled: true,
+			debugInfo: false,
+		}).join("\n");
+		const fileless = deserializeCompilerArtifact(
+			serializeCompilerArtifact(out.image, { debugInfo: false }),
+		);
+		const filelessObserved = emitProgramTranslationUnitSources(fileless, {
+			compiled: true,
+		}).join("\n");
+		const symbol = `mal_direct_${out.native.functionIndex}_${entry.id}`;
+		for (const source of [observed, stripped, filelessObserved]) {
+			expect(source).toContain(`${symbol}(vm,`);
+			expect(source).toMatch(/mal_direct_\d+_\d+_leaf\(/);
+		}
+		expect(observed).not.toContain(`${symbol}_worker(`);
+		expect(stripped).toContain(`${symbol}_worker(MalVm *vm,`);
+		expect(filelessObserved).toContain(`${symbol}_worker(MalVm *vm,`);
+	});
+
 	it("reserves slots for base constructor own-property writes", () => {
 		expect(
 			classConstructorSlotReserve(`

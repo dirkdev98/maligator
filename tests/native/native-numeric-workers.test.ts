@@ -68,6 +68,12 @@ describe("polling numeric C workers", () => {
 				debugInfo: false,
 			});
 			const emitted = source.map((unit) => unit.source).join("\n");
+			const observed = emitProgramTranslationUnits(built.programImage, {
+				compiled: true,
+			})
+				.map((unit) => unit.source)
+				.join("\n");
+			expect(observed).not.toMatch(/mal_direct_\d+_\d+_worker\(/);
 			expect(emitted).toContain(`mal_direct_${spin.functionIndex}_${target.entryId}(vm,`);
 			expect(emitted).toMatch(/mal_direct_\d+_\d+_worker\(MalVm \*vm/);
 			const unobserved = buildLocalBinary({

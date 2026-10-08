@@ -1602,6 +1602,7 @@ export function emitCompiledFunction(
 	strictCompiledTargets: ReadonlySet<number> = new Set(),
 	stringConstants: ReadonlyArray<ReadonlyArray<number>> = [],
 	callbackEntries: ReadonlySet<string> = new Set(),
+	pollingWorkersAvailable = true,
 ): CompiledFunction | null {
 	const fn = native.body;
 	const canonical = emitCompiledVariant(
@@ -1642,6 +1643,11 @@ export function emitCompiledFunction(
 			stringConstants,
 		);
 		if (emitted === null) return [];
+		if (
+			!pollingWorkersAvailable &&
+			(entry.storage?.numericWorker?.pollingIps.length ?? 0) > 0
+		)
+			return [{ entry, emitted, leaf: undefined }];
 		const worker = renderNumericWorker(nativeVariantContract(native, entry), entry);
 		if (worker === null) return [{ entry, emitted, leaf: undefined }];
 		const bounded = entry.storage!.numericWorker!.pollingIps.length === 0;
