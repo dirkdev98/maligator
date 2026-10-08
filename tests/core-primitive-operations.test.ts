@@ -156,6 +156,24 @@ describe("inherited wrapper toLocaleString", () => {
 });
 
 describe("late primitive effect and representation proofs", () => {
+	it.each(['left + right; return "miss";', "return left + right;"])(
+		"retains the length-error handler for proven String concatenation: %s",
+		(statement) => {
+			const result = inspectStaticValueFunction(
+				`function target(a,b) { const left=String(a),right=String(b); try { ${statement} } catch(error) { return error.name; } } globalThis.target=target;`,
+				"target",
+			);
+			for (const fn of [result.fn, result.native.body]) {
+				const ip = fn.instructions.findIndex(
+					(op) => op.opcode === "BINARY" && op.operator === "+",
+				);
+				expect(ip).toBeGreaterThanOrEqual(0);
+				expect(
+					vmExceptionHandlerTargets(fn.instructions.length, fn.handlers)[ip],
+				).toBeDefined();
+			}
+		},
+	);
 	it.each([
 		"Boolean(x)",
 		"new Boolean(x).valueOf()",

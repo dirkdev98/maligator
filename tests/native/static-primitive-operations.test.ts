@@ -24,6 +24,36 @@ import {
 } from "../helpers/numeric-call-profiles.ts";
 
 describe("primitive operation differential", () => {
+	it("preserves caught over-limit String concatenation even for discarded results", () => {
+		const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-string-concat-errors-"));
+		try {
+			const fixture = path.join(outDir, "concat-errors.mjs");
+			writeFileSync(
+				fixture,
+				`
+function used(a,b) { const left=String(a),right=String(b); try { return (left+right).length; } catch(error) { return error.name; } }
+function discarded(a,b) { const left=String(a),right=String(b); try { left+right; return 'miss'; } catch(error) { return error.name; } }
+globalThis.used=used; globalThis.discarded=discarded;
+const short='x'.repeat(1024), long='x'.repeat(9*1024*1024);
+console.log(used(short,short),discarded(short,short));
+console.log(used(long,long),discarded(long,long));
+`,
+			);
+			const pair = buildBackendPairFromOneProgramImage({
+				fixture,
+				name: "string-concat-errors",
+				config: resolveBuildConfig({ engine: { primordials: "locked" } }),
+				outDir,
+			});
+			for (const binary of [pair.compiled, pair.interpreted])
+				for (const env of [{}, STRESS_ENV])
+					expect(runToStdout(binary, { env, timeoutMs: 60_000 })).toBe(
+						"2048 miss\nRangeError RangeError\n",
+					);
+		} finally {
+			rmSync(outDir, { recursive: true, force: true });
+		}
+	}, 600_000);
 	it.each(["locked", "mutable"] as const)(
 		"preserves primitive constructor inputs with %s primordials",
 		(primordials) => {

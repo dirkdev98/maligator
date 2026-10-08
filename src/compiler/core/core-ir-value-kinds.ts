@@ -1467,6 +1467,7 @@ export function corePrimitiveOperatorEffectRefinement(
 	const operator = fn.instructionAttributes(instruction).operator;
 	let primitive = false;
 	let gcFree = false;
+	let stringConcatenation = false;
 	if (opcode === "unary" && masks.length === 1 && typeof operator === "string") {
 		const numericPrimitive = compilerValueKindMaskIsSubset(
 			masks[0]!,
@@ -1480,13 +1481,15 @@ export function corePrimitiveOperatorEffectRefinement(
 		const numericPrimitives = masks.every((mask) =>
 			compilerValueKindMaskIsSubset(mask, COMPILER_VALUE_KIND_NUMERIC_PRIMITIVE),
 		);
+		stringConcatenation =
+			operator === "+" &&
+			masks.every((mask) =>
+				compilerValueKindMaskIsSubset(mask, COMPILER_VALUE_KIND_STRING),
+			);
 		primitive =
 			["===", "!=="].includes(operator) ||
 			(NUMERIC_BINARY_OPERATORS.has(operator) && numericPrimitives) ||
-			(operator === "+" &&
-				masks.every((mask) =>
-					compilerValueKindMaskIsSubset(mask, COMPILER_VALUE_KIND_STRING),
-				)) ||
+			stringConcatenation ||
 			compilerOperatorInputKindsHaveExactNativeSemantics(opcode, operator, masks);
 		gcFree =
 			["===", "!=="].includes(operator) ||
@@ -1500,7 +1503,7 @@ export function corePrimitiveOperatorEffectRefinement(
 	return {
 		reads: baseline.reads.filter((domain) => domain !== "host"),
 		writes: baseline.writes.filter((domain) => domain !== "host"),
-		mayThrow: false,
+		mayThrow: stringConcatenation && baseline.mayThrow,
 		maySuspend: baseline.maySuspend,
 		mayGc: gcFree ? false : baseline.mayGc,
 		callsUserCode: false,
