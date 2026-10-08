@@ -148,7 +148,8 @@ The independent target boundary and current storage contract are recorded in
       CFG, effects, ownership, and uses; invalidate facts after layout/copy changes
       and measure cost on both compiler hosts without another wholesale IR rewrite.
 - [ ] Finish remaining legality-affecting renderer selection in explicit native
-      plans; capture-owner strategies now persist and validate. Rendering may choose C syntax; semantic
+      plans; capture-owner and String-transform strategies now persist and validate.
+      Rendering may choose C syntax; semantic
       assumptions, specialization admission, and ownership obligations belong in
       planning and must retain validated fallbacks.
 - [ ] Measure suspension planning with growing resumable functions on both compiler

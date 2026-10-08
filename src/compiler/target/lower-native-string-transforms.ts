@@ -80,6 +80,19 @@ const HTML_TRANSFORMS: Readonly<
 	sub: ["sub"],
 	sup: ["sup"],
 };
+const TRIM_METHODS: ReadonlyArray<string> = [
+	"trim",
+	"trimStart",
+	"trimLeft",
+	"trimEnd",
+	"trimRight",
+];
+const CASE_METHODS: ReadonlyArray<string> = [
+	"toUpperCase",
+	"toLowerCase",
+	"toLocaleUpperCase",
+	"toLocaleLowerCase",
+];
 
 export function selectNativeStringTransform(
 	native: NativeFunctionPlan,
@@ -95,6 +108,18 @@ export function selectNativeStringTransform(
 	)
 		return undefined;
 	const method = op.operation.slice("String.prototype.".length);
+	const html = Object.hasOwn(HTML_TRANSFORMS, method)
+		? HTML_TRANSFORMS[method]
+		: undefined;
+	if (
+		html === undefined &&
+		!TRIM_METHODS.includes(method) &&
+		!CASE_METHODS.includes(method) &&
+		method !== "normalize" &&
+		method !== "isWellFormed" &&
+		method !== "toWellFormed"
+	)
+		return undefined;
 	const receiver = decodeVmValueOperand(op.thisValue);
 	const proof = native.instructions[instructionIp];
 	const site: NativeStringTransformSite = {
@@ -113,9 +138,6 @@ export function selectNativeStringTransform(
 				: "guarded",
 		fallback: "original-call",
 	};
-	const html = Object.hasOwn(HTML_TRANSFORMS, method)
-		? HTML_TRANSFORMS[method]
-		: undefined;
 	if (html !== undefined)
 		return {
 			...site,
@@ -123,7 +145,7 @@ export function selectNativeStringTransform(
 			tag: html[0],
 			...(html[1] === undefined ? {} : { attribute: html[1] }),
 		};
-	if (["trim", "trimStart", "trimLeft", "trimEnd", "trimRight"].includes(method))
+	if (TRIM_METHODS.includes(method))
 		return {
 			...site,
 			kind: "trim",
@@ -132,16 +154,6 @@ export function selectNativeStringTransform(
 		};
 	if (method === "isWellFormed") return { ...site, kind: "is-well-formed" };
 	if (method === "toWellFormed") return { ...site, kind: "to-well-formed" };
-	if (
-		![
-			"normalize",
-			"toUpperCase",
-			"toLowerCase",
-			"toLocaleUpperCase",
-			"toLocaleLowerCase",
-		].includes(method)
-	)
-		return undefined;
 	const first = op.arguments[0];
 	const decoded = first === undefined ? undefined : decodeVmValueOperand(first);
 	const absent = decoded === undefined || decoded.kind === "undefined";
@@ -150,12 +162,9 @@ export function selectNativeStringTransform(
 		units === undefined || units.length > 16 ? undefined : String.fromCharCode(...units);
 	if (method === "normalize") {
 		const form = absent ? "NFC" : parameter;
-		const selected = NATIVE_STRING_NORMALIZATION_FORMS.find(
-			(candidate) => candidate === form,
-		);
-		return selected === undefined
-			? undefined
-			: { ...site, kind: "normalize", form: selected };
+		return form === "NFC" || form === "NFD" || form === "NFKC" || form === "NFKD"
+			? { ...site, kind: "normalize", form }
+			: undefined;
 	}
 	const selected =
 		method.includes("Locale") && !absent

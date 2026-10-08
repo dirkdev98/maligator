@@ -125,6 +125,17 @@ after restoring their actual environment. Environment allocation and rooting
 continue to follow captured storage ownership. All public program-image C-emission boundaries
 validate the body ABI and storage plans before rendering.
 
+Known String transforms persist their kernel, receiver guard mode, and prepared
+normalization form or locale per entry. Selection uses existing string representations
+or exact receiver-kind facts. Only certified literal parameters within sixteen
+UTF-16 code units select normalization and locale kernels; dynamic or invalid
+parameters keep the original call. Turkic and Lithuanian case plans retain the
+runtime's Intl-dependent root-locale fallback. HTML, trim, and well-formedness
+choices follow the same contract. Rendering preserves argument producers, original
+fallbacks, completion checks, polls, and traced string ownership. Validation
+reselects against the finalized string pool, and artifact decoding rejects stale
+or forged choices.
+
 Small numeric workers have their own selected scalar plan derived from the typed
 ABI, independently of ordinary boxed-body overlays. Polling workers render that
 schedule directly in the ordinary typed entry, retaining its root storage,
