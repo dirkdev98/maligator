@@ -66,8 +66,8 @@ leave coercion and throw checks in place. Repeated uses and intervening calls re
 ordinary boxed locals initialized to undefined. Logical GC liveness stays intact,
 and validation rederives the physical exclusion per variant. Parameters, raw
 storage, opaque or borrowed locals and suspension snapshots retain their roots.
-An existing exact Number result proof also admits coercive binary producers into
-f64 storage without requiring their inputs to be scalar. Evaluation stays
+An existing exact Number or int32 result proof also admits coercive binary producers
+into scalar storage without requiring their inputs to be scalar. Evaluation stays
 materialized; helper results are captured and checked for abrupt completion before
 conversion. Unknown addition and potential BigInt results remain boxed.
 Captured and module cell stores consume existing scalar result proofs at operand

@@ -36,6 +36,31 @@ describe("independent native SSA storage", () => {
 	}, 600_000);
 
 	it("preserves scalar arithmetic, loop transport, and suspended heap locals", () => {
+		for (const name of [
+			"coerciveScalarAnd",
+			"coerciveScalarOr",
+			"coerciveScalarXor",
+			"coerciveScalarShiftLeft",
+			"coerciveScalarShiftRight",
+		]) {
+			const native = image.native.functions.find(
+				(fn) =>
+					String.fromCharCode(
+						...(image.runtime.stringConstants[fn.body.nameStringIndex] ?? []),
+					) === name,
+			)!;
+			expect(native).toBeDefined();
+			const ip = native.body.instructions.findIndex((op) => op.opcode === "BINARY");
+			const op = native.body.instructions[ip]!;
+			if (op.opcode !== "BINARY") throw new Error("Missing scalar bitwise operator");
+			expect(native.registerRepresentations[op.left]).toBe("boxed");
+			expect(native.registerRepresentations[op.dst]).toBe("int32");
+			expect(native.storage!.rootRegisters).not.toContain(op.dst);
+			expect(native.storage!.expressionIps).not.toContain(ip);
+			expect(
+				emitCompiledFunction(native, native.functionIndex, "", false),
+			).not.toBeNull();
+		}
 		for (const name of ["coerciveScalarProduct", "coerciveScalarFusion"]) {
 			const native = image.native.functions.find(
 				(fn) =>

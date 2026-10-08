@@ -68,6 +68,35 @@ function boxedNumericLeaf(out: ReturnType<typeof inspectStaticValueFunction>) {
 }
 
 describe("native scalar plans around opaque and exceptional windows", () => {
+	it.each(["&", "|", "^", "<<", ">>"])(
+		"keeps the proven int32 result of coercive %s scalar without selecting stale fusion state",
+		(operator) => {
+			const out = inspectStaticValueFunction(
+				`function compute(left,right,gate){const number=+right;const value=left${operator}number;gate();return value+1;}globalThis.compute=compute;`,
+				"compute",
+			);
+			const ip = out.native.body.instructions.findIndex(
+				(op) => op.opcode === "BINARY" && op.operator === operator,
+			);
+			const op = out.native.body.instructions[ip]!;
+			if (op.opcode !== "BINARY") throw new Error("Missing coercive int32 operator");
+			expect(out.native.registerRepresentations[op.left]).toBe("boxed");
+			expect(out.native.registerRepresentations[op.dst]).toBe("int32");
+			expect(out.native.storage!.rootRegisters).toContain(op.left);
+			expect(out.native.storage!.rootRegisters).not.toContain(op.dst);
+			expect(out.native.storage!.expressionIps).not.toContain(ip);
+			expect(
+				out.native.specializations.some((region) => region.kind === "numeric-fusion"),
+			).toBe(false);
+			expect(out.c.source).toMatch(
+				/MalValue __binary_result_\d+ = [^;]*mal_vm_binary_op[^;]*;\n\s+if \([^\n]+\) goto __throw_exit;\n\s+r\d+ = mal_ops_number_to_i32\(mal_ops_number_as_f64\(__binary_result_\d+\)\);/,
+			);
+			expect(deserializeCompilerArtifact(serializeCompilerArtifact(out.image))).toEqual(
+				out.image,
+			);
+		},
+	);
+
 	it.each(["-", "*", "/", "%", "**"])(
 		"keeps the known Number result of coercive %s in scalar storage",
 		(operator) => {

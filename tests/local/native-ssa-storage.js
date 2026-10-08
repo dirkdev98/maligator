@@ -23,6 +23,36 @@ function coerciveScalarFusion(left, right, gate) {
 	gate();
 	return value;
 }
+function coerciveScalarAnd(left, right, gate) {
+	const number = +right;
+	const value = left & number;
+	gate();
+	return value;
+}
+function coerciveScalarOr(left, right, gate) {
+	const number = +right;
+	const value = left | number;
+	gate();
+	return value;
+}
+function coerciveScalarXor(left, right, gate) {
+	const number = +right;
+	const value = left ^ number;
+	gate();
+	return value;
+}
+function coerciveScalarShiftLeft(left, right, gate) {
+	const number = +right;
+	const value = left << number;
+	gate();
+	return value;
+}
+function coerciveScalarShiftRight(left, right, gate) {
+	const number = +right;
+	const value = left >> number;
+	gate();
+	return value;
+}
 function coerciveImmediateLess(left, right, gate, condition) {
 	const value = left < right;
 	gate();
@@ -57,6 +87,11 @@ globalThis.coerciveImmediatePlus = coerciveImmediatePlus;
 globalThis.coerciveImmediateProduct = coerciveImmediateProduct;
 globalThis.coerciveScalarProduct = coerciveScalarProduct;
 globalThis.coerciveScalarFusion = coerciveScalarFusion;
+globalThis.coerciveScalarAnd = coerciveScalarAnd;
+globalThis.coerciveScalarOr = coerciveScalarOr;
+globalThis.coerciveScalarXor = coerciveScalarXor;
+globalThis.coerciveScalarShiftLeft = coerciveScalarShiftLeft;
+globalThis.coerciveScalarShiftRight = coerciveScalarShiftRight;
 globalThis.coerciveImmediateLess = coerciveImmediateLess;
 globalThis.coerciveImmediateEqual = coerciveImmediateEqual;
 globalThis.coerciveImmediateGreaterEqual = coerciveImmediateGreaterEqual;
@@ -78,6 +113,43 @@ function coercionGate() {
 	gc();
 	coercionOrder.push("gate");
 }
+for (const operation of [
+	coerciveScalarAnd,
+	coerciveScalarOr,
+	coerciveScalarXor,
+	coerciveScalarShiftLeft,
+	coerciveScalarShiftRight,
+]) {
+	for (const [left, right] of [
+		[-0, 0],
+		[NaN, 31],
+		[Infinity, -1],
+		[2147483648, 33],
+		[-2147483649, 1],
+		[4294967295, 31],
+		["3", 2],
+		[undefined, NaN],
+		[null, -1],
+		[2.9, 3],
+	]) {
+		console.log("scalar-bitwise-number-hit", operation(left, right, gc));
+		coercionOrder.length = 0;
+		const value = operation(
+			coercionInput("left", left),
+			coercionInput("right", right),
+			coercionGate,
+		);
+		console.log("coercive-scalar-bitwise", value, coercionOrder.join(","));
+	}
+	for (const input of [1n, Symbol("scalar-bitwise")]) {
+		try {
+			operation(coercionInput("left", input), 2, coercionGate);
+		} catch (error) {
+			gc();
+			console.log("coercive-scalar-bitwise-reject", error instanceof TypeError);
+		}
+	}
+}
 for (const input of [-0, NaN, Infinity, 3]) {
 	coercionOrder.length = 0;
 	const value = coerciveImmediatePlus(coercionInput("number", input), coercionGate, true);
@@ -94,6 +166,8 @@ for (const input of [-0, NaN, Infinity, "3", null, undefined]) {
 		coerciveScalarProduct,
 		coerciveScalarFusion,
 	]) {
+		const direct = operation(input, 2, gc, true);
+		console.log("scalar-product-number-hit", String(direct), Object.is(direct, -0));
 		coercionOrder.length = 0;
 		const value = operation(
 			coercionInput("left", input),
@@ -203,6 +277,11 @@ for (const operation of [
 	coerciveImmediateProduct,
 	coerciveScalarProduct,
 	coerciveScalarFusion,
+	coerciveScalarAnd,
+	coerciveScalarOr,
+	coerciveScalarXor,
+	coerciveScalarShiftLeft,
+	coerciveScalarShiftRight,
 	coerciveImmediateLess,
 	coerciveImmediateEqual,
 	coerciveImmediateGreaterEqual,

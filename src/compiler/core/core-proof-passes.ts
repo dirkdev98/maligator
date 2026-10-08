@@ -820,11 +820,12 @@ function scalarProducerInputsSupportRepresentation(
 			(fn.valueRepresentation(source) === representation || belongsToComponent(source))
 		);
 	}
-	// Callers have proved the result kind; coercive inputs do not prevent f64 storage.
+	// Callers have proved the result kind; coercive inputs do not prevent scalar storage.
 	if (
-		representation === "f64" &&
-		(opcode === "binary" ||
-			(opcode === "unary" && fn.instructionAttributes(instruction).operator === "+"))
+		(opcode === "binary" && (representation === "f64" || representation === "i32")) ||
+		(opcode === "unary" &&
+			representation === "f64" &&
+			fn.instructionAttributes(instruction).operator === "+")
 	)
 		return true;
 

@@ -323,10 +323,10 @@ describe("connected native entry contracts", () => {
 		);
 	});
 
-	it.each(["exact-cell-value-kinds", "captured-callback-inlining"])(
-		"charges boxed-input scalar result proofs as discovery for %s",
-		(fixture) => {
-			let resultOnlyEntries = 0;
+	it("charges boxed-input variant result proofs as discovery across cells and callbacks", () => {
+		let resultOnlyEntries = 0;
+		let canonicalScalarEntries = 0;
+		for (const fixture of ["exact-cell-value-kinds", "captured-callback-inlining"]) {
 			compileEntrypoint(resolve(`tests/local/${fixture}.js`), {
 				buildConfig: resolveBuildConfig({
 					engine: { eval: false, realms: false, primordials: "locked" },
@@ -338,15 +338,21 @@ describe("connected native entry contracts", () => {
 							entry.parameterRepresentations.every((value) => value === "boxed") &&
 							entry.resultRepresentation !== "boxed"
 						) {
-							expect(entry.cost.compilerWork).toBe(0);
-							resultOnlyEntries++;
+							if (entry.valueRepresentations !== undefined) {
+								expect(entry.cost.compilerWork).toBe(0);
+								resultOnlyEntries++;
+							} else {
+								expect(entry.cost.compilerWork).toBeGreaterThan(0);
+								canonicalScalarEntries++;
+							}
 						}
 					}
 				},
 			});
-			expect(resultOnlyEntries).toBeGreaterThan(0);
-		},
-	);
+		}
+		expect(resultOnlyEntries).toBeGreaterThan(0);
+		expect(canonicalScalarEntries).toBeGreaterThan(0);
+	});
 
 	it("converges through a long call chain and keeps denied targets generic", () => {
 		const targets = Array.from({ length: 80 }, (_, index) =>

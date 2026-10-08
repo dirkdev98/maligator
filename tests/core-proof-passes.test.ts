@@ -559,35 +559,41 @@ describe("Core local proofs and representations", () => {
 		expect(fn.instructionEffectRefinement(definition.instruction)).toBeUndefined();
 	});
 
-	it("selects f64 for a coercive Number result without refining its effects", () => {
-		const program = new CoreProgram(coreOpcodeRegistry);
-		const builder = new CoreFunctionBuilder(program, { parameterCount: 1 });
-		const entry = builder.createBlock([{ representation: "boxed" }]);
-		const unknown = inspectCoreBlockParameters(builder, entry)[0]!.value;
-		const [number] = builder.appendInstruction(entry, "createNumber", [], {
-			attributes: { value: 3 },
-		});
-		const [product] = builder.appendInstruction(entry, "binary", [unknown, number!], {
-			attributes: { operator: "*" },
-		});
-		builder.setTerminator(entry, { kind: "return", value: product! });
-		const finished = builder.finish(entry);
-		const fn = program.function(finished.function);
-		const report = new CoreOptimizationReportBuilder(program);
-		const analyses = new CoreAnalysisManager(program, context, report);
-		new CoreFunctionPassScheduler(
-			program,
-			context,
-			analyses,
-			report,
-			finished.function,
-		).runComponent("proofs", CORE_PROOF_PASSES);
-		expect(fn.valueRepresentation(unknown)).toBe("boxed");
-		expect(fn.valueRepresentation(product!)).toBe("f64");
-		const definition = inspectCoreValueDefinition(fn, product!);
-		if (definition.kind !== "instruction") throw new Error("Expected product result");
-		expect(fn.instructionEffectRefinement(definition.instruction)).toBeUndefined();
-	});
+	it.each([
+		["*", "f64"],
+		["&", "i32"],
+	] as const)(
+		"selects %s result storage as %s without refining coercive effects",
+		(operator, representation) => {
+			const program = new CoreProgram(coreOpcodeRegistry);
+			const builder = new CoreFunctionBuilder(program, { parameterCount: 1 });
+			const entry = builder.createBlock([{ representation: "boxed" }]);
+			const unknown = inspectCoreBlockParameters(builder, entry)[0]!.value;
+			const [number] = builder.appendInstruction(entry, "createNumber", [], {
+				attributes: { value: 3 },
+			});
+			const [product] = builder.appendInstruction(entry, "binary", [unknown, number!], {
+				attributes: { operator },
+			});
+			builder.setTerminator(entry, { kind: "return", value: product! });
+			const finished = builder.finish(entry);
+			const fn = program.function(finished.function);
+			const report = new CoreOptimizationReportBuilder(program);
+			const analyses = new CoreAnalysisManager(program, context, report);
+			new CoreFunctionPassScheduler(
+				program,
+				context,
+				analyses,
+				report,
+				finished.function,
+			).runComponent("proofs", CORE_PROOF_PASSES);
+			expect(fn.valueRepresentation(unknown)).toBe("boxed");
+			expect(fn.valueRepresentation(product!)).toBe(representation);
+			const definition = inspectCoreValueDefinition(fn, product!);
+			if (definition.kind !== "instruction") throw new Error("Expected product result");
+			expect(fn.instructionEffectRefinement(definition.instruction)).toBeUndefined();
+		},
+	);
 
 	it("materializes primitive effects with stable proof references and scalar representations", () => {
 		const program = new CoreProgram(coreOpcodeRegistry);
