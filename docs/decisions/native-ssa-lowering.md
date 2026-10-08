@@ -68,6 +68,11 @@ zero without joining the cell's other writers into the producer's scalar compone
 Their values stay scalar until the store boxes them. Captured writes retain the
 old-slot barrier; only immediate Number and Boolean values skip new-value carding.
 Dynamic strings and generic arithmetic results keep traced storage and carding.
+Single-write boxed iterator done outputs also omit roots when the existing private
+output contract certifies final-value ownership. Every ordinary, cursor and projected
+step writes a Boolean; default initialization is undefined. Iterator values stay
+traced, and borrowed regions, suspension, aliased outputs and additional writers
+retain their existing storage contracts.
 
 Scalar locals initialize at their definition when all reads follow it in the same
 straight-line block. Bounded direct bodies without handler or resume entries also

@@ -176,6 +176,70 @@ for (const operation of [coerciveImmediateGreater, coerciveImmediateGreaterEqual
 }
 
 let immediateSaved;
+function iteratorDoneKernel(source, gate, mode) {
+	let total = 0;
+	for (const value of source) {
+		gate();
+		total += value.amount;
+		if (mode === 1) break;
+		if (mode === 2) throw { marker: total };
+	}
+	return total;
+}
+function iteratorDoneText(source, gate) {
+	let text = "";
+	for (const value of source) {
+		gate();
+		text += value;
+	}
+	return text;
+}
+globalThis.iteratorDoneKernel = iteratorDoneKernel;
+globalThis.iteratorDoneText = iteratorDoneText;
+for (const mode of [0, 1, 2]) {
+	let doneGets = 0,
+		valueGets = 0,
+		closes = 0;
+	const source = {
+		[Symbol.iterator]() {
+			let index = 0;
+			return {
+				next() {
+					const amount = ++index;
+					return {
+						get done() {
+							gc();
+							doneGets++;
+							return amount > 3;
+						},
+						get value() {
+							gc();
+							valueGets++;
+							return { amount, retained: { amount } };
+						},
+					};
+				},
+				return() {
+					gc();
+					closes++;
+					return {};
+				},
+			};
+		},
+	};
+	try {
+		console.log("iterator-done-value", mode, iteratorDoneKernel(source, gc, mode));
+	} catch (error) {
+		gc();
+		console.log("iterator-done-throw", mode, error.marker);
+	}
+	console.log("iterator-done-protocol", doneGets, valueGets, closes);
+}
+console.log(
+	"iterator-done-dense",
+	iteratorDoneKernel([{ amount: 2 }, { amount: 3 }, { amount: 4 }], gc, 0),
+);
+console.log("iterator-done-string", iteratorDoneText("native:😀:done", gc));
 function freshCoercedAdd(left, right, gate) {
 	const value = left + right;
 	gate();

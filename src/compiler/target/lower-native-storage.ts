@@ -151,6 +151,7 @@ interface NativeStorageBodyFacts {
 	readonly writeCounts: Uint32Array;
 	readonly definitions: Int32Array;
 	readonly uses: ReadonlyArray<ReadonlyArray<number>>;
+	readonly iteratorDoneRegisters: ReadonlyArray<number>;
 	readonly jumpTargets: ReadonlySet<number>;
 	readonly handlerTargets: ReturnType<typeof vmExceptionHandlerTargets>;
 	readonly controlBoundaries: ReadonlyArray<boolean>;
@@ -334,10 +335,12 @@ function storageBodyFacts(native: NativeFunctionPlan): NativeStorageBodyFacts {
 	const writeCounts = new Uint32Array(fn.registerCount);
 	const definitions = new Int32Array(fn.registerCount).fill(-1);
 	const uses: Array<Array<number>> = Array.from({ length: fn.registerCount }, () => []);
+	const iteratorDoneRegisters: Array<number> = [];
 	const jumpTargets = new Set(fn.handlers.map((handler) => handler.handlerIp));
 	const externalEntries = new Set(fn.handlers.map((handler) => handler.handlerIp));
 	const predecessorCounts = new Uint32Array(fn.instructions.length);
 	for (const [ip, op] of fn.instructions.entries()) {
+		if (op.opcode === "ITERATOR_STEP") iteratorDoneRegisters.push(op.doneDst);
 		// Conservative images have no SSA locals and receive operand validation downstream.
 		if (native.storageValues !== undefined) {
 			for (const local of writes[ip]!) {
@@ -367,6 +370,7 @@ function storageBodyFacts(native: NativeFunctionPlan): NativeStorageBodyFacts {
 		writeCounts,
 		definitions,
 		uses,
+		iteratorDoneRegisters,
 		jumpTargets,
 		handlerTargets: vmExceptionHandlerTargets(fn.instructions.length, fn.handlers),
 		controlBoundaries,
@@ -887,6 +891,7 @@ function untracedOperatorRegisters(
 
 function rootStorage(
 	native: NativeFunctionPlan,
+	body: NativeStorageBodyFacts,
 	fastPaths: NativeFastPathPlans,
 	callTransports: ReadonlyArray<NativeCallTransportPlan>,
 	rematerializedConstantIps: ReadonlyArray<number>,
@@ -901,7 +906,7 @@ function rootStorage(
 		if (!("dst" in op)) throw new Error("Native expression lacks a destination");
 		rootFree.add(op.dst);
 	}
-	const roots = nativeFrameRootRegisters(fn, native).filter(
+	let roots = nativeFrameRootRegisters(fn, native).filter(
 		(local) =>
 			["boxed", "string"].includes(native.registerRepresentations[local]!) &&
 			!rootFree.has(local),
@@ -931,6 +936,33 @@ function rootStorage(
 	];
 	for (const plan of borrowedPlans)
 		for (const local of plan.borrowedRegisters) privateLocals.delete(local);
+	if (
+		native.storageValues !== undefined &&
+		privateLocals.size > 0 &&
+		body.iteratorDoneRegisters.length > 0
+	) {
+		const omissionBorrowed = new Set(
+			[...fastPaths.propertyReadRegions, ...fastPaths.propertyReadPairs].flatMap(
+				(plan) => plan.borrowedRegisters,
+			),
+		);
+		const iteratorDone = new Set<number>();
+		for (const local of body.iteratorDoneRegisters) {
+			// Private ownership certifies final outputs; every iterator variant writes a Boolean.
+			if (
+				privateLocals.has(local) &&
+				!omissionBorrowed.has(local) &&
+				local >= fn.parameterCount + fn.argumentSnapshotCount &&
+				native.storageValues[local]! >= 0 &&
+				body.writeCounts[local] === 1 &&
+				native.registerRepresentations[local] === "boxed"
+			) {
+				iteratorDone.add(local);
+				privateLocals.delete(local);
+			}
+		}
+		if (iteratorDone.size > 0) roots = roots.filter((local) => !iteratorDone.has(local));
+	}
 	return {
 		rootRegisters: roots,
 		...selectNativeRootStorage(native, roots, privateLocals, calls),
@@ -1047,6 +1079,7 @@ function lowerStorage(
 		stackObjects: selectNativeStackObjectStorage(native, new Set(directHeapObjectIps)),
 		...rootStorage(
 			native,
+			body,
 			fastPaths,
 			callTransports,
 			scalar.rematerializedConstantIps,
@@ -1482,6 +1515,7 @@ export function validateNativeStorage(
 						...selected,
 						...rootStorage(
 							variant,
+							body,
 							selected,
 							selected.callTransports,
 							variant.storage!.rematerializedConstantIps,

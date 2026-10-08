@@ -36,6 +36,28 @@ describe("independent native SSA storage", () => {
 	}, 600_000);
 
 	it("preserves scalar arithmetic, loop transport, and suspended heap locals", () => {
+		for (const name of ["iteratorDoneKernel", "iteratorDoneText"]) {
+			const native = image.native.functions.find(
+				(fn) =>
+					String.fromCharCode(
+						...(image.runtime.stringConstants[fn.body.nameStringIndex] ?? []),
+					) === name,
+			)!;
+			expect(native).toBeDefined();
+			const op = native.body.instructions.find((op) => op.opcode === "ITERATOR_STEP")!;
+			if (op.opcode !== "ITERATOR_STEP") throw new Error("Missing iterator done output");
+			expect(native.registerRepresentations[op.doneDst]).toBe("boxed");
+			expect(
+				native.gc.safepoints.some((point) =>
+					point.incomingRootRegisters.includes(op.doneDst),
+				),
+			).toBe(true);
+			expect(native.storage!.rootRegisters).not.toContain(op.doneDst);
+			expect(native.storage!.rootRegisters).toContain(op.valueDst);
+			expect(
+				emitCompiledFunction(native, native.functionIndex, "", false),
+			).not.toBeNull();
+		}
 		for (const [name, operator] of [
 			["freshCoercedAdd", "+"],
 			["freshCoercedMultiply", "*"],
