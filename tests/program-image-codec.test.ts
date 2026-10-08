@@ -708,7 +708,7 @@ function firstNativeSafepointReader(bytes: Uint8Array) {
 	expect(reader.u32()).toBe(0);
 	expect(reader.u32()).toBe(0);
 	reader.u32();
-	for (let index = 0; index < 9; index++) reader.i32Array();
+	for (let index = 0; index < 10; index++) reader.i32Array();
 	expect(reader.u8()).toBe(0);
 	expect(reader.u32()).toBe(0);
 	expect(reader.u32()).toBe(0);

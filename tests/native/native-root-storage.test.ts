@@ -3,6 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { emitCompiledFunction } from "../../src/compiler/target/render-native-c.ts";
+import { vmExceptionHandlerTargets } from "../../src/compiler/target/runtime-image.ts";
 import {
 	assertExactLines,
 	buildBackendPairFromOneProgramImage,
@@ -35,6 +36,24 @@ describe("compact native shadow roots", () => {
 			kernel.storage!.rootRegisters.length,
 		);
 		expect(emitCompiledFunction(kernel, kernel.functionIndex, "", false)).not.toBeNull();
+		const continuation = pair.programImage.native.functions.find(
+			(fn) =>
+				String.fromCharCode(
+					...(pair.programImage.runtime.stringConstants[fn.body.nameStringIndex] ?? []),
+				) === "continuationRoots",
+		)!;
+		const handlerTargets = vmExceptionHandlerTargets(
+			continuation.body.instructions.length,
+			continuation.body.handlers,
+		);
+		expect(
+			emitCompiledFunction(continuation, continuation.functionIndex, "", false),
+		).not.toBeNull();
+		expect(
+			continuation.storage!.rootPublicationContinuations.some(
+				(ip) => handlerTargets[ip] !== undefined,
+			),
+		).toBe(true);
 		const selected = new Set<string>();
 		for (const fn of pair.programImage.native.functions) {
 			const name = String.fromCharCode(

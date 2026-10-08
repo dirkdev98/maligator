@@ -23,6 +23,11 @@ share slots only when their complete incoming/outgoing safepoint unions do not
 overlap; parameters, argument snapshots, continuously rooted locals, and helper
 output addresses retain dedicated slots. Publication tracks each slot's current
 occupant and forgets potentially cleared values at GC and control-flow boundaries.
+Per-entry storage also certifies adjacent nonpolling continuations with one ordinary
+predecessor outside selected ownership spans. Rendering retains occupant and mask
+knowledge across those labels while resetting source/profile markers. Handler and
+resume entries, joins, polling edges, and selected helpers retain the reset; validation
+reselects the continuation contract from the current body.
 Occupancy uses unsigned 32-bit words, so the allocator does not depend on the
 compiler host's BigInt width. Validation independently checks physical slot bounds,
 duplicate assignments, and simultaneous roots against each safepoint's complete

@@ -82,6 +82,7 @@ export interface NativeStoragePlan
 	readonly privateRegisters: ReadonlyArray<number>;
 	readonly privateCallResultIps: ReadonlyArray<number>;
 	readonly entryStableRootRegisters: ReadonlyArray<number>;
+	readonly rootPublicationContinuations: ReadonlyArray<number>;
 	readonly elidedTdzIps: ReadonlyArray<number>;
 	readonly numericWorker: NativeNumericWorkerPlan | undefined;
 }
@@ -1066,6 +1067,61 @@ function scalarStorageWindows(fastPaths: NativeFastPathPlans) {
 	];
 }
 
+function rootPublicationContinuations(
+	native: NativeFunctionPlan,
+	body: NativeStorageBodyFacts,
+	windows: ReturnType<typeof scalarStorageWindows>,
+): ReadonlyArray<number> {
+	const fn = native.body;
+	if (
+		native.storageValues === undefined ||
+		native.mode !== "direct" ||
+		fn.isGenerator ||
+		fn.isAsync
+	)
+		return [];
+	const polls = new Set(native.gc.safepoints.map((point) => point.instructionIp));
+	const targets: Array<number> = [];
+	for (const [target, sources] of body.branchSources) {
+		const source = target - 1;
+		if (
+			sources.length === 1 &&
+			sources[0] === source &&
+			fn.instructions[source]?.opcode === "JUMP" &&
+			body.predecessorCounts[target] === 1 &&
+			!body.externalEntries.has(target) &&
+			!polls.has(source)
+		)
+			targets.push(target);
+	}
+	if (targets.length === 0) return targets;
+	const blocked = new Set<number>();
+	const blockSpan = (ips: ReadonlyArray<number>): void => {
+		if (ips.length === 0) return;
+		let start = ips[0]!;
+		let end = start;
+		for (const ip of ips) {
+			start = Math.min(start, ip);
+			end = Math.max(end, ip);
+		}
+		for (let ip = start; ip <= end; ip++) blocked.add(ip);
+	};
+	// Selected helpers can carry hidden control and storage between sparse claims.
+	for (const region of native.specializations)
+		blockSpan([
+			region.license.admission.anchorIp,
+			...region.anchors,
+			...region.claimedIps,
+			...region.controlFlow.ordinaryBlockIps,
+		]);
+	for (const window of windows) blockSpan(window.claimedIps);
+	for (const action of native.regionActions) blocked.add(action.ip);
+	for (const site of native.fieldCalls ?? []) blockSpan([site.allocationIp, site.callIp]);
+	for (const site of native.literalSwitches ?? [])
+		blockSpan([site.instructionIp, site.endIp]);
+	return targets.filter((target) => !blocked.has(target - 1) && !blocked.has(target));
+}
+
 function lowerStorage(
 	native: NativeFunctionPlan,
 	body: NativeStorageBodyFacts,
@@ -1164,6 +1220,11 @@ function lowerStorage(
 			untracedPrimitiveResultRegisters(native, body, ownership),
 		),
 		elidedTdzIps: elidedTdzIps(native, ownership),
+		rootPublicationContinuations: rootPublicationContinuations(
+			native,
+			body,
+			expressionWindows,
+		),
 		...scalar,
 		numericWorker,
 	};
@@ -1552,6 +1613,7 @@ export function validateNativeStorage(
 					"privateRegisters",
 					"privateCallResultIps",
 					"entryStableRootRegisters",
+					"rootPublicationContinuations",
 					"elidedTdzIps",
 				] as const
 			).every(

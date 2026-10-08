@@ -1184,6 +1184,7 @@ function emitCompiledVariant(
 		storage,
 		storage.callTransports,
 		storage.callbackTransports,
+		new Set(storage.rootPublicationContinuations),
 	);
 	if (body === null) {
 		return null;
@@ -2016,6 +2017,7 @@ function emitResumableFunction(
 		storage,
 		storage.callTransports,
 		storage.callbackTransports,
+		new Set(storage.rootPublicationContinuations),
 	);
 	if (body === null) {
 		return null;
@@ -2743,6 +2745,7 @@ function emitBody(
 	},
 	callTransports: ReadonlyArray<NativeCallTransportPlan> = [],
 	callbackTransports: ReadonlyArray<NativeCallbackTransportPlan> = [],
+	rootPublicationContinuations: ReadonlySet<number> = new Set(),
 ): EmittedBody | null {
 	if (!vmRegionActionsAreCurrent(specializations, regionActions)) {
 		throw new Error("Native function has stale region actions");
@@ -3563,8 +3566,10 @@ function emitBody(
 			// Control can arrive with different published frame metadata.
 			lastPublishedPos = -1;
 			lastPublishedSite = -1;
-			lastPublishedInactiveRootMask = undefined;
-			knownPublishedPrivateRoots.clear();
+			if (!rootPublicationContinuations.has(ip)) {
+				lastPublishedInactiveRootMask = undefined;
+				knownPublishedPrivateRoots.clear();
+			}
 		}
 		const literalSwitch = switches.get(ip);
 		if (literalSwitch !== undefined) {

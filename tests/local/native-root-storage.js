@@ -46,9 +46,25 @@ function visit(value) {
 	return value.marker;
 }
 
+function continuationRoots(factory, collect, fail) {
+	const held = factory(41);
+	collect();
+	try {
+		collect();
+		if (fail) throw held;
+		return held.marker;
+	} catch (error) {
+		collect();
+		return error.marker;
+	}
+}
+
 for (const factory of [own, accessor]) {
 	for (let iteration = 0; iteration < 8; iteration++) {
 		if (compactRoots(factory, visit) !== 51) throw new Error("disjoint root lost");
+		for (const fail of [false, true])
+			if (continuationRoots(factory, gc, fail) !== 41)
+				throw new Error("continuation root lost");
 		for (const choose of [false, true])
 			for (const fail of [false, true])
 				if (branchRoots(factory, visit, choose, fail) !== (choose ? 60 : 66))

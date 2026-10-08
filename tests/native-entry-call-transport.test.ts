@@ -117,7 +117,7 @@ function skipStorageWithoutFastPaths(reader: Reader): void {
 	expect(reader.u32()).toBe(0);
 	expect(reader.u32()).toBe(0);
 	reader.u32();
-	for (let index = 0; index < 9; index++) reader.i32Array();
+	for (let index = 0; index < 10; index++) reader.i32Array();
 	expect(reader.u8()).toBe(0);
 	for (let index = 0; index < 5; index++) expect(reader.u32()).toBe(0);
 	for (let index = 0; index < 3; index++) expect(reader.u8()).toBe(0);
