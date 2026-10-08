@@ -3785,11 +3785,11 @@ static bool mal_vm_binary_coerce_operands(MalVm *vm, MalBinaryOp op, MalValue *l
         bool left_coercible_primitive = !left_object && !mal_value_is_nil(*left);
         bool right_coercible_primitive = !right_object && !mal_value_is_nil(*right);
         if (left_object && right_coercible_primitive &&
-            !mal_vm_to_primitive(vm, *left, MAL_TO_PRIMITIVE_NUMBER, left)) {
+            !mal_vm_to_primitive(vm, *left, MAL_TO_PRIMITIVE_DEFAULT, left)) {
             return false;
         }
         if (right_object && left_coercible_primitive &&
-            !mal_vm_to_primitive(vm, *right, MAL_TO_PRIMITIVE_NUMBER, right)) {
+            !mal_vm_to_primitive(vm, *right, MAL_TO_PRIMITIVE_DEFAULT, right)) {
             return false;
         }
     }

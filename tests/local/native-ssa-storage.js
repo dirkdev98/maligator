@@ -176,6 +176,39 @@ for (const operation of [coerciveImmediateGreater, coerciveImmediateGreaterEqual
 }
 
 let immediateSaved;
+const equalityHints = [];
+function equalityHintInput(throwing = false) {
+	return {
+		[Symbol.toPrimitive](hint) {
+			gc();
+			equalityHints.push(hint);
+			if (throwing) throw { marker: "equality-hint-thrown" };
+			return hint === "default" ? 1 : 7;
+		},
+	};
+}
+console.log(
+	"equality-default-hint",
+	coerciveImmediateEqual(equalityHintInput(), 1, gc, true),
+	coerciveImmediateEqual(1, equalityHintInput(), gc, true),
+	equalityHints.join(","),
+);
+equalityHints.length = 0;
+const equalitySame = equalityHintInput();
+console.log(
+	"equality-no-coercion",
+	coerciveImmediateEqual(equalitySame, equalitySame, gc, true),
+	coerciveImmediateEqual(equalitySame, equalityHintInput(), gc, true),
+	coerciveImmediateEqual(equalitySame, null, gc, true),
+	coerciveImmediateEqual(undefined, equalitySame, gc, true),
+	equalityHints.length,
+);
+try {
+	coerciveImmediateEqual(equalityHintInput(true), 1, gc, true);
+} catch (error) {
+	gc();
+	console.log("equality-hint-throw", error.marker, equalityHints.join(","));
+}
 function iteratorDoneKernel(source, gate, mode) {
 	let total = 0;
 	for (const value of source) {
