@@ -132,6 +132,42 @@ The independent target boundary and current storage contract are recorded in
       Move remaining emission-local selection into explicit native plans before
       claiming the C emitter only renders selected decisions.
 
+- [ ] Restore Node.js self-compile benchmark feedback and improve compiler phase
+      time and memory. Start with three cold runs with strict emitted-C and runtime
+      image parity; use matched before/after evidence for speedup claims.
+
+- [ ] Replace unbounded BigInt safepoint-occupancy masks in native root-slot sharing
+      with word-based bitsets. The reported lost-overlap mechanism starts at
+      safepoint index 128 under the runtime's 128-bit BigInt limit. Cover indices
+      127/128/129, 255/256, and large functions under both compiler hosts; reproduce
+      full self-hosted planning and GC behavior independently of extracted arithmetic.
+- [ ] Independently validate physical root-slot interference at every safepoint,
+      accounting for values legitimately omitted from root storage. Check allocated
+      slots directly instead of relying only on reselecting the same planner output.
+- [ ] Add compiler-host differential native-plan/output coverage and GC-stress
+      execution. Compiled/interpreted application parity from one Node-produced
+      image does not establish parity between Node and self-hosted compiler plans.
+- [ ] Share one invocation-local native analysis context across storage, expression,
+      root, and fast-path planning. Combine preserved Core identities with native
+      CFG, effects, ownership, and uses; invalidate facts after layout/copy changes
+      and measure cost on both compiler hosts without another wholesale IR rewrite.
+- [ ] Finish legality-affecting renderer selection, including capture-owner access
+      strategies, in explicit native plans. Rendering may choose C syntax; semantic
+      assumptions, specialization admission, and ownership obligations belong in
+      planning and must retain validated fallbacks.
+- [ ] Measure suspension planning with growing resumable functions on both compiler
+      hosts. Bound instruction-by-value liveness storage and repeated variant/
+      validation work; evaluate block liveness and reconstruction near suspension
+      sites before expanding coroutine specialization.
+- [ ] Update the native SSA design note for existing seed-free map/reduce callback
+      entry discovery and builtin-driven transports. Distinguish implemented
+      capabilities from remaining aggregate elimination and rendering-local choices.
+- [ ] Pin native-emission acceptance to source identities and report emitted C size,
+      helper/root-publication counts, C compile time/peak memory, executable text
+      size, representative runtime behavior, and compiler phase time/memory on both
+      hosts. Select the next proof consumer from a measured hot path rather than
+      local-count or plan-kind totals.
+
 ## World-knowledge ladder
 
 | Level             | Available knowledge                                                                   | Intended result                                                             |
