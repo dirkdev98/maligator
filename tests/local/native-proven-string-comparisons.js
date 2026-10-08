@@ -46,6 +46,12 @@ function boxedStrictNe(left, right, gate) {
 	gate();
 	return a !== b;
 }
+function boxedConcat(left, right, gate) {
+	const a = String(left);
+	const b = String(right);
+	gate();
+	return a + b;
+}
 globalThis.stringKernels = [
 	boxedLt,
 	boxedLe,
@@ -55,6 +61,7 @@ globalThis.stringKernels = [
 	boxedNe,
 	boxedStrictEq,
 	boxedStrictNe,
+	boxedConcat,
 ];
 const gc = globalThis.__mal_collect_garbage ?? (() => {});
 const pairs = [
@@ -118,4 +125,39 @@ console.log(
 	"2" == value("equal", 2),
 	"2" === value("strict", 2),
 	trace.join(","),
+);
+
+const sentinel = {};
+const coercionTrace = [];
+let caught = false;
+try {
+	boxedConcat(
+		{
+			toString() {
+				coercionTrace.push("left");
+				throw sentinel;
+			},
+		},
+		{
+			toString() {
+				coercionTrace.push("right");
+				return "lost";
+			},
+		},
+		gc,
+	);
+} catch (error) {
+	caught = error === sentinel;
+}
+console.log("concat-throw", caught, coercionTrace.join(","));
+function typedConcat(left, right) {
+	return left + right;
+}
+function typedFusion(left, right) {
+	return (left + right) * 3;
+}
+console.log(
+	"typed",
+	typedConcat(String(globalThis.freshStringWidth), String(globalThis.freshStringWidth)),
+	typedFusion(String(2), String(3)),
 );

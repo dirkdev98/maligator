@@ -5,6 +5,12 @@ import * as path from "node:path";
 import { describe, expect, it } from "vitest";
 import { resolveBuildConfig } from "../../src/build-config.ts";
 import {
+	deserializeCompilerArtifact,
+	serializeCompilerArtifact,
+} from "../../src/compiler/target/compiler-artifact-codec.ts";
+import { lowerNativeStorage } from "../../src/compiler/target/lower-native-storage.ts";
+import {
+	buildNativeProgramImage,
 	buildBackendPairFromOneProgramImage,
 	HOST_MAIN,
 	runToStdout,
@@ -45,7 +51,35 @@ console.log(used(long,long),discarded(long,long));
 				config: resolveBuildConfig({ engine: { primordials: "locked" } }),
 				outDir,
 			});
-			for (const binary of [pair.compiled, pair.interpreted])
+			const image = lowerNativeStorage({
+				...pair.programImage,
+				native: {
+					...pair.programImage.native,
+					functions: pair.programImage.native.functions.map((fn) => ({
+						...fn,
+						registerRepresentations: fn.registerRepresentations.map((rep, local) =>
+							fn.body.instructions.some(
+								(op) =>
+									op.opcode === "BINARY" &&
+									op.operator === "+" &&
+									(op.left === local || op.right === local || op.dst === local),
+							)
+								? "boxed"
+								: rep,
+						),
+					})),
+				},
+			});
+			const boxed = buildNativeProgramImage(
+				deserializeCompilerArtifact(serializeCompilerArtifact(image)),
+				{
+					name: "string-concat-errors-boxed",
+					config: resolveBuildConfig({ engine: { primordials: "locked" } }),
+					outDir,
+					compiled: true,
+				},
+			);
+			for (const binary of [pair.compiled, boxed, pair.interpreted])
 				for (const env of [{}, STRESS_ENV])
 					expect(runToStdout(binary, { env, timeoutMs: 60_000 })).toBe(
 						"2048 miss\nRangeError RangeError\n",

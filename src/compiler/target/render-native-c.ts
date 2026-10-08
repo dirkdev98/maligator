@@ -6914,9 +6914,16 @@ function emitInstruction(
 					`}`,
 				];
 			}
-			if (operator === "+" && reps[left] === "string" && reps[right] === "string") {
+			if (
+				operator === "+" &&
+				fusion === undefined &&
+				(reps[left] === "string" ||
+					exactInputKinds?.[0] === COMPILER_VALUE_KIND_STRING) &&
+				(reps[right] === "string" || exactInputKinds?.[1] === COMPILER_VALUE_KIND_STRING)
+			) {
+				// Fusion starts must establish the state consumed by their matching finish.
 				return [
-					`r${dst} = ${profileCall("string", `mal_vm_concat_strings_known(vm, mal_value_to_string(r${left}), mal_value_to_string(r${right}))`)};`,
+					`r${dst} = ${profileCall("string", reentrantValue(`mal_vm_concat_strings_known(vm, mal_value_to_string(${boxed(left)}), mal_value_to_string(${boxed(right)}))`))};`,
 					throwCheck(),
 				];
 			}

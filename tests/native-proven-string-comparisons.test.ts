@@ -11,9 +11,9 @@ import { lowerNativeStorage } from "../src/compiler/target/lower-native-storage.
 import { emitCompiledFunction } from "../src/compiler/target/render-native-c.ts";
 import { inspectStaticValueFunction } from "./helpers/static-values.ts";
 
-describe("proven String comparisons in boxed storage", () => {
+describe("proven String operations in boxed storage", () => {
 	it.each(
-		["<", "<=", ">", ">=", "==", "!=", "===", "!=="].flatMap((operator) =>
+		["+", "<", "<=", ">", ">=", "==", "!=", "===", "!=="].flatMap((operator) =>
 			[false, true].map((profile) => [operator, profile] as const),
 		),
 	)(
@@ -28,7 +28,7 @@ describe("proven String comparisons in boxed storage", () => {
 				(op) => op.opcode === "BINARY" && op.operator === operator,
 			);
 			const op = out.native.body.instructions[ip]!;
-			if (op.opcode !== "BINARY") throw new Error("Missing comparison");
+			if (op.opcode !== "BINARY") throw new Error("Missing String operation");
 			expect(out.native.instructions[ip]).toEqual({
 				kind: "exact-operator-input-kinds",
 				inputKindMasks: [COMPILER_VALUE_KIND_STRING, COMPILER_VALUE_KIND_STRING],
@@ -76,9 +76,11 @@ describe("proven String comparisons in boxed storage", () => {
 				image.runtime.stringConstants,
 			)!;
 			expect(c.source).toContain(
-				["<", "<=", ">", ">="].includes(operator)
-					? "mal_string_compare("
-					: "mal_string_equals(",
+				operator === "+"
+					? "mal_vm_concat_strings_known("
+					: ["<", "<=", ">", ">="].includes(operator)
+						? "mal_string_compare("
+						: "mal_string_equals(",
 			);
 			expect(c.source).not.toContain("mal_ops_is_number(");
 			expect(c.source.includes("MAL_PROFILE_SITE_RUNTIME_STRING")).toBe(profile);
@@ -103,6 +105,61 @@ describe("proven String comparisons in boxed storage", () => {
 					},
 				}),
 			).toThrow(/invalid exact binary kind masks/);
+		},
+	);
+
+	it.each([false, true])(
+		"consumes String entry proofs while preserving fusion ownership=%s",
+		(fusion) => {
+			const out = inspectStaticValueFunction(
+				`function compute(left,right){return ${fusion ? "(left+right)*3" : "left+right"};}globalThis.compute=compute;globalThis.output=compute(String(globalThis.left),String(globalThis.right));`,
+				"compute",
+			);
+			const op = out.native.body.instructions.find(
+				(op) => op.opcode === "BINARY" && op.operator === "+",
+			)!;
+			if (op.opcode !== "BINARY") throw new Error("Missing concat");
+			const ip = out.native.body.instructions.indexOf(op);
+			const entry = out.native.directEntries[0]!;
+			expect(entry.operatorInputs).toContainEqual({
+				instructionIp: ip,
+				masks: [COMPILER_VALUE_KIND_STRING, COMPILER_VALUE_KIND_STRING],
+			});
+			expect(
+				out.native.specializations.some((region) => region.kind === "numeric-fusion"),
+			).toBe(fusion);
+			const image = lowerNativeStorage({
+				...out.image,
+				native: {
+					...out.image.native,
+					functions: out.image.native.functions.map((fn) =>
+						fn !== out.native
+							? fn
+							: {
+									...fn,
+									directEntries: fn.directEntries.map((variant) => ({
+										...variant,
+										registerRepresentations: variant.registerRepresentations.map(
+											(rep, local) => (local === op.dst ? "boxed" : rep),
+										),
+									})),
+								},
+					),
+				},
+			});
+			const restored = deserializeCompilerArtifact(serializeCompilerArtifact(image));
+			expect(restored).toEqual(image);
+			const fn = restored.native.functions[out.native.functionIndex]!;
+			const c = emitCompiledFunction(fn, fn.functionIndex, "", false)!;
+			const source = c.directEntries[0]!.source;
+			if (fusion) {
+				expect(source).not.toContain("mal_vm_concat_strings_known(");
+				expect(source).toContain(`__nf_${ip}_ok = mal_ops_is_number(`);
+				expect(source).toContain(`if (__nf_${ip}_ok)`);
+			} else {
+				expect(source).toContain("mal_vm_concat_strings_known(");
+				expect(source).not.toContain("mal_ops_is_number(");
+			}
 		},
 	);
 

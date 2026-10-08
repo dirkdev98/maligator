@@ -155,7 +155,7 @@ export function compilerOperatorInputKindsHaveExactNativeSemantics(
 	}
 	if (opcode !== "binary" || masks.length !== 2) return false;
 	if (masks.every((mask) => mask === COMPILER_VALUE_KIND_STRING))
-		return ["<", "<=", ">", ">=", "==", "!=", "===", "!=="].includes(operator);
+		return ["+", "<", "<=", ">", ">=", "==", "!=", "===", "!=="].includes(operator);
 	let allowed: CompilerValueKindMask;
 	switch (operator) {
 		case "==":

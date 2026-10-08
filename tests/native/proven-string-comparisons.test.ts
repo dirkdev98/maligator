@@ -17,7 +17,7 @@ import {
 	STRESS_ENV,
 } from "../../src/test-harness.ts";
 
-describe("proven boxed String comparisons", () => {
+describe("proven boxed String operations", () => {
 	const fixture = "tests/local/native-proven-string-comparisons.js";
 	const config = resolveBuildConfig({ engine: { primordials: "locked" } });
 	const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-proven-string-compare-"));
@@ -63,7 +63,7 @@ describe("proven boxed String comparisons", () => {
 				}),
 			},
 		});
-		expect(comparisons).toBe(8);
+		expect(comparisons).toBe(9);
 		compiled = buildNativeProgramImage(
 			deserializeCompilerArtifact(serializeCompilerArtifact(image)),
 			{
@@ -76,7 +76,7 @@ describe("proven boxed String comparisons", () => {
 		);
 	}, 600_000);
 
-	it("preserves UTF-16 equality, ordering, operand effects and roots across collection", () => {
+	it("preserves UTF-16 operations, concatenation, operand effects and roots across collection", () => {
 		for (const binary of [compiled, interpreted])
 			for (const stress of [{}, STRESS_ENV])
 				expect(
