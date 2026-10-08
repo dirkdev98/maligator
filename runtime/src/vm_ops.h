@@ -4,6 +4,7 @@
 #include "array_object.h"
 #include "builtin_iterator.h"
 #include "function_object.h" // mal_function_object_function_index, for the call guard
+#include "heap_symbol.h"
 #include "map_object.h"
 #include "set_object.h"
 #include "object_ops.h"
@@ -3096,6 +3097,16 @@ void mal_vm_op_init_private_fields(
 
 /** PrivateGet; an unbranded receiver throws (sets vm->completion). */
 MalValue mal_vm_op_load_private(MalVm *vm, MalValue object_value, MalValue key_value);
+
+/** Noncollecting hinted PrivateGet; a miss leaves the full lookup and its throw to the op. */
+static inline bool mal_vm_private_try_load(
+    MalValue object_value, MalValue key_value, MalValue *out
+) {
+    if (!mal_value_is_object(object_value)) return false;
+    const MalTable *table = mal_object_overflow(mal_value_to_object(object_value));
+    return table != nullptr && mal_table_private_hint_read(
+        table, key_value, mal_value_to_symbol(key_value)->private_entry_hint, out);
+}
 
 /** PrivateSet; the name must already be installed on the receiver, else throws. */
 void mal_vm_op_store_private(MalVm *vm, MalValue object_value, MalValue key_value, MalValue value);

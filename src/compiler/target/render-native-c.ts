@@ -10095,9 +10095,15 @@ function emitInstruction(
 				throwCheck(),
 			];
 		case "LOAD_PRIVATE": {
+			const loaded = `__private_value_${ip}`;
 			return [
-				`r${instruction.dst} = mal_vm_op_load_private(vm, ${boxed(instruction.object)}, ${boxed(instruction.key)});`,
-				throwCheck(),
+				`MalValue ${loaded};`,
+				`if (mal_vm_private_try_load(${boxed(instruction.object)}, ${boxed(instruction.key)}, &${loaded})) {`,
+				`  r${instruction.dst} = ${loaded};`,
+				`} else {`,
+				`  r${instruction.dst} = mal_vm_op_load_private(vm, ${boxed(instruction.object)}, ${boxed(instruction.key)});`,
+				`  ${throwCheck()}`,
+				`}`,
 			];
 		}
 		case "STORE_PRIVATE":

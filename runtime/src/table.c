@@ -15,26 +15,11 @@
 #define MAL_TABLE_SMALL_MIN_CAPACITY 4
 #define MAL_TABLE_EMPTY (-1)
 
-#define MAL_TABLE_KIND_SHIFT 48
-#define MAL_TABLE_KIND_MASK (UINT64_C(3) << MAL_TABLE_KIND_SHIFT)
-#define MAL_TABLE_INDEX (UINT64_C(1) << MAL_TABLE_KIND_SHIFT)
-#define MAL_TABLE_STRING (UINT64_C(2) << MAL_TABLE_KIND_SHIFT)
-#define MAL_TABLE_SYMBOL (UINT64_C(3) << MAL_TABLE_KIND_SHIFT)
-#define MAL_TABLE_IDENTITY_MASK (UINT64_C(0x0000ffffffffffff) | MAL_TABLE_KIND_MASK)
 #define MAL_TABLE_FLAGS_SHIFT 50
 #define MAL_TABLE_FLAGS_MASK (UINT64_C(0x7f) << MAL_TABLE_FLAGS_SHIFT)
 #define MAL_TABLE_OWNS_DATA (UINT64_C(1) << 57)
 #define MAL_TABLE_HASH_SHIFT 58
 #define MAL_TABLE_HASH_MASK (UINT64_C(0x3f) << MAL_TABLE_HASH_SHIFT)
-
-typedef struct MalTableEntry {
-    // Kind zero is dead; ownership survives deletion until the RAW sidecar is freed.
-    u64 key;
-    union {
-        void *data;
-        MalValue value;
-    } payload;
-} MalTableEntry;
 
 static_assert(sizeof(MalTableEntry) == 16, "property rows must occupy two words");
 static_assert(MAKS_PTR == UINT64_C(0x0000ffffffffffff), "property keys share the value pointer width");
@@ -112,20 +97,6 @@ static bool mal_table_key_equals(const MalTableEntry *entry, u64 key, bool hashe
     MAL_PERF_COUNT(key_string_fallbacks);
     return mal_string_equals(left, right);
 }
-
-// Ordered entry indices survive buffer growth; only unpinned compaction renumbers handles.
-typedef struct MalTable {
-    u64 handle_epoch;
-    u32 size;
-    u32 tombstone_count;
-    u32 slot_capacity;
-    u32 deleted_slots;
-    u32 entry_count;
-    u32 entry_capacity;
-    u32 iterator_pins;
-    i32 *slots;
-    MalTableEntry *entries;
-} MalTable;
 
 static_assert(sizeof(MalTable) <= 64, "MalTable outgrew its descriptor allocation class");
 
@@ -399,16 +370,7 @@ bool mal_table_reserve(MalTable *table, usize desired_size) {
 bool mal_table_get_private_value(const MalTable *table, MalSymbol *symbol, MalValue *value) {
     if (table == nullptr) return false;
     MalValue key = mal_value_from_symbol(symbol);
-    u64 encoded = MAL_TABLE_SYMBOL | (key & MAKS_PTR);
-    u32 index = symbol->private_entry_hint - 1;
-    if (index < table->entry_count) {
-        const MalTableEntry *entry = &table->entries[index];
-        // Exact identity makes hints safe across receivers, growth, and compaction.
-        if (mal_table_row_live(entry) && (entry->key & MAL_TABLE_IDENTITY_MASK) == encoded) {
-            *value = entry->payload.value;
-            return true;
-        }
-    }
+    if (mal_table_private_hint_read(table, key, symbol->private_entry_hint, value)) return true;
     MalTableLookup lookup = mal_table_lookup(table, (MalKey) {.kind = MAL_KEY_SYMBOL, .value = key});
     if (!lookup.present) return false;
     symbol->private_entry_hint = (u32) (uptr) lookup.entry;

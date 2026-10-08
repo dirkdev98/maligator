@@ -6,6 +6,53 @@
 typedef struct MalTable MalTable;
 typedef struct MalSymbol MalSymbol;
 
+#define MAL_TABLE_KIND_SHIFT 48
+#define MAL_TABLE_KIND_MASK (UINT64_C(3) << MAL_TABLE_KIND_SHIFT)
+#define MAL_TABLE_INDEX (UINT64_C(1) << MAL_TABLE_KIND_SHIFT)
+#define MAL_TABLE_STRING (UINT64_C(2) << MAL_TABLE_KIND_SHIFT)
+#define MAL_TABLE_SYMBOL (UINT64_C(3) << MAL_TABLE_KIND_SHIFT)
+#define MAL_TABLE_IDENTITY_MASK (UINT64_C(0x0000ffffffffffff) | MAL_TABLE_KIND_MASK)
+
+typedef struct MalTableEntry {
+    // Kind zero is dead; ownership survives deletion until the RAW sidecar is freed.
+    u64 key;
+    union {
+        void *data;
+        MalValue value;
+    } payload;
+} MalTableEntry;
+
+// Ordered entry indices survive buffer growth; only unpinned compaction renumbers handles.
+// The layout is public only so private-element reads can probe their hint inline.
+struct MalTable {
+    u64 handle_epoch;
+    u32 size;
+    u32 tombstone_count;
+    u32 slot_capacity;
+    u32 deleted_slots;
+    u32 entry_count;
+    u32 entry_capacity;
+    u32 iterator_pins;
+    i32 *slots;
+    MalTableEntry *entries;
+};
+
+/**
+ * Read a private element through a symbol's 1-based entry hint. Exact identity of
+ * the stored key makes a hint safe across receivers, growth, and compaction.
+ */
+static inline bool mal_table_private_hint_read(
+    const MalTable *table, MalValue symbol, u32 hint, MalValue *value
+) {
+    u32 index = hint - 1;
+    if (index >= table->entry_count) return false;
+    const MalTableEntry *entry = &table->entries[index];
+    if ((entry->key & MAL_TABLE_IDENTITY_MASK) != (MAL_TABLE_SYMBOL | (symbol & MAKS_PTR)))
+        return false;
+    *value = entry->payload.value;
+    return true;
+}
+
 typedef enum MalTableIterKind {
     MAL_TABLE_ITER_STORAGE,
 } MalTableIterKind;
