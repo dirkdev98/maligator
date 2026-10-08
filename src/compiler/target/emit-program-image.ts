@@ -1007,18 +1007,25 @@ function externalizeDataArrays(
 	return { lines: output, definitions, declarations };
 }
 
+function validateImageForEmission(image: ProgramImage): void {
+	validateNativeBodyAbis(
+		image.runtime.functions,
+		image.native.functions.map((fn) => fn.body),
+	);
+	validateRuntimeImageMetadata(image.runtime);
+	const entries = nativeEntryLookup(image.native.functions);
+	for (const native of image.native.functions)
+		validateNativeStorage(native, entries, image.runtime.stringConstants);
+}
+
 function emitProgramImageParts(
 	image: ProgramImage,
 	options: EmitOptions,
 	splitCompiledFunctions: boolean,
 	maxCompiledFunctionCodeUnits?: number,
 ): EmittedProgramImageParts {
-	validateNativeBodyAbis(
-		image.runtime.functions,
-		image.native.functions.map((fn) => fn.body),
-	);
+	validateImageForEmission(image);
 	const runtime = image.runtime;
-	validateRuntimeImageMetadata(runtime);
 	const suffix = options.symbolSuffix ?? "";
 	const debug = options.debugInfo !== false;
 	const useCompiled = options.compiled !== false;
@@ -1334,9 +1341,6 @@ function emitProgramImageParts(
 		lines.push(line);
 	}
 
-	const entries = nativeEntryLookup(image.native.functions);
-	for (const native of image.native.functions)
-		validateNativeStorage(native, entries, image.runtime.stringConstants);
 	return { parts: lines, compiled };
 }
 
@@ -1640,6 +1644,7 @@ export function emitRelocatableNativeOverlayTranslationUnits(
 	if (!Number.isSafeInteger(maxCodeUnits) || maxCodeUnits <= 0) {
 		throw new RangeError("translation-unit code-unit budget must be a positive integer");
 	}
+	validateImageForEmission(image);
 	const suffix = "_eval_compiler";
 	const { compiled } = emitNativeFunctions(image, {
 		useCompiled: true,
@@ -2002,7 +2007,7 @@ export function emitBatch(
 	for (let d = 0; d < images.length; ++d) {
 		const image = images[d]!;
 		const runtime = image.runtime;
-		validateRuntimeImageMetadata(runtime);
+		validateImageForEmission(image);
 		const suffix = `_${d}`;
 		const literalTemplatesSymbol =
 			runtime.literalTemplateData.length > 0

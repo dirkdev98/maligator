@@ -6,7 +6,11 @@ import {
 	deserializeCompilerArtifact,
 	serializeCompilerArtifact,
 } from "../src/compiler/target/compiler-artifact-codec.ts";
-import { emitProgramImage } from "../src/compiler/target/emit-program-image.ts";
+import {
+	emitProgramImage,
+	emitBatch,
+	emitRelocatableNativeOverlayTranslationUnits,
+} from "../src/compiler/target/emit-program-image.ts";
 import type { NativeCaptureAccessPlan } from "../src/compiler/target/lower-native-captures.ts";
 import {
 	lowerNativeStorage,
@@ -386,4 +390,31 @@ describe("persisted native capture access contract", () => {
 		]);
 		expect(() => emitProgramImage(updated, { compiled: true })).not.toThrow();
 	});
+});
+
+it("rejects stale capture plans at every public C-emission boundary", () => {
+	const image = captureImage(false);
+	const native = image.native.functions[0]!;
+	const forged = {
+		...image,
+		native: {
+			...image.native,
+			functions: [
+				{
+					...native,
+					storage: {
+						...native.storage!,
+						captures: { ...native.storage!.captures, owners: [] },
+					},
+				},
+				...image.native.functions.slice(1),
+			],
+		},
+	};
+	for (const emit of [
+		() => emitProgramImage(forged),
+		() => emitBatch([forged]),
+		() => emitRelocatableNativeOverlayTranslationUnits(forged, "a".repeat(64)),
+	])
+		expect(emit).toThrow(/invalid or stale storage plan/);
 });
