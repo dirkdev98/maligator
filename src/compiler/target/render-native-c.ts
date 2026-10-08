@@ -6921,13 +6921,14 @@ function emitInstruction(
 			}
 			if (
 				operator === "+" &&
-				fusion === undefined &&
+				(fusion === undefined || fusion.role === "start") &&
 				(reps[left] === "string" ||
 					exactInputKinds?.[0] === COMPILER_VALUE_KIND_STRING) &&
 				(reps[right] === "string" || exactInputKinds?.[1] === COMPILER_VALUE_KIND_STRING)
 			) {
-				// Fusion starts must establish the state consumed by their matching finish.
+				// A String start selects the fusion's boxed fallback for its matching finish.
 				return [
+					...(fusion === undefined ? [] : [`__nf_${fusion.id}_ok = false;`]),
 					`r${dst} = ${profileCall("string", reentrantValue(`mal_vm_concat_strings_known(vm, mal_value_to_string(${boxed(left)}), mal_value_to_string(${boxed(right)}))`))};`,
 					throwCheck(),
 				];

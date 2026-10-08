@@ -152,13 +152,13 @@ describe("proven String operations in boxed storage", () => {
 			const fn = restored.native.functions[out.native.functionIndex]!;
 			const c = emitCompiledFunction(fn, fn.functionIndex, "", false)!;
 			const source = c.directEntries[0]!.source;
+			expect(source).toContain("mal_vm_concat_strings_known(");
+			expect(source).not.toContain("mal_ops_is_number(");
 			if (fusion) {
-				expect(source).not.toContain("mal_vm_concat_strings_known(");
-				expect(source).toContain(`__nf_${ip}_ok = mal_ops_is_number(`);
+				const reset = source.search(new RegExp(`^\\s*__nf_${ip}_ok = false;$`, "m"));
+				expect(reset).toBeGreaterThanOrEqual(0);
+				expect(source.indexOf("mal_vm_concat_strings_known(")).toBeGreaterThan(reset);
 				expect(source).toContain(`if (__nf_${ip}_ok)`);
-			} else {
-				expect(source).toContain("mal_vm_concat_strings_known(");
-				expect(source).not.toContain("mal_ops_is_number(");
 			}
 		},
 	);

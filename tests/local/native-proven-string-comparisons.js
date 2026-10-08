@@ -159,5 +159,5 @@ function typedFusion(left, right) {
 console.log(
 	"typed",
 	typedConcat(String(globalThis.freshStringWidth), String(globalThis.freshStringWidth)),
-	typedFusion(String(2), String(3)),
+	typedFusion(String(globalThis.freshStringWidth), String(globalThis.freshStringWidth)),
 );
