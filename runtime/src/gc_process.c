@@ -63,6 +63,16 @@ static void configure(void) {
     atomic_store_explicit(&g_budget, budget, memory_order_release);
 }
 
+/* Pressure cannot shrink a live set that is larger than the budget, so past the
+ * budget each round waits for growth in proportion to the overshoot; a fixed small
+ * step forced a futile major collection for every few heap chunks a large program
+ * mapped again after a sweep. */
+static usize pressure_step(usize current, usize budget) {
+    usize step = budget / 16;
+    usize backoff = current > budget ? (current - budget) / 2 : 0;
+    return backoff > step ? backoff : step;
+}
+
 MalGcProcessParticipant *mal_gc_process_register(MalGcPollTarget *poll) {
     MalGcProcessParticipant *participant = calloc(1, sizeof(*participant));
     if (participant == nullptr) abort();
@@ -127,7 +137,7 @@ void mal_gc_process_charge(usize bytes) {
     configure();
     usize total = atomic_load_explicit(&g_bytes, memory_order_relaxed);
     if (total >= g_next_pressure) {
-        usize step = atomic_load_explicit(&g_budget, memory_order_relaxed) / 16;
+        usize step = pressure_step(total, atomic_load_explicit(&g_budget, memory_order_relaxed));
         g_next_pressure = total > SIZE_MAX - step ? SIZE_MAX : total + step;
         // Registry ownership protects each mutator's TLS poll target through this request.
         for (MalGcProcessParticipant *p = g_participants; p != nullptr; p = p->next) {
@@ -149,7 +159,7 @@ void mal_gc_process_release(usize bytes) {
     if (current < budget - budget / 4) {
         g_next_pressure = budget;
     } else {
-        usize step = budget / 16;
+        usize step = pressure_step(current, budget);
         usize next = current > SIZE_MAX - step ? SIZE_MAX : current + step;
         if (next < budget) next = budget;
         // A released peak must not suppress pressure during later, smaller native growth.

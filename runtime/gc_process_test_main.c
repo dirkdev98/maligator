@@ -107,6 +107,10 @@ static void check_pressure_after_released_peak(void) {
     mal_gc_process_charge(budget);
     mal_gc_process_charge(budget * 4);
     if (!mal_gc_process_take_pressure(participant)) abort();
+    // Far past the budget, one more small step must not force another round.
+    mal_gc_process_charge(growth);
+    if (mal_gc_process_take_pressure(participant)) abort();
+    mal_gc_process_release(growth);
     mal_gc_process_release(budget * 4);
     if (mal_gc_process_bytes() < budget) abort();
     mal_gc_process_charge(growth);
