@@ -149,7 +149,12 @@ The independent target boundary and current storage contract are recorded in
       over every value local that a part names. In the native self-compiler its
       tokenizer, liveness, and interface planning take about 9% of the emission
       phase; flattening rope lines before tokenizing only moved that time into the
-      tokenizer itself.
+      tokenizer itself. The lasting fix is to stop recovering declarations, uses,
+      control transfers and address-exposed storage from C text: emission units
+      should carry that metadata for the operations they actually emit, including
+      fast-path branches and helper temporaries, and the splitter should consume
+      it. That needs every renderer path to report its C-level reads and writes,
+      so it lands as one migration rather than per opcode.
 - [ ] Use dominance for definition-initialized locals in functions with exception
       handlers. Handler entries currently disable it, so
       `lowerExecutionFunctionToNativePlan` still zeroes 4,351 registers on every call.
@@ -160,12 +165,17 @@ The independent target boundary and current storage contract are recorded in
       owner initializes a binding can never observe that binding's TDZ, and an
       owner's own read is safe once the initializing store dominates it with no
       environment rebinding in between.
-- [ ] Bring the native self-compile's maximum RSS closer to its live set. Peak live
-      bytes stay near 950 MB, but maximum RSS is 4.5 GB now that process GC
+- [ ] Bring the native self-compile's memory closer to its live set. Peak live
+      bytes stay near 900 MB, but maximum RSS is 4.4 GB now that process GC
       pressure backs off past its budget (it was 3.5 GB while pressure forced 183
-      major collections and cost 40 s). Measure what holds the difference (freed
-      heap chunks that stay mapped, raw stores, malloc'd tables) before trading
-      collection time for it.
+      major collections and cost 40 s), and RSS understates it: on macOS the
+      physical footprint peaked at 6.2 GB because up to 2.1 GB of GC chunks were
+      compressed. At the end of a run the 4.1 GB of mapped chunks hold 311 MB live
+      after the last major, 1.4 GB of free cells in partly live cell blocks, 1.4 GB
+      of recycled empty blocks and 0.46 GB of free raw cells; 1.5 GB was promoted
+      and 645 MB of it over-tenured. Malloc zones add another 0.96 GB in 10.5
+      million allocations outside the GC heap. Fragmentation of partly live blocks
+      and promoted garbage are the levers; recycled blocks are already madvised.
 - [ ] Win back the open-compiled allocation phase. Since the inline static
       property probe keeps only monomorphic and inherited-value hits, that phase
       runs about 9% slower on the JavaScript benchmark because its polymorphic hits
