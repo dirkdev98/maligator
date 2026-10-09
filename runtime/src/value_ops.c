@@ -534,6 +534,14 @@ bool mal_ops_strict_equal_heap_contents(MalValue left, MalValue right) {
         mal_bigint_value(mal_value_to_bigint(left)) == mal_bigint_value(mal_value_to_bigint(right));
 }
 
+bool mal_ops_strict_equal_distinct(MalValue left, MalValue right) {
+    if (mal_ops_is_number(left) && mal_ops_is_number(right)) {
+        return mal_ops_number_as_f64(left) == mal_ops_number_as_f64(right);
+    }
+    return mal_value_is_heap(left) && mal_value_is_heap(right) &&
+        mal_ops_strict_equal_heap_contents(left, right);
+}
+
 MalValue mal_ops_less_than(MalValue left, MalValue right) {
     return mal_value_new_boolean(mal_ops_relational_bool(left, right, 0));
 }

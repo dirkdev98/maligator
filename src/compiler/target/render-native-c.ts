@@ -7620,7 +7620,7 @@ function emitInstruction(
 					: `mal_ops_is_number(${boxed(left)}) && mal_ops_is_number(${boxed(right)})`;
 			if (compare !== undefined) {
 				if (bothBoxed && (operator === "===" || operator === "!==")) {
-					const equal = `mal_ops_strict_equal_bool(${boxed(left)}, ${boxed(right)})`;
+					const equal = `mal_ops_strict_equal_boxed(${boxed(left)}, ${boxed(right)})`;
 					return [storeBoolean(dst, operator === "!==" ? `!${equal}` : equal)];
 				}
 				const completionCheck = binaryOpCanThrow(operator) ? throwCheck() : undefined;

@@ -245,6 +245,23 @@ static inline bool mal_ops_strict_equal_bool(MalValue left, MalValue right) {
         mal_ops_strict_equal_heap_contents(left, right);
 }
 
+/** Strict equality of two different words: only Numbers and heap contents can still match. */
+bool mal_ops_strict_equal_distinct(MalValue left, MalValue right);
+
+/**
+ * Strict equality where generated code knows neither operand's kind. Every such
+ * site expands this, so only identical words and two int32s answer inline.
+ */
+static inline bool mal_ops_strict_equal_boxed(MalValue left, MalValue right) {
+    // NaN is the only word that is not strictly equal to itself.
+    if (left == right) return left != MAL_VALUE_NAN;
+    if ((left & MAL_VALUE_CLASS_MASK) == MAL_VALUE_INT32 &&
+        (right & MAL_VALUE_CLASS_MASK) == MAL_VALUE_INT32) {
+        return false;
+    }
+    return mal_ops_strict_equal_distinct(left, right);
+}
+
 /** Returns false without allocating when string concatenation exceeds the engine limit. */
 bool mal_ops_add_checked(MalHeap *heap, MalValue left, MalValue right, MalValue *out);
 
