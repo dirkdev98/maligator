@@ -192,7 +192,8 @@ The independent target boundary and current storage contract are recorded in
       callee frames rather than dispatch carry the per-call cost. Exempting
       iterator cursors from the four-expansion per-function cap admitted 350 more
       array cursors but spent the program budget that collection call chains and
-      result virtualization had used, with no wall-time change. Hot accessors only
+      result virtualization had used, with no wall-time change; doubling the
+      specialization program budget also left wall time unchanged. Hot accessors only
       sped up once inlining accepted throwing callees and class-scope closures.
 
 ## World-knowledge ladder
