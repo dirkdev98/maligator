@@ -48,6 +48,7 @@ import type { TranslationUnitPolicy } from "./compiler/target/emit-program-image
 import { emitWorkerImageTranslationUnits } from "./compiler/target/emit-worker-images.ts";
 import { serializeRuntimeImage } from "./compiler/target/program-image-codec.ts";
 import type { ProgramImage } from "./compiler/target/program-image.ts";
+import type { NativeSplitPolicy } from "./compiler/target/split-native-function.ts";
 import { cacheFrontendWire } from "./frontend-cache.ts";
 import { buildDevelopmentRunner, buildLocalBinary } from "./local-build.ts";
 import type { GeneratedObjectMeasurement, LocalBuildResult } from "./local-build.ts";
@@ -198,6 +199,8 @@ export interface BuildOptions {
 	translationUnits?: boolean;
 	/** Override deterministic generated-unit sizing for measurement experiments. */
 	translationUnitPolicy?: TranslationUnitPolicy;
+	/** Override when oversized native functions are outlined into parts. */
+	nativeFunctionSplit?: NativeSplitPolicy;
 	/**
 	 * A fully-resolved build config to build under. When provided it wins over the
 	 * flat `evalEnabled` / `intlEnabled` / `intlFeatures` / `webPlatformEnabled` /
@@ -395,6 +398,7 @@ function linkProgramImage(
 		compiled,
 		assets: includeConfiguredAssets(config.assets),
 		maligatorSurface: config.surface.maligator,
+		nativeFunctionSplit: options.nativeFunctionSplit,
 	};
 	const mainSource =
 		options.translationUnits === false

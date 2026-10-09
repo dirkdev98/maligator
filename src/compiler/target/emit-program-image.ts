@@ -28,6 +28,7 @@ import type {
 	ClosureCaptureValue,
 	RuntimeImage,
 } from "./runtime-image.ts";
+import type { NativeSplitPolicy } from "./split-native-function.ts";
 import { stablePartitionHash } from "./stable-partition-hash.ts";
 
 type VmBinaryOperator = Extract<BytecodeInstruction, { opcode: "BINARY" }>["operator"];
@@ -64,6 +65,9 @@ export interface EmitOptions {
 
 	/** Install the lowercase `mal` host surface. */
 	maligatorSurface?: boolean;
+
+	/** Outlining thresholds for oversized native functions; tests force small parts. */
+	nativeFunctionSplit?: NativeSplitPolicy;
 }
 
 /** Escape a string for a C string literal. */
@@ -731,6 +735,7 @@ function emitNativeFunctions(
 		/** Definitions that do not fit one translation unit with their declarations. */
 		excludedSymbols?: ReadonlySet<string>;
 		relocatable?: boolean;
+		nativeFunctionSplit?: NativeSplitPolicy;
 	},
 ): {
 	compiled: Array<CompiledFunction | null>;
@@ -833,6 +838,7 @@ function emitNativeFunctions(
 			options.maxCodeUnits === undefined
 				? undefined
 				: options.maxCodeUnits - headerCodeUnits,
+			options.nativeFunctionSplit,
 		);
 		if (
 			emitted === null ||
@@ -1103,6 +1109,7 @@ function emitProgramImageParts(
 		linkage: splitCompiledFunctions ? "external" : "static",
 		maxCodeUnits: maxCompiledFunctionCodeUnits,
 		excludedSymbols,
+		nativeFunctionSplit: options.nativeFunctionSplit,
 	});
 	const compiled = nativeEmission.compiled;
 	{

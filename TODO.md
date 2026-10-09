@@ -139,17 +139,14 @@ The independent target boundary and current storage contract are recorded in
       native, and image forms coexist; Node 24's default 2 GB heap leaves little
       margin for in-process native builds of the compiler.
 
-- [ ] Bound C compile time for the largest generated functions. `emitInstruction`
-      now compiles natively at 7.24 Mi with 72 shared root slots, but its unit takes
-      about 61 s alone and 104 s in a parallel self-compile build, the build's critical
-      path; the time is spread over backend passes (AArch64 MI peephole 23%, jump
-      threading 14%, greedy allocation 11%), so only smaller C or splitting helps.
-      `lowerExecutionFunctionToNativePlan` (2.29 Mi) takes 116 s in the build because
-      early machine LICM hoists tagged-constant materializations out of a loop of about
-      30,000 blocks and the coalescer then shrinks those live ranges at every copy.
-      `-mllvm -disable-machine-licm` cuts that unit to 57 s and total unit time by 17%
-      with neutral quick-cone runtime, but it is an internal LLVM option and ThinLTO
-      production builds generate code at link time.
+- [ ] Spread one split native function over several translation units. Outlining
+      functions past 256 Ki into 128 Ki parts cut the self-compile `-O2` unit wall time
+      from 132 s to 59 s at eight jobs, but `emitInstruction`'s parts still compile
+      in one 19–21 s unit, now the slowest. Parts are static and share a per-function
+      transfer struct, so they need external part symbols and a shared struct header.
+- [ ] Reduce the native splitter's emission cost. It adds about 1.1 s (13%) to Node
+      emission of the self-compile program, mostly block parsing and bitset liveness
+      over every value local that a part names.
 - [ ] Use dominance for definition-initialized locals in functions with exception
       handlers. Handler entries currently disable it, so
       `lowerExecutionFunctionToNativePlan` still zeroes 4,351 registers on every call.

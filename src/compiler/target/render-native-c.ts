@@ -103,6 +103,11 @@ import {
 	vmInstructionWriteRegisters,
 } from "./runtime-image.ts";
 import type { BytecodeFunction, BytecodeInstruction } from "./runtime-image.ts";
+import {
+	DEFAULT_NATIVE_SPLIT_POLICY,
+	splitNativeFunction,
+} from "./split-native-function.ts";
+import type { NativeSplitPolicy } from "./split-native-function.ts";
 
 /**
  * The native-C backend: lower an eligible function straight to a C function
@@ -848,6 +853,7 @@ function emitCompiledVariant(
 	strictCompiledTargets: ReadonlySet<number> = new Set(),
 	stringConstants: ReadonlyArray<ReadonlyArray<number>> = [],
 	maxCodeUnits = Infinity,
+	splitPolicy: NativeSplitPolicy = DEFAULT_NATIVE_SPLIT_POLICY,
 ): CompiledFunction | null {
 	// Generators and async functions suspend mid-body: they lower to a resumable C
 	// function (a heap register frame + entry dispatch to the saved resume point)
@@ -1272,14 +1278,10 @@ function emitCompiledVariant(
 			),
 		);
 	// Keep native entries on 64-byte boundaries as neighboring generated code changes.
-	lines.push(
+	const signature =
 		directEntry === undefined
 			? `${linkage === "static" ? "static " : ""}__attribute__((aligned(64))) MalValue ${symbol}(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalEnv *env, MalValue callee, void *entry_state) {`
-			: `${linkage === "static" ? "static " : ""}__attribute__((aligned(64))) ${cTypeOf(directEntry.resultRepresentation)} ${symbol}(MalVm *vm, MalValue this_value${directParameters!.length === 0 ? "" : `, ${directParameters!.join(", ")}`}, MalEnv *env, MalValue callee) {`,
-	);
-	// Each JavaScript arithmetic operation rounds separately, including expression chains.
-	lines.push("#pragma STDC FP_CONTRACT OFF");
-	lines.push(...rootMaskStatements.declarations);
+			: `${linkage === "static" ? "static " : ""}__attribute__((aligned(64))) ${cTypeOf(directEntry.resultRepresentation)} ${symbol}(MalVm *vm, MalValue this_value${directParameters!.length === 0 ? "" : `, ${directParameters!.join(", ")}`}, MalEnv *env, MalValue callee) {`;
 	lines.push(`    (void) this_value;`);
 	if (directEntry === undefined) lines.push(`    (void) new_target;`);
 	lines.push(`    (void) env;`);
@@ -1463,15 +1465,11 @@ function emitCompiledVariant(
 		lines.push(`    ${line}`);
 	}
 
-	for (const line of body.lines) {
-		lines.push(line);
-	}
-
 	// Falling off the end returns undefined — or `this` for a constructor with no
 	// explicit object return. A derived constructor routes through the checked
 	// helper (returning before super() is a ReferenceError); everything else uses
 	// mal_ops_construct_result (with new_target set for a [[Construct]] call).
-	lines.push(
+	const fallOff = [
 		directEntry !== undefined
 			? `    ${gcUnlink}return ${zeroOf(directEntry.resultRepresentation)};`
 			: thisSlot >= 0
@@ -1479,23 +1477,53 @@ function emitCompiledVariant(
 				: !fn.hasPrototype
 					? `    ${gcUnlink}return MAL_VALUE_UNDEFINED;`
 					: `    ${gcUnlink}return mal_ops_construct_result(MAL_VALUE_UNDEFINED, this_value, new_target);`,
-	);
+	];
 	// Shared throw-exit: unlink the root frame and leave the compiled frame with the
 	// throw pending (the dispatch caller observes vm->completion). Reached only by
 	// `goto` from a no-handler throw; placed after the unconditional fall-off return
 	// so control never falls into it. Omitted when nothing routes here.
-	if (body.resources.has("throwExit")) {
-		lines.push(
-			`__throw_exit:;`,
-			`    ${gcUnlink}return ${directEntry === undefined ? "MAL_VALUE_UNDEFINED" : zeroOf(directEntry.resultRepresentation)};`,
-		);
-	}
-	lines.push("}");
-	for (const i of definedRegisters) lines.push(`#undef r${i}`);
-	if (joinedCodeUnits(lines) > maxCodeUnits) return null;
+	const throwExit = body.resources.has("throwExit")
+		? [
+				`__throw_exit:;`,
+				`    ${gcUnlink}return ${directEntry === undefined ? "MAL_VALUE_UNDEFINED" : zeroOf(directEntry.resultRepresentation)};`,
+			]
+		: [];
+	const trailer = definedRegisters.map((register) => `#undef r${register}`);
+	const split = splitNativeFunction(
+		{
+			symbol,
+			signature,
+			resultType:
+				directEntry === undefined
+					? "MalValue"
+					: cTypeOf(directEntry.resultRepresentation),
+			inactiveRows: rootMaskStatements.declarations,
+			prologue: lines,
+			body: body.lines,
+			unitStarts: body.unitStarts,
+			fallOff,
+			fallOffLabel: `L${fn.instructions.length}`,
+			throwExit,
+			trailer,
+		},
+		splitPolicy,
+	);
+	const definition = split ?? [
+		signature,
+		// Each JavaScript arithmetic operation rounds separately, including expression chains.
+		"#pragma STDC FP_CONTRACT OFF",
+		...rootMaskStatements.declarations,
+		...lines,
+		...body.lines,
+		...fallOff,
+		...throwExit,
+		"}",
+		...trailer,
+	];
+	if (joinedCodeUnits(definition) > maxCodeUnits) return null;
 	return {
 		symbol,
-		source: lines.join("\n"),
+		source: definition.join("\n"),
 		profileDecisions,
 		emittedInstructions: body.emittedInstructions,
 		directEntryCalls: body.directEntryCalls,
@@ -1727,6 +1755,7 @@ export function emitCompiledFunction(
 	stringConstants: ReadonlyArray<ReadonlyArray<number>> = [],
 	callbackEntries: ReadonlySet<string> = new Set(),
 	maxCodeUnits = Infinity,
+	splitPolicy: NativeSplitPolicy = DEFAULT_NATIVE_SPLIT_POLICY,
 ): CompiledFunction | null {
 	if (native.storage === undefined)
 		throw new Error("Native rendering requires a lowered storage plan");
@@ -1745,6 +1774,7 @@ export function emitCompiledFunction(
 		stringConstants,
 		callbackEntries,
 		maxCodeUnits,
+		splitPolicy,
 	);
 }
 
@@ -1772,6 +1802,7 @@ export function createNativeFunctionRenderer(): typeof emitCompiledFunction {
 		stringConstants: ReadonlyArray<ReadonlyArray<number>> = [],
 		callbackEntries: ReadonlySet<string> = new Set(),
 		maxCodeUnits = Infinity,
+		splitPolicy: NativeSplitPolicy = DEFAULT_NATIVE_SPLIT_POLICY,
 	): CompiledFunction | null => {
 		if (native.storage === undefined)
 			throw new Error("Native rendering requires a lowered storage plan");
@@ -1801,6 +1832,7 @@ export function createNativeFunctionRenderer(): typeof emitCompiledFunction {
 			stringConstants,
 			callbackEntries,
 			maxCodeUnits,
+			splitPolicy,
 		);
 	};
 }
@@ -1820,6 +1852,7 @@ function renderCompiledFunction(
 	stringConstants: ReadonlyArray<ReadonlyArray<number>> = [],
 	callbackEntries: ReadonlySet<string> = new Set(),
 	maxCodeUnits = Infinity,
+	splitPolicy: NativeSplitPolicy = DEFAULT_NATIVE_SPLIT_POLICY,
 ): CompiledFunction | null {
 	const fn = native.body;
 	const canonical = emitCompiledVariant(
@@ -1838,6 +1871,7 @@ function renderCompiledFunction(
 		strictCompiledTargets,
 		stringConstants,
 		maxCodeUnits,
+		splitPolicy,
 	);
 	if (relocatable) return canonical;
 	if (canonical === null) return null;
@@ -1862,6 +1896,7 @@ function renderCompiledFunction(
 			strictCompiledTargets,
 			stringConstants,
 			maxCodeUnits,
+			splitPolicy,
 		);
 		if (emitted === null) return [];
 		const worker = renderNumericLeaf(nativeVariantContract(native, entry), entry);
@@ -2664,6 +2699,8 @@ type NativeBodyResource = "propertyCache" | "literalShapes" | "newTarget" | "thr
 
 interface EmittedBody extends NativeCallCoverage {
 	readonly lines: Array<string>;
+	/** Line index of each instruction's emission; earlier lines declare body state. */
+	readonly unitStarts: ReadonlyArray<number>;
 	readonly invocationPreamble: Array<string>;
 	readonly resources: ReadonlySet<NativeBodyResource>;
 }
@@ -3272,7 +3309,10 @@ function emitBody(
 			role: "step",
 			index: 1,
 		});
-		nativeArrayPairDestructureActionByIp.set(plan.closeIp, { cursor, role: "close" });
+		nativeArrayPairDestructureActionByIp.set(plan.closeIp, {
+			cursor,
+			role: "close",
+		});
 	}
 	// Pair and entry-pair fast paths rewrite the iterator registers they share.
 	const deferredIteratorCursors = new Set<number>();
@@ -3652,7 +3692,10 @@ function emitBody(
 	const fieldLoads = new Map(
 		directFields?.loads.map((load) => [
 			load.instructionIp,
-			{ field: load.field, representation: directFields.representations[load.field]! },
+			{
+				field: load.field,
+				representation: directFields.representations[load.field]!,
+			},
 		]),
 	);
 	const staticPropertyProjectionConflicts = (ip: number): boolean =>
@@ -3827,11 +3870,13 @@ function emitBody(
 	if (coro !== null) invocationPreamble.push(...lines.splice(0));
 	let measuredLines = 0;
 	let measuredCodeUnits = 0;
+	const unitStarts: Array<number> = [];
 	for (let ip = 0; ip < fn.instructions.length; ip++) {
 		// Give up before an over-budget body is complete, let alone joined into one string.
 		for (; measuredLines < lines.length; measuredLines++)
 			measuredCodeUnits += lines[measuredLines]!.length + 1;
 		if (measuredCodeUnits > maxCodeUnits) return null;
+		unitStarts.push(lines.length);
 		for (const slot of fieldCallSites.get(ip - 1)?.boxedSlots ?? [])
 			if (slot !== undefined) activeFieldSlots.delete(slot);
 		for (const slot of fieldAllocations.get(ip - 1)?.boxedSlots ?? [])
@@ -4422,9 +4467,11 @@ function emitBody(
 	);
 	if (coro === null) lines.unshift(...leafCacheDeclarations);
 	else invocationPreamble.push(...leafCacheDeclarations);
+	const declarationCount = coro === null ? leafCacheDeclarations.length : 0;
 
 	return {
 		lines,
+		unitStarts: unitStarts.map((start) => start + declarationCount),
 		resources,
 		invocationPreamble,
 		emittedInstructions,
