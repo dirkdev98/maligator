@@ -287,16 +287,18 @@ Set.prototype.delete = function (key) {
 ok("Set delete prototype override", new Set().delete("prototype-delete"));
 Set.prototype.delete = intrinsicSetDelete;
 
+function joinSingleEntry() {
+	const entries = new Map().set("key", "value");
+	let joined = "";
+	for (const [first, second] of entries) joined = first + ":" + second;
+	return joined;
+}
 const intrinsicArrayIterator = Array.prototype[Symbol.iterator];
-const reversedEntryMap = new Map([["key", "value"]]);
 Array.prototype[Symbol.iterator] = function* () {
 	yield this[1];
 	yield this[0];
 };
-let reversedEntry = "";
-for (const [first, second] of reversedEntryMap) {
-	reversedEntry = first + ":" + second;
-}
+const reversedEntry = joinSingleEntry();
 Array.prototype[Symbol.iterator] = intrinsicArrayIterator;
 ok("entry-pair materialization fallback", reversedEntry === "value:key");
 
