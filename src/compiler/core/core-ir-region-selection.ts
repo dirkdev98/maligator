@@ -542,7 +542,13 @@ function pendingLocalCandidate(
 			? []
 			: [lockedLiteral.constructorIntrinsic, lockedLiteral.construct]),
 	]);
-	const cost = costModel.forRegion(instructions, {
+	const closes = isIteratorCursorCandidate(candidate) ? candidate.closes : undefined;
+	// Deferred closes only materialize the iterator; the cursor's work is its own steps.
+	const costed =
+		closes === undefined
+			? instructions
+			: instructions.filter((instruction) => !closes.includes(instruction));
+	const cost = costModel.forRegion(costed, {
 		genericTwins: 1,
 		...(candidate.kind === "stack-object" ||
 		candidate.kind === "string-split-projection" ||
