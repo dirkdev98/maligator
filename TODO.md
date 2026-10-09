@@ -166,6 +166,10 @@ The independent target boundary and current storage contract are recorded in
       major collections and cost 40 s). Measure what holds the difference (freed
       heap chunks that stay mapped, raw stores, malloc'd tables) before trading
       collection time for it.
+- [ ] Cut the cost of minor sweeps in large programs. The native self-compile
+      allocates 71 GB, and minor collections spend 6 s sweeping 616 million young
+      cells, almost all dead; skipping the finalizer's out-of-line calls for plain
+      objects saved 1.5% of that, so touching each dead cell is the cost.
 - [ ] Stop fingerprinting every bytecode function with `JSON.stringify` to trust its
       safepoint root maps (452 ms of a 40 s Node frontend). Only functions that keep
       bytecode consume the trust. Profile builds also replace `profileSiteIds` in
