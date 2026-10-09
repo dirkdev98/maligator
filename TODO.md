@@ -166,6 +166,12 @@ The independent target boundary and current storage contract are recorded in
       major collections and cost 40 s). Measure what holds the difference (freed
       heap chunks that stay mapped, raw stores, malloc'd tables) before trading
       collection time for it.
+- [ ] Win back the open-compiled allocation phase. Since the inline static
+      property probe keeps only monomorphic and inherited-value hits, that phase
+      runs about 9% slower on the JavaScript benchmark because its polymorphic hits
+      take the out-of-line probe. Reading the GC poll flag through a VM pointer
+      cost the same phase another 20%, so that change was reverted: the pointer
+      load stays in the loop where the thread-local address was hoisted.
 - [ ] Cut the cost of minor sweeps in large programs. The native self-compile
       allocates 71 GB, and minor collections spend 6 s sweeping 616 million young
       cells, almost all dead; skipping the finalizer's out-of-line calls for plain
