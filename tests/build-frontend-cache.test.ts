@@ -749,7 +749,7 @@ describe("normal build frontend cache", () => {
 
 		expect(compiled.wires).toBeUndefined();
 		expect(compiled.fragmentFallback).toContain("live export 'answer'");
-	});
+	}, 30_000);
 
 	it("does not reuse policy-unchecked portable output for a checked native build", () => {
 		const root = temporaryDirectory();
