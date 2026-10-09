@@ -761,7 +761,7 @@ class BlockParser {
 	}
 
 	private lookup(name: string): Meaning | undefined {
-		return this.overrides.has(name)
+		return this.overrides.size !== 0 && this.overrides.has(name)
 			? this.overrides.get(name)
 			: this.frame.meanings.get(name);
 	}
@@ -1562,14 +1562,6 @@ function planInterfaces(graph: Graph, partition: Partition, frame: Frame): Inter
 			}
 	}
 	const words = (candidates.length + 31) >>> 5;
-	const bitsOf = (ids: ReadonlyArray<number>): Bits => {
-		const bits = new Uint32Array(words);
-		for (const id of ids) {
-			const index = candidateIndex[id]!;
-			if (index >= 0) bits[index >>> 5]! |= 1 << (index & 31);
-		}
-		return bits;
-	};
 	const constants = new Uint32Array(words);
 	for (let index = 0; index < candidates.length; index++)
 		if (written[candidates[index]!] === 0) constants[index >>> 5]! |= 1 << (index & 31);
@@ -1634,12 +1626,8 @@ function planInterfaces(graph: Graph, partition: Partition, frame: Frame): Inter
 		const exits = new Set<number>();
 		for (const block of fn.blocks) {
 			const facts = blocks[block]!;
-			const mentions = bitsOf(facts.mentions);
-			const writes = bitsOf(facts.writes);
-			for (let word = 0; word < words; word++) {
-				mentioned[word]! |= mentions[word]!;
-				mayWrite[word]! |= writes[word]!;
-			}
+			setBits(mentioned, facts.mentions, candidateIndex);
+			setBits(mayWrite, facts.writes, candidateIndex);
 			for (const object of facts.objects) objects.add(object);
 			for (const id of facts.mentions) if (graph.addressed.has(id)) objects.add(id);
 			specials |= facts.specials;
@@ -1801,6 +1789,17 @@ function evaluate(
 				break;
 			}
 		}
+	}
+}
+
+function setBits(
+	bits: Bits,
+	ids: ReadonlyArray<number>,
+	candidateIndex: Int32Array,
+): void {
+	for (const id of ids) {
+		const index = candidateIndex[id]!;
+		if (index >= 0) bits[index >>> 5]! |= 1 << (index & 31);
 	}
 }
 
