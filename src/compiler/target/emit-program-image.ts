@@ -728,6 +728,8 @@ function emitNativeFunctions(
 		debug: boolean;
 		linkage: "static" | "external";
 		maxCodeUnits?: number;
+		/** Definitions that do not fit one translation unit with their declarations. */
+		excludedSymbols?: ReadonlySet<string>;
 		relocatable?: boolean;
 	},
 ): {
@@ -828,9 +830,20 @@ function emitNativeFunctions(
 			strictCompiledTargets,
 			image.runtime.stringConstants,
 			callbackEntries,
+			options.maxCodeUnits === undefined
+				? undefined
+				: options.maxCodeUnits - headerCodeUnits,
 		);
-		if (emitted === null || !fits(emitted.source)) return null;
-		const entries = emitted.directEntries.filter((entry) => fits(entry.source));
+		if (
+			emitted === null ||
+			!fits(emitted.source) ||
+			options.excludedSymbols?.has(emitted.symbol) === true
+		)
+			return null;
+		const entries = emitted.directEntries.filter(
+			(entry) =>
+				fits(entry.source) && options.excludedSymbols?.has(entry.symbol) !== true,
+		);
 		return {
 			...emitted,
 			// A typed entry is an optional native overlay. Keep it independently
@@ -1032,6 +1045,7 @@ function emitProgramImageParts(
 	options: EmitOptions,
 	splitCompiledFunctions: boolean,
 	maxCompiledFunctionCodeUnits?: number,
+	excludedSymbols?: ReadonlySet<string>,
 ): EmittedProgramImageParts {
 	validateImageForEmission(image);
 	const runtime = image.runtime;
@@ -1088,6 +1102,7 @@ function emitProgramImageParts(
 		debug,
 		linkage: splitCompiledFunctions ? "external" : "static",
 		maxCodeUnits: maxCompiledFunctionCodeUnits,
+		excludedSymbols,
 	});
 	const compiled = nativeEmission.compiled;
 	{
@@ -1380,6 +1395,41 @@ function compiledFunctionPartitionKeys(image: ProgramImage): Array<string> {
 }
 
 /** Emit one runtime-image unit plus edit-local data and compiled-function units. */
+/** Code-unit symbols whose definition, header, and own declarations exceed one unit. */
+function oversizedCodeDefinitions(
+	inputs: {
+		readonly emitted: EmittedProgramImageParts;
+		readonly generatedDeclarations: ReadonlyArray<GeneratedDeclaration>;
+		readonly declarationIndicesBySymbol: ReadonlyMap<string, ReadonlyArray<number>>;
+	},
+	hardMaximumCodeUnits: number,
+): Array<string> {
+	const { emitted, generatedDeclarations, declarationIndicesBySymbol } = inputs;
+	let headerCodeUnits = NATIVE_C_HEADER_LINES.length;
+	for (const line of NATIVE_C_HEADER_LINES) headerCodeUnits += line.length;
+	let allDeclarationCodeUnits = generatedDeclarations.length;
+	for (const declaration of generatedDeclarations)
+		allDeclarationCodeUnits += declaration.source.length;
+	const oversized: Array<string> = [];
+	const check = (symbol: string, source: string) => {
+		if (source.length + headerCodeUnits + allDeclarationCodeUnits < hardMaximumCodeUnits)
+			return;
+		let unitCodeUnits = headerCodeUnits + source.length + 1;
+		for (const index of generatedDeclarationReferences(
+			source,
+			declarationIndicesBySymbol,
+		))
+			unitCodeUnits += generatedDeclarations[index]!.source.length + 1;
+		if (unitCodeUnits > hardMaximumCodeUnits) oversized.push(symbol);
+	};
+	for (const fn of emitted.compiled) {
+		if (fn === null) continue;
+		if (fn.source.length > 0) check(fn.symbol, fn.source);
+		for (const entry of fn.directEntries) check(entry.symbol, entry.source);
+	}
+	return oversized;
+}
+
 export function emitProgramTranslationUnits(
 	image: ProgramImage,
 	options: EmitOptions = {},
@@ -1397,56 +1447,87 @@ export function emitProgramTranslationUnits(
 			"translation-unit target and hard maximum must be positive integers with target <= maximum",
 		);
 	}
-	const emitted = emitProgramImageParts(
-		image,
-		{ ...options, includeHeader: false },
-		true,
-		hardMaximumCodeUnits,
-	);
-	const splitData = externalizeDataArrays(emitted.parts, hardMaximumCodeUnits);
-	const runtimeSource = [...GENERATED_DATA_C_HEADER_LINES, ...splitData.lines].join("\n");
-	if (runtimeSource.length > hardMaximumCodeUnits) {
-		throw new RangeError(
-			`generated runtime-image translation unit has ${runtimeSource.length} code units; ` +
-				`maximum is ${hardMaximumCodeUnits}`,
+	const emitInputs = (excludedSymbols: ReadonlySet<string>) => {
+		const emitted = emitProgramImageParts(
+			image,
+			{ ...options, includeHeader: false },
+			true,
+			hardMaximumCodeUnits,
+			excludedSymbols,
 		);
-	}
+		const splitData = externalizeDataArrays(emitted.parts, hardMaximumCodeUnits);
+		const runtimeSource = [...GENERATED_DATA_C_HEADER_LINES, ...splitData.lines].join(
+			"\n",
+		);
+		if (runtimeSource.length > hardMaximumCodeUnits) {
+			throw new RangeError(
+				`generated runtime-image translation unit has ${runtimeSource.length} code units; ` +
+					`maximum is ${hardMaximumCodeUnits}`,
+			);
+		}
 
-	const generatedDeclarations: Array<GeneratedDeclaration> = splitData.declarations
-		.concat(
-			emitted.compiled.flatMap((fn): Array<GeneratedDeclaration> =>
-				fn === null || fn.source.length === 0
-					? []
-					: [
-							{
-								symbol: fn.symbol,
-								source: `MalValue ${fn.symbol}${COMPILED_FUNCTION_DECLARATION};`,
-							},
-						],
-			),
-		)
-		.concat(
-			emitted.compiled.flatMap((fn) =>
-				(fn?.directEntries ?? []).flatMap((entry) => [
-					{ symbol: entry.symbol, source: `${directEntryDeclaration(entry)};` },
-					...(entry.callbackSymbol === undefined
+		const generatedDeclarations: Array<GeneratedDeclaration> = splitData.declarations
+			.concat(
+				emitted.compiled.flatMap((fn): Array<GeneratedDeclaration> =>
+					fn === null || fn.source.length === 0
 						? []
 						: [
 								{
-									symbol: entry.callbackSymbol,
-									source: `MalValue ${entry.callbackSymbol}${COMPILED_FUNCTION_DECLARATION};`,
+									symbol: fn.symbol,
+									source: `MalValue ${fn.symbol}${COMPILED_FUNCTION_DECLARATION};`,
 								},
-							]),
-				]),
-			),
-		);
-	const declarationIndicesBySymbol = new Map<string, Array<number>>();
-	for (const [index, declaration] of generatedDeclarations.entries()) {
-		const indices = declarationIndicesBySymbol.get(declaration.symbol);
-		if (indices === undefined)
-			declarationIndicesBySymbol.set(declaration.symbol, [index]);
-		else indices.push(index);
+							],
+				),
+			)
+			.concat(
+				emitted.compiled.flatMap((fn) =>
+					(fn?.directEntries ?? []).flatMap((entry) => [
+						{ symbol: entry.symbol, source: `${directEntryDeclaration(entry)};` },
+						...(entry.callbackSymbol === undefined
+							? []
+							: [
+									{
+										symbol: entry.callbackSymbol,
+										source: `MalValue ${entry.callbackSymbol}${COMPILED_FUNCTION_DECLARATION};`,
+									},
+								]),
+					]),
+				),
+			);
+		const declarationIndicesBySymbol = new Map<string, Array<number>>();
+		for (const [index, declaration] of generatedDeclarations.entries()) {
+			const indices = declarationIndicesBySymbol.get(declaration.symbol);
+			if (indices === undefined)
+				declarationIndicesBySymbol.set(declaration.symbol, [index]);
+			else indices.push(index);
+		}
+		return {
+			emitted,
+			splitData,
+			runtimeSource,
+			generatedDeclarations,
+			declarationIndicesBySymbol,
+		};
+	};
+	// Rendering bounds each definition before its declarations are known; a definition
+	// that cannot share a unit with its own declarations stays with the interpreter.
+	let excludedSymbols: ReadonlySet<string> = new Set();
+	let inputs = emitInputs(excludedSymbols);
+	for (
+		let oversized = oversizedCodeDefinitions(inputs, hardMaximumCodeUnits);
+		oversized.length > 0;
+		oversized = oversizedCodeDefinitions(inputs, hardMaximumCodeUnits)
+	) {
+		excludedSymbols = new Set([...excludedSymbols, ...oversized]);
+		inputs = emitInputs(excludedSymbols);
 	}
+	const {
+		emitted,
+		splitData,
+		runtimeSource,
+		generatedDeclarations,
+		declarationIndicesBySymbol,
+	} = inputs;
 	const preparePart = (
 		part: Omit<TranslationUnitPart, "declarationIndices" | "partitionHashes">,
 	): TranslationUnitPart => {

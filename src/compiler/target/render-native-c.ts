@@ -847,6 +847,7 @@ function emitCompiledVariant(
 	directEntry?: NativeDirectEntryPlan,
 	strictCompiledTargets: ReadonlySet<number> = new Set(),
 	stringConstants: ReadonlyArray<ReadonlyArray<number>> = [],
+	maxCodeUnits = Infinity,
 ): CompiledFunction | null {
 	// Generators and async functions suspend mid-body: they lower to a resumable C
 	// function (a heap register frame + entry dispatch to the saved resume point)
@@ -866,6 +867,7 @@ function emitCompiledVariant(
 			directCompiledTargets,
 			directCompiledEntries,
 			strictCompiledTargets,
+			maxCodeUnits,
 		);
 	}
 	if (directEntry !== undefined) validateNativeDirectEntry(fn, directEntry);
@@ -1237,6 +1239,7 @@ function emitCompiledVariant(
 		storage.callTransports,
 		storage.callbackTransports,
 		new Set(storage.rootPublicationContinuations),
+		maxCodeUnits,
 	);
 	if (body === null) {
 		return null;
@@ -1489,6 +1492,7 @@ function emitCompiledVariant(
 	}
 	lines.push("}");
 	for (const i of definedRegisters) lines.push(`#undef r${i}`);
+	if (joinedCodeUnits(lines) > maxCodeUnits) return null;
 	return {
 		symbol,
 		source: lines.join("\n"),
@@ -1722,6 +1726,7 @@ export function emitCompiledFunction(
 	strictCompiledTargets: ReadonlySet<number> = new Set(),
 	stringConstants: ReadonlyArray<ReadonlyArray<number>> = [],
 	callbackEntries: ReadonlySet<string> = new Set(),
+	maxCodeUnits = Infinity,
 ): CompiledFunction | null {
 	if (native.storage === undefined)
 		throw new Error("Native rendering requires a lowered storage plan");
@@ -1739,6 +1744,7 @@ export function emitCompiledFunction(
 		strictCompiledTargets,
 		stringConstants,
 		callbackEntries,
+		maxCodeUnits,
 	);
 }
 
@@ -1765,6 +1771,7 @@ export function createNativeFunctionRenderer(): typeof emitCompiledFunction {
 		strictCompiledTargets: ReadonlySet<number> = new Set(),
 		stringConstants: ReadonlyArray<ReadonlyArray<number>> = [],
 		callbackEntries: ReadonlySet<string> = new Set(),
+		maxCodeUnits = Infinity,
 	): CompiledFunction | null => {
 		if (native.storage === undefined)
 			throw new Error("Native rendering requires a lowered storage plan");
@@ -1793,6 +1800,7 @@ export function createNativeFunctionRenderer(): typeof emitCompiledFunction {
 			strictCompiledTargets,
 			stringConstants,
 			callbackEntries,
+			maxCodeUnits,
 		);
 	};
 }
@@ -1811,6 +1819,7 @@ function renderCompiledFunction(
 	strictCompiledTargets: ReadonlySet<number> = new Set(),
 	stringConstants: ReadonlyArray<ReadonlyArray<number>> = [],
 	callbackEntries: ReadonlySet<string> = new Set(),
+	maxCodeUnits = Infinity,
 ): CompiledFunction | null {
 	const fn = native.body;
 	const canonical = emitCompiledVariant(
@@ -1828,6 +1837,7 @@ function renderCompiledFunction(
 		undefined,
 		strictCompiledTargets,
 		stringConstants,
+		maxCodeUnits,
 	);
 	if (relocatable) return canonical;
 	if (canonical === null) return null;
@@ -1851,6 +1861,7 @@ function renderCompiledFunction(
 			entry,
 			strictCompiledTargets,
 			stringConstants,
+			maxCodeUnits,
 		);
 		if (emitted === null) return [];
 		const worker = renderNumericLeaf(nativeVariantContract(native, entry), entry);
@@ -1991,6 +2002,7 @@ function emitResumableFunction(
 	directCompiledTargets: ReadonlySet<number>,
 	directCompiledEntries: DirectCompiledEntries,
 	strictCompiledTargets: ReadonlySet<number>,
+	maxCodeUnits: number,
 ): CompiledFunction | null {
 	nativeFrameRootRegisters(fn, native);
 	const isAsyncFunction = fn.isAsync && !fn.isGenerator;
@@ -2097,6 +2109,7 @@ function emitResumableFunction(
 		storage.callTransports,
 		storage.callbackTransports,
 		new Set(storage.rootPublicationContinuations),
+		maxCodeUnits,
 	);
 	if (body === null) {
 		return null;
@@ -2282,6 +2295,7 @@ function emitResumableFunction(
 	for (let i = 0; i < fn.registerCount; i++) {
 		lines.push(`#undef r${i}`);
 	}
+	if (joinedCodeUnits(lines) > maxCodeUnits) return null;
 
 	return {
 		symbol,
@@ -2291,6 +2305,13 @@ function emitResumableFunction(
 		directEntryCalls: body.directEntryCalls,
 		directEntries: [],
 	};
+}
+
+/** Code units of `lines.join("\n")`, computed without building the string. */
+function joinedCodeUnits(lines: ReadonlyArray<string>): number {
+	let total = Math.max(0, lines.length - 1);
+	for (const line of lines) total += line.length;
+	return total;
 }
 
 /** The C type a register of the given rep is held in. */
@@ -3175,6 +3196,7 @@ function emitBody(
 	callTransports: ReadonlyArray<NativeCallTransportPlan> = [],
 	callbackTransports: ReadonlyArray<NativeCallbackTransportPlan> = [],
 	rootPublicationContinuations: ReadonlySet<number> = new Set(),
+	maxCodeUnits = Infinity,
 ): EmittedBody | null {
 	const callTransportByIp = new Map(
 		callTransports.map((plan) => [plan.instructionIp, plan]),
@@ -3803,7 +3825,13 @@ function emitBody(
 	const hasPrivateRoots = (rootPublication?.slots.size ?? 0) > 0;
 	const activeFieldSlots = new Set<number>();
 	if (coro !== null) invocationPreamble.push(...lines.splice(0));
+	let measuredLines = 0;
+	let measuredCodeUnits = 0;
 	for (let ip = 0; ip < fn.instructions.length; ip++) {
+		// Give up before an over-budget body is complete, let alone joined into one string.
+		for (; measuredLines < lines.length; measuredLines++)
+			measuredCodeUnits += lines[measuredLines]!.length + 1;
+		if (measuredCodeUnits > maxCodeUnits) return null;
 		for (const slot of fieldCallSites.get(ip - 1)?.boxedSlots ?? [])
 			if (slot !== undefined) activeFieldSlots.delete(slot);
 		for (const slot of fieldAllocations.get(ip - 1)?.boxedSlots ?? [])

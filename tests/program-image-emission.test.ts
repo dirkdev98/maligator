@@ -1002,6 +1002,44 @@ describe("emit-program-image instruction packing", () => {
 		);
 	});
 
+	it("interprets a function whose unit exceeds the hard maximum by one code unit", () => {
+		const instructions = [
+			...Array.from({ length: 2_000 }, () => ({
+				opcode: "CALL" as const,
+				dst: 0,
+				callee: 1,
+				thisValue: 2,
+				argumentCount: 0,
+				arguments: [],
+			})),
+			{ opcode: "RETURN" as const, value: 0 },
+		];
+		const functions = [{ ...fn, capturedCount: 0, registerCount: 3, instructions }];
+		const image = {
+			...definition,
+			runtime: { ...definition.runtime, functionCount: 1, functions },
+			native: createConservativeNativePlan(functions),
+		};
+		const emit = (hardMaximumCodeUnits: number) =>
+			emitProgramTranslationUnits(
+				image,
+				{},
+				{ targetCodeUnits: 20_000, hardMaximumCodeUnits },
+			);
+		const compiledUnit = (units: ReturnType<typeof emit>) =>
+			units.find((unit) =>
+				unit.definitions.some((item) => item.symbol === "mal_compiled_0"),
+			);
+		const unitCodeUnits = compiledUnit(emit(8 * 1024 * 1024))!.source.length;
+
+		expect(compiledUnit(emit(unitCodeUnits))?.source.length).toBe(unitCodeUnits);
+		const interpreted = emit(unitCodeUnits - 1);
+		expect(compiledUnit(interpreted)).toBeUndefined();
+		expect(interpreted.map((unit) => unit.source).join("\n")).not.toContain(
+			"mal_compiled_0",
+		);
+	});
+
 	it("keeps hash-partitioned unit identities local when one function grows", () => {
 		const functions = Array.from({ length: 64 }, () => ({
 			...fn,
