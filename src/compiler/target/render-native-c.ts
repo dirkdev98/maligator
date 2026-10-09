@@ -723,7 +723,7 @@ function nativeRootMaskStatements(masks: Iterable<NativeInactiveRootMask>): {
 	for (const mask of distinct) width = Math.max(width, Math.ceil(mask.length / 2));
 	const rows: Array<string> = [];
 	for (const mask of distinct) {
-		if (mask.length <= 2) {
+		if (width <= 1) {
 			statements.set(mask, `MAL_ROOT_MASK(0x${nativeRootMaskWordHex(mask, 0)})`);
 			continue;
 		}
@@ -759,7 +759,8 @@ function cInactiveRootMaskPublication(
 	const statement = statements?.get(mask);
 	if (statement !== undefined) return statement;
 	if (mask.length > 2) throw new Error("Native wide root mask lacks a static row");
-	return `MAL_ROOT_MASK(0x${nativeRootMaskWordHex(mask, 0)})`;
+	// Without the function's mask table a row may have set the tail, so clear it too.
+	return `mal_gc_root_frame_set_inactive(&__gc_frame, UINT64_C(0x${nativeRootMaskWordHex(mask, 0)}), nullptr, 0)`;
 }
 
 interface NativeRootPublicationPoint {

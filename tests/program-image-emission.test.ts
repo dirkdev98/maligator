@@ -1660,7 +1660,7 @@ describe("emit-program-image instruction packing", () => {
 			);
 			const masks: Array<bigint> = [];
 			if (liveCounts.at(-1) === 130) {
-				expect(output!.match(/^ {8}\{ .* \},$/gm)).toHaveLength(2);
+				expect(output!.match(/^ {8}\{ .* \},$/gm)).toHaveLength(3);
 			}
 			let publishedMask = 0n;
 			for (const match of output!.matchAll(
@@ -1792,7 +1792,7 @@ describe("emit-program-image instruction packing", () => {
 		const output = emitProgramImage(image, { compiled: true });
 
 		expect(output).toContain(
-			"#define MAL_ROOT_MASK(mask) mal_gc_root_frame_set_inactive(&__gc_frame, UINT64_C(mask), nullptr, 0)",
+			"#define MAL_ROOT_MASK(mask) (__gc_frame.inactive_slots = UINT64_C(mask))",
 		);
 		expect(output).toContain(
 			"#define MAL_ROOT_MASK_ROW(row) mal_gc_root_frame_set_inactive(&__gc_frame, __gc_inactive_rows[row][0], &__gc_inactive_rows[row][1], countof(__gc_inactive_rows[0]) - 1)",
