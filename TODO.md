@@ -214,9 +214,9 @@ The independent target boundary and current storage contract are recorded in
       most samples in hot runtime helpers land on their first instruction, which
       points at instruction fetch across 44 MB of text rather than their bodies. Self
       time now puts 26% in generated code, 19% in property caches, 11% in call
-      dispatch, 11% in GC, and 3% in macOS thread-local lookups; call caches, the
-      root-frame head, and safepoint polls no longer use thread-locals, so the rest
-      comes from runtime protector flags and GC allocation state. The hottest
+      dispatch, 11% in GC, and 3% in macOS thread-local lookups; call caches and the
+      root-frame head no longer use thread-locals, so the rest comes from safepoint
+      polls, runtime protector flags, and GC allocation state. The hottest
       generated functions are one-line Core store accessors called through
       `mal_vm_call_cached`. Measured dead ends: `__builtin_expect` on the
       generated throw check made the cone 11% slower, and forcing `always_inline`
