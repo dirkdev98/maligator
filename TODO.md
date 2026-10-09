@@ -147,6 +147,10 @@ The independent target boundary and current storage contract are recorded in
       with safepoints times slots/64: `emitInstruction` (1,897 slots) emitted 8,170
       of them, 44% of its C before all-inactive words were spelled compactly. Let a
       miss path record what it published, and encode huge-frame masks sparsely.
+      `emitInstruction` still exceeds the 8 Mi per-function cap (13.06 Mi: mask
+      tables 27.6%, storage-switch `#define`s 10.9%, wide mask calls 6.4%), so the
+      native self-compiler interprets it, about 3% of the compiler's own run.
+      Sparse tail masks alone would leave it near 10 Mi.
 
 - [ ] Keep each compiled function's C below the 16 Mi code-unit string limit.
       Native-hosted emission joins a function's lines into one string and renders
@@ -175,12 +179,16 @@ The independent target boundary and current storage contract are recorded in
       validation work. Block liveness and continuation snapshots now replace dense
       per-instruction state; quantify scaling before expanding coroutine specialization.
 - [ ] Select the next proof consumer from a measured hot path rather than
-      local-count or plan-kind totals. Self-compile snapshots now report emitted C
-      size, static root-publication counts, C compile time and peak memory,
-      executable and code-section size, runtime GC behavior, and phase time on both
-      hosts. At `1cdf5c1c` the native self-compiler took 283 s against Node's 40 s
-      on one machine, 150 s of it in Core optimization; profile it with source-site
-      counters first. Paired comparisons need a baseline that reports these fields.
+      local-count or plan-kind totals. On the shape-analysis cone the native
+      self-compiler went from 43.4 s to about 34.6 s on one machine (Node: 8.4 s);
+      stack samples now put 23% in generated code, 23% in property-cache slow paths,
+      15% in GC (nursery sweeping is 954 of 1,203 ms of minor pauses), and 4.5% in
+      macOS thread-local lookups from GC internals, cache protector flags, and the
+      root-frame head. Two measured dead ends: exempting single-target guarded
+      direct calls or small inlines from the program generated-code budget made
+      thousands more sites direct or inlined without changing wall time, because
+      callee frames rather than dispatch carry the per-call cost. Hot accessors only
+      sped up once inlining accepted throwing callees and class-scope closures.
 
 ## World-knowledge ladder
 
