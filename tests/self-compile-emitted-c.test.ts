@@ -24,7 +24,7 @@ test("counts root publication and runtime work across every emitted C unit", () 
 			"    __gc_slots[2] = r7;",
 			"    __gc_slots[130] = MAL_VALUE_UNDEFINED;",
 			"    MAL_ROOT_MASK(0x4);",
-			"    if (*vm->gc_poll) { __gc_slots[2] = r7; MAL_ROOT_MASK_ROW(0); mal_gc_safepoint(vm); }",
+			"    if (mal_gc_poll) { __gc_slots[2] = r7; MAL_ROOT_MASK_ROW(0); mal_gc_safepoint(vm); }",
 			"    r9 = mal_vm_op_load_property(vm, r3, r4);",
 			"    if (MAL_THREW()) goto __throw_exit;",
 		].join("\n"),

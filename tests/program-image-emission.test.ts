@@ -1803,7 +1803,7 @@ describe("emit-program-image instruction packing", () => {
 		expect(output.match(/MAL_ROOT_MASK\(0x2\);/g)).toHaveLength(2);
 		expect(output).toMatch(/L4:;\n {4}MAL_ROOT_MASK\(0x4\);/);
 		expect(output).toMatch(
-			/if \(\*vm->gc_poll\) \{ MAL_ROOT_MASK\(0x2\); mal_gc_safepoint\(vm\); if \(mal_gc_poll_termination\(vm\)\) goto __throw_exit; \} goto L4;/,
+			/if \(mal_gc_poll\) \{ MAL_ROOT_MASK\(0x2\); mal_gc_safepoint\(vm\); if \(mal_gc_poll_termination\(vm\)\) goto __throw_exit; \} goto L4;/,
 		);
 	});
 
@@ -2118,7 +2118,7 @@ describe("emit-program-image instruction packing", () => {
 		);
 		expect(output.slice(secondMissEnd, allocationEnd)).not.toContain("__gc_slots");
 		expect(output).toMatch(
-			/if \(\*vm->gc_poll\) \{[^\n]*__gc_slots\[2\] = r2;[^\n]*mal_gc_safepoint\(vm\);/,
+			/if \(mal_gc_poll\) \{[^\n]*__gc_slots\[2\] = r2;[^\n]*mal_gc_safepoint\(vm\);/,
 		);
 	});
 
@@ -2213,7 +2213,7 @@ describe("emit-program-image instruction packing", () => {
 			/__gc_slots\[1\] = r1;[\s\S]*?__gc_slots\[2\] = MAL_VALUE_UNDEFINED;[\s\S]*?r2 = mal_vm_op_load_property_ic_static_miss/,
 		);
 		expect(output).toMatch(
-			/if \(\*vm->gc_poll\) \{[^\n]*__gc_slots\[1\] = r1;[^\n]*mal_gc_safepoint\(vm\);/,
+			/if \(mal_gc_poll\) \{[^\n]*__gc_slots\[1\] = r1;[^\n]*mal_gc_safepoint\(vm\);/,
 		);
 	});
 
@@ -2366,7 +2366,7 @@ describe("emit-program-image instruction packing", () => {
 		expect(incoming).toContain("__gc_slots[66] = MAL_VALUE_UNDEFINED;");
 		const poll = output
 			.slice(output.indexOf("r66 = mal_vm_op_load_property_ic_static_miss"))
-			.match(/if \(\*vm->gc_poll\) \{([^\n]*)mal_gc_safepoint\(vm\);/);
+			.match(/if \(mal_gc_poll\) \{([^\n]*)mal_gc_safepoint\(vm\);/);
 		expect(poll).not.toBeNull();
 		expect(poll![1]).toContain("__gc_slots[66] = r66;");
 		expect(poll![1]).not.toContain("__gc_slots[65]");
@@ -2879,7 +2879,7 @@ describe("native update-expression representation", () => {
 		expect(output).not.toContain("MAL_UNARY_TO_NUMERIC");
 		expect(output).not.toContain("MAL_UNARY_INCREMENT");
 		expect(output).toMatch(
-			/if \(\*vm->gc_poll\) \{ (?:__gc_slots\[\d+\] = (?:r\d+|MAL_VALUE_UNDEFINED); )*MAL_ROOT_MASK\(0x[0-9a-f]+\); mal_gc_safepoint\(vm\); if \(mal_gc_poll_termination\(vm\)\) goto __throw_exit; \}/,
+			/if \(mal_gc_poll\) \{ (?:__gc_slots\[\d+\] = (?:r\d+|MAL_VALUE_UNDEFINED); )*MAL_ROOT_MASK\(0x[0-9a-f]+\); mal_gc_safepoint\(vm\); if \(mal_gc_poll_termination\(vm\)\) goto __throw_exit; \}/,
 		);
 	});
 
@@ -2923,7 +2923,7 @@ describe("native update-expression representation", () => {
 		expect(output).toContain(", 1000);");
 		expect(output).toContain("mal_vm_array_try_store(");
 		expect(output).toContain(
-			"if (*vm->gc_poll) { mal_gc_safepoint(vm); if (mal_gc_poll_termination(vm)) goto __throw_exit; }",
+			"if (mal_gc_poll) { mal_gc_safepoint(vm); if (mal_gc_poll_termination(vm)) goto __throw_exit; }",
 		);
 	});
 
@@ -3506,10 +3506,10 @@ describe("native update-expression representation", () => {
 			/MAL_ROOT_MASK\([^)]+\);\n\s+static MalMath(?:Unary|Binary)Op/,
 		);
 		expect(output).toMatch(
-			/if \(mal_builtin_math_unary_fast[^\n]+\) \{[\s\S]*?\} else \{\n\s+(MAL_ROOT_MASK\(0x[\da-f]+\));\n\s+[^\n]*&__call_caches\[\d+\][\s\S]*?\n\s+\}\n\s+if \(\*vm->gc_poll\) \{ \1; mal_gc_safepoint\(vm\); if \(mal_gc_poll_termination\(vm\)\) (?:\{ (?:__private_r\d+ = __gc_slots\[\d+\]; )+)?goto __throw_exit; (?:\} )?\}/,
+			/if \(mal_builtin_math_unary_fast[^\n]+\) \{[\s\S]*?\} else \{\n\s+(MAL_ROOT_MASK\(0x[\da-f]+\));\n\s+[^\n]*&__call_caches\[\d+\][\s\S]*?\n\s+\}\n\s+if \(mal_gc_poll\) \{ \1; mal_gc_safepoint\(vm\); if \(mal_gc_poll_termination\(vm\)\) (?:\{ (?:__private_r\d+ = __gc_slots\[\d+\]; )+)?goto __throw_exit; (?:\} )?\}/,
 		);
 		expect(output).toMatch(
-			/if \(mal_builtin_math_binary_fast[^\n]+\) \{[\s\S]*?\} else \{\n\s+(MAL_ROOT_MASK\(0x[\da-f]+\));\n\s+[^\n]*&__call_caches\[\d+\][\s\S]*?\n\s+\}\n\s+if \(\*vm->gc_poll\) \{ \1; mal_gc_safepoint\(vm\); if \(mal_gc_poll_termination\(vm\)\) (?:\{ (?:__private_r\d+ = __gc_slots\[\d+\]; )+)?goto __throw_exit; (?:\} )?\}/,
+			/if \(mal_builtin_math_binary_fast[^\n]+\) \{[\s\S]*?\} else \{\n\s+(MAL_ROOT_MASK\(0x[\da-f]+\));\n\s+[^\n]*&__call_caches\[\d+\][\s\S]*?\n\s+\}\n\s+if \(mal_gc_poll\) \{ \1; mal_gc_safepoint\(vm\); if \(mal_gc_poll_termination\(vm\)\) (?:\{ (?:__private_r\d+ = __gc_slots\[\d+\]; )+)?goto __throw_exit; (?:\} )?\}/,
 		);
 
 		const lockedOutput = emitLocked(source);
@@ -3606,7 +3606,7 @@ describe("native update-expression representation", () => {
 		const output = emitProgramImage(image, { compiled: true });
 
 		expect(output).toMatch(
-			/MAL_ROOT_MASK\(0x1\);[\s\S]*?r3 = floor\(r2\);\n\s+if \(\*vm->gc_poll\) \{ MAL_ROOT_MASK\(0x2\); mal_gc_safepoint\(vm\); if \(mal_gc_poll_termination\(vm\)\) goto __throw_exit; \}\n\s+MAL_ROOT_MASK\(0x1\);/,
+			/MAL_ROOT_MASK\(0x1\);[\s\S]*?r3 = floor\(r2\);\n\s+if \(mal_gc_poll\) \{ MAL_ROOT_MASK\(0x2\); mal_gc_safepoint\(vm\); if \(mal_gc_poll_termination\(vm\)\) goto __throw_exit; \}\n\s+MAL_ROOT_MASK\(0x1\);/,
 		);
 	});
 
@@ -5056,7 +5056,7 @@ describe("native update-expression representation", () => {
 			globalThis.read = read;
 		`);
 		const lines = output.split("\n");
-		const poll = /if \(\*vm->gc_poll\) \{[^\n]*mal_gc_safepoint\(vm\);/;
+		const poll = /if \(mal_gc_poll\) \{[^\n]*mal_gc_safepoint\(vm\);/;
 		const constructLine = lines.findIndex((line) =>
 			line.includes("mal_vm_call_known_native"),
 		);
