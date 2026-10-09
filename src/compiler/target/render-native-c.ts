@@ -2431,7 +2431,7 @@ type NativeIteratorCursor = Extract<
 
 interface NativeIteratorCursorAction {
 	readonly cursor: NativeIteratorCursor;
-	readonly role: "initialize" | "step";
+	readonly role: "initialize" | "step" | "close";
 }
 
 interface NativeArrayPairDestructureAction {
@@ -3017,11 +3017,17 @@ function analyzeNativeRegionTopology(
 			region.kind === "set-iterator-cursor"
 		) {
 			if (
-				(action.role !== "initialize" && action.role !== "step") ||
+				(action.role !== "initialize" &&
+					action.role !== "step" &&
+					action.role !== "close") ||
 				action.ip !==
 					(action.role === "initialize"
 						? region.initializeIp
-						: region.stepIps[action.primaryIndex ?? -1]) ||
+						: action.role === "step"
+							? region.stepIps[action.primaryIndex ?? -1]
+							: region.kind === "array-values-iterator-cursor"
+								? region.closeIps[action.primaryIndex ?? -1]
+								: undefined) ||
 				nativeIteratorCursorActionByIp.has(action.ip)
 			) {
 				throw new Error("Duplicate iterator cursor action");
@@ -3208,6 +3214,22 @@ function emitBody(
 			index: 1,
 		});
 		nativeArrayPairDestructureActionByIp.set(plan.closeIp, { cursor, role: "close" });
+	}
+	// Pair and entry-pair fast paths rewrite the iterator registers they share.
+	const deferredIteratorCursors = new Set<number>();
+	for (const { cursor, role } of nativeIteratorCursorActionByIp.values()) {
+		if (
+			role !== "initialize" ||
+			cursor.kind !== "array-values-iterator-cursor" ||
+			cursor.stateSynchronization !== "materialize-before-observation" ||
+			[cursor.initializeIp, ...cursor.stepIps, ...cursor.closeIps].some(
+				(ip) =>
+					nativeArrayPairDestructureActionByIp.has(ip) ||
+					nativeIteratorEntryPairVirtualizationActionByIp.has(ip),
+			)
+		)
+			continue;
+		deferredIteratorCursors.add(cursor.initializeIp);
 	}
 	const { jumpTargets, handlerTargets } = analysis;
 	const ownsCaptureEnvironment = coro === null && analysis.ownsCaptureEnvironment;
@@ -3398,6 +3420,11 @@ function emitBody(
 		if (action.cursor.protocol === "array-values") {
 			lines.push(
 				`MalIteratorObject *__iter_string_cursor_${action.cursor.initializeIp} = nullptr;`,
+			);
+		}
+		if (deferredIteratorCursors.has(action.cursor.initializeIp)) {
+			lines.push(
+				`MalArrayValuesDeferredCursor __iter_deferred_${action.cursor.initializeIp} = { .active = false };`,
 			);
 		}
 	}
@@ -3705,6 +3732,7 @@ function emitBody(
 		nativeStringCharCodeAtChainAction: undefined,
 		nativeBuiltinCollectionCallChainAction: undefined,
 		nativeIteratorCursorAction: undefined,
+		deferredIteratorCursor: false,
 		nativeArrayPairDestructureAction: undefined,
 		nativeIteratorResultVirtualizationAction: undefined,
 		nativeIteratorEntryPairVirtualizationAction: undefined,
@@ -4152,6 +4180,9 @@ function emitBody(
 			nativeBuiltinCollectionCallChainActionByIp.get(ip);
 		instructionContext.nativeIteratorCursorAction =
 			nativeIteratorCursorActionByIp.get(ip);
+		instructionContext.deferredIteratorCursor = deferredIteratorCursors.has(
+			instructionContext.nativeIteratorCursorAction?.cursor.initializeIp ?? -1,
+		);
 		instructionContext.nativeArrayPairDestructureAction =
 			nativeArrayPairDestructureActionByIp.get(ip);
 		instructionContext.nativeIteratorResultVirtualizationAction =
@@ -4615,6 +4646,7 @@ interface NativeInstructionContext {
 	readonly nativeStringCharCodeAtChainAction?: NativeStringCharCodeAtChainAction;
 	readonly nativeBuiltinCollectionCallChainAction?: NativeBuiltinCollectionCallChainAction;
 	readonly nativeIteratorCursorAction?: NativeIteratorCursorAction;
+	readonly deferredIteratorCursor: boolean;
 	readonly nativeArrayPairDestructureAction?: NativeArrayPairDestructureAction;
 	readonly nativeIteratorResultVirtualizationAction?: NativeIteratorResultVirtualizationAction;
 	readonly nativeIteratorEntryPairVirtualizationAction?: NativeIteratorEntryPairVirtualizationAction;
@@ -4820,6 +4852,7 @@ function emitInstruction(
 		nativeStringCharCodeAtChainAction,
 		nativeBuiltinCollectionCallChainAction,
 		nativeIteratorCursorAction,
+		deferredIteratorCursor,
 		nativeArrayPairDestructureAction,
 		nativeIteratorResultVirtualizationAction,
 		nativeIteratorEntryPairVirtualizationAction,
@@ -4891,6 +4924,7 @@ function emitInstruction(
 		mappedArgumentSlots,
 		hasPrototype,
 		relocation,
+		deferredIteratorCursor: false,
 	});
 	const emitGenericInstruction = (): Array<string> | null =>
 		emitInstruction(
@@ -9713,6 +9747,19 @@ function emitInstruction(
 					);
 				}
 			}
+			if (deferredIteratorCursor && nativeIteratorCursorAction?.role === "initialize") {
+				const id = nativeIteratorCursorAction.cursor.initializeIp;
+				return [
+					`if (mal_vm_array_values_deferred_begin(vm, ${boxed(instruction.source)}, &__iter_deferred_${id})) {`,
+					`  r${instruction.iteratorDst} = ${boxed(instruction.source)};`,
+					`  r${instruction.nextDst} = MAL_VALUE_UNDEFINED;`,
+					`  __iter_cursor_${id} = nullptr;`,
+					`  __iter_string_cursor_${id} = nullptr;`,
+					`} else {`,
+					...lines.map((line) => `  ${line}`),
+					`}`,
+				];
+			}
 			if (nativeArrayPairDestructureAction?.role === "initialize") {
 				const id = nativeArrayPairDestructureAction.cursor.initializeIp;
 				return [
@@ -9817,10 +9864,21 @@ function emitInstruction(
 					: nativeIteratorCursorAction?.cursor.protocol === "array-values"
 						? `mal_vm_iterator_step_dense_array_cursor(vm, __iter_cursor_${cursorInitializeIp}, &${rec}, &${val}, &${done})`
 						: `mal_vm_iterator_step_protocol_cursor(vm, __iter_cursor_${cursorInitializeIp}, &${val}, &${done})`;
-			const step =
+			const deferred =
+				deferredIteratorCursor && cursorInitializeIp !== undefined
+					? `__iter_deferred_${cursorInitializeIp}`
+					: undefined;
+			const deferredOr = (call: string, otherwise: string): string =>
+				deferred === undefined
+					? otherwise
+					: `(${deferred}.active ? ${call} : ${otherwise})`;
+			const deferredStep = `mal_vm_array_values_deferred_step(vm, ${boxed(instruction.iterator)}, &${deferred}, &${val}, &${done})`;
+			const step = deferredOr(
+				deferredStep,
 				cursorStep !== undefined
 					? `(__iter_cursor_${cursorInitializeIp} != nullptr ? ${cursorStep} : ${genericStep})`
-					: genericStep;
+					: genericStep,
+			);
 			if (nativeRegExpIteratorProjectionAction?.role === "step") {
 				const site = nativeRegExpIteratorProjectionAction.site;
 				const admission = regionAdmissionGuard(site.projection.license);
@@ -9849,17 +9907,22 @@ function emitInstruction(
 				cursorInitializeIp === undefined
 					? denseArrayProbe
 					: `(__iter_cursor_${cursorInitializeIp} != nullptr ? ${denseArrayCursorProbe} : ${denseArrayProbe})`;
-			const iteratorProbe =
+			const iteratorProbe = deferredOr(
+				`mal_vm_array_values_deferred_try_step(${boxed(instruction.iterator)}, &${deferred}, &${val}, &${done})`,
 				nativeIteratorCursorAction?.cursor.protocol === "string"
 					? `(__iter_cursor_${cursorInitializeIp} != nullptr && mal_vm_iterator_try_string_cursor_step(vm, __iter_cursor_${cursorInitializeIp}, &${val}, &${done}))`
 					: nativeIteratorCursorAction?.cursor.protocol === "array-values" &&
 						  cursorInitializeIp !== undefined
 						? `(__iter_cursor_${cursorInitializeIp} != nullptr ? ${denseArrayCursorProbe} : (__iter_string_cursor_${cursorInitializeIp} != nullptr ? mal_vm_iterator_try_string_cursor_step(vm, __iter_string_cursor_${cursorInitializeIp}, &${val}, &${done}) : (${denseArrayProbe} || mal_vm_iterator_try_string_step(vm, &${rec}, &${val}, &${done}))))`
-						: `(${denseProbe} || mal_vm_iterator_try_string_step(vm, &${rec}, &${val}, &${done}))`;
+						: `(${denseProbe} || mal_vm_iterator_try_string_step(vm, &${rec}, &${val}, &${done}))`,
+			);
 			const iteratorFallback =
 				nativeIteratorCursorAction?.cursor.protocol === "string"
 					? step
-					: `mal_vm_iterator_step(vm, &${rec}, &${val}, &${done})`;
+					: deferredOr(
+							deferredStep,
+							`mal_vm_iterator_step(vm, &${rec}, &${val}, &${done})`,
+						);
 			const advance = context.iteratorStepRootPublication
 				? [
 						`if (!${iteratorProbe}) {`,
@@ -9912,6 +9975,21 @@ function emitInstruction(
 				];
 			}
 			const rec = `iter_rec_${ip}`;
+			if (deferredIteratorCursor && nativeIteratorCursorAction?.role === "close") {
+				const deferred = `__iter_deferred_${nativeIteratorCursorAction.cursor.initializeIp}`;
+				const close = `mal_vm_array_values_deferred_close(vm, ${boxed(instruction.iterator)}, &${deferred}, ${instruction.normal})`;
+				const record = `MalIteratorRecord ${rec} = { .iterator = ${boxed(instruction.iterator)}, .next_method = MAL_VALUE_UNDEFINED };`;
+				return instruction.normal
+					? [
+							record,
+							`if (${deferred}.active ? !${close} : !mal_vm_iterator_close_normal(vm, &${rec})) ${onThrow()}`,
+						]
+					: [
+							record,
+							`if (${deferred}.active) ${close}; else mal_vm_iterator_close(vm, &${rec});`,
+							throwCheck(),
+						];
+			}
 			if (instruction.normal) {
 				// Normal-completion close: propagate return()'s throw and TypeError
 				// on a non-object result.

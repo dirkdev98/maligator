@@ -91,7 +91,7 @@ import type {
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal artifacts are hard cut-overs: stale cache entries rebuild.
-export const COMPILER_ARTIFACT_VERSION = 181;
+export const COMPILER_ARTIFACT_VERSION = 182;
 
 function validateClosureCaptureOwners(
 	owners: ReadonlyArray<number>,
@@ -2206,8 +2206,17 @@ function writeCompilerArtifact(
 					w.i32(region.iterator);
 					w.i32(region.next);
 					w.u8(region.runtimeGuard === "exact-iterator-brand-next-target" ? 1 : 0);
-					w.u8(region.stateSynchronization === "authoritative-language-object" ? 1 : 0);
+					w.u8(
+						region.stateSynchronization === "authoritative-language-object"
+							? 1
+							: region.stateSynchronization === "materialize-before-observation"
+								? 2
+								: 0,
+					);
 					w.u8(region.suspension === "forbidden" ? 1 : 0);
+					if (region.kind === "array-values-iterator-cursor") {
+						w.i32Array([...region.closeIps]);
+					}
 					break;
 				case "iterator-result-virtualization":
 					w.i32Array([...region.stepIps]);
@@ -2963,7 +2972,8 @@ function validateIteratorCursorRegion(
 	} as const;
 	const [representation, protocol] = expected[region.kind];
 	const initialize = fn.instructions[region.initializeIp];
-	const payload = [region.initializeIp, ...region.stepIps];
+	const closeIps = region.kind === "array-values-iterator-cursor" ? region.closeIps : [];
+	const payload = [region.initializeIp, ...region.stepIps, ...closeIps];
 	const activeHandlers = new Set<number>();
 	for (const ip of payload) {
 		for (const handler of fn.handlers) {
@@ -2978,7 +2988,12 @@ function validateIteratorCursorRegion(
 		region.representation !== representation ||
 		region.protocol !== protocol ||
 		region.runtimeGuard !== "exact-iterator-brand-next-target" ||
-		region.stateSynchronization !== "authoritative-language-object" ||
+		(region.stateSynchronization !== "authoritative-language-object" &&
+			region.kind !== "array-values-iterator-cursor") ||
+		(region.stateSynchronization === "authoritative-language-object" &&
+			closeIps.length !== 0) ||
+		closeIps.length > 32 ||
+		closeIps.some((ip) => fn.instructions[ip]?.opcode !== "ITERATOR_CLOSE") ||
 		region.suspension !== "forbidden" ||
 		region.composition !== undefined ||
 		region.license.guard.dependencies.length !== 0 ||
@@ -5271,9 +5286,11 @@ function readCompilerArtifact(
 					const runtimeGuardTag = r.u8();
 					const stateSynchronizationTag = r.u8();
 					const suspensionTag = r.u8();
+					const closeIps = kindTag === 17 ? r.i32Array() : [];
 					if (
 						runtimeGuardTag !== 1 ||
-						stateSynchronizationTag !== 1 ||
+						(stateSynchronizationTag !== 1 &&
+							(stateSynchronizationTag !== 2 || kindTag !== 17)) ||
 						suspensionTag !== 1
 					) {
 						throw new RangeError("program-image-codec: invalid iterator cursor header");
@@ -5303,6 +5320,11 @@ function readCompilerArtifact(
 							kind: "array-values-iterator-cursor",
 							representation: "array-values-authoritative-cursor",
 							protocol: "array-values",
+							stateSynchronization:
+								stateSynchronizationTag === 2
+									? "materialize-before-observation"
+									: "authoritative-language-object",
+							closeIps,
 						};
 					} else if (kindTag === 18) {
 						region = {

@@ -776,14 +776,31 @@ function lowerCoreSpecializations(
 				suspension: "forbidden" as const,
 			};
 			switch (kind) {
-				case "array-values-iterator-cursor":
+				case "array-values-iterator-cursor": {
+					const closes = (cursor.closes ?? []).map(requireInstruction);
+					if (closes.some((close) => close.type !== "iteratorClose")) {
+						throw new Error(`Core iterator plan ${id} lost its protocol closes`);
+					}
 					regions.push({
 						...common,
 						kind: kind,
+						cost: {
+							...common.cost,
+							metadataOperations: common.cost.metadataOperations + closes.length,
+						},
 						representation: "array-values-authoritative-cursor",
 						protocol: "array-values",
+						stateSynchronization:
+							cursor.closes === undefined
+								? "authoritative-language-object"
+								: "materialize-before-observation",
+						closes: closes.filter(
+							(close): close is Extract<CompilerInstruction, { type: "iteratorClose" }> =>
+								close.type === "iteratorClose",
+						),
 					});
 					break;
+				}
 				case "string-iterator-cursor":
 					regions.push({
 						...common,

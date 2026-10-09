@@ -2888,6 +2888,41 @@ static inline bool mal_vm_iterator_step_dense_array_cursor(
     return mal_vm_iterator_step(vm, record, value_out, done_out);
 }
 
+/**
+ * Non-calling %ArrayIteratorPrototype%.next over a deferred cursor; length is
+ * read afresh each step. Misses leave the cursor unchanged for the full step.
+ */
+static inline bool mal_vm_array_values_deferred_try_step(
+    MalValue array_value, MalArrayValuesDeferredCursor *cursor,
+    MalValue *value_out, bool *done_out
+) {
+    MalArrayObject *array = (MalArrayObject *) mal_value_to_heap(array_value);
+    u64 index = cursor->index;
+    if (cursor->done || index >= array->length) {
+        cursor->done = true;
+        *value_out = mal_value_new_undefined();
+        *done_out = true;
+        return true;
+    }
+    if (!mal_array_object_dense_get(array, (u32) index, value_out)) return false;
+    cursor->index = index + 1;
+    *done_out = false;
+    mal_perf_collection_iteration_step(array);
+    return true;
+}
+
+static inline bool mal_vm_array_values_deferred_step(
+    MalVm *vm, MalValue array_value, MalArrayValuesDeferredCursor *cursor,
+    MalValue *value_out, bool *done_out
+) {
+    if (mal_vm_array_values_deferred_try_step(array_value, cursor, value_out, done_out)) {
+        return true;
+    }
+    u64 index = cursor->index++;
+    *done_out = false;
+    return mal_vm_array_values_deferred_get(vm, array_value, index, value_out);
+}
+
 /** Inline iterator step for native code, with the complete protocol as fallback. */
 static inline bool mal_vm_iterator_step_fast(MalVm *vm, const MalIteratorRecord *record, MalValue *value_out, bool *done_out) {
     if (mal_vm_iterator_try_dense_array_step(record, value_out, done_out)) {

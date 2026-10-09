@@ -1035,6 +1035,8 @@ export interface CoreIteratorCursorCandidate extends CoreLocalSpecializationCand
 	readonly steps: ReadonlyArray<CoreInstructionId>;
 	readonly protocol: CorePlanIteratorCursorProtocol;
 	readonly exceptionalBlocks: ReadonlyArray<CoreBlockId>;
+	/** Present when the iterator and its next method reach only these closes and the steps. */
+	readonly closes?: ReadonlyArray<CoreInstructionId>;
 }
 
 export interface CoreIteratorResultVirtualizationCandidate extends CoreLocalSpecializationCandidateBase<"iterator-result-virtualization"> {
@@ -3023,7 +3025,11 @@ function iteratorCursorCandidates(
 		);
 		if (steps.length === 0 || steps.length > 32) continue;
 		const strategy = iteratorCursorKind(fn, roots, source);
-		const instructions = Object.freeze([initialize, ...steps]);
+		const closes =
+			strategy.kind === "array-values-iterator-cursor"
+				? exclusiveIteratorCloses(fn, control, roots, index, iterator, next, steps)
+				: undefined;
+		const instructions = Object.freeze([initialize, ...steps, ...(closes ?? [])]);
 		const exceptionalBlocks = Object.freeze([
 			...new Set(
 				instructions.flatMap((instruction) => {
@@ -3044,10 +3050,73 @@ function iteratorCursorCandidates(
 				exceptionalBlocks,
 				instructions,
 				fanOut: steps.length,
+				...(closes === undefined ? {} : { closes }),
 			}),
 		);
 	}
 	return candidates;
+}
+
+function exclusiveIteratorCloses(
+	fn: CoreFunctionStore,
+	control: CoreControlFlow,
+	roots: ReadonlyMap<CoreValueId, CoreValueId>,
+	index: CoreLocalFactIndex,
+	iterator: CoreValueId,
+	next: CoreValueId,
+	steps: ReadonlyArray<CoreInstructionId>,
+): ReadonlyArray<CoreInstructionId> | undefined {
+	const root = (value: CoreValueId): CoreValueId => roots.get(value) ?? value;
+	const protocol = new Set([root(iterator), root(next)]);
+	const closes: Array<CoreInstructionId> = [];
+	for (const { instruction, position } of index.uses.get(root(iterator)) ?? []) {
+		if (position !== 0) return undefined;
+		const opcode = fn.instructionOpcodeName(instruction);
+		if (opcode === "iteratorClose") closes.push(instruction);
+		else if (opcode !== "iteratorStep" || !steps.includes(instruction)) return undefined;
+	}
+	const nextUses = index.uses.get(root(next)) ?? [];
+	if (
+		closes.length > 32 ||
+		nextUses.length !== steps.length ||
+		nextUses.some(
+			({ instruction, position }) => position !== 1 || !steps.includes(instruction),
+		)
+	)
+		return undefined;
+	if (index.controlUses.has(root(iterator)) || index.controlUses.has(root(next))) {
+		// Edges may only rename the protocol values; merges and terminators could expose them.
+		for (const block of control.reachable) {
+			const parameterStart = fn.kernel.blockParameterStart(block);
+			const parameterCount = fn.kernel.blockParameterCount(block);
+			for (let parameterIndex = 0; parameterIndex < parameterCount; parameterIndex++) {
+				const parameter = root(
+					fn.kernel.blockParameterValue(parameterStart + parameterIndex),
+				);
+				for (const edge of control.predecessors[block] ?? []) {
+					const argument =
+						edge.arguments[
+							edge.kind === "exceptional" ? parameterIndex - 1 : parameterIndex
+						];
+					if (
+						argument !== undefined &&
+						protocol.has(root(argument)) &&
+						root(argument) !== parameter
+					)
+						return undefined;
+				}
+			}
+			const terminator = fn.blockTerminator(block);
+			const value = instructionOperand(fn, terminator, 0);
+			if (
+				value !== undefined &&
+				protocol.has(root(value)) &&
+				fn.instructionKind(terminator) !== "jump"
+			)
+				return undefined;
+		}
+	}
+	return Object.freeze(closes.sort((left, right) => left - right));
 }
 
 function iteratorResultVirtualizationCandidates(

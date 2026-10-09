@@ -699,7 +699,8 @@ static void mal_perf_stats_print(void) {
         "direct_map_has_hits=%llu direct_map_delete_hits=%llu "
         "direct_add_hits=%llu direct_set_has_hits=%llu "
         "direct_set_delete_hits=%llu direct_fallbacks=%llu "
-        "entry_pair_hits=%llu entry_pair_fallbacks=%llu\n",
+        "entry_pair_hits=%llu entry_pair_fallbacks=%llu "
+        "deferred_array_iterators=%llu deferred_array_materializations=%llu\n",
         (unsigned long long) mal_perf_stats.map_get_set_cache_checks,
         (unsigned long long) mal_perf_stats.map_get_set_cache_hits,
         (unsigned long long) mal_perf_stats.map_get_set_cache_misses,
@@ -713,7 +714,9 @@ static void mal_perf_stats_print(void) {
         (unsigned long long) mal_perf_stats.collection_direct_set_delete_hits,
         (unsigned long long) mal_perf_stats.collection_direct_fallbacks,
         (unsigned long long) mal_perf_stats.iterator_entry_pair_hits,
-        (unsigned long long) mal_perf_stats.iterator_entry_pair_fallbacks
+        (unsigned long long) mal_perf_stats.iterator_entry_pair_fallbacks,
+        (unsigned long long) mal_perf_stats.iterator_deferred_array_begins,
+        (unsigned long long) mal_perf_stats.iterator_deferred_array_materializations
     );
     for (usize i = 0; i < MAL_PERF_COLLECTION_KIND_COUNT; i++) {
         fprintf(

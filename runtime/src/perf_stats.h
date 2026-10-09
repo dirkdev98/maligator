@@ -262,6 +262,8 @@ typedef struct MalPerfStats {
     u64 collection_direct_fallbacks;
     u64 iterator_entry_pair_hits;
     u64 iterator_entry_pair_fallbacks;
+    u64 iterator_deferred_array_begins;
+    u64 iterator_deferred_array_materializations;
     u64 object_empty_creations;
     u64 object_shaped_creations;
     u64 stack_object_initializations;

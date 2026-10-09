@@ -69,7 +69,7 @@
 	},
 	{
 		"file": "builtin_iterator.c",
-		"sha256": "cc7c27779e8611d4c6fe3ab310ddb055a1dc9f657fa1933405705bdd1601e44c"
+		"sha256": "e8b839d5d74e0d96c088461a6fdb8d44e17ce744fc0615768ee9fc7579ddd380"
 	},
 	{
 		"file": "builtin_iterator_helpers.c",
@@ -725,6 +725,6 @@
 	},
 	{
 		"file": "vm_ops.h",
-		"sha256": "c1101b80b558a0bf036f36e8ded293d404171d06d1a1d0ca76bf97e0c2ed3b3d"
+		"sha256": "09b4ac21265890504eabd123cdb02420243f624a5e0b286507319d81b7e9b34b"
 	}
 ]

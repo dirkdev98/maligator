@@ -2954,7 +2954,7 @@ describe("native update-expression representation", () => {
 		expect(output).not.toContain("mal_vm_try_fresh_dense_indexed_fill_reserve(vm");
 	});
 
-	it("consumes the Core-owned authoritative Array iterator cursor", () => {
+	it("consumes the Core-owned Array iterator cursor and defers its iterator object", () => {
 		const source = `"use strict"; function sum(values) { let total = 0; for (const value of values) total += value; return total; } globalThis.sum = sum;`;
 		const definition = lower(source);
 		const regions = specializations(definition).filter(
@@ -2964,7 +2964,7 @@ describe("native update-expression representation", () => {
 		expect(regions[0]).toMatchObject({
 			representation: "array-values-authoritative-cursor",
 			protocol: "array-values",
-			stateSynchronization: "authoritative-language-object",
+			stateSynchronization: "materialize-before-observation",
 			suspension: "forbidden",
 		});
 		const virtualResults = specializations(definition).filter(
@@ -3017,6 +3017,8 @@ describe("native update-expression representation", () => {
 			definition,
 		);
 		const output = emitProgramImage(definition, { compiled: true });
+		expect(output).toContain("mal_vm_array_values_deferred_begin(");
+		expect(output).toContain("mal_vm_array_values_deferred_try_step(");
 		expect(output).toContain("MalIteratorObject *__iter_cursor_");
 		expect(output).toContain("mal_vm_iterator_protocol_cursor(");
 		expect(output).toContain("mal_vm_iterator_try_dense_array_cursor_step(");

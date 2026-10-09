@@ -733,6 +733,7 @@ function pendingLocalCandidate(
 									initialize: candidate.initialize,
 									steps: candidate.steps,
 									protocol: candidate.protocol,
+									...(candidate.closes === undefined ? {} : { closes: candidate.closes }),
 								}),
 							}
 						: candidate.kind === "iterator-result-virtualization"

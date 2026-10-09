@@ -269,6 +269,8 @@ export interface CorePlanIteratorCursorSpecialization extends CorePlanSpecializa
 		readonly initialize: CoreInstructionId;
 		readonly steps: ReadonlyArray<CoreInstructionId>;
 		readonly protocol: CorePlanIteratorCursorProtocol;
+		/** The only other consumers of the iterator; lets an array cursor defer the object. */
+		readonly closes?: ReadonlyArray<CoreInstructionId>;
 	};
 }
 
@@ -737,6 +739,9 @@ type CoreAllocatedIteratorCursorRegion<
 		| "set-iterator-cursor",
 	Representation extends string,
 	Protocol extends "array-values" | "string" | "typed-array-values" | "map" | "set",
+	Synchronization extends
+		| "authoritative-language-object"
+		| "materialize-before-observation" = "authoritative-language-object",
 > = CoreAllocatedRegionEnvelope<
 	Kind,
 	Representation,
@@ -751,7 +756,7 @@ type CoreAllocatedIteratorCursorRegion<
 	readonly steps: ReadonlyArray<Extract<CompilerInstruction, { type: "iteratorStep" }>>;
 	readonly protocol: Protocol;
 	readonly runtimeGuard: "exact-iterator-brand-next-target";
-	readonly stateSynchronization: "authoritative-language-object";
+	readonly stateSynchronization: Synchronization;
 	readonly suspension: "forbidden";
 };
 
@@ -759,8 +764,14 @@ export type CoreAllocatedArrayValuesIteratorCursorRegion =
 	CoreAllocatedIteratorCursorRegion<
 		"array-values-iterator-cursor",
 		"array-values-authoritative-cursor",
-		"array-values"
-	>;
+		"array-values",
+		"authoritative-language-object" | "materialize-before-observation"
+	> & {
+		/** Empty unless the iterator may stay unallocated until one of these observes it. */
+		readonly closes: ReadonlyArray<
+			Extract<CompilerInstruction, { type: "iteratorClose" }>
+		>;
+	};
 
 export type CoreAllocatedStringIteratorCursorRegion = CoreAllocatedIteratorCursorRegion<
 	"string-iterator-cursor",

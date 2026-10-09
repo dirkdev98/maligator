@@ -511,6 +511,9 @@ type VmIteratorCursorRegion<
 		| "set-iterator-cursor",
 	Representation extends string,
 	Protocol extends "array-values" | "string" | "typed-array-values" | "map" | "set",
+	Synchronization extends
+		| "authoritative-language-object"
+		| "materialize-before-observation" = "authoritative-language-object",
 > = VmRegionEnvelope<Kind, Representation, "none"> & {
 	readonly initializeIp: number;
 	readonly stepIps: ReadonlyArray<number>;
@@ -518,15 +521,19 @@ type VmIteratorCursorRegion<
 	readonly next: number;
 	readonly protocol: Protocol;
 	readonly runtimeGuard: "exact-iterator-brand-next-target";
-	readonly stateSynchronization: "authoritative-language-object";
+	readonly stateSynchronization: Synchronization;
 	readonly suspension: "forbidden";
 };
 
 export type VmArrayValuesIteratorCursorRegion = VmIteratorCursorRegion<
 	"array-values-iterator-cursor",
 	"array-values-authoritative-cursor",
-	"array-values"
->;
+	"array-values",
+	"authoritative-language-object" | "materialize-before-observation"
+> & {
+	/** Empty unless the iterator may stay unallocated until one of these observes it. */
+	readonly closeIps: ReadonlyArray<number>;
+};
 
 export type VmStringIteratorCursorRegion = VmIteratorCursorRegion<
 	"string-iterator-cursor",
@@ -718,6 +725,7 @@ export type VmRegionActionRole =
 	| "capture"
 	| "charCodeAtCall"
 	| "charCodeAtProperty"
+	| "close"
 	| "caseLength"
 	| "caseLowerCall"
 	| "caseLowerProperty"
@@ -795,6 +803,11 @@ export function vmRegionActions(
 				add(regionIndex, region.initializeIp, "initialize");
 				for (const [stepIndex, stepIp] of region.stepIps.entries()) {
 					add(regionIndex, stepIp, "step", stepIndex);
+				}
+				if (region.kind === "array-values-iterator-cursor") {
+					for (const [closeIndex, closeIp] of region.closeIps.entries()) {
+						add(regionIndex, closeIp, "close", closeIndex);
+					}
 				}
 				break;
 			case "iterator-result-virtualization":
@@ -2575,19 +2588,27 @@ function lowerExecutionFunctionToNativePlan(
 			const stepIps = region.steps.map((step) =>
 				instructionIndexByTargetInstruction.get(step),
 			);
+			const closeIps =
+				region.kind === "array-values-iterator-cursor"
+					? region.closes.map((close) => instructionIndexByTargetInstruction.get(close))
+					: [];
 			if (
 				region.license.guard !== "structural" ||
 				region.license.genericTwin !== "retained" ||
 				region.license.materialization !== "none" ||
 				region.license.admission.mode !== "stable" ||
 				region.runtimeGuard !== "exact-iterator-brand-next-target" ||
-				region.stateSynchronization !== "authoritative-language-object" ||
+				(region.stateSynchronization !== "authoritative-language-object" &&
+					region.kind !== "array-values-iterator-cursor") ||
+				(region.stateSynchronization === "authoritative-language-object" &&
+					closeIps.length !== 0) ||
 				region.suspension !== "forbidden" ||
 				fn.isGenerator ||
 				fn.isAsync ||
 				initializeIp === undefined ||
 				stepIps.length === 0 ||
 				stepIps.some((ip) => ip === undefined) ||
+				closeIps.some((ip) => ip === undefined) ||
 				anchors.some((ip) => ip === undefined) ||
 				claimedIps.some((ip) => ip === undefined) ||
 				ordinaryBlockIps.some((ip) => ip === undefined) ||
@@ -2598,8 +2619,9 @@ function lowerExecutionFunctionToNativePlan(
 			const resolvedAnchors = anchors as Array<number>;
 			const resolvedClaimedIps = claimedIps as Array<number>;
 			const resolvedStepIps = stepIps as Array<number>;
+			const resolvedCloseIps = closeIps as Array<number>;
 			const initialize = instructions[initializeIp];
-			const payloadIps = [initializeIp, ...resolvedStepIps];
+			const payloadIps = [initializeIp, ...resolvedStepIps, ...resolvedCloseIps];
 			if (
 				initialize?.opcode !== "GET_ITERATOR" ||
 				resolvedAnchors.length !== 2 ||
@@ -2617,6 +2639,7 @@ function lowerExecutionFunctionToNativePlan(
 						step.next !== initialize.nextDst
 					);
 				}) ||
+				resolvedCloseIps.some((ip) => instructions[ip]?.opcode !== "ITERATOR_CLOSE") ||
 				region.cost.score !== resolvedStepIps.length * 8 ||
 				region.cost.metadataOperations !== payloadIps.length
 			) {
@@ -2653,6 +2676,8 @@ function lowerExecutionFunctionToNativePlan(
 						kind: region.kind,
 						representation: "array-values-authoritative-cursor",
 						protocol: "array-values",
+						stateSynchronization: region.stateSynchronization,
+						closeIps: resolvedCloseIps,
 					});
 					break;
 				case "string-iterator-cursor":

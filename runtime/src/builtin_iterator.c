@@ -531,6 +531,65 @@ MalIteratorObject *mal_vm_iterator_protocol_cursor(
     return nullptr;
 }
 
+bool mal_vm_array_values_deferred_begin(
+    MalVm *vm, MalValue source, MalArrayValuesDeferredCursor *cursor
+) {
+    cursor->active = false;
+    // The protector covers Array.prototype @@iterator and ArrayIterator next/return.
+    if (!mal_primitive_method_protector || !mal_value_is_array_object(source)) {
+        return false;
+    }
+    MalObject *object = mal_value_to_object(source);
+    if (mal_object_prototype(object) !=
+            mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ARRAY_PROTOTYPE]) ||
+        ((object->shape->inline_count != 0 || mal_object_overflow(object) != nullptr) &&
+         mal_object_get_own(
+             object, mal_intrinsic_symbol_key(vm, MAL_INTRINSIC_SYMBOL_ITERATOR)).present)) {
+        return false;
+    }
+    cursor->index = 0;
+    cursor->done = false;
+    cursor->active = true;
+    MAL_PERF_COUNT(iterator_deferred_array_begins);
+    mal_perf_collection_iteration_start(mal_value_to_array_object(source));
+    return true;
+}
+
+bool mal_vm_array_values_deferred_get(
+    MalVm *vm, MalValue array, u64 index, MalValue *value_out
+) {
+    if (!mal_vm_get_property(vm, array, mal_key_index(index), value_out)) {
+        return false;
+    }
+    mal_perf_collection_iteration_step(mal_value_to_array_object(array));
+    return true;
+}
+
+bool mal_vm_array_values_deferred_close(
+    MalVm *vm,
+    MalValue array,
+    const MalArrayValuesDeferredCursor *cursor,
+    bool normal
+) {
+    if (mal_primitive_method_protector) return true;
+    MAL_PERF_COUNT(iterator_deferred_array_materializations);
+    MalValue roots[1] = {mal_vm_new_builtin_iterator(vm, MAL_ITERATOR_ARRAY_VALUES, array)};
+    MalRootSpan roots_span;
+    mal_gc_root(&roots_span, roots, 1);
+    MalIteratorObject *iterator = mal_value_to_iterator_object(roots[0]);
+    iterator->index = cursor->index;
+    iterator->done = cursor->done;
+    MalIteratorRecord record = {.iterator = roots[0], .next_method = mal_value_new_undefined()};
+    bool ok = true;
+    if (normal) {
+        ok = mal_vm_iterator_close_normal(vm, &record);
+    } else {
+        mal_vm_iterator_close(vm, &record);
+    }
+    mal_gc_unroot(&roots_span);
+    return ok;
+}
+
 bool mal_vm_iterator_step_protocol_cursor(
     MalVm *vm, MalIteratorObject *cursor, MalValue *value_out, bool *done_out
 ) {

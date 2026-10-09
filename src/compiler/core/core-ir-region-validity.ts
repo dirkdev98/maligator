@@ -1487,6 +1487,8 @@ function verifySpecialization(
 			selection.anchors[1] !== candidate.steps[0] ||
 			cursor.initialize !== candidate.initialize ||
 			!sameNumbers(cursor.steps, candidate.steps) ||
+			(cursor.closes === undefined) !== (candidate.closes === undefined) ||
+			!sameNumbers(cursor.closes ?? [], candidate.closes ?? []) ||
 			cursor.protocol !== candidate.protocol ||
 			cursor.protocol !== expected.protocol ||
 			!sameNumbers(selection.claimedInstructions, candidate.instructions) ||

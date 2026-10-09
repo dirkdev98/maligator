@@ -35,6 +35,39 @@ typedef enum MalIteratorCursorProtocol : u8 {
 MalIteratorObject *mal_vm_iterator_protocol_cursor(
     const MalIteratorRecord *record, MalIteratorCursorProtocol protocol);
 
+/**
+ * A for-of over an exact Array whose %ArrayIterator% has not been allocated. The
+ * compiled iterator register holds the array, which keeps it reachable.
+ */
+typedef struct MalArrayValuesDeferredCursor {
+    u64 index;
+    bool active;
+    bool done;
+} MalArrayValuesDeferredCursor;
+
+/**
+ * Activates `cursor` when GetIterator(source) would produce an %ArrayIterator%
+ * with the intrinsic next whose identity nothing can observe before a close.
+ */
+bool mal_vm_array_values_deferred_begin(
+    MalVm *vm, MalValue source, MalArrayValuesDeferredCursor *cursor);
+
+/** The Get %ArrayIteratorPrototype%.next performs for an index without dense storage. */
+bool mal_vm_array_values_deferred_get(
+    MalVm *vm, MalValue array, u64 index, MalValue *value_out);
+
+/**
+ * IteratorClose for a deferred cursor, with the contract of
+ * mal_vm_iterator_close_normal when `normal` and of mal_vm_iterator_close
+ * otherwise. The %ArrayIterator% is materialized only when an inherited
+ * `return` could observe it.
+ */
+bool mal_vm_array_values_deferred_close(
+    MalVm *vm,
+    MalValue array,
+    const MalArrayValuesDeferredCursor *cursor,
+    bool normal);
+
 bool mal_vm_iterator_step_protocol_cursor(
     MalVm *vm, MalIteratorObject *cursor, MalValue *value_out, bool *done_out);
 
