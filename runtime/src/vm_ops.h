@@ -1120,7 +1120,23 @@ void mal_vm_op_store_property_ic(MalVm *vm, MalValue object_value, MalValue key_
 
 typedef struct MalPropertyCachePool {
     MalInlineCache *sites;
+    /** One row per CALL instruction, in instruction order. */
+    struct MalCallCache *call_sites;
 } MalPropertyCachePool;
+
+struct MalCallCache *mal_vm_create_function_call_caches(MalVm *vm, i32 function_index, i32 count);
+
+/**
+ * A function's call cache rows. They belong to the VM rather than to thread-local
+ * statics, which cost every call site a thread-local lookup on macOS.
+ */
+static inline struct MalCallCache *mal_vm_function_call_caches(
+    MalVm *vm, i32 function_index, i32 count
+) {
+    struct MalCallCache *caches = vm->property_cache[function_index].call_sites;
+    return __builtin_expect(caches != nullptr, 1)
+        ? caches : mal_vm_create_function_call_caches(vm, function_index, count);
+}
 
 /** Address a lazily allocated dense property cache entry. */
 static inline MalInlineCache *mal_vm_property_ic_at(

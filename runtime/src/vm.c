@@ -152,6 +152,13 @@ void mal_vm_ensure_function_caches(MalVm *vm, i32 function_index) {
     mal_vm_seed_function_known_own_slot_ics(vm, function, pool);
 }
 
+MalCallCache *mal_vm_create_function_call_caches(MalVm *vm, i32 function_index, i32 count) {
+    MalCallCache *caches = calloc(count > 0 ? (usize) count : 1, sizeof(MalCallCache));
+    if (caches == nullptr) abort();
+    vm->property_cache[function_index].call_sites = caches;
+    return caches;
+}
+
 static void mal_vm_materialize_precompiled_literal_shapes(
     MalVm *vm, const MalRuntimeImage *program, i32 function_base, i32 string_base);
 
@@ -1015,6 +1022,7 @@ void mal_vm_free(MalVm *vm) {
                 }
             }
             free(pool->sites);
+            free(pool->call_sites);
         }
         free(vm->property_cache);
     }
