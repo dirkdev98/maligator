@@ -14,7 +14,10 @@ function stopProcessGroup(child: ChildProcess, signal: NodeJS.Signals): void {
 	try {
 		process.kill(-child.pid, signal);
 	} catch (error) {
-		if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+		const code = (error as NodeJS.ErrnoException).code;
+		// Darwin reports EPERM instead of ESRCH for a group whose members are all zombies.
+		if (code !== "ESRCH" && !(code === "EPERM" && process.platform === "darwin"))
+			throw error;
 	}
 }
 
