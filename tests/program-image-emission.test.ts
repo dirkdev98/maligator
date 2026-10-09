@@ -2592,7 +2592,7 @@ describe("native update-expression representation", () => {
 			const output = emit(
 				`globalThis.compare = function compare(left, right) { return left ${operator} right; };`,
 			);
-			expect(output).toContain("mal_ops_strict_equal_bool(");
+			expect(output).toContain("mal_ops_strict_equal_boxed(");
 			expect(output).not.toMatch(/mal_vm_binary_op\(vm, MAL_BIN_STRICT_(?:EQ|NEQ)/);
 		},
 	);

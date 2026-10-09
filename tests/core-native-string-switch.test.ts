@@ -91,7 +91,7 @@ describe("native literal string switch certificate", () => {
 				details: { strategy, cases: labels.length },
 			}),
 		);
-		expect(emitted.source).not.toContain("mal_ops_strict_equal_bool");
+		expect(emitted.source).not.toContain("mal_ops_strict_equal_boxed");
 		expect(emitted.source).toContain("mal_string_equals");
 	});
 
