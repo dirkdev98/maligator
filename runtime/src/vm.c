@@ -2571,7 +2571,9 @@ static void mal_vm_run_until_frame_count(
                 MalValue result;
                 MalInlineCache *ic = mal_vm_property_ic_at(
                     frame, instruction->as.load_property_static.ic_index);
-                bool cache_hit = mal_vm_property_try_load_static(vm, object, ic, &result);
+                // This one dispatch site serves every static name, so it also keeps the
+                // length rows inline; they are recorded only for `length` sites.
+                bool cache_hit = mal_vm_property_try_load_length_static(vm, object, ic, &result);
                 if (cache_hit) {
                     registers[instruction->as.load_property_static.dst] = result;
                     MAL_PERF_COUNT(interpreter_local_load_ic_hits);
