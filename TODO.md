@@ -248,7 +248,11 @@ The independent target boundary and current storage contract are recorded in
       sped up once inlining accepted throwing callees and class-scope closures.
       Inlining the strict `this` check and reading the callee's realm field
       directly in `mal_vm_call_cached` and guarded direct calls did not change the
-      JavaScript benchmarks either (closed-compiled wall +0.65%).
+      JavaScript benchmarks either (closed-compiled wall +0.65%), and moving a
+      private field load's root publication into its probe miss, as static loads
+      do, left the shape-analysis cone at 27.8 s while adding 45 Ki code units. A
+      hot accessor takes about a quarter of its own samples on its first
+      instruction, so entry, not root stores, is where its time goes.
 - [ ] Decide whether native builds should scan C stacks conservatively instead of
       publishing shadow-stack roots. Root slots, masks and their publication are a
       large share of the emitted C. A prototype that emitted none of them scanned
@@ -369,6 +373,14 @@ Runtime eval may remove source closure without invalidating authority closure.
       intermediate data. Use the existing feature indexes, summaries, and analysis
       manager to skip irrelevant work and rebuild only invalidated results. Reopen
       a previously optimized subsystem only with fresh residual-cost evidence.
+      On the Node-hosted self-compile (43 s), memory and provenance optimization
+      takes 7.4 of Core's 20 s. Its static-value queries cost about 2.5 s, mostly
+      memory forwarding (`valueForRead`, `solveSlot`) while describing a receiver
+      that is itself a load: `fold-static-property-reads` spends 1.7 s over 7,681
+      runs for 20 changed functions, and `lower-primitive-operations` 1.0 s for 40.
+      Skipping that forwarding changes which reads fold, so it needs a measured
+      output comparison rather than a byte-parity check. Verification is another
+      5.5 s (13%), most of it independent re-derivation at trust boundaries.
 
 - [ ] Put aggregate work and memory budgets around analysis extensions, including
       rejected candidates and nested queries, not only admitted entries. Reuse
