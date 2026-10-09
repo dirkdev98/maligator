@@ -174,15 +174,20 @@ The independent target boundary and current storage contract are recorded in
       per-instruction state; quantify scaling before expanding coroutine specialization.
 - [ ] Select the next proof consumer from a measured hot path rather than
       local-count or plan-kind totals. On the shape-analysis cone the native
-      self-compiler went from 43.4 s to about 33.3 s on one machine (Node: 8.4 s);
+      self-compiler went from 43.4 s to about 30.5 s on one machine (Node: 8.4 s);
       array for-of loops whose iterator reaches only its steps and closes no longer
-      allocate it (iterator cells were 21% of sampled bytes before that);
-      stack samples now put 23% in generated code, 23% in property-cache slow paths,
-      15% in GC (nursery sweeping is 954 of 1,203 ms of minor pauses), and 4.5% in
-      macOS thread-local lookups from GC internals, cache protector flags, and the
-      root-frame head. Measured dead ends: exempting single-target guarded
-      direct calls or small inlines from the program generated-code budget made
-      thousands more sites direct or inlined without changing wall time, because
+      allocate it (iterator cells were 21% of sampled bytes before that), and
+      inherited getters, alternating prototype methods and empty sites answered by
+      the shared inherited stub no longer take the collecting property slow path
+      (its entries fell from 242 to 52 million). Self time now puts 32% in
+      generated code, 14% in property caches, 9% in call dispatch, 9% in GC, and
+      4% in macOS thread-local lookups from GC internals, cache protector flags,
+      and the root-frame head. Measured dead ends: `__builtin_expect` on the
+      generated throw check made the cone 11% slower, and forcing `always_inline`
+      on the hottest small value and cache helpers changed nothing. Exempting
+      single-target guarded direct calls or small inlines from the program
+      generated-code budget made thousands more sites direct or inlined without
+      changing wall time, because
       callee frames rather than dispatch carry the per-call cost. Exempting
       iterator cursors from the four-expansion per-function cap admitted 350 more
       array cursors but spent the program budget that collection call chains and
