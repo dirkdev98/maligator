@@ -83,7 +83,56 @@ function unpublishedBranchRoots(factory, collect, holder, choose) {
 	return held.marker + second.marker;
 }
 
+// More live probe results than one deferred miss path publishes.
+function longProbeChain(holder) {
+	const a0 = holder.p0;
+	const a1 = holder.p1;
+	const a2 = holder.p2;
+	const a3 = holder.p3;
+	const a4 = holder.p4;
+	const a5 = holder.p5;
+	const a6 = holder.p6;
+	const a7 = holder.p7;
+	const a8 = holder.p8;
+	const a9 = holder.p9;
+	const a10 = holder.p10;
+	const a11 = holder.p11;
+	return (
+		a0.marker +
+		a1.marker +
+		a2.marker +
+		a3.marker +
+		a4.marker +
+		a5.marker +
+		a6.marker +
+		a7.marker +
+		a8.marker +
+		a9.marker +
+		a10.marker +
+		a11.marker
+	);
+}
+
+function probeHolder(factory, collecting) {
+	const holder = {};
+	for (let index = 0; index < 12; index++) {
+		if (collecting)
+			Object.defineProperty(holder, `p${index}`, {
+				get() {
+					gc();
+					return factory(index + 1);
+				},
+			});
+		else holder[`p${index}`] = factory(index + 1);
+	}
+	return holder;
+}
+
 for (const factory of [own, accessor]) {
+	for (const collecting of [false, true])
+		for (let iteration = 0; iteration < 4; iteration++)
+			if (longProbeChain(probeHolder(factory, collecting)) !== 78)
+				throw new Error("long probe chain root lost");
 	for (let iteration = 0; iteration < 8; iteration++) {
 		if (compactRoots(factory, visit) !== 51) throw new Error("disjoint root lost");
 		for (const fail of [false, true])

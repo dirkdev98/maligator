@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
+import { compileSemanticProgramToProgramImage } from "../src/compiler/pipeline/compile-core.ts";
 import { lowerNativeFunctionStorage } from "../src/compiler/target/lower-native-storage.ts";
 import { createConservativeNativePlan } from "../src/compiler/target/program-image.ts";
 import type {
@@ -615,14 +617,15 @@ describe("wide private-root publication", () => {
 			expect(source.slice(inactiveMiss.start, inactiveMiss.end)).not.toContain(cleared);
 			expect(isInactive(inactiveRootBits(source, 0, inactiveMiss.end), slot)).toBe(true);
 
+			// Long chains publish on the hot path before the probe instead of in its miss.
 			const outputMiss = propertyMissPath(source, output - 2);
-			expect(source.slice(outputMiss.start, outputMiss.end)).toContain(cleared);
+			const previousMiss = propertyMissPath(source, output - 3);
+			expect(source.slice(previousMiss.end, outputMiss.end)).toContain(cleared);
 			expect(isInactive(inactiveRootBits(source, 0, outputMiss.end), slot)).toBe(false);
 
-			const lastSecondMiss = propertyMissPath(source, 2 * wideWidth - 1).end;
 			expect(
 				hasIncomingCopy(
-					beforeCall(source, wideSecondCallIp, lastSecondMiss),
+					beforeCall(source, wideSecondCallIp, outputMiss.end),
 					`__gc_slots[${slot}] = r${output};`,
 				),
 			).toBe(true);
@@ -651,5 +654,30 @@ describe("wide private-root publication", () => {
 		const firstCall = beforeCall(source, wideFirstCallIp);
 		expect(firstCall).toContain("MAL_ROOT_MASK_ROW(");
 		expect(inactiveRootBits(source, 0, firstCall.length)).toBe(0n);
+	});
+});
+
+describe("bounded deferred root publication", () => {
+	it("publishes a long run of live probe results on the hot path instead of in every miss", () => {
+		const names = Array.from({ length: 24 }, (_, index) => `v${index}`);
+		const image = compileSemanticProgramToProgramImage(
+			analyzeSourceAndRunSemanticAnalysis(
+				`globalThis.wide = function wide(source) {
+					${names.map((name, index) => `const ${name} = source.p${index};`).join("\n")}
+					return [${names.join(", ")}];
+				};`,
+				"/wide-publication.js",
+			),
+		);
+		const source = emitCompiledFunction(image.native.functions[1]!, 1, "", false)!.source;
+		const misses = [
+			...source.matchAll(
+				/if \(mal_vm_property_try_load_static\([^\n]+\) \{[\s\S]*?\} else \{([\s\S]*?)\n\s+\}/g,
+			),
+		];
+		expect(misses).toHaveLength(names.length);
+		for (const [, miss] of misses)
+			expect(miss!.match(/__gc_slots\[\d+\] = /g)?.length ?? 0).toBeLessThanOrEqual(8);
+		expect(source).toMatch(/\n {4}__gc_slots\[\d+\] = r\d+;/);
 	});
 });

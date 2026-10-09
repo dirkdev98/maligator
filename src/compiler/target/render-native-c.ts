@@ -775,6 +775,12 @@ interface NativeRootPublication {
 }
 
 const EMPTY_ROOT_PUBLICATION: ReadonlyArray<string> = Object.freeze([]);
+/**
+ * Conditional publication cannot update the known-published state, so every deferred
+ * miss repeats every unpublished root. Past this many stores, one hot-path publication
+ * keeps later misses short and a function's C linear in its live roots.
+ */
+const MAX_DEFERRED_ROOT_PUBLICATION_STORES = 8;
 const EMPTY_ROOTED_OUTPUTS: ReadonlyArray<number> = Object.freeze([]);
 
 function nativeRootPublicationPoint(
@@ -3920,12 +3926,16 @@ function emitBody(
 			"incoming",
 			knownPublishedPrivateRoots,
 		);
+		const deferrableRoots =
+			incomingRootPublication.length <= MAX_DEFERRED_ROOT_PUBLICATION_STORES;
 		const deferredPropertyRoots =
+			deferrableRoots &&
 			fn.instructions[ip]!.opcode === "LOAD_PROPERTY_STATIC" &&
 			!staticPropertyProjectionConflicts(ip);
 		const indexedPropertyInstruction = fn.instructions[ip]!;
 		// Dense growth can allocate, but its allocator never collects inside the probe.
 		const deferredIndexedPropertyRoots =
+			deferrableRoots &&
 			hasPrivateRoots &&
 			(indexedPropertyInstruction.opcode === "LOAD_PROPERTY" ||
 				indexedPropertyInstruction.opcode === "STORE_PROPERTY") &&
@@ -3943,6 +3953,7 @@ function emitBody(
 			!constructorInitializationActionByIp.has(ip);
 		const staticPropertyWriteInstruction = fn.instructions[ip]!;
 		const deferredStaticPropertyWriteRoots =
+			deferrableRoots &&
 			(staticPropertyWriteInstruction.opcode === "STORE_PROPERTY_STATIC" ||
 				(hasPrivateRoots &&
 					staticPropertyWriteInstruction.opcode === "DEFINE_PROPERTY" &&
@@ -3955,13 +3966,16 @@ function emitBody(
 			!stackObjectAccesses.has(ip) &&
 			!stackObjectMaterializations.has(ip) &&
 			!constructorInitializationActionByIp.has(ip);
-		const deferredOperatorRoots = fn.instructions[ip]!.opcode === "BINARY";
+		const deferredOperatorRoots =
+			deferrableRoots && fn.instructions[ip]!.opcode === "BINARY";
 		// Only selected private values need the operator's mask on its fallback edge.
 		const eagerOperatorRootPublication =
 			deferredOperatorRoots && (rootPublication?.slots.size ?? 0) === 0;
-		const deferredTdzRoots = fn.instructions[ip]!.opcode === "THROW_IF_TDZ";
+		const deferredTdzRoots =
+			deferrableRoots && fn.instructions[ip]!.opcode === "THROW_IF_TDZ";
 		const iteratorCursorAction = nativeIteratorCursorActionByIp.get(ip);
 		const deferredIteratorRoots =
+			deferrableRoots &&
 			coro === null &&
 			fn.instructions[ip]!.opcode === "ITERATOR_STEP" &&
 			nativeInstructions[ip] === undefined &&
@@ -3974,6 +3988,7 @@ function emitBody(
 		const charCodeAtInstruction = fn.instructions[ip]!;
 		const charCodeAtPlan = nativeInstructions[ip];
 		const deferredCharCodeAtRoots =
+			deferrableRoots &&
 			coro === null &&
 			charCodeAtInstruction.opcode === "CALL" &&
 			charCodeAtPlan?.kind === "call" &&
