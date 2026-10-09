@@ -345,12 +345,12 @@ describe("native physical root storage", () => {
 	});
 });
 
-function continuousRootSlots(
+function continuousRootPlan(
 	instructions: Array<BytecodeInstruction>,
 	registers: Array<number>,
 	liveRoots: ReadonlyArray<readonly [ip: number, roots: Array<number>]>,
 	handlers: Array<BytecodeExceptionHandler> = [],
-): ReadonlyMap<number, number> {
+) {
 	const template = compile().native.functions[1]!.body;
 	const body = {
 		...template,
@@ -374,41 +374,79 @@ function continuousRootSlots(
 			})),
 		},
 	};
+	const facts = analyzeNativeBodyFacts(body);
 	const storage = selectNativeRootStorage(native, registers, new Set(), new Set(), {
 		registers: new Set(registers),
-		facts: analyzeNativeBodyFacts(body),
+		facts,
 	});
-	return new Map(
+	const slots: ReadonlyMap<number, number> = new Map(
 		registers.map((register, index) => [register, storage.rootSlots[index]!]),
 	);
+	/** Validates the selected layout with `moved` relocated into `into`'s slot. */
+	const validateSharing = (moved?: number, into?: number) =>
+		validateNativeRootStorage(
+			native,
+			registers,
+			{
+				...storage,
+				rootSlots: registers.map((register) =>
+					register === moved ? slots.get(into!)! : slots.get(register)!,
+				),
+			},
+			{ privateRegisters: new Set(), facts },
+		);
+	return { slots, validateSharing };
 }
+
+const sharedAcrossSafepoints: Parameters<typeof continuousRootPlan> = [
+	[
+		{ opcode: "CREATE_OBJECT", dst: 2 },
+		{ opcode: "MOVE", dst: 6, src: 2 },
+		{ opcode: "CREATE_OBJECT", dst: 3 },
+		{ opcode: "MOVE", dst: 4, src: 0 },
+		{ opcode: "MOVE", dst: 6, src: 3 },
+		{ opcode: "CREATE_OBJECT", dst: 5 },
+		{ opcode: "MOVE", dst: 6, src: 4 },
+		{ opcode: "RETURN", value: 5 },
+	],
+	[2, 3, 4],
+	[
+		[0, [2]],
+		[2, [3]],
+		[5, [4, 5]],
+	],
+];
+
+const readByHandler: Parameters<typeof continuousRootPlan> = [
+	[
+		{ opcode: "CREATE_OBJECT", dst: 2 },
+		{ opcode: "MOVE", dst: 3, src: 0 },
+		{ opcode: "MOVE", dst: 6, src: 0 },
+		{ opcode: "CREATE_OBJECT", dst: 4 },
+		{ opcode: "MOVE", dst: 6, src: 3 },
+		{ opcode: "RETURN", value: 6 },
+		{ opcode: "CATCH", dst: 5 },
+		{ opcode: "MOVE", dst: 6, src: 2 },
+		{ opcode: "RETURN", value: 6 },
+	],
+	[2, 3],
+	[
+		[0, [2]],
+		[3, [3, 4]],
+	],
+	[{ startIp: 0, endIp: 3, handlerIp: 6 }],
+];
 
 describe("continuously rooted storage sharing", () => {
 	it("reuses a slot after its occupant's last read but not across an overlap between safepoints", () => {
-		const slots = continuousRootSlots(
-			[
-				{ opcode: "CREATE_OBJECT", dst: 2 },
-				{ opcode: "MOVE", dst: 6, src: 2 },
-				{ opcode: "CREATE_OBJECT", dst: 3 },
-				{ opcode: "MOVE", dst: 4, src: 0 },
-				{ opcode: "MOVE", dst: 6, src: 3 },
-				{ opcode: "CREATE_OBJECT", dst: 5 },
-				{ opcode: "MOVE", dst: 6, src: 4 },
-				{ opcode: "RETURN", value: 5 },
-			],
-			[2, 3, 4],
-			[
-				[0, [2]],
-				[2, [3]],
-				[5, [4, 5]],
-			],
-		);
+		const { slots, validateSharing } = continuousRootPlan(...sharedAcrossSafepoints);
 		expect(slots.get(2)).toBe(slots.get(3));
 		expect(slots.get(4)).not.toBe(slots.get(3));
+		expect(() => validateSharing()).not.toThrow();
 	});
 
 	it("keeps a value read on the next loop iteration live past its last read in program order", () => {
-		const slots = continuousRootSlots(
+		const { slots } = continuousRootPlan(
 			[
 				{ opcode: "CREATE_OBJECT", dst: 2 },
 				{ opcode: "MOVE", dst: 6, src: 2 },
@@ -428,25 +466,20 @@ describe("continuously rooted storage sharing", () => {
 	});
 
 	it("keeps a value its exception handler reads live across the protected range", () => {
-		const slots = continuousRootSlots(
-			[
-				{ opcode: "CREATE_OBJECT", dst: 2 },
-				{ opcode: "MOVE", dst: 3, src: 0 },
-				{ opcode: "MOVE", dst: 6, src: 0 },
-				{ opcode: "CREATE_OBJECT", dst: 4 },
-				{ opcode: "MOVE", dst: 6, src: 3 },
-				{ opcode: "RETURN", value: 6 },
-				{ opcode: "CATCH", dst: 5 },
-				{ opcode: "MOVE", dst: 6, src: 2 },
-				{ opcode: "RETURN", value: 6 },
-			],
-			[2, 3],
-			[
-				[0, [2]],
-				[3, [3, 4]],
-			],
-			[{ startIp: 0, endIp: 3, handlerIp: 6 }],
-		);
+		const { slots, validateSharing } = continuousRootPlan(...readByHandler);
 		expect(slots.get(2)).not.toBe(slots.get(3));
+		expect(() => validateSharing()).not.toThrow();
+	});
+
+	it("rejects a shared slot whose occupants overlap only between safepoints", () => {
+		const { validateSharing } = continuousRootPlan(...sharedAcrossSafepoints);
+		expect(() => validateSharing(4, 3)).toThrow(
+			/continuous roots 3 and 4 share a slot at 4/,
+		);
+	});
+
+	it("rejects a shared slot whose occupant an exception handler still reads", () => {
+		const { validateSharing } = continuousRootPlan(...readByHandler);
+		expect(() => validateSharing(3, 2)).toThrow(/continuous roots 2 and 3 share a slot/);
 	});
 });

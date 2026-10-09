@@ -229,11 +229,18 @@ function colorByInstructionOccupancy(
 	return colors.length;
 }
 
+/** Inputs that let validation recheck the continuous pool beyond safepoint interference. */
+export interface NativeRootSharingFacts {
+	readonly privateRegisters: ReadonlySet<number>;
+	readonly facts: NativeContinuousRootSharing["facts"];
+}
+
 // Root omissions are checked by storage selection; interference checks only retained roots.
 export function validateNativeRootStorage(
 	native: NativeFunctionPlan,
 	registers: ReadonlyArray<number>,
 	storage: NativeRootStoragePlan,
+	sharing?: NativeRootSharingFacts,
 ): void {
 	const invalid = (reason: string): never => {
 		throw new Error(`Native function has an invalid or stale storage plan: ${reason}`);
@@ -265,6 +272,91 @@ export function validateNativeRootStorage(
 			if (slot === undefined) continue;
 			if (occupied.has(slot)) invalid(`interfering GC roots at ${point.instructionIp}`);
 			occupied.add(slot);
+		}
+	}
+	if (sharing === undefined) return;
+	const groups = new Map<number, Array<number>>();
+	for (const register of registers) {
+		if (sharing.privateRegisters.has(register)) continue;
+		const slot = slots.get(register)!;
+		const group = groups.get(slot);
+		if (group === undefined) groups.set(slot, [register]);
+		else group.push(register);
+	}
+	const shared = [...groups.values()].filter((group) => group.length > 1);
+	if (shared.length > 0) validateContinuousSlots(native, shared, sharing.facts, invalid);
+}
+
+/**
+ * Non-private registers that share a slot rely on it between safepoints as well.
+ * Their instruction lifetimes are recomputed per register by backward reachability
+ * from reads, independently of the allocator's whole-function liveness bitsets.
+ */
+function validateContinuousSlots(
+	native: NativeFunctionPlan,
+	groups: ReadonlyArray<ReadonlyArray<number>>,
+	facts: NativeRootSharingFacts["facts"],
+	invalid: (reason: string) => never,
+): void {
+	const fn = native.body;
+	const count = fn.instructions.length;
+	const checked = new Set(groups.flat());
+	const sites = () => new Map<number, Array<number>>();
+	const reads = sites();
+	const writes = sites();
+	const rooted = sites();
+	const note = (map: Map<number, Array<number>>, register: number, ip: number) => {
+		if (!checked.has(register)) return;
+		const ips = map.get(register);
+		if (ips === undefined) map.set(register, [ip]);
+		else ips.push(ip);
+	};
+	for (let ip = 0; ip < count; ip++) {
+		for (const register of facts.reads[ip]!) note(reads, register, ip);
+		for (const register of facts.writes[ip]!) note(writes, register, ip);
+	}
+	for (const point of native.gc.safepoints)
+		for (const register of point.rootRegisters)
+			note(rooted, register, point.instructionIp);
+	// Handler edges leave before the protected instruction writes, so they never kill.
+	const predecessors: Array<Array<{ ip: number; exceptional: boolean }>> = Array.from(
+		{ length: count },
+		() => [],
+	);
+	for (const [ip, op] of fn.instructions.entries()) {
+		if (op.opcode === "JUMP" || op.opcode === "JUMP_IF")
+			predecessors[op.targetIp]!.push({ ip, exceptional: false });
+		if (
+			op.opcode !== "JUMP" &&
+			op.opcode !== "RETURN" &&
+			op.opcode !== "THROW" &&
+			ip + 1 < count
+		)
+			predecessors[ip + 1]!.push({ ip, exceptional: false });
+		const handler = facts.handlerTargets[ip];
+		if (handler !== undefined) predecessors[handler]!.push({ ip, exceptional: true });
+	}
+	const live = new Int32Array(count).fill(-1);
+	const group = new Int32Array(count).fill(-1);
+	const owner = new Int32Array(count);
+	for (const [index, members] of groups.entries()) {
+		for (const register of members) {
+			const kills = new Set(writes.get(register));
+			const work = [...(reads.get(register) ?? [])];
+			for (const ip of work) live[ip] = register;
+			for (let next = 0; next < work.length; next++)
+				for (const edge of predecessors[work[next]!]!) {
+					if (live[edge.ip] === register) continue;
+					if (!edge.exceptional && kills.has(edge.ip)) continue;
+					live[edge.ip] = register;
+					work.push(edge.ip);
+				}
+			for (const ip of [...work, ...kills, ...(rooted.get(register) ?? [])]) {
+				if (group[ip] === index && owner[ip] !== register)
+					invalid(`continuous roots ${owner[ip]} and ${register} share a slot at ${ip}`);
+				group[ip] = index;
+				owner[ip] = register;
+			}
 		}
 	}
 }

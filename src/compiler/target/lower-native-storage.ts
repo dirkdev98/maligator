@@ -1713,7 +1713,10 @@ export function validateNativeStorage(
 	};
 	const matches = (variant: NativeFunctionPlan, entry?: NativeDirectEntryPlan) => {
 		if (variant.storage === undefined) return false;
-		validateNativeRootStorage(variant, variant.storage.rootRegisters, variant.storage);
+		validateNativeRootStorage(variant, variant.storage.rootRegisters, variant.storage, {
+			privateRegisters: new Set(variant.storage.privateRegisters),
+			facts: body,
+		});
 		const suspension = lowerNativeSuspension(variant, body);
 		const selected = lowerStorage(
 			variant,
