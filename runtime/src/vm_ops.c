@@ -5941,6 +5941,10 @@ static MalValue mal_vm_op_load_property_ic_keyed(
                 object->shape, mal_object_prototype(object), key_value)];
         if (mal_vm_inherited_try_load(
                 object_value, key_value, stub, &inherited_value)) {
+            // An empty site would otherwise reach this shared row through the slow path forever.
+            if (ic->mode == MAL_IC_MODE_SHAPE && ic->shape == nullptr) {
+                mal_ic_try_record_inherited(vm, object_value, key_value, inherited_value, ic);
+            }
             return inherited_value;
         }
     }
