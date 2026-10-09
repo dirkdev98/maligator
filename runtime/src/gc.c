@@ -240,7 +240,6 @@ typedef struct MalGcWorker {
     u64 batch_snapshot_discoveries;
     u64 batch_drain_traces;
 } MalGcWorker;
-static _Thread_local MalGcWorker *g_trace_worker = nullptr;
 void (*mal_gc_test_trace_env_hook)(MalEnv *env) = nullptr;
 void (*mal_gc_test_trace_snapshot_hook)(MalHeapHeader *cell) = nullptr;
 void (*mal_gc_test_before_worker_join_hook)(void) = nullptr;
@@ -453,14 +452,27 @@ static void mal_gc_workers_stop(MalGcState *g);
 #endif
 
 /* Marking helpers and SATB barriers use the active VM throughout its lifetime. */
+typedef struct MalGcThreadContext {
+    MalVm *vm;
+    MalGcState *gc;
+    struct MalGcWorker *trace_worker;
+    bool verifying;
+    /* Type of the cell the verifier is re-tracing, so a freed-target abort names the
+     * owner whose edge was missed; -1 while scanning roots. */
+    i32 verify_source;
+} MalGcThreadContext;
 #if defined(__wasi__)
-static MalVm *g_gc_vm = nullptr;
-static MalGcState *g_gc = nullptr;
+static MalGcThreadContext g_gc_thread = {.verify_source = -1};
 #else
-/* A worker binds its owning isolate before tracing and cannot borrow the mutator's context. */
-static _Thread_local MalVm *g_gc_vm = nullptr;
-static _Thread_local MalGcState *g_gc = nullptr;
+/* A worker binds its owning isolate before tracing and cannot borrow the mutator's context.
+ * One thread-local keeps shading to a single TLV lookup on Darwin. */
+static _Thread_local MalGcThreadContext g_gc_thread = {.verify_source = -1};
 #endif
+#define g_gc_vm (g_gc_thread.vm)
+#define g_gc (g_gc_thread.gc)
+#define g_trace_worker (g_gc_thread.trace_worker)
+#define g_gc_verifying (g_gc_thread.verifying)
+#define g_gc_verify_source (g_gc_thread.verify_source)
 /* Process stats reporting (atexit printer, MAL_GC_CONTROL SIGUSR1) belongs to one
  * stats owner: the first stats-enabled isolate, or a later one after the previous
  * owner's teardown. Points at the owner's live vm->gc, and at g_gc_stats_snapshot
@@ -1036,12 +1048,6 @@ void mal_gc_set_mutator_waker(MalVm *vm, void (*wake)(void *), void *data) {
 /** Shade a cell grey: a managed, non-immortal cell reached for the first time.
  * In verify mode it instead asserts the cell is already marked — a reachable but
  * unmarked cell means a trace edge was missed. */
-/* Type of the cell currently being re-traced by the verifier (diagnostic only):
- * lets a freed-target abort name the OWNER whose edge was missed, not just the
- * swept target. -1 while scanning roots (no owning cell). */
-static MAL_ISOLATE_LOCAL i32 g_gc_verify_source = -1;
-static MAL_ISOLATE_LOCAL bool g_gc_verifying = false;
-
 static void mal_gc_shade(MalHeapHeader *cell) {
     if (cell == nullptr || cell->storage == MAL_HEAP_STORAGE_IMMORTAL) {
         return;
