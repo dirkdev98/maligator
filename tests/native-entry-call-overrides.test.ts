@@ -166,7 +166,7 @@ describe("native entry call overrides", () => {
 		(available) => {
 			const source = emit(available, true, "boxed", "boxed").directEntries[0]!.source;
 			expect(privateRootRegisters(source)).toContain(2);
-			expect(source).toMatch(/if \(mal_gc_poll\) \{[^}]*__gc_slots\[\d+\] = r2;/);
+			expect(source).toMatch(/if \(\*vm->gc_poll\) \{[^}]*__gc_slots\[\d+\] = r2;/);
 			expect(source).not.toContain("__private_r2 = __gc_slots[");
 			expect(source).toContain("mal_vm_call_cached(vm,");
 			if (available) expect(source).toContain("mal_direct_1_0(");

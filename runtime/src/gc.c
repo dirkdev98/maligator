@@ -938,6 +938,7 @@ void mal_gc_init(MalVm *vm) {
     MalGcState *g = calloc(1, sizeof(MalGcState));
     if (g == nullptr) abort();
     vm->gc = g;
+    vm->gc_poll = &mal_gc_poll;
     g->vm = vm;
     g->process = mal_gc_process_register(mal_gc_current_poll_target());
 #if !defined(__wasi__)
