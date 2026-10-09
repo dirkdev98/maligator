@@ -1731,7 +1731,7 @@ typedef struct MalStaticPropertyProbeResult {
     MalValue value;
 } MalStaticPropertyProbeResult;
 
-/** Noncollecting cache probes after the inline own-slot and watched-value probes miss. */
+/** Noncollecting cache probes after the inline own-slot and inherited-value probes miss. */
 __attribute__((noinline)) MalStaticPropertyProbeResult
 mal_vm_property_try_load_static_remaining(
     MalVm *vm, MalValue receiver, const MalObject *object,
@@ -1742,30 +1742,18 @@ mal_vm_property_try_load_static_remaining(
 static inline __attribute__((always_inline)) bool mal_vm_property_try_load_static(
     MalVm *vm, MalValue receiver, MalInlineCache *ic, MalValue *out
 ) {
+    // Every static load site expands this probe; also inlining the polymorphic,
+    // watched, and string-length rows made each site about 2.5 times larger.
     const MalObject *object = mal_vm_as_object(receiver);
-    if (object != nullptr && ic->mode == MAL_IC_MODE_SHAPE && ic->slot != MAL_IC_VALUE_SLOT) {
-        if (object->shape == ic->shape) {
-            mal_perf_ic_load_mono_hit();
-            *out = mal_object_field_load_token(object, ic->field);
-            return true;
-        }
-        if (ic->poly_count > 0 && object->shape == ic->poly_shape[0]) {
-            MAL_PERF_COUNT(ic_load_poly_hits);
-            *out = mal_vm_object_poly_load(object, ic, 0);
-            return true;
-        }
+    if (object != nullptr && ic->mode == MAL_IC_MODE_SHAPE && ic->slot != MAL_IC_VALUE_SLOT &&
+        object->shape == ic->shape) {
+        mal_perf_ic_load_mono_hit();
+        *out = mal_object_field_load_token(object, ic->field);
+        return true;
     }
-    if (ic->mode == MAL_IC_MODE_SHAPE &&
-        mal_vm_watched_try_load_static(receiver, ic, out)) return true;
     // Prototype methods (`array.pop`, class methods) would otherwise pay the out-of-line probe.
     if (ic->mode == MAL_IC_MODE_INHERITED_VALUE &&
         mal_vm_inherited_value_try_load(receiver, ic, out)) {
-        return true;
-    }
-    // String length is a non-writable own property no prototype can shadow.
-    if (ic->mode == MAL_IC_MODE_STRING_LENGTH && mal_value_is_string(receiver)) {
-        mal_perf_ic_load_string_length_hit();
-        *out = mal_value_from_i32((i32) mal_value_to_string(receiver)->length);
         return true;
     }
     MalStaticPropertyProbeResult result =
@@ -1788,6 +1776,12 @@ static inline bool mal_vm_property_try_load_length_static(
         *out = mal_ops_number_value(
             (f64) ((const MalArrayObject *) mal_value_to_heap(receiver))->length);
         mal_perf_ic_load_array_length_hit();
+        return true;
+    }
+    // String length is a non-writable own property no prototype can shadow.
+    if (ic->mode == MAL_IC_MODE_STRING_LENGTH && mal_value_is_string(receiver)) {
+        mal_perf_ic_load_string_length_hit();
+        *out = mal_value_from_i32((i32) mal_value_to_string(receiver)->length);
         return true;
     }
     if (ic->mode == MAL_IC_MODE_TYPED_ARRAY_LENGTH && mal_primitive_method_protector &&
