@@ -2411,6 +2411,13 @@ mal_vm_property_try_load_static_remaining(
     MalVm *vm, MalValue receiver, const MalObject *object,
     MalInlineCache *ic
 ) {
+    // Watched built-ins such as `Math.round` are the hottest rows the inline probe
+    // leaves out; they hit by identity once the inline checks miss.
+    if (object != nullptr && ic->mode == MAL_IC_MODE_SHAPE && ic->slot == MAL_IC_VALUE_SLOT &&
+        object == ic->obj && ic->prim_kind == 0 && mal_primitive_method_protector) {
+        MAL_PERF_COUNT(ic_load_watched_hits);
+        return (MalStaticPropertyProbeResult) { .hit = true, .value = ic->value };
+    }
     // Alternate shapes are the hottest miss of the inline monomorphic probe; the
     // special modes below never coexist with a shape-mode cache.
     MalValue polymorphic_value;
