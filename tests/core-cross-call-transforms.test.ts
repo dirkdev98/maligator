@@ -1428,6 +1428,46 @@ describe("bounded Core cross-call transforms", () => {
 		expect(calls[0]!.attributes.directFunctionIndex).toBeUndefined();
 	});
 
+	it("inlines a throwing callee whose throw stays under the call site's handler", () => {
+		let optimized: CoreProgram | undefined;
+		compileSemanticProgramToProgramImage(
+			analyzeSourceAndRunSemanticAnalysis(
+				`function outer(value) {
+					let check = (input) => {
+						if (input < 0) throw new RangeError("negative");
+						return input * 2;
+					};
+					function install(other) { check = other; }
+					globalThis.install = install;
+					try { return check(value) + 1; }
+					catch (error) { return error; }
+				}`,
+				"core-guarded-inline-throw.js",
+			),
+			{
+				coreVerification: "per-pass",
+				afterCoreOptimization(program) {
+					optimized = program;
+				},
+			},
+		);
+
+		const outer = coreFunctionNamed(optimized!, "outer")!;
+		const fallback = coreOperations(outer).find(
+			({ opcode, attributes }) =>
+				opcode === "call" && attributes[CORE_GUARDED_INLINE_FALLBACK_ATTRIBUTE] === true,
+		)!;
+		const handler = inspectCoreBlockHandler(outer, fallback.block)?.block;
+		expect(handler).toBeDefined();
+		const throwing = [...outer.blockIds()].filter(
+			(block) =>
+				inspectCoreTerminatorPayload(outer, outer.blockTerminator(block)).kind ===
+				"throw",
+		);
+		expect(throwing).toHaveLength(1);
+		expect(inspectCoreBlockHandler(outer, throwing[0]!)?.block).toBe(handler);
+	});
+
 	it("bridges scalar arguments into guarded non-linear callees", () => {
 		let optimized: CoreProgram | undefined;
 		compileSemanticProgramToProgramImage(

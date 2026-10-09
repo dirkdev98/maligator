@@ -379,6 +379,8 @@ function inlineTarget(
 		const kind = fn.instructionKind(terminator);
 		if (kind === "return")
 			returns.push(fn.kernel.operandAt(fn.kernel.instructionOperandStart(terminator)));
+		// The cloned throw inherits the call site's handler, as the call's exception would.
+		else if (kind === "throw") linear = false;
 		else if (kind === "jump" || kind === "branch") {
 			if (kind === "branch") linear = false;
 			const start = fn.kernel.terminatorEdgeStart(terminator);
@@ -2163,6 +2165,12 @@ function applyGuardedInline(
 					condition: values.get(terminator.condition)!,
 					consequent: edge(terminator.consequent),
 					alternate: edge(terminator.alternate),
+				});
+			else if (terminator.kind === "throw")
+				editor.setTerminator(destination, {
+					kind: "throw",
+					value: values.get(terminator.value)!,
+					sourcePosition: callerPosition,
 				});
 			else throw new Error("Validated inline graph has an unsupported terminator");
 		}
