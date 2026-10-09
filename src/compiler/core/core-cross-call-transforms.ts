@@ -195,6 +195,120 @@ interface InlineCaptureContext {
 
 const CAPTURE_ENVIRONMENT_REBINDS = new Set(["envPush", "envCopy", "envPop"]);
 
+interface CapturedCellWrites {
+	readonly writes: ReadonlyMap<
+		string,
+		ReadonlyArray<{
+			readonly function: CoreFunctionId;
+			readonly instruction: CoreInstructionId;
+		}>
+	>;
+	readonly rebinding: ReadonlySet<CoreFunctionId>;
+}
+
+// Each discovery resets this; a wave's inlines never add captured-cell writers.
+const discoveredCapturedCellWrites = new WeakMap<CoreProgram, CapturedCellWrites>();
+
+function capturedCellWrites(program: CoreProgram): CapturedCellWrites {
+	const writes = new Map<
+		string,
+		Array<{ function: CoreFunctionId; instruction: CoreInstructionId }>
+	>();
+	const rebinding = new Set<CoreFunctionId>();
+	const record = (
+		owner: unknown,
+		index: unknown,
+		write: { function: CoreFunctionId; instruction: CoreInstructionId },
+	) => {
+		const key = `${String(owner)}:${String(index)}`;
+		const known = writes.get(key);
+		if (known === undefined) writes.set(key, [write]);
+		else known.push(write);
+	};
+	for (const functionId of program.functionIds()) {
+		const fn = program.function(functionId);
+		for (const instruction of fn.instructionIds()) {
+			if (fn.instructionKind(instruction) !== "operation") continue;
+			const opcode = fn.instructionOpcodeName(instruction);
+			const attributes = fn.instructionAttributes(instruction);
+			const write = { function: functionId, instruction };
+			if (opcode === "storeCaptured")
+				record(attributes.functionIndex, attributes.index, write);
+			else if (
+				opcode === "createPrivateNames" &&
+				Array.isArray(attributes.capturedIndices)
+			)
+				for (const index of attributes.capturedIndices)
+					record(attributes.functionIndex, index, write);
+			else if (CAPTURE_ENVIRONMENT_REBINDS.has(opcode)) rebinding.add(functionId);
+		}
+	}
+	return { writes, rebinding };
+}
+
+/**
+ * A callee read from a cell that only its owner fills with this target's fresh
+ * closures shares the caller's environment for that owner and its ancestors, so
+ * the callee's captured reads resolve identically when copied into the caller.
+ */
+function ancestorCaptureContext(
+	program: CoreProgram,
+	cells: CapturedCellWrites,
+	caller: CoreFunctionStore,
+	callee: CoreValueId,
+	site: CoreInstructionId,
+	target: CoreFunctionId,
+): InlineCaptureContext | undefined {
+	if (caller.kernel.valueDefinitionKind(callee) !== 1) return undefined;
+	const load = coreInstructionId(caller.kernel.valueDefinitionOwner(callee));
+	if (
+		caller.instructionKind(load) !== "operation" ||
+		caller.instructionOpcodeName(load) !== "loadCaptured"
+	)
+		return undefined;
+	const { functionIndex: owner, index } = caller.instructionAttributes(load);
+	if (
+		typeof owner !== "number" ||
+		typeof index !== "number" ||
+		cells.rebinding.has(owner as CoreFunctionId)
+	)
+		return undefined;
+	const writes = cells.writes.get(`${owner}:${index}`) ?? [];
+	if (writes.length === 0) return undefined;
+	for (const write of writes) {
+		if (write.function !== owner) return undefined;
+		const fn = program.function(write.function);
+		if (fn.instructionOpcodeName(write.instruction) !== "storeCaptured") return undefined;
+		const value = fn.kernel.operandAt(
+			fn.kernel.instructionOperandStart(write.instruction),
+		);
+		if (fn.kernel.valueDefinitionKind(value) !== 1) return undefined;
+		const creation = coreInstructionId(fn.kernel.valueDefinitionOwner(value));
+		if (
+			fn.instructionOpcodeName(creation) !== "createFunction" ||
+			fn.instructionAttributes(creation).functionIndex !== target
+		)
+			return undefined;
+	}
+	return { caller, callee, site };
+}
+
+function applicationCaptureContext(
+	program: CoreProgram,
+	caller: CoreFunctionStore,
+	callee: CoreValueId,
+	site: CoreInstructionId,
+	target: CoreFunctionId,
+): InlineCaptureContext | undefined {
+	const cells = discoveredCapturedCellWrites.get(program);
+	return (
+		directCaptureContext(caller, callee, site, target) ??
+		(cells === undefined
+			? undefined
+			: ancestorCaptureContext(program, cells, caller, callee, site, target))
+	);
+}
+
 function captureEnvironmentIsStable(
 	fn: CoreFunctionStore,
 	creation: CoreInstructionId,
@@ -1144,6 +1258,7 @@ function offerFunctionCandidates(
 	functionId: CoreFunctionId,
 	instanceMethodHints: ReadonlyMap<number, ReadonlyArray<CoreFunctionId>>,
 	fieldEntryNominees: ReadonlyMap<number, number>,
+	capturedCells: () => CapturedCellWrites,
 ): void {
 	const fn = program.function(functionId);
 	const outgoing = summaries.targets.outgoing(functionId);
@@ -1345,10 +1460,22 @@ function offerFunctionCandidates(
 			)
 		)
 			continue;
-		const captureContext =
+		const localCaptureContext =
 			exactTarget === undefined
 				? undefined
 				: directCaptureContext(fn, site.callee, site.instruction, exactTarget);
+		const captureContext =
+			localCaptureContext ??
+			(exactTarget === undefined
+				? undefined
+				: ancestorCaptureContext(
+						program,
+						capturedCells(),
+						fn,
+						site.callee,
+						site.instruction,
+						exactTarget,
+					));
 		const inline = inlineTarget(program, target, invocation, captureContext);
 		const singleUseGlobal =
 			coreValueIsLoadedGlobalProperty(fn, site.callee) &&
@@ -1404,7 +1531,7 @@ function offerFunctionCandidates(
 					(inline?.function.valueCapacity ?? 0) +
 					consumerDuplication +
 					(open ? 4 : 1),
-				expansive: captureContext === undefined,
+				expansive: localCaptureContext === undefined,
 				...(target === functionId
 					? { unsupportedReason: "recursive" as const }
 					: inline === undefined
@@ -1438,6 +1565,15 @@ export function discoverCoreCrossCallCandidates(
 ): void {
 	const instanceMethodHints = coreInstanceMethodHints(program);
 	const fieldEntryNominees = nativeFieldEntryNominees(program, liveFunctions);
+	discoveredCapturedCellWrites.delete(program);
+	const capturedCells = () => {
+		let cells = discoveredCapturedCellWrites.get(program);
+		if (cells === undefined) {
+			cells = capturedCellWrites(program);
+			discoveredCapturedCellWrites.set(program, cells);
+		}
+		return cells;
+	};
 	for (const functionId of functions) {
 		offerFunctionCandidates(
 			program,
@@ -1447,6 +1583,7 @@ export function discoverCoreCrossCallCandidates(
 			functionId,
 			instanceMethodHints,
 			fieldEntryNominees,
+			capturedCells,
 		);
 	}
 }
@@ -1480,7 +1617,7 @@ function applyLinearInline(
 			program,
 			target,
 			descriptor.callTransfer.invocation,
-			directCaptureContext(caller, callee, candidate.site, target),
+			applicationCaptureContext(program, caller, callee, candidate.site, target),
 		);
 	if (inline === undefined) return undefined;
 	if (inline.construction) return applyGuardedInline(program, candidate, editor, false);
@@ -1709,7 +1846,7 @@ function applyGuardedInline(
 		program,
 		target,
 		descriptor.callTransfer.invocation,
-		directCaptureContext(caller, callee, candidate.site, target),
+		applicationCaptureContext(program, caller, callee, candidate.site, target),
 	);
 	if (inline === undefined) return undefined;
 	if (

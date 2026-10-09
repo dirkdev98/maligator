@@ -159,6 +159,20 @@ const TINY_CODE_BUDGET: CoreTransformBudgetLimits = {
 	programCompilerWork: 10_000,
 };
 
+function optimizedProgram(source: string, file: string): CoreProgram {
+	let optimized: CoreProgram | undefined;
+	compileSemanticProgramToProgramImage(
+		analyzeSourceAndRunSemanticAnalysis(source, file),
+		{
+			coreVerification: "per-pass",
+			afterCoreOptimization(program) {
+				optimized = program;
+			},
+		},
+	);
+	return optimized!;
+}
+
 describe("bounded Core cross-call transforms", () => {
 	it.each([
 		{ code: 10, work: 0, reason: "generated-code-cost" },
@@ -1466,6 +1480,46 @@ describe("bounded Core cross-call transforms", () => {
 		);
 		expect(throwing).toHaveLength(1);
 		expect(inspectCoreBlockHandler(outer, throwing[0]!)?.block).toBe(handler);
+	});
+
+	it("inlines a private method whose cell only its class scope fills with fresh closures", () => {
+		const optimized = optimizedProgram(
+			`function makeStore(size) {
+				class Store {
+					#live = new Uint8Array(size);
+					#require(id) {
+						if (this.#live[id] !== 1) throw new Error("unknown");
+					}
+					read(id) {
+						this.#require(id);
+						return id;
+					}
+				}
+				return new Store();
+			}
+			globalThis.makeStore = makeStore;`,
+			"core-ancestor-capture-inline.js",
+		);
+		const read = coreFunctionNamed(optimized, "read")!;
+		expect(coreOperations(read).some(({ opcode }) => opcode === "call")).toBe(false);
+	});
+
+	it("keeps calls through captured cells that other code can rebind", () => {
+		const optimized = optimizedProgram(
+			`function outer(value) {
+				let check = (input) => {
+					if (input < 0) throw new RangeError("negative");
+					return input;
+				};
+				function run(input) { return check(input) + 1; }
+				globalThis.replace = (other) => { check = other; };
+				return run(value);
+			}
+			globalThis.outer = outer;`,
+			"core-ancestor-capture-rebind.js",
+		);
+		const run = coreFunctionNamed(optimized, "run")!;
+		expect(coreOperations(run).some(({ opcode }) => opcode === "call")).toBe(true);
 	});
 
 	it("bridges scalar arguments into guarded non-linear callees", () => {
