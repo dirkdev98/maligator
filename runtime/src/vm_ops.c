@@ -2376,13 +2376,27 @@ MalInlineCache *mal_vm_inherited_property_stub_cache(MalVm *vm) {
  * own/inherited/special handlers. Keeping full chain and table-handle
  * validation here avoids cloning it into every generated property access.
  */
+/** Sites whose cached key is their static name, so it can address the shared stub. */
+static bool mal_vm_inherited_stub_site(const MalInlineCache *site) {
+    switch (site->mode) {
+        case MAL_IC_MODE_SHAPE:
+            return site->shape != nullptr && site->slot != MAL_IC_VALUE_SLOT;
+        case MAL_IC_MODE_INHERITED_VALUE:
+        case MAL_IC_MODE_INHERITED_SLOT:
+        case MAL_IC_MODE_INHERITED_TABLE:
+        case MAL_IC_MODE_MISSING:
+            return true;
+        default:
+            return false;
+    }
+}
+
 bool mal_vm_inherited_stub_try_load_static(
     const MalVm *vm, MalValue receiver, const MalObject *object,
     const MalInlineCache *site, MalValue *out
 ) {
     if (object == nullptr || vm->inherited_property_stub == nullptr ||
-        site->mode != MAL_IC_MODE_SHAPE || site->shape == nullptr ||
-        site->slot == MAL_IC_VALUE_SLOT) {
+        !mal_vm_inherited_stub_site(site)) {
         return false;
     }
     const MalInlineCache *stub =
@@ -2448,12 +2462,15 @@ mal_vm_property_try_load_static_remaining(
     bool hit;
     if (ic->mode == MAL_IC_MODE_INHERITED_VALUE && ic->poly_count > 0 &&
         ic->receiver_type == MAL_HEAP_OBJECT) {
-        hit = mal_vm_local_inherited_value_try_load_static(object, ic, &value);
+        // A site that alternates between classes keeps one row; the stub holds the others.
+        hit = mal_vm_local_inherited_value_try_load_static(object, ic, &value) ||
+            mal_vm_inherited_stub_try_load_static(vm, receiver, object, ic, &value);
     } else if (ic->mode == MAL_IC_MODE_INHERITED_VALUE ||
         ic->mode == MAL_IC_MODE_INHERITED_SLOT ||
         ic->mode == MAL_IC_MODE_INHERITED_TABLE ||
         ic->mode == MAL_IC_MODE_MISSING) {
-        hit = mal_vm_inherited_try_load_static(receiver, ic, &value);
+        hit = mal_vm_inherited_try_load_static(receiver, ic, &value) ||
+            mal_vm_inherited_stub_try_load_static(vm, receiver, object, ic, &value);
     } else {
         hit = (object != nullptr && ic->mode == MAL_IC_MODE_OWN_TABLE &&
                mal_vm_own_table_try_load(object, ic->key, ic, &value)) ||
@@ -5375,6 +5392,7 @@ static bool mal_ic_record_local_prototype_chain(
         ((ic->mode == MAL_IC_MODE_INHERITED_VALUE && ic->poly_count > 0) ||
          ic->mode == MAL_IC_MODE_INHERITED_SLOT ||
          ic->mode == MAL_IC_MODE_INHERITED_TABLE ||
+         ic->mode == MAL_IC_MODE_INHERITED_GETTER ||
          ic->mode == MAL_IC_MODE_TYPED_ARRAY_LENGTH) &&
         ic->poly_count > 0 &&
         ic->proto_object[0] == mal_object_prototype(receiver) &&
@@ -5729,6 +5747,55 @@ static bool mal_ic_try_record_missing(
     return true;
 }
 
+/**
+ * Record an ordinary-chain accessor's getter. The chain registration clears the row
+ * on any mutation of an object between the receiver and the holder, so a hit only
+ * needs the receiver's shape and first prototype, as for inherited value rows.
+ */
+static bool mal_ic_try_record_inherited_getter(
+    MalValue receiver, MalValue key_value, MalPropertyResolution resolution,
+    MalInlineCache *ic
+) {
+    if (mal_value_heap_type(receiver) != MAL_HEAP_OBJECT ||
+        !mal_value_is_callable(resolution.desc.getter) ||
+        resolution.holder == nullptr ||
+        resolution.holder->header.type != MAL_HEAP_OBJECT) {
+        return false;
+    }
+    MalObject *object = mal_value_to_object(receiver);
+    if (mal_object_has_public_overflow(object)) return false;
+    bool found_holder = false;
+    for (MalObject *cursor = mal_object_prototype(object); cursor != nullptr;
+         cursor = mal_object_prototype(cursor)) {
+        if (cursor->header.type != MAL_HEAP_OBJECT) return false;
+        if (cursor == resolution.holder) {
+            found_holder = true;
+            break;
+        }
+    }
+    if (!found_holder) return false;
+    MalPropertyLookup own =
+        mal_object_get_own(resolution.holder, mal_key_from_value(key_value));
+    if (!own.present || !(own.desc.flags & MAL_PROPERTY_ACCESSOR) ||
+        own.desc.getter != resolution.desc.getter) {
+        return false;
+    }
+    if (!mal_ic_record_local_prototype_chain(object, resolution.holder, ic, false)) {
+        return false;
+    }
+    mal_perf_ic_note_replacement(ic, MAL_IC_MODE_INHERITED_GETTER);
+    ic->shape = object->shape;
+    ic->key = key_value;
+    ic->value = resolution.desc.getter;
+    ic->slot = MAL_IC_VALUE_SLOT;
+    ic->prim_kind = 0;
+    ic->megamorphic = false;
+    ic->mode = MAL_IC_MODE_INHERITED_GETTER;
+    ic->receiver_type = MAL_HEAP_OBJECT;
+    MAL_PERF_COUNT(ic_inherited_getter_fills);
+    return true;
+}
+
 static void mal_ic_try_record_inherited(
     MalVm *vm, MalValue receiver, MalValue key_value, MalValue result, MalInlineCache *ic
 ) {
@@ -5767,6 +5834,10 @@ static void mal_ic_try_record_inherited(
             return;
         }
         MAL_PERF_COUNT(ic_inherited_reject_resolution);
+        return;
+    }
+    if (!resolution.own && (resolution.desc.flags & MAL_PROPERTY_ACCESSOR) &&
+        mal_ic_try_record_inherited_getter(receiver, key_value, resolution, ic)) {
         return;
     }
     if (resolution.own ||
@@ -5829,6 +5900,23 @@ static MalValue mal_vm_op_load_property_ic_keyed(
 ) {
     MAL_PERF_COUNT(ic_load_fallbacks);
     MalValue key_value = key.value;
+    // Getters run user code, so their rows hit only here, after the caller rooted its operands.
+    if (ic->mode == MAL_IC_MODE_INHERITED_GETTER && key_value == ic->key &&
+        mal_value_is_heap_type(object_value, MAL_HEAP_OBJECT)) {
+        const MalObject *object = mal_value_to_object(object_value);
+        if (object->shape == ic->shape &&
+            mal_object_prototype(object) == ic->proto_object[0] &&
+            !mal_object_has_public_overflow(object)) {
+            MAL_PERF_COUNT(ic_load_inherited_getter_hits);
+            MalCompletion completion =
+                mal_vm_call_value(vm, ic->value, object_value, nullptr, 0);
+            if (completion.kind != MAL_COMPLETION_NORMAL) {
+                vm->completion = completion;
+                return MAL_VALUE_UNDEFINED;
+            }
+            return completion.value;
+        }
+    }
     MalValue special_value;
     if (!static_probe_missed &&
         mal_vm_special_try_load(vm, object_value, key_value, ic, &special_value)) {
@@ -5842,8 +5930,7 @@ static MalValue mal_vm_op_load_property_ic_keyed(
     bool inherited_stub_already_probed =
         static_probe_missed &&
         mal_value_is_heap_type(object_value, MAL_HEAP_OBJECT) &&
-        ic->mode == MAL_IC_MODE_SHAPE && ic->shape != nullptr &&
-        ic->slot != MAL_IC_VALUE_SLOT;
+        mal_vm_inherited_stub_site(ic);
     if (!inherited_stub_already_probed &&
         vm->inherited_property_stub != nullptr &&
         mal_value_is_heap_type(object_value, MAL_HEAP_OBJECT) &&
@@ -6176,10 +6263,26 @@ MalValue mal_vm_op_load_property_ic(
 }
 
 MalValue mal_vm_op_load_property_ic_static_miss(
-    MalVm *vm, MalValue object_value, MalValue key_value, MalInlineCache *ic
+    MalVm *vm, MalValue object_value, i32 atom, MalInlineCache *ic
 ) {
-    return mal_vm_op_load_property_ic_impl(
-        vm, object_value, key_value, ic, true);
+    if (mal_value_is_nil(object_value)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "Cannot read properties of null or undefined");
+        return MAL_VALUE_UNDEFINED;
+    }
+    // The VM atom is already this property's canonical query key; only an
+    // index-shaped name needs the INDEX kind.
+    MalString *name = vm->string_constant_atoms[atom];
+    u32 index = 0;
+    MalKey key = mal_vm_string_to_array_index(name, &index)
+        ? mal_key_index(index)
+        : (MalKey) {.kind = MAL_KEY_STRING, .value = mal_value_from_string(name)};
+    MalValue roots[] = {object_value};
+    MalRootSpan span;
+    mal_gc_root(&span, roots, countof(roots));
+    MalValue result = mal_vm_op_load_property_ic_keyed(vm, object_value, key, ic, true);
+    mal_gc_unroot(&span);
+    return result;
 }
 
 /*

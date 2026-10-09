@@ -6538,10 +6538,6 @@ function emitInstruction(
 					`}`,
 				];
 			}
-			const key =
-				instruction.opcode === "LOAD_PROPERTY_STATIC"
-					? `mal_value_from_string(vm->string_constant_atoms[${relocation.stringIndex(instruction.stringIndex)}])`
-					: boxed(instruction.key);
 			// Per-site monomorphic inline cache (a static, zero-initialized → starts empty).
 			// A hit is a direct slot/element read with no shape search or key conversion, and
 			// runs no user code. The hit writes a short-lived temp,
@@ -6696,7 +6692,7 @@ function emitInstruction(
 					instruction.dst,
 					profileCall(
 						"property",
-						`mal_vm_op_load_property_ic_static_miss(vm, ${boxed(instruction.object)}, ${key}, &${nativeBodyReference(resources, "propertyCache")}[${instruction.icIndex}])`,
+						`mal_vm_op_load_property_ic_static_miss(vm, ${boxed(instruction.object)}, ${relocation.stringIndex(instruction.stringIndex)}, &${nativeBodyReference(resources, "propertyCache")}[${instruction.icIndex}])`,
 					),
 				).map((line) => `  ${line}`),
 				`}`,

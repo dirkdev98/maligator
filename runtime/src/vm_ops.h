@@ -1003,6 +1003,8 @@ static inline void mal_ic_set_recorded_prototype_epoch(MalInlineCache *ic, u64 e
 #define MAL_IC_MODE_TYPED_ARRAY_LENGTH 10u
 #define MAL_IC_MODE_CONSTRUCTOR_LAYOUT 11u
 #define MAL_IC_MODE_COLLECTION_SIZE 12u
+// `value` is the getter of an accessor on an ordinary prototype chain, called on a hit.
+#define MAL_IC_MODE_INHERITED_GETTER 13u
 
 #define MAL_IC_MISSING_SHAPE_CHAIN 0u
 #define MAL_IC_MISSING_EXACT_CHAIN 1u
@@ -1107,9 +1109,12 @@ static inline u32 mal_inherited_stub_hash(
  */
 MalValue mal_vm_op_load_property_ic(MalVm *vm, MalValue object_value, MalValue key_value, MalInlineCache *ic);
 
-/** Continue immediately after the complete generated static-name cache probe misses. */
+/**
+ * Continue immediately after the complete generated static-name cache probe misses.
+ * `atom` indexes `vm->string_constant_atoms` for the static property name.
+ */
 MalValue mal_vm_op_load_property_ic_static_miss(
-    MalVm *vm, MalValue object_value, MalValue key_value, MalInlineCache *ic);
+    MalVm *vm, MalValue object_value, i32 atom, MalInlineCache *ic);
 
 void mal_vm_op_store_property_ic(MalVm *vm, MalValue object_value, MalValue key_value, MalValue value, bool strict, MalInlineCache *ic);
 
@@ -1753,8 +1758,9 @@ static inline __attribute__((always_inline)) bool mal_vm_property_try_load_stati
     if (ic->mode == MAL_IC_MODE_SHAPE &&
         mal_vm_watched_try_load_static(receiver, ic, out)) return true;
     // Prototype methods (`array.pop`, class methods) would otherwise pay the out-of-line probe.
-    if (ic->mode == MAL_IC_MODE_INHERITED_VALUE) {
-        return mal_vm_inherited_value_try_load(receiver, ic, out);
+    if (ic->mode == MAL_IC_MODE_INHERITED_VALUE &&
+        mal_vm_inherited_value_try_load(receiver, ic, out)) {
+        return true;
     }
     // String length is a non-writable own property no prototype can shadow.
     if (ic->mode == MAL_IC_MODE_STRING_LENGTH && mal_value_is_string(receiver)) {
