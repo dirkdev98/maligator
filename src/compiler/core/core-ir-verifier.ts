@@ -135,38 +135,6 @@ function arityAccepts(
 	return count >= arity.minimum && count <= arity.maximum;
 }
 
-function verifyAttributeValue(
-	value: CoreAttributeValue,
-	path: string,
-	ancestors: ReadonlySet<object> = new Set(),
-): void {
-	if (
-		value === undefined ||
-		value === null ||
-		typeof value === "boolean" ||
-		typeof value === "number" ||
-		typeof value === "string"
-	) {
-		return;
-	}
-	const object = value as object;
-	if (ancestors.has(object)) fail(`${path} contains cyclic attribute data`);
-	const nextAncestors = new Set(ancestors).add(object);
-	if (Array.isArray(value)) {
-		for (const [index, entry] of (value as ReadonlyArray<CoreAttributeValue>).entries()) {
-			verifyAttributeValue(entry, `${path}[${index}]`, nextAncestors);
-		}
-		return;
-	}
-	const prototype = Object.getPrototypeOf(value) as unknown;
-	if (prototype !== Object.prototype && prototype !== null) {
-		fail(`${path} has a non-data attribute object`);
-	}
-	for (const [key, entry] of Object.entries(value)) {
-		verifyAttributeValue(entry, `${path}.${key}`, nextAncestors);
-	}
-}
-
 function attributeAtPath(
 	attributes: CoreAttributeValue,
 	path: ReadonlyArray<string>,
@@ -505,7 +473,6 @@ function verifyInstructionRows(
 					world,
 				);
 			}
-			verifyAttributeValue(attributes, `instruction @${instruction} attributes`);
 			verifyAttributeRelocations(
 				fn,
 				instruction,

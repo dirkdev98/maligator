@@ -364,22 +364,40 @@ function freezeImmediate(value: CoreImmediate): CoreImmediate {
 	return Object.freeze({ ...value });
 }
 
-function freezeAttribute(value: CoreAttributeValue): CoreAttributeValue {
-	if (Array.isArray(value)) return Object.freeze(value.map(freezeAttribute));
-	if (value !== null && typeof value === "object") {
-		return Object.freeze(
-			Object.fromEntries(
-				Object.entries(value).map(([key, entry]) => [key, freezeAttribute(entry)]),
-			),
+// Attribute data enters the store only through this copy, so it is where the data
+// must prove to be acyclic plain records and arrays; verification relies on that.
+function freezeAttribute(
+	value: CoreAttributeValue,
+	ancestors: Set<object>,
+): CoreAttributeValue {
+	if (value === null || typeof value !== "object") return value;
+	if (ancestors.has(value))
+		throw new Error("Core instruction attributes contain cyclic data");
+	ancestors.add(value);
+	let copy: CoreAttributeValue;
+	if (Array.isArray(value)) {
+		copy = (value as ReadonlyArray<CoreAttributeValue>).map((entry) =>
+			freezeAttribute(entry, ancestors),
 		);
+	} else {
+		const prototype = Object.getPrototypeOf(value) as unknown;
+		if (prototype !== Object.prototype && prototype !== null) {
+			throw new Error("Core instruction attributes contain a non-data object");
+		}
+		const record = value as Readonly<Record<string, CoreAttributeValue>>;
+		const fields: Record<string, CoreAttributeValue> = {};
+		for (const key of Object.keys(record))
+			fields[key] = freezeAttribute(record[key], ancestors);
+		copy = fields;
 	}
-	return value;
+	ancestors.delete(value);
+	return Object.freeze(copy);
 }
 
 function freezeAttributes(
 	attributes: CoreInstructionAttributes,
 ): CoreInstructionAttributes {
-	return freezeAttribute(attributes) as CoreInstructionAttributes;
+	return freezeAttribute(attributes, new Set()) as CoreInstructionAttributes;
 }
 
 const EMPTY_CORE_INSTRUCTION_ATTRIBUTES: CoreInstructionAttributes = Object.freeze({});

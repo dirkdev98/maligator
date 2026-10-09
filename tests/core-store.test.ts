@@ -992,6 +992,33 @@ describe("Core store", () => {
 		);
 	});
 
+	it("copies shared attribute data but rejects cycles and non-data objects", () => {
+		const append = (attributes: Record<string, unknown>) => {
+			const program = new CoreProgram(registry());
+			const builder = new CoreFunctionBuilder(program);
+			const entry = builder.createBlock();
+			const [value] = builder.appendInstruction(entry, "constant", [], {
+				attributes: { literal: { kind: "number", value: 42 }, ...attributes },
+				outputRepresentations: ["i32"],
+			});
+			builder.setTerminator(entry, { kind: "return", value: value! });
+			return program
+				.function(builder.finish(entry).function)
+				.instructionAttributes(0 as never);
+		};
+		const shared = { bits: [1, 2] };
+		const stored = append({ left: shared, right: [shared, shared] }) as {
+			left: object;
+			right: ReadonlyArray<object>;
+		};
+		expect(stored.right[0]).toEqual(shared);
+		expect(Object.isFrozen(stored.right[1])).toBe(true);
+		const cyclic: Record<string, unknown> = { rows: [] };
+		(cyclic.rows as Array<unknown>).push({ back: cyclic });
+		expect(() => append({ table: cyclic })).toThrow(/cyclic data/);
+		expect(() => append({ table: { entries: [new Map()] } })).toThrow(/non-data object/);
+	});
+
 	it("produces the same dense IR regardless of construction tombstone layout", () => {
 		const build = (withTombstones: boolean): string => {
 			const program = new CoreProgram(registry());
