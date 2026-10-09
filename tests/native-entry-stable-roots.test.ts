@@ -6,6 +6,7 @@ import type {
 	BytecodeFunction,
 	BytecodeInstruction,
 } from "../src/compiler/target/runtime-image.ts";
+import { privateRootRegisters } from "./helpers/native-c-source.ts";
 import { testPropertyCacheCount } from "./helpers/program-image.ts";
 function fn(instructions: Array<BytecodeInstruction>): BytecodeFunction {
 	return {
@@ -71,7 +72,7 @@ describe("entry-stable private roots", () => {
 	});
 	it("publishes an immutable private receiver at entry rather than at every miss", () => {
 		const source = emit(fn([load, call, { opcode: "RETURN", value: 2 }]));
-		expect(source).toContain("#define r0 (__private_r0)");
+		expect(privateRootRegisters(source)).toContain(0);
 		expect(source.match(/__gc_slots\[\d+\] = r0;/g)).toHaveLength(1);
 		expect(source).toContain("mal_vm_op_load_property_ic_static_miss");
 	});
@@ -85,7 +86,7 @@ describe("entry-stable private roots", () => {
 				{ opcode: "RETURN", value: 2 },
 			]),
 		);
-		expect(source).toContain("#define r0 (__private_r0)");
+		expect(privateRootRegisters(source)).toContain(0);
 		expect((source.match(/__gc_slots\[\d+\] = r0;/g) ?? []).length).toBeGreaterThan(1);
 	});
 });

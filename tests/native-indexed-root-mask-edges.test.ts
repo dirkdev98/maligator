@@ -10,6 +10,7 @@ import type {
 	BytecodeFunction,
 	BytecodeInstruction,
 } from "../src/compiler/target/runtime-image.ts";
+import { privateRootRegisters } from "./helpers/native-c-source.ts";
 import { testPropertyCacheCount } from "./helpers/program-image.ts";
 
 type Safepoint = NativeFunctionPlan["gc"]["safepoints"][number];
@@ -155,7 +156,7 @@ function ordinary(
 }
 
 function privateSlot(source: string, register: number): number {
-	expect(source).toContain(`#define r${register} (__private_r${register})`);
+	expect(privateRootRegisters(source)).toContain(register);
 	const store = source.match(new RegExp(`__gc_slots\\[(\\d+)\\] = r${register};`));
 	expect(store).not.toBeNull();
 	return Number(store![1]);
@@ -252,7 +253,7 @@ describe("native numeric indexed-property root publication", () => {
 				representation,
 				plan,
 			);
-			expect(source).not.toContain("__private_r");
+			expect(privateRootRegisters(source).size).toBe(0);
 		},
 	);
 
@@ -271,10 +272,9 @@ describe("native numeric indexed-property root publication", () => {
 				point(3, [0, 3, 5], [6]),
 			],
 		);
-		expect(source).not.toContain("#define r3 (__private_r3)");
 		expect(source).toContain("#define r3 (__gc_slots[");
 		privateSlot(source, indexedLoad.object);
-		expect(source.match(/MalValue __private_r\d+;/g)).toEqual(["MalValue __private_r0;"]);
+		expect([...privateRootRegisters(source)]).toEqual([0]);
 	});
 
 	it("keeps an indexed receiver rooted when another definition uses a compound out-parameter", () => {
@@ -292,7 +292,7 @@ describe("native numeric indexed-property root publication", () => {
 				point(3, [0, 3, 5], [6]),
 			],
 		);
-		expect(source).not.toContain("#define r0 (__private_r0)");
+		expect(privateRootRegisters(source)).not.toContain(0);
 		expect(source).toContain("#define r0 (__gc_slots[");
 		privateSlot(source, indexedLoad.dst);
 	});
@@ -366,7 +366,7 @@ describe("native numeric indexed-property root publication", () => {
 
 	it("adds no publication for an indexed instruction without a refined GC point", () => {
 		const source = emit(fn([key, indexedLoad, { opcode: "RETURN", value: 3 }]), []);
-		expect(source).not.toContain("__private_r");
+		expect(privateRootRegisters(source).size).toBe(0);
 		expect(source).not.toContain("MAL_ROOT_MASK(");
 		expect(source).toContain("mal_vm_array_try_get_index(");
 		expect(source).toContain("mal_vm_indexed_fast_load_index(");

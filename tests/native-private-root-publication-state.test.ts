@@ -12,6 +12,7 @@ import type {
 	BytecodeFunction,
 	BytecodeInstruction,
 } from "../src/compiler/target/runtime-image.ts";
+import { privateRootRegisters, rootMaskBits } from "./helpers/native-c-source.ts";
 import { testPropertyCacheCount } from "./helpers/program-image.ts";
 
 const retained = 2;
@@ -188,30 +189,9 @@ function wideSharedRoots(): { native: NativeFunctionPlan; source: string } {
 }
 
 function inactiveRootBits(source: string, start: number, end: number): bigint {
-	const masks = [
-		...source.slice(start, end).matchAll(/MAL_ROOT_MASK(?:_WIDE)?\(.*?\);/g),
-	];
+	const masks = [...source.slice(start, end).matchAll(/MAL_ROOT_MASK(?:_ROW)?\(.*?\);/g)];
 	expect(masks.length).toBeGreaterThan(0);
-	const statement = masks.at(-1)![0];
-	const narrow = /^MAL_ROOT_MASK\(0x([0-9a-f]+)\);$/.exec(statement);
-	if (narrow !== null) return BigInt(`0x${narrow[1]}`);
-	const wide = /^MAL_ROOT_MASK_WIDE\(0x([0-9a-f]+), (\w+)\);$/.exec(statement);
-	expect(wide).not.toBeNull();
-	const tail = new RegExp(`static const u64 ${wide![2]}\\[\\] = \\{ ([^}]*) \\};`).exec(
-		source,
-	);
-	expect(tail).not.toBeNull();
-	return tail![1]!
-		.split(", ")
-		.reduce(
-			(bits, word, index) =>
-				bits |
-				((word === "UINT64_MAX"
-					? (1n << 64n) - 1n
-					: BigInt(/^UINT64_C\((0x[\da-f]+)\)$/.exec(word)?.[1] ?? word)) <<
-					BigInt(64 * (index + 1))),
-			BigInt(`0x${wide![1]}`),
-		);
+	return rootMaskBits(source, masks.at(-1)![0]);
 }
 
 function isInactive(bits: bigint, slot: number): boolean {
@@ -228,7 +208,7 @@ function propertyMissPath(
 }
 
 function privatePublication(source: string, register = retained): string {
-	expect(source).toContain(`#define r${register} (__private_r${register})`);
+	expect(privateRootRegisters(source)).toContain(register);
 	const slot = source.match(new RegExp(`__gc_slots\\[(\\d+)\\] = r${register};`))?.[1];
 	expect(slot).toBeDefined();
 	return `__gc_slots[${slot}] = r${register};`;
@@ -280,7 +260,7 @@ describe("private-root publication state at collecting edges", () => {
 			),
 			{ registerCount: 35 },
 		);
-		expect(source.match(/MalValue __private_r\d+;/g)).toHaveLength(32);
+		expect(privateRootRegisters(source).size).toBe(32);
 		const publication = privatePublication(source, 33);
 		const first = 32;
 		expect(hasIncomingCopy(beforeCall(source, first), publication)).toBe(true);
@@ -557,7 +537,7 @@ describe("private-root publication state at collecting edges", () => {
 			[point(0, [0, 1], [...live, 4]), point(1, live, [...live, 3])],
 		);
 		expect(vmInstructionWriteRegisters(argument)).toEqual([4, retained]);
-		expect(source).not.toContain(`#define r${retained} (__private_r${retained})`);
+		expect(privateRootRegisters(source)).not.toContain(retained);
 		expect(source).toContain(`#define r${retained} (__gc_slots[`);
 		const allocation = source.indexOf(`r${retained} = mal_create_arguments_object`);
 		const lookup = source.indexOf(`mal_vm_op_load_property(vm, r${retained}`);
@@ -669,7 +649,7 @@ describe("wide private-root publication", () => {
 
 	it("resets a wide inactive mask to zero when every shared slot is occupied", () => {
 		const firstCall = beforeCall(source, wideFirstCallIp);
-		expect(firstCall).toContain("MAL_ROOT_MASK_WIDE(");
+		expect(firstCall).toContain("MAL_ROOT_MASK_ROW(");
 		expect(inactiveRootBits(source, 0, firstCall.length)).toBe(0n);
 	});
 });

@@ -167,7 +167,6 @@ interface NativeStorageBodyFacts extends NativeBodyFacts {
 }
 
 interface NativeStorageControlFlow {
-	readonly blockCount: number;
 	readonly isReachable: (instructionIp: number) => boolean;
 	readonly dominates: (definitionIp: number, useIp: number) => boolean;
 	readonly isDefinedBeforeReads: (
@@ -296,7 +295,6 @@ function storageControlFlow(
 	const live = reachable();
 	let dominatesBlock: ReturnType<typeof blockDominators> | undefined;
 	return {
-		blockCount: ends.length,
 		isReachable: (ip) => live[blocks[ip]!] === 1,
 		dominates(definitionIp, useIp) {
 			const definitionBlock = blocks[definitionIp]!;
@@ -493,18 +491,18 @@ function definitionInitializedRegisters(
 		local >= fn.parameterCount + fn.argumentSnapshotCount &&
 		native.storageValues![local]! >= 0 &&
 		!borrowed.has(local) &&
-		(["number", "int32", "boolean"].includes(rep) || (boxedLocals && rep === "boxed"))
+		(["number", "int32", "boolean"].includes(rep) ||
+			(boxedLocals && (rep === "boxed" || rep === "string")))
 			? [local]
 			: [],
 	);
 	if (eligible.length === 0) return [];
-	// Limit added dominance work deterministically; exception/resume entries need a broader CFG.
+	// Exception and resume entries need a broader CFG.
 	const selectControlFlow = (): NativeStorageControlFlow | undefined =>
 		native.mode === "direct" &&
 		!fn.isGenerator &&
 		!fn.isAsync &&
-		body.externalEntries.size === 0 &&
-		(body.controlFlow?.blockCount ?? Infinity) <= 256
+		body.externalEntries.size === 0
 			? body.controlFlow
 			: undefined;
 	const phiControlFlow =
@@ -1039,7 +1037,20 @@ function rootStorage(
 	}
 	return {
 		rootRegisters: roots,
-		...selectNativeRootStorage(native, roots, privateLocals, calls),
+		...selectNativeRootStorage(native, roots, privateLocals, calls, {
+			registers: instructionLocalRoots(
+				native,
+				body,
+				roots.filter((local) => !privateLocals.has(local)),
+				[
+					...borrowedPlans,
+					...fastPaths.propertyReadRegions,
+					...fastPaths.propertyReadPairs,
+				],
+				expressionIps,
+			),
+			facts: body,
+		}),
 		privateRegisters: roots.filter((local) => privateLocals.has(local)),
 		privateCallResultIps: [...calls],
 		entryStableRootRegisters: [
@@ -1050,6 +1061,44 @@ function rootStorage(
 			),
 		],
 	};
+}
+
+// Ordinary call and exact-operator rendering touch operands only within their own instruction.
+const INSTRUCTION_LOCAL_PLAN_KINDS: ReadonlySet<string> = new Set([
+	"call",
+	"exact-operator-input-kinds",
+]);
+
+/** Continuously rooted registers whose emitted storage accesses are their VM reads and writes. */
+function instructionLocalRoots(
+	native: NativeFunctionPlan,
+	body: NativeStorageBodyFacts,
+	continuous: ReadonlyArray<number>,
+	borrowedPlans: ReadonlyArray<{ readonly borrowedRegisters: ReadonlyArray<number> }>,
+	expressionIps: ReadonlyArray<number>,
+): ReadonlySet<number> {
+	const local = new Set(continuous);
+	if (local.size === 0) return local;
+	const fn = native.body;
+	const regional = new Uint8Array(fn.instructions.length);
+	for (const [ip, plan] of native.instructions.entries())
+		if (plan !== undefined && !INSTRUCTION_LOCAL_PLAN_KINDS.has(plan.kind))
+			regional[ip] = 1;
+	for (const { ip } of native.regionActions) regional[ip] = 1;
+	for (const region of native.specializations)
+		for (const ip of region.claimedIps) regional[ip] = 1;
+	for (const call of native.fieldCalls ?? [])
+		for (let ip = call.allocationIp; ip <= call.callIp; ip++) regional[ip] = 1;
+	// Expressions render at their consumer, after their operands' VM reads.
+	for (const ip of expressionIps) regional[ip] = 1;
+	for (let ip = 0; ip < regional.length; ip++) {
+		if (regional[ip] === 0) continue;
+		for (const register of body.reads[ip]!) local.delete(register);
+		for (const register of body.writes[ip]!) local.delete(register);
+	}
+	for (const plan of borrowedPlans)
+		for (const register of plan.borrowedRegisters) local.delete(register);
+	return local;
 }
 
 function scalarStorageWindows(fastPaths: NativeFastPathPlans) {

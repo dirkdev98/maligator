@@ -8,6 +8,7 @@ import {
 	runToStdout,
 	STRESS_ENV,
 } from "../../src/test-harness.ts";
+import { privateRootRegisters } from "../helpers/native-c-source.ts";
 
 const fixture = "tests/local/static-property-root-mask.js";
 const hostGc = { MAL_HOST_GC: "1" };
@@ -448,9 +449,7 @@ describe("native static-property root-mask publication", () => {
 			expect(contract!.boundaryIncomingRoots.length).toBeGreaterThan(0);
 			for (const register of contract!.retainedRegisters) {
 				expect(contract!.privateRegisters.has(register)).toBe(true);
-				expect(contract!.source).toContain(
-					`#define r${register} (__private_r${register})`,
-				);
+				expect(privateRootRegisters(contract!.source)).toContain(register);
 				for (const roots of contract!.boundaryIncomingRoots) {
 					expect(roots).toContain(register);
 				}
@@ -465,9 +464,7 @@ describe("native static-property root-mask publication", () => {
 			expect(contract.indexedReceivers.length).toBeGreaterThan(0);
 			for (const receiver of contract.indexedReceivers) {
 				expect(contract.privateRegisters.has(receiver.register)).toBe(true);
-				expect(contract.source).toContain(
-					`#define r${receiver.register} (__private_r${receiver.register})`,
-				);
+				expect(privateRootRegisters(contract.source)).toContain(receiver.register);
 				expect(receiver.incomingRoots).toContain(receiver.register);
 			}
 		},
@@ -480,9 +477,7 @@ describe("native static-property root-mask publication", () => {
 			expect(contract.boundaryResults.length).toBeGreaterThan(0);
 			for (const result of contract.boundaryResults) {
 				expect(contract.privateRegisters.has(result.register)).toBe(true);
-				expect(contract.source).toContain(
-					`#define r${result.register} (__private_r${result.register})`,
-				);
+				expect(privateRootRegisters(contract.source)).toContain(result.register);
 				expect(result.outgoingRoots).toContain(result.register);
 				expect(result.nextCallIncomingRoots).toContain(result.register);
 			}
@@ -500,13 +495,14 @@ describe("native static-property root-mask publication", () => {
 				`MalCompletion call_result_${ip} = mal_vm_call_cached(`,
 			);
 			expect(callOffset).toBeGreaterThanOrEqual(0);
-			// The active macro binding, not the declaration, owns the CALL result storage.
-			expect(
+			// No shadow-slot binding may own the private CALL result storage.
+			expect(privateRootRegisters(contract.source)).toContain(register);
+			const binding =
 				contract.source
 					.slice(0, callOffset)
 					.match(new RegExp(`#define r${register} [^\\n]+`, "g"))
-					?.at(-1),
-			).toBe(`#define r${register} (__private_r${register})`);
+					?.at(-1) ?? "";
+			expect(binding).not.toContain("__gc_slots");
 			const continuation = contract.source.slice(callOffset);
 			const throwCheck = continuation.indexOf(
 				`if (call_result_${ip}.kind == MAL_COMPLETION_THROW)`,

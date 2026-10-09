@@ -10,6 +10,7 @@ import type {
 	BytecodeFunction,
 	BytecodeInstruction,
 } from "../src/compiler/target/runtime-image.ts";
+import { privateRootRegisters } from "./helpers/native-c-source.ts";
 import { testPropertyCacheCount } from "./helpers/program-image.ts";
 
 const call = {
@@ -184,7 +185,7 @@ describe("native root-mask state through generic continuations", () => {
 			1,
 		);
 		expect(output).toContain("mal_vm_property_try_load_static_number_pair");
-		expect(output).not.toContain("__private_r");
+		expect(privateRootRegisters(output).size).toBe(0);
 		const eagerMask = output.indexOf("\n    MAL_ROOT_MASK(0x10);\n");
 		const binaryFallback = output.indexOf("mal_vm_binary_op");
 		expect(eagerMask).toBeGreaterThan(0);

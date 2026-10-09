@@ -275,7 +275,7 @@ describe("SSA native lowering", () => {
 		const native = image.native.functions[1]!;
 		expect(native.storage?.rootRegisters.length).toBeGreaterThan(64);
 		const output = emitCompiledFunction(native, 1, "", false)?.source;
-		expect(output).toContain("MAL_ROOT_MASK_WIDE(");
+		expect(output).toContain("MAL_ROOT_MASK_ROW(");
 		expect(output).toContain("mal_vm_property_try_load_static_number_pair(");
 	});
 	it("preserves certified region exits through native edge copies", () => {

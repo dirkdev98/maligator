@@ -50,8 +50,8 @@ export interface EmittedCSummary {
 const EMITTED_C_PATTERNS = {
 	rootPublicationStores: /__gc_slots\[\d+\] = r\d+;/g,
 	rootClears: /__gc_slots\[\d+\] = MAL_VALUE_UNDEFINED;/g,
-	rootMasks: /\bMAL_ROOT_MASK(?:_WIDE)?\(/g,
-	wideRootMasks: /\bMAL_ROOT_MASK_WIDE\(/g,
+	rootMasks: /\bMAL_ROOT_MASK(?:_ROW)?\(/g,
+	wideRootMasks: /\bMAL_ROOT_MASK_ROW\(/g,
 	// Entry zeroing and CREATE_UNDEFINED share this spelling.
 	undefinedRegisterStores: /^ {4}r\d+ = MAL_VALUE_UNDEFINED;$/gm,
 	// Older emitters spell the completion test inline.

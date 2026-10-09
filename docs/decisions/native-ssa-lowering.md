@@ -18,10 +18,15 @@ sites, test batch relocation, and compiler artifacts preserve both bodies.
 Native storage planning precedes C rendering. It chooses root slot order, private
 boxed locals and their publication obligations, stable incoming roots, and bounded
 single-use scalar expressions separately for canonical and typed entries. Direct
-SSA bodies persist a logical-root-to-physical-slot map. Audited private locals
-share slots only when their complete incoming/outgoing safepoint unions do not
-overlap; parameters, argument snapshots, continuously rooted locals, and helper
-output addresses retain dedicated slots. Publication tracks each slot's current
+SSA bodies persist a logical-root-to-physical-slot map. Audited private locals,
+including helper outputs that are roots at their own safepoint, share slots only
+when their complete incoming/outgoing safepoint unions do not overlap. Continuously
+rooted locals share a separate pool when no instruction has one live or written
+while the other is live, written, or rooted there; liveness follows branches and
+exception-handler edges. Only locals whose emitted storage accesses are their own
+instruction's reads and writes qualify: region, fast-path, expression, and field
+materialization operands keep dedicated slots, as do parameters, argument
+snapshots, and continuously rooted helper outputs. Publication tracks each slot's current
 occupant and forgets potentially cleared values at GC and control-flow boundaries.
 Per-entry storage also certifies forward nonpolling continuations with one ordinary
 predecessor outside selected ownership spans. Rendering snapshots occupant and mask
@@ -43,7 +48,8 @@ recomputation never consumes a caller's previous storage plan.
 Shared slots initialize once before entry allocations; resumable invocation roots
 retain dedicated storage. Root slots differ from computational locals, and expression values have no local
 assignment. Safepoint masks cover the entire native root set using an inline word
-and immutable tail words; uncovered runtime-owned slots remain active. Small-mask
+and, beyond 64 slots, one immutable per-function row table whose index each wide
+publication names; uncovered runtime-owned slots remain active. Small-mask
 publication clears any previous tail. Entire inactive words are cleared together;
 mixed words retain selective tracing. Private publication stores undefined only into
 slots with an active occupant that is not live on that edge; every scan clears masked

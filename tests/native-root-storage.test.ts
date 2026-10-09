@@ -14,10 +14,14 @@ import {
 	lowerNativeFunctionStorage,
 	validateNativeStorage,
 } from "../src/compiler/target/lower-native-storage.ts";
+import { analyzeNativeBodyFacts } from "../src/compiler/target/native-body-facts.ts";
 import { createConservativeNativePlan } from "../src/compiler/target/program-image.ts";
 import type { NativeFunctionPlan } from "../src/compiler/target/program-image.ts";
 import { emitCompiledFunction } from "../src/compiler/target/render-native-c.ts";
-import type { BytecodeInstruction } from "../src/compiler/target/runtime-image.ts";
+import type {
+	BytecodeExceptionHandler,
+	BytecodeInstruction,
+} from "../src/compiler/target/runtime-image.ts";
 
 function compile() {
 	return compileSemanticProgramToProgramImage(
@@ -201,10 +205,13 @@ describe("native physical root storage", () => {
 			).toHaveLength(1);
 	});
 
-	it("keeps helper output addresses dedicated even when later roots are disjoint", () => {
+	it("shares a private helper output's slot only with roots disjoint from its own safepoint", () => {
 		const storage = contract(true).storage!;
-		const slot = storage.rootSlots[storage.rootRegisters.indexOf(2)]!;
-		expect(storage.rootSlots.filter((candidate) => candidate === slot)).toHaveLength(1);
+		const slotOf = (register: number) =>
+			storage.rootSlots[storage.rootRegisters.indexOf(register)];
+		expect(storage.privateRegisters).toContain(2);
+		expect(slotOf(2)).toBe(slotOf(4));
+		expect(slotOf(2)).not.toBe(slotOf(3));
 	});
 
 	it("renders a shared slot's live occupant without clearing it for its dead aliases", () => {
@@ -255,9 +262,6 @@ describe("native physical root storage", () => {
 		const slot =
 			rootedOutput.storage!.rootSlots[rootedOutput.storage!.rootRegisters.indexOf(2)]!;
 		expect(rootedOutput.storage!.definitionInitializedRegisters).toContain(2);
-		expect(
-			rootedOutput.storage!.rootSlots.filter((candidate) => candidate === slot),
-		).toHaveLength(1);
 		expect(emitCompiledFunction(rootedOutput, 0, "", false)!.source).toContain(
 			`    __gc_slots[${slot}] = MAL_VALUE_UNDEFINED;`,
 		);
@@ -338,5 +342,111 @@ describe("native physical root storage", () => {
 			expect(() => validateNativeStorage({ ...fn, storage })).toThrow(
 				/invalid or stale storage plan/,
 			);
+	});
+});
+
+function continuousRootSlots(
+	instructions: Array<BytecodeInstruction>,
+	registers: Array<number>,
+	liveRoots: ReadonlyArray<readonly [ip: number, roots: Array<number>]>,
+	handlers: Array<BytecodeExceptionHandler> = [],
+): ReadonlyMap<number, number> {
+	const template = compile().native.functions[1]!.body;
+	const body = {
+		...template,
+		parameterCount: 0,
+		argumentSnapshotCount: 0,
+		registerCount: 8,
+		instructions,
+		handlers,
+		positions: instructions.map(() => -1),
+	};
+	const native = {
+		...createConservativeNativePlan([body]).functions[0]!,
+		storageValues: Array.from({ length: 8 }, (_, index) => index),
+		gc: {
+			safepoints: liveRoots.map(([instructionIp, roots]) => ({
+				kind: "operation" as const,
+				instructionIp,
+				rootRegisters: roots,
+				incomingRootRegisters: roots,
+				outgoingRootRegisters: roots,
+			})),
+		},
+	};
+	const storage = selectNativeRootStorage(native, registers, new Set(), new Set(), {
+		registers: new Set(registers),
+		facts: analyzeNativeBodyFacts(body),
+	});
+	return new Map(
+		registers.map((register, index) => [register, storage.rootSlots[index]!]),
+	);
+}
+
+describe("continuously rooted storage sharing", () => {
+	it("reuses a slot after its occupant's last read but not across an overlap between safepoints", () => {
+		const slots = continuousRootSlots(
+			[
+				{ opcode: "CREATE_OBJECT", dst: 2 },
+				{ opcode: "MOVE", dst: 6, src: 2 },
+				{ opcode: "CREATE_OBJECT", dst: 3 },
+				{ opcode: "MOVE", dst: 4, src: 0 },
+				{ opcode: "MOVE", dst: 6, src: 3 },
+				{ opcode: "CREATE_OBJECT", dst: 5 },
+				{ opcode: "MOVE", dst: 6, src: 4 },
+				{ opcode: "RETURN", value: 5 },
+			],
+			[2, 3, 4],
+			[
+				[0, [2]],
+				[2, [3]],
+				[5, [4, 5]],
+			],
+		);
+		expect(slots.get(2)).toBe(slots.get(3));
+		expect(slots.get(4)).not.toBe(slots.get(3));
+	});
+
+	it("keeps a value read on the next loop iteration live past its last read in program order", () => {
+		const slots = continuousRootSlots(
+			[
+				{ opcode: "CREATE_OBJECT", dst: 2 },
+				{ opcode: "MOVE", dst: 6, src: 2 },
+				{ opcode: "MOVE", dst: 4, src: 6 },
+				{ opcode: "JUMP_IF", cond: 7, targetIp: 1 },
+				{ opcode: "CREATE_OBJECT", dst: 5 },
+				{ opcode: "MOVE", dst: 6, src: 4 },
+				{ opcode: "RETURN", value: 5 },
+			],
+			[2, 4],
+			[
+				[0, [2]],
+				[4, [4, 5]],
+			],
+		);
+		expect(slots.get(2)).not.toBe(slots.get(4));
+	});
+
+	it("keeps a value its exception handler reads live across the protected range", () => {
+		const slots = continuousRootSlots(
+			[
+				{ opcode: "CREATE_OBJECT", dst: 2 },
+				{ opcode: "MOVE", dst: 3, src: 0 },
+				{ opcode: "MOVE", dst: 6, src: 0 },
+				{ opcode: "CREATE_OBJECT", dst: 4 },
+				{ opcode: "MOVE", dst: 6, src: 3 },
+				{ opcode: "RETURN", value: 6 },
+				{ opcode: "CATCH", dst: 5 },
+				{ opcode: "MOVE", dst: 6, src: 2 },
+				{ opcode: "RETURN", value: 6 },
+			],
+			[2, 3],
+			[
+				[0, [2]],
+				[3, [3, 4]],
+			],
+			[{ startIp: 0, endIp: 3, handlerIp: 6 }],
+		);
+		expect(slots.get(2)).not.toBe(slots.get(3));
 	});
 });

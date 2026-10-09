@@ -7,6 +7,7 @@ import { createConservativeNativePlan } from "../src/compiler/target/program-ima
 import { emitCompiledFunction } from "../src/compiler/target/render-native-c.ts";
 import { vmInstructionWriteRegisters } from "../src/compiler/target/runtime-image.ts";
 import type { BytecodeFunction } from "../src/compiler/target/runtime-image.ts";
+import { privateRootRegisters } from "./helpers/native-c-source.ts";
 
 function argumentCacheReceiver(): BytecodeFunction {
 	return {
@@ -64,6 +65,6 @@ describe("native static-argument fallback storage", () => {
 		expect(source).toContain("r0 = mal_create_arguments_object(");
 		expect(source).toContain("mal_vm_op_load_property(vm, r0,");
 		expect(source).toMatch(/#define r0 \(__gc_slots\[\d+\]\)/);
-		expect(source).not.toContain("#define r0 (__private_r0)");
+		expect(privateRootRegisters(source)).not.toContain(0);
 	});
 });

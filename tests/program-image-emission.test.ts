@@ -34,6 +34,7 @@ import type {
 	BytecodeInstruction,
 } from "../src/compiler/target/runtime-image.ts";
 import { vmSafepointRootMapsAreTrusted } from "../src/compiler/target/runtime-image.ts";
+import { privateRootRegisters, rootMaskBits } from "./helpers/native-c-source.ts";
 import { testPropertyCacheCount } from "./helpers/program-image.ts";
 import { testProgramImage, withNativeFunctionPlan } from "./helpers/program-image.ts";
 import { inspectStaticValueFunction } from "./helpers/static-values.ts";
@@ -277,12 +278,6 @@ function withSpecializations(
 		...owner,
 		specializations: next,
 	}));
-}
-
-function tailWordValue(word: string): bigint {
-	if (word === "UINT64_MAX") return (1n << 64n) - 1n;
-	const literal = /^UINT64_C\((0x[\da-f]+)\)$/.exec(word)?.[1] ?? word;
-	return BigInt(literal);
 }
 
 describe("emit-program-image instruction packing", () => {
@@ -1626,32 +1621,16 @@ describe("emit-program-image instruction packing", () => {
 				]),
 			);
 			const masks: Array<bigint> = [];
-			const tails = new Map(
-				[...output!.matchAll(/static const u64 (\w+)\[\] = \{ ([^}]+) \};/g)].map(
-					(match) => [
-						match[1]!,
-						match[2]!
-							.split(", ")
-							.reduce(
-								(mask, word, index) =>
-									mask | (tailWordValue(word) << BigInt(64 * (index + 1))),
-								0n,
-							),
-					],
-				),
-			);
 			if (liveCounts.at(-1) === 130) {
-				expect(tails.size).toBe(2);
+				expect(output!.match(/^ {8}\{ .* \},$/gm)).toHaveLength(2);
 			}
 			let publishedMask = 0n;
 			for (const match of output!.matchAll(
-				/MAL_ROOT_MASK\((0x[\da-f]+)\);|MAL_ROOT_MASK_WIDE\((0x[\da-f]+), (\w+)\);|mal_vm_call_cached\(/g,
+				/MAL_ROOT_MASK(?:_ROW)?\((?:0x[\da-f]+|\d+)\);|mal_vm_call_cached\(/g,
 			)) {
-				if (match[1] !== undefined) publishedMask = BigInt(match[1]);
-				else if (match[2] !== undefined) {
-					expect(tails.has(match[3]!)).toBe(true);
-					publishedMask = BigInt(match[2]) | tails.get(match[3]!)!;
-				} else masks.push(publishedMask);
+				if (match[0].startsWith("MAL_ROOT_MASK"))
+					publishedMask = rootMaskBits(output!, match[0]);
+				else masks.push(publishedMask);
 			}
 			expect(new Set(slots.keys())).toEqual(new Set(safepoints[0]!.rootRegisters));
 			expect(new Set(slots.values())).toEqual(new Set(safepoints[0]!.rootRegisters));
@@ -1778,7 +1757,7 @@ describe("emit-program-image instruction packing", () => {
 			"#define MAL_ROOT_MASK(mask) mal_gc_root_frame_set_inactive(&__gc_frame, UINT64_C(mask), nullptr, 0)",
 		);
 		expect(output).toContain(
-			"#define MAL_ROOT_MASK_WIDE(mask, words) mal_gc_root_frame_set_inactive(&__gc_frame, UINT64_C(mask), words, countof(words))",
+			"#define MAL_ROOT_MASK_ROW(row) mal_gc_root_frame_set_inactive(&__gc_frame, __gc_inactive_rows[row][0], &__gc_inactive_rows[row][1], countof(__gc_inactive_rows[0]) - 1)",
 		);
 		expect(output.match(/MAL_ROOT_MASK\(0x4\);/g)).toHaveLength(2);
 		expect(output.match(/MAL_ROOT_MASK\(0x2\);/g)).toHaveLength(2);
@@ -2080,8 +2059,7 @@ describe("emit-program-image instruction packing", () => {
 		);
 		const output = emitCompiledFunction(image.native.functions[0]!, 0, "", false)!.source;
 		for (const register of [0, 1, 2]) {
-			expect(output).toContain(`MalValue __private_r${register};`);
-			expect(output).toContain(`#define r${register} (__private_r${register})`);
+			expect(privateRootRegisters(output)).toContain(register);
 		}
 		const hits = [
 			...output.matchAll(
@@ -2176,8 +2154,7 @@ describe("emit-program-image instruction packing", () => {
 		expect(output.match(/mal_vm_op_load_property_ic_static_miss\(/g)).toHaveLength(3);
 		expect(output).not.toContain("mal_vm_property_try_load_static_pair(");
 		for (const register of [0, 1, 2, 3]) {
-			expect(output).toContain(`MalValue __private_r${register};`);
-			expect(output).toContain(`#define r${register} (__private_r${register})`);
+			expect(privateRootRegisters(output)).toContain(register);
 		}
 		for (const helper of [
 			"mal_vm_property_read_region_try_load",
@@ -2264,9 +2241,9 @@ describe("emit-program-image instruction packing", () => {
 			false,
 		)!.source;
 		expect(output).toContain("mal_vm_property_try_load_static_number_pair(");
-		expect(output).not.toContain("__private_r2");
-		expect(output).not.toContain("__private_r3");
-		expect(output).toContain("#define r6 (__private_r6)");
+		expect([...privateRootRegisters(output)]).not.toContain(2);
+		expect([...privateRootRegisters(output)]).not.toContain(3);
+		expect(privateRootRegisters(output)).toContain(6);
 		const replacement = output.indexOf("r6 = r0;");
 		const call = output.indexOf("MalCompletion call_result_6 = mal_vm_call_cached");
 		expect(replacement).toBeGreaterThan(0);
@@ -2336,7 +2313,7 @@ describe("emit-program-image instruction packing", () => {
 		);
 		const output = emitCompiledFunction(image.native.functions[0]!, 0, "", false)!.source;
 		for (const register of [65, 66]) {
-			expect(output).toContain(`#define r${register} (__private_r${register})`);
+			expect(privateRootRegisters(output)).toContain(register);
 			expect(output).toContain(`__gc_slots[${register}] = r${register};`);
 		}
 		const property = output.match(
@@ -2356,14 +2333,11 @@ describe("emit-program-image instruction packing", () => {
 		expect(poll).not.toBeNull();
 		expect(poll![1]).toContain("__gc_slots[66] = r66;");
 		expect(poll![1]).not.toContain("__gc_slots[65]");
-		const tail = poll![1]!.match(/MAL_ROOT_MASK_WIDE\(0x[\da-f]+, (\w+)\);/)?.[1];
-		expect(tail).toBeDefined();
-		const highWord = output.match(
-			new RegExp(`static const u64 ${tail}\\[\\] = \\{ UINT64_C\\((0x[\\da-f]+)\\)`),
-		)?.[1];
-		expect(highWord).toBeDefined();
-		expect((BigInt(highWord!) >> 1n) & 1n).toBe(1n);
-		expect((BigInt(highWord!) >> 2n) & 1n).toBe(0n);
+		const row = poll![1]!.match(/MAL_ROOT_MASK_ROW\(\d+\);/)?.[0];
+		expect(row).toBeDefined();
+		const inactive = rootMaskBits(output, row!);
+		expect((inactive >> 65n) & 1n).toBe(1n);
+		expect((inactive >> 66n) & 1n).toBe(0n);
 	});
 
 	it.each(["single", "batch"])(
@@ -3086,7 +3060,7 @@ describe("native update-expression representation", () => {
 		const store = fn.instructions[storeIp]!;
 		if (store.opcode !== "STORE_PROPERTY_STATIC") throw new Error("missing static store");
 		const output = emitCompiledFunction(owner, ownerIndex, "", false)!.source;
-		expect(output).toContain(`#define r${store.object} (__private_r${store.object})`);
+		expect(privateRootRegisters(output)).toContain(store.object);
 		const probe = output.indexOf("mal_vm_object_try_store_static(");
 		expect(probe).toBeGreaterThan(0);
 		const previousLoadEnd = output.lastIndexOf("\n    }", probe);
@@ -3104,7 +3078,7 @@ describe("native update-expression representation", () => {
 		if (retained?.opcode !== "LOAD_PROPERTY_STATIC")
 			throw new Error("missing retained property value");
 		expect(retained.dst).not.toBe(store.object);
-		expect(output).toContain(`#define r${retained.dst} (__private_r${retained.dst})`);
+		expect(privateRootRegisters(output)).toContain(retained.dst);
 		const receiverPublication = new RegExp(
 			`__gc_slots\\[\\d+\\] = r${store.object};`,
 			"g",
@@ -3143,7 +3117,7 @@ describe("native update-expression representation", () => {
 		const step = fn.instructions[stepIp]!;
 		if (step.opcode !== "ITERATOR_STEP") throw new Error("missing iterator step");
 		const output = emitCompiledFunction(owner, ownerIndex, "", false)!.source;
-		expect(output).toContain(`#define r${step.valueDst} (__private_r${step.valueDst})`);
+		expect(privateRootRegisters(output)).toContain(step.valueDst);
 		const probe = output.indexOf("mal_vm_iterator_try_dense_array_cursor_step(");
 		expect(probe).toBeGreaterThan(0);
 		const blockStart = output.lastIndexOf("\nL", probe);

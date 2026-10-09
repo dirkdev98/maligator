@@ -713,17 +713,17 @@ function nativeRootMaskStatements(masks: Iterable<NativeInactiveRootMask>): {
 	readonly declarations: ReadonlyArray<string>;
 } {
 	const statements = new Map<NativeInactiveRootMask, string>();
-	const declarations: Array<string> = [];
-	for (const mask of masks) {
-		if (statements.has(mask)) continue;
-		const head = nativeRootMaskWordHex(mask, 0);
+	const distinct = new Set(masks);
+	let width = 0;
+	for (const mask of distinct) width = Math.max(width, Math.ceil(mask.length / 2));
+	const rows: Array<string> = [];
+	for (const mask of distinct) {
 		if (mask.length <= 2) {
-			statements.set(mask, `MAL_ROOT_MASK(0x${head})`);
+			statements.set(mask, `MAL_ROOT_MASK(0x${nativeRootMaskWordHex(mask, 0)})`);
 			continue;
 		}
-		const symbol = `__gc_inactive_tail_${declarations.length}`;
 		const words: Array<string> = [];
-		for (let word = 2; word < mask.length; word += 2) {
+		for (let word = 0; word < width * 2; word += 2) {
 			const hex = nativeRootMaskWordHex(mask, word);
 			// Huge frames repeat all-inactive words in thousands of masks; spell them compactly.
 			words.push(
@@ -734,10 +734,17 @@ function nativeRootMaskStatements(masks: Iterable<NativeInactiveRootMask>): {
 						: `UINT64_C(0x${hex})`,
 			);
 		}
-		statements.set(mask, `MAL_ROOT_MASK_WIDE(0x${head}, ${symbol})`);
-		declarations.push(`    static const u64 ${symbol}[] = { ${words.join(", ")} };`);
+		// One indexed table keeps each wide publication site independent of the frame width.
+		statements.set(mask, `MAL_ROOT_MASK_ROW(${rows.length})`);
+		rows.push(`        { ${words.join(", ")} },`);
 	}
-	return { statements, declarations };
+	return {
+		statements,
+		declarations:
+			rows.length === 0
+				? []
+				: [`    static const u64 __gc_inactive_rows[][${width}] = {`, ...rows, "    };"],
+	};
 }
 
 function cInactiveRootMaskPublication(
@@ -746,7 +753,7 @@ function cInactiveRootMaskPublication(
 ): string {
 	const statement = statements?.get(mask);
 	if (statement !== undefined) return statement;
-	if (mask.length > 2) throw new Error("Native wide root mask lacks static tail words");
+	if (mask.length > 2) throw new Error("Native wide root mask lacks a static row");
 	return `MAL_ROOT_MASK(0x${nativeRootMaskWordHex(mask, 0)})`;
 }
 
@@ -1324,20 +1331,40 @@ function emitCompiledVariant(
 			lines.push(`    MalValue ${site.inheritedValueName} = MAL_VALUE_UNDEFINED;`);
 		}
 	}
+	// Helper outputs temporarily rename their private register to its shadow slot.
+	const aliasedPrivateRegisters = new Set<number>();
+	for (const [ip, instruction] of fn.instructions.entries())
+		for (const register of nativeRootedOutputRegisters(
+			instruction,
+			ip,
+			rootPublication.privateCallResultIps,
+		))
+			if (privateRegisters.has(register)) aliasedPrivateRegisters.add(register);
+	const definedRegisters: Array<number> = [];
+	const privateLocals: Array<string> = [];
 	for (let i = 0; i < fn.registerCount; i++) {
 		const slot = slotOf.get(i);
 		const expression = expressionRegisters.get(i);
 		if (expression !== undefined) {
 			lines.push(`#define r${i} (${expression})`);
-		} else if (privateRegisters.has(i)) {
-			lines.push(`    MalValue __private_r${i};`);
+			definedRegisters.push(i);
+		} else if (aliasedPrivateRegisters.has(i)) {
+			lines.push(`    MalPrivateRoot __private_r${i};`);
 			lines.push(`#define r${i} (__private_r${i})`);
+			definedRegisters.push(i);
+		} else if (privateRegisters.has(i)) {
+			privateLocals.push(`r${i}`);
 		} else if (slot !== undefined) {
+			definedRegisters.push(i);
 			lines.push(`#define r${i} (__gc_slots[${slot}])`);
 		} else {
 			lines.push(`    ${cTypeOf(reps[i]!)} r${i};`);
 		}
 	}
+	for (let start = 0; start < privateLocals.length; start += 32)
+		lines.push(
+			`    MalPrivateRoot ${privateLocals.slice(start, start + 32).join(", ")};`,
+		);
 
 	for (let i = 0; i < fn.parameterCount; i++) {
 		lines.push(
@@ -1349,11 +1376,17 @@ function emitCompiledVariant(
 					: `    r${i} = p${i};`,
 		);
 	}
+	const zeroedSlots = new Set<number>();
 	for (let i = fn.parameterCount; i < fn.registerCount; i++) {
 		if (expressionRegisters.has(i)) continue;
 		// A fresh frame scans every root slot until its first mask, so slot-backed roots start zeroed.
 		if (definitionInitialized.has(i) && (privateRegisters.has(i) || !slotOf.has(i)))
 			continue;
+		const slot = privateRegisters.has(i) ? undefined : slotOf.get(i);
+		if (slot !== undefined) {
+			if (zeroedSlots.has(slot)) continue;
+			zeroedSlots.add(slot);
+		}
 		lines.push(`    r${i} = ${zeroOf(reps[i]!)};`);
 	}
 	for (const slot of rootPublication.slotRegisters.keys()) {
@@ -1449,9 +1482,7 @@ function emitCompiledVariant(
 		);
 	}
 	lines.push("}");
-	for (const i of [...valueRegs, ...expressionRegisters.keys()]) {
-		lines.push(`#undef r${i}`);
-	}
+	for (const i of definedRegisters) lines.push(`#undef r${i}`);
 	return {
 		symbol,
 		source: lines.join("\n"),

@@ -6,6 +6,7 @@ import {
 	runToStdout,
 	STRESS_ENV,
 } from "../../src/test-harness.ts";
+import { privateRootRegisters } from "../helpers/native-c-source.ts";
 
 const kernels = [
 	{ name: "readThree", loads: 3 },
@@ -96,7 +97,7 @@ describe("native property read region continuations", () => {
 				.filter(
 					([, slot, register]) =>
 						Number(slot) >= 64 &&
-						wideRegionSource.includes(`#define r${register} (__private_r${register})`),
+						privateRootRegisters(wideRegionSource).has(Number(register)),
 				)
 				.map(([, slot]) => Number(slot)),
 		);
