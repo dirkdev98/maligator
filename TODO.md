@@ -146,7 +146,10 @@ The independent target boundary and current storage contract are recorded in
       transfer struct, so they need external part symbols and a shared struct header.
 - [ ] Reduce the native splitter's emission cost. It adds about 1.1 s (13%) to Node
       emission of the self-compile program, mostly block parsing and bitset liveness
-      over every value local that a part names.
+      over every value local that a part names. In the native self-compiler its
+      tokenizer, liveness, and interface planning take about 9% of the emission
+      phase; flattening rope lines before tokenizing only moved that time into the
+      tokenizer itself.
 - [ ] Use dominance for definition-initialized locals in functions with exception
       handlers. Handler entries currently disable it, so
       `lowerExecutionFunctionToNativePlan` still zeroes 4,351 registers on every call.
