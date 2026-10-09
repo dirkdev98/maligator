@@ -1820,6 +1820,9 @@ typedef struct MalVm {
     MalNativeFrame *native_frames;
     i32 native_frame_count;
     i32 native_frame_capacity;
+    /** Innermost compiled-function root frame; a field, not a thread-local, so
+     * generated prologues and epilogues need no thread-local lookup. */
+    struct MalRootFrame *root_frame_head;
 #if MAL_PROFILE
     /** Last source site published by either backend; profile attribution is O(1). */
     i32 profile_current_site_id;

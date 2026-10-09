@@ -244,7 +244,7 @@ describe("native physical root storage", () => {
 			const source = emitCompiledFunction(fn, fn.functionIndex, "", false)!.source;
 			const prologue = source.slice(
 				0,
-				source.indexOf("mal_root_frame_head = &__gc_frame;"),
+				source.indexOf("vm->root_frame_head = &__gc_frame;"),
 			);
 			const defined = new Set(storage.definitionInitializedRegisters);
 			const privateRegisters = new Set(storage.privateRegisters);

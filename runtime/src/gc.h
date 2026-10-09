@@ -280,7 +280,6 @@ static inline bool mal_gc_root_frame_slot_is_inactive(const MalRootFrame *frame,
 /* Suspended native frames trace retained slots, so clear dead roots before transferring ownership. */
 void mal_gc_clear_inactive_root_frame_slots(MalRootFrame *frame);
 
-extern MAL_ISOLATE_LOCAL MalRootFrame *mal_root_frame_head;
 
 /*
  * Root span: makes a transient C buffer of live MalValues

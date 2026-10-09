@@ -1173,7 +1173,7 @@ function emitCompiledVariant(
 	);
 	const gcUnlink =
 		(retainsForwardedArguments ? "mal_gc_unroot(&__argument_roots); " : "") +
-		(needsRootFrame ? "mal_root_frame_head = __gc_frame.prev; " : "");
+		(needsRootFrame ? "vm->root_frame_head = __gc_frame.prev; " : "");
 
 	const profileDecisions: Array<BackendProfileDecision> = [];
 	const expressionIps = new Set([
@@ -1436,8 +1436,8 @@ function emitCompiledVariant(
 	if (needsRootFrame) {
 		lines.push(
 			`    ${relocatable ? "" : "static "}const MalFrameDescriptor __gc_desc = { .function_index = ${relocation.functionIndex(index)}, .slot_count = ${totalSlots} };`,
-			`    MalRootFrame __gc_frame = { .prev = mal_root_frame_head, .desc = &__gc_desc, .slots = ${totalSlots > 0 ? "__gc_slots" : "nullptr"}, .inactive_slots = 0, .env = ${fn.closureCaptureOwners?.length === 0 ? "nullptr" : "env"} };`,
-			`    mal_root_frame_head = &__gc_frame;`,
+			`    MalRootFrame __gc_frame = { .prev = vm->root_frame_head, .desc = &__gc_desc, .slots = ${totalSlots > 0 ? "__gc_slots" : "nullptr"}, .inactive_slots = 0, .env = ${fn.closureCaptureOwners?.length === 0 ? "nullptr" : "env"} };`,
+			`    vm->root_frame_head = &__gc_frame;`,
 		);
 	}
 
@@ -2061,7 +2061,7 @@ function emitResumableFunction(
 
 	const capturesEnv = fn.capturedCount > 0;
 	// Every exit after publishing the invocation's root frame must unlink it.
-	const gcUnlink = "mal_root_frame_head = __gc_frame.prev; ";
+	const gcUnlink = "vm->root_frame_head = __gc_frame.prev; ";
 	const argumentRetentionLimit = computeArgumentRetentionLimit(fn);
 	const retainArguments =
 		argumentRetentionLimit === 0x7fffffff
@@ -2248,9 +2248,9 @@ function emitResumableFunction(
 		`        __gc_slots[${selfSlot}] = mal_value_from_object((MalObject *) __coro);`,
 	);
 	lines.push(
-		`        __gc_frame = (MalRootFrame){ .prev = mal_root_frame_head, .desc = &__gc_desc, .slots = __gc_slots, .inactive_slots = 0, .env = env };`,
+		`        __gc_frame = (MalRootFrame){ .prev = vm->root_frame_head, .desc = &__gc_desc, .slots = __gc_slots, .inactive_slots = 0, .env = env };`,
 	);
-	lines.push(`        mal_root_frame_head = &__gc_frame;`);
+	lines.push(`        vm->root_frame_head = &__gc_frame;`);
 	for (const line of initializeFixedCaptureOwners(
 		fn,
 		analysis.captures,
@@ -2286,9 +2286,9 @@ function emitResumableFunction(
 
 	lines.push(`        __gc_slots[${selfSlot}] = MAL_VALUE_UNDEFINED;`);
 	lines.push(
-		`        __gc_frame = (MalRootFrame){ .prev = mal_root_frame_head, .desc = &__gc_desc, .slots = __gc_slots, .inactive_slots = 0, .env = ${fn.closureCaptureOwners?.length === 0 ? "nullptr" : "env"} };`,
+		`        __gc_frame = (MalRootFrame){ .prev = vm->root_frame_head, .desc = &__gc_desc, .slots = __gc_slots, .inactive_slots = 0, .env = ${fn.closureCaptureOwners?.length === 0 ? "nullptr" : "env"} };`,
 	);
-	lines.push(`        mal_root_frame_head = &__gc_frame;`);
+	lines.push(`        vm->root_frame_head = &__gc_frame;`);
 	if (capturesEnv) {
 		lines.push(
 			`        env = ${fn.closureCaptureOwners === undefined ? "mal_env_new" : "mal_env_new_compact"}(vm, env, ${index}, ${fn.capturedCount});`,

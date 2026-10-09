@@ -124,7 +124,6 @@ void mal_gc_request_safepoint(MalGcPollTarget *target) {
 #endif
 }
 
-MAL_ISOLATE_LOCAL MalRootFrame *mal_root_frame_head = nullptr;
 MAL_ISOLATE_LOCAL MalRootSpan *mal_root_span_head = nullptr;
 
 /* Preemption hook (docs/decisions/03-wave-0-host-architecture.md). Null in a plain
@@ -1841,7 +1840,7 @@ static void mal_gc_scan_roots(MalVm *vm) {
         vm->frames,
         vm->frame_count,
         vm->completion.value,
-        mal_root_frame_head,
+        vm->root_frame_head,
         mal_root_span_head);
 
     // Every *suspended* fiber's slice lives in its saved state. Skip the running

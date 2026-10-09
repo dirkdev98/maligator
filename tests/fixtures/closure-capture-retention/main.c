@@ -42,8 +42,8 @@ static int check_wide_root_masks(const MalRuntimeImage *image) {
     MalValue slots[130];
     for (usize i = 0; i < countof(slots); i++) slots[i] = MAL_VALUE_UNDEFINED;
     const MalFrameDescriptor descriptor = { .function_index = 0, .slot_count = countof(slots) };
-    MalRootFrame frame = { .prev = mal_root_frame_head, .desc = &descriptor, .slots = slots };
-    mal_root_frame_head = &frame;
+    MalRootFrame frame = { .prev = vm.root_frame_head, .desc = &descriptor, .slots = slots };
+    vm.root_frame_head = &frame;
     slots[64] = tracked_object(&vm, 0);
     slots[127] = tracked_object(&vm, 1);
     slots[129] = tracked_object(&vm, 2);
@@ -79,7 +79,7 @@ static int check_wide_root_masks(const MalRuntimeImage *image) {
     mal_gc_root_frame_set_inactive(&frame, UINT64_C(1), nullptr, 0);
     mal_gc_clear_inactive_root_frame_slots(&frame);
     if (slots[0] != MAL_VALUE_UNDEFINED || mal_value_to_i32(slots[64]) != 13) return 93;
-    mal_root_frame_head = frame.prev;
+    vm.root_frame_head = frame.prev;
     mal_gc_collect(&vm);
     if (finalized[3] != 1) return 83;
     mal_vm_free(&vm);
@@ -188,13 +188,13 @@ static int check_retention(const MalRuntimeImage *image) {
     MalEnv *active_child = mal_env_new(&vm, active_parent, 1, 0);
     const MalFrameDescriptor descriptor = { .function_index = 1, .slot_count = 0 };
     MalRootFrame frame = {
-        .prev = mal_root_frame_head, .desc = &descriptor, .slots = nullptr,
+        .prev = vm.root_frame_head, .desc = &descriptor, .slots = nullptr,
         .inactive_slots = 0, .env = active_child
     };
-    mal_root_frame_head = &frame;
+    vm.root_frame_head = &frame;
     mal_gc_collect(&vm);
     if (finalized[0] != 0) return 8;
-    mal_root_frame_head = frame.prev;
+    vm.root_frame_head = frame.prev;
     mal_gc_collect(&vm);
     if (finalized[0] != 1) return 9;
     mal_gc_unroot(&span);
@@ -227,14 +227,14 @@ static int check_single_owner_frame(const MalRuntimeImage *image) {
     MalEnv *loop = scope_frame.env;
     const MalFrameDescriptor descriptor = { .function_index = 4, .slot_count = 0 };
     MalRootFrame frame = {
-        .prev = mal_root_frame_head, .desc = &descriptor, .slots = nullptr,
+        .prev = vm.root_frame_head, .desc = &descriptor, .slots = nullptr,
         .inactive_slots = 0, .env = loop
     };
-    mal_root_frame_head = &frame;
+    vm.root_frame_head = &frame;
     mal_gc_collect(&vm);
     if (finalized[0] != 1 || finalized[1] != 0) return 17;
     if (mal_value_to_heap(mal_vm_load_captured(loop, 1, 0)) != tracked[1]) return 18;
-    mal_root_frame_head = frame.prev;
+    vm.root_frame_head = frame.prev;
     mal_gc_collect(&vm);
     if (finalized[1] != 1) return 19;
     mal_vm_free(&vm);
@@ -507,12 +507,12 @@ static int check_value_captures(const MalRuntimeImage *image) {
     if (borrowed_vector_finalizations != 1 || finalized[0] != 0 || finalized[2] != 0) return 67;
     MalEnv *copy = mal_value_to_function_object(roots[3])->creation_env;
     const MalFrameDescriptor descriptor = { .function_index = 9, .slot_count = 0 };
-    MalRootFrame frame = { .prev = mal_root_frame_head, .desc = &descriptor, .env = copy };
-    mal_root_frame_head = &frame;
+    MalRootFrame frame = { .prev = vm.root_frame_head, .desc = &descriptor, .env = copy };
+    vm.root_frame_head = &frame;
     roots[3] = MAL_VALUE_UNDEFINED;
     mal_gc_collect(&vm);
     if (finalized[0] != 0 || finalized[2] != 0) return 68;
-    mal_root_frame_head = frame.prev;
+    vm.root_frame_head = frame.prev;
     mal_gc_collect(&vm);
     if (finalized[0] != 1 || finalized[2] != 1) return 69;
     borrowed_vector_owner = nullptr;
@@ -590,9 +590,9 @@ static int check_value_construction_during_marking(const MalRuntimeImage *image)
     source->slots[1] = tracked_object(&vm, 0);
     const MalFrameDescriptor descriptor = { .function_index = 1, .slot_count = 0 };
     MalRootFrame source_frame = {
-        .prev = mal_root_frame_head, .desc = &descriptor, .env = source
+        .prev = vm.root_frame_head, .desc = &descriptor, .env = source
     };
-    mal_root_frame_head = &source_frame;
+    vm.root_frame_head = &source_frame;
     vm.heap.next_gc_at = 1;
     mal_gc_poll = true;
     mal_gc_safepoint(&vm);
@@ -608,7 +608,7 @@ static int check_value_construction_during_marking(const MalRuntimeImage *image)
             !mal_heap_mark_is_old(function->object.header.mark)) return 80;
     mal_gc_write_barrier_env(source_frame.env);
     source_frame.env = nullptr;
-    mal_root_frame_head = source_frame.prev;
+    vm.root_frame_head = source_frame.prev;
     if (!mal_gc_finish_pending_cycle(&vm) || mal_gc_black_alloc ||
             finalized[0] != 0 || finalized[1] != 0 ||
             !mal_heap_mark_is_old(tracked[0]->mark)) return 81;

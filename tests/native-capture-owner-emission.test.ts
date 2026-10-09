@@ -94,7 +94,7 @@ describe("native lexical owner lookup contract", () => {
 			expect(source).not.toContain("mal_vm_capture_owner");
 			expect(source).not.toContain("mal_vm_load_captured(");
 			expect(source).toContain(".inactive_slots = 0, .env = env");
-			expect(source.indexOf("mal_root_frame_head = &__gc_frame;")).toBeLessThan(
+			expect(source.indexOf("vm->root_frame_head = &__gc_frame;")).toBeLessThan(
 				source.indexOf("mal_vm_load_captured_value_at("),
 			);
 		}

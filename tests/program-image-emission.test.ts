@@ -3121,7 +3121,7 @@ describe("native update-expression representation", () => {
 			"g",
 		);
 		expect(output.match(receiverPublication)).toHaveLength(1);
-		expect(output.slice(0, output.indexOf("mal_root_frame_head = &__gc_frame"))).toMatch(
+		expect(output.slice(0, output.indexOf("vm->root_frame_head = &__gc_frame"))).toMatch(
 			receiverPublication,
 		);
 		expect(fallback).not.toMatch(receiverPublication);

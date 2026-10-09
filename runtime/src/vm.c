@@ -738,6 +738,7 @@ static void mal_vm_init_execution_state(MalVm *vm, const MalRuntimeImage *progra
     vm->native_frames = nullptr;
     vm->native_frame_count = 0;
     vm->native_frame_capacity = 0;
+    vm->root_frame_head = nullptr;
 #if MAL_PROFILE
     vm->profile_current_site_id = -1;
 #endif

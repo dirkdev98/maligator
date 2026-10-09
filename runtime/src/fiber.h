@@ -72,7 +72,7 @@ typedef struct MalFiberExec {
 #endif
 
     /* The compiled-frame shadow stack + transient root spans for this fiber —
-     * the globals mal_root_frame_head / mal_root_span_head while it runs. */
+     * vm->root_frame_head and the global mal_root_span_head while it runs. */
     MalRootFrame *root_frame_head;
     MalRootSpan *root_span_head;
 

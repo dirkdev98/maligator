@@ -260,7 +260,7 @@ void mal_fiber_save_exec(MalFiber *f, MalVm *vm) {
 #if MAL_NODE
     f->exec.async_context = vm->async_context;
 #endif
-    f->exec.root_frame_head = mal_root_frame_head;
+    f->exec.root_frame_head = vm->root_frame_head;
     f->exec.root_span_head = mal_root_span_head;
 #if MAL_REALMS
     f->exec.current_realm = vm->current_realm;
@@ -286,7 +286,7 @@ void mal_fiber_load_exec(MalFiber *f, MalVm *vm) {
 #if MAL_NODE
     vm->async_context = f->exec.async_context;
 #endif
-    mal_root_frame_head = f->exec.root_frame_head;
+    vm->root_frame_head = f->exec.root_frame_head;
     mal_root_span_head = f->exec.root_span_head;
 #if MAL_REALMS
     /* Re-enter the fiber's realm through the one choke point so vm->current_realm,
