@@ -139,24 +139,21 @@ The independent target boundary and current storage contract are recorded in
       native, and image forms coexist; Node 24's default 2 GB heap leaves little
       margin for in-process native builds of the compiler.
 
-- [ ] Bound C size and C compile time for frames with many roots. Each deferred
-      probe miss republishes every live private root, because conditional
-      publication does not update the known-published state, so that C grows
-      quadratically with the live set; clang needs about 51 s at `-O2` for two
-      72-root frames and about 400 s near 140 roots. Inactive-mask tail tables grow
-      with safepoints times slots/64: `emitInstruction` (1,897 slots) emitted 8,170
-      of them, 44% of its C before all-inactive words were spelled compactly. Let a
-      miss path record what it published, and encode huge-frame masks sparsely.
-      `emitInstruction` still exceeds the 8 Mi per-function cap (13.06 Mi: mask
-      tables 27.6%, storage-switch `#define`s 10.9%, wide mask calls 6.4%), so the
-      native self-compiler interprets it, about 3% of the compiler's own run.
-      Sparse tail masks alone would leave it near 10 Mi.
-
-- [ ] Keep each compiled function's C below the 16 Mi code-unit string limit.
-      Native-hosted emission joins a function's lines into one string and renders
-      over-budget functions completely before discarding them; `emitInstruction`
-      reached 16.85 Mi and stopped native self-compilation until compact mask words
-      brought it to about 13 Mi. Reject or split oversized functions while rendering.
+- [ ] Bound C compile time for the largest generated functions. `emitInstruction`
+      now compiles natively at 7.24 Mi with 72 shared root slots, but its unit takes
+      about 61 s alone and 104 s in a parallel self-compile build, the build's critical
+      path; the time is spread over backend passes (AArch64 MI peephole 23%, jump
+      threading 14%, greedy allocation 11%), so only smaller C or splitting helps.
+      `lowerExecutionFunctionToNativePlan` (2.29 Mi) takes 116 s in the build because
+      early machine LICM hoists tagged-constant materializations out of a loop of about
+      30,000 blocks and the coalescer then shrinks those live ranges at every copy.
+      `-mllvm -disable-machine-licm` cuts that unit to 57 s and total unit time by 17%
+      with neutral quick-cone runtime, but it is an internal LLVM option and ThinLTO
+      production builds generate code at link time.
+- [ ] Use dominance for definition-initialized locals in functions with exception
+      handlers. Handler entries currently disable it, so
+      `lowerExecutionFunctionToNativePlan` still zeroes 4,351 registers on every call.
+      Handler edges must leave from before each protected instruction's writes.
 
 - [ ] Share one invocation-local native analysis context across storage, expression,
       root, and fast-path planning. Native read/write, branch, handler, and lazy
