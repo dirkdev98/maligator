@@ -67,6 +67,7 @@ import {
 	MATH_UNARY_NATIVE_CALL,
 	MATH_BINARY_OPERATIONS,
 	NUMBER_PREDICATES,
+	boxedNumberPredicateExpression,
 	nativeNumberPredicateExpression,
 } from "./native-scalar-operators.ts";
 import { nativeValueConversion } from "./native-value-transport.ts";
@@ -7966,14 +7967,16 @@ function emitInstruction(
 					);
 					return [storeBoolean(instruction.dst, predicate), poll()];
 				}
-				const predicate = NUMBER_PREDICATES.get(instruction.operation);
-				if (predicate === undefined) throw new Error("Invalid planned Number predicate");
-				const helper = `mal_builtin_number_${predicate.slice("MAL_NUMBER_PREDICATE_".length).toLowerCase()}_known`;
-				const argsExpr = instruction.arguments.length
-					? `((MalValue[]){ ${instruction.arguments.map(boxedOperand).join(", ")} })`
-					: "nullptr";
 				return [
-					`r${instruction.dst} = ${callValue(instruction.dst, `${helper}(${argsExpr}, ${instruction.arguments.length})`)};`,
+					storeBoolean(
+						instruction.dst,
+						input === undefined
+							? "false"
+							: boxedNumberPredicateExpression(
+									instruction.operation,
+									boxedOperand(input),
+								),
+					),
 				];
 			}
 			if (!instruction.construct && instruction.argumentMode === undefined) {
@@ -8717,24 +8720,18 @@ function emitInstruction(
 				instruction.arguments,
 			);
 			if (collectionCall !== null) return [collectionCall, throwCheck(), poll()];
-			if (instruction.operation === "Number.isNaN") {
+			if (NUMBER_PREDICATES.has(instruction.operation)) {
+				const input = instruction.arguments[0];
 				return [
-					`r${instruction.dst} = ${callValue(instruction.dst, `mal_builtin_number_is_nan_known(${argsExpr}, ${instruction.arguments.length})`)};`,
-				];
-			}
-			if (instruction.operation === "Number.isFinite") {
-				return [
-					`r${instruction.dst} = ${callValue(instruction.dst, `mal_builtin_number_is_finite_known(${argsExpr}, ${instruction.arguments.length})`)};`,
-				];
-			}
-			if (instruction.operation === "Number.isInteger") {
-				return [
-					`r${instruction.dst} = ${callValue(instruction.dst, `mal_builtin_number_is_integer_known(${argsExpr}, ${instruction.arguments.length})`)};`,
-				];
-			}
-			if (instruction.operation === "Number.isSafeInteger") {
-				return [
-					`r${instruction.dst} = ${callValue(instruction.dst, `mal_builtin_number_is_safe_integer_known(${argsExpr}, ${instruction.arguments.length})`)};`,
+					storeBoolean(
+						instruction.dst,
+						input === undefined
+							? "false"
+							: boxedNumberPredicateExpression(
+									instruction.operation,
+									boxedOperand(input),
+								),
+					),
 				];
 			}
 			if (instruction.operation === "Number.prototype.valueOf") {
@@ -9238,7 +9235,10 @@ function emitInstruction(
 					argument === undefined
 						? "false"
 						: number === null
-							? `mal_builtin_number_value_${numberPredicate.slice("MAL_NUMBER_PREDICATE_".length).toLowerCase()}(${boxedOperand(argument)})`
+							? boxedNumberPredicateExpression(
+									guardedBuiltinOperation!,
+									boxedOperand(argument),
+								)
 							: nativeNumberPredicateExpression(guardedBuiltinOperation!, number);
 				return [
 					`if (mal_builtin_number_predicate_callee_matches(${numberPredicate}, ${boxedOperand(instruction.callee)})) {`,

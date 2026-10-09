@@ -80,3 +80,11 @@ export function nativeNumberPredicateExpression(
 			throw new Error(`Invalid native Number predicate ${operation}`);
 	}
 }
+
+/** The predicate over any boxed value; none of these builtins coerces its argument. */
+export function boxedNumberPredicateExpression(operation: string, value: string): string {
+	const predicate = NUMBER_PREDICATES.get(operation);
+	if (predicate === undefined)
+		throw new Error(`Invalid native Number predicate ${operation}`);
+	return `mal_builtin_number_value_${predicate.slice("MAL_NUMBER_PREDICATE_".length).toLowerCase()}(${value})`;
+}
