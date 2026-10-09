@@ -66,6 +66,12 @@ export function coreOpcodeId(value: number): CoreOpcodeId {
  */
 export const CORE_EFFECT_DOMAINS = EFFECT_DOMAINS;
 
+/**
+ * A derived constructor shares its `this` with nested arrows through this key on
+ * an internal state object; no other property ever holds the TDZ sentinel.
+ */
+export const CORE_SUPER_THIS_STATE_KEY = "\0maligator.super.this";
+
 export type CoreEffectDomain = EffectDomain;
 
 export type CoreInstructionEffects = EffectSummary;

@@ -6,7 +6,10 @@ import { CoreEditor } from "../src/compiler/core/core-editor.ts";
 import { coreTerminatorEdges } from "../src/compiler/core/core-ir-control-flow.ts";
 import { coreOpcodeRegistry } from "../src/compiler/core/core-ir-opcodes.ts";
 import { verifyCoreProgram } from "../src/compiler/core/core-ir-verifier.ts";
-import { CORE_NO_EFFECTS } from "../src/compiler/core/core-ir.ts";
+import {
+	CORE_NO_EFFECTS,
+	CORE_SUPER_THIS_STATE_KEY,
+} from "../src/compiler/core/core-ir.ts";
 import type { CoreValueId } from "../src/compiler/core/core-ir.ts";
 import type { CoreFunctionStore } from "../src/compiler/core/core-store.ts";
 import { CoreProgram } from "../src/compiler/core/core-store.ts";
@@ -717,6 +720,49 @@ describe("Core local canonicalization", () => {
 				.map((instruction) => fn.instructionOpcodeName(instruction));
 		expect(opcodes(optimized.function(safeFunction))).not.toContain("throwIfTdz");
 		expect(opcodes(optimized.function(unsafeFunction))).toContain("throwIfTdz");
+	});
+
+	it("keeps TDZ checks on property loads only where they can read the super-this state", () => {
+		const units = (text: string) => Array.from(text, (unit) => unit.charCodeAt(0));
+		const program = new CoreProgram(coreOpcodeRegistry, {
+			stringConstants: [units("label"), units(CORE_SUPER_THIS_STATE_KEY)],
+		});
+		const build = (load: "named" | "indexed" | "state") => {
+			const builder = new CoreFunctionBuilder(program, { parameterCount: 1 });
+			const entry = builder.createBlock([{ representation: "boxed" }]);
+			const receiver = inspectCoreBlockParameters(builder, entry)[0]!.value;
+			let loaded: CoreValueId;
+			if (load === "indexed") {
+				const [index] = builder.appendInstruction(entry, "createNumber", [], {
+					attributes: { value: 3 },
+				});
+				[loaded] = builder.appendInstruction(entry, "loadProperty", [
+					receiver,
+					index!,
+				]) as [CoreValueId];
+			} else {
+				[loaded] = builder.appendInstruction(entry, "loadPropertyStatic", [receiver], {
+					attributes: { stringIndex: load === "named" ? 0 : 1 },
+				}) as [CoreValueId];
+			}
+			builder.appendInstruction(entry, "throwIfTdz", [loaded], {
+				attributes: { nameStringIndex: 0 },
+			});
+			builder.setTerminator(entry, { kind: "return", value: loaded });
+			return builder.finish(entry).function;
+		};
+		const named = build("named");
+		const indexed = build("indexed");
+		const state = build("state");
+		const optimized = optimizeCore({ program, context }, { verification: "per-pass" })
+			.compilation.program;
+		const opcodes = (fn: CoreFunctionStore) =>
+			[...fn.instructionIds()]
+				.filter((instruction) => fn.instructionKind(instruction) === "operation")
+				.map((instruction) => fn.instructionOpcodeName(instruction));
+		expect(opcodes(optimized.function(named))).not.toContain("throwIfTdz");
+		expect(opcodes(optimized.function(indexed))).not.toContain("throwIfTdz");
+		expect(opcodes(optimized.function(state))).toContain("throwIfTdz");
 	});
 
 	it("revisits TDZ checks after memory forwarding", () => {

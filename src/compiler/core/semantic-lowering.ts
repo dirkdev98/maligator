@@ -81,6 +81,7 @@ import type {
 } from "./core-frontend-construction.ts";
 import { coreOpcodeRegistry } from "./core-ir-opcodes.ts";
 import { verifyCoreProgram } from "./core-ir-verifier.ts";
+import { CORE_SUPER_THIS_STATE_KEY } from "./core-ir.ts";
 import { CoreProgram } from "./core-store.ts";
 import type { CoreSourcePosition } from "./core-store.ts";
 
@@ -4231,10 +4232,6 @@ function endFunction(program: CoreFrontendContext, fn: CoreFrontendFunction) {
 	}
 }
 
-function superThisStateKey(): string {
-	return "\0maligator.super.this";
-}
-
 function loadSharedSuperThis(
 	program: CoreFrontendContext,
 	fn: CoreFrontendFunction,
@@ -4250,7 +4247,7 @@ function loadSharedSuperThis(
 		cursor.block,
 		getOrCreateBindingLocation(program, fn, binding),
 	);
-	const key = compileStaticString(program, fn, cursor, superThisStateKey());
+	const key = compileStaticString(program, fn, cursor, CORE_SUPER_THIS_STATE_KEY);
 	const value = nextCoreVariable(fn);
 	cursor.block.emitter.emit({
 		type: "loadProperty",
@@ -4281,7 +4278,7 @@ function storeSharedSuperThis(
 		cursor.block,
 		getOrCreateBindingLocation(program, fn, binding),
 	);
-	const key = compileStaticString(program, fn, cursor, superThisStateKey());
+	const key = compileStaticString(program, fn, cursor, CORE_SUPER_THIS_STATE_KEY);
 	cursor.block.emitter.emit({
 		type: "storeProperty",
 		registers: [state, key, value],
@@ -4522,7 +4519,7 @@ function compileFunctionParams(
 			{ type: "createObject", registers: [state] },
 			{ type: "createEmpty", registers: [empty] },
 		);
-		const key = compileStaticString(program, fn, cursor, superThisStateKey());
+		const key = compileStaticString(program, fn, cursor, CORE_SUPER_THIS_STATE_KEY);
 		block.emitter.emit({ type: "storeProperty", registers: [state, key, empty] });
 		storeRegisterAtLocation(
 			block,

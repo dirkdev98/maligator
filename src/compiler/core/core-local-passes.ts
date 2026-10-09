@@ -38,7 +38,12 @@ import { CORE_LOCAL_EXCEPTION_FLOW_ANALYSIS } from "./core-ir-exception-flow.ts"
 import { CORE_LOOP_INDUCTION_ANALYSIS } from "./core-ir-loops.ts";
 import { CORE_LOCAL_VALUE_KIND_ANALYSIS } from "./core-ir-value-kinds.ts";
 import type { CoreValueKindAnalysis } from "./core-ir-value-kinds.ts";
-import { coreBlockId, coreFunctionId, coreInstructionId } from "./core-ir.ts";
+import {
+	CORE_SUPER_THIS_STATE_KEY,
+	coreBlockId,
+	coreFunctionId,
+	coreInstructionId,
+} from "./core-ir.ts";
 import type {
 	CoreAttributeValue,
 	CoreBlockId,
@@ -1587,6 +1592,30 @@ const foldRedundantTdzChecks: CoreFunctionPass = {
 		const kinds = context.analysis(CORE_LOCAL_VALUE_KIND_ANALYSIS);
 		const known = new Map<CoreValueId, boolean>();
 		const visiting = new Set<CoreValueId>();
+		const isSuperThisStateKey = (stringIndex: unknown): boolean => {
+			const units =
+				typeof stringIndex === "number"
+					? program.stringConstants[stringIndex]
+					: undefined;
+			return (
+				units !== undefined &&
+				units.length === CORE_SUPER_THIS_STATE_KEY.length &&
+				units.every((unit, index) => unit === CORE_SUPER_THIS_STATE_KEY.charCodeAt(index))
+			);
+		};
+		const mayLoadSuperThisState = (instruction: CoreInstructionId, opcode: string) => {
+			if (opcode !== "loadProperty")
+				return isSuperThisStateKey(fn.instructionAttributes(instruction).stringIndex);
+			const key = instructionOperand(fn, instruction, 1);
+			if (key === undefined) return true;
+			if ((kinds.kindMask(key) & COMPILER_VALUE_KIND_STRING) === 0) return false;
+			if (fn.kernel.valueDefinitionKind(key) !== 1) return true;
+			const definition = coreInstructionId(fn.kernel.valueDefinitionOwner(key));
+			return (
+				fn.instructionOpcodeName(definition) !== "createString" ||
+				isSuperThisStateKey(fn.instructionAttributes(definition).stringIndex)
+			);
+		};
 		const excludesEmpty = (value: CoreValueId): boolean => {
 			const cached = known.get(value);
 			if (cached !== undefined) return cached;
@@ -1623,16 +1652,17 @@ const foldRedundantTdzChecks: CoreFunctionPass = {
 				result =
 					opcode === "move"
 						? source !== undefined && excludesEmpty(source)
-						: ![
-								"createEmpty",
-								"loadCaptured",
-								"loadGlobal",
-								"loadLocal",
-								"loadProperty",
-								"loadPropertyStatic",
-								"loadPropertyStaticShapeCase",
-								"loadThis",
-							].includes(opcode);
+						: opcode === "loadProperty" ||
+							  opcode === "loadPropertyStatic" ||
+							  opcode === "loadPropertyStaticShapeCase"
+							? !mayLoadSuperThisState(instruction, opcode)
+							: ![
+									"createEmpty",
+									"loadCaptured",
+									"loadGlobal",
+									"loadLocal",
+									"loadThis",
+								].includes(opcode);
 			}
 			visiting.delete(value);
 			known.set(value, result);
