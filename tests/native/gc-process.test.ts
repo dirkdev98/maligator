@@ -13,9 +13,9 @@ it("paces isolate owners under process pressure and releases reservations at tea
 			outDir,
 			mainFile: "runtime/gc_process_test_main.c",
 		});
-		expect(runToStdout(binary, { env: { MAL_GC_PROCESS_BUDGET_BYTES: "67108864" } })).toBe(
-			"gc-process PASS\n",
-		);
+		expect(
+			runToStdout(binary, { env: { MAL_GC_PROCESS_BUDGET_BYTES: "67108864" } }),
+		).toBe("gc-process PASS\n");
 	} finally {
 		rmSync(outDir, { recursive: true, force: true });
 	}
