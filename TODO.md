@@ -151,6 +151,23 @@ The independent target boundary and current storage contract are recorded in
       handlers. Handler entries currently disable it, so
       `lowerExecutionFunctionToNativePlan` still zeroes 4,351 registers on every call.
       Handler edges must leave from before each protected instruction's writes.
+- [ ] Fold TDZ checks on captured and module bindings. Property-load results no
+      longer keep their checks, but 18,942 remain in the self-compile C, mostly on
+      reads of captured cells and module globals. A closure created after its
+      owner initializes a binding can never observe that binding's TDZ, and an
+      owner's own read is safe once the initializing store dominates it with no
+      environment rebinding in between.
+- [ ] Bring the native self-compile's maximum RSS closer to its live set. Peak live
+      bytes stay near 950 MB, but maximum RSS is 4.5 GB now that process GC
+      pressure backs off past its budget (it was 3.5 GB while pressure forced 183
+      major collections and cost 40 s). Measure what holds the difference (freed
+      heap chunks that stay mapped, raw stores, malloc'd tables) before trading
+      collection time for it.
+- [ ] Stop fingerprinting every bytecode function with `JSON.stringify` to trust its
+      safepoint root maps (452 ms of a 40 s Node frontend). Only functions that keep
+      bytecode consume the trust. Profile builds also replace `profileSiteIds` in
+      place after trust is established, which silently drops the exact root maps
+      of every interpreted function.
 
 - [ ] Share one invocation-local native analysis context across storage, expression,
       root, and fast-path planning. Native read/write, branch, handler, and lazy
@@ -174,17 +191,26 @@ The independent target boundary and current storage contract are recorded in
       per-instruction state; quantify scaling before expanding coroutine specialization.
 - [ ] Select the next proof consumer from a measured hot path rather than
       local-count or plan-kind totals. On the shape-analysis cone the native
-      self-compiler went from 43.4 s to about 30.5 s on one machine (Node: 8.4 s);
+      self-compiler went from 43.4 s to about 29.3 s on one machine (Node: 8.4 s);
       array for-of loops whose iterator reaches only its steps and closes no longer
       allocate it (iterator cells were 21% of sampled bytes before that), and
       inherited getters, alternating prototype methods and empty sites answered by
       the shared inherited stub no longer take the collecting property slow path
-      (its entries fell from 242 to 52 million). Self time now puts 32% in
-      generated code, 14% in property caches, 9% in call dispatch, 9% in GC, and
-      4% in macOS thread-local lookups from GC internals, cache protector flags,
-      and the root-frame head. Measured dead ends: `__builtin_expect` on the
+      (its entries fell from 242 to 52 million). Shrinking the inline static
+      property probe cut 16% of the self-compile text and made the cone 2.5% faster:
+      most samples in hot runtime helpers land on their first instruction, which
+      points at instruction fetch across 44 MB of text rather than their bodies. Self
+      time now puts 25% in generated code, 19% in property caches, 11% in call
+      dispatch, 11% in GC, and 5% in macOS thread-local lookups. The hottest
+      generated functions are one-line Core store accessors called through
+      `mal_vm_call_cached`. Measured dead ends: `__builtin_expect` on the
       generated throw check made the cone 11% slower, and forcing `always_inline`
-      on the hottest small value and cache helpers changed nothing. Exempting
+      on the hottest small value and cache helpers changed nothing. Hinting
+      single-target methods outside loops changed nothing: the accessors read
+      private fields through class-scope captures, which a guarded inline cannot
+      resolve without the callee's environment, and the same accessors with
+      public fields inline but stay within 6% because each iteration still pays
+      every property probe that V8 hoists out of the loop. Exempting
       single-target guarded direct calls or small inlines from the program
       generated-code budget made thousands more sites direct or inlined without
       changing wall time, because
