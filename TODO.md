@@ -236,6 +236,23 @@ The independent target boundary and current storage contract are recorded in
       specialization program budget and moving the allocation mark state from
       thread-locals onto the heap also left wall time unchanged. Hot accessors only
       sped up once inlining accepted throwing callees and class-scope closures.
+      Inlining the strict `this` check and reading the callee's realm field
+      directly in `mal_vm_call_cached` and guarded direct calls did not change the
+      JavaScript benchmarks either (closed-compiled wall +0.65%).
+- [ ] Decide whether native builds should scan C stacks conservatively instead of
+      publishing shadow-stack roots. Root slots, masks and their publication are a
+      large share of the emitted C. A prototype that emitted none of them scanned
+      the running stack after a `setjmp` spill and every suspended fiber from its
+      saved stack pointer, mapping each word, raw or NaN-boxed, to an allocated cell
+      through the chunk index, block cell size and bump pointer. It cut the
+      self-compile C by 22%, its clang CPU by 14% and its Node emission by 35%, and
+      passed the GC stress fixtures. However, self-compile wall time and RSS did not
+      move (168 to 177 s either way), so the gain is build time only. Wasm cannot
+      scan its stack and keeps precise roots, so both modes would stay supported.
+      Stale stack words retain dead objects, which breaks three deterministic
+      WeakRef and ephemeron reclamation tests. Recycled cells keep stale contents,
+      so a dead, half-initialized cell found on the stack would be traced through
+      freed edges unless allocation clears payloads and tracers accept null shapes.
 
 ## World-knowledge ladder
 
