@@ -124,6 +124,19 @@ const TYPED_ENTRY_SOURCE = `
 	})();
 `;
 
+const ARGUMENT_ENTRY_SOURCE = `
+	(function () {
+		const edges = function (value) {
+			const first = arguments.length > 0 ? arguments[0] : value;
+			const second = arguments.length > 1 ? arguments[1] : 13;
+			return first * 3 + second * 5 + arguments.length;
+		};
+		let total = 0;
+		for (let index = 0; index < 16; index++) total += edges(index, index + 1, index + 2);
+		globalThis.result = total;
+	})();
+`;
+
 function optimizedCore(source: string, path: string): CoreCompilation {
 	const semantic = analyzeSourceAndRunSemanticAnalysis(source, path);
 	const lowered = lowerSemanticProgramToCore(semantic);
@@ -327,6 +340,55 @@ describe("Core target construction", () => {
 				withFunction(program, functionIndex, { directEntries }),
 			),
 		).toThrow("GC safepoint roots do not match exact execution liveness");
+	});
+
+	it("discharges the argument reads of an entry that receives its arguments", () => {
+		const program = optimizedTarget(ARGUMENT_ENTRY_SOURCE, "argument-entry.js");
+		const functionIndex = program.functions.findIndex((fn) =>
+			fn.directEntries.some((entry) => (entry.gc.discharged?.length ?? 0) > 0),
+		);
+		expect(functionIndex).toBeGreaterThanOrEqual(0);
+		const fn = program.functions[functionIndex]!;
+		const entry = fn.directEntries.find((candidate) => candidate.gc.discharged)!;
+		const generic = new Set(fn.gc.safepoints.map(({ instruction }) => instruction));
+		const kept = new Set(entry.gc.safepoints.map(({ instruction }) => instruction));
+		for (const { instruction } of entry.gc.discharged!) {
+			expect(["loadArgumentCount", "loadArgument", "loadStaticArgument"]).toContain(
+				instruction.type,
+			);
+			expect(generic.has(instruction)).toBe(true);
+			expect(kept.has(instruction)).toBe(false);
+		}
+		expect(() => verifyNativeExecutionProgram(program)).not.toThrow();
+		const replaced = (patch: Partial<typeof entry>) =>
+			withFunction(program, functionIndex, {
+				directEntries: fn.directEntries.with(entry.id, { ...entry, ...patch }),
+			});
+		expect(() =>
+			verifyNativeExecutionProgram(replaced({ gc: { safepoints: entry.gc.safepoints } })),
+		).toThrow("has no target safepoint record");
+		expect(() =>
+			verifyNativeExecutionProgram(replaced({ argumentRepresentations: undefined })),
+		).toThrow("has no valid discharge");
+		const operation = entry.gc.safepoints.find((point) => point.kind === "operation");
+		if (operation?.kind !== "operation") throw new Error("Missing operation safepoint");
+		expect(() =>
+			verifyNativeExecutionProgram(
+				replaced({
+					gc: {
+						safepoints: entry.gc.safepoints.filter((point) => point !== operation),
+						discharged: [
+							...entry.gc.discharged!,
+							{
+								coreInstruction: operation.coreInstruction,
+								instruction: operation.instruction,
+								reason: "entry-argument",
+							},
+						],
+					},
+				}),
+			),
+		).toThrow("has no valid discharge");
 	});
 
 	it("keeps the generic VM execution ABI boxed for resumable registers", () => {

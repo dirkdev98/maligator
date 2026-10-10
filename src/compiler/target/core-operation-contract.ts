@@ -133,6 +133,23 @@ export function requireCoreTargetOperationContract(
 	return coreTargetOperationContracts.get(opcode)!;
 }
 
+/** A typed entry whose ABI supplies its arguments reads them by copying parameters. */
+export function entrySuppliedArgumentRead(
+	instruction: CompilerInstruction,
+	suppliedArguments: number,
+): boolean {
+	switch (instruction.type) {
+		case "loadArgumentCount":
+			return true;
+		case "loadArgument":
+			return instruction.index < suppliedArguments;
+		case "loadStaticArgument":
+			return instruction.index < suppliedArguments && instruction.registers[2] >= 0;
+		default:
+			return false;
+	}
+}
+
 export function coreInstructionNeedsOperationSafepoint(
 	fn: CoreFunctionStore,
 	instruction: CoreInstructionId,

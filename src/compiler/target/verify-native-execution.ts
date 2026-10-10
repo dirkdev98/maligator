@@ -74,6 +74,10 @@ export function verifyNativeExecutionProgram(program: ExecutionProgram): void {
 				program.core.function(program.functionMap.executionToCore[functionIndex]!),
 				functionIndex,
 				loopBackedgeInstructions,
+				{
+					suppliedArguments: entry.argumentRepresentations?.length,
+					discharged: entry.gc.discharged ?? [],
+				},
 			);
 		}
 	}

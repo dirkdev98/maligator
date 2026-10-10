@@ -55,6 +55,7 @@ import type { CompilerOperatorInputKindMasks } from "../shared/compiler-value-ki
 import { NATIVE_STRING_SWITCH_CASE_LIMIT } from "../shared/native-string-switch.ts";
 import {
 	coreInstructionNeedsOperationSafepoint,
+	entrySuppliedArgumentRead,
 	requireCoreTargetOperationContract,
 } from "./core-operation-contract.ts";
 import type {
@@ -2418,6 +2419,24 @@ function lowerFunctionToTarget(
 				instructionOrder.get(right.instruction)!,
 		);
 	const directEntries = directEntryPlans.map((entry, entryIndex) => {
+		const suppliedArguments = entry.argumentRepresentations?.length;
+		const dischargedArgumentRead = (safepoint: CoreTargetSafepoint): boolean =>
+			suppliedArguments !== undefined &&
+			safepoint.kind === "operation" &&
+			safepoint.realizedCoreInstructions.length === 1 &&
+			safepoint.realizedCoreInstructions[0] === safepoint.coreInstruction &&
+			entrySuppliedArgumentRead(safepoint.instruction, suppliedArguments);
+		const discharged = safepoints.flatMap((safepoint) =>
+			safepoint.kind === "operation" && dischargedArgumentRead(safepoint)
+				? [
+						{
+							coreInstruction: safepoint.coreInstruction,
+							instruction: safepoint.instruction,
+							reason: "entry-argument" as const,
+						},
+					]
+				: [],
+		);
 		const representations = [...physicalRepresentations];
 		for (const [register, representation] of entryRegisterRepresentations[entryIndex]!)
 			representations[register] = representation;
@@ -2511,25 +2530,28 @@ function lowerFunctionToTarget(
 					}),
 			registerRepresentations: representations,
 			gc: {
-				safepoints: safepoints.map((safepoint) => ({
-					...safepoint,
-					// Entries share the body and only refine boxed registers; liveness is per register.
-					rootRegisters: safepoint.rootRegisters.filter(
-						(register) =>
-							representations[register] === "boxed" ||
-							representations[register] === "string",
-					),
-					incomingRootRegisters: safepoint.incomingRootRegisters.filter(
-						(register) =>
-							representations[register] === "boxed" ||
-							representations[register] === "string",
-					),
-					outgoingRootRegisters: safepoint.outgoingRootRegisters.filter(
-						(register) =>
-							representations[register] === "boxed" ||
-							representations[register] === "string",
-					),
-				})),
+				safepoints: safepoints
+					.filter((safepoint) => !dischargedArgumentRead(safepoint))
+					.map((safepoint) => ({
+						...safepoint,
+						// Entries share the body and only refine boxed registers; liveness is per register.
+						rootRegisters: safepoint.rootRegisters.filter(
+							(register) =>
+								representations[register] === "boxed" ||
+								representations[register] === "string",
+						),
+						incomingRootRegisters: safepoint.incomingRootRegisters.filter(
+							(register) =>
+								representations[register] === "boxed" ||
+								representations[register] === "string",
+						),
+						outgoingRootRegisters: safepoint.outgoingRootRegisters.filter(
+							(register) =>
+								representations[register] === "boxed" ||
+								representations[register] === "string",
+						),
+					})),
+				...(discharged.length === 0 ? {} : { discharged }),
 			},
 		};
 	});

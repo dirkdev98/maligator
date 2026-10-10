@@ -4,7 +4,11 @@ import type { CoreInstructionId } from "../core/core-ir.ts";
 import type { CoreFunctionStore } from "../core/core-store.ts";
 import { COMPILER_TWO_ADDRESS_OPERANDS } from "../shared/compiler-instruction.ts";
 import type { CompilerInstruction } from "../shared/compiler-instruction.ts";
-import { coreInstructionNeedsOperationSafepoint } from "./core-operation-contract.ts";
+import {
+	coreInstructionNeedsOperationSafepoint,
+	entrySuppliedArgumentRead,
+} from "./core-operation-contract.ts";
+import type { CoreTargetDischargedSafepoint } from "./core-target-ir.ts";
 import type {
 	ExecutionFunction,
 	ExecutionParallelCopy,
@@ -818,6 +822,10 @@ function verifyGcRoots(
 	model: FunctionModel,
 	core: CoreFunctionStore,
 	loopBackedgeInstructions: typeof executionLoopBackedgeInstructions,
+	entry?: {
+		readonly suppliedArguments: number | undefined;
+		readonly discharged: ReadonlyArray<CoreTargetDischargedSafepoint>;
+	},
 ): void {
 	const { fn, functionIndex } = model;
 	const reachable = new Set(fn.coreBlocks);
@@ -942,6 +950,22 @@ function verifyGcRoots(
 			}
 			covered.add(realized);
 		}
+	}
+	for (const { coreInstruction, instruction, reason } of entry?.discharged ?? []) {
+		const site = model.sites.get(instruction);
+		if (
+			reason !== "entry-argument" ||
+			site === undefined ||
+			!expected.has(coreInstruction) ||
+			covered.has(coreInstruction) ||
+			core.instructionOpcodeName(coreInstruction) !== instruction.type ||
+			entry?.suppliedArguments === undefined ||
+			!entrySuppliedArgumentRead(instruction, entry.suppliedArguments)
+		)
+			fail(`Core safepoint @${coreInstruction} has no valid discharge`, {
+				functionIndex,
+			});
+		covered.add(coreInstruction);
 	}
 	const missing = [...expected.keys()].find((instruction) => !covered.has(instruction));
 	if (missing !== undefined) {
@@ -1077,11 +1101,12 @@ export function verifyExecutionFunctionRepresentationVariant(
 	core: CoreFunctionStore,
 	functionIndex: number,
 	loopBackedgeInstructions = executionLoopBackedgeInstructions,
+	entry?: Parameters<typeof verifyGcRoots>[3],
 ): void {
 	const model = buildFunctionModel(fn, functionIndex);
 	verifyInstructionOperands(model);
 	verifyParallelCopies(model);
-	verifyGcRoots(model, core, loopBackedgeInstructions);
+	verifyGcRoots(model, core, loopBackedgeInstructions, entry);
 }
 
 export function verifyExecutionProgram(

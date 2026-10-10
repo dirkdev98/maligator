@@ -108,6 +108,17 @@ export type CoreTargetSafepoint = CoreTargetSafepointRoots &
 	);
 
 /**
+ * A Core collection point that a typed entry's realization cannot reach. The
+ * verifier checks the reason instead of requiring a safepoint record.
+ */
+export interface CoreTargetDischargedSafepoint {
+	readonly coreInstruction: CoreInstructionId;
+	readonly instruction: CompilerInstruction;
+	/** The entry ABI supplies the argument, so reading it copies a parameter. */
+	readonly reason: "entry-argument";
+}
+
+/**
  * One ordinary-call entry contract selected from closed-world call-site facts.
  *
  * The canonical function entry remains boxed and is always the semantic fallback.
@@ -145,6 +156,7 @@ export interface CoreTargetDirectEntry {
 	readonly registerRepresentations: ReadonlyArray<CoreTargetRegisterRepresentation>;
 	readonly gc: {
 		readonly safepoints: ReadonlyArray<CoreTargetSafepoint>;
+		readonly discharged?: ReadonlyArray<CoreTargetDischargedSafepoint>;
 	};
 }
 
