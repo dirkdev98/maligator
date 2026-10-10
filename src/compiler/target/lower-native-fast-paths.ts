@@ -1697,11 +1697,8 @@ export function selectNativeFastPaths(
 		indexedLoops,
 		(ip) => fusions.get(ip),
 		transparent,
-		fn.profileSiteIds !== undefined ||
-			native.specializations.length > 0 ||
-			(native.fieldCalls?.length ?? 0) > 0 ||
-			(native.literalSwitches?.length ?? 0) > 0 ||
-			native.instructions.some((plan) => plan !== undefined),
+		// Every other consumer reads its registers through bytecode operands.
+		fn.profileSiteIds !== undefined,
 		// Fusion can keep a preceding RHS in its private temporary rather than the semantic local.
 		!native.specializations.some((region) => region.kind === "numeric-fusion"),
 		body,
