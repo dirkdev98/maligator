@@ -123,14 +123,31 @@ typedef struct MalHttpConn {
     void *write_data;
     MalHttpServer *server;
     struct MalHttpConn *next;
+    // A connected socket keeps its endpoints, yet every keep-alive request asks again.
+    MalNetEndpoint local_endpoint;
+    MalNetEndpoint remote_endpoint;
+    bool local_endpoint_known;
+    bool remote_endpoint_known;
 } MalHttpConn;
 
-bool mal_http_conn_local_endpoint(const MalHttpConn *conn, MalNetEndpoint *out) {
-    return conn != nullptr && mal_net_local_endpoint(conn->fd, out);
+bool mal_http_conn_local_endpoint(MalHttpConn *conn, MalNetEndpoint *out) {
+    if (conn == nullptr) return false;
+    if (!conn->local_endpoint_known) {
+        if (!mal_net_local_endpoint(conn->fd, &conn->local_endpoint)) return false;
+        conn->local_endpoint_known = true;
+    }
+    *out = conn->local_endpoint;
+    return true;
 }
 
-bool mal_http_conn_remote_endpoint(const MalHttpConn *conn, MalNetEndpoint *out) {
-    return conn != nullptr && mal_net_remote_endpoint(conn->fd, out);
+bool mal_http_conn_remote_endpoint(MalHttpConn *conn, MalNetEndpoint *out) {
+    if (conn == nullptr) return false;
+    if (!conn->remote_endpoint_known) {
+        if (!mal_net_remote_endpoint(conn->fd, &conn->remote_endpoint)) return false;
+        conn->remote_endpoint_known = true;
+    }
+    *out = conn->remote_endpoint;
+    return true;
 }
 
 static MalReactor *conn_reactor(MalHttpConn *c) {
