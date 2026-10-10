@@ -998,6 +998,7 @@ function finishCoreProgram(program: CoreFrontendContext): ConstructedCoreCompila
 				),
 				singleAssignmentGlobalSlots: candidates.singleAssignmentGlobalSlots,
 				singleAssignmentCapturedSlots: candidates.singleAssignmentCapturedSlots,
+				initializedModuleGlobalSlots: coreInitializedModuleGlobalSlots(program),
 				retainedHostInstallers: [program.hostProcess, program.hostBuffer]
 					.flatMap((host) => (host?.retained === true ? [host.installer] : []))
 					.filter(
@@ -1006,6 +1007,203 @@ function finishCoreProgram(program: CoreFrontendContext): ConstructedCoreCompila
 			}),
 		},
 	};
+}
+
+// Global names whose global-object properties are non-writable and non-configurable data.
+const IMMUTABLE_GLOBAL_VALUES = new Set(["undefined", "NaN", "Infinity"]);
+
+/**
+ * Module-scope bindings that a module initializes before it can run user code.
+ *
+ * Outside an import cycle a module evaluates after its dependencies and before its
+ * importers, so before its own body runs no code holds one of its functions. Until
+ * that body first runs user code it can neither call nor publish one, so every
+ * function except a writer of the binding reads it initialized. A TDZ error in this
+ * prefix aborts the module, after which none of its functions run at all.
+ */
+function coreInitializedModuleGlobalSlots(program: CoreFrontendContext): Array<number> {
+	if (program.evalDirect) return [];
+	const graph = program.semantic.graph;
+	const cyclic = new Set(graph?.cycles.flat());
+	const slots = new Set<number>();
+	for (const file of program.semantic.files) {
+		if (
+			file.type !== "module" ||
+			file.commonjs ||
+			cyclic.has(file.path) ||
+			graph?.modules.get(file.path)?.platform?.evaluation === "side-effect-free" ||
+			(program.cjsImports.get(file.path)?.length ?? 0) > 0
+		)
+			continue;
+		for (const binding of moduleInitializationPrefix(file)) {
+			const location = program.bindingToStorage.get(binding);
+			if (location?.type === "global") slots.add(location.index);
+		}
+	}
+	return [...slots].sort((left, right) => left - right);
+}
+
+/** Bindings that the statements before the first possible user-code call initialize. */
+function moduleInitializationPrefix(file: SemanticFile): ReadonlySet<Binding> {
+	const initialized = new Set<Binding>();
+	const primitives = new Set<Binding>();
+	const classes = new Set<Binding>();
+	const readable = (node: ESTree.Identifier): boolean => {
+		const binding = file.nodeToBinding.get(node);
+		return binding === undefined || binding.undeclared === true
+			? IMMUTABLE_GLOBAL_VALUES.has(node.name)
+			: true;
+	};
+	// Primitive operands keep ToPrimitive and ToNumeric from reaching user methods.
+	const primitive = (node: ESTree.Node): boolean => {
+		switch (node.type) {
+			case "Literal":
+				return !("regex" in node && node.regex !== undefined);
+			case "TemplateLiteral":
+				return node.expressions.every(primitive);
+			case "Identifier": {
+				const binding = file.nodeToBinding.get(node);
+				return binding === undefined || binding.undeclared === true
+					? IMMUTABLE_GLOBAL_VALUES.has(node.name)
+					: primitives.has(binding);
+			}
+			case "UnaryExpression":
+				return node.operator !== "delete" && primitive(node.argument);
+			case "BinaryExpression":
+				return (
+					node.operator !== "in" &&
+					node.operator !== "instanceof" &&
+					primitive(node.left) &&
+					primitive(node.right)
+				);
+			case "LogicalExpression":
+				return primitive(node.left) && primitive(node.right);
+			case "ConditionalExpression":
+				return safe(node.test) && primitive(node.consequent) && primitive(node.alternate);
+			default:
+				return false;
+		}
+	};
+	const safe = (node: ESTree.Node): boolean => {
+		if (primitive(node)) return true;
+		switch (node.type) {
+			case "Literal":
+			case "ArrowFunctionExpression":
+			case "FunctionExpression":
+				return true;
+			case "Identifier":
+				return readable(node);
+			case "ClassExpression":
+				return safeClass(node);
+			case "ArrayExpression":
+				return node.elements.every(
+					(element) =>
+						element === null || (element.type !== "SpreadElement" && safe(element)),
+				);
+			case "ObjectExpression":
+				return node.properties.every(
+					(property) =>
+						property.type === "Property" &&
+						(!property.computed || primitive(property.key)) &&
+						safe(property.value),
+				);
+			// ToBoolean, typeof, and strict equality never call user code.
+			case "UnaryExpression":
+				return (
+					(node.operator === "!" ||
+						node.operator === "typeof" ||
+						node.operator === "void") &&
+					safe(node.argument)
+				);
+			case "BinaryExpression":
+				return (
+					(node.operator === "===" || node.operator === "!==") &&
+					safe(node.left) &&
+					safe(node.right)
+				);
+			case "LogicalExpression":
+				return safe(node.left) && safe(node.right);
+			case "ConditionalExpression":
+				return safe(node.test) && safe(node.consequent) && safe(node.alternate);
+			case "SequenceExpression":
+				return node.expressions.every(safe);
+			default:
+				return false;
+		}
+	};
+	const prefixClass = (node: ESTree.Identifier): boolean => {
+		const binding = file.nodeToBinding.get(node);
+		return binding !== undefined && classes.has(binding);
+	};
+	// Defining methods and instance fields runs no code; static initializers do.
+	const safeClass = (node: ESTree.ClassDeclaration | ESTree.ClassExpression): boolean =>
+		(node.decorators?.length ?? 0) === 0 &&
+		(node.superClass === null ||
+			(node.superClass.type === "Identifier" && prefixClass(node.superClass))) &&
+		node.body.body.every((element) => {
+			switch (element.type) {
+				case "MethodDefinition":
+					return (
+						(element.decorators?.length ?? 0) === 0 &&
+						(!element.computed || element.key === null || primitive(element.key))
+					);
+				case "PropertyDefinition":
+				case "AccessorProperty":
+					return (
+						(element.decorators?.length ?? 0) === 0 &&
+						(!element.computed || primitive(element.key)) &&
+						(!element.static ||
+							(element.value ?? null) === null ||
+							safe(element.value as ESTree.Node))
+					);
+				default:
+					return false;
+			}
+		});
+	for (const statement of file.ast.body) {
+		const node =
+			statement.type === "ExportNamedDeclaration"
+				? (statement.declaration ?? statement)
+				: statement;
+		switch (node.type) {
+			case "ImportDeclaration":
+			case "ExportAllDeclaration":
+			case "ExportNamedDeclaration":
+			case "FunctionDeclaration":
+			case "EmptyStatement":
+				continue;
+			case "ExportDefaultDeclaration":
+				if (node.declaration.type === "FunctionDeclaration") continue;
+				return initialized;
+			case "ExpressionStatement":
+				if (node.directive !== undefined) continue;
+				return initialized;
+			case "VariableDeclaration":
+				if (node.kind !== "var" && node.kind !== "let" && node.kind !== "const")
+					return initialized;
+				for (const declarator of node.declarations) {
+					const init = declarator.init ?? null;
+					if (declarator.id.type !== "Identifier" || (init !== null && !safe(init)))
+						return initialized;
+					const binding = file.nodeToBinding.get(declarator.id);
+					if (binding === undefined) continue;
+					initialized.add(binding);
+					if (init === null || primitive(init)) primitives.add(binding);
+				}
+				continue;
+			case "ClassDeclaration": {
+				if (!safeClass(node)) return initialized;
+				const binding = node.id === null ? undefined : file.nodeToBinding.get(node.id);
+				if (binding === undefined) return initialized;
+				initialized.add(binding);
+				classes.add(binding);
+				continue;
+			}
+			default:
+				return initialized;
+		}
+	}
+	return initialized;
 }
 
 /**

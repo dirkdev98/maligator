@@ -65,6 +65,7 @@ function hasInitializationCheck(
 export class CoreStaticCellIndex {
 	readonly #program: CoreProgram;
 	readonly #closed: Set<string>;
+	readonly #initialized: ReadonlySet<string>;
 	readonly #functions = new Map<CoreFunctionId, Map<string, Array<CellAccess>>>();
 	readonly #cells = new Map<string, Map<CoreFunctionId, Array<CellAccess>>>();
 	readonly #facts = new Map<
@@ -85,6 +86,9 @@ export class CoreStaticCellIndex {
 				(slot) => `captured:${slot.owner}:${slot.index}`,
 			),
 		]);
+		this.#initialized = new Set(
+			(context.data.initializedModuleGlobalSlots ?? []).map((slot) => `global:${slot}`),
+		);
 	}
 	#refresh(): void {
 		if (
@@ -160,9 +164,18 @@ export class CoreStaticCellIndex {
 		if (key === undefined || !this.#closed.has(key)) return undefined;
 		this.#refresh();
 		if (this.#proofWork >= 65536) return undefined;
+		const initializedBeforeRead = (): boolean =>
+			(this.#initialized.has(key) &&
+				!(
+					this.#cells
+						.get(key)
+						?.get(fn.id)
+						?.some((access) => access.write) ?? false
+				)) ||
+			hasInitializationCheck(fn, load, value, consumer);
 		let checkedInitialization: boolean | undefined;
 		if (requestedKey !== undefined && this.#facts.get(key) === undefined) {
-			checkedInitialization = hasInitializationCheck(fn, load, value, consumer);
+			checkedInitialization = initializedBeforeRead();
 			if (checkedInitialization) {
 				const property = this.#property(key, requestedKey, getAnalysis);
 				if (property !== undefined) return this.#stored(property, fn, value, key);
@@ -172,7 +185,7 @@ export class CoreStaticCellIndex {
 			const accesses = [...(this.#cells.get(key)?.values() ?? [])].flat(),
 				writes = accesses.filter((access) => access.write);
 			if (writes.length === 1 && writes[0]!.function !== fn.id) {
-				checkedInitialization = hasInitializationCheck(fn, load, value, consumer);
+				checkedInitialization = initializedBeforeRead();
 				// A different activation's initializer cannot prove this read has left the TDZ.
 				if (!checkedInitialization) return undefined;
 			}
@@ -210,9 +223,7 @@ export class CoreStaticCellIndex {
 					}
 				}
 		}
-		if (!initialized)
-			initialized =
-				checkedInitialization ?? hasInitializationCheck(fn, load, value, consumer);
+		if (!initialized) initialized = checkedInitialization ?? initializedBeforeRead();
 		if (!initialized) return undefined;
 		return this.#stored(source, fn, value, key);
 	}

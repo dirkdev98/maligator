@@ -46,6 +46,8 @@ export interface CoreProgramData {
 	readonly singleAssignmentGlobalSlots: ReadonlyArray<number>;
 	/** Source-immutable cells, plus captured lets with one named non-TDZ writer. */
 	readonly singleAssignmentCapturedSlots: ReadonlyArray<CoreCapturedSlotRef>;
+	/** Module bindings that no function except their writers can read uninitialized. */
+	readonly initializedModuleGlobalSlots?: ReadonlyArray<number>;
 	readonly retainedHostInstallers: ReadonlyArray<string>;
 }
 
@@ -68,6 +70,24 @@ export function coreClosedGlobalSlotMembership(
 	if (membership === undefined) {
 		membership = new Set(slots);
 		closedGlobalSlotMembershipBySource.set(slots, membership);
+	}
+	return membership;
+}
+
+const initializedGlobalSlotMembershipBySource = new WeakMap<
+	ReadonlyArray<number>,
+	ReadonlySet<number>
+>();
+
+export function coreInitializedGlobalSlotMembership(
+	context: CoreCompilationContext,
+): ReadonlySet<number> {
+	const slots = context.data.initializedModuleGlobalSlots;
+	if (slots === undefined) return new Set();
+	let membership = initializedGlobalSlotMembershipBySource.get(slots);
+	if (membership === undefined) {
+		membership = new Set(slots);
+		initializedGlobalSlotMembershipBySource.set(slots, membership);
 	}
 	return membership;
 }

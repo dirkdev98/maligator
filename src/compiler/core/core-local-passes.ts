@@ -26,6 +26,7 @@ import {
 	authorityFallback,
 	normalizeFactRequirements,
 } from "../shared/fact-implication.ts";
+import { coreInitializedGlobalSlotMembership } from "./core-compilation.ts";
 import { CoreEditor } from "./core-editor.ts";
 import { CORE_FUNCTION_HAS_EDGE_ARGUMENTS } from "./core-function-features.ts";
 import {
@@ -1592,6 +1593,23 @@ const foldRedundantTdzChecks: CoreFunctionPass = {
 		const kinds = context.analysis(CORE_LOCAL_VALUE_KIND_ANALYSIS);
 		const known = new Map<CoreValueId, boolean>();
 		const visiting = new Set<CoreValueId>();
+		const initializedGlobals = coreInitializedGlobalSlotMembership(
+			context.compilationContext,
+		);
+		let writtenGlobals: ReadonlySet<unknown> | undefined;
+		const initializedGlobal = (load: CoreInstructionId): boolean => {
+			const index = fn.instructionAttributes(load).index;
+			if (typeof index !== "number" || !initializedGlobals.has(index)) return false;
+			writtenGlobals ??= new Set(
+				[...fn.instructionIds()].flatMap((instruction) =>
+					fn.instructionKind(instruction) === "operation" &&
+					fn.instructionOpcodeName(instruction) === "storeGlobal"
+						? [fn.instructionAttributes(instruction).index]
+						: [],
+				),
+			);
+			return !writtenGlobals.has(index);
+		};
 		const isSuperThisStateKey = (stringIndex: unknown): boolean => {
 			const units =
 				typeof stringIndex === "number"
@@ -1656,13 +1674,11 @@ const foldRedundantTdzChecks: CoreFunctionPass = {
 							  opcode === "loadPropertyStatic" ||
 							  opcode === "loadPropertyStaticShapeCase"
 							? !mayLoadSuperThisState(instruction, opcode)
-							: ![
-									"createEmpty",
-									"loadCaptured",
-									"loadGlobal",
-									"loadLocal",
-									"loadThis",
-								].includes(opcode);
+							: opcode === "loadGlobal"
+								? initializedGlobal(instruction)
+								: !["createEmpty", "loadCaptured", "loadLocal", "loadThis"].includes(
+										opcode,
+									);
 			}
 			visiting.delete(value);
 			known.set(value, result);
