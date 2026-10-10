@@ -2101,14 +2101,10 @@ static inline void mal_vm_leave_compiled(MalVm *vm) {
     vm->native_call_depth--;
     if (vm->native_frame_count > 0) vm->native_frame_count--;
 }
-// A leaf cannot change observation modes; its enter and leave make the same choice.
+// A numeric leaf cannot throw, call or poll, so only the sampling profiler sees its frame.
 static inline bool mal_vm_leaf_unobserved(const MalVm *vm) {
-#if MAL_PROFILE
     (void) vm;
-    return false;
-#else
-    return vm->runtime_image->file_count == 0;
-#endif
+    return !MAL_PROFILE;
 }
 static inline bool mal_vm_enter_leaf_checked(MalVm *vm, i32 function_index) {
     if (!mal_vm_leaf_unobserved(vm)) return mal_vm_enter_compiled(vm, function_index);
