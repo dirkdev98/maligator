@@ -20,6 +20,7 @@ import type {
 	NativeFastPathPlans,
 	NativePropertyNumericUpdatePlan,
 	NativePropertyProjectionPlan,
+	NativeNumberRecordRegionPlan,
 	NativePropertyReadRegionPlan,
 } from "./lower-native-fast-paths.ts";
 import {
@@ -1014,9 +1015,11 @@ function rootStorage(
 		body.iteratorDoneRegisters.length > 0
 	) {
 		const omissionBorrowed = new Set(
-			[...fastPaths.propertyReadRegions, ...fastPaths.propertyReadPairs].flatMap(
-				(plan) => plan.borrowedRegisters,
-			),
+			[
+				...fastPaths.propertyReadRegions,
+				...fastPaths.propertyReadPairs,
+				...fastPaths.numberRecordRegions,
+			].flatMap((plan) => plan.borrowedRegisters),
 		);
 		const iteratorDone = new Set<number>();
 		for (const local of body.iteratorDoneRegisters) {
@@ -1046,6 +1049,7 @@ function rootStorage(
 					...borrowedPlans,
 					...fastPaths.propertyReadRegions,
 					...fastPaths.propertyReadPairs,
+					...fastPaths.numberRecordRegions,
 				],
 				expressionIps,
 			),
@@ -1107,6 +1111,7 @@ function scalarStorageWindows(fastPaths: NativeFastPathPlans) {
 		...fastPaths.propertyNumericUpdates,
 		...fastPaths.propertyReadRegions,
 		...fastPaths.propertyReadPairs,
+		...fastPaths.numberRecordRegions,
 		...fastPaths.pairedArrayLoops,
 		...fastPaths.arrayPresence,
 		...fastPaths.arrayPairDestructure,
@@ -1123,6 +1128,7 @@ function rootPublicationContinuations(
 	native: NativeFunctionPlan,
 	body: NativeStorageBodyFacts,
 	windows: ReturnType<typeof scalarStorageWindows>,
+	exits: ReadonlyArray<number>,
 ): ReadonlyArray<number> {
 	const fn = native.body;
 	if (
@@ -1175,6 +1181,8 @@ function rootPublicationContinuations(
 			...region.controlFlow.ordinaryBlockIps,
 		]);
 	for (const window of windows) blockSpan(window.claimedIps);
+	// An admitted record region is a second, unpublished edge into its exit.
+	for (const exit of exits) blocked.add(exit);
 	for (const action of native.regionActions) blocked.add(action.ip);
 	for (const site of native.fieldCalls ?? []) blockSpan([site.allocationIp, site.callIp]);
 	for (const site of native.literalSwitches ?? [])
@@ -1286,6 +1294,7 @@ function lowerStorage(
 			native,
 			body,
 			expressionWindows,
+			fastPaths.numberRecordRegions.map((plan) => plan.exitIp),
 		),
 		...scalar,
 		numericWorker,
@@ -1466,6 +1475,32 @@ export function validateNativeStorage(
 			);
 		});
 
+	const sameRecordRegions = (
+		stored: ReadonlyArray<NativeNumberRecordRegionPlan>,
+		selected: ReadonlyArray<NativeNumberRecordRegionPlan>,
+	): boolean =>
+		stored.length === selected.length &&
+		stored.every((plan, index) => {
+			const expected = selected[index]!;
+			return (
+				plan.id === expected.id &&
+				plan.object === expected.object &&
+				plan.exitIp === expected.exitIp &&
+				plan.fallback === expected.fallback &&
+				plan.fields.length === expected.fields.length &&
+				plan.fields.every(
+					(field, i) =>
+						field.stringIndex === expected.fields[i]!.stringIndex &&
+						field.icIndex === expected.fields[i]!.icIndex &&
+						field.stored === expected.fields[i]!.stored,
+				) &&
+				sameNumbers(plan.inputs, expected.inputs) &&
+				sameNumbers(plan.outputs, expected.outputs) &&
+				sameNumbers(plan.claimedIps, expected.claimedIps) &&
+				sameNumbers(plan.borrowedRegisters, expected.borrowedRegisters)
+			);
+		});
+
 	const sameScalar = (
 		stored: NativeScalarStoragePlan | undefined,
 		selected: NativeScalarStoragePlan | undefined,
@@ -1581,6 +1616,7 @@ export function validateNativeStorage(
 			sameProjections(stored.propertyProjections, selected.propertyProjections) &&
 			sameUpdates(stored.propertyNumericUpdates, selected.propertyNumericUpdates) &&
 			sameReadRegions(stored.propertyReadRegions, selected.propertyReadRegions) &&
+			sameRecordRegions(stored.numberRecordRegions, selected.numberRecordRegions) &&
 			stored.arrayPresence.length === selected.arrayPresence.length &&
 			stored.arrayPresence.every((plan, index) => {
 				const expected = selected.arrayPresence[index]!;

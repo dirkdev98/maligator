@@ -2405,6 +2405,14 @@ bool mal_vm_inherited_stub_try_load_static(
     return mal_vm_inherited_try_load(receiver, site->key, stub, out);
 }
 
+__attribute__((noinline)) void mal_vm_number_record_store_slow(
+    MalObject *object, const MalInlineCache *ic, f64 value
+) {
+    MAL_PERF_COUNT(number_record_slow_stores);
+    // Widening allocates only off-heap payloads, so the admission still holds no GC hazard.
+    mal_object_field_store(object, ic->slot, mal_ops_number_value(value));
+}
+
 // Keep all non-monomorphic static cache hits noncollecting: callers may hold private roots.
 __attribute__((noinline)) MalStaticPropertyProbeResult
 mal_vm_property_try_load_static_remaining(

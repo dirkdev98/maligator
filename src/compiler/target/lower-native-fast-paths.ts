@@ -127,6 +127,30 @@ export interface NativePropertyReadRegionAction {
 	readonly index: number;
 }
 
+/**
+ * One receiver admission covers every number field access of an acyclic,
+ * single-entry region. A decline runs the original instructions; an admission
+ * computes in locals, writes the stored fields back, and continues at `exitIp`.
+ */
+export interface NativeNumberRecordRegionPlan {
+	readonly id: number;
+	readonly object: number;
+	readonly exitIp: number;
+	/** A stored field's proving row is a store row, which also proves it writable. */
+	readonly fields: ReadonlyArray<{
+		readonly stringIndex: number;
+		readonly icIndex: number;
+		readonly stored: boolean;
+	}>;
+	/** Registers the region can read before writing them, admitted as numbers or Booleans. */
+	readonly inputs: ReadonlyArray<number>;
+	/** Region results read after the exit. */
+	readonly outputs: ReadonlyArray<number>;
+	readonly claimedIps: ReadonlyArray<number>;
+	readonly borrowedRegisters: ReadonlyArray<number>;
+	readonly fallback: "original-instructions";
+}
+
 export interface NativePropertyReadPairPlan {
 	readonly id: number;
 	readonly object: number;
@@ -197,6 +221,7 @@ export interface NativeFastPathPlans {
 	readonly propertyProjections: ReadonlyArray<NativePropertyProjectionPlan>;
 	readonly propertyReadRegions: ReadonlyArray<NativePropertyReadRegionPlan>;
 	readonly propertyReadPairs: ReadonlyArray<NativePropertyReadPairPlan>;
+	readonly numberRecordRegions: ReadonlyArray<NativeNumberRecordRegionPlan>;
 	readonly pairedArrayLoops: ReadonlyArray<NativePairedArrayLoopPlan>;
 	readonly arrayPresence: ReadonlyArray<NativeArrayPresencePlan>;
 	readonly arrayPairDestructure: ReadonlyArray<NativeArrayPairDestructurePlan>;
@@ -816,6 +841,399 @@ function lowerPropertyReadRegion(
 	});
 }
 
+const NUMBER_RECORD_INSTRUCTION_LIMIT = 96;
+const NUMBER_RECORD_FIELD_LIMIT = 16;
+const NUMBER_RECORD_UNARY_OPERATORS = new Set([
+	"+",
+	"-",
+	"~",
+	"!",
+	"tonumeric",
+	"increment",
+	"decrement",
+]);
+
+export type NativeNumberRecordKind = "number" | "boolean";
+
+export interface NativeNumberRecordDataflow {
+	/** Every register the region reads or writes holds one local kind throughout. */
+	readonly kinds: ReadonlyMap<number, NativeNumberRecordKind>;
+	/** Registers some path reads before the region writes them. */
+	readonly inputs: ReadonlySet<number>;
+	readonly written: ReadonlySet<number>;
+	readonly assignedAtExit: ReadonlySet<number>;
+}
+
+function numberRecordInstruction(
+	instruction: BytecodeInstruction,
+	object: number,
+): boolean {
+	switch (instruction.opcode) {
+		case "LOAD_PROPERTY_STATIC":
+			return instruction.object === object && instruction.dst !== object;
+		case "STORE_PROPERTY_STATIC":
+			return instruction.object === object && instruction.value !== object;
+		case "CREATE_NUMBER":
+		case "CREATE_F64":
+		case "CREATE_BOOLEAN":
+			return instruction.dst !== object;
+		case "MOVE":
+			return instruction.dst !== object && instruction.src !== object;
+		case "BINARY":
+			return (
+				(NATIVE_NUMBER_BINARY_OPERATORS.has(instruction.operator) ||
+					PROPERTY_REGION_COMPARE_OPERATORS.has(instruction.operator)) &&
+				![instruction.dst, instruction.left, instruction.right].includes(object)
+			);
+		case "UNARY":
+			return (
+				NUMBER_RECORD_UNARY_OPERATORS.has(instruction.operator) &&
+				instruction.dst !== object &&
+				instruction.src !== object
+			);
+		case "JUMP":
+			return true;
+		case "JUMP_IF":
+			return instruction.cond !== object;
+		default:
+			return false;
+	}
+}
+
+export function numberRecordSuccessors(
+	instruction: BytecodeInstruction,
+	ip: number,
+): Array<number> {
+	if (instruction.opcode === "JUMP") return [instruction.targetIp];
+	if (instruction.opcode === "JUMP_IF") return [instruction.targetIp, ip + 1];
+	return [ip + 1];
+}
+
+/**
+ * The instructions reachable from `startIp` before `exitIp`, in topological
+ * order, when every path stays acyclic among members until it reaches the exit.
+ */
+export function numberRecordOrder(
+	fn: BytecodeFunction,
+	startIp: number,
+	exitIp: number,
+	member: (ip: number) => boolean,
+): ReadonlyArray<number> | undefined {
+	const state = new Map<number, "open" | "done">();
+	const postorder: Array<number> = [];
+	const visit = (ip: number): boolean => {
+		if (ip === exitIp) return true;
+		const seen = state.get(ip);
+		if (seen !== undefined) return seen === "done";
+		if (
+			ip >= fn.instructions.length ||
+			!member(ip) ||
+			postorder.length >= NUMBER_RECORD_INSTRUCTION_LIMIT
+		)
+			return false;
+		state.set(ip, "open");
+		for (const successor of numberRecordSuccessors(fn.instructions[ip]!, ip))
+			if (!visit(successor)) return false;
+		state.set(ip, "done");
+		postorder.push(ip);
+		return true;
+	};
+	return visit(startIp) ? postorder.reverse() : undefined;
+}
+
+function numberRecordInputKind(
+	representation: VmRegisterRepresentation | undefined,
+): NativeNumberRecordKind | undefined {
+	if (representation === "boolean") return "boolean";
+	return representation === "number" ||
+		representation === "int32" ||
+		representation === "boxed"
+		? "number"
+		: undefined;
+}
+
+export function numberRecordDataflow(
+	fn: BytecodeFunction,
+	order: ReadonlyArray<number>,
+	exitIp: number,
+	representations: ReadonlyArray<VmRegisterRepresentation>,
+): NativeNumberRecordDataflow | undefined {
+	const kinds = new Map<number, NativeNumberRecordKind>();
+	const inputs = new Set<number>();
+	const written = new Set<number>();
+	const numericReads = new Set<number>();
+	const unify = (register: number, kind: NativeNumberRecordKind): boolean => {
+		const known = kinds.get(register);
+		if (known === undefined) kinds.set(register, kind);
+		return known === undefined || known === kind;
+	};
+	// Topological order visits each instruction after all of its predecessors.
+	const assigned = new Map<number, Set<number>>([[order[0]!, new Set()]]);
+	const join = (target: number, from: ReadonlySet<number>): void => {
+		const prior = assigned.get(target);
+		if (prior === undefined) assigned.set(target, new Set(from));
+		else for (const register of prior) if (!from.has(register)) prior.delete(register);
+	};
+	for (const ip of order) {
+		const before = assigned.get(ip)!;
+		const instruction = fn.instructions[ip]!;
+		const read = (register: number, kind?: NativeNumberRecordKind): boolean => {
+			if (!before.has(register)) {
+				inputs.add(register);
+				const input = numberRecordInputKind(representations[register]);
+				if (input === undefined || !unify(register, input)) return false;
+			}
+			if (kind === "number") numericReads.add(register);
+			return kind === undefined || kinds.get(register) === kind;
+		};
+		const write = (
+			register: number,
+			kind: NativeNumberRecordKind | undefined,
+		): boolean => {
+			written.add(register);
+			return kind !== undefined && unify(register, kind);
+		};
+		let admitted: boolean;
+		switch (instruction.opcode) {
+			case "LOAD_PROPERTY_STATIC":
+			case "CREATE_NUMBER":
+			case "CREATE_F64":
+				admitted = write(instruction.dst, "number");
+				break;
+			case "CREATE_BOOLEAN":
+				admitted = write(instruction.dst, "boolean");
+				break;
+			case "STORE_PROPERTY_STATIC":
+				admitted = read(instruction.value, "number");
+				break;
+			case "MOVE":
+				admitted =
+					read(instruction.src) && write(instruction.dst, kinds.get(instruction.src));
+				break;
+			case "BINARY":
+				admitted =
+					read(instruction.left, "number") &&
+					read(instruction.right, "number") &&
+					write(
+						instruction.dst,
+						NATIVE_NUMBER_BINARY_OPERATORS.has(instruction.operator)
+							? "number"
+							: "boolean",
+					);
+				break;
+			case "UNARY":
+				admitted =
+					read(instruction.src, instruction.operator === "!" ? undefined : "number") &&
+					write(instruction.dst, instruction.operator === "!" ? "boolean" : "number");
+				break;
+			case "JUMP_IF":
+				admitted = read(instruction.cond);
+				break;
+			default:
+				admitted = instruction.opcode === "JUMP";
+		}
+		if (!admitted) return undefined;
+		const after = new Set(before);
+		for (const register of vmInstructionWriteRegisters(instruction)) after.add(register);
+		for (const successor of numberRecordSuccessors(instruction, ip))
+			join(successor, after);
+	}
+	// A boxed value only tested or moved is as likely a Boolean, which the guard would always decline.
+	for (const register of inputs)
+		if (representations[register] === "boxed" && !numericReads.has(register))
+			return undefined;
+	return { kinds, inputs, written, assignedAtExit: assigned.get(exitIp) ?? new Set() };
+}
+
+function registersLiveAt(
+	fn: BytecodeFunction,
+	body: NativeBodyFacts,
+	entryIp: number,
+	registers: ReadonlySet<number>,
+): ReadonlyArray<number> {
+	const live: Array<number> = [];
+	for (const register of registers) {
+		const visited = new Uint8Array(fn.instructions.length);
+		const pending = [entryIp];
+		while (pending.length > 0) {
+			const ip = pending.pop()!;
+			if (ip >= fn.instructions.length || visited[ip] === 1) continue;
+			visited[ip] = 1;
+			if (body.reads[ip]!.includes(register)) {
+				live.push(register);
+				break;
+			}
+			// A throwing instruction may not have written its outputs before the handler runs.
+			const handler = body.handlerTargets[ip];
+			if (handler !== undefined) pending.push(handler);
+			if (body.writes[ip]!.includes(register)) continue;
+			const instruction = fn.instructions[ip]!;
+			if (instruction.opcode === "JUMP") pending.push(instruction.targetIp);
+			else {
+				if (instruction.opcode === "JUMP_IF") pending.push(instruction.targetIp);
+				if (instruction.opcode !== "RETURN" && instruction.opcode !== "THROW")
+					pending.push(ip + 1);
+			}
+		}
+	}
+	return live.sort((a, b) => a - b);
+}
+
+function numberRecordFields(
+	fn: BytecodeFunction,
+	order: ReadonlyArray<number>,
+): NativeNumberRecordRegionPlan["fields"] | undefined {
+	const fields = new Map<
+		number,
+		{ readonly stringIndex: number; readonly icIndex: number; readonly stored: boolean }
+	>();
+	let accesses = 0;
+	for (const ip of [...order].sort((a, b) => a - b)) {
+		const instruction = fn.instructions[ip]!;
+		if (instruction.opcode === "LOAD_PROPERTY_STATIC") {
+			accesses++;
+			if (!fields.has(instruction.stringIndex))
+				fields.set(instruction.stringIndex, {
+					stringIndex: instruction.stringIndex,
+					icIndex: instruction.icIndex,
+					stored: false,
+				});
+		} else if (instruction.opcode === "STORE_PROPERTY_STATIC") {
+			accesses++;
+			if (fields.get(instruction.stringIndex)?.stored !== true)
+				fields.set(instruction.stringIndex, {
+					stringIndex: instruction.stringIndex,
+					icIndex: instruction.icIndex,
+					stored: true,
+				});
+		}
+	}
+	return accesses < 4 ||
+		fields.size > NUMBER_RECORD_FIELD_LIMIT ||
+		![...fields.values()].some((field) => field.stored)
+		? undefined
+		: Object.freeze([...fields.values()]);
+}
+
+function admitNumberRecordRegion(
+	fn: BytecodeFunction,
+	startIp: number,
+	order: ReadonlyArray<number>,
+	exitIp: number,
+	fields: NativeNumberRecordRegionPlan["fields"],
+	representations: ReadonlyArray<VmRegisterRepresentation>,
+	body: NativeBodyFacts,
+): NativeNumberRecordRegionPlan | undefined {
+	const members = new Set(order);
+	// Control enters only at the start: a later member's predecessors are all members.
+	for (const ip of order) {
+		if (ip === startIp) continue;
+		const previous = fn.instructions[ip - 1];
+		if (
+			body.externalEntries.has(ip) ||
+			body.branchSources.get(ip)?.some((source) => !members.has(source)) ||
+			(!members.has(ip - 1) &&
+				previous !== undefined &&
+				previous.opcode !== "JUMP" &&
+				previous.opcode !== "RETURN" &&
+				previous.opcode !== "THROW")
+		)
+			return undefined;
+	}
+	const flow = numberRecordDataflow(fn, order, exitIp, representations);
+	if (flow === undefined) return undefined;
+	const outputs = registersLiveAt(fn, body, exitIp, flow.written);
+	const inputs = new Set(flow.inputs);
+	for (const register of outputs) {
+		const representation = representations[register];
+		const kind = flow.kinds.get(register);
+		if (
+			kind === "number"
+				? representation !== "number" &&
+					representation !== "int32" &&
+					representation !== "boxed"
+				: representation !== "boolean" && representation !== "boxed"
+		)
+			return undefined;
+		// A path that skips the write leaves the output with the value it entered with.
+		if (!flow.assignedAtExit.has(register)) {
+			if (numberRecordInputKind(representation) !== kind) return undefined;
+			inputs.add(register);
+		}
+	}
+	const claimedIps = [...order].sort((a, b) => a - b);
+	return Object.freeze({
+		id: startIp,
+		object: (fn.instructions[startIp] as StaticPropertyLoad).object,
+		exitIp,
+		fields,
+		inputs: Object.freeze([...inputs].sort((a, b) => a - b)),
+		outputs: Object.freeze(outputs),
+		claimedIps,
+		borrowedRegisters: borrowedRegisters(fn, claimedIps, body),
+		fallback: "original-instructions",
+	});
+}
+
+function lowerNumberRecordRegion(
+	fn: BytecodeFunction,
+	startIp: number,
+	representations: ReadonlyArray<VmRegisterRepresentation>,
+	body: NativeBodyFacts,
+	conflicts: (ip: number) => boolean,
+): NativeNumberRecordRegionPlan | undefined {
+	const first = fn.instructions[startIp];
+	if (
+		first?.opcode !== "LOAD_PROPERTY_STATIC" ||
+		representations[first.object] !== "boxed"
+	)
+		return undefined;
+	const admissible = (ip: number) =>
+		!conflicts(ip) && numberRecordInstruction(fn.instructions[ip]!, first.object);
+	const closure = new Set<number>();
+	const exits = new Set<number>();
+	const pending = [startIp];
+	while (pending.length > 0) {
+		const ip = pending.pop()!;
+		if (closure.has(ip) || exits.has(ip)) continue;
+		if (ip >= fn.instructions.length) return undefined;
+		if (!admissible(ip) || closure.size >= NUMBER_RECORD_INSTRUCTION_LIMIT) {
+			exits.add(ip);
+			continue;
+		}
+		closure.add(ip);
+		pending.push(...numberRecordSuccessors(fn.instructions[ip]!, ip));
+	}
+	if (numberRecordFields(fn, [...closure]) === undefined) return undefined;
+	// Any member or closure exit can serve as the single exit of a smaller region.
+	const candidates: Array<{
+		readonly order: ReadonlyArray<number>;
+		readonly exitIp: number;
+		readonly fields: NativeNumberRecordRegionPlan["fields"];
+	}> = [];
+	for (const exitIp of [...closure, ...exits]) {
+		if (exitIp === startIp || exitIp >= fn.instructions.length) continue;
+		const order = numberRecordOrder(fn, startIp, exitIp, (ip) => closure.has(ip));
+		const fields = order === undefined ? undefined : numberRecordFields(fn, order);
+		if (order !== undefined && fields !== undefined)
+			candidates.push({ order, exitIp, fields });
+	}
+	candidates.sort((a, b) => b.order.length - a.order.length || a.exitIp - b.exitIp);
+	for (const { order, exitIp, fields } of candidates) {
+		const plan = admitNumberRecordRegion(
+			fn,
+			startIp,
+			order,
+			exitIp,
+			fields,
+			representations,
+			body,
+		);
+		if (plan !== undefined) return plan;
+	}
+	return undefined;
+}
+
 function lowerConstructorInitialization(
 	fn: BytecodeFunction,
 	representations: ReadonlyArray<VmRegisterRepresentation>,
@@ -1331,6 +1749,8 @@ export function lowerNativeFastPaths(
 		propertyReadRegionActions,
 		propertyReadPairs: Object.freeze(propertyReadPairs),
 		propertyReadPairActions,
+		numberRecordRegions:
+			selection.kind === "render" ? selection.plans.numberRecordRegions : [],
 		...(constructorInitialization === undefined ? {} : { constructorInitialization }),
 		constructorInitializationActions,
 		...(privateFieldReserve === undefined ? {} : { privateFieldReserve }),
@@ -1688,6 +2108,31 @@ export function selectNativeFastPaths(
 			}
 		}
 	}
+	const numberRecordRegions: Array<NativeNumberRecordRegionPlan> = [];
+	// Profiled sites observe each original instruction.
+	if (
+		native.mode === "direct" &&
+		!fn.isGenerator &&
+		!fn.isAsync &&
+		fn.profileSiteIds === undefined
+	) {
+		for (const ip of body.staticPropertyLoadIps) {
+			if (blocked.has(ip)) continue;
+			const plan = lowerNumberRecordRegion(
+				fn,
+				ip,
+				native.registerRepresentations,
+				body,
+				(candidate) =>
+					blocked.has(candidate) ||
+					native.instructions[candidate] !== undefined ||
+					fusions.has(candidate),
+			);
+			if (plan === undefined) continue;
+			numberRecordRegions.push(plan);
+			for (const claimedIp of plan.claimedIps) blocked.add(claimedIp);
+		}
+	}
 	const selected = lowerNativeFastPaths(
 		fn,
 		native.registerRepresentations,
@@ -1729,6 +2174,7 @@ export function selectNativeFastPaths(
 					...selected.propertyNumericUpdates,
 					...selected.propertyReadRegions,
 					...selected.propertyReadPairs,
+					...numberRecordRegions,
 					...(selected.constructorInitialization === undefined
 						? []
 						: [selected.constructorInitialization]),
@@ -1744,6 +2190,7 @@ export function selectNativeFastPaths(
 		propertyNumericUpdates: selected.propertyNumericUpdates,
 		propertyReadRegions: selected.propertyReadRegions,
 		propertyReadPairs: selected.propertyReadPairs,
+		numberRecordRegions,
 		pairedArrayLoops: selected.pairedArrayLoops,
 		...(selected.constructorInitialization === undefined
 			? {}

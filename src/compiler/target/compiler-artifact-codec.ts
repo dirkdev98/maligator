@@ -25,6 +25,7 @@ import type {
 	NativeArrayPairDestructurePlan,
 	NativePropertyProjectionPlan,
 	NativePropertyNumericUpdatePlan,
+	NativeNumberRecordRegionPlan,
 	NativePropertyReadRegionPlan,
 	NativePropertyReadPairPlan,
 	NativePropertyProjectionOperand,
@@ -91,7 +92,7 @@ import type {
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal artifacts are hard cut-overs: stale cache entries rebuild.
-export const COMPILER_ARTIFACT_VERSION = 182;
+export const COMPILER_ARTIFACT_VERSION = 183;
 
 function validateClosureCaptureOwners(
 	owners: ReadonlyArray<number>,
@@ -805,6 +806,23 @@ function writeNativeStorage(w: Writer, storage: NativeStoragePlan | undefined): 
 		w.i32Array([...plan.borrowedRegisters]);
 		w.u8(0);
 	}
+	w.u32(storage.numberRecordRegions.length);
+	for (const plan of storage.numberRecordRegions) {
+		w.i32(plan.id);
+		w.i32(plan.object);
+		w.i32(plan.exitIp);
+		w.u32(plan.fields.length);
+		for (const field of plan.fields) {
+			w.i32(field.stringIndex);
+			w.i32(field.icIndex);
+			w.u8(field.stored ? 1 : 0);
+		}
+		w.i32Array([...plan.inputs]);
+		w.i32Array([...plan.outputs]);
+		w.i32Array([...plan.claimedIps]);
+		w.i32Array([...plan.borrowedRegisters]);
+		w.u8(0);
+	}
 	w.u32(storage.pairedArrayLoops.length);
 	for (const plan of storage.pairedArrayLoops) {
 		for (const value of [
@@ -1147,6 +1165,35 @@ function readNativeStorage(r: Reader): NativeStoragePlan {
 			fallback: "original-instructions",
 		});
 	}
+	const numberRecordRegions: Array<NativeNumberRecordRegionPlan> = [];
+	for (let i = 0, count = r.count(17); i < count; i++) {
+		const id = r.i32(),
+			object = r.i32(),
+			exitIp = r.i32();
+		const fields = Array.from({ length: r.count(9) }, () => {
+			const stringIndex = r.i32(),
+				icIndex = r.i32(),
+				stored = r.u8();
+			if (stored > 1) throw new RangeError("Invalid native number record field");
+			return { stringIndex, icIndex, stored: stored === 1 };
+		});
+		const inputs = r.i32Array(),
+			outputs = r.i32Array(),
+			claimedIps = r.i32Array(),
+			borrowedRegisters = r.i32Array();
+		if (r.u8() !== 0) throw new RangeError("Invalid native number record fallback");
+		numberRecordRegions.push({
+			id,
+			object,
+			exitIp,
+			fields,
+			inputs,
+			outputs,
+			claimedIps,
+			borrowedRegisters,
+			fallback: "original-instructions",
+		});
+	}
 	const pairedArrayLoops: Array<NativePairedArrayLoopPlan> = Array.from(
 		{ length: r.count(9) },
 		() => ({
@@ -1393,6 +1440,7 @@ function readNativeStorage(r: Reader): NativeStoragePlan {
 		propertyNumericUpdates,
 		propertyReadRegions,
 		propertyReadPairs,
+		numberRecordRegions,
 		pairedArrayLoops,
 		...(constructorInitialization === undefined ? {} : { constructorInitialization }),
 		...(privateFieldReserve === undefined ? {} : { privateFieldReserve }),

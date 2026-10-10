@@ -516,6 +516,10 @@ typedef struct MalPerfStats {
     u64 define_property_transition_fills;
     u64 ic_store_plain_generic;
     u64 ic_store_other_generic;
+    u64 number_record_attempts;
+    u64 number_record_admissions;
+    u64 number_record_field_checks;
+    u64 number_record_slow_stores;
 
     u64 ic_mode_replacements[MAL_PERF_IC_MODE_COUNT][MAL_PERF_IC_MODE_COUNT];
 

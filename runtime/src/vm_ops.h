@@ -2143,6 +2143,102 @@ static inline bool mal_vm_property_numeric_update_commit(
 }
 
 /**
+ * One receiver admitted for a bounded run of number field reads and writes.
+ * Nothing between admission and write-back can collect, reenter JavaScript,
+ * or change the receiver's layout.
+ */
+typedef struct MalNumberRecord {
+    MalObject *object;
+    const MalShape *shape;
+    void *fields;
+} MalNumberRecord;
+
+static inline __attribute__((always_inline)) bool mal_vm_number_record_begin(
+    MalValue receiver, MalNumberRecord *record
+) {
+    MAL_PERF_COUNT(number_record_attempts);
+    MalObject *object = mal_vm_as_object(receiver);
+    // Write-back skips the prototype-epoch and watched-method notifications.
+    if (object == nullptr || object->storage_kind != MAL_OBJECT_COMPACT ||
+        object->is_prototype || object->watched_method_proto ||
+        object->primordial_locked) {
+        return false;
+    }
+    *record = (MalNumberRecord) {
+        .object = object,
+        .shape = object->shape,
+        .fields = mal_object_fields_nonempty(object),
+    };
+    return true;
+}
+
+/**
+ * A shape-mode row proves an own data field for every layout of its logical
+ * shape, and a store row also proves it writable. Admits only a Number value.
+ */
+static inline __attribute__((always_inline)) bool mal_vm_number_record_field(
+    const MalNumberRecord *record, const MalInlineCache *ic, u16 *field, f64 *value
+) {
+    MAL_PERF_COUNT(number_record_field_checks);
+    if (ic->mode != MAL_IC_MODE_SHAPE || ic->slot == MAL_IC_VALUE_SLOT || ic->shape == nullptr) {
+        return false;
+    }
+    u16 token;
+    if (__builtin_expect(ic->shape == record->shape, 1)) {
+        token = ic->field;
+    } else if (mal_shape_same_logical(ic->shape, record->shape)) {
+        token = record->shape->props[ic->slot].field;
+    } else {
+        return false;
+    }
+    switch (mal_shape_field_representation(token)) {
+        case MAL_FIELD_I32:
+            *value = (f64) mal_shape_field_load_i32(record->fields, token);
+            break;
+        case MAL_FIELD_F64:
+            memcpy(value, (const u8 *) record->fields + mal_shape_field_offset(token),
+                   sizeof(*value));
+            break;
+        default:
+            if (!mal_shape_field_try_load_number(record->fields, token, value)) return false;
+    }
+    *field = token;
+    return true;
+}
+
+static inline void mal_vm_number_record_admitted(void) {
+    MAL_PERF_COUNT(number_record_admissions);
+}
+
+/** Writes only a value the admitted layout holds unchanged; false leaves the field untouched. */
+static inline __attribute__((always_inline)) bool mal_vm_number_record_try_store(
+    const MalNumberRecord *record, u16 field, f64 value
+) {
+    u8 *address = (u8 *) record->fields + mal_shape_field_offset(field);
+    MalFieldRepresentation representation = mal_shape_field_representation(field);
+    if (__builtin_expect(representation == MAL_FIELD_F64, 1)) {
+        memcpy(address, &value, sizeof(value));
+        return true;
+    }
+    if (representation == MAL_FIELD_I32 && value >= INT32_MIN && value <= INT32_MAX) {
+        i32 integer = (i32) value;
+        if ((f64) integer == value && !(integer == 0 && signbit(value))) {
+            memcpy(address, &integer, sizeof(integer));
+            return true;
+        }
+    }
+    return false;
+}
+
+/**
+ * Stores through the current layout, widening as needed. Callers repeat every
+ * stored field after any failed try-store because widening can move fields.
+ */
+__attribute__((noinline)) void mal_vm_number_record_store_slow(
+    MalObject *object, const MalInlineCache *ic, f64 value
+);
+
+/**
  * Monomorphic shape-slot overwrite or proven fresh-property shape transition.
  * Returns true when applied; false leaves the store to the general [[Set]].
  * Successful hits run no user code. Existing-slot overwrites need the SATB

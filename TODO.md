@@ -624,22 +624,12 @@ contracts or investigates costs still visible after the string follow-ups.
       array-length and array-index probes stay out of line in the large caller;
       forcing them inline cut the loop by 12% but grew the benchmark binary 1.6%.
       Moving the entry checks into each compiled function's prologue would inline
-      them once per function instead of once per call site. The `arguments`
-      function's direct entry links a root frame only because its argument loads
-      are safepoints in the generic body, though the entry reads them as
-      parameters. The Core target verifier requires every Core safepoint to keep a
-      record in each entry, so dropping those needs entry-specific omissions in that
-      contract.
-- [ ] Remove the repeated shape checks of the objects phase's particle loop. It
-      takes about 70 ms against Node's 19 and performs 14 to 17 inline-cache shape
-      checks per iteration on the same receiver, whose shape the loop never
-      changes. One guard on that receiver's shape could cover its loads and stores
-      of number fields, falling back to the unchanged generic code before any side
-      effect. Numeric property update plans do not pay for themselves here: the
-      standalone loop runs in 59 ms with them and 55 ms with generic loads and
-      stores, because their begin and commit checks cost more than the boxing they
-      save. Make them cheaper or drop them; functions with numeric fusion
-      already skip them.
+      them once per function instead of once per call site.
+- [ ] Re-measure numeric property update plans now that number record regions
+      take over loops that only touch number fields of one receiver. On the
+      particle loop, before regions, they ran 59 ms against 55 ms for generic loads
+      and stores, because their begin and commit checks cost more than the boxing
+      they save. Make them cheaper or drop them where they still apply.
 - [ ] Keep Collatz-style integer loops in int32. The core phase's remaining gap
       to Node is `collatzSteps` alone, about 70 ms against 37; its prime and throw
       loops already beat Node. The loop is clean double arithmetic whose `& 1`

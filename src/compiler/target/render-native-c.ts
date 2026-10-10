@@ -37,12 +37,18 @@ import type {
 	NativeCallTransportPlan,
 } from "./lower-native-calls.ts";
 import type { NativeCaptureAccessPlan } from "./lower-native-captures.ts";
-import { lowerNativeFastPaths } from "./lower-native-fast-paths.ts";
+import {
+	lowerNativeFastPaths,
+	numberRecordDataflow,
+	numberRecordOrder,
+	numberRecordSuccessors,
+} from "./lower-native-fast-paths.ts";
 import type {
 	NativeConstructorInitializationAction,
 	NativeFastPathPlans,
 	NativeMathCallPlan,
 	NativeNumberPredicatePlan,
+	NativeNumberRecordRegionPlan,
 	NativePairedArrayLoopAction,
 	NativePropertyNumericUpdateAction,
 	NativePropertyProjectionAction,
@@ -688,6 +694,189 @@ function nativeNumberExpr(operator: string, left: string, right: string): string
 		return `mal_number_remainder(${left}, ${right})`;
 	}
 	return null;
+}
+
+/**
+ * The admitted copy of a number record region. Its forward branches set block
+ * flags rather than jump to labels so whole-label block splitting still applies.
+ */
+function emitNumberRecordRegion(
+	fn: BytecodeFunction,
+	plan: NativeNumberRecordRegionPlan,
+	reps: ReadonlyArray<VmRegisterRepresentation>,
+	propertyCache: string,
+): ReadonlyArray<string> {
+	const members = new Set(plan.claimedIps);
+	const order = numberRecordOrder(fn, plan.id, plan.exitIp, (ip) => members.has(ip));
+	const flow =
+		order?.length === members.size
+			? numberRecordDataflow(fn, order, plan.exitIp, reps)
+			: undefined;
+	if (order === undefined || flow === undefined)
+		throw new Error("Invalid native number record region");
+	const id = `__number_record_${plan.id}`;
+	const kindOf = (register: number) => {
+		const kind = flow.kinds.get(register);
+		if (kind === undefined) throw new Error("Native number record register has no kind");
+		return kind;
+	};
+	const local = (register: number) => `${id}_r${register}`;
+	const fieldIndex = new Map(
+		plan.fields.map((field, index) => [field.stringIndex, index]),
+	);
+	const field = (stringIndex: number) => {
+		const index = fieldIndex.get(stringIndex);
+		if (index === undefined) throw new Error("Native number record field is unadmitted");
+		return `${id}_v${index}`;
+	};
+	const guards = [`mal_vm_number_record_begin(r${plan.object}, &${id})`];
+	for (const [index, { icIndex }] of plan.fields.entries())
+		guards.push(
+			`mal_vm_number_record_field(&${id}, &${propertyCache}[${icIndex}], &${id}_f${index}, &${id}_v${index})`,
+		);
+	const initial = new Map<number, string>();
+	for (const register of plan.inputs) {
+		const representation = reps[register];
+		if (kindOf(register) === "boolean") {
+			if (representation !== "boolean")
+				throw new Error("Native number record Boolean input is not unboxed");
+			initial.set(register, `r${register}`);
+		} else if (representation === "boxed") {
+			guards.push(`mal_ops_is_number(r${register})`);
+			initial.set(register, `mal_ops_number_as_f64(r${register})`);
+		} else
+			initial.set(
+				register,
+				representation === "int32" ? `(f64) r${register}` : `r${register}`,
+			);
+	}
+	const isBranch = (ip: number) => {
+		const opcode = fn.instructions[ip]?.opcode;
+		return opcode === "JUMP" || opcode === "JUMP_IF";
+	};
+	const predecessors = new Map<number, number>();
+	for (const ip of order)
+		for (const successor of numberRecordSuccessors(fn.instructions[ip]!, ip))
+			predecessors.set(successor, (predecessors.get(successor) ?? 0) + 1);
+	// A block continues only into the next instruction when that is its sole entry.
+	const heads = order.filter(
+		(ip) =>
+			ip === plan.id ||
+			!members.has(ip - 1) ||
+			isBranch(ip - 1) ||
+			predecessors.get(ip) !== 1,
+	);
+	const headSet = new Set(heads);
+	const reach = (ip: number) => (ip === plan.exitIp ? "" : `${id}_b${ip} = true;`);
+	const truthy = (register: number) =>
+		kindOf(register) === "boolean"
+			? local(register)
+			: `mal_number_is_truthy(${local(register)})`;
+	const statement = (ip: number): string => {
+		const op = fn.instructions[ip]!;
+		switch (op.opcode) {
+			case "LOAD_PROPERTY_STATIC":
+				return `${local(op.dst)} = ${field(op.stringIndex)};`;
+			case "STORE_PROPERTY_STATIC":
+				return `${field(op.stringIndex)} = ${local(op.value)};`;
+			case "CREATE_NUMBER":
+			case "CREATE_F64":
+				return `${local(op.dst)} = ${cF64Literal(op.value)};`;
+			case "CREATE_BOOLEAN":
+				return `${local(op.dst)} = ${op.value};`;
+			case "MOVE":
+				return `${local(op.dst)} = ${local(op.src)};`;
+			case "BINARY": {
+				const compare = NATIVE_COMPARE[op.operator];
+				const expression =
+					compare === undefined
+						? nativeNumberExpr(op.operator, local(op.left), local(op.right))
+						: `${local(op.left)} ${compare} ${local(op.right)}`;
+				if (expression === null) throw new Error("Invalid native number record operator");
+				return `${local(op.dst)} = ${expression};`;
+			}
+			case "UNARY": {
+				const source = local(op.src);
+				const expression =
+					op.operator === "-"
+						? `-${source}`
+						: op.operator === "increment"
+							? `${source} + 1.0`
+							: op.operator === "decrement"
+								? `${source} - 1.0`
+								: op.operator === "~"
+									? `(f64) ~mal_ops_number_to_i32(${source})`
+									: op.operator === "!"
+										? `!${truthy(op.src)}`
+										: source;
+				return `${local(op.dst)} = ${expression};`;
+			}
+			case "JUMP":
+				return reach(op.targetIp);
+			case "JUMP_IF":
+				return `if (${truthy(op.cond)}) { ${reach(op.targetIp)} } else { ${reach(ip + 1)} }`;
+			default:
+				throw new Error(`Invalid native number record instruction ${op.opcode}`);
+		}
+	};
+	const lines = [
+		"{",
+		`  MalNumberRecord ${id};`,
+		...plan.fields.map(
+			(_, index) => `  u16 ${id}_f${index} = 0; f64 ${id}_v${index} = 0.0;`,
+		),
+		`  if (${guards.join(" && ")}) {`,
+		"    mal_vm_number_record_admitted();",
+		...[...flow.kinds].map(
+			([register, kind]) =>
+				`    ${kind === "boolean" ? "bool" : "f64"} ${local(register)} = ${initial.get(register) ?? (kind === "boolean" ? "false" : "0.0")};`,
+		),
+		...heads.slice(1).map((ip) => `    bool ${id}_b${ip} = false;`),
+	];
+	for (const head of heads) {
+		lines.push(head === plan.id ? "    {" : `    if (${id}_b${head}) {`);
+		let ip = head;
+		for (;;) {
+			const emitted = statement(ip);
+			if (emitted !== "") lines.push(`      ${emitted}`);
+			if (isBranch(ip)) break;
+			if (!members.has(ip + 1) || headSet.has(ip + 1)) {
+				const fallthrough = reach(ip + 1);
+				if (fallthrough !== "") lines.push(`      ${fallthrough}`);
+				break;
+			}
+			ip++;
+		}
+		lines.push("    }");
+	}
+	const stored = plan.fields.flatMap((entry, index) => (entry.stored ? [index] : []));
+	lines.push(
+		`    if (__builtin_expect(!(${stored.map((index) => `mal_vm_number_record_try_store(&${id}, ${id}_f${index}, ${id}_v${index})`).join(" & ")}), 0)) {`,
+		...stored.map(
+			(index) =>
+				`      mal_vm_number_record_store_slow(${id}.object, &${propertyCache}[${plan.fields[index]!.icIndex}], ${id}_v${index});`,
+		),
+		"    }",
+	);
+	for (const register of plan.outputs) {
+		const value = local(register);
+		const representation = reps[register];
+		lines.push(
+			`    r${register} = ${
+				kindOf(register) === "boolean"
+					? representation === "boolean"
+						? value
+						: `mal_value_new_boolean(${value})`
+					: representation === "number"
+						? value
+						: representation === "int32"
+							? `mal_ops_number_to_i32(${value})`
+							: `mal_ops_number_value(${value})`
+			};`,
+		);
+	}
+	lines.push(`    goto L${plan.exitIp};`, "  }", "}");
+	return lines;
 }
 
 function nativeUnsignedExpr(operator: string, left: string, right: string): string {
@@ -3313,6 +3502,7 @@ function emitBody(
 		propertyNumericUpdates: [],
 		propertyReadRegions: [],
 		propertyReadPairs: [],
+		numberRecordRegions: [],
 		pairedArrayLoops: [],
 		arrayPresence: [],
 		arrayPairDestructure: [],
@@ -3417,7 +3607,18 @@ function emitBody(
 			continue;
 		deferredIteratorCursors.add(cursor.initializeIp);
 	}
-	const { jumpTargets, handlerTargets } = analysis;
+	const { handlerTargets } = analysis;
+	// An admitted number record region continues at its exit label.
+	const jumpTargets =
+		fastPathPlans.numberRecordRegions.length === 0
+			? analysis.jumpTargets
+			: new Set([
+					...analysis.jumpTargets,
+					...fastPathPlans.numberRecordRegions.map((plan) => plan.exitIp),
+				]);
+	const numberRecordRegionById = new Map(
+		fastPathPlans.numberRecordRegions.map((plan) => [plan.id, plan]),
+	);
 	const ownsCaptureEnvironment = coro === null && analysis.ownsCaptureEnvironment;
 	const staticDefineStringIndexByIp = new Map(
 		fastPathPlans.literalPropertyDefinitions.map((plan) => [
@@ -4069,6 +4270,15 @@ function emitBody(
 			emittedInstructions.add(ip);
 			continue;
 		}
+		const numberRecord = numberRecordRegionById.get(ip);
+		if (numberRecord !== undefined)
+			for (const line of emitNumberRecordRegion(
+				fn,
+				numberRecord,
+				reps,
+				nativeBodyReference(resources, "propertyCache"),
+			))
+				lines.push(`    ${line}`);
 		const safepointKind = gcSafepointKinds.get(ip);
 		const rootedOutputs = !hasPrivateRoots
 			? EMPTY_ROOTED_OUTPUTS

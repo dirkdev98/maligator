@@ -1372,6 +1372,15 @@ static void mal_perf_stats_print(void) {
         (unsigned long long) mal_perf_stats.ic_store_plain_generic,
         (unsigned long long) mal_perf_stats.ic_store_other_generic
     );
+    fprintf(
+        stderr,
+        "[perf-number-record] attempts=%llu admissions=%llu field_checks=%llu "
+        "slow_stores=%llu\n",
+        (unsigned long long) mal_perf_stats.number_record_attempts,
+        (unsigned long long) mal_perf_stats.number_record_admissions,
+        (unsigned long long) mal_perf_stats.number_record_field_checks,
+        (unsigned long long) mal_perf_stats.number_record_slow_stores
+    );
     u64 replacements = 0;
     u64 cross_mode = 0;
     u64 own_to_chain = 0;
