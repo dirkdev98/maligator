@@ -298,7 +298,7 @@ export function coreMemoryAccesses(
 
 export class CoreMemoryValueSources {
 	readonly #locations = new CoreMemoryLocationTable();
-	readonly #writes = new Set<CoreMemoryLocationId>();
+	readonly #writes = new Map<CoreMemoryLocationId, Array<CoreValueId>>();
 
 	constructor(fn: CoreFunctionStore) {
 		for (const instruction of fn.instructionIds()) {
@@ -315,8 +315,12 @@ export class CoreMemoryValueSources {
 					access.mode === "write" &&
 					access.value !== undefined &&
 					coreMemoryLocationIsExact(access.location)
-				)
-					this.#writes.add(this.#locations.id(access.location));
+				) {
+					const id = this.#locations.id(access.location);
+					const values = this.#writes.get(id);
+					if (values === undefined) this.#writes.set(id, [access.value]);
+					else values.push(access.value);
+				}
 			}
 		}
 	}
@@ -328,6 +332,13 @@ export class CoreMemoryValueSources {
 			location.kind === "element" ||
 			this.#writes.has(this.#locations.id(location))
 		);
+	}
+
+	/** The values this function writes to a slot location; heap locations have no complete list. */
+	slotWrites(location: CoreExactMemoryLocation): ReadonlyArray<CoreValueId> {
+		if (location.kind === "object-slot" || location.kind === "element")
+			throw new Error("Heap locations have no complete write list");
+		return this.#writes.get(this.#locations.id(location)) ?? [];
 	}
 }
 

@@ -399,13 +399,16 @@ Runtime eval may remove source closure without invalidating authority closure.
       manager to skip irrelevant work and rebuild only invalidated results. Reopen
       a previously optimized subsystem only with fresh residual-cost evidence.
       On the Node-hosted self-compile (43 s), memory and provenance optimization
-      takes 7.4 of Core's 20 s. Its static-value queries cost about 2.5 s, mostly
-      memory forwarding (`valueForRead`, `solveSlot`) while describing a receiver
-      that is itself a load: `fold-static-property-reads` spends 1.7 s over 7,681
-      runs for 20 changed functions, and `lower-primitive-operations` 1.0 s for 40.
-      Skipping that forwarding changes which reads fold, so it needs a measured
-      output comparison rather than a byte-parity check. Verification is another
-      5.5 s (13%), most of it independent re-derivation at trust boundaries.
+      takes 7.4 of Core's 20 s. Static-value queries now ask for memory versions
+      only when a slot's written value could be described, which kept the output
+      byte-identical and cut `fold-static-property-reads` to 1.1 s and
+      `fold-static-binding-constants` to 0.65 s over about 7,500 runs each. Most of
+      what remains is the exceptional control-flow analysis their joins request
+      after each edit, and the static cell index, which drops every cell's facts
+      whenever any function changes. Without that global drop, unsoundly, the two
+      folds took 0.9 s less before the memory gate. `lower-primitive-operations`
+      spends 1.0 s for 40 changed functions. Verification is another 5.5 s (13%),
+      most of it independent re-derivation at trust boundaries.
 
 - [ ] Put aggregate work and memory budgets around analysis extensions, including
       rejected candidates and nested queries, not only admitted entries. Reuse

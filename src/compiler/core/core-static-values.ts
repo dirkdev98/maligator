@@ -392,6 +392,7 @@ export class CoreStaticValueAnalysis {
 	readonly #memory: () => CoreMemoryVersions;
 	readonly #observationWidth: number;
 	#memorySources: CoreMemoryValueSources | undefined;
+	readonly #describable = new Map<CoreValueId, boolean>();
 	readonly #cells:
 		| ((
 				fn: CoreFunctionStore,
@@ -1426,6 +1427,81 @@ export class CoreStaticValueAnalysis {
 		};
 	}
 
+	/**
+	 * A syntactic over-approximation of `#describe`: false only when no producer
+	 * path can yield a known value. A cycle assumes true, so a false result is exact.
+	 */
+	#mayDescribe(value: CoreValueId, visiting = new Set<CoreValueId>()): boolean {
+		const cached = this.#describable.get(value);
+		if (cached !== undefined) return cached;
+		if (visiting.has(value)) return true;
+		visiting.add(value);
+		const result = this.#producerMayDescribe(value, visiting);
+		visiting.delete(value);
+		this.#describable.set(value, result);
+		return result;
+	}
+
+	#producerMayDescribe(value: CoreValueId, visiting: Set<CoreValueId>): boolean {
+		const fn = this.#fn;
+		if (fn.kernel.valueDefinitionKind(value) === 0) {
+			const block = coreBlockId(fn.kernel.valueDefinitionOwner(value));
+			if (block === fn.entry) return false;
+			const index = fn.kernel.valueDefinitionIndex(value);
+			return (this.#cfg().predecessors[block] ?? []).every((edge) => {
+				const input = edge.arguments[index];
+				return (
+					edge.kind !== "exceptional" &&
+					input !== undefined &&
+					this.#mayDescribe(input, visiting)
+				);
+			});
+		}
+		const instruction = coreInstructionId(fn.kernel.valueDefinitionOwner(value));
+		if (fn.instructionKind(instruction) !== "operation") return false;
+		const opcode = fn.instructionOpcodeName(instruction);
+		const attributes = fn.instructionAttributes(instruction);
+		const operand = (index: number) =>
+			fn.kernel.operandAt(fn.kernel.instructionOperandStart(instruction) + index);
+		switch (opcode) {
+			case "callKnown":
+				return attributes.argumentMode === undefined;
+			// Calls need a described callee and primordial property reads a described base.
+			case "call":
+			case "construct":
+			case "loadPropertyStatic":
+			case "loadProperty":
+			case "move":
+				return this.#mayDescribe(operand(0), visiting);
+			case "createFunction":
+			case "createUndefined":
+			case "createNull":
+			case "createBoolean":
+			case "createI32":
+			case "createF64":
+			case "createNumber":
+			case "createString":
+			case "createBigint":
+			case "preparedStringCompare":
+			case "preciseNumberSum":
+			case "loadLocal":
+			case "loadGlobal":
+			case "loadCaptured":
+			case "binary":
+			case "unary":
+			case "loadIntrinsic":
+			case "loadGlobalProperty":
+			case "loadPrimordial":
+			case "createObject":
+			case "createObjectShaped":
+			case "createArray":
+			case "instantiateLiteralTemplate":
+				return true;
+			default:
+				return false;
+		}
+	}
+
 	#describe(value: CoreValueId, requestedKey?: string): CoreStaticValueResult {
 		const fn = this.#fn;
 		const program = this.#program;
@@ -1567,9 +1643,11 @@ export class CoreStaticValueAnalysis {
 								owner: attributes.functionIndex as number,
 								index: attributes.index as number,
 							};
-			const maySupply = (this.#memorySources ??= new CoreMemoryValueSources(
-				fn,
-			)).maySupply(location);
+			const sources = (this.#memorySources ??= new CoreMemoryValueSources(fn));
+			// Memory versions cost more than most proofs they feed; compute them only for a describable write.
+			const maySupply =
+				sources.maySupply(location) &&
+				sources.slotWrites(location).some((written) => this.#mayDescribe(written));
 			const input = maySupply
 				? this.#memory().valueForRead(instruction, location)
 				: undefined;
