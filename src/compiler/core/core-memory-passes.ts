@@ -82,6 +82,7 @@ import {
 } from "./core-primitive-operations.ts";
 import {
 	selectStaticPropertyReads,
+	foldStaticBindingConstants,
 	foldStaticReflections,
 	foldStaticPropertyReads,
 } from "./core-static-value-selection.ts";
@@ -2489,6 +2490,7 @@ const scalarReplaceContainedAggregates: CoreFunctionPass = {
 
 export const CORE_PROVENANCE_PASSES: ReadonlyArray<CoreFunctionPass> = [
 	foldStaticPropertyReads,
+	foldStaticBindingConstants,
 	selectStaticPropertyReads,
 	foldStaticReflections,
 	resolveKnownOperations,
@@ -2517,6 +2519,7 @@ export const CORE_MEMORY_SSA_PASSES: ReadonlyArray<CoreFunctionPass> = [
 
 export const CORE_MEMORY_PASSES: ReadonlyArray<CoreFunctionPass> = [
 	foldStaticPropertyReads,
+	foldStaticBindingConstants,
 	selectStaticPropertyReads,
 	foldStaticReflections,
 	resolveKnownOperations,

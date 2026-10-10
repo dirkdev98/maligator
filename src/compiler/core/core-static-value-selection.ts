@@ -317,6 +317,91 @@ export const foldStaticPropertyReads: CoreFunctionPass = {
 	},
 };
 
+// A binding proven to hold one immutable primitive feeds it to the operations that
+// read it, so arithmetic and comparisons see a literal. The load and its TDZ check
+// stay: the proof only covers reads the check has already admitted.
+export const foldStaticBindingConstants: CoreFunctionPass = {
+	name: "fold-static-binding-constants",
+	stage: "memory",
+	requiredFunctionOpcodesAny: ["loadGlobal", "loadCaptured"],
+	requiredAnalyses: [CORE_STATIC_VALUE_ANALYSIS],
+	wakesOn: ["body", "memoryEffects", "facts"],
+	changes: { cfg: false, calls: true, facts: true, representations: false },
+	budget: CORE_O2_PASS_BUDGETS["provenance-escape-scalar-replacement"],
+	run(context) {
+		const { program, item } = context,
+			fn = program.function(item.function);
+		const loadGlobal = program.registry.get("loadGlobal")?.id;
+		const loadCaptured = program.registry.get("loadCaptured")?.id;
+		const throwIfTdz = program.registry.get("throwIfTdz")?.id;
+		const analysis = context.analysis(CORE_STATIC_VALUE_ANALYSIS);
+		const rewrites: Array<{
+			readonly consumer: CoreInstructionId;
+			readonly index: number;
+			readonly opcode: string;
+			readonly attributes: Readonly<Record<string, CoreAttributeValue>>;
+		}> = [];
+		for (const consumer of fn.instructionIds()) {
+			if (rewrites.length >= context.remainingEdits) break;
+			if (fn.instructionKind(consumer) !== "operation") continue;
+			if (fn.kernel.instructionOpcode(consumer) === throwIfTdz) continue;
+			const start = fn.kernel.instructionOperandStart(consumer);
+			const count = fn.kernel.instructionOperandCount(consumer);
+			for (let index = 0; index < count; index++) {
+				const value = fn.kernel.operandAt(start + index);
+				if (fn.kernel.valueDefinitionKind(value) !== 1) continue;
+				const definition = fn.kernel.instructionOpcode(
+					fn.kernel.valueDefinitionOwner(value) as CoreInstructionId,
+				);
+				if (definition !== loadGlobal && definition !== loadCaptured) continue;
+				const constant = analysis.constant(value, consumer);
+				const literal =
+					constant === undefined
+						? undefined
+						: constant.kind === "number"
+							? Number.isFinite(constant.value) && !Object.is(constant.value, -0)
+								? {
+										// `createNumber` carries int32 values; literal lowering uses f64 otherwise.
+										opcode:
+											Number.isInteger(constant.value) &&
+											constant.value >= -2147483648 &&
+											constant.value <= 2147483647
+												? "createNumber"
+												: "createF64",
+										attributes: { value: constant.value },
+									}
+								: undefined
+							: constant.kind === "boolean"
+								? { opcode: "createBoolean", attributes: { value: constant.value } }
+								: constant.kind === "undefined"
+									? { opcode: "createUndefined", attributes: {} }
+									: constant.kind === "null"
+										? { opcode: "createNull", attributes: {} }
+										: undefined;
+				if (literal !== undefined) rewrites.push({ consumer, index, ...literal });
+			}
+		}
+		if (rewrites.length === 0) return undefined;
+		const editor = CoreEditor.open(program, fn.id);
+		for (const { consumer, index, opcode, attributes } of rewrites) {
+			const literal = editor.insertInstruction(
+				fn.instructionBlock(consumer),
+				consumer,
+				opcode,
+				[],
+				{ attributes, sourcePosition: fn.instructionSourcePosition(consumer) },
+			).outputs[0]!;
+			const start = fn.kernel.instructionOperandStart(consumer);
+			const inputs = Array.from(
+				{ length: fn.kernel.instructionOperandCount(consumer) },
+				(_, at) => (at === index ? literal : fn.kernel.operandAt(start + at)),
+			);
+			editor.replaceOperands(consumer, inputs);
+		}
+		return editor.commit();
+	},
+};
+
 export const foldStaticReflections: CoreFunctionPass = {
 	name: "fold-static-reflections",
 	admission: {
