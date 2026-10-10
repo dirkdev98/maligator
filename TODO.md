@@ -154,7 +154,10 @@ The independent target boundary and current storage contract are recorded in
       should carry that metadata for the operations they actually emit, including
       fast-path branches and helper temporaries, and the splitter should consume
       it. That needs every renderer path to report its C-level reads and writes,
-      so it lands as one migration rather than per opcode.
+      so it lands as one migration rather than per opcode. A cheap splitter would
+      also pay for lower thresholds: splitting past 64 Ki into 32 Ki parts cut the
+      self-compile's clang CPU from 352 s to 322 s, but added 4 s of
+      single-threaded emission, which cancels the saving at eight jobs.
 - [ ] Use dominance for definition-initialized locals in functions with exception
       handlers. Handler entries currently disable it, so
       `lowerExecutionFunctionToNativePlan` still zeroes 4,351 registers on every call.
@@ -244,7 +247,10 @@ The independent target boundary and current storage contract are recorded in
       array cursors but spent the program budget that collection call chains and
       result virtualization had used, with no wall-time change; doubling the
       specialization program budget and moving the allocation mark state from
-      thread-locals onto the heap also left wall time unchanged. Hot accessors only
+      thread-locals onto the heap also left wall time unchanged, as did moving the
+      open-world Math call hint from a thread-local into the call-cache row (an
+      open-world copy of the allocation loop stayed at 171 ms; clang hoists the
+      thread-local address out of the loop). Hot accessors only
       sped up once inlining accepted throwing callees and class-scope closures.
       Inlining the strict `this` check and reading the callee's realm field
       directly in `mal_vm_call_cached` and guarded direct calls did not change the
