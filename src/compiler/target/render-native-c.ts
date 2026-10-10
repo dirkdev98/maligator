@@ -38,6 +38,7 @@ import type {
 } from "./lower-native-calls.ts";
 import type { NativeCaptureAccessPlan } from "./lower-native-captures.ts";
 import {
+	integerLoopOrder,
 	lowerNativeFastPaths,
 	numberRecordDataflow,
 	numberRecordOrder,
@@ -46,6 +47,7 @@ import {
 import type {
 	NativeConstructorInitializationAction,
 	NativeFastPathPlans,
+	NativeIntegerLoopRegionPlan,
 	NativeMathCallPlan,
 	NativeNumberPredicatePlan,
 	NativeNumberRecordRegionPlan,
@@ -700,6 +702,199 @@ function nativeNumberExpr(operator: string, left: string, right: string): string
  * The admitted copy of a number record region. Its forward branches set block
  * flags rather than jump to labels so whole-label block splitting still applies.
  */
+function emitIntegerLoopRegion(
+	fn: BytecodeFunction,
+	plan: NativeIntegerLoopRegionPlan,
+	reps: ReadonlyArray<VmRegisterRepresentation>,
+): ReadonlyArray<string> {
+	const members = new Set(plan.claimedIps.filter((ip) => ip !== plan.entryIp));
+	const order = integerLoopOrder(fn, plan.id, members);
+	const flow =
+		order === undefined ? undefined : numberRecordDataflow(fn, order, -1, reps);
+	if (order === undefined || flow === undefined)
+		throw new Error("Invalid native integer loop region");
+	const id = `__integer_loop_${plan.id}`;
+	const kindOf = (register: number) => {
+		const kind = flow.kinds.get(register);
+		if (kind === undefined) throw new Error("Native integer loop register has no kind");
+		return kind;
+	};
+	const local = (register: number) => `${id}_r${register}`;
+	const start = (register: number) => `${id}_s${register}`;
+	const guards: Array<string> = [];
+	const initial = new Map<number, string>();
+	for (const register of plan.inputs) {
+		const representation = reps[register];
+		if (kindOf(register) === "boolean") {
+			if (representation !== "boolean")
+				throw new Error("Native integer loop Boolean input is not unboxed");
+			initial.set(register, `r${register}`);
+			continue;
+		}
+		if (representation === "int32") {
+			initial.set(register, `(i64) r${register}`);
+			continue;
+		}
+		const value =
+			representation === "boxed"
+				? `mal_ops_number_as_f64(r${register})`
+				: `(f64) r${register}`;
+		if (representation === "boxed") guards.push(`mal_ops_is_number(r${register})`);
+		guards.push(`mal_safe_integer_admit(${value}, &${local(register)})`);
+	}
+	const materialize = (register: number, value: string) => {
+		const representation = reps[register];
+		if (kindOf(register) === "boolean")
+			return `r${register} = ${representation === "boolean" ? value : `mal_value_new_boolean(${value})`};`;
+		return `r${register} = ${
+			representation === "number"
+				? `(f64) ${value}`
+				: representation === "int32"
+					? `(i32) ${value}`
+					: `mal_ops_number_value((f64) ${value})`
+		};`;
+	};
+	const isBranch = (ip: number) => {
+		const opcode = fn.instructions[ip]?.opcode;
+		return opcode === "JUMP" || opcode === "JUMP_IF";
+	};
+	const predecessors = new Map<number, number>();
+	for (const ip of order)
+		for (const successor of numberRecordSuccessors(fn.instructions[ip]!, ip))
+			predecessors.set(successor, (predecessors.get(successor) ?? 0) + 1);
+	const heads = order.filter(
+		(ip) =>
+			ip === plan.id ||
+			!members.has(ip - 1) ||
+			isBranch(ip - 1) ||
+			predecessors.get(ip) !== 1,
+	);
+	const headSet = new Set(heads);
+	const exitIndex = new Map(plan.exits.map((exit, index) => [exit.targetIp, index + 1]));
+	// Iterations restart from their saved start, so a guard never resumes mid-iteration.
+	const restart = `{ ${id}_exit = 0; break; }`;
+	const reach = (ip: number): string => {
+		if (ip === plan.id)
+			return `${plan.carried.map((register) => `${start(register)} = ${local(register)};`).join(" ")} if (mal_gc_poll) ${restart} continue;`;
+		const exit = exitIndex.get(ip);
+		if (exit !== undefined) return `{ ${id}_exit = ${exit}; break; }`;
+		return `${id}_b${ip} = true;`;
+	};
+	const truthy = (register: number) =>
+		kindOf(register) === "boolean" ? local(register) : `${local(register)} != 0`;
+	const int32 = (register: number) => `mal_safe_integer_to_i32(${local(register)})`;
+	const checked = (call: string, dst: number) =>
+		`if (__builtin_expect(!${call.replace("%DST%", `&${local(dst)}`)}, 0)) ${restart}`;
+	const statement = (ip: number): string => {
+		const op = fn.instructions[ip]!;
+		switch (op.opcode) {
+			case "CREATE_NUMBER":
+			case "CREATE_F64":
+				return `${local(op.dst)} = INT64_C(${op.value});`;
+			case "CREATE_BOOLEAN":
+				return `${local(op.dst)} = ${op.value};`;
+			case "MOVE":
+				return `${local(op.dst)} = ${local(op.src)};`;
+			case "BINARY": {
+				const compare = NATIVE_COMPARE[op.operator];
+				if (compare !== undefined)
+					return `${local(op.dst)} = ${local(op.left)} ${op.operator === "===" || op.operator === "==" ? "==" : op.operator === "!==" || op.operator === "!=" ? "!=" : compare} ${local(op.right)};`;
+				const left = local(op.left);
+				const right = local(op.right);
+				switch (op.operator) {
+					case "+":
+						return checked(`mal_safe_integer_add(${left}, ${right}, %DST%)`, op.dst);
+					case "-":
+						return checked(`mal_safe_integer_sub(${left}, ${right}, %DST%)`, op.dst);
+					case "*":
+						return checked(`mal_safe_integer_mul(${left}, ${right}, %DST%)`, op.dst);
+					case "/":
+						return checked(`mal_safe_integer_div(${left}, ${right}, %DST%)`, op.dst);
+					case "%":
+						return checked(`mal_safe_integer_rem(${left}, ${right}, %DST%)`, op.dst);
+					case "&":
+						return `${local(op.dst)} = (i64) (${int32(op.left)} & ${int32(op.right)});`;
+					case "|":
+						return `${local(op.dst)} = (i64) (${int32(op.left)} | ${int32(op.right)});`;
+					case "^":
+						return `${local(op.dst)} = (i64) (${int32(op.left)} ^ ${int32(op.right)});`;
+					case "<<":
+						return `${local(op.dst)} = (i64) (i32) ((u32) ${int32(op.left)} << ((u32) ${int32(op.right)} & 31u));`;
+					case ">>":
+						return `${local(op.dst)} = (i64) (${int32(op.left)} >> ((u32) ${int32(op.right)} & 31u));`;
+					case ">>>":
+						return `${local(op.dst)} = (i64) ((u32) ${int32(op.left)} >> ((u32) ${int32(op.right)} & 31u));`;
+					default:
+						throw new Error(`Invalid native integer loop operator ${op.operator}`);
+				}
+			}
+			case "UNARY": {
+				const source = local(op.src);
+				switch (op.operator) {
+					case "-":
+						return `if (__builtin_expect(${source} == 0, 0)) ${restart} ${local(op.dst)} = -${source};`;
+					case "increment":
+						return checked(`mal_safe_integer_add(${source}, 1, %DST%)`, op.dst);
+					case "decrement":
+						return checked(`mal_safe_integer_sub(${source}, 1, %DST%)`, op.dst);
+					case "~":
+						return `${local(op.dst)} = (i64) ~${int32(op.src)};`;
+					case "!":
+						return `${local(op.dst)} = !(${truthy(op.src)});`;
+					default:
+						return `${local(op.dst)} = ${source};`;
+				}
+			}
+			case "JUMP":
+				return reach(op.targetIp);
+			case "JUMP_IF":
+				return `if (${truthy(op.cond)}) { ${reach(op.targetIp)} } else { ${reach(ip + 1)} }`;
+			default:
+				throw new Error(`Invalid native integer loop instruction ${op.opcode}`);
+		}
+	};
+	const lines = [
+		"{",
+		...[...flow.kinds].map(
+			([register, kind]) =>
+				`  ${kind === "boolean" ? "bool" : "i64"} ${local(register)} = ${initial.get(register) ?? (kind === "boolean" ? "false" : "0")};`,
+		),
+		`  if (${guards.length === 0 ? "true" : guards.join(" && ")}) {`,
+		...plan.carried.map(
+			(register) =>
+				`    ${kindOf(register) === "boolean" ? "bool" : "i64"} ${start(register)} = ${local(register)};`,
+		),
+		`    u8 ${id}_exit = 0;`,
+		"    for (;;) {",
+		...heads.slice(1).map((ip) => `      bool ${id}_b${ip} = false;`),
+	];
+	for (const head of heads) {
+		lines.push(head === plan.id ? "      {" : `      if (${id}_b${head}) {`);
+		let ip = head;
+		for (;;) {
+			lines.push(`        ${statement(ip)}`);
+			if (isBranch(ip)) break;
+			if (!members.has(ip + 1) || headSet.has(ip + 1)) {
+				lines.push(`        ${reach(ip + 1)}`);
+				break;
+			}
+			ip++;
+		}
+		lines.push("      }");
+	}
+	lines.push("    }");
+	for (const [index, exit] of plan.exits.entries()) {
+		lines.push(`    if (${id}_exit == ${index + 1}) {`);
+		for (const register of exit.outputs)
+			lines.push(`      ${materialize(register, local(register))}`);
+		lines.push(`      goto L${exit.targetIp};`, "    }");
+	}
+	for (const register of plan.carried)
+		lines.push(`    ${materialize(register, start(register))}`);
+	lines.push(`    goto L${plan.id};`, "  }", "}");
+	return lines;
+}
+
 function emitNumberRecordRegion(
 	fn: BytecodeFunction,
 	plan: NativeNumberRecordRegionPlan,
@@ -3503,6 +3698,7 @@ function emitBody(
 		propertyReadRegions: [],
 		propertyReadPairs: [],
 		numberRecordRegions: [],
+		integerLoopRegions: [],
 		pairedArrayLoops: [],
 		arrayPresence: [],
 		arrayPairDestructure: [],
@@ -3608,16 +3804,23 @@ function emitBody(
 		deferredIteratorCursors.add(cursor.initializeIp);
 	}
 	const { handlerTargets } = analysis;
-	// An admitted number record region continues at its exit label.
+	// An admitted region continues at its exit labels.
 	const jumpTargets =
-		fastPathPlans.numberRecordRegions.length === 0
+		fastPathPlans.numberRecordRegions.length === 0 &&
+		fastPathPlans.integerLoopRegions.length === 0
 			? analysis.jumpTargets
 			: new Set([
 					...analysis.jumpTargets,
 					...fastPathPlans.numberRecordRegions.map((plan) => plan.exitIp),
+					...fastPathPlans.integerLoopRegions.flatMap((plan) =>
+						plan.exits.map((exit) => exit.targetIp),
+					),
 				]);
 	const numberRecordRegionById = new Map(
 		fastPathPlans.numberRecordRegions.map((plan) => [plan.id, plan]),
+	);
+	const integerLoopRegionByEntry = new Map(
+		fastPathPlans.integerLoopRegions.map((plan) => [plan.entryIp, plan]),
 	);
 	const ownsCaptureEnvironment = coro === null && analysis.ownsCaptureEnvironment;
 	const staticDefineStringIndexByIp = new Map(
@@ -4270,6 +4473,10 @@ function emitBody(
 			emittedInstructions.add(ip);
 			continue;
 		}
+		const integerLoop = integerLoopRegionByEntry.get(ip);
+		if (integerLoop !== undefined)
+			for (const line of emitIntegerLoopRegion(fn, integerLoop, reps))
+				lines.push(`    ${line}`);
 		const numberRecord = numberRecordRegionById.get(ip);
 		if (numberRecord !== undefined)
 			for (const line of emitNumberRecordRegion(

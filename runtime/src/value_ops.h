@@ -172,6 +172,62 @@ static inline i32 mal_ops_u32_to_i32(u32 value) {
     return value <= 2147483647u ? (i32) value : (i32) ((i64) value - 4294967296ll);
 }
 
+// Safe-integer loop regions compute in i64 while every value stays within
+// Number.MAX_SAFE_INTEGER and is never -0, where integer and double results agree.
+// A helper that returns false leaves the result to the double path.
+#define MAL_SAFE_INTEGER_MAX INT64_C(9007199254740991)
+
+static inline bool mal_safe_integer_admit(f64 value, i64 *out) {
+    if (!(value >= -9007199254740991.0 && value <= 9007199254740991.0)) return false;
+    i64 integer = (i64) value;
+    if ((f64) integer != value || (integer == 0 && signbit(value))) return false;
+    *out = integer;
+    return true;
+}
+
+static inline bool mal_safe_integer_fits(i64 value, i64 *out) {
+    if (value > MAL_SAFE_INTEGER_MAX || value < -MAL_SAFE_INTEGER_MAX) return false;
+    *out = value;
+    return true;
+}
+
+static inline bool mal_safe_integer_add(i64 left, i64 right, i64 *out) {
+    return mal_safe_integer_fits(left + right, out);
+}
+
+static inline bool mal_safe_integer_sub(i64 left, i64 right, i64 *out) {
+    return mal_safe_integer_fits(left - right, out);
+}
+
+static inline bool mal_safe_integer_mul(i64 left, i64 right, i64 *out) {
+    i64 product;
+    // A zero product with a negative factor is -0.
+    if (__builtin_mul_overflow(left, right, &product) ||
+        (product == 0 && (left < 0 || right < 0))) {
+        return false;
+    }
+    return mal_safe_integer_fits(product, out);
+}
+
+static inline bool mal_safe_integer_div(i64 left, i64 right, i64 *out) {
+    if (right == 0 || left % right != 0 || (left == 0 && right < 0)) return false;
+    *out = left / right;
+    return true;
+}
+
+static inline bool mal_safe_integer_rem(i64 left, i64 right, i64 *out) {
+    if (right == 0) return false;
+    i64 remainder = left % right;
+    if (remainder == 0 && left < 0) return false;
+    *out = remainder;
+    return true;
+}
+
+/** ToInt32 of a safe integer: its value modulo 2^32 in two's complement. */
+static inline i32 mal_safe_integer_to_i32(i64 value) {
+    return mal_ops_u32_to_i32((u32) (u64) value);
+}
+
 /** ToInt32 for a value already known to be a JS Number. */
 static inline i32 mal_ops_number_to_i32(f64 number) {
 #if defined(__ARM_FEATURE_JCVT)

@@ -21,6 +21,7 @@ import type {
 	NativePropertyNumericUpdatePlan,
 	NativePropertyProjectionPlan,
 	NativeNumberRecordRegionPlan,
+	NativeIntegerLoopRegionPlan,
 	NativePropertyReadRegionPlan,
 } from "./lower-native-fast-paths.ts";
 import {
@@ -1019,6 +1020,7 @@ function rootStorage(
 				...fastPaths.propertyReadRegions,
 				...fastPaths.propertyReadPairs,
 				...fastPaths.numberRecordRegions,
+				...fastPaths.integerLoopRegions,
 			].flatMap((plan) => plan.borrowedRegisters),
 		);
 		const iteratorDone = new Set<number>();
@@ -1050,6 +1052,7 @@ function rootStorage(
 					...fastPaths.propertyReadRegions,
 					...fastPaths.propertyReadPairs,
 					...fastPaths.numberRecordRegions,
+					...fastPaths.integerLoopRegions,
 				],
 				expressionIps,
 			),
@@ -1112,6 +1115,7 @@ function scalarStorageWindows(fastPaths: NativeFastPathPlans) {
 		...fastPaths.propertyReadRegions,
 		...fastPaths.propertyReadPairs,
 		...fastPaths.numberRecordRegions,
+		...fastPaths.integerLoopRegions,
 		...fastPaths.pairedArrayLoops,
 		...fastPaths.arrayPresence,
 		...fastPaths.arrayPairDestructure,
@@ -1181,7 +1185,7 @@ function rootPublicationContinuations(
 			...region.controlFlow.ordinaryBlockIps,
 		]);
 	for (const window of windows) blockSpan(window.claimedIps);
-	// An admitted record region is a second, unpublished edge into its exit.
+	// An admitted region is a second, unpublished edge into each place it continues.
 	for (const exit of exits) blocked.add(exit);
 	for (const action of native.regionActions) blocked.add(action.ip);
 	for (const site of native.fieldCalls ?? []) blockSpan([site.allocationIp, site.callIp]);
@@ -1294,7 +1298,13 @@ function lowerStorage(
 			native,
 			body,
 			expressionWindows,
-			fastPaths.numberRecordRegions.map((plan) => plan.exitIp),
+			[
+				...fastPaths.numberRecordRegions.map((plan) => plan.exitIp),
+				...fastPaths.integerLoopRegions.flatMap((plan) => [
+					plan.id,
+					...plan.exits.map((exit) => exit.targetIp),
+				]),
+			],
 		),
 		...scalar,
 		numericWorker,
@@ -1501,6 +1511,30 @@ export function validateNativeStorage(
 			);
 		});
 
+	const sameIntegerLoops = (
+		stored: ReadonlyArray<NativeIntegerLoopRegionPlan>,
+		selected: ReadonlyArray<NativeIntegerLoopRegionPlan>,
+	): boolean =>
+		stored.length === selected.length &&
+		stored.every((plan, index) => {
+			const expected = selected[index]!;
+			return (
+				plan.id === expected.id &&
+				plan.entryIp === expected.entryIp &&
+				plan.fallback === expected.fallback &&
+				sameNumbers(plan.inputs, expected.inputs) &&
+				sameNumbers(plan.carried, expected.carried) &&
+				plan.exits.length === expected.exits.length &&
+				plan.exits.every(
+					(exit, i) =>
+						exit.targetIp === expected.exits[i]!.targetIp &&
+						sameNumbers(exit.outputs, expected.exits[i]!.outputs),
+				) &&
+				sameNumbers(plan.claimedIps, expected.claimedIps) &&
+				sameNumbers(plan.borrowedRegisters, expected.borrowedRegisters)
+			);
+		});
+
 	const sameScalar = (
 		stored: NativeScalarStoragePlan | undefined,
 		selected: NativeScalarStoragePlan | undefined,
@@ -1617,6 +1651,7 @@ export function validateNativeStorage(
 			sameUpdates(stored.propertyNumericUpdates, selected.propertyNumericUpdates) &&
 			sameReadRegions(stored.propertyReadRegions, selected.propertyReadRegions) &&
 			sameRecordRegions(stored.numberRecordRegions, selected.numberRecordRegions) &&
+			sameIntegerLoops(stored.integerLoopRegions, selected.integerLoopRegions) &&
 			stored.arrayPresence.length === selected.arrayPresence.length &&
 			stored.arrayPresence.every((plan, index) => {
 				const expected = selected.arrayPresence[index]!;

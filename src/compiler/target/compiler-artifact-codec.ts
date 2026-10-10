@@ -26,6 +26,7 @@ import type {
 	NativePropertyProjectionPlan,
 	NativePropertyNumericUpdatePlan,
 	NativeNumberRecordRegionPlan,
+	NativeIntegerLoopRegionPlan,
 	NativePropertyReadRegionPlan,
 	NativePropertyReadPairPlan,
 	NativePropertyProjectionOperand,
@@ -92,7 +93,7 @@ import type {
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal artifacts are hard cut-overs: stale cache entries rebuild.
-export const COMPILER_ARTIFACT_VERSION = 183;
+export const COMPILER_ARTIFACT_VERSION = 184;
 
 function validateClosureCaptureOwners(
 	owners: ReadonlyArray<number>,
@@ -823,6 +824,21 @@ function writeNativeStorage(w: Writer, storage: NativeStoragePlan | undefined): 
 		w.i32Array([...plan.borrowedRegisters]);
 		w.u8(0);
 	}
+	w.u32(storage.integerLoopRegions.length);
+	for (const plan of storage.integerLoopRegions) {
+		w.i32(plan.id);
+		w.i32(plan.entryIp);
+		w.i32Array([...plan.inputs]);
+		w.i32Array([...plan.carried]);
+		w.u32(plan.exits.length);
+		for (const exit of plan.exits) {
+			w.i32(exit.targetIp);
+			w.i32Array([...exit.outputs]);
+		}
+		w.i32Array([...plan.claimedIps]);
+		w.i32Array([...plan.borrowedRegisters]);
+		w.u8(0);
+	}
 	w.u32(storage.pairedArrayLoops.length);
 	for (const plan of storage.pairedArrayLoops) {
 		for (const value of [
@@ -1194,6 +1210,30 @@ function readNativeStorage(r: Reader): NativeStoragePlan {
 			fallback: "original-instructions",
 		});
 	}
+	const integerLoopRegions: Array<NativeIntegerLoopRegionPlan> = [];
+	for (let i = 0, count = r.count(29); i < count; i++) {
+		const id = r.i32(),
+			entryIp = r.i32(),
+			inputs = r.i32Array(),
+			carried = r.i32Array();
+		const exits = Array.from({ length: r.count(8) }, () => {
+			const targetIp = r.i32();
+			return { targetIp, outputs: r.i32Array() };
+		});
+		const claimedIps = r.i32Array(),
+			borrowedRegisters = r.i32Array();
+		if (r.u8() !== 0) throw new RangeError("Invalid native integer loop fallback");
+		integerLoopRegions.push({
+			id,
+			entryIp,
+			inputs,
+			carried,
+			exits,
+			claimedIps,
+			borrowedRegisters,
+			fallback: "original-instructions",
+		});
+	}
 	const pairedArrayLoops: Array<NativePairedArrayLoopPlan> = Array.from(
 		{ length: r.count(9) },
 		() => ({
@@ -1441,6 +1481,7 @@ function readNativeStorage(r: Reader): NativeStoragePlan {
 		propertyReadRegions,
 		propertyReadPairs,
 		numberRecordRegions,
+		integerLoopRegions,
 		pairedArrayLoops,
 		...(constructorInitialization === undefined ? {} : { constructorInitialization }),
 		...(privateFieldReserve === undefined ? {} : { privateFieldReserve }),

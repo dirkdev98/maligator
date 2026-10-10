@@ -151,6 +151,24 @@ export interface NativeNumberRecordRegionPlan {
 	readonly fallback: "original-instructions";
 }
 
+export interface NativeIntegerLoopRegionPlan {
+	/** The loop header; control reaches it from outside only through `entryIp`'s jump. */
+	readonly id: number;
+	readonly entryIp: number;
+	/** Registers an iteration can read before writing them, admitted as safe integers or Booleans. */
+	readonly inputs: ReadonlyArray<number>;
+	/** Written inputs, restored from the iteration's start when a guard sends it back to the header. */
+	readonly carried: ReadonlyArray<number>;
+	readonly exits: ReadonlyArray<{
+		readonly targetIp: number;
+		/** Written registers read after this exit. */
+		readonly outputs: ReadonlyArray<number>;
+	}>;
+	readonly claimedIps: ReadonlyArray<number>;
+	readonly borrowedRegisters: ReadonlyArray<number>;
+	readonly fallback: "original-instructions";
+}
+
 export interface NativePropertyReadPairPlan {
 	readonly id: number;
 	readonly object: number;
@@ -222,6 +240,7 @@ export interface NativeFastPathPlans {
 	readonly propertyReadRegions: ReadonlyArray<NativePropertyReadRegionPlan>;
 	readonly propertyReadPairs: ReadonlyArray<NativePropertyReadPairPlan>;
 	readonly numberRecordRegions: ReadonlyArray<NativeNumberRecordRegionPlan>;
+	readonly integerLoopRegions: ReadonlyArray<NativeIntegerLoopRegionPlan>;
 	readonly pairedArrayLoops: ReadonlyArray<NativePairedArrayLoopPlan>;
 	readonly arrayPresence: ReadonlyArray<NativeArrayPresencePlan>;
 	readonly arrayPairDestructure: ReadonlyArray<NativeArrayPairDestructurePlan>;
@@ -862,6 +881,8 @@ export interface NativeNumberRecordDataflow {
 	readonly inputs: ReadonlySet<number>;
 	readonly written: ReadonlySet<number>;
 	readonly assignedAtExit: ReadonlySet<number>;
+	/** Registers every path writes before reaching each visited instruction or terminal. */
+	readonly assigned: ReadonlyMap<number, ReadonlySet<number>>;
 }
 
 function numberRecordInstruction(
@@ -1042,7 +1063,13 @@ export function numberRecordDataflow(
 	for (const register of inputs)
 		if (representations[register] === "boxed" && !numericReads.has(register))
 			return undefined;
-	return { kinds, inputs, written, assignedAtExit: assigned.get(exitIp) ?? new Set() };
+	return {
+		kinds,
+		inputs,
+		written,
+		assignedAtExit: assigned.get(exitIp) ?? new Set(),
+		assigned,
+	};
 }
 
 function registersLiveAt(
@@ -1232,6 +1259,212 @@ function lowerNumberRecordRegion(
 		if (plan !== undefined) return plan;
 	}
 	return undefined;
+}
+
+const INTEGER_LOOP_INSTRUCTION_LIMIT = 64;
+// Their double lowering converts to int32 or divides, which a safe-integer iteration avoids.
+const INTEGER_LOOP_PROFITABLE_OPERATORS = new Set([
+	"/",
+	"%",
+	"&",
+	"|",
+	"^",
+	"<<",
+	">>",
+	">>>",
+]);
+
+function integerLoopInstruction(instruction: BytecodeInstruction): boolean {
+	switch (instruction.opcode) {
+		case "CREATE_NUMBER":
+		case "CREATE_F64":
+			return Number.isSafeInteger(instruction.value) && !Object.is(instruction.value, -0);
+		case "CREATE_BOOLEAN":
+		case "MOVE":
+		case "JUMP":
+		case "JUMP_IF":
+			return true;
+		case "BINARY":
+			return (
+				NATIVE_NUMBER_BINARY_OPERATORS.has(instruction.operator) ||
+				PROPERTY_REGION_COMPARE_OPERATORS.has(instruction.operator)
+			);
+		case "UNARY":
+			return NUMBER_RECORD_UNARY_OPERATORS.has(instruction.operator);
+		default:
+			return false;
+	}
+}
+
+function bytecodePredecessors(
+	fn: BytecodeFunction,
+	body: NativeBodyFacts,
+	ip: number,
+): Array<number> {
+	const previous = fn.instructions[ip - 1];
+	return [
+		...(body.branchSources.get(ip) ?? []),
+		...(previous !== undefined &&
+		previous.opcode !== "JUMP" &&
+		previous.opcode !== "RETURN" &&
+		previous.opcode !== "THROW"
+			? [ip - 1]
+			: []),
+	];
+}
+
+export interface NativeIntegerLoopShape {
+	readonly members: ReadonlySet<number>;
+	/** Members in an order that visits each after its predecessors within one iteration. */
+	readonly order: ReadonlyArray<number>;
+	readonly entryIp: number;
+}
+
+/**
+ * The innermost loop headed at `header` when control enters it only through one
+ * jump to the header and its body is acyclic apart from the edges back to the header.
+ */
+export function integerLoopShape(
+	fn: BytecodeFunction,
+	body: NativeBodyFacts,
+	header: number,
+): NativeIntegerLoopShape | undefined {
+	if (body.externalEntries.has(header)) return undefined;
+	const predecessors = bytecodePredecessors(fn, body, header);
+	if (!predecessors.some((source) => source >= header)) return undefined;
+	// A back edge leaves an instruction that every path from an entry reaches through the header.
+	const outside = new Uint8Array(fn.instructions.length);
+	const pending = [0, ...body.externalEntries];
+	while (pending.length > 0) {
+		const ip = pending.pop()!;
+		if (ip === header || ip >= fn.instructions.length || outside[ip] === 1) continue;
+		outside[ip] = 1;
+		const instruction = fn.instructions[ip]!;
+		if (instruction.opcode === "RETURN" || instruction.opcode === "THROW") continue;
+		pending.push(...numberRecordSuccessors(instruction, ip));
+	}
+	const members = new Set([header]);
+	const backward = predecessors.filter((source) => outside[source] === 0);
+	if (backward.length === 0) return undefined;
+	while (backward.length > 0) {
+		const ip = backward.pop()!;
+		if (members.has(ip)) continue;
+		if (members.size >= INTEGER_LOOP_INSTRUCTION_LIMIT) return undefined;
+		members.add(ip);
+		backward.push(...bytecodePredecessors(fn, body, ip));
+	}
+	let entryIp: number | undefined;
+	for (const source of predecessors) {
+		if (members.has(source)) continue;
+		const jump = fn.instructions[source]!;
+		if (entryIp !== undefined || jump.opcode !== "JUMP") return undefined;
+		entryIp = source;
+	}
+	if (entryIp === undefined) return undefined;
+	for (const ip of members) {
+		if (ip === header) continue;
+		if (
+			body.externalEntries.has(ip) ||
+			bytecodePredecessors(fn, body, ip).some((source) => !members.has(source))
+		)
+			return undefined;
+	}
+	const order = integerLoopOrder(fn, header, members);
+	return order === undefined ? undefined : { members, order, entryIp };
+}
+
+/** One iteration's members in topological order, when only edges to the header close a cycle. */
+export function integerLoopOrder(
+	fn: BytecodeFunction,
+	header: number,
+	members: ReadonlySet<number>,
+): ReadonlyArray<number> | undefined {
+	const state = new Map<number, "open" | "done">();
+	const postorder: Array<number> = [];
+	const visit = (ip: number): boolean => {
+		const seen = state.get(ip);
+		if (seen !== undefined) return seen === "done";
+		state.set(ip, "open");
+		for (const successor of numberRecordSuccessors(fn.instructions[ip]!, ip))
+			if (successor !== header && members.has(successor) && !visit(successor))
+				return false;
+		state.set(ip, "done");
+		postorder.push(ip);
+		return true;
+	};
+	return visit(header) && postorder.length === members.size
+		? postorder.reverse()
+		: undefined;
+}
+
+function lowerIntegerLoopRegion(
+	fn: BytecodeFunction,
+	header: number,
+	representations: ReadonlyArray<VmRegisterRepresentation>,
+	body: NativeBodyFacts,
+	conflicts: (ip: number) => boolean,
+): NativeIntegerLoopRegionPlan | undefined {
+	const shape = integerLoopShape(fn, body, header);
+	if (
+		shape === undefined ||
+		conflicts(shape.entryIp) ||
+		shape.order.some(
+			(ip) => conflicts(ip) || !integerLoopInstruction(fn.instructions[ip]!),
+		) ||
+		!shape.order.some((ip) => {
+			const instruction = fn.instructions[ip]!;
+			return (
+				instruction.opcode === "BINARY" &&
+				INTEGER_LOOP_PROFITABLE_OPERATORS.has(instruction.operator)
+			);
+		})
+	)
+		return undefined;
+	const flow = numberRecordDataflow(fn, shape.order, -1, representations);
+	if (flow === undefined) return undefined;
+	const inputs = new Set(flow.inputs);
+	const targets = new Set<number>();
+	for (const ip of shape.order)
+		for (const successor of numberRecordSuccessors(fn.instructions[ip]!, ip))
+			if (!shape.members.has(successor)) targets.add(successor);
+	if (targets.size === 0) return undefined;
+	const exits: Array<NativeIntegerLoopRegionPlan["exits"][number]> = [];
+	for (const targetIp of [...targets].sort((a, b) => a - b)) {
+		if (targetIp >= fn.instructions.length) return undefined;
+		const outputs = registersLiveAt(fn, body, targetIp, flow.written);
+		const assigned = flow.assigned.get(targetIp) ?? new Set<number>();
+		for (const register of outputs) {
+			const representation = representations[register];
+			const kind = flow.kinds.get(register);
+			if (
+				kind === "number"
+					? representation !== "number" &&
+						representation !== "int32" &&
+						representation !== "boxed"
+					: representation !== "boolean" && representation !== "boxed"
+			)
+				return undefined;
+			// A path that skips the write leaves the output with the value it entered with.
+			if (!assigned.has(register)) {
+				if (numberRecordInputKind(representation) !== kind) return undefined;
+				inputs.add(register);
+			}
+		}
+		exits.push(Object.freeze({ targetIp, outputs: Object.freeze(outputs) }));
+	}
+	const claimedIps = [...shape.members, shape.entryIp].sort((a, b) => a - b);
+	return Object.freeze({
+		id: header,
+		entryIp: shape.entryIp,
+		inputs: Object.freeze([...inputs].sort((a, b) => a - b)),
+		carried: Object.freeze(
+			[...inputs].filter((register) => flow.written.has(register)).sort((a, b) => a - b),
+		),
+		exits: Object.freeze(exits),
+		claimedIps: Object.freeze(claimedIps),
+		borrowedRegisters: borrowedRegisters(fn, claimedIps, body),
+		fallback: "original-instructions",
+	});
 }
 
 function lowerConstructorInitialization(
@@ -1751,6 +1984,8 @@ export function lowerNativeFastPaths(
 		propertyReadPairActions,
 		numberRecordRegions:
 			selection.kind === "render" ? selection.plans.numberRecordRegions : [],
+		integerLoopRegions:
+			selection.kind === "render" ? selection.plans.integerLoopRegions : [],
 		...(constructorInitialization === undefined ? {} : { constructorInitialization }),
 		constructorInitializationActions,
 		...(privateFieldReserve === undefined ? {} : { privateFieldReserve }),
@@ -2056,8 +2291,12 @@ export function selectNativeFastPaths(
 		entry?.fieldParameters?.loads.map((load) => load.instructionIp),
 	);
 	// A physically forward copy edge can still poll on a native or exceptional cycle.
-	for (const point of native.gc.safepoints)
-		if (point.kind === "loop-backedge") blocked.add(point.instructionIp);
+	const pollingEdges = new Set(
+		native.gc.safepoints.flatMap((point) =>
+			point.kind === "loop-backedge" ? [point.instructionIp] : [],
+		),
+	);
+	const unavailable = (ip: number) => blocked.has(ip) || pollingEdges.has(ip);
 	for (const site of native.fieldCalls ?? [])
 		for (let ip = site.allocationIp; ip <= site.callIp; ip++) blocked.add(ip);
 	for (const site of native.literalSwitches ?? [])
@@ -2109,6 +2348,7 @@ export function selectNativeFastPaths(
 		}
 	}
 	const numberRecordRegions: Array<NativeNumberRecordRegionPlan> = [];
+	const integerLoopRegions: Array<NativeIntegerLoopRegionPlan> = [];
 	// Profiled sites observe each original instruction.
 	if (
 		native.mode === "direct" &&
@@ -2117,14 +2357,14 @@ export function selectNativeFastPaths(
 		fn.profileSiteIds === undefined
 	) {
 		for (const ip of body.staticPropertyLoadIps) {
-			if (blocked.has(ip)) continue;
+			if (unavailable(ip)) continue;
 			const plan = lowerNumberRecordRegion(
 				fn,
 				ip,
 				native.registerRepresentations,
 				body,
 				(candidate) =>
-					blocked.has(candidate) ||
+					unavailable(candidate) ||
 					native.instructions[candidate] !== undefined ||
 					fusions.has(candidate),
 			);
@@ -2132,12 +2372,36 @@ export function selectNativeFastPaths(
 			numberRecordRegions.push(plan);
 			for (const claimedIp of plan.claimedIps) blocked.add(claimedIp);
 		}
+		for (const header of [...body.jumpTargets].sort((a, b) => a - b)) {
+			if (blocked.has(header)) continue;
+			const plan = lowerIntegerLoopRegion(
+				fn,
+				header,
+				native.registerRepresentations,
+				body,
+				// Its back edge polls by returning the iteration to the original loop.
+				(candidate) => {
+					const kind = native.instructions[candidate]?.kind;
+					return (
+						blocked.has(candidate) ||
+						fusions.has(candidate) ||
+						// Operand kind proofs refine the double lowering; the region replaces it.
+						(kind !== undefined &&
+							kind !== "exact-operator-input-kinds" &&
+							kind !== "unsigned-arithmetic")
+					);
+				},
+			);
+			if (plan === undefined) continue;
+			integerLoopRegions.push(plan);
+			for (const claimedIp of plan.claimedIps) blocked.add(claimedIp);
+		}
 	}
 	const selected = lowerNativeFastPaths(
 		fn,
 		native.registerRepresentations,
 		jumpTargets,
-		(ip) => blocked.has(ip) || native.instructions[ip] !== undefined,
+		(ip) => unavailable(ip) || native.instructions[ip] !== undefined,
 		{ kind: "select" },
 		indexedLoops,
 		(ip) => fusions.get(ip),
@@ -2175,6 +2439,7 @@ export function selectNativeFastPaths(
 					...selected.propertyReadRegions,
 					...selected.propertyReadPairs,
 					...numberRecordRegions,
+					...integerLoopRegions,
 					...(selected.constructorInitialization === undefined
 						? []
 						: [selected.constructorInitialization]),
@@ -2191,6 +2456,7 @@ export function selectNativeFastPaths(
 		propertyReadRegions: selected.propertyReadRegions,
 		propertyReadPairs: selected.propertyReadPairs,
 		numberRecordRegions,
+		integerLoopRegions,
 		pairedArrayLoops: selected.pairedArrayLoops,
 		...(selected.constructorInitialization === undefined
 			? {}
