@@ -47,6 +47,17 @@ function grows(record) {
 	return ahead;
 }
 
+// Constants defined inside the region are its outputs, so they need their own storage.
+function copyAxes(record, scale) {
+	record.vx = record.x;
+	record.vy = record.y;
+	record.vz = record.z;
+	const offset = 8232;
+	const unit = 1;
+	const width = 8;
+	return scale(offset) + scale(unit) * width;
+}
+
 function particleState(particle) {
 	return [particle.x, particle.y, particle.vx, particle.vy, particle.mass];
 }
@@ -175,5 +186,13 @@ const answers = [];
 for (let round = 0; round < 8; round++) answers.push(grows(growth));
 expectValue(answers.join(), "true,true,true,true,true,true,true,true", "boolean result");
 expectValue(growth.total, 256 + 8, "total");
+
+const axes = { x: 1, y: 2, z: 3, vx: 0, vy: 0, vz: 0 };
+let axisTotal = 0;
+for (let index = 0; index < 64; index++) {
+	axes.x = index;
+	axisTotal += copyAxes(axes, (value) => value + index) + axes.vx + axes.vy + axes.vz;
+}
+expectValue(axisTotal, 547840, "constant outputs");
 
 console.log("native-number-record-regions PASS");

@@ -595,11 +595,10 @@ function rematerializedConstantIps(
 				: (op.opcode === "CREATE_NUMBER" || op.opcode === "CREATE_F64") &&
 					(rep === "number" || rep === "int32");
 		const boxed = rep === "boxed" || (op.opcode === "CREATE_STRING" && rep === "string");
+		// A window that claims the definition writes the register itself, even a scalar one.
 		if (
-			!scalar &&
-			(!boxed ||
-				immutableOwnership.blocked.has(ip) ||
-				immutableOwnership.borrowed.has(op.dst))
+			immutableOwnership.blocked.has(ip) ||
+			(!scalar && (!boxed || immutableOwnership.borrowed.has(op.dst)))
 		)
 			return [];
 		const controlFlow = body.controlFlow;

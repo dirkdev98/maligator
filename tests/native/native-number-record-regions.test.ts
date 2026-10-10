@@ -7,7 +7,7 @@ import {
 	STRESS_ENV,
 } from "../../src/test-harness.ts";
 
-const kernels = ["stepParticle", "mixBits", "grows"];
+const kernels = ["stepParticle", "mixBits", "grows", "copyAxes"];
 const expected = ["native-number-record-regions PASS"];
 
 describe("native number record regions", () => {
