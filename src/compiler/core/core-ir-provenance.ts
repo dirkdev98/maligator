@@ -3362,6 +3362,8 @@ function stringSplitProjectionCandidates(
 	roots: ReadonlyMap<CoreValueId, CoreValueId>,
 	index: CoreLocalFactIndex,
 ): ReadonlyArray<CoreStringSplitProjectionCandidate> {
+	// Resumable native bodies render projections generically and keep no projection sites.
+	if (fn.isGenerator || fn.isAsync) return [];
 	const candidates: Array<CoreStringSplitProjectionCandidate> = [];
 	const root = (value: CoreValueId): CoreValueId => roots.get(value) ?? value;
 	for (const call of [
@@ -3673,6 +3675,7 @@ function regexpExecProjectionCandidates(
 	roots: ReadonlyMap<CoreValueId, CoreValueId>,
 	index: CoreLocalFactIndex,
 ): ReadonlyArray<CoreRegExpExecProjectionCandidate> {
+	if (fn.isGenerator || fn.isAsync) return [];
 	const candidates: Array<CoreRegExpExecProjectionCandidate> = [];
 	const root = (value: CoreValueId): CoreValueId => roots.get(value) ?? value;
 	const semanticUses = (
@@ -4079,6 +4082,7 @@ function regexpIteratorProjectionCandidates(
 	roots: ReadonlyMap<CoreValueId, CoreValueId>,
 	index: CoreLocalFactIndex,
 ): ReadonlyArray<CoreRegExpIteratorProjectionCandidate> {
+	if (fn.isGenerator || fn.isAsync) return [];
 	const candidates: Array<CoreRegExpIteratorProjectionCandidate> = [];
 	const root = (value: CoreValueId): CoreValueId => roots.get(value) ?? value;
 	for (const step of indexedOpcodeInstructions(fn, index, "iteratorStep")) {

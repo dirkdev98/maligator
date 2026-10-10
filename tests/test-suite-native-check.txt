@@ -38,6 +38,7 @@ tests/native/native-root-storage.test.ts
 tests/native/native-property-read-regions.test.ts
 tests/native/native-number-record-regions.test.ts
 tests/native/native-integer-loop-regions.test.ts
+tests/native/async-projection-regions.test.ts
 tests/native/module-private-classes.test.ts
 tests/native/static-property-projection.test.ts
 tests/native/symbol-registry-reuse.test.ts
