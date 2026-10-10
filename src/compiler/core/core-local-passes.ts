@@ -1622,42 +1622,67 @@ const foldRedundantTdzChecks: CoreFunctionPass = {
 				(opcode === "move" && emptyInitializer(instructionOperand(fn, definition, 0)))
 			);
 		};
-		// Per-iteration bindings live in pushed loop scopes, so the owner's own cells
-		// are created once per activation and reset only by explicit empty stores.
-		let ownCellStores:
-			| Map<number, Array<{ instruction: CoreInstructionId; empty: boolean }>>
+		// The owner's own cells exist once per activation; a per-iteration loop scope
+		// (a negative owner) is created fresh by its push and only copied afterwards.
+		// Either is reset only by an explicit empty store or, for a scope, its push.
+		let ownCells:
+			| Map<
+					string,
+					{
+						readonly stores: Array<CoreInstructionId>;
+						readonly resets: Array<CoreInstructionId>;
+					}
+			  >
 			| undefined;
-		const ownStores = () => {
-			if (ownCellStores !== undefined) return ownCellStores;
-			ownCellStores = new Map();
+		const scopePushes = new Map<number, Array<CoreInstructionId>>();
+		const cellKey = (owner: number, index: number) => `${owner}:${index}`;
+		const ownCellWrites = () => {
+			if (ownCells !== undefined) return ownCells;
+			ownCells = new Map();
 			for (const instruction of fn.instructionIds()) {
+				if (fn.instructionKind(instruction) !== "operation") continue;
+				const opcode = fn.instructionOpcodeName(instruction);
+				const attributes = fn.instructionAttributes(instruction);
+				if (opcode === "envPush" && typeof attributes.scopeId === "number") {
+					const pushes = scopePushes.get(attributes.scopeId) ?? [];
+					pushes.push(instruction);
+					scopePushes.set(attributes.scopeId, pushes);
+					continue;
+				}
+				const { functionIndex, index } = attributes;
 				if (
-					fn.instructionKind(instruction) !== "operation" ||
-					fn.instructionOpcodeName(instruction) !== "storeCaptured"
+					opcode !== "storeCaptured" ||
+					typeof functionIndex !== "number" ||
+					typeof index !== "number" ||
+					(functionIndex !== item.function && functionIndex >= 0)
 				)
 					continue;
-				const { functionIndex, index } = fn.instructionAttributes(instruction);
-				if (functionIndex !== item.function || typeof index !== "number") continue;
-				const stores = ownCellStores.get(index) ?? [];
-				stores.push({
-					instruction,
-					empty: emptyInitializer(instructionOperand(fn, instruction, 0)),
-				});
-				ownCellStores.set(index, stores);
+				const key = cellKey(functionIndex, index);
+				const cell = ownCells.get(key) ?? { stores: [], resets: [] };
+				(emptyInitializer(instructionOperand(fn, instruction, 0))
+					? cell.resets
+					: cell.stores
+				).push(instruction);
+				ownCells.set(key, cell);
 			}
-			return ownCellStores;
+			return ownCells;
 		};
-		// An owner's read is initialized once a value store dominates it and every
-		// TDZ reset of that cell dominates the store.
-		const ownerInitialized = (load: CoreInstructionId, index: number): boolean => {
-			const stores = ownStores().get(index) ?? [];
-			return stores.some(
+		// A read is initialized once a value store dominates it and every reset of
+		// that cell dominates the store.
+		const ownerInitialized = (
+			load: CoreInstructionId,
+			owner: number,
+			index: number,
+		): boolean => {
+			const cell = ownCellWrites().get(cellKey(owner, index));
+			if (cell === undefined) return false;
+			const resets = [
+				...cell.resets,
+				...(owner < 0 ? (scopePushes.get(owner) ?? []) : []),
+			];
+			return cell.stores.some(
 				(store) =>
-					!store.empty &&
-					precedes(store.instruction, load) &&
-					stores.every(
-						(reset) => !reset.empty || precedes(reset.instruction, store.instruction),
-					),
+					precedes(store, load) && resets.every((reset) => precedes(reset, store)),
 			);
 		};
 		const initializedCapture = (load: CoreInstructionId): boolean => {
@@ -1666,7 +1691,8 @@ const foldRedundantTdzChecks: CoreFunctionPass = {
 				typeof functionIndex === "number" &&
 				typeof index === "number" &&
 				(initializedCaptures.has(`${item.function}:${functionIndex}:${index}`) ||
-					(functionIndex === item.function && ownerInitialized(load, index)))
+					((functionIndex === item.function || functionIndex < 0) &&
+						ownerInitialized(load, functionIndex, index)))
 			);
 		};
 		let writtenGlobals: ReadonlySet<unknown> | undefined;

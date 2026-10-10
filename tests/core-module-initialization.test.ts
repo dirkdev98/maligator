@@ -140,4 +140,30 @@ describe("captured bindings initialized before their closures exist", () => {
 			),
 		).toEqual({ after: false, before: true });
 	});
+
+	it("drops the checks on a loop scope's own reads after its initialization", () => {
+		expect(
+			capturedReaders(
+				`function loopAfter(items) {
+					const out = [];
+					for (const item of items) {
+						out.push(() => item);
+						out.push(item * 2);
+					}
+					return out;
+				}
+				function loopBefore(items) {
+					const out = [];
+					for (const item of items) {
+						out.push(typeof late === "number" ? item : 0);
+						let late = item;
+						out.push(() => late);
+					}
+					return out;
+				}
+				globalThis.read = [loopAfter, loopBefore];`,
+				["loopAfter", "loopBefore"],
+			),
+		).toEqual({ loopAfter: false, loopBefore: true });
+	});
 });
