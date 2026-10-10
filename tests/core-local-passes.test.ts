@@ -901,6 +901,40 @@ describe("Core local canonicalization", () => {
 		]);
 	});
 
+	it("drops the coercibility check on an object produced by construction", () => {
+		const program = optimizedClosedModule(
+			`function bump(Kind, index) {
+				const counts = new Kind(4);
+				counts[index & 3]++;
+				return counts;
+			}
+			function bumpBuiltin(index) {
+				const counts = new Uint32Array(4);
+				counts[index & 3]++;
+				return counts;
+			}
+			function bumpLoaded(holder, index) {
+				const counts = holder.counts;
+				counts[index & 3]++;
+				return counts;
+			}
+			globalThis.keep = [bump, bumpBuiltin, bumpLoaded];`,
+			"construct-coercible.js",
+		);
+		const coercions = (name: string) => {
+			const fn = coreFunctionNamed(program, name);
+			expect(fn).toBeDefined();
+			return [...fn!.instructionIds()].filter(
+				(instruction) =>
+					fn!.instructionKind(instruction) === "operation" &&
+					fn!.instructionOpcodeName(instruction) === "requireCoercible",
+			).length;
+		};
+		expect(coercions("bump")).toBe(0);
+		expect(coercions("bumpBuiltin")).toBe(0);
+		expect(coercions("bumpLoaded")).toBe(1);
+	});
+
 	it("invalidates local value numbering across environment and derived-this rebinding", () => {
 		const program = new CoreProgram(coreOpcodeRegistry);
 		const captured = new CoreFunctionBuilder(program);

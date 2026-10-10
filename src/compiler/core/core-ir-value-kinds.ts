@@ -169,6 +169,9 @@ function staticOpcodeKind(opcode: string): CompilerValueKindMask | undefined {
 		case "createPrivateName":
 		case "createPrivateNames":
 			return COMPILER_VALUE_KIND_SYMBOL;
+		// [[Construct]] returns an Object or throws, whatever the callee.
+		case "construct":
+		case "constructSpread":
 		case "createFunction":
 		case "createArray":
 		case "createArrayFromIterable":
@@ -629,8 +632,12 @@ function addOperationTransfer(
 	}
 	if (opcode === "callKnown") {
 		const attributes = fn.instructionAttributes(instruction);
+		if (attributes.construct === true) {
+			masks[output] = masks[output]! | COMPILER_VALUE_KIND_OBJECT;
+			return;
+		}
 		const result =
-			!attributes.construct && typeof attributes.operation === "string"
+			typeof attributes.operation === "string"
 				? builtinPrimitiveResult(attributes.operation)
 				: undefined;
 		const mask = result === undefined ? undefined : BUILTIN_RESULT_KIND_MASKS[result];
