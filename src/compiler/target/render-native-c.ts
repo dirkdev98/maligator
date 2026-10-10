@@ -1764,6 +1764,7 @@ export function emitCompiledFunction(
 	callbackEntries: ReadonlySet<string> = new Set(),
 	maxCodeUnits = Infinity,
 	splitPolicy: NativeSplitPolicy = DEFAULT_NATIVE_SPLIT_POLICY,
+	sortKernelEntries: ReadonlySet<string> = new Set(),
 ): CompiledFunction | null {
 	if (native.storage === undefined)
 		throw new Error("Native rendering requires a lowered storage plan");
@@ -1783,6 +1784,7 @@ export function emitCompiledFunction(
 		callbackEntries,
 		maxCodeUnits,
 		splitPolicy,
+		sortKernelEntries,
 	);
 }
 
@@ -1811,6 +1813,7 @@ export function createNativeFunctionRenderer(): typeof emitCompiledFunction {
 		callbackEntries: ReadonlySet<string> = new Set(),
 		maxCodeUnits = Infinity,
 		splitPolicy: NativeSplitPolicy = DEFAULT_NATIVE_SPLIT_POLICY,
+		sortKernelEntries: ReadonlySet<string> = new Set(),
 	): CompiledFunction | null => {
 		if (native.storage === undefined)
 			throw new Error("Native rendering requires a lowered storage plan");
@@ -1841,6 +1844,7 @@ export function createNativeFunctionRenderer(): typeof emitCompiledFunction {
 			callbackEntries,
 			maxCodeUnits,
 			splitPolicy,
+			sortKernelEntries,
 		);
 	};
 }
@@ -1861,6 +1865,7 @@ function renderCompiledFunction(
 	callbackEntries: ReadonlySet<string> = new Set(),
 	maxCodeUnits = Infinity,
 	splitPolicy: NativeSplitPolicy = DEFAULT_NATIVE_SPLIT_POLICY,
+	sortKernelEntries: ReadonlySet<string> = new Set(),
 ): CompiledFunction | null {
 	const fn = native.body;
 	const canonical = emitCompiledVariant(
@@ -1922,9 +1927,11 @@ function renderCompiledFunction(
 			.map((_, i) => `p${i}`)
 			.concat(entry.fieldParameters?.keys.map((_, i) => `fp${i}`) ?? []);
 		const symbol = `${emitted.symbol}_leaf`;
-		const sortSymbol = numericSortKernelEntry(entry)
-			? `${emitted.symbol}_sort`
-			: undefined;
+		const sortSymbol =
+			sortKernelEntries.has(directCompiledEntryKey(index, entry.id)) &&
+			numericSortKernelEntry(entry)
+				? `${emitted.symbol}_sort`
+				: undefined;
 		const source = `static __attribute__((aligned(64))) f64 ${symbol}(${parameters.join(", ") || "void"}) {\n#pragma STDC FP_CONTRACT OFF\n${worker.join("\n")}\n}\n${emitted.source.replace(
 			"#pragma STDC FP_CONTRACT OFF\n",
 			`#pragma STDC FP_CONTRACT OFF\n    if (mal_vm_leaf_unobserved(vm)) return ${symbol}(${args.join(", ")});\n`,
@@ -1962,6 +1969,35 @@ function renderCompiledFunction(
 			resultRepresentation: entry.resultRepresentation,
 		})),
 	};
+}
+
+function numericSortSite(
+	instruction: BytecodeInstruction | undefined,
+	plan: Extract<NativeInstructionPlan, { kind: "call" }>,
+): NonNullable<typeof plan.numericSortCallback> | undefined {
+	const callback = plan.numericSortCallback;
+	return callback !== undefined &&
+		instruction?.opcode === "CALL" &&
+		instruction.arguments.length === (callback.viaCall ? 2 : 1)
+		? callback
+		: undefined;
+}
+
+/** Direct entries whose sort kernel a selected numeric sort site passes. */
+export function numericSortKernelDemand(
+	functions: ReadonlyArray<NativeFunctionPlan>,
+): ReadonlySet<string> {
+	const demand = new Set<string>();
+	for (const native of functions)
+		for (const [ip, plan] of native.instructions.entries()) {
+			const site =
+				plan?.kind === "call"
+					? numericSortSite(native.body.instructions[ip], plan)
+					: undefined;
+			if (site !== undefined)
+				demand.add(directCompiledEntryKey(site.functionIndex, site.entryId));
+		}
+	return demand;
 }
 
 // A numeric sort site can pass this kernel only where it would call the same leaf.
@@ -9217,11 +9253,9 @@ function emitInstruction(
 					`}`,
 				];
 			}
-			const numericCallback = callPlan?.numericSortCallback;
-			if (
-				numericCallback !== undefined &&
-				args.length === (numericCallback.viaCall ? 2 : 1)
-			) {
+			const numericCallback =
+				callPlan === undefined ? undefined : numericSortSite(instruction, callPlan);
+			if (numericCallback !== undefined) {
 				const entry = directCompiledEntries.get(
 					directCompiledEntryKey(numericCallback.functionIndex, numericCallback.entryId),
 				);

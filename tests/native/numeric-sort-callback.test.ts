@@ -72,6 +72,9 @@ describe("numeric sort callback specialization through both emitters", () => {
 			const calls = run.stderr.match(/numeric_sort_callback_calls=(\d+)/);
 			expect(calls, run.stderr).not.toBeNull();
 			expect(Number(calls![1])).toBeGreaterThan(0);
+			const kernels = run.stderr.match(/numeric_sort_kernel_runs=(\d+)/);
+			expect(kernels, run.stderr).not.toBeNull();
+			expect(Number(kernels![1])).toBeGreaterThan(0);
 
 			for (const binary of [pair.compiled, pair.interpreted]) {
 				expect(runToStdout(binary).trim()).toBe(expected);

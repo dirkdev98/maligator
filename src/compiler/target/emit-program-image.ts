@@ -12,6 +12,7 @@ import {
 	directCompiledEntryKey,
 	createNativeFunctionRenderer,
 	numericSortKernelDeclaration,
+	numericSortKernelDemand,
 } from "./render-native-c.ts";
 import type { CompiledFunction } from "./render-native-c.ts";
 import {
@@ -758,6 +759,7 @@ function emitNativeFunctions(
 			),
 		),
 	);
+	const sortKernelEntries = numericSortKernelDemand(image.native.functions);
 	const references = image.native.functions.map((native) => {
 		const targets = new Set<number>();
 		const entries = new Set<string>();
@@ -842,6 +844,7 @@ function emitNativeFunctions(
 				? undefined
 				: options.maxCodeUnits - headerCodeUnits,
 			options.nativeFunctionSplit,
+			sortKernelEntries,
 		);
 		if (
 			emitted === null ||

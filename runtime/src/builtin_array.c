@@ -3841,6 +3841,7 @@ static bool mal_builtin_array_sort_values(
     }
 
     if (numeric_leaf != nullptr) {
+        MAL_PERF_COUNT(numeric_sort_kernel_runs);
         numeric_leaf->numeric_sort_kernel(values, scratch, keys, count);
         mal_vm_leave_compiled(vm);
     } else for (u32 width = 1; ok && width < count;) {

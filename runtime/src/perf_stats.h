@@ -320,6 +320,7 @@ typedef struct MalPerfStats {
     u64 argument_snapshot_temporary_copies;
 	u64 direct_entry_hits;
 	u64 numeric_sort_callback_calls;
+	u64 numeric_sort_kernel_runs;
 
 	u64 call_cache_probes;
     u64 call_cache_exact_identity_hits;

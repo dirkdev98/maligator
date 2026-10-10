@@ -147,4 +147,40 @@ describe("numeric sort callback entries", () => {
 			expect(() => serializeCompilerArtifact(forged)).toThrow(/numeric sort callback/);
 		}
 	});
+
+	it("emits one sort kernel per entry that a sort site passes", () => {
+		const image = compileSemanticProgramToProgramImage(
+			analyzeSourceAndRunSemanticAnalysis(
+				`
+		function compare(a, b) { return a - b; }
+		function blend(a, b) { return a * 0.25 + b; }
+		function run() {
+			let total = 0;
+			for (let index = 0; index < 100; index++) total += blend(index, index * 2);
+			return total;
+		}
+		globalThis.result = [[3, 1, 2].sort(compare), [5, 4].toSorted(compare), run()];
+	`,
+				"sort-kernel-demand.js",
+			),
+		);
+		const [callback, ...others] = callbackPlans(image).map(({ numericSortCallback }) => ({
+			functionIndex: numericSortCallback!.functionIndex,
+			entryId: numericSortCallback!.entryId,
+		}));
+		expect(others).toEqual([callback]);
+		const output = emitProgramImage(image, { debugInfo: false });
+		const comparator = `mal_direct_${callback!.functionIndex}_${callback!.entryId}`;
+		const leaves = [...output.matchAll(/^static .* (mal_direct_\d+_\d+)_leaf\(/gm)].map(
+			(match) => match[1],
+		);
+		expect(leaves).toContain(comparator);
+		expect(leaves.length).toBeGreaterThan(1);
+		expect(
+			[...output.matchAll(/^void (mal_direct_\d+_\d+)_sort\(.*\{$/gm)].map(
+				(match) => match[1],
+			),
+		).toEqual([comparator]);
+		expect(output.split(`${comparator}_sort,`)).toHaveLength(3);
+	});
 });
