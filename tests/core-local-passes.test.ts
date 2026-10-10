@@ -727,12 +727,30 @@ describe("Core local canonicalization", () => {
 		const program = new CoreProgram(coreOpcodeRegistry, {
 			stringConstants: [units("label"), units(CORE_SUPER_THIS_STATE_KEY)],
 		});
-		const build = (load: "named" | "indexed" | "state") => {
-			const builder = new CoreFunctionBuilder(program, { parameterCount: 1 });
-			const entry = builder.createBlock([{ representation: "boxed" }]);
-			const receiver = inspectCoreBlockParameters(builder, entry)[0]!.value;
+		const build = (
+			load: "named" | "indexed" | "state" | "dynamic" | "dynamic-near-state",
+		) => {
+			const builder = new CoreFunctionBuilder(program, { parameterCount: 2 });
+			const entry = builder.createBlock([
+				{ representation: "boxed" },
+				{ representation: "boxed" },
+			]);
+			const [receiverParameter, keyParameter] = inspectCoreBlockParameters(
+				builder,
+				entry,
+			);
+			const receiver = receiverParameter!.value;
 			let loaded: CoreValueId;
-			if (load === "indexed") {
+			if (load === "dynamic" || load === "dynamic-near-state") {
+				if (load === "dynamic-near-state")
+					builder.appendInstruction(entry, "loadPropertyStatic", [receiver], {
+						attributes: { stringIndex: 1 },
+					});
+				[loaded] = builder.appendInstruction(entry, "loadProperty", [
+					receiver,
+					keyParameter!.value,
+				]) as [CoreValueId];
+			} else if (load === "indexed") {
 				const [index] = builder.appendInstruction(entry, "createNumber", [], {
 					attributes: { value: 3 },
 				});
@@ -754,6 +772,8 @@ describe("Core local canonicalization", () => {
 		const named = build("named");
 		const indexed = build("indexed");
 		const state = build("state");
+		const dynamic = build("dynamic");
+		const dynamicNearState = build("dynamic-near-state");
 		const optimized = optimizeCore({ program, context }, { verification: "per-pass" })
 			.compilation.program;
 		const opcodes = (fn: CoreFunctionStore) =>
@@ -763,6 +783,8 @@ describe("Core local canonicalization", () => {
 		expect(opcodes(optimized.function(named))).not.toContain("throwIfTdz");
 		expect(opcodes(optimized.function(indexed))).not.toContain("throwIfTdz");
 		expect(opcodes(optimized.function(state))).toContain("throwIfTdz");
+		expect(opcodes(optimized.function(dynamic))).not.toContain("throwIfTdz");
+		expect(opcodes(optimized.function(dynamicNearState))).toContain("throwIfTdz");
 	});
 
 	it("revisits TDZ checks after memory forwarding", () => {

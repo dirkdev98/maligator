@@ -1720,7 +1720,16 @@ const foldRedundantTdzChecks: CoreFunctionPass = {
 				units.every((unit, index) => unit === CORE_SUPER_THIS_STATE_KEY.charCodeAt(index))
 			);
 		};
+		// Only code lowered for derived constructors names the state key, and the state
+		// object stays in a synthetic binding no other function can reach.
+		let referencesSuperThisState: boolean | undefined;
 		const mayLoadSuperThisState = (instruction: CoreInstructionId, opcode: string) => {
+			referencesSuperThisState ??= [...fn.instructionIds()].some(
+				(candidate) =>
+					fn.instructionKind(candidate) === "operation" &&
+					isSuperThisStateKey(fn.instructionAttributes(candidate).stringIndex),
+			);
+			if (!referencesSuperThisState) return false;
 			if (opcode !== "loadProperty")
 				return isSuperThisStateKey(fn.instructionAttributes(instruction).stringIndex);
 			const key = instructionOperand(fn, instruction, 1);
