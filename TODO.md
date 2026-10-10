@@ -169,12 +169,14 @@ The independent target boundary and current storage contract are recorded in
       handlers. Handler entries currently disable it, so
       `lowerExecutionFunctionToNativePlan` still zeroes 4,351 registers on every call.
       Handler edges must leave from before each protected instruction's writes.
-- [ ] Fold TDZ checks on captured and module bindings. Property-load results no
-      longer keep their checks, but 18,942 remain in the self-compile C, mostly on
-      reads of captured cells and module globals. A closure created after its
-      owner initializes a binding can never observe that binding's TDZ, and an
-      owner's own read is safe once the initializing store dominates it with no
-      environment rebinding in between.
+- [ ] Fold the TDZ checks that remain on module and captured bindings. Module
+      bindings initialized before their module can run user code, captured cells
+      read by closures created after their declaration, and an owner's reads after
+      a dominating initialization no longer check; 7,746 of 18,830 checks remain
+      in the self-compile C. Hoisted function declarations still check every outer
+      binding they read, because they exist before the declaration runs; showing
+      that every reference to such a helper follows the declaration would cover
+      them. The merged module init keeps the checks on bindings it writes itself.
 - [ ] Bring the native self-compile's memory closer to its live set. Peak live
       bytes stay near 900 MB, but maximum RSS is 4.4 GB now that process GC
       pressure backs off past its budget (it was 3.5 GB while pressure forced 183
@@ -606,17 +608,21 @@ contracts or investigates costs still visible after the string follow-ups.
 
 ## Focused performance work
 
-- [ ] Close the closed-compiled JavaScript benchmark's per-call gap. Against Node,
-      its objects phase spends 55 ms on three-class `quote` dispatch (13 ms),
-      20 ms on an `arguments` function (12 ms) and 24 ms on a one-line closure
-      (10 ms). The closure's own work is a few instructions; each call also
-      publishes caller roots, checks the callee guard, pushes a native debug frame
-      in `mal_vm_enter_compiled`, links a root frame whose slots only its slow
-      paths need, and rechecks the TDZ of the module constant it reads. The native
-      frame repeats what the root-frame chain already records, and a root frame
-      could be linked on the first collecting edge instead of at entry. The
-      `quote` site already passes `order`'s fields to field entries and allocates
-      the object only on a guard miss; what remains there is the same frame work.
+- [ ] Close the closed-compiled JavaScript benchmark's per-call gap. In its
+      pricing loop the three-class `quote` call costs 54 ms against Node's 6 (13 ms
+      of it polymorphism), the `arguments` function 24 ms against 4 and the
+      one-line closure 26 ms against 8, about 7 ns per call. Frame work is not the
+      main cost: dropping native debug frames saved about 5 ms of 97 and dropping
+      root-frame links about 3 ms. `mal_vm_enter_compiled` and the inherited,
+      array-length and array-index probes stay out of line in the large caller;
+      forcing them inline cut the loop by 12% but grew the benchmark binary 1.6%.
+      Moving the entry checks into each compiled function's prologue would inline
+      them once per function instead of once per call site.
+- [ ] Remove the repeated shape checks of the objects phase's particle loop. It
+      takes 75 ms against Node's 19 and performs 14 to 17 inline-cache shape checks
+      per iteration on the same receiver, whose shape the loop never changes. One
+      guard on that receiver's shape could cover its loads and stores of number
+      fields, falling back to the unchanged generic code before any side effect.
 - [ ] Keep Collatz-style integer loops in int32. The core phase's remaining gap
       to Node is `collatzSteps` alone, about 70 ms against 37; its prime and throw
       loops already beat Node. The loop is clean double arithmetic whose `& 1`
