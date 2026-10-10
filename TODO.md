@@ -250,7 +250,10 @@ The independent target boundary and current storage contract are recorded in
       thread-locals onto the heap also left wall time unchanged, as did moving the
       open-world Math call hint from a thread-local into the call-cache row (an
       open-world copy of the allocation loop stayed at 171 ms; clang hoists the
-      thread-local address out of the loop). Hot accessors only
+      thread-local address out of the loop). Sending an inherited-value miss
+      straight to the shared stub, skipping the row the inline probe had just
+      tried, saved 5% of a three-class method loop and nothing in the benchmark.
+      Hot accessors only
       sped up once inlining accepted throwing callees and class-scope closures.
       Inlining the strict `this` check and reading the callee's realm field
       directly in `mal_vm_call_cached` and guarded direct calls did not change the
