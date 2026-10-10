@@ -1037,7 +1037,10 @@ function coreInitializedModuleGlobalSlots(program: CoreFrontendContext): Array<n
 			(program.cjsImports.get(file.path)?.length ?? 0) > 0
 		)
 			continue;
-		for (const binding of moduleInitializationPrefix(file)) {
+		for (const binding of moduleInitializationPrefix(
+			file,
+			program.facts.world.primordialPolicy === "locked",
+		)) {
 			const location = program.bindingToStorage.get(binding);
 			if (location?.type === "global") slots.add(location.index);
 		}
@@ -1046,7 +1049,10 @@ function coreInitializedModuleGlobalSlots(program: CoreFrontendContext): Array<n
 }
 
 /** Bindings that the statements before the first possible user-code call initialize. */
-function moduleInitializationPrefix(file: SemanticFile): ReadonlySet<Binding> {
+function moduleInitializationPrefix(
+	file: SemanticFile,
+	lockedPrimordials: boolean,
+): ReadonlySet<Binding> {
 	const initialized = new Set<Binding>();
 	const primitives = new Set<Binding>();
 	const classes = new Set<Binding>();
@@ -1086,9 +1092,51 @@ function moduleInitializationPrefix(file: SemanticFile): ReadonlySet<Binding> {
 				return false;
 		}
 	};
+	const global = (node: ESTree.Node, name: string): boolean => {
+		if (node.type !== "Identifier" || node.name !== name) return false;
+		const binding = file.nodeToBinding.get(node);
+		return binding === undefined || binding.undeclared === true;
+	};
+	const safeElements = (node: ESTree.Node, entries: boolean): boolean =>
+		node.type === "ArrayExpression" &&
+		node.elements.every(
+			(element) =>
+				element !== null &&
+				element.type !== "SpreadElement" &&
+				(entries ? safeElements(element, false) : safe(element)),
+		);
+	// Locked collection constructors iterate an array literal through the intrinsic
+	// iterator and read Map entries as own array elements, so they call no user code.
+	const intrinsicConstruction = (node: ESTree.NewExpression): boolean => {
+		const entries = global(node.callee, "Map") || global(node.callee, "WeakMap");
+		return (
+			(entries || global(node.callee, "Set") || global(node.callee, "WeakSet")) &&
+			(node.arguments.length === 0 ||
+				(node.arguments.length === 1 && safeElements(node.arguments[0]!, entries)))
+		);
+	};
+	const intrinsicFreeze = (node: ESTree.CallExpression): boolean => {
+		const callee = node.callee as ESTree.Node;
+		const [argument] = node.arguments;
+		return (
+			callee.type === "MemberExpression" &&
+			!callee.computed &&
+			callee.optional !== true &&
+			global(callee.object, "Object") &&
+			callee.property.type === "Identifier" &&
+			callee.property.name === "freeze" &&
+			node.arguments.length === 1 &&
+			(argument?.type === "ObjectExpression" || argument?.type === "ArrayExpression") &&
+			safe(argument)
+		);
+	};
 	const safe = (node: ESTree.Node): boolean => {
 		if (primitive(node)) return true;
 		switch (node.type) {
+			case "NewExpression":
+				return lockedPrimordials && intrinsicConstruction(node);
+			case "CallExpression":
+				return lockedPrimordials && !node.optional && intrinsicFreeze(node);
 			case "Literal":
 			case "ArrowFunctionExpression":
 			case "FunctionExpression":

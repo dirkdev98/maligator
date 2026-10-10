@@ -2,13 +2,18 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { resolveBuildConfig } from "../src/build-config.ts";
 import { runSemanticAnalysisForGraph } from "../src/compiler/frontend/analyze-module-graph.ts";
 import { buildModuleGraph } from "../src/compiler/frontend/module-graph.ts";
 import { compileSemanticProgramToProgramImage } from "../src/compiler/pipeline/compile-core.ts";
+import { compilerProgramFactsFromConfig } from "../src/compiler/shared/compiler-facts.ts";
 import { coreFunctionNamed, coreOperations } from "./helpers/core-inspection.ts";
 import { inspectStaticValueFunctions } from "./helpers/static-values.ts";
 
-function readerOpcodes(files: Readonly<Record<string, string>>): ReadonlyArray<string> {
+function readerOpcodes(
+	files: Readonly<Record<string, string>>,
+	primordials: "locked" | "mutable" = "mutable",
+): ReadonlyArray<string> {
 	const root = mkdtempSync(join(tmpdir(), "mal-module-initialization-"));
 	try {
 		for (const [name, source] of Object.entries(files))
@@ -17,6 +22,9 @@ function readerOpcodes(files: Readonly<Record<string, string>>): ReadonlyArray<s
 		compileSemanticProgramToProgramImage(
 			runSemanticAnalysisForGraph(buildModuleGraph(join(root, "entry.mjs"))),
 			{
+				facts: compilerProgramFactsFromConfig(
+					resolveBuildConfig({ engine: { primordials } }),
+				),
 				afterCoreOptimization(program) {
 					const reader = coreFunctionNamed(program, "reader");
 					if (reader === undefined) throw new Error("Missing Core function reader");
@@ -44,6 +52,31 @@ describe("module bindings initialized before user code", () => {
 		});
 		expect(opcodes).not.toContain("throwIfTdz");
 	});
+
+	it.each([
+		["locked", false],
+		["mutable", true],
+	] as const)(
+		"treats intrinsic collections and freezing as initialization with %s primordials",
+		(primordials, checked) => {
+			const opcodes = readerOpcodes(
+				{
+					"entry.mjs": entry,
+					"limits.mjs": `
+						const NAMES = new Set(["a", "b"]);
+						const PAIRS = new Map([["a", 1]]);
+						const TABLE = Object.freeze({ scale: 3 });
+						const LIMIT = 7;
+						export function reader(value) {
+							return NAMES.has(value) ? PAIRS.get(value) : (value * TABLE.scale) % LIMIT;
+						}
+					`,
+				},
+				primordials,
+			);
+			expect(opcodes.includes("throwIfTdz")).toBe(checked);
+		},
+	);
 
 	it("keeps the check when the module can run user code before initializing", () => {
 		const opcodes = readerOpcodes({
