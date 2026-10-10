@@ -1602,12 +1602,72 @@ const foldRedundantTdzChecks: CoreFunctionPass = {
 		const initializedCaptures = coreInitializedCapturedReadMembership(
 			context.compilationContext,
 		);
+		const precedes = (first: CoreInstructionId, second: CoreInstructionId): boolean => {
+			const firstBlock = fn.instructionBlock(first);
+			const secondBlock = fn.instructionBlock(second);
+			if (firstBlock !== secondBlock)
+				return control.instructionDominatesBlock(firstBlock, secondBlock);
+			for (const instruction of fn.instructionIds(firstBlock)) {
+				if (instruction === second) return false;
+				if (instruction === first) return true;
+			}
+			return false;
+		};
+		const emptyInitializer = (value: CoreValueId | undefined): boolean => {
+			if (value === undefined || fn.kernel.valueDefinitionKind(value) !== 1) return false;
+			const definition = coreInstructionId(fn.kernel.valueDefinitionOwner(value));
+			const opcode = fn.instructionOpcodeName(definition);
+			return (
+				opcode === "createEmpty" ||
+				(opcode === "move" && emptyInitializer(instructionOperand(fn, definition, 0)))
+			);
+		};
+		// Store order describes this activation's cells only while no environment rebinds.
+		let ownCellStores:
+			| Map<number, Array<{ instruction: CoreInstructionId; empty: boolean }>>
+			| undefined;
+		const ownStores = () => {
+			if (ownCellStores !== undefined) return ownCellStores;
+			ownCellStores = new Map();
+			for (const instruction of fn.instructionIds()) {
+				if (fn.instructionKind(instruction) !== "operation") continue;
+				const opcode = fn.instructionOpcodeName(instruction);
+				if (opcode === "envPush" || opcode === "envCopy" || opcode === "envPop") {
+					ownCellStores.clear();
+					return ownCellStores;
+				}
+				if (opcode !== "storeCaptured") continue;
+				const { functionIndex, index } = fn.instructionAttributes(instruction);
+				if (functionIndex !== item.function || typeof index !== "number") continue;
+				const stores = ownCellStores.get(index) ?? [];
+				stores.push({
+					instruction,
+					empty: emptyInitializer(instructionOperand(fn, instruction, 0)),
+				});
+				ownCellStores.set(index, stores);
+			}
+			return ownCellStores;
+		};
+		// An owner's read is initialized once a value store dominates it and every
+		// TDZ reset of that cell dominates the store.
+		const ownerInitialized = (load: CoreInstructionId, index: number): boolean => {
+			const stores = ownStores().get(index) ?? [];
+			return stores.some(
+				(store) =>
+					!store.empty &&
+					precedes(store.instruction, load) &&
+					stores.every(
+						(reset) => !reset.empty || precedes(reset.instruction, store.instruction),
+					),
+			);
+		};
 		const initializedCapture = (load: CoreInstructionId): boolean => {
 			const { functionIndex, index } = fn.instructionAttributes(load);
 			return (
 				typeof functionIndex === "number" &&
 				typeof index === "number" &&
-				initializedCaptures.has(`${item.function}:${functionIndex}:${index}`)
+				(initializedCaptures.has(`${item.function}:${functionIndex}:${index}`) ||
+					(functionIndex === item.function && ownerInitialized(load, index)))
 			);
 		};
 		let writtenGlobals: ReadonlySet<unknown> | undefined;

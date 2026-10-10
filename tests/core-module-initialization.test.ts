@@ -121,4 +121,23 @@ describe("captured bindings initialized before their closures exist", () => {
 			),
 		).toEqual({ hoisted: true, before: true, skipped: true });
 	});
+
+	it("drops the owner's check after a dominating initialization only", () => {
+		expect(
+			capturedReaders(
+				`function after(items) {
+					const scale = items.length;
+					const scaled = (item) => item * scale;
+					return [items.map(scaled), scale];
+				}
+				function before(flag) {
+					const early = flag ? late : 0;
+					const late = 1;
+					return [early, () => late];
+				}
+				globalThis.read = [after, before];`,
+				["after", "before"],
+			),
+		).toEqual({ after: false, before: true });
+	});
 });
