@@ -2807,6 +2807,36 @@ static inline bool mal_vm_array_try_store(MalArrayObject *arr, f64 index, MalVal
 }
 
 /**
+ * `receiver.push(value)` where `callee` was loaded from the receiver: the builtin
+ * appends in place when the dense vector has room. With no indexed property on
+ * Array.prototype or Object.prototype the append's Set finds no setter.
+ */
+static inline bool mal_vm_array_push_one_try(
+    MalVm *vm, MalValue callee, MalValue receiver, MalValue value, MalValue *out
+) {
+#if MAL_PERF_STATS
+    // The out-of-line push records element kinds for the perf report.
+    if (mal_perf_stats_enabled) return false;
+#endif
+    MalArrayObject *arr = mal_vm_as_array(receiver);
+    if (arr == nullptr || callee != vm->intrinsics[MAL_INTRINSIC_ARRAY_PROTOTYPE_PUSH] ||
+        !mal_array_elements_protector || arr->dense_deopted || !arr->object.extensible ||
+        !arr->length_writable || arr->elements == nullptr || arr->dense_count != arr->length ||
+        arr->length >= arr->capacity ||
+        mal_object_prototype(&arr->object) != mal_array_prototype_object) {
+        return false;
+    }
+    u32 index = arr->length;
+    arr->elements[index] = value;
+    mal_gc_array_card(&arr->object.header, index, value);
+    arr->dense_count = index + 1;
+    arr->length = index + 1;
+    MAL_PERF_COUNT(array_push_direct_hits);
+    *out = mal_ops_number_value((f64) arr->length);
+    return true;
+}
+
+/**
  * CreateDataProperty of a default element through the dense vector, mirroring
  * mal_array_object_store's fast arm; false defers to the generic define.
  */

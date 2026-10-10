@@ -3,9 +3,12 @@ import { mkdtempSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
+import { emitProgramImage } from "../../src/compiler/target/emit-program-image.ts";
+import type { ProgramImage } from "../../src/compiler/target/program-image.ts";
 import {
 	assertExactLines,
 	buildNativeBinary,
+	buildNativeBinaryResult,
 	runToStdout,
 	STRESS_ENV,
 } from "../../src/test-harness.ts";
@@ -20,14 +23,17 @@ function field(line: string, name: string): number {
 describe("guarded direct Array.prototype.push", () => {
 	let compiled: string;
 	let interpreted: string;
+	let image: ProgramImage;
 	beforeAll(() => {
-		compiled = buildNativeBinary({
+		const result = buildNativeBinaryResult({
 			fixture,
 			name: "array-push-direct",
 			compiled: true,
 			outDir,
 			environment: { ...process.env, MAL_PERF_STATS: "1" },
 		});
+		compiled = result.binaryPath;
+		image = result.programImage;
 		interpreted = buildNativeBinary({
 			fixture,
 			name: "array-push-direct-interpreted",
@@ -36,6 +42,12 @@ describe("guarded direct Array.prototype.push", () => {
 			environment: { ...process.env, MAL_PERF_STATS: "1" },
 		});
 	}, 600_000);
+
+	it("appends single values in place before calling the builtin", () => {
+		expect(emitProgramImage(image, { compiled: true })).toContain(
+			"mal_vm_array_push_one_try(",
+		);
+	});
 
 	it("preserves overrides, mutation, exceptional fallbacks, and return values", () => {
 		for (const binary of [compiled, interpreted]) {

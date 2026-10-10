@@ -9961,10 +9961,20 @@ function emitInstruction(
 				];
 			}
 			if (vmCallProvesBuiltin(callPlan, "Array.prototype.push")) {
-				return [
+				const direct = [
 					`MalCompletion ${tmp} = mal_builtin_array_push_direct(vm, ${nativeCallCacheReference(context, ip)}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length}, nullptr);`,
 					`if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow()}`,
 					`r${instruction.dst} = ${tmp}.value;`,
+				];
+				if (args.length !== 1) return [...direct, poll()];
+				const pushed = `__pushed_${ip}`;
+				return [
+					`MalValue ${pushed};`,
+					`if (mal_vm_array_push_one_try(vm, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${boxedOperand(args[0]!)}, &${pushed})) {`,
+					`  r${instruction.dst} = ${pushed};`,
+					"} else {",
+					...direct.map((line) => `  ${line}`),
+					"}",
 					poll(),
 				];
 			}
