@@ -2419,6 +2419,21 @@ mal_vm_property_try_load_static_remaining(
     MalVm *vm, MalValue receiver, const MalObject *object,
     MalInlineCache *ic
 ) {
+    // A method site that alternates between classes misses its one row for every class
+    // but one; the shared stub holds the others, so try it before the unrelated rows.
+    if (object != nullptr && ic->mode == MAL_IC_MODE_INHERITED_VALUE && ic->poly_count > 0 &&
+        vm->inherited_property_stub != nullptr) {
+        const MalObject *prototype = mal_object_prototype(object);
+        const MalInlineCache *stub = &vm->inherited_property_stub[
+            mal_inherited_stub_hash(object->shape, prototype, ic->key)];
+        if (stub->key == ic->key && stub->mode == MAL_IC_MODE_INHERITED_VALUE &&
+            stub->poly_count > 0 && stub->receiver_type == MAL_HEAP_OBJECT &&
+            (u8) object->header.type == MAL_HEAP_OBJECT && object->shape == stub->shape &&
+            prototype == stub->proto_object[0] && !mal_object_has_public_overflow(object)) {
+            mal_perf_ic_load_inherited_hit();
+            return (MalStaticPropertyProbeResult) { .hit = true, .value = stub->value };
+        }
+    }
     // Watched built-ins such as `Math.round` are the hottest rows the inline probe
     // leaves out; they hit by identity once the inline checks miss.
     if (object != nullptr && ic->mode == MAL_IC_MODE_SHAPE && ic->slot == MAL_IC_VALUE_SLOT &&

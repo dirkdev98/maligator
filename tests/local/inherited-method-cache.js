@@ -101,5 +101,38 @@ Object.prototype.toString = function () {
 ok("plain object inherited invalidation", loadToString(plain)() === "patched");
 Object.prototype.toString = originalToString;
 
+class Standard {
+	quote() {
+		return 1;
+	}
+}
+class Volume {
+	quote() {
+		return 2;
+	}
+}
+class Priority {
+	quote() {
+		return 3;
+	}
+}
+const rules = [new Standard(), new Volume(), new Priority()];
+function quoteAll(rounds) {
+	let total = 0;
+	for (let i = 0; i < rounds; i++) total += rules[i % 3].quote();
+	return total;
+}
+ok("alternating classes warm", quoteAll(300) === 600);
+Volume.prototype.quote = function () {
+	return 20;
+};
+ok("alternating class method replaced", quoteAll(300) === 2400);
+rules[2].quote = function () {
+	return 300;
+};
+ok("alternating instance shadows its class", quoteAll(300) === 32100);
+Object.setPrototypeOf(rules[0], Priority.prototype);
+ok("alternating instance changes class", quoteAll(300) === 32300);
+
 ok("checks ran", passed > 4000);
 console.log("inherited-method-cache PASS");
