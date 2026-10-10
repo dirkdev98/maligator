@@ -6,6 +6,9 @@ for (let i = 0; i < 32; i++) {
 	object[[seed, "shape", i].join("-")] = i;
 }
 const missingKey = [seed, "shape", "missing"].join("-");
+// Lookups do not intern their keys; a store elsewhere makes this one a cacheable atom.
+const elsewhere = {};
+elsewhere[missingKey] = 0;
 if (Object.hasOwn(object, missingKey)) throw new Error("missing key is present");
 
 if (typeof globalThis.__mal_reset_perf_stats !== "function") {
