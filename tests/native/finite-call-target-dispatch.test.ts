@@ -30,14 +30,14 @@ describe("finite script call-target dispatch", () => {
 		compiled = pair.compiled;
 		// Native plans address their own body, which can diverge from the runtime bytecode.
 		candidateSets = pair.programImage.native.functions.flatMap((plan) =>
-			(plan?.body.instructions ?? []).flatMap((instruction, instructionIndex) => {
+			plan.body.instructions.flatMap((instruction, instructionIndex) => {
 				if (
 					instruction.opcode !== "CALL" ||
 					instruction.guardedFunctionIndices === undefined
 				) {
 					return [];
 				}
-				expect(plan!.instructions[instructionIndex]).toMatchObject({
+				expect(plan.instructions[instructionIndex]).toMatchObject({
 					kind: "call",
 					guardedFunctionIndices: instruction.guardedFunctionIndices,
 				});
