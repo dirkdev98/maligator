@@ -536,6 +536,13 @@ check(
 	"resumed exec keeps lookbehind context",
 	execAll(/(?<=-)\d+/g, continuationSubject) === "3:12,14:7,24:301",
 );
+// A slice of two-byte text stays UTF-16 even when its own units are ASCII.
+const wideSubject = ("\u0100" + continuationSubject).slice(1);
+check(
+	"exec loop continues over two-byte ASCII text",
+	execAll(tokenPattern, wideSubject) === execAll(tokenPattern, continuationSubject) &&
+		execAll(tokenPattern, wideSubject) === "0:id-12:x=ab;,11:id-7:y=c;,21:id-301:z=def;",
+);
 const sticky = /\d+;?/y;
 const stickyFound = [];
 let stickyMatch;

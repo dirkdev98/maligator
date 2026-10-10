@@ -830,7 +830,10 @@ pub unsafe extern "C" fn mal_regexp_exec(
 
             if let Some(ascii) = cache.ascii.as_ref() {
                 execution_flags |= EXEC_ASCII;
-                cp.re.find_from_ascii(ascii, start).next()
+                // SAFETY: the copy is never modified after classification and the
+                // continuation is the only field the call below updates.
+                let text = unsafe { &*(ascii.as_str() as *const str) };
+                next_ascii_match(cache, &cp.re, text, start)
             } else {
                 execution_flags |= EXEC_NON_ASCII;
                 find_wide(&cp.re, cp.unicode_mode, subj, start)
