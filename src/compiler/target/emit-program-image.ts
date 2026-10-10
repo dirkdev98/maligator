@@ -173,6 +173,8 @@ export const GENERATED_DATA_C_HEADER_LINES = [
 	"#include <stdatomic.h>",
 	"#include <string.h>",
 	'#include "vm.h"',
+	// Bytecode rows name Math operations by their runtime enum.
+	'#include "builtin_math.h"',
 	"#define MAL_STRING_ROW(code_units_value, length_value) { .header = MAL_HEAP_HEADER_IMMORTAL(MAL_HEAP_STRING), .storage = MAL_STRING_STORAGE_EXTERNAL, .hash = 0, .length = length_value, .code_units = code_units_value }",
 	"#define MAL_LATIN1_STRING_ROW(units_value, length_value) { .header = MAL_HEAP_HEADER_IMMORTAL(MAL_HEAP_STRING), .storage = MAL_STRING_STORAGE_EXTERNAL, .latin1 = 1, .hash = 0, .length = length_value, .latin1_units = units_value }",
 	"#define MAL_LINE_ENTRY(start_ip_value, pos_id_value) { .start_ip = start_ip_value, .pos_id = pos_id_value }",
