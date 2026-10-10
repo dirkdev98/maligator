@@ -72,9 +72,9 @@ describe("contained numeric TypedArray stores", () => {
 		({ compiled, interpreted } = pair);
 		const directKinds = new Set<string>();
 		const boundedLoadKinds = new Set<string>();
-		pair.programImage.runtime.functions.forEach((fn, index) => {
-			const plan = pair.programImage.native.functions[index]!;
-			for (const [ip, instruction] of fn.instructions.entries()) {
+		pair.programImage.native.functions.forEach((plan, index) => {
+			// Native plan IPs address the native body, which can diverge from the runtime bytecode.
+			for (const [ip, instruction] of plan.body.instructions.entries()) {
 				const access = plan.instructions[ip];
 				if (
 					instruction.opcode === "LOAD_PROPERTY" &&
@@ -85,7 +85,7 @@ describe("contained numeric TypedArray stores", () => {
 					expect(plan.registerRepresentations[instruction.dst]).toBe("number");
 				}
 			}
-			const stores = fn.instructions.flatMap((instruction, ip) => {
+			const stores = plan.body.instructions.flatMap((instruction, ip) => {
 				const native = plan.instructions[ip];
 				return instruction.opcode === "STORE_PROPERTY" &&
 					native?.kind === "contained-fixed-typed-array-element"
