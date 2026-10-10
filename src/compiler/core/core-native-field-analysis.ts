@@ -27,6 +27,15 @@ const argumentProofs = new WeakMap<
 	}
 >();
 
+// These read the parameter through the activation rather than as an operand.
+const PARAMETER_ALIAS_OPCODES = new Set([
+	"loadArgument",
+	"loadStaticArgument",
+	"createArgumentsObject",
+	"createRestArguments",
+	"callRestArguments",
+]);
+
 export function coreReadOnlyParameterFields(
 	fn: CoreFunctionStore,
 	cfg: CoreControlFlow,
@@ -42,6 +51,7 @@ export function coreReadOnlyParameterFields(
 	const parameter = fn.kernel.functionParameter(0);
 	const keys: Array<number> = [];
 	const loads: Array<{ instruction: CoreInstructionId; field: number }> = [];
+	const numericCalls: Array<CoreInstructionId> = [];
 	const math = new Set<CoreValueId>();
 	const mathLoads: Array<CoreValueId> = [];
 	const callees = new Set<CoreValueId>();
@@ -69,7 +79,8 @@ export function coreReadOnlyParameterFields(
 			loads.push({ instruction, field: keys.indexOf(key) });
 			continue;
 		}
-		if (operands.includes(parameter)) return undefined;
+		if (operands.includes(parameter) || PARAMETER_ALIAS_OPCODES.has(opcode))
+			return undefined;
 		if (opcode === "loadIntrinsic" && attrs.intrinsic === "Math") {
 			math.add(fn.kernel.resultAt(fn.kernel.instructionResultStart(instruction)));
 			continue;
@@ -83,19 +94,23 @@ export function coreReadOnlyParameterFields(
 			if (opcode === "call") callees.add(operands[0]!);
 			const builtin = attrs.knownBuiltinCall as unknown as KnownBuiltinCall | undefined;
 			if (
-				builtin === undefined ||
-				!builtin.operation.startsWith("Math.") ||
-				builtin.semantics.kind !== "known" ||
-				builtin.semantics.value.result !== "number" ||
+				builtin !== undefined &&
+				builtin.operation.startsWith("Math.") &&
+				builtin.semantics.kind === "known" &&
+				builtin.semantics.value.result === "number" &&
 				(opcode === "call"
-					? !knownBuiltinCallProves(builtin, builtin.operation)
-					: builtin.identity.kind !== "known" ||
-						builtin.identity.value !== builtin.operation) ||
-				!compilerFactIsWorldInvariant(builtin.identity)
-			)
-				return undefined;
-			continue;
+					? knownBuiltinCallProves(builtin, builtin.operation)
+					: builtin.identity.kind === "known" &&
+						builtin.identity.value === builtin.operation) &&
+				compilerFactIsWorldInvariant(builtin.identity)
+			) {
+				numericCalls.push(instruction);
+				continue;
+			}
 		}
+		// A strict callee exposes no `fn.arguments`, so code it calls cannot reach a record
+		// that only its field loads read, or tell that the caller never allocated it.
+		if (fn.metadata.strict) continue;
 		if (
 			![
 				"createNumber",
@@ -113,12 +128,14 @@ export function coreReadOnlyParameterFields(
 		)
 			return undefined;
 	}
-	return keys.length === 0 || mathLoads.some((value) => !callees.has(value))
+	return keys.length === 0 ||
+		(!fn.metadata.strict && mathLoads.some((value) => !callees.has(value)))
 		? undefined
 		: Object.freeze({
 				keys: Object.freeze(keys),
 				representations: Object.freeze(keys.map(() => "boxed" as const)),
 				loads: Object.freeze(loads.map((load) => Object.freeze(load))),
+				numericCalls: Object.freeze(numericCalls),
 			});
 }
 

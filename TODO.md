@@ -258,7 +258,9 @@ The independent target boundary and current storage contract are recorded in
       outrank every hinted one. Inlining every candidate of at most 16 units
       past the budget made the cone 2.6% slower (28.20 against 27.49 s, three
       pairs), because each inlined accessor still pays the method, field and
-      private probes that V8 hoists out of the loop. Exempting
+      private probes that V8 hoists out of the loop; ranking hinted inlines
+      among exact ones within the same budget cost 0.8% (28.48 against 28.25 s).
+      Exempting
       single-target guarded direct calls or small inlines from the program
       generated-code budget made thousands more sites direct or inlined without
       changing wall time, because
@@ -476,6 +478,11 @@ iterator cursor is not, by itself, permission to delete its language object.
       and separate admission checks from proven interior operations. Do not claim
       SIMD/vectorization from simpler C, remove necessary polls, enable fast-math,
       or reorder observable accesses to make a loop look native.
+      Safe-integer loop regions cover only innermost loops of numbers and
+      Booleans. No loop in the self-compiled compiler qualifies: of its 2,495
+      single-entry innermost loops, only 15 have one blocking opcode (10 iterator
+      steps, 4 keyed loads, 1 static load), so typed-array or property access
+      inside such a region needs a consumer outside the compiler first.
 
 ## P2: composable temporary values
 
@@ -631,19 +638,14 @@ contracts or investigates costs still visible after the string follow-ups.
       array-length and array-index probes stay out of line in the large caller;
       forcing them inline cut the loop by 12% but grew the benchmark binary 1.6%.
       Moving the entry checks into each compiled function's prologue would inline
-      them once per function instead of once per call site.
+      them once per function instead of once per call site. Inlining the three
+      `quote` bodies instead of dispatching to their field entries doubled the
+      three-class loop (106 against 51 ms), so field entries stay preferred.
 - [ ] Re-measure numeric property update plans now that number record regions
       take over loops that only touch number fields of one receiver. On the
       particle loop, before regions, they ran 59 ms against 55 ms for generic loads
       and stores, because their begin and commit checks cost more than the boxing
       they save. Make them cheaper or drop them where they still apply.
-- [ ] Keep Collatz-style integer loops in int32. The core phase's remaining gap
-      to Node is `collatzSteps` alone, about 70 ms against 37; its prime and throw
-      loops already beat Node. The loop is clean double arithmetic whose `& 1`
-      converts every iteration (one FJCVTZS on arm64); Node speculates int32 with
-      an overflow check. An overflow-guarded int32 loop with a double continuation
-      would take the conversion off the loop's serial chain.
-
 - [ ] Fuse projected split/trim length consumption without flattening the shared
       rope or repeatedly descending from its root for each field's edges and slice.
       First prove split and trim results and their aliases do not escape through

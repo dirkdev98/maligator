@@ -252,16 +252,15 @@ describe("own-field native entry contracts", () => {
 				),
 			);
 			const calls = image.native.functions.flatMap((fn) => fn.fieldCalls ?? []);
-			if (primordials === "mutable" && expression.startsWith("Math.")) {
-				expect(calls).toHaveLength(0);
-				continue;
-			}
 			expect(calls).toHaveLength(1);
 			const target = calls[0]!.entries[0]!;
 			const native = image.native.functions[target.functionIndex]!;
 			const emitted = emitCompiledFunction(native, target.functionIndex, "", false)!;
 			expect(emitted.directEntries).toHaveLength(1);
-			expect(emitted.directEntries[0]!.source).not.toContain("mal_vm_binary_op");
+			// Replaceable Math methods keep their identity guard and an unknown result.
+			if (primordials === "mutable" && expression.startsWith("Math."))
+				expect(emitted.directEntries[0]!.source).toContain("_callee_matches(");
+			else expect(emitted.directEntries[0]!.source).not.toContain("mal_vm_binary_op");
 		}
 	});
 
@@ -371,7 +370,7 @@ describe("own-field native entry contracts", () => {
 		expect(() => serializeCompilerArtifact(malformed)).toThrow(/field/);
 	});
 
-	it("retains eligible arithmetic entries when mutable Math methods stay generic", () => {
+	it("dispatches strict targets to field entries when mutable Math methods stay generic", () => {
 		const image = compileSemanticProgramToProgramImage(
 			analyzeSourceAndRunSemanticAnalysis(
 				`class Standard { quote(order) { return order.net + 7; } }
@@ -389,6 +388,6 @@ describe("own-field native entry contracts", () => {
 		);
 		const calls = image.native.functions.flatMap((fn) => fn.fieldCalls ?? []);
 		expect(calls).toHaveLength(1);
-		expect(calls[0]!.entries).toHaveLength(1);
+		expect(calls[0]!.entries).toHaveLength(2);
 	});
 });

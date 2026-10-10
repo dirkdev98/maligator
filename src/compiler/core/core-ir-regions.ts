@@ -394,6 +394,8 @@ export interface CoreEntryFields {
 		readonly instruction: CoreInstructionId;
 		readonly field: number;
 	}>;
+	/** Calls of world-invariant Math builtins, the only calls whose result is known to be a Number. */
+	readonly numericCalls: ReadonlyArray<CoreInstructionId>;
 }
 
 export interface CoreDirectEntryPlan {

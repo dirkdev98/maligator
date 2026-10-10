@@ -200,4 +200,50 @@ check(retainedMixed.payload, payload);
 check(retainedMixed.active, true);
 check(retainedMixed.net, 35);
 check(retainedMixed.label, "mixed-5:");
+let reachedArguments = "unset";
+function audit(value) {
+	try {
+		reachedArguments = Audited.prototype.total.arguments;
+	} catch (error) {
+		reachedArguments = error instanceof TypeError ? "blocked" : "other";
+	}
+	if (typeof collect === "function") collect();
+	return value * 2;
+}
+class Audited {
+	total(order) {
+		return audit(order.net) + order.quantity;
+	}
+}
+class Plain {
+	total(order) {
+		return order.net - order.quantity;
+	}
+}
+function auditDrive() {
+	const audits = [new Audited(), new Plain()];
+	let total = 0;
+	for (let index = 0; index < 20; index++)
+		total += audits[index % 2].total({ net: index, quantity: 1 });
+	return total;
+}
+check(auditDrive(), 280);
+check(reachedArguments, "blocked");
+const originalFloor = Math.floor;
+let floorCalls = 0;
+try {
+	Math.floor = function scaledFloor(value) {
+		floorCalls++;
+		return value * 100;
+	};
+} catch {}
+const floorReplaced = Math.floor !== originalFloor;
+let replacedTotal = 0;
+for (let index = 0; index < 4; index++)
+	replacedTotal += rules[1 + (index & 1)].quote({ net: 24, quantity: 1 });
+check(replacedTotal, floorReplaced ? -274 : 122);
+check(floorCalls, floorReplaced ? 2 : 0);
+try {
+	Math.floor = originalFloor;
+} catch {}
 console.log("read-only-field-entries PASS");

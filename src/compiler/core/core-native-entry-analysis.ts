@@ -60,11 +60,7 @@ export function analyzeCoreNativeEntry(
 			if (fields !== undefined) {
 				const field = fields.loads.find((load) => load.instruction === instruction);
 				if (field !== undefined) return mask(fields.representations[field.field]);
-				if (
-					fn.instructionOpcodeName(instruction) === "call" ||
-					fn.instructionOpcodeName(instruction) === "callKnown"
-				)
-					return COMPILER_VALUE_KIND_NUMBER;
+				if (fields.numericCalls.includes(instruction)) return COMPILER_VALUE_KIND_NUMBER;
 			}
 			if (
 				arguments_ === undefined ||
@@ -143,6 +139,7 @@ export function analyzeCoreNativeEntry(
 						keys: [...fields.keys],
 						representations: [...fields.representations],
 						loads: fields.loads.map((load) => ({ ...load })),
+						numericCalls: [...fields.numericCalls],
 					},
 		calls: callSites.map((site) => ({ ...site })),
 		callOverrides: callOverrides?.map((site) => ({ ...site })),
@@ -199,6 +196,7 @@ export function coreNativeEntryProofIsCurrent(
 				})) &&
 		same(proof.fields?.keys, entry.fieldParameters?.keys) &&
 		same(proof.fields?.representations, entry.fieldParameters?.representations) &&
+		same(proof.fields?.numericCalls, entry.fieldParameters?.numericCalls) &&
 		(proof.fields === undefined ||
 			(entry.fieldParameters !== undefined &&
 				proof.fields.loads.length === entry.fieldParameters.loads.length &&

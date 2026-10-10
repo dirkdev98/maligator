@@ -72,6 +72,17 @@ describe("read-only parameter field entries", () => {
 						emitted.directEntries.some((entry) => entry.id === selected.entryId),
 					).toBe(true);
 				}
+				// A strict callee that runs other code still reads its record's fields only.
+				const auditCaller = programImage.native.functions.find(
+					(fn) => name(fn.body.nameStringIndex) === "auditDrive",
+				)!;
+				expect(
+					auditCaller.fieldCalls![0]!.entries.map((selected) =>
+						name(
+							programImage.native.functions[selected.functionIndex]!.body.nameStringIndex,
+						),
+					),
+				).toEqual(["total", "total"]);
 				for (const binary of [compiled, interpreted])
 					assertExactLines(
 						runToStdout(binary, { env: { MAL_HOST_GC: "1", ...STRESS_ENV } }),

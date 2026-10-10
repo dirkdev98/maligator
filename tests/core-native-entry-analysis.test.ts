@@ -86,6 +86,7 @@ describe("reachable native-entry annotations", () => {
 			keys: [1],
 			representations: ["boxed"],
 			loads: [{ instruction: liveLoad, field: 0 }],
+			numericCalls: [],
 		});
 	});
 });
