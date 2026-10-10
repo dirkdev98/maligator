@@ -1,9 +1,10 @@
 let passed = 0;
 
-function ok(name, condition) {
+// A const binding keeps its calls exact, so the mismatch build has a target hint to falsify.
+const ok = function (name, condition) {
 	if (!condition) throw new Error("FAIL " + name);
 	passed++;
-}
+};
 
 function invoke(holder, value) {
 	return holder.fn(value);

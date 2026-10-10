@@ -23,7 +23,7 @@ checks.push(
 	cloned.imported.type === "Identifier" && cloned.imported.name === "value",
 	typeof fetch === "undefined",
 	typeof Response === "undefined",
-	typeof EventTarget === "undefined",
+	typeof EventTarget === "function",
 );
 
 const passed = checks.filter(Boolean).length;

@@ -180,7 +180,8 @@ function runRefused(port) {
 	const events = [];
 	let requestError;
 	const writeErrors = [];
-	const request = http.request(`http://127.0.0.1:${port}/closed`);
+	// The pooled keep-alive connection to this port may not have seen the server's FIN yet.
+	const request = http.request(`http://127.0.0.1:${port}/closed`, { agent: false });
 	request.on("response", () => check(false, "refused response"));
 	request.on("error", (error) => {
 		check(error instanceof Error, "refused error object");
