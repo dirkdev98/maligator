@@ -3463,5 +3463,60 @@ static inline MalNumericSortComparison mal_vm_try_numeric_sort_comparison(
 
 MalCompletion mal_builtin_sort_numeric(
     MalVm *vm, MalCallCache *fallback_cache, bool copy, bool via_call, i32 function_index,
-    MalNumericSortComparator comparator, bool leaf, MalValue callee, MalValue receiver,
-    const MalValue *args, i32 arg_count);
+    MalNumericSortComparator comparator, MalNumericSortKernel kernel, MalValue callee,
+    MalValue receiver, const MalValue *args, i32 arg_count);
+
+/**
+ * Stable bottom-up merge sort of Number values under a comparator leaf, which
+ * cannot run JavaScript, collect or throw. It makes the generic merge's decisions,
+ * which an inconsistent comparator can observe. Generated code instantiates it once
+ * per leaf so the comparison compiles into the merge loop. `keys` holds 2 * count
+ * doubles; merging decoded keys keeps value decoding off the merge's serial chain.
+ */
+static inline __attribute__((always_inline)) void mal_numeric_leaf_merge_sort(
+    MalValue *values, MalValue *scratch, f64 *keys, u32 count,
+    f64 (*compare)(f64 left, f64 right)
+) {
+    for (u32 index = 0; index < count; index++) keys[index] = mal_ops_number_as_f64(values[index]);
+    MalValue *from = values;
+    MalValue *to = scratch;
+    f64 *key_from = keys;
+    f64 *key_to = keys + count;
+    for (u32 width = 1; width < count;) {
+        for (u32 low = 0; low < count;) {
+            u32 middle = width < count - low ? low + width : count;
+            u32 high = width < count - middle ? middle + width : count;
+            u32 left = low;
+            u32 right = middle;
+            u32 out = low;
+            while (left < middle && right < high) {
+                MAL_PERF_COUNT(numeric_sort_callback_calls);
+                // Merge decisions on unsorted input are unpredictable; select instead of branching.
+                bool take_right = compare(key_from[left], key_from[right]) > 0;
+                u32 source = take_right ? right : left;
+                to[out] = from[source];
+                key_to[out++] = key_from[source];
+                right += take_right;
+                left += !take_right;
+            }
+            for (; left < middle; left++, out++) {
+                to[out] = from[left];
+                key_to[out] = key_from[left];
+            }
+            for (; right < high; right++, out++) {
+                to[out] = from[right];
+                key_to[out] = key_from[right];
+            }
+            low = high;
+        }
+        MalValue *swap = from;
+        from = to;
+        to = swap;
+        f64 *key_swap = key_from;
+        key_from = key_to;
+        key_to = key_swap;
+        if (width > count / 2) break;
+        width *= 2;
+    }
+    if (from != values) memcpy(values, from, sizeof(MalValue) * count);
+}

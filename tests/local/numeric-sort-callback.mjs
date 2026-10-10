@@ -187,3 +187,44 @@ console.log(
 	"detached-effects",
 	show(Float64Array.prototype.toSorted.call(new Float64Array([5, 2, 7]), effectsCompare)),
 );
+function residue(a, b) {
+	return (a % 7) - (b % 7);
+}
+function descending(a, b) {
+	return b - a;
+}
+const scrambled = Array.from({ length: 600 }, (_, index) => (index * 211 + 17) % 600);
+// NaN elements would make every comparator inconsistent and the order implementation-defined.
+const special = Array.from(
+	{ length: 300 },
+	(_, index) => [0, -0, Infinity, -Infinity, 3, -3, 1.5][(index * 5) % 7],
+);
+const checksum = (values) => {
+	let hash = 0;
+	for (const unit of show(values)) hash = (hash * 31 + unit.charCodeAt(0)) % 1_000_003;
+	return hash;
+};
+// Each site names its comparator so the compiled sort can admit it directly.
+const sorts = {
+	residue: (values) => [...values].sort(residue),
+	residueCopy: (values) => values.toSorted(residue),
+	descending: (values) => [...values].sort(descending),
+	descendingCopy: (values) => values.toSorted(descending),
+	ascending: (values) => [...values].sort(compare),
+	ascendingCopy: (values) => values.toSorted(compare),
+};
+for (const [name, input] of [
+	["scrambled", scrambled],
+	["presorted", scrambled.toSorted(compare)],
+	["reversed", scrambled.toSorted(descending)],
+	["special", special],
+]) {
+	console.log(
+		name,
+		Object.entries(sorts)
+			// Infinity % 7 is NaN, which would make the residue comparator inconsistent.
+			.filter(([kind]) => name !== "special" || !kind.startsWith("residue"))
+			.map(([kind, sort]) => `${kind}=${checksum(sort(input))}`)
+			.join(" "),
+	);
+}

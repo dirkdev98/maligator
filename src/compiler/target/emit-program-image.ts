@@ -11,6 +11,7 @@ import {
 	COMPILED_FUNCTION_DECLARATION,
 	directCompiledEntryKey,
 	createNativeFunctionRenderer,
+	numericSortKernelDeclaration,
 } from "./render-native-c.ts";
 import type { CompiledFunction } from "./render-native-c.ts";
 import {
@@ -1132,6 +1133,8 @@ function emitProgramImageParts(
 						lines.push(
 							`static MalValue ${entry.callbackSymbol}${COMPILED_FUNCTION_DECLARATION};`,
 						);
+					if (entry.sortSymbol !== undefined)
+						lines.push(`static ${numericSortKernelDeclaration(entry.sortSymbol)};`);
 				}
 			}
 		}
@@ -1160,6 +1163,8 @@ function emitProgramImageParts(
 				lines.push(`${directEntryDeclaration(entry)};`);
 				if (entry.callbackSymbol !== undefined)
 					lines.push(`MalValue ${entry.callbackSymbol}${COMPILED_FUNCTION_DECLARATION};`);
+				if (entry.sortSymbol !== undefined)
+					lines.push(`${numericSortKernelDeclaration(entry.sortSymbol)};`);
 			}
 		}
 		if (compiled.some((fn) => fn !== null)) {
@@ -1498,6 +1503,14 @@ export function emitProgramTranslationUnits(
 									{
 										symbol: entry.callbackSymbol,
 										source: `MalValue ${entry.callbackSymbol}${COMPILED_FUNCTION_DECLARATION};`,
+									},
+								]),
+						...(entry.sortSymbol === undefined
+							? []
+							: [
+									{
+										symbol: entry.sortSymbol,
+										source: `${numericSortKernelDeclaration(entry.sortSymbol)};`,
 									},
 								]),
 					]),
@@ -2153,6 +2166,8 @@ export function emitBatch(
 					lines.push(
 						`static MalValue ${entry.callbackSymbol}${COMPILED_FUNCTION_DECLARATION};`,
 					);
+				if (entry.sortSymbol !== undefined)
+					lines.push(`static ${numericSortKernelDeclaration(entry.sortSymbol)};`);
 			}
 		}
 		if (

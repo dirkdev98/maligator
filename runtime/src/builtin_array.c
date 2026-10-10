@@ -3771,39 +3771,6 @@ static bool mal_builtin_array_sort_order(
     return true;
 }
 
-static void mal_builtin_array_sort_numeric_leaf_values(
-    MalVm *vm, MalValue *values, MalValue *scratch, u32 count, MalExactScriptCall *exact
-) {
-    MalValue *from = values;
-    MalValue *to = scratch;
-    for (u32 width = 1; width < count;) {
-        for (u32 low = 0; low < count;) {
-            u32 middle = width < count - low ? low + width : count;
-            u32 high = width < count - middle ? middle + width : count;
-            u32 left = low;
-            u32 right = middle;
-            u32 out = low;
-            while (left < middle && right < high) {
-                MAL_PERF_COUNT(direct_entry_hits);
-                MAL_PERF_COUNT(numeric_sort_callback_calls);
-                f64 order = exact->numeric_sort_comparator(vm, MAL_VALUE_UNDEFINED,
-                    mal_ops_number_as_f64(from[left]), mal_ops_number_as_f64(from[right]),
-                    exact->env, exact->callee);
-                to[out++] = from[isnan(order) || order <= 0 ? left++ : right++];
-            }
-            while (left < middle) to[out++] = from[left++];
-            while (right < high) to[out++] = from[right++];
-            low = high;
-        }
-        MalValue *swap = from;
-        from = to;
-        to = swap;
-        if (width > count / 2) break;
-        width *= 2;
-    }
-    if (from != values) memcpy(values, from, sizeof(MalValue) * count);
-}
-
 /**
  * Stable bottom-up merge sort over a value buffer. Returns false when the
  * comparator threw; the buffer contents are unspecified in that case.
@@ -3855,7 +3822,7 @@ static bool mal_builtin_array_sort_values(
 
     MalExactScriptCall *numeric_leaf = vm->exact_script_call;
     if (numeric_leaf == nullptr || numeric_leaf->callee != comparator ||
-        numeric_leaf->numeric_sort_comparator == nullptr || !numeric_leaf->numeric_sort_leaf) {
+        numeric_leaf->numeric_sort_kernel == nullptr) {
         numeric_leaf = nullptr;
     }
 #if MAL_PROFILE
@@ -3864,6 +3831,9 @@ static bool mal_builtin_array_sort_values(
     for (u32 index = 0; numeric_leaf != nullptr && index < count; index++) {
         if (!mal_ops_is_number(values[index])) numeric_leaf = nullptr;
     }
+    // Without key storage the generic merge still reaches the compiled comparator per pair.
+    f64 *keys = numeric_leaf == nullptr ? nullptr : malloc(sizeof(f64) * 2 * (usize) count);
+    if (keys == nullptr) numeric_leaf = nullptr;
     // A bounded scalar leaf cannot re-enter JS; one depth guard covers the entire merge.
     if (numeric_leaf != nullptr && !mal_vm_enter_compiled(vm, numeric_leaf->function_index)) {
         ok = false;
@@ -3871,9 +3841,7 @@ static bool mal_builtin_array_sort_values(
     }
 
     if (numeric_leaf != nullptr) {
-        numeric_leaf->numeric_sort_leaf_active = true;
-        mal_builtin_array_sort_numeric_leaf_values(vm, values, scratch, count, numeric_leaf);
-        numeric_leaf->numeric_sort_leaf_active = false;
+        numeric_leaf->numeric_sort_kernel(values, scratch, keys, count);
         mal_vm_leave_compiled(vm);
     } else for (u32 width = 1; ok && width < count;) {
         for (u32 low = 0; ok && low < count;) {
@@ -3927,6 +3895,7 @@ static bool mal_builtin_array_sort_values(
         width *= 2;
     }
 
+    free(keys);
     if (ok && from != values) {
         memcpy(values, from, sizeof(MalValue) * count);
     }

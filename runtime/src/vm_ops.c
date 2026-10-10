@@ -8705,8 +8705,8 @@ void mal_vm_op_await_compiled(
 
 MalCompletion mal_builtin_sort_numeric(
     MalVm *vm, MalCallCache *fallback_cache, bool copy, bool via_call, i32 function_index,
-    MalNumericSortComparator comparator, bool leaf, MalValue callee, MalValue receiver,
-    const MalValue *args, i32 arg_count
+    MalNumericSortComparator comparator, MalNumericSortKernel kernel, MalValue callee,
+    MalValue receiver, const MalValue *args, i32 arg_count
 ) {
     MalNativeFunctionCallback expected = mal_value_is_native_function_object(callee)
         ? mal_native_function_object_callback(mal_value_to_native_function_object(callee)) : nullptr;
@@ -8737,7 +8737,7 @@ MalCompletion mal_builtin_sort_numeric(
         .callee = callback,
         .function_index = function_index,
         .numeric_sort_comparator = comparator,
-        .numeric_sort_leaf = leaf,
+        .numeric_sort_kernel = kernel,
         .function = &vm->runtime_image->functions[function_index],
         .env = mal_value_to_function_object(callback)->creation_env,
     };

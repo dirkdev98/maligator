@@ -490,6 +490,7 @@ export interface CompiledFunction extends NativeCallCoverage {
 		resultRepresentation: VmRegisterRepresentation;
 		leaf?: true;
 		callbackSymbol?: string;
+		sortSymbol?: string;
 	}>;
 }
 
@@ -1886,6 +1887,7 @@ function renderCompiledFunction(
 		entry: NativeDirectEntryPlan;
 		emitted: CompiledFunction;
 		leaf: true | undefined;
+		sortSymbol: string | undefined;
 	}>((entry) => {
 		const emitted = emitCompiledVariant(
 			fn,
@@ -1907,7 +1909,8 @@ function renderCompiledFunction(
 		);
 		if (emitted === null) return [];
 		const worker = renderNumericLeaf(nativeVariantContract(native, entry), entry);
-		if (worker === null) return [{ entry, emitted, leaf: undefined }];
+		if (worker === null)
+			return [{ entry, emitted, leaf: undefined, sortSymbol: undefined }];
 		const parameters = entry.parameterRepresentations
 			.map((rep, i) => `${cTypeOf(rep)} r${i}`)
 			.concat(
@@ -1919,24 +1922,27 @@ function renderCompiledFunction(
 			.map((_, i) => `p${i}`)
 			.concat(entry.fieldParameters?.keys.map((_, i) => `fp${i}`) ?? []);
 		const symbol = `${emitted.symbol}_leaf`;
-		const sortAdmission =
-			" || (vm->exact_script_call != nullptr && vm->exact_script_call->numeric_sort_leaf_active && vm->exact_script_call->callee == callee)";
+		const sortSymbol = numericSortKernelEntry(entry)
+			? `${emitted.symbol}_sort`
+			: undefined;
 		const source = `static __attribute__((aligned(64))) f64 ${symbol}(${parameters.join(", ") || "void"}) {\n#pragma STDC FP_CONTRACT OFF\n${worker.join("\n")}\n}\n${emitted.source.replace(
 			"#pragma STDC FP_CONTRACT OFF\n",
-			`#pragma STDC FP_CONTRACT OFF\n    if (mal_vm_leaf_unobserved(vm)${sortAdmission}) return ${symbol}(${args.join(", ")});\n`,
-		)}`;
+			`#pragma STDC FP_CONTRACT OFF\n    if (mal_vm_leaf_unobserved(vm)) return ${symbol}(${args.join(", ")});\n`,
+		)}${sortSymbol === undefined ? "" : `\n${numericSortKernelDeclaration(sortSymbol)} {\n    mal_numeric_leaf_merge_sort(values, scratch, keys, count, ${symbol});\n}\n`}`;
 		return [
 			{
 				entry,
 				emitted: { ...emitted, source },
 				leaf: true as const,
+				sortSymbol,
 			},
 		];
 	});
 	return {
 		...canonical,
-		directEntries: variants.map(({ entry, emitted, leaf }) => ({
+		directEntries: variants.map(({ entry, emitted, leaf, sortSymbol }) => ({
 			...(leaf === undefined ? {} : { leaf }),
+			...(sortSymbol === undefined ? {} : { sortSymbol }),
 			emittedInstructions: emitted.emittedInstructions,
 			directEntryCalls: emitted.directEntryCalls,
 			id: entry.id,
@@ -1956,6 +1962,23 @@ function renderCompiledFunction(
 			resultRepresentation: entry.resultRepresentation,
 		})),
 	};
+}
+
+// A numeric sort site can pass this kernel only where it would call the same leaf.
+function numericSortKernelEntry(entry: NativeDirectEntryPlan): boolean {
+	return (
+		entry.parameterRepresentations.length === 2 &&
+		entry.parameterRepresentations.every(
+			(representation) => representation === "number",
+		) &&
+		entry.resultRepresentation === "number" &&
+		entry.argumentRepresentations === undefined &&
+		entry.fieldParameters === undefined
+	);
+}
+
+export function numericSortKernelDeclaration(symbol: string): string {
+	return `void ${symbol}(MalValue *values, MalValue *scratch, f64 *keys, u32 count)`;
 }
 
 function renderCallbackAdapter(
@@ -9202,16 +9225,10 @@ function emitInstruction(
 				const entry = directCompiledEntries.get(
 					directCompiledEntryKey(numericCallback.functionIndex, numericCallback.entryId),
 				);
-				if (
-					entry !== undefined &&
-					entry.parameterRepresentations.length === 2 &&
-					entry.parameterRepresentations.every((rep) => rep === "number") &&
-					entry.resultRepresentation === "number" &&
-					entry.argumentRepresentations === undefined &&
-					entry.fieldParameters === undefined
-				) {
+				if (entry !== undefined && numericSortKernelEntry(entry)) {
+					const comparator = `mal_direct_${numericCallback.functionIndex}_${numericCallback.entryId}${suffix}`;
 					return [
-						`MalCompletion ${tmp} = mal_builtin_sort_numeric(vm, ${nativeCallCacheReference(context, ip)}, ${numericCallback.operation === "toSorted" ? "true" : "false"}, ${numericCallback.viaCall ? "true" : "false"}, ${relocation.functionIndex(numericCallback.functionIndex)}, mal_direct_${numericCallback.functionIndex}_${numericCallback.entryId}${suffix}, ${entry.leaf ? "true" : "false"}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
+						`MalCompletion ${tmp} = mal_builtin_sort_numeric(vm, ${nativeCallCacheReference(context, ip)}, ${numericCallback.operation === "toSorted" ? "true" : "false"}, ${numericCallback.viaCall ? "true" : "false"}, ${relocation.functionIndex(numericCallback.functionIndex)}, ${comparator}, ${entry.leaf ? `${comparator}_sort` : "nullptr"}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
 						`if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow()}`,
 						`r${instruction.dst} = ${callResult(`${tmp}.value`)};`,
 						poll(),
