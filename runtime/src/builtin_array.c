@@ -2190,6 +2190,8 @@ bool mal_builtin_array_push_virtual_guard(MalVm *vm) {
     // The locked primordial graph cannot replace Array.prototype.push.
     return true;
 #else
+    // Array.prototype is watched: any redefinition of its push clears the protector.
+    if (mal_primitive_method_protector) return true;
     MalPropertyLookup live = mal_object_get_own(
         mal_value_to_object(prototype_value), mal_intrinsic_string_key(vm, "push"));
     return live.present && !(live.desc.flags & MAL_PROPERTY_ACCESSOR) &&
