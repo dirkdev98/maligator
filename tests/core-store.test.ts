@@ -1019,6 +1019,47 @@ describe("Core store", () => {
 		expect(() => append({ table: { entries: [new Map()] } })).toThrow(/non-data object/);
 	});
 
+	it("keeps an own __proto__ attribute key as data", () => {
+		const program = new CoreProgram(registry());
+		const builder = new CoreFunctionBuilder(program);
+		const entry = builder.createBlock();
+		const [value] = builder.appendInstruction(entry, "constant", [], {
+			attributes: {
+				literal: { kind: "number", value: 42 },
+				table: JSON.parse('{"__proto__":{"unexpected":123}}') as never,
+			},
+			outputRepresentations: ["i32"],
+		});
+		builder.setTerminator(entry, { kind: "return", value: value! });
+		const stored = program
+			.function(builder.finish(entry).function)
+			.instructionAttributes(0 as never).table as object;
+		expect(Object.getPrototypeOf(stored)).toBe(Object.prototype);
+		expect(Object.getOwnPropertyDescriptor(stored, "__proto__")?.value).toEqual({
+			unexpected: 123,
+		});
+		expect("unexpected" in stored).toBe(false);
+	});
+
+	it.each([
+		["function", () => 1],
+		["symbol", Symbol("attribute")],
+		["bigint", 1n],
+	])("rejects a nested %s attribute value", (_kind, nested) => {
+		const program = new CoreProgram(registry());
+		const builder = new CoreFunctionBuilder(program);
+		const entry = builder.createBlock();
+		expect(() =>
+			builder.appendInstruction(entry, "constant", [], {
+				attributes: {
+					literal: { kind: "number", value: 42 },
+					rows: [{ nested } as never],
+				},
+				outputRepresentations: ["i32"],
+			}),
+		).toThrow(/non-data value/);
+	});
+
 	it("produces the same dense IR regardless of construction tombstone layout", () => {
 		const build = (withTombstones: boolean): string => {
 			const program = new CoreProgram(registry());

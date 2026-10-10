@@ -370,7 +370,16 @@ function freezeAttribute(
 	value: CoreAttributeValue,
 	ancestors: Set<object>,
 ): CoreAttributeValue {
-	if (value === null || typeof value !== "object") return value;
+	if (
+		value === undefined ||
+		value === null ||
+		typeof value === "boolean" ||
+		typeof value === "number" ||
+		typeof value === "string"
+	)
+		return value;
+	if (typeof value !== "object")
+		throw new Error("Core instruction attributes contain a non-data value");
 	if (ancestors.has(value))
 		throw new Error("Core instruction attributes contain cyclic data");
 	ancestors.add(value);
@@ -384,11 +393,13 @@ function freezeAttribute(
 		if (prototype !== Object.prototype && prototype !== null) {
 			throw new Error("Core instruction attributes contain a non-data object");
 		}
-		const record = value as Readonly<Record<string, CoreAttributeValue>>;
-		const fields: Record<string, CoreAttributeValue> = {};
-		for (const key of Object.keys(record))
-			fields[key] = freezeAttribute(record[key], ancestors);
-		copy = fields;
+		// Assignment would send an own `__proto__` key to the inherited setter.
+		copy = Object.fromEntries(
+			Object.entries(value).map(([key, entry]) => [
+				key,
+				freezeAttribute(entry, ancestors),
+			]),
+		);
 	}
 	ancestors.delete(value);
 	return Object.freeze(copy);
