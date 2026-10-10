@@ -161,10 +161,11 @@ describe("opt-in performance statistics", () => {
 			.filter((line) => line.startsWith("[perf-intrinsic-name]"))
 			.reduce((sum, line) => sum + field(line, "calls"), 0);
 		expect(attributedNameCalls).toBe(field(intrinsics, "calls"));
+		// ToPropertyDescriptor reads each descriptor field by its interned name.
 		const intrinsicName = reportLine(
 			result.stderr,
 			"[perf-intrinsic-name]",
-			"name=push ",
+			"name=value ",
 		);
 		expect(field(intrinsicName, "calls")).toBeGreaterThan(0);
 		const properties = reportLine(result.stderr, "[perf-property-stats]");

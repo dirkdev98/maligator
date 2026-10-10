@@ -15,12 +15,21 @@ const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-input-facts-"));
 describe("native operations selected by input representations", () => {
 	it("preserves Number edges, UTF-16 operations and callee this across boxed result boundaries", () => {
 		const { image: fixture, expected } = inputFactsFixture();
+		// The runtime function and its native body must agree on strictness.
 		const image = {
 			...fixture,
 			runtime: {
 				...fixture.runtime,
 				functions: fixture.runtime.functions.map((fn, index) =>
 					index === 0 ? { ...fn, strict: true } : fn,
+				),
+			},
+			native: {
+				...fixture.native,
+				functions: fixture.native.functions.map((plan, index) =>
+					index === 0 && plan !== undefined
+						? { ...plan, body: { ...plan.body, strict: true } }
+						: plan,
 				),
 			},
 		};
