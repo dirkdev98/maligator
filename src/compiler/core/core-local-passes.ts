@@ -26,7 +26,10 @@ import {
 	authorityFallback,
 	normalizeFactRequirements,
 } from "../shared/fact-implication.ts";
-import { coreInitializedGlobalSlotMembership } from "./core-compilation.ts";
+import {
+	coreInitializedCapturedReadMembership,
+	coreInitializedGlobalSlotMembership,
+} from "./core-compilation.ts";
 import { CoreEditor } from "./core-editor.ts";
 import { CORE_FUNCTION_HAS_EDGE_ARGUMENTS } from "./core-function-features.ts";
 import {
@@ -1596,6 +1599,17 @@ const foldRedundantTdzChecks: CoreFunctionPass = {
 		const initializedGlobals = coreInitializedGlobalSlotMembership(
 			context.compilationContext,
 		);
+		const initializedCaptures = coreInitializedCapturedReadMembership(
+			context.compilationContext,
+		);
+		const initializedCapture = (load: CoreInstructionId): boolean => {
+			const { functionIndex, index } = fn.instructionAttributes(load);
+			return (
+				typeof functionIndex === "number" &&
+				typeof index === "number" &&
+				initializedCaptures.has(`${item.function}:${functionIndex}:${index}`)
+			);
+		};
 		let writtenGlobals: ReadonlySet<unknown> | undefined;
 		const initializedGlobal = (load: CoreInstructionId): boolean => {
 			const index = fn.instructionAttributes(load).index;
@@ -1676,9 +1690,9 @@ const foldRedundantTdzChecks: CoreFunctionPass = {
 							? !mayLoadSuperThisState(instruction, opcode)
 							: opcode === "loadGlobal"
 								? initializedGlobal(instruction)
-								: !["createEmpty", "loadCaptured", "loadLocal", "loadThis"].includes(
-										opcode,
-									);
+								: opcode === "loadCaptured"
+									? initializedCapture(instruction)
+									: !["createEmpty", "loadLocal", "loadThis"].includes(opcode);
 			}
 			visiting.delete(value);
 			known.set(value, result);

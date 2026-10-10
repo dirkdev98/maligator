@@ -6,6 +6,7 @@ import { runSemanticAnalysisForGraph } from "../src/compiler/frontend/analyze-mo
 import { buildModuleGraph } from "../src/compiler/frontend/module-graph.ts";
 import { compileSemanticProgramToProgramImage } from "../src/compiler/pipeline/compile-core.ts";
 import { coreFunctionNamed, coreOperations } from "./helpers/core-inspection.ts";
+import { inspectStaticValueFunctions } from "./helpers/static-values.ts";
 
 function readerOpcodes(files: Readonly<Record<string, string>>): ReadonlyArray<string> {
 	const root = mkdtempSync(join(tmpdir(), "mal-module-initialization-"));
@@ -66,5 +67,58 @@ describe("module bindings initialized before user code", () => {
 			`,
 		});
 		expect(opcodes).toContain("throwIfTdz");
+	});
+});
+
+function capturedReaders(source: string, names: ReadonlyArray<string>) {
+	const inspected = inspectStaticValueFunctions(source, names);
+	return Object.fromEntries(
+		names.map((name) => [
+			name,
+			inspected.get(name)!.core.some((operation) => operation.opcode === "throwIfTdz"),
+		]),
+	);
+}
+
+describe("captured bindings initialized before their closures exist", () => {
+	it("drops the check for closures created after the declaration", () => {
+		expect(
+			capturedReaders(
+				`function outer(items) {
+					const scale = items.length;
+					const scaled = (item) => item * scale;
+					const fns = [];
+					for (let index = 0; index < items.length; index++) {
+						const offset = index * 2;
+						fns.push(function shifted() { return offset + index + scale; });
+					}
+					return [items.map(scaled), fns];
+				}
+				globalThis.outer = outer;`,
+				["scaled", "shifted"],
+			),
+		).toEqual({ scaled: false, shifted: false });
+	});
+
+	it("keeps the check where a closure can run before the declaration", () => {
+		expect(
+			capturedReaders(
+				`function outer(kind) {
+					function hoisted() { return limit; }
+					const before = () => limit;
+					const early = [hoisted, before];
+					const limit = early.length;
+					switch (kind) {
+						case 0:
+							let late = limit;
+							return early;
+						default:
+							return function skipped() { return late; };
+					}
+				}
+				globalThis.outer = outer;`,
+				["hoisted", "before", "skipped"],
+			),
+		).toEqual({ hoisted: true, before: true, skipped: true });
 	});
 });

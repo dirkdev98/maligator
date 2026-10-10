@@ -11,6 +11,10 @@ export interface CoreCapturedSlotRef {
 	readonly index: number;
 }
 
+export interface CoreInitializedCapturedRead extends CoreCapturedSlotRef {
+	readonly function: number;
+}
+
 export interface CoreHostInstallCandidate {
 	readonly installer: string;
 	readonly exports: ReadonlyArray<{
@@ -48,6 +52,8 @@ export interface CoreProgramData {
 	readonly singleAssignmentCapturedSlots: ReadonlyArray<CoreCapturedSlotRef>;
 	/** Module bindings that no function except their writers can read uninitialized. */
 	readonly initializedModuleGlobalSlots?: ReadonlyArray<number>;
+	/** Captured cells that a function can only read after their initialization. */
+	readonly initializedCapturedReads?: ReadonlyArray<CoreInitializedCapturedRead>;
 	readonly retainedHostInstallers: ReadonlyArray<string>;
 }
 
@@ -88,6 +94,27 @@ export function coreInitializedGlobalSlotMembership(
 	if (membership === undefined) {
 		membership = new Set(slots);
 		initializedGlobalSlotMembershipBySource.set(slots, membership);
+	}
+	return membership;
+}
+
+const initializedCapturedReadMembershipBySource = new WeakMap<
+	ReadonlyArray<CoreInitializedCapturedRead>,
+	ReadonlySet<string>
+>();
+
+/** Keys `function:owner:index` of captured reads that cannot observe the TDZ. */
+export function coreInitializedCapturedReadMembership(
+	context: CoreCompilationContext,
+): ReadonlySet<string> {
+	const reads = context.data.initializedCapturedReads;
+	if (reads === undefined) return new Set();
+	let membership = initializedCapturedReadMembershipBySource.get(reads);
+	if (membership === undefined) {
+		membership = new Set(
+			reads.map((read) => `${read.function}:${read.owner}:${read.index}`),
+		);
+		initializedCapturedReadMembershipBySource.set(reads, membership);
 	}
 	return membership;
 }

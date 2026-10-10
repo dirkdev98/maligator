@@ -65,6 +65,7 @@ import {
 import { coreProgramDataFromSemantic } from "./core-compilation.ts";
 import type {
 	CoreCapturedSlotRef,
+	CoreInitializedCapturedRead,
 	ConstructedCoreCompilation,
 	CoreHostInstallCandidate,
 } from "./core-compilation.ts";
@@ -999,6 +1000,7 @@ function finishCoreProgram(program: CoreFrontendContext): ConstructedCoreCompila
 				singleAssignmentGlobalSlots: candidates.singleAssignmentGlobalSlots,
 				singleAssignmentCapturedSlots: candidates.singleAssignmentCapturedSlots,
 				initializedModuleGlobalSlots: coreInitializedModuleGlobalSlots(program),
+				initializedCapturedReads: coreInitializedCapturedReads(program),
 				retainedHostInstallers: [program.hostProcess, program.hostBuffer]
 					.flatMap((host) => (host?.retained === true ? [host.installer] : []))
 					.filter(
@@ -1204,6 +1206,145 @@ function moduleInitializationPrefix(file: SemanticFile): ReadonlySet<Binding> {
 		}
 	}
 	return initialized;
+}
+
+/**
+ * Captured bindings that each function can only read initialized.
+ *
+ * A closure is created when control reaches it, after every earlier statement of
+ * the enclosing statement lists completed, so the lexical bindings those statements
+ * declare are initialized in the activation it captures. Hoisted declarations are
+ * created at their list's entry, and switch cases can be entered past a
+ * declaration, so neither gains the bindings of their own list.
+ */
+function coreInitializedCapturedReads(
+	program: CoreFrontendContext,
+): Array<CoreInitializedCapturedRead> {
+	const reads: Array<CoreInitializedCapturedRead> = [];
+	for (const file of program.semantic.files) {
+		const declared = (node: ESTree.Node | null | undefined): Array<Binding> => {
+			if (node === null || node === undefined) return [];
+			const declaration =
+				node.type === "ExportNamedDeclaration" ? (node.declaration ?? undefined) : node;
+			if (declaration === undefined) return [];
+			if (declaration.type === "ClassDeclaration") return declaredIn(declaration.id);
+			if (
+				declaration.type === "VariableDeclaration" &&
+				(declaration.kind === "let" || declaration.kind === "const")
+			)
+				return declaration.declarations.flatMap((declarator) =>
+					declaredIn(declarator.id),
+				);
+			return [];
+		};
+		const declaredIn = (pattern: ESTree.Node | null): Array<Binding> => {
+			const bindings: Array<Binding> = [];
+			traverseEstree(pattern, (node) => {
+				if (FUNCTION_UNIT_NODE_TYPES.has(node.type)) return ESTREE_SKIP;
+				if (node.type !== "Identifier") return;
+				const binding = file.nodeToBinding.get(node);
+				if (binding?.declarationNode === node) bindings.push(binding);
+			});
+			return bindings;
+		};
+		const including = (
+			initialized: ReadonlySet<Binding>,
+			bindings: ReadonlyArray<Binding>,
+		): ReadonlySet<Binding> =>
+			bindings.length === 0 ? initialized : new Set([...initialized, ...bindings]);
+		const hoisted = (statement: ESTree.Node): ESTree.FunctionDeclaration | undefined => {
+			const declaration =
+				statement.type === "ExportNamedDeclaration" ||
+				statement.type === "ExportDefaultDeclaration"
+					? statement.declaration
+					: statement;
+			return declaration?.type === "FunctionDeclaration" ? declaration : undefined;
+		};
+		const visitFunction = (
+			node:
+				| ESTree.FunctionDeclaration
+				| ESTree.FunctionExpression
+				| ESTree.ArrowFunctionExpression,
+			initialized: ReadonlySet<Binding>,
+		): void => {
+			const functionIndex = program.nodeToFunctionCache.get(node)?.fnIndex;
+			if (functionIndex !== undefined)
+				for (const binding of initialized) {
+					const location = program.bindingToStorage.get(binding);
+					if (location?.type === "captured")
+						reads.push({
+							function: functionIndex,
+							owner: location.functionIndex,
+							index: location.index,
+						});
+				}
+			visit(node.params, initialized);
+			if (node.body?.type === "BlockStatement")
+				visitList(node.body.body, initialized, true);
+			else visit(node.body, initialized);
+		};
+		const visitList = (
+			statements: ReadonlyArray<ESTree.Node>,
+			entry: ReadonlySet<Binding>,
+			ordered: boolean,
+		): void => {
+			for (const statement of statements) {
+				const declaration = hoisted(statement);
+				if (declaration !== undefined) visitFunction(declaration, entry);
+			}
+			let initialized = entry;
+			for (const statement of statements) {
+				if (hoisted(statement) !== undefined) continue;
+				visit(statement, initialized);
+				if (ordered) initialized = including(initialized, declared(statement));
+			}
+		};
+		const visit = (root: unknown, initialized: ReadonlySet<Binding>): void => {
+			traverseEstree(root, (node) => {
+				switch (node.type) {
+					case "FunctionDeclaration":
+					case "FunctionExpression":
+					case "ArrowFunctionExpression":
+						visitFunction(node, initialized);
+						return ESTREE_SKIP;
+					case "Program":
+					case "BlockStatement":
+					case "StaticBlock":
+						visitList(node.body, initialized, true);
+						return ESTREE_SKIP;
+					case "SwitchStatement":
+						visit(node.discriminant, initialized);
+						for (const switchCase of node.cases) {
+							visit(switchCase.test, initialized);
+							visitList(switchCase.consequent, initialized, false);
+						}
+						return ESTREE_SKIP;
+					case "ForStatement": {
+						visit(node.init, initialized);
+						const body = including(initialized, declared(node.init));
+						visit(node.test, body);
+						visit(node.update, body);
+						visit(node.body, body);
+						return ESTREE_SKIP;
+					}
+					case "ForInStatement":
+					case "ForOfStatement":
+						visit(node.left, initialized);
+						visit(node.right, initialized);
+						visit(node.body, including(initialized, declared(node.left)));
+						return ESTREE_SKIP;
+					case "CatchClause":
+						visit(node.param, initialized);
+						visit(node.body, including(initialized, declaredIn(node.param)));
+						return ESTREE_SKIP;
+					default:
+						return undefined;
+				}
+			});
+		};
+		visit(file.ast, new Set());
+	}
+	return reads;
 }
 
 /**

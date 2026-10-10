@@ -66,6 +66,7 @@ export class CoreStaticCellIndex {
 	readonly #program: CoreProgram;
 	readonly #closed: Set<string>;
 	readonly #initialized: ReadonlySet<string>;
+	readonly #initializedReads: ReadonlySet<string>;
 	readonly #functions = new Map<CoreFunctionId, Map<string, Array<CellAccess>>>();
 	readonly #cells = new Map<string, Map<CoreFunctionId, Array<CellAccess>>>();
 	readonly #facts = new Map<
@@ -88,6 +89,11 @@ export class CoreStaticCellIndex {
 		]);
 		this.#initialized = new Set(
 			(context.data.initializedModuleGlobalSlots ?? []).map((slot) => `global:${slot}`),
+		);
+		this.#initializedReads = new Set(
+			(context.data.initializedCapturedReads ?? []).map(
+				(read) => `${read.function}:captured:${read.owner}:${read.index}`,
+			),
 		);
 	}
 	#refresh(): void {
@@ -172,6 +178,7 @@ export class CoreStaticCellIndex {
 						?.get(fn.id)
 						?.some((access) => access.write) ?? false
 				)) ||
+			this.#initializedReads.has(`${fn.id}:${key}`) ||
 			hasInitializationCheck(fn, load, value, consumer);
 		let checkedInitialization: boolean | undefined;
 		if (requestedKey !== undefined && this.#facts.get(key) === undefined) {
