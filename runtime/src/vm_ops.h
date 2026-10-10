@@ -1754,6 +1754,24 @@ mal_vm_property_try_load_static_remaining(
     MalInlineCache *ic
 );
 
+/**
+ * The out-of-line probe's watched-intrinsic row inline, for sites that load a
+ * guarded Math call's callee such as `Math.round`.
+ */
+static inline __attribute__((always_inline)) bool mal_vm_watched_own_value_try_load_static(
+    MalValue receiver, const MalInlineCache *ic, MalValue *out
+) {
+    if (ic->mode != MAL_IC_MODE_SHAPE || ic->slot != MAL_IC_VALUE_SLOT || ic->prim_kind != 0 ||
+        !mal_value_is_object(receiver) ||
+        (const MalObject *) mal_value_to_heap(receiver) != ic->obj ||
+        !mal_primitive_method_protector) {
+        return false;
+    }
+    MAL_PERF_COUNT(ic_load_watched_hits);
+    *out = ic->value;
+    return true;
+}
+
 /** Static-name property probe: the site identity supplies the key guard. */
 static inline __attribute__((always_inline)) bool mal_vm_property_try_load_static(
     MalVm *vm, MalValue receiver, MalInlineCache *ic, MalValue *out

@@ -8,6 +8,7 @@ import {
 	deserializeCompilerArtifact,
 	serializeCompilerArtifact,
 } from "../../src/compiler/target/compiler-artifact-codec.ts";
+import { emitCompiledFunction } from "../../src/compiler/target/render-native-c.ts";
 import {
 	buildBackendPairFromOneProgramImage,
 	buildNativeProgramImage,
@@ -39,12 +40,23 @@ it("runs patched and unpatched mutable Math callees through the callee guard", (
 	const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-open-math-guard-"));
 	try {
 		const expected = execFileSync(process.execPath, [fixture], { encoding: "utf8" });
-		const { compiled, interpreted } = buildBackendPairFromOneProgramImage({
+		const { compiled, interpreted, programImage } = buildBackendPairFromOneProgramImage({
 			fixture,
 			name: "open-math-guard",
 			outDir,
 			config: resolveBuildConfig({ engine: { primordials: "mutable" } }),
 		});
+		const index = programImage.runtime.functions.findIndex(
+			(fn) =>
+				String.fromCharCode(
+					...(programImage.runtime.stringConstants[fn.nameStringIndex] ?? []),
+				) === "round",
+		);
+		// The callee load answers its watched `Math.round` row inline.
+		expect(
+			emitCompiledFunction(programImage.native.functions[index]!, index, "", false)!
+				.source,
+		).toContain("mal_vm_watched_own_value_try_load_static(");
 		expect(runToStdout(interpreted)).toBe(expected);
 		expect(runToStdout(compiled)).toBe(expected);
 		expect(runToStdout(compiled, { env: STRESS_ENV })).toBe(expected);

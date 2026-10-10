@@ -3832,6 +3832,14 @@ function emitBody(
 	const mathCalls = new Map(
 		fastPathPlans.mathCalls.map((plan) => [plan.instructionIp, plan]),
 	);
+	const mathCalleeRegisters = new Set(
+		fastPathPlans.mathCalls.flatMap((plan) => {
+			const call = fn.instructions[plan.instructionIp];
+			return plan.mode === "guarded-boxed" && call?.opcode === "CALL"
+				? [call.callee]
+				: [];
+		}),
+	);
 	const numberPredicates = new Map(
 		fastPathPlans.numberPredicates.map((plan) => [plan.instructionIp, plan]),
 	);
@@ -4784,6 +4792,10 @@ function emitBody(
 		instructionContext.callTransport = callTransportByIp.get(ip);
 		instructionContext.callbackTransport = callbackTransportByIp.get(ip);
 		instructionContext.mathCall = mathCalls.get(ip);
+		const contextInstruction = fn.instructions[ip]!;
+		instructionContext.watchedMathCallee =
+			contextInstruction.opcode === "LOAD_PROPERTY_STATIC" &&
+			mathCalleeRegisters.has(contextInstruction.dst);
 		instructionContext.numberPredicate = numberPredicates.get(ip);
 		instructionContext.stringTransform = stringTransforms.get(ip);
 		instructionContext.indexedLengthLoopAction = indexedLengthLoopActionByIp.get(ip);
@@ -5260,6 +5272,8 @@ interface NativeInstructionContext {
 	readonly callTransport?: NativeCallTransportPlan;
 	readonly callbackTransport?: NativeCallbackTransportPlan;
 	readonly mathCall: NativeMathCallPlan | undefined;
+	/** The load reads a callee that a guarded Math call checks, so its row is a watched intrinsic. */
+	readonly watchedMathCallee?: boolean;
 	readonly numberPredicate?: NativeNumberPredicatePlan;
 	readonly stringTransform?: NativeStringTransformPlan;
 	readonly mappedArguments: boolean;
@@ -7187,7 +7201,7 @@ function emitInstruction(
 				? "mal_vm_property_try_load_length_static"
 				: "mal_vm_property_try_load_static";
 			const probe = (): string =>
-				`${probeHelper}(vm, ${boxed(instruction.object)}, &${nativeBodyReference(resources, "propertyCache")}[${instruction.icIndex}], &__v_${ip})`;
+				`${context.watchedMathCallee === true ? `mal_vm_watched_own_value_try_load_static(${boxed(instruction.object)}, &${nativeBodyReference(resources, "propertyCache")}[${instruction.icIndex}], &__v_${ip}) || ` : ""}${probeHelper}(vm, ${boxed(instruction.object)}, &${nativeBodyReference(resources, "propertyCache")}[${instruction.icIndex}], &__v_${ip})`;
 			const ordinary = (): Array<string> => [
 				`MalValue __v_${ip};`,
 				`if (${probe()}) {`,
