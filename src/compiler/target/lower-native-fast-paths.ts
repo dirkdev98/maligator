@@ -1066,6 +1066,7 @@ export function lowerNativeFastPaths(
 		undefined,
 	transparentJumpTargets: ReadonlySet<number> = new Set(),
 	materializeUpdateOutputs = true,
+	selectUpdates = true,
 	body?: NativeBodyFacts,
 ): NativeFastPathLowering {
 	let propertyLoadIps: ReadonlyArray<number> = [];
@@ -1115,17 +1116,9 @@ export function lowerNativeFastPaths(
 	if (selection.kind === "render")
 		propertyNumericUpdates.push(...selection.plans.propertyNumericUpdates);
 	else {
-		// A fusion start can keep its result in a private temporary rather than its
-		// register, so an update neither reads that result nor claims a fused operation.
-		const fusedResults = new Set(
-			fn.instructions.flatMap((instruction, ip) =>
-				terminalFusion(ip)?.role === "start" && "dst" in instruction
-					? [instruction.dst]
-					: [],
-			),
-		);
 		let nextUpdateIp = 0;
 		for (const ip of propertyLoadIps) {
+			if (!selectUpdates) break;
 			if (ip < nextUpdateIp) continue;
 			const plan = lowerPropertyNumericUpdate(
 				fn,
@@ -1134,20 +1127,13 @@ export function lowerNativeFastPaths(
 				jumpTargets,
 				(candidate) =>
 					conflicts(candidate) ||
-					terminalFusion(candidate) !== undefined ||
 					pairedArrayLoopActions.has(candidate) ||
 					propertyNumericUpdateActions.has(candidate),
 				transparentJumpTargets,
 				materializeUpdateOutputs,
 				body,
 			);
-			if (
-				plan === undefined ||
-				(plan.operation.kind === "binary" &&
-					plan.operation.right.kind === "register" &&
-					fusedResults.has(plan.operation.right.register))
-			)
-				continue;
+			if (plan === undefined) continue;
 			propertyNumericUpdates.push(plan);
 			for (const claimedIp of plan.claimedIps)
 				propertyNumericUpdateActions.set(claimedIp, updateAction(plan, "skip"));
@@ -1713,6 +1699,8 @@ export function selectNativeFastPaths(
 		transparent,
 		// Every other consumer reads its registers through bytecode operands.
 		fn.profileSiteIds !== undefined,
+		// Fusion can keep a preceding RHS in its private temporary rather than the semantic local.
+		!native.specializations.some((region) => region.kind === "numeric-fusion"),
 		body,
 	);
 	return {

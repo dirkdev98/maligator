@@ -87,15 +87,6 @@ describe("native SSA property update plans", () => {
 		expect(native.storage!.propertyNumericUpdates).toEqual([]);
 	});
 
-	it("selects an update beside an unrelated numeric fusion", () => {
-		const native = compile("(value.count += delta, (delta + 2) * delta)").native
-			.functions[1]!;
-		expect(
-			native.specializations.some((region) => region.kind === "numeric-fusion"),
-		).toBe(true);
-		expect(native.storage!.propertyNumericUpdates).toHaveLength(1);
-	});
-
 	it("preserves profile events and rejects adjacent polling edges", () => {
 		const original = compile().native.functions[1]!;
 		const profiled = lowerNativeFunctionStorage({
