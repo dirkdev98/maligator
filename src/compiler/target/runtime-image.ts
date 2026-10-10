@@ -3383,7 +3383,8 @@ function lowerExecutionFunctionToBytecode(
 		mappedArgumentSlots: [...fn.mappedArgumentSlots],
 		length: fn.length,
 		registerCount: fn.registerCount,
-		gcSafepoints,
+		// The image codec omits an empty list, so the producer does too.
+		...(gcSafepoints.length === 0 ? {} : { gcSafepoints }),
 		capturedCount: fn.capturedCount,
 		strict: fn.strict,
 		needsArguments,
