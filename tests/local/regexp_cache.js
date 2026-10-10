@@ -487,6 +487,65 @@ check(
 );
 RegExp.prototype.exec = originalPrototypeExec;
 
+// A global exec loop resumes one match iterator; any other start restarts the search.
+function execAll(pattern, subject) {
+	const found = [];
+	pattern.lastIndex = 0;
+	let match;
+	while ((match = pattern.exec(subject)) !== null) {
+		found.push(`${match.index}:${match[0]}`);
+		if (match[0] === "") pattern.lastIndex++;
+	}
+	return found.join(",");
+}
+const continuationSubject = "id-12:x=ab;id-7:y=c;;id-301:z=def;";
+const tokenPattern = /([a-z]+)-(\d+):([a-z]+)=([^;]+);?/g;
+check(
+	"exec loop continues from each match end",
+	execAll(tokenPattern, continuationSubject) ===
+		"0:id-12:x=ab;,11:id-7:y=c;,21:id-301:z=def;",
+);
+tokenPattern.lastIndex = 0;
+tokenPattern.exec(continuationSubject);
+tokenPattern.lastIndex = 0;
+check(
+	"exec restarts after lastIndex rewinds",
+	tokenPattern.exec(continuationSubject)[2] === "12",
+);
+tokenPattern.lastIndex = 13;
+check(
+	"exec restarts after lastIndex jumps",
+	tokenPattern.exec(continuationSubject)[2] === "301",
+);
+check(
+	"exec does not step past an empty match itself",
+	execAll(/b*/g, "abba") === "0:,1:bb,3:,4:",
+);
+const alternating = /\d+/g;
+const interleaved = [];
+for (let round = 0; round < 3; round++) {
+	const saved = alternating.lastIndex;
+	interleaved.push(alternating.exec("a1b22c333")?.[0]);
+	const leftIndex = alternating.lastIndex;
+	alternating.lastIndex = saved;
+	interleaved.push(alternating.exec("x9y88")?.[0]);
+	alternating.lastIndex = leftIndex;
+}
+check("exec alternates between two subjects", interleaved.join(",") === "1,9,22,88,333,");
+check(
+	"resumed exec keeps lookbehind context",
+	execAll(/(?<=-)\d+/g, continuationSubject) === "3:12,14:7,24:301",
+);
+const sticky = /\d+;?/y;
+const stickyFound = [];
+let stickyMatch;
+while ((stickyMatch = sticky.exec("12;345;x6")) !== null)
+	stickyFound.push(stickyMatch[0]);
+check(
+	"sticky exec stops at the first gap",
+	stickyFound.join(",") === "12;,345;" && sticky.lastIndex === 0,
+);
+
 let passed = 0;
 for (const [name, condition] of results) {
 	if (condition) passed++;

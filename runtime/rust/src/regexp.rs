@@ -21,7 +21,7 @@ use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::sync::Arc;
 
-use regress::{Flags, Match, Regex};
+use regress::{AsciiMatches, Flags, Match, Regex};
 
 use crate::ffi::{nullable_slice, nullable_u16_slice, write_utf8};
 
@@ -422,6 +422,21 @@ struct SubjectCache {
     latin1_ascii: bool,
     /// Widened Latin-1 code units for executions that need UTF-16 input.
     wide: Option<Vec<u16>>,
+    continuation: Option<AsciiContinuation>,
+}
+
+/// A global or sticky-free loop of `exec` calls over one ASCII subject resumes a
+/// single match iterator, whose backtracking stack keeps its capacity between
+/// matches instead of growing from empty on every call.
+struct AsciiContinuation {
+    // Declared first so it is dropped before the regex and text it borrows.
+    matches: AsciiMatches<'static, 'static>,
+    /// The position the iterator searches from next; only an `exec` starting
+    /// exactly here may resume it.
+    next_start: usize,
+    text: *const u8,
+    len: usize,
+    _re: Arc<Regex>,
 }
 
 impl SubjectCache {
@@ -662,6 +677,47 @@ fn finish_fast_exec(
     }
 }
 
+/// The next match at or after `start`, resuming the cached iterator when the
+/// previous `exec` over this same subject ended exactly at `start`.
+fn next_ascii_match(
+    cache: &mut SubjectCache,
+    re: &Arc<Regex>,
+    text: &str,
+    start: usize,
+) -> Option<Match> {
+    let resumable = cache.continuation.as_ref().is_some_and(|continuation| {
+        continuation.next_start == start
+            && continuation.text == text.as_ptr()
+            && continuation.len == text.len()
+    });
+    if !resumable {
+        cache.continuation = None;
+        let matches = re.find_from_ascii(text, start);
+        // SAFETY: the continuation owns a clone of the regex Arc, and the text is
+        // the subject's immutable bytes. The cache entry holding it is keyed by
+        // heap epoch and string identity, and every sweep that can free the
+        // subject bumps the epoch, so a stale entry is replaced before reuse.
+        let matches = unsafe {
+            core::mem::transmute::<AsciiMatches<'_, '_>, AsciiMatches<'static, 'static>>(matches)
+        };
+        cache.continuation = Some(AsciiContinuation {
+            matches,
+            next_start: start,
+            text: text.as_ptr(),
+            len: text.len(),
+            _re: Arc::clone(re),
+        });
+    }
+    let continuation = cache.continuation.as_mut().expect("continuation present");
+    let found = continuation.matches.next();
+    match &found {
+        // After an empty match the iterator steps past it, which `exec` does not.
+        Some(m) if m.end() > m.start() => continuation.next_start = m.end(),
+        _ => cache.continuation = None,
+    }
+    found
+}
+
 fn finish_exec(
     cp: &mut CompiledPattern,
     found: Option<Match>,
@@ -751,6 +807,7 @@ pub unsafe extern "C" fn mal_regexp_exec(
                 ascii: None,
                 latin1_ascii: false,
                 wide: None,
+                continuation: None,
             });
             execution_flags |= EXEC_CACHE_FILL;
             find_wide(&cp.re, cp.unicode_mode, subj, start)
@@ -860,6 +917,7 @@ pub unsafe extern "C" fn mal_regexp_exec_latin1(
             ascii: None,
             latin1_ascii: cp.ascii_eligible && subj.is_ascii(),
             wide,
+            continuation: None,
         });
         execution_flags |= EXEC_CACHE_FILL;
     }
@@ -870,7 +928,7 @@ pub unsafe extern "C" fn mal_regexp_exec_latin1(
         // Eligibility excludes ignore-case, whose ECMAScript canonicalization
         // can map non-ASCII pattern units onto ASCII subject units.
         let text = unsafe { core::str::from_utf8_unchecked(subj) };
-        cp.re.find_from_ascii(text, start).next()
+        next_ascii_match(cache, &cp.re, text, start)
     } else {
         execution_flags |= EXEC_NON_ASCII;
         let wide = cache.wide.get_or_insert_with(Vec::new);
