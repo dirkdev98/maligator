@@ -143,6 +143,10 @@ The independent target boundary and current storage contract are recorded in
       Move remaining emission-local selection into explicit native plans before
       claiming the C emitter only renders selected decisions.
 
+- [ ] Stream the product CLI's translation units to disk. Its build keeps the CLI's
+      emitted C, 650 MB with the worker root's, in memory while it compiles the
+      compiler again for the worker root, and peaks at 4.25 GB of heap; the release
+      build and the self-hosted CLI check rerun themselves with an 8 GB limit.
 - [ ] Improve Node.js self-compile phase time and memory using the restored cold
       paired comparison. The protocol now requires strict emitted-C and runtime-image
       byte parity; use matched before/after evidence for speedup claims. Compiling
@@ -662,6 +666,18 @@ contracts or investigates costs still visible after the string follow-ups.
       code calls generically, because top-level declarations become captured
       module bindings that the finite target analysis does not follow.
       `finite-call-target-dispatch` compiles its fixture as a script until then.
+- [ ] Prefer Map entry-pair virtualization when other iterator regions also apply
+      to a loop. Typing construct results as objects let iterator-result
+      virtualization and array cursors apply to `for (const [k, v] of new Map())`
+      loops in `collection-direct`, and selection then dropped every entry-pair
+      region, so that typing was reverted. It removed an out-of-line
+      RequireObjectCoercible from `counts[i & 15]++` on a constructed typed array.
+- [ ] Find why method loads on Express request objects miss their caches. In a
+      development build of the JSON route, static-load cache misses take 12% of
+      samples, much of it re-recording inherited rows in
+      `mal_ic_try_record_inherited`, for loads such as raw-body's
+      `stream.removeListener`. A dictionary-mode request object would explain it,
+      since such a row names the exact receiver; that is not yet confirmed.
 - [ ] Re-measure numeric property update plans now that number record regions
       take over loops that only touch number fields of one receiver. On the
       particle loop, before regions, they ran 59 ms against 55 ms for generic loads
