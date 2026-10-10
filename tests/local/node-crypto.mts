@@ -391,8 +391,11 @@ function throwsError(name: string, fn: () => void): void {
 }
 throwsTypeError("rejects missing algorithm", () => hashUnchecked());
 throwsTypeError("rejects non-string algorithm", () => hashUnchecked(256, "abc", "hex"));
-throwsTypeError("rejects non-sha256 algorithm", () => hash("md5", "abc", "hex"));
-throwsTypeError("rejects non-exact sha256 algorithm", () => hash("SHA256", "abc", "hex"));
+throwsError("rejects an unknown algorithm", () => hash("not-a-hash", "abc", "hex"));
+check(
+	"matches algorithm names without case",
+	hash("SHA256", "abc", "hex") === hash("sha256", "abc", "hex"),
+);
 throwsTypeError("rejects missing data", () => hashUnchecked("sha256"));
 throwsTypeError("rejects numeric data", () => hashUnchecked("sha256", 123, "hex"));
 
@@ -417,7 +420,7 @@ check("does not coerce object arguments", toStringCalls === 0);
 throwsTypeError("hash rejects an unknown output encoding", () =>
 	hash("sha256", "abc", "bogus"),
 );
-throwsTypeError("createHash rejects unsupported algorithm", () => createHash("sha512"));
+throwsError("createHash rejects an unknown algorithm", () => createHash("not-a-hash"));
 throwsTypeError("createHmac rejects unsupported algorithm", () =>
 	createHmac("sha1", "key"),
 );
