@@ -47,6 +47,31 @@ static inline void mal_perf_string_allocation(usize length) {
 }
 #endif
 
+// A variable-length memcpy is a libc call; inline payloads fit two overlapping word moves.
+static inline void mal_string_copy_inline_latin1(u8 *destination, const u8 *source, usize length) {
+    if (length >= sizeof(u64)) {
+        u64 head, tail;
+        memcpy(&head, source, sizeof(head));
+        memcpy(&tail, source + length - sizeof(tail), sizeof(tail));
+        memcpy(destination, &head, sizeof(head));
+        memcpy(destination + length - sizeof(tail), &tail, sizeof(tail));
+    } else if (length >= sizeof(u32)) {
+        u32 head, tail;
+        memcpy(&head, source, sizeof(head));
+        memcpy(&tail, source + length - sizeof(tail), sizeof(tail));
+        memcpy(destination, &head, sizeof(head));
+        memcpy(destination + length - sizeof(tail), &tail, sizeof(tail));
+    } else if (length >= sizeof(u16)) {
+        u16 head, tail;
+        memcpy(&head, source, sizeof(head));
+        memcpy(&tail, source + length - sizeof(tail), sizeof(tail));
+        memcpy(destination, &head, sizeof(head));
+        memcpy(destination + length - sizeof(tail), &tail, sizeof(tail));
+    } else if (length == 1) {
+        destination[0] = source[0];
+    }
+}
+
 static void mal_string_init_flat(
     MalString *string, MalStringStorage storage, bool latin1, usize length
 ) {
@@ -228,7 +253,7 @@ static MalTinyStringCacheResult mal_string_tiny_cache_get_latin1(
     if (cached != nullptr) MAL_PERF_COUNT(string_tiny_cache_replacements);
     MalString *string = mal_heap_alloc(heap, sizeof(MalString), MAL_HEAP_STRING);
     mal_string_init_flat(string, MAL_STRING_STORAGE_INLINE, true, length);
-    if (length != 0) memcpy(string->inline_latin1_units, units, length);
+    mal_string_copy_inline_latin1(string->inline_latin1_units, units, length);
     MAL_PERF_COUNT(string_inline_allocations);
     MAL_PERF_ADD(string_inline_code_units, length);
     string->hash = hash;
@@ -887,8 +912,9 @@ bool mal_string_new_cons_checked(MalHeap *heap, MalString *left, MalString *righ
             MalStringSegment left_segment = mal_string_leaf_segment(left, 0, left->length);
             MalStringSegment right_segment = mal_string_leaf_segment(right, 0, right->length);
             u8 units[MAL_STRING_INLINE_CODE_UNITS];
-            memcpy(units, left_segment.latin1_units, left->length);
-            memcpy(units + left->length, right_segment.latin1_units, right->length);
+            mal_string_copy_inline_latin1(units, left_segment.latin1_units, left->length);
+            mal_string_copy_inline_latin1(
+                units + left->length, right_segment.latin1_units, right->length);
             MAL_PERF_COUNT(string_inline_concat_results);
             *out = mal_string_new_latin1_copy(heap, units, length);
             return true;
@@ -908,8 +934,10 @@ bool mal_string_new_cons_checked(MalHeap *heap, MalString *left, MalString *righ
         MalStringSegment right_segment = mal_string_leaf_segment(right, 0, right->length);
         MalString *string = mal_heap_alloc(heap, sizeof(MalString), MAL_HEAP_STRING);
         mal_string_init_flat(string, MAL_STRING_STORAGE_INLINE, true, length);
-        memcpy(string->inline_latin1_units, left_segment.latin1_units, left->length);
-        memcpy(string->inline_latin1_units + left->length, right_segment.latin1_units, right->length);
+        mal_string_copy_inline_latin1(
+            string->inline_latin1_units, left_segment.latin1_units, left->length);
+        mal_string_copy_inline_latin1(
+            string->inline_latin1_units + left->length, right_segment.latin1_units, right->length);
         mal_perf_string_allocation(length);
         MAL_PERF_COUNT(string_inline_concat_results);
         MAL_PERF_COUNT(string_inline_allocations);
@@ -959,7 +987,7 @@ static MalString *mal_string_new_latin1(
         string = mal_heap_alloc(heap, sizeof(MalString), MAL_HEAP_STRING);
         if (length <= MAL_STRING_INLINE_LATIN1_CODE_UNITS) {
             mal_string_init_flat(string, MAL_STRING_STORAGE_INLINE, true, length);
-            memcpy(string->inline_latin1_units, units, length);
+            mal_string_copy_inline_latin1(string->inline_latin1_units, units, length);
             if (owned) gc_free_raw(heap, (void *) units);
             MAL_PERF_COUNT(string_inline_allocations);
             MAL_PERF_ADD(string_inline_code_units, length);
