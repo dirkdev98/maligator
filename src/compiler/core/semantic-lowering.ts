@@ -2094,17 +2094,17 @@ function prepareDirectEvalClassContext(
 ): Array<DirectEvalContextBinding> {
 	const inherited = program.directEvalContext;
 	const bindings: Array<DirectEvalContextBinding> = [];
-	program.directEvalScopeObjectBinding = createCapturedBinding(
+	program.directEvalScopeObjectBinding = createSyntheticBinding(
 		program,
 		fn,
 		"__eval_scope",
 	);
-	program.directEvalDirtyTrackerBinding = createCapturedBinding(
+	program.directEvalDirtyTrackerBinding = createSyntheticBinding(
 		program,
 		fn,
 		"__eval_dirty",
 	);
-	program.directEvalPersistentScopeBinding = createCapturedBinding(
+	program.directEvalPersistentScopeBinding = createSyntheticBinding(
 		program,
 		fn,
 		"__eval_persistent",
@@ -2119,7 +2119,7 @@ function prepareDirectEvalClassContext(
 	);
 	let homeObjectBinding: Binding | undefined;
 	if (inherited.allowSuperProperty) {
-		homeObjectBinding = createCapturedBinding(program, fn, "__eval_home");
+		homeObjectBinding = createSyntheticBinding(program, fn, "__eval_home");
 		bindings.push({ key: directEvalHomeScopeKey(), binding: homeObjectBinding });
 	}
 	let superBinding: Binding | undefined;
@@ -2127,16 +2127,20 @@ function prepareDirectEvalClassContext(
 	let superNewTargetBinding: Binding | undefined;
 	let instanceInitializerBinding: Binding | undefined;
 	if (inherited.allowSuperCall) {
-		superBinding = createCapturedBinding(program, fn, "__eval_super");
-		superThisStateBinding = createCapturedBinding(program, fn, "__eval_super_this");
-		superNewTargetBinding = createCapturedBinding(program, fn, "__eval_super_new_target");
+		superBinding = createSyntheticBinding(program, fn, "__eval_super");
+		superThisStateBinding = createSyntheticBinding(program, fn, "__eval_super_this");
+		superNewTargetBinding = createSyntheticBinding(
+			program,
+			fn,
+			"__eval_super_new_target",
+		);
 		bindings.push(
 			{ key: directEvalSuperConstructorScopeKey(), binding: superBinding },
 			{ key: directEvalSuperThisStateScopeKey(), binding: superThisStateBinding },
 			{ key: directEvalSuperNewTargetScopeKey(), binding: superNewTargetBinding },
 		);
 		if (inherited.hasInstanceInitializer) {
-			instanceInitializerBinding = createCapturedBinding(
+			instanceInitializerBinding = createSyntheticBinding(
 				program,
 				fn,
 				"__eval_instance_initializer",
@@ -2152,7 +2156,7 @@ function prepareDirectEvalClassContext(
 	for (let index = 0; index < inherited.privateNames.length; index++) {
 		const inheritedName = inherited.privateNames[index]!;
 		const makeBinding = (slot: DirectEvalPrivateSlot): Binding => {
-			const binding = createCapturedBinding(
+			const binding = createSyntheticBinding(
 				program,
 				fn,
 				`__eval_private_${index}_${slot}`,
@@ -3389,10 +3393,10 @@ function compileNewFunctionExpression(
 	) {
 		classContext.superThisStateBinding =
 			getLexicalThisBinding(compiledFn, functionNode) ??
-			createCapturedBinding(program, compiledFn, "__super_this_state");
+			createSyntheticBinding(program, compiledFn, "__super_this_state");
 		classContext.superNewTargetBinding =
 			getLexicalNewTargetBinding(compiledFn, functionNode) ??
-			createCapturedBinding(program, compiledFn, "__super_new_target");
+			createSyntheticBinding(program, compiledFn, "__super_new_target");
 	}
 
 	const paramsCursor = compileFunctionParams(program, compiledFn, functionNode);
@@ -3429,17 +3433,18 @@ function compileNewFunctionExpression(
 }
 
 /**
- * Create a synthetic captured binding owned by the enclosing function, used
- * for the class machinery (super, class self-reference, private symbols and
- * shared private functions). Ownership is claimed here so inner functions
- * resolve the slot through the enclosing frame's environment.
+ * Create a synthetic binding for the class machinery (super, class
+ * self-reference, private symbols and shared private functions). A captured
+ * binding is owned by the enclosing function, so inner functions resolve the
+ * slot through the enclosing frame's environment.
  */
-function createCapturedBinding(
+function createSyntheticBinding(
 	program: CoreFrontendContext,
 	fn: CoreFrontendFunction,
 	name: string,
+	scopedTo: "captured" | "global" = "captured",
 ): Binding {
-	const binding: Binding = { kind: "const", name, usageNodes: [], scopedTo: "captured" };
+	const binding: Binding = { kind: "const", name, usageNodes: [], scopedTo };
 	getOrCreateBindingLocation(program, fn, binding);
 	return binding;
 }
@@ -3460,7 +3465,7 @@ function classFieldKeyName(key: ESTree.Expression | ESTree.PrivateIdentifier): s
 }
 
 /**
- * Mint a fresh hidden private symbol into a captured slot at class definition
+ * Mint a fresh hidden private symbol into each binding at class definition
  * time. Each class evaluation produces distinct identities, so instances of
  * two evaluations of the same class source are not brand compatible.
  */
@@ -3474,6 +3479,12 @@ function mintPrivateNames(
 	for (const binding of bindings) {
 		if (!binding) continue;
 		const location = getOrCreateBindingLocation(program, fn, binding);
+		if (location.type === "global") {
+			const name = nextCoreVariable(fn);
+			cursor.block.emitter.emit({ type: "createPrivateName", registers: [name] });
+			storeRegisterAtLocation(cursor.block, location, name);
+			continue;
+		}
 		if (location.type !== "captured" || location.functionIndex !== fn.functionIndex) {
 			throw new Error(
 				"Private names must use captured slots owned by the class evaluator",
@@ -3790,6 +3801,15 @@ function compileClass(
 	nameHint?: string,
 ): number {
 	const classId = program.nextFunctionIndex;
+	// A module body evaluates a class outside loops at most once, so its private
+	// environment is a singleton: module globals hold it, and methods inlined into
+	// another scope still reach it without the class scope's environment.
+	const machineryScope =
+		fn.moduleInstantiated && (fn.loops?.length ?? 0) === 0 && !program.evalDirect
+			? "global"
+			: "captured";
+	const machineryBinding = (name: string) =>
+		createSyntheticBinding(program, fn, name, machineryScope);
 	const selfBinding = classNode.id
 		? fn.semanticFile.nodeToBinding.get(classNode.id)
 		: undefined;
@@ -3820,7 +3840,7 @@ function compileClass(
 			cursor.block.emitter.emit({ type: "checkSuperClass", registers: [parent] });
 		}
 
-		superBinding = createCapturedBinding(program, fn, `__super_${classId}`);
+		superBinding = machineryBinding(`__super_${classId}`);
 		storeRegisterAtLocation(
 			cursor.block,
 			getOrCreateBindingLocation(program, fn, superBinding),
@@ -3829,7 +3849,7 @@ function compileClass(
 	}
 	// Every class method has the constructor/prototype as its home object. Keep
 	// that live object available so setPrototypeOf mutations affect super reads.
-	const classBinding = createCapturedBinding(program, fn, `__class_${classId}`);
+	const classBinding = machineryBinding(`__class_${classId}`);
 
 	// Scan the body once to build the private environment and field plans. The
 	// symbols are minted at class definition (below); here we only allocate the
@@ -3845,12 +3865,8 @@ function compileClass(
 
 	const ensurePrivateEntry = (name: string, isStatic: boolean): SemanticPrivateName => {
 		const brandBinding = isStatic
-			? (staticBrandBinding ??= createCapturedBinding(program, fn, `__sbrand_${classId}`))
-			: (instanceBrandBinding ??= createCapturedBinding(
-					program,
-					fn,
-					`__brand_${classId}`,
-				));
+			? (staticBrandBinding ??= machineryBinding(`__sbrand_${classId}`))
+			: (instanceBrandBinding ??= machineryBinding(`__brand_${classId}`));
 
 		let entry = ownNames.get(name);
 		if (!entry) {
@@ -3881,11 +3897,7 @@ function compileClass(
 			if (member.key.type === "PrivateIdentifier") {
 				const name = `#${member.key.name}`;
 				const privateEntry = ensurePrivateEntry(name, member.static);
-				privateEntry.fieldBinding ??= createCapturedBinding(
-					program,
-					fn,
-					`__pf_${name}_${classId}`,
-				);
+				privateEntry.fieldBinding ??= machineryBinding(`__pf_${name}_${classId}`);
 				entry = {
 					private: true,
 					fieldBinding: privateEntry.fieldBinding,
@@ -3896,11 +3908,7 @@ function compileClass(
 			} else if (member.computed) {
 				// Every public computed field key is converted once during class
 				// definition, then loaded by instance or static initialization.
-				const keyBinding = createCapturedBinding(
-					program,
-					fn,
-					`__fk_${classId}_${computedFieldKeys.size}`,
-				);
+				const keyBinding = machineryBinding(`__fk_${classId}_${computedFieldKeys.size}`);
 				computedFieldKeys.set(member, keyBinding);
 				entry = {
 					private: false,
@@ -3937,23 +3945,11 @@ function compileClass(
 			const name = `#${member.key.name}`;
 			const entry = ensurePrivateEntry(name, member.static);
 			if (member.kind === "get") {
-				entry.getBinding ??= createCapturedBinding(
-					program,
-					fn,
-					`__pg_${name}_${classId}`,
-				);
+				entry.getBinding ??= machineryBinding(`__pg_${name}_${classId}`);
 			} else if (member.kind === "set") {
-				entry.setBinding ??= createCapturedBinding(
-					program,
-					fn,
-					`__ps_${name}_${classId}`,
-				);
+				entry.setBinding ??= machineryBinding(`__ps_${name}_${classId}`);
 			} else {
-				entry.methodBinding ??= createCapturedBinding(
-					program,
-					fn,
-					`__pm_${name}_${classId}`,
-				);
+				entry.methodBinding ??= machineryBinding(`__pm_${name}_${classId}`);
 			}
 		}
 	}
@@ -4013,7 +4009,7 @@ function compileClass(
 	);
 	const instanceInitializerBinding =
 		usesSharedSuperState && (instanceBrandBinding || instanceFieldPlan.length > 0)
-			? createCapturedBinding(program, fn, `__instance_init_${classId}`)
+			? machineryBinding(`__instance_init_${classId}`)
 			: undefined;
 	// NamedEvaluation: anonymous class expressions take the binding name.
 	const className = classNode.id?.name ?? nameHint ?? "";
@@ -11723,7 +11719,7 @@ function compileObjectExpression(
 		);
 	});
 	if (usesSuper) {
-		homeObjectBinding = createCapturedBinding(
+		homeObjectBinding = createSyntheticBinding(
 			program,
 			fn,
 			`__home_${program.nextFunctionIndex}`,

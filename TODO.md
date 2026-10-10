@@ -250,11 +250,15 @@ The independent target boundary and current storage contract are recorded in
       `mal_vm_call_cached`. Measured dead ends: `__builtin_expect` on the
       generated throw check made the cone 11% slower, and forcing `always_inline`
       on the hottest small value and cache helpers changed nothing. Hinting
-      single-target methods outside loops changed nothing: the accessors read
-      private fields through class-scope captures, which a guarded inline cannot
-      resolve without the callee's environment, and the same accessors with
-      public fields inline but stay within 6% because each iteration still pays
-      every property probe that V8 hoists out of the loop. Exempting
+      single-target methods outside loops changed nothing. Private names of
+      module-level classes now live in module globals, so a guarded inline in
+      another module can read them, but the cone's hot `fn.kernel` accessor
+      sites are still not inlined: the program generated-code budget runs out
+      with 13.5 thousand candidates pending, and exact-target candidates
+      outrank every hinted one. Inlining every candidate of at most 16 units
+      past the budget made the cone 2.6% slower (28.20 against 27.49 s, three
+      pairs), because each inlined accessor still pays the method, field and
+      private probes that V8 hoists out of the loop. Exempting
       single-target guarded direct calls or small inlines from the program
       generated-code budget made thousands more sites direct or inlined without
       changing wall time, because
@@ -735,6 +739,14 @@ contracts or investigates costs still visible after the string follow-ups.
       interpreted backend while passing compiled: use-before-initialization
       reads and initializer `Symbol.asyncDispose`/`Symbol.dispose` validation.
       They fail at HEAD without tonight's TDZ fold, so bisect from the baseline.
+
+- [ ] Mint private names per class evaluation inside loops. A class expression
+      evaluated by each iteration of a loop in one activation keeps its private
+      names in that activation's captured slots, so every evaluation overwrites
+      the same slots: after `for (...) list.push(class { #x; static has(o) { return #x in o; } })`,
+      `list[1].has(new list[0]())` is true in both backends where Node returns
+      false. Factory functions are unaffected because each call owns its slots.
+      Give such evaluations their own class scope, as per-iteration bindings do.
 
 - [ ] Apply computed object-literal accessor names at runtime. For
       `const k = Symbol("field"); const o = { get [k]() {} };`, the getter's
