@@ -429,6 +429,41 @@ static MalValue mal_builtin_math_max(MalVm *vm, MalValue this_value, const MalVa
     return mal_builtin_math_min_max(vm, args, arg_count, true);
 }
 
+const MalNativeFunctionCallback mal_builtin_math_unary_callbacks[MAL_MATH_UNARY_ROUND + 1] = {
+    [MAL_MATH_UNARY_ABS] = mal_builtin_math_abs,
+    [MAL_MATH_UNARY_FLOOR] = mal_builtin_math_floor,
+    [MAL_MATH_UNARY_CEIL] = mal_builtin_math_ceil,
+    [MAL_MATH_UNARY_TRUNC] = mal_builtin_math_trunc,
+    [MAL_MATH_UNARY_SQRT] = mal_builtin_math_sqrt,
+    [MAL_MATH_UNARY_CBRT] = mal_builtin_math_cbrt,
+    [MAL_MATH_UNARY_SIGN] = mal_builtin_math_sign,
+    [MAL_MATH_UNARY_LOG] = mal_builtin_math_log,
+    [MAL_MATH_UNARY_LOG2] = mal_builtin_math_log2,
+    [MAL_MATH_UNARY_LOG10] = mal_builtin_math_log10,
+    [MAL_MATH_UNARY_EXP] = mal_builtin_math_exp,
+    [MAL_MATH_UNARY_SIN] = mal_builtin_math_sin,
+    [MAL_MATH_UNARY_COS] = mal_builtin_math_cos,
+    [MAL_MATH_UNARY_TAN] = mal_builtin_math_tan,
+    [MAL_MATH_UNARY_ASIN] = mal_builtin_math_asin,
+    [MAL_MATH_UNARY_ACOS] = mal_builtin_math_acos,
+    [MAL_MATH_UNARY_ATAN] = mal_builtin_math_atan,
+    [MAL_MATH_UNARY_SINH] = mal_builtin_math_sinh,
+    [MAL_MATH_UNARY_COSH] = mal_builtin_math_cosh,
+    [MAL_MATH_UNARY_TANH] = mal_builtin_math_tanh,
+    [MAL_MATH_UNARY_ASINH] = mal_builtin_math_asinh,
+    [MAL_MATH_UNARY_ACOSH] = mal_builtin_math_acosh,
+    [MAL_MATH_UNARY_ATANH] = mal_builtin_math_atanh,
+    [MAL_MATH_UNARY_LOG1P] = mal_builtin_math_log1p,
+    [MAL_MATH_UNARY_EXPM1] = mal_builtin_math_expm1,
+    [MAL_MATH_UNARY_FROUND] = mal_builtin_math_fround,
+    [MAL_MATH_UNARY_ROUND] = mal_builtin_math_round,
+};
+
+const MalNativeFunctionCallback mal_builtin_math_binary_callbacks[MAL_MATH_BINARY_MAX + 1] = {
+    [MAL_MATH_BINARY_MIN] = mal_builtin_math_min,
+    [MAL_MATH_BINARY_MAX] = mal_builtin_math_max,
+};
+
 static MalValue mal_builtin_math_min_max_two(f64 left, f64 right, bool is_max) {
     return mal_ops_number_value(mal_builtin_math_min_max_add(left, right, is_max));
 }

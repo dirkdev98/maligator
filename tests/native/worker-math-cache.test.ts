@@ -5,7 +5,7 @@ import { expect, it } from "vitest";
 import { buildNativeBinary, runToStdout } from "../../src/test-harness.ts";
 
 for (const compiled of [true, false]) {
-	it(`isolates indirect Math call caches (${compiled ? "native" : "interpreted"})`, () => {
+	it(`guards indirect Math calls per isolate (${compiled ? "native" : "interpreted"})`, () => {
 		const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-worker-math-cache-"));
 		try {
 			const binary = buildNativeBinary({
@@ -20,8 +20,12 @@ for (const compiled of [true, false]) {
 					.filter((file) => file.includes(".worker-") && file.endsWith(".c"))
 					.map((file) => readFileSync(path.join(outDir, file), "utf8"))
 					.join("\n");
-				expect(workerCode).toContain("static MAL_ISOLATE_LOCAL MalMathUnaryOp __math_");
-				expect(workerCode).toContain("static MAL_ISOLATE_LOCAL MalMathBinaryOp __math_");
+				expect(workerCode).toContain(
+					"mal_builtin_math_unary_callee_matches(MAL_MATH_UNARY_ABS",
+				);
+				expect(workerCode).toContain(
+					"mal_builtin_math_binary_callee_matches(MAL_MATH_BINARY_MIN",
+				);
 			}
 			expect(runToStdout(binary, { timeoutMs: 30_000 })).toBe("worker-math-cache PASS\n");
 		} finally {

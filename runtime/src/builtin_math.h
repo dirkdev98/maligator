@@ -2,6 +2,7 @@
 
 #include "./defaults.h"
 #include "intrinsics.h"
+#include "value_ops.h"
 
 /**
  * Create the Math namespace object and install its functions and constants.
@@ -90,6 +91,23 @@ typedef enum MalMathBinaryOp {
 f64 mal_builtin_math_binary_number_known(
     MalMathBinaryOp operation, f64 left, f64 right
 );
+
+/** Each Math builtin's native callback, indexed by its operation; NONE has none. */
+extern const MalNativeFunctionCallback mal_builtin_math_unary_callbacks[MAL_MATH_UNARY_ROUND + 1];
+extern const MalNativeFunctionCallback mal_builtin_math_binary_callbacks[MAL_MATH_BINARY_MAX + 1];
+
+// A matching callee runs its kernel on Number arguments without coercion or allocation.
+static inline bool mal_builtin_math_unary_callee_matches(MalMathUnaryOp operation, MalValue callee) {
+    return mal_value_is_native_function_object(callee) &&
+        mal_value_to_native_function_object(callee)->callback ==
+            mal_builtin_math_unary_callbacks[operation];
+}
+
+static inline bool mal_builtin_math_binary_callee_matches(MalMathBinaryOp operation, MalValue callee) {
+    return mal_value_is_native_function_object(callee) &&
+        mal_value_to_native_function_object(callee)->callback ==
+            mal_builtin_math_binary_callbacks[operation];
+}
 
 /** Exact-callback fast path for two-number Math.min/Math.max calls. */
 bool mal_builtin_math_binary_fast(

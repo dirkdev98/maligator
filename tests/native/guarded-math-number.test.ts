@@ -34,6 +34,25 @@ it("preserves scalar Math coercion, errors and signed zeros through number guard
 	}
 }, 300_000);
 
+it("runs patched and unpatched mutable Math callees through the callee guard", () => {
+	const fixture = "tests/local/open-math-guard.mjs";
+	const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-open-math-guard-"));
+	try {
+		const expected = execFileSync(process.execPath, [fixture], { encoding: "utf8" });
+		const { compiled, interpreted } = buildBackendPairFromOneProgramImage({
+			fixture,
+			name: "open-math-guard",
+			outDir,
+			config: resolveBuildConfig({ engine: { primordials: "mutable" } }),
+		});
+		expect(runToStdout(interpreted)).toBe(expected);
+		expect(runToStdout(compiled)).toBe(expected);
+		expect(runToStdout(compiled, { env: STRESS_ENV })).toBe(expected);
+	} finally {
+		rmSync(outDir, { recursive: true, force: true });
+	}
+}, 300_000);
+
 it("preserves generic observations when a restored integer fusion takes either fallback", () => {
 	const fixture = "tests/local/truncating-integer-fallback.mjs";
 	const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-integer-fallback-"));

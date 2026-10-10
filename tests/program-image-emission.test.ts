@@ -3498,18 +3498,16 @@ describe("native update-expression representation", () => {
 			definition,
 		);
 		const output = emitProgramImage(definition, { compiled: true });
-		expect(output).toContain("mal_builtin_math_unary_fast");
-		expect(output).toContain("mal_builtin_math_binary_fast");
+		expect(output).toContain("mal_builtin_math_unary_callee_matches");
+		expect(output).toContain("mal_builtin_math_binary_callee_matches");
 		expect(output).not.toContain("mal_builtin_math_unary_number_known");
 		expect(output).not.toContain("mal_builtin_math_binary_number_known");
-		expect(output).not.toMatch(
-			/MAL_ROOT_MASK\([^)]+\);\n\s+static MalMath(?:Unary|Binary)Op/,
+		expect(output).not.toMatch(/MAL_ROOT_MASK\([^)]+\);\n\s+if \(mal_builtin_math_/);
+		expect(output).toMatch(
+			/if \(mal_builtin_math_unary_callee_matches[^\n]+\) \{[\s\S]*?\} else \{\n\s+(MAL_ROOT_MASK\(0x[\da-f]+\));\n\s+[^\n]*&__call_caches\[\d+\][\s\S]*?\n\s+\}\n\s+if \(mal_gc_poll\) \{ \1; mal_gc_safepoint\(vm\); if \(mal_gc_poll_termination\(vm\)\) (?:\{ (?:__private_r\d+ = __gc_slots\[\d+\]; )+)?goto __throw_exit; (?:\} )?\}/,
 		);
 		expect(output).toMatch(
-			/if \(mal_builtin_math_unary_fast[^\n]+\) \{[\s\S]*?\} else \{\n\s+(MAL_ROOT_MASK\(0x[\da-f]+\));\n\s+[^\n]*&__call_caches\[\d+\][\s\S]*?\n\s+\}\n\s+if \(mal_gc_poll\) \{ \1; mal_gc_safepoint\(vm\); if \(mal_gc_poll_termination\(vm\)\) (?:\{ (?:__private_r\d+ = __gc_slots\[\d+\]; )+)?goto __throw_exit; (?:\} )?\}/,
-		);
-		expect(output).toMatch(
-			/if \(mal_builtin_math_binary_fast[^\n]+\) \{[\s\S]*?\} else \{\n\s+(MAL_ROOT_MASK\(0x[\da-f]+\));\n\s+[^\n]*&__call_caches\[\d+\][\s\S]*?\n\s+\}\n\s+if \(mal_gc_poll\) \{ \1; mal_gc_safepoint\(vm\); if \(mal_gc_poll_termination\(vm\)\) (?:\{ (?:__private_r\d+ = __gc_slots\[\d+\]; )+)?goto __throw_exit; (?:\} )?\}/,
+			/if \(mal_builtin_math_binary_callee_matches[^\n]+\) \{[\s\S]*?\} else \{\n\s+(MAL_ROOT_MASK\(0x[\da-f]+\));\n\s+[^\n]*&__call_caches\[\d+\][\s\S]*?\n\s+\}\n\s+if \(mal_gc_poll\) \{ \1; mal_gc_safepoint\(vm\); if \(mal_gc_poll_termination\(vm\)\) (?:\{ (?:__private_r\d+ = __gc_slots\[\d+\]; )+)?goto __throw_exit; (?:\} )?\}/,
 		);
 
 		const lockedOutput = emitLocked(source);

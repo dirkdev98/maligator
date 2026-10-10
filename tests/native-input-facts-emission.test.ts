@@ -242,7 +242,9 @@ describe("boxed Math result identity admission", () => {
 			const guarded = mathCallSource(false, binary),
 				stable = mathCallSource(true, binary);
 			expect(guarded).toContain(
-				binary ? "mal_builtin_math_binary_fast" : "mal_builtin_math_unary_fast",
+				binary
+					? "mal_builtin_math_binary_callee_matches"
+					: "mal_builtin_math_unary_callee_matches",
 			);
 			expect(guarded).toContain("mal_vm_call_cached");
 			expect(stable).not.toContain("mal_builtin_math_");

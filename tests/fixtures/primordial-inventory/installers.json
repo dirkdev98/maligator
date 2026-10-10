@@ -85,7 +85,7 @@
 	},
 	{
 		"file": "builtin_math.c",
-		"sha256": "1cd565f2f0b24cbdcc6cd34fed72f43197ee381a594393dbf69773c5c9ccd5d2"
+		"sha256": "afee13937faca200717bfbc740dc6225a2e21803e3d18100c287fa04fd9a4870"
 	},
 	{
 		"file": "builtin_number.c",

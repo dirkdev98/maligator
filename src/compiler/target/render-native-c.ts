@@ -9746,51 +9746,43 @@ function emitInstruction(
 					poll(),
 				];
 			}
-			if (mathCall?.arity === 1) {
-				const argument = instruction.arguments[0]!;
-				const nativeArgument = nativeNumberOperand(argument);
-				const nativeExpression =
-					nativeArgument === null
-						? null
-						: nativeMathUnaryExpr(mathCall.operation, nativeArgument);
+			if (mathCall !== undefined) {
+				const { operation } = mathCall;
+				const kernel = (values: ReadonlyArray<string>): string | null =>
+					mathCall.arity === 1
+						? nativeMathUnaryExpr(operation, values[0]!)
+						: nativeMathBinaryExpr(operation, values[0]!, values[1]!);
+				const nativeOperands = instruction.arguments.map(nativeNumberOperand);
 				if (mathCall.mode === "number") {
-					if (nativeExpression === null)
+					const expression = nativeOperands.every((value) => value !== null)
+						? kernel(nativeOperands)
+						: null;
+					if (expression === null)
 						throw new Error("Native Math plan lacks numeric operands");
-					return [storeNumber(instruction.dst, nativeExpression), mathPoll()];
+					return [storeNumber(instruction.dst, expression), mathPoll()];
 				}
-				return [
-					`static MAL_ISOLATE_LOCAL MalMathUnaryOp __math_${ip};`,
-					`MalValue __math_result_${ip};`,
-					`if (mal_builtin_math_unary_fast(${boxedOperand(instruction.callee)}, &__math_${ip}, ${boxedOperand(argument)}, &__math_result_${ip})) {`,
-					`  r${instruction.dst} = __math_result_${ip};`,
-					`} else {`,
-					...mathFallbackRootPublication(),
-					`  MalCompletion ${tmp} = ${profileCall("call", `mal_vm_call_cached(vm, ${nativeCallCacheReference(context, ip)}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length})`)};`,
-					`  if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow()}`,
-					`  r${instruction.dst} = ${tmp}.value;`,
-					`}`,
-					mathPoll(),
+				const expression = kernel(
+					instruction.arguments.map(
+						(operand, index) =>
+							nativeOperands[index] ?? `mal_ops_number_as_f64(${boxedOperand(operand)})`,
+					),
+				);
+				if (expression === null)
+					throw new Error(`Native Math plan has no kernel for ${operation}`);
+				// The callback identity proves the callee is the Math builtin even after
+				// reassignment, so Number arguments can skip the call and its coercions.
+				const arity = mathCall.arity === 1 ? "UNARY" : "BINARY";
+				const guards = [
+					`mal_builtin_math_${arity.toLowerCase()}_callee_matches(MAL_MATH_${arity}_${operation.slice("Math.".length).toUpperCase()}, ${boxedOperand(instruction.callee)})`,
+					...instruction.arguments.flatMap((operand, index) =>
+						nativeOperands[index] === null
+							? [`mal_ops_is_number(${boxedOperand(operand)})`]
+							: [],
+					),
 				];
-			}
-			if (mathCall?.arity === 2) {
-				const left = instruction.arguments[0]!;
-				const right = instruction.arguments[1]!;
-				const nativeLeft = nativeNumberOperand(left);
-				const nativeRight = nativeNumberOperand(right);
-				const nativeExpression =
-					nativeLeft === null || nativeRight === null
-						? null
-						: nativeMathBinaryExpr(mathCall.operation, nativeLeft, nativeRight);
-				if (mathCall.mode === "number") {
-					if (nativeExpression === null)
-						throw new Error("Native Math plan lacks numeric operands");
-					return [storeNumber(instruction.dst, nativeExpression), mathPoll()];
-				}
 				return [
-					`static MAL_ISOLATE_LOCAL MalMathBinaryOp __math_${ip};`,
-					`MalValue __math_result_${ip};`,
-					`if (mal_builtin_math_binary_fast(${boxedOperand(instruction.callee)}, &__math_${ip}, ${boxedOperand(left)}, ${boxedOperand(right)}, &__math_result_${ip})) {`,
-					`  r${instruction.dst} = __math_result_${ip};`,
+					`if (${guards.join(" && ")}) {`,
+					`  ${storeMathNumber(instruction.dst, operation, expression)}`,
 					`} else {`,
 					...mathFallbackRootPublication(),
 					`  MalCompletion ${tmp} = ${profileCall("call", `mal_vm_call_cached(vm, ${nativeCallCacheReference(context, ip)}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length})`)};`,
