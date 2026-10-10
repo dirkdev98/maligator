@@ -58,11 +58,12 @@ rooting, and resource-safety defects can interrupt that order.
       wrappers create leases there. Verify the declared capabilities against the
       command lifecycle so restricted execution retains cache coordination.
 
-- [ ] Repair `tests/native/checked-leaf-entry.test.ts`, which no gate manifest
-      selects. The emitted C for `tests/local/read-only-field-entries.js` no longer
-      calls `mal_vm_enter_leaf_checked`, so its emission assertion fails; it fails
-      with the compiler from `ca75be8d` too. Decide whether the fixture still
-      reaches a leaf call and add the test to a manifest once it passes.
+- [ ] Run the native tests that only `test:full` selects on a regular cadence. The
+      native manifests name 196 of the 351 native test files; the other 155 run only
+      in the full tier's remainder, which needs approval, so their fixtures can drift
+      unnoticed. `checked-leaf-entry.test.ts` asserted a leaf call that its fixture
+      had stopped emitting. Tests of an optimization should assert that it was
+      selected before they check behavior.
 
 - [ ] Track configured asset-directory topology in `dev`. Publication validates
       consumed file identities, but adding a file or renaming a previously unwatched
