@@ -1760,11 +1760,12 @@ export function emitRelocatableNativeOverlayTranslationUnits(
 		relocatable: true,
 	});
 	const declarations = compiled.flatMap((fn) =>
-		fn === null ? [] : [`MalValue ${fn.symbol}${COMPILED_FUNCTION_DECLARATION};`],
+		fn === null ? [] : [`MAL_DECLARE_COMPILED(${fn.symbol});`],
 	);
 	const table = [
 		...NATIVE_C_HEADER_LINES,
 		'#include "compiler_native.h"',
+		`#define MAL_DECLARE_COMPILED(name) MalValue name${COMPILED_FUNCTION_DECLARATION}`,
 		...declarations,
 		"",
 		"static const MalCompiledFunction mal_eval_compiler_native_entries[] = {",
