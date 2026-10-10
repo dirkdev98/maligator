@@ -24,7 +24,9 @@ import { buildProductCli } from "../src/product-builder.ts";
 import { parseProfileCapture, profileCaptureIdentity } from "../src/profile-artifact.ts";
 import type { PreparedProfile, ProfileManifest } from "../src/profile-artifact.ts";
 import { resolvePathExecutable } from "../src/toolchain.ts";
+import { requireHeapLimit } from "./heap-limit.ts";
 
+requireHeapLimit(8192);
 const repositoryRoot = path.resolve(import.meta.dirname, "..");
 const arguments_ = process.argv.slice(2);
 let providedCli: string | undefined;

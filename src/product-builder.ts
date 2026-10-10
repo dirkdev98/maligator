@@ -163,27 +163,6 @@ export function buildProductCli(options: BuildProductCliOptions): string {
 		compilerProducerDigestsPath,
 		mutableDevelopmentRunnerPath,
 	);
-	progress("analyzing and compiling the product CLI");
-	const semanticProgram = loadEntrypointAndRunSemanticAnalysis(
-		path.join(repositoryRoot, "src/product-cli-entry.mts"),
-		{ buildConfig: config, stripTypes: stripCompactTypes },
-	);
-	const definition = compileSemanticProgramToProgramImage(semanticProgram, {
-		facts: compilerProgramFactsFromConfig(config),
-		runPhase: (phase, run) => {
-			progress(`product CLI ${phase}`);
-			const result = run();
-			progress(`product CLI ${phase} complete`);
-			return result;
-		},
-	});
-	const workerImages =
-		semanticProgram.graph === undefined
-			? []
-			: compileWorkerImages(semanticProgram.graph, {
-					buildConfig: config,
-					stripTypes: stripCompactTypes,
-				});
 	progress("embedding product CLI assets");
 	const assets = includeConfiguredAssets(config.assets, repositoryRoot);
 	const compilerWire = assets.find((asset) => asset.name === "compilerWire");
@@ -191,21 +170,14 @@ export function buildProductCli(options: BuildProductCliOptions): string {
 		throw new Error("Product compilerWire asset must contain exactly one file");
 	}
 	compilerWire.files[0]!.embeddedSymbol = "mal_compiler_wire_data";
-	progress("emitting the product CLI translation units");
+	const cli = emitProductCliTranslationUnits(repositoryRoot, config, assets, progress);
+	// The worker roots compile the compiler again, so they start only after the CLI's
+	// own program image is emitted and released, and leave only their C behind.
 	const cSource = [
-		...emitProgramTranslationUnits(definition, {
-			sourcePath: nativeSourcePath,
-			compiled: true,
-			assets,
-			maligatorSurface: config.surface.maligator,
-		}),
-		...(workerImages.length === 0
+		...cli.units,
+		...(cli.workerGraph === undefined
 			? []
-			: emitWorkerImageTranslationUnits(workerImages, {
-					sourcePath: nativeSourcePath,
-					compiled: true,
-					maligatorSurface: config.surface.maligator,
-				})),
+			: emitProductWorkerTranslationUnits(cli.workerGraph, config)),
 	];
 	progress("product CLI translation units ready");
 	const derivation = buildDerivationFromConfig(config);
@@ -243,4 +215,63 @@ export function buildProductCli(options: BuildProductCliOptions): string {
 	}
 	progress(`product CLI ready: ${binaryPath}`);
 	return binaryPath;
+}
+
+function emitProductCliTranslationUnits(
+	repositoryRoot: string,
+	config: ResolvedBuildConfig,
+	assets: ReturnType<typeof includeConfiguredAssets>,
+	progress: (message: string) => void,
+): {
+	units: ReturnType<typeof emitProgramTranslationUnits>;
+	workerGraph: Parameters<typeof compileWorkerImages>[0] | undefined;
+} {
+	progress("analyzing and compiling the product CLI");
+	const semanticProgram = loadEntrypointAndRunSemanticAnalysis(
+		path.join(repositoryRoot, "src/product-cli-entry.mts"),
+		{ buildConfig: config, stripTypes: stripCompactTypes },
+	);
+	const definition = compileSemanticProgramToProgramImage(semanticProgram, {
+		facts: compilerProgramFactsFromConfig(config),
+		runPhase: (phase, run) => {
+			progress(`product CLI ${phase}`);
+			const result = run();
+			progress(`product CLI ${phase} complete`);
+			return result;
+		},
+	});
+	progress("emitting the product CLI translation units");
+	const graph = semanticProgram.graph;
+	return {
+		units: emitProgramTranslationUnits(definition, {
+			sourcePath: nativeSourcePath,
+			compiled: true,
+			assets,
+			maligatorSurface: config.surface.maligator,
+		}),
+		workerGraph:
+			graph === undefined
+				? undefined
+				: {
+						workerEntries: graph.workerEntries,
+						dynamicImportCandidates: graph.dynamicImportCandidates,
+					},
+	};
+}
+
+function emitProductWorkerTranslationUnits(
+	workerGraph: Parameters<typeof compileWorkerImages>[0],
+	config: ResolvedBuildConfig,
+): ReturnType<typeof emitWorkerImageTranslationUnits> {
+	const workerImages = compileWorkerImages(workerGraph, {
+		buildConfig: config,
+		stripTypes: stripCompactTypes,
+	});
+	return workerImages.length === 0
+		? []
+		: emitWorkerImageTranslationUnits(workerImages, {
+				sourcePath: nativeSourcePath,
+				compiled: true,
+				maligatorSurface: config.surface.maligator,
+			});
 }

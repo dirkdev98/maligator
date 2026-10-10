@@ -16,6 +16,7 @@ import * as path from "node:path";
 import { PLATFORM_MODULES } from "../src/platform/catalog.ts";
 import { buildProductCli } from "../src/product-builder.ts";
 import { resolvePathExecutable } from "../src/toolchain.ts";
+import { requireHeapLimit } from "./heap-limit.ts";
 import { createReleaseArchive } from "./release-archive.ts";
 import { nextAlphaVersion } from "./release-version.ts";
 
@@ -968,8 +969,10 @@ if (import.meta.main) {
 	const command = process.argv[2];
 	if (command === "version-alpha") incrementAlpha();
 	else if (command === "verify-tag") verifyReleaseTag(process.argv.slice(3));
-	else if (command === "build") buildRelease(process.argv.slice(3));
-	else if (command === "pack") packRelease(process.argv.slice(3));
+	else if (command === "build") {
+		requireHeapLimit(8192);
+		buildRelease(process.argv.slice(3));
+	} else if (command === "pack") packRelease(process.argv.slice(3));
 	else if (command === "create-github") createGitHubRelease(process.argv.slice(3));
 	else if (command === "publish") publishRelease(process.argv.slice(3));
 	else if (command === "smoke") smokeRelease();
