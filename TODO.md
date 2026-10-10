@@ -63,7 +63,11 @@ rooting, and resource-safety defects can interrupt that order.
       in the full tier's remainder, which needs approval, so their fixtures can drift
       unnoticed. `checked-leaf-entry.test.ts` asserted a leaf call that its fixture
       had stopped emitting. Tests of an optimization should assert that it was
-      selected before they check behavior.
+      selected before they check behavior. A pass on 2026-10-10 found
+      a dozen more: fixed function indices and script-only optimizations after
+      fixtures became modules, native plan entries read at runtime bytecode IPs,
+      inline cache rows and installer sets after compact layouts and workers, and a
+      keep-alive race. The Wasm tests also need WASI SDK 34 on the host.
 
 - [ ] Track configured asset-directory topology in `dev`. Publication validates
       consumed file identities, but adding a file or renaming a previously unwatched
@@ -641,6 +645,23 @@ contracts or investigates costs still visible after the string follow-ups.
       them once per function instead of once per call site. Inlining the three
       `quote` bodies instead of dispatching to their field entries doubled the
       three-class loop (106 against 51 ms), so field entries stay preferred.
+      A leaf entry keeps its native stack check even when its caller's frame is
+      verified: `checked-leaf-entry` enters a leaf from a caller frame large
+      enough to exhaust the remaining margin.
+- [ ] Concatenate a template literal's parts in one allocation. Core lowers
+      `${a}:${b}:${c}` to a chain of pairwise `+`, so each step allocates and
+      copies an intermediate string; in the text phase's normalization loop that
+      chain is about a fifth of the samples and the regexp engine about half.
+      Specification string-concatenation cannot fail, so gathering the parts and
+      joining them once moves only the engine's length-limit RangeError. A native
+      fusion of adjacent concatenations must keep every operand rooted across the
+      joined allocation, which pairwise root plans do not promise today.
+- [ ] Bound the call targets of methods stored on module-scope objects. In a
+      script, `holder.run(value)` with `holder.run` assigned two functions
+      dispatches to both through a finite guarded set; as an ES module the same
+      code calls generically, because top-level declarations become captured
+      module bindings that the finite target analysis does not follow.
+      `finite-call-target-dispatch` compiles its fixture as a script until then.
 - [ ] Re-measure numeric property update plans now that number record regions
       take over loops that only touch number fields of one receiver. On the
       particle loop, before regions, they ran 59 ms against 55 ms for generic loads
