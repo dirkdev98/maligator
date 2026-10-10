@@ -16,39 +16,47 @@ describe("finite script call-target dispatch", () => {
 	let interpreted: string;
 	let compiled: string;
 	let candidateSets: Array<ReadonlyArray<number>>;
+	let interpretedSets: Array<ReadonlyArray<number>>;
 
 	beforeAll(() => {
 		const pair = buildBackendPairFromOneProgramImage({
 			fixture: "tests/local/finite-call-target-dispatch.js",
 			name: "finite-call-target-dispatch",
 			outDir,
+			// Module-scope bindings are captured, and their call targets are not yet bounded.
+			entryGoal: "script",
 		});
 		interpreted = pair.interpreted;
 		compiled = pair.compiled;
-		candidateSets = pair.programImage.runtime.functions.flatMap((fn, functionIndex) =>
-			fn.instructions.flatMap((instruction, instructionIndex) => {
+		// Native plans address their own body, which can diverge from the runtime bytecode.
+		candidateSets = pair.programImage.native.functions.flatMap((plan) =>
+			(plan?.body.instructions ?? []).flatMap((instruction, instructionIndex) => {
 				if (
 					instruction.opcode !== "CALL" ||
 					instruction.guardedFunctionIndices === undefined
 				) {
 					return [];
 				}
-				expect(
-					pair.programImage.native.functions[functionIndex]!.instructions[
-						instructionIndex
-					],
-				).toMatchObject({
+				expect(plan!.instructions[instructionIndex]).toMatchObject({
 					kind: "call",
 					guardedFunctionIndices: instruction.guardedFunctionIndices,
 				});
 				return [instruction.guardedFunctionIndices];
 			}),
 		);
+		interpretedSets = pair.programImage.runtime.functions.flatMap((fn) =>
+			fn.instructions.flatMap((instruction) =>
+				instruction.opcode === "CALL" && instruction.guardedFunctionIndices !== undefined
+					? [instruction.guardedFunctionIndices]
+					: [],
+			),
+		);
 	});
 
 	it("lowers a deterministic two-target set into both outputs", () => {
 		expect(candidateSets.some((targets) => targets.length === 2)).toBe(true);
-		for (const targets of candidateSets) {
+		expect(interpretedSets.some((targets) => targets.length === 2)).toBe(true);
+		for (const targets of [...candidateSets, ...interpretedSets]) {
 			expect(targets).toEqual(
 				[...new Set(targets)].toSorted((left, right) => left - right),
 			);
