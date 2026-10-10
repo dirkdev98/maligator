@@ -63,35 +63,39 @@ export const COMPILER_NUMERIC_BINARY_OPERATORS: ReadonlySet<string> = new Set([
 	">>>",
 ]);
 
-// Transfers normal result kinds; zero denotes an unseeded lattice value, not an unknown kind.
+// Primitive kinds ToPrimitive can produce from each kind; objects can produce any of them.
+const MAY_BECOME_STRING = COMPILER_VALUE_KIND_STRING | COMPILER_VALUE_KIND_OBJECT;
+const MAY_BECOME_BIGINT = COMPILER_VALUE_KIND_BIGINT | COMPILER_VALUE_KIND_OBJECT;
+const MAY_BECOME_NUMBER =
+	COMPILER_VALUE_KIND_NUMERIC_PRIMITIVE | COMPILER_VALUE_KIND_OBJECT;
+
+/**
+ * Transfers normal result kinds; zero denotes an unseeded lattice value, not an
+ * unknown kind. Numeric operators yield a BigInt only when both operands can become
+ * BigInts, since mixing a BigInt with a Number throws; Symbols always throw.
+ */
 export function compilerNumericResultKind(
 	operation: "unary" | "binary" | "add",
 	left: CompilerValueKindMask,
 	right: CompilerValueKindMask = 0,
 ): CompilerValueKindMask {
 	if (left === 0 || (operation !== "unary" && right === 0)) return 0;
-	const leftNumeric = compilerValueKindMaskIsSubset(
-		left,
-		COMPILER_VALUE_KIND_NUMERIC_PRIMITIVE,
-	);
+	const bigint = (operand: CompilerValueKindMask) => (operand & MAY_BECOME_BIGINT) !== 0;
 	if (operation === "unary")
-		return leftNumeric ? COMPILER_VALUE_KIND_NUMBER : COMPILER_VALUE_KIND_TOP;
-	const rightNumeric = compilerValueKindMaskIsSubset(
-		right,
-		COMPILER_VALUE_KIND_NUMERIC_PRIMITIVE,
-	);
-	if (operation === "binary")
-		return leftNumeric || rightNumeric
+		return COMPILER_VALUE_KIND_NUMBER | (bigint(left) ? COMPILER_VALUE_KIND_BIGINT : 0);
+	const numeric =
+		COMPILER_VALUE_KIND_NUMBER |
+		(bigint(left) && bigint(right) ? COMPILER_VALUE_KIND_BIGINT : 0);
+	if (operation === "binary") return numeric;
+	const number =
+		(left & MAY_BECOME_NUMBER) !== 0 && (right & MAY_BECOME_NUMBER) !== 0
 			? COMPILER_VALUE_KIND_NUMBER
-			: COMPILER_VALUE_KIND_TOP;
-	if (
-		compilerValueKindMaskIsSubset(left, COMPILER_VALUE_KIND_STRING) ||
-		compilerValueKindMaskIsSubset(right, COMPILER_VALUE_KIND_STRING)
-	)
-		return COMPILER_VALUE_KIND_STRING;
-	return leftNumeric && rightNumeric
-		? COMPILER_VALUE_KIND_NUMBER
-		: COMPILER_VALUE_KIND_TOP;
+			: 0;
+	return (
+		(numeric & ~COMPILER_VALUE_KIND_NUMBER) |
+		number |
+		((left | right) & MAY_BECOME_STRING ? COMPILER_VALUE_KIND_STRING : 0)
+	);
 }
 
 // Describes normal completion only; coercion can still call user code, collect or throw.

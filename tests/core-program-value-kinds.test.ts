@@ -24,6 +24,7 @@ import {
 	withProgramClosure,
 } from "../src/compiler/shared/compiler-facts.ts";
 import {
+	COMPILER_VALUE_KIND_BIGINT,
 	COMPILER_VALUE_KIND_STRING,
 	COMPILER_VALUE_KIND_NUMBER,
 	COMPILER_VALUE_KIND_TOP,
@@ -257,7 +258,7 @@ describe("whole-program Core value kinds", () => {
 				}).kinds;
 				expect(kinds.summary(callerId).returnKind).toBe(
 					unknown && operator !== "+"
-						? COMPILER_VALUE_KIND_TOP
+						? COMPILER_VALUE_KIND_NUMBER | COMPILER_VALUE_KIND_BIGINT
 						: COMPILER_VALUE_KIND_NUMBER,
 				);
 			}

@@ -31,6 +31,7 @@ import {
 	conservativeCompilerProgramFacts,
 } from "../src/compiler/shared/compiler-facts.ts";
 import {
+	COMPILER_VALUE_KIND_BIGINT,
 	COMPILER_VALUE_KIND_BOOLEAN,
 	COMPILER_VALUE_KIND_NUMBER,
 	COMPILER_VALUE_KIND_TOP,
@@ -395,7 +396,7 @@ describe("Core local proofs and representations", () => {
 					for (const value of [seed!, joined, updated!]) {
 						expect(kinds.latticeMask(value)).toBe(
 							unknown && operator !== "+"
-								? COMPILER_VALUE_KIND_TOP
+								? COMPILER_VALUE_KIND_NUMBER | COMPILER_VALUE_KIND_BIGINT
 								: COMPILER_VALUE_KIND_NUMBER,
 						);
 					}

@@ -216,9 +216,14 @@ describe("connected native entry contracts", () => {
 		expect(entry.callOverrides).toHaveLength(2);
 		for (const call of entry.callOverrides!) {
 			expect(call).toMatchObject({ functionIndex: leaf, guarded: true });
-			expect(
-				image.native.functions[visitor]!.instructions[call.instructionIp],
-			).not.toHaveProperty("directEntryId");
+			// The generic body knows only that the first argument is a Number.
+			const genericEntry =
+				image.native.functions[visitor]!.instructions[call.instructionIp];
+			if (genericEntry?.kind === "call" && genericEntry.directEntryId !== undefined)
+				expect(
+					image.native.functions[leaf]!.directEntries[genericEntry.directEntryId]!
+						.parameterRepresentations,
+				).toEqual(["number", "boxed"]);
 			const instruction =
 				image.native.functions[visitor]!.body.instructions[call.instructionIp]!;
 			expect(instruction.opcode).toBe("CALL");
