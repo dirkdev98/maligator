@@ -181,9 +181,9 @@ The independent target boundary and current storage contract are recorded in
       module bindings such as `CoreEditor` or `KeywordDescTable`, whose modules
       sit in an import cycle or initialize them after a statement that calls out.
       Locked collection constructors and `Object.freeze` over literals already
-      extend the prefix. A call into a dependency outside the module's cycle, with
-      arguments that hold none of the module's functions, cannot reach those
-      functions either, so the prefix could continue past it.
+      extend the prefix; continuing past calls into dependencies that receive only
+      data changed nothing in the self-compile. What remains are import cycles and
+      immediately invoked setup functions, such as the one that opens meriyah.
 - [ ] Bring the native self-compile's memory closer to its live set. Peak live
       bytes stay near 900 MB, but maximum RSS is 4.4 GB now that process GC
       pressure backs off past its budget (it was 3.5 GB while pressure forced 183
