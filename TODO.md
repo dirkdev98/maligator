@@ -619,10 +619,15 @@ contracts or investigates costs still visible after the string follow-ups.
       Moving the entry checks into each compiled function's prologue would inline
       them once per function instead of once per call site.
 - [ ] Remove the repeated shape checks of the objects phase's particle loop. It
-      takes 75 ms against Node's 19 and performs 14 to 17 inline-cache shape checks
-      per iteration on the same receiver, whose shape the loop never changes. One
-      guard on that receiver's shape could cover its loads and stores of number
-      fields, falling back to the unchanged generic code before any side effect.
+      takes about 70 ms against Node's 19 and performs 14 to 17 inline-cache shape
+      checks per iteration on the same receiver, whose shape the loop never
+      changes. One guard on that receiver's shape could cover its loads and stores
+      of number fields, falling back to the unchanged generic code before any side
+      effect. Numeric property update plans do not pay for themselves here: the
+      standalone loop runs in 59 ms with them and 55 ms with generic loads and
+      stores, because their begin and commit checks cost more than the boxing they
+      save. Make them cheaper or drop them; functions with numeric fusion
+      already skip them.
 - [ ] Keep Collatz-style integer loops in int32. The core phase's remaining gap
       to Node is `collatzSteps` alone, about 70 ms against 37; its prime and throw
       loops already beat Node. The loop is clean double arithmetic whose `& 1`
