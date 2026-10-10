@@ -8215,6 +8215,34 @@ function emitInstruction(
 							poll(),
 						];
 					} else if (
+						(MATH_UNARY_NATIVE_CALL.has(instruction.operation) && first !== undefined) ||
+						(MATH_BINARY_OPERATIONS.has(instruction.operation) &&
+							instruction.arguments.length === 2)
+					) {
+						// Only a non-Number argument reaches ToNumber and its observable coercion.
+						const guards: Array<string> = [];
+						const number = (operand: number): string => {
+							const numeric = nativeNumberOperand(operand);
+							if (numeric !== null) return numeric;
+							const value = boxedOperand(operand);
+							guards.push(`mal_ops_is_number(${value})`);
+							return `mal_ops_number_as_f64(${value})`;
+						};
+						const expression = MATH_BINARY_OPERATIONS.has(instruction.operation)
+							? nativeMathBinaryExpr(
+									instruction.operation,
+									number(first!),
+									number(second!),
+								)
+							: nativeMathUnaryExpr(instruction.operation, number(first!));
+						if (expression !== null) {
+							guard = guards.length === 0 ? "true" : guards.join(" && ");
+							direct = [
+								storeMathNumber(instruction.dst, instruction.operation, expression),
+								poll(),
+							];
+						}
+					} else if (
 						["parseInt", "parseFloat"].includes(instruction.operation) &&
 						first !== undefined
 					) {

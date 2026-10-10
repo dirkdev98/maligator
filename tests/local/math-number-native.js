@@ -319,3 +319,41 @@ for (const a of [
 		);
 	}
 }
+// Arguments that are not provably Numbers take the guarded kernel or the coercing call.
+let coercions = 0;
+const counted = {
+	valueOf() {
+		coercions++;
+		return -2.5;
+	},
+};
+function boxedMath(value, other) {
+	return [
+		Math.round(value),
+		Math.floor(value),
+		Math.abs(value),
+		Math.max(value, other),
+		Math.min(other, value),
+	];
+}
+globalThis.boxedMath = boxedMath;
+for (const [index, input] of [
+	2.5,
+	-2.5,
+	-0,
+	0 / 0,
+	"3.5",
+	null,
+	true,
+	counted,
+].entries()) {
+	console.log(
+		"round boxed",
+		index,
+		globalThis
+			.boxedMath(input, index % 2 === 0 ? -0 : 1.5)
+			.map(render)
+			.join(","),
+	);
+}
+console.log("round boxed coercions", coercions);
