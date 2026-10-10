@@ -172,12 +172,18 @@ The independent target boundary and current storage contract are recorded in
 - [ ] Fold the TDZ checks that remain on module and captured bindings. Module
       bindings initialized before their module can run user code, captured cells
       read by closures created after their declaration, and an owner's reads after
-      a dominating initialization no longer check; 5,611 of 18,830 checks remain
+      a dominating initialization no longer check; 5,073 of 18,830 checks remain
       in the self-compile C. Hoisted function declarations still check every outer
       binding they read, because they exist before the declaration runs; letting
       a helper inherit the bindings declared before its first reference removed
       only 10 more in the self-compile, so that was not kept. The merged module
-      init keeps the checks on bindings it writes itself.
+      init keeps the checks on bindings it writes itself. Most of the rest read
+      module bindings such as `CoreEditor` or `KeywordDescTable`, whose modules
+      sit in an import cycle or initialize them after a statement that calls out.
+      Locked collection constructors and `Object.freeze` over literals already
+      extend the prefix. A call into a dependency outside the module's cycle, with
+      arguments that hold none of the module's functions, cannot reach those
+      functions either, so the prefix could continue past it.
 - [ ] Bring the native self-compile's memory closer to its live set. Peak live
       bytes stay near 900 MB, but maximum RSS is 4.4 GB now that process GC
       pressure backs off past its budget (it was 3.5 GB while pressure forced 183
