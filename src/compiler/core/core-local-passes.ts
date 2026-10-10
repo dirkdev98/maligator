@@ -1622,7 +1622,8 @@ const foldRedundantTdzChecks: CoreFunctionPass = {
 				(opcode === "move" && emptyInitializer(instructionOperand(fn, definition, 0)))
 			);
 		};
-		// Store order describes this activation's cells only while no environment rebinds.
+		// Per-iteration bindings live in pushed loop scopes, so the owner's own cells
+		// are created once per activation and reset only by explicit empty stores.
 		let ownCellStores:
 			| Map<number, Array<{ instruction: CoreInstructionId; empty: boolean }>>
 			| undefined;
@@ -1630,13 +1631,11 @@ const foldRedundantTdzChecks: CoreFunctionPass = {
 			if (ownCellStores !== undefined) return ownCellStores;
 			ownCellStores = new Map();
 			for (const instruction of fn.instructionIds()) {
-				if (fn.instructionKind(instruction) !== "operation") continue;
-				const opcode = fn.instructionOpcodeName(instruction);
-				if (opcode === "envPush" || opcode === "envCopy" || opcode === "envPop") {
-					ownCellStores.clear();
-					return ownCellStores;
-				}
-				if (opcode !== "storeCaptured") continue;
+				if (
+					fn.instructionKind(instruction) !== "operation" ||
+					fn.instructionOpcodeName(instruction) !== "storeCaptured"
+				)
+					continue;
 				const { functionIndex, index } = fn.instructionAttributes(instruction);
 				if (functionIndex !== item.function || typeof index !== "number") continue;
 				const stores = ownCellStores.get(index) ?? [];
