@@ -8358,10 +8358,11 @@ function emitInstruction(
 				if (expression !== null && reps[dst] !== "boolean" && reps[dst] !== "int32")
 					return [storeNumber(dst, expression)];
 			}
-			if (operator === "+" && reps[dst] === "number") {
+			// A number-represented ToNumeric result is proven not to be a BigInt.
+			if ((operator === "+" || operator === "tonumeric") && reps[dst] === "number") {
 				const value = `unary_number_${ip}`;
 				return [
-					`MalValue ${value} = ${profileCall("unary", `mal_vm_unary_op_fast(vm, MAL_UNARY_PLUS, ${boxed(src)})`)};`,
+					`MalValue ${value} = ${profileCall("unary", `mal_vm_unary_op_fast(vm, ${emitUnaryOperator(operator)}, ${boxed(src)})`)};`,
 					throwCheck(),
 					`r${dst} = ${callValue(dst, value)};`,
 				];
