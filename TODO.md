@@ -607,11 +607,15 @@ contracts or investigates costs still visible after the string follow-ups.
       in `mal_vm_enter_compiled`, links a root frame whose slots only its slow
       paths need, and rechecks the TDZ of the module constant it reads. The native
       frame repeats what the root-frame chain already records, and a root frame
-      could be linked on the first collecting edge instead of at entry.
-- [ ] Keep Collatz-style integer loops in int32. The core phase's `collatzSteps`
-      runs at half Node's speed because `value` stays a double whose `& 1` converts
-      every iteration; Node speculates int32 with an overflow check. An overflow-
-      guarded int32 loop with a double continuation would remove the conversion.
+      could be linked on the first collecting edge instead of at entry. The
+      `quote` site already passes `order`'s fields to field entries and allocates
+      the object only on a guard miss; what remains there is the same frame work.
+- [ ] Keep Collatz-style integer loops in int32. The core phase's remaining gap
+      to Node is `collatzSteps` alone, about 70 ms against 37; its prime and throw
+      loops already beat Node. The loop is clean double arithmetic whose `& 1`
+      converts every iteration (one FJCVTZS on arm64); Node speculates int32 with
+      an overflow check. An overflow-guarded int32 loop with a double continuation
+      would take the conversion off the loop's serial chain.
 
 - [ ] Fuse projected split/trim length consumption without flattening the shared
       rope or repeatedly descending from its root for each field's edges and slice.
