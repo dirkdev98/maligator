@@ -1313,6 +1313,8 @@ typedef struct {
     MalGlobalBinding *bindings;
     i32 count;
     i32 capacity;
+    /** Changes whenever a binding is added or removed; global property caches compare it. */
+    u32 generation;
 } MalGlobalEnvironment;
 
 #if MAL_REALMS
@@ -1395,6 +1397,13 @@ typedef struct MalGlobalPropertyCacheEntry {
     void *entry;
     u64 table_handle_epoch;
     i32 string_index;
+    /**
+     * Nonzero once a load proved the name has no lexical binding at
+     * `binding_generation` and resolves to this data entry: the entry's exact
+     * key word, which also encodes liveness and property flags.
+     */
+    u32 binding_generation;
+    u64 data_key;
 } MalGlobalPropertyCacheEntry;
 
 /**

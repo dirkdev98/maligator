@@ -313,5 +313,43 @@ for (let i = 0; i < 100; i++) {
 }
 ok("outer realm stays isolated", typeof realmCachedGlobal === "undefined");
 
+// A function's repeated reads of an unresolved name hit the cached data entry; every
+// change to that entry must still be observed.
+function readCachedCounter() {
+	return cachedCounter;
+}
+globalThis.cachedCounter = 1;
+for (let i = 0; i < 100; i++) ok("cached data read", readCachedCounter() === 1);
+globalThis.cachedCounter = 2;
+ok("cached read sees a new value", readCachedCounter() === 2);
+let cachedCounterGets = 0;
+Object.defineProperty(globalThis, "cachedCounter", {
+	configurable: true,
+	get() {
+		cachedCounterGets++;
+		return 3;
+	},
+});
+ok(
+	"cached read calls a getter that replaced the data property",
+	readCachedCounter() === 3 && readCachedCounter() === 3 && cachedCounterGets === 2,
+);
+delete globalThis.cachedCounter;
+ok(
+	"cached read of a deleted property throws",
+	caught(readCachedCounter) instanceof ReferenceError,
+);
+globalThis.cachedCounter = 4;
+ok("cached read sees a re-added property", readCachedCounter() === 4);
+function readRound() {
+	return Math.round(2.5);
+}
+for (let i = 0; i < 100; i++) ok("cached Math read", readRound() === 3);
+const originalMath = Math;
+globalThis.Math = { round: () => "replaced" };
+ok("cached read sees a replaced Math", readRound() === "replaced");
+globalThis.Math = originalMath;
+ok("cached read sees the restored Math", readRound() === 3);
+
 ok("checks ran", passed > 0);
 console.log("global-property-cache PASS");

@@ -41,6 +41,12 @@ struct MalTable {
  * Read a private element through a symbol's 1-based entry hint. Exact identity of
  * the stored key makes a hint safe across receivers, growth, and compaction.
  */
+/** The row behind an entry handle, or null when the handle is out of range. */
+static inline const MalTableEntry *mal_table_handle_row(const MalTable *table, const void *handle) {
+    u32 index = (u32) ((uptr) handle - 1);
+    return index < table->entry_count ? &table->entries[index] : nullptr;
+}
+
 static inline bool mal_table_private_hint_read(
     const MalTable *table, MalValue symbol, u32 hint, MalValue *value
 ) {

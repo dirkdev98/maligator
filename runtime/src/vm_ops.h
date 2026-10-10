@@ -3078,11 +3078,53 @@ void mal_vm_op_merge_data_properties(MalVm *vm, MalValue target_value, MalValue 
 /** Set [[Prototype]] for an object-literal `__proto__:` member or class heritage. */
 void mal_vm_op_set_prototype(MalVm *vm, MalValue object_value, MalValue prototype_value, bool literal);
 
+static inline MalGlobalEnvironment *mal_vm_global_environment(MalVm *vm) {
+#if MAL_REALMS
+    return &vm->current_realm->global_environment;
+#else
+    return &vm->global_environment;
+#endif
+}
+
+/* Names such as `Math` resolve to the same global-object data entry on every load;
+ * a matching key word proves the entry is still live with the same attributes. */
+static inline bool mal_vm_global_data_property_cached(
+    MalVm *vm, i32 name_string_index, MalValue *out
+) {
+    if (vm->global_property_cache == nullptr) return false;
+    const MalGlobalPropertyCacheEntry *cache = &vm->global_property_cache[
+        (u32) name_string_index & (MAL_GLOBAL_PROPERTY_CACHE_SIZE - 1u)];
+    if (cache->string_index != name_string_index || cache->data_key == 0 ||
+        cache->realm_intrinsics != vm->intrinsics ||
+        cache->binding_generation != mal_vm_global_environment(vm)->generation) {
+        return false;
+    }
+    MalValue global = vm->intrinsics[MAL_INTRINSIC_GLOBAL_THIS];
+    if (!mal_value_is_heap_type(global, MAL_HEAP_OBJECT)) return false;
+    const MalObject *global_object = (const MalObject *) mal_value_to_heap(global);
+    const MalTable *table = mal_object_overflow(global_object);
+    if (global_object != cache->global_object || table != cache->table ||
+        table->handle_epoch != cache->table_handle_epoch) {
+        return false;
+    }
+    const MalTableEntry *row = mal_table_handle_row(table, cache->entry);
+    if (row == nullptr || row->key != cache->data_key) return false;
+    *out = row->payload.value;
+    return true;
+}
+
+/** Lexical bindings, the global object's own and inherited properties, and the cache fill. */
+MalValue mal_vm_op_load_global_property_slow(MalVm *vm, i32 name_string_index);
+
 /**
  * Sloppy-mode read of an unresolved name: return the global object's property
  * `name_string_index`, or throw ReferenceError if it is absent.
  */
-MalValue mal_vm_op_load_global_property(MalVm *vm, i32 name_string_index);
+static inline MalValue mal_vm_op_load_global_property(MalVm *vm, i32 name_string_index) {
+    MalValue cached;
+    if (mal_vm_global_data_property_cached(vm, name_string_index, &cached)) return cached;
+    return mal_vm_op_load_global_property_slow(vm, name_string_index);
+}
 void mal_vm_op_declare_global_lexical(MalVm *vm, i32 name_string_index, i32 index, bool immutable, bool check_only);
 MalValue mal_vm_op_global_binding_query(MalVm *vm, i32 name_string_index, u8 query);
 void mal_op_declare_global_lexical(MalCallable *callable, const MalInstruction *instruction);

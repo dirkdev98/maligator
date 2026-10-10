@@ -7218,13 +7218,6 @@ static MalPropertyLookup mal_vm_global_dictionary_lookup(
     return lookup;
 }
 
-static MalGlobalEnvironment *mal_vm_global_environment(MalVm *vm) {
-#if MAL_REALMS
-    return &vm->current_realm->global_environment;
-#else
-    return &vm->global_environment;
-#endif
-}
 
 static MalGlobalBinding *mal_vm_global_binding(MalVm *vm, i32 name_string_index) {
     MalGlobalEnvironment *environment = mal_vm_global_environment(vm);
@@ -7246,6 +7239,7 @@ static void mal_vm_add_global_binding(MalVm *vm, i32 name_string_index, i32 inde
         environment->bindings = realloc(
             environment->bindings, (usize) environment->capacity * sizeof(MalGlobalBinding));
     }
+    environment->generation++;
     environment->bindings[environment->count++] = (MalGlobalBinding) {
         .name_string_index = name_string_index, .global_index = index, .immutable = immutable,
     };
@@ -7275,7 +7269,7 @@ void mal_op_declare_global_lexical(MalCallable *callable, const MalInstruction *
         instruction->as.declare_global_lexical.check_only);
 }
 
-MalValue mal_vm_op_load_global_property(MalVm *vm, i32 name_string_index) {
+MalValue mal_vm_op_load_global_property_slow(MalVm *vm, i32 name_string_index) {
     MalGlobalBinding *binding = mal_vm_global_binding(vm, name_string_index);
     if (binding != nullptr && binding->global_index >= 0) {
         MalValue value = vm->globals[binding->global_index];
@@ -7290,6 +7284,17 @@ MalValue mal_vm_op_load_global_property(MalVm *vm, i32 name_string_index) {
     MalPropertyLookup own = mal_vm_global_dictionary_lookup(
         vm, name_string_index, &global_object, &key);
     if (own.present && !(own.desc.flags & MAL_PROPERTY_ACCESSOR)) {
+        MalGlobalPropertyCacheEntry *cache = vm->global_property_cache == nullptr
+            ? nullptr
+            : &vm->global_property_cache[
+                (u32) name_string_index & (MAL_GLOBAL_PROPERTY_CACHE_SIZE - 1u)];
+        const MalTable *table = global_object == nullptr ? nullptr : mal_object_overflow(global_object);
+        const MalTableEntry *row = table == nullptr ? nullptr : mal_table_handle_row(table, own.entry);
+        if (cache != nullptr && row != nullptr && cache->string_index == name_string_index &&
+            cache->entry == own.entry && cache->table == table) {
+            cache->binding_generation = mal_vm_global_environment(vm)->generation;
+            cache->data_key = row->key;
+        }
         return own.desc.value;
     }
 
@@ -7441,6 +7446,7 @@ MalValue mal_vm_op_global_binding_query(MalVm *vm, i32 name_string_index, u8 que
             MalGlobalEnvironment *environment = mal_vm_global_environment(vm);
             i32 index = (i32) (binding - environment->bindings);
             environment->bindings[index] = environment->bindings[--environment->count];
+            environment->generation++;
         }
         return mal_value_new_boolean(deleted);
     }
