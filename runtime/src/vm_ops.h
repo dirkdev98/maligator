@@ -2597,11 +2597,44 @@ static inline MalValue mal_vm_indexed_fast_load_full(MalVm *vm, MalValue object_
     return mal_vm_op_load_property_ic(vm, object_value, key_value, ic);
 }
 
-/** Byte reads from Uint8Array and Buffer views and Latin-1 character reads from
- * flat strings drive text loops; test them before the complete keyed load.
- * Forcing this inline at every keyed-load site grew large generated programs
- * by several percent. */
-static inline MalValue mal_vm_indexed_fast_load(
+/**
+ * An in-bounds element of a fixed, non-BigInt view over an unshared, attached
+ * buffer. Integer-indexed [[Get]] never consults the prototype chain, so a view
+ * whose type the compiler could not prove still answers without the keyed path.
+ */
+static inline __attribute__((always_inline)) bool mal_vm_typed_array_try_get_index(
+    MalValue receiver, f64 index, MalValue *out
+) {
+    if (!mal_value_is_typed_array_object(receiver)) return false;
+    const MalTypedArrayObject *array = mal_value_to_typed_array_object(receiver);
+    const MalArrayBufferObject *buffer = array->buffer;
+    MalTypedArrayKind kind = array->kind;
+    if (kind >= MAL_TA_BIGINT64 || array->length_tracking || buffer == nullptr ||
+        buffer->detached || buffer->shared_memory != nullptr ||
+        !(index >= 0 && index < (f64) array->length)) {
+        return false;
+    }
+    static const u8 element_shifts[MAL_TA_BIGINT64] = {0, 0, 0, 1, 1, 2, 2, 2, 3};
+    u32 shift = element_shifts[kind];
+    u32 element = (u32) index;
+    // A resizable buffer can shrink below a fixed view's extent.
+    if ((f64) element != index ||
+        (u64) array->byte_offset + ((u64) array->length << shift) > buffer->byte_length) {
+        return false;
+    }
+    *out = mal_vm_numeric_typed_array_load_at(
+        buffer->data + array->byte_offset + ((usize) element << shift), kind);
+    return true;
+}
+
+/** The complete keyed load, kept out of line so its callers stay small. */
+__attribute__((noinline)) MalValue mal_vm_indexed_load_keyed(
+    MalVm *vm, MalValue object_value, MalValue key_value, MalInlineCache *ic
+);
+
+/** Latin-1 character reads from flat strings and numeric typed array reads drive
+ * text and kernel loops; test them before the complete keyed load. */
+static inline __attribute__((always_inline)) MalValue mal_vm_indexed_fast_load(
     MalVm *vm, MalValue object_value, MalValue key_value, MalInlineCache *ic
 ) {
     if (mal_ops_is_number(key_value) && mal_value_is_string(object_value)) {
@@ -2615,20 +2648,14 @@ static inline MalValue mal_vm_indexed_fast_load(
             MalString *character = unit <= UINT8_MAX ? vm->code_unit_strings[unit] : nullptr;
             if (character != nullptr) return mal_value_from_string(character);
         }
-    } else if (mal_ops_is_number(key_value) && mal_value_is_typed_array_object(object_value)) {
-        const MalTypedArrayObject *array = mal_value_to_typed_array_object(object_value);
-        const MalArrayBufferObject *buffer = array->buffer;
-        f64 index = mal_ops_number_as_f64(key_value);
-        if (array->kind == MAL_TA_UINT8 && !array->length_tracking && buffer != nullptr &&
-            !buffer->detached && index >= 0 && index < (f64) array->length &&
-            (u64) array->byte_offset + array->length <= buffer->byte_length) {
-            u32 element = (u32) index;
-            if ((f64) element == index) {
-                return mal_value_from_i32((u8) buffer->data[array->byte_offset + element]);
-            }
+    } else if (mal_ops_is_number(key_value)) {
+        MalValue element;
+        if (mal_vm_typed_array_try_get_index(
+                object_value, mal_ops_number_as_f64(key_value), &element)) {
+            return element;
         }
     }
-    return mal_vm_indexed_fast_load_full(vm, object_value, key_value, ic);
+    return mal_vm_indexed_load_keyed(vm, object_value, key_value, ic);
 }
 
 static inline void mal_vm_indexed_fast_store(MalVm *vm, MalValue object_value, MalValue key_value, MalValue value, bool strict, MalInlineCache *ic) {
@@ -2876,6 +2903,7 @@ static inline MalValue mal_vm_indexed_fast_load_index(MalVm *vm, MalValue object
     if (array != nullptr && mal_vm_array_try_get_index(array, index, &out)) {
         return out;
     }
+    if (mal_vm_typed_array_try_get_index(object_value, index, &out)) return out;
     return mal_vm_indexed_fast_load(vm, object_value, mal_ops_number_value(index), ic);
 }
 
