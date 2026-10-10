@@ -596,6 +596,20 @@ contracts or investigates costs still visible after the string follow-ups.
 
 ## Focused performance work
 
+- [ ] Close the closed-compiled JavaScript benchmark's per-call gap. Against Node,
+      its objects phase spends 55 ms on three-class `quote` dispatch (13 ms),
+      20 ms on an `arguments` function (12 ms) and 24 ms on a one-line closure
+      (10 ms). The closure's own work is a few instructions; each call also
+      publishes caller roots, checks the callee guard, pushes a native debug frame
+      in `mal_vm_enter_compiled`, links a root frame whose slots only its slow
+      paths need, and rechecks the TDZ of the module constant it reads. The native
+      frame repeats what the root-frame chain already records, and a root frame
+      could be linked on the first collecting edge instead of at entry.
+- [ ] Keep Collatz-style integer loops in int32. The core phase's `collatzSteps`
+      runs at half Node's speed because `value` stays a double whose `& 1` converts
+      every iteration; Node speculates int32 with an overflow check. An overflow-
+      guarded int32 loop with a double continuation would remove the conversion.
+
 - [ ] Fuse projected split/trim length consumption without flattening the shared
       rope or repeatedly descending from its root for each field's edges and slice.
       First prove split and trim results and their aliases do not escape through
