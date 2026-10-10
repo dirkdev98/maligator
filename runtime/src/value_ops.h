@@ -82,7 +82,7 @@ static inline f64 mal_number_min_max(f64 left, f64 right, bool maximum) {
  * (value_ops.h reaches both the runtime and the emitted C) so the native `%` path
  * inlines in hot loops. Everything else defers to fmod.
  */
-static inline f64 mal_number_remainder(f64 a, f64 b) {
+static inline __attribute__((always_inline)) f64 mal_number_remainder(f64 a, f64 b) {
     if (fabs(a) < fabs(b)) {
         return a;
     }
@@ -212,7 +212,7 @@ static inline MalValue mal_ops_construct_result(MalValue value, MalValue this_va
  * call per boxed arithmetic result — and so `mal_ops_number_as_f64` composed with
  * it (a chained guarded-numeric op re-boxing then re-unboxing) can fold to identity.
  */
-static inline MalValue mal_ops_number_value(f64 value) {
+static inline __attribute__((always_inline)) MalValue mal_ops_number_value(f64 value) {
     if (value >= INT32_MIN && value <= INT32_MAX) {
         i32 integer = (i32) value;
         if ((f64) integer == value && (integer != 0 || !signbit(value))) {
