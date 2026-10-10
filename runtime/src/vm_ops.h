@@ -2602,6 +2602,8 @@ static inline MalValue mal_vm_indexed_fast_load_full(MalVm *vm, MalValue object_
  * buffer. Integer-indexed [[Get]] never consults the prototype chain, so a view
  * whose type the compiler could not prove still answers without the keyed path.
  */
+static const u8 mal_vm_typed_array_element_shifts[MAL_TA_BIGINT64] = {0, 0, 0, 1, 1, 2, 2, 2, 3};
+
 static inline __attribute__((always_inline)) bool mal_vm_typed_array_try_get_index(
     MalValue receiver, f64 index, MalValue *out
 ) {
@@ -2614,8 +2616,7 @@ static inline __attribute__((always_inline)) bool mal_vm_typed_array_try_get_ind
         !(index >= 0 && index < (f64) array->length)) {
         return false;
     }
-    static const u8 element_shifts[MAL_TA_BIGINT64] = {0, 0, 0, 1, 1, 2, 2, 2, 3};
-    u32 shift = element_shifts[kind];
+    u32 shift = mal_vm_typed_array_element_shifts[kind];
     u32 element = (u32) index;
     // A resizable buffer can shrink below a fixed view's extent.
     if ((f64) element != index ||
@@ -2624,6 +2625,49 @@ static inline __attribute__((always_inline)) bool mal_vm_typed_array_try_get_ind
     }
     *out = mal_vm_numeric_typed_array_load_at(
         buffer->data + array->byte_offset + ((usize) element << shift), kind);
+    return true;
+}
+
+/**
+ * A Number written at an in-bounds index of a fixed, writable, non-BigInt view over
+ * an attached, unshared buffer, for values whose element conversion cannot run user
+ * code or differ from a plain cast. Clamped views and non-integral values for
+ * integer kinds take the complete store.
+ */
+static inline __attribute__((always_inline)) bool mal_vm_typed_array_try_set_index(
+    MalValue receiver, f64 index, MalValue value
+) {
+    if (!mal_value_is_typed_array_object(receiver) || !mal_ops_is_number(value)) return false;
+    MalTypedArrayObject *array = mal_value_to_typed_array_object(receiver);
+    MalArrayBufferObject *buffer = array->buffer;
+    MalTypedArrayKind kind = array->kind;
+    if (kind == MAL_TA_UINT8_CLAMPED || kind >= MAL_TA_BIGINT64 || array->length_tracking ||
+        buffer == nullptr || buffer->detached || buffer->immutable ||
+        buffer->shared_memory != nullptr || !(index >= 0 && index < (f64) array->length)) {
+        return false;
+    }
+    u32 shift = mal_vm_typed_array_element_shifts[kind];
+    u32 element = (u32) index;
+    if ((f64) element != index ||
+        (u64) array->byte_offset + ((u64) array->length << shift) > buffer->byte_length) {
+        return false;
+    }
+    byte *at = buffer->data + array->byte_offset + ((usize) element << shift);
+    f64 number = mal_ops_number_as_f64(value);
+    if (kind == MAL_TA_FLOAT64) {
+        mal_scalar_store_native_u64(at, mal_scalar_f64_to_bits(number));
+        return true;
+    }
+    if (kind == MAL_TA_FLOAT32) {
+        mal_scalar_store_native_u32(at, mal_scalar_f32_to_bits((f32) number));
+        return true;
+    }
+    if (!(number >= INT32_MIN && number <= INT32_MAX)) return false;
+    i32 integer = (i32) number;
+    if ((f64) integer != number) return false;
+    if (shift == 0) mal_scalar_store_native_u8(at, (u8) integer);
+    else if (shift == 1) mal_scalar_store_native_u16(at, (u16) integer);
+    else mal_scalar_store_native_u32(at, (u32) integer);
     return true;
 }
 
@@ -2667,6 +2711,7 @@ static inline void mal_vm_indexed_fast_store(MalVm *vm, MalValue object_value, M
                 return;
             }
         } else if (mal_value_is_typed_array_object(object_value)) {
+            if (mal_vm_typed_array_try_set_index(object_value, index, value)) return;
             MalTypedArrayObject *array = mal_value_to_typed_array_object(object_value);
             if (array->buffer->immutable) {
                 if (strict) {
@@ -2913,6 +2958,7 @@ static inline void mal_vm_indexed_fast_store_index(MalVm *vm, MalValue object_va
     if (array != nullptr && mal_vm_array_try_store(array, index, value)) {
         return;
     }
+    if (mal_vm_typed_array_try_set_index(object_value, index, value)) return;
     mal_vm_indexed_fast_store(vm, object_value, mal_ops_number_value(index), value, strict, ic);
 }
 

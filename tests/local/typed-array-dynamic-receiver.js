@@ -19,6 +19,9 @@ function hold(view) {
 function read(slot, index) {
 	return holders[slot].view[index];
 }
+function write(slot, index, value) {
+	holders[slot].view[index] = value;
+}
 function describe(value) {
 	if (typeof value === "bigint") return `${value}n`;
 	return Object.is(value, -0) ? "-0" : String(value);
@@ -40,6 +43,18 @@ for (const Kind of kinds) {
 		reads.push(describe(read(slot, index)));
 	}
 	output.push(`${Kind.name} ${reads.join(",")}`);
+}
+
+for (const Kind of kinds) {
+	if (Kind === BigInt64Array) continue;
+	const slot = hold(new Kind(8));
+	const values = [300, -129, 70000.75, -0, NaN, 2 ** 40 + 3, -2147483648, 0.5];
+	for (let index = 0; index < values.length; index++) write(slot, index, values[index]);
+	write(slot, 8, 1);
+	write(slot, 1.5, 1);
+	const reads = [];
+	for (let index = 0; index < 9; index++) reads.push(describe(read(slot, index)));
+	output.push(`${Kind.name} writes ${reads.join(",")}`);
 }
 
 const offset = new Int16Array(new ArrayBuffer(16), 4, 3);
@@ -66,6 +81,8 @@ const tracking = new Uint32Array(resizable);
 const trackingSlot = hold(tracking);
 output.push(`resizable ${read(fixedSlot, 3)},${read(trackingSlot, 3)}`);
 resizable.resize(8);
+write(fixedSlot, 0, 9);
+write(trackingSlot, 1, 11);
 output.push(
 	`shrunk ${read(fixedSlot, 0)},${read(trackingSlot, 1)},${read(trackingSlot, 3)}`,
 );
@@ -74,6 +91,7 @@ const detachable = new Float64Array([1.25, 2.5]);
 const detachableSlot = hold(detachable);
 output.push(`attached ${read(detachableSlot, 1)}`);
 detachable.buffer.transfer();
+write(detachableSlot, 0, 7);
 output.push(`detached ${read(detachableSlot, 1)},${read(detachableSlot, 0)}`);
 
 for (const line of output) console.log(line);
