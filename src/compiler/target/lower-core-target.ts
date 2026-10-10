@@ -1892,12 +1892,15 @@ function lowerFunctionToTarget(
 	for (const blockId of blockOrder) {
 		const loweredBlock = loweredBlockForCore.get(blockId)!;
 		const instructions = blocks[loweredBlock]!.instructions;
-		const handler = kernel.blockHandlerBlock(blockId);
+		const declaredHandler = kernel.blockHandlerBlock(blockId);
+		// The verified order is the exceptional-CFG RPO, so an omitted handler is one
+		// that none of this block's instructions can throw to.
+		const handler =
+			declaredHandler !== undefined && loweredBlockForCore.has(declaredHandler)
+				? declaredHandler
+				: undefined;
 		if (handler !== undefined) {
-			const targetBlock = loweredBlockForCore.get(handler);
-			if (targetBlock === undefined) {
-				throw new Error(`Core handler targets unreachable block b${handler}`);
-			}
+			const targetBlock = loweredBlockForCore.get(handler)!;
 			const parameterStart = kernel.blockParameterStart(handler);
 			const parameterCount = kernel.blockParameterCount(handler);
 			if (parameterCount === 0 || kernel.blockParameterRole(parameterStart) !== 1) {
