@@ -2,6 +2,9 @@
 
 #include <math.h>
 #include <string.h>
+#if defined(__ARM_FEATURE_JCVT)
+#include <arm_acle.h>
+#endif
 #include "./defaults.h"
 #include "heap.h"
 #include "heap_bigint.h"
@@ -171,6 +174,10 @@ static inline i32 mal_ops_u32_to_i32(u32 value) {
 
 /** ToInt32 for a value already known to be a JS Number. */
 static inline i32 mal_ops_number_to_i32(f64 number) {
+#if defined(__ARM_FEATURE_JCVT)
+    // FJCVTZS is ToInt32 in one instruction, including the modulo wrap, NaN and infinities.
+    return __jcvt(number);
+#else
     // In-range finite values need only C's truncating conversion. This is the
     // overwhelmingly common case for native bitwise code (indices, counters,
     // flags), and avoids the general ToUint32 fmod/ldexp path. Comparisons also
@@ -184,6 +191,7 @@ static inline i32 mal_ops_number_to_i32(f64 number) {
         return mal_ops_u32_to_i32((u32) (u64) (i64) number);
     }
     return mal_ops_u32_to_i32(mal_ops_number_to_uint32(number));
+#endif
 }
 
 /**
