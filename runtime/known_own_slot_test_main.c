@@ -6,6 +6,19 @@
 
 extern const MalRuntimeImage mal_runtime_image;
 
+// Execution may add a compact layout of a preseeded shape and promote whichever row
+// hit last, so a preseeded row survives as any position holding its logical shape.
+static bool retains_row(const MalInlineCache *ic, const MalShape *shape, u8 slot) {
+    if (ic->mode != MAL_IC_MODE_SHAPE) return false;
+    if (mal_shape_same_logical(ic->shape, shape) && ic->slot == slot) return true;
+    for (u8 i = 0; i < ic->poly_count; i++) {
+        if (mal_shape_same_logical(ic->poly_shape[i], shape) && mal_ic_poly_slot(ic, i) == slot) {
+            return true;
+        }
+    }
+    return false;
+}
+
 int main(void) {
     MalVm vm;
     mal_vm_init(&vm, &mal_runtime_image);
@@ -37,13 +50,9 @@ int main(void) {
     int code = 0;
     MalInlineCache *property_cache = vm.property_cache[0].sites;
     if (property_cache == nullptr ||
-        property_cache[0].mode != MAL_IC_MODE_SHAPE ||
-        property_cache[0].shape != vm.literal_shape_cache[0][1] ||
-        property_cache[0].slot != 0 ||
-        property_cache[2].shape != vm.literal_shape_cache[0][1] ||
-        property_cache[2].poly_count != 1 ||
-        property_cache[2].poly_shape[0] != vm.literal_shape_cache[0][2] ||
-        mal_ic_poly_slot(&property_cache[2], 0) != 1) {
+        !retains_row(&property_cache[0], vm.literal_shape_cache[0][1], 0) ||
+        !retains_row(&property_cache[2], vm.literal_shape_cache[0][1], 0) ||
+        !retains_row(&property_cache[2], vm.literal_shape_cache[0][2], 1)) {
         fprintf(stderr, "known own-slot IC was not preseeded\n");
         code = 1;
     }

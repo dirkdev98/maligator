@@ -16,6 +16,13 @@ function retainedHostInstallers(binary: string): Array<string> {
 		.sort();
 }
 
+// The host main always links the application API and the worker runtime it shuts down,
+// so their installers' objects are present whatever the program imports.
+const HOST_MAIN_INSTALLERS = [
+	"mal_host_install_maligator",
+	"mal_host_install_maligator_internal_workers",
+];
+
 describe("node host installer link retention", () => {
 	function installers(fixture: string, name: string): Array<string> {
 		const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-node-link-retention-"));
@@ -36,7 +43,7 @@ describe("node host installer link retention", () => {
 
 	it("retains only the node:path installer for a path-only program", () => {
 		expect(installers("tests/local/node-link-path.mjs", "node-link-path")).toEqual([
-			"mal_host_install_maligator",
+			...HOST_MAIN_INSTALLERS,
 			"mal_host_install_node_path",
 		]);
 	});
@@ -45,7 +52,7 @@ describe("node host installer link retention", () => {
 		expect(installers("tests/local/node-link-process.mjs", "node-link-process")).toEqual(
 			[
 				...new Set([
-					"mal_host_install_maligator",
+					...HOST_MAIN_INSTALLERS,
 					...[...HOST_MODULES.values()].map((module) => module.installer),
 				]),
 			].sort(),
@@ -55,12 +62,12 @@ describe("node host installer link retention", () => {
 	it("omits the path installer when its only read is optimized away", () => {
 		expect(
 			installers("tests/local/node-link-dead-path.mjs", "node-link-dead-path"),
-		).toEqual(["mal_host_install_maligator"]);
+		).toEqual(HOST_MAIN_INSTALLERS);
 	});
 
 	it("retains Buffer for a reachable free global", () => {
 		expect(installers("tests/local/node-link-buffer.mjs", "node-link-buffer")).toEqual([
-			"mal_host_install_maligator",
+			...HOST_MAIN_INSTALLERS,
 			"mal_host_install_node_buffer",
 		]);
 	});
@@ -68,6 +75,6 @@ describe("node host installer link retention", () => {
 	it("omits the Buffer installer when its imported read is optimized away", () => {
 		expect(
 			installers("tests/local/node-link-dead-buffer.mjs", "node-link-dead-buffer"),
-		).toEqual(["mal_host_install_maligator"]);
+		).toEqual(HOST_MAIN_INSTALLERS);
 	});
 });
