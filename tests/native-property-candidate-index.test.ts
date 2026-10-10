@@ -42,7 +42,6 @@ describe("shared native property candidate indexing", () => {
 				() => undefined,
 				new Set(),
 				true,
-				true,
 				body,
 			);
 			expect(shared).toEqual(standalone);
@@ -77,7 +76,6 @@ describe("shared native property candidate indexing", () => {
 				[],
 				() => undefined,
 				new Set(),
-				true,
 				true,
 				{
 					...body,
