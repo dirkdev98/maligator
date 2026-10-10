@@ -285,6 +285,12 @@ static bool mal_ascii_atom_cache_matches(
     const MalString *atom, const byte *name, usize length
 ) {
     if (atom->length != length) return false;
+    // Interned names are almost always flat Latin-1, which needs no iterator.
+    if (atom->latin1 && atom->storage < MAL_STRING_STORAGE_DEPENDENT) {
+        const u8 *units = atom->storage == MAL_STRING_STORAGE_INLINE
+            ? atom->inline_latin1_units : atom->latin1_units;
+        return memcmp(units, name, length) == 0;
+    }
     MalStringIterator iterator;
     MalStringSegment segment;
     mal_string_iterator_init(&iterator, atom, 0, length);
