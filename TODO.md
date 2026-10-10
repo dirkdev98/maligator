@@ -618,7 +618,12 @@ contracts or investigates costs still visible after the string follow-ups.
       array-length and array-index probes stay out of line in the large caller;
       forcing them inline cut the loop by 12% but grew the benchmark binary 1.6%.
       Moving the entry checks into each compiled function's prologue would inline
-      them once per function instead of once per call site.
+      them once per function instead of once per call site. The `arguments`
+      function's direct entry links a root frame only because its argument loads
+      are safepoints in the generic body, though the entry reads them as
+      parameters. The Core target verifier requires every Core safepoint to keep a
+      record in each entry, so dropping those needs entry-specific omissions in that
+      contract.
 - [ ] Remove the repeated shape checks of the objects phase's particle loop. It
       takes about 70 ms against Node's 19 and performs 14 to 17 inline-cache shape
       checks per iteration on the same receiver, whose shape the loop never
