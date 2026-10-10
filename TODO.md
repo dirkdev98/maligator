@@ -699,6 +699,13 @@ contracts or investigates costs still visible after the string follow-ups.
 
 ## Active correctness clusters
 
+- [ ] Restore the interpreted `await using` Test262 results. Against the
+      1 October baseline, 15 tests under `language/statements/await-using` and
+      `for-of/head-await-using-bound-names-fordecl-tdz.js` now fail in the
+      interpreted backend while passing compiled: use-before-initialization
+      reads and initializer `Symbol.asyncDispose`/`Symbol.dispose` validation.
+      They fail at HEAD without tonight's TDZ fold, so bisect from the baseline.
+
 - [ ] Apply computed object-literal accessor names at runtime. For
       `const k = Symbol("field"); const o = { get [k]() {} };`, the getter's
       name is currently empty instead of `get [field]`. Reuse the evaluated
