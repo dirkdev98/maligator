@@ -1262,14 +1262,14 @@ Mal.serve({
 		</main>
 
 		<footer class="site-footer">
-			<span>Maligator <span data-version>0.1.0-alpha.27</span></span>
+			<span>Maligator <span data-version>0.1.0-alpha.28</span></span>
 			<span>Self-contained. No analytics.</span>
 		</footer>
 
 		<!-- site-data:start -->
 		<script id="site-data" type="application/json">
 			{
-				"version": "0.1.0-alpha.27",
+				"version": "0.1.0-alpha.28",
 				"test262": [
 					{
 						"commit": "b0cffda1",
@@ -1781,6 +1781,23 @@ Mal.serve({
 						"openCompiledMs": 1117.278375,
 						"closedInterpretedMs": 3984.110625,
 						"openInterpretedMs": 4247.213833
+					},
+					{
+						"commit": "c468ba81",
+						"date": "2026-10-11T10:15:41+02:00",
+						"workload": "javascript-v1",
+						"runs": 5,
+						"nativeBuild": {
+							"optimizationFlags": ["-O2", "-g0", "-flto=thin"],
+							"lto": true,
+							"strip": true,
+							"compilerVersion": "Apple clang version 21.0.0 (clang-2100.3.34.2)",
+							"target": "aarch64-apple-darwin"
+						},
+						"closedCompiledMs": 462.772875,
+						"openCompiledMs": 572.114083,
+						"closedInterpretedMs": 3631.505917,
+						"openInterpretedMs": 3741.87025
 					}
 				],
 				"selfCompile": [
@@ -67920,6 +67937,5293 @@ Mal.serve({
 								"nodeOptimizeCore": 1,
 								"maligatorOptimizeCore": 0.999971523560694,
 								"hostGap": 1.0006695342336456,
+								"allocation": 1
+							}
+						}
+					},
+					{
+						"commit": "c468ba81",
+						"date": "2026-10-11T10:15:41+02:00",
+						"world": "closed",
+						"maligatorMs": 167469.888209,
+						"nodeMs": 43148.183833,
+						"maligatorPhases": {
+							"graphMs": 990,
+							"semanticMs": 1768,
+							"constructCoreMs": 15633,
+							"optimizeCoreMs": 76513,
+							"coreToExecutionMs": 9959,
+							"executionToImageMs": 28913,
+							"emitMs": 20046,
+							"writeMs": 1506
+						},
+						"nodePhases": {
+							"graphMs": 250,
+							"semanticMs": 385,
+							"constructCoreMs": 3438,
+							"optimizeCoreMs": 19589,
+							"coreToExecutionMs": 2793,
+							"executionToImageMs": 6827,
+							"emitMs": 6378,
+							"writeMs": 350
+						},
+						"runs": 5,
+						"units": 123,
+						"maligatorCodeUnits": 137251797,
+						"nodeCodeUnits": 137251797,
+						"platform": "darwin",
+						"arch": "arm64",
+						"nodeVersion": "v26.10.0",
+						"nativeBuild": {
+							"phasesMs": {
+								"runtime C projection": 1154.5922910000081,
+								"runtime C object reuse": 0,
+								"runtime C object compile": 40.6121249999851,
+								"runtime C · engine": 34.28370799997356,
+								"runtime C · host": 20.574374999967404,
+								"runtime C · runtime": 23.58941600000253,
+								"runtime": 1413.5356250000186,
+								"rust": 7.837459000002127,
+								"write generated C": 56.2668330000015,
+								"generated C objects": 54307.38070799998,
+								"link": 215.39850000001024,
+								"publish binary": 236.7361249999958
+							},
+							"totalMs": 57510.80716499995,
+							"translationUnits": 123,
+							"generatedCBytes": 137231884,
+							"objectBytes": 62085416,
+							"cCompilationMs": 54307.38070799998,
+							"linkMs": 215.39850000001024,
+							"stripMs": 0,
+							"peakRssBytes": 644677632
+						},
+						"executable": { "binaryBytes": 59008952, "binaryTextBytes": 49090176 },
+						"emittedC": {
+							"codeUnits": 137251797,
+							"rootPublicationStores": 272586,
+							"rootClears": 220642,
+							"rootMasks": 185451,
+							"wideRootMasks": 43101,
+							"undefinedRegisterStores": 102054,
+							"throwChecks": 129650,
+							"runtimeCallSites": 716840
+						},
+						"runtime": {
+							"maligator": {
+								"collections": 199,
+								"allocatedBytes": 75888083066,
+								"peakLiveBytes": 1199610032,
+								"maxPauseMs": 263.389,
+								"rssBytes": 5138415616
+							},
+							"nodePeakRssBytes": 3678404608
+						},
+						"cold": {
+							"node": {
+								"wallMs": 44190.410417,
+								"units": 125,
+								"codeUnits": 137263075,
+								"digest": "11a9c6e2930644251a961f4fb8b38231b567a91238a71b3ebaa324f3fb768f23",
+								"phases": {
+									"graphMs": 260,
+									"semanticMs": 387,
+									"constructCoreMs": 3458,
+									"optimizeCoreMs": 20112,
+									"coreToExecutionMs": 2799,
+									"coreToNativeMs": 2864,
+									"executionToImageMs": 7162,
+									"emitMs": 6418,
+									"writeMs": 387
+								}
+							},
+							"maligator": {
+								"wallMs": 170719.43525,
+								"units": 125,
+								"codeUnits": 137263075,
+								"digest": "11a9c6e2930644251a961f4fb8b38231b567a91238a71b3ebaa324f3fb768f23",
+								"phases": {
+									"graphMs": 959,
+									"semanticMs": 1809,
+									"constructCoreMs": 15713,
+									"optimizeCoreMs": 76779,
+									"coreToExecutionMs": 9628,
+									"coreToNativeMs": 12015,
+									"executionToImageMs": 29844,
+									"emitMs": 22321,
+									"writeMs": 1523
+								}
+							}
+						},
+						"coldSamples": {
+							"node": [
+								{
+									"wallMs": 44190.410417,
+									"units": 125,
+									"codeUnits": 137263075,
+									"digest": "11a9c6e2930644251a961f4fb8b38231b567a91238a71b3ebaa324f3fb768f23",
+									"phases": {
+										"graphMs": 260,
+										"semanticMs": 387,
+										"constructCoreMs": 3458,
+										"optimizeCoreMs": 20112,
+										"coreToExecutionMs": 2799,
+										"coreToNativeMs": 2864,
+										"executionToImageMs": 7162,
+										"emitMs": 6418,
+										"writeMs": 387
+									}
+								},
+								{
+									"wallMs": 43896.228083,
+									"units": 123,
+									"codeUnits": 137254232,
+									"digest": "3767dac53653042ff4abb658e90a29e8081d29d993a3c31d82ba7113d4942726",
+									"phases": {
+										"graphMs": 218,
+										"semanticMs": 381,
+										"constructCoreMs": 3465,
+										"optimizeCoreMs": 19899,
+										"coreToExecutionMs": 2737,
+										"coreToNativeMs": 3013,
+										"executionToImageMs": 6925,
+										"emitMs": 6576,
+										"writeMs": 372
+									}
+								},
+								{
+									"wallMs": 43319.280125,
+									"units": 122,
+									"codeUnits": 137249564,
+									"digest": "92d0e1d7a77f4a7ff1887f8de33d4ffb3089e44abb2e19a321ca0494b3ee082d",
+									"phases": {
+										"graphMs": 261,
+										"semanticMs": 384,
+										"constructCoreMs": 3413,
+										"optimizeCoreMs": 19709,
+										"coreToExecutionMs": 2779,
+										"coreToNativeMs": 2801,
+										"executionToImageMs": 6806,
+										"emitMs": 6461,
+										"writeMs": 362
+									}
+								}
+							],
+							"maligator": [
+								{
+									"wallMs": 170719.43525,
+									"units": 125,
+									"codeUnits": 137263075,
+									"digest": "11a9c6e2930644251a961f4fb8b38231b567a91238a71b3ebaa324f3fb768f23",
+									"phases": {
+										"graphMs": 959,
+										"semanticMs": 1809,
+										"constructCoreMs": 15713,
+										"optimizeCoreMs": 76779,
+										"coreToExecutionMs": 9628,
+										"coreToNativeMs": 12015,
+										"executionToImageMs": 29844,
+										"emitMs": 22321,
+										"writeMs": 1523
+									}
+								},
+								{
+									"wallMs": 168674.315625,
+									"units": 123,
+									"codeUnits": 137254232,
+									"digest": "3767dac53653042ff4abb658e90a29e8081d29d993a3c31d82ba7113d4942726",
+									"phases": {
+										"graphMs": 988,
+										"semanticMs": 1778,
+										"constructCoreMs": 15612,
+										"optimizeCoreMs": 77292,
+										"coreToExecutionMs": 10024,
+										"coreToNativeMs": 11501,
+										"executionToImageMs": 30164,
+										"emitMs": 19644,
+										"writeMs": 1520
+									}
+								},
+								{
+									"wallMs": 172760.075083,
+									"units": 122,
+									"codeUnits": 137249564,
+									"digest": "92d0e1d7a77f4a7ff1887f8de33d4ffb3089e44abb2e19a321ca0494b3ee082d",
+									"phases": {
+										"graphMs": 956,
+										"semanticMs": 1774,
+										"constructCoreMs": 15613,
+										"optimizeCoreMs": 77288,
+										"coreToExecutionMs": 9995,
+										"coreToNativeMs": 11630,
+										"executionToImageMs": 30818,
+										"emitMs": 22935,
+										"writeMs": 1615
+									}
+								}
+							]
+						},
+						"warm": {
+							"node": [
+								{
+									"wallMs": 43927.582916,
+									"units": 123,
+									"codeUnits": 137251797,
+									"digest": "97ef22e6c32bb5dc29af8c594d81e0d9edce79b3ce1b94f6281f6758c2f8c8f3",
+									"phases": {
+										"graphMs": 250,
+										"semanticMs": 382,
+										"constructCoreMs": 3570,
+										"optimizeCoreMs": 19589,
+										"coreToExecutionMs": 2894,
+										"coreToNativeMs": 3070,
+										"executionToImageMs": 6962,
+										"emitMs": 6506,
+										"writeMs": 359
+									}
+								},
+								{
+									"wallMs": 43148.183833,
+									"units": 123,
+									"codeUnits": 137251797,
+									"digest": "97ef22e6c32bb5dc29af8c594d81e0d9edce79b3ce1b94f6281f6758c2f8c8f3",
+									"phases": {
+										"graphMs": 220,
+										"semanticMs": 388,
+										"constructCoreMs": 3438,
+										"optimizeCoreMs": 19648,
+										"coreToExecutionMs": 2661,
+										"coreToNativeMs": 3100,
+										"executionToImageMs": 6667,
+										"emitMs": 6378,
+										"writeMs": 350
+									}
+								},
+								{
+									"wallMs": 42622.044542,
+									"units": 123,
+									"codeUnits": 137251797,
+									"digest": "97ef22e6c32bb5dc29af8c594d81e0d9edce79b3ce1b94f6281f6758c2f8c8f3",
+									"phases": {
+										"graphMs": 276,
+										"semanticMs": 391,
+										"constructCoreMs": 3393,
+										"optimizeCoreMs": 19386,
+										"coreToExecutionMs": 2741,
+										"coreToNativeMs": 2746,
+										"executionToImageMs": 6727,
+										"emitMs": 6279,
+										"writeMs": 344
+									}
+								},
+								{
+									"wallMs": 42919.114417,
+									"units": 123,
+									"codeUnits": 137251797,
+									"digest": "97ef22e6c32bb5dc29af8c594d81e0d9edce79b3ce1b94f6281f6758c2f8c8f3",
+									"phases": {
+										"graphMs": 256,
+										"semanticMs": 385,
+										"constructCoreMs": 3453,
+										"optimizeCoreMs": 19481,
+										"coreToExecutionMs": 2793,
+										"coreToNativeMs": 2765,
+										"executionToImageMs": 6926,
+										"emitMs": 6191,
+										"writeMs": 347
+									}
+								},
+								{
+									"wallMs": 43592.825292,
+									"units": 123,
+									"codeUnits": 137251797,
+									"digest": "97ef22e6c32bb5dc29af8c594d81e0d9edce79b3ce1b94f6281f6758c2f8c8f3",
+									"phases": {
+										"graphMs": 247,
+										"semanticMs": 378,
+										"constructCoreMs": 3415,
+										"optimizeCoreMs": 19689,
+										"coreToExecutionMs": 2866,
+										"coreToNativeMs": 3039,
+										"executionToImageMs": 6827,
+										"emitMs": 6403,
+										"writeMs": 375
+									}
+								}
+							],
+							"maligator": [
+								{
+									"wallMs": 168899.803875,
+									"units": 123,
+									"codeUnits": 137251797,
+									"digest": "97ef22e6c32bb5dc29af8c594d81e0d9edce79b3ce1b94f6281f6758c2f8c8f3",
+									"phases": {
+										"graphMs": 977,
+										"semanticMs": 1770,
+										"constructCoreMs": 15624,
+										"optimizeCoreMs": 76457,
+										"coreToExecutionMs": 9981,
+										"coreToNativeMs": 11416,
+										"executionToImageMs": 31016,
+										"emitMs": 20093,
+										"writeMs": 1478
+									}
+								},
+								{
+									"wallMs": 167469.888209,
+									"units": 123,
+									"codeUnits": 137251797,
+									"digest": "97ef22e6c32bb5dc29af8c594d81e0d9edce79b3ce1b94f6281f6758c2f8c8f3",
+									"phases": {
+										"graphMs": 990,
+										"semanticMs": 1768,
+										"constructCoreMs": 15633,
+										"optimizeCoreMs": 76497,
+										"coreToExecutionMs": 9959,
+										"coreToNativeMs": 11429,
+										"executionToImageMs": 29512,
+										"emitMs": 20046,
+										"writeMs": 1506
+									}
+								},
+								{
+									"wallMs": 167370.738917,
+									"units": 123,
+									"codeUnits": 137251797,
+									"digest": "97ef22e6c32bb5dc29af8c594d81e0d9edce79b3ce1b94f6281f6758c2f8c8f3",
+									"phases": {
+										"graphMs": 977,
+										"semanticMs": 1754,
+										"constructCoreMs": 15705,
+										"optimizeCoreMs": 76656,
+										"coreToExecutionMs": 10009,
+										"coreToNativeMs": 12314,
+										"executionToImageMs": 27977,
+										"emitMs": 20458,
+										"writeMs": 1452
+									}
+								},
+								{
+									"wallMs": 166822.615792,
+									"units": 123,
+									"codeUnits": 137251797,
+									"digest": "97ef22e6c32bb5dc29af8c594d81e0d9edce79b3ce1b94f6281f6758c2f8c8f3",
+									"phases": {
+										"graphMs": 996,
+										"semanticMs": 1768,
+										"constructCoreMs": 15608,
+										"optimizeCoreMs": 76920,
+										"coreToExecutionMs": 9770,
+										"coreToNativeMs": 11827,
+										"executionToImageMs": 28033,
+										"emitMs": 19799,
+										"writeMs": 1905
+									}
+								},
+								{
+									"wallMs": 167772.659458,
+									"units": 123,
+									"codeUnits": 137251797,
+									"digest": "97ef22e6c32bb5dc29af8c594d81e0d9edce79b3ce1b94f6281f6758c2f8c8f3",
+									"phases": {
+										"graphMs": 1018,
+										"semanticMs": 1841,
+										"constructCoreMs": 15881,
+										"optimizeCoreMs": 76513,
+										"coreToExecutionMs": 9901,
+										"coreToNativeMs": 12223,
+										"executionToImageMs": 28913,
+										"emitMs": 19825,
+										"writeMs": 1571
+									}
+								}
+							]
+						},
+						"phasesSample": {
+							"node": {
+								"wallMs": 42810.574958,
+								"units": 123,
+								"codeUnits": 137251797,
+								"digest": "97ef22e6c32bb5dc29af8c594d81e0d9edce79b3ce1b94f6281f6758c2f8c8f3",
+								"phases": {
+									"graphMs": 212,
+									"semanticMs": 380,
+									"constructCoreMs": 3398,
+									"optimizeCoreMs": 19587,
+									"coreToExecutionMs": 2691,
+									"coreToNativeMs": 2887,
+									"executionToImageMs": 6753,
+									"emitMs": 6252,
+									"writeMs": 357
+								},
+								"optimizer": {
+									"instrumentation": "phases",
+									"construction": {
+										"virtualPhisCreated": 2799891,
+										"virtualPhisCollapsed": 2196892,
+										"materializedBlockParameters": 602999,
+										"edgeArgumentsEmitted": 785762,
+										"definitionSnapshotEntriesCopied": 0,
+										"aliasResolutions": 2418118,
+										"maximumUnresolvedPhiDepth": 3
+									},
+									"input": {
+										"functions": 6458,
+										"blocks": 262468,
+										"instructions": 921902,
+										"values": 1122586,
+										"facts": 0,
+										"planCandidates": 0
+									},
+									"output": {
+										"functions": 6513,
+										"blocks": 129042,
+										"instructions": 559040,
+										"values": 381695,
+										"facts": 42409,
+										"planCandidates": 4625
+									},
+									"phases": [
+										{ "phase": "pre-optimization-verification", "elapsedMs": 695 },
+										{ "phase": "construction-cleanup", "elapsedMs": 0 },
+										{ "phase": "initial-local-optimization", "elapsedMs": 1 },
+										{ "phase": "structural-cfg-optimization", "elapsedMs": 2269 },
+										{ "phase": "dense-generation-barrier", "elapsedMs": 572 },
+										{ "phase": "post-barrier-local-optimization", "elapsedMs": 1173 },
+										{ "phase": "advanced-cfg-optimization", "elapsedMs": 993 },
+										{
+											"phase": "proof-and-representation-optimization",
+											"elapsedMs": 552
+										},
+										{ "phase": "memory-and-provenance-optimization", "elapsedMs": 6820 },
+										{ "phase": "late-local-cleanup", "elapsedMs": 393 },
+										{ "phase": "program-flow", "elapsedMs": 1373 },
+										{ "phase": "cross-call-transforms", "elapsedMs": 2978 },
+										{ "phase": "cross-call-memory-forwarding", "elapsedMs": 11 },
+										{ "phase": "specialization-discovery", "elapsedMs": 478 },
+										{ "phase": "specialization-selection", "elapsedMs": 455 },
+										{ "phase": "plan-verification", "elapsedMs": 249 },
+										{ "phase": "final-core-verification", "elapsedMs": 429 },
+										{ "phase": "sealing", "elapsedMs": 4 }
+									],
+									"checkpoints": [
+										{
+											"checkpoint": "after-core-construction",
+											"functions": { "live": 6458, "capacity": 6458 },
+											"blocks": { "live": 262468, "capacity": 262468 },
+											"instructions": { "live": 921902, "capacity": 921902 },
+											"values": { "live": 1122586, "capacity": 1122586 },
+											"uses": { "live": 1336162, "capacity": 1336162 },
+											"operands": { "live": 1336162, "capacity": 1336162 },
+											"blockParameters": { "live": 616417, "capacity": 616800 },
+											"terminatorEdges": { "live": 287296, "capacity": 287296 },
+											"terminatorArguments": 681425,
+											"handlerArguments": { "live": 104337, "capacity": 104337 },
+											"facts": { "live": 0, "capacity": 0 },
+											"effectRefinements": { "live": 0, "capacity": 0 },
+											"abandonedStorage": {
+												"operands": 0,
+												"blockParameters": 383,
+												"terminatorEdges": 0,
+												"handlerArguments": 0,
+												"effectRefinements": 0
+											}
+										},
+										{
+											"checkpoint": "after-initial-local-structural-optimization",
+											"functions": { "live": 6458, "capacity": 6458 },
+											"blocks": { "live": 122976, "capacity": 262468 },
+											"instructions": { "live": 631228, "capacity": 921923 },
+											"values": { "live": 394525, "capacity": 1122607 },
+											"uses": { "live": 612622, "capacity": 1340358 },
+											"operands": { "live": 612622, "capacity": 1403830 },
+											"blockParameters": { "live": 38801, "capacity": 630977 },
+											"terminatorEdges": { "live": 149362, "capacity": 290381 },
+											"terminatorArguments": 60310,
+											"handlerArguments": { "live": 37343, "capacity": 104337 },
+											"facts": { "live": 0, "capacity": 0 },
+											"effectRefinements": { "live": 0, "capacity": 0 },
+											"abandonedStorage": {
+												"operands": 791208,
+												"blockParameters": 592176,
+												"terminatorEdges": 141019,
+												"handlerArguments": 66994,
+												"effectRefinements": 0
+											}
+										},
+										{
+											"checkpoint": "after-construction-generation-finalization",
+											"functions": { "live": 6513, "capacity": 6513 },
+											"blocks": { "live": 123332, "capacity": 123332 },
+											"instructions": { "live": 633796, "capacity": 633796 },
+											"values": { "live": 396691, "capacity": 396691 },
+											"uses": { "live": 615532, "capacity": 615532 },
+											"operands": { "live": 615532, "capacity": 615532 },
+											"blockParameters": { "live": 39056, "capacity": 39056 },
+											"terminatorEdges": { "live": 149744, "capacity": 149744 },
+											"terminatorArguments": 60451,
+											"handlerArguments": { "live": 37343, "capacity": 37343 },
+											"facts": { "live": 0, "capacity": 0 },
+											"effectRefinements": { "live": 0, "capacity": 0 },
+											"abandonedStorage": {
+												"operands": 0,
+												"blockParameters": 0,
+												"terminatorEdges": 0,
+												"handlerArguments": 0,
+												"effectRefinements": 0
+											}
+										},
+										{
+											"checkpoint": "before-memory-and-provenance",
+											"functions": { "live": 6513, "capacity": 6513 },
+											"blocks": { "live": 123225, "capacity": 123679 },
+											"instructions": { "live": 540693, "capacity": 641821 },
+											"values": { "live": 368329, "capacity": 404334 },
+											"uses": { "live": 531035, "capacity": 619150 },
+											"operands": { "live": 531035, "capacity": 632770 },
+											"blockParameters": { "live": 34452, "capacity": 48320 },
+											"terminatorEdges": { "live": 149680, "capacity": 150047 },
+											"terminatorArguments": 43856,
+											"handlerArguments": { "live": 37303, "capacity": 37343 },
+											"facts": { "live": 41329, "capacity": 41503 },
+											"effectRefinements": { "live": 41252, "capacity": 41503 },
+											"abandonedStorage": {
+												"operands": 101735,
+												"blockParameters": 13868,
+												"terminatorEdges": 367,
+												"handlerArguments": 40,
+												"effectRefinements": 251
+											}
+										},
+										{
+											"checkpoint": "before-program-flow",
+											"functions": { "live": 6513, "capacity": 6513 },
+											"blocks": { "live": 123225, "capacity": 123679 },
+											"instructions": { "live": 540693, "capacity": 641821 },
+											"values": { "live": 368329, "capacity": 404334 },
+											"uses": { "live": 531035, "capacity": 619150 },
+											"operands": { "live": 531035, "capacity": 632770 },
+											"blockParameters": { "live": 34452, "capacity": 48320 },
+											"terminatorEdges": { "live": 149680, "capacity": 150047 },
+											"terminatorArguments": 43856,
+											"handlerArguments": { "live": 37303, "capacity": 37343 },
+											"facts": { "live": 41329, "capacity": 41503 },
+											"effectRefinements": { "live": 41252, "capacity": 41503 },
+											"abandonedStorage": {
+												"operands": 101735,
+												"blockParameters": 13868,
+												"terminatorEdges": 367,
+												"handlerArguments": 40,
+												"effectRefinements": 251
+											}
+										},
+										{
+											"checkpoint": "after-cross-call-transforms",
+											"functions": { "live": 6513, "capacity": 6513 },
+											"blocks": { "live": 129042, "capacity": 129499 },
+											"instructions": { "live": 559040, "capacity": 661764 },
+											"values": { "live": 381695, "capacity": 419262 },
+											"uses": { "live": 552849, "capacity": 634039 },
+											"operands": { "live": 552849, "capacity": 650252 },
+											"blockParameters": { "live": 36159, "capacity": 50005 },
+											"terminatorEdges": { "live": 157292, "capacity": 158096 },
+											"terminatorArguments": 47310,
+											"handlerArguments": { "live": 38519, "capacity": 38559 },
+											"facts": { "live": 42409, "capacity": 42583 },
+											"effectRefinements": { "live": 42306, "capacity": 42583 },
+											"abandonedStorage": {
+												"operands": 97403,
+												"blockParameters": 13846,
+												"terminatorEdges": 804,
+												"handlerArguments": 40,
+												"effectRefinements": 277
+											}
+										},
+										{
+											"checkpoint": "before-sealing",
+											"functions": { "live": 6513, "capacity": 6513 },
+											"blocks": { "live": 129042, "capacity": 129499 },
+											"instructions": { "live": 559040, "capacity": 661764 },
+											"values": { "live": 381695, "capacity": 419262 },
+											"uses": { "live": 552849, "capacity": 634039 },
+											"operands": { "live": 552849, "capacity": 650252 },
+											"blockParameters": { "live": 36159, "capacity": 50005 },
+											"terminatorEdges": { "live": 157292, "capacity": 158096 },
+											"terminatorArguments": 47310,
+											"handlerArguments": { "live": 38519, "capacity": 38559 },
+											"facts": { "live": 42409, "capacity": 42583 },
+											"effectRefinements": { "live": 42306, "capacity": 42583 },
+											"abandonedStorage": {
+												"operands": 97403,
+												"blockParameters": 13846,
+												"terminatorEdges": 804,
+												"handlerArguments": 40,
+												"effectRefinements": 277
+											}
+										},
+										{
+											"checkpoint": "after-sealing",
+											"functions": { "live": 6513, "capacity": 6513 },
+											"blocks": { "live": 129042, "capacity": 129499 },
+											"instructions": { "live": 559040, "capacity": 661764 },
+											"values": { "live": 381695, "capacity": 419262 },
+											"uses": { "live": 552849, "capacity": 634039 },
+											"operands": { "live": 552849, "capacity": 650252 },
+											"blockParameters": { "live": 36159, "capacity": 50005 },
+											"terminatorEdges": { "live": 157292, "capacity": 158096 },
+											"terminatorArguments": 47310,
+											"handlerArguments": { "live": 38519, "capacity": 38559 },
+											"facts": { "live": 42409, "capacity": 42583 },
+											"effectRefinements": { "live": 42306, "capacity": 42583 },
+											"abandonedStorage": {
+												"operands": 97403,
+												"blockParameters": 13846,
+												"terminatorEdges": 804,
+												"handlerArguments": 40,
+												"effectRefinements": 277
+											}
+										}
+									],
+									"passes": [],
+									"analyses": [],
+									"owners": [],
+									"discovery": {
+										"candidates": 0,
+										"byKind": {},
+										"stackObjects": 0,
+										"denseArrays": 0,
+										"numericFusions": 0,
+										"largestFanOut": 0
+									},
+									"program": {
+										"functionsAnalyzed": 0,
+										"functionsReused": 0,
+										"summaryFunctionsAnalyzed": 0,
+										"reachabilityFunctionsScanned": 0,
+										"callSites": 0,
+										"exactCallEdges": 0,
+										"wildcardCallers": 0,
+										"wildcardCallSites": 0,
+										"opaqueCallSites": 0,
+										"aggregateDependencies": 0,
+										"storedGraphRows": 0,
+										"storedGraphEntries": 0,
+										"sccs": 0,
+										"sccNodesAnalyzed": 0,
+										"sccEdgeVisits": 0,
+										"sccTransfers": 0,
+										"summaryChanges": 0,
+										"callerWakeups": 0,
+										"affectedCallers": 0,
+										"deadFunctions": 0
+									},
+									"transforms": {
+										"considered": 0,
+										"applied": 0,
+										"declined": 0,
+										"appliedByKind": {},
+										"declinedByReason": {},
+										"generatedCodeConsumed": 0,
+										"compilerWorkConsumed": 0,
+										"waves": 0,
+										"callerEditSessions": 0,
+										"callerLocalOptimizations": 0,
+										"programFlowResolves": 0,
+										"instructionsIntroduced": 0,
+										"blocksIntroduced": 0,
+										"callGraphFunctionsAnalyzed": 0,
+										"summaryFunctionsAnalyzed": 0,
+										"sccNodesAnalyzed": 0,
+										"sccEdgeVisits": 0,
+										"sccTransfers": 0,
+										"callerWakeups": 0,
+										"valueKindFunctionEvaluations": 0,
+										"valueKindFolds": 0,
+										"wildcardAggregateRecomputations": 0,
+										"exactReverseCallerVisits": 0,
+										"wildcardReverseCallerVisits": 0
+									},
+									"plan": {
+										"discovery": {
+											"opportunities": 0,
+											"attempted": 0,
+											"skipped": 0,
+											"compilerWork": 0,
+											"skippedByReason": {}
+										},
+										"admittedFunctions": 0,
+										"discovered": 0,
+										"selected": 0,
+										"declined": 0,
+										"discoveredByKind": {},
+										"selectedByKind": {},
+										"declinedByReason": {},
+										"generatedCodeConsumed": 0,
+										"compilerWorkConsumed": 0,
+										"verificationMs": 0
+									},
+									"queue": { "pushes": 0, "pops": 0, "maximumDepth": 0 },
+									"budget": { "workItems": 0, "edits": 0, "exhaustedPasses": [] },
+									"counters": {
+										"analysisQueries": 0,
+										"analysisRecomputations": 0,
+										"localRulesConsidered": 0,
+										"localRulesApplied": 0,
+										"functionScans": 0,
+										"programFlowJournalEntries": 0,
+										"programFlowDirtyFunctions": 0,
+										"programFlowLocalScans": 0,
+										"programFlowLocalInstructionVisits": 0,
+										"programFlowTransferRecords": 0,
+										"programFlowTransferReuses": 0,
+										"programFlowTargetWakeups": 0,
+										"programFlowSummaryWakeups": 0,
+										"programFlowValueKindWakeups": 0,
+										"programFlowReachabilityWakeups": 0,
+										"programFlowSccPops": 0,
+										"programFlowSccWakeups": 0,
+										"programFlowFunctionPops": 0,
+										"programFlowFunctionWakeups": 0,
+										"explicitCallEdges": 0,
+										"wildcardCallSources": 0,
+										"wildcardCallSites": 0,
+										"opaqueCallSites": 0,
+										"aggregateDependencies": 0,
+										"storedCallGraphRows": 0,
+										"storedCallGraphEntries": 0,
+										"wildcardAggregateRecomputations": 0,
+										"exactReverseCallerVisits": 0,
+										"wildcardReverseCallerVisits": 0,
+										"callTargetMs": 0,
+										"summaryMs": 0,
+										"reachabilityMs": 0,
+										"valueKindMs": 0,
+										"sccNodes": 0,
+										"sccEdges": 0,
+										"sccTransfers": 0,
+										"localFactRebuilds": 0,
+										"provenanceRebuilds": 0,
+										"provenanceLayoutsMaterialized": 0,
+										"provenanceEscapeChecks": 0,
+										"integerProofValues": 0,
+										"valueClassContainmentChecks": 0,
+										"memoryAccesses": 0,
+										"memoryInstructionsIndexed": 0,
+										"memoryLocalReadAttempts": 0,
+										"memoryLocalReadAnswers": 0,
+										"memoryLocalReadInstructions": 0,
+										"memoryHeapAccessesResolved": 0,
+										"memoryEvents": 0,
+										"memoryCompactedEvents": 0,
+										"memoryLocations": 0,
+										"memoryPartitionsSolved": 0,
+										"memoryTouchedBlocks": 0,
+										"memoryStateRows": 0,
+										"memoryStateEntries": 0,
+										"memoryPhis": 0,
+										"memoryTransfers": 0,
+										"memoryFamilyWidens": 0,
+										"specializationFunctionsScanned": 0,
+										"specializationCandidatesDiscovered": 0,
+										"specializationCandidatesSelected": 0,
+										"specializationPayloadsMaterialized": 0,
+										"liveUseVisits": 0,
+										"deadUseSkips": 0,
+										"abandonedOperandStorage": 0,
+										"abandonedParameterStorage": 0
+									}
+								}
+							},
+							"maligator": {
+								"wallMs": 167238.902458,
+								"units": 123,
+								"codeUnits": 137251797,
+								"digest": "97ef22e6c32bb5dc29af8c594d81e0d9edce79b3ce1b94f6281f6758c2f8c8f3",
+								"phases": {
+									"graphMs": 983,
+									"semanticMs": 1766,
+									"constructCoreMs": 15571,
+									"optimizeCoreMs": 76595,
+									"coreToExecutionMs": 9554,
+									"coreToNativeMs": 11837,
+									"executionToImageMs": 28794,
+									"emitMs": 20465,
+									"writeMs": 1517
+								},
+								"optimizer": {
+									"instrumentation": "phases",
+									"construction": {
+										"virtualPhisCreated": 2799891,
+										"virtualPhisCollapsed": 2196892,
+										"materializedBlockParameters": 602999,
+										"edgeArgumentsEmitted": 785762,
+										"definitionSnapshotEntriesCopied": 0,
+										"aliasResolutions": 2418118,
+										"maximumUnresolvedPhiDepth": 3
+									},
+									"input": {
+										"functions": 6458,
+										"blocks": 262468,
+										"instructions": 921902,
+										"values": 1122586,
+										"facts": 0,
+										"planCandidates": 0
+									},
+									"output": {
+										"functions": 6513,
+										"blocks": 129042,
+										"instructions": 559040,
+										"values": 381695,
+										"facts": 42409,
+										"planCandidates": 4625
+									},
+									"phases": [
+										{ "phase": "pre-optimization-verification", "elapsedMs": 3536 },
+										{ "phase": "construction-cleanup", "elapsedMs": 0 },
+										{ "phase": "initial-local-optimization", "elapsedMs": 23 },
+										{ "phase": "structural-cfg-optimization", "elapsedMs": 11205 },
+										{ "phase": "dense-generation-barrier", "elapsedMs": 2303 },
+										{ "phase": "post-barrier-local-optimization", "elapsedMs": 5078 },
+										{ "phase": "advanced-cfg-optimization", "elapsedMs": 3653 },
+										{
+											"phase": "proof-and-representation-optimization",
+											"elapsedMs": 2660
+										},
+										{ "phase": "memory-and-provenance-optimization", "elapsedMs": 25529 },
+										{ "phase": "late-local-cleanup", "elapsedMs": 1806 },
+										{ "phase": "program-flow", "elapsedMs": 5176 },
+										{ "phase": "cross-call-transforms", "elapsedMs": 9700 },
+										{ "phase": "cross-call-memory-forwarding", "elapsedMs": 29 },
+										{ "phase": "specialization-discovery", "elapsedMs": 1510 },
+										{ "phase": "specialization-selection", "elapsedMs": 1326 },
+										{ "phase": "plan-verification", "elapsedMs": 600 },
+										{ "phase": "final-core-verification", "elapsedMs": 1932 },
+										{ "phase": "sealing", "elapsedMs": 6 }
+									],
+									"checkpoints": [
+										{
+											"checkpoint": "after-core-construction",
+											"functions": { "live": 6458, "capacity": 6458 },
+											"blocks": { "live": 262468, "capacity": 262468 },
+											"instructions": { "live": 921902, "capacity": 921902 },
+											"values": { "live": 1122586, "capacity": 1122586 },
+											"uses": { "live": 1336162, "capacity": 1336162 },
+											"operands": { "live": 1336162, "capacity": 1336162 },
+											"blockParameters": { "live": 616417, "capacity": 616800 },
+											"terminatorEdges": { "live": 287296, "capacity": 287296 },
+											"terminatorArguments": 681425,
+											"handlerArguments": { "live": 104337, "capacity": 104337 },
+											"facts": { "live": 0, "capacity": 0 },
+											"effectRefinements": { "live": 0, "capacity": 0 },
+											"abandonedStorage": {
+												"operands": 0,
+												"blockParameters": 383,
+												"terminatorEdges": 0,
+												"handlerArguments": 0,
+												"effectRefinements": 0
+											}
+										},
+										{
+											"checkpoint": "after-initial-local-structural-optimization",
+											"functions": { "live": 6458, "capacity": 6458 },
+											"blocks": { "live": 122976, "capacity": 262468 },
+											"instructions": { "live": 631228, "capacity": 921923 },
+											"values": { "live": 394525, "capacity": 1122607 },
+											"uses": { "live": 612622, "capacity": 1340358 },
+											"operands": { "live": 612622, "capacity": 1403830 },
+											"blockParameters": { "live": 38801, "capacity": 630977 },
+											"terminatorEdges": { "live": 149362, "capacity": 290381 },
+											"terminatorArguments": 60310,
+											"handlerArguments": { "live": 37343, "capacity": 104337 },
+											"facts": { "live": 0, "capacity": 0 },
+											"effectRefinements": { "live": 0, "capacity": 0 },
+											"abandonedStorage": {
+												"operands": 791208,
+												"blockParameters": 592176,
+												"terminatorEdges": 141019,
+												"handlerArguments": 66994,
+												"effectRefinements": 0
+											}
+										},
+										{
+											"checkpoint": "after-construction-generation-finalization",
+											"functions": { "live": 6513, "capacity": 6513 },
+											"blocks": { "live": 123332, "capacity": 123332 },
+											"instructions": { "live": 633796, "capacity": 633796 },
+											"values": { "live": 396691, "capacity": 396691 },
+											"uses": { "live": 615532, "capacity": 615532 },
+											"operands": { "live": 615532, "capacity": 615532 },
+											"blockParameters": { "live": 39056, "capacity": 39056 },
+											"terminatorEdges": { "live": 149744, "capacity": 149744 },
+											"terminatorArguments": 60451,
+											"handlerArguments": { "live": 37343, "capacity": 37343 },
+											"facts": { "live": 0, "capacity": 0 },
+											"effectRefinements": { "live": 0, "capacity": 0 },
+											"abandonedStorage": {
+												"operands": 0,
+												"blockParameters": 0,
+												"terminatorEdges": 0,
+												"handlerArguments": 0,
+												"effectRefinements": 0
+											}
+										},
+										{
+											"checkpoint": "before-memory-and-provenance",
+											"functions": { "live": 6513, "capacity": 6513 },
+											"blocks": { "live": 123225, "capacity": 123679 },
+											"instructions": { "live": 540693, "capacity": 641821 },
+											"values": { "live": 368329, "capacity": 404334 },
+											"uses": { "live": 531035, "capacity": 619150 },
+											"operands": { "live": 531035, "capacity": 632770 },
+											"blockParameters": { "live": 34452, "capacity": 48320 },
+											"terminatorEdges": { "live": 149680, "capacity": 150047 },
+											"terminatorArguments": 43856,
+											"handlerArguments": { "live": 37303, "capacity": 37343 },
+											"facts": { "live": 41329, "capacity": 41503 },
+											"effectRefinements": { "live": 41252, "capacity": 41503 },
+											"abandonedStorage": {
+												"operands": 101735,
+												"blockParameters": 13868,
+												"terminatorEdges": 367,
+												"handlerArguments": 40,
+												"effectRefinements": 251
+											}
+										},
+										{
+											"checkpoint": "before-program-flow",
+											"functions": { "live": 6513, "capacity": 6513 },
+											"blocks": { "live": 123225, "capacity": 123679 },
+											"instructions": { "live": 540693, "capacity": 641821 },
+											"values": { "live": 368329, "capacity": 404334 },
+											"uses": { "live": 531035, "capacity": 619150 },
+											"operands": { "live": 531035, "capacity": 632770 },
+											"blockParameters": { "live": 34452, "capacity": 48320 },
+											"terminatorEdges": { "live": 149680, "capacity": 150047 },
+											"terminatorArguments": 43856,
+											"handlerArguments": { "live": 37303, "capacity": 37343 },
+											"facts": { "live": 41329, "capacity": 41503 },
+											"effectRefinements": { "live": 41252, "capacity": 41503 },
+											"abandonedStorage": {
+												"operands": 101735,
+												"blockParameters": 13868,
+												"terminatorEdges": 367,
+												"handlerArguments": 40,
+												"effectRefinements": 251
+											}
+										},
+										{
+											"checkpoint": "after-cross-call-transforms",
+											"functions": { "live": 6513, "capacity": 6513 },
+											"blocks": { "live": 129042, "capacity": 129499 },
+											"instructions": { "live": 559040, "capacity": 661764 },
+											"values": { "live": 381695, "capacity": 419262 },
+											"uses": { "live": 552849, "capacity": 634039 },
+											"operands": { "live": 552849, "capacity": 650252 },
+											"blockParameters": { "live": 36159, "capacity": 50005 },
+											"terminatorEdges": { "live": 157292, "capacity": 158096 },
+											"terminatorArguments": 47310,
+											"handlerArguments": { "live": 38519, "capacity": 38559 },
+											"facts": { "live": 42409, "capacity": 42583 },
+											"effectRefinements": { "live": 42306, "capacity": 42583 },
+											"abandonedStorage": {
+												"operands": 97403,
+												"blockParameters": 13846,
+												"terminatorEdges": 804,
+												"handlerArguments": 40,
+												"effectRefinements": 277
+											}
+										},
+										{
+											"checkpoint": "before-sealing",
+											"functions": { "live": 6513, "capacity": 6513 },
+											"blocks": { "live": 129042, "capacity": 129499 },
+											"instructions": { "live": 559040, "capacity": 661764 },
+											"values": { "live": 381695, "capacity": 419262 },
+											"uses": { "live": 552849, "capacity": 634039 },
+											"operands": { "live": 552849, "capacity": 650252 },
+											"blockParameters": { "live": 36159, "capacity": 50005 },
+											"terminatorEdges": { "live": 157292, "capacity": 158096 },
+											"terminatorArguments": 47310,
+											"handlerArguments": { "live": 38519, "capacity": 38559 },
+											"facts": { "live": 42409, "capacity": 42583 },
+											"effectRefinements": { "live": 42306, "capacity": 42583 },
+											"abandonedStorage": {
+												"operands": 97403,
+												"blockParameters": 13846,
+												"terminatorEdges": 804,
+												"handlerArguments": 40,
+												"effectRefinements": 277
+											}
+										},
+										{
+											"checkpoint": "after-sealing",
+											"functions": { "live": 6513, "capacity": 6513 },
+											"blocks": { "live": 129042, "capacity": 129499 },
+											"instructions": { "live": 559040, "capacity": 661764 },
+											"values": { "live": 381695, "capacity": 419262 },
+											"uses": { "live": 552849, "capacity": 634039 },
+											"operands": { "live": 552849, "capacity": 650252 },
+											"blockParameters": { "live": 36159, "capacity": 50005 },
+											"terminatorEdges": { "live": 157292, "capacity": 158096 },
+											"terminatorArguments": 47310,
+											"handlerArguments": { "live": 38519, "capacity": 38559 },
+											"facts": { "live": 42409, "capacity": 42583 },
+											"effectRefinements": { "live": 42306, "capacity": 42583 },
+											"abandonedStorage": {
+												"operands": 97403,
+												"blockParameters": 13846,
+												"terminatorEdges": 804,
+												"handlerArguments": 40,
+												"effectRefinements": 277
+											}
+										}
+									],
+									"passes": [],
+									"analyses": [],
+									"owners": [],
+									"discovery": {
+										"candidates": 0,
+										"byKind": {},
+										"stackObjects": 0,
+										"denseArrays": 0,
+										"numericFusions": 0,
+										"largestFanOut": 0
+									},
+									"program": {
+										"functionsAnalyzed": 0,
+										"functionsReused": 0,
+										"summaryFunctionsAnalyzed": 0,
+										"reachabilityFunctionsScanned": 0,
+										"callSites": 0,
+										"exactCallEdges": 0,
+										"wildcardCallers": 0,
+										"wildcardCallSites": 0,
+										"opaqueCallSites": 0,
+										"aggregateDependencies": 0,
+										"storedGraphRows": 0,
+										"storedGraphEntries": 0,
+										"sccs": 0,
+										"sccNodesAnalyzed": 0,
+										"sccEdgeVisits": 0,
+										"sccTransfers": 0,
+										"summaryChanges": 0,
+										"callerWakeups": 0,
+										"affectedCallers": 0,
+										"deadFunctions": 0
+									},
+									"transforms": {
+										"considered": 0,
+										"applied": 0,
+										"declined": 0,
+										"appliedByKind": {},
+										"declinedByReason": {},
+										"generatedCodeConsumed": 0,
+										"compilerWorkConsumed": 0,
+										"waves": 0,
+										"callerEditSessions": 0,
+										"callerLocalOptimizations": 0,
+										"programFlowResolves": 0,
+										"instructionsIntroduced": 0,
+										"blocksIntroduced": 0,
+										"callGraphFunctionsAnalyzed": 0,
+										"summaryFunctionsAnalyzed": 0,
+										"sccNodesAnalyzed": 0,
+										"sccEdgeVisits": 0,
+										"sccTransfers": 0,
+										"callerWakeups": 0,
+										"valueKindFunctionEvaluations": 0,
+										"valueKindFolds": 0,
+										"wildcardAggregateRecomputations": 0,
+										"exactReverseCallerVisits": 0,
+										"wildcardReverseCallerVisits": 0
+									},
+									"plan": {
+										"discovery": {
+											"opportunities": 0,
+											"attempted": 0,
+											"skipped": 0,
+											"compilerWork": 0,
+											"skippedByReason": {}
+										},
+										"admittedFunctions": 0,
+										"discovered": 0,
+										"selected": 0,
+										"declined": 0,
+										"discoveredByKind": {},
+										"selectedByKind": {},
+										"declinedByReason": {},
+										"generatedCodeConsumed": 0,
+										"compilerWorkConsumed": 0,
+										"verificationMs": 0
+									},
+									"queue": { "pushes": 0, "pops": 0, "maximumDepth": 0 },
+									"budget": { "workItems": 0, "edits": 0, "exhaustedPasses": [] },
+									"counters": {
+										"analysisQueries": 0,
+										"analysisRecomputations": 0,
+										"localRulesConsidered": 0,
+										"localRulesApplied": 0,
+										"functionScans": 0,
+										"programFlowJournalEntries": 0,
+										"programFlowDirtyFunctions": 0,
+										"programFlowLocalScans": 0,
+										"programFlowLocalInstructionVisits": 0,
+										"programFlowTransferRecords": 0,
+										"programFlowTransferReuses": 0,
+										"programFlowTargetWakeups": 0,
+										"programFlowSummaryWakeups": 0,
+										"programFlowValueKindWakeups": 0,
+										"programFlowReachabilityWakeups": 0,
+										"programFlowSccPops": 0,
+										"programFlowSccWakeups": 0,
+										"programFlowFunctionPops": 0,
+										"programFlowFunctionWakeups": 0,
+										"explicitCallEdges": 0,
+										"wildcardCallSources": 0,
+										"wildcardCallSites": 0,
+										"opaqueCallSites": 0,
+										"aggregateDependencies": 0,
+										"storedCallGraphRows": 0,
+										"storedCallGraphEntries": 0,
+										"wildcardAggregateRecomputations": 0,
+										"exactReverseCallerVisits": 0,
+										"wildcardReverseCallerVisits": 0,
+										"callTargetMs": 0,
+										"summaryMs": 0,
+										"reachabilityMs": 0,
+										"valueKindMs": 0,
+										"sccNodes": 0,
+										"sccEdges": 0,
+										"sccTransfers": 0,
+										"localFactRebuilds": 0,
+										"provenanceRebuilds": 0,
+										"provenanceLayoutsMaterialized": 0,
+										"provenanceEscapeChecks": 0,
+										"integerProofValues": 0,
+										"valueClassContainmentChecks": 0,
+										"memoryAccesses": 0,
+										"memoryInstructionsIndexed": 0,
+										"memoryLocalReadAttempts": 0,
+										"memoryLocalReadAnswers": 0,
+										"memoryLocalReadInstructions": 0,
+										"memoryHeapAccessesResolved": 0,
+										"memoryEvents": 0,
+										"memoryCompactedEvents": 0,
+										"memoryLocations": 0,
+										"memoryPartitionsSolved": 0,
+										"memoryTouchedBlocks": 0,
+										"memoryStateRows": 0,
+										"memoryStateEntries": 0,
+										"memoryPhis": 0,
+										"memoryTransfers": 0,
+										"memoryFamilyWidens": 0,
+										"specializationFunctionsScanned": 0,
+										"specializationCandidatesDiscovered": 0,
+										"specializationCandidatesSelected": 0,
+										"specializationPayloadsMaterialized": 0,
+										"liveUseVisits": 0,
+										"deadUseSkips": 0,
+										"abandonedOperandStorage": 0,
+										"abandonedParameterStorage": 0
+									}
+								}
+							}
+						},
+						"countersSample": {
+							"node": {
+								"wallMs": 43706.442209,
+								"units": 123,
+								"codeUnits": 137251797,
+								"digest": "97ef22e6c32bb5dc29af8c594d81e0d9edce79b3ce1b94f6281f6758c2f8c8f3",
+								"phases": {
+									"graphMs": 256,
+									"semanticMs": 417,
+									"constructCoreMs": 3370,
+									"optimizeCoreMs": 19811,
+									"coreToExecutionMs": 2864,
+									"coreToNativeMs": 2900,
+									"executionToImageMs": 7071,
+									"emitMs": 6292,
+									"writeMs": 385
+								},
+								"optimizer": {
+									"instrumentation": "counters",
+									"construction": {
+										"virtualPhisCreated": 2799891,
+										"virtualPhisCollapsed": 2196892,
+										"materializedBlockParameters": 602999,
+										"edgeArgumentsEmitted": 785762,
+										"definitionSnapshotEntriesCopied": 0,
+										"aliasResolutions": 2418118,
+										"maximumUnresolvedPhiDepth": 3
+									},
+									"input": {
+										"functions": 6458,
+										"blocks": 262468,
+										"instructions": 921902,
+										"values": 1122586,
+										"facts": 0,
+										"planCandidates": 0
+									},
+									"output": {
+										"functions": 6513,
+										"blocks": 129042,
+										"instructions": 559040,
+										"values": 381695,
+										"facts": 42409,
+										"planCandidates": 4625
+									},
+									"phases": [],
+									"checkpoints": [
+										{
+											"checkpoint": "after-core-construction",
+											"functions": { "live": 6458, "capacity": 6458 },
+											"blocks": { "live": 262468, "capacity": 262468 },
+											"instructions": { "live": 921902, "capacity": 921902 },
+											"values": { "live": 1122586, "capacity": 1122586 },
+											"uses": { "live": 1336162, "capacity": 1336162 },
+											"operands": { "live": 1336162, "capacity": 1336162 },
+											"blockParameters": { "live": 616417, "capacity": 616800 },
+											"terminatorEdges": { "live": 287296, "capacity": 287296 },
+											"terminatorArguments": 681425,
+											"handlerArguments": { "live": 104337, "capacity": 104337 },
+											"facts": { "live": 0, "capacity": 0 },
+											"effectRefinements": { "live": 0, "capacity": 0 },
+											"abandonedStorage": {
+												"operands": 0,
+												"blockParameters": 383,
+												"terminatorEdges": 0,
+												"handlerArguments": 0,
+												"effectRefinements": 0
+											}
+										},
+										{
+											"checkpoint": "after-initial-local-structural-optimization",
+											"functions": { "live": 6458, "capacity": 6458 },
+											"blocks": { "live": 122976, "capacity": 262468 },
+											"instructions": { "live": 631228, "capacity": 921923 },
+											"values": { "live": 394525, "capacity": 1122607 },
+											"uses": { "live": 612622, "capacity": 1340358 },
+											"operands": { "live": 612622, "capacity": 1403830 },
+											"blockParameters": { "live": 38801, "capacity": 630977 },
+											"terminatorEdges": { "live": 149362, "capacity": 290381 },
+											"terminatorArguments": 60310,
+											"handlerArguments": { "live": 37343, "capacity": 104337 },
+											"facts": { "live": 0, "capacity": 0 },
+											"effectRefinements": { "live": 0, "capacity": 0 },
+											"abandonedStorage": {
+												"operands": 791208,
+												"blockParameters": 592176,
+												"terminatorEdges": 141019,
+												"handlerArguments": 66994,
+												"effectRefinements": 0
+											}
+										},
+										{
+											"checkpoint": "after-construction-generation-finalization",
+											"functions": { "live": 6513, "capacity": 6513 },
+											"blocks": { "live": 123332, "capacity": 123332 },
+											"instructions": { "live": 633796, "capacity": 633796 },
+											"values": { "live": 396691, "capacity": 396691 },
+											"uses": { "live": 615532, "capacity": 615532 },
+											"operands": { "live": 615532, "capacity": 615532 },
+											"blockParameters": { "live": 39056, "capacity": 39056 },
+											"terminatorEdges": { "live": 149744, "capacity": 149744 },
+											"terminatorArguments": 60451,
+											"handlerArguments": { "live": 37343, "capacity": 37343 },
+											"facts": { "live": 0, "capacity": 0 },
+											"effectRefinements": { "live": 0, "capacity": 0 },
+											"abandonedStorage": {
+												"operands": 0,
+												"blockParameters": 0,
+												"terminatorEdges": 0,
+												"handlerArguments": 0,
+												"effectRefinements": 0
+											}
+										},
+										{
+											"checkpoint": "before-memory-and-provenance",
+											"functions": { "live": 6513, "capacity": 6513 },
+											"blocks": { "live": 123225, "capacity": 123679 },
+											"instructions": { "live": 540693, "capacity": 641821 },
+											"values": { "live": 368329, "capacity": 404334 },
+											"uses": { "live": 531035, "capacity": 619150 },
+											"operands": { "live": 531035, "capacity": 632770 },
+											"blockParameters": { "live": 34452, "capacity": 48320 },
+											"terminatorEdges": { "live": 149680, "capacity": 150047 },
+											"terminatorArguments": 43856,
+											"handlerArguments": { "live": 37303, "capacity": 37343 },
+											"facts": { "live": 41329, "capacity": 41503 },
+											"effectRefinements": { "live": 41252, "capacity": 41503 },
+											"abandonedStorage": {
+												"operands": 101735,
+												"blockParameters": 13868,
+												"terminatorEdges": 367,
+												"handlerArguments": 40,
+												"effectRefinements": 251
+											}
+										},
+										{
+											"checkpoint": "before-program-flow",
+											"functions": { "live": 6513, "capacity": 6513 },
+											"blocks": { "live": 123225, "capacity": 123679 },
+											"instructions": { "live": 540693, "capacity": 641821 },
+											"values": { "live": 368329, "capacity": 404334 },
+											"uses": { "live": 531035, "capacity": 619150 },
+											"operands": { "live": 531035, "capacity": 632770 },
+											"blockParameters": { "live": 34452, "capacity": 48320 },
+											"terminatorEdges": { "live": 149680, "capacity": 150047 },
+											"terminatorArguments": 43856,
+											"handlerArguments": { "live": 37303, "capacity": 37343 },
+											"facts": { "live": 41329, "capacity": 41503 },
+											"effectRefinements": { "live": 41252, "capacity": 41503 },
+											"abandonedStorage": {
+												"operands": 101735,
+												"blockParameters": 13868,
+												"terminatorEdges": 367,
+												"handlerArguments": 40,
+												"effectRefinements": 251
+											}
+										},
+										{
+											"checkpoint": "after-cross-call-transforms",
+											"functions": { "live": 6513, "capacity": 6513 },
+											"blocks": { "live": 129042, "capacity": 129499 },
+											"instructions": { "live": 559040, "capacity": 661764 },
+											"values": { "live": 381695, "capacity": 419262 },
+											"uses": { "live": 552849, "capacity": 634039 },
+											"operands": { "live": 552849, "capacity": 650252 },
+											"blockParameters": { "live": 36159, "capacity": 50005 },
+											"terminatorEdges": { "live": 157292, "capacity": 158096 },
+											"terminatorArguments": 47310,
+											"handlerArguments": { "live": 38519, "capacity": 38559 },
+											"facts": { "live": 42409, "capacity": 42583 },
+											"effectRefinements": { "live": 42306, "capacity": 42583 },
+											"abandonedStorage": {
+												"operands": 97403,
+												"blockParameters": 13846,
+												"terminatorEdges": 804,
+												"handlerArguments": 40,
+												"effectRefinements": 277
+											}
+										},
+										{
+											"checkpoint": "before-sealing",
+											"functions": { "live": 6513, "capacity": 6513 },
+											"blocks": { "live": 129042, "capacity": 129499 },
+											"instructions": { "live": 559040, "capacity": 661764 },
+											"values": { "live": 381695, "capacity": 419262 },
+											"uses": { "live": 552849, "capacity": 634039 },
+											"operands": { "live": 552849, "capacity": 650252 },
+											"blockParameters": { "live": 36159, "capacity": 50005 },
+											"terminatorEdges": { "live": 157292, "capacity": 158096 },
+											"terminatorArguments": 47310,
+											"handlerArguments": { "live": 38519, "capacity": 38559 },
+											"facts": { "live": 42409, "capacity": 42583 },
+											"effectRefinements": { "live": 42306, "capacity": 42583 },
+											"abandonedStorage": {
+												"operands": 97403,
+												"blockParameters": 13846,
+												"terminatorEdges": 804,
+												"handlerArguments": 40,
+												"effectRefinements": 277
+											}
+										},
+										{
+											"checkpoint": "after-sealing",
+											"functions": { "live": 6513, "capacity": 6513 },
+											"blocks": { "live": 129042, "capacity": 129499 },
+											"instructions": { "live": 559040, "capacity": 661764 },
+											"values": { "live": 381695, "capacity": 419262 },
+											"uses": { "live": 552849, "capacity": 634039 },
+											"operands": { "live": 552849, "capacity": 650252 },
+											"blockParameters": { "live": 36159, "capacity": 50005 },
+											"terminatorEdges": { "live": 157292, "capacity": 158096 },
+											"terminatorArguments": 47310,
+											"handlerArguments": { "live": 38519, "capacity": 38559 },
+											"facts": { "live": 42409, "capacity": 42583 },
+											"effectRefinements": { "live": 42306, "capacity": 42583 },
+											"abandonedStorage": {
+												"operands": 97403,
+												"blockParameters": 13846,
+												"terminatorEdges": 804,
+												"handlerArguments": 40,
+												"effectRefinements": 277
+											}
+										}
+									],
+									"passes": [],
+									"analyses": [],
+									"owners": [],
+									"discovery": {
+										"candidates": 0,
+										"byKind": {},
+										"stackObjects": 142,
+										"denseArrays": 0,
+										"numericFusions": 142,
+										"largestFanOut": 45
+									},
+									"program": {
+										"functionsAnalyzed": 4378,
+										"functionsReused": 2135,
+										"summaryFunctionsAnalyzed": 926,
+										"reachabilityFunctionsScanned": 6513,
+										"callSites": 33357,
+										"exactCallEdges": 7055,
+										"wildcardCallers": 3387,
+										"wildcardCallSites": 19992,
+										"opaqueCallSites": 29000,
+										"aggregateDependencies": 6513,
+										"storedGraphRows": 5224,
+										"storedGraphEntries": 30523,
+										"sccs": 2654,
+										"sccNodesAnalyzed": 6514,
+										"sccEdgeVisits": 16955,
+										"sccTransfers": 14262,
+										"summaryChanges": 358,
+										"callerWakeups": 15,
+										"affectedCallers": 47,
+										"deadFunctions": 0
+									},
+									"transforms": {
+										"considered": 18388,
+										"applied": 1172,
+										"declined": 17216,
+										"appliedByKind": {},
+										"declinedByReason": {},
+										"generatedCodeConsumed": 16897,
+										"compilerWorkConsumed": 31652,
+										"waves": 1,
+										"callerEditSessions": 1001,
+										"callerLocalOptimizations": 926,
+										"programFlowResolves": 2,
+										"instructionsIntroduced": 14063,
+										"blocksIntroduced": 5820,
+										"callGraphFunctionsAnalyzed": 10891,
+										"summaryFunctionsAnalyzed": 7439,
+										"sccNodesAnalyzed": 13028,
+										"sccEdgeVisits": 33465,
+										"sccTransfers": 21630,
+										"callerWakeups": 15,
+										"valueKindFunctionEvaluations": 18175,
+										"valueKindFolds": 0,
+										"wildcardAggregateRecomputations": 19,
+										"exactReverseCallerVisits": 36399,
+										"wildcardReverseCallerVisits": 9915
+									},
+									"plan": {
+										"discovery": {
+											"opportunities": 26811,
+											"attempted": 1469,
+											"skipped": 25342,
+											"compilerWork": 354435,
+											"skippedByReason": {
+												"compiler-work-cost": 12,
+												"generated-code-cost": 25330
+											}
+										},
+										"admittedFunctions": 980,
+										"discovered": 6583,
+										"selected": 4625,
+										"declined": 1958,
+										"discoveredByKind": {},
+										"selectedByKind": {},
+										"declinedByReason": {},
+										"generatedCodeConsumed": 50690,
+										"compilerWorkConsumed": 509039,
+										"verificationMs": 229
+									},
+									"queue": { "pushes": 2308847, "pops": 2308847, "maximumDepth": 29622 },
+									"budget": {
+										"workItems": 2275345,
+										"edits": 1908853,
+										"exhaustedPasses": []
+									},
+									"counters": {
+										"analysisQueries": 1035558,
+										"analysisRecomputations": 117588,
+										"localRulesConsidered": 3309197,
+										"localRulesApplied": 235767,
+										"functionScans": 43018,
+										"programFlowJournalEntries": 27876,
+										"programFlowDirtyFunctions": 6527,
+										"programFlowLocalScans": 13026,
+										"programFlowLocalInstructionVisits": 1099733,
+										"programFlowTransferRecords": 1255452,
+										"programFlowTransferReuses": 28689,
+										"programFlowTargetWakeups": 5331,
+										"programFlowSummaryWakeups": 6527,
+										"programFlowValueKindWakeups": 6521,
+										"programFlowReachabilityWakeups": 5331,
+										"programFlowSccPops": 10809,
+										"programFlowSccWakeups": 10809,
+										"programFlowFunctionPops": 13811,
+										"programFlowFunctionWakeups": 13811,
+										"explicitCallEdges": 7055,
+										"wildcardCallSources": 3387,
+										"wildcardCallSites": 19992,
+										"opaqueCallSites": 29000,
+										"aggregateDependencies": 6513,
+										"storedCallGraphRows": 5224,
+										"storedCallGraphEntries": 30523,
+										"wildcardAggregateRecomputations": 19,
+										"exactReverseCallerVisits": 36399,
+										"wildcardReverseCallerVisits": 9915,
+										"callTargetMs": 0,
+										"summaryMs": 0,
+										"reachabilityMs": 0,
+										"valueKindMs": 0,
+										"sccNodes": 26056,
+										"sccEdges": 66930,
+										"sccTransfers": 21630,
+										"localFactRebuilds": 11995,
+										"provenanceRebuilds": 11995,
+										"provenanceLayoutsMaterialized": 48366,
+										"provenanceEscapeChecks": 38053,
+										"integerProofValues": 3498,
+										"valueClassContainmentChecks": 15,
+										"memoryAccesses": 999253,
+										"memoryInstructionsIndexed": 2336657,
+										"memoryLocalReadAttempts": 31163,
+										"memoryLocalReadAnswers": 23618,
+										"memoryLocalReadInstructions": 66024,
+										"memoryHeapAccessesResolved": 0,
+										"memoryEvents": 952642,
+										"memoryCompactedEvents": 637879,
+										"memoryLocations": 14835,
+										"memoryPartitionsSolved": 18538,
+										"memoryTouchedBlocks": 326115,
+										"memoryStateRows": 374213,
+										"memoryStateEntries": 593318,
+										"memoryPhis": 53374,
+										"memoryTransfers": 602898,
+										"memoryFamilyWidens": 1100019,
+										"specializationFunctionsScanned": 835,
+										"specializationCandidatesDiscovered": 5987,
+										"specializationCandidatesSelected": 4625,
+										"specializationPayloadsMaterialized": 4394,
+										"liveUseVisits": 3352060,
+										"deadUseSkips": 0,
+										"abandonedOperandStorage": 97403,
+										"abandonedParameterStorage": 13846
+									}
+								}
+							},
+							"maligator": {
+								"wallMs": 169226.993791,
+								"units": 123,
+								"codeUnits": 137251797,
+								"digest": "97ef22e6c32bb5dc29af8c594d81e0d9edce79b3ce1b94f6281f6758c2f8c8f3",
+								"phases": {
+									"graphMs": 976,
+									"semanticMs": 1759,
+									"constructCoreMs": 15611,
+									"optimizeCoreMs": 77179,
+									"coreToExecutionMs": 9857,
+									"coreToNativeMs": 11922,
+									"executionToImageMs": 29053,
+									"emitMs": 21266,
+									"writeMs": 1507
+								},
+								"optimizer": {
+									"instrumentation": "counters",
+									"construction": {
+										"virtualPhisCreated": 2799891,
+										"virtualPhisCollapsed": 2196892,
+										"materializedBlockParameters": 602999,
+										"edgeArgumentsEmitted": 785762,
+										"definitionSnapshotEntriesCopied": 0,
+										"aliasResolutions": 2418118,
+										"maximumUnresolvedPhiDepth": 3
+									},
+									"input": {
+										"functions": 6458,
+										"blocks": 262468,
+										"instructions": 921902,
+										"values": 1122586,
+										"facts": 0,
+										"planCandidates": 0
+									},
+									"output": {
+										"functions": 6513,
+										"blocks": 129042,
+										"instructions": 559040,
+										"values": 381695,
+										"facts": 42409,
+										"planCandidates": 4625
+									},
+									"phases": [],
+									"checkpoints": [
+										{
+											"checkpoint": "after-core-construction",
+											"functions": { "live": 6458, "capacity": 6458 },
+											"blocks": { "live": 262468, "capacity": 262468 },
+											"instructions": { "live": 921902, "capacity": 921902 },
+											"values": { "live": 1122586, "capacity": 1122586 },
+											"uses": { "live": 1336162, "capacity": 1336162 },
+											"operands": { "live": 1336162, "capacity": 1336162 },
+											"blockParameters": { "live": 616417, "capacity": 616800 },
+											"terminatorEdges": { "live": 287296, "capacity": 287296 },
+											"terminatorArguments": 681425,
+											"handlerArguments": { "live": 104337, "capacity": 104337 },
+											"facts": { "live": 0, "capacity": 0 },
+											"effectRefinements": { "live": 0, "capacity": 0 },
+											"abandonedStorage": {
+												"operands": 0,
+												"blockParameters": 383,
+												"terminatorEdges": 0,
+												"handlerArguments": 0,
+												"effectRefinements": 0
+											}
+										},
+										{
+											"checkpoint": "after-initial-local-structural-optimization",
+											"functions": { "live": 6458, "capacity": 6458 },
+											"blocks": { "live": 122976, "capacity": 262468 },
+											"instructions": { "live": 631228, "capacity": 921923 },
+											"values": { "live": 394525, "capacity": 1122607 },
+											"uses": { "live": 612622, "capacity": 1340358 },
+											"operands": { "live": 612622, "capacity": 1403830 },
+											"blockParameters": { "live": 38801, "capacity": 630977 },
+											"terminatorEdges": { "live": 149362, "capacity": 290381 },
+											"terminatorArguments": 60310,
+											"handlerArguments": { "live": 37343, "capacity": 104337 },
+											"facts": { "live": 0, "capacity": 0 },
+											"effectRefinements": { "live": 0, "capacity": 0 },
+											"abandonedStorage": {
+												"operands": 791208,
+												"blockParameters": 592176,
+												"terminatorEdges": 141019,
+												"handlerArguments": 66994,
+												"effectRefinements": 0
+											}
+										},
+										{
+											"checkpoint": "after-construction-generation-finalization",
+											"functions": { "live": 6513, "capacity": 6513 },
+											"blocks": { "live": 123332, "capacity": 123332 },
+											"instructions": { "live": 633796, "capacity": 633796 },
+											"values": { "live": 396691, "capacity": 396691 },
+											"uses": { "live": 615532, "capacity": 615532 },
+											"operands": { "live": 615532, "capacity": 615532 },
+											"blockParameters": { "live": 39056, "capacity": 39056 },
+											"terminatorEdges": { "live": 149744, "capacity": 149744 },
+											"terminatorArguments": 60451,
+											"handlerArguments": { "live": 37343, "capacity": 37343 },
+											"facts": { "live": 0, "capacity": 0 },
+											"effectRefinements": { "live": 0, "capacity": 0 },
+											"abandonedStorage": {
+												"operands": 0,
+												"blockParameters": 0,
+												"terminatorEdges": 0,
+												"handlerArguments": 0,
+												"effectRefinements": 0
+											}
+										},
+										{
+											"checkpoint": "before-memory-and-provenance",
+											"functions": { "live": 6513, "capacity": 6513 },
+											"blocks": { "live": 123225, "capacity": 123679 },
+											"instructions": { "live": 540693, "capacity": 641821 },
+											"values": { "live": 368329, "capacity": 404334 },
+											"uses": { "live": 531035, "capacity": 619150 },
+											"operands": { "live": 531035, "capacity": 632770 },
+											"blockParameters": { "live": 34452, "capacity": 48320 },
+											"terminatorEdges": { "live": 149680, "capacity": 150047 },
+											"terminatorArguments": 43856,
+											"handlerArguments": { "live": 37303, "capacity": 37343 },
+											"facts": { "live": 41329, "capacity": 41503 },
+											"effectRefinements": { "live": 41252, "capacity": 41503 },
+											"abandonedStorage": {
+												"operands": 101735,
+												"blockParameters": 13868,
+												"terminatorEdges": 367,
+												"handlerArguments": 40,
+												"effectRefinements": 251
+											}
+										},
+										{
+											"checkpoint": "before-program-flow",
+											"functions": { "live": 6513, "capacity": 6513 },
+											"blocks": { "live": 123225, "capacity": 123679 },
+											"instructions": { "live": 540693, "capacity": 641821 },
+											"values": { "live": 368329, "capacity": 404334 },
+											"uses": { "live": 531035, "capacity": 619150 },
+											"operands": { "live": 531035, "capacity": 632770 },
+											"blockParameters": { "live": 34452, "capacity": 48320 },
+											"terminatorEdges": { "live": 149680, "capacity": 150047 },
+											"terminatorArguments": 43856,
+											"handlerArguments": { "live": 37303, "capacity": 37343 },
+											"facts": { "live": 41329, "capacity": 41503 },
+											"effectRefinements": { "live": 41252, "capacity": 41503 },
+											"abandonedStorage": {
+												"operands": 101735,
+												"blockParameters": 13868,
+												"terminatorEdges": 367,
+												"handlerArguments": 40,
+												"effectRefinements": 251
+											}
+										},
+										{
+											"checkpoint": "after-cross-call-transforms",
+											"functions": { "live": 6513, "capacity": 6513 },
+											"blocks": { "live": 129042, "capacity": 129499 },
+											"instructions": { "live": 559040, "capacity": 661764 },
+											"values": { "live": 381695, "capacity": 419262 },
+											"uses": { "live": 552849, "capacity": 634039 },
+											"operands": { "live": 552849, "capacity": 650252 },
+											"blockParameters": { "live": 36159, "capacity": 50005 },
+											"terminatorEdges": { "live": 157292, "capacity": 158096 },
+											"terminatorArguments": 47310,
+											"handlerArguments": { "live": 38519, "capacity": 38559 },
+											"facts": { "live": 42409, "capacity": 42583 },
+											"effectRefinements": { "live": 42306, "capacity": 42583 },
+											"abandonedStorage": {
+												"operands": 97403,
+												"blockParameters": 13846,
+												"terminatorEdges": 804,
+												"handlerArguments": 40,
+												"effectRefinements": 277
+											}
+										},
+										{
+											"checkpoint": "before-sealing",
+											"functions": { "live": 6513, "capacity": 6513 },
+											"blocks": { "live": 129042, "capacity": 129499 },
+											"instructions": { "live": 559040, "capacity": 661764 },
+											"values": { "live": 381695, "capacity": 419262 },
+											"uses": { "live": 552849, "capacity": 634039 },
+											"operands": { "live": 552849, "capacity": 650252 },
+											"blockParameters": { "live": 36159, "capacity": 50005 },
+											"terminatorEdges": { "live": 157292, "capacity": 158096 },
+											"terminatorArguments": 47310,
+											"handlerArguments": { "live": 38519, "capacity": 38559 },
+											"facts": { "live": 42409, "capacity": 42583 },
+											"effectRefinements": { "live": 42306, "capacity": 42583 },
+											"abandonedStorage": {
+												"operands": 97403,
+												"blockParameters": 13846,
+												"terminatorEdges": 804,
+												"handlerArguments": 40,
+												"effectRefinements": 277
+											}
+										},
+										{
+											"checkpoint": "after-sealing",
+											"functions": { "live": 6513, "capacity": 6513 },
+											"blocks": { "live": 129042, "capacity": 129499 },
+											"instructions": { "live": 559040, "capacity": 661764 },
+											"values": { "live": 381695, "capacity": 419262 },
+											"uses": { "live": 552849, "capacity": 634039 },
+											"operands": { "live": 552849, "capacity": 650252 },
+											"blockParameters": { "live": 36159, "capacity": 50005 },
+											"terminatorEdges": { "live": 157292, "capacity": 158096 },
+											"terminatorArguments": 47310,
+											"handlerArguments": { "live": 38519, "capacity": 38559 },
+											"facts": { "live": 42409, "capacity": 42583 },
+											"effectRefinements": { "live": 42306, "capacity": 42583 },
+											"abandonedStorage": {
+												"operands": 97403,
+												"blockParameters": 13846,
+												"terminatorEdges": 804,
+												"handlerArguments": 40,
+												"effectRefinements": 277
+											}
+										}
+									],
+									"passes": [],
+									"analyses": [],
+									"owners": [],
+									"discovery": {
+										"candidates": 0,
+										"byKind": {},
+										"stackObjects": 142,
+										"denseArrays": 0,
+										"numericFusions": 142,
+										"largestFanOut": 45
+									},
+									"program": {
+										"functionsAnalyzed": 4378,
+										"functionsReused": 2135,
+										"summaryFunctionsAnalyzed": 926,
+										"reachabilityFunctionsScanned": 6513,
+										"callSites": 33357,
+										"exactCallEdges": 7055,
+										"wildcardCallers": 3387,
+										"wildcardCallSites": 19992,
+										"opaqueCallSites": 29000,
+										"aggregateDependencies": 6513,
+										"storedGraphRows": 5224,
+										"storedGraphEntries": 30523,
+										"sccs": 2654,
+										"sccNodesAnalyzed": 6514,
+										"sccEdgeVisits": 16955,
+										"sccTransfers": 14262,
+										"summaryChanges": 358,
+										"callerWakeups": 15,
+										"affectedCallers": 47,
+										"deadFunctions": 0
+									},
+									"transforms": {
+										"considered": 18388,
+										"applied": 1172,
+										"declined": 17216,
+										"appliedByKind": {},
+										"declinedByReason": {},
+										"generatedCodeConsumed": 16897,
+										"compilerWorkConsumed": 31652,
+										"waves": 1,
+										"callerEditSessions": 1001,
+										"callerLocalOptimizations": 926,
+										"programFlowResolves": 2,
+										"instructionsIntroduced": 14063,
+										"blocksIntroduced": 5820,
+										"callGraphFunctionsAnalyzed": 10891,
+										"summaryFunctionsAnalyzed": 7439,
+										"sccNodesAnalyzed": 13028,
+										"sccEdgeVisits": 33465,
+										"sccTransfers": 21630,
+										"callerWakeups": 15,
+										"valueKindFunctionEvaluations": 18175,
+										"valueKindFolds": 0,
+										"wildcardAggregateRecomputations": 19,
+										"exactReverseCallerVisits": 36399,
+										"wildcardReverseCallerVisits": 9915
+									},
+									"plan": {
+										"discovery": {
+											"opportunities": 26811,
+											"attempted": 1469,
+											"skipped": 25342,
+											"compilerWork": 354435,
+											"skippedByReason": {
+												"compiler-work-cost": 12,
+												"generated-code-cost": 25330
+											}
+										},
+										"admittedFunctions": 980,
+										"discovered": 6583,
+										"selected": 4625,
+										"declined": 1958,
+										"discoveredByKind": {},
+										"selectedByKind": {},
+										"declinedByReason": {},
+										"generatedCodeConsumed": 50690,
+										"compilerWorkConsumed": 509039,
+										"verificationMs": 576
+									},
+									"queue": { "pushes": 2308847, "pops": 2308847, "maximumDepth": 29622 },
+									"budget": {
+										"workItems": 2275345,
+										"edits": 1908853,
+										"exhaustedPasses": []
+									},
+									"counters": {
+										"analysisQueries": 1035558,
+										"analysisRecomputations": 117588,
+										"localRulesConsidered": 3309197,
+										"localRulesApplied": 235767,
+										"functionScans": 43018,
+										"programFlowJournalEntries": 27876,
+										"programFlowDirtyFunctions": 6527,
+										"programFlowLocalScans": 13026,
+										"programFlowLocalInstructionVisits": 1099733,
+										"programFlowTransferRecords": 1255452,
+										"programFlowTransferReuses": 28689,
+										"programFlowTargetWakeups": 5331,
+										"programFlowSummaryWakeups": 6527,
+										"programFlowValueKindWakeups": 6521,
+										"programFlowReachabilityWakeups": 5331,
+										"programFlowSccPops": 10809,
+										"programFlowSccWakeups": 10809,
+										"programFlowFunctionPops": 13811,
+										"programFlowFunctionWakeups": 13811,
+										"explicitCallEdges": 7055,
+										"wildcardCallSources": 3387,
+										"wildcardCallSites": 19992,
+										"opaqueCallSites": 29000,
+										"aggregateDependencies": 6513,
+										"storedCallGraphRows": 5224,
+										"storedCallGraphEntries": 30523,
+										"wildcardAggregateRecomputations": 19,
+										"exactReverseCallerVisits": 36399,
+										"wildcardReverseCallerVisits": 9915,
+										"callTargetMs": 0,
+										"summaryMs": 0,
+										"reachabilityMs": 0,
+										"valueKindMs": 0,
+										"sccNodes": 26056,
+										"sccEdges": 66930,
+										"sccTransfers": 21630,
+										"localFactRebuilds": 11995,
+										"provenanceRebuilds": 11995,
+										"provenanceLayoutsMaterialized": 48366,
+										"provenanceEscapeChecks": 38053,
+										"integerProofValues": 3498,
+										"valueClassContainmentChecks": 15,
+										"memoryAccesses": 999253,
+										"memoryInstructionsIndexed": 2336657,
+										"memoryLocalReadAttempts": 31163,
+										"memoryLocalReadAnswers": 23618,
+										"memoryLocalReadInstructions": 66024,
+										"memoryHeapAccessesResolved": 0,
+										"memoryEvents": 952642,
+										"memoryCompactedEvents": 637879,
+										"memoryLocations": 14835,
+										"memoryPartitionsSolved": 18538,
+										"memoryTouchedBlocks": 326115,
+										"memoryStateRows": 374213,
+										"memoryStateEntries": 593318,
+										"memoryPhis": 53374,
+										"memoryTransfers": 602898,
+										"memoryFamilyWidens": 1100019,
+										"specializationFunctionsScanned": 835,
+										"specializationCandidatesDiscovered": 5987,
+										"specializationCandidatesSelected": 4625,
+										"specializationPayloadsMaterialized": 4394,
+										"liveUseVisits": 3352060,
+										"deadUseSkips": 0,
+										"abandonedOperandStorage": 97403,
+										"abandonedParameterStorage": 13846
+									}
+								}
+							}
+						},
+						"ownerSample": {
+							"node": {
+								"wallMs": 43261.80925,
+								"units": 123,
+								"codeUnits": 137251797,
+								"digest": "97ef22e6c32bb5dc29af8c594d81e0d9edce79b3ce1b94f6281f6758c2f8c8f3",
+								"phases": {
+									"graphMs": 247,
+									"semanticMs": 386,
+									"constructCoreMs": 3384,
+									"optimizeCoreMs": 19766,
+									"coreToExecutionMs": 2806,
+									"coreToNativeMs": 2966,
+									"executionToImageMs": 6650,
+									"emitMs": 6380,
+									"writeMs": 380
+								},
+								"optimizer": {
+									"instrumentation": "full",
+									"construction": {
+										"virtualPhisCreated": 2799891,
+										"virtualPhisCollapsed": 2196892,
+										"materializedBlockParameters": 602999,
+										"edgeArgumentsEmitted": 785762,
+										"definitionSnapshotEntriesCopied": 0,
+										"aliasResolutions": 2418118,
+										"maximumUnresolvedPhiDepth": 3
+									},
+									"input": {
+										"functions": 6458,
+										"blocks": 262468,
+										"instructions": 921902,
+										"values": 1122586,
+										"facts": 0,
+										"planCandidates": 0
+									},
+									"output": {
+										"functions": 6513,
+										"blocks": 129042,
+										"instructions": 559040,
+										"values": 381695,
+										"facts": 42409,
+										"planCandidates": 4625
+									},
+									"phases": [
+										{ "phase": "pre-optimization-verification", "elapsedMs": 721 },
+										{ "phase": "construction-cleanup", "elapsedMs": 0 },
+										{ "phase": "initial-local-optimization", "elapsedMs": 4 },
+										{ "phase": "structural-cfg-optimization", "elapsedMs": 2246 },
+										{ "phase": "dense-generation-barrier", "elapsedMs": 560 },
+										{ "phase": "post-barrier-local-optimization", "elapsedMs": 1228 },
+										{ "phase": "advanced-cfg-optimization", "elapsedMs": 992 },
+										{
+											"phase": "proof-and-representation-optimization",
+											"elapsedMs": 581
+										},
+										{ "phase": "memory-and-provenance-optimization", "elapsedMs": 6970 },
+										{ "phase": "late-local-cleanup", "elapsedMs": 423 },
+										{ "phase": "program-flow", "elapsedMs": 1440 },
+										{ "phase": "cross-call-transforms", "elapsedMs": 2876 },
+										{ "phase": "cross-call-memory-forwarding", "elapsedMs": 12 },
+										{ "phase": "specialization-discovery", "elapsedMs": 460 },
+										{ "phase": "specialization-selection", "elapsedMs": 446 },
+										{ "phase": "sealing", "elapsedMs": 4 },
+										{ "phase": "plan-verification", "elapsedMs": 244 },
+										{ "phase": "final-core-verification", "elapsedMs": 421 }
+									],
+									"checkpoints": [
+										{
+											"checkpoint": "after-core-construction",
+											"functions": { "live": 6458, "capacity": 6458 },
+											"blocks": { "live": 262468, "capacity": 262468 },
+											"instructions": { "live": 921902, "capacity": 921902 },
+											"values": { "live": 1122586, "capacity": 1122586 },
+											"uses": { "live": 1336162, "capacity": 1336162 },
+											"operands": { "live": 1336162, "capacity": 1336162 },
+											"blockParameters": { "live": 616417, "capacity": 616800 },
+											"terminatorEdges": { "live": 287296, "capacity": 287296 },
+											"terminatorArguments": 681425,
+											"handlerArguments": { "live": 104337, "capacity": 104337 },
+											"facts": { "live": 0, "capacity": 0 },
+											"effectRefinements": { "live": 0, "capacity": 0 },
+											"abandonedStorage": {
+												"operands": 0,
+												"blockParameters": 383,
+												"terminatorEdges": 0,
+												"handlerArguments": 0,
+												"effectRefinements": 0
+											}
+										},
+										{
+											"checkpoint": "after-initial-local-structural-optimization",
+											"functions": { "live": 6458, "capacity": 6458 },
+											"blocks": { "live": 122976, "capacity": 262468 },
+											"instructions": { "live": 631228, "capacity": 921923 },
+											"values": { "live": 394525, "capacity": 1122607 },
+											"uses": { "live": 612622, "capacity": 1340358 },
+											"operands": { "live": 612622, "capacity": 1403830 },
+											"blockParameters": { "live": 38801, "capacity": 630977 },
+											"terminatorEdges": { "live": 149362, "capacity": 290381 },
+											"terminatorArguments": 60310,
+											"handlerArguments": { "live": 37343, "capacity": 104337 },
+											"facts": { "live": 0, "capacity": 0 },
+											"effectRefinements": { "live": 0, "capacity": 0 },
+											"abandonedStorage": {
+												"operands": 791208,
+												"blockParameters": 592176,
+												"terminatorEdges": 141019,
+												"handlerArguments": 66994,
+												"effectRefinements": 0
+											}
+										},
+										{
+											"checkpoint": "after-construction-generation-finalization",
+											"functions": { "live": 6513, "capacity": 6513 },
+											"blocks": { "live": 123332, "capacity": 123332 },
+											"instructions": { "live": 633796, "capacity": 633796 },
+											"values": { "live": 396691, "capacity": 396691 },
+											"uses": { "live": 615532, "capacity": 615532 },
+											"operands": { "live": 615532, "capacity": 615532 },
+											"blockParameters": { "live": 39056, "capacity": 39056 },
+											"terminatorEdges": { "live": 149744, "capacity": 149744 },
+											"terminatorArguments": 60451,
+											"handlerArguments": { "live": 37343, "capacity": 37343 },
+											"facts": { "live": 0, "capacity": 0 },
+											"effectRefinements": { "live": 0, "capacity": 0 },
+											"abandonedStorage": {
+												"operands": 0,
+												"blockParameters": 0,
+												"terminatorEdges": 0,
+												"handlerArguments": 0,
+												"effectRefinements": 0
+											}
+										},
+										{
+											"checkpoint": "before-memory-and-provenance",
+											"functions": { "live": 6513, "capacity": 6513 },
+											"blocks": { "live": 123225, "capacity": 123679 },
+											"instructions": { "live": 540693, "capacity": 641821 },
+											"values": { "live": 368329, "capacity": 404334 },
+											"uses": { "live": 531035, "capacity": 619150 },
+											"operands": { "live": 531035, "capacity": 632770 },
+											"blockParameters": { "live": 34452, "capacity": 48320 },
+											"terminatorEdges": { "live": 149680, "capacity": 150047 },
+											"terminatorArguments": 43856,
+											"handlerArguments": { "live": 37303, "capacity": 37343 },
+											"facts": { "live": 41329, "capacity": 41503 },
+											"effectRefinements": { "live": 41252, "capacity": 41503 },
+											"abandonedStorage": {
+												"operands": 101735,
+												"blockParameters": 13868,
+												"terminatorEdges": 367,
+												"handlerArguments": 40,
+												"effectRefinements": 251
+											}
+										},
+										{
+											"checkpoint": "before-program-flow",
+											"functions": { "live": 6513, "capacity": 6513 },
+											"blocks": { "live": 123225, "capacity": 123679 },
+											"instructions": { "live": 540693, "capacity": 641821 },
+											"values": { "live": 368329, "capacity": 404334 },
+											"uses": { "live": 531035, "capacity": 619150 },
+											"operands": { "live": 531035, "capacity": 632770 },
+											"blockParameters": { "live": 34452, "capacity": 48320 },
+											"terminatorEdges": { "live": 149680, "capacity": 150047 },
+											"terminatorArguments": 43856,
+											"handlerArguments": { "live": 37303, "capacity": 37343 },
+											"facts": { "live": 41329, "capacity": 41503 },
+											"effectRefinements": { "live": 41252, "capacity": 41503 },
+											"abandonedStorage": {
+												"operands": 101735,
+												"blockParameters": 13868,
+												"terminatorEdges": 367,
+												"handlerArguments": 40,
+												"effectRefinements": 251
+											}
+										},
+										{
+											"checkpoint": "after-cross-call-transforms",
+											"functions": { "live": 6513, "capacity": 6513 },
+											"blocks": { "live": 129042, "capacity": 129499 },
+											"instructions": { "live": 559040, "capacity": 661764 },
+											"values": { "live": 381695, "capacity": 419262 },
+											"uses": { "live": 552849, "capacity": 634039 },
+											"operands": { "live": 552849, "capacity": 650252 },
+											"blockParameters": { "live": 36159, "capacity": 50005 },
+											"terminatorEdges": { "live": 157292, "capacity": 158096 },
+											"terminatorArguments": 47310,
+											"handlerArguments": { "live": 38519, "capacity": 38559 },
+											"facts": { "live": 42409, "capacity": 42583 },
+											"effectRefinements": { "live": 42306, "capacity": 42583 },
+											"abandonedStorage": {
+												"operands": 97403,
+												"blockParameters": 13846,
+												"terminatorEdges": 804,
+												"handlerArguments": 40,
+												"effectRefinements": 277
+											}
+										},
+										{
+											"checkpoint": "before-sealing",
+											"functions": { "live": 6513, "capacity": 6513 },
+											"blocks": { "live": 129042, "capacity": 129499 },
+											"instructions": { "live": 559040, "capacity": 661764 },
+											"values": { "live": 381695, "capacity": 419262 },
+											"uses": { "live": 552849, "capacity": 634039 },
+											"operands": { "live": 552849, "capacity": 650252 },
+											"blockParameters": { "live": 36159, "capacity": 50005 },
+											"terminatorEdges": { "live": 157292, "capacity": 158096 },
+											"terminatorArguments": 47310,
+											"handlerArguments": { "live": 38519, "capacity": 38559 },
+											"facts": { "live": 42409, "capacity": 42583 },
+											"effectRefinements": { "live": 42306, "capacity": 42583 },
+											"abandonedStorage": {
+												"operands": 97403,
+												"blockParameters": 13846,
+												"terminatorEdges": 804,
+												"handlerArguments": 40,
+												"effectRefinements": 277
+											}
+										},
+										{
+											"checkpoint": "after-sealing",
+											"functions": { "live": 6513, "capacity": 6513 },
+											"blocks": { "live": 129042, "capacity": 129499 },
+											"instructions": { "live": 559040, "capacity": 661764 },
+											"values": { "live": 381695, "capacity": 419262 },
+											"uses": { "live": 552849, "capacity": 634039 },
+											"operands": { "live": 552849, "capacity": 650252 },
+											"blockParameters": { "live": 36159, "capacity": 50005 },
+											"terminatorEdges": { "live": 157292, "capacity": 158096 },
+											"terminatorArguments": 47310,
+											"handlerArguments": { "live": 38519, "capacity": 38559 },
+											"facts": { "live": 42409, "capacity": 42583 },
+											"effectRefinements": { "live": 42306, "capacity": 42583 },
+											"abandonedStorage": {
+												"operands": 97403,
+												"blockParameters": 13846,
+												"terminatorEdges": 804,
+												"handlerArguments": 40,
+												"effectRefinements": 277
+											}
+										}
+									],
+									"passes": [
+										{
+											"pass": "annotate-terminal-yield-sites",
+											"runs": 17220,
+											"workItems": 17220,
+											"changedItems": 0,
+											"edits": 0,
+											"elapsedMs": 5
+										},
+										{
+											"pass": "forwarding-block-elimination",
+											"runs": 26617,
+											"workItems": 26617,
+											"changedItems": 8083,
+											"edits": 110070,
+											"elapsedMs": 311
+										},
+										{
+											"pass": "linear-block-merging",
+											"runs": 25337,
+											"workItems": 25337,
+											"changedItems": 5620,
+											"edits": 315274,
+											"elapsedMs": 533
+										},
+										{
+											"pass": "unreachable-block-removal",
+											"runs": 28546,
+											"workItems": 28546,
+											"changedItems": 2084,
+											"edits": 15409,
+											"elapsedMs": 193
+										},
+										{
+											"pass": "fused-local-optimizer",
+											"runs": 33502,
+											"workItems": 2900770,
+											"changedItems": 194034,
+											"edits": 283125,
+											"elapsedMs": 0
+										},
+										{
+											"pass": "block-parameter-simplification",
+											"runs": 15263,
+											"workItems": 15263,
+											"changedItems": 754,
+											"edits": 778648,
+											"elapsedMs": 731
+										},
+										{
+											"pass": "rewrite-exact-builtin-calls",
+											"runs": 12257,
+											"workItems": 12257,
+											"changedItems": 2362,
+											"edits": 9933,
+											"elapsedMs": 437
+										},
+										{
+											"pass": "local-explicit-throw-lowering",
+											"runs": 10104,
+											"workItems": 10104,
+											"changedItems": 0,
+											"edits": 0,
+											"elapsedMs": 11
+										},
+										{
+											"pass": "canonicalize-fact-claims",
+											"runs": 12023,
+											"workItems": 12023,
+											"changedItems": 0,
+											"edits": 0,
+											"elapsedMs": 27
+										},
+										{
+											"pass": "empty-fact-elimination",
+											"runs": 12023,
+											"workItems": 12023,
+											"changedItems": 0,
+											"edits": 0,
+											"elapsedMs": 5
+										},
+										{
+											"pass": "local-scalar-representation-selection",
+											"runs": 7387,
+											"workItems": 7387,
+											"changedItems": 5596,
+											"edits": 75718,
+											"elapsedMs": 41
+										},
+										{
+											"pass": "fold-static-reflections",
+											"runs": 7444,
+											"workItems": 7444,
+											"changedItems": 1,
+											"edits": 1,
+											"elapsedMs": 191
+										},
+										{
+											"pass": "resolve-known-operations",
+											"runs": 8729,
+											"workItems": 8729,
+											"changedItems": 1487,
+											"edits": 6425,
+											"elapsedMs": 377
+										},
+										{
+											"pass": "dominance-redundancy-elimination",
+											"runs": 5267,
+											"workItems": 5267,
+											"changedItems": 2655,
+											"edits": 54930,
+											"elapsedMs": 243
+										},
+										{
+											"pass": "fold-static-binding-constants",
+											"runs": 7323,
+											"workItems": 7323,
+											"changedItems": 173,
+											"edits": 1172,
+											"elapsedMs": 644
+										},
+										{
+											"pass": "materialize-virtual-state",
+											"runs": 4476,
+											"workItems": 4476,
+											"changedItems": 122,
+											"edits": 1300,
+											"elapsedMs": 194
+										},
+										{
+											"pass": "annotate-known-own-slots",
+											"runs": 7022,
+											"workItems": 7022,
+											"changedItems": 77,
+											"edits": 364,
+											"elapsedMs": 162
+										},
+										{
+											"pass": "refine-contained-own-slot-accesses",
+											"runs": 3442,
+											"workItems": 3442,
+											"changedItems": 43,
+											"edits": 348,
+											"elapsedMs": 435
+										},
+										{
+											"pass": "scalar-replace-contained-aggregates",
+											"runs": 3936,
+											"workItems": 3936,
+											"changedItems": 429,
+											"edits": 1740,
+											"elapsedMs": 620
+										},
+										{
+											"pass": "value-kind-observation-folding",
+											"runs": 11766,
+											"workItems": 11766,
+											"changedItems": 0,
+											"edits": 0,
+											"elapsedMs": 180
+										},
+										{
+											"pass": "redundant-tdz-check-folding",
+											"runs": 5073,
+											"workItems": 5073,
+											"changedItems": 3592,
+											"edits": 68871,
+											"elapsedMs": 132
+										},
+										{
+											"pass": "primitive-effect-refinement",
+											"runs": 12477,
+											"workItems": 12477,
+											"changedItems": 4815,
+											"edits": 85208,
+											"elapsedMs": 227
+										},
+										{
+											"pass": "flow-scalar-representation-selection",
+											"runs": 8763,
+											"workItems": 8763,
+											"changedItems": 1545,
+											"edits": 15105,
+											"elapsedMs": 290
+										},
+										{
+											"pass": "fold-static-property-reads",
+											"runs": 7913,
+											"workItems": 7913,
+											"changedItems": 18,
+											"edits": 37,
+											"elapsedMs": 1070
+										},
+										{
+											"pass": "lower-primitive-operations",
+											"runs": 6478,
+											"workItems": 6478,
+											"changedItems": 47,
+											"edits": 468,
+											"elapsedMs": 722
+										},
+										{
+											"pass": "reuse-primitive-call-results",
+											"runs": 197,
+											"workItems": 197,
+											"changedItems": 0,
+											"edits": 0,
+											"elapsedMs": 22
+										},
+										{
+											"pass": "reuse-literal-constants",
+											"runs": 2296,
+											"workItems": 2296,
+											"changedItems": 1,
+											"edits": 5,
+											"elapsedMs": 43
+										},
+										{
+											"pass": "canonical-block-parameter-elimination",
+											"runs": 5850,
+											"workItems": 5850,
+											"changedItems": 225,
+											"edits": 28320,
+											"elapsedMs": 158
+										},
+										{
+											"pass": "natural-loop-canonicalization",
+											"runs": 1874,
+											"workItems": 1874,
+											"changedItems": 244,
+											"edits": 882,
+											"elapsedMs": 63
+										},
+										{
+											"pass": "loop-invariant-code-motion",
+											"runs": 2870,
+											"workItems": 2870,
+											"changedItems": 505,
+											"edits": 3498,
+											"elapsedMs": 290
+										},
+										{
+											"pass": "loop-scalar-representation-selection",
+											"runs": 2306,
+											"workItems": 2306,
+											"changedItems": 389,
+											"edits": 4587,
+											"elapsedMs": 270
+										},
+										{
+											"pass": "numeric-nullish-join-normalization",
+											"runs": 9670,
+											"workItems": 9670,
+											"changedItems": 0,
+											"edits": 0,
+											"elapsedMs": 61
+										},
+										{
+											"pass": "select-static-property-reads",
+											"runs": 2613,
+											"workItems": 2613,
+											"changedItems": 9,
+											"edits": 466,
+											"elapsedMs": 54
+										},
+										{
+											"pass": "refine-exact-typed-array-accesses",
+											"runs": 3029,
+											"workItems": 3029,
+											"changedItems": 43,
+											"edits": 233,
+											"elapsedMs": 144
+										},
+										{
+											"pass": "partial-redundancy-elimination",
+											"runs": 1174,
+											"workItems": 1174,
+											"changedItems": 77,
+											"edits": 682,
+											"elapsedMs": 81
+										},
+										{
+											"pass": "path-range-control-folding",
+											"runs": 1149,
+											"workItems": 1149,
+											"changedItems": 40,
+											"edits": 42,
+											"elapsedMs": 77
+										},
+										{
+											"pass": "rewrite-contained-fresh-array-builtins",
+											"runs": 952,
+											"workItems": 952,
+											"changedItems": 13,
+											"edits": 116,
+											"elapsedMs": 485
+										},
+										{
+											"pass": "forward-exact-memory-loads",
+											"runs": 3089,
+											"workItems": 3089,
+											"changedItems": 170,
+											"edits": 625,
+											"elapsedMs": 1002
+										},
+										{
+											"pass": "forward-fresh-own-slot-prefix",
+											"runs": 2293,
+											"workItems": 2293,
+											"changedItems": 0,
+											"edits": 0,
+											"elapsedMs": 74
+										},
+										{
+											"pass": "refine-stack-object-cell-representations",
+											"runs": 2216,
+											"workItems": 2216,
+											"changedItems": 0,
+											"edits": 0,
+											"elapsedMs": 168
+										},
+										{
+											"pass": "scalarize-rooted-contained-objects",
+											"runs": 617,
+											"workItems": 617,
+											"changedItems": 0,
+											"edits": 0,
+											"elapsedMs": 66
+										},
+										{
+											"pass": "primitive-coercion-folding",
+											"runs": 1418,
+											"workItems": 1418,
+											"changedItems": 10,
+											"edits": 411,
+											"elapsedMs": 74
+										},
+										{
+											"pass": "sink-conditional-object-allocations",
+											"runs": 41,
+											"workItems": 41,
+											"changedItems": 0,
+											"edits": 0,
+											"elapsedMs": 8
+										},
+										{
+											"pass": "refine-exact-collection-accesses",
+											"runs": 48,
+											"workItems": 48,
+											"changedItems": 0,
+											"edits": 0,
+											"elapsedMs": 7
+										},
+										{
+											"pass": "fold-exact-allocation-observations",
+											"runs": 481,
+											"workItems": 481,
+											"changedItems": 0,
+											"edits": 0,
+											"elapsedMs": 104
+										},
+										{
+											"pass": "lower-known-operation-results",
+											"runs": 234,
+											"workItems": 234,
+											"changedItems": 209,
+											"edits": 6344,
+											"elapsedMs": 47
+										},
+										{
+											"pass": "forward-rest-arguments",
+											"runs": 20,
+											"workItems": 20,
+											"changedItems": 1,
+											"edits": 2,
+											"elapsedMs": 0
+										},
+										{
+											"pass": "scalarize-rest-argument-reads",
+											"runs": 20,
+											"workItems": 20,
+											"changedItems": 0,
+											"edits": 0,
+											"elapsedMs": 0
+										},
+										{
+											"pass": "scalarize-bounded-rest-reads",
+											"runs": 20,
+											"workItems": 20,
+											"changedItems": 0,
+											"edits": 0,
+											"elapsedMs": 0
+										},
+										{
+											"pass": "numeric-algebraic-simplification",
+											"runs": 1,
+											"workItems": 1,
+											"changedItems": 1,
+											"edits": 1,
+											"elapsedMs": 0
+										},
+										{
+											"pass": "path-range-strength-reduction",
+											"runs": 29,
+											"workItems": 29,
+											"changedItems": 0,
+											"edits": 0,
+											"elapsedMs": 0
+										},
+										{
+											"pass": "cross-call-local-optimizer",
+											"runs": 926,
+											"workItems": 97034,
+											"changedItems": 293,
+											"edits": 38493,
+											"elapsedMs": 0
+										}
+									],
+									"analyses": [
+										{
+											"analysis": "control-flow-bundle",
+											"queries": 419543,
+											"hits": 398856,
+											"recomputations": 20687,
+											"invalidations": 0,
+											"elapsedMs": 14
+										},
+										{
+											"analysis": "canonical-value-roots",
+											"queries": 38499,
+											"hits": 15870,
+											"recomputations": 22629,
+											"invalidations": 14704,
+											"elapsedMs": 261
+										},
+										{
+											"analysis": "local-value-kinds",
+											"queries": 82008,
+											"hits": 58651,
+											"recomputations": 23357,
+											"invalidations": 14770,
+											"elapsedMs": 665
+										},
+										{
+											"analysis": "static-value-descriptions",
+											"queries": 60689,
+											"hits": 46342,
+											"recomputations": 14347,
+											"invalidations": 3311,
+											"elapsedMs": 4
+										},
+										{
+											"analysis": "local-fact-bundle",
+											"queries": 32576,
+											"hits": 20581,
+											"recomputations": 11995,
+											"invalidations": 4710,
+											"elapsedMs": 27
+										},
+										{
+											"analysis": "local-shape-provenance",
+											"queries": 10464,
+											"hits": 3274,
+											"recomputations": 7190,
+											"invalidations": 1280,
+											"elapsedMs": 69
+										},
+										{
+											"analysis": "local-memory-versions",
+											"queries": 70330,
+											"hits": 65949,
+											"recomputations": 4381,
+											"invalidations": 1555,
+											"elapsedMs": 5
+										},
+										{
+											"analysis": "loop-induction-and-path-ranges",
+											"queries": 3983,
+											"hits": 853,
+											"recomputations": 3130,
+											"invalidations": 1470,
+											"elapsedMs": 100
+										},
+										{
+											"analysis": "local-exception-flow",
+											"queries": 1506,
+											"hits": 0,
+											"recomputations": 1506,
+											"invalidations": 752,
+											"elapsedMs": 10
+										},
+										{
+											"analysis": "static-private-cell-index",
+											"queries": 308031,
+											"hits": 302719,
+											"recomputations": 5312,
+											"invalidations": 0,
+											"elapsedMs": 6
+										},
+										{
+											"analysis": "local-stack-object-proofs",
+											"queries": 2216,
+											"hits": 0,
+											"recomputations": 2216,
+											"invalidations": 610,
+											"elapsedMs": 164
+										},
+										{
+											"analysis": "program-flow",
+											"queries": 4877,
+											"hits": 4875,
+											"recomputations": 2,
+											"invalidations": 1,
+											"elapsedMs": 2752
+										},
+										{
+											"analysis": "program-flow-valueKinds",
+											"queries": 1,
+											"hits": 0,
+											"recomputations": 1,
+											"invalidations": 0,
+											"elapsedMs": 292
+										},
+										{
+											"analysis": "local-specialization-candidates",
+											"queries": 835,
+											"hits": 0,
+											"recomputations": 835,
+											"invalidations": 0,
+											"elapsedMs": 145
+										}
+									],
+									"owners": [
+										{ "id": 0, "name": "unattributed", "elapsedMs": 0, "workUnits": 0 },
+										{
+											"id": 1,
+											"name": "semantic-to-Core construction",
+											"elapsedMs": 0,
+											"workUnits": 0
+										},
+										{
+											"id": 2,
+											"name": "construction structural cleanup",
+											"elapsedMs": 135,
+											"workUnits": 6458
+										},
+										{
+											"id": 3,
+											"name": "dense generation barrier",
+											"elapsedMs": 560,
+											"workUnits": 6513
+										},
+										{
+											"id": 4,
+											"name": "fused local optimization",
+											"elapsedMs": 764,
+											"workUnits": 2997804
+										},
+										{
+											"id": 5,
+											"name": "block-parameter simplification",
+											"elapsedMs": 577,
+											"workUnits": 21113
+										},
+										{
+											"id": 6,
+											"name": "forwarding and linear block normalization",
+											"elapsedMs": 624,
+											"workUnits": 51954
+										},
+										{
+											"id": 7,
+											"name": "CFG edge construction",
+											"elapsedMs": 479,
+											"workUnits": 52784
+										},
+										{
+											"id": 8,
+											"name": "control-flow traversal",
+											"elapsedMs": 271,
+											"workUnits": 54292
+										},
+										{
+											"id": 9,
+											"name": "immediate dominators",
+											"elapsedMs": 311,
+											"workUnits": 21277
+										},
+										{
+											"id": 10,
+											"name": "loops and dominance frontiers",
+											"elapsedMs": 206,
+											"workUnits": 16885
+										},
+										{
+											"id": 11,
+											"name": "local value kinds",
+											"elapsedMs": 628,
+											"workUnits": 26544
+										},
+										{
+											"id": 12,
+											"name": "canonical value roots",
+											"elapsedMs": 217,
+											"workUnits": 22629
+										},
+										{
+											"id": 13,
+											"name": "local fact and provenance construction",
+											"elapsedMs": 520,
+											"workUnits": 104977
+										},
+										{
+											"id": 14,
+											"name": "memory event extraction",
+											"elapsedMs": 1076,
+											"workUnits": 1052495
+										},
+										{
+											"id": 15,
+											"name": "memoryVersions / MemorySSA",
+											"elapsedMs": 903,
+											"workUnits": 629914
+										},
+										{
+											"id": 16,
+											"name": "program-flow local extraction",
+											"elapsedMs": 155,
+											"workUnits": 1099733
+										},
+										{
+											"id": 17,
+											"name": "program-flow convergence",
+											"elapsedMs": 2861,
+											"workUnits": 31359
+										},
+										{
+											"id": 18,
+											"name": "cross-call transforms",
+											"elapsedMs": 582,
+											"workUnits": 18388
+										},
+										{
+											"id": 19,
+											"name": "specialization discovery",
+											"elapsedMs": 438,
+											"workUnits": 6583
+										},
+										{
+											"id": 20,
+											"name": "specialization selection",
+											"elapsedMs": 446,
+											"workUnits": 6583
+										},
+										{
+											"id": 21,
+											"name": "Core verification",
+											"elapsedMs": 1386,
+											"workUnits": 12971
+										},
+										{
+											"id": 22,
+											"name": "Core-to-Execution lowering",
+											"elapsedMs": 0,
+											"workUnits": 0
+										},
+										{
+											"id": 23,
+											"name": "Execution-to-Image lowering",
+											"elapsedMs": 0,
+											"workUnits": 0
+										},
+										{ "id": 24, "name": "emission", "elapsedMs": 0, "workUnits": 0 },
+										{
+											"id": 25,
+											"name": "other function optimization passes",
+											"elapsedMs": 5574,
+											"workUnits": 238326
+										},
+										{
+											"id": 26,
+											"name": "optimizer instrumentation",
+											"elapsedMs": 17,
+											"workUnits": 8
+										},
+										{
+											"id": 27,
+											"name": "optimizer orchestration",
+											"elapsedMs": 1035,
+											"workUnits": 0
+										},
+										{ "id": 28, "name": "module graph", "elapsedMs": 0, "workUnits": 0 },
+										{
+											"id": 29,
+											"name": "semantic analysis",
+											"elapsedMs": 0,
+											"workUnits": 0
+										},
+										{
+											"id": 30,
+											"name": "output serialization",
+											"elapsedMs": 0,
+											"workUnits": 0
+										},
+										{ "id": 31, "name": "output writing", "elapsedMs": 0, "workUnits": 0 }
+									],
+									"discovery": {
+										"candidates": 5987,
+										"byKind": {
+											"array-values-iterator-cursor": 2536,
+											"iterator-result-virtualization": 762,
+											"builtin-collection-call-chain": 2096,
+											"indexed-length-loop": 53,
+											"stack-object": 142,
+											"map-iterator-cursor": 29,
+											"iterator-entry-pair-virtualization": 164,
+											"set-iterator-cursor": 36,
+											"numeric-fusion": 142,
+											"string-slice-number": 1,
+											"regexp-exec-projection": 2,
+											"string-char-code-at-chain": 24
+										},
+										"stackObjects": 142,
+										"denseArrays": 0,
+										"numericFusions": 142,
+										"largestFanOut": 45
+									},
+									"program": {
+										"functionsAnalyzed": 4378,
+										"functionsReused": 2135,
+										"summaryFunctionsAnalyzed": 926,
+										"reachabilityFunctionsScanned": 6513,
+										"callSites": 33357,
+										"exactCallEdges": 7055,
+										"wildcardCallers": 3387,
+										"wildcardCallSites": 19992,
+										"opaqueCallSites": 29000,
+										"aggregateDependencies": 6513,
+										"storedGraphRows": 5224,
+										"storedGraphEntries": 30523,
+										"sccs": 2654,
+										"sccNodesAnalyzed": 6514,
+										"sccEdgeVisits": 16955,
+										"sccTransfers": 14262,
+										"summaryChanges": 358,
+										"callerWakeups": 15,
+										"affectedCallers": 47,
+										"deadFunctions": 0
+									},
+									"transforms": {
+										"considered": 18388,
+										"applied": 1172,
+										"declined": 17216,
+										"appliedByKind": {
+											"static-argument-specialization": 0,
+											"finite-dispatch": 9,
+											"inline": 153,
+											"guarded-inline": 979,
+											"array-iteration-inline": 31,
+											"direct-entry": 0,
+											"guarded-direct-call": 0,
+											"stack-object-plan": 0,
+											"dense-array-plan": 0,
+											"numeric-fusion": 0,
+											"string-split-projection": 0,
+											"string-slice-number": 0,
+											"regexp-exec-projection": 0,
+											"regexp-iterator-projection": 0,
+											"string-char-code-at-chain": 0,
+											"builtin-collection-call-chain": 0,
+											"array-values-iterator-cursor": 0,
+											"string-iterator-cursor": 0,
+											"typed-array-iterator-cursor": 0,
+											"map-iterator-cursor": 0,
+											"set-iterator-cursor": 0,
+											"iterator-result-virtualization": 0,
+											"iterator-entry-pair-virtualization": 0,
+											"fresh-array-length": 0,
+											"indexed-length-loop": 0,
+											"function-call-chain": 0,
+											"string-split-cursor": 0
+										},
+										"declinedByReason": {
+											"expansion-limit": 0,
+											"generated-code-cost": 12995,
+											"compiler-work-cost": 0,
+											"unsupported-graph": 4108,
+											"recursive": 113,
+											"overlap": 0,
+											"stale-anchor": 0,
+											"representation": 0,
+											"target-support": 0
+										},
+										"generatedCodeConsumed": 16897,
+										"compilerWorkConsumed": 31652,
+										"waves": 1,
+										"callerEditSessions": 1001,
+										"callerLocalOptimizations": 926,
+										"programFlowResolves": 2,
+										"instructionsIntroduced": 14063,
+										"blocksIntroduced": 5820,
+										"callGraphFunctionsAnalyzed": 10891,
+										"summaryFunctionsAnalyzed": 7439,
+										"sccNodesAnalyzed": 13028,
+										"sccEdgeVisits": 33465,
+										"sccTransfers": 21630,
+										"callerWakeups": 15,
+										"valueKindFunctionEvaluations": 18175,
+										"valueKindFolds": 0,
+										"wildcardAggregateRecomputations": 19,
+										"exactReverseCallerVisits": 36399,
+										"wildcardReverseCallerVisits": 9915
+									},
+									"plan": {
+										"discovery": {
+											"opportunities": 26811,
+											"attempted": 1469,
+											"skipped": 25342,
+											"compilerWork": 354435,
+											"skippedByReason": {
+												"compiler-work-cost": 12,
+												"generated-code-cost": 25330
+											}
+										},
+										"admittedFunctions": 980,
+										"discovered": 6583,
+										"selected": 4625,
+										"declined": 1958,
+										"discoveredByKind": {
+											"direct-entry": 591,
+											"array-values-iterator-cursor": 2536,
+											"iterator-result-virtualization": 762,
+											"builtin-collection-call-chain": 2096,
+											"indexed-length-loop": 53,
+											"stack-object-plan": 142,
+											"map-iterator-cursor": 29,
+											"iterator-entry-pair-virtualization": 164,
+											"set-iterator-cursor": 36,
+											"numeric-fusion": 142,
+											"string-slice-number": 1,
+											"regexp-exec-projection": 2,
+											"string-char-code-at-chain": 24,
+											"guarded-direct-call": 5
+										},
+										"selectedByKind": {
+											"direct-entry": 231,
+											"iterator-result-virtualization": 724,
+											"builtin-collection-call-chain": 1928,
+											"array-values-iterator-cursor": 1407,
+											"indexed-length-loop": 32,
+											"iterator-entry-pair-virtualization": 160,
+											"stack-object-plan": 41,
+											"numeric-fusion": 58,
+											"map-iterator-cursor": 8,
+											"set-iterator-cursor": 10,
+											"string-char-code-at-chain": 21,
+											"guarded-direct-call": 5
+										},
+										"declinedByReason": {
+											"expansion-limit": 1158,
+											"generated-code-cost": 617,
+											"compiler-work-cost": 181,
+											"unsupported-graph": 0,
+											"recursive": 0,
+											"overlap": 2,
+											"stale-anchor": 0,
+											"representation": 0,
+											"target-support": 0
+										},
+										"generatedCodeConsumed": 50690,
+										"compilerWorkConsumed": 509039,
+										"verificationMs": 225
+									},
+									"queue": { "pushes": 2308847, "pops": 2308847, "maximumDepth": 29622 },
+									"budget": {
+										"workItems": 2275345,
+										"edits": 1908853,
+										"exhaustedPasses": []
+									},
+									"counters": {
+										"analysisQueries": 1035558,
+										"analysisRecomputations": 117588,
+										"localRulesConsidered": 3309197,
+										"localRulesApplied": 235767,
+										"functionScans": 43018,
+										"programFlowJournalEntries": 27876,
+										"programFlowDirtyFunctions": 6527,
+										"programFlowLocalScans": 13026,
+										"programFlowLocalInstructionVisits": 1099733,
+										"programFlowTransferRecords": 1255452,
+										"programFlowTransferReuses": 28689,
+										"programFlowTargetWakeups": 5331,
+										"programFlowSummaryWakeups": 6527,
+										"programFlowValueKindWakeups": 6521,
+										"programFlowReachabilityWakeups": 5331,
+										"programFlowSccPops": 10809,
+										"programFlowSccWakeups": 10809,
+										"programFlowFunctionPops": 13811,
+										"programFlowFunctionWakeups": 13811,
+										"explicitCallEdges": 7055,
+										"wildcardCallSources": 3387,
+										"wildcardCallSites": 19992,
+										"opaqueCallSites": 29000,
+										"aggregateDependencies": 6513,
+										"storedCallGraphRows": 5224,
+										"storedCallGraphEntries": 30523,
+										"wildcardAggregateRecomputations": 19,
+										"exactReverseCallerVisits": 36399,
+										"wildcardReverseCallerVisits": 9915,
+										"callTargetMs": 0,
+										"summaryMs": 0,
+										"reachabilityMs": 0,
+										"valueKindMs": 0,
+										"sccNodes": 26056,
+										"sccEdges": 66930,
+										"sccTransfers": 21630,
+										"localFactRebuilds": 11995,
+										"provenanceRebuilds": 11995,
+										"provenanceLayoutsMaterialized": 48366,
+										"provenanceEscapeChecks": 38053,
+										"integerProofValues": 3498,
+										"valueClassContainmentChecks": 15,
+										"memoryAccesses": 999253,
+										"memoryInstructionsIndexed": 2336657,
+										"memoryLocalReadAttempts": 31163,
+										"memoryLocalReadAnswers": 23618,
+										"memoryLocalReadInstructions": 66024,
+										"memoryHeapAccessesResolved": 0,
+										"memoryEvents": 952642,
+										"memoryCompactedEvents": 637879,
+										"memoryLocations": 14835,
+										"memoryPartitionsSolved": 18538,
+										"memoryTouchedBlocks": 326115,
+										"memoryStateRows": 374213,
+										"memoryStateEntries": 593318,
+										"memoryPhis": 53374,
+										"memoryTransfers": 602898,
+										"memoryFamilyWidens": 1100019,
+										"specializationFunctionsScanned": 835,
+										"specializationCandidatesDiscovered": 5987,
+										"specializationCandidatesSelected": 4625,
+										"specializationPayloadsMaterialized": 4394,
+										"liveUseVisits": 3352060,
+										"deadUseSkips": 0,
+										"abandonedOperandStorage": 97403,
+										"abandonedParameterStorage": 13846
+									}
+								},
+								"owners": [
+									{ "id": 0, "name": "unattributed", "elapsedMs": 0, "workUnits": 0 },
+									{
+										"id": 1,
+										"name": "semantic-to-Core construction",
+										"elapsedMs": 3384,
+										"workUnits": 921902
+									},
+									{
+										"id": 2,
+										"name": "construction structural cleanup",
+										"elapsedMs": 135,
+										"workUnits": 6458
+									},
+									{
+										"id": 3,
+										"name": "dense generation barrier",
+										"elapsedMs": 560,
+										"workUnits": 6513
+									},
+									{
+										"id": 4,
+										"name": "fused local optimization",
+										"elapsedMs": 764,
+										"workUnits": 2997804
+									},
+									{
+										"id": 5,
+										"name": "block-parameter simplification",
+										"elapsedMs": 577,
+										"workUnits": 21113
+									},
+									{
+										"id": 6,
+										"name": "forwarding and linear block normalization",
+										"elapsedMs": 624,
+										"workUnits": 51954
+									},
+									{
+										"id": 7,
+										"name": "CFG edge construction",
+										"elapsedMs": 479,
+										"workUnits": 52784
+									},
+									{
+										"id": 8,
+										"name": "control-flow traversal",
+										"elapsedMs": 271,
+										"workUnits": 54292
+									},
+									{
+										"id": 9,
+										"name": "immediate dominators",
+										"elapsedMs": 311,
+										"workUnits": 21277
+									},
+									{
+										"id": 10,
+										"name": "loops and dominance frontiers",
+										"elapsedMs": 206,
+										"workUnits": 16885
+									},
+									{
+										"id": 11,
+										"name": "local value kinds",
+										"elapsedMs": 628,
+										"workUnits": 26544
+									},
+									{
+										"id": 12,
+										"name": "canonical value roots",
+										"elapsedMs": 217,
+										"workUnits": 22629
+									},
+									{
+										"id": 13,
+										"name": "local fact and provenance construction",
+										"elapsedMs": 520,
+										"workUnits": 104977
+									},
+									{
+										"id": 14,
+										"name": "memory event extraction",
+										"elapsedMs": 1076,
+										"workUnits": 1052495
+									},
+									{
+										"id": 15,
+										"name": "memoryVersions / MemorySSA",
+										"elapsedMs": 903,
+										"workUnits": 629914
+									},
+									{
+										"id": 16,
+										"name": "program-flow local extraction",
+										"elapsedMs": 155,
+										"workUnits": 1099733
+									},
+									{
+										"id": 17,
+										"name": "program-flow convergence",
+										"elapsedMs": 2861,
+										"workUnits": 31359
+									},
+									{
+										"id": 18,
+										"name": "cross-call transforms",
+										"elapsedMs": 582,
+										"workUnits": 18388
+									},
+									{
+										"id": 19,
+										"name": "specialization discovery",
+										"elapsedMs": 438,
+										"workUnits": 6583
+									},
+									{
+										"id": 20,
+										"name": "specialization selection",
+										"elapsedMs": 446,
+										"workUnits": 6583
+									},
+									{
+										"id": 21,
+										"name": "Core verification",
+										"elapsedMs": 1386,
+										"workUnits": 12971
+									},
+									{
+										"id": 22,
+										"name": "Core-to-Execution lowering",
+										"elapsedMs": 2806,
+										"workUnits": 559040
+									},
+									{
+										"id": 23,
+										"name": "Execution-to-Image lowering",
+										"elapsedMs": 6650,
+										"workUnits": 559040
+									},
+									{
+										"id": 24,
+										"name": "emission",
+										"elapsedMs": 6380,
+										"workUnits": 137251797
+									},
+									{
+										"id": 25,
+										"name": "other function optimization passes",
+										"elapsedMs": 5574,
+										"workUnits": 238326
+									},
+									{
+										"id": 26,
+										"name": "optimizer instrumentation",
+										"elapsedMs": 17,
+										"workUnits": 8
+									},
+									{
+										"id": 27,
+										"name": "optimizer orchestration",
+										"elapsedMs": 1035,
+										"workUnits": 0
+									},
+									{ "id": 28, "name": "module graph", "elapsedMs": 247, "workUnits": 0 },
+									{
+										"id": 29,
+										"name": "semantic analysis",
+										"elapsedMs": 386,
+										"workUnits": 921902
+									},
+									{
+										"id": 30,
+										"name": "output serialization",
+										"elapsedMs": 0,
+										"workUnits": 137251797
+									},
+									{
+										"id": 31,
+										"name": "output writing",
+										"elapsedMs": 380,
+										"workUnits": 137251797
+									}
+								]
+							},
+							"maligator": {
+								"wallMs": 172606.937792,
+								"units": 123,
+								"codeUnits": 137251797,
+								"digest": "97ef22e6c32bb5dc29af8c594d81e0d9edce79b3ce1b94f6281f6758c2f8c8f3",
+								"phases": {
+									"graphMs": 996,
+									"semanticMs": 1789,
+									"constructCoreMs": 15709,
+									"optimizeCoreMs": 78369,
+									"coreToExecutionMs": 10094,
+									"coreToNativeMs": 11476,
+									"executionToImageMs": 31011,
+									"emitMs": 20977,
+									"writeMs": 1542
+								},
+								"optimizer": {
+									"instrumentation": "full",
+									"construction": {
+										"virtualPhisCreated": 2799891,
+										"virtualPhisCollapsed": 2196892,
+										"materializedBlockParameters": 602999,
+										"edgeArgumentsEmitted": 785762,
+										"definitionSnapshotEntriesCopied": 0,
+										"aliasResolutions": 2418118,
+										"maximumUnresolvedPhiDepth": 3
+									},
+									"input": {
+										"functions": 6458,
+										"blocks": 262468,
+										"instructions": 921902,
+										"values": 1122586,
+										"facts": 0,
+										"planCandidates": 0
+									},
+									"output": {
+										"functions": 6513,
+										"blocks": 129042,
+										"instructions": 559040,
+										"values": 381695,
+										"facts": 42409,
+										"planCandidates": 4625
+									},
+									"phases": [
+										{ "phase": "pre-optimization-verification", "elapsedMs": 3541 },
+										{ "phase": "construction-cleanup", "elapsedMs": 1 },
+										{ "phase": "initial-local-optimization", "elapsedMs": 43 },
+										{ "phase": "structural-cfg-optimization", "elapsedMs": 11399 },
+										{ "phase": "dense-generation-barrier", "elapsedMs": 2326 },
+										{ "phase": "post-barrier-local-optimization", "elapsedMs": 5268 },
+										{ "phase": "advanced-cfg-optimization", "elapsedMs": 3932 },
+										{
+											"phase": "proof-and-representation-optimization",
+											"elapsedMs": 2833
+										},
+										{ "phase": "memory-and-provenance-optimization", "elapsedMs": 26210 },
+										{ "phase": "late-local-cleanup", "elapsedMs": 1864 },
+										{ "phase": "program-flow", "elapsedMs": 5139 },
+										{ "phase": "cross-call-transforms", "elapsedMs": 9870 },
+										{ "phase": "cross-call-memory-forwarding", "elapsedMs": 29 },
+										{ "phase": "specialization-discovery", "elapsedMs": 1563 },
+										{ "phase": "specialization-selection", "elapsedMs": 1348 },
+										{ "phase": "sealing", "elapsedMs": 6 },
+										{ "phase": "plan-verification", "elapsedMs": 598 },
+										{ "phase": "final-core-verification", "elapsedMs": 1944 }
+									],
+									"checkpoints": [
+										{
+											"checkpoint": "after-core-construction",
+											"functions": { "live": 6458, "capacity": 6458 },
+											"blocks": { "live": 262468, "capacity": 262468 },
+											"instructions": { "live": 921902, "capacity": 921902 },
+											"values": { "live": 1122586, "capacity": 1122586 },
+											"uses": { "live": 1336162, "capacity": 1336162 },
+											"operands": { "live": 1336162, "capacity": 1336162 },
+											"blockParameters": { "live": 616417, "capacity": 616800 },
+											"terminatorEdges": { "live": 287296, "capacity": 287296 },
+											"terminatorArguments": 681425,
+											"handlerArguments": { "live": 104337, "capacity": 104337 },
+											"facts": { "live": 0, "capacity": 0 },
+											"effectRefinements": { "live": 0, "capacity": 0 },
+											"abandonedStorage": {
+												"operands": 0,
+												"blockParameters": 383,
+												"terminatorEdges": 0,
+												"handlerArguments": 0,
+												"effectRefinements": 0
+											}
+										},
+										{
+											"checkpoint": "after-initial-local-structural-optimization",
+											"functions": { "live": 6458, "capacity": 6458 },
+											"blocks": { "live": 122976, "capacity": 262468 },
+											"instructions": { "live": 631228, "capacity": 921923 },
+											"values": { "live": 394525, "capacity": 1122607 },
+											"uses": { "live": 612622, "capacity": 1340358 },
+											"operands": { "live": 612622, "capacity": 1403830 },
+											"blockParameters": { "live": 38801, "capacity": 630977 },
+											"terminatorEdges": { "live": 149362, "capacity": 290381 },
+											"terminatorArguments": 60310,
+											"handlerArguments": { "live": 37343, "capacity": 104337 },
+											"facts": { "live": 0, "capacity": 0 },
+											"effectRefinements": { "live": 0, "capacity": 0 },
+											"abandonedStorage": {
+												"operands": 791208,
+												"blockParameters": 592176,
+												"terminatorEdges": 141019,
+												"handlerArguments": 66994,
+												"effectRefinements": 0
+											}
+										},
+										{
+											"checkpoint": "after-construction-generation-finalization",
+											"functions": { "live": 6513, "capacity": 6513 },
+											"blocks": { "live": 123332, "capacity": 123332 },
+											"instructions": { "live": 633796, "capacity": 633796 },
+											"values": { "live": 396691, "capacity": 396691 },
+											"uses": { "live": 615532, "capacity": 615532 },
+											"operands": { "live": 615532, "capacity": 615532 },
+											"blockParameters": { "live": 39056, "capacity": 39056 },
+											"terminatorEdges": { "live": 149744, "capacity": 149744 },
+											"terminatorArguments": 60451,
+											"handlerArguments": { "live": 37343, "capacity": 37343 },
+											"facts": { "live": 0, "capacity": 0 },
+											"effectRefinements": { "live": 0, "capacity": 0 },
+											"abandonedStorage": {
+												"operands": 0,
+												"blockParameters": 0,
+												"terminatorEdges": 0,
+												"handlerArguments": 0,
+												"effectRefinements": 0
+											}
+										},
+										{
+											"checkpoint": "before-memory-and-provenance",
+											"functions": { "live": 6513, "capacity": 6513 },
+											"blocks": { "live": 123225, "capacity": 123679 },
+											"instructions": { "live": 540693, "capacity": 641821 },
+											"values": { "live": 368329, "capacity": 404334 },
+											"uses": { "live": 531035, "capacity": 619150 },
+											"operands": { "live": 531035, "capacity": 632770 },
+											"blockParameters": { "live": 34452, "capacity": 48320 },
+											"terminatorEdges": { "live": 149680, "capacity": 150047 },
+											"terminatorArguments": 43856,
+											"handlerArguments": { "live": 37303, "capacity": 37343 },
+											"facts": { "live": 41329, "capacity": 41503 },
+											"effectRefinements": { "live": 41252, "capacity": 41503 },
+											"abandonedStorage": {
+												"operands": 101735,
+												"blockParameters": 13868,
+												"terminatorEdges": 367,
+												"handlerArguments": 40,
+												"effectRefinements": 251
+											}
+										},
+										{
+											"checkpoint": "before-program-flow",
+											"functions": { "live": 6513, "capacity": 6513 },
+											"blocks": { "live": 123225, "capacity": 123679 },
+											"instructions": { "live": 540693, "capacity": 641821 },
+											"values": { "live": 368329, "capacity": 404334 },
+											"uses": { "live": 531035, "capacity": 619150 },
+											"operands": { "live": 531035, "capacity": 632770 },
+											"blockParameters": { "live": 34452, "capacity": 48320 },
+											"terminatorEdges": { "live": 149680, "capacity": 150047 },
+											"terminatorArguments": 43856,
+											"handlerArguments": { "live": 37303, "capacity": 37343 },
+											"facts": { "live": 41329, "capacity": 41503 },
+											"effectRefinements": { "live": 41252, "capacity": 41503 },
+											"abandonedStorage": {
+												"operands": 101735,
+												"blockParameters": 13868,
+												"terminatorEdges": 367,
+												"handlerArguments": 40,
+												"effectRefinements": 251
+											}
+										},
+										{
+											"checkpoint": "after-cross-call-transforms",
+											"functions": { "live": 6513, "capacity": 6513 },
+											"blocks": { "live": 129042, "capacity": 129499 },
+											"instructions": { "live": 559040, "capacity": 661764 },
+											"values": { "live": 381695, "capacity": 419262 },
+											"uses": { "live": 552849, "capacity": 634039 },
+											"operands": { "live": 552849, "capacity": 650252 },
+											"blockParameters": { "live": 36159, "capacity": 50005 },
+											"terminatorEdges": { "live": 157292, "capacity": 158096 },
+											"terminatorArguments": 47310,
+											"handlerArguments": { "live": 38519, "capacity": 38559 },
+											"facts": { "live": 42409, "capacity": 42583 },
+											"effectRefinements": { "live": 42306, "capacity": 42583 },
+											"abandonedStorage": {
+												"operands": 97403,
+												"blockParameters": 13846,
+												"terminatorEdges": 804,
+												"handlerArguments": 40,
+												"effectRefinements": 277
+											}
+										},
+										{
+											"checkpoint": "before-sealing",
+											"functions": { "live": 6513, "capacity": 6513 },
+											"blocks": { "live": 129042, "capacity": 129499 },
+											"instructions": { "live": 559040, "capacity": 661764 },
+											"values": { "live": 381695, "capacity": 419262 },
+											"uses": { "live": 552849, "capacity": 634039 },
+											"operands": { "live": 552849, "capacity": 650252 },
+											"blockParameters": { "live": 36159, "capacity": 50005 },
+											"terminatorEdges": { "live": 157292, "capacity": 158096 },
+											"terminatorArguments": 47310,
+											"handlerArguments": { "live": 38519, "capacity": 38559 },
+											"facts": { "live": 42409, "capacity": 42583 },
+											"effectRefinements": { "live": 42306, "capacity": 42583 },
+											"abandonedStorage": {
+												"operands": 97403,
+												"blockParameters": 13846,
+												"terminatorEdges": 804,
+												"handlerArguments": 40,
+												"effectRefinements": 277
+											}
+										},
+										{
+											"checkpoint": "after-sealing",
+											"functions": { "live": 6513, "capacity": 6513 },
+											"blocks": { "live": 129042, "capacity": 129499 },
+											"instructions": { "live": 559040, "capacity": 661764 },
+											"values": { "live": 381695, "capacity": 419262 },
+											"uses": { "live": 552849, "capacity": 634039 },
+											"operands": { "live": 552849, "capacity": 650252 },
+											"blockParameters": { "live": 36159, "capacity": 50005 },
+											"terminatorEdges": { "live": 157292, "capacity": 158096 },
+											"terminatorArguments": 47310,
+											"handlerArguments": { "live": 38519, "capacity": 38559 },
+											"facts": { "live": 42409, "capacity": 42583 },
+											"effectRefinements": { "live": 42306, "capacity": 42583 },
+											"abandonedStorage": {
+												"operands": 97403,
+												"blockParameters": 13846,
+												"terminatorEdges": 804,
+												"handlerArguments": 40,
+												"effectRefinements": 277
+											}
+										}
+									],
+									"passes": [
+										{
+											"pass": "annotate-terminal-yield-sites",
+											"runs": 17220,
+											"workItems": 17220,
+											"changedItems": 0,
+											"edits": 0,
+											"elapsedMs": 30
+										},
+										{
+											"pass": "forwarding-block-elimination",
+											"runs": 26617,
+											"workItems": 26617,
+											"changedItems": 8083,
+											"edits": 110070,
+											"elapsedMs": 1289
+										},
+										{
+											"pass": "linear-block-merging",
+											"runs": 25337,
+											"workItems": 25337,
+											"changedItems": 5620,
+											"edits": 315274,
+											"elapsedMs": 2110
+										},
+										{
+											"pass": "unreachable-block-removal",
+											"runs": 28546,
+											"workItems": 28546,
+											"changedItems": 2084,
+											"edits": 15409,
+											"elapsedMs": 689
+										},
+										{
+											"pass": "fused-local-optimizer",
+											"runs": 33502,
+											"workItems": 2900770,
+											"changedItems": 194034,
+											"edits": 283125,
+											"elapsedMs": 0
+										},
+										{
+											"pass": "block-parameter-simplification",
+											"runs": 15263,
+											"workItems": 15263,
+											"changedItems": 754,
+											"edits": 778648,
+											"elapsedMs": 3948
+										},
+										{
+											"pass": "rewrite-exact-builtin-calls",
+											"runs": 12257,
+											"workItems": 12257,
+											"changedItems": 2362,
+											"edits": 9933,
+											"elapsedMs": 1638
+										},
+										{
+											"pass": "local-explicit-throw-lowering",
+											"runs": 10104,
+											"workItems": 10104,
+											"changedItems": 0,
+											"edits": 0,
+											"elapsedMs": 52
+										},
+										{
+											"pass": "canonicalize-fact-claims",
+											"runs": 12023,
+											"workItems": 12023,
+											"changedItems": 0,
+											"edits": 0,
+											"elapsedMs": 96
+										},
+										{
+											"pass": "empty-fact-elimination",
+											"runs": 12023,
+											"workItems": 12023,
+											"changedItems": 0,
+											"edits": 0,
+											"elapsedMs": 18
+										},
+										{
+											"pass": "local-scalar-representation-selection",
+											"runs": 7387,
+											"workItems": 7387,
+											"changedItems": 5596,
+											"edits": 75718,
+											"elapsedMs": 326
+										},
+										{
+											"pass": "fold-static-reflections",
+											"runs": 7444,
+											"workItems": 7444,
+											"changedItems": 1,
+											"edits": 1,
+											"elapsedMs": 921
+										},
+										{
+											"pass": "resolve-known-operations",
+											"runs": 8729,
+											"workItems": 8729,
+											"changedItems": 1487,
+											"edits": 6425,
+											"elapsedMs": 1323
+										},
+										{
+											"pass": "dominance-redundancy-elimination",
+											"runs": 5267,
+											"workItems": 5267,
+											"changedItems": 2655,
+											"edits": 54930,
+											"elapsedMs": 1169
+										},
+										{
+											"pass": "fold-static-binding-constants",
+											"runs": 7323,
+											"workItems": 7323,
+											"changedItems": 173,
+											"edits": 1172,
+											"elapsedMs": 2186
+										},
+										{
+											"pass": "materialize-virtual-state",
+											"runs": 4476,
+											"workItems": 4476,
+											"changedItems": 122,
+											"edits": 1300,
+											"elapsedMs": 650
+										},
+										{
+											"pass": "annotate-known-own-slots",
+											"runs": 7022,
+											"workItems": 7022,
+											"changedItems": 77,
+											"edits": 364,
+											"elapsedMs": 596
+										},
+										{
+											"pass": "refine-contained-own-slot-accesses",
+											"runs": 3442,
+											"workItems": 3442,
+											"changedItems": 43,
+											"edits": 348,
+											"elapsedMs": 1889
+										},
+										{
+											"pass": "scalar-replace-contained-aggregates",
+											"runs": 3936,
+											"workItems": 3936,
+											"changedItems": 429,
+											"edits": 1740,
+											"elapsedMs": 2280
+										},
+										{
+											"pass": "value-kind-observation-folding",
+											"runs": 11766,
+											"workItems": 11766,
+											"changedItems": 0,
+											"edits": 0,
+											"elapsedMs": 716
+										},
+										{
+											"pass": "redundant-tdz-check-folding",
+											"runs": 5073,
+											"workItems": 5073,
+											"changedItems": 3592,
+											"edits": 68871,
+											"elapsedMs": 547
+										},
+										{
+											"pass": "primitive-effect-refinement",
+											"runs": 12477,
+											"workItems": 12477,
+											"changedItems": 4815,
+											"edits": 85208,
+											"elapsedMs": 896
+										},
+										{
+											"pass": "flow-scalar-representation-selection",
+											"runs": 8763,
+											"workItems": 8763,
+											"changedItems": 1545,
+											"edits": 15105,
+											"elapsedMs": 1277
+										},
+										{
+											"pass": "fold-static-property-reads",
+											"runs": 7913,
+											"workItems": 7913,
+											"changedItems": 18,
+											"edits": 37,
+											"elapsedMs": 3434
+										},
+										{
+											"pass": "lower-primitive-operations",
+											"runs": 6478,
+											"workItems": 6478,
+											"changedItems": 47,
+											"edits": 468,
+											"elapsedMs": 2505
+										},
+										{
+											"pass": "reuse-primitive-call-results",
+											"runs": 197,
+											"workItems": 197,
+											"changedItems": 0,
+											"edits": 0,
+											"elapsedMs": 77
+										},
+										{
+											"pass": "reuse-literal-constants",
+											"runs": 2296,
+											"workItems": 2296,
+											"changedItems": 1,
+											"edits": 5,
+											"elapsedMs": 153
+										},
+										{
+											"pass": "canonical-block-parameter-elimination",
+											"runs": 5850,
+											"workItems": 5850,
+											"changedItems": 225,
+											"edits": 28320,
+											"elapsedMs": 510
+										},
+										{
+											"pass": "natural-loop-canonicalization",
+											"runs": 1874,
+											"workItems": 1874,
+											"changedItems": 244,
+											"edits": 882,
+											"elapsedMs": 151
+										},
+										{
+											"pass": "loop-invariant-code-motion",
+											"runs": 2870,
+											"workItems": 2870,
+											"changedItems": 505,
+											"edits": 3498,
+											"elapsedMs": 1105
+										},
+										{
+											"pass": "loop-scalar-representation-selection",
+											"runs": 2306,
+											"workItems": 2306,
+											"changedItems": 389,
+											"edits": 4587,
+											"elapsedMs": 1074
+										},
+										{
+											"pass": "numeric-nullish-join-normalization",
+											"runs": 9670,
+											"workItems": 9670,
+											"changedItems": 0,
+											"edits": 0,
+											"elapsedMs": 373
+										},
+										{
+											"pass": "select-static-property-reads",
+											"runs": 2613,
+											"workItems": 2613,
+											"changedItems": 9,
+											"edits": 466,
+											"elapsedMs": 225
+										},
+										{
+											"pass": "refine-exact-typed-array-accesses",
+											"runs": 3029,
+											"workItems": 3029,
+											"changedItems": 43,
+											"edits": 233,
+											"elapsedMs": 568
+										},
+										{
+											"pass": "partial-redundancy-elimination",
+											"runs": 1174,
+											"workItems": 1174,
+											"changedItems": 77,
+											"edits": 682,
+											"elapsedMs": 158
+										},
+										{
+											"pass": "path-range-control-folding",
+											"runs": 1149,
+											"workItems": 1149,
+											"changedItems": 40,
+											"edits": 42,
+											"elapsedMs": 308
+										},
+										{
+											"pass": "rewrite-contained-fresh-array-builtins",
+											"runs": 952,
+											"workItems": 952,
+											"changedItems": 13,
+											"edits": 116,
+											"elapsedMs": 2494
+										},
+										{
+											"pass": "forward-exact-memory-loads",
+											"runs": 3089,
+											"workItems": 3089,
+											"changedItems": 170,
+											"edits": 625,
+											"elapsedMs": 3157
+										},
+										{
+											"pass": "forward-fresh-own-slot-prefix",
+											"runs": 2293,
+											"workItems": 2293,
+											"changedItems": 0,
+											"edits": 0,
+											"elapsedMs": 290
+										},
+										{
+											"pass": "refine-stack-object-cell-representations",
+											"runs": 2216,
+											"workItems": 2216,
+											"changedItems": 0,
+											"edits": 0,
+											"elapsedMs": 672
+										},
+										{
+											"pass": "scalarize-rooted-contained-objects",
+											"runs": 617,
+											"workItems": 617,
+											"changedItems": 0,
+											"edits": 0,
+											"elapsedMs": 342
+										},
+										{
+											"pass": "primitive-coercion-folding",
+											"runs": 1418,
+											"workItems": 1418,
+											"changedItems": 10,
+											"edits": 411,
+											"elapsedMs": 368
+										},
+										{
+											"pass": "sink-conditional-object-allocations",
+											"runs": 41,
+											"workItems": 41,
+											"changedItems": 0,
+											"edits": 0,
+											"elapsedMs": 32
+										},
+										{
+											"pass": "refine-exact-collection-accesses",
+											"runs": 48,
+											"workItems": 48,
+											"changedItems": 0,
+											"edits": 0,
+											"elapsedMs": 26
+										},
+										{
+											"pass": "fold-exact-allocation-observations",
+											"runs": 481,
+											"workItems": 481,
+											"changedItems": 0,
+											"edits": 0,
+											"elapsedMs": 486
+										},
+										{
+											"pass": "lower-known-operation-results",
+											"runs": 234,
+											"workItems": 234,
+											"changedItems": 209,
+											"edits": 6344,
+											"elapsedMs": 187
+										},
+										{
+											"pass": "forward-rest-arguments",
+											"runs": 20,
+											"workItems": 20,
+											"changedItems": 1,
+											"edits": 2,
+											"elapsedMs": 0
+										},
+										{
+											"pass": "scalarize-rest-argument-reads",
+											"runs": 20,
+											"workItems": 20,
+											"changedItems": 0,
+											"edits": 0,
+											"elapsedMs": 0
+										},
+										{
+											"pass": "scalarize-bounded-rest-reads",
+											"runs": 20,
+											"workItems": 20,
+											"changedItems": 0,
+											"edits": 0,
+											"elapsedMs": 0
+										},
+										{
+											"pass": "numeric-algebraic-simplification",
+											"runs": 1,
+											"workItems": 1,
+											"changedItems": 1,
+											"edits": 1,
+											"elapsedMs": 0
+										},
+										{
+											"pass": "path-range-strength-reduction",
+											"runs": 29,
+											"workItems": 29,
+											"changedItems": 0,
+											"edits": 0,
+											"elapsedMs": 3
+										},
+										{
+											"pass": "cross-call-local-optimizer",
+											"runs": 926,
+											"workItems": 97034,
+											"changedItems": 293,
+											"edits": 38493,
+											"elapsedMs": 0
+										}
+									],
+									"analyses": [
+										{
+											"analysis": "control-flow-bundle",
+											"queries": 419543,
+											"hits": 398856,
+											"recomputations": 20687,
+											"invalidations": 0,
+											"elapsedMs": 35
+										},
+										{
+											"analysis": "canonical-value-roots",
+											"queries": 38499,
+											"hits": 15870,
+											"recomputations": 22629,
+											"invalidations": 14704,
+											"elapsedMs": 990
+										},
+										{
+											"analysis": "local-value-kinds",
+											"queries": 82008,
+											"hits": 58651,
+											"recomputations": 23357,
+											"invalidations": 14770,
+											"elapsedMs": 3211
+										},
+										{
+											"analysis": "static-value-descriptions",
+											"queries": 60689,
+											"hits": 46342,
+											"recomputations": 14347,
+											"invalidations": 3311,
+											"elapsedMs": 54
+										},
+										{
+											"analysis": "local-fact-bundle",
+											"queries": 32576,
+											"hits": 20581,
+											"recomputations": 11995,
+											"invalidations": 4710,
+											"elapsedMs": 103
+										},
+										{
+											"analysis": "local-shape-provenance",
+											"queries": 10464,
+											"hits": 3274,
+											"recomputations": 7190,
+											"invalidations": 1280,
+											"elapsedMs": 222
+										},
+										{
+											"analysis": "local-memory-versions",
+											"queries": 70330,
+											"hits": 65949,
+											"recomputations": 4381,
+											"invalidations": 1555,
+											"elapsedMs": 14
+										},
+										{
+											"analysis": "loop-induction-and-path-ranges",
+											"queries": 3983,
+											"hits": 853,
+											"recomputations": 3130,
+											"invalidations": 1470,
+											"elapsedMs": 351
+										},
+										{
+											"analysis": "local-exception-flow",
+											"queries": 1506,
+											"hits": 0,
+											"recomputations": 1506,
+											"invalidations": 752,
+											"elapsedMs": 29
+										},
+										{
+											"analysis": "static-private-cell-index",
+											"queries": 308031,
+											"hits": 302719,
+											"recomputations": 5312,
+											"invalidations": 0,
+											"elapsedMs": 15
+										},
+										{
+											"analysis": "local-stack-object-proofs",
+											"queries": 2216,
+											"hits": 0,
+											"recomputations": 2216,
+											"invalidations": 610,
+											"elapsedMs": 659
+										},
+										{
+											"analysis": "program-flow",
+											"queries": 4877,
+											"hits": 4875,
+											"recomputations": 2,
+											"invalidations": 1,
+											"elapsedMs": 9643
+										},
+										{
+											"analysis": "program-flow-valueKinds",
+											"queries": 1,
+											"hits": 0,
+											"recomputations": 1,
+											"invalidations": 0,
+											"elapsedMs": 723
+										},
+										{
+											"analysis": "local-specialization-candidates",
+											"queries": 835,
+											"hits": 0,
+											"recomputations": 835,
+											"invalidations": 0,
+											"elapsedMs": 445
+										}
+									],
+									"owners": [
+										{
+											"id": 0,
+											"name": "unattributed",
+											"elapsedMs": 0,
+											"workUnits": 0,
+											"allocatedBytes": 0,
+											"collections": 0
+										},
+										{
+											"id": 1,
+											"name": "semantic-to-Core construction",
+											"elapsedMs": 0,
+											"workUnits": 0,
+											"allocatedBytes": 0,
+											"collections": 0
+										},
+										{
+											"id": 2,
+											"name": "construction structural cleanup",
+											"elapsedMs": 1077,
+											"workUnits": 6458,
+											"allocatedBytes": 133707728,
+											"collections": 1
+										},
+										{
+											"id": 3,
+											"name": "dense generation barrier",
+											"elapsedMs": 2326,
+											"workUnits": 6513,
+											"allocatedBytes": 1953109248,
+											"collections": 15
+										},
+										{
+											"id": 4,
+											"name": "fused local optimization",
+											"elapsedMs": 4809,
+											"workUnits": 2997804,
+											"allocatedBytes": 932232928,
+											"collections": 8
+										},
+										{
+											"id": 5,
+											"name": "block-parameter simplification",
+											"elapsedMs": 3363,
+											"workUnits": 21113,
+											"allocatedBytes": 1413987104,
+											"collections": 11
+										},
+										{
+											"id": 6,
+											"name": "forwarding and linear block normalization",
+											"elapsedMs": 2514,
+											"workUnits": 51954,
+											"allocatedBytes": 1312160792,
+											"collections": 10
+										},
+										{
+											"id": 7,
+											"name": "CFG edge construction",
+											"elapsedMs": 1925,
+											"workUnits": 52784,
+											"allocatedBytes": 1278492104,
+											"collections": 10
+										},
+										{
+											"id": 8,
+											"name": "control-flow traversal",
+											"elapsedMs": 921,
+											"workUnits": 54292,
+											"allocatedBytes": 458353232,
+											"collections": 4
+										},
+										{
+											"id": 9,
+											"name": "immediate dominators",
+											"elapsedMs": 585,
+											"workUnits": 21277,
+											"allocatedBytes": 67152192,
+											"collections": 0
+										},
+										{
+											"id": 10,
+											"name": "loops and dominance frontiers",
+											"elapsedMs": 541,
+											"workUnits": 16885,
+											"allocatedBytes": 262923768,
+											"collections": 3
+										},
+										{
+											"id": 11,
+											"name": "local value kinds",
+											"elapsedMs": 3121,
+											"workUnits": 26544,
+											"allocatedBytes": 528574736,
+											"collections": 2
+										},
+										{
+											"id": 12,
+											"name": "canonical value roots",
+											"elapsedMs": 848,
+											"workUnits": 22629,
+											"allocatedBytes": 394084816,
+											"collections": 5
+										},
+										{
+											"id": 13,
+											"name": "local fact and provenance construction",
+											"elapsedMs": 1985,
+											"workUnits": 104977,
+											"allocatedBytes": 745468848,
+											"collections": 3
+										},
+										{
+											"id": 14,
+											"name": "memory event extraction",
+											"elapsedMs": 3524,
+											"workUnits": 1052495,
+											"allocatedBytes": 1427138016,
+											"collections": 7
+										},
+										{
+											"id": 15,
+											"name": "memoryVersions / MemorySSA",
+											"elapsedMs": 1987,
+											"workUnits": 629914,
+											"allocatedBytes": 988506176,
+											"collections": 2
+										},
+										{
+											"id": 16,
+											"name": "program-flow local extraction",
+											"elapsedMs": 530,
+											"workUnits": 1099733,
+											"allocatedBytes": 153048368,
+											"collections": 0
+										},
+										{
+											"id": 17,
+											"name": "program-flow convergence",
+											"elapsedMs": 9621,
+											"workUnits": 31359,
+											"allocatedBytes": 3026633172,
+											"collections": 7
+										},
+										{
+											"id": 18,
+											"name": "cross-call transforms",
+											"elapsedMs": 2154,
+											"workUnits": 18388,
+											"allocatedBytes": 1524158792,
+											"collections": 3
+										},
+										{
+											"id": 19,
+											"name": "specialization discovery",
+											"elapsedMs": 1512,
+											"workUnits": 6583,
+											"allocatedBytes": 109348608,
+											"collections": 0
+										},
+										{
+											"id": 20,
+											"name": "specialization selection",
+											"elapsedMs": 1348,
+											"workUnits": 6583,
+											"allocatedBytes": 0,
+											"collections": 0
+										},
+										{
+											"id": 21,
+											"name": "Core verification",
+											"elapsedMs": 6083,
+											"workUnits": 12971,
+											"allocatedBytes": 1539228112,
+											"collections": 2
+										},
+										{
+											"id": 22,
+											"name": "Core-to-Execution lowering",
+											"elapsedMs": 0,
+											"workUnits": 0,
+											"allocatedBytes": 0,
+											"collections": 0
+										},
+										{
+											"id": 23,
+											"name": "Execution-to-Image lowering",
+											"elapsedMs": 0,
+											"workUnits": 0,
+											"allocatedBytes": 0,
+											"collections": 0
+										},
+										{
+											"id": 24,
+											"name": "emission",
+											"elapsedMs": 0,
+											"workUnits": 0,
+											"allocatedBytes": 0,
+											"collections": 0
+										},
+										{
+											"id": 25,
+											"name": "other function optimization passes",
+											"elapsedMs": 22821,
+											"workUnits": 238326,
+											"allocatedBytes": 7616010491,
+											"collections": 32
+										},
+										{
+											"id": 26,
+											"name": "optimizer instrumentation",
+											"elapsedMs": 54,
+											"workUnits": 8,
+											"allocatedBytes": 4166448,
+											"collections": 0
+										},
+										{
+											"id": 27,
+											"name": "optimizer orchestration",
+											"elapsedMs": 4718,
+											"workUnits": 0,
+											"allocatedBytes": 1596602192,
+											"collections": 3
+										},
+										{
+											"id": 28,
+											"name": "module graph",
+											"elapsedMs": 0,
+											"workUnits": 0,
+											"allocatedBytes": 0,
+											"collections": 0
+										},
+										{
+											"id": 29,
+											"name": "semantic analysis",
+											"elapsedMs": 0,
+											"workUnits": 0,
+											"allocatedBytes": 0,
+											"collections": 0
+										},
+										{
+											"id": 30,
+											"name": "output serialization",
+											"elapsedMs": 0,
+											"workUnits": 0,
+											"allocatedBytes": 0,
+											"collections": 0
+										},
+										{
+											"id": 31,
+											"name": "output writing",
+											"elapsedMs": 0,
+											"workUnits": 0,
+											"allocatedBytes": 0,
+											"collections": 0
+										}
+									],
+									"discovery": {
+										"candidates": 5987,
+										"byKind": {
+											"array-values-iterator-cursor": 2536,
+											"iterator-result-virtualization": 762,
+											"builtin-collection-call-chain": 2096,
+											"indexed-length-loop": 53,
+											"stack-object": 142,
+											"map-iterator-cursor": 29,
+											"iterator-entry-pair-virtualization": 164,
+											"set-iterator-cursor": 36,
+											"numeric-fusion": 142,
+											"string-slice-number": 1,
+											"regexp-exec-projection": 2,
+											"string-char-code-at-chain": 24
+										},
+										"stackObjects": 142,
+										"denseArrays": 0,
+										"numericFusions": 142,
+										"largestFanOut": 45
+									},
+									"program": {
+										"functionsAnalyzed": 4378,
+										"functionsReused": 2135,
+										"summaryFunctionsAnalyzed": 926,
+										"reachabilityFunctionsScanned": 6513,
+										"callSites": 33357,
+										"exactCallEdges": 7055,
+										"wildcardCallers": 3387,
+										"wildcardCallSites": 19992,
+										"opaqueCallSites": 29000,
+										"aggregateDependencies": 6513,
+										"storedGraphRows": 5224,
+										"storedGraphEntries": 30523,
+										"sccs": 2654,
+										"sccNodesAnalyzed": 6514,
+										"sccEdgeVisits": 16955,
+										"sccTransfers": 14262,
+										"summaryChanges": 358,
+										"callerWakeups": 15,
+										"affectedCallers": 47,
+										"deadFunctions": 0
+									},
+									"transforms": {
+										"considered": 18388,
+										"applied": 1172,
+										"declined": 17216,
+										"appliedByKind": {
+											"static-argument-specialization": 0,
+											"finite-dispatch": 9,
+											"inline": 153,
+											"guarded-inline": 979,
+											"array-iteration-inline": 31,
+											"direct-entry": 0,
+											"guarded-direct-call": 0,
+											"stack-object-plan": 0,
+											"dense-array-plan": 0,
+											"numeric-fusion": 0,
+											"string-split-projection": 0,
+											"string-slice-number": 0,
+											"regexp-exec-projection": 0,
+											"regexp-iterator-projection": 0,
+											"string-char-code-at-chain": 0,
+											"builtin-collection-call-chain": 0,
+											"array-values-iterator-cursor": 0,
+											"string-iterator-cursor": 0,
+											"typed-array-iterator-cursor": 0,
+											"map-iterator-cursor": 0,
+											"set-iterator-cursor": 0,
+											"iterator-result-virtualization": 0,
+											"iterator-entry-pair-virtualization": 0,
+											"fresh-array-length": 0,
+											"indexed-length-loop": 0,
+											"function-call-chain": 0,
+											"string-split-cursor": 0
+										},
+										"declinedByReason": {
+											"expansion-limit": 0,
+											"generated-code-cost": 12995,
+											"compiler-work-cost": 0,
+											"unsupported-graph": 4108,
+											"recursive": 113,
+											"overlap": 0,
+											"stale-anchor": 0,
+											"representation": 0,
+											"target-support": 0
+										},
+										"generatedCodeConsumed": 16897,
+										"compilerWorkConsumed": 31652,
+										"waves": 1,
+										"callerEditSessions": 1001,
+										"callerLocalOptimizations": 926,
+										"programFlowResolves": 2,
+										"instructionsIntroduced": 14063,
+										"blocksIntroduced": 5820,
+										"callGraphFunctionsAnalyzed": 10891,
+										"summaryFunctionsAnalyzed": 7439,
+										"sccNodesAnalyzed": 13028,
+										"sccEdgeVisits": 33465,
+										"sccTransfers": 21630,
+										"callerWakeups": 15,
+										"valueKindFunctionEvaluations": 18175,
+										"valueKindFolds": 0,
+										"wildcardAggregateRecomputations": 19,
+										"exactReverseCallerVisits": 36399,
+										"wildcardReverseCallerVisits": 9915
+									},
+									"plan": {
+										"discovery": {
+											"opportunities": 26811,
+											"attempted": 1469,
+											"skipped": 25342,
+											"compilerWork": 354435,
+											"skippedByReason": {
+												"compiler-work-cost": 12,
+												"generated-code-cost": 25330
+											}
+										},
+										"admittedFunctions": 980,
+										"discovered": 6583,
+										"selected": 4625,
+										"declined": 1958,
+										"discoveredByKind": {
+											"direct-entry": 591,
+											"array-values-iterator-cursor": 2536,
+											"iterator-result-virtualization": 762,
+											"builtin-collection-call-chain": 2096,
+											"indexed-length-loop": 53,
+											"stack-object-plan": 142,
+											"map-iterator-cursor": 29,
+											"iterator-entry-pair-virtualization": 164,
+											"set-iterator-cursor": 36,
+											"numeric-fusion": 142,
+											"string-slice-number": 1,
+											"regexp-exec-projection": 2,
+											"string-char-code-at-chain": 24,
+											"guarded-direct-call": 5
+										},
+										"selectedByKind": {
+											"direct-entry": 231,
+											"iterator-result-virtualization": 724,
+											"builtin-collection-call-chain": 1928,
+											"array-values-iterator-cursor": 1407,
+											"indexed-length-loop": 32,
+											"iterator-entry-pair-virtualization": 160,
+											"stack-object-plan": 41,
+											"numeric-fusion": 58,
+											"map-iterator-cursor": 8,
+											"set-iterator-cursor": 10,
+											"string-char-code-at-chain": 21,
+											"guarded-direct-call": 5
+										},
+										"declinedByReason": {
+											"expansion-limit": 1158,
+											"generated-code-cost": 617,
+											"compiler-work-cost": 181,
+											"unsupported-graph": 0,
+											"recursive": 0,
+											"overlap": 2,
+											"stale-anchor": 0,
+											"representation": 0,
+											"target-support": 0
+										},
+										"generatedCodeConsumed": 50690,
+										"compilerWorkConsumed": 509039,
+										"verificationMs": 575
+									},
+									"queue": { "pushes": 2308847, "pops": 2308847, "maximumDepth": 29622 },
+									"budget": {
+										"workItems": 2275345,
+										"edits": 1908853,
+										"exhaustedPasses": []
+									},
+									"counters": {
+										"analysisQueries": 1035558,
+										"analysisRecomputations": 117588,
+										"localRulesConsidered": 3309197,
+										"localRulesApplied": 235767,
+										"functionScans": 43018,
+										"programFlowJournalEntries": 27876,
+										"programFlowDirtyFunctions": 6527,
+										"programFlowLocalScans": 13026,
+										"programFlowLocalInstructionVisits": 1099733,
+										"programFlowTransferRecords": 1255452,
+										"programFlowTransferReuses": 28689,
+										"programFlowTargetWakeups": 5331,
+										"programFlowSummaryWakeups": 6527,
+										"programFlowValueKindWakeups": 6521,
+										"programFlowReachabilityWakeups": 5331,
+										"programFlowSccPops": 10809,
+										"programFlowSccWakeups": 10809,
+										"programFlowFunctionPops": 13811,
+										"programFlowFunctionWakeups": 13811,
+										"explicitCallEdges": 7055,
+										"wildcardCallSources": 3387,
+										"wildcardCallSites": 19992,
+										"opaqueCallSites": 29000,
+										"aggregateDependencies": 6513,
+										"storedCallGraphRows": 5224,
+										"storedCallGraphEntries": 30523,
+										"wildcardAggregateRecomputations": 19,
+										"exactReverseCallerVisits": 36399,
+										"wildcardReverseCallerVisits": 9915,
+										"callTargetMs": 0,
+										"summaryMs": 0,
+										"reachabilityMs": 0,
+										"valueKindMs": 0,
+										"sccNodes": 26056,
+										"sccEdges": 66930,
+										"sccTransfers": 21630,
+										"localFactRebuilds": 11995,
+										"provenanceRebuilds": 11995,
+										"provenanceLayoutsMaterialized": 48366,
+										"provenanceEscapeChecks": 38053,
+										"integerProofValues": 3498,
+										"valueClassContainmentChecks": 15,
+										"memoryAccesses": 999253,
+										"memoryInstructionsIndexed": 2336657,
+										"memoryLocalReadAttempts": 31163,
+										"memoryLocalReadAnswers": 23618,
+										"memoryLocalReadInstructions": 66024,
+										"memoryHeapAccessesResolved": 0,
+										"memoryEvents": 952642,
+										"memoryCompactedEvents": 637879,
+										"memoryLocations": 14835,
+										"memoryPartitionsSolved": 18538,
+										"memoryTouchedBlocks": 326115,
+										"memoryStateRows": 374213,
+										"memoryStateEntries": 593318,
+										"memoryPhis": 53374,
+										"memoryTransfers": 602898,
+										"memoryFamilyWidens": 1100019,
+										"specializationFunctionsScanned": 835,
+										"specializationCandidatesDiscovered": 5987,
+										"specializationCandidatesSelected": 4625,
+										"specializationPayloadsMaterialized": 4394,
+										"liveUseVisits": 3352060,
+										"deadUseSkips": 0,
+										"abandonedOperandStorage": 97403,
+										"abandonedParameterStorage": 13846
+									}
+								},
+								"owners": [
+									{
+										"id": 0,
+										"name": "unattributed",
+										"elapsedMs": 0,
+										"workUnits": 0,
+										"allocatedBytes": 0,
+										"collections": 0
+									},
+									{
+										"id": 1,
+										"name": "semantic-to-Core construction",
+										"elapsedMs": 15709,
+										"workUnits": 921902,
+										"allocatedBytes": 7040478045,
+										"collections": 21
+									},
+									{
+										"id": 2,
+										"name": "construction structural cleanup",
+										"elapsedMs": 1077,
+										"workUnits": 6458,
+										"allocatedBytes": 133707728,
+										"collections": 1
+									},
+									{
+										"id": 3,
+										"name": "dense generation barrier",
+										"elapsedMs": 2326,
+										"workUnits": 6513,
+										"allocatedBytes": 1953109248,
+										"collections": 15
+									},
+									{
+										"id": 4,
+										"name": "fused local optimization",
+										"elapsedMs": 4809,
+										"workUnits": 2997804,
+										"allocatedBytes": 932232928,
+										"collections": 8
+									},
+									{
+										"id": 5,
+										"name": "block-parameter simplification",
+										"elapsedMs": 3363,
+										"workUnits": 21113,
+										"allocatedBytes": 1413987104,
+										"collections": 11
+									},
+									{
+										"id": 6,
+										"name": "forwarding and linear block normalization",
+										"elapsedMs": 2514,
+										"workUnits": 51954,
+										"allocatedBytes": 1312160792,
+										"collections": 10
+									},
+									{
+										"id": 7,
+										"name": "CFG edge construction",
+										"elapsedMs": 1925,
+										"workUnits": 52784,
+										"allocatedBytes": 1278492104,
+										"collections": 10
+									},
+									{
+										"id": 8,
+										"name": "control-flow traversal",
+										"elapsedMs": 921,
+										"workUnits": 54292,
+										"allocatedBytes": 458353232,
+										"collections": 4
+									},
+									{
+										"id": 9,
+										"name": "immediate dominators",
+										"elapsedMs": 585,
+										"workUnits": 21277,
+										"allocatedBytes": 67152192,
+										"collections": 0
+									},
+									{
+										"id": 10,
+										"name": "loops and dominance frontiers",
+										"elapsedMs": 541,
+										"workUnits": 16885,
+										"allocatedBytes": 262923768,
+										"collections": 3
+									},
+									{
+										"id": 11,
+										"name": "local value kinds",
+										"elapsedMs": 3121,
+										"workUnits": 26544,
+										"allocatedBytes": 528574736,
+										"collections": 2
+									},
+									{
+										"id": 12,
+										"name": "canonical value roots",
+										"elapsedMs": 848,
+										"workUnits": 22629,
+										"allocatedBytes": 394084816,
+										"collections": 5
+									},
+									{
+										"id": 13,
+										"name": "local fact and provenance construction",
+										"elapsedMs": 1985,
+										"workUnits": 104977,
+										"allocatedBytes": 745468848,
+										"collections": 3
+									},
+									{
+										"id": 14,
+										"name": "memory event extraction",
+										"elapsedMs": 3524,
+										"workUnits": 1052495,
+										"allocatedBytes": 1427138016,
+										"collections": 7
+									},
+									{
+										"id": 15,
+										"name": "memoryVersions / MemorySSA",
+										"elapsedMs": 1987,
+										"workUnits": 629914,
+										"allocatedBytes": 988506176,
+										"collections": 2
+									},
+									{
+										"id": 16,
+										"name": "program-flow local extraction",
+										"elapsedMs": 530,
+										"workUnits": 1099733,
+										"allocatedBytes": 153048368,
+										"collections": 0
+									},
+									{
+										"id": 17,
+										"name": "program-flow convergence",
+										"elapsedMs": 9621,
+										"workUnits": 31359,
+										"allocatedBytes": 3026633172,
+										"collections": 7
+									},
+									{
+										"id": 18,
+										"name": "cross-call transforms",
+										"elapsedMs": 2154,
+										"workUnits": 18388,
+										"allocatedBytes": 1524158792,
+										"collections": 3
+									},
+									{
+										"id": 19,
+										"name": "specialization discovery",
+										"elapsedMs": 1512,
+										"workUnits": 6583,
+										"allocatedBytes": 109348608,
+										"collections": 0
+									},
+									{
+										"id": 20,
+										"name": "specialization selection",
+										"elapsedMs": 1348,
+										"workUnits": 6583,
+										"allocatedBytes": 0,
+										"collections": 0
+									},
+									{
+										"id": 21,
+										"name": "Core verification",
+										"elapsedMs": 6083,
+										"workUnits": 12971,
+										"allocatedBytes": 1539228112,
+										"collections": 2
+									},
+									{
+										"id": 22,
+										"name": "Core-to-Execution lowering",
+										"elapsedMs": 10094,
+										"workUnits": 559040,
+										"allocatedBytes": 6259299512,
+										"collections": 11
+									},
+									{
+										"id": 23,
+										"name": "Execution-to-Image lowering",
+										"elapsedMs": 31011,
+										"workUnits": 559040,
+										"allocatedBytes": 14664654572,
+										"collections": 7
+									},
+									{
+										"id": 24,
+										"name": "emission",
+										"elapsedMs": 20977,
+										"workUnits": 137251797,
+										"allocatedBytes": 12955346534,
+										"collections": 10
+									},
+									{
+										"id": 25,
+										"name": "other function optimization passes",
+										"elapsedMs": 22821,
+										"workUnits": 238326,
+										"allocatedBytes": 7616010491,
+										"collections": 32
+									},
+									{
+										"id": 26,
+										"name": "optimizer instrumentation",
+										"elapsedMs": 54,
+										"workUnits": 8,
+										"allocatedBytes": 4166448,
+										"collections": 0
+									},
+									{
+										"id": 27,
+										"name": "optimizer orchestration",
+										"elapsedMs": 4718,
+										"workUnits": 0,
+										"allocatedBytes": 1596602192,
+										"collections": 3
+									},
+									{
+										"id": 28,
+										"name": "module graph",
+										"elapsedMs": 996,
+										"workUnits": 0,
+										"allocatedBytes": 300017004,
+										"collections": 6
+									},
+									{
+										"id": 29,
+										"name": "semantic analysis",
+										"elapsedMs": 1789,
+										"workUnits": 921902,
+										"allocatedBytes": 1116747904,
+										"collections": 4
+									},
+									{
+										"id": 30,
+										"name": "output serialization",
+										"elapsedMs": 0,
+										"workUnits": 137251797,
+										"allocatedBytes": 0,
+										"collections": 0
+									},
+									{
+										"id": 31,
+										"name": "output writing",
+										"elapsedMs": 1542,
+										"workUnits": 137251797,
+										"allocatedBytes": 246033456,
+										"collections": 0
+									}
+								]
+							},
+							"owners": [
+								{
+									"id": 0,
+									"name": "unattributed",
+									"nodeMs": 0,
+									"maligatorMs": 0,
+									"hostRatio": null,
+									"hostGapMs": 0,
+									"workUnits": 0,
+									"nodeNsPerWorkUnit": null,
+									"maligatorNsPerWorkUnit": null,
+									"allocatedBytes": 0,
+									"collections": 0
+								},
+								{
+									"id": 1,
+									"name": "semantic-to-Core construction",
+									"nodeMs": 3384,
+									"maligatorMs": 15709,
+									"hostRatio": 4.642139479905437,
+									"hostGapMs": 12325,
+									"workUnits": 921902,
+									"nodeNsPerWorkUnit": 3670.672153873188,
+									"maligatorNsPerWorkUnit": 17039.772123284252,
+									"allocatedBytes": 7040478045,
+									"collections": 21
+								},
+								{
+									"id": 2,
+									"name": "construction structural cleanup",
+									"nodeMs": 135,
+									"maligatorMs": 1077,
+									"hostRatio": 7.977777777777778,
+									"hostGapMs": 942,
+									"workUnits": 6458,
+									"nodeNsPerWorkUnit": 20904.304738309074,
+									"maligatorNsPerWorkUnit": 166769.89780117685,
+									"allocatedBytes": 133707728,
+									"collections": 1
+								},
+								{
+									"id": 3,
+									"name": "dense generation barrier",
+									"nodeMs": 560,
+									"maligatorMs": 2326,
+									"hostRatio": 4.1535714285714285,
+									"hostGapMs": 1766,
+									"workUnits": 6513,
+									"nodeNsPerWorkUnit": 85981.88238906802,
+									"maligatorNsPerWorkUnit": 357131.8900660218,
+									"allocatedBytes": 1953109248,
+									"collections": 15
+								},
+								{
+									"id": 4,
+									"name": "fused local optimization",
+									"nodeMs": 764,
+									"maligatorMs": 4809,
+									"hostRatio": 6.294502617801047,
+									"hostGapMs": 4045,
+									"workUnits": 2997804,
+									"nodeNsPerWorkUnit": 254.853219223138,
+									"maligatorNsPerWorkUnit": 1604.1742555550663,
+									"allocatedBytes": 932232928,
+									"collections": 8
+								},
+								{
+									"id": 5,
+									"name": "block-parameter simplification",
+									"nodeMs": 577,
+									"maligatorMs": 3363,
+									"hostRatio": 5.82842287694974,
+									"hostGapMs": 2786,
+									"workUnits": 21113,
+									"nodeNsPerWorkUnit": 27329.133709089187,
+									"maligatorNsPerWorkUnit": 159285.74811727373,
+									"allocatedBytes": 1413987104,
+									"collections": 11
+								},
+								{
+									"id": 6,
+									"name": "forwarding and linear block normalization",
+									"nodeMs": 624,
+									"maligatorMs": 2514,
+									"hostRatio": 4.028846153846154,
+									"hostGapMs": 1890,
+									"workUnits": 51954,
+									"nodeNsPerWorkUnit": 12010.624783462294,
+									"maligatorNsPerWorkUnit": 48388.95946414136,
+									"allocatedBytes": 1312160792,
+									"collections": 10
+								},
+								{
+									"id": 7,
+									"name": "CFG edge construction",
+									"nodeMs": 479,
+									"maligatorMs": 1925,
+									"hostRatio": 4.018789144050104,
+									"hostGapMs": 1446,
+									"workUnits": 52784,
+									"nodeNsPerWorkUnit": 9074.719612003637,
+									"maligatorNsPerWorkUnit": 36469.38466201879,
+									"allocatedBytes": 1278492104,
+									"collections": 10
+								},
+								{
+									"id": 8,
+									"name": "control-flow traversal",
+									"nodeMs": 271,
+									"maligatorMs": 921,
+									"hostRatio": 3.3985239852398523,
+									"hostGapMs": 650,
+									"workUnits": 54292,
+									"nodeNsPerWorkUnit": 4991.527296839314,
+									"maligatorNsPerWorkUnit": 16963.82524128785,
+									"allocatedBytes": 458353232,
+									"collections": 4
+								},
+								{
+									"id": 9,
+									"name": "immediate dominators",
+									"nodeMs": 311,
+									"maligatorMs": 585,
+									"hostRatio": 1.8810289389067525,
+									"hostGapMs": 274,
+									"workUnits": 21277,
+									"nodeNsPerWorkUnit": 14616.722282276636,
+									"maligatorNsPerWorkUnit": 27494.477604925505,
+									"allocatedBytes": 67152192,
+									"collections": 0
+								},
+								{
+									"id": 10,
+									"name": "loops and dominance frontiers",
+									"nodeMs": 206,
+									"maligatorMs": 541,
+									"hostRatio": 2.6262135922330097,
+									"hostGapMs": 335,
+									"workUnits": 16885,
+									"nodeNsPerWorkUnit": 12200.177672490376,
+									"maligatorNsPerWorkUnit": 32040.27243115191,
+									"allocatedBytes": 262923768,
+									"collections": 3
+								},
+								{
+									"id": 11,
+									"name": "local value kinds",
+									"nodeMs": 628,
+									"maligatorMs": 3121,
+									"hostRatio": 4.969745222929936,
+									"hostGapMs": 2493,
+									"workUnits": 26544,
+									"nodeNsPerWorkUnit": 23658.830620855937,
+									"maligatorNsPerWorkUnit": 117578.36045810729,
+									"allocatedBytes": 528574736,
+									"collections": 2
+								},
+								{
+									"id": 12,
+									"name": "canonical value roots",
+									"nodeMs": 217,
+									"maligatorMs": 848,
+									"hostRatio": 3.9078341013824884,
+									"hostGapMs": 631,
+									"workUnits": 22629,
+									"nodeNsPerWorkUnit": 9589.464845994078,
+									"maligatorNsPerWorkUnit": 37474.037739184234,
+									"allocatedBytes": 394084816,
+									"collections": 5
+								},
+								{
+									"id": 13,
+									"name": "local fact and provenance construction",
+									"nodeMs": 520,
+									"maligatorMs": 1985,
+									"hostRatio": 3.8173076923076925,
+									"hostGapMs": 1465,
+									"workUnits": 104977,
+									"nodeNsPerWorkUnit": 4953.465997313698,
+									"maligatorNsPerWorkUnit": 18908.90385513017,
+									"allocatedBytes": 745468848,
+									"collections": 3
+								},
+								{
+									"id": 14,
+									"name": "memory event extraction",
+									"nodeMs": 1076,
+									"maligatorMs": 3524,
+									"hostRatio": 3.275092936802974,
+									"hostGapMs": 2448,
+									"workUnits": 1052495,
+									"nodeNsPerWorkUnit": 1022.332647661034,
+									"maligatorNsPerWorkUnit": 3348.234433417736,
+									"allocatedBytes": 1427138016,
+									"collections": 7
+								},
+								{
+									"id": 15,
+									"name": "memoryVersions / MemorySSA",
+									"nodeMs": 903,
+									"maligatorMs": 1987,
+									"hostRatio": 2.2004429678848285,
+									"hostGapMs": 1084,
+									"workUnits": 629914,
+									"nodeNsPerWorkUnit": 1433.529021421972,
+									"maligatorNsPerWorkUnit": 3154.3988544467975,
+									"allocatedBytes": 988506176,
+									"collections": 2
+								},
+								{
+									"id": 16,
+									"name": "program-flow local extraction",
+									"nodeMs": 155,
+									"maligatorMs": 530,
+									"hostRatio": 3.4193548387096775,
+									"hostGapMs": 375,
+									"workUnits": 1099733,
+									"nodeNsPerWorkUnit": 140.94330169231986,
+									"maligatorNsPerWorkUnit": 481.9351606253518,
+									"allocatedBytes": 153048368,
+									"collections": 0
+								},
+								{
+									"id": 17,
+									"name": "program-flow convergence",
+									"nodeMs": 2861,
+									"maligatorMs": 9621,
+									"hostRatio": 3.3628102062216008,
+									"hostGapMs": 6760,
+									"workUnits": 31359,
+									"nodeNsPerWorkUnit": 91233.77658726362,
+									"maligatorNsPerWorkUnit": 306801.87505979143,
+									"allocatedBytes": 3026633172,
+									"collections": 7
+								},
+								{
+									"id": 18,
+									"name": "cross-call transforms",
+									"nodeMs": 582,
+									"maligatorMs": 2154,
+									"hostRatio": 3.7010309278350517,
+									"hostGapMs": 1572,
+									"workUnits": 18388,
+									"nodeNsPerWorkUnit": 31651.076789210354,
+									"maligatorNsPerWorkUnit": 117141.61409614966,
+									"allocatedBytes": 1524158792,
+									"collections": 3
+								},
+								{
+									"id": 19,
+									"name": "specialization discovery",
+									"nodeMs": 438,
+									"maligatorMs": 1512,
+									"hostRatio": 3.452054794520548,
+									"hostGapMs": 1074,
+									"workUnits": 6583,
+									"nodeNsPerWorkUnit": 66535.01443111044,
+									"maligatorNsPerWorkUnit": 229682.51557040864,
+									"allocatedBytes": 109348608,
+									"collections": 0
+								},
+								{
+									"id": 20,
+									"name": "specialization selection",
+									"nodeMs": 446,
+									"maligatorMs": 1348,
+									"hostRatio": 3.022421524663677,
+									"hostGapMs": 902,
+									"workUnits": 6583,
+									"nodeNsPerWorkUnit": 67750.26583624487,
+									"maligatorNsPerWorkUnit": 204769.86176515266,
+									"allocatedBytes": 0,
+									"collections": 0
+								},
+								{
+									"id": 21,
+									"name": "Core verification",
+									"nodeMs": 1386,
+									"maligatorMs": 6083,
+									"hostRatio": 4.388888888888889,
+									"hostGapMs": 4697,
+									"workUnits": 12971,
+									"nodeNsPerWorkUnit": 106853.75067458177,
+									"maligatorNsPerWorkUnit": 468969.2390717755,
+									"allocatedBytes": 1539228112,
+									"collections": 2
+								},
+								{
+									"id": 22,
+									"name": "Core-to-Execution lowering",
+									"nodeMs": 2806,
+									"maligatorMs": 10094,
+									"hostRatio": 3.5972915181753384,
+									"hostGapMs": 7288,
+									"workUnits": 559040,
+									"nodeNsPerWorkUnit": 5019.318832283915,
+									"maligatorNsPerWorkUnit": 18055.953062392673,
+									"allocatedBytes": 6259299512,
+									"collections": 11
+								},
+								{
+									"id": 23,
+									"name": "Execution-to-Image lowering",
+									"nodeMs": 6650,
+									"maligatorMs": 31011,
+									"hostRatio": 4.6633082706766915,
+									"hostGapMs": 24361,
+									"workUnits": 559040,
+									"nodeNsPerWorkUnit": 11895.392100744133,
+									"maligatorNsPerWorkUnit": 55471.8803663423,
+									"allocatedBytes": 14664654572,
+									"collections": 7
+								},
+								{
+									"id": 24,
+									"name": "emission",
+									"nodeMs": 6380,
+									"maligatorMs": 20977,
+									"hostRatio": 3.287931034482759,
+									"hostGapMs": 14597,
+									"workUnits": 137251797,
+									"nodeNsPerWorkUnit": 46.48390869519909,
+									"maligatorNsPerWorkUnit": 152.83588600300803,
+									"allocatedBytes": 12955346534,
+									"collections": 10
+								},
+								{
+									"id": 25,
+									"name": "other function optimization passes",
+									"nodeMs": 5574,
+									"maligatorMs": 22821,
+									"hostRatio": 4.094187298170075,
+									"hostGapMs": 17247,
+									"workUnits": 238326,
+									"nodeNsPerWorkUnit": 23388.132222250195,
+									"maligatorNsPerWorkUnit": 95755.39387225901,
+									"allocatedBytes": 7616010491,
+									"collections": 32
+								},
+								{
+									"id": 26,
+									"name": "optimizer instrumentation",
+									"nodeMs": 17,
+									"maligatorMs": 54,
+									"hostRatio": 3.176470588235294,
+									"hostGapMs": 37,
+									"workUnits": 8,
+									"nodeNsPerWorkUnit": 2125000,
+									"maligatorNsPerWorkUnit": 6750000,
+									"allocatedBytes": 4166448,
+									"collections": 0
+								},
+								{
+									"id": 27,
+									"name": "optimizer orchestration",
+									"nodeMs": 1035,
+									"maligatorMs": 4718,
+									"hostRatio": 4.558454106280193,
+									"hostGapMs": 3683,
+									"workUnits": 0,
+									"nodeNsPerWorkUnit": null,
+									"maligatorNsPerWorkUnit": null,
+									"allocatedBytes": 1596602192,
+									"collections": 3
+								},
+								{
+									"id": 28,
+									"name": "module graph",
+									"nodeMs": 247,
+									"maligatorMs": 996,
+									"hostRatio": 4.032388663967612,
+									"hostGapMs": 749,
+									"workUnits": 0,
+									"nodeNsPerWorkUnit": null,
+									"maligatorNsPerWorkUnit": null,
+									"allocatedBytes": 300017004,
+									"collections": 6
+								},
+								{
+									"id": 29,
+									"name": "semantic analysis",
+									"nodeMs": 386,
+									"maligatorMs": 1789,
+									"hostRatio": 4.634715025906735,
+									"hostGapMs": 1403,
+									"workUnits": 921902,
+									"nodeNsPerWorkUnit": 418.6996014760788,
+									"maligatorNsPerWorkUnit": 1940.5533343023444,
+									"allocatedBytes": 1116747904,
+									"collections": 4
+								},
+								{
+									"id": 30,
+									"name": "output serialization",
+									"nodeMs": 0,
+									"maligatorMs": 0,
+									"hostRatio": null,
+									"hostGapMs": 0,
+									"workUnits": 137251797,
+									"nodeNsPerWorkUnit": 0,
+									"maligatorNsPerWorkUnit": 0,
+									"allocatedBytes": 0,
+									"collections": 0
+								},
+								{
+									"id": 31,
+									"name": "output writing",
+									"nodeMs": 380,
+									"maligatorMs": 1542,
+									"hostRatio": 4.057894736842106,
+									"hostGapMs": 1162,
+									"workUnits": 137251797,
+									"nodeNsPerWorkUnit": 2.7686340602156196,
+									"maligatorNsPerWorkUnit": 11.234825581190751,
+									"allocatedBytes": 246033456,
+									"collections": 0
+								}
+							],
+							"coverage": {
+								"nodeOptimizeCore": 0.9999494080744713,
+								"maligatorOptimizeCore": 0.9999744797049854,
+								"hostGap": 0.9315155611823164,
 								"allocation": 1
 							}
 						}
