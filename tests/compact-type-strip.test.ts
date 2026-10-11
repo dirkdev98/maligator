@@ -73,6 +73,36 @@ globalThis.stripResult = [!satisfies(1, 2), retryAfter({ headers: { get: () => "
 		expect(result).toBe(6);
 	});
 
+	test("preserves short-circuit comparisons with conditional bounds", () => {
+		const source = `function invalid(count: number, concat: boolean): boolean {
+ return count < (concat ? 2 : 0) || count > (concat ? 64 : 32);
+}
+globalThis.stripResult = [[invalid(0, true), invalid(2, true), invalid(64, true), invalid(65, true)], [invalid(0, false), invalid(2, false), invalid(64, false), invalid(65, false)]];`;
+		const stripped = strip(source);
+		expect(() => parseModule(stripped)).not.toThrow();
+		expect(runInNewContext(stripped)).toEqual([
+			[true, false, false, true],
+			[false, false, true, true],
+		]);
+	});
+
+	test.each([
+		["5 < (10) && 5 > (1)", true],
+		["5 < (10) ?? 5 > (1)", true],
+	])("preserves runtime operators between comparisons: %s", (expression, expected) => {
+		const stripped = strip(`globalThis.stripResult = ${expression};`);
+		expect(() => parseModule(stripped)).not.toThrow();
+		expect(runInNewContext(stripped)).toBe(expected);
+	});
+
+	test("erases conditional, union and intersection type arguments with operator literals", () => {
+		const source = `function identity<T>(value: T): T { return value; }
+globalThis.stripResult = [identity<string | number>(3), identity<{ value: number } & { value: 2 }>({ value: 2 }).value, identity<true extends boolean ? "||" : "&&">("||")];`;
+		const stripped = strip(source);
+		expect(() => parseModule(stripped)).not.toThrow();
+		expect(runInNewContext(stripped)).toEqual([3, 2, "||"]);
+	});
+
 	test("erases type spans in place, keeping length, newlines, and columns", () => {
 		const source = `import type { Model } from "./types.ts";
 export type Result = string;
