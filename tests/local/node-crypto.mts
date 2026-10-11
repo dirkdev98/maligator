@@ -69,7 +69,11 @@ eq(
 	new Uint8Array([0x61, 0x62, 0x63]),
 	"ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
 );
-// A subarray hashes only its own window (respects byteOffset), not the whole buffer.
+eq(
+	"Buffer window hashes its raw bytes",
+	Buffer.from([9, 0x61, 0x62, 0x63, 9]).subarray(1, 4),
+	"ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+);
 const framed = new Uint8Array([9, 1, 2, 3, 9]).subarray(1, 4);
 eq(
 	"Uint8Array subarray (byteOffset)",

@@ -3,6 +3,7 @@ import {
 	existsSync,
 	mkdtempSync,
 	readFileSync,
+	rmSync,
 	statSync,
 	utimesSync,
 	writeFileSync,
@@ -72,6 +73,39 @@ describe("layered artifact store", () => {
 			expect(readFileSync(artifactOutput(rebuilt!, "object").path, "utf8")).toBe("good");
 		},
 	);
+
+	it.each([
+		{
+			name: "empty",
+			bytes: new Uint8Array(),
+			digest: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+		},
+		{
+			name: "all byte values",
+			bytes: Uint8Array.from({ length: 256 }, (_, index) => index),
+			digest: "40aff2e9d2d8922e47afd4648e6967497158785fbd1da870e7110266bf944880",
+		},
+	])("preserves the SHA-256 identity of $name files", ({ name, bytes, digest }) => {
+		const root = mkdtempSync(path.join(os.tmpdir(), "maligator-binary-artifacts-"));
+		try {
+			const source = path.join(root, "source");
+			writeFileSync(source, bytes);
+			const producer = artifactProducer("example", 1, "implementation");
+			const action = artifactActionKey(producer, { input: name });
+			const published = publishArtifactAction(root, "example", producer, action, [
+				{ name: "binary", file: source },
+			]);
+			const output = artifactOutput(published, "binary");
+			expect(output.digest).toBe(digest);
+			expect(output.size).toBe(bytes.byteLength);
+			expect([...readFileSync(output.path)]).toEqual([...bytes]);
+			const restored = readArtifactAction(root, "example", producer, action);
+			expect(restored).toBeDefined();
+			expect(artifactOutput(restored!, "binary").digest).toBe(digest);
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
 
 	it("recovers a stale per-action publication lock", () => {
 		const root = mkdtempSync(path.join(os.tmpdir(), "maligator-lock-"));

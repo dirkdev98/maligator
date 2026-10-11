@@ -126,7 +126,7 @@ function actionManifestPath(
 }
 
 function fileDigest(file: string): string {
-	return artifactDigest(new Uint8Array(readFileSync(file)));
+	return artifactDigest(readFileSync(file));
 }
 
 function validBlob(file: string, digest: string, size: number): boolean {
