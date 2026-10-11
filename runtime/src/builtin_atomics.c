@@ -418,12 +418,9 @@ static MalValue atomics_wait_result(MalVm *vm, bool async, MalValue value) {
 
 // Per-isolate agent record. Each isolate runs on one mutator thread, so
 // isolate-local storage is the agent's [[CanBlock]] and termination point.
-// Threadless WASI has no other agent that could ever notify, so it cannot block.
-#if defined(__wasi__)
+// Only native workers opt in: a main agent keeps its event loop responsive, and
+// threadless WASI has no other agent that could ever notify.
 static MAL_ISOLATE_LOCAL bool g_atomics_can_block = false;
-#else
-static MAL_ISOLATE_LOCAL bool g_atomics_can_block = true;
-#endif
 static MAL_ISOLATE_LOCAL MalSharedWaitInterrupt *g_atomics_interrupt;
 // Per isolate: only an isolate whose event loop installed the hook can settle
 // its own waitAsync promises, and teardown clears it before the loop is freed.

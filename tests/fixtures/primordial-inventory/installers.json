@@ -17,7 +17,7 @@
 	},
 	{
 		"file": "builtin_atomics.c",
-		"sha256": "928713ea9d7dfe91460d5cd0186bd8a2b473969848b86b6960283a3413e9e582"
+		"sha256": "a7e8c2e4f55709732f0acb010d25ddd3b40b6fc57ddadc3e0a845447c8e341c9"
 	},
 	{
 		"file": "builtin_bigint.c",
