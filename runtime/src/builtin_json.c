@@ -2067,8 +2067,8 @@ static MalValue mal_json_object_members_finalize(
         return mal_value_from_object(mal_intrinsic_new_object(parser->vm));
     }
 
-    MalString *shape_keys[MAL_SHAPE_DYNAMIC_INLINE_SLOTS];
-    MalValue shape_values[MAL_SHAPE_DYNAMIC_INLINE_SLOTS];
+    MalString *shape_keys[MAL_SHAPE_MAX_INLINE_SLOTS];
+    MalValue shape_values[MAL_SHAPE_MAX_INLINE_SLOTS];
     u32 shape_count = 0;
     bool shaped = true;
     for (usize i = 0; i < members->count; i++) {
@@ -2090,7 +2090,7 @@ static MalValue mal_json_object_members_finalize(
             shape_values[slot] = members->roots[i * 2 + 1];
             continue;
         }
-        if (shape_count == MAL_SHAPE_DYNAMIC_INLINE_SLOTS) {
+        if (shape_count == MAL_SHAPE_MAX_INLINE_SLOTS) {
             shaped = false;
             break;
         }

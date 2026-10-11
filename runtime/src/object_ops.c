@@ -551,7 +551,7 @@ MalDefineOwnStatus mal_object_define_own(MalObject *object, MalKey key, const Ma
             // compatibility machinery.
         } else if (mal_object_desc_is_default_data(desc) &&
             !mal_object_has_public_overflow(object)
-            && mal_shape_can_add_property(object->shape, key)) {
+            && mal_shape_can_add_property(object->shape)) {
             if (!object->extensible) {
                 return MAL_DEFINE_OWN_REJECTED;
             }

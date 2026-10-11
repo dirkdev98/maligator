@@ -6443,7 +6443,7 @@ static void mal_vm_op_store_object_property_ic(
             return;
         }
         if (idx < 0 && !mal_object_has_public_overflow(object) && object->extensible &&
-            mal_shape_can_add_property(object->shape, key) &&
+            mal_shape_can_add_property(object->shape) &&
             mal_ic_key_is_stable_string(key_value) &&
             mal_ic_can_apply_transition_store(object, key)) {
             MalShape *source = object->shape;
@@ -7740,9 +7740,9 @@ MalValue mal_vm_op_copy_data_properties(
         if (!mal_object_has_public_overflow(source_object) &&
             source_shape->inline_count > 0) {
             MalShape *result_shape = mal_shape_root(&vm->heap);
-            MalValue values[MAL_SHAPE_DYNAMIC_INLINE_SLOTS];
+            MalValue values[MAL_SHAPE_MAX_INLINE_SLOTS];
             u32 count = 0;
-            bool eligible = source_shape->inline_count <= MAL_SHAPE_DYNAMIC_INLINE_SLOTS;
+            bool eligible = source_shape->inline_count <= MAL_SHAPE_MAX_INLINE_SLOTS;
             for (u32 i = 0; eligible && i < source_shape->inline_count; i++) {
                 const MalShapeProp *prop = &source_shape->props[i];
                 MalKey key = mal_key_from_value(prop->key);
@@ -7875,7 +7875,7 @@ static bool mal_vm_try_merge_shaped_data_properties(
         return false;
     }
     u32 source_count = source_object->shape->inline_count;
-    if (source_count == 0 || source_count > MAL_SHAPE_DYNAMIC_INLINE_SLOTS) {
+    if (source_count == 0 || source_count > MAL_SHAPE_MAX_INLINE_SLOTS) {
         return false;
     }
     MalShape *target_shape = target->shape;
@@ -7888,7 +7888,7 @@ static bool mal_vm_try_merge_shaped_data_properties(
         && cached->append_plan.source == target_shape
         && cached->append_plan.final != nullptr) {
         MAL_PERF_COUNT(merge_shape_cache_hits);
-        MalValue projected[MAL_SHAPE_DYNAMIC_INLINE_SLOTS];
+        MalValue projected[MAL_SHAPE_MAX_INLINE_SLOTS];
         for (u32 i = 0; i < cached->count; ++i) {
             u32 ordinal = cached->identity_projection ? i : cached->source_slots[i];
             projected[i] = mal_object_field_load(source_object, ordinal);
@@ -7912,7 +7912,7 @@ static bool mal_vm_try_merge_shaped_data_properties(
     }
     if (!needs_normalization) {
         MalShapeAppendPlan plan;
-        MalValue values[MAL_SHAPE_DYNAMIC_INLINE_SLOTS];
+        MalValue values[MAL_SHAPE_MAX_INLINE_SLOTS];
         for (u32 i = 0; i < source_count; i++) {
             values[i] = mal_object_field_load(source_object, i);
         }
@@ -7934,8 +7934,8 @@ static bool mal_vm_try_merge_shaped_data_properties(
         return true;
     }
     MalShape *result_shape = target_shape;
-    MalValue values[MAL_SHAPE_DYNAMIC_INLINE_SLOTS];
-    u8 source_slots[MAL_SHAPE_DYNAMIC_INLINE_SLOTS];
+    MalValue values[MAL_SHAPE_MAX_INLINE_SLOTS];
+    u8 source_slots[MAL_SHAPE_MAX_INLINE_SLOTS];
     u32 count = 0;
     for (u32 i = 0; i < source_count; ++i) {
         const MalShapeProp *prop = &source_object->shape->props[i];

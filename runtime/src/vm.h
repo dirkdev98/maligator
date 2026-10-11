@@ -1463,7 +1463,7 @@ typedef struct {
 typedef struct MalShapeCopyCacheEntry {
     MalShape *source_shape;
     MalShapeAppendPlan append_plan;
-    u8 source_slots[MAL_SHAPE_DYNAMIC_INLINE_SLOTS];
+    u8 source_slots[MAL_SHAPE_MAX_INLINE_SLOTS];
     u8 count;
     bool identity_projection;
 } MalShapeCopyCacheEntry;

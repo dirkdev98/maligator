@@ -10,11 +10,10 @@
 #include "value_ops.h"
 
 /**
- * Dynamic keys stop extending shapes at the normal limit, bounding shape-tree
- * growth under churn. Immortal compiler/runtime keys may use the wider absolute
- * limit so stable framework records do not dictionarize at their 33rd field.
+ * Beyond this many properties an object drops to dictionary mode, which bounds
+ * shape-tree growth under churn. Framework records such as Express requests and
+ * responses carry 40 to 50 properties.
  */
-#define MAL_SHAPE_DYNAMIC_INLINE_SLOTS 32
 #define MAL_SHAPE_MAX_INLINE_SLOTS 64
 
 typedef struct MalShape MalShape;
@@ -229,11 +228,8 @@ static inline bool mal_shape_same_logical(const MalShape *left, const MalShape *
     return left_logical == right_logical;
 }
 
-static inline bool mal_shape_can_add_property(const MalShape *shape, MalKey key) {
-    if (shape->inline_count < MAL_SHAPE_DYNAMIC_INLINE_SLOTS) return true;
-    return shape->inline_count < MAL_SHAPE_MAX_INLINE_SLOTS
-        && key.kind == MAL_KEY_STRING && mal_value_is_string(key.value)
-        && mal_value_to_heap(key.value)->storage == MAL_HEAP_STORAGE_IMMORTAL;
+static inline bool mal_shape_can_add_property(const MalShape *shape) {
+    return shape->inline_count < MAL_SHAPE_MAX_INLINE_SLOTS;
 }
 
 static_assert(sizeof(MalShape) <= 64, "MalShape outgrew its 64-byte layout budget");
