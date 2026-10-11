@@ -963,17 +963,27 @@ const forwardExactMemoryLoads: CoreFunctionPass = {
 			indexedCount: number;
 		}
 		const available = new Map<number, Array<InputGroup>>();
+		const privateAvailable = new Map<number, Array<InputGroup>>();
 		const replacements = new Map<CoreValueId, CoreValueId>();
 		const removed: Array<CoreInstructionId> = [];
 		let estimatedEdits = 0;
 		for (const block of control.reversePostorder) {
+			privateAvailable.clear();
 			for (const instruction of fn.bodyInstructionIds(block)) {
+				// Successful raw private reads do not poll; other GC points may permit re-entry.
+				if (
+					privateAvailable.size > 0 &&
+					fn.instructionOpcodeName(instruction) !== "loadPrivate" &&
+					coreInstructionEffects(fn, instruction).mayGc
+				)
+					privateAvailable.clear();
 				if (!isReusableMemoryRead(fn, instruction)) continue;
 				const result = instructionResultAt(fn, instruction, 0);
 				if (result === undefined) continue;
 				const privateRead = fn.instructionOpcodeName(instruction) === "loadPrivate";
+				const candidates = privateRead ? privateAvailable : available;
 				const inputHash = coreInstructionInputsHash(fn, instruction);
-				const groups = available.get(inputHash) ?? [];
+				const groups = candidates.get(inputHash) ?? [];
 				let group = groups.find(
 					({ example }) =>
 						fn.valueRepresentation(example.value) === fn.valueRepresentation(result) &&
@@ -988,12 +998,12 @@ const forwardExactMemoryLoads: CoreFunctionPass = {
 						indexedCount: 0,
 					};
 					groups.push(group);
-					available.set(inputHash, groups);
+					candidates.set(inputHash, groups);
 					continue;
 				}
 				const dominates = (candidate: AvailableRead): boolean =>
 					fn.instructionBlock(candidate.instruction) === block ||
-					(privateRead ? controlBundle.exceptional() : control).instructionDominatesBlock(
+					control.instructionDominatesBlock(
 						fn.instructionBlock(candidate.instruction),
 						block,
 					);

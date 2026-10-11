@@ -10,6 +10,7 @@ import {
 import { CORE_LOCAL_INTERPROCEDURAL_FLOW_ANALYSIS } from "../src/compiler/core/core-ir-interprocedural-flow.ts";
 import {
 	CORE_LOCAL_MEMORY_VERSIONS_ANALYSIS,
+	analyzeCoreMemoryVersions,
 	coreMemoryAccesses,
 	coreMemoryLocationIsExact,
 } from "../src/compiler/core/core-ir-memory.ts";
@@ -111,7 +112,7 @@ describe("Core local memory, provenance, and escape optimization", () => {
 	});
 
 	it.each(["same block", "ordinary successor"])(
-		"reuses successful private loads in the %s while retaining the first brand check",
+		"retains each block's first private brand check: %s",
 		(flow) => {
 			const core = program();
 			const builder = new CoreFunctionBuilder(core, { parameterCount: 2 });
@@ -129,7 +130,8 @@ describe("Core local memory, provenance, and escape optimization", () => {
 					kind: "jump",
 					edge: { block: body, arguments: [] },
 				});
-			builder.appendInstruction(body, "loadPrivate", [receiver, key]);
+			const [second] = builder.appendInstruction(body, "loadPrivate", [receiver, key]);
+			const secondInstruction = builder.bodyInstructionIds(body).at(-1)!;
 			const [last] = builder.appendInstruction(body, "loadPrivate", [receiver, key]);
 			builder.setTerminator(body, { kind: "return", value: last! });
 			const fn = core.function(builder.finish(entry).function);
@@ -140,12 +142,134 @@ describe("Core local memory, provenance, and escape optimization", () => {
 						fn.instructionKind(instruction) === "operation" &&
 						fn.instructionOpcodeName(instruction) === "loadPrivate",
 				),
-			).toEqual([firstInstruction]);
+			).toEqual(
+				body === entry ? [firstInstruction] : [firstInstruction, secondInstruction],
+			);
 			expect(inspectCoreTerminatorPayload(fn, fn.blockTerminator(body))).toEqual({
 				kind: "return",
-				value: first,
+				value: body === entry ? first : second,
 			});
 			expect(fn.instructionEffectRefinement(firstInstruction)).toBeUndefined();
+		},
+	);
+
+	it("keeps independent private reads before, within, and after a loop", () => {
+		const core = program();
+		const builder = new CoreFunctionBuilder(core, { parameterCount: 3 });
+		const entry = builder.createBlock([
+			{ representation: "boxed" },
+			{ representation: "boxed" },
+			{ representation: "boxed" },
+		]);
+		const body = builder.createBlock();
+		const exit = builder.createBlock();
+		const receiver = builder.blockParameterValue(entry, 0);
+		const key = builder.blockParameterValue(entry, 1);
+		const repeat = builder.blockParameterValue(entry, 2);
+		const [before] = builder.appendInstruction(entry, "loadPrivate", [receiver, key]);
+		const entryRead = builder.bodyInstructionIds(entry).at(-1)!;
+		builder.setTerminator(entry, {
+			kind: "jump",
+			edge: { block: body, arguments: [] },
+		});
+		builder.appendInstruction(body, "loadPrivate", [receiver, key]);
+		const bodyRead = builder.bodyInstructionIds(body).at(-1)!;
+		const [during] = builder.appendInstruction(body, "loadPrivate", [receiver, key]);
+		builder.setTerminator(body, {
+			kind: "branch",
+			condition: repeat,
+			consequent: { block: body, arguments: [] },
+			alternate: { block: exit, arguments: [] },
+		});
+		const [after] = builder.appendInstruction(exit, "loadPrivate", [receiver, key]);
+		const exitRead = builder.bodyInstructionIds(exit).at(-1)!;
+		const [last] = builder.appendInstruction(exit, "loadPrivate", [receiver, key]);
+		builder.appendInstruction(exit, "rootUse", [before!, during!, last!]);
+		builder.setTerminator(exit, { kind: "return", value: last! });
+		const fn = core.function(builder.finish(entry).function);
+		forwardMemoryLoads(core, fn);
+		expect(
+			[...fn.instructionIds()].filter(
+				(instruction) =>
+					fn.instructionKind(instruction) === "operation" &&
+					fn.instructionOpcodeName(instruction) === "loadPrivate",
+			),
+		).toEqual([entryRead, bodyRead, exitRead]);
+		expect(inspectCoreTerminatorPayload(fn, fn.blockTerminator(exit))).toEqual({
+			kind: "return",
+			value: after,
+		});
+	});
+
+	it.each(["allocation", "known read-only call"])(
+		"restarts private reuse after a collecting %s even when memory versions agree",
+		(barrier) => {
+			const core = program();
+			const builder = new CoreFunctionBuilder(core, { parameterCount: 3 });
+			const entry = builder.createBlock([
+				{ representation: "boxed" },
+				{ representation: "boxed" },
+				{ representation: "boxed" },
+			]);
+			const receiver = builder.blockParameterValue(entry, 0);
+			const key = builder.blockParameterValue(entry, 1);
+			const collection = builder.blockParameterValue(entry, 2);
+			const [first] = builder.appendInstruction(entry, "loadPrivate", [receiver, key]);
+			const firstRead = builder.bodyInstructionIds(entry).at(-1)!;
+			const [intermediate] =
+				barrier === "allocation"
+					? builder.appendInstruction(entry, "createArray", [], {
+							attributes: { length: 0 },
+						})
+					: builder.appendInstruction(entry, "callKnown", [collection, key], {
+							attributes: {
+								operation: "Map.prototype.get",
+								worldAssumptions: {
+									...builtinWorldAssumptions("Map.prototype.get", "exact-builtin-proof"),
+								},
+							},
+						});
+			const collecting = builder.bodyInstructionIds(entry).at(-1)!;
+			const [second] = builder.appendInstruction(entry, "loadPrivate", [receiver, key]);
+			const secondRead = builder.bodyInstructionIds(entry).at(-1)!;
+			const [last] = builder.appendInstruction(entry, "loadPrivate", [receiver, key]);
+			builder.appendInstruction(entry, "rootUse", [first!, intermediate!, last!]);
+			builder.setTerminator(entry, { kind: "return", value: last! });
+			const fn = core.function(builder.finish(entry).function);
+			if (barrier === "known read-only call") {
+				const editor = CoreEditor.open(core, fn.id);
+				const effects = {
+					...CORE_NO_EFFECTS,
+					reads: ["object-property"],
+					mayGc: true,
+					mayThrow: true,
+				} as const;
+				const proof = editor.addFact({
+					kind: "test-read-only-call",
+					value: true,
+					claims: [{ kind: "effect", instruction: collecting, effects }],
+					validity: { kind: "summary", digest: "test-read-only-call" },
+					obligations: [],
+					origin: "test",
+				});
+				editor.setInstructionEffectRefinement(collecting, { effects, proof });
+				editor.commit();
+			}
+			expect(
+				analyzeCoreMemoryVersions(core, fn.id).readsEquivalent(firstRead, secondRead),
+			).toBe(true);
+			forwardMemoryLoads(core, fn);
+			expect(
+				[...fn.instructionIds()].filter(
+					(instruction) =>
+						fn.instructionKind(instruction) === "operation" &&
+						fn.instructionOpcodeName(instruction) === "loadPrivate",
+				),
+			).toEqual([firstRead, secondRead]);
+			expect(inspectCoreTerminatorPayload(fn, fn.blockTerminator(entry))).toEqual({
+				kind: "return",
+				value: second,
+			});
 		},
 	);
 
