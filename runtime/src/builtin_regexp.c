@@ -416,9 +416,19 @@ static MalValue regexp_escape_pattern(MalVm *vm, MalString *src) {
     return mal_value_from_string(mal_string_new_owned(&vm->heap, buf, out));
 }
 
-// ---------------------------------------------------------------------------
-// RegExpInitialize / RegExpCreate
-// ---------------------------------------------------------------------------
+static void regexp_initialize_state(
+    MalVm *vm, MalRegExpObject *re, void *matcher, MalString *pattern,
+    MalString *flags_str, u32 bits
+) {
+    re->matcher = matcher;
+    re->source = pattern;
+    re->flags = flags_str;
+    re->flag_bits = bits;
+    // lastIndex is a { writable, !enumerable, !configurable } own data property.
+    MalValue last_index = mal_value_from_i32(0);
+    mal_object_set_shaped_values(
+        (MalObject *) re, regexp_instance_shape(vm), &last_index, 1);
+}
 
 static bool regexp_initialize(MalVm *vm, MalRegExpObject *re, MalString *pattern, MalString *flags_str) {
     u32 bits;
@@ -442,14 +452,7 @@ static bool regexp_initialize(MalVm *vm, MalRegExpObject *re, MalString *pattern
         mal_vm_throw_error(vm, MAL_INTRINSIC_SYNTAX_ERROR_PROTOTYPE, "invalid regular expression");
         return false;
     }
-    re->matcher = matcher;
-    re->source = pattern;
-    re->flags = flags_str;
-    re->flag_bits = bits;
-    // lastIndex is a { writable, !enumerable, !configurable } own data property.
-    MalValue last_index = mal_value_from_i32(0);
-    mal_object_set_shaped_values(
-        (MalObject *) re, regexp_instance_shape(vm), &last_index, 1);
+    regexp_initialize_state(vm, re, matcher, pattern, flags_str, bits);
     return true;
 }
 
@@ -2101,7 +2104,12 @@ static MalValue regexp_proto_match_all(MalVm *vm, MalValue this_value, const Mal
     MalRegExpObject *canonical;
     if (regexp_canonical_instance(vm, this_value, &canonical)) {
         MalString *flags = regexp_canonical_flags_string(vm, canonical);
-        matcher = mal_regexp_create(vm, canonical->source, flags);
+        MalObject *prototype = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_REGEXP_PROTOTYPE]);
+        MalRegExpObject *clone = mal_regexp_object_new(&vm->heap, prototype);
+        void *compiled = mal_regexp_clone_fresh(canonical->matcher);
+        assert(compiled != nullptr);
+        regexp_initialize_state(vm, clone, compiled, canonical->source, flags, canonical->flag_bits);
+        matcher = mal_value_from_regexp_object(clone);
         if (regexp_threw(vm)) {
             return mal_value_new_undefined();
         }

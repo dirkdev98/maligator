@@ -30,7 +30,8 @@ use crate::ffi::{nullable_slice, nullable_u16_slice, write_utf8};
 /// v3: added immutable-subject identity and execution-path reporting.
 /// v4: added conservative allocation-free literal/class execution plans.
 /// v5: added compact Latin-1 subject execution.
-pub const MAL_REGEXP_ABI_VERSION: u32 = 5;
+/// v6: added fresh-state cloning of an existing compiled pattern.
+pub const MAL_REGEXP_ABI_VERSION: u32 = 6;
 
 const EXEC_ASCII: u32 = 1 << 0;
 const EXEC_CACHE_HIT: u32 = 1 << 1;
@@ -398,6 +399,26 @@ struct CompiledPattern {
     fast_last_captures: [i32; FAST_CAPTURE_SLOTS],
 }
 
+impl CompiledPattern {
+    fn fresh(
+        re: Arc<Regex>,
+        fast: Option<Arc<FastPattern>>,
+        unicode_mode: bool,
+        ascii_eligible: bool,
+    ) -> Self {
+        Self {
+            re,
+            fast,
+            unicode_mode,
+            ascii_eligible,
+            subject_cache: None,
+            last: None,
+            fast_last_groups: 0,
+            fast_last_captures: [-1; FAST_CAPTURE_SLOTS],
+        }
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum SubjectEncoding {
     Utf16,
@@ -567,23 +588,50 @@ pub unsafe extern "C" fn mal_regexp_compile(
             fast,
             unicode_mode,
         }) => {
-            let boxed = Box::new(CompiledPattern {
+            let boxed = Box::new(CompiledPattern::fresh(
                 re,
                 fast,
                 unicode_mode,
-                ascii_eligible: flags & FLAG_IGNORE_CASE == 0,
-                subject_cache: None,
-                last: None,
-                fast_last_groups: 0,
-                fast_last_captures: [-1; FAST_CAPTURE_SLOTS],
-            });
+                flags & FLAG_IGNORE_CASE == 0,
+            ));
             Box::into_raw(boxed) as *mut core::ffi::c_void
         }
         None => core::ptr::null_mut(),
     }
 }
 
-/// Free a compiled-pattern handle from `mal_regexp_compile`. Null-tolerant, so
+/// Share immutable engine code with a live handle, retaining no match or subject state.
+/// The returned handle has independent ownership; a null source returns null.
+#[no_mangle]
+pub unsafe extern "C" fn mal_regexp_clone_fresh(
+    handle: *const core::ffi::c_void,
+) -> *mut core::ffi::c_void {
+    if handle.is_null() {
+        return core::ptr::null_mut();
+    }
+    let source = unsafe { &*(handle as *const CompiledPattern) };
+    // Cloning replaces a compile-cache hit, so it must preserve that entry's recency.
+    PATTERN_CACHE.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        if let Some(index) = cache
+            .iter()
+            .position(|entry| Arc::ptr_eq(&entry.re, &source.re))
+        {
+            if let Some(entry) = cache.remove(index) {
+                cache.push_front(entry);
+            }
+        }
+    });
+    let boxed = Box::new(CompiledPattern::fresh(
+        Arc::clone(&source.re),
+        source.fast.clone(),
+        source.unicode_mode,
+        source.ascii_eligible,
+    ));
+    Box::into_raw(boxed) as *mut core::ffi::c_void
+}
+
+/// Free an owned compiled-pattern handle. Null-tolerant, so
 /// the GC finalizer (which nulls the field after the call) is idempotent.
 #[no_mangle]
 pub unsafe extern "C" fn mal_regexp_free(handle: *mut core::ffi::c_void) {
@@ -1065,6 +1113,126 @@ mod tests {
         unsafe {
             mal_regexp_free(first);
             mal_regexp_free(second);
+        }
+    }
+
+    #[test]
+    fn fresh_clone_owns_code_but_not_the_sources_subject_or_captures() {
+        clear_cache();
+        assert!(unsafe { mal_regexp_clone_fresh(core::ptr::null()) }.is_null());
+        let pattern = utf16("(?<letter>a)(b)?");
+        let source = unsafe { handle(&pattern, FLAG_UNICODE) };
+        let mut source_caps = [-1; 6];
+        let mut flags = 0;
+        assert_eq!(
+            unsafe { exec_latin1(source, b"zab", 1, 7, &mut source_caps, &mut flags) },
+            3
+        );
+        assert_eq!(source_caps, [1, 3, 1, 2, 2, 3]);
+        let cloned = unsafe { mal_regexp_clone_fresh(source) };
+        assert!(!cloned.is_null());
+        assert_ne!(source, cloned);
+        {
+            let original = unsafe { &*(source as *const CompiledPattern) };
+            let copy = unsafe { &*(cloned as *const CompiledPattern) };
+            assert!(Arc::ptr_eq(&original.re, &copy.re));
+            assert!(original.subject_cache.is_some());
+            assert!(copy.subject_cache.is_none());
+            assert!(copy.unicode_mode);
+        }
+        let mut clone_caps = [-1; 6];
+        assert_eq!(
+            unsafe { mal_regexp_copy_captures(cloned, clone_caps.as_mut_ptr(), 6) },
+            0
+        );
+        assert_eq!(unsafe { mal_regexp_named_group_count(cloned) }, 0);
+        assert_eq!(
+            unsafe { exec_latin1(cloned, b"a", 2, 7, &mut clone_caps, &mut flags) },
+            3
+        );
+        assert_eq!(clone_caps, [0, 1, 0, 1, -1, -1]);
+        assert_eq!(unsafe { mal_regexp_named_group_count(cloned) }, 1);
+        let mut retained = [-1; 6];
+        assert_eq!(
+            unsafe { mal_regexp_copy_captures(source, retained.as_mut_ptr(), 6) },
+            3
+        );
+        assert_eq!(retained, source_caps);
+        clear_cache();
+        unsafe { mal_regexp_free(source) };
+        assert_eq!(
+            unsafe { exec_latin1(cloned, b"xab", 3, 7, &mut clone_caps, &mut flags) },
+            3
+        );
+        assert_eq!(clone_caps, [1, 3, 1, 2, 2, 3]);
+        assert_eq!(cache_len(), 0);
+        unsafe { mal_regexp_free(cloned) };
+    }
+
+    #[test]
+    fn fresh_clone_keeps_existing_compiled_code_hot_across_unrelated_constructions() {
+        clear_cache();
+        let pattern = utf16("(cache-hot+)");
+        let source = unsafe { handle(&pattern, 0) };
+        for index in 0..PATTERN_CACHE_CAPACITY + 2 {
+            let other = utf16(&format!("other-{index}"));
+            let handle = unsafe { handle(&other, 0) };
+            unsafe { mal_regexp_free(handle) };
+            let clone = unsafe { mal_regexp_clone_fresh(source) };
+            unsafe { mal_regexp_free(clone) };
+        }
+        let recreated = unsafe { handle(&pattern, 0) };
+        let original = unsafe { &*(source as *const CompiledPattern) };
+        let warm = unsafe { &*(recreated as *const CompiledPattern) };
+        assert!(Arc::ptr_eq(&original.re, &warm.re));
+        assert_eq!(cache_len(), PATTERN_CACHE_CAPACITY);
+        unsafe {
+            mal_regexp_free(source);
+            mal_regexp_free(recreated);
+        }
+    }
+
+    #[test]
+    fn fresh_clone_shares_fast_plan_but_keeps_capture_slots_independent() {
+        clear_cache();
+        let pattern = utf16("id=([0-9]+);");
+        let source = unsafe { handle(&pattern, 0) };
+        let mut source_caps = [-1; 4];
+        let mut flags = 0;
+        assert_eq!(
+            unsafe { exec_latin1(source, b"id=12;", 1, 7, &mut source_caps, &mut flags) },
+            2
+        );
+        assert_eq!(flags, EXEC_FAST | EXEC_LATIN1);
+        let cloned = unsafe { mal_regexp_clone_fresh(source) };
+        assert!(!cloned.is_null());
+        {
+            let original = unsafe { &*(source as *const CompiledPattern) };
+            let copy = unsafe { &*(cloned as *const CompiledPattern) };
+            assert!(Arc::ptr_eq(
+                original.fast.as_ref().unwrap(),
+                copy.fast.as_ref().unwrap()
+            ));
+        }
+        let mut clone_caps = [-1; 4];
+        assert_eq!(
+            unsafe { mal_regexp_copy_captures(cloned, clone_caps.as_mut_ptr(), 4) },
+            0
+        );
+        assert_eq!(
+            unsafe { exec_latin1(cloned, b"id=345;", 2, 7, &mut clone_caps, &mut flags) },
+            2
+        );
+        assert_eq!(clone_caps, [0, 7, 3, 6]);
+        let mut retained = [-1; 4];
+        assert_eq!(
+            unsafe { mal_regexp_copy_captures(source, retained.as_mut_ptr(), 4) },
+            2
+        );
+        assert_eq!(retained, [0, 6, 3, 5]);
+        unsafe {
+            mal_regexp_free(source);
+            mal_regexp_free(cloned);
         }
     }
 

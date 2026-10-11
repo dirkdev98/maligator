@@ -153,6 +153,33 @@ check(
 		canonicalMatchAll.lastIndex === 1,
 );
 
+const interleavedSource = /(?<letter>[a-z])(\d)?/dgiu;
+interleavedSource.exec("K1");
+interleavedSource.lastIndex = 1;
+const leftIterator = "x\u212a2b".matchAll(interleavedSource);
+const rightIterator = "ya3C".matchAll(interleavedSource);
+const leftFirst = leftIterator.next().value;
+interleavedSource.exec("zQ7");
+const rightFirst = rightIterator.next().value;
+const leftSecond = leftIterator.next().value;
+const rightSecond = rightIterator.next().value;
+check(
+	"matchAll clones keep independent captures and progress after the source executes",
+	leftFirst[0] === "\u212a2" &&
+		leftFirst.groups.letter === "\u212a" &&
+		leftFirst.indices.groups.letter[0] === 1 &&
+		leftFirst.indices.groups.letter[1] === 2 &&
+		rightFirst[0] === "a3" &&
+		leftSecond[0] === "b" &&
+		leftSecond[2] === undefined &&
+		rightSecond[0] === "C" &&
+		leftSecond.index === 3 &&
+		rightSecond.index === 3 &&
+		leftIterator.next().done &&
+		rightIterator.next().done &&
+		interleavedSource.lastIndex === 3,
+);
+
 const customFlags = /a/g;
 let customFlagsCalls = 0;
 Object.defineProperty(customFlags, "flags", {

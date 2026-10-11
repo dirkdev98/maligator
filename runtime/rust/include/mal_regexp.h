@@ -25,8 +25,9 @@ extern "C" {
  * v2: added mal_regexp_free (GC finalization).
  * v3: added immutable-subject identity and execution-path reporting.
  * v4: added conservative allocation-free literal/class execution plans.
- * v5: added compact Latin-1 subject execution. */
-#define MAL_REGEXP_ABI_VERSION 5u
+ * v5: added compact Latin-1 subject execution.
+ * v6: added fresh-state cloning of an existing compiled pattern. */
+#define MAL_REGEXP_ABI_VERSION 6u
 
 /* Returns the ABI version compiled into the linked archive. */
 uint32_t mal_regexp_abi_version(void);
@@ -52,7 +53,11 @@ uint32_t mal_regexp_abi_version(void);
  * lives as long as the owning RegExp object; freed by mal_regexp_free. */
 void *mal_regexp_compile(const uint16_t *pattern, size_t pattern_len, uint32_t flags);
 
-/* Free a handle from mal_regexp_compile (null-tolerant, so the GC finalizer is
+/* Share only immutable code with a live handle; the fresh mutable state and
+ * ownership are independent. Null input returns NULL; free the result normally. */
+void *mal_regexp_clone_fresh(const void *handle);
+
+/* Free an owned compiled-pattern handle (null-tolerant, so the GC finalizer is
  * idempotent after nulling the field). ABI v2+. */
 void mal_regexp_free(void *handle);
 

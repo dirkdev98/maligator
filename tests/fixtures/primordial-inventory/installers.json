@@ -109,7 +109,7 @@
 	},
 	{
 		"file": "builtin_regexp.c",
-		"sha256": "4fa9b314a462f9520fe4c656befc185f643fcfd721f21b12d019db43f39b0e2e"
+		"sha256": "e7a1e05a3d23f156312bf050674523f88765ccb21cc0996f9ffc7a33bb17dfef"
 	},
 	{
 		"file": "builtin_set.c",
