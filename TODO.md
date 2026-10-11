@@ -68,6 +68,15 @@ rooting, and resource-safety defects can interrupt that order.
       fixtures became modules, native plan entries read at runtime bytecode IPs,
       inline cache rows and installer sets after compact layouts and workers, and a
       keep-alive race. The Wasm tests also need WASI SDK 34 on the host.
+      `web-disabled.test.ts` builds its web-off runtime inside a 180 second hook;
+      after runtime sources change, that cold build under the remainder's parallel
+      load ran out of time on 2026-10-11 and passed in 3 seconds once cached.
+- [ ] Fix the Linux crash of `test/staging/sm/expressions/octal-literals.js` in the
+      sloppy pass. Two full CI runs (38120653230 and 38124199226) report it CRASHED
+      in the same batch of eval-heavy staging tests, while its strict pass and both
+      passes of that batch on macOS succeed. It is the only regression against the
+      2026-10-04 baseline, so the 53 tests that pass since then stay unrecorded until
+      a run can import an improvement-only baseline.
 
 - [ ] Track configured asset-directory topology in `dev`. Publication validates
       consumed file identities, but adding a file or renaming a previously unwatched
