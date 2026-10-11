@@ -3,8 +3,10 @@
 Maligator is an ahead-of-time JavaScript compiler and native runtime. Use current
 source, command help, and test manifests to establish behavior. Saved memories,
 design documents, and old reports provide context, not proof about the current tree.
-[TODO.md](TODO.md) owns unfinished project work; [docs/testing.md](docs/testing.md)
-owns detailed test selection, runner flags, and evidence formats.
+[TODO.md](TODO.md) owns unfinished project work. Read topic references when needed:
+[testing](docs/testing.md) for runner details and evidence,
+[benchmarking](docs/benchmarking.md) for performance, and
+[website](website/README.md) for documentation generation and previews.
 
 ## Scope and authority
 
@@ -53,13 +55,10 @@ owns detailed test selection, runner flags, and evidence formats.
 
 ## Environment and coordination
 
-Establish the session's execution environment with `npm run env:check -- --json`
-before builds, tests, or benchmarks. It needs permission to write the workspace,
-temporary directory, Maligator user cache, npm cache, and
-Cargo cache, and to bind loopback `listen(0)`. Read-only inspection does not need
-those capabilities. Download/network access and Git writes are separate permissions.
-Unit and quality wrappers also attempt to write cache leases; do not assume that a
-TypeScript-only command needs no user-cache access.
+Run `npm run env:check -- --json` before builds, tests, or benchmarks. It probes
+workspace, temporary, Maligator/npm/Cargo cache writes and loopback `listen(0)`;
+unit and quality wrappers also need cache leases. Read-only inspection needs none
+of these capabilities. Network access and Git writes are separate permissions.
 
 If the probe confirms an `EPERM` or `EACCES` capability failure, correct the sandbox
 and rerun the exact command before diagnosing product code. Before heavy work,
@@ -71,45 +70,37 @@ tests, and benchmarks; never kill another task or introduce a global performance
 Use bounded, one-shot commands while developing. `npm test` and `npm run test:unit`
 run once by default; pass `-- --watch` only when requested.
 
-| Purpose                                    | Command                                       |
-| ------------------------------------------ | --------------------------------------------- |
-| Inspect the normal gate without running it | `npm run test:check -- --plan=json`           |
-| Focused unit tests                         | `npm run test:unit -- --run <file>`           |
-| Focused slow unit/integration test         | `npm run test:unit:full-only -- --run <file>` |
-| Focused native behavior                    | `npm run test:native -- <file>`               |
-| Native memory/UB checks                    | `npm run test:sanitize -- <file>`             |
-| Type checking                              | `npm run type-check`                          |
-| Lint and formatting without source edits   | `npm run lint:ci`                             |
-| Canonical acceptance gate                  | `npm run test:check`                          |
+| Purpose                                    | Command                                 |
+| ------------------------------------------ | --------------------------------------- |
+| Inspect the normal gate without running it | `npm run test:check -- --plan=json`     |
+| Focused unit tests                         | `npm run test:unit -- <file>`           |
+| Focused slow unit/integration test         | `npm run test:unit:full-only -- <file>` |
+| Focused native behavior                    | `npm run test:native -- <file>`         |
+| Native memory/UB checks                    | `npm run test:sanitize -- <file>`       |
+| Type checking                              | `npm run type-check`                    |
+| Lint and formatting without source edits   | `npm run lint:ci`                       |
+| Canonical acceptance gate                  | `npm run test:check`                    |
 
-`test:check` includes smoke and the selected native, sanitizer, and standards lanes.
-It does not cover every native fixture or the full standards corpus. During edits,
-run affected unit files and the native or sanitizer fixture that observes the change.
-Batch type-check and lint after cohesive work; do not run the whole unit suite or
-canonical gate after every small edit or checkpoint. For documentation and website
-assets, check formatting, links, generation, routes, and relevant behavior without
-rebuilding the runtime.
+During edits, run affected unit files and the native or sanitizer fixture that
+observes the change. Batch type-check and lint after cohesive work; do not repeat
+the whole unit suite or canonical gate after every small edit or checkpoint.
+Documentation-only changes need formatting, links, and command checks; website
+changes also need relevant generation, routes, and behavior. Do not rebuild the
+runtime for prose edits.
 
-CI owns broad acceptance for an authorized branch or PR checkpoint: Linux's disjoint
-lanes combine into the canonical check result, alongside macOS ARM smoke. Existing
-successful evidence counts only for its recorded source content, selection, and
-environment. Continue independent work while checks run; acceptance remains pending
-until the required coverage succeeds. Push authority is separate from verification.
-When CI is unavailable or pushing is not authorized, run the relevant local lanes
-once after the batch; run the entire gate for cross-cutting changes or unresolved
-coverage concerns. Repeat checks only after relevant changes or to resolve a failure.
-Use `npm run test:help`, tier `--list`/`--plan=json`, and the manifests for exact coverage
-and time budgets; durations depend on the host and cache state.
-The weekly native-remainder workflow exercises the native files outside check on
-Linux and macOS, with each file assigned to its normal or sanitizer dimension. Use
-`npm run test:native:remainder -- --plan=json` to inspect that selection; its partial
-report is not a complete full-gate pass.
+CI owns broad acceptance at an authorized branch or PR checkpoint. Continue
+independent work while checks run; acceptance remains pending until required
+coverage succeeds. Push authority is separate. Without CI or push authority, run
+relevant local lanes once after the batch; use the entire gate for cross-cutting
+changes or unresolved coverage. Repeat only after relevant changes or failures.
+Check is a curated gate, not every native fixture or the full standards corpus.
+Use `test:help`, tier `--list`/`--plan=json`, and the manifests for exact coverage;
+[CI coverage](docs/testing.md#github-actions) includes the weekly native remainder.
 
 Follow [test placement](docs/testing.md#test-placement) when adding tests. Ask if the
 acceptance boundary could reasonably belong in multiple lanes. Slow unit/subprocess
 tests belong in `tests/test-suite-unit-full-only.txt`. For Core changes, use the
 [focused optimizer workflow](docs/testing.md#focused-optimizer-verification).
-`MAL_DEBUG=true node ./src/index.ts build <fixture>` enables per-pass Core diagnostics.
 Reproduce Test262 cases through its runner so harness includes and variants are honored.
 
 ## Standards and baselines
@@ -119,42 +110,30 @@ filtered tests and small manifests remain normal development tools. Keep self-ho
 checks early in the full gate. Use explicit `--backend` and `--mode` flags: canonical
 runners remove ambient runtime overrides such as `MAL_INTERP`.
 
-`npm run test262` and `npm run test262:report` check against the resolved HEAD baseline
-without rewriting it. `--baseline <file>` selects an explicit comparison input.
-Inspect completeness and exact `PASSED -> FAILED` transitions, not just totals.
+Test262 checks the resolved HEAD baseline without rewriting it; inspect completeness
+and exact `PASSED -> FAILED` transitions, not just totals.
 Replacing `scripts/test262.json` requires an authorized
 `npm run test262:update-baseline`; updating `bench/baseline.json` requires an authorized
 benchmark `--update`. Neither baseline update is implied by running a check.
 
 ## Performance and evidence
 
-The benchmark families are `javascript`, `http`, and `self-compile`; default runs
-select the first two and `--full` selects all three. Keep Node-hosted compiler DX
-measurements (`npm run bench:dx -- --source`) distinct from AOT self-compile measurements.
-
-Use matched workloads, output parity/checksums, source/toolchain identity, and repeated
-interleaved pairs for performance conclusions. Inspect `--plan=json` before a costly
-comparison: even `--runs 1` includes warmup and can include cold and diagnostic work.
-For comparisons, use `--compare <ref> --budget-seconds <seconds>` and retain the printed
-run directory. Exit 2 means failed or incomplete; exit 1 flags a classified regression.
-A single pair or a zero exit code does not establish stable performance acceptance.
-Resume only with matching source/options/host, after a fresh environment check.
+Use matched workloads, output parity, source/toolchain identity, and repeated
+interleaved pairs for performance conclusions. Inspect `--plan=json` before costly
+work; a single pair or zero exit code does not establish acceptance. Use the
+[benchmark reference](docs/benchmarking.md) for commands, budgets, and resume rules.
 
 Report what was exercised, failed, and left unverified. Retain the evidence needed
 to review the current change; historical timings and old passes are not current
-validation. Gate runs print their retained report path under
-`.cache/mal-build/test-suite/runs/`; use that path when citing evidence. The latest
-`report-<tier>[-<lane>].json` is only a discovery shortcut. A report with changed source
-or incomplete coverage cannot establish acceptance.
+validation. Cite the retained [run report](docs/testing.md#reports), not the mutable
+latest shortcut. Evidence counts only for its recorded source, selection, and
+environment; changed source or incomplete coverage cannot establish acceptance.
 
 ## Artifact hygiene
 
-- Leave no disposable files behind in `.cache/` or temp directories; cleanup is part
-  of completing the task.
-- Keep generated profiles, benchmark outputs, logs, captures, and scratch scripts
-  out of tracked directories. Use one task-scoped directory under `.cache/` for
-  evidence that must survive the command; use an OS temporary directory with
-  cleanup in `finally` for disposable intermediates.
+- Use one task-scoped `.cache/` directory for retained evidence and OS temporary
+  directories with cleanup in `finally` for disposable intermediates. Keep profiles,
+  logs, captures, and scratch scripts out of tracked directories.
 - Tool defaults must write reports under `.cache/`, create their output directories,
   and print the resulting paths. Read comparison inputs explicitly; never silently
   adopt an old experiment output as a baseline. Baseline replacement remains an
@@ -165,18 +144,16 @@ or incomplete coverage cannot establish acceptance.
   in `docs/decisions/`. Remove scratch helpers when their investigation ends.
 - Before finishing a task, remove its disposable builds and superseded outputs.
   Retain only evidence supporting the result or an unresolved failure, and report
-  its location. An ignored `.cache/` directory is not a permanent archive; never
-  force-add its contents. Do not delete another task's artifacts.
+  its location. Never force-add `.cache/` contents or delete another task's artifacts.
 
 ## Cleanup and delegation
 
 Audit ownership and activity before deleting artifacts. Remove only explicitly
 identified inactive scratch or superseded generated data; preserve source, baselines,
 useful failure evidence, and unrelated drafts. Use `cache prune --dry-run` before
-supported cache pruning, and respect live leases. The default target is 15 GiB;
-family minimums and recent-entry protection can leave more than that. This command
-manages the user cache, not repository `.cache/` reports. Never reuse an old deletion
-list.
+supported cache pruning and respect live leases. It manages the user cache, not
+repository reports; see [cache ownership](docs/testing.md#cache-ownership). Never
+reuse an old deletion list.
 
 Delegate only when requested. Use the requested available external harness, give each
 assignment a complete scope and a 30-minute wall-clock limit, and capture its output.

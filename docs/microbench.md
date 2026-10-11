@@ -134,7 +134,7 @@ pairs having completed from later diagnostic failures.
 The baseline is the resolved tip of `main`, not a merge base. The existing
 label-triggered [Native performance workflow](../.github/workflows/native-performance.yml)
 continues to provide parent/cumulative merge-base comparisons. See
-[testing documentation](testing.md#bounded-native-runtime-and-compiler-checks)
+[benchmarking documentation](benchmarking.md#bounded-native-runtime-and-compiler-checks)
 for local runner commands and details of parity and timing evidence.
 
 ## Execution boundary

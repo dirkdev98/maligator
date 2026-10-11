@@ -1,0 +1,327 @@
+# Benchmarking
+
+Use this reference when measuring a compiler or runtime change. Working authority and
+verification policy live in [AGENTS.md](../AGENTS.md); correctness checks live in
+[testing.md](testing.md). Inspect the command plan before a costly run and compare
+matched workloads, output parity, source/toolchain identity, and repeated interleaved
+pairs. A single pair or a zero exit code does not establish performance acceptance.
+Replacing `bench/baseline.json` requires an explicitly authorized `--update`.
+
+The `npm run bench` families are `javascript`, `http`, and `self-compile`. Default
+runs select the first two; `--full` selects all three. Keep source-hosted DX
+measurements (`npm run bench:dx -- --source`) separate from AOT self-compilation.
+For application profiling, use [profiling.md](profiling.md).
+
+## Performance entry points
+
+`bench:compiler-scale` writes `.cache/compiler-scale/report.json` by default.
+`bench:performance` is the public performance entrypoint. `gap` compiles each selected
+diagnostic case independently, so adding an unselected case does not grow or invalidate
+an existing case. Its reports under `.cache/performance/` include per-case compiler
+artifact identity, image counts, generated-object measurements, executable size, and
+cache outcomes. Use `--plan=json` before execution, `--category` or repeatable `--case`
+for focused work, and `--preset confirm --case ID` for deeper selected evidence.
+
+Use `--owner primordial-methods` to select the 50 grouped primordial microbenchmarks.
+`bench/runtime-gap/primordial-methods.json` records the selected 200 callable identities.
+Their catalog `methods` list records the methods exercised in each measured workload;
+the result is a group workload offset, not an individual method cost. Case `features`
+enable RegExp or the Intl collator only where required, and plans and reports record
+the resolved build configuration for each case. Run the date workloads with `TZ=UTC`.
+For a bounded local survey, use
+`TZ=UTC npm run bench:performance -- gap --owner primordial-methods --samples 5 --target-node-ms 20 --budget-seconds 3600 --plan=json`,
+then remove `--plan=json` to execute the inspected selection.
+
+Use `bench:performance -- experiment new ID [--from CASE] [--control CASE]` for ignored
+scratch work. `experiment run ID` supports `smoke`, `verify`, and `confirm` presets;
+promotion refuses collisions and does not add the new case to a default suite unless
+`--preset survey` or `--preset quick` is explicit. `experiment remove ID` deletes only
+that experiment. `case.mjs` is the only scratch source file and may import only the
+committed runtime-gap case runner; this makes the queue's selected two-file transport
+and later promotion exact rather than best-effort.
+
+`bench:performance -- portfolio --baseline REF` is the broad acceptance path. Its
+versioned, fixed-weight portfolio delegates to app-batch, compiler-app, JavaScript,
+HTTP, and self-compile owners. Missing families remain incomplete and are never
+reweighted. A smaller related regression may be outweighed by a larger portfolio win,
+but every regression remains visible and explicit per-family guardrails still apply.
+Acceptance uses the fixed-weight geometric aggregate of family median cost ratios.
+Its interval comes from deterministic paired resampling within each family, with
+families resampled independently because sequential family runs do not share round
+identities. Individual inconclusive family classifications therefore do not veto a
+supported aggregate result. There is no minimum percentage gain: a positive
+aggregate whose interval excludes zero can count, subject to the family regression
+guardrails. Reports retain the estimator, seed, iteration count,
+family contributions, assumptions, and a warning when the small number of pairs makes
+bootstrap calibration weak; bootstrap iterations are not additional measurements.
+One-pair runs remain screening evidence and cannot produce an acceptance decision.
+Families run independently under their declared budgets. JavaScript uses the
+production closed-compiled mode and HTTP uses one-second scenarios. Self-compile
+builds each exact revision's production compiler once, then runs the requested
+interleaved pairs over one frozen baseline source graph and requires each revision's
+native output to match its Node-hosted output. Self-compile cold-start,
+instrumentation, owner, and resource samples remain in the specialized command and
+are not repeated inside portfolio samples. JavaScript and HTTP still use their full
+benchmark snapshots, including their resource probes; their family budgets include
+that work. Alternate modes and longer HTTP samples remain specialized diagnostics.
+Families run in manifest order, so compiler-app, app-batch, JavaScript, and HTTP
+usually provide broad preliminary evidence before the deliberately longer
+self-compile acceptance tail. The default whole-portfolio budget includes three
+warmed self-compile pairs; a smaller explicit budget may retain earlier family
+results but must leave the portfolio incomplete.
+The specialized benchmark commands remain available for their owning diagnostics;
+the performance entrypoint supersedes them as the normal experiment and acceptance
+workflow. None of these commands updates `bench/baseline.json`.
+
+For authorized queue runs, use `mjq perf.performance`. Queue options select
+`mode=gap`, `mode=experiment`, or `mode=portfolio`; the selected mode's budget bounds
+the complete driver. Smoke and quick reports are screening evidence, not acceptance.
+Headline timing excludes diagnostics. RSS is process-wide; Maligator allocation and
+collection deltas cover the measured window, while its GC pause and peak-live values
+cover the separate resource process. Node allocation is sampled and is not directly
+equivalent to Maligator's charged managed-heap bytes.
+
+## Paired performance comparisons
+
+Use a paired comparison for Maligator changes instead of reading a single delta
+against the committed snapshot:
+
+```sh
+npm run bench -- javascript --compare HEAD --runs 5
+npm run bench -- --changed --compare HEAD
+```
+
+The runner exports the requested Git revision to a temporary directory, shares
+dependencies when the lockfiles match, and otherwise installs the baseline with
+`npm ci` from its own lockfile. It records both lockfile hashes, warms both trees,
+and alternates the base/head execution order. A historical comparison includes
+dependency changes as part of the revision. `--changed` maps the Git diff to the smallest relevant
+benchmark lanes. It starts with the requested number of pairs and may collect up to
+15 while a result remains uncertain. The JavaScript family runs one deterministic
+ES module through the probed production native plan across the closed/open x
+compiled/interpreted matrix and records the exact compiler, target, optimization
+flags, LTO, and strip decisions in its snapshot. The HTTP family runs the fully
+closed compiled bare and Express servers. `--full` adds the slower fully closed
+self-compile family.
+
+Every classified metric reports the paired median change and a bootstrapped 95%
+confidence interval. Wall time and throughput have no minimum effect size: a
+repeatable small gain can count when the interval excludes zero. p99 latency,
+RSS, and GC pause metrics require 5%; binary size requires 0.5% and at least 32 KiB.
+The outcomes are `improvement`, `regression`, `unchanged`, and `inconclusive`.
+Exit 1 flags a classified regression; exit 2 means execution failed or was incomplete.
+The classifier also operates on a single pair, whose bootstrap interval cannot
+estimate run-to-run variability. Use repeated matched pairs before making a
+performance claim. An inconclusive result remains evidence to inspect, not a passing
+performance claim.
+
+Raw reports are retained under `.cache/bench-comparisons/`. They include every
+completed source snapshot and its checksums, configuration, native plan, resource
+counters, and numeric samples. Each run has a directory containing `report.json`,
+the original snapshots, and a log per snapshot. The report is written before work
+starts and after each pair; `status` distinguishes `running`, `complete`,
+`incomplete`, and `failed`. Failed and interrupted runs retain their evidence.
+The base revision must contain the paired-runner support; use a recent checkpoint
+when investigating older history.
+
+Inspect all planned work before a time-sensitive experiment:
+
+```sh
+npm run bench -- self-compile --compare HEAD --runs 1 --max-pairs 1 --budget-seconds 600 --plan=json
+```
+
+Remove `--plan=json` to execute. `--runs` counts measured pairs; each comparison
+also warms both sources. A self-compile snapshot includes a native build, three
+cold pairs, a warmup pair, the requested measured pairs, phase/counter/owner
+instrumentation, and a resource pair. A one-pair comparison can therefore exceed
+ten minutes. The plan reports this additional work explicitly. Each snapshot also
+records the self-compiler executable and code-section sizes, and static counts from
+the warmup pair's emitted C: root publication stores and clears, inactive-mask
+publications, register stores of undefined, throw checks, and runtime call sites.
+
+`--budget-seconds` bounds each comparison invocation, including preparation and
+warmup. The runner stops its child process group at the deadline and allows a short
+shutdown grace period before forcing termination. Exit 2 means failed or incomplete,
+never a passing performance claim. Completed snapshots and pairs remain available;
+single-family self-compile comparisons also checkpoint between stages. Resume with
+the same command plus `--resume <run-directory>` and a fresh time budget. Source
+content (including untracked files), revision, options, and host identity must match.
+Only complete pairs contribute metrics; a partial pair is retained but excluded.
+
+### Bounded native runtime and compiler checks
+
+`node scripts/native-micro-compare.ts --base REF --plan=json` describes a focused
+comparison of the baseline compiler and the current checkout. Remove `--plan=json`
+to execute, or select canonical kernels with repeated `--case ID` arguments:
+
+```sh
+node scripts/native-micro-compare.ts --base REF \
+  --case stable-shape-properties --case heap-valued-projection \
+  --pairs 7 --target-node-ms 80 --budget-seconds 2400 --plan=json
+```
+
+The default set contains six call, record, and allocation controls plus seven
+property/root-publication probes. The runner archives the baseline under its new
+`.cache/native-micro/` evidence directory and uses the same frozen fixture paths
+for both compilers. It requires identical dependency lockfiles and native build
+plans, records five in-process warmups per invocation, calibrates the shared work
+scale against Node with a native timeout cap, and alternates seven measured pairs.
+Each sample must match Node's case ID, scale, checksum, and operation count.
+
+`report.json` preserves every sample and complete pair, paired median reduction
+and median absolute deviation, source and fixture digests, native toolchain
+identity, generated C and compiler artifact bytes, executable and ELF `.text`
+bytes, build phases, and cache reuse. The command requires GNU-compatible `size`
+for its section measurement. Build timings are single observations with recorded
+cache state. They do not establish a build-time improvement. Logs, generated C,
+and fixtures remain in the report directory; the disposable baseline archive and
+source export are removed. Exit 2 marks failed or incomplete work, and a completed
+report does not classify a performance win.
+
+On Linux, `--diagnostics` also retains the exact timed production ELF, a symbol
+companion copied before stripping, generated-function sizes, and disassembly.
+It requires `llvm-nm-19` and `llvm-objdump-19`. A unique final-link cache key forces
+that copy without changing production flags or discarding reusable generated
+objects and runtime archives. Reapplying the recorded strip command must reproduce
+the measured executable byte for byte; the companion's `.text` bytes and address
+must also match. Function indices map symbols to the captured ProgramImage;
+inlined or eliminated functions with no final symbol remain unattributed.
+
+`--perf-pairs 3` adds separate counter samples after the ordinary timing pairs and
+requires diagnostics. The runner probes PMU availability without changing kernel
+policy or privileges. Unavailable counters are explicit, and every counter process
+must pass the same output oracle. Counters include startup and five warmups, so
+they are whole-process evidence rather than the timed kernel interval. Reports
+preserve ordinary timing completeness separately from counter status. The micro
+workflow enables both options and uploads one compressed executable bundle per
+case, each capped at 31 MiB, alongside the reports and disassembly.
+
+Same-repository pull requests can opt into the `Native performance` workflow with
+these labels. Adding a label starts only that family; pushing a new head starts
+every currently labeled family. Remove other family labels before a push when
+only one family needs to run:
+
+| Label                         | Work per distinct baseline                                                                                                                     |
+| ----------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| `native-performance`          | Separate closed-compiled and open-compiled JavaScript comparisons, five initial pairs, up to seven pairs, 45-minute comparison budgets         |
+| `native-micro-performance`    | The 13 frozen micro kernels above, seven pairs, a 40-minute total build/run budget                                                             |
+| `native-compiler-performance` | One source-only compiler program, two native captures built with `--program` pointing to it, then parser and shape slices with five pairs each |
+
+Every family compares the candidate with `git merge-base HEAD PR_BASE_SHA` and,
+when different, with `git merge-base HEAD origin/main` for cumulative stacked-PR
+evidence. JavaScript and micro jobs have 55-minute ceilings; compiler jobs have a
+70-minute ceiling. Compiler captures use 15-minute build budgets, the parser slice
+has an eight-minute comparison budget, and the shape slice has a 25-minute budget.
+The compiler lane uses `self-compile-experiment.ts`'s frozen Node output oracle and retains its build
+events, captured source identities, output digests, resource logs, and partial reports. The
+workflow uploads evidence even on failure, preserves failing exit codes, and
+does not update benchmark baselines. These checks complement the ordinary test
+gate; use the raw variability and completeness records when assessing a change.
+Classified metrics absent from any source/sample, such as native-build RSS on cache hits,
+are listed under `unpairedMetrics` and excluded rather than treated as zero.
+Source changes during execution invalidate resumption, even if later reverted.
+Run `env:check` and inspect cache activity before each resume, since power and CPU
+load can change between invocations.
+
+On completion the runner removes its exported baseline source while retaining the
+reports and snapshots. Interrupted runs retain that source and self-compile scratch
+inside the run directory for resumption. After confirming the run has stopped,
+removing its directory discards only that run's evidence and scratch. Shared native
+artifacts remain under normal cache management.
+
+`npm run bench -- javascript --compare HEAD --ablate-core-family guarded-direct-call`
+compares the normal compiler with a candidate that skips guarded direct-call
+emission after plan selection. Discovery, admission, and budget charges stay fixed.
+
+## Focused compiler execution experiments
+
+For a small compiler or runtime execution experiment, preserve a compiler before
+editing and compare it with a later capture on the same frozen input:
+
+```sh
+npm run bench:self-compile-experiment -- capture .cache/compiler-base
+# Edit the compiler or runtime, then capture the candidate.
+npm run bench:self-compile-experiment -- capture .cache/compiler-candidate
+npm run bench:self-compile-experiment -- compare .cache/compiler-base .cache/compiler-candidate --output .cache/compiler-pairs --workload parser --pairs 5 --budget-seconds 600 --plan=json
+```
+
+Remove `--plan=json` to execute. Select `--workload shape` or `--workload full`
+for larger inputs, and `--host node` for a separate Node-hosted comparison.
+Both Node compiler snapshots use the same source preparation. Native captures use
+a fresh explicit module frontend because cached artifacts deliberately lose trusted
+precise VM root maps on deserialization. This keeps their GC policy consistent.
+The actual module graph must certify whole-program source closure; the certificate
+is recorded with the capture rather than inferred from runtime settings.
+They use closed development O2/no-LTO builds without instrumentation; this is an inner
+loop, not the production-plan JavaScript/HTTP benchmark matrix.
+
+Capture records HEAD plus a digest of pending changes, the tracked patch, exact
+prepared source and binary hashes, lockfile, Node/host identity, and native build
+plan/toolchain. Comparison refuses modified captures or different preparation,
+dependencies, hosts, and native plans. Every run compiles the baseline capture's
+input and must exactly match its Node output oracle in both emitted C and stripped
+runtime-image bytes. Runtime serialization and file writes count toward `writeMs`;
+raw byte hashing happens after the measured compiler process exits. Capture schema 5
+requires fresh captures using this protocol; its timings include serialization and
+cannot be compared directly with historical C-only timings.
+
+To measure code-generation changes, first capture `.cache/compiler-program`, then
+capture both baseline and candidate with `--program .cache/compiler-program`.
+Both host compilers compile that same frozen JavaScript source at the same path,
+so the resulting native executables can still be checked against an exact Node
+oracle. Each capture preserves the frozen source and its original manifest digest.
+This isolates the speed of the generated native program; measuring a changed
+compiler's own output still requires semantic benchmarks when emitted C differs.
+
+For a guarded direct-call ablation, capture both compilers from one frozen program
+source and pass `--ablate-core-family guarded-direct-call` only to the candidate
+`capture`. This omits already selected guarded call plans during target lowering;
+the timed compilers use the same ordinary evaluation policy and output oracle.
+Use `--ablate-core-family priority-scheduling` to build a compiler with the
+previous global-priority candidate order while leaving its timed evaluation
+policy and budget limits unchanged.
+
+The budget includes the oracle, two warmups, and all measured pairs. Only complete
+pairs enter the elapsed-time summary; individual peak-RSS readings and raw resource
+logs are retained on macOS/Linux. The time covers JavaScript input through C
+emission, excluding capture/build and output-digest verification. A timeout stops
+the worker process group and exits 2, retaining partial outputs and `report.json`
+with `status: incomplete`. Other failures also exit 2. A completed run records
+samples and variability without declaring a performance win. Output directories
+must be new, and evidence remains until explicitly removed.
+
+For current-tree diagnostics, `npm run bench:self-compile-profile -- --quick`
+profiles the shape-analysis cone; omit `--quick` for full self-compilation.
+Add `--compiler-profile` for source-site counters or `--timing-only` for an
+uninstrumented run. Every mode uses a fresh certified whole-program frontend
+and development O2/no-LTO code. The report records its closure certificate,
+native plan, and toolchain. Native builds and child runs clear ambient `MAL_*`
+and `NODE_*` overrides before applying the selected instrumentation. Completed
+runs must match Node on the same prepared input, outside the timed interval.
+Failed runs retain their scratch directory for diagnosis. Profile runs are diagnostics;
+use the matched experiment workflow above for performance conclusions.
+
+## DX performance exercise
+
+`npm run bench:dx -- <maligator-binary>` creates an isolated representative
+Express, Drizzle, Valibot, SQLite, and TypeScript project. It reports cold and
+warm `run` and `test` latency plus cold and cached `dev` startup and a leaf-edit
+restart. Development measurements check the application's served revision before
+and after the edit; a compiler restart message alone cannot satisfy the check.
+Use `--only run`, `--only test`, or `--only dev` for independent lanes,
+and `--fresh-cache` to give the selected project a disposable empty user cache.
+The generated project and optional fresh cache are removed afterward. Add
+`--assets` after the binary to include the deliberately slower 100-file configured-
+asset path; this is optional while development assets still require the native
+toolchain.
+
+The exercise records measurements rather than enforcing machine-specific timing
+thresholds. Performance changes should compare the same binary, host, and cache
+scenario before and after the change.
+
+The development driver rejects child exits while waiting for readiness and checks
+the complete HTTP response body. Readiness is bounded to two minutes; shutdown
+allows 1.5 seconds for SIGTERM before SIGKILL and waits for stdio to close within
+five seconds. Retained diagnostics include final stdout and stderr. Run
+`npm run test:unit:full-only -- --run tests/development-driver.test.ts` for the
+controlled stale-revision, unfinished-response, early-exit, and ignored-SIGTERM cases.

@@ -296,66 +296,26 @@ always executed and are never cache entries.
 
 ## Development
 
-Development requires Node.js 24 or newer, a C/C++ toolchain, and Rustup with the
-pinned Rust toolchain.
+Source tooling needs Node.js 24 or newer; native work also needs the
+[toolchain above](#native-toolchain). Read [AGENTS.md](AGENTS.md) for working policy.
 
 ```shell
 npm ci
-
-# Run the Node-hosted product CLI while working on the compiler.
-node ./src/index.ts build path/to/entry.ts
-
-# Default developer gate; smoke is its fast initial fuse.
-npm run test:check
-
-# Standalone 20-second warm / four-minute cold fuse.
-npm run test:smoke
-
-# Exhaustive gates. Ask before running either command: they include full Test262.
-npm run test:full
-npm run test:full:report
-
-npm run type-check
-npm run lint
-npm run bench                              # production-plan JavaScript + closed HTTP/Express
-npm run bench -- javascript --mode open-interpreted
-npm run bench -- --full --update           # add closed self-compile; hard-cut baseline
-npm run bench -- javascript --compare HEAD --runs 5
-npm run bench -- --changed --compare HEAD
-npm run bench -- self-compile --compare HEAD --runs 1 --max-pairs 1 --budget-seconds 600 --plan=json
-
-# Complete standards reports without baseline updates. Ask before full Test262.
-npm run test262:report
-npm run test:wpt:report
-
-# Explicit full-corpus baseline replacement; ask before running.
-npm run test262:update-baseline
-
-# Targeted lanes remain available while developing.
-npm run test:unit                 # watch mode
-npm test run                     # one-shot unit and native projects
-npm run test:native
-npm run test:sanitize -- tests/native/example.test.ts
-npm run test262:regressions
-npm run test262:prepare             # populate/repair the pinned full-corpus cache
-
-# Inspect or reclaim Maligator-owned rebuildable caches.
-node ./src/index.ts cache status
-node ./src/index.ts cache prune --dry-run
-node ./src/index.ts cache prune     # target 15 GiB, preserving protected entries
-node ./src/index.ts cache clear --all
-
-# Check agent sandbox/cache access and inspect exact stage requirements.
 npm run env:check -- --json
-npm run test:help
-npm run test:check -- --list
-npm run test:check -- --plan=json
+node ./src/index.ts build path/to/entry.ts
+npm run test:unit -- tests/platform-catalog.test.ts
 ```
 
-See [`docs/testing.md`](docs/testing.md) for tier contents, fail-fast versus
-completion policies, paired performance comparisons, full-matrix coverage, and
-where new tests belong. See [`docs/profiling.md`](docs/profiling.md) for application
-performance investigation.
+Choose affected tests while editing, then batch `npm run type-check` and
+`npm run lint:ci` after cohesive work. Unit commands run once by default; use
+`--watch` for an explicit watch loop. CI supplies broad acceptance at authorized
+checkpoints; [verification policy](AGENTS.md#verification) defines local fallbacks.
+
+Use [testing.md](docs/testing.md) for selections, tiers, and test placement,
+[benchmarking.md](docs/benchmarking.md) for performance comparisons, and
+[profiling.md](docs/profiling.md) for application investigation. Website changes
+follow [website/README.md](website/README.md). `test:full`, full Test262, and baseline
+replacement require explicit authorization.
 
 ## Structure
 

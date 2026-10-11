@@ -18,10 +18,9 @@ npm run test:unit -- --run tests/platform-catalog.test.ts
 npm run type-check
 npm run lint:ci
 npm run test:check -- --plan=json
-npm run test:check
 ```
 
-Use bounded one-shot commands during development. The normal gate includes smoke and selected native, sanitizer, and standards lanes; it is not the full standards corpus. Follow the repository policy for test placement and explicit authorization for full suites or baseline replacement.
+Select the affected unit files and native behavior while editing, then batch quality checks. CI runs broad acceptance at an authorized branch or PR checkpoint; the [repository verification policy](https://github.com/dirkdev98/maligator/blob/main/AGENTS.md#verification) defines when a local gate is needed. Unit commands run once by default; add `--watch` only for an explicit watch loop.
 
 For compiler diagnostics, `MAL_DEBUG=true node ./src/index.ts build <fixture>` prints per-pass Core evidence. Reproduce standards cases through their runner so includes and variants are honored.
 

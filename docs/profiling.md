@@ -204,6 +204,6 @@ new keys beyond that point aggregate into an explicit overflow row, while the de
 global and per-site count/requested/charged totals remain exact.
 
 For changes to Maligator itself, use the paired benchmark workflow in
-[`testing.md`](testing.md). It alternates base and head runs, retains raw samples,
+[`benchmarking.md`](benchmarking.md). It alternates base and head runs, retains raw samples,
 and distinguishes meaningful regressions from noise; a single benchmark delta is
 not sufficient evidence for keeping or reverting an optimization.
