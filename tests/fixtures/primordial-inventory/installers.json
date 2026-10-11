@@ -313,11 +313,11 @@
 	},
 	{
 		"file": "intrinsics.c",
-		"sha256": "8123b6c93dc24ed035f8107a82dd5ca1174fd56e7ac03abd7e91aaec100c5a4f"
+		"sha256": "7918c6d657c0764ec248e49c4609af3f8d8676755bd67150b7292bfccf3aeac8"
 	},
 	{
 		"file": "intrinsics.h",
-		"sha256": "16f4997857f4d3bd071bcc8751895ff75bca75c708b48325d8a32b565e8b0657"
+		"sha256": "823765b3f528488d3e63e6218b3cdd3f88302e8aa454f16aef977d1cb383852c"
 	},
 	{
 		"file": "object_ops.c",
@@ -717,7 +717,7 @@
 	},
 	{
 		"file": "vm.h",
-		"sha256": "46e5db360a7c6c531fd96f82566f38dc5face34d17bea22a32b91358498d46a0"
+		"sha256": "ad7c607d6babf027312892fdb9022649eaf8f5e194dd98633383bdeed43c044c"
 	},
 	{
 		"file": "vm_ops.c",

@@ -1751,8 +1751,9 @@ typedef struct MalVm {
     MalString *hot_intrinsic_keys[MAL_HOT_KEY_COUNT];
 
     /**
-     * Direct-mapped fallback for repeated ASCII names outside the curated hot
-     * vocabulary. Entries are content-validated; the atom table owns the strings.
+     * Direct-mapped by the address of the caller's name, which is nearly always a
+     * literal. Entries are still content-validated because a reused buffer can
+     * hold another name; the atom table owns the strings.
      */
     MalAsciiAtomCacheEntry ascii_atom_cache[MAL_ASCII_ATOM_CACHE_CAPACITY];
 

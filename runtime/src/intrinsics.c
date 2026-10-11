@@ -272,87 +272,59 @@ static MalHotIntrinsicKey mal_hot_intrinsic_key(const byte *name, usize length) 
     }
 }
 
-static u32 mal_ascii_atom_cache_hash(const byte *name, usize length) {
-    u32 hash = 2166136261u;
-    for (usize i = 0; i < length; i++) {
-        hash ^= name[i];
-        hash *= 16777619u;
-    }
-    return hash;
+static u32 mal_ascii_atom_cache_slot(const byte *name) {
+    return (u32) (((uptr) name * 0x9E3779B97F4A7C15ull) >> 32) & (MAL_ASCII_ATOM_CACHE_CAPACITY - 1);
 }
 
-static bool mal_ascii_atom_cache_matches(
-    const MalString *atom, const byte *name, usize length
-) {
-    if (atom->length != length) return false;
-    // Interned names are almost always flat Latin-1, which needs no iterator.
-    if (atom->latin1 && atom->storage < MAL_STRING_STORAGE_DEPENDENT) {
-        const u8 *units = atom->storage == MAL_STRING_STORAGE_INLINE
-            ? atom->inline_latin1_units : atom->latin1_units;
-        return memcmp(units, name, length) == 0;
+// Stops at the first difference, so a shorter name is never read past its terminator.
+static bool mal_ascii_atom_cache_matches(const MalString *atom, const byte *name) {
+    if (!atom->latin1 || atom->storage >= MAL_STRING_STORAGE_DEPENDENT) return false;
+    const u8 *units = atom->storage == MAL_STRING_STORAGE_INLINE
+        ? atom->inline_latin1_units : atom->latin1_units;
+    usize length = atom->length;
+    for (usize i = 0; i < length; i++) {
+        if (units[i] != (u8) name[i]) return false;
     }
-    MalStringIterator iterator;
-    MalStringSegment segment;
-    mal_string_iterator_init(&iterator, atom, 0, length);
-    usize offset = 0;
-    bool equal = true;
-    while (equal && mal_string_iterator_next(&iterator, &segment)) {
-        if (segment.latin1) {
-            equal = memcmp(segment.latin1_units, name + offset, segment.length) == 0;
-        } else {
-            for (usize i = 0; i < segment.length; i++) {
-                if (segment.utf16_units[i] != (c16) (u8) name[offset + i]) {
-                    equal = false;
-                    break;
-                }
-            }
-        }
-        offset += segment.length;
-    }
-    mal_string_iterator_dispose(&iterator);
-    return equal;
+    return name[length] == '\0';
 }
 
 MalString *mal_intrinsic_ascii(MalVm *vm, const byte *name) {
-    usize length = 0;
-    while (name[length] != '\0') {
-        length++;
+    MalAsciiAtomCacheEntry *cache = &vm->ascii_atom_cache[mal_ascii_atom_cache_slot(name)];
+    if (cache->name == name && mal_ascii_atom_cache_matches(cache->atom, name)) {
+        MAL_PERF_COUNT(intrinsic_ascii_calls);
+        MAL_PERF_ADD(intrinsic_ascii_bytes, cache->atom->length);
+        mal_perf_intrinsic_name(name, cache->atom->length);
+        MAL_PERF_COUNT(intrinsic_ascii_cache_hits);
+        return cache->atom;
     }
+
+    usize length = strlen((const char *) name);
     MAL_PERF_COUNT(intrinsic_ascii_calls);
     MAL_PERF_ADD(intrinsic_ascii_bytes, length);
     mal_perf_intrinsic_name(name, length);
 
     MalHotIntrinsicKey hot_key = mal_hot_intrinsic_key(name, length);
-    if (hot_key != MAL_HOT_KEY_COUNT && vm->hot_intrinsic_keys[hot_key] != nullptr) {
-        MAL_PERF_COUNT(intrinsic_ascii_cache_hits);
-        return vm->hot_intrinsic_keys[hot_key];
-    }
-
-    u32 cache_hash = mal_ascii_atom_cache_hash(name, length);
-    MalAsciiAtomCacheEntry *cache = &vm->ascii_atom_cache[
-        cache_hash & (MAL_ASCII_ATOM_CACHE_CAPACITY - 1)];
-    if (cache->atom != nullptr && cache->hash == cache_hash &&
-        mal_ascii_atom_cache_matches(cache->atom, name, length)) {
-        MAL_PERF_COUNT(intrinsic_ascii_cache_hits);
-        return cache->atom;
-    }
-
-    // A borrowed Latin-1 probe avoids allocating or widening canonical names.
-    MalString probe;
-    mal_string_init_external_latin1(&probe, (const u8 *) name, length);
-    MalString *atom = mal_atom_store_find(&vm->atoms, &probe);
+    MalString *atom = hot_key != MAL_HOT_KEY_COUNT ? vm->hot_intrinsic_keys[hot_key] : nullptr;
     if (atom != nullptr) {
-        MAL_PERF_COUNT(intrinsic_ascii_hits);
+        MAL_PERF_COUNT(intrinsic_ascii_cache_hits);
     } else {
-        MAL_PERF_COUNT(intrinsic_ascii_misses);
-        atom = mal_string_new_ascii(&vm->heap, name, length);
-        atom = mal_atom_store_intern(&vm->atoms, atom);
+        // A borrowed Latin-1 probe avoids allocating or widening canonical names.
+        MalString probe;
+        mal_string_init_external_latin1(&probe, (const u8 *) name, length);
+        atom = mal_atom_store_find(&vm->atoms, &probe);
+        if (atom != nullptr) {
+            MAL_PERF_COUNT(intrinsic_ascii_hits);
+        } else {
+            MAL_PERF_COUNT(intrinsic_ascii_misses);
+            atom = mal_string_new_ascii(&vm->heap, name, length);
+            atom = mal_atom_store_intern(&vm->atoms, atom);
+        }
+        if (hot_key != MAL_HOT_KEY_COUNT) {
+            vm->hot_intrinsic_keys[hot_key] = atom;
+            MAL_PERF_COUNT(intrinsic_ascii_cache_fills);
+        }
     }
-    if (hot_key != MAL_HOT_KEY_COUNT) {
-        vm->hot_intrinsic_keys[hot_key] = atom;
-        MAL_PERF_COUNT(intrinsic_ascii_cache_fills);
-    }
-    *cache = (MalAsciiAtomCacheEntry) {.hash = cache_hash, .atom = atom};
+    *cache = (MalAsciiAtomCacheEntry) {.name = name, .atom = atom};
     MAL_PERF_COUNT(intrinsic_ascii_cache_fills);
 
     return atom;

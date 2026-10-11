@@ -13,7 +13,7 @@ static_assert(
     "ASCII atom cache capacity must be a power of two");
 
 typedef struct MalAsciiAtomCacheEntry {
-    u32 hash;
+    const byte *name;
     MalString *atom;
 } MalAsciiAtomCacheEntry;
 
