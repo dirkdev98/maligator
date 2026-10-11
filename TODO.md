@@ -48,12 +48,11 @@ rooting, and resource-safety defects can interrupt that order.
       current 128-bit storage, and input-size scaling. Keep conversion costs separate
       from traversal and checksum work.
 
-- [ ] Verify the first hosted native-remainder workflow on Linux and macOS after
-      publication. The check plan selects 113 of the 356 native files; the weekly
-      complement selects the other 242, plus the macOS-only leak audit. Inspect cold
-      runtime preparation and skipped external-service cases rather than treating
-      successful discovery as executed coverage. Slow unit and Wasm coverage remains
-      separate; the Wasm tests need WASI SDK 34 on the host.
+- [ ] Get the hosted native-remainder workflow green on Linux and macOS. The first
+      run exposed cold feature-profile builds and aggregate GC-stress deadlines;
+      verify their corrected preparation and budgets on both hosts. Inspect skipped
+      external-service cases rather than treating discovery as executed coverage.
+      Slow unit and Wasm coverage remains separate; Wasm needs WASI SDK 34 on the host.
 - [ ] Fix the Linux crash of `test/staging/sm/expressions/octal-literals.js` in the
       sloppy pass. Two full CI runs (38120653230 and 38124199226) report it CRASHED
       in the same batch of eval-heavy staging tests, while its strict pass and both

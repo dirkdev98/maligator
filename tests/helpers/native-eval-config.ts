@@ -8,13 +8,18 @@ import type { ResolvedBuildConfig } from "../../src/build-config.ts";
 export function preparedNativeEvalConfig({
 	node = false,
 	webPlatform = true,
-}: { node?: boolean; webPlatform?: boolean } = {}): ResolvedBuildConfig {
+	realms = true,
+}: {
+	node?: boolean;
+	webPlatform?: boolean;
+	realms?: boolean;
+} = {}): ResolvedBuildConfig {
 	return resolveBuildConfig({
 		engine: {
 			primordials: "mutable",
 			eval: true,
 			regexp: true,
-			realms: true,
+			realms,
 			temporal: true,
 			intl: { enabled: true, features: [] },
 		},

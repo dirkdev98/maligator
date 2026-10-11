@@ -56,7 +56,12 @@ export function setup(project: TestProject): void {
 					CARGO_BUILD_JOBS: preparationJobs,
 				};
 	// Both default surfaces must prepare their shared compiler before timed fixture builds.
-	const variants = [
+	const variants: Array<{
+		environment: NodeJS.ProcessEnv;
+		node: boolean;
+		webPlatform: boolean;
+		realms?: boolean;
+	}> = [
 		{ environment, node: false, webPlatform: true },
 		{ environment, node: true, webPlatform: true },
 	];
@@ -65,6 +70,9 @@ export function setup(project: TestProject): void {
 	);
 	if (selectedPaths.has(path.resolve("tests/native/web-disabled.test.ts"))) {
 		variants.push({ environment, node: false, webPlatform: false });
+	}
+	if (selectedPaths.has(path.resolve("tests/native/realms-disabled.test.ts"))) {
+		variants.push({ environment, node: false, webPlatform: true, realms: false });
 	}
 	// Vitest records selected paths before global setup; collected files are still empty.
 	if (
@@ -77,9 +85,19 @@ export function setup(project: TestProject): void {
 			webPlatform: true,
 		});
 	}
+	if (
+		!perfStatsEnabled(environment) &&
+		selectedPaths.has(path.resolve("tests/native/node-http-ready-queues.test.ts"))
+	) {
+		variants.push({
+			environment: { ...environment, MAL_PERF_STATS: "1" },
+			node: true,
+			webPlatform: true,
+		});
+	}
 	const progress = new CommandProgress("native-prepare", { cacheLease: false });
 	for (const [index, variant] of variants.entries()) {
-		const label = `eval runtime (Node ${variant.node ? "on" : "off"}, web ${variant.webPlatform ? "on" : "off"}, stats ${perfStatsEnabled(variant.environment) ? "on" : "off"})`;
+		const label = `eval runtime (Node ${variant.node ? "on" : "off"}, web ${variant.webPlatform ? "on" : "off"}, realms ${variant.realms === false ? "off" : "on"}, stats ${perfStatsEnabled(variant.environment) ? "on" : "off"})`;
 		progress.stage(index + 1, variants.length, label);
 		try {
 			const config = preparedNativeEvalConfig(variant);

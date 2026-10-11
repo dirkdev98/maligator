@@ -1,7 +1,7 @@
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { beforeAll, describe, it } from "vitest";
+import { afterAll, beforeAll, describe, it } from "vitest";
 import {
 	assertPassLine,
 	buildNativeBinary,
@@ -10,17 +10,8 @@ import {
 	STRESS_ENV,
 } from "../../src/test-harness.ts";
 
-// The runtime half of `engine.realms: false` (the compile-time / cache-suffix half
-// is covered by tests/build-config.test.ts). Passing realmsEnabled:false routes the
-// build through the same plumbing the CLI uses — resolveBuildConfig sets
-// engine.realms:false, buildConfigCacheSuffix then returns a non-empty hash, so the
-// realms-off C archive lands in its own `-<hash>` suffixed dir (the Rust cache suffix
-// ignores realms, so the canonical ICU/regress/ada archive is reused). That this
-// binary LINKS at all with `-DMAL_REALMS=0` — the Realm surface compiled away, the
-// host entry's realm install gated out, no dangling `mal_realm_*` symbols — is the
-// core assertion. The test also proves core intrinsics run on the selected
-// realms-off artifacts via an existing generic Array-intrinsics fixture.
 const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-realms-off-"));
+afterAll(() => rmSync(outDir, { recursive: true, force: true }));
 const cleanFixture = path.join(outDir, "default-driver-clean.js");
 writeFileSync(
 	cleanFixture,

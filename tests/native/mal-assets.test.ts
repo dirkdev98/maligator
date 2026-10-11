@@ -3,16 +3,18 @@ import {
 	mkdtempSync,
 	readFileSync,
 	realpathSync,
+	rmSync,
 	writeFileSync,
 } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { includeConfiguredAssets } from "../../src/assets.ts";
 import { resolveBuildConfig } from "../../src/build-config.ts";
 import { buildNativeBinary, runToStdout, STRESS_ENV } from "../../src/test-harness.ts";
 
 const root = mkdtempSync(path.join(os.tmpdir(), "mal-assets-native-"));
+afterAll(() => rmSync(root, { recursive: true, force: true }));
 const sourceTree = path.join(root, "source");
 const baseDirectory = path.join(root, "materialized");
 const entry = path.join(root, "main.js");
@@ -68,7 +70,7 @@ try { mal.assets.materialize("missing"); } catch (error) { console.log(error.mes
 			outDir,
 			config,
 		});
-	});
+	}, 600_000);
 
 	function assertRun(env?: NodeJS.ProcessEnv): void {
 		const lines = runToStdout(binary, { env }).trim().split("\n");

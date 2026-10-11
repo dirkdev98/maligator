@@ -11,10 +11,6 @@ import {
 	STRESS_ENV,
 } from "../../src/test-harness.ts";
 
-// engine.intl.features (per-service selection). Builds a "core" subset — collator,
-// number-format, date-time-format, plural-rules, list-format — dropping the heavy
-// Segmenter (LSTM, ~12 MB) and the experimental trio. Asserts the selected services
-// localize, the dropped ones are absent, and the subset binary is much smaller.
 const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-intl-feat-"));
 afterAll(() => rmSync(outDir, { recursive: true, force: true }));
 const CORE = [
@@ -68,18 +64,25 @@ describe("engine.intl.features (service subset)", () => {
 		});
 		assertResultPass(runToStdout(segmenterBin));
 	});
-	it.each(["relative-time-format", "duration-format"] as const)(
-		"formats parts with only %s enabled",
+	describe.each(["relative-time-format", "duration-format"] as const)(
+		"only %s enabled",
 		(feature) => {
-			const binary = buildNativeBinary({
-				fixture: "tests/local/intl_isolated_parts.mjs",
-				name: `intl-isolated-${feature}`,
-				mainFile: HOST_MAIN,
-				outDir,
-				intlFeatures: [feature],
+			let binary: string;
+			beforeAll(() => {
+				binary = buildNativeBinary({
+					fixture: "tests/local/intl_isolated_parts.mjs",
+					name: `intl-isolated-${feature}`,
+					mainFile: HOST_MAIN,
+					outDir,
+					intlFeatures: [feature],
+				});
+			}, 600_000);
+			it("formats parts", () => {
+				assertResultPass(runToStdout(binary));
 			});
-			assertResultPass(runToStdout(binary));
-			assertResultPass(runToStdout(binary, { env: STRESS_ENV }));
+			it("formats parts under GC stress", () => {
+				assertResultPass(runToStdout(binary, { env: STRESS_ENV }));
+			});
 		},
 	);
 });

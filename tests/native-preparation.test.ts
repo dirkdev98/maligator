@@ -98,6 +98,37 @@ describe("native runtime preparation", () => {
 		expect(ensureNativeArtifacts).toHaveBeenCalledWith(webDisabled[0]);
 	});
 
+	it("prepares the realms-disabled profile before its timed hook", () => {
+		setup(selectedProject("realms-disabled.test.ts"));
+		const contexts = preparedContexts();
+		expect(contexts.map((context) => context.features?.realmsEnabled)).toEqual([
+			true,
+			true,
+			false,
+		]);
+		expect(contexts.at(-1)?.features).toMatchObject({
+			nodeEnabled: false,
+			webPlatformEnabled: true,
+		});
+		expect(ensureNativeArtifacts).toHaveBeenCalledWith(contexts.at(-1));
+	});
+
+	it("prepares Node instrumentation for the HTTP queue lifecycle fixture", () => {
+		setup(selectedProject("node-http-ready-queues.test.ts"));
+		const contexts = preparedContexts();
+		expect(contexts.map((context) => context.features?.nodeEnabled)).toEqual([
+			false,
+			true,
+			true,
+		]);
+		expect(contexts.map((context) => perfStatsDefines(context.environment))).toEqual([
+			[],
+			[],
+			["-DMAL_PERF_STATS=1"],
+		]);
+		expect(ensureNativeArtifacts).toHaveBeenCalledWith(contexts.at(-1));
+	});
+
 	it.each([
 		"gc.test.ts",
 		"node-events.test.ts",
