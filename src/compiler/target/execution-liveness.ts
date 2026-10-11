@@ -122,19 +122,19 @@ export function executionSafepointRoots(
 				firstSafepoints[block] = index;
 			}
 			const registers = instructionRegisters(instruction);
-			const writes = writeCount(instruction);
-			const rooted = (register: number): boolean => {
+			const outputCount = writeCount(instruction);
+			const reads: Array<number> = [];
+			const writes: Array<number> = [];
+			for (let operand = 0; operand < registers.length; operand++) {
+				const register = registers[operand]!;
+				if (!(register >= 0)) continue;
 				const representation = fn.registerRepresentations[register];
-				return representation === "boxed" || representation === "string";
-			};
-			return {
-				reads: registers
-					.slice(writes)
-					.filter((register) => register >= 0 && rooted(register)),
-				writes: registers
-					.slice(0, writes)
-					.filter((register) => register >= 0 && rooted(register)),
-			};
+				if (representation === "boxed" || representation === "string") {
+					if (operand < outputCount) writes.push(register);
+					else reads.push(register);
+				}
+			}
+			return { reads, writes };
 		}),
 	);
 	const successors = blockSuccessors(fn);
