@@ -2508,8 +2508,9 @@ mal_vm_property_try_load_static_remaining(
         hit = mal_vm_inherited_try_load_static(receiver, ic, &value) ||
             mal_vm_inherited_stub_try_load_static(vm, receiver, object, ic, &value);
     } else {
-        hit = (object != nullptr && ic->mode == MAL_IC_MODE_OWN_TABLE &&
-               mal_vm_own_table_try_load(object, ic->key, ic, &value)) ||
+        const MalObject *own = object != nullptr ? object : mal_vm_as_own_slot_object(receiver);
+        hit = (own != nullptr && ic->mode == MAL_IC_MODE_OWN_TABLE &&
+               mal_vm_own_table_try_load(own, ic->key, ic, &value)) ||
             mal_vm_watched_try_load_static(receiver, ic, &value) ||
             mal_vm_special_try_load_static(vm, receiver, ic, &value) ||
             mal_vm_inherited_stub_try_load_static(vm, receiver, object, ic, &value);
@@ -5221,7 +5222,9 @@ static void mal_ic_detach_prototype_cache(MalInlineCache *ic) {
 bool mal_vm_own_table_try_load(
     const MalObject *object, MalValue key, const MalInlineCache *ic, MalValue *out
 ) {
-    if (object->header.type != MAL_HEAP_OBJECT || key != ic->key ||
+    if ((object->header.type != MAL_HEAP_OBJECT &&
+         mal_tag_for_heap_type(object->header.type) != MAL_VALUE_CALLABLE) ||
+        key != ic->key ||
         object->shape->inline_count != 0 || mal_object_overflow(object) == nullptr) {
         return false;
     }
@@ -6139,6 +6142,18 @@ static MalValue mal_vm_op_load_property_ic_keyed(
                     vm, object_value, key_value, result, ic);
             }
             return result;
+        }
+        // Functions given many own properties, such as debug's `enabled` or an Express
+        // app's methods, are dictionaries. A data row in their own table is exact: a
+        // function's synthetic `prototype` applies only while the table lacks one.
+        if (object->header.type != MAL_HEAP_OBJECT && object->shape->inline_count == 0 &&
+            mal_object_overflow(object) != nullptr && key.kind == MAL_KEY_STRING &&
+            mal_ic_key_is_stable_string(key_value)) {
+            MalPropertyLookup own = mal_property_lookup(mal_object_overflow(object), key);
+            if (own.present && !(own.desc.flags & MAL_PROPERTY_ACCESSOR)) {
+                mal_ic_record_own_table(ic, key_value, own.entry);
+                return own.desc.value;
+            }
         }
         MAL_PERF_COUNT(ic_load_plain_generic);
         MalValue result = mal_vm_op_load_property_keyed(vm, object_value, key);

@@ -258,6 +258,60 @@ check(
 	"callable receivers preserve their own property behavior",
 	read(other) + read(callable) === 114,
 );
+const dictionaryCallable = dictionary(function dictionaryCallable() {});
+let callableSum = 0;
+for (let index = 0; index < 512; index++) {
+	dictionaryCallable.target = index;
+	callableSum += read(dictionaryCallable);
+}
+check("dictionary callables observe current values", callableSum === 130816);
+const otherCallable = dictionary(function otherCallable() {});
+otherCallable.first = 0;
+otherCallable.target = 89;
+const bound = dictionary(otherCallable.bind(null));
+bound.target = 97;
+const native = dictionary(Number.isSafeInteger);
+native.target = 101;
+check(
+	"callables of every kind keep their own entries",
+	read(dictionaryCallable) + read(otherCallable) + read(bound) + read(native) === 798,
+);
+function readPrototype(fn) {
+	return fn.prototype;
+}
+const ownPrototype = {};
+dictionaryCallable.prototype = ownPrototype;
+for (let index = 0; index < 16; index++) {
+	check(
+		"an assigned prototype is an own entry",
+		readPrototype(dictionaryCallable) === ownPrototype,
+	);
+}
+function syntheticPrototype() {}
+dictionary(syntheticPrototype);
+check(
+	"a function without a prototype entry still materializes its own",
+	readPrototype(syntheticPrototype) !== ownPrototype &&
+		readPrototype(syntheticPrototype).constructor === syntheticPrototype,
+);
+Object.defineProperty(dictionaryCallable, "target", {
+	get() {
+		return 103;
+	},
+	configurable: true,
+});
+check(
+	"a callable's data-to-accessor change invokes the getter",
+	read(dictionaryCallable) === 103,
+);
+delete dictionaryCallable.target;
+Function.prototype.target = 107;
+check(
+	"a deleted callable entry falls back to the prototype",
+	read(dictionaryCallable) === 107,
+);
+delete Function.prototype.target;
+check("the prototype deletion is observed", read(dictionaryCallable) === undefined);
 const shaped = { target: 73 };
 check(
 	"a site can return from dictionary to shaped storage",

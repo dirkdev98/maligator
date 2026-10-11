@@ -48,7 +48,7 @@ describe("dictionary own-property cache hints", () => {
 		expect(runToStdout(interpreted, { env })).toBe(expected);
 	});
 
-	it("uses validated entry hints for repeated mutable dictionary reads", () => {
+	it("uses validated entry hints for repeated dictionary object and callable reads", () => {
 		const result = spawnSync(instrumented, [], {
 			env: { ...process.env, MAL_PERF_STATS: "1", MAL_HOST_GC: "1" },
 			encoding: "utf8",
@@ -57,6 +57,6 @@ describe("dictionary own-property cache hints", () => {
 		expect(result.status, result.stderr).toBe(0);
 		expect(result.stdout).toBe(expected);
 		const hits = Number(result.stderr.match(/load_own_table_hits=(\d+)/)?.[1] ?? -1);
-		expect(hits).toBeGreaterThanOrEqual(500);
+		expect(hits).toBeGreaterThanOrEqual(1000);
 	});
 });
