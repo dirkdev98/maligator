@@ -672,12 +672,6 @@ contracts or investigates costs still visible after the string follow-ups.
       loops in `collection-direct`, and selection then dropped every entry-pair
       region, so that typing was reverted. It removed an out-of-line
       RequireObjectCoercible from `counts[i & 15]++` on a constructed typed array.
-- [ ] Find why method loads on Express request objects miss their caches. In a
-      development build of the JSON route, static-load cache misses take 12% of
-      samples, much of it re-recording inherited rows in
-      `mal_ic_try_record_inherited`, for loads such as raw-body's
-      `stream.removeListener`. A dictionary-mode request object would explain it,
-      since such a row names the exact receiver; that is not yet confirmed.
 - [ ] Re-measure numeric property update plans now that number record regions
       take over loops that only touch number fields of one receiver. On the
       particle loop, before regions, they ran 59 ms against 55 ms for generic loads
