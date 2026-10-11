@@ -659,7 +659,29 @@ contracts or investigates costs still visible after the string follow-ups.
       Specification string-concatenation cannot fail, so gathering the parts and
       joining them once moves only the engine's length-limit RangeError. A native
       fusion of adjacent concatenations must keep every operand rooted across the
-      joined allocation, which pairwise root plans do not promise today.
+      joined allocation, which pairwise root plans do not promise today. Captures
+      of up to 16 units are copied rather than sliced, so every step already builds
+      an inline string and the chain's cost is its allocations.
+- [ ] Keep three receivers of a polymorphic method site in its own cache. The
+      objects phase's `rules[i % 3].quote(order)` hits the site's one inherited row
+      for one class in three; the others take the out-of-line probe and the shared
+      stub, about 31% of that loop's samples (40 ms alone against Node's 14 ms).
+      The 72-byte cache row has no room for three shape, prototype and value
+      triples, so extra rows need storage registered for prototype invalidation
+      like the stub's.
+- [ ] Forward `fn.apply(this, arguments)` without materializing `arguments`.
+      Express's router (`restore`) and type-is build a dictionary arguments object
+      per call, about 3% of the Express JSON route's samples. Rest parameters
+      already forward through `callRestArguments`; arguments objects also need
+      mapped-parameter aliasing ruled out, and a fallback that builds an arguments
+      object rather than an Array when `apply` is not the builtin.
+- [ ] Keep Node stream state in native fields. The C stream runtime reads and
+      writes its state as own properties named by C strings, about 177 interned
+      names per Express JSON request, and its helpers take 7% of that route's
+      samples. Interning by address made each name cheap; the property traffic
+      remains. The route's other cache misses are mostly debug's `enabled` getter,
+      ten per request; calling it straight from the function's own table changed
+      nothing measurable.
 - [ ] Bound the call targets of methods stored on module-scope objects. In a
       script, `holder.run(value)` with `holder.run` assigned two functions
       dispatches to both through a finite guarded set; as an ES module the same
