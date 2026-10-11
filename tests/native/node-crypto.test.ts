@@ -1,16 +1,18 @@
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { beforeAll, describe, it } from "vitest";
+import { afterAll, beforeAll, describe, it } from "vitest";
 import {
 	assertResultPass,
 	buildNativeBinary,
 	HOST_MAIN,
 	runToStdout,
+	scaledNativeRunTimeoutMs,
 	STRESS_ENV,
 } from "../../src/test-harness.ts";
 
 const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-node-crypto-"));
+afterAll(() => rmSync(outDir, { recursive: true, force: true }));
 
 describe("node:crypto (surface.node)", () => {
 	let compiled: string;
@@ -60,9 +62,16 @@ describe("node:crypto (surface.node)", () => {
 		assertResultPass(runToStdout(pinnedInterpreted));
 	});
 
-	it("passes focused and pinned fixtures under GC stress", () => {
-		for (const binary of [compiled, interpreted, pinnedCompiled, pinnedInterpreted]) {
-			assertResultPass(runToStdout(binary, { env: STRESS_ENV }));
-		}
-	});
+	it.each([
+		["focused compiled", () => compiled],
+		["focused interpreted", () => interpreted],
+		["pinned compiled", () => pinnedCompiled],
+		["pinned interpreted", () => pinnedInterpreted],
+	] as const)(
+		"passes %s under GC stress",
+		(_name, binary) => {
+			assertResultPass(runToStdout(binary(), { env: STRESS_ENV }));
+		},
+		scaledNativeRunTimeoutMs(20_000, { ...process.env, ...STRESS_ENV }) + 1000,
+	);
 });

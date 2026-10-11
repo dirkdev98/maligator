@@ -1,12 +1,18 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { beforeAll, describe, expect, it } from "vitest";
-import { buildNativeBinary, runToStdout, STRESS_ENV } from "../../src/test-harness.ts";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import {
+	buildNativeBinary,
+	runToStdout,
+	scaledNativeRunTimeoutMs,
+	STRESS_ENV,
+} from "../../src/test-harness.ts";
 
 const fixture = "tests/local/interpreter-dispatch-state.js";
 const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-interpreter-dispatch-state-"));
+afterAll(() => rmSync(outDir, { recursive: true, force: true }));
 const hostGcEnv = { MAL_HOST_GC: "1" };
 
 describe("localized interpreter dispatch state", () => {
@@ -31,14 +37,16 @@ describe("localized interpreter dispatch state", () => {
 		}
 	});
 
-	it("keeps state canonical at GC-stress boundaries on both backends", () => {
-		for (const binary of binaries) {
+	it.each(["compiled", "interpreted"] as const)(
+		"keeps state canonical at GC-stress boundaries in %s mode",
+		(mode) => {
 			expect(
-				runToStdout(binary, {
+				runToStdout(binaries[mode === "compiled" ? 0 : 1]!, {
 					env: { ...hostGcEnv, ...STRESS_ENV },
 					timeoutMs: 60_000,
 				}),
 			).toBe(expected);
-		}
-	});
+		},
+		scaledNativeRunTimeoutMs(60_000, { ...process.env, ...STRESS_ENV }) + 1000,
+	);
 });
