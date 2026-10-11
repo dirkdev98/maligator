@@ -4,6 +4,7 @@ import {
 	assertExactLines,
 	buildBackendPairFromOneProgramImage,
 	runToStdout,
+	scaledNativeRunTimeoutMs,
 	STRESS_ENV,
 } from "../../src/test-harness.ts";
 
@@ -51,9 +52,13 @@ describe("native safe-integer loop regions", () => {
 		assertExactLines(runToStdout(compiled), expected);
 	});
 
-	it("returns polled iterations to the original loop under collection stress", () => {
-		assertExactLines(runToStdout(compiled, { env: STRESS_ENV }), expected);
-	});
+	it(
+		"returns polled iterations to the original loop under collection stress",
+		() => {
+			assertExactLines(runToStdout(compiled, { env: STRESS_ENV }), expected);
+		},
+		scaledNativeRunTimeoutMs(undefined, { ...process.env, ...STRESS_ENV }) + 10_000,
+	);
 
 	it("matches the interpreted semantics", () => {
 		assertExactLines(runToStdout(interpreted), expected);
