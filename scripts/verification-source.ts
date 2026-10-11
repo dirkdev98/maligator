@@ -72,18 +72,20 @@ export function captureVerificationSource(root: string): VerificationSource {
 export function captureVerificationEnvironment(root: string) {
 	const version = (command: string, cwd: string) => {
 		try {
-			return (
-				execFileSync(command, ["--version"], {
-					cwd,
-					encoding: "utf8",
-					stdio: ["ignore", "pipe", "pipe"],
-					timeout: 5000,
-				})
-					.trim()
-					.split("\n")[0] ?? null
-			);
-		} catch {
-			return null;
+			const firstLine = execFileSync(command, ["--version"], {
+				cwd,
+				encoding: "utf8",
+				stdio: ["ignore", "pipe", "pipe"],
+				timeout: 30_000,
+			})
+				.trim()
+				.split("\n")[0];
+			if (!firstLine) throw new Error("empty version output");
+			return firstLine;
+		} catch (cause) {
+			throw new Error(`cannot capture verification toolchain: ${command} --version`, {
+				cause,
+			});
 		}
 	};
 	const cc = process.env.CC?.trim() || "cc";

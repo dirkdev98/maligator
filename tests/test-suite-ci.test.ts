@@ -10,7 +10,7 @@ import {
 } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { combineCheckReports } from "../scripts/test-suite-ci.ts";
 import {
 	captureVerificationEnvironment,
@@ -72,6 +72,20 @@ describe("CI check coverage aggregation", () => {
 			}
 			writeFileSync(path.join(directory, ".gitignore"), ".cache/\n");
 			execFileSync("git", ["init", "--quiet"], { cwd: directory });
+			const tools = path.join(directory, "tools");
+			mkdirSync(tools);
+			for (const [name, version] of [
+				["cc", "Clang fixture"],
+				["rustc", "rustc fixture"],
+			] as const) {
+				writeFileSync(
+					path.join(tools, name),
+					`#!/bin/sh\nprintf '%s\\n' '${version}'\n`,
+					{ mode: 0o755 },
+				);
+			}
+			vi.stubEnv("CC", path.join(tools, "cc"));
+			vi.stubEnv("PATH", `${tools}${path.delimiter}${process.env.PATH ?? ""}`);
 			const identity = captureVerificationSource(directory);
 			const toolchain = captureVerificationEnvironment(directory);
 			const artifacts = path.join(directory, ".cache/ci-lane-reports");
@@ -119,6 +133,7 @@ describe("CI check coverage aggregation", () => {
 			);
 			expect(readdirSync(path.join(reportRoot, "runs"))).toEqual([combined.runId]);
 		} finally {
+			vi.unstubAllEnvs();
 			rmSync(directory, { recursive: true, force: true });
 		}
 	});
@@ -163,6 +178,13 @@ describe("CI check coverage aggregation", () => {
 		expect(() => combineCheckReports(different, plan, source, environment)).toThrow(
 			"source or environment mismatch",
 		);
+	});
+
+	it("rejects missing toolchain identity even when every report matches", () => {
+		const missing = { ...environment, cc: { ...environment.cc, version: "" } };
+		expect(() =>
+			combineCheckReports(reports(source, missing), plan, source, missing),
+		).toThrow("missing verification toolchain identity");
 	});
 
 	it("rejects failed execution even when the report claims success", () => {

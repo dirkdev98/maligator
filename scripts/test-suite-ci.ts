@@ -45,6 +45,9 @@ export function combineCheckReports(
 	source: VerificationSource,
 	environment: ReturnType<typeof captureVerificationEnvironment>,
 ) {
+	if (!environment.cc?.version || !environment.rustc?.version) {
+		throw new Error("missing verification toolchain identity");
+	}
 	const expected = new Map(plan.stages.map((stage) => [stage.name, stage]));
 	const completed = new Map<string, LaneReport["stages"][number]>();
 	const lanes = new Set<string>();

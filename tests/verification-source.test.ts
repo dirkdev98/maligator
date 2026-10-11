@@ -9,8 +9,11 @@ import {
 } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { describe, expect, it } from "vitest";
-import { captureVerificationSource } from "../scripts/verification-source.ts";
+import { describe, expect, it, vi } from "vitest";
+import {
+	captureVerificationEnvironment,
+	captureVerificationSource,
+} from "../scripts/verification-source.ts";
 
 function withRepository(run: (directory: string) => void): void {
 	const directory = mkdtempSync(path.join(os.tmpdir(), "maligator-verification-source-"));
@@ -29,6 +32,17 @@ function withRepository(run: (directory: string) => void): void {
 }
 
 describe("verification source identity", () => {
+	it("fails with the command identity when a toolchain probe cannot run", () => {
+		vi.stubEnv("CC", "maligator-missing-compiler-fixture");
+		try {
+			expect(() => captureVerificationEnvironment(import.meta.dirname)).toThrow(
+				"cannot capture verification toolchain: maligator-missing-compiler-fixture --version",
+			);
+		} finally {
+			vi.unstubAllEnvs();
+		}
+	});
+
 	it("detects unstaged changes, new inputs and deletions without including generated reports", () => {
 		withRepository((directory) => {
 			const initial = captureVerificationSource(directory);
