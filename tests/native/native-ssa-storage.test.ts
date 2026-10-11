@@ -939,7 +939,7 @@ describe("independent native SSA storage", () => {
 			fixture: evalFixture,
 			name: "native-compact-suspension-eval",
 			mainFile: HOST_MAIN,
-			config: preparedNativeEvalConfig(false),
+			config: preparedNativeEvalConfig(),
 			outDir,
 		});
 		for (const fn of pair.programImage.native.functions.filter(

@@ -80,15 +80,30 @@ can enter watch mode; use that only when requested.
 | Native memory/UB checks                    | `npm run test:sanitize -- <file>`             |
 | Type checking                              | `npm run type-check`                          |
 | Lint and formatting without source edits   | `npm run lint:ci`                             |
-| Normal developer gate                      | `npm run test:check`                          |
+| Canonical acceptance gate                  | `npm run test:check`                          |
 
 `test:check` includes smoke and the selected native, sanitizer, and standards lanes.
-It does not cover every native fixture or the full standards corpus. Use focused
-tests during implementation, then run it after code changes; repeat only when later
-changes, failures, or unresolved concerns justify it. For documentation-only cleanup,
-check formatting, links, and command accuracy without rebuilding the runtime.
+It does not cover every native fixture or the full standards corpus. During edits,
+run affected unit files and the native or sanitizer fixture that observes the change.
+Batch type-check and lint after cohesive work; do not run the whole unit suite or
+canonical gate after every small edit or checkpoint. For documentation and website
+assets, check formatting, links, generation, routes, and relevant behavior without
+rebuilding the runtime.
+
+CI owns broad acceptance for an authorized branch or PR checkpoint: Linux's disjoint
+lanes combine into the canonical check result, alongside macOS ARM smoke. Existing
+successful evidence counts only for its recorded source content, selection, and
+environment. Continue independent work while checks run; acceptance remains pending
+until the required coverage succeeds. Push authority is separate from verification.
+When CI is unavailable or pushing is not authorized, run the relevant local lanes
+once after the batch; run the entire gate for cross-cutting changes or unresolved
+coverage concerns. Repeat checks only after relevant changes or to resolve a failure.
 Use `npm run test:help`, tier `--list`/`--plan=json`, and the manifests for exact coverage
 and time budgets; durations depend on the host and cache state.
+The weekly native-remainder workflow exercises the native files outside check on
+Linux and macOS, with each file assigned to its normal or sanitizer dimension. Use
+`npm run test:native:remainder -- --plan=json` to inspect that selection; its partial
+report is not a complete full-gate pass.
 
 Follow [test placement](docs/testing.md#test-placement) when adding tests. Ask if the
 acceptance boundary could reasonably belong in multiple lanes. Slow unit/subprocess
@@ -127,8 +142,10 @@ Resume only with matching source/options/host, after a fresh environment check.
 
 Report what was exercised, failed, and left unverified. Retain the evidence needed
 to review the current change; historical timings and old passes are not current
-validation. Copy a gate report into the current run directory when needed because
-`report-<tier>.json` is overwritten.
+validation. Gate runs print their retained report path under
+`.cache/mal-build/test-suite/runs/`; use that path when citing evidence. The latest
+`report-<tier>[-<lane>].json` is only a discovery shortcut. A report with changed source
+or incomplete coverage cannot establish acceptance.
 
 ## Artifact hygiene
 

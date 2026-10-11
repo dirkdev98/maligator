@@ -1,5 +1,7 @@
 import childProcess from "node:child_process";
+import { writeFileSync } from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
+import * as path from "node:path";
 import { mock } from "node:test";
 
 const encodedStages = process.env.MAL_TEST_SUITE_FAKE_STAGES;
@@ -15,6 +17,9 @@ mock.method(childProcess, "spawnSync", () => {
 	const stage = stages[index++];
 	if (stage === undefined) throw new Error("unexpected test-suite stage");
 	now += stage.durationMs;
+	if (index === 1 && process.env.MAL_TEST_SUITE_SOURCE_CHANGE === "1") {
+		writeFileSync(path.join(process.cwd(), "input.ts"), "export const value = 2;\n");
+	}
 	return {
 		pid: process.pid,
 		output: [],

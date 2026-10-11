@@ -67,6 +67,7 @@
 		"test:help": "node ./scripts/test-suite.ts --help",
 		"test:leak": "MAL_LEAKCHECK=1 node ./scripts/vitest.ts run --project native tests/native/leak.test.ts",
 		"test:native": "node ./scripts/vitest.ts run --project native",
+		"test:native:remainder": "node ./scripts/test-suite.ts full --native-remainder --policy complete",
 		"test:rust": "node ./scripts/test-rust.ts",
 		"test:sanitize": "node ./scripts/test-sanitize.ts",
 		"test:smoke": "node ./scripts/test-suite.ts smoke",

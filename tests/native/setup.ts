@@ -3,6 +3,7 @@ import * as path from "node:path";
 import type { TestProject } from "vitest/node";
 import { buildDerivationFromConfig } from "../../src/build-config.ts";
 import { perfStatsEnabled } from "../../src/build-flags.ts";
+import { CommandProgress } from "../../src/command-progress.ts";
 import { compilerEntrypointSourceFiles } from "../../src/compiler-bake.ts";
 import { stripCompactTypes } from "../../src/compiler/frontend/compact-type-strip.ts";
 import {
@@ -56,24 +57,44 @@ export function setup(project: TestProject): void {
 				};
 	// Both default surfaces must prepare their shared compiler before timed fixture builds.
 	const variants = [
-		{ environment, node: false },
-		{ environment, node: true },
+		{ environment, node: false, webPlatform: true },
+		{ environment, node: true, webPlatform: true },
 	];
+	const selectedPaths = new Set(
+		project.vitest.state.getPaths().map((file) => path.resolve(file)),
+	);
+	if (selectedPaths.has(path.resolve("tests/native/web-disabled.test.ts"))) {
+		variants.push({ environment, node: false, webPlatform: false });
+	}
 	// Vitest records selected paths before global setup; collected files are still empty.
 	if (
 		!perfStatsEnabled(environment) &&
-		project.vitest.state.getPaths().some((file) => perfTests.has(path.resolve(file)))
+		[...selectedPaths].some((file) => perfTests.has(file))
 	) {
-		variants.push({ environment: { ...environment, MAL_PERF_STATS: "1" }, node: false });
+		variants.push({
+			environment: { ...environment, MAL_PERF_STATS: "1" },
+			node: false,
+			webPlatform: true,
+		});
 	}
-	for (const variant of variants) {
-		const config = preparedNativeEvalConfig(variant.node);
-		ensureNativeArtifacts(
-			resolveNativeBuildContext({
-				features: buildDerivationFromConfig(config).features,
-				compilerBake,
-				environment: variant.environment,
-			}),
-		);
+	const progress = new CommandProgress("native-prepare", { cacheLease: false });
+	for (const [index, variant] of variants.entries()) {
+		const label = `eval runtime (Node ${variant.node ? "on" : "off"}, web ${variant.webPlatform ? "on" : "off"}, stats ${perfStatsEnabled(variant.environment) ? "on" : "off"})`;
+		progress.stage(index + 1, variants.length, label);
+		try {
+			const config = preparedNativeEvalConfig(variant);
+			ensureNativeArtifacts(
+				resolveNativeBuildContext({
+					features: buildDerivationFromConfig(config).features,
+					compilerBake,
+					environment: variant.environment,
+				}),
+			);
+			progress.stagePassed(index + 1, variants.length, label);
+		} catch (error) {
+			progress.stageFailed(index + 1, variants.length, label);
+			throw error;
+		}
 	}
+	progress.complete();
 }

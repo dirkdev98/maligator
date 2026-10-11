@@ -1,10 +1,11 @@
 import { spawnSync } from "node:child_process";
-import { hash } from "node:crypto";
+import { hash, randomUUID } from "node:crypto";
 import {
 	existsSync,
 	mkdirSync,
 	readdirSync,
 	readFileSync,
+	renameSync,
 	rmSync,
 	writeFileSync,
 } from "node:fs";
@@ -32,9 +33,22 @@ import {
 } from "./command-requirements.ts";
 import type { CommandKind, CommandRequirements } from "./command-requirements.ts";
 import { cleanTestEnvironment } from "./test-environment.ts";
+import {
+	captureVerificationSource,
+	captureVerificationEnvironment,
+} from "./verification-source.ts";
 
 type Tier = "smoke" | "check" | "full";
 type Policy = "bail" | "complete";
+type Lane = "quality" | "native" | "sanitizer" | "standards" | "compiler" | "rust";
+const lanes: ReadonlyArray<Lane> = [
+	"quality",
+	"native",
+	"sanitizer",
+	"standards",
+	"compiler",
+	"rust",
+];
 
 interface Command {
 	kind: CommandKind;
@@ -101,6 +115,8 @@ Focused lanes:
 Options:
   --policy bail|complete  stop at the first failure or finish every stage
   --exclude-quality       omit type-check/lint and report the excluded coverage
+  --lane NAME             run one disjoint lane: quality, native, sanitizer, standards, compiler, rust
+  --native-remainder      full tier's native complement only, including macOS leak checks
   --test262-baseline PATH  explicit Test262 comparison input for every standards stage
   --workers N             total worker budget (default: half the available CPUs)
   --list                  print the exact commands without running them
@@ -121,6 +137,8 @@ function parseArguments(): {
 	list: boolean;
 	jsonPlan: boolean;
 	excludeQuality: boolean;
+	nativeRemainder: boolean;
+	lane?: Lane;
 	test262Baseline?: string;
 	workers: number;
 } {
@@ -131,6 +149,8 @@ function parseArguments(): {
 	let list = false;
 	let jsonPlan = false;
 	let excludeQuality = false;
+	let nativeRemainder = false;
+	let lane: Lane | undefined;
 	let test262Baseline: string | undefined;
 	let workers: number | undefined;
 	for (let index = 2; index < process.argv.length; index++) {
@@ -155,6 +175,19 @@ function parseArguments(): {
 		if (argument === "--exclude-quality") {
 			if (excludeQuality) exitWithUsage("--exclude-quality may only be specified once");
 			excludeQuality = true;
+			continue;
+		}
+		if (argument === "--lane") {
+			const value = process.argv[++index];
+			if (lane !== undefined || !lanes.includes(value as Lane)) {
+				exitWithUsage(`--lane requires one of: ${lanes.join(", ")}`);
+			}
+			lane = value as Lane;
+			continue;
+		}
+		if (argument === "--native-remainder") {
+			if (nativeRemainder) exitWithUsage("--native-remainder may only be specified once");
+			nativeRemainder = true;
 			continue;
 		}
 		if (argument === "--test262-baseline") {
@@ -189,12 +222,17 @@ function parseArguments(): {
 		exitWithUsage(`unknown argument: ${argument}`);
 	}
 	if (list && jsonPlan) exitWithUsage("--list and --plan=json cannot be combined");
+	if (nativeRemainder && tier !== "full") {
+		exitWithUsage("--native-remainder requires the full tier");
+	}
 	return {
 		tier,
 		policy,
 		list,
 		jsonPlan,
 		excludeQuality,
+		nativeRemainder,
+		lane,
 		test262Baseline,
 		workers: workers ?? workerBudget(process.env.MALIGATOR_WORKERS),
 	};
@@ -391,8 +429,17 @@ function runCommand(
 	return report;
 }
 
-const { tier, policy, list, jsonPlan, excludeQuality, test262Baseline, workers } =
-	parseArguments();
+const {
+	tier,
+	policy,
+	list,
+	jsonPlan,
+	excludeQuality,
+	nativeRemainder,
+	lane,
+	test262Baseline,
+	workers,
+} = parseArguments();
 const fullOnlyUnit = readManifest("tests/test-suite-unit-full-only.txt");
 const unitSmoke = readManifest("tests/test-suite-unit-smoke.txt");
 const nativeSmoke = readManifest("tests/test-suite-native-smoke.txt");
@@ -611,6 +658,10 @@ const test262FullMatrix: Array<Command> = [
 ];
 
 const remainingNativeCommands = nativeDimensionCommands("full: remaining", nativeFull);
+const leakCommands =
+	process.platform === "darwin"
+		? [npm("full: leak audit", "test:leak", vitestPolicy)]
+		: [];
 
 const fullCommands: Array<Command> = [
 	...selfHostedCommands,
@@ -639,9 +690,7 @@ const fullCommands: Array<Command> = [
 		...runnerPolicy,
 	]),
 	...test262FullMatrix,
-	...(process.platform === "darwin"
-		? [npm("full: leak audit", "test:leak", vitestPolicy)]
-		: []),
+	...leakCommands,
 ];
 
 const allLaterCommands =
@@ -666,13 +715,26 @@ function assertUniqueCommands(commands: Array<Command>): void {
 }
 
 assertUniqueCommands([...allSmokeCommands, ...allLaterCommands]);
-const included = (command: Command) => !excludeQuality || command.kind !== "quality";
+function commandLane(command: Command): Lane {
+	if (command.kind === "unit") return "quality";
+	if (command.args.includes("test:sanitize")) return "sanitizer";
+	return command.kind;
+}
+const included = (command: Command) =>
+	(!excludeQuality || command.kind !== "quality") &&
+	(!nativeRemainder ||
+		remainingNativeCommands.includes(command) ||
+		leakCommands.includes(command)) &&
+	(lane === undefined || commandLane(command) === lane);
 const smokeCommands = allSmokeCommands.filter(included);
 const laterCommands = allLaterCommands.filter(included);
 const excludedStages = [...allSmokeCommands, ...allLaterCommands]
 	.filter((command) => !included(command))
 	.map((command) => command.name);
 const scope = { coversEntireTier: excludedStages.length === 0, excludedStages };
+if (smokeCommands.length + laterCommands.length === 0) {
+	exitWithUsage(`no ${tier} stages selected`);
+}
 
 async function exitAfterPrinting(output: string): Promise<never> {
 	await new Promise<void>((resolve, reject) => {
@@ -696,9 +758,14 @@ if (jsonPlan) {
 			{
 				...commandEnvironmentPlan(
 					mergeCommandRequirements(commands.map((command) => command.requirements)),
-					{ approval: tier === "full" ? "explicit" : "none", workspace: root },
+					{
+						approval: tier === "full" && !nativeRemainder ? "explicit" : "none",
+						workspace: root,
+					},
 				),
 				tier,
+				nativeRemainder,
+				lane,
 				policy,
 				scope,
 				test262Baseline,
@@ -709,6 +776,7 @@ if (jsonPlan) {
 				},
 				stages: commands.map((command) => ({
 					kind: command.kind,
+					lane: commandLane(command),
 					name: command.name,
 					invocation: formatCommand(command),
 					requirements: command.requirements,
@@ -724,35 +792,77 @@ if (jsonPlan) {
 
 const sharedCache = maligatorCacheDirectory();
 const suiteReportDirectory = path.join(root, ".cache", "mal-build", "test-suite");
-const telemetryRoot = path.join(suiteReportDirectory, `telemetry-${tier}-${process.pid}`);
-const suiteReportPath = path.join(suiteReportDirectory, `report-${tier}.json`);
-rmSync(telemetryRoot, { recursive: true, force: true });
+const runId = `${new Date().toISOString().replace(/[:.]/g, "-")}-${randomUUID()}`;
+const runDirectory = path.join(suiteReportDirectory, "runs", runId);
+const telemetryRoot = path.join(runDirectory, "telemetry");
+const suiteReportPath = path.join(runDirectory, "report.json");
+const latestReportPath = path.join(
+	suiteReportDirectory,
+	`report-${tier}${nativeRemainder ? "-native-remainder" : ""}${lane === undefined ? "" : `-${lane}`}.json`,
+);
 mkdirSync(telemetryRoot, { recursive: true });
+const sourceBefore = captureVerificationSource(root);
+const environment = captureVerificationEnvironment(root);
+let sourceAfter: ReturnType<typeof captureVerificationSource> | null = null;
 const suiteStartedAt = new Date();
 const suiteStartedAtMs = performance.now();
 const stageReports: Array<StageReport> = [];
 function persistSuiteReport(complete: boolean): void {
-	writeFileSync(
-		suiteReportPath,
-		`${JSON.stringify(
-			{
-				schemaVersion: 3,
-				tier,
-				policy,
-				scope,
-				test262Baseline,
-				workers,
-				startedAt: suiteStartedAt.toISOString(),
-				durationMs: Math.round((performance.now() - suiteStartedAtMs) * 1000) / 1000,
-				complete,
-				stages: stageReports,
+	const contents = `${JSON.stringify(
+		{
+			schemaVersion: 4,
+			runId,
+			reportPath: path.relative(root, suiteReportPath),
+			tier,
+			nativeRemainder,
+			lane,
+			policy,
+			scope,
+			test262Baseline,
+			workers,
+			startedAt: suiteStartedAt.toISOString(),
+			durationMs: Math.round((performance.now() - suiteStartedAtMs) * 1000) / 1000,
+			complete,
+			passed:
+				complete &&
+				sourceAfter?.digest === sourceBefore.digest &&
+				failures === 0 &&
+				stageReports.every((stage) => stage.status === 0),
+			source: {
+				before: sourceBefore,
+				after: sourceAfter,
+				consistent:
+					sourceAfter === null ? null : sourceAfter.digest === sourceBefore.digest,
 			},
-			null,
-			2,
-		)}\n`,
-	);
+			environment,
+			selection: [...smokeCommands, ...laterCommands].map((command) => ({
+				name: command.name,
+				invocation: formatCommand(command),
+				lane: commandLane(command),
+			})),
+			stages: stageReports,
+		},
+		null,
+		2,
+	)}\n`;
+	writeFileSync(suiteReportPath, contents);
+	const temporary = path.join(runDirectory, "latest.json");
+	writeFileSync(temporary, contents);
+	renameSync(temporary, latestReportPath);
+}
+let failures = 0;
+function finish(complete: boolean): void {
+	sourceAfter = captureVerificationSource(root);
+	if (sourceAfter.digest !== sourceBefore.digest) {
+		console.error(
+			"[test-suite] source changed during verification; this run cannot establish acceptance",
+		);
+		failures++;
+	}
+	persistSuiteReport(complete);
 }
 persistSuiteReport(false);
+console.log(`[test-suite] report: ${suiteReportPath}`);
 const smokeIdentity = hashDirectoryTreesCached(
 	{
 		root,
@@ -802,29 +912,28 @@ const useColdSmokeBudget = coldSmokeRun || tier !== "smoke";
 const smokeBudget = smokeBudgetForWorkers(workers);
 const smokeFuseMs = useColdSmokeBudget ? smokeBudget.coldMs : smokeBudget.warmMs;
 
-if (coldSmokeRun) {
+if (smokeCommands.length > 0 && coldSmokeRun) {
 	console.log(
 		`[test-suite] cold caches detected; smoke fuse extended to ${formatCommandDuration(smokeFuseMs)}`,
 	);
-} else if (tier !== "smoke") {
+} else if (smokeCommands.length > 0 && tier !== "smoke") {
 	console.log(
 		`[test-suite] cumulative gate uses ${formatCommandDuration(smokeFuseMs)} smoke completion budget`,
 	);
 }
 
-let failures = 0;
 const smokeStarted = Date.now();
 const commands = [...smokeCommands, ...laterCommands];
 const progress = new CommandProgress("test-suite");
 progress.start(
-	`${tier} ${scope.coversEntireTier ? "gate" : "selected stages"} · ${commands.length} stages · ${coldSmokeRun ? "cold" : useColdSmokeBudget ? "completion" : "warm"} smoke budget ${formatCommandDuration(smokeFuseMs)}`,
+	`${tier} ${scope.coversEntireTier ? "gate" : "selected stages"} · ${commands.length} stages${smokeCommands.length === 0 ? "" : ` · ${coldSmokeRun ? "cold" : useColdSmokeBudget ? "completion" : "warm"} smoke budget ${formatCommandDuration(smokeFuseMs)}`}`,
 );
 let stageIndex = 0;
 for (const command of smokeCommands) {
 	stageIndex++;
 	if (policy === "bail" && Date.now() - smokeStarted >= smokeFuseMs) {
 		console.error("[test-suite] smoke fuse expired before all stages started");
-		persistSuiteReport(false);
+		finish(false);
 		process.exit(1);
 	}
 	const stage = runCommand(
@@ -838,7 +947,10 @@ for (const command of smokeCommands) {
 	persistSuiteReport(false);
 	if (stage.status !== 0) {
 		failures++;
-		if (policy === "bail") process.exit(1);
+		if (policy === "bail") {
+			finish(false);
+			process.exit(1);
+		}
 	}
 }
 
@@ -846,12 +958,12 @@ if (Date.now() - smokeStarted > smokeFuseMs) {
 	console.error(`[test-suite] smoke fuse exceeded ${smokeFuseMs / 1000}s`);
 	failures++;
 	if (policy === "bail") {
-		persistSuiteReport(false);
+		finish(false);
 		process.exit(1);
 	}
 }
 
-if (failures === 0) {
+if (failures === 0 && smokeCommands.length === allSmokeCommands.length) {
 	mkdirSync(path.dirname(smokeStampPath), { recursive: true });
 	writeFileSync(smokeStampPath, `${JSON.stringify({ identity: smokeIdentity })}\n`);
 }
@@ -869,14 +981,16 @@ for (const command of laterCommands) {
 	persistSuiteReport(false);
 	if (stage.status !== 0) {
 		failures++;
-		if (policy === "bail") process.exit(1);
+		if (policy === "bail") {
+			finish(false);
+			process.exit(1);
+		}
 	}
 }
 
+finish(true);
 if (failures > 0) {
 	console.error(`\n[test-suite] ${failures} stage${failures === 1 ? "" : "s"} failed`);
-	persistSuiteReport(true);
 	process.exit(1);
 }
-progress.complete(`${tier} passed`);
-persistSuiteReport(true);
+progress.complete(`${tier} ${scope.coversEntireTier ? "gate" : "selected stages"} passed`);

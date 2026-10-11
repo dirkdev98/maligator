@@ -1,8 +1,17 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync } from "node:fs";
+import {
+	existsSync,
+	mkdtempSync,
+	readFileSync,
+	readdirSync,
+	rmSync,
+	symlinkSync,
+	writeFileSync,
+} from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
+import { parse } from "yaml";
 
 const root = path.resolve(import.meta.dirname, "..");
 
@@ -20,47 +29,89 @@ function stageInvocation(output: string, stage: string): string {
 	return lines[index + 1] ?? "";
 }
 
-function simulateSmokeStages(
+function simulateSuiteStages(
 	stages: Array<{ durationMs: number; status: number }>,
 	policy: "bail" | "complete" = "bail",
+	options: {
+		runs?: number;
+		lane?: string;
+		changeSource?: boolean;
+		nativeRemainder?: boolean;
+	} = {},
 ) {
 	const directory = mkdtempSync(path.join(os.tmpdir(), "maligator-smoke-budget-"));
 	try {
 		for (const entry of ["scripts", "src", "runtime", "tests", "package-lock.json"]) {
 			symlinkSync(path.join(root, entry), path.join(directory, entry));
 		}
-		const result = spawnSync(
-			process.execPath,
-			[
-				// Keep the gate's report root inside this disposable fixture.
-				"--preserve-symlinks-main",
-				"--import",
-				path.join(root, "tests/fixtures/test-suite-clock.mts"),
-				path.join(directory, "scripts/test-suite.ts"),
-				"smoke",
-				"--workers",
-				"4",
-				"--policy",
-				policy,
-			],
-			{
-				cwd: directory,
-				encoding: "utf8",
-				env: {
-					...process.env,
-					MALIGATOR_CACHE_DIR: path.join(directory, "cache"),
-					MAL_TEST_SUITE_FAKE_STAGES: JSON.stringify(stages),
+		writeFileSync(path.join(directory, ".gitignore"), ".cache/\ncache/\n");
+		writeFileSync(path.join(directory, "input.ts"), "export const value = 1;\n");
+		execFileSync("git", ["init", "--quiet"], { cwd: directory });
+		const run = () =>
+			spawnSync(
+				process.execPath,
+				[
+					// Keep the gate's report root inside this disposable fixture.
+					"--preserve-symlinks-main",
+					"--import",
+					path.join(root, "tests/fixtures/test-suite-clock.mts"),
+					path.join(directory, "scripts/test-suite.ts"),
+					options.nativeRemainder ? "full" : "smoke",
+					"--workers",
+					"4",
+					"--policy",
+					policy,
+					...(options.lane === undefined ? [] : ["--lane", options.lane]),
+					...(options.nativeRemainder ? ["--native-remainder"] : []),
+				],
+				{
+					cwd: directory,
+					encoding: "utf8",
+					env: {
+						...process.env,
+						MALIGATOR_CACHE_DIR: path.join(directory, "cache"),
+						MAL_TEST_SUITE_FAKE_STAGES: JSON.stringify(stages),
+						MAL_TEST_SUITE_SOURCE_CHANGE: options.changeSource ? "1" : "0",
+					},
 				},
-			},
-		);
+			);
+		let result = run();
+		for (let index = 1; index < (options.runs ?? 1); index++) result = run();
 		if (result.error !== undefined) throw result.error;
 		const report = JSON.parse(
 			readFileSync(
-				path.join(directory, ".cache/mal-build/test-suite/report-smoke.json"),
+				path.join(
+					directory,
+					`.cache/mal-build/test-suite/report-${options.nativeRemainder ? "full-native-remainder" : "smoke"}${options.lane === undefined ? "" : `-${options.lane}`}.json`,
+				),
 				"utf8",
 			),
-		) as { complete: boolean; stages: Array<{ name: string; status: number }> };
-		return { status: result.status, stderr: result.stderr, report };
+		) as {
+			runId: string;
+			complete: boolean;
+			passed: boolean;
+			source: { consistent: boolean | null };
+			scope: { coversEntireTier: boolean };
+			stages: Array<{ name: string; status: number }>;
+		};
+		const retained = readdirSync(
+			path.join(directory, ".cache/mal-build/test-suite/runs"),
+		).map(
+			(id) =>
+				JSON.parse(
+					readFileSync(
+						path.join(directory, ".cache/mal-build/test-suite/runs", id, "report.json"),
+						"utf8",
+					),
+				) as typeof report,
+		);
+		return {
+			status: result.status,
+			stderr: result.stderr,
+			report,
+			retained,
+			fullSmokeStamp: existsSync(path.join(directory, "cache/v1/test-suite-smoke.json")),
+		};
 	} finally {
 		rmSync(directory, { recursive: true, force: true });
 	}
@@ -191,6 +242,130 @@ describe("test suite planner", () => {
 		expect(full.approval).toBe("explicit");
 	});
 
+	it("partitions check into disjoint lanes with complete canonical coverage", () => {
+		const workflow = parse(
+			readFileSync(path.join(root, ".github/workflows/ci.yml"), "utf8"),
+		) as {
+			jobs: { "linux-lanes": { strategy: { matrix: { lane: Array<string> } } } };
+		};
+		const complete = JSON.parse(runSuite("check", "--plan=json")) as {
+			stages: Array<{ name: string; invocation: string }>;
+		};
+		const selected = workflow.jobs["linux-lanes"].strategy.matrix.lane.flatMap((lane) => {
+			const plan = JSON.parse(runSuite("check", "--lane", lane, "--plan=json")) as {
+				scope: { coversEntireTier: boolean };
+				stages: typeof complete.stages;
+			};
+			expect(plan.scope.coversEntireTier).toBe(false);
+			return plan.stages;
+		});
+		expect(new Set(selected.map((stage) => stage.name)).size).toBe(selected.length);
+		expect(selected.map((stage) => stage.invocation).sort()).toEqual(
+			complete.stages.map((stage) => stage.invocation).sort(),
+		);
+	});
+
+	it("selects the complete native remainder without repeating check or standards coverage", () => {
+		const filesIn = (...args: Array<string>) => {
+			const plan = JSON.parse(runSuite(...args, "--plan=json")) as {
+				approval: string;
+				scope: { coversEntireTier: boolean };
+				stages: Array<{ kind: string; invocation: string }>;
+			};
+			return {
+				plan,
+				files: plan.stages.flatMap((stage) =>
+					stage.kind === "native"
+						? (stage.invocation.match(/tests\/native\/[^\s]+\.test\.ts/g) ?? [])
+						: [],
+				),
+			};
+		};
+		const check = filesIn("check").files;
+		const full = filesIn("full").files;
+		const remaining = filesIn("full", "--native-remainder");
+		expect(remaining.plan.approval).toBe("none");
+		expect(remaining.plan.scope.coversEntireTier).toBe(false);
+		expect(remaining.plan.stages.every((stage) => stage.kind === "native")).toBe(true);
+		// test:leak selects its fixture inside package.json rather than in the invocation.
+		const leak = process.platform === "darwin" ? ["tests/native/leak.test.ts"] : [];
+		const selected = [...check, ...remaining.files];
+		expect(new Set(selected).size).toBe(selected.length);
+		expect(selected.sort()).toEqual(full.sort());
+		const allNative = readdirSync(path.join(root, "tests/native"), {
+			recursive: true,
+			encoding: "utf8",
+		})
+			.filter((file) => file.endsWith(".test.ts") && file !== "leak.test.ts")
+			.map((file) => `tests/native/${file}`);
+		expect([...selected, ...leak].sort()).toEqual([...allNative, ...leak].sort());
+	});
+
+	it("retains a remainder verdict without warming smoke or claiming a full gate pass", () => {
+		const result = simulateSuiteStages(
+			Array.from({ length: process.platform === "darwin" ? 3 : 2 }, () => ({
+				durationMs: 1,
+				status: 0,
+			})),
+			"complete",
+			{ nativeRemainder: true },
+		);
+		expect(result.status).toBe(0);
+		expect(result.report.passed).toBe(true);
+		expect(result.report.scope.coversEntireTier).toBe(false);
+		expect(result.fullSmokeStamp).toBe(false);
+	});
+
+	it.each([
+		["--lane", "unknown"],
+		["--lane", "quality", "--lane", "native"],
+		["--lane", "sanitizer"],
+		["--native-remainder"],
+	])("rejects invalid or empty smoke selections %j", (...args) => {
+		expect(() => runSuite("smoke", ...args, "--plan=json")).toThrow();
+	});
+
+	it("retains prior reports when publishing a new latest report", () => {
+		const result = simulateSuiteStages(
+			Array.from({ length: 5 }, () => ({ durationMs: 1, status: 0 })),
+			"bail",
+			{ runs: 2 },
+		);
+		expect(result.retained).toHaveLength(2);
+		expect(new Set(result.retained.map((report) => report.runId)).size).toBe(2);
+		expect(result.retained.every((report) => report.complete && report.passed)).toBe(
+			true,
+		);
+		expect(result.retained).toContainEqual(result.report);
+	});
+
+	it("rejects successful stages when their source changed during execution", () => {
+		const result = simulateSuiteStages(
+			Array.from({ length: 5 }, () => ({ durationMs: 1, status: 0 })),
+			"bail",
+			{ changeSource: true },
+		);
+		expect(result.status).toBe(1);
+		expect(result.report.complete).toBe(true);
+		expect(result.report.passed).toBe(false);
+		expect(result.report.source.consistent).toBe(false);
+		expect(result.stderr).toContain("source changed during verification");
+	});
+
+	it("does not warm the full smoke stamp after a partial lane", () => {
+		const result = simulateSuiteStages(
+			[
+				{ durationMs: 1, status: 0 },
+				{ durationMs: 1, status: 0 },
+			],
+			"bail",
+			{ lane: "quality" },
+		);
+		expect(result.status).toBe(0);
+		expect(result.report.passed).toBe(true);
+		expect(result.fullSmokeStamp).toBe(false);
+	});
+
 	it.each([1, 2, 4])(
 		"right-sizes test and build workers within a %i-worker budget",
 		(workers) => {
@@ -256,7 +431,7 @@ describe("test suite planner", () => {
 	);
 
 	it("reaches WPT after successful cold builds consume ten minutes", () => {
-		const result = simulateSmokeStages(
+		const result = simulateSuiteStages(
 			[22_400, 13_800, 104_000, 460_100, 60_000].map((durationMs) => ({
 				durationMs,
 				status: 0,
@@ -268,7 +443,7 @@ describe("test suite planner", () => {
 	});
 
 	it("still stops before the next stage when the cold fuse expires", () => {
-		const result = simulateSmokeStages([{ durationMs: 3_600_001, status: 0 }]);
+		const result = simulateSuiteStages([{ durationMs: 3_600_001, status: 0 }]);
 		expect(result.status).toBe(1);
 		expect(result.stderr).toContain("smoke fuse expired before all stages started");
 		expect(result.report.complete).toBe(false);
@@ -278,7 +453,7 @@ describe("test suite planner", () => {
 	});
 
 	it("still bails on a failed stage before the cold fuse expires", () => {
-		const result = simulateSmokeStages([{ durationMs: 1, status: 1 }]);
+		const result = simulateSuiteStages([{ durationMs: 1, status: 1 }]);
 		expect(result.status).toBe(1);
 		expect(result.stderr).toContain("exited with status 1");
 		expect(result.report.complete).toBe(false);
@@ -288,7 +463,7 @@ describe("test suite planner", () => {
 	});
 
 	it("finishes coverage under complete policy while reporting a cold fuse failure", () => {
-		const result = simulateSmokeStages(
+		const result = simulateSuiteStages(
 			[3_600_001, 0, 0, 0, 0].map((durationMs) => ({ durationMs, status: 0 })),
 			"complete",
 		);

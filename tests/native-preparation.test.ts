@@ -81,6 +81,23 @@ describe("native runtime preparation", () => {
 		expect(ensureNativeArtifacts).toHaveBeenCalledTimes(3);
 	});
 
+	it("prepares the web-disabled runtime before its timed hook without instrumenting that variant", () => {
+		setup(selectedProject("web-disabled.test.ts", "collection-direct.test.ts"));
+		const contexts = preparedContexts();
+		expect(contexts).toHaveLength(4);
+		const webDisabled = contexts.filter(
+			(context) => context.features?.webPlatformEnabled === false,
+		);
+		expect(webDisabled).toHaveLength(1);
+		expect(webDisabled[0]!.features?.nodeEnabled).toBe(false);
+		expect(perfStatsDefines(webDisabled[0]!.environment)).toEqual([]);
+		expect(webDisabled[0]!.environment).toMatchObject({
+			MAL_BUILD_JOBS: "4",
+			CARGO_BUILD_JOBS: "4",
+		});
+		expect(ensureNativeArtifacts).toHaveBeenCalledWith(webDisabled[0]);
+	});
+
 	it.each([
 		"gc.test.ts",
 		"node-events.test.ts",

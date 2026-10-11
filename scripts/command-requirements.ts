@@ -56,12 +56,12 @@ export function requirementsForCommand(kind: CommandKind): CommandRequirements {
 	return {
 		cpu: builds ? "heavy" : "light",
 		capabilities: {
-			workspaceWrite: kind !== "quality",
+			workspaceWrite: true,
 			temporaryWrite: kind !== "quality",
-			userCacheWrite: builds,
+			userCacheWrite: true,
 			npmCacheWrite: true,
 			cargoCacheWrite: rust,
-			loopbackListen: native,
+			loopbackListen: native || kind === "unit",
 			outboundNetwork: false,
 			processInspection: builds,
 		},

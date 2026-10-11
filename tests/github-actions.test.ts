@@ -23,6 +23,68 @@ function usedActions(value: unknown): Array<string> {
 }
 
 describe("GitHub Actions", () => {
+	it("keeps scheduled native coverage separate and includes both platform dimensions", () => {
+		const workflow = parse(
+			readFileSync(path.join(githubRoot, "workflows/native-remainder.yml"), "utf8"),
+		) as {
+			on: { schedule: Array<{ cron: string }>; workflow_dispatch: unknown };
+			permissions: Record<string, string>;
+			jobs: {
+				"native-remainder": {
+					strategy: { matrix: { include: Array<{ os: string; lane: string }> } };
+					steps: Array<{ run?: string }>;
+				};
+			};
+		};
+		expect(workflow.on.schedule).toHaveLength(1);
+		expect(workflow.on).toHaveProperty("workflow_dispatch");
+		expect(workflow.permissions).toEqual({ contents: "read" });
+		const job = workflow.jobs["native-remainder"];
+		expect(
+			job.strategy.matrix.include.map(({ os, lane }) => `${os}/${lane}`).sort(),
+		).toEqual([
+			"macos-15/native",
+			"macos-15/sanitizer",
+			"ubuntu-24.04/native",
+			"ubuntu-24.04/sanitizer",
+		]);
+		expect(
+			job.steps.some((step) => step.run?.startsWith("npm run test:native:remainder -- ")),
+		).toBe(true);
+		expect(job.steps.some((step) => /test262|test:full/.test(step.run ?? ""))).toBe(
+			false,
+		);
+	});
+
+	it("requires successful lane aggregation for the existing Linux check", () => {
+		const workflow = parse(
+			readFileSync(path.join(githubRoot, "workflows/ci.yml"), "utf8"),
+		) as {
+			jobs: Record<
+				string,
+				{
+					name: string;
+					needs?: string;
+					if?: string;
+					strategy?: { "fail-fast": boolean };
+					steps: Array<{ run?: string; env?: Record<string, string> }>;
+				}
+			>;
+		};
+		const aggregate = workflow.jobs["linux-check"]!;
+		expect(aggregate.name).toBe("Linux check");
+		expect(aggregate.needs).toBe("linux-lanes");
+		expect(aggregate.if).toBe("always()");
+		expect(aggregate.steps[0]?.env?.LANE_RESULT).toBe("${{ needs.linux-lanes.result }}");
+		expect(aggregate.steps[0]?.run).toBe('test "$LANE_RESULT" = success');
+		expect(
+			aggregate.steps.some(
+				(step) => step.run === "node scripts/test-suite-ci.ts .cache/ci-lane-reports",
+			),
+		).toBe(true);
+		expect(workflow.jobs["linux-lanes"]?.strategy?.["fail-fast"]).toBe(false);
+	});
+
 	it("does not use runner-local contexts in job-level environment expressions", () => {
 		const violations: Array<string> = [];
 		for (const file of yamlFiles(path.join(githubRoot, "workflows"))) {

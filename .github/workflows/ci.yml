@@ -13,10 +13,14 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  linux-check:
-    name: Linux check
+  linux-lanes:
+    name: Linux ${{ matrix.lane }}
     runs-on: ubuntu-24.04
     timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        lane: [quality, native, sanitizer, standards]
     steps:
       - name: Check out the tested revision
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -26,24 +30,63 @@ jobs:
       - name: Set up Linux
         uses: ./.github/actions/setup-linux
         with:
-          cache-test262: "true"
+          cache-test262: ${{ matrix.lane == 'standards' && 'true' || 'false' }}
 
       - name: Check the runner environment
         run: npm run env:check -- --json
 
-      - name: Run the canonical developer gate
-        run: npm run test:check -- --workers 4
+      - name: Run the selected check lane
+        run: npm run test:check -- --workers 4 --lane ${{ matrix.lane }}
 
-      - name: Retain failure reports
-        if: failure()
+      - name: Retain verification reports
+        if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: linux-check-reports-${{ github.run_id }}-${{ github.run_attempt }}
+          name: linux-${{ matrix.lane }}-reports-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
-            .cache/mal-build/test-suite/report-check.json
+            .cache/mal-build/test-suite/runs/*/report.json
             .cache/mal-build/test262*/report-*.json
             .cache/mal-build/wpt*/report-*.json
           if-no-files-found: ignore
+          include-hidden-files: true
+          retention-days: 7
+
+  linux-check:
+    name: Linux check
+    needs: linux-lanes
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Require every lane to succeed
+        env:
+          LANE_RESULT: ${{ needs.linux-lanes.result }}
+        run: test "$LANE_RESULT" = success
+
+      - name: Check out the tested revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Linux
+        uses: ./.github/actions/setup-linux
+
+      - name: Download lane reports
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: linux-*-reports-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .cache/ci-lane-reports
+
+      - name: Verify complete canonical coverage
+        run: node scripts/test-suite-ci.ts .cache/ci-lane-reports
+
+      - name: Retain the combined gate report
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: linux-check-reports-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .cache/mal-build/test-suite/runs/*/report.json
+          include-hidden-files: true
+          if-no-files-found: error
           retention-days: 7
 
   macos-arm-smoke:
@@ -67,14 +110,15 @@ jobs:
       - name: Run smoke tests
         run: npm run test:smoke -- --workers 3
 
-      - name: Retain failure reports
-        if: failure()
+      - name: Retain verification reports
+        if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: macos-arm-smoke-reports-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
-            .cache/mal-build/test-suite/report-smoke.json
+            .cache/mal-build/test-suite/runs/*/report.json
             .cache/mal-build/test262*/report-*.json
             .cache/mal-build/wpt*/report-*.json
           if-no-files-found: ignore
+          include-hidden-files: true
           retention-days: 7

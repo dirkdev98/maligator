@@ -48,29 +48,12 @@ rooting, and resource-safety defects can interrupt that order.
       current 128-bit storage, and input-size scaling. Keep conversion costs separate
       from traversal and checksum work.
 
-- [ ] Retain gate reports per run with source revision/content identity. The current
-      `scripts/test-suite.ts` overwrites `report-<tier>.json` and cannot associate its
-      stage verdicts with a specific source snapshot. Preserve a discoverable latest
-      report without replacing earlier evidence.
-
-- [ ] Align `scripts/command-requirements.ts` with actual cache-lease behavior. Unit
-      and quality plans declare no user-cache writes, while their `CommandProgress`
-      wrappers create leases there. Verify the declared capabilities against the
-      command lifecycle so restricted execution retains cache coordination.
-
-- [ ] Run the native tests that only `test:full` selects on a regular cadence. The
-      native manifests name 196 of the 351 native test files; the other 155 run only
-      in the full tier's remainder, which needs approval, so their fixtures can drift
-      unnoticed. `checked-leaf-entry.test.ts` asserted a leaf call that its fixture
-      had stopped emitting. Tests of an optimization should assert that it was
-      selected before they check behavior. A pass on 2026-10-10 found
-      a dozen more: fixed function indices and script-only optimizations after
-      fixtures became modules, native plan entries read at runtime bytecode IPs,
-      inline cache rows and installer sets after compact layouts and workers, and a
-      keep-alive race. The Wasm tests also need WASI SDK 34 on the host.
-      `web-disabled.test.ts` builds its web-off runtime inside a 180 second hook;
-      after runtime sources change, that cold build under the remainder's parallel
-      load ran out of time on 2026-10-11 and passed in 3 seconds once cached.
+- [ ] Verify the first hosted native-remainder workflow on Linux and macOS after
+      publication. The check plan selects 113 of the 356 native files; the weekly
+      complement selects the other 242, plus the macOS-only leak audit. Inspect cold
+      runtime preparation and skipped external-service cases rather than treating
+      successful discovery as executed coverage. Slow unit and Wasm coverage remains
+      separate; the Wasm tests need WASI SDK 34 on the host.
 - [ ] Fix the Linux crash of `test/staging/sm/expressions/octal-literals.js` in the
       sloppy pass. Two full CI runs (38120653230 and 38124199226) report it CRASHED
       in the same batch of eval-heavy staging tests, while its strict pass and both

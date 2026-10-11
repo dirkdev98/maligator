@@ -10,14 +10,9 @@ import {
 	runToStdout,
 	STRESS_ENV,
 } from "../../src/test-harness.ts";
+import { preparedNativeEvalConfig } from "../helpers/native-eval-config.ts";
 
-// The runtime half of `surface.webPlatform: false` (the cache-suffix / derivation
-// half is covered by tests/build-config.test.ts). Builds the host entry into the
-// web-off archive: with Node also off, `-DMAL_WEB_PLATFORM=0` compiles web_url.c
-// away and the Rust crate is built without the `url` feature, so the ada C++ parser
-// AND the `-lc++` link are dropped. That this binary LINKS at all — with URL gated out
-// of host_main and no `mal_url_*` symbols in the archive — is the core assertion.
-// The web-off build selects its own content-addressed artifacts.
+// Linking HOST_MAIN with web and Node disabled must not retain ada or its C++ dependency.
 const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-web-off-"));
 
 describe("surface.webPlatform: false runtime gate", () => {
@@ -28,7 +23,7 @@ describe("surface.webPlatform: false runtime gate", () => {
 			name: "web-disabled",
 			mainFile: HOST_MAIN,
 			outDir,
-			webPlatformEnabled: false,
+			config: preparedNativeEvalConfig({ webPlatform: false }),
 		});
 	});
 

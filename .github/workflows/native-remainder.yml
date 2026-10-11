@@ -1,0 +1,72 @@
+name: Weekly native remainder
+
+on:
+  schedule:
+    - cron: "43 2 * * 6"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-remainder
+  cancel-in-progress: false
+
+jobs:
+  native-remainder:
+    name: ${{ matrix.platform }} remaining ${{ matrix.lane }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 240
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: Linux
+            os: ubuntu-24.04
+            workers: 4
+            lane: native
+          - platform: Linux
+            os: ubuntu-24.04
+            workers: 4
+            lane: sanitizer
+          - platform: macOS ARM
+            os: macos-15
+            workers: 3
+            lane: native
+          - platform: macOS ARM
+            os: macos-15
+            workers: 3
+            lane: sanitizer
+    steps:
+      - name: Require the main branch
+        if: github.ref != 'refs/heads/main'
+        run: exit 1
+
+      - name: Check out the tested revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Linux
+        if: matrix.platform == 'Linux'
+        uses: ./.github/actions/setup-linux
+
+      - name: Set up macOS
+        if: matrix.platform == 'macOS ARM'
+        uses: ./.github/actions/setup-macos
+
+      - name: Check the runner environment
+        run: npm run env:check -- --json
+
+      - name: Run the remaining native dimension
+        run: npm run test:native:remainder -- --workers ${{ matrix.workers }} --lane ${{ matrix.lane }}
+
+      - name: Retain verification reports
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: native-remainder-${{ matrix.os }}-${{ matrix.lane }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .cache/mal-build/test-suite/runs/*/report.json
+          if-no-files-found: ignore
+          include-hidden-files: true
+          retention-days: 14

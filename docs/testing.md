@@ -1,9 +1,11 @@
 # Testing
 
-Maligator uses three cumulative test tiers. Check is the normal developer gate;
-its native duration depends on cache warmth and the selected worker budget. The
-smoke tier is primarily an early fuse inside larger runs, and the full tier is
-exhaustive rather than interactive.
+Maligator uses three cumulative test tiers. Check is the canonical acceptance gate;
+CI runs its disjoint lanes asynchronously. During development, select affected unit
+files and observable native behavior, then batch quality checks after cohesive work.
+Do not repeat the whole unit suite or check gate after each small edit. The smoke
+tier is primarily an early fuse inside larger runs, and the full tier is exhaustive
+rather than interactive. Native duration depends on cache warmth and worker budget.
 
 ## DX performance exercise
 
@@ -43,8 +45,17 @@ selection and concurrent isolated tests. It prints the selected binary's digest
 and saves command/watch evidence under `.cache/selfhost-cli/<pid>`; the caller
 must establish which source produced that binary.
 
-Every tier also writes its latest machine-readable gate report to
-`.cache/mal-build/test-suite/report-<tier>.json`. It records exact stage wall times,
+Every execution prints a retained machine-readable report at
+`.cache/mal-build/test-suite/runs/<run-id>/report.json`. In-progress reports are updated
+in that run directory; completed reports are retained across subsequent runs. The
+latest report is also published atomically at `report-<tier>[-<lane>].json` for discovery.
+Native-remainder runs use `report-full-native-remainder[-<lane>].json` so they never
+replace the latest complete full-gate report.
+Reports record the Git revision, dirty state, a content digest of tracked and
+non-ignored untracked files, host/Node/compiler versions, exact selection, completion,
+and verdict. The source is captured before and after execution; changed content
+returns a failure and cannot establish acceptance. Git checkout roots are required.
+Reports record exact stage wall times,
 exit status, and native fixture spans for frontend work, C/Rust artifacts, generated
 objects, linking, and execution, including cache hit/miss counts and the 20 slowest
 spans. Vitest forks write process-local JSONL while running, so telemetry does not
@@ -436,8 +447,8 @@ WPT removes its per-run native scratch tree on exit; pass
 Smoke and check own disjoint unit selections: the small
 `tests/test-suite-unit-smoke.txt` manifest is the capability proof and check derives
 the complete regular-unit complement. `test:check` excludes every entry in
-`tests/test-suite-unit-full-only.txt`. The current
-entry, `tests/toolchain.test.ts`, creates fake C/Rust toolchains and repeatedly
+`tests/test-suite-unit-full-only.txt`. For example,
+`tests/toolchain.test.ts` creates fake C/Rust toolchains and repeatedly
 exercises subprocess discovery, capability probes, cache invalidation,
 corruption recovery, and concurrent publication. It is valuable infrastructure
 coverage but costs roughly 25 seconds and belongs in the full gate.
@@ -502,7 +513,44 @@ deadline uses the same factors. Outer test and queue job budgets remain separate
 ## GitHub Actions
 
 Pull requests and pushes to `main` run the canonical check tier on Linux x64 and the
-smoke tier on macOS ARM. The workflows use four Linux workers and three macOS workers
+smoke tier on macOS ARM. Linux runs four jobs in parallel using the runner's own
+four-worker budget:
+
+```sh
+npm run test:check -- --workers 4 --lane quality
+npm run test:check -- --workers 4 --lane native
+npm run test:check -- --workers 4 --lane sanitizer
+npm run test:check -- --workers 4 --lane standards
+```
+
+`quality` includes type-check, lint, and both unit selections. `native` and `sanitizer`
+run their owning dimensions; `standards` includes Test262 and WPT. Each lane records
+its excluded coverage and cannot stand in for the complete gate. The `Linux check`
+job requires all jobs to succeed, then combines their retained reports only when
+source, environment, selections, and executed stages match the current canonical
+plan exactly. Missing, duplicate, failed, or incomplete reports fail aggregation.
+`--lane compiler` and `--lane rust` select those full-tier dimensions when authorized;
+selecting a lane absent from a tier fails before execution. Partial smoke selections
+never publish the full smoke cache stamp.
+
+The weekly native-remainder workflow runs Saturdays at 02:43 UTC and can also be
+dispatched from `main`. Its four independent jobs cover Linux x64 and macOS ARM,
+with separate normal and sanitizer dimensions and a four-hour limit per job:
+
+```sh
+npm run test:native:remainder -- --workers 4 --lane native
+npm run test:native:remainder -- --workers 4 --lane sanitizer
+```
+
+This derives the remaining native files from the same manifests as the full gate,
+without repeating check's fixtures, quality, or standards. macOS also runs its leak
+audit in the normal dimension. The runner completes every selected stage to collect
+failures and retains source-bound reports for fourteen days. These reports remain
+partial full-tier evidence. Optional external-service tests retain their prerequisites;
+the slow unit, Wasm, self-hosting, and full standards dimensions still belong to their
+own verification commands. Writing this workflow does not dispatch it.
+
+The workflows use four workers per Linux job and three macOS workers
 to match the hosted CPU allocations. External actions are pinned to immutable commit
 SHAs; local setup actions install Node 24, the repository-pinned Rust toolchain, and
 the platform compiler before running `env:check`.
@@ -510,7 +558,9 @@ the platform compiler before running `env:check`.
 CI caches npm downloads and the pinned Test262 corpus only. The generated Maligator
 blob store, native objects, Zig outputs, and whole managed cache are deliberately not
 stored because a normal developer cache can exceed the repository's 10 GB Actions
-cache allowance. Test reports are retained only on failure.
+cache allowance. Gate reports are retained on success and failure for seven days,
+including their tested source identity. The standards lane alone prepares the
+Test262 corpus. Release workflows remain separate.
 
 The weekly and manually dispatched Test262 workflow runs the complete canonical
 compiled/normal report on `main`. It commits `scripts/test262.json` only when the
@@ -754,6 +804,19 @@ Add it to a smoke or check manifest only when its signal and runtime fit that
 tier's fixed budget. Add an unusually slow unit or subprocess integration test to
 `tests/test-suite-unit-full-only.txt`; ordinary unit tests run in smoke/check.
 
+Optimization regressions must establish that their fixture selects or executes the
+intended path, then verify observable behavior and relevant fallback cases. Prefer
+named function/plan identities and executed-path counters over incidental function
+indices or generated text. Require a counter to be positive when it proves coverage;
+assert exact counts only when the count itself is the contract, such as a handcrafted
+cache probe sequence. Semantic output checks already verify loop results.
+
+Native global setup prepares the shared eval runtimes before timed hooks, including
+the web-disabled variant only when its fixture is selected. Specialized runtimes
+belong in preparation rather than consuming an execution timeout. Child execution
+deadlines stay bounded and scale for sanitizer and GC stress; distinguish runtime
+preparation, fixture compilation, and execution in failure reports.
+
 Do not guess when a regression plausibly belongs in more than one lane, such as
 Test262 versus native or WPT versus native. Ask the user which acceptance boundary
 they want before adding the test.
@@ -785,7 +848,11 @@ exercise backend parity and GC stress themselves. Add a focused
 `rest-forwarding` and `stack-object` currently belong to the full-tier native
 complement; a successful `test:check` alone does not exercise them. Use
 `npm run test:check -- --plan=json` or a tier's `--list` to inspect actual selection.
-Finish with `npm run test:check` once the focused behavior passes.
+After cohesive work, batch type-check and lint. Use CI's complete check result for
+the tested checkpoint when pushing is authorized. Otherwise run the relevant local
+lanes once, and the whole `test:check` gate when the change is cross-cutting or coverage
+remains uncertain. Focused full-tier fixtures still run when relevant; a check pass
+does not replace them.
 
 For a compiler representation failure, use the product CLI with `MAL_DEBUG=true`
 and a self-contained fixture. A raw Test262 file may require harness includes;

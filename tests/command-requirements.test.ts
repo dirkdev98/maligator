@@ -10,6 +10,17 @@ import {
 } from "../scripts/command-requirements.ts";
 
 describe("machine-readable command requirements", () => {
+	it("declares cache leases and unit-test loopback access without classifying quality as a build", () => {
+		const quality = requirementsForCommand("quality");
+		const unit = requirementsForCommand("unit");
+		expect(quality.cpu).toBe("light");
+		expect(quality.capabilities.workspaceWrite).toBe(true);
+		expect(quality.capabilities.userCacheWrite).toBe(true);
+		expect(unit.capabilities.userCacheWrite).toBe(true);
+		expect(unit.capabilities.loopbackListen).toBe(true);
+		expect(quality.capabilities.loopbackListen).toBe(false);
+	});
+
 	it("merges sandbox capabilities without inventing an execution lock", () => {
 		const requirements = mergeCommandRequirements([
 			requirementsForCommand("quality"),
