@@ -1,11 +1,13 @@
 import { execFileSync } from "node:child_process";
 import {
+	chmodSync,
 	copyFileSync,
 	existsSync,
 	mkdirSync,
 	mkdtempSync,
 	readFileSync,
 	rmSync,
+	symlinkSync,
 	writeFileSync,
 } from "node:fs";
 import * as os from "node:os";
@@ -23,7 +25,8 @@ function comparisonFixture() {
 		path.join(repository, "scripts/bench.ts"),
 	);
 	writeFileSync(path.join(repository, "package-lock.json"), "{}");
-	writeFileSync(path.join(repository, ".gitignore"), ".cache/\n");
+	writeFileSync(path.join(repository, ".gitignore"), ".cache/\nnode_modules/\n");
+	writeFileSync(path.join(repository, "candidate-value.json"), "90");
 	writeFileSync(path.join(repository, "control-path.json"), JSON.stringify(root));
 	const control = (value: Record<string, unknown>) =>
 		writeFileSync(path.join(root, "control.json"), JSON.stringify(value));
@@ -70,7 +73,12 @@ test("failed comparisons preserve complete snapshots and resume without replayin
 	expect(
 		JSON.parse(readFileSync(path.join(directory, "pair-0-head.json"), "utf8")),
 	).toMatchObject({
-		source: { commit: "candidate" },
+		source: {
+			commit: execFileSync("git", ["rev-parse", "HEAD"], {
+				cwd: fixture.repository,
+				encoding: "utf8",
+			}).trim(),
+		},
 		nativePlan: { compiler: "fixture" },
 		javascript: { phaseChecksums: { main: 42 } },
 	});
@@ -159,7 +167,7 @@ test("a budget stops the benchmark process group and leaves a resumable checkpoi
 	expect(existsSync(path.join(directory, "warm-base.json"))).toBe(true);
 }, 30_000);
 
-test("resuming refuses changed source before reusing evidence", async () => {
+test("resuming uses captured source after the original checkout changes", async () => {
 	const fixture = comparisonFixture();
 	fixture.control({ fail: "warm-head" });
 	const result = await runBenchmarkComparison(fixture.options);
@@ -167,12 +175,64 @@ test("resuming refuses changed source before reusing evidence", async () => {
 		path.join(fixture.repository, "new-source.ts"),
 		"export const changed = true;\n",
 	);
-	await expect(
-		runBenchmarkComparison({
-			...fixture.options,
-			resumeDirectory: path.dirname(result.reportPath),
-		}),
-	).rejects.toThrow("source, options, or host changed");
+	writeFileSync(path.join(fixture.repository, "candidate-value.json"), "999");
+	fixture.control({});
+	const resumed = await runBenchmarkComparison({
+		...fixture.options,
+		resumeDirectory: path.dirname(result.reportPath),
+	});
+	expect(resumed.exitCode).toBe(0);
+	expect(
+		resumed.metrics.find((metric) => metric.path === "javascript.wallMs")?.samples,
+	).toEqual([
+		{ base: 100, head: 90 },
+		{ base: 100, head: 90 },
+	]);
+});
+
+test("candidate capture includes dirty files, symlinks, executable modes, and dependencies", async () => {
+	const fixture = comparisonFixture();
+	const repository = fixture.repository;
+	writeFileSync(path.join(repository, "untracked-value.json"), "81");
+	symlinkSync("untracked-value.json", path.join(repository, "candidate-link.json"));
+	const executable = path.join(repository, "candidate-helper.sh");
+	writeFileSync(executable, "#!/bin/sh\nexit 0\n");
+	chmodSync(executable, 0o755);
+	mkdirSync(path.join(repository, "node_modules/fixture-value"), { recursive: true });
+	writeFileSync(path.join(repository, "node_modules/fixture-value/value.json"), "81");
+	const runner = path.join(repository, "scripts/bench.ts");
+	writeFileSync(
+		runner,
+		readFileSync(runner, "utf8").replace(
+			'const base = label.endsWith("base");',
+			`const base = label.endsWith("base");
+if (!base) {
+  const { execFileSync } = await import("node:child_process");
+  execFileSync("./candidate-helper.sh");
+  const sourceValue = JSON.parse(readFileSync("candidate-link.json", "utf8"));
+  const dependencyValue = JSON.parse(readFileSync("node_modules/fixture-value/value.json", "utf8"));
+  if (sourceValue !== dependencyValue) throw new Error("captured source/dependency mismatch");
+  if (sourceValue !== JSON.parse(readFileSync("candidate-value.json", "utf8"))) throw new Error("captured input mismatch");
+}`,
+		),
+	);
+	writeFileSync(path.join(repository, "candidate-value.json"), "81");
+	fixture.control({ mutateCheckout: "warm-base" });
+	const result = await runBenchmarkComparison(fixture.options);
+	expect(result.exitCode).toBe(0);
+	expect(
+		result.metrics.find((metric) => metric.path === "javascript.wallMs")?.samples,
+	).toEqual([
+		{ base: 100, head: 81 },
+		{ base: 100, head: 81 },
+	]);
+	expect(JSON.parse(readFileSync(result.reportPath, "utf8"))).toMatchObject({
+		schema: 3,
+		identity: { headDirty: true },
+		resumeAllowed: false,
+	});
+	expect(readFileSync(path.join(repository, "candidate-value.json"), "utf8")).toBe("999");
+	expect(existsSync(path.join(path.dirname(result.reportPath), "head"))).toBe(false);
 });
 
 test("a workload mismatch is retained as failed evidence rather than a speedup", async () => {
@@ -259,7 +319,7 @@ if (dependency.version !== (base ? "1.0.0" : "2.0.0")) throw new Error("wrong re
 	);
 });
 
-test("source changes during execution invalidate resumption even after source restoration", async () => {
+test("captured source changes invalidate resumption even after source restoration", async () => {
 	const fixture = comparisonFixture();
 	fixture.control({ mutate: "warm-head" });
 	const result = await runBenchmarkComparison(fixture.options);
@@ -267,11 +327,32 @@ test("source changes during execution invalidate resumption even after source re
 		status: "failed",
 		resumeAllowed: false,
 	});
-	rmSync(path.join(fixture.repository, "changed-during-bench.ts"));
+	copyFileSync(
+		path.join(fixture.repository, "scripts/bench.ts"),
+		path.join(path.dirname(result.reportPath), "head/scripts/bench.ts"),
+	);
 	await expect(
 		runBenchmarkComparison({
 			...fixture.options,
 			resumeDirectory: path.dirname(result.reportPath),
 		}),
 	).rejects.toThrow("source, options, or host changed");
+});
+
+test("resuming rejects changed comparison options and old report schemas", async () => {
+	const fixture = comparisonFixture();
+	fixture.control({ fail: "warm-head" });
+	const result = await runBenchmarkComparison(fixture.options);
+	const resumeDirectory = path.dirname(result.reportPath);
+	await expect(
+		runBenchmarkComparison({ ...fixture.options, pairs: 1, resumeDirectory }),
+	).rejects.toThrow("source, options, or host changed");
+	const report = JSON.parse(readFileSync(result.reportPath, "utf8")) as Record<
+		string,
+		unknown
+	>;
+	writeFileSync(result.reportPath, JSON.stringify({ ...report, schema: 2 }));
+	await expect(
+		runBenchmarkComparison({ ...fixture.options, resumeDirectory }),
+	).rejects.toThrow("captured inputs are unavailable");
 });

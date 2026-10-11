@@ -13,11 +13,23 @@ const control = JSON.parse(
 	hang?: string;
 	checksumMismatch?: boolean;
 	mutate?: string;
+	mutateCheckout?: string;
 };
 appendFileSync(path.join(controlDirectory, "calls.jsonl"), `${JSON.stringify(label)}\n`);
 process.stdout.write(`fixture started ${label}\n`);
 if (control.mutate === label)
-	writeFileSync("changed-during-bench.ts", "export const changed = true;\n");
+	writeFileSync("scripts/bench.ts", `${readFileSync("scripts/bench.ts", "utf8")}\n`);
+if (control.mutateCheckout === label) {
+	writeFileSync(path.join(controlDirectory, "repository", "candidate-value.json"), "999");
+	writeFileSync(
+		path.join(controlDirectory, "repository", "new-source.ts"),
+		"export const changed = true;\n",
+	);
+	for (const file of ["untracked-value.json", "node_modules/fixture-value/value.json"]) {
+		const target = path.join(controlDirectory, "repository", file);
+		if (existsSync(target)) writeFileSync(target, "999");
+	}
+}
 if (control.fail === label) {
 	process.stderr.write("controlled benchmark failure\n");
 	process.exit(23);
@@ -42,14 +54,17 @@ writeFileSync(
 	JSON.stringify({
 		source: {
 			commit: process.env.MAL_INTERNAL_BENCH_SOURCE_COMMIT ?? "candidate",
-			digest: "fixture",
+			digest: process.env.MAL_INTERNAL_BENCH_SOURCE_DIGEST ?? "fixture",
+			dirty: process.env.MAL_INTERNAL_BENCH_SOURCE_DIRTY === "true",
 		},
 		javascript: {
 			workload: "fixture",
 			phaseChecksums: {
 				main: control.checksumMismatch && label.endsWith("head") ? 99 : 42,
 			},
-			wallMs: base ? 100 : 90,
+			wallMs: base
+				? 100
+				: (JSON.parse(readFileSync("candidate-value.json", "utf8")) as number),
 		},
 		nativePlan: { compiler: "fixture" },
 		nativeBuild: base ? { peakRssBytes: 1024 } : {},

@@ -10,6 +10,32 @@ export interface VerificationSource {
 	files: number;
 }
 
+export function verificationSourceDigest(
+	root: string,
+	files: ReadonlyArray<string>,
+): string {
+	const digest = createHash("sha256").update("maligator-verification-source-v1\0");
+	for (const file of files) {
+		const absolute = path.join(root, file);
+		let contents: Buffer;
+		let mode: number;
+		try {
+			const stat = lstatSync(absolute);
+			mode = stat.isSymbolicLink() ? 0o120000 : stat.mode & 0o111;
+			contents = stat.isSymbolicLink()
+				? Buffer.from(readlinkSync(absolute))
+				: readFileSync(absolute);
+		} catch (error) {
+			if (!(error instanceof Error && "code" in error && error.code === "ENOENT"))
+				throw error;
+			mode = -1;
+			contents = Buffer.alloc(0);
+		}
+		digest.update(`${file}\0${mode}\0${contents.length}\0`).update(contents);
+	}
+	return digest.digest("hex");
+}
+
 export function captureVerificationSource(root: string): VerificationSource {
 	const git = (...args: Array<string>) =>
 		execFileSync("git", args, {
@@ -35,28 +61,9 @@ export function captureVerificationSource(root: string): VerificationSource {
 				.filter(Boolean),
 		),
 	].sort();
-	const digest = createHash("sha256").update("maligator-verification-source-v1\0");
-	for (const file of files) {
-		const absolute = path.join(root, file);
-		let contents: Buffer;
-		let mode: number;
-		try {
-			const stat = lstatSync(absolute);
-			mode = stat.isSymbolicLink() ? 0o120000 : stat.mode & 0o111;
-			contents = stat.isSymbolicLink()
-				? Buffer.from(readlinkSync(absolute))
-				: readFileSync(absolute);
-		} catch (error) {
-			if (!(error instanceof Error && "code" in error && error.code === "ENOENT"))
-				throw error;
-			mode = -1;
-			contents = Buffer.alloc(0);
-		}
-		digest.update(`${file}\0${mode}\0${contents.length}\0`).update(contents);
-	}
 	return {
 		revision,
-		digest: digest.digest("hex"),
+		digest: verificationSourceDigest(root, files),
 		dirty: git("status", "--porcelain=v1", "--untracked-files=normal", "-z").length > 0,
 		files: files.length,
 	};

@@ -144,8 +144,15 @@ warmup. The runner stops its child process group at the deadline and allows a sh
 shutdown grace period before forcing termination. Exit 2 means failed or incomplete,
 never a passing performance claim. Completed snapshots and pairs remain available;
 single-family self-compile comparisons also checkpoint between stages. Resume with
-the same command plus `--resume <run-directory>` and a fresh time budget. Source
-content (including untracked files), revision, options, and host identity must match.
+the same command plus `--resume <run-directory>` and a fresh time budget. Comparisons
+capture the baseline and candidate source, including dirty tracked files and
+non-ignored untracked files, under the run directory before warmup. Installed
+candidate dependencies are copied there; an identical baseline lockfile shares that
+copy, while a different lockfile installs its own dependencies. Checkout edits can
+continue during the run. Resume reuses the captured revisions and content, even if
+the checkout or named baseline ref has moved; options and host identity must match.
+Changes to captured source invalidate the run. Old reports without captured inputs
+cannot resume.
 Only complete pairs contribute metrics; a partial pair is retained but excluded.
 
 ### Bounded native runtime and compiler checks
@@ -219,13 +226,14 @@ does not update benchmark baselines. These checks complement the ordinary test
 gate; use the raw variability and completeness records when assessing a change.
 Classified metrics absent from any source/sample, such as native-build RSS on cache hits,
 are listed under `unpairedMetrics` and excluded rather than treated as zero.
-Source changes during execution invalidate resumption, even if later reverted.
+Captured source changes during execution invalidate resumption, even if later reverted.
 Run `env:check` and inspect cache activity before each resume, since power and CPU
 load can change between invocations.
 
-On completion the runner removes its exported baseline source while retaining the
-reports and snapshots. Interrupted runs retain that source and self-compile scratch
-inside the run directory for resumption. After confirming the run has stopped,
+On completion the runner removes both source copies and their dependencies while
+retaining reports and snapshots. Interrupted runs, including incomplete HTTP GC
+diagnostics, retain the source copies and self-compile scratch inside the run
+directory for resumption. After confirming the run has stopped,
 removing its directory discards only that run's evidence and scratch. Shared native
 artifacts remain under normal cache management.
 

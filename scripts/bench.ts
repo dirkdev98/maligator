@@ -333,8 +333,22 @@ function hashBytes(value: string | Uint8Array): string {
 
 function benchmarkSource(): NonNullable<BenchmarkSnapshot["source"]> {
 	const archivedCommit = process.env.MAL_INTERNAL_BENCH_SOURCE_COMMIT;
+	const archivedDigest = process.env.MAL_INTERNAL_BENCH_SOURCE_DIGEST;
+	const archivedDirty = process.env.MAL_INTERNAL_BENCH_SOURCE_DIRTY;
 	if (archivedCommit !== undefined && !/^[0-9a-f]{40}$/.test(archivedCommit)) {
 		throw new Error("invalid archived benchmark source commit");
+	}
+	if (
+		archivedDigest !== undefined &&
+		(!/^[0-9a-f]{64}$/.test(archivedDigest) || archivedCommit === undefined)
+	) {
+		throw new Error("invalid archived benchmark source digest");
+	}
+	if (
+		archivedDirty !== undefined &&
+		(!["true", "false"].includes(archivedDirty) || archivedDigest === undefined)
+	) {
+		throw new Error("invalid archived benchmark source dirty flag");
 	}
 	const commit =
 		archivedCommit ??
@@ -366,8 +380,8 @@ function benchmarkSource(): NonNullable<BenchmarkSnapshot["source"]> {
 	}
 	return Object.freeze({
 		commit,
-		dirty: dirtyPatch.length > 0,
-		digest: hashBytes(`${commit}\0${dirtyPatch}`),
+		dirty: archivedDirty === undefined ? dirtyPatch.length > 0 : archivedDirty === "true",
+		digest: archivedDigest ?? hashBytes(`${commit}\0${dirtyPatch}`),
 		benchmarkDigest: benchmarkDigest.digest("hex"),
 		configurationDigest: hashBytes(
 			JSON.stringify({
@@ -2066,6 +2080,8 @@ if (options.plan) {
 								(options.maxPairs ?? Math.max(options.runs, 15)) * 2,
 							budgetSeconds: options.budgetSeconds ?? null,
 							resumeDirectory: options.resumeDirectory ?? null,
+							capturedSource: true,
+							copiesInstalledDependencies: true,
 							httpGcDiagnostic: requestedLanes.includes("http")
 								? { workload: "routes", freshPairs: 1, afterOrdinaryPairs: true }
 								: null,

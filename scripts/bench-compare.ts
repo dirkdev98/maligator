@@ -1,7 +1,11 @@
 import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
+	chmodSync,
 	closeSync,
+	constants,
+	copyFileSync,
+	cpSync,
 	existsSync,
 	mkdirSync,
 	mkdtempSync,
@@ -23,6 +27,10 @@ import {
 	runHttpSnapshot,
 } from "./bench-http-ordinary.ts";
 import type { HttpPreparation } from "./bench-http-ordinary.ts";
+import {
+	captureVerificationSource,
+	verificationSourceDigest,
+} from "./verification-source.ts";
 
 export const BENCHMARK_LANE_RULES: ReadonlyArray<{
 	pattern: RegExp;
@@ -261,9 +269,10 @@ function exportBase(
 	baseRef: string,
 	repository: string,
 	destination: string,
+	candidate: string,
 	deadline: number,
 ): void {
-	const currentLock = readFileSync(path.join(repository, "package-lock.json"), "utf-8");
+	const currentLock = readFileSync(path.join(candidate, "package-lock.json"), "utf-8");
 	const baseLock = command("git", ["show", `${baseRef}:package-lock.json`], {
 		cwd: repository,
 		deadline,
@@ -292,13 +301,86 @@ function exportBase(
 	command("tar", ["-xf", archive, "-C", base], { deadline });
 	if (currentLock !== baseLock) {
 		command("npm", ["ci", "--no-audit", "--no-fund"], { cwd: base, deadline });
-	} else if (existsSync(path.join(repository, "node_modules"))) {
+	} else if (existsSync(path.join(candidate, "node_modules"))) {
 		symlinkSync(
-			path.join(repository, "node_modules"),
+			path.join(candidate, "node_modules"),
 			path.join(base, "node_modules"),
 			"dir",
 		);
 	}
+}
+
+interface SourceSnapshot {
+	files: Array<string>;
+	digest: string;
+}
+
+function exportCandidate(
+	repository: string,
+	candidate: string,
+	expectedDigest: string,
+	deadline: number,
+): SourceSnapshot {
+	const files = [
+		...new Set(
+			command("git", ["ls-files", "--cached", "--others", "--exclude-standard", "-z"], {
+				cwd: repository,
+				deadline,
+			})
+				.split("\0")
+				.filter(Boolean),
+		),
+	].sort();
+	rmSync(candidate, { recursive: true, force: true });
+	mkdirSync(candidate, { recursive: true });
+	for (const file of files) {
+		remainingTime(deadline);
+		const source = path.join(repository, file);
+		let stat: ReturnType<typeof lstatSync>;
+		try {
+			stat = lstatSync(source);
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+			throw error;
+		}
+		const target = path.join(candidate, file);
+		mkdirSync(path.dirname(target), { recursive: true });
+		if (stat.isSymbolicLink()) {
+			const link = readlinkSync(source);
+			const relative = path.relative(
+				repository,
+				path.resolve(path.dirname(source), link),
+			);
+			if (
+				path.isAbsolute(link) ||
+				relative === ".." ||
+				relative.startsWith(`..${path.sep}`)
+			)
+				throw new Error(
+					`benchmark source symlink must stay within the captured tree: ${file}`,
+				);
+			symlinkSync(link, target);
+		} else if (stat.isFile()) {
+			copyFileSync(source, target, constants.COPYFILE_FICLONE);
+			chmodSync(target, stat.mode);
+		} else throw new Error(`unsupported benchmark source entry: ${file}`);
+	}
+	if (
+		verificationSourceDigest(candidate, files) !== expectedDigest ||
+		performanceSourceIdentity(repository).digest !== expectedDigest
+	)
+		throw new Error("working source changed while capturing the benchmark candidate");
+	const dependencies = path.join(repository, "node_modules");
+	if (existsSync(dependencies)) {
+		cpSync(dependencies, path.join(candidate, "node_modules"), {
+			recursive: true,
+			mode: constants.COPYFILE_FICLONE,
+			preserveTimestamps: true,
+			verbatimSymlinks: true,
+		});
+	}
+	remainingTime(deadline);
+	return { files, digest: expectedDigest };
 }
 
 export interface ComparisonOptions {
@@ -335,6 +417,7 @@ interface ComparisonIdentity {
 	dependencyLocks: { base: string; head: string };
 	headCommit: string;
 	headDigest: string;
+	headDirty: boolean;
 	lanes: Array<string>;
 	pairs: number;
 	maxPairs: number;
@@ -351,24 +434,12 @@ interface ComparisonIdentity {
 export function performanceSourceIdentity(repository: string): {
 	commit: string;
 	digest: string;
+	dirty: boolean;
 } {
-	const commit = command("git", ["rev-parse", "HEAD"], { cwd: repository }).trim();
-	const digest = createHash("sha256").update(commit);
-	digest.update(command("git", ["diff", "--binary", "HEAD"], { cwd: repository }));
-	const untracked = command("git", ["ls-files", "--others", "--exclude-standard", "-z"], {
-		cwd: repository,
-	})
-		.split("\0")
-		.filter(Boolean)
-		.sort();
-	for (const file of untracked) {
-		const absolute = path.join(repository, file);
-		const contents = lstatSync(absolute).isSymbolicLink()
-			? Buffer.from(readlinkSync(absolute))
-			: readFileSync(absolute);
-		digest.update(`${file}\0${contents.length}\0`).update(contents);
-	}
-	return { commit, digest: digest.digest("hex") };
+	const source = captureVerificationSource(repository);
+	if (source.revision === null)
+		throw new Error("benchmark source requires a committed revision");
+	return { commit: source.revision, digest: source.digest, dirty: source.dirty };
 }
 
 function writeJson(file: string, value: unknown): void {
@@ -392,7 +463,7 @@ async function runLoggedCommand(
 	log: string,
 	deadline: number,
 	scratchDirectory: string,
-	sourceCommit?: string,
+	source?: { commit: string; digest: string; dirty: boolean },
 ): Promise<void> {
 	if (performance.now() >= deadline)
 		throw new ComparisonInterrupted("time budget exhausted");
@@ -408,9 +479,13 @@ async function runLoggedCommand(
 					TMP: scratchDirectory,
 					TEMP: scratchDirectory,
 					NO_COLOR: "true",
-					...(sourceCommit === undefined
+					...(source === undefined
 						? {}
-						: { MAL_INTERNAL_BENCH_SOURCE_COMMIT: sourceCommit }),
+						: {
+								MAL_INTERNAL_BENCH_SOURCE_COMMIT: source.commit,
+								MAL_INTERNAL_BENCH_SOURCE_DIGEST: source.digest,
+								MAL_INTERNAL_BENCH_SOURCE_DIRTY: String(source.dirty),
+							}),
 				},
 				stdio: ["ignore", descriptor, descriptor],
 				detached: process.platform !== "win32",
@@ -479,7 +554,7 @@ async function runSnapshot(
 	runDirectory: string,
 	label: string,
 	deadline: number,
-	sourceCommit?: string,
+	source?: { commit: string; digest: string; dirty: boolean },
 ): Promise<unknown> {
 	const output = path.join(runDirectory, `${label}.json`);
 	if (existsSync(output)) return JSON.parse(readFileSync(output, "utf8")) as unknown;
@@ -512,7 +587,7 @@ async function runSnapshot(
 			path.join(runDirectory, `${label}.log`),
 			deadline,
 			scratchDirectory,
-			sourceCommit,
+			source,
 		);
 		if (existsSync(pendingOutput)) {
 			JSON.parse(readFileSync(pendingOutput, "utf8"));
@@ -575,13 +650,43 @@ export async function runBenchmarkComparison(options: ComparisonOptions): Promis
 			? Infinity
 			: started + options.budgetSeconds * 1000;
 	const repository = path.resolve(options.repository ?? process.cwd());
-	const head = performanceSourceIdentity(repository);
-	const baseCommit = command("git", ["rev-parse", options.baseRef], {
-		cwd: repository,
-	}).trim();
+	const previous =
+		options.resumeDirectory === undefined
+			? undefined
+			: (JSON.parse(
+					readFileSync(path.join(options.resumeDirectory, "report.json"), "utf8"),
+				) as {
+					schema: number;
+					identity: ComparisonIdentity;
+					resumeAllowed: boolean;
+					baseRef: string;
+				});
+	if (
+		previous !== undefined &&
+		(previous.schema !== 3 ||
+			previous.resumeAllowed !== true ||
+			previous.identity === undefined)
+	) {
+		throw new Error(
+			"comparison source, options, or host changed, or captured inputs are unavailable; start a new run",
+		);
+	}
+	const head =
+		previous === undefined
+			? performanceSourceIdentity(repository)
+			: {
+					commit: previous.identity.headCommit,
+					digest: previous.identity.headDigest,
+					dirty: previous.identity.headDirty,
+				};
+	const baseCommit =
+		previous?.identity.baseCommit ??
+		command("git", ["rev-parse", options.baseRef], {
+			cwd: repository,
+		}).trim();
 	const identity: ComparisonIdentity = {
 		baseCommit,
-		dependencyLocks: {
+		dependencyLocks: previous?.identity.dependencyLocks ?? {
 			base: createHash("sha256")
 				.update(
 					command("git", ["show", `${baseCommit}:package-lock.json`], {
@@ -595,6 +700,7 @@ export async function runBenchmarkComparison(options: ComparisonOptions): Promis
 		},
 		headCommit: head.commit,
 		headDigest: head.digest,
+		headDirty: head.dirty,
 		lanes: options.lanes,
 		pairs: options.pairs,
 		maxPairs: options.maxPairs ?? Math.max(options.pairs, 15),
@@ -639,14 +745,10 @@ export async function runBenchmarkComparison(options: ComparisonOptions): Promis
 			: path.resolve(options.resumeDirectory);
 	const reportPath = path.join(runDirectory, "report.json");
 	const ordinaryReportPath = path.join(runDirectory, "ordinary-report.json");
-	if (options.resumeDirectory !== undefined) {
-		const previous = JSON.parse(readFileSync(reportPath, "utf8")) as {
-			identity?: ComparisonIdentity;
-			resumeAllowed?: boolean;
-		};
+	if (previous !== undefined) {
 		if (
-			previous.resumeAllowed === false ||
-			JSON.stringify(previous.identity) !== JSON.stringify(identity)
+			previous.baseRef !== options.baseRef ||
+			!isDeepStrictEqual(previous.identity, identity)
 		) {
 			throw new Error(
 				`comparison source, options, or host changed; start a new run instead of resuming ${reportPath}`,
@@ -654,6 +756,11 @@ export async function runBenchmarkComparison(options: ComparisonOptions): Promis
 		}
 	}
 	const base = path.join(runDirectory, "base");
+	const candidate = path.join(runDirectory, "head");
+	const headReady = path.join(runDirectory, "head-ready.json");
+	const baseReady = path.join(runDirectory, "base-ready.json");
+	let headSnapshot: SourceSnapshot | undefined;
+	let baseSnapshot: SourceSnapshot | undefined;
 	let httpPreparation: HttpPreparation | undefined;
 	const samples = new Map<string, Array<MetricSample>>();
 	const unpairedMetrics = new Set<string>();
@@ -674,14 +781,14 @@ export async function runBenchmarkComparison(options: ComparisonOptions): Promis
 		status: identity.httpGcDiagnostics ? "pending" : "not-requested",
 		results: {},
 	};
-	let resumeAllowed = true;
+	let resumeAllowed = previous !== undefined;
 	const persist = (
 		status: "running" | "complete" | "incomplete" | "failed",
 		error?: string,
 		file = reportPath,
 	) => {
 		writeJson(file, {
-			schema: 2,
+			schema: 3,
 			status,
 			complete: status === "complete",
 			ordinaryComplete,
@@ -700,11 +807,15 @@ export async function runBenchmarkComparison(options: ComparisonOptions): Promis
 		});
 	};
 	const assertSource = () => {
-		if (performanceSourceIdentity(repository).digest !== head.digest) {
+		if (
+			headSnapshot === undefined ||
+			baseSnapshot === undefined ||
+			headSnapshot.digest !== head.digest ||
+			verificationSourceDigest(candidate, headSnapshot.files) !== headSnapshot.digest ||
+			verificationSourceDigest(base, baseSnapshot.files) !== baseSnapshot.digest
+		) {
 			resumeAllowed = false;
-			throw new Error(
-				"working source changed during comparison; results cannot be combined",
-			);
+			throw new Error("captured benchmark source changed; results cannot be combined");
 		}
 	};
 	const snapshot = async (label: string, isBase: boolean) => {
@@ -713,13 +824,15 @@ export async function runBenchmarkComparison(options: ComparisonOptions): Promis
 		assertSource();
 		if (!options.lanes.includes("http")) {
 			const result = await runSnapshot(
-				isBase ? base : repository,
+				isBase ? base : candidate,
 				options.lanes,
 				isBase ? identity.baseArgs : identity.headArgs,
 				runDirectory,
 				label,
 				deadline,
-				isBase ? identity.baseCommit : undefined,
+				isBase
+					? { commit: identity.baseCommit, digest: baseSnapshot!.digest, dirty: false }
+					: head,
 			);
 			assertSource();
 			activeSnapshot = undefined;
@@ -734,13 +847,19 @@ export async function runBenchmarkComparison(options: ComparisonOptions): Promis
 				ordinaryLanes.length === 0
 					? {}
 					: await runSnapshot(
-							isBase ? base : repository,
+							isBase ? base : candidate,
 							ordinaryLanes,
 							isBase ? identity.baseArgs : identity.headArgs,
 							runDirectory,
 							`${label}-other`,
 							deadline,
-							isBase ? identity.baseCommit : undefined,
+							isBase
+								? {
+										commit: identity.baseCommit,
+										digest: baseSnapshot!.digest,
+										dirty: false,
+									}
+								: head,
 						);
 			const args = isBase ? identity.baseArgs : identity.headArgs;
 			const secondsIndex = args.indexOf("--http-seconds");
@@ -751,7 +870,7 @@ export async function runBenchmarkComparison(options: ComparisonOptions): Promis
 				throw new Error("HTTP binaries were not prepared");
 			const http = await runHttpSnapshot(
 				httpPreparation.binaries[isBase ? "base" : "head"],
-				repository,
+				candidate,
 				path.join(runDirectory, "http-raw", label),
 				seconds,
 				deadline,
@@ -768,12 +887,32 @@ export async function runBenchmarkComparison(options: ComparisonOptions): Promis
 	try {
 		if (performance.now() >= deadline)
 			throw new ComparisonInterrupted("time budget exhausted");
-		const baseReady = path.join(runDirectory, "base-ready.json");
+		if (existsSync(headReady)) {
+			headSnapshot = JSON.parse(readFileSync(headReady, "utf8")) as SourceSnapshot;
+		} else {
+			if (previous !== undefined)
+				throw new Error("captured benchmark candidate is unavailable; start a new run");
+			headSnapshot = exportCandidate(repository, candidate, head.digest, deadline);
+			writeJson(headReady, headSnapshot);
+		}
+		resumeAllowed = true;
 		if (!existsSync(baseReady)) {
 			rmSync(base, { recursive: true, force: true });
-			exportBase(identity.baseCommit, repository, runDirectory, deadline);
-			writeJson(baseReady, { commit: identity.baseCommit });
+			exportBase(identity.baseCommit, repository, runDirectory, candidate, deadline);
+			const files = command(
+				"git",
+				["ls-tree", "-r", "--name-only", "-z", identity.baseCommit],
+				{ cwd: repository, deadline },
+			)
+				.split("\0")
+				.filter(Boolean)
+				.sort();
+			baseSnapshot = { files, digest: verificationSourceDigest(base, files) };
+			writeJson(baseReady, baseSnapshot);
+		} else {
+			baseSnapshot = JSON.parse(readFileSync(baseReady, "utf8")) as SourceSnapshot;
 		}
+		assertSource();
 		if (options.lanes.includes("http")) {
 			if (!isDeepStrictEqual(identity.baseArgs, identity.headArgs)) {
 				throw new Error(
@@ -782,7 +921,7 @@ export async function runBenchmarkComparison(options: ComparisonOptions): Promis
 			}
 			httpPreparation = await prepareHttpBinaries(
 				base,
-				repository,
+				candidate,
 				runDirectory,
 				deadline,
 			);
@@ -868,7 +1007,7 @@ export async function runBenchmarkComparison(options: ComparisonOptions): Promis
 						? (JSON.parse(readFileSync(saved, "utf8")) as unknown)
 						: await runHttpGcDiagnostic(
 								httpPreparation.binaries[revision].express,
-								repository,
+								candidate,
 								path.join(runDirectory, "http-gc-raw", revision),
 								seconds,
 								deadline,
@@ -890,10 +1029,17 @@ export async function runBenchmarkComparison(options: ComparisonOptions): Promis
 				persist("complete");
 			}
 		}
-		rmSync(base, { recursive: true, force: true });
-		rmSync(path.join(runDirectory, "base.tar"), { force: true });
-		rmSync(baseReady, { force: true });
-		rmSync(path.join(runDirectory, "http-build"), { recursive: true, force: true });
+		if (
+			httpGcDiagnostics.status !== "failed" &&
+			httpGcDiagnostics.status !== "incomplete"
+		) {
+			for (const directory of [base, candidate, path.join(runDirectory, "http-build")])
+				rmSync(directory, { recursive: true, force: true });
+			for (const file of [baseReady, headReady, path.join(runDirectory, "base.tar")])
+				rmSync(file, { force: true });
+			resumeAllowed = false;
+			persist("complete");
+		}
 		const metrics = comparisonMetrics(samples);
 		for (const metric of metrics) {
 			console.log(
