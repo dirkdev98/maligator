@@ -339,6 +339,92 @@ describe("Core IR", () => {
 		);
 	});
 
+	it.each([false, true])(
+		"preserves a successful private read across a read-only call transfer: %s",
+		(knownReadOnly) => {
+			const program = new CoreProgram(coreOpcodeRegistry);
+			const builder = new CoreFunctionBuilder(program, { parameterCount: 3 });
+			const entry = builder.createBlock([
+				{ representation: "boxed" },
+				{ representation: "boxed" },
+				{ representation: "boxed" },
+			]);
+			const receiver = builder.blockParameterValue(entry, 0);
+			const key = builder.blockParameterValue(entry, 1);
+			const callee = builder.blockParameterValue(entry, 2);
+			builder.appendInstruction(entry, "loadPrivate", [receiver, key]);
+			const first = builder.bodyInstructionIds(entry).at(-1)!;
+			builder.appendInstruction(entry, "call", [callee, receiver]);
+			const call = builder.bodyInstructionIds(entry).at(-1)!;
+			const [value] = builder.appendInstruction(entry, "loadPrivate", [receiver, key]);
+			const second = builder.bodyInstructionIds(entry).at(-1)!;
+			builder.setTerminator(entry, { kind: "return", value: value! });
+			const memory = analyzeCoreMemoryVersions(program, builder.finish(entry).function, {
+				instructionTransfers: knownReadOnly
+					? new Map([
+							[
+								call,
+								{
+									accesses: [],
+									residualEffects: { ...CORE_NO_EFFECTS, mayGc: true, mayThrow: true },
+								},
+							],
+						])
+					: undefined,
+			});
+			expect(memory.readsEquivalent(first, second)).toBe(knownReadOnly);
+		},
+	);
+
+	it("preserves slot values only on the successful edge of a private read", () => {
+		const program = new CoreProgram(coreOpcodeRegistry, { globalCount: 1 });
+		const builder = new CoreFunctionBuilder(program, { parameterCount: 2 });
+		const entry = builder.createBlock([
+			{ representation: "boxed" },
+			{ representation: "boxed" },
+		]);
+		const normal = builder.createBlock();
+		const handler = builder.createBlock([{ representation: "boxed", role: "exception" }]);
+		builder.setHandler(entry, handler, []);
+		const [stored] = builder.appendInstruction(entry, "createNumber", [], {
+			attributes: { value: 7 },
+		});
+		builder.appendInstruction(entry, "storeGlobal", [stored!], {
+			attributes: { index: 0 },
+		});
+		builder.appendInstruction(entry, "loadPrivate", [
+			builder.blockParameterValue(entry, 0),
+			builder.blockParameterValue(entry, 1),
+		]);
+		builder.setTerminator(entry, {
+			kind: "jump",
+			edge: { block: normal, arguments: [] },
+		});
+		const reads = [normal, handler].map((block) => {
+			const [loaded] = builder.appendInstruction(block, "loadGlobal", [], {
+				attributes: { index: 0 },
+			});
+			const instruction = builder.bodyInstructionIds(block).at(-1)!;
+			builder.setTerminator(block, { kind: "return", value: loaded! });
+			return instruction;
+		});
+		const functionId = builder.finish(entry).function;
+		const memory = analyzeCoreMemoryVersions(program, functionId);
+		const location = { kind: "global-slot", slot: 0 } as const;
+		expect(memory.valueForRead(reads[0]!, location)).toBe(stored);
+		expect(memory.valueForRead(reads[1]!, location)).toBeUndefined();
+		expect(memory.readsEquivalent(reads[0]!, reads[1]!)).toBe(false);
+		const fn = program.function(functionId);
+		const privateRead = builder.bodyInstructionIds(entry).at(-1)!;
+		expect(
+			coreOpcodeRegistry.byId(fn.instructionOpcode(privateRead)).effects,
+		).toMatchObject({
+			callsUserCode: true,
+			mayThrow: true,
+			mayGc: true,
+		});
+	});
+
 	it.each(
 		[false, true].flatMap((prepared) =>
 			["body", "data"].map((change) => ({ prepared, change })),

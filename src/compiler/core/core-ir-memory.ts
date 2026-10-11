@@ -402,6 +402,17 @@ function sameSlotLocation(
 const LOCAL_MEMORY_READ_UNRESOLVED = Symbol("local-memory-read-unresolved");
 type LocalMemoryReadValue = CoreValueId | undefined | typeof LOCAL_MEMORY_READ_UNRESOLVED;
 
+function normalMemoryEffects(
+	fn: CoreFunctionStore,
+	instruction: CoreInstructionId,
+): CoreInstructionEffects {
+	const effects = coreInstructionEffects(fn, instruction);
+	// Private accessors use separate calls; failure effects enter distinct exceptional versions.
+	return fn.instructionOpcodeName(instruction) === "loadPrivate"
+		? { ...effects, callsUserCode: false, writes: [] }
+		: effects;
+}
+
 function localMemoryRead(
 	fn: CoreFunctionStore,
 	cfg: CoreControlFlow,
@@ -442,7 +453,7 @@ function localMemoryRead(
 			continue;
 		}
 		instructions++;
-		const effects = coreInstructionEffects(fn, instruction);
+		const effects = normalMemoryEffects(fn, instruction);
 		if (
 			!effects.callsUserCode &&
 			!effects.maySuspend &&
@@ -599,7 +610,7 @@ function prepareMemoryVersions(
 					instructionOrder[instruction] = order;
 					const transfer = instructionTransfers?.get(instruction);
 					const effects =
-						transfer?.residualEffects ?? coreInstructionEffects(fn, instruction);
+						transfer?.residualEffects ?? normalMemoryEffects(fn, instruction);
 					if (
 						transfer !== undefined &&
 						(effects.callsUserCode || effects.maySuspend || effects.writes.length > 0)
@@ -866,7 +877,7 @@ function prepareMemoryVersions(
 				} else {
 					const transfer = instructionTransfers?.get(instruction);
 					const effects =
-						transfer?.residualEffects ?? coreInstructionEffects(fn, instruction);
+						transfer?.residualEffects ?? normalMemoryEffects(fn, instruction);
 					if (partition.kind === "domain") {
 						reads = domainReaders.get(partition.domain)?.has(instruction) ?? false;
 						const accesses =

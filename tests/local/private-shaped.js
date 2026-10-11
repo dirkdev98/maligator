@@ -122,4 +122,111 @@ check(
 	array.read() === 12 && array.join(",") === "1,2,3,4",
 );
 
+class PrivateReference extends ReturnReceiver {
+	#columns = [11, 13];
+	#other = [17];
+
+	static same(receiver) {
+		const first = receiver.#columns;
+		const second = receiver.#columns;
+		const third = receiver.#columns;
+		return first === second && second === third;
+	}
+
+	static distinguish(left, right) {
+		const first = left.#columns;
+		return first !== right.#columns && first !== left.#other;
+	}
+
+	static replace(receiver, replacement) {
+		const first = receiver.#columns;
+		receiver.#columns = replacement;
+		return first !== receiver.#columns && receiver.#columns === replacement;
+	}
+
+	static around(receiver, callback) {
+		const first = receiver.#columns;
+		callback();
+		const second = receiver.#columns;
+		return first !== second;
+	}
+
+	static retry(receiver, stamp) {
+		let failures = 0;
+		try {
+			receiver.#columns;
+		} catch {
+			failures++;
+			stamp();
+		}
+		const first = receiver.#columns;
+		const second = receiver.#columns;
+		return failures === 1 && first === second && second[0] === 11;
+	}
+
+	get value() {
+		this.#columns = [29];
+		return 0;
+	}
+
+	readAcrossGetter() {
+		const first = this.#columns;
+		this.value;
+		return first !== this.#columns && this.#columns[0] === 29;
+	}
+
+	get #changing() {
+		this.#columns = [this.#columns[0] + 1];
+		return this.#columns;
+	}
+
+	readPrivateGetter() {
+		const first = this.#changing;
+		const second = this.#changing;
+		return first !== second && second[0] === first[0] + 1;
+	}
+}
+
+const reference = new PrivateReference();
+check(
+	"successful private loads retain their reference",
+	PrivateReference.same(reference),
+);
+check(
+	"private load identity includes receiver and name",
+	PrivateReference.distinguish(reference, new PrivateReference()),
+);
+check(
+	"private stores invalidate the reference",
+	PrivateReference.replace(reference, [19]),
+);
+check(
+	"callbacks may replace the private backing object",
+	PrivateReference.around(reference, () => PrivateReference.replace(reference, [23])),
+);
+check("ordinary getters may replace private state", reference.readAcrossGetter());
+check("private getters execute every time", reference.readPrivateGetter());
+const unstamped = {};
+check(
+	"failed private loads cannot supply a successful retry",
+	PrivateReference.retry(unstamped, () => new PrivateReference(unstamped)),
+);
+let privateProxyTraps = 0;
+const privateProxy = new Proxy(reference, {
+	get() {
+		privateProxyTraps++;
+		return undefined;
+	},
+});
+let privateProxyThrew = false;
+try {
+	PrivateReference.same(privateProxy);
+} catch (error) {
+	privateProxyThrew = error instanceof TypeError;
+}
+check(
+	"private loads reject an unbranded proxy without traps",
+	privateProxyThrew && privateProxyTraps === 0,
+);
+
 console.log("private-shaped PASS");

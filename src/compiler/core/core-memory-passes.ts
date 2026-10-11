@@ -144,13 +144,15 @@ function isReusableMemoryRead(
 	fn: CoreFunctionStore,
 	instruction: CoreInstructionId,
 ): boolean {
+	if (fn.instructionKind(instruction) !== "operation") return false;
+	const opcode = fn.instructionOpcodeName(instruction);
+	// Private accessors lower to separate calls; a successful raw load proves its brand check.
+	if (opcode === "loadPrivate") return true;
 	if (
-		fn.instructionKind(instruction) !== "operation" ||
 		!effectsPermitRemoval(fn, instruction) ||
 		coreInstructionEffects(fn, instruction).reads.length === 0
 	)
 		return false;
-	const opcode = fn.instructionOpcodeName(instruction);
 	if (
 		!fn.registry.byId(fn.instructionOpcode(instruction)).discardable &&
 		opcode !== "loadProperty" &&
@@ -932,7 +934,7 @@ const forwardExactMemoryLoads: CoreFunctionPass = {
 	requiredFunctionFeatures: CORE_FUNCTION_HAS_MEMORY_ACCESSES,
 	admission: {
 		predicate:
-			"repeated removable read with identical opcode, attributes, operands and representation",
+			"repeated removable or successful private read with identical inputs and representation",
 		hasOpportunity({ program, function: functionId }) {
 			return hasExactMemoryLoadForwardingOpportunity(program.function(functionId));
 		},
@@ -947,7 +949,8 @@ const forwardExactMemoryLoads: CoreFunctionPass = {
 	run(context) {
 		const { program, item } = context;
 		const fn = program.function(item.function);
-		const control = context.analysis(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS).ordinary();
+		const controlBundle = context.analysis(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS);
+		const control = controlBundle.ordinary();
 		const memory = context.analysis(CORE_LOCAL_MEMORY_VERSIONS_ANALYSIS);
 		interface AvailableRead {
 			readonly instruction: CoreInstructionId;
@@ -968,6 +971,7 @@ const forwardExactMemoryLoads: CoreFunctionPass = {
 				if (!isReusableMemoryRead(fn, instruction)) continue;
 				const result = instructionResultAt(fn, instruction, 0);
 				if (result === undefined) continue;
+				const privateRead = fn.instructionOpcodeName(instruction) === "loadPrivate";
 				const inputHash = coreInstructionInputsHash(fn, instruction);
 				const groups = available.get(inputHash) ?? [];
 				let group = groups.find(
@@ -989,7 +993,7 @@ const forwardExactMemoryLoads: CoreFunctionPass = {
 				}
 				const dominates = (candidate: AvailableRead): boolean =>
 					fn.instructionBlock(candidate.instruction) === block ||
-					control.instructionDominatesBlock(
+					(privateRead ? controlBundle.exceptional() : control).instructionDominatesBlock(
 						fn.instructionBlock(candidate.instruction),
 						block,
 					);

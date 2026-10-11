@@ -34,6 +34,7 @@ import { CORE_MEMORY_PASSES } from "../src/compiler/core/core-memory-passes.ts";
 import { CoreOptimizationReportBuilder } from "../src/compiler/core/core-optimization-report.ts";
 import { CoreFunctionPassScheduler } from "../src/compiler/core/core-pass-manager.ts";
 import { CoreProgram } from "../src/compiler/core/core-store.ts";
+import type { CoreFunctionStore } from "../src/compiler/core/core-store.ts";
 import { optimizeCore } from "../src/compiler/core/optimize.ts";
 import { parseScript } from "../src/compiler/frontend/parser.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
@@ -77,7 +78,164 @@ function program(): CoreProgram {
 	});
 }
 
+function forwardMemoryLoads(core: CoreProgram, fn: CoreFunctionStore): void {
+	const report = new CoreOptimizationReportBuilder(core);
+	const analyses = new CoreAnalysisManager(core, context, report);
+	const pass = CORE_MEMORY_PASSES.find(
+		({ name }) => name === "forward-exact-memory-loads",
+	)!;
+	new CoreFunctionPassScheduler(core, context, analyses, report, fn.id, {
+		optionalMaxRunsPerWorkItem: 1,
+		verification: "per-pass",
+	}).runComponent("memory", [pass]);
+}
+
 describe("Core local memory, provenance, and escape optimization", () => {
+	it("shares the private backing reference after ordinary class lowering", () => {
+		const result = inspectStaticValueFunction(
+			`class PrivateReference {
+				#columns = [];
+				static same(receiver) {
+					const first = receiver.#columns;
+					const second = receiver.#columns;
+					const third = receiver.#columns;
+					return first === second && second === third;
+				}
+			}
+			globalThis.probe = PrivateReference.same;`,
+			"same",
+		);
+		expect(
+			result.core.filter((instruction) => instruction.opcode === "loadPrivate"),
+		).toHaveLength(1);
+	});
+
+	it.each(["same block", "ordinary successor"])(
+		"reuses successful private loads in the %s while retaining the first brand check",
+		(flow) => {
+			const core = program();
+			const builder = new CoreFunctionBuilder(core, { parameterCount: 2 });
+			const entry = builder.createBlock([
+				{ representation: "boxed" },
+				{ representation: "boxed" },
+			]);
+			const receiver = builder.blockParameterValue(entry, 0);
+			const key = builder.blockParameterValue(entry, 1);
+			const [first] = builder.appendInstruction(entry, "loadPrivate", [receiver, key]);
+			const firstInstruction = builder.bodyInstructionIds(entry).at(-1)!;
+			const body = flow === "same block" ? entry : builder.createBlock();
+			if (body !== entry)
+				builder.setTerminator(entry, {
+					kind: "jump",
+					edge: { block: body, arguments: [] },
+				});
+			builder.appendInstruction(body, "loadPrivate", [receiver, key]);
+			const [last] = builder.appendInstruction(body, "loadPrivate", [receiver, key]);
+			builder.setTerminator(body, { kind: "return", value: last! });
+			const fn = core.function(builder.finish(entry).function);
+			forwardMemoryLoads(core, fn);
+			expect(
+				[...fn.instructionIds()].filter(
+					(instruction) =>
+						fn.instructionKind(instruction) === "operation" &&
+						fn.instructionOpcodeName(instruction) === "loadPrivate",
+				),
+			).toEqual([firstInstruction]);
+			expect(inspectCoreTerminatorPayload(fn, fn.blockTerminator(body))).toEqual({
+				kind: "return",
+				value: first,
+			});
+			expect(fn.instructionEffectRefinement(firstInstruction)).toBeUndefined();
+		},
+	);
+
+	it.each([
+		"private store",
+		"unknown call",
+		"ordinary getter",
+		"other receiver",
+		"other private name",
+	])("retains a private load after %s", (change) => {
+		const core = program();
+		const builder = new CoreFunctionBuilder(core, { parameterCount: 3 });
+		const entry = builder.createBlock([
+			{ representation: "boxed" },
+			{ representation: "boxed" },
+			{ representation: "boxed" },
+		]);
+		const receiver = builder.blockParameterValue(entry, 0);
+		const key = builder.blockParameterValue(entry, 1);
+		const other = builder.blockParameterValue(entry, 2);
+		builder.appendInstruction(entry, "loadPrivate", [receiver, key]);
+		if (change === "private store")
+			builder.appendInstruction(entry, "storePrivate", [receiver, key, other]);
+		else if (change === "unknown call")
+			builder.appendInstruction(entry, "call", [other, receiver]);
+		else if (change === "ordinary getter")
+			builder.appendInstruction(entry, "loadPropertyStatic", [receiver], {
+				attributes: { stringIndex: 0 },
+			});
+		const [last] = builder.appendInstruction(entry, "loadPrivate", [
+			change === "other receiver" ? other : receiver,
+			change === "other private name" ? other : key,
+		]);
+		builder.setTerminator(entry, { kind: "return", value: last! });
+		const fn = core.function(builder.finish(entry).function);
+		forwardMemoryLoads(core, fn);
+		expect(
+			[...fn.instructionIds()].filter(
+				(instruction) =>
+					fn.instructionKind(instruction) === "operation" &&
+					fn.instructionOpcodeName(instruction) === "loadPrivate",
+			),
+		).toHaveLength(2);
+		expect(inspectCoreTerminatorPayload(fn, fn.blockTerminator(entry))).toEqual({
+			kind: "return",
+			value: last,
+		});
+	});
+
+	it("does not reuse a private load reached again after its first attempt threw", () => {
+		const core = program();
+		const builder = new CoreFunctionBuilder(core, { parameterCount: 3 });
+		const entry = builder.createBlock([
+			{ representation: "boxed" },
+			{ representation: "boxed" },
+			{ representation: "boxed" },
+		]);
+		const handler = builder.createBlock([{ representation: "boxed", role: "exception" }]);
+		const retry = builder.createBlock();
+		const receiver = builder.blockParameterValue(entry, 0);
+		const key = builder.blockParameterValue(entry, 1);
+		const callback = builder.blockParameterValue(entry, 2);
+		builder.setHandler(entry, handler, []);
+		builder.appendInstruction(entry, "loadPrivate", [receiver, key]);
+		builder.setTerminator(entry, {
+			kind: "jump",
+			edge: { block: retry, arguments: [] },
+		});
+		builder.appendInstruction(handler, "call", [callback, receiver]);
+		builder.setTerminator(handler, {
+			kind: "jump",
+			edge: { block: retry, arguments: [] },
+		});
+		const [last] = builder.appendInstruction(retry, "loadPrivate", [receiver, key]);
+		builder.setTerminator(retry, { kind: "return", value: last! });
+		const fn = core.function(builder.finish(entry).function);
+		forwardMemoryLoads(core, fn);
+		expect(
+			[...fn.instructionIds()].filter(
+				(instruction) =>
+					fn.instructionKind(instruction) === "operation" &&
+					fn.instructionOpcodeName(instruction) === "loadPrivate",
+			),
+		).toHaveLength(2);
+		expect(inspectCoreTerminatorPayload(fn, fn.blockTerminator(retry))).toEqual({
+			kind: "return",
+			value: last,
+		});
+	});
+
 	it.each(["changed key order", "materialized object"] as const)(
 		"refreshes an existing own-slot cache hint after %s",
 		(change) => {
