@@ -205,8 +205,9 @@ deadline uses the same factors. Outer test and queue job budgets remain separate
 ## GitHub Actions
 
 Pull requests and pushes to `main` run the canonical check tier on Linux x64 and the
-smoke tier on macOS ARM. Linux runs four jobs in parallel using the runner's own
-four-worker budget:
+smoke tier on macOS ARM. The active `main` gate finishes while the newest push waits;
+newer pushes replace its pending successor. Pull request updates cancel superseded
+runs. Linux runs four jobs in parallel using the runner's own four-worker budget:
 
 ```sh
 npm run test:check -- --workers 4 --lane quality

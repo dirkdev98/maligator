@@ -659,7 +659,10 @@ contracts or investigates costs still visible after the string follow-ups.
       stub, about 31% of that loop's samples (40 ms alone against Node's 14 ms).
       The 72-byte cache row has no room for three shape, prototype and value
       triples, so extra rows need storage registered for prototype invalidation
-      like the stub's.
+      like the stub's. A two-extra-row experiment preserved the primary probe and
+      binary-size budget, but matched whole-workload compiled results were
+      inconclusive. An isolated three-class loop improved 7% while its monomorphic
+      control regressed 1.3%; resolve that trade-off before shipping site storage.
 - [ ] Forward `fn.apply(this, arguments)` without materializing `arguments`.
       Express's router (`restore`) and type-is build a dictionary arguments object
       per call, about 3% of the Express JSON route's samples. Rest parameters
