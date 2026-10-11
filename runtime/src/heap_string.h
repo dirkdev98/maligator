@@ -105,6 +105,9 @@ MalString *mal_string_new_slice(MalHeap *heap, MalString *parent, usize offset, 
  */
 bool mal_string_new_cons_checked(MalHeap *heap, MalString *left, MalString *right, MalString **out);
 
+// Parts must remain rooted; overflow returns before allocation, and a sole nonempty part may be reused.
+bool mal_string_new_flat_parts_checked(MalHeap *heap, MalString *const *parts, usize count, MalString **out);
+
 /**
  * Allocate a string that TAKES OWNERSHIP of an existing heap-raw buffer (one
  * returned by `mal_heap_alloc_raw`). Eligible UTF-16 input is compacted; other

@@ -3,7 +3,11 @@ import type { CoreCompilationContext } from "../core/core-compilation.ts";
 import { directBuiltinOperationIds } from "../shared/builtin-registry.ts";
 import type { DirectBuiltinOperationId } from "../shared/builtin-registry.ts";
 import { knownBuiltinCallProves } from "../shared/compiler-facts.ts";
-import { MAX_PRECISE_NUMBER_SUM_INPUTS } from "../shared/compiler-instruction.ts";
+import {
+	MAX_PRECISE_NUMBER_SUM_INPUTS,
+	MAX_STRING_CODE_UNITS,
+	MAX_STRING_CONCAT_INPUTS,
+} from "../shared/compiler-instruction.ts";
 import type {
 	CompilerImmediateValue,
 	CompilerInstruction,
@@ -883,6 +887,18 @@ export type BytecodeInstruction =
 			arguments: Array<number>;
 	  }
 	| {
+			opcode: "STRING_CONCAT_LENGTH";
+			dst: number;
+			prefixLength: number;
+			part: number;
+			followingQuasiLength: number;
+	  }
+	| {
+			opcode: "CONCAT_STRINGS";
+			dst: number;
+			arguments: Array<number>;
+	  }
+	| {
 			opcode: "CALL_KNOWN";
 			dst: number;
 			thisValue: number;
@@ -1398,6 +1414,8 @@ export function vmInstructionWriteRegisters(
 }
 
 const VM_REGISTER_USE_FIELDS = [
+	"prefixLength",
+	"part",
 	"src",
 	"value",
 	"cond",
@@ -2073,6 +2091,29 @@ export function validateRuntimeImageMetadata(definition: RuntimeImage): void {
 					)
 				)
 					throw new RangeError("invalid precise sum operands");
+			}
+			if (instruction.opcode === "STRING_CONCAT_LENGTH") {
+				if (
+					!Number.isSafeInteger(instruction.followingQuasiLength) ||
+					instruction.followingQuasiLength < 0 ||
+					instruction.followingQuasiLength > MAX_STRING_CODE_UNITS ||
+					[instruction.dst, instruction.prefixLength, instruction.part].some(
+						(register) =>
+							!Number.isInteger(register) || register < 0 || register >= fn.registerCount,
+					)
+				)
+					throw new RangeError("invalid string concat length operands");
+			}
+			if (instruction.opcode === "CONCAT_STRINGS") {
+				if (
+					instruction.arguments.length < 2 ||
+					instruction.arguments.length > MAX_STRING_CONCAT_INPUTS ||
+					[instruction.dst, ...instruction.arguments].some(
+						(register) =>
+							!Number.isInteger(register) || register < 0 || register >= fn.registerCount,
+					)
+				)
+					throw new RangeError("invalid string concat operands");
 			}
 			if (instruction.opcode === "PREPARED_STRING_COMPARE") {
 				const units = definition.stringConstants[instruction.stringIndex];
@@ -3740,6 +3781,20 @@ function lowerInstructionToBytecodeInstruction(
 		case "preciseNumberSum":
 			return {
 				opcode: "PRECISE_NUMBER_SUM",
+				dst: instruction.registers[0],
+				arguments: instruction.registers.slice(1),
+			};
+		case "stringConcatLength":
+			return {
+				opcode: "STRING_CONCAT_LENGTH",
+				dst: instruction.registers[0],
+				prefixLength: instruction.registers[1],
+				part: instruction.registers[2],
+				followingQuasiLength: instruction.followingQuasiLength,
+			};
+		case "concatStrings":
+			return {
+				opcode: "CONCAT_STRINGS",
 				dst: instruction.registers[0],
 				arguments: instruction.registers.slice(1),
 			};

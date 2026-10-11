@@ -704,6 +704,8 @@ function scalarRepresentation(kind: CoreExactScalarKind): CoreRepresentation {
 }
 
 const SCALAR_PRODUCERS: ReadonlySet<string> = new Set([
+	"stringConcatLength",
+	"concatStrings",
 	"createNumber",
 	"createF64",
 	"createBoolean",
@@ -722,6 +724,8 @@ const SCALAR_PRODUCERS: ReadonlySet<string> = new Set([
 ]);
 
 const SCALAR_CONSUMERS: ReadonlySet<string> = new Set([
+	"stringConcatLength",
+	"concatStrings",
 	"move",
 	"unary",
 	"binary",

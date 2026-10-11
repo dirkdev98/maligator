@@ -686,6 +686,15 @@ typedef struct MalInstruction {
         } precise_number_sum;
 
         struct {
+            i32 dst, prefix_length, part;
+            u32 following_quasi_length;
+        } string_concat_length;
+
+        struct {
+            i32 dst, data_offset;
+        } concat_strings;
+
+        struct {
             i32 dst;
             MalBuiltinError error;
         } builtin_error;

@@ -1,6 +1,7 @@
 import { verifyBuiltinWorldAssumptions } from "../shared/builtin-assumptions.ts";
 import { exactBuiltinCallDescriptor } from "../shared/builtin-registry.ts";
 import type { WorldFacts } from "../shared/compiler-facts.ts";
+import { MAX_STRING_CODE_UNITS } from "../shared/compiler-instruction.ts";
 import { effectSummaryCovers } from "../shared/effect-summary.ts";
 import { isKnownBuiltinError } from "../shared/known-builtin-errors.ts";
 import { knownArgumentModes } from "../shared/known-operations.ts";
@@ -406,7 +407,16 @@ function verifyInstructionRows(
 					) !== "length")
 			)
 				fail("Invalid primitive String length hint");
-			if (descriptor.opcode === "loadPrimordial") {
+			if (descriptor.opcode === "stringConcatLength") {
+				const length = attributes.followingQuasiLength;
+				if (
+					typeof length !== "number" ||
+					!Number.isSafeInteger(length) ||
+					length < 0 ||
+					length > MAX_STRING_CODE_UNITS
+				)
+					fail("Invalid template quasi length");
+			} else if (descriptor.opcode === "loadPrimordial") {
 				const node = getPrimordialCatalog().nodes[attributes.nodeIndex as number];
 				if (node === undefined || (node[2] & 9) === 0)
 					fail(

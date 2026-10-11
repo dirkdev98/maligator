@@ -1484,6 +1484,8 @@ export class CoreStaticValueAnalysis {
 			case "createBigint":
 			case "preparedStringCompare":
 			case "preciseNumberSum":
+			case "stringConcatLength":
+			case "concatStrings":
 			case "loadLocal":
 			case "loadGlobal":
 			case "loadCaptured":
@@ -1599,7 +1601,12 @@ export class CoreStaticValueAnalysis {
 					"bigint",
 				);
 		}
-		if (opcode === "preparedStringCompare" || opcode === "preciseNumberSum")
+		if (
+			opcode === "preparedStringCompare" ||
+			opcode === "preciseNumberSum" ||
+			opcode === "stringConcatLength" ||
+			opcode === "concatStrings"
+		)
 			return immutableStaticValue(
 				value,
 				intern.intern({
@@ -1608,11 +1615,13 @@ export class CoreStaticValueAnalysis {
 					targetContract:
 						opcode === "preciseNumberSum"
 							? "Math.sumPrecise"
-							: "String.prototype.localeCompare",
+							: opcode === "preparedStringCompare"
+								? "String.prototype.localeCompare"
+								: opcode,
 					contentsComplete: false,
 					words: [],
 				}),
-				"number",
+				opcode === "concatStrings" ? "string" : "number",
 			);
 		if (
 			opcode === "loadIntrinsic" &&

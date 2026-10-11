@@ -17,7 +17,7 @@
  */
 
 #define WIRE_MAGIC 0x574c414du // "MALW" little-endian
-#define WIRE_VERSION 69u
+#define WIRE_VERSION 70u
 #define WIRE_FLAG_HAS_DEBUG 1u
 
 typedef enum WireOp {
@@ -839,6 +839,26 @@ static void rd_instruction_operands(Rd *r, MalInstruction *o, I32Builder *side_d
             o->as.precise_number_sum.data_offset = rd_side_single(r, side_data, count);
             return;
         }
+        case WIRE_STRING_CONCAT_LENGTH: {
+            o->opcode = MAL_OP_STRING_CONCAT_LENGTH;
+            o->as.string_concat_length.dst = rd_i32(r);
+            o->as.string_concat_length.prefix_length = rd_i32(r);
+            o->as.string_concat_length.part = rd_i32(r);
+            o->as.string_concat_length.following_quasi_length = rd_u32(r);
+            if (o->as.string_concat_length.following_quasi_length > MAL_STRING_MAX_CODE_UNITS) r->ok = false;
+            return;
+        }
+        case WIRE_CONCAT_STRINGS: {
+            o->opcode = MAL_OP_CONCAT_STRINGS;
+            o->as.concat_strings.dst = rd_i32(r);
+            i32 count = rd_i32(r);
+            if (count < 2 || count > MAL_STRING_CONCAT_MAX_INPUTS) {
+                r->ok = false;
+                return;
+            }
+            o->as.concat_strings.data_offset = rd_side_single(r, side_data, count);
+            return;
+        }
         case WIRE_CALL_KNOWN: {
             o->opcode = MAL_OP_CALL_KNOWN;
             o->as.call_known.dst = rd_i32(r);
@@ -1545,6 +1565,8 @@ static bool mal_loaded_instruction_writes_register(
         MAL_WRITES_DST(MAL_OP_CALL_KNOWN, call_known);
         MAL_WRITES_DST(MAL_OP_BUILTIN_ERROR, builtin_error);
         MAL_WRITES_DST(MAL_OP_PRECISE_NUMBER_SUM, precise_number_sum);
+        MAL_WRITES_DST(MAL_OP_STRING_CONCAT_LENGTH, string_concat_length);
+        MAL_WRITES_DST(MAL_OP_CONCAT_STRINGS, concat_strings);
         MAL_WRITES_DST(MAL_OP_PREPARED_STRING_COMPARE, prepared_string_compare);
         MAL_WRITES_DST(MAL_OP_CONSTRUCT, construct);
         MAL_WRITES_DST(MAL_OP_CATCH, caught);
@@ -2564,6 +2586,16 @@ MalLoadedRuntimeImage *mal_runtime_image_load_with_host_resolver(
             } else if (instruction->opcode == MAL_OP_PRECISE_NUMBER_SUM) {
                 const i32 *data = &fn->instruction_data[instruction->as.precise_number_sum.data_offset];
                 if (instruction->as.precise_number_sum.dst < 0 || instruction->as.precise_number_sum.dst >= fn->register_count) r.ok = false;
+                for (i32 index = 0; r.ok && index < data[0]; index++)
+                    if (data[index + 1] < 0 || data[index + 1] >= fn->register_count) r.ok = false;
+            } else if (instruction->opcode == MAL_OP_STRING_CONCAT_LENGTH) {
+                i32 registers[] = {instruction->as.string_concat_length.dst,
+                    instruction->as.string_concat_length.prefix_length, instruction->as.string_concat_length.part};
+                for (usize index = 0; index < countof(registers); index++)
+                    if (registers[index] < 0 || registers[index] >= fn->register_count) r.ok = false;
+            } else if (instruction->opcode == MAL_OP_CONCAT_STRINGS) {
+                const i32 *data = &fn->instruction_data[instruction->as.concat_strings.data_offset];
+                if (instruction->as.concat_strings.dst < 0 || instruction->as.concat_strings.dst >= fn->register_count) r.ok = false;
                 for (i32 index = 0; r.ok && index < data[0]; index++)
                     if (data[index + 1] < 0 || data[index + 1] >= fn->register_count) r.ok = false;
             } else if (instruction->opcode == MAL_OP_GUARD_BASE_CONSTRUCTOR_LAYOUT) {

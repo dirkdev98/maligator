@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { MAX_STRING_CODE_UNITS } from "../src/compiler/shared/compiler-instruction.ts";
 import {
 	COMPILER_ARTIFACT_MAGIC,
 	COMPILER_ARTIFACT_VERSION,
@@ -6,7 +7,6 @@ import {
 	serializeCompilerArtifact,
 } from "../src/compiler/target/compiler-artifact-codec.ts";
 import {
-	MAX_STRING_CODE_UNITS,
 	deserializeRuntimeImage,
 	readRuntimeImage,
 	readRuntimeFunction,
@@ -949,7 +949,7 @@ describe("program-image-codec", () => {
 
 	it("covers every opcode in the wire table", () => {
 		expect(new Set(WIRE_OPCODES).size).toBe(WIRE_OPCODES.length);
-		expect(WIRE_OPCODES.slice(-21)).toEqual([
+		expect(WIRE_OPCODES.slice(-23)).toEqual([
 			"INIT_GLOBAL_VARS",
 			"CREATE_PRIVATE_NAMES",
 			"INIT_PRIVATE_FIELDS",
@@ -971,7 +971,49 @@ describe("program-image-codec", () => {
 			"BUILTIN_ERROR",
 			"PREPARED_STRING_COMPARE",
 			"PRECISE_NUMBER_SUM",
+			"STRING_CONCAT_LENGTH",
+			"CONCAT_STRINGS",
 		]);
+	});
+
+	it("round-trips template construction and rejects invalid bounds and registers", () => {
+		const withOperation = (replacement: BytecodeInstruction): ProgramImage =>
+			withBytecodeFunctions(definition, [
+				{ ...mainFn, registerCount: 3, positions: [], instructions: [replacement] },
+			]);
+		const length: BytecodeInstruction = {
+			opcode: "STRING_CONCAT_LENGTH",
+			dst: 0,
+			prefixLength: 1,
+			part: 2,
+			followingQuasiLength: 16 * 1024 * 1024,
+		};
+		for (const operation of [
+			length,
+			{ ...length, followingQuasiLength: 0 },
+			{ opcode: "CONCAT_STRINGS", dst: 0, arguments: [1, 2] },
+			{ opcode: "CONCAT_STRINGS", dst: 0, arguments: Array<number>(64).fill(2) },
+		] satisfies Array<BytecodeInstruction>) {
+			const restored = deserializeCompilerArtifact(
+				serializeCompilerArtifact(withOperation(operation), { debugInfo: false }),
+			);
+			expect(restored.runtime.functions[0]!.instructions).toEqual([operation]);
+		}
+		for (const invalid of [
+			{ ...length, prefixLength: -1 },
+			{ ...length, part: 3 },
+			{ ...length, followingQuasiLength: -1 },
+			{ ...length, followingQuasiLength: 0.5 },
+			{ ...length, followingQuasiLength: 16 * 1024 * 1024 + 1 },
+			{ opcode: "CONCAT_STRINGS", dst: 0, arguments: [1] },
+			{ opcode: "CONCAT_STRINGS", dst: 0, arguments: [1, -1] },
+			{ opcode: "CONCAT_STRINGS", dst: 0, arguments: [1, 3] },
+			{ opcode: "CONCAT_STRINGS", dst: 3, arguments: [1, 2] },
+			{ opcode: "CONCAT_STRINGS", dst: 0, arguments: Array<number>(65).fill(2) },
+		] satisfies Array<BytecodeInstruction>)
+			expect(() => serializeCompilerArtifact(withOperation(invalid))).toThrow(
+				/invalid string concat.*operands/,
+			);
 	});
 
 	it("round-trips bounded precise sums and rejects invalid input registers", () => {

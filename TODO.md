@@ -643,16 +643,6 @@ contracts or investigates costs still visible after the string follow-ups.
       A leaf entry keeps its native stack check even when its caller's frame is
       verified: `checked-leaf-entry` enters a leaf from a caller frame large
       enough to exhaust the remaining margin.
-- [ ] Concatenate a template literal's parts in one allocation. Core lowers
-      `${a}:${b}:${c}` to a chain of pairwise `+`, so each step allocates and
-      copies an intermediate string; in the text phase's normalization loop that
-      chain is about a fifth of the samples and the regexp engine about half.
-      Specification string-concatenation cannot fail, so gathering the parts and
-      joining them once moves only the engine's length-limit RangeError. A native
-      fusion of adjacent concatenations must keep every operand rooted across the
-      joined allocation, which pairwise root plans do not promise today. Captures
-      of up to 16 units are copied rather than sliced, so every step already builds
-      an inline string and the chain's cost is its allocations.
 - [ ] Keep three receivers of a polymorphic method site in its own cache. The
       objects phase's `rules[i % 3].quote(order)` hits the site's one inherited row
       for one class in three; the others take the out-of-line probe and the shared

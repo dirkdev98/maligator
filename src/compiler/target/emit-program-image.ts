@@ -477,6 +477,7 @@ function instructionData(fn: RuntimeImage["functions"][number]): {
 				single(index, instruction.arguments, instruction.argumentCount);
 				break;
 			case "PRECISE_NUMBER_SUM":
+			case "CONCAT_STRINGS":
 				single(index, instruction.arguments, instruction.arguments.length);
 				break;
 			case "CONSTRUCT":
@@ -2415,6 +2416,10 @@ function emitInstruction(instruction: BytecodeInstruction, dataOffset?: number) 
 			return `{ .opcode = MAL_OP_BUILTIN_ERROR, .as.builtin_error = { .dst = ${instruction.dst}, .error = MAL_BUILTIN_ERROR_${instruction.error} } }`;
 		case "PRECISE_NUMBER_SUM":
 			return `{ .opcode = MAL_OP_PRECISE_NUMBER_SUM, .as.precise_number_sum = { .dst = ${instruction.dst}, .data_offset = ${sideDataOffset()} } }`;
+		case "STRING_CONCAT_LENGTH":
+			return `{ .opcode = MAL_OP_STRING_CONCAT_LENGTH, .as.string_concat_length = { .dst = ${instruction.dst}, .prefix_length = ${instruction.prefixLength}, .part = ${instruction.part}, .following_quasi_length = ${instruction.followingQuasiLength}u } }`;
+		case "CONCAT_STRINGS":
+			return `{ .opcode = MAL_OP_CONCAT_STRINGS, .as.concat_strings = { .dst = ${instruction.dst}, .data_offset = ${sideDataOffset()} } }`;
 		case "PREPARED_STRING_COMPARE":
 			return `{ .opcode = MAL_OP_PREPARED_STRING_COMPARE, .as.prepared_string_compare = { .dst = ${instruction.dst}, .left = ${instruction.left}, .right = ${instruction.right}, .locale_options = ${instruction.stringIndex}u * 64u + ${instruction.options}u } }`;
 		case "CALL_KNOWN":

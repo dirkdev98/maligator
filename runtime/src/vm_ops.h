@@ -340,6 +340,10 @@ MalValue mal_vm_add(MalVm *vm, MalValue left, MalValue right);
 
 // Inputs are rooted primitive strings; pending throws and length-limit errors are preserved.
 MalValue mal_vm_concat_strings_known(MalVm *vm, MalString *left, MalString *right);
+MalValue mal_vm_string_concat_length(
+    MalVm *vm, MalValue prefix_length, MalValue part, u32 following_quasi_length
+);
+MalValue mal_vm_concat_strings(MalVm *vm, const MalValue *parts, i32 count);
 
 /**
  * Spec OrdinaryHasInstance: non-callable targets answer false, bound
@@ -3551,6 +3555,8 @@ void mal_op_require_coercible(MalCallable *callable, const MalInstruction *instr
 void mal_op_builtin_error(MalCallable *callable, const MalInstruction *instruction);
 void mal_op_prepared_string_compare(MalCallable *callable, const MalInstruction *instruction);
 void mal_op_precise_number_sum(MalCallable *callable, const MalInstruction *instruction);
+void mal_op_string_concat_length(MalCallable *callable, const MalInstruction *instruction);
+void mal_op_concat_strings(MalCallable *callable, const MalInstruction *instruction);
 void mal_op_check_super_class(MalCallable *callable, const MalInstruction *instruction);
 
 void mal_op_create_rest_arguments(MalCallable *callable, const MalInstruction *instruction);

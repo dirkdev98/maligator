@@ -161,8 +161,10 @@ function staticOpcodeKind(opcode: string): CompilerValueKindMask | undefined {
 		case "mathBinaryNumber":
 		case "preparedStringCompare":
 		case "preciseNumberSum":
+		case "stringConcatLength":
 			return COMPILER_VALUE_KIND_NUMBER;
 		case "createString":
+		case "concatStrings":
 			return COMPILER_VALUE_KIND_STRING;
 		case "createBigint":
 			return COMPILER_VALUE_KIND_BIGINT;

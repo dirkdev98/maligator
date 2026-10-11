@@ -133,6 +133,8 @@ const FRESH_RESULTS = new Set([
 ]);
 
 const PRIMITIVE_RESULTS = new Set([
+	"stringConcatLength",
+	"concatStrings",
 	"binary",
 	"createBigint",
 	"createBoolean",

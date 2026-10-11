@@ -6,6 +6,10 @@ import type { KnownArgumentMode } from "./known-operations.ts";
 import type { StaticDataQueryKind } from "./static-data-query.ts";
 
 export const MAX_PRECISE_NUMBER_SUM_INPUTS = 64;
+// Bounded operands limit native and interpreter stack/root scratch.
+export const MAX_STRING_CONCAT_INPUTS = 64;
+// Keep in sync with runtime/src/heap_string.h.
+export const MAX_STRING_CODE_UNITS = 16 * 1024 * 1024;
 
 /** Numeric TypedArray brands whose element access produces a Number. */
 export type CompilerNumericTypedArrayKind =
@@ -447,6 +451,15 @@ type CompilerOperation =
 	| {
 			type: "preciseNumberSum";
 			registers: [number, ...Array<number>];
+	  }
+	| {
+			type: "stringConcatLength";
+			registers: [number, number, number];
+			followingQuasiLength: number;
+	  }
+	| {
+			type: "concatStrings";
+			registers: [number, number, number, ...Array<number>];
 	  }
 	| {
 			type: "callKnown";

@@ -1,5 +1,9 @@
 import type { PlatformData } from "../../platform/catalog.ts";
-import { MAX_PRECISE_NUMBER_SUM_INPUTS } from "../shared/compiler-instruction.ts";
+import {
+	MAX_PRECISE_NUMBER_SUM_INPUTS,
+	MAX_STRING_CODE_UNITS,
+	MAX_STRING_CONCAT_INPUTS,
+} from "../shared/compiler-instruction.ts";
 import {
 	knownBuiltinErrorNames,
 	isKnownBuiltinError,
@@ -35,9 +39,7 @@ import type {
 
 export const WIRE_MAGIC = 0x574c414d; // "MALW" little-endian
 // Runtime wires are hard cut-overs: stale cached buffers must rebuild.
-export const WIRE_VERSION = 69;
-// Keep in sync with runtime/src/heap_string.h.
-export const MAX_STRING_CODE_UNITS = 16 * 1024 * 1024;
+export const WIRE_VERSION = 70;
 
 /** Canonical wire tags generated into the C runtime from the same registry. */
 export const WIRE_OPCODES = BYTECODE_OPERATIONS;
@@ -936,9 +938,16 @@ function writeInstructionOperands(w: Writer, i: BytecodeInstruction): void {
 			w.u8(i.specialized === undefined ? 0 : directBuiltinTag(i.specialized) + 1);
 			return;
 		case "PRECISE_NUMBER_SUM":
+		case "CONCAT_STRINGS":
 			w.i32(i.dst);
 			w.i32(i.arguments.length);
 			w.i32Array(i.arguments);
+			return;
+		case "STRING_CONCAT_LENGTH":
+			w.i32(i.dst);
+			w.i32(i.prefixLength);
+			w.i32(i.part);
+			w.u32(i.followingQuasiLength);
 			return;
 		case "CONSTRUCT":
 			w.i32(i.dst);
@@ -1804,17 +1813,30 @@ function readInstructionOperands(r: Reader): BytecodeInstruction {
 				operation,
 			};
 		}
-		case "PRECISE_NUMBER_SUM": {
+		case "PRECISE_NUMBER_SUM":
+		case "CONCAT_STRINGS": {
 			const dst = r.i32(),
 				count = r.i32(),
 				arguments_ = r.i32Array();
+			const concat = opcode === "CONCAT_STRINGS";
 			if (
 				count !== arguments_.length ||
-				count < 0 ||
-				count > MAX_PRECISE_NUMBER_SUM_INPUTS
+				count < (concat ? 2 : 0) ||
+				count > (concat ? MAX_STRING_CONCAT_INPUTS : MAX_PRECISE_NUMBER_SUM_INPUTS)
 			)
-				throw new RangeError("invalid precise sum operands");
+				throw new RangeError(
+					concat ? "invalid string concat operands" : "invalid precise sum operands",
+				);
 			return { opcode, dst, arguments: arguments_ };
+		}
+		case "STRING_CONCAT_LENGTH": {
+			const dst = r.i32(),
+				prefixLength = r.i32(),
+				part = r.i32(),
+				followingQuasiLength = r.u32();
+			if (followingQuasiLength > MAX_STRING_CODE_UNITS)
+				throw new RangeError("invalid string concat length operands");
+			return { opcode, dst, prefixLength, part, followingQuasiLength };
 		}
 		case "CALL_KNOWN": {
 			const dst = r.i32(),

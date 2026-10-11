@@ -1,4 +1,7 @@
-import { MAX_PRECISE_NUMBER_SUM_INPUTS } from "../shared/compiler-instruction.ts";
+import {
+	MAX_PRECISE_NUMBER_SUM_INPUTS,
+	MAX_STRING_CONCAT_INPUTS,
+} from "../shared/compiler-instruction.ts";
 import {
 	CORE_MEMORY_FAMILY_DOMAINS,
 	CORE_NO_EFFECTS,
@@ -31,6 +34,8 @@ export const CORE_OPCODES = [
 	"builtinError",
 	"preparedStringCompare",
 	"preciseNumberSum",
+	"stringConcatLength",
+	"concatStrings",
 	"call",
 	"callKnown",
 	"callSpread",
@@ -558,6 +563,8 @@ function opcodeCallTransfer(opcode: CoreOpcode): CoreOpcodeCallTransfer | undefi
 
 /** Operands inspected without anything retaining the reference passed in. */
 const OBSERVES_OPERANDS = new Set<CoreOpcode>([
+	"stringConcatLength",
+	"concatStrings",
 	"baseConstructResult",
 	"isEmpty",
 	"move",
@@ -578,6 +585,8 @@ const OBSERVES_OPERANDS = new Set<CoreOpcode>([
  * can be held weakly and `loadIntrinsic` therefore cannot join this set.
  */
 const RESULT_CANNOT_BE_HELD_WEAKLY = new Set<CoreOpcode>([
+	"stringConcatLength",
+	"concatStrings",
 	"preciseNumberSum",
 	"preparedStringCompare",
 	"queryStaticData",
@@ -625,6 +634,8 @@ const INPUT_ARITIES = {
 	builtinError: [0, 0],
 	preparedStringCompare: [2, 2],
 	preciseNumberSum: [0, MAX_PRECISE_NUMBER_SUM_INPUTS],
+	stringConcatLength: [2, 2],
+	concatStrings: [2, MAX_STRING_CONCAT_INPUTS],
 	call: [2, 65_535],
 	callKnown: [1, 65_535],
 	callSpread: [3, 3],

@@ -8417,6 +8417,23 @@ function emitInstruction(
 				poll(),
 			];
 		}
+		case "STRING_CONCAT_LENGTH": {
+			const result = `concat_length_${ip}`;
+			return [
+				`MalValue ${result} = mal_vm_string_concat_length(vm, ${boxed(instruction.prefixLength)}, ${boxed(instruction.part)}, ${instruction.followingQuasiLength}u);`,
+				throwCheck(),
+				`r${instruction.dst} = ${callValue(instruction.dst, result)};`,
+			];
+		}
+		case "CONCAT_STRINGS": {
+			const parts = instruction.arguments.map(boxed);
+			const result = `concat_result_${ip}`;
+			return [
+				`MalValue ${result} = mal_vm_concat_strings(vm, (const MalValue[]){ ${parts.join(", ")} }, ${parts.length});`,
+				throwCheck(),
+				`r${instruction.dst} = ${callValue(instruction.dst, result)};`,
+			];
+		}
 		case "BUILTIN_ERROR":
 			return [
 				`r${instruction.dst} = MAL_VALUE_UNDEFINED;`,

@@ -9,6 +9,7 @@
 #include "arguments_object.h"
 #include "async_function.h"
 #include "bound_function_object.h"
+#include "checked_size.h"
 #include "bigint128.h"
 #include "builtin_array.h"
 #include "builtin_typed_array.h"
@@ -154,6 +155,43 @@ MalValue mal_vm_concat_strings_known(MalVm *vm, MalString *left, MalString *righ
         return MAL_VALUE_UNDEFINED;
     }
     return mal_value_from_string(result);
+}
+
+MalValue mal_vm_string_concat_length(
+    MalVm *vm, MalValue prefix_length, MalValue part, u32 following_quasi_length
+) {
+    if (vm->completion.kind == MAL_COMPLETION_THROW) return MAL_VALUE_UNDEFINED;
+    if (!mal_ops_is_number(prefix_length) || !mal_value_is_string(part)) abort();
+    f64 prefix = mal_ops_number_as_f64(prefix_length);
+    if (!(prefix >= 0 && prefix <= MAL_STRING_MAX_CODE_UNITS) ||
+        prefix != (usize) prefix || following_quasi_length > MAL_STRING_MAX_CODE_UNITS) abort();
+    usize length;
+    if (!mal_checked_size_add((usize) prefix, mal_string_length(mal_value_to_string(part)),
+            MAL_STRING_MAX_CODE_UNITS, &length) ||
+        !mal_checked_size_add(length, following_quasi_length, MAL_STRING_MAX_CODE_UNITS, &length)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Invalid string length");
+        return MAL_VALUE_UNDEFINED;
+    }
+    return mal_ops_number_value((f64) length);
+}
+
+MalValue mal_vm_concat_strings(MalVm *vm, const MalValue *parts, i32 count) {
+    if (vm->completion.kind == MAL_COMPLETION_THROW) return MAL_VALUE_UNDEFINED;
+    if (count < 2 || count > MAL_STRING_CONCAT_MAX_INPUTS || parts == nullptr) abort();
+    MalValue rooted_parts[MAL_STRING_CONCAT_MAX_INPUTS];
+    MalString *strings[MAL_STRING_CONCAT_MAX_INPUTS];
+    for (i32 i = 0; i < count; i++) {
+        if (!mal_value_is_string(parts[i])) abort();
+        rooted_parts[i] = parts[i];
+        strings[i] = mal_value_to_string(parts[i]);
+    }
+    MalRootSpan span;
+    mal_gc_root(&span, rooted_parts, count);
+    MalString *string;
+    bool ok = mal_string_new_flat_parts_checked(&vm->heap, strings, (usize) count, &string);
+    if (!ok) mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Invalid string length");
+    mal_gc_unroot(&span);
+    return ok ? mal_value_from_string(string) : MAL_VALUE_UNDEFINED;
 }
 
 static bool mal_vm_string_to_array_index(MalString *string, u32 *index_out) {
@@ -7573,6 +7611,20 @@ void mal_op_precise_number_sum(MalCallable *callable, const MalInstruction *inst
         values[index] = mal_ops_number_as_f64(callable->registers[data[index + 1]]);
     f64 result = mal_builtin_math_sum_precise_numbers(callable->vm, values, (usize) data[0]);
     callable->registers[instruction->as.precise_number_sum.dst] = mal_ops_number_value(result);
+}
+
+void mal_op_string_concat_length(MalCallable *callable, const MalInstruction *instruction) {
+    callable->registers[instruction->as.string_concat_length.dst] = mal_vm_string_concat_length(
+        callable->vm, callable->registers[instruction->as.string_concat_length.prefix_length],
+        callable->registers[instruction->as.string_concat_length.part],
+        instruction->as.string_concat_length.following_quasi_length);
+}
+
+void mal_op_concat_strings(MalCallable *callable, const MalInstruction *instruction) {
+    const i32 *data = mal_op_instruction_data(callable, instruction->as.concat_strings.data_offset);
+    MalValue parts[MAL_STRING_CONCAT_MAX_INPUTS];
+    for (i32 i = 0; i < data[0]; i++) parts[i] = callable->registers[data[i + 1]];
+    callable->registers[instruction->as.concat_strings.dst] = mal_vm_concat_strings(callable->vm, parts, data[0]);
 }
 
 void mal_op_prepared_string_compare(MalCallable *callable, const MalInstruction *instruction) {

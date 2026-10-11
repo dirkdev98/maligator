@@ -721,7 +721,10 @@ function scalarValueBoundary(op: BytecodeInstruction, local: number): boolean {
 		case "PREPARED_STRING_COMPARE":
 			return op.left === local || op.right === local;
 		case "PRECISE_NUMBER_SUM":
+		case "CONCAT_STRINGS":
 			return op.arguments.includes(local);
+		case "STRING_CONCAT_LENGTH":
+			return op.prefixLength === local || op.part === local;
 		default:
 			return false;
 	}

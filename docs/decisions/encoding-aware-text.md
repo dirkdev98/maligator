@@ -27,6 +27,19 @@ Latin-1 directly. A caller that proves owned UTF-16 content contains a wider uni
 can use `mal_string_new_utf16_owned` without a redundant narrowing scan. Emitted
 and wire-loaded UTF-16 literals remain valid external strings.
 
+Untagged templates convert each substitution before evaluating the next one.
+Bounded templates retain the converted strings as explicit Core operands, rooted
+across later coercions, calls, suspension, and final construction. Prefix-length
+checks preserve the engine's RangeError boundary before each later substitution;
+the final constructor checks the complete length before allocating.
+
+Up to 64 nonempty quasis and converted substitutions use one flat construction.
+The constructor chooses width from visible content, including narrow ranges of
+wider parents, and copies each piece without flattening its input. Flat Latin-1
+pieces use bounded word copies for short leaves. The result uses the existing
+inline cell or owned payload plus cell; it introduces no new storage kind.
+Larger templates retain pairwise lowering as a bounded fallback.
+
 Cons joins preserve a weight bound: a nonterminal cons child occupies at most
 three quarters of its parent's code units. Flat/dependent leaves and a cons of at
 most 32 units with two flat/dependent children are terminal for balancing. The

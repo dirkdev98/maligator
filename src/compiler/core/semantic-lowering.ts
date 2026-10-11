@@ -53,6 +53,7 @@ import {
 	conservativeCompilerProgramFacts,
 } from "../shared/compiler-facts.ts";
 import type { CompilerProgramFacts } from "../shared/compiler-facts.ts";
+import { MAX_STRING_CONCAT_INPUTS } from "../shared/compiler-instruction.ts";
 import type {
 	CompilerBinaryOperator,
 	CompilerInstruction,
@@ -10786,6 +10787,59 @@ function compileConditionalExpression(
 }
 
 function compileTemplateLiteral(
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	cursor: CoreFrontendCursor,
+	expression: ESTree.TemplateLiteral,
+): number {
+	const quasis = expression.quasis.map((quasi) => quasi.value.cooked ?? "");
+	const partCount =
+		expression.expressions.length + quasis.filter((quasi) => quasi.length > 0).length;
+	if (partCount > MAX_STRING_CONCAT_INPUTS)
+		return compileTemplateLiteralPairwise(program, fn, cursor, expression);
+	if (expression.expressions.length === 0)
+		return compileStaticString(program, fn, cursor, quasis[0] ?? "");
+	const parts: Array<number> = [];
+	const head = quasis[0] ?? "";
+	if (head.length > 0) parts.push(compileStaticString(program, fn, cursor, head));
+	let prefixLength = compileNumberLiteral(fn, cursor, head.length);
+	for (let index = 0; index < expression.expressions.length; index++) {
+		const part = compileExpression(
+			program,
+			fn,
+			cursor,
+			expression.expressions[index] as ESTree.Expression,
+		);
+		const stringPart = nextCoreVariable(fn);
+		cursor.block.emitter.emit({
+			type: "unary",
+			registers: [stringPart, part],
+			operator: "tostring",
+		});
+		parts.push(stringPart);
+		if (partCount === 1) return stringPart;
+		const quasi = quasis[index + 1] ?? "";
+		if (index + 1 < expression.expressions.length) {
+			const length = nextCoreVariable(fn);
+			// Preserve the engine's length-error boundary before the next substitution.
+			cursor.block.emitter.emit({
+				type: "stringConcatLength",
+				registers: [length, prefixLength, stringPart],
+				followingQuasiLength: quasi.length,
+			});
+			prefixLength = length;
+		}
+		if (quasi.length > 0) parts.push(compileStaticString(program, fn, cursor, quasi));
+	}
+	const result = nextCoreVariable(fn);
+	cursor.block.emitter.emit({
+		type: "concatStrings",
+		registers: [result, parts[0]!, parts[1]!, ...parts.slice(2)],
+	});
+	return result;
+}
+
+function compileTemplateLiteralPairwise(
 	program: CoreFrontendContext,
 	fn: CoreFrontendFunction,
 	cursor: CoreFrontendCursor,
