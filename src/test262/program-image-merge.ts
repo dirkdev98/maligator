@@ -37,6 +37,13 @@ function rebaseNativeStorage(
 					...plan,
 					stringIndex: plan.stringIndex + stringBase,
 				})),
+				numberRecordRegions: storage.numberRecordRegions.map((plan) => ({
+					...plan,
+					fields: plan.fields.map((field) => ({
+						...field,
+						stringIndex: field.stringIndex + stringBase,
+					})),
+				})),
 				callbackTransports: storage.callbackTransports.map((plan) => ({
 					...plan,
 					functionIndex: plan.functionIndex + functionBase,

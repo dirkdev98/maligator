@@ -6,8 +6,10 @@ import {
 	serializeCompilerArtifact,
 } from "../src/compiler/target/compiler-artifact-codec.ts";
 import type { NativeNumberRecordRegionPlan } from "../src/compiler/target/lower-native-fast-paths.ts";
+import { validateNativeProgramStorage } from "../src/compiler/target/lower-native-storage.ts";
 import type { ProgramImage } from "../src/compiler/target/program-image.ts";
 import { emitCompiledFunction } from "../src/compiler/target/render-native-c.ts";
+import { mergeProgramImages } from "../src/test262/program-image-merge.ts";
 
 function compile(body: string) {
 	return compileSemanticProgramToProgramImage(
@@ -86,6 +88,20 @@ describe("native number record regions", () => {
 		const image = compile(PARTICLE);
 		const restored = deserializeCompilerArtifact(serializeCompilerArtifact(image));
 		expect(regions(restored)).toEqual(regions(image));
+	});
+
+	it("keeps naming its fields when merged behind another program", () => {
+		const image = compile(PARTICLE);
+		const merged = mergeProgramImages([compile("return record.other;"), image]);
+		const index = merged.functionBases[1]! + 1;
+		const [plan] = merged.image.native.functions[index]!.storage!.numberRecordRegions;
+		expect(fieldNames(merged.image, plan!)).toEqual(["vy=", "mass", "x=", "vx"]);
+		expect(() =>
+			validateNativeProgramStorage(
+				merged.image.native,
+				merged.image.runtime.stringConstants,
+			),
+		).not.toThrow();
 	});
 
 	it("rejects forged guards, outputs, and exits at serialization", () => {
