@@ -69,7 +69,7 @@ tests, and benchmarks; never kill another task or introduce a global performance
 ## Verification
 
 Use bounded, one-shot commands while developing. `npm test` and `npm run test:unit`
-can enter watch mode; use that only when requested.
+run once by default; pass `-- --watch` only when requested.
 
 | Purpose                                    | Command                                       |
 | ------------------------------------------ | --------------------------------------------- |

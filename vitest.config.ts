@@ -29,6 +29,7 @@ const runningFullOnlyUnitTests = process.env.MAL_TEST_UNIT_FULL_ONLY === "1";
 
 export default defineConfig({
 	test: {
+		watch: false,
 		coverage: {
 			provider: "v8",
 		},

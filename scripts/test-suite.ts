@@ -993,4 +993,6 @@ if (failures > 0) {
 	console.error(`\n[test-suite] ${failures} stage${failures === 1 ? "" : "s"} failed`);
 	process.exit(1);
 }
-progress.complete(`${tier} ${scope.coversEntireTier ? "gate" : "selected stages"} passed`);
+progress.complete(
+	`${tier} ${scope.coversEntireTier ? "gate" : "selected stages"} passed`,
+);

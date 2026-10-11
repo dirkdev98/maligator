@@ -751,10 +751,12 @@ npm run test262:prepare
 npm run test:wpt -- --test url/url-tojson.any.js --mode normal
 ```
 
-`npm run test:unit` is the unit-only watch loop. Add `-- --run` for one-shot unit
-execution. It excludes application fixtures and the slow tests listed in
+`npm run test:unit` runs the unit project once. Use
+`npm run test:unit -- --watch <file>` for an explicit watch loop. It excludes
+application fixtures and the slow tests listed in
 `tests/test-suite-unit-full-only.txt`; use `test:unit:full-only` to run one of
-those directly. `npm test run` runs both regular Vitest projects once. The Rust lane is
+those directly. `npm test` runs both regular Vitest projects once; the existing
+`npm test run` and `--run` forms also work. The Rust lane is
 full-only because it compiles the feature-complete crate. `test262:prepare` is
 the only Test262 command that clones, fetches, or checks out the pinned full
 corpus. All execution commands consume that shared snapshot read-only and name
