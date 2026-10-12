@@ -377,6 +377,13 @@ Runtime eval may remove source closure without invalidating authority closure.
       an observable object. Keep numeric signed-zero/overflow constraints and
       pointer-root requirements explicit. Extend the existing bounded range walk
       only for a demonstrated consumer; a larger walk limit is not an optimization.
+      Start with the repeated Core-store private-brand checks: retain the producer's
+      module-singleton private-key provenance, validate initialization and all
+      current writers, and relate later key loads only after a dominating successful
+      private access. `singleAssignmentGlobalSlots` alone is not that proof. Preserve
+      receiver/key roots and getter calls; do not cache field payloads or backing
+      locations. Keep captured/per-evaluation keys conservative. Confirm admitted
+      receiver/key pairs and matched compiler cost before widening scope.
 
 - [ ] Extend existing scalar-replacement, field-entry, and conditional-materialization
       plans to one real multi-field region unlocked by the preceding facts. Keep
@@ -1149,9 +1156,14 @@ remains a Maligator extension and does not count as global fetch conformance.
 - [ ] Validate native worker capacity under live constrained and nested CPU quotas.
       Synthetic v1/v2 mounted-path and visible-ancestor fixtures pass; hidden
       namespace ancestors cannot be inferred. Keep the inline capacity fallback.
-- [ ] Measure peak committed/deferred storage, long root/remark/finalizer pauses,
-      and backstop completions. Extend block ownership only if a measured need
-      justifies background reclamation.
+- [ ] Measure peak committed/deferred storage, synchronous minor and long
+      root/remark/finalizer pauses, and backstop completions. Lower allocation in
+      the production JavaScript workload coincides with longer maximum minor pauses,
+      despite less total GC time in raw diagnostic pairs. Isolate the expensive
+      collection with matched checkpoint ablations before changing pacing; retain
+      mark, remembered-slot, sweep and promotion evidence. Keep peak managed
+      survivor accounting distinct from exact live heap and RSS. Extend block
+      ownership only if a measured need justifies background reclamation.
 
 ### Concurrent generational GC experiments
 
