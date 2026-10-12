@@ -76,7 +76,11 @@ describe("class read-accessor lowering", () => {
 			const input = lowerSemanticProgramToCore(
 				semantic(source.replaceAll("receiver.read(index)", `receiver.read(${key})`)),
 			);
-			optimizeCore(input, { verification: "per-pass" });
+			const { report } = optimizeCore(input, {
+				verification: "per-pass",
+				instrumentation: "counters",
+			});
+			expect(report.transforms.accessorInstructionVisits).toBe(0);
 			expect(
 				coreOperations(coreFunctionNamed(input.program, "pair")!).some(
 					({ opcode }) => opcode === "probeRead",

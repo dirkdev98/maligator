@@ -196,6 +196,8 @@ function readRegion(
 			? { target, summary }
 			: undefined;
 	};
+	const anchor = accessorCall(candidate.site);
+	if (anchor === undefined) return undefined;
 	let start = candidate.site;
 	for (let count = 0; count < 12; count++) {
 		const previous = fn.instructionPrevious(start);
@@ -224,7 +226,7 @@ function readRegion(
 			instructions.push(instruction);
 			continue;
 		}
-		const call = accessorCall(instruction);
+		const call = instruction === candidate.site ? anchor : accessorCall(instruction);
 		if (call === undefined || calls.size >= 6) break;
 		calls.set(instruction, call);
 		instructions.push(instruction);
