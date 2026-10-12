@@ -300,6 +300,13 @@ function cloneInstruction(
 			};
 		case "GUARD_FUNCTION_INDEX":
 			return { ...instruction, functionIndex: instruction.functionIndex + base.function };
+		case "PROBE_READ":
+			return {
+				...instruction,
+				...(instruction.stringIndex === undefined
+					? {}
+					: { stringIndex: instruction.stringIndex + base.string }),
+			};
 		case "GUARD_BASE_CONSTRUCTOR_LAYOUT":
 			return {
 				...instruction,

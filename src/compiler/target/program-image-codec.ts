@@ -39,7 +39,7 @@ import type {
 
 export const WIRE_MAGIC = 0x574c414d; // "MALW" little-endian
 // Runtime wires are hard cut-overs: stale cached buffers must rebuild.
-export const WIRE_VERSION = 70;
+export const WIRE_VERSION = 71;
 
 /** Canonical wire tags generated into the C runtime from the same registry. */
 export const WIRE_OPCODES = BYTECODE_OPERATIONS;
@@ -1056,6 +1056,14 @@ function writeInstructionOperands(w: Writer, i: BytecodeInstruction): void {
 			w.i32(i.object);
 			w.i32(i.key);
 			return;
+		case "PROBE_READ":
+			w.i32(i.dst);
+			w.i32(i.success);
+			w.i32(i.object);
+			w.i32(i.key);
+			w.u8(["private", "named", "indexed"].indexOf(i.readKind));
+			w.i32(i.stringIndex ?? -1);
+			return;
 		case "LOAD_PROPERTY_STATIC":
 		case "LOAD_PROPERTY_STATIC_ARRAY_LENGTH":
 			w.i32(i.dst);
@@ -2039,6 +2047,26 @@ function readInstructionOperands(r: Reader): BytecodeInstruction {
 			return { opcode, dst: r.i32(), object: r.i32(), key: r.i32() };
 		case "LOAD_PRIVATE":
 			return { opcode, dst: r.i32(), object: r.i32(), key: r.i32() };
+		case "PROBE_READ": {
+			const dst = r.i32(),
+				success = r.i32(),
+				object = r.i32(),
+				key = r.i32();
+			const readKind = (["private", "named", "indexed"] as const)[r.u8()];
+			if (readKind === undefined) throw new RangeError("Invalid data-read probe kind");
+			const stringIndex = r.i32();
+			if (readKind !== "named" && stringIndex !== -1)
+				throw new RangeError("Invalid data-read probe string index");
+			return {
+				opcode,
+				dst,
+				success,
+				object,
+				key,
+				readKind,
+				...(readKind === "named" ? { stringIndex } : {}),
+			};
+		}
 		case "HAS_PRIVATE":
 			return { opcode, dst: r.i32(), object: r.i32(), key: r.i32() };
 		case "STORE_PROPERTY":

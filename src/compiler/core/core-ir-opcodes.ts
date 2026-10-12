@@ -103,6 +103,7 @@ export const CORE_OPCODES = [
 	"loadLocal",
 	"loadNewTarget",
 	"loadPrivate",
+	"probeRead",
 	"loadProperty",
 	"loadPropertyStaticShapeCase",
 	"loadPropertyStatic",
@@ -178,6 +179,7 @@ const NO_OUTPUT = new Set<CoreOpcode>([
 ]);
 
 const TWO_OUTPUTS = new Set<CoreOpcode>([
+	"probeRead",
 	"await",
 	"getAsyncIterator",
 	"getIterator",
@@ -187,6 +189,7 @@ const TWO_OUTPUTS = new Set<CoreOpcode>([
 ]);
 
 const GC_FREE = new Set<CoreOpcode>([
+	"probeRead",
 	"baseConstructResult",
 	"createBoolean",
 	"createEmpty",
@@ -293,6 +296,7 @@ const CALLS_USER_CODE = new Set<CoreOpcode>([
 ]);
 
 const DISCARDABLE = new Set<CoreOpcode>([
+	"probeRead",
 	"baseConstructResult",
 	"createBigint",
 	"createBoolean",
@@ -454,6 +458,7 @@ const OPCODE_ACCESSES = {
 	mergeDataProperties: [write("object-slot"), write("shape")],
 	hasPrivate: [read("object-slot")],
 	loadPrivate: [read("object-slot")],
+	probeRead: [read("object-slot"), read("shape"), read("prototype"), read("element")],
 	storePrivate: [write("object-slot")],
 	loadSuperProperty: [read("object-slot")],
 	storeSuperProperty: [write("object-slot")],
@@ -703,6 +708,7 @@ const INPUT_ARITIES = {
 	loadLocal: [0, 0],
 	loadNewTarget: [0, 0],
 	loadPrivate: [2, 2],
+	probeRead: [2, 2],
 	loadProperty: [2, 2],
 	loadPropertyStatic: [1, 1],
 	loadPropertyStaticShapeCase: [2, 2],

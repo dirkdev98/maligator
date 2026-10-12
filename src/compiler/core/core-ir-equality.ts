@@ -1,4 +1,4 @@
-import type { CoreAttributeValue, CoreInstructionId, CoreValueId } from "./core-ir.ts";
+import type { CoreAttributeValue, CoreInstructionId } from "./core-ir.ts";
 import type { CoreFunctionStore } from "./core-store.ts";
 
 export function coreAttributeValuesEqual(
@@ -43,8 +43,8 @@ export function coreInstructionInputsEqual(
 	fn: CoreFunctionStore,
 	left: CoreInstructionId,
 	right: CoreInstructionId,
-	leftInputs?: ReadonlyArray<CoreValueId>,
-	rightInputs?: ReadonlyArray<CoreValueId>,
+	leftInputs?: ReadonlyArray<number>,
+	rightInputs?: ReadonlyArray<number>,
 ): boolean {
 	if (fn.instructionOpcode(left) !== fn.instructionOpcode(right)) return false;
 	const leftStart = fn.kernel.instructionOperandStart(left);
@@ -110,12 +110,13 @@ export function coreAttributeValueHash(hash: number, value: CoreAttributeValue):
 export function coreInstructionInputsHash(
 	fn: CoreFunctionStore,
 	instruction: CoreInstructionId,
+	inputs?: ReadonlyArray<number>,
 ): number {
 	const start = fn.kernel.instructionOperandStart(instruction);
-	const count = fn.kernel.instructionOperandCount(instruction);
+	const count = inputs?.length ?? fn.kernel.instructionOperandCount(instruction);
 	let hash = mixHash(2_166_136_261, fn.instructionOpcode(instruction));
 	for (let index = 0; index < count; index++)
-		hash = mixHash(hash, fn.kernel.operandAt(start + index));
+		hash = mixHash(hash, inputs?.[index] ?? fn.kernel.operandAt(start + index));
 	return coreAttributeValueHash(
 		mixHash(hash, count),
 		fn.instructionAttributes(instruction),

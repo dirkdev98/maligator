@@ -92,6 +92,51 @@ function forwardMemoryLoads(core: CoreProgram, fn: CoreFunctionStore): void {
 }
 
 describe("Core local memory, provenance, and escape optimization", () => {
+	it.each([false, true])(
+		"bounds non-observable probe reuse at collection: %s",
+		(collects) => {
+			const core = program();
+			const builder = new CoreFunctionBuilder(core, { parameterCount: 1 });
+			const entry = builder.createBlock([{}]);
+			const receiver = builder.blockParameterValue(entry, 0);
+			const [key] = builder.appendInstruction(entry, "createUndefined", []);
+			const [first, firstSuccess] = builder.appendInstruction(
+				entry,
+				"probeRead",
+				[receiver, key!],
+				{ attributes: { readKind: "named", stringIndex: 0 }, outputCount: 2 },
+			);
+			if (collects)
+				builder.appendInstruction(entry, "createArray", [], { attributes: { count: 0 } });
+			const [second, secondSuccess] = builder.appendInstruction(
+				entry,
+				"probeRead",
+				[receiver, key!],
+				{ attributes: { readKind: "named", stringIndex: 0 }, outputCount: 2 },
+			);
+			const [same] = builder.appendInstruction(entry, "binary", [first!, second!], {
+				attributes: { operator: "===" },
+			});
+			const [sameSuccess] = builder.appendInstruction(
+				entry,
+				"binary",
+				[firstSuccess!, secondSuccess!],
+				{ attributes: { operator: "===" } },
+			);
+			const [result] = builder.appendInstruction(entry, "binary", [same!, sameSuccess!], {
+				attributes: { operator: "===" },
+			});
+			builder.setTerminator(entry, { kind: "return", value: result! });
+			const fn = core.function(builder.finish(entry).function);
+			forwardMemoryLoads(core, fn);
+			expect(
+				[...fn.bodyInstructionIds(entry)].filter(
+					(instruction) => fn.instructionOpcodeName(instruction) === "probeRead",
+				),
+			).toHaveLength(collects ? 2 : 1);
+		},
+	);
+
 	it("shares the private backing reference after ordinary class lowering", () => {
 		const result = inspectStaticValueFunction(
 			`class PrivateReference {

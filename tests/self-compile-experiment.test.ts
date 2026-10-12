@@ -156,7 +156,7 @@ it("plans the oracle, warmups and paired work without writing or leasing a cache
 	);
 	expect(result.status, result.stderr).toBe(0);
 	const plan = JSON.parse(result.stdout) as { work: Array<string> };
-	expect(plan.work).toContain("one Node oracle");
+	expect(plan.work).toContain("two Node oracles");
 	expect(plan.work).toContain("10 measured compiler runs");
 	expect(existsSync(test.output)).toBe(false);
 	expect(result.stderr).toBe("");
@@ -190,9 +190,28 @@ it("uses frozen input, alternates complete pairs and excludes warmups from stati
 	);
 });
 
+it("permits code generation changes while checking each revision against its own Node oracle", () => {
+	const test = fixture({ wrongCandidate: true });
+	expect(test.run().status).toBe(0);
+	expect(test.report()).toMatchObject({ status: "complete", complete: true });
+	const baseline = JSON.parse(
+		readFileSync(path.join(test.output, "oracle.json"), "utf8"),
+	) as { digest: string };
+	const candidate = JSON.parse(
+		readFileSync(path.join(test.output, "oracle-candidate.json"), "utf8"),
+	) as { digest: string };
+	expect(candidate.digest).not.toBe(baseline.digest);
+});
+
+it("rejects drift from a revision's own oracle", () => {
+	const test = fixture({ wrongRun: "warm-candidate" });
+	expect(test.run().status).toBe(2);
+	expect(test.report()).toMatchObject({ status: "failed", complete: false, pairs: [] });
+});
+
 it("fails on a real output mismatch and preserves the failed output outside paired statistics", () => {
 	const test = fixture({ wrongCandidate: true });
-	expect(test.run().status).toBe(2);
+	expect(test.run("--shared-oracle").status).toBe(2);
 	expect(test.report()).toMatchObject({ status: "failed", complete: false, pairs: [] });
 	expect(readFileSync(path.join(test.output, "run.log"), "utf8")).toContain(
 		"output differs from the frozen Node oracle",

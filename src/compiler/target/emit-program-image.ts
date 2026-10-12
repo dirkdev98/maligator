@@ -434,6 +434,14 @@ function instructionData(fn: RuntimeImage["functions"][number]): {
 					);
 				}
 				break;
+			case "PROBE_READ":
+				offsets[index] = data.length;
+				data.push(
+					instruction.key,
+					["private", "named", "indexed"].indexOf(instruction.readKind),
+					instruction.stringIndex ?? -1,
+				);
+				break;
 			case "CREATE_OBJECT_SHAPED":
 				if (instruction.count !== instruction.keyStringIndices.length) {
 					throw new Error("instruction side-data count mismatch");
@@ -2564,6 +2572,8 @@ function emitInstruction(instruction: BytecodeInstruction, dataOffset?: number) 
 			return `{ .opcode = MAL_OP_INIT_PRIVATE_FIELDS, .as.init_private_fields = { .object = ${instruction.object}, .data_offset = ${sideDataOffset()} } }`;
 		case "LOAD_PRIVATE":
 			return `{ .opcode = MAL_OP_LOAD_PRIVATE, .as.load_private = { .dst = ${instruction.dst}, .object = ${instruction.object}, .key = ${instruction.key} } }`;
+		case "PROBE_READ":
+			return `{ .opcode = MAL_OP_PROBE_READ, .as.probe_read = { .dst = ${instruction.dst}, .success = ${instruction.success}, .object = ${instruction.object}, .data_offset = ${sideDataOffset()} } }`;
 		case "STORE_PRIVATE":
 			return `{ .opcode = MAL_OP_STORE_PRIVATE, .as.store_private = { .object = ${instruction.object}, .key = ${instruction.key}, .value = ${instruction.value} } }`;
 		case "HAS_PRIVATE":

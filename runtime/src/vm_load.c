@@ -17,7 +17,7 @@
  */
 
 #define WIRE_MAGIC 0x574c414du // "MALW" little-endian
-#define WIRE_VERSION 70u
+#define WIRE_VERSION 71u
 #define WIRE_FLAG_HAS_DEBUG 1u
 
 typedef enum WireOp {
@@ -1076,6 +1076,21 @@ static void rd_instruction_operands(Rd *r, MalInstruction *o, I32Builder *side_d
             o->as.load_private.object = rd_i32(r);
             o->as.load_private.key = rd_i32(r);
             return;
+        case WIRE_PROBE_READ: {
+            o->opcode = MAL_OP_PROBE_READ;
+            o->as.probe_read.dst = rd_i32(r);
+            o->as.probe_read.success = rd_i32(r);
+            o->as.probe_read.object = rd_i32(r);
+            i32 key = rd_i32(r);
+            u8 kind = rd_u8(r);
+            i32 string_index = rd_i32(r);
+            if (kind > 2 || !i32_builder_reserve(side_data, r, 3)) { r->ok = false; return; }
+            o->as.probe_read.data_offset = (i32) side_data->count;
+            side_data->data[side_data->count++] = key;
+            side_data->data[side_data->count++] = kind;
+            side_data->data[side_data->count++] = string_index;
+            return;
+        }
         case WIRE_HAS_PRIVATE:
             o->opcode = MAL_OP_HAS_PRIVATE;
             o->as.has_private.dst = rd_i32(r);
@@ -1558,6 +1573,8 @@ static bool mal_loaded_instruction_writes_register(
         case MAL_OP_LOAD_STATIC_ARGUMENT:
             return instruction->as.load_static_argument.dst == target_register ||
                 instruction->as.load_static_argument.fallback == target_register;
+        case MAL_OP_PROBE_READ:
+            return instruction->as.probe_read.dst == target_register || instruction->as.probe_read.success == target_register;
         MAL_WRITES_DST(MAL_OP_LOAD_THIS, load_this);
         MAL_WRITES_DST(MAL_OP_LOAD_NEW_TARGET, load_new_target);
         MAL_WRITES_DST(MAL_OP_LOAD_CALLEE, load_callee);
@@ -2581,6 +2598,20 @@ MalLoadedRuntimeImage *mal_runtime_image_load_with_host_resolver(
                         r.ok = false;
                     }
                 }
+            } else if (instruction->opcode == MAL_OP_PROBE_READ) {
+                i32 offset = instruction->as.probe_read.data_offset;
+                if (offset < 0 || offset > fn->instruction_data_count - 3) { r.ok = false; continue; }
+                const i32 *data = fn->instruction_data + offset;
+                const i32 registers[] = { instruction->as.probe_read.dst,
+                    instruction->as.probe_read.success, instruction->as.probe_read.object,
+                    data[0] };
+                for (u32 index = 0; index < 4; index++) {
+                    if (registers[index] < 0 || registers[index] >= fn->register_count) r.ok = false;
+                }
+                i32 string_index = data[2];
+                if (data[1] == 1 ?
+                    string_index < 0 || string_index >= (i32) string_count :
+                    string_index != -1) r.ok = false;
             } else if (instruction->opcode == MAL_OP_BUILTIN_ERROR) {
                 if (instruction->as.builtin_error.dst < 0 || instruction->as.builtin_error.dst >= fn->register_count) r.ok = false;
             } else if (instruction->opcode == MAL_OP_PRECISE_NUMBER_SUM) {

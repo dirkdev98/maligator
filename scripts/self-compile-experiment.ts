@@ -45,15 +45,16 @@ Options:
   --workload parser|shape|full       frozen input cone (default: parser)
   --pairs N                         alternating measured pairs (default: 5)
   --cold                            Node fresh-process pairs without extra oracle or warmups
+  --shared-oracle                   require both revisions to match the baseline Node output
   --budget-seconds N                total command budget (default: 600)
   --plan=json                       show work without building or writing
 
 Source-only captures contain no native executable or native closure certificate.
 Native capture uses a fresh module frontend and development O2/no-LTO closed native code
 without instrumentation, keeping portable GC-root trust independent of cache hits.
-Compare runs a BASE Node output oracle and one warmup per compiler before timing.
+Compare runs a Node output oracle and one warmup per compiler revision before timing.
 With --cold, the first measured baseline is the oracle; filesystem caches are not cleared.
-Emitted C and stripped runtime-wire bytes must both match that oracle exactly.
+Emitted C and stripped runtime-wire bytes must both match the selected oracle exactly.
 Use --program with the same capture
 before and after a code-generation change to measure its effect on one program.
 This measures JS-to-C execution, not C builds.
@@ -77,6 +78,7 @@ interface Options {
 	workload: keyof typeof TARGETS;
 	pairs: number;
 	cold: boolean;
+	perRevisionOracle: boolean;
 	budgetSeconds: number;
 	plan: boolean;
 	sourceOnly: boolean;
@@ -478,9 +480,14 @@ function compareCapturedCompilers(options: Options): void {
 		};
 	};
 	let reference: Sample | undefined;
+	let candidateReference: Sample | undefined;
 	if (!options.cold) {
 		reference = run("node-reference", baseDirectory, "node");
 		writeJson(path.join(options.output, "oracle.json"), reference);
+		if (options.perRevisionOracle) {
+			candidateReference = run("node-reference-candidate", candidateDirectory, "node");
+			writeJson(path.join(options.output, "oracle-candidate.json"), candidateReference);
+		}
 	}
 	const checked = (label: string, directory: string): Sample => {
 		const sample = run(label, directory, options.host);
@@ -489,17 +496,23 @@ function compareCapturedCompilers(options: Options): void {
 		if (reference === undefined) {
 			reference = sample;
 			writeJson(path.join(options.output, "oracle.json"), reference);
-		} else if (
-			sample.digest !== reference.digest ||
-			sample.units !== reference.units ||
-			sample.codeUnits !== reference.codeUnits
+		}
+		const expected =
+			directory === candidateDirectory && options.perRevisionOracle
+				? candidateReference
+				: reference;
+		if (expected === undefined) throw new Error("Missing compiler revision oracle");
+		if (
+			sample.digest !== expected.digest ||
+			sample.units !== expected.units ||
+			sample.codeUnits !== expected.codeUnits
 		)
 			throw new Error(
 				`${label} output differs from the frozen Node oracle; see ${options.output}`,
 			);
 		if (
-			sample.wireDigest !== reference.wireDigest ||
-			sample.wireBytes !== reference.wireBytes
+			sample.wireDigest !== expected.wireDigest ||
+			sample.wireBytes !== expected.wireBytes
 		)
 			throw new Error(
 				`${label} runtime image differs from the frozen Node oracle; see ${options.output}`,
@@ -551,6 +564,7 @@ function parseOptions(args: Array<string>): Options | undefined {
 		workload: "parser",
 		pairs: 5,
 		cold: false,
+		perRevisionOracle: true,
 		budgetSeconds: 600,
 		plan: false,
 		sourceOnly: false,
@@ -558,6 +572,8 @@ function parseOptions(args: Array<string>): Options | undefined {
 	while (args.length > 0) {
 		const option = args.shift();
 		if (option === "--plan=json") options.plan = true;
+		else if (option === "--shared-oracle" && command === "compare")
+			options.perRevisionOracle = false;
 		else if (option === "--cold" && command === "compare") options.cold = true;
 		else if (option === "--source-only" && command === "capture")
 			options.sourceOnly = true;
@@ -602,6 +618,7 @@ function parseOptions(args: Array<string>): Options | undefined {
 	if (!options.output) throw new Error("compare requires --output DIRECTORY");
 	if (options.cold && options.host !== "node")
 		throw new Error("--cold requires --host node");
+	if (options.cold) options.perRevisionOracle = false;
 	return options;
 }
 
@@ -732,7 +749,12 @@ if (import.meta.main) {
 											"verify capture integrity and compatibility",
 											...(options.cold
 												? ["first measured baseline is the Node oracle", "zero warmups"]
-												: ["one Node oracle", "two warmups"]),
+												: [
+														options.perRevisionOracle
+															? "two Node oracles"
+															: "one Node oracle",
+														"two warmups",
+													]),
 											`${2 * options.pairs} measured compiler runs`,
 											"verify emitted C and stripped runtime-wire byte parity",
 											"verify capture integrity",

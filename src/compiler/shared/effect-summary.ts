@@ -387,7 +387,21 @@ export function normalizeRootReasons(
  * at least one edge could not be, which is why an otherwise narrow `effects` may
  * still be saturated. Escape and return facts describe this function's own frame.
  */
+export interface ReadAccessorSummary {
+	readonly reads: ReadonlyArray<
+		| { readonly kind: "private"; readonly slot: number }
+		| { readonly kind: "named"; readonly stringIndex: number }
+		| { readonly kind: "indexed"; readonly argument: number }
+	>;
+	readonly defaultValue?:
+		| { readonly kind: "number"; readonly value: number }
+		| { readonly kind: "undefined" }
+		| { readonly kind: "null" };
+}
+
 export interface FunctionEffectSummary {
+	/** Describes the reads without weakening their ordinary JavaScript effects. */
+	readonly readAccessor?: ReadAccessorSummary;
 	readonly id: string;
 	readonly functionIndex: number;
 	/** Owning module summary id, so the two maps are navigable in both directions. */

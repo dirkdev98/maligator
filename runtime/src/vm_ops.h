@@ -3419,6 +3419,51 @@ static inline bool mal_vm_private_try_load(
         table, key_value, mal_value_to_symbol(key_value)->private_entry_hint, out);
 }
 
+/** Probes never invoke getters, proxies, coercion, collection, or exception construction. */
+static inline bool mal_vm_probe_read(
+    MalVm *vm, MalValue receiver, MalValue key, u8 kind, i32 string_index, MalValue *out
+) {
+    *out = MAL_VALUE_UNDEFINED;
+    if (kind == 0) {
+        if (!mal_value_is_object(receiver) || !mal_value_is_symbol(key) ||
+            !mal_value_to_symbol(key)->is_private) return false;
+        return mal_table_get_private_value(
+            mal_object_overflow(mal_value_to_object(receiver)), mal_value_to_symbol(key), out);
+    }
+    if (kind == 2) {
+        f64 number;
+        if (!mal_value_is_heap_type(receiver, MAL_HEAP_ARRAY_OBJECT) ||
+            !mal_ops_try_number_as_f64(key, &number) ||
+            !(number >= 0 && number < UINT32_MAX)) return false;
+        u32 index = (u32) number;
+        if ((f64) index != number) return false;
+        return mal_array_object_dense_get(
+            (const MalArrayObject *) mal_value_to_heap(receiver), index, out);
+    }
+    if (kind != 1) return false;
+    MalKey name = mal_key_from_value(mal_value_from_string(vm->string_constant_atoms[string_index]));
+    for (u32 depth = 0; depth < 8; depth++) {
+        if (!mal_value_is_heap_type(receiver, MAL_HEAP_OBJECT)) return false;
+        const MalObject *object = mal_value_to_object(receiver);
+        if (object->is_arguments) return false;
+        i32 slot = mal_shape_find(object->shape, name, MAL_SHAPE_FIND_LOAD_IC);
+        if (slot >= 0) {
+            if (object->shape->props[slot].attrs & MAL_PROPERTY_ACCESSOR) return false;
+            *out = mal_object_field_load(object, (u32) slot);
+            return true;
+        }
+        if (mal_object_has_public_overflow(object)) {
+            MalPropertyRead read = mal_property_read(mal_object_overflow(object), name);
+            if (read.kind == MAL_PROPERTY_READ_ACCESSOR) return false;
+            if (read.kind == MAL_PROPERTY_READ_DATA) { *out = read.value; return true; }
+        }
+        const MalObject *prototype = mal_object_prototype(object);
+        if (prototype == nullptr) return false;
+        receiver = mal_value_from_object((MalObject *) prototype);
+    }
+    return false;
+}
+
 /** PrivateSet; the name must already be installed on the receiver, else throws. */
 void mal_vm_op_store_private(MalVm *vm, MalValue object_value, MalValue key_value, MalValue value);
 

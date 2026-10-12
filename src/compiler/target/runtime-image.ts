@@ -1261,6 +1261,15 @@ export type BytecodeInstruction =
 			value: number;
 	  }
 	| {
+			opcode: "PROBE_READ";
+			dst: number;
+			success: number;
+			object: number;
+			key: number;
+			readKind: "private" | "named" | "indexed";
+			stringIndex?: number;
+	  }
+	| {
 			opcode: "HAS_PRIVATE";
 			dst: number;
 			object: number;
@@ -1404,6 +1413,8 @@ export function vmInstructionWriteRegisters(
 			return [instruction.valueDst, instruction.doneDst];
 		case "LOAD_STATIC_ARGUMENT":
 			return [instruction.dst, instruction.fallback];
+		case "PROBE_READ":
+			return [instruction.dst, instruction.success];
 		case "WITH_SET":
 			return [instruction.found];
 		default: {
@@ -2080,6 +2091,26 @@ export function validateRuntimeImageMetadata(definition: RuntimeImage): void {
 					instruction.methodFunctionIndex >= definition.functionCount
 				)
 					throw new RangeError("invalid constructor layout guard");
+				continue;
+			}
+			if (instruction.opcode === "PROBE_READ") {
+				if (
+					!["private", "named", "indexed"].includes(instruction.readKind) ||
+					[
+						instruction.dst,
+						instruction.success,
+						instruction.object,
+						instruction.key,
+					].some(
+						(register) =>
+							!isNonnegativeSafeInteger(register) || register >= fn.registerCount,
+					) ||
+					(instruction.readKind === "named"
+						? !isNonnegativeSafeInteger(instruction.stringIndex) ||
+							instruction.stringIndex >= definition.stringConstants.length
+						: instruction.stringIndex !== undefined)
+				)
+					throw new RangeError("invalid data-read probe");
 				continue;
 			}
 			if (instruction.opcode === "PRECISE_NUMBER_SUM") {
@@ -4183,6 +4214,16 @@ function lowerInstructionToBytecodeInstruction(
 				dst: instruction.registers[0],
 				object: instruction.registers[1],
 				key: instruction.registers[2],
+			};
+		case "probeRead":
+			return {
+				opcode: "PROBE_READ",
+				dst: instruction.registers[0],
+				success: instruction.registers[1],
+				object: instruction.registers[2],
+				key: instruction.registers[3],
+				readKind: instruction.readKind,
+				stringIndex: instruction.stringIndex,
 			};
 		case "storePrivate":
 			return {

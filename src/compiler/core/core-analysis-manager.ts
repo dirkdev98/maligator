@@ -134,6 +134,10 @@ export class CoreAnalysisManager {
 		this.#scratch = scratch;
 	}
 
+	get compilationContext(): CoreCompilationContext {
+		return this.#context;
+	}
+
 	get<Result>(
 		definition: CoreAnalysisDefinition<Result>,
 		request: CoreAnalysisRequest,

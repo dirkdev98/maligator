@@ -1255,6 +1255,11 @@ static void mal_vm_rebase_instruction(
             data[0] += string_base;
             break;
         }
+        case MAL_OP_PROBE_READ: {
+            i32 *data = instruction_data + in->as.probe_read.data_offset;
+            if (data[1] == 1) data[2] += string_base;
+            break;
+        }
         case MAL_OP_STORE_PROPERTY_STATIC:
             in->as.store_property_static.string_index += string_base;
             break;
@@ -2982,6 +2987,17 @@ static void mal_vm_run_until_frame_count(
             case MAL_OP_LOAD_PRIVATE:
                 MAL_VM_INTERPRETER_SYNCHRONIZED_HELPER(mal_op_load_private(frame, instruction));
                 break;
+            case MAL_OP_PROBE_READ: {
+                const i32 *data = frame->function->instruction_data + instruction->as.probe_read.data_offset;
+                MalValue value;
+                bool success = mal_vm_probe_read(vm,
+                    registers[instruction->as.probe_read.object],
+                    registers[data[0]], (u8) data[1], data[2], &value);
+                registers[instruction->as.probe_read.dst] = value;
+                registers[instruction->as.probe_read.success] = success ? MAL_VALUE_TRUE : MAL_VALUE_FALSE;
+                MAL_VM_INTERPRETER_DIRECT_LEAF();
+                continue;
+            }
             case MAL_OP_STORE_PRIVATE:
                 MAL_VM_INTERPRETER_SYNCHRONIZED_HELPER(mal_op_store_private(frame, instruction));
                 break;

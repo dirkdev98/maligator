@@ -21,6 +21,7 @@ import type {
 	RelativeOwnSlotEffectSummary,
 	ReturnProvenance,
 	ReturnRepresentation,
+	ReadAccessorSummary,
 	SummaryRootReason,
 	ValueContainmentFact,
 	ValueEscapeFact,
@@ -33,6 +34,7 @@ import {
 import type { CoreCallGraphIndex } from "./core-ir-call-targets.ts";
 import { buildCoreControlFlow } from "./core-ir-control-flow.ts";
 import type { CoreControlFlow } from "./core-ir-control-flow.ts";
+import { coreAttributeValuesEqual } from "./core-ir-equality.ts";
 import { coreInstructionEffects } from "./core-ir-opcodes.ts";
 import type {
 	CoreBlockId,
@@ -41,6 +43,7 @@ import type {
 	CoreRepresentation,
 	CoreValueId,
 } from "./core-ir.ts";
+import type { CoreAttributeValue } from "./core-ir.ts";
 import { CoreProgramFlowEngine } from "./core-program-flow.ts";
 import type {
 	CoreProgramFlowLocalTransfers,
@@ -50,6 +53,7 @@ import type {
 	CoreProgramFlowSummaryState,
 	CoreProgramFlowSummaryStatistics,
 } from "./core-program-flow.ts";
+import { coreReadAccessorSummary } from "./core-read-accessors.ts";
 import type { CoreFunctionStore, CoreProgram } from "./core-store.ts";
 
 export const CORE_CALL_EFFECT_SUMMARY_FACT = "call-effect-summary";
@@ -75,6 +79,7 @@ const ORIGIN_TRANSFER_PRIMITIVE = 4;
 const ORIGIN_TRANSFER_UNKNOWN = 5;
 
 export interface CoreLocalFunctionSummary {
+	readonly readAccessor?: ReadAccessorSummary;
 	readonly function: CoreFunctionId;
 	readonly bodyVersion: number;
 	readonly cfgVersion: number;
@@ -586,6 +591,7 @@ function analyzeLocalSummary(
 	}
 	return Object.freeze({
 		function: fn.id,
+		readAccessor: coreReadAccessorSummary(fn, cfg),
 		bodyVersion: fn.version("body"),
 		cfgVersion: fn.version("cfg"),
 		exceptionFlowVersion: fn.version("exceptionFlow"),
@@ -720,6 +726,10 @@ function summariesEqual(
 	return (
 		left === right ||
 		(left.id === right.id &&
+			coreAttributeValuesEqual(
+				left.readAccessor as unknown as CoreAttributeValue,
+				right.readAccessor as unknown as CoreAttributeValue,
+			) &&
 			left.functionIndex === right.functionIndex &&
 			left.module === right.module &&
 			effectSummariesEqual(left.effects, right.effects) &&
@@ -894,6 +904,7 @@ function deriveSummary(
 	const roots = reasons.get(functionId) ?? [];
 	return Object.freeze({
 		id: local.summaryId,
+		readAccessor: local.readAccessor,
 		functionIndex: functionId,
 		module: local.moduleId,
 		effects,

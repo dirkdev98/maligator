@@ -52,11 +52,17 @@ import {
 	coreFieldArgument,
 	coreReadOnlyParameterFields,
 } from "./core-native-field-analysis.ts";
+import { coreModulePrivateNames } from "./core-private-names.ts";
+import type { CoreModulePrivateNameIndex } from "./core-private-names.ts";
 import {
 	CORE_PROGRAM_FLOW_ANALYSIS,
 	CORE_PROGRAM_VALUE_KIND_ANALYSIS,
 } from "./core-program-flow-analysis.ts";
 import type { CoreProgramFlowState } from "./core-program-flow-analysis.ts";
+import {
+	expandCoreReadAccessorRegion,
+	coreReadAccessorRegionCost,
+} from "./core-read-accessor-expansion.ts";
 import { specializeCoreStaticArguments } from "./core-static-value-calls.ts";
 import type { CoreChangeSet, CoreFunctionStore, CoreProgram } from "./core-store.ts";
 import {
@@ -94,6 +100,14 @@ interface AppliedTransform {
 	readonly instructionsIntroduced: number;
 	readonly blocksIntroduced: number;
 }
+
+const readAccessorInputs = new WeakMap<
+	CoreProgram,
+	{
+		names: CoreModulePrivateNameIndex;
+		hints: ReadonlyMap<number, ReadonlyArray<CoreFunctionId>>;
+	}
+>();
 
 interface InlineTarget {
 	readonly argumentSnapshots: boolean;
@@ -1250,6 +1264,25 @@ function inlinePriorityScore(
 	return -(loopFrequency * savedWork) / Math.max(1, generatedCodeCost);
 }
 
+function coreInstanceMethodHintsForAccessor(
+	fn: CoreFunctionStore,
+	callee: CoreValueId,
+	receiver: CoreValueId | undefined,
+	hints: ReadonlyMap<number, ReadonlyArray<CoreFunctionId>>,
+	summaries: CoreProgramSummaries,
+	privateNames: CoreModulePrivateNameIndex,
+): boolean {
+	const target = coreInstanceMethodHint(fn, callee, receiver, hints);
+	const accessor =
+		target === undefined ? undefined : summaries.summary(target)?.readAccessor;
+	return (
+		accessor !== undefined &&
+		accessor.reads.every(
+			(read) => read.kind !== "private" || privateNames.validSlot(read.slot),
+		)
+	);
+}
+
 function offerFunctionCandidates(
 	program: CoreProgram,
 	analyses: CoreAnalysisManager,
@@ -1259,6 +1292,7 @@ function offerFunctionCandidates(
 	instanceMethodHints: ReadonlyMap<number, ReadonlyArray<CoreFunctionId>>,
 	fieldEntryNominees: ReadonlyMap<number, number>,
 	capturedCells: () => CapturedCellWrites,
+	privateNames: CoreModulePrivateNameIndex,
 ): void {
 	const fn = program.function(functionId);
 	const outgoing = summaries.targets.outgoing(functionId);
@@ -1437,11 +1471,26 @@ function offerFunctionCandidates(
 			exactTarget === undefined &&
 			site.targets.functions.length === 0 &&
 			coreCalleeTargetsAreOpen(site.targets) &&
-			inLoop
+			(inLoop ||
+				coreInstanceMethodHintsForAccessor(
+					fn,
+					site.callee,
+					site.receiver,
+					instanceMethodHints,
+					summaries,
+					privateNames,
+				))
 				? coreInstanceMethodHint(fn, site.callee, site.receiver, instanceMethodHints)
 				: undefined;
 		const target = exactTarget ?? hintedTarget;
 		if (target === undefined) continue;
+		const accessor = summaries.summary(target)?.readAccessor;
+		const readAccessor =
+			invocation === "call" &&
+			accessor !== undefined &&
+			accessor.reads.every(
+				(read) => read.kind !== "private" || privateNames.validSlot(read.slot),
+			);
 		const open = hintedTarget !== undefined || coreCalleeTargetsAreOpen(site.targets);
 		// Primitive literals can sink into guarded misses; heap fields must retain their lifetime.
 		if (
@@ -1512,25 +1561,45 @@ function offerFunctionCandidates(
 			(inline?.linear === false ? inline.blocks.length : 0) +
 			consumerDuplication +
 			(open ? 1 : 0);
+		const regionCost = readAccessor
+			? coreReadAccessorRegionCost(
+					program,
+					summaries,
+					{
+						caller: functionId,
+						site: site.instruction,
+						targets: [target],
+					},
+					instanceMethodHints,
+				)
+			: undefined;
+		if (readAccessor && regionCost === undefined) continue;
 		service.offer(
 			Object.freeze({
-				kind: open ? "guarded-inline" : "inline",
+				kind: readAccessor
+					? open
+						? "guarded-read-accessor"
+						: "read-accessor"
+					: open
+						? "guarded-inline"
+						: "inline",
 				caller: functionId,
 				site: site.instruction,
 				revision: summaries.version(target),
-				priorityClass: hintedTarget !== undefined ? 3 : 2,
+				priorityClass: readAccessor ? 1 : hintedTarget !== undefined ? 3 : 2,
 				priorityScore: inlinePriorityScore(
 					loopFrequency,
-					generatedCodeCost,
+					regionCost?.generatedCode ?? generatedCodeCost,
 					open ? CORE_GENERATED_CODE_COST_WEIGHTS.runtime.guard : 0,
 				),
 				targets: Object.freeze([target]),
-				generatedCodeCost,
+				generatedCodeCost: regionCost?.generatedCode ?? generatedCodeCost,
 				compilerWorkCost:
+					regionCost?.compilerWork ??
 					(inline?.instructions.length ?? 0) +
-					(inline?.function.valueCapacity ?? 0) +
-					consumerDuplication +
-					(open ? 4 : 1),
+						(inline?.function.valueCapacity ?? 0) +
+						consumerDuplication +
+						(open ? 4 : 1),
 				expansive: localCaptureContext === undefined,
 				...(target === functionId
 					? { unsupportedReason: "recursive" as const }
@@ -1574,6 +1643,8 @@ export function discoverCoreCrossCallCandidates(
 		}
 		return cells;
 	};
+	const privateNames = coreModulePrivateNames(program, analyses.compilationContext);
+	readAccessorInputs.set(program, { names: privateNames, hints: instanceMethodHints });
 	for (const functionId of functions) {
 		offerFunctionCandidates(
 			program,
@@ -1584,6 +1655,7 @@ export function discoverCoreCrossCallCandidates(
 			instanceMethodHints,
 			fieldEntryNominees,
 			capturedCells,
+			privateNames,
 		);
 	}
 }
@@ -2488,6 +2560,20 @@ function applyCandidate(
 			return applyLinearInline(program, candidate, editor);
 		case "guarded-inline":
 			return applyGuardedInline(program, candidate, editor);
+		case "read-accessor":
+		case "guarded-read-accessor": {
+			const input = readAccessorInputs.get(program);
+			return input === undefined
+				? undefined
+				: expandCoreReadAccessorRegion(
+						program,
+						summaries,
+						input.names,
+						candidate,
+						editor,
+						input.hints,
+					);
+		}
 	}
 }
 
@@ -2714,6 +2800,8 @@ export function runCoreCrossCallTransforms(
 			if (
 				candidate.kind === "inline" ||
 				candidate.kind === "guarded-inline" ||
+				candidate.kind === "read-accessor" ||
+				candidate.kind === "guarded-read-accessor" ||
 				candidate.kind === "array-iteration-inline"
 			) {
 				published = true;

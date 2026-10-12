@@ -337,6 +337,11 @@ typedef struct MalInstruction {
             i32 dst, callee, function_index;
         } guard_function_index;
 
+        // Side data keeps both destinations inside the packed instruction ABI.
+        struct {
+            i32 dst, success, object, data_offset;
+        } probe_read;
+
         struct {
             i32 dst, callee, function_index, data_offset;
         } guard_base_constructor_layout;
