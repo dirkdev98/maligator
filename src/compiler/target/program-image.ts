@@ -1988,7 +1988,9 @@ export function compactProgramImageConstants(
 				functionCount: vmCount,
 				functions: compacted.runtime.functions.slice(0, vmCount),
 			},
-			native: remapNativeConstants(definition.native, compacted),
+			native: remapNativeConstants(definition.native, compacted, (fn) =>
+				remapRuntimeFunctionConstants(fn.body, compacted),
+			),
 		},
 		changed: true,
 		report: compacted.report,
@@ -1998,11 +2000,12 @@ export function compactProgramImageConstants(
 function remapNativeConstants(
 	native: NativePlan,
 	compacted: RuntimeImageConstantCompactionResult,
+	bodyFor: (fn: NativeFunctionPlan, index: number) => BytecodeFunction,
 ): NativePlan {
 	if (!compacted.changed) return native;
-	const functions = native.functions.map((fn) => ({
+	const functions = native.functions.map((fn, index) => ({
 		...fn,
-		body: remapRuntimeFunctionConstants(fn.body, compacted),
+		body: bodyFor(fn, index),
 		...(fn.literalSwitches === undefined
 			? {}
 			: {
@@ -2099,6 +2102,11 @@ export function lowerVerifiedExecutionToProgramImage(
 		native: remapNativeConstants(
 			{ semanticProtectors, functions: nativeFunctions },
 			nativeRuntimePlan.compacted,
+			// Native wrappers must not publish the compacted snapshot's VM root-map trust.
+			(fn, index) =>
+				nativeRuntimePlan === runtimePlan
+					? remapRuntimeFunctionConstants(fn.body, nativeRuntimePlan.compacted)
+					: { ...nativeRuntimePlan.compacted.runtime.functions[index]! },
 		),
 		diagnostics: {},
 	};

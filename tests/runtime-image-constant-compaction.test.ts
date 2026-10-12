@@ -1,4 +1,7 @@
 import { describe, expect, it } from "vitest";
+import { CoreEditor } from "../src/compiler/core/core-editor.ts";
+import { lowerSemanticProgramToCore } from "../src/compiler/core/core-frontend.ts";
+import { optimizeCore } from "../src/compiler/core/optimize.ts";
 import { parseScript } from "../src/compiler/frontend/parser.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
 import { compileSemanticProgramToRuntimeImage } from "../src/compiler/pipeline/compile-runtime-core.ts";
@@ -6,6 +9,9 @@ import {
 	deserializeCompilerArtifact,
 	serializeCompilerArtifact,
 } from "../src/compiler/target/compiler-artifact-codec.ts";
+import { lowerCoreCompilationToExecution } from "../src/compiler/target/lower-native-execution.ts";
+import { lowerExecutionToProgramImage } from "../src/compiler/target/lower-native-program-image.ts";
+import { lowerCoreCompilationToNativeProgram } from "../src/compiler/target/lower-native.ts";
 import type { VmStringSplitProjectionRegion } from "../src/compiler/target/program-image.ts";
 import { compactProgramImageConstants } from "../src/compiler/target/program-image.ts";
 import {
@@ -19,6 +25,7 @@ import type {
 	BytecodeInstruction,
 	RuntimeImage,
 } from "../src/compiler/target/runtime-image.ts";
+import { lowerExecutionFixtureToProgramImage } from "./helpers/native-program-image.ts";
 import { testPropertyCacheCount } from "./helpers/program-image.ts";
 import { testProgramImage, withNativeFunctionPlan } from "./helpers/program-image.ts";
 
@@ -140,6 +147,89 @@ function runtimeFixture(): RuntimeImage {
 }
 
 describe("RuntimeImage constant compaction", () => {
+	it.each(["distinct", "same"] as const)(
+		"preserves native instruction ownership and root aliasing for %s targets",
+		(target) => {
+			const core = lowerSemanticProgramToCore(
+				analyzeSourceAndRunSemanticAnalysis(
+					`function* keep(value) {
+						const live = { value, label: "retained" };
+						yield live;
+						return live.label;
+					}
+					globalThis.keep = keep;`,
+					"native-compaction-ownership.js",
+				),
+			);
+			const dead = units("unreferenced-compaction-sentinel");
+			const generator = [...core.program.functionIds()].find(
+				(id) => core.program.function(id).isGenerator,
+			)!;
+			const editor = CoreEditor.open(core.program, generator);
+			const oldNameIndex = editor.appendStringConstants([dead, units("keep")]) + 1;
+			editor.configureFunction({ metadata: { nameStringIndex: oldNameIndex } });
+			editor.commit();
+			const optimized = optimizeCore(core).compilation;
+			expect(optimized.program.stringConstants).toContainEqual(dead);
+			const execution = lowerCoreCompilationToExecution(optimized);
+			const image =
+				target === "same"
+					? lowerExecutionFixtureToProgramImage(execution)
+					: lowerExecutionToProgramImage(
+							execution,
+							lowerCoreCompilationToNativeProgram(optimized),
+						);
+			expect(image.runtime.stringConstants).not.toContainEqual(dead);
+			const native = image.native.functions.find((fn) => fn.body.isGenerator)!;
+			expect(native).toBeDefined();
+			expect(native.body.nameStringIndex).toBeLessThan(oldNameIndex);
+			expect(image.runtime.stringConstants[native.body.nameStringIndex]).toEqual(
+				units("keep"),
+			);
+			expect(vmSafepointRootMapsAreTrusted(native.body)).toBe(false);
+			const portable = image.runtime.functions[native.functionIndex]!;
+			expect(portable.gcSafepoints?.length).toBeGreaterThan(0);
+			const instructions = structuredClone(native.body.instructions);
+			const roots = structuredClone(native.body.gcSafepoints);
+			const restored = deserializeCompilerArtifact(serializeCompilerArtifact(image));
+			expect(restored.native.functions[native.functionIndex]!.body.instructions).toEqual(
+				instructions,
+			);
+			Object.assign(portable.instructions[0]!, { dst: portable.registerCount });
+			portable.instructions.length = 0;
+			portable.gcSafepoints![0]!.rootRegisters.push(portable.registerCount);
+			expect(native.body.instructions).toEqual(instructions);
+			expect(native.body.gcSafepoints).toEqual(
+				target === "same" ? portable.gcSafepoints : roots,
+			);
+		},
+	);
+
+	it("diagnoses constants introduced by a later caller-owned native body read", () => {
+		const image = testProgramImage(runtimeFixture());
+		const native = image.native.functions[0]!;
+		const original = native.body;
+		const changed = {
+			...original,
+			instructions: [
+				{ opcode: "CREATE_STRING" as const, dst: 0, stringIndex: 0 },
+				...original.instructions.slice(1),
+			],
+		};
+		let captured = false;
+		Object.defineProperty(native, "body", {
+			enumerable: true,
+			get() {
+				const body = captured ? changed : original;
+				captured = true;
+				return body;
+			},
+		});
+		expect(() => compactProgramImageConstants(image)).toThrow(
+			"RuntimeImage removed constant 0 still named by stringIndex",
+		);
+	});
+
 	it("retains constants used only by an independent native body", () => {
 		const image = testProgramImage(runtimeFixture());
 		const native = image.native.functions[0]!;
@@ -170,6 +260,9 @@ describe("RuntimeImage constant compaction", () => {
 		);
 		const restored = deserializeCompilerArtifact(serializeCompilerArtifact(compacted));
 		expect(restored.native.functions[0]!.body.instructions[0]).toEqual(op);
+		const unchanged = compactProgramImageConstants(compacted);
+		expect(unchanged.changed).toBe(false);
+		expect(unchanged.definition).toBe(compacted);
 	});
 
 	it.each([false, true])(
