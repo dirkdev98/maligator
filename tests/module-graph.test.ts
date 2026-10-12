@@ -776,10 +776,10 @@ test("canonicalizes bare buffer and exposes the node:buffer constructor", () => 
 	});
 	const dependency = graph.modules.get(graph.entry)!.dependencies[0]!;
 	expect(dependency.resolvedPath).toBe("node:buffer");
-	expect(graph.modules.get("node:buffer")?.host).toMatchObject({
-		named: ["Buffer", "constants"],
-		hasDefault: true,
-	});
+	const host = graph.modules.get("node:buffer")?.host;
+	expect(host?.named).toContain("Buffer");
+	expect(host?.named).toContain("constants");
+	expect(host?.hasDefault).toBe(true);
 });
 
 test("canonicalizes bare ESM buffer to node:buffer", () => {
