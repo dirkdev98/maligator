@@ -833,13 +833,12 @@ export function expandCoreReadAccessorRegion(
 		sourcePosition: oldTerminator.sourcePosition,
 	});
 	if (loop !== undefined) {
-		for (const block of [fallback, ...fastBlocks])
-			states.set(block, editor.appendBlockParameters(block, stateSpecs));
-		for (const [block, state] of states) {
+		for (const block of new Set([...states.keys(), ...outgoing.keys()])) {
+			const state = outgoing.get(block) ?? states.get(block)!;
 			const invalidated = [...fn.bodyInstructionIds(block)].some((instruction) =>
 				loop.invalidators.has(instruction),
 			);
-			const exitState = invalidated ? initial : (outgoing.get(block) ?? state);
+			const exitState = invalidated ? initial : state;
 			editor.replaceTerminator(
 				block,
 				mapAccessorLoopEdges(
