@@ -79,6 +79,7 @@ export interface CoreReadAccessorWork {
 		site: number;
 		header: number;
 		prefixes: ReadonlyArray<string>;
+		retainedPrefixes: ReadonlyArray<string>;
 		numericGuards: ReadonlyArray<number>;
 		invalidations: ReadonlyArray<number>;
 	}>;
@@ -333,7 +334,7 @@ export function coreReadAccessorRegionCost(
 			: region.instructions.length +
 				loop.prefixes.length * 6 +
 				loop.numericGuards.length * 3 +
-				loop.loop.blocks.size * (loop.prefixes.length + 2) * 2 +
+				loop.loop.blocks.size * (loop.retainedPrefixes.length + 2) * 2 +
 				12;
 	const generatedCode =
 		loopCost +
@@ -431,7 +432,7 @@ export function expandCoreReadAccessorRegion(
 			: [
 					{ representation: "boolean" as const },
 					{ representation: "f64" as const },
-					...loop.prefixes.map(() => ({ representation: "boxed" as const })),
+					...loop.retainedPrefixes.map(() => ({ representation: "boxed" as const })),
 				];
 	const states = new Map<CoreBlockId, ReadonlyArray<CoreValueId>>();
 	const outgoing = new Map<CoreBlockId, ReadonlyArray<CoreValueId>>();
@@ -447,7 +448,7 @@ export function expandCoreReadAccessorRegion(
 			attributes: { value: 0 },
 			outputRepresentations: ["f64"],
 		}).outputs[0]!;
-		initial = [ready, epoch, ...loop.prefixes.map(() => empty)];
+		initial = [ready, epoch, ...loop.retainedPrefixes.map(() => empty)];
 		for (const block of loop.loop.blocks)
 			states.set(block, editor.appendBlockParameters(block, stateSpecs));
 	}
@@ -587,7 +588,23 @@ export function expandCoreReadAccessorRegion(
 					guarded.add(guard);
 				}
 				let value = receiver;
-				for (const read of call.summary.reads) {
+				let reads = call.summary.reads;
+				if (reuse !== undefined) {
+					let prefix = loop!.paths.get(operation.inputs[1]!)!;
+					for (const read of reads.slice(0, -1)) {
+						if (read.kind === "indexed") throw new Error("Unexpected indexed prefix");
+						prefix = accessorPrefixKey(
+							prefix,
+							read.kind,
+							read.kind === "private" ? read.slot : read.stringIndex,
+						);
+					}
+					value = reuse.get(prefix)!;
+					if (value === undefined)
+						throw new Error(`Missing retained accessor array ${prefix}`);
+					reads = reads.slice(-1);
+				}
+				for (const read of reads) {
 					if (read.kind === "private") {
 						const parent = pathOf(value);
 						const prefix =
@@ -658,6 +675,12 @@ export function expandCoreReadAccessorRegion(
 				operation.opcode === "loadPropertyStatic" ||
 				operation.opcode === "loadPrivate"
 			) {
+				if (reuse !== undefined) {
+					const prefix = loop!.paths.get(operation.outputs[0]!);
+					const value = prefix === undefined ? undefined : reuse.get(prefix);
+					if (value !== undefined) values.set(operation.outputs[0]!, value);
+					continue;
+				}
 				const receiver = currentValue(operation.inputs[0]!);
 				const value =
 					operation.opcode === "loadPrivate"
@@ -732,7 +755,11 @@ export function expandCoreReadAccessorRegion(
 		});
 		fast = cached;
 		const reused = emitRegion(
-			new Map(loop.prefixes.map((prefix, index) => [prefix, input[index + 2]!] as const)),
+			new Map(
+				loop.retainedPrefixes.map(
+					(prefix, index) => [prefix, input[index + 2]!] as const,
+				),
+			),
 		);
 		outgoing.set(fast, input);
 		editor.setTerminator(fast, {
@@ -769,7 +796,7 @@ export function expandCoreReadAccessorRegion(
 		outgoing.set(fast, [
 			ready,
 			epoch,
-			...loop.prefixes.map((prefix) => {
+			...loop.retainedPrefixes.map((prefix) => {
 				const value = admittedRegion.prefixValues.get(prefix);
 				if (value === undefined)
 					throw new Error(`Missing retained accessor prefix ${prefix}`);
@@ -853,6 +880,7 @@ export function expandCoreReadAccessorRegion(
 				site: candidate.site,
 				header: loop.loop.header,
 				prefixes: loop.prefixes,
+				retainedPrefixes: loop.retainedPrefixes,
 				numericGuards: loop.numericGuards,
 				invalidations: [...loop.invalidators],
 			});

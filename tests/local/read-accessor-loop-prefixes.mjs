@@ -111,6 +111,23 @@ function escapedOutput(owner, count, choose) {
 globalThis.escapedOutput = escapedOutput;
 cases.push(globalThis.escapedOutput({ kernel: new Kernel(input()) }, 8, true));
 
+function materializeAndReceiver(owner, count) {
+	const output = [];
+	let receiver;
+	for (let index = 0; index < count; index++) {
+		receiver = owner.kernel;
+		output.push(receiver.read(index));
+	}
+	return { output, receiver };
+}
+globalThis.materializeAndReceiver = materializeAndReceiver;
+const retainedReceiver = new Kernel(input());
+const retained = globalThis.materializeAndReceiver({ kernel: retainedReceiver }, 8);
+cases.push({
+	values: retained.output,
+	sameReceiver: retained.receiver === retainedReceiver,
+});
+
 const heap = Array.from({ length: 32 }, (_, index) => ({ index }));
 const heapValues = globalThis.materialize({ kernel: new Kernel(heap) }, 32, null);
 cases.push(

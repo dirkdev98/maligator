@@ -15,6 +15,7 @@ export interface CoreReadAccessorLoopPlan {
 	readonly loop: CoreNaturalLoop;
 	readonly paths: ReadonlyMap<CoreValueId, string>;
 	readonly prefixes: ReadonlyArray<string>;
+	readonly retainedPrefixes: ReadonlyArray<string>;
 	readonly numericGuards: ReadonlyArray<CoreValueId>;
 	readonly invalidators: ReadonlySet<CoreInstructionId>;
 	readonly arrayWrites: ReadonlyArray<{
@@ -127,6 +128,7 @@ export function coreReadAccessorLoopPlan(
 	};
 	const paths = new Map<CoreValueId, string>();
 	const prefixes = new Set<string>();
+	const retainedPrefixes = new Set<string>();
 	const path = (value: CoreValueId): string | undefined => {
 		const resolved = root(value);
 		const known = paths.get(value) ?? paths.get(resolved);
@@ -177,9 +179,31 @@ export function coreReadAccessorLoopPlan(
 				prefixes.add(parent);
 			}
 			if (call.summary.reads.at(-1)?.kind !== "indexed") return undefined;
+			retainedPrefixes.add(parent);
 		} else if (opcode === "loadPrivate") return undefined;
 	}
 	if (prefixes.size < 2 || prefixes.size > 8) return undefined;
+	const regionInstructions = new Set(region.instructions);
+	for (const instruction of region.instructions) {
+		if (fn.instructionOpcodeName(instruction) !== "loadPropertyStatic") continue;
+		const value = fn.kernel.resultAt(fn.kernel.instructionResultStart(instruction));
+		let needed = fn.kernel.valueHandlerUseCount(value) > 0;
+		for (
+			let use = fn.kernel.valueFirstUse(value);
+			use >= 0;
+			use = fn.kernel.useNext(use)
+		) {
+			const consumer = fn.kernel.useInstruction(use);
+			if (
+				!regionInstructions.has(consumer) ||
+				(region.calls.has(consumer)
+					? inputs(fn, consumer).slice(2).includes(value)
+					: fn.instructionOpcodeName(consumer) !== "loadPropertyStatic")
+			)
+				needed = true;
+		}
+		if (needed) retainedPrefixes.add(paths.get(value)!);
+	}
 	const numericGuards = new Set<CoreValueId>();
 	const checked = new Map<CoreValueId, boolean>();
 	const numeric = (value: CoreValueId, remaining = 32): boolean => {
@@ -276,6 +300,7 @@ export function coreReadAccessorLoopPlan(
 		loop,
 		paths,
 		prefixes: [...prefixes],
+		retainedPrefixes: [...retainedPrefixes],
 		numericGuards: [...numericGuards],
 		invalidators,
 		arrayWrites,

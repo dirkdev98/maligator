@@ -7,8 +7,10 @@ retained boxed values, and instructions that invalidate the relationships. Neste
 or irreducible loops and unsupported accesses retain ordinary expansion.
 
 Admission is lazy at the original read. The loop carries a readiness flag, a
-runtime service generation, and boxed prefix references through SSA block
-parameters. An unsuccessful probe enters the original region for the current
+runtime service generation, and boxed references consumed by the retained path
+through SSA block parameters. Method, receiver, and intermediate field proofs
+remain admission facts; their values become payload only when an ordinary
+program use needs them. An unsuccessful probe enters the original region for the current
 iteration. That continuation clears readiness and preserves already appended
 output; it never restarts the materializer. Indexed probes remain in every
 successful iteration and reload current elements and backing storage.

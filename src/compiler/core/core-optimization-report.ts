@@ -205,6 +205,7 @@ export interface CoreTransformWorkReport {
 		site: number;
 		header: number;
 		prefixes: ReadonlyArray<string>;
+		retainedPrefixes: ReadonlyArray<string>;
 		numericGuards: ReadonlyArray<number>;
 		invalidations: ReadonlyArray<number>;
 	}>;
