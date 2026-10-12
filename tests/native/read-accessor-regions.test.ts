@@ -89,8 +89,8 @@ console.log(count);`),
 			expect(control.status, control.stderr).toBe(0);
 			expect(control.stdout.trim()).toBe("400");
 			const controlCounters = probeCounters(control.stderr);
-			console.log(
-				JSON.stringify({ mode: "expansion-disabled", counters: controlCounters }),
+			process.stdout.write(
+				`${JSON.stringify({ mode: "expansion-disabled", counters: controlCounters })}\n`,
 			);
 			const names = built.programImage.runtime.functions.map((fn) => {
 				const units = built.programImage.runtime.stringConstants[fn.nameStringIndex];
@@ -171,15 +171,15 @@ console.log(count);`),
 					for (const kind of ["private", "named", "indexed"])
 						expect(counters[`${kind}_hits`]).toBe(counters[`${kind}_attempts`]);
 				} else expect(counters.indexed_hits).toBeLessThan(counters.indexed_attempts!);
-				console.log(
-					JSON.stringify({
+				process.stdout.write(
+					`${JSON.stringify({
 						mode,
 						probes,
 						counters,
 						accessorInstructionExecutions: Object.fromEntries(
 							[...accessors].map((name) => [name, executions(name)]),
 						),
-					}),
+					})}\n`,
 				);
 			}
 		} finally {

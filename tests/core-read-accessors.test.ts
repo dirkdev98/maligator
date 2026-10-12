@@ -124,8 +124,8 @@ describe("class read-accessor lowering", () => {
 		);
 		const fn = coreFunctionNamed(input.program, "read")!;
 		const cfg = buildCoreControlFlow(input.program, fn.id);
-		const original = fn.bodyInstructionIds;
-		const instructions = original.bind(fn);
+		const original = Object.getOwnPropertyDescriptor(fn, "bodyInstructionIds");
+		const instructions = fn.bodyInstructionIds.bind(fn);
 		let visited = 0;
 		fn.bodyInstructionIds = function* (block) {
 			for (const instruction of instructions(block)) {
@@ -138,7 +138,8 @@ describe("class read-accessor lowering", () => {
 			expect(visited).toBeGreaterThan(0);
 			expect(visited).toBeLessThanOrEqual(25);
 		} finally {
-			fn.bodyInstructionIds = original;
+			if (original === undefined) Reflect.deleteProperty(fn, "bodyInstructionIds");
+			else Object.defineProperty(fn, "bodyInstructionIds", original);
 		}
 	});
 

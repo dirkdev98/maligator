@@ -10870,7 +10870,7 @@ function emitInstruction(
 				success = `__probe_success_${ip}`;
 			const stringIndex =
 				instruction.readKind === "named"
-					? relocation.stringIndex(instruction.stringIndex!)
+					? relocation.stringIndex(instruction.stringIndex)
 					: -1;
 			const cache =
 				instruction.readKind === "named"
