@@ -192,6 +192,11 @@ export interface CorePlanWorkReport {
 }
 
 export interface CoreTransformWorkReport {
+	readonly accessorRegionDiscoveries?: number;
+	readonly accessorInstructionVisits?: number;
+	readonly accessorPlansReused?: number;
+	readonly accessorRegionsOffered?: number;
+	readonly accessorRegionsApplied?: number;
 	readonly considered: number;
 	readonly applied: number;
 	readonly declined: number;

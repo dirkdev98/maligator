@@ -5769,6 +5769,49 @@ static bool mal_ic_try_record_inherited_slot(
     return true;
 }
 
+bool mal_vm_probe_named_read_miss(
+    MalVm *vm, MalValue receiver, i32 string_index, MalInlineCache *ic, MalValue *out
+) {
+    MalValue key_value = mal_value_from_string(vm->string_constant_atoms[string_index]);
+    MalKey key = mal_key_from_value(key_value);
+    MalObject *object = mal_value_to_object(receiver);
+    for (u32 depth = 0; depth < 8; depth++) {
+        if (object->header.type != MAL_HEAP_OBJECT || object->is_arguments) {
+            MAL_PERF_COUNT(probe_read_unsupported[1]);
+            return false;
+        }
+        MalPropertyLookup own = mal_object_get_own(object, key);
+        if (own.present) {
+            if (own.desc.flags & MAL_PROPERTY_ACCESSOR) {
+                MAL_PERF_COUNT(probe_read_named_getters);
+                return false;
+            }
+            *out = own.desc.value;
+            if (depth > 0) {
+                (void) mal_ic_try_record_inherited_slot(receiver, key_value,
+                    (MalPropertyResolution) { .found = true, .holder = object, .desc = own.desc },
+                    ic, true);
+            } else if (own.entry != nullptr) {
+                if (object->shape->inline_count == 0)
+                    mal_ic_record_own_table(ic, key_value, own.entry);
+            } else {
+                i32 index = mal_shape_find(object->shape, key, MAL_SHAPE_FIND_LOAD_IC);
+                if (index >= 0)
+                    mal_vm_record_own_slot(ic, object->shape, key_value,
+                        object->shape->props[index].slot);
+            }
+            return true;
+        }
+        object = mal_object_prototype(object);
+        if (object == nullptr) {
+            MAL_PERF_COUNT(probe_read_named_missing);
+            return false;
+        }
+    }
+    MAL_PERF_COUNT(probe_read_unsupported[1]);
+    return false;
+}
+
 static bool mal_ic_try_record_missing(
     MalValue receiver, MalValue key_value, MalInlineCache *ic, bool count_fill
 ) {

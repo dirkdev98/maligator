@@ -1,4 +1,5 @@
 import type { CoreFunctionId, CoreInstructionId } from "./core-ir.ts";
+import type { CoreReadAccessorRegionPlan } from "./core-read-accessor-expansion.ts";
 
 export type CoreTransformKind =
 	| "static-argument-specialization"
@@ -51,6 +52,7 @@ export interface CoreTransformCandidate {
 	readonly priorityScore: number;
 	readonly targets: ReadonlyArray<CoreFunctionId>;
 	readonly targetSetKind?: "closed" | "open-hints";
+	readonly readAccessorRegion?: CoreReadAccessorRegionPlan;
 	readonly generatedCodeCost: number;
 	readonly compilerWorkCost: number;
 	readonly expansive: boolean;

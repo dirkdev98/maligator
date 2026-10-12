@@ -1260,15 +1260,16 @@ export type BytecodeInstruction =
 			key: number;
 			value: number;
 	  }
-	| {
+	| ({
 			opcode: "PROBE_READ";
 			dst: number;
 			success: number;
 			object: number;
 			key: number;
-			readKind: "private" | "named" | "indexed";
-			stringIndex?: number;
-	  }
+	  } & (
+			| { readKind: "named"; stringIndex: number; icIndex: number }
+			| { readKind: "private" | "indexed"; stringIndex?: undefined }
+	  ))
 	| {
 			opcode: "HAS_PRIVATE";
 			dst: number;
@@ -3348,6 +3349,10 @@ function lowerExecutionFunctionToBytecode(
 							};
 			}
 			switch (vmInstruction.opcode) {
+				case "PROBE_READ":
+					if (vmInstruction.readKind === "named")
+						vmInstruction.icIndex = propertyIcIndexByInstruction.get(instruction)!;
+					break;
 				case "LOAD_PROPERTY":
 				case "LOAD_PROPERTY_STATIC":
 				case "LOAD_PROPERTY_STATIC_ARRAY_LENGTH":
@@ -4222,8 +4227,9 @@ function lowerInstructionToBytecodeInstruction(
 				success: instruction.registers[1],
 				object: instruction.registers[2],
 				key: instruction.registers[3],
-				readKind: instruction.readKind,
-				stringIndex: instruction.stringIndex,
+				...(instruction.readKind === "named"
+					? { readKind: "named", stringIndex: instruction.stringIndex!, icIndex: -1 }
+					: { readKind: instruction.readKind, stringIndex: undefined }),
 			};
 		case "storePrivate":
 			return {

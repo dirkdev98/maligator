@@ -48,7 +48,34 @@ interface ReadRegion {
 	readonly calls: ReadonlyMap<CoreInstructionId, AccessorCall>;
 }
 
-type ReadAccessorAnchor = Pick<CoreTransformCandidate, "caller" | "site" | "targets">;
+export interface CoreReadAccessorRegionPlan {
+	readonly bodyVersion: number;
+	readonly cfgVersion: number;
+	readonly memoryEffectsVersion: number;
+	readonly region: ReadRegion;
+}
+
+export interface CoreReadAccessorWork {
+	accessorRegionDiscoveries: number;
+	accessorInstructionVisits: number;
+	accessorPlansReused: number;
+	accessorRegionsOffered: number;
+	accessorRegionsApplied: number;
+}
+
+export const EMPTY_CORE_READ_ACCESSOR_WORK: Readonly<CoreReadAccessorWork> =
+	Object.freeze({
+		accessorRegionDiscoveries: 0,
+		accessorInstructionVisits: 0,
+		accessorPlansReused: 0,
+		accessorRegionsOffered: 0,
+		accessorRegionsApplied: 0,
+	});
+
+type ReadAccessorAnchor = Pick<
+	CoreTransformCandidate,
+	"caller" | "site" | "targets" | "readAccessorRegion"
+>;
 
 function regionInstruction(
 	fn: CoreFunctionStore,
@@ -72,6 +99,8 @@ function readRegion(
 	summaries: CoreProgramSummaries,
 	candidate: ReadAccessorAnchor,
 	hints: ReadonlyMap<number, ReadonlyArray<CoreFunctionId>>,
+	reusePlan = true,
+	work?: CoreReadAccessorWork,
 ): ReadRegion | undefined {
 	const fn = program.function(candidate.caller);
 	if (
@@ -80,13 +109,22 @@ function readRegion(
 			true
 	)
 		return undefined;
+	const planned = candidate.readAccessorRegion;
+	if (
+		reusePlan &&
+		planned !== undefined &&
+		planned.bodyVersion === fn.version("body") &&
+		planned.cfgVersion === fn.version("cfg") &&
+		planned.memoryEffectsVersion === fn.version("memoryEffects") &&
+		[...planned.region.calls.values()].every(
+			(call) => summaries.summary(call.target)?.readAccessor === call.summary,
+		)
+	) {
+		if (work !== undefined) work.accessorPlansReused++;
+		return planned.region;
+	}
+	if (work !== undefined) work.accessorRegionDiscoveries++;
 	const block = fn.instructionBlock(candidate.site);
-	const body = [...fn.bodyInstructionIds(block)];
-	const siteIndex = body.indexOf(candidate.site);
-	if (siteIndex < 0) return undefined;
-	const sites = new Map(
-		summaries.targets.outgoing(fn.id).map((site) => [site.instruction, site]),
-	);
 	const accessorCall = (instruction: CoreInstructionId): AccessorCall | undefined => {
 		if (
 			fn.instructionOpcodeName(instruction) !== "call" ||
@@ -94,7 +132,7 @@ function readRegion(
 				true
 		)
 			return undefined;
-		const site = sites.get(instruction),
+		const site = summaries.targets.site(fn.id, instruction),
 			inputs = operands(fn, instruction);
 		const target =
 			instruction === candidate.site
@@ -112,29 +150,42 @@ function readRegion(
 			? { target, summary }
 			: undefined;
 	};
-	let start = siteIndex;
-	while (
-		start > 0 &&
-		siteIndex - start < 12 &&
-		(regionInstruction(fn, body[start - 1]!) ||
-			accessorCall(body[start - 1]!) !== undefined)
-	)
-		start--;
+	let start = candidate.site;
+	for (let count = 0; count < 12; count++) {
+		const previous = fn.instructionPrevious(start);
+		if (work !== undefined && previous !== undefined) work.accessorInstructionVisits++;
+		if (
+			previous === undefined ||
+			fn.instructionKind(previous) !== "operation" ||
+			(!regionInstruction(fn, previous) && accessorCall(previous) === undefined)
+		)
+			break;
+		start = previous;
+	}
 	const calls = new Map<CoreInstructionId, AccessorCall>();
-	let end = start;
-	for (; end < body.length && end - start < 40; end++) {
-		const instruction = body[end]!;
+	const instructions: Array<CoreInstructionId> = [];
+	let instruction: CoreInstructionId | undefined = start;
+	for (
+		let count = 0;
+		instruction !== undefined &&
+		fn.instructionKind(instruction) === "operation" &&
+		count < 40;
+		count++, instruction = fn.instructionNext(instruction)
+	) {
+		if (work !== undefined) work.accessorInstructionVisits++;
 		if (fn.instructionOpcodeName(instruction) !== "call") {
 			if (!regionInstruction(fn, instruction)) break;
+			instructions.push(instruction);
 			continue;
 		}
 		const call = accessorCall(instruction);
 		if (call === undefined || calls.size >= 6) break;
 		calls.set(instruction, call);
+		instructions.push(instruction);
 	}
 	if (!calls.has(candidate.site)) return undefined;
-	const lastCall = body.indexOf([...calls.keys()].at(-1)!);
-	return { block, instructions: body.slice(start, lastCall + 1), calls };
+	const lastCall = instructions.indexOf([...calls.keys()].at(-1)!);
+	return { block, instructions: instructions.slice(0, lastCall + 1), calls };
 }
 
 export function coreReadAccessorRegionCost(
@@ -142,9 +193,23 @@ export function coreReadAccessorRegionCost(
 	summaries: CoreProgramSummaries,
 	candidate: ReadAccessorAnchor,
 	hints: ReadonlyMap<number, ReadonlyArray<CoreFunctionId>>,
-): { generatedCode: number; compilerWork: number } | undefined {
-	const region = readRegion(program, summaries, candidate, hints);
+	work?: CoreReadAccessorWork,
+):
+	| {
+			generatedCode: number;
+			compilerWork: number;
+			sites: ReadonlyArray<CoreInstructionId>;
+			plan: CoreReadAccessorRegionPlan;
+	  }
+	| undefined {
+	const region = readRegion(program, summaries, candidate, hints, true, work);
 	if (region === undefined) return undefined;
+	// A single field read has no sharing benefit and retains the ordinary inline fast path.
+	if (
+		region.calls.size === 1 &&
+		region.calls.values().next().value!.summary.reads.length === 1
+	)
+		return undefined;
 	const generatedCode =
 		region.instructions.length * 2 +
 		[...region.calls.values()].reduce(
@@ -155,7 +220,18 @@ export function coreReadAccessorRegionCost(
 				(summary.defaultValue === undefined ? 0 : 5),
 			0,
 		);
-	return { generatedCode, compilerWork: generatedCode * 2 + region.instructions.length };
+	const fn = program.function(candidate.caller);
+	return {
+		generatedCode,
+		compilerWork: generatedCode * 2 + region.instructions.length,
+		sites: [...region.calls.keys()],
+		plan: {
+			bodyVersion: fn.version("body"),
+			cfgVersion: fn.version("cfg"),
+			memoryEffectsVersion: fn.version("memoryEffects"),
+			region,
+		},
+	};
 }
 
 export function expandCoreReadAccessorRegion(
@@ -165,9 +241,18 @@ export function expandCoreReadAccessorRegion(
 	candidate: CoreTransformCandidate,
 	editor: CoreEditor,
 	hints: ReadonlyMap<number, ReadonlyArray<CoreFunctionId>>,
+	work?: CoreReadAccessorWork,
 ): { instructionsIntroduced: number; blocksIntroduced: number } | undefined {
 	const fn = program.function(candidate.caller),
-		region = readRegion(program, summaries, candidate, hints);
+		// Store versions advance on commit, so an open edit batch invalidates its plans.
+		region = readRegion(
+			program,
+			summaries,
+			candidate,
+			hints,
+			editor.pendingEdits === 0,
+			work,
+		);
 	if (
 		region === undefined ||
 		[...region.calls.values()].some(({ summary }) =>
@@ -407,5 +492,6 @@ export function expandCoreReadAccessorRegion(
 		for (const block of [join, fallback, ...fastBlocks])
 			editor.setHandler(block, handlerBlock, handlerArguments);
 	}
+	if (work !== undefined) work.accessorRegionsApplied++;
 	return { instructionsIntroduced: introduced, blocksIntroduced: fastBlocks.length + 2 };
 }

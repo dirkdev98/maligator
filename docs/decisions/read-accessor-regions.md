@@ -13,8 +13,12 @@ not make their field values immutable. These identities reflect the separate
 private environments created by [class evaluation](https://tc39.es/ecma262/multipage/ecmascript-language-functions-and-classes.html#sec-classdefinitionevaluation).
 
 Call specialization groups a bounded sequence of accessor calls and non-observable
-work. It preserves the originally resolved callee and arguments. Function identity
-guards also enforce the existing realm contract. Successful probes admit private
+work. It preserves the originally resolved callee and arguments.
+Single field reads with no sharing benefit retain ordinary inlining. Summary discovery stops at its
+instruction bound, and region discovery walks only its bounded neighborhood using
+the existing call-site index.
+
+Function identity guards also enforce the existing realm contract. Successful probes admit private
 data, ordinary named data properties, and present dense array elements. Getters,
 proxies, holes, unsupported keys, and other misses enter the original operations
 in their original order. Earlier successful probes have no observable effects,
@@ -31,8 +35,13 @@ clobbers. Kernel retirement therefore cannot preserve the old columns reference.
 References remain boxed and participate in normal root planning. The first version
 does not retain raw array backing addresses or assume stable lengths and elements.
 Native and interpreted targets consume the same portable `PROBE_READ` operation;
-its extra operands use side data to preserve the packed instruction ABI. Core's
-private-name proof is consumed before serialization. Artifacts preserve the actual
+its extra operands use side data to preserve the packed instruction ABI.
+Named probes use the existing per-site property caches and their prototype
+invalidation contracts. Misses resolve only ordinary data properties without
+executing JavaScript; private probes retain the existing entry hint. The cache
+capacity and global optimization budgets are unchanged.
+
+Core's private-name proof is consumed before serialization. Artifacts preserve the actual
 guards and probes and validate their operand kinds, register bounds, and named
 constant references. Wire and compiler-artifact versions invalidate older caches.
 
@@ -42,3 +51,10 @@ class names or larger global inlining budgets. Structural coverage includes the
 actual kernel operand and result materialization loops; native fixtures cover
 mutation, retirement, method replacement, getters, private failures, defaults,
 backend parity, and collection stress.
+
+The benchmark-only `class-read-accessors` ablation disables caller expansion while
+retaining summaries and ordinary inline selection. It applies when building the
+measured binary, independently of the compilation settings that binary later
+uses. Counter instrumentation reports bounded region visits, plan reuse, offers,
+and applications; runtime diagnostics distinguish probe hits from hint/cache
+miss searches. Ordinary performance measurements keep that instrumentation off.

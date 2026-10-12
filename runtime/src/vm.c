@@ -2992,7 +2992,9 @@ static void mal_vm_run_until_frame_count(
                 MalValue value;
                 bool success = mal_vm_probe_read(vm,
                     registers[instruction->as.probe_read.object],
-                    registers[data[0]], (u8) data[1], data[2], &value);
+                    registers[data[0]], (u8) data[1], data[2],
+                    data[1] == 1 ? mal_vm_property_ic_at(frame, data[3]) : nullptr,
+                    &value);
                 registers[instruction->as.probe_read.dst] = value;
                 registers[instruction->as.probe_read.success] = success ? MAL_VALUE_TRUE : MAL_VALUE_FALSE;
                 MAL_VM_INTERPRETER_DIRECT_LEAF();

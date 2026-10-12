@@ -24,14 +24,14 @@ export function coreReadAccessorSummary(
 		cfg.irreducibleCycles.length > 0
 	)
 		return undefined;
-	const instructions = [...cfg.reachable].flatMap((block) => [
-		...fn.bodyInstructionIds(block),
-	]);
-	if (
-		instructions.length > 24 ||
-		[...cfg.reachable].some((block) => fn.kernel.blockHandlerBlock(block) !== undefined)
-	)
-		return undefined;
+	const instructions: Array<CoreInstructionId> = [];
+	for (const block of cfg.reachable) {
+		if (fn.kernel.blockHandlerBlock(block) !== undefined) return undefined;
+		for (const instruction of fn.bodyInstructionIds(block)) {
+			if (instructions.length === 24) return undefined;
+			instructions.push(instruction);
+		}
+	}
 	const used = new Set<CoreInstructionId>();
 	const operand = (instruction: CoreInstructionId, index: number): CoreValueId =>
 		fn.kernel.operandAt(fn.kernel.instructionOperandStart(instruction) + index);

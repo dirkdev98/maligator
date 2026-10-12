@@ -440,6 +440,7 @@ function instructionData(fn: RuntimeImage["functions"][number]): {
 					instruction.key,
 					["private", "named", "indexed"].indexOf(instruction.readKind),
 					instruction.stringIndex ?? -1,
+					instruction.readKind === "named" ? instruction.icIndex : -1,
 				);
 				break;
 			case "CREATE_OBJECT_SHAPED":

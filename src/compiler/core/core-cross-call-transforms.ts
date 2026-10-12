@@ -62,7 +62,9 @@ import type { CoreProgramFlowState } from "./core-program-flow-analysis.ts";
 import {
 	expandCoreReadAccessorRegion,
 	coreReadAccessorRegionCost,
+	EMPTY_CORE_READ_ACCESSOR_WORK,
 } from "./core-read-accessor-expansion.ts";
+import type { CoreReadAccessorWork } from "./core-read-accessor-expansion.ts";
 import { specializeCoreStaticArguments } from "./core-static-value-calls.ts";
 import type { CoreChangeSet, CoreFunctionStore, CoreProgram } from "./core-store.ts";
 import {
@@ -76,7 +78,8 @@ import type {
 } from "./core-transform-candidates.ts";
 import { virtualizeGuardedCallbackEnvironment } from "./core-virtual-captures.ts";
 
-export interface CoreCrossCallTransformStatistics extends CoreTransformBudgetStatistics {
+export interface CoreCrossCallTransformStatistics
+	extends CoreTransformBudgetStatistics, Readonly<CoreReadAccessorWork> {
 	readonly waves: number;
 	readonly callerEditSessions: number;
 	readonly callerLocalOptimizations: number;
@@ -106,6 +109,7 @@ const readAccessorInputs = new WeakMap<
 	{
 		names: CoreModulePrivateNameIndex;
 		hints: ReadonlyMap<number, ReadonlyArray<CoreFunctionId>>;
+		work?: CoreReadAccessorWork;
 	}
 >();
 
@@ -1293,11 +1297,14 @@ function offerFunctionCandidates(
 	fieldEntryNominees: ReadonlyMap<number, number>,
 	capturedCells: () => CapturedCellWrites,
 	privateNames: CoreModulePrivateNameIndex,
+	readAccessors: boolean,
+	accessorWork?: CoreReadAccessorWork,
 ): void {
 	const fn = program.function(functionId);
 	const outgoing = summaries.targets.outgoing(functionId);
 	const globalTargetUses = new Map<CoreFunctionId, number>();
 	const blockFrequencies = new Map<CoreBlockId, number>();
+	const offeredReadAccessorSites = new Set<CoreInstructionId>();
 	for (const site of outgoing) {
 		const target =
 			site.targets.functions.length === 1 ? site.targets.functions[0] : undefined;
@@ -1472,20 +1479,22 @@ function offerFunctionCandidates(
 			site.targets.functions.length === 0 &&
 			coreCalleeTargetsAreOpen(site.targets) &&
 			(inLoop ||
-				coreInstanceMethodHintsForAccessor(
-					fn,
-					site.callee,
-					site.receiver,
-					instanceMethodHints,
-					summaries,
-					privateNames,
-				))
+				(readAccessors &&
+					coreInstanceMethodHintsForAccessor(
+						fn,
+						site.callee,
+						site.receiver,
+						instanceMethodHints,
+						summaries,
+						privateNames,
+					)))
 				? coreInstanceMethodHint(fn, site.callee, site.receiver, instanceMethodHints)
 				: undefined;
 		const target = exactTarget ?? hintedTarget;
 		if (target === undefined) continue;
 		const accessor = summaries.summary(target)?.readAccessor;
-		const readAccessor =
+		let readAccessor =
+			readAccessors &&
 			invocation === "call" &&
 			accessor !== undefined &&
 			accessor.reads.every(
@@ -1571,10 +1580,18 @@ function offerFunctionCandidates(
 						targets: [target],
 					},
 					instanceMethodHints,
+					accessorWork,
 				)
 			: undefined;
-		if (readAccessor && regionCost === undefined) continue;
-		service.offer(
+		if (readAccessor && regionCost === undefined) {
+			if (hintedTarget !== undefined && !inLoop) continue;
+			readAccessor = false;
+		}
+		if (
+			regionCost?.sites.some((instruction) => offeredReadAccessorSites.has(instruction))
+		)
+			continue;
+		const offered = service.offer(
 			Object.freeze({
 				kind: readAccessor
 					? open
@@ -1586,13 +1603,14 @@ function offerFunctionCandidates(
 				caller: functionId,
 				site: site.instruction,
 				revision: summaries.version(target),
-				priorityClass: readAccessor ? 1 : hintedTarget !== undefined ? 3 : 2,
+				priorityClass: hintedTarget !== undefined ? 3 : 2,
 				priorityScore: inlinePriorityScore(
-					loopFrequency,
+					loopFrequency * (regionCost?.sites.length ?? 1),
 					regionCost?.generatedCode ?? generatedCodeCost,
 					open ? CORE_GENERATED_CODE_COST_WEIGHTS.runtime.guard : 0,
 				),
 				targets: Object.freeze([target]),
+				...(regionCost === undefined ? {} : { readAccessorRegion: regionCost.plan }),
 				generatedCodeCost: regionCost?.generatedCode ?? generatedCodeCost,
 				compilerWorkCost:
 					regionCost?.compilerWork ??
@@ -1610,6 +1628,11 @@ function offerFunctionCandidates(
 							: {}),
 			}),
 		);
+		if (offered && regionCost !== undefined) {
+			if (accessorWork !== undefined) accessorWork.accessorRegionsOffered++;
+			for (const instruction of regionCost.sites)
+				offeredReadAccessorSites.add(instruction);
+		}
 	}
 }
 
@@ -1631,6 +1654,8 @@ export function discoverCoreCrossCallCandidates(
 	service: CoreTransformCandidateService,
 	liveFunctions: ReadonlySet<CoreFunctionId>,
 	functions: Iterable<CoreFunctionId> = program.functionIds(),
+	readAccessors = true,
+	accessorWork?: CoreReadAccessorWork,
 ): void {
 	const instanceMethodHints = coreInstanceMethodHints(program);
 	const fieldEntryNominees = nativeFieldEntryNominees(program, liveFunctions);
@@ -1644,7 +1669,11 @@ export function discoverCoreCrossCallCandidates(
 		return cells;
 	};
 	const privateNames = coreModulePrivateNames(program, analyses.compilationContext);
-	readAccessorInputs.set(program, { names: privateNames, hints: instanceMethodHints });
+	readAccessorInputs.set(program, {
+		names: privateNames,
+		hints: instanceMethodHints,
+		work: accessorWork,
+	});
 	for (const functionId of functions) {
 		offerFunctionCandidates(
 			program,
@@ -1656,6 +1685,8 @@ export function discoverCoreCrossCallCandidates(
 			fieldEntryNominees,
 			capturedCells,
 			privateNames,
+			readAccessors,
+			accessorWork,
 		);
 	}
 }
@@ -2572,6 +2603,7 @@ function applyCandidate(
 						candidate,
 						editor,
 						input.hints,
+						input.work,
 					);
 		}
 	}
@@ -2603,6 +2635,7 @@ export function emptyCoreCrossCallTransformResult(
 		localPlanInputs: Object.freeze([]),
 		statistics: Object.freeze({
 			...budget,
+			...EMPTY_CORE_READ_ACCESSOR_WORK,
 			waves: 0,
 			callerEditSessions: 0,
 			callerLocalOptimizations: 0,
@@ -2691,10 +2724,15 @@ export function runCoreCrossCallTransforms(
 	limits?: CoreTransformBudgetLimits,
 	initialFlow?: CoreProgramFlowState,
 	candidateService?: CoreTransformCandidateService,
+	readAccessors = true,
+	collectAccessorWork = false,
 ): CoreCrossCallTransformResult {
 	const phaseLimits = limits ?? DEFAULT_CORE_TRANSFORM_BUDGETS;
 	const service = candidateService ?? new CoreTransformCandidateService(phaseLimits);
 	const budgetBaseline = service.statistics();
+	const accessorWork: CoreReadAccessorWork | undefined = collectAccessorWork
+		? { ...EMPTY_CORE_READ_ACCESSOR_WORK }
+		: undefined;
 	let flow =
 		initialFlow ?? analyses.get(CORE_PROGRAM_FLOW_ANALYSIS, { scope: "program" });
 	let summaries = flow.summaries;
@@ -2757,6 +2795,8 @@ export function runCoreCrossCallTransforms(
 			service,
 			new Set(flow.reachability.liveFunctions),
 			undefined,
+			readAccessors,
+			accessorWork,
 		);
 		const foldsByCaller = discoverProgramValueKindObservations(
 			program,
@@ -2883,6 +2923,7 @@ export function runCoreCrossCallTransforms(
 		localPlanInputs: Object.freeze([...localPlanInputs.values()]),
 		statistics: Object.freeze({
 			...budget,
+			...(accessorWork ?? EMPTY_CORE_READ_ACCESSOR_WORK),
 			waves,
 			callerEditSessions,
 			callerLocalOptimizations,

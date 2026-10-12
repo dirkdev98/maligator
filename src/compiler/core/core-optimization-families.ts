@@ -20,6 +20,7 @@ export const CORE_OPTIMIZATION_BENCHMARK_ABLATIONS = Object.freeze([
 	...CORE_OPTIMIZATION_FAMILIES,
 	"guarded-direct-call",
 	"priority-scheduling",
+	"class-read-accessors",
 ] as const);
 
 export type CoreOptimizationFamily = (typeof CORE_OPTIMIZATION_FAMILIES)[number];

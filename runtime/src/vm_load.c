@@ -17,7 +17,7 @@
  */
 
 #define WIRE_MAGIC 0x574c414du // "MALW" little-endian
-#define WIRE_VERSION 71u
+#define WIRE_VERSION 72u
 #define WIRE_FLAG_HAS_DEBUG 1u
 
 typedef enum WireOp {
@@ -1084,11 +1084,12 @@ static void rd_instruction_operands(Rd *r, MalInstruction *o, I32Builder *side_d
             i32 key = rd_i32(r);
             u8 kind = rd_u8(r);
             i32 string_index = rd_i32(r);
-            if (kind > 2 || !i32_builder_reserve(side_data, r, 3)) { r->ok = false; return; }
+            if (kind > 2 || !i32_builder_reserve(side_data, r, 4)) { r->ok = false; return; }
             o->as.probe_read.data_offset = (i32) side_data->count;
             side_data->data[side_data->count++] = key;
             side_data->data[side_data->count++] = kind;
             side_data->data[side_data->count++] = string_index;
+            side_data->data[side_data->count++] = -1;
             return;
         }
         case WIRE_HAS_PRIVATE:
@@ -1465,6 +1466,15 @@ static void rd_instruction_operands(Rd *r, MalInstruction *o, I32Builder *side_d
 
 static i32 *rd_property_cache_index(Rd *r, MalInstruction *instruction, I32Builder *side_data) {
     switch (instruction->opcode) {
+        case MAL_OP_PROBE_READ: {
+            i32 offset = instruction->as.probe_read.data_offset;
+            if (offset < 0 || offset > (i32) side_data->count - 4) {
+                r->ok = false;
+                return nullptr;
+            }
+            return side_data->data[offset + 1] == 1
+                ? &side_data->data[offset + 3] : nullptr;
+        }
         case MAL_OP_LOAD_PROPERTY:
             return &instruction->as.load_property.ic_index;
         case MAL_OP_LOAD_PROPERTY_STATIC:
@@ -2600,7 +2610,7 @@ MalLoadedRuntimeImage *mal_runtime_image_load_with_host_resolver(
                 }
             } else if (instruction->opcode == MAL_OP_PROBE_READ) {
                 i32 offset = instruction->as.probe_read.data_offset;
-                if (offset < 0 || offset > fn->instruction_data_count - 3) { r.ok = false; continue; }
+                if (offset < 0 || offset > fn->instruction_data_count - 4) { r.ok = false; continue; }
                 const i32 *data = fn->instruction_data + offset;
                 const i32 registers[] = { instruction->as.probe_read.dst,
                     instruction->as.probe_read.success, instruction->as.probe_read.object,

@@ -39,6 +39,109 @@ function semantic(text = source) {
 }
 
 describe("class read-accessor lowering", () => {
+	it("reports bounded region discovery work separately from expanded execution", () => {
+		const input = lowerSemanticProgramToCore(semantic());
+		const { report } = optimizeCore(input, { instrumentation: "counters" });
+		expect(report.transforms.accessorRegionDiscoveries).toBeGreaterThan(0);
+		expect(report.transforms.accessorRegionsApplied).toBeGreaterThan(0);
+		expect(report.transforms.accessorInstructionVisits).toBeLessThanOrEqual(
+			report.transforms.accessorRegionDiscoveries! * 52,
+		);
+	});
+
+	it("can ablate expansion while retaining ordinary inlining and the same summaries", () => {
+		const input = lowerSemanticProgramToCore(semantic());
+		optimizeCore(input, {
+			verification: "per-pass",
+			benchmarkAblation: { family: "class-read-accessors" },
+		});
+		const accessor = coreFunctionNamed(input.program, "read")!;
+		expect(
+			coreReadAccessorSummary(accessor, buildCoreControlFlow(input.program, accessor.id))
+				?.reads,
+		).toHaveLength(3);
+		expect(
+			coreOperations(coreFunctionNamed(input.program, "pair")!).some(
+				({ opcode }) => opcode === "probeRead",
+			),
+		).toBe(false);
+	});
+
+	it("preserves dominance when earlier candidates change a planned caller in the same batch", () => {
+		const input = lowerSemanticProgramToCore(
+			semantic(readFileSync("tests/local/read-accessor-regions.mjs", "utf8")),
+		);
+		optimizeCore(input, { verification: "per-pass" });
+		verifyCoreProgram(input.program, undefined, input.context);
+	});
+
+	it.each(["this.#value", "this.value"])(
+		"retains ordinary inlining when %s has no shared read chain",
+		(read) => {
+			const input = lowerSemanticProgramToCore(
+				semantic(`class Scalar {
+					#value = 7; value = 7;
+					read() { return ${read}; }
+				}
+				function scan(receiver) {
+					let result = 0;
+					for (let index = 0; index < 10; index++) result += receiver.read();
+					return result;
+				}
+				globalThis.scan = scan;`),
+			);
+			optimizeCore(input, { verification: "per-pass" });
+			const operations = coreOperations(coreFunctionNamed(input.program, "scan")!);
+			expect(operations.some(({ opcode }) => opcode === "probeRead")).toBe(false);
+			expect(
+				operations.some(
+					({ opcode, attributes }) =>
+						opcode === "call" && attributes.guardedInlineFallback === true,
+				),
+			).toBe(true);
+			expect(
+				operations.some(({ opcode }) =>
+					read === "this.#value"
+						? opcode === "loadPrivate"
+						: opcode === "loadPropertyStatic",
+				),
+			).toBe(true);
+		},
+	);
+
+	it("bounds rejected-summary discovery in a large straight-line method", () => {
+		const calls = Array.from(
+			{ length: 80 },
+			(_, index) => `globalThis.touch(${index});`,
+		).join("\n");
+		const input = lowerSemanticProgramToCore(
+			semantic(
+				source.replace(
+					"return this.#columns.items[index] ?? 0;",
+					`${calls}\nreturn this.#columns.items[index] ?? 0;`,
+				),
+			),
+		);
+		const fn = coreFunctionNamed(input.program, "read")!;
+		const cfg = buildCoreControlFlow(input.program, fn.id);
+		const original = fn.bodyInstructionIds;
+		const instructions = original.bind(fn);
+		let visited = 0;
+		fn.bodyInstructionIds = function* (block) {
+			for (const instruction of instructions(block)) {
+				visited++;
+				yield instruction;
+			}
+		};
+		try {
+			expect(coreReadAccessorSummary(fn, cfg)).toBeUndefined();
+			expect(visited).toBeGreaterThan(0);
+			expect(visited).toBeLessThanOrEqual(25);
+		} finally {
+			fn.bodyInstructionIds = original;
+		}
+	});
+
 	it("rejects an inverted nullish branch", () => {
 		const input = lowerSemanticProgramToCore(
 			semantic(

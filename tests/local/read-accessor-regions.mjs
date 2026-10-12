@@ -117,6 +117,40 @@ kernel.replace(mutable);
 check(readPair(kernel, 0).join() === "8,8", "initial references");
 mutable.starts = [9];
 check(readPair(kernel, 0).join() === "9,9", "named reference replacement");
+const inherited = { starts: [13] };
+const inheritedColumns = Object.create(inherited);
+kernel.replace(inheritedColumns);
+for (let round = 0; round < 20; round++)
+	check(readPair(kernel, 0).join() === "13,13", "inherited column reference");
+inherited.starts = [14];
+check(readPair(kernel, 0).join() === "14,14", "inherited reference replacement");
+inheritedColumns.starts = [15];
+check(readPair(kernel, 0).join() === "15,15", "own column shadows cached prototype");
+delete inheritedColumns.starts;
+check(readPair(kernel, 0).join() === "14,14", "deleted column restores prototype");
+Object.defineProperty(inherited, "starts", {
+	get() {
+		return [++reads];
+	},
+	configurable: true,
+});
+check(readPair(kernel, 0).join() === "5,6", "prototype getter replaces cached data");
+
+let methodReads = 0;
+Object.defineProperty(kernel, "start", {
+	get() {
+		methodReads++;
+		return saved;
+	},
+	configurable: true,
+});
+kernel.replace({ starts: [16] });
+check(
+	readPair(kernel, 0).join() === "16,16" && methodReads === 2,
+	"method getters retain original lookup order and frequency",
+);
+delete kernel.start;
+
 function retireBetweenReads(value) {
 	const first = value.start(0);
 	value.retire();
