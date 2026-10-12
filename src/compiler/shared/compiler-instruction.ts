@@ -879,6 +879,14 @@ type CompilerOperation =
 			registers: [number, number, number];
 	  }
 	| {
+			type: "guardServiceEpoch";
+			registers: [number, number];
+	  }
+	| {
+			type: "readServiceEpoch";
+			registers: [number];
+	  }
+	| {
 			/** A miss is non-observable and must enter the original JavaScript continuation. */
 			type: "probeRead";
 			registers: [number, number, number, number];

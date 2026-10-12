@@ -1260,6 +1260,8 @@ export type BytecodeInstruction =
 			key: number;
 			value: number;
 	  }
+	| { opcode: "READ_SERVICE_EPOCH"; dst: number }
+	| { opcode: "GUARD_SERVICE_EPOCH"; dst: number; epoch: number }
 	| ({
 			opcode: "PROBE_READ";
 			dst: number;
@@ -1426,6 +1428,7 @@ export function vmInstructionWriteRegisters(
 }
 
 const VM_REGISTER_USE_FIELDS = [
+	"epoch",
 	"prefixLength",
 	"part",
 	"src",
@@ -4220,6 +4223,14 @@ function lowerInstructionToBytecodeInstruction(
 				object: instruction.registers[1],
 				key: instruction.registers[2],
 			};
+		case "guardServiceEpoch":
+			return {
+				opcode: "GUARD_SERVICE_EPOCH",
+				dst: instruction.registers[0],
+				epoch: instruction.registers[1],
+			};
+		case "readServiceEpoch":
+			return { opcode: "READ_SERVICE_EPOCH", dst: instruction.registers[0] };
 		case "probeRead":
 			return {
 				opcode: "PROBE_READ",

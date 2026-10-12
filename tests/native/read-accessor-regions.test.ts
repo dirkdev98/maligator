@@ -3,6 +3,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
+import { resolveBuildConfig } from "../../src/build-config.ts";
 import { stripCompactTypes } from "../../src/compiler/frontend/compact-type-strip.ts";
 import { parseCompilerCapture } from "../../src/profile-artifact.ts";
 import {
@@ -11,6 +12,7 @@ import {
 	runToStdout,
 	STRESS_ENV,
 } from "../../src/test-harness.ts";
+import { kernelMaterializerSource } from "../helpers/read-accessor-kernel.ts";
 
 const fixture = "tests/local/read-accessor-regions.mjs";
 const expected = execFileSync(process.execPath, [fixture], { encoding: "utf8" }).trim();
@@ -23,6 +25,199 @@ function probeCounters(stderr: string): Record<string, number> {
 }
 
 describe("admitted class read-accessor regions", () => {
+	it("keeps real materializer prefix discovery constant as element counts grow", () => {
+		const directory = mkdtempSync(path.join(os.tmpdir(), "mal-loop-prefix-scaling-"));
+		try {
+			const fixturePath = path.join(directory, "scaling.mjs");
+			writeFileSync(
+				fixturePath,
+				`${kernelMaterializerSource(["materializeInstructionOperands", "materializeInstructionResults", "materializeTerminatorEdge"])}
+const count = Number(process.argv[2]);
+const kind = process.argv[3];
+const hole = process.argv[4] === "hole";
+const source = Array.from({ length: count }, (_, index) => index + 7);
+if (hole && count > 1) delete source[1];
+const owner = { kernel: new CoreFunctionKernel({
+ instructionOperandStart: [0], instructionOperandCount: [count], operands: source,
+ instructionResultStart: [0], instructionResultCount: [count], results: source,
+ terminatorEdgeArgumentStart: [0], terminatorEdgeArgumentCount: [count], terminatorEdgeBlock: [7],
+}) };
+globalThis.materialize = kind === "operands" ? materializeInstructionOperands : kind === "results" ? materializeInstructionResults : materializeTerminatorEdge;
+const materialized = globalThis.materialize(owner, 0);
+const output = kind === "edge" ? materialized.arguments : materialized;
+let sum = 0;
+for (let index = 0; index < output.length; index++) sum += output[index] ?? 0;
+console.log(JSON.stringify({ count: output.length, sum }));`,
+			);
+			const config = resolveBuildConfig({
+				engine: { primordials: "locked" },
+				surface: { node: true },
+			});
+			const built = buildNativeBinaryResult({
+				fixture: fixturePath,
+				name: "loop-prefix-scaling",
+				compiled: true,
+				profileEnabled: true,
+				nodeEnabled: true,
+				config,
+				environment: { ...process.env, MAL_PERF_STATS: "1" },
+				outDir: directory,
+			});
+			const names = built.programImage.runtime.functions.map((fn) =>
+				String.fromCodePoint(
+					...(built.programImage.runtime.stringConstants[fn.nameStringIndex] ?? []),
+				),
+			);
+			const sites = built.programImage.diagnostics.profileSites ?? [];
+			for (const kind of ["operands", "results", "edge"]) {
+				const name =
+					kind === "operands"
+						? "materializeInstructionOperands"
+						: kind === "results"
+							? "materializeInstructionResults"
+							: "materializeTerminatorEdge";
+				const accessor = kind === "results" ? "resultAt" : "operandAt";
+				const readArray = kind === "edge" ? "operands" : kind;
+				let denseDiscovery:
+					| { private: number; kernel: number; array: number; method: number }
+					| undefined;
+				for (const count of [0, 1, 2, 8, 32]) {
+					const capture = path.join(directory, `${kind}-${count}.bin`);
+					const result = spawnSync(built.binaryPath, [String(count), kind, "dense"], {
+						env: {
+							...process.env,
+							MAL_PROFILE_CAPTURE: capture,
+							MAL_PROFILE_COMPILER: "1",
+							MAL_PROFILE_IDENTITY: "b".repeat(64),
+							MAL_PERF_STATS: "1",
+						},
+						encoding: "utf8",
+						timeout: 30_000,
+					});
+					const expected = execFileSync(
+						process.execPath,
+						[fixturePath, String(count), kind, "dense"],
+						{ encoding: "utf8" },
+					).trim();
+					expect(result.status, result.stderr).toBe(0);
+					expect(result.stdout.trim()).toBe(expected);
+					const events = parseCompilerCapture(readFileSync(`${capture}.compiler`));
+					const diagnostic = spawnSync(built.binaryPath, [String(count), kind, "dense"], {
+						env: {
+							...process.env,
+							MAL_PROFILE_CAPTURE: undefined,
+							MAL_PROFILE_COMPILER: undefined,
+							MAL_PERF_STATS: "1",
+						},
+						encoding: "utf8",
+						timeout: 30000,
+					});
+					expect(diagnostic.status, diagnostic.stderr).toBe(0);
+					expect(diagnostic.stdout.trim()).toBe(expected);
+					const counters = probeCounters(diagnostic.stderr);
+					expect(counters.prefix_admissions).toBe(count === 0 ? 0 : 1);
+					expect(counters.prefix_invalidations).toBe(0);
+					const counts = {
+						private: 0,
+						kernel: 0,
+						array: 0,
+						method: 0,
+						indexed: 0,
+						admissions: 0,
+						checks: 0,
+						generic: 0,
+					};
+					for (const [
+						functionIndex,
+						fn,
+					] of built.programImage.native.functions.entries()) {
+						if (names[functionIndex] !== name) continue;
+						for (const [index, instruction] of fn.body.instructions.entries()) {
+							const site = fn.body.profileSiteIds?.[index] ?? -1;
+							const executions = site < 0 ? 0 : events.bySite[site]!.executions;
+							if (instruction.opcode === "PROBE_READ") {
+								if (instruction.readKind === "private") counts.private += executions;
+								else if (instruction.readKind === "indexed") counts.indexed += executions;
+								else if (instruction.readKind === "named") {
+									const key = String.fromCodePoint(
+										...built.programImage.runtime.stringConstants[
+											instruction.stringIndex
+										]!,
+									);
+									if (key === "kernel") counts.kernel += executions;
+									if (key === readArray) counts.array += executions;
+								}
+							} else if (
+								instruction.opcode === "GUARD_FUNCTION_INDEX" &&
+								names[instruction.functionIndex] === accessor
+							)
+								counts.method += executions;
+							else if (instruction.opcode === "READ_SERVICE_EPOCH")
+								counts.admissions += executions;
+							else if (instruction.opcode === "GUARD_SERVICE_EPOCH")
+								counts.checks += executions;
+							else if (instruction.opcode === "CALL") counts.generic += executions;
+						}
+					}
+					expect(counts.admissions).toBe(count === 0 ? 0 : 1);
+					expect(counts.checks).toBe(Math.max(count - 1, 0));
+					expect(counts.method).toBe(count === 0 ? 0 : 1);
+					expect(counts.array).toBe(count === 0 ? 0 : 1);
+					expect(counts.indexed).toBe(count + (kind === "edge" ? 3 : 2));
+					expect(counts.generic).toBe(0);
+					const bodyExecutions = sites
+						.filter((site) => names[site.functionIndex] === accessor)
+						.reduce((sum, site) => sum + events.bySite[site.id]!.executions, 0);
+					expect(bodyExecutions).toBe(0);
+					if (count > 0) {
+						const discovery = {
+							private: counts.private,
+							kernel: counts.kernel,
+							array: counts.array,
+							method: counts.method,
+						};
+						if (denseDiscovery === undefined) denseDiscovery = discovery;
+						else expect(discovery).toEqual(denseDiscovery);
+					}
+					process.stdout.write(
+						`${JSON.stringify({ kind, count, counts, counters, bodyExecutions })}\n`,
+					);
+				}
+				for (const mode of ["hole", "service"]) {
+					const result = spawnSync(
+						built.binaryPath,
+						["32", kind, mode === "hole" ? "hole" : "dense"],
+						{
+							env: {
+								...process.env,
+								...(mode === "service" ? STRESS_ENV : {}),
+								MAL_PROFILE_CAPTURE: undefined,
+								MAL_PROFILE_COMPILER: undefined,
+								MAL_PERF_STATS: "1",
+							},
+							encoding: "utf8",
+							timeout: 30_000,
+						},
+					);
+					expect(result.status, result.stderr).toBe(0);
+					expect(result.stdout.trim()).toBe(
+						execFileSync(
+							process.execPath,
+							[fixturePath, "32", kind, mode === "hole" ? "hole" : "dense"],
+							{ encoding: "utf8" },
+						).trim(),
+					);
+					const counters = probeCounters(result.stderr);
+					if (mode === "service") expect(counters.prefix_admissions).toBeGreaterThan(1);
+					else expect(counters.indexed_hits).toBeLessThan(counters.indexed_attempts!);
+					process.stdout.write(`${JSON.stringify({ kind, mode, counters })}\n`);
+				}
+			}
+		} finally {
+			rmSync(directory, { recursive: true, force: true });
+		}
+	}, 600_000);
+
 	it("executes the real kernel loop without entering accessors until an indexed admission fails", () => {
 		const directory = mkdtempSync(path.join(os.tmpdir(), "mal-kernel-accessors-"));
 		try {
@@ -191,6 +386,22 @@ console.log(count);`),
 		const pair = buildBackendPairFromOneProgramImage({
 			fixture,
 			name: "read-accessor-regions",
+		});
+		for (const binary of [pair.compiled, pair.interpreted]) {
+			expect(runToStdout(binary).trim()).toBe(expected);
+			expect(runToStdout(binary, { env: STRESS_ENV }).trim()).toBe(expected);
+		}
+	}, 600_000);
+
+	it("continues the current iteration after a hole, retirement, or method change", () => {
+		const fixture = "tests/local/read-accessor-loop-prefixes.mjs";
+		const expected = execFileSync(process.execPath, [fixture], {
+			encoding: "utf8",
+		}).trim();
+		const pair = buildBackendPairFromOneProgramImage({
+			fixture,
+			name: "accessor-loop-continuations",
+			config: resolveBuildConfig({ engine: { primordials: "locked" } }),
 		});
 		for (const binary of [pair.compiled, pair.interpreted]) {
 			expect(runToStdout(binary).trim()).toBe(expected);

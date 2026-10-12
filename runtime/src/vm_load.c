@@ -17,7 +17,7 @@
  */
 
 #define WIRE_MAGIC 0x574c414du // "MALW" little-endian
-#define WIRE_VERSION 72u
+#define WIRE_VERSION 73u
 #define WIRE_FLAG_HAS_DEBUG 1u
 
 typedef enum WireOp {
@@ -1076,6 +1076,15 @@ static void rd_instruction_operands(Rd *r, MalInstruction *o, I32Builder *side_d
             o->as.load_private.object = rd_i32(r);
             o->as.load_private.key = rd_i32(r);
             return;
+        case WIRE_GUARD_SERVICE_EPOCH:
+            o->opcode = MAL_OP_GUARD_SERVICE_EPOCH;
+            o->as.guard_service_epoch.dst = rd_i32(r);
+            o->as.guard_service_epoch.epoch = rd_i32(r);
+            return;
+        case WIRE_READ_SERVICE_EPOCH:
+            o->opcode = MAL_OP_READ_SERVICE_EPOCH;
+            o->as.read_service_epoch.dst = rd_i32(r);
+            return;
         case WIRE_PROBE_READ: {
             o->opcode = MAL_OP_PROBE_READ;
             o->as.probe_read.dst = rd_i32(r);
@@ -1585,6 +1594,8 @@ static bool mal_loaded_instruction_writes_register(
                 instruction->as.load_static_argument.fallback == target_register;
         case MAL_OP_PROBE_READ:
             return instruction->as.probe_read.dst == target_register || instruction->as.probe_read.success == target_register;
+        MAL_WRITES_DST(MAL_OP_GUARD_SERVICE_EPOCH, guard_service_epoch);
+        MAL_WRITES_DST(MAL_OP_READ_SERVICE_EPOCH, read_service_epoch);
         MAL_WRITES_DST(MAL_OP_LOAD_THIS, load_this);
         MAL_WRITES_DST(MAL_OP_LOAD_NEW_TARGET, load_new_target);
         MAL_WRITES_DST(MAL_OP_LOAD_CALLEE, load_callee);
@@ -2608,6 +2619,10 @@ MalLoadedRuntimeImage *mal_runtime_image_load_with_host_resolver(
                         r.ok = false;
                     }
                 }
+            } else if (instruction->opcode == MAL_OP_GUARD_SERVICE_EPOCH) {
+                if (instruction->as.guard_service_epoch.dst < 0 || instruction->as.guard_service_epoch.dst >= fn->register_count || instruction->as.guard_service_epoch.epoch < 0 || instruction->as.guard_service_epoch.epoch >= fn->register_count) r.ok = false;
+            } else if (instruction->opcode == MAL_OP_READ_SERVICE_EPOCH) {
+                if (instruction->as.read_service_epoch.dst < 0 || instruction->as.read_service_epoch.dst >= fn->register_count) r.ok = false;
             } else if (instruction->opcode == MAL_OP_PROBE_READ) {
                 i32 offset = instruction->as.probe_read.data_offset;
                 if (offset < 0 || offset > fn->instruction_data_count - 4) { r.ok = false; continue; }

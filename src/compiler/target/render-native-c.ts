@@ -10865,6 +10865,21 @@ function emitInstruction(
 				`}`,
 			];
 		}
+		case "GUARD_SERVICE_EPOCH":
+			return [
+				storeBoolean(
+					instruction.dst,
+					`mal_vm_guard_service_epoch(vm, ${typedNumber(instruction.epoch)})`,
+				),
+			];
+		case "READ_SERVICE_EPOCH": {
+			const epoch = "mal_vm_read_service_epoch(vm)";
+			return [
+				reps[instruction.dst] === "number"
+					? `r${instruction.dst} = ${epoch};`
+					: `r${instruction.dst} = mal_ops_number_value(${epoch});`,
+			];
+		}
 		case "PROBE_READ": {
 			const loaded = `__probe_value_${ip}`,
 				success = `__probe_success_${ip}`;

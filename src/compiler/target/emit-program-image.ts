@@ -2573,6 +2573,10 @@ function emitInstruction(instruction: BytecodeInstruction, dataOffset?: number) 
 			return `{ .opcode = MAL_OP_INIT_PRIVATE_FIELDS, .as.init_private_fields = { .object = ${instruction.object}, .data_offset = ${sideDataOffset()} } }`;
 		case "LOAD_PRIVATE":
 			return `{ .opcode = MAL_OP_LOAD_PRIVATE, .as.load_private = { .dst = ${instruction.dst}, .object = ${instruction.object}, .key = ${instruction.key} } }`;
+		case "GUARD_SERVICE_EPOCH":
+			return `{ .opcode = MAL_OP_GUARD_SERVICE_EPOCH, .as.guard_service_epoch = { .dst = ${instruction.dst}, .epoch = ${instruction.epoch} } }`;
+		case "READ_SERVICE_EPOCH":
+			return `{ .opcode = MAL_OP_READ_SERVICE_EPOCH, .as.read_service_epoch = { .dst = ${instruction.dst} } }`;
 		case "PROBE_READ":
 			return `{ .opcode = MAL_OP_PROBE_READ, .as.probe_read = { .dst = ${instruction.dst}, .success = ${instruction.success}, .object = ${instruction.object}, .data_offset = ${sideDataOffset()} } }`;
 		case "STORE_PRIVATE":

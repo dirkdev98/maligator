@@ -1286,11 +1286,15 @@ static void mal_perf_stats_print(void) {
     }
     fprintf(
         stderr,
-        "[perf-probe-reads] private_attempts=%llu private_hits=%llu private_unsupported=%llu "
+        "[perf-probe-reads] prefix_admissions=%llu prefix_checks=%llu prefix_invalidations=%llu "
+        "private_attempts=%llu private_hits=%llu private_unsupported=%llu "
         "private_hint_hits=%llu private_searches=%llu private_load_attempts=%llu private_load_hint_hits=%llu "
         "named_attempts=%llu named_hits=%llu named_unsupported=%llu "
         "named_cache_hits=%llu named_searches=%llu named_getters=%llu named_missing=%llu "
         "indexed_attempts=%llu indexed_hits=%llu indexed_unsupported=%llu\n",
+        (unsigned long long) mal_perf_stats.accessor_prefix_admissions,
+        (unsigned long long) mal_perf_stats.accessor_prefix_checks,
+        (unsigned long long) mal_perf_stats.accessor_prefix_invalidations,
         (unsigned long long) mal_perf_stats.probe_read_attempts[0],
         (unsigned long long) mal_perf_stats.probe_read_hits[0],
         (unsigned long long) mal_perf_stats.probe_read_unsupported[0],

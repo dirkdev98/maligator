@@ -1261,11 +1261,18 @@ function inlinePriorityScore(
 	loopFrequency: number,
 	generatedCodeCost: number,
 	addedRuntimeCost: number,
+	loopPrefixCount = 0,
 ): number {
 	const weights = CORE_GENERATED_CODE_COST_WEIGHTS.runtime;
 	// Inlining removes one dispatch; the callee body still executes, even with many targets.
 	const savedWork = Math.max(0, weights.helperCall - addedRuntimeCost);
-	return -(loopFrequency * savedWork) / Math.max(1, generatedCodeCost);
+	const prefixWork = Math.max(
+		0,
+		loopPrefixCount * (weights.helperCall - weights.rootSlot) - weights.guard,
+	);
+	// Retained prefixes remove probes after admission; their boxed roots still cross each edge.
+	const reuseWork = Math.max(0, loopFrequency - 1) * prefixWork;
+	return -(loopFrequency * savedWork + reuseWork) / Math.max(1, generatedCodeCost);
 }
 
 function coreInstanceMethodHintsForAccessor(
@@ -1578,6 +1585,7 @@ function offerFunctionCandidates(
 						caller: functionId,
 						site: site.instruction,
 						targets: [target],
+						...(inLoop ? { readAccessorLoopEligible: true as const } : {}),
 					},
 					instanceMethodHints,
 					accessorWork,
@@ -1608,9 +1616,11 @@ function offerFunctionCandidates(
 					loopFrequency * (regionCost?.sites.length ?? 1),
 					regionCost?.generatedCode ?? generatedCodeCost,
 					open ? CORE_GENERATED_CODE_COST_WEIGHTS.runtime.guard : 0,
+					regionCost?.loopPrefixCount,
 				),
 				targets: Object.freeze([target]),
 				...(regionCost === undefined ? {} : { readAccessorRegion: regionCost.plan }),
+				...(inLoop && readAccessor ? { readAccessorLoopEligible: true as const } : {}),
 				generatedCodeCost: regionCost?.generatedCode ?? generatedCodeCost,
 				compilerWorkCost:
 					regionCost?.compilerWork ??
@@ -2731,7 +2741,11 @@ export function runCoreCrossCallTransforms(
 	const service = candidateService ?? new CoreTransformCandidateService(phaseLimits);
 	const budgetBaseline = service.statistics();
 	const accessorWork: CoreReadAccessorWork | undefined = collectAccessorWork
-		? { ...EMPTY_CORE_READ_ACCESSOR_WORK, accessorApplications: [] }
+		? {
+				...EMPTY_CORE_READ_ACCESSOR_WORK,
+				accessorApplications: [],
+				accessorLoopApplications: [],
+			}
 		: undefined;
 	let flow =
 		initialFlow ?? analyses.get(CORE_PROGRAM_FLOW_ANALYSIS, { scope: "program" });

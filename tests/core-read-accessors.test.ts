@@ -1,6 +1,8 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
+import { resolveBuildConfig } from "../src/build-config.ts";
 import { CoreEditor } from "../src/compiler/core/core-editor.ts";
+import { formatCoreFunction } from "../src/compiler/core/core-format.ts";
 import { lowerSemanticProgramToCore } from "../src/compiler/core/core-frontend.ts";
 import { buildCoreControlFlow } from "../src/compiler/core/core-ir-control-flow.ts";
 import { coreInstructionEffects } from "../src/compiler/core/core-ir-opcodes.ts";
@@ -8,15 +10,19 @@ import { verifyCoreProgram } from "../src/compiler/core/core-ir-verifier.ts";
 import { coreModulePrivateNames } from "../src/compiler/core/core-private-names.ts";
 import { coreReadAccessorSummary } from "../src/compiler/core/core-read-accessors.ts";
 import { optimizeCore } from "../src/compiler/core/optimize.ts";
-import { stripCompactTypes } from "../src/compiler/frontend/compact-type-strip.ts";
 import { parseModule } from "../src/compiler/frontend/parser.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
 import { compileSemanticProgramToProgramImage } from "../src/compiler/pipeline/compile-core.ts";
+import { compilerProgramFactsFromConfig } from "../src/compiler/shared/compiler-facts.ts";
 import {
 	deserializeCompilerArtifact,
 	serializeCompilerArtifact,
 } from "../src/compiler/target/compiler-artifact-codec.ts";
 import { coreFunctionNamed, coreOperations } from "./helpers/core-inspection.ts";
+import {
+	kernelMaterializers,
+	kernelMaterializerSource,
+} from "./helpers/read-accessor-kernel.ts";
 
 const source = `class Columns {
 	#columns;
@@ -346,34 +352,47 @@ describe("class read-accessor lowering", () => {
 		expect(probes(decoded)).toEqual(probes(image));
 	});
 
-	it.each(["materializeInstructionOperands", "materializeInstructionResults"])(
-		"lowers the real kernel loop in %s",
-		(name) => {
-			const kernel = readFileSync("src/compiler/core/core-function-kernel.ts", "utf8");
-			const callers = readFileSync(
-				"src/compiler/core/core-cross-call-transforms.ts",
-				"utf8",
-			);
-			const start = callers.indexOf(`function ${name}(`);
-			const end = callers.indexOf("\nfunction ", start + 1);
-			const text = stripCompactTypes(
-				`${kernel}\n${callers.slice(start, end)}\nglobalThis.probe = ${name};`,
-			);
-			const input = lowerSemanticProgramToCore(semantic(text));
-			optimizeCore(input, { verification: "per-pass" });
-			const fn = coreFunctionNamed(input.program, name)!;
-			const operations = coreOperations(fn);
-			expect(
-				operations.filter(
-					({ opcode, attributes }) =>
-						opcode === "probeRead" && attributes.readKind === "private",
-				),
-			).toHaveLength(2);
-			expect(
-				operations.filter(({ opcode }) => opcode === "guardFunctionIndex"),
-			).toHaveLength(3);
-			const cfg = buildCoreControlFlow(input.program, fn.id);
-			expect(cfg.loops.length).toBeGreaterThan(0);
-		},
-	);
+	it.each(kernelMaterializers)("lowers the real kernel loop in %s", (name) => {
+		const text = `${kernelMaterializerSource([name])}\nglobalThis.probe = ${name};`;
+		const facts = compilerProgramFactsFromConfig(
+			resolveBuildConfig({ engine: { primordials: "locked" } }),
+		);
+		const input = lowerSemanticProgramToCore(semantic(text), { facts });
+		optimizeCore(input, { verification: "per-pass" });
+		const fn = coreFunctionNamed(input.program, name)!;
+		const operations = coreOperations(fn);
+		expect(
+			operations.some(({ opcode }) => opcode === "readServiceEpoch"),
+			formatCoreFunction(input.program, fn.id),
+		).toBe(true);
+		expect(
+			operations.filter(
+				({ opcode, attributes }) =>
+					opcode === "probeRead" && attributes.readKind === "private",
+			),
+		).toHaveLength(name === "materializeTerminatorEdge" ? 3 : 2);
+		expect(
+			operations.filter(({ opcode }) => opcode === "guardFunctionIndex"),
+		).toHaveLength(name === "materializeTerminatorEdge" ? 4 : 3);
+		const cfg = buildCoreControlFlow(input.program, fn.id);
+		expect(cfg.loops.length).toBeGreaterThan(0);
+	});
+
+	it("retains ordinary output writes when a mixed alias can replace push", () => {
+		const facts = compilerProgramFactsFromConfig(
+			resolveBuildConfig({ engine: { primordials: "locked" } }),
+		);
+		const input = lowerSemanticProgramToCore(
+			semantic(readFileSync("tests/local/read-accessor-loop-prefixes.mjs", "utf8")),
+			{ facts },
+		);
+		optimizeCore(input, { verification: "per-pass" });
+		const operations = coreOperations(coreFunctionNamed(input.program, "escapedOutput")!);
+		expect(
+			operations.some(
+				({ attributes }) => attributes.specialized === "Array.prototype.push",
+			),
+		).toBe(false);
+		expect(operations.some(({ opcode }) => opcode === "readServiceEpoch")).toBe(false);
+	});
 });

@@ -342,6 +342,9 @@ typedef struct MalInstruction {
             i32 dst, success, object, data_offset;
         } probe_read;
 
+        struct { i32 dst; } read_service_epoch;
+        struct { i32 dst, epoch; } guard_service_epoch;
+
         struct {
             i32 dst, callee, function_index, data_offset;
         } guard_base_constructor_layout;
@@ -1812,6 +1815,8 @@ typedef struct MalVm {
      * rather than overflowing the C stack.
      */
     i32 native_call_depth;
+    // Saturation makes every prepared-prefix comparison miss instead of wrapping.
+    u64 service_epoch;
 
     /** Active nested Proxy meta-object dispatches; bounds recursive Proxy chains. */
     i32 proxy_dispatch_depth;

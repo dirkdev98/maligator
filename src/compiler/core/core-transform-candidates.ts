@@ -53,6 +53,7 @@ export interface CoreTransformCandidate {
 	readonly targets: ReadonlyArray<CoreFunctionId>;
 	readonly targetSetKind?: "closed" | "open-hints";
 	readonly readAccessorRegion?: CoreReadAccessorRegionPlan;
+	readonly readAccessorLoopEligible?: true;
 	readonly generatedCodeCost: number;
 	readonly compilerWorkCost: number;
 	readonly expansive: boolean;

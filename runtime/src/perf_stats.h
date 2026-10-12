@@ -462,6 +462,9 @@ typedef struct MalPerfStats {
     u64 probe_read_unsupported[3];
     u64 probe_read_private_hint_hits;
     u64 probe_read_private_searches;
+    u64 accessor_prefix_admissions;
+    u64 accessor_prefix_checks;
+    u64 accessor_prefix_invalidations;
     u64 private_load_attempts;
     u64 private_load_hint_hits;
     u64 probe_read_named_cache_hits;

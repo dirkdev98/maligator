@@ -3422,6 +3422,18 @@ static inline bool mal_vm_private_try_load(
     return hit;
 }
 
+static inline f64 mal_vm_read_service_epoch(MalVm *vm) {
+    MAL_PERF_COUNT(accessor_prefix_admissions);
+    return vm->service_epoch == 9007199254740991ULL ? NAN : (f64) vm->service_epoch;
+}
+
+static inline bool mal_vm_guard_service_epoch(MalVm *vm, f64 expected) {
+    MAL_PERF_COUNT(accessor_prefix_checks);
+    bool valid = vm->service_epoch < 9007199254740991ULL && expected == (f64) vm->service_epoch;
+    if (!valid) MAL_PERF_COUNT(accessor_prefix_invalidations);
+    return valid;
+}
+
 bool mal_vm_probe_named_read_miss(
     MalVm *vm, MalValue receiver, i32 string_index, MalInlineCache *ic, MalValue *out
 );

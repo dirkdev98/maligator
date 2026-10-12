@@ -1448,6 +1448,24 @@ const rewriteContainedFreshArrayBuiltins: CoreFunctionPass = {
 			if (handlerEscapes.has(allocation)) continue;
 			let valid = true;
 			for (const instruction of fn.instructionIds()) {
+				const edgeStart = fn.kernel.terminatorEdgeStart(instruction);
+				for (let index = 0; index < fn.kernel.terminatorEdgeCount(instruction); index++) {
+					const edge = edgeStart + index;
+					const target = fn.kernel.terminatorEdgeBlock(edge);
+					const argumentsStart = fn.kernel.terminatorEdgeArgumentStart(edge);
+					const parametersStart = fn.kernel.blockParameterStart(target);
+					for (
+						let argument = 0;
+						argument < fn.kernel.terminatorEdgeArgumentCount(edge);
+						argument++
+					) {
+						const value = fn.kernel.operandAt(argumentsStart + argument);
+						if (provenance.allocationOf(value)?.instruction !== allocation) continue;
+						const parameter = fn.kernel.blockParameterValue(parametersStart + argument);
+						if (provenance.allocationOf(parameter)?.instruction !== allocation)
+							valid = false;
+					}
+				}
 				const operandStart = fn.kernel.instructionOperandStart(instruction);
 				const operandCount = fn.kernel.instructionOperandCount(instruction);
 				for (let operandIndex = 0; operandIndex < operandCount; operandIndex++) {
@@ -1459,7 +1477,22 @@ const rewriteContainedFreshArrayBuiltins: CoreFunctionPass = {
 							: undefined;
 					const candidateCall = byCall.get(instruction);
 					const candidateProperty = byProperty.get(instruction);
+					const finishesWithArray =
+						fn.instructionKind(instruction) === "return" ||
+						((opcode === "createObject" || opcode === "createObjectShaped") &&
+							fn.instructionKind(fn.blockTerminator(fn.instructionBlock(instruction))) ===
+								"return" &&
+							(() => {
+								for (
+									let next = fn.instructionNext(instruction);
+									next !== undefined;
+									next = fn.instructionNext(next)
+								)
+									if (byCall.get(next)?.allocation === allocation) return false;
+								return true;
+							})());
 					const allowed =
+						finishesWithArray ||
 						(candidateProperty?.allocation === allocation && operandIndex === 0) ||
 						(candidateCall?.allocation === allocation &&
 							operandIndex === candidateCall.receiverPosition) ||
