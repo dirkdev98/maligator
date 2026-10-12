@@ -33,7 +33,9 @@ With `surface.node`, `node:module.builtinModules` and `isBuiltin` describe the m
 
 `node:buffer.isAscii` and `isUtf8` validate the bytes of Buffers, typed arrays, and ArrayBuffers, including shared backing stores. They honor typed-array offsets and validate UTF-8 scalar values without accepting surrogate encodings. Detached and out-of-bounds inputs are empty; DataViews and proxies are rejected, matching Node 26.8 and later.
 
-`node:util.toUSVString` coerces its input to a string and replaces unpaired surrogates with U+FFFD. The supported `node:util/types` predicates share identity with `util.types`, inspect runtime brands without invoking property getters, and preserve the distinction between ordinary, async, and generator functions.
+`node:util.toUSVString` coerces its input to a string and replaces unpaired surrogates with U+FFFD. The supported `node:util/types` predicates share identity with `util.types`, inspect runtime brands without invoking property getters, and preserve the distinction between ordinary, async, and generator functions. Arguments and native errors retain their brands after prototype changes; prototypes and `Symbol.toStringTag` cannot forge them.
+
+`node:path/posix` exposes the existing POSIX path implementation with the same object and function identities as `path.posix`. `Buffer.isEncoding` recognizes supported encoding names without coercing other values.
 
 ## Replace a module specifier
 

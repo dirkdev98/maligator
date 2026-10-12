@@ -23,7 +23,7 @@
 		},
 		{
 			"mode": "full",
-			"sha256": "27c842863343e204121387eb7c525dd4422a0878a93321195fcf5be9c9d1b5d7",
+			"sha256": "f79bb6e94113d3b8fbd4df9298f7883df8111c5d747cf7b3431ab35969559ede",
 			"phases": [
 				{
 					"phase": "language-initialized",
@@ -33,15 +33,15 @@
 				},
 				{
 					"phase": "host-installed",
-					"nodes": 1905,
-					"descriptors": 5809,
+					"nodes": 1909,
+					"descriptors": 5822,
 					"repeatedOwnKeys": [{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }]
 				}
 			]
 		},
 		{
 			"mode": "mutable",
-			"sha256": "4eb8484d371bce3a2b013b6cbaca9f0d39db0435f6a09993cf7002467b1289f2",
+			"sha256": "f25b226715016fbdef29525ede33fa8d6024fa7606d2f98fe48d5c5e93a69240",
 			"phases": [
 				{
 					"phase": "language-initialized",
@@ -51,15 +51,15 @@
 				},
 				{
 					"phase": "host-installed",
-					"nodes": 1901,
-					"descriptors": 5800,
+					"nodes": 1905,
+					"descriptors": 5813,
 					"repeatedOwnKeys": []
 				}
 			]
 		},
 		{
 			"mode": "node",
-			"sha256": "26a470613382625fb51a7c8c2e4b7884ea2d7546b2b37c9ce6e250489467982a",
+			"sha256": "ca0cba8a6735f34117893fbda26973e3442130e7c57e2c96ec534443e433d109",
 			"phases": [
 				{
 					"phase": "language-initialized",
@@ -69,8 +69,8 @@
 				},
 				{
 					"phase": "host-installed",
-					"nodes": 1432,
-					"descriptors": 4410,
+					"nodes": 1436,
+					"descriptors": 4423,
 					"repeatedOwnKeys": [{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }]
 				}
 			]
@@ -95,7 +95,7 @@
 		},
 		{
 			"mode": "diagnostic",
-			"sha256": "0354ee5bc83c1f2298c877ad6ee7c7dec1c5e7464874a13796c3a2ed0b36d9b7",
+			"sha256": "3c1f45cb30632fe81bf6e43f475a3c99ca3c829d3ddd12a800080049f88c8e4e",
 			"phases": [
 				{
 					"phase": "language-initialized",
@@ -105,15 +105,15 @@
 				},
 				{
 					"phase": "host-installed",
-					"nodes": 1913,
-					"descriptors": 5839,
+					"nodes": 1917,
+					"descriptors": 5852,
 					"repeatedOwnKeys": [{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }]
 				}
 			]
 		},
 		{
 			"mode": "no-eval",
-			"sha256": "27c842863343e204121387eb7c525dd4422a0878a93321195fcf5be9c9d1b5d7",
+			"sha256": "f79bb6e94113d3b8fbd4df9298f7883df8111c5d747cf7b3431ab35969559ede",
 			"phases": [
 				{
 					"phase": "language-initialized",
@@ -123,15 +123,15 @@
 				},
 				{
 					"phase": "host-installed",
-					"nodes": 1905,
-					"descriptors": 5809,
+					"nodes": 1909,
+					"descriptors": 5822,
 					"repeatedOwnKeys": [{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }]
 				}
 			]
 		},
 		{
 			"mode": "no-realms",
-			"sha256": "31cec71130b4c142731817ecd9d1063696036764a52e60939e59ad66719eb0c6",
+			"sha256": "dfbe250047b577bf95805d123223a3390c992fbafa48f37619d0928e330260e4",
 			"phases": [
 				{
 					"phase": "language-initialized",
@@ -141,15 +141,15 @@
 				},
 				{
 					"phase": "host-installed",
-					"nodes": 1901,
-					"descriptors": 5797,
+					"nodes": 1905,
+					"descriptors": 5810,
 					"repeatedOwnKeys": [{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }]
 				}
 			]
 		},
 		{
 			"mode": "no-regexp",
-			"sha256": "22abf1ee4c90793c594e0c6cd85c6ec54c61037b8564e2ca39749725539f6a82",
+			"sha256": "85af58bd438cfd089b03dab20c60df5a471a340c790ccda369172e50844871c1",
 			"phases": [
 				{
 					"phase": "language-initialized",
@@ -159,15 +159,15 @@
 				},
 				{
 					"phase": "host-installed",
-					"nodes": 1859,
-					"descriptors": 5656,
+					"nodes": 1863,
+					"descriptors": 5669,
 					"repeatedOwnKeys": [{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }]
 				}
 			]
 		},
 		{
 			"mode": "no-temporal",
-			"sha256": "bd4beab948549ab7cc4f3ae14cf831e0b01702a5379c4d1ff8ea29c28516d190",
+			"sha256": "e9db0b6d63dd34b40d612cde880f82286a438c86cf6af9a1f5e69ec4f1d2a746",
 			"phases": [
 				{
 					"phase": "language-initialized",
@@ -177,15 +177,15 @@
 				},
 				{
 					"phase": "host-installed",
-					"nodes": 1662,
-					"descriptors": 5082,
+					"nodes": 1666,
+					"descriptors": 5095,
 					"repeatedOwnKeys": [{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }]
 				}
 			]
 		},
 		{
 			"mode": "no-intl",
-			"sha256": "236760003fd4616cd14a9a3ee7c0b479d94efe50e32b11c7d79d6def55592c54",
+			"sha256": "31b7bd9256e9925a4dcd7ee68de6e4e40230b031322185c2369e60281cb21aca",
 			"phases": [
 				{
 					"phase": "language-initialized",
@@ -195,15 +195,15 @@
 				},
 				{
 					"phase": "host-installed",
-					"nodes": 1832,
-					"descriptors": 5597,
+					"nodes": 1836,
+					"descriptors": 5610,
 					"repeatedOwnKeys": [{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }]
 				}
 			]
 		},
 		{
 			"mode": "intl-collator",
-			"sha256": "8d335dbd9feb127689852aec7f64ce296de4720e30d282a45565a8e55863c26a",
+			"sha256": "905b8aa3fd087d9c7dd5d9a1fb520e3be96308213c17ad8e43b6bf851a50ae07",
 			"phases": [
 				{
 					"phase": "language-initialized",
@@ -213,15 +213,15 @@
 				},
 				{
 					"phase": "host-installed",
-					"nodes": 1855,
-					"descriptors": 5665,
+					"nodes": 1859,
+					"descriptors": 5678,
 					"repeatedOwnKeys": [{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }]
 				}
 			]
 		},
 		{
 			"mode": "intl-number-format",
-			"sha256": "5e4f842619ba95d8046ec3bcf3cb9c0946649bdcb282150b4477d6a886f1c8e6",
+			"sha256": "bfaae56149262d688d98734b627a16850b48dac53d8098e81cd3024e2a5afa6d",
 			"phases": [
 				{
 					"phase": "language-initialized",
@@ -231,15 +231,15 @@
 				},
 				{
 					"phase": "host-installed",
-					"nodes": 1855,
-					"descriptors": 5665,
+					"nodes": 1859,
+					"descriptors": 5678,
 					"repeatedOwnKeys": [{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }]
 				}
 			]
 		},
 		{
 			"mode": "intl-date-time-format",
-			"sha256": "81bf8c1db2beafb6f924eba7cacf39c0a6a37299ae9d940aecce179a8dfb0d44",
+			"sha256": "6ef85f8524f5d99917e02bc9ab7579f6c2de3fae9f6f1d64f6a7eefd3747dea9",
 			"phases": [
 				{
 					"phase": "language-initialized",
@@ -249,15 +249,15 @@
 				},
 				{
 					"phase": "host-installed",
-					"nodes": 1857,
-					"descriptors": 5671,
+					"nodes": 1861,
+					"descriptors": 5684,
 					"repeatedOwnKeys": [{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }]
 				}
 			]
 		},
 		{
 			"mode": "intl-plural-rules",
-			"sha256": "9b74b55d5179adaeb3a257178e2f7bb12c290204fd00f4cc301dd5424d07206e",
+			"sha256": "a3ae83c8a0ee0ea3c8b7d8700c9fa3d6cb2a58c19b5038792f7c22a1249ce29a",
 			"phases": [
 				{
 					"phase": "language-initialized",
@@ -267,15 +267,15 @@
 				},
 				{
 					"phase": "host-installed",
-					"nodes": 1855,
-					"descriptors": 5665,
+					"nodes": 1859,
+					"descriptors": 5678,
 					"repeatedOwnKeys": [{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }]
 				}
 			]
 		},
 		{
 			"mode": "intl-list-format",
-			"sha256": "d0a8115a8b2b657efc812ee6eb16095fdc0c9376a4e347f8a0ac554813c584d4",
+			"sha256": "26706530127bf2672cd1a51c29f475aa1f86ed79bc3bc5eb6fe5f3e7f16d27dd",
 			"phases": [
 				{
 					"phase": "language-initialized",
@@ -285,15 +285,15 @@
 				},
 				{
 					"phase": "host-installed",
-					"nodes": 1856,
-					"descriptors": 5668,
+					"nodes": 1860,
+					"descriptors": 5681,
 					"repeatedOwnKeys": [{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }]
 				}
 			]
 		},
 		{
 			"mode": "intl-segmenter",
-			"sha256": "44938239d5f8c34f0bf8e4e87ce88efebeaf84b33c3b6f3f02d94d39b740b978",
+			"sha256": "fde16465054bc8785b615262328af2f888ab343c954b099bba1dcd35e9456503",
 			"phases": [
 				{
 					"phase": "language-initialized",
@@ -303,15 +303,15 @@
 				},
 				{
 					"phase": "host-installed",
-					"nodes": 1860,
-					"descriptors": 5675,
+					"nodes": 1864,
+					"descriptors": 5688,
 					"repeatedOwnKeys": [{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }]
 				}
 			]
 		},
 		{
 			"mode": "intl-display-names",
-			"sha256": "899c079da64203a33e920017d0d07edde43bee40175d5448e9b9c9363e9b6423",
+			"sha256": "2e9ac9c58f521e8b91dea822ad57c3fca0e9a9a9adf3cf500e03e76916b631d3",
 			"phases": [
 				{
 					"phase": "language-initialized",
@@ -321,15 +321,15 @@
 				},
 				{
 					"phase": "host-installed",
-					"nodes": 1855,
-					"descriptors": 5665,
+					"nodes": 1859,
+					"descriptors": 5678,
 					"repeatedOwnKeys": [{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }]
 				}
 			]
 		},
 		{
 			"mode": "intl-relative-time-format",
-			"sha256": "b06f1f33f8193f5f65cd7feac3a81edff6452db3f7415a6c2526dd0e37b64bda",
+			"sha256": "f9ad91e51ef5539826097d7e94b539c5cf28883449810041d190d3db8bda21f9",
 			"phases": [
 				{
 					"phase": "language-initialized",
@@ -339,15 +339,15 @@
 				},
 				{
 					"phase": "host-installed",
-					"nodes": 1856,
-					"descriptors": 5668,
+					"nodes": 1860,
+					"descriptors": 5681,
 					"repeatedOwnKeys": [{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }]
 				}
 			]
 		},
 		{
 			"mode": "intl-duration-format",
-			"sha256": "96963ac605cc03177d718c1f70d25d8c33906ab5a29b4175c4a56022c1d55c1f",
+			"sha256": "7a3e9ee361404dd5a6540cceea429fed28648be28d42a2f2495b2b1e4aac3098",
 			"phases": [
 				{
 					"phase": "language-initialized",
@@ -357,8 +357,8 @@
 				},
 				{
 					"phase": "host-installed",
-					"nodes": 1856,
-					"descriptors": 5668,
+					"nodes": 1860,
+					"descriptors": 5681,
 					"repeatedOwnKeys": [{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }]
 				}
 			]
@@ -5080,6 +5080,30 @@
 		[
 			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%",
 			{ "string": "node:path" },
+			[
+				"full",
+				"mutable",
+				"node",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%",
+			{ "string": "node:path/posix" },
 			[
 				"full",
 				"mutable",
@@ -13263,6 +13287,54 @@
 		],
 		[
 			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"]",
+			{ "string": "isArgumentsObject" },
+			[
+				"full",
+				"mutable",
+				"node",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"]",
+			{ "string": "isNativeError" },
+			[
+				"full",
+				"mutable",
+				"node",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"]",
 			{ "string": "isAnyArrayBuffer" },
 			[
 				"full",
@@ -14199,6 +14271,54 @@
 		],
 		[
 			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"].isAnyArrayBuffer",
+			{ "string": "name" },
+			[
+				"full",
+				"mutable",
+				"node",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"].isArgumentsObject",
+			{ "string": "length" },
+			[
+				"full",
+				"mutable",
+				"node",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"].isArgumentsObject",
 			{ "string": "name" },
 			[
 				"full",
@@ -15735,6 +15855,54 @@
 		],
 		[
 			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"].isModuleNamespaceObject",
+			{ "string": "name" },
+			[
+				"full",
+				"mutable",
+				"node",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"].isNativeError",
+			{ "string": "length" },
+			[
+				"full",
+				"mutable",
+				"node",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"].isNativeError",
 			{ "string": "name" },
 			[
 				"full",
@@ -30736,6 +30904,30 @@
 		[
 			"%MAL_INTRINSIC_NODE_MODULE_API_MODULE%.builtinModules",
 			{ "string": "38" },
+			[
+				"full",
+				"mutable",
+				"node",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"%MAL_INTRINSIC_NODE_MODULE_API_MODULE%.builtinModules",
+			{ "string": "39" },
 			[
 				"full",
 				"mutable",
@@ -117324,6 +117516,30 @@
 		],
 		[
 			"globalThis.Buffer",
+			{ "string": "isEncoding" },
+			[
+				"full",
+				"mutable",
+				"node",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"globalThis.Buffer",
 			{ "string": "byteLength" },
 			[
 				"full",
@@ -117709,6 +117925,102 @@
 		[
 			"globalThis.Buffer.isBuffer",
 			{ "string": "name" },
+			[
+				"full",
+				"mutable",
+				"node",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"globalThis.Buffer.isEncoding",
+			{ "string": "length" },
+			[
+				"full",
+				"mutable",
+				"node",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"globalThis.Buffer.isEncoding",
+			{ "string": "name" },
+			[
+				"full",
+				"mutable",
+				"node",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"globalThis.Buffer.isEncoding",
+			{ "string": "prototype" },
+			[
+				"full",
+				"mutable",
+				"node",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"globalThis.Buffer.isEncoding.prototype",
+			{ "string": "constructor" },
 			[
 				"full",
 				"mutable",

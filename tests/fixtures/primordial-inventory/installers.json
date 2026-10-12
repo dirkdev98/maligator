@@ -305,15 +305,15 @@
 	},
 	{
 		"file": "generated/known_primordials.inc",
-		"sha256": "09cab2bf9a5f86751daee15e096ddab56b16e7d71fd94ad388b5e2e794b4eaba"
+		"sha256": "39124813ea9c18d5e0134936fa3a3059e3a70a223c76de8b06054eb664e6378b"
 	},
 	{
 		"file": "generated/node_builtin_installers.inc",
-		"sha256": "07dc57430ef92ae8d5bf5d366c004ff29fa2dce630501f2c97f83642d1d16ec9"
+		"sha256": "05633b3614502f47badc3fe557363ae2ca83fbc7600115179be109ef26261a02"
 	},
 	{
 		"file": "generated/node_builtin_modules.inc",
-		"sha256": "1a0bf200330ef0a77840076cf2a6f5646d18c7f397fe463dd2442c187a7c6f88"
+		"sha256": "30e8de90cedc4f3a1cff88b287bfa5518e518213f56be50a1c92ec6b6b1ffd18"
 	},
 	{
 		"file": "generated/primordial_registry.inc",
@@ -349,7 +349,7 @@
 	},
 	{
 		"file": "runtime/host_registry.c",
-		"sha256": "f307c90502e360cb291db4eb0fcdb49fa36b198f9d4f3303b57da1d395dc14dd"
+		"sha256": "853bd609501a457c49781f524b30b392d123e7bf39d7b11e2007cfe50b708d99"
 	},
 	{
 		"file": "runtime/mal_application.c",
@@ -393,7 +393,7 @@
 	},
 	{
 		"file": "runtime/node_buffer.c",
-		"sha256": "8b84a7e144a9271444c00566ed32b3581c5b44dbdb126732b9376acb35db9368"
+		"sha256": "c7dfb457664add099ac9605c60c9455f98c854dc7be2cb06ec1bfe735d7855f4"
 	},
 	{
 		"file": "runtime/node_buffer.h",
@@ -529,11 +529,11 @@
 	},
 	{
 		"file": "runtime/node_path.c",
-		"sha256": "ce609fae19b495112a43b5387ca23a429396bfb05fe057c00ac6c25be2babf1a"
+		"sha256": "3585090dbe86e7d2fc5637ab8a1c9df549551a1f5dc74a0f34e231689b96fe5f"
 	},
 	{
 		"file": "runtime/node_path.h",
-		"sha256": "d2bc907fd7508391fcc6341d92476c9592dd9853dae7e08401c6b59f32214328"
+		"sha256": "a0f13d73f0c10cb3c3e6075a10083503c26d281c25e720d7c299c3cbd88d831a"
 	},
 	{
 		"file": "runtime/node_perf_hooks.c",
@@ -625,7 +625,7 @@
 	},
 	{
 		"file": "runtime/node_util.c",
-		"sha256": "e1f0d861995d0b3ecb23eb4951210400ad004ce7bdad255488987df683c5f0d2"
+		"sha256": "801e5684372797873de9dc897a0e9cc323ee93e5cd05cb0c639b8061dd160df9"
 	},
 	{
 		"file": "runtime/node_util.h",
@@ -669,7 +669,7 @@
 	},
 	{
 		"file": "runtime/web_events.c",
-		"sha256": "6e2d3d0bc4d741a5c8107a757240bc420e6f7e6963a930d0f1596986dc134e8a"
+		"sha256": "721a9672b3e12897177d643196d800b3d5e379ff80f9a85537d71393e0ac2ef8"
 	},
 	{
 		"file": "runtime/web_fetch.c",

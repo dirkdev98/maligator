@@ -76,6 +76,7 @@ MalHostInstaller mal_host_resolve_installer(const char *name, usize length) {
     MATCH_INSTALLER(mal_host_install_node_net);
     MATCH_INSTALLER(mal_host_install_node_os);
     MATCH_INSTALLER(mal_host_install_node_path);
+    MATCH_INSTALLER(mal_host_install_node_path_posix);
     MATCH_INSTALLER(mal_host_install_node_perf_hooks);
     MATCH_INSTALLER(mal_host_install_node_querystring);
     MATCH_INSTALLER(mal_host_install_node_readline);

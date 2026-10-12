@@ -101,6 +101,12 @@ const PATH: HostModuleSpec = {
 	installer: hostInstallerSymbol("node:path"),
 };
 
+const PATH_POSIX: HostModuleSpec = {
+	...PATH,
+	id: "node:path/posix",
+	installer: hostInstallerSymbol("node:path/posix"),
+};
+
 const FS: HostModuleSpec = {
 	id: "node:fs",
 	named: [
@@ -359,6 +365,8 @@ const UTIL: HostModuleSpec = {
 const UTIL_TYPES: HostModuleSpec = {
 	id: "node:util/types",
 	named: [
+		"isArgumentsObject",
+		"isNativeError",
 		"isPromise",
 		"isAnyArrayBuffer",
 		"isArrayBuffer",
@@ -680,6 +688,7 @@ const SQLITE: HostModuleSpec = {
 export const HOST_MODULES: ReadonlyMap<string, HostModuleSpec> = new Map(
 	[
 		PATH,
+		PATH_POSIX,
 		FS,
 		FS_PROMISES,
 		V8,

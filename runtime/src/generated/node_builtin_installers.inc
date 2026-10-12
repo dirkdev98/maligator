@@ -1,5 +1,6 @@
 /* Generated from the compiler's supported host-module registry. */
         {"node:path", mal_host_install_node_path, true},
+        {"node:path/posix", mal_host_install_node_path_posix, true},
         {"node:fs", mal_host_install_node_fs, true},
         {"node:fs/promises", mal_host_install_node_fs_promises, true},
         {"node:v8", mal_host_install_node_v8, true},

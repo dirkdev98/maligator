@@ -35,8 +35,6 @@ console.log(
 			isBuiltin("sqlite"),
 		],
 		coerced,
-		unsupported: ["path/posix", "path/win32", "timers", "dns/promises", "stream/web"].map(
-			isBuiltin,
-		),
+		unsupported: ["path/win32", "timers", "dns/promises", "stream/web"].map(isBuiltin),
 	}),
 );

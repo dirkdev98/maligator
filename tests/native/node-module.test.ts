@@ -66,7 +66,7 @@ describe("node:module builtin registry", () => {
 				expect(actual).toEqual({
 					...oracle,
 					names,
-					unsupported: [false, false, false, false, false],
+					unsupported: [false, false, false, false],
 				});
 			}
 		}

@@ -103,6 +103,28 @@ describe("global Buffer and node:buffer", () => {
 });
 
 describe("node:buffer text validation", () => {
+	it("recognizes encoding names without coercion and preserves construction behavior", () => {
+		const directory = mkdtempSync(path.join(os.tmpdir(), "mal-buffer-encoding-"));
+		const fixture = "tests/local/node-buffer-encoding.mjs";
+		const expected = execFileSync(process.execPath, [fixture], {
+			encoding: "utf8",
+		}).trim();
+		try {
+			const pair = buildBackendPairFromOneProgramImage({
+				fixture,
+				name: "node-buffer-encoding",
+				outDir: directory,
+				mainFile: HOST_MAIN,
+				nodeEnabled: true,
+			});
+			for (const binary of [pair.compiled, pair.interpreted]) {
+				for (const env of [{}, STRESS_ENV])
+					expect(runToStdout(binary, { env }).trim()).toBe(expected);
+			}
+		} finally {
+			rmSync(directory, { recursive: true, force: true });
+		}
+	});
 	it("validates encoded bytes and observable argument errors like Node", () => {
 		const directory = mkdtempSync(path.join(os.tmpdir(), "mal-buffer-validation-"));
 		const fixture = "tests/local/node-buffer-validation.mjs";

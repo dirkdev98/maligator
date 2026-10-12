@@ -11,6 +11,7 @@
 #include "ascii.h"
 #include "array_buffer_object.h"
 #include "builtin_string.h"
+#include "builtin_error.h"
 #include "function_object.h"
 #include "gc.h"
 #include "heap_string.h"
@@ -731,6 +732,8 @@ UTIL_TYPE_PREDICATE(is_weak_set,
 UTIL_TYPE_PREDICATE(is_reg_exp, mal_value_is_regexp_object(value))
 UTIL_TYPE_PREDICATE(is_typed_array, mal_value_is_typed_array_object(value))
 UTIL_TYPE_PREDICATE(is_boxed_primitive, mal_value_is_primitive_wrapper(value))
+UTIL_TYPE_PREDICATE(is_arguments_object, mal_value_is_object(value)
+    && mal_value_to_object(value)->is_arguments)
 UTIL_TYPE_PREDICATE(is_big_int_object, mal_value_is_primitive_wrapper(value)
     && mal_value_to_primitive_wrapper(value)->kind == MAL_PRIMITIVE_WRAPPER_BIGINT)
 UTIL_TYPE_PREDICATE(is_boolean_object, mal_value_is_primitive_wrapper(value)
@@ -806,7 +809,16 @@ static MalValue util_types_is_generator_function(
     return util_types_function_kind(vm, args, argc, false);
 }
 
+static MalValue util_types_is_native_error(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
+    MalValue new_target, MalValue callee) {
+    (void) receiver; (void) new_target; (void) callee;
+    return mal_value_new_boolean(argc > 0 && mal_builtin_value_has_error_data(vm, args[0]));
+}
+
 static const MalNodeUtilTypeExport util_type_exports[] = {
+    {"isArgumentsObject", util_types_is_arguments_object},
+    {"isNativeError", util_types_is_native_error},
     {"isAnyArrayBuffer", util_types_is_any_array_buffer},
     {"isArrayBuffer", util_types_is_array_buffer},
     {"isSharedArrayBuffer", util_types_is_shared_array_buffer},

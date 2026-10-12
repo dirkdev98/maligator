@@ -614,6 +614,21 @@ bool mal_node_buffer_encoding_is_known(MalValue encoding) {
         && mal_buffer_encoding_named(mal_value_to_string(encoding), &resolved);
 }
 
+static MalValue mal_buffer_is_encoding(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
+    MalValue new_target, MalValue callee) {
+    (void) receiver; (void) callee;
+    if (!mal_value_is_undefined(new_target)) {
+        MalObject *prototype;
+        if (!mal_vm_get_prototype_from_constructor(
+                vm, new_target, MAL_INTRINSIC_OBJECT_PROTOTYPE, &prototype)) {
+            return mal_value_new_undefined();
+        }
+        return mal_value_from_object(mal_object_new(&vm->heap, prototype));
+    }
+    return mal_value_new_boolean(argc > 0 && mal_node_buffer_encoding_is_known(args[0]));
+}
+
 byte *mal_node_buffer_decode_string(
     MalVm *vm, MalValue string, MalValue encoding, usize *length_out
 ) {
@@ -1754,6 +1769,26 @@ static void mal_buffer_define_method(
     mal_gc_unroot(&root);
 }
 
+static void mal_buffer_define_regular_method(
+    MalVm *vm, MalObject *object, const byte *name, i32 length,
+    MalNativeFunctionCallback callback, MalValue buffer_prototype
+) {
+    MalValue roots[] = {mal_value_new_undefined(), mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    MalNativeFunctionObject *function = mal_buffer_method(vm, name, length, callback, buffer_prototype);
+    roots[0] = mal_value_from_native_function_object(function);
+    mal_native_function_object_set_constructor(function);
+    mal_native_function_object_set_handles_new_target_prototype(function);
+    roots[1] = mal_value_from_object(mal_intrinsic_new_object(vm));
+    mal_intrinsic_define_data(vm, (MalObject *) function, "prototype", roots[1], MAL_PROPERTY_WRITABLE);
+    mal_intrinsic_define_data(vm, mal_value_to_object(roots[1]), "constructor", roots[0],
+        MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
+    mal_intrinsic_define_data(vm, object, name, roots[0],
+        MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE);
+    mal_gc_unroot(&root);
+}
+
 static void mal_buffer_install_exports(
     MalVm *vm, const MalHostInstallSlot *slots, i32 count,
     MalValue constructor, MalValue module_default
@@ -1808,6 +1843,8 @@ void mal_host_install_node_buffer(
                              mal_buffer_alloc_unsafe, roots[0]);
     mal_buffer_define_method(vm, (MalObject *) constructor, "isBuffer", 1,
                              mal_buffer_is_buffer, roots[0]);
+    mal_buffer_define_regular_method(vm, (MalObject *) constructor, "isEncoding", 1,
+                                    mal_buffer_is_encoding, roots[0]);
     mal_buffer_define_method(vm, (MalObject *) constructor, "byteLength", 1,
                              mal_buffer_byte_length, roots[0]);
     mal_buffer_define_method(vm, (MalObject *) constructor, "concat", 1, mal_buffer_concat,

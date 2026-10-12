@@ -2596,6 +2596,19 @@
 			"decisions": []
 		},
 		{
+			"id": "[\"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%\",\"node:path/posix\"]",
+			"owner": "%MAL_INTRINSIC_NODE_BUILTIN_MODULES%",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%",
+				"MAL_INTRINSIC_NODE_BUILTIN_MODULES"
+			],
+			"key": "node:path/posix",
+			"kind": "data",
+			"operations": [],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
 			"id": "[\"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%\",\"node:async_hooks\"]",
 			"owner": "%MAL_INTRINSIC_NODE_BUILTIN_MODULES%",
 			"ownerPaths": [
@@ -5069,8 +5082,11 @@
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:path\"]",
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:path\"].posix",
+				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:path/posix\"]",
 				"mal_host_install_node_path:default",
-				"mal_host_install_node_path:posix"
+				"mal_host_install_node_path:posix",
+				"mal_host_install_node_path_posix:default",
+				"mal_host_install_node_path_posix:posix"
 			],
 			"key": "basename",
 			"kind": "data",
@@ -5084,8 +5100,11 @@
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:path\"]",
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:path\"].posix",
+				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:path/posix\"]",
 				"mal_host_install_node_path:default",
-				"mal_host_install_node_path:posix"
+				"mal_host_install_node_path:posix",
+				"mal_host_install_node_path_posix:default",
+				"mal_host_install_node_path_posix:posix"
 			],
 			"key": "dirname",
 			"kind": "data",
@@ -5099,8 +5118,11 @@
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:path\"]",
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:path\"].posix",
+				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:path/posix\"]",
 				"mal_host_install_node_path:default",
-				"mal_host_install_node_path:posix"
+				"mal_host_install_node_path:posix",
+				"mal_host_install_node_path_posix:default",
+				"mal_host_install_node_path_posix:posix"
 			],
 			"key": "extname",
 			"kind": "data",
@@ -5114,8 +5136,11 @@
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:path\"]",
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:path\"].posix",
+				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:path/posix\"]",
 				"mal_host_install_node_path:default",
-				"mal_host_install_node_path:posix"
+				"mal_host_install_node_path:posix",
+				"mal_host_install_node_path_posix:default",
+				"mal_host_install_node_path_posix:posix"
 			],
 			"key": "format",
 			"kind": "data",
@@ -5129,8 +5154,11 @@
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:path\"]",
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:path\"].posix",
+				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:path/posix\"]",
 				"mal_host_install_node_path:default",
-				"mal_host_install_node_path:posix"
+				"mal_host_install_node_path:posix",
+				"mal_host_install_node_path_posix:default",
+				"mal_host_install_node_path_posix:posix"
 			],
 			"key": "isAbsolute",
 			"kind": "data",
@@ -5144,8 +5172,11 @@
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:path\"]",
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:path\"].posix",
+				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:path/posix\"]",
 				"mal_host_install_node_path:default",
-				"mal_host_install_node_path:posix"
+				"mal_host_install_node_path:posix",
+				"mal_host_install_node_path_posix:default",
+				"mal_host_install_node_path_posix:posix"
 			],
 			"key": "join",
 			"kind": "data",
@@ -5159,8 +5190,11 @@
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:path\"]",
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:path\"].posix",
+				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:path/posix\"]",
 				"mal_host_install_node_path:default",
-				"mal_host_install_node_path:posix"
+				"mal_host_install_node_path:posix",
+				"mal_host_install_node_path_posix:default",
+				"mal_host_install_node_path_posix:posix"
 			],
 			"key": "matchesGlob",
 			"kind": "data",
@@ -5174,8 +5208,11 @@
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:path\"]",
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:path\"].posix",
+				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:path/posix\"]",
 				"mal_host_install_node_path:default",
-				"mal_host_install_node_path:posix"
+				"mal_host_install_node_path:posix",
+				"mal_host_install_node_path_posix:default",
+				"mal_host_install_node_path_posix:posix"
 			],
 			"key": "normalize",
 			"kind": "data",
@@ -5189,8 +5226,11 @@
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:path\"]",
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:path\"].posix",
+				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:path/posix\"]",
 				"mal_host_install_node_path:default",
-				"mal_host_install_node_path:posix"
+				"mal_host_install_node_path:posix",
+				"mal_host_install_node_path_posix:default",
+				"mal_host_install_node_path_posix:posix"
 			],
 			"key": "parse",
 			"kind": "data",
@@ -5204,8 +5244,11 @@
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:path\"]",
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:path\"].posix",
+				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:path/posix\"]",
 				"mal_host_install_node_path:default",
-				"mal_host_install_node_path:posix"
+				"mal_host_install_node_path:posix",
+				"mal_host_install_node_path_posix:default",
+				"mal_host_install_node_path_posix:posix"
 			],
 			"key": "relative",
 			"kind": "data",
@@ -5219,8 +5262,11 @@
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:path\"]",
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:path\"].posix",
+				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:path/posix\"]",
 				"mal_host_install_node_path:default",
-				"mal_host_install_node_path:posix"
+				"mal_host_install_node_path:posix",
+				"mal_host_install_node_path_posix:default",
+				"mal_host_install_node_path_posix:posix"
 			],
 			"key": "resolve",
 			"kind": "data",
@@ -5234,8 +5280,11 @@
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:path\"]",
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:path\"].posix",
+				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:path/posix\"]",
 				"mal_host_install_node_path:default",
-				"mal_host_install_node_path:posix"
+				"mal_host_install_node_path:posix",
+				"mal_host_install_node_path_posix:default",
+				"mal_host_install_node_path_posix:posix"
 			],
 			"key": "toNamespacedPath",
 			"kind": "data",
@@ -5251,8 +5300,11 @@
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:path\"]",
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:path\"].posix",
+				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:path/posix\"]",
 				"mal_host_install_node_path:default",
-				"mal_host_install_node_path:posix"
+				"mal_host_install_node_path:posix",
+				"mal_host_install_node_path_posix:default",
+				"mal_host_install_node_path_posix:posix"
 			],
 			"key": "delimiter",
 			"kind": "data",
@@ -5266,8 +5318,11 @@
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:path\"]",
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:path\"].posix",
+				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:path/posix\"]",
 				"mal_host_install_node_path:default",
-				"mal_host_install_node_path:posix"
+				"mal_host_install_node_path:posix",
+				"mal_host_install_node_path_posix:default",
+				"mal_host_install_node_path_posix:posix"
 			],
 			"key": "sep",
 			"kind": "data",
@@ -5281,8 +5336,11 @@
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:path\"]",
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:path\"].posix",
+				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:path/posix\"]",
 				"mal_host_install_node_path:default",
-				"mal_host_install_node_path:posix"
+				"mal_host_install_node_path:posix",
+				"mal_host_install_node_path_posix:default",
+				"mal_host_install_node_path_posix:posix"
 			],
 			"key": "posix",
 			"kind": "data",
@@ -5295,7 +5353,8 @@
 			"owner": "%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:path\"].basename",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:path\"].basename",
-				"mal_host_install_node_path:basename"
+				"mal_host_install_node_path:basename",
+				"mal_host_install_node_path_posix:basename"
 			],
 			"key": "length",
 			"kind": "data",
@@ -5308,7 +5367,8 @@
 			"owner": "%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:path\"].basename",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:path\"].basename",
-				"mal_host_install_node_path:basename"
+				"mal_host_install_node_path:basename",
+				"mal_host_install_node_path_posix:basename"
 			],
 			"key": "name",
 			"kind": "data",
@@ -5321,7 +5381,8 @@
 			"owner": "%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:path\"].dirname",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:path\"].dirname",
-				"mal_host_install_node_path:dirname"
+				"mal_host_install_node_path:dirname",
+				"mal_host_install_node_path_posix:dirname"
 			],
 			"key": "length",
 			"kind": "data",
@@ -5334,7 +5395,8 @@
 			"owner": "%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:path\"].dirname",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:path\"].dirname",
-				"mal_host_install_node_path:dirname"
+				"mal_host_install_node_path:dirname",
+				"mal_host_install_node_path_posix:dirname"
 			],
 			"key": "name",
 			"kind": "data",
@@ -5347,7 +5409,8 @@
 			"owner": "%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:path\"].extname",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:path\"].extname",
-				"mal_host_install_node_path:extname"
+				"mal_host_install_node_path:extname",
+				"mal_host_install_node_path_posix:extname"
 			],
 			"key": "length",
 			"kind": "data",
@@ -5360,7 +5423,8 @@
 			"owner": "%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:path\"].extname",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:path\"].extname",
-				"mal_host_install_node_path:extname"
+				"mal_host_install_node_path:extname",
+				"mal_host_install_node_path_posix:extname"
 			],
 			"key": "name",
 			"kind": "data",
@@ -5373,7 +5437,8 @@
 			"owner": "%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:path\"].format",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:path\"].format",
-				"mal_host_install_node_path:format"
+				"mal_host_install_node_path:format",
+				"mal_host_install_node_path_posix:format"
 			],
 			"key": "length",
 			"kind": "data",
@@ -5386,7 +5451,8 @@
 			"owner": "%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:path\"].format",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:path\"].format",
-				"mal_host_install_node_path:format"
+				"mal_host_install_node_path:format",
+				"mal_host_install_node_path_posix:format"
 			],
 			"key": "name",
 			"kind": "data",
@@ -5399,7 +5465,8 @@
 			"owner": "%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:path\"].isAbsolute",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:path\"].isAbsolute",
-				"mal_host_install_node_path:isAbsolute"
+				"mal_host_install_node_path:isAbsolute",
+				"mal_host_install_node_path_posix:isAbsolute"
 			],
 			"key": "length",
 			"kind": "data",
@@ -5412,7 +5479,8 @@
 			"owner": "%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:path\"].isAbsolute",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:path\"].isAbsolute",
-				"mal_host_install_node_path:isAbsolute"
+				"mal_host_install_node_path:isAbsolute",
+				"mal_host_install_node_path_posix:isAbsolute"
 			],
 			"key": "name",
 			"kind": "data",
@@ -5425,7 +5493,8 @@
 			"owner": "%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:path\"].join",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:path\"].join",
-				"mal_host_install_node_path:join"
+				"mal_host_install_node_path:join",
+				"mal_host_install_node_path_posix:join"
 			],
 			"key": "length",
 			"kind": "data",
@@ -5438,7 +5507,8 @@
 			"owner": "%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:path\"].join",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:path\"].join",
-				"mal_host_install_node_path:join"
+				"mal_host_install_node_path:join",
+				"mal_host_install_node_path_posix:join"
 			],
 			"key": "name",
 			"kind": "data",
@@ -5451,7 +5521,8 @@
 			"owner": "%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:path\"].matchesGlob",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:path\"].matchesGlob",
-				"mal_host_install_node_path:matchesGlob"
+				"mal_host_install_node_path:matchesGlob",
+				"mal_host_install_node_path_posix:matchesGlob"
 			],
 			"key": "length",
 			"kind": "data",
@@ -5464,7 +5535,8 @@
 			"owner": "%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:path\"].matchesGlob",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:path\"].matchesGlob",
-				"mal_host_install_node_path:matchesGlob"
+				"mal_host_install_node_path:matchesGlob",
+				"mal_host_install_node_path_posix:matchesGlob"
 			],
 			"key": "name",
 			"kind": "data",
@@ -5477,7 +5549,8 @@
 			"owner": "%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:path\"].normalize",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:path\"].normalize",
-				"mal_host_install_node_path:normalize"
+				"mal_host_install_node_path:normalize",
+				"mal_host_install_node_path_posix:normalize"
 			],
 			"key": "length",
 			"kind": "data",
@@ -5490,7 +5563,8 @@
 			"owner": "%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:path\"].normalize",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:path\"].normalize",
-				"mal_host_install_node_path:normalize"
+				"mal_host_install_node_path:normalize",
+				"mal_host_install_node_path_posix:normalize"
 			],
 			"key": "name",
 			"kind": "data",
@@ -5503,7 +5577,8 @@
 			"owner": "%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:path\"].parse",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:path\"].parse",
-				"mal_host_install_node_path:parse"
+				"mal_host_install_node_path:parse",
+				"mal_host_install_node_path_posix:parse"
 			],
 			"key": "length",
 			"kind": "data",
@@ -5516,7 +5591,8 @@
 			"owner": "%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:path\"].parse",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:path\"].parse",
-				"mal_host_install_node_path:parse"
+				"mal_host_install_node_path:parse",
+				"mal_host_install_node_path_posix:parse"
 			],
 			"key": "name",
 			"kind": "data",
@@ -5529,7 +5605,8 @@
 			"owner": "%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:path\"].relative",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:path\"].relative",
-				"mal_host_install_node_path:relative"
+				"mal_host_install_node_path:relative",
+				"mal_host_install_node_path_posix:relative"
 			],
 			"key": "length",
 			"kind": "data",
@@ -5542,7 +5619,8 @@
 			"owner": "%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:path\"].relative",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:path\"].relative",
-				"mal_host_install_node_path:relative"
+				"mal_host_install_node_path:relative",
+				"mal_host_install_node_path_posix:relative"
 			],
 			"key": "name",
 			"kind": "data",
@@ -5555,7 +5633,8 @@
 			"owner": "%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:path\"].resolve",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:path\"].resolve",
-				"mal_host_install_node_path:resolve"
+				"mal_host_install_node_path:resolve",
+				"mal_host_install_node_path_posix:resolve"
 			],
 			"key": "length",
 			"kind": "data",
@@ -5568,7 +5647,8 @@
 			"owner": "%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:path\"].resolve",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:path\"].resolve",
-				"mal_host_install_node_path:resolve"
+				"mal_host_install_node_path:resolve",
+				"mal_host_install_node_path_posix:resolve"
 			],
 			"key": "name",
 			"kind": "data",
@@ -5581,7 +5661,8 @@
 			"owner": "%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:path\"].toNamespacedPath",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:path\"].toNamespacedPath",
-				"mal_host_install_node_path:toNamespacedPath"
+				"mal_host_install_node_path:toNamespacedPath",
+				"mal_host_install_node_path_posix:toNamespacedPath"
 			],
 			"key": "length",
 			"kind": "data",
@@ -5594,7 +5675,8 @@
 			"owner": "%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:path\"].toNamespacedPath",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:path\"].toNamespacedPath",
-				"mal_host_install_node_path:toNamespacedPath"
+				"mal_host_install_node_path:toNamespacedPath",
+				"mal_host_install_node_path_posix:toNamespacedPath"
 			],
 			"key": "name",
 			"kind": "data",
@@ -7064,6 +7146,40 @@
 			"decisions": []
 		},
 		{
+			"id": "[\"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\\\"node:util/types\\\"]\",\"isArgumentsObject\"]",
+			"owner": "%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"]",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util\"].types",
+				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"]",
+				"mal_host_install_node_util:types",
+				"mal_host_install_node_util_types:default"
+			],
+			"key": "isArgumentsObject",
+			"kind": "data",
+			"operations": [
+				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"].isArgumentsObject"
+			],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\\\"node:util/types\\\"]\",\"isNativeError\"]",
+			"owner": "%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"]",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util\"].types",
+				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"]",
+				"mal_host_install_node_util:types",
+				"mal_host_install_node_util_types:default"
+			],
+			"key": "isNativeError",
+			"kind": "data",
+			"operations": [
+				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"].isNativeError"
+			],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
 			"id": "[\"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\\\"node:util/types\\\"]\",\"isAnyArrayBuffer\"]",
 			"owner": "%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"]",
 			"ownerPaths": [
@@ -7720,6 +7836,32 @@
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"].isAnyArrayBuffer",
 				"mal_host_install_node_util_types:isAnyArrayBuffer"
+			],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\\\"node:util/types\\\"].isArgumentsObject\",\"length\"]",
+			"owner": "%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"].isArgumentsObject",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"].isArgumentsObject",
+				"mal_host_install_node_util_types:isArgumentsObject"
+			],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\\\"node:util/types\\\"].isArgumentsObject\",\"name\"]",
+			"owner": "%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"].isArgumentsObject",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"].isArgumentsObject",
+				"mal_host_install_node_util_types:isArgumentsObject"
 			],
 			"key": "name",
 			"kind": "data",
@@ -8592,6 +8734,32 @@
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"].isModuleNamespaceObject",
 				"mal_host_install_node_util_types:isModuleNamespaceObject"
+			],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\\\"node:util/types\\\"].isNativeError\",\"length\"]",
+			"owner": "%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"].isNativeError",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"].isNativeError",
+				"mal_host_install_node_util_types:isNativeError"
+			],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\\\"node:util/types\\\"].isNativeError\",\"name\"]",
+			"owner": "%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"].isNativeError",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"].isNativeError",
+				"mal_host_install_node_util_types:isNativeError"
 			],
 			"key": "name",
 			"kind": "data",
@@ -16786,6 +16954,19 @@
 				"mal_host_install_node_module:builtinModules"
 			],
 			"key": "38",
+			"kind": "data",
+			"operations": [],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_MODULE_API_MODULE%.builtinModules\",\"39\"]",
+			"owner": "%MAL_INTRINSIC_NODE_MODULE_API_MODULE%.builtinModules",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_MODULE_API_MODULE%.builtinModules",
+				"mal_host_install_node_module:builtinModules"
+			],
+			"key": "39",
 			"kind": "data",
 			"operations": [],
 			"task": "N-06",
@@ -79635,6 +79816,22 @@
 			"decisions": []
 		},
 		{
+			"id": "[\"globalThis.Buffer\",\"isEncoding\"]",
+			"owner": "globalThis.Buffer",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_BUFFER_MODULE%.Buffer",
+				"MAL_INTRINSIC_NODE_BUFFER_CONSTRUCTOR",
+				"globalThis.Buffer",
+				"globalThis.Buffer.prototype.constructor",
+				"mal_host_install_node_buffer:Buffer"
+			],
+			"key": "isEncoding",
+			"kind": "data",
+			"operations": ["globalThis.Buffer.isEncoding"],
+			"task": "N-04",
+			"decisions": []
+		},
+		{
 			"id": "[\"globalThis.Buffer\",\"byteLength\"]",
 			"owner": "globalThis.Buffer",
 			"ownerPaths": [
@@ -79819,6 +80016,55 @@
 			"key": "name",
 			"kind": "data",
 			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.Buffer.isEncoding\",\"length\"]",
+			"owner": "globalThis.Buffer.isEncoding",
+			"ownerPaths": [
+				"globalThis.Buffer.isEncoding",
+				"globalThis.Buffer.isEncoding.prototype.constructor"
+			],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.Buffer.isEncoding\",\"name\"]",
+			"owner": "globalThis.Buffer.isEncoding",
+			"ownerPaths": [
+				"globalThis.Buffer.isEncoding",
+				"globalThis.Buffer.isEncoding.prototype.constructor"
+			],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.Buffer.isEncoding\",\"prototype\"]",
+			"owner": "globalThis.Buffer.isEncoding",
+			"ownerPaths": [
+				"globalThis.Buffer.isEncoding",
+				"globalThis.Buffer.isEncoding.prototype.constructor"
+			],
+			"key": "prototype",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.Buffer.isEncoding.prototype\",\"constructor\"]",
+			"owner": "globalThis.Buffer.isEncoding.prototype",
+			"ownerPaths": ["globalThis.Buffer.isEncoding.prototype"],
+			"key": "constructor",
+			"kind": "data",
+			"operations": ["globalThis.Buffer.isEncoding"],
 			"task": "H-10",
 			"decisions": []
 		},
@@ -93584,7 +93830,8 @@
 			"owner": "%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:path\"].basename",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:path\"].basename",
-				"mal_host_install_node_path:basename"
+				"mal_host_install_node_path:basename",
+				"mal_host_install_node_path_posix:basename"
 			],
 			"key": "<call>",
 			"kind": "call",
@@ -93597,7 +93844,8 @@
 			"owner": "%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:path\"].basename",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:path\"].basename",
-				"mal_host_install_node_path:basename"
+				"mal_host_install_node_path:basename",
+				"mal_host_install_node_path_posix:basename"
 			],
 			"key": "<construct>",
 			"kind": "construct",
@@ -93610,7 +93858,8 @@
 			"owner": "%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:path\"].dirname",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:path\"].dirname",
-				"mal_host_install_node_path:dirname"
+				"mal_host_install_node_path:dirname",
+				"mal_host_install_node_path_posix:dirname"
 			],
 			"key": "<call>",
 			"kind": "call",
@@ -93623,7 +93872,8 @@
 			"owner": "%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:path\"].dirname",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:path\"].dirname",
-				"mal_host_install_node_path:dirname"
+				"mal_host_install_node_path:dirname",
+				"mal_host_install_node_path_posix:dirname"
 			],
 			"key": "<construct>",
 			"kind": "construct",
@@ -93636,7 +93886,8 @@
 			"owner": "%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:path\"].extname",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:path\"].extname",
-				"mal_host_install_node_path:extname"
+				"mal_host_install_node_path:extname",
+				"mal_host_install_node_path_posix:extname"
 			],
 			"key": "<call>",
 			"kind": "call",
@@ -93649,7 +93900,8 @@
 			"owner": "%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:path\"].extname",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:path\"].extname",
-				"mal_host_install_node_path:extname"
+				"mal_host_install_node_path:extname",
+				"mal_host_install_node_path_posix:extname"
 			],
 			"key": "<construct>",
 			"kind": "construct",
@@ -93662,7 +93914,8 @@
 			"owner": "%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:path\"].format",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:path\"].format",
-				"mal_host_install_node_path:format"
+				"mal_host_install_node_path:format",
+				"mal_host_install_node_path_posix:format"
 			],
 			"key": "<call>",
 			"kind": "call",
@@ -93675,7 +93928,8 @@
 			"owner": "%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:path\"].format",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:path\"].format",
-				"mal_host_install_node_path:format"
+				"mal_host_install_node_path:format",
+				"mal_host_install_node_path_posix:format"
 			],
 			"key": "<construct>",
 			"kind": "construct",
@@ -93688,7 +93942,8 @@
 			"owner": "%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:path\"].isAbsolute",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:path\"].isAbsolute",
-				"mal_host_install_node_path:isAbsolute"
+				"mal_host_install_node_path:isAbsolute",
+				"mal_host_install_node_path_posix:isAbsolute"
 			],
 			"key": "<call>",
 			"kind": "call",
@@ -93701,7 +93956,8 @@
 			"owner": "%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:path\"].isAbsolute",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:path\"].isAbsolute",
-				"mal_host_install_node_path:isAbsolute"
+				"mal_host_install_node_path:isAbsolute",
+				"mal_host_install_node_path_posix:isAbsolute"
 			],
 			"key": "<construct>",
 			"kind": "construct",
@@ -93714,7 +93970,8 @@
 			"owner": "%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:path\"].join",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:path\"].join",
-				"mal_host_install_node_path:join"
+				"mal_host_install_node_path:join",
+				"mal_host_install_node_path_posix:join"
 			],
 			"key": "<call>",
 			"kind": "call",
@@ -93727,7 +93984,8 @@
 			"owner": "%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:path\"].join",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:path\"].join",
-				"mal_host_install_node_path:join"
+				"mal_host_install_node_path:join",
+				"mal_host_install_node_path_posix:join"
 			],
 			"key": "<construct>",
 			"kind": "construct",
@@ -93740,7 +93998,8 @@
 			"owner": "%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:path\"].matchesGlob",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:path\"].matchesGlob",
-				"mal_host_install_node_path:matchesGlob"
+				"mal_host_install_node_path:matchesGlob",
+				"mal_host_install_node_path_posix:matchesGlob"
 			],
 			"key": "<call>",
 			"kind": "call",
@@ -93753,7 +94012,8 @@
 			"owner": "%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:path\"].matchesGlob",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:path\"].matchesGlob",
-				"mal_host_install_node_path:matchesGlob"
+				"mal_host_install_node_path:matchesGlob",
+				"mal_host_install_node_path_posix:matchesGlob"
 			],
 			"key": "<construct>",
 			"kind": "construct",
@@ -93766,7 +94026,8 @@
 			"owner": "%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:path\"].normalize",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:path\"].normalize",
-				"mal_host_install_node_path:normalize"
+				"mal_host_install_node_path:normalize",
+				"mal_host_install_node_path_posix:normalize"
 			],
 			"key": "<call>",
 			"kind": "call",
@@ -93779,7 +94040,8 @@
 			"owner": "%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:path\"].normalize",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:path\"].normalize",
-				"mal_host_install_node_path:normalize"
+				"mal_host_install_node_path:normalize",
+				"mal_host_install_node_path_posix:normalize"
 			],
 			"key": "<construct>",
 			"kind": "construct",
@@ -93792,7 +94054,8 @@
 			"owner": "%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:path\"].parse",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:path\"].parse",
-				"mal_host_install_node_path:parse"
+				"mal_host_install_node_path:parse",
+				"mal_host_install_node_path_posix:parse"
 			],
 			"key": "<call>",
 			"kind": "call",
@@ -93805,7 +94068,8 @@
 			"owner": "%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:path\"].parse",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:path\"].parse",
-				"mal_host_install_node_path:parse"
+				"mal_host_install_node_path:parse",
+				"mal_host_install_node_path_posix:parse"
 			],
 			"key": "<construct>",
 			"kind": "construct",
@@ -93818,7 +94082,8 @@
 			"owner": "%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:path\"].relative",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:path\"].relative",
-				"mal_host_install_node_path:relative"
+				"mal_host_install_node_path:relative",
+				"mal_host_install_node_path_posix:relative"
 			],
 			"key": "<call>",
 			"kind": "call",
@@ -93831,7 +94096,8 @@
 			"owner": "%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:path\"].relative",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:path\"].relative",
-				"mal_host_install_node_path:relative"
+				"mal_host_install_node_path:relative",
+				"mal_host_install_node_path_posix:relative"
 			],
 			"key": "<construct>",
 			"kind": "construct",
@@ -93844,7 +94110,8 @@
 			"owner": "%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:path\"].resolve",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:path\"].resolve",
-				"mal_host_install_node_path:resolve"
+				"mal_host_install_node_path:resolve",
+				"mal_host_install_node_path_posix:resolve"
 			],
 			"key": "<call>",
 			"kind": "call",
@@ -93857,7 +94124,8 @@
 			"owner": "%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:path\"].resolve",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:path\"].resolve",
-				"mal_host_install_node_path:resolve"
+				"mal_host_install_node_path:resolve",
+				"mal_host_install_node_path_posix:resolve"
 			],
 			"key": "<construct>",
 			"kind": "construct",
@@ -93870,7 +94138,8 @@
 			"owner": "%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:path\"].toNamespacedPath",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:path\"].toNamespacedPath",
-				"mal_host_install_node_path:toNamespacedPath"
+				"mal_host_install_node_path:toNamespacedPath",
+				"mal_host_install_node_path_posix:toNamespacedPath"
 			],
 			"key": "<call>",
 			"kind": "call",
@@ -93885,7 +94154,8 @@
 			"owner": "%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:path\"].toNamespacedPath",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:path\"].toNamespacedPath",
-				"mal_host_install_node_path:toNamespacedPath"
+				"mal_host_install_node_path:toNamespacedPath",
+				"mal_host_install_node_path_posix:toNamespacedPath"
 			],
 			"key": "<construct>",
 			"kind": "construct",
@@ -94848,6 +95118,36 @@
 			"decisions": []
 		},
 		{
+			"id": "[\"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\\\"node:util/types\\\"].isArgumentsObject\",\"<call>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"].isArgumentsObject",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"].isArgumentsObject",
+				"mal_host_install_node_util_types:isArgumentsObject"
+			],
+			"key": "<call>",
+			"kind": "call",
+			"operations": [
+				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"].isArgumentsObject"
+			],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\\\"node:util/types\\\"].isArgumentsObject\",\"<construct>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"].isArgumentsObject",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"].isArgumentsObject",
+				"mal_host_install_node_util_types:isArgumentsObject"
+			],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": [
+				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"].isArgumentsObject"
+			],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
 			"id": "[\"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\\\"node:util/types\\\"].isArrayBuffer\",\"<call>\"]",
 			"owner": "%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"].isArrayBuffer",
 			"ownerPaths": [
@@ -95515,6 +95815,36 @@
 			"kind": "construct",
 			"operations": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"].isModuleNamespaceObject"
+			],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\\\"node:util/types\\\"].isNativeError\",\"<call>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"].isNativeError",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"].isNativeError",
+				"mal_host_install_node_util_types:isNativeError"
+			],
+			"key": "<call>",
+			"kind": "call",
+			"operations": [
+				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"].isNativeError"
+			],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\\\"node:util/types\\\"].isNativeError\",\"<construct>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"].isNativeError",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"].isNativeError",
+				"mal_host_install_node_util_types:isNativeError"
+			],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": [
+				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"].isNativeError"
 			],
 			"task": "N-06",
 			"decisions": []
@@ -202950,6 +203280,32 @@
 			"decisions": []
 		},
 		{
+			"id": "[\"globalThis.Buffer.isEncoding\",\"<call>\"]",
+			"owner": "globalThis.Buffer.isEncoding",
+			"ownerPaths": [
+				"globalThis.Buffer.isEncoding",
+				"globalThis.Buffer.isEncoding.prototype.constructor"
+			],
+			"key": "<call>",
+			"kind": "call",
+			"operations": ["globalThis.Buffer.isEncoding"],
+			"task": "N-04",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.Buffer.isEncoding\",\"<construct>\"]",
+			"owner": "globalThis.Buffer.isEncoding",
+			"ownerPaths": [
+				"globalThis.Buffer.isEncoding",
+				"globalThis.Buffer.isEncoding.prototype.constructor"
+			],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": ["globalThis.Buffer.isEncoding"],
+			"task": "N-04",
+			"decisions": []
+		},
+		{
 			"id": "[\"globalThis.Buffer.prototype.compare\",\"<call>\"]",
 			"owner": "globalThis.Buffer.prototype.compare",
 			"ownerPaths": ["globalThis.Buffer.prototype.compare"],
@@ -218101,6 +218457,168 @@
 			"decisions": []
 		},
 		{
+			"id": "[\"[[roots]]\",\"mal_host_install_node_path_posix:basename\"]",
+			"owner": "[[roots]]",
+			"ownerPaths": ["[[roots]]"],
+			"key": "mal_host_install_node_path_posix:basename",
+			"kind": "binding",
+			"operations": ["%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:path\"].basename"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"[[roots]]\",\"mal_host_install_node_path_posix:default\"]",
+			"owner": "[[roots]]",
+			"ownerPaths": ["[[roots]]"],
+			"key": "mal_host_install_node_path_posix:default",
+			"kind": "binding",
+			"operations": [],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"[[roots]]\",\"mal_host_install_node_path_posix:delimiter\"]",
+			"owner": "[[roots]]",
+			"ownerPaths": ["[[roots]]"],
+			"key": "mal_host_install_node_path_posix:delimiter",
+			"kind": "binding",
+			"operations": [],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"[[roots]]\",\"mal_host_install_node_path_posix:dirname\"]",
+			"owner": "[[roots]]",
+			"ownerPaths": ["[[roots]]"],
+			"key": "mal_host_install_node_path_posix:dirname",
+			"kind": "binding",
+			"operations": ["%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:path\"].dirname"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"[[roots]]\",\"mal_host_install_node_path_posix:extname\"]",
+			"owner": "[[roots]]",
+			"ownerPaths": ["[[roots]]"],
+			"key": "mal_host_install_node_path_posix:extname",
+			"kind": "binding",
+			"operations": ["%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:path\"].extname"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"[[roots]]\",\"mal_host_install_node_path_posix:format\"]",
+			"owner": "[[roots]]",
+			"ownerPaths": ["[[roots]]"],
+			"key": "mal_host_install_node_path_posix:format",
+			"kind": "binding",
+			"operations": ["%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:path\"].format"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"[[roots]]\",\"mal_host_install_node_path_posix:isAbsolute\"]",
+			"owner": "[[roots]]",
+			"ownerPaths": ["[[roots]]"],
+			"key": "mal_host_install_node_path_posix:isAbsolute",
+			"kind": "binding",
+			"operations": ["%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:path\"].isAbsolute"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"[[roots]]\",\"mal_host_install_node_path_posix:join\"]",
+			"owner": "[[roots]]",
+			"ownerPaths": ["[[roots]]"],
+			"key": "mal_host_install_node_path_posix:join",
+			"kind": "binding",
+			"operations": ["%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:path\"].join"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"[[roots]]\",\"mal_host_install_node_path_posix:matchesGlob\"]",
+			"owner": "[[roots]]",
+			"ownerPaths": ["[[roots]]"],
+			"key": "mal_host_install_node_path_posix:matchesGlob",
+			"kind": "binding",
+			"operations": ["%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:path\"].matchesGlob"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"[[roots]]\",\"mal_host_install_node_path_posix:normalize\"]",
+			"owner": "[[roots]]",
+			"ownerPaths": ["[[roots]]"],
+			"key": "mal_host_install_node_path_posix:normalize",
+			"kind": "binding",
+			"operations": ["%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:path\"].normalize"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"[[roots]]\",\"mal_host_install_node_path_posix:parse\"]",
+			"owner": "[[roots]]",
+			"ownerPaths": ["[[roots]]"],
+			"key": "mal_host_install_node_path_posix:parse",
+			"kind": "binding",
+			"operations": ["%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:path\"].parse"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"[[roots]]\",\"mal_host_install_node_path_posix:posix\"]",
+			"owner": "[[roots]]",
+			"ownerPaths": ["[[roots]]"],
+			"key": "mal_host_install_node_path_posix:posix",
+			"kind": "binding",
+			"operations": [],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"[[roots]]\",\"mal_host_install_node_path_posix:relative\"]",
+			"owner": "[[roots]]",
+			"ownerPaths": ["[[roots]]"],
+			"key": "mal_host_install_node_path_posix:relative",
+			"kind": "binding",
+			"operations": ["%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:path\"].relative"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"[[roots]]\",\"mal_host_install_node_path_posix:resolve\"]",
+			"owner": "[[roots]]",
+			"ownerPaths": ["[[roots]]"],
+			"key": "mal_host_install_node_path_posix:resolve",
+			"kind": "binding",
+			"operations": ["%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:path\"].resolve"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"[[roots]]\",\"mal_host_install_node_path_posix:sep\"]",
+			"owner": "[[roots]]",
+			"ownerPaths": ["[[roots]]"],
+			"key": "mal_host_install_node_path_posix:sep",
+			"kind": "binding",
+			"operations": [],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"[[roots]]\",\"mal_host_install_node_path_posix:toNamespacedPath\"]",
+			"owner": "[[roots]]",
+			"ownerPaths": ["[[roots]]"],
+			"key": "mal_host_install_node_path_posix:toNamespacedPath",
+			"kind": "binding",
+			"operations": [
+				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:path\"].toNamespacedPath"
+			],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
 			"id": "[\"[[roots]]\",\"mal_host_install_node_perf_hooks:default\"]",
 			"owner": "[[roots]]",
 			"ownerPaths": ["[[roots]]"],
@@ -218843,6 +219361,18 @@
 			"decisions": []
 		},
 		{
+			"id": "[\"[[roots]]\",\"mal_host_install_node_util_types:isArgumentsObject\"]",
+			"owner": "[[roots]]",
+			"ownerPaths": ["[[roots]]"],
+			"key": "mal_host_install_node_util_types:isArgumentsObject",
+			"kind": "binding",
+			"operations": [
+				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"].isArgumentsObject"
+			],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
 			"id": "[\"[[roots]]\",\"mal_host_install_node_util_types:isArrayBuffer\"]",
 			"owner": "[[roots]]",
 			"ownerPaths": ["[[roots]]"],
@@ -219108,6 +219638,18 @@
 			"kind": "binding",
 			"operations": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"].isModuleNamespaceObject"
+			],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"[[roots]]\",\"mal_host_install_node_util_types:isNativeError\"]",
+			"owner": "[[roots]]",
+			"ownerPaths": ["[[roots]]"],
+			"key": "mal_host_install_node_util_types:isNativeError",
+			"kind": "binding",
+			"operations": [
+				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"].isNativeError"
 			],
 			"task": "N-06",
 			"decisions": []
@@ -220456,6 +220998,12 @@
 			]
 		},
 		{
+			"id": "%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"].isArgumentsObject",
+			"identities": [
+				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"].isArgumentsObject"
+			]
+		},
+		{
 			"id": "%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"].isArrayBuffer",
 			"identities": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"].isArrayBuffer"
@@ -220581,6 +221129,12 @@
 			"id": "%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"].isModuleNamespaceObject",
 			"identities": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"].isModuleNamespaceObject"
+			]
+		},
+		{
+			"id": "%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"].isNativeError",
+			"identities": [
+				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"].isNativeError"
 			]
 		},
 		{
@@ -224007,6 +224561,10 @@
 		{ "id": "globalThis.Buffer.concat", "identities": ["globalThis.Buffer.concat"] },
 		{ "id": "globalThis.Buffer.from", "identities": ["globalThis.Buffer.from"] },
 		{ "id": "globalThis.Buffer.isBuffer", "identities": ["globalThis.Buffer.isBuffer"] },
+		{
+			"id": "globalThis.Buffer.isEncoding",
+			"identities": ["globalThis.Buffer.isEncoding"]
+		},
 		{
 			"id": "globalThis.Buffer.prototype.compare",
 			"identities": ["globalThis.Buffer.prototype.compare"]
@@ -233967,8 +234525,8 @@
 			"owner": "Buffer",
 			"key": "isEncoding",
 			"task": "N-04",
-			"exposures": [],
-			"state": "not-installed-in-full-inventory"
+			"exposures": ["[\"globalThis.Buffer\",\"isEncoding\"]"],
+			"state": "reconciled"
 		},
 		{
 			"owner": "Buffer",

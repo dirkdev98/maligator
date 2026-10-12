@@ -136,6 +136,7 @@ static u16 dom_exception_legacy_code(const MalString *name) {
 static MalValue dom_exception_create(
     MalVm *vm, MalObject *prototype, MalValue message, MalValue name) {
     MalObject *exception = mal_object_new(&vm->heap, prototype);
+    exception->has_error_data = true;
     MalValue exception_value = mal_value_from_object(exception);
     MalValue roots[] = {exception_value, message, name};
     MalRootSpan rs;

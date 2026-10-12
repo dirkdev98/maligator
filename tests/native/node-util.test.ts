@@ -105,6 +105,23 @@ describe("node:util Unicode conversion", () => {
 });
 
 describe("node:util/types", () => {
+	it("recognizes arguments and native errors without accepting forged brands", () => {
+		const fixture = "tests/local/node-util-brands.mjs";
+		const expected = execFileSync(process.execPath, [fixture], {
+			encoding: "utf8",
+		}).trim();
+		const pair = buildBackendPairFromOneProgramImage({
+			fixture,
+			name: "node-util-brands",
+			outDir,
+			mainFile: HOST_MAIN,
+			nodeEnabled: true,
+		});
+		for (const binary of [pair.compiled, pair.interpreted]) {
+			for (const env of [{}, STRESS_ENV])
+				expect(runToStdout(binary, { env }).trim()).toBe(expected);
+		}
+	});
 	it("keeps the original submodule after the parent property is replaced", () => {
 		const fixture = "tests/local/node-util-types-cache.mjs";
 		const expected = execFileSync(process.execPath, [fixture], {

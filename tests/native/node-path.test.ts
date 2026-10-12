@@ -1,16 +1,19 @@
-import { mkdtempSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, rmSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { beforeAll, describe, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
 	assertResultPass,
 	buildNativeBinary,
+	buildBackendPairFromOneProgramImage,
 	HOST_MAIN,
 	runToStdout,
 	STRESS_ENV,
 } from "../../src/test-harness.ts";
 
 const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-node-path-"));
+afterAll(() => rmSync(outDir, { recursive: true, force: true }));
 
 // Native `node:path` (POSIX). The fixture runs the same acceptance suite under
 // both the native codegen backend and the bytecode interpreter (path methods are
@@ -49,5 +52,25 @@ describe("node:path (POSIX)", () => {
 
 	it("passes under MAL_GC_STRESS + MAL_GC_VERIFY", () => {
 		assertResultPass(runToStdout(compiled, { env: STRESS_ENV }));
+	});
+});
+
+describe("node:path/posix", () => {
+	it("shares path.posix values and survives replacement of the parent alias", () => {
+		const fixture = "tests/local/node-path-posix.mjs";
+		const expected = execFileSync(process.execPath, [fixture], {
+			encoding: "utf8",
+		}).trim();
+		const pair = buildBackendPairFromOneProgramImage({
+			fixture,
+			name: "node-path-posix",
+			outDir,
+			mainFile: HOST_MAIN,
+			nodeEnabled: true,
+		});
+		for (const binary of [pair.compiled, pair.interpreted]) {
+			for (const env of [{}, STRESS_ENV])
+				expect(runToStdout(binary, { env }).trim()).toBe(expected);
+		}
 	});
 });

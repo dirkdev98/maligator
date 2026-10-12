@@ -26,3 +26,7 @@ MalValue mal_node_path_resolve_path(MalVm *vm, MalValue path);
 void mal_host_install_node_path(
     MalVm *vm, const MalHostInstallSlot *slots, i32 count, const MalHostLaunchContext *launch
 );
+
+void mal_host_install_node_path_posix(
+    MalVm *vm, const MalHostInstallSlot *slots, i32 count, const MalHostLaunchContext *launch
+);

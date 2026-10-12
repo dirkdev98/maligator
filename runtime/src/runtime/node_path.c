@@ -1398,4 +1398,13 @@ void mal_host_install_node_path(
     mal_gc_unroot(&rs);
 }
 
+void mal_host_install_node_path_posix(
+    MalVm *vm, const MalHostInstallSlot *slots, i32 count, const MalHostLaunchContext *launch) {
+    if (mal_node_module_install_cached(vm, "node:path/posix", slots, count)) return;
+    mal_host_install_node_path(vm, nullptr, 0, launch);
+    if (vm->completion.kind == MAL_COMPLETION_THROW) return;
+    mal_node_module_publish(vm, "node:path/posix", slots, count,
+        mal_node_module_get_cached(vm, "node:path"));
+}
+
 #endif /* MAL_NODE */

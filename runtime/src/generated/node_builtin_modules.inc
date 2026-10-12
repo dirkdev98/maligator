@@ -20,6 +20,7 @@
     "net",
     "os",
     "path",
+    "path/posix",
     "perf_hooks",
     "process",
     "querystring",
