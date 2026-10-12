@@ -1100,21 +1100,23 @@ export class DirectCoreFunctionConstruction {
 
 	#canonicalConstructionValue(value: ConstructionValue): ConstructionValue {
 		if (!isVirtualPhi(value)) return value;
-		const path: Array<number> = [];
+		let firstIndex = -1;
+		let remainingPath: Array<number> | undefined;
 		while (isVirtualPhi(value)) {
 			const index = virtualPhiIndex(value);
 			const alias = this.#phiAliases[index];
 			if (alias === undefined) throw new Error(`Unresolved virtual phi ${index}`);
 			if (alias === value) break;
-			path.push(index);
+			if (firstIndex === -1) firstIndex = index;
+			else (remainingPath ??= []).push(index);
 			value = alias;
 		}
-		this.#aliasResolutions += path.length;
-		this.#maximumUnresolvedPhiDepth = Math.max(
-			this.#maximumUnresolvedPhiDepth,
-			path.length,
-		);
-		for (const index of path) this.#phiAliases[index] = value;
+		const depth = firstIndex === -1 ? 0 : 1 + (remainingPath?.length ?? 0);
+		this.#aliasResolutions += depth;
+		this.#maximumUnresolvedPhiDepth = Math.max(this.#maximumUnresolvedPhiDepth, depth);
+		if (firstIndex !== -1) this.#phiAliases[firstIndex] = value;
+		if (remainingPath !== undefined)
+			for (const index of remainingPath) this.#phiAliases[index] = value;
 		return value;
 	}
 
