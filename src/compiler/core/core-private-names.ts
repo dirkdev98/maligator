@@ -4,6 +4,11 @@ import type { CoreControlFlow } from "./core-ir-control-flow.ts";
 import { coreInstructionId } from "./core-ir.ts";
 import type { CoreFunctionId, CoreInstructionId, CoreValueId } from "./core-ir.ts";
 import type { CoreFunctionStore, CoreProgram } from "./core-store.ts";
+import {
+	CORE_PROGRAM_FLOW_BODY,
+	CORE_PROGRAM_FLOW_CFG,
+	CORE_PROGRAM_FLOW_EXCEPTION,
+} from "./core-store.ts";
 
 interface PrivateNameWriter {
 	readonly function: CoreFunctionId;
@@ -61,8 +66,17 @@ export class CoreModulePrivateNameIndex {
 				let revision = this.#revision;
 				revision < this.#program.programFlowRevision;
 				revision++
-			)
-				dirty.add(this.#program.programFlowFunctionAt(revision));
+			) {
+				// Facts and representations cannot change the writer graph or initialization CFG.
+				if (
+					(this.#program.programFlowDomainMaskAt(revision) &
+						(CORE_PROGRAM_FLOW_BODY |
+							CORE_PROGRAM_FLOW_CFG |
+							CORE_PROGRAM_FLOW_EXCEPTION)) !==
+					0
+				)
+					dirty.add(this.#program.programFlowFunctionAt(revision));
+			}
 		}
 		for (const id of dirty) {
 			this.#controls.delete(id);

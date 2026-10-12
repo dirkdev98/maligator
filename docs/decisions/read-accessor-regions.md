@@ -24,6 +24,11 @@ proxies, holes, unsupported keys, and other misses enter the original operations
 in their original order. Earlier successful probes have no observable effects,
 so replay on a miss does not duplicate JavaScript work.
 
+Expansion reuses admitted values and function guards within its non-observable
+region before constructing additional success branches. Private writer proofs
+refresh after body and control-flow edits; facts and representations do not change
+the writer graph or initialization control flow.
+
 The existing memory pass forwards every result of equivalent probes, including
 their success flags. Private-key equality uses the producer's validated cell
 identity independently of the key load's SSA identity. Memory versions still

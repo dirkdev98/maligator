@@ -213,6 +213,24 @@ describe("class read-accessor lowering", () => {
 					opcode === "probeRead" && attributes.readKind === "named",
 			),
 		).toHaveLength(2);
+		for (const instruction of fn.instructionIds()) {
+			if (
+				fn.instructionKind(instruction) !== "operation" ||
+				fn.instructionOpcodeName(instruction) !== "probeRead"
+			)
+				continue;
+			const success = fn.kernel.resultAt(
+				fn.kernel.instructionResultStart(instruction) + 1,
+			);
+			let checks = 0;
+			for (
+				let use = fn.kernel.valueFirstUse(success);
+				use >= 0;
+				use = fn.kernel.useNext(use)
+			)
+				if (fn.instructionKind(fn.kernel.useInstruction(use)) === "branch") checks++;
+			expect(checks).toBeLessThanOrEqual(1);
+		}
 	});
 
 	it("rejects a forged second private-name writer and refreshes after edits", () => {
@@ -240,6 +258,40 @@ describe("class read-accessor lowering", () => {
 		expect(() => verifyCoreProgram(input.program, undefined, input.context)).toThrow(
 			"unique acyclic private-name initializer",
 		);
+	});
+
+	it("retains private initialization proof after a fact-only edit without rescanning writers", () => {
+		const input = lowerSemanticProgramToCore(semantic());
+		const names = coreModulePrivateNames(input.program, input.context);
+		const record = input.context.data.modulePrivateNames![0]!;
+		expect(names.validSlot(record.slot)).toBe(true);
+		const fn = input.program.function(record.evaluator as never);
+		const editor = CoreEditor.open(input.program, fn.id);
+		editor.addFact({
+			kind: "test-independent-fact",
+			value: true,
+			claims: [],
+			validity: { kind: "asserted", source: "test" },
+			obligations: [],
+			origin: "test",
+		});
+		editor.commit();
+		const original = Object.getOwnPropertyDescriptor(fn, "instructionIds");
+		const instructions = fn.instructionIds.bind(fn);
+		let visits = 0;
+		fn.instructionIds = function* (block) {
+			for (const instruction of instructions(block)) {
+				visits++;
+				yield instruction;
+			}
+		};
+		try {
+			expect(names.validSlot(record.slot)).toBe(true);
+			expect(visits).toBe(0);
+		} finally {
+			if (original === undefined) Reflect.deleteProperty(fn, "instructionIds");
+			else Object.defineProperty(fn, "instructionIds", original);
+		}
 	});
 
 	it("keeps factory and loop class evaluations outside the module-private contract", () => {

@@ -318,6 +318,9 @@ export function expandCoreReadAccessorRegion(
 		(_, index) => fn.kernel.handlerArgumentAt(handlerStart + index),
 	);
 	const values = new Map<CoreValueId, CoreValueId>();
+	// Every continuation is dominated by admission, and the region contains no clobbers.
+	const admitted = new Map<CoreValueId, Map<string, CoreValueId>>();
+	const guarded = new Set<string>();
 	let introduced = 0;
 	let position: number | undefined;
 	const currentValue = (value: CoreValueId): CoreValueId => values.get(value) ?? value;
@@ -354,7 +357,16 @@ export function expandCoreReadAccessorRegion(
 		key: CoreValueId,
 		readKind: "private" | "named" | "indexed",
 		stringIndex = -1,
+		privateSlot?: number,
 	): CoreValueId => {
+		const identity =
+			readKind === "named"
+				? `named:${stringIndex}`
+				: readKind === "private" && privateSlot !== undefined
+					? `private-slot:${privateSlot}`
+					: `${readKind}:${key}`;
+		const known = admitted.get(receiver)?.get(identity);
+		if (known !== undefined) return known;
 		const [value, success] = append(
 			"probeRead",
 			[receiver, key],
@@ -362,6 +374,10 @@ export function expandCoreReadAccessorRegion(
 			["boxed", "boolean"],
 		);
 		check(success!);
+		let reads = admitted.get(receiver);
+		if (reads === undefined)
+			admitted.set(receiver, (reads = new Map<string, CoreValueId>()));
+		reads.set(identity, value!);
 		return value!;
 	};
 	for (const operation of original) {
@@ -370,16 +386,20 @@ export function expandCoreReadAccessorRegion(
 		if (call !== undefined) {
 			const callee = currentValue(operation.inputs[0]!),
 				receiver = currentValue(operation.inputs[1]!);
-			check(
-				append("guardFunctionIndex", [callee], { functionIndex: call.target }, [
-					"boolean",
-				])[0]!,
-			);
+			const guard = `${callee}:${call.target}`;
+			if (!guarded.has(guard)) {
+				check(
+					append("guardFunctionIndex", [callee], { functionIndex: call.target }, [
+						"boolean",
+					])[0]!,
+				);
+				guarded.add(guard);
+			}
 			let value = receiver;
 			for (const read of call.summary.reads) {
 				if (read.kind === "private") {
 					const key = append("loadGlobal", [], { index: read.slot })[0]!;
-					value = probe(value, key, "private");
+					value = probe(value, key, "private", -1, read.slot);
 				} else if (read.kind === "named")
 					value = probe(value, undefinedConstant(), "named", read.stringIndex);
 				else
@@ -438,7 +458,13 @@ export function expandCoreReadAccessorRegion(
 			const receiver = currentValue(operation.inputs[0]!);
 			const value =
 				operation.opcode === "loadPrivate"
-					? probe(receiver, currentValue(operation.inputs[1]!), "private")
+					? probe(
+							receiver,
+							currentValue(operation.inputs[1]!),
+							"private",
+							-1,
+							names.keySlot(fn, operation.inputs[1]!),
+						)
 					: probe(
 							receiver,
 							undefinedConstant(),
