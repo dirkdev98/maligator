@@ -2399,11 +2399,12 @@ MalPropertyStubEntry *mal_vm_property_stub_cache(MalVm *vm) {
 MalInlineCache *mal_vm_inherited_property_stub_cache(MalVm *vm) {
     if (vm->inherited_property_stub == nullptr) {
         vm->inherited_property_stub = calloc(
-            (usize) MAL_INHERITED_STUB_CACHE_SIZE, sizeof(MalInlineCache));
+            (usize) MAL_INHERITED_STUB_CACHE_ROW_COUNT, sizeof(MalInlineCache));
+        if (vm->inherited_property_stub == nullptr) return nullptr;
         MAL_PERF_COUNT(inherited_property_stub_cache_allocations);
         MAL_PERF_ADD(
             inherited_property_stub_cache_bytes,
-            (u64) MAL_INHERITED_STUB_CACHE_SIZE * sizeof(MalInlineCache));
+            (u64) MAL_INHERITED_STUB_CACHE_ROW_COUNT * sizeof(MalInlineCache));
     }
     return vm->inherited_property_stub;
 }
@@ -2440,7 +2441,9 @@ bool mal_vm_inherited_stub_try_load_static(
     const MalInlineCache *stub =
         &vm->inherited_property_stub[mal_inherited_stub_hash(
             object->shape, mal_object_prototype(object), site->key)];
-    return mal_vm_inherited_try_load(receiver, site->key, stub, out);
+    return mal_vm_inherited_try_load(receiver, site->key, stub, out) ||
+        mal_vm_inherited_try_load(
+            receiver, site->key, stub + MAL_INHERITED_STUB_CACHE_SET_COUNT, out);
 }
 
 __attribute__((noinline)) void mal_vm_number_record_store_slow(
@@ -2476,6 +2479,14 @@ mal_vm_property_try_load_static_remaining(
             prototype == stub->proto_object[0] && !mal_object_has_public_overflow(object)) {
             mal_perf_ic_load_inherited_hit();
             return (MalStaticPropertyProbeResult) { .hit = true, .value = stub->value };
+        }
+        const MalInlineCache *second = stub + MAL_INHERITED_STUB_CACHE_SET_COUNT;
+        if (second->key == ic->key && second->mode == MAL_IC_MODE_INHERITED_VALUE &&
+            second->poly_count > 0 && second->receiver_type == MAL_HEAP_OBJECT &&
+            (u8) object->header.type == MAL_HEAP_OBJECT && object->shape == second->shape &&
+            prototype == second->proto_object[0] && !mal_object_has_public_overflow(object)) {
+            mal_perf_ic_load_inherited_hit();
+            return (MalStaticPropertyProbeResult) { .hit = true, .value = second->value };
         }
     }
     // Watched built-ins such as `Math.round` are the hottest rows the inline probe
@@ -5873,8 +5884,32 @@ static bool mal_ic_try_record_inherited_getter(
     return true;
 }
 
+static MalInlineCache *mal_vm_inherited_stub_for_fill(
+    MalVm *vm, const MalObject *object, MalValue key, MalInlineCache *site
+) {
+    MalInlineCache *rows = mal_vm_inherited_property_stub_cache(vm);
+    if (rows == nullptr) return nullptr;
+    MalInlineCache *first = &rows[mal_inherited_stub_hash(
+        object->shape, mal_object_prototype(object), key)];
+    MalInlineCache *second = first + MAL_INHERITED_STUB_CACHE_SET_COUNT;
+    if (site == first || site == second) return site;
+    if (first->key == 0) return first;
+    if (first->poly_count == 0 &&
+        (first->mode == MAL_IC_MODE_INHERITED_SLOT ||
+         first->mode == MAL_IC_MODE_INHERITED_TABLE ||
+         (first->mode == MAL_IC_MODE_MISSING &&
+          first->receiver_type == MAL_IC_MISSING_EXACT_CHAIN)) &&
+        (mal_prototype_chain_epoch == 0 ||
+         mal_ic_recorded_prototype_epoch(first) != mal_prototype_chain_epoch)) {
+        return first;
+    }
+    // Keep the first resident stable; only a full set's second way is replaced.
+    return second;
+}
+
 static void mal_ic_try_record_inherited(
-    MalVm *vm, MalValue receiver, MalValue key_value, MalValue result, MalInlineCache *ic
+    MalVm *vm, MalValue receiver, MalValue key_value, MalValue result,
+    MalInlineCache *ic, bool fill_shared
 ) {
     if (!mal_value_is_object(receiver) || mal_value_is_proxy_object(receiver)) {
         MAL_PERF_COUNT(ic_inherited_reject_basic);
@@ -5895,14 +5930,10 @@ static void mal_ic_try_record_inherited(
     if (!resolution.found) {
         if (result == mal_value_new_undefined() &&
             mal_ic_try_record_missing(receiver, key_value, ic, true)) {
-            MalObject *object = mal_value_to_object(receiver);
-            MalInlineCache *stub =
-                &mal_vm_inherited_property_stub_cache(vm)[mal_inherited_stub_hash(
-                    object->shape, mal_object_prototype(object), key_value)];
-            if (stub != ic) {
-                // A direct-mapped collision replaces the old independently
-                // registered chain. Clearing first bypasses the per-site policy
-                // that deliberately retains one exact deep-chain row.
+            if (!fill_shared) return;
+            MalInlineCache *stub = mal_vm_inherited_stub_for_fill(vm, object, key_value, ic);
+            if (stub != nullptr && stub != ic) {
+                // Shared replacement must bypass the per-site exact missing-chain retention policy.
                 mal_ic_detach_prototype_cache(stub);
                 *stub = (MalInlineCache) {0};
                 (void) mal_ic_try_record_missing(
@@ -5926,10 +5957,9 @@ static void mal_ic_try_record_inherited(
 
     if (mal_ic_try_record_inherited_slot(
             receiver, key_value, resolution, ic, true)) {
-        MalInlineCache *stub =
-            &mal_vm_inherited_property_stub_cache(vm)[mal_inherited_stub_hash(
-                object->shape, mal_object_prototype(object), key_value)];
-        if (stub != ic) {
+        if (!fill_shared) return;
+        MalInlineCache *stub = mal_vm_inherited_stub_for_fill(vm, object, key_value, ic);
+        if (stub != nullptr && stub != ic) {
             (void) mal_ic_try_record_inherited_slot(
                 receiver, key_value, resolution, stub, false);
         }
@@ -6017,10 +6047,14 @@ static MalValue mal_vm_op_load_property_ic_keyed(
             &vm->inherited_property_stub[mal_inherited_stub_hash(
                 object->shape, mal_object_prototype(object), key_value)];
         if (mal_vm_inherited_try_load(
-                object_value, key_value, stub, &inherited_value)) {
+                object_value, key_value, stub, &inherited_value) ||
+            mal_vm_inherited_try_load(
+                object_value, key_value, stub + MAL_INHERITED_STUB_CACHE_SET_COUNT,
+                &inherited_value)) {
             // An empty site would otherwise reach this shared row through the slow path forever.
             if (ic->mode == MAL_IC_MODE_SHAPE && ic->shape == nullptr) {
-                mal_ic_try_record_inherited(vm, object_value, key_value, inherited_value, ic);
+                // The shared hit already occupies a way; copying it again could evict its peer.
+                mal_ic_try_record_inherited(vm, object_value, key_value, inherited_value, ic, false);
             }
             return inherited_value;
         }
@@ -6177,7 +6211,7 @@ static MalValue mal_vm_op_load_property_ic_keyed(
             }
             if (!own.present && vm->completion.kind != MAL_COMPLETION_THROW) {
                 mal_ic_try_record_inherited(
-                    vm, object_value, key_value, result, ic);
+                    vm, object_value, key_value, result, ic, true);
             }
             return result;
         }
@@ -6196,7 +6230,7 @@ static MalValue mal_vm_op_load_property_ic_keyed(
         MAL_PERF_COUNT(ic_load_plain_generic);
         MalValue result = mal_vm_op_load_property_keyed(vm, object_value, key);
         if (vm->completion.kind != MAL_COMPLETION_THROW) {
-            mal_ic_try_record_inherited(vm, object_value, key_value, result, ic);
+            mal_ic_try_record_inherited(vm, object_value, key_value, result, ic, true);
         }
         return result;
     }
@@ -6281,7 +6315,7 @@ static MalValue mal_vm_op_load_property_ic_keyed(
     MAL_PERF_COUNT(ic_load_other_generic);
     MalValue result = mal_vm_op_load_property_keyed(vm, object_value, key);
     if (vm->completion.kind != MAL_COMPLETION_THROW) {
-        mal_ic_try_record_inherited(vm, object_value, key_value, result, ic);
+        mal_ic_try_record_inherited(vm, object_value, key_value, result, ic, true);
     }
     return result;
 }

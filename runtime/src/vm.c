@@ -1035,7 +1035,7 @@ void mal_vm_free(MalVm *vm) {
     }
     free(vm->property_stub);
     if (vm->inherited_property_stub != nullptr) {
-        for (usize i = 0; i < MAL_INHERITED_STUB_CACHE_SIZE; i++) {
+        for (usize i = 0; i < MAL_INHERITED_STUB_CACHE_ROW_COUNT; i++) {
             MalInlineCache *stub = &vm->inherited_property_stub[i];
             if (stub->key != 0) {
                 mal_object_unregister_prototype_cache(stub);

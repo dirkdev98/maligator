@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
@@ -413,3 +413,22 @@ describe("inherited built-in method and native call caches", () => {
 		);
 	});
 });
+
+it("keeps colliding inherited shared rows independent across eviction and GC", () => {
+	const sharedOutDir = mkdtempSync(
+		path.join(os.tmpdir(), "mal-inherited-shared-two-way-"),
+	);
+	try {
+		const binary = buildNativeBinary({
+			fixture: "tests/local/fibertest_stub.js",
+			name: "inherited-shared-two-way",
+			mainFile: "tests/fixtures/inherited-shared-two-way/main.c",
+			outDir: sharedOutDir,
+		});
+		assertExactLines(runToStdout(binary, { env: { MAL_GC_VERIFY: "1" } }), [
+			"inherited-shared-two-way PASS",
+		]);
+	} finally {
+		rmSync(sharedOutDir, { recursive: true, force: true });
+	}
+}, 600_000);
