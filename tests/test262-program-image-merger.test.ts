@@ -73,6 +73,52 @@ function image(
 }
 
 describe("Test262 VM image merger", () => {
+	it("relocates named probe constants while preserving local cache rows in both layouts", () => {
+		const instructions: Array<BytecodeInstruction> = [
+			{
+				opcode: "PROBE_READ",
+				readKind: "named",
+				dst: 0,
+				success: 1,
+				object: 2,
+				key: 3,
+				stringIndex: 0,
+				icIndex: 0,
+			},
+			{
+				opcode: "PROBE_READ",
+				readKind: "private",
+				dst: 4,
+				success: 5,
+				object: 2,
+				key: 3,
+			},
+			{
+				opcode: "PROBE_READ",
+				readKind: "indexed",
+				dst: 6,
+				success: 7,
+				object: 2,
+				key: 3,
+			},
+			{ opcode: "RETURN", value: 0 },
+		];
+		const { image: merged } = mergeProgramImages([
+			image(),
+			image({ stringConstants: [[66]], functions: [vmFunction(instructions)] }),
+		]);
+		for (const fn of [merged.runtime.functions[1]!, merged.native.functions[1]!.body]) {
+			expect(fn.propertyIcCount).toBe(1);
+			expect(fn.instructions[0]).toMatchObject({
+				readKind: "named",
+				stringIndex: 1,
+				icIndex: 0,
+			});
+			expect(fn.instructions.slice(1, 3)).toEqual(instructions.slice(1, 3));
+		}
+		expect(() => emitProgramImage(merged, {})).not.toThrow();
+	});
+
 	it("rebases immutable capture owners without aliasing descriptor arrays or entries", () => {
 		const owner = { ...vmFunction([{ opcode: "RETURN", value: 0 }]), capturedCount: 3 };
 		const child = {

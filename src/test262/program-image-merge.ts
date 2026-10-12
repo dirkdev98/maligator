@@ -301,12 +301,9 @@ function cloneInstruction(
 		case "GUARD_FUNCTION_INDEX":
 			return { ...instruction, functionIndex: instruction.functionIndex + base.function };
 		case "PROBE_READ":
-			return {
-				...instruction,
-				...(instruction.stringIndex === undefined
-					? {}
-					: { stringIndex: instruction.stringIndex + base.string }),
-			};
+			return instruction.readKind === "named"
+				? { ...instruction, stringIndex: instruction.stringIndex + base.string }
+				: instruction;
 		case "GUARD_BASE_CONSTRUCTOR_LAYOUT":
 			return {
 				...instruction,
