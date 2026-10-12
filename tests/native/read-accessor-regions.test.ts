@@ -8,6 +8,7 @@ import { stripCompactTypes } from "../../src/compiler/frontend/compact-type-stri
 import { parseCompilerCapture } from "../../src/profile-artifact.ts";
 import {
 	buildBackendPairFromOneProgramImage,
+	buildNativeBinary,
 	buildNativeBinaryResult,
 	runToStdout,
 	STRESS_ENV,
@@ -25,6 +26,21 @@ function probeCounters(stderr: string): Record<string, number> {
 }
 
 describe("admitted class read-accessor regions", () => {
+	it("invalidates before the native-frame gate and permanently declines a saturated epoch", () => {
+		const directory = mkdtempSync(path.join(os.tmpdir(), "mal-accessor-epoch-"));
+		try {
+			const binary = buildNativeBinary({
+				fixture: "tests/local/fibertest_stub.js",
+				name: "read-accessor-service-epoch",
+				mainFile: "tests/fixtures/read-accessor-service-epoch/main.c",
+				outDir: directory,
+			});
+			expect(runToStdout(binary)).toBe("read-accessor-service-epoch PASS\n");
+		} finally {
+			rmSync(directory, { recursive: true, force: true });
+		}
+	});
+
 	it("keeps real materializer prefix discovery constant as element counts grow", () => {
 		const directory = mkdtempSync(path.join(os.tmpdir(), "mal-loop-prefix-scaling-"));
 		try {

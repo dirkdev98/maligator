@@ -190,9 +190,10 @@ export function coreReadAccessorLoopPlan(
 		let needed = fn.kernel.valueHandlerUseCount(value) > 0;
 		for (
 			let use = fn.kernel.valueFirstUse(value);
-			use >= 0;
+			!needed && use >= 0;
 			use = fn.kernel.useNext(use)
 		) {
+			charge(1);
 			const consumer = fn.kernel.useInstruction(use);
 			if (
 				!regionInstructions.has(consumer) ||
