@@ -44,6 +44,9 @@ describe("class read-accessor lowering", () => {
 		const { report } = optimizeCore(input, { instrumentation: "counters" });
 		expect(report.transforms.accessorRegionDiscoveries).toBeGreaterThan(0);
 		expect(report.transforms.accessorRegionsApplied).toBeGreaterThan(0);
+		expect(
+			report.transforms.accessorApplications?.some((site) => site.name === "pair"),
+		).toBe(true);
 		expect(report.transforms.accessorInstructionVisits).toBeLessThanOrEqual(
 			report.transforms.accessorRegionDiscoveries! * 52,
 		);

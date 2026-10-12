@@ -61,6 +61,7 @@ export interface CoreReadAccessorWork {
 	accessorPlansReused: number;
 	accessorRegionsOffered: number;
 	accessorRegionsApplied: number;
+	accessorApplications?: Array<{ caller: number; name: string; site: number }>;
 }
 
 export const EMPTY_CORE_READ_ACCESSOR_WORK: Readonly<CoreReadAccessorWork> =
@@ -492,6 +493,15 @@ export function expandCoreReadAccessorRegion(
 		for (const block of [join, fallback, ...fastBlocks])
 			editor.setHandler(block, handlerBlock, handlerArguments);
 	}
-	if (work !== undefined) work.accessorRegionsApplied++;
+	if (work !== undefined) {
+		work.accessorRegionsApplied++;
+		work.accessorApplications?.push({
+			caller: fn.id,
+			name: String.fromCodePoint(
+				...(program.stringConstants[fn.metadata.nameStringIndex] ?? []),
+			),
+			site: candidate.site,
+		});
+	}
 	return { instructionsIntroduced: introduced, blocksIntroduced: fastBlocks.length + 2 };
 }

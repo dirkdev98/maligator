@@ -2731,7 +2731,7 @@ export function runCoreCrossCallTransforms(
 	const service = candidateService ?? new CoreTransformCandidateService(phaseLimits);
 	const budgetBaseline = service.statistics();
 	const accessorWork: CoreReadAccessorWork | undefined = collectAccessorWork
-		? { ...EMPTY_CORE_READ_ACCESSOR_WORK }
+		? { ...EMPTY_CORE_READ_ACCESSOR_WORK, accessorApplications: [] }
 		: undefined;
 	let flow =
 		initialFlow ?? analyses.get(CORE_PROGRAM_FLOW_ANALYSIS, { scope: "program" });
