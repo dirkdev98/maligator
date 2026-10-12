@@ -70,6 +70,34 @@ describe("class read-accessor lowering", () => {
 		).toBe(false);
 	});
 
+	it.each(['"value"', "-1", "1.5", "4294967295", "undefined", "null", "true"])(
+		"retains the ordinary path for an indexed argument that cannot admit: %s",
+		(key) => {
+			const input = lowerSemanticProgramToCore(
+				semantic(source.replaceAll("receiver.read(index)", `receiver.read(${key})`)),
+			);
+			optimizeCore(input, { verification: "per-pass" });
+			expect(
+				coreOperations(coreFunctionNamed(input.program, "pair")!).some(
+					({ opcode }) => opcode === "probeRead",
+				),
+			).toBe(false);
+		},
+	);
+
+	it.each(["0", "-0"])("admits a supported constant array index: %s", (key) => {
+		const input = lowerSemanticProgramToCore(
+			semantic(source.replaceAll("receiver.read(index)", `receiver.read(${key})`)),
+		);
+		optimizeCore(input, { verification: "per-pass" });
+		expect(
+			coreOperations(coreFunctionNamed(input.program, "pair")!).some(
+				({ opcode, attributes }) =>
+					opcode === "probeRead" && attributes.readKind === "indexed",
+			),
+		).toBe(true);
+	});
+
 	it("preserves dominance when earlier candidates change a planned caller in the same batch", () => {
 		const input = lowerSemanticProgramToCore(
 			semantic(readFileSync("tests/local/read-accessor-regions.mjs", "utf8")),

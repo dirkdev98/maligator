@@ -11,6 +11,7 @@ import type {
 	CoreInstructionId,
 	CoreValueId,
 } from "./core-ir.ts";
+import { coreInstructionId } from "./core-ir.ts";
 import type { CoreModulePrivateNameIndex } from "./core-private-names.ts";
 import type { CoreFunctionStore, CoreProgram } from "./core-store.ts";
 import type { CoreTransformCandidate } from "./core-transform-candidates.ts";
@@ -77,6 +78,49 @@ type ReadAccessorAnchor = Pick<
 	CoreTransformCandidate,
 	"caller" | "site" | "targets" | "readAccessorRegion"
 >;
+
+function accessorArgumentsMayAdmit(
+	fn: CoreFunctionStore,
+	inputs: ReadonlyArray<CoreValueId>,
+	summary: ReadAccessorSummary,
+): boolean {
+	for (const read of summary.reads) {
+		if (read.kind !== "indexed") continue;
+		let value = inputs[read.argument + 2];
+		if (value === undefined) return false;
+		for (let depth = 0; depth < 16; depth++) {
+			if (fn.kernel.valueDefinitionKind(value) !== 1) break;
+			const instruction = coreInstructionId(fn.kernel.valueDefinitionOwner(value));
+			const opcode = fn.instructionOpcodeName(instruction);
+			if (opcode === "move") {
+				value = fn.kernel.operandAt(fn.kernel.instructionOperandStart(instruction));
+				continue;
+			}
+			switch (opcode) {
+				case "createNumber":
+				case "createF64": {
+					const number = fn.instructionAttributes(instruction).value;
+					if (
+						typeof number !== "number" ||
+						!Number.isInteger(number) ||
+						number < 0 ||
+						number >= 0xffff_ffff
+					)
+						return false;
+					break;
+				}
+				case "createString":
+				case "createBoolean":
+				case "createNull":
+				case "createUndefined":
+				case "createBigint":
+					return false;
+			}
+			break;
+		}
+	}
+	return true;
+}
 
 function regionInstruction(
 	fn: CoreFunctionStore,
@@ -146,6 +190,7 @@ function readRegion(
 		const output = results(fn, instruction);
 		return target !== undefined &&
 			summary !== undefined &&
+			accessorArgumentsMayAdmit(fn, inputs, summary) &&
 			output.length === 1 &&
 			fn.valueRepresentation(output[0]!) === "boxed"
 			? { target, summary }

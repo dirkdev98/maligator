@@ -17,6 +17,8 @@ work. It preserves the originally resolved callee and arguments.
 Single field reads with no sharing benefit retain ordinary inlining. Summary discovery stops at its
 instruction bound, and region discovery walks only its bounded neighborhood using
 the existing call-site index.
+Statically nonnumeric, fractional, negative, or out-of-range indexed arguments retain
+their ordinary path; unknown arguments still require runtime admission.
 
 Function identity guards also enforce the existing realm contract. Successful probes admit private
 data, ordinary named data properties, and present dense array elements. Getters,
