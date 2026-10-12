@@ -1024,9 +1024,6 @@ remains a Maligator extension and does not count as global fetch conformance.
       inherited and ignored stdio cover UPM commands. Exercise active-child cleanup
       in embedded VM teardown and Linux memory/libc reporting on a Linux host.
 
-- [ ] Align node:module builtinModules/isBuiltin with the supported builtin registry;
-      its separate list omits stream/promises and advertises unsupported aliases.
-
 - [ ] Preserve partially consumed ciphertext in direct node:tls socket reads;
       the Rust TLS input ABI can accept less than one socket-read buffer. Exercise
       large encrypted bodies beyond the existing ping fixtures.

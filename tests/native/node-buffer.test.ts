@@ -1,16 +1,19 @@
-import { mkdtempSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, rmSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { beforeAll, describe, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
 	assertResultPass,
 	buildNativeBinary,
+	buildBackendPairFromOneProgramImage,
 	HOST_MAIN,
 	runToStdout,
 	STRESS_ENV,
 } from "../../src/test-harness.ts";
 
 const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-node-buffer-"));
+afterAll(() => rmSync(outDir, { recursive: true, force: true }));
 
 describe("global Buffer and node:buffer", () => {
 	let esmCompiled: string;
@@ -96,5 +99,30 @@ describe("global Buffer and node:buffer", () => {
 		assertResultPass(runToStdout(cjsCompiled, { env: STRESS_ENV }));
 		assertResultPass(runToStdout(globalOnly, { env: STRESS_ENV }));
 		assertResultPass(runToStdout(expressDependencySmoke, { env: STRESS_ENV }));
+	});
+});
+
+describe("node:buffer text validation", () => {
+	it("validates encoded bytes and observable argument errors like Node", () => {
+		const directory = mkdtempSync(path.join(os.tmpdir(), "mal-buffer-validation-"));
+		const fixture = "tests/local/node-buffer-validation.mjs";
+		const expected = execFileSync(process.execPath, [fixture], {
+			encoding: "utf8",
+		}).trim();
+		try {
+			const pair = buildBackendPairFromOneProgramImage({
+				fixture,
+				name: "node-buffer-validation",
+				nodeEnabled: true,
+				mainFile: HOST_MAIN,
+				outDir: directory,
+			});
+			for (const binary of [pair.compiled, pair.interpreted]) {
+				expect(runToStdout(binary).trim()).toBe(expected);
+				expect(runToStdout(binary, { env: STRESS_ENV }).trim()).toBe(expected);
+			}
+		} finally {
+			rmSync(directory, { recursive: true, force: true });
+		}
 	});
 });

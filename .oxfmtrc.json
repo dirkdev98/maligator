@@ -6,6 +6,7 @@
 		"runtime/src/generated/primordial_registry.inc",
 		"runtime/src/generated/bytecode_operations.inc",
 		"runtime/src/generated/known_*.inc",
+		"runtime/src/generated/node_builtin_*.inc",
 		"runtime/rust/target",
 		"runtime/vendor",
 		"tests/wpt/fixtures"

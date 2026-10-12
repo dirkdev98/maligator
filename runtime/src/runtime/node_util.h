@@ -7,3 +7,7 @@
 void mal_host_install_node_util(
     MalVm *vm, const MalHostInstallSlot *slots, i32 count,
     const MalHostLaunchContext *launch);
+
+void mal_host_install_node_util_types(
+    MalVm *vm, const MalHostInstallSlot *slots, i32 count,
+    const MalHostLaunchContext *launch);

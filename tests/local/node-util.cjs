@@ -10,6 +10,10 @@ function check(condition, name) {
 const util = require("util");
 const canonical = require("node:util");
 check(util === canonical, "bare/canonical identity");
+check(
+	require("util/types") === util.types && require("node:util/types") === util.types,
+	"type submodule shares the util.types object",
+);
 check(util.format("%s:%i", "port", 42.8) === "port:42", "CommonJS format");
 check(util.inspect({ ok: true }) === "{ ok: true }", "CommonJS inspect");
 check(

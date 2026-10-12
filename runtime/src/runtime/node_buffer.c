@@ -691,6 +691,114 @@ static MalTypedArrayObject *mal_buffer_byte_view(MalVm *vm, MalValue value) {
     return mal_value_to_typed_array_object(value);
 }
 
+static MalValue mal_buffer_validate_text(MalVm *vm, MalValue input, bool utf8) {
+    const byte *data;
+    u32 length;
+    bool shared;
+    if (mal_value_is_array_buffer_object(input)) {
+        MalArrayBufferObject *buffer = mal_value_to_array_buffer_object(input);
+        length = mal_array_buffer_object_byte_length(buffer);
+        data = buffer->data;
+        shared = buffer->shared_memory != nullptr;
+    } else if (mal_value_is_typed_array_object(input)) {
+        MalTypedArrayObject *view = mal_value_to_typed_array_object(input);
+        length = mal_typed_array_object_byte_length(view);
+        data = length == 0 ? nullptr : mal_buffer_view_data(view);
+        shared = mal_buffer_view_shared(view);
+    } else {
+        if (mal_value_is_object(input) || mal_value_is_callable(input)) {
+            MalValue received[] = { input, mal_value_new_undefined() };
+            MalRootSpan received_root;
+            mal_gc_root(&received_root, received, countof(received));
+            // Node's error formatting observes constructor/name accessors before throwing.
+            bool callable = mal_value_is_callable(input);
+            received[1] = mal_vm_op_load_property(vm, received[0], mal_value_from_string(
+                mal_intrinsic_ascii(vm, callable ? "name" : "constructor")));
+            if (!callable && vm->completion.kind != MAL_COMPLETION_THROW
+                && !mal_value_is_nil(received[1])) {
+                received[1] = mal_vm_op_load_property(vm, received[1], mal_value_from_string(
+                    mal_intrinsic_ascii(vm, "name")));
+            }
+            mal_gc_unroot(&received_root);
+            if (vm->completion.kind == MAL_COMPLETION_THROW) return mal_value_new_undefined();
+        }
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "The input argument must be an ArrayBuffer, Buffer, or TypedArray");
+        if (vm->completion.kind == MAL_COMPLETION_THROW
+            && mal_value_is_object(vm->completion.value)) {
+            MalValue roots[] = {
+                vm->completion.value,
+                mal_value_from_string(mal_intrinsic_ascii(vm, "ERR_INVALID_ARG_TYPE")),
+            };
+            MalRootSpan root;
+            mal_gc_root(&root, roots, countof(roots));
+            mal_intrinsic_define_data(vm, mal_value_to_object(roots[0]), "code", roots[1],
+                MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE);
+            mal_gc_unroot(&root);
+        }
+        return mal_value_new_undefined();
+    }
+    if (length == 0) return mal_value_new_boolean(true);
+    byte *snapshot = nullptr;
+    if (shared) {
+        snapshot = malloc(length);
+        if (snapshot == nullptr) {
+            mal_vm_throw_allocation_error(vm);
+            return mal_value_new_undefined();
+        }
+        mal_shared_bytes_read(snapshot, data, length);
+        data = snapshot;
+    }
+    bool valid = true;
+    if (utf8) {
+        valid = mal_utf8_is_valid(data, length);
+    } else {
+        for (u32 index = 0; index < length; index++) {
+            if ((u8) data[index] >= 0x80) {
+                valid = false;
+                break;
+            }
+        }
+    }
+    free(snapshot);
+    return mal_value_new_boolean(valid);
+}
+
+static MalValue mal_buffer_validate_text_call(
+    MalVm *vm, MalValue input, MalValue new_target, bool utf8
+) {
+    if (mal_value_is_undefined(new_target)) return mal_buffer_validate_text(vm, input, utf8);
+    MalObject *prototype;
+    if (!mal_vm_get_prototype_from_constructor(
+            vm, new_target, MAL_INTRINSIC_OBJECT_PROTOTYPE, &prototype)) {
+        return mal_value_new_undefined();
+    }
+    MalValue instance = mal_value_from_object(mal_object_new(&vm->heap, prototype));
+    MalRootSpan root;
+    mal_gc_root(&root, &instance, 1);
+    (void) mal_buffer_validate_text(vm, input, utf8);
+    mal_gc_unroot(&root);
+    return vm->completion.kind == MAL_COMPLETION_THROW ? mal_value_new_undefined() : instance;
+}
+
+static MalValue mal_buffer_is_ascii(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc,
+    MalValue new_target, MalValue callee
+) {
+    (void) self; (void) callee;
+    return mal_buffer_validate_text_call(
+        vm, argc > 0 ? args[0] : mal_value_new_undefined(), new_target, false);
+}
+
+static MalValue mal_buffer_is_utf8(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc,
+    MalValue new_target, MalValue callee
+) {
+    (void) self; (void) callee;
+    return mal_buffer_validate_text_call(
+        vm, argc > 0 ? args[0] : mal_value_new_undefined(), new_target, true);
+}
+
 static f64 mal_buffer_span_number_at(
     const MalTypedArraySpan *span, u32 index
 ) {
@@ -1669,11 +1777,12 @@ void mal_host_install_node_buffer(
             vm->intrinsics[MAL_INTRINSIC_NODE_BUFFER_MODULE]);
         return;
     }
-    MalValue roots[4] = {
+    MalValue roots[7] = {
         mal_value_new_undefined(), mal_value_new_undefined(),
-        mal_value_new_undefined(), mal_value_new_undefined()};
+        mal_value_new_undefined(), mal_value_new_undefined(),
+        mal_value_new_undefined(), mal_value_new_undefined(), mal_value_new_undefined()};
     MalRootSpan root;
-    mal_gc_root(&root, roots, 4);
+    mal_gc_root(&root, roots, countof(roots));
 
     MalObject *uint8_prototype = mal_value_to_object(
         vm->intrinsics[MAL_INTRINSIC_TYPED_ARRAY_UINT8_PROTOTYPE]);
@@ -1745,6 +1854,26 @@ void mal_host_install_node_buffer(
     mal_intrinsic_define_data(vm, module_default, "constants", roots[3],
         MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE |
             MAL_PROPERTY_CONFIGURABLE);
+    roots[4] = mal_value_from_native_function_object(mal_native_function_object_new_arity(
+        &vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
+        mal_intrinsic_ascii(vm, "isAscii"), 1, mal_buffer_is_ascii));
+    roots[5] = mal_value_from_native_function_object(mal_native_function_object_new_arity(
+        &vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
+        mal_intrinsic_ascii(vm, "isUtf8"), 1, mal_buffer_is_utf8));
+    for (usize index = 4; index <= 5; index++) {
+        MalNativeFunctionObject *function = mal_value_to_native_function_object(roots[index]);
+        mal_native_function_object_set_constructor(function);
+        mal_native_function_object_set_handles_new_target_prototype(function);
+        roots[6] = mal_value_from_object(mal_intrinsic_new_object(vm));
+        mal_intrinsic_define_data(vm, (MalObject *) function, "prototype", roots[6],
+            MAL_PROPERTY_WRITABLE);
+        mal_intrinsic_define_data(vm, mal_value_to_object(roots[6]), "constructor", roots[index],
+            MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
+    }
+    mal_intrinsic_define_data(vm, module_default, "isAscii", roots[4],
+        MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE);
+    mal_intrinsic_define_data(vm, module_default, "isUtf8", roots[5],
+        MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE);
 
     vm->intrinsics[MAL_INTRINSIC_NODE_BUFFER_CONSTRUCTOR] = roots[1];
     vm->intrinsics[MAL_INTRINSIC_NODE_BUFFER_PROTOTYPE] = roots[0];

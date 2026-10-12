@@ -16,13 +16,7 @@
 #include "vm_ops.h"
 
 static const char *node_module_builtin_names[] = {
-    "assert", "assert/strict", "async_hooks", "buffer", "child_process",
-    "cluster", "crypto", "diagnostics_channel", "dns", "domain", "events",
-    "fs", "fs/promises", "http", "http2", "https", "inspector", "module",
-    "net", "os", "path", "path/posix", "path/win32", "perf_hooks", "process",
-    "querystring", "readline", "stream", "string_decoder", "timers",
-    "timers/promises", "tls", "tty", "url", "util", "v8", "vm",
-    "worker_threads", "zlib", "node:sqlite",
+#include "generated/node_builtin_modules.inc"
 };
 
 static bool node_module_matches_builtin(MalString *string, const char *name) {
@@ -75,6 +69,7 @@ static MalValue node_module_builtin_modules(MalVm *vm) {
             mal_value_from_string(mal_string_new_ascii(
                 &vm->heap, (const byte *) name, strlen(name))));
     }
+    mal_object_set_integrity_level((MalObject *) array, true);
     mal_gc_unroot(&root);
     return result;
 }

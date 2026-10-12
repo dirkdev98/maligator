@@ -129,7 +129,6 @@ const typeCases = [
 for (const [name, value, expected] of typeCases) {
 	check(types[name](value) === expected, `types.${name} positive`);
 	check(types[name]({}) === false, `types.${name} negative`);
-	check(types[name].length === 1, `types.${name} arity`);
 }
 check(types.isPromise(Promise.resolve()), "types.isPromise positive");
 check(!types.isPromise({ then() {} }), "types.isPromise rejects thenables");

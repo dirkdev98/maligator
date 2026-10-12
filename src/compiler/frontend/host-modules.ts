@@ -349,15 +349,64 @@ const UTIL: HostModuleSpec = {
 		"parseEnv",
 		"promisify",
 		"styleText",
+		"toUSVString",
 		"types",
 	],
 	hasDefault: true,
 	installer: hostInstallerSymbol("node:util"),
 };
 
+const UTIL_TYPES: HostModuleSpec = {
+	id: "node:util/types",
+	named: [
+		"isPromise",
+		"isAnyArrayBuffer",
+		"isArrayBuffer",
+		"isSharedArrayBuffer",
+		"isDataView",
+		"isDate",
+		"isMap",
+		"isSet",
+		"isWeakMap",
+		"isWeakSet",
+		"isRegExp",
+		"isTypedArray",
+		"isBoxedPrimitive",
+		"isBigIntObject",
+		"isBooleanObject",
+		"isNumberObject",
+		"isStringObject",
+		"isSymbolObject",
+		"isArrayBufferView",
+		"isAsyncFunction",
+		"isGeneratorFunction",
+		"isGeneratorObject",
+		"isModuleNamespaceObject",
+		"isProxy",
+		"isExternal",
+		"isKeyObject",
+		"isCryptoKey",
+		"isMapIterator",
+		"isSetIterator",
+		"isInt8Array",
+		"isUint8Array",
+		"isUint8ClampedArray",
+		"isInt16Array",
+		"isUint16Array",
+		"isInt32Array",
+		"isUint32Array",
+		"isFloat32Array",
+		"isFloat64Array",
+		"isBigInt64Array",
+		"isBigUint64Array",
+	],
+	hasDefault: true,
+	installer: hostInstallerSymbol("node:util/types"),
+};
+
 const BUFFER: HostModuleSpec = {
 	id: "node:buffer",
-	named: ["Buffer", "constants"],
+	named: ["Buffer", "constants", "isAscii", "isUtf8"],
 	hasDefault: true,
 	installer: BUFFER_INSTALLER_SYMBOL,
 };
@@ -648,6 +697,7 @@ export const HOST_MODULES: ReadonlyMap<string, HostModuleSpec> = new Map(
 		EVENTS,
 		TTY,
 		UTIL,
+		UTIL_TYPES,
 		BUFFER,
 		PROCESS,
 		ASSERT,
@@ -783,4 +833,14 @@ export function canonicalNodeBuiltinId(specifier: string): string | undefined {
 /** Sorted list of supported specifiers, for clear "unknown module" diagnostics. */
 export function supportedHostModuleIds(): Array<string> {
 	return [...HOST_MODULES.keys()];
+}
+
+export function supportedNodeBuiltinNames(): Array<string> {
+	const names = [...HOST_MODULES.keys()]
+		.map((id) => (NODE_PREFIX_ONLY_BUILTIN_IDS.has(id) ? id : id.slice(5)))
+		.sort();
+	return [
+		...names.filter((name) => !isNodeSpecifier(name)),
+		...names.filter(isNodeSpecifier),
+	];
 }

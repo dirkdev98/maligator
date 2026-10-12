@@ -513,7 +513,7 @@
 				</div>
 				<aside class="summary-board" aria-label="Compatibility inventory summary">
 					<!-- compatibility-summary:start -->
-					<strong>107</strong><span>fully passing WPT files</span> <strong>38</strong
+					<strong>107</strong><span>fully passing WPT files</span> <strong>39</strong
 					><span>recognized Node.js modules</span> <strong>0</strong
 					><span>suppressed WPT failures</span>
 					<!-- compatibility-summary:end -->
@@ -1163,7 +1163,7 @@
 						<section class="inventory-group module-group" aria-labelledby="node:buffer">
 							<div class="inventory-heading">
 								<h3 id="node:buffer"><code>node:buffer</code></h3>
-								<span>2 recognized APIs · default export</span>
+								<span>4 recognized APIs · default export</span>
 							</div>
 							<div class="table-wrap">
 								<table>
@@ -1180,6 +1180,14 @@
 										</tr>
 										<tr>
 											<td><code class="api-name">node:buffer#constants</code></td>
+											<td><span class="status partial">Partial implementation</span></td>
+										</tr>
+										<tr>
+											<td><code class="api-name">node:buffer#isAscii</code></td>
+											<td><span class="status partial">Partial implementation</span></td>
+										</tr>
+										<tr>
+											<td><code class="api-name">node:buffer#isUtf8</code></td>
 											<td><span class="status partial">Partial implementation</span></td>
 										</tr>
 									</tbody>
@@ -2728,7 +2736,7 @@
 						<section class="inventory-group module-group" aria-labelledby="node:util">
 							<div class="inventory-heading">
 								<h3 id="node:util"><code>node:util</code></h3>
-								<span>22 recognized APIs · default export</span>
+								<span>23 recognized APIs · default export</span>
 							</div>
 							<div class="table-wrap">
 								<table>
@@ -2824,7 +2832,230 @@
 											<td><span class="status partial">Partial implementation</span></td>
 										</tr>
 										<tr>
+											<td><code class="api-name">node:util#toUSVString</code></td>
+											<td><span class="status partial">Partial implementation</span></td>
+										</tr>
+										<tr>
 											<td><code class="api-name">node:util#types</code></td>
+											<td><span class="status partial">Partial implementation</span></td>
+										</tr>
+									</tbody>
+								</table>
+							</div>
+						</section>
+						<section
+							class="inventory-group module-group"
+							aria-labelledby="node:util/types"
+						>
+							<div class="inventory-heading">
+								<h3 id="node:util/types"><code>node:util/types</code></h3>
+								<span>40 recognized APIs · default export</span>
+							</div>
+							<div class="table-wrap">
+								<table>
+									<thead>
+										<tr>
+											<th>API</th>
+											<th>Status</th>
+										</tr>
+									</thead>
+									<tbody>
+										<tr>
+											<td><code class="api-name">node:util/types#isPromise</code></td>
+											<td><span class="status partial">Partial implementation</span></td>
+										</tr>
+										<tr>
+											<td>
+												<code class="api-name">node:util/types#isAnyArrayBuffer</code>
+											</td>
+											<td><span class="status partial">Partial implementation</span></td>
+										</tr>
+										<tr>
+											<td><code class="api-name">node:util/types#isArrayBuffer</code></td>
+											<td><span class="status partial">Partial implementation</span></td>
+										</tr>
+										<tr>
+											<td>
+												<code class="api-name">node:util/types#isSharedArrayBuffer</code>
+											</td>
+											<td><span class="status partial">Partial implementation</span></td>
+										</tr>
+										<tr>
+											<td><code class="api-name">node:util/types#isDataView</code></td>
+											<td><span class="status partial">Partial implementation</span></td>
+										</tr>
+										<tr>
+											<td><code class="api-name">node:util/types#isDate</code></td>
+											<td><span class="status partial">Partial implementation</span></td>
+										</tr>
+										<tr>
+											<td><code class="api-name">node:util/types#isMap</code></td>
+											<td><span class="status partial">Partial implementation</span></td>
+										</tr>
+										<tr>
+											<td><code class="api-name">node:util/types#isSet</code></td>
+											<td><span class="status partial">Partial implementation</span></td>
+										</tr>
+										<tr>
+											<td><code class="api-name">node:util/types#isWeakMap</code></td>
+											<td><span class="status partial">Partial implementation</span></td>
+										</tr>
+										<tr>
+											<td><code class="api-name">node:util/types#isWeakSet</code></td>
+											<td><span class="status partial">Partial implementation</span></td>
+										</tr>
+										<tr>
+											<td><code class="api-name">node:util/types#isRegExp</code></td>
+											<td><span class="status partial">Partial implementation</span></td>
+										</tr>
+										<tr>
+											<td><code class="api-name">node:util/types#isTypedArray</code></td>
+											<td><span class="status partial">Partial implementation</span></td>
+										</tr>
+										<tr>
+											<td>
+												<code class="api-name">node:util/types#isBoxedPrimitive</code>
+											</td>
+											<td><span class="status partial">Partial implementation</span></td>
+										</tr>
+										<tr>
+											<td>
+												<code class="api-name">node:util/types#isBigIntObject</code>
+											</td>
+											<td><span class="status partial">Partial implementation</span></td>
+										</tr>
+										<tr>
+											<td>
+												<code class="api-name">node:util/types#isBooleanObject</code>
+											</td>
+											<td><span class="status partial">Partial implementation</span></td>
+										</tr>
+										<tr>
+											<td>
+												<code class="api-name">node:util/types#isNumberObject</code>
+											</td>
+											<td><span class="status partial">Partial implementation</span></td>
+										</tr>
+										<tr>
+											<td>
+												<code class="api-name">node:util/types#isStringObject</code>
+											</td>
+											<td><span class="status partial">Partial implementation</span></td>
+										</tr>
+										<tr>
+											<td>
+												<code class="api-name">node:util/types#isSymbolObject</code>
+											</td>
+											<td><span class="status partial">Partial implementation</span></td>
+										</tr>
+										<tr>
+											<td>
+												<code class="api-name">node:util/types#isArrayBufferView</code>
+											</td>
+											<td><span class="status partial">Partial implementation</span></td>
+										</tr>
+										<tr>
+											<td>
+												<code class="api-name">node:util/types#isAsyncFunction</code>
+											</td>
+											<td><span class="status partial">Partial implementation</span></td>
+										</tr>
+										<tr>
+											<td>
+												<code class="api-name">node:util/types#isGeneratorFunction</code>
+											</td>
+											<td><span class="status partial">Partial implementation</span></td>
+										</tr>
+										<tr>
+											<td>
+												<code class="api-name">node:util/types#isGeneratorObject</code>
+											</td>
+											<td><span class="status partial">Partial implementation</span></td>
+										</tr>
+										<tr>
+											<td>
+												<code class="api-name"
+													>node:util/types#isModuleNamespaceObject</code
+												>
+											</td>
+											<td><span class="status partial">Partial implementation</span></td>
+										</tr>
+										<tr>
+											<td><code class="api-name">node:util/types#isProxy</code></td>
+											<td><span class="status partial">Partial implementation</span></td>
+										</tr>
+										<tr>
+											<td><code class="api-name">node:util/types#isExternal</code></td>
+											<td><span class="status partial">Partial implementation</span></td>
+										</tr>
+										<tr>
+											<td><code class="api-name">node:util/types#isKeyObject</code></td>
+											<td><span class="status partial">Partial implementation</span></td>
+										</tr>
+										<tr>
+											<td><code class="api-name">node:util/types#isCryptoKey</code></td>
+											<td><span class="status partial">Partial implementation</span></td>
+										</tr>
+										<tr>
+											<td><code class="api-name">node:util/types#isMapIterator</code></td>
+											<td><span class="status partial">Partial implementation</span></td>
+										</tr>
+										<tr>
+											<td><code class="api-name">node:util/types#isSetIterator</code></td>
+											<td><span class="status partial">Partial implementation</span></td>
+										</tr>
+										<tr>
+											<td><code class="api-name">node:util/types#isInt8Array</code></td>
+											<td><span class="status partial">Partial implementation</span></td>
+										</tr>
+										<tr>
+											<td><code class="api-name">node:util/types#isUint8Array</code></td>
+											<td><span class="status partial">Partial implementation</span></td>
+										</tr>
+										<tr>
+											<td>
+												<code class="api-name">node:util/types#isUint8ClampedArray</code>
+											</td>
+											<td><span class="status partial">Partial implementation</span></td>
+										</tr>
+										<tr>
+											<td><code class="api-name">node:util/types#isInt16Array</code></td>
+											<td><span class="status partial">Partial implementation</span></td>
+										</tr>
+										<tr>
+											<td><code class="api-name">node:util/types#isUint16Array</code></td>
+											<td><span class="status partial">Partial implementation</span></td>
+										</tr>
+										<tr>
+											<td><code class="api-name">node:util/types#isInt32Array</code></td>
+											<td><span class="status partial">Partial implementation</span></td>
+										</tr>
+										<tr>
+											<td><code class="api-name">node:util/types#isUint32Array</code></td>
+											<td><span class="status partial">Partial implementation</span></td>
+										</tr>
+										<tr>
+											<td>
+												<code class="api-name">node:util/types#isFloat32Array</code>
+											</td>
+											<td><span class="status partial">Partial implementation</span></td>
+										</tr>
+										<tr>
+											<td>
+												<code class="api-name">node:util/types#isFloat64Array</code>
+											</td>
+											<td><span class="status partial">Partial implementation</span></td>
+										</tr>
+										<tr>
+											<td>
+												<code class="api-name">node:util/types#isBigInt64Array</code>
+											</td>
+											<td><span class="status partial">Partial implementation</span></td>
+										</tr>
+										<tr>
+											<td>
+												<code class="api-name">node:util/types#isBigUint64Array</code>
+											</td>
 											<td><span class="status partial">Partial implementation</span></td>
 										</tr>
 									</tbody>

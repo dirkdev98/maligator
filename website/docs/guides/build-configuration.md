@@ -29,6 +29,12 @@ Engine choices apply to the whole image, including workers. RegExp is enabled by
 
 The [configuration reference](/api/build#MaligatorBuildConfig) lists each default and interaction. Type declarations remain visible even for disabled surfaces. Check [Compatibility](/compatibility) for support within an enabled surface.
 
+With `surface.node`, `node:module.builtinModules` and `isBuiltin` describe the modules this image supports. The list is frozen and uses Node's spellings, including the required `node:` prefix for `node:sqlite`. A listed module can still expose a subset of Node's APIs; consult Compatibility for its exports.
+
+`node:buffer.isAscii` and `isUtf8` validate the bytes of Buffers, typed arrays, and ArrayBuffers, including shared backing stores. They honor typed-array offsets and validate UTF-8 scalar values without accepting surrogate encodings. Detached and out-of-bounds inputs are empty; DataViews and proxies are rejected, matching Node 26.8 and later.
+
+`node:util.toUSVString` coerces its input to a string and replaces unpaired surrogates with U+FFFD. The supported `node:util/types` predicates share identity with `util.types`, inspect runtime brands without invoking property getters, and preserve the distinction between ordinary, async, and generator functions.
+
 ## Replace a module specifier
 
 ```typescript maligator.build.ts

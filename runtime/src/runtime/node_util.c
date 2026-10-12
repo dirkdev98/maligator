@@ -10,6 +10,7 @@
 #include "array_object.h"
 #include "ascii.h"
 #include "array_buffer_object.h"
+#include "builtin_string.h"
 #include "function_object.h"
 #include "gc.h"
 #include "heap_string.h"
@@ -23,6 +24,7 @@
 #include "property_iter.h"
 #include "property_store.h"
 #include "promise_object.h"
+#include "primitive_wrapper_object.h"
 #include "proxy_object.h"
 #include "typed_array_object.h"
 #include "text_buffer.h"
@@ -687,7 +689,16 @@ UTIL_LEGACY_PREDICATE(is_undefined, UTIL_IS_UNDEFINED)
 typedef bool (*MalUtilTypePredicate)(MalValue value);
 
 static MalValue util_type_predicate_result(
-    const MalValue *args, i32 argc, MalUtilTypePredicate predicate) {
+    MalVm *vm, const MalValue *args, i32 argc, MalValue new_target,
+    MalUtilTypePredicate predicate) {
+    if (!mal_value_is_undefined(new_target)) {
+        MalObject *prototype;
+        if (!mal_vm_get_prototype_from_constructor(
+                vm, new_target, MAL_INTRINSIC_OBJECT_PROTOTYPE, &prototype)) {
+            return mal_value_new_undefined();
+        }
+        return mal_value_from_object(mal_object_new(&vm->heap, prototype));
+    }
     return mal_value_new_boolean(argc > 0 && predicate(args[0]));
 }
 
@@ -696,8 +707,8 @@ static MalValue util_type_predicate_result(
     static MalValue util_types_##name( \
         MalVm *vm, MalValue receiver, const MalValue *args, i32 argc, \
         MalValue new_target, MalValue callee) { \
-        (void) vm; (void) receiver; (void) new_target; (void) callee; \
-        return util_type_predicate_result(args, argc, util_type_check_##name); \
+        (void) receiver; (void) callee; \
+        return util_type_predicate_result(vm, args, argc, new_target, util_type_check_##name); \
     }
 
 UTIL_TYPE_PREDICATE(is_any_array_buffer, mal_value_is_array_buffer_object(value))
@@ -720,6 +731,16 @@ UTIL_TYPE_PREDICATE(is_weak_set,
 UTIL_TYPE_PREDICATE(is_reg_exp, mal_value_is_regexp_object(value))
 UTIL_TYPE_PREDICATE(is_typed_array, mal_value_is_typed_array_object(value))
 UTIL_TYPE_PREDICATE(is_boxed_primitive, mal_value_is_primitive_wrapper(value))
+UTIL_TYPE_PREDICATE(is_big_int_object, mal_value_is_primitive_wrapper(value)
+    && mal_value_to_primitive_wrapper(value)->kind == MAL_PRIMITIVE_WRAPPER_BIGINT)
+UTIL_TYPE_PREDICATE(is_boolean_object, mal_value_is_primitive_wrapper(value)
+    && mal_value_to_primitive_wrapper(value)->kind == MAL_PRIMITIVE_WRAPPER_BOOLEAN)
+UTIL_TYPE_PREDICATE(is_number_object, mal_value_is_primitive_wrapper(value)
+    && mal_value_to_primitive_wrapper(value)->kind == MAL_PRIMITIVE_WRAPPER_NUMBER)
+UTIL_TYPE_PREDICATE(is_string_object, mal_value_is_primitive_wrapper(value)
+    && mal_value_to_primitive_wrapper(value)->kind == MAL_PRIMITIVE_WRAPPER_STRING)
+UTIL_TYPE_PREDICATE(is_symbol_object, mal_value_is_primitive_wrapper(value)
+    && mal_value_to_primitive_wrapper(value)->kind == MAL_PRIMITIVE_WRAPPER_SYMBOL)
 UTIL_TYPE_PREDICATE(is_generator_object, mal_value_is_generator_object(value))
 UTIL_TYPE_PREDICATE(is_module_namespace_object,
     mal_value_is_module_namespace_object(value))
@@ -754,41 +775,90 @@ UTIL_TYPED_ARRAY_PREDICATE(is_big_uint64_array, MAL_TA_BIGUINT64)
 typedef struct MalNodeUtilTypeExport {
     const char *name;
     MalNativeFunctionCallback callback;
+    bool javascript_wrapper;
 } MalNodeUtilTypeExport;
+
+static MalValue util_types_function_kind(
+    MalVm *vm, const MalValue *args, i32 argc, bool async) {
+    bool matches = false;
+    if (argc > 0 && mal_value_is_function_object(args[0])) {
+        i32 index = mal_function_object_function_index(mal_value_to_function_object(args[0]));
+        if (index >= 0 && index < vm->runtime_image->function_count) {
+            MalFunctionKind kind = vm->runtime_image->functions[index].kind;
+            matches = kind == MAL_FUNCTION_KIND_ASYNC_GENERATOR
+                || kind == (async ? MAL_FUNCTION_KIND_ASYNC : MAL_FUNCTION_KIND_GENERATOR);
+        }
+    }
+    return mal_value_new_boolean(matches);
+}
+
+static MalValue util_types_is_async_function(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
+    MalValue new_target, MalValue callee) {
+    (void) receiver; (void) new_target; (void) callee;
+    return util_types_function_kind(vm, args, argc, true);
+}
+
+static MalValue util_types_is_generator_function(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
+    MalValue new_target, MalValue callee) {
+    (void) receiver; (void) new_target; (void) callee;
+    return util_types_function_kind(vm, args, argc, false);
+}
 
 static const MalNodeUtilTypeExport util_type_exports[] = {
     {"isAnyArrayBuffer", util_types_is_any_array_buffer},
     {"isArrayBuffer", util_types_is_array_buffer},
     {"isSharedArrayBuffer", util_types_is_shared_array_buffer},
-    {"isDataView", util_types_is_data_view},
+    {"isDataView", util_types_is_data_view, true},
     {"isDate", util_types_is_date},
     {"isMap", util_types_is_map},
     {"isSet", util_types_is_set},
     {"isWeakMap", util_types_is_weak_map},
     {"isWeakSet", util_types_is_weak_set},
     {"isRegExp", util_types_is_reg_exp},
-    {"isTypedArray", util_types_is_typed_array},
+    {"isTypedArray", util_types_is_typed_array, true},
     {"isBoxedPrimitive", util_types_is_boxed_primitive},
+    {"isAsyncFunction", util_types_is_async_function},
+    {"isGeneratorFunction", util_types_is_generator_function},
+    {"isBigIntObject", util_types_is_big_int_object},
+    {"isBooleanObject", util_types_is_boolean_object},
+    {"isNumberObject", util_types_is_number_object},
+    {"isStringObject", util_types_is_string_object},
+    {"isSymbolObject", util_types_is_symbol_object},
     {"isGeneratorObject", util_types_is_generator_object},
     {"isModuleNamespaceObject", util_types_is_module_namespace_object},
     {"isProxy", util_types_is_proxy},
     {"isExternal", util_types_is_external},
-    {"isKeyObject", util_types_is_key_object},
-    {"isCryptoKey", util_types_is_crypto_key},
+    {"isKeyObject", util_types_is_key_object, true},
+    {"isCryptoKey", util_types_is_crypto_key, true},
     {"isMapIterator", util_types_is_map_iterator},
     {"isSetIterator", util_types_is_set_iterator},
-    {"isInt8Array", util_types_is_int8_array},
-    {"isUint8Array", util_types_is_uint8_array},
-    {"isUint8ClampedArray", util_types_is_uint8_clamped_array},
-    {"isInt16Array", util_types_is_int16_array},
-    {"isUint16Array", util_types_is_uint16_array},
-    {"isInt32Array", util_types_is_int32_array},
-    {"isUint32Array", util_types_is_uint32_array},
-    {"isFloat32Array", util_types_is_float32_array},
-    {"isFloat64Array", util_types_is_float64_array},
-    {"isBigInt64Array", util_types_is_big_int64_array},
-    {"isBigUint64Array", util_types_is_big_uint64_array},
+    {"isInt8Array", util_types_is_int8_array, true},
+    {"isUint8Array", util_types_is_uint8_array, true},
+    {"isUint8ClampedArray", util_types_is_uint8_clamped_array, true},
+    {"isInt16Array", util_types_is_int16_array, true},
+    {"isUint16Array", util_types_is_uint16_array, true},
+    {"isInt32Array", util_types_is_int32_array, true},
+    {"isUint32Array", util_types_is_uint32_array, true},
+    {"isFloat32Array", util_types_is_float32_array, true},
+    {"isFloat64Array", util_types_is_float64_array, true},
+    {"isBigInt64Array", util_types_is_big_int64_array, true},
+    {"isBigUint64Array", util_types_is_big_uint64_array, true},
 };
+
+static MalValue util_to_usv_string(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
+    MalValue new_target, MalValue callee) {
+    (void) receiver;
+    (void) new_target;
+    (void) callee;
+    MalString *string;
+    if (!mal_vm_to_string(vm, argc > 0 ? args[0] : mal_value_new_undefined(), &string)) {
+        return mal_value_new_undefined();
+    }
+    return mal_builtin_string_to_well_formed_known(vm, string);
+}
 
 static MalValue util_debug_noop(
     MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
@@ -2032,6 +2102,7 @@ static const MalNodeUtilExport util_exports[] = {
     {"parseEnv", 1, util_parse_env},
     {"promisify", 1, util_promisify},
     {"styleText", 2, util_style_text},
+    {"toUSVString", 1, util_to_usv_string},
 };
 
 void mal_host_install_node_util(
@@ -2059,16 +2130,32 @@ void mal_host_install_node_util(
 	values[types_index] = mal_value_from_object(mal_intrinsic_new_object(vm));
 	values[namespace_index] = mal_value_from_native_function_object(
 		mal_native_function_object_new_arity(&vm->heap, function_prototype,
-			mal_intrinsic_ascii(vm, (const byte *) "isPromise"), 1,
+			mal_intrinsic_ascii(vm, ""), 0,
 			util_types_is_promise));
 	mal_intrinsic_define_data(vm, mal_value_to_object(values[types_index]),
 		(const byte *) "isPromise", values[namespace_index], UTIL_VISIBLE);
+    mal_intrinsic_define_data(vm, mal_value_to_object(values[types_index]),
+        "isArrayBufferView", vm->intrinsics[MAL_INTRINSIC_ARRAY_BUFFER_IS_VIEW], UTIL_VISIBLE);
 	for (usize i = 0; i < countof(util_type_exports); i++) {
 		const MalNodeUtilTypeExport *export = &util_type_exports[i];
 		values[namespace_index] = mal_value_from_native_function_object(
 			mal_native_function_object_new_arity(&vm->heap, function_prototype,
-				mal_intrinsic_ascii(vm, (const byte *) export->name), 1,
+				mal_intrinsic_ascii(vm, export->javascript_wrapper ? export->name : ""),
+                export->javascript_wrapper ? 1 : 0,
 				export->callback));
+        if (export->javascript_wrapper) {
+            MalNativeFunctionObject *function = mal_value_to_native_function_object(values[namespace_index]);
+            mal_native_function_object_set_constructor(function);
+            mal_native_function_object_set_handles_new_target_prototype(function);
+            MalValue prototype = mal_value_from_object(mal_intrinsic_new_object(vm));
+            MalRootSpan prototype_root;
+            mal_gc_root(&prototype_root, &prototype, 1);
+            mal_intrinsic_define_data(vm, (MalObject *) function, "prototype", prototype,
+                MAL_PROPERTY_WRITABLE);
+            mal_intrinsic_define_data(vm, mal_value_to_object(prototype), "constructor",
+                values[namespace_index], MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
+            mal_gc_unroot(&prototype_root);
+        }
 		mal_intrinsic_define_data(vm, mal_value_to_object(values[types_index]),
 			(const byte *) export->name, values[namespace_index], UTIL_VISIBLE);
 	}
@@ -2081,8 +2168,18 @@ void mal_host_install_node_util(
 	mal_intrinsic_define_data(vm, namespace,
 		(const byte *) "types", values[types_index], UTIL_VISIBLE);
 
+    mal_node_module_publish(vm, "node:util/types", nullptr, 0, values[types_index]);
     mal_node_module_publish(vm, "node:util", slots, count, values[namespace_index]);
     mal_gc_unroot(&root);
+}
+
+void mal_host_install_node_util_types(
+    MalVm *vm, const MalHostInstallSlot *slots, i32 count,
+    const MalHostLaunchContext *launch) {
+    if (mal_node_module_install_cached(vm, "node:util/types", slots, count)) return;
+    mal_host_install_node_util(vm, nullptr, 0, launch);
+    if (vm->completion.kind == MAL_COMPLETION_THROW) return;
+    (void) mal_node_module_install_cached(vm, "node:util/types", slots, count);
 }
 
 #endif /* MAL_NODE */

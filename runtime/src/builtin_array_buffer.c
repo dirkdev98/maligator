@@ -750,7 +750,8 @@ void mal_builtin_array_buffer_install(MalVm *vm) {
 
     mal_intrinsic_define_data(vm, (MalObject *) constructor, "prototype", vm->intrinsics[MAL_INTRINSIC_ARRAY_BUFFER_PROTOTYPE], MAL_PROPERTY_NONE);
     mal_intrinsic_define_data(vm, prototype, "constructor", vm->intrinsics[MAL_INTRINSIC_ARRAY_BUFFER_CONSTRUCTOR], MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
-    mal_intrinsic_define_method_n(vm, (MalObject *) constructor, "isView", 1, mal_builtin_array_buffer_is_view);
+    vm->intrinsics[MAL_INTRINSIC_ARRAY_BUFFER_IS_VIEW] = mal_intrinsic_define_method_n(
+        vm, (MalObject *) constructor, "isView", 1, mal_builtin_array_buffer_is_view);
     mal_intrinsic_define_species(vm, (MalObject *) constructor);
 
     mal_builtin_array_buffer_define_getter(vm, prototype, "byteLength", mal_builtin_array_buffer_byte_length_getter);

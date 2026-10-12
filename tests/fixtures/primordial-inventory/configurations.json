@@ -5,7 +5,7 @@
 	"modes": [
 		{
 			"mode": "minimal",
-			"sha256": "001b1197abd0bfe3ab984c861a01c5e5b92f7fdbfc8a8624185653d7f10e0b80",
+			"sha256": "05eb135668490497dbbf97c88f99c8b476cd8440398279b26fdaccd0ab43836c",
 			"phases": [
 				{
 					"phase": "language-initialized",
@@ -23,7 +23,7 @@
 		},
 		{
 			"mode": "full",
-			"sha256": "c1dd177b998160240beb78b1280d3f11c4ecf60142980153b4e2bea986a99fce",
+			"sha256": "27c842863343e204121387eb7c525dd4422a0878a93321195fcf5be9c9d1b5d7",
 			"phases": [
 				{
 					"phase": "language-initialized",
@@ -33,15 +33,15 @@
 				},
 				{
 					"phase": "host-installed",
-					"nodes": 1878,
-					"descriptors": 5744,
+					"nodes": 1905,
+					"descriptors": 5809,
 					"repeatedOwnKeys": [{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }]
 				}
 			]
 		},
 		{
 			"mode": "mutable",
-			"sha256": "5be065f2989cc48f5007705e2fb8b61fbdd8e28664d33d83a8be85d29777303b",
+			"sha256": "4eb8484d371bce3a2b013b6cbaca9f0d39db0435f6a09993cf7002467b1289f2",
 			"phases": [
 				{
 					"phase": "language-initialized",
@@ -51,15 +51,15 @@
 				},
 				{
 					"phase": "host-installed",
-					"nodes": 1874,
-					"descriptors": 5735,
+					"nodes": 1901,
+					"descriptors": 5800,
 					"repeatedOwnKeys": []
 				}
 			]
 		},
 		{
 			"mode": "node",
-			"sha256": "635e903dbf77ee772dd4562c7dbe8434bd834cab6dc59906f639def43584fdf5",
+			"sha256": "26a470613382625fb51a7c8c2e4b7884ea2d7546b2b37c9ce6e250489467982a",
 			"phases": [
 				{
 					"phase": "language-initialized",
@@ -69,15 +69,15 @@
 				},
 				{
 					"phase": "host-installed",
-					"nodes": 1405,
-					"descriptors": 4345,
+					"nodes": 1432,
+					"descriptors": 4410,
 					"repeatedOwnKeys": [{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }]
 				}
 			]
 		},
 		{
 			"mode": "web",
-			"sha256": "9bacafccace7f3cfc0b5d68cb5b00c8c84bccfe024221d53ec44a7689ee8e6a6",
+			"sha256": "f2f1e86e37a3d0a13d51894398399f2e9af1de58d94a2bc370e2e978e4ae004b",
 			"phases": [
 				{
 					"phase": "language-initialized",
@@ -95,7 +95,7 @@
 		},
 		{
 			"mode": "diagnostic",
-			"sha256": "e94ac92cc1a960058baeb34461656141c07bb6315282b4149d956cb92964c272",
+			"sha256": "0354ee5bc83c1f2298c877ad6ee7c7dec1c5e7464874a13796c3a2ed0b36d9b7",
 			"phases": [
 				{
 					"phase": "language-initialized",
@@ -105,15 +105,15 @@
 				},
 				{
 					"phase": "host-installed",
-					"nodes": 1886,
-					"descriptors": 5774,
+					"nodes": 1913,
+					"descriptors": 5839,
 					"repeatedOwnKeys": [{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }]
 				}
 			]
 		},
 		{
 			"mode": "no-eval",
-			"sha256": "c1dd177b998160240beb78b1280d3f11c4ecf60142980153b4e2bea986a99fce",
+			"sha256": "27c842863343e204121387eb7c525dd4422a0878a93321195fcf5be9c9d1b5d7",
 			"phases": [
 				{
 					"phase": "language-initialized",
@@ -123,15 +123,15 @@
 				},
 				{
 					"phase": "host-installed",
-					"nodes": 1878,
-					"descriptors": 5744,
+					"nodes": 1905,
+					"descriptors": 5809,
 					"repeatedOwnKeys": [{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }]
 				}
 			]
 		},
 		{
 			"mode": "no-realms",
-			"sha256": "b3869ad695aa652fd952535525fcb0dc1fb6edb936a512cb0b2cb12fb2ac7f48",
+			"sha256": "31cec71130b4c142731817ecd9d1063696036764a52e60939e59ad66719eb0c6",
 			"phases": [
 				{
 					"phase": "language-initialized",
@@ -141,15 +141,15 @@
 				},
 				{
 					"phase": "host-installed",
-					"nodes": 1874,
-					"descriptors": 5732,
+					"nodes": 1901,
+					"descriptors": 5797,
 					"repeatedOwnKeys": [{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }]
 				}
 			]
 		},
 		{
 			"mode": "no-regexp",
-			"sha256": "421250b15d99c59aafcd4fe97742deacd7bdefb7b4741de76c92845bd37cc30e",
+			"sha256": "22abf1ee4c90793c594e0c6cd85c6ec54c61037b8564e2ca39749725539f6a82",
 			"phases": [
 				{
 					"phase": "language-initialized",
@@ -159,15 +159,15 @@
 				},
 				{
 					"phase": "host-installed",
-					"nodes": 1832,
-					"descriptors": 5591,
+					"nodes": 1859,
+					"descriptors": 5656,
 					"repeatedOwnKeys": [{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }]
 				}
 			]
 		},
 		{
 			"mode": "no-temporal",
-			"sha256": "97ecefe70bc03c1b29a5d1c3934730dc604025ac1722da46e8d683a167091634",
+			"sha256": "bd4beab948549ab7cc4f3ae14cf831e0b01702a5379c4d1ff8ea29c28516d190",
 			"phases": [
 				{
 					"phase": "language-initialized",
@@ -177,15 +177,15 @@
 				},
 				{
 					"phase": "host-installed",
-					"nodes": 1635,
-					"descriptors": 5017,
+					"nodes": 1662,
+					"descriptors": 5082,
 					"repeatedOwnKeys": [{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }]
 				}
 			]
 		},
 		{
 			"mode": "no-intl",
-			"sha256": "e4d8ee0331a80289349bc6482b369013f794b11ab170f9d1b691bcae5a2a5fc2",
+			"sha256": "236760003fd4616cd14a9a3ee7c0b479d94efe50e32b11c7d79d6def55592c54",
 			"phases": [
 				{
 					"phase": "language-initialized",
@@ -195,15 +195,15 @@
 				},
 				{
 					"phase": "host-installed",
-					"nodes": 1805,
-					"descriptors": 5532,
+					"nodes": 1832,
+					"descriptors": 5597,
 					"repeatedOwnKeys": [{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }]
 				}
 			]
 		},
 		{
 			"mode": "intl-collator",
-			"sha256": "58b9424a58b3e2e2f72378d02a1b2eb94f6dab0a5c397ff0ed109c7602c42ee6",
+			"sha256": "8d335dbd9feb127689852aec7f64ce296de4720e30d282a45565a8e55863c26a",
 			"phases": [
 				{
 					"phase": "language-initialized",
@@ -213,15 +213,15 @@
 				},
 				{
 					"phase": "host-installed",
-					"nodes": 1828,
-					"descriptors": 5600,
+					"nodes": 1855,
+					"descriptors": 5665,
 					"repeatedOwnKeys": [{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }]
 				}
 			]
 		},
 		{
 			"mode": "intl-number-format",
-			"sha256": "4b43688658780e4eaaea6afb1e1da59376a683fa9c9aa5f3a4e26ef9b0388b0f",
+			"sha256": "5e4f842619ba95d8046ec3bcf3cb9c0946649bdcb282150b4477d6a886f1c8e6",
 			"phases": [
 				{
 					"phase": "language-initialized",
@@ -231,15 +231,15 @@
 				},
 				{
 					"phase": "host-installed",
-					"nodes": 1828,
-					"descriptors": 5600,
+					"nodes": 1855,
+					"descriptors": 5665,
 					"repeatedOwnKeys": [{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }]
 				}
 			]
 		},
 		{
 			"mode": "intl-date-time-format",
-			"sha256": "340a227e701cdb0a8b060fd5d83fb1e11b66af35cb1c3feba1fece6ce5fdab8f",
+			"sha256": "81bf8c1db2beafb6f924eba7cacf39c0a6a37299ae9d940aecce179a8dfb0d44",
 			"phases": [
 				{
 					"phase": "language-initialized",
@@ -249,15 +249,15 @@
 				},
 				{
 					"phase": "host-installed",
-					"nodes": 1830,
-					"descriptors": 5606,
+					"nodes": 1857,
+					"descriptors": 5671,
 					"repeatedOwnKeys": [{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }]
 				}
 			]
 		},
 		{
 			"mode": "intl-plural-rules",
-			"sha256": "a5c3c64fd3317068004cb7751fd98d9d0d3292734b66bc18a66e05355fd80c70",
+			"sha256": "9b74b55d5179adaeb3a257178e2f7bb12c290204fd00f4cc301dd5424d07206e",
 			"phases": [
 				{
 					"phase": "language-initialized",
@@ -267,15 +267,15 @@
 				},
 				{
 					"phase": "host-installed",
-					"nodes": 1828,
-					"descriptors": 5600,
+					"nodes": 1855,
+					"descriptors": 5665,
 					"repeatedOwnKeys": [{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }]
 				}
 			]
 		},
 		{
 			"mode": "intl-list-format",
-			"sha256": "615a06f79a3dc954d07bcf53d34b15c87d723c0f959b402902b30408899fb8d0",
+			"sha256": "d0a8115a8b2b657efc812ee6eb16095fdc0c9376a4e347f8a0ac554813c584d4",
 			"phases": [
 				{
 					"phase": "language-initialized",
@@ -285,15 +285,15 @@
 				},
 				{
 					"phase": "host-installed",
-					"nodes": 1829,
-					"descriptors": 5603,
+					"nodes": 1856,
+					"descriptors": 5668,
 					"repeatedOwnKeys": [{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }]
 				}
 			]
 		},
 		{
 			"mode": "intl-segmenter",
-			"sha256": "d81c5cf1198b451817535556ebff2c537833c23f04c050f36cec5d35a52bf8cb",
+			"sha256": "44938239d5f8c34f0bf8e4e87ce88efebeaf84b33c3b6f3f02d94d39b740b978",
 			"phases": [
 				{
 					"phase": "language-initialized",
@@ -303,15 +303,15 @@
 				},
 				{
 					"phase": "host-installed",
-					"nodes": 1833,
-					"descriptors": 5610,
+					"nodes": 1860,
+					"descriptors": 5675,
 					"repeatedOwnKeys": [{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }]
 				}
 			]
 		},
 		{
 			"mode": "intl-display-names",
-			"sha256": "899bbe3b61386d2c54a0c240e6308ee6581c08e5c35a5a2092b532eafac16d04",
+			"sha256": "899c079da64203a33e920017d0d07edde43bee40175d5448e9b9c9363e9b6423",
 			"phases": [
 				{
 					"phase": "language-initialized",
@@ -321,15 +321,15 @@
 				},
 				{
 					"phase": "host-installed",
-					"nodes": 1828,
-					"descriptors": 5600,
+					"nodes": 1855,
+					"descriptors": 5665,
 					"repeatedOwnKeys": [{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }]
 				}
 			]
 		},
 		{
 			"mode": "intl-relative-time-format",
-			"sha256": "f1a1299e896e9ad3824c29c61ab1e0b341d5aa559df4e886c4538a7f5b5596b3",
+			"sha256": "b06f1f33f8193f5f65cd7feac3a81edff6452db3f7415a6c2526dd0e37b64bda",
 			"phases": [
 				{
 					"phase": "language-initialized",
@@ -339,15 +339,15 @@
 				},
 				{
 					"phase": "host-installed",
-					"nodes": 1829,
-					"descriptors": 5603,
+					"nodes": 1856,
+					"descriptors": 5668,
 					"repeatedOwnKeys": [{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }]
 				}
 			]
 		},
 		{
 			"mode": "intl-duration-format",
-			"sha256": "4f3eed2dcf979a5ae3d70f82d8172256db1455d90799b461982f2ac2d5c0b574",
+			"sha256": "96963ac605cc03177d718c1f70d25d8c33906ab5a29b4175c4a56022c1d55c1f",
 			"phases": [
 				{
 					"phase": "language-initialized",
@@ -357,8 +357,8 @@
 				},
 				{
 					"phase": "host-installed",
-					"nodes": 1829,
-					"descriptors": 5603,
+					"nodes": 1856,
+					"descriptors": 5668,
 					"repeatedOwnKeys": [{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }]
 				}
 			]
@@ -4814,8 +4814,248 @@
 			]
 		],
 		[
+			"%MAL_INTRINSIC_NODE_BUFFER_MODULE%",
+			{ "string": "isAscii" },
+			[
+				"full",
+				"mutable",
+				"node",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"%MAL_INTRINSIC_NODE_BUFFER_MODULE%",
+			{ "string": "isUtf8" },
+			[
+				"full",
+				"mutable",
+				"node",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
 			"%MAL_INTRINSIC_NODE_BUFFER_MODULE%.constants",
 			{ "string": "MAX_STRING_LENGTH" },
+			[
+				"full",
+				"mutable",
+				"node",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"%MAL_INTRINSIC_NODE_BUFFER_MODULE%.isAscii",
+			{ "string": "length" },
+			[
+				"full",
+				"mutable",
+				"node",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"%MAL_INTRINSIC_NODE_BUFFER_MODULE%.isAscii",
+			{ "string": "name" },
+			[
+				"full",
+				"mutable",
+				"node",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"%MAL_INTRINSIC_NODE_BUFFER_MODULE%.isAscii",
+			{ "string": "prototype" },
+			[
+				"full",
+				"mutable",
+				"node",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"%MAL_INTRINSIC_NODE_BUFFER_MODULE%.isAscii.prototype",
+			{ "string": "constructor" },
+			[
+				"full",
+				"mutable",
+				"node",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"%MAL_INTRINSIC_NODE_BUFFER_MODULE%.isUtf8",
+			{ "string": "length" },
+			[
+				"full",
+				"mutable",
+				"node",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"%MAL_INTRINSIC_NODE_BUFFER_MODULE%.isUtf8",
+			{ "string": "name" },
+			[
+				"full",
+				"mutable",
+				"node",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"%MAL_INTRINSIC_NODE_BUFFER_MODULE%.isUtf8",
+			{ "string": "prototype" },
+			[
+				"full",
+				"mutable",
+				"node",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"%MAL_INTRINSIC_NODE_BUFFER_MODULE%.isUtf8.prototype",
+			{ "string": "constructor" },
 			[
 				"full",
 				"mutable",
@@ -5272,6 +5512,30 @@
 		[
 			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%",
 			{ "string": "node:tty" },
+			[
+				"full",
+				"mutable",
+				"node",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%",
+			{ "string": "node:util/types" },
 			[
 				"full",
 				"mutable",
@@ -11847,6 +12111,30 @@
 		],
 		[
 			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util\"]",
+			{ "string": "toUSVString" },
+			[
+				"full",
+				"mutable",
+				"node",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util\"]",
 			{ "string": "types" },
 			[
 				"full",
@@ -12878,7 +13166,55 @@
 			]
 		],
 		[
-			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util\"].types",
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util\"].toUSVString",
+			{ "string": "length" },
+			[
+				"full",
+				"mutable",
+				"node",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util\"].toUSVString",
+			{ "string": "name" },
+			[
+				"full",
+				"mutable",
+				"node",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"]",
 			{ "string": "isPromise" },
 			[
 				"full",
@@ -12902,7 +13238,31 @@
 			]
 		],
 		[
-			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util\"].types",
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"]",
+			{ "string": "isArrayBufferView" },
+			[
+				"full",
+				"mutable",
+				"node",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"]",
 			{ "string": "isAnyArrayBuffer" },
 			[
 				"full",
@@ -12926,7 +13286,7 @@
 			]
 		],
 		[
-			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util\"].types",
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"]",
 			{ "string": "isArrayBuffer" },
 			[
 				"full",
@@ -12950,7 +13310,7 @@
 			]
 		],
 		[
-			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util\"].types",
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"]",
 			{ "string": "isSharedArrayBuffer" },
 			[
 				"full",
@@ -12974,7 +13334,7 @@
 			]
 		],
 		[
-			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util\"].types",
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"]",
 			{ "string": "isDataView" },
 			[
 				"full",
@@ -12998,7 +13358,7 @@
 			]
 		],
 		[
-			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util\"].types",
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"]",
 			{ "string": "isDate" },
 			[
 				"full",
@@ -13022,7 +13382,7 @@
 			]
 		],
 		[
-			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util\"].types",
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"]",
 			{ "string": "isMap" },
 			[
 				"full",
@@ -13046,7 +13406,7 @@
 			]
 		],
 		[
-			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util\"].types",
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"]",
 			{ "string": "isSet" },
 			[
 				"full",
@@ -13070,7 +13430,7 @@
 			]
 		],
 		[
-			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util\"].types",
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"]",
 			{ "string": "isWeakMap" },
 			[
 				"full",
@@ -13094,7 +13454,7 @@
 			]
 		],
 		[
-			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util\"].types",
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"]",
 			{ "string": "isWeakSet" },
 			[
 				"full",
@@ -13118,7 +13478,7 @@
 			]
 		],
 		[
-			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util\"].types",
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"]",
 			{ "string": "isRegExp" },
 			[
 				"full",
@@ -13142,7 +13502,7 @@
 			]
 		],
 		[
-			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util\"].types",
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"]",
 			{ "string": "isTypedArray" },
 			[
 				"full",
@@ -13166,7 +13526,7 @@
 			]
 		],
 		[
-			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util\"].types",
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"]",
 			{ "string": "isBoxedPrimitive" },
 			[
 				"full",
@@ -13190,7 +13550,175 @@
 			]
 		],
 		[
-			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util\"].types",
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"]",
+			{ "string": "isAsyncFunction" },
+			[
+				"full",
+				"mutable",
+				"node",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"]",
+			{ "string": "isGeneratorFunction" },
+			[
+				"full",
+				"mutable",
+				"node",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"]",
+			{ "string": "isBigIntObject" },
+			[
+				"full",
+				"mutable",
+				"node",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"]",
+			{ "string": "isBooleanObject" },
+			[
+				"full",
+				"mutable",
+				"node",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"]",
+			{ "string": "isNumberObject" },
+			[
+				"full",
+				"mutable",
+				"node",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"]",
+			{ "string": "isStringObject" },
+			[
+				"full",
+				"mutable",
+				"node",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"]",
+			{ "string": "isSymbolObject" },
+			[
+				"full",
+				"mutable",
+				"node",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"]",
 			{ "string": "isGeneratorObject" },
 			[
 				"full",
@@ -13214,7 +13742,7 @@
 			]
 		],
 		[
-			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util\"].types",
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"]",
 			{ "string": "isModuleNamespaceObject" },
 			[
 				"full",
@@ -13238,7 +13766,7 @@
 			]
 		],
 		[
-			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util\"].types",
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"]",
 			{ "string": "isProxy" },
 			[
 				"full",
@@ -13262,7 +13790,7 @@
 			]
 		],
 		[
-			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util\"].types",
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"]",
 			{ "string": "isExternal" },
 			[
 				"full",
@@ -13286,7 +13814,7 @@
 			]
 		],
 		[
-			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util\"].types",
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"]",
 			{ "string": "isKeyObject" },
 			[
 				"full",
@@ -13310,7 +13838,7 @@
 			]
 		],
 		[
-			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util\"].types",
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"]",
 			{ "string": "isCryptoKey" },
 			[
 				"full",
@@ -13334,7 +13862,7 @@
 			]
 		],
 		[
-			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util\"].types",
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"]",
 			{ "string": "isMapIterator" },
 			[
 				"full",
@@ -13358,7 +13886,7 @@
 			]
 		],
 		[
-			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util\"].types",
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"]",
 			{ "string": "isSetIterator" },
 			[
 				"full",
@@ -13382,7 +13910,7 @@
 			]
 		],
 		[
-			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util\"].types",
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"]",
 			{ "string": "isInt8Array" },
 			[
 				"full",
@@ -13406,7 +13934,7 @@
 			]
 		],
 		[
-			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util\"].types",
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"]",
 			{ "string": "isUint8Array" },
 			[
 				"full",
@@ -13430,7 +13958,7 @@
 			]
 		],
 		[
-			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util\"].types",
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"]",
 			{ "string": "isUint8ClampedArray" },
 			[
 				"full",
@@ -13454,7 +13982,7 @@
 			]
 		],
 		[
-			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util\"].types",
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"]",
 			{ "string": "isInt16Array" },
 			[
 				"full",
@@ -13478,7 +14006,7 @@
 			]
 		],
 		[
-			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util\"].types",
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"]",
 			{ "string": "isUint16Array" },
 			[
 				"full",
@@ -13502,7 +14030,7 @@
 			]
 		],
 		[
-			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util\"].types",
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"]",
 			{ "string": "isInt32Array" },
 			[
 				"full",
@@ -13526,7 +14054,7 @@
 			]
 		],
 		[
-			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util\"].types",
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"]",
 			{ "string": "isUint32Array" },
 			[
 				"full",
@@ -13550,7 +14078,7 @@
 			]
 		],
 		[
-			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util\"].types",
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"]",
 			{ "string": "isFloat32Array" },
 			[
 				"full",
@@ -13574,7 +14102,7 @@
 			]
 		],
 		[
-			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util\"].types",
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"]",
 			{ "string": "isFloat64Array" },
 			[
 				"full",
@@ -13598,7 +14126,7 @@
 			]
 		],
 		[
-			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util\"].types",
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"]",
 			{ "string": "isBigInt64Array" },
 			[
 				"full",
@@ -13622,7 +14150,7 @@
 			]
 		],
 		[
-			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util\"].types",
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"]",
 			{ "string": "isBigUint64Array" },
 			[
 				"full",
@@ -13646,7 +14174,7 @@
 			]
 		],
 		[
-			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util\"].types.isAnyArrayBuffer",
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"].isAnyArrayBuffer",
 			{ "string": "length" },
 			[
 				"full",
@@ -13670,7 +14198,7 @@
 			]
 		],
 		[
-			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util\"].types.isAnyArrayBuffer",
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"].isAnyArrayBuffer",
 			{ "string": "name" },
 			[
 				"full",
@@ -13694,7 +14222,7 @@
 			]
 		],
 		[
-			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util\"].types.isArrayBuffer",
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"].isArrayBuffer",
 			{ "string": "length" },
 			[
 				"full",
@@ -13718,7 +14246,7 @@
 			]
 		],
 		[
-			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util\"].types.isArrayBuffer",
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"].isArrayBuffer",
 			{ "string": "name" },
 			[
 				"full",
@@ -13742,7 +14270,7 @@
 			]
 		],
 		[
-			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util\"].types.isBigInt64Array",
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"].isAsyncFunction",
 			{ "string": "length" },
 			[
 				"full",
@@ -13766,7 +14294,7 @@
 			]
 		],
 		[
-			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util\"].types.isBigInt64Array",
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"].isAsyncFunction",
 			{ "string": "name" },
 			[
 				"full",
@@ -13790,7 +14318,7 @@
 			]
 		],
 		[
-			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util\"].types.isBigUint64Array",
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"].isBigInt64Array",
 			{ "string": "length" },
 			[
 				"full",
@@ -13814,7 +14342,7 @@
 			]
 		],
 		[
-			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util\"].types.isBigUint64Array",
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"].isBigInt64Array",
 			{ "string": "name" },
 			[
 				"full",
@@ -13838,7 +14366,55 @@
 			]
 		],
 		[
-			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util\"].types.isBoxedPrimitive",
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"].isBigInt64Array",
+			{ "string": "prototype" },
+			[
+				"full",
+				"mutable",
+				"node",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"].isBigInt64Array.prototype",
+			{ "string": "constructor" },
+			[
+				"full",
+				"mutable",
+				"node",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"].isBigIntObject",
 			{ "string": "length" },
 			[
 				"full",
@@ -13862,7 +14438,7 @@
 			]
 		],
 		[
-			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util\"].types.isBoxedPrimitive",
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"].isBigIntObject",
 			{ "string": "name" },
 			[
 				"full",
@@ -13886,7 +14462,7 @@
 			]
 		],
 		[
-			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util\"].types.isCryptoKey",
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"].isBigUint64Array",
 			{ "string": "length" },
 			[
 				"full",
@@ -13910,7 +14486,7 @@
 			]
 		],
 		[
-			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util\"].types.isCryptoKey",
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"].isBigUint64Array",
 			{ "string": "name" },
 			[
 				"full",
@@ -13934,7 +14510,55 @@
 			]
 		],
 		[
-			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util\"].types.isDataView",
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"].isBigUint64Array",
+			{ "string": "prototype" },
+			[
+				"full",
+				"mutable",
+				"node",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"].isBigUint64Array.prototype",
+			{ "string": "constructor" },
+			[
+				"full",
+				"mutable",
+				"node",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"].isBooleanObject",
 			{ "string": "length" },
 			[
 				"full",
@@ -13958,7 +14582,7 @@
 			]
 		],
 		[
-			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util\"].types.isDataView",
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"].isBooleanObject",
 			{ "string": "name" },
 			[
 				"full",
@@ -13982,7 +14606,7 @@
 			]
 		],
 		[
-			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util\"].types.isDate",
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"].isBoxedPrimitive",
 			{ "string": "length" },
 			[
 				"full",
@@ -14006,7 +14630,7 @@
 			]
 		],
 		[
-			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util\"].types.isDate",
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"].isBoxedPrimitive",
 			{ "string": "name" },
 			[
 				"full",
@@ -14030,7 +14654,7 @@
 			]
 		],
 		[
-			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util\"].types.isExternal",
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"].isCryptoKey",
 			{ "string": "length" },
 			[
 				"full",
@@ -14054,7 +14678,7 @@
 			]
 		],
 		[
-			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util\"].types.isExternal",
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"].isCryptoKey",
 			{ "string": "name" },
 			[
 				"full",
@@ -14078,7 +14702,55 @@
 			]
 		],
 		[
-			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util\"].types.isFloat32Array",
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"].isCryptoKey",
+			{ "string": "prototype" },
+			[
+				"full",
+				"mutable",
+				"node",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"].isCryptoKey.prototype",
+			{ "string": "constructor" },
+			[
+				"full",
+				"mutable",
+				"node",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"].isDataView",
 			{ "string": "length" },
 			[
 				"full",
@@ -14102,7 +14774,7 @@
 			]
 		],
 		[
-			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util\"].types.isFloat32Array",
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"].isDataView",
 			{ "string": "name" },
 			[
 				"full",
@@ -14126,7 +14798,55 @@
 			]
 		],
 		[
-			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util\"].types.isFloat64Array",
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"].isDataView",
+			{ "string": "prototype" },
+			[
+				"full",
+				"mutable",
+				"node",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"].isDataView.prototype",
+			{ "string": "constructor" },
+			[
+				"full",
+				"mutable",
+				"node",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"].isDate",
 			{ "string": "length" },
 			[
 				"full",
@@ -14150,7 +14870,7 @@
 			]
 		],
 		[
-			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util\"].types.isFloat64Array",
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"].isDate",
 			{ "string": "name" },
 			[
 				"full",
@@ -14174,7 +14894,7 @@
 			]
 		],
 		[
-			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util\"].types.isGeneratorObject",
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"].isExternal",
 			{ "string": "length" },
 			[
 				"full",
@@ -14198,7 +14918,7 @@
 			]
 		],
 		[
-			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util\"].types.isGeneratorObject",
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"].isExternal",
 			{ "string": "name" },
 			[
 				"full",
@@ -14222,7 +14942,7 @@
 			]
 		],
 		[
-			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util\"].types.isInt16Array",
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"].isFloat32Array",
 			{ "string": "length" },
 			[
 				"full",
@@ -14246,7 +14966,7 @@
 			]
 		],
 		[
-			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util\"].types.isInt16Array",
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"].isFloat32Array",
 			{ "string": "name" },
 			[
 				"full",
@@ -14270,7 +14990,55 @@
 			]
 		],
 		[
-			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util\"].types.isInt32Array",
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"].isFloat32Array",
+			{ "string": "prototype" },
+			[
+				"full",
+				"mutable",
+				"node",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"].isFloat32Array.prototype",
+			{ "string": "constructor" },
+			[
+				"full",
+				"mutable",
+				"node",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"].isFloat64Array",
 			{ "string": "length" },
 			[
 				"full",
@@ -14294,7 +15062,7 @@
 			]
 		],
 		[
-			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util\"].types.isInt32Array",
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"].isFloat64Array",
 			{ "string": "name" },
 			[
 				"full",
@@ -14318,7 +15086,55 @@
 			]
 		],
 		[
-			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util\"].types.isInt8Array",
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"].isFloat64Array",
+			{ "string": "prototype" },
+			[
+				"full",
+				"mutable",
+				"node",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"].isFloat64Array.prototype",
+			{ "string": "constructor" },
+			[
+				"full",
+				"mutable",
+				"node",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"].isGeneratorFunction",
 			{ "string": "length" },
 			[
 				"full",
@@ -14342,7 +15158,7 @@
 			]
 		],
 		[
-			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util\"].types.isInt8Array",
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"].isGeneratorFunction",
 			{ "string": "name" },
 			[
 				"full",
@@ -14366,7 +15182,7 @@
 			]
 		],
 		[
-			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util\"].types.isKeyObject",
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"].isGeneratorObject",
 			{ "string": "length" },
 			[
 				"full",
@@ -14390,7 +15206,7 @@
 			]
 		],
 		[
-			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util\"].types.isKeyObject",
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"].isGeneratorObject",
 			{ "string": "name" },
 			[
 				"full",
@@ -14414,7 +15230,7 @@
 			]
 		],
 		[
-			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util\"].types.isMap",
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"].isInt16Array",
 			{ "string": "length" },
 			[
 				"full",
@@ -14438,7 +15254,7 @@
 			]
 		],
 		[
-			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util\"].types.isMap",
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"].isInt16Array",
 			{ "string": "name" },
 			[
 				"full",
@@ -14462,7 +15278,55 @@
 			]
 		],
 		[
-			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util\"].types.isMapIterator",
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"].isInt16Array",
+			{ "string": "prototype" },
+			[
+				"full",
+				"mutable",
+				"node",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"].isInt16Array.prototype",
+			{ "string": "constructor" },
+			[
+				"full",
+				"mutable",
+				"node",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"].isInt32Array",
 			{ "string": "length" },
 			[
 				"full",
@@ -14486,7 +15350,7 @@
 			]
 		],
 		[
-			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util\"].types.isMapIterator",
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"].isInt32Array",
 			{ "string": "name" },
 			[
 				"full",
@@ -14510,7 +15374,55 @@
 			]
 		],
 		[
-			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util\"].types.isModuleNamespaceObject",
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"].isInt32Array",
+			{ "string": "prototype" },
+			[
+				"full",
+				"mutable",
+				"node",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"].isInt32Array.prototype",
+			{ "string": "constructor" },
+			[
+				"full",
+				"mutable",
+				"node",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"].isInt8Array",
 			{ "string": "length" },
 			[
 				"full",
@@ -14534,7 +15446,7 @@
 			]
 		],
 		[
-			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util\"].types.isModuleNamespaceObject",
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"].isInt8Array",
 			{ "string": "name" },
 			[
 				"full",
@@ -14558,7 +15470,55 @@
 			]
 		],
 		[
-			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util\"].types.isPromise",
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"].isInt8Array",
+			{ "string": "prototype" },
+			[
+				"full",
+				"mutable",
+				"node",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"].isInt8Array.prototype",
+			{ "string": "constructor" },
+			[
+				"full",
+				"mutable",
+				"node",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"].isKeyObject",
 			{ "string": "length" },
 			[
 				"full",
@@ -14582,7 +15542,7 @@
 			]
 		],
 		[
-			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util\"].types.isPromise",
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"].isKeyObject",
 			{ "string": "name" },
 			[
 				"full",
@@ -14606,7 +15566,55 @@
 			]
 		],
 		[
-			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util\"].types.isProxy",
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"].isKeyObject",
+			{ "string": "prototype" },
+			[
+				"full",
+				"mutable",
+				"node",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"].isKeyObject.prototype",
+			{ "string": "constructor" },
+			[
+				"full",
+				"mutable",
+				"node",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"].isMap",
 			{ "string": "length" },
 			[
 				"full",
@@ -14630,7 +15638,7 @@
 			]
 		],
 		[
-			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util\"].types.isProxy",
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"].isMap",
 			{ "string": "name" },
 			[
 				"full",
@@ -14654,7 +15662,7 @@
 			]
 		],
 		[
-			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util\"].types.isRegExp",
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"].isMapIterator",
 			{ "string": "length" },
 			[
 				"full",
@@ -14678,7 +15686,7 @@
 			]
 		],
 		[
-			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util\"].types.isRegExp",
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"].isMapIterator",
 			{ "string": "name" },
 			[
 				"full",
@@ -14702,7 +15710,7 @@
 			]
 		],
 		[
-			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util\"].types.isSet",
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"].isModuleNamespaceObject",
 			{ "string": "length" },
 			[
 				"full",
@@ -14726,7 +15734,7 @@
 			]
 		],
 		[
-			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util\"].types.isSet",
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"].isModuleNamespaceObject",
 			{ "string": "name" },
 			[
 				"full",
@@ -14750,7 +15758,7 @@
 			]
 		],
 		[
-			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util\"].types.isSetIterator",
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"].isNumberObject",
 			{ "string": "length" },
 			[
 				"full",
@@ -14774,7 +15782,7 @@
 			]
 		],
 		[
-			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util\"].types.isSetIterator",
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"].isNumberObject",
 			{ "string": "name" },
 			[
 				"full",
@@ -14798,7 +15806,7 @@
 			]
 		],
 		[
-			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util\"].types.isSharedArrayBuffer",
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"].isPromise",
 			{ "string": "length" },
 			[
 				"full",
@@ -14822,7 +15830,7 @@
 			]
 		],
 		[
-			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util\"].types.isSharedArrayBuffer",
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"].isPromise",
 			{ "string": "name" },
 			[
 				"full",
@@ -14846,7 +15854,7 @@
 			]
 		],
 		[
-			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util\"].types.isTypedArray",
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"].isProxy",
 			{ "string": "length" },
 			[
 				"full",
@@ -14870,7 +15878,7 @@
 			]
 		],
 		[
-			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util\"].types.isTypedArray",
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"].isProxy",
 			{ "string": "name" },
 			[
 				"full",
@@ -14894,7 +15902,7 @@
 			]
 		],
 		[
-			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util\"].types.isUint16Array",
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"].isRegExp",
 			{ "string": "length" },
 			[
 				"full",
@@ -14918,7 +15926,7 @@
 			]
 		],
 		[
-			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util\"].types.isUint16Array",
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"].isRegExp",
 			{ "string": "name" },
 			[
 				"full",
@@ -14942,7 +15950,7 @@
 			]
 		],
 		[
-			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util\"].types.isUint32Array",
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"].isSet",
 			{ "string": "length" },
 			[
 				"full",
@@ -14966,7 +15974,7 @@
 			]
 		],
 		[
-			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util\"].types.isUint32Array",
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"].isSet",
 			{ "string": "name" },
 			[
 				"full",
@@ -14990,7 +15998,7 @@
 			]
 		],
 		[
-			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util\"].types.isUint8Array",
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"].isSetIterator",
 			{ "string": "length" },
 			[
 				"full",
@@ -15014,7 +16022,7 @@
 			]
 		],
 		[
-			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util\"].types.isUint8Array",
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"].isSetIterator",
 			{ "string": "name" },
 			[
 				"full",
@@ -15038,7 +16046,7 @@
 			]
 		],
 		[
-			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util\"].types.isUint8ClampedArray",
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"].isSharedArrayBuffer",
 			{ "string": "length" },
 			[
 				"full",
@@ -15062,7 +16070,7 @@
 			]
 		],
 		[
-			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util\"].types.isUint8ClampedArray",
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"].isSharedArrayBuffer",
 			{ "string": "name" },
 			[
 				"full",
@@ -15086,7 +16094,7 @@
 			]
 		],
 		[
-			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util\"].types.isWeakMap",
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"].isStringObject",
 			{ "string": "length" },
 			[
 				"full",
@@ -15110,7 +16118,7 @@
 			]
 		],
 		[
-			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util\"].types.isWeakMap",
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"].isStringObject",
 			{ "string": "name" },
 			[
 				"full",
@@ -15134,7 +16142,7 @@
 			]
 		],
 		[
-			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util\"].types.isWeakSet",
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"].isSymbolObject",
 			{ "string": "length" },
 			[
 				"full",
@@ -15158,7 +16166,583 @@
 			]
 		],
 		[
-			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util\"].types.isWeakSet",
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"].isSymbolObject",
+			{ "string": "name" },
+			[
+				"full",
+				"mutable",
+				"node",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"].isTypedArray",
+			{ "string": "length" },
+			[
+				"full",
+				"mutable",
+				"node",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"].isTypedArray",
+			{ "string": "name" },
+			[
+				"full",
+				"mutable",
+				"node",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"].isTypedArray",
+			{ "string": "prototype" },
+			[
+				"full",
+				"mutable",
+				"node",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"].isTypedArray.prototype",
+			{ "string": "constructor" },
+			[
+				"full",
+				"mutable",
+				"node",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"].isUint16Array",
+			{ "string": "length" },
+			[
+				"full",
+				"mutable",
+				"node",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"].isUint16Array",
+			{ "string": "name" },
+			[
+				"full",
+				"mutable",
+				"node",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"].isUint16Array",
+			{ "string": "prototype" },
+			[
+				"full",
+				"mutable",
+				"node",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"].isUint16Array.prototype",
+			{ "string": "constructor" },
+			[
+				"full",
+				"mutable",
+				"node",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"].isUint32Array",
+			{ "string": "length" },
+			[
+				"full",
+				"mutable",
+				"node",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"].isUint32Array",
+			{ "string": "name" },
+			[
+				"full",
+				"mutable",
+				"node",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"].isUint32Array",
+			{ "string": "prototype" },
+			[
+				"full",
+				"mutable",
+				"node",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"].isUint32Array.prototype",
+			{ "string": "constructor" },
+			[
+				"full",
+				"mutable",
+				"node",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"].isUint8Array",
+			{ "string": "length" },
+			[
+				"full",
+				"mutable",
+				"node",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"].isUint8Array",
+			{ "string": "name" },
+			[
+				"full",
+				"mutable",
+				"node",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"].isUint8Array",
+			{ "string": "prototype" },
+			[
+				"full",
+				"mutable",
+				"node",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"].isUint8Array.prototype",
+			{ "string": "constructor" },
+			[
+				"full",
+				"mutable",
+				"node",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"].isUint8ClampedArray",
+			{ "string": "length" },
+			[
+				"full",
+				"mutable",
+				"node",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"].isUint8ClampedArray",
+			{ "string": "name" },
+			[
+				"full",
+				"mutable",
+				"node",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"].isUint8ClampedArray",
+			{ "string": "prototype" },
+			[
+				"full",
+				"mutable",
+				"node",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"].isUint8ClampedArray.prototype",
+			{ "string": "constructor" },
+			[
+				"full",
+				"mutable",
+				"node",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"].isWeakMap",
+			{ "string": "length" },
+			[
+				"full",
+				"mutable",
+				"node",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"].isWeakMap",
+			{ "string": "name" },
+			[
+				"full",
+				"mutable",
+				"node",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"].isWeakSet",
+			{ "string": "length" },
+			[
+				"full",
+				"mutable",
+				"node",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:util/types\"].isWeakSet",
 			{ "string": "name" },
 			[
 				"full",
@@ -29152,30 +30736,6 @@
 		[
 			"%MAL_INTRINSIC_NODE_MODULE_API_MODULE%.builtinModules",
 			{ "string": "38" },
-			[
-				"full",
-				"mutable",
-				"node",
-				"diagnostic",
-				"no-eval",
-				"no-realms",
-				"no-regexp",
-				"no-temporal",
-				"no-intl",
-				"intl-collator",
-				"intl-number-format",
-				"intl-date-time-format",
-				"intl-plural-rules",
-				"intl-list-format",
-				"intl-segmenter",
-				"intl-display-names",
-				"intl-relative-time-format",
-				"intl-duration-format"
-			]
-		],
-		[
-			"%MAL_INTRINSIC_NODE_MODULE_API_MODULE%.builtinModules",
-			{ "string": "39" },
 			[
 				"full",
 				"mutable",

@@ -1,7 +1,11 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import {
+	generateNodeBuiltinModulesInclude,
+	generateNodeBuiltinInstallersInclude,
+} from "../scripts/generate-node-builtin-modules.ts";
 import { resolveBuildConfig } from "../src/build-config.ts";
 import { loadEntrypointAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-program.ts";
 import { compileSemanticProgramToProgramImage } from "../src/compiler/pipeline/compile-core.ts";
@@ -57,6 +61,14 @@ function loadGlobalSlots(def: ProgramImage): Set<number> {
 }
 
 describe("host-install manifest", () => {
+	it("keeps the runtime builtin-name table generated from the compiler registry", () => {
+		expect(readFileSync("runtime/src/generated/node_builtin_modules.inc", "utf8")).toBe(
+			generateNodeBuiltinModulesInclude(),
+		);
+		expect(
+			readFileSync("runtime/src/generated/node_builtin_installers.inc", "utf8"),
+		).toBe(generateNodeBuiltinInstallersInclude());
+	});
 	it("compiles a used host import to a LOAD_GLOBAL slot, no new opcode", () => {
 		const def = compile(
 			`import { join } from "node:path";\nglobalThis.sink = join("a", "b");\n`,
