@@ -27,7 +27,6 @@ for (const id of [
 	"process",
 	"querystring",
 	"readline",
-	"sqlite",
 	"stream",
 	"stream/promises",
 	"string_decoder",
@@ -45,6 +44,11 @@ for (const id of [
 	if (!module || module !== globalThis.process.getBuiltinModule("node:" + id))
 		throw new Error("Builtin alias identity: " + id);
 }
+if (
+	globalThis.process.getBuiltinModule("sqlite") !== undefined ||
+	!globalThis.process.getBuiltinModule("node:sqlite")
+)
+	throw new Error("SQLite requires the node: prefix");
 if (globalThis.process.getBuiltinModule("http") !== http)
 	throw new Error("Static builtin identity");
 
