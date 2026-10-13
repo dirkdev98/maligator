@@ -1,3 +1,4 @@
+import { ARRAY_INITIALIZATION_LIMITS } from "../shared/array-initialization.ts";
 import { CoreEditor } from "./core-editor.ts";
 import { CORE_FUNCTION_HAS_ALLOCATIONS } from "./core-function-features.ts";
 import { coreInstructionEffects } from "./core-ir-opcodes.ts";
@@ -8,6 +9,8 @@ import type { CoreInstructionId, CoreValueId } from "./core-ir.ts";
 import { CORE_O2_PASS_BUDGETS } from "./core-optimization-families.ts";
 import type { CoreFunctionPass } from "./core-pass.ts";
 import type { CoreFunctionStore } from "./core-store.ts";
+
+const IMMUTABLE_LITERALS = new Set(["createString", "createNull", "createUndefined"]);
 
 const SCALAR_PRODUCERS = new Set([
 	"createNumber",
@@ -60,14 +63,23 @@ export const prepareFreshArrayValues: CoreFunctionPass = {
 			return kind === "number" || kind === "boolean";
 		};
 		for (const allocation of fn.instructionIds()) {
-			if (++visited > 4096 || attempted >= 16) break;
+			if (
+				++visited > ARRAY_INITIALIZATION_LIMITS.maximumFunctionInstructions ||
+				attempted >= ARRAY_INITIALIZATION_LIMITS.maximumCandidates
+			)
+				break;
 			if (
 				fn.instructionKind(allocation) !== "operation" ||
 				fn.instructionOpcodeName(allocation) !== "createArray"
 			)
 				continue;
 			const length = fn.instructionAttributes(allocation).length;
-			if (typeof length !== "number" || length < 2 || length > 8) continue;
+			if (
+				typeof length !== "number" ||
+				length < 2 ||
+				length > ARRAY_INITIALIZATION_LIMITS.maximumLength
+			)
+				continue;
 			attempted++;
 			const receiver = fn.kernel.resultAt(fn.kernel.instructionResultStart(allocation));
 			const producers: Array<CoreInstructionId> = [];
@@ -77,7 +89,9 @@ export const prepareFreshArrayValues: CoreFunctionPass = {
 				preparesValue = false;
 			for (
 				let next = fn.instructionNext(allocation);
-				next !== undefined && ++scanned <= 32 && fn.instructionKind(next) === "operation";
+				next !== undefined &&
+				++scanned <= ARRAY_INITIALIZATION_LIMITS.maximumInitializerInstructions &&
+				fn.instructionKind(next) === "operation";
 				next = fn.instructionNext(next)
 			) {
 				const opcode = fn.instructionOpcodeName(next);
@@ -95,7 +109,8 @@ export const prepareFreshArrayValues: CoreFunctionPass = {
 					if (++initialized === length) break;
 					continue;
 				}
-				if (!SCALAR_PRODUCERS.has(opcode)) break;
+				const literal = IMMUTABLE_LITERALS.has(opcode);
+				if (!literal && !SCALAR_PRODUCERS.has(opcode)) break;
 				const effects = coreInstructionEffects(fn, next);
 				if (
 					effects.mayThrow ||
@@ -105,7 +120,8 @@ export const prepareFreshArrayValues: CoreFunctionPass = {
 					effects.reads.length !== 0 ||
 					effects.writes.length !== 0 ||
 					fn.kernel.instructionResultCount(next) !== 1 ||
-					!scalar(fn.kernel.resultAt(fn.kernel.instructionResultStart(next)))
+					(!literal &&
+						!scalar(fn.kernel.resultAt(fn.kernel.instructionResultStart(next))))
 				)
 					break;
 				let safe = true;
@@ -125,7 +141,7 @@ export const prepareFreshArrayValues: CoreFunctionPass = {
 				context.deferForBudget();
 				break;
 			}
-			// Same-block scalar producers cannot observe the unpublished array or alter its initializers.
+			// Same-block effect-free producers cannot observe the unpublished array or alter its initializers.
 			editor ??= CoreEditor.open(program, item.function);
 			for (const producer of producers)
 				editor.moveInstruction(producer, fn.instructionBlock(allocation), allocation);

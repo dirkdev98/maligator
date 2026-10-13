@@ -129,6 +129,11 @@ describe("Core IR", () => {
 		).toThrow(/binary expects 2\.\.2 inputs/);
 	});
 
+	it("treats immutable runtime-image string constants as noncollecting loads", () => {
+		expect(coreOpcodeRegistry.require("createString").effects).toEqual(CORE_NO_EFFECTS);
+		expect(coreOpcodeRegistry.require("concatStrings").effects.mayGc).toBe(true);
+	});
+
 	it("names every declared access against the effect domains it belongs to", () => {
 		for (const descriptor of coreOpcodeRegistry.entries()) {
 			for (const access of descriptor.accesses ?? []) {

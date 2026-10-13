@@ -3020,6 +3020,32 @@
 			"controls": ["string-span-trim-search", "string-span-search"]
 		},
 		{
+			"id": "typed-array-interleaved-four-lane",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "TypedArray storage regions",
+			"category": "object-array-representation",
+			"mechanisms": ["typed-arrays-numeric-loops"],
+			"inputShape": "Four interleaved Float64Array lanes visit the full output length with stride four and ordered reads and writes across three fixed views.",
+			"unit": "element",
+			"sourceSeam": "src/compiler/target/lower-native-fast-paths.ts",
+			"fixture": "cases/typed-array-interleaved-four-lane.mjs",
+			"controls": ["typed-array-three-view", "typed-array-affine-window"]
+		},
+		{
+			"id": "fresh-mixed-values-32",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "Fresh Array initialization",
+			"category": "object-array-representation",
+			"mechanisms": ["allocation-gc"],
+			"inputShape": "A retained Array of 32 prepared values combines computed numbers, Boolean and string literals, null, undefined and repeated object references.",
+			"unit": "result",
+			"sourceSeam": "src/compiler/core/core-array-initialization.ts",
+			"fixture": "cases/fresh-mixed-values-32.mjs",
+			"controls": ["fresh-numeric-values", "fresh-three-values"]
+		},
+		{
 			"id": "method-name-unique",
 			"group": "runtime",
 			"suite": "runtime",

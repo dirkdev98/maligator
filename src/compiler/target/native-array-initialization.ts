@@ -1,3 +1,4 @@
+import { ARRAY_INITIALIZATION_LIMITS } from "../shared/array-initialization.ts";
 import type { NativeBodyFacts } from "./native-body-facts.ts";
 import type { NativeFunctionPlan } from "./program-image.ts";
 import { decodeVmValueOperand } from "./runtime-image.ts";
@@ -8,6 +9,17 @@ export interface NativeArrayInitialization {
 	readonly values: ReadonlyArray<number>;
 	readonly claimedIps: ReadonlyArray<number>;
 	readonly borrowedRegisters: ReadonlyArray<number>;
+}
+
+function initializationStringKey(
+	strings: ReadonlyArray<ReadonlyArray<number>>,
+	index: number,
+): string | undefined {
+	const value = strings[index];
+	return value !== undefined &&
+		value.length <= String(ARRAY_INITIALIZATION_LIMITS.maximumLength - 1).length
+		? String.fromCharCode(...value)
+		: undefined;
 }
 
 export function selectNativeArrayInitializations(
@@ -24,47 +36,69 @@ export function selectNativeArrayInitializations(
 		fn.isAsync ||
 		fn.isGenerator ||
 		fn.profileSiteIds !== undefined ||
-		fn.instructions.length > 4096
+		fn.instructions.length > ARRAY_INITIALIZATION_LIMITS.maximumFunctionInstructions
 	)
 		return plans;
+	let attempted = 0;
 	for (const [allocationIp, allocation] of fn.instructions.entries()) {
 		if (
 			allocation.opcode !== "CREATE_ARRAY" ||
 			allocation.length < 2 ||
-			allocation.length > 8 ||
+			allocation.length > ARRAY_INITIALIZATION_LIMITS.maximumLength ||
 			unavailable(allocationIp)
 		)
 			continue;
+		if (++attempted > ARRAY_INITIALIZATION_LIMITS.maximumCandidates) break;
 		const keys = new Map<number, string>(),
 			writes = new Set([allocation.dst]);
+		let preparedKeys: Map<number, string> | undefined;
 		const preparedKey = (register: number): string | undefined => {
 			if (writes.has(register) || body.jumpTargets.has(allocationIp)) return undefined;
-			for (let ip = allocationIp - 1; ip >= Math.max(0, allocationIp - 32); ip--) {
-				const op = fn.instructions[ip]!;
-				if (
-					op.opcode === "JUMP" ||
-					op.opcode === "JUMP_IF" ||
-					op.opcode === "RETURN" ||
-					op.opcode === "THROW" ||
-					op.opcode === "YIELD" ||
-					op.opcode === "AWAIT"
-				)
-					return undefined;
-				if (body.writes[ip]!.includes(register))
-					return op.opcode === "CREATE_STRING"
-						? String.fromCharCode(...(strings[op.stringIndex] ?? []))
-						: op.opcode === "CREATE_NUMBER" || op.opcode === "CREATE_F64"
-							? String(op.value)
-							: undefined;
-				if (body.jumpTargets.has(ip)) return undefined;
+			if (preparedKeys === undefined) {
+				preparedKeys = new Map();
+				const seen = new Set<number>();
+				for (
+					let ip = allocationIp - 1;
+					ip >=
+					Math.max(
+						0,
+						allocationIp - ARRAY_INITIALIZATION_LIMITS.maximumPreparedKeyInstructions,
+					);
+					ip--
+				) {
+					const op = fn.instructions[ip]!;
+					if (
+						op.opcode === "JUMP" ||
+						op.opcode === "JUMP_IF" ||
+						op.opcode === "RETURN" ||
+						op.opcode === "THROW" ||
+						op.opcode === "YIELD" ||
+						op.opcode === "AWAIT"
+					)
+						break;
+					for (const written of body.writes[ip]!) {
+						if (seen.has(written)) continue;
+						seen.add(written);
+						if (op.opcode === "CREATE_STRING") {
+							const key = initializationStringKey(strings, op.stringIndex);
+							if (key !== undefined) preparedKeys.set(written, key);
+						} else if (op.opcode === "CREATE_NUMBER" || op.opcode === "CREATE_F64")
+							preparedKeys.set(written, String(op.value));
+					}
+					if (body.jumpTargets.has(ip)) break;
+				}
 			}
-			return undefined;
+			return preparedKeys.get(register);
 		};
 		const values: Array<number> = [],
 			stores: Array<number> = [];
 		for (
 			let ip = allocationIp + 1;
-			ip < Math.min(fn.instructions.length, allocationIp + 18);
+			ip <
+			Math.min(
+				fn.instructions.length,
+				allocationIp + 1 + ARRAY_INITIALIZATION_LIMITS.maximumInitializerInstructions,
+			);
 			ip++
 		) {
 			if (body.jumpTargets.has(ip) || unavailable(ip)) break;
@@ -74,12 +108,12 @@ export function selectNativeArrayInitializations(
 				op.opcode === "CREATE_NUMBER" ||
 				op.opcode === "CREATE_F64"
 			) {
-				keys.set(
-					op.dst,
+				const key =
 					op.opcode === "CREATE_STRING"
-						? String.fromCharCode(...(strings[op.stringIndex] ?? []))
-						: String(op.value),
-				);
+						? initializationStringKey(strings, op.stringIndex)
+						: String(op.value);
+				if (key === undefined) keys.delete(op.dst);
+				else keys.set(op.dst, key);
 				writes.add(op.dst);
 				continue;
 			}
@@ -95,7 +129,7 @@ export function selectNativeArrayInitializations(
 			const key = decodeVmValueOperand(op.key);
 			const property =
 				key.kind === "string"
-					? String.fromCharCode(...(strings[key.index] ?? []))
+					? initializationStringKey(strings, key.index)
 					: key.kind === "number"
 						? String(key.value)
 						: key.kind === "register"
@@ -116,7 +150,6 @@ export function selectNativeArrayInitializations(
 				break;
 			}
 		}
-		if (plans.length === 16) break;
 	}
 	return plans;
 }

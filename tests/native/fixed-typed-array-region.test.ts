@@ -17,6 +17,69 @@ afterAll(() => rmSync(outDir, { recursive: true, force: true }));
 
 describe("fixed TypedArray storage regions", () => {
 	it.each(["mutable", "locked"] as const)(
+		"retains strided interleaved windows, overlap and exact overshoot with %s primordials",
+		(primordials) => {
+			const strideFixture = "tests/local/fixed-typed-array-stride.js";
+			const pair = buildBackendPairFromOneProgramImage({
+				fixture: strideFixture,
+				name: `fixed-stride-${primordials}`,
+				outDir,
+				mainFile: HOST_MAIN,
+				config: resolveBuildConfig({
+					engine: { primordials, eval: false, realms: false },
+					surface: { node: true },
+				}),
+				environment: { ...process.env, MAL_PERF_STATS: "1" },
+			});
+			for (const [name, stride] of [
+				["threeLanes", 3],
+				["fourLanes", 4],
+				["overshoot", 2147483647],
+			] as const) {
+				const fn = pair.programImage.native.functions.find(
+					(fn) =>
+						String.fromCharCode(
+							...(pair.programImage.runtime.stringConstants[fn.body.nameStringIndex] ??
+								[]),
+						) === name,
+				)!;
+				expect(
+					fn?.storage!.numericLoopRegions.some(
+						(plan) => plan.kind === "fixed-numeric" && plan.stride === stride,
+					),
+					name,
+				).toBe(true);
+			}
+			for (const mode of ["three", "four", "edges", "overshoot"]) {
+				const env = { TYPED_STRIDE_KIND: mode, MAL_HOST_GC: "1" };
+				const expected = execFileSync(process.execPath, [strideFixture], {
+					encoding: "utf8",
+					env: { ...process.env, ...env },
+				});
+				const measured = spawnSync(pair.compiled, [], {
+					encoding: "utf8",
+					timeout: 60000,
+					env: { ...process.env, ...env, MAL_PERF_STATS: "1" },
+				});
+				expect(measured.status, measured.stderr).toBe(0);
+				expect(measured.stdout).toBe(expected);
+				expect(
+					Number(
+						measured.stderr.match(
+							/\[perf-typed-array-stride-stats\] admissions=(\d+)/,
+						)?.[1] ?? 0,
+					),
+					mode,
+				).toBeGreaterThan(0);
+				for (const binary of [pair.compiled, pair.interpreted])
+					expect(
+						runToStdout(binary, { env: { ...env, ...STRESS_ENV }, timeoutMs: 60000 }),
+					).toBe(expected);
+			}
+		},
+		600000,
+	);
+	it.each(["mutable", "locked"] as const)(
 		"preserves numeric conversions, mixed overlap, fallback coercions, detachment, and polled state under %s primordials",
 		(primordials) => {
 			const expected = execFileSync(process.execPath, [fixture], {

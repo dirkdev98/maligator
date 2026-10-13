@@ -235,6 +235,7 @@ typedef struct MalPerfStats {
     u64 fixed_typed_array_region_f64_admissions;
     u64 fixed_typed_array_region_views[9];
     u64 fixed_typed_array_affine_regions;
+    u64 fixed_typed_array_stride_regions;
     u64 object_keys_count_admissions;
     u64 object_keys_snapshot_admissions;
     u64 object_keys_snapshot_materializations;
@@ -280,6 +281,7 @@ typedef struct MalPerfStats {
     u64 merge_shape_cache_misses;
     u64 merge_shape_cache_builds;
     u64 array_initialization_regions;
+    u64 array_initialization_large_regions;
     u64 map_region_entry_hits;
     u64 map_region_entry_misses;
     u64 map_get_set_cache_checks;

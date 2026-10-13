@@ -744,6 +744,7 @@ function emitNumericLoopRegion(
 	const local = (register: number) => `${id}_r${register}`;
 	const start = (register: number) => `${id}_s${register}`;
 	const guards: Array<string> = [];
+	const rangePrelude: Array<string> = [];
 	const initial = new Map<number, string>();
 	for (const register of plan.inputs) {
 		const representation = reps[register];
@@ -779,12 +780,18 @@ function emitNumericLoopRegion(
 			`${local(plan.bound)} <= UINT32_MAX`,
 			`${local(plan.bound)} == trunc(${local(plan.bound)})`,
 		);
+		const range = `${id}_range`,
+			last = `${id}_last`;
+		rangePrelude.push(
+			`  bool ${range} = ${guards.join(" && ")};`,
+			// Casts and division are reached only for a nonempty integral u32 range.
+			`  f64 ${last} = ${range} ? (f64) ((u64) ${local(plan.index)} + (((u64) ${local(plan.bound)} - 1 - (u64) ${local(plan.index)}) / (u32) ${plan.stride}) * (u32) ${plan.stride}) : 0.0;`,
+		);
+		guards.length = 0;
+		guards.push(range);
 		for (const view of plan.views) {
 			const low = `(${local(plan.index)} + ${cF64Literal(view.minOffset)})`;
-			const high =
-				view.maxOffset === 0
-					? local(plan.bound)
-					: `(${local(plan.bound)} + ${cF64Literal(view.maxOffset)})`;
+			const high = `(${last} + ${cF64Literal(view.maxOffset + 1)})`;
 			if (view.minOffset !== 0) guards.push(`${low} >= 0.0`);
 			if (view.maxOffset !== 0) guards.push(`${high} >= 0.0`, `${high} <= UINT32_MAX`);
 			guards.push(
@@ -982,10 +989,14 @@ function emitNumericLoopRegion(
 			([register, kind]) =>
 				`  ${kind === "boolean" ? "bool" : floating ? "f64" : "i64"} ${local(register)} = ${initial.get(register) ?? (kind === "boolean" ? "false" : "0")};`,
 		),
+		...rangePrelude,
 		`  if (${guards.length === 0 ? "true" : guards.join(" && ")}) {`,
 		...(plan.kind === "fixed-numeric"
 			? [
 					"    MAL_PERF_COUNT(fixed_typed_array_region_admissions);",
+					...(plan.stride > 1
+						? ["    MAL_PERF_COUNT(fixed_typed_array_stride_regions);"]
+						: []),
 					...(plan.views.some((view) => view.minOffset !== 0 || view.maxOffset !== 0)
 						? ["    MAL_PERF_COUNT(fixed_typed_array_affine_regions);"]
 						: []),
@@ -6202,6 +6213,9 @@ function emitInstruction(
 		const values = plan.values.map(boxedOperand).join(", ");
 		return [
 			`MAL_PERF_COUNT(array_initialization_regions);`,
+			...(plan.values.length > 8
+				? ["MAL_PERF_COUNT(array_initialization_large_regions);"]
+				: []),
 			`r${instruction.dst} = ${profileCall("allocation", `mal_value_from_array_object(mal_array_object_new_from_values(&vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ARRAY_PROTOTYPE]), (MalValue[]){ ${values} }, ${plan.values.length}))`)};`,
 		];
 	}

@@ -184,6 +184,7 @@ export type NativeNumericLoopRegionPlan = NativeNumericLoopRegionBase &
 				readonly kind: "fixed-numeric";
 				readonly index: number;
 				readonly bound: number;
+				readonly stride: number;
 				readonly views: ReadonlyArray<{
 					readonly object: number;
 					readonly writable: boolean;
@@ -1346,6 +1347,8 @@ function lowerNumberRecordRegion(
 }
 
 const NUMERIC_LOOP_INSTRUCTION_LIMIT = 64;
+// Four interleaved lanes need two reads and one write each.
+const FIXED_NUMERIC_LOOP_ACCESS_LIMIT = 12;
 // Their double lowering converts to int32 or divides, which a safe-integer iteration avoids.
 const INTEGER_LOOP_PROFITABLE_OPERATORS = new Set([
 	"/",
@@ -1497,7 +1500,7 @@ function numericLoopIndexFacts(
 	index: number,
 ): {
 	readonly offsets: ReadonlyMap<number, number>;
-	readonly increments: ReadonlyArray<number>;
+	readonly increments: ReadonlyMap<number, number>;
 } {
 	const written = new Set(
 		shape.order.flatMap((ip) => vmInstructionWriteRegisters(fn.instructions[ip]!)),
@@ -1532,17 +1535,13 @@ function numericLoopIndexFacts(
 		[shape.order[0]!, initial],
 	]);
 	const offsets = new Map<number, number>();
-	const increments: Array<number> = [];
+	const increments = new Map<number, number>();
 	for (const ip of shape.order) {
 		const facts = new Map(before.get(ip));
 		const op = fn.instructions[ip]!;
 		if (op.opcode === "LOAD_PROPERTY" || op.opcode === "STORE_PROPERTY") {
 			const key = facts.get(op.key);
 			if (key?.base === "index") offsets.set(ip, key.offset);
-		}
-		if (op.opcode === "UNARY" && op.operator === "increment") {
-			const source = facts.get(op.src);
-			if (source?.base === "index" && source.offset === 0) increments.push(ip);
 		}
 		let result: NumericLoopIndexFact | undefined;
 		if (
@@ -1555,7 +1554,11 @@ function numericLoopIndexFacts(
 			(op.opcode === "UNARY" && (op.operator === "tonumeric" || op.operator === "+"))
 		)
 			result = facts.get(op.src);
-		else if (op.opcode === "BINARY" && (op.operator === "+" || op.operator === "-")) {
+		else if (op.opcode === "UNARY" && op.operator === "increment") {
+			const source = facts.get(op.src);
+			if (source !== undefined && numericLoopOffset(source.offset + 1))
+				result = { base: source.base, offset: source.offset + 1 };
+		} else if (op.opcode === "BINARY" && (op.operator === "+" || op.operator === "-")) {
 			const left = facts.get(op.left),
 				right = facts.get(op.right);
 			if (
@@ -1572,6 +1575,12 @@ function numericLoopIndexFacts(
 					};
 			}
 		}
+		if (
+			result?.base === "index" &&
+			result.offset > 0 &&
+			(op.opcode === "BINARY" || (op.opcode === "UNARY" && op.operator === "increment"))
+		)
+			increments.set(ip, result.offset);
 		for (const register of vmInstructionWriteRegisters(op)) facts.delete(register);
 		if (result !== undefined && "dst" in op) facts.set(op.dst, result);
 		for (const successor of numberRecordSuccessors(op, ip)) {
@@ -1596,7 +1605,7 @@ function fixedNumericLoopStorage(
 ):
 	| Pick<
 			Extract<NativeNumericLoopRegionPlan, { kind: "fixed-numeric" }>,
-			"index" | "bound" | "views"
+			"index" | "bound" | "stride" | "views"
 	  >
 	| undefined {
 	const memory = shape.order.flatMap((ip) => {
@@ -1607,7 +1616,7 @@ function fixedNumericLoopStorage(
 	});
 	if (
 		memory.length < 3 ||
-		memory.length > 8 ||
+		memory.length > FIXED_NUMERIC_LOOP_ACCESS_LIMIT ||
 		!memory.some(({ op }) => op.opcode === "STORE_PROPERTY")
 	)
 		return undefined;
@@ -1624,31 +1633,36 @@ function fixedNumericLoopStorage(
 	)
 		return undefined;
 	const { offsets, increments } = numericLoopIndexFacts(fn, body, shape, index);
-	if (increments.length !== 1) return undefined;
-	const increment = fn.instructions[increments[0]!]!;
-	if (increment.opcode !== "UNARY" || increment.dst === index) return undefined;
 	const indexWrites = shape.order.filter((ip) =>
 		vmInstructionWriteRegisters(fn.instructions[ip]!).includes(index),
 	);
 	if (indexWrites.length !== 1) return undefined;
 	const update = fn.instructions[indexWrites[0]!]!;
+	if (update.opcode !== "MOVE") return undefined;
+	const candidates = [...increments].filter(([ip]) => {
+		const op = fn.instructions[ip]!;
+		return "dst" in op && op.dst === update.src;
+	});
+	if (candidates.length !== 1) return undefined;
+	const [incrementIp, stride] = candidates[0]!;
+	const increment = fn.instructions[incrementIp]!;
+	if (!("dst" in increment) || increment.dst === index) return undefined;
 	if (
-		update.opcode !== "MOVE" ||
 		update.src !== increment.dst ||
-		shape.order.indexOf(indexWrites[0]!) <= shape.order.indexOf(increments[0]!) ||
-		shape.order.indexOf(increments[0]!) <
+		shape.order.indexOf(indexWrites[0]!) <= shape.order.indexOf(incrementIp) ||
+		shape.order.indexOf(incrementIp) <
 			Math.max(...memory.map(({ ip }) => shape.order.indexOf(ip)))
 	)
 		return undefined;
 	if (
 		shape.order.some(
 			(ip) =>
-				ip !== increments[0] &&
+				ip !== incrementIp &&
 				vmInstructionWriteRegisters(fn.instructions[ip]!).includes(increment.dst),
 		)
 	)
 		return undefined;
-	for (const required of [increments[0]!, indexWrites[0]!]) {
+	for (const required of [incrementIp, indexWrites[0]!]) {
 		const pending = [branch.targetIp],
 			seen = new Set<number>();
 		while (pending.length > 0) {
@@ -1695,6 +1709,7 @@ function fixedNumericLoopStorage(
 	return {
 		index,
 		bound,
+		stride,
 		views: [...views].map(([object, window]) => ({ object, ...window })),
 	};
 }

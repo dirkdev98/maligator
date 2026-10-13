@@ -17,7 +17,7 @@ afterAll(() => rmSync(outDir, { recursive: true, force: true }));
 
 describe("fresh Array initialization", () => {
 	it.each(["mutable", "locked"] as const)(
-		"preserves numeric producers, references, holes, evaluation order, and inherited setters under %s primordials",
+		"preserves larger mixed producers, references, holes, evaluation order, and inherited setters under %s primordials",
 		(primordials) => {
 			const expected = execFileSync(process.execPath, [fixture], {
 				encoding: "utf8",
@@ -48,6 +48,15 @@ describe("fresh Array initialization", () => {
 			expect(
 				numeric.storage!.arrayInitializations.some((plan) => plan.values.length === 5),
 			).toBe(true);
+			const large = pair.programImage.native.functions.find(
+				(fn) =>
+					String.fromCharCode(
+						...(pair.programImage.runtime.stringConstants[fn.body.nameStringIndex] ?? []),
+					) === "mixedLarge",
+			)!;
+			expect(
+				large.storage!.arrayInitializations.some((plan) => plan.values.length === 32),
+			).toBe(true);
 			for (const binary of [pair.compiled, pair.interpreted])
 				for (const stress of [{}, STRESS_ENV])
 					expect(
@@ -69,10 +78,11 @@ describe("fresh Array initialization", () => {
 			expect(measured.status, measured.stderr).toBe(0);
 			expect(measured.stdout).toBe(expected);
 			const stats = measured.stderr.match(
-				/\[perf-array-initialization-stats\] regions=(\d+)/,
+				/\[perf-array-initialization-stats\] regions=(\d+) large_regions=(\d+)/,
 			);
 			expect(stats).not.toBeNull();
 			expect(Number(stats![1])).toBeGreaterThan(0);
+			expect(Number(stats![2])).toBeGreaterThan(0);
 		},
 		600_000,
 	);

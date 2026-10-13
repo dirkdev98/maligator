@@ -1538,6 +1538,7 @@ export function validateNativeStorage(
 					(expected.kind === "fixed-numeric" &&
 						plan.index === expected.index &&
 						plan.bound === expected.bound &&
+						plan.stride === expected.stride &&
 						plan.views.length === expected.views.length &&
 						plan.views.every(
 							(view, i) =>

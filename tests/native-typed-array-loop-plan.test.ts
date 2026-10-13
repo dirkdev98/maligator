@@ -20,6 +20,62 @@ function compile(body: string) {
 }
 const body = "for(let i=0;i<count;i++){output[i]=left[i]+right[i];}return output;";
 describe("fixed TypedArray loop storage", () => {
+	it.each(["i++", "i+=1", "i+=2", "i=i+4", "i=3+i", "i-= -2"])(
+		"retains the proven positive stride for %s",
+		(update) => {
+			const image = compile(
+				`for(let i=0;i<count;${update}){output[i]=left[i]+right[i];}return output;`,
+			);
+			const plan = image.native.functions[1]!.storage!.numericLoopRegions[0];
+			if (plan?.kind !== "fixed-numeric") throw new Error("Missing strided region");
+			expect(plan.stride).toBe(
+				update === "i++" || update === "i+=1"
+					? 1
+					: update === "i=i+4"
+						? 4
+						: update === "i=3+i"
+							? 3
+							: 2,
+			);
+			expect(deserializeCompilerArtifact(serializeCompilerArtifact(image))).toEqual(
+				image,
+			);
+		},
+	);
+	it.each([3, 4])(
+		"admits an interleaved %i-lane body within the existing instruction budget",
+		(lanes) => {
+			const accesses = Array.from(
+				{ length: lanes },
+				(_, lane) => `output[i+${lane}]=left[i+${lane}]+right[i+${lane}];`,
+			).join("");
+			const image = compile(
+				`for(let i=0;i<count;i+=${lanes}){${accesses}}return output;`,
+			);
+			const fn = image.native.functions[1]!;
+			const plan = fn.storage!.numericLoopRegions[0];
+			if (plan?.kind !== "fixed-numeric") throw new Error("Missing interleaved region");
+			expect(plan.stride).toBe(lanes);
+			expect(
+				plan.views.every((view) => view.minOffset === 0 && view.maxOffset === lanes - 1),
+			).toBe(true);
+			expect(plan.claimedIps.length).toBeLessThanOrEqual(65);
+			expect(emitCompiledFunction(fn, 1, "", false)).not.toBeNull();
+			expect(deserializeCompilerArtifact(serializeCompilerArtifact(image))).toEqual(
+				image,
+			);
+		},
+	);
+	it("declines a fifth lane instead of multiplying the region budget", () => {
+		const accesses = Array.from(
+			{ length: 5 },
+			(_, lane) => `output[i+${lane}]=left[i+${lane}]+right[i+${lane}];`,
+		).join("");
+		expect(
+			compile(`for(let i=0;i<count;i+=5){${accesses}}`).native.functions[1]!.storage!
+				.numericLoopRegions,
+		).toEqual([]);
+	});
 	it("proves distinct affine windows while retaining ordered rounded readback", () => {
 		const image = compile(
 			"for(let i=1;i<count;i++){output[i-1]=left[i-1]+right[i+1];right[i]=output[i-1]-left[i];}return output;",
@@ -138,6 +194,32 @@ describe("fixed TypedArray loop storage", () => {
 			);
 		}
 	});
+	it("rejects a strided update that reads the previous iteration's arithmetic result", () => {
+		const native = compile("for(let i=0;i<count;i+=2){output[i]=left[i]+right[i];}")
+			.native.functions[1]!;
+		const plan = native.storage!.numericLoopRegions[0];
+		if (plan?.kind !== "fixed-numeric") throw new Error("Missing strided region");
+		const original = native.body.instructions;
+		const updateIp = original.findIndex(
+			(op, ip) =>
+				plan.claimedIps.includes(ip) && op.opcode === "MOVE" && op.dst === plan.index,
+		);
+		const update = original[updateIp]!;
+		if (update.opcode !== "MOVE") throw new Error("Missing index update");
+		const stepIp = original.findIndex(
+			(op, ip) =>
+				plan.claimedIps.includes(ip) && op.opcode === "BINARY" && op.dst === update.src,
+		);
+		const step = original[stepIp]!;
+		const instructions = original.with(stepIp, update).with(updateIp, step);
+		expect(
+			selectNativeFastPaths({
+				...native,
+				body: { ...native.body, instructions },
+				instructions: instructions.map(() => undefined),
+			}).numericLoopRegions,
+		).toEqual([]);
+	});
 	it("retains one range and three ordered view accesses through the artifact", () => {
 		const image = compile(body),
 			native = image.native.functions[1]!;
@@ -211,7 +293,13 @@ describe("fixed TypedArray loop storage", () => {
 		"for(let i=0;i<count;i++){output[i+0.5]=left[i]+right[i];}",
 		"for(let i=0;i<count;i++){output[i+2147483648]=left[i]+right[i];}",
 
-		"for(let i=0;i<count;i+=2){output[i]=left[i]+right[i];}",
+		"for(let i=0;i<count;i+=0){output[i]=left[i]+right[i];}",
+		"for(let i=0;i<count;i-=2){output[i]=left[i]+right[i];}",
+		"for(let i=0;i<count;i+=0.5){output[i]=left[i]+right[i];}",
+		"for(let i=0;i<count;i+=2147483648){output[i]=left[i]+right[i];}",
+		"for(let i=0;i<count;i+=hook){output[i]=left[i]+right[i];}",
+		"let step=2;for(let i=0;i<count;i+=step){output[i]=left[i]+right[i];step=left[i];}",
+		"let step;for(let i=0;i<count;i+=step){output[i]=left[i]+right[i];if(hook)step=2;else step=4;}",
 		"for(let i=0;i<count;i++){output[i]=left[i]+right[i];left=right;}",
 		"for(let i=0;i<count;){output[i]=left[i]+right[i];if(hook)i++;}",
 		"for(let i=0;i<count;i++){output[i]=left[i]+right[i];count--;}",
@@ -229,6 +317,12 @@ describe("fixed TypedArray loop storage", () => {
 		const plan = native.storage!.numericLoopRegions[0]!;
 		if (plan.kind !== "fixed-numeric") throw new Error("Missing storage region");
 		for (const forged of [
+			{ ...plan, stride: 0 },
+			{ ...plan, stride: -1 },
+			{ ...plan, stride: 2 },
+			{ ...plan, stride: 0.5 },
+			{ ...plan, stride: 2147483648 },
+			{ ...plan, stride: undefined } as unknown as NativeNumericLoopRegionPlan,
 			{ ...plan, bound: plan.index },
 			{ ...plan, views: plan.views.slice(1) },
 			{ ...plan, views: plan.views.map((view) => ({ ...view, writable: false })) },

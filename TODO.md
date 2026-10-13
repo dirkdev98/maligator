@@ -366,6 +366,8 @@ Runtime eval may remove source closure without invalidating authority closure.
 Track the requested expansion through the owning tasks below. Keep semantic,
 mechanism, and measured acceptance separate; reuse existing callback discovery,
 numeric sorting, stack objects, and string projections.
+The shared lifetime and fallback rules are recorded in
+[runtime region contracts](docs/decisions/runtime-region-contracts.md).
 
 - [x] Numeric `reduce` / `reduceRight`: reuse the selected callback entry and carry
       the accumulator as a number, with per-element boxed continuation and live
@@ -541,7 +543,7 @@ numeric sorting, stack objects, and string projections.
       Both backends and GC stress preserve outputs. Locked sanitizer coverage passes;
       the mutable aggregate read/admission ratio was invalidated by deeper chains and
       is replaced with explicit composition and executed-consumer checks. The sanitizer
-      rerun and measurement remain pending.
+      rerun passes; measurement remains pending.
 - [ ] Extend exact callback invocation to Map and Set `forEach` receivers.
       Carry value/key/owner arguments without numeric assumptions, preserving live
       iteration, mutation, callback effects, realms, and cached generic fallback.
@@ -571,7 +573,8 @@ numeric sorting, stack objects, and string projections.
       backends preserve output under GC stress. A locked-mode missing range counter
       exposed escape analysis counting unreachable inlined predecessor edges; that
       analysis is repaired, with dead/live merge coverage and 171 focused checks
-      passing. Its native rerun and measurement remain pending.
+      passing. All three Linux ASan/UBSan checks now pass with strict search counters;
+      measurement remains pending.
 - [ ] Admit observed temporary-object lifetimes after unrelated exception handlers
       and in disjoint branches. Reuse per-function control-flow reachability and
       target alias flow; preserve rejection of active exception transport and
@@ -597,8 +600,8 @@ numeric sorting, stack objects, and string projections.
       Implemented through stable function indices and the existing fiber execution
       state. All 145 focused checks, Node oracles, both-mode frontend selection, and
       runtime/generated C syntax checks pass. Deterministic table relocation and
-      interleaved scheduler regressions pass under Linux ASan/UBSan; JavaScript
-      lifetime checks remain pending.
+      interleaved scheduler regressions pass under Linux ASan/UBSan, as do both
+      mutable/locked JavaScript lifetime checks across backends and GC stress.
 - [ ] Establish one canonical compiled callback contract for forwarded callback
       parameters and selected closures. Reuse the guarded collection operation and
       exact callback context without inventing numeric argument or result facts;
@@ -615,6 +618,22 @@ numeric sorting, stack objects, and string projections.
       longer block admission after inlining. All 305 focused checks, Node oracles,
       actual bundled selection, and C syntax checks pass. Native execution and
       measurement remain pending.
+- [ ] Extend fixed TypedArray regions to positive constant strides and useful
+      interleaved kernels. Derive stride from the actual induction update, bound each
+      view by the final visited index, and retain ordered accesses, numeric guards,
+      and completed-iteration state when polling. Implemented with a positive i32
+      stride and up to twelve accesses for four interleaved lanes, within the existing
+      instruction and view budgets. All 107 focused checks, actual bundled frontend
+      selection, artifact roundtrips, Node oracles, and C syntax checks pass. Native
+      execution and measurement remain pending.
+- [ ] Widen fresh Array output plans beyond eight prepared elements and accept
+      mixed immutable literals. Share bounded discovery limits between preparation
+      and target selection; preserve initializer effects, roots, holes, and the
+      existing builder publication contract. Implemented with a shared 32-value bound
+      and bounded cached key discovery. Immutable string loads now carry their actual
+      GC-free effect contract. Focused Core/root/codec checks, actual bundled selection,
+      Node oracles, and emitted C syntax checks pass. Native execution and measurement
+      remain pending.
 
 | Order | Slice                        | Owning work and exit condition                                                                                                                                  |
 | ----- | ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
