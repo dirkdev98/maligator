@@ -1183,6 +1183,14 @@ static MalValue mal_ih_method_for_each(MalVm *vm, MalValue this_value, const Mal
     mal_gc_root(&rec_span, &record.iterator, 2);
     mal_gc_root(&span, roots, 1);
     mal_gc_native_rooted_begin(vm);
+    MalExactScriptCall runtime_callback;
+    bool nominated = (vm->exact_script_call == nullptr ||
+        vm->exact_script_call->callee != callback) &&
+        mal_vm_prepare_builtin_callback(vm, callback, &runtime_callback);
+    if (nominated) {
+        vm->exact_script_call = &runtime_callback;
+        MAL_PERF_COUNT(iterator_for_each_runtime_callback_nominations);
+    }
     i32 index = 0;
     while (true) {
         MalValue value;
@@ -1195,12 +1203,13 @@ static MalValue mal_ih_method_for_each(MalVm *vm, MalValue this_value, const Mal
         }
         roots[0] = value;
         MalValue callback_args[2] = {value, mal_value_from_i32(index++)};
-        MalCompletion result = mal_vm_call_value(vm, callback, mal_value_new_undefined(), callback_args, 2);
+        MalCompletion result = mal_vm_call_builtin_callback(vm, callback, mal_value_new_undefined(), callback_args, 2);
         if (result.kind == MAL_COMPLETION_THROW) {
             mal_vm_iterator_close(vm, &record);
             break;
         }
     }
+    if (nominated) vm->exact_script_call = runtime_callback.previous;
     mal_gc_native_rooted_end(vm);
     mal_gc_unroot(&span);
     mal_gc_unroot(&rec_span);
@@ -1224,6 +1233,14 @@ static MalValue mal_ih_method_reduce(MalVm *vm, MalValue this_value, const MalVa
     mal_gc_root(&rec_span, &record.iterator, 2);
     mal_gc_root(&span, roots, 2);
     mal_gc_native_rooted_begin(vm);
+    MalExactScriptCall runtime_callback;
+    bool nominated = (vm->exact_script_call == nullptr ||
+        vm->exact_script_call->callee != callback) &&
+        mal_vm_prepare_builtin_callback(vm, callback, &runtime_callback);
+    if (nominated) {
+        vm->exact_script_call = &runtime_callback;
+        MAL_PERF_COUNT(iterator_reduce_runtime_callback_nominations);
+    }
     MalValue ret = mal_value_new_undefined();
 
     MalValue accumulator;
@@ -1255,7 +1272,7 @@ static MalValue mal_ih_method_reduce(MalVm *vm, MalValue this_value, const MalVa
         }
         roots[1] = value;
         MalValue callback_args[3] = {accumulator, value, mal_value_from_i32(index++)};
-        MalCompletion result = mal_vm_call_value(vm, callback, mal_value_new_undefined(), callback_args, 3);
+        MalCompletion result = mal_vm_call_builtin_callback(vm, callback, mal_value_new_undefined(), callback_args, 3);
         if (result.kind == MAL_COMPLETION_THROW) {
             mal_vm_iterator_close(vm, &record);
             goto done;
@@ -1265,6 +1282,7 @@ static MalValue mal_ih_method_reduce(MalVm *vm, MalValue this_value, const MalVa
     }
 
 done:
+    if (nominated) vm->exact_script_call = runtime_callback.previous;
     mal_gc_native_rooted_end(vm);
     mal_gc_unroot(&span);
     mal_gc_unroot(&rec_span);
@@ -1287,6 +1305,14 @@ static MalValue mal_ih_predicate(MalVm *vm, MalValue this_value, const MalValue 
     mal_gc_root(&rec_span, &record.iterator, 2);
     mal_gc_root(&span, roots, 1);
     mal_gc_native_rooted_begin(vm);
+    MalExactScriptCall runtime_callback;
+    bool nominated = (vm->exact_script_call == nullptr ||
+        vm->exact_script_call->callee != callback) &&
+        mal_vm_prepare_builtin_callback(vm, callback, &runtime_callback);
+    if (nominated) {
+        vm->exact_script_call = &runtime_callback;
+        MAL_PERF_COUNT(iterator_predicate_runtime_callback_nominations);
+    }
     MalValue ret = mal_value_new_undefined();
     i32 index = 0;
     while (true) {
@@ -1303,7 +1329,7 @@ static MalValue mal_ih_predicate(MalVm *vm, MalValue this_value, const MalValue 
         }
         roots[0] = value;
         MalValue callback_args[2] = {value, mal_value_from_i32(index++)};
-        MalCompletion result = mal_vm_call_value(vm, callback, mal_value_new_undefined(), callback_args, 2);
+        MalCompletion result = mal_vm_call_builtin_callback(vm, callback, mal_value_new_undefined(), callback_args, 2);
         if (result.kind == MAL_COMPLETION_THROW) {
             mal_vm_iterator_close(vm, &record);
             goto done;
@@ -1326,6 +1352,7 @@ static MalValue mal_ih_predicate(MalVm *vm, MalValue this_value, const MalValue 
     }
 
 done:
+    if (nominated) vm->exact_script_call = runtime_callback.previous;
     mal_gc_native_rooted_end(vm);
     mal_gc_unroot(&span);
     mal_gc_unroot(&rec_span);

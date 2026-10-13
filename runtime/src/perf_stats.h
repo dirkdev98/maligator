@@ -367,6 +367,9 @@ typedef struct MalPerfStats {
 	u64 typed_array_from_runtime_callback_nominations;
 	u64 object_group_by_runtime_callback_nominations;
 	u64 map_group_by_runtime_callback_nominations;
+	u64 iterator_for_each_runtime_callback_nominations;
+	u64 iterator_reduce_runtime_callback_nominations;
+	u64 iterator_predicate_runtime_callback_nominations;
 
 	u64 call_cache_probes;
     u64 call_cache_exact_identity_hits;

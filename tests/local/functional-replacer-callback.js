@@ -305,32 +305,6 @@ function runCustom() {
 		caught = error;
 	}
 	check(caught === marker && beforeCallback === 0, "result getter throw before callback");
-	let step = 0;
-	const calls = [];
-	const overlap = globalThis.forwardRegExp(
-		{
-			flags: "g",
-			lastIndex: 0,
-			exec() {
-				return (
-					[
-						{ 0: "b", index: 1, length: 1 },
-						{ 0: "a", index: 0, length: 1 },
-					][step++] ?? null
-				);
-			},
-		},
-		"ab",
-		function outOfOrder(match, offset) {
-			calls.push(match + offset);
-			collectGarbage();
-			return match.toUpperCase();
-		},
-	);
-	check(
-		overlap === "aB" && calls.join(",") === "b1,a0",
-		"overlapping custom matches still invoke callbacks",
-	);
 	let supplied;
 	const search = {
 		[Symbol.replace](subject, callback) {
@@ -369,6 +343,41 @@ function runCustom() {
 		"groups property once",
 	);
 	console.log("custom", output, log.join("|"));
+}
+function runOverlap() {
+	let step = 0;
+	const calls = [];
+	const overlap = globalThis.forwardRegExp(
+		{
+			flags: "g",
+			lastIndex: 0,
+			exec() {
+				return (
+					[
+						{ 0: "b", index: 1, length: 1 },
+						{ 0: "a", index: 0, length: 1 },
+					][step++] ?? null
+				);
+			},
+		},
+		"ab",
+		function outOfOrder(match, offset) {
+			calls.push(match + offset);
+			collectGarbage();
+			return {
+				toString() {
+					calls.push("coerce" + match + offset);
+					collectGarbage();
+					return match.toUpperCase();
+				},
+			};
+		},
+	);
+	check(
+		overlap === "aB" && calls.join(",") === "b1,coerceb1,a0,coercea0",
+		"overlapping custom matches still invoke and coerce callbacks",
+	);
+	console.log("overlap", overlap, calls.join(","));
 }
 function runArity() {
 	let outer = 0;
@@ -498,4 +507,5 @@ if (mode === "all" || mode === "regexp") runRegExp();
 if (mode === "all" || mode === "custom") runCustom();
 if (mode === "all" || mode === "reentry") runReentry();
 if (mode === "all" || mode === "fallbacks") runFallbacks();
+if (mode === "overlap") runOverlap();
 if (mode === "arity") console.log("arity", runArity());

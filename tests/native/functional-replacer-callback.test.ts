@@ -58,9 +58,21 @@ describe("functional replacer callback nomination", () => {
 				expect(fn.body.instructions.some((op) => op.opcode === "CALL")).toBe(true);
 				expect(fn.storage!.callbackTransports).toEqual([]);
 			}
-			for (const kind of ["string", "regexp", "custom", "reentry", "fallbacks"]) {
+			for (const kind of [
+				"string",
+				"regexp",
+				"custom",
+				"overlap",
+				"reentry",
+				"fallbacks",
+			]) {
 				const env = { REPLACER_KIND: kind, MAL_HOST_GC: "1" };
-				const expected = nodeOracle(fixture, env);
+				// Node 24.21 rejects this custom-exec case; @@replace steps 15.11–15.13 require callback and ToString first.
+				// https://tc39.es/ecma262/multipage/text-processing.html#sec-regexp.prototype-%symbol.replace%
+				const expected =
+					kind === "overlap"
+						? "overlap aB b1,coerceb1,a0,coercea0\n"
+						: nodeOracle(fixture, env);
 				const measured = spawnSync(pair.compiled, [], {
 					encoding: "utf8",
 					timeout: 60_000,
@@ -80,7 +92,7 @@ describe("functional replacer callback nomination", () => {
 						expect(string).toBeGreaterThan(0);
 						expect(regexp).toBe(0);
 					}
-					if (kind === "regexp" || kind === "custom") {
+					if (kind === "regexp" || kind === "custom" || kind === "overlap") {
 						expect(regexp).toBeGreaterThan(0);
 						expect(string).toBe(0);
 					}

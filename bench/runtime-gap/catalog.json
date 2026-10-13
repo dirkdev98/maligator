@@ -3150,6 +3150,19 @@
 			"controls": ["string-span-reverse-search", "string-span-search"]
 		},
 		{
+			"id": "forwarded-iterator-terminal",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "Synchronous Iterator callback transport",
+			"category": "api-builtins",
+			"mechanisms": ["array-callback"],
+			"inputShape": "128 elements consumed by the five synchronous Iterator terminal methods with forwarded captured callbacks.",
+			"unit": "visited element",
+			"sourceSeam": "runtime/src/builtin_iterator_helpers.c",
+			"fixture": "cases/forwarded-iterator-terminal.mjs",
+			"controls": ["forwarded-group-by", "forwarded-array-callback"]
+		},
+		{
 			"id": "method-name-unique",
 			"group": "runtime",
 			"suite": "runtime",

@@ -701,6 +701,19 @@ The shared lifetime and fallback rules are recorded in
       runtime/generated C syntax checks pass. Native execution and measurement
       remain pending.
 
+- [ ] Reuse canonical callback nomination in synchronous Iterator terminal methods.
+      Preserve the existing forEach, reduce, some, every, and find traversals, exact
+      argument counts, accumulator roots, and IteratorClose completion rules.
+      Implemented through three existing rooted loops and the shared callback entry.
+      All 43 focused checks, Node oracles, ten actual frontend/artifact roundtrips,
+      and runtime/generated C syntax checks pass. Native execution and measurement
+      remain pending.
+- [ ] Restore entry-pair virtualization selection in the complete collection fixture.
+      CI found correct observable output but zero executed entry-pair hits; trace
+      compiler admission and preserve the strict positive and fallback assertions.
+- [ ] Remove the i32 index limit in synchronous Iterator terminal methods after
+      verifying each method's specified counter and overflow behavior.
+
 | Order | Slice                        | Owning work and exit condition                                                                                                                                  |
 | ----- | ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 1     | Callback invocation          | The tasks above; remove measured repeated invocation work for a numeric reduction with captures.                                                                |

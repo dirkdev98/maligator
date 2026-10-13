@@ -20,6 +20,7 @@ tests/native/forwarded-sort-callback.test.ts
 tests/native/functional-replacer-callback.test.ts
 tests/native/forwarded-from-mapper.test.ts
 tests/native/forwarded-group-by.test.ts
+tests/native/forwarded-iterator-terminal.test.ts
 tests/native/string-span-primitive-positions.test.ts
 tests/native/function-reflect-builtins.test.ts
 tests/native/gc.test.ts
