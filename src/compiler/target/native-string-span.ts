@@ -1,3 +1,4 @@
+import { CORE_STRING_SPAN_CHARACTER_METHODS } from "../core/core-ir-regions.ts";
 import type { NativeBodyFacts } from "./native-body-facts.ts";
 import { validateNativeVirtualValue } from "./native-virtual-value.ts";
 import type { VmStringSpanRegion } from "./program-image.ts";
@@ -12,16 +13,16 @@ export function nativeSpanCharacterCall(
 	ip: number,
 	strings: ReadonlyArray<ReadonlyArray<number>>,
 	body: Pick<NativeBodyFacts, "branchSources" | "externalEntries">,
-): "charCodeAtCall" | "codePointAtCall" | undefined {
+): `${(typeof CORE_STRING_SPAN_CHARACTER_METHODS)[number]}Call` | undefined {
 	const call = instructions[ip];
-	if (call?.opcode === "CALL_KNOWN")
-		return call.operation === "String.prototype.charCodeAt"
-			? "charCodeAtCall"
-			: call.operation === "String.prototype.codePointAt"
-				? "codePointAtCall"
-				: undefined;
+	if (call?.opcode === "CALL_KNOWN") {
+		const method = CORE_STRING_SPAN_CHARACTER_METHODS.find(
+			(name) => call.operation === `String.prototype.${name}`,
+		);
+		return method === undefined ? undefined : `${method}Call`;
+	}
 	if (call?.opcode !== "CALL") return undefined;
-	type Kind = "charCodeAtCall" | "codePointAtCall";
+	type Kind = `${(typeof CORE_STRING_SPAN_CHARACTER_METHODS)[number]}Call`;
 	const visiting = new Set<number>(),
 		completed = new Map<number, Kind | undefined>();
 	let work = 0;
@@ -49,12 +50,8 @@ export function nativeSpanCharacterCall(
 					op.opcode === "LOAD_PROPERTY_STATIC"
 						? String.fromCharCode(...(strings[op.stringIndex] ?? []))
 						: undefined;
-				found =
-					name === "charCodeAt"
-						? "charCodeAtCall"
-						: name === "codePointAt"
-							? "codePointAtCall"
-							: undefined;
+				const method = CORE_STRING_SPAN_CHARACTER_METHODS.find((value) => value === name);
+				found = method === undefined ? undefined : `${method}Call`;
 			} else found = visit(definition);
 			if (found === undefined || (method !== undefined && method !== found))
 				return undefined;
@@ -117,6 +114,12 @@ export function validateNativeStringSpan(
 		| undefined;
 	for (const consumer of region.consumers) {
 		const instruction = instructions[consumer.ip];
+		const characterProperty = CORE_STRING_SPAN_CHARACTER_METHODS.find(
+			(method) => consumer.kind === `${method}Property`,
+		);
+		const characterCall = CORE_STRING_SPAN_CHARACTER_METHODS.find(
+			(method) => consumer.kind === `${method}Call`,
+		);
 		if (
 			instruction === undefined ||
 			!region.resultRegisters.includes(consumer.value) ||
@@ -137,30 +140,26 @@ export function validateNativeStringSpan(
 		)
 			fail();
 		if (
-			(consumer.kind === "charCodeAtProperty" ||
-				consumer.kind === "codePointAtProperty") &&
+			characterProperty !== undefined &&
 			(instruction.opcode !== "LOAD_PROPERTY_STATIC" ||
 				instruction.object !== consumer.value ||
 				String.fromCharCode(...(strings[instruction.stringIndex] ?? [])) !==
-					(consumer.kind === "codePointAtProperty" ? "codePointAt" : "charCodeAt"))
+					characterProperty)
 		)
 			fail();
 		if (
-			(consumer.kind === "charCodeAtCall" || consumer.kind === "codePointAtCall") &&
+			characterCall !== undefined &&
 			((instruction.opcode !== "CALL" && instruction.opcode !== "CALL_KNOWN") ||
 				instruction.thisValue !== consumer.value ||
 				instruction.arguments.length > 1 ||
 				instruction.arguments[0] === consumer.value ||
 				(instruction.opcode === "CALL_KNOWN" &&
-					(instruction.operation !==
-						(consumer.kind === "codePointAtCall"
-							? "String.prototype.codePointAt"
-							: "String.prototype.charCodeAt") ||
+					(instruction.operation !== `String.prototype.${characterCall}` ||
 						instruction.construct ||
 						instruction.argumentMode !== undefined)))
 		)
 			fail();
-		if (consumer.kind === "charCodeAtCall" || consumer.kind === "codePointAtCall") {
+		if (characterCall !== undefined) {
 			if (characterBody === undefined) {
 				const branchSources = new Map<number, Array<number>>();
 				for (const [source, op] of instructions.entries()) {

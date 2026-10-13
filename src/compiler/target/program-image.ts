@@ -500,6 +500,10 @@ export type VmStringSpanRegion = VmRegionEnvelope<
 			| "charCodeAtCall"
 			| "codePointAtProperty"
 			| "codePointAtCall"
+			| "charAtProperty"
+			| "charAtCall"
+			| "atProperty"
+			| "atCall"
 			| "materialize";
 	}>;
 };
@@ -761,6 +765,10 @@ export type VmRegionActionRole =
 	| "charCodeAtCall"
 	| "codePointAtProperty"
 	| "codePointAtCall"
+	| "charAtProperty"
+	| "charAtCall"
+	| "atProperty"
+	| "atCall"
 	| "charCodeAtProperty"
 	| "close"
 	| "caseLength"

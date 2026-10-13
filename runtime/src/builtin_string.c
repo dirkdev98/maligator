@@ -1071,7 +1071,7 @@ bool mal_builtin_string_character_direct(
 ) {
     if (!mal_builtin_string_is_flat_value(receiver)) return false;
     *result = mal_builtin_string_character_numeric(
-        vm, mal_value_to_string(receiver), position, operation);
+        vm, mal_value_to_string(receiver), 0, mal_string_length(mal_value_to_string(receiver)), position, operation);
     return true;
 }
 
@@ -1739,27 +1739,28 @@ bool mal_builtin_string_range_span_init(
 }
 
 bool mal_builtin_string_span_character(
-    MalValue callee, bool locked, MalValue subject, usize start, usize end,
+    MalVm *vm, MalValue callee, bool locked, MalValue subject, usize start, usize end,
     MalValue position, MalStringCharacterOp operation, MalValue *out
 ) {
-    if ((operation != MAL_STRING_CHARACTER_CHAR_CODE_AT && operation != MAL_STRING_CHARACTER_CODE_POINT_AT) ||
-        (!locked && (!mal_value_is_native_function_object(callee) ||
-         mal_native_function_object_callback(mal_value_to_native_function_object(callee)) !=
-            (operation == MAL_STRING_CHARACTER_CODE_POINT_AT
-                ? mal_builtin_string_prototype_code_point_at : mal_builtin_string_prototype_char_code_at))) ||
-        (!mal_value_is_undefined(position) && !mal_ops_is_number(position))) return false;
-    f64 index = mal_value_is_undefined(position) ? 0 : mal_ops_number_to_integer_or_infinity(mal_ops_number_as_f64(position));
-    if (index < 0 || index >= (f64) (end - start)) {
-        *out = operation == MAL_STRING_CHARACTER_CODE_POINT_AT ? MAL_VALUE_UNDEFINED : mal_ops_number_value(NAN);
-    } else {
-        MalString *string = mal_value_to_string(subject);
-        usize absolute = start + (usize) index;
-        *out = mal_value_from_i32((i32) (operation == MAL_STRING_CHARACTER_CODE_POINT_AT
-            ? mal_builtin_string_code_point_in_range(string, absolute, end)
-            : mal_string_code_unit_at(string, absolute)));
+    MalNativeFunctionCallback expected;
+    switch (operation) {
+        case MAL_STRING_CHARACTER_AT: expected = mal_builtin_string_prototype_at; break;
+        case MAL_STRING_CHARACTER_CHAR_AT: expected = mal_builtin_string_prototype_char_at; break;
+        case MAL_STRING_CHARACTER_CHAR_CODE_AT: expected = mal_builtin_string_prototype_char_code_at; break;
+        case MAL_STRING_CHARACTER_CODE_POINT_AT: expected = mal_builtin_string_prototype_code_point_at; break;
+        default: return false;
     }
-    if (operation == MAL_STRING_CHARACTER_CODE_POINT_AT) MAL_PERF_COUNT(string_span_code_point_reads);
-    else MAL_PERF_COUNT(string_span_character_reads);
+    if ((!locked && (!mal_value_is_native_function_object(callee) ||
+         mal_native_function_object_callback(mal_value_to_native_function_object(callee)) != expected)) ||
+        (!mal_value_is_undefined(position) && !mal_ops_is_number(position))) return false;
+    *out = mal_builtin_string_character_numeric(vm, mal_value_to_string(subject), start, end,
+        mal_value_is_undefined(position) ? 0 : mal_ops_number_as_f64(position), operation);
+    switch (operation) {
+        case MAL_STRING_CHARACTER_AT: MAL_PERF_COUNT(string_span_at_reads); break;
+        case MAL_STRING_CHARACTER_CHAR_AT: MAL_PERF_COUNT(string_span_char_at_reads); break;
+        case MAL_STRING_CHARACTER_CODE_POINT_AT: MAL_PERF_COUNT(string_span_code_point_reads); break;
+        case MAL_STRING_CHARACTER_CHAR_CODE_AT: MAL_PERF_COUNT(string_span_character_reads); break;
+    }
     return true;
 }
 

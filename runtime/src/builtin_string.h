@@ -212,9 +212,9 @@ static inline u32 mal_builtin_string_code_point_in_range(MalString *string, usiz
 
 // Character positions remain UTF-16 code-unit offsets for every physical encoding.
 static inline MalValue mal_builtin_string_character_numeric(
-    MalVm *vm, MalString *string, f64 position, MalStringCharacterOp operation
+    MalVm *vm, MalString *string, usize start, usize end, f64 position, MalStringCharacterOp operation
 ) {
-    usize length = mal_string_length(string);
+    usize length = end - start;
     position = mal_ops_number_to_integer_or_infinity(position);
     if (operation == MAL_STRING_CHARACTER_AT && position < 0) position += (f64) length;
     if (position < 0 || position >= (f64) length) {
@@ -222,9 +222,9 @@ static inline MalValue mal_builtin_string_character_numeric(
         return operation == MAL_STRING_CHARACTER_CHAR_AT
             ? mal_value_from_string(mal_intrinsic_ascii(vm, "")) : mal_value_new_undefined();
     }
-    usize index = (usize) position;
+    usize index = start + (usize) position;
     if (operation == MAL_STRING_CHARACTER_CODE_POINT_AT)
-        return mal_value_from_i32((i32) mal_builtin_string_code_point_in_range(string, index, length));
+        return mal_value_from_i32((i32) mal_builtin_string_code_point_in_range(string, index, end));
     c16 unit = mal_string_code_unit_at(string, index);
     if (operation == MAL_STRING_CHARACTER_CHAR_CODE_AT) return mal_value_from_i32((i32) unit);
     return mal_value_from_string(mal_intrinsic_code_unit(vm, unit));
@@ -282,8 +282,9 @@ bool mal_builtin_string_range_span_init(
 );
 bool mal_builtin_string_span_equal(MalValue subject, usize start, usize end, MalValue other);
 
+// Callers publish ordinary CALL roots; success may allocate a one-code-unit string.
 bool mal_builtin_string_span_character(
-    MalValue callee, bool locked, MalValue subject, usize start, usize end,
+    MalVm *vm, MalValue callee, bool locked, MalValue subject, usize start, usize end,
     MalValue position, MalStringCharacterOp operation, MalValue *out
 );
 

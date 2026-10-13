@@ -505,15 +505,28 @@ numeric sorting, stack objects, and string projections.
       Implemented through the existing traversal and exact callback entry, preserving
       species, live element reads, early exits, callback effects, and generic fallback.
       All nine methods select the shared transport in both primordial modes; 119
-      focused compiler checks and Node oracles pass. Native verification and
-      measurement remain pending.
+      focused compiler checks, Node oracles, and all three Linux ASan/UBSan checks
+      pass; measurement remains pending.
 - [ ] Carry range spans through nested `slice` and `substring` producers, including
       split fields and regexp captures. Implemented with depth-two continuations,
       separate child roots and materialization slots, and relative UTF-16 bounds.
       Discovery is bounded and transported metadata is independently rederived;
       56 focused checks, Node oracles, and emitted-C syntax checks pass. All four
-      parent kinds select actual regions; native verification and measurement
-      remain pending.
+      parent kinds select actual regions; all three expanded Linux ASan/UBSan checks
+      pass, including realms. Measurement remains pending.
+- [ ] Retain exact comparator invocation on nonnumeric sort pairs and BigInt
+      TypedArray `sort`/`toSorted` inputs. Preserve existing sort algorithms, guarded
+      numeric entries, callback effects, and result coercion on the boxed path.
+      Implemented through the shared exact callback entry without changing sorting
+      algorithms; 23 compiler checks and isolated Array, BigInt, mixed, and realm Node
+      oracles pass. Native verification and measurement remain pending.
+- [ ] Extend shared span character consumers to `charAt` and `at`, including nested
+      ranges; preserve relative indexing, single UTF-16 code-unit results, method
+      identity, coercion order, and root publication when producing strings. Implemented
+      through the shared bounded character helper, with transported consumer validation
+      and ordinary call root publication. Focused compiler and primitive-operation
+      checks, Node oracles, and emitted-C syntax checks pass; native verification and
+      measurement remain pending.
 
 | Order | Slice                        | Owning work and exit condition                                                                                                                                  |
 | ----- | ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |

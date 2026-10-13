@@ -1865,7 +1865,7 @@ static bool mal_ta_compare_callback(
     MalValue call_args[2] = {left, right};
     MalRootSpan call_span;
     mal_gc_root(&call_span, call_args, 2);
-    MalCompletion completion = mal_vm_call_value(
+    MalCompletion completion = mal_vm_call_builtin_callback(
         vm, compare, mal_value_new_undefined(), call_args, 2);
     if (completion.kind != MAL_COMPLETION_NORMAL) {
         mal_gc_unroot(&call_span);

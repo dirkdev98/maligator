@@ -507,4 +507,123 @@ if (process.env.MAL_STRING_SPAN_MUTABLE !== "locked") {
 	observations.push(nestedSlice("x😀z", changing, 2, true, collect));
 	Object.defineProperty(String.prototype, "substring", saved);
 }
+function stringCharacters(source, position, effect) {
+	const kept = effect();
+	const part = source.slice(1, -1);
+	const first = part.charAt(position);
+	const last = part.at(position);
+	effect();
+	return [kept, first, last, last === undefined, part.length, first.length];
+}
+function retainedCharacterState() {
+	collect();
+	return { marker: ["kept", "😀", "\ud800"] };
+}
+for (let repeat = 0; repeat < 4; repeat++)
+	for (const word of [
+		"😀",
+		"\ud800",
+		"\udc00",
+		"a\ud800b",
+		"",
+		"abc",
+		"x".repeat(300) + "𝄞",
+	]) {
+		const source = "x" + word + "z";
+		for (const position of [
+			undefined,
+			NaN,
+			-Infinity,
+			Infinity,
+			-99,
+			-2,
+			-1,
+			-0.5,
+			-0,
+			0,
+			0.9,
+			1,
+			1.8,
+			2,
+			99,
+			"-1",
+			null,
+			true,
+		])
+			observations.push(stringCharacters(source, position, retainedCharacterState));
+	}
+const characterEffects = [];
+observations.push(
+	stringCharacters(
+		"x😀z",
+		{
+			valueOf() {
+				characterEffects.push("position");
+				collect();
+				return -1;
+			},
+		},
+		retainedCharacterState,
+	),
+	characterEffects,
+);
+for (const position of [
+	Symbol("position"),
+	1n,
+	{
+		valueOf() {
+			collect();
+			throw new RangeError("position");
+		},
+	},
+]) {
+	try {
+		stringCharacters("x😀z", position, retainedCharacterState);
+	} catch (error) {
+		observations.push(error.name);
+	}
+}
+if (process.env.MAL_STRING_SPAN_MUTABLE !== "locked") {
+	for (const method of ["charAt", "at"]) {
+		const saved = Object.getOwnPropertyDescriptor(String.prototype, method);
+		const receivers = [];
+		Object.defineProperty(String.prototype, method, {
+			configurable: true,
+			get() {
+				receivers.push(String(this));
+				collect();
+				return saved.value;
+			},
+		});
+		observations.push(stringCharacters("x😀z", -1, retainedCharacterState), receivers);
+		Object.defineProperty(String.prototype, method, saved);
+		observations.push(
+			stringCharacters(
+				"x😀z",
+				{
+					valueOf() {
+						String.prototype[method] = () => "override";
+						collect();
+						return 0;
+					},
+				},
+				retainedCharacterState,
+			),
+		);
+		observations.push(stringCharacters("x😀z", 0, retainedCharacterState));
+		Object.defineProperty(String.prototype, method, saved);
+	}
+}
+function nestedStringCharacters(source, position, effect) {
+	const kept = effect();
+	const parent = source.substring(1, 4);
+	const part = parent.slice(0, 2);
+	const first = part.charAt(position);
+	const last = part.at(position);
+	effect();
+	return [kept, first, last, last === undefined, part.length, parent.length];
+}
+for (const source of ["x😀z", "x\ud800az", "x\udc00z", "xaz", ""])
+	for (const position of [-2, -1, -0.5, 0, 1, 2, undefined])
+		observations.push(nestedStringCharacters(source, position, retainedCharacterState));
 console.log(JSON.stringify(observations));

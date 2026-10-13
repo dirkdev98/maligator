@@ -2890,6 +2890,32 @@
 			"fixture": "cases/string-span-nested.mjs"
 		},
 		{
+			"id": "typed-array-bigint-sort-callback",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "TypedArray sort callback transport",
+			"category": "api-builtins",
+			"mechanisms": ["array-callback"],
+			"inputShape": "BigInt64Array toSorted comparisons retain a captured numeric direction and exact boxed invocation while preserving BigInt elements.",
+			"unit": "sorted element",
+			"sourceSeam": "runtime/src/vm_ops.c",
+			"fixture": "cases/typed-array-bigint-sort-callback.mjs",
+			"controls": ["sorting", "typed-array-operations"]
+		},
+		{
+			"id": "string-span-characters",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "Shared string span character results",
+			"category": "memory-layout-usage",
+			"mechanisms": ["string-allocation", "string-traversal"],
+			"inputShape": "Substring spans with charAt and negative-index at consumers over empty, non-ASCII and surrogate inputs, plus sparse token observations.",
+			"unit": "token",
+			"sourceSeam": "runtime/src/builtin_string.c",
+			"fixture": "cases/string-span-characters.mjs",
+			"controls": ["string-span-code-points", "string-span-nested"]
+		},
+		{
 			"id": "method-name-unique",
 			"group": "runtime",
 			"suite": "runtime",

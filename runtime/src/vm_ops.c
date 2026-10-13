@@ -8903,8 +8903,7 @@ MalCompletion mal_builtin_sort_numeric(
         function_index < vm->runtime_image->function_count &&
         (!via_call || expected == mal_builtin_function_prototype_call) &&
         ((array_sort && mal_value_is_array_object(sort_receiver)) ||
-         (typed_sort && mal_value_is_typed_array_object(sort_receiver) &&
-          mal_value_to_typed_array_object(sort_receiver)->kind < MAL_TA_BIGINT64)) &&
+         (typed_sort && mal_value_is_typed_array_object(sort_receiver))) &&
         mal_value_is_function_object(callback) &&
         mal_function_object_function_index(mal_value_to_function_object(callback)) == function_index;
 #if MAL_REALMS

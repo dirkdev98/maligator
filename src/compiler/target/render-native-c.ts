@@ -1,3 +1,4 @@
+import { CORE_STRING_SPAN_CHARACTER_METHODS } from "../core/core-ir-regions.ts";
 import type { CorePropertyPlacement } from "../core/core-ir-regions.ts";
 import { builtinResultIsInt32 } from "../shared/builtin-registry.ts";
 import {
@@ -6189,6 +6190,12 @@ function emitInstruction(
 	}
 	if (nativeStringSpanAction !== undefined) {
 		const { site, role, consumer } = nativeStringSpanAction;
+		const characterProperty = CORE_STRING_SPAN_CHARACTER_METHODS.find(
+			(method) => role === `${method}Property`,
+		);
+		const characterCall = CORE_STRING_SPAN_CHARACTER_METHODS.find(
+			(method) => role === `${method}Call`,
+		);
 		const { span } = site;
 		const prefix = `__string_span_${site.producerIp}`;
 		const source = `__gc_slots[${site.subjectSlot}]`;
@@ -6299,9 +6306,7 @@ function emitInstruction(
 				instruction.operator === "!==" ? `!${equal}` : equal,
 			);
 		} else if (
-			(role === "charCodeAtProperty" ||
-				role === "codePointAtProperty" ||
-				role === "rangeProperty") &&
+			(characterProperty !== undefined || role === "rangeProperty") &&
 			instruction.opcode === "LOAD_PROPERTY_STATIC"
 		) {
 			const chain = nativeStringCharCodeAtChainAction?.chain;
@@ -6322,10 +6327,16 @@ function emitInstruction(
 				projected = `${resetCapture}r${instruction.dst} = ${callValue(instruction.dst, method)};`;
 			}
 		} else if (
-			(role === "charCodeAtCall" || role === "codePointAtCall") &&
+			characterCall !== undefined &&
 			(instruction.opcode === "CALL" || instruction.opcode === "CALL_KNOWN")
 		) {
 			const result = `${prefix}_code_${ip}`;
+			const operation =
+				characterCall === "charCodeAt"
+					? "CHAR_CODE_AT"
+					: STRING_CHARACTER_KERNELS[`String.prototype.${characterCall}`];
+			if (operation === undefined)
+				throw new Error("Unknown string span character operation");
 			declarations.push(`MalValue ${result};`);
 			const locked =
 				instruction.opcode === "CALL_KNOWN" ||
@@ -6334,7 +6345,7 @@ function emitInstruction(
 				instruction.arguments[0] === undefined
 					? "MAL_VALUE_UNDEFINED"
 					: boxedOperand(instruction.arguments[0]);
-			guard += ` && mal_builtin_string_span_character(${locked ? "MAL_VALUE_UNDEFINED" : boxedOperand(instruction.callee)}, ${locked}, ${source}, ${prefix}_start, ${prefix}_end, ${position}, MAL_STRING_CHARACTER_${role === "codePointAtCall" ? "CODE_POINT_AT" : "CHAR_CODE_AT"}, &${result})`;
+			guard += ` && mal_builtin_string_span_character(vm, ${locked ? "MAL_VALUE_UNDEFINED" : boxedOperand(instruction.callee)}, ${locked}, ${source}, ${prefix}_start, ${prefix}_end, ${position}, MAL_STRING_CHARACTER_${operation}, &${result})`;
 			projected = `r${instruction.dst} = ${callValue(instruction.dst, result)};`;
 		} else if (
 			role === "number" &&
@@ -6356,10 +6367,8 @@ function emitInstruction(
 			`  ${poll()}`,
 			`} else {`,
 			...(role === "number" ||
-			role === "charCodeAtProperty" ||
-			role === "charCodeAtCall" ||
-			role === "codePointAtProperty" ||
-			role === "codePointAtCall" ||
+			characterProperty !== undefined ||
+			characterCall !== undefined ||
 			role === "rangeProperty"
 				? materialize.map((line) => `  ${line}`)
 				: []),
@@ -9098,7 +9107,7 @@ function emitInstruction(
 					if (position !== null) {
 						const result = `character_result_${ip}`;
 						return [
-							`MalValue ${result} = mal_builtin_string_character_numeric(vm, mal_value_to_string(${boxedOperand(instruction.thisValue)}), ${position}, MAL_STRING_CHARACTER_${character});`,
+							`MalValue ${result} = mal_builtin_string_character_numeric(vm, mal_value_to_string(${boxedOperand(instruction.thisValue)}), 0, mal_string_length(mal_value_to_string(${boxedOperand(instruction.thisValue)})), ${position}, MAL_STRING_CHARACTER_${character});`,
 							`r${instruction.dst} = ${callValue(instruction.dst, result)};`,
 							poll(),
 						];

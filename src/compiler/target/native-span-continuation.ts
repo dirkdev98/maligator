@@ -1,3 +1,4 @@
+import { CORE_STRING_SPAN_CHARACTER_METHODS } from "../core/core-ir-regions.ts";
 import type { NativeBodyFacts } from "./native-body-facts.ts";
 import { nativeSpanCharacterCall } from "./native-string-span.ts";
 import {
@@ -166,6 +167,13 @@ export function selectNativeSpanContinuations(
 				callee.dst === op.callee &&
 				String.fromCharCode(...(strings[callee.nameStringIndex] ?? [])) === "Number";
 			let kind: NativeSpanConsumer["kind"];
+			const characterProperty =
+				op.opcode === "LOAD_PROPERTY_STATIC"
+					? CORE_STRING_SPAN_CHARACTER_METHODS.find(
+							(method) =>
+								method === String.fromCharCode(...(strings[op.stringIndex] ?? [])),
+						)
+					: undefined;
 			if (
 				childProperties.has(ip) &&
 				op.opcode === "LOAD_PROPERTY_STATIC" &&
@@ -189,14 +197,9 @@ export function selectNativeSpanContinuations(
 			else if (
 				op.opcode === "LOAD_PROPERTY_STATIC" &&
 				op.object === value &&
-				["charCodeAt", "codePointAt"].includes(
-					String.fromCharCode(...(strings[op.stringIndex] ?? [])),
-				)
+				characterProperty !== undefined
 			)
-				kind =
-					String.fromCharCode(...(strings[op.stringIndex] ?? [])) === "codePointAt"
-						? "codePointAtProperty"
-						: "charCodeAtProperty";
+				kind = `${characterProperty}Property`;
 			else if (
 				(op.opcode === "CALL" || op.opcode === "CALL_KNOWN") &&
 				op.thisValue === value &&

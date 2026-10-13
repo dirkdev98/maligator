@@ -78,7 +78,7 @@ describe("span continuations from split projections", () => {
 		expect(chain.methodIdentity).toBe("authority-invariant");
 		const emitted = emitCompiledFunction(native, 1, "", false)!.source;
 		expect(emitted).toContain(
-			"mal_builtin_string_span_character(MAL_VALUE_UNDEFINED, true,",
+			"mal_builtin_string_span_character(vm, MAL_VALUE_UNDEFINED, true,",
 		);
 		expect(emitted).toContain(`__string_char_code_at_${chain.callIp}_captured = true;`);
 	});
@@ -110,6 +110,8 @@ describe("span continuations from split projections", () => {
 		["number", "charCodeAtCall"],
 		["charCodeAtProperty", "codePointAtProperty"],
 		["charCodeAtCall", "codePointAtCall"],
+		["charCodeAtCall", "charAtCall"],
+		["charCodeAtCall", "atCall"],
 	] as const)("rejects a %s continuation forged as %s", (original, kind) => {
 		const image = compile(
 			"const part=source.split('|')[1]; return part.charCodeAt(escape)+Number(part);",
@@ -407,4 +409,53 @@ describe("bounded nested range continuations", () => {
 			),
 		).toBe(true);
 	});
+});
+
+describe("string character continuation results", () => {
+	it.each(["mutable", "locked"] as const)(
+		"keeps string outputs rooted across projected and nested spans under %s primordials",
+		(mode) => {
+			for (const producer of [
+				"source.split('|')[1]",
+				"observe.exec(source)[1]",
+				"source.slice(1,-1).substring(0,2)",
+			])
+				for (const method of ["charAt", "at"] as const) {
+					const image = compile(
+						`const kept=observe();const part=${producer};${producer.includes(".slice(") ? "" : "if(part===undefined)return kept;"}const character=part.${method}(escape);observe();return [kept,character,part.length];`,
+						mode,
+					);
+					const native = image.native.functions[1]!;
+					const consumers = [
+						...native.storage!.spanContinuations.flatMap((plan) => plan.consumers),
+						...native.specializations.flatMap((region) =>
+							region.kind === "string-span" ? region.consumers : [],
+						),
+					];
+					const consumer = consumers.find((value) => value.kind === `${method}Call`)!;
+					expect(consumer, producer).toBeDefined();
+					const call = native.body.instructions[consumer.ip]!;
+					if (call.opcode !== "CALL" && call.opcode !== "CALL_KNOWN")
+						throw new Error("character call missing");
+					const point = native.gc.safepoints.find(
+						(point) => point.instructionIp === consumer.ip,
+					)!;
+					const retained = native.body.instructions.find(
+						(instruction) => instruction.opcode === "CALL",
+					)!;
+					if (retained.opcode !== "CALL") throw new Error("retained call missing");
+					expect(point.incomingRootRegisters).toContain(retained.dst);
+					expect(point.outgoingRootRegisters).toContain(call.dst);
+					expect(native.storage!.rootRegisters).toContain(call.dst);
+					const emitted = emitCompiledFunction(native, 1, "", false)!.source;
+					expect(emitted).toContain("mal_builtin_string_span_character(vm,");
+					expect(emitted).toContain(
+						`MAL_STRING_CHARACTER_${method === "at" ? "AT" : "CHAR_AT"}`,
+					);
+					expect(deserializeCompilerArtifact(serializeCompilerArtifact(image))).toEqual(
+						image,
+					);
+				}
+		},
+	);
 });

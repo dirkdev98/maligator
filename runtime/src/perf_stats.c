@@ -900,6 +900,9 @@ static void mal_perf_stats_print(void) {
         (unsigned long long) mal_perf_stats.object_keys_snapshot_materializations);
     fprintf(stderr, "[perf-string-span-character-stats] reads=%llu\n",
         (unsigned long long) mal_perf_stats.string_span_character_reads);
+    fprintf(stderr, "[perf-string-span-string-character-stats] char_at=%llu at=%llu\n",
+        (unsigned long long) mal_perf_stats.string_span_char_at_reads,
+        (unsigned long long) mal_perf_stats.string_span_at_reads);
     fprintf(stderr, "[perf-string-span-code-point-stats] reads=%llu\n",
         (unsigned long long) mal_perf_stats.string_span_code_point_reads);
     fprintf(stderr, "[perf-string-span-nested-stats] admissions=%llu\n",

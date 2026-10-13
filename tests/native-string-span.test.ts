@@ -276,3 +276,102 @@ describe("composable string spans", () => {
 		).toThrow(/string-span/);
 	});
 });
+
+describe("string-valued span character consumers", () => {
+	it.each(["mutable", "locked"] as const)(
+		"retains charAt and at results under %s primordials",
+		(mode) => {
+			for (const method of ["charAt", "at"] as const)
+				for (const operation of ["slice", "substring"] as const) {
+					const image = compile(
+						`const kept=observer(); const part=value.${operation}(start,end); const character=part.${method}(escape); observer(); return [kept,character,character===undefined,part.length];`,
+						mode,
+					);
+					const native = image.native.functions[1]!;
+					const region = spans(image)[0]!;
+					expect(region).toBeDefined();
+					const consumer = region.consumers.find(
+						(value) => value.kind === `${method}Call`,
+					)!;
+					expect(consumer).toBeDefined();
+					const call = native.body.instructions[consumer.ip]!;
+					expect(call.opcode).toMatch(/^CALL/);
+					if (call.opcode !== "CALL" && call.opcode !== "CALL_KNOWN")
+						throw new Error("character call missing");
+					const retained = native.body.instructions.find((op) => op.opcode === "CALL")!;
+					if (retained.opcode !== "CALL") throw new Error("retained call missing");
+					const point = native.gc.safepoints.find(
+						(point) => point.instructionIp === consumer.ip,
+					)!;
+					expect(point.incomingRootRegisters).toContain(retained.dst);
+					expect(point.outgoingRootRegisters).toContain(call.dst);
+					expect(native.storage!.rootRegisters).toContain(call.dst);
+					if (method === "at")
+						expect(native.registerRepresentations[call.dst]).toBe("boxed");
+					expect(deserializeCompilerArtifact(serializeCompilerArtifact(image))).toEqual(
+						image,
+					);
+				}
+		},
+	);
+	it.each(["charAt", "at"] as const)(
+		"preserves the rooted result of known %s calls",
+		(method) => {
+			const image = compile(
+				`const kept=observer();const part="x😀z".substring(start,end);const character=part.${method}(escape);observer();return [kept,character,character===undefined,part.length];`,
+				"locked",
+			);
+			const native = image.native.functions[1]!;
+			const region = spans(image)[0]!;
+			const consumer = region.consumers.find(
+				(consumer) => consumer.kind === `${method}Call`,
+			)!;
+			const call = native.body.instructions[consumer.ip]!;
+			expect(call.opcode).toBe("CALL_KNOWN");
+			if (call.opcode !== "CALL_KNOWN") throw new Error("known character call missing");
+			expect(native.registerRepresentations[call.dst]).toBe(
+				method === "charAt" ? "string" : "boxed",
+			);
+			expect(
+				native.gc.safepoints.find((point) => point.instructionIp === consumer.ip)!
+					.outgoingRootRegisters,
+			).toContain(call.dst);
+			expect(native.storage!.privateCallResultIps).not.toContain(consumer.ip);
+			expect(deserializeCompilerArtifact(serializeCompilerArtifact(image))).toEqual(
+				image,
+			);
+		},
+	);
+	it.each(["charAt", "at"] as const)(
+		"rejects a forged %s character operation",
+		(method) => {
+			const image = compile(
+				`const part=value.slice(start,end);return [part.${method}(escape),part.length];`,
+			);
+			const native = image.native.functions[1]!;
+			const region = spans(image)[0]!;
+			const forged = {
+				...region,
+				consumers: region.consumers.map((consumer) =>
+					consumer.kind === `${method}Call`
+						? { ...consumer, kind: "codePointAtCall" as const }
+						: consumer,
+				),
+			};
+			expect(() =>
+				serializeCompilerArtifact({
+					...image,
+					native: {
+						...image.native,
+						functions: image.native.functions.with(1, {
+							...native,
+							specializations: native.specializations.map((entry) =>
+								entry === region ? forged : entry,
+							),
+						}),
+					},
+				}),
+			).toThrow(/string-span|stale/);
+		},
+	);
+});

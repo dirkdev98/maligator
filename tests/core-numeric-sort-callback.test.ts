@@ -101,6 +101,32 @@ describe("numeric sort callback entries", () => {
 		}
 	});
 
+	it.each(["sort", "toSorted"])(
+		"retains a guarded numeric contract for nonnumeric operands at %s sites",
+		(operation) => {
+			for (const receiver of [
+				"['3', '1', '2']",
+				"new BigInt64Array([3n, 1n, 2n])",
+				"new BigUint64Array([3n, 1n, 2n])",
+			]) {
+				const image = deserializeCompilerArtifact(
+					serializeCompilerArtifact(
+						compile("return a < b ? -1 : a > b ? 1 : 0;", operation, receiver),
+					),
+				);
+				const plans = callbackPlans(image);
+				expect(plans).toHaveLength(1);
+				const callback = plans[0]!.numericSortCallback!;
+				const fn = image.native.functions[callback.functionIndex]!;
+				expect(fn.directEntries[callback.entryId]!.parameterRepresentations).toEqual([
+					"number",
+					"number",
+				]);
+				expect(fn.directEntries[callback.entryId]!.resultRepresentation).toBe("number");
+			}
+		},
+	);
+
 	it.each([
 		"globalThis.args = arguments; return a - b;",
 		"return arguments[2];",

@@ -214,4 +214,113 @@ if (typeof process !== "undefined" && process.env.MAL_SPAN_MUTABLE === "mutable"
 	rows.push(classify("ignored", false), calls);
 	String.prototype.split = original;
 }
+function stringCharacters(source, position, effect) {
+	const kept = effect();
+	const part = source.split("|")[1];
+	if (part === undefined) return "missing";
+	const first = part.charAt(position);
+	const last = part.at(position);
+	effect();
+	return [kept, first, last, last === undefined, part.length, first.length];
+}
+function retainedCharacterState() {
+	observe();
+	return { marker: ["kept", "😀", "\ud800"] };
+}
+for (let repeat = 0; repeat < 4; repeat++)
+	for (const word of [
+		"😀",
+		"\ud800",
+		"\udc00",
+		"a\ud800b",
+		"",
+		"abc",
+		"x".repeat(300) + "𝄞",
+	]) {
+		const source = "x|" + word + "|z";
+		for (const position of [
+			undefined,
+			NaN,
+			-Infinity,
+			Infinity,
+			-99,
+			-2,
+			-1,
+			-0.5,
+			-0,
+			0,
+			0.9,
+			1,
+			1.8,
+			2,
+			99,
+			"-1",
+			null,
+			true,
+		])
+			rows.push(stringCharacters(source, position, retainedCharacterState));
+	}
+const characterEffects = [];
+rows.push(
+	stringCharacters(
+		"x|😀|z",
+		{
+			valueOf() {
+				characterEffects.push("position");
+				observe();
+				return -1;
+			},
+		},
+		retainedCharacterState,
+	),
+	characterEffects,
+);
+for (const position of [
+	Symbol("position"),
+	1n,
+	{
+		valueOf() {
+			observe();
+			throw new RangeError("position");
+		},
+	},
+]) {
+	try {
+		stringCharacters("x|😀|z", position, retainedCharacterState);
+	} catch (error) {
+		rows.push(error.name);
+	}
+}
+if (process.env.MAL_SPAN_MUTABLE !== "locked") {
+	for (const method of ["charAt", "at"]) {
+		const saved = Object.getOwnPropertyDescriptor(String.prototype, method);
+		const receivers = [];
+		Object.defineProperty(String.prototype, method, {
+			configurable: true,
+			get() {
+				receivers.push(String(this));
+				observe();
+				return saved.value;
+			},
+		});
+		rows.push(stringCharacters("x|😀|z", -1, retainedCharacterState), receivers);
+		Object.defineProperty(String.prototype, method, saved);
+		rows.push(
+			stringCharacters(
+				"x|😀|z",
+				{
+					valueOf() {
+						String.prototype[method] = () => "override";
+						observe();
+						return 0;
+					},
+				},
+				retainedCharacterState,
+			),
+		);
+		rows.push(stringCharacters("x|😀|z", 0, retainedCharacterState));
+		Object.defineProperty(String.prototype, method, saved);
+	}
+}
+rows.push(stringCharacters("missing", -1, retainedCharacterState));
 console.log(JSON.stringify(rows));

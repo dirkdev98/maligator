@@ -13,6 +13,7 @@ import {
 } from "./core-ir-loops.ts";
 import type { CoreLoopInductionAnalysis } from "./core-ir-loops.ts";
 import { coreTargetSupportsNumericFusionOperator } from "./core-ir-region-strategies.ts";
+import { CORE_STRING_SPAN_CHARACTER_METHODS } from "./core-ir-regions.ts";
 import type {
 	CoreStringSpanConsumer,
 	CoreStackObjectMaterialization,
@@ -3719,6 +3720,9 @@ function stringSpanCandidates(
 			}
 			const value = instructionOperand(fn, instruction, use.position)!;
 			let kind: CoreStringSpanConsumer["kind"] = "materialize";
+			const characterProperty = CORE_STRING_SPAN_CHARACTER_METHODS.find((method) =>
+				staticPropertyNamed(program, fn, instruction, method),
+			);
 			if (
 				opcode === "loadPropertyStatic" &&
 				use.position === 0 &&
@@ -3728,12 +3732,9 @@ function stringSpanCandidates(
 			else if (
 				opcode === "loadPropertyStatic" &&
 				use.position === 0 &&
-				(staticPropertyNamed(program, fn, instruction, "charCodeAt") ||
-					staticPropertyNamed(program, fn, instruction, "codePointAt"))
+				characterProperty !== undefined
 			)
-				kind = staticPropertyNamed(program, fn, instruction, "codePointAt")
-					? "codePointAtProperty"
-					: "charCodeAtProperty";
+				kind = `${characterProperty}Property`;
 			else if (
 				(opcode === "call" &&
 					use.position === 1 &&
@@ -3748,21 +3749,18 @@ function stringSpanCandidates(
 						? specializationDefinition(fn, roots, instructionOperand(fn, instruction, 0)!)
 						: undefined;
 				const position = instructionOperand(fn, instruction, opcode === "call" ? 2 : 1);
+				const characterMethod = CORE_STRING_SPAN_CHARACTER_METHODS.find((name) =>
+					opcode === "callKnown"
+						? callAttrs.operation === `String.prototype.${name}`
+						: staticPropertyNamed(program, fn, method, name),
+				);
 				if (
 					!callAttrs.construct &&
 					callAttrs.argumentMode === undefined &&
 					(position === undefined || root(position) !== resultRoot) &&
-					(opcode === "callKnown"
-						? callAttrs.operation === "String.prototype.charCodeAt" ||
-							callAttrs.operation === "String.prototype.codePointAt"
-						: staticPropertyNamed(program, fn, method, "charCodeAt") ||
-							staticPropertyNamed(program, fn, method, "codePointAt"))
+					characterMethod !== undefined
 				)
-					kind =
-						callAttrs.operation === "String.prototype.codePointAt" ||
-						staticPropertyNamed(program, fn, method, "codePointAt")
-							? "codePointAtCall"
-							: "charCodeAtCall";
+					kind = `${characterMethod}Call`;
 			} else if (
 				opcode === "binary" &&
 				(fn.instructionAttributes(instruction).operator === "===" ||

@@ -147,6 +147,13 @@ export interface CorePlanStringSplitProjectionSpecialization extends CorePlanSpe
 	};
 }
 
+export const CORE_STRING_SPAN_CHARACTER_METHODS = [
+	"charCodeAt",
+	"codePointAt",
+	"charAt",
+	"at",
+] as const;
+
 export interface CoreStringSpanConsumer {
 	readonly instruction: CoreInstructionId;
 	readonly value: CoreValueId;
@@ -158,6 +165,10 @@ export interface CoreStringSpanConsumer {
 		| "charCodeAtCall"
 		| "codePointAtProperty"
 		| "codePointAtCall"
+		| "charAtProperty"
+		| "charAtCall"
+		| "atProperty"
+		| "atCall"
 		| "materialize";
 }
 

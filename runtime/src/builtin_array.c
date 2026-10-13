@@ -3647,8 +3647,11 @@ static bool mal_builtin_array_sort_order(
         MalValue args[] = {left, right};
         MalRootSpan args_span;
         mal_gc_root(&args_span, args, 2);
-        MalCompletion completion = mal_vm_call_cached(
-            vm, comparator_cache, comparator, mal_value_new_undefined(), args, 2);
+        MalExactScriptCall *exact = vm->exact_script_call;
+        MalCompletion completion = exact != nullptr && exact->callee == comparator
+            ? mal_vm_call_builtin_callback(vm, comparator, mal_value_new_undefined(), args, 2)
+            : mal_vm_call_cached(
+                vm, comparator_cache, comparator, mal_value_new_undefined(), args, 2);
         if (completion.kind != MAL_COMPLETION_NORMAL) {
             mal_gc_unroot(&args_span);
             vm->completion = completion;

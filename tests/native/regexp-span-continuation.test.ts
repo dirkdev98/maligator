@@ -103,6 +103,12 @@ describe("regexp capture span continuations", () => {
 			);
 			expect(characters).not.toBeNull();
 			expect(Number(characters![1])).toBeGreaterThan(0);
+			const stringCharacters = measured.stderr.match(
+				/\[perf-string-span-string-character-stats\] char_at=(\d+) at=(\d+)/,
+			);
+			expect(stringCharacters).not.toBeNull();
+			expect(Number(stringCharacters![1])).toBeGreaterThan(0);
+			expect(Number(stringCharacters![2])).toBeGreaterThan(0);
 			const codePoints = measured.stderr.match(
 				/\[perf-string-span-code-point-stats\] reads=(\d+)/,
 			);

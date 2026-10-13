@@ -17,7 +17,7 @@ const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-string-span-"));
 afterAll(() => rmSync(outDir, { recursive: true, force: true }));
 
 describe("composable string spans", () => {
-	it("retains captured code-point method realms during coercing fallback", () => {
+	it("retains captured character method realms during coercing fallback", () => {
 		const realmFixture = "tests/local/string-span-code-points-realms.js";
 		const expected = execFileSync(
 			process.execPath,
@@ -118,6 +118,12 @@ describe("composable string spans", () => {
 			);
 			expect(characters).not.toBeNull();
 			expect(Number(characters![1])).toBeGreaterThan(0);
+			const stringCharacters = measured.stderr.match(
+				/\[perf-string-span-string-character-stats\] char_at=(\d+) at=(\d+)/,
+			);
+			expect(stringCharacters).not.toBeNull();
+			expect(Number(stringCharacters![1])).toBeGreaterThan(0);
+			expect(Number(stringCharacters![2])).toBeGreaterThan(0);
 			const codePoints = measured.stderr.match(
 				/\[perf-string-span-code-point-stats\] reads=(\d+)/,
 			);
