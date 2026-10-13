@@ -52,11 +52,19 @@ import {
 	coreFieldArgument,
 	coreReadOnlyParameterFields,
 } from "./core-native-field-analysis.ts";
+import { coreModulePrivateNames } from "./core-private-names.ts";
+import type { CoreModulePrivateNameIndex } from "./core-private-names.ts";
 import {
 	CORE_PROGRAM_FLOW_ANALYSIS,
 	CORE_PROGRAM_VALUE_KIND_ANALYSIS,
 } from "./core-program-flow-analysis.ts";
 import type { CoreProgramFlowState } from "./core-program-flow-analysis.ts";
+import {
+	expandCoreReadAccessorRegion,
+	coreReadAccessorRegionCost,
+	EMPTY_CORE_READ_ACCESSOR_WORK,
+} from "./core-read-accessor-expansion.ts";
+import type { CoreReadAccessorWork } from "./core-read-accessor-expansion.ts";
 import { specializeCoreStaticArguments } from "./core-static-value-calls.ts";
 import type { CoreChangeSet, CoreFunctionStore, CoreProgram } from "./core-store.ts";
 import {
@@ -70,7 +78,8 @@ import type {
 } from "./core-transform-candidates.ts";
 import { virtualizeGuardedCallbackEnvironment } from "./core-virtual-captures.ts";
 
-export interface CoreCrossCallTransformStatistics extends CoreTransformBudgetStatistics {
+export interface CoreCrossCallTransformStatistics
+	extends CoreTransformBudgetStatistics, Readonly<CoreReadAccessorWork> {
 	readonly waves: number;
 	readonly callerEditSessions: number;
 	readonly callerLocalOptimizations: number;
@@ -94,6 +103,15 @@ interface AppliedTransform {
 	readonly instructionsIntroduced: number;
 	readonly blocksIntroduced: number;
 }
+
+const readAccessorInputs = new WeakMap<
+	CoreProgram,
+	{
+		names: CoreModulePrivateNameIndex;
+		hints: ReadonlyMap<number, ReadonlyArray<CoreFunctionId>>;
+		work?: CoreReadAccessorWork;
+	}
+>();
 
 interface InlineTarget {
 	readonly argumentSnapshots: boolean;
@@ -1243,11 +1261,37 @@ function inlinePriorityScore(
 	loopFrequency: number,
 	generatedCodeCost: number,
 	addedRuntimeCost: number,
+	loopPrefixCount = 0,
 ): number {
 	const weights = CORE_GENERATED_CODE_COST_WEIGHTS.runtime;
 	// Inlining removes one dispatch; the callee body still executes, even with many targets.
 	const savedWork = Math.max(0, weights.helperCall - addedRuntimeCost);
-	return -(loopFrequency * savedWork) / Math.max(1, generatedCodeCost);
+	const prefixWork = Math.max(
+		0,
+		loopPrefixCount * (weights.helperCall - weights.rootSlot) - weights.guard,
+	);
+	// Retained prefixes remove probes after admission; their boxed roots still cross each edge.
+	const reuseWork = Math.max(0, loopFrequency - 1) * prefixWork;
+	return -(loopFrequency * savedWork + reuseWork) / Math.max(1, generatedCodeCost);
+}
+
+function coreInstanceMethodHintsForAccessor(
+	fn: CoreFunctionStore,
+	callee: CoreValueId,
+	receiver: CoreValueId | undefined,
+	hints: ReadonlyMap<number, ReadonlyArray<CoreFunctionId>>,
+	summaries: CoreProgramSummaries,
+	privateNames: CoreModulePrivateNameIndex,
+): boolean {
+	const target = coreInstanceMethodHint(fn, callee, receiver, hints);
+	const accessor =
+		target === undefined ? undefined : summaries.summary(target)?.readAccessor;
+	return (
+		accessor !== undefined &&
+		accessor.reads.every(
+			(read) => read.kind !== "private" || privateNames.validSlot(read.slot),
+		)
+	);
 }
 
 function offerFunctionCandidates(
@@ -1259,11 +1303,15 @@ function offerFunctionCandidates(
 	instanceMethodHints: ReadonlyMap<number, ReadonlyArray<CoreFunctionId>>,
 	fieldEntryNominees: ReadonlyMap<number, number>,
 	capturedCells: () => CapturedCellWrites,
+	privateNames: CoreModulePrivateNameIndex,
+	readAccessors: boolean,
+	accessorWork?: CoreReadAccessorWork,
 ): void {
 	const fn = program.function(functionId);
 	const outgoing = summaries.targets.outgoing(functionId);
 	const globalTargetUses = new Map<CoreFunctionId, number>();
 	const blockFrequencies = new Map<CoreBlockId, number>();
+	const offeredReadAccessorSites = new Set<CoreInstructionId>();
 	for (const site of outgoing) {
 		const target =
 			site.targets.functions.length === 1 ? site.targets.functions[0] : undefined;
@@ -1437,11 +1485,28 @@ function offerFunctionCandidates(
 			exactTarget === undefined &&
 			site.targets.functions.length === 0 &&
 			coreCalleeTargetsAreOpen(site.targets) &&
-			inLoop
+			(inLoop ||
+				(readAccessors &&
+					coreInstanceMethodHintsForAccessor(
+						fn,
+						site.callee,
+						site.receiver,
+						instanceMethodHints,
+						summaries,
+						privateNames,
+					)))
 				? coreInstanceMethodHint(fn, site.callee, site.receiver, instanceMethodHints)
 				: undefined;
 		const target = exactTarget ?? hintedTarget;
 		if (target === undefined) continue;
+		const accessor = summaries.summary(target)?.readAccessor;
+		let readAccessor =
+			readAccessors &&
+			invocation === "call" &&
+			accessor !== undefined &&
+			accessor.reads.every(
+				(read) => read.kind !== "private" || privateNames.validSlot(read.slot),
+			);
 		const open = hintedTarget !== undefined || coreCalleeTargetsAreOpen(site.targets);
 		// Primitive literals can sink into guarded misses; heap fields must retain their lifetime.
 		if (
@@ -1512,25 +1577,57 @@ function offerFunctionCandidates(
 			(inline?.linear === false ? inline.blocks.length : 0) +
 			consumerDuplication +
 			(open ? 1 : 0);
-		service.offer(
+		const regionCost = readAccessor
+			? coreReadAccessorRegionCost(
+					program,
+					summaries,
+					{
+						caller: functionId,
+						site: site.instruction,
+						targets: [target],
+						...(inLoop ? { readAccessorLoopEligible: true as const } : {}),
+					},
+					instanceMethodHints,
+					accessorWork,
+				)
+			: undefined;
+		if (readAccessor && regionCost === undefined) {
+			if (hintedTarget !== undefined && !inLoop) continue;
+			readAccessor = false;
+		}
+		if (
+			regionCost?.sites.some((instruction) => offeredReadAccessorSites.has(instruction))
+		)
+			continue;
+		const offered = service.offer(
 			Object.freeze({
-				kind: open ? "guarded-inline" : "inline",
+				kind: readAccessor
+					? open
+						? "guarded-read-accessor"
+						: "read-accessor"
+					: open
+						? "guarded-inline"
+						: "inline",
 				caller: functionId,
 				site: site.instruction,
 				revision: summaries.version(target),
 				priorityClass: hintedTarget !== undefined ? 3 : 2,
 				priorityScore: inlinePriorityScore(
-					loopFrequency,
-					generatedCodeCost,
+					loopFrequency * (regionCost?.sites.length ?? 1),
+					regionCost?.generatedCode ?? generatedCodeCost,
 					open ? CORE_GENERATED_CODE_COST_WEIGHTS.runtime.guard : 0,
+					regionCost?.loopPrefixCount,
 				),
 				targets: Object.freeze([target]),
-				generatedCodeCost,
+				...(regionCost === undefined ? {} : { readAccessorRegion: regionCost.plan }),
+				...(inLoop && readAccessor ? { readAccessorLoopEligible: true as const } : {}),
+				generatedCodeCost: regionCost?.generatedCode ?? generatedCodeCost,
 				compilerWorkCost:
+					regionCost?.compilerWork ??
 					(inline?.instructions.length ?? 0) +
-					(inline?.function.valueCapacity ?? 0) +
-					consumerDuplication +
-					(open ? 4 : 1),
+						(inline?.function.valueCapacity ?? 0) +
+						consumerDuplication +
+						(open ? 4 : 1),
 				expansive: localCaptureContext === undefined,
 				...(target === functionId
 					? { unsupportedReason: "recursive" as const }
@@ -1541,6 +1638,11 @@ function offerFunctionCandidates(
 							: {}),
 			}),
 		);
+		if (offered && regionCost !== undefined) {
+			if (accessorWork !== undefined) accessorWork.accessorRegionsOffered++;
+			for (const instruction of regionCost.sites)
+				offeredReadAccessorSites.add(instruction);
+		}
 	}
 }
 
@@ -1562,6 +1664,8 @@ export function discoverCoreCrossCallCandidates(
 	service: CoreTransformCandidateService,
 	liveFunctions: ReadonlySet<CoreFunctionId>,
 	functions: Iterable<CoreFunctionId> = program.functionIds(),
+	readAccessors = true,
+	accessorWork?: CoreReadAccessorWork,
 ): void {
 	const instanceMethodHints = coreInstanceMethodHints(program);
 	const fieldEntryNominees = nativeFieldEntryNominees(program, liveFunctions);
@@ -1574,6 +1678,12 @@ export function discoverCoreCrossCallCandidates(
 		}
 		return cells;
 	};
+	const privateNames = coreModulePrivateNames(program, analyses.compilationContext);
+	readAccessorInputs.set(program, {
+		names: privateNames,
+		hints: instanceMethodHints,
+		work: accessorWork,
+	});
 	for (const functionId of functions) {
 		offerFunctionCandidates(
 			program,
@@ -1584,6 +1694,9 @@ export function discoverCoreCrossCallCandidates(
 			instanceMethodHints,
 			fieldEntryNominees,
 			capturedCells,
+			privateNames,
+			readAccessors,
+			accessorWork,
 		);
 	}
 }
@@ -2488,6 +2601,21 @@ function applyCandidate(
 			return applyLinearInline(program, candidate, editor);
 		case "guarded-inline":
 			return applyGuardedInline(program, candidate, editor);
+		case "read-accessor":
+		case "guarded-read-accessor": {
+			const input = readAccessorInputs.get(program);
+			return input === undefined
+				? undefined
+				: expandCoreReadAccessorRegion(
+						program,
+						summaries,
+						input.names,
+						candidate,
+						editor,
+						input.hints,
+						input.work,
+					);
+		}
 	}
 }
 
@@ -2517,6 +2645,7 @@ export function emptyCoreCrossCallTransformResult(
 		localPlanInputs: Object.freeze([]),
 		statistics: Object.freeze({
 			...budget,
+			...EMPTY_CORE_READ_ACCESSOR_WORK,
 			waves: 0,
 			callerEditSessions: 0,
 			callerLocalOptimizations: 0,
@@ -2605,10 +2734,19 @@ export function runCoreCrossCallTransforms(
 	limits?: CoreTransformBudgetLimits,
 	initialFlow?: CoreProgramFlowState,
 	candidateService?: CoreTransformCandidateService,
+	readAccessors = true,
+	collectAccessorWork = false,
 ): CoreCrossCallTransformResult {
 	const phaseLimits = limits ?? DEFAULT_CORE_TRANSFORM_BUDGETS;
 	const service = candidateService ?? new CoreTransformCandidateService(phaseLimits);
 	const budgetBaseline = service.statistics();
+	const accessorWork: CoreReadAccessorWork | undefined = collectAccessorWork
+		? {
+				...EMPTY_CORE_READ_ACCESSOR_WORK,
+				accessorApplications: [],
+				accessorLoopApplications: [],
+			}
+		: undefined;
 	let flow =
 		initialFlow ?? analyses.get(CORE_PROGRAM_FLOW_ANALYSIS, { scope: "program" });
 	let summaries = flow.summaries;
@@ -2671,6 +2809,8 @@ export function runCoreCrossCallTransforms(
 			service,
 			new Set(flow.reachability.liveFunctions),
 			undefined,
+			readAccessors,
+			accessorWork,
 		);
 		const foldsByCaller = discoverProgramValueKindObservations(
 			program,
@@ -2714,6 +2854,8 @@ export function runCoreCrossCallTransforms(
 			if (
 				candidate.kind === "inline" ||
 				candidate.kind === "guarded-inline" ||
+				candidate.kind === "read-accessor" ||
+				candidate.kind === "guarded-read-accessor" ||
 				candidate.kind === "array-iteration-inline"
 			) {
 				published = true;
@@ -2795,6 +2937,7 @@ export function runCoreCrossCallTransforms(
 		localPlanInputs: Object.freeze([...localPlanInputs.values()]),
 		statistics: Object.freeze({
 			...budget,
+			...(accessorWork ?? EMPTY_CORE_READ_ACCESSOR_WORK),
 			waves,
 			callerEditSessions,
 			callerLocalOptimizations,

@@ -1260,6 +1260,18 @@ export type BytecodeInstruction =
 			key: number;
 			value: number;
 	  }
+	| { opcode: "READ_SERVICE_EPOCH"; dst: number }
+	| { opcode: "GUARD_SERVICE_EPOCH"; dst: number; epoch: number }
+	| ({
+			opcode: "PROBE_READ";
+			dst: number;
+			success: number;
+			object: number;
+			key: number;
+	  } & (
+			| { readKind: "named"; stringIndex: number; icIndex: number }
+			| { readKind: "private" | "indexed"; stringIndex?: undefined }
+	  ))
 	| {
 			opcode: "HAS_PRIVATE";
 			dst: number;
@@ -1404,6 +1416,8 @@ export function vmInstructionWriteRegisters(
 			return [instruction.valueDst, instruction.doneDst];
 		case "LOAD_STATIC_ARGUMENT":
 			return [instruction.dst, instruction.fallback];
+		case "PROBE_READ":
+			return [instruction.dst, instruction.success];
 		case "WITH_SET":
 			return [instruction.found];
 		default: {
@@ -1414,6 +1428,7 @@ export function vmInstructionWriteRegisters(
 }
 
 const VM_REGISTER_USE_FIELDS = [
+	"epoch",
 	"prefixLength",
 	"part",
 	"src",
@@ -2080,6 +2095,26 @@ export function validateRuntimeImageMetadata(definition: RuntimeImage): void {
 					instruction.methodFunctionIndex >= definition.functionCount
 				)
 					throw new RangeError("invalid constructor layout guard");
+				continue;
+			}
+			if (instruction.opcode === "PROBE_READ") {
+				if (
+					!["private", "named", "indexed"].includes(instruction.readKind) ||
+					[
+						instruction.dst,
+						instruction.success,
+						instruction.object,
+						instruction.key,
+					].some(
+						(register) =>
+							!isNonnegativeSafeInteger(register) || register >= fn.registerCount,
+					) ||
+					(instruction.readKind === "named"
+						? !isNonnegativeSafeInteger(instruction.stringIndex) ||
+							instruction.stringIndex >= definition.stringConstants.length
+						: instruction.stringIndex !== undefined)
+				)
+					throw new RangeError("invalid data-read probe");
 				continue;
 			}
 			if (instruction.opcode === "PRECISE_NUMBER_SUM") {
@@ -3317,6 +3352,10 @@ function lowerExecutionFunctionToBytecode(
 							};
 			}
 			switch (vmInstruction.opcode) {
+				case "PROBE_READ":
+					if (vmInstruction.readKind === "named")
+						vmInstruction.icIndex = propertyIcIndexByInstruction.get(instruction)!;
+					break;
 				case "LOAD_PROPERTY":
 				case "LOAD_PROPERTY_STATIC":
 				case "LOAD_PROPERTY_STATIC_ARRAY_LENGTH":
@@ -4183,6 +4222,25 @@ function lowerInstructionToBytecodeInstruction(
 				dst: instruction.registers[0],
 				object: instruction.registers[1],
 				key: instruction.registers[2],
+			};
+		case "guardServiceEpoch":
+			return {
+				opcode: "GUARD_SERVICE_EPOCH",
+				dst: instruction.registers[0],
+				epoch: instruction.registers[1],
+			};
+		case "readServiceEpoch":
+			return { opcode: "READ_SERVICE_EPOCH", dst: instruction.registers[0] };
+		case "probeRead":
+			return {
+				opcode: "PROBE_READ",
+				dst: instruction.registers[0],
+				success: instruction.registers[1],
+				object: instruction.registers[2],
+				key: instruction.registers[3],
+				...(instruction.readKind === "named"
+					? { readKind: "named", stringIndex: instruction.stringIndex!, icIndex: -1 }
+					: { readKind: instruction.readKind, stringIndex: undefined }),
 			};
 		case "storePrivate":
 			return {

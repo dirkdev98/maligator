@@ -267,7 +267,7 @@ Capture records HEAD plus a digest of pending changes, the tracked patch, exact
 prepared source and binary hashes, lockfile, Node/host identity, and native build
 plan/toolchain. Comparison refuses modified captures or different preparation,
 dependencies, hosts, and native plans. Every run compiles the baseline capture's
-input and must exactly match its Node output oracle in both emitted C and stripped
+input and must exactly match its revision's Node output oracle in both emitted C and stripped
 runtime-image bytes. Runtime serialization and file writes count toward `writeMs`;
 raw byte hashing happens after the measured compiler process exits. Capture schema 5
 requires fresh captures using this protocol; its timings include serialization and
@@ -280,6 +280,13 @@ so the resulting native executables can still be checked against an exact Node
 oracle. Each capture preserves the frozen source and its original manifest digest.
 This isolates the speed of the generated native program; measuring a changed
 compiler's own output still requires semantic benchmarks when emitted C differs.
+
+Warm comparisons require each capture's native output to match its own Node
+output on the same frozen baseline input.
+Different revisions may generate different code; semantic fixtures establish
+observable behavior across revisions. This protocol adds a second Node oracle and
+retains it in `oracle-candidate.json`. Use `--shared-oracle` only when identical
+generated output across revisions is part of the experiment's contract.
 
 For a guarded direct-call ablation, capture both compilers from one frozen program
 source and pass `--ablate-core-family guarded-direct-call` only to the candidate

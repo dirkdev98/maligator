@@ -40,6 +40,7 @@ tests/native/native-number-record-regions.test.ts
 tests/native/native-integer-loop-regions.test.ts
 tests/native/async-projection-regions.test.ts
 tests/native/module-private-classes.test.ts
+tests/native/read-accessor-regions.test.ts
 tests/native/static-property-projection.test.ts
 tests/native/symbol-registry-reuse.test.ts
 tests/native/virtual-state.test.ts

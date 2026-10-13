@@ -1,10 +1,13 @@
 import type { CoreFunctionId, CoreInstructionId } from "./core-ir.ts";
+import type { CoreReadAccessorRegionPlan } from "./core-read-accessor-expansion.ts";
 
 export type CoreTransformKind =
 	| "static-argument-specialization"
 	| "finite-dispatch"
 	| "inline"
 	| "guarded-inline"
+	| "read-accessor"
+	| "guarded-read-accessor"
 	| "array-iteration-inline"
 	| "direct-entry"
 	| "guarded-direct-call"
@@ -49,6 +52,8 @@ export interface CoreTransformCandidate {
 	readonly priorityScore: number;
 	readonly targets: ReadonlyArray<CoreFunctionId>;
 	readonly targetSetKind?: "closed" | "open-hints";
+	readonly readAccessorRegion?: CoreReadAccessorRegionPlan;
+	readonly readAccessorLoopEligible?: true;
 	readonly generatedCodeCost: number;
 	readonly compilerWorkCost: number;
 	readonly expansive: boolean;
@@ -127,6 +132,8 @@ function transformKindCounts(): Record<CoreTransformKind, number> {
 		"finite-dispatch": 0,
 		inline: 0,
 		"guarded-inline": 0,
+		"read-accessor": 0,
+		"guarded-read-accessor": 0,
 		"array-iteration-inline": 0,
 		"direct-entry": 0,
 		"guarded-direct-call": 0,

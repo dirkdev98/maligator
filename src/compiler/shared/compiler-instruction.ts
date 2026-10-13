@@ -879,6 +879,21 @@ type CompilerOperation =
 			registers: [number, number, number];
 	  }
 	| {
+			type: "guardServiceEpoch";
+			registers: [number, number];
+	  }
+	| {
+			type: "readServiceEpoch";
+			registers: [number];
+	  }
+	| {
+			/** A miss is non-observable and must enter the original JavaScript continuation. */
+			type: "probeRead";
+			registers: [number, number, number, number];
+			readKind: "private" | "named" | "indexed";
+			stringIndex?: number;
+	  }
+	| {
 			// [object, key, value]; own-only write keyed by a private symbol.
 			// Throws TypeError when the receiver lacks the member.
 			type: "storePrivate";

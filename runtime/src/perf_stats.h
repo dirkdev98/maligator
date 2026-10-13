@@ -457,6 +457,21 @@ typedef struct MalPerfStats {
     u64 shape_transition_index_probes;
     u64 shape_transition_index_builds;
 
+    u64 probe_read_attempts[3];
+    u64 probe_read_hits[3];
+    u64 probe_read_unsupported[3];
+    u64 probe_read_private_hint_hits;
+    u64 probe_read_private_searches;
+    u64 accessor_prefix_admissions;
+    u64 accessor_prefix_checks;
+    u64 accessor_prefix_invalidations;
+    u64 private_load_attempts;
+    u64 private_load_hint_hits;
+    u64 probe_read_named_cache_hits;
+    u64 probe_read_named_searches;
+    u64 probe_read_named_getters;
+    u64 probe_read_named_missing;
+
     u64 ic_load_mono_hits;
     u64 ic_load_own_table_hits;
     u64 ic_load_own_table_fills;

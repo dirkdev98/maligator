@@ -300,6 +300,13 @@ function cloneInstruction(
 			};
 		case "GUARD_FUNCTION_INDEX":
 			return { ...instruction, functionIndex: instruction.functionIndex + base.function };
+		case "READ_SERVICE_EPOCH":
+		case "GUARD_SERVICE_EPOCH":
+			return instruction;
+		case "PROBE_READ":
+			return instruction.readKind === "named"
+				? { ...instruction, stringIndex: instruction.stringIndex + base.string }
+				: instruction;
 		case "GUARD_BASE_CONSTRUCTOR_LAYOUT":
 			return {
 				...instruction,

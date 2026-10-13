@@ -192,6 +192,28 @@ export interface CorePlanWorkReport {
 }
 
 export interface CoreTransformWorkReport {
+	readonly accessorRegionDiscoveries?: number;
+	readonly accessorInstructionVisits?: number;
+	readonly accessorPlansReused?: number;
+	readonly accessorRegionsOffered?: number;
+	readonly accessorRegionsApplied?: number;
+	readonly accessorLoopRegionsApplied?: number;
+	readonly accessorLoopAnalysisWork?: number;
+	readonly accessorLoopApplications?: ReadonlyArray<{
+		caller: number;
+		name: string;
+		site: number;
+		header: number;
+		prefixes: ReadonlyArray<string>;
+		retainedPrefixes: ReadonlyArray<string>;
+		numericGuards: ReadonlyArray<number>;
+		invalidations: ReadonlyArray<number>;
+	}>;
+	readonly accessorApplications?: ReadonlyArray<{
+		caller: number;
+		name: string;
+		site: number;
+	}>;
 	readonly considered: number;
 	readonly applied: number;
 	readonly declined: number;

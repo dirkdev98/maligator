@@ -32,6 +32,11 @@ export interface CoreHostInstallCandidate {
  * copied into this closed contract instead.
  */
 export interface CoreProgramData {
+	/** Only module evaluation can initialize these unobservable private-name cells. */
+	readonly modulePrivateNames?: ReadonlyArray<{
+		readonly slot: number;
+		readonly evaluator: number;
+	}>;
 	readonly sourceCallSites?: ReadonlyArray<SourceCallSite>;
 	readonly entrypointPath: string;
 	readonly moduleEvaluationOrder: ReadonlyArray<string>;

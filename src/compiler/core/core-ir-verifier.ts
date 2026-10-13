@@ -29,6 +29,7 @@ import type {
 } from "./core-ir.ts";
 import { coreBlockId, coreFactId, coreInstructionId, coreValueId } from "./core-ir.ts";
 import type { CoreOptimizationStage } from "./core-pass.ts";
+import { coreModulePrivateNames } from "./core-private-names.ts";
 import type { CoreFunctionStore, CoreProgram } from "./core-store.ts";
 
 export type CoreVerificationStage =
@@ -407,7 +408,18 @@ function verifyInstructionRows(
 					) !== "length")
 			)
 				fail("Invalid primitive String length hint");
-			if (descriptor.opcode === "stringConcatLength") {
+			if (descriptor.opcode === "probeRead") {
+				if (
+					!["private", "named", "indexed"].includes(attributes.readKind as string) ||
+					(attributes.readKind === "named"
+						? typeof attributes.stringIndex !== "number" ||
+							!Number.isSafeInteger(attributes.stringIndex) ||
+							attributes.stringIndex < 0 ||
+							attributes.stringIndex >= program.stringConstants.length
+						: attributes.stringIndex !== undefined)
+				)
+					fail("Invalid non-observable data-read probe");
+			} else if (descriptor.opcode === "stringConcatLength") {
 				const length = attributes.followingQuasiLength;
 				if (
 					typeof length !== "number" ||
@@ -1297,6 +1309,35 @@ function verifyCompilationContext(
 	program: CoreProgram,
 	context: CoreCompilationContext,
 ): void {
+	const names = coreModulePrivateNames(program, context);
+	const referencedPrivateSlots = new Set<number>();
+	if ((context.data.modulePrivateNames?.length ?? 0) > 0) {
+		for (const id of program.functionIds()) {
+			const fn = program.function(id);
+			for (const instruction of fn.instructionIds()) {
+				if (fn.instructionKind(instruction) !== "operation") continue;
+				if (
+					fn.instructionOpcodeName(instruction) === "loadGlobal" ||
+					fn.instructionOpcodeName(instruction) === "storeGlobal"
+				) {
+					const slot = fn.instructionAttributes(instruction).index;
+					if (typeof slot === "number") referencedPrivateSlots.add(slot);
+				}
+			}
+		}
+	}
+	for (const { slot, evaluator } of context.data.modulePrivateNames ?? []) {
+		if (
+			!Number.isSafeInteger(slot) ||
+			slot < 0 ||
+			slot >= program.globalCount ||
+			!Number.isSafeInteger(evaluator) ||
+			evaluator < 0
+		)
+			fail(`Invalid module-private name ${slot}:${evaluator}`);
+		if (referencedPrivateSlots.has(slot) && !names.validSlot(slot))
+			fail(`Module-private name ${slot} has no unique acyclic private-name initializer`);
+	}
 	for (const functionId of context.data.cjsModuleFunctionIndices) {
 		if (!Number.isSafeInteger(functionId)) {
 			fail(`compilation context has non-integral CJS module function ${functionId}`);

@@ -483,6 +483,7 @@ export interface CoreMemoryVersions {
 	readonly statistics: {
 		readonly accesses: number;
 		readonly indexedInstructions: number;
+		readonly readLifetimeInstructions: number;
 		readonly localReadAttempts: number;
 		readonly localReadAnswers: number;
 		readonly localReadInstructions: number;
@@ -539,6 +540,7 @@ function prepareMemoryVersions(
 	const statistics = {
 		accesses: 0,
 		indexedInstructions: 0,
+		readLifetimeInstructions: 0,
 		localReadAttempts: 0,
 		localReadAnswers: 0,
 		localReadInstructions: 0,
@@ -1214,6 +1216,47 @@ function prepareMemoryVersions(
 		return versions;
 	};
 	const readHashes = new Map<CoreInstructionId, number>();
+	let readLifetimes: ReadonlyMap<CoreInstructionId, number> | undefined;
+	const readLifetime = (instruction: CoreInstructionId): number => {
+		if (fn.instructionOpcodeName(instruction) !== "probeRead") return 0;
+		if (readLifetimes === undefined) {
+			readLifetimes = runOwner(CORE_OPTIMIZATION_OWNER.memoryEventExtraction, () => {
+				const lifetimes = new Map<CoreInstructionId, number>();
+				const ends = new Map<CoreBlockId, number>();
+				let next = 0,
+					visited = 0;
+				for (const block of cfg.reversePostorder) {
+					const incoming = (cfg.predecessors[block] ?? []).filter((edge) =>
+						cfg.reachable.has(edge.from),
+					);
+					const first =
+						incoming[0] === undefined ? undefined : ends.get(incoming[0].from);
+					// Backedges poll and exceptional edges do not carry successful read admission.
+					let lifetime =
+						first !== undefined &&
+						incoming.every(
+							(edge) => edge.kind === "ordinary" && ends.get(edge.from) === first,
+						)
+							? first
+							: ++next;
+					for (const operation of fn.bodyInstructionIds(block)) {
+						visited++;
+						lifetimes.set(operation, lifetime);
+						const effects = normalMemoryEffects(fn, operation);
+						if (
+							fn.instructionOpcodeName(operation) !== "loadPrivate" &&
+							(effects.mayGc || effects.callsUserCode || effects.maySuspend)
+						)
+							lifetime = ++next;
+					}
+					ends.set(block, lifetime);
+				}
+				addStatistics({ readLifetimeInstructions: visited });
+				return lifetimes;
+			});
+		}
+		return readLifetimes.get(instruction) ?? -1;
+	};
 	const localReads = new Map<
 		CoreInstructionId,
 		{
@@ -1238,11 +1281,14 @@ function prepareMemoryVersions(
 				sum = (sum + mixed) >>> 0;
 				xor ^= mixed;
 			}
-			const hash = Math.imul(sum ^ xor ^ versions.size, 16_777_619) >>> 0;
+			const hash =
+				Math.imul(sum ^ xor ^ versions.size ^ readLifetime(instruction), 16_777_619) >>>
+				0;
 			readHashes.set(instruction, hash);
 			return hash;
 		},
 		readsEquivalent(left: CoreInstructionId, right: CoreInstructionId) {
+			if (readLifetime(left) !== readLifetime(right)) return false;
 			const leftVersions = versionsForRead(left),
 				rightVersions = versionsForRead(right);
 			if (leftVersions === undefined || rightVersions === undefined)
@@ -1310,6 +1356,7 @@ const MEMORY_FUNCTION_DEPENDENCIES = [
 const EMPTY_MEMORY_STATISTICS: CoreMemoryVersions["statistics"] = Object.freeze({
 	accesses: 0,
 	indexedInstructions: 0,
+	readLifetimeInstructions: 0,
 	localReadAttempts: 0,
 	localReadAnswers: 0,
 	localReadInstructions: 0,

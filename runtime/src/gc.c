@@ -3520,6 +3520,8 @@ static void mal_gc_incremental_safepoint(MalVm *vm) {
 static void gc_safepoint_step(MalVm *vm);
 
 void mal_gc_safepoint(MalVm *vm) {
+    // Invalidate retained read relationships before any service or re-entry.
+    if (vm->service_epoch < 9007199254740991ULL) vm->service_epoch++;
     gc_safepoint_step(vm);
     // Every path through the step may consume the poll; termination must stay observable.
     if (mal_gc_termination) mal_gc_poll = true;

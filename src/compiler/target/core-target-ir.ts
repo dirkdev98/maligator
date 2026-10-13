@@ -16,6 +16,7 @@ export function targetInstructionUsesPropertyCache(
 		instruction.type === "loadProperty" ||
 		instruction.type === "loadPropertyStatic" ||
 		instruction.type === "loadPropertyStaticShapeCase" ||
+		(instruction.type === "probeRead" && instruction.readKind === "named") ||
 		instruction.type === "storeProperty" ||
 		instruction.type === "storePropertyStatic" ||
 		instruction.type === "guardBaseConstructorLayout"

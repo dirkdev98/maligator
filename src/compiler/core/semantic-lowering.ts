@@ -88,6 +88,7 @@ import { CoreProgram } from "./core-store.ts";
 import type { CoreSourcePosition } from "./core-store.ts";
 
 interface CoreFrontendContext {
+	modulePrivateNames: Array<{ slot: number; evaluator: number }>;
 	sourceOrigins?: SourceFunctionOrigins;
 	/**
 	 * The semantic program that we are compiling.
@@ -831,6 +832,7 @@ export function constructSemanticProgramCore(
 
 		compiledModuleInitForPaths: new Map(),
 		bindingToStorage: new Map(),
+		modulePrivateNames: [],
 		nextLoopScopeId: -1,
 		nodeToFunctionCache: new Map(),
 
@@ -962,6 +964,7 @@ function finishCoreProgram(program: CoreFrontendContext): ConstructedCoreCompila
 		context: {
 			facts: program.facts,
 			data: coreProgramDataFromSemantic(program.semantic, {
+				modulePrivateNames: program.modulePrivateNames,
 				sourceCallSites: program.sourceOrigins?.callSites(),
 				cjsModuleFunctionIndices: [...program.cjsWrapperFunctionIndex],
 				hostInstallCandidates,
@@ -3481,6 +3484,10 @@ function mintPrivateNames(
 		if (!binding) continue;
 		const location = getOrCreateBindingLocation(program, fn, binding);
 		if (location.type === "global") {
+			program.modulePrivateNames.push({
+				slot: location.index,
+				evaluator: fn.functionIndex,
+			});
 			const name = nextCoreVariable(fn);
 			cursor.block.emitter.emit({ type: "createPrivateName", registers: [name] });
 			storeRegisterAtLocation(cursor.block, location, name);

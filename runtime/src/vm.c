@@ -711,6 +711,7 @@ static void mal_vm_init_execution_state(MalVm *vm, const MalRuntimeImage *progra
     vm->value_stack = malloc(sizeof(MalValue) * (usize) vm->value_stack_capacity);
     vm->value_stack_size = 0;
     vm->native_call_depth = 0;
+    vm->service_epoch = 0;
     vm->proxy_dispatch_depth = 0;
     vm->stack_limit = mal_vm_compute_stack_limit();
     vm->gc_native_frames = 0;
@@ -1253,6 +1254,11 @@ static void mal_vm_rebase_instruction(
             i32 *data = instruction_data +
                 in->as.load_property_static_shape_case.data_offset;
             data[0] += string_base;
+            break;
+        }
+        case MAL_OP_PROBE_READ: {
+            i32 *data = instruction_data + in->as.probe_read.data_offset;
+            if (data[1] == 1) data[2] += string_base;
             break;
         }
         case MAL_OP_STORE_PROPERTY_STATIC:
@@ -2982,6 +2988,27 @@ static void mal_vm_run_until_frame_count(
             case MAL_OP_LOAD_PRIVATE:
                 MAL_VM_INTERPRETER_SYNCHRONIZED_HELPER(mal_op_load_private(frame, instruction));
                 break;
+            case MAL_OP_GUARD_SERVICE_EPOCH:
+                registers[instruction->as.guard_service_epoch.dst] = mal_value_new_boolean(mal_vm_guard_service_epoch(vm, mal_ops_number_as_f64(registers[instruction->as.guard_service_epoch.epoch])));
+                MAL_VM_INTERPRETER_DIRECT_LEAF();
+                continue;
+            case MAL_OP_READ_SERVICE_EPOCH:
+                registers[instruction->as.read_service_epoch.dst] = mal_ops_number_value(mal_vm_read_service_epoch(vm));
+                MAL_VM_INTERPRETER_DIRECT_LEAF();
+                continue;
+            case MAL_OP_PROBE_READ: {
+                const i32 *data = frame->function->instruction_data + instruction->as.probe_read.data_offset;
+                MalValue value;
+                bool success = mal_vm_probe_read(vm,
+                    registers[instruction->as.probe_read.object],
+                    registers[data[0]], (u8) data[1], data[2],
+                    data[1] == 1 ? mal_vm_property_ic_at(frame, data[3]) : nullptr,
+                    &value);
+                registers[instruction->as.probe_read.dst] = value;
+                registers[instruction->as.probe_read.success] = success ? MAL_VALUE_TRUE : MAL_VALUE_FALSE;
+                MAL_VM_INTERPRETER_DIRECT_LEAF();
+                continue;
+            }
             case MAL_OP_STORE_PRIVATE:
                 MAL_VM_INTERPRETER_SYNCHRONIZED_HELPER(mal_op_store_private(frame, instruction));
                 break;

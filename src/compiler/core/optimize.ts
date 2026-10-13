@@ -94,7 +94,9 @@ export function optimizeCore(
 	const instrumentation = options.instrumentation ?? "off";
 	const ablatedFamily = options.benchmarkAblation?.family;
 	const ablatedPassFamily =
-		ablatedFamily === "guarded-direct-call" || ablatedFamily === "priority-scheduling"
+		ablatedFamily === "guarded-direct-call" ||
+		ablatedFamily === "priority-scheduling" ||
+		ablatedFamily === "class-read-accessors"
 			? undefined
 			: ablatedFamily;
 	const profile =
@@ -337,6 +339,8 @@ export function optimizeCore(
 						crossCallBudgets,
 						initialFlow,
 						o3Candidates,
+						ablatedFamily !== "class-read-accessors",
+						instrumentation === "counters" || instrumentation === "full",
 					),
 		CORE_OPTIMIZATION_OWNER.crossCallTransforms,
 	);

@@ -10865,6 +10865,35 @@ function emitInstruction(
 				`}`,
 			];
 		}
+		case "GUARD_SERVICE_EPOCH":
+			return [
+				storeBoolean(
+					instruction.dst,
+					`mal_vm_guard_service_epoch(vm, ${typedNumber(instruction.epoch)})`,
+				),
+			];
+		case "READ_SERVICE_EPOCH": {
+			const epoch = "mal_vm_read_service_epoch(vm)";
+			return [
+				reps[instruction.dst] === "number"
+					? `r${instruction.dst} = ${epoch};`
+					: `r${instruction.dst} = mal_ops_number_value(${epoch});`,
+			];
+		}
+		case "PROBE_READ": {
+			const loaded = `__probe_value_${ip}`,
+				success = `__probe_success_${ip}`;
+			const probe =
+				instruction.readKind === "named"
+					? `mal_vm_probe_named_read(vm, ${boxed(instruction.object)}, ${relocation.stringIndex(instruction.stringIndex)}, &${nativeBodyReference(resources, "propertyCache")}[${instruction.icIndex}], &${loaded})`
+					: `mal_vm_probe_${instruction.readKind}_read(${boxed(instruction.object)}, ${boxed(instruction.key)}, &${loaded})`;
+			return [
+				`MalValue ${loaded};`,
+				`bool ${success} = ${probe};`,
+				`r${instruction.dst} = ${loaded};`,
+				storeBoolean(instruction.success, success),
+			];
+		}
 		case "STORE_PRIVATE":
 			// PrivateSet; the name must already be installed, else throws.
 			return [

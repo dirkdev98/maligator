@@ -1286,6 +1286,35 @@ static void mal_perf_stats_print(void) {
     }
     fprintf(
         stderr,
+        "[perf-probe-reads] prefix_admissions=%llu prefix_checks=%llu prefix_invalidations=%llu "
+        "private_attempts=%llu private_hits=%llu private_unsupported=%llu "
+        "private_hint_hits=%llu private_searches=%llu private_load_attempts=%llu private_load_hint_hits=%llu "
+        "named_attempts=%llu named_hits=%llu named_unsupported=%llu "
+        "named_cache_hits=%llu named_searches=%llu named_getters=%llu named_missing=%llu "
+        "indexed_attempts=%llu indexed_hits=%llu indexed_unsupported=%llu\n",
+        (unsigned long long) mal_perf_stats.accessor_prefix_admissions,
+        (unsigned long long) mal_perf_stats.accessor_prefix_checks,
+        (unsigned long long) mal_perf_stats.accessor_prefix_invalidations,
+        (unsigned long long) mal_perf_stats.probe_read_attempts[0],
+        (unsigned long long) mal_perf_stats.probe_read_hits[0],
+        (unsigned long long) mal_perf_stats.probe_read_unsupported[0],
+        (unsigned long long) mal_perf_stats.probe_read_private_hint_hits,
+        (unsigned long long) mal_perf_stats.probe_read_private_searches,
+        (unsigned long long) mal_perf_stats.private_load_attempts,
+        (unsigned long long) mal_perf_stats.private_load_hint_hits,
+        (unsigned long long) mal_perf_stats.probe_read_attempts[1],
+        (unsigned long long) mal_perf_stats.probe_read_hits[1],
+        (unsigned long long) mal_perf_stats.probe_read_unsupported[1],
+        (unsigned long long) mal_perf_stats.probe_read_named_cache_hits,
+        (unsigned long long) mal_perf_stats.probe_read_named_searches,
+        (unsigned long long) mal_perf_stats.probe_read_named_getters,
+        (unsigned long long) mal_perf_stats.probe_read_named_missing,
+        (unsigned long long) mal_perf_stats.probe_read_attempts[2],
+        (unsigned long long) mal_perf_stats.probe_read_hits[2],
+        (unsigned long long) mal_perf_stats.probe_read_unsupported[2]
+    );
+    fprintf(
+        stderr,
         "[perf-ic-stats] load_mono_hits=%llu load_inherited_hits=%llu "
         "load_own_table_hits=%llu load_own_table_fills=%llu "
         "load_missing_hits=%llu load_missing_fills=%llu "
