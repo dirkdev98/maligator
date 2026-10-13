@@ -121,7 +121,7 @@ export const VM_GUARDED_BUILTIN_OPERATIONS = [
 	"TypedArray.prototype.filter",
 	"TypedArray.prototype.findLast",
 	"TypedArray.prototype.findLastIndex",
-	"ArrayOrTypedArray.prototype.forEach",
+	"Collection.prototype.forEach",
 	"ArrayOrTypedArray.prototype.some",
 	"ArrayOrTypedArray.prototype.every",
 	"ArrayOrTypedArray.prototype.find",
@@ -505,7 +505,15 @@ export type VmStringSpanRegion = VmRegionEnvelope<
 			| "charAtProperty"
 			| "charAtCall"
 			| "atProperty"
+			| "indexOfProperty"
+			| "includesProperty"
+			| "startsWithProperty"
+			| "endsWithProperty"
 			| "atCall"
+			| "indexOfCall"
+			| "includesCall"
+			| "startsWithCall"
+			| "endsWithCall"
 			| "materialize";
 	}>;
 };
@@ -770,7 +778,15 @@ export type VmRegionActionRole =
 	| "charAtProperty"
 	| "charAtCall"
 	| "atProperty"
+	| "indexOfProperty"
+	| "includesProperty"
+	| "startsWithProperty"
+	| "endsWithProperty"
 	| "atCall"
+	| "indexOfCall"
+	| "includesCall"
+	| "startsWithCall"
+	| "endsWithCall"
 	| "charCodeAtProperty"
 	| "close"
 	| "caseLength"

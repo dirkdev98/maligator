@@ -3,6 +3,12 @@ const observations = [];
 function collect() {
 	if (typeof gc === "function") gc();
 }
+["x|😀|z", "x|abab|z", "x||z"].forEach((source) => {
+	observations.push(searchRange(source, "a", 0, false, collect));
+	observations.push(searchNested(source, "a", 0, collect));
+	observations.push(searchSplit(source, "a", 0, collect));
+	observations.push(searchCapture(source, "a", 0, collect));
+});
 function inspect(value, start, end, escape, observer) {
 	const part = value.slice(start, end);
 	const length = part.length;
@@ -785,4 +791,224 @@ function retainedDeepCapture(source, regexp) {
 	return values;
 }
 observations.push(retainedDeepCapture("ab cd ef", /(\w+)/g));
+
+function searchRange(source, needle, position, escape, effect) {
+	const part = source.slice(1, -1);
+	const first = part.indexOf(needle, position);
+	const contained = part.includes(needle, position);
+	const starts = part.startsWith(needle, position);
+	const ends = part.endsWith(needle, position);
+	effect();
+	if (escape) return part;
+	return [first, contained, starts, ends, part.length];
+}
+function searchNested(source, needle, position, effect) {
+	const outer = source.substring(1, 1000);
+	const middle = outer.slice(0, -1);
+	const inner = middle.substring(0, 1000);
+	const part = inner.slice(0, 600);
+	const first = part.indexOf(needle, position);
+	effect();
+	return [
+		first,
+		part.includes(needle, position),
+		part.startsWith(needle, position),
+		part.endsWith(needle, position),
+		outer.length,
+	];
+}
+function searchSplit(source, needle, position, effect) {
+	const part = source.split("|")[1];
+	if (part === undefined) return "absent";
+	const first = part.indexOf(needle, position);
+	effect();
+	return [
+		first,
+		part.includes(needle, position),
+		part.startsWith(needle, position),
+		part.endsWith(needle, position),
+	];
+}
+function searchCapture(source, needle, position, effect) {
+	const match = /x(?:\|([^|]*)\|)?/.exec(source);
+	if (match === null) return "null";
+	const part = match[1];
+	if (part === undefined) return "absent";
+	const first = part.indexOf(needle, position);
+	effect();
+	return [
+		first,
+		part.includes(needle, position),
+		part.startsWith(needle, position),
+		part.endsWith(needle, position),
+	];
+}
+for (const word of [
+	"😀",
+	"a\ud800b",
+	"\udc00",
+	"",
+	"undefined",
+	"abababab",
+	"a".repeat(300) + "b",
+])
+	for (const needle of ["", "😀", "\ud800", "\ude00", "a", "b", "z", "a".repeat(33)])
+		for (const position of [
+			undefined,
+			NaN,
+			-Infinity,
+			Infinity,
+			-2,
+			-0,
+			0.9,
+			1.8,
+			2,
+			600,
+		]) {
+			observations.push(searchRange("x" + word + "z", needle, position, false, collect));
+			observations.push(searchNested("x" + word + "z", needle, position, collect));
+			observations.push(searchSplit("x|" + word + "|z", needle, position, collect));
+			observations.push(searchCapture("x|" + word + "|z", needle, position, collect));
+		}
+
+observations.push(
+	searchSplit("missing", "a", 0, collect),
+	searchCapture("missing", "a", 0, collect),
+	searchCapture("x", "a", 0, collect),
+);
+const searchEvents = [];
+const searchNeedle = {
+	get [Symbol.match]() {
+		searchEvents.push("match");
+		collect();
+		return false;
+	},
+	toString() {
+		searchEvents.push("needle");
+		collect();
+		return "a";
+	},
+};
+const searchPosition = {
+	valueOf() {
+		searchEvents.push("position");
+		collect();
+		return 0;
+	},
+};
+observations.push(
+	searchRange("xabz", searchNeedle, searchPosition, false, collect),
+	searchEvents,
+);
+for (const needle of [
+	undefined,
+	null,
+	true,
+	1n,
+	Symbol("needle"),
+	/a/,
+	{
+		get [Symbol.match]() {
+			collect();
+			throw new RangeError("match");
+		},
+	},
+]) {
+	try {
+		observations.push(searchRange("xundefinedz", needle, 0, false, collect));
+	} catch (error) {
+		observations.push(error.name);
+	}
+}
+for (const position of [
+	"1",
+	null,
+	true,
+	1n,
+	Symbol("position"),
+	{
+		valueOf() {
+			collect();
+			throw new RangeError("position");
+		},
+	},
+]) {
+	try {
+		observations.push(searchRange("xabz", "", position, false, collect));
+	} catch (error) {
+		observations.push(error.name);
+	}
+}
+function missingSearch(source) {
+	const part = source.slice(1, -1);
+	return [part.indexOf(), part.includes(), part.startsWith(), part.endsWith()];
+}
+observations.push(missingSearch("xundefinedz"), missingSearch("xabz"));
+if (process.env.MAL_STRING_SPAN_MUTABLE !== "locked") {
+	for (const method of ["indexOf", "includes", "startsWith", "endsWith"]) {
+		const saved = Object.getOwnPropertyDescriptor(String.prototype, method);
+		const events = [];
+		Object.defineProperty(String.prototype, method, {
+			configurable: true,
+			get() {
+				events.push(String(this));
+				collect();
+				return saved.value;
+			},
+		});
+		observations.push(searchRange("xabz", "a", 0, false, collect), events);
+		Object.defineProperty(String.prototype, method, saved);
+		observations.push(
+			searchRange(
+				"xabz",
+				{
+					toString() {
+						String.prototype[method] = () => "override";
+						collect();
+						return "a";
+					},
+				},
+				0,
+				false,
+				collect,
+			),
+		);
+		Object.defineProperty(String.prototype, method, saved);
+	}
+}
+if (process.env.MAL_STRING_SPAN_MUTABLE !== "locked") {
+	const savedExec = RegExp.prototype.exec;
+	const execEvents = [];
+	RegExp.prototype.exec = function (source) {
+		execEvents.push(source);
+		return savedExec.call(this, source);
+	};
+	const needle = {
+		get [Symbol.match]() {
+			execEvents.push("match");
+			collect();
+			return false;
+		},
+		toString() {
+			execEvents.push("needle");
+			return "a";
+		},
+	};
+	observations.push(
+		searchCapture(
+			"x|ab|z",
+			needle,
+			{
+				valueOf() {
+					execEvents.push("position");
+					collect();
+					return 0;
+				},
+			},
+			collect,
+		),
+		execEvents,
+	);
+	RegExp.prototype.exec = savedExec;
+}
 console.log(JSON.stringify(observations));

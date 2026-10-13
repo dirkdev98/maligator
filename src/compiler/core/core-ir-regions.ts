@@ -154,6 +154,18 @@ export const CORE_STRING_SPAN_CHARACTER_METHODS = [
 	"at",
 ] as const;
 
+export const CORE_STRING_SPAN_SEARCH_METHODS = [
+	"indexOf",
+	"includes",
+	"startsWith",
+	"endsWith",
+] as const;
+
+export const CORE_STRING_SPAN_METHODS = [
+	...CORE_STRING_SPAN_CHARACTER_METHODS,
+	...CORE_STRING_SPAN_SEARCH_METHODS,
+] as const;
+
 export interface CoreStringSpanConsumer {
 	readonly instruction: CoreInstructionId;
 	readonly value: CoreValueId;
@@ -168,7 +180,15 @@ export interface CoreStringSpanConsumer {
 		| "charAtProperty"
 		| "charAtCall"
 		| "atProperty"
+		| "indexOfProperty"
+		| "includesProperty"
+		| "startsWithProperty"
+		| "endsWithProperty"
 		| "atCall"
+		| "indexOfCall"
+		| "includesCall"
+		| "startsWithCall"
+		| "endsWithCall"
 		| "materialize";
 }
 

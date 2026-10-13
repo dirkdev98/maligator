@@ -480,14 +480,27 @@ const typedArrayIterationOperations: ReadonlyArray<BuiltinOperationDescriptor> =
 		}));
 
 const iterationInvocationFamilies: ReadonlyArray<BuiltinOperationDescriptor> =
-	typedArrayIterationOperations.map((typed) => ({
+	typedArrayIterationOperations.map((typed): BuiltinOperationDescriptor => ({
 		...typed,
-		id: `ArrayOrTypedArray.prototype.${typed.key}`,
-		owner: "ArrayOrTypedArray.prototype",
+		id:
+			typed.key === "forEach"
+				? "Collection.prototype.forEach"
+				: `ArrayOrTypedArray.prototype.${typed.key}`,
+		owner:
+			typed.key === "forEach" ? "Collection.prototype" : "ArrayOrTypedArray.prototype",
 		receiver: "any",
 		coercionOrder: ["receiver-object", "receiver-length"],
 		effects: ["coerce", ...typed.effects],
-		guardedCallees: [`Array.prototype.${typed.key}`, typed.id],
+		guardedCallees: [
+			`Array.prototype.${typed.key}`,
+			typed.id,
+			...(typed.key === "forEach"
+				? ["Map.prototype.forEach", "Set.prototype.forEach"]
+				: []),
+		],
+		...(typed.key === "forEach"
+			? { callback: { argumentIndex: 0, argumentKinds: ["any", "any", "object"] } }
+			: {}),
 	}));
 
 export const builtinOperations: ReadonlyArray<BuiltinOperationDescriptor> = [
@@ -1086,12 +1099,36 @@ export function builtinCallbackInvocation(
 				member?.callback === undefined ||
 				member.callback.kind !== invocation.kind ||
 				member.callback.argumentIndex !== invocation.argumentIndex ||
-				member.callback.argumentKinds.join("\0") !== invocation.argumentKinds.join("\0")
+				member.callback.argumentKinds.length !== invocation.argumentKinds.length ||
+				member.callback.argumentKinds.some(
+					(kind, index) =>
+						invocation.argumentKinds[index] !== "any" &&
+						kind !== invocation.argumentKinds[index],
+				)
 			);
 		})
 	)
 		return undefined;
 	return invocation;
+}
+
+// Family member numeric roles nominate guarded adapters, never unconditional argument facts.
+export function builtinCallbackNumberArgumentCandidates(
+	id: string,
+): ReadonlyArray<number> {
+	const invocation = builtinCallbackInvocation(id);
+	if (invocation === undefined) return [];
+	const members = builtinOperationDescriptor(id)?.guardedCallees ?? [];
+	return invocation.argumentKinds.flatMap((kind, index) =>
+		kind === "number" ||
+		(kind === "any" &&
+			members.some(
+				(member) =>
+					builtinOperationDescriptor(member)?.callback?.argumentKinds[index] === "number",
+			))
+			? [index]
+			: [],
+	);
 }
 
 function featureGuard(feature: BuiltinFeature): string {

@@ -2916,6 +2916,19 @@
 			"controls": ["map-operations", "typed-array-map-callback"]
 		},
 		{
+			"id": "map-foreach-loop-callback",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "Shared collection callback transport",
+			"category": "api-builtins",
+			"mechanisms": ["array-callback"],
+			"inputShape": "A Map passed through a helper and loop backedges retains guarded callback invocation with nonnumeric keys and captured arithmetic.",
+			"unit": "visited entry",
+			"sourceSeam": "runtime/src/builtin_array.c",
+			"fixture": "cases/map-foreach-loop-callback.mjs",
+			"controls": ["map-foreach-callback", "typed-array-map-callback"]
+		},
+		{
 			"id": "string-span-characters",
 			"group": "runtime",
 			"suite": "runtime",
@@ -2940,6 +2953,19 @@
 			"sourceSeam": "src/compiler/target/native-span-continuation.ts",
 			"fixture": "cases/string-span-deep.mjs",
 			"controls": ["string-span-nested", "string-span-characters"]
+		},
+		{
+			"id": "string-span-search",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "Bounded string span search",
+			"category": "memory-layout-usage",
+			"mechanisms": ["string-allocation", "string-traversal"],
+			"inputShape": "Retained substring spans feed prefix, suffix, inclusion, and index searches with relative positions and bounded UTF-16 matching.",
+			"unit": "token",
+			"sourceSeam": "runtime/src/builtin_string.c",
+			"fixture": "cases/string-span-search.mjs",
+			"controls": ["string-search", "string-span-deep"]
 		},
 		{
 			"id": "method-name-unique",

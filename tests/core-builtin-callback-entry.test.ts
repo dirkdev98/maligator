@@ -24,7 +24,7 @@ import { nativeEntryLookup } from "../src/compiler/target/lower-native-calls.ts"
 import { emitCompiledFunction } from "../src/compiler/target/render-native-c.ts";
 
 function input(
-	operation: "map" | "reduce",
+	operation: "map" | "reduce" | "forEach",
 	observesArguments = false,
 	numeric = false,
 	primordials: "mutable" | "locked" = "mutable",
@@ -63,17 +63,28 @@ describe("native entries from builtin callback invocation facts", () => {
 	])(
 		"carries the %s family argument roles through bounded rest observations",
 		(method) => {
-			const family = builtinOperationDescriptor(`ArrayOrTypedArray.prototype.${method}`)!;
+			const family = builtinOperationDescriptor(
+				method === "forEach"
+					? "Collection.prototype.forEach"
+					: `ArrayOrTypedArray.prototype.${method}`,
+			)!;
 			expect(family.result).not.toBe("array");
 			expect(family.lowerings).toEqual(["generic"]);
 			expect(family.guardedCallees).toEqual([
 				`Array.prototype.${method}`,
 				`TypedArray.prototype.${method}`,
+				...(method === "forEach"
+					? ["Map.prototype.forEach", "Set.prototype.forEach"]
+					: []),
 			]);
 			for (const callee of family.guardedCallees!)
 				expect(builtinCallbackInvocation(callee)).toEqual({
 					argumentIndex: 0,
-					argumentKinds: ["any", "number", "object"],
+					argumentKinds: [
+						"any",
+						callee.startsWith("Map.") || callee.startsWith("Set.") ? "any" : "number",
+						"object",
+					],
 				});
 			for (const primordials of ["mutable", "locked"] as const) {
 				const { options } = input("map", false, false, primordials);
@@ -110,8 +121,9 @@ describe("native entries from builtin callback invocation facts", () => {
 
 	it("keeps receiver-specific callback semantics separate from invocation families", () => {
 		expect(builtinCallbackInvocation("TypedArray.prototype.flatMap")).toBeUndefined();
-		expect(builtinCallbackInvocation("Map.prototype.forEach")).toBeUndefined();
-		expect(builtinCallbackInvocation("Set.prototype.forEach")).toBeUndefined();
+		expect(
+			builtinCallbackInvocation("Collection.prototype.forEach")?.argumentKinds,
+		).toEqual(["any", "any", "object"]);
 		const image = compileSemanticProgramToProgramImage(
 			analyzeSourceAndRunSemanticAnalysis(
 				`globalThis.run=()=>[1,2].map(function(value,index){for(let i=0;i<2;i++) value+=index;return value;});`,
@@ -395,7 +407,7 @@ describe("native entries from builtin callback invocation facts", () => {
 		}
 	});
 
-	it.each(["map", "reduce"] as const)(
+	it.each(["map", "reduce", "forEach"] as const)(
 		"nominates guarded %s value operands only when Number operations improve",
 		(operation) => {
 			const { semantic, options } = input(operation, false, true);
@@ -409,7 +421,7 @@ describe("native entries from builtin callback invocation facts", () => {
 			)!;
 			expect(entry).toBeDefined();
 			expect(entry.parameterRepresentations).toEqual(
-				operation === "map" ? ["f64", "f64", "boxed"] : ["f64", "f64", "f64", "boxed"],
+				operation !== "reduce" ? ["f64", "f64", "boxed"] : ["f64", "f64", "f64", "boxed"],
 			);
 			expect(
 				entry.operatorInputs!.some((site) =>
@@ -422,7 +434,7 @@ describe("native entries from builtin callback invocation facts", () => {
 			)!;
 			const transport = caller.storage!.callbackTransports[0]!;
 			expect(transport.parameters).toEqual(
-				operation === "map"
+				operation !== "reduce"
 					? ["number", "number", "boxed"]
 					: ["number", "number", "number", "boxed"],
 			);
@@ -444,49 +456,79 @@ describe("native entries from builtin callback invocation facts", () => {
 			image.native.functions.flatMap((fn) => fn.storage!.callbackTransports),
 		).toEqual([]);
 	});
-
-	it("requires the nomination marker and keeps receiver fields outside the numeric hypothesis", () => {
-		const { semantic, options } = input("map", false, true);
+	it("retains the guarded numeric index entry when collection values stay boxed", () => {
+		const { options } = input("map");
+		const semantic = analyzeSourceAndRunSemanticAnalysis(
+			`globalThis.run=function(values) { values.forEach(function(value,index) { globalThis.observe(value.score + index * 3); }); };`,
+			"/collection-index-callback.js",
+		);
 		const compilation = optimizeSemanticProgramToCore(semantic, options, (_phase, run) =>
 			run(),
 		);
 		const entry = compilation.plan.directEntries.find((entry) =>
-			entry.callSites.some((site) => site.builtinCallbackNumbers),
+			entry.callSites.some(
+				(site) => site.builtinCallbackOperation === "Collection.prototype.forEach",
+			),
 		)!;
-		const fn = compilation.program.function(entry.function);
-		for (const [parameterRepresentations, callSites] of [
-			[
-				entry.parameterRepresentations,
-				entry.callSites.map(({ builtinCallbackNumbers: _numbers, ...site }) => site),
-			],
-			[entry.parameterRepresentations.map(() => "f64" as const), entry.callSites],
-		] as const) {
-			const forged = {
-				...entry,
-				parameterRepresentations,
-				callSites,
-				...analyzeCoreNativeEntry(
-					fn,
-					buildCoreControlFlow(compilation.program, entry.function),
-					parameterRepresentations,
-					undefined,
-					callSites,
-				),
-			};
-			expect(() =>
-				verifyCoreOptimizationPlan(
-					compilation.program,
-					{
-						...compilation.plan,
-						directEntries: compilation.plan.directEntries.map((candidate) =>
-							candidate === entry ? forged : candidate,
-						),
-					},
-					compilation.context,
-				),
-			).toThrow(/builtin callback contract/);
-		}
+		expect(entry.parameterRepresentations).toEqual(["boxed", "f64"]);
+		expect(entry.callSites.every((site) => site.builtinCallbackNumbers === true)).toBe(
+			true,
+		);
+		const image = compileSemanticProgramToProgramImage(semantic, options);
+		expect(
+			image.native.functions
+				.flatMap((fn) => fn.storage!.callbackTransports)
+				.map((plan) => plan.parameters),
+		).toContainEqual(["boxed", "number"]);
 	});
+
+	it.each(["map", "forEach"] as const)(
+		"requires the %s nomination marker and keeps receiver fields outside the numeric hypothesis",
+		(method) => {
+			const { semantic, options } = input(method, false, true);
+			const compilation = optimizeSemanticProgramToCore(
+				semantic,
+				options,
+				(_phase, run) => run(),
+			);
+			const entry = compilation.plan.directEntries.find((entry) =>
+				entry.callSites.some((site) => site.builtinCallbackNumbers),
+			)!;
+			const fn = compilation.program.function(entry.function);
+			for (const [parameterRepresentations, callSites] of [
+				[
+					entry.parameterRepresentations,
+					entry.callSites.map(({ builtinCallbackNumbers: _numbers, ...site }) => site),
+				],
+				[entry.parameterRepresentations.map(() => "f64" as const), entry.callSites],
+			] as const) {
+				const forged = {
+					...entry,
+					parameterRepresentations,
+					callSites,
+					...analyzeCoreNativeEntry(
+						fn,
+						buildCoreControlFlow(compilation.program, entry.function),
+						parameterRepresentations,
+						undefined,
+						callSites,
+					),
+				};
+				expect(() =>
+					verifyCoreOptimizationPlan(
+						compilation.program,
+						{
+							...compilation.plan,
+							directEntries: compilation.plan.directEntries.map((candidate) =>
+								candidate === entry ? forged : candidate,
+							),
+						},
+						compilation.context,
+					),
+				).toThrow(/builtin callback contract/);
+			}
+		},
+	);
 
 	it("selects each descriptor index when one callback serves both map and reduce", () => {
 		const { options } = input("map");

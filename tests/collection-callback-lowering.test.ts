@@ -58,7 +58,11 @@ describe("collection callback boundary contracts", () => {
 				expect(plans).toHaveLength(1);
 				const plan = plans[0]!;
 				if (plan.kind !== "call") throw new Error("missing call");
-				expect(plan.guardedBuiltinCall?.operation).toBe(`${kind}.prototype.forEach`);
+				expect(plan.guardedBuiltinCall?.operation).toBe(
+					mode === "locked"
+						? `${kind}.prototype.forEach`
+						: "Collection.prototype.forEach",
+				);
 				const encoded = serializeCompilerArtifact(image);
 				expect(serializeCompilerArtifact(deserializeCompilerArtifact(encoded))).toEqual(
 					encoded,

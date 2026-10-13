@@ -375,3 +375,70 @@ describe("string-valued span character consumers", () => {
 		},
 	);
 });
+
+describe("bounded string span searches", () => {
+	it.each(["mutable", "locked"] as const)(
+		"shares search consumers across range producers under %s primordials",
+		(mode) => {
+			for (const operation of ["slice", "substring"])
+				for (const method of ["indexOf", "includes", "startsWith", "endsWith"]) {
+					const image = compile(
+						`const part=value.${operation}(start,end);observer();if(escape)return part;return part.${method}("😀",start);`,
+						mode,
+					);
+					const region = spans(image)[0]!;
+					expect(region).toBeDefined();
+					expect(region.consumers.map((c) => c.kind)).toContain(`${method}Call`);
+					expect(deserializeCompilerArtifact(serializeCompilerArtifact(image))).toEqual(
+						image,
+					);
+				}
+		},
+	);
+	it("retains argument evaluation and declines virtual aliases used as search operands", () => {
+		for (const args of ["observer(),start", '"a",observer()', "", '"a",undefined']) {
+			const image = compile(
+				`const part=value.slice(start,end);return part.includes(${args});`,
+			);
+			expect(spans(image)[0]!.consumers.some((c) => c.kind === "includesCall")).toBe(
+				true,
+			);
+		}
+		for (const args of ["part,0", '"a",part', '"a",0,observer()']) {
+			const image = compile(
+				`const part=value.slice(start,end);return part.includes(${args})+part.length;`,
+			);
+			expect(
+				spans(image)
+					.flatMap((region) => region.consumers)
+					.some((c) => c.kind === "includesCall"),
+			).toBe(false);
+		}
+	});
+	it("rejects a forged search method contract", () => {
+		const image = compile(
+			'const part=value.slice(start,end);return part.startsWith("a",0);',
+		);
+		const fn = image.native.functions[1]!;
+		const region = spans(image)[0]!;
+		expect(region.consumers.some((c) => c.kind === "startsWithCall")).toBe(true);
+		const forged = {
+			...region,
+			consumers: region.consumers.map((c) =>
+				c.kind === "startsWithCall" ? { ...c, kind: "endsWithCall" as const } : c,
+			),
+		};
+		expect(() =>
+			serializeCompilerArtifact({
+				...image,
+				native: {
+					...image.native,
+					functions: image.native.functions.with(1, {
+						...fn,
+						specializations: fn.specializations.map((r) => (r === region ? forged : r)),
+					}),
+				},
+			}),
+		).toThrow();
+	});
+});

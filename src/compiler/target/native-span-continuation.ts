@@ -1,6 +1,9 @@
-import { CORE_STRING_SPAN_CHARACTER_METHODS } from "../core/core-ir-regions.ts";
+import {
+	CORE_STRING_SPAN_METHODS,
+	CORE_STRING_SPAN_SEARCH_METHODS,
+} from "../core/core-ir-regions.ts";
 import type { NativeBodyFacts } from "./native-body-facts.ts";
-import { nativeSpanCharacterCall } from "./native-string-span.ts";
+import { nativeSpanMethodCall } from "./native-string-span.ts";
 import {
 	nativeVirtualValueFlow,
 	validateNativeVirtualValue,
@@ -192,7 +195,7 @@ export function selectNativeSpanContinuations(
 				break;
 			}
 			const value = reads[0]!;
-			const characterCall = nativeSpanCharacterCall(fn.instructions, ip, strings, body);
+			const methodCall = nativeSpanMethodCall(fn.instructions, ip, strings, body);
 			const callee = fn.instructions[ip - 1];
 			const numberCallee =
 				op.opcode === "CALL" &&
@@ -200,9 +203,9 @@ export function selectNativeSpanContinuations(
 				callee.dst === op.callee &&
 				String.fromCharCode(...(strings[callee.nameStringIndex] ?? [])) === "Number";
 			let kind: NativeSpanConsumer["kind"];
-			const characterProperty =
+			const methodProperty =
 				op.opcode === "LOAD_PROPERTY_STATIC"
-					? CORE_STRING_SPAN_CHARACTER_METHODS.find(
+					? CORE_STRING_SPAN_METHODS.find(
 							(method) =>
 								method === String.fromCharCode(...(strings[op.stringIndex] ?? [])),
 						)
@@ -230,19 +233,22 @@ export function selectNativeSpanContinuations(
 			else if (
 				op.opcode === "LOAD_PROPERTY_STATIC" &&
 				op.object === value &&
-				characterProperty !== undefined
+				methodProperty !== undefined
 			)
-				kind = `${characterProperty}Property`;
+				kind = `${methodProperty}Property`;
 			else if (
 				(op.opcode === "CALL" || op.opcode === "CALL_KNOWN") &&
 				op.thisValue === value &&
-				op.arguments.length <= 1 &&
-				op.arguments[0] !== value &&
+				op.arguments.length <=
+					(CORE_STRING_SPAN_SEARCH_METHODS.some((name) => methodCall === `${name}Call`)
+						? 2
+						: 1) &&
+				!op.arguments.includes(value) &&
 				(op.opcode === "CALL_KNOWN"
-					? characterCall !== undefined && !op.construct && op.argumentMode === undefined
-					: characterCall !== undefined || materializingObservers.has(ip))
+					? methodCall !== undefined && !op.construct && op.argumentMode === undefined
+					: methodCall !== undefined || materializingObservers.has(ip))
 			)
-				kind = characterCall ?? "charCodeAtCall";
+				kind = methodCall ?? "charCodeAtCall";
 			else if (
 				(op.opcode === "CALL" || op.opcode === "CALL_KNOWN") &&
 				op.arguments.length === 1 &&

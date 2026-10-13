@@ -595,3 +595,62 @@ describe("bounded bottom-up span composition", () => {
 		}
 	});
 });
+
+describe("shared search span continuations", () => {
+	it.each(["mutable", "locked"] as const)(
+		"selects searches after projections and nested ranges under %s primordials",
+		(mode) => {
+			for (const producer of [
+				"source.split('|')[1]",
+				"observe.exec(source)[1]",
+				"source.slice(1,-1).substring(0,8).slice(0,6).substring(0,4)",
+			])
+				for (const method of ["indexOf", "includes", "startsWith", "endsWith"]) {
+					const image = compile(
+						`const part=${producer}; if(escape)return part; return part.${method}('😀',escape);`,
+						mode,
+					);
+					const native = image.native.functions[1]!;
+					const consumers = [
+						...native.storage!.spanContinuations.flatMap((p) => p.consumers),
+						...native.specializations.flatMap((r) =>
+							r.kind === "string-span" ? r.consumers : [],
+						),
+					];
+					expect(consumers.some((c) => c.kind === `${method}Call`)).toBe(true);
+					expect(emitCompiledFunction(native, 1, "", false)!.source).toContain(
+						"mal_builtin_string_span_search(",
+					);
+					expect(deserializeCompilerArtifact(serializeCompilerArtifact(image))).toEqual(
+						image,
+					);
+				}
+		},
+	);
+	it("rejects a forged projection search method", () => {
+		const image = compile(
+			`const part=source.split('|')[1];return part.indexOf('a',escape);`,
+		);
+		const native = image.native.functions[1]!;
+		const plans = native.storage!.spanContinuations;
+		expect(plans[0]!.consumers.some((c) => c.kind === "indexOfCall")).toBe(true);
+		const forged = plans.map((p) => ({
+			...p,
+			consumers: p.consumers.map((c) =>
+				c.kind === "indexOfCall" ? { ...c, kind: "includesCall" as const } : c,
+			),
+		}));
+		expect(() =>
+			serializeCompilerArtifact({
+				...image,
+				native: {
+					...image.native,
+					functions: image.native.functions.with(1, {
+						...native,
+						storage: { ...native.storage!, spanContinuations: forged },
+					}),
+				},
+			}),
+		).toThrow(/invalid or stale storage plan/);
+	});
+});

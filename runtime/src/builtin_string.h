@@ -236,9 +236,9 @@ bool mal_builtin_string_character_direct(
     MalStringCharacterOp operation, MalValue *result
 );
 
-// Search primitive strings without changing their representation.
+// Bounds delimit the logical string; returned indices are relative to start.
 MalValue mal_builtin_string_search_strings(
-    MalString *string, MalString *search, f64 position, MalStringSearchOp operation
+    MalString *string, usize start, usize end, MalString *search, f64 position, MalStringSearchOp operation
 );
 
 // A false result is side-effect-free; primitive strings search their borrowed leaf storage.
@@ -280,6 +280,11 @@ bool mal_builtin_string_range_span_init(
     MalValue start_value, MalValue end_value, MalStringRangeOp operation, bool identity_locked,
     MalValue *subject_out, usize *start_out, usize *end_out
 );
+bool mal_builtin_string_span_search(
+    MalValue callee, bool locked, MalValue subject, usize start, usize end,
+    MalValue needle, MalValue position, MalStringSearchOp operation, MalValue *out
+);
+
 bool mal_builtin_string_span_equal(MalValue subject, usize start, usize end, MalValue other);
 
 // Callers publish ordinary CALL roots; success may allocate a one-code-unit string.

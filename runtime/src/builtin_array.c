@@ -5227,7 +5227,7 @@ static MalCompletion mal_builtin_array_iteration_direct_impl(
         case MAL_BUILTIN_TYPED_ARRAY_REDUCE_RIGHT:
             expected = mal_builtin_typed_array_iteration_callback(operation);
             break;
-        case MAL_BUILTIN_ARRAY_OR_TYPED_ARRAY_FOR_EACH:
+        case MAL_BUILTIN_COLLECTION_FOR_EACH:
             expected = mal_builtin_array_for_each;
             alternate = mal_builtin_typed_array_iteration_callback(MAL_BUILTIN_TYPED_ARRAY_FOR_EACH);
             break;
@@ -5287,6 +5287,11 @@ static MalCompletion mal_builtin_array_iteration_direct_impl(
     MalNativeFunctionCallback actual = mal_value_is_native_function_object(callee)
         ? mal_native_function_object_callback(mal_value_to_native_function_object(callee))
         : nullptr;
+    if (operation == MAL_BUILTIN_COLLECTION_FOR_EACH &&
+        (actual == mal_builtin_map_prototype_for_each ||
+         actual == mal_builtin_set_prototype_for_each)) {
+        expected = actual;
+    }
     if (alternate != nullptr && actual == alternate) expected = alternate;
     bool exact = arg_count >= 0 && actual != nullptr && actual == expected;
 #if MAL_REALMS

@@ -95,7 +95,7 @@ import type {
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal artifacts are hard cut-overs: stale cache entries rebuild.
-export const COMPILER_ARTIFACT_VERSION = 208;
+export const COMPILER_ARTIFACT_VERSION = 209;
 
 function validateClosureCaptureOwners(
 	owners: ReadonlyArray<number>,
@@ -208,7 +208,9 @@ const TAGGED_GUARDED_BUILTIN_OPERATIONS = [
 	),
 	...VM_GUARDED_BUILTIN_OPERATIONS.filter(
 		(operation) =>
-			operation.startsWith("TypedArray.") || operation.startsWith("ArrayOrTypedArray."),
+			operation.startsWith("TypedArray.") ||
+			operation.startsWith("ArrayOrTypedArray.") ||
+			operation === "Collection.prototype.forEach",
 	),
 	...VM_GUARDED_BUILTIN_OPERATIONS.filter((operation) => operation.startsWith("Number.")),
 	...VM_GUARDED_BUILTIN_OPERATIONS.filter(
@@ -236,7 +238,7 @@ const ARRAY_ITERATION_CALLBACK_OPERATIONS: ReadonlySet<string> = new Set([
 	"TypedArray.prototype.filter",
 	"TypedArray.prototype.findLast",
 	"TypedArray.prototype.findLastIndex",
-	"ArrayOrTypedArray.prototype.forEach",
+	"Collection.prototype.forEach",
 	"ArrayOrTypedArray.prototype.some",
 	"ArrayOrTypedArray.prototype.every",
 	"ArrayOrTypedArray.prototype.find",
@@ -1037,7 +1039,15 @@ function writeNativeStorage(w: Writer, storage: NativeStoragePlan | undefined): 
 					"charAtProperty",
 					"charAtCall",
 					"atProperty",
+					"indexOfProperty",
+					"includesProperty",
+					"startsWithProperty",
+					"endsWithProperty",
 					"atCall",
+					"indexOfCall",
+					"includesCall",
+					"startsWithCall",
+					"endsWithCall",
 					"rangeProperty",
 					"rangeCall",
 				].indexOf(consumer.kind),
@@ -1572,7 +1582,15 @@ function readNativeStorage(r: Reader): NativeStoragePlan {
 							"charAtProperty",
 							"charAtCall",
 							"atProperty",
+							"indexOfProperty",
+							"includesProperty",
+							"startsWithProperty",
+							"endsWithProperty",
 							"atCall",
+							"indexOfCall",
+							"includesCall",
+							"startsWithCall",
+							"endsWithCall",
 							"rangeProperty",
 							"rangeCall",
 						] as const
@@ -2473,7 +2491,15 @@ function writeCompilerArtifact(
 								"charAtProperty",
 								"charAtCall",
 								"atProperty",
+								"indexOfProperty",
+								"includesProperty",
+								"startsWithProperty",
+								"endsWithProperty",
 								"atCall",
+								"indexOfCall",
+								"includesCall",
+								"startsWithCall",
+								"endsWithCall",
 							].indexOf(consumer.kind),
 						);
 					}
@@ -5273,7 +5299,15 @@ function readCompilerArtifact(
 								"charAtProperty",
 								"charAtCall",
 								"atProperty",
+								"indexOfProperty",
+								"includesProperty",
+								"startsWithProperty",
+								"endsWithProperty",
 								"atCall",
+								"indexOfCall",
+								"includesCall",
+								"startsWithCall",
+								"endsWithCall",
 							] as const
 						)[tag];
 						if (kind === undefined)

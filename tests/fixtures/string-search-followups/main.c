@@ -97,7 +97,7 @@ static bool search_matches_reference(MalVm *vm) {
                     for (usize p = 0; p < countof(starts); p++) {
                         for (usize reverse = 0; reverse < 2; reverse++) {
                             i32 expected = reference_find(units, countof(units), units + offsets[o], sizes[n], starts[p], reverse);
-                            MalValue actual = mal_builtin_string_search_strings(strings[s], needles[variant], starts[p],
+                            MalValue actual = mal_builtin_string_search_strings(strings[s], 0, mal_string_length(strings[s]), needles[variant], starts[p],
                                 reverse ? MAL_STRING_SEARCH_LAST_INDEX_OF : MAL_STRING_SEARCH_INDEX_OF);
                             CHECK(mal_value_to_i32(actual) == expected);
                         }
@@ -108,6 +108,44 @@ static bool search_matches_reference(MalVm *vm) {
     }
     CHECK(strings[2]->storage == MAL_STRING_STORAGE_CONS);
     CHECK(strings[3]->storage == MAL_STRING_STORAGE_CONS);
+    return true;
+}
+
+static bool bounded_windows_match_reference(MalVm *vm) {
+    c16 units[256];
+    for (usize i = 0; i < countof(units); i++) units[i] = (c16) ('a' + i % 7);
+    units[46] = 0xd800;
+    units[47] = 0xdc00;
+    MalString *strings[] = {
+        mal_string_new_copy(&vm->heap, units, countof(units)),
+        mal_string_new_external(&vm->heap, units, countof(units)),
+        rope_from_units(vm, units, countof(units), false),
+        rope_from_units(vm, units, countof(units), true),
+    };
+    const usize bounds[][2] = {{0, 0}, {1, 12}, {40, 47}, {47, 48}, {43, 100}, {200, 256}};
+    const usize needle_lengths[] = {0, 1, 2, 7, 31, 32, 33};
+    const f64 positions[] = {-INFINITY, -1, -0.0, 0.9, 1.8, 7, 100, INFINITY, NAN};
+    for (usize b = 0; b < countof(bounds); b++) {
+        usize start = bounds[b][0], end = bounds[b][1], length = end - start;
+        for (usize n = 0; n < countof(needle_lengths); n++) {
+            usize needle_length = needle_lengths[n];
+            MalString *needle = mal_string_new_copy(&vm->heap, units + 43, needle_length);
+            for (usize s = 0; s < countof(strings); s++) {
+                for (usize p = 0; p < countof(positions); p++) {
+                    i32 expected = reference_find(units + start, length, units + 43, needle_length, positions[p], false);
+                    CHECK(mal_value_to_i32(mal_builtin_string_search_strings(strings[s], start, end, needle, positions[p], MAL_STRING_SEARCH_INDEX_OF)) == expected);
+                    CHECK(mal_value_to_boolean(mal_builtin_string_search_strings(strings[s], start, end, needle, positions[p], MAL_STRING_SEARCH_INCLUDES)) == (expected >= 0));
+                    usize at = isnan(positions[p]) || positions[p] <= 0 ? 0 : positions[p] >= (f64) length ? length : (usize) positions[p];
+                    bool starts = needle_length <= length - at && memcmp(units + start + at, units + 43, needle_length * sizeof(c16)) == 0;
+                    bool ends = needle_length <= at && memcmp(units + start + at - needle_length, units + 43, needle_length * sizeof(c16)) == 0;
+                    CHECK(mal_value_to_boolean(mal_builtin_string_search_strings(strings[s], start, end, needle, positions[p], MAL_STRING_SEARCH_STARTS_WITH)) == starts);
+                    CHECK(mal_value_to_boolean(mal_builtin_string_search_strings(strings[s], start, end, needle, positions[p], MAL_STRING_SEARCH_ENDS_WITH)) == ends);
+                    i32 reverse = reference_find(units + start, length, units + 43, needle_length, positions[p], true);
+                    CHECK(mal_value_to_i32(mal_builtin_string_search_strings(strings[s], start, end, needle, positions[p], MAL_STRING_SEARCH_LAST_INDEX_OF)) == reverse);
+                }
+            }
+        }
+    }
     return true;
 }
 
@@ -132,7 +170,7 @@ static bool compact_single_unit_search(MalVm *vm) {
             for (usize p = 0; p < countof(starts); p++) {
                 i32 expected = reference_find(units + 16, 128, needles + n, 1, starts[p], false);
                 MalValue actual = mal_builtin_string_search_strings(
-                    strings[s], needle, starts[p], MAL_STRING_SEARCH_INDEX_OF);
+                    strings[s], 0, mal_string_length(strings[s]), needle, starts[p], MAL_STRING_SEARCH_INDEX_OF);
                 CHECK(mal_value_to_i32(actual) == expected);
             }
         }
@@ -155,7 +193,7 @@ static bool long_prefix_work_is_bounded(MalVm *vm) {
         MalString *needle = rope_from_units(vm, needle_units, needle_length, true);
         for (usize reverse = 0; reverse < 2; reverse++) {
             mal_perf_stats_reset();
-            MalValue result = mal_builtin_string_search_strings(haystack, needle,
+            MalValue result = mal_builtin_string_search_strings(haystack, 0, mal_string_length(haystack), needle,
                 reverse ? INFINITY : 0,
                 reverse ? MAL_STRING_SEARCH_LAST_INDEX_OF : MAL_STRING_SEARCH_INDEX_OF);
             CHECK(mal_value_to_i32(result) == -1);
@@ -174,7 +212,7 @@ static bool long_prefix_work_is_bounded(MalVm *vm) {
         mal_perf_stats_reset();
         MalString *suffix = mal_string_new_ascii(&vm->heap, "aaaa", 4);
         CHECK(mal_value_to_i32(mal_builtin_string_search_strings(
-            haystack, suffix, INFINITY, MAL_STRING_SEARCH_LAST_INDEX_OF)) == (i32) length - 4);
+            haystack, 0, mal_string_length(haystack), suffix, INFINITY, MAL_STRING_SEARCH_LAST_INDEX_OF)) == (i32) length - 4);
 #if MAL_PERF_STATS
         CHECK(mal_perf_stats.string_iterator_nodes < 128);
 #endif
@@ -200,7 +238,7 @@ static bool short_rope_search_work_is_bounded(MalVm *vm) {
             MalString *needle = mal_string_new_copy(&vm->heap, needle_units, needle_length);
             for (usize reverse = 0; reverse < 2; reverse++) {
                 mal_perf_stats_reset();
-                MalValue result = mal_builtin_string_search_strings(haystack, needle,
+                MalValue result = mal_builtin_string_search_strings(haystack, 0, mal_string_length(haystack), needle,
                     reverse ? INFINITY : 0,
                     reverse ? MAL_STRING_SEARCH_LAST_INDEX_OF : MAL_STRING_SEARCH_INDEX_OF);
                 CHECK(mal_value_to_i32(result) == -1);
@@ -213,10 +251,10 @@ static bool short_rope_search_work_is_bounded(MalVm *vm) {
             MalString *hit;
             CHECK(mal_string_new_cons_checked(&vm->heap, haystack, needle, &hit));
             CHECK(mal_value_to_i32(mal_builtin_string_search_strings(
-                hit, needle, 0, MAL_STRING_SEARCH_INDEX_OF)) == (i32) length);
+                hit, 0, mal_string_length(hit), needle, 0, MAL_STRING_SEARCH_INDEX_OF)) == (i32) length);
             mal_perf_stats_reset();
             CHECK(mal_value_to_i32(mal_builtin_string_search_strings(
-                hit, needle, INFINITY, MAL_STRING_SEARCH_LAST_INDEX_OF)) == (i32) length);
+                hit, 0, mal_string_length(hit), needle, INFINITY, MAL_STRING_SEARCH_LAST_INDEX_OF)) == (i32) length);
 #if MAL_PERF_STATS
             CHECK(mal_perf_stats.string_iterator_nodes < 128);
 #endif
@@ -493,7 +531,7 @@ int main(void) {
 #endif
     MalVm vm;
     mal_vm_init(&vm, &mal_runtime_image);
-    bool passed = search_matches_reference(&vm) && compact_single_unit_search(&vm)
+    bool passed = search_matches_reference(&vm) && bounded_windows_match_reference(&vm) && compact_single_unit_search(&vm)
         && long_prefix_work_is_bounded(&vm)
         && short_rope_search_work_is_bounded(&vm)
         && split_and_replace_keep_sequential_state(&vm)

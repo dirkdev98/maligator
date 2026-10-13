@@ -63,7 +63,11 @@ describe("TypedArray callback invocation families", () => {
 					"findLast",
 					"findLastIndex",
 				]
-					.map((method) => `ArrayOrTypedArray.prototype.${method}`)
+					.map((method) =>
+						method === "forEach"
+							? "Collection.prototype.forEach"
+							: `ArrayOrTypedArray.prototype.${method}`,
+					)
 					.sort(),
 			);
 			for (const binary of [pair.compiled, pair.interpreted])

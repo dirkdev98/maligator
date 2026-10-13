@@ -13,7 +13,10 @@ import {
 } from "./core-ir-loops.ts";
 import type { CoreLoopInductionAnalysis } from "./core-ir-loops.ts";
 import { coreTargetSupportsNumericFusionOperator } from "./core-ir-region-strategies.ts";
-import { CORE_STRING_SPAN_CHARACTER_METHODS } from "./core-ir-regions.ts";
+import {
+	CORE_STRING_SPAN_METHODS,
+	CORE_STRING_SPAN_SEARCH_METHODS,
+} from "./core-ir-regions.ts";
 import type {
 	CoreStringSpanConsumer,
 	CoreStackObjectMaterialization,
@@ -3720,7 +3723,7 @@ function stringSpanCandidates(
 			}
 			const value = instructionOperand(fn, instruction, use.position)!;
 			let kind: CoreStringSpanConsumer["kind"] = "materialize";
-			const characterProperty = CORE_STRING_SPAN_CHARACTER_METHODS.find((method) =>
+			const methodProperty = CORE_STRING_SPAN_METHODS.find((method) =>
 				staticPropertyNamed(program, fn, instruction, method),
 			);
 			if (
@@ -3732,24 +3735,25 @@ function stringSpanCandidates(
 			else if (
 				opcode === "loadPropertyStatic" &&
 				use.position === 0 &&
-				characterProperty !== undefined
+				methodProperty !== undefined
 			)
-				kind = `${characterProperty}Property`;
+				kind = `${methodProperty}Property`;
 			else if (
 				(opcode === "call" &&
 					use.position === 1 &&
-					instructionOperandCount(fn, instruction) <= 3) ||
+					instructionOperandCount(fn, instruction) <= 4) ||
 				(opcode === "callKnown" &&
 					use.position === 0 &&
-					instructionOperandCount(fn, instruction) <= 2)
+					instructionOperandCount(fn, instruction) <= 3)
 			) {
 				const callAttrs = fn.instructionAttributes(instruction);
 				const method =
 					opcode === "call"
 						? specializationDefinition(fn, roots, instructionOperand(fn, instruction, 0)!)
 						: undefined;
-				const position = instructionOperand(fn, instruction, opcode === "call" ? 2 : 1);
-				const characterMethod = CORE_STRING_SPAN_CHARACTER_METHODS.find((name) =>
+				const argumentOffset = opcode === "call" ? 2 : 1;
+				const argumentCount = instructionOperandCount(fn, instruction) - argumentOffset;
+				const methodName = CORE_STRING_SPAN_METHODS.find((name) =>
 					opcode === "callKnown"
 						? callAttrs.operation === `String.prototype.${name}`
 						: staticPropertyNamed(program, fn, method, name),
@@ -3757,10 +3761,16 @@ function stringSpanCandidates(
 				if (
 					!callAttrs.construct &&
 					callAttrs.argumentMode === undefined &&
-					(position === undefined || root(position) !== resultRoot) &&
-					characterMethod !== undefined
+					methodName !== undefined &&
+					argumentCount <=
+						(CORE_STRING_SPAN_SEARCH_METHODS.some((name) => name === methodName)
+							? 2
+							: 1) &&
+					Array.from({ length: argumentCount }, (_, index) =>
+						instructionOperand(fn, instruction, argumentOffset + index)!,
+					).every((argument) => root(argument) !== resultRoot)
 				)
-					kind = `${characterMethod}Call`;
+					kind = `${methodName}Call`;
 			} else if (
 				opcode === "binary" &&
 				(fn.instructionAttributes(instruction).operator === "===" ||

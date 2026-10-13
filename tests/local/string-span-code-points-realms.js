@@ -84,4 +84,60 @@ for (const method of ["charAt", "at"]) {
 	rows.push(inspect("x😀z", 0));
 	String.prototype[method] = local;
 }
+function searchIndexOf(source, needle, position) {
+	const part = source.slice(1, -1);
+	return [part.indexOf(needle, position), part.length];
+}
+function searchIncludes(source, needle, position) {
+	const part = source.slice(1, -1);
+	return [part.includes(needle, position), part.length];
+}
+function searchStartsWith(source, needle, position) {
+	const part = source.substring(1, 3);
+	return [part.startsWith(needle, position), part.length];
+}
+function searchEndsWith(source, needle, position) {
+	const part = source.substring(1, 3);
+	return [part.endsWith(needle, position), part.length];
+}
+const searches = [searchIndexOf, searchIncludes, searchStartsWith, searchEndsWith];
+["indexOf", "includes", "startsWith", "endsWith"].forEach((method, index) => {
+	const local = String.prototype[method];
+	String.prototype[method] = other.String.prototype[method];
+	const search = searches[index];
+	rows.push(search("x😀z", "\ud83d", 0));
+	for (const needle of [Symbol("needle"), /a/]) {
+		try {
+			rows.push(search("xabz", needle, 0));
+		} catch (error) {
+			rows.push(error instanceof other.TypeError, error instanceof TypeError);
+		}
+	}
+	for (const position of [Symbol("position"), 1n]) {
+		try {
+			search("xabz", "a", position);
+		} catch (error) {
+			rows.push(error instanceof other.TypeError, error instanceof TypeError);
+		}
+	}
+	try {
+		search(
+			"xabz",
+			{
+				get [Symbol.match]() {
+					gc?.();
+					throw new RangeError("local match");
+				},
+				toString() {
+					gc?.();
+					throw new RangeError("local needle");
+				},
+			},
+			0,
+		);
+	} catch (error) {
+		rows.push(error instanceof other.RangeError, error instanceof RangeError);
+	}
+	String.prototype[method] = local;
+});
 console.log(JSON.stringify(rows));

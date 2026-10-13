@@ -1,4 +1,8 @@
-import { CORE_STRING_SPAN_CHARACTER_METHODS } from "../core/core-ir-regions.ts";
+import {
+	CORE_STRING_SPAN_CHARACTER_METHODS,
+	CORE_STRING_SPAN_METHODS,
+	CORE_STRING_SPAN_SEARCH_METHODS,
+} from "../core/core-ir-regions.ts";
 import type { CorePropertyPlacement } from "../core/core-ir-regions.ts";
 import { builtinResultIsInt32 } from "../shared/builtin-registry.ts";
 import {
@@ -6190,10 +6194,13 @@ function emitInstruction(
 	}
 	if (nativeStringSpanAction !== undefined) {
 		const { site, role, consumer } = nativeStringSpanAction;
-		const characterProperty = CORE_STRING_SPAN_CHARACTER_METHODS.find(
+		const methodProperty = CORE_STRING_SPAN_METHODS.find(
 			(method) => role === `${method}Property`,
 		);
 		const characterCall = CORE_STRING_SPAN_CHARACTER_METHODS.find(
+			(method) => role === `${method}Call`,
+		);
+		const searchCall = CORE_STRING_SPAN_SEARCH_METHODS.find(
 			(method) => role === `${method}Call`,
 		);
 		const { span } = site;
@@ -6311,7 +6318,7 @@ function emitInstruction(
 				instruction.operator === "!==" ? `!${equal}` : equal,
 			);
 		} else if (
-			(characterProperty !== undefined || role === "rangeProperty") &&
+			(methodProperty !== undefined || role === "rangeProperty") &&
 			instruction.opcode === "LOAD_PROPERTY_STATIC"
 		) {
 			const chain = nativeStringCharCodeAtChainAction?.chain;
@@ -6353,6 +6360,24 @@ function emitInstruction(
 			guard += ` && mal_builtin_string_span_character(vm, ${locked ? "MAL_VALUE_UNDEFINED" : boxedOperand(instruction.callee)}, ${locked}, ${source}, ${prefix}_start, ${prefix}_end, ${position}, MAL_STRING_CHARACTER_${operation}, &${result})`;
 			projected = `r${instruction.dst} = ${callValue(instruction.dst, result)};`;
 		} else if (
+			searchCall !== undefined &&
+			(instruction.opcode === "CALL" || instruction.opcode === "CALL_KNOWN")
+		) {
+			const result = `${prefix}_search_${ip}`;
+			const operation = STRING_SEARCH_KERNELS[`String.prototype.${searchCall}`];
+			if (operation === undefined)
+				throw new Error("Unknown string span search operation");
+			declarations.push(`MalValue ${result};`);
+			const locked = instruction.opcode === "CALL_KNOWN";
+			const argument = (index: number) =>
+				instruction.arguments[index] === undefined
+					? "MAL_VALUE_UNDEFINED"
+					: boxedOperand(instruction.arguments[index]);
+			guard += ` && mal_builtin_string_span_search(${locked ? "MAL_VALUE_UNDEFINED" : boxedOperand(instruction.callee)}, ${locked}, ${source}, ${prefix}_start, ${prefix}_end, ${argument(0)}, ${argument(1)}, MAL_STRING_SEARCH_${operation[0]}, &${result})`;
+			const sourceKind =
+				site.parent !== undefined ? "nested" : (site.projection?.kind ?? "range");
+			projected = `MAL_PERF_COUNT(string_span_${sourceKind}_searches); r${instruction.dst} = ${callValue(instruction.dst, result)};`;
+		} else if (
 			role === "number" &&
 			(instruction.opcode === "CALL" || instruction.opcode === "CALL_KNOWN")
 		) {
@@ -6372,8 +6397,9 @@ function emitInstruction(
 			`  ${poll()}`,
 			`} else {`,
 			...(role === "number" ||
-			characterProperty !== undefined ||
+			methodProperty !== undefined ||
 			characterCall !== undefined ||
+			searchCall !== undefined ||
 			role === "rangeProperty"
 				? materialize.map((line) => `  ${line}`)
 				: []),
@@ -9682,7 +9708,7 @@ function emitInstruction(
 							operandIsString(instruction.arguments[0])
 						) {
 							return [
-								`MalValue ${result} = mal_builtin_string_search_strings(mal_value_to_string(${boxedOperand(instruction.thisValue)}), mal_value_to_string(${boxedOperand(instruction.arguments[0])}), ${position}, MAL_STRING_SEARCH_${search[0]});`,
+								`MalValue ${result} = mal_builtin_string_search_strings(mal_value_to_string(${boxedOperand(instruction.thisValue)}), 0, mal_string_length(mal_value_to_string(${boxedOperand(instruction.thisValue)})), mal_value_to_string(${boxedOperand(instruction.arguments[0])}), ${position}, MAL_STRING_SEARCH_${search[0]});`,
 								`r${instruction.dst} = ${callValue(instruction.dst, result)};`,
 								poll(),
 							];
@@ -10420,8 +10446,7 @@ function emitInstruction(
 							"TypedArray.prototype.findLast": "MAL_BUILTIN_TYPED_ARRAY_FIND_LAST",
 							"TypedArray.prototype.findLastIndex":
 								"MAL_BUILTIN_TYPED_ARRAY_FIND_LAST_INDEX",
-							"ArrayOrTypedArray.prototype.forEach":
-								"MAL_BUILTIN_ARRAY_OR_TYPED_ARRAY_FOR_EACH",
+							"Collection.prototype.forEach": "MAL_BUILTIN_COLLECTION_FOR_EACH",
 							"ArrayOrTypedArray.prototype.some": "MAL_BUILTIN_ARRAY_OR_TYPED_ARRAY_SOME",
 							"ArrayOrTypedArray.prototype.every":
 								"MAL_BUILTIN_ARRAY_OR_TYPED_ARRAY_EVERY",
@@ -10467,7 +10492,7 @@ function emitInstruction(
 								| "TypedArray.prototype.filter"
 								| "TypedArray.prototype.findLast"
 								| "TypedArray.prototype.findLastIndex"
-								| "ArrayOrTypedArray.prototype.forEach"
+								| "Collection.prototype.forEach"
 								| "ArrayOrTypedArray.prototype.some"
 								| "ArrayOrTypedArray.prototype.every"
 								| "ArrayOrTypedArray.prototype.find"

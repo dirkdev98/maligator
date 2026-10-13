@@ -1,4 +1,7 @@
-import { builtinCallbackInvocation } from "../shared/builtin-registry.ts";
+import {
+	builtinCallbackInvocation,
+	builtinCallbackNumberArgumentCandidates,
+} from "../shared/builtin-registry.ts";
 import {
 	COMPILER_VALUE_KIND_BOOLEAN,
 	COMPILER_VALUE_KIND_NUMBER,
@@ -235,6 +238,10 @@ export function connectCoreNativeEntries(
 			observation.indices.length > 0 ||
 			observation.restStarts.length > 0;
 		const argumentCount = invocation.argumentKinds.length;
+		const numberArguments = builtinCallbackNumberArgumentCandidates(operation);
+		const guardedNumbers = numberArguments.some(
+			(index) => invocation.argumentKinds[index] !== "number",
+		);
 		if (
 			(nodes.get(callback.target) ?? []).some(
 				({ entry }) =>
@@ -249,7 +256,7 @@ export function connectCoreNativeEntries(
 		const representations = Array.from(
 			{ length: exactArity ? argumentCount : fn.parameterCount },
 			(_, index): CorePlanRepresentation =>
-				invocation.argumentKinds[index] === "number" ? "f64" : "boxed",
+				numberArguments.includes(index) ? "f64" : "boxed",
 		);
 		if (
 			!exactArity &&
@@ -274,6 +281,7 @@ export function connectCoreNativeEntries(
 				instruction: callback.instruction,
 				guarded: true,
 				builtinCallbackOperation: operation,
+				...(guardedNumbers ? { builtinCallbackNumbers: true as const } : {}),
 			}),
 		);
 		callbackSeeds.set(key, seed);

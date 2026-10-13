@@ -526,10 +526,10 @@ numeric sorting, stack objects, and string projections.
       through the shared bounded character helper, with transported consumer validation
       and ordinary call root publication. Focused compiler and primitive-operation
       checks, Node oracles, and emitted-C syntax checks pass. Range-span Linux ASan/UBSan
-      passes. Split and regexp outputs match under both backends and GC stress, but
-      three new character-counter assertions were unexercised after caller inlining.
-      Executed callback paths now cover numeric/undefined positions; strict assertions
-      remain and the sanitizer rerun is pending. Measurement remains pending.
+      passes. Split and locked regexp checks now pass, including executed character
+      counters. Mutable regexp positive calls ran after prototype mutation permanently
+      invalidated the protector; their placement is repaired while fallback coverage
+      and strict counters remain. The sanitizer rerun and measurement remain pending.
 
 - [ ] Compose bounded range continuations up to four levels, including split and
       regexp roots, while retaining each span's own lifetime and materialization state.
@@ -538,15 +538,35 @@ numeric sorting, stack objects, and string projections.
       bottom-up admission, independent roots, and a depth-four suffix when an outer
       producer exceeds the cap. All three source kinds select connected depth-four
       chains; 133 span/codec checks, Node oracles, and emitted-C syntax checks pass.
-      Native execution and measurement remain pending.
+      Both backends and GC stress preserve outputs. Locked sanitizer coverage passes;
+      the mutable aggregate read/admission ratio was invalidated by deeper chains and
+      is replaced with explicit composition and executed-consumer checks. The sanitizer
+      rerun and measurement remain pending.
 - [ ] Extend exact callback invocation to Map and Set `forEach` receivers.
       Carry value/key/owner arguments without numeric assumptions, preserving live
       iteration, mutation, callback effects, realms, and cached generic fallback.
-      Implemented through the existing iterators and exact callback entry. Constructed
-      receivers nominate mutable guarded calls without proving their brand; locked
-      builtin calls retain their callback contract through target lowering. Focused
-      compiler and verifier checks pass; native execution and measurement remain pending.
-      Unknown helper receivers need a separately validated common invocation contract.
+      Implemented through the existing iterators and exact callback entry. Proven
+      receivers retain concrete guarded calls; locked builtin calls retain their
+      callback contract through target lowering. Focused
+      compiler and verifier checks pass; mutable and locked sanitizer checks pass.
+      Realm coverage required eval for its Function constructor; that configuration is
+      repaired and its rerun remains pending. Measurement remains pending.
+- [ ] Share guarded `forEach` invocation across Array, TypedArray, Map, and Set
+      receivers passed through helpers and loop backedges. Keep the common callback
+      arguments boxed; numeric entry nominations require the existing argument guards.
+      Preserve captured-method identity, realm behavior, live iteration, and fallback.
+      Implemented through one collection invocation family; constructor syntax hints
+      are removed. All 131 focused callback/entry/codec checks, Node oracles, and C
+      syntax checks pass. Native execution and measurement remain pending. Forwarded
+      callback parameters still require a validated runtime invocation contract.
+- [ ] Consume range, split, regexp, and nested spans with `startsWith`, `endsWith`,
+      `includes`, and `indexOf` through bounded shared search helpers. Preserve relative
+      UTF-16 positions, empty needles, matching boundaries, coercion order, and one-time
+      materialization for unsupported or observable arguments.
+      Implemented through the existing bounded forward search and KMP cursor, with
+      primitive-needle/position guards and per-method/source-family execution counters.
+      Focused compiler checks, Node oracles, and C syntax checks pass; native execution
+      and measurement remain pending.
 
 | Order | Slice                        | Owning work and exit condition                                                                                                                                  |
 | ----- | ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |

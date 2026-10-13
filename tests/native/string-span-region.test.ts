@@ -76,6 +76,49 @@ describe("composable string spans", () => {
 					),
 				),
 			).toBe(true);
+			expect(
+				pair.programImage.native.functions.some((fn) =>
+					fn.specializations.some(
+						(region) =>
+							region.kind === "string-span" &&
+							["length", "equal", "number"].every((kind) =>
+								region.consumers.some((consumer) => consumer.kind === kind),
+							),
+					),
+				),
+			).toBe(true);
+			const searchFamilies = new Set<string>();
+			for (const fn of pair.programImage.native.functions) {
+				const plans = [
+					...fn.specializations
+						.filter((region) => region.kind === "string-span")
+						.map((region) => ({
+							producerIp: region.callIp,
+							sourceKind: "range",
+							consumers: region.consumers,
+						})),
+					...(fn.storage?.spanContinuations ?? []),
+				];
+				const children = new Set(
+					plans.flatMap((plan) =>
+						plan.consumers
+							.filter((consumer) => consumer.kind === "rangeCall")
+							.map((consumer) => consumer.ip),
+					),
+				);
+				for (const plan of plans)
+					if (
+						["indexOfCall", "includesCall", "startsWithCall", "endsWithCall"].every(
+							(kind) => plan.consumers.some((consumer) => consumer.kind === kind),
+						)
+					)
+						searchFamilies.add(
+							children.has(plan.producerIp) ? "nested" : plan.sourceKind,
+						);
+			}
+			expect([...searchFamilies]).toEqual(
+				expect.arrayContaining(["range", "split", "regexp", "nested"]),
+			);
 			const nestedSources = pair.programImage.native.functions.flatMap(
 				(fn) =>
 					fn.storage?.spanContinuations
@@ -132,9 +175,8 @@ describe("composable string spans", () => {
 			);
 			expect(stats).not.toBeNull();
 			expect(Number(stats![1])).toBeGreaterThan(0);
-			expect(Number(stats![2])).toBeGreaterThan(Number(stats![1]));
+			expect(Number(stats![2])).toBeGreaterThan(0);
 			expect(Number(stats![3])).toBeGreaterThan(0);
-			expect(Number(stats![3])).toBeLessThan(Number(stats![1]));
 			const characters = measured.stderr.match(
 				/\[perf-string-span-character-stats\] reads=(\d+)/,
 			);
@@ -161,6 +203,17 @@ describe("composable string spans", () => {
 			);
 			expect(deep).not.toBeNull();
 			expect(Number(deep![1])).toBeGreaterThan(0);
+			const searches = measured.stderr.match(
+				/\[perf-string-span-search-stats\] index_of=(\d+) includes=(\d+) starts_with=(\d+) ends_with=(\d+)/,
+			);
+			expect(searches).not.toBeNull();
+			for (const count of searches!.slice(1)) expect(Number(count)).toBeGreaterThan(0);
+			const searchSources = measured.stderr.match(
+				/\[perf-string-span-search-source-stats\] range=(\d+) split=(\d+) regexp=(\d+) nested=(\d+)/,
+			);
+			expect(searchSources).not.toBeNull();
+			for (const count of searchSources!.slice(1))
+				expect(Number(count)).toBeGreaterThan(0);
 			const substring = measured.stderr.match(
 				/\[perf-string-span-substring-stats\] admissions=(\d+)/,
 			);

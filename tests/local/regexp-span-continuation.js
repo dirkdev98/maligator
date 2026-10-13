@@ -255,6 +255,11 @@ const custom = {
 	},
 };
 rows.push(inspect(custom, "original", false, 1, collect), events);
+["x|😀|z", "x|ab|z", "x||z"].forEach((source) => {
+	rows.push(stringCharacters(source, 0, retainedCharacterState));
+	rows.push(stringCharacters(source, -1, retainedCharacterState));
+	rows.push(stringCharacters(source, undefined, retainedCharacterState));
+});
 if (typeof process !== "undefined" && process.env.MAL_SPAN_MUTABLE === "mutable") {
 	let missingReads = 0;
 	let missingReceiver;
@@ -376,11 +381,7 @@ for (let repeat = 0; repeat < 4; repeat++)
 		])
 			rows.push(stringCharacters(source, position, retainedCharacterState));
 	}
-["x|😀|z", "x|ab|z", "x||z"].forEach((source) => {
-	rows.push(stringCharacters(source, 0, retainedCharacterState));
-	rows.push(stringCharacters(source, -1, retainedCharacterState));
-	rows.push(stringCharacters(source, undefined, retainedCharacterState));
-});
+
 const characterEffects = [];
 rows.push(
 	stringCharacters(
