@@ -27,6 +27,8 @@ design documents, and old reports provide context, not proof about the current t
 
 - Fix defects at the owning layer. Do not hide them with fixture-specific branches,
   disabled checks, unconditional cache clearing, or retry loops.
+- Understand and optimize the whole picture instead of trying to micro-change /
+  micro-optimize your way out of things.
 - JavaScript semantics and compiler invariants take priority over passing one case.
   Trace the actual fact, effect, control-flow, and representation contracts before
   changing an optimization. Use the [ECMAScript specification](https://tc39.es/ecma262/multipage/)
