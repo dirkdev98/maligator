@@ -175,6 +175,7 @@ tests/native/object-keys-count-region.test.ts
 tests/native/object-values-snapshot.test.ts
 tests/native/object-entries-snapshot.test.ts
 tests/native/object-indexed-enumeration.test.ts
+tests/native/object-enumeration-counts.test.ts
 tests/native/object-own-keys-snapshot.test.ts
 tests/native/split-span-continuation.test.ts
 tests/native/regexp-span-continuation.test.ts
@@ -190,4 +191,5 @@ tests/native/fixed-typed-array-directions.test.ts
 tests/native/set-algebra-callback.test.ts
 tests/native/string-span-dynamic-equality.test.ts
 tests/native/string-span-handlers.test.ts
+tests/native/string-span-trim-alias.test.ts
 tests/native/from-async-callback.test.ts

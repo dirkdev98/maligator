@@ -589,8 +589,13 @@ describe("trim range producers", () => {
 	it.each(["mutable", "locked"] as const)(
 		"shares trim bounds and consumers under %s primordials",
 		(mode) => {
-			for (const method of ["trim", "trimStart", "trimEnd"])
-				for (const args of ["", "start", "start, end"]) {
+			for (const method of ["trim", "trimStart", "trimEnd", "trimLeft", "trimRight"])
+				for (const args of [
+					"",
+					"start",
+					"start, end",
+					"start, end, observer(), observer()",
+				]) {
 					const image = compile(
 						`const part=value.${method}(${args});observer();if(escape)return part;return [part.length,part==='12',Number(part),part.charAt(0),part.at(-1),part.codePointAt(0),part.startsWith('1')];`,
 						mode,
@@ -615,8 +620,18 @@ describe("trim range producers", () => {
 				}
 		},
 	);
-	it("rejects a forged trim direction", () => {
-		const image = compile("const part=value.trimStart();return part.length;");
+	it.each(["slice", "substring", "substr"])(
+		"retains the bounded argument contract for %s",
+		(method) => {
+			const image = compile(
+				`const part=value.${method}(start,end,observer());return part.length;`,
+			);
+			expect(spans(image)).toHaveLength(0);
+		},
+	);
+
+	it.each(["trimStart", "trimLeft"])("rejects a forged %s direction", (method) => {
+		const image = compile(`const part=value.${method}();return part.length;`);
 		const fn = image.native.functions.find((fn) =>
 			fn.specializations.some((region) => region.kind === "string-span"),
 		)!;

@@ -17,6 +17,7 @@ import { coreTargetSupportsNumericFusionOperator } from "./core-ir-region-strate
 import {
 	CORE_STRING_SPAN_METHODS,
 	CORE_STRING_SPAN_RANGE_METHODS,
+	coreStringSpanRangeAcceptsArgumentCount,
 	CORE_STRING_SPAN_SEARCH_METHODS,
 } from "./core-ir-regions.ts";
 import type {
@@ -3710,7 +3711,6 @@ function stringSpanCandidates(
 					(method) => attrs.operation === `String.prototype.${method}`,
 				)) ||
 			instructionOperandCount(fn, call) < offset ||
-			instructionOperandCount(fn, call) > offset + 2 ||
 			instructionResultCount(fn, call) !== 1 ||
 			!control.reachable.has(fn.instructionBlock(call))
 		)
@@ -3723,7 +3723,14 @@ function stringSpanCandidates(
 				? attrs.operation === `String.prototype.${method}`
 				: staticPropertyNamed(program, fn, property, method),
 		);
-		if (rangeOperation === undefined) continue;
+		if (
+			rangeOperation === undefined ||
+			!coreStringSpanRangeAcceptsArgumentCount(
+				rangeOperation,
+				instructionOperandCount(fn, call) - offset,
+			)
+		)
+			continue;
 		if (
 			!known &&
 			(!staticPropertyNamed(program, fn, property, rangeOperation) ||

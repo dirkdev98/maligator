@@ -25,8 +25,6 @@ MalValue mal_builtin_object_keys_known(
 );
 
 // Counts the snapshot without allocation or user code; a decline leaves the original call untouched.
-bool mal_builtin_object_keys_count(MalValue callee, MalValue target, bool locked, u32 *count_out);
-
 typedef enum MalObjectEnumerationKind {
     MAL_OBJECT_ENUMERATION_KEYS,
     MAL_OBJECT_ENUMERATION_VALUES,
@@ -34,6 +32,8 @@ typedef enum MalObjectEnumerationKind {
     MAL_OBJECT_ENUMERATION_NAMES,
     MAL_OBJECT_ENUMERATION_SYMBOLS,
 } MalObjectEnumerationKind;
+
+bool mal_builtin_object_enumeration_count(MalValue callee, MalValue target, bool locked, MalObjectEnumerationKind kind, u32 *count_out);
 
 // Caller-owned roots retain the eager sequence independently of later receiver mutations.
 bool mal_builtin_object_enumeration_snapshot(MalVm *vm, MalValue callee, MalValue target, bool locked, MalObjectEnumerationKind kind, MalValue *elements, u32 capacity, u32 *count_out);

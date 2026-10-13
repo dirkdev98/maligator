@@ -853,13 +853,13 @@ export const builtinOperations: ReadonlyArray<BuiltinOperationDescriptor> = [
 			lowerings: ["generic", "span-projection"],
 		}),
 	),
-	...(["trim", "trimStart", "trimEnd"] as const).map(
+	...(["trim", "trimStart", "trimEnd", "trimLeft", "trimRight"] as const).map(
 		(key): BuiltinOperationDescriptor => ({
 			id: `String.prototype.${key}`,
 			owner: "String.prototype",
 			key,
 			receiver: "string",
-			arity: { minimum: 0, maximum: 2 },
+			arity: { minimum: 0 },
 			evaluationOrder: "receiver-then-arguments",
 			coercionOrder: ["receiver-string"],
 			effects: ["coerce", "allocate", "throw", "safepoint"],

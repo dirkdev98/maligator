@@ -132,6 +132,37 @@ describe("span continuations from split projections", () => {
 	);
 
 	it.each(["mutable", "locked"] as const)(
+		"composes trim aliases and evaluated ignored arguments under %s primordials",
+		(mode) => {
+			for (const root of [
+				"source.slice(1,-1)",
+				"source.split('|')[1]",
+				"/(.*)/.exec(source)[1]",
+			]) {
+				const image = compile(
+					`const parent=${root};const part=parent.trimLeft(observe(1),observe(2),observe(3));const child=part.trimRight();observe();if(escape)return child;return [child.length,child.at(-1),parent.length];`,
+					mode,
+				);
+				const fn = image.native.functions[1]!;
+				const plans = [
+					...fn.specializations.filter((p) => p.kind === "string-span"),
+					...fn.storage!.spanContinuations,
+				];
+				expect(
+					plans.map((p) => ("rangeOperation" in p ? p.rangeOperation : undefined)),
+				).toEqual(expect.arrayContaining(["trimLeft", "trimRight"]));
+				expect(
+					plans.filter((p) => p.consumers.some((c) => c.kind === "rangeCall")).length,
+				).toBeGreaterThanOrEqual(2);
+				expect(deserializeCompilerArtifact(serializeCompilerArtifact(image))).toEqual(
+					image,
+				);
+				expect(() => emitProgramImage(image)).not.toThrow();
+			}
+		},
+	);
+
+	it.each(["mutable", "locked"] as const)(
 		"composes branching consumers under %s primordials",
 		(mode) => {
 			const image = compile(body, mode),

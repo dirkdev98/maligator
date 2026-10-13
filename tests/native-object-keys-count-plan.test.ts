@@ -164,11 +164,19 @@ describe("Object enumeration snapshot storage", () => {
 					"",
 					false,
 				)!.source;
-				expect(source).toContain("mal_builtin_object_enumeration_snapshot");
-				expect(source).toContain("MAL_OBJECT_ENUMERATION_VALUES");
-				expect(source).not.toContain("mal_builtin_object_keys_count");
 				expect(source).toContain(
-					`MalValue __gc_slots[${native.storage!.rootSlotCount + 17}];`,
+					plan!.elementIps.length > 0
+						? "mal_builtin_object_enumeration_snapshot"
+						: "mal_builtin_object_enumeration_count",
+				);
+				expect(source).toContain("MAL_OBJECT_ENUMERATION_VALUES");
+				expect(source).not.toContain(
+					plan!.elementIps.length > 0
+						? "mal_builtin_object_enumeration_count"
+						: "mal_builtin_object_enumeration_snapshot",
+				);
+				expect(source).toContain(
+					`MalValue __gc_slots[${native.storage!.rootSlotCount + (plan!.elementIps.length > 0 ? 17 : 0)}];`,
 				);
 				expect(deserializeCompilerArtifact(serializeCompilerArtifact(image))).toEqual(
 					image,

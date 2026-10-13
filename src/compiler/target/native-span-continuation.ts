@@ -2,6 +2,7 @@ import type { CoreStringSpanRangeOperation } from "../core/core-ir-regions.ts";
 import {
 	CORE_STRING_SPAN_METHODS,
 	CORE_STRING_SPAN_RANGE_METHODS,
+	coreStringSpanRangeAcceptsArgumentCount,
 	CORE_STRING_SPAN_SEARCH_METHODS,
 } from "../core/core-ir-regions.ts";
 import { stringConstantEquals } from "../shared/string-constant.ts";
@@ -95,11 +96,7 @@ export function selectNativeSpanContinuations(
 	if (children.length)
 		for (const [ip, call] of fn.instructions.entries()) {
 			if (sources.length >= 32) break;
-			if (
-				(call.opcode !== "CALL" && call.opcode !== "CALL_KNOWN") ||
-				call.arguments.length > 2 ||
-				unavailable(ip)
-			)
+			if ((call.opcode !== "CALL" && call.opcode !== "CALL_KNOWN") || unavailable(ip))
 				continue;
 			let operation: CoreStringSpanRangeOperation | undefined;
 			let propertyIp = -1;
@@ -130,7 +127,10 @@ export function selectNativeSpanContinuations(
 					if (body.writes[at]!.includes(call.thisValue)) break;
 				}
 			}
-			if (operation !== undefined)
+			if (
+				operation !== undefined &&
+				coreStringSpanRangeAcceptsArgumentCount(operation, call.arguments.length)
+			)
 				sources.push({
 					producerIp: ip,
 					sourceKind: "range",

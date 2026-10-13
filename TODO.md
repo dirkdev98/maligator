@@ -823,7 +823,8 @@ The shared lifetime and fallback rules are recorded in
       comparison operand order. Retain signed strides, per-view affine bounds,
       original alias order, numeric admission and poll resumption. Focused loop and
       artifact checks, four actual frontend/C captures and forced-GC Node oracles
-      pass; native verification and measurement remain pending.
+      pass. Both new directed-loop cases and four span controls pass under Linux
+      ASan/UBSan; measurement remains pending.
 - [ ] Root captured Set-like records throughout observable size/has/keys acquisition,
       then reuse one compiled has callback contract in intersection, difference,
       isSubsetOf and isDisjointFrom. Keep native Set and keys-only traversal paths.
@@ -838,14 +839,15 @@ The shared lifetime and fallback rules are recorded in
       pass. Native values checks passed before an incorrect fallback counter assertion;
       actual frontend proof shows that fallback comparisons are generic or folded.
       The repaired counter contract retains mandatory positive values coverage;
-      focused native rerun and measurement remain pending.
+      both repaired native cases pass under Linux ASan/UBSan; measurement remains pending.
 
 - [ ] Extend split, regexp and nested span continuations to completed exception
       handlers, disjoint protected branches and valid catch-local ranges. Prove
       exception-aware alias lifetimes, preserve Core-owned protected spans and reject
       live continuation crossings or expired generations. All 174 focused checks,
       four actual frontend/artifact/C captures and seven forced-GC Node oracles pass;
-      native verification and measurement remain pending.
+      both new handler cases and four existing continuation controls pass under Linux
+      ASan/UBSan; measurement remains pending.
 
 - [ ] Retain canonical Array.fromAsync mapper nomination across awaits using a
       stable function index in the traced step state. Rebuild guarded stack contexts
@@ -859,14 +861,28 @@ The shared lifetime and fallback rules are recorded in
       Preserve property order and eager values; reject observable accessors before
       any allocation, root captured values during index-string creation, and retain
       cached pair/outer identities. Four actual frontend/artifact/C captures and five
-      forced-GC Node oracles pass; native verification and measurement remain pending.
+      forced-GC Node oracles pass. Both new cases and three existing entries controls
+      pass under Linux ASan/UBSan; measurement remains pending.
 - [ ] Make Array.fromAsync await AsyncIteratorClose before settling an original
       mapper rejection, and replace its u32 iteration index with the specified Number
       index. Implemented with a traced original error and suspended close phase,
       exactly-once return observations, original throw precedence and Proxy-aware
       property creation. All 24 focused checks, four frontend/artifact/C captures
-      and runtime/driver C syntax checks pass; native boundary, close-order and
-      rejection verification remain pending.
+      and runtime/driver C syntax checks pass. All five Linux ASan/UBSan cases pass,
+      including both backend boundary drivers, awaited close and realm coverage.
+
+- [ ] Widen count-only enumeration to all five keys, values, entries, own-names and
+      own-symbol methods without allocating bounded snapshot slots. Ordinary data
+      records and Arrays can exceed previous element limits; primitives reuse their
+      exact own-key counts. Accessors, proxies and other exotics preserve original
+      eager observations through fallback. A Symbol-only property iterator skips
+      unrelated keys and supplies exact fresh-result capacity to getOwnPropertySymbols.
+      Focused unit, Node and frontend/artifact/C checks pass; native and measurement pending.
+- [ ] Compose trimLeft and trimRight aliases through existing trim range kernels,
+      and admit ignored extra trim arguments while retaining their evaluation and
+      effects. Existing method identity, UTF-16, source roots and cached escapes
+      remain authoritative. All 174 focused checks, eleven forced-GC Node oracles
+      and five frontend/artifact/C captures pass; native and measurement pending.
 
 | Order | Slice                        | Owning work and exit condition                                                                                                                                  |
 | ----- | ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |

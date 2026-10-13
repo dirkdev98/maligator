@@ -227,7 +227,8 @@ static void mal_property_iter_start_phase(MalPropertyIter *iter, u32 phase) {
 void mal_property_iter_init(MalPropertyIter *iter, MalObject *object, MalPropertyIterKind kind) {
     iter->object = object;
     iter->kind = kind;
-    iter->phase = MAL_PROPERTY_ITER_PHASE_INDEX;
+    iter->phase = kind == MAL_PROPERTY_ITER_SYMBOL_OWN_PROPERTY_ORDER
+        ? MAL_PROPERTY_ITER_PHASE_SYMBOL : MAL_PROPERTY_ITER_PHASE_INDEX;
     iter->last_index = 0;
     iter->has_last_index = false;
     iter->shape_index = 0;

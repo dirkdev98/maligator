@@ -1,25 +1,38 @@
-const gc = globalThis.__mal_collect_garbage;
+const collectGarbage =
+	globalThis.__mal_collect_garbage ?? globalThis.$262?.gc ?? globalThis.gc;
 const other = $262.createRealm().global;
 const rows = [];
 function trim(value) {
 	const token = value.trim();
-	gc?.();
+	collectGarbage?.();
 	return [token.length, token.charAt(0), `value:${token}`];
 }
 function start(value) {
 	const token = value.trimStart();
-	gc?.();
+	collectGarbage?.();
 	return [token.length, token.at(-1), `value:${token}`];
 }
 function end(value) {
 	const token = value.trimEnd();
-	gc?.();
+	collectGarbage?.();
 	return [token.length, token.codePointAt(0), `value:${token}`];
+}
+function left(value) {
+	const token = value.trimLeft(Symbol("ignored"), 1n, {}, null);
+	collectGarbage?.();
+	return [token.length, token.charAt(0), `value:${token}`];
+}
+function right(value) {
+	const token = value.trimRight(Symbol("ignored"), 1n, {}, null);
+	collectGarbage?.();
+	return [token.length, token.at(-1), `value:${token}`];
 }
 for (const [method, inspect] of [
 	["trim", trim],
 	["trimStart", start],
 	["trimEnd", end],
+	["trimLeft", left],
+	["trimRight", right],
 ]) {
 	const original = String.prototype[method];
 	String.prototype[method] = other.String.prototype[method];
@@ -28,12 +41,12 @@ for (const [method, inspect] of [
 		events = [];
 	boxed.toString = function () {
 		events.push("receiver");
-		gc?.();
+		collectGarbage?.();
 		return " 12 ";
 	};
 	rows.push(inspect(boxed), events);
 	boxed.toString = function () {
-		gc?.();
+		collectGarbage?.();
 		return Symbol("bad receiver");
 	};
 	try {
@@ -42,7 +55,7 @@ for (const [method, inspect] of [
 		rows.push(error instanceof other.TypeError, error instanceof TypeError);
 	}
 	boxed.toString = function () {
-		gc?.();
+		collectGarbage?.();
 		throw new RangeError("local receiver");
 	};
 	try {
@@ -52,7 +65,7 @@ for (const [method, inspect] of [
 	}
 	boxed.toString = function () {
 		String.prototype[method] = () => "override";
-		gc?.();
+		collectGarbage?.();
 		return " 12 ";
 	};
 	rows.push(inspect(boxed), inspect(" 12 "));

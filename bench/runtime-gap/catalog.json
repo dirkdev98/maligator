@@ -3392,6 +3392,32 @@
 			"controls": ["object-values-indexed-snapshot", "object-keys-snapshot-traversal"]
 		},
 		{
+			"id": "object-enumeration-counts",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "Object enumeration snapshots",
+			"category": "object-array-representation",
+			"mechanisms": ["enumeration-count", "delayed-materialization"],
+			"inputShape": "Five count-only enumeration methods over indexed data records and Arrays exceeding bounded snapshot storage.",
+			"unit": "enumeration",
+			"sourceSeam": "runtime/src/builtin_object.c",
+			"fixture": "cases/object-enumeration-counts.mjs",
+			"controls": ["object-keys-count", "object-own-keys-snapshot"]
+		},
+		{
+			"id": "string-span-trim-alias",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "Composable string spans",
+			"category": "memory-layout-usage",
+			"mechanisms": ["string-spans", "delayed-materialization"],
+			"inputShape": "Compose trimLeft and trimRight over bounded slice results with length, character, search and sparse escaping observations.",
+			"unit": "token",
+			"sourceSeam": "src/compiler/target/native-span-continuation.ts",
+			"fixture": "cases/string-span-trim-alias.mjs",
+			"controls": ["string-span-after-handler", "string-span-classify"]
+		},
+		{
 			"id": "method-name-unique",
 			"group": "runtime",
 			"suite": "runtime",

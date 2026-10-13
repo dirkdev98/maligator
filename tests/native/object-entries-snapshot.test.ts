@@ -111,17 +111,25 @@ describe("Object.entries snapshots", () => {
 				const admissions = Number(stats[1]),
 					outer = Number(stats[2]),
 					pairs = Number(stats[3]);
-				expect(admissions, mode).toBeGreaterThan(0);
 				if (mode === "count") {
+					const count = measured.stderr.match(
+						/\[perf-object-entries-count-stats\] admissions=(\d+)/,
+					);
+					expect(count, measured.stderr).not.toBeNull();
+					expect(Number(count![1])).toBeGreaterThan(0);
+					expect(admissions).toBe(0);
 					expect(outer).toBe(0);
 					expect(pairs).toBe(0);
 				} else if (mode === "index") {
+					expect(admissions).toBeGreaterThan(0);
 					expect(outer).toBe(0);
 					expect(pairs).toBe(admissions);
 				} else if (mode === "materialize") {
+					expect(admissions).toBeGreaterThan(0);
 					expect(outer).toBe(admissions);
 					expect(pairs).toBe(admissions * 8);
 				} else {
+					expect(admissions).toBeGreaterThan(0);
 					expect(outer).toBeGreaterThan(0);
 					expect(pairs).toBeGreaterThan(0);
 				}

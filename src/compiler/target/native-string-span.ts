@@ -1,6 +1,7 @@
 import {
 	CORE_STRING_SPAN_METHODS,
 	CORE_STRING_SPAN_RANGE_METHODS,
+	coreStringSpanRangeAcceptsArgumentCount,
 	CORE_STRING_SPAN_SEARCH_METHODS,
 } from "../core/core-ir-regions.ts";
 import { stringConstantEquals } from "../shared/string-constant.ts";
@@ -120,7 +121,10 @@ export function validateNativeStringSpan(
 		!CORE_STRING_SPAN_RANGE_METHODS.includes(region.rangeOperation) ||
 		(producer.opcode === "CALL_KNOWN" &&
 			(producer.construct || producer.argumentMode !== undefined)) ||
-		producer.arguments.length > 2 ||
+		!coreStringSpanRangeAcceptsArgumentCount(
+			region.rangeOperation,
+			producer.arguments.length,
+		) ||
 		producer.thisValue !== region.receiver ||
 		region.propertyPlacement !== "in-place" ||
 		(producer.opcode === "CALL_KNOWN"

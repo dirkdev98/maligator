@@ -68,6 +68,8 @@ export const VM_GUARDED_BUILTIN_OPERATIONS = [
 	"String.prototype.trim",
 	"String.prototype.trimStart",
 	"String.prototype.trimEnd",
+	"String.prototype.trimLeft",
+	"String.prototype.trimRight",
 	"Map.prototype.get",
 	"Map.prototype.set",
 	"Map.prototype.has",

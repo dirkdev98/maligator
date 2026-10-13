@@ -457,6 +457,8 @@ const STRING_SPAN_RANGE_KERNELS: Readonly<Record<CoreStringSpanRangeOperation, s
 		trim: "TRIM",
 		trimStart: "TRIM_START",
 		trimEnd: "TRIM_END",
+		trimLeft: "TRIM_START",
+		trimRight: "TRIM_END",
 	};
 
 const STRING_CHARACTER_KERNELS: Readonly<Record<string, string>> = {
@@ -1759,7 +1761,7 @@ function emitCompiledVariant(
 		NativeObjectEnumerationSnapshotSite
 	>();
 	for (const plan of storage.objectEnumerationSnapshots) {
-		const snapshot = plan.kind !== "keys" || plan.elementIps.length > 0;
+		const snapshot = plan.elementIps.length > 0;
 		const elementsSlot = snapshot ? nextStackSlot : -1;
 		if (snapshot) nextStackSlot += NATIVE_ENUMERATION_SNAPSHOT_CAPACITY;
 		const materializedSlot = snapshot ? nextStackSlot++ : -1;
@@ -6536,7 +6538,7 @@ function emitInstruction(
 		const name = `__enumeration_snapshot_${site.callIp}`;
 		const ordinary = emitGenericInstruction();
 		if (ordinary === null) return null;
-		const snapshot = site.kind !== "keys" || site.elementIps.length > 0;
+		const snapshot = site.elementIps.length > 0;
 		const elements = `&__gc_slots[${site.elementsSlot}]`;
 		const materialized = `__gc_slots[${site.materializedSlot}]`;
 		if (
@@ -6552,7 +6554,7 @@ function emitInstruction(
 							`${materialized} = MAL_VALUE_UNDEFINED;`,
 						]
 					: []),
-				`${name}_active = ${snapshot ? `mal_builtin_object_enumeration_snapshot(vm, ${args}, MAL_OBJECT_ENUMERATION_${site.kind.toUpperCase()}, ${elements}, ${NATIVE_ENUMERATION_SNAPSHOT_CAPACITY}, &${name}_value)` : `mal_builtin_object_keys_count(${args}, &${name}_value)`};`,
+				`${name}_active = ${snapshot ? `mal_builtin_object_enumeration_snapshot(vm, ${args}, MAL_OBJECT_ENUMERATION_${site.kind.toUpperCase()}, ${elements}, ${NATIVE_ENUMERATION_SNAPSHOT_CAPACITY}, &${name}_value)` : `mal_builtin_object_enumeration_count(${args}, MAL_OBJECT_ENUMERATION_${site.kind.toUpperCase()}, &${name}_value)`};`,
 				`if (${name}_active) {`,
 				`  r${instruction.dst} = MAL_VALUE_UNDEFINED;`,
 				`  ${poll()}`,

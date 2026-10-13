@@ -154,9 +154,18 @@ export const CORE_STRING_SPAN_RANGE_METHODS = [
 	"trim",
 	"trimStart",
 	"trimEnd",
+	"trimLeft",
+	"trimRight",
 ] as const;
 export type CoreStringSpanRangeOperation =
 	(typeof CORE_STRING_SPAN_RANGE_METHODS)[number];
+
+export function coreStringSpanRangeAcceptsArgumentCount(
+	operation: CoreStringSpanRangeOperation,
+	count: number,
+): boolean {
+	return count <= 2 || operation.startsWith("trim");
+}
 
 export const CORE_STRING_SPAN_CHARACTER_METHODS = [
 	"charCodeAt",

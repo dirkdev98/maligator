@@ -896,6 +896,14 @@ static void mal_perf_stats_print(void) {
     );
     fprintf(stderr, "[perf-object-keys-count-stats] admissions=%llu\n",
         (unsigned long long) mal_perf_stats.object_keys_count_admissions);
+    fprintf(stderr, "[perf-object-values-count-stats] admissions=%llu\n",
+        (unsigned long long) mal_perf_stats.object_values_count_admissions);
+    fprintf(stderr, "[perf-object-entries-count-stats] admissions=%llu\n",
+        (unsigned long long) mal_perf_stats.object_entries_count_admissions);
+    fprintf(stderr, "[perf-object-names-count-stats] admissions=%llu\n",
+        (unsigned long long) mal_perf_stats.object_names_count_admissions);
+    fprintf(stderr, "[perf-object-symbols-count-stats] admissions=%llu\n",
+        (unsigned long long) mal_perf_stats.object_symbols_count_admissions);
     fprintf(stderr, "[perf-object-keys-snapshot-stats] admissions=%llu materializations=%llu\n",
         (unsigned long long) mal_perf_stats.object_keys_snapshot_admissions,
         (unsigned long long) mal_perf_stats.object_keys_snapshot_materializations);
