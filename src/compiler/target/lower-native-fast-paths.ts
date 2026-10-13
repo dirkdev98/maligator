@@ -799,6 +799,9 @@ function propertyReadRegionPureInstruction(
 		case "CREATE_NUMBER":
 		case "CREATE_F64":
 		case "CREATE_BOOLEAN":
+		case "CREATE_STRING":
+		case "CREATE_NULL":
+		case "CREATE_UNDEFINED":
 			return true;
 		case "MOVE":
 			return (
@@ -808,12 +811,14 @@ function propertyReadRegionPureInstruction(
 			);
 		case "BINARY":
 			return (
-				isNumericRepresentation(representations[instruction.left]!) &&
-				isNumericRepresentation(representations[instruction.right]!) &&
-				(isNumericRepresentation(representations[instruction.dst]!) ||
-					representations[instruction.dst] === "boolean") &&
-				(NATIVE_NUMBER_BINARY_OPERATORS.has(instruction.operator) ||
-					PROPERTY_REGION_COMPARE_OPERATORS.has(instruction.operator))
+				instruction.operator === "===" ||
+				instruction.operator === "!==" ||
+				(isNumericRepresentation(representations[instruction.left]!) &&
+					isNumericRepresentation(representations[instruction.right]!) &&
+					(isNumericRepresentation(representations[instruction.dst]!) ||
+						representations[instruction.dst] === "boolean") &&
+					(NATIVE_NUMBER_BINARY_OPERATORS.has(instruction.operator) ||
+						PROPERTY_REGION_COMPARE_OPERATORS.has(instruction.operator)))
 			);
 		case "UNARY":
 			return (
@@ -833,7 +838,7 @@ function lowerPropertyReadRegion(
 	representations: ReadonlyArray<VmRegisterRepresentation>,
 	jumpTargets: ReadonlySet<number>,
 	conflicts: (ip: number) => boolean,
-	body?: NativeBodyFacts,
+	body: NativeBodyFacts,
 ): NativePropertyReadRegionPlan | undefined {
 	const first = fn.instructions[firstIp];
 	if (
@@ -846,9 +851,25 @@ function lowerPropertyReadRegion(
 		return undefined;
 	}
 	const loads = [{ ip: firstIp, instruction: first }];
+	const admitted = new Set([firstIp]);
+	const claimed = [firstIp];
 	const limit = Math.min(fn.instructions.length, firstIp + 24);
 	for (let ip = firstIp + 1; ip < limit; ip++) {
-		if (jumpTargets.has(ip) || conflicts(ip)) break;
+		const sources = body.branchSources.get(ip) ?? [];
+		const previous = fn.instructions[ip - 1]!;
+		const fallsThrough = !["JUMP", "RETURN", "THROW", "LOAD_UNDECLARED"].includes(
+			previous.opcode,
+		);
+		// Every incoming edge must retain the admission; an unsafe arm poisons its join.
+		if (
+			body.externalEntries.has(ip) ||
+			(jumpTargets.has(ip) && sources.length === 0) ||
+			(fallsThrough && !admitted.has(ip - 1)) ||
+			sources.some((source) => source >= ip || !admitted.has(source)) ||
+			(!fallsThrough && sources.length === 0) ||
+			conflicts(ip)
+		)
+			continue;
 		const instruction = fn.instructions[ip]!;
 		if (
 			instruction.opcode === "LOAD_PROPERTY_STATIC" &&
@@ -856,28 +877,28 @@ function lowerPropertyReadRegion(
 			representations[instruction.dst] === "boxed"
 		) {
 			loads.push({ ip, instruction });
-			if (loads.length === 8 || instruction.dst === first.object) break;
+			claimed.push(ip);
+			if (loads.length === 8) break;
+			if (instruction.dst !== first.object) admitted.add(ip);
 			continue;
 		}
-		// Captured storage is valid only while the receiver is unchanged and no
-		// operation can collect, reenter JavaScript, throw, or mutate its layout.
+		const forwardBranch =
+			(instruction.opcode === "JUMP" || instruction.opcode === "JUMP_IF") &&
+			instruction.targetIp > ip;
 		if (
-			(body?.writes[ip] ?? vmInstructionWriteRegisters(instruction)).includes(
-				first.object,
-			) ||
-			!propertyReadRegionPureInstruction(instruction, representations)
+			body.writes[ip]!.includes(first.object) ||
+			(!forwardBranch && !propertyReadRegionPureInstruction(instruction, representations))
 		) {
-			break;
+			continue;
 		}
+		admitted.add(ip);
+		claimed.push(ip);
 	}
 	if (loads.length < 2 || (loads.length === 2 && loads[1]!.ip === firstIp + 1)) {
 		// Preserve the smaller existing adjacent-pair admission.
 		return undefined;
 	}
-	const claimedIps = Array.from(
-		{ length: loads.at(-1)!.ip - firstIp + 1 },
-		(_, i) => firstIp + i,
-	);
+	const claimedIps = claimed.filter((ip) => ip <= loads.at(-1)!.ip);
 	return Object.freeze({
 		id: firstIp,
 		object: first.object,
@@ -2008,6 +2029,7 @@ export function lowerNativeFastPaths(
 	if (selection.kind === "render")
 		propertyReadRegions.push(...selection.plans.propertyReadRegions);
 	else {
+		const regionBody = body ?? analyzeNativeBodyFacts(fn);
 		let nextRegionIp = 0;
 		for (const ip of propertyLoadIps) {
 			if (ip < nextRegionIp) continue;
@@ -2022,7 +2044,7 @@ export function lowerNativeFastPaths(
 					pairedArrayLoopActions.has(candidate) ||
 					propertyNumericUpdateActions.has(candidate) ||
 					propertyProjectionActions.has(candidate),
-				body,
+				regionBody,
 			);
 			if (plan === undefined) continue;
 			propertyReadRegions.push(plan);

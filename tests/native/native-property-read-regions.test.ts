@@ -9,6 +9,7 @@ import {
 import { privateRootRegisters } from "../helpers/native-c-source.ts";
 
 const kernels = [
+	{ name: "readTagged", loads: 5 },
 	{ name: "readThree", loads: 3 },
 	{ name: "readEight", loads: 8 },
 	{ name: "readDetachedOwn", loads: 3 },

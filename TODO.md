@@ -391,26 +391,34 @@ numeric sorting, stack objects, and string projections.
 - [x] Enumeration count: ordinary-object key counts
       avoid the array; observable arrays, proxies, primitives, and overridden calls
       keep the original path. Seven clean matched pairs improved count-only work by
-      75%; the keys control was inconclusive and the entries control was 0.9% slower.
+      75%; a nine-pair confirmation retained the gain, with keys and entries controls
+      0.3% and 0.6% slower respectively. Keep that small negative tradeoff explicit.
       Focused Linux ASan/UBSan passed in both backends, primordial modes, and GC stress.
 - [x] Split fields compose with the shared span length/equality consumers and
       materialize at ordinary or character-access observers. Seven matched pairs
       improved classification by 22%; both string controls were inconclusive.
       Linux ASan/UBSan passed both backends, primordial modes, and GC stress.
-- [ ] Region-local Map entries are checkpointed: retain indices only for overlapping
+- [x] Region-local Map entries: retain indices only for overlapping
       numeric lookups, revalidate live keys before updates, and preserve mutation
       barriers. Seven matched pairs improved interleaved updates by 18%; controls
-      changed by less than 0.3%. Focused Linux sanitizer verification is pending.
-- [ ] Fresh Array initialization is checkpointed: consume the existing folded-push
+      changed by less than 0.3%. All 10 focused Linux ASan/UBSan tests passed,
+      including mutation, both backends, primordial modes, and GC verification.
+- [x] Fresh Array initialization: consume the existing folded-push
       and literal-array stores through one prepared-values builder. Input roots,
       zero scanned length during reserve, card barriers, and final publication stay
-      explicit. Seven matched pairs improved three-value construction by 62%; final
-      sanitizer verification is pending.
-- [ ] Tagged-record investigation: the Binary branch already has one numeric field
-      projection for all three reads. Profile the measured case before introducing
-      additional discriminant/layout state.
-- [ ] Complete the remaining slices below, including their semantic and measured
-      acceptance boundaries; the completed cases do not close the broader tasks.
+      explicit. Seven matched pairs improved three-value construction by 61%; all
+      eight focused Linux ASan/UBSan tests passed, including direct pushes and the
+      exceptional object-lifetime path in the worker fixture.
+- [ ] Tagged-record branches: retain receiver admission across bounded strict tag
+      comparisons and safe forward branches, including reference-valued fields.
+      Implemented with all-predecessor validation and per-load fallback; focused
+      unit coverage passes. Native memory verification and measurement are pending.
+- [ ] Enumeration snapshot traversal: consume a retained key snapshot without a
+      general keys Array; preserve eager enumeration, key order, and mutation semantics.
+- [ ] Broaden shared span consumers beyond length, equality, and numeric conversion;
+      preserve method identity, UTF-16 behavior, and materialization at observers.
+- [ ] Complete broad verification and compiler-cost acceptance for this sequence;
+      the completed cases do not close the broader owning tasks below.
 
 | Order | Slice                        | Owning work and exit condition                                                                                                                                  |
 | ----- | ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |

@@ -23,6 +23,36 @@ function compile(count = 3) {
 }
 
 describe("persisted native property read regions", () => {
+	it("shares one admission across tagged reference fields without specializing the tag as a shape", () => {
+		const image = compileSemanticProgramToProgramImage(
+			analyzeSourceAndRunSemanticAnalysis(
+				`globalThis.pick = function pick(node) {
+					if (node.kind === "Binary") return node.operator === "+" ? node.left : node.right;
+					return node.value;
+				};`,
+				"/tagged-read-region.js",
+			),
+		);
+		const restored = deserializeCompilerArtifact(serializeCompilerArtifact(image));
+		const native = restored.native.functions[1]!;
+		expect(native.storage!.propertyReadRegions).toHaveLength(1);
+		const plan = native.storage!.propertyReadRegions[0]!;
+		expect(
+			plan.loads
+				.map(({ ip }) => {
+					const op = native.body.instructions[ip]!;
+					if (op.opcode !== "LOAD_PROPERTY_STATIC")
+						throw new Error("Missing property read");
+					return String.fromCharCode(
+						...restored.runtime.stringConstants[op.stringIndex]!,
+					);
+				})
+				.sort(),
+		).toEqual(["kind", "left", "operator", "right", "value"]);
+		expect(
+			plan.claimedIps.some((ip) => native.body.instructions[ip]!.opcode === "JUMP_IF"),
+		).toBe(true);
+	});
 	it.each([3, 8])(
 		"round-trips a %i-load continuation without replaying admission selection",
 		(count) => {

@@ -334,4 +334,61 @@ describe("bounded native property read regions", () => {
 		expect(lower([load(1), ...gap, load(2)]).propertyReadRegions).toHaveLength(1);
 		expect(lower([load(1), ...gap, copy, load(2)]).propertyReadRegions).toHaveLength(0);
 	});
+
+	it("retains admission through strict discriminants and both forward arms", () => {
+		const lowered = lower([
+			load(1),
+			{ opcode: "CREATE_STRING", dst: 2, stringIndex: 0 },
+			{ opcode: "BINARY", dst: 3, left: 1, right: 2, operator: "===" },
+			{ opcode: "JUMP_IF", cond: 3, targetIp: 6 },
+			load(4),
+			{ opcode: "RETURN", value: 4 },
+			load(5),
+			{ opcode: "RETURN", value: 5 },
+		]);
+		expect(lowered.propertyReadRegions[0]!.loads.map(({ ip }) => ip)).toEqual([0, 4, 6]);
+	});
+
+	it("does not carry admission into a join reached through an invalidating arm", () => {
+		const lowered = lower([
+			load(1),
+			{ opcode: "JUMP_IF", cond: 1, targetIp: 5 },
+			{ opcode: "CREATE_OBJECT", dst: 7 },
+			{ opcode: "JUMP", targetIp: 8 },
+			{ opcode: "RETURN", value: 1 },
+			load(2),
+			{ opcode: "JUMP", targetIp: 8 },
+			{ opcode: "RETURN", value: 2 },
+			load(3),
+		]);
+		expect(lowered.propertyReadRegions[0]!.loads.map(({ ip }) => ip)).toEqual([0, 5]);
+		expect(lowered.propertyReadRegionActions.has(8)).toBe(false);
+	});
+
+	it("rejects external, backward and exceptional entries into admitted branches", () => {
+		const body: Array<BytecodeInstruction> = [
+			load(1),
+			{ opcode: "JUMP_IF", cond: 1, targetIp: 4 },
+			{ opcode: "RETURN", value: 1 },
+			{ opcode: "RETURN", value: 1 },
+			load(2),
+			{ opcode: "RETURN", value: 2 },
+		];
+		expect(lower(body).propertyReadRegions).toHaveLength(1);
+		expect(lower([...body, { opcode: "JUMP", targetIp: 4 }]).propertyReadRegions).toEqual(
+			[],
+		);
+		expect(
+			lower([
+				{ opcode: "JUMP_IF", cond: 1, targetIp: 5 },
+				...body.map((op) =>
+					op.opcode === "JUMP_IF" ? { ...op, targetIp: op.targetIp + 1 } : op,
+				),
+			]).propertyReadRegions,
+		).toEqual([]);
+		expect(
+			lower(body, { handlers: [{ startIp: 0, endIp: 1, handlerIp: 4 }] })
+				.propertyReadRegions,
+		).toEqual([]);
+	});
 });

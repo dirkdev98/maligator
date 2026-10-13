@@ -7,6 +7,19 @@ function expectValue(actual, expected, message) {
 	if (actual !== expected) throw new Error(message + ": " + actual);
 }
 
+function readTagged(node) {
+	if (node.kind === "Binary") {
+		return node.operator === "+" ? node.left : node.right;
+	}
+	return node.value;
+}
+
+function readTaggedEffect(node, observer) {
+	const kind = node.kind;
+	if (kind === "Binary") observer(node);
+	return node.value;
+}
+
 function readThree(receiver) {
 	const first = receiver.first;
 	const middle = receiver.middle;
@@ -316,6 +329,8 @@ function readWideJoin(owner, receiver) {
 }
 
 globalThis.nativePropertyRegionReaders = [
+	readTagged,
+	readTaggedEffect,
 	readMixed,
 	readSameShape,
 	readInheritedMutation,
@@ -743,6 +758,84 @@ expectValue(
 	readPublicOverflowShadow(publicOverflowShadowReceiver),
 	18,
 	"public overflow shadows an inherited cache value without changing the empty shape",
+);
+
+const leftNode = { marker: 17 };
+const rightNode = { marker: 23 };
+const tagged = { kind: "Binary", operator: "+", left: leftNode, right: rightNode };
+for (let index = 0; index < 32; index++) {
+	tagged.operator = index % 2 ? "+" : "-";
+	expectValue(
+		readTagged(tagged),
+		index % 2 ? leftNode : rightNode,
+		"tagged reference branch",
+	);
+}
+expectValue(
+	readTagged({ right: rightNode, left: leftNode, kind: "Binary", operator: "+" }),
+	leftNode,
+	"same tag with another layout",
+);
+tagged.left = 42;
+tagged.operator = "+";
+expectValue(readTagged(tagged), 42, "field type changes without changing the tag");
+expectValue(readTagged({ kind: "Literal", value: leftNode }), leftNode, "literal branch");
+
+for (const property of ["kind", "operator", "left"]) {
+	const events = [];
+	const changing = { kind: "Binary", operator: "+", left: leftNode, right: rightNode };
+	Object.defineProperty(changing, property, {
+		get() {
+			events.push(property);
+			changing[0] = true;
+			changing.right = { marker: 31 };
+			if (property === "kind") changing.operator = "-";
+			gc();
+			return property === "kind" ? "Binary" : property === "operator" ? "-" : leftNode;
+		},
+	});
+	const result = readTagged(changing);
+	expectValue(
+		result,
+		property === "left" ? leftNode : changing.right,
+		"getter mutation across tagged branch",
+	);
+	expectValue(events.join(","), property, "tagged getter executes once");
+}
+
+const tagEvents = [];
+const taggedProxy = new Proxy(tagged, {
+	get(target, key, receiver) {
+		tagEvents.push(key);
+		gc();
+		return Reflect.get(target, key, receiver);
+	},
+});
+expectValue(readTagged(taggedProxy), 42, "tagged proxy result");
+expectValue(tagEvents.join(","), "kind,operator,left", "tagged proxy order");
+let taggedThrown;
+try {
+	readTagged({
+		kind: "Binary",
+		get operator() {
+			gc();
+			throw rightNode;
+		},
+		get left() {
+			throw new Error("read after throw");
+		},
+	});
+} catch (error) {
+	taggedThrown = error;
+}
+expectValue(taggedThrown, rightNode, "tagged getter exception identity");
+expectValue(
+	readTaggedEffect({ kind: "Binary", value: leftNode }, (node) => {
+		node.value = rightNode;
+		gc();
+	}),
+	rightNode,
+	"call on one arm invalidates the joined read",
 );
 
 console.log("native-property-read-regions PASS");
