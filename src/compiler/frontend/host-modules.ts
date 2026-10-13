@@ -165,6 +165,7 @@ const FS_PROMISES: HostModuleSpec = {
 	id: "node:fs/promises",
 	named: [
 		"access",
+		"constants",
 		"appendFile",
 		"copyFile",
 		"chmod",

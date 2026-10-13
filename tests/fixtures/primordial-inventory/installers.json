@@ -457,7 +457,7 @@
 	},
 	{
 		"file": "runtime/node_fs.c",
-		"sha256": "e76f6f3443a8e41194cffe43471efe2926663631f225956e4f8913842f9777c8"
+		"sha256": "265d6bb111e7b4b341b00a483d998cb64a57689dbc9fa3ea867a3c732bd868f0"
 	},
 	{
 		"file": "runtime/node_fs.h",

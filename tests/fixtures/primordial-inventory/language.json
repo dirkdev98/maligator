@@ -12782,6 +12782,7 @@
 		["mal_host_install_node_fs_promises:access", ["runtime", "primitive"]],
 		["mal_host_install_node_fs_promises:appendFile", ["runtime", "primitive"]],
 		["mal_host_install_node_fs_promises:chmod", ["runtime", "primitive"]],
+		["mal_host_install_node_fs_promises:constants", ["runtime", "primitive"]],
 		["mal_host_install_node_fs_promises:copyFile", ["runtime", "primitive"]],
 		["mal_host_install_node_fs_promises:default", ["runtime", "primitive"]],
 		["mal_host_install_node_fs_promises:glob", ["runtime", "primitive"]],

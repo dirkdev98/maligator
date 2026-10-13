@@ -4490,6 +4490,12 @@ void mal_host_install_node_fs_promises(
     mal_native_function_object_set_async(mal_value_to_native_function_object(roots[1]));
     mal_intrinsic_define_data(vm, mal_value_to_object(roots[2]), "mkdtemp", roots[1], NODE_FS_VISIBLE);
 
+    if (!mal_vm_get_property(vm, roots[0], mal_intrinsic_string_key(vm, "constants"), &roots[1])) {
+        mal_gc_unroot(&root);
+        return;
+    }
+    mal_intrinsic_define_data(vm, mal_value_to_object(roots[2]), "constants", roots[1], NODE_FS_VISIBLE);
+
     vm->intrinsics[MAL_INTRINSIC_NODE_FS_PROMISES_MODULE] = roots[2];
     mal_node_module_publish(vm, "node:fs/promises", slots, count, roots[2]);
     mal_gc_unroot(&root);

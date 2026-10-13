@@ -43,6 +43,8 @@ With `surface.node`, `node:module.builtinModules` and `isBuiltin` describe the m
 
 Callback and promise forms of filesystem `access`, `unlink`, and `rename` run through the bounded host worker pool. Callbacks run after the initiating call and retain their async-local context. `fs.promises`, its named export, and `node:fs/promises` share one module; public sync-export replacement does not replace captured promise implementations. The three promise methods preserve async-function branding, and error types and codes match the supported Node behavior; error-message wording can differ.
 
+`node:fs/promises.constants` shares the `fs.constants` object. Its module property can be replaced, while a named import retains its original binding, matching Node.
+
 `mkdtemp` supports callback and promise forms, while `mkdtempSync` performs the same operation synchronously. All three honor encoding options, including Buffer paths, and preserve Node's option-getter order. Callback `fsync` and `fdatasync` run on the host worker pool; `fsyncSync` and `fdatasyncSync` flush directly. These APIs retain Node's descriptor validation, callback signatures, and construction behavior.
 
 ## Replace a module specifier

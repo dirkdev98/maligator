@@ -11478,7 +11478,9 @@
 			"owner": "%MAL_INTRINSIC_NODE_FS_MODULE%.constants",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_FS_MODULE%.constants",
-				"mal_host_install_node_fs:constants"
+				"%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%.constants",
+				"mal_host_install_node_fs:constants",
+				"mal_host_install_node_fs_promises:constants"
 			],
 			"key": "UV_FS_SYMLINK_DIR",
 			"kind": "data",
@@ -11491,7 +11493,9 @@
 			"owner": "%MAL_INTRINSIC_NODE_FS_MODULE%.constants",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_FS_MODULE%.constants",
-				"mal_host_install_node_fs:constants"
+				"%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%.constants",
+				"mal_host_install_node_fs:constants",
+				"mal_host_install_node_fs_promises:constants"
 			],
 			"key": "UV_FS_SYMLINK_JUNCTION",
 			"kind": "data",
@@ -11504,7 +11508,9 @@
 			"owner": "%MAL_INTRINSIC_NODE_FS_MODULE%.constants",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_FS_MODULE%.constants",
-				"mal_host_install_node_fs:constants"
+				"%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%.constants",
+				"mal_host_install_node_fs:constants",
+				"mal_host_install_node_fs_promises:constants"
 			],
 			"key": "O_RDONLY",
 			"kind": "data",
@@ -11517,7 +11523,9 @@
 			"owner": "%MAL_INTRINSIC_NODE_FS_MODULE%.constants",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_FS_MODULE%.constants",
-				"mal_host_install_node_fs:constants"
+				"%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%.constants",
+				"mal_host_install_node_fs:constants",
+				"mal_host_install_node_fs_promises:constants"
 			],
 			"key": "O_WRONLY",
 			"kind": "data",
@@ -11530,7 +11538,9 @@
 			"owner": "%MAL_INTRINSIC_NODE_FS_MODULE%.constants",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_FS_MODULE%.constants",
-				"mal_host_install_node_fs:constants"
+				"%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%.constants",
+				"mal_host_install_node_fs:constants",
+				"mal_host_install_node_fs_promises:constants"
 			],
 			"key": "O_RDWR",
 			"kind": "data",
@@ -11543,7 +11553,9 @@
 			"owner": "%MAL_INTRINSIC_NODE_FS_MODULE%.constants",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_FS_MODULE%.constants",
-				"mal_host_install_node_fs:constants"
+				"%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%.constants",
+				"mal_host_install_node_fs:constants",
+				"mal_host_install_node_fs_promises:constants"
 			],
 			"key": "UV_DIRENT_UNKNOWN",
 			"kind": "data",
@@ -11556,7 +11568,9 @@
 			"owner": "%MAL_INTRINSIC_NODE_FS_MODULE%.constants",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_FS_MODULE%.constants",
-				"mal_host_install_node_fs:constants"
+				"%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%.constants",
+				"mal_host_install_node_fs:constants",
+				"mal_host_install_node_fs_promises:constants"
 			],
 			"key": "UV_DIRENT_FILE",
 			"kind": "data",
@@ -11569,7 +11583,9 @@
 			"owner": "%MAL_INTRINSIC_NODE_FS_MODULE%.constants",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_FS_MODULE%.constants",
-				"mal_host_install_node_fs:constants"
+				"%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%.constants",
+				"mal_host_install_node_fs:constants",
+				"mal_host_install_node_fs_promises:constants"
 			],
 			"key": "UV_DIRENT_DIR",
 			"kind": "data",
@@ -11582,7 +11598,9 @@
 			"owner": "%MAL_INTRINSIC_NODE_FS_MODULE%.constants",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_FS_MODULE%.constants",
-				"mal_host_install_node_fs:constants"
+				"%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%.constants",
+				"mal_host_install_node_fs:constants",
+				"mal_host_install_node_fs_promises:constants"
 			],
 			"key": "UV_DIRENT_LINK",
 			"kind": "data",
@@ -11595,7 +11613,9 @@
 			"owner": "%MAL_INTRINSIC_NODE_FS_MODULE%.constants",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_FS_MODULE%.constants",
-				"mal_host_install_node_fs:constants"
+				"%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%.constants",
+				"mal_host_install_node_fs:constants",
+				"mal_host_install_node_fs_promises:constants"
 			],
 			"key": "UV_DIRENT_FIFO",
 			"kind": "data",
@@ -11608,7 +11628,9 @@
 			"owner": "%MAL_INTRINSIC_NODE_FS_MODULE%.constants",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_FS_MODULE%.constants",
-				"mal_host_install_node_fs:constants"
+				"%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%.constants",
+				"mal_host_install_node_fs:constants",
+				"mal_host_install_node_fs_promises:constants"
 			],
 			"key": "UV_DIRENT_SOCKET",
 			"kind": "data",
@@ -11621,7 +11643,9 @@
 			"owner": "%MAL_INTRINSIC_NODE_FS_MODULE%.constants",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_FS_MODULE%.constants",
-				"mal_host_install_node_fs:constants"
+				"%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%.constants",
+				"mal_host_install_node_fs:constants",
+				"mal_host_install_node_fs_promises:constants"
 			],
 			"key": "UV_DIRENT_CHAR",
 			"kind": "data",
@@ -11634,7 +11658,9 @@
 			"owner": "%MAL_INTRINSIC_NODE_FS_MODULE%.constants",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_FS_MODULE%.constants",
-				"mal_host_install_node_fs:constants"
+				"%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%.constants",
+				"mal_host_install_node_fs:constants",
+				"mal_host_install_node_fs_promises:constants"
 			],
 			"key": "UV_DIRENT_BLOCK",
 			"kind": "data",
@@ -11647,7 +11673,9 @@
 			"owner": "%MAL_INTRINSIC_NODE_FS_MODULE%.constants",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_FS_MODULE%.constants",
-				"mal_host_install_node_fs:constants"
+				"%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%.constants",
+				"mal_host_install_node_fs:constants",
+				"mal_host_install_node_fs_promises:constants"
 			],
 			"key": "S_IFMT",
 			"kind": "data",
@@ -11660,7 +11688,9 @@
 			"owner": "%MAL_INTRINSIC_NODE_FS_MODULE%.constants",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_FS_MODULE%.constants",
-				"mal_host_install_node_fs:constants"
+				"%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%.constants",
+				"mal_host_install_node_fs:constants",
+				"mal_host_install_node_fs_promises:constants"
 			],
 			"key": "S_IFREG",
 			"kind": "data",
@@ -11673,7 +11703,9 @@
 			"owner": "%MAL_INTRINSIC_NODE_FS_MODULE%.constants",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_FS_MODULE%.constants",
-				"mal_host_install_node_fs:constants"
+				"%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%.constants",
+				"mal_host_install_node_fs:constants",
+				"mal_host_install_node_fs_promises:constants"
 			],
 			"key": "S_IFDIR",
 			"kind": "data",
@@ -11686,7 +11718,9 @@
 			"owner": "%MAL_INTRINSIC_NODE_FS_MODULE%.constants",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_FS_MODULE%.constants",
-				"mal_host_install_node_fs:constants"
+				"%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%.constants",
+				"mal_host_install_node_fs:constants",
+				"mal_host_install_node_fs_promises:constants"
 			],
 			"key": "S_IFCHR",
 			"kind": "data",
@@ -11699,7 +11733,9 @@
 			"owner": "%MAL_INTRINSIC_NODE_FS_MODULE%.constants",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_FS_MODULE%.constants",
-				"mal_host_install_node_fs:constants"
+				"%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%.constants",
+				"mal_host_install_node_fs:constants",
+				"mal_host_install_node_fs_promises:constants"
 			],
 			"key": "S_IFBLK",
 			"kind": "data",
@@ -11712,7 +11748,9 @@
 			"owner": "%MAL_INTRINSIC_NODE_FS_MODULE%.constants",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_FS_MODULE%.constants",
-				"mal_host_install_node_fs:constants"
+				"%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%.constants",
+				"mal_host_install_node_fs:constants",
+				"mal_host_install_node_fs_promises:constants"
 			],
 			"key": "S_IFIFO",
 			"kind": "data",
@@ -11725,7 +11763,9 @@
 			"owner": "%MAL_INTRINSIC_NODE_FS_MODULE%.constants",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_FS_MODULE%.constants",
-				"mal_host_install_node_fs:constants"
+				"%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%.constants",
+				"mal_host_install_node_fs:constants",
+				"mal_host_install_node_fs_promises:constants"
 			],
 			"key": "S_IFLNK",
 			"kind": "data",
@@ -11738,7 +11778,9 @@
 			"owner": "%MAL_INTRINSIC_NODE_FS_MODULE%.constants",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_FS_MODULE%.constants",
-				"mal_host_install_node_fs:constants"
+				"%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%.constants",
+				"mal_host_install_node_fs:constants",
+				"mal_host_install_node_fs_promises:constants"
 			],
 			"key": "S_IFSOCK",
 			"kind": "data",
@@ -11751,7 +11793,9 @@
 			"owner": "%MAL_INTRINSIC_NODE_FS_MODULE%.constants",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_FS_MODULE%.constants",
-				"mal_host_install_node_fs:constants"
+				"%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%.constants",
+				"mal_host_install_node_fs:constants",
+				"mal_host_install_node_fs_promises:constants"
 			],
 			"key": "O_CREAT",
 			"kind": "data",
@@ -11764,7 +11808,9 @@
 			"owner": "%MAL_INTRINSIC_NODE_FS_MODULE%.constants",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_FS_MODULE%.constants",
-				"mal_host_install_node_fs:constants"
+				"%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%.constants",
+				"mal_host_install_node_fs:constants",
+				"mal_host_install_node_fs_promises:constants"
 			],
 			"key": "O_EXCL",
 			"kind": "data",
@@ -11777,7 +11823,9 @@
 			"owner": "%MAL_INTRINSIC_NODE_FS_MODULE%.constants",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_FS_MODULE%.constants",
-				"mal_host_install_node_fs:constants"
+				"%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%.constants",
+				"mal_host_install_node_fs:constants",
+				"mal_host_install_node_fs_promises:constants"
 			],
 			"key": "UV_FS_O_FILEMAP",
 			"kind": "data",
@@ -11790,7 +11838,9 @@
 			"owner": "%MAL_INTRINSIC_NODE_FS_MODULE%.constants",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_FS_MODULE%.constants",
-				"mal_host_install_node_fs:constants"
+				"%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%.constants",
+				"mal_host_install_node_fs:constants",
+				"mal_host_install_node_fs_promises:constants"
 			],
 			"key": "O_NOCTTY",
 			"kind": "data",
@@ -11803,7 +11853,9 @@
 			"owner": "%MAL_INTRINSIC_NODE_FS_MODULE%.constants",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_FS_MODULE%.constants",
-				"mal_host_install_node_fs:constants"
+				"%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%.constants",
+				"mal_host_install_node_fs:constants",
+				"mal_host_install_node_fs_promises:constants"
 			],
 			"key": "O_TRUNC",
 			"kind": "data",
@@ -11816,7 +11868,9 @@
 			"owner": "%MAL_INTRINSIC_NODE_FS_MODULE%.constants",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_FS_MODULE%.constants",
-				"mal_host_install_node_fs:constants"
+				"%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%.constants",
+				"mal_host_install_node_fs:constants",
+				"mal_host_install_node_fs_promises:constants"
 			],
 			"key": "O_APPEND",
 			"kind": "data",
@@ -11829,7 +11883,9 @@
 			"owner": "%MAL_INTRINSIC_NODE_FS_MODULE%.constants",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_FS_MODULE%.constants",
-				"mal_host_install_node_fs:constants"
+				"%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%.constants",
+				"mal_host_install_node_fs:constants",
+				"mal_host_install_node_fs_promises:constants"
 			],
 			"key": "O_DIRECTORY",
 			"kind": "data",
@@ -11842,7 +11898,9 @@
 			"owner": "%MAL_INTRINSIC_NODE_FS_MODULE%.constants",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_FS_MODULE%.constants",
-				"mal_host_install_node_fs:constants"
+				"%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%.constants",
+				"mal_host_install_node_fs:constants",
+				"mal_host_install_node_fs_promises:constants"
 			],
 			"key": "O_NOFOLLOW",
 			"kind": "data",
@@ -11855,7 +11913,9 @@
 			"owner": "%MAL_INTRINSIC_NODE_FS_MODULE%.constants",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_FS_MODULE%.constants",
-				"mal_host_install_node_fs:constants"
+				"%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%.constants",
+				"mal_host_install_node_fs:constants",
+				"mal_host_install_node_fs_promises:constants"
 			],
 			"key": "O_SYNC",
 			"kind": "data",
@@ -11868,7 +11928,9 @@
 			"owner": "%MAL_INTRINSIC_NODE_FS_MODULE%.constants",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_FS_MODULE%.constants",
-				"mal_host_install_node_fs:constants"
+				"%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%.constants",
+				"mal_host_install_node_fs:constants",
+				"mal_host_install_node_fs_promises:constants"
 			],
 			"key": "O_DSYNC",
 			"kind": "data",
@@ -11881,7 +11943,9 @@
 			"owner": "%MAL_INTRINSIC_NODE_FS_MODULE%.constants",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_FS_MODULE%.constants",
-				"mal_host_install_node_fs:constants"
+				"%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%.constants",
+				"mal_host_install_node_fs:constants",
+				"mal_host_install_node_fs_promises:constants"
 			],
 			"key": "O_SYMLINK",
 			"kind": "data",
@@ -11894,7 +11958,9 @@
 			"owner": "%MAL_INTRINSIC_NODE_FS_MODULE%.constants",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_FS_MODULE%.constants",
-				"mal_host_install_node_fs:constants"
+				"%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%.constants",
+				"mal_host_install_node_fs:constants",
+				"mal_host_install_node_fs_promises:constants"
 			],
 			"key": "O_NONBLOCK",
 			"kind": "data",
@@ -11907,7 +11973,9 @@
 			"owner": "%MAL_INTRINSIC_NODE_FS_MODULE%.constants",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_FS_MODULE%.constants",
-				"mal_host_install_node_fs:constants"
+				"%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%.constants",
+				"mal_host_install_node_fs:constants",
+				"mal_host_install_node_fs_promises:constants"
 			],
 			"key": "S_IRWXU",
 			"kind": "data",
@@ -11920,7 +11988,9 @@
 			"owner": "%MAL_INTRINSIC_NODE_FS_MODULE%.constants",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_FS_MODULE%.constants",
-				"mal_host_install_node_fs:constants"
+				"%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%.constants",
+				"mal_host_install_node_fs:constants",
+				"mal_host_install_node_fs_promises:constants"
 			],
 			"key": "S_IRUSR",
 			"kind": "data",
@@ -11933,7 +12003,9 @@
 			"owner": "%MAL_INTRINSIC_NODE_FS_MODULE%.constants",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_FS_MODULE%.constants",
-				"mal_host_install_node_fs:constants"
+				"%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%.constants",
+				"mal_host_install_node_fs:constants",
+				"mal_host_install_node_fs_promises:constants"
 			],
 			"key": "S_IWUSR",
 			"kind": "data",
@@ -11946,7 +12018,9 @@
 			"owner": "%MAL_INTRINSIC_NODE_FS_MODULE%.constants",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_FS_MODULE%.constants",
-				"mal_host_install_node_fs:constants"
+				"%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%.constants",
+				"mal_host_install_node_fs:constants",
+				"mal_host_install_node_fs_promises:constants"
 			],
 			"key": "S_IXUSR",
 			"kind": "data",
@@ -11959,7 +12033,9 @@
 			"owner": "%MAL_INTRINSIC_NODE_FS_MODULE%.constants",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_FS_MODULE%.constants",
-				"mal_host_install_node_fs:constants"
+				"%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%.constants",
+				"mal_host_install_node_fs:constants",
+				"mal_host_install_node_fs_promises:constants"
 			],
 			"key": "S_IRWXG",
 			"kind": "data",
@@ -11972,7 +12048,9 @@
 			"owner": "%MAL_INTRINSIC_NODE_FS_MODULE%.constants",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_FS_MODULE%.constants",
-				"mal_host_install_node_fs:constants"
+				"%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%.constants",
+				"mal_host_install_node_fs:constants",
+				"mal_host_install_node_fs_promises:constants"
 			],
 			"key": "S_IRGRP",
 			"kind": "data",
@@ -11985,7 +12063,9 @@
 			"owner": "%MAL_INTRINSIC_NODE_FS_MODULE%.constants",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_FS_MODULE%.constants",
-				"mal_host_install_node_fs:constants"
+				"%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%.constants",
+				"mal_host_install_node_fs:constants",
+				"mal_host_install_node_fs_promises:constants"
 			],
 			"key": "S_IWGRP",
 			"kind": "data",
@@ -11998,7 +12078,9 @@
 			"owner": "%MAL_INTRINSIC_NODE_FS_MODULE%.constants",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_FS_MODULE%.constants",
-				"mal_host_install_node_fs:constants"
+				"%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%.constants",
+				"mal_host_install_node_fs:constants",
+				"mal_host_install_node_fs_promises:constants"
 			],
 			"key": "S_IXGRP",
 			"kind": "data",
@@ -12011,7 +12093,9 @@
 			"owner": "%MAL_INTRINSIC_NODE_FS_MODULE%.constants",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_FS_MODULE%.constants",
-				"mal_host_install_node_fs:constants"
+				"%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%.constants",
+				"mal_host_install_node_fs:constants",
+				"mal_host_install_node_fs_promises:constants"
 			],
 			"key": "S_IRWXO",
 			"kind": "data",
@@ -12024,7 +12108,9 @@
 			"owner": "%MAL_INTRINSIC_NODE_FS_MODULE%.constants",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_FS_MODULE%.constants",
-				"mal_host_install_node_fs:constants"
+				"%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%.constants",
+				"mal_host_install_node_fs:constants",
+				"mal_host_install_node_fs_promises:constants"
 			],
 			"key": "S_IROTH",
 			"kind": "data",
@@ -12037,7 +12123,9 @@
 			"owner": "%MAL_INTRINSIC_NODE_FS_MODULE%.constants",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_FS_MODULE%.constants",
-				"mal_host_install_node_fs:constants"
+				"%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%.constants",
+				"mal_host_install_node_fs:constants",
+				"mal_host_install_node_fs_promises:constants"
 			],
 			"key": "S_IWOTH",
 			"kind": "data",
@@ -12050,7 +12138,9 @@
 			"owner": "%MAL_INTRINSIC_NODE_FS_MODULE%.constants",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_FS_MODULE%.constants",
-				"mal_host_install_node_fs:constants"
+				"%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%.constants",
+				"mal_host_install_node_fs:constants",
+				"mal_host_install_node_fs_promises:constants"
 			],
 			"key": "S_IXOTH",
 			"kind": "data",
@@ -12063,7 +12153,9 @@
 			"owner": "%MAL_INTRINSIC_NODE_FS_MODULE%.constants",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_FS_MODULE%.constants",
-				"mal_host_install_node_fs:constants"
+				"%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%.constants",
+				"mal_host_install_node_fs:constants",
+				"mal_host_install_node_fs_promises:constants"
 			],
 			"key": "F_OK",
 			"kind": "data",
@@ -12076,7 +12168,9 @@
 			"owner": "%MAL_INTRINSIC_NODE_FS_MODULE%.constants",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_FS_MODULE%.constants",
-				"mal_host_install_node_fs:constants"
+				"%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%.constants",
+				"mal_host_install_node_fs:constants",
+				"mal_host_install_node_fs_promises:constants"
 			],
 			"key": "R_OK",
 			"kind": "data",
@@ -12089,7 +12183,9 @@
 			"owner": "%MAL_INTRINSIC_NODE_FS_MODULE%.constants",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_FS_MODULE%.constants",
-				"mal_host_install_node_fs:constants"
+				"%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%.constants",
+				"mal_host_install_node_fs:constants",
+				"mal_host_install_node_fs_promises:constants"
 			],
 			"key": "W_OK",
 			"kind": "data",
@@ -12102,7 +12198,9 @@
 			"owner": "%MAL_INTRINSIC_NODE_FS_MODULE%.constants",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_FS_MODULE%.constants",
-				"mal_host_install_node_fs:constants"
+				"%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%.constants",
+				"mal_host_install_node_fs:constants",
+				"mal_host_install_node_fs_promises:constants"
 			],
 			"key": "X_OK",
 			"kind": "data",
@@ -12115,7 +12213,9 @@
 			"owner": "%MAL_INTRINSIC_NODE_FS_MODULE%.constants",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_FS_MODULE%.constants",
-				"mal_host_install_node_fs:constants"
+				"%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%.constants",
+				"mal_host_install_node_fs:constants",
+				"mal_host_install_node_fs_promises:constants"
 			],
 			"key": "UV_FS_COPYFILE_EXCL",
 			"kind": "data",
@@ -12128,7 +12228,9 @@
 			"owner": "%MAL_INTRINSIC_NODE_FS_MODULE%.constants",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_FS_MODULE%.constants",
-				"mal_host_install_node_fs:constants"
+				"%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%.constants",
+				"mal_host_install_node_fs:constants",
+				"mal_host_install_node_fs_promises:constants"
 			],
 			"key": "COPYFILE_EXCL",
 			"kind": "data",
@@ -12141,7 +12243,9 @@
 			"owner": "%MAL_INTRINSIC_NODE_FS_MODULE%.constants",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_FS_MODULE%.constants",
-				"mal_host_install_node_fs:constants"
+				"%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%.constants",
+				"mal_host_install_node_fs:constants",
+				"mal_host_install_node_fs_promises:constants"
 			],
 			"key": "UV_FS_COPYFILE_FICLONE",
 			"kind": "data",
@@ -12154,7 +12258,9 @@
 			"owner": "%MAL_INTRINSIC_NODE_FS_MODULE%.constants",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_FS_MODULE%.constants",
-				"mal_host_install_node_fs:constants"
+				"%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%.constants",
+				"mal_host_install_node_fs:constants",
+				"mal_host_install_node_fs_promises:constants"
 			],
 			"key": "COPYFILE_FICLONE",
 			"kind": "data",
@@ -12167,7 +12273,9 @@
 			"owner": "%MAL_INTRINSIC_NODE_FS_MODULE%.constants",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_FS_MODULE%.constants",
-				"mal_host_install_node_fs:constants"
+				"%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%.constants",
+				"mal_host_install_node_fs:constants",
+				"mal_host_install_node_fs_promises:constants"
 			],
 			"key": "UV_FS_COPYFILE_FICLONE_FORCE",
 			"kind": "data",
@@ -12180,7 +12288,9 @@
 			"owner": "%MAL_INTRINSIC_NODE_FS_MODULE%.constants",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_FS_MODULE%.constants",
-				"mal_host_install_node_fs:constants"
+				"%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%.constants",
+				"mal_host_install_node_fs:constants",
+				"mal_host_install_node_fs_promises:constants"
 			],
 			"key": "COPYFILE_FICLONE_FORCE",
 			"kind": "data",
@@ -13753,6 +13863,22 @@
 			"key": "mkdtemp",
 			"kind": "data",
 			"operations": ["%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%.mkdtemp"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%\",\"constants\"]",
+			"owner": "%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:fs/promises\"]",
+				"%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%",
+				"MAL_INTRINSIC_NODE_FS_PROMISES_MODULE",
+				"mal_host_install_node_fs:promises",
+				"mal_host_install_node_fs_promises:default"
+			],
+			"key": "constants",
+			"kind": "data",
+			"operations": [],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -218935,6 +219061,16 @@
 			"key": "mal_host_install_node_fs_promises:chmod",
 			"kind": "binding",
 			"operations": ["%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%.appendFile"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"[[roots]]\",\"mal_host_install_node_fs_promises:constants\"]",
+			"owner": "[[roots]]",
+			"ownerPaths": ["[[roots]]"],
+			"key": "mal_host_install_node_fs_promises:constants",
+			"kind": "binding",
+			"operations": [],
 			"task": "N-06",
 			"decisions": []
 		},
