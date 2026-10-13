@@ -29,6 +29,34 @@ function compile(body: string, primordials: "mutable" | "locked" = "mutable") {
 const body = `const part=source.split('|')[1]; const size=part.length;
  if(part==='if')return size+10; if(escape)return observe(part); return size;`;
 describe("span continuations from split projections", () => {
+	it.each(["mutable", "locked"] as const)(
+		"classifies numeric strings across range, split and regexp continuations under %s primordials",
+		(mode) => {
+			for (const producer of [
+				"source.split('|')[1]",
+				"/\\|([^|]*)\\|/.exec(source)[1]",
+				"source.slice(1,-1).trim()",
+			]) {
+				const image = compile(
+					`const part=${producer};if(escape)return observe(part);return [isFinite(part),isNaN(part)];`,
+					mode,
+				);
+				const kinds = image.native.functions.flatMap((fn) => [
+					...fn.specializations.flatMap((p) =>
+						p.kind === "string-span" ? p.consumers.map((c) => c.kind) : [],
+					),
+					...(fn.storage?.spanContinuations.flatMap((p) =>
+						p.consumers.map((c) => c.kind),
+					) ?? []),
+				]);
+				expect(kinds, producer).toEqual(expect.arrayContaining(["isFinite", "isNaN"]));
+				expect(deserializeCompilerArtifact(serializeCompilerArtifact(image))).toEqual(
+					image,
+				);
+			}
+		},
+	);
+
 	it("compiles an unrelated large property observation beside a span consumer", () => {
 		const key = "x".repeat(150000);
 		const image = compile(

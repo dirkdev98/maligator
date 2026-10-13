@@ -698,6 +698,10 @@ static void mal_perf_stats_print(void) {
     fprintf(stderr, "[perf-map-region-stats] hits=%llu misses=%llu\n",
         (unsigned long long) mal_perf_stats.map_region_entry_hits,
         (unsigned long long) mal_perf_stats.map_region_entry_misses);
+    fprintf(stderr, "[perf-property-read-region-stats] admissions=%llu hits=%llu continuations=%llu\n",
+        (unsigned long long) mal_perf_stats.property_read_region_admissions,
+        (unsigned long long) mal_perf_stats.property_read_region_hits,
+        (unsigned long long) mal_perf_stats.property_read_region_continuations);
     fprintf(
         stderr,
         "[perf-map-stats] get_set_cache_checks=%llu get_set_cache_hits=%llu "
@@ -961,6 +965,9 @@ static void mal_perf_stats_print(void) {
     fprintf(stderr, "[perf-string-span-parse-stats] parse_int=%llu parse_float=%llu\n",
         (unsigned long long) mal_perf_stats.string_span_parse_int_calls,
         (unsigned long long) mal_perf_stats.string_span_parse_float_calls);
+    fprintf(stderr, "[perf-string-span-global-number-stats] is_finite=%llu is_nan=%llu\n",
+        (unsigned long long) mal_perf_stats.string_span_is_finite_calls,
+        (unsigned long long) mal_perf_stats.string_span_is_nan_calls);
     fprintf(stderr, "[perf-string-span-parse-source-stats] range=%llu split=%llu regexp=%llu nested=%llu\n",
         (unsigned long long) mal_perf_stats.string_span_range_parses,
         (unsigned long long) mal_perf_stats.string_span_split_parses,

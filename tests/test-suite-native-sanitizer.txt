@@ -194,3 +194,5 @@ tests/native/string-span-dynamic-equality.test.ts
 tests/native/string-span-handlers.test.ts
 tests/native/string-span-trim-alias.test.ts
 tests/native/from-async-callback.test.ts
+tests/native/property-read-inputs.test.ts
+tests/native/string-span-global-number.test.ts

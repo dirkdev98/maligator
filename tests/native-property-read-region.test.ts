@@ -312,6 +312,46 @@ describe("bounded native property read regions", () => {
 		expect(clobber.propertyReadRegionActions.has(3)).toBe(false);
 	});
 
+	it("retains the original receiver through copies after its first register is overwritten", () => {
+		const plan = lower([
+			load(1),
+			{ opcode: "MOVE", dst: 5, src: 0 },
+			{ opcode: "CREATE_NULL", dst: 0 },
+			load(2, 5),
+			load(3, 5),
+		]).propertyReadRegions[0]!;
+		expect(plan.loads.map(({ ip }) => ip)).toEqual([0, 3, 4]);
+		expect(plan.borrowedRegisters).toContain(5);
+	});
+	it("requires a receiver alias on every incoming path", () => {
+		const instructions: Array<BytecodeInstruction> = [
+			load(1),
+			{ opcode: "JUMP_IF", cond: 31, targetIp: 5 },
+			{ opcode: "MOVE", dst: 5, src: 0 },
+			load(2, 5),
+			{ opcode: "JUMP", targetIp: 8 },
+			{ opcode: "MOVE", dst: 5, src: 0 },
+			load(3, 5),
+			{ opcode: "JUMP", targetIp: 8 },
+			load(4, 5),
+			{ opcode: "RETURN", value: 4 },
+		];
+		expect(lower(instructions).propertyReadRegions[0]!.loads.map(({ ip }) => ip)).toEqual(
+			[0, 3, 6, 8],
+		);
+		instructions[5] = { opcode: "MOVE", dst: 5, src: 9 };
+		expect(lower(instructions).propertyReadRegions).toEqual([]);
+	});
+	it("admits non-coercing boxed truthiness and typeof predicates", () => {
+		for (const predicate of [
+			{ opcode: "UNARY", operator: "!", dst: 4, src: 1 },
+			{ opcode: "TYPEOF_COMPARE", dst: 4, src: 1, expected: "string", negated: false },
+			{ opcode: "IS_EMPTY", dst: 4, src: 1 },
+		] satisfies ReadonlyArray<BytecodeInstruction>)
+			expect(
+				lower([load(1), predicate, load(2), load(3)]).propertyReadRegions,
+			).toHaveLength(1);
+	});
 	it("does not carry admission through a control-flow entry or an exclusive native plan", () => {
 		const instructions = [load(1), copy, load(2)];
 		expect(
@@ -322,11 +362,11 @@ describe("bounded native property read regions", () => {
 		).toHaveLength(0);
 	});
 
-	it("bounds admissions to eight loads and twenty-four instructions", () => {
-		const many = lower(Array.from({ length: 10 }, (_, index) => load(index + 1)));
+	it("bounds admissions to sixteen loads and ninety-six instructions", () => {
+		const many = lower(Array.from({ length: 18 }, (_, index) => load(index + 1)));
 		expect(many.propertyReadRegions).toHaveLength(1);
-		expect(many.propertyReadRegions[0]!.loads).toHaveLength(8);
-		const gap: Array<BytecodeInstruction> = Array.from({ length: 22 }, () => ({
+		expect(many.propertyReadRegions[0]!.loads).toHaveLength(16);
+		const gap: Array<BytecodeInstruction> = Array.from({ length: 94 }, () => ({
 			opcode: "CREATE_NUMBER",
 			dst: 20,
 			value: 3,

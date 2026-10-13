@@ -6476,6 +6476,15 @@ function emitInstruction(
 				site.parent !== undefined ? "nested" : (site.projection?.kind ?? "range");
 			projected = `MAL_PERF_COUNT(string_span_${sourceKind}_parses); ${storeNumber(instruction.dst, result)}`;
 		} else if (
+			(role === "isFinite" || role === "isNaN") &&
+			(instruction.opcode === "CALL" || instruction.opcode === "CALL_KNOWN")
+		) {
+			const finite = role === "isFinite";
+			if (instruction.opcode === "CALL")
+				guard += ` && ${boxedOperand(instruction.callee)} == vm->intrinsics[MAL_INTRINSIC_${finite ? "IS_FINITE" : "IS_NAN"}]`;
+			const number = `mal_ops_number_as_f64(mal_ops_string_range_to_number(mal_value_to_string(${source}), ${prefix}_start, ${prefix}_end - ${prefix}_start))`;
+			projected = `MAL_PERF_COUNT(string_span_${finite ? "is_finite" : "is_nan"}_calls); ${storeBoolean(instruction.dst, `${finite ? "isfinite" : "isnan"}(${number})`)}`;
+		} else if (
 			role === "number" &&
 			(instruction.opcode === "CALL" || instruction.opcode === "CALL_KNOWN")
 		) {
@@ -6497,6 +6506,8 @@ function emitInstruction(
 			...(role === "number" ||
 			role === "parseInt" ||
 			role === "parseFloat" ||
+			role === "isFinite" ||
+			role === "isNaN" ||
 			methodProperty !== undefined ||
 			characterCall !== undefined ||
 			searchCall !== undefined ||

@@ -91,14 +91,11 @@ if (mode === "left" || mode === "right" || mode === "many") {
 	])
 		for (const escape of [false, true]) rows.push(visit(text, undefined, escape));
 	if (effects !== 48) throw new Error("argument evaluation count");
-} else if (mode === "nested") {
+} else if (mode === "range" || mode === "split" || mode === "regexp") {
+	const visit = mode === "range" ? nested : mode === "split" ? split : capture;
 	for (const text of [" \t12\ufeff ", "\u2029😀\u3000", " \ud800 ", "\t\n", ""])
 		for (const escape of [false, true])
-			rows.push(
-				nested("x" + text + "y", escape),
-				split("x|" + text + "|y", escape),
-				capture("x|" + text + "|y", escape),
-			);
+			rows.push(visit(mode === "range" ? "x" + text + "y" : "x|" + text + "|y", escape));
 } else if (mode === "fallback") {
 	const observed = [];
 	const custom = {

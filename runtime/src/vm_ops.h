@@ -1854,6 +1854,7 @@ mal_vm_property_read_region_begin(MalValue receiver) {
     if (object == nullptr) {
         return (MalNativePropertyReadRegion) {0};
     }
+    MAL_PERF_COUNT(property_read_region_admissions);
     return (MalNativePropertyReadRegion) {
         .object = object,
         .shape = object->shape,
@@ -1877,6 +1878,7 @@ static inline __attribute__((always_inline)) bool mal_vm_property_read_region_tr
         if (__builtin_expect(ic->mode == MAL_IC_MODE_SHAPE, 1)) {
             if (ic->slot != MAL_IC_VALUE_SLOT) {
                 *out = mal_shape_field_load(region->fields, ic->field);
+                MAL_PERF_COUNT(property_read_region_hits);
                 mal_perf_ic_load_mono_hit();
                 return true;
             }
@@ -1885,11 +1887,13 @@ static inline __attribute__((always_inline)) bool mal_vm_property_read_region_tr
             !mal_object_has_public_overflow(region->object) &&
             mal_object_prototype(region->object) == ic->proto_object[0]) {
             *out = ic->value;
+            MAL_PERF_COUNT(property_read_region_hits);
             mal_perf_ic_load_inherited_hit();
             return true;
         }
     }
     region->active = false;
+    MAL_PERF_COUNT(property_read_region_continuations);
     return false;
 }
 

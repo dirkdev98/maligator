@@ -93,13 +93,13 @@ export function nativeSpanNumericCall(
 	ip: number,
 	strings: ReadonlyArray<ReadonlyArray<number>>,
 	body: Pick<NativeBodyFacts, "branchSources" | "externalEntries">,
-): "number" | "parseInt" | "parseFloat" | undefined {
+): "number" | "parseInt" | "parseFloat" | "isFinite" | "isNaN" | undefined {
 	const name = nativeSpanCalleeName(
 		instructions,
 		ip,
 		strings,
 		body,
-		["Number", "parseInt", "parseFloat"] as const,
+		["Number", "parseInt", "parseFloat", "isFinite", "isNaN"] as const,
 		"",
 	);
 	return name === "Number" ? "number" : name;
@@ -204,7 +204,9 @@ export function validateNativeStringSpan(
 		if (
 			methodCall !== undefined ||
 			consumer.kind === "parseInt" ||
-			consumer.kind === "parseFloat"
+			consumer.kind === "parseFloat" ||
+			consumer.kind === "isFinite" ||
+			consumer.kind === "isNaN"
 		) {
 			if (methodBody === undefined) {
 				const branchSources = new Map<number, Array<number>>();
@@ -230,7 +232,9 @@ export function validateNativeStringSpan(
 		if (
 			(consumer.kind === "number" ||
 				consumer.kind === "parseInt" ||
-				consumer.kind === "parseFloat") &&
+				consumer.kind === "parseFloat" ||
+				consumer.kind === "isFinite" ||
+				consumer.kind === "isNaN") &&
 			((instruction.opcode !== "CALL" && instruction.opcode !== "CALL_KNOWN") ||
 				(instruction.opcode === "CALL_KNOWN" &&
 					(instruction.construct || instruction.argumentMode !== undefined)) ||

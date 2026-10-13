@@ -3838,7 +3838,9 @@ function stringSpanCandidates(
 				const calleeAttrs =
 					callee === undefined ? undefined : fn.instructionAttributes(callee);
 				const globalName = calleeAttrs?.nameStringIndex;
-				const operation = (["Number", "parseInt", "parseFloat"] as const).find((name) =>
+				const operation = (
+					["Number", "parseInt", "parseFloat", "isFinite", "isNaN"] as const
+				).find((name) =>
 					opcode === "callKnown"
 						? callAttrs.operation === name
 						: callee !== undefined &&

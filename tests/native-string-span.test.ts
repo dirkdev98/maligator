@@ -42,6 +42,75 @@ const branching = `const part = value.slice(start, end); const length = part.len
 
 describe("composable string spans", () => {
 	it.each(["mutable", "locked"] as const)(
+		"classifies numeric strings with coercing globals under %s primordials",
+		(mode) => {
+			const image = compile(
+				`const part=value.slice(start,end);if(escape)return observer(part);return [isFinite(part),isNaN(part)];`,
+				mode,
+			);
+			const region = spans(image)[0]!;
+			expect(region.consumers.map((c) => c.kind)).toEqual(
+				expect.arrayContaining(["isFinite", "isNaN", "materialize"]),
+			);
+			expect(deserializeCompilerArtifact(serializeCompilerArtifact(image))).toEqual(
+				image,
+			);
+			for (const expression of [
+				"new isFinite(part)",
+				"isFinite(part, observer())",
+				"Number.isFinite(part)",
+				"Number.isNaN(part)",
+			]) {
+				const control = compile(
+					`const part=value.slice(start,end);return [part.length,${expression}];`,
+					mode,
+				);
+				const consumer = spans(control)
+					.flatMap((region) => region.consumers)
+					.find((c) => c.kind === "isFinite" || c.kind === "isNaN");
+				if (!expression.startsWith("Number."))
+					expect(consumer, expression).toBeUndefined();
+				expect(deserializeCompilerArtifact(serializeCompilerArtifact(control))).toEqual(
+					control,
+				);
+			}
+		},
+	);
+	it("rejects numeric predicate metadata that disagrees with the captured callee", () => {
+		const image = compile("const part=value.slice(start,end);return isFinite(part);");
+		const owner = image.native.functions.find((fn) =>
+			fn.specializations.some((r) => r.kind === "string-span"),
+		)!;
+		const specializations = owner.specializations.map((r) =>
+			r.kind !== "string-span"
+				? r
+				: {
+						...r,
+						consumers: r.consumers.map((c) =>
+							c.kind === "isFinite" ? { ...c, kind: "isNaN" as const } : c,
+						),
+					},
+		);
+		expect(() =>
+			serializeCompilerArtifact({
+				...image,
+				native: {
+					...image.native,
+					functions: image.native.functions.map((fn) =>
+						fn !== owner
+							? fn
+							: {
+									...fn,
+									specializations,
+									regionActions: vmRegionActions(specializations),
+								},
+					),
+				},
+			}),
+		).toThrow(/string-span/i);
+	});
+
+	it.each(["mutable", "locked"] as const)(
 		"compares dynamic inputs without coercing them under %s primordials",
 		(mode) => {
 			for (const expression of ["part===observer", "observer!==part"]) {

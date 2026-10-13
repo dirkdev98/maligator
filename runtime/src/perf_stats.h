@@ -287,6 +287,8 @@ typedef struct MalPerfStats {
     u64 string_span_nested_searches;
     u64 string_span_parse_int_calls;
     u64 string_span_parse_float_calls;
+    u64 string_span_is_finite_calls;
+    u64 string_span_is_nan_calls;
     u64 string_span_range_parses;
     u64 string_span_split_parses;
     u64 string_span_regexp_parses;
@@ -311,6 +313,9 @@ typedef struct MalPerfStats {
     u64 array_initialization_regions;
     u64 array_initialization_large_regions;
     u64 array_initialization_incremental_regions;
+    u64 property_read_region_admissions;
+    u64 property_read_region_hits;
+    u64 property_read_region_continuations;
     u64 map_region_entry_hits;
     u64 map_region_entry_misses;
     u64 map_get_set_cache_checks;

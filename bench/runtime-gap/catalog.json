@@ -3444,6 +3444,32 @@
 			"controls": ["map-reference-interleaved", "map-reference-adjacent"]
 		},
 		{
+			"id": "tagged-record-typeof-truthiness",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "Tagged record field regions",
+			"category": "object-array-representation",
+			"mechanisms": ["property-access"],
+			"inputShape": "Three record layouts with typeof and boxed truthiness branches share retained property admission across reference-valued fields.",
+			"unit": "record",
+			"sourceSeam": "src/compiler/target/lower-native-fast-paths.ts",
+			"fixture": "cases/tagged-record-typeof-truthiness.mjs",
+			"controls": ["tagged-record-wide-distinct", "tagged-record-branches"]
+		},
+		{
+			"id": "string-span-global-number",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "Composable string spans",
+			"category": "memory-layout-usage",
+			"mechanisms": ["string-spans", "delayed-materialization"],
+			"inputShape": "Coercing global isFinite and isNaN consume temporary string ranges while Number predicates retain noncoercing behavior.",
+			"unit": "token",
+			"sourceSeam": "src/compiler/target/native-string-span.ts",
+			"fixture": "cases/string-span-global-number.mjs",
+			"controls": ["string-span-parsers", "string-span-classify"]
+		},
+		{
 			"id": "method-name-unique",
 			"group": "runtime",
 			"suite": "runtime",

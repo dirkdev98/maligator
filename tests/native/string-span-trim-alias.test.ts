@@ -46,7 +46,34 @@ describe("canonical trim aliases and ignored arguments", () => {
 			expect(spans.map((p) => p.rangeOperation)).toEqual(
 				expect.arrayContaining(["trimLeft", "trimRight", "trim"]),
 			);
-			for (const mode of ["left", "right", "many", "nested", "fallback"]) {
+			for (const [name, sourceKind] of [
+				["nested", "range"],
+				["split", "split"],
+				["capture", "regexp"],
+			]) {
+				const target = pair.programImage.native.functions.find(
+					(fn) =>
+						String.fromCharCode(
+							...(pair.programImage.runtime.stringConstants[fn.body.nameStringIndex] ??
+								[]),
+						) === name,
+				);
+				expect(
+					target?.storage?.spanContinuations.some(
+						(span) => span.sourceKind === sourceKind,
+					),
+					`${primordials}: ${name} ${sourceKind} continuation`,
+				).toBe(true);
+			}
+			for (const mode of [
+				"left",
+				"right",
+				"many",
+				"range",
+				"split",
+				"regexp",
+				"fallback",
+			]) {
 				const env = { TRIM_ALIAS_MODE: mode, TRIM_ALIAS_PRIMORDIALS: primordials };
 				const expected = execFileSync(process.execPath, ["--expose-gc", fixture], {
 					encoding: "utf8",
@@ -73,13 +100,16 @@ describe("canonical trim aliases and ignored arguments", () => {
 								? [1]
 								: [2, 3])
 						expect(Number(counts![index]), context).toBeGreaterThan(0);
-					if (mode === "nested") {
+					if (mode === "range" || mode === "split" || mode === "regexp") {
 						const sources = result.stderr.match(
 							/\[perf-string-span-trim-source-stats\] direct=(\d+) range=(\d+) split=(\d+) regexp=(\d+)/,
 						);
 						expect(sources, `${context}: ${result.stderr}`).not.toBeNull();
-						for (const count of sources!.slice(2))
-							expect(Number(count), context).toBeGreaterThan(0);
+						const index = mode === "range" ? 2 : mode === "split" ? 3 : 4;
+						expect(
+							Number(sources![index]),
+							`${context}: ${mode} source ${sources![0]}`,
+						).toBeGreaterThan(0);
 					}
 				}
 			}

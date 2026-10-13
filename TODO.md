@@ -751,8 +751,8 @@ The shared lifetime and fallback rules are recorded in
       cached result materialization and captured-builtin realm fallback. Implemented
       for ordinary objects and Arrays with bounded rooted storage; focused compiler,
       Node oracle and frontend/artifact/C checks pass. Realm sanitizer coverage passes;
-      two materialization fixture failures are repaired after tracing inlining into
-      a protected range and a locked-prototype mutation. Rerun and measurement pending.
+      both materialization cases now pass after repairing execution through a
+      protected inline range and a locked-prototype mutation. Measurement is pending.
 - [ ] Extend enumeration snapshots to Object.entries with eager key/value capture
       and lazy pair arrays. Reuse sixteen rooted slots for up to eight entries;
       first observation caches each pair, and outer materialization reuses those
@@ -879,12 +879,12 @@ The shared lifetime and fallback rules are recorded in
       cards preserve collecting initializer results. Reject escaped aliases, control
       entries and protected allocations whose handlers could observe partial length.
       Focused compiler contracts, Node GC oracles and four artifact/C captures pass;
-      native sanitizer and performance evidence remain pending.
+      all focused Linux ASan/UBSan cases pass; performance evidence remains pending.
 - [ ] Keep revalidated Map entry indices across branches, protected control flow and
       loop iterations. Nomination uses bounded CFG reachability; current storage,
       live entry and canonical key checks remain authoritative at every update.
       All71 focused contracts, eight Node GC oracles and four frontend/artifact/C
-      captures pass; native sanitizer and performance evidence remain pending.
+      captures pass; all focused Linux ASan/UBSan cases pass; performance evidence remains pending.
 
 - [ ] Widen count-only enumeration to all five keys, values, entries, own-names and
       own-symbol methods without allocating bounded snapshot slots. Ordinary data
@@ -893,12 +893,29 @@ The shared lifetime and fallback rules are recorded in
       eager observations through fallback. A Symbol-only property iterator skips
       unrelated keys and supplies exact fresh-result capacity to getOwnPropertySymbols.
       Focused unit, Node and frontend/artifact/C checks pass; both count sanitizer cases pass.
-      Final batch collection and measurement remain pending.
+      The complete batch archive is retained; measurement remains pending.
 - [ ] Compose trimLeft and trimRight aliases through existing trim range kernels,
       and admit ignored extra trim arguments while retaining their evaluation and
       effects. Existing method identity, UTF-16, source roots and cached escapes
       remain authoritative. All 174 focused checks, eleven forced-GC Node oracles
-      and five frontend/artifact/C captures pass; native and measurement pending.
+      and five frontend/artifact/C captures pass. A nested fixture counter failure is
+      repaired by executing the selected helpers through runtime dispatch;25 Node GC
+      modes and179 integrated span/codec checks pass. Native rerun and measurement pending.
+
+- [ ] Extend retained property-read admission through receiver aliases, typeof tests
+      and boxed truthiness branches, with up to16 fields over96 instructions.
+      Every incoming edge must preserve the same receiver; the first generic miss
+      permanently ends the raw-storage lifetime before getters or Proxy callbacks.
+      All81 focused checks and four actual frontend/artifact/C captures pass, including
+      constructor-selection controls. Forced-GC Node oracles cover reference identity,
+      throwing accessors and prototype mutation. Native and performance checks pending.
+
+- [ ] Let coercing global isFinite and isNaN consume retained range, split, capture
+      and nested spans through the existing numeric parser, preserving exact callee
+      identity. Number.isFinite and Number.isNaN retain noncoercing semantics; extra
+      arguments and foreign callees use ordinary materialization. All179 focused
+      span/codec checks,25 Node GC modes and seven actual frontend/artifact/C captures
+      pass. Execution counters and native sanitizer checks remain pending.
 
 | Order | Slice                        | Owning work and exit condition                                                                                                                                  |
 | ----- | ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |

@@ -798,6 +798,8 @@ function propertyReadRegionPureInstruction(
 		case "CREATE_STRING":
 		case "CREATE_NULL":
 		case "CREATE_UNDEFINED":
+		case "TYPEOF_COMPARE":
+		case "IS_EMPTY":
 			return true;
 		case "MOVE":
 			return (
@@ -818,10 +820,11 @@ function propertyReadRegionPureInstruction(
 			);
 		case "UNARY":
 			return (
-				isNumericRepresentation(representations[instruction.src]!) &&
-				(isNumericRepresentation(representations[instruction.dst]!) ||
-					representations[instruction.dst] === "boolean") &&
-				PROPERTY_REGION_UNARY_OPERATORS.has(instruction.operator)
+				instruction.operator === "!" ||
+				(isNumericRepresentation(representations[instruction.src]!) &&
+					(isNumericRepresentation(representations[instruction.dst]!) ||
+						representations[instruction.dst] === "boolean") &&
+					PROPERTY_REGION_UNARY_OPERATORS.has(instruction.operator))
 			);
 		default:
 			return false;
@@ -847,9 +850,9 @@ function lowerPropertyReadRegion(
 		return undefined;
 	}
 	const loads = [{ ip: firstIp, instruction: first }];
-	const admitted = new Set([firstIp]);
+	const admitted = new Map([[firstIp, new Set([first.object])]]);
 	const claimed = [firstIp];
-	const limit = Math.min(fn.instructions.length, firstIp + 24);
+	const limit = Math.min(fn.instructions.length, firstIp + 96);
 	for (let ip = firstIp + 1; ip < limit; ip++) {
 		const sources = body.branchSources.get(ip) ?? [];
 		const previous = fn.instructions[ip - 1]!;
@@ -866,28 +869,39 @@ function lowerPropertyReadRegion(
 			conflicts(ip)
 		)
 			continue;
+		const predecessors = [...(fallsThrough ? [ip - 1] : []), ...sources];
+		const aliases = new Set(admitted.get(predecessors[0]!));
+		for (const predecessor of predecessors.slice(1))
+			for (const alias of aliases)
+				if (!admitted.get(predecessor)!.has(alias)) aliases.delete(alias);
+		if (aliases.size === 0) continue;
 		const instruction = fn.instructions[ip]!;
 		if (
 			instruction.opcode === "LOAD_PROPERTY_STATIC" &&
-			instruction.object === first.object &&
+			aliases.has(instruction.object) &&
 			representations[instruction.dst] === "boxed"
 		) {
 			loads.push({ ip, instruction });
 			claimed.push(ip);
-			if (loads.length === 8) break;
-			if (instruction.dst !== first.object) admitted.add(ip);
+			if (loads.length === 16) break;
+			aliases.delete(instruction.dst);
+			if (aliases.size > 0) admitted.set(ip, aliases);
 			continue;
 		}
 		const forwardBranch =
 			(instruction.opcode === "JUMP" || instruction.opcode === "JUMP_IF") &&
 			instruction.targetIp > ip;
 		if (
-			body.writes[ip]!.includes(first.object) ||
-			(!forwardBranch && !propertyReadRegionPureInstruction(instruction, representations))
+			!forwardBranch &&
+			!propertyReadRegionPureInstruction(instruction, representations)
 		) {
 			continue;
 		}
-		admitted.add(ip);
+		const copiesReceiver = instruction.opcode === "MOVE" && aliases.has(instruction.src);
+		for (const register of body.writes[ip]!) aliases.delete(register);
+		if (copiesReceiver && instruction.opcode === "MOVE") aliases.add(instruction.dst);
+		if (aliases.size === 0) continue;
+		admitted.set(ip, aliases);
 		claimed.push(ip);
 	}
 	if (loads.length < 2 || (loads.length === 2 && loads[1]!.ip === firstIp + 1)) {

@@ -53,6 +53,33 @@ describe("persisted native property read regions", () => {
 			plan.claimedIps.some((ip) => native.body.instructions[ip]!.opcode === "JUMP_IF"),
 		).toBe(true);
 	});
+	it("carries one admission through typeof and boxed truthiness branches", () => {
+		const image = compileSemanticProgramToProgramImage(
+			analyzeSourceAndRunSemanticAnalysis(
+				`globalThis.inspect=function inspect(node){const kind=node.kind;if(typeof kind==='string'){const enabled=node.enabled;if(!enabled){const left=node.left;const right=node.right;return [left,right];}const value=node.value,label=node.label;return[value,label];}const first=node.first,last=node.last;return[first,last];};`,
+				"/property-inputs.js",
+			),
+		);
+		const fn = image.native.functions[1]!;
+		const plan = fn.storage!.propertyReadRegions[0]!;
+		expect(fn.storage!.propertyReadRegions).toHaveLength(1);
+		expect(plan.loads).toHaveLength(8);
+		expect(plan.endIp - plan.id).toBeGreaterThan(24);
+		expect(
+			plan.claimedIps.some((ip) => fn.body.instructions[ip]!.opcode === "TYPEOF_COMPARE"),
+		).toBe(true);
+		expect(
+			plan.claimedIps.some((ip) => {
+				const op = fn.body.instructions[ip]!;
+				return (
+					op.opcode === "UNARY" &&
+					op.operator === "!" &&
+					fn.registerRepresentations[op.src] === "boxed"
+				);
+			}),
+		).toBe(true);
+		expect(deserializeCompilerArtifact(serializeCompilerArtifact(image))).toEqual(image);
+	});
 	it("keeps short tagged selectors on ordinary property probes", () => {
 		const image = compileSemanticProgramToProgramImage(
 			analyzeSourceAndRunSemanticAnalysis(
@@ -65,7 +92,7 @@ describe("persisted native property read regions", () => {
 		);
 		expect(image.native.functions[1]!.storage!.propertyReadRegions).toHaveLength(0);
 	});
-	it.each([3, 8])(
+	it.each([3, 8, 16])(
 		"round-trips a %i-load continuation without replaying admission selection",
 		(count) => {
 			const image = compile(count);
