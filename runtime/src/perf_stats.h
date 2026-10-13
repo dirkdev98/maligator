@@ -243,6 +243,7 @@ typedef struct MalPerfStats {
     u64 string_span_char_at_reads;
     u64 string_span_at_reads;
     u64 string_span_substring_admissions;
+    u64 string_span_substr_admissions;
     u64 string_span_trim_admissions;
     u64 string_span_trim_start_admissions;
     u64 string_span_trim_end_admissions;
@@ -253,6 +254,7 @@ typedef struct MalPerfStats {
     u64 string_span_nested_admissions;
     u64 string_span_deep_admissions;
     u64 string_span_index_of_searches;
+    u64 string_span_last_index_of_searches;
     u64 string_span_includes_searches;
     u64 string_span_starts_with_searches;
     u64 string_span_ends_with_searches;
@@ -407,6 +409,7 @@ typedef struct MalPerfStats {
     u64 array_iteration_direct_fallbacks;
     u64 array_iteration_exact_callback_calls;
     u64 array_iteration_exact_compiled_callback_calls;
+    u64 array_iteration_runtime_callback_nominations;
     u64 array_iteration_numeric_reduce_calls;
     u64 string_span_admissions;
     u64 string_span_projections;

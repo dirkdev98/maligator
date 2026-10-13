@@ -909,6 +909,9 @@ static void mal_perf_stats_print(void) {
         (unsigned long long) mal_perf_stats.string_span_nested_admissions);
     fprintf(stderr, "[perf-string-span-deep-stats] admissions=%llu\n",
         (unsigned long long) mal_perf_stats.string_span_deep_admissions);
+    fprintf(stderr, "[perf-string-span-reverse-stats] substr=%llu last_index_of=%llu\n",
+        (unsigned long long) mal_perf_stats.string_span_substr_admissions,
+        (unsigned long long) mal_perf_stats.string_span_last_index_of_searches);
     fprintf(stderr, "[perf-string-span-search-stats] index_of=%llu includes=%llu starts_with=%llu ends_with=%llu\n",
         (unsigned long long) mal_perf_stats.string_span_index_of_searches,
         (unsigned long long) mal_perf_stats.string_span_includes_searches,
@@ -1081,7 +1084,8 @@ static void mal_perf_stats_print(void) {
         "iteration_direct_hits=%llu iteration_direct_fallbacks=%llu "
         "iteration_exact_callback_calls=%llu "
         "iteration_exact_compiled_callback_calls=%llu "
-        "iteration_typed_callback_hits=%llu iteration_typed_callback_fallbacks=%llu iteration_numeric_reduce_calls=%llu\n",
+        "iteration_typed_callback_hits=%llu iteration_typed_callback_fallbacks=%llu iteration_numeric_reduce_calls=%llu "
+        "iteration_runtime_callback_nominations=%llu\n",
         (unsigned long long) mal_perf_stats.array_fresh_dense_stores,
         (unsigned long long) mal_perf_stats.array_fresh_dense_growths,
         (unsigned long long) mal_perf_stats.array_fresh_dense_fallbacks,
@@ -1108,7 +1112,8 @@ static void mal_perf_stats_print(void) {
         (unsigned long long) mal_perf_stats.array_iteration_exact_compiled_callback_calls,
         (unsigned long long) mal_perf_stats.array_iteration_typed_callback_hits,
         (unsigned long long) mal_perf_stats.array_iteration_typed_callback_fallbacks,
-        (unsigned long long) mal_perf_stats.array_iteration_numeric_reduce_calls
+        (unsigned long long) mal_perf_stats.array_iteration_numeric_reduce_calls,
+        (unsigned long long) mal_perf_stats.array_iteration_runtime_callback_nominations
     );
     fprintf(stderr, "[perf-string-span-stats] admissions=%llu projections=%llu materializations=%llu\n",
         (unsigned long long) mal_perf_stats.string_span_admissions,

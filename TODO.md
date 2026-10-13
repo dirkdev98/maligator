@@ -578,7 +578,7 @@ numeric sorting, stack objects, and string projections.
       allocation-generation backedges. Implemented with one reverse reachability
       analysis and reuse of target virtual-value flow. All 131 focused tests, Node
       oracles, both-mode frontend selection, and artifact roundtrips pass. Native
-      execution and measurement remain pending; later reachable handlers still end
+      ASan/UBSan checks pass; measurement remains pending. Later reachable handlers end
       admission even when the object's last explicit use precedes them.
 - [ ] Compose `trim`, `trimStart`, and `trimEnd` as shared span producers, including
       split fields and regexp captures. Reuse whitespace-boundary discovery and the
@@ -588,7 +588,8 @@ numeric sorting, stack objects, and string projections.
       arguments. Inlined template observers can now consume a cached materialization
       through the original ToString operation. All 2,833 focused tests, Node oracles,
       both-mode frontend selection, and runtime/generated C syntax checks pass.
-      Native execution and measurement remain pending.
+      All three Linux ASan/UBSan checks pass, including both backends, primordial
+      modes, GC stress, and realms; measurement remains pending.
 - [ ] Preserve exact callback contexts across runtime image growth and fiber
       switches. Replace cached function-table row pointers with stable indices and
       save the dynamically scoped callback context with each fiber's execution state.
@@ -596,7 +597,24 @@ numeric sorting, stack objects, and string projections.
       Implemented through stable function indices and the existing fiber execution
       state. All 145 focused checks, Node oracles, both-mode frontend selection, and
       runtime/generated C syntax checks pass. Deterministic table relocation and
-      interleaved scheduler regressions are added; native execution remains pending.
+      interleaved scheduler regressions pass under Linux ASan/UBSan; JavaScript
+      lifetime checks remain pending.
+- [ ] Establish one canonical compiled callback contract for forwarded callback
+      parameters and selected closures. Reuse the guarded collection operation and
+      exact callback context without inventing numeric argument or result facts;
+      preserve invocation order and fallback for unsupported callable kinds.
+      Implemented through one runtime nomination after builtin identity validation.
+      All 64 focused checks, Node oracles, both-mode frontend/codec checks, and runtime
+      and generated C syntax checks pass. Native execution and measurement remain
+      pending; foreign-realm callbacks conservatively retain generic invocation.
+- [ ] Compose `substr` with existing span lifetimes and consume spans through
+      bounded `lastIndexOf`. Reuse the canonical relative-index normalization and
+      reverse search machinery, including its lower window boundary; preserve
+      coercions, UTF-16 boundaries, and materialization at observers. Implemented
+      through shared range and reverse-search algorithms; unreachable span uses no
+      longer block admission after inlining. All 305 focused checks, Node oracles,
+      actual bundled selection, and C syntax checks pass. Native execution and
+      measurement remain pending.
 
 | Order | Slice                        | Owning work and exit condition                                                                                                                                  |
 | ----- | ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |

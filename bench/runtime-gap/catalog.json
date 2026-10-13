@@ -2994,6 +2994,32 @@
 			"controls": ["string-span-search", "split-span-classify"]
 		},
 		{
+			"id": "forwarded-array-callback",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "Shared collection callback transport",
+			"category": "api-builtins",
+			"mechanisms": ["array-callback"],
+			"inputShape": "Array traversal selects one of two captured closures at runtime and forwards it through a helper without a static callback target.",
+			"unit": "visited element",
+			"sourceSeam": "runtime/src/builtin_array.c",
+			"fixture": "cases/forwarded-array-callback.mjs",
+			"controls": ["map-foreach-loop-callback", "typed-array-map-callback"]
+		},
+		{
+			"id": "string-span-reverse-search",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "String span composition",
+			"category": "memory-layout-usage",
+			"mechanisms": ["string-allocation", "string-traversal"],
+			"inputShape": "Split fields pass through trim and substr before bounded reverse search, character reads and sparse escaping observations.",
+			"unit": "classified field",
+			"sourceSeam": "runtime/src/builtin_string.c",
+			"fixture": "cases/string-span-reverse-search.mjs",
+			"controls": ["string-span-trim-search", "string-span-search"]
+		},
+		{
 			"id": "method-name-unique",
 			"group": "runtime",
 			"suite": "runtime",

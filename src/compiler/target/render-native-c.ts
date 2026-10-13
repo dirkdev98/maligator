@@ -453,6 +453,7 @@ const STRING_SPAN_RANGE_KERNELS: Readonly<Record<CoreStringSpanRangeOperation, s
 	{
 		slice: "SLICE",
 		substring: "SUBSTRING",
+		substr: "SUBSTR",
 		trim: "TRIM",
 		trimStart: "TRIM_START",
 		trimEnd: "TRIM_END",
@@ -6276,7 +6277,7 @@ function emitInstruction(
 				`${source} = MAL_VALUE_UNDEFINED;`,
 				`${prefix}_active = ${profileCall("string", `mal_builtin_string_range_span_init(${callee}, ${receiver}, ${bounds}, ${argument(0)}, ${argument(1)}, MAL_STRING_RANGE_${STRING_SPAN_RANGE_KERNELS[operation]}, ${locked ? "true" : "false"}, &${source}, &${prefix}_start, &${prefix}_end)`)};`,
 				`if (${prefix}_active) {`,
-				...(operation === "slice" || operation === "substring"
+				...(!operation.startsWith("trim")
 					? []
 					: [
 							`  MAL_PERF_COUNT(string_span_trim_${parent === undefined ? "direct" : (parent.projection?.kind ?? "range")}_admissions);`,

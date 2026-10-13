@@ -150,6 +150,7 @@ export interface CorePlanStringSplitProjectionSpecialization extends CorePlanSpe
 export const CORE_STRING_SPAN_RANGE_METHODS = [
 	"slice",
 	"substring",
+	"substr",
 	"trim",
 	"trimStart",
 	"trimEnd",
@@ -166,6 +167,7 @@ export const CORE_STRING_SPAN_CHARACTER_METHODS = [
 
 export const CORE_STRING_SPAN_SEARCH_METHODS = [
 	"indexOf",
+	"lastIndexOf",
 	"includes",
 	"startsWith",
 	"endsWith",
@@ -191,11 +193,13 @@ export interface CoreStringSpanConsumer {
 		| "charAtCall"
 		| "atProperty"
 		| "indexOfProperty"
+		| "lastIndexOfProperty"
 		| "includesProperty"
 		| "startsWithProperty"
 		| "endsWithProperty"
 		| "atCall"
 		| "indexOfCall"
+		| "lastIndexOfCall"
 		| "includesCall"
 		| "startsWithCall"
 		| "endsWithCall"

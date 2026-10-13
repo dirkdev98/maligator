@@ -27,6 +27,41 @@ const body = `const part=source.split('|')[1]; const size=part.length;
  if(part==='if')return size+10; if(escape)return observe(part); return size;`;
 describe("span continuations from split projections", () => {
 	it.each(["mutable", "locked"] as const)(
+		"composes substr and reverse search across every projection under %s primordials",
+		(mode) => {
+			for (const root of [
+				"source.slice(1,-1)",
+				"source.split('|')[1]",
+				"/(.*)/.exec(source)[1]",
+			]) {
+				const image = compile(
+					`const parent=${root}; const part=parent.substr(1,4);const found=part.lastIndexOf("a",2);
+ observe(); if(escape)return part;return [found,parent.length,part.length];`,
+					mode,
+				);
+				const fn = image.native.functions[1]!;
+				expect(
+					fn.storage!.spanContinuations.some((p) =>
+						p.consumers.some((c) => c.kind === "rangeCall"),
+					),
+				).toBe(true);
+				expect(
+					fn.specializations.some(
+						(p) =>
+							p.kind === "string-span" &&
+							p.rangeOperation === "substr" &&
+							p.consumers.some((c) => c.kind === "lastIndexOfCall"),
+					),
+				).toBe(true);
+				expect(deserializeCompilerArtifact(serializeCompilerArtifact(image))).toEqual(
+					image,
+				);
+				expect(() => emitProgramImage(image)).not.toThrow();
+			}
+		},
+	);
+
+	it.each(["mutable", "locked"] as const)(
 		"composes branching consumers under %s primordials",
 		(mode) => {
 			const image = compile(body, mode),
@@ -627,32 +662,35 @@ describe("shared search span continuations", () => {
 				}
 		},
 	);
-	it("rejects a forged projection search method", () => {
-		const image = compile(
-			`const part=source.split('|')[1];return part.indexOf('a',escape);`,
-		);
-		const native = image.native.functions[1]!;
-		const plans = native.storage!.spanContinuations;
-		expect(plans[0]!.consumers.some((c) => c.kind === "indexOfCall")).toBe(true);
-		const forged = plans.map((p) => ({
-			...p,
-			consumers: p.consumers.map((c) =>
-				c.kind === "indexOfCall" ? { ...c, kind: "includesCall" as const } : c,
-			),
-		}));
-		expect(() =>
-			serializeCompilerArtifact({
-				...image,
-				native: {
-					...image.native,
-					functions: image.native.functions.with(1, {
-						...native,
-						storage: { ...native.storage!, spanContinuations: forged },
-					}),
-				},
-			}),
-		).toThrow(/invalid or stale storage plan/);
-	});
+	it.each(["indexOf", "lastIndexOf"] as const)(
+		"rejects a forged %s projection search method",
+		(method) => {
+			const image = compile(
+				`const part=source.split('|')[1];return part.${method}('a',escape);`,
+			);
+			const native = image.native.functions[1]!;
+			const plans = native.storage!.spanContinuations;
+			expect(plans[0]!.consumers.some((c) => c.kind === `${method}Call`)).toBe(true);
+			const forged = plans.map((p) => ({
+				...p,
+				consumers: p.consumers.map((c) =>
+					c.kind === `${method}Call` ? { ...c, kind: "includesCall" as const } : c,
+				),
+			}));
+			expect(() =>
+				serializeCompilerArtifact({
+					...image,
+					native: {
+						...image.native,
+						functions: image.native.functions.with(1, {
+							...native,
+							storage: { ...native.storage!, spanContinuations: forged },
+						}),
+					},
+				}),
+			).toThrow(/invalid or stale storage plan/);
+		},
+	);
 });
 
 describe("trim producers in shared continuations", () => {

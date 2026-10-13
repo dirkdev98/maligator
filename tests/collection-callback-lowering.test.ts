@@ -70,23 +70,49 @@ describe("collection callback boundary contracts", () => {
 			}
 		},
 	);
-	it("keeps unknown receiver and callback inputs outside concrete collection nomination", () => {
-		const image = compileSemanticProgramToProgramImage(
-			analyzeSourceAndRunSemanticAnalysis(
-				`globalThis.invoke=function(receiver,callback){receiver.forEach(callback);};`,
-				"/collection.js",
-			),
-			options("mutable"),
-		);
-		expect(
-			image.native.functions.flatMap((fn) =>
-				fn.instructions.filter(
-					(plan) =>
-						plan?.kind === "call" && plan.directCallbackFunctionIndex !== undefined,
+	it.each(["mutable", "locked"] as const)(
+		"retains guarded families for forwarded and phi callbacks with %s primordials",
+		(mode) => {
+			const image = compileSemanticProgramToProgramImage(
+				analyzeSourceAndRunSemanticAnalysis(
+					`globalThis.invoke=function(receiver,callback,other,choose){
+                    let selected=callback;if(choose)selected=other;
+                    receiver.forEach(selected);return receiver.map(callback);
+                };
+                globalThis.reduce=function(receiver,callback,initial){return receiver.reduce(callback,initial);};`,
+					"/collection.js",
 				),
-			),
-		).toEqual([]);
-	});
+				options(mode),
+			);
+			const calls = image.native.functions.flatMap((fn) =>
+				fn.instructions.filter(
+					(plan) => plan?.kind === "call" && plan.guardedBuiltinCall !== undefined,
+				),
+			);
+			expect(
+				calls.map((plan) =>
+					plan?.kind === "call" ? plan.guardedBuiltinCall?.operation : undefined,
+				),
+			).toEqual(
+				expect.arrayContaining([
+					"Collection.prototype.forEach",
+					"ArrayOrTypedArray.prototype.map",
+					"ArrayOrTypedArray.prototype.reduce",
+				]),
+			);
+			for (const plan of calls) {
+				if (plan?.kind !== "call") throw new Error("missing call");
+				expect(plan.directCallbackFunctionIndex).toBeUndefined();
+			}
+			expect(
+				image.native.functions.flatMap((fn) => fn.storage!.callbackTransports),
+			).toEqual([]);
+			const encoded = serializeCompilerArtifact(image);
+			expect(serializeCompilerArtifact(deserializeCompilerArtifact(encoded))).toEqual(
+				encoded,
+			);
+		},
+	);
 	it("does not invent builtin identity for an unknown replacement constructor", () => {
 		const compilation = optimizeSemanticProgramToCore(
 			analyzeSourceAndRunSemanticAnalysis(

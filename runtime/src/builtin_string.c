@@ -430,7 +430,7 @@ typedef struct MalBuiltinStringSearch {
 // cross JS reentry or a UTF-16 bridge that can materialize its leaves.
 static void mal_builtin_string_search_cursor_init(
     MalBuiltinStringSearch *cursor, const MalString *string,
-    const MalString *search, usize from, bool reverse, usize end
+    const MalString *search, usize from, bool reverse, usize start, usize end
 ) {
     cursor->length = mal_string_length(search);
     assert(cursor->length != 0);
@@ -464,7 +464,7 @@ static void mal_builtin_string_search_cursor_init(
     cursor->local = 0;
     cursor->position = reverse ? from + cursor->length : from;
     if (reverse) {
-        mal_string_iterator_init_reverse(&cursor->iterator, string, 0, cursor->position);
+        mal_string_iterator_init_reverse(&cursor->iterator, string, start, cursor->position - start);
     } else {
         if (end == SIZE_MAX) end = mal_string_length(string);
         mal_string_iterator_init(&cursor->iterator, string, from, end - from);
@@ -593,7 +593,7 @@ static i64 mal_builtin_string_find(const MalString *string, const MalString *sea
     if (search_length > 1) MAL_PERF_COUNT(string_search_multi_unit_calls);
     if (search_length >= MAL_STRING_SEARCH_INLINE_UNITS) {
         MalBuiltinStringSearch cursor;
-        mal_builtin_string_search_cursor_init(&cursor, string, search, from, false, length);
+        mal_builtin_string_search_cursor_init(&cursor, string, search, from, false, 0, length);
         i64 result = mal_builtin_string_search_cursor_next(&cursor);
         mal_builtin_string_search_cursor_dispose(&cursor);
         return result;
@@ -630,7 +630,7 @@ static i64 mal_builtin_string_find(const MalString *string, const MalString *sea
             if (!contained || !contiguous_needle) {
                 // Switch once before verification would restart at a rope root.
                 MalBuiltinStringSearch cursor;
-                mal_builtin_string_search_cursor_init(&cursor, string, search, position, false, length);
+                mal_builtin_string_search_cursor_init(&cursor, string, search, position, false, 0, length);
                 result = mal_builtin_string_search_cursor_next(&cursor);
                 mal_builtin_string_search_cursor_dispose(&cursor);
                 goto done;
@@ -663,7 +663,7 @@ done:
 }
 
 static i64 mal_builtin_string_reverse_find(
-    const MalString *string, const MalString *search, usize from
+    const MalString *string, const MalString *search, usize from, usize start
 ) {
     MAL_PERF_COUNT(string_reverse_search_calls);
     usize search_length = mal_string_length(search);
@@ -671,7 +671,7 @@ static i64 mal_builtin_string_reverse_find(
     if (string == search) return 0;
     if (search_length >= MAL_STRING_SEARCH_INLINE_UNITS) {
         MalBuiltinStringSearch cursor;
-        mal_builtin_string_search_cursor_init(&cursor, string, search, from, true, SIZE_MAX);
+        mal_builtin_string_search_cursor_init(&cursor, string, search, from, true, start, SIZE_MAX);
         i64 result = mal_builtin_string_search_cursor_next(&cursor);
         mal_builtin_string_search_cursor_dispose(&cursor);
         return result;
@@ -683,7 +683,7 @@ static i64 mal_builtin_string_reverse_find(
         : mal_string_code_unit_at((MalString *) search, 0);
     MalStringIterator iterator;
     // Expose trailing units for local verification; candidate starts remain bounded by from.
-    mal_string_iterator_init_reverse(&iterator, string, 0, from + search_length);
+    mal_string_iterator_init_reverse(&iterator, string, start, from + search_length - start);
     MalStringSegment segment;
     usize offset = from + search_length;
     i64 result = -1;
@@ -707,7 +707,7 @@ static i64 mal_builtin_string_reverse_find(
             if (search_length > segment.length - position || !contiguous_needle) {
                 MalBuiltinStringSearch cursor;
                 mal_builtin_string_search_cursor_init(
-                    &cursor, string, search, offset + position, true, SIZE_MAX);
+                    &cursor, string, search, offset + position, true, start, SIZE_MAX);
                 result = mal_builtin_string_search_cursor_next(&cursor);
                 mal_builtin_string_search_cursor_dispose(&cursor);
                 goto done;
@@ -741,7 +741,7 @@ static MalValue mal_builtin_string_search_impl(
         usize max_start = length - search_length;
         position = isnan(position) ? INFINITY : mal_ops_number_to_integer_or_infinity(position);
         usize start = position <= 0 ? 0 : position >= (f64) max_start ? max_start : (usize) position;
-        i64 match = mal_builtin_string_reverse_find(string, search, range_start + start);
+        i64 match = mal_builtin_string_reverse_find(string, search, range_start + start, range_start);
         result = mal_value_from_i32(match < (i64) range_start ? -1 : (i32) (match - range_start));
         return result;
     }
@@ -1435,31 +1435,8 @@ static MalValue mal_builtin_string_prototype_last_index_of(MalVm *vm, MalValue t
     }
     string = mal_builtin_string_root_get(&string_root);
     search = mal_builtin_string_root_get(&search_root);
-    usize length = mal_string_length(string);
-    usize search_length = mal_string_length(search);
-    if (search_length > length) {
-        mal_builtin_string_root_dispose(&search_root);
-        mal_builtin_string_root_dispose(&string_root);
-        return mal_value_from_i32(-1);
-    }
-
-    usize max_start = length - search_length;
-    usize start;
-    if (isnan(raw_position)) {
-        start = max_start;
-    } else {
-        f64 position = mal_ops_number_to_integer_or_infinity(raw_position);
-        if (position <= 0) {
-            start = 0;
-        } else if (position >= (f64) max_start) {
-            start = max_start;
-        } else {
-            start = (usize) position;
-        }
-    }
-    MalValue result = mal_value_from_i32(
-        (i32) mal_builtin_string_reverse_find(string, search, start)
-    );
+    MalValue result = mal_builtin_string_search_impl(string, 0, mal_string_length(string),
+        search, raw_position, MAL_STRING_SEARCH_LAST_INDEX_OF);
     mal_builtin_string_root_dispose(&search_root);
     mal_builtin_string_root_dispose(&string_root);
     return result;
@@ -1748,6 +1725,7 @@ bool mal_builtin_string_span_search(
     MalNativeFunctionCallback expected;
     switch (operation) {
         case MAL_STRING_SEARCH_INDEX_OF: expected = mal_builtin_string_prototype_index_of; break;
+        case MAL_STRING_SEARCH_LAST_INDEX_OF: expected = mal_builtin_string_prototype_last_index_of; break;
         case MAL_STRING_SEARCH_INCLUDES: expected = mal_builtin_string_prototype_includes; break;
         case MAL_STRING_SEARCH_STARTS_WITH: expected = mal_builtin_string_prototype_starts_with; break;
         case MAL_STRING_SEARCH_ENDS_WITH: expected = mal_builtin_string_prototype_ends_with; break;
@@ -1758,12 +1736,13 @@ bool mal_builtin_string_span_search(
         !mal_value_is_string(needle) ||
         (!mal_value_is_undefined(position) && !mal_ops_is_number(position))) return false;
     f64 offset = mal_value_is_undefined(position)
-        ? (operation == MAL_STRING_SEARCH_ENDS_WITH ? INFINITY : 0)
+        ? (operation == MAL_STRING_SEARCH_ENDS_WITH || operation == MAL_STRING_SEARCH_LAST_INDEX_OF ? INFINITY : 0)
         : mal_ops_number_as_f64(position);
     *out = mal_builtin_string_search_impl(mal_value_to_string(subject), start, end,
         mal_value_to_string(needle), offset, operation);
     switch (operation) {
         case MAL_STRING_SEARCH_INDEX_OF: MAL_PERF_COUNT(string_span_index_of_searches); break;
+        case MAL_STRING_SEARCH_LAST_INDEX_OF: MAL_PERF_COUNT(string_span_last_index_of_searches); break;
         case MAL_STRING_SEARCH_INCLUDES: MAL_PERF_COUNT(string_span_includes_searches); break;
         case MAL_STRING_SEARCH_STARTS_WITH: MAL_PERF_COUNT(string_span_starts_with_searches); break;
         case MAL_STRING_SEARCH_ENDS_WITH: MAL_PERF_COUNT(string_span_ends_with_searches); break;
@@ -2412,6 +2391,7 @@ bool mal_builtin_string_range_span_init(
     switch (operation) {
         case MAL_STRING_RANGE_SLICE: expected = mal_builtin_string_prototype_slice; break;
         case MAL_STRING_RANGE_SUBSTRING: expected = mal_builtin_string_prototype_substring; break;
+        case MAL_STRING_RANGE_SUBSTR: expected = mal_builtin_string_prototype_substr; break;
         case MAL_STRING_RANGE_TRIM: expected = mal_builtin_string_prototype_trim; trim = true; break;
         case MAL_STRING_RANGE_TRIM_START: expected = mal_builtin_string_prototype_trim_start; trim = true; break;
         case MAL_STRING_RANGE_TRIM_END: expected = mal_builtin_string_prototype_trim_end; trim = true; break;
@@ -2449,6 +2429,7 @@ bool mal_builtin_string_range_span_init(
     if (nested) MAL_PERF_COUNT(string_span_nested_admissions);
     MAL_PERF_COUNT(string_span_admissions);
     if (operation == MAL_STRING_RANGE_SUBSTRING) MAL_PERF_COUNT(string_span_substring_admissions);
+    if (operation == MAL_STRING_RANGE_SUBSTR) MAL_PERF_COUNT(string_span_substr_admissions);
     return true;
 }
 
@@ -3155,7 +3136,7 @@ static bool mal_builtin_string_split_plan_matches(
     }
 
     MalBuiltinStringSearch cursor;
-    mal_builtin_string_search_cursor_init(&cursor, string, separator, 0, false, SIZE_MAX);
+    mal_builtin_string_search_cursor_init(&cursor, string, separator, 0, false, 0, SIZE_MAX);
     bool complete = true;
     for (;;) {
         i64 match_position = mal_builtin_string_search_cursor_next(&cursor);
@@ -3313,7 +3294,7 @@ static MalValue mal_builtin_string_prototype_split(MalVm *vm, MalValue this_valu
     usize position = overflow_match_position;
     MalBuiltinStringSearch cursor;
     mal_builtin_string_search_cursor_init(
-        &cursor, string, separator, position + separator_length, false, SIZE_MAX);
+        &cursor, string, separator, position + separator_length, false, 0, SIZE_MAX);
     while (true) {
         MalValue segment =
             mal_builtin_string_slice(vm, string, segment_start, position - segment_start);
@@ -3412,7 +3393,7 @@ static bool mal_builtin_string_split_projection_impl(
         usize match_position = overflow_match_position;
         MalBuiltinStringSearch cursor;
         mal_builtin_string_search_cursor_init(
-            &cursor, string, separator, match_position + separator_length, false, SIZE_MAX);
+            &cursor, string, separator, match_position + separator_length, false, 0, SIZE_MAX);
         while (true) {
             if (next_output < output_count && indices[next_output] == total_match_count) {
                 starts[next_output] = segment_start;
@@ -3561,7 +3542,7 @@ static MalValue mal_builtin_string_replace_literal(
         } else {
             MalBuiltinStringSearch cursor;
             mal_builtin_string_search_cursor_init(
-                &cursor, string, search, first_match + search_length, false, SIZE_MAX);
+                &cursor, string, search, first_match + search_length, false, 0, SIZE_MAX);
             for (;;) {
                 i64 match = mal_builtin_string_search_cursor_next(&cursor);
                 if (match < 0) break;
@@ -3588,7 +3569,7 @@ static MalValue mal_builtin_string_replace_literal(
     MalBuiltinStringSearch cursor;
     if (search_length != 0 && match_count > 1) {
         mal_builtin_string_search_cursor_init(
-            &cursor, string, search, first_match + search_length, false, SIZE_MAX);
+            &cursor, string, search, first_match + search_length, false, 0, SIZE_MAX);
     }
     for (usize match_index = 0; match_index < match_count && output.status == MAL_TEXT_BUFFER_OK; match_index++) {
         mal_builtin_string_copy_cursor_advance(&source_cursor, match_position, &output);
@@ -3668,7 +3649,7 @@ MalValue mal_builtin_string_replace_known(MalVm *vm, MalString *string, MalStrin
 
     if (search_length != 0 && all) {
         mal_builtin_string_search_cursor_init(
-            &match_cursor, string, search, (usize) first_match + search_length, false, SIZE_MAX);
+            &match_cursor, string, search, (usize) first_match + search_length, false, 0, SIZE_MAX);
         match_cursor_active = true;
         if (functional) {
             // The spec collects positions before calling the replacer. Keeping

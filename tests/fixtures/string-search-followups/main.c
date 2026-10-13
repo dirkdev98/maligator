@@ -149,6 +149,41 @@ static bool bounded_windows_match_reference(MalVm *vm) {
     return true;
 }
 
+static bool reverse_windows_do_not_scan_prefix(MalVm *vm) {
+    c16 units[4096];
+    for (usize i = 0; i < countof(units); i++) units[i] = 'a';
+    const usize start = countof(units) - 96;
+    units[start - 1] = 'b';
+    MalString *strings[] = {
+        mal_string_new_copy(&vm->heap, units, countof(units)),
+        rope_from_units(vm, units, countof(units), false),
+        rope_from_units(vm, units, countof(units), true),
+    };
+    const usize lengths[] = {1, 7, 31, 32, 33, 64};
+    for (usize n = 0; n < countof(lengths); n++) {
+        c16 needle_units[64];
+        for (usize i = 0; i < lengths[n]; i++) needle_units[i] = 'a';
+        needle_units[0] = 'z';
+        MalString *absent = mal_string_new_copy(&vm->heap, needle_units, lengths[n]);
+        needle_units[0] = 'b';
+        MalString *needle = mal_string_new_copy(&vm->heap, needle_units, lengths[n]);
+        for (usize variant = 0; variant < countof(strings); variant++) {
+            mal_perf_stats_reset();
+            CHECK(mal_value_to_i32(mal_builtin_string_search_strings(strings[variant], start,
+                countof(units), absent, INFINITY, MAL_STRING_SEARCH_LAST_INDEX_OF)) == -1);
+#if MAL_PERF_STATS
+            CHECK(mal_perf_stats.string_reverse_search_first_unit_rejects <= 96);
+            CHECK(mal_perf_stats.string_search_linear_comparisons <= 3 * (96 + lengths[n]));
+#endif
+            CHECK(mal_value_to_i32(mal_builtin_string_search_strings(strings[variant], start,
+                countof(units), needle, INFINITY, MAL_STRING_SEARCH_LAST_INDEX_OF)) == -1);
+            CHECK(mal_value_to_i32(mal_builtin_string_search_strings(strings[variant], start - 1,
+                countof(units), needle, INFINITY, MAL_STRING_SEARCH_LAST_INDEX_OF)) == 0);
+        }
+    }
+    return true;
+}
+
 static bool trim_windows_preserve_sources(MalVm *vm) {
     c16 units[145];
     for (usize i = 0; i < countof(units); i++) units[i] = 'A';
@@ -182,6 +217,29 @@ static bool trim_windows_preserve_sources(MalVm *vm) {
         }
     }
     mal_gc_unroot(&span);
+    return true;
+}
+
+static bool substr_windows_keep_relative_count(MalVm *vm) {
+    MalValue receiver = mal_value_from_string(mal_intrinsic_ascii(vm, "0123456789abcdefghijKLMNOP"));
+    const f64 starts[] = {-INFINITY, INFINITY, NAN, -3.9, 1.9, -0.0, -100, 100};
+    const f64 counts[] = {INFINITY, 2, 2, 2.9, -0.0, NAN, -2, INFINITY};
+    const usize expected[][2] = {{10,20},{20,20},{10,12},{17,19},{11,11},{10,10},{10,10},{20,20}};
+    for (usize i = 0; i < countof(starts); i++) {
+        MalValue subject = MAL_VALUE_UNDEFINED;
+        usize start = 999, end = 999;
+        CHECK(mal_builtin_string_range_span_init(MAL_VALUE_UNDEFINED, receiver, 10, 20,
+            mal_ops_number_value(starts[i]), mal_ops_number_value(counts[i]),
+            MAL_STRING_RANGE_SUBSTR, true, &subject, &start, &end));
+        CHECK(subject == receiver && start == expected[i][0] && end == expected[i][1]);
+    }
+    MalValue subject = MAL_VALUE_UNDEFINED;
+    usize start = 999, end = 999;
+    CHECK(mal_builtin_string_range_span_init(MAL_VALUE_UNDEFINED, receiver, 10, 20,
+        MAL_VALUE_UNDEFINED, MAL_VALUE_UNDEFINED, MAL_STRING_RANGE_SUBSTR, true, &subject, &start, &end));
+    CHECK(subject == receiver && start == 10 && end == 20);
+    CHECK(!mal_builtin_string_range_span_init(MAL_VALUE_UNDEFINED, receiver, 10, 20,
+        MAL_VALUE_NULL, MAL_VALUE_UNDEFINED, MAL_STRING_RANGE_SUBSTR, true, &subject, &start, &end));
     return true;
 }
 
@@ -567,7 +625,7 @@ int main(void) {
 #endif
     MalVm vm;
     mal_vm_init(&vm, &mal_runtime_image);
-    bool passed = search_matches_reference(&vm) && bounded_windows_match_reference(&vm) && trim_windows_preserve_sources(&vm) && compact_single_unit_search(&vm)
+    bool passed = search_matches_reference(&vm) && bounded_windows_match_reference(&vm) && reverse_windows_do_not_scan_prefix(&vm) && trim_windows_preserve_sources(&vm) && substr_windows_keep_relative_count(&vm) && compact_single_unit_search(&vm)
         && long_prefix_work_is_bounded(&vm)
         && short_rope_search_work_is_bounded(&vm)
         && split_and_replace_keep_sequential_state(&vm)

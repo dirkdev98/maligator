@@ -42,49 +42,125 @@ const branching = `const part = value.slice(start, end); const length = part.len
 
 describe("composable string spans", () => {
 	it.each(["mutable", "locked"] as const)(
-		"ignores dead inline escape edges while rejecting live mixed-result merges under %s primordials",
+		"composes substr bounds and reverse search under %s primordials",
 		(mode) => {
-			for (const escape of ["false", "escape"]) {
-				const source = `function project(source, escape) {
- const part=source.slice(1,-1);
- const a=part.indexOf('a'), b=part.includes('a'), c=part.startsWith('a'), d=part.endsWith('a');
- if(escape)return part; return [a,b,c,d,part.length];
-} globalThis.inspect=function inspect(value,escape){return project(value,${escape});};`;
-				const image = compileSemanticProgramToProgramImage(
-					analyzeSourceAndRunSemanticAnalysis(
-						source,
-						"/span-inline-escape.mjs",
-						parseModule(source),
-					),
-					{
-						facts: compilerProgramFactsFromConfig(
-							resolveBuildConfig({ engine: { primordials: mode } }),
-						),
-					},
+			for (const args of ["", "start", "start,end"]) {
+				const image = compile(
+					`const part=value.substr(${args}); const found=part.lastIndexOf("a",start); observer();
+ if(escape)return part; return [found,part.lastIndexOf(),part.length,part.charAt(0),Number(part),part==="ab"];`,
+					mode,
 				);
-				const caller = image.native.functions.find(
-					(fn) =>
-						String.fromCharCode(
-							...(image.runtime.stringConstants[fn.body.nameStringIndex] ?? []),
-						) === "inspect",
-				)!;
-				const regions = caller.specializations.filter(
-					(region) => region.kind === "string-span",
+				const region = spans(image)[0]!;
+				expect(region.rangeOperation).toBe("substr");
+				expect(region.consumers.map((c) => c.kind)).toEqual(
+					expect.arrayContaining([
+						"lastIndexOfCall",
+						"length",
+						"charAtCall",
+						"number",
+						"equal",
+						"materialize",
+					]),
 				);
-				expect(regions.length).toBe(escape === "false" ? 1 : 0);
-				if (escape === "false")
-					expect(regions[0]!.consumers.map((consumer) => consumer.kind)).toEqual(
-						expect.arrayContaining([
-							"indexOfCall",
-							"includesCall",
-							"startsWithCall",
-							"endsWithCall",
-							"length",
-						]),
-					);
 				expect(deserializeCompilerArtifact(serializeCompilerArtifact(image))).toEqual(
 					image,
 				);
+			}
+		},
+	);
+	it("rejects a forged reverse consumer and substr producer", () => {
+		const image = compile(
+			'const part=value.substr(start,end);return part.lastIndexOf("a");',
+		);
+		const owner = image.native.functions.find((fn) =>
+			fn.specializations.some((r) => r.kind === "string-span"),
+		)!;
+		for (const forge of ["producer", "consumer"]) {
+			const specializations = owner.specializations.map((r) =>
+				r.kind !== "string-span"
+					? r
+					: forge === "producer"
+						? { ...r, rangeOperation: "substring" as const }
+						: {
+								...r,
+								consumers: r.consumers.map((c) =>
+									c.kind === "lastIndexOfCall"
+										? { ...c, kind: "indexOfCall" as const }
+										: c,
+								),
+							},
+			);
+			expect(() =>
+				serializeCompilerArtifact({
+					...image,
+					native: {
+						...image.native,
+						functions: image.native.functions.map((fn) =>
+							fn !== owner
+								? fn
+								: {
+										...fn,
+										specializations,
+										regionActions: vmRegionActions(specializations),
+									},
+						),
+					},
+				}),
+			).toThrow(/string-span/i);
+		}
+	});
+	it.each(["mutable", "locked"] as const)(
+		"ignores dead inline observations while retaining live observers and rejecting mixed-result merges under %s primordials",
+		(mode) => {
+			for (const escape of ["false", "escape"]) {
+				for (const observation of ["part", "globalThis.observe(part)"]) {
+					const source = `function project(source, escape) {
+ const part=source.slice(1,-1);
+ const a=part.indexOf('a'), b=part.includes('a'), c=part.startsWith('a'), d=part.endsWith('a');
+ if(escape)return ${observation}; return [a,b,c,d,part.length];
+} globalThis.inspect=function inspect(value,escape){return project(value,${escape});};`;
+					const image = compileSemanticProgramToProgramImage(
+						analyzeSourceAndRunSemanticAnalysis(
+							source,
+							"/span-inline-escape.mjs",
+							parseModule(source),
+						),
+						{
+							facts: compilerProgramFactsFromConfig(
+								resolveBuildConfig({ engine: { primordials: mode } }),
+							),
+						},
+					);
+					const caller = image.native.functions.find(
+						(fn) =>
+							String.fromCharCode(
+								...(image.runtime.stringConstants[fn.body.nameStringIndex] ?? []),
+							) === "inspect",
+					)!;
+					const regions = caller.specializations.filter(
+						(region) => region.kind === "string-span",
+					);
+					expect(regions.length).toBe(
+						escape === "false" || observation !== "part" ? 1 : 0,
+					);
+					if (escape === "false")
+						expect(regions[0]!.consumers.map((consumer) => consumer.kind)).toEqual(
+							expect.arrayContaining([
+								"indexOfCall",
+								"includesCall",
+								"startsWithCall",
+								"endsWithCall",
+								"length",
+							]),
+						);
+					if (escape !== "false" && observation !== "part")
+						expect(regions[0]!.consumers.some((c) => c.kind === "materialize")).toBe(
+							true,
+						);
+					expect(deserializeCompilerArtifact(serializeCompilerArtifact(image))).toEqual(
+						image,
+					);
+				}
 			}
 		},
 	);

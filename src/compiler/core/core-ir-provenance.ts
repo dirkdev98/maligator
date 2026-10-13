@@ -3731,7 +3731,9 @@ function stringSpanCandidates(
 		}
 		const result = instructionResult(fn, call, 0)!;
 		const resultRoot = root(result);
-		const uses = index.uses.get(resultRoot) ?? [];
+		const uses = (index.uses.get(resultRoot) ?? []).filter((use) =>
+			control.reachable.has(fn.instructionBlock(use.instruction)),
+		);
 		if (uses.length > 16) continue;
 		const flow = (controlUses ??= stackObjectControlUses(fn, control, roots));
 		if (flow.escapingRoots.has(resultRoot)) continue;

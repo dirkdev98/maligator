@@ -63,6 +63,7 @@ export const VM_GUARDED_BUILTIN_OPERATIONS = [
 	"String.prototype.charCodeAt",
 	"String.prototype.slice",
 	"String.prototype.substring",
+	"String.prototype.substr",
 	"String.prototype.split",
 	"String.prototype.trim",
 	"String.prototype.trimStart",
@@ -509,11 +510,13 @@ export type VmStringSpanRegion = VmRegionEnvelope<
 			| "charAtCall"
 			| "atProperty"
 			| "indexOfProperty"
+			| "lastIndexOfProperty"
 			| "includesProperty"
 			| "startsWithProperty"
 			| "endsWithProperty"
 			| "atCall"
 			| "indexOfCall"
+			| "lastIndexOfCall"
 			| "includesCall"
 			| "startsWithCall"
 			| "endsWithCall"
@@ -782,11 +785,13 @@ export type VmRegionActionRole =
 	| "charAtCall"
 	| "atProperty"
 	| "indexOfProperty"
+	| "lastIndexOfProperty"
 	| "includesProperty"
 	| "startsWithProperty"
 	| "endsWithProperty"
 	| "atCall"
 	| "indexOfCall"
+	| "lastIndexOfCall"
 	| "includesCall"
 	| "startsWithCall"
 	| "endsWithCall"

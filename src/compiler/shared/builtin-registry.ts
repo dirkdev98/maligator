@@ -834,19 +834,25 @@ export const builtinOperations: ReadonlyArray<BuiltinOperationDescriptor> = [
 		realm: "semantic-identity",
 		lowerings: ["generic", "guarded-native-collection", "exact-builtin-call"],
 	})),
-	...(["slice", "substring"] as const).map((key): BuiltinOperationDescriptor => ({
-		id: `String.prototype.${key}`,
-		owner: "String.prototype",
-		key,
-		receiver: "string",
-		arity: { minimum: 0, maximum: 2 },
-		evaluationOrder: "receiver-then-arguments",
-		coercionOrder: ["receiver-string", "start-integer", "end-integer"],
-		effects: ["coerce", "allocate", "throw", "safepoint"],
-		result: "string",
-		realm: "semantic-identity",
-		lowerings: ["generic", "span-projection"],
-	})),
+	...(["slice", "substring", "substr"] as const).map(
+		(key): BuiltinOperationDescriptor => ({
+			id: `String.prototype.${key}`,
+			owner: "String.prototype",
+			key,
+			receiver: "string",
+			arity: { minimum: 0, maximum: 2 },
+			evaluationOrder: "receiver-then-arguments",
+			coercionOrder: [
+				"receiver-string",
+				"start-integer",
+				key === "substr" ? "length-integer" : "end-integer",
+			],
+			effects: ["coerce", "allocate", "throw", "safepoint"],
+			result: "string",
+			realm: "semantic-identity",
+			lowerings: ["generic", "span-projection"],
+		}),
+	),
 	...(["trim", "trimStart", "trimEnd"] as const).map(
 		(key): BuiltinOperationDescriptor => ({
 			id: `String.prototype.${key}`,

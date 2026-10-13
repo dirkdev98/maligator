@@ -96,7 +96,7 @@ import type {
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal artifacts are hard cut-overs: stale cache entries rebuild.
-export const COMPILER_ARTIFACT_VERSION = 210;
+export const COMPILER_ARTIFACT_VERSION = 211;
 
 function validateClosureCaptureOwners(
 	owners: ReadonlyArray<number>,
@@ -203,6 +203,7 @@ const TAGGED_GUARDED_BUILTIN_OPERATIONS = [
 	"String.prototype.trimEnd",
 	"String.prototype.slice",
 	"String.prototype.substring",
+	"String.prototype.substr",
 	...VM_GUARDED_BUILTIN_OPERATIONS.filter((operation) => operation.startsWith("Math.")),
 	"RegExp.prototype.exec",
 	...VM_GUARDED_BUILTIN_OPERATIONS.filter(
@@ -1047,11 +1048,13 @@ function writeNativeStorage(w: Writer, storage: NativeStoragePlan | undefined): 
 					"charAtCall",
 					"atProperty",
 					"indexOfProperty",
+					"lastIndexOfProperty",
 					"includesProperty",
 					"startsWithProperty",
 					"endsWithProperty",
 					"atCall",
 					"indexOfCall",
+					"lastIndexOfCall",
 					"includesCall",
 					"startsWithCall",
 					"endsWithCall",
@@ -1587,11 +1590,13 @@ function readNativeStorage(r: Reader): NativeStoragePlan {
 							"charAtCall",
 							"atProperty",
 							"indexOfProperty",
+							"lastIndexOfProperty",
 							"includesProperty",
 							"startsWithProperty",
 							"endsWithProperty",
 							"atCall",
 							"indexOfCall",
+							"lastIndexOfCall",
 							"includesCall",
 							"startsWithCall",
 							"endsWithCall",
@@ -2496,11 +2501,13 @@ function writeCompilerArtifact(
 								"charAtCall",
 								"atProperty",
 								"indexOfProperty",
+								"lastIndexOfProperty",
 								"includesProperty",
 								"startsWithProperty",
 								"endsWithProperty",
 								"atCall",
 								"indexOfCall",
+								"lastIndexOfCall",
 								"includesCall",
 								"startsWithCall",
 								"endsWithCall",
@@ -5304,11 +5311,13 @@ function readCompilerArtifact(
 								"charAtCall",
 								"atProperty",
 								"indexOfProperty",
+								"lastIndexOfProperty",
 								"includesProperty",
 								"startsWithProperty",
 								"endsWithProperty",
 								"atCall",
 								"indexOfCall",
+								"lastIndexOfCall",
 								"includesCall",
 								"startsWithCall",
 								"endsWithCall",
