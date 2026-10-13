@@ -11,6 +11,7 @@ import {
 	MATH_BINARY_OPERATIONS,
 	NUMBER_PREDICATES,
 } from "./native-scalar-operators.ts";
+import { validateNativeVirtualValue } from "./native-virtual-value.ts";
 import type {
 	NativeDirectEntryPlan,
 	NativeFunctionPlan,
@@ -29,6 +30,14 @@ type StaticPropertyLoad = Extract<
 	BytecodeInstruction,
 	{ opcode: "LOAD_PROPERTY_STATIC" }
 >;
+
+export interface NativeObjectKeysCountPlan {
+	readonly callIp: number;
+	readonly lengthIp: number;
+	readonly claimedIps: ReadonlyArray<number>;
+	readonly borrowedRegisters: ReadonlyArray<number>;
+	readonly fallback: "original-instructions";
+}
 
 export type NativePropertyProjectionOperand =
 	| { readonly kind: "load"; readonly index: number }
@@ -249,6 +258,7 @@ export interface NativeFastPathPlans {
 	readonly mathCalls: ReadonlyArray<NativeMathCallPlan>;
 	readonly numberPredicates: ReadonlyArray<NativeNumberPredicatePlan>;
 	readonly stringTransforms: ReadonlyArray<NativeStringTransformPlan>;
+	readonly objectKeysCounts: ReadonlyArray<NativeObjectKeysCountPlan>;
 	readonly propertyNumericUpdates: ReadonlyArray<NativePropertyNumericUpdatePlan>;
 	readonly propertyProjections: ReadonlyArray<NativePropertyProjectionPlan>;
 	readonly propertyReadRegions: ReadonlyArray<NativePropertyReadRegionPlan>;
@@ -2111,6 +2121,7 @@ export function lowerNativeFastPaths(
 		mathCalls: selection.kind === "render" ? selection.plans.mathCalls : [],
 		numberPredicates: selection.kind === "render" ? selection.plans.numberPredicates : [],
 		stringTransforms: selection.kind === "render" ? selection.plans.stringTransforms : [],
+		objectKeysCounts: selection.kind === "render" ? selection.plans.objectKeysCounts : [],
 		arrayPresence: selection.kind === "render" ? selection.plans.arrayPresence : [],
 		arrayPairDestructure:
 			selection.kind === "render" ? selection.plans.arrayPairDestructure : [],
@@ -2491,6 +2502,66 @@ export function selectNativeFastPaths(
 	}
 	const numberRecordRegions: Array<NativeNumberRecordRegionPlan> = [];
 	const numericLoopRegions: Array<NativeNumericLoopRegionPlan> = [];
+	const objectKeysCounts: Array<NativeObjectKeysCountPlan> = [];
+	if (
+		native.mode === "direct" &&
+		!fn.isGenerator &&
+		!fn.isAsync &&
+		fn.handlers.length === 0 &&
+		fn.profileSiteIds === undefined
+	) {
+		for (const [ip, call] of fn.instructions.entries()) {
+			const length = fn.instructions[ip + 1];
+			if (
+				(call.opcode !== "CALL" && call.opcode !== "CALL_KNOWN") ||
+				(call.opcode === "CALL_KNOWN" &&
+					(call.operation !== "Object.keys" ||
+						call.construct ||
+						call.argumentMode !== undefined)) ||
+				call.arguments.length !== 1 ||
+				unavailable(ip) ||
+				unavailable(ip + 1) ||
+				body.externalEntries.has(ip + 1) ||
+				length?.opcode !== "LOAD_PROPERTY_STATIC" ||
+				length.object !== call.dst ||
+				String.fromCharCode(...(stringConstants[length.stringIndex] ?? [])) !== "length"
+			)
+				continue;
+			if (call.opcode === "CALL") {
+				const property = fn.instructions[ip - 1];
+				if (
+					property?.opcode !== "LOAD_PROPERTY_STATIC" ||
+					property.dst !== call.callee ||
+					String.fromCharCode(...(stringConstants[property.stringIndex] ?? [])) !== "keys"
+				)
+					continue;
+			}
+			let valid = true;
+			try {
+				validateNativeVirtualValue(
+					fn.instructions,
+					ip,
+					call.dst,
+					new Map([[ip + 1, [call.dst]]]),
+					() => {
+						throw new RangeError("Observed keys array");
+					},
+				);
+			} catch {
+				valid = false;
+			}
+			if (!valid) continue;
+			objectKeysCounts.push({
+				callIp: ip,
+				lengthIp: ip + 1,
+				claimedIps: [ip, ip + 1],
+				borrowedRegisters: [],
+				fallback: "original-instructions",
+			});
+			blocked.add(ip);
+			blocked.add(ip + 1);
+		}
+	}
 	// Profiled sites observe each original instruction.
 	if (
 		native.mode === "direct" &&
@@ -2559,6 +2630,7 @@ export function selectNativeFastPaths(
 		mathCalls,
 		numberPredicates,
 		stringTransforms,
+		objectKeysCounts,
 		...selectArrayWindows(
 			native,
 			new Set([
@@ -2582,6 +2654,7 @@ export function selectNativeFastPaths(
 					...selected.propertyReadPairs,
 					...numberRecordRegions,
 					...numericLoopRegions,
+					...objectKeysCounts,
 					...(selected.constructorInitialization === undefined
 						? []
 						: [selected.constructorInitialization]),

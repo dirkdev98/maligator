@@ -1023,6 +1023,7 @@ function rootStorage(
 				...fastPaths.propertyReadPairs,
 				...fastPaths.numberRecordRegions,
 				...fastPaths.numericLoopRegions,
+				...fastPaths.objectKeysCounts,
 			].flatMap((plan) => plan.borrowedRegisters),
 		);
 		const iteratorDone = new Set<number>();
@@ -1055,6 +1056,7 @@ function rootStorage(
 					...fastPaths.propertyReadPairs,
 					...fastPaths.numberRecordRegions,
 					...fastPaths.numericLoopRegions,
+					...fastPaths.objectKeysCounts,
 				],
 				expressionIps,
 			),
@@ -1118,6 +1120,7 @@ function scalarStorageWindows(fastPaths: NativeFastPathPlans) {
 		...fastPaths.propertyReadPairs,
 		...fastPaths.numberRecordRegions,
 		...fastPaths.numericLoopRegions,
+		...fastPaths.objectKeysCounts,
 		...fastPaths.pairedArrayLoops,
 		...fastPaths.arrayPresence,
 		...fastPaths.arrayPairDestructure,
@@ -1656,6 +1659,17 @@ export function validateNativeStorage(
 					plan.instructionIp === selected.numberPredicates[index]!.instructionIp &&
 					plan.mode === selected.numberPredicates[index]!.mode,
 			) &&
+			stored.objectKeysCounts.length === selected.objectKeysCounts.length &&
+			stored.objectKeysCounts.every((plan, index) => {
+				const expected = selected.objectKeysCounts[index]!;
+				return (
+					plan.callIp === expected.callIp &&
+					plan.lengthIp === expected.lengthIp &&
+					plan.fallback === expected.fallback &&
+					sameNumbers(plan.claimedIps, expected.claimedIps) &&
+					sameNumbers(plan.borrowedRegisters, expected.borrowedRegisters)
+				);
+			}) &&
 			nativeStringTransformPlansMatch(
 				stored.stringTransforms,
 				selected.stringTransforms,

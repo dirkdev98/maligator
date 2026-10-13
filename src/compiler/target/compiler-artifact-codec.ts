@@ -95,7 +95,7 @@ import type {
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal artifacts are hard cut-overs: stale cache entries rebuild.
-export const COMPILER_ARTIFACT_VERSION = 193;
+export const COMPILER_ARTIFACT_VERSION = 194;
 
 function validateClosureCaptureOwners(
 	owners: ReadonlyArray<number>,
@@ -979,6 +979,13 @@ function writeNativeStorage(w: Writer, storage: NativeStoragePlan | undefined): 
 		w.i32(plan.instructionIp);
 		w.u8(NATIVE_NUMBER_PREDICATE_MODES.indexOf(plan.mode));
 	}
+	w.u32(storage.objectKeysCounts.length);
+	for (const plan of storage.objectKeysCounts) {
+		w.i32(plan.callIp);
+		w.i32(plan.lengthIp);
+		w.i32Array([...plan.claimedIps]);
+		w.i32Array([...plan.borrowedRegisters]);
+	}
 	w.u32(storage.stringTransforms.length);
 	for (const plan of storage.stringTransforms) {
 		w.i32(plan.instructionIp);
@@ -1443,6 +1450,13 @@ function readNativeStorage(r: Reader): NativeStoragePlan {
 			return { instructionIp, mode };
 		},
 	);
+	const objectKeysCounts = Array.from({ length: r.count(16) }, () => ({
+		callIp: r.i32(),
+		lengthIp: r.i32(),
+		claimedIps: r.i32Array(),
+		borrowedRegisters: r.i32Array(),
+		fallback: "original-instructions" as const,
+	}));
 	const stringTransforms: Array<NativeStringTransformPlan> = Array.from(
 		{ length: r.count(6) },
 		() => {
@@ -1501,6 +1515,7 @@ function readNativeStorage(r: Reader): NativeStoragePlan {
 		mathCalls,
 		numberPredicates,
 		stringTransforms,
+		objectKeysCounts,
 		arrayPresence,
 		arrayPairDestructure,
 		callTransports,

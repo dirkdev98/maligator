@@ -2565,6 +2565,19 @@
 			"controls": ["primordial-array-folds", "array-map"]
 		},
 		{
+			"id": "object-keys-count",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "Object.keys snapshots",
+			"category": "api-builtins",
+			"mechanisms": ["object-enumeration", "array-allocation"],
+			"inputShape": "Repeated count-only snapshots of three ordinary records with two through four enumerable string keys.",
+			"unit": "enumeration call",
+			"sourceSeam": "runtime/src/builtin_object.c",
+			"fixture": "cases/object-keys-count.mjs",
+			"controls": ["object-entries-small-keys-8", "object-entries-small-entries-8"]
+		},
+		{
 			"id": "typed-array-three-view",
 			"group": "runtime",
 			"suite": "runtime",

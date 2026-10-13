@@ -24,6 +24,9 @@ MalValue mal_builtin_object_keys_known(
     MalVm *vm, const MalValue *args, i32 arg_count
 );
 
+// Counts the snapshot without allocation or user code; a decline leaves the original call untouched.
+bool mal_builtin_object_keys_count(MalValue callee, MalValue target, bool locked, u32 *count_out);
+
 /** Exact Object.values invocation after the locked namespace/property seam. */
 MalValue mal_builtin_object_values_known(
     MalVm *vm, const MalValue *args, i32 arg_count

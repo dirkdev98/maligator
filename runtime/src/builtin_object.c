@@ -1122,6 +1122,34 @@ MalValue mal_builtin_object_keys_known(
         MAL_VALUE_UNDEFINED);
 }
 
+bool mal_builtin_object_keys_count(MalValue callee, MalValue target, bool locked, u32 *count_out) {
+    if ((!locked && (!mal_value_is_native_function_object(callee) ||
+        mal_native_function_object_callback(mal_value_to_native_function_object(callee)) != mal_builtin_object_keys)) ||
+        !mal_value_is_heap_type(target, MAL_HEAP_OBJECT)) return false;
+    MalObject *object = mal_value_to_object(target);
+    u32 capacity;
+    if (!mal_builtin_object_plain_capacity(object, &capacity)) return false;
+    u32 count = 0;
+    if (!mal_object_has_public_overflow(object)) {
+        MalShape *shape = object->shape;
+        for (u32 i = 0; i < shape->inline_count; i++) {
+            const MalShapeProp *prop = &shape->props[i];
+            if (mal_value_is_string(prop->key) && (prop->attrs & MAL_PROPERTY_ENUMERABLE)) count++;
+        }
+    } else {
+        MalPropertyIter iter;
+        mal_property_iter_init(&iter, object, MAL_PROPERTY_ITER_STORAGE_ORDER);
+        MalKey key;
+        MalPropertyDesc desc;
+        while (mal_property_iter_next(&iter, &key, &desc)) {
+            if (key.kind != MAL_KEY_SYMBOL && (desc.flags & MAL_PROPERTY_ENUMERABLE)) count++;
+        }
+    }
+    *count_out = count;
+    MAL_PERF_COUNT(object_keys_count_admissions);
+    return true;
+}
+
 static MalValue mal_builtin_object_values(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) this_value;
     return mal_builtin_object_collect(

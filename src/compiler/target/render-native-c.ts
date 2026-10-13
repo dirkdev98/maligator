@@ -3813,6 +3813,7 @@ function emitBody(
 		mathCalls: [],
 		numberPredicates: [],
 		stringTransforms: [],
+		objectKeysCounts: [],
 		propertyProjections: [],
 		propertyNumericUpdates: [],
 		propertyReadRegions: [],
@@ -3962,6 +3963,15 @@ function emitBody(
 	);
 	const numberPredicates = new Map(
 		fastPathPlans.numberPredicates.map((plan) => [plan.instructionIp, plan]),
+	);
+	const objectKeysCounts = new Map(
+		fastPathPlans.objectKeysCounts.flatMap(
+			(plan) =>
+				[
+					[plan.callIp, plan],
+					[plan.lengthIp, plan],
+				] as const,
+		),
 	);
 	const stringTransforms = new Map(
 		fastPathPlans.stringTransforms.map((plan) => [plan.instructionIp, plan]),
@@ -4424,6 +4434,7 @@ function emitBody(
 		mathCall: undefined,
 		numberPredicate: undefined,
 		stringTransform: undefined,
+		objectKeysCount: undefined,
 		mappedArguments: fn.mappedArguments,
 		mappedArgumentSlots: fn.mappedArgumentSlots,
 		hasPrototype: fn.hasPrototype,
@@ -4452,6 +4463,11 @@ function emitBody(
 		privateFieldReserveCount: undefined,
 		relocation,
 	};
+	for (const plan of fastPathPlans.objectKeysCounts)
+		lines.push(
+			`bool __keys_count_${plan.callIp}_active = false;`,
+			`u32 __keys_count_${plan.callIp}_value = 0;`,
+		);
 	let lastPublishedPos = -1;
 	let lastPublishedSite = -1;
 	let lastPublishedInactiveRootMask: NativeInactiveRootMask | undefined;
@@ -4900,6 +4916,7 @@ function emitBody(
 			mathCalleeRegisters.has(contextInstruction.dst);
 		instructionContext.numberPredicate = numberPredicates.get(ip);
 		instructionContext.stringTransform = stringTransforms.get(ip);
+		instructionContext.objectKeysCount = objectKeysCounts.get(ip);
 		instructionContext.indexedLengthLoopAction = indexedLengthLoopActionByIp.get(ip);
 		instructionContext.nativeArrayPresenceProjectionAction = arrayPresenceAction;
 		instructionContext.pairedArrayLoopAction = pairedArrayLoopActionByIp.get(ip);
@@ -5377,6 +5394,7 @@ interface NativeInstructionContext {
 	readonly watchedMathCallee?: boolean;
 	readonly numberPredicate?: NativeNumberPredicatePlan;
 	readonly stringTransform?: NativeStringTransformPlan;
+	readonly objectKeysCount?: { readonly callIp: number; readonly lengthIp: number };
 	readonly mappedArguments: boolean;
 	readonly mappedArgumentSlots: ReadonlyArray<number>;
 	readonly hasPrototype: boolean;
@@ -6110,6 +6128,36 @@ function emitInstruction(
 			...ordinary.map((line) => `  ${line}`),
 			`}`,
 		];
+	}
+	if (context.objectKeysCount !== undefined) {
+		const site = context.objectKeysCount;
+		const name = `__keys_count_${site.callIp}`;
+		const ordinary = emitGenericInstruction();
+		if (ordinary === null) return null;
+		if (
+			ip === site.callIp &&
+			(instruction.opcode === "CALL" || instruction.opcode === "CALL_KNOWN")
+		) {
+			const locked = instruction.opcode === "CALL_KNOWN";
+			return [
+				`${name}_active = mal_builtin_object_keys_count(${locked ? "MAL_VALUE_UNDEFINED" : boxedOperand(instruction.callee)}, ${boxedOperand(instruction.arguments[0]!)}, ${locked}, &${name}_value);`,
+				`if (${name}_active) {`,
+				`  r${instruction.dst} = MAL_VALUE_UNDEFINED;`,
+				`  ${poll()}`,
+				`} else {`,
+				...ordinary.map((line) => `  ${line}`),
+				`}`,
+			];
+		}
+		if (ip === site.lengthIp && instruction.opcode === "LOAD_PROPERTY_STATIC")
+			return [
+				`if (${name}_active) {`,
+				`  ${storeNumber(instruction.dst, `(f64) ${name}_value`)}`,
+				`} else {`,
+				...ordinary.map((line) => `  ${line}`),
+				`}`,
+			];
+		throw new Error("Invalid keys-count action");
 	}
 	if (stackObjectMaterialization?.site.materializedSlot !== undefined) {
 		const { site, values } = stackObjectMaterialization;

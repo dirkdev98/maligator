@@ -888,6 +888,8 @@ static void mal_perf_stats_print(void) {
         (unsigned long long) mal_perf_stats.collection_tracking_overflows,
         (unsigned long long) mal_perf_stats.collection_tracking_misses
     );
+    fprintf(stderr, "[perf-object-keys-count-stats] admissions=%llu\n",
+        (unsigned long long) mal_perf_stats.object_keys_count_admissions);
     fprintf(stderr, "[perf-typed-array-region-stats] admissions=%llu\n",
         (unsigned long long) mal_perf_stats.fixed_typed_array_region_admissions);
     fprintf(
