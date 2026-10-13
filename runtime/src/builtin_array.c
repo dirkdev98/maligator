@@ -4693,6 +4693,7 @@ enum {
     MAL_FROM_ASYNC_SLOT_PHASE,
     MAL_FROM_ASYNC_SLOT_FAIL,
     MAL_FROM_ASYNC_SLOT_CALLBACK_INDEX,
+    MAL_FROM_ASYNC_SLOT_CLOSE_ERROR,
     MAL_FROM_ASYNC_SLOT_COUNT,
 };
 
@@ -4701,62 +4702,24 @@ enum {
     MAL_FROM_ASYNC_PHASE_ITER_MAP,      // awaiting a mapped value (iterator path)
     MAL_FROM_ASYNC_PHASE_AL_GET,        // awaiting arrayLike[k]
     MAL_FROM_ASYNC_PHASE_AL_MAP,        // awaiting a mapped value (array-like path)
+    MAL_FROM_ASYNC_PHASE_ITER_CLOSE,
 };
 
 static MalCompletion mal_array_normal(void) {
     return (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = mal_value_new_undefined()};
 }
 
-static u32 mal_from_async_slot_u32(MalNativeFunctionObject *self, i32 slot) {
-    return (u32) mal_ops_to_number(mal_native_function_object_get_slot(self, slot));
+static f64 mal_from_async_slot_number(MalNativeFunctionObject *self, i32 slot) {
+    return mal_ops_to_number(mal_native_function_object_get_slot(self, slot));
 }
 
-// Call a one-argument capability function (resolve/reject), clearing completion.
 static void mal_from_async_call1(MalVm *vm, MalValue fn, MalValue arg) {
     vm->completion = mal_array_normal();
     mal_vm_call_value(vm, fn, mal_value_new_undefined(), &arg, 1);
     vm->completion = mal_array_normal();
 }
 
-// Best-effort AsyncIteratorClose for an abrupt completion: call the iterator's
-// return() and swallow the result (the original rejection is what propagates).
-static void mal_from_async_close(MalVm *vm, MalValue iterator, MalValue error) {
-    // Some callers clear the pending completion before observable return lookup.
-    MalRootSpan error_span;
-    mal_gc_root(&error_span, &error, 1);
-    if (mal_value_is_object(iterator)) {
-        MalIteratorRecord record = {.iterator = iterator, .next_method = mal_value_new_undefined()};
-        mal_vm_iterator_close(vm, &record);
-    }
-    mal_gc_unroot(&error_span);
-}
-
-// CreateDataPropertyOrThrow(target, index, value): leaves a pending TypeError
-// (returns false) when the define is rejected (e.g. a non-extensible receiver).
-static bool mal_from_async_create_data_property(MalVm *vm, MalValue target, u32 index, MalValue value) {
-    // A fresh Array result takes the indexed-element fast path (which keeps
-    // `length` in step); a custom `this`-constructed receiver goes through the
-    // generic [[DefineOwnProperty]], throwing when it refuses the property.
-    if (mal_value_is_array_object(target)) {
-        mal_builtin_array_store_index(mal_value_to_array_object(target), index, value);
-        return true;
-    }
-    MalPropertyDesc desc = {
-        .flags = MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE,
-        .value = value,
-        .getter = mal_value_new_undefined(),
-        .setter = mal_value_new_undefined(),
-    };
-    if (mal_object_define_own(mal_value_to_object(target), mal_key_index(index), &desc) != MAL_DEFINE_OWN_APPLIED) {
-        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot define array index property");
-        return false;
-    }
-    return true;
-}
-
-// Await(value): PromiseResolve(value) then attach step/fail as its reactions. A
-// PromiseResolve throw rejects the capability immediately.
-static void mal_from_async_await(MalVm *vm, MalValue value, MalValue step, MalValue fail, MalValue reject) {
+static void mal_from_async_await(MalVm *vm, MalValue value, MalValue step, MalValue fail) {
     // The PromiseResolve wrapper for a primitive cannot escape this Await.
     // Resume through the same reaction job without allocating that Promise.
     if (!mal_value_is_object(value)) {
@@ -4773,14 +4736,46 @@ static void mal_from_async_await(MalVm *vm, MalValue value, MalValue step, MalVa
     MalValue promise;
     if (!mal_promise_resolve_value(vm, value, &promise)) {
         MalValue error = vm->completion.value;
-        mal_from_async_call1(vm, reject, error);
+        mal_from_async_call1(vm, fail, error);
         return;
     }
     mal_promise_perform_then(vm, promise, step, fail, mal_value_new_undefined(), mal_value_new_undefined());
 }
 
+static void mal_from_async_reject_close(MalVm *vm, MalNativeFunctionObject *self) {
+    MalValue error = mal_native_function_object_get_slot(self, MAL_FROM_ASYNC_SLOT_CLOSE_ERROR);
+    mal_from_async_call1(vm, mal_native_function_object_get_slot(self, MAL_FROM_ASYNC_SLOT_REJECT), error);
+    mal_native_function_object_set_slot(self, MAL_FROM_ASYNC_SLOT_CLOSE_ERROR, mal_value_new_undefined());
+}
+
+static void mal_from_async_close(MalVm *vm, MalNativeFunctionObject *self, MalValue error) {
+    // AsyncIteratorClose preserves the original throw even when return lookup, Call, or Await fails.
+    mal_native_function_object_set_slot(self, MAL_FROM_ASYNC_SLOT_CLOSE_ERROR, error);
+    mal_native_function_object_set_slot(self, MAL_FROM_ASYNC_SLOT_PHASE, mal_value_from_f64(MAL_FROM_ASYNC_PHASE_ITER_CLOSE));
+    vm->completion = mal_array_normal();
+    MalValue iterator = mal_native_function_object_get_slot(self, MAL_FROM_ASYNC_SLOT_ITERATOR);
+    MalValue return_method;
+    if (!mal_vm_get_property(vm, iterator, mal_intrinsic_string_key(vm, "return"), &return_method) ||
+        !mal_value_is_callable(return_method)) {
+        mal_from_async_reject_close(vm, self);
+        return;
+    }
+    MalCompletion returned = mal_vm_call_value(vm, return_method, iterator, nullptr, 0);
+    if (returned.kind != MAL_COMPLETION_NORMAL) {
+        mal_from_async_reject_close(vm, self);
+        return;
+    }
+    mal_from_async_await(vm, returned.value, mal_value_from_native_function_object(self),
+        mal_native_function_object_get_slot(self, MAL_FROM_ASYNC_SLOT_FAIL));
+}
+
 // Iterator path: Call(next, iterator) then Await the result at PHASE_ITER_NEXT.
 static void mal_from_async_iter_next(MalVm *vm, MalNativeFunctionObject *self, MalValue step, MalValue fail) {
+    if (mal_from_async_slot_number(self, MAL_FROM_ASYNC_SLOT_K) >= MAL_NUMBER_MAX_SAFE_INTEGER) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Array.fromAsync exceeded maximum safe index");
+        mal_from_async_close(vm, self, vm->completion.value);
+        return;
+    }
     MalValue iterator = mal_native_function_object_get_slot(self, MAL_FROM_ASYNC_SLOT_ITERATOR);
     MalValue next = mal_native_function_object_get_slot(self, MAL_FROM_ASYNC_SLOT_NEXT);
     MalValue reject = mal_native_function_object_get_slot(self, MAL_FROM_ASYNC_SLOT_REJECT);
@@ -4790,7 +4785,7 @@ static void mal_from_async_iter_next(MalVm *vm, MalNativeFunctionObject *self, M
         return;
     }
     mal_native_function_object_set_slot(self, MAL_FROM_ASYNC_SLOT_PHASE, mal_value_from_f64(MAL_FROM_ASYNC_PHASE_ITER_NEXT));
-    mal_from_async_await(vm, completion.value, step, fail, reject);
+    mal_from_async_await(vm, completion.value, step, fail);
 }
 
 // Array-like path: Get(arrayLike, k) then Await it at PHASE_AL_GET; if the index
@@ -4799,9 +4794,9 @@ static void mal_from_async_al_get(MalVm *vm, MalNativeFunctionObject *self, MalV
     MalValue reject = mal_native_function_object_get_slot(self, MAL_FROM_ASYNC_SLOT_REJECT);
     MalValue resolve = mal_native_function_object_get_slot(self, MAL_FROM_ASYNC_SLOT_RESOLVE);
     MalValue result = mal_native_function_object_get_slot(self, MAL_FROM_ASYNC_SLOT_RESULT);
-    u32 k = mal_from_async_slot_u32(self, MAL_FROM_ASYNC_SLOT_K);
+    f64 k = mal_from_async_slot_number(self, MAL_FROM_ASYNC_SLOT_K);
     f64 len = mal_ops_to_number(mal_native_function_object_get_slot(self, MAL_FROM_ASYNC_SLOT_LEN));
-    if ((f64) k >= len) {
+    if (k >= len) {
         if (!mal_builtin_array_set_or_throw(vm, result, mal_intrinsic_string_key(vm, "length"), mal_value_from_f64(len))) {
             mal_from_async_call1(vm, reject, vm->completion.value);
             return;
@@ -4811,17 +4806,16 @@ static void mal_from_async_al_get(MalVm *vm, MalNativeFunctionObject *self, MalV
     }
     MalValue array_like = mal_native_function_object_get_slot(self, MAL_FROM_ASYNC_SLOT_ARRAY_LIKE);
     MalValue k_value;
-    if (!mal_vm_get_property(vm, array_like, mal_key_index(k), &k_value)) {
+    MalKey key;
+    if (!mal_builtin_array_numeric_key(vm, k, &key) ||
+        !mal_vm_get_property(vm, array_like, key, &k_value)) {
         mal_from_async_call1(vm, reject, vm->completion.value);
         return;
     }
     mal_native_function_object_set_slot(self, MAL_FROM_ASYNC_SLOT_PHASE, mal_value_from_f64(MAL_FROM_ASYNC_PHASE_AL_GET));
-    mal_from_async_await(vm, k_value, step, fail, reject);
+    mal_from_async_await(vm, k_value, step, fail);
 }
 
-// onRejected: a rejected Await of a mapped value (PHASE_ITER_MAP) closes the
-// async iterator first (IfAbruptCloseAsyncIterator); every other rejection just
-// settles the capability.
 static MalValue mal_array_from_async_fail(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) this_value;
     (void) new_target;
@@ -4829,16 +4823,21 @@ static MalValue mal_array_from_async_fail(MalVm *vm, MalValue this_value, const 
     MalNativeFunctionObject *self = mal_value_to_native_function_object(
         mal_native_function_object_get_slot(fail_self, 0));
     MalValue error = arg_count >= 1 ? args[0] : mal_value_new_undefined();
-    i32 phase = (i32) mal_from_async_slot_u32(self, MAL_FROM_ASYNC_SLOT_PHASE);
+    i32 phase = (i32) mal_from_async_slot_number(self, MAL_FROM_ASYNC_SLOT_PHASE);
     if (phase == MAL_FROM_ASYNC_PHASE_ITER_MAP) {
-        mal_from_async_close(vm, mal_native_function_object_get_slot(self, MAL_FROM_ASYNC_SLOT_ITERATOR), error);
+        mal_from_async_close(vm, self, error);
+        return mal_value_new_undefined();
+    }
+    if (phase == MAL_FROM_ASYNC_PHASE_ITER_CLOSE) {
+        mal_from_async_reject_close(vm, self);
+        return mal_value_new_undefined();
     }
     mal_from_async_call1(vm, mal_native_function_object_get_slot(self, MAL_FROM_ASYNC_SLOT_REJECT), error);
     return mal_value_new_undefined();
 }
 
 static MalCompletion mal_from_async_map(
-    MalVm *vm, MalNativeFunctionObject *self, MalValue value, u32 index
+    MalVm *vm, MalNativeFunctionObject *self, MalValue value, f64 index
 ) {
     MalValue mapper = mal_native_function_object_get_slot(self, MAL_FROM_ASYNC_SLOT_MAPFN);
     MalValue map_args[2] = {value, mal_value_from_f64(index)};
@@ -4890,10 +4889,9 @@ static MalValue mal_array_from_async_step(MalVm *vm, MalValue this_value, const 
     MalValue reject = mal_native_function_object_get_slot(self, MAL_FROM_ASYNC_SLOT_REJECT);
     MalValue resolve = mal_native_function_object_get_slot(self, MAL_FROM_ASYNC_SLOT_RESOLVE);
     MalValue result = mal_native_function_object_get_slot(self, MAL_FROM_ASYNC_SLOT_RESULT);
-    MalValue iterator = mal_native_function_object_get_slot(self, MAL_FROM_ASYNC_SLOT_ITERATOR);
     bool mapping = mal_value_is_truthy(mal_native_function_object_get_slot(self, MAL_FROM_ASYNC_SLOT_MAPPING));
-    u32 k = mal_from_async_slot_u32(self, MAL_FROM_ASYNC_SLOT_K);
-    i32 phase = (i32) mal_from_async_slot_u32(self, MAL_FROM_ASYNC_SLOT_PHASE);
+    f64 k = mal_from_async_slot_number(self, MAL_FROM_ASYNC_SLOT_K);
+    i32 phase = (i32) mal_from_async_slot_number(self, MAL_FROM_ASYNC_SLOT_PHASE);
     MalValue resumed = arg_count >= 1 ? args[0] : mal_value_new_undefined();
 
     switch (phase) {
@@ -4925,19 +4923,15 @@ static MalValue mal_array_from_async_step(MalVm *vm, MalValue this_value, const 
             if (mapping) {
                 MalCompletion mapped = mal_from_async_map(vm, self, next_value, k);
                 if (mapped.kind != MAL_COMPLETION_NORMAL) {
-                    mal_from_async_close(vm, iterator, mapped.value);
-                    mal_from_async_call1(vm, reject, mapped.value);
+                    mal_from_async_close(vm, self, mapped.value);
                     return mal_value_new_undefined();
                 }
                 mal_native_function_object_set_slot(self, MAL_FROM_ASYNC_SLOT_PHASE, mal_value_from_f64(MAL_FROM_ASYNC_PHASE_ITER_MAP));
-                mal_from_async_await(vm, mapped.value, step, fail, reject);
+                mal_from_async_await(vm, mapped.value, step, fail);
                 return mal_value_new_undefined();
             }
-            if (!mal_from_async_create_data_property(vm, result, k, next_value)) {
-                MalValue error = vm->completion.value;
-                vm->completion = mal_array_normal();
-                mal_from_async_close(vm, iterator, error);
-                mal_from_async_call1(vm, reject, error);
+            if (!mal_builtin_array_create_data_property_wide(vm, result, k, next_value)) {
+                mal_from_async_close(vm, self, vm->completion.value);
                 return mal_value_new_undefined();
             }
             mal_native_function_object_set_slot(self, MAL_FROM_ASYNC_SLOT_K, mal_value_from_f64(k + 1));
@@ -4945,11 +4939,8 @@ static MalValue mal_array_from_async_step(MalVm *vm, MalValue this_value, const 
             return mal_value_new_undefined();
         }
         case MAL_FROM_ASYNC_PHASE_ITER_MAP: {
-            if (!mal_from_async_create_data_property(vm, result, k, resumed)) {
-                MalValue error = vm->completion.value;
-                vm->completion = mal_array_normal();
-                mal_from_async_close(vm, iterator, error);
-                mal_from_async_call1(vm, reject, error);
+            if (!mal_builtin_array_create_data_property_wide(vm, result, k, resumed)) {
+                mal_from_async_close(vm, self, vm->completion.value);
                 return mal_value_new_undefined();
             }
             mal_native_function_object_set_slot(self, MAL_FROM_ASYNC_SLOT_K, mal_value_from_f64(k + 1));
@@ -4964,10 +4955,10 @@ static MalValue mal_array_from_async_step(MalVm *vm, MalValue this_value, const 
                     return mal_value_new_undefined();
                 }
                 mal_native_function_object_set_slot(self, MAL_FROM_ASYNC_SLOT_PHASE, mal_value_from_f64(MAL_FROM_ASYNC_PHASE_AL_MAP));
-                mal_from_async_await(vm, mapped.value, step, fail, reject);
+                mal_from_async_await(vm, mapped.value, step, fail);
                 return mal_value_new_undefined();
             }
-            if (!mal_from_async_create_data_property(vm, result, k, resumed)) {
+            if (!mal_builtin_array_create_data_property_wide(vm, result, k, resumed)) {
                 mal_from_async_call1(vm, reject, vm->completion.value);
                 return mal_value_new_undefined();
             }
@@ -4976,7 +4967,7 @@ static MalValue mal_array_from_async_step(MalVm *vm, MalValue this_value, const 
             return mal_value_new_undefined();
         }
         case MAL_FROM_ASYNC_PHASE_AL_MAP: {
-            if (!mal_from_async_create_data_property(vm, result, k, resumed)) {
+            if (!mal_builtin_array_create_data_property_wide(vm, result, k, resumed)) {
                 mal_from_async_call1(vm, reject, vm->completion.value);
                 return mal_value_new_undefined();
             }
@@ -4984,6 +4975,9 @@ static MalValue mal_array_from_async_step(MalVm *vm, MalValue this_value, const 
             mal_from_async_al_get(vm, self, step, fail);
             return mal_value_new_undefined();
         }
+        case MAL_FROM_ASYNC_PHASE_ITER_CLOSE:
+            mal_from_async_reject_close(vm, self);
+            return mal_value_new_undefined();
         default:
             return mal_value_new_undefined();
     }

@@ -302,6 +302,233 @@ async function main() {
 		}
 		assert(closes === 3, "fresh errors close once");
 		console.log("freshErrors", closes);
+	} else if (kind === "closeOrder") {
+		for (const failure of ["call", "await", "define"]) {
+			let entered,
+				release,
+				settled = false,
+				gets = 0,
+				calls = 0,
+				nexts = 0;
+			const closing = new Promise((resolve) => {
+				entered = resolve;
+			});
+			const source = {
+				[Symbol.asyncIterator]() {
+					return {
+						next() {
+							nexts++;
+							return { value: 7, done: false };
+						},
+						get return() {
+							gets++;
+							collectGarbage();
+							return function () {
+								assert(this === sourceIterator, "close receiver");
+								calls++;
+								collectGarbage();
+								return new Promise((resolve, reject) => {
+									release = () => {
+										collectGarbage();
+										if (failure === "await") reject({ secondary: true });
+										else resolve({});
+									};
+									entered();
+								});
+							};
+						},
+					};
+				},
+			};
+			const sourceIterator = source[Symbol.asyncIterator]();
+			source[Symbol.asyncIterator] = () => sourceIterator;
+			function Result() {
+				return new Proxy(
+					{},
+					{
+						defineProperty() {
+							collectGarbage();
+							throw { tag: "define", payload: { n: 43 } };
+						},
+					},
+				);
+			}
+			const completion = Array.fromAsync
+				.call(failure === "define" ? Result : Array, source, function () {
+					collectGarbage();
+					if (failure === "call") throw { tag: "call", payload: { n: 43 } };
+					if (failure === "await")
+						return Promise.reject({ tag: "await", payload: { n: 43 } });
+					return 7;
+				})
+				.then(
+					() => {
+						throw new Error("missing close error");
+					},
+					(error) => {
+						settled = true;
+						collectGarbage();
+						assert(
+							error.tag === failure && error.payload.n === 43,
+							"retained original close error",
+						);
+					},
+				);
+			await closing;
+			await Promise.resolve();
+			assert(
+				!settled && gets === 1 && calls === 1 && nexts === 1,
+				"rejection awaited close exactly once",
+			);
+			collectGarbage();
+			release();
+			await completion;
+			assert(settled && gets === 1 && calls === 1, "close settlement");
+		}
+		console.log("closeOrder", 3);
+	} else if (kind === "closeAbrupt") {
+		let gets = 0,
+			calls = 0;
+		for (const mode of [
+			"getter",
+			"notCallable",
+			"call",
+			"constructor",
+			"absent",
+			"primitive",
+		]) {
+			const source = {
+				[Symbol.asyncIterator]() {
+					return {
+						next() {
+							return { value: 1, done: false };
+						},
+						get return() {
+							gets++;
+							collectGarbage();
+							if (mode === "getter") throw { secondary: mode };
+							if (mode === "notCallable") return 42;
+							if (mode === "absent") return undefined;
+							return function () {
+								calls++;
+								collectGarbage();
+								if (mode === "call") throw { secondary: mode };
+								if (mode === "primitive") return 1;
+								const promise = Promise.resolve({});
+								Object.defineProperty(promise, "constructor", {
+									get() {
+										collectGarbage();
+										throw { secondary: mode };
+									},
+								});
+								return promise;
+							};
+						},
+					};
+				},
+			};
+			try {
+				await Array.fromAsync(source, function () {
+					throw { tag: mode, payload: { n: 47 } };
+				});
+				throw new Error("missing abrupt close rejection");
+			} catch (error) {
+				collectGarbage();
+				assert(error.tag === mode && error.payload.n === 47, "close error precedence");
+			}
+		}
+		let closes = 0;
+		function poisonedPromise() {
+			const promise = Promise.resolve({ value: 1, done: false });
+			Object.defineProperty(promise, "constructor", {
+				get() {
+					collectGarbage();
+					throw { tag: "await-setup", payload: { n: 53 } };
+				},
+			});
+			return promise;
+		}
+		for (const nextThrows of [false, true]) {
+			const source = {
+				[Symbol.asyncIterator]() {
+					return {
+						next() {
+							return nextThrows ? poisonedPromise() : { value: 1, done: false };
+						},
+						return() {
+							closes++;
+							collectGarbage();
+							return {};
+						},
+					};
+				},
+			};
+			try {
+				await Array.fromAsync(source, function () {
+					return poisonedPromise();
+				});
+				throw new Error("missing Await setup throw");
+			} catch (error) {
+				assert(
+					error.tag === "await-setup" && error.payload.n === 53,
+					"Await setup error identity",
+				);
+			}
+			assert(closes === 1, "only mapped Await failure closes");
+		}
+		assert(gets === 6 && calls === 3, "close observation count");
+		console.log("closeAbrupt", gets, calls, closes);
+	} else if (kind === "proxyResult") {
+		const log = [];
+		function Result() {
+			return new Proxy(
+				{},
+				{
+					defineProperty(target, key, descriptor) {
+						collectGarbage();
+						log.push(`${key}:${descriptor.value}`);
+						return Reflect.defineProperty(target, key, descriptor);
+					},
+				},
+			);
+		}
+		const mapped = await Array.fromAsync.call(
+			Result,
+			{ length: 2, 0: 3, 1: Promise.resolve(5) },
+			function (value, index) {
+				return value + index;
+			},
+		);
+		assert(
+			mapped[0] === 3 &&
+				mapped[1] === 6 &&
+				mapped.length === 2 &&
+				log.join(",") === "0:3,1:6,length:2",
+			"Proxy CreateDataProperty and final Set",
+		);
+		for (const source of [
+			{ length: 1, 0: 9 },
+			{
+				[Symbol.asyncIterator]() {
+					let done = false;
+					return {
+						next() {
+							const previous = done;
+							done = true;
+							return previous ? { done: true } : { value: 9, done: false };
+						},
+					};
+				},
+			},
+		]) {
+			log.length = 0;
+			const unmapped = await Array.fromAsync.call(Result, source);
+			assert(
+				unmapped[0] === 9 && unmapped.length === 1 && log.join(",") === "0:9,length:1",
+				"unmapped Proxy result",
+			);
+		}
+		console.log("proxyResult", mapped[0], mapped[1], log.join(","));
 	} else if (kind === "acquisition") {
 		const marker = {};
 		let calls = 0;

@@ -3366,6 +3366,19 @@
 			"controls": ["string-span-dynamic-token", "string-span-classify"]
 		},
 		{
+			"id": "object-values-indexed-snapshot",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "Object enumeration snapshots",
+			"category": "object-array-representation",
+			"mechanisms": ["object-values", "delayed-materialization"],
+			"inputShape": "Eager numeric value snapshots from alternating packed arrays and indexed records, mutated after capture.",
+			"unit": "snapshot",
+			"sourceSeam": "runtime/src/builtin_object.c",
+			"fixture": "cases/object-values-indexed-snapshot.mjs",
+			"controls": ["object-values-snapshot"]
+		},
+		{
 			"id": "method-name-unique",
 			"group": "runtime",
 			"suite": "runtime",

@@ -781,8 +781,8 @@ The shared lifetime and fallback rules are recorded in
       existing materialization fallback. A bounded canonical parser reader traverses
       rope leaves without flattening the source. All 188 focused checks, eleven Node
       oracles, five frontend/artifact/C checks, and runtime C syntax checks pass. Both
-      main-mode sanitizer checks and the bounded rope parser C check pass; the realm
-      test driver is repaired and its rerun remains pending, as does measurement.
+      main-mode sanitizer checks, the bounded rope parser C check and repaired realm
+      driver pass; measurement remains pending.
 - [ ] Reuse builtin Map/Set/Array entry cursors in Object.fromEntries while retaining
       eager key/value capture, property-key conversion, result realms, and iterator
       completion behavior. Implemented through the existing rooted traversal;
@@ -807,7 +807,8 @@ The shared lifetime and fallback rules are recorded in
       including ordered overlapping shifts and contained numeric-fusion operations.
       Preserve storage guards, numeric admission, poll resumption and original fallback.
       All 50 loop-plan checks, four actual frontend/artifact/C captures and forced-GC
-      Node oracles pass; native verification and measurement remain pending.
+      Node oracles pass. Both new native cases and four existing storage controls
+      pass under Linux ASan/UBSan; measurement remains pending.
 - [ ] Extend fixed TypedArray loops to descending and inclusive ranges with either
       comparison operand order. Retain signed strides, per-view affine bounds,
       original alias order, numeric admission and poll resumption. Focused loop and
@@ -838,10 +839,19 @@ The shared lifetime and fallback rules are recorded in
       iterator records and original errors throughout user-code boundaries. All 24
       callback checks, seven forced-GC Node oracles and six actual frontend/artifact/C
       captures pass; native verification and measurement remain pending.
+- [ ] Extend keys, values and entries snapshots to ordinary indexed records and
+      arrays, including holes, sparse storage and non-enumerable own properties.
+      Preserve property order and eager values; reject observable accessors before
+      any allocation, root captured values during index-string creation, and retain
+      cached pair/outer identities. Four actual frontend/artifact/C captures and five
+      forced-GC Node oracles pass; native verification and measurement remain pending.
 - [ ] Make Array.fromAsync await AsyncIteratorClose before settling an original
       mapper rejection, and replace its u32 iteration index with the specified Number
-      index. Current synchronous close can settle before a pending return promise;
-      preserve the original throw precedence and exactly-once close observations.
+      index. Implemented with a traced original error and suspended close phase,
+      exactly-once return observations, original throw precedence and Proxy-aware
+      property creation. All 24 focused checks, four frontend/artifact/C captures
+      and runtime/driver C syntax checks pass; native boundary, close-order and
+      rejection verification remain pending.
 
 | Order | Slice                        | Owning work and exit condition                                                                                                                                  |
 | ----- | ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |

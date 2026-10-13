@@ -78,6 +78,9 @@ describe("retained Array.fromAsync callback contracts", () => {
 				["reentry", 2, 4],
 				["abrupt", 3, 2],
 				["freshErrors", 3, 3],
+				["closeOrder", 3, 3],
+				["closeAbrupt", 8, 7],
+				["proxyResult", 1, 2],
 				["acquisition", 3, 0],
 				["fallbacks", 0, 0],
 			] as const) {
@@ -89,7 +92,11 @@ describe("retained Array.fromAsync callback contracts", () => {
 						? "sync 10 14 18 async,sync,next-get,construct,next0,map0,await0,next1,map1,await1,next2,map2,await2,next3\n"
 						: kind === "abrupt"
 							? "abrupt 2\n"
-							: oracle(fixture, env);
+							: kind === "closeAbrupt"
+								? "closeAbrupt 6 3 1\n"
+								: kind === "closeOrder"
+									? "closeOrder 3\n"
+									: oracle(fixture, env);
 				for (const [backend, target] of [
 					["compiled", pair.compiled],
 					["interpreted", pair.interpreted],
@@ -131,4 +138,30 @@ describe("retained Array.fromAsync callback contracts", () => {
 			);
 		}
 	}, 600_000);
+	it.each([true, false])(
+		"uses Number indices, proxy definitions, and an awaited safe-index close (compiled=%s)",
+		(compiled) => {
+			const built = buildNativeBinaryResult({
+				fixture: "tests/local/from-async-boundaries.js",
+				mainFile: "tests/fixtures/from-async-boundaries/main.c",
+				entryGoal: "script",
+				entryStrict: false,
+				name: `from-async-boundaries-${compiled}`,
+				compiled,
+				outDir,
+				config: resolveBuildConfig({
+					engine: { primordials: "mutable", eval: false, realms: false },
+				}),
+			});
+			const invocation = resolveHarnessExecutionInvocation(built.binaryPath);
+			const run = spawnSync(invocation.executable, invocation.args, {
+				encoding: "utf8",
+				timeout: 60_000,
+				env: { ...process.env, ...STRESS_ENV },
+			});
+			expect(run.status, run.stderr).toBe(0);
+			expect(run.stdout).toBe("from-async-boundaries PASS\n");
+		},
+		600_000,
+	);
 });

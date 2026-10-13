@@ -1135,7 +1135,7 @@ static bool mal_builtin_object_enumeration_admits(MalValue callee, MalValue targ
     }
     return (locked || (mal_value_is_native_function_object(callee) &&
         mal_native_function_object_callback(mal_value_to_native_function_object(callee)) == expected)) &&
-        mal_value_is_heap_type(target, MAL_HEAP_OBJECT);
+        (mal_value_is_heap_type(target, MAL_HEAP_OBJECT) || mal_value_is_array_object(target));
 }
 
 bool mal_builtin_object_enumeration_snapshot(MalVm *vm, MalValue callee, MalValue target, bool locked, MalObjectEnumerationKind kind, MalValue *elements, u32 capacity, u32 *count_out) {
@@ -1147,20 +1147,45 @@ bool mal_builtin_object_enumeration_snapshot(MalVm *vm, MalValue callee, MalValu
     (void) vm;
 #endif
     MalObject *object = mal_value_to_object(target);
-    if (mal_object_has_public_overflow(object)) return false;
-    const MalShape *shape = object->shape;
     u32 count = 0;
     u32 stride = kind == MAL_OBJECT_ENUMERATION_ENTRIES ? 2 : 1;
-    for (u32 i = 0; i < shape->inline_count; i++) {
-        const MalShapeProp *prop = &shape->props[i];
-        if (!mal_value_is_string(prop->key) || !(prop->attrs & MAL_PROPERTY_ENUMERABLE)) continue;
-        if (count == capacity / stride || (kind != MAL_OBJECT_ENUMERATION_KEYS &&
-            (prop->attrs & MAL_PROPERTY_ACCESSOR))) return false;
-        elements[count * stride] = kind == MAL_OBJECT_ENUMERATION_VALUES
-            ? mal_object_field_load(object, prop->slot) : prop->key;
-        if (kind == MAL_OBJECT_ENUMERATION_ENTRIES)
-            elements[count * stride + 1] = mal_object_field_load(object, prop->slot);
-        count++;
+    if (!mal_value_is_array_object(target) && !mal_object_has_public_overflow(object)) {
+        const MalShape *shape = object->shape;
+        for (u32 i = 0; i < shape->inline_count; i++) {
+            const MalShapeProp *prop = &shape->props[i];
+            if (!mal_value_is_string(prop->key) || !(prop->attrs & MAL_PROPERTY_ENUMERABLE)) continue;
+            if (count == capacity / stride || (kind != MAL_OBJECT_ENUMERATION_KEYS &&
+                (prop->attrs & MAL_PROPERTY_ACCESSOR))) return false;
+            elements[count * stride] = kind == MAL_OBJECT_ENUMERATION_VALUES
+                ? mal_object_field_load(object, prop->slot) : prop->key;
+            if (kind == MAL_OBJECT_ENUMERATION_ENTRIES)
+                elements[count * stride + 1] = mal_object_field_load(object, prop->slot);
+            count++;
+        }
+    } else {
+        MalPropertyIter iter;
+        mal_property_iter_init(&iter, object, MAL_PROPERTY_ITER_OWN_PROPERTY_ORDER);
+        MalKey key;
+        MalPropertyDesc desc;
+        while (mal_property_iter_next(&iter, &key, &desc)) {
+            if (key.kind == MAL_KEY_SYMBOL || !(desc.flags & MAL_PROPERTY_ENUMERABLE)) continue;
+            if (count == capacity / stride || (kind != MAL_OBJECT_ENUMERATION_KEYS &&
+                (desc.flags & MAL_PROPERTY_ACCESSOR))) return false;
+            elements[count * stride] = kind == MAL_OBJECT_ENUMERATION_VALUES ? desc.value : key.value;
+            if (kind == MAL_OBJECT_ENUMERATION_ENTRIES) elements[count * stride + 1] = desc.value;
+            count++;
+        }
+        if (kind != MAL_OBJECT_ENUMERATION_VALUES) {
+            // Finish the non-observing capture before allocating index strings; all retained values are roots.
+            MalRootSpan elements_span;
+            mal_gc_root(&elements_span, elements, count * stride);
+            for (u32 i = 0; i < count; i++) {
+                MalValue *key_value = &elements[i * stride];
+                if (!mal_value_is_string(*key_value))
+                    *key_value = mal_value_from_string(mal_ops_to_string(&vm->heap, *key_value));
+            }
+            mal_gc_unroot(&elements_span);
+        }
     }
     *count_out = count;
     if (kind == MAL_OBJECT_ENUMERATION_KEYS) MAL_PERF_COUNT(object_keys_snapshot_admissions);
@@ -1197,8 +1222,10 @@ bool mal_builtin_object_keys_count(MalValue callee, MalValue target, bool locked
     MalObject *object = mal_value_to_object(target);
     u32 capacity;
     if (!mal_builtin_object_plain_capacity(object, &capacity)) return false;
+    if (mal_value_is_array_object(target) &&
+        mal_value_to_array_object(target)->dense_count > UINT32_MAX - capacity) return false;
     u32 count = 0;
-    if (!mal_object_has_public_overflow(object)) {
+    if (!mal_value_is_array_object(target) && !mal_object_has_public_overflow(object)) {
         MalShape *shape = object->shape;
         for (u32 i = 0; i < shape->inline_count; i++) {
             const MalShapeProp *prop = &shape->props[i];
