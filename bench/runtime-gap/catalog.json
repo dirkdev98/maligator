@@ -6162,6 +6162,45 @@
 			"sourceSeam": "runtime/src/builtin_string.c",
 			"fixture": "cases/string-span-pad.mjs",
 			"controls": ["string-span-repeat", "string-span-classify"]
+		},
+		{
+			"id": "typed-array-reduction-regions",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "Fixed TypedArray regions",
+			"category": "memory-layout-usage",
+			"mechanisms": ["fixed-typed-array-storage", "numeric-reduction"],
+			"inputShape": "Single-view sum and descending dot-product reductions retain read-only Float64 storage over 256 elements.",
+			"unit": "element",
+			"sourceSeam": "src/compiler/target/lower-native-fast-paths.ts",
+			"fixture": "cases/typed-array-reduction-regions.mjs",
+			"controls": ["typed-array-inplace"]
+		},
+		{
+			"id": "typed-array-wide-regions",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "Fixed TypedArray regions",
+			"category": "memory-layout-usage",
+			"mechanisms": ["fixed-typed-array-storage", "interleaved-access"],
+			"inputShape": "Seven-input kernels and eight interleaved three-input lanes retain complete view windows and access order.",
+			"unit": "element",
+			"sourceSeam": "src/compiler/target/lower-native-fast-paths.ts",
+			"fixture": "cases/typed-array-wide-regions.mjs",
+			"controls": ["typed-array-reduction-regions"]
+		},
+		{
+			"id": "string-span-case",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "Composable string spans",
+			"category": "memory-layout-usage",
+			"mechanisms": ["string-spans", "delayed-materialization"],
+			"inputShape": "Uppercase and lowercase output from retained range, split, capture and nested spans preserves bounded Unicode context.",
+			"unit": "token",
+			"sourceSeam": "runtime/src/builtin_string.c",
+			"fixture": "cases/string-span-case.mjs",
+			"controls": ["string-span-pad", "string-span-classify"]
 		}
 	]
 }

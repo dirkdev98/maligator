@@ -975,6 +975,9 @@ static void mal_perf_stats_print(void) {
     fprintf(stderr, "[perf-string-span-pad-stats] start=%llu end=%llu\n",
         (unsigned long long) mal_perf_stats.string_span_pad_start_calls,
         (unsigned long long) mal_perf_stats.string_span_pad_end_calls);
+    fprintf(stderr, "[perf-string-span-case-stats] lower=%llu upper=%llu\n",
+        (unsigned long long) mal_perf_stats.string_span_lower_case_calls,
+        (unsigned long long) mal_perf_stats.string_span_upper_case_calls);
     fprintf(stderr, "[perf-string-span-repeat-stats] calls=%llu\n",
         (unsigned long long) mal_perf_stats.string_span_repeat_calls);
     fprintf(stderr, "[perf-string-span-global-number-stats] is_finite=%llu is_nan=%llu\n",

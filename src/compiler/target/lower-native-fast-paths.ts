@@ -1360,9 +1360,8 @@ function lowerNumberRecordRegion(
 	return undefined;
 }
 
-const NUMERIC_LOOP_INSTRUCTION_LIMIT = 64;
-// Four interleaved lanes need two reads and one write each.
-const FIXED_NUMERIC_LOOP_ACCESS_LIMIT = 12;
+const NUMERIC_LOOP_INSTRUCTION_LIMIT = 128;
+const FIXED_NUMERIC_LOOP_ACCESS_LIMIT = 32;
 // Their double lowering converts to int32 or divides, which a safe-integer iteration avoids.
 const INTEGER_LOOP_PROFITABLE_OPERATORS = new Set([
 	"/",
@@ -1634,11 +1633,7 @@ function fixedNumericLoopStorage(
 			? [{ ip, op }]
 			: [];
 	});
-	if (
-		memory.length < 2 ||
-		memory.length > FIXED_NUMERIC_LOOP_ACCESS_LIMIT ||
-		!memory.some(({ op }) => op.opcode === "STORE_PROPERTY")
-	)
+	if (memory.length === 0 || memory.length > FIXED_NUMERIC_LOOP_ACCESS_LIMIT)
 		return undefined;
 	const comparison = fn.instructions[shape.order[0]!]!;
 	if (
@@ -1722,7 +1717,7 @@ function fixedNumericLoopStorage(
 			maxOffset: Math.max(previous?.maxOffset ?? offset, offset),
 		});
 	}
-	if (views.size > 4 || views.has(index) || views.has(bound)) return undefined;
+	if (views.size > 8 || views.has(index) || views.has(bound)) return undefined;
 	for (const ip of shape.order) {
 		const op = fn.instructions[ip]!;
 		if (

@@ -6448,6 +6448,15 @@ function emitInstruction(
 			guard += ` && mal_builtin_string_span_pad(vm, ${locked ? "MAL_VALUE_UNDEFINED" : boxedOperand(instruction.callee)}, ${locked}, ${source}, ${prefix}_start, ${prefix}_end, ${argument(0)}, ${argument(1)}, ${role === "padStartCall"}, &${result})`;
 			projected = `${throwCheck()} r${instruction.dst} = ${callValue(instruction.dst, result)};`;
 		} else if (
+			(role === "toLowerCaseCall" || role === "toUpperCaseCall") &&
+			(instruction.opcode === "CALL" || instruction.opcode === "CALL_KNOWN")
+		) {
+			const result = `${prefix}_case_${ip}`;
+			declarations.push(`MalValue ${result};`);
+			const locked = instruction.opcode === "CALL_KNOWN";
+			guard += ` && mal_builtin_string_span_case(vm, ${locked ? "MAL_VALUE_UNDEFINED" : boxedOperand(instruction.callee)}, ${locked}, ${source}, ${prefix}_start, ${prefix}_end, ${role === "toUpperCaseCall"}, &${result})`;
+			projected = `${throwCheck()} r${instruction.dst} = ${callValue(instruction.dst, result)};`;
+		} else if (
 			characterCall !== undefined &&
 			(instruction.opcode === "CALL" || instruction.opcode === "CALL_KNOWN")
 		) {
@@ -6537,6 +6546,8 @@ function emitInstruction(
 			role === "repeatCall" ||
 			role === "padStartCall" ||
 			role === "padEndCall" ||
+			role === "toLowerCaseCall" ||
+			role === "toUpperCaseCall" ||
 			methodProperty !== undefined ||
 			characterCall !== undefined ||
 			searchCall !== undefined ||

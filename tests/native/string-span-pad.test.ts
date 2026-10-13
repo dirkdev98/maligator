@@ -123,8 +123,12 @@ describe("pad output from rooted string spans", () => {
 			mainFile: "tests/fixtures/string-repeat-frames/main.c",
 			config: resolveBuildConfig({ engine: { eval: false, realms: false } }),
 		});
-		expect(runToStdout(built.binaryPath, { env: STRESS_ENV, timeoutMs: 60000 })).toBe(
-			"string-repeat-frames PASS\n",
-		);
+		// Collection counters are opt-in even when stress forces collection.
+		expect(
+			runToStdout(built.binaryPath, {
+				env: { ...STRESS_ENV, MAL_GC_STATS: "1" },
+				timeoutMs: 60000,
+			}),
+		).toBe("string-repeat-frames PASS\n");
 	}, 600000);
 });

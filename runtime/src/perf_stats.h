@@ -297,6 +297,8 @@ typedef struct MalPerfStats {
     u64 string_span_repeat_calls;
     u64 string_span_pad_start_calls;
     u64 string_span_pad_end_calls;
+    u64 string_span_lower_case_calls;
+    u64 string_span_upper_case_calls;
     u64 string_span_range_parses;
     u64 string_span_split_parses;
     u64 string_span_regexp_parses;

@@ -97,7 +97,7 @@ import type {
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal artifacts are hard cut-overs: stale cache entries rebuild.
-export const COMPILER_ARTIFACT_VERSION = 228;
+export const COMPILER_ARTIFACT_VERSION = 229;
 
 function validateClosureCaptureOwners(
 	owners: ReadonlyArray<number>,
@@ -1054,6 +1054,10 @@ function writeNativeStorage(w: Writer, storage: NativeStoragePlan | undefined): 
 					"padStartCall",
 					"padEndProperty",
 					"padEndCall",
+					"toLowerCaseProperty",
+					"toLowerCaseCall",
+					"toUpperCaseProperty",
+					"toUpperCaseCall",
 					"charCodeAtProperty",
 					"charCodeAtCall",
 					"codePointAtProperty",
@@ -1609,6 +1613,10 @@ function readNativeStorage(r: Reader): NativeStoragePlan {
 							"padStartCall",
 							"padEndProperty",
 							"padEndCall",
+							"toLowerCaseProperty",
+							"toLowerCaseCall",
+							"toUpperCaseProperty",
+							"toUpperCaseCall",
 							"charCodeAtProperty",
 							"charCodeAtCall",
 							"codePointAtProperty",
@@ -2543,6 +2551,10 @@ function writeCompilerArtifact(
 								"padStartCall",
 								"padEndProperty",
 								"padEndCall",
+								"toLowerCaseProperty",
+								"toLowerCaseCall",
+								"toUpperCaseProperty",
+								"toUpperCaseCall",
 								"charCodeAtProperty",
 								"charCodeAtCall",
 								"codePointAtProperty",
@@ -5363,6 +5375,10 @@ function readCompilerArtifact(
 								"padStartCall",
 								"padEndProperty",
 								"padEndCall",
+								"toLowerCaseProperty",
+								"toLowerCaseCall",
+								"toUpperCaseProperty",
+								"toUpperCaseCall",
 								"charCodeAtProperty",
 								"charCodeAtCall",
 								"codePointAtProperty",

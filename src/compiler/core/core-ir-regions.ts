@@ -183,6 +183,8 @@ export const CORE_STRING_SPAN_SEARCH_METHODS = [
 ] as const;
 
 export const CORE_STRING_SPAN_METHODS = [
+	"toLowerCase",
+	"toUpperCase",
 	"repeat",
 	"padStart",
 	"padEnd",
@@ -193,6 +195,7 @@ export const CORE_STRING_SPAN_METHODS = [
 export function coreStringSpanMethodArgumentLimit(
 	method: (typeof CORE_STRING_SPAN_METHODS)[number],
 ): number {
+	if (method === "toLowerCase" || method === "toUpperCase") return Infinity;
 	return method === "padStart" ||
 		method === "padEnd" ||
 		CORE_STRING_SPAN_SEARCH_METHODS.some((name) => name === method)
@@ -217,6 +220,10 @@ export interface CoreStringSpanConsumer {
 		| "padStartCall"
 		| "padEndProperty"
 		| "padEndCall"
+		| "toLowerCaseProperty"
+		| "toLowerCaseCall"
+		| "toUpperCaseProperty"
+		| "toUpperCaseCall"
 		| "charCodeAtProperty"
 		| "charCodeAtCall"
 		| "codePointAtProperty"

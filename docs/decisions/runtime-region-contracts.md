@@ -47,6 +47,10 @@ Padding converts its target before its filler, and a satisfied target never obse
 the filler. Direct compiled helpers own no native GC-suppression contribution; only
 the native wrapper may remove its own contribution after publishing its roots.
 Long repetition polls only after publishing a completed prefix.
+Case conversion bounds both its Latin-1 scans and Unicode context to the span,
+including final-sigma decisions at either boundary. A changed output uses the
+canonical builder; unchanged output materializes only the final range. Whole-string
+callers retain cached flattening, while partial ropes copy only the required range.
 
 Enumeration snapshots retain the sequence produced by the original operation.
 Keys can be counted without loading values; values must be copied eagerly into
@@ -84,6 +88,9 @@ before invoking either observer, including when the builtin changes descriptors
 or returns the same object. Callee and receiver positions require separate proof.
 
 Fixed TypedArray regions preserve memory-operation order for overlapping views.
+Read-only reductions retain the same storage guards without requiring writable
+buffers. Every view contributes its complete visited index window, including all
+interleaved lanes; the region preserves each numeric operation and storage rounding.
 Their induction update proves the stride; admission covers the visited index
 windows. Polling publishes completed-iteration state before resumption. Fresh Array
 plans use the shared builder's root and publication contract: only effect-free

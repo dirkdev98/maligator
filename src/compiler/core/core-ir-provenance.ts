@@ -3785,12 +3785,8 @@ function stringSpanCandidates(
 			)
 				kind = `${methodProperty}Property`;
 			else if (
-				(opcode === "call" &&
-					use.position === 1 &&
-					instructionOperandCount(fn, instruction) <= 4) ||
-				(opcode === "callKnown" &&
-					use.position === 0 &&
-					instructionOperandCount(fn, instruction) <= 3)
+				(opcode === "call" && use.position === 1) ||
+				(opcode === "callKnown" && use.position === 0)
 			) {
 				const callAttrs = fn.instructionAttributes(instruction);
 				const method =

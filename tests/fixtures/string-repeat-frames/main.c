@@ -12,21 +12,30 @@ static void observe_safe_point(MalVm *vm) {
     if (vm->gc_native_frames != 0) abort();
     polls++;
 }
-#define CHECK(x) do { if (!(x)) { fprintf(stderr, "line %d: %s\n", __LINE__, #x); return 1; } } while (0)
+#define CHECK(x) do { if (!(x)) { \
+    fprintf(stderr, "repeat frames: route=%s outer=%d frames=%d polls=%zu collections=%llu->%llu line=%d: %s\n", \
+        route_name, outer, vm.gc_native_frames, polls, (unsigned long long) before, \
+        (unsigned long long) mal_gc_collection_count(&vm), __LINE__, #x); \
+    goto cleanup; \
+} } while (0)
 
 int main(void) {
     MalVm vm;
+    i32 status = 1, outer = -1;
+    const char *route_name = "setup";
+    u64 before = 0;
     mal_vm_init(&vm, &mal_runtime_image);
     MalValue roots[3] = {mal_value_from_string(mal_intrinsic_ascii(&vm, "xaby")), MAL_VALUE_UNDEFINED, MAL_VALUE_UNDEFINED};
     MalRootSpan span;
     mal_gc_root(&span, roots, 3);
     CHECK(mal_vm_get_property(&vm, roots[0], mal_intrinsic_string_key(&vm, "repeat"), &roots[1]));
     mal_gc_preempt_hook = observe_safe_point;
-    for (i32 outer = 0; outer <= 1; outer++) {
+    for (outer = 0; outer <= 1; outer++) {
         for (i32 route = 0; route < 3; route++) {
+            route_name = route == 0 ? "direct-full" : route == 1 ? "direct-span" : "native-wrapper";
             vm.gc_native_frames = outer;
             polls = 0;
-            u64 before = mal_gc_collection_count(&vm);
+            before = mal_gc_collection_count(&vm);
             if (route == 0) roots[2] = mal_builtin_string_repeat_numeric(&vm, mal_value_to_string(roots[0]), 32768);
             else if (route == 1) CHECK(mal_builtin_string_span_repeat(&vm, roots[1], false, roots[0], 1, 3, mal_value_from_i32(32768), &roots[2]));
             else {
@@ -45,9 +54,12 @@ int main(void) {
             CHECK(mal_string_code_unit_at(mal_value_to_string(roots[2]), 0) == (route == 1 ? 'a' : 'x'));
         }
     }
+    status = 0;
+cleanup:
     mal_gc_preempt_hook = nullptr;
+    vm.gc_native_frames = 0;
     mal_gc_unroot(&span);
     mal_vm_free(&vm);
-    puts("string-repeat-frames PASS");
-    return 0;
+    if (status == 0) puts("string-repeat-frames PASS");
+    return status;
 }

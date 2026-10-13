@@ -925,7 +925,8 @@ The shared lifetime and fallback rules are recorded in
       primitive rejection, Proxy observations and foreign result realms. All six
       enumeration methods also accept ignored extra arguments after their original
       evaluation. All70 focused checks, eleven Node GC modes, five frontend/artifact/C
-      captures and six runtime C syntax checks pass. Native and measurement pending.
+      captures and six runtime C syntax checks pass. All three Linux ASan/UBSan cases
+      pass, alongside the existing count and entry controls; measurement pending.
 
 - [ ] Build repeated string output directly from retained range, split, capture and
       nested spans. Reuse the canonical repeat builder with source bounds, retaining
@@ -933,20 +934,39 @@ The shared lifetime and fallback rules are recorded in
       output roots and ordinary fallback before effects. All184 span/codec checks,
       eleven Node GC modes and five actual frontend/artifact/C captures pass, including
       large partial ranges, ropes, surrogate boundaries and foreign method errors.
-      Native execution and measurement remain pending.
+      The first native run timed out inside exhaustive JavaScript checksums of large
+      outputs. Those checks now compare complete output strings against Node while
+      retaining input sizes, stress, GC hooks, counters and timeouts. The rooted
+      repeat polling repair and stronger output oracle pass all three Linux ASan/UBSan
+      cases. Measurement remains pending.
 
 - [ ] Retain bounded Object.values and Object.entries snapshots across observable
       getters. Capture all original string keys before effects, recheck each current
       descriptor, and root prior values through mutation, nested calls and collection.
       Once observation starts, propagate the original exception without replay.
       Eleven Node GC oracle modes, five actual frontend/artifact/C captures and four
-      runtime C syntax checks pass. Native and performance verification remain pending.
+      runtime C syntax checks pass. All three Linux ASan/UBSan cases and the four
+      existing values controls pass. Performance verification remains pending.
 - [ ] Build padStart and padEnd output directly from retained range, split, capture
       and nested spans through the canonical padding builder. Preserve target/filler
       conversion order, no-op coercion suppression, source roots and foreign methods.
       Keep repeat's shared allocating helper frame-neutral; only its native wrapper
       owns suppression, and long builders poll with completed prefixes rooted.
-      Focused compiler, Node and frontend/C checks pass; native and performance
+      Focused compiler, Node, frontend/C and all three JavaScript ASan/UBSan cases
+      pass. The C polling driver now enables collection statistics and cleans up on
+      assertion failure; its corrected native rerun and measurement remain pending.
+
+- [ ] Widen fixed TypedArray storage regions to read-only sums and dot products,
+      up to eight view owners,32 ordered accesses and128 instructions. Retain exact
+      view bounds, numeric admission, overlap order, rounding and poll continuation;
+      immutable inputs remain readable, while immutable outputs preserve fallback.
+      All72 loop contracts, four Node GC modes and six actual frontend/artifact/C
+      captures pass. Native and performance verification remain pending.
+- [ ] Produce lower- and uppercase output directly from retained range, split,
+      capture and nested spans. Bound the canonical Latin-1 scans and Unicode
+      conversion context to the original span, retaining source roots and final
+      unchanged-output materialization. All196 span/codec contracts, eleven Node GC
+      modes and five actual frontend/artifact/C captures pass. Native and performance
       verification remain pending.
 
 | Order | Slice                        | Owning work and exit condition                                                                                                                                  |

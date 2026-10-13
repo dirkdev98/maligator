@@ -10,16 +10,65 @@ import type { NativeNumericLoopRegionPlan } from "../src/compiler/target/lower-n
 import { emitCompiledFunction } from "../src/compiler/target/render-native-c.ts";
 import type { BytecodeInstruction } from "../src/compiler/target/runtime-image.ts";
 
-function compile(body: string) {
+function compile(body: string, parameters = "left,right,output,count,hook") {
 	return compileSemanticProgramToProgramImage(
 		analyzeSourceAndRunSemanticAnalysis(
-			`globalThis.kernel=function(left,right,output,count,hook){${body}};`,
+			`globalThis.kernel=function(${parameters}){${body}};`,
 			"/typed-loop.js",
 		),
 	);
 }
 const body = "for(let i=0;i<count;i++){output[i]=left[i]+right[i];}return output;";
 describe("fixed TypedArray loop storage", () => {
+	it.each([
+		["let total=0;for(let i=0;i<count;i++)total+=left[i];return total;", 1],
+		["let total=0;for(let i=0;i<count;i++)total+=left[i]*right[i];return total;", 2],
+		["let total=0;for(let i=count-1;i>=0;i--)total+=left[i];return total;", 1],
+	] as const)("retains read-only storage for a numeric reduction: %s", (body, views) => {
+		const image = compile(body);
+		const native = image.native.functions[1]!;
+		const plan = native.storage!.numericLoopRegions.find(
+			(plan) => plan.kind === "fixed-numeric",
+		);
+		if (plan?.kind !== "fixed-numeric") throw new Error("Missing reduction storage");
+		expect(plan.views).toHaveLength(views);
+		expect(plan.views.every((view) => !view.writable)).toBe(true);
+		expect(plan.exits.some((exit) => exit.outputs.length > 0)).toBe(true);
+		expect(deserializeCompilerArtifact(serializeCompilerArtifact(image))).toEqual(image);
+		expect(emitCompiledFunction(native, 1, "", false)).not.toBeNull();
+	});
+	it("retains all eight owners for a seven-input numeric kernel", () => {
+		const image = compile(
+			"for(let i=0;i<count;i++)output[i]=left[i]+right[i]+a[i]+b[i]+c[i]+d[i]+e[i];return output;",
+			"left,right,a,b,c,d,e,output,count",
+		);
+		const native = image.native.functions[1]!;
+		const plan = native.storage!.numericLoopRegions.find(
+			(plan) => plan.kind === "fixed-numeric",
+		);
+		if (plan?.kind !== "fixed-numeric") throw new Error("Missing multi-owner storage");
+		expect(plan.views).toHaveLength(8);
+		expect(plan.views.filter((view) => view.writable)).toHaveLength(1);
+		expect(deserializeCompilerArtifact(serializeCompilerArtifact(image))).toEqual(image);
+		expect(emitCompiledFunction(native, 1, "", false)).not.toBeNull();
+	});
+	it("retains eight interleaved lanes and their complete ordered windows", () => {
+		const image = compile(
+			`for(let i=0;i<count;i+=8){${Array.from({ length: 8 }, (_, index) => `output[i+${index}]=left[i+${index}]+right[i+${index}]+hook[i+${index}];`).join("")}}return output;`,
+		);
+		const native = image.native.functions[1]!;
+		const plan = native.storage!.numericLoopRegions.find(
+			(plan) => plan.kind === "fixed-numeric",
+		);
+		if (plan?.kind !== "fixed-numeric") throw new Error("Missing interleaved storage");
+		expect(plan.stride).toBe(8);
+		expect(plan.views).toHaveLength(4);
+		expect(plan.views.every((view) => view.minOffset === 0 && view.maxOffset === 7)).toBe(
+			true,
+		);
+		expect(deserializeCompilerArtifact(serializeCompilerArtifact(image))).toEqual(image);
+		expect(emitCompiledFunction(native, 1, "", false)).not.toBeNull();
+	});
 	it("composes a complete numeric fusion inside a fixed storage region", () => {
 		const image = compile(
 			"for(let i=0;i<count;i++){left[i]=left[i]*right+hook;}return left;",
@@ -138,13 +187,13 @@ describe("fixed TypedArray loop storage", () => {
 		expect(deserializeCompilerArtifact(serializeCompilerArtifact(image))).toEqual(image);
 		expect(emitCompiledFunction(native, 1, "", false)).not.toBeNull();
 	});
-	it("declines a fifth lane instead of multiplying the region budget", () => {
+	it("declines a kernel beyond the bounded access budget", () => {
 		const accesses = Array.from(
-			{ length: 5 },
+			{ length: 11 },
 			(_, lane) => `output[i+${lane}]=left[i+${lane}]+right[i+${lane}];`,
 		).join("");
 		expect(
-			compile(`for(let i=0;i<count;i+=5){${accesses}}`).native.functions[1]!.storage!
+			compile(`for(let i=0;i<count;i+=11){${accesses}}`).native.functions[1]!.storage!
 				.numericLoopRegions,
 		).toEqual([]);
 	});

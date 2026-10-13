@@ -200,3 +200,5 @@ tests/native/reflect-own-keys-region.test.ts
 tests/native/string-span-repeat.test.ts
 tests/native/object-observed-enumeration.test.ts
 tests/native/string-span-pad.test.ts
+tests/native/fixed-typed-array-reductions.test.ts
+tests/native/string-span-case.test.ts
