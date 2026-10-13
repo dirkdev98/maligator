@@ -71,3 +71,7 @@ MalValue mal_builtin_map_get_number(MalVm *vm, MalValue this_value, f64 key);
 MalValue mal_builtin_map_set_number(MalVm *vm, MalValue this_value, f64 key, MalValue value);
 bool mal_builtin_map_has_number(MalVm *vm, MalValue this_value, f64 key);
 bool mal_builtin_map_delete_number(MalVm *vm, MalValue this_value, f64 key);
+
+// Exact Map receivers, with numeric entry admission and validation owned by Map storage.
+MalValue mal_builtin_map_get_entry(MalVm *vm, MalValue receiver, MalValue key, u32 *entry_out);
+MalValue mal_builtin_map_set_entry(MalVm *vm, MalValue receiver, MalValue key, MalValue value, u32 entry);

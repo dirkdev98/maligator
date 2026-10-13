@@ -6,6 +6,8 @@ import { selectNativeStringTransform } from "./lower-native-string-transforms.ts
 import type { NativeStringTransformPlan } from "./lower-native-string-transforms.ts";
 import { analyzeNativeBodyFacts } from "./native-body-facts.ts";
 import type { NativeBodyFacts } from "./native-body-facts.ts";
+import { selectNativeMapEntries } from "./native-map-entry-plan.ts";
+import type { NativeMapEntryPlan } from "./native-map-entry-plan.ts";
 import {
 	MATH_UNARY_NATIVE_CALL,
 	MATH_BINARY_OPERATIONS,
@@ -260,6 +262,7 @@ export interface NativeFastPathPlans {
 	readonly mathCalls: ReadonlyArray<NativeMathCallPlan>;
 	readonly numberPredicates: ReadonlyArray<NativeNumberPredicatePlan>;
 	readonly stringTransforms: ReadonlyArray<NativeStringTransformPlan>;
+	readonly mapEntries: ReadonlyArray<NativeMapEntryPlan>;
 	readonly objectKeysCounts: ReadonlyArray<NativeObjectKeysCountPlan>;
 	readonly spanContinuations: ReadonlyArray<NativeSpanContinuation>;
 	readonly propertyNumericUpdates: ReadonlyArray<NativePropertyNumericUpdatePlan>;
@@ -2124,6 +2127,7 @@ export function lowerNativeFastPaths(
 		mathCalls: selection.kind === "render" ? selection.plans.mathCalls : [],
 		numberPredicates: selection.kind === "render" ? selection.plans.numberPredicates : [],
 		stringTransforms: selection.kind === "render" ? selection.plans.stringTransforms : [],
+		mapEntries: selection.kind === "render" ? selection.plans.mapEntries : [],
 		objectKeysCounts: selection.kind === "render" ? selection.plans.objectKeysCounts : [],
 		spanContinuations:
 			selection.kind === "render" ? selection.plans.spanContinuations : [],
@@ -2463,9 +2467,12 @@ export function selectNativeFastPaths(
 		number,
 		{ readonly id: number; readonly role: "start" | "finish" }
 	>();
+	const mapEntryBlocked = new Set(blocked);
 	const indexedLoops: Array<NativeIndexedLoopElement> = [];
 	for (const action of native.regionActions) {
 		const region = native.specializations[action.regionIndex]!;
+		if (region.kind !== "builtin-collection-call-chain")
+			for (const ip of region.claimedIps) mapEntryBlocked.add(ip);
 		if (region.kind !== "numeric-fusion") {
 			blocked.add(action.ip);
 			for (const ip of region.claimedIps) blocked.add(ip);
@@ -2511,6 +2518,12 @@ export function selectNativeFastPaths(
 		(ip) => unavailable(ip) || fusions.has(ip),
 	);
 	for (const plan of spanContinuations) for (const ip of plan.claimedIps) blocked.add(ip);
+	const mapEntries = selectNativeMapEntries(
+		native,
+		body,
+		(ip) => mapEntryBlocked.has(ip) || pollingEdges.has(ip),
+	);
+	for (const plan of mapEntries) for (const ip of plan.claimedIps) blocked.add(ip);
 	const numberRecordRegions: Array<NativeNumberRecordRegionPlan> = [];
 	const numericLoopRegions: Array<NativeNumericLoopRegionPlan> = [];
 	const objectKeysCounts: Array<NativeObjectKeysCountPlan> = [];
@@ -2641,6 +2654,7 @@ export function selectNativeFastPaths(
 		mathCalls,
 		numberPredicates,
 		stringTransforms,
+		mapEntries,
 		objectKeysCounts,
 		spanContinuations,
 		...selectArrayWindows(
@@ -2666,6 +2680,7 @@ export function selectNativeFastPaths(
 					...selected.propertyReadPairs,
 					...numberRecordRegions,
 					...numericLoopRegions,
+					...mapEntries,
 					...objectKeysCounts,
 					...spanContinuations,
 					...(selected.constructorInitialization === undefined

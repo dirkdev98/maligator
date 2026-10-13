@@ -3834,6 +3834,7 @@ function emitBody(
 		mathCalls: [],
 		numberPredicates: [],
 		stringTransforms: [],
+		mapEntries: [],
 		objectKeysCounts: [],
 		spanContinuations: [],
 		propertyProjections: [],
@@ -3985,6 +3986,15 @@ function emitBody(
 	);
 	const numberPredicates = new Map(
 		fastPathPlans.numberPredicates.map((plan) => [plan.instructionIp, plan]),
+	);
+	const mapEntries = new Map(
+		fastPathPlans.mapEntries.flatMap(
+			(plan) =>
+				[
+					[plan.getIp, plan],
+					[plan.setIp, plan],
+				] as const,
+		),
 	);
 	const objectKeysCounts = new Map(
 		fastPathPlans.objectKeysCounts.flatMap(
@@ -4461,6 +4471,7 @@ function emitBody(
 		mathCall: undefined,
 		numberPredicate: undefined,
 		stringTransform: undefined,
+		mapEntry: undefined,
 		objectKeysCount: undefined,
 		mappedArguments: fn.mappedArguments,
 		mappedArgumentSlots: fn.mappedArgumentSlots,
@@ -4490,6 +4501,8 @@ function emitBody(
 		privateFieldReserveCount: undefined,
 		relocation,
 	};
+	for (const plan of fastPathPlans.mapEntries)
+		lines.push(`u32 __map_entry_${plan.getIp} = 0;`);
 	for (const plan of fastPathPlans.objectKeysCounts)
 		lines.push(
 			`bool __keys_count_${plan.callIp}_active = false;`,
@@ -4943,6 +4956,7 @@ function emitBody(
 			mathCalleeRegisters.has(contextInstruction.dst);
 		instructionContext.numberPredicate = numberPredicates.get(ip);
 		instructionContext.stringTransform = stringTransforms.get(ip);
+		instructionContext.mapEntry = mapEntries.get(ip);
 		instructionContext.objectKeysCount = objectKeysCounts.get(ip);
 		instructionContext.indexedLengthLoopAction = indexedLengthLoopActionByIp.get(ip);
 		instructionContext.nativeArrayPresenceProjectionAction = arrayPresenceAction;
@@ -5421,6 +5435,7 @@ interface NativeInstructionContext {
 	readonly watchedMathCallee?: boolean;
 	readonly numberPredicate?: NativeNumberPredicatePlan;
 	readonly stringTransform?: NativeStringTransformPlan;
+	readonly mapEntry?: { readonly getIp: number; readonly setIp: number };
 	readonly objectKeysCount?: { readonly callIp: number; readonly lengthIp: number };
 	readonly mappedArguments: boolean;
 	readonly mappedArgumentSlots: ReadonlyArray<number>;
@@ -5833,6 +5848,21 @@ function emitInstruction(
 		const value = args[1] === undefined ? "MAL_VALUE_UNDEFINED" : boxedOperand(args[1]);
 		const entry = (boxed: string, number: string): string =>
 			`${numberKey === null ? boxed : number}(vm, ${receiver}, ${key}`;
+		const mapEntry = context.mapEntry;
+		if (
+			mapEntry !== undefined &&
+			(operation === "Map.prototype.get" || operation === "Map.prototype.set")
+		) {
+			const saved = `__map_entry_${mapEntry.getIp}`;
+			const boxedKey = boxedOperand(args[0]!);
+			return {
+				call:
+					operation === "Map.prototype.get"
+						? `mal_builtin_map_get_entry(vm, ${receiver}, ${boxedKey}, &${saved})`
+						: `mal_builtin_map_set_entry(vm, ${receiver}, ${boxedKey}, ${value}, ${saved})`,
+				boolean: false,
+			};
+		}
 		switch (operation) {
 			case "Map.prototype.get":
 				return {

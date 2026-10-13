@@ -1023,6 +1023,7 @@ function rootStorage(
 				...fastPaths.propertyReadPairs,
 				...fastPaths.numberRecordRegions,
 				...fastPaths.numericLoopRegions,
+				...fastPaths.mapEntries,
 				...fastPaths.objectKeysCounts,
 				...fastPaths.spanContinuations,
 			].flatMap((plan) => plan.borrowedRegisters),
@@ -1057,6 +1058,7 @@ function rootStorage(
 					...fastPaths.propertyReadPairs,
 					...fastPaths.numberRecordRegions,
 					...fastPaths.numericLoopRegions,
+					...fastPaths.mapEntries,
 					...fastPaths.objectKeysCounts,
 					...fastPaths.spanContinuations,
 				],
@@ -1122,6 +1124,7 @@ function scalarStorageWindows(fastPaths: NativeFastPathPlans) {
 		...fastPaths.propertyReadPairs,
 		...fastPaths.numberRecordRegions,
 		...fastPaths.numericLoopRegions,
+		...fastPaths.mapEntries,
 		...fastPaths.objectKeysCounts,
 		...fastPaths.spanContinuations,
 		...fastPaths.pairedArrayLoops,
@@ -1679,6 +1682,16 @@ export function validateNativeStorage(
 							consumer.kind === value.kind
 						);
 					})
+				);
+			}) &&
+			stored.mapEntries.length === selected.mapEntries.length &&
+			stored.mapEntries.every((plan, index) => {
+				const expected = selected.mapEntries[index]!;
+				return (
+					plan.getIp === expected.getIp &&
+					plan.setIp === expected.setIp &&
+					sameNumbers(plan.claimedIps, expected.claimedIps) &&
+					sameNumbers(plan.borrowedRegisters, expected.borrowedRegisters)
 				);
 			}) &&
 			stored.objectKeysCounts.length === selected.objectKeysCounts.length &&

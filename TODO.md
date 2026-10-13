@@ -393,7 +393,14 @@ numeric sorting, stack objects, and string projections.
       keep the original path. Seven clean matched pairs improved count-only work by
       75%; the keys control was inconclusive and the entries control was 0.9% slower.
       Focused Linux ASan/UBSan passed in both backends, primordial modes, and GC stress.
-- [ ] Extend a measured capture or split producer into the shared span consumers.
+- [x] Split fields compose with the shared span length/equality consumers and
+      materialize at ordinary or character-access observers. Seven matched pairs
+      improved classification by 22%; both string controls were inconclusive.
+      Linux ASan/UBSan passed both backends, primordial modes, and GC stress.
+- [ ] Region-local Map entries are checkpointed: retain indices only for overlapping
+      numeric lookups, revalidate live keys before updates, and preserve mutation
+      barriers. Seven matched pairs improved interleaved updates by 18%; controls
+      changed by less than 0.3%. Focused Linux sanitizer verification is pending.
 - [ ] Complete the remaining slices below, including their semantic and measured
       acceptance boundaries; the completed cases do not close the broader tasks.
 

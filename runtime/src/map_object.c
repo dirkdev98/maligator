@@ -7,6 +7,7 @@
 #include "hash_index.h"
 #include "perf_stats.h"
 #include "profile.h"
+#include "value_ops.h"
 
 #define MAL_MAP_SMALL_CAPACITY 4
 
@@ -488,6 +489,28 @@ MalValue mal_map_object_get_hinted(MalMapObject *map, MalValue key) {
     MalMapStorage *storage = map->entries;
     u32 entry = mal_map_storage_find_hinted(storage, key);
     return entry == 0 ? MAL_VALUE_UNDEFINED : mal_map_value_at(storage, entry - 1);
+}
+
+MalValue mal_map_object_get_borrowed(MalMapObject *map, MalValue key, u32 *entry_out) {
+    MalMapStorage *storage = map->entries;
+    u32 entry = mal_map_storage_find_hinted(storage, key);
+    MalValue value = entry == 0 ? MAL_VALUE_UNDEFINED : mal_map_value_at(storage, entry - 1);
+    *entry_out = mal_ops_is_number(key) && mal_ops_is_number(value) ? entry : 0;
+    return value;
+}
+
+void mal_map_object_set_borrowed(MalMapObject *map, MalValue key, MalValue value, u32 entry) {
+    MalMapStorage *storage = map->entries;
+    if (entry != 0 && storage != nullptr && entry <= storage->count &&
+        mal_ops_is_number(key) && mal_ops_is_number(value) &&
+        mal_map_is_live(storage, entry - 1) && mal_map_key_at(storage, entry - 1) == key) {
+        MAL_PERF_COUNT(map_region_entry_hits);
+        mal_map_object_update_entry(map, entry, key, value);
+        mal_map_storage_remember_entry(storage, entry);
+    } else {
+        MAL_PERF_COUNT(map_region_entry_misses);
+        mal_map_object_set_hinted(map, key, value);
+    }
 }
 
 u32 mal_map_object_upsert_canonical(MalMapObject *map, MalValue key, bool *inserted) {

@@ -349,6 +349,17 @@ MalValue mal_builtin_map_get_key(MalVm *vm, MalValue this_value, MalValue key) {
     return mal_builtin_map_get_value(vm, this_value, mal_value_to_map_object(this_value), key);
 }
 
+MalValue mal_builtin_map_get_entry(MalVm *vm, MalValue receiver, MalValue key, u32 *entry_out) {
+    (void) vm;
+    return mal_map_object_get_borrowed(mal_value_to_map_object(receiver), mal_collection_canonical_value(key), entry_out);
+}
+
+MalValue mal_builtin_map_set_entry(MalVm *vm, MalValue receiver, MalValue key, MalValue value, u32 entry) {
+    (void) vm;
+    mal_map_object_set_borrowed(mal_value_to_map_object(receiver), mal_collection_canonical_value(key), value, entry);
+    return receiver;
+}
+
 MalValue mal_builtin_map_get_known(
     MalVm *vm,
     MalValue this_value,
