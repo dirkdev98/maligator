@@ -1055,6 +1055,10 @@ static void mal_perf_stats_print(void) {
         (unsigned long long) mal_perf_stats.array_iteration_typed_callback_fallbacks,
         (unsigned long long) mal_perf_stats.array_iteration_numeric_reduce_calls
     );
+    fprintf(stderr, "[perf-string-span-stats] admissions=%llu projections=%llu materializations=%llu\n",
+        (unsigned long long) mal_perf_stats.string_span_admissions,
+        (unsigned long long) mal_perf_stats.string_span_projections,
+        (unsigned long long) mal_perf_stats.string_span_materializations);
     fprintf(
         stderr,
         "[perf-node-events-stats] singleton_inserts=%llu listener_array_allocations=%llu "

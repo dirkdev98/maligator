@@ -29,6 +29,7 @@ import type {
 import { collectCompilerFactFlowReport } from "./fact-flow-report.ts";
 import { lowerNativeFunctionStorage } from "./lower-native-storage.ts";
 import type { NativeStoragePlan } from "./lower-native-storage.ts";
+import { validateNativeStringSpan } from "./native-string-span.ts";
 import { buildProfileMetadata } from "./profile-metadata.ts";
 import type { CompilerRemark, ProfileSite } from "./profile-metadata.ts";
 import { remapRuntimeFunctionConstants } from "./runtime-image.ts";
@@ -452,22 +453,22 @@ export type VmRegExpIteratorProjectionRegion = VmRegionEnvelope<
 	}>;
 };
 
-export type VmStringSliceNumberRegion = VmRegionEnvelope<
-	"string-slice-number",
-	"primitive-string-span-number",
-	"none"
+export type VmStringSpanRegion = VmRegionEnvelope<
+	"string-span",
+	"primitive-string-span",
+	"on-demand"
 > & {
 	readonly propertyIp: number;
 	readonly propertyPlacement: CorePropertyPlacement;
 	readonly builtinIdentities: CoreBuiltinIdentityDecision;
 	readonly sliceCallIp: number;
-	readonly sliceStartIp: number;
-	readonly numberIntrinsicIp: number;
-	readonly numberCallIp: number;
-	readonly numberCallee: number;
 	readonly receiver: number;
-	readonly sliceStart: number;
-	readonly result: number;
+	readonly resultRegisters: ReadonlyArray<number>;
+	readonly consumers: ReadonlyArray<{
+		readonly ip: number;
+		readonly value: number;
+		readonly kind: "length" | "equal" | "number" | "materialize";
+	}>;
 };
 
 export type VmStringCharCodeAtChainRegion = VmRegionEnvelope<
@@ -655,7 +656,7 @@ export type VmRegion =
 	| VmMapIteratorCursorRegion
 	| VmRegExpExecProjectionRegion
 	| VmRegExpIteratorProjectionRegion
-	| VmStringSliceNumberRegion
+	| VmStringSpanRegion
 	| VmNumericFusionRegion
 	| VmStackObjectPlanRegion
 	| VmStringCharCodeAtChainRegion
@@ -733,6 +734,7 @@ export type VmRegionActionRole =
 	| "caseUpperProperty"
 	| "compare"
 	| "coerce"
+	| "equal"
 	| "element"
 	| "finish"
 	| "inherited"
@@ -859,12 +861,12 @@ export function vmRegionActions(
 				add(regionIndex, region.propertyIp, "property");
 				add(regionIndex, region.callIp, "call");
 				break;
-			case "string-slice-number":
-				if (region.propertyPlacement === "call-fallback") {
+			case "string-span":
+				if (region.propertyPlacement === "call-fallback")
 					add(regionIndex, region.propertyIp, "property");
-				}
 				add(regionIndex, region.sliceCallIp, "slice");
-				add(regionIndex, region.numberCallIp, "number");
+				for (const [index, consumer] of region.consumers.entries())
+					add(regionIndex, consumer.ip, consumer.kind, index);
 				break;
 			case "string-split-projection":
 				if (region.propertyPlacement === "call-fallback") {
@@ -3307,7 +3309,7 @@ function lowerExecutionFunctionToNativePlan(
 				region.controlFlow.ordinaryBlocks.length ||
 			exceptionalHandlerIps.some((ip) => ip === undefined) ||
 			(region.kind !== "regexp-iterator-projection" &&
-				region.kind !== "string-slice-number" &&
+				region.kind !== "string-span" &&
 				region.kind !== "string-char-code-at-chain" &&
 				region.kind !== "builtin-collection-call-chain" &&
 				region.controlFlow.exceptionalBlocks.length !== 0) ||
@@ -3903,125 +3905,20 @@ function lowerExecutionFunctionToNativePlan(
 				});
 				break;
 			}
-			case "string-slice-number": {
-				const sliceCallIp = resolvedAnchors[0];
-				const numberCallIp = resolvedAnchors[1];
-				const propertyIp =
-					region.property === undefined
-						? -1
-						: instructionIndexByTargetInstruction.get(region.property);
-				const sliceStartIp = instructionIndexByTargetInstruction.get(
-					region.sliceStartInstruction,
-				);
-				const numberIntrinsicIp =
-					region.numberIntrinsic === undefined
-						? -1
-						: instructionIndexByTargetInstruction.get(region.numberIntrinsic);
-				if (
-					region.representation !== "primitive-string-span-number" ||
-					region.license.materialization !== "none" ||
-					!guard.obligations.includes("fallback") ||
-					guard.obligations.includes("materialize") ||
-					resolvedAnchors.length !== 2 ||
-					propertyIp === undefined ||
-					sliceStartIp === undefined ||
-					numberIntrinsicIp === undefined
-				) {
-					throw coreRegionError(region.kind, "fusion metadata");
-				}
-				const property = instructions[propertyIp];
-				const sliceCall = instructions[sliceCallIp!];
-				const sliceStartInstruction = instructions[sliceStartIp];
-				const numberIntrinsic = instructions[numberIntrinsicIp];
-				const numberCall = instructions[numberCallIp!];
-				const numberArgument =
-					(numberCall?.opcode === "CALL" || numberCall?.opcode === "CALL_KNOWN") &&
-					numberCall.arguments[0] !== undefined
-						? decodeVmValueOperand(numberCall.arguments[0])
-						: undefined;
-				const expectedBuiltinIdentities =
-					sliceCall?.opcode === "CALL_KNOWN" ||
-					(sliceCall?.opcode === "CALL" &&
-						guardedBuiltinCallOf(sliceCall) !== undefined &&
-						vmGuardIsWorldInvariant(guardedBuiltinCallOf(sliceCall)!.guard))
-						? "authority-invariant"
-						: "runtime-guarded";
-				const payloadIps = new Set(
-					[
-						propertyIp,
-						sliceCallIp!,
-						sliceStartIp,
-						numberIntrinsicIp,
-						numberCallIp!,
-					].filter((ip) => ip >= 0),
-				);
-				if (
-					(sliceCall?.opcode !== "CALL" && sliceCall?.opcode !== "CALL_KNOWN") ||
-					(sliceCall.opcode === "CALL_KNOWN"
-						? sliceCall.operation !== "String.prototype.slice" ||
-							sliceCall.construct ||
-							sliceCall.argumentMode !== undefined ||
-							propertyIp !== -1
-						: property?.opcode !== "LOAD_PROPERTY_STATIC" ||
-							String.fromCharCode(...(stringConstants[property.stringIndex] ?? [])) !==
-								"slice" ||
-							property.dst !== sliceCall.callee ||
-							property.object !== sliceCall.thisValue ||
-							!vmCallProvesBuiltin(
-								(() => {
-									const plan = nativePlanOf(sliceCall);
-									return plan?.kind === "call" ? plan : undefined;
-								})(),
-								"String.prototype.slice",
-								{
-									lowering: "number-consumer-fusion",
-									result: "string",
-									effects: ["coerce", "allocate", "throw", "safepoint"],
-								},
-							)) ||
-					sliceCall.arguments.length !== 1 ||
-					(sliceStartInstruction?.opcode !== "CREATE_NUMBER" &&
-						sliceStartInstruction?.opcode !== "CREATE_F64") ||
-					!Object.is(sliceStartInstruction.value, region.sliceStart) ||
-					!Number.isFinite(region.sliceStart) ||
-					(numberCall?.opcode !== "CALL" && numberCall?.opcode !== "CALL_KNOWN") ||
-					(numberCall.opcode === "CALL_KNOWN"
-						? numberCall.operation !== "Number" ||
-							numberCall.construct ||
-							numberCall.argumentMode !== undefined ||
-							numberIntrinsicIp !== -1
-						: numberIntrinsic?.opcode !== "LOAD_INTRINSIC" ||
-							numberIntrinsic.intrinsic !== "Number" ||
-							numberCall.callee !== numberIntrinsic.dst) ||
-					numberCall.arguments.length !== 1 ||
-					numberArgument?.kind !== "register" ||
-					numberArgument.register !== sliceCall.dst ||
-					region.builtinIdentities !== expectedBuiltinIdentities ||
-					!vmPropertyPlacementHolds(
-						region.propertyPlacement,
-						propertyIp,
-						sliceCallIp!,
-						instructions,
-						handlers,
-					) ||
-					(region.propertyPlacement === "call-fallback" &&
-						region.builtinIdentities !== "authority-invariant") ||
-					region.cost.metadataOperations !== payloadIps.size ||
-					payloadIps.size !== resolvedClaimedIps.length ||
-					resolvedClaimedIps.some((ip) => !payloadIps.has(ip))
-				) {
-					throw coreRegionError(region.kind, "instruction or claim contract");
-				}
-				for (const ip of resolvedClaimedIps) claimedRegionInstructions.add(ip);
-				regions.push({
-					kind: "string-slice-number",
+			case "string-span": {
+				const sliceCallIp = resolvedAnchors[0]!;
+				const call = instructions[sliceCallIp];
+				if (call?.opcode !== "CALL" && call?.opcode !== "CALL_KNOWN")
+					throw coreRegionError(region.kind, "producer");
+				const span: VmStringSpanRegion = {
+					kind: "string-span",
 					license: {
 						guard,
 						genericTwin: "retained",
-						materialization: "none",
+						materialization: "on-demand",
 						admission,
 					},
-					representation: "primitive-string-span-number",
+					representation: "primitive-string-span",
 					anchors: resolvedAnchors,
 					claimedIps: resolvedClaimedIps,
 					controlFlow: {
@@ -4029,18 +3926,24 @@ function lowerExecutionFunctionToNativePlan(
 						exceptionalHandlerIps: resolvedExceptionalHandlerIps,
 					},
 					cost: region.cost,
-					propertyIp,
+					propertyIp:
+						region.property === undefined
+							? -1
+							: instructionIndexByTargetInstruction.get(region.property)!,
 					propertyPlacement: region.propertyPlacement,
 					builtinIdentities: region.builtinIdentities,
-					sliceCallIp: sliceCallIp!,
-					sliceStartIp,
-					numberIntrinsicIp,
-					numberCallIp: numberCallIp!,
-					numberCallee: numberCall.opcode === "CALL" ? numberCall.callee : -1,
-					receiver: sliceCall.thisValue,
-					sliceStart: region.sliceStart,
-					result: numberCall.dst,
-				});
+					sliceCallIp,
+					receiver: call.thisValue,
+					resultRegisters: region.resultRegisters,
+					consumers: region.consumers.map((consumer) => ({
+						ip: instructionIndexByTargetInstruction.get(consumer.instruction)!,
+						value: consumer.value,
+						kind: consumer.kind,
+					})),
+				};
+				validateNativeStringSpan(instructions, span, stringConstants);
+				for (const ip of resolvedClaimedIps) claimedRegionInstructions.add(ip);
+				regions.push(span);
 				break;
 			}
 			case "string-char-code-at-chain": {

@@ -13,6 +13,7 @@ import {
 } from "./core-ir-loops.ts";
 import type { CoreLoopInductionAnalysis } from "./core-ir-loops.ts";
 import { coreTargetSupportsNumericFusionOperator } from "./core-ir-region-strategies.ts";
+import type { CoreStringSpanConsumer } from "./core-ir-regions.ts";
 import type {
 	CoreCollectionBuiltinOperation,
 	CorePlanIteratorCursorKind,
@@ -869,7 +870,7 @@ export type CoreLocalSpecializationCandidateKind =
 	| "dense-array"
 	| "numeric-fusion"
 	| "string-split-projection"
-	| "string-slice-number"
+	| "string-span"
 	| "regexp-exec-projection"
 	| "regexp-iterator-projection"
 	| "string-char-code-at-chain"
@@ -945,13 +946,11 @@ export interface CoreStringSplitProjectionCandidate extends CoreLocalSpecializat
 	>;
 }
 
-export interface CoreStringSliceNumberCandidate extends CoreLocalSpecializationCandidateBase<"string-slice-number"> {
+export interface CoreStringSpanCandidate extends CoreLocalSpecializationCandidateBase<"string-span"> {
 	readonly property?: CoreInstructionId;
 	readonly sliceCall: CoreInstructionId;
-	readonly sliceStartInstruction: CoreInstructionId;
-	readonly numberIntrinsic?: CoreInstructionId;
-	readonly numberCall: CoreInstructionId;
-	readonly sliceStart: number;
+	readonly resultValues: ReadonlyArray<CoreValueId>;
+	readonly consumers: ReadonlyArray<CoreStringSpanConsumer>;
 	readonly exceptionalBlocks: ReadonlyArray<CoreBlockId>;
 }
 
@@ -1109,7 +1108,7 @@ export type CoreLocalSpecializationCandidate =
 	| CoreStackObjectCandidate
 	| CoreDenseArrayCandidate
 	| CoreStringSplitProjectionCandidate
-	| CoreStringSliceNumberCandidate
+	| CoreStringSpanCandidate
 	| CoreRegExpExecProjectionCandidate
 	| CoreRegExpIteratorProjectionCandidate
 	| CoreStringCharCodeAtCandidate
@@ -3533,107 +3532,156 @@ function stringSplitProjectionCandidates(
 	return candidates;
 }
 
-function stringSliceNumberCandidates(
+function stringSpanCandidates(
 	program: CoreProgram,
 	fn: CoreFunctionStore,
 	control: CoreControlFlow,
 	roots: ReadonlyMap<CoreValueId, CoreValueId>,
 	index: CoreLocalFactIndex,
-): ReadonlyArray<CoreStringSliceNumberCandidate> {
-	const candidates: Array<CoreStringSliceNumberCandidate> = [];
-	const root = (value: CoreValueId): CoreValueId => roots.get(value) ?? value;
+): ReadonlyArray<CoreStringSpanCandidate> {
+	if (fn.isGenerator || fn.isAsync) return [];
+	const candidates: Array<CoreStringSpanCandidate> = [];
+	const root = (value: CoreValueId) => roots.get(value) ?? value;
+	let controlUses: CoreStackObjectControlUses | undefined;
 	for (const sliceCall of [
 		...indexedOpcodeInstructions(fn, index, "call"),
 		...indexedOpcodeInstructions(fn, index, "callKnown"),
 	]) {
-		const knownSlice = fn.instructionOpcodeName(sliceCall) === "callKnown";
+		const known = fn.instructionOpcodeName(sliceCall) === "callKnown";
 		const attrs = fn.instructionAttributes(sliceCall);
+		const offset = known ? 1 : 2;
 		if (
-			knownSlice &&
-			(attrs.operation !== "String.prototype.slice" ||
-				attrs.construct ||
-				attrs.argumentMode !== undefined)
-		)
-			continue;
-		if (
-			fn.instructionKind(sliceCall) !== "operation" ||
-			instructionOperandCount(fn, sliceCall) !== (knownSlice ? 2 : 3) ||
+			attrs.construct ||
+			attrs.argumentMode !== undefined ||
+			(known && attrs.operation !== "String.prototype.slice") ||
+			instructionOperandCount(fn, sliceCall) < offset ||
+			instructionOperandCount(fn, sliceCall) > offset + 2 ||
 			instructionResultCount(fn, sliceCall) !== 1 ||
 			!control.reachable.has(fn.instructionBlock(sliceCall))
 		)
 			continue;
-		const property = knownSlice
+		const property = known
 			? undefined
 			: specializationDefinition(fn, roots, instructionOperand(fn, sliceCall, 0)!);
-		const start = specializationDefinition(
-			fn,
-			roots,
-			instructionOperand(fn, sliceCall, knownSlice ? 1 : 2)!,
-		);
 		if (
-			(!knownSlice &&
-				(!staticPropertyNamed(program, fn, property, "slice") ||
-					root(instructionOperand(fn, property, 0)!) !==
-						root(instructionOperand(fn, sliceCall, 1)!) ||
-					!specializationInstructionDominates(control, index, property, sliceCall))) ||
-			start === undefined ||
-			(fn.instructionOpcodeName(start) !== "createNumber" &&
-				fn.instructionOpcodeName(start) !== "createF64") ||
-			!specializationInstructionDominates(control, index, start, sliceCall)
+			!known &&
+			(!staticPropertyNamed(program, fn, property, "slice") ||
+				root(instructionOperand(fn, property, 0)!) !==
+					root(instructionOperand(fn, sliceCall, 1)!) ||
+				!specializationInstructionDominates(control, index, property, sliceCall))
 		)
 			continue;
-		const sliceStart = fn.instructionAttributes(start).value;
-		if (typeof sliceStart !== "number" || !Number.isFinite(sliceStart)) continue;
-		const propertyUses =
-			property === undefined
-				? []
-				: (index.uses.get(root(instructionResult(fn, property, 0)!)) ?? []);
+		if (property !== undefined) {
+			const uses = index.uses.get(root(instructionResult(fn, property, 0)!)) ?? [];
+			if (
+				uses.length !== 1 ||
+				uses[0]!.instruction !== sliceCall ||
+				uses[0]!.position !== 0
+			)
+				continue;
+		}
 		const result = instructionResult(fn, sliceCall, 0)!;
-		const sliceUses = (index.uses.get(root(result)) ?? []).filter(({ instruction }) => {
+		const resultRoot = root(result);
+		const uses = index.uses.get(resultRoot) ?? [];
+		if (uses.length > 16) continue;
+		const flow = (controlUses ??= stackObjectControlUses(fn, control, roots));
+		if (flow.escapingRoots.has(resultRoot)) continue;
+		const consumers = new Map<CoreInstructionId, CoreStringSpanConsumer>();
+		let safe = true,
+			projected = 0;
+		for (const use of uses) {
+			const instruction = use.instruction;
 			const opcode = fn.instructionOpcodeName(instruction);
-			return opcode !== "throwIfTdz" && opcode !== "rootUse";
-		});
-		if (
-			(!knownSlice &&
-				(propertyUses.length !== 1 ||
-					propertyUses[0]?.instruction !== sliceCall ||
-					propertyUses[0].position !== 0)) ||
-			sliceUses.length !== 1
-		)
-			continue;
-		const numberCall = sliceUses[0]!.instruction;
-		const knownNumber = fn.instructionOpcodeName(numberCall) === "callKnown";
-		const numberAttrs = fn.instructionAttributes(numberCall);
-		if (
-			knownNumber &&
-			(numberAttrs.operation !== "Number" ||
-				numberAttrs.construct ||
-				numberAttrs.argumentMode !== undefined)
-		)
-			continue;
-		if (
-			(!knownNumber && fn.instructionOpcodeName(numberCall) !== "call") ||
-			instructionOperandCount(fn, numberCall) !== (knownNumber ? 2 : 3) ||
-			root(instructionOperand(fn, numberCall, knownNumber ? 1 : 2)!) !== root(result)
-		)
-			continue;
-		const numberIntrinsic = knownNumber
-			? undefined
-			: specializationDefinition(fn, roots, instructionOperand(fn, numberCall, 0)!);
-		if (
-			!knownNumber &&
-			(numberIntrinsic === undefined ||
-				fn.instructionOpcodeName(numberIntrinsic) !== "loadIntrinsic" ||
-				fn.instructionAttributes(numberIntrinsic).intrinsic !== "Number" ||
-				!specializationInstructionDominates(control, index, numberIntrinsic, numberCall))
-		)
-			continue;
-		const instructions = Object.freeze(
-			[property, sliceCall, start, numberIntrinsic, numberCall].filter(
-				(instruction): instruction is CoreInstructionId => instruction !== undefined,
-			),
-		);
-		if (new Set(instructions).size !== instructions.length) continue;
+			if (
+				(opcode === "move" || opcode === "throwIfTdz" || opcode === "rootUse") &&
+				use.position === 0
+			)
+				continue;
+			if (!specializationInstructionDominates(control, index, sliceCall, instruction)) {
+				safe = false;
+				break;
+			}
+			const value = instructionOperand(fn, instruction, use.position)!;
+			let kind: CoreStringSpanConsumer["kind"] = "materialize";
+			if (
+				opcode === "loadPropertyStatic" &&
+				use.position === 0 &&
+				staticPropertyNamed(program, fn, instruction, "length")
+			)
+				kind = "length";
+			else if (
+				opcode === "binary" &&
+				(fn.instructionAttributes(instruction).operator === "===" ||
+					fn.instructionAttributes(instruction).operator === "!==")
+			) {
+				const other = specializationDefinition(
+					fn,
+					roots,
+					instructionOperand(fn, instruction, 1 - use.position)!,
+				);
+				if (other !== undefined && fn.instructionOpcodeName(other) === "createString")
+					kind = "equal";
+			} else if (
+				(opcode === "call" &&
+					use.position === 2 &&
+					instructionOperandCount(fn, instruction) === 3) ||
+				(opcode === "callKnown" &&
+					use.position === 1 &&
+					instructionOperandCount(fn, instruction) === 2)
+			) {
+				const callAttrs = fn.instructionAttributes(instruction);
+				const callee =
+					opcode === "call"
+						? specializationDefinition(fn, roots, instructionOperand(fn, instruction, 0)!)
+						: undefined;
+				const calleeAttrs =
+					callee === undefined ? undefined : fn.instructionAttributes(callee);
+				const globalName = calleeAttrs?.nameStringIndex;
+				const numberCallee =
+					callee !== undefined &&
+					((fn.instructionOpcodeName(callee) === "loadIntrinsic" &&
+						calleeAttrs?.intrinsic === "Number") ||
+						(fn.instructionOpcodeName(callee) === "loadGlobalProperty" &&
+							typeof globalName === "number" &&
+							decodeCoreString(program, globalName) === "Number"));
+				if (
+					!callAttrs.construct &&
+					callAttrs.argumentMode === undefined &&
+					(opcode === "callKnown" ? callAttrs.operation === "Number" : numberCallee)
+				)
+					kind = "number";
+			}
+			if (kind === "materialize" && (opcode !== "call" || use.position < 2)) {
+				safe = false;
+				break;
+			}
+			const prior = consumers.get(instruction);
+			if (prior !== undefined && prior.value !== value) {
+				safe = false;
+				break;
+			}
+			consumers.set(instruction, { instruction, value, kind });
+			if (kind !== "materialize") projected++;
+		}
+		if (!safe || projected === 0) continue;
+		for (const instruction of flow.returns.get(resultRoot) ?? []) {
+			if (!specializationInstructionDominates(control, index, sliceCall, instruction)) {
+				safe = false;
+				break;
+			}
+			consumers.set(instruction, {
+				instruction,
+				value: instructionOperand(fn, instruction, 0)!,
+				kind: "materialize",
+			});
+		}
+		if (!safe || consumers.size > 16) continue;
+		const sites = [...consumers.values()].sort((a, b) => a.instruction - b.instruction);
+		const instructions = Object.freeze([
+			...(property === undefined ? [] : [property]),
+			sliceCall,
+			...sites.map((site) => site.instruction),
+		]);
 		const ordinaryBlocks = new Set(
 			instructions.map((instruction) => fn.instructionBlock(instruction)),
 		);
@@ -3646,22 +3694,19 @@ function stringSliceNumberCandidates(
 			),
 		]);
 		if (exceptionalBlocks.some((block) => ordinaryBlocks.has(block))) continue;
-		const key = `string-slice-number:${fn.id}:${sliceCall}:${numberCall}`;
 		candidates.push(
 			Object.freeze({
-				key,
-				kind: "string-slice-number",
+				key: `string-span:${fn.id}:${sliceCall}`,
+				kind: "string-span",
 				function: fn.id,
 				root: sliceCall,
 				property,
 				sliceCall,
-				sliceStartInstruction: start,
-				numberIntrinsic,
-				numberCall,
-				sliceStart,
+				resultValues: specializationResultValues(index, roots, result),
+				consumers: Object.freeze(sites),
 				exceptionalBlocks,
 				instructions,
-				fanOut: 1,
+				fanOut: sites.length,
 			}),
 		);
 	}
@@ -4370,8 +4415,8 @@ function discoverCandidates(
 		...(requested("string-split-projection")
 			? stringSplitProjectionCandidates(program, fn, control, roots, index)
 			: []),
-		...(requested("string-slice-number")
-			? stringSliceNumberCandidates(program, fn, control, roots, index)
+		...(requested("string-span")
+			? stringSpanCandidates(program, fn, control, roots, index)
 			: []),
 		...(requested("regexp-exec-projection")
 			? regexpExecProjectionCandidates(program, fn, control, roots, index)

@@ -46,6 +46,7 @@ import {
 } from "./lower-native-string-transforms.ts";
 import type { NativeStringTransformPlan } from "./lower-native-string-transforms.ts";
 import type { NativeSuspensionPlan } from "./lower-native-suspension.ts";
+import { validateNativeStringSpan } from "./native-string-span.ts";
 import { NATIVE_VALUE_CONVERSIONS } from "./native-value-transport.ts";
 import type { Reader } from "./program-image-codec.ts";
 import {
@@ -93,7 +94,7 @@ import type {
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal artifacts are hard cut-overs: stale cache entries rebuild.
-export const COMPILER_ARTIFACT_VERSION = 190;
+export const COMPILER_ARTIFACT_VERSION = 191;
 
 function validateClosureCaptureOwners(
 	owners: ReadonlyArray<number>,
@@ -471,8 +472,8 @@ function writePropertyPlacement(w: Writer, placement: CorePropertyPlacement): vo
 	w.u8(placement === "call-fallback" ? 1 : 0);
 }
 
-function stringSliceNumberGuardMasks(
-	license: Extract<VmRegion, { kind: "string-slice-number" }>["license"],
+function stringSpanGuardMasks(
+	license: Extract<VmRegion, { kind: "string-span" }>["license"],
 ): { dependencyMask: number; obligationMask: number } {
 	let dependencyMask = 0;
 	for (const dependency of license.guard.dependencies) {
@@ -481,9 +482,7 @@ function stringSliceNumberGuardMasks(
 		} else if (dependency.kind === "epoch" && dependency.family === "watched-methods") {
 			dependencyMask |= 4;
 		} else {
-			throw new RangeError(
-				"program-image-codec: unsupported String.slice Number dependency",
-			);
+			throw new RangeError("program-image-codec: unsupported string-span dependency");
 		}
 	}
 	let obligationMask = 0;
@@ -492,11 +491,11 @@ function stringSliceNumberGuardMasks(
 	}
 	if (
 		license.genericTwin !== "retained" ||
-		license.materialization !== "none" ||
+		license.materialization !== "on-demand" ||
 		(dependencyMask !== 1 && dependencyMask !== 4) ||
-		obligationMask !== 1
+		obligationMask !== 3
 	) {
-		throw new RangeError("program-image-codec: invalid String.slice Number guard plan");
+		throw new RangeError("program-image-codec: invalid string-span guard plan");
 	}
 	return { dependencyMask, obligationMask };
 }
@@ -2074,8 +2073,8 @@ function writeCompilerArtifact(
 							? regexpExecProjectionGuardMasks(region.license)
 							: region.kind === "regexp-iterator-projection"
 								? regexpIteratorProjectionGuardMasks(region.license)
-								: region.kind === "string-slice-number"
-									? stringSliceNumberGuardMasks(region.license)
+								: region.kind === "string-span"
+									? stringSpanGuardMasks(region.license)
 									: region.kind === "string-char-code-at-chain"
 										? stringCharCodeAtChainGuardMasks(region.license)
 										: region.kind === "builtin-collection-call-chain"
@@ -2256,18 +2255,19 @@ function writeCompilerArtifact(
 						w.i32(load.numberCallIp);
 					}
 					break;
-				case "string-slice-number":
+				case "string-span":
 					w.i32(region.propertyIp);
 					writePropertyPlacement(w, region.propertyPlacement);
 					w.u8(region.builtinIdentities === "authority-invariant" ? 1 : 0);
 					w.i32(region.sliceCallIp);
-					w.i32(region.sliceStartIp);
-					w.i32(region.numberIntrinsicIp);
-					w.i32(region.numberCallIp);
-					w.i32(region.numberCallee);
 					w.i32(region.receiver);
-					w.f64(region.sliceStart);
-					w.i32(region.result);
+					w.i32Array([...region.resultRegisters]);
+					w.u32(region.consumers.length);
+					for (const consumer of region.consumers) {
+						w.i32(consumer.ip);
+						w.i32(consumer.value);
+						w.u8(["length", "equal", "number", "materialize"].indexOf(consumer.kind));
+					}
 					break;
 				case "string-char-code-at-chain":
 					w.i32(region.propertyIp);
@@ -2389,7 +2389,7 @@ function validateRegionEnvelope(
 				!fn.handlers.some((handler) => handler.handlerIp === ip),
 		) ||
 		(region.kind !== "regexp-iterator-projection" &&
-			region.kind !== "string-slice-number" &&
+			region.kind !== "string-span" &&
 			region.kind !== "string-char-code-at-chain" &&
 			region.kind !== "builtin-collection-call-chain" &&
 			region.kind !== "iterator-entry-pair-virtualization" &&
@@ -2456,8 +2456,8 @@ function validateRegion(
 		case "regexp-iterator-projection":
 			validateRegExpIteratorProjectionRegion(fn, region);
 			break;
-		case "string-slice-number":
-			validateStringSliceNumberRegion(fn, region, stringConstants, nativeInstructions);
+		case "string-span":
+			validateStringSpanRegion(fn, region, stringConstants, nativeInstructions);
 			break;
 		case "string-char-code-at-chain":
 			validateStringCharCodeAtChainRegion(
@@ -2834,103 +2834,37 @@ function validateStackObjectPlanRegion(
 		throw new RangeError("program-image-codec: invalid stack-object plan region");
 }
 
-function validateStringSliceNumberRegion(
+function validateStringSpanRegion(
 	fn: BytecodeFunction,
-	region: Extract<VmRegion, { kind: "string-slice-number" }>,
+	region: Extract<VmRegion, { kind: "string-span" }>,
 	stringConstants: ReadonlyArray<ReadonlyArray<number>>,
 	nativeInstructions: ReadonlyArray<NativeInstructionPlan | undefined>,
 ): void {
-	stringSliceNumberGuardMasks(region.license);
-	const property = fn.instructions[region.propertyIp];
-	const sliceCall = fn.instructions[region.sliceCallIp];
-	const sliceCallPlan = nativeCallPlanAt(nativeInstructions, region.sliceCallIp);
-	const sliceStartInstruction = fn.instructions[region.sliceStartIp];
-	const numberIntrinsic = fn.instructions[region.numberIntrinsicIp];
-	const numberCall = fn.instructions[region.numberCallIp];
-	const numberArgument =
-		(numberCall?.opcode === "CALL" || numberCall?.opcode === "CALL_KNOWN") &&
-		numberCall.arguments[0] !== undefined
-			? decodeVmValueOperand(numberCall.arguments[0])
-			: undefined;
-	const expectedBuiltinIdentities =
-		sliceCall?.opcode === "CALL_KNOWN" ||
-		(sliceCall?.opcode === "CALL" &&
-			sliceCallPlan?.guardedBuiltinCall !== undefined &&
-			vmGuardIsWorldInvariant(sliceCallPlan.guardedBuiltinCall.guard))
+	stringSpanGuardMasks(region.license);
+	validateNativeStringSpan(fn.instructions, region, stringConstants);
+	const call = fn.instructions[region.sliceCallIp];
+	const plan = nativeCallPlanAt(nativeInstructions, region.sliceCallIp);
+	const identity =
+		call?.opcode === "CALL_KNOWN" ||
+		(plan?.guardedBuiltinCall !== undefined &&
+			vmGuardIsWorldInvariant(plan.guardedBuiltinCall.guard))
 			? "authority-invariant"
 			: "runtime-guarded";
-	const payload = new Set(
-		[
-			region.propertyIp,
-			region.sliceCallIp,
-			region.sliceStartIp,
-			region.numberIntrinsicIp,
-			region.numberCallIp,
-		].filter((ip) => ip >= 0),
+	const handlers = new Set(
+		fn.handlers
+			.filter((handler) =>
+				region.claimedIps.some((ip) => ip >= handler.startIp && ip < handler.endIp),
+			)
+			.map((handler) => handler.handlerIp),
 	);
-	const activeHandlers = new Set<number>();
-	for (const ip of region.claimedIps) {
-		for (const handler of fn.handlers) {
-			if (ip >= handler.startIp && ip < handler.endIp) {
-				activeHandlers.add(handler.handlerIp);
-			}
-		}
-	}
 	if (
-		region.representation !== "primitive-string-span-number" ||
-		region.anchors.length !== 2 ||
-		region.anchors[0] !== region.sliceCallIp ||
-		region.anchors[1] !== region.numberCallIp ||
-		(sliceCall?.opcode !== "CALL" && sliceCall?.opcode !== "CALL_KNOWN") ||
-		(sliceCall.opcode === "CALL_KNOWN"
-			? sliceCall.operation !== "String.prototype.slice" ||
-				sliceCall.construct ||
-				sliceCall.argumentMode !== undefined ||
-				region.propertyIp !== -1
-			: property?.opcode !== "LOAD_PROPERTY_STATIC" ||
-				String.fromCharCode(...(stringConstants[property.stringIndex] ?? [])) !==
-					"slice" ||
-				sliceCallPlan?.guardedBuiltinCall?.operation !== "String.prototype.slice" ||
-				property.dst !== sliceCall.callee ||
-				property.object !== sliceCall.thisValue) ||
-		sliceCall.arguments.length !== 1 ||
-		(sliceStartInstruction?.opcode !== "CREATE_NUMBER" &&
-			sliceStartInstruction?.opcode !== "CREATE_F64") ||
-		!Object.is(sliceStartInstruction.value, region.sliceStart) ||
-		!Number.isFinite(region.sliceStart) ||
-		(numberCall?.opcode !== "CALL" && numberCall?.opcode !== "CALL_KNOWN") ||
-		(numberCall.opcode === "CALL_KNOWN"
-			? numberCall.operation !== "Number" ||
-				numberCall.construct ||
-				numberCall.argumentMode !== undefined ||
-				region.numberIntrinsicIp !== -1 ||
-				region.numberCallee !== -1
-			: numberIntrinsic?.opcode !== "LOAD_INTRINSIC" ||
-				numberIntrinsic.intrinsic !== "Number" ||
-				numberCall.callee !== numberIntrinsic.dst ||
-				numberCall.callee !== region.numberCallee) ||
-		numberCall.arguments.length !== 1 ||
-		numberArgument?.kind !== "register" ||
-		numberArgument.register !== sliceCall.dst ||
-		region.builtinIdentities !== expectedBuiltinIdentities ||
-		!propertyPlacementHolds(
-			fn,
-			region.propertyPlacement,
-			region.propertyIp,
-			region.sliceCallIp,
-		) ||
-		(region.propertyPlacement === "call-fallback" &&
-			region.builtinIdentities !== "authority-invariant") ||
-		region.receiver !== sliceCall.thisValue ||
-		region.result !== numberCall.dst ||
-		activeHandlers.size !== region.controlFlow.exceptionalHandlerIps.length ||
-		region.controlFlow.exceptionalHandlerIps.some((ip) => !activeHandlers.has(ip)) ||
-		region.cost.metadataOperations !== payload.size ||
-		payload.size !== region.claimedIps.length ||
-		region.claimedIps.some((ip) => !payload.has(ip))
-	) {
-		throw new RangeError("program-image-codec: invalid String.slice Number region");
-	}
+		region.builtinIdentities !== identity ||
+		(call?.opcode === "CALL" &&
+			plan?.guardedBuiltinCall?.operation !== "String.prototype.slice") ||
+		handlers.size !== region.controlFlow.exceptionalHandlerIps.length ||
+		region.controlFlow.exceptionalHandlerIps.some((ip) => !handlers.has(ip))
+	)
+		throw new RangeError("program-image-codec: invalid string-span authority");
 }
 
 function validateStringCharCodeAtChainRegion(
@@ -4638,12 +4572,12 @@ function readCompilerArtifact(
 					materializationTag === 1 &&
 					(dependencyMask === 1 || dependencyMask === 4) &&
 					obligationMask === 3;
-				const stringSliceNumberContract =
+				const stringSpanContract =
 					kindTag === 7 &&
 					representationTag === 7 &&
-					materializationTag === 0 &&
+					materializationTag === 1 &&
 					(dependencyMask === 1 || dependencyMask === 4) &&
-					obligationMask === 1;
+					obligationMask === 3;
 				const stackObjectPlanContract =
 					kindTag === 11 &&
 					representationTag === 11 &&
@@ -4710,7 +4644,7 @@ function readCompilerArtifact(
 						!stringSplitProjectionContract &&
 						!regexpExecProjectionContract &&
 						!regexpIteratorProjectionContract &&
-						!stringSliceNumberContract &&
+						!stringSpanContract &&
 						!stackObjectPlanContract &&
 						!numericFusionContract &&
 						!indexedLengthLoopContract &&
@@ -5093,33 +5027,38 @@ function readCompilerArtifact(
 					const propertyPlacement = readPropertyPlacement(r);
 					const builtinIdentitiesTag = r.u8();
 					const sliceCallIp = r.i32();
-					const sliceStartIp = r.i32();
-					const numberIntrinsicIp = r.i32();
-					const numberCallIp = r.i32();
-					const numberCallee = r.i32();
 					const receiver = r.i32();
-					const sliceStart = r.f64();
-					const result = r.i32();
-					if (builtinIdentitiesTag > 1) {
-						throw new RangeError(
-							"program-image-codec: invalid String.slice identity decision",
-						);
+					const resultRegisters = r.i32Array();
+					const count = r.count(3);
+					if (builtinIdentitiesTag > 1 || count === 0 || count > 16)
+						throw new RangeError("program-image-codec: invalid string-span payload");
+					const consumers: Array<
+						Extract<VmRegion, { kind: "string-span" }>["consumers"][number]
+					> = [];
+					for (let index = 0; index < count; index++) {
+						const ip = r.i32(),
+							value = r.i32(),
+							tag = r.u8();
+						const kind = (["length", "equal", "number", "materialize"] as const)[tag];
+						if (kind === undefined)
+							throw new RangeError("program-image-codec: invalid string-span consumer");
+						consumers.push({ ip, value, kind });
 					}
 					region = {
-						kind: "string-slice-number",
+						kind: "string-span",
 						license: {
 							guard: {
 								dependencies:
 									dependencyMask === 1
 										? [{ kind: "world", fact: "primordials.locked" }]
 										: [{ kind: "epoch", family: "watched-methods" }],
-								obligations: ["fallback"],
+								obligations: ["fallback", "materialize"],
 							},
 							genericTwin: "retained",
-							materialization: "none",
+							materialization: "on-demand",
 							admission,
 						},
-						representation: "primitive-string-span-number",
+						representation: "primitive-string-span",
 						anchors,
 						claimedIps,
 						controlFlow: { ordinaryBlockIps, exceptionalHandlerIps },
@@ -5129,13 +5068,9 @@ function readCompilerArtifact(
 						builtinIdentities:
 							builtinIdentitiesTag === 1 ? "authority-invariant" : "runtime-guarded",
 						sliceCallIp,
-						sliceStartIp,
-						numberIntrinsicIp,
-						numberCallIp,
-						numberCallee,
 						receiver,
-						sliceStart,
-						result,
+						resultRegisters,
+						consumers,
 					};
 				} else if (kindTag === 11) {
 					const siteCount = r.count(5);

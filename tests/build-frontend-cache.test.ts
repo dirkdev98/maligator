@@ -306,10 +306,10 @@ describe("normal build frontend cache", () => {
 		const cold = compile(entrypoint, cacheDirectory);
 		const warm = compile(entrypoint, cacheDirectory);
 		const coldRegions = cold.programImage.native.functions.flatMap((fn) =>
-			fn.specializations.filter((region) => region.kind === "string-slice-number"),
+			fn.specializations.filter((region) => region.kind === "string-span"),
 		);
 		const warmRegions = warm.programImage.native.functions.flatMap((fn) =>
-			fn.specializations.filter((region) => region.kind === "string-slice-number"),
+			fn.specializations.filter((region) => region.kind === "string-span"),
 		);
 		const coldC = emitProgramTranslationUnits(cold.programImage)
 			.map((unit) => unit.source)
@@ -322,7 +322,7 @@ describe("normal build frontend cache", () => {
 		expect(warm.cache).toBe("hit");
 		expect(coldRegions).not.toHaveLength(0);
 		expect(warmRegions).toEqual(coldRegions);
-		expect(coldC).toContain("mal_builtin_string_slice_to_number_direct");
+		expect(coldC).toContain("mal_builtin_string_slice_span_init");
 		expect(warmC).toBe(coldC);
 	});
 

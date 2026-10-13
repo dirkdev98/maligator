@@ -1012,7 +1012,7 @@ export class CoreOptimizationReportBuilder {
 					this.#discoveredNumericFusions++;
 					break;
 				case "string-split-projection":
-				case "string-slice-number":
+				case "string-span":
 				case "regexp-exec-projection":
 				case "regexp-iterator-projection":
 					break;

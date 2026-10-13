@@ -367,6 +367,19 @@ Track the requested expansion through the owning tasks below. Keep semantic,
 mechanism, and measured acceptance separate; reuse existing callback discovery,
 numeric sorting, stack objects, and string projections.
 
+- [x] Numeric `reduce` / `reduceRight`: reuse the selected callback entry and carry
+      the accumulator as a number, with per-element boxed continuation and live
+      captures. Seven matched laptop pairs improved the captured-reduction case
+      by 31%; focused Linux ASan/UBSan and both backend/GC modes passed.
+- [x] Slice spans: retain one rooted source and normalized bounds across length,
+      literal equality, numeric conversion, and conditional string observations.
+      Artifact validation rejects untracked aliases and omitted observers. Seven
+      matched laptop pairs improved token classification by 19%; native sanitizer
+      coverage is running. Existing split materialization shares the span helper.
+- [ ] Extend a measured capture or split producer into the shared span consumers.
+- [ ] Complete the remaining slices below, including their semantic and measured
+      acceptance boundaries; the completed cases do not close the broader tasks.
+
 | Order | Slice                        | Owning work and exit condition                                                                                                                                  |
 | ----- | ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 1     | Callback invocation          | The tasks above; remove measured repeated invocation work for a numeric reduction with captures.                                                                |

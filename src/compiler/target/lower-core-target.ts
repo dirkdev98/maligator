@@ -1293,52 +1293,46 @@ function lowerCoreSpecializations(
 			});
 			continue;
 		}
-		if (kind === "string-slice-number") {
-			const slice = coreSpecializationRecipePayloadAt(
+		if (kind === "string-span") {
+			const span = coreSpecializationRecipePayloadAt(
 				recipeTable,
 				row,
-				"string-slice-number",
-				"stringSliceNumber",
+				"string-span",
+				"stringSpan",
 			);
 			const property =
-				slice.property === undefined ? undefined : requireInstruction(slice.property);
-			const sliceCall = requireInstruction(slice.sliceCall);
-			const start = requireInstruction(slice.sliceStartInstruction);
-			const numberIntrinsic =
-				slice.numberIntrinsic === undefined
-					? undefined
-					: requireInstruction(slice.numberIntrinsic);
-			const numberCall = requireInstruction(slice.numberCall);
+				span.property === undefined ? undefined : requireInstruction(span.property);
+			const call = requireInstruction(span.sliceCall);
 			if (
 				(property !== undefined && property.type !== "loadPropertyStatic") ||
-				(sliceCall.type !== "call" && sliceCall.type !== "callKnown") ||
-				(start.type !== "createNumber" && start.type !== "createF64") ||
-				(numberIntrinsic !== undefined && numberIntrinsic.type !== "loadIntrinsic") ||
-				(numberCall.type !== "call" && numberCall.type !== "callKnown")
-			) {
-				throw new Error(`Core String.slice plan ${id} lost its producers`);
-			}
+				(call.type !== "call" && call.type !== "callKnown")
+			)
+				throw new Error(`Core String span ${id} lost its producer`);
+			const consumers = span.consumers.map((consumer) => ({
+				instruction: requireInstruction(consumer.instruction),
+				value: registerForValue(consumer.value),
+				kind: consumer.kind,
+			}));
 			regions.push({
 				...envelope(row),
-				anchors: [sliceCall, numberCall],
-				kind: "string-slice-number",
+				anchors: [call, consumers[0]!.instruction],
+				kind: "string-span",
 				license: {
-					guard: slice.guard,
+					guard: span.guard,
 					genericTwin: "retained",
-					materialization: "none",
+					materialization: "on-demand",
 					admission: admission(row),
 				},
-				representation: "primitive-string-span-number",
+				representation: "primitive-string-span",
 				property,
-				propertyPlacement: slice.propertyPlacement,
-				builtinIdentities: slice.builtinIdentities,
-				sliceStartInstruction: start,
-				numberIntrinsic,
-				numberCall,
-				sliceStart: slice.sliceStart,
+				propertyPlacement: span.propertyPlacement,
+				builtinIdentities: span.builtinIdentities,
+				resultRegisters: span.resultValues.map(registerForValue),
+				consumers,
 			});
 			continue;
 		}
+
 		if (kind === "string-char-code-at-chain") {
 			const chain = coreSpecializationRecipePayloadAt(
 				recipeTable,
@@ -1630,12 +1624,12 @@ function lowerFunctionToTarget(
 				plannedPrimitiveStringLengths.set(length, true);
 			}
 		}
-		if (kind === "string-slice-number") {
+		if (kind === "string-span") {
 			const slice = coreSpecializationRecipePayloadAt(
 				recipeTable,
 				row,
-				"string-slice-number",
-				"stringSliceNumber",
+				"string-span",
+				"stringSpan",
 			);
 			plannedBuiltinCalls.set(
 				slice.sliceCall,

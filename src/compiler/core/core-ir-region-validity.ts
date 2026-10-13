@@ -431,7 +431,7 @@ function validBuiltinPlanGuard(
 	guard: CompilerGuardPlan,
 	kind:
 		| "string-split-projection"
-		| "string-slice-number"
+		| "string-span"
 		| "regexp-exec-projection"
 		| "string-split-cursor"
 		| "string-char-code-at-chain"
@@ -532,8 +532,8 @@ function specializationAdmissionDependencies(
 				return selection.stringSplitCursor.guard;
 			case "string-split-projection":
 				return selection.stringSplitProjection.guard;
-			case "string-slice-number":
-				return selection.stringSliceNumber.guard;
+			case "string-span":
+				return selection.stringSpan.guard;
 			case "regexp-exec-projection":
 				return selection.regexpExecProjection.guard;
 			case "regexp-iterator-projection":
@@ -572,10 +572,8 @@ function specializationAdmissionAnchor(
 			return (
 				selection.stringSplitProjection.property ?? selection.stringSplitProjection.call
 			);
-		case "string-slice-number":
-			return (
-				selection.stringSliceNumber.property ?? selection.stringSliceNumber.sliceCall
-			);
+		case "string-span":
+			return selection.stringSpan.property ?? selection.stringSpan.sliceCall;
 		case "regexp-exec-projection":
 			return (
 				selection.regexpExecProjection.property ?? selection.regexpExecProjection.call
@@ -1185,14 +1183,14 @@ function verifySpecialization(
 			fail(`${selection.id} has an invalid String.split projection certificate`);
 		}
 	}
-	if (selection.kind === "string-slice-number") {
+	if (selection.kind === "string-span") {
 		const candidate = localCandidate(
 			program,
 			localCandidates,
 			selection.function,
 			selection.id,
 		);
-		const slice = selection.stringSliceNumber;
+		const slice = selection.stringSpan;
 		const expectedBlocks =
 			candidate?.instructions === undefined
 				? []
@@ -1204,37 +1202,37 @@ function verifySpecialization(
 						),
 					].sort((left, right) => left - right);
 		if (
-			candidate?.kind !== "string-slice-number" ||
+			candidate?.kind !== "string-span" ||
 			selection.anchors.length !== 2 ||
 			selection.anchors[0] !== candidate.sliceCall ||
-			selection.anchors[1] !== candidate.numberCall ||
+			selection.anchors[1] !== candidate.consumers[0]!.instruction ||
 			slice.property !== candidate.property ||
 			slice.sliceCall !== candidate.sliceCall ||
-			slice.sliceStartInstruction !== candidate.sliceStartInstruction ||
-			slice.numberIntrinsic !== candidate.numberIntrinsic ||
-			slice.numberCall !== candidate.numberCall ||
-			!Object.is(slice.sliceStart, candidate.sliceStart) ||
+			!sameNumbers(slice.resultValues, candidate.resultValues) ||
+			slice.consumers.length !== candidate.consumers.length ||
+			slice.consumers.some((consumer, index) => {
+				const expected = candidate.consumers[index]!;
+				return (
+					consumer.instruction !== expected.instruction ||
+					consumer.value !== expected.value ||
+					consumer.kind !== expected.kind
+				);
+			}) ||
 			!sameNumbers(selection.claimedInstructions, candidate.instructions) ||
 			!sameNumbers(selection.ordinaryBlocks, expectedBlocks) ||
 			!sameNumbers(selection.exceptionalBlocks, candidate.exceptionalBlocks) ||
 			selection.composition !== "exclusive" ||
-			selection.representation !== "primitive-string-span-number" ||
+			selection.representation !== "primitive-string-span" ||
 			selection.semanticProtectors.length !== 0 ||
 			selection.targetFunctions.length !== 0 ||
-			(slice.propertyPlacement !== "in-place" &&
-				slice.propertyPlacement !== "call-fallback") ||
-			(slice.propertyPlacement === "call-fallback" &&
-				(slice.builtinIdentities !== "authority-invariant" ||
-					(slice.property !== undefined &&
-						fn.instructionBlock(slice.property) !==
-							fn.instructionBlock(slice.sliceCall)))) ||
+			slice.propertyPlacement !== "in-place" ||
 			!validBuiltinPlanGuard(
 				slice.guard,
-				"string-slice-number",
+				"string-span",
 				selection.function,
 				slice.sliceCall,
 				slice.builtinIdentities,
-				false,
+				true,
 				slice.builtinCall,
 				"String.prototype.slice",
 			)

@@ -3922,22 +3922,16 @@ describe("native update-expression representation", () => {
 		`;
 		const output = emit(code);
 		expect(output).toContain("mal_builtin_string_split_projection(vm,");
-		expect(output).not.toContain("mal_builtin_string_slice_to_number_direct(vm,");
+		expect(output).toContain("mal_builtin_string_slice_span_init(");
 
 		const lockedOutput = emitLocked(code);
 		expect(lockedOutput).toContain("mal_builtin_string_split_projection_locked(vm,");
-		expect(lockedOutput).toContain(
-			"mal_builtin_string_slice_to_number_direct_locked(vm,",
-		);
+		expect(lockedOutput).toContain("mal_builtin_string_slice_span_init(");
 		expect(lockedOutput).not.toContain("mal_builtin_string_split_projection(vm,");
-		expect(lockedOutput).not.toContain("mal_builtin_string_slice_to_number_direct(vm,");
 		// The adjacent property Get is absent from the hot attempt and reconstructed
 		// inside the local-guard fallback before the ordinary call.
 		expect(lockedOutput).toMatch(
 			/mal_builtin_string_split_projection_locked\([^\n]+\);[\s\S]*?else \{\n\s+r\d+ = mal_vm_op_load_property_ic\(/,
-		);
-		expect(lockedOutput).toMatch(
-			/mal_builtin_string_slice_to_number_direct_locked\([^\n]+\);[\s\S]*?else \{\n\s+r\d+ = mal_vm_op_load_property_ic\(/,
 		);
 	});
 
@@ -4284,31 +4278,31 @@ describe("native update-expression representation", () => {
 		};`;
 		const semantic = analyzeSourceAndRunSemanticAnalysis(
 			source,
-			"string-slice-number-lowering.js",
+			"string-span-lowering.js",
 			parseScript(source, { strict: false }),
 		);
 		const mutable = compileSemanticProgramToProgramImage(semantic);
-		expect(
-			specializations(mutable).some((region) => region.kind === "string-slice-number"),
-		).toBe(false);
+		expect(specializations(mutable).some((region) => region.kind === "string-span")).toBe(
+			true,
+		);
 		const lowered = compileSemanticProgramToProgramImage(semantic, {
 			facts: compilerProgramFactsFromConfig(resolveBuildConfig({})),
 		});
 		const regions = specializations(lowered).filter(
-			(region) => region.kind === "string-slice-number",
+			(region) => region.kind === "string-span",
 		);
 		expect(regions).toHaveLength(1);
 		expect(regions[0]).toMatchObject({
-			kind: "string-slice-number",
-			representation: "primitive-string-span-number",
+			kind: "string-span",
+			representation: "primitive-string-span",
 			builtinIdentities: "authority-invariant",
-			sliceStart: 1,
+			consumers: [expect.objectContaining({ kind: "number" })],
 			license: {
 				genericTwin: "retained",
-				materialization: "none",
+				materialization: "on-demand",
 				guard: {
 					dependencies: [{ kind: "world", fact: "primordials.locked" }],
-					obligations: ["fallback"],
+					obligations: ["fallback", "materialize"],
 				},
 			},
 		});
@@ -4317,7 +4311,7 @@ describe("native update-expression representation", () => {
 			facts: compilerProgramFactsFromConfig(resolveBuildConfig({})),
 		});
 		const lockedRegions = specializations(lockedDefinition).filter(
-			(region) => region.kind === "string-slice-number",
+			(region) => region.kind === "string-span",
 		);
 		expect(lockedRegions).toHaveLength(1);
 		expect(lockedRegions[0]).toMatchObject({
@@ -4328,21 +4322,21 @@ describe("native update-expression representation", () => {
 			serializeCompilerArtifact(lowered, { debugInfo: false }),
 		);
 		expect(
-			specializations(cached).filter((region) => region.kind === "string-slice-number"),
+			specializations(cached).filter((region) => region.kind === "string-span"),
 		).toEqual(regions);
 		expect(emitProgramImage(cached, { compiled: true })).toContain(
-			"mal_builtin_string_slice_to_number_direct_locked(vm,",
+			"mal_builtin_string_slice_span_init(",
 		);
 
 		const functionIndex = lowered.native.functions.findIndex((fn) =>
-			fn.specializations.some((region) => region.kind === "string-slice-number"),
+			fn.specializations.some((region) => region.kind === "string-span"),
 		);
 		const owner = lowered.native.functions[functionIndex]!;
 		const regionIndex = owner.specializations.findIndex(
-			(region) => region.kind === "string-slice-number",
+			(region) => region.kind === "string-span",
 		);
 		const region = owner.specializations[regionIndex]!;
-		if (region.kind !== "string-slice-number") {
+		if (region.kind !== "string-span") {
 			throw new Error("missing String.slice Number region");
 		}
 		const malformed = withSpecializations(
@@ -4350,12 +4344,13 @@ describe("native update-expression representation", () => {
 			functionIndex,
 			owner.specializations.with(regionIndex, {
 				...region,
-				sliceStart: Number.POSITIVE_INFINITY,
+				consumers: region.consumers.map((consumer) => ({
+					...consumer,
+					value: region.receiver,
+				})),
 			}),
 		);
-		expect(() => serializeCompilerArtifact(malformed)).toThrow(
-			/invalid String\.slice Number region/,
-		);
+		expect(() => serializeCompilerArtifact(malformed)).toThrow(/[Ii]nvalid string-span/);
 		const invalidIdentity = withSpecializations(
 			lowered,
 			functionIndex,
@@ -4365,7 +4360,7 @@ describe("native update-expression representation", () => {
 			}),
 		);
 		expect(() => serializeCompilerArtifact(invalidIdentity)).toThrow(
-			/invalid String\.slice Number region/,
+			/[Ii]nvalid string-span/,
 		);
 	});
 
@@ -4613,7 +4608,7 @@ describe("native update-expression representation", () => {
 		expect(output).toMatch(
 			/mal_vm_semantic_dependencies_validate\(vm, MAL_SEMANTIC_DEPENDENCY_WATCHED_METHODS, __string_split_cursor_\d+_semantic_epoch\) && mal_builtin_string_trim_span_length_locked/,
 		);
-		expect(output).toContain("mal_builtin_string_split_cursor_materialize(vm,");
+		expect(output).toContain("mal_builtin_string_span_materialize(vm,");
 
 		const lockedOutput = emitLocked(code);
 		expect(lockedOutput).toContain("mal_builtin_string_split_cursor_init_locked(vm,");
@@ -4751,7 +4746,7 @@ describe("native update-expression representation", () => {
 		expect(output).not.toContain("mal_builtin_string_split_cursor_init(vm,");
 	});
 
-	it("keeps slice materialized when its result has another use", () => {
+	it("projects Number and length from the same string span", () => {
 		const output = emit(`
 			function parse(value) {
 				const tail = value.slice(1);
@@ -4759,7 +4754,7 @@ describe("native update-expression representation", () => {
 			}
 			globalThis.parse = parse;
 		`);
-		expect(output).not.toContain("mal_builtin_string_slice_to_number_direct(vm,");
+		expect(output).toContain("mal_builtin_string_slice_span_init(");
 	});
 
 	it("projects selected captures from a closed RegExp exec result", () => {

@@ -1542,6 +1542,15 @@ function emitCompiledVariant(
 		});
 		nextStackSlot += loads.length + 1;
 	}
+	const stringSpanSites = new Map<number, NativeStringSpanSite>();
+	for (const span of nativeContract.specializations) {
+		if (span.kind !== "string-span") continue;
+		stringSpanSites.set(span.sliceCallIp, {
+			span,
+			subjectSlot: nextStackSlot++,
+			materializedSlot: nextStackSlot++,
+		});
+	}
 	const fieldCalls = renderFieldCallSlots(fn, nativeContract, () => nextStackSlot++);
 	const totalSlots = nextStackSlot;
 
@@ -1607,6 +1616,7 @@ function emitCompiledVariant(
 		stringSplitCursorSites,
 		regexpExecProjectionSites,
 		regexpIteratorProjectionSites,
+		stringSpanSites,
 		directCompiledTargets,
 		directCompiledEntries,
 		directEntry?.resultRepresentation,
@@ -2606,6 +2616,7 @@ function emitResumableFunction(
 		new Map(),
 		new Map(),
 		new Map(),
+		new Map(),
 		directCompiledTargets,
 		directCompiledEntries,
 		undefined,
@@ -2955,13 +2966,17 @@ interface NativeRegExpIteratorProjectionAction {
 	load?: NativeRegExpIteratorProjection["loads"][number];
 }
 
-type NativeStringSliceNumberFusion = Extract<VmRegion, { kind: "string-slice-number" }>;
+type NativeStringSpan = Extract<VmRegion, { kind: "string-span" }>;
 
-interface NativeStringSliceNumberFusionAction {
-	fusion: NativeStringSliceNumberFusion;
-	role: "property" | "slice" | "number";
-	lockedIdentity: boolean;
-	propertyLoad?: Extract<BytecodeInstruction, { opcode: "LOAD_PROPERTY_STATIC" }>;
+interface NativeStringSpanSite {
+	span: NativeStringSpan;
+	subjectSlot: number;
+	materializedSlot: number;
+}
+interface NativeStringSpanAction {
+	site: NativeStringSpanSite;
+	role: "slice" | "length" | "equal" | "number" | "materialize";
+	consumer?: NativeStringSpan["consumers"][number];
 }
 
 type NativeStringCharCodeAtChain = Extract<
@@ -3704,6 +3719,7 @@ function emitBody(
 	stringSplitCursorSites: ReadonlyMap<number, NativeStringSplitCursorSite>,
 	regexpExecProjectionSites: ReadonlyMap<number, NativeRegExpExecProjectionSite>,
 	regexpIteratorProjectionSites: ReadonlyMap<number, NativeRegExpIteratorProjectionSite>,
+	stringSpanSites: ReadonlyMap<number, NativeStringSpanSite>,
 	directCompiledTargets: ReadonlySet<number>,
 	directCompiledEntries: DirectCompiledEntries,
 	directResultRepresentation: VmRegisterRepresentation | undefined,
@@ -4005,33 +4021,15 @@ function emitBody(
 			...(load === undefined ? {} : { load }),
 		});
 	}
-	const nativeStringSliceNumberFusionActionByIp = new Map<
-		number,
-		NativeStringSliceNumberFusionAction
-	>();
-	for (const action of topology.actionsByKind.get("string-slice-number") ?? []) {
-		const fusion = specializations[action.regionIndex];
-		if (fusion?.kind !== "string-slice-number") continue;
-		const lockedIdentity = fusion.builtinIdentities === "authority-invariant";
-		const propertyLoad = regionFallbackPropertyLoad(
-			fn,
-			fusion.propertyPlacement,
-			fusion.propertyIp,
-			lockedIdentity,
-		);
-		if (
-			action.role !== "property" &&
-			action.role !== "slice" &&
-			action.role !== "number"
-		) {
-			throw new Error("Invalid String.slice Number action");
-		}
-		nativeStringSliceNumberFusionActionByIp.set(action.ip, {
-			fusion,
-			role: action.role,
-			lockedIdentity,
-			...(propertyLoad === undefined ? {} : { propertyLoad }),
-		});
+	const nativeStringSpanActionByIp = new Map<number, NativeStringSpanAction>();
+	for (const site of stringSpanSites.values()) {
+		nativeStringSpanActionByIp.set(site.span.sliceCallIp, { site, role: "slice" });
+		for (const consumer of site.span.consumers)
+			nativeStringSpanActionByIp.set(consumer.ip, {
+				site,
+				role: consumer.kind,
+				consumer,
+			});
 	}
 	const lines: Array<string> = [];
 	const resources = new Set<NativeBodyResource>();
@@ -4130,12 +4128,12 @@ function emitBody(
 			`i32 __regexp_iter_${site.projection.stepIp}_ends[${site.loads.length}];`,
 		);
 	}
-	for (const action of nativeStringSliceNumberFusionActionByIp.values()) {
-		if (action.role !== "slice") continue;
-		const { fusion } = action;
+	for (const site of stringSpanSites.values()) {
+		const id = site.span.sliceCallIp;
 		lines.push(
-			`bool __string_slice_number_${fusion.sliceCallIp}_fast = false;`,
-			`f64 __string_slice_number_${fusion.sliceCallIp}_value = 0;`,
+			`bool __string_span_${id}_active = false;`,
+			`usize __string_span_${id}_start = 0;`,
+			`usize __string_span_${id}_end = 0;`,
 		);
 	}
 	for (const action of indexedLengthLoopActionByIp.values()) {
@@ -4244,7 +4242,7 @@ function emitBody(
 		nativeStringSplitCursorActionByIp.has(ip) ||
 		nativeRegExpExecProjectionActionByIp.has(ip) ||
 		nativeRegExpIteratorProjectionActionByIp.has(ip) ||
-		nativeStringSliceNumberFusionActionByIp.has(ip) ||
+		nativeStringSpanActionByIp.has(ip) ||
 		nativeStringCharCodeAtChainActionByIp.has(ip) ||
 		nativeBuiltinCollectionCallChainActionByIp.has(ip);
 	const nativeFastPaths = lowerNativeFastPaths(
@@ -4366,7 +4364,7 @@ function emitBody(
 		stringSplitTrimLengthSite: undefined,
 		nativeRegExpExecProjectionAction: undefined,
 		nativeRegExpIteratorProjectionAction: undefined,
-		nativeStringSliceNumberFusionAction: undefined,
+		nativeStringSpanAction: undefined,
 		nativeStringCharCodeAtChainAction: undefined,
 		nativeBuiltinCollectionCallChainAction: undefined,
 		nativeIteratorCursorAction: undefined,
@@ -4627,7 +4625,7 @@ function emitBody(
 			!nativeStringSplitProjectionActionByIp.has(ip) &&
 			!nativeRegExpExecProjectionActionByIp.has(ip) &&
 			!nativeRegExpIteratorProjectionActionByIp.has(ip) &&
-			!nativeStringSliceNumberFusionActionByIp.has(ip) &&
+			!nativeStringSpanActionByIp.has(ip) &&
 			!nativeBuiltinCollectionCallChainActionByIp.has(ip);
 		const effects = nativeInstructionEffects(fn.instructions[ip]!);
 		const publishesIncomingRoots =
@@ -4725,7 +4723,7 @@ function emitBody(
 			nativeStringSplitCursorActionByIp.get(ip) === undefined &&
 			nativeRegExpExecProjectionActionByIp.get(ip) === undefined &&
 			nativeRegExpIteratorProjectionActionByIp.get(ip) === undefined &&
-			nativeStringSliceNumberFusionActionByIp.get(ip) === undefined &&
+			nativeStringSpanActionByIp.get(ip) === undefined &&
 			nativeStringCharCodeAtChainActionByIp.get(ip) === undefined &&
 			nativeBuiltinCollectionCallChainActionByIp.get(ip) === undefined &&
 			inactiveRootMask !== lastPublishedInactiveRootMask
@@ -4844,8 +4842,7 @@ function emitBody(
 			nativeRegExpExecProjectionActionByIp.get(ip);
 		instructionContext.nativeRegExpIteratorProjectionAction =
 			nativeRegExpIteratorProjectionActionByIp.get(ip);
-		instructionContext.nativeStringSliceNumberFusionAction =
-			nativeStringSliceNumberFusionActionByIp.get(ip);
+		instructionContext.nativeStringSpanAction = nativeStringSpanActionByIp.get(ip);
 		instructionContext.nativeStringCharCodeAtChainAction =
 			nativeStringCharCodeAtChainActionByIp.get(ip);
 		instructionContext.nativeBuiltinCollectionCallChainAction =
@@ -5320,7 +5317,7 @@ interface NativeInstructionContext {
 	readonly stringSplitTrimLengthSite?: NativeStringSplitCursorSite;
 	readonly nativeRegExpExecProjectionAction?: NativeRegExpExecProjectionAction;
 	readonly nativeRegExpIteratorProjectionAction?: NativeRegExpIteratorProjectionAction;
-	readonly nativeStringSliceNumberFusionAction?: NativeStringSliceNumberFusionAction;
+	readonly nativeStringSpanAction?: NativeStringSpanAction;
 	readonly nativeStringCharCodeAtChainAction?: NativeStringCharCodeAtChainAction;
 	readonly nativeBuiltinCollectionCallChainAction?: NativeBuiltinCollectionCallChainAction;
 	readonly nativeIteratorCursorAction?: NativeIteratorCursorAction;
@@ -5526,7 +5523,7 @@ function emitInstruction(
 		nativeStringSplitCursorAction,
 		nativeRegExpExecProjectionAction,
 		nativeRegExpIteratorProjectionAction,
-		nativeStringSliceNumberFusionAction,
+		nativeStringSpanAction,
 		nativeStringCharCodeAtChainAction,
 		nativeBuiltinCollectionCallChainAction,
 		nativeIteratorCursorAction,
@@ -5922,6 +5919,84 @@ function emitInstruction(
 				: [
 						`  ${cInactiveRootMaskPublication(context.mathCallInactiveRootMask, context.inactiveRootMaskStatements)};`,
 					]);
+	if (nativeStringSpanAction !== undefined) {
+		const { site, role, consumer } = nativeStringSpanAction;
+		const { span } = site;
+		const prefix = `__string_span_${span.sliceCallIp}`;
+		const source = `__gc_slots[${site.subjectSlot}]`;
+		const materialized = `__gc_slots[${site.materializedSlot}]`;
+		const ordinary = emitGenericInstruction();
+		if (ordinary === null) return null;
+		if (
+			role === "slice" &&
+			(instruction.opcode === "CALL" || instruction.opcode === "CALL_KNOWN")
+		) {
+			const locked = span.builtinIdentities === "authority-invariant";
+			const callee =
+				instruction.opcode === "CALL"
+					? boxedOperand(instruction.callee)
+					: "MAL_VALUE_UNDEFINED";
+			const argument = (index: number): string =>
+				instruction.arguments[index] === undefined
+					? "MAL_VALUE_UNDEFINED"
+					: boxedOperand(instruction.arguments[index]);
+			return [
+				`${materialized} = MAL_VALUE_UNDEFINED;`,
+				`${source} = MAL_VALUE_UNDEFINED;`,
+				`${prefix}_active = ${profileCall("string", `mal_builtin_string_slice_span_init(${callee}, ${boxedOperand(instruction.thisValue)}, ${argument(0)}, ${argument(1)}, ${locked ? "true" : "false"}, &${source}, &${prefix}_start, &${prefix}_end)`)};`,
+				`if (${prefix}_active) {`,
+				`  r${instruction.dst} = MAL_VALUE_UNDEFINED;`,
+				`  ${poll()}`,
+				`} else {`,
+				...ordinary.map((line) => `  ${line}`),
+				`}`,
+			];
+		}
+		if (consumer === undefined) throw new Error("String-span action has no consumer");
+		const materialize = [
+			`if (${prefix}_active) {`,
+			`  if (mal_value_is_undefined(${materialized})) {`,
+			`    ${materialized} = ${profileCall("string", `mal_builtin_string_span_materialize(vm, ${source}, ${prefix}_start, ${prefix}_end)`)};`,
+			`    ${throwCheck()}`,
+			`  }`,
+			`  r${consumer.value} = ${materialized};`,
+			`}`,
+		];
+		let guard = `${prefix}_active`;
+		let projected: string | undefined;
+		if (role === "length" && instruction.opcode === "LOAD_PROPERTY_STATIC")
+			projected = storeNumber(instruction.dst, `(f64) (${prefix}_end - ${prefix}_start)`);
+		else if (role === "equal" && instruction.opcode === "BINARY") {
+			const other =
+				instruction.left === consumer.value ? instruction.right : instruction.left;
+			const equal = `mal_builtin_string_span_equal(${source}, ${prefix}_start, ${prefix}_end, ${boxedOperand(other)})`;
+			projected = storeBoolean(
+				instruction.dst,
+				instruction.operator === "!==" ? `!${equal}` : equal,
+			);
+		} else if (
+			role === "number" &&
+			(instruction.opcode === "CALL" || instruction.opcode === "CALL_KNOWN")
+		) {
+			if (instruction.opcode === "CALL")
+				guard += ` && ${boxedOperand(instruction.callee)} == vm->intrinsics[MAL_INTRINSIC_NUMBER_CONSTRUCTOR]`;
+			projected = storeNumber(
+				instruction.dst,
+				`mal_ops_number_as_f64(mal_ops_string_range_to_number(mal_value_to_string(${source}), ${prefix}_start, ${prefix}_end - ${prefix}_start))`,
+			);
+		}
+		if (projected === undefined) return [...materialize, ...ordinary];
+		return [
+			`if (${guard}) {`,
+			`  MAL_PERF_COUNT(string_span_projections);`,
+			`  ${projected}`,
+			`  ${poll()}`,
+			`} else {`,
+			...(role === "number" ? materialize.map((line) => `  ${line}`) : []),
+			...ordinary.map((line) => `  ${line}`),
+			`}`,
+		];
+	}
 	// Where `this` is stored: a derived constructor's is a mutable rooted slot
 	// (super() rebinds it); everything else reads the immutable `this_value` param.
 	const thisRef = thisSlot >= 0 ? `__gc_slots[${thisSlot}]` : "this_value";
@@ -6905,7 +6980,6 @@ function emitInstruction(
 				instruction.opcode === "LOAD_PROPERTY_STATIC" &&
 				(nativeStringSplitProjectionAction?.role === "property" ||
 					nativeStringSplitCursorAction?.role === "property" ||
-					nativeStringSliceNumberFusionAction?.role === "property" ||
 					nativeRegExpExecProjectionAction?.role === "property")
 			) {
 				return [];
@@ -7207,7 +7281,7 @@ function emitInstruction(
 						`if (__string_split_cursor_${id}_active) {`,
 						...trim,
 						`  r${instruction.dst} = MAL_VALUE_UNDEFINED;`,
-						`  if (!__string_split_cursor_${id}_trim_fast) r${instruction.dst} = ${profileCall("string", `mal_builtin_string_split_cursor_materialize(vm, __gc_slots[${site.subjectSlot}], __string_split_cursor_${id}_start, __string_split_cursor_${id}_end)`)};`,
+						`  if (!__string_split_cursor_${id}_trim_fast) r${instruction.dst} = ${profileCall("string", `mal_builtin_string_span_materialize(vm, __gc_slots[${site.subjectSlot}], __string_split_cursor_${id}_start, __string_split_cursor_${id}_end)`)};`,
 						`} else {`,
 						...ordinary().map((line) => `  ${line}`),
 						`}`,
@@ -9022,7 +9096,7 @@ function emitInstruction(
 					(range !== undefined || instruction.operation === "String.prototype.repeat") &&
 					!instruction.construct &&
 					instruction.argumentMode === undefined &&
-					nativeStringSliceNumberFusionAction === undefined
+					nativeStringSpanAction === undefined
 				) {
 					const position = (index: number, fallback: string) => {
 						const operand = instruction.arguments[index];
@@ -9118,30 +9192,7 @@ function emitInstruction(
 						];
 					}
 				}
-				if (nativeStringSliceNumberFusionAction !== undefined) {
-					const { fusion } = nativeStringSliceNumberFusionAction;
-					const fast = `__string_slice_number_${fusion.sliceCallIp}_fast`;
-					const number = `__string_slice_number_${fusion.sliceCallIp}_value`;
-					if (nativeStringSliceNumberFusionAction.role === "slice") {
-						return [
-							`${fast} = ${profileCall("string", `mal_builtin_string_slice_to_number_direct_locked(vm, ${boxedOperand(instruction.thisValue)}, ${cF64Literal(fusion.sliceStart)}, &${number})`)};`,
-							`if (${fast}) {`,
-							`  r${instruction.dst} = MAL_VALUE_UNDEFINED;`,
-							`  ${poll()}`,
-							`} else {`,
-							...fallback.map((line) => `  ${line}`),
-							`}`,
-						];
-					}
-					return [
-						`if (${fast}) {`,
-						`  r${instruction.dst} = ${reps[instruction.dst] === "number" ? number : profileCall("boxing", `mal_ops_number_value(${number})`)};`,
-						`  ${poll()}`,
-						`} else {`,
-						...fallback.map((line) => `  ${line}`),
-						`}`,
-					];
-				}
+
 				if (
 					nativeRegExpExecProjectionAction?.role === "number" ||
 					nativeRegExpIteratorProjectionAction?.role === "number"
@@ -9653,52 +9704,7 @@ function emitInstruction(
 					poll(),
 				];
 			}
-			if (nativeStringSliceNumberFusionAction !== undefined) {
-				const { fusion, lockedIdentity, propertyLoad } =
-					nativeStringSliceNumberFusionAction;
-				const fast = `__string_slice_number_${fusion.sliceCallIp}_fast`;
-				const value = `__string_slice_number_${fusion.sliceCallIp}_value`;
-				if (nativeStringSliceNumberFusionAction.role === "slice") {
-					const convert = lockedIdentity
-						? profileCall(
-								"string",
-								`mal_builtin_string_slice_to_number_direct_locked(vm, ${boxedOperand(instruction.thisValue)}, ${cF64Literal(fusion.sliceStart)}, &${value})`,
-							)
-						: profileCall(
-								"string",
-								`mal_builtin_string_slice_to_number_direct(vm, ${boxedOperand(instruction.callee)}, ${boxed(fusion.numberCallee)}, ${boxedOperand(instruction.thisValue)}, ${cF64Literal(fusion.sliceStart)}, &${value})`,
-							);
-					return [
-						`${fast} = ${convert};`,
-						`if (${fast}) {`,
-						`  r${instruction.dst} = MAL_VALUE_UNDEFINED;`,
-						`  ${poll()}`,
-						`} else {`,
-						...(propertyLoad === undefined
-							? []
-							: [
-									`  r${propertyLoad.dst} = ${profileCall("property", `mal_vm_op_load_property_ic(vm, ${boxedOperand(propertyLoad.object)}, mal_value_from_string(vm->string_constant_atoms[${relocation.stringIndex(propertyLoad.stringIndex)}]), &${nativeBodyReference(resources, "propertyCache")}[${propertyLoad.icIndex}])`)};`,
-									`  ${throwCheck()}`,
-								]),
-						`  MalCompletion ${tmp} = ${profileCall("call", `mal_vm_call_cached(vm, ${nativeCallCacheReference(context, ip)}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length})`)};`,
-						`  if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow()}`,
-						`  r${instruction.dst} = ${tmp}.value;`,
-						`  ${poll()}`,
-						`}`,
-					];
-				}
-				return [
-					`if (${fast}) {`,
-					`  r${instruction.dst} = ${reps[instruction.dst] === "number" ? value : profileCall("boxing", `mal_ops_number_value(${value})`)};`,
-					`  ${poll()}`,
-					`} else {`,
-					`  MalCompletion ${tmp} = ${profileCall("call", `mal_vm_call_cached(vm, ${nativeCallCacheReference(context, ip)}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length})`)};`,
-					`  if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow()}`,
-					`  r${instruction.dst} = ${reps[instruction.dst] === "number" ? `mal_ops_number_as_f64(${tmp}.value)` : `${tmp}.value`};`,
-					`  ${poll()}`,
-					`}`,
-				];
-			}
+
 			if (nativeStringSplitProjectionAction?.role === "call") {
 				const { site, propertyLoad } = nativeStringSplitProjectionAction;
 				const projection = site.projection;

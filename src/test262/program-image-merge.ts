@@ -265,10 +265,12 @@ function cloneRegion(region: VmRegion, base: RebaseBases): VmRegion {
 				resultRegisters: [...region.resultRegisters],
 				loads: region.loads.map((load) => ({ ...load })),
 			};
-		case "string-slice-number":
+		case "string-span":
 			return {
 				...cloneRegionEnvelope(region),
 				kind: region.kind,
+				resultRegisters: [...region.resultRegisters],
+				consumers: region.consumers.map((consumer) => ({ ...consumer })),
 			};
 		case "stack-object-plan":
 			return {

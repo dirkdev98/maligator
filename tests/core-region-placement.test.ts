@@ -93,8 +93,8 @@ function propertyPlacement(
 			return selection.stringSplitCursor.propertyPlacement;
 		case "string-split-projection":
 			return selection.stringSplitProjection.propertyPlacement;
-		case "string-slice-number":
-			return selection.stringSliceNumber.propertyPlacement;
+		case "string-span":
+			return selection.stringSpan.propertyPlacement;
 		case "regexp-exec-projection":
 			return selection.regexpExecProjection.propertyPlacement;
 		default:
@@ -278,17 +278,17 @@ describe("Core plan property placement", () => {
 		const compilation = optimize(SPLIT_AND_SLICE, "placement-invalid.js");
 		const specializations = projectCoreSpecializationRecipes(compilation.plan.recipes);
 		const index = specializations.findIndex(
-			(selection) => selection.kind === "string-slice-number",
+			(selection) => selection.kind === "string-span",
 		);
 		const selection = specializations[index];
-		if (selection?.kind !== "string-slice-number") throw new Error("missing slice plan");
+		if (selection?.kind !== "string-span") throw new Error("missing slice plan");
 		const invalid: CoreOptimizationPlan = {
 			...compilation.plan,
 			recipes: buildCoreSpecializationRecipeTable(
 				specializations.with(index, {
 					...selection,
-					stringSliceNumber: {
-						...selection.stringSliceNumber,
+					stringSpan: {
+						...selection.stringSpan,
 						propertyPlacement: "wherever" as never,
 					},
 				}),
@@ -374,14 +374,15 @@ describe("Core plan property placement", () => {
 		expect(vmRegions(restored)).toEqual(vmRegions(definition));
 
 		const functionIndex = definition.native.functions.findIndex((fn) =>
-			fn.specializations.some(({ kind }) => kind === "string-slice-number"),
+			fn.specializations.some(({ kind }) => kind === "string-split-projection"),
 		);
 		const owner = definition.native.functions[functionIndex]!;
 		const regionIndex = owner.specializations.findIndex(
-			({ kind }) => kind === "string-slice-number",
+			({ kind }) => kind === "string-split-projection",
 		);
 		const region = owner.specializations[regionIndex];
-		if (region?.kind !== "string-slice-number") throw new Error("missing slice region");
+		if (region?.kind !== "string-split-projection")
+			throw new Error("missing slice region");
 		const alternate = serializeCompilerArtifact(
 			withVmRegion(definition, functionIndex, regionIndex, {
 				...region,

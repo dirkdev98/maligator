@@ -1700,55 +1700,57 @@ static MalValue mal_builtin_string_prototype_slice(MalVm *vm, MalValue this_valu
     return mal_builtin_string_range(vm, this_value, args, arg_count, MAL_STRING_RANGE_SLICE);
 }
 
-static bool mal_builtin_string_slice_to_number_direct_impl(
-    MalVm *vm,
-    MalValue slice_callee,
-    MalValue number_callee,
-    MalValue receiver,
-    f64 relative_start,
-    f64 *number_out,
-    bool identities_locked
+bool mal_builtin_string_slice_span_init(
+    MalValue callee, MalValue receiver, MalValue start_value, MalValue end_value,
+    bool identity_locked, MalValue *subject_out, usize *start_out, usize *end_out
 ) {
     if (!mal_value_is_string(receiver) ||
-        (!identities_locked &&
-         (!mal_value_is_native_function_object(slice_callee) ||
-          mal_native_function_object_callback(
-              mal_value_to_native_function_object(slice_callee)) !=
-              mal_builtin_string_prototype_slice ||
-          number_callee != vm->intrinsics[MAL_INTRINSIC_NUMBER_CONSTRUCTOR]))) {
-        return false;
-    }
-
-    MalString *string = mal_value_to_string(receiver);
-    usize length = mal_string_length(string);
-    usize start = (usize) mal_ops_number_clamp_relative(
-        relative_start, (f64) length);
-    MalValue number = mal_ops_string_range_to_number(string, start, length - start);
-    *number_out = mal_ops_number_as_f64(number);
+        (!mal_ops_is_number(start_value) && !mal_value_is_undefined(start_value)) ||
+        (!mal_ops_is_number(end_value) && !mal_value_is_undefined(end_value)) ||
+        (!identity_locked &&
+         (!mal_value_is_native_function_object(callee) ||
+          mal_native_function_object_callback(mal_value_to_native_function_object(callee)) !=
+              mal_builtin_string_prototype_slice))) return false;
+    usize length = mal_string_length(mal_value_to_string(receiver));
+    f64 start_number = mal_value_is_undefined(start_value) ? 0 : mal_ops_number_as_f64(start_value);
+    f64 end_number = mal_value_is_undefined(end_value) ? (f64) length : mal_ops_number_as_f64(end_value);
+    usize start = (usize) mal_ops_number_clamp_relative(start_number, (f64) length);
+    usize end = (usize) mal_ops_number_clamp_relative(end_number, (f64) length);
+    *subject_out = receiver;
+    *start_out = start;
+    *end_out = end < start ? start : end;
+    MAL_PERF_COUNT(string_span_admissions);
     return true;
 }
 
-bool mal_builtin_string_slice_to_number_direct(
-    MalVm *vm,
-    MalValue slice_callee,
-    MalValue number_callee,
-    MalValue receiver,
-    f64 relative_start,
-    f64 *number_out
-) {
-    return mal_builtin_string_slice_to_number_direct_impl(
-        vm, slice_callee, number_callee, receiver, relative_start, number_out, false);
-}
-
-bool mal_builtin_string_slice_to_number_direct_locked(
-    MalVm *vm,
-    MalValue receiver,
-    f64 relative_start,
-    f64 *number_out
-) {
-    return mal_builtin_string_slice_to_number_direct_impl(
-        vm, MAL_VALUE_UNDEFINED, MAL_VALUE_UNDEFINED, receiver, relative_start, number_out,
-        true);
+bool mal_builtin_string_span_equal(MalValue subject_value, usize start, usize end, MalValue other_value) {
+    if (!mal_value_is_string(other_value)) return false;
+    MalString *other = mal_value_to_string(other_value);
+    usize length = end - start;
+    if (mal_string_length(other) != length) return false;
+    MalStringIterator left_iterator, right_iterator;
+    mal_string_iterator_init(&left_iterator, mal_value_to_string(subject_value), start, length);
+    mal_string_iterator_init(&right_iterator, other, 0, length);
+    MalStringSegment left = {0}, right = {0};
+    usize left_index = 0, right_index = 0;
+    bool equal = true;
+    for (usize index = 0; index < length; index++) {
+        if (left_index == left.length) {
+            if (!mal_string_iterator_next(&left_iterator, &left)) { equal = false; break; }
+            left_index = 0;
+        }
+        if (right_index == right.length) {
+            if (!mal_string_iterator_next(&right_iterator, &right)) { equal = false; break; }
+            right_index = 0;
+        }
+        if (mal_string_segment_code_unit_at(&left, left_index++) != mal_string_segment_code_unit_at(&right, right_index++)) {
+            equal = false;
+            break;
+        }
+    }
+    mal_string_iterator_dispose(&left_iterator);
+    mal_string_iterator_dispose(&right_iterator);
+    return equal;
 }
 
 static MalValue mal_builtin_string_prototype_substring(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
@@ -4040,13 +4042,14 @@ bool mal_builtin_string_split_cursor_next(
     return true;
 }
 
-MalValue mal_builtin_string_split_cursor_materialize(
+MalValue mal_builtin_string_span_materialize(
     MalVm *vm, MalValue subject_value, usize start, usize end
 ) {
     if (!mal_value_is_string(subject_value)) return MAL_VALUE_UNDEFINED;
     MalString *subject = mal_value_to_string(subject_value);
     usize length = mal_string_length(subject);
     if (start > end || end > length) return MAL_VALUE_UNDEFINED;
+    MAL_PERF_COUNT(string_span_materializations);
     return mal_builtin_string_slice(vm, subject, start, end - start);
 }
 

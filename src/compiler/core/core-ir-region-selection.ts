@@ -442,14 +442,14 @@ function pendingLocalCandidate(
 					candidate.call,
 					true,
 				)
-			: candidate.kind === "string-slice-number"
+			: candidate.kind === "string-span"
 				? builtinPlanProof(
 						context,
 						"String.prototype.slice",
 						kind,
 						candidate.function,
 						candidate.sliceCall,
-						false,
+						true,
 					)
 				: candidate.kind === "regexp-exec-projection"
 					? builtinPlanProof(
@@ -515,7 +515,7 @@ function pendingLocalCandidate(
 			: undefined;
 	if (
 		(candidate.kind === "string-split-projection" ||
-			candidate.kind === "string-slice-number" ||
+			candidate.kind === "string-span" ||
 			candidate.kind === "regexp-exec-projection" ||
 			candidate.kind === "string-char-code-at-chain" ||
 			candidate.kind === "builtin-collection-call-chain") &&
@@ -590,8 +590,11 @@ function pendingLocalCandidate(
 										])
 									: candidate.kind === "string-split-projection"
 										? Object.freeze([candidate.call, candidate.loads[0]!.instruction])
-										: candidate.kind === "string-slice-number"
-											? Object.freeze([candidate.sliceCall, candidate.numberCall])
+										: candidate.kind === "string-span"
+											? Object.freeze([
+													candidate.sliceCall,
+													candidate.consumers[0]!.instruction,
+												])
 											: candidate.kind === "regexp-exec-projection"
 												? Object.freeze([candidate.call, candidate.loads[0]!.instruction])
 												: candidate.kind === "regexp-iterator-projection"
@@ -612,7 +615,7 @@ function pendingLocalCandidate(
 			candidate.kind === "iterator-result-virtualization" ||
 			candidate.kind === "iterator-entry-pair-virtualization" ||
 			candidate.kind === "string-split-cursor" ||
-			candidate.kind === "string-slice-number" ||
+			candidate.kind === "string-span" ||
 			candidate.kind === "regexp-iterator-projection" ||
 			candidate.kind === "string-char-code-at-chain" ||
 			candidate.kind === "builtin-collection-call-chain" ||
@@ -623,7 +626,7 @@ function pendingLocalCandidate(
 			candidate.kind === "string-split-cursor" ||
 			candidate.kind === "string-split-projection"
 				? (candidate.property ?? candidate.call)
-				: candidate.kind === "string-slice-number"
+				: candidate.kind === "string-span"
 					? (candidate.property ?? candidate.sliceCall)
 					: candidate.kind === "regexp-exec-projection"
 						? (candidate.property ?? candidate.call)
@@ -640,7 +643,7 @@ function pendingLocalCandidate(
 					  candidate.kind === "iterator-entry-pair-virtualization"
 					? protector!.guard.dependencies
 					: candidate.kind === "string-split-projection" ||
-						  candidate.kind === "string-slice-number" ||
+						  candidate.kind === "string-span" ||
 						  candidate.kind === "regexp-exec-projection" ||
 						  candidate.kind === "string-char-code-at-chain" ||
 						  candidate.kind === "builtin-collection-call-chain"
@@ -873,26 +876,21 @@ function pendingLocalCandidate(
 																loads: candidate.loads,
 															}),
 														}
-													: candidate.kind === "string-slice-number"
+													: candidate.kind === "string-span"
 														? {
 																...common,
-																kind: "string-slice-number",
-																representation: "primitive-string-span-number",
+																kind: "string-span",
+																representation: "primitive-string-span",
 																composition: "exclusive",
-																stringSliceNumber: Object.freeze({
+																stringSpan: Object.freeze({
 																	guard: builtin!.guard,
 																	builtinCall: builtin!.builtinCall,
 																	property: candidate.property,
-																	propertyPlacement: propertyPlacement(
-																		candidate.property,
-																		candidate.sliceCall,
-																	),
+																	propertyPlacement: "in-place",
 																	builtinIdentities: builtin!.identity,
 																	sliceCall: candidate.sliceCall,
-																	sliceStartInstruction: candidate.sliceStartInstruction,
-																	numberIntrinsic: candidate.numberIntrinsic,
-																	numberCall: candidate.numberCall,
-																	sliceStart: candidate.sliceStart,
+																	resultValues: candidate.resultValues,
+																	consumers: candidate.consumers,
 																}),
 															}
 														: candidate.kind === "regexp-exec-projection"

@@ -2565,6 +2565,19 @@
 			"controls": ["primordial-array-folds", "array-map"]
 		},
 		{
+			"id": "string-span-classify",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "String.prototype.slice",
+			"category": "api-builtins",
+			"mechanisms": ["string-slice"],
+			"inputShape": "256 tokens with dynamic source bounds, repeated length and literal classification, numeric conversion, and sparse escaping tokens.",
+			"unit": "classified token",
+			"sourceSeam": "src/compiler/frontend/direct-eval-context.ts",
+			"fixture": "cases/string-span-classify.mjs",
+			"controls": ["string-split", "string-search"]
+		},
+		{
 			"id": "method-name-unique",
 			"group": "runtime",
 			"suite": "runtime",

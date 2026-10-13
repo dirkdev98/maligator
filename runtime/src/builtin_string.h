@@ -262,26 +262,12 @@ bool mal_builtin_string_ascii_case_chain_length_span_locked(
     u32 *length_out
 );
 
-/**
- * Producer-consumer fusion for exact builtin `string.slice(start)` immediately
- * consumed by the exact Number constructor. Guard failure is side-effect-free.
- */
-bool mal_builtin_string_slice_to_number_direct(
-    MalVm *vm,
-    MalValue slice_callee,
-    MalValue number_callee,
-    MalValue receiver,
-    f64 relative_start,
-    f64 *number_out
+// Admission accepts only primitive bounds, so failure never repeats coercion effects.
+bool mal_builtin_string_slice_span_init(
+    MalValue callee, MalValue receiver, MalValue start_value, MalValue end_value,
+    bool identity_locked, MalValue *subject_out, usize *start_out, usize *end_out
 );
-
-/** Locked slice identity plus compiler-proven exact Number intrinsic. */
-bool mal_builtin_string_slice_to_number_direct_locked(
-    MalVm *vm,
-    MalValue receiver,
-    f64 relative_start,
-    f64 *number_out
-);
+bool mal_builtin_string_span_equal(MalValue subject, usize start, usize end, MalValue other);
 
 #define MAL_STRING_SPLIT_PROJECTION_MAX_OUTPUTS 8u
 
@@ -363,8 +349,8 @@ bool mal_builtin_string_split_cursor_next(
     usize *end_out
 );
 
-/** Materialize one split span for the cold generic String method path. */
-MalValue mal_builtin_string_split_cursor_materialize(
+// The source stays rooted by the caller; no borrowed backing pointer crosses materialization.
+MalValue mal_builtin_string_span_materialize(
     MalVm *vm, MalValue subject, usize start, usize end
 );
 

@@ -1527,7 +1527,7 @@ describe("wire loader side-data validation", () => {
 	});
 
 	it("loads a nonempty String.slice Number proof region payload", () => {
-		const entrypoint = path.join(directory, "string-slice-number-region.mjs");
+		const entrypoint = path.join(directory, "string-span-region.mjs");
 		writeFileSync(
 			entrypoint,
 			`function parse(value) {
@@ -1545,10 +1545,10 @@ describe("wire loader side-data validation", () => {
 		});
 		expect(
 			regionDefinition.native.functions.flatMap((fn) =>
-				fn.specializations.filter((region) => region.kind === "string-slice-number"),
+				fn.specializations.filter((region) => region.kind === "string-span"),
 			),
 		).not.toHaveLength(0);
-		const wirePath = path.join(directory, "string-slice-number-region.malw");
+		const wirePath = path.join(directory, "string-span-region.malw");
 		writeFileSync(
 			wirePath,
 			serializeRuntimeImage(regionDefinition.runtime, { debugInfo: false }),

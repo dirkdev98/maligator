@@ -31,7 +31,7 @@ export type CorePlanSpecializationKind =
 	| "string-split-projection"
 	| "regexp-exec-projection"
 	| "regexp-iterator-projection"
-	| "string-slice-number"
+	| "string-span"
 	| "string-char-code-at-chain"
 	| "builtin-collection-call-chain"
 	| "array-values-iterator-cursor"
@@ -144,18 +144,22 @@ export interface CorePlanStringSplitProjectionSpecialization extends CorePlanSpe
 	};
 }
 
-export interface CorePlanStringSliceNumberSpecialization extends CorePlanSpecializationBase<"string-slice-number"> {
-	readonly stringSliceNumber: {
+export interface CoreStringSpanConsumer {
+	readonly instruction: CoreInstructionId;
+	readonly value: CoreValueId;
+	readonly kind: "length" | "equal" | "number" | "materialize";
+}
+
+export interface CorePlanStringSpanSpecialization extends CorePlanSpecializationBase<"string-span"> {
+	readonly stringSpan: {
 		readonly guard: CompilerGuardPlan;
 		readonly builtinCall: KnownBuiltinCall;
 		readonly property?: CoreInstructionId;
 		readonly propertyPlacement: CorePropertyPlacement;
 		readonly builtinIdentities: CoreBuiltinIdentityDecision;
 		readonly sliceCall: CoreInstructionId;
-		readonly sliceStartInstruction: CoreInstructionId;
-		readonly numberIntrinsic?: CoreInstructionId;
-		readonly numberCall: CoreInstructionId;
-		readonly sliceStart: number;
+		readonly resultValues: ReadonlyArray<CoreValueId>;
+		readonly consumers: ReadonlyArray<CoreStringSpanConsumer>;
 	};
 }
 
@@ -356,7 +360,7 @@ export type CorePlanSpecialization =
 	| CorePlanStackObjectSpecialization
 	| CorePlanDenseArraySpecialization
 	| CorePlanStringSplitProjectionSpecialization
-	| CorePlanStringSliceNumberSpecialization
+	| CorePlanStringSpanSpecialization
 	| CorePlanRegExpExecProjectionSpecialization
 	| CorePlanRegExpIteratorProjectionSpecialization
 	| CorePlanStringCharCodeAtSpecialization
@@ -668,27 +672,24 @@ export interface CoreAllocatedRegExpIteratorProjectionRegion extends CoreAllocat
 	}>;
 }
 
-/** Closed String.prototype.slice to Number fusion after register allocation. */
-export interface CoreAllocatedStringSliceNumberRegion extends CoreAllocatedRegionEnvelope<
-	"string-slice-number",
-	"primitive-string-span-number",
-	"none",
+export interface CoreAllocatedStringSpanRegion extends CoreAllocatedRegionEnvelope<
+	"string-span",
+	"primitive-string-span",
+	"on-demand",
 	readonly [
 		Extract<CompilerInstruction, { type: "call" | "callKnown" }>,
-		Extract<CompilerInstruction, { type: "call" | "callKnown" }>,
+		CompilerInstruction,
 	]
 > {
 	readonly property?: Extract<CompilerInstruction, { type: "loadPropertyStatic" }>;
 	readonly propertyPlacement: CorePropertyPlacement;
-	/** Covers both the exact slice method and the exact intrinsic Number consumer. */
 	readonly builtinIdentities: CoreBuiltinIdentityDecision;
-	readonly sliceStartInstruction: Extract<
-		CompilerInstruction,
-		{ type: "createNumber" | "createF64" }
-	>;
-	readonly numberIntrinsic?: Extract<CompilerInstruction, { type: "loadIntrinsic" }>;
-	readonly numberCall: Extract<CompilerInstruction, { type: "call" | "callKnown" }>;
-	readonly sliceStart: number;
+	readonly resultRegisters: ReadonlyArray<number>;
+	readonly consumers: ReadonlyArray<{
+		readonly instruction: CompilerInstruction;
+		readonly value: number;
+		readonly kind: CoreStringSpanConsumer["kind"];
+	}>;
 }
 
 export interface CoreAllocatedStringCharCodeAtChainRegion extends CoreAllocatedRegionEnvelope<
@@ -969,7 +970,7 @@ export type CoreAllocatedRegion =
 	| CoreAllocatedStackObjectPlanRegion
 	| CoreAllocatedStringCharCodeAtChainRegion
 	| CoreAllocatedStringIteratorCursorRegion
-	| CoreAllocatedStringSliceNumberRegion
+	| CoreAllocatedStringSpanRegion
 	| CoreAllocatedStringSplitProjectionRegion
 	| CoreAllocatedStringSplitCursorRegion
 	| CoreAllocatedSetIteratorCursorRegion

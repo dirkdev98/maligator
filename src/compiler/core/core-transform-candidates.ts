@@ -15,7 +15,7 @@ export type CoreTransformKind =
 	| "dense-array-plan"
 	| "numeric-fusion"
 	| "string-split-projection"
-	| "string-slice-number"
+	| "string-span"
 	| "regexp-exec-projection"
 	| "regexp-iterator-projection"
 	| "string-char-code-at-chain"
@@ -141,7 +141,7 @@ function transformKindCounts(): Record<CoreTransformKind, number> {
 		"dense-array-plan": 0,
 		"numeric-fusion": 0,
 		"string-split-projection": 0,
-		"string-slice-number": 0,
+		"string-span": 0,
 		"regexp-exec-projection": 0,
 		"regexp-iterator-projection": 0,
 		"string-char-code-at-chain": 0,

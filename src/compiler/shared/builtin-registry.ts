@@ -789,7 +789,7 @@ export const builtinOperations: ReadonlyArray<BuiltinOperationDescriptor> = [
 		effects: ["coerce", "allocate", "throw", "safepoint"],
 		result: "string",
 		realm: "semantic-identity",
-		lowerings: ["generic", "number-consumer-fusion"],
+		lowerings: ["generic", "span-projection"],
 	},
 	{
 		id: "String.prototype.trim",

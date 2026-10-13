@@ -48,6 +48,7 @@ const MULTI_REGION_SOURCE = `globalThis.run = function run(value, separator) {
 	return total + Number(fields[3].slice(2)) + fields.length +
 		(match === null ? 0 : Number(match[1]));
 };
+globalThis.numeric = function numeric(a, b) { return (a + b) * (a - b); };
 globalThis.iterate = function iterate(values) {
 	let total = 0;
 	for (const value of values) total += value;
@@ -86,8 +87,8 @@ function guardDependencies(
 			return selection.stringSplitCursor.guard.dependencies;
 		case "string-split-projection":
 			return selection.stringSplitProjection.guard.dependencies;
-		case "string-slice-number":
-			return selection.stringSliceNumber.guard.dependencies;
+		case "string-span":
+			return selection.stringSpan.guard.dependencies;
 		case "regexp-exec-projection":
 			return selection.regexpExecProjection.guard.dependencies;
 		case "regexp-iterator-projection":
@@ -181,7 +182,7 @@ describe("Core plan admission modes", () => {
 		for (const expected of [
 			"string-split-cursor",
 			"regexp-exec-projection",
-			"string-slice-number",
+			"string-span",
 			"array-values-iterator-cursor",
 			"iterator-result-virtualization",
 			"numeric-fusion",
