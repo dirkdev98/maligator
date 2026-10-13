@@ -43,7 +43,6 @@ export function selectNativeSpanContinuations(
 		native.mode !== "direct" ||
 		fn.isGenerator ||
 		fn.isAsync ||
-		fn.handlers.length ||
 		fn.profileSiteIds !== undefined ||
 		fn.instructions.length > 4096
 	)
@@ -162,14 +161,33 @@ export function selectNativeSpanContinuations(
 		attempted.add(producerIp);
 		if (plans.length >= 16) return undefined;
 		const producer = fn.instructions[producerIp];
-		if (producer === undefined || !("dst" in producer)) return undefined;
+		if (
+			producer === undefined ||
+			!("dst" in producer) ||
+			body.handlerTargets[sourceCallIp] !== undefined ||
+			body.handlerTargets[producerIp] !== undefined
+		)
+			return undefined;
 		const reset = new Set(sourceKind === "range" ? [] : [sourceCallIp]);
-		const flow = nativeVirtualValueFlow(fn.instructions, producerIp, producer.dst, reset);
+		const flow = nativeVirtualValueFlow(
+			fn.instructions,
+			producerIp,
+			producer.dst,
+			reset,
+			body.handlerTargets,
+		);
 		const consumers: Array<NativeSpanConsumer> = [];
 		let safe = true,
 			projected = false,
 			depth = 1;
 		for (const [ip, aliases] of flow) {
+			if (
+				aliases.may.size > 0 &&
+				(body.handlerTargets[ip] !== undefined || body.handlerEntries.has(ip))
+			) {
+				safe = false;
+				break;
+			}
 			if (ip === producerIp) continue;
 			const op = fn.instructions[ip]!;
 			const reads = [
@@ -298,6 +316,7 @@ export function selectNativeSpanContinuations(
 				undefined,
 				false,
 				reset,
+				body.handlerTargets,
 			);
 		} catch (error) {
 			if (!(error instanceof RangeError)) throw error;

@@ -828,3 +828,87 @@ describe("trim producers in shared continuations", () => {
 		).toThrow();
 	});
 });
+
+describe("span continuation lifetimes around exception handlers", () => {
+	it.each(["mutable", "locked"] as const)(
+		"admits completed handlers and disjoint protected branches under %s primordials",
+		(mode) => {
+			for (const source of [
+				`try{observe()}catch(error){observe(error)} const part=source.split('|')[1];if(escape)observe(part);return part.length+part.indexOf('a');`,
+				`if(escape){try{observe()}catch(error){return 3}return 4;}const part=source.split('|')[1];return part.length+part.indexOf('a');`,
+				`try{observe()}catch(error){observe(error)} const part=/x(.*)z/.exec(source)[1];if(escape)observe(part);return part.length+part.indexOf('a');`,
+				`try{observe()}catch(error){observe(error)}const parent=source.slice(1,-1);const part=parent.substring(0,3);if(escape)observe(part);return part.length+parent.length;`,
+				`try{observe()}catch(error){const parent=source.slice(1,-1);const part=parent.substring(0,3);observe(part);return part.length+parent.length;}return 0;`,
+			]) {
+				const image = compile(source, mode);
+				const native = image.native.functions[1]!;
+				expect(native.body.handlers.length).toBeGreaterThan(0);
+				expect(native.storage!.spanContinuations.length).toBeGreaterThan(0);
+				expect(deserializeCompilerArtifact(serializeCompilerArtifact(image))).toEqual(
+					image,
+				);
+				expect(() => emitProgramImage(image)).not.toThrow();
+			}
+		},
+	);
+	it("preserves existing Core-owned protected spans without admitting their continuations", () => {
+		const image = compile(
+			`try{const part=source.slice(1,-1);return part.length;}catch(error){return 0;}`,
+		);
+		const native = image.native.functions[1]!;
+		expect(native.specializations.some((region) => region.kind === "string-span")).toBe(
+			true,
+		);
+		expect(native.storage!.spanContinuations).toEqual([]);
+		expect(deserializeCompilerArtifact(serializeCompilerArtifact(image))).toEqual(image);
+		expect(() => emitProgramImage(image)).not.toThrow();
+	});
+	it("rejects protected sources and live virtual aliases before any handler consumer", () => {
+		const image = compile(
+			`const part=source.split('|')[1];observe();return part.length+part.indexOf('a');`,
+		);
+		const native = image.native.functions[1]!;
+		const plan = native.storage!.spanContinuations[0]!;
+		const handlerIp = native.body.instructions.findLastIndex(
+			(op) => op.opcode === "RETURN",
+		);
+		const observerIp = native.body.instructions.findIndex(
+			(op, ip) =>
+				ip > plan.producerIp && op.opcode === "CALL" && op.arguments.length === 0,
+		);
+		expect(observerIp).toBeGreaterThan(plan.producerIp);
+		for (const startIp of [
+			plan.sourceCallIp,
+			plan.producerIp,
+			observerIp,
+			plan.consumers[0]!.ip,
+		]) {
+			const body = {
+				...native.body,
+				handlers: [{ startIp, endIp: startIp + 1, handlerIp }],
+			};
+			expect(
+				selectNativeSpanContinuations(
+					{ ...native, body },
+					analyzeNativeBodyFacts(body),
+					image.runtime.stringConstants,
+					() => false,
+				),
+			).toEqual([]);
+		}
+	});
+	it("keeps protected throws, catch observations, mixed aliases, and recycled generations generic", () => {
+		for (const source of [
+			`try{const part=source.split('|')[1];observe();return part.length;}catch(error){return 0;}`,
+			`const part=source.split('|')[1];try{observe()}catch(error){return part.length;}return part.length;`,
+			`try{observe()}catch(error){observe(error)}const parent=source.slice(1,-1);const chosen=escape?parent:source;const child=chosen.substring(0,2);return child.length;`,
+			`try{observe()}catch(error){observe(error)}let previous='';let total=0;for(let i=0;i<3;i++){const part=source.split('|')[1];total+=previous.length;previous=part;}return total;`,
+		]) {
+			const image = compile(source);
+			expect(image.native.functions[1]!.storage!.spanContinuations).toEqual([]);
+			expect(deserializeCompilerArtifact(serializeCompilerArtifact(image))).toEqual(
+				image,
+			);
+		}
+	});
+});

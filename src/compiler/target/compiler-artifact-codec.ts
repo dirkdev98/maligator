@@ -96,7 +96,7 @@ import type {
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal artifacts are hard cut-overs: stale cache entries rebuild.
-export const COMPILER_ARTIFACT_VERSION = 221;
+export const COMPILER_ARTIFACT_VERSION = 222;
 
 function validateClosureCaptureOwners(
 	owners: ReadonlyArray<number>,
@@ -3108,7 +3108,7 @@ function validateStringSpanRegion(
 	nativeInstructions: ReadonlyArray<NativeInstructionPlan | undefined>,
 ): void {
 	stringSpanGuardMasks(region.license);
-	validateNativeStringSpan(fn.instructions, region, stringConstants);
+	validateNativeStringSpan(fn.instructions, region, stringConstants, fn.handlers);
 	const call = fn.instructions[region.callIp];
 	const plan = nativeCallPlanAt(nativeInstructions, region.callIp);
 	const identity =

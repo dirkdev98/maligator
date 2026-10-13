@@ -1554,10 +1554,14 @@ function numericLoopIndexFacts(
 			(op.opcode === "UNARY" && (op.operator === "tonumeric" || op.operator === "+"))
 		)
 			result = facts.get(op.src);
-		else if (op.opcode === "UNARY" && op.operator === "increment") {
+		else if (
+			op.opcode === "UNARY" &&
+			(op.operator === "increment" || op.operator === "decrement")
+		) {
 			const source = facts.get(op.src);
-			if (source !== undefined && numericLoopOffset(source.offset + 1))
-				result = { base: source.base, offset: source.offset + 1 };
+			const step = op.operator === "increment" ? 1 : -1;
+			if (source !== undefined && numericLoopOffset(source.offset + step))
+				result = { base: source.base, offset: source.offset + step };
 		} else if (op.opcode === "BINARY" && (op.operator === "+" || op.operator === "-")) {
 			const left = facts.get(op.left),
 				right = facts.get(op.right);
@@ -1577,8 +1581,10 @@ function numericLoopIndexFacts(
 		}
 		if (
 			result?.base === "index" &&
-			result.offset > 0 &&
-			(op.opcode === "BINARY" || (op.opcode === "UNARY" && op.operator === "increment"))
+			result.offset !== 0 &&
+			(op.opcode === "BINARY" ||
+				(op.opcode === "UNARY" &&
+					(op.operator === "increment" || op.operator === "decrement")))
 		)
 			increments.set(ip, result.offset);
 		for (const register of vmInstructionWriteRegisters(op)) facts.delete(register);
@@ -1621,9 +1627,20 @@ function fixedNumericLoopStorage(
 	)
 		return undefined;
 	const comparison = fn.instructions[shape.order[0]!]!;
-	if (comparison.opcode !== "BINARY" || comparison.operator !== "<") return undefined;
-	const index = comparison.left;
-	const bound = comparison.right;
+	if (
+		comparison.opcode !== "BINARY" ||
+		!["<", "<=", ">", ">="].includes(comparison.operator)
+	)
+		return undefined;
+	const leftWritten = shape.order.some((ip) =>
+		body.writes[ip]!.includes(comparison.left),
+	);
+	const rightWritten = shape.order.some((ip) =>
+		body.writes[ip]!.includes(comparison.right),
+	);
+	if (leftWritten === rightWritten) return undefined;
+	const index = leftWritten ? comparison.left : comparison.right;
+	const bound = leftWritten ? comparison.right : comparison.left;
 	const branch = fn.instructions[shape.order[0]! + 1];
 	if (
 		branch?.opcode !== "JUMP_IF" ||
@@ -1645,6 +1662,10 @@ function fixedNumericLoopStorage(
 	});
 	if (candidates.length !== 1) return undefined;
 	const [incrementIp, stride] = candidates[0]!;
+	const ascending = leftWritten
+		? comparison.operator === "<" || comparison.operator === "<="
+		: comparison.operator === ">" || comparison.operator === ">=";
+	if (ascending !== stride > 0) return undefined;
 	const increment = fn.instructions[incrementIp]!;
 	if (!("dst" in increment) || increment.dst === index) return undefined;
 	if (

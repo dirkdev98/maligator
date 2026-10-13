@@ -100,6 +100,44 @@ describe("fixed TypedArray loop storage", () => {
 			);
 		},
 	);
+	it.each([
+		["i>=0", "i--", -1],
+		["i>0", "i-=1", -1],
+		["i>=0", "i=i-3", -3],
+		["i>0", "i+=-4", -4],
+		["i>=0", "i-=2147483647", -2147483647],
+		["i<=count", "i++", 1],
+		["i<=count", "i+=3", 3],
+		["0<=i", "i--", -1],
+		["0<i", "i-=3", -3],
+		["count>=i", "i++", 1],
+		["count>i", "i+=3", 3],
+	] as const)("retains the direction of %s with %s", (condition, update, stride) => {
+		const image = compile(
+			`for(let i=hook;${condition};${update}){output[i]=left[i]+right[i];}return output;`,
+		);
+		const native = image.native.functions[1]!;
+		const plan = native.storage!.numericLoopRegions[0];
+		if (plan?.kind !== "fixed-numeric")
+			throw new Error("Missing directed storage region");
+		expect(plan.stride).toBe(stride);
+		expect(deserializeCompilerArtifact(serializeCompilerArtifact(image))).toEqual(image);
+		expect(emitCompiledFunction(native, 1, "", false)).not.toBeNull();
+	});
+	it("retains negative affine windows in a descending interleaved region", () => {
+		const image = compile(
+			"for(let i=count;i>0;i-=3){output[i-1]=left[i-1];output[i-2]=left[i-2];output[i-3]=left[i-3];}return output;",
+		);
+		const native = image.native.functions[1]!;
+		const plan = native.storage!.numericLoopRegions[0];
+		if (plan?.kind !== "fixed-numeric") throw new Error("Missing descending region");
+		expect(plan.stride).toBe(-3);
+		expect(
+			plan.views.every((view) => view.minOffset === -3 && view.maxOffset === -1),
+		).toBe(true);
+		expect(deserializeCompilerArtifact(serializeCompilerArtifact(image))).toEqual(image);
+		expect(emitCompiledFunction(native, 1, "", false)).not.toBeNull();
+	});
 	it("declines a fifth lane instead of multiplying the region budget", () => {
 		const accesses = Array.from(
 			{ length: 5 },
@@ -329,6 +367,11 @@ describe("fixed TypedArray loop storage", () => {
 
 		"for(let i=0;i<count;i+=0){output[i]=left[i]+right[i];}",
 		"for(let i=0;i<count;i-=2){output[i]=left[i]+right[i];}",
+		"for(let i=count;i>=0;i++){output[i]=left[i]+right[i];}",
+		"for(let i=count;i>0;i+=2){output[i]=left[i]+right[i];}",
+		"for(let i=0;i<=count;i--){output[i]=left[i]+right[i];}",
+		"for(let i=0;count<=i;i++){output[i]=left[i]+right[i];}",
+		"for(let i=count;0>i;i--){output[i]=left[i]+right[i];}",
 		"for(let i=0;i<count;i+=0.5){output[i]=left[i]+right[i];}",
 		"for(let i=0;i<count;i+=2147483648){output[i]=left[i]+right[i];}",
 		"for(let i=0;i<count;i+=hook){output[i]=left[i]+right[i];}",

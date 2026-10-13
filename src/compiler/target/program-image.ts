@@ -4019,7 +4019,7 @@ function lowerExecutionFunctionToNativePlan(
 						kind: consumer.kind,
 					})),
 				};
-				validateNativeStringSpan(instructions, span, stringConstants);
+				validateNativeStringSpan(instructions, span, stringConstants, handlers);
 				for (const ip of resolvedClaimedIps) claimedRegionInstructions.add(ip);
 				regions.push(span);
 				break;

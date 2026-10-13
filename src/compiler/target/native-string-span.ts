@@ -8,10 +8,11 @@ import type { NativeBodyFacts } from "./native-body-facts.ts";
 import { validateNativeVirtualValue } from "./native-virtual-value.ts";
 import type { VmStringSpanRegion } from "./program-image.ts";
 import {
+	vmExceptionHandlerTargets,
 	vmInstructionReadRegisters,
 	vmInstructionWriteRegisters,
 } from "./runtime-image.ts";
-import type { BytecodeInstruction } from "./runtime-image.ts";
+import type { BytecodeExceptionHandler, BytecodeInstruction } from "./runtime-image.ts";
 
 function nativeSpanCalleeName<T extends string>(
 	instructions: ReadonlyArray<BytecodeInstruction>,
@@ -107,6 +108,7 @@ export function validateNativeStringSpan(
 	instructions: ReadonlyArray<BytecodeInstruction>,
 	region: VmStringSpanRegion,
 	strings: ReadonlyArray<ReadonlyArray<number>>,
+	handlers: ReadonlyArray<BytecodeExceptionHandler>,
 ): void {
 	function fail(): never {
 		throw new RangeError("Invalid string-span region");
@@ -211,7 +213,7 @@ export function validateNativeStringSpan(
 				}
 				methodBody = {
 					branchSources,
-					externalEntries: new Set(region.controlFlow.exceptionalHandlerIps),
+					externalEntries: new Set(handlers.map((handler) => handler.handlerIp)),
 				};
 			}
 			const method =
@@ -246,5 +248,9 @@ export function validateNativeStringSpan(
 		producer.dst,
 		new Map(region.consumers.map((consumer) => [consumer.ip, [consumer.value]])),
 		fail,
+		undefined,
+		false,
+		undefined,
+		handlers.length ? vmExceptionHandlerTargets(instructions.length, handlers) : [],
 	);
 }

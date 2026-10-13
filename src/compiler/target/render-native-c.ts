@@ -773,27 +773,39 @@ function emitNumericLoopRegion(
 		else guards.push(`mal_safe_integer_admit(${value}, &${local(register)})`);
 	}
 	if (plan.kind === "fixed-numeric") {
+		const comparison = fn.instructions[plan.id]!;
+		if (comparison.opcode !== "BINARY") throw new Error("Invalid typed loop comparison");
+		const ascending = plan.stride > 0;
+		const inclusive = comparison.operator === "<=" || comparison.operator === ">=";
+		const index = local(plan.index),
+			bound = local(plan.bound);
 		guards.push(
-			`${local(plan.index)} >= 0.0`,
-			`${local(plan.index)} == trunc(${local(plan.index)})`,
-			`${local(plan.bound)} > ${local(plan.index)}`,
-			`${local(plan.bound)} <= UINT32_MAX`,
-			`${local(plan.bound)} == trunc(${local(plan.bound)})`,
+			`${index} >= 0.0`,
+			`${index} <= UINT32_MAX`,
+			`${index} == trunc(${index})`,
+			`${bound} ${ascending ? ">" : "<"}${inclusive ? "=" : ""} ${index}`,
+			ascending ? `${bound} <= UINT32_MAX` : `${bound} >= ${inclusive ? "0.0" : "-1.0"}`,
+			`${bound} == trunc(${bound})`,
 		);
 		const range = `${id}_range`,
 			last = `${id}_last`;
+		const limit = inclusive ? bound : `(${bound} ${ascending ? "-" : "+"} 1.0)`;
+		const distance = ascending
+			? `((u64) ${limit} - (u64) ${index})`
+			: `((u64) ${index} - (u64) ${limit})`;
+		const stride = Math.abs(plan.stride);
 		rangePrelude.push(
 			`  bool ${range} = ${guards.join(" && ")};`,
-			// Casts and division are reached only for a nonempty integral u32 range.
-			`  f64 ${last} = ${range} ? (f64) ((u64) ${local(plan.index)} + (((u64) ${local(plan.bound)} - 1 - (u64) ${local(plan.index)}) / (u32) ${plan.stride}) * (u32) ${plan.stride}) : 0.0;`,
+			// The direction and endpoint guards make both unsigned operands a nonempty integral range.
+			`  f64 ${last} = ${range} ? (f64) ((u64) ${index} ${ascending ? "+" : "-"} (${distance} / (u32) ${stride}) * (u32) ${stride}) : 0.0;`,
 		);
 		guards.length = 0;
 		guards.push(range);
 		for (const view of plan.views) {
-			const low = `(${local(plan.index)} + ${cF64Literal(view.minOffset)})`;
-			const high = `(${last} + ${cF64Literal(view.maxOffset + 1)})`;
+			const low = `(${ascending ? index : last} + ${cF64Literal(view.minOffset)})`;
+			const high = `(${ascending ? last : index} + ${cF64Literal(view.maxOffset + 1)})`;
 			if (view.minOffset !== 0) guards.push(`${low} >= 0.0`);
-			if (view.maxOffset !== 0) guards.push(`${high} >= 0.0`, `${high} <= UINT32_MAX`);
+			guards.push(`${high} <= UINT32_MAX`);
 			guards.push(
 				`mal_vm_fixed_numeric_storage(r${view.object}, (u32) ${high}, ${view.writable}, &${id}_v${view.object})`,
 			);

@@ -184,6 +184,8 @@ tests/native/sort-callback-continuation.test.ts
 tests/native/collection-foreach-callback.test.ts
 tests/native/collection-constructor-callback.test.ts
 tests/native/fixed-typed-array-single-view.test.ts
+tests/native/fixed-typed-array-directions.test.ts
 tests/native/set-algebra-callback.test.ts
 tests/native/string-span-dynamic-equality.test.ts
+tests/native/string-span-handlers.test.ts
 tests/native/from-async-callback.test.ts

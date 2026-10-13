@@ -113,6 +113,7 @@ describe("shared span numeric parsers", () => {
 				fn.body.instructions,
 				forged,
 				image.runtime.stringConstants,
+				fn.body.handlers,
 			),
 		).toThrow(/string-span/);
 		const projected = compile(
@@ -164,6 +165,7 @@ describe("shared span numeric parsers", () => {
 				fn.body.instructions,
 				forged,
 				image.runtime.stringConstants,
+				fn.body.handlers,
 			),
 		).toThrow(/string-span/);
 		expect(() =>
@@ -199,6 +201,7 @@ describe("shared span numeric parsers", () => {
 					fn.body.instructions.with(consumer.ip, { ...call, arguments: arguments_ }),
 					region,
 					image.runtime.stringConstants,
+					fn.body.handlers,
 				),
 			).toThrow(/string-span/);
 	});

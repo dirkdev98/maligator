@@ -808,6 +808,11 @@ The shared lifetime and fallback rules are recorded in
       Preserve storage guards, numeric admission, poll resumption and original fallback.
       All 50 loop-plan checks, four actual frontend/artifact/C captures and forced-GC
       Node oracles pass; native verification and measurement remain pending.
+- [ ] Extend fixed TypedArray loops to descending and inclusive ranges with either
+      comparison operand order. Retain signed strides, per-view affine bounds,
+      original alias order, numeric admission and poll resumption. Focused loop and
+      artifact checks, four actual frontend/C captures and forced-GC Node oracles
+      pass; native verification and measurement remain pending.
 - [ ] Root captured Set-like records throughout observable size/has/keys acquisition,
       then reuse one compiled has callback contract in intersection, difference,
       isSubsetOf and isDisjointFrom. Keep native Set and keys-only traversal paths.
@@ -819,6 +824,13 @@ The shared lifetime and fallback rules are recorded in
       unrelated input identities, aliases and cached materialization. All 47 focused
       span checks, forced-GC Node oracles and four actual frontend/artifact/C captures
       pass; native verification and measurement remain pending.
+
+- [ ] Extend split, regexp and nested span continuations to completed exception
+      handlers, disjoint protected branches and valid catch-local ranges. Prove
+      exception-aware alias lifetimes, preserve Core-owned protected spans and reject
+      live continuation crossings or expired generations. All 174 focused checks,
+      four actual frontend/artifact/C captures and seven forced-GC Node oracles pass;
+      native verification and measurement remain pending.
 
 - [ ] Retain canonical Array.fromAsync mapper nomination across awaits using a
       stable function index in the traced step state. Rebuild guarded stack contexts
