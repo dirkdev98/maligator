@@ -12,6 +12,9 @@ import {
 	STRESS_ENV,
 } from "../../src/test-harness.ts";
 
+// Callback code keeps every-safepoint stress; runtime compilation uses its dedicated cadence.
+const callbackStressEnv = { ...STRESS_ENV, MAL_EVAL_GC_STRESS_INTERVAL: "1000" };
+
 const fixture = "tests/local/forwarded-sort-callback.js";
 const outDir = mkdtempSync(join(tmpdir(), "mal-forwarded-sort-"));
 afterAll(() => rmSync(outDir, { recursive: true, force: true }));
@@ -110,7 +113,10 @@ describe("forwarded sort comparator nomination", () => {
 					const context = `forwarded-sort ${primordials} ${kind} ${backend} GC stress`;
 					try {
 						expect(
-							runToStdout(binary, { env: { ...env, ...STRESS_ENV }, timeoutMs: 60_000 }),
+							runToStdout(binary, {
+								env: { ...env, ...callbackStressEnv },
+								timeoutMs: 60_000,
+							}),
 							context,
 						).toBe(expected);
 					} catch (cause) {
@@ -157,7 +163,7 @@ describe("forwarded sort comparator nomination", () => {
 		const measured = spawnSync(pair.compiled, [], {
 			encoding: "utf8",
 			timeout: 60_000,
-			env: { ...process.env, ...env, MAL_PERF_STATS: "1", ...STRESS_ENV },
+			env: { ...process.env, ...env, MAL_PERF_STATS: "1", ...callbackStressEnv },
 		});
 		expect(measured.status, measured.stderr).toBe(0);
 		expect(measured.stdout).toBe(expected);
@@ -174,7 +180,7 @@ describe("forwarded sort comparator nomination", () => {
 		);
 		expect(
 			runToStdout(pair.interpreted, {
-				env: { ...env, ...STRESS_ENV },
+				env: { ...env, ...callbackStressEnv },
 				timeoutMs: 60_000,
 			}),
 		).toBe(expected);
@@ -205,7 +211,7 @@ describe("forwarded sort comparator nomination", () => {
 					MAL_TEST262: "1",
 					MAL_HOST_GC: "1",
 					MAL_PERF_STATS: "1",
-					...STRESS_ENV,
+					...callbackStressEnv,
 				},
 			});
 			expect(measured.status, measured.stderr).toBe(0);
