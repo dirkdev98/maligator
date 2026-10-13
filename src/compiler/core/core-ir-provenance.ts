@@ -1347,6 +1347,16 @@ function stackObjectCandidate(
 			))
 	)
 		return undefined;
+	// An unconditional observer without field consumers would only add a stack-to-heap copy.
+	if (
+		accesses.size === 0 &&
+		!requiresObjectIdentity &&
+		[...observations.keys()].some(
+			(instruction) =>
+				fn.instructionBlock(instruction) === fn.instructionBlock(layout.instruction),
+		)
+	)
+		return undefined;
 	if (observations.size > 0)
 		for (const [instruction, values] of identities) observations.set(instruction, values);
 	const materializations: Array<CoreStackObjectMaterialization> = [

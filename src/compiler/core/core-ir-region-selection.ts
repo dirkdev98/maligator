@@ -101,8 +101,8 @@ import type {
 
 type CorePendingClaims = Pick<
 	CorePlanSpecialization,
-	"function" | "kind" | "composition" | "claimedInstructions"
->;
+	"function" | "composition" | "claimedInstructions"
+> & { readonly kind: CorePlanSpecializationKind | "field-call" };
 
 export interface CorePendingOptimizationCandidate {
 	readonly budget: CoreTransformCandidate;
@@ -1754,6 +1754,7 @@ function conflicts(
 	return selection.claimedInstructions.some((instruction) => {
 		const state = owned?.get(instruction);
 		if (state === undefined) return false;
+		if (selection.kind === "field-call" && state.overlays.has("field-call")) return false;
 		if (selection.kind === "guarded-direct-call" && state.exclusive) return true;
 		if (
 			selection.composition === "exclusive" &&
@@ -1769,7 +1770,7 @@ function conflicts(
 
 interface ClaimState {
 	exclusive: boolean;
-	readonly overlays: Set<CorePlanSpecializationKind>;
+	readonly overlays: Set<CorePlanSpecializationKind | "field-call">;
 }
 
 function claim(
@@ -1784,7 +1785,8 @@ function claim(
 			overlays: new Set(),
 		};
 		if (selection.composition === "exclusive") state.exclusive = true;
-		else state.overlays.add(selection.kind);
+		if (selection.composition !== "exclusive" || selection.kind === "field-call")
+			state.overlays.add(selection.kind);
 		owned.set(instruction, state);
 	}
 	claimed.set(selection.function, owned);
@@ -1971,6 +1973,20 @@ export function buildCoreOptimizationPlan(
 				break;
 			}
 			const candidate = byBudget.get(budget)!;
+			const claims: ReadonlyArray<CorePendingClaims> = isPendingDirectEntry(candidate)
+				? candidate.callSites.flatMap((site) =>
+						site.fieldObject === undefined
+							? []
+							: [
+									{
+										function: site.caller,
+										kind: "field-call" as const,
+										composition: "exclusive" as const,
+										claimedInstructions: [site.fieldObject],
+									},
+								],
+					)
+				: [candidate.claims];
 			let reason: CoreTransformDeclineReason | undefined = service.admit(budget);
 			if (
 				reason === undefined &&
@@ -1981,8 +1997,7 @@ export function buildCoreOptimizationPlan(
 			}
 			if (
 				reason === undefined &&
-				!isPendingDirectEntry(candidate) &&
-				conflicts(candidate.claims, claimed)
+				claims.some((selection) => conflicts(selection, claimed))
 			) {
 				reason = "overlap";
 			}
@@ -2005,6 +2020,7 @@ export function buildCoreOptimizationPlan(
 					increment(declinedByPlanReason, "expansion-limit");
 					continue;
 				}
+				for (const selection of claims) claim(selection, claimed);
 				entries.push(
 					Object.freeze({
 						id: entries.length,
