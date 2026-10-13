@@ -465,30 +465,22 @@ const arrayIterationOperations: ReadonlyArray<BuiltinOperationDescriptor> = (
 	},
 }));
 
-const typedArrayReductionOperations: ReadonlyArray<BuiltinOperationDescriptor> = [
-	"reduce",
-	"reduceRight",
-].map((key) => ({
-	id: `TypedArray.prototype.${key}`,
-	owner: "TypedArray.prototype",
-	key,
-	receiver: "typed-array",
-	arity: { minimum: 1 },
-	evaluationOrder: "receiver-then-arguments",
-	coercionOrder: [],
-	effects: ["property-access", "call-user-code", "allocate", "throw", "safepoint"],
-	result: "any",
-	realm: "semantic-identity",
-	lowerings: ["generic"],
-	callback: {
-		kind: "reduction",
-		argumentIndex: 0,
-		argumentKinds: ["any", "any", "number", "object"],
-	},
-}));
+const typedArrayIterationOperations: ReadonlyArray<BuiltinOperationDescriptor> =
+	arrayIterationOperations
+		.filter(({ key }) => key !== "flatMap")
+		.map((array) => ({
+			...array,
+			id: `TypedArray.prototype.${array.key}`,
+			owner: "TypedArray.prototype",
+			receiver: "typed-array",
+			coercionOrder: [],
+			effects: ["property-access", "call-user-code", "allocate", "throw", "safepoint"],
+			result: array.result === "array" ? "object" : array.result,
+			lowerings: ["generic"],
+		}));
 
-const reductionInvocationFamilies: ReadonlyArray<BuiltinOperationDescriptor> =
-	typedArrayReductionOperations.map((typed) => ({
+const iterationInvocationFamilies: ReadonlyArray<BuiltinOperationDescriptor> =
+	typedArrayIterationOperations.map((typed) => ({
 		...typed,
 		id: `ArrayOrTypedArray.prototype.${typed.key}`,
 		owner: "ArrayOrTypedArray.prototype",
@@ -885,8 +877,8 @@ export const builtinOperations: ReadonlyArray<BuiltinOperationDescriptor> = [
 		lowerings: ["generic", "capture-projection"],
 	},
 	...arrayIterationOperations,
-	...typedArrayReductionOperations,
-	...reductionInvocationFamilies,
+	...typedArrayIterationOperations,
+	...iterationInvocationFamilies,
 	...mathOperations,
 	...mathBinaryOperations,
 ];

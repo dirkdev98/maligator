@@ -2864,6 +2864,32 @@
 			"controls": ["substring-span-classify", "string-span-classify"]
 		},
 		{
+			"id": "typed-array-map-callback",
+			"owner": "TypedArray.prototype.map",
+			"category": "api-builtins",
+			"mechanisms": ["array-callback"],
+			"inputShape": "Float64Array mapping with a captured numeric factor and bounded argument-index and argument-count observations.",
+			"unit": "visited element",
+			"sourceSeam": "runtime/src/builtin_typed_array.c",
+			"controls": ["typed-numeric-reduce", "typed-array-operations"],
+			"group": "runtime",
+			"suite": "runtime",
+			"fixture": "cases/typed-array-map-callback.mjs"
+		},
+		{
+			"id": "string-span-nested",
+			"owner": "Shared string spans",
+			"category": "memory-layout-usage",
+			"mechanisms": ["string-allocation", "string-traversal"],
+			"inputShape": "A slice parent and substring child share rooted UTF-16 source bounds through length, code-point reads, and sparse child string observations.",
+			"unit": "token",
+			"sourceSeam": "src/compiler/target/native-span-continuation.ts",
+			"controls": ["string-span-code-points", "substring-span-classify"],
+			"group": "runtime",
+			"suite": "runtime",
+			"fixture": "cases/string-span-nested.mjs"
+		},
+		{
 			"id": "method-name-unique",
 			"group": "runtime",
 			"suite": "runtime",

@@ -486,18 +486,34 @@ numeric sorting, stack objects, and string projections.
       Implemented with bounded reaching facts, unanimous joins, dynamic numeric start
       admission, and per-view offsets rederived by artifact validation. The existing
       instruction/view budgets and two loop bodies remain; 91 focused plan, integer-loop,
-      and codec checks pass. Expanded native verification and measurement remain pending.
+      and codec checks pass. Expanded Linux ASan/UBSan checks pass; measurement remains
+      pending.
 - [ ] Apply the storage contract to Int8, Uint8, Uint8Clamped, Int16, and Uint16 views.
       Runtime admission and byte-safe numeric transport are implemented; the existing
       clamping and integer conversion helpers retain store semantics. All nine numeric
-      kinds pass a Node-derived conversion and guard probe under ASan/UBSan; full
-      compiled/interpreted fixture verification and measurement remain pending.
+      kinds pass a Node-derived conversion and guard probe and mutable/locked
+      compiled/interpreted fixtures under ASan/UBSan; measurement remains pending.
 - [ ] Compose `codePointAt` with range, split, and regexp spans; keep surrogate-pair
       reads within the retained span and preserve undefined results and late observers.
       Implemented through the shared numeric-character helper and bounded captured-method
       proof; 76 focused compiler checks, Node oracles, and C syntax checks pass. Actual
-      regions are selected for all producers in both primordial modes; expanded native
-      verification, foreign-realm fallback, and measurement remain pending.
+      regions are selected for all producers in both primordial modes. Expanded Linux
+      ASan/UBSan checks, including foreign-realm fallback, pass; measurement remains
+      pending.
+- [ ] Extend the shared callback invocation contract to TypedArray `map`, `filter`,
+      `forEach`, `some`, `every`, `find`, `findIndex`, `findLast`, and `findLastIndex`.
+      Implemented through the existing traversal and exact callback entry, preserving
+      species, live element reads, early exits, callback effects, and generic fallback.
+      All nine methods select the shared transport in both primordial modes; 119
+      focused compiler checks and Node oracles pass. Native verification and
+      measurement remain pending.
+- [ ] Carry range spans through nested `slice` and `substring` producers, including
+      split fields and regexp captures. Implemented with depth-two continuations,
+      separate child roots and materialization slots, and relative UTF-16 bounds.
+      Discovery is bounded and transported metadata is independently rederived;
+      56 focused checks, Node oracles, and emitted-C syntax checks pass. All four
+      parent kinds select actual regions; native verification and measurement
+      remain pending.
 
 | Order | Slice                        | Owning work and exit condition                                                                                                                                  |
 | ----- | ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |

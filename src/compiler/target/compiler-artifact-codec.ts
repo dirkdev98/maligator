@@ -95,7 +95,7 @@ import type {
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal artifacts are hard cut-overs: stale cache entries rebuild.
-export const COMPILER_ARTIFACT_VERSION = 205;
+export const COMPILER_ARTIFACT_VERSION = 206;
 
 function validateClosureCaptureOwners(
 	owners: ReadonlyArray<number>,
@@ -223,6 +223,24 @@ const ARRAY_ITERATION_CALLBACK_OPERATIONS: ReadonlySet<string> = new Set([
 	"Array.prototype.filter",
 	"Array.prototype.reduce",
 	"Array.prototype.reduceRight",
+	"TypedArray.prototype.forEach",
+	"TypedArray.prototype.some",
+	"TypedArray.prototype.every",
+	"TypedArray.prototype.find",
+	"TypedArray.prototype.findIndex",
+	"TypedArray.prototype.map",
+	"TypedArray.prototype.filter",
+	"TypedArray.prototype.findLast",
+	"TypedArray.prototype.findLastIndex",
+	"ArrayOrTypedArray.prototype.forEach",
+	"ArrayOrTypedArray.prototype.some",
+	"ArrayOrTypedArray.prototype.every",
+	"ArrayOrTypedArray.prototype.find",
+	"ArrayOrTypedArray.prototype.findIndex",
+	"ArrayOrTypedArray.prototype.map",
+	"ArrayOrTypedArray.prototype.filter",
+	"ArrayOrTypedArray.prototype.findLast",
+	"ArrayOrTypedArray.prototype.findLastIndex",
 	"TypedArray.prototype.reduce",
 	"TypedArray.prototype.reduceRight",
 	"ArrayOrTypedArray.prototype.reduce",
@@ -993,7 +1011,8 @@ function writeNativeStorage(w: Writer, storage: NativeStoragePlan | undefined): 
 	w.u32(storage.spanContinuations.length);
 	for (const plan of storage.spanContinuations) {
 		w.i32(plan.producerIp);
-		w.u8(plan.sourceKind === "split" ? 0 : 1);
+		w.u8(["split", "regexp", "range"].indexOf(plan.sourceKind));
+		w.u8(plan.rangeOperation === undefined ? 0 : plan.rangeOperation === "slice" ? 1 : 2);
 		w.i32(plan.sourceCallIp);
 		w.i32Array([...plan.claimedIps]);
 		w.i32Array([...plan.borrowedRegisters]);
@@ -1011,6 +1030,8 @@ function writeNativeStorage(w: Writer, storage: NativeStoragePlan | undefined): 
 					"charCodeAtCall",
 					"codePointAtProperty",
 					"codePointAtCall",
+					"rangeProperty",
+					"rangeCall",
 				].indexOf(consumer.kind),
 			);
 		}
@@ -1507,14 +1528,23 @@ function readNativeStorage(r: Reader): NativeStoragePlan {
 			return { instructionIp, mode };
 		},
 	);
-	const spanContinuations = Array.from({ length: r.count(21) }, () => {
+	const spanContinuations = Array.from({ length: r.count(22) }, () => {
 		const producerIp = r.i32();
-		const sourceKind = (["split", "regexp"] as const)[r.u8()];
+		const sourceKind = (["split", "regexp", "range"] as const)[r.u8()];
+		const rangeKind = r.u8();
+		if (rangeKind > 2) throw new RangeError("Invalid span range operation");
+		const rangeOperation =
+			rangeKind === 0
+				? undefined
+				: rangeKind === 1
+					? ("slice" as const)
+					: ("substring" as const);
 		if (sourceKind === undefined)
 			throw new RangeError("Invalid span continuation source");
 		return {
 			producerIp,
 			sourceKind,
+			...(rangeOperation === undefined ? {} : { rangeOperation }),
 			sourceCallIp: r.i32(),
 			claimedIps: r.i32Array(),
 			borrowedRegisters: r.i32Array(),
@@ -1531,6 +1561,8 @@ function readNativeStorage(r: Reader): NativeStoragePlan {
 							"charCodeAtCall",
 							"codePointAtProperty",
 							"codePointAtCall",
+							"rangeProperty",
+							"rangeCall",
 						] as const
 					)[r.u8()];
 				if (kind === undefined)

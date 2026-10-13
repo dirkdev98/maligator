@@ -5174,6 +5174,7 @@ static MalCompletion mal_builtin_array_iteration_direct_impl(
     i32 arg_count
 ) {
     MalNativeFunctionCallback expected = nullptr;
+    MalNativeFunctionCallback alternate = nullptr;
     switch (operation) {
         case MAL_BUILTIN_ARRAY_ITERATION_FOR_EACH:
             expected = mal_builtin_array_for_each;
@@ -5202,19 +5203,63 @@ static MalCompletion mal_builtin_array_iteration_direct_impl(
         case MAL_BUILTIN_ARRAY_ITERATION_REDUCE_RIGHT:
             expected = mal_builtin_array_reduce_right;
             break;
+        case MAL_BUILTIN_TYPED_ARRAY_FOR_EACH:
+        case MAL_BUILTIN_TYPED_ARRAY_SOME:
+        case MAL_BUILTIN_TYPED_ARRAY_EVERY:
+        case MAL_BUILTIN_TYPED_ARRAY_FIND:
+        case MAL_BUILTIN_TYPED_ARRAY_FIND_INDEX:
+        case MAL_BUILTIN_TYPED_ARRAY_MAP:
+        case MAL_BUILTIN_TYPED_ARRAY_FILTER:
+        case MAL_BUILTIN_TYPED_ARRAY_FIND_LAST:
+        case MAL_BUILTIN_TYPED_ARRAY_FIND_LAST_INDEX:
         case MAL_BUILTIN_TYPED_ARRAY_REDUCE:
         case MAL_BUILTIN_TYPED_ARRAY_REDUCE_RIGHT:
-            expected = mal_builtin_typed_array_reduce_callback(operation == MAL_BUILTIN_TYPED_ARRAY_REDUCE_RIGHT);
+            expected = mal_builtin_typed_array_iteration_callback(operation);
+            break;
+        case MAL_BUILTIN_ARRAY_OR_TYPED_ARRAY_FOR_EACH:
+            expected = mal_builtin_array_for_each;
+            alternate = mal_builtin_typed_array_iteration_callback(MAL_BUILTIN_TYPED_ARRAY_FOR_EACH);
+            break;
+        case MAL_BUILTIN_ARRAY_OR_TYPED_ARRAY_SOME:
+            expected = mal_builtin_array_some;
+            alternate = mal_builtin_typed_array_iteration_callback(MAL_BUILTIN_TYPED_ARRAY_SOME);
+            break;
+        case MAL_BUILTIN_ARRAY_OR_TYPED_ARRAY_EVERY:
+            expected = mal_builtin_array_every;
+            alternate = mal_builtin_typed_array_iteration_callback(MAL_BUILTIN_TYPED_ARRAY_EVERY);
+            break;
+        case MAL_BUILTIN_ARRAY_OR_TYPED_ARRAY_FIND:
+            expected = mal_builtin_array_find;
+            alternate = mal_builtin_typed_array_iteration_callback(MAL_BUILTIN_TYPED_ARRAY_FIND);
+            break;
+        case MAL_BUILTIN_ARRAY_OR_TYPED_ARRAY_FIND_INDEX:
+            expected = mal_builtin_array_find_index;
+            alternate = mal_builtin_typed_array_iteration_callback(MAL_BUILTIN_TYPED_ARRAY_FIND_INDEX);
+            break;
+        case MAL_BUILTIN_ARRAY_OR_TYPED_ARRAY_MAP:
+            expected = mal_builtin_array_map;
+            alternate = mal_builtin_typed_array_iteration_callback(MAL_BUILTIN_TYPED_ARRAY_MAP);
+            break;
+        case MAL_BUILTIN_ARRAY_OR_TYPED_ARRAY_FILTER:
+            expected = mal_builtin_array_filter;
+            alternate = mal_builtin_typed_array_iteration_callback(MAL_BUILTIN_TYPED_ARRAY_FILTER);
+            break;
+        case MAL_BUILTIN_ARRAY_OR_TYPED_ARRAY_FIND_LAST:
+            expected = mal_builtin_array_find_last;
+            alternate = mal_builtin_typed_array_iteration_callback(MAL_BUILTIN_TYPED_ARRAY_FIND_LAST);
+            break;
+        case MAL_BUILTIN_ARRAY_OR_TYPED_ARRAY_FIND_LAST_INDEX:
+            expected = mal_builtin_array_find_last_index;
+            alternate = mal_builtin_typed_array_iteration_callback(MAL_BUILTIN_TYPED_ARRAY_FIND_LAST_INDEX);
             break;
         case MAL_BUILTIN_ARRAY_OR_TYPED_ARRAY_REDUCE:
-        case MAL_BUILTIN_ARRAY_OR_TYPED_ARRAY_REDUCE_RIGHT: {
-            bool right = operation == MAL_BUILTIN_ARRAY_OR_TYPED_ARRAY_REDUCE_RIGHT;
-            MalNativeFunctionCallback typed = mal_builtin_typed_array_reduce_callback(right);
-            expected = mal_value_is_native_function_object(callee) &&
-                mal_native_function_object_callback(mal_value_to_native_function_object(callee)) == typed
-                ? typed : (right ? mal_builtin_array_reduce_right : mal_builtin_array_reduce);
+            expected = mal_builtin_array_reduce;
+            alternate = mal_builtin_typed_array_iteration_callback(MAL_BUILTIN_TYPED_ARRAY_REDUCE);
             break;
-        }
+        case MAL_BUILTIN_ARRAY_OR_TYPED_ARRAY_REDUCE_RIGHT:
+            expected = mal_builtin_array_reduce_right;
+            alternate = mal_builtin_typed_array_iteration_callback(MAL_BUILTIN_TYPED_ARRAY_REDUCE_RIGHT);
+            break;
         case MAL_BUILTIN_ARRAY_ITERATION_FIND_LAST:
             expected = mal_builtin_array_find_last;
             break;
@@ -5228,9 +5273,11 @@ static MalCompletion mal_builtin_array_iteration_direct_impl(
             abort();
     }
 
-    bool exact = arg_count >= 0 && mal_value_is_native_function_object(callee) &&
-        mal_native_function_object_callback(
-            mal_value_to_native_function_object(callee)) == expected;
+    MalNativeFunctionCallback actual = mal_value_is_native_function_object(callee)
+        ? mal_native_function_object_callback(mal_value_to_native_function_object(callee))
+        : nullptr;
+    if (alternate != nullptr && actual == alternate) expected = alternate;
+    bool exact = arg_count >= 0 && actual != nullptr && actual == expected;
 #if MAL_REALMS
     exact = exact && mal_vm_callee_realm(vm, callee) == vm->current_realm;
 #endif

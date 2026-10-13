@@ -360,4 +360,151 @@ if (typeof process !== "undefined" && process.env.MAL_STRING_SPAN_MUTABLE === "m
 	observations.push(inspect("xabz", 1, -1, true, consume));
 	String.prototype.slice = original;
 }
+function nestedSlice(source, start, end, escape, effect) {
+	const parent = source.slice(1, -1);
+	const before = parent.length;
+	const child = parent.substring(start, end);
+	effect(parent);
+	const size = child.length;
+	if (escape) return child;
+	return (
+		before +
+		size +
+		child.codePointAt(0) +
+		child.charCodeAt(1) +
+		Number(child) +
+		(child === "😀" ? 10 : 0) +
+		parent.length
+	);
+}
+function nestedSubstring(source, start, end) {
+	const parent = source.substring(9, 1);
+	const child = parent.slice(start, end);
+	collect();
+	if (start) return child;
+	return child.length + child.codePointAt(0) + parent.length;
+}
+function nestedSplit(source, start, end) {
+	const parent = source.split("|")[1];
+	if (parent === undefined) return "missing";
+	const child = parent.substring(start, end);
+	collect();
+	if (start) return child;
+	return child.length + child.codePointAt(0) + parent.length;
+}
+function nestedCapture(source, regexp, start, end) {
+	const match = regexp.exec(source);
+	if (match === null) return "null";
+	const parent = match[1];
+	if (parent === undefined) return "absent";
+	const child = parent.slice(start, end);
+	collect();
+	if (start) return child;
+	return child.length + child.codePointAt(0) + parent.length + regexp.lastIndex;
+}
+function nestedMissing(source) {
+	const parent = source.slice();
+	const child = parent.substring();
+	return parent.length + child.length + Number(child);
+}
+for (let repeat = 0; repeat < 4; repeat++) {
+	for (const source of [
+		"x😀z",
+		"x\ud800z",
+		"x\udc00z",
+		"x12z",
+		"x-0z",
+		"xInfinityz",
+		"",
+		"x 7 z",
+	]) {
+		for (const bounds of [
+			[0, 2],
+			[2, 0],
+			[-1, Infinity],
+			[-Infinity, 99],
+			[NaN, undefined],
+			[-0, 1.8],
+			[1, 1],
+			[Infinity, -Infinity],
+			["1", null],
+		]) {
+			observations.push(nestedSlice(source, bounds[0], bounds[1], false, collect));
+			observations.push(nestedSlice(source, bounds[0], bounds[1], true, collect));
+			observations.push(nestedSubstring(source, bounds[0], bounds[1]));
+			observations.push(nestedSplit("a|" + source + "|b", bounds[0], bounds[1]));
+			observations.push(nestedCapture(source, /(.*)/g, bounds[0], bounds[1]));
+		}
+		observations.push(nestedMissing(source));
+	}
+}
+observations.push(
+	nestedSplit("absent", 0, 2),
+	nestedCapture("", /(a)?/, 0, 2),
+	nestedCapture("", /(a)/, 0, 2),
+);
+observations.push(
+	nestedSlice("x😀z", 0, 2, false, (parent) => {
+		observations.push("parent:" + parent);
+		collect();
+	}),
+);
+const nestedEffects = [];
+const nestedStart = {
+	valueOf() {
+		nestedEffects.push("start");
+		collect();
+		return 2;
+	},
+};
+const nestedEnd = {
+	valueOf() {
+		nestedEffects.push("end");
+		collect();
+		return 0;
+	},
+};
+observations.push(
+	nestedSlice("x😀z", nestedStart, nestedEnd, true, collect),
+	nestedEffects,
+);
+for (const bound of [
+	Symbol("bound"),
+	1n,
+	{
+		valueOf() {
+			collect();
+			throw new RangeError("bounds");
+		},
+	},
+]) {
+	try {
+		nestedSlice("x😀z", bound, 2, false, collect);
+	} catch (error) {
+		observations.push(error.name);
+	}
+}
+if (process.env.MAL_STRING_SPAN_MUTABLE !== "locked") {
+	const saved = Object.getOwnPropertyDescriptor(String.prototype, "substring");
+	const receiverEvents = [];
+	Object.defineProperty(String.prototype, "substring", {
+		configurable: true,
+		get() {
+			receiverEvents.push(String(this));
+			collect();
+			return saved.value;
+		},
+	});
+	observations.push(nestedSlice("x😀z", 0, 2, true, collect), receiverEvents);
+	Object.defineProperty(String.prototype, "substring", saved);
+	const changing = {
+		valueOf() {
+			String.prototype.substring = () => "changed";
+			collect();
+			return 0;
+		},
+	};
+	observations.push(nestedSlice("x😀z", changing, 2, true, collect));
+	Object.defineProperty(String.prototype, "substring", saved);
+}
 console.log(JSON.stringify(observations));

@@ -241,6 +241,7 @@ typedef struct MalPerfStats {
     u64 string_span_character_reads;
     u64 string_span_code_point_reads;
     u64 string_span_substring_admissions;
+    u64 string_span_nested_admissions;
     u64 shape_case_probes;
     u64 shape_case_hits;
     u64 shape_case_fallbacks;

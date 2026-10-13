@@ -2,6 +2,7 @@
 
 #include "./defaults.h"
 #include "intrinsics.h"
+#include "builtin_array.h"
 #include "vm.h"
 
 /**
@@ -17,4 +18,4 @@ MalValue mal_builtin_typed_array_sort(MalVm *vm, MalValue receiver,
 MalValue mal_builtin_typed_array_to_sorted(MalVm *vm, MalValue receiver,
     const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee);
 
-MalNativeFunctionCallback mal_builtin_typed_array_reduce_callback(bool right);
+MalNativeFunctionCallback mal_builtin_typed_array_iteration_callback(MalBuiltinArrayIterationOp operation);

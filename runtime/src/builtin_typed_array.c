@@ -1458,8 +1458,6 @@ static MalValue mal_ta_reverse(MalVm *vm, MalValue this_value, const MalValue *a
     return this_value;
 }
 
-// Iteration helpers: forEach/map/filter/reduce/find/some/every share the
-// element walk. callback signature is (value, index, array).
 typedef enum MalTaIterOp {
     MAL_TA_FOR_EACH,
     MAL_TA_MAP,
@@ -1522,7 +1520,7 @@ static MalValue mal_ta_iterate(MalVm *vm, MalValue this_value, const MalValue *a
         MalValue call_args[3] = {element, mal_value_from_i32((i32) i), this_value};
         MalRootSpan call_span;
         mal_gc_root(&call_span, call_args, 3);
-        MalCompletion completion = mal_vm_call_value(vm, callback, this_arg, call_args, 3);
+        MalCompletion completion = mal_vm_call_builtin_callback(vm, callback, this_arg, call_args, 3);
         mal_gc_unroot(&call_span);
         if (completion.kind != MAL_COMPLETION_NORMAL) {
             vm->completion = completion;
@@ -1711,8 +1709,21 @@ static MalValue mal_ta_reduce_right(MalVm *vm, MalValue this_value, const MalVal
     return mal_ta_reduce_impl(vm, this_value, args, arg_count, true);
 }
 
-MalNativeFunctionCallback mal_builtin_typed_array_reduce_callback(bool right) {
-    return right ? mal_ta_reduce_right : mal_ta_reduce;
+MalNativeFunctionCallback mal_builtin_typed_array_iteration_callback(MalBuiltinArrayIterationOp operation) {
+    switch (operation) {
+        case MAL_BUILTIN_TYPED_ARRAY_FOR_EACH: return mal_ta_for_each;
+        case MAL_BUILTIN_TYPED_ARRAY_SOME: return mal_ta_some;
+        case MAL_BUILTIN_TYPED_ARRAY_EVERY: return mal_ta_every;
+        case MAL_BUILTIN_TYPED_ARRAY_FIND: return mal_ta_find;
+        case MAL_BUILTIN_TYPED_ARRAY_FIND_INDEX: return mal_ta_find_index;
+        case MAL_BUILTIN_TYPED_ARRAY_MAP: return mal_ta_map;
+        case MAL_BUILTIN_TYPED_ARRAY_FILTER: return mal_ta_filter;
+        case MAL_BUILTIN_TYPED_ARRAY_FIND_LAST: return mal_ta_find_last;
+        case MAL_BUILTIN_TYPED_ARRAY_FIND_LAST_INDEX: return mal_ta_find_last_index;
+        case MAL_BUILTIN_TYPED_ARRAY_REDUCE: return mal_ta_reduce;
+        case MAL_BUILTIN_TYPED_ARRAY_REDUCE_RIGHT: return mal_ta_reduce_right;
+        default: return nullptr;
+    }
 }
 
 // Default TypedArray sort order over raw element bits: numeric ascending (NaN

@@ -273,10 +273,11 @@ typedef enum MalStringRangeOp {
     MAL_STRING_RANGE_SUBSTR,
 } MalStringRangeOp;
 
-// Admission accepts only primitive bounds, so failure never repeats coercion effects.
+// SIZE_MAX selects the full receiver; other source bounds delimit a rooted parent span.
+// Primitive-only admission ensures failure never repeats coercion effects.
 bool mal_builtin_string_range_span_init(
-    MalValue callee, MalValue receiver, MalValue start_value, MalValue end_value,
-    MalStringRangeOp operation, bool identity_locked,
+    MalValue callee, MalValue receiver, usize source_start, usize source_end,
+    MalValue start_value, MalValue end_value, MalStringRangeOp operation, bool identity_locked,
     MalValue *subject_out, usize *start_out, usize *end_out
 );
 bool mal_builtin_string_span_equal(MalValue subject, usize start, usize end, MalValue other);

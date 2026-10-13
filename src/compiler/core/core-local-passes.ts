@@ -1428,6 +1428,13 @@ function constructedCollectionReceiver(
 	value: CoreValueId,
 	receiver: string,
 ): boolean {
+	if (receiver === "array") {
+		const construction = definingInstruction(fn, value);
+		return (
+			construction !== undefined &&
+			fn.instructionOpcodeName(construction) === "createArray"
+		);
+	}
 	if (receiver !== "map" && receiver !== "set") return false;
 	const construction = definingInstruction(fn, value);
 	if (construction === undefined) return false;

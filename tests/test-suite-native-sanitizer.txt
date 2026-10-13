@@ -48,6 +48,7 @@ tests/native/native-numeric-workers.test.ts
 tests/native/native-callback-transport.test.ts
 tests/native/numeric-reduce-region.test.ts
 tests/native/typed-array-reduce-region.test.ts
+tests/native/typed-array-callback-families.test.ts
 tests/native/string-span-region.test.ts
 tests/native/observed-object-region.test.ts
 tests/native/native-property-read-regions.test.ts

@@ -295,3 +295,116 @@ describe("span continuations from regexp captures", () => {
 		expect(() => emitProgramImage(image, {})).not.toThrow();
 	});
 });
+
+describe("bounded nested range continuations", () => {
+	it.each(["mutable", "locked"] as const)(
+		"composes relative range bounds under %s primordials",
+		(mode) => {
+			for (const producer of [
+				"source.slice(1,-1)",
+				"source.substring(1,9)",
+				"source.split('|')[1]",
+				"observe.exec(source)[1]",
+			]) {
+				const image = compile(
+					`const parent=${producer}; const child=parent.substring(escape,3); const size=child.length; if(escape)return child; return size+child.codePointAt(0)+parent.length;`,
+					mode,
+				);
+				const native = image.native.functions[1]!;
+				const plan = native.storage!.spanContinuations.find((entry) =>
+					entry.consumers.some((consumer) => consumer.kind === "rangeCall"),
+				);
+				expect(plan, producer).toBeDefined();
+				expect(plan!.consumers.map((consumer) => consumer.kind)).toContain("length");
+				const child = plan!.consumers.find((consumer) => consumer.kind === "rangeCall")!;
+				expect(
+					native.specializations.find(
+						(region) => region.kind === "string-span" && region.callIp === child.ip,
+					),
+				).toMatchObject({ kind: "string-span", rangeOperation: "substring" });
+				expect(deserializeCompilerArtifact(serializeCompilerArtifact(image))).toEqual(
+					image,
+				);
+			}
+		},
+	);
+	it("rejects forged relative operations and removed parent observers", () => {
+		const image = compile(
+			"const parent=source.slice(1,-1); const child=parent.substring(escape,3); return child.length+parent.length;",
+		);
+		const native = image.native.functions[1]!;
+		const plan = native.storage!.spanContinuations[0]!;
+		expect(plan?.sourceKind).toBe("range");
+		for (const forged of [
+			{ ...plan, rangeOperation: "substring" as const },
+			{ ...plan, sourceKind: "split" as const },
+			{
+				...plan,
+				consumers: plan.consumers.map((consumer) =>
+					consumer.kind === "rangeCall"
+						? { ...consumer, kind: "materialize" as const }
+						: consumer,
+				),
+			},
+			{
+				...plan,
+				consumers: plan.consumers.map((consumer) =>
+					consumer.kind === "rangeCall"
+						? { ...consumer, value: consumer.value + 1 }
+						: consumer,
+				),
+			},
+			{
+				...plan,
+				consumers: plan.consumers.filter((consumer) => consumer.kind !== "length"),
+			},
+		]) {
+			expect(() =>
+				serializeCompilerArtifact({
+					...image,
+					native: {
+						...image.native,
+						functions: image.native.functions.with(1, {
+							...native,
+							storage: { ...native.storage!, spanContinuations: [forged] },
+						}),
+					},
+				}),
+			).toThrow(/invalid or stale storage plan/);
+		}
+	});
+	it("declines mixed branch receivers without losing the certified child", () => {
+		const image = compile(
+			"const parent=source.slice(1,-1); const chosen=escape?parent:source; const child=chosen.substring(0,2); return child.length;",
+		);
+		const native = image.native.functions[1]!;
+		expect(native.specializations.some((region) => region.kind === "string-span")).toBe(
+			true,
+		);
+		expect(
+			native.storage!.spanContinuations.every(
+				(plan) => !plan.consumers.some((consumer) => consumer.kind === "rangeCall"),
+			),
+		).toBe(true);
+	});
+	it("declines a child bound that observes its virtual parent", () => {
+		const image = compile(
+			"const parent=source.slice(1,-1); const child=parent.substring(parent,3); return child.length+parent.length;",
+		);
+		expect(
+			image.native.functions[1]!.storage!.spanContinuations.every(
+				(plan) => plan.sourceKind !== "range",
+			),
+		).toBe(true);
+	});
+	it("declines a capture retained across its next exec before slicing", () => {
+		const image = compile(
+			`let prior=""; let result=0; for(let i=0;i<3;i++){ const part=observe.exec(source)[1]; const child=prior.slice(1); result+=child.length; prior=part; }return result;`,
+		);
+		expect(
+			image.native.functions[1]!.storage!.spanContinuations.every(
+				(plan) => !plan.consumers.some((consumer) => consumer.kind === "rangeCall"),
+			),
+		).toBe(true);
+	});
+});

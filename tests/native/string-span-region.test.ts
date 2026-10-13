@@ -76,6 +76,15 @@ describe("composable string spans", () => {
 					),
 				),
 			).toBe(true);
+			const nestedSources = pair.programImage.native.functions.flatMap(
+				(fn) =>
+					fn.storage?.spanContinuations
+						.filter((plan) =>
+							plan.consumers.some((consumer) => consumer.kind === "rangeCall"),
+						)
+						.map((plan) => plan.sourceKind) ?? [],
+			);
+			expect(nestedSources).toEqual(expect.arrayContaining(["range", "split", "regexp"]));
 			for (const binary of [pair.compiled, pair.interpreted])
 				for (const stress of [{}, STRESS_ENV])
 					expect(
@@ -114,6 +123,11 @@ describe("composable string spans", () => {
 			);
 			expect(codePoints).not.toBeNull();
 			expect(Number(codePoints![1])).toBeGreaterThan(0);
+			const nested = measured.stderr.match(
+				/\[perf-string-span-nested-stats\] admissions=(\d+)/,
+			);
+			expect(nested).not.toBeNull();
+			expect(Number(nested![1])).toBeGreaterThan(0);
 			const substring = measured.stderr.match(
 				/\[perf-string-span-substring-stats\] admissions=(\d+)/,
 			);

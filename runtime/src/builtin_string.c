@@ -1708,8 +1708,8 @@ static MalValue mal_builtin_string_prototype_substring(MalVm *vm, MalValue this_
 }
 
 bool mal_builtin_string_range_span_init(
-    MalValue callee, MalValue receiver, MalValue start_value, MalValue end_value,
-    MalStringRangeOp operation, bool identity_locked,
+    MalValue callee, MalValue receiver, usize source_start, usize source_end,
+    MalValue start_value, MalValue end_value, MalStringRangeOp operation, bool identity_locked,
     MalValue *subject_out, usize *start_out, usize *end_out
 ) {
     if ((operation != MAL_STRING_RANGE_SLICE && operation != MAL_STRING_RANGE_SUBSTRING) ||
@@ -1721,11 +1721,18 @@ bool mal_builtin_string_range_span_init(
           mal_native_function_object_callback(mal_value_to_native_function_object(callee)) !=
               (operation == MAL_STRING_RANGE_SUBSTRING
                   ? mal_builtin_string_prototype_substring : mal_builtin_string_prototype_slice)))) return false;
-    usize length = mal_string_length(mal_value_to_string(receiver));
+    usize source_length = mal_string_length(mal_value_to_string(receiver));
+    bool nested = source_end != SIZE_MAX;
+    if (!nested) source_end = source_length;
+    if (source_start > source_end || source_end > source_length) return false;
+    usize length = source_end - source_start;
     f64 start_number = mal_value_is_undefined(start_value) ? 0 : mal_ops_number_as_f64(start_value);
     f64 end_number = mal_value_is_undefined(end_value) ? (f64) length : mal_ops_number_as_f64(end_value);
     mal_builtin_string_range_bounds(length, start_number, end_number, operation, start_out, end_out);
+    *start_out += source_start;
+    *end_out += source_start;
     *subject_out = receiver;
+    if (nested) MAL_PERF_COUNT(string_span_nested_admissions);
     MAL_PERF_COUNT(string_span_admissions);
     if (operation == MAL_STRING_RANGE_SUBSTRING) MAL_PERF_COUNT(string_span_substring_admissions);
     return true;

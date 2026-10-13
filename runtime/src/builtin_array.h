@@ -102,7 +102,7 @@ MalCompletion mal_builtin_array_at_direct(
     i32 arg_count
 );
 
-/** Array callback methods admitted by the compiler's known-builtin analysis. */
+// Families share callback argument contracts, never receiver or result semantics.
 typedef enum MalBuiltinArrayIterationOp {
     MAL_BUILTIN_ARRAY_ITERATION_FOR_EACH,
     MAL_BUILTIN_ARRAY_ITERATION_SOME,
@@ -116,6 +116,24 @@ typedef enum MalBuiltinArrayIterationOp {
     MAL_BUILTIN_ARRAY_ITERATION_FIND_LAST,
     MAL_BUILTIN_ARRAY_ITERATION_FIND_LAST_INDEX,
     MAL_BUILTIN_ARRAY_ITERATION_FLAT_MAP,
+    MAL_BUILTIN_TYPED_ARRAY_FOR_EACH,
+    MAL_BUILTIN_TYPED_ARRAY_SOME,
+    MAL_BUILTIN_TYPED_ARRAY_EVERY,
+    MAL_BUILTIN_TYPED_ARRAY_FIND,
+    MAL_BUILTIN_TYPED_ARRAY_FIND_INDEX,
+    MAL_BUILTIN_TYPED_ARRAY_MAP,
+    MAL_BUILTIN_TYPED_ARRAY_FILTER,
+    MAL_BUILTIN_TYPED_ARRAY_FIND_LAST,
+    MAL_BUILTIN_TYPED_ARRAY_FIND_LAST_INDEX,
+    MAL_BUILTIN_ARRAY_OR_TYPED_ARRAY_FOR_EACH,
+    MAL_BUILTIN_ARRAY_OR_TYPED_ARRAY_SOME,
+    MAL_BUILTIN_ARRAY_OR_TYPED_ARRAY_EVERY,
+    MAL_BUILTIN_ARRAY_OR_TYPED_ARRAY_FIND,
+    MAL_BUILTIN_ARRAY_OR_TYPED_ARRAY_FIND_INDEX,
+    MAL_BUILTIN_ARRAY_OR_TYPED_ARRAY_MAP,
+    MAL_BUILTIN_ARRAY_OR_TYPED_ARRAY_FILTER,
+    MAL_BUILTIN_ARRAY_OR_TYPED_ARRAY_FIND_LAST,
+    MAL_BUILTIN_ARRAY_OR_TYPED_ARRAY_FIND_LAST_INDEX,
     MAL_BUILTIN_TYPED_ARRAY_REDUCE,
     MAL_BUILTIN_TYPED_ARRAY_REDUCE_RIGHT,
     MAL_BUILTIN_ARRAY_OR_TYPED_ARRAY_REDUCE,
@@ -123,7 +141,7 @@ typedef enum MalBuiltinArrayIterationOp {
 } MalBuiltinArrayIterationOp;
 
 /**
- * Call a statically identified Array callback builtin after validating the
+ * Call a statically identified Array or TypedArray callback builtin after validating the
  * ordinary loaded callee once. A shadowed or cross-Realm method retains the
  * original cached call and all of its observable behavior.
  */

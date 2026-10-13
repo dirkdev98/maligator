@@ -50,6 +50,85 @@ function input(
 }
 
 describe("native entries from builtin callback invocation facts", () => {
+	it.each([
+		"map",
+		"filter",
+		"forEach",
+		"some",
+		"every",
+		"find",
+		"findIndex",
+		"findLast",
+		"findLastIndex",
+	])(
+		"carries the %s family argument roles through bounded rest observations",
+		(method) => {
+			const family = builtinOperationDescriptor(`ArrayOrTypedArray.prototype.${method}`)!;
+			expect(family.result).not.toBe("array");
+			expect(family.lowerings).toEqual(["generic"]);
+			expect(family.guardedCallees).toEqual([
+				`Array.prototype.${method}`,
+				`TypedArray.prototype.${method}`,
+			]);
+			for (const callee of family.guardedCallees!)
+				expect(builtinCallbackInvocation(callee)).toEqual({
+					argumentIndex: 0,
+					argumentKinds: ["any", "number", "object"],
+				});
+			for (const primordials of ["mutable", "locked"] as const) {
+				const { options } = input("map", false, false, primordials);
+				const image = compileSemanticProgramToProgramImage(
+					analyzeSourceAndRunSemanticAnalysis(
+						`globalThis.run=function(values) {
+					return values.${method}(function(value, ...tail) {
+						for(let i=0;i<2;i++) value += tail[0];
+						return value + tail.length + tail[1].length;
+					});
+				}`,
+						"/builtin-callback-entry.js",
+					),
+					options,
+				);
+				const owner = image.native.functions.find(
+					(fn) => fn.storage!.callbackTransports.length > 0,
+				)!;
+				expect(owner).toBeDefined();
+				const [transport] = owner.storage!.callbackTransports;
+				expect(transport!.argumentCount).toBe(3);
+				expect(transport!.parameters).toHaveLength(3);
+				expect(transport!.parameters.slice(1)).toEqual(["number", "boxed"]);
+				expect(transport!.numericReduction).toBeUndefined();
+				expect(owner.instructions[transport!.instructionIp]).toMatchObject({
+					guardedBuiltinCall: { operation: family.id },
+				});
+				expect(deserializeCompilerArtifact(serializeCompilerArtifact(image))).toEqual(
+					image,
+				);
+			}
+		},
+	);
+
+	it("keeps receiver-specific callback semantics separate from invocation families", () => {
+		expect(builtinCallbackInvocation("TypedArray.prototype.flatMap")).toBeUndefined();
+		expect(builtinCallbackInvocation("Map.prototype.forEach")).toBeUndefined();
+		expect(builtinCallbackInvocation("Set.prototype.forEach")).toBeUndefined();
+		const image = compileSemanticProgramToProgramImage(
+			analyzeSourceAndRunSemanticAnalysis(
+				`globalThis.run=()=>[1,2].map(function(value,index){for(let i=0;i<2;i++) value+=index;return value;});`,
+				"/array-callback.js",
+			),
+		);
+		expect(
+			image.native.functions
+				.flatMap((fn) => fn.instructions)
+				.some(
+					(plan) =>
+						plan?.kind === "call" &&
+						plan.guardedBuiltinCall?.operation === "Array.prototype.map",
+				),
+		).toBe(true);
+	});
+
 	it("preserves guarded Array loop expansion for a nonnumeric reduction callback", () => {
 		const semantic = analyzeSourceAndRunSemanticAnalysis(
 			`function join(groups) {

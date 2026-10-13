@@ -1677,6 +1677,7 @@ export function validateNativeStorage(
 					plan.producerIp === expected.producerIp &&
 					plan.sourceKind === expected.sourceKind &&
 					plan.sourceCallIp === expected.sourceCallIp &&
+					plan.rangeOperation === expected.rangeOperation &&
 					sameNumbers(plan.claimedIps, expected.claimedIps) &&
 					sameNumbers(plan.borrowedRegisters, expected.borrowedRegisters) &&
 					plan.consumers.length === expected.consumers.length &&

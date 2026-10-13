@@ -80,6 +80,7 @@ import {
 	boxedNumberPredicateExpression,
 	nativeNumberPredicateExpression,
 } from "./native-scalar-operators.ts";
+import type { NativeSpanConsumer } from "./native-span-continuation.ts";
 import { nativeValueConversion } from "./native-value-transport.ts";
 import type { NativeValueConversion } from "./native-value-transport.ts";
 import { profileOperationForInstruction } from "./profile-metadata.ts";
@@ -1662,6 +1663,16 @@ function emitCompiledVariant(
 		});
 	}
 	for (const continuation of storage.spanContinuations) {
+		if (continuation.sourceKind === "range") {
+			stringSpanSites.set(continuation.producerIp, {
+				producerIp: continuation.producerIp,
+				rangeOperation: continuation.rangeOperation!,
+				consumers: continuation.consumers,
+				subjectSlot: nextStackSlot++,
+				materializedSlot: nextStackSlot++,
+			});
+			continue;
+		}
 		const projection =
 			continuation.sourceKind === "split"
 				? stringSplitProjectionSites.get(continuation.sourceCallIp)
@@ -1687,6 +1698,15 @@ function emitCompiledVariant(
 			subjectSlot: projection.subjectSlot,
 			materializedSlot: projection.slotsOffset + slot,
 		});
+	}
+	for (const site of stringSpanSites.values()) {
+		for (const consumer of site.consumers) {
+			if (consumer.kind !== "rangeCall") continue;
+			const child = stringSpanSites.get(consumer.ip);
+			if (child === undefined || child.parent !== undefined)
+				throw new Error("Invalid nested span parent");
+			child.parent = site;
+		}
 	}
 	const objectKeysSnapshotSites = new Map<number, NativeObjectKeysSnapshotSite>();
 	for (const plan of storage.objectKeysSnapshots) {
@@ -3122,15 +3142,17 @@ interface NativeObjectKeysSnapshotSite extends NativeObjectKeysSnapshotPlan {
 interface NativeStringSpanSite {
 	producerIp: number;
 	span?: NativeStringSpan;
+	rangeOperation?: "slice" | "substring";
+	parent?: NativeStringSpanSite;
 	projection?: { kind: "split" | "regexp"; callIp: number; slot: number };
-	consumers: NativeStringSpan["consumers"];
+	consumers: ReadonlyArray<NativeSpanConsumer>;
 	subjectSlot: number;
 	materializedSlot: number;
 }
 interface NativeStringSpanAction {
 	site: NativeStringSpanSite;
-	role: "range" | "projection" | NativeStringSpan["consumers"][number]["kind"];
-	consumer?: NativeStringSpan["consumers"][number];
+	role: "range" | "projection" | NativeSpanConsumer["kind"];
+	consumer?: NativeSpanConsumer;
 }
 
 type NativeStringCharCodeAtChain = Extract<
@@ -4221,11 +4243,12 @@ function emitBody(
 			role: site.projection === undefined ? "range" : "projection",
 		});
 		for (const consumer of site.consumers)
-			nativeStringSpanActionByIp.set(consumer.ip, {
-				site,
-				role: consumer.kind,
-				consumer,
-			});
+			if (consumer.kind !== "rangeCall")
+				nativeStringSpanActionByIp.set(consumer.ip, {
+					site,
+					role: consumer.kind,
+					consumer,
+				});
 	}
 	const lines: Array<string> = [];
 	const resources = new Set<NativeBodyResource>();
@@ -6170,6 +6193,23 @@ function emitInstruction(
 		const prefix = `__string_span_${site.producerIp}`;
 		const source = `__gc_slots[${site.subjectSlot}]`;
 		const materialized = `__gc_slots[${site.materializedSlot}]`;
+		const materializeSpan = (
+			valueSite: NativeStringSpanSite,
+			value: number,
+		): Array<string> => {
+			const name = `__string_span_${valueSite.producerIp}`;
+			const subject = `__gc_slots[${valueSite.subjectSlot}]`;
+			const cached = `__gc_slots[${valueSite.materializedSlot}]`;
+			return [
+				`if (${name}_active) {`,
+				`  if (mal_value_is_undefined(${cached})) {`,
+				`    ${cached} = ${profileCall("string", `mal_builtin_string_span_materialize(vm, ${subject}, ${name}_start, ${name}_end)`)};`,
+				`    ${throwCheck()}`,
+				`  }`,
+				`  r${value} = ${cached};`,
+				`}`,
+			];
+		};
 		const ordinary = emitGenericInstruction({
 			nativeStringCharCodeAtChainAction,
 			nativeRegExpExecProjectionAction,
@@ -6177,10 +6217,26 @@ function emitInstruction(
 		if (ordinary === null) return null;
 		if (
 			role === "range" &&
-			span !== undefined &&
+			(span !== undefined || site.rangeOperation !== undefined) &&
 			(instruction.opcode === "CALL" || instruction.opcode === "CALL_KNOWN")
 		) {
-			const locked = span.builtinIdentities === "authority-invariant";
+			const locked =
+				instruction.opcode === "CALL_KNOWN" ||
+				span?.builtinIdentities === "authority-invariant";
+			const operation = span?.rangeOperation ?? site.rangeOperation!;
+			const parent = site.parent;
+			const parentPrefix =
+				parent === undefined ? undefined : `__string_span_${parent.producerIp}`;
+			const parentSource =
+				parent === undefined ? undefined : `__gc_slots[${parent.subjectSlot}]`;
+			const receiver =
+				parent === undefined
+					? boxedOperand(instruction.thisValue)
+					: `${parentPrefix}_active ? ${parentSource} : ${boxedOperand(instruction.thisValue)}`;
+			const bounds =
+				parent === undefined
+					? "0, SIZE_MAX"
+					: `${parentPrefix}_active ? ${parentPrefix}_start : 0, ${parentPrefix}_active ? ${parentPrefix}_end : SIZE_MAX`;
 			const callee =
 				instruction.opcode === "CALL"
 					? boxedOperand(instruction.callee)
@@ -6192,11 +6248,14 @@ function emitInstruction(
 			return [
 				`${materialized} = MAL_VALUE_UNDEFINED;`,
 				`${source} = MAL_VALUE_UNDEFINED;`,
-				`${prefix}_active = ${profileCall("string", `mal_builtin_string_range_span_init(${callee}, ${boxedOperand(instruction.thisValue)}, ${argument(0)}, ${argument(1)}, MAL_STRING_RANGE_${span.rangeOperation.toUpperCase()}, ${locked ? "true" : "false"}, &${source}, &${prefix}_start, &${prefix}_end)`)};`,
+				`${prefix}_active = ${profileCall("string", `mal_builtin_string_range_span_init(${callee}, ${receiver}, ${bounds}, ${argument(0)}, ${argument(1)}, MAL_STRING_RANGE_${operation.toUpperCase()}, ${locked ? "true" : "false"}, &${source}, &${prefix}_start, &${prefix}_end)`)};`,
 				`if (${prefix}_active) {`,
 				`  r${instruction.dst} = MAL_VALUE_UNDEFINED;`,
 				`  ${poll()}`,
 				`} else {`,
+				...(parent === undefined
+					? []
+					: materializeSpan(parent, instruction.thisValue).map((line) => `  ${line}`)),
 				...ordinary.map((line) => `  ${line}`),
 				`}`,
 			];
@@ -6225,15 +6284,7 @@ function emitInstruction(
 			];
 		}
 		if (consumer === undefined) throw new Error("String-span action has no consumer");
-		const materialize = [
-			`if (${prefix}_active) {`,
-			`  if (mal_value_is_undefined(${materialized})) {`,
-			`    ${materialized} = ${profileCall("string", `mal_builtin_string_span_materialize(vm, ${source}, ${prefix}_start, ${prefix}_end)`)};`,
-			`    ${throwCheck()}`,
-			`  }`,
-			`  r${consumer.value} = ${materialized};`,
-			`}`,
-		];
+		const materialize = materializeSpan(site, consumer.value);
 		let guard = `${prefix}_active`;
 		const declarations: Array<string> = [];
 		let projected: string | undefined;
@@ -6248,7 +6299,9 @@ function emitInstruction(
 				instruction.operator === "!==" ? `!${equal}` : equal,
 			);
 		} else if (
-			(role === "charCodeAtProperty" || role === "codePointAtProperty") &&
+			(role === "charCodeAtProperty" ||
+				role === "codePointAtProperty" ||
+				role === "rangeProperty") &&
 			instruction.opcode === "LOAD_PROPERTY_STATIC"
 		) {
 			const chain = nativeStringCharCodeAtChainAction?.chain;
@@ -6306,7 +6359,8 @@ function emitInstruction(
 			role === "charCodeAtProperty" ||
 			role === "charCodeAtCall" ||
 			role === "codePointAtProperty" ||
-			role === "codePointAtCall"
+			role === "codePointAtCall" ||
+			role === "rangeProperty"
 				? materialize.map((line) => `  ${line}`)
 				: []),
 			...ordinary.map((line) => `  ${line}`),
@@ -10340,6 +10394,31 @@ function emitInstruction(
 							"Array.prototype.filter": "MAL_BUILTIN_ARRAY_ITERATION_FILTER",
 							"Array.prototype.reduce": "MAL_BUILTIN_ARRAY_ITERATION_REDUCE",
 							"Array.prototype.reduceRight": "MAL_BUILTIN_ARRAY_ITERATION_REDUCE_RIGHT",
+							"TypedArray.prototype.forEach": "MAL_BUILTIN_TYPED_ARRAY_FOR_EACH",
+							"TypedArray.prototype.some": "MAL_BUILTIN_TYPED_ARRAY_SOME",
+							"TypedArray.prototype.every": "MAL_BUILTIN_TYPED_ARRAY_EVERY",
+							"TypedArray.prototype.find": "MAL_BUILTIN_TYPED_ARRAY_FIND",
+							"TypedArray.prototype.findIndex": "MAL_BUILTIN_TYPED_ARRAY_FIND_INDEX",
+							"TypedArray.prototype.map": "MAL_BUILTIN_TYPED_ARRAY_MAP",
+							"TypedArray.prototype.filter": "MAL_BUILTIN_TYPED_ARRAY_FILTER",
+							"TypedArray.prototype.findLast": "MAL_BUILTIN_TYPED_ARRAY_FIND_LAST",
+							"TypedArray.prototype.findLastIndex":
+								"MAL_BUILTIN_TYPED_ARRAY_FIND_LAST_INDEX",
+							"ArrayOrTypedArray.prototype.forEach":
+								"MAL_BUILTIN_ARRAY_OR_TYPED_ARRAY_FOR_EACH",
+							"ArrayOrTypedArray.prototype.some": "MAL_BUILTIN_ARRAY_OR_TYPED_ARRAY_SOME",
+							"ArrayOrTypedArray.prototype.every":
+								"MAL_BUILTIN_ARRAY_OR_TYPED_ARRAY_EVERY",
+							"ArrayOrTypedArray.prototype.find": "MAL_BUILTIN_ARRAY_OR_TYPED_ARRAY_FIND",
+							"ArrayOrTypedArray.prototype.findIndex":
+								"MAL_BUILTIN_ARRAY_OR_TYPED_ARRAY_FIND_INDEX",
+							"ArrayOrTypedArray.prototype.map": "MAL_BUILTIN_ARRAY_OR_TYPED_ARRAY_MAP",
+							"ArrayOrTypedArray.prototype.filter":
+								"MAL_BUILTIN_ARRAY_OR_TYPED_ARRAY_FILTER",
+							"ArrayOrTypedArray.prototype.findLast":
+								"MAL_BUILTIN_ARRAY_OR_TYPED_ARRAY_FIND_LAST",
+							"ArrayOrTypedArray.prototype.findLastIndex":
+								"MAL_BUILTIN_ARRAY_OR_TYPED_ARRAY_FIND_LAST_INDEX",
 							"TypedArray.prototype.reduce": "MAL_BUILTIN_TYPED_ARRAY_REDUCE",
 							"TypedArray.prototype.reduceRight": "MAL_BUILTIN_TYPED_ARRAY_REDUCE_RIGHT",
 							"ArrayOrTypedArray.prototype.reduce":
@@ -10361,6 +10440,24 @@ function emitInstruction(
 								| "Array.prototype.filter"
 								| "Array.prototype.reduce"
 								| "Array.prototype.reduceRight"
+								| "TypedArray.prototype.forEach"
+								| "TypedArray.prototype.some"
+								| "TypedArray.prototype.every"
+								| "TypedArray.prototype.find"
+								| "TypedArray.prototype.findIndex"
+								| "TypedArray.prototype.map"
+								| "TypedArray.prototype.filter"
+								| "TypedArray.prototype.findLast"
+								| "TypedArray.prototype.findLastIndex"
+								| "ArrayOrTypedArray.prototype.forEach"
+								| "ArrayOrTypedArray.prototype.some"
+								| "ArrayOrTypedArray.prototype.every"
+								| "ArrayOrTypedArray.prototype.find"
+								| "ArrayOrTypedArray.prototype.findIndex"
+								| "ArrayOrTypedArray.prototype.map"
+								| "ArrayOrTypedArray.prototype.filter"
+								| "ArrayOrTypedArray.prototype.findLast"
+								| "ArrayOrTypedArray.prototype.findLastIndex"
 								| "TypedArray.prototype.reduce"
 								| "TypedArray.prototype.reduceRight"
 								| "ArrayOrTypedArray.prototype.reduce"
