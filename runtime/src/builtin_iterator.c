@@ -591,11 +591,26 @@ bool mal_vm_array_values_deferred_close(
 }
 
 bool mal_vm_iterator_step_protocol_cursor(
-    MalVm *vm, MalIteratorObject *cursor, MalValue *value_out, bool *done_out
+    MalVm *vm,
+    MalIteratorObject *cursor,
+    const MalIteratorRecord *record,
+    MalValue *value_out,
+    bool *done_out
 ) {
+#if MAL_REALMS
+    // Allocations and errors belong to captured next, not the iterator's creation realm.
+    MalRealm *saved_realm = vm->current_realm;
+    mal_vm_realm_switch_to(vm, mal_vm_callee_realm(vm, record->next_method));
+#else
+    (void) record;
+#endif
+    // Advance retains unrooted intermediates under native next's GC suppression.
     vm->gc_native_frames++;
     bool ok = mal_builtin_iterator_object_advance(vm, cursor, value_out, done_out);
     vm->gc_native_frames--;
+#if MAL_REALMS
+    mal_vm_realm_switch_to(vm, saved_realm);
+#endif
     return ok;
 }
 
@@ -961,25 +976,14 @@ bool mal_vm_iterator_step(MalVm *vm, const MalIteratorRecord *record, MalValue *
     *value_out = mal_value_new_undefined();
     *done_out = false;
 
-    // Fast path: a builtin iterator whose captured `next` is still its own builtin
-    // method. Advancing it directly is observably identical to calling next() — the
-    // method's only effect is producing the {value,done} — but skips that per-step
-    // result-object allocation and the call dispatch. The callback-identity check
-    // makes it robust: an overridden next, a cross-wired receiver, or any
-    // non-builtin iterator fails it and falls through to the generic protocol.
-    // Collection is suppressed across the advance exactly as across the equivalent
-    // native next() call (the iterator internals — e.g. building an entries pair —
-    // assume that), so a value held mid-step cannot be swept.
     if (mal_value_is_iterator_object(record->iterator) &&
         mal_value_is_native_function_object(record->next_method)) {
         MalIteratorObject *iterator = mal_value_to_iterator_object(record->iterator);
         MalNativeFunctionCallback next_callback =
             mal_native_function_object_callback(mal_value_to_native_function_object(record->next_method));
         if (next_callback == mal_builtin_iterator_expected_next(iterator->kind)) {
-            vm->gc_native_frames++;
-            bool ok = mal_builtin_iterator_object_advance(vm, iterator, value_out, done_out);
-            vm->gc_native_frames--;
-            return ok;
+            return mal_vm_iterator_step_protocol_cursor(
+                vm, iterator, record, value_out, done_out);
         }
     }
 

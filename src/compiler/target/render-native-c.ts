@@ -11239,7 +11239,7 @@ function emitInstruction(
 					? undefined
 					: nativeIteratorCursorAction?.cursor.protocol === "array-values"
 						? `mal_vm_iterator_step_dense_array_cursor(vm, __iter_cursor_${cursorInitializeIp}, &${rec}, &${val}, &${done})`
-						: `mal_vm_iterator_step_protocol_cursor(vm, __iter_cursor_${cursorInitializeIp}, &${val}, &${done})`;
+						: `mal_vm_iterator_step_protocol_cursor(vm, __iter_cursor_${cursorInitializeIp}, &${rec}, &${val}, &${done})`;
 			const deferred =
 				deferredIteratorCursor && cursorInitializeIp !== undefined
 					? `__iter_deferred_${cursorInitializeIp}`

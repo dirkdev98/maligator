@@ -244,6 +244,10 @@ typedef struct MalPerfStats {
     u64 object_entries_snapshot_admissions;
     u64 object_entries_snapshot_materializations;
     u64 object_entries_snapshot_pair_materializations;
+    u64 object_names_snapshot_admissions;
+    u64 object_names_snapshot_materializations;
+    u64 object_symbols_snapshot_admissions;
+    u64 object_symbols_snapshot_materializations;
     u64 object_from_entries_borrowed_pairs;
     u64 collection_constructor_map_nominations;
     u64 collection_constructor_weak_map_nominations;

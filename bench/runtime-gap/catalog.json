@@ -3379,6 +3379,19 @@
 			"controls": ["object-values-snapshot"]
 		},
 		{
+			"id": "object-own-keys-snapshot",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "Object enumeration snapshots",
+			"category": "object-array-representation",
+			"mechanisms": ["object-own-keys", "delayed-materialization"],
+			"inputShape": "Own string and Symbol keys of indexed objects and holey arrays, including non-enumerable properties.",
+			"unit": "snapshot",
+			"sourceSeam": "runtime/src/builtin_object.c",
+			"fixture": "cases/object-own-keys-snapshot.mjs",
+			"controls": ["object-values-indexed-snapshot", "object-keys-snapshot-traversal"]
+		},
+		{
 			"id": "method-name-unique",
 			"group": "runtime",
 			"suite": "runtime",

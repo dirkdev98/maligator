@@ -47,6 +47,7 @@ import {
 } from "./lower-native-string-transforms.ts";
 import type { NativeStringTransformPlan } from "./lower-native-string-transforms.ts";
 import type { NativeSuspensionPlan } from "./lower-native-suspension.ts";
+import { NATIVE_ENUMERATION_SNAPSHOT_KINDS } from "./native-object-enumeration-snapshot.ts";
 import { validateNativeStackObject } from "./native-stack-object.ts";
 import { validateNativeStringSpan } from "./native-string-span.ts";
 import { NATIVE_VALUE_CONVERSIONS } from "./native-value-transport.ts";
@@ -96,7 +97,7 @@ import type {
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal artifacts are hard cut-overs: stale cache entries rebuild.
-export const COMPILER_ARTIFACT_VERSION = 222;
+export const COMPILER_ARTIFACT_VERSION = 223;
 
 function validateClosureCaptureOwners(
 	owners: ReadonlyArray<number>,
@@ -1085,7 +1086,7 @@ function writeNativeStorage(w: Writer, storage: NativeStoragePlan | undefined): 
 	w.u32(storage.objectEnumerationSnapshots.length);
 	for (const plan of storage.objectEnumerationSnapshots) {
 		w.i32(plan.callIp);
-		w.u8((["keys", "values", "entries"] as const).indexOf(plan.kind));
+		w.u8(NATIVE_ENUMERATION_SNAPSHOT_KINDS.indexOf(plan.kind));
 		w.i32Array([...plan.lengthIps]);
 		w.i32Array([...plan.elementIps]);
 		w.i32Array([...plan.claimedIps]);
@@ -1632,7 +1633,7 @@ function readNativeStorage(r: Reader): NativeStoragePlan {
 	}));
 	const objectEnumerationSnapshots = Array.from({ length: r.count(21) }, () => {
 		const callIp = r.i32();
-		const kind = (["keys", "values", "entries"] as const)[r.u8()];
+		const kind = NATIVE_ENUMERATION_SNAPSHOT_KINDS[r.u8()];
 		if (kind === undefined)
 			throw new RangeError("Invalid native Object enumeration snapshot kind");
 		return {

@@ -22,7 +22,7 @@ function oracle(fixture: string, env: NodeJS.ProcessEnv, realms = false) {
 			"-e",
 			`${realms ? 'globalThis.$262={createRealm(){return {global:require("node:vm").runInNewContext("globalThis")}}};' : ""}require("node:vm").runInThisContext(require("node:fs").readFileSync(${JSON.stringify(fixture)},"utf8"));`,
 		],
-		{ encoding: "utf8", env: { ...process.env, ...env } },
+		{ encoding: "utf8", timeout: 10_000, env: { ...process.env, ...env } },
 	);
 }
 function observe(
@@ -99,30 +99,34 @@ describe("rooted collection constructor callback contracts", () => {
 		},
 		600_000,
 	);
-	it("preserves captured foreign weak-adder errors and local callbacks in foreign constructors", () => {
-		const fixture = "tests/local/collection-constructor-realms.js";
-		const expected = oracle(fixture, {}, true);
-		for (const compiled of [true, false]) {
-			const built = buildNativeBinaryResult({
-				fixture,
-				entryGoal: "script",
-				entryStrict: false,
-				name: `collection-constructor-realms-${compiled}`,
-				compiled,
-				outDir,
-				mainFile: "runtime/test262_main.c",
-				config: resolveBuildConfig({
-					engine: { primordials: "mutable", eval: false, realms: true },
-				}),
-				environment: { ...process.env, MAL_PERF_STATS: "1" },
-			});
-			observe(
-				built.binaryPath,
-				expected,
-				[compiled ? 1 : 0, 0, 0, 0, 0],
-				{ MAL_TEST262: "1" },
-				`realms compiled=${compiled}`,
-			);
-		}
-	}, 600_000);
+	it.each(["mutable", "locked"] as const)(
+		"preserves captured adder and iterator realms under %s primordials",
+		(primordials) => {
+			const fixture = "tests/local/collection-constructor-realms.js";
+			const expected = oracle(fixture, {}, true);
+			for (const compiled of [true, false]) {
+				const built = buildNativeBinaryResult({
+					fixture,
+					entryGoal: "script",
+					entryStrict: false,
+					name: `collection-constructor-realms-${primordials}-${compiled}`,
+					compiled,
+					outDir,
+					mainFile: "runtime/test262_main.c",
+					config: resolveBuildConfig({
+						engine: { primordials, eval: false, realms: true },
+					}),
+					environment: { ...process.env, MAL_PERF_STATS: "1" },
+				});
+				observe(
+					built.binaryPath,
+					expected,
+					[compiled ? 1 : 0, 0, 0, 0, 0],
+					{ MAL_TEST262: "1" },
+					`realms ${primordials} compiled=${compiled}`,
+				);
+			}
+		},
+		600_000,
+	);
 });

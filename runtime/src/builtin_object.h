@@ -31,6 +31,8 @@ typedef enum MalObjectEnumerationKind {
     MAL_OBJECT_ENUMERATION_KEYS,
     MAL_OBJECT_ENUMERATION_VALUES,
     MAL_OBJECT_ENUMERATION_ENTRIES,
+    MAL_OBJECT_ENUMERATION_NAMES,
+    MAL_OBJECT_ENUMERATION_SYMBOLS,
 } MalObjectEnumerationKind;
 
 // Caller-owned roots retain the eager sequence independently of later receiver mutations.

@@ -8,10 +8,17 @@ import type { NativeFunctionPlan } from "./program-image.ts";
 import { vmInstructionReadRegisters } from "./runtime-image.ts";
 
 export const NATIVE_ENUMERATION_SNAPSHOT_CAPACITY = 16;
+export const NATIVE_ENUMERATION_SNAPSHOT_KINDS = [
+	"keys",
+	"values",
+	"entries",
+	"names",
+	"symbols",
+] as const;
 
 export interface NativeObjectEnumerationSnapshotPlan {
 	readonly callIp: number;
-	readonly kind: "keys" | "values" | "entries";
+	readonly kind: (typeof NATIVE_ENUMERATION_SNAPSHOT_KINDS)[number];
 	readonly lengthIps: ReadonlyArray<number>;
 	readonly elementIps: ReadonlyArray<number>;
 	readonly claimedIps: ReadonlyArray<number>;
@@ -42,25 +49,34 @@ export function selectNativeObjectEnumerationSnapshots(
 		if (plans.length === 8) break;
 		if (
 			(call.opcode !== "CALL" && call.opcode !== "CALL_KNOWN") ||
-			(call.opcode === "CALL_KNOWN" &&
-				((call.operation !== "Object.keys" &&
-					call.operation !== "Object.values" &&
-					call.operation !== "Object.entries") ||
-					call.construct ||
-					call.argumentMode !== undefined)) ||
 			call.arguments.length !== 1 ||
 			body.handlerTargets[ip] !== undefined ||
 			unavailable(ip)
 		)
 			continue;
-		let kind: "keys" | "values" | "entries" | undefined =
-			call.opcode === "CALL_KNOWN"
-				? call.operation === "Object.keys"
-					? "keys"
-					: call.operation === "Object.values"
-						? "values"
-						: "entries"
-				: undefined;
+		let kind: NativeObjectEnumerationSnapshotPlan["kind"] | undefined;
+		if (call.opcode === "CALL_KNOWN") {
+			if (call.construct || call.argumentMode !== undefined) continue;
+			switch (call.operation) {
+				case "Object.keys":
+					kind = "keys";
+					break;
+				case "Object.values":
+					kind = "values";
+					break;
+				case "Object.entries":
+					kind = "entries";
+					break;
+				case "Object.getOwnPropertyNames":
+					kind = "names";
+					break;
+				case "Object.getOwnPropertySymbols":
+					kind = "symbols";
+					break;
+				default:
+					continue;
+			}
+		}
 		if (call.opcode === "CALL") {
 			for (let prior = ip - 1; prior >= Math.max(0, ip - 16); prior--) {
 				if (body.jumpTargets.has(prior + 1)) break;
@@ -78,6 +94,8 @@ export function selectNativeObjectEnumerationSnapshots(
 					if (named(op.stringIndex, "keys")) kind = "keys";
 					else if (named(op.stringIndex, "values")) kind = "values";
 					else if (named(op.stringIndex, "entries")) kind = "entries";
+					else if (named(op.stringIndex, "getOwnPropertyNames")) kind = "names";
+					else if (named(op.stringIndex, "getOwnPropertySymbols")) kind = "symbols";
 				}
 				break;
 			}

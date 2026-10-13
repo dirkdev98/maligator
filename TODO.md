@@ -745,6 +745,12 @@ The shared lifetime and fallback rules are recorded in
       A C fixture seeds real helpers at both index boundaries and relocates the
       function table between public-next and direct-step resumes; both compiled and
       interpreted Linux ASan/UBSan cases pass.
+- [ ] Extend rooted enumeration snapshots to own string and Symbol keys. Support
+      non-enumerable and accessor keys without invoking getters, retain Symbol
+      identity, and synthesize Array length in the correct own-key order. Reuse
+      cached result materialization and captured-builtin realm fallback. Implemented
+      for ordinary objects and Arrays with bounded rooted storage; focused compiler,
+      Node oracle and frontend/artifact/C checks pass. Native and measurement pending.
 - [ ] Extend enumeration snapshots to Object.entries with eager key/value capture
       and lazy pair arrays. Reuse sixteen rooted slots for up to eight entries;
       first observation caches each pair, and outer materialization reuses those
@@ -801,7 +807,11 @@ The shared lifetime and fallback rules are recorded in
       step, and preserve foreign weak-adder error realms. A foreign Array next method
       falls back before entry borrowing can bypass its error realm. All 24 focused
       checks, ten forced-GC Node oracles and six frontend/artifact/C captures pass;
-      native verification and measurement remain pending.
+      both main-mode constructor sanitizer cases pass. The realm case exposed a
+      shared iterator-step boundary that discarded captured next realm; its runtime
+      and compiler-cursor callers are repaired with 178 focused checks and new
+      cross-realm error and pair-prototype coverage. Native repair verification and
+      measurement remain pending.
 
 - [ ] Extend fixed TypedArray regions to two-access copies and single-view updates,
       including ordered overlapping shifts and contained numeric-fusion operations.
@@ -818,13 +828,17 @@ The shared lifetime and fallback rules are recorded in
       then reuse one compiled has callback contract in intersection, difference,
       isSubsetOf and isDisjointFrom. Keep native Set and keys-only traversal paths.
       All 24 callback-contract checks, eleven forced-GC Node oracles and six actual
-      frontend/artifact/C captures pass; native verification and measurement remain pending.
+      frontend/artifact/C captures pass. All three Linux ASan/UBSan cases pass across
+      both backends, primordial modes, GC stress and realms; measurement remains pending.
 
 - [ ] Compare range spans directly with dynamic strict-equality inputs through the
       existing bounded UTF-16 equality helper. Preserve non-coercing comparison,
       unrelated input identities, aliases and cached materialization. All 47 focused
       span checks, forced-GC Node oracles and four actual frontend/artifact/C captures
-      pass; native verification and measurement remain pending.
+      pass. Native values checks passed before an incorrect fallback counter assertion;
+      actual frontend proof shows that fallback comparisons are generic or folded.
+      The repaired counter contract retains mandatory positive values coverage;
+      focused native rerun and measurement remain pending.
 
 - [ ] Extend split, regexp and nested span continuations to completed exception
       handlers, disjoint protected branches and valid catch-local ranges. Prove
@@ -838,7 +852,8 @@ The shared lifetime and fallback rules are recorded in
       per invocation and restore them before suspension. Root setup state, acquired
       iterator records and original errors throughout user-code boundaries. All 24
       callback checks, seven forced-GC Node oracles and six actual frontend/artifact/C
-      captures pass; native verification and measurement remain pending.
+      captures pass. All three initial Linux ASan/UBSan cases pass; the wider
+      async-close and Number-index implementation below is still awaiting verification.
 - [ ] Extend keys, values and entries snapshots to ordinary indexed records and
       arrays, including holes, sparse storage and non-enumerable own properties.
       Preserve property order and eager values; reject observable accessors before

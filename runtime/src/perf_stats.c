@@ -906,6 +906,12 @@ static void mal_perf_stats_print(void) {
         (unsigned long long) mal_perf_stats.object_entries_snapshot_admissions,
         (unsigned long long) mal_perf_stats.object_entries_snapshot_materializations,
         (unsigned long long) mal_perf_stats.object_entries_snapshot_pair_materializations);
+    fprintf(stderr, "[perf-object-names-snapshot-stats] admissions=%llu materializations=%llu\n",
+        (unsigned long long) mal_perf_stats.object_names_snapshot_admissions,
+        (unsigned long long) mal_perf_stats.object_names_snapshot_materializations);
+    fprintf(stderr, "[perf-object-symbols-snapshot-stats] admissions=%llu materializations=%llu\n",
+        (unsigned long long) mal_perf_stats.object_symbols_snapshot_admissions,
+        (unsigned long long) mal_perf_stats.object_symbols_snapshot_materializations);
     fprintf(stderr, "[perf-object-from-entries-stats] borrowed_pairs=%llu\n",
         (unsigned long long) mal_perf_stats.object_from_entries_borrowed_pairs);
     fprintf(stderr, "[perf-collection-constructor-stats] map=%llu weak_map=%llu set=%llu weak_set=%llu borrowed_pairs=%llu\n",

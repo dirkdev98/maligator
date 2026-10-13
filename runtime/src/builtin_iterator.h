@@ -69,7 +69,11 @@ bool mal_vm_array_values_deferred_close(
     bool normal);
 
 bool mal_vm_iterator_step_protocol_cursor(
-    MalVm *vm, MalIteratorObject *cursor, MalValue *value_out, bool *done_out);
+    MalVm *vm,
+    MalIteratorObject *cursor,
+    const MalIteratorRecord *record,
+    MalValue *value_out,
+    bool *done_out);
 
 bool mal_vm_iterator_step_entry_pair_protocol_cursor(
 	MalVm *vm,

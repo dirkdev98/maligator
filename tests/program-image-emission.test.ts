@@ -3183,7 +3183,9 @@ describe("native update-expression representation", () => {
 		);
 		expect(specializations(definition).some((region) => region.kind === kind)).toBe(true);
 		const output = emitProgramImage(definition, { compiled: true });
-		expect(output).toContain("mal_vm_iterator_step_protocol_cursor(vm,");
+		expect(output).toMatch(
+			/mal_vm_iterator_step_protocol_cursor\(vm, __iter_cursor_\d+, &iter_rec_\d+, &iter_val_\d+, &iter_done_\d+\)/,
+		);
 	});
 
 	it("guards constructed iterator entry pairs while retaining materialization fallback", () => {

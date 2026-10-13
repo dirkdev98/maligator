@@ -175,6 +175,7 @@ tests/native/object-keys-count-region.test.ts
 tests/native/object-values-snapshot.test.ts
 tests/native/object-entries-snapshot.test.ts
 tests/native/object-indexed-enumeration.test.ts
+tests/native/object-own-keys-snapshot.test.ts
 tests/native/split-span-continuation.test.ts
 tests/native/regexp-span-continuation.test.ts
 tests/native/map-region-entries.test.ts

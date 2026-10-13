@@ -69,7 +69,7 @@
 	},
 	{
 		"file": "builtin_iterator.c",
-		"sha256": "5c4b82d8389ab9f2d3778bbf9049c445ac9079cac6d5f58d24e7b857da9b9000"
+		"sha256": "f5dd23cb29c3ebef77a229a1bf524759a3b7e879237a3771d6465988eaee97d9"
 	},
 	{
 		"file": "builtin_iterator_helpers.c",
@@ -93,7 +93,7 @@
 	},
 	{
 		"file": "builtin_object.c",
-		"sha256": "feba29adac11259b790d132678322340036781dab78a213d992d16b924c2dc8d"
+		"sha256": "ea34c78535fb5e2b4c12d60b7eedef336835d4041931b5be3bf7771362dad95e"
 	},
 	{
 		"file": "builtin_promise.c",
