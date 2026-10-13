@@ -388,11 +388,11 @@ numeric sorting, stack objects, and string projections.
       the next iteration's state. Seven matched laptop pairs improved the three-view
       kernel by 94%; both controls were inconclusive. Linux ASan/UBSan passed all
       16 focused tests, including overlaps, detachment, resizing, coercions, and GC.
-- [ ] Enumeration count implementation is checkpointed: ordinary-object key counts
+- [x] Enumeration count: ordinary-object key counts
       avoid the array; observable arrays, proxies, primitives, and overridden calls
       keep the original path. Seven clean matched pairs improved count-only work by
       75%; the keys control was inconclusive and the entries control was 0.9% slower.
-      Focused Linux sanitizer coverage remains in progress.
+      Focused Linux ASan/UBSan passed in both backends, primordial modes, and GC stress.
 - [ ] Extend a measured capture or split producer into the shared span consumers.
 - [ ] Complete the remaining slices below, including their semantic and measured
       acceptance boundaries; the completed cases do not close the broader tasks.

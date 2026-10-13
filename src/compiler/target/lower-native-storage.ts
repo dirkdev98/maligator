@@ -1024,6 +1024,7 @@ function rootStorage(
 				...fastPaths.numberRecordRegions,
 				...fastPaths.numericLoopRegions,
 				...fastPaths.objectKeysCounts,
+				...fastPaths.spanContinuations,
 			].flatMap((plan) => plan.borrowedRegisters),
 		);
 		const iteratorDone = new Set<number>();
@@ -1057,6 +1058,7 @@ function rootStorage(
 					...fastPaths.numberRecordRegions,
 					...fastPaths.numericLoopRegions,
 					...fastPaths.objectKeysCounts,
+					...fastPaths.spanContinuations,
 				],
 				expressionIps,
 			),
@@ -1121,6 +1123,7 @@ function scalarStorageWindows(fastPaths: NativeFastPathPlans) {
 		...fastPaths.numberRecordRegions,
 		...fastPaths.numericLoopRegions,
 		...fastPaths.objectKeysCounts,
+		...fastPaths.spanContinuations,
 		...fastPaths.pairedArrayLoops,
 		...fastPaths.arrayPresence,
 		...fastPaths.arrayPairDestructure,
@@ -1659,6 +1662,25 @@ export function validateNativeStorage(
 					plan.instructionIp === selected.numberPredicates[index]!.instructionIp &&
 					plan.mode === selected.numberPredicates[index]!.mode,
 			) &&
+			stored.spanContinuations.length === selected.spanContinuations.length &&
+			stored.spanContinuations.every((plan, index) => {
+				const expected = selected.spanContinuations[index]!;
+				return (
+					plan.producerIp === expected.producerIp &&
+					plan.splitCallIp === expected.splitCallIp &&
+					sameNumbers(plan.claimedIps, expected.claimedIps) &&
+					sameNumbers(plan.borrowedRegisters, expected.borrowedRegisters) &&
+					plan.consumers.length === expected.consumers.length &&
+					plan.consumers.every((consumer, i) => {
+						const value = expected.consumers[i]!;
+						return (
+							consumer.ip === value.ip &&
+							consumer.value === value.value &&
+							consumer.kind === value.kind
+						);
+					})
+				);
+			}) &&
 			stored.objectKeysCounts.length === selected.objectKeysCounts.length &&
 			stored.objectKeysCounts.every((plan, index) => {
 				const expected = selected.objectKeysCounts[index]!;

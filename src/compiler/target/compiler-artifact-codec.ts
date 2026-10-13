@@ -95,7 +95,7 @@ import type {
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal artifacts are hard cut-overs: stale cache entries rebuild.
-export const COMPILER_ARTIFACT_VERSION = 194;
+export const COMPILER_ARTIFACT_VERSION = 195;
 
 function validateClosureCaptureOwners(
 	owners: ReadonlyArray<number>,
@@ -979,6 +979,19 @@ function writeNativeStorage(w: Writer, storage: NativeStoragePlan | undefined): 
 		w.i32(plan.instructionIp);
 		w.u8(NATIVE_NUMBER_PREDICATE_MODES.indexOf(plan.mode));
 	}
+	w.u32(storage.spanContinuations.length);
+	for (const plan of storage.spanContinuations) {
+		w.i32(plan.producerIp);
+		w.i32(plan.splitCallIp);
+		w.i32Array([...plan.claimedIps]);
+		w.i32Array([...plan.borrowedRegisters]);
+		w.u32(plan.consumers.length);
+		for (const consumer of plan.consumers) {
+			w.i32(consumer.ip);
+			w.i32(consumer.value);
+			w.u8(["length", "equal", "number", "materialize"].indexOf(consumer.kind));
+		}
+	}
 	w.u32(storage.objectKeysCounts.length);
 	for (const plan of storage.objectKeysCounts) {
 		w.i32(plan.callIp);
@@ -1450,6 +1463,19 @@ function readNativeStorage(r: Reader): NativeStoragePlan {
 			return { instructionIp, mode };
 		},
 	);
+	const spanContinuations = Array.from({ length: r.count(20) }, () => ({
+		producerIp: r.i32(),
+		splitCallIp: r.i32(),
+		claimedIps: r.i32Array(),
+		borrowedRegisters: r.i32Array(),
+		consumers: Array.from({ length: r.count(9) }, () => {
+			const ip = r.i32(),
+				value = r.i32(),
+				kind = (["length", "equal", "number", "materialize"] as const)[r.u8()];
+			if (kind === undefined) throw new RangeError("Invalid span continuation consumer");
+			return { ip, value, kind };
+		}),
+	}));
 	const objectKeysCounts = Array.from({ length: r.count(16) }, () => ({
 		callIp: r.i32(),
 		lengthIp: r.i32(),
@@ -1516,6 +1542,7 @@ function readNativeStorage(r: Reader): NativeStoragePlan {
 		numberPredicates,
 		stringTransforms,
 		objectKeysCounts,
+		spanContinuations,
 		arrayPresence,
 		arrayPairDestructure,
 		callTransports,

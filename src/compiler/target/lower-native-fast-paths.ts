@@ -11,6 +11,8 @@ import {
 	MATH_BINARY_OPERATIONS,
 	NUMBER_PREDICATES,
 } from "./native-scalar-operators.ts";
+import { selectNativeSpanContinuations } from "./native-span-continuation.ts";
+import type { NativeSpanContinuation } from "./native-span-continuation.ts";
 import { validateNativeVirtualValue } from "./native-virtual-value.ts";
 import type {
 	NativeDirectEntryPlan,
@@ -259,6 +261,7 @@ export interface NativeFastPathPlans {
 	readonly numberPredicates: ReadonlyArray<NativeNumberPredicatePlan>;
 	readonly stringTransforms: ReadonlyArray<NativeStringTransformPlan>;
 	readonly objectKeysCounts: ReadonlyArray<NativeObjectKeysCountPlan>;
+	readonly spanContinuations: ReadonlyArray<NativeSpanContinuation>;
 	readonly propertyNumericUpdates: ReadonlyArray<NativePropertyNumericUpdatePlan>;
 	readonly propertyProjections: ReadonlyArray<NativePropertyProjectionPlan>;
 	readonly propertyReadRegions: ReadonlyArray<NativePropertyReadRegionPlan>;
@@ -2122,6 +2125,8 @@ export function lowerNativeFastPaths(
 		numberPredicates: selection.kind === "render" ? selection.plans.numberPredicates : [],
 		stringTransforms: selection.kind === "render" ? selection.plans.stringTransforms : [],
 		objectKeysCounts: selection.kind === "render" ? selection.plans.objectKeysCounts : [],
+		spanContinuations:
+			selection.kind === "render" ? selection.plans.spanContinuations : [],
 		arrayPresence: selection.kind === "render" ? selection.plans.arrayPresence : [],
 		arrayPairDestructure:
 			selection.kind === "render" ? selection.plans.arrayPairDestructure : [],
@@ -2500,6 +2505,12 @@ export function selectNativeFastPaths(
 			}
 		}
 	}
+	const spanContinuations = selectNativeSpanContinuations(
+		native,
+		stringConstants,
+		(ip) => unavailable(ip) || fusions.has(ip),
+	);
+	for (const plan of spanContinuations) for (const ip of plan.claimedIps) blocked.add(ip);
 	const numberRecordRegions: Array<NativeNumberRecordRegionPlan> = [];
 	const numericLoopRegions: Array<NativeNumericLoopRegionPlan> = [];
 	const objectKeysCounts: Array<NativeObjectKeysCountPlan> = [];
@@ -2631,6 +2642,7 @@ export function selectNativeFastPaths(
 		numberPredicates,
 		stringTransforms,
 		objectKeysCounts,
+		spanContinuations,
 		...selectArrayWindows(
 			native,
 			new Set([
@@ -2655,6 +2667,7 @@ export function selectNativeFastPaths(
 					...numberRecordRegions,
 					...numericLoopRegions,
 					...objectKeysCounts,
+					...spanContinuations,
 					...(selected.constructorInitialization === undefined
 						? []
 						: [selected.constructorInitialization]),

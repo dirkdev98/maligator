@@ -30,6 +30,7 @@ for (const value of [null, undefined]) {
 		rows.push(error.name);
 	}
 }
+rows.push([record, dictionary].map(count));
 const events = [];
 const proxy = new Proxy(
 	{ a: 1, b: 2, c: 3 },

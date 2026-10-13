@@ -1557,6 +1557,7 @@ function emitCompiledVariant(
 	for (const { projection, elementLoads } of topology.stringSplitProjections) {
 		stringSplitProjectionSites.set(projection.callIp, {
 			projection,
+			subjectSlot: nextStackSlot++,
 			slotsOffset: nextStackSlot,
 			elementLoads,
 			lockedIdentity: projection.splitIdentity === "authority-invariant",
@@ -1612,8 +1613,24 @@ function emitCompiledVariant(
 		if (span.kind !== "string-span") continue;
 		stringSpanSites.set(span.sliceCallIp, {
 			span,
+			producerIp: span.sliceCallIp,
+			consumers: span.consumers,
 			subjectSlot: nextStackSlot++,
 			materializedSlot: nextStackSlot++,
+		});
+	}
+	for (const continuation of storage.spanContinuations) {
+		const split = stringSplitProjectionSites.get(continuation.splitCallIp);
+		const slot =
+			split?.elementLoads.findIndex((load) => load.ip === continuation.producerIp) ?? -1;
+		if (split === undefined || slot < 0)
+			throw new Error("Span continuation lacks its producer");
+		stringSpanSites.set(continuation.producerIp, {
+			producerIp: continuation.producerIp,
+			split: { callIp: continuation.splitCallIp, slot },
+			consumers: continuation.consumers,
+			subjectSlot: split.subjectSlot,
+			materializedSlot: split.slotsOffset + slot,
 		});
 	}
 	const fieldCalls = renderFieldCallSlots(fn, nativeContract, () => nextStackSlot++);
@@ -2944,6 +2961,7 @@ function zeroOf(rep: RegisterRep): string {
 type NativeStringSplitProjection = Extract<VmRegion, { kind: "string-split-projection" }>;
 
 interface NativeStringSplitProjectionSite {
+	subjectSlot: number;
 	projection: NativeStringSplitProjection;
 	slotsOffset: number;
 	lockedIdentity: boolean;
@@ -3034,13 +3052,16 @@ interface NativeRegExpIteratorProjectionAction {
 type NativeStringSpan = Extract<VmRegion, { kind: "string-span" }>;
 
 interface NativeStringSpanSite {
-	span: NativeStringSpan;
+	producerIp: number;
+	span?: NativeStringSpan;
+	split?: { callIp: number; slot: number };
+	consumers: NativeStringSpan["consumers"];
 	subjectSlot: number;
 	materializedSlot: number;
 }
 interface NativeStringSpanAction {
 	site: NativeStringSpanSite;
-	role: "slice" | "length" | "equal" | "number" | "materialize";
+	role: "slice" | "split" | "length" | "equal" | "number" | "materialize";
 	consumer?: NativeStringSpan["consumers"][number];
 }
 
@@ -3814,6 +3835,7 @@ function emitBody(
 		numberPredicates: [],
 		stringTransforms: [],
 		objectKeysCounts: [],
+		spanContinuations: [],
 		propertyProjections: [],
 		propertyNumericUpdates: [],
 		propertyReadRegions: [],
@@ -4104,8 +4126,11 @@ function emitBody(
 	}
 	const nativeStringSpanActionByIp = new Map<number, NativeStringSpanAction>();
 	for (const site of stringSpanSites.values()) {
-		nativeStringSpanActionByIp.set(site.span.sliceCallIp, { site, role: "slice" });
-		for (const consumer of site.span.consumers)
+		nativeStringSpanActionByIp.set(site.producerIp, {
+			site,
+			role: site.split === undefined ? "slice" : "split",
+		});
+		for (const consumer of site.consumers)
 			nativeStringSpanActionByIp.set(consumer.ip, {
 				site,
 				role: consumer.kind,
@@ -4165,6 +4190,8 @@ function emitBody(
 		lines.push(
 			`bool __string_split_${site.projection.callIp}_fast = false;`,
 			`u32 __string_split_${site.projection.callIp}_length = 0;`,
+			`usize __string_split_${site.projection.callIp}_starts[${site.elementLoads.length}];`,
+			`usize __string_split_${site.projection.callIp}_ends[${site.elementLoads.length}];`,
 		);
 	}
 	for (const site of stringSplitCursorSites.values()) {
@@ -4210,7 +4237,7 @@ function emitBody(
 		);
 	}
 	for (const site of stringSpanSites.values()) {
-		const id = site.span.sliceCallIp;
+		const id = site.producerIp;
 		lines.push(
 			`bool __string_span_${id}_active = false;`,
 			`usize __string_span_${id}_start = 0;`,
@@ -6013,13 +6040,14 @@ function emitInstruction(
 	if (nativeStringSpanAction !== undefined) {
 		const { site, role, consumer } = nativeStringSpanAction;
 		const { span } = site;
-		const prefix = `__string_span_${span.sliceCallIp}`;
+		const prefix = `__string_span_${site.producerIp}`;
 		const source = `__gc_slots[${site.subjectSlot}]`;
 		const materialized = `__gc_slots[${site.materializedSlot}]`;
-		const ordinary = emitGenericInstruction();
+		const ordinary = emitGenericInstruction({ nativeStringCharCodeAtChainAction });
 		if (ordinary === null) return null;
 		if (
 			role === "slice" &&
+			span !== undefined &&
 			(instruction.opcode === "CALL" || instruction.opcode === "CALL_KNOWN")
 		) {
 			const locked = span.builtinIdentities === "authority-invariant";
@@ -6038,6 +6066,22 @@ function emitInstruction(
 				`if (${prefix}_active) {`,
 				`  r${instruction.dst} = MAL_VALUE_UNDEFINED;`,
 				`  ${poll()}`,
+				`} else {`,
+				...ordinary.map((line) => `  ${line}`),
+				`}`,
+			];
+		}
+		if (role === "split" && site.split !== undefined && "dst" in instruction) {
+			const split = `__string_split_${site.split.callIp}`,
+				slot = site.split.slot;
+			return [
+				`${prefix}_active = false;`,
+				`if (${split}_fast) {`,
+				`  ${prefix}_start = ${split}_starts[${slot}];`,
+				`  ${prefix}_end = ${split}_ends[${slot}];`,
+				`  ${prefix}_active = ${prefix}_start != SIZE_MAX;`,
+				`  if (${prefix}_active) MAL_PERF_COUNT(string_span_admissions);`,
+				`  r${instruction.dst} = MAL_VALUE_UNDEFINED;`,
 				`} else {`,
 				...ordinary.map((line) => `  ${line}`),
 				`}`,
@@ -7467,6 +7511,10 @@ function emitInstruction(
 					if (slot >= 0) {
 						return [
 							`if (__string_split_${site.projection.callIp}_fast) {`,
+							`  if (__string_split_${site.projection.callIp}_starts[${slot}] != SIZE_MAX && mal_value_is_undefined(__gc_slots[${site.slotsOffset + slot}])) {`,
+							`    __gc_slots[${site.slotsOffset + slot}] = mal_builtin_string_span_materialize(vm, __gc_slots[${site.subjectSlot}], __string_split_${site.projection.callIp}_starts[${slot}], __string_split_${site.projection.callIp}_ends[${slot}]);`,
+							`    ${throwCheck()}`,
+							`  }`,
 							`  r${instruction.dst} = __gc_slots[${site.slotsOffset + slot}];`,
 							`} else {`,
 							...ordinary().map((line) => `  ${line}`),
@@ -7549,6 +7597,10 @@ function emitInstruction(
 				if (slot >= 0) {
 					return [
 						`if (${fast}) {`,
+						`  if (__string_split_${site.projection.callIp}_starts[${slot}] != SIZE_MAX && mal_value_is_undefined(__gc_slots[${site.slotsOffset + slot}])) {`,
+						`    __gc_slots[${site.slotsOffset + slot}] = mal_builtin_string_span_materialize(vm, __gc_slots[${site.subjectSlot}], __string_split_${site.projection.callIp}_starts[${slot}], __string_split_${site.projection.callIp}_ends[${slot}]);`,
+						`    ${throwCheck()}`,
+						`  }`,
 						`  r${instruction.dst} = __gc_slots[${site.slotsOffset + slot}];`,
 						`} else {`,
 						...ordinary().map((line) => `  ${line}`),
@@ -9585,11 +9637,14 @@ function emitInstruction(
 				const projection = site.projection;
 				const fast = `__string_split_${projection.callIp}_fast`;
 				const indices = site.elementLoads.map((load) => load.index).join(", ");
-				const outputs = site.elementLoads
-					.map((_load, index) => `&__gc_slots[${site.slotsOffset + index}]`)
-					.join(", ");
+
 				return [
-					`${fast} = ${profileCall("string", `mal_builtin_string_split_projection_locked(vm, ${boxedOperand(instruction.thisValue)}, ${boxedOperand(instruction.arguments[0]!)}, (const u32[]){ ${indices} }, (MalValue *[]){ ${outputs} }, ${site.elementLoads.length}, &__string_split_${projection.callIp}_length)`)};`,
+					`__gc_slots[${site.subjectSlot}] = ${boxedOperand(instruction.thisValue)};`,
+					...site.elementLoads.map(
+						(_, index) =>
+							`__gc_slots[${site.slotsOffset + index}] = MAL_VALUE_UNDEFINED;`,
+					),
+					`${fast} = ${profileCall("string", `mal_builtin_string_split_projection_locked(vm, ${boxedOperand(instruction.thisValue)}, ${boxedOperand(instruction.arguments[0]!)}, (const u32[]){ ${indices} }, __string_split_${projection.callIp}_starts, __string_split_${projection.callIp}_ends, ${site.elementLoads.length}, &__string_split_${projection.callIp}_length)`)};`,
 					`if (${fast}) {`,
 					`  r${instruction.dst} = MAL_VALUE_UNDEFINED;`,
 					`} else {`,
@@ -9884,19 +9939,22 @@ function emitInstruction(
 				const projection = site.projection;
 				const fast = `__string_split_${projection.callIp}_fast`;
 				const indices = site.elementLoads.map((load) => load.index).join(", ");
-				const outputs = site.elementLoads
-					.map((_load, index) => `&__gc_slots[${site.slotsOffset + index}]`)
-					.join(", ");
+
 				const project = site.lockedIdentity
 					? profileCall(
 							"string",
-							`mal_builtin_string_split_projection_locked(vm, ${boxedOperand(instruction.thisValue)}, ${boxedOperand(instruction.arguments[0]!)}, (const u32[]){ ${indices} }, (MalValue *[]){ ${outputs} }, ${site.elementLoads.length}, &__string_split_${projection.callIp}_length)`,
+							`mal_builtin_string_split_projection_locked(vm, ${boxedOperand(instruction.thisValue)}, ${boxedOperand(instruction.arguments[0]!)}, (const u32[]){ ${indices} }, __string_split_${projection.callIp}_starts, __string_split_${projection.callIp}_ends, ${site.elementLoads.length}, &__string_split_${projection.callIp}_length)`,
 						)
 					: profileCall(
 							"string",
-							`mal_builtin_string_split_projection(vm, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${boxedOperand(instruction.arguments[0]!)}, (const u32[]){ ${indices} }, (MalValue *[]){ ${outputs} }, ${site.elementLoads.length}, &__string_split_${projection.callIp}_length)`,
+							`mal_builtin_string_split_projection(vm, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${boxedOperand(instruction.arguments[0]!)}, (const u32[]){ ${indices} }, __string_split_${projection.callIp}_starts, __string_split_${projection.callIp}_ends, ${site.elementLoads.length}, &__string_split_${projection.callIp}_length)`,
 						);
 				return [
+					`__gc_slots[${site.subjectSlot}] = ${boxedOperand(instruction.thisValue)};`,
+					...site.elementLoads.map(
+						(_, index) =>
+							`__gc_slots[${site.slotsOffset + index}] = MAL_VALUE_UNDEFINED;`,
+					),
 					`${fast} = ${project};`,
 					`if (${fast}) {`,
 					`  r${instruction.dst} = MAL_VALUE_UNDEFINED;`,

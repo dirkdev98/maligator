@@ -4,15 +4,12 @@ import {
 } from "./runtime-image.ts";
 import type { BytecodeInstruction } from "./runtime-image.ts";
 
-export function validateNativeVirtualValue(
+export function nativeVirtualValueFlow(
 	instructions: ReadonlyArray<BytecodeInstruction>,
 	producerIp: number,
 	result: number,
-	consumers: ReadonlyMap<number, ReadonlyArray<number>>,
-	fail: () => never,
-	transparent: (instruction: BytecodeInstruction) => boolean = () => false,
-	allowMixed = false,
-): void {
+	resetIps: ReadonlySet<number> = new Set(),
+) {
 	// Union and intersection distinguish a live virtual alias from a register reused on one incoming path.
 	const incoming = new Map<
 		number,
@@ -66,6 +63,11 @@ export function validateNativeVirtualValue(
 		}
 		if (moveMay && instruction.opcode === "MOVE") may.add(instruction.dst);
 		if (moveMust && instruction.opcode === "MOVE") must.add(instruction.dst);
+		if (resetIps.has(ip)) {
+			for (const alias of may) expired.add(alias);
+			may.clear();
+			must.clear();
+		}
 		if (ip === producerIp) {
 			for (const alias of may) expired.add(alias);
 			may.clear();
@@ -83,6 +85,20 @@ export function validateNativeVirtualValue(
 		)
 			add(ip + 1, may, must, expired);
 	}
+	return incoming;
+}
+
+export function validateNativeVirtualValue(
+	instructions: ReadonlyArray<BytecodeInstruction>,
+	producerIp: number,
+	result: number,
+	consumers: ReadonlyMap<number, ReadonlyArray<number>>,
+	fail: () => never,
+	transparent: (instruction: BytecodeInstruction) => boolean = () => false,
+	allowMixed = false,
+	resetIps: ReadonlySet<number> = new Set(),
+): void {
+	const incoming = nativeVirtualValueFlow(instructions, producerIp, result, resetIps);
 	for (const [ip, aliases] of incoming) {
 		const instruction = instructions[ip]!;
 		if (

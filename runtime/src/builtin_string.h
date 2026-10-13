@@ -272,10 +272,9 @@ bool mal_builtin_string_span_equal(MalValue subject, usize start, usize end, Mal
 #define MAL_STRING_SPLIT_PROJECTION_MAX_OUTPUTS 8u
 
 /**
- * Allocation-free Array projection for a compiler-proven `String#split` result.
- * Materializes only the requested element indices and returns the virtual result
- * length. Guard failure has no observable effect so generated code can execute
- * the complete Get+Call+property fallback unchanged.
+ * Project selected fields as source offsets; SIZE_MAX denotes a missing field.
+ * The caller roots the immutable receiver until all spans are consumed.
+ * A decline performs no JavaScript observations; the original call remains valid.
  */
 bool mal_builtin_string_split_projection(
     MalVm *vm,
@@ -283,7 +282,8 @@ bool mal_builtin_string_split_projection(
     MalValue receiver,
     MalValue separator,
     const u32 *indices,
-    MalValue **outputs,
+    usize *starts,
+    usize *ends,
     u32 output_count,
     u32 *length_out
 );
@@ -298,7 +298,8 @@ bool mal_builtin_string_split_projection_locked(
     MalValue receiver,
     MalValue separator,
     const u32 *indices,
-    MalValue **outputs,
+    usize *starts,
+    usize *ends,
     u32 output_count,
     u32 *length_out
 );

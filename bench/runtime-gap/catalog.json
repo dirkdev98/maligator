@@ -2565,6 +2565,32 @@
 			"controls": ["primordial-array-folds", "array-map"]
 		},
 		{
+			"id": "map-two-key-interleaved",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "Map entry reuse",
+			"category": "api-builtins",
+			"mechanisms": ["map-get-set-cache"],
+			"inputShape": "Two distinct numeric-key updates on one 256-entry Map, with interleaved get/set calls.",
+			"unit": "collection call",
+			"sourceSeam": "runtime/src/map_object.c",
+			"fixture": "cases/map-two-key-interleaved.mjs",
+			"controls": ["map-two-key-adjacent"]
+		},
+		{
+			"id": "map-two-key-adjacent",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "Map entry reuse",
+			"category": "api-builtins",
+			"mechanisms": ["map-get-set-cache"],
+			"inputShape": "Two distinct numeric-key updates on one 256-entry Map, with adjacent get/set calls.",
+			"unit": "collection call",
+			"sourceSeam": "runtime/src/map_object.c",
+			"fixture": "cases/map-two-key-adjacent.mjs",
+			"controls": []
+		},
+		{
 			"id": "object-keys-count",
 			"group": "runtime",
 			"suite": "runtime",
@@ -2615,6 +2641,19 @@
 			"sourceSeam": "src/compiler/frontend/direct-eval-context.ts",
 			"fixture": "cases/string-span-classify.mjs",
 			"controls": ["string-split", "string-search"]
+		},
+		{
+			"id": "split-span-classify",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "String spans",
+			"category": "api-builtins",
+			"mechanisms": ["string-projection"],
+			"inputShape": "Split field consumed by length and literal comparison, with an uncommon observer branch.",
+			"unit": "classified field",
+			"sourceSeam": "src/compiler/target/native-span-continuation.ts",
+			"fixture": "cases/split-span-classify.mjs",
+			"controls": ["string-span-classify", "string-split"]
 		},
 		{
 			"id": "method-name-unique",

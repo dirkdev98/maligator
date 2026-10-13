@@ -3251,7 +3251,8 @@ static bool mal_builtin_string_split_projection_impl(
     MalValue receiver,
     MalValue separator_value,
     const u32 *indices,
-    MalValue **outputs,
+    usize *starts,
+    usize *ends,
     u32 output_count,
     u32 *length_out,
     bool identity_locked
@@ -3273,12 +3274,12 @@ static bool mal_builtin_string_split_projection_impl(
     usize separator_length = mal_string_length(separator);
     if (separator_length == 0) return false;
 
-    MalValue roots[2 + MAL_STRING_SPLIT_PROJECTION_MAX_OUTPUTS];
+    MalValue roots[2];
     roots[0] = receiver;
     roots[1] = separator_value;
-    for (u32 i = 0; i < output_count; i++) roots[2 + i] = MAL_VALUE_UNDEFINED;
+    for (u32 i = 0; i < output_count; i++) { starts[i] = SIZE_MAX; ends[i] = SIZE_MAX; }
     MalRootSpan root_span;
-    mal_gc_root(&root_span, roots, 2 + output_count);
+    mal_gc_root(&root_span, roots, 2);
     mal_gc_native_rooted_begin(vm);
 
     usize match_offsets[MAL_STRING_SPLIT_MATCH_PLAN_CAPACITY];
@@ -3295,8 +3296,8 @@ static bool mal_builtin_string_split_projection_impl(
     for (u32 i = 0; i < match_count; i++) {
         usize match_position = match_offsets[i];
         if (next_output < output_count && indices[next_output] == total_match_count) {
-            roots[2 + next_output] = mal_builtin_string_slice(
-                vm, string, segment_start, match_position - segment_start);
+            starts[next_output] = segment_start;
+            ends[next_output] = match_position;
             next_output++;
         }
         total_match_count++;
@@ -3310,8 +3311,8 @@ static bool mal_builtin_string_split_projection_impl(
             &cursor, string, separator, match_position + separator_length, false);
         while (true) {
             if (next_output < output_count && indices[next_output] == total_match_count) {
-                roots[2 + next_output] = mal_builtin_string_slice(
-                    vm, string, segment_start, match_position - segment_start);
+                starts[next_output] = segment_start;
+                ends[next_output] = match_position;
                 next_output++;
             }
             total_match_count++;
@@ -3325,11 +3326,10 @@ static bool mal_builtin_string_split_projection_impl(
     }
 
     if (next_output < output_count && indices[next_output] == total_match_count) {
-        roots[2 + next_output] = mal_builtin_string_slice(
-            vm, string, segment_start, length - segment_start);
+        starts[next_output] = segment_start;
+        ends[next_output] = length;
     }
     *length_out = total_match_count + 1;
-    for (u32 i = 0; i < output_count; i++) *outputs[i] = roots[2 + i];
 
     mal_gc_native_rooted_end(vm);
     mal_gc_unroot(&root_span);
@@ -3342,12 +3342,13 @@ bool mal_builtin_string_split_projection(
     MalValue receiver,
     MalValue separator_value,
     const u32 *indices,
-    MalValue **outputs,
+    usize *starts,
+    usize *ends,
     u32 output_count,
     u32 *length_out
 ) {
     return mal_builtin_string_split_projection_impl(
-        vm, callee, receiver, separator_value, indices, outputs, output_count, length_out, false);
+        vm, callee, receiver, separator_value, indices, starts, ends, output_count, length_out, false);
 }
 
 bool mal_builtin_string_split_projection_locked(
@@ -3355,12 +3356,13 @@ bool mal_builtin_string_split_projection_locked(
     MalValue receiver,
     MalValue separator_value,
     const u32 *indices,
-    MalValue **outputs,
+    usize *starts,
+    usize *ends,
     u32 output_count,
     u32 *length_out
 ) {
     return mal_builtin_string_split_projection_impl(
-        vm, MAL_VALUE_UNDEFINED, receiver, separator_value, indices, outputs, output_count,
+        vm, MAL_VALUE_UNDEFINED, receiver, separator_value, indices, starts, ends, output_count,
         length_out, true);
 }
 
