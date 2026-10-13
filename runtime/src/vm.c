@@ -1769,6 +1769,15 @@ MalValue mal_vm_callee_this(MalVm *vm, const MalFunction *function, MalValue thi
 }
 
 #if MAL_REALMS
+bool mal_vm_owns_realm(const MalVm *vm, const MalRealm *realm) {
+    if (realm == nullptr) return false;
+    if (realm == vm->initial_realm) return true;
+    for (const MalRealm *owned = vm->realms; owned != nullptr; owned = owned->next) {
+        if (owned == realm) return true;
+    }
+    return false;
+}
+
 MalRealm *mal_vm_callee_realm(MalVm *vm, MalValue callee) {
     if (mal_value_is_function_object(callee)) {
         MalRealm *realm = mal_value_to_function_object(callee)->realm;
@@ -4464,7 +4473,8 @@ bool mal_vm_prepare_builtin_callback(MalVm *vm, MalValue callback, MalExactScrip
     i32 index = mal_function_object_function_index(closure);
     if (index < 0 || index >= vm->runtime_image->function_count) return false;
 #if MAL_REALMS
-    if (mal_vm_callee_realm(vm, callback) != vm->current_realm) return false;
+    // A realm stamp must share this VM's function-index space, not merely be callable.
+    if (!mal_vm_owns_realm(vm, closure->realm)) return false;
 #endif
     const MalFunction *function = &vm->runtime_image->functions[index];
     if (function->kind != MAL_FUNCTION_KIND_NORMAL ||
@@ -4479,6 +4489,11 @@ bool mal_vm_prepare_builtin_callback(MalVm *vm, MalValue callback, MalExactScrip
         .env = closure->creation_env,
         .numeric_reduce_callback = nullptr,
     };
+#if MAL_REALMS
+    if (closure->realm != vm->current_realm) {
+        MAL_PERF_COUNT(builtin_callback_foreign_realm_nominations);
+    }
+#endif
     return true;
 }
 

@@ -375,6 +375,7 @@ typedef struct MalPerfStats {
 	u64 iterator_predicate_runtime_callback_nominations;
 	u64 iterator_lazy_callback_nominations;
 	u64 iterator_lazy_callback_resumes;
+	u64 builtin_callback_foreign_realm_nominations;
 	u64 json_parse_runtime_callback_nominations;
 	u64 json_stringify_runtime_callback_nominations;
 

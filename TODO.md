@@ -663,8 +663,8 @@ The shared lifetime and fallback rules are recorded in
       artifact roundtrips, and runtime/generated C syntax checks pass. Typed-context
       and realm sanitizer checks pass. The remaining modes exposed a Node 24 oracle
       disagreements for overlapping matches and custom flags-getter observation;
-      explicit normative expectations are repaired, with the final rerun pending.
-      Measurement remains pending.
+      explicit normative expectations are repaired and all four sanitizer checks
+      now pass. Measurement remains pending.
 - [ ] Admit fresh Array regions inside handler-bearing functions when their local
       allocation and initialization range has one exception target and no external
       entry. Accept immutable BigInt literals through the existing rooted builder;
@@ -735,20 +735,40 @@ The shared lifetime and fallback rules are recorded in
       stack-local context on resume and preserve matching outer typed contexts.
       Keep the helper in its 128-byte allocation class and preserve callback roots,
       realm fallback, abrupt completion, and reentry. All 43 focused checks, twelve
-      frontend/artifact/generated-C checks, Node oracles, and C syntax checks pass;
-      native execution and measurement remain pending.
+      frontend/artifact/generated-C checks, Node oracles, and C syntax checks pass.
+      Typed-context, realm, and both counter/table-relocation sanitizer cases pass.
+      Forced collection exposed missing old-to-young cards on retained inner
+      iterators in flatMap; the shared flatMap/concat publication repair is pending
+      verification. Measurement remains pending.
 - [ ] Remove the i32 index limit in synchronous Iterator methods. Lazy helpers and
       terminal traversals now follow Number addition, including rounding at 2^53.
       A C fixture seeds real helpers at both index boundaries and relocates the
-      function table between public-next and direct-step resumes; its sanitizer
-      execution remains pending.
+      function table between public-next and direct-step resumes; both compiled and
+      interpreted Linux ASan/UBSan cases pass.
 - [ ] Extend enumeration snapshots to Object.entries with eager key/value capture
       and lazy pair arrays. Reuse sixteen rooted slots for up to eight entries;
       first observation caches each pair, and outer materialization reuses those
       identities. Allocating indexed reads publish incoming roots and their result
       before polling. All 150 focused tests, five frontend/artifact/generated-C
-      checks, Node oracles, and runtime C syntax checks pass; native execution and
-      measurement remain pending.
+      checks, Node oracles, and runtime C syntax checks pass. All three new Linux
+      ASan/UBSan cases and seven keys/values/handler controls pass across both
+      backends, primordial modes, GC stress, and realms; measurement remains pending.
+
+- [ ] Preserve conditional temporary-object regions at known builtin observations.
+      Treat fixed nonconstructing CALL_KNOWN arguments as the same materialization
+      boundary as ordinary call arguments; independently validate receiver/callee
+      exclusions and retain existing lifetime guards. Freeze, seal, defineProperty,
+      assign, result aliases, and mixed proxy inputs select actual plans in both
+      modes. All 153 focused tests, four Node cases and four frontend/artifact/C
+      checks pass; native execution and measurement remain pending.
+- [ ] Admit canonical compiled callbacks from other realms owned by the same VM.
+      Validate realm membership before using the shared function-index space and
+      preserve per-invocation realm switching, restoration, this boxing, and generic
+      eval-callback fallback. Retained lazy contexts use the same ownership proof.
+      All 43 focused checks, sixteen Node oracles, sixteen frontend/artifact/C
+      checks, and runtime/C-driver syntax checks pass. A worker-thread VM exercises
+      same-index rejection without sharing GC thread state; native verification
+      remains pending.
 
 | Order | Slice                        | Owning work and exit condition                                                                                                                                  |
 | ----- | ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |

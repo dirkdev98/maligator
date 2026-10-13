@@ -186,7 +186,7 @@ describe("forwarded sort comparator nomination", () => {
 		).toBe(expected);
 	}, 600_000);
 
-	it("declines foreign comparators and preserves foreign builtin result realms", () => {
+	it("keeps eval comparators generic and preserves owned foreign builtin result realms", () => {
 		const realmFixture = "tests/local/forwarded-sort-realms.js";
 		const expected = nodeOracle(realmFixture, {}, true);
 		for (const compiled of [true, false]) {
@@ -216,9 +216,18 @@ describe("forwarded sort comparator nomination", () => {
 			});
 			expect(measured.status, measured.stderr).toBe(0);
 			expect(measured.stdout).toBe(expected);
-			expect(measured.stderr).toMatch(
-				/\[perf-sort-callback-stats\] array_nominations=0 typed_nominations=0/,
+			const nominations = measured.stderr.match(
+				/\[perf-sort-callback-stats\] array_nominations=(\d+) typed_nominations=(\d+)/,
 			);
+			expect(nominations, measured.stderr).not.toBeNull();
+			expect(nominations!.slice(1).map(Number)).toEqual(compiled ? [1, 1] : [0, 0]);
+			expect(
+				Number(
+					measured.stderr.match(
+						/\[perf-callback-realm-stats\] foreign_nominations=(\d+)/,
+					)?.[1] ?? -1,
+				),
+			).toBe(compiled ? 2 : 0);
 		}
 	}, 600_000);
 });

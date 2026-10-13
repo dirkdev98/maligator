@@ -1367,6 +1367,8 @@ static void mal_perf_stats_print(void) {
     fprintf(stderr, "[perf-iterator-lazy-callback-stats] nominations=%llu resumes=%llu\n",
         (unsigned long long) mal_perf_stats.iterator_lazy_callback_nominations,
         (unsigned long long) mal_perf_stats.iterator_lazy_callback_resumes);
+    fprintf(stderr, "[perf-callback-realm-stats] foreign_nominations=%llu\n",
+        (unsigned long long) mal_perf_stats.builtin_callback_foreign_realm_nominations);
     fprintf(stderr, "[perf-json-callback-stats] parse_nominations=%llu stringify_nominations=%llu\n",
         (unsigned long long) mal_perf_stats.json_parse_runtime_callback_nominations,
         (unsigned long long) mal_perf_stats.json_stringify_runtime_callback_nominations);

@@ -22,6 +22,7 @@ tests/native/forwarded-from-mapper.test.ts
 tests/native/forwarded-group-by.test.ts
 tests/native/forwarded-iterator-terminal.test.ts
 tests/native/retained-iterator-callback.test.ts
+tests/native/owned-realm-callback.test.ts
 tests/native/forwarded-json-callback.test.ts
 tests/native/string-span-primitive-positions.test.ts
 tests/native/function-reflect-builtins.test.ts
@@ -61,6 +62,7 @@ tests/native/typed-array-reduce-region.test.ts
 tests/native/typed-array-callback-families.test.ts
 tests/native/string-span-region.test.ts
 tests/native/observed-object-region.test.ts
+tests/native/known-object-observation.test.ts
 tests/native/native-property-read-regions.test.ts
 tests/native/read-accessor-regions.test.ts
 tests/native/native-number-record-regions.test.ts

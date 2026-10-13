@@ -1365,8 +1365,8 @@ function stackObjectCandidate(
 			continue;
 		}
 		if (
-			opcode === "call" &&
-			position >= 2 &&
+			((opcode === "call" && position >= 2) ||
+				(opcode === "callKnown" && position >= 1)) &&
 			!fn.instructionAttributes(instruction).construct &&
 			fn.instructionAttributes(instruction).argumentMode === undefined &&
 			handlerBlock(fn, fn.instructionBlock(instruction)) === undefined

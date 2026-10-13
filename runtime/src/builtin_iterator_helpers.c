@@ -221,6 +221,16 @@ static bool mal_ih_step_drop(
     return mal_ih_yield(value, value_out, done_out);
 }
 
+static void mal_ih_set_inner(MalIteratorHelperObject *self, MalValue iterator, MalValue next) {
+    mal_gc_write_barrier(self->inner_iterator);
+    mal_gc_write_barrier(self->inner_next);
+    self->inner_iterator = iterator;
+    self->inner_next = next;
+    // Resumed helpers may be old while the newly opened iterator is young.
+    mal_gc_card(&self->object.header, iterator);
+    mal_gc_card(&self->object.header, next);
+}
+
 static bool mal_ih_step_flatmap(
     MalVm *vm, MalIteratorHelperObject *self,
     MalValue *value_out, bool *done_out
@@ -241,13 +251,7 @@ static bool mal_ih_step_flatmap(
             if (!done) {
                 return mal_ih_yield(value, value_out, done_out);
             }
-            // SATB: the exhausted inner iterator (traced via this helper) is being
-            // dropped; shade the old refs before clearing. The re-arm sites store
-            // into a slot just cleared to undefined, so they need no shade.
-            mal_gc_write_barrier(self->inner_iterator);
-            mal_gc_write_barrier(self->inner_next);
-            self->inner_iterator = mal_value_new_undefined();
-            self->inner_next = mal_value_new_undefined();
+            mal_ih_set_inner(self, mal_value_new_undefined(), mal_value_new_undefined());
         }
 
         MalValue value;
@@ -274,8 +278,7 @@ static bool mal_ih_step_flatmap(
             mal_vm_iterator_close(vm, &outer);
             return false;
         }
-        self->inner_iterator = inner.iterator;
-        self->inner_next = inner.next_method;
+        mal_ih_set_inner(self, inner.iterator, inner.next_method);
     }
 }
 
@@ -305,13 +308,7 @@ static bool mal_ih_step_concat(
             if (!done) {
                 return mal_ih_yield(value, value_out, done_out);
             }
-            // SATB: the exhausted inner iterator (traced via this helper) is being
-            // dropped; shade the old refs before clearing. The re-arm sites store
-            // into a slot just cleared to undefined, so they need no shade.
-            mal_gc_write_barrier(self->inner_iterator);
-            mal_gc_write_barrier(self->inner_next);
-            self->inner_iterator = mal_value_new_undefined();
-            self->inner_next = mal_value_new_undefined();
+            mal_ih_set_inner(self, mal_value_new_undefined(), mal_value_new_undefined());
         }
 
         if (self->state.index >= length) {
@@ -335,16 +332,17 @@ static bool mal_ih_step_concat(
             mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Iterator is not an object");
             return false;
         }
+        MalRootSpan opened_span;
+        mal_gc_root(&opened_span, &opened.value, 1);
         MalValue inner_next;
-        if (!mal_vm_get_property(
-                vm, opened.value,
-                mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_NEXT),
-                &inner_next)) {
+        bool got_next = mal_vm_get_property(
+            vm, opened.value, mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_NEXT), &inner_next);
+        if (got_next) mal_ih_set_inner(self, opened.value, inner_next);
+        mal_gc_unroot(&opened_span);
+        if (!got_next) {
             self->done = true;
             return false;
         }
-        self->inner_iterator = opened.value;
-        self->inner_next = inner_next;
     }
 }
 
@@ -599,17 +597,17 @@ static bool mal_ih_advance(
     MalVm *vm, MalIteratorHelperObject *self,
     MalValue *value_out, bool *done_out
 ) {
+    bool has_callback = mal_ih_has_callback(self->kind);
     MalValue live_helper = mal_value_from_iterator_helper_object(self);
     MalRootSpan helper_span;
-    mal_gc_root(&helper_span, &live_helper, 1);
-    bool has_callback = mal_ih_has_callback(self->kind);
+    if (has_callback) mal_gc_root(&helper_span, &live_helper, 1);
     MalExactScriptCall callback;
     bool resumed = false;
     if (has_callback && self->state.callback_function_index >= 0 &&
         self->state.callback_function_index < vm->runtime_image->function_count &&
         (vm->exact_script_call == nullptr || vm->exact_script_call->callee != self->callback)
 #if MAL_REALMS
-        && mal_vm_callee_realm(vm, self->callback) == vm->current_realm
+        && mal_vm_owns_realm(vm, mal_value_to_function_object(self->callback)->realm)
 #endif
     ) {
         i32 index = self->state.callback_function_index;
@@ -671,7 +669,7 @@ static bool mal_ih_advance(
     }
     if (resumed) vm->exact_script_call = callback.previous;
     if (!ok && has_callback) self->done = true;
-    mal_gc_unroot(&helper_span);
+    if (has_callback) mal_gc_unroot(&helper_span);
     return ok;
 }
 

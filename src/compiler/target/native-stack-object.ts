@@ -51,6 +51,19 @@ export function validateNativeStackObject(
 				values.some((value) => !vmInstructionReadRegisters(instruction).includes(value))
 			)
 				fail();
+			if (instruction.opcode === "CALL" || instruction.opcode === "CALL_KNOWN") {
+				if (
+					(instruction.opcode === "CALL_KNOWN" &&
+						(instruction.construct || instruction.argumentMode !== undefined)) ||
+					values.some(
+						(value) =>
+							!instruction.arguments.includes(value) ||
+							instruction.thisValue === value ||
+							(instruction.opcode === "CALL" && instruction.callee === value),
+					)
+				)
+					fail();
+			}
 			consumers.set(materialization.ip, values);
 		}
 	}

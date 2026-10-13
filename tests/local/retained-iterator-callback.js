@@ -278,6 +278,28 @@ function roots() {
 		flattened.next().value.id === 1 && flattened.toArray()[0].id === 2,
 		"fresh flattenable iterator root",
 	);
+	function freshSource(id) {
+		return {
+			[Symbol.iterator]() {
+				return {
+					payload: { id },
+					get next() {
+						collectGarbage();
+						return function next() {
+							const payload = this.payload;
+							this.payload = null;
+							return payload ? { value: payload, done: false } : { done: true };
+						};
+					},
+				};
+			},
+		};
+	}
+	const concatenated = Iterator.concat(freshSource(3), freshSource(4));
+	collectGarbage();
+	check(concatenated.next().value.id === 3, "concat fresh iterator after promotion");
+	collectGarbage();
+	check(concatenated.toArray()[0].id === 4, "concat next getter and new inner edge");
 	console.log("roots", "retained");
 }
 function fallbacks() {

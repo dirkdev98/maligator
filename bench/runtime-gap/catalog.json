@@ -3207,6 +3207,19 @@
 			"controls": ["forwarded-iterator-terminal", "forwarded-array-callback"]
 		},
 		{
+			"id": "known-object-observation",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "Conditional observation through known builtins",
+			"category": "object-array-representation",
+			"mechanisms": ["allocation-gc"],
+			"inputShape": "Three-field temporary records conditionally frozen on one in eight calls before field reads.",
+			"unit": "temporary record",
+			"sourceSeam": "src/compiler/core/core-ir-provenance.ts",
+			"fixture": "cases/known-object-observation.mjs",
+			"controls": ["conditional-span-records", "handled-span-records"]
+		},
+		{
 			"id": "method-name-unique",
 			"group": "runtime",
 			"suite": "runtime",

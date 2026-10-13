@@ -1967,6 +1967,7 @@ static inline void mal_vm_realm_switch_to(MalVm *vm, MalRealm *target) {
  * targets are already resolved before this is consulted) and no exotic fallback.
  */
 MalRealm *mal_vm_callee_realm(MalVm *vm, MalValue callee);
+bool mal_vm_owns_realm(const MalVm *vm, const MalRealm *realm);
 
 /**
  * GetFunctionRealm (ECMA-262 10.2.2): resolve a callable's owning realm through

@@ -177,7 +177,7 @@ describe("forwarded Iterator terminal callback nomination", () => {
 		).toBe(expected);
 	}, 600_000);
 
-	it("declines foreign callbacks and preserves local callback realms under borrowed methods", () => {
+	it("keeps eval callbacks generic and nominates compiled callbacks across owned realms", () => {
 		const realmFixture = "tests/local/forwarded-iterator-terminal-realms.js";
 		const expected = nodeOracle(realmFixture, {}, true);
 		for (const compiled of [true, false]) {
@@ -207,9 +207,18 @@ describe("forwarded Iterator terminal callback nomination", () => {
 			});
 			expect(measured.status, measured.stderr).toBe(0);
 			expect(measured.stdout).toBe(expected);
-			expect(measured.stderr).toMatch(
-				/\[perf-iterator-callback-stats\] for_each_nominations=0 reduce_nominations=0 predicate_nominations=0/,
+			const nominations = measured.stderr.match(
+				/\[perf-iterator-callback-stats\] for_each_nominations=(\d+) reduce_nominations=(\d+) predicate_nominations=(\d+)/,
 			);
+			expect(nominations, measured.stderr).not.toBeNull();
+			expect(nominations!.slice(1).map(Number)).toEqual(compiled ? [0, 1, 1] : [0, 0, 0]);
+			expect(
+				Number(
+					measured.stderr.match(
+						/\[perf-callback-realm-stats\] foreign_nominations=(\d+)/,
+					)?.[1] ?? -1,
+				),
+			).toBe(compiled ? 2 : 0);
 		}
 	}, 600_000);
 });

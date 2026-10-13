@@ -166,7 +166,7 @@ describe("retained lazy Iterator callback contracts", () => {
 			}),
 		).toBe(expected);
 	}, 600_000);
-	it("declines retained foreign callbacks and preserves borrowed-method realms", () => {
+	it("retains owned cross-realm callbacks while eval callbacks remain generic", () => {
 		const realmFixture = "tests/local/retained-iterator-callback-realms.js";
 		const expected = nodeOracle(realmFixture, {}, true);
 		for (const compiled of [true, false]) {
@@ -196,9 +196,18 @@ describe("retained lazy Iterator callback contracts", () => {
 			});
 			expect(measured.status, measured.stderr).toBe(0);
 			expect(measured.stdout).toBe(expected);
-			expect(measured.stderr).toMatch(
-				/\[perf-iterator-lazy-callback-stats\] nominations=0 resumes=0/,
+			const nominations = measured.stderr.match(
+				/\[perf-iterator-lazy-callback-stats\] nominations=(\d+) resumes=(\d+)/,
 			);
+			expect(nominations, measured.stderr).not.toBeNull();
+			expect(nominations!.slice(1).map(Number)).toEqual(compiled ? [1, 3] : [0, 0]);
+			expect(
+				Number(
+					measured.stderr.match(
+						/\[perf-callback-realm-stats\] foreign_nominations=(\d+)/,
+					)?.[1] ?? -1,
+				),
+			).toBe(compiled ? 1 : 0);
 		}
 	}, 600_000);
 	it.each([true, false])(
