@@ -1302,7 +1302,7 @@ function lowerCoreSpecializations(
 			);
 			const property =
 				span.property === undefined ? undefined : requireInstruction(span.property);
-			const call = requireInstruction(span.sliceCall);
+			const call = requireInstruction(span.call);
 			if (
 				(property !== undefined && property.type !== "loadPropertyStatic") ||
 				(call.type !== "call" && call.type !== "callKnown")
@@ -1324,6 +1324,7 @@ function lowerCoreSpecializations(
 					admission: admission(row),
 				},
 				representation: "primitive-string-span",
+				rangeOperation: span.rangeOperation,
 				property,
 				propertyPlacement: span.propertyPlacement,
 				builtinIdentities: span.builtinIdentities,
@@ -1642,7 +1643,7 @@ function lowerFunctionToTarget(
 				"stringSpan",
 			);
 			plannedBuiltinCalls.set(
-				slice.sliceCall,
+				slice.call,
 				slice.builtinCall as unknown as CoreAttributeValue,
 			);
 		}

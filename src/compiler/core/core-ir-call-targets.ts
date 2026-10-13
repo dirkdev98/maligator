@@ -1,4 +1,4 @@
-import { builtinOperationDescriptor } from "../shared/builtin-registry.ts";
+import { builtinCallbackInvocation } from "../shared/builtin-registry.ts";
 import type { CoreCallGraph } from "./core-call-graph.ts";
 import { coreClosedCapturedValueSlots } from "./core-compilation.ts";
 import type { CoreCompilationContext } from "./core-compilation.ts";
@@ -372,7 +372,7 @@ export function coreBuiltinCallbackOperation(
 				? known.operation
 				: undefined;
 	return typeof operation === "string" &&
-		builtinOperationDescriptor(operation)?.callback !== undefined
+		builtinCallbackInvocation(operation) !== undefined
 		? operation
 		: undefined;
 }
@@ -383,7 +383,7 @@ export function coreDirectBuiltinCallbackTarget(
 ): CoreFunctionId | undefined {
 	const operation = coreBuiltinCallbackOperation(fn, instruction);
 	if (operation === undefined) return undefined;
-	const descriptor = builtinOperationDescriptor(operation)!.callback!;
+	const descriptor = builtinCallbackInvocation(operation)!;
 	const offset = fn.instructionOpcodeName(instruction) === "callKnown" ? 1 : 2;
 	const callback = instructionOperand(fn, instruction, offset + descriptor.argumentIndex);
 	return callback === undefined ? undefined : coreDirectCreatedFunction(fn, callback);

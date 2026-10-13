@@ -81,6 +81,7 @@ try {
 let checksum = 0;
 for (let i = 0; i < 400; i++) checksum += classify(i % 2 ? "a|if|z" : "a|else|z", false);
 rows.push(checksum, ["a|if|z", "a|else|z"].map(classify));
+rows.push(["x|AB|z", "x|😀|z", "x|12|z"].map(character));
 if (typeof process !== "undefined" && process.env.MAL_SPAN_MUTABLE === "mutable") {
 	const savedCharacter = Object.getOwnPropertyDescriptor(String.prototype, "charCodeAt");
 	const methodEvents = [];

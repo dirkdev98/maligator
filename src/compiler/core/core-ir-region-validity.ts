@@ -1,4 +1,4 @@
-import { builtinOperationDescriptor } from "../shared/builtin-registry.ts";
+import { builtinCallbackInvocation } from "../shared/builtin-registry.ts";
 import { knownBuiltinCallProves } from "../shared/compiler-facts.ts";
 import type { CompilerGuardPlan, KnownBuiltinCall } from "../shared/compiler-facts.ts";
 import type { FactDependency } from "../shared/fact-implication.ts";
@@ -573,7 +573,7 @@ function specializationAdmissionAnchor(
 				selection.stringSplitProjection.property ?? selection.stringSplitProjection.call
 			);
 		case "string-span":
-			return selection.stringSpan.property ?? selection.stringSpan.sliceCall;
+			return selection.stringSpan.property ?? selection.stringSpan.call;
 		case "regexp-exec-projection":
 			return (
 				selection.regexpExecProjection.property ?? selection.regexpExecProjection.call
@@ -1208,10 +1208,11 @@ function verifySpecialization(
 		if (
 			candidate?.kind !== "string-span" ||
 			selection.anchors.length !== 2 ||
-			selection.anchors[0] !== candidate.sliceCall ||
+			selection.anchors[0] !== candidate.call ||
 			selection.anchors[1] !== candidate.consumers[0]!.instruction ||
 			slice.property !== candidate.property ||
-			slice.sliceCall !== candidate.sliceCall ||
+			slice.call !== candidate.call ||
+			slice.rangeOperation !== candidate.rangeOperation ||
 			!sameNumbers(slice.resultValues, candidate.resultValues) ||
 			slice.consumers.length !== candidate.consumers.length ||
 			slice.consumers.some((consumer, index) => {
@@ -1234,14 +1235,14 @@ function verifySpecialization(
 				slice.guard,
 				"string-span",
 				selection.function,
-				slice.sliceCall,
+				slice.call,
 				slice.builtinIdentities,
 				true,
 				slice.builtinCall,
-				"String.prototype.slice",
+				`String.prototype.${slice.rangeOperation}`,
 			)
 		) {
-			fail(`${selection.id} has an invalid String.slice Number certificate`);
+			fail(`${selection.id} has an invalid String range span certificate`);
 		}
 	}
 	if (selection.kind === "regexp-exec-projection") {
@@ -2121,9 +2122,7 @@ export function verifyCoreOptimizationPlan(
 				);
 			if (site.builtinCallbackOperation !== undefined) {
 				const caller = program.function(site.caller);
-				const invocation = builtinOperationDescriptor(
-					site.builtinCallbackOperation,
-				)?.callback;
+				const invocation = builtinCallbackInvocation(site.builtinCallbackOperation);
 				const origin = `${site.caller}:${site.instruction}`;
 				const observation = callbackObservation!;
 				if (

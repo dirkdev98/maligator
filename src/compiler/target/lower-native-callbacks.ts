@@ -1,4 +1,4 @@
-import { builtinOperationDescriptor } from "../shared/builtin-registry.ts";
+import { builtinCallbackInvocation } from "../shared/builtin-registry.ts";
 import type { NativeEntryLookup } from "./lower-native-calls.ts";
 import type { NativeFunctionPlan, VmRegisterRepresentation } from "./program-image.ts";
 
@@ -27,9 +27,9 @@ export function selectNativeCallbackTransports(
 			call.directCallbackFunctionIndex === undefined
 		)
 			return [];
-		const invocation = builtinOperationDescriptor(
+		const invocation = builtinCallbackInvocation(
 			call.guardedBuiltinCall?.operation ?? "",
-		)?.callback;
+		);
 		const arity = invocation?.argumentKinds.length;
 		if (arity === undefined || native.body.instructions[instructionIp]?.opcode !== "CALL")
 			return [];
@@ -65,8 +65,7 @@ export function selectNativeCallbackTransports(
 					: { argumentCount: entry.argumentRepresentations.length }),
 				parameters,
 				resultRepresentation: entry.resultRepresentation,
-				...((call.guardedBuiltinCall?.operation === "Array.prototype.reduce" ||
-					call.guardedBuiltinCall?.operation === "Array.prototype.reduceRight") &&
+				...(invocation?.kind === "reduction" &&
 				entry.resultRepresentation === "number" &&
 				parameters.length >= 2 &&
 				parameters.length <= 4 &&

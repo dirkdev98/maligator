@@ -7,6 +7,10 @@ import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/se
 import { optimizeSemanticProgramToCore } from "../src/compiler/pipeline/compile-core-common.ts";
 import { compileSemanticProgramToProgramImage } from "../src/compiler/pipeline/compile-core.ts";
 import {
+	builtinCallbackInvocation,
+	builtinOperationDescriptor,
+} from "../src/compiler/shared/builtin-registry.ts";
+import {
 	compilerProgramFactsFromConfig,
 	programClosureCertificate,
 	withProgramClosure,
@@ -46,6 +50,55 @@ function input(
 }
 
 describe("native entries from builtin callback invocation facts", () => {
+	it("preserves guarded Array loop expansion for a nonnumeric reduction callback", () => {
+		const semantic = analyzeSourceAndRunSemanticAnalysis(
+			`function join(groups) {
+			let text = "";
+			for (let index = 0; index < groups.length; index++)
+				text += groups[index].reduce((acc, value) => acc + value, "");
+			return text;
+		} globalThis.join = join;`,
+			"/array-reduce-inline.js",
+		);
+		const compilation = optimizeSemanticProgramToCore(
+			semantic,
+			{ coreVerification: "per-pass" },
+			(_phase, run) => run(),
+		);
+		const invocations = [...compilation.program.functionIds()].flatMap((id) => {
+			const fn = compilation.program.function(id);
+			return [...fn.instructionIds()].filter(
+				(instruction) =>
+					fn.instructionKind(instruction) === "operation" &&
+					fn.instructionAttributes(instruction).intrinsic === "__arrayIterationEligible",
+			);
+		});
+		expect(invocations).toHaveLength(1);
+	});
+
+	it.each(["reduce", "reduceRight"])(
+		"retains concrete builtin identities beneath the %s invocation family",
+		(method) => {
+			const family = builtinOperationDescriptor(`ArrayOrTypedArray.prototype.${method}`)!;
+			expect(family.receiver).toBe("any");
+			expect(family.lowerings).toEqual(["generic"]);
+			expect(family.guardedCallees).toEqual([
+				`Array.prototype.${method}`,
+				`TypedArray.prototype.${method}`,
+			]);
+			const invocation = builtinCallbackInvocation(family.id)!;
+			expect(invocation).toEqual({
+				kind: "reduction",
+				argumentIndex: 0,
+				argumentKinds: ["any", "any", "number", "object"],
+			});
+			for (const callee of family.guardedCallees!)
+				expect(builtinCallbackInvocation(callee)).toEqual(invocation);
+			expect(builtinCallbackInvocation("Array.prototype.map")).not.toEqual(invocation);
+			expect(builtinCallbackInvocation("Math.round")).toBeUndefined();
+		},
+	);
+
 	it.each(["map", "reduce"] as const)(
 		"discovers the %s index ABI without an ordinary seed call",
 		(operation) => {

@@ -416,7 +416,7 @@ numeric sorting, stack objects, and string projections.
       matched pairs improve broader shared-layout and distinct-layout cases by 10%
       and 2.5%. All 21 focused Linux ASan/UBSan checks passed after correcting an
       obsolete fixture assertion.
-- [ ] Enumeration snapshot traversal: consume a retained key snapshot without a
+- [x] Enumeration snapshot traversal: consume a retained key snapshot without a
       general keys Array; preserve eager enumeration, key order, and mutation semantics.
       Indexed traversal now retains up to 16 shaped-record keys in root slots, with
       one cached Array materialization for out-of-range or coercing observations.
@@ -424,7 +424,7 @@ numeric sorting, stack objects, and string projections.
       control changed by about 1%. Admission now follows a captured keys method across
       bounded argument preparation. All three focused native checks now pass after
       fixing the realm harness and exercising materialization in a selected region;
-      the expanded Linux sanitizer rerun remains pending.
+      all three expanded Linux ASan/UBSan checks pass.
 - [ ] Broaden shared span consumers beyond length, equality, and numeric conversion;
       preserve method identity, UTF-16 behavior, and materialization at observers.
       Slice and split spans now support guarded `charCodeAt`, and split spans share
@@ -434,6 +434,8 @@ numeric sorting, stack objects, and string projections.
       repeated execution. Sanitizer failures exposed retained capture/case-result
       control-flow escapes and missing locked character-method authority; both are
       repaired, with 71 focused span/Core and 16 regexp emission checks passing.
+      Regexp and slice Linux ASan/UBSan checks pass. Split native checks pass after
+      adding an executed numeric callback path; its sanitizer rerun remains pending.
 - [ ] Broaden numeric comparator invocation to fixed argument snapshots, missing
       and default parameters, bounded rest, and comparator-owned captured locals.
       Implemented through the existing two-number callback ABI and per-activation
@@ -443,33 +445,40 @@ numeric sorting, stack objects, and string projections.
       loop backedges when the same allocation cannot execute again on that lifetime.
       Implemented using dominance and the existing alias/generation validation;
       retain heap mutation visibility after observation and decline cross-generation
-      aliases. Focused compiler checks pass; native verification remains pending and
+      aliases. Focused compiler and mutable/locked Linux ASan/UBSan checks pass;
       the busy-laptop microbenchmark is inconclusive.
 - [ ] Extend fixed TypedArray storage regions to Float32, Int32, Uint32, and mixed
       views using one admitted storage descriptor and ordered numeric accesses.
       Implemented with store rounding, integer conversion, overlap order, and completed
       iteration state at polls. One shared loop generator retains a separate all-Float64
       entry after an initial microbenchmark exposed repeated kind checks. Focused
-      checks and the runtime helper sanitizer probe pass; full native verification
-      and measurements on an isolated host remain pending.
+      checks, the runtime helper probe, and mutable/locked Linux ASan/UBSan checks
+      pass; measurements on an isolated host remain pending.
 - [ ] Reuse builtin callback arity facts for bounded argument snapshots and rest
       parameters, including numeric reduction, without changing invocation semantics.
       Implemented through existing descriptor argument counts and native entries;
       pure entry producers preserve snapshots, while effects end the admissible prefix.
-      Focused unit checks pass; native execution and measurement remain pending.
+      Focused units and mutable/locked Linux ASan/UBSan checks pass; measurement
+      remains pending.
 - [ ] Carry proven pure numeric producers into the shared fresh Array output plan;
       preserve initializer order, roots, and the existing publication contract.
       Bounded same-block Core scheduling and preallocation key lookup are implemented;
-      focused units pass, with native execution and measurement pending.
+      focused units and mutable/locked Linux ASan/UBSan checks pass; measurement
+      remains pending.
 - [ ] Complete broad verification and compiler-cost acceptance for this sequence;
       the completed cases do not close the broader owning tasks below. The initial
       sequence's native self-compiler comparison was inconclusive (five matched pairs,
       0.76% slower); later widening is outside that captured source.
 - [ ] Extend descriptor-driven callback invocation to TypedArray `reduce` and
       `reduceRight`, retaining element observation, detachment behavior, callback
-      effects, and generic BigInt fallback.
+      effects, and generic BigInt fallback. Implemented through explicit guarded
+      invocation families and the shared VM callback entry; fixed argument snapshots,
+      rest, every numeric element kind, and generic resizable/shared inputs are covered
+      by the new fixture. Focused units pass; native verification remains pending.
 - [ ] Admit `substring` as a shared span producer using its own swap/clamp bounds
-      normalization and the existing rooted lifetime and consumer contract.
+      normalization and the existing rooted lifetime and consumer contract. Implemented
+      with one shared range normalizer and validated producer metadata; 78 focused
+      compiler and 11 emission checks pass. Native verification remains pending.
 - [ ] Widen fixed numeric storage regions to bounded affine index windows such as
       `i + constant`; validate each view's full window once and preserve overlap order.
 

@@ -1642,9 +1642,9 @@ function emitCompiledVariant(
 	const stringSpanSites = new Map<number, NativeStringSpanSite>();
 	for (const span of nativeContract.specializations) {
 		if (span.kind !== "string-span") continue;
-		stringSpanSites.set(span.sliceCallIp, {
+		stringSpanSites.set(span.callIp, {
 			span,
-			producerIp: span.sliceCallIp,
+			producerIp: span.callIp,
 			consumers: span.consumers,
 			subjectSlot: nextStackSlot++,
 			materializedSlot: nextStackSlot++,
@@ -3118,7 +3118,7 @@ interface NativeStringSpanSite {
 }
 interface NativeStringSpanAction {
 	site: NativeStringSpanSite;
-	role: "slice" | "projection" | NativeStringSpan["consumers"][number]["kind"];
+	role: "range" | "projection" | NativeStringSpan["consumers"][number]["kind"];
 	consumer?: NativeStringSpan["consumers"][number];
 }
 
@@ -4207,7 +4207,7 @@ function emitBody(
 	for (const site of stringSpanSites.values()) {
 		nativeStringSpanActionByIp.set(site.producerIp, {
 			site,
-			role: site.projection === undefined ? "slice" : "projection",
+			role: site.projection === undefined ? "range" : "projection",
 		});
 		for (const consumer of site.consumers)
 			nativeStringSpanActionByIp.set(consumer.ip, {
@@ -6165,7 +6165,7 @@ function emitInstruction(
 		});
 		if (ordinary === null) return null;
 		if (
-			role === "slice" &&
+			role === "range" &&
 			span !== undefined &&
 			(instruction.opcode === "CALL" || instruction.opcode === "CALL_KNOWN")
 		) {
@@ -6181,7 +6181,7 @@ function emitInstruction(
 			return [
 				`${materialized} = MAL_VALUE_UNDEFINED;`,
 				`${source} = MAL_VALUE_UNDEFINED;`,
-				`${prefix}_active = ${profileCall("string", `mal_builtin_string_slice_span_init(${callee}, ${boxedOperand(instruction.thisValue)}, ${argument(0)}, ${argument(1)}, ${locked ? "true" : "false"}, &${source}, &${prefix}_start, &${prefix}_end)`)};`,
+				`${prefix}_active = ${profileCall("string", `mal_builtin_string_range_span_init(${callee}, ${boxedOperand(instruction.thisValue)}, ${argument(0)}, ${argument(1)}, MAL_STRING_RANGE_${span.rangeOperation.toUpperCase()}, ${locked ? "true" : "false"}, &${source}, &${prefix}_start, &${prefix}_end)`)};`,
 				`if (${prefix}_active) {`,
 				`  r${instruction.dst} = MAL_VALUE_UNDEFINED;`,
 				`  ${poll()}`,
@@ -10325,6 +10325,12 @@ function emitInstruction(
 							"Array.prototype.filter": "MAL_BUILTIN_ARRAY_ITERATION_FILTER",
 							"Array.prototype.reduce": "MAL_BUILTIN_ARRAY_ITERATION_REDUCE",
 							"Array.prototype.reduceRight": "MAL_BUILTIN_ARRAY_ITERATION_REDUCE_RIGHT",
+							"TypedArray.prototype.reduce": "MAL_BUILTIN_TYPED_ARRAY_REDUCE",
+							"TypedArray.prototype.reduceRight": "MAL_BUILTIN_TYPED_ARRAY_REDUCE_RIGHT",
+							"ArrayOrTypedArray.prototype.reduce":
+								"MAL_BUILTIN_ARRAY_OR_TYPED_ARRAY_REDUCE",
+							"ArrayOrTypedArray.prototype.reduceRight":
+								"MAL_BUILTIN_ARRAY_OR_TYPED_ARRAY_REDUCE_RIGHT",
 							"Array.prototype.findLast": "MAL_BUILTIN_ARRAY_ITERATION_FIND_LAST",
 							"Array.prototype.findLastIndex":
 								"MAL_BUILTIN_ARRAY_ITERATION_FIND_LAST_INDEX",
@@ -10340,6 +10346,10 @@ function emitInstruction(
 								| "Array.prototype.filter"
 								| "Array.prototype.reduce"
 								| "Array.prototype.reduceRight"
+								| "TypedArray.prototype.reduce"
+								| "TypedArray.prototype.reduceRight"
+								| "ArrayOrTypedArray.prototype.reduce"
+								| "ArrayOrTypedArray.prototype.reduceRight"
 								| "Array.prototype.findLast"
 								| "Array.prototype.findLastIndex"
 								| "Array.prototype.flatMap"

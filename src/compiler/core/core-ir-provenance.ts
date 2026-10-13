@@ -948,7 +948,8 @@ export interface CoreStringSplitProjectionCandidate extends CoreLocalSpecializat
 
 export interface CoreStringSpanCandidate extends CoreLocalSpecializationCandidateBase<"string-span"> {
 	readonly property?: CoreInstructionId;
-	readonly sliceCall: CoreInstructionId;
+	readonly call: CoreInstructionId;
+	readonly rangeOperation: "slice" | "substring";
 	readonly resultValues: ReadonlyArray<CoreValueId>;
 	readonly consumers: ReadonlyArray<CoreStringSpanConsumer>;
 	readonly exceptionalBlocks: ReadonlyArray<CoreBlockId>;
@@ -3655,44 +3656,47 @@ function stringSpanCandidates(
 	const candidates: Array<CoreStringSpanCandidate> = [];
 	const root = (value: CoreValueId) => roots.get(value) ?? value;
 	let controlUses: CoreStackObjectControlUses | undefined;
-	for (const sliceCall of [
+	for (const call of [
 		...indexedOpcodeInstructions(fn, index, "call"),
 		...indexedOpcodeInstructions(fn, index, "callKnown"),
 	]) {
-		const known = fn.instructionOpcodeName(sliceCall) === "callKnown";
-		const attrs = fn.instructionAttributes(sliceCall);
+		const known = fn.instructionOpcodeName(call) === "callKnown";
+		const attrs = fn.instructionAttributes(call);
 		const offset = known ? 1 : 2;
 		if (
 			attrs.construct ||
 			attrs.argumentMode !== undefined ||
-			(known && attrs.operation !== "String.prototype.slice") ||
-			instructionOperandCount(fn, sliceCall) < offset ||
-			instructionOperandCount(fn, sliceCall) > offset + 2 ||
-			instructionResultCount(fn, sliceCall) !== 1 ||
-			!control.reachable.has(fn.instructionBlock(sliceCall))
+			(known &&
+				attrs.operation !== "String.prototype.slice" &&
+				attrs.operation !== "String.prototype.substring") ||
+			instructionOperandCount(fn, call) < offset ||
+			instructionOperandCount(fn, call) > offset + 2 ||
+			instructionResultCount(fn, call) !== 1 ||
+			!control.reachable.has(fn.instructionBlock(call))
 		)
 			continue;
 		const property = known
 			? undefined
-			: specializationDefinition(fn, roots, instructionOperand(fn, sliceCall, 0)!);
+			: specializationDefinition(fn, roots, instructionOperand(fn, call, 0)!);
+		const rangeOperation =
+			(known && attrs.operation === "String.prototype.substring") ||
+			staticPropertyNamed(program, fn, property, "substring")
+				? "substring"
+				: "slice";
 		if (
 			!known &&
-			(!staticPropertyNamed(program, fn, property, "slice") ||
+			(!staticPropertyNamed(program, fn, property, rangeOperation) ||
 				root(instructionOperand(fn, property, 0)!) !==
-					root(instructionOperand(fn, sliceCall, 1)!) ||
-				!specializationInstructionDominates(control, index, property, sliceCall))
+					root(instructionOperand(fn, call, 1)!) ||
+				!specializationInstructionDominates(control, index, property, call))
 		)
 			continue;
 		if (property !== undefined) {
 			const uses = index.uses.get(root(instructionResult(fn, property, 0)!)) ?? [];
-			if (
-				uses.length !== 1 ||
-				uses[0]!.instruction !== sliceCall ||
-				uses[0]!.position !== 0
-			)
+			if (uses.length !== 1 || uses[0]!.instruction !== call || uses[0]!.position !== 0)
 				continue;
 		}
-		const result = instructionResult(fn, sliceCall, 0)!;
+		const result = instructionResult(fn, call, 0)!;
 		const resultRoot = root(result);
 		const uses = index.uses.get(resultRoot) ?? [];
 		if (uses.length > 16) continue;
@@ -3709,7 +3713,7 @@ function stringSpanCandidates(
 				use.position === 0
 			)
 				continue;
-			if (!specializationInstructionDominates(control, index, sliceCall, instruction)) {
+			if (!specializationInstructionDominates(control, index, call, instruction)) {
 				safe = false;
 				break;
 			}
@@ -3806,7 +3810,7 @@ function stringSpanCandidates(
 		}
 		if (!safe || projected === 0) continue;
 		for (const instruction of flow.returns.get(resultRoot) ?? []) {
-			if (!specializationInstructionDominates(control, index, sliceCall, instruction)) {
+			if (!specializationInstructionDominates(control, index, call, instruction)) {
 				safe = false;
 				break;
 			}
@@ -3820,7 +3824,7 @@ function stringSpanCandidates(
 		const sites = [...consumers.values()].sort((a, b) => a.instruction - b.instruction);
 		const instructions = Object.freeze([
 			...(property === undefined ? [] : [property]),
-			sliceCall,
+			call,
 			...sites.map((site) => site.instruction),
 		]);
 		const ordinaryBlocks = new Set(
@@ -3837,12 +3841,13 @@ function stringSpanCandidates(
 		if (exceptionalBlocks.some((block) => ordinaryBlocks.has(block))) continue;
 		candidates.push(
 			Object.freeze({
-				key: `string-span:${fn.id}:${sliceCall}`,
+				key: `string-span:${fn.id}:${call}`,
 				kind: "string-span",
 				function: fn.id,
-				root: sliceCall,
+				root: call,
 				property,
-				sliceCall,
+				call,
+				rangeOperation,
 				resultValues: specializationResultValues(index, roots, result),
 				consumers: Object.freeze(sites),
 				exceptionalBlocks,

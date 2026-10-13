@@ -41,6 +41,61 @@ const branching = `const part = value.slice(start, end); const length = part.len
 
 describe("composable string spans", () => {
 	it.each(["mutable", "locked"] as const)(
+		"shares substring bounds with the span consumers under %s primordials",
+		(mode) => {
+			const image = compile(branching.replace(".slice(", ".substring("), mode);
+			expect(spans(image)).toHaveLength(1);
+			expect(spans(image)[0]!.rangeOperation).toBe("substring");
+			expect(spans(image)[0]!.consumers.map((consumer) => consumer.kind)).toEqual(
+				expect.arrayContaining(["length", "equal", "number", "materialize"]),
+			);
+			expect(deserializeCompilerArtifact(serializeCompilerArtifact(image))).toEqual(
+				image,
+			);
+		},
+	);
+	it.each(["", "start", "start, end"])(
+		"selects substring character consumers with arguments (%s)",
+		(args) => {
+			const image = compile(`const part=value.substring(${args}); observer();
+ return part.charCodeAt(escape)+part.length;`);
+			expect(spans(image)).toHaveLength(1);
+			expect(spans(image)[0]!.rangeOperation).toBe("substring");
+			expect(spans(image)[0]!.consumers.map((consumer) => consumer.kind)).toContain(
+				"charCodeAtCall",
+			);
+		},
+	);
+	it.each(["slice", "substring"] as const)(
+		"rejects a forged range operation for a %s producer",
+		(operation) => {
+			const image = compile(
+				`const part=value.${operation}(start,end);return part.length;`,
+			);
+			const owner = image.native.functions[1]!;
+			expect(spans(image)).toHaveLength(1);
+			expect(() =>
+				serializeCompilerArtifact({
+					...image,
+					native: {
+						...image.native,
+						functions: image.native.functions.with(1, {
+							...owner,
+							specializations: owner.specializations.map((region) =>
+								region.kind === "string-span"
+									? {
+											...region,
+											rangeOperation: operation === "slice" ? "substring" : "slice",
+										}
+									: region,
+							),
+						}),
+					},
+				}),
+			).toThrow(/string-span/i);
+		},
+	);
+	it.each(["mutable", "locked"] as const)(
 		"keeps character-code consumers inside the span under %s primordials",
 		(mode) => {
 			const image = compile(

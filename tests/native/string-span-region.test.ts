@@ -39,6 +39,14 @@ describe("composable string spans", () => {
 					.flatMap((fn) => fn.specializations)
 					.filter((region) => region.kind === "string-span").length,
 			).toBeGreaterThan(0);
+			expect(
+				pair.programImage.native.functions.some((fn) =>
+					fn.specializations.some(
+						(region) =>
+							region.kind === "string-span" && region.rangeOperation === "substring",
+					),
+				),
+			).toBe(true);
 			for (const binary of [pair.compiled, pair.interpreted])
 				for (const stress of [{}, STRESS_ENV])
 					expect(
@@ -72,6 +80,11 @@ describe("composable string spans", () => {
 			);
 			expect(characters).not.toBeNull();
 			expect(Number(characters![1])).toBeGreaterThan(0);
+			const substring = measured.stderr.match(
+				/\[perf-string-span-substring-stats\] admissions=(\d+)/,
+			);
+			expect(substring).not.toBeNull();
+			expect(Number(substring![1])).toBeGreaterThan(0);
 		},
 		600_000,
 	);

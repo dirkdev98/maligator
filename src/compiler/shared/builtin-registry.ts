@@ -81,6 +81,7 @@ export interface BuiltinOperationDescriptor {
 		| "none"
 		| "any"
 		| "array"
+		| "typed-array"
 		| "boolean"
 		| "number"
 		| "string"
@@ -96,7 +97,9 @@ export interface BuiltinOperationDescriptor {
 	readonly lowerings: ReadonlyArray<string>;
 	/** Exact argument count currently accepted by the unboxed numeric lowering. */
 	readonly nativeNumberArity?: number;
+	readonly guardedCallees?: ReadonlyArray<string>;
 	readonly callback?: {
+		readonly kind?: "reduction";
 		readonly argumentIndex: number;
 		readonly argumentKinds: ReadonlyArray<"any" | "number" | "object">;
 	};
@@ -453,6 +456,7 @@ const arrayIterationOperations: ReadonlyArray<BuiltinOperationDescriptor> = (
 	realm: "semantic-identity",
 	lowerings: ["generic", "inlined-callback-loop"],
 	callback: {
+		...(key === "reduce" || key === "reduceRight" ? { kind: "reduction" as const } : {}),
 		argumentIndex: 0,
 		argumentKinds:
 			key === "reduce" || key === "reduceRight"
@@ -460,6 +464,39 @@ const arrayIterationOperations: ReadonlyArray<BuiltinOperationDescriptor> = (
 				: ["any", "number", "object"],
 	},
 }));
+
+const typedArrayReductionOperations: ReadonlyArray<BuiltinOperationDescriptor> = [
+	"reduce",
+	"reduceRight",
+].map((key) => ({
+	id: `TypedArray.prototype.${key}`,
+	owner: "TypedArray.prototype",
+	key,
+	receiver: "typed-array",
+	arity: { minimum: 1 },
+	evaluationOrder: "receiver-then-arguments",
+	coercionOrder: [],
+	effects: ["property-access", "call-user-code", "allocate", "throw", "safepoint"],
+	result: "any",
+	realm: "semantic-identity",
+	lowerings: ["generic"],
+	callback: {
+		kind: "reduction",
+		argumentIndex: 0,
+		argumentKinds: ["any", "any", "number", "object"],
+	},
+}));
+
+const reductionInvocationFamilies: ReadonlyArray<BuiltinOperationDescriptor> =
+	typedArrayReductionOperations.map((typed) => ({
+		...typed,
+		id: `ArrayOrTypedArray.prototype.${typed.key}`,
+		owner: "ArrayOrTypedArray.prototype",
+		receiver: "any",
+		coercionOrder: ["receiver-object", "receiver-length"],
+		effects: ["coerce", ...typed.effects],
+		guardedCallees: [`Array.prototype.${typed.key}`, typed.id],
+	}));
 
 export const builtinOperations: ReadonlyArray<BuiltinOperationDescriptor> = [
 	{
@@ -778,10 +815,10 @@ export const builtinOperations: ReadonlyArray<BuiltinOperationDescriptor> = [
 		realm: "semantic-identity",
 		lowerings: ["generic", "guarded-native-collection", "exact-builtin-call"],
 	})),
-	{
-		id: "String.prototype.slice",
+	...(["slice", "substring"] as const).map((key): BuiltinOperationDescriptor => ({
+		id: `String.prototype.${key}`,
 		owner: "String.prototype",
-		key: "slice",
+		key,
 		receiver: "string",
 		arity: { minimum: 0, maximum: 2 },
 		evaluationOrder: "receiver-then-arguments",
@@ -790,7 +827,7 @@ export const builtinOperations: ReadonlyArray<BuiltinOperationDescriptor> = [
 		result: "string",
 		realm: "semantic-identity",
 		lowerings: ["generic", "span-projection"],
-	},
+	})),
 	{
 		id: "String.prototype.trim",
 		owner: "String.prototype",
@@ -848,6 +885,8 @@ export const builtinOperations: ReadonlyArray<BuiltinOperationDescriptor> = [
 		lowerings: ["generic", "capture-projection"],
 	},
 	...arrayIterationOperations,
+	...typedArrayReductionOperations,
+	...reductionInvocationFamilies,
 	...mathOperations,
 	...mathBinaryOperations,
 ];
@@ -1027,6 +1066,28 @@ export function builtinOperationDescriptor(
 	return builtinOperations.find((operation) => operation.id === id);
 }
 
+export function builtinCallbackInvocation(
+	id: string,
+): BuiltinOperationDescriptor["callback"] {
+	const descriptor = builtinOperationDescriptor(id);
+	const invocation = descriptor?.callback;
+	if (invocation === undefined) return undefined;
+	if (
+		descriptor?.guardedCallees?.some((callee) => {
+			const member = builtinOperationDescriptor(callee);
+			return (
+				member?.guardedCallees !== undefined ||
+				member?.callback === undefined ||
+				member.callback.kind !== invocation.kind ||
+				member.callback.argumentIndex !== invocation.argumentIndex ||
+				member.callback.argumentKinds.join("\0") !== invocation.argumentKinds.join("\0")
+			);
+		})
+	)
+		return undefined;
+	return invocation;
+}
+
 function featureGuard(feature: BuiltinFeature): string {
 	switch (feature) {
 		case "always":
@@ -1087,6 +1148,15 @@ export function validateBuiltinRegistry(): void {
 		if (operationIds.has(operation.id))
 			throw new Error(`duplicate builtin operation: ${operation.id}`);
 		operationIds.add(operation.id);
+		if (
+			operation.guardedCallees !== undefined &&
+			(operation.guardedCallees.length < 2 ||
+				builtinCallbackInvocation(operation.id) === undefined ||
+				operation.guardedCallees.some(
+					(callee) => builtinOperationDescriptor(callee)?.key !== operation.key,
+				))
+		)
+			throw new Error(`invalid builtin callback family: ${operation.id}`);
 	}
 	for (const operation of directBuiltinOperationIds) {
 		const descriptor = builtinOperationDescriptor(operation);

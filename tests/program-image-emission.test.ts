@@ -3922,11 +3922,11 @@ describe("native update-expression representation", () => {
 		`;
 		const output = emit(code);
 		expect(output).toContain("mal_builtin_string_split_projection(vm,");
-		expect(output).toContain("mal_builtin_string_slice_span_init(");
+		expect(output).toContain("mal_builtin_string_range_span_init(");
 
 		const lockedOutput = emitLocked(code);
 		expect(lockedOutput).toContain("mal_builtin_string_split_projection_locked(vm,");
-		expect(lockedOutput).toContain("mal_builtin_string_slice_span_init(");
+		expect(lockedOutput).toContain("mal_builtin_string_range_span_init(");
 		expect(lockedOutput).not.toContain("mal_builtin_string_split_projection(vm,");
 		// The adjacent property Get is absent from the hot attempt and reconstructed
 		// inside the local-guard fallback before the ordinary call.
@@ -4325,7 +4325,7 @@ describe("native update-expression representation", () => {
 			specializations(cached).filter((region) => region.kind === "string-span"),
 		).toEqual(regions);
 		expect(emitProgramImage(cached, { compiled: true })).toContain(
-			"mal_builtin_string_slice_span_init(",
+			"mal_builtin_string_range_span_init(",
 		);
 
 		const functionIndex = lowered.native.functions.findIndex((fn) =>
@@ -4754,7 +4754,7 @@ describe("native update-expression representation", () => {
 			}
 			globalThis.parse = parse;
 		`);
-		expect(output).toContain("mal_builtin_string_slice_span_init(");
+		expect(output).toContain("mal_builtin_string_range_span_init(");
 	});
 
 	it("projects selected captures from a closed RegExp exec result", () => {

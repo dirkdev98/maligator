@@ -262,10 +262,17 @@ bool mal_builtin_string_ascii_case_chain_length_span_locked(
     u32 *length_out
 );
 
+typedef enum MalStringRangeOp {
+    MAL_STRING_RANGE_SLICE,
+    MAL_STRING_RANGE_SUBSTRING,
+    MAL_STRING_RANGE_SUBSTR,
+} MalStringRangeOp;
+
 // Admission accepts only primitive bounds, so failure never repeats coercion effects.
-bool mal_builtin_string_slice_span_init(
+bool mal_builtin_string_range_span_init(
     MalValue callee, MalValue receiver, MalValue start_value, MalValue end_value,
-    bool identity_locked, MalValue *subject_out, usize *start_out, usize *end_out
+    MalStringRangeOp operation, bool identity_locked,
+    MalValue *subject_out, usize *start_out, usize *end_out
 );
 bool mal_builtin_string_span_equal(MalValue subject, usize start, usize end, MalValue other);
 
@@ -370,12 +377,6 @@ bool mal_builtin_string_trim_span_length_direct(
 /** Caller proves the captured builtin identity and any required semantic epochs. */
 bool mal_builtin_string_trim_span_length_locked(
     MalValue subject, usize start, usize end, u32 *out);
-
-typedef enum MalStringRangeOp {
-    MAL_STRING_RANGE_SLICE,
-    MAL_STRING_RANGE_SUBSTRING,
-    MAL_STRING_RANGE_SUBSTR,
-} MalStringRangeOp;
 
 // Canonical builtin identity, primitive receiver, and numeric bounds are caller proofs.
 MalValue mal_builtin_string_range_numeric(MalVm *vm, MalString *string, f64 start, f64 end, MalStringRangeOp operation);

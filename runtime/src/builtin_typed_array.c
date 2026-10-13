@@ -1644,48 +1644,60 @@ static MalValue mal_ta_reduce_impl(MalVm *vm, MalValue this_value, const MalValu
     }
     u32 length = mal_typed_array_object_length(array);
     bool has_accumulator = arg_count >= 2;
-    MalValue accumulator = has_accumulator ? args[1] : mal_value_new_undefined();
-
-    // The accumulator (an arbitrary callback return) is carried across every
-    // callback and must survive a collection inside one; root it (and the call
-    // arguments, which also hold a BigInt element). Numeric elements are non-heap.
-    MalValue acc_root[1] = {accumulator};
-    MalRootSpan acc_span;
-    mal_gc_root(&acc_span, acc_root, 1);
+    MalValue roots[] = {has_accumulator ? args[1] : MAL_VALUE_UNDEFINED, MAL_VALUE_UNDEFINED, this_value};
+    MalRootSpan span;
+    mal_gc_root(&span, roots, 3);
     mal_gc_native_rooted_begin(vm);
-    MalValue ret = mal_value_new_undefined();
+    MalValue ret = MAL_VALUE_UNDEFINED;
+    const MalExactScriptCall *exact = vm->exact_script_call;
+    if (exact == nullptr || exact->callee != callback || exact->numeric_reduce_callback == nullptr)
+        exact = nullptr;
+    bool numeric = exact != nullptr && mal_ops_is_number(roots[0]);
+    f64 accumulator = numeric ? mal_ops_number_as_f64(roots[0]) : 0;
 
     for (u32 step = 0; step < length; step++) {
         u32 i = from_right ? length - 1 - step : step;
+        // Each Get observes the current buffer extent, while iteration keeps its initial length.
         MalValue element = mal_typed_array_object_get(vm, array, i);
+        if (vm->completion.kind == MAL_COMPLETION_THROW) goto done;
+        roots[1] = element;
         if (!has_accumulator) {
-            accumulator = element;
-            acc_root[0] = accumulator;
+            roots[0] = element;
             has_accumulator = true;
+        } else if (numeric && mal_ops_is_number(element)) {
+            if (!mal_vm_call_numeric_reduce_callback(
+                    vm, exact, accumulator, mal_ops_number_as_f64(element), (f64) i,
+                    this_value, &accumulator)) goto done;
             continue;
+        } else {
+            MalValue call_args[] = {
+                numeric ? mal_ops_number_value(accumulator) : roots[0],
+                element, mal_ops_number_value((f64) i), this_value,
+            };
+            MalCompletion completion = mal_vm_call_builtin_callback(
+                vm, callback, MAL_VALUE_UNDEFINED, call_args, 4);
+            if (completion.kind != MAL_COMPLETION_NORMAL) {
+                vm->completion = completion;
+                goto done;
+            }
+            roots[0] = completion.value;
         }
-        MalValue call_args[4] = {accumulator, element, mal_value_from_i32((i32) i), this_value};
-        MalRootSpan call_span;
-        mal_gc_root(&call_span, call_args, 4);
-        MalCompletion completion = mal_vm_call_value(vm, callback, mal_value_new_undefined(), call_args, 4);
-        mal_gc_unroot(&call_span);
-        if (completion.kind != MAL_COMPLETION_NORMAL) {
-            vm->completion = completion;
-            goto done;
+        numeric = exact != nullptr && mal_ops_is_number(roots[0]);
+        if (numeric) {
+            accumulator = mal_ops_number_as_f64(roots[0]);
+            roots[0] = MAL_VALUE_UNDEFINED;
         }
-        accumulator = completion.value;
-        acc_root[0] = accumulator;
     }
 
     if (!has_accumulator) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Reduce of empty array with no initial value");
         goto done;
     }
-    ret = accumulator;
+    ret = numeric ? mal_ops_number_value(accumulator) : roots[0];
 
 done:
     mal_gc_native_rooted_end(vm);
-    mal_gc_unroot(&acc_span);
+    mal_gc_unroot(&span);
     return ret;
 }
 
@@ -1697,6 +1709,10 @@ static MalValue mal_ta_reduce(MalVm *vm, MalValue this_value, const MalValue *ar
 static MalValue mal_ta_reduce_right(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) new_target;
     return mal_ta_reduce_impl(vm, this_value, args, arg_count, true);
+}
+
+MalNativeFunctionCallback mal_builtin_typed_array_reduce_callback(bool right) {
+    return right ? mal_ta_reduce_right : mal_ta_reduce;
 }
 
 // Default TypedArray sort order over raw element bits: numeric ascending (NaN

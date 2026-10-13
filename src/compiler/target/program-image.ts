@@ -61,6 +61,7 @@ export const VM_GUARDED_BUILTIN_OPERATIONS = [
 	"Array.prototype.unshift",
 	"String.prototype.charCodeAt",
 	"String.prototype.slice",
+	"String.prototype.substring",
 	"String.prototype.split",
 	"String.prototype.trim",
 	"Map.prototype.get",
@@ -109,6 +110,10 @@ export const VM_GUARDED_BUILTIN_OPERATIONS = [
 	"Array.prototype.filter",
 	"Array.prototype.reduce",
 	"Array.prototype.reduceRight",
+	"TypedArray.prototype.reduce",
+	"TypedArray.prototype.reduceRight",
+	"ArrayOrTypedArray.prototype.reduce",
+	"ArrayOrTypedArray.prototype.reduceRight",
 	"Array.prototype.findLast",
 	"Array.prototype.findLastIndex",
 	"Array.prototype.flatMap",
@@ -459,10 +464,11 @@ export type VmStringSpanRegion = VmRegionEnvelope<
 	"primitive-string-span",
 	"on-demand"
 > & {
+	readonly rangeOperation: "slice" | "substring";
 	readonly propertyIp: number;
 	readonly propertyPlacement: CorePropertyPlacement;
 	readonly builtinIdentities: CoreBuiltinIdentityDecision;
-	readonly sliceCallIp: number;
+	readonly callIp: number;
 	readonly receiver: number;
 	readonly resultRegisters: ReadonlyArray<number>;
 	readonly consumers: ReadonlyArray<{
@@ -756,7 +762,7 @@ export type VmRegionActionRole =
 	| "number"
 	| "outerStep"
 	| "property"
-	| "slice"
+	| "range"
 	| "start"
 	| "step"
 	| "trimCall"
@@ -872,7 +878,7 @@ export function vmRegionActions(
 			case "string-span":
 				if (region.propertyPlacement === "call-fallback")
 					add(regionIndex, region.propertyIp, "property");
-				add(regionIndex, region.sliceCallIp, "slice");
+				add(regionIndex, region.callIp, "range");
 				for (const [index, consumer] of region.consumers.entries())
 					add(regionIndex, consumer.ip, consumer.kind, index);
 				break;
@@ -3917,12 +3923,13 @@ function lowerExecutionFunctionToNativePlan(
 				break;
 			}
 			case "string-span": {
-				const sliceCallIp = resolvedAnchors[0]!;
-				const call = instructions[sliceCallIp];
+				const callIp = resolvedAnchors[0]!;
+				const call = instructions[callIp];
 				if (call?.opcode !== "CALL" && call?.opcode !== "CALL_KNOWN")
 					throw coreRegionError(region.kind, "producer");
 				const span: VmStringSpanRegion = {
 					kind: "string-span",
+					rangeOperation: region.rangeOperation,
 					license: {
 						guard,
 						genericTwin: "retained",
@@ -3943,7 +3950,7 @@ function lowerExecutionFunctionToNativePlan(
 							: instructionIndexByTargetInstruction.get(region.property)!,
 					propertyPlacement: region.propertyPlacement,
 					builtinIdentities: region.builtinIdentities,
-					sliceCallIp,
+					callIp,
 					receiver: call.thisValue,
 					resultRegisters: region.resultRegisters,
 					consumers: region.consumers.map((consumer) => ({

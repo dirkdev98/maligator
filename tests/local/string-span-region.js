@@ -33,6 +33,18 @@ function characters(value, start, end, position, effect) {
 	effect();
 	return [length, part.charCodeAt(position), part.charCodeAt(), part.length];
 }
+function substring(value, start, end, escape, observer) {
+	const part = value.substring(start, end);
+	const length = part.length;
+	collect();
+	if (escape) return [length, part === "ab", observer(part)];
+	return [length, part === "😀", part.charCodeAt(0), Number(part)];
+}
+function substringMissing(value, start) {
+	const whole = value.substring();
+	const tail = value.substring(start);
+	return [whole.length, whole === "xabz", tail.length, Number(tail)];
+}
 function selfIndexedCharacter(value) {
 	const part = value.slice(1, -1);
 	return [part.charCodeAt(part), part.length];
@@ -47,9 +59,14 @@ for (const value of ["xabz", "x12z", "x-0z", "xInfinityz", "x😀z", "", "x 7 z"
 		[NaN, Infinity],
 		[Infinity, -Infinity],
 		[2.8, 1.2],
+		[-0, 2],
+		[null, true],
+		["3", "1"],
 	]) {
 		observations.push(inspect(value, bounds[0], bounds[1], false, consume));
 		observations.push(inspect(value, bounds[0], bounds[1], true, consume));
+		observations.push(substring(value, bounds[0], bounds[1], false, consume));
+		observations.push(substring(value, bounds[0], bounds[1], true, consume));
 		observations.push(
 			branch(value, bounds[0], bounds[1], false),
 			branch(value, bounds[0], bounds[1], true),
@@ -59,10 +76,12 @@ for (const value of ["xabz", "x12z", "x-0z", "xInfinityz", "x😀z", "", "x 7 z"
 			observations.push(characters(value, bounds[0], bounds[1], position, collect));
 	}
 }
+observations.push(["xabz", "😀", "12"].map(substringMissing));
 let rope = "";
 for (let index = 0; index < 100; index++) rope += index % 2 ? "😀" : "ab";
 observations.push(inspect(rope, 1, 190, true, consume), unicode(rope, 2, 4));
 observations.push(characters(rope, 1, 190, 2, collect));
+observations.push(substring(rope, 190, 1, true, consume));
 for (const position of [
 	"1",
 	null,
@@ -97,6 +116,49 @@ const end = {
 	},
 };
 observations.push(inspect("xabz", start, end, true, consume), coercions);
+const substringEvents = [];
+const substringStart = {
+	valueOf() {
+		substringEvents.push("start");
+		collect();
+		return 3;
+	},
+};
+const substringEnd = {
+	valueOf() {
+		substringEvents.push("end");
+		collect();
+		return 1;
+	},
+};
+observations.push(substring("xabz", substringStart, substringEnd, true, consume));
+observations.push(substringEvents);
+for (const bound of [Symbol("bound"), 1n]) {
+	try {
+		substring("xabz", bound, substringEnd, false, consume);
+	} catch (error) {
+		observations.push(error.name, substringEvents.length);
+	}
+}
+observations.push(
+	substring(
+		{
+			get substring() {
+				substringEvents.push("get");
+				collect();
+				return function (first, last) {
+					substringEvents.push(this.marker, first, last);
+					return "ab";
+				};
+			},
+			marker: "receiver",
+		},
+		1,
+		3,
+		true,
+		consume,
+	),
+);
 const receiver = {
 	slice(a, b) {
 		observations.push(["override", a, b]);
@@ -129,6 +191,28 @@ function delayed(value, effect) {
 }
 const savedNumber = Number;
 if (typeof process !== "undefined" && process.env.MAL_STRING_SPAN_MUTABLE === "mutable") {
+	const savedSubstring = String.prototype.substring;
+	observations.push(
+		substring(
+			"xabz",
+			{
+				valueOf() {
+					substringEvents.push("replace");
+					String.prototype.substring = () => "12";
+					collect();
+					return 3;
+				},
+			},
+			1,
+			true,
+			consume,
+		),
+	);
+	observations.push(substring("xabz", 1, 3, true, consume));
+	String.prototype.substring = String.prototype.slice;
+	observations.push(substring("xabz", 3, 1, true, consume));
+	String.prototype.substring = savedSubstring;
+	observations.push(substringEvents);
 	const savedCharacter = Object.getOwnPropertyDescriptor(String.prototype, "charCodeAt");
 	const methodEvents = [];
 	Object.defineProperty(String.prototype, "charCodeAt", {

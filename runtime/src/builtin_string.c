@@ -1643,10 +1643,10 @@ static MalValue mal_builtin_string_prototype_ends_with(MalVm *vm, MalValue this_
     return result;
 }
 
-MalValue mal_builtin_string_range_numeric(
-    MalVm *vm, MalString *string, f64 raw_start, f64 raw_end, MalStringRangeOp operation
+static void mal_builtin_string_range_bounds(
+    usize length, f64 raw_start, f64 raw_end, MalStringRangeOp operation,
+    usize *start_out, usize *end_out
 ) {
-    usize length = mal_string_length(string);
     usize start;
     usize end;
     if (operation == MAL_STRING_RANGE_SUBSTRING) {
@@ -1670,6 +1670,15 @@ MalValue mal_builtin_string_range_numeric(
             if (end < start) end = start;
         }
     }
+    *start_out = start;
+    *end_out = end;
+}
+
+MalValue mal_builtin_string_range_numeric(
+    MalVm *vm, MalString *string, f64 raw_start, f64 raw_end, MalStringRangeOp operation
+) {
+    usize start, end;
+    mal_builtin_string_range_bounds(mal_string_length(string), raw_start, raw_end, operation, &start, &end);
     MalBuiltinRootedString root;
     mal_builtin_string_root_init(&root, string);
     MalValue result = mal_builtin_string_slice(vm, mal_builtin_string_root_get(&root), start, end - start);
@@ -1700,26 +1709,31 @@ static MalValue mal_builtin_string_prototype_slice(MalVm *vm, MalValue this_valu
     return mal_builtin_string_range(vm, this_value, args, arg_count, MAL_STRING_RANGE_SLICE);
 }
 
-bool mal_builtin_string_slice_span_init(
+static MalValue mal_builtin_string_prototype_substring(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
+    return mal_builtin_string_range(vm, this_value, args, arg_count, MAL_STRING_RANGE_SUBSTRING);
+}
+
+bool mal_builtin_string_range_span_init(
     MalValue callee, MalValue receiver, MalValue start_value, MalValue end_value,
-    bool identity_locked, MalValue *subject_out, usize *start_out, usize *end_out
+    MalStringRangeOp operation, bool identity_locked,
+    MalValue *subject_out, usize *start_out, usize *end_out
 ) {
-    if (!mal_value_is_string(receiver) ||
+    if ((operation != MAL_STRING_RANGE_SLICE && operation != MAL_STRING_RANGE_SUBSTRING) ||
+        !mal_value_is_string(receiver) ||
         (!mal_ops_is_number(start_value) && !mal_value_is_undefined(start_value)) ||
         (!mal_ops_is_number(end_value) && !mal_value_is_undefined(end_value)) ||
         (!identity_locked &&
          (!mal_value_is_native_function_object(callee) ||
           mal_native_function_object_callback(mal_value_to_native_function_object(callee)) !=
-              mal_builtin_string_prototype_slice))) return false;
+              (operation == MAL_STRING_RANGE_SUBSTRING
+                  ? mal_builtin_string_prototype_substring : mal_builtin_string_prototype_slice)))) return false;
     usize length = mal_string_length(mal_value_to_string(receiver));
     f64 start_number = mal_value_is_undefined(start_value) ? 0 : mal_ops_number_as_f64(start_value);
     f64 end_number = mal_value_is_undefined(end_value) ? (f64) length : mal_ops_number_as_f64(end_value);
-    usize start = (usize) mal_ops_number_clamp_relative(start_number, (f64) length);
-    usize end = (usize) mal_ops_number_clamp_relative(end_number, (f64) length);
+    mal_builtin_string_range_bounds(length, start_number, end_number, operation, start_out, end_out);
     *subject_out = receiver;
-    *start_out = start;
-    *end_out = end < start ? start : end;
     MAL_PERF_COUNT(string_span_admissions);
+    if (operation == MAL_STRING_RANGE_SUBSTRING) MAL_PERF_COUNT(string_span_substring_admissions);
     return true;
 }
 
@@ -1765,10 +1779,6 @@ bool mal_builtin_string_span_equal(MalValue subject_value, usize start, usize en
     mal_string_iterator_dispose(&left_iterator);
     mal_string_iterator_dispose(&right_iterator);
     return equal;
-}
-
-static MalValue mal_builtin_string_prototype_substring(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
-    return mal_builtin_string_range(vm, this_value, args, arg_count, MAL_STRING_RANGE_SUBSTRING);
 }
 
 static MalValue mal_builtin_string_prototype_substr(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {

@@ -95,7 +95,7 @@ import type {
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal artifacts are hard cut-overs: stale cache entries rebuild.
-export const COMPILER_ARTIFACT_VERSION = 203;
+export const COMPILER_ARTIFACT_VERSION = 204;
 
 function validateClosureCaptureOwners(
 	owners: ReadonlyArray<number>,
@@ -197,11 +197,16 @@ const TAGGED_GUARDED_BUILTIN_OPERATIONS = [
 	"String.prototype.split",
 	"String.prototype.trim",
 	"String.prototype.slice",
+	"String.prototype.substring",
 	...VM_GUARDED_BUILTIN_OPERATIONS.filter((operation) => operation.startsWith("Math.")),
 	"RegExp.prototype.exec",
 	...VM_GUARDED_BUILTIN_OPERATIONS.filter(
 		(operation) =>
 			operation.startsWith("Array.prototype.") && operation !== "Array.prototype.push",
+	),
+	...VM_GUARDED_BUILTIN_OPERATIONS.filter(
+		(operation) =>
+			operation.startsWith("TypedArray.") || operation.startsWith("ArrayOrTypedArray."),
 	),
 	...VM_GUARDED_BUILTIN_OPERATIONS.filter((operation) => operation.startsWith("Number.")),
 	...VM_GUARDED_BUILTIN_OPERATIONS.filter(
@@ -218,6 +223,10 @@ const ARRAY_ITERATION_CALLBACK_OPERATIONS: ReadonlySet<string> = new Set([
 	"Array.prototype.filter",
 	"Array.prototype.reduce",
 	"Array.prototype.reduceRight",
+	"TypedArray.prototype.reduce",
+	"TypedArray.prototype.reduceRight",
+	"ArrayOrTypedArray.prototype.reduce",
+	"ArrayOrTypedArray.prototype.reduceRight",
 	"Array.prototype.findLast",
 	"Array.prototype.findLastIndex",
 	"Array.prototype.flatMap",
@@ -2385,10 +2394,11 @@ function writeCompilerArtifact(
 					}
 					break;
 				case "string-span":
+					w.u8(region.rangeOperation === "substring" ? 1 : 0);
 					w.i32(region.propertyIp);
 					writePropertyPlacement(w, region.propertyPlacement);
 					w.u8(region.builtinIdentities === "authority-invariant" ? 1 : 0);
-					w.i32(region.sliceCallIp);
+					w.i32(region.callIp);
 					w.i32(region.receiver);
 					w.i32Array([...region.resultRegisters]);
 					w.u32(region.consumers.length);
@@ -2985,8 +2995,8 @@ function validateStringSpanRegion(
 ): void {
 	stringSpanGuardMasks(region.license);
 	validateNativeStringSpan(fn.instructions, region, stringConstants);
-	const call = fn.instructions[region.sliceCallIp];
-	const plan = nativeCallPlanAt(nativeInstructions, region.sliceCallIp);
+	const call = fn.instructions[region.callIp];
+	const plan = nativeCallPlanAt(nativeInstructions, region.callIp);
 	const identity =
 		call?.opcode === "CALL_KNOWN" ||
 		(plan?.guardedBuiltinCall !== undefined &&
@@ -3003,7 +3013,8 @@ function validateStringSpanRegion(
 	if (
 		region.builtinIdentities !== identity ||
 		(call?.opcode === "CALL" &&
-			plan?.guardedBuiltinCall?.operation !== "String.prototype.slice") ||
+			plan?.guardedBuiltinCall?.operation !==
+				`String.prototype.${region.rangeOperation}`) ||
 		handlers.size !== region.controlFlow.exceptionalHandlerIps.length ||
 		region.controlFlow.exceptionalHandlerIps.some((ip) => !handlers.has(ip))
 	)
@@ -5166,14 +5177,20 @@ function readCompilerArtifact(
 						loads,
 					};
 				} else if (kindTag === 7) {
+					const rangeOperationTag = r.u8();
 					const propertyIp = r.i32();
 					const propertyPlacement = readPropertyPlacement(r);
 					const builtinIdentitiesTag = r.u8();
-					const sliceCallIp = r.i32();
+					const callIp = r.i32();
 					const receiver = r.i32();
 					const resultRegisters = r.i32Array();
 					const count = r.count(3);
-					if (builtinIdentitiesTag > 1 || count === 0 || count > 16)
+					if (
+						rangeOperationTag > 1 ||
+						builtinIdentitiesTag > 1 ||
+						count === 0 ||
+						count > 16
+					)
 						throw new RangeError("program-image-codec: invalid string-span payload");
 					const consumers: Array<
 						Extract<VmRegion, { kind: "string-span" }>["consumers"][number]
@@ -5198,6 +5215,7 @@ function readCompilerArtifact(
 					}
 					region = {
 						kind: "string-span",
+						rangeOperation: rangeOperationTag === 1 ? "substring" : "slice",
 						license: {
 							guard: {
 								dependencies:
@@ -5219,7 +5237,7 @@ function readCompilerArtifact(
 						propertyPlacement,
 						builtinIdentities:
 							builtinIdentitiesTag === 1 ? "authority-invariant" : "runtime-guarded",
-						sliceCallIp,
+						callIp,
 						receiver,
 						resultRegisters,
 						consumers,

@@ -2662,6 +2662,50 @@ mal_vm_call_exact_script_compiled_callback(
     return completion;
 }
 
+static inline __attribute__((always_inline)) MalCompletion mal_vm_call_builtin_callback(
+    MalVm *vm,
+    MalValue callback,
+    MalValue this_arg,
+    const MalValue *args,
+    i32 arg_count
+) {
+    MalExactScriptCall *exact = vm->exact_script_call;
+    if (exact != nullptr && exact->callee == callback) {
+        MAL_PERF_COUNT(array_iteration_exact_callback_calls);
+        if (exact->compiled_callback != nullptr) {
+            MAL_PERF_COUNT(array_iteration_exact_compiled_callback_calls);
+            return mal_vm_call_exact_script_compiled_callback(
+                vm, exact, this_arg, args, arg_count);
+        }
+        return mal_vm_call_exact_script(
+            vm, exact->function_index, callback, this_arg, args, arg_count);
+    }
+    return mal_vm_call_value(vm, callback, this_arg, args, arg_count);
+}
+
+
+static inline __attribute__((always_inline)) bool mal_vm_call_numeric_reduce_callback(
+    MalVm *vm, const MalExactScriptCall *exact, f64 accumulator, f64 value,
+    f64 index, MalValue receiver, f64 *result
+) {
+    if (vm->completion.kind == MAL_COMPLETION_THROW) return false;
+#if MAL_REALMS
+    MalRealm *saved_realm = vm->current_realm;
+    mal_vm_realm_switch_to(vm, mal_vm_callee_realm(vm, exact->callee));
+#endif
+    if (mal_vm_enter_compiled(vm, exact->function_index)) {
+        MAL_PERF_COUNT(array_iteration_numeric_reduce_calls);
+        *result = exact->numeric_reduce_callback(
+            vm, mal_vm_callee_this(vm, exact->function, MAL_VALUE_UNDEFINED),
+            accumulator, value, index, receiver, exact->env, exact->callee);
+        mal_vm_leave_compiled(vm);
+    }
+#if MAL_REALMS
+    mal_vm_realm_switch_to(vm, saved_realm);
+#endif
+    return vm->completion.kind != MAL_COMPLETION_THROW;
+}
+
 // The callback must match the guarded function index; keep it visible to C.
 static inline __attribute__((always_inline)) MalCompletion
 mal_vm_call_function_call_direct_compiled(

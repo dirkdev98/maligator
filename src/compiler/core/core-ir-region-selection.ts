@@ -445,10 +445,10 @@ function pendingLocalCandidate(
 			: candidate.kind === "string-span"
 				? builtinPlanProof(
 						context,
-						"String.prototype.slice",
+						`String.prototype.${candidate.rangeOperation}`,
 						kind,
 						candidate.function,
-						candidate.sliceCall,
+						candidate.call,
 						true,
 					)
 				: candidate.kind === "regexp-exec-projection"
@@ -592,7 +592,7 @@ function pendingLocalCandidate(
 										? Object.freeze([candidate.call, candidate.loads[0]!.instruction])
 										: candidate.kind === "string-span"
 											? Object.freeze([
-													candidate.sliceCall,
+													candidate.call,
 													candidate.consumers[0]!.instruction,
 												])
 											: candidate.kind === "regexp-exec-projection"
@@ -627,7 +627,7 @@ function pendingLocalCandidate(
 			candidate.kind === "string-split-projection"
 				? (candidate.property ?? candidate.call)
 				: candidate.kind === "string-span"
-					? (candidate.property ?? candidate.sliceCall)
+					? (candidate.property ?? candidate.call)
 					: candidate.kind === "regexp-exec-projection"
 						? (candidate.property ?? candidate.call)
 						: candidate.kind === "string-char-code-at-chain" ||
@@ -883,12 +883,13 @@ function pendingLocalCandidate(
 																representation: "primitive-string-span",
 																composition: "exclusive",
 																stringSpan: Object.freeze({
+																	rangeOperation: candidate.rangeOperation,
 																	guard: builtin!.guard,
 																	builtinCall: builtin!.builtinCall,
 																	property: candidate.property,
 																	propertyPlacement: "in-place",
 																	builtinIdentities: builtin!.identity,
-																	sliceCall: candidate.sliceCall,
+																	call: candidate.call,
 																	resultValues: candidate.resultValues,
 																	consumers: candidate.consumers,
 																}),

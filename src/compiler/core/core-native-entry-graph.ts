@@ -1,4 +1,4 @@
-import { builtinOperationDescriptor } from "../shared/builtin-registry.ts";
+import { builtinCallbackInvocation } from "../shared/builtin-registry.ts";
 import {
 	COMPILER_VALUE_KIND_BOOLEAN,
 	COMPILER_VALUE_KIND_NUMBER,
@@ -225,9 +225,7 @@ export function connectCoreNativeEntries(
 		const caller = program.function(callback.caller);
 		const operation = coreBuiltinCallbackOperation(caller, callback.instruction);
 		const invocation =
-			operation === undefined
-				? undefined
-				: builtinOperationDescriptor(operation)?.callback;
+			operation === undefined ? undefined : builtinCallbackInvocation(operation);
 		if (invocation === undefined || operation === undefined) continue;
 		const fn = program.function(callback.target);
 		const observation = observationFor(callback.target);
@@ -289,9 +287,9 @@ export function connectCoreNativeEntries(
 		);
 		if (cost === undefined) continue;
 		const fn = program.function(seed.target);
-		const invocation = builtinOperationDescriptor(
+		const invocation = builtinCallbackInvocation(
 			seed.calls[0]!.builtinCallbackOperation!,
-		)!.callback!;
+		)!;
 		const observation = observationFor(seed.target);
 		const nominated = seed.representations.map((rep, index) =>
 			!nominatedTargets.has(seed.target) &&

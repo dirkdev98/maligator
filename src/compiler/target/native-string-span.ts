@@ -11,32 +11,35 @@ export function validateNativeStringSpan(
 	function fail(): never {
 		throw new RangeError("Invalid string-span region");
 	}
-	const producer = instructions[region.sliceCallIp];
+	const producer = instructions[region.callIp];
 	if (producer?.opcode !== "CALL" && producer?.opcode !== "CALL_KNOWN") fail();
 	const property = instructions[region.propertyIp];
 	if (
+		(region.rangeOperation !== "slice" && region.rangeOperation !== "substring") ||
 		(producer.opcode === "CALL_KNOWN" &&
 			(producer.construct || producer.argumentMode !== undefined)) ||
 		producer.arguments.length > 2 ||
 		producer.thisValue !== region.receiver ||
 		region.propertyPlacement !== "in-place" ||
 		(producer.opcode === "CALL_KNOWN"
-			? producer.operation !== "String.prototype.slice" || region.propertyIp !== -1
+			? producer.operation !== `String.prototype.${region.rangeOperation}` ||
+				region.propertyIp !== -1
 			: property?.opcode !== "LOAD_PROPERTY_STATIC" ||
-				String.fromCharCode(...(strings[property.stringIndex] ?? [])) !== "slice" ||
+				String.fromCharCode(...(strings[property.stringIndex] ?? [])) !==
+					region.rangeOperation ||
 				property.dst !== producer.callee ||
 				property.object !== producer.thisValue) ||
 		region.consumers.length === 0 ||
 		region.consumers.length > 16 ||
 		region.anchors.length !== 2 ||
-		region.anchors[0] !== region.sliceCallIp ||
+		region.anchors[0] !== region.callIp ||
 		region.anchors[1] !== region.consumers[0]!.ip ||
 		!region.resultRegisters.includes(producer.dst)
 	)
 		fail();
 	const consumers = new Map(region.consumers.map((consumer) => [consumer.ip, consumer]));
 	const payload = new Set(
-		[region.propertyIp, region.sliceCallIp, ...consumers.keys()].filter((ip) => ip >= 0),
+		[region.propertyIp, region.callIp, ...consumers.keys()].filter((ip) => ip >= 0),
 	);
 	if (
 		consumers.size !== region.consumers.length ||
@@ -98,7 +101,7 @@ export function validateNativeStringSpan(
 	}
 	validateNativeVirtualValue(
 		instructions,
-		region.sliceCallIp,
+		region.callIp,
 		producer.dst,
 		new Map(region.consumers.map((consumer) => [consumer.ip, [consumer.value]])),
 		fail,

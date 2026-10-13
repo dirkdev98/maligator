@@ -16,3 +16,5 @@ MalValue mal_builtin_typed_array_sort(MalVm *vm, MalValue receiver,
     const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee);
 MalValue mal_builtin_typed_array_to_sorted(MalVm *vm, MalValue receiver,
     const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee);
+
+MalNativeFunctionCallback mal_builtin_typed_array_reduce_callback(bool right);

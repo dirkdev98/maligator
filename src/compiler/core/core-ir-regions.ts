@@ -161,12 +161,13 @@ export interface CoreStringSpanConsumer {
 
 export interface CorePlanStringSpanSpecialization extends CorePlanSpecializationBase<"string-span"> {
 	readonly stringSpan: {
+		readonly rangeOperation: "slice" | "substring";
 		readonly guard: CompilerGuardPlan;
 		readonly builtinCall: KnownBuiltinCall;
 		readonly property?: CoreInstructionId;
 		readonly propertyPlacement: CorePropertyPlacement;
 		readonly builtinIdentities: CoreBuiltinIdentityDecision;
-		readonly sliceCall: CoreInstructionId;
+		readonly call: CoreInstructionId;
 		readonly resultValues: ReadonlyArray<CoreValueId>;
 		readonly consumers: ReadonlyArray<CoreStringSpanConsumer>;
 	};
@@ -690,6 +691,7 @@ export interface CoreAllocatedStringSpanRegion extends CoreAllocatedRegionEnvelo
 		CompilerInstruction,
 	]
 > {
+	readonly rangeOperation: "slice" | "substring";
 	readonly property?: Extract<CompilerInstruction, { type: "loadPropertyStatic" }>;
 	readonly propertyPlacement: CorePropertyPlacement;
 	readonly builtinIdentities: CoreBuiltinIdentityDecision;

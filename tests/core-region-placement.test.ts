@@ -295,7 +295,7 @@ describe("Core plan property placement", () => {
 			),
 		};
 		expect(() => verifyCoreOptimizationPlan(compilation.program, invalid)).toThrow(
-			/invalid String\.slice Number certificate|property placement/,
+			/invalid String range span certificate|property placement/,
 		);
 	});
 

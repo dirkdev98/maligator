@@ -1031,6 +1031,9 @@ const rewriteExactBuiltinCalls: CoreFunctionPass = {
 					constructedCollectionReceiver(fn, root, receiverRoot, candidate.receiver)
 				);
 			});
+			const callbackFamily = candidates.find(
+				(candidate) => candidate.guardedCallees !== undefined,
+			);
 			const compatibleCollectionCollision =
 				candidates.length === 2 &&
 				(key === "has" || key === "delete") &&
@@ -1041,9 +1044,11 @@ const rewriteExactBuiltinCalls: CoreFunctionPass = {
 					? candidates[0]
 					: ownerMatches.length === 1
 						? ownerMatches[0]
-						: compatibleCollectionCollision
-							? candidates[0]
-							: undefined;
+						: callbackFamily !== undefined
+							? callbackFamily
+							: compatibleCollectionCollision
+								? candidates[0]
+								: undefined;
 			if (descriptor === undefined) continue;
 			if (descriptor.receiver === "boolean" && !booleanReceiver()) continue;
 			const exact = exactBuiltinCallDescriptor(descriptor.id);

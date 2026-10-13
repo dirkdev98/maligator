@@ -79,6 +79,9 @@ describe("native builtin callback transport", () => {
 			)!;
 			expect(caller).toBeDefined();
 			const transport = caller.storage!.callbackTransports[0]!;
+			expect(caller.instructions[transport.instructionIp]).toMatchObject({
+				guardedBuiltinCall: { operation: `ArrayOrTypedArray.prototype.${operation}` },
+			});
 			expect(transport.argumentCount).toBe(snapshots ? 4 : undefined);
 			expect(transport).toMatchObject({
 				numericReduction: true,

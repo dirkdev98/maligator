@@ -2786,6 +2786,45 @@
 			"controls": ["numeric-captured-reduce"]
 		},
 		{
+			"id": "typed-numeric-reduce",
+			"owner": "TypedArray.prototype.reduce",
+			"category": "api-builtins",
+			"mechanisms": ["array-callback"],
+			"inputShape": "Ordered Float64 and Int32 folds with a captured numeric factor and exact callback argument snapshots.",
+			"unit": "visited element",
+			"sourceSeam": "runtime/src/builtin_typed_array.c",
+			"controls": ["numeric-arguments-reduce", "typed-array-operations"],
+			"group": "runtime",
+			"suite": "runtime",
+			"fixture": "cases/typed-numeric-reduce.mjs"
+		},
+		{
+			"id": "substring-span-classify",
+			"owner": "Shared substring spans",
+			"category": "memory-layout-usage",
+			"mechanisms": ["string-allocation", "string-traversal"],
+			"inputShape": "Prepared token ranges, half with reversed bounds, shared by length, literal comparison, numeric conversion, and sparse string observations.",
+			"unit": "token",
+			"sourceSeam": "runtime/src/builtin_string.c",
+			"controls": ["string-span-classify", "string-search"],
+			"group": "runtime",
+			"suite": "runtime",
+			"fixture": "cases/substring-span-classify.mjs"
+		},
+		{
+			"id": "fresh-numeric-values",
+			"owner": "Fresh Array initialization",
+			"category": "object-array-representation",
+			"mechanisms": ["allocation-gc"],
+			"inputShape": "Five computed numeric and Boolean fields in a retained Array returned by a helper.",
+			"unit": "result",
+			"sourceSeam": "src/compiler/core/core-array-initialization.ts",
+			"controls": ["fresh-three-values", "short-lived-records"],
+			"group": "runtime",
+			"suite": "runtime",
+			"fixture": "cases/fresh-numeric-values.mjs"
+		},
+		{
 			"id": "method-name-unique",
 			"group": "runtime",
 			"suite": "runtime",

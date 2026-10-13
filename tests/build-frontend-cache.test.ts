@@ -322,7 +322,7 @@ describe("normal build frontend cache", () => {
 		expect(warm.cache).toBe("hit");
 		expect(coldRegions).not.toHaveLength(0);
 		expect(warmRegions).toEqual(coldRegions);
-		expect(coldC).toContain("mal_builtin_string_slice_span_init");
+		expect(coldC).toContain("mal_builtin_string_range_span_init");
 		expect(warmC).toBe(coldC);
 	});
 
