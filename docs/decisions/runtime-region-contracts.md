@@ -40,12 +40,18 @@ Numeric prefix parsing shares the ordinary parseInt/parseFloat algorithms throug
 a bounded segment reader. Borrowed leaves remain within a non-collecting parse;
 the source stays rooted and unrelated rope ranges need not be flattened. Radix
 conversion that can execute user code falls back before parsing begins.
+Output consumers such as repeat pass those bounds into the canonical builder.
+The builder retains the source across allocation and publishes either its final
+result or its pending exception; a declined admission has performed no effects.
 
 Enumeration snapshots retain the sequence produced by the original operation.
 Keys can be counted without loading values; values must be copied eagerly into
 root slots before any consumer runs. Enumerable accessors and unsupported storage
 fall back before user code runs. Indexed observations share one cached Array
 materialization, so later reads see mutations made through that Array.
+Reflect.ownKeys includes strings and public Symbols in own-key order and rejects
+primitive targets; it does not inherit Object methods' primitive boxing behavior.
+Ignored arguments still finish evaluation before enumeration captures its state.
 Entries capture keys and values eagerly but create each pair Array only when
 observed. The captured string key distinguishes an unrealized pair from its cached
 Array in the same rooted slot. Repeated reads reuse that pair; outer materialization
@@ -73,7 +79,16 @@ Their induction update proves the stride; admission covers the visited index
 windows. Polling publishes completed-iteration state before resumption. Fresh Array
 plans use the shared builder's root and publication contract: only effect-free
 initializer work can move before allocation, and references remain rooted until
-the completed result is published.
+the completed result is published. Incremental initialization reserves capacity
+with zero scanned length, then publishes each initialized slot at its original
+store. Collecting initializers retain the owner as an ordinary rooted value and
+use per-store barriers; no backing pointer survives their calls. A handler that
+could observe partially changed Array length prevents that admission.
+
+Property-read regions can retain a receiver through must-alias register moves
+and effect-free forward branches. Every incoming edge preserves that identity.
+The first property-cache miss ends the borrowed shape and field-pointer lifetime
+before the generic load can invoke user code; later reads never readmit that region.
 
 Borrowed Map entries carry an owner-relative index, never a storage pointer. Each
 update checks the current live entry and canonical key before using the ordinary

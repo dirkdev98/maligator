@@ -241,6 +241,9 @@ typedef struct MalPerfStats {
     u64 object_entries_count_admissions;
     u64 object_names_count_admissions;
     u64 object_symbols_count_admissions;
+    u64 object_own_keys_count_admissions;
+    u64 object_own_keys_snapshot_admissions;
+    u64 object_own_keys_snapshot_materializations;
     u64 object_keys_snapshot_admissions;
     u64 object_keys_snapshot_materializations;
     u64 object_values_snapshot_admissions;
@@ -289,6 +292,7 @@ typedef struct MalPerfStats {
     u64 string_span_parse_float_calls;
     u64 string_span_is_finite_calls;
     u64 string_span_is_nan_calls;
+    u64 string_span_repeat_calls;
     u64 string_span_range_parses;
     u64 string_span_split_parses;
     u64 string_span_regexp_parses;

@@ -396,6 +396,12 @@ bool mal_builtin_string_trim_span_length_locked(
 // Canonical builtin identity, primitive receiver, and numeric bounds are caller proofs.
 MalValue mal_builtin_string_range_numeric(MalVm *vm, MalString *string, f64 start, f64 end, MalStringRangeOp operation);
 MalValue mal_builtin_string_repeat_numeric(MalVm *vm, MalString *string, f64 count);
+// A miss has no effects; an admitted output may allocate or leave a pending throw.
+bool mal_builtin_string_span_repeat(
+    MalVm *vm, MalValue callee, bool locked, MalValue subject, usize start, usize end,
+    MalValue count, MalValue *out
+);
+
 MalValue mal_builtin_string_from_codes_numbers(MalVm *vm, const f64 *numbers, i32 count, bool code_points);
 
 MalValue mal_builtin_string_pad_numeric(MalVm *vm, MalString *string, f64 target, MalValue fill, bool pad_start);

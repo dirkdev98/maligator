@@ -14,6 +14,7 @@ export const NATIVE_ENUMERATION_SNAPSHOT_KINDS = [
 	"entries",
 	"names",
 	"symbols",
+	"own_keys",
 ] as const;
 
 export interface NativeObjectEnumerationSnapshotPlan {
@@ -49,7 +50,7 @@ export function selectNativeObjectEnumerationSnapshots(
 		if (plans.length === 8) break;
 		if (
 			(call.opcode !== "CALL" && call.opcode !== "CALL_KNOWN") ||
-			call.arguments.length !== 1 ||
+			call.arguments.length === 0 ||
 			body.handlerTargets[ip] !== undefined ||
 			unavailable(ip)
 		)
@@ -69,6 +70,9 @@ export function selectNativeObjectEnumerationSnapshots(
 					break;
 				case "Object.getOwnPropertyNames":
 					kind = "names";
+					break;
+				case "Reflect.ownKeys":
+					kind = "own_keys";
 					break;
 				case "Object.getOwnPropertySymbols":
 					kind = "symbols";
@@ -96,6 +100,7 @@ export function selectNativeObjectEnumerationSnapshots(
 					else if (named(op.stringIndex, "entries")) kind = "entries";
 					else if (named(op.stringIndex, "getOwnPropertyNames")) kind = "names";
 					else if (named(op.stringIndex, "getOwnPropertySymbols")) kind = "symbols";
+					else if (named(op.stringIndex, "ownKeys")) kind = "own_keys";
 				}
 				break;
 			}

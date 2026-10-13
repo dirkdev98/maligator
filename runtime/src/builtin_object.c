@@ -2,6 +2,7 @@
 
 #include "array_object.h"
 #include "builtin_error.h"
+#include "builtin_reflect.h"
 #include "arguments_object.h"
 #include "builtin_iterator.h"
 #include "checked_size.h"
@@ -1139,6 +1140,7 @@ static bool mal_builtin_object_enumeration_callee_matches(MalValue callee, bool 
         case MAL_OBJECT_ENUMERATION_ENTRIES: expected = mal_builtin_object_entries; break;
         case MAL_OBJECT_ENUMERATION_NAMES: expected = mal_builtin_object_get_own_property_names; break;
         case MAL_OBJECT_ENUMERATION_SYMBOLS: expected = mal_builtin_object_get_own_property_symbols; break;
+        case MAL_OBJECT_ENUMERATION_OWN_KEYS: return locked || mal_builtin_reflect_own_keys_matches(callee);
         default: return false;
     }
     return locked || (mal_value_is_native_function_object(callee) &&
@@ -1146,10 +1148,12 @@ static bool mal_builtin_object_enumeration_callee_matches(MalValue callee, bool 
 }
 
 static bool mal_builtin_object_enumeration_key_matches(MalObjectEnumerationKind kind, MalKey key, u32 attrs) {
-    if (kind == MAL_OBJECT_ENUMERATION_SYMBOLS)
-        return key.kind == MAL_KEY_SYMBOL && !mal_symbol_is_private(mal_value_to_symbol(key.value));
-    return key.kind != MAL_KEY_SYMBOL &&
-        (kind == MAL_OBJECT_ENUMERATION_NAMES || (attrs & MAL_PROPERTY_ENUMERABLE));
+    if (key.kind == MAL_KEY_SYMBOL)
+        return (kind == MAL_OBJECT_ENUMERATION_SYMBOLS || kind == MAL_OBJECT_ENUMERATION_OWN_KEYS) &&
+            !mal_symbol_is_private(mal_value_to_symbol(key.value));
+    return kind != MAL_OBJECT_ENUMERATION_SYMBOLS &&
+        (kind == MAL_OBJECT_ENUMERATION_NAMES || kind == MAL_OBJECT_ENUMERATION_OWN_KEYS ||
+            (attrs & MAL_PROPERTY_ENUMERABLE));
 }
 
 bool mal_builtin_object_enumeration_snapshot(MalVm *vm, MalValue callee, MalValue target, bool locked, MalObjectEnumerationKind kind, MalValue *elements, u32 capacity, u32 *count_out) {
@@ -1184,7 +1188,8 @@ bool mal_builtin_object_enumeration_snapshot(MalVm *vm, MalValue callee, MalValu
             ? MAL_PROPERTY_ITER_SYMBOL_OWN_PROPERTY_ORDER : MAL_PROPERTY_ITER_OWN_PROPERTY_ORDER);
         MalKey key;
         MalPropertyDesc desc;
-        bool needs_length = kind == MAL_OBJECT_ENUMERATION_NAMES && mal_value_is_array_object(target);
+        bool needs_length = (kind == MAL_OBJECT_ENUMERATION_NAMES || kind == MAL_OBJECT_ENUMERATION_OWN_KEYS) &&
+            mal_value_is_array_object(target);
         u32 length_slot = UINT32_MAX;
         while (mal_property_iter_next(&iter, &key, &desc)) {
             // Array length precedes other strings but lives outside the property storage iterator.
@@ -1214,7 +1219,7 @@ bool mal_builtin_object_enumeration_snapshot(MalVm *vm, MalValue callee, MalValu
                 elements[length_slot] = mal_value_from_string(mal_intrinsic_ascii(vm, "length"));
             for (u32 i = 0; i < count; i++) {
                 MalValue *key_value = &elements[i * stride];
-                if (!mal_value_is_string(*key_value))
+                if (!mal_value_is_string(*key_value) && !mal_value_is_symbol(*key_value))
                     *key_value = mal_value_from_string(mal_ops_to_string(&vm->heap, *key_value));
             }
             mal_gc_unroot(&elements_span);
@@ -1227,6 +1232,7 @@ bool mal_builtin_object_enumeration_snapshot(MalVm *vm, MalValue callee, MalValu
         case MAL_OBJECT_ENUMERATION_ENTRIES: MAL_PERF_COUNT(object_entries_snapshot_admissions); break;
         case MAL_OBJECT_ENUMERATION_NAMES: MAL_PERF_COUNT(object_names_snapshot_admissions); break;
         case MAL_OBJECT_ENUMERATION_SYMBOLS: MAL_PERF_COUNT(object_symbols_snapshot_admissions); break;
+        case MAL_OBJECT_ENUMERATION_OWN_KEYS: MAL_PERF_COUNT(object_own_keys_snapshot_admissions); break;
     }
     return true;
 }
@@ -1256,7 +1262,7 @@ MalValue mal_builtin_object_enumeration_materialize(MalVm *vm, MalObjectEnumerat
 
 static bool mal_builtin_object_enumeration_count_target(MalValue target, MalObjectEnumerationKind kind, u32 *count_out) {
     if (!mal_value_is_object(target)) {
-        if (mal_value_is_nil(target)) return false;
+        if (mal_value_is_nil(target) || kind == MAL_OBJECT_ENUMERATION_OWN_KEYS) return false;
         // Primitive wrappers have no own keys except a String's UTF-16 indices and length.
         usize count = mal_value_is_string(target) && kind != MAL_OBJECT_ENUMERATION_SYMBOLS
             ? mal_string_length(mal_value_to_string(target)) + (kind == MAL_OBJECT_ENUMERATION_NAMES ? 1 : 0) : 0;
@@ -1269,7 +1275,7 @@ static bool mal_builtin_object_enumeration_count_target(MalValue target, MalObje
     u32 capacity;
     if (!mal_builtin_object_plain_capacity(object, &capacity)) return false;
     bool array = mal_value_is_array_object(target);
-    u32 count = array && kind == MAL_OBJECT_ENUMERATION_NAMES ? 1 : 0;
+    u32 count = array && (kind == MAL_OBJECT_ENUMERATION_NAMES || kind == MAL_OBJECT_ENUMERATION_OWN_KEYS) ? 1 : 0;
     if (capacity > UINT32_MAX - count) return false;
     if (array && kind != MAL_OBJECT_ENUMERATION_SYMBOLS &&
         mal_value_to_array_object(target)->dense_count > UINT32_MAX - count - capacity) return false;
@@ -1308,6 +1314,7 @@ bool mal_builtin_object_enumeration_count(MalValue callee, MalValue target, bool
         case MAL_OBJECT_ENUMERATION_ENTRIES: MAL_PERF_COUNT(object_entries_count_admissions); break;
         case MAL_OBJECT_ENUMERATION_NAMES: MAL_PERF_COUNT(object_names_count_admissions); break;
         case MAL_OBJECT_ENUMERATION_SYMBOLS: MAL_PERF_COUNT(object_symbols_count_admissions); break;
+        case MAL_OBJECT_ENUMERATION_OWN_KEYS: MAL_PERF_COUNT(object_own_keys_count_admissions); break;
     }
     return true;
 }

@@ -6422,6 +6422,19 @@ function emitInstruction(
 				projected = `${resetCapture}r${instruction.dst} = ${callValue(instruction.dst, method)};`;
 			}
 		} else if (
+			role === "repeatCall" &&
+			(instruction.opcode === "CALL" || instruction.opcode === "CALL_KNOWN")
+		) {
+			const result = `${prefix}_repeat_${ip}`;
+			declarations.push(`MalValue ${result};`);
+			const locked = instruction.opcode === "CALL_KNOWN";
+			const count =
+				instruction.arguments[0] === undefined
+					? "MAL_VALUE_UNDEFINED"
+					: boxedOperand(instruction.arguments[0]);
+			guard += ` && mal_builtin_string_span_repeat(vm, ${locked ? "MAL_VALUE_UNDEFINED" : boxedOperand(instruction.callee)}, ${locked}, ${source}, ${prefix}_start, ${prefix}_end, ${count}, &${result})`;
+			projected = `${throwCheck()} r${instruction.dst} = ${callValue(instruction.dst, result)};`;
+		} else if (
 			characterCall !== undefined &&
 			(instruction.opcode === "CALL" || instruction.opcode === "CALL_KNOWN")
 		) {
@@ -6508,6 +6521,7 @@ function emitInstruction(
 			role === "parseFloat" ||
 			role === "isFinite" ||
 			role === "isNaN" ||
+			role === "repeatCall" ||
 			methodProperty !== undefined ||
 			characterCall !== undefined ||
 			searchCall !== undefined ||

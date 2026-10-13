@@ -12,7 +12,7 @@ import { emitCompiledFunction } from "../src/compiler/target/render-native-c.ts"
 function compile(method: string, body: string, primordials: "mutable" | "locked") {
 	const image = compileSemanticProgramToProgramImage(
 		analyzeSourceAndRunSemanticAnalysis(
-			`globalThis.inspect=function inspect(record,index,observe){const snapshot=Object.${method}(record);${body}};`,
+			`globalThis.inspect=function inspect(record,index,observe){const snapshot=${method === "ownKeys" ? "Reflect" : "Object"}.${method}(record);${body}};`,
 			"own-keys.js",
 		),
 		{
@@ -34,6 +34,7 @@ describe("own string and Symbol key snapshot contracts", () => {
 	for (const [method, kind] of [
 		["getOwnPropertyNames", "names"],
 		["getOwnPropertySymbols", "symbols"],
+		["ownKeys", "own_keys"],
 	] as const) {
 		it.each(["mutable", "locked"] as const)(
 			`retains ${method} across calls and materializing reads under %s primordials`,

@@ -695,6 +695,10 @@ static void mal_perf_stats_print(void) {
         (unsigned long long) mal_perf_stats.array_initialization_regions,
         (unsigned long long) mal_perf_stats.array_initialization_large_regions,
         (unsigned long long) mal_perf_stats.array_initialization_incremental_regions);
+    fprintf(stderr, "[perf-reflect-own-keys-stats] counts=%llu snapshots=%llu materializations=%llu\n",
+        (unsigned long long) mal_perf_stats.object_own_keys_count_admissions,
+        (unsigned long long) mal_perf_stats.object_own_keys_snapshot_admissions,
+        (unsigned long long) mal_perf_stats.object_own_keys_snapshot_materializations);
     fprintf(stderr, "[perf-map-region-stats] hits=%llu misses=%llu\n",
         (unsigned long long) mal_perf_stats.map_region_entry_hits,
         (unsigned long long) mal_perf_stats.map_region_entry_misses);
@@ -965,6 +969,8 @@ static void mal_perf_stats_print(void) {
     fprintf(stderr, "[perf-string-span-parse-stats] parse_int=%llu parse_float=%llu\n",
         (unsigned long long) mal_perf_stats.string_span_parse_int_calls,
         (unsigned long long) mal_perf_stats.string_span_parse_float_calls);
+    fprintf(stderr, "[perf-string-span-repeat-stats] calls=%llu\n",
+        (unsigned long long) mal_perf_stats.string_span_repeat_calls);
     fprintf(stderr, "[perf-string-span-global-number-stats] is_finite=%llu is_nan=%llu\n",
         (unsigned long long) mal_perf_stats.string_span_is_finite_calls,
         (unsigned long long) mal_perf_stats.string_span_is_nan_calls);

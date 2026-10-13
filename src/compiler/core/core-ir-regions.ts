@@ -183,6 +183,7 @@ export const CORE_STRING_SPAN_SEARCH_METHODS = [
 ] as const;
 
 export const CORE_STRING_SPAN_METHODS = [
+	"repeat",
 	...CORE_STRING_SPAN_CHARACTER_METHODS,
 	...CORE_STRING_SPAN_SEARCH_METHODS,
 ] as const;
@@ -198,6 +199,8 @@ export interface CoreStringSpanConsumer {
 		| "parseFloat"
 		| "isFinite"
 		| "isNaN"
+		| "repeatProperty"
+		| "repeatCall"
 		| "charCodeAtProperty"
 		| "charCodeAtCall"
 		| "codePointAtProperty"

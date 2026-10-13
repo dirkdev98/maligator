@@ -1,6 +1,7 @@
 #pragma once
 
 #include "./defaults.h"
+#include "value.h"
 
 typedef struct MalVm MalVm;
 
@@ -11,3 +12,5 @@ typedef struct MalVm MalVm;
  * one source of truth for [[Get]]/[[Set]]/[[Delete]]/[[DefineOwnProperty]]/etc.
  */
 void mal_builtin_reflect_install(MalVm *vm);
+
+bool mal_builtin_reflect_own_keys_matches(MalValue callee);

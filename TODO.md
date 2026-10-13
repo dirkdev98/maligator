@@ -917,6 +917,21 @@ The shared lifetime and fallback rules are recorded in
       span/codec checks,25 Node GC modes and seven actual frontend/artifact/C captures
       pass. Execution counters and native sanitizer checks remain pending.
 
+- [ ] Reuse the shared enumeration contract for Reflect.ownKeys counts and snapshots,
+      retaining public Symbol identity and string/Symbol ordering while preserving
+      primitive rejection, Proxy observations and foreign result realms. All six
+      enumeration methods also accept ignored extra arguments after their original
+      evaluation. All70 focused checks, eleven Node GC modes, five frontend/artifact/C
+      captures and six runtime C syntax checks pass. Native and measurement pending.
+
+- [ ] Build repeated string output directly from retained range, split, capture and
+      nested spans. Reuse the canonical repeat builder with source bounds, retaining
+      primitive count conversion, current-realm method identity, error precedence,
+      output roots and ordinary fallback before effects. All184 span/codec checks,
+      eleven Node GC modes and five actual frontend/artifact/C captures pass, including
+      large partial ranges, ropes, surrogate boundaries and foreign method errors.
+      Native execution and measurement remain pending.
+
 | Order | Slice                        | Owning work and exit condition                                                                                                                                  |
 | ----- | ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 1     | Callback invocation          | The tasks above; remove measured repeated invocation work for a numeric reduction with captures.                                                                |

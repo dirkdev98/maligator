@@ -42,6 +42,64 @@ const branching = `const part = value.slice(start, end); const length = part.len
 
 describe("composable string spans", () => {
 	it.each(["mutable", "locked"] as const)(
+		"repeats retained ranges with guarded primitive counts under %s primordials",
+		(mode) => {
+			for (const args of ["", "start"]) {
+				const image = compile(
+					`const part=value.slice(start,end);const output=part.repeat(${args});if(escape)observer(part);return output;`,
+					mode,
+				);
+				expect(spans(image)[0]?.consumers.map((c) => c.kind)).toContain("repeatCall");
+				expect(deserializeCompilerArtifact(serializeCompilerArtifact(image))).toEqual(
+					image,
+				);
+			}
+			for (const args of ["part", "start,observer()"]) {
+				const image = compile(
+					`const part=value.slice(start,end);return [part.length,part.repeat(${args})];`,
+					mode,
+				);
+				expect(spans(image).flatMap((r) => r.consumers.map((c) => c.kind))).not.toContain(
+					"repeatCall",
+				);
+			}
+		},
+	);
+	it("rejects a forged repeat call with another captured method", () => {
+		const image = compile("const part=value.slice(start,end);return part.charAt(start);");
+		const owner = image.native.functions.find((fn) =>
+			fn.specializations.some((r) => r.kind === "string-span"),
+		)!;
+		const specializations = owner.specializations.map((r) =>
+			r.kind !== "string-span"
+				? r
+				: {
+						...r,
+						consumers: r.consumers.map((c) =>
+							c.kind === "charAtCall" ? { ...c, kind: "repeatCall" as const } : c,
+						),
+					},
+		);
+		expect(() =>
+			serializeCompilerArtifact({
+				...image,
+				native: {
+					...image.native,
+					functions: image.native.functions.map((fn) =>
+						fn !== owner
+							? fn
+							: {
+									...fn,
+									specializations,
+									regionActions: vmRegionActions(specializations),
+								},
+					),
+				},
+			}),
+		).toThrow(/string-span/i);
+	});
+
+	it.each(["mutable", "locked"] as const)(
 		"classifies numeric strings with coercing globals under %s primordials",
 		(mode) => {
 			const image = compile(

@@ -196,3 +196,5 @@ tests/native/string-span-trim-alias.test.ts
 tests/native/from-async-callback.test.ts
 tests/native/property-read-inputs.test.ts
 tests/native/string-span-global-number.test.ts
+tests/native/reflect-own-keys-region.test.ts
+tests/native/string-span-repeat.test.ts

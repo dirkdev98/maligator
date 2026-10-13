@@ -3470,6 +3470,32 @@
 			"controls": ["string-span-parsers", "string-span-classify"]
 		},
 		{
+			"id": "reflect-own-keys-region",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "Enumeration snapshots",
+			"category": "api-builtins",
+			"mechanisms": ["object-enumeration", "array-allocation"],
+			"inputShape": "Ordered string and Symbol snapshots over ordinary records and Arrays, plus count-only enumeration beyond snapshot capacity.",
+			"unit": "enumeration",
+			"sourceSeam": "runtime/src/builtin_object.c",
+			"fixture": "cases/reflect-own-keys-region.mjs",
+			"controls": ["object-own-keys-snapshot", "object-enumeration-counts"]
+		},
+		{
+			"id": "string-span-repeat",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "Composable string spans",
+			"category": "memory-layout-usage",
+			"mechanisms": ["string-spans", "delayed-materialization"],
+			"inputShape": "Repeated output from retained range, split, capture and nested spans uses the shared repeat output builder.",
+			"unit": "token",
+			"sourceSeam": "runtime/src/builtin_string.c",
+			"fixture": "cases/string-span-repeat.mjs",
+			"controls": ["string-span-trim-alias", "string-span-classify"]
+		},
+		{
 			"id": "method-name-unique",
 			"group": "runtime",
 			"suite": "runtime",

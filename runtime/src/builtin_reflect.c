@@ -269,6 +269,11 @@ static MalValue mal_reflect_own_keys(MalVm *vm, MalValue this_value, const MalVa
     return keys;
 }
 
+bool mal_builtin_reflect_own_keys_matches(MalValue callee) {
+    return mal_value_is_native_function_object(callee) &&
+        mal_native_function_object_callback(mal_value_to_native_function_object(callee)) == mal_reflect_own_keys;
+}
+
 static MalValue mal_reflect_get_prototype_of(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) this_value;
     (void) new_target;

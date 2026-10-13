@@ -14,15 +14,51 @@ const methods = [
 	"entries",
 	"getOwnPropertyNames",
 	"getOwnPropertySymbols",
+	"ownKeys",
 ];
 describe("count-only enumeration transport", () => {
+	for (const method of methods)
+		it.each(["mutable", "locked"] as const)(
+			`${method} retains ignored argument evaluation under %s primordials`,
+			(primordials) => {
+				const image = compileSemanticProgramToProgramImage(
+					analyzeSourceAndRunSemanticAnalysis(
+						`globalThis.count=function count(record,observe,unused){const snapshot=${method === "ownKeys" ? "Reflect" : "Object"}.${method}(record,observe(record),unused);return snapshot.length;};`,
+						"extra-count.js",
+					),
+					{
+						facts: compilerProgramFactsFromConfig(
+							resolveBuildConfig({ engine: { primordials } }),
+						),
+					},
+				);
+				const fn = image.native.functions.find(
+					(fn) =>
+						String.fromCharCode(
+							...(image.runtime.stringConstants[fn.body.nameStringIndex] ?? []),
+						) === "count",
+				)!;
+				expect(fn.storage!.objectEnumerationSnapshots).toHaveLength(1);
+				const call =
+					fn.body.instructions[fn.storage!.objectEnumerationSnapshots[0]!.callIp]!;
+				expect(call.opcode === "CALL" || call.opcode === "CALL_KNOWN").toBe(true);
+				if (
+					primordials === "mutable" &&
+					(call.opcode === "CALL" || call.opcode === "CALL_KNOWN")
+				)
+					expect(call.arguments.length).toBeGreaterThan(1);
+				expect(deserializeCompilerArtifact(serializeCompilerArtifact(image))).toEqual(
+					image,
+				);
+			},
+		);
 	for (const method of methods)
 		it.each(["mutable", "locked"] as const)(
 			`${method} keeps only the count across later effects under %s primordials`,
 			(primordials) => {
 				const image = compileSemanticProgramToProgramImage(
 					analyzeSourceAndRunSemanticAnalysis(
-						`globalThis.count=function count(record,observe){const snapshot=Object.${method}(record);observe(record);return snapshot.length+snapshot.length;};`,
+						`globalThis.count=function count(record,observe){const snapshot=${method === "ownKeys" ? "Reflect" : "Object"}.${method}(record);observe(record);return snapshot.length+snapshot.length;};`,
 						"count.js",
 					),
 					{

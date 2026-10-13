@@ -2215,7 +2215,9 @@ static MalValue mal_builtin_string_prototype_repeat(MalVm *vm, MalValue this_val
     return result;
 }
 
-MalValue mal_builtin_string_repeat_numeric(MalVm *vm, MalString *string, f64 count) {
+static MalValue mal_builtin_string_repeat_range_numeric(
+    MalVm *vm, MalString *string, usize start, usize end, f64 count
+) {
     MalValue string_root = mal_value_from_string(string);
     MalRootSpan string_span;
     mal_gc_root(&string_span, &string_root, 1);
@@ -2226,7 +2228,7 @@ MalValue mal_builtin_string_repeat_numeric(MalVm *vm, MalString *string, f64 cou
         goto done;
     }
     string = mal_value_to_string(string_root);
-    usize length = mal_string_length(string);
+    usize length = end - start;
     // Repeating an empty string (or zero times) is empty regardless of count;
     // short-circuit so a huge count can't spin a multi-billion-iteration loop.
     if (length == 0 || count < 1) {
@@ -2244,7 +2246,7 @@ MalValue mal_builtin_string_repeat_numeric(MalVm *vm, MalString *string, f64 cou
         goto done;
     }
     if (repeat == 1) {
-        result_value = string_root;
+        result_value = mal_builtin_string_slice(vm, string, start, length);
         goto done;
     }
 
@@ -2253,6 +2255,10 @@ MalValue mal_builtin_string_repeat_numeric(MalVm *vm, MalString *string, f64 cou
         (storage == MAL_STRING_STORAGE_OWNED ||
          storage == MAL_STRING_STORAGE_INLINE ||
          storage == MAL_STRING_STORAGE_EXTERNAL)) {
+        if (start != 0 || end != mal_string_length(string)) {
+            string_root = mal_builtin_string_slice(vm, string, start, length);
+            string = mal_value_to_string(string_root);
+        }
         MalValue result_root = string_root;
         MalRootSpan result_span;
         mal_gc_root(&result_span, &result_root, 1);
@@ -2290,13 +2296,36 @@ lazy_done:
 
     MalTextBuffer output = {.heap = &vm->heap};
     mal_text_buffer_hint_capacity(&output, result_length);
-    mal_text_buffer_append_string(&output, mal_value_to_string(string_root));
+    mal_text_buffer_append_range(&output, mal_value_to_string(string_root), start, length);
     mal_builtin_string_repeat_buffer(&output, 0, result_length);
     result_value = mal_builtin_string_finish_text(vm, &output);
 
 done:
     mal_gc_unroot(&string_span);
     return result_value;
+}
+
+MalValue mal_builtin_string_repeat_numeric(MalVm *vm, MalString *string, f64 count) {
+    return mal_builtin_string_repeat_range_numeric(vm, string, 0, mal_string_length(string), count);
+}
+
+bool mal_builtin_string_span_repeat(
+    MalVm *vm, MalValue callee, bool locked, MalValue subject, usize start, usize end,
+    MalValue count_value, MalValue *out
+) {
+    if (!locked && (!mal_value_is_native_function_object(callee) ||
+        mal_native_function_object_callback(mal_value_to_native_function_object(callee)) !=
+            mal_builtin_string_prototype_repeat)) return false;
+#if MAL_REALMS
+    if (!locked && mal_vm_callee_realm(vm, callee) != vm->current_realm) return false;
+#endif
+    f64 count;
+    if (!mal_value_is_string(subject) || start > end ||
+        end > mal_string_length(mal_value_to_string(subject)) ||
+        !mal_ops_try_primitive_to_number(count_value, &count)) return false;
+    MAL_PERF_COUNT(string_span_repeat_calls);
+    *out = mal_builtin_string_repeat_range_numeric(vm, mal_value_to_string(subject), start, end, count);
+    return true;
 }
 
 static usize mal_builtin_string_edge_whitespace(
