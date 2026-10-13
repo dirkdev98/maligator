@@ -8,6 +8,7 @@ function observed(part) {
 	return `observed:${part}`;
 }
 function summary(output) {
+	if (output.length > 1024) return [output.length, output];
 	let sum = 0;
 	for (let i = 0; i < output.length; i++)
 		sum = (sum + output.charCodeAt(i) * ((i % 31) + 1)) >>> 0;

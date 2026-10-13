@@ -40,14 +40,23 @@ Numeric prefix parsing shares the ordinary parseInt/parseFloat algorithms throug
 a bounded segment reader. Borrowed leaves remain within a non-collecting parse;
 the source stays rooted and unrelated rope ranges need not be flattened. Radix
 conversion that can execute user code falls back before parsing begins.
-Output consumers such as repeat pass those bounds into the canonical builder.
+Output consumers such as repeat and padding pass those bounds into the canonical builder.
 The builder retains the source across allocation and publishes either its final
 result or its pending exception; a declined admission has performed no effects.
+Padding converts its target before its filler, and a satisfied target never observes
+the filler. Direct compiled helpers own no native GC-suppression contribution; only
+the native wrapper may remove its own contribution after publishing its roots.
+Long repetition polls only after publishing a completed prefix.
 
 Enumeration snapshots retain the sequence produced by the original operation.
 Keys can be counted without loading values; values must be copied eagerly into
-root slots before any consumer runs. Enumerable accessors and unsupported storage
-fall back before user code runs. Indexed observations share one cached Array
+root slots before any consumer runs. Bounded accessor enumeration first captures all
+original string keys, including hidden keys whose enumerability an earlier getter
+can change. Each key then rechecks its own descriptor before observing its value.
+Captured keys, prior values and the receiver remain rooted through every getter;
+no storage pointer survives it. Admission becomes irreversible before the first
+getter, so an abrupt result propagates without replay. Unsupported storage and
+oversized key sets fall back before user code runs. Indexed observations share one cached Array
 materialization, so later reads see mutations made through that Array.
 Reflect.ownKeys includes strings and public Symbols in own-key order and rejects
 primitive targets; it does not inherit Object methods' primitive boxing behavior.

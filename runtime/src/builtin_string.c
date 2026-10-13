@@ -2209,8 +2209,13 @@ static MalValue mal_builtin_string_prototype_repeat(MalVm *vm, MalValue this_val
     MalBuiltinRootedString root;
     mal_builtin_string_root_init(&root, string);
     f64 count = arg_count > 0 ? mal_builtin_string_arg_to_number(vm, args[0]) : 0;
-    MalValue result = vm->completion.kind == MAL_COMPLETION_THROW ? mal_value_new_undefined()
-        : mal_builtin_string_repeat_numeric(vm, mal_builtin_string_root_get(&root), count);
+    MalValue result = mal_value_new_undefined();
+    if (vm->completion.kind != MAL_COMPLETION_THROW) {
+        // Only this native entry owns a suppression contribution; compiled helpers do not.
+        mal_gc_native_rooted_begin(vm);
+        result = mal_builtin_string_repeat_numeric(vm, mal_builtin_string_root_get(&root), count);
+        mal_gc_native_rooted_end(vm);
+    }
     mal_builtin_string_root_dispose(&root);
     return result;
 }
@@ -2262,7 +2267,6 @@ static MalValue mal_builtin_string_repeat_range_numeric(
         MalValue result_root = string_root;
         MalRootSpan result_span;
         mal_gc_root(&result_span, &result_root, 1);
-        mal_gc_native_rooted_begin(vm);
 
         // Consume the count below its highest bit, doubling the completed prefix
         // and appending one source copy for each set bit.
@@ -2285,11 +2289,13 @@ static MalValue mal_builtin_string_repeat_range_numeric(
                 }
                 result_root = mal_value_from_string(result);
             }
+            // A completed prefix is rooted before collection or fiber preemption.
+            mal_gc_safepoint(vm);
+            result = mal_value_to_string(result_root);
         }
         result_value = result_root;
 
 lazy_done:
-        mal_gc_native_rooted_end(vm);
         mal_gc_unroot(&result_span);
         goto done;
     }
@@ -3885,20 +3891,23 @@ static MalValue mal_builtin_string_pad_impl(MalVm *vm, MalValue this_value, cons
     return result;
 }
 
-MalValue mal_builtin_string_pad_numeric(MalVm *vm, MalString *string, f64 raw_target, MalValue filler, bool pad_start) {
-    MalValue roots[2] = {mal_value_from_string(string), mal_value_new_undefined()};
+static MalValue mal_builtin_string_pad_range_numeric(
+    MalVm *vm, MalString *string, usize start, usize end,
+    f64 raw_target, MalValue filler, bool pad_start
+) {
+    MalValue roots[2] = {mal_value_from_string(string), filler};
     MalRootSpan root_span;
     mal_gc_root(&root_span, roots, 2);
     MalValue result = mal_value_new_undefined();
-    usize length = mal_string_length(string);
+    usize length = end - start;
     raw_target = mal_ops_number_to_length(raw_target);
     if (raw_target <= (f64) length) {
-        result = roots[0];
+        result = mal_builtin_string_slice(vm, mal_value_to_string(roots[0]), start, length);
         goto done;
     }
 
-    MalString *pad = !mal_value_is_undefined(filler)
-        ? mal_builtin_string_coerce(vm, filler)
+    MalString *pad = !mal_value_is_undefined(roots[1])
+        ? mal_builtin_string_coerce(vm, roots[1])
         : mal_intrinsic_ascii(vm, " ");
     if (vm->completion.kind == MAL_COMPLETION_THROW) {
         goto done;
@@ -3906,7 +3915,7 @@ MalValue mal_builtin_string_pad_numeric(MalVm *vm, MalString *string, f64 raw_ta
     roots[1] = mal_value_from_string(pad);
     usize pad_length = mal_string_length(pad);
     if (pad_length == 0) {
-        result = roots[0];
+        result = mal_builtin_string_slice(vm, mal_value_to_string(roots[0]), start, length);
         goto done;
     }
 
@@ -3925,16 +3934,20 @@ MalValue mal_builtin_string_pad_numeric(MalVm *vm, MalString *string, f64 raw_ta
     mal_text_buffer_hint_capacity(&output, target);
     string = mal_value_to_string(roots[0]);
     pad = mal_value_to_string(roots[1]);
-    if (!pad_start) mal_text_buffer_append_string(&output, string);
+    if (!pad_start) mal_text_buffer_append_range(&output, string, start, length);
     usize fill_start = output.length;
     mal_text_buffer_append_range(&output, pad, 0, pad_length < fill_length ? pad_length : fill_length);
     mal_builtin_string_repeat_buffer(&output, fill_start, fill_start + fill_length);
-    if (pad_start) mal_text_buffer_append_string(&output, string);
+    if (pad_start) mal_text_buffer_append_range(&output, string, start, length);
     result = mal_builtin_string_finish_text(vm, &output);
 
 done:
     mal_gc_unroot(&root_span);
     return result;
+}
+
+MalValue mal_builtin_string_pad_numeric(MalVm *vm, MalString *string, f64 target, MalValue filler, bool pad_start) {
+    return mal_builtin_string_pad_range_numeric(vm, string, 0, mal_string_length(string), target, filler, pad_start);
 }
 
 static MalValue mal_builtin_string_prototype_pad_start(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
@@ -3943,6 +3956,27 @@ static MalValue mal_builtin_string_prototype_pad_start(MalVm *vm, MalValue this_
 
 static MalValue mal_builtin_string_prototype_pad_end(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     return mal_builtin_string_pad_impl(vm, this_value, args, arg_count, false);
+}
+
+bool mal_builtin_string_span_pad(
+    MalVm *vm, MalValue callee, bool locked, MalValue subject, usize start, usize end,
+    MalValue target_value, MalValue filler, bool pad_start, MalValue *out
+) {
+    MalNativeFunctionCallback expected = pad_start
+        ? mal_builtin_string_prototype_pad_start : mal_builtin_string_prototype_pad_end;
+    if (!locked && (!mal_value_is_native_function_object(callee) ||
+        mal_native_function_object_callback(mal_value_to_native_function_object(callee)) != expected)) return false;
+#if MAL_REALMS
+    if (!locked && mal_vm_callee_realm(vm, callee) != vm->current_realm) return false;
+#endif
+    f64 target;
+    if (!mal_value_is_string(subject) || start > end ||
+        end > mal_string_length(mal_value_to_string(subject)) ||
+        !mal_ops_try_primitive_to_number(target_value, &target)) return false;
+    if (pad_start) MAL_PERF_COUNT(string_span_pad_start_calls);
+    else MAL_PERF_COUNT(string_span_pad_end_calls);
+    *out = mal_builtin_string_pad_range_numeric(vm, mal_value_to_string(subject), start, end, target, filler, pad_start);
+    return true;
 }
 
 /**

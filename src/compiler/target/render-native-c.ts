@@ -6435,6 +6435,19 @@ function emitInstruction(
 			guard += ` && mal_builtin_string_span_repeat(vm, ${locked ? "MAL_VALUE_UNDEFINED" : boxedOperand(instruction.callee)}, ${locked}, ${source}, ${prefix}_start, ${prefix}_end, ${count}, &${result})`;
 			projected = `${throwCheck()} r${instruction.dst} = ${callValue(instruction.dst, result)};`;
 		} else if (
+			(role === "padStartCall" || role === "padEndCall") &&
+			(instruction.opcode === "CALL" || instruction.opcode === "CALL_KNOWN")
+		) {
+			const result = `${prefix}_pad_${ip}`;
+			declarations.push(`MalValue ${result};`);
+			const locked = instruction.opcode === "CALL_KNOWN";
+			const argument = (index: number) =>
+				instruction.arguments[index] === undefined
+					? "MAL_VALUE_UNDEFINED"
+					: boxedOperand(instruction.arguments[index]);
+			guard += ` && mal_builtin_string_span_pad(vm, ${locked ? "MAL_VALUE_UNDEFINED" : boxedOperand(instruction.callee)}, ${locked}, ${source}, ${prefix}_start, ${prefix}_end, ${argument(0)}, ${argument(1)}, ${role === "padStartCall"}, &${result})`;
+			projected = `${throwCheck()} r${instruction.dst} = ${callValue(instruction.dst, result)};`;
+		} else if (
 			characterCall !== undefined &&
 			(instruction.opcode === "CALL" || instruction.opcode === "CALL_KNOWN")
 		) {
@@ -6522,6 +6535,8 @@ function emitInstruction(
 			role === "isFinite" ||
 			role === "isNaN" ||
 			role === "repeatCall" ||
+			role === "padStartCall" ||
+			role === "padEndCall" ||
 			methodProperty !== undefined ||
 			characterCall !== undefined ||
 			searchCall !== undefined ||
@@ -6596,6 +6611,7 @@ function emitInstruction(
 					: []),
 				`${name}_active = ${snapshot ? `mal_builtin_object_enumeration_snapshot(vm, ${args}, MAL_OBJECT_ENUMERATION_${site.kind.toUpperCase()}, ${elements}, ${NATIVE_ENUMERATION_SNAPSHOT_CAPACITY}, &${name}_value)` : `mal_builtin_object_enumeration_count(${args}, MAL_OBJECT_ENUMERATION_${site.kind.toUpperCase()}, &${name}_value)`};`,
 				`if (${name}_active) {`,
+				...(snapshot ? [`  ${throwCheck()}`] : []),
 				`  r${instruction.dst} = MAL_VALUE_UNDEFINED;`,
 				`  ${poll()}`,
 				`} else {`,

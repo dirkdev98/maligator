@@ -1156,15 +1156,10 @@ static bool mal_builtin_object_enumeration_key_matches(MalObjectEnumerationKind 
             (attrs & MAL_PROPERTY_ENUMERABLE));
 }
 
-bool mal_builtin_object_enumeration_snapshot(MalVm *vm, MalValue callee, MalValue target, bool locked, MalObjectEnumerationKind kind, MalValue *elements, u32 capacity, u32 *count_out) {
-    if (!mal_builtin_object_enumeration_callee_matches(callee, locked, kind) ||
-        (!mal_value_is_heap_type(target, MAL_HEAP_OBJECT) && !mal_value_is_array_object(target))) return false;
-#if MAL_REALMS
-    // Delayed Array materialization uses the current realm's prototype.
-    if (!locked && mal_vm_callee_realm(vm, callee) != vm->current_realm) return false;
-#else
-    (void) vm;
-#endif
+static bool mal_builtin_object_enumeration_capture(
+    MalVm *vm, MalValue target, MalObjectEnumerationKind kind,
+    MalValue *elements, u32 capacity, u32 *count_out
+) {
     MalObject *object = mal_value_to_object(target);
     u32 count = 0;
     u32 stride = kind == MAL_OBJECT_ENUMERATION_ENTRIES ? 2 : 1;
@@ -1226,6 +1221,64 @@ bool mal_builtin_object_enumeration_snapshot(MalVm *vm, MalValue callee, MalValu
         }
     }
     *count_out = count;
+    return true;
+}
+
+static bool mal_builtin_object_enumeration_observe(
+    MalVm *vm, MalValue target, MalObjectEnumerationKind kind,
+    MalValue *elements, u32 capacity, u32 *count_out
+) {
+    if (kind != MAL_OBJECT_ENUMERATION_VALUES && kind != MAL_OBJECT_ENUMERATION_ENTRIES) return false;
+    MalValue keys[16];
+    for (u32 i = 0; i < countof(keys); i++) keys[i] = MAL_VALUE_UNDEFINED;
+    u32 stride = kind == MAL_OBJECT_ENUMERATION_ENTRIES ? 2 : 1;
+    u32 key_capacity = capacity / stride;
+    if (key_capacity > countof(keys)) key_capacity = countof(keys);
+    MalRootSpan target_span, keys_span, elements_span;
+    mal_gc_root(&target_span, &target, 1);
+    mal_gc_root(&keys_span, keys, countof(keys));
+    mal_gc_root(&elements_span, elements, capacity);
+    u32 key_count;
+    bool admitted = mal_builtin_object_enumeration_capture(
+        vm, target, MAL_OBJECT_ENUMERATION_NAMES, keys, key_capacity, &key_count);
+    if (!admitted) goto done;
+    for (u32 i = 0; i < capacity; i++) elements[i] = MAL_VALUE_UNDEFINED;
+    *count_out = 0;
+    if (kind == MAL_OBJECT_ENUMERATION_VALUES) MAL_PERF_COUNT(object_values_snapshot_observed);
+    else MAL_PERF_COUNT(object_entries_snapshot_observed);
+    // All original string keys survive; earlier getters may change a later key's enumerability.
+    for (u32 i = 0; i < key_count; i++) {
+        MalKey key;
+        bool present;
+        MalPropertyDesc desc;
+        if (!mal_vm_to_property_key(vm, keys[i], &key) ||
+            !mal_vm_get_own_property(vm, target, key, &present, &desc)) goto done;
+        if (!present || !(desc.flags & MAL_PROPERTY_ENUMERABLE)) continue;
+        u32 slot = *count_out * stride;
+        MalValue *value = &elements[slot + (stride - 1)];
+        if (!mal_vm_get_property(vm, target, key, value)) goto done;
+        if (kind == MAL_OBJECT_ENUMERATION_ENTRIES) elements[slot] = keys[i];
+        (*count_out)++;
+    }
+done:
+    mal_gc_unroot(&elements_span);
+    mal_gc_unroot(&keys_span);
+    mal_gc_unroot(&target_span);
+    // After admission, a pending getter throw belongs to this call and must never replay it.
+    return admitted;
+}
+
+bool mal_builtin_object_enumeration_snapshot(MalVm *vm, MalValue callee, MalValue target, bool locked, MalObjectEnumerationKind kind, MalValue *elements, u32 capacity, u32 *count_out) {
+    if (!mal_builtin_object_enumeration_callee_matches(callee, locked, kind) ||
+        (!mal_value_is_heap_type(target, MAL_HEAP_OBJECT) && !mal_value_is_array_object(target))) return false;
+#if MAL_REALMS
+    // Delayed Array materialization uses the current realm's prototype.
+    if (!locked && mal_vm_callee_realm(vm, callee) != vm->current_realm) return false;
+#else
+    (void) vm;
+#endif
+    if (!mal_builtin_object_enumeration_capture(vm, target, kind, elements, capacity, count_out) &&
+        !mal_builtin_object_enumeration_observe(vm, target, kind, elements, capacity, count_out)) return false;
     switch (kind) {
         case MAL_OBJECT_ENUMERATION_KEYS: MAL_PERF_COUNT(object_keys_snapshot_admissions); break;
         case MAL_OBJECT_ENUMERATION_VALUES: MAL_PERF_COUNT(object_values_snapshot_admissions); break;

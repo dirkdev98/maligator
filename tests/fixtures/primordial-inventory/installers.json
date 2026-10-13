@@ -93,7 +93,7 @@
 	},
 	{
 		"file": "builtin_object.c",
-		"sha256": "558b288b96b689c189b6610cd00ae3411a7901d5cc741361a7b180392093a902"
+		"sha256": "72fa1c7829d4f2972430fa12611c9f597391c3657d491b442ecbe710f455a971"
 	},
 	{
 		"file": "builtin_promise.c",
@@ -125,7 +125,7 @@
 	},
 	{
 		"file": "builtin_string.c",
-		"sha256": "bd88c8569844ec8d95d79f8dc7a74abf7aaf5f3253ea8bfa0eede635018ba70f"
+		"sha256": "e4122e12c655b10320a4edf9c81077ff43f815621bfd16481abd7d7bc9570383"
 	},
 	{
 		"file": "builtin_symbol.c",

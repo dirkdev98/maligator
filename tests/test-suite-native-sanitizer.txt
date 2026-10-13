@@ -198,3 +198,5 @@ tests/native/property-read-inputs.test.ts
 tests/native/string-span-global-number.test.ts
 tests/native/reflect-own-keys-region.test.ts
 tests/native/string-span-repeat.test.ts
+tests/native/object-observed-enumeration.test.ts
+tests/native/string-span-pad.test.ts

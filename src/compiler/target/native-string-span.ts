@@ -2,7 +2,7 @@ import {
 	CORE_STRING_SPAN_METHODS,
 	CORE_STRING_SPAN_RANGE_METHODS,
 	coreStringSpanRangeAcceptsArgumentCount,
-	CORE_STRING_SPAN_SEARCH_METHODS,
+	coreStringSpanMethodArgumentLimit,
 } from "../core/core-ir-regions.ts";
 import { stringConstantEquals } from "../shared/string-constant.ts";
 import type { NativeBodyFacts } from "./native-body-facts.ts";
@@ -192,8 +192,7 @@ export function validateNativeStringSpan(
 			methodCall !== undefined &&
 			((instruction.opcode !== "CALL" && instruction.opcode !== "CALL_KNOWN") ||
 				instruction.thisValue !== consumer.value ||
-				instruction.arguments.length >
-					(CORE_STRING_SPAN_SEARCH_METHODS.some((name) => name === methodCall) ? 2 : 1) ||
+				instruction.arguments.length > coreStringSpanMethodArgumentLimit(methodCall) ||
 				instruction.arguments.includes(consumer.value) ||
 				(instruction.opcode === "CALL_KNOWN" &&
 					(instruction.operation !== `String.prototype.${methodCall}` ||

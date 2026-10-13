@@ -395,6 +395,7 @@ bool mal_builtin_string_trim_span_length_locked(
 
 // Canonical builtin identity, primitive receiver, and numeric bounds are caller proofs.
 MalValue mal_builtin_string_range_numeric(MalVm *vm, MalString *string, f64 start, f64 end, MalStringRangeOp operation);
+// Publishes its roots and polls without changing the caller's native-frame suppression.
 MalValue mal_builtin_string_repeat_numeric(MalVm *vm, MalString *string, f64 count);
 // A miss has no effects; an admitted output may allocate or leave a pending throw.
 bool mal_builtin_string_span_repeat(
@@ -405,6 +406,11 @@ bool mal_builtin_string_span_repeat(
 MalValue mal_builtin_string_from_codes_numbers(MalVm *vm, const f64 *numbers, i32 count, bool code_points);
 
 MalValue mal_builtin_string_pad_numeric(MalVm *vm, MalString *string, f64 target, MalValue fill, bool pad_start);
+// Guard misses have no effects; admitted calls may coerce the rooted filler, allocate or throw.
+bool mal_builtin_string_span_pad(
+    MalVm *vm, MalValue callee, bool locked, MalValue subject, usize start, usize end,
+    MalValue target, MalValue filler, bool pad_start, MalValue *out
+);
 // A guard miss has no effects; a hit may allocate or leave a pending throw.
 bool mal_builtin_string_concat_direct(MalVm *vm, MalValue receiver, const MalValue *arguments, i32 argument_count, MalValue *result);
 

@@ -42,6 +42,35 @@ const branching = `const part = value.slice(start, end); const length = part.len
 
 describe("composable string spans", () => {
 	it.each(["mutable", "locked"] as const)(
+		"pads retained ranges with zero, one or two arguments under %s primordials",
+		(mode) => {
+			for (const method of ["padStart", "padEnd"]) {
+				for (const args of ["", "start", "start,observer"]) {
+					const image = compile(
+						`const part=value.slice(start,end);const result=part.${method}(${args});if(escape)observer(part);return result;`,
+						mode,
+					);
+					expect(spans(image)[0]?.consumers.map((c) => c.kind)).toContain(
+						`${method}Call`,
+					);
+					expect(deserializeCompilerArtifact(serializeCompilerArtifact(image))).toEqual(
+						image,
+					);
+				}
+				for (const args of ["part,observer", "start,part", "start,observer,escape()"]) {
+					const image = compile(
+						`const part=value.slice(start,end);return [part.length,part.${method}(${args})];`,
+						mode,
+					);
+					expect(
+						spans(image).flatMap((r) => r.consumers.map((c) => c.kind)),
+					).not.toContain(`${method}Call`);
+				}
+			}
+		},
+	);
+
+	it.each(["mutable", "locked"] as const)(
 		"repeats retained ranges with guarded primitive counts under %s primordials",
 		(mode) => {
 			for (const args of ["", "start"]) {
@@ -65,39 +94,44 @@ describe("composable string spans", () => {
 			}
 		},
 	);
-	it("rejects a forged repeat call with another captured method", () => {
-		const image = compile("const part=value.slice(start,end);return part.charAt(start);");
-		const owner = image.native.functions.find((fn) =>
-			fn.specializations.some((r) => r.kind === "string-span"),
-		)!;
-		const specializations = owner.specializations.map((r) =>
-			r.kind !== "string-span"
-				? r
-				: {
-						...r,
-						consumers: r.consumers.map((c) =>
-							c.kind === "charAtCall" ? { ...c, kind: "repeatCall" as const } : c,
+	it.each(["repeatCall", "padStartCall", "padEndCall"] as const)(
+		"rejects a forged %s with another captured method",
+		(kind) => {
+			const image = compile(
+				"const part=value.slice(start,end);return part.charAt(start);",
+			);
+			const owner = image.native.functions.find((fn) =>
+				fn.specializations.some((r) => r.kind === "string-span"),
+			)!;
+			const specializations = owner.specializations.map((r) =>
+				r.kind !== "string-span"
+					? r
+					: {
+							...r,
+							consumers: r.consumers.map((c) =>
+								c.kind === "charAtCall" ? { ...c, kind } : c,
+							),
+						},
+			);
+			expect(() =>
+				serializeCompilerArtifact({
+					...image,
+					native: {
+						...image.native,
+						functions: image.native.functions.map((fn) =>
+							fn !== owner
+								? fn
+								: {
+										...fn,
+										specializations,
+										regionActions: vmRegionActions(specializations),
+									},
 						),
 					},
-		);
-		expect(() =>
-			serializeCompilerArtifact({
-				...image,
-				native: {
-					...image.native,
-					functions: image.native.functions.map((fn) =>
-						fn !== owner
-							? fn
-							: {
-									...fn,
-									specializations,
-									regionActions: vmRegionActions(specializations),
-								},
-					),
-				},
-			}),
-		).toThrow(/string-span/i);
-	});
+				}),
+			).toThrow(/string-span/i);
+		},
+	);
 
 	it.each(["mutable", "locked"] as const)(
 		"classifies numeric strings with coercing globals under %s primordials",

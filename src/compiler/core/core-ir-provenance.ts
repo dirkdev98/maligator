@@ -18,7 +18,7 @@ import {
 	CORE_STRING_SPAN_METHODS,
 	CORE_STRING_SPAN_RANGE_METHODS,
 	coreStringSpanRangeAcceptsArgumentCount,
-	CORE_STRING_SPAN_SEARCH_METHODS,
+	coreStringSpanMethodArgumentLimit,
 } from "./core-ir-regions.ts";
 import type {
 	CoreStringSpanConsumer,
@@ -3808,10 +3808,7 @@ function stringSpanCandidates(
 					!callAttrs.construct &&
 					callAttrs.argumentMode === undefined &&
 					methodName !== undefined &&
-					argumentCount <=
-						(CORE_STRING_SPAN_SEARCH_METHODS.some((name) => name === methodName)
-							? 2
-							: 1) &&
+					argumentCount <= coreStringSpanMethodArgumentLimit(methodName) &&
 					Array.from({ length: argumentCount }, (_, index) =>
 						instructionOperand(fn, instruction, argumentOffset + index)!,
 					).every((argument) => root(argument) !== resultRoot)

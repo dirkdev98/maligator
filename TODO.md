@@ -900,7 +900,8 @@ The shared lifetime and fallback rules are recorded in
       remain authoritative. All 174 focused checks, eleven forced-GC Node oracles
       and five frontend/artifact/C captures pass. A nested fixture counter failure is
       repaired by executing the selected helpers through runtime dispatch;25 Node GC
-      modes and179 integrated span/codec checks pass. Native rerun and measurement pending.
+      modes and179 integrated span/codec checks pass. All three repaired Linux ASan/UBSan
+      cases pass; measurement remains pending.
 
 - [ ] Extend retained property-read admission through receiver aliases, typeof tests
       and boxed truthiness branches, with up to16 fields over96 instructions.
@@ -908,14 +909,16 @@ The shared lifetime and fallback rules are recorded in
       permanently ends the raw-storage lifetime before getters or Proxy callbacks.
       All81 focused checks and four actual frontend/artifact/C captures pass, including
       constructor-selection controls. Forced-GC Node oracles cover reference identity,
-      throwing accessors and prototype mutation. Native and performance checks pending.
+      throwing accessors and prototype mutation. Both new and21 existing property-read
+      cases pass under Linux ASan/UBSan; performance checks remain pending.
 
 - [ ] Let coercing global isFinite and isNaN consume retained range, split, capture
       and nested spans through the existing numeric parser, preserving exact callee
       identity. Number.isFinite and Number.isNaN retain noncoercing semantics; extra
       arguments and foreign callees use ordinary materialization. All179 focused
       span/codec checks,25 Node GC modes and seven actual frontend/artifact/C captures
-      pass. Execution counters and native sanitizer checks remain pending.
+      pass. All three Linux ASan/UBSan cases pass with mandatory execution counters;
+      performance measurement remains pending.
 
 - [ ] Reuse the shared enumeration contract for Reflect.ownKeys counts and snapshots,
       retaining public Symbol identity and string/Symbol ordering while preserving
@@ -931,6 +934,20 @@ The shared lifetime and fallback rules are recorded in
       eleven Node GC modes and five actual frontend/artifact/C captures pass, including
       large partial ranges, ropes, surrogate boundaries and foreign method errors.
       Native execution and measurement remain pending.
+
+- [ ] Retain bounded Object.values and Object.entries snapshots across observable
+      getters. Capture all original string keys before effects, recheck each current
+      descriptor, and root prior values through mutation, nested calls and collection.
+      Once observation starts, propagate the original exception without replay.
+      Eleven Node GC oracle modes, five actual frontend/artifact/C captures and four
+      runtime C syntax checks pass. Native and performance verification remain pending.
+- [ ] Build padStart and padEnd output directly from retained range, split, capture
+      and nested spans through the canonical padding builder. Preserve target/filler
+      conversion order, no-op coercion suppression, source roots and foreign methods.
+      Keep repeat's shared allocating helper frame-neutral; only its native wrapper
+      owns suppression, and long builders poll with completed prefixes rooted.
+      Focused compiler, Node and frontend/C checks pass; native and performance
+      verification remain pending.
 
 | Order | Slice                        | Owning work and exit condition                                                                                                                                  |
 | ----- | ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |

@@ -36,7 +36,7 @@ typedef enum MalObjectEnumerationKind {
 // Counts without allocation or user code; a decline leaves the original call untouched.
 bool mal_builtin_object_enumeration_count(MalValue callee, MalValue target, bool locked, MalObjectEnumerationKind kind, u32 *count_out);
 
-// Caller-owned roots retain the eager sequence independently of later receiver mutations.
+// Caller-owned roots retain eager values; true may carry a pending getter throw, false has no effects.
 bool mal_builtin_object_enumeration_snapshot(MalVm *vm, MalValue callee, MalValue target, bool locked, MalObjectEnumerationKind kind, MalValue *elements, u32 capacity, u32 *count_out);
 
 // Caller-rooted interleaved keys/values become cached pairs in their key slots.

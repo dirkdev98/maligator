@@ -3,7 +3,7 @@ import {
 	CORE_STRING_SPAN_METHODS,
 	CORE_STRING_SPAN_RANGE_METHODS,
 	coreStringSpanRangeAcceptsArgumentCount,
-	CORE_STRING_SPAN_SEARCH_METHODS,
+	coreStringSpanMethodArgumentLimit,
 } from "../core/core-ir-regions.ts";
 import { stringConstantEquals } from "../shared/string-constant.ts";
 import type { NativeBodyFacts } from "./native-body-facts.ts";
@@ -252,9 +252,13 @@ export function selectNativeSpanContinuations(
 				(op.opcode === "CALL" || op.opcode === "CALL_KNOWN") &&
 				op.thisValue === value &&
 				op.arguments.length <=
-					(CORE_STRING_SPAN_SEARCH_METHODS.some((name) => methodCall === `${name}Call`)
-						? 2
-						: 1) &&
+					(methodCall === undefined
+						? 1
+						: coreStringSpanMethodArgumentLimit(
+								CORE_STRING_SPAN_METHODS.find(
+									(method) => methodCall === `${method}Call`,
+								)!,
+							)) &&
 				!op.arguments.includes(value) &&
 				(op.opcode === "CALL_KNOWN"
 					? methodCall !== undefined && !op.construct && op.argumentMode === undefined

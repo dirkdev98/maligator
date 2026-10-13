@@ -184,9 +184,21 @@ export const CORE_STRING_SPAN_SEARCH_METHODS = [
 
 export const CORE_STRING_SPAN_METHODS = [
 	"repeat",
+	"padStart",
+	"padEnd",
 	...CORE_STRING_SPAN_CHARACTER_METHODS,
 	...CORE_STRING_SPAN_SEARCH_METHODS,
 ] as const;
+
+export function coreStringSpanMethodArgumentLimit(
+	method: (typeof CORE_STRING_SPAN_METHODS)[number],
+): number {
+	return method === "padStart" ||
+		method === "padEnd" ||
+		CORE_STRING_SPAN_SEARCH_METHODS.some((name) => name === method)
+		? 2
+		: 1;
+}
 
 export interface CoreStringSpanConsumer {
 	readonly instruction: CoreInstructionId;
@@ -201,6 +213,10 @@ export interface CoreStringSpanConsumer {
 		| "isNaN"
 		| "repeatProperty"
 		| "repeatCall"
+		| "padStartProperty"
+		| "padStartCall"
+		| "padEndProperty"
+		| "padEndCall"
 		| "charCodeAtProperty"
 		| "charCodeAtCall"
 		| "codePointAtProperty"

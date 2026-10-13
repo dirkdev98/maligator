@@ -858,7 +858,7 @@
 			"owner": "short string concatenation",
 			"category": "memory-layout-usage",
 			"mechanisms": ["string-allocation", "string-concatenation"],
-			"inputShape": "18–23-unit dynamic template keys through 17–20-unit intermediates",
+			"inputShape": "18\u201323-unit dynamic template keys through 17\u201320-unit intermediates",
 			"unit": "concatenation chain",
 			"sourceSeam": "runtime/src/heap_string.c",
 			"controls": [
@@ -6136,6 +6136,32 @@
 			"sourceSeam": "runtime/src/heap_string.h",
 			"controls": ["string-concatenation"],
 			"fixture": "cases/string-cons-full-scan-32.mjs"
+		},
+		{
+			"id": "object-observed-enumeration",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "Enumeration snapshots",
+			"category": "api-builtins",
+			"mechanisms": ["object-enumeration", "array-allocation"],
+			"inputShape": "Eager accessor values and entries from ordinary records and Arrays, retaining getter observations without an outer result Array.",
+			"unit": "enumeration",
+			"sourceSeam": "runtime/src/builtin_object.c",
+			"fixture": "cases/object-observed-enumeration.mjs",
+			"controls": ["object-values-snapshot", "object-entries-snapshot"]
+		},
+		{
+			"id": "string-span-pad",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "Composable string spans",
+			"category": "memory-layout-usage",
+			"mechanisms": ["string-spans", "delayed-materialization"],
+			"inputShape": "Padded output from retained range, split, capture and nested spans, with primitive target conversion and observable filler conversion.",
+			"unit": "token",
+			"sourceSeam": "runtime/src/builtin_string.c",
+			"fixture": "cases/string-span-pad.mjs",
+			"controls": ["string-span-repeat", "string-span-classify"]
 		}
 	]
 }
