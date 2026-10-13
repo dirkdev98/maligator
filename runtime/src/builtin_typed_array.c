@@ -2238,6 +2238,8 @@ static MalValue mal_ta_from(MalVm *vm, MalValue this_value, const MalValue *args
     MalIteratorRecord record;
     MalRootSpan values_span, extra_span, record_span;
     bool record_rooted = false;
+    MalExactScriptCall runtime_callback;
+    bool nominated = false;
     mal_gc_root(&values_span, values, 0);
     mal_gc_root(&extra_span, extra, 2);
     mal_gc_native_rooted_begin(vm);
@@ -2318,6 +2320,13 @@ static MalValue mal_ta_from(MalVm *vm, MalValue this_value, const MalValue *args
             goto done;
         }
         extra[0] = result;
+        nominated = (vm->exact_script_call == nullptr ||
+            vm->exact_script_call->callee != map_fn) &&
+            mal_vm_prepare_builtin_callback(vm, map_fn, &runtime_callback);
+        if (nominated) {
+            vm->exact_script_call = &runtime_callback;
+            MAL_PERF_COUNT(typed_array_from_runtime_callback_nominations);
+        }
         MalTypedArrayObject *array = mal_value_to_typed_array_object(result);
         for (u32 i = 0; i < length; i++) {
             MalValue element;
@@ -2328,7 +2337,7 @@ static MalValue mal_ta_from(MalVm *vm, MalValue this_value, const MalValue *args
                 MalValue call_args[2] = {element, mal_value_from_i32((i32) i)};
                 MalRootSpan call_span;
                 mal_gc_root(&call_span, call_args, 2);
-                MalCompletion completion = mal_vm_call_value(vm, map_fn, this_arg, call_args, 2);
+                MalCompletion completion = mal_vm_call_builtin_callback(vm, map_fn, this_arg, call_args, 2);
                 mal_gc_unroot(&call_span);
                 if (completion.kind != MAL_COMPLETION_NORMAL) {
                     vm->completion = completion;
@@ -2351,6 +2360,13 @@ static MalValue mal_ta_from(MalVm *vm, MalValue this_value, const MalValue *args
         goto done;
     }
     extra[0] = result;
+    nominated = (vm->exact_script_call == nullptr ||
+        vm->exact_script_call->callee != map_fn) &&
+        mal_vm_prepare_builtin_callback(vm, map_fn, &runtime_callback);
+    if (nominated) {
+        vm->exact_script_call = &runtime_callback;
+        MAL_PERF_COUNT(typed_array_from_runtime_callback_nominations);
+    }
     MalTypedArrayObject *array = mal_value_to_typed_array_object(result);
     usize i = mal_value_is_undefined(map_fn)
         ? mal_typed_array_object_store_number_prefix(vm, array, values, count)
@@ -2361,7 +2377,7 @@ static MalValue mal_ta_from(MalVm *vm, MalValue this_value, const MalValue *args
             MalValue call_args[2] = {element, mal_value_from_i32((i32) i)};
             MalRootSpan call_span;
             mal_gc_root(&call_span, call_args, 2);
-            MalCompletion completion = mal_vm_call_value(vm, map_fn, this_arg, call_args, 2);
+            MalCompletion completion = mal_vm_call_builtin_callback(vm, map_fn, this_arg, call_args, 2);
             mal_gc_unroot(&call_span);
             if (completion.kind != MAL_COMPLETION_NORMAL) {
                 vm->completion = completion;
@@ -2378,6 +2394,7 @@ static MalValue mal_ta_from(MalVm *vm, MalValue this_value, const MalValue *args
     ret = result;
 
 done:
+    if (nominated) vm->exact_script_call = runtime_callback.previous;
     mal_gc_native_rooted_end(vm);
     if (record_rooted) {
         mal_gc_unroot(&record_span);

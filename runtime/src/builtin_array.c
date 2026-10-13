@@ -845,9 +845,6 @@ done:
         : result;
 }
 
-/**
- * Apply the Array.from mapFn when present; returns false when it threw.
- */
 static bool mal_builtin_array_from_map(
     MalVm *vm,
     MalCallCache *call_cache,
@@ -861,8 +858,10 @@ static bool mal_builtin_array_from_map(
     }
 
     MalValue mapped_args[] = {*element, mal_value_from_i32((i32) index)};
-    MalCompletion completion = mal_vm_call_cached(
-        vm, call_cache, map_fn, this_arg, mapped_args, 2);
+    MalCompletion completion = vm->exact_script_call != nullptr &&
+        vm->exact_script_call->callee == map_fn
+        ? mal_vm_call_builtin_callback(vm, map_fn, this_arg, mapped_args, 2)
+        : mal_vm_call_cached(vm, call_cache, map_fn, this_arg, mapped_args, 2);
     if (completion.kind != MAL_COMPLETION_NORMAL) {
         vm->completion = completion;
         return false;
@@ -942,6 +941,8 @@ static MalValue mal_builtin_array_from(MalVm *vm, MalValue this_value, const Mal
         mal_value_to_native_function_object(method)->realm == vm->current_realm;
 #endif
     MalCallCache map_call_cache = {0};
+    MalExactScriptCall runtime_callback;
+    bool nominated = false;
 
     if (mal_value_is_callable(method) && !direct_array_copy) {
         MalRootSpan method_span;
@@ -990,9 +991,13 @@ static MalValue mal_builtin_array_from(MalVm *vm, MalValue this_value, const Mal
             }
         }
 
-        // Each step (iterator.next) and the mapfn re-enter JS and can collect;
-        // root the record, the result A, and the in-flight element, and lift GC
-        // suppression for the loop.
+        nominated = (vm->exact_script_call == nullptr ||
+            vm->exact_script_call->callee != map_fn) &&
+            mal_vm_prepare_builtin_callback(vm, map_fn, &runtime_callback);
+        if (nominated) {
+            vm->exact_script_call = &runtime_callback;
+            MAL_PERF_COUNT(array_from_runtime_callback_nominations);
+        }
         MalValue ret = mal_value_new_undefined();
         u32 index = 0;
         while (true) {
@@ -1041,6 +1046,7 @@ static MalValue mal_builtin_array_from(MalVm *vm, MalValue this_value, const Mal
         }
 
     iter_done:
+        if (nominated) vm->exact_script_call = runtime_callback.previous;
         mal_gc_native_rooted_end(vm);
         mal_gc_unroot(&span);
         mal_gc_unroot(&rec_span);
@@ -1088,6 +1094,13 @@ static MalValue mal_builtin_array_from(MalVm *vm, MalValue this_value, const Mal
     MalRootSpan span;
     mal_gc_root(&span, roots, 2);
     mal_gc_native_rooted_begin(vm);
+    nominated = (vm->exact_script_call == nullptr ||
+        vm->exact_script_call->callee != map_fn) &&
+        mal_vm_prepare_builtin_callback(vm, map_fn, &runtime_callback);
+    if (nominated) {
+        vm->exact_script_call = &runtime_callback;
+        MAL_PERF_COUNT(array_from_runtime_callback_nominations);
+    }
     MalValue ret = mal_value_new_undefined();
     for (u32 index = 0; index < length; index++) {
         MalValue element = mal_builtin_array_get(vm, source, index);
@@ -1118,6 +1131,7 @@ static MalValue mal_builtin_array_from(MalVm *vm, MalValue this_value, const Mal
     ret = roots[0];
 
 done:
+    if (nominated) vm->exact_script_call = runtime_callback.previous;
     mal_gc_native_rooted_end(vm);
     mal_gc_unroot(&span);
     return ret;

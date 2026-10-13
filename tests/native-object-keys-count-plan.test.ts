@@ -8,6 +8,7 @@ import {
 	serializeCompilerArtifact,
 } from "../src/compiler/target/compiler-artifact-codec.ts";
 import { emitProgramImage } from "../src/compiler/target/emit-program-image.ts";
+import { validateNativeStorage } from "../src/compiler/target/lower-native-storage.ts";
 import { analyzeNativeBodyFacts } from "../src/compiler/target/native-body-facts.ts";
 import { selectNativeObjectEnumerationSnapshots } from "../src/compiler/target/native-object-enumeration-snapshot.ts";
 import { emitCompiledFunction } from "../src/compiler/target/render-native-c.ts";
@@ -36,6 +37,65 @@ function inspect(image: ReturnType<typeof compile>) {
 	return native;
 }
 describe("Object enumeration snapshot storage", () => {
+	it.each(["mutable", "locked"] as const)(
+		"retains keys and values after independent handlers and in catch bodies under %s primordials",
+		(mode) => {
+			for (const kind of ["keys", "values"] as const)
+				for (const body of [
+					`try{hook();}catch(error){hook(error);}const result=Object.${kind}(record);hook(record);return [result[0],result.length];`,
+					`try{hook();}catch(error){const result=Object.${kind}(record);hook(record);return [result[0],result.length];}return null;`,
+					`try{hook();}catch(error){hook(error);}try{hook(record);}catch(error){hook(error);}const result=Object.${kind}(record);return [result[0],result.length];`,
+				]) {
+					const image = compile(body, mode),
+						native = inspect(image);
+					expect(native.body.handlers.length).toBeGreaterThan(0);
+					expect(native.storage!.objectEnumerationSnapshots).toHaveLength(1);
+					expect(native.storage!.objectEnumerationSnapshots[0]!.kind).toBe(kind);
+					expect(deserializeCompilerArtifact(serializeCompilerArtifact(image))).toEqual(
+						image,
+					);
+					expect(() => emitProgramImage(image, {})).not.toThrow();
+				}
+		},
+	);
+	it.each(["keys", "values"] as const)(
+		"declines %s snapshots whose aliases or producer reach exception boundaries",
+		(kind) => {
+			for (const body of [
+				`try{const result=Object.${kind}(record);return result.length;}catch(error){return error;}`,
+				`const result=Object.${kind}(record);try{hook();}catch(error){return result[0];}return result.length;`,
+				`const result=Object.${kind}(record);try{hook();}finally{hook(result[0]);}return result.length;`,
+				`const result=Object.${kind}(record);const size=result.length;try{hook();}catch(error){}return size;`,
+				`let previous;for(let i=0;i<3;i++){try{hook();}catch(error){}const result=Object.${kind}(record);if(previous)hook(previous[0]);previous=result;}return previous.length;`,
+				`let result=Object.${kind}(record);try{hook();}catch(error){result=[];}return result[0];`,
+			])
+				expect(inspect(compile(body)).storage!.objectEnumerationSnapshots, body).toEqual(
+					[],
+				);
+		},
+	);
+	it("revalidates transported snapshot lifetimes against changed exception edges", () => {
+		const image = compile(
+				"const result=Object.values(record);return [result[0],result.length];",
+			),
+			native = inspect(image),
+			plan = native.storage!.objectEnumerationSnapshots[0]!;
+		const handlerIp = native.body.instructions.length - 1;
+		for (const startIp of [plan.callIp, plan.elementIps[0]!])
+			expect(() =>
+				validateNativeStorage(
+					{
+						...native,
+						body: {
+							...native.body,
+							handlers: [{ startIp, endIp: handlerIp, handlerIp }],
+						},
+					},
+					undefined,
+					image.runtime.stringConstants,
+				),
+			).toThrow(/invalid or stale storage plan/);
+	});
 	it.each([
 		"const keys=Object.keys({ first:record, second:hook });return [keys[hook],keys.length];",
 		"const keys=Object.keys(hook(record));return [keys[0],keys.length];",

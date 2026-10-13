@@ -73,7 +73,7 @@ describe("forwarded sort comparator nomination", () => {
 					timeout: 60_000,
 					env: { ...process.env, ...env, MAL_PERF_STATS: "1" },
 				});
-				expect(measured.status, measured.stderr).toBe(0);
+				expect(measured.status, `${kind} compiled: ${measured.stderr}`).toBe(0);
 				expect(measured.stdout).toBe(expected);
 				const counters = measured.stderr.match(
 					/\[perf-sort-callback-stats\] array_nominations=(\d+) typed_nominations=(\d+)/,
@@ -103,10 +103,21 @@ describe("forwarded sort comparator nomination", () => {
 						),
 					).toBeGreaterThanOrEqual(array + typed);
 				}
-				for (const binary of [pair.compiled, pair.interpreted])
-					expect(
-						runToStdout(binary, { env: { ...env, ...STRESS_ENV }, timeoutMs: 60_000 }),
-					).toBe(expected);
+				for (const [backend, binary] of [
+					["compiled", pair.compiled],
+					["interpreted", pair.interpreted],
+				] as const) {
+					const context = `forwarded-sort ${primordials} ${kind} ${backend} GC stress`;
+					try {
+						expect(
+							runToStdout(binary, { env: { ...env, ...STRESS_ENV }, timeoutMs: 60_000 }),
+							context,
+						).toBe(expected);
+					} catch (cause) {
+						process.stderr.write(`[native] ${context} failed\n`);
+						throw new Error(`${context} failed`, { cause });
+					}
+				}
 			}
 		},
 		600_000,

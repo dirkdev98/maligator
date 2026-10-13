@@ -668,6 +668,21 @@ The shared lifetime and fallback rules are recorded in
       artifact roundtrips, and emitted C syntax checks pass. Native execution and
       measurement remain pending.
 
+- [ ] Reuse canonical callback nomination in Array.from and TypedArray.from mapping.
+      Preserve iterator versus array-like ordering, custom construction, callback
+      this/arity, IteratorClose behavior, roots, and nested transport fallback.
+      Implemented in the existing rooted iterable and array-like algorithms. All 43
+      focused checks, Node oracles, eleven frontend/artifact roundtrips, and runtime
+      and generated C syntax checks pass. Native execution and measurement remain
+      pending.
+- [ ] Admit Object.keys/values snapshots in functions with independent handlers.
+      Validate exception successors and keep the retained snapshot lifetime outside
+      protected instructions and handler entries; retain generation and alias checks.
+      Implemented with existing exception successor facts and bounded alias discovery.
+      All 197 focused checks, Node oracles, four actual bundled programs, artifact
+      roundtrips, and generated C syntax checks pass. Native execution and measurement
+      remain pending.
+
 | Order | Slice                        | Owning work and exit condition                                                                                                                                  |
 | ----- | ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 1     | Callback invocation          | The tasks above; remove measured repeated invocation work for a numeric reduction with captures.                                                                |

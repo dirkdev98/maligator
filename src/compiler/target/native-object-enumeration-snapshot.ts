@@ -31,7 +31,6 @@ export function selectNativeObjectEnumerationSnapshots(
 		native.mode !== "direct" ||
 		fn.isGenerator ||
 		fn.isAsync ||
-		fn.handlers.length ||
 		fn.profileSiteIds !== undefined ||
 		fn.instructions.length > 4096
 	)
@@ -48,6 +47,7 @@ export function selectNativeObjectEnumerationSnapshots(
 					call.construct ||
 					call.argumentMode !== undefined)) ||
 			call.arguments.length !== 1 ||
+			body.handlerTargets[ip] !== undefined ||
 			unavailable(ip)
 		)
 			continue;
@@ -80,12 +80,26 @@ export function selectNativeObjectEnumerationSnapshots(
 		if (kind === undefined) continue;
 		// Rejected escapes also incur a whole-function lifetime analysis.
 		if (candidates++ === 16) break;
-		const flow = nativeVirtualValueFlow(fn.instructions, ip, call.dst);
+		const flow = nativeVirtualValueFlow(
+			fn.instructions,
+			ip,
+			call.dst,
+			undefined,
+			body.handlerTargets,
+		);
 		const consumers = new Map<number, ReadonlyArray<number>>();
 		const lengthIps: Array<number> = [],
 			elementIps: Array<number> = [];
 		let safe = true;
 		for (const [consumerIp, aliases] of flow) {
+			if (
+				aliases.may.size > 0 &&
+				(body.handlerTargets[consumerIp] !== undefined ||
+					body.handlerEntries.has(consumerIp))
+			) {
+				safe = false;
+				break;
+			}
 			if (consumerIp === ip) continue;
 			const op = fn.instructions[consumerIp]!;
 			const reads = vmInstructionReadRegisters(op).filter((r) => aliases.may.has(r));
@@ -110,9 +124,19 @@ export function selectNativeObjectEnumerationSnapshots(
 		}
 		if (!safe || !consumers.size || consumers.size > 16) continue;
 		try {
-			validateNativeVirtualValue(fn.instructions, ip, call.dst, consumers, () => {
-				throw new RangeError("Observed enumeration array");
-			});
+			validateNativeVirtualValue(
+				fn.instructions,
+				ip,
+				call.dst,
+				consumers,
+				() => {
+					throw new RangeError("Observed enumeration array");
+				},
+				undefined,
+				false,
+				undefined,
+				body.handlerTargets,
+			);
 		} catch (error) {
 			if (!(error instanceof RangeError)) throw error;
 			continue;

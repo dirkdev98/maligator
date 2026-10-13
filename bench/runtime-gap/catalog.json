@@ -3098,6 +3098,32 @@
 			"controls": ["fresh-mixed-values-32", "fresh-three-values"]
 		},
 		{
+			"id": "forwarded-from-mapper",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "Shared Array and TypedArray mapping callback",
+			"category": "api-builtins",
+			"mechanisms": ["array-callback"],
+			"inputShape": "128 typed elements mapped through a selected captured callback into Array and Float64Array outputs.",
+			"unit": "mapped element",
+			"sourceSeam": "runtime/src/builtin_array.c",
+			"fixture": "cases/forwarded-from-mapper.mjs",
+			"controls": ["forwarded-array-callback", "forwarded-typed-sort-callback"]
+		},
+		{
+			"id": "enumeration-after-handler",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "Enumeration snapshots after independent handlers",
+			"category": "object-array-representation",
+			"mechanisms": ["allocation-gc"],
+			"inputShape": "Four eager record values traversed after an independent try/catch.",
+			"unit": "snapshot",
+			"sourceSeam": "src/compiler/target/native-object-enumeration-snapshot.ts",
+			"fixture": "cases/enumeration-after-handler.mjs",
+			"controls": ["object-values-snapshot", "object-keys-snapshot-traversal"]
+		},
+		{
 			"id": "method-name-unique",
 			"group": "runtime",
 			"suite": "runtime",
