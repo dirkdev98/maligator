@@ -111,6 +111,7 @@ const FS: HostModuleSpec = {
 	id: "node:fs",
 	named: [
 		"Stats",
+		"access",
 		"accessSync",
 		"appendFileSync",
 		"chmodSync",
@@ -128,6 +129,7 @@ const FS: HostModuleSpec = {
 		"mkdirSync",
 		"mkdtempSync",
 		"openSync",
+		"promises",
 		"readFile",
 		"readFileSync",
 		"readlink",
@@ -136,6 +138,7 @@ const FS: HostModuleSpec = {
 		"readdir",
 		"readdirSync",
 		"realpathSync",
+		"rename",
 		"renameSync",
 		"rmSync",
 		"rmdirSync",
@@ -143,6 +146,7 @@ const FS: HostModuleSpec = {
 		"stat",
 		"symlink",
 		"symlinkSync",
+		"unlink",
 		"unlinkSync",
 		"utimesSync",
 		"write",
@@ -156,6 +160,7 @@ const FS: HostModuleSpec = {
 const FS_PROMISES: HostModuleSpec = {
 	id: "node:fs/promises",
 	named: [
+		"access",
 		"appendFile",
 		"copyFile",
 		"chmod",
@@ -588,6 +593,7 @@ const URL: HostModuleSpec = {
 	id: "node:url",
 	named: [
 		"URL",
+		"URLSearchParams",
 		"Url",
 		"fileURLToPath",
 		"format",
@@ -623,7 +629,7 @@ const READLINE: HostModuleSpec = {
 
 const NET: HostModuleSpec = {
 	id: "node:net",
-	named: ["Socket", "connect", "createConnection", "isIP"],
+	named: ["Socket", "connect", "createConnection", "isIP", "isIPv4", "isIPv6"],
 	hasDefault: true,
 	installer: hostInstallerSymbol("node:net"),
 };

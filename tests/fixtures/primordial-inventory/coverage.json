@@ -10169,6 +10169,21 @@
 			"decisions": []
 		},
 		{
+			"id": "[\"%MAL_INTRINSIC_NODE_FS_MODULE%\",\"access\"]",
+			"owner": "%MAL_INTRINSIC_NODE_FS_MODULE%",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:fs\"]",
+				"%MAL_INTRINSIC_NODE_FS_MODULE%",
+				"MAL_INTRINSIC_NODE_FS_MODULE",
+				"mal_host_install_node_fs:default"
+			],
+			"key": "access",
+			"kind": "data",
+			"operations": ["%MAL_INTRINSIC_NODE_FS_MODULE%.access"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
 			"id": "[\"%MAL_INTRINSIC_NODE_FS_MODULE%\",\"accessSync\"]",
 			"owner": "%MAL_INTRINSIC_NODE_FS_MODULE%",
 			"ownerPaths": [
@@ -10529,6 +10544,21 @@
 			"decisions": []
 		},
 		{
+			"id": "[\"%MAL_INTRINSIC_NODE_FS_MODULE%\",\"rename\"]",
+			"owner": "%MAL_INTRINSIC_NODE_FS_MODULE%",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:fs\"]",
+				"%MAL_INTRINSIC_NODE_FS_MODULE%",
+				"MAL_INTRINSIC_NODE_FS_MODULE",
+				"mal_host_install_node_fs:default"
+			],
+			"key": "rename",
+			"kind": "data",
+			"operations": ["%MAL_INTRINSIC_NODE_FS_MODULE%.access"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
 			"id": "[\"%MAL_INTRINSIC_NODE_FS_MODULE%\",\"renameSync\"]",
 			"owner": "%MAL_INTRINSIC_NODE_FS_MODULE%",
 			"ownerPaths": [
@@ -10634,6 +10664,21 @@
 			"decisions": []
 		},
 		{
+			"id": "[\"%MAL_INTRINSIC_NODE_FS_MODULE%\",\"unlink\"]",
+			"owner": "%MAL_INTRINSIC_NODE_FS_MODULE%",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:fs\"]",
+				"%MAL_INTRINSIC_NODE_FS_MODULE%",
+				"MAL_INTRINSIC_NODE_FS_MODULE",
+				"mal_host_install_node_fs:default"
+			],
+			"key": "unlink",
+			"kind": "data",
+			"operations": ["%MAL_INTRINSIC_NODE_FS_MODULE%.access"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
 			"id": "[\"%MAL_INTRINSIC_NODE_FS_MODULE%\",\"unlinkSync\"]",
 			"owner": "%MAL_INTRINSIC_NODE_FS_MODULE%",
 			"ownerPaths": [
@@ -10720,6 +10765,21 @@
 			"key": "constants",
 			"kind": "data",
 			"operations": [],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_FS_MODULE%\",\"promises\"]",
+			"owner": "%MAL_INTRINSIC_NODE_FS_MODULE%",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:fs\"]",
+				"%MAL_INTRINSIC_NODE_FS_MODULE%",
+				"MAL_INTRINSIC_NODE_FS_MODULE",
+				"mal_host_install_node_fs:default"
+			],
+			"key": "promises",
+			"kind": "accessor",
+			"operations": ["%MAL_INTRINSIC_NODE_FS_MODULE%.promises<get>"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -11194,6 +11254,58 @@
 			"key": "name",
 			"kind": "data",
 			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_FS_MODULE%.access\",\"length\"]",
+			"owner": "%MAL_INTRINSIC_NODE_FS_MODULE%.access",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_FS_MODULE%.access",
+				"%MAL_INTRINSIC_NODE_FS_MODULE%.access.prototype.constructor",
+				"mal_host_install_node_fs:access"
+			],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_FS_MODULE%.access\",\"name\"]",
+			"owner": "%MAL_INTRINSIC_NODE_FS_MODULE%.access",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_FS_MODULE%.access",
+				"%MAL_INTRINSIC_NODE_FS_MODULE%.access.prototype.constructor",
+				"mal_host_install_node_fs:access"
+			],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_FS_MODULE%.access\",\"prototype\"]",
+			"owner": "%MAL_INTRINSIC_NODE_FS_MODULE%.access",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_FS_MODULE%.access",
+				"%MAL_INTRINSIC_NODE_FS_MODULE%.access.prototype.constructor",
+				"mal_host_install_node_fs:access"
+			],
+			"key": "prototype",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_FS_MODULE%.access.prototype\",\"constructor\"]",
+			"owner": "%MAL_INTRINSIC_NODE_FS_MODULE%.access.prototype",
+			"ownerPaths": ["%MAL_INTRINSIC_NODE_FS_MODULE%.access.prototype"],
+			"key": "constructor",
+			"kind": "data",
+			"operations": ["%MAL_INTRINSIC_NODE_FS_MODULE%.access"],
 			"task": "H-10",
 			"decisions": []
 		},
@@ -12329,6 +12441,26 @@
 			"decisions": []
 		},
 		{
+			"id": "[\"%MAL_INTRINSIC_NODE_FS_MODULE%.promises<get>\",\"length\"]",
+			"owner": "%MAL_INTRINSIC_NODE_FS_MODULE%.promises<get>",
+			"ownerPaths": ["%MAL_INTRINSIC_NODE_FS_MODULE%.promises<get>"],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_FS_MODULE%.promises<get>\",\"name\"]",
+			"owner": "%MAL_INTRINSIC_NODE_FS_MODULE%.promises<get>",
+			"ownerPaths": ["%MAL_INTRINSIC_NODE_FS_MODULE%.promises<get>"],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
 			"id": "[\"%MAL_INTRINSIC_NODE_FS_MODULE%.readFile\",\"length\"]",
 			"owner": "%MAL_INTRINSIC_NODE_FS_MODULE%.readFile",
 			"ownerPaths": [
@@ -12537,6 +12669,58 @@
 			"decisions": []
 		},
 		{
+			"id": "[\"%MAL_INTRINSIC_NODE_FS_MODULE%.rename\",\"length\"]",
+			"owner": "%MAL_INTRINSIC_NODE_FS_MODULE%.rename",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_FS_MODULE%.rename",
+				"%MAL_INTRINSIC_NODE_FS_MODULE%.rename.prototype.constructor",
+				"mal_host_install_node_fs:rename"
+			],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_FS_MODULE%.rename\",\"name\"]",
+			"owner": "%MAL_INTRINSIC_NODE_FS_MODULE%.rename",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_FS_MODULE%.rename",
+				"%MAL_INTRINSIC_NODE_FS_MODULE%.rename.prototype.constructor",
+				"mal_host_install_node_fs:rename"
+			],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_FS_MODULE%.rename\",\"prototype\"]",
+			"owner": "%MAL_INTRINSIC_NODE_FS_MODULE%.rename",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_FS_MODULE%.rename",
+				"%MAL_INTRINSIC_NODE_FS_MODULE%.rename.prototype.constructor",
+				"mal_host_install_node_fs:rename"
+			],
+			"key": "prototype",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_FS_MODULE%.rename.prototype\",\"constructor\"]",
+			"owner": "%MAL_INTRINSIC_NODE_FS_MODULE%.rename.prototype",
+			"ownerPaths": ["%MAL_INTRINSIC_NODE_FS_MODULE%.rename.prototype"],
+			"key": "constructor",
+			"kind": "data",
+			"operations": ["%MAL_INTRINSIC_NODE_FS_MODULE%.access"],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
 			"id": "[\"%MAL_INTRINSIC_NODE_FS_MODULE%.renameSync\",\"length\"]",
 			"owner": "%MAL_INTRINSIC_NODE_FS_MODULE%.renameSync",
 			"ownerPaths": [
@@ -12719,6 +12903,58 @@
 			"decisions": []
 		},
 		{
+			"id": "[\"%MAL_INTRINSIC_NODE_FS_MODULE%.unlink\",\"length\"]",
+			"owner": "%MAL_INTRINSIC_NODE_FS_MODULE%.unlink",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_FS_MODULE%.unlink",
+				"%MAL_INTRINSIC_NODE_FS_MODULE%.unlink.prototype.constructor",
+				"mal_host_install_node_fs:unlink"
+			],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_FS_MODULE%.unlink\",\"name\"]",
+			"owner": "%MAL_INTRINSIC_NODE_FS_MODULE%.unlink",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_FS_MODULE%.unlink",
+				"%MAL_INTRINSIC_NODE_FS_MODULE%.unlink.prototype.constructor",
+				"mal_host_install_node_fs:unlink"
+			],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_FS_MODULE%.unlink\",\"prototype\"]",
+			"owner": "%MAL_INTRINSIC_NODE_FS_MODULE%.unlink",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_FS_MODULE%.unlink",
+				"%MAL_INTRINSIC_NODE_FS_MODULE%.unlink.prototype.constructor",
+				"mal_host_install_node_fs:unlink"
+			],
+			"key": "prototype",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_FS_MODULE%.unlink.prototype\",\"constructor\"]",
+			"owner": "%MAL_INTRINSIC_NODE_FS_MODULE%.unlink.prototype",
+			"ownerPaths": ["%MAL_INTRINSIC_NODE_FS_MODULE%.unlink.prototype"],
+			"key": "constructor",
+			"kind": "data",
+			"operations": ["%MAL_INTRINSIC_NODE_FS_MODULE%.access"],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
 			"id": "[\"%MAL_INTRINSIC_NODE_FS_MODULE%.unlinkSync\",\"length\"]",
 			"owner": "%MAL_INTRINSIC_NODE_FS_MODULE%.unlinkSync",
 			"ownerPaths": [
@@ -12855,6 +13091,7 @@
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:fs/promises\"]",
 				"%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%",
 				"MAL_INTRINSIC_NODE_FS_PROMISES_MODULE",
+				"mal_host_install_node_fs:promises",
 				"mal_host_install_node_fs_promises:default"
 			],
 			"key": "appendFile",
@@ -12870,6 +13107,7 @@
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:fs/promises\"]",
 				"%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%",
 				"MAL_INTRINSIC_NODE_FS_PROMISES_MODULE",
+				"mal_host_install_node_fs:promises",
 				"mal_host_install_node_fs_promises:default"
 			],
 			"key": "chmod",
@@ -12885,6 +13123,7 @@
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:fs/promises\"]",
 				"%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%",
 				"MAL_INTRINSIC_NODE_FS_PROMISES_MODULE",
+				"mal_host_install_node_fs:promises",
 				"mal_host_install_node_fs_promises:default"
 			],
 			"key": "copyFile",
@@ -12900,6 +13139,7 @@
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:fs/promises\"]",
 				"%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%",
 				"MAL_INTRINSIC_NODE_FS_PROMISES_MODULE",
+				"mal_host_install_node_fs:promises",
 				"mal_host_install_node_fs_promises:default"
 			],
 			"key": "link",
@@ -12915,6 +13155,7 @@
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:fs/promises\"]",
 				"%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%",
 				"MAL_INTRINSIC_NODE_FS_PROMISES_MODULE",
+				"mal_host_install_node_fs:promises",
 				"mal_host_install_node_fs_promises:default"
 			],
 			"key": "lstat",
@@ -12930,6 +13171,7 @@
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:fs/promises\"]",
 				"%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%",
 				"MAL_INTRINSIC_NODE_FS_PROMISES_MODULE",
+				"mal_host_install_node_fs:promises",
 				"mal_host_install_node_fs_promises:default"
 			],
 			"key": "mkdir",
@@ -12945,6 +13187,7 @@
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:fs/promises\"]",
 				"%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%",
 				"MAL_INTRINSIC_NODE_FS_PROMISES_MODULE",
+				"mal_host_install_node_fs:promises",
 				"mal_host_install_node_fs_promises:default"
 			],
 			"key": "readFile",
@@ -12960,6 +13203,7 @@
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:fs/promises\"]",
 				"%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%",
 				"MAL_INTRINSIC_NODE_FS_PROMISES_MODULE",
+				"mal_host_install_node_fs:promises",
 				"mal_host_install_node_fs_promises:default"
 			],
 			"key": "readlink",
@@ -12975,6 +13219,7 @@
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:fs/promises\"]",
 				"%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%",
 				"MAL_INTRINSIC_NODE_FS_PROMISES_MODULE",
+				"mal_host_install_node_fs:promises",
 				"mal_host_install_node_fs_promises:default"
 			],
 			"key": "readdir",
@@ -12990,24 +13235,10 @@
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:fs/promises\"]",
 				"%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%",
 				"MAL_INTRINSIC_NODE_FS_PROMISES_MODULE",
+				"mal_host_install_node_fs:promises",
 				"mal_host_install_node_fs_promises:default"
 			],
 			"key": "realpath",
-			"kind": "data",
-			"operations": ["%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%.appendFile"],
-			"task": "N-06",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%\",\"rename\"]",
-			"owner": "%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%",
-			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:fs/promises\"]",
-				"%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%",
-				"MAL_INTRINSIC_NODE_FS_PROMISES_MODULE",
-				"mal_host_install_node_fs_promises:default"
-			],
-			"key": "rename",
 			"kind": "data",
 			"operations": ["%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%.appendFile"],
 			"task": "N-06",
@@ -13020,6 +13251,7 @@
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:fs/promises\"]",
 				"%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%",
 				"MAL_INTRINSIC_NODE_FS_PROMISES_MODULE",
+				"mal_host_install_node_fs:promises",
 				"mal_host_install_node_fs_promises:default"
 			],
 			"key": "rm",
@@ -13035,6 +13267,7 @@
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:fs/promises\"]",
 				"%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%",
 				"MAL_INTRINSIC_NODE_FS_PROMISES_MODULE",
+				"mal_host_install_node_fs:promises",
 				"mal_host_install_node_fs_promises:default"
 			],
 			"key": "rmdir",
@@ -13050,6 +13283,7 @@
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:fs/promises\"]",
 				"%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%",
 				"MAL_INTRINSIC_NODE_FS_PROMISES_MODULE",
+				"mal_host_install_node_fs:promises",
 				"mal_host_install_node_fs_promises:default"
 			],
 			"key": "stat",
@@ -13065,24 +13299,10 @@
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:fs/promises\"]",
 				"%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%",
 				"MAL_INTRINSIC_NODE_FS_PROMISES_MODULE",
+				"mal_host_install_node_fs:promises",
 				"mal_host_install_node_fs_promises:default"
 			],
 			"key": "symlink",
-			"kind": "data",
-			"operations": ["%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%.appendFile"],
-			"task": "N-06",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%\",\"unlink\"]",
-			"owner": "%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%",
-			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:fs/promises\"]",
-				"%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%",
-				"MAL_INTRINSIC_NODE_FS_PROMISES_MODULE",
-				"mal_host_install_node_fs_promises:default"
-			],
-			"key": "unlink",
 			"kind": "data",
 			"operations": ["%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%.appendFile"],
 			"task": "N-06",
@@ -13095,6 +13315,7 @@
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:fs/promises\"]",
 				"%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%",
 				"MAL_INTRINSIC_NODE_FS_PROMISES_MODULE",
+				"mal_host_install_node_fs:promises",
 				"mal_host_install_node_fs_promises:default"
 			],
 			"key": "utimes",
@@ -13110,6 +13331,7 @@
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:fs/promises\"]",
 				"%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%",
 				"MAL_INTRINSIC_NODE_FS_PROMISES_MODULE",
+				"mal_host_install_node_fs:promises",
 				"mal_host_install_node_fs_promises:default"
 			],
 			"key": "writeFile",
@@ -13125,6 +13347,7 @@
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:fs/promises\"]",
 				"%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%",
 				"MAL_INTRINSIC_NODE_FS_PROMISES_MODULE",
+				"mal_host_install_node_fs:promises",
 				"mal_host_install_node_fs_promises:default"
 			],
 			"key": "open",
@@ -13140,12 +13363,87 @@
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:fs/promises\"]",
 				"%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%",
 				"MAL_INTRINSIC_NODE_FS_PROMISES_MODULE",
+				"mal_host_install_node_fs:promises",
 				"mal_host_install_node_fs_promises:default"
 			],
 			"key": "glob",
 			"kind": "data",
 			"operations": ["%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%.glob"],
 			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%\",\"access\"]",
+			"owner": "%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:fs/promises\"]",
+				"%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%",
+				"MAL_INTRINSIC_NODE_FS_PROMISES_MODULE",
+				"mal_host_install_node_fs:promises",
+				"mal_host_install_node_fs_promises:default"
+			],
+			"key": "access",
+			"kind": "data",
+			"operations": ["%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%.access"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%\",\"unlink\"]",
+			"owner": "%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:fs/promises\"]",
+				"%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%",
+				"MAL_INTRINSIC_NODE_FS_PROMISES_MODULE",
+				"mal_host_install_node_fs:promises",
+				"mal_host_install_node_fs_promises:default"
+			],
+			"key": "unlink",
+			"kind": "data",
+			"operations": ["%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%.access"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%\",\"rename\"]",
+			"owner": "%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:fs/promises\"]",
+				"%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%",
+				"MAL_INTRINSIC_NODE_FS_PROMISES_MODULE",
+				"mal_host_install_node_fs:promises",
+				"mal_host_install_node_fs_promises:default"
+			],
+			"key": "rename",
+			"kind": "data",
+			"operations": ["%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%.access"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%.access\",\"length\"]",
+			"owner": "%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%.access",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%.access",
+				"mal_host_install_node_fs_promises:access"
+			],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%.access\",\"name\"]",
+			"owner": "%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%.access",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%.access",
+				"mal_host_install_node_fs_promises:access"
+			],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
 			"decisions": []
 		},
 		{
@@ -17138,6 +17436,36 @@
 			"decisions": []
 		},
 		{
+			"id": "[\"%MAL_INTRINSIC_NODE_NET_MODULE%\",\"isIPv4\"]",
+			"owner": "%MAL_INTRINSIC_NODE_NET_MODULE%",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:net\"]",
+				"%MAL_INTRINSIC_NODE_NET_MODULE%",
+				"MAL_INTRINSIC_NODE_NET_MODULE",
+				"mal_host_install_node_net:default"
+			],
+			"key": "isIPv4",
+			"kind": "data",
+			"operations": ["%MAL_INTRINSIC_NODE_NET_MODULE%.isIPv4"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_NET_MODULE%\",\"isIPv6\"]",
+			"owner": "%MAL_INTRINSIC_NODE_NET_MODULE%",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:net\"]",
+				"%MAL_INTRINSIC_NODE_NET_MODULE%",
+				"MAL_INTRINSIC_NODE_NET_MODULE",
+				"mal_host_install_node_net:default"
+			],
+			"key": "isIPv6",
+			"kind": "data",
+			"operations": ["%MAL_INTRINSIC_NODE_NET_MODULE%.isIPv6"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
 			"id": "[\"%MAL_INTRINSIC_NODE_NET_MODULE%.connect\",\"length\"]",
 			"owner": "%MAL_INTRINSIC_NODE_NET_MODULE%.connect",
 			"ownerPaths": [
@@ -17194,6 +17522,7 @@
 			"owner": "%MAL_INTRINSIC_NODE_NET_MODULE%.isIP",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_NET_MODULE%.isIP",
+				"%MAL_INTRINSIC_NODE_NET_MODULE%.isIP.prototype.constructor",
 				"mal_host_install_node_net:isIP"
 			],
 			"key": "length",
@@ -17207,11 +17536,140 @@
 			"owner": "%MAL_INTRINSIC_NODE_NET_MODULE%.isIP",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_NET_MODULE%.isIP",
+				"%MAL_INTRINSIC_NODE_NET_MODULE%.isIP.prototype.constructor",
 				"mal_host_install_node_net:isIP"
 			],
 			"key": "name",
 			"kind": "data",
 			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_NET_MODULE%.isIP\",\"prototype\"]",
+			"owner": "%MAL_INTRINSIC_NODE_NET_MODULE%.isIP",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_NET_MODULE%.isIP",
+				"%MAL_INTRINSIC_NODE_NET_MODULE%.isIP.prototype.constructor",
+				"mal_host_install_node_net:isIP"
+			],
+			"key": "prototype",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_NET_MODULE%.isIP.prototype\",\"constructor\"]",
+			"owner": "%MAL_INTRINSIC_NODE_NET_MODULE%.isIP.prototype",
+			"ownerPaths": ["%MAL_INTRINSIC_NODE_NET_MODULE%.isIP.prototype"],
+			"key": "constructor",
+			"kind": "data",
+			"operations": ["%MAL_INTRINSIC_NODE_NET_MODULE%.isIP"],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_NET_MODULE%.isIPv4\",\"length\"]",
+			"owner": "%MAL_INTRINSIC_NODE_NET_MODULE%.isIPv4",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_NET_MODULE%.isIPv4",
+				"%MAL_INTRINSIC_NODE_NET_MODULE%.isIPv4.prototype.constructor",
+				"mal_host_install_node_net:isIPv4"
+			],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_NET_MODULE%.isIPv4\",\"name\"]",
+			"owner": "%MAL_INTRINSIC_NODE_NET_MODULE%.isIPv4",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_NET_MODULE%.isIPv4",
+				"%MAL_INTRINSIC_NODE_NET_MODULE%.isIPv4.prototype.constructor",
+				"mal_host_install_node_net:isIPv4"
+			],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_NET_MODULE%.isIPv4\",\"prototype\"]",
+			"owner": "%MAL_INTRINSIC_NODE_NET_MODULE%.isIPv4",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_NET_MODULE%.isIPv4",
+				"%MAL_INTRINSIC_NODE_NET_MODULE%.isIPv4.prototype.constructor",
+				"mal_host_install_node_net:isIPv4"
+			],
+			"key": "prototype",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_NET_MODULE%.isIPv4.prototype\",\"constructor\"]",
+			"owner": "%MAL_INTRINSIC_NODE_NET_MODULE%.isIPv4.prototype",
+			"ownerPaths": ["%MAL_INTRINSIC_NODE_NET_MODULE%.isIPv4.prototype"],
+			"key": "constructor",
+			"kind": "data",
+			"operations": ["%MAL_INTRINSIC_NODE_NET_MODULE%.isIPv4"],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_NET_MODULE%.isIPv6\",\"length\"]",
+			"owner": "%MAL_INTRINSIC_NODE_NET_MODULE%.isIPv6",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_NET_MODULE%.isIPv6",
+				"%MAL_INTRINSIC_NODE_NET_MODULE%.isIPv6.prototype.constructor",
+				"mal_host_install_node_net:isIPv6"
+			],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_NET_MODULE%.isIPv6\",\"name\"]",
+			"owner": "%MAL_INTRINSIC_NODE_NET_MODULE%.isIPv6",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_NET_MODULE%.isIPv6",
+				"%MAL_INTRINSIC_NODE_NET_MODULE%.isIPv6.prototype.constructor",
+				"mal_host_install_node_net:isIPv6"
+			],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_NET_MODULE%.isIPv6\",\"prototype\"]",
+			"owner": "%MAL_INTRINSIC_NODE_NET_MODULE%.isIPv6",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_NET_MODULE%.isIPv6",
+				"%MAL_INTRINSIC_NODE_NET_MODULE%.isIPv6.prototype.constructor",
+				"mal_host_install_node_net:isIPv6"
+			],
+			"key": "prototype",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_NET_MODULE%.isIPv6.prototype\",\"constructor\"]",
+			"owner": "%MAL_INTRINSIC_NODE_NET_MODULE%.isIPv6.prototype",
+			"ownerPaths": ["%MAL_INTRINSIC_NODE_NET_MODULE%.isIPv6.prototype"],
+			"key": "constructor",
+			"kind": "data",
+			"operations": ["%MAL_INTRINSIC_NODE_NET_MODULE%.isIPv6"],
 			"task": "H-10",
 			"decisions": []
 		},
@@ -20970,6 +21428,21 @@
 			"key": "URL",
 			"kind": "data",
 			"operations": ["globalThis.URL"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_URL_MODULE%\",\"URLSearchParams\"]",
+			"owner": "%MAL_INTRINSIC_NODE_URL_MODULE%",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:url\"]",
+				"%MAL_INTRINSIC_NODE_URL_MODULE%",
+				"MAL_INTRINSIC_NODE_URL_MODULE",
+				"mal_host_install_node_url:default"
+			],
+			"key": "URLSearchParams",
+			"kind": "data",
+			"operations": ["globalThis.URLSearchParams"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -87246,9 +87719,11 @@
 			"id": "[\"globalThis.URLSearchParams\",\"length\"]",
 			"owner": "globalThis.URLSearchParams",
 			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_URL_MODULE%.URLSearchParams",
 				"MAL_INTRINSIC_URL_SEARCH_PARAMS_CONSTRUCTOR",
 				"globalThis.URLSearchParams",
-				"globalThis.URLSearchParams.prototype.constructor"
+				"globalThis.URLSearchParams.prototype.constructor",
+				"mal_host_install_node_url:URLSearchParams"
 			],
 			"key": "length",
 			"kind": "data",
@@ -87260,9 +87735,11 @@
 			"id": "[\"globalThis.URLSearchParams\",\"name\"]",
 			"owner": "globalThis.URLSearchParams",
 			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_URL_MODULE%.URLSearchParams",
 				"MAL_INTRINSIC_URL_SEARCH_PARAMS_CONSTRUCTOR",
 				"globalThis.URLSearchParams",
-				"globalThis.URLSearchParams.prototype.constructor"
+				"globalThis.URLSearchParams.prototype.constructor",
+				"mal_host_install_node_url:URLSearchParams"
 			],
 			"key": "name",
 			"kind": "data",
@@ -87274,9 +87751,11 @@
 			"id": "[\"globalThis.URLSearchParams\",\"prototype\"]",
 			"owner": "globalThis.URLSearchParams",
 			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_URL_MODULE%.URLSearchParams",
 				"MAL_INTRINSIC_URL_SEARCH_PARAMS_CONSTRUCTOR",
 				"globalThis.URLSearchParams",
-				"globalThis.URLSearchParams.prototype.constructor"
+				"globalThis.URLSearchParams.prototype.constructor",
+				"mal_host_install_node_url:URLSearchParams"
 			],
 			"key": "prototype",
 			"kind": "data",
@@ -97271,6 +97750,34 @@
 			"decisions": []
 		},
 		{
+			"id": "[\"%MAL_INTRINSIC_NODE_FS_MODULE%.access\",\"<call>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_FS_MODULE%.access",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_FS_MODULE%.access",
+				"%MAL_INTRINSIC_NODE_FS_MODULE%.access.prototype.constructor",
+				"mal_host_install_node_fs:access"
+			],
+			"key": "<call>",
+			"kind": "call",
+			"operations": ["%MAL_INTRINSIC_NODE_FS_MODULE%.access"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_FS_MODULE%.access\",\"<construct>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_FS_MODULE%.access",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_FS_MODULE%.access",
+				"%MAL_INTRINSIC_NODE_FS_MODULE%.access.prototype.constructor",
+				"mal_host_install_node_fs:access"
+			],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": ["%MAL_INTRINSIC_NODE_FS_MODULE%.access"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
 			"id": "[\"%MAL_INTRINSIC_NODE_FS_MODULE%.accessSync\",\"<call>\"]",
 			"owner": "%MAL_INTRINSIC_NODE_FS_MODULE%.accessSync",
 			"ownerPaths": [
@@ -97687,6 +98194,26 @@
 			"decisions": []
 		},
 		{
+			"id": "[\"%MAL_INTRINSIC_NODE_FS_MODULE%.promises<get>\",\"<call>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_FS_MODULE%.promises<get>",
+			"ownerPaths": ["%MAL_INTRINSIC_NODE_FS_MODULE%.promises<get>"],
+			"key": "<call>",
+			"kind": "call",
+			"operations": ["%MAL_INTRINSIC_NODE_FS_MODULE%.promises<get>"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_FS_MODULE%.promises<get>\",\"<construct>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_FS_MODULE%.promises<get>",
+			"ownerPaths": ["%MAL_INTRINSIC_NODE_FS_MODULE%.promises<get>"],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": ["%MAL_INTRINSIC_NODE_FS_MODULE%.promises<get>"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
 			"id": "[\"%MAL_INTRINSIC_NODE_FS_MODULE%.readFile\",\"<call>\"]",
 			"owner": "%MAL_INTRINSIC_NODE_FS_MODULE%.readFile",
 			"ownerPaths": [
@@ -97895,6 +98422,34 @@
 			"decisions": []
 		},
 		{
+			"id": "[\"%MAL_INTRINSIC_NODE_FS_MODULE%.rename\",\"<call>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_FS_MODULE%.rename",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_FS_MODULE%.rename",
+				"%MAL_INTRINSIC_NODE_FS_MODULE%.rename.prototype.constructor",
+				"mal_host_install_node_fs:rename"
+			],
+			"key": "<call>",
+			"kind": "call",
+			"operations": ["%MAL_INTRINSIC_NODE_FS_MODULE%.access"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_FS_MODULE%.rename\",\"<construct>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_FS_MODULE%.rename",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_FS_MODULE%.rename",
+				"%MAL_INTRINSIC_NODE_FS_MODULE%.rename.prototype.constructor",
+				"mal_host_install_node_fs:rename"
+			],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": ["%MAL_INTRINSIC_NODE_FS_MODULE%.access"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
 			"id": "[\"%MAL_INTRINSIC_NODE_FS_MODULE%.renameSync\",\"<call>\"]",
 			"owner": "%MAL_INTRINSIC_NODE_FS_MODULE%.renameSync",
 			"ownerPaths": [
@@ -98077,6 +98632,34 @@
 			"decisions": []
 		},
 		{
+			"id": "[\"%MAL_INTRINSIC_NODE_FS_MODULE%.unlink\",\"<call>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_FS_MODULE%.unlink",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_FS_MODULE%.unlink",
+				"%MAL_INTRINSIC_NODE_FS_MODULE%.unlink.prototype.constructor",
+				"mal_host_install_node_fs:unlink"
+			],
+			"key": "<call>",
+			"kind": "call",
+			"operations": ["%MAL_INTRINSIC_NODE_FS_MODULE%.access"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_FS_MODULE%.unlink\",\"<construct>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_FS_MODULE%.unlink",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_FS_MODULE%.unlink",
+				"%MAL_INTRINSIC_NODE_FS_MODULE%.unlink.prototype.constructor",
+				"mal_host_install_node_fs:unlink"
+			],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": ["%MAL_INTRINSIC_NODE_FS_MODULE%.access"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
 			"id": "[\"%MAL_INTRINSIC_NODE_FS_MODULE%.unlinkSync\",\"<call>\"]",
 			"owner": "%MAL_INTRINSIC_NODE_FS_MODULE%.unlinkSync",
 			"ownerPaths": [
@@ -98203,6 +98786,32 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["%MAL_INTRINSIC_NODE_FS_MODULE%.writeSync"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%.access\",\"<call>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%.access",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%.access",
+				"mal_host_install_node_fs_promises:access"
+			],
+			"key": "<call>",
+			"kind": "call",
+			"operations": ["%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%.access"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%.access\",\"<construct>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%.access",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%.access",
+				"mal_host_install_node_fs_promises:access"
+			],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": ["%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%.access"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -98527,7 +99136,7 @@
 			],
 			"key": "<call>",
 			"kind": "call",
-			"operations": ["%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%.appendFile"],
+			"operations": ["%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%.access"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -98540,7 +99149,7 @@
 			],
 			"key": "<construct>",
 			"kind": "construct",
-			"operations": ["%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%.appendFile"],
+			"operations": ["%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%.access"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -98657,7 +99266,7 @@
 			],
 			"key": "<call>",
 			"kind": "call",
-			"operations": ["%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%.appendFile"],
+			"operations": ["%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%.access"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -98670,7 +99279,7 @@
 			],
 			"key": "<construct>",
 			"kind": "construct",
-			"operations": ["%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%.appendFile"],
+			"operations": ["%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%.access"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -99713,6 +100322,7 @@
 			"owner": "%MAL_INTRINSIC_NODE_NET_MODULE%.isIP",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_NET_MODULE%.isIP",
+				"%MAL_INTRINSIC_NODE_NET_MODULE%.isIP.prototype.constructor",
 				"mal_host_install_node_net:isIP"
 			],
 			"key": "<call>",
@@ -99726,11 +100336,68 @@
 			"owner": "%MAL_INTRINSIC_NODE_NET_MODULE%.isIP",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_NET_MODULE%.isIP",
+				"%MAL_INTRINSIC_NODE_NET_MODULE%.isIP.prototype.constructor",
 				"mal_host_install_node_net:isIP"
 			],
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["%MAL_INTRINSIC_NODE_NET_MODULE%.isIP"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_NET_MODULE%.isIPv4\",\"<call>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_NET_MODULE%.isIPv4",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_NET_MODULE%.isIPv4",
+				"%MAL_INTRINSIC_NODE_NET_MODULE%.isIPv4.prototype.constructor",
+				"mal_host_install_node_net:isIPv4"
+			],
+			"key": "<call>",
+			"kind": "call",
+			"operations": ["%MAL_INTRINSIC_NODE_NET_MODULE%.isIPv4"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_NET_MODULE%.isIPv4\",\"<construct>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_NET_MODULE%.isIPv4",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_NET_MODULE%.isIPv4",
+				"%MAL_INTRINSIC_NODE_NET_MODULE%.isIPv4.prototype.constructor",
+				"mal_host_install_node_net:isIPv4"
+			],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": ["%MAL_INTRINSIC_NODE_NET_MODULE%.isIPv4"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_NET_MODULE%.isIPv6\",\"<call>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_NET_MODULE%.isIPv6",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_NET_MODULE%.isIPv6",
+				"%MAL_INTRINSIC_NODE_NET_MODULE%.isIPv6.prototype.constructor",
+				"mal_host_install_node_net:isIPv6"
+			],
+			"key": "<call>",
+			"kind": "call",
+			"operations": ["%MAL_INTRINSIC_NODE_NET_MODULE%.isIPv6"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_NET_MODULE%.isIPv6\",\"<construct>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_NET_MODULE%.isIPv6",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_NET_MODULE%.isIPv6",
+				"%MAL_INTRINSIC_NODE_NET_MODULE%.isIPv6.prototype.constructor",
+				"mal_host_install_node_net:isIPv6"
+			],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": ["%MAL_INTRINSIC_NODE_NET_MODULE%.isIPv6"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -207354,9 +208021,11 @@
 			"id": "[\"globalThis.URLSearchParams\",\"<call>\"]",
 			"owner": "globalThis.URLSearchParams",
 			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_URL_MODULE%.URLSearchParams",
 				"MAL_INTRINSIC_URL_SEARCH_PARAMS_CONSTRUCTOR",
 				"globalThis.URLSearchParams",
-				"globalThis.URLSearchParams.prototype.constructor"
+				"globalThis.URLSearchParams.prototype.constructor",
+				"mal_host_install_node_url:URLSearchParams"
 			],
 			"key": "<call>",
 			"kind": "call",
@@ -207368,9 +208037,11 @@
 			"id": "[\"globalThis.URLSearchParams\",\"<construct>\"]",
 			"owner": "globalThis.URLSearchParams",
 			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_URL_MODULE%.URLSearchParams",
 				"MAL_INTRINSIC_URL_SEARCH_PARAMS_CONSTRUCTOR",
 				"globalThis.URLSearchParams",
-				"globalThis.URLSearchParams.prototype.constructor"
+				"globalThis.URLSearchParams.prototype.constructor",
+				"mal_host_install_node_url:URLSearchParams"
 			],
 			"key": "<construct>",
 			"kind": "construct",
@@ -217274,6 +217945,16 @@
 			"decisions": []
 		},
 		{
+			"id": "[\"[[roots]]\",\"mal_host_install_node_fs:access\"]",
+			"owner": "[[roots]]",
+			"ownerPaths": ["[[roots]]"],
+			"key": "mal_host_install_node_fs:access",
+			"kind": "binding",
+			"operations": ["%MAL_INTRINSIC_NODE_FS_MODULE%.access"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
 			"id": "[\"[[roots]]\",\"mal_host_install_node_fs:accessSync\"]",
 			"owner": "[[roots]]",
 			"ownerPaths": ["[[roots]]"],
@@ -217454,6 +218135,16 @@
 			"decisions": []
 		},
 		{
+			"id": "[\"[[roots]]\",\"mal_host_install_node_fs:promises\"]",
+			"owner": "[[roots]]",
+			"ownerPaths": ["[[roots]]"],
+			"key": "mal_host_install_node_fs:promises",
+			"kind": "binding",
+			"operations": [],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
 			"id": "[\"[[roots]]\",\"mal_host_install_node_fs:readFile\"]",
 			"owner": "[[roots]]",
 			"ownerPaths": ["[[roots]]"],
@@ -217534,6 +218225,16 @@
 			"decisions": []
 		},
 		{
+			"id": "[\"[[roots]]\",\"mal_host_install_node_fs:rename\"]",
+			"owner": "[[roots]]",
+			"ownerPaths": ["[[roots]]"],
+			"key": "mal_host_install_node_fs:rename",
+			"kind": "binding",
+			"operations": ["%MAL_INTRINSIC_NODE_FS_MODULE%.access"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
 			"id": "[\"[[roots]]\",\"mal_host_install_node_fs:renameSync\"]",
 			"owner": "[[roots]]",
 			"ownerPaths": ["[[roots]]"],
@@ -217604,6 +218305,16 @@
 			"decisions": []
 		},
 		{
+			"id": "[\"[[roots]]\",\"mal_host_install_node_fs:unlink\"]",
+			"owner": "[[roots]]",
+			"ownerPaths": ["[[roots]]"],
+			"key": "mal_host_install_node_fs:unlink",
+			"kind": "binding",
+			"operations": ["%MAL_INTRINSIC_NODE_FS_MODULE%.access"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
 			"id": "[\"[[roots]]\",\"mal_host_install_node_fs:unlinkSync\"]",
 			"owner": "[[roots]]",
 			"ownerPaths": ["[[roots]]"],
@@ -217650,6 +218361,16 @@
 			"key": "mal_host_install_node_fs:writeSync",
 			"kind": "binding",
 			"operations": ["%MAL_INTRINSIC_NODE_FS_MODULE%.writeSync"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"[[roots]]\",\"mal_host_install_node_fs_promises:access\"]",
+			"owner": "[[roots]]",
+			"ownerPaths": ["[[roots]]"],
+			"key": "mal_host_install_node_fs_promises:access",
+			"kind": "binding",
+			"operations": ["%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%.access"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -217789,7 +218510,7 @@
 			"ownerPaths": ["[[roots]]"],
 			"key": "mal_host_install_node_fs_promises:rename",
 			"kind": "binding",
-			"operations": ["%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%.appendFile"],
+			"operations": ["%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%.access"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -217839,7 +218560,7 @@
 			"ownerPaths": ["[[roots]]"],
 			"key": "mal_host_install_node_fs_promises:unlink",
 			"kind": "binding",
-			"operations": ["%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%.appendFile"],
+			"operations": ["%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%.access"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -218210,6 +218931,26 @@
 			"key": "mal_host_install_node_net:isIP",
 			"kind": "binding",
 			"operations": ["%MAL_INTRINSIC_NODE_NET_MODULE%.isIP"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"[[roots]]\",\"mal_host_install_node_net:isIPv4\"]",
+			"owner": "[[roots]]",
+			"ownerPaths": ["[[roots]]"],
+			"key": "mal_host_install_node_net:isIPv4",
+			"kind": "binding",
+			"operations": ["%MAL_INTRINSIC_NODE_NET_MODULE%.isIPv4"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"[[roots]]\",\"mal_host_install_node_net:isIPv6\"]",
+			"owner": "[[roots]]",
+			"ownerPaths": ["[[roots]]"],
+			"key": "mal_host_install_node_net:isIPv6",
+			"kind": "binding",
+			"operations": ["%MAL_INTRINSIC_NODE_NET_MODULE%.isIPv6"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -219140,6 +219881,16 @@
 			"key": "mal_host_install_node_url:URL",
 			"kind": "binding",
 			"operations": ["globalThis.URL"],
+			"task": "N-04",
+			"decisions": []
+		},
+		{
+			"id": "[\"[[roots]]\",\"mal_host_install_node_url:URLSearchParams\"]",
+			"owner": "[[roots]]",
+			"ownerPaths": ["[[roots]]"],
+			"key": "mal_host_install_node_url:URLSearchParams",
+			"kind": "binding",
+			"operations": ["globalThis.URLSearchParams"],
 			"task": "N-04",
 			"decisions": []
 		},
@@ -221480,6 +222231,14 @@
 			"identities": ["%MAL_INTRINSIC_NODE_FS_MODULE%.Stats.prototype.mtime<set>"]
 		},
 		{
+			"id": "%MAL_INTRINSIC_NODE_FS_MODULE%.access",
+			"identities": [
+				"%MAL_INTRINSIC_NODE_FS_MODULE%.access",
+				"%MAL_INTRINSIC_NODE_FS_MODULE%.rename",
+				"%MAL_INTRINSIC_NODE_FS_MODULE%.unlink"
+			]
+		},
+		{
 			"id": "%MAL_INTRINSIC_NODE_FS_MODULE%.accessSync",
 			"identities": ["%MAL_INTRINSIC_NODE_FS_MODULE%.accessSync"]
 		},
@@ -221547,6 +222306,10 @@
 		{
 			"id": "%MAL_INTRINSIC_NODE_FS_MODULE%.openSync",
 			"identities": ["%MAL_INTRINSIC_NODE_FS_MODULE%.openSync"]
+		},
+		{
+			"id": "%MAL_INTRINSIC_NODE_FS_MODULE%.promises<get>",
+			"identities": ["%MAL_INTRINSIC_NODE_FS_MODULE%.promises<get>"]
 		},
 		{
 			"id": "%MAL_INTRINSIC_NODE_FS_MODULE%.readFile",
@@ -221617,6 +222380,14 @@
 			"identities": ["%MAL_INTRINSIC_NODE_FS_MODULE%.writeSync"]
 		},
 		{
+			"id": "%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%.access",
+			"identities": [
+				"%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%.access",
+				"%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%.rename",
+				"%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%.unlink"
+			]
+		},
+		{
 			"id": "%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%.appendFile",
 			"identities": [
 				"%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%.appendFile",
@@ -221629,11 +222400,9 @@
 				"%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%.readdir",
 				"%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%.readlink",
 				"%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%.realpath",
-				"%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%.rename",
 				"%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%.rmdir",
 				"%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%.stat",
 				"%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%.symlink",
-				"%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%.unlink",
 				"%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%.utimes",
 				"%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%.writeFile"
 			]
@@ -221829,6 +222598,14 @@
 		{
 			"id": "%MAL_INTRINSIC_NODE_NET_MODULE%.isIP",
 			"identities": ["%MAL_INTRINSIC_NODE_NET_MODULE%.isIP"]
+		},
+		{
+			"id": "%MAL_INTRINSIC_NODE_NET_MODULE%.isIPv4",
+			"identities": ["%MAL_INTRINSIC_NODE_NET_MODULE%.isIPv4"]
+		},
+		{
+			"id": "%MAL_INTRINSIC_NODE_NET_MODULE%.isIPv6",
+			"identities": ["%MAL_INTRINSIC_NODE_NET_MODULE%.isIPv6"]
 		},
 		{
 			"id": "%MAL_INTRINSIC_NODE_NET_SOCKET_CONSTRUCTOR%",

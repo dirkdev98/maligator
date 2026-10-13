@@ -39,6 +39,10 @@ With `surface.node`, `node:module.builtinModules` and `isBuiltin` describe the m
 
 `Buffer.copyBytesFrom` copies a typed array's raw bytes into an independent Buffer. Its offset and length count elements; shared backing stores are read atomically, and detached or out-of-bounds views are empty. `node:url.urlToHttpOptions` converts URL-like objects, retaining enumerable extensions and Node's property-access and coercion order. These APIs preserve error types and codes; error-message wording can differ from Node.
 
+`node:url.URL` and `URLSearchParams` share identity with the global constructors. `node:net.isIP`, `isIPv4`, and `isIPv6` preserve Node's string coercions, reject leading-zero IPv4 components, and support IPv6 zone identifiers.
+
+Callback and promise forms of filesystem `access`, `unlink`, and `rename` run through the bounded host worker pool. Callbacks run after the initiating call and retain their async-local context. `fs.promises`, its named export, and `node:fs/promises` share one module; public sync-export replacement does not replace captured promise implementations. The three promise methods preserve async-function branding, and error types and codes match the supported Node behavior; error-message wording can differ.
+
 ## Replace a module specifier
 
 ```typescript maligator.build.ts

@@ -98,6 +98,21 @@ try {
 } catch (error) {
 	results.push(["constructor throws", error === original, effects]);
 }
+const functionNameEffects = [];
+function namedInput() {}
+Object.defineProperty(namedInput, "name", {
+	value: {
+		[Symbol.toPrimitive](hint) {
+			functionNameEffects.push(hint);
+			throw original;
+		},
+	},
+});
+try {
+	Buffer.copyBytesFrom(namedInput);
+} catch (error) {
+	results.push(["function name throws", error === original, functionNameEffects]);
+}
 const metadata = Buffer.copyBytesFrom;
 results.push([
 	"metadata",

@@ -1,7 +1,7 @@
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
 	buildNativeBinary,
 	HOST_MAIN,
@@ -10,6 +10,7 @@ import {
 } from "../../src/test-harness.ts";
 
 const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-node-net-"));
+afterAll(() => rmSync(outDir, { recursive: true, force: true }));
 
 describe("node:net Socket", () => {
 	let binaries: Array<string>;

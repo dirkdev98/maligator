@@ -10,6 +10,7 @@
 #include <string.h>
 
 #include "ascii.h"
+#include "async_context.h"
 #include "array_object.h"
 #include "builtin_data_view.h"
 #include "builtin_date.h"
@@ -55,12 +56,8 @@ static const MalPropertyFlags NODE_FS_VISIBLE =
  * --------------------------------------------------------------------------- */
 
 static MalValue node_fs_string_from_utf8(MalVm *vm, const byte *bytes, usize len) {
-    MalString *string = mal_string_from_utf8(&vm->heap, bytes, len);
-    if (string == nullptr) {
-        mal_vm_throw_allocation_error(vm);
-        return mal_value_new_undefined();
-    }
-    return mal_value_from_string(string);
+    return mal_node_buffer_encode_bytes(vm, bytes, len,
+        mal_value_from_string(mal_intrinsic_ascii(vm, "utf8")), true);
 }
 
 static MalValue node_fs_string_from_cstr(MalVm *vm, const char *cstr) {
@@ -124,18 +121,35 @@ static NodeFsPathResult node_fs_path_bytes(
     return NODE_FS_PATH_OK;
 }
 
+static void node_fs_throw_code(
+    MalVm *vm, MalIntrinsic prototype, const byte *message, const byte *code
+) {
+    mal_vm_throw_error(vm, prototype, message);
+    MalValue roots[] = {
+        vm->completion.value,
+        mal_value_from_string(mal_intrinsic_ascii(vm, code)),
+    };
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    mal_intrinsic_define_data(vm, mal_value_to_object(roots[0]), "code", roots[1],
+        NODE_FS_VISIBLE);
+    mal_gc_unroot(&root);
+}
+
 /* Validate a PathLike and return its malloc-owned C path. */
 static char *node_fs_path_cstr(MalVm *vm, MalValue value) {
     char *path;
     NodeFsPathResult result = node_fs_path_bytes(vm, value, false, &path);
     if (result == NODE_FS_PATH_INVALID_TYPE) {
-        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
-            (const byte *) "filesystem path must be a string, Uint8Array, or file URL");
+        if (vm->completion.kind == MAL_COMPLETION_THROW) return nullptr;
+        node_fs_throw_code(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "filesystem path must be a string, Uint8Array, or file URL",
+            "ERR_INVALID_ARG_TYPE");
         return nullptr;
     }
     if (result == NODE_FS_PATH_EMBEDDED_NUL) {
-        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
-            (const byte *) "filesystem path must not contain null bytes");
+        node_fs_throw_code(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "filesystem path must not contain null bytes", "ERR_INVALID_ARG_VALUE");
         return nullptr;
     }
     if (result == NODE_FS_PATH_ALLOCATION_FAILED) {
@@ -432,6 +446,24 @@ static MalValue node_fs_exists_sync(
     return mal_value_new_boolean(exists);
 }
 
+static bool node_fs_access_mode(MalVm *vm, MalValue value, u32 *mode) {
+    *mode = 0;
+    if (mal_value_is_nil(value)) return true;
+    if (!mal_ops_is_number(value)) {
+        node_fs_throw_code(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "access mode must be a number or null", "ERR_INVALID_ARG_TYPE");
+        return false;
+    }
+    f64 number = trunc(mal_ops_number_as_f64(value));
+    if (!isfinite(number) || number < 0 || number > 7) {
+        node_fs_throw_code(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
+            "access mode must truncate to an integer from 0 through 7", "ERR_OUT_OF_RANGE");
+        return false;
+    }
+    *mode = (u32) number;
+    return true;
+}
+
 static MalValue node_fs_access_sync(
     MalVm *vm, MalValue self, const MalValue *args, i32 argc,
     MalValue nt, MalValue callee) {
@@ -440,23 +472,10 @@ static MalValue node_fs_access_sync(
     (void) callee;
     char *path = node_fs_path_cstr(vm, argc > 0 ? args[0] : mal_value_new_undefined());
     if (path == nullptr) return mal_value_new_undefined();
-    u32 mode = 0;
-    if (argc > 1 && !mal_value_is_undefined(args[1]) && !mal_value_is_null(args[1])) {
-        if (!mal_ops_is_number(args[1])) {
-            free(path);
-            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
-                (const byte *) "access mode must be an integer or null");
-            return mal_value_new_undefined();
-        }
-        f64 number = mal_ops_number_as_f64(args[1]);
-        number = trunc(number);
-        if (!isfinite(number) || number < 0 || number > 7) {
-            free(path);
-            mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
-                (const byte *) "access mode must truncate to an integer from 0 through 7");
-            return mal_value_new_undefined();
-        }
-        mode = (u32) number;
+    u32 mode;
+    if (!node_fs_access_mode(vm, argc > 1 ? args[1] : mal_value_new_undefined(), &mode)) {
+        free(path);
+        return mal_value_new_undefined();
     }
     int err = mal_posix_fs_access(path, mode);
     if (err != 0) node_fs_throw_errno(vm, err, "access", path);
@@ -2301,8 +2320,17 @@ static MalValue node_fs_rm_promise(MalVm *vm, MalValue self, const MalValue *arg
 static MalValue node_fs_errno_value(
     MalVm *vm, int error, const char *syscall, const char *path);
 
-typedef struct NodeFsWriteJob {
+typedef enum NodeFsJobKind {
+    NODE_FS_JOB_WRITE,
+    NODE_FS_JOB_ACCESS,
+    NODE_FS_JOB_UNLINK,
+    NODE_FS_JOB_RENAME,
+} NodeFsJobKind;
+
+typedef struct NodeFsJob {
+    NodeFsJobKind kind;
     char *path;
+    char *destination;
     byte *bytes;
     usize length;
     int fd;
@@ -2313,31 +2341,51 @@ typedef struct NodeFsWriteJob {
     bool flush;
     int error;
     const char *syscall;
-} NodeFsWriteJob;
+} NodeFsJob;
 
-typedef struct NodeFsAsyncWrite {
-    struct NodeFsAsyncWrite *next;
+typedef struct NodeFsPending {
+    struct NodeFsPending *next;
     MalVm *vm;
     MalHostHandle operation;
-    MalValue promise;
+    MalValue completion;
+    bool callback;
+    const char *syscall;
+    MalAsyncContext *async_context;
 #if MAL_REALMS
     MalRealm *realm;
 #endif
-} NodeFsAsyncWrite;
+} NodeFsPending;
 
-// Pending writes and their root registration belong to this mutator's isolate.
-static MAL_ISOLATE_LOCAL NodeFsAsyncWrite *node_fs_async_writes;
+// Pending operations and their root registration belong to this mutator's isolate.
+static MAL_ISOLATE_LOCAL NodeFsPending *node_fs_pending;
 static MAL_ISOLATE_LOCAL bool node_fs_async_installed;
 
-static void node_fs_write_job_free(void *data) {
-    NodeFsWriteJob *job = data;
+static void node_fs_job_free(void *data) {
+    NodeFsJob *job = data;
     free(job->path);
+    free(job->destination);
     free(job->bytes);
     free(job);
 }
 
-static void node_fs_write_job_run(void *data) {
-    NodeFsWriteJob *job = data;
+static void node_fs_job_run(void *data) {
+    NodeFsJob *job = data;
+    switch (job->kind) {
+        case NODE_FS_JOB_ACCESS:
+            job->syscall = "access";
+            job->error = mal_posix_fs_access(job->path, job->mode);
+            return;
+        case NODE_FS_JOB_UNLINK:
+            job->syscall = "unlink";
+            job->error = mal_posix_fs_unlink(job->path);
+            return;
+        case NODE_FS_JOB_RENAME:
+            job->syscall = "rename";
+            job->error = mal_posix_fs_rename(job->path, job->destination);
+            return;
+        case NODE_FS_JOB_WRITE:
+            break;
+    }
     job->syscall = "open";
     if (job->close_fd) {
         job->error = mal_posix_fs_open(job->path, job->flags,
@@ -2360,16 +2408,18 @@ static void node_fs_write_job_run(void *data) {
 
 static void node_fs_async_scan_roots(MalVm *vm, void *data) {
     (void) data;
-    for (NodeFsAsyncWrite *state = node_fs_async_writes;
+    for (NodeFsPending *state = node_fs_pending;
         state != nullptr; state = state->next) {
-        if (state->vm == vm) mal_gc_mark_value(state->promise);
+        if (state->vm != vm) continue;
+        mal_gc_mark_value(state->completion);
+        mal_gc_mark_value(mal_async_internal_value((MalHeapHeader *) state->async_context));
     }
 }
 
 static void node_fs_async_free(MalVm *vm) {
-    NodeFsAsyncWrite **link = &node_fs_async_writes;
+    NodeFsPending **link = &node_fs_pending;
     while (*link != nullptr) {
-        NodeFsAsyncWrite *state = *link;
+        NodeFsPending *state = *link;
         if (state->vm != vm) {
             link = &state->next;
             continue;
@@ -2383,31 +2433,47 @@ static bool node_fs_async_drain(MalVm *vm) {
     MalHost *host = mal_host(vm);
     MalHostTask task;
     if (host == nullptr || !mal_host_peek_task(&host->tasks, &task)) return false;
-    NodeFsAsyncWrite **link = &node_fs_async_writes;
+    NodeFsPending **link = &node_fs_pending;
     while (*link != nullptr &&
         ((*link)->vm != vm || (*link)->operation != task.operation)) {
         link = &(*link)->next;
     }
-    NodeFsAsyncWrite *state = *link;
+    NodeFsPending *state = *link;
     if (state == nullptr || !mal_host_next_task(&host->tasks, &task)) return false;
 #if MAL_REALMS
     MalRealm *saved_realm = vm->current_realm;
     mal_realm_switch(vm, state->realm);
 #endif
-    NodeFsWriteJob *job = mal_blocking_work_result_data(task.data);
-    MalPromiseObject *promise = mal_value_to_promise_object(state->promise);
-    if (task.result == MAL_HOST_TERMINAL_CANCELLED) {
-        MalValue error = node_fs_errno_value(vm, ECANCELED, "write", nullptr);
-        mal_promise_reject(vm, promise, error);
-    } else if (job->error != 0) {
-        MalValue error = node_fs_errno_value(vm, job->error, job->syscall,
-            strcmp(job->syscall, "close") == 0 ? nullptr : job->path);
-        mal_promise_reject(vm, promise, error);
-    } else {
-        mal_promise_fulfill(vm, promise, mal_value_new_undefined());
-    }
     *link = state->next;
+    MalValue roots[] = {state->completion, mal_value_new_null()};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    MalAsyncContextScope async_scope;
+    mal_async_context_scope_enter(vm, &async_scope, state->async_context);
+    bool callback = state->callback;
+    const char *syscall = state->syscall;
     free(state);
+    NodeFsJob *job = mal_blocking_work_result_data(task.data);
+    if (task.result == MAL_HOST_TERMINAL_CANCELLED) {
+        roots[1] = node_fs_errno_value(vm, ECANCELED, syscall, nullptr);
+    } else if (job->error != 0) {
+        node_fs_throw_errno_with_dest(vm, job->error, job->syscall,
+            strcmp(job->syscall, "close") == 0 ? nullptr : job->path, job->destination);
+        roots[1] = vm->completion.value;
+        node_fs_clear_completion(vm);
+    }
+    if (callback) {
+        mal_vm_call_value(vm, roots[0], mal_value_new_undefined(), roots + 1, 1);
+    } else {
+        MalPromiseObject *promise = mal_value_to_promise_object(roots[0]);
+        if (mal_value_is_null(roots[1])) {
+            mal_promise_fulfill(vm, promise, mal_value_new_undefined());
+        } else {
+            mal_promise_reject(vm, promise, roots[1]);
+        }
+    }
+    mal_async_context_scope_exit(vm, &async_scope);
+    mal_gc_unroot(&root);
 #if MAL_REALMS
     mal_realm_switch(vm, saved_realm);
 #endif
@@ -2418,8 +2484,8 @@ static bool node_fs_async_drain(MalVm *vm) {
 static void node_fs_queue_write(
     MalVm *vm, MalValue promise_value, const MalValue *args, i32 argc, u32 flags) {
     MalBlockingWorkReservation reservation = {0};
-    NodeFsWriteJob *job = calloc(1, sizeof(*job));
-    NodeFsAsyncWrite *state = calloc(1, sizeof(*state));
+    NodeFsJob *job = calloc(1, sizeof(*job));
+    NodeFsPending *state = calloc(1, sizeof(*state));
     if (job == nullptr || state == nullptr) {
         free(job);
         free(state);
@@ -2456,20 +2522,22 @@ static void node_fs_queue_write(
         memcpy(job->bytes, bytes, job->length);
     }
     state->vm = vm;
-    state->promise = promise_value;
+    state->completion = promise_value;
+    state->syscall = "write";
+    state->async_context = mal_async_context_capture(vm);
 #if MAL_REALMS
     state->realm = vm->current_realm;
 #endif
-    if (!mal_blocking_work_start(mal_host(vm), node_fs_write_job_run, job,
-            node_fs_write_job_free, &reservation, &state->operation)) {
+    if (!mal_blocking_work_start(mal_host(vm), node_fs_job_run, job,
+            node_fs_job_free, &reservation, &state->operation)) {
         node_fs_throw_errno(vm, EAGAIN, "write", job->path);
         goto failed;
     }
-    state->next = node_fs_async_writes;
-    node_fs_async_writes = state;
+    state->next = node_fs_pending;
+    node_fs_pending = state;
     return;
 failed:
-    node_fs_write_job_free(job);
+    node_fs_job_free(job);
     mal_blocking_work_reservation_release(&reservation);
     free(state);
 reject:
@@ -2478,6 +2546,141 @@ reject:
         node_fs_clear_completion(vm);
         mal_promise_reject(vm, mal_value_to_promise_object(promise_value), error);
     }
+}
+
+static bool node_fs_queue_path(
+    MalVm *vm, NodeFsJobKind kind, char *path, char *destination, u32 mode,
+    MalValue completion, bool callback
+) {
+    NodeFsJob *job = calloc(1, sizeof(*job));
+    NodeFsPending *state = calloc(1, sizeof(*state));
+    if (job == nullptr || state == nullptr) {
+        free(job);
+        free(state);
+        free(path);
+        free(destination);
+        mal_vm_throw_allocation_error(vm);
+        return false;
+    }
+    job->kind = kind;
+    job->path = path;
+    job->destination = destination;
+    job->mode = mode;
+    state->vm = vm;
+    state->completion = completion;
+    state->callback = callback;
+    state->syscall = kind == NODE_FS_JOB_ACCESS ? "access"
+        : kind == NODE_FS_JOB_UNLINK ? "unlink" : "rename";
+    state->async_context = mal_async_context_capture(vm);
+#if MAL_REALMS
+    state->realm = vm->current_realm;
+#endif
+    MalBlockingWorkReservation reservation = {0};
+    if (!mal_blocking_work_reserve(mal_host(vm), strlen(path) + 1 + sizeof(*job)
+            + (destination == nullptr ? 0 : strlen(destination) + 1), &reservation)
+        || !mal_blocking_work_start(mal_host(vm), node_fs_job_run, job,
+            node_fs_job_free, &reservation, &state->operation)) {
+        node_fs_throw_errno_with_dest(vm, EAGAIN, state->syscall, path, destination);
+        node_fs_job_free(job);
+        mal_blocking_work_reservation_release(&reservation);
+        free(state);
+        return false;
+    }
+    state->next = node_fs_pending;
+    node_fs_pending = state;
+    return true;
+}
+
+static NodeFsJobKind node_fs_path_kind(MalValue callee) {
+    return (NodeFsJobKind) mal_value_to_i32(mal_native_function_object_get_slot(
+        mal_value_to_native_function_object(callee), 0));
+}
+
+static MalValue node_fs_path_callback(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
+    MalValue new_target, MalValue callee
+) {
+    (void) receiver;
+    NodeFsJobKind kind = node_fs_path_kind(callee);
+    MalValue roots[] = {mal_value_new_undefined(), mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    if (!mal_value_is_undefined(new_target)) {
+        MalObject *prototype;
+        if (!mal_vm_get_prototype_from_constructor(
+                vm, new_target, MAL_INTRINSIC_OBJECT_PROTOTYPE, &prototype)) goto failed;
+        roots[0] = mal_value_from_object(mal_object_new(&vm->heap, prototype));
+    }
+    char *path = node_fs_path_cstr(vm, argc > 0 ? args[0] : mal_value_new_undefined());
+    if (path == nullptr) goto failed;
+    char *destination = nullptr;
+    if (kind == NODE_FS_JOB_RENAME) {
+        destination = node_fs_path_cstr(vm, argc > 1 ? args[1] : mal_value_new_undefined());
+        if (destination == nullptr) { free(path); goto failed; }
+    }
+    MalValue mode = argc > 1 ? args[1] : mal_value_new_undefined();
+    bool omitted_mode = kind == NODE_FS_JOB_ACCESS && mal_value_is_callable(mode);
+    i32 callback_index = kind == NODE_FS_JOB_UNLINK || omitted_mode ? 1 : 2;
+    roots[1] = argc > callback_index ? args[callback_index] : mal_value_new_undefined();
+    if (!mal_value_is_callable(roots[1])) {
+        free(path);
+        free(destination);
+        node_fs_throw_code(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "The callback argument must be a function", "ERR_INVALID_ARG_TYPE");
+        goto failed;
+    }
+    u32 access_mode = 0;
+    if (kind == NODE_FS_JOB_ACCESS && !node_fs_access_mode(
+            vm, omitted_mode ? mal_value_new_undefined() : mode, &access_mode)) {
+        free(path);
+        free(destination);
+        goto failed;
+    }
+    if (!node_fs_queue_path(vm, kind, path, destination, access_mode, roots[1], true)) goto failed;
+    MalValue result = roots[0];
+    mal_gc_unroot(&root);
+    return result;
+ failed:
+    mal_gc_unroot(&root);
+    return mal_value_new_undefined();
+}
+
+static MalValue node_fs_path_promise(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
+    MalValue new_target, MalValue callee
+) {
+    (void) receiver; (void) new_target;
+    NodeFsJobKind kind = node_fs_path_kind(callee);
+    MalValue promise = mal_value_from_promise_object(mal_promise_object_new(
+        &vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_PROMISE_PROTOTYPE])));
+    MalRootSpan root;
+    mal_gc_root(&root, &promise, 1);
+    char *path = node_fs_path_cstr(vm, argc > 0 ? args[0] : mal_value_new_undefined());
+    char *destination = nullptr;
+    u32 mode = 0;
+    bool started = false;
+    if (path != nullptr) {
+        bool valid = true;
+        if (kind == NODE_FS_JOB_RENAME) {
+            destination = node_fs_path_cstr(vm, argc > 1 ? args[1] : mal_value_new_undefined());
+            valid = destination != nullptr;
+        } else if (kind == NODE_FS_JOB_ACCESS) {
+            valid = node_fs_access_mode(vm, argc > 1 ? args[1] : mal_value_new_undefined(), &mode);
+        }
+        if (valid) {
+            started = node_fs_queue_path(vm, kind, path, destination, mode, promise, false);
+        } else {
+            free(path);
+            free(destination);
+        }
+    }
+    if (!started) {
+        MalValue error = vm->completion.value;
+        node_fs_clear_completion(vm);
+        mal_promise_reject(vm, mal_value_to_promise_object(promise), error);
+    }
+    mal_gc_unroot(&root);
+    return promise;
 }
 
 enum {
@@ -3511,11 +3714,47 @@ static MalValue node_fs_make_constructor_slot(MalVm *vm, MalObject *fn_proto, co
     return value;
 }
 
+static MalValue node_fs_make_regular_fn(
+    MalVm *vm, MalObject *prototype, const char *name, i32 arity,
+    MalNativeFunctionCallback callback, NodeFsJobKind kind
+) {
+    MalValue slot = mal_value_from_i32((i32) kind);
+    MalValue roots[] = {mal_value_from_native_function_object(
+        mal_native_function_object_new_with_slots_arity(&vm->heap, prototype,
+            mal_intrinsic_ascii(vm, name), arity, callback, &slot, 1)),
+        mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    MalNativeFunctionObject *function = mal_value_to_native_function_object(roots[0]);
+    mal_native_function_object_set_constructor(function);
+    mal_native_function_object_set_handles_new_target_prototype(function);
+    roots[1] = mal_value_from_object(mal_intrinsic_new_object(vm));
+    mal_intrinsic_define_data(vm, (MalObject *) function, "prototype", roots[1],
+        MAL_PROPERTY_WRITABLE);
+    mal_intrinsic_define_data(vm, mal_value_to_object(roots[1]), "constructor", roots[0],
+        MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
+    MalValue result = roots[0];
+    mal_gc_unroot(&root);
+    return result;
+}
+
 static MalValue node_fs_export(
     MalVm *vm, MalObject *fn_proto, const char *name, const MalValue *protos) {
     if (strcmp(name, "Stats") == 0) {
         return node_fs_make_constructor_slot(
             vm, fn_proto, "Stats", node_fs_stats_constructor, protos[0]);
+    }
+    if (strcmp(name, "access") == 0) {
+        return node_fs_make_regular_fn(vm, fn_proto, "access", 3,
+            node_fs_path_callback, NODE_FS_JOB_ACCESS);
+    }
+    if (strcmp(name, "unlink") == 0) {
+        return node_fs_make_regular_fn(vm, fn_proto, "unlink", 2,
+            node_fs_path_callback, NODE_FS_JOB_UNLINK);
+    }
+    if (strcmp(name, "rename") == 0) {
+        return node_fs_make_regular_fn(vm, fn_proto, "rename", 3,
+            node_fs_path_callback, NODE_FS_JOB_RENAME);
     }
     if (strcmp(name, "accessSync") == 0) {
         return node_fs_make_fn(vm, fn_proto, "accessSync", 2, node_fs_access_sync);
@@ -3644,12 +3883,34 @@ static MalValue node_fs_export(
     return mal_value_new_undefined();
 }
 
+static MalValue node_fs_get_promises(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
+    MalValue new_target, MalValue callee
+) {
+    (void) receiver; (void) args; (void) argc; (void) new_target; (void) callee;
+    return vm->intrinsics[MAL_INTRINSIC_NODE_FS_PROMISES_MODULE];
+}
+
+static void node_fs_install_promises_slots(
+    MalVm *vm, const MalHostInstallSlot *slots, i32 count
+) {
+    for (i32 index = 0; index < count; index++) {
+        if (strcmp(slots[index].name, "promises") == 0) {
+            vm->globals[slots[index].slot] = vm->intrinsics[MAL_INTRINSIC_NODE_FS_PROMISES_MODULE];
+        }
+    }
+}
+
 void mal_host_install_node_fs(
     MalVm *vm, const MalHostInstallSlot *slots, i32 count, const MalHostLaunchContext *launch) {
-    if (mal_node_module_install_cached(vm, "node:fs", slots, count)) return;
+    if (mal_node_module_install_cached(vm, "node:fs", slots, count)) {
+        node_fs_install_promises_slots(vm, slots, count);
+        return;
+    }
     MalValue cached = vm->intrinsics[MAL_INTRINSIC_NODE_FS_MODULE];
     if (!mal_value_is_undefined(cached)) {
         mal_node_module_publish(vm, "node:fs", slots, count, cached);
+        node_fs_install_promises_slots(vm, slots, count);
         return;
     }
     if (!node_fs_async_installed) {
@@ -3731,9 +3992,9 @@ void mal_host_install_node_fs(
         node_fs_is_symbolic_link);
 
     static const char *names[] = {
-		"Stats", "accessSync", "appendFileSync", "chmodSync", "closeSync", "copyFileSync", "createReadStream", "existsSync", "fstatSync", "fsyncSync", "ftruncateSync", "link", "linkSync", "lstatSync", "mkdirSync",
-		"mkdtempSync", "openSync", "readFile", "readFileSync", "readlink", "readlinkSync", "readSync", "readdir", "readdirSync", "realpathSync", "renameSync",
-        "rmSync", "rmdirSync", "statSync", "stat", "symlink", "symlinkSync", "unlinkSync", "utimesSync", "write", "writeFileSync", "writeSync",
+		"Stats", "access", "accessSync", "appendFileSync", "chmodSync", "closeSync", "copyFileSync", "createReadStream", "existsSync", "fstatSync", "fsyncSync", "ftruncateSync", "link", "linkSync", "lstatSync", "mkdirSync",
+		"mkdtempSync", "openSync", "readFile", "readFileSync", "readlink", "readlinkSync", "readSync", "readdir", "readdirSync", "realpathSync", "rename", "renameSync",
+        "rmSync", "rmdirSync", "statSync", "stat", "symlink", "symlinkSync", "unlink", "unlinkSync", "utimesSync", "write", "writeFileSync", "writeSync",
     };
     MalValue module = mal_value_from_object(mal_intrinsic_new_object(vm));
     MalRootSpan module_root;
@@ -3758,9 +4019,20 @@ void mal_host_install_node_fs(
     }
     mal_intrinsic_define_data(vm, mal_value_to_object(module),
         (const byte *) "constants", constants, MAL_PROPERTY_ENUMERABLE);
+    mal_intrinsic_define_getter(vm, mal_value_to_object(module), "promises", "get",
+        node_fs_get_promises, MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE);
     mal_gc_unroot(&constants_root);
     vm->intrinsics[MAL_INTRINSIC_NODE_FS_MODULE] = module;
+    mal_node_module_publish(vm, "node:fs", nullptr, 0, module);
+    // Capture the filesystem implementations before public export mutation can replace them.
+    mal_host_install_node_fs_promises(vm, nullptr, 0, launch);
+    if (vm->completion.kind == MAL_COMPLETION_THROW) {
+        mal_gc_unroot(&module_root);
+        mal_gc_unroot(&proto_rs);
+        return;
+    }
     mal_node_module_publish(vm, "node:fs", slots, count, module);
+    node_fs_install_promises_slots(vm, slots, count);
     mal_gc_unroot(&module_root);
 
     mal_gc_unroot(&proto_rs);
@@ -3777,6 +4049,11 @@ void mal_host_install_node_fs_promises(
 
     mal_host_install_node_fs(vm, nullptr, 0, launch);
     if (vm->completion.kind == MAL_COMPLETION_THROW) return;
+    cached = vm->intrinsics[MAL_INTRINSIC_NODE_FS_PROMISES_MODULE];
+    if (!mal_value_is_undefined(cached)) {
+        mal_node_module_publish(vm, "node:fs/promises", slots, count, cached);
+        return;
+    }
     mal_gc_register_finalizer(
         MAL_HEAP_NODE_FS_FILE_HANDLE_OBJECT, node_fs_file_handle_finalize);
 
@@ -3859,12 +4136,10 @@ void mal_host_install_node_fs_promises(
         {"readlink", "readlinkSync", 1},
         {"readdir", "readdirSync", 1},
         {"realpath", "realpathSync", 1},
-        {"rename", "renameSync", 2},
         {"rm", "rmSync", 1},
         {"rmdir", "rmdirSync", 1},
         {"stat", "statSync", 1},
         {"symlink", "symlinkSync", 2},
-        {"unlink", "unlinkSync", 1},
         {"utimes", "utimesSync", 3},
         {"writeFile", "writeFileSync", 2},
     };
@@ -3915,6 +4190,27 @@ void mal_host_install_node_fs_promises(
     MalValue dirent_proto = mal_native_function_object_get_slot(mal_value_to_native_function_object(roots[1]), 0);
     roots[1] = node_fs_make_fn_slot(vm, fn_proto, "glob", 1, node_fs_glob, dirent_proto);
     mal_intrinsic_define_data(vm, mal_value_to_object(roots[2]), "glob", roots[1], NODE_FS_VISIBLE);
+
+    static const struct {
+        const char *name;
+        i32 arity;
+        NodeFsJobKind kind;
+    } paths[] = {
+        {"access", 1, NODE_FS_JOB_ACCESS},
+        {"unlink", 1, NODE_FS_JOB_UNLINK},
+        {"rename", 2, NODE_FS_JOB_RENAME},
+    };
+    for (usize index = 0; index < countof(paths); index++) {
+        MalValue kind = mal_value_from_i32((i32) paths[index].kind);
+        roots[1] = mal_value_from_native_function_object(
+            mal_native_function_object_new_with_slots_arity(&vm->heap,
+                mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ASYNC_FUNCTION_PROTOTYPE]),
+                mal_intrinsic_ascii(vm, paths[index].name), paths[index].arity,
+                node_fs_path_promise, &kind, 1));
+        mal_native_function_object_set_async(mal_value_to_native_function_object(roots[1]));
+        mal_intrinsic_define_data(vm, mal_value_to_object(roots[2]), paths[index].name,
+            roots[1], NODE_FS_VISIBLE);
+    }
 
     vm->intrinsics[MAL_INTRINSIC_NODE_FS_PROMISES_MODULE] = roots[2];
     mal_node_module_publish(vm, "node:fs/promises", slots, count, roots[2]);

@@ -736,6 +736,10 @@ static MalValue mal_buffer_invalid_type(MalVm *vm, MalValue input, const byte *m
             received[1] = mal_vm_op_load_property(vm, received[1], mal_value_from_string(
                 mal_intrinsic_ascii(vm, "name")));
         }
+        if (callable && vm->completion.kind != MAL_COMPLETION_THROW) {
+            MalString *name;
+            mal_vm_to_string(vm, received[1], &name);
+        }
         mal_gc_unroot(&received_root);
         if (vm->completion.kind == MAL_COMPLETION_THROW) return mal_value_new_undefined();
     }

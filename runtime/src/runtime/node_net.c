@@ -185,28 +185,152 @@ static MalValue net_error(MalVm *vm, int error) {
     return value;
 }
 
-static MalValue net_is_ip(
-    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
-    MalValue new_target, MalValue callee) {
-    (void) vm;
-    (void) receiver;
-    (void) new_target;
-    (void) callee;
-    if (argc < 1 || !mal_value_is_string(args[0])) return mal_value_from_i32(0);
-    MalString *string = mal_value_to_string(args[0]);
-    usize length = mal_string_length(string);
-    if (length == 0 || length > INET6_ADDRSTRLEN) return mal_value_from_i32(0);
-    char text[INET6_ADDRSTRLEN + 1];
-    const c16 *units = mal_string_code_units(string);
-    for (usize i = 0; i < length; i++) {
-        if (units[i] > 0x7f) return mal_value_from_i32(0);
-        text[i] = (char) units[i];
+static bool net_matches_ipv4_text(const char *text) {
+    for (u32 segment = 0; segment < 4; segment++) {
+        const char *start = text;
+        u32 number = 0;
+        while (*text >= '0' && *text <= '9') {
+            number = number * 10 + (u32) (*text++ - '0');
+            if (text - start > 3) return false;
+        }
+        if (text == start || number > 255 || (*start == '0' && text - start > 1)) {
+            return false;
+        }
+        if (segment == 3) return *text == '\0';
+        if (*text++ != '.') return false;
     }
-    text[length] = '\0';
-    struct in_addr address4;
-    if (inet_pton(AF_INET, text, &address4) == 1) return mal_value_from_i32(4);
-    struct in6_addr address6;
-    return mal_value_from_i32(inet_pton(AF_INET6, text, &address6) == 1 ? 6 : 0);
+    return false;
+}
+
+static bool net_matches_ip(MalVm *vm, MalValue value, int family, bool *matches) {
+    MalString *string;
+    if (!mal_vm_to_string(vm, value, &string)) return false;
+    usize length = mal_string_length(string);
+    if (family == AF_INET && length >= INET_ADDRSTRLEN) {
+        *matches = false;
+        return true;
+    }
+    const c16 *units = mal_string_code_units(string);
+    usize address_length = length;
+    if (family == AF_INET6) {
+        for (usize index = 0; index < length; index++) {
+            if (units[index] != '%') continue;
+            address_length = index;
+            if (index + 1 == length) {
+                *matches = false;
+                return true;
+            }
+            for (usize zone = index + 1; zone < length; zone++) {
+                c16 unit = units[zone];
+                if (!((unit >= '0' && unit <= '9')
+                    || (unit >= 'a' && unit <= 'z')
+                    || (unit >= 'A' && unit <= 'Z')
+                    || unit == '-' || unit == '.' || unit == ':')) {
+                    *matches = false;
+                    return true;
+                }
+            }
+            break;
+        }
+    }
+    if (address_length == 0 || address_length >= INET6_ADDRSTRLEN) {
+        *matches = false;
+        return true;
+    }
+    char address[INET6_ADDRSTRLEN];
+    for (usize index = 0; index < address_length; index++) {
+        if (units[index] == 0 || units[index] > 0x7f) {
+            *matches = false;
+            return true;
+        }
+        address[index] = (char) units[index];
+    }
+    address[address_length] = '\0';
+    if (family == AF_INET) {
+        *matches = net_matches_ipv4_text(address);
+        return true;
+    }
+    if (strchr(address, '.') != nullptr) {
+        const char *suffix = strrchr(address, ':');
+        if (suffix == nullptr || !net_matches_ipv4_text(suffix + 1)) {
+            *matches = false;
+            return true;
+        }
+    }
+    struct in6_addr parsed;
+    *matches = inet_pton(family, address, &parsed) == 1;
+    return true;
+}
+
+static MalValue net_ip_call(
+    MalVm *vm, const MalValue *args, i32 argc, MalValue new_target, int family
+) {
+    MalValue roots[] = {
+        argc > 0 ? args[0] : mal_value_new_undefined(),
+        mal_value_new_undefined(),
+    };
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    if (!mal_value_is_undefined(new_target)) {
+        MalObject *prototype;
+        if (!mal_vm_get_prototype_from_constructor(
+                vm, new_target, MAL_INTRINSIC_OBJECT_PROTOTYPE, &prototype)) goto failed;
+        roots[1] = mal_value_from_object(mal_object_new(&vm->heap, prototype));
+    }
+    bool matches;
+    int matched_family = 0;
+    if (family != AF_INET6) {
+        if (!net_matches_ip(vm, roots[0], AF_INET, &matches)) goto failed;
+        if (matches) matched_family = 4;
+    }
+    if (family != AF_INET && matched_family == 0) {
+        if (!net_matches_ip(vm, roots[0], AF_INET6, &matches)) goto failed;
+        if (matches) matched_family = 6;
+    }
+    MalValue result = !mal_value_is_undefined(new_target) ? roots[1]
+        : family == AF_UNSPEC ? mal_value_from_i32(matched_family)
+        : mal_value_new_boolean(matched_family != 0);
+    mal_gc_unroot(&root);
+    return result;
+ failed:
+    mal_gc_unroot(&root);
+    return mal_value_new_undefined();
+}
+
+#define NET_IP_PREDICATE(name, family) \
+    static MalValue name( \
+        MalVm *vm, MalValue receiver, const MalValue *args, i32 argc, \
+        MalValue new_target, MalValue callee) { \
+        (void) receiver; (void) callee; \
+        return net_ip_call(vm, args, argc, new_target, family); \
+    }
+
+NET_IP_PREDICATE(net_is_ip, AF_UNSPEC)
+NET_IP_PREDICATE(net_is_ipv4, AF_INET)
+NET_IP_PREDICATE(net_is_ipv6, AF_INET6)
+#undef NET_IP_PREDICATE
+
+static MalValue net_ip_function(
+    MalVm *vm, const byte *name, MalNativeFunctionCallback callback
+) {
+    MalValue roots[] = {mal_value_new_undefined(), mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    MalNativeFunctionObject *function = mal_native_function_object_new_arity(
+        &vm->heap,
+        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
+        mal_intrinsic_ascii(vm, name), 1, callback);
+    roots[0] = mal_value_from_native_function_object(function);
+    mal_native_function_object_set_constructor(function);
+    mal_native_function_object_set_handles_new_target_prototype(function);
+    roots[1] = mal_value_from_object(mal_intrinsic_new_object(vm));
+    mal_intrinsic_define_data(vm, (MalObject *) function, "prototype", roots[1],
+        MAL_PROPERTY_WRITABLE);
+    mal_intrinsic_define_data(vm, mal_value_to_object(roots[1]), "constructor", roots[0],
+        NET_METHOD);
+    MalValue result = roots[0];
+    mal_gc_unroot(&root);
+    return result;
 }
 
 static MalValue net_socket_constructor(
@@ -909,7 +1033,7 @@ void mal_host_install_node_net(
         mal_value_from_object(mal_intrinsic_new_object(vm)),
         mal_value_new_undefined(), mal_value_new_undefined(),
         mal_value_new_undefined(), mal_value_new_undefined(),
-        mal_value_new_undefined(),
+        mal_value_new_undefined(), mal_value_new_undefined(), mal_value_new_undefined(),
     };
     MalRootSpan root;
     mal_gc_root(&root, roots, countof(roots));
@@ -934,10 +1058,9 @@ void mal_host_install_node_net(
     roots[2] = net_constructor(vm, "Socket", net_socket_constructor, roots[1]);
     mal_object_set_prototype(mal_value_to_object(roots[2]), mal_value_to_object(
         vm->intrinsics[MAL_INTRINSIC_NODE_DUPLEX_CONSTRUCTOR]));
-    roots[3] = mal_value_from_native_function_object(
-        mal_native_function_object_new_arity(&vm->heap,
-            mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
-            mal_intrinsic_ascii(vm, (const byte *) "isIP"), 1, net_is_ip));
+    roots[3] = net_ip_function(vm, "isIP", net_is_ip);
+    roots[6] = net_ip_function(vm, "isIPv4", net_is_ipv4);
+    roots[7] = net_ip_function(vm, "isIPv6", net_is_ipv6);
     roots[4] = mal_value_from_native_function_object(
         mal_native_function_object_new_arity(&vm->heap,
             mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
@@ -948,8 +1071,8 @@ void mal_host_install_node_net(
             mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
             mal_intrinsic_ascii(vm, (const byte *) "createConnection"), 2,
             net_create_connection));
-    static const char *names[] = {"Socket", "isIP", "connect", "createConnection"};
-    MalValue values[] = {roots[2], roots[3], roots[4], roots[5]};
+    static const char *names[] = {"Socket", "isIP", "connect", "createConnection", "isIPv4", "isIPv6"};
+    MalValue values[] = {roots[2], roots[3], roots[4], roots[5], roots[6], roots[7]};
     for (usize i = 0; i < countof(names); i++) {
         mal_intrinsic_define_data(vm, mal_value_to_object(roots[0]),
             (const byte *) names[i], values[i], NET_VISIBLE);

@@ -1,5 +1,15 @@
-import { urlToHttpOptions } from "node:url";
+import url, { URL, URLSearchParams, urlToHttpOptions } from "node:url";
 const results = [];
+const params = new URLSearchParams("a=1&a=2&x=%C3%A9");
+results.push([
+	"constructors",
+	URL === globalThis.URL,
+	URLSearchParams === globalThis.URLSearchParams,
+	url.URLSearchParams === URLSearchParams,
+	new URL("https://example.com?a=1").searchParams instanceof URLSearchParams,
+	params.getAll("a"),
+	params.get("x"),
+]);
 function record(label, value) {
 	try {
 		const options = urlToHttpOptions(value);

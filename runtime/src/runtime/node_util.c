@@ -784,7 +784,10 @@ typedef struct MalNodeUtilTypeExport {
 static MalValue util_types_function_kind(
     MalVm *vm, const MalValue *args, i32 argc, bool async) {
     bool matches = false;
-    if (argc > 0 && mal_value_is_function_object(args[0])) {
+    if (async && argc > 0 && mal_value_is_native_function_object(args[0])) {
+        matches = mal_native_function_object_is_async(
+            mal_value_to_native_function_object(args[0]));
+    } else if (argc > 0 && mal_value_is_function_object(args[0])) {
         i32 index = mal_function_object_function_index(mal_value_to_function_object(args[0]));
         if (index >= 0 && index < vm->runtime_image->function_count) {
             MalFunctionKind kind = vm->runtime_image->functions[index].kind;

@@ -63,6 +63,7 @@ static void mal_native_function_init_state(
     function->length = length;
     function->is_constructor = false;
     function->handles_new_target_prototype = false;
+    function->is_async = false;
 #if MAL_PROFILE && MAL_PERF_STATS
     function->profile_category = heap->profile_native_category;
 #endif
@@ -272,6 +273,14 @@ bool mal_native_function_object_is_constructor(const MalNativeFunctionObject *fu
 
 void mal_native_function_object_set_constructor(MalNativeFunctionObject *function) {
     function->is_constructor = true;
+}
+
+bool mal_native_function_object_is_async(const MalNativeFunctionObject *function) {
+    return function->is_async;
+}
+
+void mal_native_function_object_set_async(MalNativeFunctionObject *function) {
+    function->is_async = true;
 }
 
 bool mal_native_function_object_handles_new_target_prototype(

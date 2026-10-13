@@ -81,6 +81,8 @@ typedef struct MalNativeFunctionObject {
      */
     bool handles_new_target_prototype;
 
+    bool is_async;
+
 #if MAL_PROFILE && MAL_PERF_STATS
     /** Exact-profile subsystem owning this native callback, or zero for core runtime. */
     u8 profile_category;
@@ -234,6 +236,10 @@ bool mal_native_function_object_is_constructor(const MalNativeFunctionObject *fu
  * Flag the native function as a constructor (implements [[Construct]]).
  */
 void mal_native_function_object_set_constructor(MalNativeFunctionObject *function);
+
+bool mal_native_function_object_is_async(const MalNativeFunctionObject *function);
+// JS-compatible async callbacks must return a Promise for every completion.
+void mal_native_function_object_set_async(MalNativeFunctionObject *function);
 
 /** Mark/query a native constructor that selects its instance prototype itself. */
 bool mal_native_function_object_handles_new_target_prototype(
