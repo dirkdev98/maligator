@@ -37,6 +37,11 @@ function readPair(kernel, index) {
 	return [first, second];
 }
 
+function readSingle(kernel, index) {
+	return kernel.start(index);
+}
+globalThis.singleRead = readSingle;
+
 function scan(kernel, length) {
 	let total = 0;
 	for (let instruction = 0; instruction < length; instruction++) {
@@ -171,4 +176,39 @@ function argument() {
 	return 0;
 }
 check(kernel.start(argument()) === 4 && argumentCalls === 1, "argument executes once");
+let singleReads = 0;
+const singleElements = [23];
+Object.defineProperty(singleElements, "-1", {
+	get() {
+		singleReads++;
+		return 31;
+	},
+});
+const singleKernel = new Kernel({ starts: singleElements });
+check(globalThis.singleRead(singleKernel, -1) === 31, "terminal named index getter");
+check(singleReads === 1, "terminal getter executes once");
+singleKernel.replace({ starts: [23] });
+const changingIndex = {
+	[Symbol.toPrimitive]() {
+		singleKernel.replace({ starts: [47] });
+		return "0";
+	},
+};
+check(
+	globalThis.singleRead(singleKernel, changingIndex) === 23,
+	"index coercion uses resolved array",
+);
+check(globalThis.singleRead(singleKernel, 0) === 47, "later read sees changed columns");
+const throwingIndex = {
+	[Symbol.toPrimitive]() {
+		throw new Error("terminal key");
+	},
+};
+let terminalThrew = false;
+try {
+	globalThis.singleRead(singleKernel, throwingIndex);
+} catch (error) {
+	terminalThrew = error.message === "terminal key";
+}
+check(terminalThrew, "terminal key exception reaches caller");
 console.log("read-accessor-regions PASS");

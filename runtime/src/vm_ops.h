@@ -3438,49 +3438,57 @@ bool mal_vm_probe_named_read_miss(
     MalVm *vm, MalValue receiver, i32 string_index, MalInlineCache *ic, MalValue *out
 );
 
-/** Probes never invoke getters, proxies, coercion, collection, or exception construction. */
-static inline bool mal_vm_probe_read(
-    MalVm *vm, MalValue receiver, MalValue key, u8 kind, i32 string_index,
-    MalInlineCache *ic, MalValue *out
+// Probes never invoke getters, proxies, coercion, collection, or exception construction.
+static inline __attribute__((always_inline)) bool mal_vm_probe_private_read(
+    MalValue receiver, MalValue key, MalValue *out
 ) {
     *out = MAL_VALUE_UNDEFINED;
-    MAL_PERF_COUNT(probe_read_attempts[kind]);
-    if (kind == 0) {
-        if (!mal_value_is_object(receiver) || !mal_value_is_symbol(key) ||
-            !mal_value_to_symbol(key)->is_private) {
-            MAL_PERF_COUNT(probe_read_unsupported[0]);
-            return false;
-        }
-        if (mal_vm_private_try_load(receiver, key, out)) {
-            MAL_PERF_COUNT(probe_read_private_hint_hits);
-            MAL_PERF_COUNT(probe_read_hits[0]);
-            return true;
-        }
-        MAL_PERF_COUNT(probe_read_private_searches);
-        bool found = mal_table_get_private_value(
-            mal_object_overflow(mal_value_to_object(receiver)), mal_value_to_symbol(key), out);
-        if (found) MAL_PERF_COUNT(probe_read_hits[0]);
-        return found;
+    MAL_PERF_COUNT(probe_read_attempts[0]);
+    if (!mal_value_is_object(receiver) || !mal_value_is_symbol(key) ||
+        !mal_value_to_symbol(key)->is_private) {
+        MAL_PERF_COUNT(probe_read_unsupported[0]);
+        return false;
     }
-    if (kind == 2) {
-        f64 number;
-        if (!mal_value_is_heap_type(receiver, MAL_HEAP_ARRAY_OBJECT) ||
-            !mal_ops_try_number_as_f64(key, &number) ||
-            !(number >= 0 && number < UINT32_MAX)) {
-            MAL_PERF_COUNT(probe_read_unsupported[2]);
-            return false;
-        }
-        u32 index = (u32) number;
-        if ((f64) index != number) {
-            MAL_PERF_COUNT(probe_read_unsupported[2]);
-            return false;
-        }
-        bool found = mal_array_object_dense_get(
-            (const MalArrayObject *) mal_value_to_heap(receiver), index, out);
-        if (found) MAL_PERF_COUNT(probe_read_hits[2]);
-        return found;
+    if (mal_vm_private_try_load(receiver, key, out)) {
+        MAL_PERF_COUNT(probe_read_private_hint_hits);
+        MAL_PERF_COUNT(probe_read_hits[0]);
+        return true;
     }
-    if (kind != 1) return false;
+    MAL_PERF_COUNT(probe_read_private_searches);
+    bool found = mal_table_get_private_value(
+        mal_object_overflow(mal_value_to_object(receiver)), mal_value_to_symbol(key), out);
+    if (found) MAL_PERF_COUNT(probe_read_hits[0]);
+    return found;
+}
+
+static inline __attribute__((always_inline)) bool mal_vm_probe_indexed_read(
+    MalValue receiver, MalValue key, MalValue *out
+) {
+    *out = MAL_VALUE_UNDEFINED;
+    MAL_PERF_COUNT(probe_read_attempts[2]);
+    f64 number;
+    if (!mal_value_is_heap_type(receiver, MAL_HEAP_ARRAY_OBJECT) ||
+        !mal_ops_try_number_as_f64(key, &number) ||
+        !(number >= 0 && number < UINT32_MAX)) {
+        MAL_PERF_COUNT(probe_read_unsupported[2]);
+        return false;
+    }
+    u32 index = (u32) number;
+    if ((f64) index != number) {
+        MAL_PERF_COUNT(probe_read_unsupported[2]);
+        return false;
+    }
+    bool found = mal_array_object_dense_get(
+        (const MalArrayObject *) mal_value_to_heap(receiver), index, out);
+    if (found) MAL_PERF_COUNT(probe_read_hits[2]);
+    return found;
+}
+
+static inline __attribute__((always_inline)) bool mal_vm_probe_named_read(
+    MalVm *vm, MalValue receiver, i32 string_index, MalInlineCache *ic, MalValue *out
+) {
+    *out = MAL_VALUE_UNDEFINED;
+    MAL_PERF_COUNT(probe_read_attempts[1]);
     if (!mal_value_is_heap_type(receiver, MAL_HEAP_OBJECT) ||
         mal_value_to_object(receiver)->is_arguments) {
         MAL_PERF_COUNT(probe_read_unsupported[1]);
@@ -3495,6 +3503,20 @@ static inline bool mal_vm_probe_read(
     bool found = mal_vm_probe_named_read_miss(vm, receiver, string_index, ic, out);
     if (found) MAL_PERF_COUNT(probe_read_hits[1]);
     return found;
+}
+
+static inline bool mal_vm_probe_read(
+    MalVm *vm, MalValue receiver, MalValue key, u8 kind, i32 string_index,
+    MalInlineCache *ic, MalValue *out
+) {
+    switch (kind) {
+        case 0: return mal_vm_probe_private_read(receiver, key, out);
+        case 1: return mal_vm_probe_named_read(vm, receiver, string_index, ic, out);
+        case 2: return mal_vm_probe_indexed_read(receiver, key, out);
+        default:
+            *out = MAL_VALUE_UNDEFINED;
+            return false;
+    }
 }
 
 /** PrivateSet; the name must already be installed on the receiver, else throws. */

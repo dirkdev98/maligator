@@ -10883,17 +10883,13 @@ function emitInstruction(
 		case "PROBE_READ": {
 			const loaded = `__probe_value_${ip}`,
 				success = `__probe_success_${ip}`;
-			const stringIndex =
+			const probe =
 				instruction.readKind === "named"
-					? relocation.stringIndex(instruction.stringIndex)
-					: -1;
-			const cache =
-				instruction.readKind === "named"
-					? `&${nativeBodyReference(resources, "propertyCache")}[${instruction.icIndex}]`
-					: "nullptr";
+					? `mal_vm_probe_named_read(vm, ${boxed(instruction.object)}, ${relocation.stringIndex(instruction.stringIndex)}, &${nativeBodyReference(resources, "propertyCache")}[${instruction.icIndex}], &${loaded})`
+					: `mal_vm_probe_${instruction.readKind}_read(${boxed(instruction.object)}, ${boxed(instruction.key)}, &${loaded})`;
 			return [
 				`MalValue ${loaded};`,
-				`bool ${success} = mal_vm_probe_read(vm, ${boxed(instruction.object)}, ${boxed(instruction.key)}, ${["private", "named", "indexed"].indexOf(instruction.readKind)}, ${stringIndex}, ${cache}, &${loaded});`,
+				`bool ${success} = ${probe};`,
 				`r${instruction.dst} = ${loaded};`,
 				storeBoolean(instruction.success, success),
 			];

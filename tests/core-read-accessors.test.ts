@@ -45,6 +45,28 @@ function semantic(text = source) {
 }
 
 describe("class read-accessor lowering", () => {
+	it("completes an isolated terminal miss after its admitted prefixes", () => {
+		const input = lowerSemanticProgramToCore(
+			semantic(
+				source.replace(
+					"const first = receiver.read(index);\n\tconst second = receiver.read(index);\n\treturn [first, second];",
+					"return receiver.read(index);",
+				),
+			),
+		);
+		optimizeCore(input, { verification: "per-pass" });
+		const fn = coreFunctionNamed(input.program, "pair")!;
+		const operations = coreOperations(fn);
+		const slow = operations.filter(({ opcode }) => opcode === "loadProperty");
+		expect(slow).toHaveLength(1);
+		const cfg = buildCoreControlFlow(input.program, fn.id);
+		const probes = operations.filter(({ opcode }) => opcode === "probeRead");
+		expect(probes.length).toBeGreaterThan(0);
+		for (const probe of probes)
+			expect(cfg.dominates(probe.block, slow[0]!.block)).toBe(true);
+		expect(coreInstructionEffects(fn, slow[0]!.id).callsUserCode).toBe(true);
+	});
+
 	it("reports bounded region discovery work separately from expanded execution", () => {
 		const input = lowerSemanticProgramToCore(semantic());
 		const { report } = optimizeCore(input, { instrumentation: "counters" });

@@ -26,6 +26,13 @@ proxies, holes, unsupported keys, and other misses enter the original operations
 in their original order. Earlier successful probes have no observable effects,
 so replay on a miss does not duplicate JavaScript work.
 
+For an isolated accessor without retained loop state, a miss on its final indexed
+read completes with an ordinary property read from the already-resolved receiver.
+No later read can reuse the admitted prefixes, so this terminal slow path can invoke
+getters or key coercion without replaying the accessor. It retains normal effects,
+exception edges, and GC rooting. Shared regions and retained loop paths still replay
+on a miss.
+
 Expansion reuses admitted values and function guards within its non-observable
 region before constructing additional success branches. Private writer proofs
 refresh after body and control-flow edits; facts and representations do not change
@@ -46,7 +53,9 @@ its extra operands use side data to preserve the packed instruction ABI.
 Named probes use the existing per-site property caches and their prototype
 invalidation contracts. Misses resolve only ordinary data properties without
 executing JavaScript; private probes retain the existing entry hint. The cache
-capacity and global optimization budgets are unchanged.
+capacity and global optimization budgets are unchanged. Native emission selects
+inline probes for the known read kinds instead of dispatching through a generic
+probe with unused arguments.
 
 Core's private-name proof is consumed before serialization. Artifacts preserve the actual
 guards and probes and validate their operand kinds, register bounds, and named

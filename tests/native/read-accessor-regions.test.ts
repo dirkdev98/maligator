@@ -234,7 +234,7 @@ console.log(JSON.stringify({ count: output.length, sum }));`,
 		}
 	}, 600_000);
 
-	it("executes the real kernel loop without entering accessors until an indexed admission fails", () => {
+	it("completes indexed misses in the real kernel loop without entering accessors", () => {
 		const directory = mkdtempSync(path.join(os.tmpdir(), "mal-kernel-accessors-"));
 		try {
 			const kernel = readFileSync("src/compiler/core/core-function-kernel.ts", "utf8");
@@ -340,9 +340,7 @@ console.log(count);`),
 						.filter((site) => names[site.functionIndex] === name)
 						.reduce((total, site) => total + events.bySite[site.id]!.executions, 0);
 				for (const name of accessors)
-					if (mode === "hole" && name === "operandAt")
-						expect(executions(name)).toBeGreaterThan(0);
-					else expect(executions(name), `${mode}: ${name}`).toBe(0);
+					expect(executions(name), `${mode}: ${name}`).toBe(0);
 				const probes = { private: 0, named: 0, indexed: 0 };
 				for (const [functionIndex, fn] of built.programImage.native.functions.entries()) {
 					if (names[functionIndex] !== "materializeInstructionOperands") continue;

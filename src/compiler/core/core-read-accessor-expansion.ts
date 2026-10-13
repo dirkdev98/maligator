@@ -62,6 +62,7 @@ export interface CoreReadAccessorRegionPlan {
 	readonly exceptionFlowVersion: number;
 	readonly memoryEffectsVersion: number;
 	readonly region: ReadRegion;
+	readonly completeTerminalRead: boolean;
 	readonly loop?: CoreReadAccessorLoopPlan;
 }
 
@@ -328,6 +329,10 @@ export function coreReadAccessorRegionCost(
 		region.calls.values().next().value!.summary.reads.length === 1
 	)
 		return undefined;
+	const completeTerminalRead =
+		loop === undefined &&
+		region.calls.size === 1 &&
+		region.calls.values().next().value!.summary.reads.at(-1)?.kind === "indexed";
 	const loopCost =
 		loop === undefined
 			? 0
@@ -337,6 +342,7 @@ export function coreReadAccessorRegionCost(
 				loop.loop.blocks.size * (loop.retainedPrefixes.length + 2) * 2 +
 				12;
 	const generatedCode =
+		(completeTerminalRead ? 3 : 0) +
 		loopCost +
 		region.instructions.length * 2 +
 		[...region.calls.values()].reduce(
@@ -358,6 +364,7 @@ export function coreReadAccessorRegionCost(
 			exceptionFlowVersion: fn.version("exceptionFlow"),
 			memoryEffectsVersion: fn.version("memoryEffects"),
 			region,
+			completeTerminalRead,
 			...(loop === undefined ? {} : { loop }),
 		},
 	};
@@ -488,7 +495,7 @@ export function expandCoreReadAccessorRegion(
 	let introduced = 0;
 	const emitRegion = (reuse?: ReadonlyMap<string, CoreValueId>) => {
 		const values = new Map<CoreValueId, CoreValueId>();
-		// Every continuation is dominated by admission, and the region contains no clobbers.
+		// Prefix reuse ends before the terminal read, whose slow path can call user code.
 		const admitted = new Map<CoreValueId, Map<string, CoreValueId>>();
 		const guarded = new Set<string>();
 		let position: number | undefined;
@@ -572,6 +579,31 @@ export function expandCoreReadAccessorRegion(
 			}
 			return value!;
 		};
+		const completeIndexedRead = (receiver: CoreValueId, key: CoreValueId) => {
+			const [value, success] = append(
+				"probeRead",
+				[receiver, key],
+				{ readKind: "indexed" },
+				["boxed", "boolean"],
+			);
+			const slow = editor.createBlock(),
+				done = editor.createBlock([{}]);
+			fastBlocks.push(slow, done);
+			editor.setTerminator(fast, {
+				kind: "branch",
+				condition: success!,
+				consequent: { block: done, arguments: [value!] },
+				alternate: { block: slow, arguments: [] },
+			});
+			fast = slow;
+			const loaded = append("loadProperty", [receiver, key])[0]!;
+			editor.setTerminator(slow, {
+				kind: "jump",
+				edge: { block: done, arguments: [loaded] },
+			});
+			fast = done;
+			return fn.kernel.blockParameterValue(fn.kernel.blockParameterStart(done));
+		};
 		for (const operation of original) {
 			position = operation.position;
 			const call = region.calls.get(operation.instruction);
@@ -622,14 +654,16 @@ export function expandCoreReadAccessorRegion(
 						}
 					} else if (read.kind === "named")
 						value = probe(value, undefinedConstant(), "named", read.stringIndex);
-					else
-						value = probe(
-							value,
+					else {
+						const key =
 							operation.inputs[read.argument + 2] === undefined
 								? undefinedConstant()
-								: currentValue(operation.inputs[read.argument + 2]!),
-							"indexed",
-						);
+								: currentValue(operation.inputs[read.argument + 2]!);
+						value =
+							planned!.completeTerminalRead && read === reads.at(-1)
+								? completeIndexedRead(value, key)
+								: probe(value, key, "indexed");
+					}
 				}
 				if (call.summary.defaultValue !== undefined) {
 					const condition = append(
