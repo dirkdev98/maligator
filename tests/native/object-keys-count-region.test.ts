@@ -36,7 +36,7 @@ describe("Object.keys count regions", () => {
 			});
 			expect(
 				pair.programImage.native.functions.some(
-					(fn) => fn.storage!.objectKeysCounts.length > 0,
+					(fn) => fn.storage!.objectKeysSnapshots.length > 0,
 				),
 			).toBe(true);
 			for (const binary of [pair.compiled, pair.interpreted])
@@ -64,6 +64,12 @@ describe("Object.keys count regions", () => {
 			);
 			expect(stats).not.toBeNull();
 			expect(Number(stats![1])).toBeGreaterThan(0);
+			const snapshots = measured.stderr.match(
+				/\[perf-object-keys-snapshot-stats\] admissions=(\d+) materializations=(\d+)/,
+			);
+			expect(snapshots).not.toBeNull();
+			expect(Number(snapshots![1])).toBeGreaterThan(0);
+			expect(Number(snapshots![2])).toBeGreaterThan(0);
 		},
 		600_000,
 	);

@@ -1122,10 +1122,31 @@ MalValue mal_builtin_object_keys_known(
         MAL_VALUE_UNDEFINED);
 }
 
+static bool mal_builtin_object_keys_admits(MalValue callee, MalValue target, bool locked) {
+    return (locked || (mal_value_is_native_function_object(callee) &&
+        mal_native_function_object_callback(mal_value_to_native_function_object(callee)) == mal_builtin_object_keys)) &&
+        mal_value_is_heap_type(target, MAL_HEAP_OBJECT);
+}
+
+bool mal_builtin_object_keys_snapshot(MalValue callee, MalValue target, bool locked, MalValue *keys, u32 capacity, u32 *count_out) {
+    if (!mal_builtin_object_keys_admits(callee, target, locked)) return false;
+    MalObject *object = mal_value_to_object(target);
+    if (mal_object_has_public_overflow(object)) return false;
+    const MalShape *shape = object->shape;
+    u32 count = 0;
+    for (u32 i = 0; i < shape->inline_count; i++) {
+        const MalShapeProp *prop = &shape->props[i];
+        if (!mal_value_is_string(prop->key) || !(prop->attrs & MAL_PROPERTY_ENUMERABLE)) continue;
+        if (count == capacity) return false;
+        keys[count++] = prop->key;
+    }
+    *count_out = count;
+    MAL_PERF_COUNT(object_keys_snapshot_admissions);
+    return true;
+}
+
 bool mal_builtin_object_keys_count(MalValue callee, MalValue target, bool locked, u32 *count_out) {
-    if ((!locked && (!mal_value_is_native_function_object(callee) ||
-        mal_native_function_object_callback(mal_value_to_native_function_object(callee)) != mal_builtin_object_keys)) ||
-        !mal_value_is_heap_type(target, MAL_HEAP_OBJECT)) return false;
+    if (!mal_builtin_object_keys_admits(callee, target, locked)) return false;
     MalObject *object = mal_value_to_object(target);
     u32 capacity;
     if (!mal_builtin_object_plain_capacity(object, &capacity)) return false;

@@ -27,6 +27,9 @@ MalValue mal_builtin_object_keys_known(
 // Counts the snapshot without allocation or user code; a decline leaves the original call untouched.
 bool mal_builtin_object_keys_count(MalValue callee, MalValue target, bool locked, u32 *count_out);
 
+// Caller-owned roots retain the eager key sequence independently of later receiver mutations.
+bool mal_builtin_object_keys_snapshot(MalValue callee, MalValue target, bool locked, MalValue *keys, u32 capacity, u32 *count_out);
+
 /** Exact Object.values invocation after the locked namespace/property seam. */
 MalValue mal_builtin_object_values_known(
     MalVm *vm, const MalValue *args, i32 arg_count

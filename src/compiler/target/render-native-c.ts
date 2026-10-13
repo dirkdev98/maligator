@@ -66,6 +66,8 @@ import {
 } from "./lower-native-storage.ts";
 import type { NativeStringTransformPlan } from "./lower-native-string-transforms.ts";
 import type { NativeSuspensionPlan } from "./lower-native-suspension.ts";
+import { NATIVE_KEY_SNAPSHOT_CAPACITY } from "./native-object-keys-snapshot.ts";
+import type { NativeObjectKeysSnapshotPlan } from "./native-object-keys-snapshot.ts";
 import { nativeInactiveRootMasks, nativeRootMaskWordHex } from "./native-root-masks.ts";
 import type { NativeInactiveRootMask } from "./native-root-masks.ts";
 import {
@@ -1633,6 +1635,13 @@ function emitCompiledVariant(
 			materializedSlot: split.slotsOffset + slot,
 		});
 	}
+	const objectKeysSnapshotSites = new Map<number, NativeObjectKeysSnapshotSite>();
+	for (const plan of storage.objectKeysSnapshots) {
+		const keysSlot = plan.elementIps.length ? nextStackSlot : -1;
+		if (plan.elementIps.length) nextStackSlot += NATIVE_KEY_SNAPSHOT_CAPACITY;
+		const materializedSlot = plan.elementIps.length ? nextStackSlot++ : -1;
+		objectKeysSnapshotSites.set(plan.callIp, { ...plan, keysSlot, materializedSlot });
+	}
 	const fieldCalls = renderFieldCallSlots(fn, nativeContract, () => nextStackSlot++);
 	const totalSlots = nextStackSlot;
 
@@ -1699,6 +1708,7 @@ function emitCompiledVariant(
 		regexpExecProjectionSites,
 		regexpIteratorProjectionSites,
 		stringSpanSites,
+		objectKeysSnapshotSites,
 		directCompiledTargets,
 		directCompiledEntries,
 		directEntry?.resultRepresentation,
@@ -2699,6 +2709,7 @@ function emitResumableFunction(
 		new Map(),
 		new Map(),
 		new Map(),
+		new Map(),
 		directCompiledTargets,
 		directCompiledEntries,
 		undefined,
@@ -3050,6 +3061,11 @@ interface NativeRegExpIteratorProjectionAction {
 }
 
 type NativeStringSpan = Extract<VmRegion, { kind: "string-span" }>;
+
+interface NativeObjectKeysSnapshotSite extends NativeObjectKeysSnapshotPlan {
+	readonly keysSlot: number;
+	readonly materializedSlot: number;
+}
 
 interface NativeStringSpanSite {
 	producerIp: number;
@@ -3812,6 +3828,7 @@ function emitBody(
 	regexpExecProjectionSites: ReadonlyMap<number, NativeRegExpExecProjectionSite>,
 	regexpIteratorProjectionSites: ReadonlyMap<number, NativeRegExpIteratorProjectionSite>,
 	stringSpanSites: ReadonlyMap<number, NativeStringSpanSite>,
+	objectKeysSnapshotSites: ReadonlyMap<number, NativeObjectKeysSnapshotSite>,
 	directCompiledTargets: ReadonlySet<number>,
 	directCompiledEntries: DirectCompiledEntries,
 	directResultRepresentation: VmRegisterRepresentation | undefined,
@@ -3836,7 +3853,7 @@ function emitBody(
 		stringTransforms: [],
 		arrayInitializations: [],
 		mapEntries: [],
-		objectKeysCounts: [],
+		objectKeysSnapshots: [],
 		spanContinuations: [],
 		propertyProjections: [],
 		propertyNumericUpdates: [],
@@ -3869,13 +3886,21 @@ function emitBody(
 	const { stableCaptureOwners, copiedCaptures, requiredCaptureOwners } = analysis;
 	const topology = analysis.regionTopology(specializations, regionActions);
 	const {
-		indexedLengthLoopActionByIp,
+		indexedLengthLoopActionByIp: allIndexedLengthLoopActions,
 		nativeStringCharCodeAtChainActionByIp,
 		nativeBuiltinCollectionCallChainActionByIp,
 		nativeIteratorCursorActionByIp,
 		nativeIteratorResultVirtualizationActionByIp,
 		nativeIteratorEntryPairVirtualizationActionByIp,
 	} = topology;
+	const snapshotLengthIps = new Set(
+		[...objectKeysSnapshotSites.values()].flatMap((site) => site.lengthIps),
+	);
+	const indexedLengthLoopActionByIp = new Map(
+		[...allIndexedLengthLoopActions].filter(
+			([, action]) => !snapshotLengthIps.has(action.loadIp),
+		),
+	);
 	const numericFusionActionByIp = new Map<number, NativeNumericFusionAction>();
 	for (const candidate of topology.numericFusionCandidates) {
 		if (numericFusionActionByIp.has(candidate.instructionIp))
@@ -4002,15 +4027,12 @@ function emitBody(
 				] as const,
 		),
 	);
-	const objectKeysCounts = new Map(
-		fastPathPlans.objectKeysCounts.flatMap(
-			(plan) =>
-				[
-					[plan.callIp, plan],
-					[plan.lengthIp, plan],
-				] as const,
+	const objectKeysSnapshots = new Map(
+		[...objectKeysSnapshotSites.values()].flatMap((site) =>
+			site.claimedIps.map((ip) => [ip, site] as const),
 		),
 	);
+
 	const stringTransforms = new Map(
 		fastPathPlans.stringTransforms.map((plan) => [plan.instructionIp, plan]),
 	);
@@ -4479,7 +4501,7 @@ function emitBody(
 		stringTransform: undefined,
 		arrayInitialization: undefined,
 		mapEntry: undefined,
-		objectKeysCount: undefined,
+		objectKeysSnapshot: undefined,
 		mappedArguments: fn.mappedArguments,
 		mappedArgumentSlots: fn.mappedArgumentSlots,
 		hasPrototype: fn.hasPrototype,
@@ -4510,10 +4532,10 @@ function emitBody(
 	};
 	for (const plan of fastPathPlans.mapEntries)
 		lines.push(`u32 __map_entry_${plan.getIp} = 0;`);
-	for (const plan of fastPathPlans.objectKeysCounts)
+	for (const plan of fastPathPlans.objectKeysSnapshots)
 		lines.push(
-			`bool __keys_count_${plan.callIp}_active = false;`,
-			`u32 __keys_count_${plan.callIp}_value = 0;`,
+			`bool __keys_snapshot_${plan.callIp}_active = false;`,
+			`u32 __keys_snapshot_${plan.callIp}_value = 0;`,
 		);
 	let lastPublishedPos = -1;
 	let lastPublishedSite = -1;
@@ -4965,7 +4987,7 @@ function emitBody(
 		instructionContext.stringTransform = stringTransforms.get(ip);
 		instructionContext.arrayInitialization = arrayInitializations.get(ip);
 		instructionContext.mapEntry = mapEntries.get(ip);
-		instructionContext.objectKeysCount = objectKeysCounts.get(ip);
+		instructionContext.objectKeysSnapshot = objectKeysSnapshots.get(ip);
 		instructionContext.indexedLengthLoopAction = indexedLengthLoopActionByIp.get(ip);
 		instructionContext.nativeArrayPresenceProjectionAction = arrayPresenceAction;
 		instructionContext.pairedArrayLoopAction = pairedArrayLoopActionByIp.get(ip);
@@ -5448,7 +5470,7 @@ interface NativeInstructionContext {
 		readonly values: ReadonlyArray<number>;
 	};
 	readonly mapEntry?: { readonly getIp: number; readonly setIp: number };
-	readonly objectKeysCount?: { readonly callIp: number; readonly lengthIp: number };
+	readonly objectKeysSnapshot?: NativeObjectKeysSnapshotSite;
 	readonly mappedArguments: boolean;
 	readonly mappedArgumentSlots: ReadonlyArray<number>;
 	readonly hasPrototype: boolean;
@@ -6226,18 +6248,28 @@ function emitInstruction(
 			`}`,
 		];
 	}
-	if (context.objectKeysCount !== undefined) {
-		const site = context.objectKeysCount;
-		const name = `__keys_count_${site.callIp}`;
+	if (context.objectKeysSnapshot !== undefined) {
+		const site = context.objectKeysSnapshot;
+		const name = `__keys_snapshot_${site.callIp}`;
 		const ordinary = emitGenericInstruction();
 		if (ordinary === null) return null;
+		const snapshot = site.elementIps.length > 0;
+		const keys = `&__gc_slots[${site.keysSlot}]`;
+		const materialized = `__gc_slots[${site.materializedSlot}]`;
 		if (
 			ip === site.callIp &&
 			(instruction.opcode === "CALL" || instruction.opcode === "CALL_KNOWN")
 		) {
 			const locked = instruction.opcode === "CALL_KNOWN";
+			const args = `${locked ? "MAL_VALUE_UNDEFINED" : boxedOperand(instruction.callee)}, ${boxedOperand(instruction.arguments[0]!)}, ${locked}`;
 			return [
-				`${name}_active = mal_builtin_object_keys_count(${locked ? "MAL_VALUE_UNDEFINED" : boxedOperand(instruction.callee)}, ${boxedOperand(instruction.arguments[0]!)}, ${locked}, &${name}_value);`,
+				...(snapshot
+					? [
+							`for (u32 i = 0; i < ${NATIVE_KEY_SNAPSHOT_CAPACITY}; i++) __gc_slots[${site.keysSlot} + i] = MAL_VALUE_UNDEFINED;`,
+							`${materialized} = MAL_VALUE_UNDEFINED;`,
+						]
+					: []),
+				`${name}_active = ${snapshot ? `mal_builtin_object_keys_snapshot(${args}, ${keys}, ${NATIVE_KEY_SNAPSHOT_CAPACITY}, &${name}_value)` : `mal_builtin_object_keys_count(${args}, &${name}_value)`};`,
 				`if (${name}_active) {`,
 				`  r${instruction.dst} = MAL_VALUE_UNDEFINED;`,
 				`  ${poll()}`,
@@ -6246,15 +6278,37 @@ function emitInstruction(
 				`}`,
 			];
 		}
-		if (ip === site.lengthIp && instruction.opcode === "LOAD_PROPERTY_STATIC")
-			return [
-				`if (${name}_active) {`,
-				`  ${storeNumber(instruction.dst, `(f64) ${name}_value`)}`,
-				`} else {`,
-				...ordinary.map((line) => `  ${line}`),
-				`}`,
-			];
-		throw new Error("Invalid keys-count action");
+		if (
+			instruction.opcode !== "LOAD_PROPERTY_STATIC" &&
+			instruction.opcode !== "LOAD_PROPERTY"
+		)
+			throw new Error("Invalid key-snapshot consumer");
+		const available = `${name}_active${snapshot ? ` && mal_value_is_undefined(${materialized})` : ""}`;
+		const element = instruction.opcode === "LOAD_PROPERTY";
+		const index = `${name}_index_${ip}`;
+		const guard = element
+			? `${available} && ${index} >= 0 && ${index} < ${name}_value && (f64) (u32) ${index} == ${index}`
+			: available;
+		return [
+			...(element
+				? [
+						`f64 ${index} = mal_ops_is_number(${boxedOperand(instruction.key)}) ? mal_ops_number_as_f64(${boxedOperand(instruction.key)}) : -1;`,
+					]
+				: []),
+			`if (${guard}) {`,
+			`  ${element ? `r${instruction.dst} = ${callValue(instruction.dst, `__gc_slots[${site.keysSlot} + (u32) ${index}]`)};` : storeNumber(instruction.dst, `(f64) ${name}_value`)}`,
+			`} else {`,
+			...(snapshot
+				? [
+						`  if (${name}_active) {`,
+						`    if (mal_value_is_undefined(${materialized})) { MAL_PERF_COUNT(object_keys_snapshot_materializations); ${materialized} = mal_value_from_array_object(mal_array_object_new_from_values(&vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ARRAY_PROTOTYPE]), ${keys}, ${name}_value)); }`,
+						`    r${instruction.object} = ${materialized};`,
+						`  }`,
+					]
+				: []),
+			...ordinary.map((line) => `  ${line}`),
+			`}`,
+		];
 	}
 	if (stackObjectMaterialization?.site.materializedSlot !== undefined) {
 		const { site, values } = stackObjectMaterialization;

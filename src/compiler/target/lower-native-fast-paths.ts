@@ -10,6 +10,8 @@ import { analyzeNativeBodyFacts } from "./native-body-facts.ts";
 import type { NativeBodyFacts } from "./native-body-facts.ts";
 import { selectNativeMapEntries } from "./native-map-entry-plan.ts";
 import type { NativeMapEntryPlan } from "./native-map-entry-plan.ts";
+import { selectNativeObjectKeysSnapshots } from "./native-object-keys-snapshot.ts";
+import type { NativeObjectKeysSnapshotPlan } from "./native-object-keys-snapshot.ts";
 import {
 	MATH_UNARY_NATIVE_CALL,
 	MATH_BINARY_OPERATIONS,
@@ -17,7 +19,6 @@ import {
 } from "./native-scalar-operators.ts";
 import { selectNativeSpanContinuations } from "./native-span-continuation.ts";
 import type { NativeSpanContinuation } from "./native-span-continuation.ts";
-import { validateNativeVirtualValue } from "./native-virtual-value.ts";
 import type {
 	NativeDirectEntryPlan,
 	NativeFunctionPlan,
@@ -36,14 +37,6 @@ type StaticPropertyLoad = Extract<
 	BytecodeInstruction,
 	{ opcode: "LOAD_PROPERTY_STATIC" }
 >;
-
-export interface NativeObjectKeysCountPlan {
-	readonly callIp: number;
-	readonly lengthIp: number;
-	readonly claimedIps: ReadonlyArray<number>;
-	readonly borrowedRegisters: ReadonlyArray<number>;
-	readonly fallback: "original-instructions";
-}
 
 export type NativePropertyProjectionOperand =
 	| { readonly kind: "load"; readonly index: number }
@@ -266,7 +259,7 @@ export interface NativeFastPathPlans {
 	readonly stringTransforms: ReadonlyArray<NativeStringTransformPlan>;
 	readonly arrayInitializations: ReadonlyArray<NativeArrayInitialization>;
 	readonly mapEntries: ReadonlyArray<NativeMapEntryPlan>;
-	readonly objectKeysCounts: ReadonlyArray<NativeObjectKeysCountPlan>;
+	readonly objectKeysSnapshots: ReadonlyArray<NativeObjectKeysSnapshotPlan>;
 	readonly spanContinuations: ReadonlyArray<NativeSpanContinuation>;
 	readonly propertyNumericUpdates: ReadonlyArray<NativePropertyNumericUpdatePlan>;
 	readonly propertyProjections: ReadonlyArray<NativePropertyProjectionPlan>;
@@ -2155,7 +2148,8 @@ export function lowerNativeFastPaths(
 		arrayInitializations:
 			selection.kind === "render" ? selection.plans.arrayInitializations : [],
 		mapEntries: selection.kind === "render" ? selection.plans.mapEntries : [],
-		objectKeysCounts: selection.kind === "render" ? selection.plans.objectKeysCounts : [],
+		objectKeysSnapshots:
+			selection.kind === "render" ? selection.plans.objectKeysSnapshots : [],
 		spanContinuations:
 			selection.kind === "render" ? selection.plans.spanContinuations : [],
 		arrayPresence: selection.kind === "render" ? selection.plans.arrayPresence : [],
@@ -2495,9 +2489,13 @@ export function selectNativeFastPaths(
 		{ readonly id: number; readonly role: "start" | "finish" }
 	>();
 	const mapEntryBlocked = new Set(blocked);
+	const snapshotOverlayIps = new Set<number>();
+	const snapshotBlocked = new Set(blocked);
 	const indexedLoops: Array<NativeIndexedLoopElement> = [];
 	for (const action of native.regionActions) {
 		const region = native.specializations[action.regionIndex]!;
+		if (region.kind !== "indexed-length-loop")
+			for (const ip of region.claimedIps) snapshotBlocked.add(ip);
 		if (region.kind !== "builtin-collection-call-chain")
 			for (const ip of region.claimedIps) mapEntryBlocked.add(ip);
 		if (region.kind !== "numeric-fusion") {
@@ -2518,6 +2516,7 @@ export function selectNativeFastPaths(
 				break;
 			}
 			case "indexed-length-loop": {
+				snapshotOverlayIps.add(action.ip);
 				blocked.add(action.ip);
 				const site = region.sites[action.primaryIndex!]!;
 				const element =
@@ -2561,66 +2560,16 @@ export function selectNativeFastPaths(
 		for (const ip of plan.claimedIps) blocked.add(ip);
 	const numberRecordRegions: Array<NativeNumberRecordRegionPlan> = [];
 	const numericLoopRegions: Array<NativeNumericLoopRegionPlan> = [];
-	const objectKeysCounts: Array<NativeObjectKeysCountPlan> = [];
-	if (
-		native.mode === "direct" &&
-		!fn.isGenerator &&
-		!fn.isAsync &&
-		fn.handlers.length === 0 &&
-		fn.profileSiteIds === undefined
-	) {
-		for (const [ip, call] of fn.instructions.entries()) {
-			const length = fn.instructions[ip + 1];
-			if (
-				(call.opcode !== "CALL" && call.opcode !== "CALL_KNOWN") ||
-				(call.opcode === "CALL_KNOWN" &&
-					(call.operation !== "Object.keys" ||
-						call.construct ||
-						call.argumentMode !== undefined)) ||
-				call.arguments.length !== 1 ||
-				unavailable(ip) ||
-				unavailable(ip + 1) ||
-				body.externalEntries.has(ip + 1) ||
-				length?.opcode !== "LOAD_PROPERTY_STATIC" ||
-				length.object !== call.dst ||
-				String.fromCharCode(...(stringConstants[length.stringIndex] ?? [])) !== "length"
-			)
-				continue;
-			if (call.opcode === "CALL") {
-				const property = fn.instructions[ip - 1];
-				if (
-					property?.opcode !== "LOAD_PROPERTY_STATIC" ||
-					property.dst !== call.callee ||
-					String.fromCharCode(...(stringConstants[property.stringIndex] ?? [])) !== "keys"
-				)
-					continue;
-			}
-			let valid = true;
-			try {
-				validateNativeVirtualValue(
-					fn.instructions,
-					ip,
-					call.dst,
-					new Map([[ip + 1, [call.dst]]]),
-					() => {
-						throw new RangeError("Observed keys array");
-					},
-				);
-			} catch {
-				valid = false;
-			}
-			if (!valid) continue;
-			objectKeysCounts.push({
-				callIp: ip,
-				lengthIp: ip + 1,
-				claimedIps: [ip, ip + 1],
-				borrowedRegisters: [],
-				fallback: "original-instructions",
-			});
-			blocked.add(ip);
-			blocked.add(ip + 1);
-		}
-	}
+	const objectKeysSnapshots = selectNativeObjectKeysSnapshots(
+		native,
+		stringConstants,
+		(ip) =>
+			(blocked.has(ip) && !snapshotOverlayIps.has(ip)) ||
+			snapshotBlocked.has(ip) ||
+			pollingEdges.has(ip),
+	);
+	for (const plan of objectKeysSnapshots)
+		for (const ip of plan.claimedIps) blocked.add(ip);
 	// Profiled sites observe each original instruction.
 	if (
 		native.mode === "direct" &&
@@ -2691,7 +2640,7 @@ export function selectNativeFastPaths(
 		stringTransforms,
 		arrayInitializations,
 		mapEntries,
-		objectKeysCounts,
+		objectKeysSnapshots,
 		spanContinuations,
 		...selectArrayWindows(
 			native,
@@ -2718,7 +2667,7 @@ export function selectNativeFastPaths(
 					...numericLoopRegions,
 					...arrayInitializations,
 					...mapEntries,
-					...objectKeysCounts,
+					...objectKeysSnapshots,
 					...spanContinuations,
 					...(selected.constructorInitialization === undefined
 						? []

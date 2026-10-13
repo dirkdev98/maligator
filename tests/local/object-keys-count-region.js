@@ -78,7 +78,80 @@ for (let i = 0; i < 500; i++) {
 	if (typeof gc === "function") gc();
 }
 rows.push(total);
+function traverse(record, observer) {
+	const keys = Object.keys(record);
+	let result = "";
+	for (let i = 0; i < keys.length; i++) {
+		const key = keys[i];
+		result += key + ";";
+		observer(record, key);
+	}
+	return result;
+}
+function snapshotReads(record, index) {
+	const keys = Object.keys(record);
+	const first = keys[index];
+	return [first, keys.length, keys[0]];
+}
+const unchanged = () => {};
+const small = { z: 1, a: 2, "𝄞": 3 };
+Object.defineProperty(small, "hidden", { value: 4 });
+small[Symbol("symbol")] = 5;
+Object.defineProperty(small, "accessor", {
+	enumerable: true,
+	get() {
+		throw new Error("snapshot read a value");
+	},
+});
+rows.push(
+	traverse(small, (object, key) => {
+		if (key === "z") {
+			delete object.a;
+			object.added = 7;
+			Object.defineProperty(object, "𝄞", { enumerable: false });
+			if (typeof gc === "function") gc();
+		}
+	}),
+);
+rows.push(traverse({ 10: 1, 2: 2, b: 3, a: 4 }, unchanged));
+rows.push(traverse(dictionary, unchanged), traverse("𝄞a", unchanged));
+events.length = 0;
+rows.push(traverse(proxy, unchanged), events.join(","));
+rows.push(snapshotReads({ first: 1, second: 2 }, -0));
+rows.push(snapshotReads({ first: 1 }, "0"));
+rows.push(snapshotReads({ first: 1 }, -1));
+let coercions = 0;
+rows.push(
+	snapshotReads(
+		{ first: 1 },
+		{
+			toString() {
+				coercions++;
+				if (typeof gc === "function") gc();
+				return "0";
+			},
+		},
+	),
+	coercions,
+);
+for (let i = 0; i < 24; i++) {
+	const record = {};
+	for (let k = 0; k < i; k++) record["key" + k] = k;
+	rows.push(traverse(record, unchanged));
+}
 if (typeof process === "undefined" || process.env.MAL_PRIMORDIALS !== "locked") {
+	Object.defineProperty(Array.prototype, "17", {
+		configurable: true,
+		get() {
+			this[0] = "changed";
+			this.length = 1;
+			if (typeof gc === "function") gc();
+			return "inherited";
+		},
+	});
+	const inherited = snapshotReads({ first: 1, second: 2 }, 17);
+	delete Array.prototype[17];
+	rows.push(inherited);
 	const original = Object.keys;
 	let calls = 0;
 	Object.keys = function (value) {
@@ -91,6 +164,8 @@ if (typeof process === "undefined" || process.env.MAL_PRIMORDIALS !== "locked") 
 		};
 	};
 	rows.push(count({ answer: 42 }), calls);
+	Object.keys = () => ["override", "keys"];
+	rows.push(traverse({}, unchanged));
 	Object.keys = original;
 }
 console.log(JSON.stringify(rows));

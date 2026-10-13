@@ -415,6 +415,9 @@ numeric sorting, stack objects, and string projections.
       unit coverage passes. Native memory verification and measurement are pending.
 - [ ] Enumeration snapshot traversal: consume a retained key snapshot without a
       general keys Array; preserve eager enumeration, key order, and mutation semantics.
+      Indexed traversal now retains up to 16 shaped-record keys in root slots, with
+      one cached Array materialization for out-of-range or coercing observations.
+      Focused unit checks pass; native memory verification and measurement are pending.
 - [ ] Broaden shared span consumers beyond length, equality, and numeric conversion;
       preserve method identity, UTF-16 behavior, and materialization at observers.
 - [ ] Complete broad verification and compiler-cost acceptance for this sequence;
