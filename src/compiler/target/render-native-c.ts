@@ -47,6 +47,7 @@ import type {
 import type { NativeCaptureAccessPlan } from "./lower-native-captures.ts";
 import {
 	numericLoopOrder,
+	numericLoopMathInstruction,
 	lowerNativeFastPaths,
 	numberRecordDataflow,
 	numberRecordOrder,
@@ -865,6 +866,23 @@ function emitNumericLoopRegion(
 	const statement = (ip: number, fixedF64: boolean): string => {
 		const op = fn.instructions[ip]!;
 		switch (op.opcode) {
+			case "CALL_KNOWN":
+			case "MATH_UNARY_NUMBER":
+			case "MATH_BINARY_NUMBER": {
+				const math = floating ? numericLoopMathInstruction(op) : undefined;
+				if (math === undefined) throw new Error("Invalid numeric loop Math operation");
+				const arguments_ = math.arguments.map((argument) =>
+					argument.kind === "number"
+						? cF64Literal(argument.value)
+						: local(argument.register),
+				);
+				const expression =
+					arguments_.length === 1
+						? nativeMathUnaryExpr(math.operation, arguments_[0]!)
+						: nativeMathBinaryExpr(math.operation, arguments_[0]!, arguments_[1]!);
+				if (expression === null) throw new Error("Invalid numeric loop Math expression");
+				return `${local(op.dst)} = ${expression};`;
+			}
 			case "LOAD_PROPERTY":
 				return fixedF64
 					? `${local(op.dst)} = mal_scalar_f64_from_bits(mal_scalar_load_native_u64(${id}_v${op.object}.data + (usize)(u32) ${local(op.key)} * 8));`
@@ -6457,6 +6475,19 @@ function emitInstruction(
 			guard += ` && mal_builtin_string_span_case(vm, ${locked ? "MAL_VALUE_UNDEFINED" : boxedOperand(instruction.callee)}, ${locked}, ${source}, ${prefix}_start, ${prefix}_end, ${role === "toUpperCaseCall"}, &${result})`;
 			projected = `${throwCheck()} r${instruction.dst} = ${callValue(instruction.dst, result)};`;
 		} else if (
+			role === "normalizeCall" &&
+			(instruction.opcode === "CALL" || instruction.opcode === "CALL_KNOWN")
+		) {
+			const result = `${prefix}_normalize_${ip}`;
+			declarations.push(`MalValue ${result};`);
+			const locked = instruction.opcode === "CALL_KNOWN";
+			const form =
+				instruction.arguments[0] === undefined
+					? "MAL_VALUE_UNDEFINED"
+					: boxedOperand(instruction.arguments[0]);
+			guard += ` && mal_builtin_string_span_normalize(vm, ${locked ? "MAL_VALUE_UNDEFINED" : boxedOperand(instruction.callee)}, ${locked}, ${source}, ${prefix}_start, ${prefix}_end, ${form}, &${result})`;
+			projected = `${throwCheck()} r${instruction.dst} = ${callValue(instruction.dst, result)};`;
+		} else if (
 			characterCall !== undefined &&
 			(instruction.opcode === "CALL" || instruction.opcode === "CALL_KNOWN")
 		) {
@@ -6548,6 +6579,7 @@ function emitInstruction(
 			role === "padEndCall" ||
 			role === "toLowerCaseCall" ||
 			role === "toUpperCaseCall" ||
+			role === "normalizeCall" ||
 			methodProperty !== undefined ||
 			characterCall !== undefined ||
 			searchCall !== undefined ||

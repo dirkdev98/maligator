@@ -42,6 +42,40 @@ const branching = `const part = value.slice(start, end); const length = part.len
 
 describe("composable string spans", () => {
 	it.each(["mutable", "locked"] as const)(
+		"normalizes ranges with dynamic forms and ignored argument effects under %s primordials",
+		(mode) => {
+			for (const args of [
+				"",
+				"undefined",
+				"'NFC'",
+				"'NFD'",
+				"'NFKC'",
+				"'NFKD'",
+				"observer",
+				"observer(),start,end,escape",
+			]) {
+				const image = compile(
+					`const part=value.slice(start,end);const result=part.normalize(${args});if(escape)observer(part);return result;`,
+					mode,
+				);
+				expect(spans(image)[0]?.consumers.map((c) => c.kind)).toContain("normalizeCall");
+				expect(deserializeCompilerArtifact(serializeCompilerArtifact(image))).toEqual(
+					image,
+				);
+			}
+			for (const args of ["part", "'NFC',part"]) {
+				const image = compile(
+					`const part=value.slice(start,end);return [part.length,part.normalize(${args})];`,
+					mode,
+				);
+				expect(spans(image).flatMap((r) => r.consumers.map((c) => c.kind))).not.toContain(
+					"normalizeCall",
+				);
+			}
+		},
+	);
+
+	it.each(["mutable", "locked"] as const)(
 		"converts retained ranges with ignored argument effects under %s primordials",
 		(mode) => {
 			for (const method of ["toLowerCase", "toUpperCase"]) {
@@ -127,6 +161,7 @@ describe("composable string spans", () => {
 		"padEndCall",
 		"toLowerCaseCall",
 		"toUpperCaseCall",
+		"normalizeCall",
 	] as const)("rejects a forged %s with another captured method", (kind) => {
 		const image = compile("const part=value.slice(start,end);return part.charAt(start);");
 		const owner = image.native.functions.find((fn) =>

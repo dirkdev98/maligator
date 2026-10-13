@@ -420,6 +420,11 @@ bool mal_builtin_string_span_case(
     bool upper, MalValue *out
 );
 MalValue mal_builtin_string_case_known(MalVm *vm, MalString *string, bool upper, MalUnicodeLocale locale);
+// Guard misses have no effects; admitted form conversion may re-enter, allocate or throw.
+bool mal_builtin_string_span_normalize(
+    MalVm *vm, MalValue callee, bool locked, MalValue subject, usize start, usize end,
+    MalValue form, MalValue *out
+);
 MalValue mal_builtin_string_normalize_known(MalVm *vm, MalString *string, bool compatibility, bool compose);
 
 MalValue mal_builtin_string_trim_known(MalVm *vm, MalString *string, bool start, bool end);

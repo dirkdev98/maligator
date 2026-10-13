@@ -1833,6 +1833,26 @@ static const c16 *mal_builtin_string_transform_input(
     return units;
 }
 
+static MalStringSegment mal_builtin_string_transform_range(
+    MalString *string, usize start, usize length,
+    c16 stack[MAL_STRING_TRANSFORM_STACK_UNITS], c16 **scratch
+) {
+    *scratch = nullptr;
+    // Preserve cached flattening for canonical whole-string callers.
+    if (start == 0 && length == mal_string_length(string)) return mal_string_flat_segment(string);
+    MalStringSegment segment;
+    if (mal_string_try_get_segment(string, start, length, &segment)) return segment;
+    c16 *units = stack;
+    if (length > MAL_STRING_TRANSFORM_STACK_UNITS) {
+        units = malloc(length * sizeof(c16));
+        if (units == nullptr) abort();
+        *scratch = units;
+    }
+    // Unicode context and composition cannot consume code units outside this range.
+    mal_string_copy_range_to(string, start, length, units);
+    return (MalStringSegment) {.latin1 = false, .utf16_units = units, .length = length};
+}
+
 static bool mal_builtin_string_segment_equals_units(
     const MalStringSegment *segment, const c16 *units, usize length
 ) {
@@ -1864,15 +1884,15 @@ static MalValue mal_builtin_string_unicode_result(MalVm *vm, MalString *source, 
     return result;
 }
 
-MalValue mal_builtin_string_normalize_known(MalVm *vm, MalString *string, bool compatibility, bool compose) {
-    // Latin-1 has neither combining marks nor canonical compositions or
-    // decompositions that NFC retains, so every Latin-1 string is already NFC.
-    if (string->latin1 && compose && !compatibility) return mal_value_from_string(string);
-    MalBuiltinRootedString root;
-    mal_builtin_string_root_init(&root, string);
-    MalStringSegment segment = mal_string_flat_segment(string);
-    string = mal_builtin_string_root_get(&root);
-    mal_builtin_string_root_dispose(&root);
+static MalValue mal_builtin_string_normalize_range_impl(
+    MalVm *vm, MalString *string, usize start, usize length, bool compatibility, bool compose
+) {
+    // Latin-1 has no canonical decomposition that NFC retains.
+    if (string->latin1 && compose && !compatibility)
+        return mal_builtin_string_slice(vm, string, start, length);
+    c16 stack[MAL_STRING_TRANSFORM_STACK_UNITS];
+    c16 *range_scratch;
+    MalStringSegment segment = mal_builtin_string_transform_range(string, start, length, stack, &range_scratch);
     bool ascii;
     if (segment.latin1) {
         u8 aggregate = 0;
@@ -1881,45 +1901,83 @@ MalValue mal_builtin_string_normalize_known(MalVm *vm, MalString *string, bool c
     } else {
         ascii = mal_builtin_string_ascii_units(segment.utf16_units, segment.length);
     }
-    if (ascii) return mal_value_from_string(string);
-    c16 stack[MAL_STRING_TRANSFORM_STACK_UNITS];
-    c16 *scratch;
-    const c16 *source = mal_builtin_string_transform_input(&segment, stack, &scratch);
+    if (ascii || (segment.latin1 && compose && !compatibility)) {
+        free(range_scratch);
+        return mal_builtin_string_slice(vm, string, start, length);
+    }
+    c16 *wide_scratch;
+    const c16 *source = mal_builtin_string_transform_input(&segment, stack, &wide_scratch);
     c16 *output = nullptr;
-    usize length = 0;
-    MalUnicodeStatus status = mal_unicode_normalize(source, segment.length, compatibility, compose, &output, &length);
-    free(scratch);
-    return mal_builtin_string_unicode_result(vm, string, 0, &segment, status, output, length, false);
+    usize output_length = 0;
+    MalUnicodeStatus status = mal_unicode_normalize(source, length, compatibility, compose, &output, &output_length);
+    MalValue result = mal_builtin_string_unicode_result(vm, string, start, &segment, status, output, output_length, false);
+    free(wide_scratch);
+    free(range_scratch);
+    return result;
+}
+
+MalValue mal_builtin_string_normalize_known(MalVm *vm, MalString *string, bool compatibility, bool compose) {
+    MalBuiltinRootedString root;
+    mal_builtin_string_root_init(&root, string);
+    MalValue result = mal_builtin_string_normalize_range_impl(vm, string, 0, mal_string_length(string), compatibility, compose);
+    mal_builtin_string_root_dispose(&root);
+    return result;
+}
+
+static bool mal_builtin_string_normalize_form(MalVm *vm, MalValue value, bool *compatibility, bool *compose) {
+    *compatibility = false;
+    *compose = true;
+    if (mal_value_is_undefined(value)) return true;
+    MalString *form;
+    if (!mal_vm_to_string(vm, value, &form)) return false;
+    usize length = mal_string_length(form);
+    c16 units[4] = {0};
+    if (length == 3 || length == 4) mal_string_copy_range_to(form, 0, length, units);
+    bool valid = (length == 3 && units[0] == 'N' && units[1] == 'F' && (units[2] == 'C' || units[2] == 'D')) ||
+        (length == 4 && units[0] == 'N' && units[1] == 'F' && units[2] == 'K' && (units[3] == 'C' || units[3] == 'D'));
+    if (!valid) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "The normalization form should be one of NFC, NFD, NFKC, NFKD");
+        return false;
+    }
+    *compatibility = length == 4;
+    *compose = units[length - 1] == 'C';
+    return true;
+}
+
+static MalValue mal_builtin_string_normalize_range(
+    MalVm *vm, MalString *string, usize start, usize length, MalValue form
+) {
+    MalValue roots[2] = {mal_value_from_string(string), form};
+    MalRootSpan span;
+    mal_gc_root(&span, roots, 2);
+    bool compatibility, compose;
+    MalValue result = MAL_VALUE_UNDEFINED;
+    if (mal_builtin_string_normalize_form(vm, roots[1], &compatibility, &compose))
+        result = mal_builtin_string_normalize_range_impl(vm, mal_value_to_string(roots[0]), start, length, compatibility, compose);
+    mal_gc_unroot(&span);
+    return result;
 }
 
 static MalValue mal_builtin_string_prototype_normalize(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     MalString *string = mal_builtin_string_this_to_string(vm, this_value);
     if (vm->completion.kind == MAL_COMPLETION_THROW) return mal_value_new_undefined();
-    MalBuiltinRootedString root;
-    mal_builtin_string_root_init(&root, string);
-    bool compatibility = false, compose = true;
-    if (arg_count >= 1 && !mal_value_is_undefined(args[0])) {
-        MalString *form;
-        if (!mal_vm_to_string(vm, args[0], &form)) {
-            mal_builtin_string_root_dispose(&root);
-            return mal_value_new_undefined();
-        }
-        usize length = mal_string_length(form);
-        c16 units[4] = {0};
-        if (length == 3 || length == 4) mal_string_copy_range_to(form, 0, length, units);
-        bool valid = (length == 3 && units[0] == 'N' && units[1] == 'F' && (units[2] == 'C' || units[2] == 'D')) ||
-            (length == 4 && units[0] == 'N' && units[1] == 'F' && units[2] == 'K' && (units[3] == 'C' || units[3] == 'D'));
-        if (!valid) {
-            mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "The normalization form should be one of NFC, NFD, NFKC, NFKD");
-            mal_builtin_string_root_dispose(&root);
-            return mal_value_new_undefined();
-        }
-        compatibility = length == 4;
-        compose = units[length - 1] == 'C';
-    }
-    MalValue result = mal_builtin_string_normalize_known(vm, mal_builtin_string_root_get(&root), compatibility, compose);
-    mal_builtin_string_root_dispose(&root);
-    return result;
+    return mal_builtin_string_normalize_range(vm, string, 0, mal_string_length(string), arg_count > 0 ? args[0] : MAL_VALUE_UNDEFINED);
+}
+
+bool mal_builtin_string_span_normalize(
+    MalVm *vm, MalValue callee, bool locked, MalValue subject, usize start, usize end,
+    MalValue form, MalValue *out
+) {
+    if (!locked && (!mal_value_is_native_function_object(callee) ||
+        mal_native_function_object_callback(mal_value_to_native_function_object(callee)) != mal_builtin_string_prototype_normalize)) return false;
+#if MAL_REALMS
+    if (!locked && mal_vm_callee_realm(vm, callee) != vm->current_realm) return false;
+#endif
+    if (!mal_value_is_string(subject) || start > end ||
+        end > mal_string_length(mal_value_to_string(subject))) return false;
+    MAL_PERF_COUNT(string_span_normalize_calls);
+    *out = mal_builtin_string_normalize_range(vm, mal_value_to_string(subject), start, end - start, form);
+    return true;
 }
 
 bool mal_builtin_string_concat_direct(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue *result) {
@@ -2609,37 +2667,16 @@ static MalValue mal_builtin_string_case_range_impl(MalVm *vm, MalString *string,
         if (mal_builtin_string_latin1_upper_expanding(vm, string, start, length, &expanded)) return expanded;
     }
     if (!mappable) {
-        MalStringSegment segment;
         c16 stack[MAL_STRING_TRANSFORM_STACK_UNITS];
-        c16 *scratch = nullptr;
-        const c16 *source;
-        bool contiguous;
-        if (start == 0 && length == mal_string_length(string)) {
-            // Preserve cached flattening for canonical whole-string callers.
-            segment = mal_string_flat_segment(string);
-            contiguous = true;
-        } else {
-            contiguous = mal_string_try_get_segment(string, start, length, &segment);
-        }
-        if (contiguous) {
-            source = mal_builtin_string_transform_input(&segment, stack, &scratch);
-        } else {
-            c16 *units = stack;
-            if (length > MAL_STRING_TRANSFORM_STACK_UNITS) {
-                units = malloc(length * sizeof(c16));
-                if (units == nullptr) abort();
-                scratch = units;
-            }
-            // Unicode context, including final sigma, must stop at both span boundaries.
-            mal_string_copy_range_to(string, start, length, units);
-            segment = (MalStringSegment) {.latin1 = false, .utf16_units = units, .length = length};
-            source = units;
-        }
+        c16 *range_scratch, *wide_scratch;
+        MalStringSegment segment = mal_builtin_string_transform_range(string, start, length, stack, &range_scratch);
+        const c16 *source = mal_builtin_string_transform_input(&segment, stack, &wide_scratch);
         c16 *output = nullptr;
         usize output_length = 0;
         MalUnicodeStatus status = mal_unicode_case(source, length, to_upper, locale, &output, &output_length);
         MalValue result = mal_builtin_string_unicode_result(vm, string, start, &segment, status, output, output_length, true);
-        free(scratch);
+        free(wide_scratch);
+        free(range_scratch);
         return result;
     }
     if (!changed) {

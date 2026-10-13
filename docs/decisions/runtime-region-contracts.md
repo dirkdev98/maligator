@@ -51,6 +51,9 @@ Case conversion bounds both its Latin-1 scans and Unicode context to the span,
 including final-sigma decisions at either boundary. A changed output uses the
 canonical builder; unchanged output materializes only the final range. Whole-string
 callers retain cached flattening, while partial ropes copy only the required range.
+Normalization shares this bounded input preparation and canonical Unicode builder.
+The source and form stay rooted through form coercion; validation occurs before
+empty or already-normalized shortcuts, and an admitted exception never replays.
 
 Enumeration snapshots retain the sequence produced by the original operation.
 Keys can be counted without loading values; values must be copied eagerly into
@@ -91,6 +94,10 @@ Fixed TypedArray regions preserve memory-operation order for overlapping views.
 Read-only reductions retain the same storage guards without requiring writable
 buffers. Every view contributes its complete visited index window, including all
 interleaved lanes; the region preserves each numeric operation and storage rounding.
+Proven Math builtin identities reuse their canonical numeric bodies inside fixed
+storage regions. Admission guards every consumed argument as a Number before any
+memory operation; these bodies cannot invoke user code or collect. Mutable method
+lookups and argument effects retain their original execution path.
 Their induction update proves the stride; admission covers the visited index
 windows. Polling publishes completed-iteration state before resumption. Fresh Array
 plans use the shared builder's root and publication contract: only effect-free

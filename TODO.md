@@ -969,6 +969,18 @@ The shared lifetime and fallback rules are recorded in
       modes and five actual frontend/artifact/C captures pass. Native and performance
       verification remain pending.
 
+- [ ] Retain fixed TypedArray storage across certified Math unary and binary bodies.
+      Guard consumed numeric inputs before memory operations and reuse canonical
+      signed-zero, NaN and rounding semantics without per-call transport. Mutable
+      lookups, coercion and ignored-argument effects preserve their original path.
+      All111 loop contracts, eighteen Node GC modes and four frontend/artifact/C
+      captures pass. Native and performance verification remain pending.
+- [ ] Normalize retained range, split, capture and nested spans through the shared
+      canonical Unicode builder, preserving form coercion, invalid-form errors,
+      source roots and bounded normalization context. All237 focused checks, eleven
+      Node GC modes, six frontend/artifact/C captures and four runtime C syntax
+      configurations pass. Native and performance verification remain pending.
+
 | Order | Slice                        | Owning work and exit condition                                                                                                                                  |
 | ----- | ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 1     | Callback invocation          | The tasks above; remove measured repeated invocation work for a numeric reduction with captures.                                                                |

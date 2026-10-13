@@ -31,7 +31,11 @@ import {
 	vmInstructionUsesRegister,
 	vmInstructionWriteRegisters,
 } from "./runtime-image.ts";
-import type { BytecodeFunction, BytecodeInstruction } from "./runtime-image.ts";
+import type {
+	BytecodeFunction,
+	BytecodeInstruction,
+	DecodedVmValueOperand,
+} from "./runtime-image.ts";
 
 type StaticPropertyLoad = Extract<
 	BytecodeInstruction,
@@ -1107,6 +1111,18 @@ export function numberRecordDataflow(
 		};
 		let admitted: boolean;
 		switch (instruction.opcode) {
+			case "CALL_KNOWN":
+			case "MATH_UNARY_NUMBER":
+			case "MATH_BINARY_NUMBER": {
+				const math = indexed ? numericLoopMathInstruction(instruction) : undefined;
+				admitted =
+					math !== undefined &&
+					math.arguments.every(
+						(argument) => argument.kind === "number" || read(argument.register, "number"),
+					) &&
+					write(instruction.dst, "number");
+				break;
+			}
 			case "LOAD_PROPERTY":
 				admitted =
 					indexed && read(instruction.key, "number") && write(instruction.dst, "number");
@@ -1617,6 +1633,50 @@ function numericLoopIndexFacts(
 	return { offsets, increments };
 }
 
+/** Only proven builtin identities whose numeric bodies cannot call user code or collect. */
+export function numericLoopMathInstruction(instruction: BytecodeInstruction):
+	| {
+			readonly operation: string;
+			readonly arguments: ReadonlyArray<
+				Extract<DecodedVmValueOperand, { kind: "register" | "number" }>
+			>;
+	  }
+	| undefined {
+	if (instruction.opcode === "MATH_UNARY_NUMBER")
+		return {
+			operation: instruction.operation,
+			arguments: [{ kind: "register", register: instruction.src }],
+		};
+	if (instruction.opcode === "MATH_BINARY_NUMBER")
+		return {
+			operation: instruction.operation,
+			arguments: [
+				{ kind: "register", register: instruction.left },
+				{ kind: "register", register: instruction.right },
+			],
+		};
+	if (
+		instruction.opcode !== "CALL_KNOWN" ||
+		instruction.construct ||
+		instruction.argumentMode !== undefined ||
+		instruction.specialized !== undefined
+	)
+		return undefined;
+	const arity = MATH_UNARY_NATIVE_CALL.has(instruction.operation)
+		? 1
+		: MATH_BINARY_OPERATIONS.has(instruction.operation) &&
+			  instruction.arguments.length === 2
+			? 2
+			: undefined;
+	if (arity === undefined || instruction.arguments.length < arity) return undefined;
+	const arguments_ = instruction.arguments.slice(0, arity).map(decodeVmValueOperand);
+	return arguments_.every(
+		(argument) => argument.kind === "register" || argument.kind === "number",
+	)
+		? { operation: instruction.operation, arguments: arguments_ }
+		: undefined;
+}
+
 function fixedNumericLoopStorage(
 	fn: BytecodeFunction,
 	shape: NativeNumericLoopShape,
@@ -1730,7 +1790,8 @@ function fixedNumericLoopStorage(
 		if (
 			(op.opcode !== "CREATE_NUMBER" &&
 				op.opcode !== "CREATE_F64" &&
-				!integerLoopInstruction(op)) ||
+				!integerLoopInstruction(op) &&
+				numericLoopMathInstruction(op) === undefined) ||
 			vmInstructionReadRegisters(op).some((register) => views.has(register))
 		)
 			return undefined;
@@ -2799,7 +2860,11 @@ export function selectNativeFastPaths(
 						// Operand kind proofs refine the double lowering; the region replaces it.
 						(kind !== undefined &&
 							kind !== "exact-operator-input-kinds" &&
-							kind !== "unsigned-arithmetic")
+							kind !== "unsigned-arithmetic" &&
+							!(
+								kind === "exact-builtin-input-kinds" &&
+								numericLoopMathInstruction(fn.instructions[candidate]!) !== undefined
+							))
 					);
 				},
 			);

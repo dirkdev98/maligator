@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
+import { resolveBuildConfig } from "../src/build-config.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
 import { compileSemanticProgramToProgramImage } from "../src/compiler/pipeline/compile-core.ts";
+import { compilerProgramFactsFromConfig } from "../src/compiler/shared/compiler-facts.ts";
 import {
 	serializeCompilerArtifact,
 	deserializeCompilerArtifact,
@@ -9,17 +11,106 @@ import { selectNativeFastPaths } from "../src/compiler/target/lower-native-fast-
 import type { NativeNumericLoopRegionPlan } from "../src/compiler/target/lower-native-fast-paths.ts";
 import { emitCompiledFunction } from "../src/compiler/target/render-native-c.ts";
 import type { BytecodeInstruction } from "../src/compiler/target/runtime-image.ts";
+import {
+	decodeVmValueOperand,
+	VM_MATH_UNARY_NUMBER_OPERATIONS,
+} from "../src/compiler/target/runtime-image.ts";
 
-function compile(body: string, parameters = "left,right,output,count,hook") {
+function compile(
+	body: string,
+	parameters = "left,right,output,count,hook",
+	primordials: "mutable" | "locked" = "mutable",
+) {
 	return compileSemanticProgramToProgramImage(
 		analyzeSourceAndRunSemanticAnalysis(
 			`globalThis.kernel=function(${parameters}){${body}};`,
 			"/typed-loop.js",
 		),
+		{
+			facts: compilerProgramFactsFromConfig(
+				resolveBuildConfig({ engine: { primordials } }),
+			),
+		},
 	);
 }
 const body = "for(let i=0;i<count;i++){output[i]=left[i]+right[i];}return output;";
 describe("fixed TypedArray loop storage", () => {
+	it.each(VM_MATH_UNARY_NUMBER_OPERATIONS)(
+		"carries numeric storage across the certified %s body",
+		(operation) => {
+			const image = compile(
+				`for(let i=0;i<count;i++)output[i]=${operation}(left[i]);return output;`,
+				undefined,
+				"locked",
+			);
+			const native = image.native.functions[1]!;
+			const [plan] = native.storage!.numericLoopRegions;
+			expect(plan?.kind).toBe("fixed-numeric");
+			expect(
+				plan!.claimedIps.some(
+					(ip) => native.body.instructions[ip]!.opcode === "CALL_KNOWN",
+				),
+			).toBe(true);
+			expect(
+				serializeCompilerArtifact(
+					deserializeCompilerArtifact(serializeCompilerArtifact(image)),
+				),
+			).toEqual(serializeCompilerArtifact(image));
+			expect(emitCompiledFunction(native, 1, "", false)).not.toBeNull();
+		},
+	);
+	it.each([
+		"Math.sqrt(+left[i])",
+		"Math.min(+left[i],+right[i])",
+		"Math.max(left[i],right[i])",
+		"Math.min(left[i],3)",
+		"Math.abs(left[i],hook)",
+	])(
+		"retains primitive Math operations, literals and ignored operands: %s",
+		(expression) => {
+			const image = compile(
+				`for(let i=0;i<count;i++)output[i]=${expression};return output;`,
+				undefined,
+				"locked",
+			);
+			const native = image.native.functions[1]!;
+			expect(native.storage!.numericLoopRegions[0]?.kind).toBe("fixed-numeric");
+			expect(emitCompiledFunction(native, 1, "", false)).not.toBeNull();
+		},
+	);
+	it.each(["Math.abs(left[i])", "Math.min(left[i],right[i])", "hook(left[i])"])(
+		"retains mutable callee lookup and effects outside storage: %s",
+		(expression) => {
+			expect(
+				compile(`for(let i=0;i<count;i++)output[i]=${expression};`).native.functions[1]!
+					.storage!.numericLoopRegions,
+			).toEqual([]);
+		},
+	);
+	it.each([
+		"Math.abs(left[i],hook())",
+		"new Math.abs(left[i])",
+		"Math.abs(...left)",
+		"Math.min(left[i],hook)",
+	])("does not erase possible effects or nonnumeric operands: %s", (expression) => {
+		const image = compile(
+			`for(let i=0;i<count;i++)output[i]=${expression};`,
+			"left,right,output,count,hook",
+			"locked",
+		);
+		if (expression === "Math.min(left[i],hook)") {
+			const native = image.native.functions[1]!;
+			const plan = native.storage!.numericLoopRegions[0];
+			expect(plan?.kind).toBe("fixed-numeric");
+			const call = native.body.instructions.find(
+				(op) => op.opcode === "CALL_KNOWN" && op.operation === "Math.min",
+			);
+			if (call?.opcode !== "CALL_KNOWN") throw new Error("Missing numeric builtin call");
+			const input = decodeVmValueOperand(call.arguments[1]!);
+			if (input.kind !== "register") throw new Error("Missing dynamic numeric input");
+			expect(plan!.inputs).toContain(input.register);
+		} else expect(image.native.functions[1]!.storage!.numericLoopRegions).toEqual([]);
+	});
 	it.each([
 		["let total=0;for(let i=0;i<count;i++)total+=left[i];return total;", 1],
 		["let total=0;for(let i=0;i<count;i++)total+=left[i]*right[i];return total;", 2],

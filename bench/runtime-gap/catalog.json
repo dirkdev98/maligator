@@ -6201,6 +6201,32 @@
 			"sourceSeam": "runtime/src/builtin_string.c",
 			"fixture": "cases/string-span-case.mjs",
 			"controls": ["string-span-pad", "string-span-classify"]
+		},
+		{
+			"id": "typed-array-math-regions",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "Fixed TypedArray regions",
+			"category": "memory-layout-usage",
+			"mechanisms": ["fixed-typed-array-storage", "numeric-builtin-bodies"],
+			"inputShape": "Locked numeric Math rounding, clamping and absolute reductions retain Float64 and Float32 storage.",
+			"unit": "element",
+			"sourceSeam": "src/compiler/target/lower-native-fast-paths.ts",
+			"fixture": "cases/typed-array-math-regions.mjs",
+			"controls": ["typed-array-reduction-regions"]
+		},
+		{
+			"id": "string-span-normalize",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "Composable string spans",
+			"category": "memory-layout-usage",
+			"mechanisms": ["string-spans", "delayed-materialization"],
+			"inputShape": "Unicode normalization from retained range, split, capture and nested spans, including dynamic normalization forms.",
+			"unit": "token",
+			"sourceSeam": "runtime/src/builtin_string.c",
+			"fixture": "cases/string-span-normalize.mjs",
+			"controls": ["string-span-case", "string-span-classify"]
 		}
 	]
 }

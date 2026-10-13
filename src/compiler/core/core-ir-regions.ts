@@ -183,6 +183,7 @@ export const CORE_STRING_SPAN_SEARCH_METHODS = [
 ] as const;
 
 export const CORE_STRING_SPAN_METHODS = [
+	"normalize",
 	"toLowerCase",
 	"toUpperCase",
 	"repeat",
@@ -195,7 +196,8 @@ export const CORE_STRING_SPAN_METHODS = [
 export function coreStringSpanMethodArgumentLimit(
 	method: (typeof CORE_STRING_SPAN_METHODS)[number],
 ): number {
-	if (method === "toLowerCase" || method === "toUpperCase") return Infinity;
+	if (method === "toLowerCase" || method === "toUpperCase" || method === "normalize")
+		return Infinity;
 	return method === "padStart" ||
 		method === "padEnd" ||
 		CORE_STRING_SPAN_SEARCH_METHODS.some((name) => name === method)
@@ -224,6 +226,8 @@ export interface CoreStringSpanConsumer {
 		| "toLowerCaseCall"
 		| "toUpperCaseProperty"
 		| "toUpperCaseCall"
+		| "normalizeProperty"
+		| "normalizeCall"
 		| "charCodeAtProperty"
 		| "charCodeAtCall"
 		| "codePointAtProperty"
