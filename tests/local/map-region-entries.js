@@ -126,8 +126,198 @@ function runCase(kind) {
 	];
 	return update(map, 3, kind % 2 ? 3 : 7, mutations[kind >> 1]);
 }
+function updateAcrossControl(map, firstKey, secondKey, mutate, branch) {
+	let first = "unread-first",
+		second = "unread-second";
+	try {
+		first = map.get(firstKey);
+		second = map.get(secondKey);
+		if (branch) mutate(map);
+		else collectGarbage();
+	} catch (error) {
+		check(error && error.message === "lookup", "original completion");
+		collectGarbage();
+	}
+	const firstResult = map.set(firstKey, { previous: first });
+	const secondResult = map.set(secondKey, { previous: second });
+	return [first, second, firstResult === map, secondResult === map];
+}
+
+function updateLoopHints(maps, keys, skip, mutate) {
+	const rows = [];
+	for (let index = 0; index < maps.length; index++) {
+		const map = maps[index],
+			firstKey = keys[index][0],
+			secondKey = keys[index][1];
+		let first = -1,
+			second = -2;
+		if (!skip[index]) {
+			first = map.get(firstKey);
+			second = map.get(secondKey);
+		}
+		mutate(map, index);
+		map.set(firstKey, first + 1);
+		map.set(secondKey, second + 2);
+		rows.push([map.get(firstKey), map.get(secondKey), map.size]);
+	}
+	return rows;
+}
+
+function controlFlow() {
+	const rows = [];
+	const firstKey = Symbol("first"),
+		secondKey = {};
+	for (let mutation = 0; mutation < 5; mutation++) {
+		const map = new Map([
+			[firstKey, 10],
+			[secondKey, 20],
+		]);
+		rows.push(
+			updateAcrossControl(
+				map,
+				firstKey,
+				secondKey,
+				(target) => {
+					if (mutation === 1) target.delete(firstKey);
+					if (mutation === 2) {
+						target.clear();
+						target.set(secondKey, 80);
+						target.set(firstKey, 90);
+					}
+					if (mutation === 3) {
+						for (let key = 0; key < 100; key++) target.set(key, key);
+						for (let key = 0; key < 95; key++) target.delete(key);
+					}
+					if (mutation === 4) {
+						const inner = new Map([
+							[firstKey, 30],
+							[secondKey, 40],
+						]);
+						const nested = updateAcrossControl(inner, firstKey, secondKey, noop, false);
+						check(nested[0] === 30 && nested[1] === 40, "reentrant activation");
+						throw new Error("lookup");
+					}
+					collectGarbage();
+				},
+				true,
+			),
+		);
+		check(
+			map.get(firstKey).previous === 10 && map.get(secondKey).previous === 20,
+			"handler values",
+		);
+	}
+	let reads = 0;
+	const throwing = new Map([
+		[firstKey, 10],
+		[secondKey, 20],
+	]);
+	Object.defineProperty(throwing, "get", {
+		value(key) {
+			if (++reads === 2) throw new Error("lookup");
+			collectGarbage();
+			return Map.prototype.get.call(this, key);
+		},
+	});
+	rows.push(updateAcrossControl(throwing, firstKey, secondKey, noop, false), reads);
+	check(
+		Map.prototype.get.call(throwing, secondKey).previous === "unread-second",
+		"throw preserves destination",
+	);
+	const maps = [
+		new Map(),
+		new Map([
+			["a", 10],
+			["b", 20],
+		]),
+		new Map([
+			["a", 30],
+			["b", 40],
+		]),
+		new Map([
+			["c", 30],
+			["d", 40],
+		]),
+		new Map([
+			["z", 50],
+			["b", 60],
+		]),
+		new Map([
+			["a", 30],
+			["b", 40],
+		]),
+		new Map([
+			["b", 70],
+			["a", 80],
+		]),
+	];
+	let genericReads = 0;
+	Object.defineProperty(maps[5], "get", {
+		value() {
+			genericReads++;
+			return 77;
+		},
+	});
+	rows.push(
+		updateLoopHints(
+			maps,
+			[
+				["a", "b"],
+				["a", "b"],
+				["a", "b"],
+				["c", "d"],
+				["a", "b"],
+				["a", "b"],
+				["a", "b"],
+			],
+			[true, false, true, true, true, false, false],
+			(map, index) => {
+				if (index === 6) {
+					map.clear();
+					map.set("a", 90);
+					map.set("b", 100);
+				}
+				collectGarbage();
+			},
+		),
+	);
+	check(
+		genericReads === 4 &&
+			Map.prototype.get.call(maps[5], "a") === 78 &&
+			Map.prototype.get.call(maps[5], "b") === 79,
+		"generic result with prior hint",
+	);
+	const fake = {
+		get() {
+			return 7;
+		},
+		set(key, value) {
+			this[key] = value;
+			return 42;
+		},
+	};
+	rows.push(updateAcrossControl(fake, "a", "b", noop, false));
+	const marker = { label: "setter" };
+	let sets = 0;
+	Object.defineProperty(fake, "set", {
+		value() {
+			sets++;
+			throw marker;
+		},
+	});
+	try {
+		updateAcrossControl(fake, "a", "b", noop, false);
+		throw new Error("missed throw");
+	} catch (error) {
+		check(error === marker && sets === 1, "setter abrupt without replay");
+	}
+	return rows;
+}
+
 const mode = globalThis.process?.env.MAL_MAP_REGION_MODE;
-if (mode === "references" || mode === "handler") {
+if (mode === "control") {
+	console.log(JSON.stringify(controlFlow()));
+} else if (mode === "references" || mode === "handler") {
 	console.log(mode, references(mode === "handler"));
 } else {
 	const rows = Array.from({ length: 12 }, (_, i) => i).map(runCase);

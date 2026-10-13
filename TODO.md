@@ -668,7 +668,7 @@ The shared lifetime and fallback rules are recorded in
 - [ ] Admit fresh Array regions inside handler-bearing functions when their local
       allocation and initialization range has one exception target and no external
       entry. Accept immutable BigInt literals through the existing rooted builder;
-      continue declining effectful initializers and protected-range crossings.
+      the prepared mode continues declining protected-range crossings.
       Implemented with the existing local body facts and GC-free constant loads.
       All 195 focused checks, Node oracles, four actual bundled programs, byte-identical
       artifact roundtrips, and emitted C syntax checks pass. All four expanded Linux
@@ -750,7 +750,9 @@ The shared lifetime and fallback rules are recorded in
       identity, and synthesize Array length in the correct own-key order. Reuse
       cached result materialization and captured-builtin realm fallback. Implemented
       for ordinary objects and Arrays with bounded rooted storage; focused compiler,
-      Node oracle and frontend/artifact/C checks pass. Native and measurement pending.
+      Node oracle and frontend/artifact/C checks pass. Realm sanitizer coverage passes;
+      two materialization fixture failures are repaired after tracing inlining into
+      a protected range and a locked-prototype mutation. Rerun and measurement pending.
 - [ ] Extend enumeration snapshots to Object.entries with eager key/value capture
       and lazy pair arrays. Reuse sixteen rooted slots for up to eight entries;
       first observation caches each pair, and outer materialization reuses those
@@ -871,13 +873,27 @@ The shared lifetime and fallback rules are recorded in
       and runtime/driver C syntax checks pass. All five Linux ASan/UBSan cases pass,
       including both backend boundary drivers, awaited close and realm coverage.
 
+- [ ] Reserve fresh Array capacity across effectful initializer calls and getters,
+      preserving each evaluation and store position. The incremental mode supports
+      up to128 values without a temporary C value array; retained roots and per-store
+      cards preserve collecting initializer results. Reject escaped aliases, control
+      entries and protected allocations whose handlers could observe partial length.
+      Focused compiler contracts, Node GC oracles and four artifact/C captures pass;
+      native sanitizer and performance evidence remain pending.
+- [ ] Keep revalidated Map entry indices across branches, protected control flow and
+      loop iterations. Nomination uses bounded CFG reachability; current storage,
+      live entry and canonical key checks remain authoritative at every update.
+      All71 focused contracts, eight Node GC oracles and four frontend/artifact/C
+      captures pass; native sanitizer and performance evidence remain pending.
+
 - [ ] Widen count-only enumeration to all five keys, values, entries, own-names and
       own-symbol methods without allocating bounded snapshot slots. Ordinary data
       records and Arrays can exceed previous element limits; primitives reuse their
       exact own-key counts. Accessors, proxies and other exotics preserve original
       eager observations through fallback. A Symbol-only property iterator skips
       unrelated keys and supplies exact fresh-result capacity to getOwnPropertySymbols.
-      Focused unit, Node and frontend/artifact/C checks pass; native and measurement pending.
+      Focused unit, Node and frontend/artifact/C checks pass; both count sanitizer cases pass.
+      Final batch collection and measurement remain pending.
 - [ ] Compose trimLeft and trimRight aliases through existing trim range kernels,
       and admit ignored extra trim arguments while retaining their evaluation and
       effects. Existing method identity, UTF-16, source roots and cached escapes

@@ -97,7 +97,7 @@ import type {
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal artifacts are hard cut-overs: stale cache entries rebuild.
-export const COMPILER_ARTIFACT_VERSION = 224;
+export const COMPILER_ARTIFACT_VERSION = 225;
 
 function validateClosureCaptureOwners(
 	owners: ReadonlyArray<number>,
@@ -1073,6 +1073,7 @@ function writeNativeStorage(w: Writer, storage: NativeStoragePlan | undefined): 
 	w.u32(storage.arrayInitializations.length);
 	for (const plan of storage.arrayInitializations) {
 		w.i32(plan.allocationIp);
+		w.u8(plan.mode === "prepared" ? 0 : 1);
 		w.i32Array([...plan.stores]);
 		w.i32Array([...plan.values]);
 		w.i32Array([...plan.claimedIps]);
@@ -1620,13 +1621,19 @@ function readNativeStorage(r: Reader): NativeStoragePlan {
 			}),
 		};
 	});
-	const arrayInitializations = Array.from({ length: r.count(20) }, () => ({
-		allocationIp: r.i32(),
-		stores: r.i32Array(),
-		values: r.i32Array(),
-		claimedIps: r.i32Array(),
-		borrowedRegisters: r.i32Array(),
-	}));
+	const arrayInitializations = Array.from({ length: r.count(21) }, () => {
+		const allocationIp = r.i32();
+		const mode = (["prepared", "incremental"] as const)[r.u8()];
+		if (mode === undefined) throw new RangeError("Invalid Array initialization mode");
+		return {
+			allocationIp,
+			mode,
+			stores: r.i32Array(),
+			values: r.i32Array(),
+			claimedIps: r.i32Array(),
+			borrowedRegisters: r.i32Array(),
+		};
+	});
 	const mapEntries = Array.from({ length: r.count(16) }, () => ({
 		getIp: r.i32(),
 		setIp: r.i32(),

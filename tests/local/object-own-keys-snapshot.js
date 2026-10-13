@@ -11,6 +11,8 @@ function symbols(record, index, observe) {
 	observe(record);
 	return [snapshot.length, snapshot[0], snapshot[index], snapshot[0], snapshot.length];
 }
+globalThis.inspectOwnNames = names;
+globalThis.inspectOwnSymbols = symbols;
 function unchanged() {
 	collectGarbage?.();
 }
@@ -82,38 +84,46 @@ if (mode === "names" || mode === "symbols") {
 			mode === "names" ? names(empty, 0, unchanged) : symbols(empty, 0, unchanged),
 		);
 } else if (mode === "materialize") {
+	const mutable = process.env.MAL_PRIMORDIALS !== "locked";
 	let receiver;
-	Object.defineProperty(Array.prototype, "inspectSnapshot", {
-		configurable: true,
-		get() {
-			receiver = this;
-			this[0] = "changed";
-			this.length = 1;
-			collectGarbage?.();
-			return this;
-		},
-	});
+	function checkMaterialization(row) {
+		if (mutable) return row[2] === receiver && row[3] === "changed" && row[4] === 1;
+		return row[2] === row[1] && row[3] === row[1] && row[4] === row[0];
+	}
+	if (mutable)
+		Object.defineProperty(Array.prototype, "inspectSnapshot", {
+			configurable: true,
+			get() {
+				receiver = this;
+				this[0] = "changed";
+				this.length = 1;
+				collectGarbage?.();
+				return this;
+			},
+		});
 	try {
+		let conversions = 0;
 		const key = {
 			toString() {
+				conversions++;
 				collectGarbage?.();
-				return "inspectSnapshot";
+				return mutable ? "inspectSnapshot" : "0";
 			},
 		};
 		for (const record of inputs()) {
-			const first = names(record, key, mutate);
-			if (first[2] !== receiver || first[3] !== "changed" || first[4] !== 1)
-				throw new Error("names materialization identity");
+			const first = globalThis.inspectOwnNames(record, key, mutate);
+			if (!checkMaterialization(first)) throw new Error("names materialization identity");
 			rows.push(first);
 		}
 		for (const record of inputs()) {
-			const second = symbols(record, key, mutate);
-			if (second[2] !== receiver || second[3] !== "changed" || second[4] !== 1)
+			const second = globalThis.inspectOwnSymbols(record, key, mutate);
+			if (!checkMaterialization(second))
 				throw new Error("symbols materialization identity");
 			rows.push(second);
 		}
+		if (conversions !== 14) throw new Error("key conversions replayed");
 	} finally {
-		delete Array.prototype.inspectSnapshot;
+		if (mutable) delete Array.prototype.inspectSnapshot;
 	}
 } else if (mode === "fallback") {
 	const events = [];

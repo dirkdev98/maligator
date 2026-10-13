@@ -8,6 +8,7 @@ import {
 	buildBackendPairFromOneProgramImage,
 	HOST_MAIN,
 	runToStdout,
+	resolveHarnessExecutionInvocation,
 	STRESS_ENV,
 } from "../../src/test-harness.ts";
 
@@ -17,7 +18,7 @@ afterAll(() => rmSync(outDir, { recursive: true, force: true }));
 
 describe("region-local Map entries", () => {
 	it.each(["mutable", "locked"] as const)(
-		"preserves keys, reference values, GC and mutations across unprotected regions under %s primordials",
+		"preserves keys, reference values, GC and mutations across branches, handlers and loop generations under %s primordials",
 		(primordials) => {
 			const pair = buildBackendPairFromOneProgramImage({
 				fixture,
@@ -35,7 +36,12 @@ describe("region-local Map entries", () => {
 					(fn) => fn.storage!.mapEntries.length > 0,
 				),
 			).toBe(true);
-			for (const name of ["updateReferences", "updateAfterHandler"]) {
+			for (const name of [
+				"updateReferences",
+				"updateAfterHandler",
+				"updateAcrossControl",
+				"updateLoopHints",
+			]) {
 				const fn = pair.programImage.native.functions.find(
 					(fn) =>
 						String.fromCharCode(
@@ -44,10 +50,10 @@ describe("region-local Map entries", () => {
 						) === name,
 				)!;
 				expect(fn.storage!.mapEntries.length, name).toBeGreaterThan(0);
-				if (name === "updateAfterHandler")
+				if (name === "updateAfterHandler" || name === "updateAcrossControl")
 					expect(fn.body.handlers.length).toBeGreaterThan(0);
 			}
-			for (const mode of ["numeric", "references", "handler"]) {
+			for (const mode of ["numeric", "references", "handler", "control"]) {
 				const env = {
 					MAL_HOST_GC: "1",
 					MAL_MAP_MUTABLE: primordials,
@@ -64,8 +70,10 @@ describe("region-local Map entries", () => {
 								env: { ...env, ...stress },
 								timeoutMs: 60_000,
 							}),
+							`${primordials}/${mode}/${binary}/${JSON.stringify(stress)}`,
 						).toBe(expected);
-				const measured = spawnSync(pair.compiled, [], {
+				const invocation = resolveHarnessExecutionInvocation(pair.compiled);
+				const measured = spawnSync(invocation.executable, invocation.args, {
 					encoding: "utf8",
 					timeout: 60_000,
 					env: {
@@ -74,14 +82,14 @@ describe("region-local Map entries", () => {
 						MAL_PERF_STATS: "1",
 					},
 				});
-				expect(measured.status, measured.stderr).toBe(0);
+				expect(measured.status, `${primordials}/${mode}: ${measured.stderr}`).toBe(0);
 				expect(measured.stdout).toBe(expected);
 				const stats = measured.stderr.match(
 					/\[perf-map-region-stats\] hits=(\d+) misses=(\d+)/,
 				);
 				expect(stats).not.toBeNull();
-				expect(Number(stats![1])).toBeGreaterThan(0);
-				expect(Number(stats![2])).toBeGreaterThan(0);
+				expect(Number(stats![1]), `${primordials}/${mode}: hits`).toBeGreaterThan(0);
+				expect(Number(stats![2]), `${primordials}/${mode}: misses`).toBeGreaterThan(0);
 			}
 		},
 		600_000,

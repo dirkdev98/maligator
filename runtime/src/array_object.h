@@ -262,6 +262,10 @@ MalArrayObject *mal_array_object_new(MalHeap *heap, MalObject *prototype);
 MalArrayObject *mal_array_object_new_from_values(
     MalHeap *heap, MalObject *prototype, const MalValue *values, u32 count
 );
+
+MalArrayObject *mal_array_object_new_reserved(
+    MalHeap *heap, MalObject *prototype, u32 capacity
+);
 MalArrayObject *mal_array_object_try_new(MalHeap *heap, MalObject *prototype);
 
 /**

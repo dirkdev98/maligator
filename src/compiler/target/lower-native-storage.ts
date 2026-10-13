@@ -1697,6 +1697,7 @@ export function validateNativeStorage(
 				const expected = selected.arrayInitializations[index]!;
 				return (
 					plan.allocationIp === expected.allocationIp &&
+					plan.mode === expected.mode &&
 					sameNumbers(plan.stores, expected.stores) &&
 					sameNumbers(plan.values, expected.values) &&
 					sameNumbers(plan.claimedIps, expected.claimedIps) &&

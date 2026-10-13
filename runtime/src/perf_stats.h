@@ -310,6 +310,7 @@ typedef struct MalPerfStats {
     u64 merge_shape_cache_builds;
     u64 array_initialization_regions;
     u64 array_initialization_large_regions;
+    u64 array_initialization_incremental_regions;
     u64 map_region_entry_hits;
     u64 map_region_entry_misses;
     u64 map_get_set_cache_checks;

@@ -5607,6 +5607,7 @@ interface NativeInstructionContext {
 	readonly stringTransform?: NativeStringTransformPlan;
 	readonly arrayInitialization?: {
 		readonly allocationIp: number;
+		readonly mode: "prepared" | "incremental";
 		readonly values: ReadonlyArray<number>;
 	};
 	readonly mapEntry?: { readonly getIp: number; readonly setIp: number };
@@ -6243,16 +6244,30 @@ function emitInstruction(
 					]);
 	if (context.arrayInitialization !== undefined) {
 		const plan = context.arrayInitialization;
-		if (ip !== plan.allocationIp) return [];
+		if (ip !== plan.allocationIp) {
+			if (plan.mode === "prepared") return [];
+			if (instruction.opcode !== "DEFINE_PROPERTY")
+				throw new Error("Invalid incremental Array initializer");
+			return [
+				`mal_array_object_fresh_dense_append_reserved(mal_value_to_array_object(r${instruction.object}), ${boxed(instruction.value)});`,
+			];
+		}
 		if (instruction.opcode !== "CREATE_ARRAY")
 			throw new Error("Invalid array initialization producer");
 		const values = plan.values.map(boxedOperand).join(", ");
+		const allocation =
+			plan.mode === "prepared"
+				? `mal_array_object_new_from_values(&vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ARRAY_PROTOTYPE]), (MalValue[]){ ${values} }, ${plan.values.length})`
+				: `mal_array_object_new_reserved(&vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ARRAY_PROTOTYPE]), ${plan.values.length})`;
 		return [
 			`MAL_PERF_COUNT(array_initialization_regions);`,
+			...(plan.mode === "incremental"
+				? ["MAL_PERF_COUNT(array_initialization_incremental_regions);"]
+				: []),
 			...(plan.values.length > 8
 				? ["MAL_PERF_COUNT(array_initialization_large_regions);"]
 				: []),
-			`r${instruction.dst} = ${profileCall("allocation", `mal_value_from_array_object(mal_array_object_new_from_values(&vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ARRAY_PROTOTYPE]), (MalValue[]){ ${values} }, ${plan.values.length}))`)};`,
+			`r${instruction.dst} = ${profileCall("allocation", `mal_value_from_array_object(${allocation})`)};`,
 		];
 	}
 	if (nativeStringSpanAction !== undefined) {

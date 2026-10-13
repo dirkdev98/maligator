@@ -9,6 +9,48 @@ export interface NativeMapEntryPlan {
 	readonly borrowedRegisters: ReadonlyArray<number>;
 }
 
+function entryPaths(native: NativeFunctionPlan, body: NativeBodyFacts) {
+	const successors = native.body.instructions.map(() => new Array<number>());
+	const predecessors = native.body.instructions.map(() => new Array<number>());
+	for (const [ip, op] of native.body.instructions.entries()) {
+		const add = (target: number) => {
+			if (target < 0 || target >= successors.length || successors[ip]!.includes(target))
+				return;
+			successors[ip]!.push(target);
+			predecessors[target]!.push(ip);
+		};
+		if (op.opcode === "JUMP" || op.opcode === "JUMP_IF") add(op.targetIp);
+		if (
+			op.opcode !== "JUMP" &&
+			op.opcode !== "RETURN" &&
+			op.opcode !== "THROW" &&
+			op.opcode !== "LOAD_UNDECLARED"
+		)
+			add(ip + 1);
+		const handler = body.handlerTargets[ip];
+		if (handler !== undefined) add(handler);
+	}
+	return (getIp: number, setIp: number): Uint8Array => {
+		const forward = new Uint8Array(successors.length);
+		const pending = [...successors[getIp]!];
+		while (pending.length > 0) {
+			const ip = pending.pop()!;
+			if (ip === getIp || forward[ip]) continue;
+			forward[ip] = 1;
+			if (ip !== setIp) pending.push(...successors[ip]!);
+		}
+		const between = new Uint8Array(successors.length);
+		if (forward[setIp]) pending.push(setIp);
+		while (pending.length > 0) {
+			const ip = pending.pop()!;
+			if (!forward[ip] || between[ip]) continue;
+			between[ip] = 1;
+			pending.push(...predecessors[ip]!);
+		}
+		return between;
+	};
+}
+
 export function selectNativeMapEntries(
 	native: NativeFunctionPlan,
 	body: NativeBodyFacts,
@@ -24,18 +66,12 @@ export function selectNativeMapEntries(
 		fn.instructions.length > 4096
 	)
 		return plans;
-	const pending = new Map<number, { ip: number; receiver: string }>();
+	const gets = new Map<string, Array<number>>();
+	const sets: Array<{ ip: number; receiver: string; key: string }> = [];
 	const origins = new Map<number, string>();
+	const originOf = (register: number) => origins.get(register) ?? `register:${register}`;
+	// Origins only predict reuse: each update revalidates the current receiver, live index and key.
 	for (const [ip, op] of fn.instructions.entries()) {
-		if (body.handlerTargets[ip] !== undefined || body.handlerEntries.has(ip)) {
-			pending.clear();
-			origins.clear();
-			continue;
-		}
-		if (body.jumpTargets.has(ip)) {
-			pending.clear();
-			origins.clear();
-		}
 		const plan = native.instructions[ip];
 		const operation =
 			op.opcode === "CALL_KNOWN"
@@ -45,53 +81,53 @@ export function selectNativeMapEntries(
 					: undefined;
 		if ((op.opcode === "CALL" || op.opcode === "CALL_KNOWN") && !unavailable(ip)) {
 			const key = op.arguments[0];
-			const receiver = origins.get(op.thisValue) ?? `register:${op.thisValue}`;
-			if (
-				key !== undefined &&
-				operation === "Map.prototype.set" &&
-				op.arguments.length === 2
-			) {
-				const get = pending.get(key);
-				if (get !== undefined && get.receiver === receiver && ip - get.ip <= 32) {
-					plans.push({
-						receiver,
-						getIp: get.ip,
-						setIp: ip,
-						claimedIps: [get.ip, ip],
-						borrowedRegisters: [],
-					});
-					pending.delete(key);
-					if (plans.length === 16) break;
+			const receiver = originOf(op.thisValue);
+			if (key !== undefined) {
+				const identity = `${receiver}/${originOf(key)}`;
+				if (operation === "Map.prototype.set" && op.arguments.length === 2) {
+					sets.push({ ip, receiver, key: identity });
+				} else if (operation === "Map.prototype.get" && op.arguments.length === 1) {
+					const entries = gets.get(identity) ?? [];
+					entries.push(ip);
+					gets.set(identity, entries);
 				}
-			} else if (
-				key !== undefined &&
-				operation === "Map.prototype.get" &&
-				op.arguments.length === 1
-			) {
-				pending.set(key, { ip, receiver });
 			}
 		}
 		const origin =
 			op.opcode === "MOVE"
-				? (origins.get(op.src) ?? `register:${op.src}`)
+				? originOf(op.src)
 				: op.opcode === "LOAD_GLOBAL"
 					? `global:${op.index}`
 					: undefined;
-		for (const register of vmInstructionWriteRegisters(op)) {
-			origins.delete(register);
-			pending.delete(register);
-		}
+		for (const register of vmInstructionWriteRegisters(op))
+			origins.set(register, `value:${ip}:${register}`);
 		if (origin !== undefined && "dst" in op) origins.set(op.dst, origin);
 	}
-	// Adjacent get/set already reuses the owner's hint; local state pays only for overlapping lookups.
+	for (const set of sets) {
+		const entries = gets.get(set.key);
+		if (entries === undefined || entries.length === 0) continue;
+		const before = entries.findLastIndex((ip) => ip < set.ip);
+		const getIp = entries.splice(before < 0 ? 0 : before, 1)[0]!;
+		plans.push({
+			receiver: set.receiver,
+			getIp,
+			setIp: set.ip,
+			claimedIps: [getIp, set.ip],
+			borrowedRegisters: [],
+		});
+		if (plans.length === 16) break;
+	}
+	if (plans.length < 2) return [];
+	const paths = entryPaths(native, body);
+	const between = plans.map((plan) => paths(plan.getIp, plan.setIp));
+	// Stop at either endpoint so another loop iteration cannot make adjacent get/set appear overlapping.
 	return plans
-		.filter((plan) =>
+		.filter((plan, index) =>
 			plans.some(
 				(other) =>
 					other !== plan &&
 					other.receiver === plan.receiver &&
-					plan.getIp < other.setIp &&
-					other.getIp < plan.setIp,
+					(between[index]![other.getIp] || between[index]![other.setIp]),
 			),
 		)
 		.slice(0, 8)

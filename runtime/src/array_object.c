@@ -596,11 +596,18 @@ MalArrayObject *mal_array_object_new(MalHeap *heap, MalObject *prototype) {
 MalArrayObject *mal_array_object_new_from_values(
     MalHeap *heap, MalObject *prototype, const MalValue *values, u32 count
 ) {
-    MalArrayObject *array = mal_array_object_new(heap, prototype);
+    MalArrayObject *array = mal_array_object_new_reserved(heap, prototype, count);
     if (count > 0) {
-        if (!mal_array_object_fresh_dense_reserve_exact(array, count)) abort();
         mal_array_object_dense_build_values_reserved(array, 0, values, count);
     }
+    return array;
+}
+
+MalArrayObject *mal_array_object_new_reserved(
+    MalHeap *heap, MalObject *prototype, u32 capacity
+) {
+    MalArrayObject *array = mal_array_object_new(heap, prototype);
+    if (capacity > 0 && !mal_array_object_fresh_dense_reserve_exact(array, capacity)) abort();
     return array;
 }
 

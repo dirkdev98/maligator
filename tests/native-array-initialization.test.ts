@@ -69,15 +69,20 @@ describe("fresh Array initialization regions", () => {
 			}
 		},
 	);
-	it("declines protected-range crossings, effectful initializers, and BigInt arithmetic", () => {
+	it("keeps incremental values outside protected ranges and preserves hole fallback", () => {
 		for (const body of [
 			'try{return [source,123n,"tag"]; }catch(error){return error;}',
 			'try{return [source,123n,"tag"]; }finally{observe();}',
-			"try{observe();}catch(error){escape(error);}return [source,observe(),123n];",
-			'try{observe();}catch(error){escape(error);}return [source,source+123n,"tag"];',
 			'try{observe();}catch(error){escape(error);}return [source,123n,,"tag"];',
 		])
 			expect(classify(compile(body)).storage!.arrayInitializations, body).toEqual([]);
+		for (const body of [
+			"try{observe();}catch(error){escape(error);}return [source,observe(),123n];",
+			'try{observe();}catch(error){escape(error);}return [source,source+123n,"tag"];',
+		])
+			expect(classify(compile(body)).storage!.arrayInitializations[0]?.mode, body).toBe(
+				"incremental",
+			);
 	});
 	it("requires one effective handler through prepared keys, allocation, and all stores", () => {
 		const image = compile("source=+source;return [source+1,escape,observe];");
@@ -119,6 +124,79 @@ describe("fresh Array initialization regions", () => {
 				() => false,
 			),
 		).toEqual([]);
+	});
+	it("rejects an incremental Array observable from an exceptional successor", () => {
+		const image = compile("return [observe(),observe()];");
+		const native = classify(image);
+		const plan = native.storage!.arrayInitializations[0]!;
+		expect(plan.mode).toBe("incremental");
+		const allocation = native.body.instructions[plan.allocationIp]!;
+		if (allocation.opcode !== "CREATE_ARRAY") throw new Error("Missing allocation");
+		const handlerIp = native.body.instructions.length;
+		const body = {
+			...native.body,
+			instructions: [
+				...native.body.instructions,
+				{ opcode: "RETURN", value: allocation.dst } as const,
+			],
+			handlers: [{ startIp: 0, endIp: handlerIp, handlerIp }],
+		};
+		expect(
+			selectNativeArrayInitializations(
+				{ ...native, body },
+				analyzeNativeBodyFacts(body),
+				image.runtime.stringConstants,
+				() => false,
+			),
+		).toEqual([]);
+	});
+	it("rejects aliases and calls that observe an incomplete incremental Array", () => {
+		const image = compile("return [observe(),observe()];");
+		const native = classify(image);
+		const allocationIp = native.storage!.arrayInitializations[0]!.allocationIp;
+		const allocation = native.body.instructions[allocationIp]!;
+		if (allocation.opcode !== "CREATE_ARRAY") throw new Error("Missing allocation");
+		for (const inserted of [
+			{ opcode: "MOVE", dst: 0, src: allocation.dst },
+			{
+				opcode: "CALL",
+				dst: 0,
+				callee: 2,
+				thisValue: -1,
+				argumentCount: 1,
+				arguments: [allocation.dst],
+			},
+		] satisfies ReadonlyArray<BytecodeInstruction>) {
+			const body = {
+				...native.body,
+				instructions: native.body.instructions.toSpliced(allocationIp + 1, 0, inserted),
+			};
+			expect(
+				selectNativeArrayInitializations(
+					{ ...native, body },
+					analyzeNativeBodyFacts(body),
+					image.runtime.stringConstants,
+					() => false,
+				),
+			).toEqual([]);
+		}
+	});
+	it("independently rejects a forged initialization mode", () => {
+		const image = compile("return [source,escape,observe];");
+		const native = classify(image);
+		const plan = native.storage!.arrayInitializations[0]!;
+		expect(() =>
+			validateNativeStorage(native, undefined, image.runtime.stringConstants),
+		).not.toThrow();
+		expect(() =>
+			validateNativeStorage({
+				...native,
+				storage: {
+					...native.storage!,
+					arrayInitializations: [{ ...plan, mode: "incremental" }],
+				},
+			}),
+		).toThrow(/invalid or stale storage plan/);
 	});
 	it("independently rejects a transported plan after its handler boundary changes", () => {
 		const image = compile("return [source,escape,observe];");
@@ -195,13 +273,59 @@ describe("fresh Array initialization regions", () => {
 			expect(point.incomingRootRegisters).toContain(value);
 		expect(point.outgoingRootRegisters).toContain(allocation.dst);
 	});
-	it("retains the bounded size and rejects effectful mixed initializers", () => {
+	it.each(["mutable", "locked"] as const)(
+		"keeps effectful values at their original stores under %s primordials",
+		(mode) => {
+			for (const body of [
+				'return [source,"tag",null,observe(),undefined,true];',
+				'return [source,"tag",null,observe.value,undefined,true];',
+				'return [source+1,"tag",null,undefined,true];',
+			]) {
+				const image = compile(body, mode),
+					native = classify(image);
+				const plan = native.storage!.arrayInitializations[0]!;
+				expect(plan?.mode, body).toBe("incremental");
+				const facts = analyzeNativeBodyFacts(native.body);
+				for (const point of native.gc.safepoints.filter(
+					(point) =>
+						point.instructionIp > plan.allocationIp &&
+						point.instructionIp < plan.stores.at(-1)!,
+				)) {
+					const allocation = native.body.instructions[plan.allocationIp]!;
+					if (allocation.opcode !== "CREATE_ARRAY")
+						throw new Error("Missing Array allocation");
+					expect(point.incomingRootRegisters, body).toContain(allocation.dst);
+				}
+				expect(
+					plan.stores.every(
+						(ip) => facts.handlerTargets[ip] === facts.handlerTargets[plan.allocationIp],
+					),
+				).toBe(true);
+				expect(deserializeCompilerArtifact(serializeCompilerArtifact(image))).toEqual(
+					image,
+				);
+				expect(() => emitProgramImage(image, {})).not.toThrow();
+			}
+		},
+	);
+	it.each([33, 64, 128])(
+		"reserves %i prepared elements without a larger temporary value array",
+		(length) => {
+			const image = compile(
+				`return [${Array.from({ length }, () => "source").join(",")}];`,
+			);
+			const plan = classify(image).storage!.arrayInitializations[0]!;
+			expect(plan?.mode).toBe("incremental");
+			expect(plan.values).toHaveLength(length);
+			expect(deserializeCompilerArtifact(serializeCompilerArtifact(image))).toEqual(
+				image,
+			);
+		},
+	);
+	it("rejects holes and oversized initialization", () => {
 		for (const body of [
-			`return [${Array.from({ length: 33 }, () => "source").join(",")}];`,
-			'return [source,"tag",null,observe(),undefined,true];',
-			'return [source,"tag",null,observe.value,undefined,true];',
-			'return [source+1,"tag",null,undefined,true];',
 			'return [source,"tag",,undefined,true];',
+			`return [${Array.from({ length: 129 }, () => "source").join(",")}];`,
 		])
 			expect(classify(compile(body)).storage!.arrayInitializations).toEqual([]);
 	});
@@ -260,7 +384,7 @@ describe("fresh Array initialization regions", () => {
 			).toEqual([]);
 		}
 	});
-	it("rejects initialization moved across effects or holes", () => {
+	it("does not move effectful values and declines branch joins and holes", () => {
 		for (const body of [
 			"return [observe(),source,escape];",
 			"return [source,,escape];",
@@ -270,7 +394,9 @@ describe("fresh Array initialization regions", () => {
 			"source=+source;return [source+1,escape?source*2:source*3,observe];",
 			"source=+source;return [source+1,,escape];",
 		]) {
-			expect(classify(compile(body)).storage!.arrayInitializations).toEqual([]);
+			const plans = classify(compile(body)).storage!.arrayInitializations;
+			if (body.includes(",,") || body.includes("?")) expect(plans, body).toEqual([]);
+			else expect(plans[0]?.mode, body).toBe("incremental");
 		}
 	});
 	it("does not decode unrelated large string literals while discovering prepared keys", () => {

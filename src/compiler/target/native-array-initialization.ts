@@ -5,6 +5,7 @@ import { decodeVmValueOperand } from "./runtime-image.ts";
 
 export interface NativeArrayInitialization {
 	readonly allocationIp: number;
+	readonly mode: "prepared" | "incremental";
 	readonly stores: ReadonlyArray<number>;
 	readonly values: ReadonlyArray<number>;
 	readonly claimedIps: ReadonlyArray<number>;
@@ -17,7 +18,8 @@ function initializationStringKey(
 ): string | undefined {
 	const value = strings[index];
 	return value !== undefined &&
-		value.length <= String(ARRAY_INITIALIZATION_LIMITS.maximumLength - 1).length
+		value.length <=
+			String(ARRAY_INITIALIZATION_LIMITS.maximumIncrementalLength - 1).length
 		? String.fromCharCode(...value)
 		: undefined;
 }
@@ -43,7 +45,7 @@ export function selectNativeArrayInitializations(
 		if (
 			allocation.opcode !== "CREATE_ARRAY" ||
 			allocation.length < 2 ||
-			allocation.length > ARRAY_INITIALIZATION_LIMITS.maximumLength ||
+			allocation.length > ARRAY_INITIALIZATION_LIMITS.maximumIncrementalLength ||
 			unavailable(allocationIp)
 		)
 			continue;
@@ -95,11 +97,12 @@ export function selectNativeArrayInitializations(
 			stores: Array<number> = [];
 		for (
 			let ip = allocationIp + 1;
+			allocation.length <= ARRAY_INITIALIZATION_LIMITS.maximumLength &&
 			ip <
-			Math.min(
-				fn.instructions.length,
-				allocationIp + 1 + ARRAY_INITIALIZATION_LIMITS.maximumInitializerInstructions,
-			);
+				Math.min(
+					fn.instructions.length,
+					allocationIp + 1 + ARRAY_INITIALIZATION_LIMITS.maximumInitializerInstructions,
+				);
 			ip++
 		) {
 			if (
@@ -148,12 +151,84 @@ export function selectNativeArrayInitializations(
 			if (values.length === allocation.length) {
 				plans.push({
 					allocationIp,
+					mode: "prepared",
 					stores,
 					values,
 					claimedIps: [allocationIp, ...stores],
 					borrowedRegisters: [],
 				});
 				break;
+			}
+		}
+		if (plans.at(-1)?.allocationIp === allocationIp) continue;
+		// An exceptional successor could observe a partially initialized length.
+		if (handlerTarget !== undefined) continue;
+		keys.clear();
+		writes.clear();
+		writes.add(allocation.dst);
+		values.length = 0;
+		stores.length = 0;
+		for (
+			let ip = allocationIp + 1;
+			ip <
+			Math.min(
+				fn.instructions.length,
+				allocationIp + 1 + ARRAY_INITIALIZATION_LIMITS.maximumIncrementalInstructions,
+			);
+			ip++
+		) {
+			const op = fn.instructions[ip]!;
+			if (
+				body.handlerTargets[ip] !== handlerTarget ||
+				body.jumpTargets.has(ip) ||
+				body.writes[ip]!.includes(allocation.dst) ||
+				["JUMP", "JUMP_IF", "RETURN", "THROW", "YIELD", "AWAIT"].includes(op.opcode)
+			)
+				break;
+			if (op.opcode === "DEFINE_PROPERTY" && op.object === allocation.dst) {
+				if (
+					!op.enumerable ||
+					!op.writable ||
+					!op.configurable ||
+					op.value === allocation.dst ||
+					unavailable(ip)
+				)
+					break;
+				const key = decodeVmValueOperand(op.key);
+				const property =
+					key.kind === "string"
+						? initializationStringKey(strings, key.index)
+						: key.kind === "number"
+							? String(key.value)
+							: key.kind === "register"
+								? (keys.get(key.register) ?? preparedKey(key.register))
+								: undefined;
+				if (property !== String(values.length)) break;
+				stores.push(ip);
+				values.push(op.value);
+				if (values.length === allocation.length) {
+					plans.push({
+						allocationIp,
+						mode: "incremental",
+						stores,
+						values,
+						claimedIps: [allocationIp, ...stores],
+						borrowedRegisters: [],
+					});
+					break;
+				}
+			} else {
+				// Effects may collect or throw, but cannot observe this unpublished Array.
+				if (body.reads[ip]!.includes(allocation.dst)) break;
+				for (const register of body.writes[ip]!) {
+					keys.delete(register);
+					writes.add(register);
+				}
+				if (op.opcode === "CREATE_STRING") {
+					const key = initializationStringKey(strings, op.stringIndex);
+					if (key !== undefined) keys.set(op.dst, key);
+				} else if (op.opcode === "CREATE_NUMBER" || op.opcode === "CREATE_F64")
+					keys.set(op.dst, String(op.value));
 			}
 		}
 	}

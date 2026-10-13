@@ -43,7 +43,7 @@ return [first,second];`;
 		},
 	);
 	it.each(["mutable", "locked"] as const)(
-		"declines entry state within or across a protected range under %s primordials",
+		"retains revalidated hints within and across protected ranges under %s primordials",
 		(mode) => {
 			for (const source of [
 				`try { ${body} } catch { observe(); }`,
@@ -51,8 +51,10 @@ return [first,second];`;
 try { observe(); } catch { escape(); }
 source.set(1,first); source.set(2,second);`,
 			]) {
-				expect(compile(source, mode).native.functions[1]!.storage!.mapEntries).toEqual(
-					[],
+				const image = compile(source, mode);
+				expect(image.native.functions[1]!.storage!.mapEntries).toHaveLength(2);
+				expect(deserializeCompilerArtifact(serializeCompilerArtifact(image))).toEqual(
+					image,
 				);
 			}
 		},
@@ -85,11 +87,33 @@ source.set(1,first); source.set(2,second);`,
 			}),
 		).toThrow(/invalid or stale storage plan/);
 	});
-	it("declines unrelated owners and mixed control-flow", () => {
+	it.each(["mutable", "locked"] as const)(
+		"retains aliases across joins, loop backedges and long ranges under %s primordials",
+		(mode) => {
+			for (const source of [
+				`const alias=source;const key=escape;const first=source.get(key);const second=alias.get(observe);
+if(first)observe();else escape();alias.set(escape,first);source.set(observe,second);`,
+				`for(let i=0;i<4;i++){let first=0;let second=0;if(i!==1){first=source.get(1);second=source.get(2);}
+if(i===2)observe();source.set(1,first);source.set(2,second);}`,
+				`const first=source.get(1);const second=source.get(2);${"observe();".repeat(18)}
+source.set(1,first);source.set(2,second);`,
+			]) {
+				const image = compile(source, mode);
+				expect(image.native.functions[1]!.storage!.mapEntries, source).toHaveLength(2);
+				expect(deserializeCompilerArtifact(serializeCompilerArtifact(image))).toEqual(
+					image,
+				);
+				expect(() => emitProgramImage(image, {})).not.toThrow();
+			}
+		},
+	);
+	it("declines unrelated owners, disjoint paths and nonoverlapping loop iterations", () => {
 		for (const body of [
 			"const a=source.get(1);source.set(1,a+1);const b=source.get(2);source.set(2,b+1);",
 			"const x=source.get(1);observe.set(1,x+1);",
 			"const x=source.get(1);if(escape)observe();source.set(1,x+1);",
+			"for(let i=0;i<4;i++){const a=source.get(1);source.set(1,a+1);const b=source.get(2);source.set(2,b+1);}",
+			"if(escape){source.get(1);source.get(2);return;}else{source.set(1,1);source.set(2,2);}",
 		]) {
 			expect(compile(body).native.functions[1]!.storage!.mapEntries).toEqual([]);
 		}

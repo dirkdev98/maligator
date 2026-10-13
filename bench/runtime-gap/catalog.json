@@ -3418,6 +3418,32 @@
 			"controls": ["string-span-after-handler", "string-span-classify"]
 		},
 		{
+			"id": "fresh-effectful-values-64",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "Fresh Array initialization",
+			"category": "object-array-representation",
+			"mechanisms": ["allocation-gc"],
+			"inputShape": "A retained64-element Array evaluates interleaved callback calls and getter reads at their original positions while one exact reservation serves every own-data initialization.",
+			"unit": "result",
+			"sourceSeam": "src/compiler/target/native-array-initialization.ts",
+			"fixture": "cases/fresh-effectful-values-64.mjs",
+			"controls": ["fresh-mixed-values-32", "fresh-three-values"]
+		},
+		{
+			"id": "map-entry-control-flow",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "Map entry regions",
+			"category": "object-array-representation",
+			"mechanisms": ["map-get-set-cache"],
+			"inputShape": "Protected and branched Map updates retain independently validated entry indices across overlapping lookups and callback boundaries.",
+			"unit": "update",
+			"sourceSeam": "src/compiler/target/native-map-entry-plan.ts",
+			"fixture": "cases/map-entry-control-flow.mjs",
+			"controls": ["map-reference-interleaved", "map-reference-adjacent"]
+		},
+		{
 			"id": "method-name-unique",
 			"group": "runtime",
 			"suite": "runtime",
