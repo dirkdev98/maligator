@@ -2708,6 +2708,32 @@
 			"controls": ["object-keys-count", "object-entries-small-keys-8"]
 		},
 		{
+			"id": "tagged-record-wide-common",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "Tagged record field regions",
+			"category": "object-array-representation",
+			"mechanisms": ["property-access"],
+			"inputShape": "Three guaranteed reference-field reads through a kind branch, common Binary/Literal layouts.",
+			"unit": "record",
+			"sourceSeam": "src/compiler/target/lower-native-fast-paths.ts",
+			"fixture": "cases/tagged-record-wide-common.mjs",
+			"controls": ["tagged-record-branches", "tagged-record-fields"]
+		},
+		{
+			"id": "tagged-record-wide-distinct",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "Tagged record field regions",
+			"category": "object-array-representation",
+			"mechanisms": ["property-access"],
+			"inputShape": "Three guaranteed reference-field reads through a kind branch, distinct Binary/Literal layouts.",
+			"unit": "record",
+			"sourceSeam": "src/compiler/target/lower-native-fast-paths.ts",
+			"fixture": "cases/tagged-record-wide-distinct.mjs",
+			"controls": ["tagged-record-branches", "tagged-record-fields"]
+		},
+		{
 			"id": "method-name-unique",
 			"group": "runtime",
 			"suite": "runtime",

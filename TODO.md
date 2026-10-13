@@ -412,12 +412,18 @@ numeric sorting, stack objects, and string projections.
 - [ ] Tagged-record branches: retain receiver admission across bounded strict tag
       comparisons and safe forward branches, including reference-valued fields.
       Implemented with all-predecessor validation and per-load fallback; focused
-      unit coverage passes. Native memory verification and measurement are pending.
+      unit coverage passes. Require three reads on every admitted path: this removes
+      the short selector's 8% regression (confirmation is within noise) while seven
+      matched pairs improve broader shared-layout and distinct-layout cases by 10%
+      and 2.5%. Native memory verification remains pending after correcting an
+      obsolete fixture assertion.
 - [ ] Enumeration snapshot traversal: consume a retained key snapshot without a
       general keys Array; preserve eager enumeration, key order, and mutation semantics.
       Indexed traversal now retains up to 16 shaped-record keys in root slots, with
       one cached Array materialization for out-of-range or coercing observations.
-      Focused unit checks pass; native memory verification and measurement are pending.
+      Seven matched pairs improved indexed traversal by 24%; the observable keys
+      control changed by about 1%. Focused unit checks pass; native memory verification
+      remains pending, including foreign-realm Array fallback and explicit GC seams.
 - [ ] Broaden shared span consumers beyond length, equality, and numeric conversion;
       preserve method identity, UTF-16 behavior, and materialization at observers.
       Slice and split spans now support guarded `charCodeAt`, and split spans share

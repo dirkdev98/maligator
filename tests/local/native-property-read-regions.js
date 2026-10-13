@@ -14,6 +14,19 @@ function readTagged(node) {
 	return node.value;
 }
 
+function readTaggedFields(node) {
+	if (node.kind === "Binary") {
+		const left = node.left;
+		const right = node.right;
+		gc();
+		return [left, right];
+	}
+	const value = node.value;
+	const label = node.label;
+	gc();
+	return [value, label];
+}
+
 function readTaggedEffect(node, observer) {
 	const kind = node.kind;
 	if (kind === "Binary") observer(node);
@@ -330,6 +343,7 @@ function readWideJoin(owner, receiver) {
 
 globalThis.nativePropertyRegionReaders = [
 	readTagged,
+	readTaggedFields,
 	readTaggedEffect,
 	readMixed,
 	readSameShape,
@@ -763,6 +777,16 @@ expectValue(
 const leftNode = { marker: 17 };
 const rightNode = { marker: 23 };
 const tagged = { kind: "Binary", operator: "+", left: leftNode, right: rightNode };
+for (const node of [
+	{ kind: "Binary", left: leftNode, right: rightNode },
+	{ kind: "Literal", value: leftNode, label: rightNode },
+]) {
+	for (let index = 0; index < 16; index++) {
+		const fields = readTaggedFields(node);
+		expectValue(fields[0], leftNode, "first field survives admitted branch");
+		expectValue(fields[1], rightNode, "second field survives admitted branch");
+	}
+}
 for (let index = 0; index < 32; index++) {
 	tagged.operator = index % 2 ? "+" : "-";
 	expectValue(

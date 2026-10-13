@@ -892,6 +892,32 @@ function lowerPropertyReadRegion(
 		return undefined;
 	}
 	const claimedIps = claimed.filter((ip) => ip <= loads.at(-1)!.ip);
+	if (
+		claimedIps.some((ip) => {
+			const opcode = fn.instructions[ip]!.opcode;
+			return opcode === "JUMP" || opcode === "JUMP_IF";
+		})
+	) {
+		const members = new Set(claimedIps);
+		const readIps = new Set(loads.map(({ ip }) => ip));
+		const minimumReads = new Map([[firstIp, 0]]);
+		for (const ip of claimedIps) {
+			const before = minimumReads.get(ip);
+			if (before === undefined) continue;
+			const count = before + (readIps.has(ip) ? 1 : 0);
+			for (const successor of numberRecordSuccessors(fn.instructions[ip]!, ip)) {
+				if (!members.has(successor)) {
+					// Mutually exclusive loads cannot amortize retained storage on a short arm.
+					if (count < 3) return undefined;
+				} else {
+					minimumReads.set(
+						successor,
+						Math.min(minimumReads.get(successor) ?? count, count),
+					);
+				}
+			}
+		}
+	}
 	return Object.freeze({
 		id: firstIp,
 		object: first.object,

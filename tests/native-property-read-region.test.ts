@@ -340,55 +340,79 @@ describe("bounded native property read regions", () => {
 			load(1),
 			{ opcode: "CREATE_STRING", dst: 2, stringIndex: 0 },
 			{ opcode: "BINARY", dst: 3, left: 1, right: 2, operator: "===" },
-			{ opcode: "JUMP_IF", cond: 3, targetIp: 6 },
+			{ opcode: "JUMP_IF", cond: 3, targetIp: 7 },
 			load(4),
+			load(6),
 			{ opcode: "RETURN", value: 4 },
 			load(5),
+			load(7),
 			{ opcode: "RETURN", value: 5 },
 		]);
-		expect(lowered.propertyReadRegions[0]!.loads.map(({ ip }) => ip)).toEqual([0, 4, 6]);
+		expect(lowered.propertyReadRegions[0]!.loads.map(({ ip }) => ip)).toEqual([
+			0, 4, 5, 7, 8,
+		]);
+	});
+
+	it("does not count mutually exclusive short arms as repeated executed reads", () => {
+		const lowered = lower([
+			load(1),
+			{ opcode: "JUMP_IF", cond: 1, targetIp: 4 },
+			load(2),
+			{ opcode: "RETURN", value: 2 },
+			load(3),
+			{ opcode: "RETURN", value: 3 },
+		]);
+		expect(lowered.propertyReadRegions).toHaveLength(0);
 	});
 
 	it("does not carry admission into a join reached through an invalidating arm", () => {
 		const lowered = lower([
 			load(1),
-			{ opcode: "JUMP_IF", cond: 1, targetIp: 5 },
-			{ opcode: "CREATE_OBJECT", dst: 7 },
-			{ opcode: "JUMP", targetIp: 8 },
+			load(6),
+			load(7),
+			{ opcode: "JUMP_IF", cond: 1, targetIp: 7 },
+			{ opcode: "CREATE_OBJECT", dst: 8 },
+			{ opcode: "JUMP", targetIp: 10 },
 			{ opcode: "RETURN", value: 1 },
 			load(2),
-			{ opcode: "JUMP", targetIp: 8 },
+			{ opcode: "JUMP", targetIp: 10 },
 			{ opcode: "RETURN", value: 2 },
 			load(3),
 		]);
-		expect(lowered.propertyReadRegions[0]!.loads.map(({ ip }) => ip)).toEqual([0, 5]);
-		expect(lowered.propertyReadRegionActions.has(8)).toBe(false);
+		expect(lowered.propertyReadRegions[0]!.loads.map(({ ip }) => ip)).toEqual([
+			0, 1, 2, 7,
+		]);
+		expect(lowered.propertyReadRegionActions.has(10)).toBe(false);
 	});
 
 	it("rejects external, backward and exceptional entries into admitted branches", () => {
 		const body: Array<BytecodeInstruction> = [
 			load(1),
-			{ opcode: "JUMP_IF", cond: 1, targetIp: 4 },
+			load(6),
+			load(7),
+			{ opcode: "JUMP_IF", cond: 1, targetIp: 6 },
 			{ opcode: "RETURN", value: 1 },
 			{ opcode: "RETURN", value: 1 },
 			load(2),
 			{ opcode: "RETURN", value: 2 },
 		];
 		expect(lower(body).propertyReadRegions).toHaveLength(1);
-		expect(lower([...body, { opcode: "JUMP", targetIp: 4 }]).propertyReadRegions).toEqual(
-			[],
-		);
+		expect(lower(body).propertyReadRegionActions.has(6)).toBe(true);
+		expect(
+			lower([...body, { opcode: "JUMP", targetIp: 6 }]).propertyReadRegionActions.has(6),
+		).toBe(false);
 		expect(
 			lower([
-				{ opcode: "JUMP_IF", cond: 1, targetIp: 5 },
+				{ opcode: "JUMP_IF", cond: 1, targetIp: 7 },
 				...body.map((op) =>
 					op.opcode === "JUMP_IF" ? { ...op, targetIp: op.targetIp + 1 } : op,
 				),
-			]).propertyReadRegions,
-		).toEqual([]);
+			]).propertyReadRegionActions.has(7),
+		).toBe(false);
 		expect(
-			lower(body, { handlers: [{ startIp: 0, endIp: 1, handlerIp: 4 }] })
-				.propertyReadRegions,
-		).toEqual([]);
+			lower(body, {
+				handlers: [{ startIp: 0, endIp: 1, handlerIp: 6 }],
+			}).propertyReadRegionActions.has(6),
+		).toBe(false);
 	});
 });

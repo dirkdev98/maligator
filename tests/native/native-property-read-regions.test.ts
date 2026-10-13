@@ -9,22 +9,24 @@ import {
 import { privateRootRegisters } from "../helpers/native-c-source.ts";
 
 const kernels = [
-	{ name: "readTagged", loads: 5 },
-	{ name: "readThree", loads: 3 },
-	{ name: "readEight", loads: 8 },
-	{ name: "readDetachedOwn", loads: 3 },
-	{ name: "readThreeInTry", loads: 3 },
-	{ name: "readMixed", loads: 3 },
-	{ name: "readSameShape", loads: 3 },
-	{ name: "readInheritedMutation", loads: 3 },
-	{ name: "readPrototypeMutation", loads: 3 },
-	{ name: "readAccessorMutation", loads: 3 },
-	{ name: "readStorageMutation", loads: 3 },
-	{ name: "readProxy", loads: 3 },
-	{ name: "readGuardFallback", loads: 3 },
-	{ name: "readHandlerBoundary", loads: 3 },
-	{ name: "readInheritedStorageMutation", loads: 3 },
-	{ name: "readPublicOverflowShadow", loads: 3 },
+	{ name: "readTaggedFields", fields: ["kind", "left", "right", "value", "label"] },
+	{ name: "readEight", fields: ["a", "b", "c", "d", "e", "f", "g", "h"] },
+	{ name: "readHandlerBoundary", fields: ["first", "middle", "last", "tail"] },
+	...[
+		"readThree",
+		"readDetachedOwn",
+		"readThreeInTry",
+		"readMixed",
+		"readSameShape",
+		"readInheritedMutation",
+		"readPrototypeMutation",
+		"readAccessorMutation",
+		"readStorageMutation",
+		"readProxy",
+		"readGuardFallback",
+		"readInheritedStorageMutation",
+		"readPublicOverflowShadow",
+	].map((name) => ({ name, fields: ["first", "middle", "last"] })),
 ];
 const expected = ["native-property-read-regions PASS"];
 const hostGc = { MAL_HOST_GC: "1" };
@@ -41,7 +43,10 @@ describe("native property read region continuations", () => {
 	let interpreted: string;
 	let wideRootCount = 0;
 	let wideRegionSource = "";
-	const emittedKernels = new Map<string, string>();
+	const emittedKernels = new Map<
+		string,
+		{ source: string; admissions: number; loads: number }
+	>();
 
 	beforeAll(() => {
 		const pair = buildBackendPairFromOneProgramImage({
@@ -54,6 +59,10 @@ describe("native property read region continuations", () => {
 			const name = String.fromCharCode(
 				...(image.runtime.stringConstants[fn.nameStringIndex] ?? []),
 			);
+			if (name === "readTagged")
+				expect(image.native.functions[index]!.storage!.propertyReadRegions).toHaveLength(
+					0,
+				);
 			if (name === "readWideJoin") {
 				const native = image.native.functions[index]!;
 				wideRootCount = Math.max(
@@ -61,9 +70,8 @@ describe("native property read region continuations", () => {
 				);
 				wideRegionSource = emitCompiledFunction(native, index, "", false)?.source ?? "";
 			}
-			if (!kernels.some((kernel) => kernel.name === name)) {
-				continue;
-			}
+			const kernel = kernels.find((kernel) => kernel.name === name);
+			if (kernel === undefined) continue;
 			const output = emitCompiledFunction(
 				image.native.functions[index]!,
 				index,
@@ -72,21 +80,35 @@ describe("native property read region continuations", () => {
 			)?.source;
 			expect(output).toBeDefined();
 			const native = image.native.functions[index]!;
-			const plan = native.storage!.propertyReadRegions[0]!;
+			const plans = native.storage!.propertyReadRegions;
+			const plan = plans.find((region) => {
+				const fields = region.loads.map(({ ip }) => {
+					const load = native.body.instructions[ip]!;
+					if (load.opcode !== "LOAD_PROPERTY_STATIC")
+						throw new Error("Invalid property region load");
+					return String.fromCharCode(...image.runtime.stringConstants[load.stringIndex]!);
+				});
+				return kernel.fields.every((field) => fields.includes(field));
+			});
 			expect(plan).toBeDefined();
-			expect(plan.loads).toHaveLength(
-				kernels.find((kernel) => kernel.name === name)!.loads,
-			);
-			expect(plan.continuation).toBe("remaining-instructions");
-			emittedKernels.set(name, output!);
+			expect(plan!.continuation).toBe("remaining-instructions");
+			emittedKernels.set(name, {
+				source: output!,
+				admissions: plans.length,
+				loads: plans.reduce((count, region) => count + region.loads.length, 0),
+			});
 		}
 	}, 600_000);
 
-	it.each(kernels)("executes an emitted region for $name", ({ name, loads }) => {
+	it.each(kernels)("emits the admitted field reads for $name", ({ name }) => {
 		const output = emittedKernels.get(name);
 		expect(output).toBeDefined();
-		expect(output!.match(/mal_vm_property_read_region_begin\(/g)).toHaveLength(1);
-		expect(output!.match(/mal_vm_property_read_region_try_load\(/g)).toHaveLength(loads);
+		expect(output!.source.match(/mal_vm_property_read_region_begin\(/g)).toHaveLength(
+			output!.admissions,
+		);
+		expect(output!.source.match(/mal_vm_property_read_region_try_load\(/g)).toHaveLength(
+			output!.loads,
+		);
 	});
 
 	it("keeps wide private roots native through a region continuation", () => {

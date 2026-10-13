@@ -66,6 +66,38 @@ function scan(regexp, source) {
 	return [total, regexp.lastIndex];
 }
 rows.push(scan(/(\d+)/g, "1 22 333"));
+function materializeAcrossExec(regexp, source) {
+	const captures = [];
+	for (let index = 0; index < 6; index++) {
+		const match = regexp.exec(source);
+		if (match === null) {
+			captures.push(["miss", regexp.lastIndex]);
+			continue;
+		}
+		const part = match[1];
+		if (part === undefined) {
+			captures.push(["absent", regexp.lastIndex]);
+			continue;
+		}
+		const first = observe(part);
+		collect();
+		const second = observe(part);
+		captures.push([first, second, part.length, Number(part), regexp.lastIndex]);
+	}
+	return captures;
+}
+rows.push(materializeAcrossExec(/(\d+)|x/g, "1 x 22 333"));
+function mixedCaptureConsumers(regexp, source) {
+	const match = regexp.exec(source);
+	if (match === null) return "miss";
+	const tail = match[2];
+	const firstLength = match[1].length;
+	collect();
+	if (tail === undefined) return [firstLength, "absent"];
+	return [firstLength, tail.length, Number(tail), observe(tail)];
+}
+for (const source of ["😀|12", "a|", "|7", "missing"])
+	rows.push(mixedCaptureConsumers(/([^|]*)\|(\d*)?/, source));
 function concatenate(regexp, source) {
 	const match = regexp.exec(source);
 	if (match === null) return "miss";

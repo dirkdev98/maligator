@@ -23,12 +23,12 @@ function compile(count = 3) {
 }
 
 describe("persisted native property read regions", () => {
-	it("shares one admission across tagged reference fields without specializing the tag as a shape", () => {
+	it("shares admission when every tagged arm reads multiple reference fields", () => {
 		const image = compileSemanticProgramToProgramImage(
 			analyzeSourceAndRunSemanticAnalysis(
 				`globalThis.pick = function pick(node) {
-					if (node.kind === "Binary") return node.operator === "+" ? node.left : node.right;
-					return node.value;
+					if (node.kind === "Binary") { const left=node.left; const right=node.right; return [left,right]; }
+					const value=node.value; const label=node.label; return [value,label];
 				};`,
 				"/tagged-read-region.js",
 			),
@@ -48,10 +48,22 @@ describe("persisted native property read regions", () => {
 					);
 				})
 				.sort(),
-		).toEqual(["kind", "left", "operator", "right", "value"]);
+		).toEqual(["kind", "label", "left", "right", "value"]);
 		expect(
 			plan.claimedIps.some((ip) => native.body.instructions[ip]!.opcode === "JUMP_IF"),
 		).toBe(true);
+	});
+	it("keeps short tagged selectors on ordinary property probes", () => {
+		const image = compileSemanticProgramToProgramImage(
+			analyzeSourceAndRunSemanticAnalysis(
+				`globalThis.pick = function pick(node) {
+					if (node.kind === "Binary") return node.operator === "+" ? node.left : node.right;
+					return node.value;
+				};`,
+				"/short-tagged-read-region.js",
+			),
+		);
+		expect(image.native.functions[1]!.storage!.propertyReadRegions).toHaveLength(0);
 	});
 	it.each([3, 8])(
 		"round-trips a %i-load continuation without replaying admission selection",

@@ -34,9 +34,41 @@ describe("regexp capture span continuations", () => {
 				}),
 				environment: { ...process.env, MAL_PERF_STATS: "1" },
 			});
+			const named = (name: string) =>
+				pair.programImage.native.functions.find(
+					(fn) =>
+						String.fromCharCode(
+							...(pair.programImage.runtime.stringConstants[fn.body.nameStringIndex] ??
+								[]),
+						) === name,
+				)!;
+			const repeated = named("materializeAcrossExec");
 			expect(
-				pair.programImage.native.functions.some((fn) =>
-					fn.storage!.spanContinuations.some((plan) => plan.sourceKind === "regexp"),
+				repeated.storage!.spanContinuations.some(
+					(plan) =>
+						plan.sourceKind === "regexp" &&
+						plan.consumers.filter((consumer) => consumer.kind === "materialize").length >=
+							2,
+				),
+			).toBe(true);
+			const mixed = named("mixedCaptureConsumers");
+			expect(
+				mixed.specializations.some(
+					(region) =>
+						region.kind === "regexp-exec-projection" &&
+						region.loads.some(
+							(load) => load.captureIndex === 1 && load.consumer?.kind === "length",
+						) &&
+						region.loads.some(
+							(load) =>
+								load.captureIndex === 2 &&
+								mixed.storage!.spanContinuations.some(
+									(plan) =>
+										plan.sourceKind === "regexp" &&
+										plan.sourceCallIp === region.callIp &&
+										plan.producerIp === load.ip,
+								),
+						),
 				),
 			).toBe(true);
 			for (const binary of [pair.compiled, pair.interpreted])
