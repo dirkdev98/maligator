@@ -2565,6 +2565,19 @@
 			"controls": ["primordial-array-folds", "array-map"]
 		},
 		{
+			"id": "typed-array-three-view",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "TypedArray storage regions",
+			"category": "object-array-representation",
+			"mechanisms": ["typed-arrays-numeric-loops"],
+			"inputShape": "Three fixed Float64Array views in an ordered pointwise addition kernel with a caller-provided count.",
+			"unit": "element",
+			"sourceSeam": "src/compiler/target/lower-native-fast-paths.ts",
+			"fixture": "cases/typed-array-three-view.mjs",
+			"controls": ["parallel-typed-arrays", "typed-array-operations"]
+		},
+		{
 			"id": "conditional-span-records",
 			"group": "runtime",
 			"suite": "runtime",

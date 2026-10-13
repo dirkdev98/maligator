@@ -39,7 +39,7 @@ describe("native safe-integer loop regions", () => {
 			);
 			if (!kernels.includes(name)) continue;
 			const native = image.native.functions[index]!;
-			expect(native.storage!.integerLoopRegions).toHaveLength(1);
+			expect(native.storage!.numericLoopRegions).toHaveLength(1);
 			emittedKernels.set(name, emitCompiledFunction(native, index, "", false)!.source);
 		}
 	}, 600_000);

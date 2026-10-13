@@ -21,7 +21,7 @@ import type {
 	NativePropertyNumericUpdatePlan,
 	NativePropertyProjectionPlan,
 	NativeNumberRecordRegionPlan,
-	NativeIntegerLoopRegionPlan,
+	NativeNumericLoopRegionPlan,
 	NativePropertyReadRegionPlan,
 } from "./lower-native-fast-paths.ts";
 import {
@@ -1022,7 +1022,7 @@ function rootStorage(
 				...fastPaths.propertyReadRegions,
 				...fastPaths.propertyReadPairs,
 				...fastPaths.numberRecordRegions,
-				...fastPaths.integerLoopRegions,
+				...fastPaths.numericLoopRegions,
 			].flatMap((plan) => plan.borrowedRegisters),
 		);
 		const iteratorDone = new Set<number>();
@@ -1054,7 +1054,7 @@ function rootStorage(
 					...fastPaths.propertyReadRegions,
 					...fastPaths.propertyReadPairs,
 					...fastPaths.numberRecordRegions,
-					...fastPaths.integerLoopRegions,
+					...fastPaths.numericLoopRegions,
 				],
 				expressionIps,
 			),
@@ -1117,7 +1117,7 @@ function scalarStorageWindows(fastPaths: NativeFastPathPlans) {
 		...fastPaths.propertyReadRegions,
 		...fastPaths.propertyReadPairs,
 		...fastPaths.numberRecordRegions,
-		...fastPaths.integerLoopRegions,
+		...fastPaths.numericLoopRegions,
 		...fastPaths.pairedArrayLoops,
 		...fastPaths.arrayPresence,
 		...fastPaths.arrayPairDestructure,
@@ -1302,7 +1302,7 @@ function lowerStorage(
 			expressionWindows,
 			[
 				...fastPaths.numberRecordRegions.map((plan) => plan.exitIp),
-				...fastPaths.integerLoopRegions.flatMap((plan) => [
+				...fastPaths.numericLoopRegions.flatMap((plan) => [
 					plan.id,
 					...plan.exits.map((exit) => exit.targetIp),
 				]),
@@ -1513,14 +1513,25 @@ export function validateNativeStorage(
 			);
 		});
 
-	const sameIntegerLoops = (
-		stored: ReadonlyArray<NativeIntegerLoopRegionPlan>,
-		selected: ReadonlyArray<NativeIntegerLoopRegionPlan>,
+	const sameNumericLoops = (
+		stored: ReadonlyArray<NativeNumericLoopRegionPlan>,
+		selected: ReadonlyArray<NativeNumericLoopRegionPlan>,
 	): boolean =>
 		stored.length === selected.length &&
 		stored.every((plan, index) => {
 			const expected = selected[index]!;
 			return (
+				plan.kind === expected.kind &&
+				(plan.kind !== "fixed-f64" ||
+					(expected.kind === "fixed-f64" &&
+						plan.index === expected.index &&
+						plan.bound === expected.bound &&
+						plan.views.length === expected.views.length &&
+						plan.views.every(
+							(view, i) =>
+								view.object === expected.views[i]!.object &&
+								view.writable === expected.views[i]!.writable,
+						))) &&
 				plan.id === expected.id &&
 				plan.entryIp === expected.entryIp &&
 				plan.fallback === expected.fallback &&
@@ -1653,7 +1664,7 @@ export function validateNativeStorage(
 			sameUpdates(stored.propertyNumericUpdates, selected.propertyNumericUpdates) &&
 			sameReadRegions(stored.propertyReadRegions, selected.propertyReadRegions) &&
 			sameRecordRegions(stored.numberRecordRegions, selected.numberRecordRegions) &&
-			sameIntegerLoops(stored.integerLoopRegions, selected.integerLoopRegions) &&
+			sameNumericLoops(stored.numericLoopRegions, selected.numericLoopRegions) &&
 			stored.arrayPresence.length === selected.arrayPresence.length &&
 			stored.arrayPresence.every((plan, index) => {
 				const expected = selected.arrayPresence[index]!;

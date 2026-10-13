@@ -38,7 +38,7 @@ import type {
 } from "./lower-native-calls.ts";
 import type { NativeCaptureAccessPlan } from "./lower-native-captures.ts";
 import {
-	integerLoopOrder,
+	numericLoopOrder,
 	lowerNativeFastPaths,
 	numberRecordDataflow,
 	numberRecordOrder,
@@ -47,7 +47,7 @@ import {
 import type {
 	NativeConstructorInitializationAction,
 	NativeFastPathPlans,
-	NativeIntegerLoopRegionPlan,
+	NativeNumericLoopRegionPlan,
 	NativeMathCallPlan,
 	NativeNumberPredicatePlan,
 	NativeNumberRecordRegionPlan,
@@ -699,22 +699,22 @@ function nativeNumberExpr(operator: string, left: string, right: string): string
 	return null;
 }
 
-/**
- * The admitted copy of a number record region. Its forward branches set block
- * flags rather than jump to labels so whole-label block splitting still applies.
- */
-function emitIntegerLoopRegion(
+// Forward block flags preserve whole-label splitting while both loop modes retain their original fallback.
+function emitNumericLoopRegion(
 	fn: BytecodeFunction,
-	plan: NativeIntegerLoopRegionPlan,
+	plan: NativeNumericLoopRegionPlan,
 	reps: ReadonlyArray<VmRegisterRepresentation>,
 ): ReadonlyArray<string> {
 	const members = new Set(plan.claimedIps.filter((ip) => ip !== plan.entryIp));
-	const order = integerLoopOrder(fn, plan.id, members);
+	const order = numericLoopOrder(fn, plan.id, members);
 	const flow =
-		order === undefined ? undefined : numberRecordDataflow(fn, order, -1, reps);
+		order === undefined
+			? undefined
+			: numberRecordDataflow(fn, order, -1, reps, plan.kind === "fixed-f64");
 	if (order === undefined || flow === undefined)
 		throw new Error("Invalid native integer loop region");
-	const id = `__integer_loop_${plan.id}`;
+	const floating = plan.kind === "fixed-f64";
+	const id = floating ? `__typed_loop_${plan.id}` : `__integer_loop_${plan.id}`;
 	const kindOf = (register: number) => {
 		const kind = flow.kinds.get(register);
 		if (kind === undefined) throw new Error("Native integer loop register has no kind");
@@ -732,7 +732,7 @@ function emitIntegerLoopRegion(
 			initial.set(register, `r${register}`);
 			continue;
 		}
-		if (representation === "int32") {
+		if (representation === "int32" && !floating) {
 			initial.set(register, `(i64) r${register}`);
 			continue;
 		}
@@ -741,7 +741,27 @@ function emitIntegerLoopRegion(
 				? `mal_ops_number_as_f64(r${register})`
 				: `(f64) r${register}`;
 		if (representation === "boxed") guards.push(`mal_ops_is_number(r${register})`);
-		guards.push(`mal_safe_integer_admit(${value}, &${local(register)})`);
+		if (floating)
+			initial.set(
+				register,
+				representation === "boxed"
+					? `mal_ops_is_number(r${register}) ? ${value} : NAN`
+					: value,
+			);
+		else guards.push(`mal_safe_integer_admit(${value}, &${local(register)})`);
+	}
+	if (plan.kind === "fixed-f64") {
+		guards.push(
+			`${local(plan.index)} >= 0.0`,
+			`${local(plan.index)} == trunc(${local(plan.index)})`,
+			`${local(plan.bound)} > ${local(plan.index)}`,
+			`${local(plan.bound)} <= UINT32_MAX`,
+			`${local(plan.bound)} == trunc(${local(plan.bound)})`,
+		);
+		for (const view of plan.views)
+			guards.push(
+				`mal_vm_fixed_f64_storage(r${view.object}, (u32) ${local(plan.bound)}, ${view.writable}, &${id}_v${view.object})`,
+			);
 	}
 	const materialize = (register: number, value: string) => {
 		const representation = reps[register];
@@ -751,7 +771,9 @@ function emitIntegerLoopRegion(
 			representation === "number"
 				? `(f64) ${value}`
 				: representation === "int32"
-					? `(i32) ${value}`
+					? floating
+						? `mal_ops_number_to_i32(${value})`
+						: `(i32) ${value}`
 					: `mal_ops_number_value((f64) ${value})`
 		};`;
 	};
@@ -782,16 +804,24 @@ function emitIntegerLoopRegion(
 		return `${id}_b${ip} = true;`;
 	};
 	const truthy = (register: number) =>
-		kindOf(register) === "boolean" ? local(register) : `${local(register)} != 0`;
+		kindOf(register) === "boolean"
+			? local(register)
+			: floating
+				? `mal_number_is_truthy(${local(register)})`
+				: `${local(register)} != 0`;
 	const int32 = (register: number) => `mal_safe_integer_to_i32(${local(register)})`;
 	const checked = (call: string, dst: number) =>
 		`if (__builtin_expect(!${call.replace("%DST%", `&${local(dst)}`)}, 0)) ${restart}`;
 	const statement = (ip: number): string => {
 		const op = fn.instructions[ip]!;
 		switch (op.opcode) {
+			case "LOAD_PROPERTY":
+				return `${local(op.dst)} = mal_scalar_f64_from_bits(mal_scalar_load_native_u64(${id}_v${op.object} + (usize)(u32) ${local(op.key)} * 8));`;
+			case "STORE_PROPERTY":
+				return `mal_scalar_store_native_u64(${id}_v${op.object} + (usize)(u32) ${local(op.key)} * 8, mal_scalar_f64_to_bits(${local(op.value)}));`;
 			case "CREATE_NUMBER":
 			case "CREATE_F64":
-				return `${local(op.dst)} = INT64_C(${op.value});`;
+				return `${local(op.dst)} = ${floating ? cF64Literal(op.value) : `INT64_C(${op.value})`};`;
 			case "CREATE_BOOLEAN":
 				return `${local(op.dst)} = ${op.value};`;
 			case "MOVE":
@@ -802,6 +832,11 @@ function emitIntegerLoopRegion(
 					return `${local(op.dst)} = ${local(op.left)} ${op.operator === "===" || op.operator === "==" ? "==" : op.operator === "!==" || op.operator === "!=" ? "!=" : compare} ${local(op.right)};`;
 				const left = local(op.left);
 				const right = local(op.right);
+				if (floating) {
+					const expression = nativeNumberExpr(op.operator, left, right);
+					if (expression === null) throw new Error("Invalid numeric loop operator");
+					return `${local(op.dst)} = ${expression};`;
+				}
 				switch (op.operator) {
 					case "+":
 						return checked(`mal_safe_integer_add(${left}, ${right}, %DST%)`, op.dst);
@@ -831,6 +866,21 @@ function emitIntegerLoopRegion(
 			}
 			case "UNARY": {
 				const source = local(op.src);
+				if (floating) {
+					const expression =
+						op.operator === "-"
+							? `-${source}`
+							: op.operator === "increment"
+								? `${source} + 1.0`
+								: op.operator === "decrement"
+									? `${source} - 1.0`
+									: op.operator === "~"
+										? `(f64) ~mal_ops_number_to_i32(${source})`
+										: op.operator === "!"
+											? `!(${truthy(op.src)})`
+											: source;
+					return `${local(op.dst)} = ${expression};`;
+				}
 				switch (op.operator) {
 					case "-":
 						return `if (__builtin_expect(${source} == 0, 0)) ${restart} ${local(op.dst)} = -${source};`;
@@ -856,14 +906,18 @@ function emitIntegerLoopRegion(
 	};
 	const lines = [
 		"{",
+		...(plan.kind === "fixed-f64"
+			? plan.views.map((view) => `  byte *${id}_v${view.object} = nullptr;`)
+			: []),
 		...[...flow.kinds].map(
 			([register, kind]) =>
-				`  ${kind === "boolean" ? "bool" : "i64"} ${local(register)} = ${initial.get(register) ?? (kind === "boolean" ? "false" : "0")};`,
+				`  ${kind === "boolean" ? "bool" : floating ? "f64" : "i64"} ${local(register)} = ${initial.get(register) ?? (kind === "boolean" ? "false" : "0")};`,
 		),
 		`  if (${guards.length === 0 ? "true" : guards.join(" && ")}) {`,
+		...(floating ? ["    MAL_PERF_COUNT(fixed_typed_array_region_admissions);"] : []),
 		...plan.carried.map(
 			(register) =>
-				`    ${kindOf(register) === "boolean" ? "bool" : "i64"} ${start(register)} = ${local(register)};`,
+				`    ${kindOf(register) === "boolean" ? "bool" : floating ? "f64" : "i64"} ${start(register)} = ${local(register)};`,
 		),
 		`    u8 ${id}_exit = 0;`,
 		"    for (;;) {",
@@ -3764,7 +3818,7 @@ function emitBody(
 		propertyReadRegions: [],
 		propertyReadPairs: [],
 		numberRecordRegions: [],
-		integerLoopRegions: [],
+		numericLoopRegions: [],
 		pairedArrayLoops: [],
 		arrayPresence: [],
 		arrayPairDestructure: [],
@@ -3873,12 +3927,12 @@ function emitBody(
 	// An admitted region continues at its exit labels.
 	const jumpTargets =
 		fastPathPlans.numberRecordRegions.length === 0 &&
-		fastPathPlans.integerLoopRegions.length === 0
+		fastPathPlans.numericLoopRegions.length === 0
 			? analysis.jumpTargets
 			: new Set([
 					...analysis.jumpTargets,
 					...fastPathPlans.numberRecordRegions.map((plan) => plan.exitIp),
-					...fastPathPlans.integerLoopRegions.flatMap((plan) =>
+					...fastPathPlans.numericLoopRegions.flatMap((plan) =>
 						plan.exits.map((exit) => exit.targetIp),
 					),
 				]);
@@ -3886,7 +3940,7 @@ function emitBody(
 		fastPathPlans.numberRecordRegions.map((plan) => [plan.id, plan]),
 	);
 	const integerLoopRegionByEntry = new Map(
-		fastPathPlans.integerLoopRegions.map((plan) => [plan.entryIp, plan]),
+		fastPathPlans.numericLoopRegions.map((plan) => [plan.entryIp, plan]),
 	);
 	const ownsCaptureEnvironment = coro === null && analysis.ownsCaptureEnvironment;
 	const staticDefineStringIndexByIp = new Map(
@@ -4531,7 +4585,7 @@ function emitBody(
 		}
 		const integerLoop = integerLoopRegionByEntry.get(ip);
 		if (integerLoop !== undefined)
-			for (const line of emitIntegerLoopRegion(fn, integerLoop, reps))
+			for (const line of emitNumericLoopRegion(fn, integerLoop, reps))
 				lines.push(`    ${line}`);
 		const numberRecord = numberRecordRegionById.get(ip);
 		if (numberRecord !== undefined)

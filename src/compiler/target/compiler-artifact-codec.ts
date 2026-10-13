@@ -26,7 +26,7 @@ import type {
 	NativePropertyProjectionPlan,
 	NativePropertyNumericUpdatePlan,
 	NativeNumberRecordRegionPlan,
-	NativeIntegerLoopRegionPlan,
+	NativeNumericLoopRegionPlan,
 	NativePropertyReadRegionPlan,
 	NativePropertyReadPairPlan,
 	NativePropertyProjectionOperand,
@@ -95,7 +95,7 @@ import type {
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal artifacts are hard cut-overs: stale cache entries rebuild.
-export const COMPILER_ARTIFACT_VERSION = 192;
+export const COMPILER_ARTIFACT_VERSION = 193;
 
 function validateClosureCaptureOwners(
 	owners: ReadonlyArray<number>,
@@ -824,8 +824,18 @@ function writeNativeStorage(w: Writer, storage: NativeStoragePlan | undefined): 
 		w.i32Array([...plan.borrowedRegisters]);
 		w.u8(0);
 	}
-	w.u32(storage.integerLoopRegions.length);
-	for (const plan of storage.integerLoopRegions) {
+	w.u32(storage.numericLoopRegions.length);
+	for (const plan of storage.numericLoopRegions) {
+		w.u8(plan.kind === "integer" ? 0 : 1);
+		if (plan.kind === "fixed-f64") {
+			w.i32(plan.index);
+			w.i32(plan.bound);
+			w.u32(plan.views.length);
+			for (const view of plan.views) {
+				w.i32(view.object);
+				w.u8(view.writable ? 1 : 0);
+			}
+		}
 		w.i32(plan.id);
 		w.i32(plan.entryIp);
 		w.i32Array([...plan.inputs]);
@@ -1211,8 +1221,24 @@ function readNativeStorage(r: Reader): NativeStoragePlan {
 			fallback: "original-instructions",
 		});
 	}
-	const integerLoopRegions: Array<NativeIntegerLoopRegionPlan> = [];
+	const numericLoopRegions: Array<NativeNumericLoopRegionPlan> = [];
 	for (let i = 0, count = r.count(29); i < count; i++) {
+		const kindTag = r.u8();
+		if (kindTag > 1) throw new RangeError("Invalid native numeric loop kind");
+		const storage =
+			kindTag === 0
+				? { kind: "integer" as const }
+				: {
+						kind: "fixed-f64" as const,
+						index: r.i32(),
+						bound: r.i32(),
+						views: Array.from({ length: r.count(5) }, () => {
+							const object = r.i32(),
+								writable = r.u8();
+							if (writable > 1) throw new RangeError("Invalid numeric loop view");
+							return { object, writable: writable === 1 };
+						}),
+					};
 		const id = r.i32(),
 			entryIp = r.i32(),
 			inputs = r.i32Array(),
@@ -1224,7 +1250,8 @@ function readNativeStorage(r: Reader): NativeStoragePlan {
 		const claimedIps = r.i32Array(),
 			borrowedRegisters = r.i32Array();
 		if (r.u8() !== 0) throw new RangeError("Invalid native integer loop fallback");
-		integerLoopRegions.push({
+		numericLoopRegions.push({
+			...storage,
 			id,
 			entryIp,
 			inputs,
@@ -1487,7 +1514,7 @@ function readNativeStorage(r: Reader): NativeStoragePlan {
 		propertyReadRegions,
 		propertyReadPairs,
 		numberRecordRegions,
-		integerLoopRegions,
+		numericLoopRegions,
 		pairedArrayLoops,
 		...(constructorInitialization === undefined ? {} : { constructorInitialization }),
 		...(privateFieldReserve === undefined ? {} : { privateFieldReserve }),

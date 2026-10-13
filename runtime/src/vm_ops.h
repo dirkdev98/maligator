@@ -2452,6 +2452,24 @@ static inline u32 mal_vm_typed_array_numeric_index(f64 index) {
     return UINT32_MAX;
 }
 
+// Borrowed bytes are used only until a poll; the numeric region cannot collect or re-enter JS.
+static inline bool mal_vm_fixed_f64_storage(
+    MalValue receiver, u32 count, bool writable, byte **data
+) {
+    if (!mal_value_is_typed_array_object(receiver)) return false;
+    MalTypedArrayObject *array = mal_value_to_typed_array_object(receiver);
+    const MalArrayBufferObject *buffer = array->buffer;
+    if (array->kind != MAL_TA_FLOAT64 || array->length_tracking ||
+        buffer == nullptr || buffer->detached || buffer->resizable ||
+        buffer->shared || buffer->shared_memory != nullptr ||
+        (writable && buffer->immutable) || count > array->length ||
+        buffer->data == nullptr ||
+        (u64) array->byte_offset + (u64) array->length * 8 > buffer->byte_length)
+        return false;
+    *data = buffer->data + array->byte_offset;
+    return true;
+}
+
 bool mal_vm_resolve_typed_array_length(
     MalVm *vm, MalValue receiver, MalInlineCache *ic,
     MalTypedArrayObject **out, u32 *length

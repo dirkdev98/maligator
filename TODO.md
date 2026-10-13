@@ -380,8 +380,14 @@ numeric sorting, stack objects, and string projections.
 - [x] Conditional helper-result objects: keep multi-field results virtual through
       guarded helper joins and loop-local observations; materialize once, preserve
       aliases, and observe subsequent heap mutations. Seven matched laptop pairs
-      improved the source-span helper by 66%; Linux sanitizer coverage is running.
+      improved the source-span helper by 66%; Linux ASan/UBSan, both backends,
+      primordial modes, and GC stress passed.
       Virtual values carried across mixed loop backedges remain conservative.
+- [x] Fixed Float64Array storage: extend numeric-loop admission to two through four
+      fixed nonshared views, range checks, and ordered accesses; leave at polls with
+      the next iteration's state. Seven matched laptop pairs improved the three-view
+      kernel by 94%; both controls were inconclusive. Linux ASan/UBSan passed all
+      16 focused tests, including overlaps, detachment, resizing, coercions, and GC.
 - [ ] Extend a measured capture or split producer into the shared span consumers.
 - [ ] Complete the remaining slices below, including their semantic and measured
       acceptance boundaries; the completed cases do not close the broader tasks.

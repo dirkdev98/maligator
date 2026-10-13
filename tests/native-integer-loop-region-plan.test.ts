@@ -5,7 +5,7 @@ import {
 	deserializeCompilerArtifact,
 	serializeCompilerArtifact,
 } from "../src/compiler/target/compiler-artifact-codec.ts";
-import type { NativeIntegerLoopRegionPlan } from "../src/compiler/target/lower-native-fast-paths.ts";
+import type { NativeNumericLoopRegionPlan } from "../src/compiler/target/lower-native-fast-paths.ts";
 import type { ProgramImage } from "../src/compiler/target/program-image.ts";
 
 function compile(body: string) {
@@ -27,8 +27,8 @@ const COLLATZ = `
 	return steps;
 `;
 
-function regions(image: ProgramImage): ReadonlyArray<NativeIntegerLoopRegionPlan> {
-	return image.native.functions[1]!.storage!.integerLoopRegions;
+function regions(image: ProgramImage): ReadonlyArray<NativeNumericLoopRegionPlan> {
+	return image.native.functions[1]!.storage!.numericLoopRegions;
 }
 
 describe("native safe-integer loop regions", () => {
@@ -108,7 +108,7 @@ describe("native safe-integer loop regions", () => {
 						...image.native,
 						functions: image.native.functions.with(1, {
 							...native,
-							storage: { ...native.storage!, integerLoopRegions: [forged] },
+							storage: { ...native.storage!, numericLoopRegions: [forged] },
 						}),
 					},
 				}),
