@@ -256,11 +256,12 @@ including their tested source identity. The standards lane alone prepares the
 Test262 corpus. Release workflows remain separate.
 
 The weekly and manually dispatched Test262 workflow runs the complete canonical
-compiled/normal report on `main`. It commits `scripts/test262.json` only when the
-complete report has no regressions and the baseline changed. Regressions are never
-accepted into the baseline; one issue named `Automated Test262 regressions` is
-created or reopened and updated from the complete report, then closed by the next
-regression-free run.
+compiled/normal report on `main` and retains its reports for fourteen days. Manual
+runs check the existing baseline without changing it or posting regression issues.
+Scheduled runs commit `scripts/test262.json` only when the complete report has no
+regressions and the baseline changed. Regressions are never accepted into the
+baseline; scheduled runs maintain one issue named `Automated Test262 regressions`,
+closing it after the next regression-free scheduled run.
 
 ## Worker budgets
 

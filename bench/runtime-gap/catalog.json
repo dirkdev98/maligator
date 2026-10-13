@@ -3163,6 +3163,24 @@
 			"controls": ["forwarded-group-by", "forwarded-array-callback"]
 		},
 		{
+			"id": "forwarded-json-callback",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "Shared JSON callback invocation",
+			"category": "api-builtins",
+			"mechanisms": ["json", "array-callback"],
+			"inputShape": "64 two-field records parsed and serialized through runtime-selected captured callbacks.",
+			"unit": "callback invocation",
+			"sourceSeam": "runtime/src/builtin_json.c",
+			"fixture": "cases/forwarded-json-callback.mjs",
+			"controls": [
+				"json-parse",
+				"json-stringify",
+				"json-reviver-wide",
+				"json-replacer-depth"
+			]
+		},
+		{
 			"id": "method-name-unique",
 			"group": "runtime",
 			"suite": "runtime",

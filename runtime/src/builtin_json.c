@@ -670,7 +670,7 @@ static bool mal_json_prepare_value(
     if (mal_value_is_callable(state->replacer_fn)) {
         key_string = mal_json_materialize_key_string(vm, get_key, key_string);
         MalValue replacer_args[2] = {key_string, *value};
-        MalCompletion completion = mal_vm_call_value(
+        MalCompletion completion = mal_vm_call_builtin_callback(
             vm, state->replacer_fn, holder, replacer_args, 2);
         if (completion.kind == MAL_COMPLETION_THROW) return false;
         *value = completion.value;
@@ -1481,6 +1481,14 @@ static MalValue mal_builtin_json_stringify(MalVm *vm, MalValue this_value, const
         state.gap_length = length;
     }
 
+    MalExactScriptCall runtime_callback;
+    bool nominated = (vm->exact_script_call == nullptr ||
+        vm->exact_script_call->callee != state.replacer_fn) &&
+        mal_vm_prepare_builtin_callback(vm, state.replacer_fn, &runtime_callback);
+    if (nominated) {
+        vm->exact_script_call = &runtime_callback;
+        MAL_PERF_COUNT(json_stringify_runtime_callback_nominations);
+    }
     MalValue empty_key = mal_value_from_string(mal_intrinsic_ascii(vm, ""));
     MalJsonBuilder builder = {.vm = vm};
     MalKey root_key = {.kind = MAL_KEY_STRING, .value = empty_key};
@@ -1505,6 +1513,7 @@ static MalValue mal_builtin_json_stringify(MalVm *vm, MalValue this_value, const
             &state, &builder, root_key, empty_key, holder, value, 0);
     }
 
+    if (nominated) vm->exact_script_call = runtime_callback.previous;
     mal_rooted_value_list_dispose(&state.property_list);
     free(state.active.entries);
 
@@ -2576,7 +2585,7 @@ static bool mal_json_internalize(
                 MAL_PROPERTY_CONFIGURABLE);
     }
     MalValue reviver_args[3] = {roots[2], roots[3], roots[4]};
-    MalCompletion completion = mal_vm_call_value(
+    MalCompletion completion = mal_vm_call_builtin_callback(
         vm, roots[0], roots[1], reviver_args, 3);
     if (completion.kind != MAL_COMPLETION_NORMAL) {
         vm->completion = completion;
@@ -2654,10 +2663,20 @@ static MalValue mal_builtin_json_parse(MalVm *vm, MalValue this_value, const Mal
         MalObject *root = mal_intrinsic_new_object(vm);
         MalValue empty_key = mal_value_from_string(mal_intrinsic_ascii(vm, ""));
         mal_intrinsic_define_data(vm, root, "", result, MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE);
+        MalExactScriptCall runtime_callback;
+        bool nominated = (vm->exact_script_call == nullptr ||
+            vm->exact_script_call->callee != reviver) &&
+            mal_vm_prepare_builtin_callback(vm, reviver, &runtime_callback);
+        if (nominated) {
+            vm->exact_script_call = &runtime_callback;
+            MAL_PERF_COUNT(json_parse_runtime_callback_nominations);
+        }
         MalValue revived;
-        if (!mal_json_internalize(
-                vm, reviver, mal_value_from_object(root), empty_key,
-                &parse_state, root_node, &revived, 0)) {
+        bool revived_ok = mal_json_internalize(
+            vm, reviver, mal_value_from_object(root), empty_key,
+            &parse_state, root_node, &revived, 0);
+        if (nominated) vm->exact_script_call = runtime_callback.previous;
+        if (!revived_ok) {
             mal_json_parse_node_dispose(root_node);
             mal_rooted_value_list_dispose(&parse_state.roots);
             mal_string_iterator_dispose(&parser.iterator);

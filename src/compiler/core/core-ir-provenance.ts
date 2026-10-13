@@ -3264,33 +3264,44 @@ function iteratorResultVirtualizationCandidates(
 	control: CoreControlFlow,
 	index: CoreLocalFactIndex,
 ): ReadonlyArray<CoreIteratorResultVirtualizationCandidate> {
-	const steps = indexedOpcodeInstructions(fn, index, "iteratorStep").filter(
-		(instruction) => control.reachable.has(fn.instructionBlock(instruction)),
-	);
+	const protocols = new Map<string, Array<CoreInstructionId>>();
+	for (const instruction of indexedOpcodeInstructions(fn, index, "iteratorStep")) {
+		if (!control.reachable.has(fn.instructionBlock(instruction))) continue;
+		const iterator = instructionOperand(fn, instruction, 0);
+		const next = instructionOperand(fn, instruction, 1);
+		if (iterator === undefined || next === undefined) continue;
+		const key = `${iterator}:${next}`;
+		const steps = protocols.get(key) ?? [];
+		steps.push(instruction);
+		protocols.set(key, steps);
+	}
 	const candidates: Array<CoreIteratorResultVirtualizationCandidate> = [];
-	for (let offset = 0; offset < steps.length; offset += 64) {
-		const shard = Object.freeze(steps.slice(offset, offset + 64));
-		if (shard.length === 0) continue;
-		const exceptionalBlocks = Object.freeze([
-			...new Set(
-				shard.flatMap((instruction) => {
-					const handler = handlerBlock(fn, fn.instructionBlock(instruction));
-					return handler === undefined ? [] : [handler];
+	// Unrelated cursors must not pool benefit under their hottest loop's frequency.
+	for (const steps of protocols.values()) {
+		for (let offset = 0; offset < steps.length; offset += 64) {
+			const shard = Object.freeze(steps.slice(offset, offset + 64));
+			if (shard.length === 0) continue;
+			const exceptionalBlocks = Object.freeze([
+				...new Set(
+					shard.flatMap((instruction) => {
+						const handler = handlerBlock(fn, fn.instructionBlock(instruction));
+						return handler === undefined ? [] : [handler];
+					}),
+				),
+			]);
+			candidates.push(
+				Object.freeze({
+					key: `iterator-result-virtualization:${fn.id}:${shard[0]}`,
+					kind: "iterator-result-virtualization",
+					function: fn.id,
+					root: shard[0]!,
+					steps: shard,
+					exceptionalBlocks,
+					instructions: shard,
+					fanOut: shard.length,
 				}),
-			),
-		]);
-		candidates.push(
-			Object.freeze({
-				key: `iterator-result-virtualization:${fn.id}:${shard[0]}`,
-				kind: "iterator-result-virtualization",
-				function: fn.id,
-				root: shard[0]!,
-				steps: shard,
-				exceptionalBlocks,
-				instructions: shard,
-				fanOut: shard.length,
-			}),
-		);
+			);
+		}
 	}
 	return candidates;
 }

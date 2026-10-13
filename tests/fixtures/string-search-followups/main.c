@@ -7,7 +7,9 @@
 #include "builtin_string.h"
 #include "function_object.h"
 #include "gc.h"
+#include "heap_bigint.h"
 #include "heap_string.h"
+#include "heap_symbol.h"
 #include "perf_stats.h"
 #include "vm.h"
 
@@ -238,8 +240,31 @@ static bool substr_windows_keep_relative_count(MalVm *vm) {
     CHECK(mal_builtin_string_range_span_init(MAL_VALUE_UNDEFINED, receiver, 10, 20,
         MAL_VALUE_UNDEFINED, MAL_VALUE_UNDEFINED, MAL_STRING_RANGE_SUBSTR, true, &subject, &start, &end));
     CHECK(subject == receiver && start == 10 && end == 20);
-    CHECK(!mal_builtin_string_range_span_init(MAL_VALUE_UNDEFINED, receiver, 10, 20,
+    CHECK(mal_builtin_string_range_span_init(MAL_VALUE_UNDEFINED, receiver, 10, 20,
         MAL_VALUE_NULL, MAL_VALUE_UNDEFINED, MAL_STRING_RANGE_SUBSTR, true, &subject, &start, &end));
+    CHECK(subject == receiver && start == 10 && end == 20);
+    CHECK(mal_builtin_string_range_span_init(MAL_VALUE_UNDEFINED, receiver, 10, 20,
+        MAL_VALUE_NULL, mal_value_new_boolean(true), MAL_STRING_RANGE_SUBSTR, true, &subject, &start, &end));
+    CHECK(subject == receiver && start == 10 && end == 11);
+    CHECK(mal_builtin_string_range_span_init(MAL_VALUE_UNDEFINED, receiver, 10, 20,
+        mal_value_from_string(mal_intrinsic_ascii(vm, " -3.9 ")),
+        mal_value_from_string(mal_intrinsic_ascii(vm, "2.9")),
+        MAL_STRING_RANGE_SUBSTR, true, &subject, &start, &end));
+    CHECK(subject == receiver && start == 17 && end == 19);
+    MalValue rejected[3] = {MAL_VALUE_UNDEFINED, MAL_VALUE_UNDEFINED, MAL_VALUE_UNDEFINED};
+    MalRootSpan span;
+    mal_gc_root(&span, rejected, countof(rejected));
+    rejected[0] = mal_value_from_object(mal_object_new(&vm->heap, nullptr));
+    rejected[1] = mal_value_from_bigint(mal_bigint_new(&vm->heap, 0));
+    rejected[2] = mal_value_from_symbol(mal_symbol_new(&vm->heap, nullptr));
+    for (usize i = 0; i < countof(rejected); i++) {
+        CHECK(!mal_builtin_string_range_span_init(MAL_VALUE_UNDEFINED, receiver, 10, 20,
+            rejected[i], MAL_VALUE_UNDEFINED, MAL_STRING_RANGE_SUBSTR, true, &subject, &start, &end));
+        CHECK(!mal_builtin_string_range_span_init(MAL_VALUE_UNDEFINED, receiver, 10, 20,
+            MAL_VALUE_UNDEFINED, rejected[i], MAL_STRING_RANGE_SUBSTR, true, &subject, &start, &end));
+        CHECK(vm->completion.kind != MAL_COMPLETION_THROW);
+    }
+    mal_gc_unroot(&span);
     return true;
 }
 

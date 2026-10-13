@@ -643,9 +643,9 @@ The shared lifetime and fallback rules are recorded in
       collection, boxed comparator semantics, nested contexts, and realm fallback.
       Implemented through one shared canonical callback nomination helper. All 31
       focused checks, Node oracles, eleven frontend/codec/generated-C checks, and
-      runtime C syntax checks pass. The focused sanitizer run passed fourteen controls
-      but exposed three sort stress timeouts. The tests now use the documented
-      compiler-only GC cadence; diagnostic rerun and measurement remain pending.
+      runtime C syntax checks pass. All four Linux ASan/UBSan checks now pass with
+      the documented compiler-only GC cadence; program GC stress and strict counter
+      assertions remain enabled. Measurement remains pending.
 - [ ] Extend enumeration snapshots to `Object.values` on ordinary shaped data
       records. Capture values eagerly in rooted slots, retain the cached result
       materialization, and decline accessors before executing any user effects.
@@ -660,46 +660,52 @@ The shared lifetime and fallback rules are recorded in
       captured environments, nested contexts, and restoration after abrupt completion.
       Implemented through the shared nomination helper; RegExp callback results remain
       rooted during conversion. All 43 focused checks, Node oracles, eleven frontend
-      artifact roundtrips, and runtime/generated C syntax checks pass. Native
-      execution and measurement remain pending.
+      artifact roundtrips, and runtime/generated C syntax checks pass. Typed-context
+      and realm sanitizer checks pass. The remaining modes exposed a Node 24 oracle
+      disagreement for overlapping custom matches; the normative oracle repair is
+      queued for verification. Measurement remains pending.
 - [ ] Admit fresh Array regions inside handler-bearing functions when their local
       allocation and initialization range has one exception target and no external
       entry. Accept immutable BigInt literals through the existing rooted builder;
       continue declining effectful initializers and protected-range crossings.
       Implemented with the existing local body facts and GC-free constant loads.
       All 195 focused checks, Node oracles, four actual bundled programs, byte-identical
-      artifact roundtrips, and emitted C syntax checks pass. Native execution and
-      measurement remain pending.
+      artifact roundtrips, and emitted C syntax checks pass. All four expanded Linux
+      ASan/UBSan checks pass across backends, primordial modes, and GC stress;
+      measurement remains pending.
 
 - [ ] Reuse canonical callback nomination in Array.from and TypedArray.from mapping.
       Preserve iterator versus array-like ordering, custom construction, callback
       this/arity, IteratorClose behavior, roots, and nested transport fallback.
       Implemented in the existing rooted iterable and array-like algorithms. All 43
       focused checks, Node oracles, eleven frontend/artifact roundtrips, and runtime
-      and generated C syntax checks pass. Native execution and measurement remain
-      pending.
+      and generated C syntax checks pass. All four Linux ASan/UBSan checks pass,
+      including typed-context fallback and foreign realms; measurement remains pending.
 - [ ] Admit Object.keys/values snapshots in functions with independent handlers.
       Validate exception successors and keep the retained snapshot lifetime outside
       protected instructions and handler entries; retain generation and alias checks.
       Implemented with existing exception successor facts and bounded alias discovery.
       All 197 focused checks, Node oracles, four actual bundled programs, artifact
-      roundtrips, and generated C syntax checks pass. Native execution and measurement
-      remain pending.
+      roundtrips, and generated C syntax checks pass. Both handler-specific Linux
+      ASan/UBSan checks and both existing snapshot controls pass; measurement remains
+      pending.
 
 - [ ] Accept non-observable primitive position conversions in shared string spans.
       Reuse the canonical number parser for null, Boolean, and primitive string bounds;
       preserve method defaults and defer object, Symbol, and BigInt coercions.
       Implemented through one shared primitive-number guard and canonical parser.
       All 102 focused checks, Node oracles, four actual bundled programs, artifact
-      roundtrips, and runtime/generated C syntax checks pass. Native execution and
+      roundtrips, and runtime/generated C syntax checks pass. Both Linux ASan/UBSan
+      checks pass across primordial modes, backends, and GC stress. A separate C
+      fixture's obsolete null-rejection expectation is repaired; its rerun and
       measurement remain pending.
 - [ ] Reuse canonical callback nomination in Object.groupBy and Map.groupBy.
       Preserve iterator closing, property-key conversion, identity and equality rules,
       callback arity, nested contexts, and rooted group construction. Implemented in
       the existing rooted traversals through the shared callback contract. All 43
       focused checks, Node oracles, ten actual frontend/artifact roundtrips, and
-      runtime/generated C syntax checks pass. Native execution and measurement
-      remain pending.
+      runtime/generated C syntax checks pass. All four Linux ASan/UBSan checks pass,
+      including typed-context fallback and realms; measurement remains pending.
 
 - [ ] Reuse canonical callback nomination in synchronous Iterator terminal methods.
       Preserve the existing forEach, reduce, some, every, and find traversals, exact
@@ -710,9 +716,20 @@ The shared lifetime and fallback rules are recorded in
       remain pending.
 - [ ] Restore entry-pair virtualization selection in the complete collection fixture.
       CI found correct observable output but zero executed entry-pair hits; trace
-      compiler admission and preserve the strict positive and fallback assertions.
-- [ ] Remove the i32 index limit in synchronous Iterator terminal methods after
-      verifying each method's specified counter and overflow behavior.
+      the shared budget's candidate costing. Result regions now group only steps
+      from the same iterator/next protocol, preserving the existing bounds. All 100
+      focused tests, actual bundled selection, artifact roundtrips, and emitted C
+      syntax pass; the native counter rerun remains pending.
+- [ ] Reuse canonical callback nomination for JSON.parse revivers and JSON.stringify
+      replacers. Preserve recursive traversal, holder identity, context.source,
+      toJSON ordering, existing roots, and callback restoration across reentry.
+      Implemented through one dynamically scoped contract per operation, preserving
+      the existing traversal algorithms and automatic-GC suppression. All 43 focused
+      checks, Node oracles, ten actual frontend/artifact roundtrips, and runtime/generated
+      C syntax checks pass; native execution and measurement remain pending.
+- [ ] Remove the i32 index limit in synchronous Iterator terminal methods. Their
+      counters follow Number addition and stop advancing at 2^53; unlike grouping,
+      they must not throw at the safe-integer boundary.
 
 | Order | Slice                        | Owning work and exit condition                                                                                                                                  |
 | ----- | ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |

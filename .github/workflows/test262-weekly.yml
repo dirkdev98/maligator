@@ -56,13 +56,13 @@ jobs:
           echo "improvements=$(jq -r .improvements "$RUNNER_TEMP/test262-summary.json")" >> "$GITHUB_OUTPUT"
 
       - name: Import an improvement-only baseline
-        if: steps.test262.outcome == 'success' && steps.summary.outputs.regressions == '0'
+        if: github.event_name == 'schedule' && steps.test262.outcome == 'success' && steps.summary.outputs.regressions == '0'
         run: >-
           npm run test262:update-baseline --
           --from-report .cache/mal-build/test262/report-compiled-normal-combined.json
 
       - name: Commit a changed baseline
-        if: steps.test262.outcome == 'success' && steps.summary.outputs.regressions == '0'
+        if: github.event_name == 'schedule' && steps.test262.outcome == 'success' && steps.summary.outputs.regressions == '0'
         shell: bash
         run: |
           if git diff --quiet -- scripts/test262.json; then
@@ -77,6 +77,7 @@ jobs:
           git push origin HEAD:main
 
       - name: Update the regression issue
+        if: github.event_name == 'schedule'
         env:
           GH_TOKEN: ${{ github.token }}
           REGRESSIONS: ${{ steps.summary.outputs.regressions }}
@@ -111,6 +112,7 @@ jobs:
           name: test262-reports-${{ github.run_id }}-${{ github.run_attempt }}
           path: .cache/mal-build/test262/report-*.json
           if-no-files-found: warn
+          include-hidden-files: true
           retention-days: 14
 
       - name: Fail on regressions or an incomplete run
