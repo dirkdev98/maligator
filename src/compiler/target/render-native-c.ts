@@ -498,6 +498,7 @@ export interface CompiledFunction extends NativeCallCoverage {
 		resultRepresentation: VmRegisterRepresentation;
 		leaf?: true;
 		callbackSymbol?: string;
+		reductionSymbol?: string;
 		sortSymbol?: string;
 	}>;
 }
@@ -2149,6 +2150,7 @@ export function emitCompiledFunction(
 	maxCodeUnits = Infinity,
 	splitPolicy: NativeSplitPolicy = DEFAULT_NATIVE_SPLIT_POLICY,
 	sortKernelEntries: ReadonlySet<string> = new Set(),
+	reductionEntries: ReadonlySet<string> = new Set(),
 ): CompiledFunction | null {
 	if (native.storage === undefined)
 		throw new Error("Native rendering requires a lowered storage plan");
@@ -2169,6 +2171,7 @@ export function emitCompiledFunction(
 		maxCodeUnits,
 		splitPolicy,
 		sortKernelEntries,
+		reductionEntries,
 	);
 }
 
@@ -2198,6 +2201,7 @@ export function createNativeFunctionRenderer(): typeof emitCompiledFunction {
 		maxCodeUnits = Infinity,
 		splitPolicy: NativeSplitPolicy = DEFAULT_NATIVE_SPLIT_POLICY,
 		sortKernelEntries: ReadonlySet<string> = new Set(),
+		reductionEntries: ReadonlySet<string> = new Set(),
 	): CompiledFunction | null => {
 		if (native.storage === undefined)
 			throw new Error("Native rendering requires a lowered storage plan");
@@ -2229,6 +2233,7 @@ export function createNativeFunctionRenderer(): typeof emitCompiledFunction {
 			maxCodeUnits,
 			splitPolicy,
 			sortKernelEntries,
+			reductionEntries,
 		);
 	};
 }
@@ -2250,6 +2255,7 @@ function renderCompiledFunction(
 	maxCodeUnits = Infinity,
 	splitPolicy: NativeSplitPolicy = DEFAULT_NATIVE_SPLIT_POLICY,
 	sortKernelEntries: ReadonlySet<string> = new Set(),
+	reductionEntries: ReadonlySet<string> = new Set(),
 ): CompiledFunction | null {
 	const fn = native.body;
 	const canonical = emitCompiledVariant(
@@ -2342,7 +2348,13 @@ function renderCompiledFunction(
 				emitted.source +
 				(callbackEntries.has(directCompiledEntryKey(index, entry.id))
 					? `\n${renderCallbackAdapter(entry, index, suffix, linkage)}`
+					: "") +
+				(reductionEntries.has(directCompiledEntryKey(index, entry.id))
+					? `\n${renderReductionAdapter(entry, index, suffix, linkage)}`
 					: ""),
+			...(reductionEntries.has(directCompiledEntryKey(index, entry.id))
+				? { reductionSymbol: `${nativeCallbackSymbol(index, entry.id, suffix)}_reduce` }
+				: {}),
 			...(callbackEntries.has(directCompiledEntryKey(index, entry.id))
 				? { callbackSymbol: nativeCallbackSymbol(index, entry.id, suffix) }
 				: {}),
@@ -2446,6 +2458,27 @@ function renderCallbackAdapter(
 		`    ${cTypeOf(entry.resultRepresentation)} value = mal_direct_${index}_${entry.id}${suffix}(vm, this_value${values.length ? `, ${values.join(", ")}` : ""}, env, callee);`,
 		"    if (MAL_THREW()) return MAL_VALUE_UNDEFINED;",
 		`    return ${result};`,
+		"}",
+	].join("\n");
+}
+
+export function numericReductionDeclaration(symbol: string): string {
+	return `f64 ${symbol}(MalVm *vm, MalValue this_value, f64 accumulator, f64 value, f64 index, MalValue receiver, MalEnv *env, MalValue callee)`;
+}
+
+function renderReductionAdapter(
+	entry: NativeDirectEntryPlan,
+	index: number,
+	suffix: string,
+	linkage: "static" | "external",
+): string {
+	const values = ["accumulator", "value", "index", "receiver"].slice(
+		0,
+		entry.parameterRepresentations.length,
+	);
+	return [
+		`${linkage === "static" ? "static " : ""}${numericReductionDeclaration(`${nativeCallbackSymbol(index, entry.id, suffix)}_reduce`)} {`,
+		`    return mal_direct_${index}_${entry.id}${suffix}(vm, this_value, ${values.join(", ")}, env, callee);`,
 		"}",
 	].join("\n");
 }
@@ -9900,8 +9933,18 @@ function emitInstruction(
 							? nativeCallbackSymbol(callbackTarget, callbackEntry.entryId, suffix)
 							: `mal_compiled_${callbackTarget}${suffix}`
 						: "nullptr";
+				const numericReduction =
+					callbackEntry?.numericReduction === true &&
+					callbackTarget !== undefined &&
+					directCompiledTargets.has(callbackTarget) &&
+					directCompiledEntries.has(
+						directCompiledEntryKey(callbackTarget, callbackEntry.entryId),
+					);
+				const helper = numericReduction
+					? "mal_builtin_array_numeric_reduce_direct"
+					: "mal_builtin_array_iteration_direct";
 				return [
-					`MalCompletion ${tmp} = mal_builtin_array_iteration_direct(vm, ${nativeCallCacheReference(context, ip)}, ${arrayIterationOperation}, ${callPlan?.directCallbackFunctionIndex === undefined ? -1 : relocation.functionIndex(callPlan.directCallbackFunctionIndex)}, ${callbackSymbol}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
+					`MalCompletion ${tmp} = ${helper}(vm, ${nativeCallCacheReference(context, ip)}, ${arrayIterationOperation}, ${callPlan?.directCallbackFunctionIndex === undefined ? -1 : relocation.functionIndex(callPlan.directCallbackFunctionIndex)}, ${callbackSymbol}, ${numericReduction ? `${callbackSymbol}_reduce, ` : ""}${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
 					`if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow()}`,
 					`r${instruction.dst} = ${callResult(`${tmp}.value`)};`,
 					poll(),

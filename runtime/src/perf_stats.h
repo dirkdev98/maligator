@@ -375,6 +375,7 @@ typedef struct MalPerfStats {
     u64 array_iteration_direct_fallbacks;
     u64 array_iteration_exact_callback_calls;
     u64 array_iteration_exact_compiled_callback_calls;
+    u64 array_iteration_numeric_reduce_calls;
     u64 array_iteration_typed_callback_hits;
     u64 array_iteration_typed_callback_fallbacks;
 

@@ -93,7 +93,7 @@ import type {
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal artifacts are hard cut-overs: stale cache entries rebuild.
-export const COMPILER_ARTIFACT_VERSION = 189;
+export const COMPILER_ARTIFACT_VERSION = 190;
 
 function validateClosureCaptureOwners(
 	owners: ReadonlyArray<number>,
@@ -921,6 +921,7 @@ function writeNativeStorage(w: Writer, storage: NativeStoragePlan | undefined): 
 		w.u32(plan.parameters.length);
 		for (const rep of [...plan.parameters, plan.resultRepresentation])
 			w.u8(["int32", "number", "boolean", "boxed", "string"].indexOf(rep));
+		w.u8(plan.numericReduction === true ? 1 : 0);
 	}
 	w.u32(storage.arrayPresence.length);
 	for (const plan of storage.arrayPresence) {
@@ -1344,13 +1345,18 @@ function readNativeStorage(r: Reader): NativeStoragePlan {
 			const argumentCount = r.i32();
 			if (argumentCount < -1)
 				throw new RangeError("Invalid native callback argument count");
+			const parameters = Array.from({ length: r.count(1) }, readCallbackRepresentation);
+			const resultRepresentation = readCallbackRepresentation();
+			const numericReduction = r.u8();
+			if (numericReduction > 1) throw new RangeError("Invalid native numeric reduction");
 			return {
 				instructionIp,
 				functionIndex,
 				entryId,
 				...(argumentCount < 0 ? {} : { argumentCount }),
-				parameters: Array.from({ length: r.count(1) }, readCallbackRepresentation),
-				resultRepresentation: readCallbackRepresentation(),
+				parameters,
+				resultRepresentation,
+				...(numericReduction === 1 ? { numericReduction: true as const } : {}),
 			};
 		},
 	);

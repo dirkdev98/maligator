@@ -12,6 +12,7 @@ import {
 	directCompiledEntryKey,
 	createNativeFunctionRenderer,
 	numericSortKernelDeclaration,
+	numericReductionDeclaration,
 	numericSortKernelDemand,
 } from "./render-native-c.ts";
 import type { CompiledFunction } from "./render-native-c.ts";
@@ -771,6 +772,18 @@ function emitNativeFunctions(
 			),
 		),
 	);
+	const reductionEntries = new Set(
+		image.native.functions.flatMap((native) =>
+			[native.storage, ...native.directEntries.map((entry) => entry.storage)].flatMap(
+				(storage) =>
+					(storage?.callbackTransports ?? []).flatMap((plan) =>
+						plan.numericReduction === true
+							? [directCompiledEntryKey(plan.functionIndex, plan.entryId)]
+							: [],
+					),
+			),
+		),
+	);
 	const sortKernelEntries = numericSortKernelDemand(image.native.functions);
 	const references = image.native.functions.map((native) => {
 		const targets = new Set<number>();
@@ -857,6 +870,7 @@ function emitNativeFunctions(
 				: options.maxCodeUnits - headerCodeUnits,
 			options.nativeFunctionSplit,
 			sortKernelEntries,
+			reductionEntries,
 		);
 		if (
 			emitted === null ||
@@ -1148,6 +1162,8 @@ function emitProgramImageParts(
 						lines.push(
 							`static MalValue ${entry.callbackSymbol}${COMPILED_FUNCTION_DECLARATION};`,
 						);
+					if (entry.reductionSymbol !== undefined)
+						lines.push(`static ${numericReductionDeclaration(entry.reductionSymbol)};`);
 					if (entry.sortSymbol !== undefined)
 						lines.push(`static ${numericSortKernelDeclaration(entry.sortSymbol)};`);
 				}
@@ -1178,6 +1194,8 @@ function emitProgramImageParts(
 				lines.push(`${directEntryDeclaration(entry)};`);
 				if (entry.callbackSymbol !== undefined)
 					lines.push(`MalValue ${entry.callbackSymbol}${COMPILED_FUNCTION_DECLARATION};`);
+				if (entry.reductionSymbol !== undefined)
+					lines.push(`${numericReductionDeclaration(entry.reductionSymbol)};`);
 				if (entry.sortSymbol !== undefined)
 					lines.push(`${numericSortKernelDeclaration(entry.sortSymbol)};`);
 			}
@@ -1518,6 +1536,14 @@ export function emitProgramTranslationUnits(
 									{
 										symbol: entry.callbackSymbol,
 										source: `MalValue ${entry.callbackSymbol}${COMPILED_FUNCTION_DECLARATION};`,
+									},
+								]),
+						...(entry.reductionSymbol === undefined
+							? []
+							: [
+									{
+										symbol: entry.reductionSymbol,
+										source: `${numericReductionDeclaration(entry.reductionSymbol)};`,
 									},
 								]),
 						...(entry.sortSymbol === undefined
@@ -2182,6 +2208,8 @@ export function emitBatch(
 					lines.push(
 						`static MalValue ${entry.callbackSymbol}${COMPILED_FUNCTION_DECLARATION};`,
 					);
+				if (entry.reductionSymbol !== undefined)
+					lines.push(`static ${numericReductionDeclaration(entry.reductionSymbol)};`);
 				if (entry.sortSymbol !== undefined)
 					lines.push(`static ${numericSortKernelDeclaration(entry.sortSymbol)};`);
 			}

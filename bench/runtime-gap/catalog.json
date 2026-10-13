@@ -2552,6 +2552,19 @@
 			"fixture": "cases/json-late-fallback.mjs"
 		},
 		{
+			"id": "numeric-captured-reduce",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "Array.prototype.reduce",
+			"category": "api-builtins",
+			"mechanisms": ["array-callback"],
+			"inputShape": "Two ordered folds of 256 numeric elements with a per-round captured factor and repeated arithmetic in the callback.",
+			"unit": "visited element",
+			"sourceSeam": "runtime/src/builtin_array.c",
+			"fixture": "cases/numeric-captured-reduce.mjs",
+			"controls": ["primordial-array-folds", "array-map"]
+		},
+		{
 			"id": "method-name-unique",
 			"group": "runtime",
 			"suite": "runtime",

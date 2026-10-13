@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
+import { resolveBuildConfig } from "../src/build-config.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
 import { compileSemanticProgramToProgramImage } from "../src/compiler/pipeline/compile-core.ts";
+import {
+	compilerProgramFactsFromConfig,
+	programClosureCertificate,
+	withProgramClosure,
+} from "../src/compiler/shared/compiler-facts.ts";
 import {
 	deserializeCompilerArtifact,
 	serializeCompilerArtifact,
@@ -36,6 +42,60 @@ function callbackImage(body = "return total;", warmArguments = "1, 2") {
 }
 
 describe("native builtin callback transport", () => {
+	it.each(["reduce", "reduceRight"])(
+		"carries the %s numeric accumulator ABI through serialization and split emission",
+		(operation) => {
+			const image = compileSemanticProgramToProgramImage(
+				analyzeSourceAndRunSemanticAnalysis(
+					`globalThis.run = function(values) {
+						return values.${operation}(function(acc, value, index, receiver) {
+							for (let i = 0; i < 2; i++) acc += value;
+							return acc + index;
+						}, 0);
+					};`,
+					"/numeric-reduction.js",
+				),
+				{
+					facts: withProgramClosure(
+						compilerProgramFactsFromConfig(
+							resolveBuildConfig({ engine: { eval: false, realms: false } }),
+						),
+						programClosureCertificate(
+							{ kind: "whole-program", entry: "/numeric-reduction.js" },
+							[],
+							[],
+						),
+					),
+				},
+			);
+			const restored = deserializeCompilerArtifact(serializeCompilerArtifact(image));
+			const caller = restored.native.functions.find((fn) =>
+				fn.storage!.callbackTransports.some((plan) => plan.numericReduction),
+			)!;
+			expect(caller).toBeDefined();
+			const transport = caller.storage!.callbackTransports[0]!;
+			expect(transport).toMatchObject({
+				numericReduction: true,
+				parameters: ["number", "number", "number", "boxed"],
+				resultRepresentation: "number",
+			});
+			const symbol = `mal_callback_${transport.functionIndex}_${transport.entryId}_reduce`;
+			expect(emitProgramImage(restored)).toContain(`f64 ${symbol}(`);
+			const units = emitProgramTranslationUnits(restored);
+			expect(units.some((unit) => unit.source.includes(`f64 ${symbol}(`))).toBe(true);
+			const forged = {
+				...caller,
+				storage: {
+					...caller.storage!,
+					callbackTransports: [{ ...transport, numericReduction: undefined }],
+				},
+			};
+			expect(() =>
+				validateNativeStorage(forged, nativeEntryLookup(image.native.functions)),
+			).toThrow(/invalid or stale storage plan/);
+		},
+	);
+
 	it("persists an existing typed entry and emits one shared callback adapter", () => {
 		const image = callbackImage();
 		const caller = image.native.functions.find(

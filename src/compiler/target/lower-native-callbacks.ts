@@ -9,6 +9,7 @@ export interface NativeCallbackTransportPlan {
 	readonly argumentCount?: number;
 	readonly parameters: ReadonlyArray<VmRegisterRepresentation>;
 	readonly resultRepresentation: VmRegisterRepresentation;
+	readonly numericReduction?: true;
 }
 
 export function selectNativeCallbackTransports(
@@ -64,6 +65,15 @@ export function selectNativeCallbackTransports(
 					: { argumentCount: entry.argumentRepresentations.length }),
 				parameters,
 				resultRepresentation: entry.resultRepresentation,
+				...((call.guardedBuiltinCall?.operation === "Array.prototype.reduce" ||
+					call.guardedBuiltinCall?.operation === "Array.prototype.reduceRight") &&
+				entry.argumentRepresentations === undefined &&
+				entry.resultRepresentation === "number" &&
+				parameters.length >= 2 &&
+				parameters.length <= 4 &&
+				parameters.every((rep, index) => rep === (index < 3 ? "number" : "boxed"))
+					? { numericReduction: true as const }
+					: {}),
 			};
 		}
 		return selected === undefined ? [] : [selected];
@@ -84,6 +94,7 @@ export function nativeCallbackTransportsMatch(
 				plan.entryId === expected.entryId &&
 				plan.argumentCount === expected.argumentCount &&
 				plan.resultRepresentation === expected.resultRepresentation &&
+				plan.numericReduction === expected.numericReduction &&
 				plan.parameters.length === expected.parameters.length &&
 				plan.parameters.every((rep, i) => rep === expected.parameters[i])
 			);

@@ -342,22 +342,46 @@ Runtime eval may remove source closure without invalidating authority closure.
 
 ## P1: callback-aware interprocedural facts
 
-- [ ] Extend shared builtin descriptors with the callback invocation contracts
-      needed by the selected hot consumer: argument kinds/arity, receiver, return
+- [ ] Complete shared builtin callback invocation contracts beyond the existing
+      argument-kind/arity descriptors: receiver, return
       use, invocation multiplicity, retention, and synchronous versus deferred
       invocation. A sort comparator must receive numeric facts only when element
       facts justify them. Preserve canonical identity and mutation requirements;
       builtin names or source closure alone do not prove callback behavior.
 
-- [ ] Feed certified builtin callback edges into the existing bounded signature
-      selection and call-summary machinery, rather than restricting eligibility to
-      ordinary calls. Reuse the per-target and program budgets; account for unknown
+- [ ] Extend the existing builtin-driven signature selection and numeric sort
+      transport into a reusable invocation contract for numeric reduction with
+      captured values. Audit repeated argument preparation, capture-owner resolution,
+      activation checks, and canonical fallback before selecting the remaining cost.
+      Reuse the per-target and program budgets; account for unknown
       callers, recursion, defaults, extra arguments, and captured environments.
       Lower one hot callback consumer through the selected typed entry while
       retaining required activation checks and generic fallback. Exit with real
       admitted sites, less executed marshalling/dispatch, semantic parity, and the
       full discovery/planning cost on both compiler hosts. Do not duplicate the
       sorting algorithm or create an unbounded callback-specialization matrix.
+
+### Region composition implementation sequence
+
+Track the requested expansion through the owning tasks below. Keep semantic,
+mechanism, and measured acceptance separate; reuse existing callback discovery,
+numeric sorting, stack objects, and string projections.
+
+| Order | Slice                        | Owning work and exit condition                                                                                                                                  |
+| ----- | ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1     | Callback invocation          | The tasks above; remove measured repeated invocation work for a numeric reduction with captures.                                                                |
+| 2     | Composable string spans      | P2 composable temporary values; length and literal comparison share a span, with materialization on an escaping branch.                                         |
+| 3     | Cross-call temporary objects | P1 selective effects, aliases, and field facts; carry multiple fields through a helper and a conditional observation, including mutation after materialization. |
+| 4     | Fixed TypedArray storage     | P2 virtual iteration and loop regions; admit a three-view numeric kernel with ordered overlapping accesses and detached/resizable fallback.                     |
+| 5     | Enumeration snapshots        | P2 composable temporary values; eliminate a keys array for a length or keys-only consumer while preserving snapshot order.                                      |
+| 6     | Region-local Map results     | P2 composable temporary values; measure residual lookup cost before retaining multiple owner-relative entry identities.                                         |
+| 7     | Fresh construction           | P2 composable temporary values; share a bounded scalar initialization contract with explicit GC publication state.                                              |
+| 8     | Discriminant and layout      | P1 selective effects, aliases, and field facts; prove a useful tagged-record correlation before specializing field reads.                                       |
+
+For each retained slice, run focused semantic and memory checks, compare repeated
+matched performance samples, then commit and push on main for CI verification.
+Use mjq for longer verification and continue the next independent slice while it
+runs. Keep run identities and raw evidence under the task's ignored cache directory.
 
 ## P1: selective effects, aliases, and field facts
 

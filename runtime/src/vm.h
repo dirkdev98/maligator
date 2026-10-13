@@ -858,6 +858,10 @@ typedef MalValue (*MalCompiledFunction)(
 typedef f64 (*MalNumericSortComparator)(
     MalVm *vm, MalValue this_value, f64 left, f64 right, MalEnv *env, MalValue callee);
 
+typedef f64 (*MalNumericReduceCallback)(
+    MalVm *vm, MalValue this_value, f64 accumulator, f64 value, f64 index,
+    MalValue receiver, MalEnv *env, MalValue callee);
+
 /** Sorts Number values with one comparator compiled in; `keys` holds 2 * count doubles. */
 typedef void (*MalNumericSortKernel)(MalValue *values, MalValue *scratch, f64 *keys, u32 count);
 
@@ -1466,6 +1470,7 @@ typedef struct MalExactScriptCall {
     MalNumericSortKernel numeric_sort_kernel;
     const MalFunction *function;
     MalEnv *env;
+    MalNumericReduceCallback numeric_reduce_callback;
 } MalExactScriptCall;
 
 enum { MAL_LITERAL_CACHE_CAPACITY = 32, MAL_LITERAL_CACHE_MAX_WORDS = 16384 };

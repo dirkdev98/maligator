@@ -1591,64 +1591,89 @@ done:
     return ret;
 }
 
-static MalValue mal_builtin_array_reduce(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
-    if (!mal_builtin_array_to_object(vm, &this_value)) {
-        return mal_value_new_undefined();
+static bool mal_builtin_array_numeric_reduce_call(
+    MalVm *vm, const MalExactScriptCall *exact, f64 accumulator, f64 value,
+    f64 index, MalValue receiver, f64 *result
+) {
+    if (vm->completion.kind == MAL_COMPLETION_THROW) return false;
+#if MAL_REALMS
+    MalRealm *saved_realm = vm->current_realm;
+    mal_vm_realm_switch_to(vm, mal_vm_callee_realm(vm, exact->callee));
+#endif
+    if (mal_vm_enter_compiled(vm, exact->function_index)) {
+        MAL_PERF_COUNT(array_iteration_numeric_reduce_calls);
+        *result = exact->numeric_reduce_callback(
+            vm, mal_vm_callee_this(vm, exact->function, MAL_VALUE_UNDEFINED),
+            accumulator, value, index, receiver, exact->env, exact->callee);
+        mal_vm_leave_compiled(vm);
     }
-    u32 length;
-    if (!mal_builtin_array_this_length(vm, this_value, &length) || !mal_builtin_array_callback_arg(vm, args, arg_count)) {
-        return mal_value_new_undefined();
-    }
-    MalValue accumulator = mal_value_new_undefined();
-    bool has_accumulator = false;
+#if MAL_REALMS
+    mal_vm_realm_switch_to(vm, saved_realm);
+#endif
+    return vm->completion.kind != MAL_COMPLETION_THROW;
+}
 
-    if (arg_count >= 2) {
-        accumulator = args[1];
-        has_accumulator = true;
-    }
+static MalValue mal_builtin_array_reduce_impl(
+    MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, bool right
+) {
+    if (!mal_builtin_array_to_object(vm, &this_value)) return MAL_VALUE_UNDEFINED;
+    f64 length;
+    if (!mal_builtin_array_length_of_array_like(vm, this_value, &length) ||
+        !mal_builtin_array_callback_arg(vm, args, arg_count)) return MAL_VALUE_UNDEFINED;
 
-    // roots[0] = accumulator (carried across every callback), roots[1] = the
-    // current element (a fresh getter result lives only in C locals across the
-    // callback). Both are the live MalValues passed in callback_args. roots[2] =
-    // a boxed primitive receiver the call seam does not track.
-    MalValue roots[3] = {accumulator, mal_value_new_undefined(), this_value};
+    bool has_accumulator = arg_count >= 2;
+    MalValue roots[] = {has_accumulator ? args[1] : MAL_VALUE_UNDEFINED, MAL_VALUE_UNDEFINED, this_value};
     MalRootSpan span;
     mal_gc_root(&span, roots, 3);
     mal_gc_native_rooted_begin(vm);
-    MalValue ret = mal_value_new_undefined();
+    MalValue ret = MAL_VALUE_UNDEFINED;
+    const MalExactScriptCall *exact = vm->exact_script_call;
+    if (exact == nullptr || exact->callee != args[0] || exact->numeric_reduce_callback == nullptr)
+        exact = nullptr;
+    bool numeric = exact != nullptr && mal_ops_is_number(roots[0]);
+    f64 accumulator = numeric ? mal_ops_number_as_f64(roots[0]) : 0;
 
-    for (u32 index = 0; index < length; index++) {
+    for (f64 cursor = 0; cursor < length; cursor++) {
+        f64 index = right ? length - cursor - 1 : cursor;
         MalValue element;
-        if (!mal_builtin_array_try_get(vm, this_value, index, &element)) {
-            continue;
-        }
-
-        if (!has_accumulator) {
-            accumulator = element;
-            roots[0] = accumulator;
-            has_accumulator = true;
+        if (!mal_builtin_array_try_get_wide(vm, this_value, index, &element)) {
+            if (vm->completion.kind == MAL_COMPLETION_THROW) goto done;
             continue;
         }
         roots[1] = element;
-
-        MalValue callback_args[] = {accumulator, element, mal_value_from_i32((i32) index), this_value};
-        MalCompletion completion = mal_builtin_array_call_callback(
-            vm, args[0], mal_value_new_undefined(), callback_args, 4);
-        if (completion.kind != MAL_COMPLETION_NORMAL) {
-            vm->completion = completion;
-            goto done;
+        if (!has_accumulator) {
+            roots[0] = element;
+            has_accumulator = true;
+        } else if (numeric && mal_ops_is_number(element)) {
+            if (!mal_builtin_array_numeric_reduce_call(
+                    vm, exact, accumulator, mal_ops_number_as_f64(element), index,
+                    this_value, &accumulator)) goto done;
+            continue;
+        } else {
+            // Resume with the current accumulator and element; neither the getter nor callback is replayed.
+            MalValue callback_args[] = {
+                numeric ? mal_ops_number_value(accumulator) : roots[0],
+                element, mal_ops_number_value(index), this_value,
+            };
+            MalCompletion completion = mal_builtin_array_call_callback(
+                vm, args[0], MAL_VALUE_UNDEFINED, callback_args, 4);
+            if (completion.kind != MAL_COMPLETION_NORMAL) {
+                vm->completion = completion;
+                goto done;
+            }
+            roots[0] = completion.value;
         }
-
-        accumulator = completion.value;
-        roots[0] = accumulator;
+        numeric = exact != nullptr && mal_ops_is_number(roots[0]);
+        if (numeric) {
+            accumulator = mal_ops_number_as_f64(roots[0]);
+            roots[0] = MAL_VALUE_UNDEFINED;
+        }
     }
-
     if (!has_accumulator) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Reduce of empty array with no initial value");
         goto done;
     }
-
-    ret = accumulator;
+    ret = numeric ? mal_ops_number_value(accumulator) : roots[0];
 
 done:
     mal_gc_native_rooted_end(vm);
@@ -1656,72 +1681,12 @@ done:
     return ret;
 }
 
+static MalValue mal_builtin_array_reduce(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
+    return mal_builtin_array_reduce_impl(vm, this_value, args, arg_count, false);
+}
+
 static MalValue mal_builtin_array_reduce_right(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
-    if (!mal_builtin_array_to_object(vm, &this_value)) {
-        return mal_value_new_undefined();
-    }
-    f64 length;
-    if (!mal_builtin_array_length_of_array_like(vm, this_value, &length) || !mal_builtin_array_callback_arg(vm, args, arg_count)) {
-        return mal_value_new_undefined();
-    }
-
-    MalValue accumulator = mal_value_new_undefined();
-    bool has_accumulator = false;
-
-    if (arg_count >= 2) {
-        accumulator = args[1];
-        has_accumulator = true;
-    }
-
-    // roots[0] = accumulator (carried across every callback), roots[1] = the
-    // current element; both live only in C locals across the callback's
-    // collection. roots[2] = a boxed primitive receiver the call seam misses.
-    MalValue roots[3] = {accumulator, mal_value_new_undefined(), this_value};
-    MalRootSpan span;
-    mal_gc_root(&span, roots, 3);
-    mal_gc_native_rooted_begin(vm);
-    MalValue ret = mal_value_new_undefined();
-
-    for (f64 index = length; index-- > 0;) {
-        MalValue element;
-        if (!mal_builtin_array_try_get_wide(vm, this_value, index, &element)) {
-            if (vm->completion.kind == MAL_COMPLETION_THROW) {
-                goto done;
-            }
-            continue;
-        }
-
-        if (!has_accumulator) {
-            accumulator = element;
-            roots[0] = accumulator;
-            has_accumulator = true;
-            continue;
-        }
-        roots[1] = element;
-
-        MalValue callback_args[] = {accumulator, element, mal_ops_number_value(index), this_value};
-        MalCompletion completion = mal_builtin_array_call_callback(
-            vm, args[0], mal_value_new_undefined(), callback_args, 4);
-        if (completion.kind != MAL_COMPLETION_NORMAL) {
-            vm->completion = completion;
-            goto done;
-        }
-
-        accumulator = completion.value;
-        roots[0] = accumulator;
-    }
-
-    if (!has_accumulator) {
-        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Reduce of empty array with no initial value");
-        goto done;
-    }
-
-    ret = accumulator;
-
-done:
-    mal_gc_native_rooted_end(vm);
-    mal_gc_unroot(&span);
-    return ret;
+    return mal_builtin_array_reduce_impl(vm, this_value, args, arg_count, true);
 }
 
 static MalValue mal_builtin_array_find(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
@@ -5239,12 +5204,13 @@ bool mal_builtin_array_default_map_guard(MalVm *vm, MalValue receiver) {
         mal_array_default_species(vm, receiver);
 }
 
-MalCompletion mal_builtin_array_iteration_direct(
+static MalCompletion mal_builtin_array_iteration_direct_impl(
     MalVm *vm,
     MalCallCache *fallback_cache,
     MalBuiltinArrayIterationOp operation,
     i32 callback_function_index,
     MalCompiledFunction compiled_callback,
+    MalNumericReduceCallback numeric_reduce_callback,
     MalValue callee,
     MalValue this_value,
     const MalValue *args,
@@ -5305,6 +5271,7 @@ MalCompletion mal_builtin_array_iteration_direct(
             .callee = arg_count > 0 ? args[0] : MAL_VALUE_UNDEFINED,
             .function_index = callback_function_index,
             .compiled_callback = compiled_callback,
+            .numeric_reduce_callback = numeric_reduce_callback,
             .function = nullptr,
             .env = nullptr,
         };
@@ -5328,6 +5295,27 @@ MalCompletion mal_builtin_array_iteration_direct(
     MAL_PERF_COUNT(array_iteration_direct_fallbacks);
     return mal_vm_call_cached(
         vm, fallback_cache, callee, this_value, args, arg_count);
+}
+
+MalCompletion mal_builtin_array_iteration_direct(
+    MalVm *vm, MalCallCache *fallback_cache, MalBuiltinArrayIterationOp operation,
+    i32 callback_function_index, MalCompiledFunction compiled_callback,
+    MalValue callee, MalValue this_value, const MalValue *args, i32 arg_count
+) {
+    return mal_builtin_array_iteration_direct_impl(
+        vm, fallback_cache, operation, callback_function_index, compiled_callback,
+        nullptr, callee, this_value, args, arg_count);
+}
+
+MalCompletion mal_builtin_array_numeric_reduce_direct(
+    MalVm *vm, MalCallCache *fallback_cache, MalBuiltinArrayIterationOp operation,
+    i32 callback_function_index, MalCompiledFunction compiled_callback,
+    MalNumericReduceCallback numeric_reduce_callback,
+    MalValue callee, MalValue this_value, const MalValue *args, i32 arg_count
+) {
+    return mal_builtin_array_iteration_direct_impl(
+        vm, fallback_cache, operation, callback_function_index, compiled_callback,
+        numeric_reduce_callback, callee, this_value, args, arg_count);
 }
 
 /**
