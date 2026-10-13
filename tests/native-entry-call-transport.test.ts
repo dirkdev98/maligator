@@ -144,6 +144,7 @@ function skipStorageWithoutFastPaths(reader: Reader): void {
 	expect(reader.u32()).toBe(0);
 	expect(reader.u32()).toBe(0);
 	expect(reader.u32()).toBe(0);
+	for (let index = 0; index < 4; index++) expect(reader.u32()).toBe(0);
 }
 
 function firstOverrideOffset(bytes: Uint8Array): number {

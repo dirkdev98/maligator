@@ -3834,6 +3834,7 @@ function emitBody(
 		mathCalls: [],
 		numberPredicates: [],
 		stringTransforms: [],
+		arrayInitializations: [],
 		mapEntries: [],
 		objectKeysCounts: [],
 		spanContinuations: [],
@@ -3986,6 +3987,11 @@ function emitBody(
 	);
 	const numberPredicates = new Map(
 		fastPathPlans.numberPredicates.map((plan) => [plan.instructionIp, plan]),
+	);
+	const arrayInitializations = new Map(
+		fastPathPlans.arrayInitializations.flatMap((plan) =>
+			plan.claimedIps.map((ip) => [ip, plan] as const),
+		),
 	);
 	const mapEntries = new Map(
 		fastPathPlans.mapEntries.flatMap(
@@ -4471,6 +4477,7 @@ function emitBody(
 		mathCall: undefined,
 		numberPredicate: undefined,
 		stringTransform: undefined,
+		arrayInitialization: undefined,
 		mapEntry: undefined,
 		objectKeysCount: undefined,
 		mappedArguments: fn.mappedArguments,
@@ -4956,6 +4963,7 @@ function emitBody(
 			mathCalleeRegisters.has(contextInstruction.dst);
 		instructionContext.numberPredicate = numberPredicates.get(ip);
 		instructionContext.stringTransform = stringTransforms.get(ip);
+		instructionContext.arrayInitialization = arrayInitializations.get(ip);
 		instructionContext.mapEntry = mapEntries.get(ip);
 		instructionContext.objectKeysCount = objectKeysCounts.get(ip);
 		instructionContext.indexedLengthLoopAction = indexedLengthLoopActionByIp.get(ip);
@@ -5435,6 +5443,10 @@ interface NativeInstructionContext {
 	readonly watchedMathCallee?: boolean;
 	readonly numberPredicate?: NativeNumberPredicatePlan;
 	readonly stringTransform?: NativeStringTransformPlan;
+	readonly arrayInitialization?: {
+		readonly allocationIp: number;
+		readonly values: ReadonlyArray<number>;
+	};
 	readonly mapEntry?: { readonly getIp: number; readonly setIp: number };
 	readonly objectKeysCount?: { readonly callIp: number; readonly lengthIp: number };
 	readonly mappedArguments: boolean;
@@ -6067,6 +6079,17 @@ function emitInstruction(
 				: [
 						`  ${cInactiveRootMaskPublication(context.mathCallInactiveRootMask, context.inactiveRootMaskStatements)};`,
 					]);
+	if (context.arrayInitialization !== undefined) {
+		const plan = context.arrayInitialization;
+		if (ip !== plan.allocationIp) return [];
+		if (instruction.opcode !== "CREATE_ARRAY")
+			throw new Error("Invalid array initialization producer");
+		const values = plan.values.map(boxedOperand).join(", ");
+		return [
+			`MAL_PERF_COUNT(array_initialization_regions);`,
+			`r${instruction.dst} = ${profileCall("allocation", `mal_value_from_array_object(mal_array_object_new_from_values(&vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ARRAY_PROTOTYPE]), (MalValue[]){ ${values} }, ${plan.values.length}))`)};`,
+		];
+	}
 	if (nativeStringSpanAction !== undefined) {
 		const { site, role, consumer } = nativeStringSpanAction;
 		const { span } = site;

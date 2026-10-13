@@ -9,6 +9,7 @@ export function nativeVirtualValueFlow(
 	producerIp: number,
 	result: number,
 	resetIps: ReadonlySet<number> = new Set(),
+	exceptionTargets: ReadonlyArray<number | undefined> = [],
 ) {
 	// Union and intersection distinguish a live virtual alias from a register reused on one incoming path.
 	const incoming = new Map<
@@ -51,6 +52,8 @@ export function nativeVirtualValueFlow(
 		const ip = pending.pop()!;
 		const instruction = instructions[ip]!;
 		const aliases = incoming.get(ip)!;
+		const handler = exceptionTargets[ip];
+		if (handler !== undefined) add(handler, aliases.may, aliases.must, aliases.expired);
 		const may = new Set(aliases.may),
 			must = new Set(aliases.must),
 			expired = new Set(aliases.expired);
@@ -97,8 +100,15 @@ export function validateNativeVirtualValue(
 	transparent: (instruction: BytecodeInstruction) => boolean = () => false,
 	allowMixed = false,
 	resetIps: ReadonlySet<number> = new Set(),
+	exceptionTargets: ReadonlyArray<number | undefined> = [],
 ): void {
-	const incoming = nativeVirtualValueFlow(instructions, producerIp, result, resetIps);
+	const incoming = nativeVirtualValueFlow(
+		instructions,
+		producerIp,
+		result,
+		resetIps,
+		exceptionTargets,
+	);
 	for (const [ip, aliases] of incoming) {
 		const instruction = instructions[ip]!;
 		if (

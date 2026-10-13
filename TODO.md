@@ -401,6 +401,14 @@ numeric sorting, stack objects, and string projections.
       numeric lookups, revalidate live keys before updates, and preserve mutation
       barriers. Seven matched pairs improved interleaved updates by 18%; controls
       changed by less than 0.3%. Focused Linux sanitizer verification is pending.
+- [ ] Fresh Array initialization is checkpointed: consume the existing folded-push
+      and literal-array stores through one prepared-values builder. Input roots,
+      zero scanned length during reserve, card barriers, and final publication stay
+      explicit. Seven matched pairs improved three-value construction by 62%; final
+      sanitizer verification is pending.
+- [ ] Tagged-record investigation: the Binary branch already has one numeric field
+      projection for all three reads. Profile the measured case before introducing
+      additional discriminant/layout state.
 - [ ] Complete the remaining slices below, including their semantic and measured
       acceptance boundaries; the completed cases do not close the broader tasks.
 

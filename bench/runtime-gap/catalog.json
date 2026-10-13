@@ -2565,6 +2565,32 @@
 			"controls": ["primordial-array-folds", "array-map"]
 		},
 		{
+			"group": "runtime",
+			"suite": "runtime",
+			"category": "object-array-representation",
+			"mechanisms": ["allocation-gc"],
+			"unit": "result",
+			"sourceSeam": "src/compiler/target/lower-native-fast-paths.ts",
+			"fixture": "cases/fresh-three-values.mjs",
+			"id": "fresh-three-values",
+			"owner": "Fresh Array initialization",
+			"inputShape": "Three prepared scalar fields in a retained fresh Array returned by a helper.",
+			"controls": ["dynamic-array-operations", "short-lived-records"]
+		},
+		{
+			"group": "runtime",
+			"suite": "runtime",
+			"category": "object-array-representation",
+			"mechanisms": ["property-access"],
+			"unit": "record",
+			"sourceSeam": "src/compiler/target/lower-native-fast-paths.ts",
+			"fixture": "cases/tagged-record-fields.mjs",
+			"id": "tagged-record-fields",
+			"owner": "Tagged record field regions",
+			"inputShape": "Immutable Binary and Literal records with three field reads in the Binary branch.",
+			"controls": ["stable-shape-properties"]
+		},
+		{
 			"id": "map-two-key-interleaved",
 			"group": "runtime",
 			"suite": "runtime",

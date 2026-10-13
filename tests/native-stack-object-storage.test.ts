@@ -20,6 +20,14 @@ function compile(body: string, preamble = "") {
 }
 
 describe("native typed stack fields", () => {
+	it("validates returned objects created on exceptional control-flow", () => {
+		const image = compile(
+			"try { globalThis.observe(input); return {status: 0, signal: null}; } catch (error) { return {status: error.status, signal: error.signal}; }",
+		);
+		expect(deserializeCompilerArtifact(serializeCompilerArtifact(image))).toEqual(image);
+		for (const fn of image.native.functions)
+			expect(() => emitCompiledFunction(fn, fn.functionIndex, "", false)).not.toThrow();
+	});
 	it("persists three independent field representations from an activation-local certificate", () => {
 		const image = compile(
 			"const o={x:1.5,y:2,flag:true}; o.y=3; return o===input?-1:o.x+o.y+(o.flag?1:0);",

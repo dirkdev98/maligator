@@ -1023,6 +1023,7 @@ function rootStorage(
 				...fastPaths.propertyReadPairs,
 				...fastPaths.numberRecordRegions,
 				...fastPaths.numericLoopRegions,
+				...fastPaths.arrayInitializations,
 				...fastPaths.mapEntries,
 				...fastPaths.objectKeysCounts,
 				...fastPaths.spanContinuations,
@@ -1058,6 +1059,7 @@ function rootStorage(
 					...fastPaths.propertyReadPairs,
 					...fastPaths.numberRecordRegions,
 					...fastPaths.numericLoopRegions,
+					...fastPaths.arrayInitializations,
 					...fastPaths.mapEntries,
 					...fastPaths.objectKeysCounts,
 					...fastPaths.spanContinuations,
@@ -1124,6 +1126,7 @@ function scalarStorageWindows(fastPaths: NativeFastPathPlans) {
 		...fastPaths.propertyReadPairs,
 		...fastPaths.numberRecordRegions,
 		...fastPaths.numericLoopRegions,
+		...fastPaths.arrayInitializations,
 		...fastPaths.mapEntries,
 		...fastPaths.objectKeysCounts,
 		...fastPaths.spanContinuations,
@@ -1682,6 +1685,17 @@ export function validateNativeStorage(
 							consumer.kind === value.kind
 						);
 					})
+				);
+			}) &&
+			stored.arrayInitializations.length === selected.arrayInitializations.length &&
+			stored.arrayInitializations.every((plan, index) => {
+				const expected = selected.arrayInitializations[index]!;
+				return (
+					plan.allocationIp === expected.allocationIp &&
+					sameNumbers(plan.stores, expected.stores) &&
+					sameNumbers(plan.values, expected.values) &&
+					sameNumbers(plan.claimedIps, expected.claimedIps) &&
+					sameNumbers(plan.borrowedRegisters, expected.borrowedRegisters)
 				);
 			}) &&
 			stored.mapEntries.length === selected.mapEntries.length &&

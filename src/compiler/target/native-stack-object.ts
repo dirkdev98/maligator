@@ -1,12 +1,15 @@
 import { validateNativeVirtualValue } from "./native-virtual-value.ts";
 import type { VmStackObjectPlanRegion } from "./program-image.ts";
-import { vmInstructionReadRegisters } from "./runtime-image.ts";
-import type { BytecodeInstruction } from "./runtime-image.ts";
+import {
+	vmInstructionReadRegisters,
+	vmExceptionHandlerTargets,
+} from "./runtime-image.ts";
+import type { BytecodeInstruction, BytecodeExceptionHandler } from "./runtime-image.ts";
 
 export function validateNativeStackObject(
 	instructions: ReadonlyArray<BytecodeInstruction>,
 	site: VmStackObjectPlanRegion["sites"][number],
-	hasHandlers = false,
+	handlers: ReadonlyArray<BytecodeExceptionHandler> = [],
 ): void {
 	function fail(): never {
 		throw new RangeError("Invalid stack-object observation region");
@@ -55,7 +58,7 @@ export function validateNativeStackObject(
 	const identityOnly = !site.materializations.some(
 		(materialization) => materialization.kind === "observe",
 	);
-	if (!identityOnly && hasHandlers) fail();
+	if (!identityOnly && handlers.length > 0) fail();
 	validateNativeVirtualValue(
 		instructions,
 		site.allocationIp,
@@ -70,5 +73,7 @@ export function validateNativeStackObject(
 				instruction.opcode === "TYPEOF_COMPARE" ||
 				(instruction.opcode === "UNARY" && instruction.operator === "typeof")),
 		!identityOnly,
+		undefined,
+		vmExceptionHandlerTargets(instructions.length, handlers),
 	);
 }

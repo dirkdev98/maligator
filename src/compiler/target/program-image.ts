@@ -3210,7 +3210,7 @@ function lowerExecutionFunctionToNativePlan(
 					...(inheritedAccessIp === undefined ? {} : { inheritedAccessIp }),
 					materializations: resolvedMaterializations,
 				};
-				validateNativeStackObject(instructions, resolvedSite);
+				validateNativeStackObject(instructions, resolvedSite, handlers);
 				resolvedSites.push(resolvedSite);
 			}
 			const resolvedAggregateClaims = aggregateClaims as Array<number>;

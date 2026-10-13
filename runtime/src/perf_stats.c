@@ -691,6 +691,8 @@ static void mal_perf_stats_print(void) {
         (unsigned long long) mal_perf_stats.shape_case_load_hits,
         (unsigned long long) mal_perf_stats.shape_case_load_fallbacks
     );
+    fprintf(stderr, "[perf-array-initialization-stats] regions=%llu\n",
+        (unsigned long long) mal_perf_stats.array_initialization_regions);
     fprintf(stderr, "[perf-map-region-stats] hits=%llu misses=%llu\n",
         (unsigned long long) mal_perf_stats.map_region_entry_hits,
         (unsigned long long) mal_perf_stats.map_region_entry_misses);

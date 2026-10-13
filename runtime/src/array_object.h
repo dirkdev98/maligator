@@ -256,7 +256,9 @@ void mal_array_object_init(MalHeap *heap, MalArrayObject *array, MalObject *prot
  */
 MalArrayObject *mal_array_object_new(MalHeap *heap, MalObject *prototype);
 
-/** Copy present values into a fresh Array with exact dense capacity. */
+/** Inputs must remain rooted across allocation. Capacity is reserved while the
+ * scanned length is zero; initialization retains card barriers and publishes
+ * the completed dense length once. No safepoint occurs inside initialization. */
 MalArrayObject *mal_array_object_new_from_values(
     MalHeap *heap, MalObject *prototype, const MalValue *values, u32 count
 );

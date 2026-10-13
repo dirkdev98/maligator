@@ -158,3 +158,4 @@ tests/native/root-compiler.test.ts
 tests/native/object-keys-count-region.test.ts
 tests/native/split-span-continuation.test.ts
 tests/native/map-region-entries.test.ts
+tests/native/array-initialization-region.test.ts
