@@ -1,5 +1,6 @@
 import {
 	CORE_STRING_SPAN_METHODS,
+	CORE_STRING_SPAN_RANGE_METHODS,
 	CORE_STRING_SPAN_SEARCH_METHODS,
 } from "../core/core-ir-regions.ts";
 import type { NativeBodyFacts } from "./native-body-facts.ts";
@@ -79,7 +80,7 @@ export function validateNativeStringSpan(
 	if (producer?.opcode !== "CALL" && producer?.opcode !== "CALL_KNOWN") fail();
 	const property = instructions[region.propertyIp];
 	if (
-		(region.rangeOperation !== "slice" && region.rangeOperation !== "substring") ||
+		!CORE_STRING_SPAN_RANGE_METHODS.includes(region.rangeOperation) ||
 		(producer.opcode === "CALL_KNOWN" &&
 			(producer.construct || producer.argumentMode !== undefined)) ||
 		producer.arguments.length > 2 ||

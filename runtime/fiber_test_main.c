@@ -11,6 +11,7 @@
 #include "host.h"
 #include "scheduler.h"
 #include "value.h"
+#include "vm_ops.h"
 
 /*
  * Fiber-foundation acceptance test. Drives the fiber scheduler on a real
@@ -54,6 +55,43 @@ static bool g_splice_completed = false;
 static bool g_splice_reallocated = false;
 static bool g_suspended_root_survived = false;
 static bool g_suspended_frame_rebound = false;
+static bool g_suspended_callback_rebound = false;
+static bool g_suspended_numeric_callbacks_rebound = false;
+static int g_callback_context_corruptions = 0;
+
+static MalValue exact_probe_callback(
+    MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count,
+    MalValue new_target, MalEnv *env, MalValue callee,
+    void *entry_state
+) {
+    (void) vm;
+    (void) this_value;
+    (void) new_target;
+    (void) env;
+    (void) callee;
+    (void) entry_state;
+    return arg_count > 0 ? args[0] : MAL_VALUE_UNDEFINED;
+}
+
+static f64 exact_probe_reduce(
+    MalVm *vm, MalValue this_value, f64 accumulator, f64 value, f64 index,
+    MalValue receiver, MalEnv *env, MalValue callee
+) {
+    (void) vm;
+    (void) this_value;
+    (void) env;
+    return receiver == callee ? accumulator + value + index : -1;
+}
+
+static f64 exact_probe_compare(
+    MalVm *vm, MalValue this_value, f64 left, f64 right, MalEnv *env, MalValue callee
+) {
+    (void) vm;
+    (void) this_value;
+    (void) env;
+    (void) callee;
+    return left - right;
+}
 
 /* Build the unique payload a fiber holds across its whole lifetime. */
 static int make_payload(intptr_t id, byte *buf, int cap) {
@@ -104,6 +142,18 @@ static void suspended_frame_worker(void *arg) {
     MalVmFrame *frame = &g_vm->frames[g_vm->frame_count - 1];
     frame->registers[0] = mal_value_from_string(
         mal_string_new_ascii(&g_vm->heap, payload, sizeof(payload) - 1));
+    MalValue callback = mal_vm_op_create_function(g_vm, 0, nullptr);
+    MalRootSpan callback_root;
+    mal_gc_root(&callback_root, &callback, 1);
+    MalExactScriptCall exact = {
+        .previous = g_vm->exact_script_call,
+        .callee = callback,
+        .function_index = 0,
+        .compiled_callback = exact_probe_callback,
+        .numeric_reduce_callback = exact_probe_reduce,
+        .numeric_sort_comparator = exact_probe_compare,
+    };
+    g_vm->exact_script_call = &exact;
     g_suspended_frame_ready = true;
     mal_sched_yield();
 
@@ -112,6 +162,20 @@ static void suspended_frame_worker(void *arg) {
         frame->registers[0], payload, (int) sizeof(payload) - 1);
     g_suspended_frame_rebound =
         frame->function == &g_vm->live_runtime_image.functions[frame->function_index];
+    if (g_vm->exact_script_call == &exact) {
+        MalCompletion completion = mal_vm_call_builtin_callback(
+            g_vm, callback, MAL_VALUE_UNDEFINED, &frame->registers[0], 1);
+        g_suspended_callback_rebound = completion.kind == MAL_COMPLETION_NORMAL &&
+            completion.value == frame->registers[0];
+        f64 reduced = 0, compared = 0;
+        g_suspended_numeric_callbacks_rebound = mal_vm_call_numeric_reduce_callback(
+            g_vm, &exact, 7, 3, 2, callback, &reduced) && reduced == 12 &&
+            mal_vm_try_numeric_sort_comparison(
+                g_vm, callback, mal_ops_number_value(9), mal_ops_number_value(4), &compared)
+                == MAL_NUMERIC_SORT_COMPLETE && compared == 5;
+    }
+    g_vm->exact_script_call = exact.previous;
+    mal_gc_unroot(&callback_root);
 
     g_vm->value_stack_size = frame->stack_base;
     g_vm->frame_count = previous_frame_count;
@@ -160,8 +224,22 @@ static void worker(void *arg) {
     MalValue held = mal_value_from_string(mal_string_new_ascii(&g_vm->heap, payload, (usize) len));
     MalRootSpan span;
     mal_gc_root(&span, &held, 1);
+    if (g_vm->exact_script_call != nullptr) g_callback_context_corruptions++;
+    MalValue callback = mal_vm_op_create_function(g_vm, 0, nullptr);
+    MalRootSpan callback_root;
+    mal_gc_root(&callback_root, &callback, 1);
+    MalExactScriptCall outer = {
+        .previous = g_vm->exact_script_call,
+        .callee = callback,
+        .function_index = 0,
+        .compiled_callback = exact_probe_callback,
+    };
+    g_vm->exact_script_call = &outer;
 
     for (int i = 0; i < ITER_PER_FIBER; i++) {
+        MalExactScriptCall nested = outer;
+        nested.previous = &outer;
+        g_vm->exact_script_call = &nested;
         if (g_log_len < (int) (sizeof(g_log) / sizeof(g_log[0]))) {
             g_log[g_log_len++] = (int) id;
         }
@@ -181,11 +259,24 @@ static void worker(void *arg) {
         /* Poll point: may collect (STRESS) and may preempt this fiber. */
         mal_gc_safepoint(g_vm);
 
+        if (g_vm->exact_script_call != &nested) g_callback_context_corruptions++;
+        else {
+            MalCompletion completion = mal_vm_call_builtin_callback(
+                g_vm, callback, MAL_VALUE_UNDEFINED, &held, 1);
+            if (completion.kind != MAL_COMPLETION_NORMAL || completion.value != held)
+                g_callback_context_corruptions++;
+        }
+        g_vm->exact_script_call = nested.previous;
+        mal_sched_yield();
+        if (g_vm->exact_script_call != &outer) g_callback_context_corruptions++;
+
         if (!string_matches(held, payload, len)) {
             g_corruptions++;
         }
     }
 
+    g_vm->exact_script_call = outer.previous;
+    mal_gc_unroot(&callback_root);
     mal_gc_unroot(&span);
     g_finished++;
 }
@@ -240,6 +331,10 @@ int main(void) {
         {"eval splice reallocated the function table", g_splice_reallocated},
         {"suspended frame root survived splice-time GC", g_suspended_root_survived},
         {"suspended frame rebound after function-table relocation", g_suspended_frame_rebound},
+        {"suspended exact callback survives function-table relocation", g_suspended_callback_rebound},
+        {"suspended numeric callbacks survive function-table relocation", g_suspended_numeric_callbacks_rebound},
+        {"nested exact callbacks remain local to each fiber", g_callback_context_corruptions == 0},
+        {"main fiber restores its empty callback context", vm.exact_script_call == nullptr},
     };
     int total = (int) (sizeof(checks) / sizeof(checks[0]));
     int passed = 0;

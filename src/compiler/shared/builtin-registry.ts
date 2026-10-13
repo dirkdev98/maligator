@@ -847,19 +847,24 @@ export const builtinOperations: ReadonlyArray<BuiltinOperationDescriptor> = [
 		realm: "semantic-identity",
 		lowerings: ["generic", "span-projection"],
 	})),
-	{
-		id: "String.prototype.trim",
-		owner: "String.prototype",
-		key: "trim",
-		receiver: "string",
-		arity: { minimum: 0, maximum: 0 },
-		evaluationOrder: "receiver-then-arguments",
-		coercionOrder: ["receiver-string"],
-		effects: ["coerce", "allocate", "throw", "safepoint"],
-		result: "string",
-		realm: "semantic-identity",
-		lowerings: ["generic", "split-cursor-span"],
-	},
+	...(["trim", "trimStart", "trimEnd"] as const).map(
+		(key): BuiltinOperationDescriptor => ({
+			id: `String.prototype.${key}`,
+			owner: "String.prototype",
+			key,
+			receiver: "string",
+			arity: { minimum: 0, maximum: 2 },
+			evaluationOrder: "receiver-then-arguments",
+			coercionOrder: ["receiver-string"],
+			effects: ["coerce", "allocate", "throw", "safepoint"],
+			result: "string",
+			realm: "semantic-identity",
+			lowerings:
+				key === "trim"
+					? ["generic", "span-projection", "split-cursor-span"]
+					: ["generic", "span-projection"],
+		}),
+	),
 	{
 		id: "String.prototype.split",
 		owner: "String.prototype",

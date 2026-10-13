@@ -149,6 +149,42 @@ static bool bounded_windows_match_reference(MalVm *vm) {
     return true;
 }
 
+static bool trim_windows_preserve_sources(MalVm *vm) {
+    c16 units[145];
+    for (usize i = 0; i < countof(units); i++) units[i] = 'A';
+    units[46] = ' '; units[47] = '\t'; units[48] = 0xa0; units[49] = 0xd800; units[50] = ' ';
+    MalValue roots[4];
+    for (usize i = 0; i < countof(roots); i++) roots[i] = MAL_VALUE_UNDEFINED;
+    MalRootSpan span;
+    mal_gc_root(&span, roots, countof(roots));
+    roots[0] = mal_value_from_string(mal_string_new_copy(&vm->heap, units, countof(units)));
+    roots[1] = mal_value_from_string(rope_from_units(vm, units, countof(units), false));
+    roots[2] = mal_value_from_string(rope_from_units(vm, units, countof(units), true));
+    const MalStringRangeOp operations[] = {MAL_STRING_RANGE_TRIM, MAL_STRING_RANGE_TRIM_START, MAL_STRING_RANGE_TRIM_END};
+    const usize windows[][2] = {{46, 51}, {46, 49}, {49, 50}, {48, 48}};
+    const usize starts[][3] = {{49,49,46}, {49,49,46}, {49,49,49}, {48,48,48}};
+    const usize ends[][3] = {{50,51,50}, {49,49,46}, {50,50,50}, {48,48,48}};
+    for (usize source = 0; source < 3; source++) {
+        for (usize window = 0; window < countof(windows); window++) {
+            for (usize operation = 0; operation < countof(operations); operation++) {
+                usize start = 999, end = 999;
+                MalValue subject = MAL_VALUE_UNDEFINED;
+                MalStringStorage storage = mal_value_to_string(roots[source])->storage;
+                CHECK(mal_builtin_string_range_span_init(MAL_VALUE_UNDEFINED, roots[source],
+                    windows[window][0], windows[window][1], MAL_VALUE_NULL, mal_value_new_boolean(true),
+                    operations[operation], true, &subject, &start, &end));
+                CHECK(subject == roots[source] && start == starts[window][operation] && end == ends[window][operation]);
+                CHECK(mal_value_to_string(roots[source])->storage == storage);
+                roots[3] = mal_builtin_string_span_materialize(vm, subject, start, end);
+                CHECK(mal_string_length(mal_value_to_string(roots[3])) == end - start);
+                for (usize index = start; index < end; index++) CHECK(mal_string_code_unit_at(mal_value_to_string(roots[3]), index-start) == units[index]);
+            }
+        }
+    }
+    mal_gc_unroot(&span);
+    return true;
+}
+
 static bool compact_single_unit_search(MalVm *vm) {
     c16 units[256];
     for (usize i = 0; i < countof(units); i++) units[i] = (c16) ('a' + i % 23);
@@ -531,7 +567,7 @@ int main(void) {
 #endif
     MalVm vm;
     mal_vm_init(&vm, &mal_runtime_image);
-    bool passed = search_matches_reference(&vm) && bounded_windows_match_reference(&vm) && compact_single_unit_search(&vm)
+    bool passed = search_matches_reference(&vm) && bounded_windows_match_reference(&vm) && trim_windows_preserve_sources(&vm) && compact_single_unit_search(&vm)
         && long_prefix_work_is_bounded(&vm)
         && short_rope_search_work_is_bounded(&vm)
         && split_and_replace_keep_sequential_state(&vm)

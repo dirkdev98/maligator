@@ -556,5 +556,162 @@ check(
 );
 check("repeated conditional uses share one allocation", repeatedConditionalUse());
 
+const handlerGc = globalThis.__mal_collect_garbage ?? globalThis.gc ?? (() => {});
+const handlerErrors = [];
+const handlerRetained = [];
+let handlerInitializers = 0;
+let handlerObserverCalls = 0;
+const handlerMarker = { reason: "before allocation" };
+globalThis.handlerObservedError = (error) => {
+	handlerErrors.push(error);
+	handlerGc();
+};
+
+function handlerBeforeObject(seed, prepare, initialize, observe) {
+	function make(value) {
+		return { value, next: value + 1, label: "span:" + value };
+	}
+	try {
+		prepare(seed);
+	} catch (error) {
+		globalThis.handlerObservedError(error);
+	}
+	const object = make(initialize(seed));
+	if (seed) observe(object, object);
+	object.next = object.value + 2;
+	if (seed) observe(object, object);
+	return object.next + object.label.length;
+}
+
+function handlerDisjointObject(seed, prepare, initialize, observe) {
+	function make(value) {
+		return { value, next: value + 1, label: "branch:" + value };
+	}
+	if (seed < 0) {
+		try {
+			prepare(seed);
+		} catch (error) {
+			globalThis.handlerObservedError(error);
+		}
+		return -1;
+	}
+	const object = make(initialize(seed));
+	if (seed) observe(object, object);
+	object.next = object.value + 3;
+	return object.next + object.label.length;
+}
+globalThis.handlerBeforeObject = handlerBeforeObject;
+globalThis.handlerDisjointObject = handlerDisjointObject;
+
+function initializeHandlerObject(seed) {
+	handlerInitializers++;
+	handlerGc();
+	return seed;
+}
+function observeHandlerObject(object, alias) {
+	handlerObserverCalls++;
+	check("handler-disjoint aliases share identity", object === alias);
+	handlerRetained.push(object);
+	object.value += 10;
+	object.label += ":seen";
+	handlerGc();
+}
+function prepareHandlerObject() {
+	handlerGc();
+	throw handlerMarker;
+}
+const firstHandlerResult = handlerBeforeObject(
+	1,
+	prepareHandlerObject,
+	initializeHandlerObject,
+	observeHandlerObject,
+);
+const firstHandlerObject = handlerRetained[0];
+check(
+	"handler before allocation retains one materialized identity and live mutations",
+	handlerInitializers === 1 &&
+		handlerObserverCalls === 2 &&
+		handlerErrors[0] === handlerMarker &&
+		handlerRetained[1] === firstHandlerObject &&
+		firstHandlerObject.value === 21 &&
+		firstHandlerObject.next === 13 &&
+		firstHandlerResult === 29,
+);
+const initializersBeforeBranch = handlerInitializers;
+check(
+	"disjoint handled branch does not evaluate the initializer",
+	handlerDisjointObject(
+		-1,
+		prepareHandlerObject,
+		initializeHandlerObject,
+		observeHandlerObject,
+	) === -1 && handlerInitializers === initializersBeforeBranch,
+);
+let reentered = false;
+const reentrantHandlerResult = handlerBeforeObject(
+	2,
+	() => {
+		check(
+			"reentry before allocation",
+			handlerDisjointObject(
+				0,
+				prepareHandlerObject,
+				initializeHandlerObject,
+				observeHandlerObject,
+			) === 11,
+		);
+		throw handlerMarker;
+	},
+	initializeHandlerObject,
+	(object, alias) => {
+		observeHandlerObject(object, alias);
+		if (!reentered) {
+			reentered = true;
+			check(
+				"reentry after materialization",
+				handlerDisjointObject(
+					3,
+					prepareHandlerObject,
+					initializeHandlerObject,
+					observeHandlerObject,
+				) === 29,
+			);
+		}
+	},
+);
+check(
+	"distinct activations retain their own cached materialization",
+	reentrantHandlerResult === 30 &&
+		handlerInitializers === 4 &&
+		handlerRetained[2] === handlerRetained[4] &&
+		handlerRetained[2] !== firstHandlerObject &&
+		handlerRetained[3] !== handlerRetained[2] &&
+		firstHandlerObject.value === 21 &&
+		firstHandlerObject.next === 13,
+);
+const beforeThrowInitializers = handlerInitializers;
+let throwingObserverCalls = 0;
+let thrownHandlerObject;
+let caughtObserverError;
+try {
+	handlerBeforeObject(4, prepareHandlerObject, initializeHandlerObject, (object) => {
+		throwingObserverCalls++;
+		thrownHandlerObject = object;
+		object.next = 77;
+		handlerGc();
+		throw handlerMarker;
+	});
+} catch (error) {
+	caughtObserverError = error;
+}
+handlerGc();
+check(
+	"unhandled observer throws once without replay or post-call mutation",
+	caughtObserverError === handlerMarker &&
+		throwingObserverCalls === 1 &&
+		handlerInitializers === beforeThrowInitializers + 1 &&
+		thrownHandlerObject.next === 77,
+);
+
 if (failed !== 0) throw new Error("stack-object failures: " + failed);
 console.log("stack-object PASS " + passed + "/" + passed);

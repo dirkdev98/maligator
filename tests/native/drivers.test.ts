@@ -1,7 +1,7 @@
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
 	assertPassLine,
 	buildNativeBinaryResult,
@@ -15,6 +15,7 @@ import {
 import type { BuildNativeBinaryResult } from "../../src/test-harness.ts";
 
 const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-drivers-"));
+afterAll(() => rmSync(outDir, { recursive: true, force: true }));
 
 // C driver acceptance tests: each links a bespoke *_test_main.c against a trivial
 // isolate and prints a "<tag> PASS N/N" line. All but the pure-function HTTP

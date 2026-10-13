@@ -101,7 +101,7 @@ export function validateNativeVirtualValue(
 	allowMixed = false,
 	resetIps: ReadonlySet<number> = new Set(),
 	exceptionTargets: ReadonlyArray<number | undefined> = [],
-): void {
+): ReturnType<typeof nativeVirtualValueFlow> {
 	const incoming = nativeVirtualValueFlow(
 		instructions,
 		producerIp,
@@ -135,4 +135,5 @@ export function validateNativeVirtualValue(
 			fail();
 	}
 	for (const ip of consumers.keys()) if (!incoming.has(ip)) fail();
+	return incoming;
 }

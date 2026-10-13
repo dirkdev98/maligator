@@ -58,8 +58,8 @@ export function validateNativeStackObject(
 	const identityOnly = !site.materializations.some(
 		(materialization) => materialization.kind === "observe",
 	);
-	if (!identityOnly && handlers.length > 0) fail();
-	validateNativeVirtualValue(
+	const exceptionTargets = vmExceptionHandlerTargets(instructions.length, handlers);
+	const incoming = validateNativeVirtualValue(
 		instructions,
 		site.allocationIp,
 		allocation.dst,
@@ -74,6 +74,18 @@ export function validateNativeStackObject(
 				(instruction.opcode === "UNARY" && instruction.operator === "typeof")),
 		!identityOnly,
 		undefined,
-		vmExceptionHandlerTargets(instructions.length, handlers),
+		exceptionTargets,
 	);
+	if (!identityOnly) {
+		if (exceptionTargets[site.allocationIp] !== undefined) fail();
+		const handlerTargets = new Set(handlers.map((handler) => handler.handlerIp));
+		for (const [ip, aliases] of incoming) {
+			// Materialized aliases still belong to this allocation's lifetime.
+			if (
+				aliases.may.size > 0 &&
+				(exceptionTargets[ip] !== undefined || handlerTargets.has(ip))
+			)
+				fail();
+		}
+	}
 }

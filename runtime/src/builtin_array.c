@@ -5305,12 +5305,9 @@ static MalCompletion mal_builtin_array_iteration_direct_impl(
             .function_index = callback_function_index,
             .compiled_callback = compiled_callback,
             .numeric_reduce_callback = numeric_reduce_callback,
-            .function = nullptr,
             .env = nullptr,
         };
         if (callback_function_index >= 0 && compiled_callback != nullptr) {
-            callback_call.function =
-                &vm->runtime_image->functions[callback_function_index];
             callback_call.env =
                 mal_value_to_function_object(callback_call.callee)->creation_env;
         }

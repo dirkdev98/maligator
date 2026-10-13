@@ -1,5 +1,7 @@
+import type { CoreStringSpanRangeOperation } from "../core/core-ir-regions.ts";
 import {
 	CORE_STRING_SPAN_METHODS,
+	CORE_STRING_SPAN_RANGE_METHODS,
 	CORE_STRING_SPAN_SEARCH_METHODS,
 } from "../core/core-ir-regions.ts";
 import type { NativeBodyFacts } from "./native-body-facts.ts";
@@ -21,7 +23,7 @@ export type NativeSpanConsumer = Omit<VmStringSpanRegion["consumers"][number], "
 export interface NativeSpanContinuation {
 	readonly producerIp: number;
 	readonly sourceKind: "split" | "regexp" | "range";
-	readonly rangeOperation?: "slice" | "substring";
+	readonly rangeOperation?: CoreStringSpanRangeOperation;
 	readonly sourceCallIp: number;
 	readonly consumers: ReadonlyArray<NativeSpanConsumer>;
 	readonly claimedIps: ReadonlyArray<number>;
@@ -68,7 +70,7 @@ export function selectNativeSpanContinuations(
 		producerIp: number;
 		sourceKind: NativeSpanContinuation["sourceKind"];
 		sourceCallIp: number;
-		rangeOperation?: "slice" | "substring";
+		rangeOperation?: CoreStringSpanRangeOperation;
 		propertyIp: number;
 	};
 	const sources: Array<Candidate> = [];
@@ -99,16 +101,13 @@ export function selectNativeSpanContinuations(
 				unavailable(ip)
 			)
 				continue;
-			let operation: "slice" | "substring" | undefined;
+			let operation: CoreStringSpanRangeOperation | undefined;
 			let propertyIp = -1;
 			if (call.opcode === "CALL_KNOWN") {
 				if (call.construct || call.argumentMode !== undefined) continue;
-				operation =
-					call.operation === "String.prototype.slice"
-						? "slice"
-						: call.operation === "String.prototype.substring"
-							? "substring"
-							: undefined;
+				operation = CORE_STRING_SPAN_RANGE_METHODS.find(
+					(method) => call.operation === `String.prototype.${method}`,
+				);
 			} else {
 				for (let at = ip - 1; at >= Math.max(0, ip - 32); at--) {
 					if (body.jumpTargets.has(at + 1) || body.externalEntries.has(at + 1)) break;
@@ -121,8 +120,11 @@ export function selectNativeSpanContinuations(
 							const name = String.fromCharCode(
 								...(strings[definition.stringIndex] ?? []),
 							);
-							if (name === "slice" || name === "substring") {
-								operation = name;
+							const method = CORE_STRING_SPAN_RANGE_METHODS.find(
+								(method) => method === name,
+							);
+							if (method !== undefined) {
+								operation = method;
 								propertyIp = at;
 							}
 						}

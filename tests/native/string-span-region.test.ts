@@ -212,8 +212,11 @@ describe("composable string spans", () => {
 				/\[perf-string-span-search-source-stats\] range=(\d+) split=(\d+) regexp=(\d+) nested=(\d+)/,
 			);
 			expect(searchSources).not.toBeNull();
-			for (const count of searchSources!.slice(1))
-				expect(Number(count)).toBeGreaterThan(0);
+			for (const [index, family] of ["range", "split", "regexp", "nested"].entries())
+				expect(
+					Number(searchSources![index + 1]),
+					`${family}: ${searchSources![0]}`,
+				).toBeGreaterThan(0);
 			const substring = measured.stderr.match(
 				/\[perf-string-span-substring-stats\] admissions=(\d+)/,
 			);

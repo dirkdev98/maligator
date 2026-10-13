@@ -654,3 +654,69 @@ describe("shared search span continuations", () => {
 		).toThrow(/invalid or stale storage plan/);
 	});
 });
+
+describe("trim producers in shared continuations", () => {
+	it.each(["mutable", "locked"] as const)(
+		"composes all source families under %s primordials",
+		(mode) => {
+			for (const source of [
+				"source.slice(1,-1)",
+				"source.split('|')[1]",
+				"/x(.*)z/.exec(source)[1]",
+			])
+				for (const method of ["trim", "trimStart", "trimEnd"]) {
+					const image = compile(
+						`const outer=${source};const part=outer.${method}();const child=part.substring(0,3);observe();if(escape)return outer;return [part.length,child.startsWith('1'),child.codePointAt(0)];`,
+						mode,
+					);
+					const native = image.native.functions[1]!;
+					const plans = [
+						...native.specializations
+							.filter((region) => region.kind === "string-span")
+							.map((region) => ({
+								rangeOperation: region.rangeOperation,
+								consumers: region.consumers,
+							})),
+						...native.storage!.spanContinuations,
+					];
+					expect(plans.some((plan) => plan.rangeOperation === method)).toBe(true);
+					expect(
+						native.storage!.spanContinuations.some((plan) =>
+							plan.consumers.some((consumer) => consumer.kind === "rangeCall"),
+						),
+					).toBe(true);
+					expect(deserializeCompilerArtifact(serializeCompilerArtifact(image))).toEqual(
+						image,
+					);
+					expect(() => emitProgramImage(image)).not.toThrow();
+				}
+		},
+	);
+	it("rejects forged trim source metadata", () => {
+		const image = compile(
+			"const part=source.trim();const child=part.slice(0,2);return child.length+part.length;",
+		);
+		const native = image.native.functions[1]!,
+			plan = native.storage!.spanContinuations.find(
+				(plan) => plan.rangeOperation === "trim",
+			)!;
+		expect(plan).toBeDefined();
+		expect(() =>
+			serializeCompilerArtifact({
+				...image,
+				native: {
+					...image.native,
+					functions: image.native.functions.with(1, {
+						...native,
+						storage: {
+							...native.storage!,
+							spanContinuations: native.storage!.spanContinuations.map((candidate) =>
+								candidate === plan ? { ...plan, rangeOperation: "trimEnd" } : candidate,
+							),
+						},
+					}),
+				},
+			}),
+		).toThrow();
+	});
+});

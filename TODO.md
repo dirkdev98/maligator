@@ -529,7 +529,7 @@ numeric sorting, stack objects, and string projections.
       passes. Split and locked regexp checks now pass, including executed character
       counters. Mutable regexp positive calls ran after prototype mutation permanently
       invalidated the protector; their placement is repaired while fallback coverage
-      and strict counters remain. The sanitizer rerun and measurement remain pending.
+      and strict counters remain. Both regexp sanitizer modes now pass; measurement remains pending.
 
 - [ ] Compose bounded range continuations up to four levels, including split and
       regexp roots, while retaining each span's own lifetime and materialization state.
@@ -550,23 +550,53 @@ numeric sorting, stack objects, and string projections.
       callback contract through target lowering. Focused
       compiler and verifier checks pass; mutable and locked sanitizer checks pass.
       Realm coverage required eval for its Function constructor; that configuration is
-      repaired and its rerun remains pending. Measurement remains pending.
+      repaired and its sanitizer rerun passes. Measurement remains pending.
 - [ ] Share guarded `forEach` invocation across Array, TypedArray, Map, and Set
       receivers passed through helpers and loop backedges. Keep the common callback
       arguments boxed; numeric entry nominations require the existing argument guards.
       Preserve captured-method identity, realm behavior, live iteration, and fallback.
       Implemented through one collection invocation family; constructor syntax hints
       are removed. All 131 focused callback/entry/codec checks, Node oracles, and C
-      syntax checks pass. Native execution and measurement remain pending. Forwarded
-      callback parameters still require a validated runtime invocation contract.
+      syntax checks pass. All five collection sanitizer checks pass, including both
+      backends, primordial modes, GC stress, and foreign realms. Measurement remains
+      pending. Forwarded callback parameters still require a validated runtime
+      invocation contract.
 - [ ] Consume range, split, regexp, and nested spans with `startsWith`, `endsWith`,
       `includes`, and `indexOf` through bounded shared search helpers. Preserve relative
       UTF-16 positions, empty needles, matching boundaries, coercion order, and one-time
       materialization for unsupported or observable arguments.
       Implemented through the existing bounded forward search and KMP cursor, with
       primitive-needle/position guards and per-method/source-family execution counters.
-      Focused compiler checks, Node oracles, and C syntax checks pass; native execution
-      and measurement remain pending.
+      Focused compiler checks, Node oracles, and C syntax checks pass. Both native
+      backends preserve output under GC stress. A locked-mode missing range counter
+      exposed escape analysis counting unreachable inlined predecessor edges; that
+      analysis is repaired, with dead/live merge coverage and 171 focused checks
+      passing. Its native rerun and measurement remain pending.
+- [ ] Admit observed temporary-object lifetimes after unrelated exception handlers
+      and in disjoint branches. Reuse per-function control-flow reachability and
+      target alias flow; preserve rejection of active exception transport and
+      allocation-generation backedges. Implemented with one reverse reachability
+      analysis and reuse of target virtual-value flow. All 131 focused tests, Node
+      oracles, both-mode frontend selection, and artifact roundtrips pass. Native
+      execution and measurement remain pending; later reachable handlers still end
+      admission even when the object's last explicit use precedes them.
+- [ ] Compose `trim`, `trimStart`, and `trimEnd` as shared span producers, including
+      split fields and regexp captures. Reuse whitespace-boundary discovery and the
+      existing consumers, nested lifetime, and cached materialization contract.
+      Preserve method identity, coercions, UTF-16 whitespace, and foreign realms.
+      Implemented with bounded whitespace scans and zero through two ignored
+      arguments. Inlined template observers can now consume a cached materialization
+      through the original ToString operation. All 2,833 focused tests, Node oracles,
+      both-mode frontend selection, and runtime/generated C syntax checks pass.
+      Native execution and measurement remain pending.
+- [ ] Preserve exact callback contexts across runtime image growth and fiber
+      switches. Replace cached function-table row pointers with stable indices and
+      save the dynamically scoped callback context with each fiber's execution state.
+      Cover runtime compilation between callbacks and interleaved suspended builtins.
+      Implemented through stable function indices and the existing fiber execution
+      state. All 145 focused checks, Node oracles, both-mode frontend selection, and
+      runtime/generated C syntax checks pass. Deterministic table relocation and
+      interleaved scheduler regressions are added; native execution remains pending.
 
 | Order | Slice                        | Owning work and exit condition                                                                                                                                  |
 | ----- | ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |

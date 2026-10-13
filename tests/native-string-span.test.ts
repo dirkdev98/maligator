@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { resolveBuildConfig } from "../src/build-config.ts";
+import { parseModule } from "../src/compiler/frontend/parser.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
 import { compileSemanticProgramToProgramImage } from "../src/compiler/pipeline/compile-core.ts";
 import { compilerProgramFactsFromConfig } from "../src/compiler/shared/compiler-facts.ts";
@@ -40,6 +41,53 @@ const branching = `const part = value.slice(start, end); const length = part.len
  return Number(part) + length;`;
 
 describe("composable string spans", () => {
+	it.each(["mutable", "locked"] as const)(
+		"ignores dead inline escape edges while rejecting live mixed-result merges under %s primordials",
+		(mode) => {
+			for (const escape of ["false", "escape"]) {
+				const source = `function project(source, escape) {
+ const part=source.slice(1,-1);
+ const a=part.indexOf('a'), b=part.includes('a'), c=part.startsWith('a'), d=part.endsWith('a');
+ if(escape)return part; return [a,b,c,d,part.length];
+} globalThis.inspect=function inspect(value,escape){return project(value,${escape});};`;
+				const image = compileSemanticProgramToProgramImage(
+					analyzeSourceAndRunSemanticAnalysis(
+						source,
+						"/span-inline-escape.mjs",
+						parseModule(source),
+					),
+					{
+						facts: compilerProgramFactsFromConfig(
+							resolveBuildConfig({ engine: { primordials: mode } }),
+						),
+					},
+				);
+				const caller = image.native.functions.find(
+					(fn) =>
+						String.fromCharCode(
+							...(image.runtime.stringConstants[fn.body.nameStringIndex] ?? []),
+						) === "inspect",
+				)!;
+				const regions = caller.specializations.filter(
+					(region) => region.kind === "string-span",
+				);
+				expect(regions.length).toBe(escape === "false" ? 1 : 0);
+				if (escape === "false")
+					expect(regions[0]!.consumers.map((consumer) => consumer.kind)).toEqual(
+						expect.arrayContaining([
+							"indexOfCall",
+							"includesCall",
+							"startsWithCall",
+							"endsWithCall",
+							"length",
+						]),
+					);
+				expect(deserializeCompilerArtifact(serializeCompilerArtifact(image))).toEqual(
+					image,
+				);
+			}
+		},
+	);
 	it.each(["mutable", "locked"] as const)(
 		"composes code points with both range producers under %s primordials",
 		(mode) => {
@@ -441,4 +489,92 @@ describe("bounded string span searches", () => {
 			}),
 		).toThrow();
 	});
+});
+
+describe("trim range producers", () => {
+	it.each(["mutable", "locked"] as const)(
+		"shares trim bounds and consumers under %s primordials",
+		(mode) => {
+			for (const method of ["trim", "trimStart", "trimEnd"])
+				for (const args of ["", "start", "start, end"]) {
+					const image = compile(
+						`const part=value.${method}(${args});observer();if(escape)return part;return [part.length,part==='12',Number(part),part.charAt(0),part.at(-1),part.codePointAt(0),part.startsWith('1')];`,
+						mode,
+					);
+					expect(spans(image)).toHaveLength(1);
+					expect(spans(image)[0]!.rangeOperation).toBe(method);
+					expect(spans(image)[0]!.consumers.map((consumer) => consumer.kind)).toEqual(
+						expect.arrayContaining([
+							"length",
+							"equal",
+							"number",
+							"charAtCall",
+							"atCall",
+							"codePointAtCall",
+							"startsWithCall",
+							"materialize",
+						]),
+					);
+					expect(deserializeCompilerArtifact(serializeCompilerArtifact(image))).toEqual(
+						image,
+					);
+				}
+		},
+	);
+	it("rejects a forged trim direction", () => {
+		const image = compile("const part=value.trimStart();return part.length;");
+		const fn = image.native.functions.find((fn) =>
+			fn.specializations.some((region) => region.kind === "string-span"),
+		)!;
+		const region = fn.specializations.find((region) => region.kind === "string-span")!;
+		expect(() =>
+			serializeCompilerArtifact({
+				...image,
+				native: {
+					...image.native,
+					functions: image.native.functions.map((candidate) =>
+						candidate === fn
+							? {
+									...fn,
+									specializations: fn.specializations.map((candidate) =>
+										candidate === region
+											? { ...region, rangeOperation: "trimEnd" as const }
+											: candidate,
+									),
+								}
+							: candidate,
+					),
+				},
+			}),
+		).toThrow(/string-span/);
+	});
+});
+
+describe("inlined string observers", () => {
+	it.each(["slice(1,-1)", "trim()"])(
+		"materializes before the original ToString for %s",
+		(operation) => {
+			const image = compile(
+				`const part=value.${operation};const description=\`value:\${part}\`;return [part.length,description];`,
+			);
+			const region = spans(image)[0]!;
+			expect(region).toBeDefined();
+			const fn = image.native.functions.find((fn) =>
+				fn.specializations.includes(region),
+			)!;
+			expect(
+				region.consumers.some((consumer) => {
+					const instruction = fn.body.instructions[consumer.ip];
+					return (
+						consumer.kind === "materialize" &&
+						instruction?.opcode === "UNARY" &&
+						instruction.operator === "tostring"
+					);
+				}),
+			).toBe(true);
+			expect(deserializeCompilerArtifact(serializeCompilerArtifact(image))).toEqual(
+				image,
+			);
+		},
+	);
 });

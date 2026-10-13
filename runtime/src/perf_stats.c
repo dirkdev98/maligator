@@ -919,6 +919,15 @@ static void mal_perf_stats_print(void) {
         (unsigned long long) mal_perf_stats.string_span_split_searches,
         (unsigned long long) mal_perf_stats.string_span_regexp_searches,
         (unsigned long long) mal_perf_stats.string_span_nested_searches);
+    fprintf(stderr, "[perf-string-span-trim-source-stats] direct=%llu range=%llu split=%llu regexp=%llu\n",
+        (unsigned long long) mal_perf_stats.string_span_trim_direct_admissions,
+        (unsigned long long) mal_perf_stats.string_span_trim_range_admissions,
+        (unsigned long long) mal_perf_stats.string_span_trim_split_admissions,
+        (unsigned long long) mal_perf_stats.string_span_trim_regexp_admissions);
+    fprintf(stderr, "[perf-string-span-trim-stats] trim=%llu trim_start=%llu trim_end=%llu\n",
+        (unsigned long long) mal_perf_stats.string_span_trim_admissions,
+        (unsigned long long) mal_perf_stats.string_span_trim_start_admissions,
+        (unsigned long long) mal_perf_stats.string_span_trim_end_admissions);
     fprintf(stderr, "[perf-string-span-substring-stats] admissions=%llu\n",
         (unsigned long long) mal_perf_stats.string_span_substring_admissions);
     fprintf(stderr, "[perf-typed-array-region-stats] admissions=%llu i32_views=%llu u32_views=%llu f32_views=%llu f64_views=%llu f64_regions=%llu i8_views=%llu u8_views=%llu u8c_views=%llu i16_views=%llu u16_views=%llu affine_regions=%llu\n",

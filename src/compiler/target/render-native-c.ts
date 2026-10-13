@@ -3,7 +3,10 @@ import {
 	CORE_STRING_SPAN_METHODS,
 	CORE_STRING_SPAN_SEARCH_METHODS,
 } from "../core/core-ir-regions.ts";
-import type { CorePropertyPlacement } from "../core/core-ir-regions.ts";
+import type {
+	CorePropertyPlacement,
+	CoreStringSpanRangeOperation,
+} from "../core/core-ir-regions.ts";
 import { builtinResultIsInt32 } from "../shared/builtin-registry.ts";
 import {
 	COMPILER_VALUE_KIND_NUMBER,
@@ -445,6 +448,15 @@ const STRING_RANGE_KERNELS: Readonly<Record<string, string>> = {
 	"String.prototype.substring": "SUBSTRING",
 	"String.prototype.substr": "SUBSTR",
 };
+
+const STRING_SPAN_RANGE_KERNELS: Readonly<Record<CoreStringSpanRangeOperation, string>> =
+	{
+		slice: "SLICE",
+		substring: "SUBSTRING",
+		trim: "TRIM",
+		trimStart: "TRIM_START",
+		trimEnd: "TRIM_END",
+	};
 
 const STRING_CHARACTER_KERNELS: Readonly<Record<string, string>> = {
 	"String.prototype.at": "AT",
@@ -3147,7 +3159,7 @@ interface NativeObjectKeysSnapshotSite extends NativeObjectKeysSnapshotPlan {
 interface NativeStringSpanSite {
 	producerIp: number;
 	span?: NativeStringSpan;
-	rangeOperation?: "slice" | "substring";
+	rangeOperation?: CoreStringSpanRangeOperation;
 	parent?: NativeStringSpanSite;
 	projection?: { kind: "split" | "regexp"; callIp: number; slot: number };
 	consumers: ReadonlyArray<NativeSpanConsumer>;
@@ -6262,8 +6274,13 @@ function emitInstruction(
 			return [
 				`${materialized} = MAL_VALUE_UNDEFINED;`,
 				`${source} = MAL_VALUE_UNDEFINED;`,
-				`${prefix}_active = ${profileCall("string", `mal_builtin_string_range_span_init(${callee}, ${receiver}, ${bounds}, ${argument(0)}, ${argument(1)}, MAL_STRING_RANGE_${operation.toUpperCase()}, ${locked ? "true" : "false"}, &${source}, &${prefix}_start, &${prefix}_end)`)};`,
+				`${prefix}_active = ${profileCall("string", `mal_builtin_string_range_span_init(${callee}, ${receiver}, ${bounds}, ${argument(0)}, ${argument(1)}, MAL_STRING_RANGE_${STRING_SPAN_RANGE_KERNELS[operation]}, ${locked ? "true" : "false"}, &${source}, &${prefix}_start, &${prefix}_end)`)};`,
 				`if (${prefix}_active) {`,
+				...(operation === "slice" || operation === "substring"
+					? []
+					: [
+							`  MAL_PERF_COUNT(string_span_trim_${parent === undefined ? "direct" : (parent.projection?.kind ?? "range")}_admissions);`,
+						]),
 				...(parent?.parent === undefined
 					? []
 					: [
@@ -10809,7 +10826,7 @@ function emitInstruction(
 						`  MalCompletion ${tmp};`,
 						...(directCompiledTargets.has(target)
 							? [
-									`  const MalExactScriptCall ${exact} = { .callee = ${guardedCallee}, .function_index = ${target}, .compiled_callback = mal_compiled_${target}${suffix}, .function = &vm->runtime_image->functions[${target}], .env = mal_value_to_function_object(${guardedCallee})->creation_env };`,
+									`  const MalExactScriptCall ${exact} = { .callee = ${guardedCallee}, .function_index = ${target}, .compiled_callback = mal_compiled_${target}${suffix}, .env = mal_value_to_function_object(${guardedCallee})->creation_env };`,
 									`  ${tmp} = mal_vm_call_exact_script_compiled_callback(vm, &${exact}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
 								]
 							: [

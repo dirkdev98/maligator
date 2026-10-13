@@ -3831,7 +3831,7 @@ static inline MalNumericSortComparison mal_vm_try_numeric_sort_comparison(
         MAL_PERF_COUNT(direct_entry_hits);
         MAL_PERF_COUNT(numeric_sort_callback_calls);
         result = exact->numeric_sort_comparator(vm,
-            mal_vm_callee_this(vm, exact->function, MAL_VALUE_UNDEFINED),
+            mal_vm_callee_this(vm, &vm->runtime_image->functions[exact->function_index], MAL_VALUE_UNDEFINED),
             mal_ops_number_as_f64(left), mal_ops_number_as_f64(right), exact->env, compare);
         mal_vm_leave_compiled(vm);
     }

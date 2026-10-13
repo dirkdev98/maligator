@@ -1647,6 +1647,7 @@ static void mal_builtin_string_range_bounds(
     usize length, f64 raw_start, f64 raw_end, MalStringRangeOp operation,
     usize *start_out, usize *end_out
 ) {
+    assert(operation == MAL_STRING_RANGE_SLICE || operation == MAL_STRING_RANGE_SUBSTRING || operation == MAL_STRING_RANGE_SUBSTR);
     usize start;
     usize end;
     if (operation == MAL_STRING_RANGE_SUBSTRING) {
@@ -1713,36 +1714,6 @@ static MalValue mal_builtin_string_prototype_substring(MalVm *vm, MalValue this_
     return mal_builtin_string_range(vm, this_value, args, arg_count, MAL_STRING_RANGE_SUBSTRING);
 }
 
-bool mal_builtin_string_range_span_init(
-    MalValue callee, MalValue receiver, usize source_start, usize source_end,
-    MalValue start_value, MalValue end_value, MalStringRangeOp operation, bool identity_locked,
-    MalValue *subject_out, usize *start_out, usize *end_out
-) {
-    if ((operation != MAL_STRING_RANGE_SLICE && operation != MAL_STRING_RANGE_SUBSTRING) ||
-        !mal_value_is_string(receiver) ||
-        (!mal_ops_is_number(start_value) && !mal_value_is_undefined(start_value)) ||
-        (!mal_ops_is_number(end_value) && !mal_value_is_undefined(end_value)) ||
-        (!identity_locked &&
-         (!mal_value_is_native_function_object(callee) ||
-          mal_native_function_object_callback(mal_value_to_native_function_object(callee)) !=
-              (operation == MAL_STRING_RANGE_SUBSTRING
-                  ? mal_builtin_string_prototype_substring : mal_builtin_string_prototype_slice)))) return false;
-    usize source_length = mal_string_length(mal_value_to_string(receiver));
-    bool nested = source_end != SIZE_MAX;
-    if (!nested) source_end = source_length;
-    if (source_start > source_end || source_end > source_length) return false;
-    usize length = source_end - source_start;
-    f64 start_number = mal_value_is_undefined(start_value) ? 0 : mal_ops_number_as_f64(start_value);
-    f64 end_number = mal_value_is_undefined(end_value) ? (f64) length : mal_ops_number_as_f64(end_value);
-    mal_builtin_string_range_bounds(length, start_number, end_number, operation, start_out, end_out);
-    *start_out += source_start;
-    *end_out += source_start;
-    *subject_out = receiver;
-    if (nested) MAL_PERF_COUNT(string_span_nested_admissions);
-    MAL_PERF_COUNT(string_span_admissions);
-    if (operation == MAL_STRING_RANGE_SUBSTRING) MAL_PERF_COUNT(string_span_substring_admissions);
-    return true;
-}
 
 bool mal_builtin_string_span_character(
     MalVm *vm, MalValue callee, bool locked, MalValue subject, usize start, usize end,
@@ -2384,10 +2355,19 @@ static usize mal_builtin_string_edge_whitespace(
     return count;
 }
 
-MalValue mal_builtin_string_trim_known(MalVm *vm, MalString *string, bool trim_start, bool trim_end) {
-    usize end = mal_string_length(string);
-    usize start = trim_start ? mal_builtin_string_edge_whitespace(string, 0, end, false) : 0;
+static void mal_builtin_string_trim_bounds(
+    MalString *string, usize start, usize end, bool trim_start, bool trim_end,
+    usize *start_out, usize *end_out
+) {
+    if (trim_start) start += mal_builtin_string_edge_whitespace(string, start, end - start, false);
     if (trim_end) end -= mal_builtin_string_edge_whitespace(string, start, end - start, true);
+    *start_out = start;
+    *end_out = end;
+}
+
+MalValue mal_builtin_string_trim_known(MalVm *vm, MalString *string, bool trim_start, bool trim_end) {
+    usize start, end;
+    mal_builtin_string_trim_bounds(string, 0, mal_string_length(string), trim_start, trim_end, &start, &end);
     if (start == 0 && end == mal_string_length(string)) return mal_value_from_string(string);
 
     MalBuiltinRootedString string_root;
@@ -2420,6 +2400,56 @@ static MalValue mal_builtin_string_prototype_trim_end(MalVm *vm, MalValue this_v
     (void) args;
     (void) arg_count;
     return mal_builtin_string_trim_impl(vm, this_value, false, true);
+}
+
+bool mal_builtin_string_range_span_init(
+    MalValue callee, MalValue receiver, usize source_start, usize source_end,
+    MalValue start_value, MalValue end_value, MalStringRangeOp operation, bool identity_locked,
+    MalValue *subject_out, usize *start_out, usize *end_out
+) {
+    MalNativeFunctionCallback expected;
+    bool trim = false;
+    switch (operation) {
+        case MAL_STRING_RANGE_SLICE: expected = mal_builtin_string_prototype_slice; break;
+        case MAL_STRING_RANGE_SUBSTRING: expected = mal_builtin_string_prototype_substring; break;
+        case MAL_STRING_RANGE_TRIM: expected = mal_builtin_string_prototype_trim; trim = true; break;
+        case MAL_STRING_RANGE_TRIM_START: expected = mal_builtin_string_prototype_trim_start; trim = true; break;
+        case MAL_STRING_RANGE_TRIM_END: expected = mal_builtin_string_prototype_trim_end; trim = true; break;
+        default: return false;
+    }
+    if (!mal_value_is_string(receiver) ||
+        (!trim && ((!mal_ops_is_number(start_value) && !mal_value_is_undefined(start_value)) ||
+                   (!mal_ops_is_number(end_value) && !mal_value_is_undefined(end_value)))) ||
+        (!identity_locked && (!mal_value_is_native_function_object(callee) ||
+         mal_native_function_object_callback(mal_value_to_native_function_object(callee)) != expected))) return false;
+    MalString *subject = mal_value_to_string(receiver);
+    usize source_length = mal_string_length(subject);
+    bool nested = source_end != SIZE_MAX;
+    if (!nested) source_end = source_length;
+    if (source_start > source_end || source_end > source_length) return false;
+    if (trim) {
+        mal_builtin_string_trim_bounds(subject, source_start, source_end,
+            operation != MAL_STRING_RANGE_TRIM_END, operation != MAL_STRING_RANGE_TRIM_START,
+            start_out, end_out);
+        switch (operation) {
+            case MAL_STRING_RANGE_TRIM: MAL_PERF_COUNT(string_span_trim_admissions); break;
+            case MAL_STRING_RANGE_TRIM_START: MAL_PERF_COUNT(string_span_trim_start_admissions); break;
+            case MAL_STRING_RANGE_TRIM_END: MAL_PERF_COUNT(string_span_trim_end_admissions); break;
+            default: abort();
+        }
+    } else {
+        usize length = source_end - source_start;
+        f64 start_number = mal_value_is_undefined(start_value) ? 0 : mal_ops_number_as_f64(start_value);
+        f64 end_number = mal_value_is_undefined(end_value) ? (f64) length : mal_ops_number_as_f64(end_value);
+        mal_builtin_string_range_bounds(length, start_number, end_number, operation, start_out, end_out);
+        *start_out += source_start;
+        *end_out += source_start;
+    }
+    *subject_out = receiver;
+    if (nested) MAL_PERF_COUNT(string_span_nested_admissions);
+    MAL_PERF_COUNT(string_span_admissions);
+    if (operation == MAL_STRING_RANGE_SUBSTRING) MAL_PERF_COUNT(string_span_substring_admissions);
+    return true;
 }
 
 // Root-locale case mapping of U+0000..U+00FF is context-free and stays in
@@ -4147,16 +4177,8 @@ bool mal_builtin_string_trim_identity(MalVm *vm, MalValue callee) {
 static u32 mal_builtin_string_trim_span_length(MalString *subject, usize start, usize end) {
     // Flatten once: independent edge descents across successive spans can be quadratic.
     if (subject->storage == MAL_STRING_STORAGE_CONS) mal_string_flat_segment(subject);
-    MalStringSegment segment;
-    bool contiguous = mal_string_try_get_segment(subject, start, end - start, &segment);
-    assert(contiguous);
-    (void) contiguous;
-    usize leading = 0, trailing = segment.length;
-    while (leading < trailing && mal_ecma_is_string_whitespace(
-            mal_string_segment_code_unit_at(&segment, leading))) leading++;
-    while (trailing > leading && mal_ecma_is_string_whitespace(
-            mal_string_segment_code_unit_at(&segment, trailing - 1))) trailing--;
-    return (u32) (trailing - leading);
+    mal_builtin_string_trim_bounds(subject, start, end, true, true, &start, &end);
+    return (u32) (end - start);
 }
 
 bool mal_builtin_string_trim_span_length_locked(

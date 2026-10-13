@@ -2,6 +2,7 @@ import type {
 	CoreBuiltinIdentityDecision,
 	CoreCollectionBuiltinOperation,
 	CorePropertyPlacement,
+	CoreStringSpanRangeOperation,
 } from "../core/core-ir-regions.ts";
 import type {
 	SourceFunctionOrigin,
@@ -64,6 +65,8 @@ export const VM_GUARDED_BUILTIN_OPERATIONS = [
 	"String.prototype.substring",
 	"String.prototype.split",
 	"String.prototype.trim",
+	"String.prototype.trimStart",
+	"String.prototype.trimEnd",
 	"Map.prototype.get",
 	"Map.prototype.set",
 	"Map.prototype.has",
@@ -484,7 +487,7 @@ export type VmStringSpanRegion = VmRegionEnvelope<
 	"primitive-string-span",
 	"on-demand"
 > & {
-	readonly rangeOperation: "slice" | "substring";
+	readonly rangeOperation: CoreStringSpanRangeOperation;
 	readonly propertyIp: number;
 	readonly propertyPlacement: CorePropertyPlacement;
 	readonly builtinIdentities: CoreBuiltinIdentityDecision;

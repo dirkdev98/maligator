@@ -147,6 +147,16 @@ export interface CorePlanStringSplitProjectionSpecialization extends CorePlanSpe
 	};
 }
 
+export const CORE_STRING_SPAN_RANGE_METHODS = [
+	"slice",
+	"substring",
+	"trim",
+	"trimStart",
+	"trimEnd",
+] as const;
+export type CoreStringSpanRangeOperation =
+	(typeof CORE_STRING_SPAN_RANGE_METHODS)[number];
+
 export const CORE_STRING_SPAN_CHARACTER_METHODS = [
 	"charCodeAt",
 	"codePointAt",
@@ -194,7 +204,7 @@ export interface CoreStringSpanConsumer {
 
 export interface CorePlanStringSpanSpecialization extends CorePlanSpecializationBase<"string-span"> {
 	readonly stringSpan: {
-		readonly rangeOperation: "slice" | "substring";
+		readonly rangeOperation: CoreStringSpanRangeOperation;
 		readonly guard: CompilerGuardPlan;
 		readonly builtinCall: KnownBuiltinCall;
 		readonly property?: CoreInstructionId;
@@ -724,7 +734,7 @@ export interface CoreAllocatedStringSpanRegion extends CoreAllocatedRegionEnvelo
 		CompilerInstruction,
 	]
 > {
-	readonly rangeOperation: "slice" | "substring";
+	readonly rangeOperation: CoreStringSpanRangeOperation;
 	readonly property?: Extract<CompilerInstruction, { type: "loadPropertyStatic" }>;
 	readonly propertyPlacement: CorePropertyPlacement;
 	readonly builtinIdentities: CoreBuiltinIdentityDecision;

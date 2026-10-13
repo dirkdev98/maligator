@@ -243,6 +243,13 @@ typedef struct MalPerfStats {
     u64 string_span_char_at_reads;
     u64 string_span_at_reads;
     u64 string_span_substring_admissions;
+    u64 string_span_trim_admissions;
+    u64 string_span_trim_start_admissions;
+    u64 string_span_trim_end_admissions;
+    u64 string_span_trim_direct_admissions;
+    u64 string_span_trim_range_admissions;
+    u64 string_span_trim_split_admissions;
+    u64 string_span_trim_regexp_admissions;
     u64 string_span_nested_admissions;
     u64 string_span_deep_admissions;
     u64 string_span_index_of_searches;

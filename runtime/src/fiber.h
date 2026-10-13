@@ -61,6 +61,7 @@ typedef struct MalFiberExec {
 
     i32 native_call_depth;
     i32 proxy_dispatch_depth;
+    MalExactScriptCall *exact_script_call;
     uptr stack_limit;
     i32 gc_native_frames;
     u64 frame_seq;

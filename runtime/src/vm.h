@@ -1454,13 +1454,8 @@ typedef struct MalSemanticEpochs {
     u64 watched_methods;
 } MalSemanticEpochs;
 
-/**
- * Dynamically scoped exact script-call fact published by generated code while a
- * native builtin repeatedly invokes one of its arguments. The callee remains
- * rooted by the generated caller's argument register; this context only carries
- * the independently proved function coordinate. `previous` makes nested and
- * re-entrant builtin calls restore the enclosing fact exactly.
- */
+// Callback facts borrow the rooted builtin arguments. Function indices survive
+// eval relocating the metadata table; previous is scoped to the current fiber.
 typedef struct MalExactScriptCall {
     struct MalExactScriptCall *previous;
     MalValue callee;
@@ -1468,7 +1463,6 @@ typedef struct MalExactScriptCall {
     MalCompiledFunction compiled_callback;
     MalNumericSortComparator numeric_sort_comparator;
     MalNumericSortKernel numeric_sort_kernel;
-    const MalFunction *function;
     MalEnv *env;
     MalNumericReduceCallback numeric_reduce_callback;
 } MalExactScriptCall;
@@ -2643,7 +2637,7 @@ mal_vm_call_exact_script_compiled_callback(
     } else {
         MalValue value = exact->compiled_callback(
             vm,
-            mal_vm_callee_this(vm, exact->function, this_value),
+            mal_vm_callee_this(vm, &vm->runtime_image->functions[exact->function_index], this_value),
             args,
             arg_count,
             MAL_VALUE_UNDEFINED,
@@ -2696,7 +2690,7 @@ static inline __attribute__((always_inline)) bool mal_vm_call_numeric_reduce_cal
     if (mal_vm_enter_compiled(vm, exact->function_index)) {
         MAL_PERF_COUNT(array_iteration_numeric_reduce_calls);
         *result = exact->numeric_reduce_callback(
-            vm, mal_vm_callee_this(vm, exact->function, MAL_VALUE_UNDEFINED),
+            vm, mal_vm_callee_this(vm, &vm->runtime_image->functions[exact->function_index], MAL_VALUE_UNDEFINED),
             accumulator, value, index, receiver, exact->env, exact->callee);
         mal_vm_leave_compiled(vm);
     }
@@ -2730,7 +2724,6 @@ mal_vm_call_function_call_direct_compiled(
             .callee = target,
             .function_index = expected_function_index,
             .compiled_callback = callback,
-            .function = &vm->runtime_image->functions[expected_function_index],
             .env = mal_value_to_function_object(target)->creation_env,
         };
         return mal_vm_call_exact_script_compiled_callback(

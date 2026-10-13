@@ -15,10 +15,12 @@ import type { CoreLoopInductionAnalysis } from "./core-ir-loops.ts";
 import { coreTargetSupportsNumericFusionOperator } from "./core-ir-region-strategies.ts";
 import {
 	CORE_STRING_SPAN_METHODS,
+	CORE_STRING_SPAN_RANGE_METHODS,
 	CORE_STRING_SPAN_SEARCH_METHODS,
 } from "./core-ir-regions.ts";
 import type {
 	CoreStringSpanConsumer,
+	CoreStringSpanRangeOperation,
 	CoreStackObjectMaterialization,
 } from "./core-ir-regions.ts";
 import type {
@@ -953,7 +955,7 @@ export interface CoreStringSplitProjectionCandidate extends CoreLocalSpecializat
 export interface CoreStringSpanCandidate extends CoreLocalSpecializationCandidateBase<"string-span"> {
 	readonly property?: CoreInstructionId;
 	readonly call: CoreInstructionId;
-	readonly rangeOperation: "slice" | "substring";
+	readonly rangeOperation: CoreStringSpanRangeOperation;
 	readonly resultValues: ReadonlyArray<CoreValueId>;
 	readonly consumers: ReadonlyArray<CoreStringSpanConsumer>;
 	readonly exceptionalBlocks: ReadonlyArray<CoreBlockId>;
@@ -1150,6 +1152,7 @@ const FRESH_DENSE_NUMERIC_OPERATORS: ReadonlySet<string> = new Set([
 interface CoreStackObjectControlUses {
 	readonly escapingRoots: ReadonlySet<CoreValueId>;
 	readonly returns: ReadonlyMap<CoreValueId, ReadonlyArray<CoreInstructionId>>;
+	readonly reachesExceptionTransport: ReadonlySet<CoreBlockId>;
 }
 
 function stackObjectControlUses(
@@ -1160,7 +1163,13 @@ function stackObjectControlUses(
 	const root = (value: CoreValueId): CoreValueId => roots.get(value) ?? value;
 	const escapingRoots = new Set<CoreValueId>();
 	const returns = new Map<CoreValueId, Array<CoreInstructionId>>();
+	const reachesExceptionTransport = new Set<CoreBlockId>();
 	for (const block of control.reachable) {
+		const handler = handlerBlock(fn, block);
+		if (handler !== undefined) {
+			reachesExceptionTransport.add(block);
+			reachesExceptionTransport.add(handler);
+		}
 		const handlerArgumentStart = fn.kernel.blockHandlerArgumentStart(block);
 		const handlerArgumentCount = fn.kernel.blockHandlerArgumentCount(block);
 		for (let index = 0; index < handlerArgumentCount; index++) {
@@ -1172,6 +1181,7 @@ function stackObjectControlUses(
 		for (let index = 0; index < parameterCount; index++) {
 			const parameter = root(fn.kernel.blockParameterValue(parameterStart + index));
 			for (const edge of incoming) {
+				if (!control.reachable.has(edge.from)) continue;
 				const argument = edge.arguments[edge.kind === "exceptional" ? index - 1 : index];
 				if (argument === undefined) continue;
 				const argumentRoot = root(argument);
@@ -1196,7 +1206,16 @@ function stackObjectControlUses(
 			escapingRoots.add(valueRoot);
 		}
 	}
-	return { escapingRoots, returns };
+	const pending = [...reachesExceptionTransport];
+	while (pending.length > 0) {
+		const block = pending.pop()!;
+		for (const edge of control.predecessors[block] ?? []) {
+			if (edge.kind !== "ordinary" || reachesExceptionTransport.has(edge.from)) continue;
+			reachesExceptionTransport.add(edge.from);
+			pending.push(edge.from);
+		}
+	}
+	return { escapingRoots, returns, reachesExceptionTransport };
 }
 
 function stackObjectCandidate(
@@ -1216,10 +1235,14 @@ function stackObjectCandidate(
 		return undefined;
 	const allocationRoot = roots.get(layout.result) ?? layout.result;
 	const flow = controlUses();
+	const reachesExceptionTransport = flow.reachesExceptionTransport.has(
+		fn.instructionBlock(layout.instruction),
+	);
 	const aliases = new Set([allocationRoot]);
 	if (flow.escapingRoots.has(allocationRoot)) {
 		// A guarded helper can join its virtual result with an ordinary fallback result.
 		if (
+			reachesExceptionTransport ||
 			control.irreducibleCycles.some((loop) =>
 				loop.blocks.has(fn.instructionBlock(layout.instruction)),
 			)
@@ -1229,8 +1252,6 @@ function stackObjectCandidate(
 		while (changed) {
 			changed = false;
 			for (const block of control.reachable) {
-				if (handlerBlock(fn, block) !== undefined || index.handlerTargets.has(block))
-					return undefined;
 				const start = fn.kernel.blockParameterStart(block);
 				for (
 					let parameterIndex = 0;
@@ -1242,6 +1263,7 @@ function stackObjectCandidate(
 					if (aliases.has(root)) continue;
 					if (
 						(control.predecessors[block] ?? []).some((edge) => {
+							if (edge.kind !== "ordinary") return false;
 							const argument = edge.arguments[parameterIndex];
 							return (
 								argument !== undefined && aliases.has(roots.get(argument) ?? argument)
@@ -1268,6 +1290,15 @@ function stackObjectCandidate(
 				return undefined;
 		}
 		for (const block of control.reachable) {
+			const handlerArgumentStart = fn.kernel.blockHandlerArgumentStart(block);
+			for (
+				let offset = 0;
+				offset < fn.kernel.blockHandlerArgumentCount(block);
+				offset++
+			) {
+				const value = fn.kernel.handlerArgumentAt(handlerArgumentStart + offset);
+				if (aliases.has(roots.get(value) ?? value)) return undefined;
+			}
 			const terminator = fn.blockTerminator(block);
 			const kind = fn.instructionKind(terminator);
 			const value = instructionOperand(fn, terminator, 0);
@@ -1347,11 +1378,7 @@ function stackObjectCandidate(
 	if (
 		(aliases.size > 1 && observations.size === 0) ||
 		observations.size > 8 ||
-		(observations.size > 0 &&
-			[...control.reachable].some(
-				(block) =>
-					handlerBlock(fn, block) !== undefined || index.handlerTargets.has(block),
-			))
+		(observations.size > 0 && reachesExceptionTransport)
 	)
 		return undefined;
 	// An unconditional observer without field consumers would only add a stack-to-heap copy.
@@ -3671,8 +3698,9 @@ function stringSpanCandidates(
 			attrs.construct ||
 			attrs.argumentMode !== undefined ||
 			(known &&
-				attrs.operation !== "String.prototype.slice" &&
-				attrs.operation !== "String.prototype.substring") ||
+				!CORE_STRING_SPAN_RANGE_METHODS.some(
+					(method) => attrs.operation === `String.prototype.${method}`,
+				)) ||
 			instructionOperandCount(fn, call) < offset ||
 			instructionOperandCount(fn, call) > offset + 2 ||
 			instructionResultCount(fn, call) !== 1 ||
@@ -3682,11 +3710,12 @@ function stringSpanCandidates(
 		const property = known
 			? undefined
 			: specializationDefinition(fn, roots, instructionOperand(fn, call, 0)!);
-		const rangeOperation =
-			(known && attrs.operation === "String.prototype.substring") ||
-			staticPropertyNamed(program, fn, property, "substring")
-				? "substring"
-				: "slice";
+		const rangeOperation = CORE_STRING_SPAN_RANGE_METHODS.find((method) =>
+			known
+				? attrs.operation === `String.prototype.${method}`
+				: staticPropertyNamed(program, fn, property, method),
+		);
+		if (rangeOperation === undefined) continue;
 		if (
 			!known &&
 			(!staticPropertyNamed(program, fn, property, rangeOperation) ||
@@ -3813,7 +3842,15 @@ function stringSpanCandidates(
 				)
 					kind = "number";
 			}
-			if (kind === "materialize" && (opcode !== "call" || use.position < 2)) {
+			if (
+				kind === "materialize" &&
+				!(opcode === "call" && use.position >= 2) &&
+				!(
+					opcode === "unary" &&
+					use.position === 0 &&
+					fn.instructionAttributes(instruction).operator === "tostring"
+				)
+			) {
 				safe = false;
 				break;
 			}

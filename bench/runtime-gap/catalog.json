@@ -2656,6 +2656,19 @@
 			"controls": ["short-lived-records", "stable-shape-properties"]
 		},
 		{
+			"id": "handled-span-records",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "Core temporary objects",
+			"category": "object-array-representation",
+			"mechanisms": ["allocation-gc"],
+			"inputShape": "Three-field helper results after a handled preparation callback, with sparse observations and subsequent field mutations.",
+			"unit": "source span",
+			"sourceSeam": "src/compiler/core/core-ir-provenance.ts",
+			"fixture": "cases/handled-span-records.mjs",
+			"controls": ["conditional-span-records", "loop-carried-span-records"]
+		},
+		{
 			"id": "string-span-classify",
 			"group": "runtime",
 			"suite": "runtime",
@@ -2966,6 +2979,19 @@
 			"sourceSeam": "runtime/src/builtin_string.c",
 			"fixture": "cases/string-span-search.mjs",
 			"controls": ["string-search", "string-span-deep"]
+		},
+		{
+			"id": "string-span-trim-search",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "String span composition",
+			"category": "memory-layout-usage",
+			"mechanisms": ["string-allocation", "string-traversal"],
+			"inputShape": "Split fields trimmed and sliced before bounded searches, numeric conversion and sparse escaping observations.",
+			"unit": "classified field",
+			"sourceSeam": "src/compiler/target/native-span-continuation.ts",
+			"fixture": "cases/string-span-trim-search.mjs",
+			"controls": ["string-span-search", "split-span-classify"]
 		},
 		{
 			"id": "method-name-unique",

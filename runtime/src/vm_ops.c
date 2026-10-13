@@ -8917,7 +8917,6 @@ MalCompletion mal_builtin_sort_numeric(
         .function_index = function_index,
         .numeric_sort_comparator = comparator,
         .numeric_sort_kernel = kernel,
-        .function = &vm->runtime_image->functions[function_index],
         .env = mal_value_to_function_object(callback)->creation_env,
     };
     vm->exact_script_call = &exact;

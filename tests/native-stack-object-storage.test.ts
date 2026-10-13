@@ -7,6 +7,7 @@ import {
 } from "../src/compiler/target/compiler-artifact-codec.ts";
 import { selectNativeDirectHeapObjects } from "../src/compiler/target/lower-native-objects.ts";
 import { lowerNativeFunctionStorage } from "../src/compiler/target/lower-native-storage.ts";
+import { validateNativeStackObject } from "../src/compiler/target/native-stack-object.ts";
 import { vmRegionActions } from "../src/compiler/target/program-image.ts";
 import { emitCompiledFunction } from "../src/compiler/target/render-native-c.ts";
 
@@ -391,9 +392,90 @@ describe("native typed stack fields", () => {
 });
 
 describe("observing virtual objects", () => {
+	it.each([
+		`try{globalThis.before(input);}catch(error){globalThis.caught(error);}`,
+		`if(input<0){try{globalThis.before(input);}catch(error){globalThis.caught(error);}return 0;}`,
+	])("retains a helper result after disjoint exception control flow: %s", (prefix) => {
+		const image = compile(`
+			function make(value){return {x:value,y:2,label:"span"};}
+			${prefix}
+			const object=make(1.5);
+			if(input)globalThis.observe(object,object);
+			object.y=3;return object.x+object.y;
+		`);
+		const native = image.native.functions[1]!;
+		const sites = native.specializations.flatMap((region) =>
+			region.kind === "stack-object-plan" ? region.sites : [],
+		);
+		expect(native.body.handlers.length).toBeGreaterThan(0);
+		expect(sites).toHaveLength(1);
+		expect(sites[0]!.materializations.some((entry) => entry.kind === "observe")).toBe(
+			true,
+		);
+		expect(deserializeCompilerArtifact(serializeCompilerArtifact(image))).toEqual(image);
+		expect(emitCompiledFunction(native, native.functionIndex, "", false)).not.toBeNull();
+	});
+
+	it("rejects forged exception transport of an observed allocation", () => {
+		const image = compile(`
+			try{globalThis.before(input);}catch(error){globalThis.caught(error);}
+			const object={x:1.5,y:2};
+			if(input)globalThis.observe(object);
+			object.y=3;return object.x+object.y;
+		`);
+		const native = image.native.functions[1]!;
+		const site = native.specializations.flatMap((region) =>
+			region.kind === "stack-object-plan" ? region.sites : [],
+		)[0]!;
+		expect(site).toBeDefined();
+		const observation = site.materializations.find((entry) => entry.kind === "observe")!;
+		const handler = native.body.handlers[0]!;
+		for (const handlers of [
+			[{ ...handler, endIp: observation.ip + 1 }],
+			[{ ...handler, startIp: observation.ip, endIp: observation.ip + 1 }],
+			[{ ...handler, startIp: site.allocationIp, endIp: site.allocationIp + 1 }],
+			[{ ...handler, handlerIp: observation.ip }],
+		]) {
+			expect(() =>
+				validateNativeStackObject(native.body.instructions, site, handlers),
+			).toThrow(/Invalid stack-object observation region/);
+		}
+	});
+
+	it.each([
+		`const object=make(1.5);if(input)globalThis.observe(object);const result=object.x+object.y;
+		try{globalThis.after(input);}catch(error){globalThis.caught(error);}return result;`,
+		`const object=make(1.5);try{if(input)globalThis.observe(object);}
+		catch(error){globalThis.caught(error);}return object.x+object.y;`,
+		`try{const object=make(1.5);if(input)globalThis.observe(object);return object.x+object.y;}
+		catch(error){return 0;}`,
+		`let prior=input;for(let i=0;i<3;i++){
+		try{globalThis.before(i);}catch(error){globalThis.caught(error);}
+		const object=make(i);if(i)globalThis.observe(prior);prior=object;
+		}return prior.x;`,
+	])(
+		"declines observed lifetimes reaching handlers or recycled allocations: %s",
+		(body) => {
+			const image = compile(
+				`function make(value){return {x:value,y:2,label:"span"};}${body}`,
+			);
+			expect(
+				image.native.functions[1]!.specializations.some(
+					(region) =>
+						region.kind === "stack-object-plan" &&
+						region.sites.some((site) =>
+							site.materializations.some((entry) => entry.kind === "observe"),
+						),
+				),
+			).toBe(false);
+			expect(() => serializeCompilerArtifact(image)).not.toThrow();
+		},
+	);
+
 	it("carries a helper's one allocation through mixed loop aliases and observations", () => {
 		const image = compile(`
 			function make(value){return {x:value,y:2,label:"span"};}
+			try{globalThis.before(input);}catch(error){globalThis.caught(error);}
 			const original=make(1.5);let object=input;let prior=input;let sum=0;
 			for(let i=0;i<12;i++){
 				if(i%3===0)object=original;

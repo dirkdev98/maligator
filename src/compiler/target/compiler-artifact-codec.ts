@@ -1,4 +1,5 @@
 import { coreRegionStrategy } from "../core/core-ir-region-strategies.ts";
+import { CORE_STRING_SPAN_RANGE_METHODS } from "../core/core-ir-regions.ts";
 import type { CorePropertyPlacement } from "../core/core-ir-regions.ts";
 import type {
 	CompilerExactCollectionBrand,
@@ -95,7 +96,7 @@ import type {
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal artifacts are hard cut-overs: stale cache entries rebuild.
-export const COMPILER_ARTIFACT_VERSION = 209;
+export const COMPILER_ARTIFACT_VERSION = 210;
 
 function validateClosureCaptureOwners(
 	owners: ReadonlyArray<number>,
@@ -198,6 +199,8 @@ const TAGGED_GUARDED_BUILTIN_OPERATIONS = [
 	"Set.prototype.forEach",
 	"String.prototype.split",
 	"String.prototype.trim",
+	"String.prototype.trimStart",
+	"String.prototype.trimEnd",
 	"String.prototype.slice",
 	"String.prototype.substring",
 	...VM_GUARDED_BUILTIN_OPERATIONS.filter((operation) => operation.startsWith("Math.")),
@@ -1018,7 +1021,11 @@ function writeNativeStorage(w: Writer, storage: NativeStoragePlan | undefined): 
 	for (const plan of storage.spanContinuations) {
 		w.i32(plan.producerIp);
 		w.u8(["split", "regexp", "range"].indexOf(plan.sourceKind));
-		w.u8(plan.rangeOperation === undefined ? 0 : plan.rangeOperation === "slice" ? 1 : 2);
+		w.u8(
+			plan.rangeOperation === undefined
+				? 0
+				: CORE_STRING_SPAN_RANGE_METHODS.indexOf(plan.rangeOperation) + 1,
+		);
 		w.i32(plan.sourceCallIp);
 		w.i32Array([...plan.claimedIps]);
 		w.i32Array([...plan.borrowedRegisters]);
@@ -1550,13 +1557,10 @@ function readNativeStorage(r: Reader): NativeStoragePlan {
 		const producerIp = r.i32();
 		const sourceKind = (["split", "regexp", "range"] as const)[r.u8()];
 		const rangeKind = r.u8();
-		if (rangeKind > 2) throw new RangeError("Invalid span range operation");
+		if (rangeKind > CORE_STRING_SPAN_RANGE_METHODS.length)
+			throw new RangeError("Invalid span range operation");
 		const rangeOperation =
-			rangeKind === 0
-				? undefined
-				: rangeKind === 1
-					? ("slice" as const)
-					: ("substring" as const);
+			rangeKind === 0 ? undefined : CORE_STRING_SPAN_RANGE_METHODS[rangeKind - 1]!;
 		if (sourceKind === undefined)
 			throw new RangeError("Invalid span continuation source");
 		return {
@@ -2467,7 +2471,7 @@ function writeCompilerArtifact(
 					}
 					break;
 				case "string-span":
-					w.u8(region.rangeOperation === "substring" ? 1 : 0);
+					w.u8(CORE_STRING_SPAN_RANGE_METHODS.indexOf(region.rangeOperation));
 					w.i32(region.propertyIp);
 					writePropertyPlacement(w, region.propertyPlacement);
 					w.u8(region.builtinIdentities === "authority-invariant" ? 1 : 0);
@@ -5264,7 +5268,7 @@ function readCompilerArtifact(
 						loads,
 					};
 				} else if (kindTag === 7) {
-					const rangeOperationTag = r.u8();
+					const rangeOperation = CORE_STRING_SPAN_RANGE_METHODS[r.u8()];
 					const propertyIp = r.i32();
 					const propertyPlacement = readPropertyPlacement(r);
 					const builtinIdentitiesTag = r.u8();
@@ -5273,7 +5277,7 @@ function readCompilerArtifact(
 					const resultRegisters = r.i32Array();
 					const count = r.count(3);
 					if (
-						rangeOperationTag > 1 ||
+						rangeOperation === undefined ||
 						builtinIdentitiesTag > 1 ||
 						count === 0 ||
 						count > 16
@@ -5316,7 +5320,7 @@ function readCompilerArtifact(
 					}
 					region = {
 						kind: "string-span",
-						rangeOperation: rangeOperationTag === 1 ? "substring" : "slice",
+						rangeOperation,
 						license: {
 							guard: {
 								dependencies:

@@ -31,6 +31,24 @@ describe("compiled stack objects", () => {
 				) === "deferredFieldCaller",
 		);
 		expect(caller?.fieldCalls).toHaveLength(1);
+		for (const name of ["handlerBeforeObject", "handlerDisjointObject"]) {
+			const fn = pair.programImage.native.functions.find(
+				(candidate) =>
+					candidate.body.nameStringIndex >= 0 &&
+					String.fromCharCode(
+						...pair.programImage.runtime.stringConstants[candidate.body.nameStringIndex]!,
+					) === name,
+			);
+			expect(fn?.body.handlers.length).toBeGreaterThan(0);
+			const observedSites = fn?.specializations.flatMap((region) =>
+				region.kind === "stack-object-plan"
+					? region.sites.filter((site) =>
+							site.materializations.some((entry) => entry.kind === "observe"),
+						)
+					: [],
+			);
+			expect(observedSites).toHaveLength(1);
+		}
 	});
 
 	it("preserves compiled identity, slots, recursion, branches, materialization, and escapes", () => {
