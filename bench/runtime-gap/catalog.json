@@ -5928,6 +5928,58 @@
 			"sourceSeam": "runtime/src/builtin_map.c",
 			"fixture": "cases/collection-constructor-adder.mjs",
 			"controls": ["object-from-entries-map-pairs"]
+		},
+		{
+			"id": "typed-array-inplace",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "TypedArray storage regions",
+			"category": "object-array-representation",
+			"mechanisms": ["typed-arrays-numeric-loops"],
+			"inputShape": "Repeated ordered load/store updates of one fixed Float64Array.",
+			"unit": "element",
+			"sourceSeam": "src/compiler/target/lower-native-fast-paths.ts",
+			"fixture": "cases/typed-array-inplace.mjs",
+			"controls": ["typed-array-three-view", "typed-array-affine-window"]
+		},
+		{
+			"id": "set-algebra-captured-has",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "Set algebra callback transport",
+			"category": "api-builtins",
+			"mechanisms": ["callback-invocation"],
+			"inputShape": "Four Set algebra methods traverse captured custom has callbacks on set-like arguments.",
+			"unit": "membership call",
+			"sourceSeam": "runtime/src/builtin_set.c",
+			"fixture": "cases/set-algebra-captured-has.mjs",
+			"controls": ["collection-constructor-adder", "set-operations"]
+		},
+		{
+			"id": "string-span-dynamic-token",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "Composable string spans",
+			"category": "memory-layout-usage",
+			"mechanisms": ["string-spans", "delayed-materialization"],
+			"inputShape": "Substring tokens compared against dynamic primitive string inputs.",
+			"unit": "token",
+			"sourceSeam": "src/compiler/core/core-ir-provenance.ts",
+			"fixture": "cases/string-span-dynamic-token.mjs",
+			"controls": ["string-span-classify", "substring-span-classify"]
+		},
+		{
+			"id": "array-from-async-captured-map",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "Suspended builtin callback transport",
+			"category": "api-builtins",
+			"mechanisms": ["callback-invocation", "async-await"],
+			"inputShape": "Array.fromAsync maps64 values per operation with one captured ordinary compiled mapper across await resumes.",
+			"unit": "mapped element",
+			"sourceSeam": "runtime/src/builtin_array.c",
+			"fixture": "cases/array-from-async-captured-map.mjs",
+			"controls": ["forwarded-from-mapper", "promise-await-resolved"]
 		}
 	]
 }

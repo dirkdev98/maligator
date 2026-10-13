@@ -316,19 +316,21 @@ bool mal_vm_async_iterator_from_method(
             method_is_async ? "Async iterator is not an object" : "Iterator is not an object");
         return false;
     }
-    MalValue next;
-    if (!mal_vm_get_property(vm, completion.value, mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_NEXT), &next)) {
-        return false;
+    MalIteratorRecord record = {
+        .iterator = completion.value,
+        .next_method = mal_value_new_undefined(),
+    };
+    MalRootSpan record_span;
+    mal_gc_root(&record_span, &record.iterator, 2);
+    bool ok = mal_vm_get_property(
+        vm, record.iterator, mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_NEXT),
+        &record.next_method);
+    if (ok) {
+        if (method_is_async) *record_out = record;
+        else mal_async_from_sync_wrap(vm, &record, record_out);
     }
-    if (method_is_async) {
-        record_out->iterator = completion.value;
-        record_out->next_method = next;
-        return true;
-    }
-
-    MalIteratorRecord sync_record = {.iterator = completion.value, .next_method = next};
-    mal_async_from_sync_wrap(vm, &sync_record, record_out);
-    return true;
+    mal_gc_unroot(&record_span);
+    return ok;
 }
 
 bool mal_vm_get_async_iterator(MalVm *vm, MalValue value, MalIteratorRecord *record_out) {

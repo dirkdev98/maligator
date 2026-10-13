@@ -20,6 +20,40 @@ function compile(body: string) {
 }
 const body = "for(let i=0;i<count;i++){output[i]=left[i]+right[i];}return output;";
 describe("fixed TypedArray loop storage", () => {
+	it("composes a complete numeric fusion inside a fixed storage region", () => {
+		const image = compile(
+			"for(let i=0;i<count;i++){left[i]=left[i]*right+hook;}return left;",
+		);
+		const native = image.native.functions[1]!;
+		const fusion = native.specializations.find(
+			(region) => region.kind === "numeric-fusion",
+		);
+		if (fusion?.kind !== "numeric-fusion") throw new Error("Missing numeric fusion");
+		const plan = native.storage!.numericLoopRegions[0];
+		if (plan?.kind !== "fixed-numeric") throw new Error("Missing numeric storage region");
+		expect(plan.views).toHaveLength(1);
+		for (const pair of fusion.pairs) {
+			expect(plan.claimedIps).toContain(pair.firstIp);
+			expect(plan.claimedIps).toContain(pair.finishIp);
+		}
+		expect(deserializeCompilerArtifact(serializeCompilerArtifact(image))).toEqual(image);
+		expect(emitCompiledFunction(native, 1, "", false)).not.toBeNull();
+	});
+	it.each([
+		["left[i]=left[i]*2+1", 1, 0],
+		["output[i]=left[i]", 2, 0],
+		["left[i+1]=left[i]*0.5", 1, 1],
+	] as const)("admits a two-access numeric kernel: %s", (accesses, views, maximum) => {
+		const image = compile(`for(let i=0;i<count;i++){${accesses};}return left;`);
+		const native = image.native.functions[1]!;
+		const plan = native.storage!.numericLoopRegions[0];
+		if (plan?.kind !== "fixed-numeric") throw new Error("Missing numeric storage region");
+		expect(plan.views).toHaveLength(views);
+		expect(Math.max(...plan.views.map((view) => view.maxOffset))).toBe(maximum);
+		expect(plan.views.some((view) => view.writable)).toBe(true);
+		expect(deserializeCompilerArtifact(serializeCompilerArtifact(image))).toEqual(image);
+		expect(emitCompiledFunction(native, 1, "", false)).not.toBeNull();
+	});
 	it.each(["i++", "i+=1", "i+=2", "i=i+4", "i=3+i", "i-= -2"])(
 		"retains the proven positive stride for %s",
 		(update) => {

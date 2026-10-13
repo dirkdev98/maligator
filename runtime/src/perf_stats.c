@@ -914,6 +914,11 @@ static void mal_perf_stats_print(void) {
         (unsigned long long) mal_perf_stats.collection_constructor_set_nominations,
         (unsigned long long) mal_perf_stats.collection_constructor_weak_set_nominations,
         (unsigned long long) mal_perf_stats.collection_constructor_borrowed_pairs);
+    fprintf(stderr, "[perf-set-algebra-callback-stats] has_nominations=%llu\n",
+        (unsigned long long) mal_perf_stats.set_algebra_has_callback_nominations);
+    fprintf(stderr, "[perf-array-from-async-callback-stats] nominations=%llu resumes=%llu\n",
+        (unsigned long long) mal_perf_stats.array_from_async_callback_nominations,
+        (unsigned long long) mal_perf_stats.array_from_async_callback_resumes);
     fprintf(stderr, "[perf-string-span-character-stats] reads=%llu\n",
         (unsigned long long) mal_perf_stats.string_span_character_reads);
     fprintf(stderr, "[perf-string-span-string-character-stats] char_at=%llu at=%llu\n",
@@ -1141,6 +1146,8 @@ static void mal_perf_stats_print(void) {
         (unsigned long long) mal_perf_stats.array_iteration_numeric_reduce_calls,
         (unsigned long long) mal_perf_stats.array_iteration_runtime_callback_nominations
     );
+    fprintf(stderr, "[perf-string-span-equal-stats] calls=%llu\n",
+        (unsigned long long) mal_perf_stats.string_span_equal_calls);
     fprintf(stderr, "[perf-string-span-stats] admissions=%llu projections=%llu materializations=%llu\n",
         (unsigned long long) mal_perf_stats.string_span_admissions,
         (unsigned long long) mal_perf_stats.string_span_projections,

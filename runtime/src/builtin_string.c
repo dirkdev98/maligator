@@ -1738,6 +1738,7 @@ bool mal_builtin_string_span_search(
 }
 
 bool mal_builtin_string_span_equal(MalValue subject_value, usize start, usize end, MalValue other_value) {
+    MAL_PERF_COUNT(string_span_equal_calls);
     if (!mal_value_is_string(other_value)) return false;
     MalString *other = mal_value_to_string(other_value);
     usize length = end - start;

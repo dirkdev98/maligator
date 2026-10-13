@@ -3815,13 +3815,8 @@ function stringSpanCandidates(
 				(fn.instructionAttributes(instruction).operator === "===" ||
 					fn.instructionAttributes(instruction).operator === "!==")
 			) {
-				const other = specializationDefinition(
-					fn,
-					roots,
-					instructionOperand(fn, instruction, 1 - use.position)!,
-				);
-				if (other !== undefined && fn.instructionOpcodeName(other) === "createString")
-					kind = "equal";
+				const other = instructionOperand(fn, instruction, 1 - use.position)!;
+				if (root(other) !== resultRoot) kind = "equal";
 			} else if (
 				(opcode === "call" && use.position === 2) ||
 				(opcode === "callKnown" && use.position === 1)

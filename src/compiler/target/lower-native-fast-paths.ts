@@ -1615,7 +1615,7 @@ function fixedNumericLoopStorage(
 			: [];
 	});
 	if (
-		memory.length < 3 ||
+		memory.length < 2 ||
 		memory.length > FIXED_NUMERIC_LOOP_ACCESS_LIMIT ||
 		!memory.some(({ op }) => op.opcode === "STORE_PROPERTY")
 	)
@@ -1687,8 +1687,7 @@ function fixedNumericLoopStorage(
 			maxOffset: Math.max(previous?.maxOffset ?? offset, offset),
 		});
 	}
-	if (views.size < 2 || views.size > 4 || views.has(index) || views.has(bound))
-		return undefined;
+	if (views.size > 4 || views.has(index) || views.has(bound)) return undefined;
 	for (const ip of shape.order) {
 		const op = fn.instructions[ip]!;
 		if (
@@ -2642,7 +2641,7 @@ export function selectNativeFastPaths(
 		for (let ip = site.instructionIp; ip <= site.endIp; ip++) blocked.add(ip);
 	const fusions = new Map<
 		number,
-		{ readonly id: number; readonly role: "start" | "finish" }
+		{ readonly id: number; readonly finishIp: number; readonly role: "start" | "finish" }
 	>();
 	const mapEntryBlocked = new Set(blocked);
 	const snapshotOverlayIps = new Set<number>();
@@ -2667,7 +2666,11 @@ export function selectNativeFastPaths(
 				) {
 					if (action.role !== "start" && action.role !== "finish")
 						throw new Error("Invalid numeric-fusion action");
-					fusions.set(action.ip, { id: pair.firstIp, role: action.role });
+					fusions.set(action.ip, {
+						id: pair.firstIp,
+						finishIp: pair.finishIp,
+						role: action.role,
+					});
 				}
 				break;
 			}
@@ -2763,7 +2766,6 @@ export function selectNativeFastPaths(
 					const kind = native.instructions[candidate]?.kind;
 					return (
 						blocked.has(candidate) ||
-						fusions.has(candidate) ||
 						// Operand kind proofs refine the double lowering; the region replaces it.
 						(kind !== undefined &&
 							kind !== "exact-operator-input-kinds" &&
@@ -2772,6 +2774,20 @@ export function selectNativeFastPaths(
 				},
 			);
 			if (plan === undefined) continue;
+			const members = new Set(plan.claimedIps);
+			// A retained fallback fusion cannot carry its private intermediate across a region boundary.
+			if (
+				plan.claimedIps.some((ip) => {
+					const fusion = fusions.get(ip);
+					return (
+						fusion !== undefined &&
+						(plan.kind !== "fixed-numeric" ||
+							!members.has(fusion.id) ||
+							!members.has(fusion.finishIp))
+					);
+				})
+			)
+				continue;
 			numericLoopRegions.push(plan);
 			for (const claimedIp of plan.claimedIps) blocked.add(claimedIp);
 		}

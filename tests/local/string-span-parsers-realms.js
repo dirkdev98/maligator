@@ -1,4 +1,4 @@
-const collect = globalThis.__mal_collect_garbage ?? globalThis.gc;
+const collect = globalThis.__mal_collect_garbage ?? globalThis.$262?.gc ?? globalThis.gc;
 const other = $262.createRealm().global;
 const rows = [];
 function integer(source, radix) {

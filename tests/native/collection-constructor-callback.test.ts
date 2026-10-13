@@ -6,6 +6,8 @@ import { afterAll, describe, expect, it } from "vitest";
 import { resolveBuildConfig } from "../../src/build-config.ts";
 import {
 	buildBackendPairFromOneProgramImage,
+	buildNativeBinaryResult,
+	resolveHarnessExecutionInvocation,
 	HOST_MAIN,
 	STRESS_ENV,
 } from "../../src/test-harness.ts";
@@ -30,12 +32,13 @@ function observe(
 	env: NodeJS.ProcessEnv,
 	context: string,
 ) {
-	const run = spawnSync(binary, [], {
+	const invocation = resolveHarnessExecutionInvocation(binary);
+	const run = spawnSync(invocation.executable, [...invocation.args], {
 		encoding: "utf8",
 		timeout: 60_000,
 		env: { ...process.env, ...env, ...STRESS_ENV, MAL_HOST_GC: "1", MAL_PERF_STATS: "1" },
 	});
-	expect(run.status, `${context}: ${run.stderr}`).toBe(0);
+	expect(run.status, `${context}: ${run.error ?? run.stderr}`).toBe(0);
 	expect(run.stdout, context).toBe(expected);
 	const counts = run.stderr.match(
 		/\[perf-collection-constructor-stats\] map=(\d+) weak_map=(\d+) set=(\d+) weak_set=(\d+) borrowed_pairs=(\d+)/,
@@ -98,29 +101,28 @@ describe("rooted collection constructor callback contracts", () => {
 	);
 	it("preserves captured foreign weak-adder errors and local callbacks in foreign constructors", () => {
 		const fixture = "tests/local/collection-constructor-realms.js";
-		const pair = buildBackendPairFromOneProgramImage({
-			fixture,
-			entryGoal: "script",
-			entryStrict: false,
-			name: "collection-constructor-realms",
-			outDir,
-			mainFile: "runtime/test262_main.c",
-			config: resolveBuildConfig({
-				engine: { primordials: "mutable", eval: false, realms: true },
-			}),
-			environment: { ...process.env, MAL_PERF_STATS: "1" },
-		});
 		const expected = oracle(fixture, {}, true);
-		for (const [backend, binary] of [
-			["compiled", pair.compiled],
-			["interpreted", pair.interpreted],
-		] as const)
+		for (const compiled of [true, false]) {
+			const built = buildNativeBinaryResult({
+				fixture,
+				entryGoal: "script",
+				entryStrict: false,
+				name: `collection-constructor-realms-${compiled}`,
+				compiled,
+				outDir,
+				mainFile: "runtime/test262_main.c",
+				config: resolveBuildConfig({
+					engine: { primordials: "mutable", eval: false, realms: true },
+				}),
+				environment: { ...process.env, MAL_PERF_STATS: "1" },
+			});
 			observe(
-				binary,
+				built.binaryPath,
 				expected,
-				[backend === "compiled" ? 1 : 0, 0, 0, 0, 0],
+				[compiled ? 1 : 0, 0, 0, 0, 0],
 				{ MAL_TEST262: "1" },
-				`realms ${backend}`,
+				`realms compiled=${compiled}`,
 			);
+		}
 	}, 600_000);
 });

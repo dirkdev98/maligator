@@ -738,8 +738,8 @@ The shared lifetime and fallback rules are recorded in
       frontend/artifact/generated-C checks, Node oracles, and C syntax checks pass.
       Typed-context, realm, and both counter/table-relocation sanitizer cases pass.
       Forced collection exposed missing old-to-young cards on retained inner
-      iterators in flatMap; the shared flatMap/concat publication repair is pending
-      verification. Measurement remains pending.
+      iterators in flatMap; the shared flatMap/concat publication repair now passes
+      all six retained-Iterator Linux ASan/UBSan checks. Measurement remains pending.
 - [ ] Remove the i32 index limit in synchronous Iterator methods. Lazy helpers and
       terminal traversals now follow Number addition, including rounding at 2^53.
       A C fixture seeds real helpers at both index boundaries and relocates the
@@ -772,15 +772,17 @@ The shared lifetime and fallback rules are recorded in
       Six existing eager callback realm controls pass. The new realm fixture exposed
       an unrooted freshly boxed sloppy this value at compiled entry. Collecting bodies
       that read this now retain an activation root, including generic and direct calls;
-      33 focused checks and six frontend/artifact/C checks pass. Native rerun pending.
+      33 focused checks and six frontend/artifact/C checks pass. All three owned-realm
+      Linux ASan/UBSan checks now pass. Measurement remains pending.
 
 - [ ] Parse numeric prefixes directly from range, split, capture, and nested string
       spans using the canonical parseInt/parseFloat algorithms. Preserve captured
       callee identity, radix coercion order, Unicode bounds, signed zero, and the
       existing materialization fallback. A bounded canonical parser reader traverses
       rope leaves without flattening the source. All 188 focused checks, eleven Node
-      oracles, five frontend/artifact/C checks, and runtime C syntax checks pass; native
-      verification and measurement remain pending.
+      oracles, five frontend/artifact/C checks, and runtime C syntax checks pass. Both
+      main-mode sanitizer checks and the bounded rope parser C check pass; the realm
+      test driver is repaired and its rerun remains pending, as does measurement.
 - [ ] Reuse builtin Map/Set/Array entry cursors in Object.fromEntries while retaining
       eager key/value capture, property-key conversion, result realms, and iterator
       completion behavior. Implemented through the existing rooted traversal;
@@ -800,6 +802,34 @@ The shared lifetime and fallback rules are recorded in
       falls back before entry borrowing can bypass its error realm. All 24 focused
       checks, ten forced-GC Node oracles and six frontend/artifact/C captures pass;
       native verification and measurement remain pending.
+
+- [ ] Extend fixed TypedArray regions to two-access copies and single-view updates,
+      including ordered overlapping shifts and contained numeric-fusion operations.
+      Preserve storage guards, numeric admission, poll resumption and original fallback.
+      All 50 loop-plan checks, four actual frontend/artifact/C captures and forced-GC
+      Node oracles pass; native verification and measurement remain pending.
+- [ ] Root captured Set-like records throughout observable size/has/keys acquisition,
+      then reuse one compiled has callback contract in intersection, difference,
+      isSubsetOf and isDisjointFrom. Keep native Set and keys-only traversal paths.
+      All 24 callback-contract checks, eleven forced-GC Node oracles and six actual
+      frontend/artifact/C captures pass; native verification and measurement remain pending.
+
+- [ ] Compare range spans directly with dynamic strict-equality inputs through the
+      existing bounded UTF-16 equality helper. Preserve non-coercing comparison,
+      unrelated input identities, aliases and cached materialization. All 47 focused
+      span checks, forced-GC Node oracles and four actual frontend/artifact/C captures
+      pass; native verification and measurement remain pending.
+
+- [ ] Retain canonical Array.fromAsync mapper nomination across awaits using a
+      stable function index in the traced step state. Rebuild guarded stack contexts
+      per invocation and restore them before suspension. Root setup state, acquired
+      iterator records and original errors throughout user-code boundaries. All 24
+      callback checks, seven forced-GC Node oracles and six actual frontend/artifact/C
+      captures pass; native verification and measurement remain pending.
+- [ ] Make Array.fromAsync await AsyncIteratorClose before settling an original
+      mapper rejection, and replace its u32 iteration index with the specified Number
+      index. Current synchronous close can settle before a pending return promise;
+      preserve the original throw precedence and exactly-once close observations.
 
 | Order | Slice                        | Owning work and exit condition                                                                                                                                  |
 | ----- | ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |

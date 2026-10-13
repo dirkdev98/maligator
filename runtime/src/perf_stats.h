@@ -250,6 +250,9 @@ typedef struct MalPerfStats {
     u64 collection_constructor_set_nominations;
     u64 collection_constructor_weak_set_nominations;
     u64 collection_constructor_borrowed_pairs;
+    u64 set_algebra_has_callback_nominations;
+    u64 array_from_async_callback_nominations;
+    u64 array_from_async_callback_resumes;
     u64 string_span_character_reads;
     u64 string_span_code_point_reads;
     u64 string_span_char_at_reads;
@@ -449,6 +452,7 @@ typedef struct MalPerfStats {
     u64 string_span_admissions;
     u64 string_span_projections;
     u64 string_span_materializations;
+    u64 string_span_equal_calls;
     u64 array_iteration_typed_callback_hits;
     u64 array_iteration_typed_callback_fallbacks;
 

@@ -39,7 +39,8 @@ describe("region-local Map entries", () => {
 				const fn = pair.programImage.native.functions.find(
 					(fn) =>
 						String.fromCharCode(
-							...pair.programImage.runtime.stringConstants[fn.body.nameStringIndex]!,
+							...(pair.programImage.runtime.stringConstants[fn.body.nameStringIndex] ??
+								[]),
 						) === name,
 				)!;
 				expect(fn.storage!.mapEntries.length, name).toBeGreaterThan(0);

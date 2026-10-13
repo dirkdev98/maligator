@@ -6,6 +6,7 @@ import { afterAll, describe, expect, it } from "vitest";
 import { resolveBuildConfig } from "../../src/build-config.ts";
 import {
 	buildBackendPairFromOneProgramImage,
+	buildNativeBinaryResult,
 	HOST_MAIN,
 	runToStdout,
 	STRESS_ENV,
@@ -25,21 +26,25 @@ describe("numeric parsers over rooted string spans", () => {
 			],
 			{ encoding: "utf8" },
 		);
-		const pair = buildBackendPairFromOneProgramImage({
-			fixture,
-			name: "span-parser-realms",
-			outDir,
-			mainFile: "runtime/test262_main.c",
-			config: resolveBuildConfig({ engine: { primordials: "mutable", realms: true } }),
-		});
-		for (const binary of [pair.compiled, pair.interpreted])
+		for (const compiled of [true, false]) {
+			const built = buildNativeBinaryResult({
+				fixture,
+				name: `span-parser-realms-${compiled}`,
+				compiled,
+				outDir,
+				mainFile: "runtime/test262_main.c",
+				config: resolveBuildConfig({
+					engine: { primordials: "mutable", eval: false, realms: true },
+				}),
+			});
 			for (const stress of [{}, STRESS_ENV])
 				expect(
-					runToStdout(binary, {
+					runToStdout(built.binaryPath, {
 						env: { MAL_TEST262: "1", MAL_HOST_GC: "1", ...stress },
 						timeoutMs: 60000,
 					}),
 				).toBe(expected);
+		}
 	}, 600000);
 
 	it.each(["mutable", "locked"] as const)(

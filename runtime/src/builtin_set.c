@@ -408,10 +408,6 @@ static MalValue mal_builtin_weak_set_prototype_delete(MalVm *vm, MalValue this_v
     return mal_value_new_boolean(mal_weak_set_object_delete(set, arg_count >= 1 ? args[0] : mal_value_new_undefined()));
 }
 
-/**
- * Spec Set Record: the set-like object together with its coerced size and the
- * has/keys methods captured by GetSetRecord (read once, eagerly).
- */
 typedef struct MalSetRecord {
     MalValue set_object;
     MalValue has;
@@ -421,25 +417,13 @@ typedef struct MalSetRecord {
     MalSetObject *native_set;
 } MalSetRecord;
 
-/**
- * Spec GetSetRecord(obj): validate obj is a set-like object and capture its
- * size (coerced through ToNumber, NaN -> TypeError), has, and keys. Reads
- * happen in the spec order: size, has, keys. Returns false on a throw.
- */
 static bool mal_builtin_set_get_set_record(MalVm *vm, MalValue obj, MalSetRecord *record_out) {
     if (!mal_value_is_object(obj)) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Set-like argument is not an object");
         return false;
     }
 
-    /*
-     * An exact same-Realm Set inherits all three observable record properties
-     * from the protected intrinsic prototype. Avoid resolving those properties
-     * and coercing the already-integral native size on the overwhelmingly common
-     * Set-vs-Set composition path. Own overrides and subclass prototypes remain
-     * observable below; mutations of %Set.prototype% invalidate the monotonic
-     * method protector before this path can be taken again.
-     */
+    // The protector covers inherited size/has/keys only for an unmodified intrinsic instance.
     if (mal_primitive_method_protector && mal_value_is_set_object(obj)) {
         MalSetObject *candidate = mal_value_to_set_object(obj);
         MalObject *object = &candidate->object;
@@ -457,76 +441,73 @@ static bool mal_builtin_set_get_set_record(MalVm *vm, MalValue obj, MalSetRecord
         }
     }
 
-    MalValue raw_size;
+    MalSetRecord record = {
+        .set_object = obj,
+        .has = mal_value_new_undefined(),
+        .keys = mal_value_new_undefined(),
+    };
+    MalValue raw_size = mal_value_new_undefined();
+    MalRootSpan record_span, size_span;
+    mal_gc_root(&record_span, &record.set_object, 3);
+    mal_gc_root(&size_span, &raw_size, 1);
+    bool ok = false;
+
+    // Later getters can explicitly collect a freshly returned earlier method or size object.
     if (!mal_vm_get_property(vm, obj, mal_intrinsic_string_key(vm, "size"), &raw_size)) {
-        return false;
+        goto done;
     }
-
     f64 num_size;
-    if (!mal_vm_to_number(vm, raw_size, &num_size)) {
-        return false;
-    }
-
+    if (!mal_vm_to_number(vm, raw_size, &num_size)) goto done;
     if (isnan(num_size)) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Set-like size is NaN");
-        return false;
+        goto done;
     }
-
-    // ToIntegerOrInfinity for the negativity check (NaN already excluded).
-    f64 int_size = trunc(num_size);
-    if (int_size < 0.0) {
+    record.size = trunc(num_size);
+    if (record.size < 0.0) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Set-like size is negative");
-        return false;
+        goto done;
     }
-
-    MalValue has;
-    if (!mal_vm_get_property(vm, obj, mal_intrinsic_string_key(vm, "has"), &has)) {
-        return false;
+    if (!mal_vm_get_property(vm, obj, mal_intrinsic_string_key(vm, "has"), &record.has)) {
+        goto done;
     }
-    if (!mal_value_is_callable(has)) {
+    if (!mal_value_is_callable(record.has)) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Set-like 'has' is not callable");
-        return false;
+        goto done;
     }
-
-    MalValue keys;
-    if (!mal_vm_get_property(vm, obj, mal_intrinsic_string_key(vm, "keys"), &keys)) {
-        return false;
+    if (!mal_vm_get_property(vm, obj, mal_intrinsic_string_key(vm, "keys"), &record.keys)) {
+        goto done;
     }
-    if (!mal_value_is_callable(keys)) {
+    if (!mal_value_is_callable(record.keys)) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Set-like 'keys' is not callable");
-        return false;
+        goto done;
     }
-
-    MalSetObject *native_set = nullptr;
-    if (mal_value_is_set_object(obj)) {
-        MalSetObject *candidate = mal_value_to_set_object(obj);
-        if (has == vm->intrinsics[MAL_INTRINSIC_SET_PROTOTYPE_HAS] &&
-            keys == vm->intrinsics[MAL_INTRINSIC_SET_PROTOTYPE_VALUES]) {
-            native_set = candidate;
-        }
+    if (mal_value_is_set_object(obj) &&
+        record.has == vm->intrinsics[MAL_INTRINSIC_SET_PROTOTYPE_HAS] &&
+        record.keys == vm->intrinsics[MAL_INTRINSIC_SET_PROTOTYPE_VALUES]) {
+        record.native_set = mal_value_to_set_object(obj);
     }
+    *record_out = record;
+    ok = true;
 
-    *record_out = (MalSetRecord) {
-        .set_object = obj,
-        .has = has,
-        .keys = keys,
-        .size = int_size,
-        .native_set = native_set,
-    };
-    return true;
+done:
+    mal_gc_unroot(&size_span);
+    mal_gc_unroot(&record_span);
+    return ok;
 }
 
-/** Root/lift state shared by the generic, user-code-reentering Set paths. */
 typedef struct MalSetExecution {
     MalValue values[2]; // result (or undefined), current iterator/key value
     MalIteratorRecord iterator;
     MalRootSpan record_span;
     MalRootSpan values_span;
     MalRootSpan iterator_span;
+    MalExactScriptCall has_callback;
+    bool nominated_has;
 } MalSetExecution;
 
 static void mal_builtin_set_execution_begin(
-    MalVm *vm, MalSetRecord *record, MalValue result, MalSetExecution *execution
+    MalVm *vm, MalSetRecord *record, MalValue result, MalSetExecution *execution,
+    bool calls_has
 ) {
     execution->values[0] = result;
     execution->values[1] = mal_value_new_undefined();
@@ -538,9 +519,17 @@ static void mal_builtin_set_execution_begin(
     mal_gc_root(&execution->values_span, execution->values, 2);
     mal_gc_root(&execution->iterator_span, &execution->iterator.iterator, 2);
     mal_gc_native_rooted_begin(vm);
+    execution->nominated_has = calls_has &&
+        (vm->exact_script_call == nullptr || vm->exact_script_call->callee != record->has) &&
+        mal_vm_prepare_builtin_callback(vm, record->has, &execution->has_callback);
+    if (execution->nominated_has) {
+        vm->exact_script_call = &execution->has_callback;
+        MAL_PERF_COUNT(set_algebra_has_callback_nominations);
+    }
 }
 
 static void mal_builtin_set_execution_end(MalVm *vm, MalSetExecution *execution) {
+    if (execution->nominated_has) vm->exact_script_call = execution->has_callback.previous;
     mal_gc_native_rooted_end(vm);
     mal_gc_unroot(&execution->iterator_span);
     mal_gc_unroot(&execution->values_span);
@@ -574,12 +563,8 @@ static bool mal_builtin_set_record_keys_iterator(MalVm *vm, const MalSetRecord *
     return true;
 }
 
-/**
- * Invoke the set record's has(value) and coerce the result to a boolean.
- * Returns false on a throw; otherwise *out carries the truthiness.
- */
 static bool mal_builtin_set_record_has(MalVm *vm, const MalSetRecord *record, MalValue value, bool *out) {
-    MalCompletion completion = mal_vm_call_value(vm, record->has, record->set_object, &value, 1);
+    MalCompletion completion = mal_vm_call_builtin_callback(vm, record->has, record->set_object, &value, 1);
     if (completion.kind != MAL_COMPLETION_NORMAL) {
         return false;
     }
@@ -662,7 +647,7 @@ static MalValue mal_builtin_set_prototype_union(MalVm *vm, MalValue this_value, 
 
     MalSetExecution execution;
     mal_builtin_set_execution_begin(
-        vm, &record, this_value, &execution);
+        vm, &record, this_value, &execution, false);
     MalValue ret = mal_value_new_undefined();
     if (!mal_builtin_set_record_keys_iterator(vm, &record, &execution.iterator)) {
         goto done;
@@ -749,7 +734,7 @@ static MalValue mal_builtin_set_prototype_intersection(MalVm *vm, MalValue this_
         mal_set_storage_pin(set->entries);
         MalSetExecution execution;
         mal_builtin_set_execution_begin(
-            vm, &record, mal_value_from_set_object(result), &execution);
+            vm, &record, mal_value_from_set_object(result), &execution, true);
         MalValue ret = mal_value_new_undefined();
         MalSetIter iter;
         mal_set_iter_init(&iter, set->entries);
@@ -789,7 +774,7 @@ receiver_done:
         // Walk other's keys; keep those the receiver still contains, deduped.
         MalSetExecution execution;
         mal_builtin_set_execution_begin(
-            vm, &record, mal_value_from_set_object(result), &execution);
+            vm, &record, mal_value_from_set_object(result), &execution, false);
         MalValue ret = mal_value_new_undefined();
         if (!mal_builtin_set_record_keys_iterator(
                 vm, &record, &execution.iterator)) {
@@ -867,7 +852,7 @@ static MalValue mal_builtin_set_prototype_difference(MalVm *vm, MalValue this_va
 
         MalSetExecution execution;
         mal_builtin_set_execution_begin(
-            vm, &record, mal_value_from_set_object(result), &execution);
+            vm, &record, mal_value_from_set_object(result), &execution, true);
         MalValue ret = mal_value_new_undefined();
         MalSetIter iter;
         mal_set_iter_init(&iter, result->entries);
@@ -905,7 +890,7 @@ result_done:
         // Remove every key other yields from the receiver's copy.
         MalSetExecution execution;
         mal_builtin_set_execution_begin(
-            vm, &record, mal_value_from_set_object(result), &execution);
+            vm, &record, mal_value_from_set_object(result), &execution, false);
         MalValue ret = mal_value_new_undefined();
         if (!mal_builtin_set_record_keys_iterator(
                 vm, &record, &execution.iterator)) {
@@ -981,7 +966,7 @@ static MalValue mal_builtin_set_prototype_symmetric_difference(MalVm *vm, MalVal
 
     MalSetExecution execution;
     mal_builtin_set_execution_begin(
-        vm, &record, this_value, &execution);
+        vm, &record, this_value, &execution, false);
     MalValue ret = mal_value_new_undefined();
     if (!mal_builtin_set_record_keys_iterator(vm, &record, &execution.iterator)) {
         goto done;
@@ -1056,7 +1041,7 @@ static MalValue mal_builtin_set_prototype_is_subset_of(MalVm *vm, MalValue this_
     mal_set_storage_pin(set->entries);
     MalSetExecution execution;
     mal_builtin_set_execution_begin(
-        vm, &record, mal_value_new_undefined(), &execution);
+        vm, &record, mal_value_new_undefined(), &execution, true);
     MalValue ret = mal_value_new_undefined();
     MalSetIter iter;
     mal_set_iter_init(&iter, set->entries);
@@ -1120,7 +1105,7 @@ static MalValue mal_builtin_set_prototype_is_superset_of(MalVm *vm, MalValue thi
 
     MalSetExecution execution;
     mal_builtin_set_execution_begin(
-        vm, &record, mal_value_new_undefined(), &execution);
+        vm, &record, mal_value_new_undefined(), &execution, false);
     MalValue ret = mal_value_new_undefined();
     if (!mal_builtin_set_record_keys_iterator(vm, &record, &execution.iterator)) {
         goto done;
@@ -1185,7 +1170,7 @@ static MalValue mal_builtin_set_prototype_is_disjoint_from(MalVm *vm, MalValue t
         mal_set_storage_pin(set->entries);
         MalSetExecution execution;
         mal_builtin_set_execution_begin(
-            vm, &record, mal_value_new_undefined(), &execution);
+            vm, &record, mal_value_new_undefined(), &execution, true);
         MalValue ret = mal_value_new_undefined();
         MalSetIter iter;
         mal_set_iter_init(&iter, set->entries);
@@ -1224,7 +1209,7 @@ receiver_done:
 
         MalSetExecution execution;
         mal_builtin_set_execution_begin(
-            vm, &record, mal_value_new_undefined(), &execution);
+            vm, &record, mal_value_new_undefined(), &execution, false);
         MalValue ret = mal_value_new_undefined();
         if (!mal_builtin_set_record_keys_iterator(
                 vm, &record, &execution.iterator)) {

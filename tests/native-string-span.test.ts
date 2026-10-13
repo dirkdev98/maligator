@@ -42,6 +42,24 @@ const branching = `const part = value.slice(start, end); const length = part.len
 
 describe("composable string spans", () => {
 	it.each(["mutable", "locked"] as const)(
+		"compares dynamic inputs without coercing them under %s primordials",
+		(mode) => {
+			for (const expression of ["part===observer", "observer!==part"]) {
+				const image = compile(
+					`const part=value.slice(start,end);if(escape)return part;return ${expression};`,
+					mode,
+				);
+				const region = spans(image)[0]!;
+				expect(region.consumers.map((c) => c.kind)).toEqual(
+					expect.arrayContaining(["equal", "materialize"]),
+				);
+				expect(deserializeCompilerArtifact(serializeCompilerArtifact(image))).toEqual(
+					image,
+				);
+			}
+		},
+	);
+	it.each(["mutable", "locked"] as const)(
 		"composes substr bounds and reverse search under %s primordials",
 		(mode) => {
 			for (const args of ["", "start", "start,end"]) {
