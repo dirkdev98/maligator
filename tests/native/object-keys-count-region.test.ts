@@ -17,7 +17,7 @@ const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-object-keys-count-"));
 afterAll(() => rmSync(outDir, { recursive: true, force: true }));
 
 describe("Object.keys count regions", () => {
-	it("preserves the keys Array creation realm at inherited indexed observers", () => {
+	it("preserves the enumeration Array creation realm at inherited indexed observers", () => {
 		const realmFixture = "tests/local/object-keys-snapshot-realms.js";
 		const expected = execFileSync(
 			process.execPath,
@@ -38,7 +38,14 @@ describe("Object.keys count regions", () => {
 			});
 			expect(
 				built.programImage.native.functions.some((fn) =>
-					fn.storage!.objectKeysSnapshots.some((plan) => plan.elementIps.length > 0),
+					fn.storage!.objectEnumerationSnapshots.some(
+						(plan) => plan.elementIps.length > 0,
+					),
+				),
+			).toBe(true);
+			expect(
+				built.programImage.native.functions.some((fn) =>
+					fn.storage!.objectEnumerationSnapshots.some((plan) => plan.kind === "values"),
 				),
 			).toBe(true);
 			for (const stress of [{}, STRESS_ENV]) {
@@ -72,7 +79,7 @@ describe("Object.keys count regions", () => {
 			});
 			expect(
 				pair.programImage.native.functions.some(
-					(fn) => fn.storage!.objectKeysSnapshots.length > 0,
+					(fn) => fn.storage!.objectEnumerationSnapshots.length > 0,
 				),
 			).toBe(true);
 			for (const binary of [pair.compiled, pair.interpreted])

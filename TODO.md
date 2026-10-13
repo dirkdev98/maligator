@@ -561,8 +561,8 @@ The shared lifetime and fallback rules are recorded in
       are removed. All 131 focused callback/entry/codec checks, Node oracles, and C
       syntax checks pass. All five collection sanitizer checks pass, including both
       backends, primordial modes, GC stress, and foreign realms. Measurement remains
-      pending. Forwarded callback parameters still require a validated runtime
-      invocation contract.
+      pending. Forwarded callback parameters use the runtime invocation contract
+      recorded below.
 - [ ] Consume range, split, regexp, and nested spans with `startsWith`, `endsWith`,
       `includes`, and `indexOf` through bounded shared search helpers. Preserve relative
       UTF-16 positions, empty needles, matching boundaries, coercion order, and one-time
@@ -608,16 +608,18 @@ The shared lifetime and fallback rules are recorded in
       preserve invocation order and fallback for unsupported callable kinds.
       Implemented through one runtime nomination after builtin identity validation.
       All 64 focused checks, Node oracles, both-mode frontend/codec checks, and runtime
-      and generated C syntax checks pass. Native execution and measurement remain
-      pending; foreign-realm callbacks conservatively retain generic invocation.
+      and generated C syntax checks pass. All three Linux ASan/UBSan checks pass across
+      both backends, primordial modes, GC stress, and realm fallbacks; measurement
+      remains pending. Foreign-realm callbacks conservatively retain generic invocation.
 - [ ] Compose `substr` with existing span lifetimes and consume spans through
       bounded `lastIndexOf`. Reuse the canonical relative-index normalization and
       reverse search machinery, including its lower window boundary; preserve
       coercions, UTF-16 boundaries, and materialization at observers. Implemented
       through shared range and reverse-search algorithms; unreachable span uses no
       longer block admission after inlining. All 305 focused checks, Node oracles,
-      actual bundled selection, and C syntax checks pass. Native execution and
-      measurement remain pending.
+      actual bundled selection, and C syntax checks pass. All three Linux ASan/UBSan
+      checks pass, including executed source-family counters, both backends, GC stress,
+      and realm fallback. Measurement remains pending.
 - [ ] Extend fixed TypedArray regions to positive constant strides and useful
       interleaved kernels. Derive stride from the actual induction update, bound each
       view by the final visited index, and retain ordered accesses, numeric guards,
@@ -634,6 +636,20 @@ The shared lifetime and fallback rules are recorded in
       GC-free effect contract. Focused Core/root/codec checks, actual bundled selection,
       Node oracles, and emitted C syntax checks pass. Native execution and measurement
       remain pending.
+
+- [ ] Reuse canonical runtime callback nomination for forwarded Array and TypedArray
+      `sort`/`toSorted` comparators. Preserve selected numeric adapters, eager element
+      collection, boxed comparator semantics, nested contexts, and realm fallback.
+      Implemented through one shared canonical callback nomination helper. All 31
+      focused checks, Node oracles, eleven frontend/codec/generated-C checks, and
+      runtime C syntax checks pass. Native execution and measurement remain pending.
+- [ ] Extend enumeration snapshots to `Object.values` on ordinary shaped data
+      records. Capture values eagerly in rooted slots, retain the cached result
+      materialization, and decline accessors before executing any user effects.
+      Implemented through one keys/values plan and runtime helper with sixteen
+      rooted elements. All 211 focused checks, Node oracles, seven actual bundled
+      programs, artifact roundtrips, and C syntax checks pass. Native execution
+      and measurement remain pending.
 
 | Order | Slice                        | Owning work and exit condition                                                                                                                                  |
 | ----- | ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |

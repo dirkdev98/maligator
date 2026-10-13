@@ -1,46 +1,66 @@
 import { describe, expect, it } from "vitest";
+import { resolveBuildConfig } from "../src/build-config.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
 import { compileSemanticProgramToProgramImage } from "../src/compiler/pipeline/compile-core.ts";
+import { compilerProgramFactsFromConfig } from "../src/compiler/shared/compiler-facts.ts";
 import {
 	deserializeCompilerArtifact,
 	serializeCompilerArtifact,
 } from "../src/compiler/target/compiler-artifact-codec.ts";
 import { emitProgramImage } from "../src/compiler/target/emit-program-image.ts";
+import { analyzeNativeBodyFacts } from "../src/compiler/target/native-body-facts.ts";
+import { selectNativeObjectEnumerationSnapshots } from "../src/compiler/target/native-object-enumeration-snapshot.ts";
+import { emitCompiledFunction } from "../src/compiler/target/render-native-c.ts";
 
-function compile(body: string) {
+function compile(body: string, primordials: "mutable" | "locked" = "mutable") {
 	return compileSemanticProgramToProgramImage(
 		analyzeSourceAndRunSemanticAnalysis(
-			`globalThis.count=function(record,hook){${body}};`,
-			"/keys-count.js",
+			`globalThis.count=function inspect(record,hook){${body}};`,
+			"/enumeration-snapshot.js",
 		),
+		{
+			facts: compilerProgramFactsFromConfig(
+				resolveBuildConfig({ engine: { primordials } }),
+			),
+		},
 	);
 }
-describe("Object.keys count storage", () => {
+function inspect(image: ReturnType<typeof compile>) {
+	const native = image.native.functions.find(
+		(fn) =>
+			String.fromCharCode(
+				...(image.runtime.stringConstants[fn.body.nameStringIndex] ?? []),
+			) === "inspect",
+	);
+	if (native === undefined) throw new Error("Missing inspect function");
+	return native;
+}
+describe("Object enumeration snapshot storage", () => {
 	it.each([
 		"const keys=Object.keys({ first:record, second:hook });return [keys[hook],keys.length];",
 		"const keys=Object.keys(hook(record));return [keys[0],keys.length];",
 	])("retains the captured builtin across argument preparation: %s", (source) => {
 		const image = compile(source);
-		expect(image.native.functions[1]!.storage!.objectKeysSnapshots).toHaveLength(1);
+		expect(inspect(image).storage!.objectEnumerationSnapshots).toHaveLength(1);
 		expect(deserializeCompilerArtifact(serializeCompilerArtifact(image))).toEqual(image);
 	});
 	it("bounds lifetime analysis even when earlier key snapshots escape", () => {
 		const source = (escapes: number) =>
 			`${"hook(Object.keys(record));".repeat(escapes)} return Object.keys(record).length;`;
-		expect(
-			compile(source(4)).native.functions[1]!.storage!.objectKeysSnapshots,
-		).toHaveLength(1);
-		expect(
-			compile(source(64)).native.functions[1]!.storage!.objectKeysSnapshots,
-		).toHaveLength(0);
+		expect(inspect(compile(source(4))).storage!.objectEnumerationSnapshots).toHaveLength(
+			1,
+		);
+		expect(inspect(compile(source(64))).storage!.objectEnumerationSnapshots).toHaveLength(
+			0,
+		);
 	});
 	it("retains snapshots through indexed traversal, calls, and aliases", () => {
 		const image = compile(`const keys=Object.keys(record); const alias=keys;
 			let size=0; for(let i=0;i<keys.length;i++){ const key=alias[i]; hook(record,key); size+=key.length; } return size;`);
-		const native = image.native.functions[1]!;
-		expect(native.storage!.objectKeysSnapshots).toHaveLength(1);
-		expect(native.storage!.objectKeysSnapshots[0]!.elementIps).toHaveLength(1);
-		expect(native.storage!.objectKeysSnapshots[0]!.lengthIps).toHaveLength(1);
+		const native = inspect(image);
+		expect(native.storage!.objectEnumerationSnapshots).toHaveLength(1);
+		expect(native.storage!.objectEnumerationSnapshots[0]!.elementIps).toHaveLength(1);
+		expect(native.storage!.objectEnumerationSnapshots[0]!.lengthIps).toHaveLength(1);
 		expect(deserializeCompilerArtifact(serializeCompilerArtifact(image))).toEqual(image);
 		expect(() => emitProgramImage(image, {})).not.toThrow();
 	});
@@ -49,12 +69,12 @@ describe("Object.keys count storage", () => {
 			"const keys=Object.keys(record); return [keys[hook], keys.length, keys[0]];",
 		);
 		expect(
-			image.native.functions[1]!.storage!.objectKeysSnapshots[0]!.elementIps,
+			inspect(image).storage!.objectEnumerationSnapshots[0]!.elementIps,
 		).toHaveLength(2);
 	});
 	it("retains a validated count projection through artifact loading and emission", () => {
 		const image = compile("return Object.keys(record).length;");
-		expect(image.native.functions[1]!.storage!.objectKeysSnapshots).toHaveLength(1);
+		expect(inspect(image).storage!.objectEnumerationSnapshots).toHaveLength(1);
 		expect(deserializeCompilerArtifact(serializeCompilerArtifact(image))).toEqual(image);
 		expect(() => emitProgramImage(image, {})).not.toThrow();
 	});
@@ -65,13 +85,74 @@ describe("Object.keys count storage", () => {
 		"let keys=Object.keys(record); if(hook) keys=['other']; return keys[0];",
 		"const keys=Object.keys(record);keys[0]='extra';return keys.length;",
 	])("retains an observable array: %s", (body) => {
-		expect(compile(body).native.functions[1]!.storage!.objectKeysSnapshots).toEqual([]);
+		expect(inspect(compile(body)).storage!.objectEnumerationSnapshots).toEqual([]);
+	});
+	it.each(["mutable", "locked"] as const)(
+		"captures values through calls and length-only observations under %s primordials",
+		(mode) => {
+			for (const body of [
+				"const values=Object.values(record);hook(record);return values.length;",
+				"const values=Object.values(record);const alias=values;hook(record);return [alias[0],values[hook],values.length];",
+			]) {
+				const image = compile(body, mode),
+					native = inspect(image);
+				const [plan] = native.storage!.objectEnumerationSnapshots;
+				expect(plan?.kind).toBe("values");
+				const source = emitCompiledFunction(
+					native,
+					native.functionIndex,
+					"",
+					false,
+				)!.source;
+				expect(source).toContain("mal_builtin_object_enumeration_snapshot");
+				expect(source).toContain("MAL_OBJECT_ENUMERATION_VALUES");
+				expect(source).not.toContain("mal_builtin_object_keys_count");
+				expect(source).toContain(
+					`MalValue __gc_slots[${native.storage!.rootSlotCount + 17}];`,
+				);
+				expect(deserializeCompilerArtifact(serializeCompilerArtifact(image))).toEqual(
+					image,
+				);
+			}
+		},
+	);
+	it.each([
+		"const values=Object.values(record);hook(values);return values.length;",
+		"const values=Object.values(record);return [values.length,values];",
+		"let values=Object.values(record);if(hook)values=[];return values[0];",
+		"const values=Object.values(record);values[0]=hook;return values.length;",
+	])("keeps observable values arrays: %s", (body) => {
+		expect(inspect(compile(body)).storage!.objectEnumerationSnapshots).toEqual([]);
+	});
+	it("declines large unrelated callee and consumer names without decoding them", () => {
+		const image = compile("return Object.values(record).length;"),
+			native = inspect(image);
+		expect(native.storage!.objectEnumerationSnapshots).toHaveLength(1);
+		for (const name of ["values", "length"]) {
+			const index = image.runtime.stringConstants.findIndex(
+				(units) => String.fromCharCode(...units) === name,
+			);
+			expect(index).toBeGreaterThanOrEqual(0);
+			const strings = image.runtime.stringConstants.with(
+				index,
+				Array.from({ length: 150000 }, () => 120),
+			);
+			expect(
+				selectNativeObjectEnumerationSnapshots(
+					native,
+					analyzeNativeBodyFacts(native.body),
+					strings,
+					() => false,
+				),
+			).toEqual([]);
+		}
 	});
 	it("rejects forged consumers and missing claimed instructions", () => {
 		const image = compile("return Object.keys(record).length;"),
-			native = image.native.functions[1]!;
-		const plan = native.storage!.objectKeysSnapshots[0]!;
+			native = inspect(image);
+		const plan = native.storage!.objectEnumerationSnapshots[0]!;
 		for (const forged of [
+			{ ...plan, kind: "values" as const },
 			{ ...plan, lengthIps: [plan.callIp] },
 			{ ...plan, claimedIps: [plan.callIp] },
 		]) {
@@ -80,10 +161,13 @@ describe("Object.keys count storage", () => {
 					...image,
 					native: {
 						...image.native,
-						functions: image.native.functions.with(1, {
-							...native,
-							storage: { ...native.storage!, objectKeysSnapshots: [forged] },
-						}),
+						functions: image.native.functions.with(
+							image.native.functions.indexOf(native),
+							{
+								...native,
+								storage: { ...native.storage!, objectEnumerationSnapshots: [forged] },
+							},
+						),
 					},
 				}),
 			).toThrow(/invalid or stale storage plan/);

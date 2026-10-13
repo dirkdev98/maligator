@@ -3749,6 +3749,14 @@ static bool mal_builtin_array_sort_values(
     // Compiled comparators dispatch directly; every other callable keeps generic [[Call]].
     MalCallCache comparator_cache = {0};
 
+    MalExactScriptCall runtime_callback;
+    bool nominated = (vm->exact_script_call == nullptr ||
+        vm->exact_script_call->callee != comparator) &&
+        mal_vm_prepare_builtin_callback(vm, comparator, &runtime_callback);
+    if (nominated) {
+        vm->exact_script_call = &runtime_callback;
+        MAL_PERF_COUNT(array_sort_runtime_callback_nominations);
+    }
     MalExactScriptCall *numeric_leaf = vm->exact_script_call;
     if (numeric_leaf == nullptr || numeric_leaf->callee != comparator ||
         numeric_leaf->numeric_sort_kernel == nullptr) {
@@ -3826,6 +3834,7 @@ static bool mal_builtin_array_sort_values(
     }
 
     free(keys);
+    if (nominated) vm->exact_script_call = runtime_callback.previous;
     if (ok && from != values) {
         memcpy(values, from, sizeof(MalValue) * count);
     }
@@ -5311,24 +5320,9 @@ static MalCompletion mal_builtin_array_iteration_direct_impl(
             callback_call.env =
                 mal_value_to_function_object(callback_call.callee)->creation_env;
         }
-        if (callback_function_index < 0 && mal_value_is_function_object(callback_call.callee)) {
-            MalFunctionObject *callback = mal_value_to_function_object(callback_call.callee);
-            i32 index = mal_function_object_function_index(callback);
-            bool eligible = index >= 0 && index < vm->runtime_image->function_count;
-#if MAL_REALMS
-            eligible = eligible && mal_vm_callee_realm(vm, callback_call.callee) == vm->current_realm;
-#endif
-            if (eligible) {
-                const MalFunction *function = &vm->runtime_image->functions[index];
-                if (function->kind == MAL_FUNCTION_KIND_NORMAL &&
-                    !function->is_class_constructor && function->compiled != nullptr) {
-                    callback_call.function_index = index;
-                    callback_call.compiled_callback = function->compiled;
-                    callback_call.numeric_reduce_callback = nullptr;
-                    callback_call.env = callback->creation_env;
-                    MAL_PERF_COUNT(array_iteration_runtime_callback_nominations);
-                }
-            }
+        if (callback_function_index < 0 &&
+            mal_vm_prepare_builtin_callback(vm, callback_call.callee, &callback_call)) {
+            MAL_PERF_COUNT(array_iteration_runtime_callback_nominations);
         }
         if (callback_call.function_index >= 0) {
             vm->exact_script_call = &callback_call;

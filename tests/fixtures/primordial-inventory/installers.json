@@ -5,7 +5,7 @@
 	},
 	{
 		"file": "builtin_array.c",
-		"sha256": "ba96d07daa2c54dcaf0ae0db2bc9e70f7494394c167bfdb5acdc04b5650047ec"
+		"sha256": "bd50ce578c1c71577713b56efaf971ab6b77b932f1bb0d9bdbf93b99cc1f8fb0"
 	},
 	{
 		"file": "builtin_array_buffer.c",
@@ -93,7 +93,7 @@
 	},
 	{
 		"file": "builtin_object.c",
-		"sha256": "d1ae56ac48aeb97681499c2350c4bb69c853ca88c390b2ec7c0e52ed813cf34d"
+		"sha256": "1680d7c7d4deed2a74ae46e824dc6c9b002a1948c3be75df9ca0cd348e20766a"
 	},
 	{
 		"file": "builtin_promise.c",
@@ -137,7 +137,7 @@
 	},
 	{
 		"file": "builtin_typed_array.c",
-		"sha256": "beea621f798de7e5dbc8c828f41391141b5575b1f07228580629aacb116b3b1d"
+		"sha256": "97ad8bbfb4355017d093424d087f13d0cf51cbc07f2a20f34503113d6349ee2f"
 	},
 	{
 		"file": "builtin_uri.c",
@@ -717,11 +717,11 @@
 	},
 	{
 		"file": "vm.c",
-		"sha256": "17d066745c64f3ea4746b71a1b08e52e5a7a9133a1daac38ea9985de41b3b0af"
+		"sha256": "34137ce893621c48217b28634e7fcfa9831e48b1f3cbe8697bf4e243caa43b22"
 	},
 	{
 		"file": "vm.h",
-		"sha256": "1e921d27fad211229b0c6393401d3086753b758b8fea16d0e41e47d16e5224e3"
+		"sha256": "1170c706852d9d88e4b0b157a70f8f3a3b85eab44246a2c87636da0a7b53dcac"
 	},
 	{
 		"file": "vm_ops.c",

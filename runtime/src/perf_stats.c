@@ -899,6 +899,9 @@ static void mal_perf_stats_print(void) {
     fprintf(stderr, "[perf-object-keys-snapshot-stats] admissions=%llu materializations=%llu\n",
         (unsigned long long) mal_perf_stats.object_keys_snapshot_admissions,
         (unsigned long long) mal_perf_stats.object_keys_snapshot_materializations);
+    fprintf(stderr, "[perf-object-values-snapshot-stats] admissions=%llu materializations=%llu\n",
+        (unsigned long long) mal_perf_stats.object_values_snapshot_admissions,
+        (unsigned long long) mal_perf_stats.object_values_snapshot_materializations);
     fprintf(stderr, "[perf-string-span-character-stats] reads=%llu\n",
         (unsigned long long) mal_perf_stats.string_span_character_reads);
     fprintf(stderr, "[perf-string-span-string-character-stats] char_at=%llu at=%llu\n",
@@ -1339,6 +1342,10 @@ static void mal_perf_stats_print(void) {
         (unsigned long long) mal_perf_stats.numeric_sort_callback_calls,
         (unsigned long long) mal_perf_stats.numeric_sort_kernel_runs
     );
+    fprintf(stderr,
+        "[perf-sort-callback-stats] array_nominations=%llu typed_nominations=%llu\n",
+        (unsigned long long) mal_perf_stats.array_sort_runtime_callback_nominations,
+        (unsigned long long) mal_perf_stats.typed_array_sort_runtime_callback_nominations);
     for (usize i = 0; i < MAL_PERF_NATIVE_NAME_CAPACITY; i++) {
         const MalPerfNativeName *entry = &mal_perf_native_names[i];
         if (entry->calls == 0) continue;

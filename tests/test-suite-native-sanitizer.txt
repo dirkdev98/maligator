@@ -16,6 +16,7 @@ tests/native/coroutine-pool.test.ts
 tests/native/eval-gc-runtime-compilation-p0.test.ts
 tests/native/exact-callback-lifetime.test.ts
 tests/native/forwarded-callback.test.ts
+tests/native/forwarded-sort-callback.test.ts
 tests/native/function-reflect-builtins.test.ts
 tests/native/gc.test.ts
 tests/native/gc-cgroup-capacity.test.ts
@@ -160,6 +161,7 @@ tests/native/image-domains.test.ts
 tests/native/application-images.test.ts
 tests/native/root-compiler.test.ts
 tests/native/object-keys-count-region.test.ts
+tests/native/object-values-snapshot.test.ts
 tests/native/split-span-continuation.test.ts
 tests/native/regexp-span-continuation.test.ts
 tests/native/map-region-entries.test.ts

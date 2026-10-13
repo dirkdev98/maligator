@@ -74,8 +74,8 @@ import {
 } from "./lower-native-storage.ts";
 import type { NativeStringTransformPlan } from "./lower-native-string-transforms.ts";
 import type { NativeSuspensionPlan } from "./lower-native-suspension.ts";
-import { NATIVE_KEY_SNAPSHOT_CAPACITY } from "./native-object-keys-snapshot.ts";
-import type { NativeObjectKeysSnapshotPlan } from "./native-object-keys-snapshot.ts";
+import { NATIVE_ENUMERATION_SNAPSHOT_CAPACITY } from "./native-object-enumeration-snapshot.ts";
+import type { NativeObjectEnumerationSnapshotPlan } from "./native-object-enumeration-snapshot.ts";
 import { nativeInactiveRootMasks, nativeRootMaskWordHex } from "./native-root-masks.ts";
 import type { NativeInactiveRootMask } from "./native-root-masks.ts";
 import {
@@ -1737,12 +1737,20 @@ function emitCompiledVariant(
 			child.parent = site;
 		}
 	}
-	const objectKeysSnapshotSites = new Map<number, NativeObjectKeysSnapshotSite>();
-	for (const plan of storage.objectKeysSnapshots) {
-		const keysSlot = plan.elementIps.length ? nextStackSlot : -1;
-		if (plan.elementIps.length) nextStackSlot += NATIVE_KEY_SNAPSHOT_CAPACITY;
-		const materializedSlot = plan.elementIps.length ? nextStackSlot++ : -1;
-		objectKeysSnapshotSites.set(plan.callIp, { ...plan, keysSlot, materializedSlot });
+	const objectEnumerationSnapshotSites = new Map<
+		number,
+		NativeObjectEnumerationSnapshotSite
+	>();
+	for (const plan of storage.objectEnumerationSnapshots) {
+		const snapshot = plan.kind === "values" || plan.elementIps.length > 0;
+		const elementsSlot = snapshot ? nextStackSlot : -1;
+		if (snapshot) nextStackSlot += NATIVE_ENUMERATION_SNAPSHOT_CAPACITY;
+		const materializedSlot = snapshot ? nextStackSlot++ : -1;
+		objectEnumerationSnapshotSites.set(plan.callIp, {
+			...plan,
+			elementsSlot,
+			materializedSlot,
+		});
 	}
 	const fieldCalls = renderFieldCallSlots(fn, nativeContract, () => nextStackSlot++);
 	const totalSlots = nextStackSlot;
@@ -1810,7 +1818,7 @@ function emitCompiledVariant(
 		regexpExecProjectionSites,
 		regexpIteratorProjectionSites,
 		stringSpanSites,
-		objectKeysSnapshotSites,
+		objectEnumerationSnapshotSites,
 		directCompiledTargets,
 		directCompiledEntries,
 		directEntry?.resultRepresentation,
@@ -3163,8 +3171,8 @@ interface NativeRegExpIteratorProjectionAction {
 
 type NativeStringSpan = Extract<VmRegion, { kind: "string-span" }>;
 
-interface NativeObjectKeysSnapshotSite extends NativeObjectKeysSnapshotPlan {
-	readonly keysSlot: number;
+interface NativeObjectEnumerationSnapshotSite extends NativeObjectEnumerationSnapshotPlan {
+	readonly elementsSlot: number;
 	readonly materializedSlot: number;
 }
 
@@ -3931,7 +3939,10 @@ function emitBody(
 	regexpExecProjectionSites: ReadonlyMap<number, NativeRegExpExecProjectionSite>,
 	regexpIteratorProjectionSites: ReadonlyMap<number, NativeRegExpIteratorProjectionSite>,
 	stringSpanSites: ReadonlyMap<number, NativeStringSpanSite>,
-	objectKeysSnapshotSites: ReadonlyMap<number, NativeObjectKeysSnapshotSite>,
+	objectEnumerationSnapshotSites: ReadonlyMap<
+		number,
+		NativeObjectEnumerationSnapshotSite
+	>,
 	directCompiledTargets: ReadonlySet<number>,
 	directCompiledEntries: DirectCompiledEntries,
 	directResultRepresentation: VmRegisterRepresentation | undefined,
@@ -3956,7 +3967,7 @@ function emitBody(
 		stringTransforms: [],
 		arrayInitializations: [],
 		mapEntries: [],
-		objectKeysSnapshots: [],
+		objectEnumerationSnapshots: [],
 		spanContinuations: [],
 		propertyProjections: [],
 		propertyNumericUpdates: [],
@@ -3997,7 +4008,7 @@ function emitBody(
 		nativeIteratorEntryPairVirtualizationActionByIp,
 	} = topology;
 	const snapshotLengthIps = new Set(
-		[...objectKeysSnapshotSites.values()].flatMap((site) => site.lengthIps),
+		[...objectEnumerationSnapshotSites.values()].flatMap((site) => site.lengthIps),
 	);
 	const indexedLengthLoopActionByIp = new Map(
 		[...allIndexedLengthLoopActions].filter(
@@ -4130,8 +4141,8 @@ function emitBody(
 				] as const,
 		),
 	);
-	const objectKeysSnapshots = new Map(
-		[...objectKeysSnapshotSites.values()].flatMap((site) =>
+	const objectEnumerationSnapshots = new Map(
+		[...objectEnumerationSnapshotSites.values()].flatMap((site) =>
 			site.claimedIps.map((ip) => [ip, site] as const),
 		),
 	);
@@ -4605,7 +4616,7 @@ function emitBody(
 		stringTransform: undefined,
 		arrayInitialization: undefined,
 		mapEntry: undefined,
-		objectKeysSnapshot: undefined,
+		objectEnumerationSnapshot: undefined,
 		mappedArguments: fn.mappedArguments,
 		mappedArgumentSlots: fn.mappedArgumentSlots,
 		hasPrototype: fn.hasPrototype,
@@ -4636,10 +4647,10 @@ function emitBody(
 	};
 	for (const plan of fastPathPlans.mapEntries)
 		lines.push(`u32 __map_entry_${plan.getIp} = 0;`);
-	for (const plan of fastPathPlans.objectKeysSnapshots)
+	for (const plan of fastPathPlans.objectEnumerationSnapshots)
 		lines.push(
-			`bool __keys_snapshot_${plan.callIp}_active = false;`,
-			`u32 __keys_snapshot_${plan.callIp}_value = 0;`,
+			`bool __enumeration_snapshot_${plan.callIp}_active = false;`,
+			`u32 __enumeration_snapshot_${plan.callIp}_value = 0;`,
 		);
 	let lastPublishedPos = -1;
 	let lastPublishedSite = -1;
@@ -5091,7 +5102,7 @@ function emitBody(
 		instructionContext.stringTransform = stringTransforms.get(ip);
 		instructionContext.arrayInitialization = arrayInitializations.get(ip);
 		instructionContext.mapEntry = mapEntries.get(ip);
-		instructionContext.objectKeysSnapshot = objectKeysSnapshots.get(ip);
+		instructionContext.objectEnumerationSnapshot = objectEnumerationSnapshots.get(ip);
 		instructionContext.indexedLengthLoopAction = indexedLengthLoopActionByIp.get(ip);
 		instructionContext.nativeArrayPresenceProjectionAction = arrayPresenceAction;
 		instructionContext.pairedArrayLoopAction = pairedArrayLoopActionByIp.get(ip);
@@ -5574,7 +5585,7 @@ interface NativeInstructionContext {
 		readonly values: ReadonlyArray<number>;
 	};
 	readonly mapEntry?: { readonly getIp: number; readonly setIp: number };
-	readonly objectKeysSnapshot?: NativeObjectKeysSnapshotSite;
+	readonly objectEnumerationSnapshot?: NativeObjectEnumerationSnapshotSite;
 	readonly mappedArguments: boolean;
 	readonly mappedArgumentSlots: ReadonlyArray<number>;
 	readonly hasPrototype: boolean;
@@ -6480,13 +6491,13 @@ function emitInstruction(
 			`}`,
 		];
 	}
-	if (context.objectKeysSnapshot !== undefined) {
-		const site = context.objectKeysSnapshot;
-		const name = `__keys_snapshot_${site.callIp}`;
+	if (context.objectEnumerationSnapshot !== undefined) {
+		const site = context.objectEnumerationSnapshot;
+		const name = `__enumeration_snapshot_${site.callIp}`;
 		const ordinary = emitGenericInstruction();
 		if (ordinary === null) return null;
-		const snapshot = site.elementIps.length > 0;
-		const keys = `&__gc_slots[${site.keysSlot}]`;
+		const snapshot = site.kind === "values" || site.elementIps.length > 0;
+		const elements = `&__gc_slots[${site.elementsSlot}]`;
 		const materialized = `__gc_slots[${site.materializedSlot}]`;
 		if (
 			ip === site.callIp &&
@@ -6497,15 +6508,20 @@ function emitInstruction(
 			return [
 				...(snapshot
 					? [
-							`for (u32 i = 0; i < ${NATIVE_KEY_SNAPSHOT_CAPACITY}; i++) __gc_slots[${site.keysSlot} + i] = MAL_VALUE_UNDEFINED;`,
+							`for (u32 i = 0; i < ${NATIVE_ENUMERATION_SNAPSHOT_CAPACITY}; i++) __gc_slots[${site.elementsSlot} + i] = MAL_VALUE_UNDEFINED;`,
 							`${materialized} = MAL_VALUE_UNDEFINED;`,
 						]
 					: []),
-				`${name}_active = ${snapshot ? `mal_builtin_object_keys_snapshot(vm, ${args}, ${keys}, ${NATIVE_KEY_SNAPSHOT_CAPACITY}, &${name}_value)` : `mal_builtin_object_keys_count(${args}, &${name}_value)`};`,
+				`${name}_active = ${snapshot ? `mal_builtin_object_enumeration_snapshot(vm, ${args}, MAL_OBJECT_ENUMERATION_${site.kind.toUpperCase()}, ${elements}, ${NATIVE_ENUMERATION_SNAPSHOT_CAPACITY}, &${name}_value)` : `mal_builtin_object_keys_count(${args}, &${name}_value)`};`,
 				`if (${name}_active) {`,
 				`  r${instruction.dst} = MAL_VALUE_UNDEFINED;`,
 				`  ${poll()}`,
 				`} else {`,
+				...(snapshot
+					? [
+							`  for (u32 i = 0; i < ${NATIVE_ENUMERATION_SNAPSHOT_CAPACITY}; i++) (${elements})[i] = MAL_VALUE_UNDEFINED;`,
+						]
+					: []),
 				...ordinary.map((line) => `  ${line}`),
 				`}`,
 			];
@@ -6514,7 +6530,7 @@ function emitInstruction(
 			instruction.opcode !== "LOAD_PROPERTY_STATIC" &&
 			instruction.opcode !== "LOAD_PROPERTY"
 		)
-			throw new Error("Invalid key-snapshot consumer");
+			throw new Error("Invalid enumeration-snapshot consumer");
 		const available = `${name}_active${snapshot ? ` && mal_value_is_undefined(${materialized})` : ""}`;
 		const element = instruction.opcode === "LOAD_PROPERTY";
 		const index = `${name}_index_${ip}`;
@@ -6528,12 +6544,12 @@ function emitInstruction(
 					]
 				: []),
 			`if (${guard}) {`,
-			`  ${element ? `r${instruction.dst} = ${callValue(instruction.dst, `__gc_slots[${site.keysSlot} + (u32) ${index}]`)};` : storeNumber(instruction.dst, `(f64) ${name}_value`)}`,
+			`  ${element ? `r${instruction.dst} = ${callValue(instruction.dst, `__gc_slots[${site.elementsSlot} + (u32) ${index}]`)};` : storeNumber(instruction.dst, `(f64) ${name}_value`)}`,
 			`} else {`,
 			...(snapshot
 				? [
 						`  if (${name}_active) {`,
-						`    if (mal_value_is_undefined(${materialized})) { MAL_PERF_COUNT(object_keys_snapshot_materializations); ${materialized} = mal_value_from_array_object(mal_array_object_new_from_values(&vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ARRAY_PROTOTYPE]), ${keys}, ${name}_value)); }`,
+						`    if (mal_value_is_undefined(${materialized})) { MAL_PERF_COUNT(object_${site.kind}_snapshot_materializations); ${materialized} = mal_value_from_array_object(mal_array_object_new_from_values(&vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ARRAY_PROTOTYPE]), ${elements}, ${name}_value)); }`,
 						`    r${instruction.object} = ${materialized};`,
 						`  }`,
 					]

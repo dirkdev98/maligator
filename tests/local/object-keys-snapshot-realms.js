@@ -4,6 +4,12 @@ function inspect(namespace, record, index) {
 	return [value, keys.length, keys[0]];
 }
 
+function inspectValues(namespace, record, index) {
+	const values = namespace.values(record);
+	const value = values[index];
+	return [value, values.length, values[0]];
+}
+
 function count(namespace, record) {
 	return namespace.keys(record).length;
 }
@@ -26,6 +32,8 @@ Object.defineProperty(other.Array.prototype, "17", {
 try {
 	rows.push(inspect(other.Object, record, 17));
 	rows.push(inspect(Object, record, 17));
+	rows.push(inspectValues(other.Object, record, 17));
+	rows.push(inspectValues(Object, record, 17));
 	rows.push(count(other.Object, record), reads);
 	Object.defineProperty(other.Array.prototype, "17", {
 		configurable: true,
@@ -35,7 +43,7 @@ try {
 		},
 	});
 	try {
-		inspect(other.Object, record, 17);
+		inspectValues(other.Object, record, 17);
 	} catch (error) {
 		rows.push(error instanceof other.RangeError, error instanceof RangeError, reads);
 	}

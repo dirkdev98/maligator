@@ -4458,6 +4458,30 @@ call_compiled:
         : (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = value};
 }
 
+bool mal_vm_prepare_builtin_callback(MalVm *vm, MalValue callback, MalExactScriptCall *exact) {
+    if (!mal_value_is_function_object(callback)) return false;
+    MalFunctionObject *closure = mal_value_to_function_object(callback);
+    i32 index = mal_function_object_function_index(closure);
+    if (index < 0 || index >= vm->runtime_image->function_count) return false;
+#if MAL_REALMS
+    if (mal_vm_callee_realm(vm, callback) != vm->current_realm) return false;
+#endif
+    const MalFunction *function = &vm->runtime_image->functions[index];
+    if (function->kind != MAL_FUNCTION_KIND_NORMAL ||
+        function->is_class_constructor || function->compiled == nullptr) return false;
+    *exact = (MalExactScriptCall) {
+        .previous = vm->exact_script_call,
+        .callee = callback,
+        .function_index = index,
+        .compiled_callback = function->compiled,
+        .numeric_sort_comparator = nullptr,
+        .numeric_sort_kernel = nullptr,
+        .env = closure->creation_env,
+        .numeric_reduce_callback = nullptr,
+    };
+    return true;
+}
+
 MalCompletion mal_vm_call_exact_script(
     MalVm *vm,
     i32 function_index,

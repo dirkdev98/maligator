@@ -2609,6 +2609,9 @@ MalValue mal_vm_cjs_require(MalVm *vm, i32 id);
  */
 MalValue mal_vm_callee_this(MalVm *vm, const MalFunction *function, MalValue this_value);
 
+// Borrows the rooted callback; preparation cannot allocate, throw, or invoke JavaScript.
+bool mal_vm_prepare_builtin_callback(MalVm *vm, MalValue callback, MalExactScriptCall *exact);
+
 /**
  * Exact script call through a generated typed callback bridge. Keep this in the
  * header: the hot Array loop then folds the proved target setup into its callback

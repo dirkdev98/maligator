@@ -10,8 +10,8 @@ import { analyzeNativeBodyFacts } from "./native-body-facts.ts";
 import type { NativeBodyFacts } from "./native-body-facts.ts";
 import { selectNativeMapEntries } from "./native-map-entry-plan.ts";
 import type { NativeMapEntryPlan } from "./native-map-entry-plan.ts";
-import { selectNativeObjectKeysSnapshots } from "./native-object-keys-snapshot.ts";
-import type { NativeObjectKeysSnapshotPlan } from "./native-object-keys-snapshot.ts";
+import { selectNativeObjectEnumerationSnapshots } from "./native-object-enumeration-snapshot.ts";
+import type { NativeObjectEnumerationSnapshotPlan } from "./native-object-enumeration-snapshot.ts";
 import {
 	MATH_UNARY_NATIVE_CALL,
 	MATH_BINARY_OPERATIONS,
@@ -262,7 +262,7 @@ export interface NativeFastPathPlans {
 	readonly stringTransforms: ReadonlyArray<NativeStringTransformPlan>;
 	readonly arrayInitializations: ReadonlyArray<NativeArrayInitialization>;
 	readonly mapEntries: ReadonlyArray<NativeMapEntryPlan>;
-	readonly objectKeysSnapshots: ReadonlyArray<NativeObjectKeysSnapshotPlan>;
+	readonly objectEnumerationSnapshots: ReadonlyArray<NativeObjectEnumerationSnapshotPlan>;
 	readonly spanContinuations: ReadonlyArray<NativeSpanContinuation>;
 	readonly propertyNumericUpdates: ReadonlyArray<NativePropertyNumericUpdatePlan>;
 	readonly propertyProjections: ReadonlyArray<NativePropertyProjectionPlan>;
@@ -2304,8 +2304,8 @@ export function lowerNativeFastPaths(
 		arrayInitializations:
 			selection.kind === "render" ? selection.plans.arrayInitializations : [],
 		mapEntries: selection.kind === "render" ? selection.plans.mapEntries : [],
-		objectKeysSnapshots:
-			selection.kind === "render" ? selection.plans.objectKeysSnapshots : [],
+		objectEnumerationSnapshots:
+			selection.kind === "render" ? selection.plans.objectEnumerationSnapshots : [],
 		spanContinuations:
 			selection.kind === "render" ? selection.plans.spanContinuations : [],
 		arrayPresence: selection.kind === "render" ? selection.plans.arrayPresence : [],
@@ -2717,7 +2717,7 @@ export function selectNativeFastPaths(
 		for (const ip of plan.claimedIps) blocked.add(ip);
 	const numberRecordRegions: Array<NativeNumberRecordRegionPlan> = [];
 	const numericLoopRegions: Array<NativeNumericLoopRegionPlan> = [];
-	const objectKeysSnapshots = selectNativeObjectKeysSnapshots(
+	const objectEnumerationSnapshots = selectNativeObjectEnumerationSnapshots(
 		native,
 		body,
 		stringConstants,
@@ -2726,7 +2726,7 @@ export function selectNativeFastPaths(
 			snapshotBlocked.has(ip) ||
 			pollingEdges.has(ip),
 	);
-	for (const plan of objectKeysSnapshots)
+	for (const plan of objectEnumerationSnapshots)
 		for (const ip of plan.claimedIps) blocked.add(ip);
 	// Profiled sites observe each original instruction.
 	if (
@@ -2798,7 +2798,7 @@ export function selectNativeFastPaths(
 		stringTransforms,
 		arrayInitializations,
 		mapEntries,
-		objectKeysSnapshots,
+		objectEnumerationSnapshots,
 		spanContinuations,
 		...selectArrayWindows(
 			native,
@@ -2825,7 +2825,7 @@ export function selectNativeFastPaths(
 					...numericLoopRegions,
 					...arrayInitializations,
 					...mapEntries,
-					...objectKeysSnapshots,
+					...objectEnumerationSnapshots,
 					...spanContinuations,
 					...(selected.constructorInitialization === undefined
 						? []

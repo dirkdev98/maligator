@@ -1920,6 +1920,14 @@ MalValue mal_builtin_typed_array_sort(MalVm *vm, MalValue this_value, const MalV
     mal_gc_native_rooted_begin(vm);
     MalValue ret = this_value;
 
+    MalExactScriptCall runtime_callback;
+    bool nominated = (vm->exact_script_call == nullptr ||
+        vm->exact_script_call->callee != compare) &&
+        mal_vm_prepare_builtin_callback(vm, compare, &runtime_callback);
+    if (nominated) {
+        vm->exact_script_call = &runtime_callback;
+        MAL_PERF_COUNT(typed_array_sort_runtime_callback_nominations);
+    }
     MalValue *source = values;
     MalValue *destination = scratch;
     u32 width = 1;
@@ -1961,6 +1969,7 @@ MalValue mal_builtin_typed_array_sort(MalVm *vm, MalValue this_value, const MalV
     }
 
 done:
+    if (nominated) vm->exact_script_call = runtime_callback.previous;
     mal_gc_native_rooted_end(vm);
     mal_gc_unroot(&scratch_span);
     mal_gc_unroot(&values_span);

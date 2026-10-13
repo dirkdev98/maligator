@@ -6,10 +6,11 @@ import {
 import type { NativeFunctionPlan } from "./program-image.ts";
 import { vmInstructionReadRegisters } from "./runtime-image.ts";
 
-export const NATIVE_KEY_SNAPSHOT_CAPACITY = 16;
+export const NATIVE_ENUMERATION_SNAPSHOT_CAPACITY = 16;
 
-export interface NativeObjectKeysSnapshotPlan {
+export interface NativeObjectEnumerationSnapshotPlan {
 	readonly callIp: number;
+	readonly kind: "keys" | "values";
 	readonly lengthIps: ReadonlyArray<number>;
 	readonly elementIps: ReadonlyArray<number>;
 	readonly claimedIps: ReadonlyArray<number>;
@@ -17,14 +18,14 @@ export interface NativeObjectKeysSnapshotPlan {
 	readonly fallback: "original-instructions";
 }
 
-export function selectNativeObjectKeysSnapshots(
+export function selectNativeObjectEnumerationSnapshots(
 	native: NativeFunctionPlan,
 	body: NativeBodyFacts,
 	strings: ReadonlyArray<ReadonlyArray<number>>,
 	unavailable: (ip: number) => boolean,
-): Array<NativeObjectKeysSnapshotPlan> {
+): Array<NativeObjectEnumerationSnapshotPlan> {
 	const fn = native.body,
-		plans: Array<NativeObjectKeysSnapshotPlan> = [];
+		plans: Array<NativeObjectEnumerationSnapshotPlan> = [];
 	if (
 		native.mode !== "direct" ||
 		fn.isGenerator ||
@@ -34,21 +35,33 @@ export function selectNativeObjectKeysSnapshots(
 		fn.instructions.length > 4096
 	)
 		return plans;
+	const named = (index: number, name: string): boolean => {
+		const units = strings[index];
+		return (
+			units?.length === name.length &&
+			units.every((unit, offset) => unit === name.charCodeAt(offset))
+		);
+	};
 	let candidates = 0;
 	for (const [ip, call] of fn.instructions.entries()) {
 		if (plans.length === 8) break;
 		if (
 			(call.opcode !== "CALL" && call.opcode !== "CALL_KNOWN") ||
 			(call.opcode === "CALL_KNOWN" &&
-				(call.operation !== "Object.keys" ||
+				((call.operation !== "Object.keys" && call.operation !== "Object.values") ||
 					call.construct ||
 					call.argumentMode !== undefined)) ||
 			call.arguments.length !== 1 ||
 			unavailable(ip)
 		)
 			continue;
+		let kind: "keys" | "values" | undefined =
+			call.opcode === "CALL_KNOWN"
+				? call.operation === "Object.keys"
+					? "keys"
+					: "values"
+				: undefined;
 		if (call.opcode === "CALL") {
-			let readsKeys = false;
 			for (let prior = ip - 1; prior >= Math.max(0, ip - 16); prior--) {
 				if (body.jumpTargets.has(prior + 1)) break;
 				const op = fn.instructions[prior]!;
@@ -61,13 +74,14 @@ export function selectNativeObjectKeysSnapshots(
 					break;
 				if (!body.writes[prior]!.includes(call.callee)) continue;
 				// The captured callee survives argument evaluation; runtime still guards its identity.
-				readsKeys =
-					op.opcode === "LOAD_PROPERTY_STATIC" &&
-					String.fromCharCode(...(strings[op.stringIndex] ?? [])) === "keys";
+				if (op.opcode === "LOAD_PROPERTY_STATIC") {
+					if (named(op.stringIndex, "keys")) kind = "keys";
+					else if (named(op.stringIndex, "values")) kind = "values";
+				}
 				break;
 			}
-			if (!readsKeys) continue;
 		}
+		if (kind === undefined) continue;
 		// Rejected escapes also incur a whole-function lifetime analysis.
 		if (candidates++ === 16) break;
 		const flow = nativeVirtualValueFlow(fn.instructions, ip, call.dst);
@@ -87,7 +101,7 @@ export function selectNativeObjectKeysSnapshots(
 			if (
 				op.opcode === "LOAD_PROPERTY_STATIC" &&
 				op.object === reads[0] &&
-				String.fromCharCode(...(strings[op.stringIndex] ?? [])) === "length"
+				named(op.stringIndex, "length")
 			)
 				lengthIps.push(consumerIp);
 			else if (op.opcode === "LOAD_PROPERTY" && op.object === reads[0])
@@ -101,7 +115,7 @@ export function selectNativeObjectKeysSnapshots(
 		if (!safe || !consumers.size || consumers.size > 16) continue;
 		try {
 			validateNativeVirtualValue(fn.instructions, ip, call.dst, consumers, () => {
-				throw new RangeError("Observed keys array");
+				throw new RangeError("Observed enumeration array");
 			});
 		} catch (error) {
 			if (!(error instanceof RangeError)) throw error;
@@ -111,6 +125,7 @@ export function selectNativeObjectKeysSnapshots(
 		elementIps.sort((a, b) => a - b);
 		plans.push({
 			callIp: ip,
+			kind,
 			lengthIps,
 			elementIps,
 			claimedIps: [ip, ...consumers.keys()].sort((a, b) => a - b),

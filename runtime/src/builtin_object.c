@@ -1122,14 +1122,18 @@ MalValue mal_builtin_object_keys_known(
         MAL_VALUE_UNDEFINED);
 }
 
-static bool mal_builtin_object_keys_admits(MalValue callee, MalValue target, bool locked) {
+static MalValue mal_builtin_object_values(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee);
+
+static bool mal_builtin_object_enumeration_admits(MalValue callee, MalValue target, bool locked, MalObjectEnumerationKind kind) {
+    MalNativeFunctionCallback expected = kind == MAL_OBJECT_ENUMERATION_KEYS
+        ? mal_builtin_object_keys : mal_builtin_object_values;
     return (locked || (mal_value_is_native_function_object(callee) &&
-        mal_native_function_object_callback(mal_value_to_native_function_object(callee)) == mal_builtin_object_keys)) &&
+        mal_native_function_object_callback(mal_value_to_native_function_object(callee)) == expected)) &&
         mal_value_is_heap_type(target, MAL_HEAP_OBJECT);
 }
 
-bool mal_builtin_object_keys_snapshot(MalVm *vm, MalValue callee, MalValue target, bool locked, MalValue *keys, u32 capacity, u32 *count_out) {
-    if (!mal_builtin_object_keys_admits(callee, target, locked)) return false;
+bool mal_builtin_object_enumeration_snapshot(MalVm *vm, MalValue callee, MalValue target, bool locked, MalObjectEnumerationKind kind, MalValue *elements, u32 capacity, u32 *count_out) {
+    if (!mal_builtin_object_enumeration_admits(callee, target, locked, kind)) return false;
 #if MAL_REALMS
     // Delayed Array materialization uses the current realm's prototype.
     if (!locked && mal_vm_callee_realm(vm, callee) != vm->current_realm) return false;
@@ -1143,16 +1147,19 @@ bool mal_builtin_object_keys_snapshot(MalVm *vm, MalValue callee, MalValue targe
     for (u32 i = 0; i < shape->inline_count; i++) {
         const MalShapeProp *prop = &shape->props[i];
         if (!mal_value_is_string(prop->key) || !(prop->attrs & MAL_PROPERTY_ENUMERABLE)) continue;
-        if (count == capacity) return false;
-        keys[count++] = prop->key;
+        if (count == capacity || (kind == MAL_OBJECT_ENUMERATION_VALUES &&
+            (prop->attrs & MAL_PROPERTY_ACCESSOR))) return false;
+        elements[count++] = kind == MAL_OBJECT_ENUMERATION_KEYS
+            ? prop->key : mal_object_field_load(object, prop->slot);
     }
     *count_out = count;
-    MAL_PERF_COUNT(object_keys_snapshot_admissions);
+    if (kind == MAL_OBJECT_ENUMERATION_KEYS) MAL_PERF_COUNT(object_keys_snapshot_admissions);
+    else MAL_PERF_COUNT(object_values_snapshot_admissions);
     return true;
 }
 
 bool mal_builtin_object_keys_count(MalValue callee, MalValue target, bool locked, u32 *count_out) {
-    if (!mal_builtin_object_keys_admits(callee, target, locked)) return false;
+    if (!mal_builtin_object_enumeration_admits(callee, target, locked, MAL_OBJECT_ENUMERATION_KEYS)) return false;
     MalObject *object = mal_value_to_object(target);
     u32 capacity;
     if (!mal_builtin_object_plain_capacity(object, &capacity)) return false;

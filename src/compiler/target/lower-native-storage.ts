@@ -1025,7 +1025,7 @@ function rootStorage(
 				...fastPaths.numericLoopRegions,
 				...fastPaths.arrayInitializations,
 				...fastPaths.mapEntries,
-				...fastPaths.objectKeysSnapshots,
+				...fastPaths.objectEnumerationSnapshots,
 				...fastPaths.spanContinuations,
 			].flatMap((plan) => plan.borrowedRegisters),
 		);
@@ -1061,7 +1061,7 @@ function rootStorage(
 					...fastPaths.numericLoopRegions,
 					...fastPaths.arrayInitializations,
 					...fastPaths.mapEntries,
-					...fastPaths.objectKeysSnapshots,
+					...fastPaths.objectEnumerationSnapshots,
 					...fastPaths.spanContinuations,
 				],
 				expressionIps,
@@ -1128,7 +1128,7 @@ function scalarStorageWindows(fastPaths: NativeFastPathPlans) {
 		...fastPaths.numericLoopRegions,
 		...fastPaths.arrayInitializations,
 		...fastPaths.mapEntries,
-		...fastPaths.objectKeysSnapshots,
+		...fastPaths.objectEnumerationSnapshots,
 		...fastPaths.spanContinuations,
 		...fastPaths.pairedArrayLoops,
 		...fastPaths.arrayPresence,
@@ -1713,11 +1713,13 @@ export function validateNativeStorage(
 					sameNumbers(plan.borrowedRegisters, expected.borrowedRegisters)
 				);
 			}) &&
-			stored.objectKeysSnapshots.length === selected.objectKeysSnapshots.length &&
-			stored.objectKeysSnapshots.every((plan, index) => {
-				const expected = selected.objectKeysSnapshots[index]!;
+			stored.objectEnumerationSnapshots.length ===
+				selected.objectEnumerationSnapshots.length &&
+			stored.objectEnumerationSnapshots.every((plan, index) => {
+				const expected = selected.objectEnumerationSnapshots[index]!;
 				return (
 					plan.callIp === expected.callIp &&
+					plan.kind === expected.kind &&
 					sameNumbers(plan.lengthIps, expected.lengthIps) &&
 					sameNumbers(plan.elementIps, expected.elementIps) &&
 					plan.fallback === expected.fallback &&

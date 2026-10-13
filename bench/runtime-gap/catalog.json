@@ -3046,6 +3046,32 @@
 			"controls": ["fresh-numeric-values", "fresh-three-values"]
 		},
 		{
+			"id": "object-values-snapshot",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "Object enumeration snapshots",
+			"category": "object-array-representation",
+			"mechanisms": ["allocation-gc"],
+			"inputShape": "An eager four-value record snapshot is traversed while a callback replaces source fields, preserving the captured values without an observable result Array.",
+			"unit": "snapshot",
+			"sourceSeam": "src/compiler/target/native-object-enumeration-snapshot.ts",
+			"fixture": "cases/object-values-snapshot.mjs",
+			"controls": ["object-keys-snapshot-traversal", "object-keys-count"]
+		},
+		{
+			"id": "forwarded-typed-sort-callback",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "Shared sort callback transport",
+			"category": "api-builtins",
+			"mechanisms": ["array-callback"],
+			"inputShape": "A runtime-selected captured comparator passes through a helper into TypedArray toSorted without a static callback target.",
+			"unit": "sorted element",
+			"sourceSeam": "runtime/src/builtin_typed_array.c",
+			"fixture": "cases/forwarded-typed-sort-callback.mjs",
+			"controls": ["forwarded-array-callback", "typed-array-bigint-sort-callback"]
+		},
+		{
 			"id": "method-name-unique",
 			"group": "runtime",
 			"suite": "runtime",

@@ -42,6 +42,45 @@ function callbackPlans(image: ProgramImage) {
 
 describe("numeric sort callback entries", () => {
 	it.each(["sort", "toSorted"])(
+		"keeps forwarded %s comparators boxed until runtime target nomination",
+		(operation) => {
+			const image = deserializeCompilerArtifact(
+				serializeCompilerArtifact(
+					compileSemanticProgramToProgramImage(
+						analyzeSourceAndRunSemanticAnalysis(
+							`
+					function forward(receiver, callbacks, pick) {
+						let compare = callbacks[0];
+						if (pick) compare = callbacks[1];
+						return receiver.${operation}(compare);
+					}
+					globalThis.forward = forward;
+				`,
+							"forwarded-sort.js",
+						),
+					),
+				),
+			);
+			const forward = image.native.functions.find(
+				(fn) =>
+					String.fromCharCode(
+						...(image.runtime.stringConstants[fn.body.nameStringIndex] ?? []),
+					) === "forward",
+			)!;
+			expect(forward).toBeDefined();
+			expect(forward.body.instructions.filter((op) => op.opcode === "CALL")).toHaveLength(
+				1,
+			);
+			for (const call of forward.instructions) {
+				if (call?.kind !== "call") continue;
+				expect(call.numericSortCallback).toBeUndefined();
+				expect(call.directCallbackFunctionIndex).toBeUndefined();
+			}
+			expect(forward.storage!.callbackTransports).toEqual([]);
+		},
+	);
+
+	it.each(["sort", "toSorted"])(
 		"carries %s's checked numeric callback contract through the codec and emitter",
 		(operation) => {
 			const image = deserializeCompilerArtifact(
