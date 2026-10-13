@@ -675,6 +675,12 @@ bool mal_vm_iterator_step_entry_pair_protocol_cursor(
             mal_builtin_iterator_expected_next(cursor->kind)) {
         return false;
     }
+#if MAL_REALMS
+    // A sparse element Get can throw in the captured next method's realm.
+    if (mal_vm_callee_realm(vm, record->next_method) != vm->current_realm) {
+        return false;
+    }
+#endif
     if (cursor->done) {
         *first_out = mal_value_new_undefined();
         *second_out = mal_value_new_undefined();

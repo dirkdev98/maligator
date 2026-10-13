@@ -5,6 +5,7 @@
 #include "builtin_iterator.h"
 #include "heap_string.h"
 #include "heap_symbol.h"
+#include "perf_stats.h"
 #include "set_object.h"
 #include "weak_collection.h"
 #include "value_ops.h"
@@ -32,11 +33,6 @@ static MalValue mal_builtin_weak_set_prototype_add(
     MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count,
     MalValue new_target, MalValue callee);
 
-/**
- * Shared Set/WeakSet constructor tail: populate the fresh set from an
- * optional iterable through this.add, closing the iterator on abrupt
- * completions.
- */
 static MalValue mal_builtin_set_construct(
     MalVm *vm,
     MalValue new_target,
@@ -71,27 +67,54 @@ static MalValue mal_builtin_set_construct(
         return set_value;
     }
 
-    MalValue adder;
-    if (!mal_vm_get_property(vm, set_value, mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_ADD), &adder)) {
-        return mal_value_new_undefined();
-    }
+    MalValue roots[3] = {
+        set_value,
+        mal_value_new_undefined(),
+        mal_value_new_undefined(),
+    };
+    MalIteratorRecord record = {
+        .iterator = mal_value_new_undefined(),
+        .next_method = mal_value_new_undefined(),
+    };
+    MalRootSpan rec_span, span;
+    mal_gc_root(&rec_span, &record.iterator, 2);
+    mal_gc_root(&span, roots, countof(roots));
+    mal_gc_native_rooted_begin(vm);
+    MalValue ret = mal_value_new_undefined();
+    MalExactScriptCall runtime_callback;
+    bool nominated = false;
 
-    if (!mal_value_is_callable(adder)) {
+    // Adder and iterator getters can explicitly collect before population starts.
+    if (!mal_vm_get_property(vm, roots[0], mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_ADD), &roots[1])) {
+        goto done;
+    }
+    if (!mal_value_is_callable(roots[1])) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Set adder is not callable");
-        return mal_value_new_undefined();
+        goto done;
     }
     bool direct_set_adder = !weak &&
-        adder == vm->intrinsics[MAL_INTRINSIC_SET_PROTOTYPE_ADD];
+        roots[1] == vm->intrinsics[MAL_INTRINSIC_SET_PROTOTYPE_ADD];
     bool direct_weak_adder = weak &&
-        mal_value_is_native_function_object(adder) &&
+        mal_value_is_native_function_object(roots[1]) &&
         mal_native_function_object_callback(
-            mal_value_to_native_function_object(adder)) ==
+            mal_value_to_native_function_object(roots[1])) ==
             mal_builtin_weak_set_prototype_add;
+#if MAL_REALMS
+    // Invalid weak keys must throw in the captured adder's realm.
+    direct_weak_adder = direct_weak_adder &&
+        mal_vm_callee_realm(vm, roots[1]) == vm->current_realm;
+#endif
     bool direct_adder = direct_set_adder || direct_weak_adder;
-
-    MalIteratorRecord record;
     if (!mal_vm_get_iterator(vm, args[0], &record)) {
-        return mal_value_new_undefined();
+        goto done;
+    }
+    nominated = !direct_adder &&
+        (vm->exact_script_call == nullptr || vm->exact_script_call->callee != roots[1]) &&
+        mal_vm_prepare_builtin_callback(vm, roots[1], &runtime_callback);
+    if (nominated) {
+        vm->exact_script_call = &runtime_callback;
+        if (weak) MAL_PERF_COUNT(collection_constructor_weak_set_nominations);
+        else MAL_PERF_COUNT(collection_constructor_set_nominations);
     }
 
     MalIteratorObject *dense_array_cursor = direct_set_adder
@@ -109,20 +132,6 @@ static MalValue mal_builtin_set_construct(
         if (weak) (void) mal_weak_set_object_reserve(weak_set, size_hint);
         else (void) mal_set_object_reserve(set, size_hint);
     }
-
-    // Each step and the adder re-enter JS and can collect. A callable Proxy may
-    // allocate its apply-argument array before the generic call seam publishes
-    // those arguments, so keep the current item rooted as well.
-    MalValue roots[3] = {
-        set_value,
-        adder,
-        mal_value_new_undefined(), // current item
-    };
-    MalRootSpan rec_span, span;
-    mal_gc_root(&rec_span, &record.iterator, 2);
-    mal_gc_root(&span, roots, countof(roots));
-    mal_gc_native_rooted_begin(vm);
-    MalValue ret = mal_value_new_undefined();
 
     while (true) {
         bool done;
@@ -146,9 +155,6 @@ static MalValue mal_builtin_set_construct(
             goto done;
         }
 
-        // The exact built-in Set.prototype.add has no observable call seam.
-        // Its identity was captured before iterator acquisition, so direct
-        // insertion remains valid even if later iterator effects replace add.
         if (direct_adder) {
             if (direct_weak_adder &&
                 !mal_weak_key_can_be_held(roots[2])) {
@@ -163,7 +169,7 @@ static MalValue mal_builtin_set_construct(
             continue;
         }
 
-        MalCompletion completion = mal_vm_call_value(
+        MalCompletion completion = mal_vm_call_builtin_callback(
             vm, roots[1], roots[0], &roots[2], 1);
         if (completion.kind != MAL_COMPLETION_NORMAL) {
             mal_vm_iterator_close(vm, &record);
@@ -172,6 +178,7 @@ static MalValue mal_builtin_set_construct(
     }
 
 done:
+    if (nominated) vm->exact_script_call = runtime_callback.previous;
     mal_gc_native_rooted_end(vm);
     mal_gc_unroot(&span);
     mal_gc_unroot(&rec_span);

@@ -788,6 +788,19 @@ The shared lifetime and fallback rules are recorded in
       Six Node oracles exercise the explicit GC hook. Native verification and
       measurement remain pending.
 
+- [ ] Retain several Map lookup indices for arbitrary keys and reference values,
+      including unprotected regions in functions with handlers. Revalidate current
+      storage, live entry and canonical key before using the existing barrier-aware
+      updater. Eight focused checks, six frontend/artifact/C captures and forced-GC
+      Node oracles pass; native verification and measurement remain pending.
+- [ ] Root fresh collection constructors before adder and iterator acquisition;
+      reuse one captured compiled-adder contract through Map, WeakMap, Set and
+      WeakSet population. Reuse borrowed entry pairs without replay after an abrupt
+      step, and preserve foreign weak-adder error realms. A foreign Array next method
+      falls back before entry borrowing can bypass its error realm. All 24 focused
+      checks, ten forced-GC Node oracles and six frontend/artifact/C captures pass;
+      native verification and measurement remain pending.
+
 | Order | Slice                        | Owning work and exit condition                                                                                                                                  |
 | ----- | ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 1     | Callback invocation          | The tasks above; remove measured repeated invocation work for a numeric reduction with captures.                                                                |

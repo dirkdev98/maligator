@@ -5889,6 +5889,45 @@
 			"sourceSeam": "runtime/src/builtin_number.c",
 			"controls": ["string-span-trim-search", "string-span-nested"],
 			"fixture": "cases/string-span-parsers.mjs"
+		},
+		{
+			"id": "map-reference-interleaved",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "Map entry reuse",
+			"category": "api-builtins",
+			"mechanisms": ["map-get-set-cache"],
+			"inputShape": "Two interleaved updates of retained reference values with string and BigInt keys on a 256-entry Map.",
+			"unit": "collection call",
+			"sourceSeam": "runtime/src/map_object.c",
+			"fixture": "cases/map-reference-interleaved.mjs",
+			"controls": ["map-reference-adjacent", "map-two-key-interleaved"]
+		},
+		{
+			"id": "map-reference-adjacent",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "Map entry reuse",
+			"category": "api-builtins",
+			"mechanisms": ["map-get-set-cache"],
+			"inputShape": "Two adjacent updates of retained reference values with string and BigInt keys on a 256-entry Map.",
+			"unit": "collection call",
+			"sourceSeam": "runtime/src/map_object.c",
+			"fixture": "cases/map-reference-adjacent.mjs",
+			"controls": ["map-two-key-adjacent"]
+		},
+		{
+			"id": "collection-constructor-adder",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "Collection constructor callback transport",
+			"category": "api-builtins",
+			"mechanisms": ["callback-invocation", "iterator-entry-pair-virtualization"],
+			"inputShape": "A custom captured Map setter consumes a live Map entries cursor during construction.",
+			"unit": "constructed entry",
+			"sourceSeam": "runtime/src/builtin_map.c",
+			"fixture": "cases/collection-constructor-adder.mjs",
+			"controls": ["object-from-entries-map-pairs"]
 		}
 	]
 }

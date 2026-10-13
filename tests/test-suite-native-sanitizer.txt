@@ -182,3 +182,4 @@ tests/native/numeric-sort-invocation.test.ts
 tests/native/sort-callback-continuation.test.ts
 
 tests/native/collection-foreach-callback.test.ts
+tests/native/collection-constructor-callback.test.ts

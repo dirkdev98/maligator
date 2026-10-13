@@ -33,11 +33,6 @@ static MalValue mal_builtin_weak_map_prototype_set(
     MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count,
     MalValue new_target, MalValue callee);
 
-/**
- * Shared Map/WeakMap constructor tail: populate the fresh map from an
- * optional iterable of [key, value] entries through this.set, closing the
- * iterator on abrupt completions.
- */
 static MalValue mal_builtin_map_construct(
     MalVm *vm,
     MalValue new_target,
@@ -72,41 +67,62 @@ static MalValue mal_builtin_map_construct(
         return map_value;
     }
 
-    MalValue adder;
-    if (!mal_vm_get_property(vm, map_value, mal_intrinsic_string_key(vm, "set"), &adder)) {
-        return mal_value_new_undefined();
-    }
+    MalValue roots[5] = {
+        map_value,
+        mal_value_new_undefined(),
+        mal_value_new_undefined(),
+        mal_value_new_undefined(),
+        mal_value_new_undefined(),
+    };
+    MalIteratorRecord record = {
+        .iterator = mal_value_new_undefined(),
+        .next_method = mal_value_new_undefined(),
+    };
+    MalRootSpan rec_span, span;
+    mal_gc_root(&rec_span, &record.iterator, 2);
+    mal_gc_root(&span, roots, countof(roots));
+    mal_gc_native_rooted_begin(vm);
+    MalValue ret = mal_value_new_undefined();
+    MalExactScriptCall runtime_callback;
+    bool nominated = false;
 
-    if (!mal_value_is_callable(adder)) {
+    // Adder and iterator getters can explicitly collect before population starts.
+    if (!mal_vm_get_property(vm, roots[0], mal_intrinsic_string_key(vm, "set"), &roots[1])) {
+        goto done;
+    }
+    if (!mal_value_is_callable(roots[1])) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Map adder is not callable");
-        return mal_value_new_undefined();
+        goto done;
     }
     bool direct_map_adder = !weak &&
-        adder == vm->intrinsics[MAL_INTRINSIC_MAP_PROTOTYPE_SET];
+        roots[1] == vm->intrinsics[MAL_INTRINSIC_MAP_PROTOTYPE_SET];
     bool direct_weak_adder = weak &&
-        mal_value_is_native_function_object(adder) &&
+        mal_value_is_native_function_object(roots[1]) &&
         mal_native_function_object_callback(
-            mal_value_to_native_function_object(adder)) ==
+            mal_value_to_native_function_object(roots[1])) ==
             mal_builtin_weak_map_prototype_set;
+#if MAL_REALMS
+    // Invalid weak keys must throw in the captured adder's realm.
+    direct_weak_adder = direct_weak_adder &&
+        mal_vm_callee_realm(vm, roots[1]) == vm->current_realm;
+#endif
     bool direct_adder = direct_map_adder || direct_weak_adder;
-
-    MalIteratorRecord record;
     if (!mal_vm_get_iterator(vm, args[0], &record)) {
-        return mal_value_new_undefined();
+        goto done;
+    }
+    nominated = !direct_adder &&
+        (vm->exact_script_call == nullptr || vm->exact_script_call->callee != roots[1]) &&
+        mal_vm_prepare_builtin_callback(vm, roots[1], &runtime_callback);
+    if (nominated) {
+        vm->exact_script_call = &runtime_callback;
+        if (weak) MAL_PERF_COUNT(collection_constructor_weak_map_nominations);
+        else MAL_PERF_COUNT(collection_constructor_map_nominations);
     }
 
-    MalIteratorObject *map_entries_cursor = direct_map_adder
-        ? mal_vm_iterator_protocol_cursor(&record, MAL_ITERATOR_CURSOR_MAP)
-        : nullptr;
-    bool direct_map_entries = map_entries_cursor != nullptr &&
-        map_entries_cursor->kind == MAL_ITERATOR_MAP_ENTRIES;
     MalIteratorObject *dense_array_cursor = direct_map_adder
         ? mal_vm_iterator_dense_array_cursor(&record)
         : nullptr;
 
-    // The iterator and adder have already been observed in spec order. An exact,
-    // fresh built-in iterator gives a sound count hint without consulting the
-    // iterable again; custom/advanced iterators retain ordinary growth.
     usize size_hint;
     if (direct_adder &&
         mal_vm_builtin_iterator_size_hint(&record, &size_hint)) {
@@ -114,71 +130,42 @@ static MalValue mal_builtin_map_construct(
         else (void) mal_map_object_reserve(map, size_hint);
     }
 
-    // Each step, the entry index Gets, and the adder all re-enter JS and can
-    // collect; root the record, the map being built, the adder, and the current
-    // entry across the loop, and lift GC suppression. (The extracted key/value are
-    // the adder's args → rooted by the call seam during that call.)
-    MalValue roots[5] = {
-        map_value,
-        adder,
-        mal_value_new_undefined(), // current entry
-        mal_value_new_undefined(), // entry key
-        mal_value_new_undefined(), // entry value
-    };
-    MalRootSpan rec_span, span;
-    mal_gc_root(&rec_span, &record.iterator, 2);
-    mal_gc_root(&span, roots, countof(roots));
-    mal_gc_native_rooted_begin(vm);
-    MalValue ret = mal_value_new_undefined();
-
     while (true) {
         bool done;
-        if (direct_map_entries) {
-            mal_vm_iterator_step_map_entries_cursor(
-                map_entries_cursor, &roots[3], &roots[4], &done);
-            if (done) {
-                ret = roots[0];
-                goto done;
+        bool borrowed = mal_vm_iterator_step_entry_pair_protocol_cursor(
+            vm, &record, &roots[3], &roots[4], &done);
+        // A borrowed Array entry can advance and then throw from its element Get.
+        if (!borrowed && vm->completion.kind != MAL_COMPLETION_NORMAL) goto done;
+        if (borrowed) {
+            if (!done) MAL_PERF_COUNT(collection_constructor_borrowed_pairs);
+        } else {
+            bool stepped = dense_array_cursor != nullptr
+                ? mal_vm_iterator_step_dense_array_cursor(
+                    vm, dense_array_cursor, &record, &roots[2], &done)
+                : mal_vm_iterator_step(vm, &record, &roots[2], &done);
+            if (!stepped) goto done;
+            if (!done) {
+                if (!mal_value_is_object(roots[2])) {
+                    mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Iterator entry is not an object");
+                    mal_vm_iterator_close(vm, &record);
+                    goto done;
+                }
+                bool dense_pair = mal_value_is_array_object(roots[2]) &&
+                    mal_array_object_dense_pair(
+                        mal_value_to_array_object(roots[2]), &roots[3], &roots[4]);
+                if (!dense_pair &&
+                    (!mal_vm_get_property(vm, roots[2], mal_key_index(0), &roots[3]) ||
+                     !mal_vm_get_property(vm, roots[2], mal_key_index(1), &roots[4]))) {
+                    mal_vm_iterator_close(vm, &record);
+                    goto done;
+                }
             }
-            mal_map_object_set_canonical(
-                map, mal_collection_canonical_value(roots[3]), roots[4]);
-            continue;
         }
-
-        bool stepped = dense_array_cursor != nullptr
-            ? mal_vm_iterator_step_dense_array_cursor(
-                vm, dense_array_cursor, &record, &roots[2], &done)
-            : mal_vm_iterator_step(vm, &record, &roots[2], &done);
-        if (!stepped) {
-            goto done;
-        }
-
         if (done) {
             ret = roots[0];
             goto done;
         }
-        if (!mal_value_is_object(roots[2])) {
-            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Iterator entry is not an object");
-            mal_vm_iterator_close(vm, &record);
-            goto done;
-        }
 
-        bool dense_pair = mal_value_is_array_object(roots[2]) &&
-            mal_array_object_dense_pair(
-                mal_value_to_array_object(roots[2]), &roots[3], &roots[4]);
-        if (!dense_pair) {
-            if (!mal_vm_get_property(
-                    vm, roots[2], mal_key_index(0), &roots[3]) ||
-                !mal_vm_get_property(
-                    vm, roots[2], mal_key_index(1), &roots[4])) {
-                mal_vm_iterator_close(vm, &record);
-                goto done;
-            }
-        }
-
-        // The exact built-in Map.prototype.set has no observable call seam.
-        // The constructor already performed Get(map, "set") before acquiring
-        // the iterator, so reuse that captured identity after the entry Gets.
         if (direct_adder) {
             if (direct_weak_adder &&
                 !mal_weak_key_can_be_held(roots[3])) {
@@ -195,7 +182,7 @@ static MalValue mal_builtin_map_construct(
         }
 
         MalValue entry_args[2] = {roots[3], roots[4]};
-        MalCompletion completion = mal_vm_call_value(
+        MalCompletion completion = mal_vm_call_builtin_callback(
             vm, roots[1], roots[0], entry_args, 2);
         if (completion.kind != MAL_COMPLETION_NORMAL) {
             mal_vm_iterator_close(vm, &record);
@@ -204,6 +191,7 @@ static MalValue mal_builtin_map_construct(
     }
 
 done:
+    if (nominated) vm->exact_script_call = runtime_callback.previous;
     mal_gc_native_rooted_end(vm);
     mal_gc_unroot(&span);
     mal_gc_unroot(&rec_span);

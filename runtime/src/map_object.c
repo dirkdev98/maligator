@@ -495,15 +495,19 @@ MalValue mal_map_object_get_borrowed(MalMapObject *map, MalValue key, u32 *entry
     MalMapStorage *storage = map->entries;
     u32 entry = mal_map_storage_find_hinted(storage, key);
     MalValue value = entry == 0 ? MAL_VALUE_UNDEFINED : mal_map_value_at(storage, entry - 1);
-    *entry_out = mal_ops_is_number(key) && mal_ops_is_number(value) ? entry : 0;
+    *entry_out = entry;
     return value;
 }
 
 void mal_map_object_set_borrowed(MalMapObject *map, MalValue key, MalValue value, u32 entry) {
     MalMapStorage *storage = map->entries;
-    if (entry != 0 && storage != nullptr && entry <= storage->count &&
-        mal_ops_is_number(key) && mal_ops_is_number(value) &&
-        mal_map_is_live(storage, entry - 1) && mal_map_key_at(storage, entry - 1) == key) {
+    bool matches = entry != 0 && storage != nullptr && entry <= storage->count &&
+        mal_map_is_live(storage, entry - 1);
+    if (matches) {
+        MalValue candidate = mal_map_key_at(storage, entry - 1);
+        matches = candidate == key || mal_map_key_equals_slow(storage->domain, candidate, key);
+    }
+    if (matches) {
         MAL_PERF_COUNT(map_region_entry_hits);
         mal_map_object_update_entry(map, entry, key, value);
         mal_map_storage_remember_entry(storage, entry);

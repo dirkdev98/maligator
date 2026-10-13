@@ -75,11 +75,20 @@ plans use the shared builder's root and publication contract: only effect-free
 initializer work can move before allocation, and references remain rooted until
 the completed result is published.
 
+Borrowed Map entries carry an owner-relative index, never a storage pointer. Each
+update checks the current live entry and canonical key before using the ordinary
+barrier-aware updater. Reference values and equal string or BigInt representatives
+need no additional retained roots; the Map owns its stored keys and values.
+
 Entry-pair consumers may reuse keys and values from an exact captured builtin
 iterator without constructing an otherwise unobservable pair Array. Both values
 must be rooted before key coercion or callbacks can mutate the collection. A
 failed Array entry step may already have advanced and thrown; only a clean
 admission miss permits the original step, while abrupt completion propagates.
+An Array entry cursor with a foreign captured next method takes that original call
+so an element access throws in the method's realm. Fresh collection constructors
+root their receiver and captured adder before acquiring the iterator, since either
+getter can explicitly collect.
 
 ## Bounded expansion
 

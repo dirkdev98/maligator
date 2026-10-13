@@ -13,7 +13,7 @@ function compile(body: string, primordials: "mutable" | "locked" = "mutable") {
 	return compileSemanticProgramToProgramImage(
 		analyzeSourceAndRunSemanticAnalysis(
 			`globalThis.classify=function(source,escape,observe){${body}};`,
-			"/split-span.js",
+			"/map-entries.js",
 		),
 		{
 			facts: compilerProgramFactsFromConfig(
@@ -25,6 +25,38 @@ function compile(body: string, primordials: "mutable" | "locked" = "mutable") {
 const body = `const first=source.get(1); const second=source.get(2);
  source.set(1,first+1);source.set(2,second+1);return first+second;`;
 describe("region-local Map entries", () => {
+	it.each(["mutable", "locked"] as const)(
+		"carries reference keys and values outside protected ranges under %s primordials",
+		(mode) => {
+			const source = `try { observe(); } catch { escape(); }
+const first=source.get(escape); const second=source.get(observe);
+observe(); source.set(escape,{previous:first}); source.set(observe,{previous:second});
+return [first,second];`;
+			const image = compile(source, mode);
+			const native = image.native.functions[1]!;
+			expect(native.body.handlers.length).toBeGreaterThan(0);
+			expect(native.storage!.mapEntries).toHaveLength(2);
+			expect(deserializeCompilerArtifact(serializeCompilerArtifact(image))).toEqual(
+				image,
+			);
+			expect(() => emitProgramImage(image, {})).not.toThrow();
+		},
+	);
+	it.each(["mutable", "locked"] as const)(
+		"declines entry state within or across a protected range under %s primordials",
+		(mode) => {
+			for (const source of [
+				`try { ${body} } catch { observe(); }`,
+				`const first=source.get(1); const second=source.get(2);
+try { observe(); } catch { escape(); }
+source.set(1,first); source.set(2,second);`,
+			]) {
+				expect(compile(source, mode).native.functions[1]!.storage!.mapEntries).toEqual(
+					[],
+				);
+			}
+		},
+	);
 	it.each(["mutable", "locked"] as const)(
 		"carries several indices under %s primordials",
 		(mode) => {

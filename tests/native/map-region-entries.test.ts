@@ -17,12 +17,8 @@ afterAll(() => rmSync(outDir, { recursive: true, force: true }));
 
 describe("region-local Map entries", () => {
 	it.each(["mutable", "locked"] as const)(
-		"preserves aliases, numeric keys, missing entries, structural mutations, and overrides under %s primordials",
+		"preserves keys, reference values, GC and mutations across unprotected regions under %s primordials",
 		(primordials) => {
-			const expected = execFileSync(process.execPath, [fixture], {
-				encoding: "utf8",
-				env: { ...process.env, MAL_MAP_MUTABLE: primordials },
-			});
 			const pair = buildBackendPairFromOneProgramImage({
 				fixture,
 				name: `map-region-${primordials}`,
@@ -39,32 +35,53 @@ describe("region-local Map entries", () => {
 					(fn) => fn.storage!.mapEntries.length > 0,
 				),
 			).toBe(true);
-			for (const binary of [pair.compiled, pair.interpreted])
-				for (const stress of [{}, STRESS_ENV])
-					expect(
-						runToStdout(binary, {
-							env: { MAL_HOST_GC: "1", MAL_MAP_MUTABLE: primordials, ...stress },
-							timeoutMs: 60_000,
-						}),
-					).toBe(expected);
-			const measured = spawnSync(pair.compiled, [], {
-				encoding: "utf8",
-				timeout: 60_000,
-				env: {
-					...process.env,
+			for (const name of ["updateReferences", "updateAfterHandler"]) {
+				const fn = pair.programImage.native.functions.find(
+					(fn) =>
+						String.fromCharCode(
+							...pair.programImage.runtime.stringConstants[fn.body.nameStringIndex]!,
+						) === name,
+				)!;
+				expect(fn.storage!.mapEntries.length, name).toBeGreaterThan(0);
+				if (name === "updateAfterHandler")
+					expect(fn.body.handlers.length).toBeGreaterThan(0);
+			}
+			for (const mode of ["numeric", "references", "handler"]) {
+				const env = {
 					MAL_HOST_GC: "1",
 					MAL_MAP_MUTABLE: primordials,
-					MAL_PERF_STATS: "1",
-				},
-			});
-			expect(measured.status, measured.stderr).toBe(0);
-			expect(measured.stdout).toBe(expected);
-			const stats = measured.stderr.match(
-				/\[perf-map-region-stats\] hits=(\d+) misses=(\d+)/,
-			);
-			expect(stats).not.toBeNull();
-			expect(Number(stats![1])).toBeGreaterThan(0);
-			expect(Number(stats![2])).toBeGreaterThan(0);
+					MAL_MAP_REGION_MODE: mode,
+				};
+				const expected = execFileSync(process.execPath, ["--expose-gc", fixture], {
+					encoding: "utf8",
+					env: { ...process.env, ...env },
+				});
+				for (const binary of [pair.compiled, pair.interpreted])
+					for (const stress of [{}, STRESS_ENV])
+						expect(
+							runToStdout(binary, {
+								env: { ...env, ...stress },
+								timeoutMs: 60_000,
+							}),
+						).toBe(expected);
+				const measured = spawnSync(pair.compiled, [], {
+					encoding: "utf8",
+					timeout: 60_000,
+					env: {
+						...process.env,
+						...env,
+						MAL_PERF_STATS: "1",
+					},
+				});
+				expect(measured.status, measured.stderr).toBe(0);
+				expect(measured.stdout).toBe(expected);
+				const stats = measured.stderr.match(
+					/\[perf-map-region-stats\] hits=(\d+) misses=(\d+)/,
+				);
+				expect(stats).not.toBeNull();
+				expect(Number(stats![1])).toBeGreaterThan(0);
+				expect(Number(stats![2])).toBeGreaterThan(0);
+			}
 		},
 		600_000,
 	);

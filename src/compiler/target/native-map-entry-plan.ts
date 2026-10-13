@@ -18,7 +18,6 @@ export function selectNativeMapEntries(
 		plans: Array<NativeMapEntryPlan & { readonly receiver: string }> = [];
 	if (
 		native.mode !== "direct" ||
-		fn.handlers.length ||
 		fn.isAsync ||
 		fn.isGenerator ||
 		fn.profileSiteIds !== undefined ||
@@ -28,6 +27,11 @@ export function selectNativeMapEntries(
 	const pending = new Map<number, { ip: number; receiver: string }>();
 	const origins = new Map<number, string>();
 	for (const [ip, op] of fn.instructions.entries()) {
+		if (body.handlerTargets[ip] !== undefined || body.handlerEntries.has(ip)) {
+			pending.clear();
+			origins.clear();
+			continue;
+		}
 		if (body.jumpTargets.has(ip)) {
 			pending.clear();
 			origins.clear();

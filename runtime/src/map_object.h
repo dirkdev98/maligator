@@ -53,7 +53,7 @@ void mal_map_object_remember_entry(MalMapObject *map, u32 entry);
 u32 mal_map_object_find_hinted(MalMapObject *map, MalValue key);
 MalValue mal_map_object_get_hinted(MalMapObject *map, MalValue key);
 void mal_map_object_set_hinted(MalMapObject *map, MalValue key, MalValue value);
-// The borrowed index contains no pointer; every update revalidates its live canonical numeric key.
+// The borrowed index contains no pointer; every update revalidates its live canonical key.
 MalValue mal_map_object_get_borrowed(MalMapObject *map, MalValue key, u32 *entry_out);
 void mal_map_object_set_borrowed(MalMapObject *map, MalValue key, MalValue value, u32 entry);
 

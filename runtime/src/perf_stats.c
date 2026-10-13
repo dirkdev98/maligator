@@ -908,6 +908,12 @@ static void mal_perf_stats_print(void) {
         (unsigned long long) mal_perf_stats.object_entries_snapshot_pair_materializations);
     fprintf(stderr, "[perf-object-from-entries-stats] borrowed_pairs=%llu\n",
         (unsigned long long) mal_perf_stats.object_from_entries_borrowed_pairs);
+    fprintf(stderr, "[perf-collection-constructor-stats] map=%llu weak_map=%llu set=%llu weak_set=%llu borrowed_pairs=%llu\n",
+        (unsigned long long) mal_perf_stats.collection_constructor_map_nominations,
+        (unsigned long long) mal_perf_stats.collection_constructor_weak_map_nominations,
+        (unsigned long long) mal_perf_stats.collection_constructor_set_nominations,
+        (unsigned long long) mal_perf_stats.collection_constructor_weak_set_nominations,
+        (unsigned long long) mal_perf_stats.collection_constructor_borrowed_pairs);
     fprintf(stderr, "[perf-string-span-character-stats] reads=%llu\n",
         (unsigned long long) mal_perf_stats.string_span_character_reads);
     fprintf(stderr, "[perf-string-span-string-character-stats] char_at=%llu at=%llu\n",

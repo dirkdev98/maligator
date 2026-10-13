@@ -69,7 +69,7 @@
 	},
 	{
 		"file": "builtin_iterator.c",
-		"sha256": "e8b839d5d74e0d96c088461a6fdb8d44e17ce744fc0615768ee9fc7579ddd380"
+		"sha256": "5c4b82d8389ab9f2d3778bbf9049c445ac9079cac6d5f58d24e7b857da9b9000"
 	},
 	{
 		"file": "builtin_iterator_helpers.c",
@@ -81,7 +81,7 @@
 	},
 	{
 		"file": "builtin_map.c",
-		"sha256": "a8468152a3a6df7038f591f729c6d3d96aa03522280480c499a0018a3b274960"
+		"sha256": "113ef9342585f1b6225a69116752caa753a0481a07985d437daa48caaf2448c8"
 	},
 	{
 		"file": "builtin_math.c",
@@ -113,7 +113,7 @@
 	},
 	{
 		"file": "builtin_set.c",
-		"sha256": "f569744b11a4032d35030c900001f04abe655c3896a3ae31e97d06ffe1ed330d"
+		"sha256": "5e985b91610c506ff36d3a7cc82f663f244155a3c9fbd41f4d859f722f39e07b"
 	},
 	{
 		"file": "builtin_shadow_realm.c",

@@ -319,8 +319,11 @@ static int check_gc(MalVm *vm) {
     for (i32 i = 0; i < 64; i++) {
         CHECK(mal_value_is_object(mal_map_object_get(numeric, mal_value_from_i32(i))));
     }
+    u32 entry;
+    CHECK(mal_value_is_object(mal_map_object_get_borrowed(numeric, mal_value_from_f64(17.0), &entry)));
+    CHECK(entry != 0);
     MalValue young = mal_value_from_object(mal_object_new(&vm->heap, nullptr));
-    mal_map_object_set(numeric, mal_value_from_i32(17), young);
+    mal_map_object_set_borrowed(numeric, mal_value_from_f64(17.0), young, entry);
     MalValue young_weak = mal_value_from_object(mal_object_new(&vm->heap, nullptr));
     mal_weak_map_object_set(weak, roots[2], young_weak);
     vm->heap.next_gc_at = 1;
@@ -336,11 +339,46 @@ static int check_gc(MalVm *vm) {
     return 0;
 }
 
+static int check_borrowed_keys(MalVm *vm) {
+    MalValue roots[5] = {MAL_VALUE_UNDEFINED, MAL_VALUE_UNDEFINED, MAL_VALUE_UNDEFINED,
+        MAL_VALUE_UNDEFINED, MAL_VALUE_UNDEFINED};
+    MalRootSpan span;
+    mal_gc_root(&span, roots, countof(roots));
+    MalMapObject *map = mal_map_object_new(&vm->heap, nullptr);
+    roots[0] = mal_value_from_map_object(map);
+    roots[1] = mal_value_from_string(mal_string_new_ascii(&vm->heap, "first entry", 11));
+    roots[2] = mal_value_from_string(mal_string_new_ascii(&vm->heap, "second entry", 12));
+    roots[3] = mal_value_from_string(mal_string_new_ascii(&vm->heap, "first entry", 11));
+    CHECK(roots[1] != roots[3]);
+    mal_map_object_set(map, roots[1], MAL_VALUE_UNDEFINED);
+    mal_map_object_set(map, roots[2], MAL_VALUE_NULL);
+    u32 first, second;
+    CHECK(mal_map_object_get_borrowed(map, roots[1], &first) == MAL_VALUE_UNDEFINED);
+    CHECK(mal_map_object_get_borrowed(map, roots[2], &second) == MAL_VALUE_NULL);
+    CHECK(first != 0 && second != 0 && first != second);
+    mal_gc_collect(vm);
+    roots[4] = mal_value_from_object(mal_object_new(&vm->heap, nullptr));
+    mal_map_object_set_borrowed(map, roots[3], roots[4], first);
+    CHECK(mal_map_object_size(map) == 2 && mal_map_object_get(map, roots[1]) == roots[4]);
+    mal_map_object_clear(map);
+    mal_map_object_set(map, roots[2], MAL_VALUE_FALSE);
+    mal_map_object_set_borrowed(map, roots[3], roots[4], first);
+    CHECK(mal_map_object_size(map) == 2);
+    CHECK(mal_map_object_get(map, roots[2]) == MAL_VALUE_FALSE);
+    CHECK(mal_map_object_get(map, roots[1]) == roots[4]);
+    mal_map_object_set_borrowed(map, roots[2], MAL_VALUE_TRUE, UINT32_MAX);
+    CHECK(mal_map_object_get(map, roots[2]) == MAL_VALUE_TRUE);
+    mal_gc_collect(vm);
+    CHECK(mal_map_object_get(map, roots[3]) == roots[4]);
+    mal_gc_unroot(&span);
+    return 0;
+}
+
 int main(void) {
     MalVm vm;
     mal_vm_init(&vm, &mal_runtime_image);
     vm.heap.next_gc_at = SIZE_MAX;
-    if (check_clear_during_mark(&vm) || check_storage(&vm) || check_transitions(&vm) || check_value_tombstones(&vm) || check_gc(&vm)) return 1;
+    if (check_clear_during_mark(&vm) || check_storage(&vm) || check_transitions(&vm) || check_value_tombstones(&vm) || check_gc(&vm) || check_borrowed_keys(&vm)) return 1;
     mal_vm_free(&vm);
     puts("map-storage ABI PASS");
     return 0;
