@@ -16,6 +16,39 @@ const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-object-keys-count-"));
 afterAll(() => rmSync(outDir, { recursive: true, force: true }));
 
 describe("Object.keys count regions", () => {
+	it("preserves the keys Array creation realm at inherited indexed observers", () => {
+		const realmFixture = "tests/local/object-keys-snapshot-realms.js";
+		const expected = execFileSync(
+			process.execPath,
+			[
+				"-e",
+				`globalThis.$262 = { createRealm() { return { global: require("node:vm").runInNewContext("globalThis") }; } }; require(${JSON.stringify(path.resolve(realmFixture))});`,
+			],
+			{ encoding: "utf8" },
+		);
+		const pair = buildBackendPairFromOneProgramImage({
+			fixture: realmFixture,
+			name: "object-keys-snapshot-realms",
+			outDir,
+			config: resolveBuildConfig({ engine: { primordials: "mutable", realms: true } }),
+		});
+		expect(
+			pair.programImage.native.functions.some((fn) =>
+				fn.storage!.objectKeysSnapshots.some((plan) => plan.elementIps.length > 0),
+			),
+		).toBe(true);
+		for (const binary of [pair.compiled, pair.interpreted]) {
+			for (const stress of [{}, STRESS_ENV]) {
+				expect(
+					runToStdout(binary, {
+						env: { MAL_TEST262: "1", MAL_HOST_GC: "1", ...stress },
+						timeoutMs: 60_000,
+					}),
+				).toBe(expected);
+			}
+		}
+	}, 600_000);
+
 	it.each(["mutable", "locked"] as const)(
 		"preserves enumerable own key counts, proxy observations, and builtin overrides under %s primordials",
 		(primordials) => {

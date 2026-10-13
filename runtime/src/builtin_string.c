@@ -1723,6 +1723,20 @@ bool mal_builtin_string_slice_span_init(
     return true;
 }
 
+bool mal_builtin_string_span_char_code_at(
+    MalValue callee, bool locked, MalValue subject, usize start, usize end,
+    MalValue position, f64 *out
+) {
+    if ((!locked && (!mal_value_is_native_function_object(callee) ||
+        mal_native_function_object_callback(mal_value_to_native_function_object(callee)) != mal_builtin_string_prototype_char_code_at)) ||
+        (!mal_value_is_undefined(position) && !mal_ops_is_number(position))) return false;
+    f64 index = mal_value_is_undefined(position) ? 0 : mal_ops_number_to_integer_or_infinity(mal_ops_number_as_f64(position));
+    *out = index < 0 || index >= (f64) (end - start) ? NAN :
+        (f64) mal_string_code_unit_at(mal_value_to_string(subject), start + (usize) index);
+    MAL_PERF_COUNT(string_span_character_reads);
+    return true;
+}
+
 bool mal_builtin_string_span_equal(MalValue subject_value, usize start, usize end, MalValue other_value) {
     if (!mal_value_is_string(other_value)) return false;
     MalString *other = mal_value_to_string(other_value);

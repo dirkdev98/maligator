@@ -468,7 +468,13 @@ export type VmStringSpanRegion = VmRegionEnvelope<
 	readonly consumers: ReadonlyArray<{
 		readonly ip: number;
 		readonly value: number;
-		readonly kind: "length" | "equal" | "number" | "materialize";
+		readonly kind:
+			| "length"
+			| "equal"
+			| "number"
+			| "charCodeAtProperty"
+			| "charCodeAtCall"
+			| "materialize";
 	}>;
 };
 
@@ -1630,6 +1636,7 @@ export function validateNativeNumericSortCallback(
 	functions: ReadonlyArray<NativeFunctionPlan>,
 ): void {
 	const entry = functions[callback.functionIndex]?.directEntries[callback.entryId];
+	const parameters = entry?.argumentRepresentations ?? entry?.parameterRepresentations;
 	if (
 		(callback.operation !== "sort" && callback.operation !== "toSorted") ||
 		(callback.viaCall !== undefined && callback.viaCall !== true) ||
@@ -1639,12 +1646,9 @@ export function validateNativeNumericSortCallback(
 		callback.entryId < 0 ||
 		entry === undefined ||
 		entry.id !== callback.entryId ||
-		entry.parameterRepresentations.length !== 2 ||
-		entry.parameterRepresentations.some(
-			(representation) => representation !== "number",
-		) ||
+		parameters?.length !== 2 ||
+		parameters.some((representation) => representation !== "number") ||
 		entry.resultRepresentation !== "number" ||
-		entry.argumentRepresentations !== undefined ||
 		entry.fieldParameters !== undefined
 	) {
 		throw new RangeError("Invalid native numeric sort callback contract");

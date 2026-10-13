@@ -1594,6 +1594,10 @@ function emitCompiledVariant(
 			subjectSlot: nextStackSlot,
 			slotsOffset: nextStackSlot + 1,
 			loads,
+			spanMask: loads.reduce(
+				(mask, load, index) => mask | (load.consumer === undefined ? 0 : 1 << index),
+				0,
+			),
 		});
 		nextStackSlot += loads.length + 1;
 	}
@@ -1622,17 +1626,30 @@ function emitCompiledVariant(
 		});
 	}
 	for (const continuation of storage.spanContinuations) {
-		const split = stringSplitProjectionSites.get(continuation.splitCallIp);
-		const slot =
-			split?.elementLoads.findIndex((load) => load.ip === continuation.producerIp) ?? -1;
-		if (split === undefined || slot < 0)
+		const projection =
+			continuation.sourceKind === "split"
+				? stringSplitProjectionSites.get(continuation.sourceCallIp)
+				: regexpExecProjectionSites.get(continuation.sourceCallIp);
+		const loads =
+			projection === undefined
+				? []
+				: "elementLoads" in projection
+					? projection.elementLoads
+					: projection.loads;
+		const slot = loads.findIndex((load) => load.ip === continuation.producerIp);
+		if (projection === undefined || slot < 0)
 			throw new Error("Span continuation lacks its producer");
+		if ("spanMask" in projection) projection.spanMask |= 1 << slot;
 		stringSpanSites.set(continuation.producerIp, {
 			producerIp: continuation.producerIp,
-			split: { callIp: continuation.splitCallIp, slot },
+			projection: {
+				kind: continuation.sourceKind,
+				callIp: continuation.sourceCallIp,
+				slot,
+			},
 			consumers: continuation.consumers,
-			subjectSlot: split.subjectSlot,
-			materializedSlot: split.slotsOffset + slot,
+			subjectSlot: projection.subjectSlot,
+			materializedSlot: projection.slotsOffset + slot,
 		});
 	}
 	const objectKeysSnapshotSites = new Map<number, NativeObjectKeysSnapshotSite>();
@@ -2500,13 +2517,11 @@ export function numericSortKernelDemand(
 
 // A numeric sort site can pass this kernel only where it would call the same leaf.
 function numericSortKernelEntry(entry: NativeDirectEntryPlan): boolean {
+	const parameters = entry.argumentRepresentations ?? entry.parameterRepresentations;
 	return (
-		entry.parameterRepresentations.length === 2 &&
-		entry.parameterRepresentations.every(
-			(representation) => representation === "number",
-		) &&
+		parameters.length === 2 &&
+		parameters.every((representation) => representation === "number") &&
 		entry.resultRepresentation === "number" &&
-		entry.argumentRepresentations === undefined &&
 		entry.fieldParameters === undefined
 	);
 }
@@ -3021,6 +3036,7 @@ interface NativeRegExpExecProjectionSite {
 	subjectSlot: number;
 	slotsOffset: number;
 	loads: ReadonlyArray<NativeRegExpExecProjection["loads"][number]>;
+	spanMask: number;
 }
 
 interface NativeRegExpExecProjectionAction {
@@ -3070,14 +3086,14 @@ interface NativeObjectKeysSnapshotSite extends NativeObjectKeysSnapshotPlan {
 interface NativeStringSpanSite {
 	producerIp: number;
 	span?: NativeStringSpan;
-	split?: { callIp: number; slot: number };
+	projection?: { kind: "split" | "regexp"; callIp: number; slot: number };
 	consumers: NativeStringSpan["consumers"];
 	subjectSlot: number;
 	materializedSlot: number;
 }
 interface NativeStringSpanAction {
 	site: NativeStringSpanSite;
-	role: "slice" | "split" | "length" | "equal" | "number" | "materialize";
+	role: "slice" | "projection" | NativeStringSpan["consumers"][number]["kind"];
 	consumer?: NativeStringSpan["consumers"][number];
 }
 
@@ -4166,7 +4182,7 @@ function emitBody(
 	for (const site of stringSpanSites.values()) {
 		nativeStringSpanActionByIp.set(site.producerIp, {
 			site,
-			role: site.split === undefined ? "slice" : "split",
+			role: site.projection === undefined ? "slice" : "projection",
 		});
 		for (const consumer of site.consumers)
 			nativeStringSpanActionByIp.set(consumer.ip, {
@@ -6118,7 +6134,10 @@ function emitInstruction(
 		const prefix = `__string_span_${site.producerIp}`;
 		const source = `__gc_slots[${site.subjectSlot}]`;
 		const materialized = `__gc_slots[${site.materializedSlot}]`;
-		const ordinary = emitGenericInstruction({ nativeStringCharCodeAtChainAction });
+		const ordinary = emitGenericInstruction({
+			nativeStringCharCodeAtChainAction,
+			nativeRegExpExecProjectionAction,
+		});
 		if (ordinary === null) return null;
 		if (
 			role === "slice" &&
@@ -6146,15 +6165,22 @@ function emitInstruction(
 				`}`,
 			];
 		}
-		if (role === "split" && site.split !== undefined && "dst" in instruction) {
-			const split = `__string_split_${site.split.callIp}`,
-				slot = site.split.slot;
+		if (role === "projection" && site.projection !== undefined && "dst" in instruction) {
+			const { kind, callIp, slot } = site.projection;
+			const projection =
+				kind === "split" ? `__string_split_${callIp}` : `__regexp_exec_${callIp}`;
+			const admitted =
+				kind === "split" ? `${projection}_fast` : `${projection}_projected`;
+			const present =
+				kind === "split"
+					? `${projection}_starts[${slot}] != SIZE_MAX`
+					: `${projection}_starts[${slot}] >= 0`;
 			return [
 				`${prefix}_active = false;`,
-				`if (${split}_fast) {`,
-				`  ${prefix}_start = ${split}_starts[${slot}];`,
-				`  ${prefix}_end = ${split}_ends[${slot}];`,
-				`  ${prefix}_active = ${prefix}_start != SIZE_MAX;`,
+				`if (${admitted}) {`,
+				`  ${prefix}_start = ${projection}_starts[${slot}];`,
+				`  ${prefix}_end = ${projection}_ends[${slot}];`,
+				`  ${prefix}_active = ${present};`,
 				`  if (${prefix}_active) MAL_PERF_COUNT(string_span_admissions);`,
 				`  r${instruction.dst} = MAL_VALUE_UNDEFINED;`,
 				`} else {`,
@@ -6173,6 +6199,7 @@ function emitInstruction(
 			`}`,
 		];
 		let guard = `${prefix}_active`;
+		const declarations: Array<string> = [];
 		let projected: string | undefined;
 		if (role === "length" && instruction.opcode === "LOAD_PROPERTY_STATIC")
 			projected = storeNumber(instruction.dst, `(f64) (${prefix}_end - ${prefix}_start)`);
@@ -6184,6 +6211,33 @@ function emitInstruction(
 				instruction.dst,
 				instruction.operator === "!==" ? `!${equal}` : equal,
 			);
+		} else if (
+			role === "charCodeAtProperty" &&
+			instruction.opcode === "LOAD_PROPERTY_STATIC"
+		) {
+			const method = `${prefix}_method_${ip}`;
+			declarations.push(`MalValue ${method};`);
+			// A non-index prototype data property is identical for every primitive string.
+			guard += ` && mal_vm_property_try_load_static(vm, ${source}, &${nativeBodyReference(resources, "propertyCache")}[${instruction.icIndex}], &${method})`;
+			// The overlapping chain's admission may belong to an earlier loop iteration.
+			const resetCapture =
+				nativeStringCharCodeAtChainAction === undefined
+					? ""
+					: `__string_char_code_at_${nativeStringCharCodeAtChainAction.chain.callIp}_captured = false; `;
+			projected = `${resetCapture}r${instruction.dst} = ${callValue(instruction.dst, method)};`;
+		} else if (
+			role === "charCodeAtCall" &&
+			(instruction.opcode === "CALL" || instruction.opcode === "CALL_KNOWN")
+		) {
+			const result = `${prefix}_code_${ip}`;
+			declarations.push(`f64 ${result};`);
+			const locked = instruction.opcode === "CALL_KNOWN";
+			const position =
+				instruction.arguments[0] === undefined
+					? "MAL_VALUE_UNDEFINED"
+					: boxedOperand(instruction.arguments[0]);
+			guard += ` && mal_builtin_string_span_char_code_at(${locked ? "MAL_VALUE_UNDEFINED" : boxedOperand(instruction.callee)}, ${locked}, ${source}, ${prefix}_start, ${prefix}_end, ${position}, &${result})`;
+			projected = storeNumber(instruction.dst, result);
 		} else if (
 			role === "number" &&
 			(instruction.opcode === "CALL" || instruction.opcode === "CALL_KNOWN")
@@ -6197,12 +6251,15 @@ function emitInstruction(
 		}
 		if (projected === undefined) return [...materialize, ...ordinary];
 		return [
+			...declarations,
 			`if (${guard}) {`,
 			`  MAL_PERF_COUNT(string_span_projections);`,
 			`  ${projected}`,
 			`  ${poll()}`,
 			`} else {`,
-			...(role === "number" ? materialize.map((line) => `  ${line}`) : []),
+			...(role === "number" || role === "charCodeAtProperty" || role === "charCodeAtCall"
+				? materialize.map((line) => `  ${line}`)
+				: []),
 			...ordinary.map((line) => `  ${line}`),
 			`}`,
 		];
@@ -6269,7 +6326,7 @@ function emitInstruction(
 							`${materialized} = MAL_VALUE_UNDEFINED;`,
 						]
 					: []),
-				`${name}_active = ${snapshot ? `mal_builtin_object_keys_snapshot(${args}, ${keys}, ${NATIVE_KEY_SNAPSHOT_CAPACITY}, &${name}_value)` : `mal_builtin_object_keys_count(${args}, &${name}_value)`};`,
+				`${name}_active = ${snapshot ? `mal_builtin_object_keys_snapshot(vm, ${args}, ${keys}, ${NATIVE_KEY_SNAPSHOT_CAPACITY}, &${name}_value)` : `mal_builtin_object_keys_count(${args}, &${name}_value)`};`,
 				`if (${name}_active) {`,
 				`  r${instruction.dst} = MAL_VALUE_UNDEFINED;`,
 				`  ${poll()}`,
@@ -9567,10 +9624,7 @@ function emitInstruction(
 					const outputs = site.loads
 						.map((_load, index) => `&__gc_slots[${site.slotsOffset + index}]`)
 						.join(", ");
-					const spanMask = site.loads.reduce(
-						(mask, load, index) => mask | (load.consumer === undefined ? 0 : 1 << index),
-						0,
-					);
+					const spanMask = site.spanMask;
 					const parameters = `vm, ${boxedOperand(instruction.thisValue)}, ${boxedOperand(instruction.arguments[0]!)}, (const u32[]){ ${indices} }, (MalValue *[]){ ${outputs} }, ${site.loads.length}, ${spanMask}, __regexp_exec_${projection.callIp}_starts, __regexp_exec_${projection.callIp}_ends, &__gc_slots[${site.subjectSlot}], &r${instruction.dst}`;
 					if (projection.lockedFreshLiteral)
 						return [
@@ -10009,10 +10063,7 @@ function emitInstruction(
 				const outputs = site.loads
 					.map((_load, index) => `&__gc_slots[${site.slotsOffset + index}]`)
 					.join(", ");
-				const spanMask = site.loads.reduce(
-					(mask, load, index) => mask | (load.consumer === undefined ? 0 : 1 << index),
-					0,
-				);
+				const spanMask = site.spanMask;
 				if (propertyLoad !== undefined) {
 					return [
 						`__regexp_exec_${projection.callIp}_projected = false;`,

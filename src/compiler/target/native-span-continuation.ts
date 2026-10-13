@@ -7,7 +7,8 @@ import { vmInstructionReadRegisters } from "./runtime-image.ts";
 
 export interface NativeSpanContinuation {
 	readonly producerIp: number;
-	readonly splitCallIp: number;
+	readonly sourceKind: "split" | "regexp";
+	readonly sourceCallIp: number;
 	readonly consumers: VmStringSpanRegion["consumers"];
 	readonly claimedIps: ReadonlyArray<number>;
 	readonly borrowedRegisters: ReadonlyArray<number>;
@@ -38,10 +39,15 @@ export function selectNativeSpanContinuations(
 	);
 	const claimed = new Set<number>();
 	for (const region of native.specializations) {
-		if (region.kind !== "string-split-projection") continue;
+		if (
+			region.kind !== "string-split-projection" &&
+			region.kind !== "regexp-exec-projection"
+		)
+			continue;
 		for (const load of region.loads) {
 			if (plans.length >= 16) return plans;
-			if (load.kind !== "element") continue;
+			if ("kind" in load ? load.kind !== "element" : load.consumer !== undefined)
+				continue;
 			const producer = fn.instructions[load.ip];
 			if (producer === undefined || !("dst" in producer)) continue;
 			const reset = new Set([region.callIp]);
@@ -69,6 +75,12 @@ export function selectNativeSpanContinuations(
 					break;
 				}
 				const value = reads[0]!;
+				const callee = fn.instructions[ip - 1];
+				const numberCallee =
+					op.opcode === "CALL" &&
+					callee?.opcode === "LOAD_GLOBAL_PROPERTY" &&
+					callee.dst === op.callee &&
+					String.fromCharCode(...(strings[callee.nameStringIndex] ?? [])) === "Number";
 				let kind: VmStringSpanRegion["consumers"][number]["kind"];
 				if (
 					op.opcode === "LOAD_PROPERTY_STATIC" &&
@@ -76,6 +88,35 @@ export function selectNativeSpanContinuations(
 					String.fromCharCode(...(strings[op.stringIndex] ?? [])) === "length"
 				)
 					kind = "length";
+				else if (
+					op.opcode === "LOAD_PROPERTY_STATIC" &&
+					op.object === value &&
+					String.fromCharCode(...(strings[op.stringIndex] ?? [])) === "charCodeAt"
+				)
+					kind = "charCodeAtProperty";
+				else if (
+					(op.opcode === "CALL" || op.opcode === "CALL_KNOWN") &&
+					op.thisValue === value &&
+					op.arguments.length <= 1 &&
+					op.arguments[0] !== value &&
+					(op.opcode === "CALL_KNOWN"
+						? op.operation === "String.prototype.charCodeAt" &&
+							!op.construct &&
+							op.argumentMode === undefined
+						: materializingObservers.has(ip))
+				)
+					kind = "charCodeAtCall";
+				else if (
+					(op.opcode === "CALL" || op.opcode === "CALL_KNOWN") &&
+					op.arguments.length === 1 &&
+					op.arguments[0] === value &&
+					(numberCallee ||
+						(op.opcode === "CALL_KNOWN" &&
+							op.operation === "Number" &&
+							!op.construct &&
+							op.argumentMode === undefined))
+				)
+					kind = "number";
 				else if (
 					op.opcode === "BINARY" &&
 					(op.operator === "===" || op.operator === "!==") &&
@@ -109,7 +150,8 @@ export function selectNativeSpanContinuations(
 			for (const ip of claimedIps) claimed.add(ip);
 			plans.push({
 				producerIp: load.ip,
-				splitCallIp: region.callIp,
+				sourceKind: region.kind === "string-split-projection" ? "split" : "regexp",
+				sourceCallIp: region.callIp,
 				consumers,
 				claimedIps,
 				borrowedRegisters: [],

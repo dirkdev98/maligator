@@ -1382,14 +1382,7 @@ function directEntryOpportunities(
 					if (target !== undefined && live.has(target)) {
 						const callback = program.function(target);
 						const observation = coreArgumentObservation(callback);
-						if (
-							callback.parameterCount === 2 &&
-							callback.metadata.capturedCount === 0 &&
-							observation.kind !== "general" &&
-							!observation.readsCount &&
-							observation.indices.length === 0 &&
-							observation.restStarts.length === 0
-						) {
+						if (observation.kind !== "general") {
 							const calls = callsByTarget.get(target) ?? [];
 							// Property names nominate candidates; runtime admission proves both calls.
 							calls.push({
@@ -1505,7 +1498,9 @@ function directEntryOpportunities(
 				const needsArity =
 					observation.readsCount ||
 					observation.indices.length > 0 ||
-					observation.restStarts.length > 0;
+					observation.restStarts.length > 0 ||
+					(fn.parameterCount !== 2 &&
+						callSites.some((call) => call.numericSortCallback !== undefined));
 				let parameterRepresentations: ReadonlyArray<CorePlanRepresentation> = Array.from(
 					{ length: fn.parameterCount },
 					() => "boxed",
@@ -1604,12 +1599,15 @@ function directEntryOpportunities(
 					>();
 					for (const call of selectedCalls) {
 						const site = summaries.targets.site(call.caller, call.instruction);
+						// Builtin operands describe the sort call, not its two comparator arguments.
+						const argumentCount =
+							call.numericSortCallback === undefined ? site?.arguments?.length : 2;
 						if (
 							needsArity &&
-							(site?.arguments === undefined ||
-								site.arguments.length > 16 ||
-								observation.indices.some((index) => index >= site.arguments!.length) ||
-								observation.restStarts.some((index) => index > site.arguments!.length))
+							(argumentCount === undefined ||
+								argumentCount > 16 ||
+								observation.indices.some((index) => index >= argumentCount) ||
+								observation.restStarts.some((index) => index > argumentCount))
 						)
 							continue;
 						const kinds = analyses.get(CORE_LOCAL_VALUE_KIND_ANALYSIS, {
@@ -1618,7 +1616,7 @@ function directEntryOpportunities(
 						});
 						const representations = Array.from(
 							{
-								length: needsArity ? site!.arguments!.length : fn.parameterCount,
+								length: needsArity ? argumentCount! : fn.parameterCount,
 							},
 							(_, index): CorePlanRepresentation => {
 								if (call.numericSortCallback !== undefined) return "f64";

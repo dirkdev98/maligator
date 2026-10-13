@@ -3720,6 +3720,35 @@ function stringSpanCandidates(
 			)
 				kind = "length";
 			else if (
+				opcode === "loadPropertyStatic" &&
+				use.position === 0 &&
+				staticPropertyNamed(program, fn, instruction, "charCodeAt")
+			)
+				kind = "charCodeAtProperty";
+			else if (
+				(opcode === "call" &&
+					use.position === 1 &&
+					instructionOperandCount(fn, instruction) <= 3) ||
+				(opcode === "callKnown" &&
+					use.position === 0 &&
+					instructionOperandCount(fn, instruction) <= 2)
+			) {
+				const callAttrs = fn.instructionAttributes(instruction);
+				const method =
+					opcode === "call"
+						? specializationDefinition(fn, roots, instructionOperand(fn, instruction, 0)!)
+						: undefined;
+				const position = instructionOperand(fn, instruction, opcode === "call" ? 2 : 1);
+				if (
+					!callAttrs.construct &&
+					callAttrs.argumentMode === undefined &&
+					(position === undefined || root(position) !== resultRoot) &&
+					(opcode === "callKnown"
+						? callAttrs.operation === "String.prototype.charCodeAt"
+						: staticPropertyNamed(program, fn, method, "charCodeAt"))
+				)
+					kind = "charCodeAtCall";
+			} else if (
 				opcode === "binary" &&
 				(fn.instructionAttributes(instruction).operator === "===" ||
 					fn.instructionAttributes(instruction).operator === "!==")

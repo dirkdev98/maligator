@@ -2176,12 +2176,12 @@ export function verifyCoreOptimizationPlan(
 				((site.numericSortCallback !== "sort" &&
 					site.numericSortCallback !== "toSorted") ||
 					site.guarded !== true ||
-					entry.parameterRepresentations.length !== 2 ||
-					entry.parameterRepresentations.some(
+					(entry.argumentRepresentations ?? entry.parameterRepresentations).length !==
+						2 ||
+					(entry.argumentRepresentations ?? entry.parameterRepresentations).some(
 						(representation) => representation !== "f64",
 					) ||
 					entry.resultRepresentation !== "f64" ||
-					entry.argumentRepresentations !== undefined ||
 					entry.fieldParameters !== undefined)
 			)
 				fail(

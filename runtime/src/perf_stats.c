@@ -898,6 +898,8 @@ static void mal_perf_stats_print(void) {
     fprintf(stderr, "[perf-object-keys-snapshot-stats] admissions=%llu materializations=%llu\n",
         (unsigned long long) mal_perf_stats.object_keys_snapshot_admissions,
         (unsigned long long) mal_perf_stats.object_keys_snapshot_materializations);
+    fprintf(stderr, "[perf-string-span-character-stats] reads=%llu\n",
+        (unsigned long long) mal_perf_stats.string_span_character_reads);
     fprintf(stderr, "[perf-typed-array-region-stats] admissions=%llu\n",
         (unsigned long long) mal_perf_stats.fixed_typed_array_region_admissions);
     fprintf(

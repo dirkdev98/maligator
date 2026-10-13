@@ -32,6 +32,7 @@ export function selectNativeObjectKeysSnapshots(
 		fn.instructions.length > 4096
 	)
 		return plans;
+	let candidates = 0;
 	for (const [ip, call] of fn.instructions.entries()) {
 		if (plans.length === 8) break;
 		if (
@@ -53,6 +54,8 @@ export function selectNativeObjectKeysSnapshots(
 			)
 				continue;
 		}
+		// Rejected escapes also incur a whole-function lifetime analysis.
+		if (candidates++ === 16) break;
 		const flow = nativeVirtualValueFlow(fn.instructions, ip, call.dst);
 		const consumers = new Map<number, ReadonlyArray<number>>();
 		const lengthIps: Array<number> = [],

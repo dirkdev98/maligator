@@ -420,6 +420,16 @@ numeric sorting, stack objects, and string projections.
       Focused unit checks pass; native memory verification and measurement are pending.
 - [ ] Broaden shared span consumers beyond length, equality, and numeric conversion;
       preserve method identity, UTF-16 behavior, and materialization at observers.
+      Slice and split spans now support guarded `charCodeAt`, and split spans share
+      numeric conversion. Focused unit checks pass; native execution and measurement
+      are pending. Regexp captures now use the same consumer and lazy materialization
+      contract, preserving missing captures and rejecting stale lifetimes across
+      repeated execution; 62 focused span and Core checks pass.
+- [ ] Broaden numeric comparator invocation to fixed argument snapshots, missing
+      and default parameters, bounded rest, and comparator-owned captured locals.
+      Implemented through the existing two-number callback ABI and per-activation
+      environment; 84 focused unit checks pass. Native execution and measurement
+      are pending; general argument escapes and unproved results remain generic.
 - [ ] Complete broad verification and compiler-cost acceptance for this sequence;
       the completed cases do not close the broader owning tasks below.
 

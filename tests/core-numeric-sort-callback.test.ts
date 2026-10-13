@@ -5,11 +5,15 @@ import {
 	deserializeCompilerArtifact,
 	serializeCompilerArtifact,
 } from "../src/compiler/target/compiler-artifact-codec.ts";
-import { emitProgramImage } from "../src/compiler/target/emit-program-image.ts";
+import {
+	emitProgramImage,
+	emitProgramTranslationUnits,
+} from "../src/compiler/target/emit-program-image.ts";
 import type {
 	NativeInstructionPlan,
 	ProgramImage,
 } from "../src/compiler/target/program-image.ts";
+import { validateNativeNumericSortCallback } from "../src/compiler/target/program-image.ts";
 
 function compile(
 	body = "return a - b;",
@@ -98,15 +102,16 @@ describe("numeric sort callback entries", () => {
 	});
 
 	it.each([
-		"return arguments.length;",
+		"globalThis.args = arguments; return a - b;",
+		"return arguments[2];",
 		"return a > b ? 'yes' : 'no';",
 		"return () => a;",
 	])("keeps unsupported comparator contracts generic: %s", (body) => {
 		expect(callbackPlans(compile(body))).toEqual([]);
 	});
 
-	it.each(["a", "a, b, extra", "...args"])(
-		"does not force comparator parameters %s into the two-number ABI",
+	it.each(["", "a", "a, b, extra", "...args"])(
+		"uses the comparator's two actual arguments for declared parameters %s",
 		(parameters) => {
 			const image = compileSemanticProgramToProgramImage(
 				analyzeSourceAndRunSemanticAnalysis(
@@ -115,12 +120,84 @@ describe("numeric sort callback entries", () => {
 				const array = [3, 1, 2];
 				globalThis.result = array.sort.call(array, compare);
 			`,
-					"unsupported-sort-arity.js",
+					"numeric-sort-arity.js",
 				),
 			);
-			expect(callbackPlans(image)).toEqual([]);
+			const callback = callbackPlans(image)[0]!.numericSortCallback!;
+			const entry =
+				image.native.functions[callback.functionIndex]!.directEntries[callback.entryId]!;
+			expect(entry.argumentRepresentations).toEqual(["number", "number"]);
+			expect(entry.resultRepresentation).toBe("number");
 		},
 	);
+
+	it.each(["sort", "toSorted"])(
+		"preserves fixed argument observations in %s without an ordinary call",
+		(operation) => {
+			for (const body of [
+				"return arguments.length === 2 ? a - b : 0;",
+				"return arguments[0] - arguments[1];",
+			]) {
+				const image = deserializeCompilerArtifact(
+					serializeCompilerArtifact(compile(body, operation)),
+				);
+				const callback = callbackPlans(image)[0]!.numericSortCallback!;
+				const entry =
+					image.native.functions[callback.functionIndex]!.directEntries[
+						callback.entryId
+					]!;
+				expect(entry.argumentRepresentations).toEqual(["number", "number"]);
+				expect(entry.resultRepresentation).toBe("number");
+				const symbol = `mal_direct_${callback.functionIndex}_${callback.entryId}`;
+				expect(emitProgramImage(image)).toContain(`double ${symbol}(`);
+				expect(
+					emitProgramTranslationUnits(image).some((unit) =>
+						unit.definitions.some((definition) => definition.symbol === symbol),
+					),
+				).toBe(true);
+			}
+		},
+	);
+
+	it("admits a comparator that publishes a closure over its own activation", () => {
+		const image = deserializeCompilerArtifact(
+			serializeCompilerArtifact(compile("globalThis.read = () => a; return a - b;")),
+		);
+		const callback = callbackPlans(image)[0]!.numericSortCallback!;
+		expect(
+			image.native.functions[callback.functionIndex]!.body.capturedCount,
+		).toBeGreaterThan(0);
+		expect(
+			image.native.functions[callback.functionIndex]!.directEntries[callback.entryId]!
+				.resultRepresentation,
+		).toBe("number");
+	});
+
+	it("rejects a fixed comparator entry with incompatible argument transport", () => {
+		const image = compile("return arguments[0] - arguments[1];");
+		const callback = callbackPlans(image)[0]!.numericSortCallback!;
+		for (const argumentRepresentations of [
+			["number"],
+			["number", "boxed"],
+			["number", "number", "number"],
+		] as const) {
+			const functions = image.native.functions.map((fn) =>
+				fn.functionIndex === callback.functionIndex
+					? {
+							...fn,
+							directEntries: fn.directEntries.map((entry) =>
+								entry.id === callback.entryId
+									? { ...entry, argumentRepresentations }
+									: entry,
+							),
+						}
+					: fn,
+			);
+			expect(() => validateNativeNumericSortCallback(callback, functions)).toThrow(
+				/numeric sort callback/,
+			);
+		}
+	});
 
 	it("rejects forged numeric callback ABI coordinates", () => {
 		const image = compile();

@@ -2682,6 +2682,32 @@
 			"controls": ["string-span-classify", "string-split"]
 		},
 		{
+			"id": "tagged-record-branches",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "Tagged record field regions",
+			"category": "object-array-representation",
+			"mechanisms": ["property-access"],
+			"inputShape": "Immutable Binary and Literal records selecting reference-valued fields through strict kind and operator branches.",
+			"unit": "record",
+			"sourceSeam": "src/compiler/target/lower-native-fast-paths.ts",
+			"fixture": "cases/tagged-record-branches.mjs",
+			"controls": ["tagged-record-fields", "stable-shape-properties"]
+		},
+		{
+			"id": "object-keys-snapshot-traversal",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "Object.keys snapshots",
+			"category": "api-builtins",
+			"mechanisms": ["object-enumeration", "array-allocation"],
+			"inputShape": "Indexed traversal over eager snapshots of four to eight shaped-record keys.",
+			"unit": "enumeration call",
+			"sourceSeam": "runtime/src/builtin_object.c",
+			"fixture": "cases/object-keys-snapshot-traversal.mjs",
+			"controls": ["object-keys-count", "object-entries-small-keys-8"]
+		},
+		{
 			"id": "method-name-unique",
 			"group": "runtime",
 			"suite": "runtime",

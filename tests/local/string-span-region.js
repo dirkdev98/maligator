@@ -1,3 +1,4 @@
+const gc = globalThis.__mal_collect_garbage;
 const observations = [];
 function collect() {
 	if (typeof gc === "function") gc();
@@ -26,6 +27,18 @@ function consume(value) {
 	collect();
 	return `observed:${value}`;
 }
+function characters(value, start, end, position, effect) {
+	const part = value.slice(start, end);
+	const length = part.length;
+	effect();
+	return [length, part.charCodeAt(position), part.charCodeAt(), part.length];
+}
+function selfIndexedCharacter(value) {
+	const part = value.slice(1, -1);
+	return [part.charCodeAt(part), part.length];
+}
+for (const value of ["x1z", "x00z", "xabz"])
+	observations.push(selfIndexedCharacter(value));
 for (const value of ["xabz", "x12z", "x-0z", "xInfinityz", "x😀z", "", "x 7 z"]) {
 	for (const bounds of [
 		[1, -1],
@@ -42,11 +55,32 @@ for (const value of ["xabz", "x12z", "x-0z", "xInfinityz", "x😀z", "", "x 7 z"
 			branch(value, bounds[0], bounds[1], true),
 		);
 		observations.push(unicode(value, bounds[0], bounds[1]));
+		for (const position of [undefined, NaN, -Infinity, Infinity, -1, -0.5, 0, 1.8, 2, 99])
+			observations.push(characters(value, bounds[0], bounds[1], position, collect));
 	}
 }
 let rope = "";
 for (let index = 0; index < 100; index++) rope += index % 2 ? "😀" : "ab";
 observations.push(inspect(rope, 1, 190, true, consume), unicode(rope, 2, 4));
+observations.push(characters(rope, 1, 190, 2, collect));
+for (const position of [
+	"1",
+	null,
+	{
+		valueOf() {
+			collect();
+			return 1;
+		},
+	},
+])
+	observations.push(characters("x😀z", 1, -1, position, collect));
+for (const position of [Symbol("index"), 1n]) {
+	try {
+		characters("x😀z", 1, -1, position, collect);
+	} catch (error) {
+		observations.push(error.name);
+	}
+}
 let coercions = 0;
 const start = {
 	valueOf() {
@@ -95,6 +129,36 @@ function delayed(value, effect) {
 }
 const savedNumber = Number;
 if (typeof process !== "undefined" && process.env.MAL_STRING_SPAN_MUTABLE === "mutable") {
+	const savedCharacter = Object.getOwnPropertyDescriptor(String.prototype, "charCodeAt");
+	const methodEvents = [];
+	Object.defineProperty(String.prototype, "charCodeAt", {
+		configurable: true,
+		get() {
+			methodEvents.push(String(this));
+			collect();
+			return function (position) {
+				return savedCharacter.value.call(this, position);
+			};
+		},
+	});
+	observations.push(characters("x😀z", 1, -1, 1, collect), methodEvents);
+	Object.defineProperty(String.prototype, "charCodeAt", savedCharacter);
+	observations.push(
+		characters(
+			"xabz",
+			1,
+			-1,
+			{
+				valueOf() {
+					String.prototype.charCodeAt = () => 321;
+					collect();
+					return 1;
+				},
+			},
+			collect,
+		),
+	);
+	Object.defineProperty(String.prototype, "charCodeAt", savedCharacter);
 	observations.push(
 		delayed("x12z", () => {
 			globalThis.Number = (part) => {

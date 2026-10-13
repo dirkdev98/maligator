@@ -1673,7 +1673,8 @@ export function validateNativeStorage(
 				const expected = selected.spanContinuations[index]!;
 				return (
 					plan.producerIp === expected.producerIp &&
-					plan.splitCallIp === expected.splitCallIp &&
+					plan.sourceKind === expected.sourceKind &&
+					plan.sourceCallIp === expected.sourceCallIp &&
 					sameNumbers(plan.claimedIps, expected.claimedIps) &&
 					sameNumbers(plan.borrowedRegisters, expected.borrowedRegisters) &&
 					plan.consumers.length === expected.consumers.length &&

@@ -66,6 +66,11 @@ describe("split span continuations", () => {
 			expect(Number(stats![1])).toBeGreaterThan(0);
 			expect(Number(stats![2])).toBeGreaterThan(0);
 			expect(Number(stats![3])).toBeGreaterThan(0);
+			const characters = measured.stderr.match(
+				/\[perf-string-span-character-stats\] reads=(\d+)/,
+			);
+			expect(characters).not.toBeNull();
+			expect(Number(characters![1])).toBeGreaterThan(0);
 		},
 		600_000,
 	);

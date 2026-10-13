@@ -16,6 +16,16 @@ function compile(body: string) {
 	);
 }
 describe("Object.keys count storage", () => {
+	it("bounds lifetime analysis even when earlier key snapshots escape", () => {
+		const source = (escapes: number) =>
+			`${"hook(Object.keys(record));".repeat(escapes)} return Object.keys(record).length;`;
+		expect(
+			compile(source(4)).native.functions[1]!.storage!.objectKeysSnapshots,
+		).toHaveLength(1);
+		expect(
+			compile(source(64)).native.functions[1]!.storage!.objectKeysSnapshots,
+		).toHaveLength(0);
+	});
 	it("retains snapshots through indexed traversal, calls, and aliases", () => {
 		const image = compile(`const keys=Object.keys(record); const alias=keys;
 			let size=0; for(let i=0;i<keys.length;i++){ const key=alias[i]; hook(record,key); size+=key.length; } return size;`);

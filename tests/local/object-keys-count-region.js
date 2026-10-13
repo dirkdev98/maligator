@@ -1,3 +1,4 @@
+const gc = globalThis.__mal_collect_garbage;
 function count(record) {
 	return Object.keys(record).length;
 }

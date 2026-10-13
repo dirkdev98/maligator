@@ -1128,8 +1128,14 @@ static bool mal_builtin_object_keys_admits(MalValue callee, MalValue target, boo
         mal_value_is_heap_type(target, MAL_HEAP_OBJECT);
 }
 
-bool mal_builtin_object_keys_snapshot(MalValue callee, MalValue target, bool locked, MalValue *keys, u32 capacity, u32 *count_out) {
+bool mal_builtin_object_keys_snapshot(MalVm *vm, MalValue callee, MalValue target, bool locked, MalValue *keys, u32 capacity, u32 *count_out) {
     if (!mal_builtin_object_keys_admits(callee, target, locked)) return false;
+#if MAL_REALMS
+    // Delayed Array materialization uses the current realm's prototype.
+    if (!locked && mal_vm_callee_realm(vm, callee) != vm->current_realm) return false;
+#else
+    (void) vm;
+#endif
     MalObject *object = mal_value_to_object(target);
     if (mal_object_has_public_overflow(object)) return false;
     const MalShape *shape = object->shape;

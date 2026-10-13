@@ -269,6 +269,11 @@ bool mal_builtin_string_slice_span_init(
 );
 bool mal_builtin_string_span_equal(MalValue subject, usize start, usize end, MalValue other);
 
+bool mal_builtin_string_span_char_code_at(
+    MalValue callee, bool locked, MalValue subject, usize start, usize end,
+    MalValue position, f64 *out
+);
+
 #define MAL_STRING_SPLIT_PROJECTION_MAX_OUTPUTS 8u
 
 /**

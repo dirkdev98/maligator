@@ -95,7 +95,7 @@ import type {
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal artifacts are hard cut-overs: stale cache entries rebuild.
-export const COMPILER_ARTIFACT_VERSION = 199;
+export const COMPILER_ARTIFACT_VERSION = 201;
 
 function validateClosureCaptureOwners(
 	owners: ReadonlyArray<number>,
@@ -982,14 +982,24 @@ function writeNativeStorage(w: Writer, storage: NativeStoragePlan | undefined): 
 	w.u32(storage.spanContinuations.length);
 	for (const plan of storage.spanContinuations) {
 		w.i32(plan.producerIp);
-		w.i32(plan.splitCallIp);
+		w.u8(plan.sourceKind === "split" ? 0 : 1);
+		w.i32(plan.sourceCallIp);
 		w.i32Array([...plan.claimedIps]);
 		w.i32Array([...plan.borrowedRegisters]);
 		w.u32(plan.consumers.length);
 		for (const consumer of plan.consumers) {
 			w.i32(consumer.ip);
 			w.i32(consumer.value);
-			w.u8(["length", "equal", "number", "materialize"].indexOf(consumer.kind));
+			w.u8(
+				[
+					"length",
+					"equal",
+					"number",
+					"materialize",
+					"charCodeAtProperty",
+					"charCodeAtCall",
+				].indexOf(consumer.kind),
+			);
 		}
 	}
 	w.u32(storage.arrayInitializations.length);
@@ -1479,19 +1489,36 @@ function readNativeStorage(r: Reader): NativeStoragePlan {
 			return { instructionIp, mode };
 		},
 	);
-	const spanContinuations = Array.from({ length: r.count(20) }, () => ({
-		producerIp: r.i32(),
-		splitCallIp: r.i32(),
-		claimedIps: r.i32Array(),
-		borrowedRegisters: r.i32Array(),
-		consumers: Array.from({ length: r.count(9) }, () => {
-			const ip = r.i32(),
-				value = r.i32(),
-				kind = (["length", "equal", "number", "materialize"] as const)[r.u8()];
-			if (kind === undefined) throw new RangeError("Invalid span continuation consumer");
-			return { ip, value, kind };
-		}),
-	}));
+	const spanContinuations = Array.from({ length: r.count(21) }, () => {
+		const producerIp = r.i32();
+		const sourceKind = (["split", "regexp"] as const)[r.u8()];
+		if (sourceKind === undefined)
+			throw new RangeError("Invalid span continuation source");
+		return {
+			producerIp,
+			sourceKind,
+			sourceCallIp: r.i32(),
+			claimedIps: r.i32Array(),
+			borrowedRegisters: r.i32Array(),
+			consumers: Array.from({ length: r.count(9) }, () => {
+				const ip = r.i32(),
+					value = r.i32(),
+					kind = (
+						[
+							"length",
+							"equal",
+							"number",
+							"materialize",
+							"charCodeAtProperty",
+							"charCodeAtCall",
+						] as const
+					)[r.u8()];
+				if (kind === undefined)
+					throw new RangeError("Invalid span continuation consumer");
+				return { ip, value, kind };
+			}),
+		};
+	});
 	const arrayInitializations = Array.from({ length: r.count(20) }, () => ({
 		allocationIp: r.i32(),
 		stores: r.i32Array(),
@@ -2368,7 +2395,16 @@ function writeCompilerArtifact(
 					for (const consumer of region.consumers) {
 						w.i32(consumer.ip);
 						w.i32(consumer.value);
-						w.u8(["length", "equal", "number", "materialize"].indexOf(consumer.kind));
+						w.u8(
+							[
+								"length",
+								"equal",
+								"number",
+								"materialize",
+								"charCodeAtProperty",
+								"charCodeAtCall",
+							].indexOf(consumer.kind),
+						);
 					}
 					break;
 				case "string-char-code-at-chain":
@@ -5146,7 +5182,16 @@ function readCompilerArtifact(
 						const ip = r.i32(),
 							value = r.i32(),
 							tag = r.u8();
-						const kind = (["length", "equal", "number", "materialize"] as const)[tag];
+						const kind = (
+							[
+								"length",
+								"equal",
+								"number",
+								"materialize",
+								"charCodeAtProperty",
+								"charCodeAtCall",
+							] as const
+						)[tag];
 						if (kind === undefined)
 							throw new RangeError("program-image-codec: invalid string-span consumer");
 						consumers.push({ ip, value, kind });

@@ -4867,7 +4867,7 @@ describe("native update-expression representation", () => {
 		expect(output).not.toContain("mal_builtin_string_ascii_case_chain_length_span(vm,");
 	});
 
-	it("keeps RegExp capture strings materialized when scalar results have another use", () => {
+	it("materializes a composed RegExp capture before string concatenation observes it", () => {
 		const output = emit(`
 			function parse(regexp, value) {
 				const match = regexp.exec(value);
@@ -4878,7 +4878,7 @@ describe("native update-expression representation", () => {
 			globalThis.parse = parse;
 		`);
 		expect(output).toContain("mal_regexp_exec_capture_projection(vm,");
-		expect(output).toContain(", 0, __regexp_exec_");
+		expect(output).toContain("mal_builtin_string_span_materialize(vm,");
 	});
 
 	it("parses a closed RegExp capture span through the exact Number intrinsic", () => {

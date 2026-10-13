@@ -150,7 +150,13 @@ export interface CorePlanStringSplitProjectionSpecialization extends CorePlanSpe
 export interface CoreStringSpanConsumer {
 	readonly instruction: CoreInstructionId;
 	readonly value: CoreValueId;
-	readonly kind: "length" | "equal" | "number" | "materialize";
+	readonly kind:
+		| "length"
+		| "equal"
+		| "number"
+		| "charCodeAtProperty"
+		| "charCodeAtCall"
+		| "materialize";
 }
 
 export interface CorePlanStringSpanSpecialization extends CorePlanSpecializationBase<"string-span"> {

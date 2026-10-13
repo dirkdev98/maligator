@@ -41,6 +41,25 @@ const branching = `const part = value.slice(start, end); const length = part.len
 
 describe("composable string spans", () => {
 	it.each(["mutable", "locked"] as const)(
+		"keeps character-code consumers inside the span under %s primordials",
+		(mode) => {
+			const image = compile(
+				"const part=value.slice(start,end); observer(); return part.charCodeAt(escape)+part.length;",
+				mode,
+			);
+			expect(spans(image)).toHaveLength(1);
+			expect(spans(image)[0]!.consumers.map((value) => value.kind)).toContain(
+				"charCodeAtCall",
+			);
+			expect(spans(image)[0]!.consumers.map((value) => value.kind)).not.toContain(
+				"materialize",
+			);
+			expect(deserializeCompilerArtifact(serializeCompilerArtifact(image))).toEqual(
+				image,
+			);
+		},
+	);
+	it.each(["mutable", "locked"] as const)(
 		"retains projections and branch materialization with %s methods",
 		(primordials) => {
 			const image = compile(branching, primordials);
@@ -75,6 +94,12 @@ describe("composable string spans", () => {
 			),
 		).toHaveLength(0);
 	});
+	it("retains index coercion when the substring is its own character position", () => {
+		const image = compile(
+			"const part=value.slice(start,end); return part.charCodeAt(part)+part.length;",
+		);
+		expect(spans(image)).toHaveLength(0);
+	});
 	it("rejects a forged artifact that omits an escaping observer", () => {
 		const image = compile(branching);
 		const index = image.native.functions.findIndex((fn) =>
@@ -105,5 +130,44 @@ describe("composable string spans", () => {
 			},
 		};
 		expect(() => serializeCompilerArtifact(forged)).toThrow(/string-span/);
+	});
+	it.each([
+		["charCodeAtProperty", "charCodeAtCall"],
+		["charCodeAtCall", "charCodeAtProperty"],
+		["length", "charCodeAtProperty"],
+		["number", "charCodeAtCall"],
+	] as const)("rejects a %s consumer forged as %s", (original, kind) => {
+		const image = compile(
+			"const part=value.slice(start,end); return part.charCodeAt(escape)+part.length+Number(part);",
+		);
+		const index = image.native.functions.findIndex((fn) =>
+			fn.specializations.some((region) => region.kind === "string-span"),
+		);
+		const owner = image.native.functions[index]!;
+		const region = spans(image)[0]!;
+		expect(region.consumers.some((consumer) => consumer.kind === original)).toBe(true);
+		const specializations = owner.specializations.map((candidate) =>
+			candidate !== region
+				? candidate
+				: {
+						...region,
+						consumers: region.consumers.map((consumer) =>
+							consumer.kind === original ? { ...consumer, kind } : consumer,
+						),
+					},
+		);
+		expect(() =>
+			serializeCompilerArtifact({
+				...image,
+				native: {
+					...image.native,
+					functions: image.native.functions.with(index, {
+						...owner,
+						specializations,
+						regionActions: vmRegionActions(specializations),
+					}),
+				},
+			}),
+		).toThrow(/string-span/);
 	});
 });

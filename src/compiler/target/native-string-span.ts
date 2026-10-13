@@ -67,6 +67,25 @@ export function validateNativeStringSpan(
 		)
 			fail();
 		if (
+			consumer.kind === "charCodeAtProperty" &&
+			(instruction.opcode !== "LOAD_PROPERTY_STATIC" ||
+				instruction.object !== consumer.value ||
+				String.fromCharCode(...(strings[instruction.stringIndex] ?? [])) !== "charCodeAt")
+		)
+			fail();
+		if (
+			consumer.kind === "charCodeAtCall" &&
+			((instruction.opcode !== "CALL" && instruction.opcode !== "CALL_KNOWN") ||
+				instruction.thisValue !== consumer.value ||
+				instruction.arguments.length > 1 ||
+				instruction.arguments[0] === consumer.value ||
+				(instruction.opcode === "CALL_KNOWN" &&
+					(instruction.operation !== "String.prototype.charCodeAt" ||
+						instruction.construct ||
+						instruction.argumentMode !== undefined)))
+		)
+			fail();
+		if (
 			consumer.kind === "number" &&
 			((instruction.opcode !== "CALL" && instruction.opcode !== "CALL_KNOWN") ||
 				(instruction.opcode === "CALL_KNOWN" &&
