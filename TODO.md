@@ -1010,6 +1010,10 @@ remains a Maligator extension and does not count as global fetch conformance.
 
 # Node and ecosystem compatibility
 
+- [ ] Match Node's invalid-argument diagnostic inspection, including custom inspect
+      hooks and thrown-hook precedence. Buffer validators and copyBytesFrom currently
+      use a generic formatter.
+
 - [ ] Measure remaining UPM performance paths: off-loop filesystem and
       decompression scheduling, and DNS/Agent dispatcher reuse. Use matched
       workloads after output parity; AOT does not need a V8 compile cache.

@@ -37,7 +37,7 @@ With `surface.node`, `node:module.builtinModules` and `isBuiltin` describe the m
 
 `node:path/posix` exposes the existing POSIX path implementation with the same object and function identities as `path.posix`. `Buffer.isEncoding` recognizes supported encoding names without coercing other values.
 
-`Buffer.copyBytesFrom` copies a typed array's raw bytes into an independent Buffer. Its offset and length count elements; shared backing stores are read atomically, and detached or out-of-bounds views are empty. `node:url.urlToHttpOptions` converts URL-like objects, retaining enumerable extensions and Node's property-access and coercion order. These APIs preserve error types and codes; error-message wording can differ from Node.
+`Buffer.copyBytesFrom` copies a typed array's raw bytes into an independent Buffer. Its offset and length count elements; shared backing stores are read atomically, and detached or out-of-bounds views are empty. `node:url.urlToHttpOptions` converts URL-like objects, retaining enumerable extensions and Node's property-access and coercion order. Ordinary invalid arguments preserve the supported Node error types and codes; error-message wording can differ. Buffer invalid-type diagnostics use a generic formatter and do not invoke `util.inspect.custom` hooks, including hooks that would throw in Node.
 
 `node:url.URL` and `URLSearchParams` share identity with the global constructors. `node:net.isIP`, `isIPv4`, and `isIPv6` preserve Node's string coercions, reject leading-zero IPv4 components, and support IPv6 zone identifiers.
 
