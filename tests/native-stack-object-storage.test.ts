@@ -381,3 +381,95 @@ describe("native typed stack fields", () => {
 			).toThrow(/invalid or stale storage plan/);
 	});
 });
+
+describe("observing virtual objects", () => {
+	it("retains mixed helper results inside a loop without carrying virtual values across its backedge", () => {
+		const image = compile(
+			`let sum=0;for(let i=0;i<12;i++){const o=i%2?{x:i,y:2}:input;if(i%3===0)globalThis.observe(o);sum+=o.x+o.y;}return sum;`,
+		);
+		const native = image.native.functions[1]!;
+		expect(
+			native.specializations.some(
+				(region) =>
+					region.kind === "stack-object-plan" &&
+					region.sites.some((site) =>
+						site.materializations.some((entry) => entry.kind === "observe"),
+					),
+			),
+		).toBe(true);
+		expect(deserializeCompilerArtifact(serializeCompilerArtifact(image))).toEqual(image);
+	});
+	it("retains the allocation identity at a mixed helper fallback join", () => {
+		const image = compile(
+			`const o=input?{x:1.5,y:2}:globalThis.fallback; if(input)globalThis.observe(o); return o.x+o.y;`,
+		);
+		const native = image.native.functions[1]!;
+		expect(
+			native.specializations.some(
+				(region) =>
+					region.kind === "stack-object-plan" &&
+					region.sites.some((site) =>
+						site.materializations.some((entry) => entry.kind === "observe"),
+					),
+			),
+		).toBe(true);
+		expect(emitCompiledFunction(native, native.functionIndex, "", false)).not.toBeNull();
+		expect(deserializeCompilerArtifact(serializeCompilerArtifact(image))).toEqual(image);
+	});
+
+	it("retains field storage across a conditional observer and return", () => {
+		const image = compile(
+			`const o={x:1.5,y:2,flag:true}; if(input)globalThis.observe(o,o); o.y=3; if(input)return o; return o.x+o.y;`,
+		);
+		const native = image.native.functions[1]!;
+		const regions = native.specializations.filter(
+			(region) => region.kind === "stack-object-plan",
+		);
+		const site = regions
+			.flatMap((region) => region.sites)
+			.find((site) => site.materializations.some((entry) => entry.kind === "observe"));
+		expect(site).toBeDefined();
+		expect(site!.materializations.map((entry) => entry.kind).sort()).toEqual([
+			"observe",
+			"return",
+		]);
+		expect(native.storage!.stackObjects).toHaveLength(1);
+		expect(emitCompiledFunction(native, native.functionIndex, "", false)).not.toBeNull();
+		expect(deserializeCompilerArtifact(serializeCompilerArtifact(image))).toEqual(image);
+	});
+	it("rejects an artifact that omits an observing call", () => {
+		const image = compile(
+			`const o={x:1.5,y:2}; if(input)globalThis.observe(o); return o.x+o.y;`,
+		);
+		const native = image.native.functions[1]!;
+		const specializations = native.specializations.map((region) => {
+			if (region.kind !== "stack-object-plan") return region;
+			const omitted = region.sites
+				.flatMap((site) => site.materializations)
+				.find((entry) => entry.kind === "observe")!;
+			expect(omitted).toBeDefined();
+			return {
+				...region,
+				sites: region.sites.map((site) => ({
+					...site,
+					materializations: site.materializations.filter((entry) => entry !== omitted),
+				})),
+				claimedIps: region.claimedIps.filter((ip) => ip !== omitted.ip),
+				cost: { ...region.cost, metadataOperations: region.cost.metadataOperations - 1 },
+				license: { ...region.license, materialization: "none" as const },
+			};
+		});
+		const forged = {
+			...image,
+			native: {
+				...image.native,
+				functions: image.native.functions.with(1, {
+					...native,
+					specializations,
+					regionActions: vmRegionActions(specializations),
+				}),
+			},
+		};
+		expect(() => serializeCompilerArtifact(forged)).toThrow(/stack-object/);
+	});
+});

@@ -46,6 +46,7 @@ import {
 } from "./lower-native-string-transforms.ts";
 import type { NativeStringTransformPlan } from "./lower-native-string-transforms.ts";
 import type { NativeSuspensionPlan } from "./lower-native-suspension.ts";
+import { validateNativeStackObject } from "./native-stack-object.ts";
 import { validateNativeStringSpan } from "./native-string-span.ts";
 import { NATIVE_VALUE_CONVERSIONS } from "./native-value-transport.ts";
 import type { Reader } from "./program-image-codec.ts";
@@ -94,7 +95,7 @@ import type {
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal artifacts are hard cut-overs: stale cache entries rebuild.
-export const COMPILER_ARTIFACT_VERSION = 191;
+export const COMPILER_ARTIFACT_VERSION = 192;
 
 function validateClosureCaptureOwners(
 	owners: ReadonlyArray<number>,
@@ -2345,7 +2346,9 @@ function writeCompilerArtifact(
 						w.u32(site.materializations.length);
 						for (const materialization of site.materializations) {
 							w.i32(materialization.ip);
-							w.u8(1);
+							w.u8(materialization.kind === "return" ? 1 : 2);
+							if (materialization.kind === "observe")
+								w.i32Array([...materialization.values!]);
 						}
 					}
 					break;
@@ -2775,6 +2778,7 @@ function validateStackObjectPlanRegion(
 		) {
 			valid = false;
 		}
+		validateNativeStackObject(fn.instructions, site, fn.handlers.length > 0);
 		allocationIps.add(site.allocationIp);
 		totalSlots += site.slotCount;
 		payload.add(site.allocationIp);
@@ -2809,8 +2813,10 @@ function validateStackObjectPlanRegion(
 			materializationCount++;
 			const instruction = fn.instructions[materialization.ip];
 			if (
-				materialization.kind !== "return" ||
-				instruction?.opcode !== "RETURN" ||
+				(materialization.kind === "return"
+					? instruction?.opcode !== "RETURN"
+					: materialization.values === undefined ||
+						materialization.values.length === 0) ||
 				payload.has(materialization.ip)
 			) {
 				valid = false;
@@ -5094,7 +5100,12 @@ function readCompilerArtifact(
 						}
 						const inheritedAccessIp = r.i32();
 						const materializationCount = r.count(2);
-						const materializations: Array<{ ip: number; kind: "return" }> = [];
+						const materializations: Array<
+							Extract<
+								VmRegion,
+								{ kind: "stack-object-plan" }
+							>["sites"][number]["materializations"][number]
+						> = [];
 						for (
 							let materialization = 0;
 							materialization < materializationCount;
@@ -5102,14 +5113,15 @@ function readCompilerArtifact(
 						) {
 							const ip = r.i32();
 							const tag = r.u8();
-							if (tag !== 1) {
+							if (tag !== 1 && tag !== 2) {
 								throw new RangeError(
 									"program-image-codec: invalid stack-object materialization",
 								);
 							}
 							materializations.push({
 								ip,
-								kind: "return",
+								kind: tag === 1 ? "return" : "observe",
+								...(tag === 2 ? { values: r.i32Array() } : {}),
 							});
 						}
 						sites.push({

@@ -2565,6 +2565,19 @@
 			"controls": ["primordial-array-folds", "array-map"]
 		},
 		{
+			"id": "conditional-span-records",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "Core temporary objects",
+			"category": "object-array-representation",
+			"mechanisms": ["allocation-gc"],
+			"inputShape": "Three-field source spans returned by a helper, read after a sparse tracing callback that mutates the end field.",
+			"unit": "source span",
+			"sourceSeam": "src/compiler/core/core-ir-provenance.ts",
+			"fixture": "cases/conditional-span-records.mjs",
+			"controls": ["short-lived-records", "stable-shape-properties"]
+		},
+		{
 			"id": "string-span-classify",
 			"group": "runtime",
 			"suite": "runtime",

@@ -93,6 +93,12 @@ interface CorePlanSpecializationBase<Kind extends CorePlanSpecializationKind> {
 	readonly cost: CorePlanCost;
 }
 
+export interface CoreStackObjectMaterialization {
+	readonly instruction: CoreInstructionId;
+	readonly kind: "return" | "observe";
+	readonly values?: ReadonlyArray<CoreValueId>;
+}
+
 export interface CorePlanStackObjectSpecialization extends CorePlanSpecializationBase<"stack-object-plan"> {
 	readonly stackObject: {
 		readonly allocation: CoreInstructionId;
@@ -102,10 +108,7 @@ export interface CorePlanStackObjectSpecialization extends CorePlanSpecializatio
 			readonly instruction: CoreInstructionId;
 			readonly slot: number;
 		}>;
-		readonly materializations: ReadonlyArray<{
-			readonly instruction: CoreInstructionId;
-			readonly kind: "return";
-		}>;
+		readonly materializations: ReadonlyArray<CoreStackObjectMaterialization>;
 	};
 }
 
@@ -950,8 +953,9 @@ export interface CoreAllocatedStackObjectPlanRegion extends CoreAllocatedRegionE
 			{ type: "loadProperty" | "loadPropertyStatic" }
 		>;
 		readonly materializations: ReadonlyArray<{
-			readonly instruction: Extract<CompilerInstruction, { type: "return" }>;
-			readonly kind: "return";
+			readonly instruction: CompilerInstruction;
+			readonly kind: "return" | "observe";
+			readonly values?: ReadonlyArray<number>;
 		}>;
 	}>;
 }

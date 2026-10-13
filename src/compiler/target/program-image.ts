@@ -29,6 +29,7 @@ import type {
 import { collectCompilerFactFlowReport } from "./fact-flow-report.ts";
 import { lowerNativeFunctionStorage } from "./lower-native-storage.ts";
 import type { NativeStoragePlan } from "./lower-native-storage.ts";
+import { validateNativeStackObject } from "./native-stack-object.ts";
 import { validateNativeStringSpan } from "./native-string-span.ts";
 import { buildProfileMetadata } from "./profile-metadata.ts";
 import type { CompilerRemark, ProfileSite } from "./profile-metadata.ts";
@@ -605,7 +606,8 @@ export type VmStackObjectPlanRegion = VmRegionEnvelope<
 		readonly inheritedAccessIp?: number;
 		readonly materializations: ReadonlyArray<{
 			readonly ip: number;
-			readonly kind: "return";
+			readonly kind: "return" | "observe";
+			readonly values?: ReadonlyArray<number>;
 		}>;
 	}>;
 };
@@ -3145,6 +3147,9 @@ function lowerExecutionFunctionToNativePlan(
 				const materializations = site.materializations.map((materialization) => ({
 					ip: instructionIndexByTargetInstruction.get(materialization.instruction),
 					kind: materialization.kind,
+					...(materialization.values === undefined
+						? {}
+						: { values: materialization.values }),
 				}));
 				if (
 					allocationIp === undefined ||
@@ -3173,8 +3178,10 @@ function lowerExecutionFunctionToNativePlan(
 					materializations.some(
 						(materialization) =>
 							materialization.ip === undefined ||
-							materialization.kind !== "return" ||
-							instructions[materialization.ip]?.opcode !== "RETURN",
+							(materialization.kind === "return"
+								? instructions[materialization.ip]?.opcode !== "RETURN"
+								: materialization.values === undefined ||
+									materialization.values.length === 0),
 					)
 				) {
 					throw coreRegionError(region.kind, "site instruction metadata");
@@ -3183,10 +3190,8 @@ function lowerExecutionFunctionToNativePlan(
 					ip: ip!,
 					slot,
 				}));
-				const resolvedMaterializations = materializations as Array<{
-					ip: number;
-					kind: "return";
-				}>;
+				const resolvedMaterializations =
+					materializations as VmStackObjectPlanRegion["sites"][number]["materializations"];
 				const sitePayload = [
 					allocationIp,
 					...resolvedAccesses.map((access) => access.ip),
@@ -3197,14 +3202,16 @@ function lowerExecutionFunctionToNativePlan(
 					throw coreRegionError(region.kind, "site claim set");
 				}
 				payloadIps.push(...sitePayload);
-				resolvedSites.push({
+				const resolvedSite: VmStackObjectPlanRegion["sites"][number] = {
 					allocationIp,
 					mode: site.mode,
 					slotCount: site.slotCount,
 					accesses: resolvedAccesses,
 					...(inheritedAccessIp === undefined ? {} : { inheritedAccessIp }),
 					materializations: resolvedMaterializations,
-				});
+				};
+				validateNativeStackObject(instructions, resolvedSite);
+				resolvedSites.push(resolvedSite);
 			}
 			const resolvedAggregateClaims = aggregateClaims as Array<number>;
 			if (new Set(payloadIps).size !== payloadIps.length) {

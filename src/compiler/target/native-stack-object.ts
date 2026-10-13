@@ -1,0 +1,74 @@
+import { validateNativeVirtualValue } from "./native-virtual-value.ts";
+import type { VmStackObjectPlanRegion } from "./program-image.ts";
+import { vmInstructionReadRegisters } from "./runtime-image.ts";
+import type { BytecodeInstruction } from "./runtime-image.ts";
+
+export function validateNativeStackObject(
+	instructions: ReadonlyArray<BytecodeInstruction>,
+	site: VmStackObjectPlanRegion["sites"][number],
+	hasHandlers = false,
+): void {
+	function fail(): never {
+		throw new RangeError("Invalid stack-object observation region");
+	}
+	const allocation = instructions[site.allocationIp];
+	if (
+		allocation?.opcode !== "CREATE_OBJECT_SHAPED" &&
+		allocation?.opcode !== "CREATE_OBJECT"
+	)
+		fail();
+	const consumers = new Map<number, ReadonlyArray<number>>();
+	for (const access of site.accesses) {
+		const instruction = instructions[access.ip];
+		if (
+			instruction?.opcode !== "LOAD_PROPERTY_STATIC" &&
+			instruction?.opcode !== "STORE_PROPERTY_STATIC" &&
+			instruction?.opcode !== "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT" &&
+			instruction?.opcode !== "STORE_PROPERTY_STATIC_KNOWN_OWN_SLOT"
+		)
+			fail();
+		consumers.set(access.ip, [instruction.object]);
+	}
+	if (site.inheritedAccessIp !== undefined) {
+		const instruction = instructions[site.inheritedAccessIp];
+		if (instruction?.opcode !== "LOAD_PROPERTY_STATIC") fail();
+		consumers.set(site.inheritedAccessIp, [instruction.object]);
+	}
+	for (const materialization of site.materializations) {
+		const instruction = instructions[materialization.ip];
+		if (instruction === undefined) fail();
+		if (materialization.kind === "return") {
+			if (instruction.opcode !== "RETURN") fail();
+			consumers.set(materialization.ip, [instruction.value]);
+		} else {
+			const values = materialization.values;
+			if (
+				values === undefined ||
+				values.length === 0 ||
+				values.some((value) => !vmInstructionReadRegisters(instruction).includes(value))
+			)
+				fail();
+			consumers.set(materialization.ip, values);
+		}
+	}
+	// Identity-only objects retain their stack identity without publishing it to another activation.
+	const identityOnly = !site.materializations.some(
+		(materialization) => materialization.kind === "observe",
+	);
+	if (!identityOnly && hasHandlers) fail();
+	validateNativeVirtualValue(
+		instructions,
+		site.allocationIp,
+		allocation.dst,
+		consumers,
+		fail,
+		(instruction) =>
+			identityOnly &&
+			((instruction.opcode === "BINARY" &&
+				(instruction.operator === "===" || instruction.operator === "!==")) ||
+				instruction.opcode === "LOAD_PROTOTYPE" ||
+				instruction.opcode === "TYPEOF_COMPARE" ||
+				(instruction.opcode === "UNARY" && instruction.operator === "typeof")),
+		!identityOnly,
+	);
+}

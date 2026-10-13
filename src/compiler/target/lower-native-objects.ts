@@ -79,8 +79,9 @@ export function selectNativeStackObjectStorage(
 				site.inheritedAccessIp !== undefined ||
 				!site.materializations.every(
 					(materialization) =>
-						materialization.kind === "return" &&
-						native.body.instructions[materialization.ip]?.opcode === "RETURN",
+						materialization.kind === "observe" ||
+						(materialization.kind === "return" &&
+							native.body.instructions[materialization.ip]?.opcode === "RETURN"),
 				)
 			)
 				continue;

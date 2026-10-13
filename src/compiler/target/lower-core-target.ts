@@ -1423,13 +1423,23 @@ function lowerCoreSpecializations(
 				}
 				return { instruction: lowered, slot };
 			});
-			const materializations = stack.materializations.map(({ instruction }) => {
-				const lowered = requireInstruction(instruction);
-				if (lowered.type !== "return") {
-					throw new Error(`Core stack-object plan ${id} has an invalid materialization`);
-				}
-				return { instruction: lowered, kind: "return" as const };
-			});
+			const materializations = stack.materializations.map(
+				({ instruction, kind, values }) => {
+					const lowered = requireInstruction(instruction);
+					if (
+						(kind === "return" && lowered.type !== "return") ||
+						(kind === "observe" && values === undefined)
+					)
+						throw new Error(
+							`Core stack-object plan ${id} has an invalid materialization`,
+						);
+					return {
+						instruction: lowered,
+						kind,
+						...(values === undefined ? {} : { values: values.map(registerForValue) }),
+					};
+				},
+			);
 			const materializes = materializations.length > 0;
 			regions.push({
 				...envelope(row),

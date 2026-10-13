@@ -1,8 +1,6 @@
+import { validateNativeVirtualValue } from "./native-virtual-value.ts";
 import type { VmStringSpanRegion } from "./program-image.ts";
-import {
-	vmInstructionReadRegisters,
-	vmInstructionWriteRegisters,
-} from "./runtime-image.ts";
+import { vmInstructionReadRegisters } from "./runtime-image.ts";
 import type { BytecodeInstruction } from "./runtime-image.ts";
 
 export function validateNativeStringSpan(
@@ -79,69 +77,11 @@ export function validateNativeStringSpan(
 		)
 			fail();
 	}
-	// Union and intersection distinguish a live virtual alias from a register reused on one incoming path.
-	const incoming = new Map<number, { may: Set<number>; must: Set<number> }>();
-	const pending: Array<number> = [];
-	const add = (ip: number, may: ReadonlySet<number>, must: ReadonlySet<number>): void => {
-		if (ip < 0 || ip >= instructions.length) return;
-		const prior = incoming.get(ip);
-		if (prior === undefined) {
-			incoming.set(ip, { may: new Set(may), must: new Set(must) });
-			pending.push(ip);
-			return;
-		}
-		const beforeMay = prior.may.size,
-			beforeMust = prior.must.size;
-		for (const alias of may) prior.may.add(alias);
-		for (const alias of prior.must) if (!must.has(alias)) prior.must.delete(alias);
-		if (prior.may.size !== beforeMay || prior.must.size !== beforeMust) pending.push(ip);
-	};
-	add(0, new Set(), new Set());
-	while (pending.length > 0) {
-		const ip = pending.pop()!;
-		const instruction = instructions[ip]!;
-		const aliases = incoming.get(ip)!;
-		const may = new Set(aliases.may),
-			must = new Set(aliases.must);
-		const moveMay = instruction.opcode === "MOVE" && may.has(instruction.src);
-		const moveMust = instruction.opcode === "MOVE" && must.has(instruction.src);
-		for (const value of vmInstructionWriteRegisters(instruction)) {
-			may.delete(value);
-			must.delete(value);
-		}
-		if (moveMay && instruction.opcode === "MOVE") may.add(instruction.dst);
-		if (moveMust && instruction.opcode === "MOVE") must.add(instruction.dst);
-		if (ip === region.sliceCallIp) {
-			may.clear();
-			must.clear();
-			may.add(producer.dst);
-			must.add(producer.dst);
-		}
-		if (instruction.opcode === "JUMP" || instruction.opcode === "JUMP_IF")
-			add(instruction.targetIp, may, must);
-		if (
-			instruction.opcode !== "JUMP" &&
-			instruction.opcode !== "RETURN" &&
-			instruction.opcode !== "THROW" &&
-			instruction.opcode !== "LOAD_UNDECLARED"
-		)
-			add(ip + 1, may, must);
-	}
-	for (const [ip, aliases] of incoming) {
-		if (ip === region.sliceCallIp) continue;
-		const instruction = instructions[ip]!;
-		const consumer = consumers.get(ip);
-		if (consumer !== undefined && !aliases.must.has(consumer.value)) fail();
-		const reads = vmInstructionReadRegisters(instruction).filter((value) =>
-			aliases.may.has(value),
-		);
-		if (
-			reads.length > 0 &&
-			instruction.opcode !== "MOVE" &&
-			instruction.opcode !== "THROW_IF_TDZ" &&
-			(consumer === undefined || reads.some((value) => value !== consumer.value))
-		)
-			fail();
-	}
-	for (const consumer of region.consumers) if (!incoming.has(consumer.ip)) fail();
+	validateNativeVirtualValue(
+		instructions,
+		region.sliceCallIp,
+		producer.dst,
+		new Map(region.consumers.map((consumer) => [consumer.ip, [consumer.value]])),
+		fail,
+	);
 }

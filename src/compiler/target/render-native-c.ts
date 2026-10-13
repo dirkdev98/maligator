@@ -1418,8 +1418,12 @@ function emitCompiledVariant(
 			slotCount: site.slotCount,
 		});
 		if (!elided && fieldRepresentations === undefined) nextStackSlot += site.slotCount;
+		if (
+			site.materializations.some((materialization) => materialization.kind === "observe")
+		)
+			stackObjectSites.get(site.allocationIp)!.materializedSlot = nextStackSlot++;
 	}
-	const stackObjectMaterializations = new Map<number, StackObjectSite>();
+	const stackObjectMaterializations = new Map<number, StackObjectMaterialization>();
 	const stackObjectAccesses = new Map<number, { site: StackObjectSite; slot: number }>();
 	const stackObjectInheritedAccesses = new Map<number, StackObjectSite>();
 	for (const action of topology.actionsByKind.get("stack-object-plan") ?? []) {
@@ -1438,15 +1442,22 @@ function emitCompiledVariant(
 			const instruction = fn.instructions[action.ip];
 			if (
 				materialization?.ip !== action.ip ||
-				materialization.kind !== "return" ||
-				instruction?.opcode !== "RETURN" ||
+				(materialization.kind === "return"
+					? instruction?.opcode !== "RETURN"
+					: materialization.values === undefined) ||
 				stackObjectMaterializations.has(action.ip)
 			) {
 				throw new Error(
 					`Invalid stack-object materialization metadata at instruction ${action.ip}`,
 				);
 			}
-			stackObjectMaterializations.set(action.ip, site);
+			stackObjectMaterializations.set(action.ip, {
+				site,
+				values:
+					materialization.kind === "return" && instruction?.opcode === "RETURN"
+						? [instruction.value]
+						: materialization.values!,
+			});
 		} else if (action.role === "access") {
 			const access = planSite.accesses[action.secondaryIndex ?? -1];
 			const instruction = fn.instructions[action.ip];
@@ -3072,6 +3083,7 @@ function nativeIteratorCursorProtocol(cursor: NativeIteratorCursor): string {
 interface StackObjectSite {
 	objectName: string;
 	elided?: true;
+	materializedSlot?: number;
 	slotsOffset?: number;
 	slotCount: number;
 	fieldSlots?: ReadonlyArray<{
@@ -3083,6 +3095,11 @@ interface StackObjectSite {
 	inheritedFastName?: string;
 	inheritedValueName?: string;
 	inheritedGuard?: VmGuardPlan;
+}
+
+interface StackObjectMaterialization {
+	readonly site: StackObjectSite;
+	readonly values: ReadonlyArray<number>;
 }
 
 function stackObjectSlotReference(site: StackObjectSite, slot: number): string {
@@ -3713,7 +3730,7 @@ function emitBody(
 	coro: CoroutineContext | null,
 	stackObjectSites: ReadonlyMap<number, StackObjectSite>,
 	stackObjectAccesses: ReadonlyMap<number, { site: StackObjectSite; slot: number }>,
-	stackObjectMaterializations: ReadonlyMap<number, StackObjectSite>,
+	stackObjectMaterializations: ReadonlyMap<number, StackObjectMaterialization>,
 	stackObjectInheritedAccesses: ReadonlyMap<number, StackObjectSite>,
 	stringSplitProjectionSites: ReadonlyMap<number, NativeStringSplitProjectionSite>,
 	stringSplitCursorSites: ReadonlyMap<number, NativeStringSplitCursorSite>,
@@ -5283,7 +5300,7 @@ interface NativeInstructionContext {
 	readonly iteratorStepInactiveRootMask?: NativeInactiveRootMask;
 	readonly stackObjectSite?: StackObjectSite;
 	readonly stackObjectAccess?: { site: StackObjectSite; slot: number };
-	readonly stackObjectMaterialization?: StackObjectSite;
+	readonly stackObjectMaterialization?: StackObjectMaterialization;
 	readonly stackObjectInheritedAccess?: StackObjectSite;
 	readonly strictCompiledTargets: ReadonlySet<number>;
 	readonly directCompiledTargets: ReadonlySet<number>;
@@ -5602,7 +5619,9 @@ function emitInstruction(
 		relocation,
 		deferredIteratorCursor: false,
 	});
-	const emitGenericInstruction = (): Array<string> | null =>
+	const emitGenericInstruction = (
+		overrides: Partial<NativeInstructionContext> = {},
+	): Array<string> | null =>
 		emitInstruction(
 			instruction,
 			ip,
@@ -5613,7 +5632,7 @@ function emitInstruction(
 			gcUnlink,
 			thisSlot,
 			coro,
-			genericContext(),
+			{ ...genericContext(), ...overrides },
 		);
 	const convert = (mode: NativeValueConversion, value: string): string => {
 		switch (mode) {
@@ -6034,6 +6053,56 @@ function emitInstruction(
 			`  __indexed_length_${id}_induction = (f64) __indexed_length_${id}_value;`,
 			`  r${instruction.dst} = ${reps[instruction.dst] === "number" ? `(f64) __indexed_length_${id}_value` : `mal_value_from_u32(__indexed_length_${id}_value)`};`,
 			`} else {`,
+			...ordinary.map((line) => `  ${line}`),
+			`}`,
+		];
+	}
+	if (stackObjectMaterialization?.site.materializedSlot !== undefined) {
+		const { site, values } = stackObjectMaterialization;
+		const materialized = `__gc_slots[${site.materializedSlot}]`;
+		const fields = site.fieldSlots;
+		const ordinary = emitGenericInstruction();
+		if (ordinary === null) return null;
+		return [
+			`if (${values.map((value) => `r${value} == mal_value_from_object(&${site.objectName}.object)`).join(" || ")}) {`,
+			` if (mal_value_is_undefined(${materialized})) {`,
+			...(fields === undefined
+				? []
+				: [
+						`  MalValue __stack_values_${ip}[${fields.length}] = { ${fields.map((field) => convertedValue(field.representation, "boxed", field.name)).join(", ")} };`,
+					]),
+			`  ${materialized} = ${fields === undefined ? `mal_vm_materialize_stack_object(vm, &${site.objectName}.object)` : `mal_vm_materialize_stack_object_fields(vm, &${site.objectName}.object, __stack_values_${ip}, ${fields.length})`};`,
+			`  ${throwCheck()}`,
+			`}`,
+			...values.map(
+				(value) =>
+					`if (r${value} == mal_value_from_object(&${site.objectName}.object)) r${value} = ${materialized};`,
+			),
+			`}`,
+			...ordinary,
+		];
+	}
+	if (
+		stackObjectAccess?.site.materializedSlot !== undefined &&
+		(instruction.opcode === "LOAD_PROPERTY_STATIC" ||
+			instruction.opcode === "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT" ||
+			instruction.opcode === "STORE_PROPERTY_STATIC" ||
+			instruction.opcode === "STORE_PROPERTY_STATIC_KNOWN_OWN_SLOT")
+	) {
+		const { site, slot } = stackObjectAccess;
+		const materialized = `__gc_slots[${site.materializedSlot}]`;
+		const ordinary = emitGenericInstruction({ nativePlan: undefined });
+		if (ordinary === null) return null;
+		const virtual =
+			instruction.opcode === "LOAD_PROPERTY_STATIC" ||
+			instruction.opcode === "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT"
+				? stackLoad(site, slot, instruction.dst)
+				: stackStore(site, slot, instruction.value);
+		return [
+			`if (r${instruction.object} == mal_value_from_object(&${site.objectName}.object) && mal_value_is_undefined(${materialized})) {`,
+			`  ${virtual}`,
+			`} else {`,
+			`  if (r${instruction.object} == mal_value_from_object(&${site.objectName}.object)) r${instruction.object} = ${materialized};`,
 			...ordinary.map((line) => `  ${line}`),
 			`}`,
 		];
@@ -6537,6 +6606,9 @@ function emitInstruction(
 			}
 			return [
 				...shape,
+				...(stackObjectSite.materializedSlot === undefined
+					? []
+					: [`__gc_slots[${stackObjectSite.materializedSlot}] = MAL_VALUE_UNDEFINED;`]),
 				"mal_perf_stack_object_init();",
 				`mal_object_init_embedded_stack(&vm->heap, &${objectName}, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]), __oshape_${ip}, ${stackObjectSite.fieldSlots === undefined ? `&__gc_slots[${slotsOffset!}]` : "nullptr"});`,
 				...instruction.valueRegisters.map((register, index) =>
@@ -10756,11 +10828,11 @@ function emitInstruction(
 			const materialize: Array<string> = [];
 			if (stackObjectMaterialization !== undefined) {
 				const materialized = `materialized_ret_${ip}`;
-				const fields = stackObjectMaterialization.fieldSlots;
+				const fields = stackObjectMaterialization.site.fieldSlots;
 				const helper =
 					fields === undefined
-						? `mal_vm_materialize_stack_object(vm, &${stackObjectMaterialization.objectName}.object)`
-						: `mal_vm_materialize_stack_object_fields(vm, &${stackObjectMaterialization.objectName}.object, __stack_return_values_${ip}, ${fields.length})`;
+						? `mal_vm_materialize_stack_object(vm, &${stackObjectMaterialization.site.objectName}.object)`
+						: `mal_vm_materialize_stack_object_fields(vm, &${stackObjectMaterialization.site.objectName}.object, __stack_return_values_${ip}, ${fields.length})`;
 				if (fields !== undefined)
 					materialize.push(
 						`MalValue __stack_return_values_${ip}[${fields.length}] = { ${fields

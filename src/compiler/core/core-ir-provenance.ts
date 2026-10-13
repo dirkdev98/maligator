@@ -13,7 +13,10 @@ import {
 } from "./core-ir-loops.ts";
 import type { CoreLoopInductionAnalysis } from "./core-ir-loops.ts";
 import { coreTargetSupportsNumericFusionOperator } from "./core-ir-region-strategies.ts";
-import type { CoreStringSpanConsumer } from "./core-ir-regions.ts";
+import type {
+	CoreStringSpanConsumer,
+	CoreStackObjectMaterialization,
+} from "./core-ir-regions.ts";
 import type {
 	CoreCollectionBuiltinOperation,
 	CorePlanIteratorCursorKind,
@@ -903,10 +906,7 @@ export interface CoreStackObjectCandidate extends CoreLocalSpecializationCandida
 		readonly instruction: CoreInstructionId;
 		readonly slot: number;
 	}>;
-	readonly materializations: ReadonlyArray<{
-		readonly instruction: CoreInstructionId;
-		readonly kind: "return";
-	}>;
+	readonly materializations: ReadonlyArray<CoreStackObjectMaterialization>;
 }
 
 export interface CoreContainedDenseArrayCandidate extends CoreLocalSpecializationCandidateBase<"dense-array"> {
@@ -1203,13 +1203,75 @@ function stackObjectCandidate(
 	controlUses: () => CoreStackObjectControlUses,
 ): CoreStackObjectCandidate | undefined {
 	if (
+		fn.isAsync ||
+		fn.isGenerator ||
 		fn.instructionOpcodeName(layout.instruction) !== "createObjectShaped" ||
 		!control.reachable.has(fn.instructionBlock(layout.instruction))
 	)
 		return undefined;
 	const allocationRoot = roots.get(layout.result) ?? layout.result;
 	const flow = controlUses();
-	if (flow.escapingRoots.has(allocationRoot)) return undefined;
+	const aliases = new Set([allocationRoot]);
+	if (flow.escapingRoots.has(allocationRoot)) {
+		// A guarded helper can join its virtual result with an ordinary fallback result.
+		if (
+			control.irreducibleCycles.some((loop) =>
+				loop.blocks.has(fn.instructionBlock(layout.instruction)),
+			)
+		)
+			return undefined;
+		let changed = true;
+		while (changed) {
+			changed = false;
+			for (const block of control.reachable) {
+				if (handlerBlock(fn, block) !== undefined || index.handlerTargets.has(block))
+					return undefined;
+				const start = fn.kernel.blockParameterStart(block);
+				for (
+					let parameterIndex = 0;
+					parameterIndex < fn.kernel.blockParameterCount(block);
+					parameterIndex++
+				) {
+					const value = fn.kernel.blockParameterValue(start + parameterIndex);
+					const root = roots.get(value) ?? value;
+					if (aliases.has(root)) continue;
+					if (
+						(control.predecessors[block] ?? []).some((edge) => {
+							const argument = edge.arguments[parameterIndex];
+							return (
+								argument !== undefined && aliases.has(roots.get(argument) ?? argument)
+							);
+						})
+					) {
+						aliases.add(root);
+						changed = true;
+					}
+				}
+			}
+			if (aliases.size > 16) return undefined;
+		}
+		for (const block of control.reachable) {
+			if (
+				(control.successors[block] ?? []).some(
+					(edge) =>
+						control.dominates(edge.to, block) &&
+						edge.arguments.some((value) => aliases.has(roots.get(value) ?? value)),
+				)
+			)
+				return undefined;
+		}
+		for (const block of control.reachable) {
+			const terminator = fn.blockTerminator(block);
+			const kind = fn.instructionKind(terminator);
+			const value = instructionOperand(fn, terminator, 0);
+			if (
+				value !== undefined &&
+				aliases.has(roots.get(value) ?? value) &&
+				(kind === "throw" || kind === "branch" || kind === "guard" || kind === "switch")
+			)
+				return undefined;
+		}
+	}
 
 	const slotByStringIndex = new Map(
 		layout.keys.map((stringIndex, slot) => [stringIndex, slot] as const),
@@ -1219,7 +1281,20 @@ function stackObjectCandidate(
 		{ readonly instruction: CoreInstructionId; readonly slot: number }
 	>();
 	let requiresObjectIdentity = false;
-	for (const { instruction, position } of index.uses.get(allocationRoot) ?? []) {
+	const observations = new Map<CoreInstructionId, Set<CoreValueId>>();
+	const identities = new Map<CoreInstructionId, Set<CoreValueId>>();
+	const observe = (
+		map: Map<CoreInstructionId, Set<CoreValueId>>,
+		instruction: CoreInstructionId,
+		value: CoreValueId,
+	): void => {
+		const values = map.get(instruction) ?? new Set();
+		values.add(value);
+		map.set(instruction, values);
+	};
+	for (const { instruction, position } of [...aliases].flatMap(
+		(root) => index.uses.get(root) ?? [],
+	)) {
 		if (!control.reachable.has(fn.instructionBlock(instruction))) continue;
 		const opcode = fn.instructionOpcodeName(instruction);
 		const operator = fn.instructionAttributes(instruction).operator;
@@ -1236,6 +1311,7 @@ function stackObjectCandidate(
 			(opcode === "unary" && operator === "typeof" && position === 0)
 		) {
 			requiresObjectIdentity = true;
+			observe(identities, instruction, instructionOperand(fn, instruction, position)!);
 			continue;
 		}
 		if (
@@ -1249,15 +1325,42 @@ function stackObjectCandidate(
 			accesses.set(instruction, { instruction, slot });
 			continue;
 		}
+		if (
+			opcode === "call" &&
+			position >= 2 &&
+			!fn.instructionAttributes(instruction).construct &&
+			fn.instructionAttributes(instruction).argumentMode === undefined &&
+			handlerBlock(fn, fn.instructionBlock(instruction)) === undefined
+		) {
+			observe(observations, instruction, instructionOperand(fn, instruction, position)!);
+			continue;
+		}
 		return undefined;
 	}
-
-	const materializations = (flow.returns.get(allocationRoot) ?? []).map(
-		(instruction) => ({
+	if (
+		(aliases.size > 1 && observations.size === 0) ||
+		observations.size > 8 ||
+		(observations.size > 0 &&
+			[...control.reachable].some(
+				(block) =>
+					handlerBlock(fn, block) !== undefined || index.handlerTargets.has(block),
+			))
+	)
+		return undefined;
+	if (observations.size > 0)
+		for (const [instruction, values] of identities) observations.set(instruction, values);
+	const materializations: Array<CoreStackObjectMaterialization> = [
+		...new Set([...aliases].flatMap((root) => flow.returns.get(root) ?? [])),
+	].map((instruction) => ({
+		instruction,
+		kind: "return" as const,
+	}));
+	for (const [instruction, values] of observations)
+		materializations.push({
 			instruction,
-			kind: "return" as const,
-		}),
-	);
+			kind: "observe",
+			values: Object.freeze([...values]),
+		});
 	const stableAccesses = Object.freeze(
 		[...accesses.values()].sort((left, right) => left.instruction - right.instruction),
 	);
@@ -1297,10 +1400,7 @@ export interface CoreStackObjectProof {
 		readonly instruction: CoreInstructionId;
 		readonly slot: number;
 	}>;
-	readonly materializations: ReadonlyArray<{
-		readonly instruction: CoreInstructionId;
-		readonly kind: "return";
-	}>;
+	readonly materializations: ReadonlyArray<CoreStackObjectMaterialization>;
 }
 
 export interface CoreStackObjectProofs {

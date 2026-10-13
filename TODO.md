@@ -374,8 +374,14 @@ numeric sorting, stack objects, and string projections.
 - [x] Slice spans: retain one rooted source and normalized bounds across length,
       literal equality, numeric conversion, and conditional string observations.
       Artifact validation rejects untracked aliases and omitted observers. Seven
-      matched laptop pairs improved token classification by 19%; native sanitizer
-      coverage is running. Existing split materialization shares the span helper.
+      matched laptop pairs improved token classification by 19%; Linux ASan/UBSan,
+      both backends, primordial modes, and GC stress passed. Existing split
+      materialization shares the span helper.
+- [x] Conditional helper-result objects: keep multi-field results virtual through
+      guarded helper joins and loop-local observations; materialize once, preserve
+      aliases, and observe subsequent heap mutations. Seven matched laptop pairs
+      improved the source-span helper by 66%; Linux sanitizer coverage is running.
+      Virtual values carried across mixed loop backedges remain conservative.
 - [ ] Extend a measured capture or split producer into the shared span consumers.
 - [ ] Complete the remaining slices below, including their semantic and measured
       acceptance boundaries; the completed cases do not close the broader tasks.

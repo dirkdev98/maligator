@@ -993,7 +993,11 @@ function verifySpecialization(
 				(materialization, index) =>
 					materialization.instruction !==
 						candidate.materializations[index]?.instruction ||
-					materialization.kind !== candidate.materializations[index]?.kind,
+					materialization.kind !== candidate.materializations[index]?.kind ||
+					!sameNumbers(
+						materialization.values ?? [],
+						candidate.materializations[index]?.values ?? [],
+					),
 			)
 		) {
 			fail(`${selection.id} has an invalid stack-object certificate`);
