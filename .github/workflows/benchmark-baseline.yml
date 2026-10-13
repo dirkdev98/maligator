@@ -1,0 +1,73 @@
+name: Full benchmark baseline
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: benchmark-baseline
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  baseline:
+    name: Measure all benchmark families
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    steps:
+      - name: Require the main branch
+        if: github.ref != 'refs/heads/main'
+        run: |
+          echo "Dispatch this workflow from main." >&2
+          exit 1
+
+      - name: Check out the dispatched revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Linux
+        uses: ./.github/actions/setup-linux
+
+      - name: Select matching LLVM archive and link tools
+        run: |
+          sudo apt-get install --yes llvm-19 lld-19
+          mkdir -p "$RUNNER_TEMP/benchmark-bin"
+          ln -s "$(command -v llvm-ar-19)" "$RUNNER_TEMP/benchmark-bin/ar"
+          ln -s "$(command -v ld.lld-19)" "$RUNNER_TEMP/benchmark-bin/ld.lld"
+          echo "$RUNNER_TEMP/benchmark-bin" >> "$GITHUB_PATH"
+
+      - name: Check the runner and record the complete plan
+        run: |
+          set -o pipefail
+          mkdir -p .cache/benchmark-baseline
+          git rev-parse HEAD > .cache/benchmark-baseline/revision.txt
+          uname -a > .cache/benchmark-baseline/host.txt
+          node --version >> .cache/benchmark-baseline/host.txt
+          npm run env:check -- --json | tee .cache/benchmark-baseline/environment.log
+          node ./src/index.ts cache status | tee .cache/benchmark-baseline/cache-before.log
+          npm run bench -- --full --update --plan=json > .cache/benchmark-baseline/plan.json
+
+      - name: Measure JavaScript, HTTP, and self-compilation
+        run: |
+          set -o pipefail
+          npm run bench -- --full --update --json-out .cache/benchmark-baseline/snapshot.json \
+            2>&1 | tee .cache/benchmark-baseline/benchmark.log
+          cp bench/baseline.json .cache/benchmark-baseline/baseline.json
+
+      - name: Retain baseline and verification evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: benchmark-baseline-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .cache/benchmark-baseline/
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 14

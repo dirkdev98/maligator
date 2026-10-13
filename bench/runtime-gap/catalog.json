@@ -3181,6 +3181,32 @@
 			]
 		},
 		{
+			"id": "object-entries-snapshot",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "Eager entry snapshots with deferred pair allocation",
+			"category": "object-array-representation",
+			"mechanisms": ["allocation-gc"],
+			"inputShape": "Four-field ordinary records with indexed pair reads and mutation after the eager snapshot.",
+			"unit": "snapshot",
+			"sourceSeam": "src/compiler/target/native-object-enumeration-snapshot.ts",
+			"fixture": "cases/object-entries-snapshot.mjs",
+			"controls": ["object-values-snapshot", "object-keys-snapshot-traversal"]
+		},
+		{
+			"id": "retained-iterator-callback",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "Callback contracts retained across Iterator resumes",
+			"category": "api-builtins",
+			"mechanisms": ["array-callback"],
+			"inputShape": "128 typed-array elements mapped through a forwarded captured callback, mixing next and iteration.",
+			"unit": "visited element",
+			"sourceSeam": "runtime/src/builtin_iterator_helpers.c",
+			"fixture": "cases/retained-iterator-callback.mjs",
+			"controls": ["forwarded-iterator-terminal", "forwarded-array-callback"]
+		},
+		{
 			"id": "method-name-unique",
 			"group": "runtime",
 			"suite": "runtime",

@@ -67,12 +67,13 @@ describe("functional replacer callback nomination", () => {
 				"fallbacks",
 			]) {
 				const env = { REPLACER_KIND: kind, MAL_HOST_GC: "1" };
-				// Node 24.21 rejects this custom-exec case; @@replace steps 15.11–15.13 require callback and ToString first.
-				// https://tc39.es/ecma262/multipage/text-processing.html#sec-regexp.prototype-%symbol.replace%
+				// @@replace reads flags before exec; Node 24 lacks that step on custom receivers.
 				const expected =
-					kind === "overlap"
-						? "overlap aB b1,coerceb1,a0,coercea0\n"
-						: nodeOracle(fixture, env);
+					kind === "custom"
+						? "custom AB flags|exec0|exec1|exec2|capture|replace0:undefined:CAP|get primitive0|replace1:after:undefined|get primitive1\n"
+						: kind === "overlap"
+							? "overlap aB b1,coerceb1,a0,coercea0\n"
+							: nodeOracle(fixture, env);
 				const measured = spawnSync(pair.compiled, [], {
 					encoding: "utf8",
 					timeout: 60_000,

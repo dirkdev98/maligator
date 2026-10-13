@@ -1742,7 +1742,7 @@ function emitCompiledVariant(
 		NativeObjectEnumerationSnapshotSite
 	>();
 	for (const plan of storage.objectEnumerationSnapshots) {
-		const snapshot = plan.kind === "values" || plan.elementIps.length > 0;
+		const snapshot = plan.kind !== "keys" || plan.elementIps.length > 0;
 		const elementsSlot = snapshot ? nextStackSlot : -1;
 		if (snapshot) nextStackSlot += NATIVE_ENUMERATION_SNAPSHOT_CAPACITY;
 		const materializedSlot = snapshot ? nextStackSlot++ : -1;
@@ -4496,6 +4496,7 @@ function emitBody(
 		expressionIps.has(ip) ||
 		nativeInstructions[ip] !== undefined ||
 		fieldLoads.has(ip) ||
+		objectEnumerationSnapshots.get(ip)?.kind === "entries" ||
 		stackObjectAccesses.has(ip) ||
 		stackObjectInheritedAccesses.has(ip) ||
 		indexedLengthLoopActionByIp.has(ip) ||
@@ -4989,6 +4990,7 @@ function emitBody(
 			fn.instructions[ip]!.opcode === "LOAD_PROPERTY_STATIC" &&
 			nativeInstructions[ip] === undefined &&
 			stackObjectAccesses.get(ip) === undefined &&
+			objectEnumerationSnapshots.get(ip)?.kind !== "entries" &&
 			stackObjectInheritedAccesses.get(ip) === undefined &&
 			nativeStringSplitProjectionActionByIp.get(ip) === undefined &&
 			nativeStringSplitCursorActionByIp.get(ip) === undefined &&
@@ -6496,7 +6498,7 @@ function emitInstruction(
 		const name = `__enumeration_snapshot_${site.callIp}`;
 		const ordinary = emitGenericInstruction();
 		if (ordinary === null) return null;
-		const snapshot = site.kind === "values" || site.elementIps.length > 0;
+		const snapshot = site.kind !== "keys" || site.elementIps.length > 0;
 		const elements = `&__gc_slots[${site.elementsSlot}]`;
 		const materialized = `__gc_slots[${site.materializedSlot}]`;
 		if (
@@ -6544,12 +6546,13 @@ function emitInstruction(
 					]
 				: []),
 			`if (${guard}) {`,
-			`  ${element ? `r${instruction.dst} = ${callValue(instruction.dst, `__gc_slots[${site.elementsSlot} + (u32) ${index}]`)};` : storeNumber(instruction.dst, `(f64) ${name}_value`)}`,
+			`  ${element ? `r${instruction.dst} = ${callValue(instruction.dst, site.kind === "entries" ? `mal_builtin_object_enumeration_entry(vm, ${elements}, (u32) ${index})` : `__gc_slots[${site.elementsSlot} + (u32) ${index}]`)};` : storeNumber(instruction.dst, `(f64) ${name}_value`)}`,
+			...(element && site.kind === "entries" ? [`  ${poll()}`] : []),
 			`} else {`,
 			...(snapshot
 				? [
 						`  if (${name}_active) {`,
-						`    if (mal_value_is_undefined(${materialized})) { MAL_PERF_COUNT(object_${site.kind}_snapshot_materializations); ${materialized} = mal_value_from_array_object(mal_array_object_new_from_values(&vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ARRAY_PROTOTYPE]), ${elements}, ${name}_value)); }`,
+						`    if (mal_value_is_undefined(${materialized})) { MAL_PERF_COUNT(object_${site.kind}_snapshot_materializations); ${materialized} = mal_builtin_object_enumeration_materialize(vm, MAL_OBJECT_ENUMERATION_${site.kind.toUpperCase()}, ${elements}, ${name}_value); }`,
 						`    r${instruction.object} = ${materialized};`,
 						`  }`,
 					]

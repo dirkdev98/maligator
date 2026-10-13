@@ -30,10 +30,16 @@ bool mal_builtin_object_keys_count(MalValue callee, MalValue target, bool locked
 typedef enum MalObjectEnumerationKind {
     MAL_OBJECT_ENUMERATION_KEYS,
     MAL_OBJECT_ENUMERATION_VALUES,
+    MAL_OBJECT_ENUMERATION_ENTRIES,
 } MalObjectEnumerationKind;
 
 // Caller-owned roots retain the eager sequence independently of later receiver mutations.
 bool mal_builtin_object_enumeration_snapshot(MalVm *vm, MalValue callee, MalValue target, bool locked, MalObjectEnumerationKind kind, MalValue *elements, u32 capacity, u32 *count_out);
+
+// Caller-rooted interleaved keys/values become cached pairs in their key slots.
+MalValue mal_builtin_object_enumeration_entry(MalVm *vm, MalValue *elements, u32 index);
+// Consumes entry storage; the caller caches the outer Array before any reentry.
+MalValue mal_builtin_object_enumeration_materialize(MalVm *vm, MalObjectEnumerationKind kind, MalValue *elements, u32 count);
 
 /** Exact Object.values invocation after the locked namespace/property seam. */
 MalValue mal_builtin_object_values_known(

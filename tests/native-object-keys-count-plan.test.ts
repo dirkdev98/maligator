@@ -38,9 +38,9 @@ function inspect(image: ReturnType<typeof compile>) {
 }
 describe("Object enumeration snapshot storage", () => {
 	it.each(["mutable", "locked"] as const)(
-		"retains keys and values after independent handlers and in catch bodies under %s primordials",
+		"retains enumeration snapshots after independent handlers and in catch bodies under %s primordials",
 		(mode) => {
-			for (const kind of ["keys", "values"] as const)
+			for (const kind of ["keys", "values", "entries"] as const)
 				for (const body of [
 					`try{hook();}catch(error){hook(error);}const result=Object.${kind}(record);hook(record);return [result[0],result.length];`,
 					`try{hook();}catch(error){const result=Object.${kind}(record);hook(record);return [result[0],result.length];}return null;`,
@@ -58,7 +58,7 @@ describe("Object enumeration snapshot storage", () => {
 				}
 		},
 	);
-	it.each(["keys", "values"] as const)(
+	it.each(["keys", "values", "entries"] as const)(
 		"declines %s snapshots whose aliases or producer reach exception boundaries",
 		(kind) => {
 			for (const body of [

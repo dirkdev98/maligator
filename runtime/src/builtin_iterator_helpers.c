@@ -35,52 +35,41 @@ static bool mal_ih_get_direct(MalVm *vm, MalValue this_value, MalIteratorRecord 
     return true;
 }
 
-/**
- * Spec GetIteratorFlattenable(obj, reject-primitives). Unlike GetIterator, when
- * @@iterator is undefined/null it falls back to treating obj as the iterator
- * itself (GetIteratorDirect). A non-object always throws a TypeError; callers
- * that allow strings (Iterator.from) handle that case before calling here.
- */
+// Unlike GetIterator, an absent @@iterator treats the object itself as the iterator.
 static bool mal_ih_get_flattenable(MalVm *vm, MalValue obj, MalIteratorRecord *record_out) {
     if (!mal_value_is_object(obj)) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Value is not an object");
         return false;
     }
-
-    MalValue method;
-    if (!mal_vm_get_property(vm, obj, mal_intrinsic_symbol_key(vm, MAL_INTRINSIC_SYMBOL_ITERATOR), &method)) {
-        return false;
+    MalValue roots[3] = {obj, mal_value_new_undefined(), mal_value_new_undefined()};
+    MalRootSpan span;
+    mal_gc_root(&span, roots, 3);
+    bool ok = false;
+    if (!mal_vm_get_property(vm, obj, mal_intrinsic_symbol_key(vm, MAL_INTRINSIC_SYMBOL_ITERATOR), &roots[1])) {
+        goto done;
     }
-
-    MalValue iterator;
-    if (mal_value_is_nil(method)) {
-        // No @@iterator: obj is itself the iterator.
-        iterator = obj;
-    } else if (mal_value_is_callable(method)) {
-        MalCompletion completion = mal_vm_call_value(vm, method, obj, nullptr, 0);
-        if (completion.kind != MAL_COMPLETION_NORMAL) {
-            return false;
-        }
+    if (mal_value_is_nil(roots[1])) {
+        roots[2] = obj;
+    } else if (mal_value_is_callable(roots[1])) {
+        MalCompletion completion = mal_vm_call_value(vm, roots[1], obj, nullptr, 0);
+        if (completion.kind != MAL_COMPLETION_NORMAL) goto done;
         if (!mal_value_is_object(completion.value)) {
             mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Iterator is not an object");
-            return false;
+            goto done;
         }
-        iterator = completion.value;
+        roots[2] = completion.value;
     } else {
-        // Present but neither callable nor nullish.
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "@@iterator is not a function");
-        return false;
+        goto done;
     }
-
     MalValue next;
-    if (!mal_vm_get_property(
-            vm, iterator,
-            mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_NEXT), &next)) {
-        return false;
-    }
-    record_out->iterator = iterator;
+    if (!mal_vm_get_property(vm, roots[2], mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_NEXT), &next)) goto done;
+    record_out->iterator = roots[2];
     record_out->next_method = next;
-    return true;
+    ok = true;
+done:
+    mal_gc_unroot(&span);
+    return ok;
 }
 
 /**
@@ -122,8 +111,6 @@ static bool mal_ih_yield(MalValue value, MalValue *value_out, bool *done_out) {
     return true;
 }
 
-// --- Per-kind lazy steps (read the helper's struct state) -------------------
-
 static bool mal_ih_step_map(
     MalVm *vm, MalIteratorHelperObject *self,
     MalValue *value_out, bool *done_out
@@ -137,8 +124,11 @@ static bool mal_ih_step_map(
     if (done) {
         return mal_ih_finish(self, value_out, done_out);
     }
-    MalValue callback_args[2] = {value, mal_value_from_i32(self->index++)};
-    MalCompletion mapped = mal_vm_call_value(vm, self->callback, mal_value_new_undefined(), callback_args, 2);
+    MalValue callback_args[2] = {value, mal_value_from_f64(self->counter++)};
+    MalRootSpan callback_span;
+    mal_gc_root(&callback_span, callback_args, 2);
+    MalCompletion mapped = mal_vm_call_builtin_callback(vm, self->callback, mal_value_new_undefined(), callback_args, 2);
+    mal_gc_unroot(&callback_span);
     if (mapped.kind == MAL_COMPLETION_THROW) {
         self->done = true;
         mal_vm_iterator_close(vm, &record);
@@ -161,8 +151,11 @@ static bool mal_ih_step_filter(
         if (done) {
             return mal_ih_finish(self, value_out, done_out);
         }
-        MalValue callback_args[2] = {value, mal_value_from_i32(self->index++)};
-        MalCompletion kept = mal_vm_call_value(vm, self->callback, mal_value_new_undefined(), callback_args, 2);
+        MalValue callback_args[2] = {value, mal_value_from_f64(self->counter++)};
+        MalRootSpan callback_span;
+        mal_gc_root(&callback_span, callback_args, 2);
+        MalCompletion kept = mal_vm_call_builtin_callback(vm, self->callback, mal_value_new_undefined(), callback_args, 2);
+        mal_gc_unroot(&callback_span);
         if (kept.kind == MAL_COMPLETION_THROW) {
             self->done = true;
             mal_vm_iterator_close(vm, &record);
@@ -265,8 +258,11 @@ static bool mal_ih_step_flatmap(
         if (done) {
             return mal_ih_finish(self, value_out, done_out);
         }
-        MalValue callback_args[2] = {value, mal_value_from_i32(self->index++)};
-        MalCompletion mapped = mal_vm_call_value(vm, self->callback, mal_value_new_undefined(), callback_args, 2);
+        MalValue callback_args[2] = {value, mal_value_from_f64(self->counter++)};
+        MalRootSpan callback_span;
+        mal_gc_root(&callback_span, callback_args, 2);
+        MalCompletion mapped = mal_vm_call_builtin_callback(vm, self->callback, mal_value_new_undefined(), callback_args, 2);
+        mal_gc_unroot(&callback_span);
         if (mapped.kind == MAL_COMPLETION_THROW) {
             self->done = true;
             mal_vm_iterator_close(vm, &outer);
@@ -318,16 +314,16 @@ static bool mal_ih_step_concat(
             self->inner_next = mal_value_new_undefined();
         }
 
-        if (self->index >= length) {
+        if (self->state.index >= length) {
             return mal_ih_finish(self, value_out, done_out);
         }
 
         // Open the next source: call its captured @@iterator method.
         MalValue iterable;
         MalValue method;
-        iterable = mal_ih_zip_get(vm, self->sources, self->index);
-        method = mal_ih_zip_get(vm, self->source_methods, self->index);
-        self->index++;
+        iterable = mal_ih_zip_get(vm, self->sources, self->state.index);
+        method = mal_ih_zip_get(vm, self->source_methods, self->state.index);
+        self->state.index++;
 
         MalCompletion opened = mal_vm_call_value(vm, method, iterable, nullptr, 0);
         if (opened.kind != MAL_COMPLETION_NORMAL) {
@@ -575,7 +571,7 @@ static bool mal_ih_step_windows(
             return false;
         }
         if (done) {
-            if (self->index != 0 && buffer->length != 0 &&
+            if (self->state.index != 0 && buffer->length != 0 &&
                 (f64) buffer->length < self->counter) {
                 self->done = true;
                 return mal_ih_yield(
@@ -594,37 +590,89 @@ static bool mal_ih_step_windows(
     }
 }
 
-// --- Shared %IteratorHelperPrototype% next / return -------------------------
+static bool mal_ih_has_callback(MalIteratorHelperKind kind) {
+    return kind == MAL_ITERATOR_HELPER_MAP || kind == MAL_ITERATOR_HELPER_FILTER ||
+        kind == MAL_ITERATOR_HELPER_FLATMAP;
+}
 
 static bool mal_ih_advance(
     MalVm *vm, MalIteratorHelperObject *self,
     MalValue *value_out, bool *done_out
 ) {
+    MalValue live_helper = mal_value_from_iterator_helper_object(self);
+    MalRootSpan helper_span;
+    mal_gc_root(&helper_span, &live_helper, 1);
+    bool has_callback = mal_ih_has_callback(self->kind);
+    MalExactScriptCall callback;
+    bool resumed = false;
+    if (has_callback && self->state.callback_function_index >= 0 &&
+        self->state.callback_function_index < vm->runtime_image->function_count &&
+        (vm->exact_script_call == nullptr || vm->exact_script_call->callee != self->callback)
+#if MAL_REALMS
+        && mal_vm_callee_realm(vm, self->callback) == vm->current_realm
+#endif
+    ) {
+        i32 index = self->state.callback_function_index;
+        // Only the stable ID survives suspension; eval may relocate the function table.
+        MalCompiledFunction compiled = vm->runtime_image->functions[index].compiled;
+        if (compiled != nullptr) {
+            callback = (MalExactScriptCall) {
+                .previous = vm->exact_script_call,
+                .callee = self->callback,
+                .function_index = index,
+                .compiled_callback = compiled,
+                .numeric_sort_comparator = nullptr,
+                .numeric_sort_kernel = nullptr,
+                .env = mal_value_to_function_object(self->callback)->creation_env,
+                .numeric_reduce_callback = nullptr,
+            };
+            vm->exact_script_call = &callback;
+            resumed = true;
+            MAL_PERF_COUNT(iterator_lazy_callback_resumes);
+        }
+    }
+    bool ok;
     switch (self->kind) {
         case MAL_ITERATOR_HELPER_MAP:
-            return mal_ih_step_map(vm, self, value_out, done_out);
+            ok = mal_ih_step_map(vm, self, value_out, done_out);
+            break;
         case MAL_ITERATOR_HELPER_FILTER:
-            return mal_ih_step_filter(vm, self, value_out, done_out);
+            ok = mal_ih_step_filter(vm, self, value_out, done_out);
+            break;
         case MAL_ITERATOR_HELPER_TAKE:
-            return mal_ih_step_take(vm, self, value_out, done_out);
+            ok = mal_ih_step_take(vm, self, value_out, done_out);
+            break;
         case MAL_ITERATOR_HELPER_DROP:
-            return mal_ih_step_drop(vm, self, value_out, done_out);
+            ok = mal_ih_step_drop(vm, self, value_out, done_out);
+            break;
         case MAL_ITERATOR_HELPER_FLATMAP:
-            return mal_ih_step_flatmap(vm, self, value_out, done_out);
+            ok = mal_ih_step_flatmap(vm, self, value_out, done_out);
+            break;
         case MAL_ITERATOR_HELPER_WRAP: {
             MalIteratorRecord record = mal_ih_underlying(self);
-            return mal_vm_iterator_step(vm, &record, value_out, done_out);
+            ok = mal_vm_iterator_step(vm, &record, value_out, done_out);
+            break;
         }
         case MAL_ITERATOR_HELPER_CONCAT:
-            return mal_ih_step_concat(vm, self, value_out, done_out);
+            ok = mal_ih_step_concat(vm, self, value_out, done_out);
+            break;
         case MAL_ITERATOR_HELPER_ZIP:
-            return mal_ih_step_zip(vm, self, value_out, done_out);
+            ok = mal_ih_step_zip(vm, self, value_out, done_out);
+            break;
         case MAL_ITERATOR_HELPER_CHUNKS:
-            return mal_ih_step_chunks(vm, self, value_out, done_out);
+            ok = mal_ih_step_chunks(vm, self, value_out, done_out);
+            break;
         case MAL_ITERATOR_HELPER_WINDOWS:
-            return mal_ih_step_windows(vm, self, value_out, done_out);
+            ok = mal_ih_step_windows(vm, self, value_out, done_out);
+            break;
+        default:
+            ok = mal_ih_finish(self, value_out, done_out);
+            break;
     }
-    return mal_ih_finish(self, value_out, done_out);
+    if (resumed) vm->exact_script_call = callback.previous;
+    if (!ok && has_callback) self->done = true;
+    mal_gc_unroot(&helper_span);
+    return ok;
 }
 
 static MalValue mal_ih_proto_next(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
@@ -647,7 +695,7 @@ static MalValue mal_ih_proto_next(MalVm *vm, MalValue this_value, const MalValue
         return mal_vm_create_iter_result(vm, mal_value_new_undefined(), true);
     }
     if (self->kind == MAL_ITERATOR_HELPER_ZIP) {
-        self->index = 1;
+        self->state.index = 1;
     }
     self->running = true;
     MalValue result;
@@ -696,7 +744,7 @@ int mal_builtin_iterator_helper_try_step(
     // Recreate that native frame's GC suppression while helper state and callback
     // scratch live in C locals.
     if (self->kind == MAL_ITERATOR_HELPER_ZIP) {
-        self->index = 1;
+        self->state.index = 1;
     }
     self->running = true;
     vm->gc_native_frames++;
@@ -746,7 +794,7 @@ static MalValue mal_ih_proto_return(MalVm *vm, MalValue this_value, const MalVal
 
     // A suspended-start generator becomes completed before closing its inputs,
     // so close hooks may observe completed rather than executing state.
-    self->running = self->kind != MAL_ITERATOR_HELPER_ZIP || self->index != 0;
+    self->running = self->kind != MAL_ITERATOR_HELPER_ZIP || self->state.index != 0;
 
     // zip closes every still-open input iterator.
     if (self->kind == MAL_ITERATOR_HELPER_ZIP) {
@@ -779,8 +827,6 @@ static MalValue mal_ih_proto_return(MalVm *vm, MalValue this_value, const MalVal
     return mal_vm_create_iter_result(vm, mal_value_new_undefined(), true);
 }
 
-// --- Helper construction -----------------------------------------------------
-
 static MalValue mal_ih_new(MalVm *vm, MalIteratorHelperKind kind, const MalIteratorRecord *record, MalValue callback, f64 counter) {
     MalIteratorHelperObject *helper = mal_heap_alloc(&vm->heap, sizeof(MalIteratorHelperObject), MAL_HEAP_ITERATOR_HELPER_OBJECT);
     mal_object_init(&vm->heap, &helper->object, MAL_HEAP_ITERATOR_HELPER_OBJECT, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ITERATOR_HELPER_PROTOTYPE]));
@@ -791,7 +837,13 @@ static MalValue mal_ih_new(MalVm *vm, MalIteratorHelperKind kind, const MalItera
     helper->counter = counter;
     helper->done = false;
     helper->running = false;
-    helper->index = 0;
+    helper->state.index = 0;
+    if (mal_ih_has_callback(kind)) {
+        MalExactScriptCall candidate;
+        bool nominated = mal_vm_prepare_builtin_callback(vm, callback, &candidate);
+        helper->state.callback_function_index = nominated ? candidate.function_index : -1;
+        if (nominated) MAL_PERF_COUNT(iterator_lazy_callback_nominations);
+    }
     helper->inner_iterator = mal_value_new_undefined();
     helper->inner_next = mal_value_new_undefined();
     helper->sources = mal_value_new_undefined();
@@ -957,7 +1009,7 @@ static MalValue mal_ih_chunking(
     if (kind == MAL_ITERATOR_HELPER_WINDOWS) {
         helper->sources = mal_value_from_array_object(
             mal_intrinsic_new_array(vm, 0));
-        helper->index = allow_partial ? 1 : 0;
+        helper->state.index = allow_partial ? 1 : 0;
     }
     return helper_value;
 }
@@ -1191,7 +1243,7 @@ static MalValue mal_ih_method_for_each(MalVm *vm, MalValue this_value, const Mal
         vm->exact_script_call = &runtime_callback;
         MAL_PERF_COUNT(iterator_for_each_runtime_callback_nominations);
     }
-    i32 index = 0;
+    f64 index = 0;
     while (true) {
         MalValue value;
         bool done;
@@ -1202,7 +1254,7 @@ static MalValue mal_ih_method_for_each(MalVm *vm, MalValue this_value, const Mal
             break;
         }
         roots[0] = value;
-        MalValue callback_args[2] = {value, mal_value_from_i32(index++)};
+        MalValue callback_args[2] = {value, mal_value_from_f64(index++)};
         MalCompletion result = mal_vm_call_builtin_callback(vm, callback, mal_value_new_undefined(), callback_args, 2);
         if (result.kind == MAL_COMPLETION_THROW) {
             mal_vm_iterator_close(vm, &record);
@@ -1244,7 +1296,7 @@ static MalValue mal_ih_method_reduce(MalVm *vm, MalValue this_value, const MalVa
     MalValue ret = mal_value_new_undefined();
 
     MalValue accumulator;
-    i32 index = 0;
+    f64 index = 0;
     if (arg_count >= 2) {
         accumulator = args[1];
     } else {
@@ -1271,7 +1323,7 @@ static MalValue mal_ih_method_reduce(MalVm *vm, MalValue this_value, const MalVa
             goto done;
         }
         roots[1] = value;
-        MalValue callback_args[3] = {accumulator, value, mal_value_from_i32(index++)};
+        MalValue callback_args[3] = {accumulator, value, mal_value_from_f64(index++)};
         MalCompletion result = mal_vm_call_builtin_callback(vm, callback, mal_value_new_undefined(), callback_args, 3);
         if (result.kind == MAL_COMPLETION_THROW) {
             mal_vm_iterator_close(vm, &record);
@@ -1314,7 +1366,7 @@ static MalValue mal_ih_predicate(MalVm *vm, MalValue this_value, const MalValue 
         MAL_PERF_COUNT(iterator_predicate_runtime_callback_nominations);
     }
     MalValue ret = mal_value_new_undefined();
-    i32 index = 0;
+    f64 index = 0;
     while (true) {
         MalValue value;
         bool done;
@@ -1328,7 +1380,7 @@ static MalValue mal_ih_predicate(MalVm *vm, MalValue this_value, const MalValue 
             goto done;
         }
         roots[0] = value;
-        MalValue callback_args[2] = {value, mal_value_from_i32(index++)};
+        MalValue callback_args[2] = {value, mal_value_from_f64(index++)};
         MalCompletion result = mal_vm_call_builtin_callback(vm, callback, mal_value_new_undefined(), callback_args, 2);
         if (result.kind == MAL_COMPLETION_THROW) {
             mal_vm_iterator_close(vm, &record);

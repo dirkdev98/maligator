@@ -1123,10 +1123,16 @@ MalValue mal_builtin_object_keys_known(
 }
 
 static MalValue mal_builtin_object_values(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee);
+static MalValue mal_builtin_object_entries(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee);
 
 static bool mal_builtin_object_enumeration_admits(MalValue callee, MalValue target, bool locked, MalObjectEnumerationKind kind) {
-    MalNativeFunctionCallback expected = kind == MAL_OBJECT_ENUMERATION_KEYS
-        ? mal_builtin_object_keys : mal_builtin_object_values;
+    MalNativeFunctionCallback expected;
+    switch (kind) {
+        case MAL_OBJECT_ENUMERATION_KEYS: expected = mal_builtin_object_keys; break;
+        case MAL_OBJECT_ENUMERATION_VALUES: expected = mal_builtin_object_values; break;
+        case MAL_OBJECT_ENUMERATION_ENTRIES: expected = mal_builtin_object_entries; break;
+        default: return false;
+    }
     return (locked || (mal_value_is_native_function_object(callee) &&
         mal_native_function_object_callback(mal_value_to_native_function_object(callee)) == expected)) &&
         mal_value_is_heap_type(target, MAL_HEAP_OBJECT);
@@ -1144,18 +1150,46 @@ bool mal_builtin_object_enumeration_snapshot(MalVm *vm, MalValue callee, MalValu
     if (mal_object_has_public_overflow(object)) return false;
     const MalShape *shape = object->shape;
     u32 count = 0;
+    u32 stride = kind == MAL_OBJECT_ENUMERATION_ENTRIES ? 2 : 1;
     for (u32 i = 0; i < shape->inline_count; i++) {
         const MalShapeProp *prop = &shape->props[i];
         if (!mal_value_is_string(prop->key) || !(prop->attrs & MAL_PROPERTY_ENUMERABLE)) continue;
-        if (count == capacity || (kind == MAL_OBJECT_ENUMERATION_VALUES &&
+        if (count == capacity / stride || (kind != MAL_OBJECT_ENUMERATION_KEYS &&
             (prop->attrs & MAL_PROPERTY_ACCESSOR))) return false;
-        elements[count++] = kind == MAL_OBJECT_ENUMERATION_KEYS
-            ? prop->key : mal_object_field_load(object, prop->slot);
+        elements[count * stride] = kind == MAL_OBJECT_ENUMERATION_VALUES
+            ? mal_object_field_load(object, prop->slot) : prop->key;
+        if (kind == MAL_OBJECT_ENUMERATION_ENTRIES)
+            elements[count * stride + 1] = mal_object_field_load(object, prop->slot);
+        count++;
     }
     *count_out = count;
     if (kind == MAL_OBJECT_ENUMERATION_KEYS) MAL_PERF_COUNT(object_keys_snapshot_admissions);
-    else MAL_PERF_COUNT(object_values_snapshot_admissions);
+    else if (kind == MAL_OBJECT_ENUMERATION_VALUES) MAL_PERF_COUNT(object_values_snapshot_admissions);
+    else MAL_PERF_COUNT(object_entries_snapshot_admissions);
     return true;
+}
+
+MalValue mal_builtin_object_enumeration_entry(MalVm *vm, MalValue *elements, u32 index) {
+    MalValue *entry = &elements[index * 2];
+    // Captured keys are strings, so an Array in this slot unambiguously owns the pair identity.
+    if (mal_value_is_string(entry[0])) {
+        entry[0] = mal_value_from_array_object(mal_intrinsic_new_dense_pair(vm, entry[0], entry[1]));
+        entry[1] = MAL_VALUE_UNDEFINED;
+        MAL_PERF_COUNT(object_entries_snapshot_pair_materializations);
+    }
+    return entry[0];
+}
+
+MalValue mal_builtin_object_enumeration_materialize(MalVm *vm, MalObjectEnumerationKind kind, MalValue *elements, u32 count) {
+    if (kind == MAL_OBJECT_ENUMERATION_ENTRIES) {
+        for (u32 i = 0; i < count; i++)
+            (void) mal_builtin_object_enumeration_entry(vm, elements, i);
+        // Forward compaction cannot overwrite an unread pair; the outer cache owns later reads.
+        for (u32 i = 0; i < count; i++) elements[i] = elements[i * 2];
+        for (u32 i = count; i < count * 2; i++) elements[i] = MAL_VALUE_UNDEFINED;
+    }
+    return mal_value_from_array_object(mal_array_object_new_from_values(
+        &vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ARRAY_PROTOTYPE]), elements, count));
 }
 
 bool mal_builtin_object_keys_count(MalValue callee, MalValue target, bool locked, u32 *count_out) {

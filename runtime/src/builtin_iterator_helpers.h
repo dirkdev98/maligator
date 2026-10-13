@@ -44,7 +44,7 @@ typedef struct MalIteratorHelperObject {
 
     // map/filter/flatMap predicate (undefined for take/drop/wrap).
     MalValue callback;
-    // take/drop remaining count; chunks/windows group size.
+    // Callback Number index; take/drop remaining count; chunks/windows group size.
     f64 counter;
 
     // flatMap: the inner iterator currently being drained.
@@ -72,7 +72,10 @@ typedef struct MalIteratorHelperObject {
     // Guards against re-entrant next() (GeneratorState "executing"): a TypeError
     // is thrown if next() is called while a previous next() is still on the stack.
     bool running;
-    i32 index;
+    union {
+        i32 index;
+        i32 callback_function_index;
+    } state;
 } MalIteratorHelperObject;
 
 static_assert(sizeof(MalIteratorHelperObject) <= 128, "MalIteratorHelperObject outgrew its 128-byte size class");

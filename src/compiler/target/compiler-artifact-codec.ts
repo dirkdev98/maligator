@@ -96,7 +96,7 @@ import type {
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal artifacts are hard cut-overs: stale cache entries rebuild.
-export const COMPILER_ARTIFACT_VERSION = 215;
+export const COMPILER_ARTIFACT_VERSION = 216;
 
 function validateClosureCaptureOwners(
 	owners: ReadonlyArray<number>,
@@ -1083,7 +1083,7 @@ function writeNativeStorage(w: Writer, storage: NativeStoragePlan | undefined): 
 	w.u32(storage.objectEnumerationSnapshots.length);
 	for (const plan of storage.objectEnumerationSnapshots) {
 		w.i32(plan.callIp);
-		w.u8(plan.kind === "keys" ? 0 : 1);
+		w.u8((["keys", "values", "entries"] as const).indexOf(plan.kind));
 		w.i32Array([...plan.lengthIps]);
 		w.i32Array([...plan.elementIps]);
 		w.i32Array([...plan.claimedIps]);
@@ -1628,7 +1628,7 @@ function readNativeStorage(r: Reader): NativeStoragePlan {
 	}));
 	const objectEnumerationSnapshots = Array.from({ length: r.count(21) }, () => {
 		const callIp = r.i32();
-		const kind = (["keys", "values"] as const)[r.u8()];
+		const kind = (["keys", "values", "entries"] as const)[r.u8()];
 		if (kind === undefined)
 			throw new RangeError("Invalid native Object enumeration snapshot kind");
 		return {

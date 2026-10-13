@@ -11,7 +11,7 @@ export const NATIVE_ENUMERATION_SNAPSHOT_CAPACITY = 16;
 
 export interface NativeObjectEnumerationSnapshotPlan {
 	readonly callIp: number;
-	readonly kind: "keys" | "values";
+	readonly kind: "keys" | "values" | "entries";
 	readonly lengthIps: ReadonlyArray<number>;
 	readonly elementIps: ReadonlyArray<number>;
 	readonly claimedIps: ReadonlyArray<number>;
@@ -43,7 +43,9 @@ export function selectNativeObjectEnumerationSnapshots(
 		if (
 			(call.opcode !== "CALL" && call.opcode !== "CALL_KNOWN") ||
 			(call.opcode === "CALL_KNOWN" &&
-				((call.operation !== "Object.keys" && call.operation !== "Object.values") ||
+				((call.operation !== "Object.keys" &&
+					call.operation !== "Object.values" &&
+					call.operation !== "Object.entries") ||
 					call.construct ||
 					call.argumentMode !== undefined)) ||
 			call.arguments.length !== 1 ||
@@ -51,11 +53,13 @@ export function selectNativeObjectEnumerationSnapshots(
 			unavailable(ip)
 		)
 			continue;
-		let kind: "keys" | "values" | undefined =
+		let kind: "keys" | "values" | "entries" | undefined =
 			call.opcode === "CALL_KNOWN"
 				? call.operation === "Object.keys"
 					? "keys"
-					: "values"
+					: call.operation === "Object.values"
+						? "values"
+						: "entries"
 				: undefined;
 		if (call.opcode === "CALL") {
 			for (let prior = ip - 1; prior >= Math.max(0, ip - 16); prior--) {
@@ -73,6 +77,7 @@ export function selectNativeObjectEnumerationSnapshots(
 				if (op.opcode === "LOAD_PROPERTY_STATIC") {
 					if (named(op.stringIndex, "keys")) kind = "keys";
 					else if (named(op.stringIndex, "values")) kind = "values";
+					else if (named(op.stringIndex, "entries")) kind = "entries";
 				}
 				break;
 			}

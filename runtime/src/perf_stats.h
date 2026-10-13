@@ -241,6 +241,9 @@ typedef struct MalPerfStats {
     u64 object_keys_snapshot_materializations;
     u64 object_values_snapshot_admissions;
     u64 object_values_snapshot_materializations;
+    u64 object_entries_snapshot_admissions;
+    u64 object_entries_snapshot_materializations;
+    u64 object_entries_snapshot_pair_materializations;
     u64 string_span_character_reads;
     u64 string_span_code_point_reads;
     u64 string_span_char_at_reads;
@@ -370,6 +373,8 @@ typedef struct MalPerfStats {
 	u64 iterator_for_each_runtime_callback_nominations;
 	u64 iterator_reduce_runtime_callback_nominations;
 	u64 iterator_predicate_runtime_callback_nominations;
+	u64 iterator_lazy_callback_nominations;
+	u64 iterator_lazy_callback_resumes;
 	u64 json_parse_runtime_callback_nominations;
 	u64 json_stringify_runtime_callback_nominations;
 
