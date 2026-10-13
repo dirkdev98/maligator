@@ -10289,6 +10289,36 @@
 			"decisions": []
 		},
 		{
+			"id": "[\"%MAL_INTRINSIC_NODE_FS_MODULE%\",\"fdatasync\"]",
+			"owner": "%MAL_INTRINSIC_NODE_FS_MODULE%",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:fs\"]",
+				"%MAL_INTRINSIC_NODE_FS_MODULE%",
+				"MAL_INTRINSIC_NODE_FS_MODULE",
+				"mal_host_install_node_fs:default"
+			],
+			"key": "fdatasync",
+			"kind": "data",
+			"operations": ["%MAL_INTRINSIC_NODE_FS_MODULE%.fdatasync"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_FS_MODULE%\",\"fdatasyncSync\"]",
+			"owner": "%MAL_INTRINSIC_NODE_FS_MODULE%",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:fs\"]",
+				"%MAL_INTRINSIC_NODE_FS_MODULE%",
+				"MAL_INTRINSIC_NODE_FS_MODULE",
+				"mal_host_install_node_fs:default"
+			],
+			"key": "fdatasyncSync",
+			"kind": "data",
+			"operations": ["%MAL_INTRINSIC_NODE_FS_MODULE%.fdatasyncSync"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
 			"id": "[\"%MAL_INTRINSIC_NODE_FS_MODULE%\",\"fstatSync\"]",
 			"owner": "%MAL_INTRINSIC_NODE_FS_MODULE%",
 			"ownerPaths": [
@@ -10300,6 +10330,21 @@
 			"key": "fstatSync",
 			"kind": "data",
 			"operations": ["%MAL_INTRINSIC_NODE_FS_MODULE%.fstatSync"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_FS_MODULE%\",\"fsync\"]",
+			"owner": "%MAL_INTRINSIC_NODE_FS_MODULE%",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:fs\"]",
+				"%MAL_INTRINSIC_NODE_FS_MODULE%",
+				"MAL_INTRINSIC_NODE_FS_MODULE",
+				"mal_host_install_node_fs:default"
+			],
+			"key": "fsync",
+			"kind": "data",
+			"operations": ["%MAL_INTRINSIC_NODE_FS_MODULE%.fdatasync"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -10390,6 +10435,21 @@
 			"key": "mkdirSync",
 			"kind": "data",
 			"operations": ["%MAL_INTRINSIC_NODE_FS_MODULE%.mkdirSync"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_FS_MODULE%\",\"mkdtemp\"]",
+			"owner": "%MAL_INTRINSIC_NODE_FS_MODULE%",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:fs\"]",
+				"%MAL_INTRINSIC_NODE_FS_MODULE%",
+				"MAL_INTRINSIC_NODE_FS_MODULE",
+				"mal_host_install_node_fs:default"
+			],
+			"key": "mkdtemp",
+			"kind": "data",
+			"operations": ["%MAL_INTRINSIC_NODE_FS_MODULE%.mkdtemp"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -12207,6 +12267,110 @@
 			"decisions": []
 		},
 		{
+			"id": "[\"%MAL_INTRINSIC_NODE_FS_MODULE%.fdatasync\",\"length\"]",
+			"owner": "%MAL_INTRINSIC_NODE_FS_MODULE%.fdatasync",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_FS_MODULE%.fdatasync",
+				"%MAL_INTRINSIC_NODE_FS_MODULE%.fdatasync.prototype.constructor",
+				"mal_host_install_node_fs:fdatasync"
+			],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_FS_MODULE%.fdatasync\",\"name\"]",
+			"owner": "%MAL_INTRINSIC_NODE_FS_MODULE%.fdatasync",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_FS_MODULE%.fdatasync",
+				"%MAL_INTRINSIC_NODE_FS_MODULE%.fdatasync.prototype.constructor",
+				"mal_host_install_node_fs:fdatasync"
+			],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_FS_MODULE%.fdatasync\",\"prototype\"]",
+			"owner": "%MAL_INTRINSIC_NODE_FS_MODULE%.fdatasync",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_FS_MODULE%.fdatasync",
+				"%MAL_INTRINSIC_NODE_FS_MODULE%.fdatasync.prototype.constructor",
+				"mal_host_install_node_fs:fdatasync"
+			],
+			"key": "prototype",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_FS_MODULE%.fdatasync.prototype\",\"constructor\"]",
+			"owner": "%MAL_INTRINSIC_NODE_FS_MODULE%.fdatasync.prototype",
+			"ownerPaths": ["%MAL_INTRINSIC_NODE_FS_MODULE%.fdatasync.prototype"],
+			"key": "constructor",
+			"kind": "data",
+			"operations": ["%MAL_INTRINSIC_NODE_FS_MODULE%.fdatasync"],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_FS_MODULE%.fdatasyncSync\",\"length\"]",
+			"owner": "%MAL_INTRINSIC_NODE_FS_MODULE%.fdatasyncSync",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_FS_MODULE%.fdatasyncSync",
+				"%MAL_INTRINSIC_NODE_FS_MODULE%.fdatasyncSync.prototype.constructor",
+				"mal_host_install_node_fs:fdatasyncSync"
+			],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_FS_MODULE%.fdatasyncSync\",\"name\"]",
+			"owner": "%MAL_INTRINSIC_NODE_FS_MODULE%.fdatasyncSync",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_FS_MODULE%.fdatasyncSync",
+				"%MAL_INTRINSIC_NODE_FS_MODULE%.fdatasyncSync.prototype.constructor",
+				"mal_host_install_node_fs:fdatasyncSync"
+			],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_FS_MODULE%.fdatasyncSync\",\"prototype\"]",
+			"owner": "%MAL_INTRINSIC_NODE_FS_MODULE%.fdatasyncSync",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_FS_MODULE%.fdatasyncSync",
+				"%MAL_INTRINSIC_NODE_FS_MODULE%.fdatasyncSync.prototype.constructor",
+				"mal_host_install_node_fs:fdatasyncSync"
+			],
+			"key": "prototype",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_FS_MODULE%.fdatasyncSync.prototype\",\"constructor\"]",
+			"owner": "%MAL_INTRINSIC_NODE_FS_MODULE%.fdatasyncSync.prototype",
+			"ownerPaths": ["%MAL_INTRINSIC_NODE_FS_MODULE%.fdatasyncSync.prototype"],
+			"key": "constructor",
+			"kind": "data",
+			"operations": ["%MAL_INTRINSIC_NODE_FS_MODULE%.fdatasyncSync"],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
 			"id": "[\"%MAL_INTRINSIC_NODE_FS_MODULE%.fstatSync\",\"length\"]",
 			"owner": "%MAL_INTRINSIC_NODE_FS_MODULE%.fstatSync",
 			"ownerPaths": [
@@ -12233,10 +12397,63 @@
 			"decisions": []
 		},
 		{
+			"id": "[\"%MAL_INTRINSIC_NODE_FS_MODULE%.fsync\",\"length\"]",
+			"owner": "%MAL_INTRINSIC_NODE_FS_MODULE%.fsync",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_FS_MODULE%.fsync",
+				"%MAL_INTRINSIC_NODE_FS_MODULE%.fsync.prototype.constructor",
+				"mal_host_install_node_fs:fsync"
+			],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_FS_MODULE%.fsync\",\"name\"]",
+			"owner": "%MAL_INTRINSIC_NODE_FS_MODULE%.fsync",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_FS_MODULE%.fsync",
+				"%MAL_INTRINSIC_NODE_FS_MODULE%.fsync.prototype.constructor",
+				"mal_host_install_node_fs:fsync"
+			],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_FS_MODULE%.fsync\",\"prototype\"]",
+			"owner": "%MAL_INTRINSIC_NODE_FS_MODULE%.fsync",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_FS_MODULE%.fsync",
+				"%MAL_INTRINSIC_NODE_FS_MODULE%.fsync.prototype.constructor",
+				"mal_host_install_node_fs:fsync"
+			],
+			"key": "prototype",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_FS_MODULE%.fsync.prototype\",\"constructor\"]",
+			"owner": "%MAL_INTRINSIC_NODE_FS_MODULE%.fsync.prototype",
+			"ownerPaths": ["%MAL_INTRINSIC_NODE_FS_MODULE%.fsync.prototype"],
+			"key": "constructor",
+			"kind": "data",
+			"operations": ["%MAL_INTRINSIC_NODE_FS_MODULE%.fdatasync"],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
 			"id": "[\"%MAL_INTRINSIC_NODE_FS_MODULE%.fsyncSync\",\"length\"]",
 			"owner": "%MAL_INTRINSIC_NODE_FS_MODULE%.fsyncSync",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_FS_MODULE%.fsyncSync",
+				"%MAL_INTRINSIC_NODE_FS_MODULE%.fsyncSync.prototype.constructor",
 				"mal_host_install_node_fs:fsyncSync"
 			],
 			"key": "length",
@@ -12250,11 +12467,36 @@
 			"owner": "%MAL_INTRINSIC_NODE_FS_MODULE%.fsyncSync",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_FS_MODULE%.fsyncSync",
+				"%MAL_INTRINSIC_NODE_FS_MODULE%.fsyncSync.prototype.constructor",
 				"mal_host_install_node_fs:fsyncSync"
 			],
 			"key": "name",
 			"kind": "data",
 			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_FS_MODULE%.fsyncSync\",\"prototype\"]",
+			"owner": "%MAL_INTRINSIC_NODE_FS_MODULE%.fsyncSync",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_FS_MODULE%.fsyncSync",
+				"%MAL_INTRINSIC_NODE_FS_MODULE%.fsyncSync.prototype.constructor",
+				"mal_host_install_node_fs:fsyncSync"
+			],
+			"key": "prototype",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_FS_MODULE%.fsyncSync.prototype\",\"constructor\"]",
+			"owner": "%MAL_INTRINSIC_NODE_FS_MODULE%.fsyncSync.prototype",
+			"ownerPaths": ["%MAL_INTRINSIC_NODE_FS_MODULE%.fsyncSync.prototype"],
+			"key": "constructor",
+			"kind": "data",
+			"operations": ["%MAL_INTRINSIC_NODE_FS_MODULE%.fsyncSync"],
 			"task": "H-10",
 			"decisions": []
 		},
@@ -12389,10 +12631,63 @@
 			"decisions": []
 		},
 		{
+			"id": "[\"%MAL_INTRINSIC_NODE_FS_MODULE%.mkdtemp\",\"length\"]",
+			"owner": "%MAL_INTRINSIC_NODE_FS_MODULE%.mkdtemp",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_FS_MODULE%.mkdtemp",
+				"%MAL_INTRINSIC_NODE_FS_MODULE%.mkdtemp.prototype.constructor",
+				"mal_host_install_node_fs:mkdtemp"
+			],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_FS_MODULE%.mkdtemp\",\"name\"]",
+			"owner": "%MAL_INTRINSIC_NODE_FS_MODULE%.mkdtemp",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_FS_MODULE%.mkdtemp",
+				"%MAL_INTRINSIC_NODE_FS_MODULE%.mkdtemp.prototype.constructor",
+				"mal_host_install_node_fs:mkdtemp"
+			],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_FS_MODULE%.mkdtemp\",\"prototype\"]",
+			"owner": "%MAL_INTRINSIC_NODE_FS_MODULE%.mkdtemp",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_FS_MODULE%.mkdtemp",
+				"%MAL_INTRINSIC_NODE_FS_MODULE%.mkdtemp.prototype.constructor",
+				"mal_host_install_node_fs:mkdtemp"
+			],
+			"key": "prototype",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_FS_MODULE%.mkdtemp.prototype\",\"constructor\"]",
+			"owner": "%MAL_INTRINSIC_NODE_FS_MODULE%.mkdtemp.prototype",
+			"ownerPaths": ["%MAL_INTRINSIC_NODE_FS_MODULE%.mkdtemp.prototype"],
+			"key": "constructor",
+			"kind": "data",
+			"operations": ["%MAL_INTRINSIC_NODE_FS_MODULE%.mkdtemp"],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
 			"id": "[\"%MAL_INTRINSIC_NODE_FS_MODULE%.mkdtempSync\",\"length\"]",
 			"owner": "%MAL_INTRINSIC_NODE_FS_MODULE%.mkdtempSync",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_FS_MODULE%.mkdtempSync",
+				"%MAL_INTRINSIC_NODE_FS_MODULE%.mkdtempSync.prototype.constructor",
 				"mal_host_install_node_fs:mkdtempSync"
 			],
 			"key": "length",
@@ -12406,11 +12701,36 @@
 			"owner": "%MAL_INTRINSIC_NODE_FS_MODULE%.mkdtempSync",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_FS_MODULE%.mkdtempSync",
+				"%MAL_INTRINSIC_NODE_FS_MODULE%.mkdtempSync.prototype.constructor",
 				"mal_host_install_node_fs:mkdtempSync"
 			],
 			"key": "name",
 			"kind": "data",
 			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_FS_MODULE%.mkdtempSync\",\"prototype\"]",
+			"owner": "%MAL_INTRINSIC_NODE_FS_MODULE%.mkdtempSync",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_FS_MODULE%.mkdtempSync",
+				"%MAL_INTRINSIC_NODE_FS_MODULE%.mkdtempSync.prototype.constructor",
+				"mal_host_install_node_fs:mkdtempSync"
+			],
+			"key": "prototype",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_FS_MODULE%.mkdtempSync.prototype\",\"constructor\"]",
+			"owner": "%MAL_INTRINSIC_NODE_FS_MODULE%.mkdtempSync.prototype",
+			"ownerPaths": ["%MAL_INTRINSIC_NODE_FS_MODULE%.mkdtempSync.prototype"],
+			"key": "constructor",
+			"kind": "data",
+			"operations": ["%MAL_INTRINSIC_NODE_FS_MODULE%.mkdtempSync"],
 			"task": "H-10",
 			"decisions": []
 		},
@@ -13421,6 +13741,22 @@
 			"decisions": []
 		},
 		{
+			"id": "[\"%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%\",\"mkdtemp\"]",
+			"owner": "%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:fs/promises\"]",
+				"%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%",
+				"MAL_INTRINSIC_NODE_FS_PROMISES_MODULE",
+				"mal_host_install_node_fs:promises",
+				"mal_host_install_node_fs_promises:default"
+			],
+			"key": "mkdtemp",
+			"kind": "data",
+			"operations": ["%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%.mkdtemp"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
 			"id": "[\"%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%.access\",\"length\"]",
 			"owner": "%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%.access",
 			"ownerPaths": [
@@ -13621,6 +13957,32 @@
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%.mkdir",
 				"mal_host_install_node_fs_promises:mkdir"
+			],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%.mkdtemp\",\"length\"]",
+			"owner": "%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%.mkdtemp",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%.mkdtemp",
+				"mal_host_install_node_fs_promises:mkdtemp"
+			],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%.mkdtemp\",\"name\"]",
+			"owner": "%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%.mkdtemp",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%.mkdtemp",
+				"mal_host_install_node_fs_promises:mkdtemp"
 			],
 			"key": "name",
 			"kind": "data",
@@ -97960,6 +98322,62 @@
 			"decisions": []
 		},
 		{
+			"id": "[\"%MAL_INTRINSIC_NODE_FS_MODULE%.fdatasync\",\"<call>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_FS_MODULE%.fdatasync",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_FS_MODULE%.fdatasync",
+				"%MAL_INTRINSIC_NODE_FS_MODULE%.fdatasync.prototype.constructor",
+				"mal_host_install_node_fs:fdatasync"
+			],
+			"key": "<call>",
+			"kind": "call",
+			"operations": ["%MAL_INTRINSIC_NODE_FS_MODULE%.fdatasync"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_FS_MODULE%.fdatasync\",\"<construct>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_FS_MODULE%.fdatasync",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_FS_MODULE%.fdatasync",
+				"%MAL_INTRINSIC_NODE_FS_MODULE%.fdatasync.prototype.constructor",
+				"mal_host_install_node_fs:fdatasync"
+			],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": ["%MAL_INTRINSIC_NODE_FS_MODULE%.fdatasync"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_FS_MODULE%.fdatasyncSync\",\"<call>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_FS_MODULE%.fdatasyncSync",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_FS_MODULE%.fdatasyncSync",
+				"%MAL_INTRINSIC_NODE_FS_MODULE%.fdatasyncSync.prototype.constructor",
+				"mal_host_install_node_fs:fdatasyncSync"
+			],
+			"key": "<call>",
+			"kind": "call",
+			"operations": ["%MAL_INTRINSIC_NODE_FS_MODULE%.fdatasyncSync"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_FS_MODULE%.fdatasyncSync\",\"<construct>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_FS_MODULE%.fdatasyncSync",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_FS_MODULE%.fdatasyncSync",
+				"%MAL_INTRINSIC_NODE_FS_MODULE%.fdatasyncSync.prototype.constructor",
+				"mal_host_install_node_fs:fdatasyncSync"
+			],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": ["%MAL_INTRINSIC_NODE_FS_MODULE%.fdatasyncSync"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
 			"id": "[\"%MAL_INTRINSIC_NODE_FS_MODULE%.fstatSync\",\"<call>\"]",
 			"owner": "%MAL_INTRINSIC_NODE_FS_MODULE%.fstatSync",
 			"ownerPaths": [
@@ -97986,10 +98404,39 @@
 			"decisions": []
 		},
 		{
+			"id": "[\"%MAL_INTRINSIC_NODE_FS_MODULE%.fsync\",\"<call>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_FS_MODULE%.fsync",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_FS_MODULE%.fsync",
+				"%MAL_INTRINSIC_NODE_FS_MODULE%.fsync.prototype.constructor",
+				"mal_host_install_node_fs:fsync"
+			],
+			"key": "<call>",
+			"kind": "call",
+			"operations": ["%MAL_INTRINSIC_NODE_FS_MODULE%.fdatasync"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_FS_MODULE%.fsync\",\"<construct>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_FS_MODULE%.fsync",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_FS_MODULE%.fsync",
+				"%MAL_INTRINSIC_NODE_FS_MODULE%.fsync.prototype.constructor",
+				"mal_host_install_node_fs:fsync"
+			],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": ["%MAL_INTRINSIC_NODE_FS_MODULE%.fdatasync"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
 			"id": "[\"%MAL_INTRINSIC_NODE_FS_MODULE%.fsyncSync\",\"<call>\"]",
 			"owner": "%MAL_INTRINSIC_NODE_FS_MODULE%.fsyncSync",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_FS_MODULE%.fsyncSync",
+				"%MAL_INTRINSIC_NODE_FS_MODULE%.fsyncSync.prototype.constructor",
 				"mal_host_install_node_fs:fsyncSync"
 			],
 			"key": "<call>",
@@ -98003,6 +98450,7 @@
 			"owner": "%MAL_INTRINSIC_NODE_FS_MODULE%.fsyncSync",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_FS_MODULE%.fsyncSync",
+				"%MAL_INTRINSIC_NODE_FS_MODULE%.fsyncSync.prototype.constructor",
 				"mal_host_install_node_fs:fsyncSync"
 			],
 			"key": "<construct>",
@@ -98142,10 +98590,39 @@
 			"decisions": []
 		},
 		{
+			"id": "[\"%MAL_INTRINSIC_NODE_FS_MODULE%.mkdtemp\",\"<call>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_FS_MODULE%.mkdtemp",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_FS_MODULE%.mkdtemp",
+				"%MAL_INTRINSIC_NODE_FS_MODULE%.mkdtemp.prototype.constructor",
+				"mal_host_install_node_fs:mkdtemp"
+			],
+			"key": "<call>",
+			"kind": "call",
+			"operations": ["%MAL_INTRINSIC_NODE_FS_MODULE%.mkdtemp"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_FS_MODULE%.mkdtemp\",\"<construct>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_FS_MODULE%.mkdtemp",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_FS_MODULE%.mkdtemp",
+				"%MAL_INTRINSIC_NODE_FS_MODULE%.mkdtemp.prototype.constructor",
+				"mal_host_install_node_fs:mkdtemp"
+			],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": ["%MAL_INTRINSIC_NODE_FS_MODULE%.mkdtemp"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
 			"id": "[\"%MAL_INTRINSIC_NODE_FS_MODULE%.mkdtempSync\",\"<call>\"]",
 			"owner": "%MAL_INTRINSIC_NODE_FS_MODULE%.mkdtempSync",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_FS_MODULE%.mkdtempSync",
+				"%MAL_INTRINSIC_NODE_FS_MODULE%.mkdtempSync.prototype.constructor",
 				"mal_host_install_node_fs:mkdtempSync"
 			],
 			"key": "<call>",
@@ -98159,6 +98636,7 @@
 			"owner": "%MAL_INTRINSIC_NODE_FS_MODULE%.mkdtempSync",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_FS_MODULE%.mkdtempSync",
+				"%MAL_INTRINSIC_NODE_FS_MODULE%.mkdtempSync.prototype.constructor",
 				"mal_host_install_node_fs:mkdtempSync"
 			],
 			"key": "<construct>",
@@ -98994,6 +99472,32 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%.appendFile"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%.mkdtemp\",\"<call>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%.mkdtemp",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%.mkdtemp",
+				"mal_host_install_node_fs_promises:mkdtemp"
+			],
+			"key": "<call>",
+			"kind": "call",
+			"operations": ["%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%.mkdtemp"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%.mkdtemp\",\"<construct>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%.mkdtemp",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%.mkdtemp",
+				"mal_host_install_node_fs_promises:mkdtemp"
+			],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": ["%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%.mkdtemp"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -218045,12 +218549,42 @@
 			"decisions": []
 		},
 		{
+			"id": "[\"[[roots]]\",\"mal_host_install_node_fs:fdatasync\"]",
+			"owner": "[[roots]]",
+			"ownerPaths": ["[[roots]]"],
+			"key": "mal_host_install_node_fs:fdatasync",
+			"kind": "binding",
+			"operations": ["%MAL_INTRINSIC_NODE_FS_MODULE%.fdatasync"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"[[roots]]\",\"mal_host_install_node_fs:fdatasyncSync\"]",
+			"owner": "[[roots]]",
+			"ownerPaths": ["[[roots]]"],
+			"key": "mal_host_install_node_fs:fdatasyncSync",
+			"kind": "binding",
+			"operations": ["%MAL_INTRINSIC_NODE_FS_MODULE%.fdatasyncSync"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
 			"id": "[\"[[roots]]\",\"mal_host_install_node_fs:fstatSync\"]",
 			"owner": "[[roots]]",
 			"ownerPaths": ["[[roots]]"],
 			"key": "mal_host_install_node_fs:fstatSync",
 			"kind": "binding",
 			"operations": ["%MAL_INTRINSIC_NODE_FS_MODULE%.fstatSync"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"[[roots]]\",\"mal_host_install_node_fs:fsync\"]",
+			"owner": "[[roots]]",
+			"ownerPaths": ["[[roots]]"],
+			"key": "mal_host_install_node_fs:fsync",
+			"kind": "binding",
+			"operations": ["%MAL_INTRINSIC_NODE_FS_MODULE%.fdatasync"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -218111,6 +218645,16 @@
 			"key": "mal_host_install_node_fs:mkdirSync",
 			"kind": "binding",
 			"operations": ["%MAL_INTRINSIC_NODE_FS_MODULE%.mkdirSync"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"[[roots]]\",\"mal_host_install_node_fs:mkdtemp\"]",
+			"owner": "[[roots]]",
+			"ownerPaths": ["[[roots]]"],
+			"key": "mal_host_install_node_fs:mkdtemp",
+			"kind": "binding",
+			"operations": ["%MAL_INTRINSIC_NODE_FS_MODULE%.mkdtemp"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -218451,6 +218995,16 @@
 			"key": "mal_host_install_node_fs_promises:mkdir",
 			"kind": "binding",
 			"operations": ["%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%.appendFile"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"[[roots]]\",\"mal_host_install_node_fs_promises:mkdtemp\"]",
+			"owner": "[[roots]]",
+			"ownerPaths": ["[[roots]]"],
+			"key": "mal_host_install_node_fs_promises:mkdtemp",
+			"kind": "binding",
+			"operations": ["%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%.mkdtemp"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -222267,6 +222821,17 @@
 			"identities": ["%MAL_INTRINSIC_NODE_FS_MODULE%.existsSync"]
 		},
 		{
+			"id": "%MAL_INTRINSIC_NODE_FS_MODULE%.fdatasync",
+			"identities": [
+				"%MAL_INTRINSIC_NODE_FS_MODULE%.fdatasync",
+				"%MAL_INTRINSIC_NODE_FS_MODULE%.fsync"
+			]
+		},
+		{
+			"id": "%MAL_INTRINSIC_NODE_FS_MODULE%.fdatasyncSync",
+			"identities": ["%MAL_INTRINSIC_NODE_FS_MODULE%.fdatasyncSync"]
+		},
+		{
 			"id": "%MAL_INTRINSIC_NODE_FS_MODULE%.fstatSync",
 			"identities": ["%MAL_INTRINSIC_NODE_FS_MODULE%.fstatSync"]
 		},
@@ -222298,6 +222863,10 @@
 		{
 			"id": "%MAL_INTRINSIC_NODE_FS_MODULE%.mkdirSync",
 			"identities": ["%MAL_INTRINSIC_NODE_FS_MODULE%.mkdirSync"]
+		},
+		{
+			"id": "%MAL_INTRINSIC_NODE_FS_MODULE%.mkdtemp",
+			"identities": ["%MAL_INTRINSIC_NODE_FS_MODULE%.mkdtemp"]
 		},
 		{
 			"id": "%MAL_INTRINSIC_NODE_FS_MODULE%.mkdtempSync",
@@ -222410,6 +222979,10 @@
 		{
 			"id": "%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%.glob",
 			"identities": ["%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%.glob"]
+		},
+		{
+			"id": "%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%.mkdtemp",
+			"identities": ["%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%.mkdtemp"]
 		},
 		{
 			"id": "%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%.open",

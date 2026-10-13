@@ -305,7 +305,7 @@
 	},
 	{
 		"file": "generated/known_primordials.inc",
-		"sha256": "60cc93930226ef1d58b17dad776a980169706eafc4d080786bad881737c8c28d"
+		"sha256": "eb2c3a923b63825c55879eeb82b3a57eed9a0706f9dcb27bb8d3b42697832d11"
 	},
 	{
 		"file": "generated/node_builtin_installers.inc",
@@ -361,7 +361,7 @@
 	},
 	{
 		"file": "runtime/mal_assets.c",
-		"sha256": "6784f80b0864bc39475af8d87f273dfc05d9faf94c52dd3ae72542036912e2d0"
+		"sha256": "2b77c2f0dcfba6c19b427e508a81cf273c0425c1a793d817b68d5dc13670aeed"
 	},
 	{
 		"file": "runtime/mal_assets.h",
@@ -457,7 +457,7 @@
 	},
 	{
 		"file": "runtime/node_fs.c",
-		"sha256": "b56c6437a84f790bdac23af04779647dc73117a72a2366d6065a25b2654cfad3"
+		"sha256": "e76f6f3443a8e41194cffe43471efe2926663631f225956e4f8913842f9777c8"
 	},
 	{
 		"file": "runtime/node_fs.h",

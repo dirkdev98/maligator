@@ -588,7 +588,7 @@ static int mal_asset_materialize(
     }
     err = mal_posix_fs_mkdtemp(temp_prefix, &temp);
     free(temp_prefix);
-    if (err != 0) goto fail;
+    if (err != 0) { free(temp); goto fail; }
     err = mal_asset_write_tree(asset, temp, identity);
     if (err == 0) err = mal_posix_fs_rename(temp, target);
     if (err != 0) {

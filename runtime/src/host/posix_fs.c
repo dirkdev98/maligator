@@ -701,6 +701,7 @@ int mal_posix_fs_realpath(const char *path, char **out_path) {
 }
 
 int mal_posix_fs_mkdtemp(const char *prefix, char **out_path) {
+    *out_path = nullptr;
     usize len = strlen(prefix);
     char *template = malloc(len + 7);
     if (template == nullptr) {
@@ -708,12 +709,8 @@ int mal_posix_fs_mkdtemp(const char *prefix, char **out_path) {
     }
     memcpy(template, prefix, len);
     memcpy(template + len, "XXXXXX", 7);
-    if (mkdtemp(template) == nullptr) {
-        int err = errno;
-        free(template);
-        return err;
-    }
     *out_path = template;
+    if (mkdtemp(template) == nullptr) return errno;
     return 0;
 }
 

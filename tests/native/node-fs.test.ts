@@ -1,7 +1,7 @@
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { beforeAll, describe, it } from "vitest";
+import { afterAll, beforeAll, describe, it } from "vitest";
 import {
 	assertResultPass,
 	buildNativeBinary,
@@ -11,6 +11,7 @@ import {
 } from "../../src/test-harness.ts";
 
 const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-node-fs-"));
+afterAll(() => rmSync(outDir, { recursive: true, force: true }));
 
 describe("node:fs POSIX surface", () => {
 	let compiled: string;
