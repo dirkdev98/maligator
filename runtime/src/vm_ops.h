@@ -2453,21 +2453,52 @@ static inline u32 mal_vm_typed_array_numeric_index(f64 index) {
 }
 
 // Borrowed bytes are used only until a poll; the numeric region cannot collect or re-enter JS.
-static inline bool mal_vm_fixed_f64_storage(
-    MalValue receiver, u32 count, bool writable, byte **data
+static inline bool mal_vm_fixed_numeric_storage(
+    MalValue receiver, u32 count, bool writable, MalTypedArraySpan *span
 ) {
     if (!mal_value_is_typed_array_object(receiver)) return false;
     MalTypedArrayObject *array = mal_value_to_typed_array_object(receiver);
     const MalArrayBufferObject *buffer = array->buffer;
-    if (array->kind != MAL_TA_FLOAT64 || array->length_tracking ||
+    if (array->kind < MAL_TA_INT32 || array->kind > MAL_TA_FLOAT64 || array->length_tracking ||
         buffer == nullptr || buffer->detached || buffer->resizable ||
         buffer->shared || buffer->shared_memory != nullptr ||
         (writable && buffer->immutable) || count > array->length ||
-        buffer->data == nullptr ||
-        (u64) array->byte_offset + (u64) array->length * 8 > buffer->byte_length)
+        buffer->data == nullptr)
         return false;
-    *data = buffer->data + array->byte_offset;
+    u32 size = array->kind == MAL_TA_FLOAT64 ? 8 : 4;
+    if ((u64) array->byte_offset + (u64) array->length * size > buffer->byte_length)
+        return false;
+    *span = (MalTypedArraySpan) {
+        .data = buffer->data + array->byte_offset,
+        .length = array->length,
+        .kind = array->kind,
+        .element_size = size,
+        .shared = false,
+    };
     return true;
+}
+
+static inline f64 mal_vm_fixed_numeric_load(const MalTypedArraySpan *span, u32 index) {
+    const byte *at = span->data + (usize) index * span->element_size;
+    if (span->kind == MAL_TA_FLOAT64)
+        return mal_scalar_f64_from_bits(mal_scalar_load_native_u64(at));
+    u32 bits = mal_scalar_load_native_u32(at);
+    if (span->kind == MAL_TA_FLOAT32) return (f64) mal_scalar_f32_from_bits(bits);
+    return span->kind == MAL_TA_INT32 ? (f64) mal_scalar_i32_from_bits(bits) : (f64) bits;
+}
+
+static inline void mal_vm_fixed_numeric_store(
+    const MalTypedArraySpan *span, u32 index, f64 number
+) {
+    byte *at = span->data + (usize) index * span->element_size;
+    if (span->kind == MAL_TA_FLOAT64) {
+        mal_scalar_store_native_u64(at, mal_scalar_f64_to_bits(number));
+    } else {
+        u32 bits = span->kind == MAL_TA_FLOAT32
+            ? mal_scalar_f32_to_bits((f32) number)
+            : mal_ops_number_to_uint32(number);
+        mal_scalar_store_native_u32(at, bits);
+    }
 }
 
 bool mal_vm_resolve_typed_array_length(

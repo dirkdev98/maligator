@@ -37,6 +37,29 @@ export function selectNativeArrayInitializations(
 			continue;
 		const keys = new Map<number, string>(),
 			writes = new Set([allocation.dst]);
+		const preparedKey = (register: number): string | undefined => {
+			if (writes.has(register) || body.jumpTargets.has(allocationIp)) return undefined;
+			for (let ip = allocationIp - 1; ip >= Math.max(0, allocationIp - 32); ip--) {
+				const op = fn.instructions[ip]!;
+				if (
+					op.opcode === "JUMP" ||
+					op.opcode === "JUMP_IF" ||
+					op.opcode === "RETURN" ||
+					op.opcode === "THROW" ||
+					op.opcode === "YIELD" ||
+					op.opcode === "AWAIT"
+				)
+					return undefined;
+				if (body.writes[ip]!.includes(register))
+					return op.opcode === "CREATE_STRING"
+						? String.fromCharCode(...(strings[op.stringIndex] ?? []))
+						: op.opcode === "CREATE_NUMBER" || op.opcode === "CREATE_F64"
+							? String(op.value)
+							: undefined;
+				if (body.jumpTargets.has(ip)) return undefined;
+			}
+			return undefined;
+		};
 		const values: Array<number> = [],
 			stores: Array<number> = [];
 		for (
@@ -46,7 +69,11 @@ export function selectNativeArrayInitializations(
 		) {
 			if (body.jumpTargets.has(ip) || unavailable(ip)) break;
 			const op = fn.instructions[ip]!;
-			if (op.opcode === "CREATE_STRING" || op.opcode === "CREATE_NUMBER") {
+			if (
+				op.opcode === "CREATE_STRING" ||
+				op.opcode === "CREATE_NUMBER" ||
+				op.opcode === "CREATE_F64"
+			) {
 				keys.set(
 					op.dst,
 					op.opcode === "CREATE_STRING"
@@ -72,7 +99,7 @@ export function selectNativeArrayInitializations(
 					: key.kind === "number"
 						? String(key.value)
 						: key.kind === "register"
-							? keys.get(key.register)
+							? (keys.get(key.register) ?? preparedKey(key.register))
 							: undefined;
 			if (property !== String(values.length)) break;
 

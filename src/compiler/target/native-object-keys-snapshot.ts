@@ -1,3 +1,4 @@
+import type { NativeBodyFacts } from "./native-body-facts.ts";
 import {
 	nativeVirtualValueFlow,
 	validateNativeVirtualValue,
@@ -18,6 +19,7 @@ export interface NativeObjectKeysSnapshotPlan {
 
 export function selectNativeObjectKeysSnapshots(
 	native: NativeFunctionPlan,
+	body: NativeBodyFacts,
 	strings: ReadonlyArray<ReadonlyArray<number>>,
 	unavailable: (ip: number) => boolean,
 ): Array<NativeObjectKeysSnapshotPlan> {
@@ -46,13 +48,25 @@ export function selectNativeObjectKeysSnapshots(
 		)
 			continue;
 		if (call.opcode === "CALL") {
-			const property = fn.instructions[ip - 1];
-			if (
-				property?.opcode !== "LOAD_PROPERTY_STATIC" ||
-				property.dst !== call.callee ||
-				String.fromCharCode(...(strings[property.stringIndex] ?? [])) !== "keys"
-			)
-				continue;
+			let readsKeys = false;
+			for (let prior = ip - 1; prior >= Math.max(0, ip - 16); prior--) {
+				if (body.jumpTargets.has(prior + 1)) break;
+				const op = fn.instructions[prior]!;
+				if (
+					op.opcode === "JUMP" ||
+					op.opcode === "JUMP_IF" ||
+					op.opcode === "RETURN" ||
+					op.opcode === "THROW"
+				)
+					break;
+				if (!body.writes[prior]!.includes(call.callee)) continue;
+				// The captured callee survives argument evaluation; runtime still guards its identity.
+				readsKeys =
+					op.opcode === "LOAD_PROPERTY_STATIC" &&
+					String.fromCharCode(...(strings[op.stringIndex] ?? [])) === "keys";
+				break;
+			}
+			if (!readsKeys) continue;
 		}
 		// Rejected escapes also incur a whole-function lifetime analysis.
 		if (candidates++ === 16) break;

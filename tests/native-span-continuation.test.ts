@@ -8,6 +8,7 @@ import {
 	serializeCompilerArtifact,
 } from "../src/compiler/target/compiler-artifact-codec.ts";
 import { emitProgramImage } from "../src/compiler/target/emit-program-image.ts";
+import { emitCompiledFunction } from "../src/compiler/target/render-native-c.ts";
 
 function compile(body: string, primordials: "mutable" | "locked" = "mutable") {
 	return compileSemanticProgramToProgramImage(
@@ -65,6 +66,22 @@ describe("span continuations from split projections", () => {
 			);
 		},
 	);
+	it("uses the locked character chain's identity and retains its coercing fallback admission", () => {
+		const image = compile(
+			"const part=source.split('|')[1]; return part.charCodeAt(escape)+Number(part);",
+			"locked",
+		);
+		const native = image.native.functions[1]!;
+		const chain = native.specializations.find(
+			(region) => region.kind === "string-char-code-at-chain",
+		)!;
+		expect(chain.methodIdentity).toBe("authority-invariant");
+		const emitted = emitCompiledFunction(native, 1, "", false)!.source;
+		expect(emitted).toContain(
+			"mal_builtin_string_span_char_code_at(MAL_VALUE_UNDEFINED, true,",
+		);
+		expect(emitted).toContain(`__string_char_code_at_${chain.callIp}_captured = true;`);
+	});
 	it("rejects omitted observers and a forged producer lifetime", () => {
 		const image = compile(body),
 			native = image.native.functions[1]!,
@@ -195,16 +212,45 @@ describe("span continuations from regexp captures", () => {
 			).toThrow(/invalid or stale storage plan/);
 		}
 	});
-	it("rejects a capture that remains live after the next execution of its producer", () => {
-		const image = compile(`let prior; let total=0;
+	it.each(["mutable", "locked"] as const)(
+		"materializes a capture retained across its producer's next execution under %s primordials",
+		(mode) => {
+			const image = compile(
+				`let prior=""; let total=0;
  for(let i=0;i<2;i++) {
  const match=observe.exec(source); if(match===null)return total;
- const part=match[1]; if(i)total+=prior.length; prior=part; total+=part.length;
+ const part=match[1]; total+=prior.length; prior=part; total+=part.length;
+ } return total;`,
+				mode,
+			);
+			const native = image.native.functions[1]!;
+			const projection = native.specializations.find(
+				(region) => region.kind === "regexp-exec-projection",
+			)!;
+			expect(projection).toBeDefined();
+			expect(projection.loads).toHaveLength(1);
+			expect(projection.loads[0]!.consumer).toBeUndefined();
+			expect(native.storage!.spanContinuations).toHaveLength(0);
+			expect(deserializeCompilerArtifact(serializeCompilerArtifact(image))).toEqual(
+				image,
+			);
+		},
+	);
+	it.each([
+		"prior=upper; total+=upper.toLowerCase().length;",
+		"const lower=upper.toLowerCase(); prior=lower; total+=lower.length;",
+	])("materializes retained case-chain intermediates: %s", (tail) => {
+		const image = compile(`let prior=""; let total=0;
+ for(let i=0;i<3;i++) {
+ const match=observe.exec(source); if(match===null)break;
+ const upper=match[1].toUpperCase(); total+=prior.length; ${tail}
  } return total;`);
 		const native = image.native.functions[1]!;
-		expect(
-			native.specializations.some((region) => region.kind === "regexp-exec-projection"),
-		).toBe(true);
-		expect(native.storage!.spanContinuations).toHaveLength(0);
+		const projection = native.specializations.find(
+			(region) => region.kind === "regexp-exec-projection",
+		)!;
+		expect(projection).toBeDefined();
+		expect(projection.loads[0]!.consumer).toBeUndefined();
+		expect(() => emitProgramImage(image, {})).not.toThrow();
 	});
 });

@@ -45,6 +45,21 @@ describe("conditional object materialization", () => {
 							),
 					).length,
 			).toBeGreaterThan(0);
+			const carried = pair.programImage.native.functions.find(
+				(fn) =>
+					String.fromCharCode(
+						...(pair.programImage.runtime.stringConstants[fn.body.nameStringIndex] ?? []),
+					) === "carriedMixed",
+			)!;
+			expect(
+				carried.specializations.some(
+					(region) =>
+						region.kind === "stack-object-plan" &&
+						region.sites.some((site) =>
+							site.materializations.some((entry) => entry.kind === "observe"),
+						),
+				),
+			).toBe(true);
 			for (const binary of [pair.compiled, pair.interpreted])
 				for (const stress of [{}, STRESS_ENV])
 					expect(

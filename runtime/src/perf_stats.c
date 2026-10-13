@@ -900,8 +900,13 @@ static void mal_perf_stats_print(void) {
         (unsigned long long) mal_perf_stats.object_keys_snapshot_materializations);
     fprintf(stderr, "[perf-string-span-character-stats] reads=%llu\n",
         (unsigned long long) mal_perf_stats.string_span_character_reads);
-    fprintf(stderr, "[perf-typed-array-region-stats] admissions=%llu\n",
-        (unsigned long long) mal_perf_stats.fixed_typed_array_region_admissions);
+    fprintf(stderr, "[perf-typed-array-region-stats] admissions=%llu i32_views=%llu u32_views=%llu f32_views=%llu f64_views=%llu f64_regions=%llu\n",
+        (unsigned long long) mal_perf_stats.fixed_typed_array_region_admissions,
+        (unsigned long long) mal_perf_stats.fixed_typed_array_region_views[0],
+        (unsigned long long) mal_perf_stats.fixed_typed_array_region_views[1],
+        (unsigned long long) mal_perf_stats.fixed_typed_array_region_views[2],
+        (unsigned long long) mal_perf_stats.fixed_typed_array_region_views[3],
+        (unsigned long long) mal_perf_stats.fixed_typed_array_region_f64_admissions);
     fprintf(
         stderr,
         "[perf-allocation-stats] empty_objects=%llu shaped_objects=%llu "

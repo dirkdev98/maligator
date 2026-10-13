@@ -95,7 +95,7 @@ import type {
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal artifacts are hard cut-overs: stale cache entries rebuild.
-export const COMPILER_ARTIFACT_VERSION = 202;
+export const COMPILER_ARTIFACT_VERSION = 203;
 
 function validateClosureCaptureOwners(
 	owners: ReadonlyArray<number>,
@@ -827,7 +827,7 @@ function writeNativeStorage(w: Writer, storage: NativeStoragePlan | undefined): 
 	w.u32(storage.numericLoopRegions.length);
 	for (const plan of storage.numericLoopRegions) {
 		w.u8(plan.kind === "integer" ? 0 : 1);
-		if (plan.kind === "fixed-f64") {
+		if (plan.kind === "fixed-numeric") {
 			w.i32(plan.index);
 			w.i32(plan.bound);
 			w.u32(plan.views.length);
@@ -1275,7 +1275,7 @@ function readNativeStorage(r: Reader): NativeStoragePlan {
 			kindTag === 0
 				? { kind: "integer" as const }
 				: {
-						kind: "fixed-f64" as const,
+						kind: "fixed-numeric" as const,
 						index: r.i32(),
 						bound: r.i32(),
 						views: Array.from({ length: r.count(5) }, () => {

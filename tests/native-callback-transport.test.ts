@@ -42,15 +42,20 @@ function callbackImage(body = "return total;", warmArguments = "1, 2") {
 }
 
 describe("native builtin callback transport", () => {
-	it.each(["reduce", "reduceRight"])(
-		"carries the %s numeric accumulator ABI through serialization and split emission",
-		(operation) => {
+	it.each([
+		["reduce", false],
+		["reduceRight", false],
+		["reduce", true],
+		["reduceRight", true],
+	] as const)(
+		"carries the %s numeric accumulator ABI with argument snapshots=%s through serialization and split emission",
+		(operation, snapshots) => {
 			const image = compileSemanticProgramToProgramImage(
 				analyzeSourceAndRunSemanticAnalysis(
 					`globalThis.run = function(values) {
-						return values.${operation}(function(acc, value, index, receiver) {
+						return values.${operation}(function(acc, value${snapshots ? "" : ", index, receiver"}) {
 							for (let i = 0; i < 2; i++) acc += value;
-							return acc + index;
+							return acc + ${snapshots ? "arguments[2] + arguments.length" : "index"};
 						}, 0);
 					};`,
 					"/numeric-reduction.js",
@@ -74,6 +79,7 @@ describe("native builtin callback transport", () => {
 			)!;
 			expect(caller).toBeDefined();
 			const transport = caller.storage!.callbackTransports[0]!;
+			expect(transport.argumentCount).toBe(snapshots ? 4 : undefined);
 			expect(transport).toMatchObject({
 				numericReduction: true,
 				parameters: ["number", "number", "number", "boxed"],

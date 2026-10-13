@@ -120,6 +120,38 @@ function retainAcrossExec(regexp, source) {
 	return sizes;
 }
 rows.push(retainAcrossExec(/(\d+)/g, "1 22 333"));
+function retainUpperAcrossExec(regexp, source) {
+	let previous = "";
+	const values = [];
+	for (let index = 0; index < 3; index++) {
+		const match = regexp.exec(source);
+		if (match === null) break;
+		const upper = match[1].toUpperCase();
+		collect();
+		values.push(previous);
+		previous = upper;
+		values.push(upper.toLowerCase().length);
+	}
+	return values;
+}
+function retainLowerAcrossExec(regexp, source) {
+	let previous = "";
+	const values = [];
+	for (let index = 0; index < 3; index++) {
+		const match = regexp.exec(source);
+		if (match === null) break;
+		const lower = match[1].toUpperCase().toLowerCase();
+		collect();
+		values.push(previous);
+		previous = lower;
+		values.push(lower.length);
+	}
+	return values;
+}
+rows.push(
+	retainUpperAcrossExec(/(\w+)/g, "a bb ccc"),
+	retainLowerAcrossExec(/(\w+)/g, "A BB CCC"),
+);
 let coercions = 0;
 rows.push(
 	inspect(

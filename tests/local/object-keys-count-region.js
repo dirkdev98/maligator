@@ -121,6 +121,11 @@ rows.push(traverse(proxy, unchanged), events.join(","));
 rows.push(snapshotReads({ first: 1, second: 2 }, -0));
 rows.push(snapshotReads({ first: 1 }, "0"));
 rows.push(snapshotReads({ first: 1 }, -1));
+[-0, "0", -1, 17].forEach(function materializeSnapshotIndex(index) {
+	const keys = Object.keys({ first: 1, second: 2 });
+	const value = keys[index];
+	rows.push([value, keys.length, keys[0]]);
+});
 let coercions = 0;
 rows.push(
 	snapshotReads(

@@ -17,7 +17,7 @@ afterAll(() => rmSync(outDir, { recursive: true, force: true }));
 
 describe("fresh Array initialization", () => {
 	it.each(["mutable", "locked"] as const)(
-		"preserves prepared values, references, holes, evaluation order, and inherited setters under %s primordials",
+		"preserves numeric producers, references, holes, evaluation order, and inherited setters under %s primordials",
 		(primordials) => {
 			const expected = execFileSync(process.execPath, [fixture], {
 				encoding: "utf8",
@@ -38,6 +38,15 @@ describe("fresh Array initialization", () => {
 				pair.programImage.native.functions.some(
 					(fn) => fn.storage!.arrayInitializations.length > 0,
 				),
+			).toBe(true);
+			const numeric = pair.programImage.native.functions.find(
+				(fn) =>
+					String.fromCharCode(
+						...(pair.programImage.runtime.stringConstants[fn.body.nameStringIndex] ?? []),
+					) === "numeric",
+			)!;
+			expect(
+				numeric.storage!.arrayInitializations.some((plan) => plan.values.length === 5),
 			).toBe(true);
 			for (const binary of [pair.compiled, pair.interpreted])
 				for (const stress of [{}, STRESS_ENV])

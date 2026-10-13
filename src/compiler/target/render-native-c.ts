@@ -712,10 +712,10 @@ function emitNumericLoopRegion(
 	const flow =
 		order === undefined
 			? undefined
-			: numberRecordDataflow(fn, order, -1, reps, plan.kind === "fixed-f64");
+			: numberRecordDataflow(fn, order, -1, reps, plan.kind === "fixed-numeric");
 	if (order === undefined || flow === undefined)
 		throw new Error("Invalid native integer loop region");
-	const floating = plan.kind === "fixed-f64";
+	const floating = plan.kind === "fixed-numeric";
 	const id = floating ? `__typed_loop_${plan.id}` : `__integer_loop_${plan.id}`;
 	const kindOf = (register: number) => {
 		const kind = flow.kinds.get(register);
@@ -752,7 +752,7 @@ function emitNumericLoopRegion(
 			);
 		else guards.push(`mal_safe_integer_admit(${value}, &${local(register)})`);
 	}
-	if (plan.kind === "fixed-f64") {
+	if (plan.kind === "fixed-numeric") {
 		guards.push(
 			`${local(plan.index)} >= 0.0`,
 			`${local(plan.index)} == trunc(${local(plan.index)})`,
@@ -762,7 +762,7 @@ function emitNumericLoopRegion(
 		);
 		for (const view of plan.views)
 			guards.push(
-				`mal_vm_fixed_f64_storage(r${view.object}, (u32) ${local(plan.bound)}, ${view.writable}, &${id}_v${view.object})`,
+				`mal_vm_fixed_numeric_storage(r${view.object}, (u32) ${local(plan.bound)}, ${view.writable}, &${id}_v${view.object})`,
 			);
 	}
 	const materialize = (register: number, value: string) => {
@@ -814,13 +814,17 @@ function emitNumericLoopRegion(
 	const int32 = (register: number) => `mal_safe_integer_to_i32(${local(register)})`;
 	const checked = (call: string, dst: number) =>
 		`if (__builtin_expect(!${call.replace("%DST%", `&${local(dst)}`)}, 0)) ${restart}`;
-	const statement = (ip: number): string => {
+	const statement = (ip: number, fixedF64: boolean): string => {
 		const op = fn.instructions[ip]!;
 		switch (op.opcode) {
 			case "LOAD_PROPERTY":
-				return `${local(op.dst)} = mal_scalar_f64_from_bits(mal_scalar_load_native_u64(${id}_v${op.object} + (usize)(u32) ${local(op.key)} * 8));`;
+				return fixedF64
+					? `${local(op.dst)} = mal_scalar_f64_from_bits(mal_scalar_load_native_u64(${id}_v${op.object}.data + (usize)(u32) ${local(op.key)} * 8));`
+					: `${local(op.dst)} = mal_vm_fixed_numeric_load(&${id}_v${op.object}, (u32) ${local(op.key)});`;
 			case "STORE_PROPERTY":
-				return `mal_scalar_store_native_u64(${id}_v${op.object} + (usize)(u32) ${local(op.key)} * 8, mal_scalar_f64_to_bits(${local(op.value)}));`;
+				return fixedF64
+					? `mal_scalar_store_native_u64(${id}_v${op.object}.data + (usize)(u32) ${local(op.key)} * 8, mal_scalar_f64_to_bits(${local(op.value)}));`
+					: `mal_vm_fixed_numeric_store(&${id}_v${op.object}, (u32) ${local(op.key)}, ${local(op.value)});`;
 			case "CREATE_NUMBER":
 			case "CREATE_F64":
 				return `${local(op.dst)} = ${floating ? cF64Literal(op.value) : `INT64_C(${op.value})`};`;
@@ -906,50 +910,71 @@ function emitNumericLoopRegion(
 				throw new Error(`Invalid native integer loop instruction ${op.opcode}`);
 		}
 	};
-	const lines = [
+	const loopBody = (fixedF64: boolean): ReadonlyArray<string> => {
+		const lines = [
+			...plan.carried.map(
+				(register) =>
+					`    ${kindOf(register) === "boolean" ? "bool" : floating ? "f64" : "i64"} ${start(register)} = ${local(register)};`,
+			),
+			`    u8 ${id}_exit = 0;`,
+			"    for (;;) {",
+			...heads.slice(1).map((ip) => `      bool ${id}_b${ip} = false;`),
+		];
+		for (const head of heads) {
+			lines.push(head === plan.id ? "      {" : `      if (${id}_b${head}) {`);
+			let ip = head;
+			for (;;) {
+				lines.push(`        ${statement(ip, fixedF64)}`);
+				if (isBranch(ip)) break;
+				if (!members.has(ip + 1) || headSet.has(ip + 1)) {
+					lines.push(`        ${reach(ip + 1)}`);
+					break;
+				}
+				ip++;
+			}
+			lines.push("      }");
+		}
+		lines.push("    }");
+		for (const [index, exit] of plan.exits.entries()) {
+			lines.push(`    if (${id}_exit == ${index + 1}) {`);
+			for (const register of exit.outputs)
+				lines.push(`      ${materialize(register, local(register))}`);
+			lines.push(`      goto L${exit.targetIp};`, "    }");
+		}
+		for (const register of plan.carried)
+			lines.push(`    ${materialize(register, start(register))}`);
+		lines.push(`    goto L${plan.id};`);
+		return lines;
+	};
+	return [
 		"{",
-		...(plan.kind === "fixed-f64"
-			? plan.views.map((view) => `  byte *${id}_v${view.object} = nullptr;`)
+		...(plan.kind === "fixed-numeric"
+			? plan.views.map((view) => `  MalTypedArraySpan ${id}_v${view.object} = {0};`)
 			: []),
 		...[...flow.kinds].map(
 			([register, kind]) =>
 				`  ${kind === "boolean" ? "bool" : floating ? "f64" : "i64"} ${local(register)} = ${initial.get(register) ?? (kind === "boolean" ? "false" : "0")};`,
 		),
 		`  if (${guards.length === 0 ? "true" : guards.join(" && ")}) {`,
-		...(floating ? ["    MAL_PERF_COUNT(fixed_typed_array_region_admissions);"] : []),
-		...plan.carried.map(
-			(register) =>
-				`    ${kindOf(register) === "boolean" ? "bool" : floating ? "f64" : "i64"} ${start(register)} = ${local(register)};`,
-		),
-		`    u8 ${id}_exit = 0;`,
-		"    for (;;) {",
-		...heads.slice(1).map((ip) => `      bool ${id}_b${ip} = false;`),
+		...(plan.kind === "fixed-numeric"
+			? [
+					"    MAL_PERF_COUNT(fixed_typed_array_region_admissions);",
+					...plan.views.map(
+						(view) =>
+							`    MAL_PERF_COUNT(fixed_typed_array_region_views[${id}_v${view.object}.kind - MAL_TA_INT32]);`,
+					),
+					// One bounded specialization keeps kind dispatch out of the established Float64 loop.
+					`    if (${plan.views.map((view) => `${id}_v${view.object}.kind == MAL_TA_FLOAT64`).join(" && ")}) {`,
+					"      MAL_PERF_COUNT(fixed_typed_array_region_f64_admissions);",
+					...loopBody(true).map((line) => `  ${line}`),
+					"    } else {",
+					...loopBody(false).map((line) => `  ${line}`),
+					"    }",
+				]
+			: loopBody(false)),
+		"  }",
+		"}",
 	];
-	for (const head of heads) {
-		lines.push(head === plan.id ? "      {" : `      if (${id}_b${head}) {`);
-		let ip = head;
-		for (;;) {
-			lines.push(`        ${statement(ip)}`);
-			if (isBranch(ip)) break;
-			if (!members.has(ip + 1) || headSet.has(ip + 1)) {
-				lines.push(`        ${reach(ip + 1)}`);
-				break;
-			}
-			ip++;
-		}
-		lines.push("      }");
-	}
-	lines.push("    }");
-	for (const [index, exit] of plan.exits.entries()) {
-		lines.push(`    if (${id}_exit == ${index + 1}) {`);
-		for (const register of exit.outputs)
-			lines.push(`      ${materialize(register, local(register))}`);
-		lines.push(`      goto L${exit.targetIp};`, "    }");
-	}
-	for (const register of plan.carried)
-		lines.push(`    ${materialize(register, start(register))}`);
-	lines.push(`    goto L${plan.id};`, "  }", "}");
-	return lines;
 }
 
 function emitNumberRecordRegion(
@@ -2591,7 +2616,7 @@ function renderReductionAdapter(
 ): string {
 	const values = ["accumulator", "value", "index", "receiver"].slice(
 		0,
-		entry.parameterRepresentations.length,
+		(entry.argumentRepresentations ?? entry.parameterRepresentations).length,
 	);
 	return [
 		`${linkage === "static" ? "static " : ""}${numericReductionDeclaration(`${nativeCallbackSymbol(index, entry.id, suffix)}_reduce`)} {`,
@@ -6215,23 +6240,32 @@ function emitInstruction(
 			role === "charCodeAtProperty" &&
 			instruction.opcode === "LOAD_PROPERTY_STATIC"
 		) {
-			const method = `${prefix}_method_${ip}`;
-			declarations.push(`MalValue ${method};`);
-			// A non-index prototype data property is identical for every primitive string.
-			guard += ` && mal_vm_property_try_load_static(vm, ${source}, &${nativeBodyReference(resources, "propertyCache")}[${instruction.icIndex}], &${method})`;
-			// The overlapping chain's admission may belong to an earlier loop iteration.
-			const resetCapture =
-				nativeStringCharCodeAtChainAction === undefined
-					? ""
-					: `__string_char_code_at_${nativeStringCharCodeAtChainAction.chain.callIp}_captured = false; `;
-			projected = `${resetCapture}r${instruction.dst} = ${callValue(instruction.dst, method)};`;
+			const chain = nativeStringCharCodeAtChainAction?.chain;
+			const captured =
+				chain === undefined
+					? undefined
+					: `__string_char_code_at_${chain.callIp}_captured`;
+			if (chain?.methodIdentity === "authority-invariant") {
+				// The chain elides its locked callee; its admission must survive coercing fallback.
+				projected = `${captured} = true; r${instruction.dst} = MAL_VALUE_UNDEFINED;`;
+			} else {
+				const method = `${prefix}_method_${ip}`;
+				declarations.push(`MalValue ${method};`);
+				// A non-index prototype data property is identical for every primitive string.
+				guard += ` && mal_vm_property_try_load_static(vm, ${source}, &${nativeBodyReference(resources, "propertyCache")}[${instruction.icIndex}], &${method})`;
+				// The overlapping chain's admission may belong to an earlier loop iteration.
+				const resetCapture = captured === undefined ? "" : `${captured} = false; `;
+				projected = `${resetCapture}r${instruction.dst} = ${callValue(instruction.dst, method)};`;
+			}
 		} else if (
 			role === "charCodeAtCall" &&
 			(instruction.opcode === "CALL" || instruction.opcode === "CALL_KNOWN")
 		) {
 			const result = `${prefix}_code_${ip}`;
 			declarations.push(`f64 ${result};`);
-			const locked = instruction.opcode === "CALL_KNOWN";
+			const locked =
+				instruction.opcode === "CALL_KNOWN" ||
+				nativeStringCharCodeAtChainAction?.chain.methodIdentity === "authority-invariant";
 			const position =
 				instruction.arguments[0] === undefined
 					? "MAL_VALUE_UNDEFINED"

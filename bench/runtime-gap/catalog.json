@@ -2734,6 +2734,58 @@
 			"controls": ["tagged-record-branches", "tagged-record-fields"]
 		},
 		{
+			"id": "typed-array-three-view-f32",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "TypedArray storage regions",
+			"category": "object-array-representation",
+			"mechanisms": ["typed-arrays-numeric-loops"],
+			"inputShape": "Three fixed Float32Array views with fractional inputs and rounded stores in an ordered pointwise addition kernel.",
+			"unit": "element",
+			"sourceSeam": "src/compiler/target/lower-native-fast-paths.ts",
+			"fixture": "cases/typed-array-three-view-f32.mjs",
+			"controls": ["typed-array-three-view"]
+		},
+		{
+			"id": "typed-array-three-view-mixed",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "TypedArray storage regions",
+			"category": "object-array-representation",
+			"mechanisms": ["typed-arrays-numeric-loops"],
+			"inputShape": "Fixed Int32Array and Uint32Array inputs with a Float32Array output, including signed and unsigned values outside the Int32 positive range.",
+			"unit": "element",
+			"sourceSeam": "src/compiler/target/lower-native-fast-paths.ts",
+			"fixture": "cases/typed-array-three-view-mixed.mjs",
+			"controls": ["typed-array-three-view"]
+		},
+		{
+			"id": "loop-carried-span-records",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "Core temporary objects",
+			"category": "object-array-representation",
+			"mechanisms": ["allocation-gc"],
+			"inputShape": "A helper result alternates with a heap fallback across sixteen loop iterations; an uncommon observer materializes and mutates the original before later reads.",
+			"unit": "loop observation",
+			"sourceSeam": "src/compiler/core/core-ir-provenance.ts",
+			"fixture": "cases/loop-carried-span-records.mjs",
+			"controls": ["conditional-span-records"]
+		},
+		{
+			"id": "numeric-arguments-reduce",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "Array.prototype.reduce",
+			"category": "api-builtins",
+			"mechanisms": ["array-callback"],
+			"inputShape": "Captured numeric reduce/reduceRight callbacks consume the builtin-provided index and exact argument count through bounded arguments observations.",
+			"unit": "visited element",
+			"sourceSeam": "runtime/src/builtin_array.c",
+			"fixture": "cases/numeric-arguments-reduce.mjs",
+			"controls": ["numeric-captured-reduce"]
+		},
+		{
 			"id": "method-name-unique",
 			"group": "runtime",
 			"suite": "runtime",

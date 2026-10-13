@@ -35,6 +35,26 @@ describe("numeric reduction invocation", () => {
 					fn.storage!.callbackTransports.some((plan) => plan.numericReduction),
 				),
 			).toBe(true);
+			for (const name of ["snapshotReducer", "restReducer"]) {
+				const callback = pair.programImage.native.functions.find(
+					(fn) =>
+						String.fromCharCode(
+							...(pair.programImage.runtime.stringConstants[fn.body.nameStringIndex] ??
+								[]),
+						) === name,
+				)!;
+				expect(callback, name).toBeDefined();
+				expect(
+					pair.programImage.native.functions.some((fn) =>
+						fn.storage!.callbackTransports.some(
+							(plan) =>
+								plan.functionIndex === callback.functionIndex &&
+								plan.argumentCount === 4 &&
+								plan.numericReduction,
+						),
+					),
+				).toBe(true);
+			}
 			for (const binary of [pair.compiled, pair.interpreted])
 				for (const stress of [{}, STRESS_ENV])
 					expect(

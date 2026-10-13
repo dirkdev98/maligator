@@ -181,7 +181,7 @@ export type NativeNumericLoopRegionPlan = NativeNumericLoopRegionBase &
 	(
 		| { readonly kind: "integer" }
 		| {
-				readonly kind: "fixed-f64";
+				readonly kind: "fixed-numeric";
 				readonly index: number;
 				readonly bound: number;
 				readonly views: ReadonlyArray<{
@@ -1479,12 +1479,12 @@ export function numericLoopOrder(
 		: undefined;
 }
 
-function fixedF64LoopStorage(
+function fixedNumericLoopStorage(
 	fn: BytecodeFunction,
 	shape: NativeNumericLoopShape,
 ):
 	| Pick<
-			Extract<NativeNumericLoopRegionPlan, { kind: "fixed-f64" }>,
+			Extract<NativeNumericLoopRegionPlan, { kind: "fixed-numeric" }>,
 			"index" | "bound" | "views"
 	  >
 	| undefined {
@@ -1593,7 +1593,7 @@ function lowerNumericLoopRegion(
 	conflicts: (ip: number) => boolean,
 ): NativeNumericLoopRegionPlan | undefined {
 	const shape = numericLoopShape(fn, body, header);
-	const storage = shape === undefined ? undefined : fixedF64LoopStorage(fn, shape);
+	const storage = shape === undefined ? undefined : fixedNumericLoopStorage(fn, shape);
 	if (
 		shape === undefined ||
 		conflicts(shape.entryIp) ||
@@ -1654,7 +1654,7 @@ function lowerNumericLoopRegion(
 	return Object.freeze({
 		...(storage === undefined
 			? { kind: "integer" as const }
-			: { kind: "fixed-f64" as const, ...storage }),
+			: { kind: "fixed-numeric" as const, ...storage }),
 		id: header,
 		entryIp: shape.entryIp,
 		inputs: Object.freeze([...inputs].sort((a, b) => a - b)),
@@ -2588,6 +2588,7 @@ export function selectNativeFastPaths(
 	const numericLoopRegions: Array<NativeNumericLoopRegionPlan> = [];
 	const objectKeysSnapshots = selectNativeObjectKeysSnapshots(
 		native,
+		body,
 		stringConstants,
 		(ip) =>
 			(blocked.has(ip) && !snapshotOverlayIps.has(ip)) ||

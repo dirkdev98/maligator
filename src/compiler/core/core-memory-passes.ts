@@ -1,3 +1,4 @@
+import { prepareFreshArrayValues } from "./core-array-initialization.ts";
 import { CoreEditor } from "./core-editor.ts";
 import {
 	removeInstructionAndOwnedProof,
@@ -2620,6 +2621,7 @@ export const CORE_PROVENANCE_PASSES: ReadonlyArray<CoreFunctionPass> = [
 	eliminatePrimitiveWrappers,
 	lowerPrimitiveOperations,
 	reusePrimitiveCallResults,
+	prepareFreshArrayValues,
 	materializeVirtualState,
 	reuseLiteralConstants,
 	lowerKnownOperationResults,
@@ -2649,6 +2651,7 @@ export const CORE_MEMORY_PASSES: ReadonlyArray<CoreFunctionPass> = [
 	eliminatePrimitiveWrappers,
 	lowerPrimitiveOperations,
 	reusePrimitiveCallResults,
+	prepareFreshArrayValues,
 	materializeVirtualState,
 	reuseLiteralConstants,
 	lowerKnownOperationResults,

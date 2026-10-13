@@ -1250,11 +1250,13 @@ function stackObjectCandidate(
 			}
 			if (aliases.size > 16) return undefined;
 		}
+		// A carried alias must not survive a backedge that can re-enter its allocation.
 		for (const block of control.reachable) {
 			if (
 				(control.successors[block] ?? []).some(
 					(edge) =>
 						control.dominates(edge.to, block) &&
+						control.dominates(edge.to, fn.instructionBlock(layout.instruction)) &&
 						edge.arguments.some((value) => aliases.has(roots.get(value) ?? value)),
 				)
 			)
@@ -3998,6 +4000,8 @@ function regexpExecProjectionCandidates(
 
 		for (const load of loads) {
 			const capture = root(instructionResult(fn, load.instruction, 0)!);
+			// Control-flow arguments can retain a capture beyond the next exec result.
+			if (index.controlUses.has(capture)) continue;
 			const captureUses = semanticUses(capture);
 			if (captureUses.length === 1) {
 				const consumer = captureUses[0]!.instruction;
@@ -4067,6 +4071,7 @@ function regexpExecProjectionCandidates(
 					1
 			) {
 				const upperResult = root(instructionResult(fn, upperCall, 0)!);
+				if (index.controlUses.has(upperResult)) continue;
 				const upperUses = semanticUses(upperResult);
 				const lowerPropertyUse = upperUses.find(
 					({ instruction, position }) =>
@@ -4090,7 +4095,9 @@ function regexpExecProjectionCandidates(
 					(index.uses.get(root(instructionResult(fn, lowerProperty, 0)!))?.length ??
 						0) === 1
 				) {
-					const lowerUses = semanticUses(instructionResult(fn, lowerCall, 0)!);
+					const lowerResult = root(instructionResult(fn, lowerCall, 0)!);
+					if (index.controlUses.has(lowerResult)) continue;
+					const lowerUses = semanticUses(lowerResult);
 					const lengthProperty = lowerUses[0]?.instruction;
 					if (
 						lowerUses.length === 1 &&

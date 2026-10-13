@@ -19,7 +19,12 @@ import {
 import { nativeEntryLookup } from "../src/compiler/target/lower-native-calls.ts";
 import { emitCompiledFunction } from "../src/compiler/target/render-native-c.ts";
 
-function input(operation: "map" | "reduce", observesArguments = false, numeric = false) {
+function input(
+	operation: "map" | "reduce",
+	observesArguments = false,
+	numeric = false,
+	primordials: "mutable" | "locked" = "mutable",
+) {
 	const source = `globalThis.run = function run(values) {
 		return values.${operation}(function callback(${operation === "reduce" ? "accumulator, " : ""}value, index, receiver) {
 			let offset = index * 3;
@@ -32,7 +37,7 @@ function input(operation: "map" | "reduce", observesArguments = false, numeric =
 	const facts = withProgramClosure(
 		compilerProgramFactsFromConfig(
 			resolveBuildConfig({
-				engine: { eval: false, realms: false, primordials: "mutable" },
+				engine: { eval: false, realms: false, primordials },
 			}),
 		),
 		programClosureCertificate({ kind: "whole-program", entry: path }, [], []),
@@ -83,12 +88,179 @@ describe("native entries from builtin callback invocation facts", () => {
 		},
 	);
 
-	it("retains callbacks with general argument observation on the canonical ABI", () => {
-		const { semantic, options } = input("map", true);
+	it.each(["map", "reduce"] as const)(
+		"retains the %s invocation count in a typed callback entry",
+		(operation) => {
+			const { semantic, options } = input(operation, true, true);
+			const image = compileSemanticProgramToProgramImage(semantic, options);
+			const transport = image.native.functions.flatMap(
+				(fn) => fn.storage!.callbackTransports,
+			)[0]!;
+			expect(transport).toBeDefined();
+			expect(transport.argumentCount).toBe(operation === "map" ? 3 : 4);
+			expect(transport.numericReduction).toBe(operation === "reduce" ? true : undefined);
+			expect(deserializeCompilerArtifact(serializeCompilerArtifact(image))).toEqual(
+				image,
+			);
+		},
+	);
+
+	it.each([
+		[
+			"fixed argument snapshots",
+			"acc, value",
+			"arguments[0] + arguments[1] + arguments[2] + arguments[3].length",
+		],
+		[
+			"rest observations",
+			"acc, value, ...tail",
+			"acc + value + tail[0] + tail[1].length + tail.length",
+		],
+		[
+			"missing default formal",
+			"acc, value, index, receiver, missing = 7",
+			"acc + value + index + missing + arguments.length",
+		],
+	] as const)("carries exact reduce arity through %s", (_name, parameters, result) => {
+		for (const primordials of ["mutable", "locked"] as const) {
+			const { options } = input("reduce", false, false, primordials);
+			const semantic = analyzeSourceAndRunSemanticAnalysis(
+				`globalThis.run = function(values) {
+			return values.reduce(function(${parameters}) {
+				for (let i = 0; i < 2; i++) acc += value;
+				return ${result};
+			}, 0);
+		};`,
+				"/builtin-callback-entry.js",
+			);
+			const image = compileSemanticProgramToProgramImage(semantic, options);
+			const transport = image.native.functions.flatMap(
+				(fn) => fn.storage!.callbackTransports,
+			)[0]!;
+			expect(transport).toBeDefined();
+			expect(transport.argumentCount).toBe(4);
+			expect(transport.parameters).toHaveLength(4);
+			expect(deserializeCompilerArtifact(serializeCompilerArtifact(image))).toEqual(
+				image,
+			);
+		}
+	});
+
+	it.each([
+		"return arguments;",
+		"globalThis.consume(arguments); return value + index;",
+		"return arguments[index];",
+		"return arguments[3];",
+	])(
+		"retains unbounded or unavailable callback arguments on the canonical ABI: %s",
+		(body) => {
+			const { options } = input("map");
+			const semantic = analyzeSourceAndRunSemanticAnalysis(
+				`globalThis.run = function(values) {
+			return values.map(function(value, index) { ${body} });
+		};`,
+				"/builtin-callback-entry.js",
+			);
+			const image = compileSemanticProgramToProgramImage(semantic, options);
+			expect(
+				image.native.functions.flatMap((fn) => fn.storage!.callbackTransports),
+			).toEqual([]);
+		},
+	);
+
+	it.each([
+		"return tail;",
+		"globalThis.consume(tail); return value + index;",
+		"tail[0] = value; return value + index;",
+	])("retains escaping or changed rest arguments on the canonical ABI: %s", (body) => {
+		const { options } = input("map");
+		const semantic = analyzeSourceAndRunSemanticAnalysis(
+			`globalThis.run = function(values) {
+			return values.map(function(value, index, ...tail) { ${body} });
+		};`,
+			"/builtin-callback-entry.js",
+		);
 		const image = compileSemanticProgramToProgramImage(semantic, options);
 		expect(
 			image.native.functions.flatMap((fn) => fn.storage!.callbackTransports),
 		).toEqual([]);
+	});
+
+	it("does not infer a callback invocation contract from an unknown method", () => {
+		const { options } = input("map");
+		const semantic = analyzeSourceAndRunSemanticAnalysis(
+			`globalThis.run = function(values) {
+			return values.custom(function(value, index) { return value + index + arguments.length; });
+		};`,
+			"/builtin-callback-entry.js",
+		);
+		const image = compileSemanticProgramToProgramImage(semantic, options);
+		expect(
+			image.native.functions.flatMap((fn) => fn.storage!.callbackTransports),
+		).toEqual([]);
+	});
+
+	it("keeps different builtin argument vectors distinct for a callback without formals", () => {
+		const { options } = input("map");
+		const semantic = analyzeSourceAndRunSemanticAnalysis(
+			`globalThis.run = function(values) {
+			const callback = function() { return arguments.length + arguments[0] * 2 + arguments[1] * 3; };
+			return [values.map(callback), values.reduce(callback, 0)];
+		};`,
+			"/builtin-callback-entry.js",
+		);
+		const image = compileSemanticProgramToProgramImage(semantic, options);
+		const transports = image.native.functions.flatMap(
+			(fn) => fn.storage!.callbackTransports,
+		);
+		expect(transports.map((plan) => plan.argumentCount)).toEqual([3, 4]);
+		expect(new Set(transports.map((plan) => plan.entryId)).size).toBe(2);
+		for (const transport of transports) {
+			const callback = image.native.functions[transport.functionIndex]!;
+			expect(callback.body.parameterCount).toBe(0);
+			expect(
+				callback.directEntries[transport.entryId]!.argumentRepresentations,
+			).toHaveLength(transport.argumentCount!);
+		}
+	});
+
+	it("independently rejects exact arity inconsistent with the builtin body", () => {
+		const { semantic, options } = input("reduce", true, true);
+		const compilation = optimizeSemanticProgramToCore(semantic, options, (_phase, run) =>
+			run(),
+		);
+		const entry = compilation.plan.directEntries.find(
+			(entry) => entry.argumentRepresentations !== undefined,
+		)!;
+		const fn = compilation.program.function(entry.function);
+		for (const argumentRepresentations of [
+			entry.argumentRepresentations!.slice(0, 3),
+			[...entry.argumentRepresentations!, "boxed" as const],
+		]) {
+			const forged = {
+				...entry,
+				argumentRepresentations,
+				...analyzeCoreNativeEntry(
+					fn,
+					buildCoreControlFlow(compilation.program, entry.function),
+					entry.parameterRepresentations,
+					argumentRepresentations,
+					entry.callSites,
+				),
+			};
+			expect(() =>
+				verifyCoreOptimizationPlan(
+					compilation.program,
+					{
+						...compilation.plan,
+						directEntries: compilation.plan.directEntries.map((candidate) =>
+							candidate === entry ? forged : candidate,
+						),
+					},
+					compilation.context,
+				),
+			).toThrow(/builtin callback contract/);
+		}
 	});
 
 	it.each(["map", "reduce"] as const)(

@@ -3,12 +3,58 @@ import { CoreFunctionBuilder } from "../src/compiler/core/core-builder.ts";
 import { buildCoreControlFlow } from "../src/compiler/core/core-ir-control-flow.ts";
 import { coreOpcodeRegistry } from "../src/compiler/core/core-ir-opcodes.ts";
 import type { CoreBlockId } from "../src/compiler/core/core-ir.ts";
-import { analyzeCoreNativeEntry } from "../src/compiler/core/core-native-entry-analysis.ts";
+import {
+	analyzeCoreNativeEntry,
+	coreArgumentObservation,
+} from "../src/compiler/core/core-native-entry-analysis.ts";
 import { coreReadOnlyParameterFields } from "../src/compiler/core/core-native-field-analysis.ts";
 import { CoreProgram } from "../src/compiler/core/core-store.ts";
 import { COMPILER_VALUE_KIND_NUMBER } from "../src/compiler/shared/compiler-value-kinds.ts";
 
 describe("reachable native-entry annotations", () => {
+	it.each(["none", "allocation", "coercion", "throw", "write"] as const)(
+		"accepts argument snapshots only before effect barriers: %s",
+		(barrier) => {
+			const program = new CoreProgram(coreOpcodeRegistry, { stringConstants: [[]] });
+			const builder = new CoreFunctionBuilder(program);
+			const entry = builder.createBlock();
+			const [zero] = builder.appendInstruction(entry, "createNumber", [], {
+				attributes: { value: 0 },
+			});
+			if (barrier === "allocation")
+				builder.appendInstruction(entry, "createArray", [], {
+					attributes: { length: 0 },
+				});
+			if (barrier === "coercion")
+				builder.appendInstruction(entry, "binary", [zero!, zero!], {
+					attributes: { operator: "+" },
+				});
+			if (barrier === "throw")
+				builder.appendInstruction(entry, "throwIfTdz", [zero!], {
+					attributes: { nameStringIndex: 0 },
+				});
+			if (barrier === "write")
+				builder.appendInstruction(entry, "storeLocal", [zero!], {
+					attributes: { index: 0 },
+				});
+			const [snapshot] = builder.appendInstruction(entry, "loadArgument", [], {
+				attributes: { index: 0 },
+			});
+			builder.setTerminator(entry, { kind: "return", value: snapshot! });
+			const fn = program.function(builder.finish(entry).function);
+			expect(coreArgumentObservation(fn)).toEqual(
+				barrier === "none"
+					? {
+							kind: "count-and-static-elements",
+							readsCount: false,
+							indices: [0],
+							restStarts: [],
+						}
+					: { kind: "general" },
+			);
+		},
+	);
+
 	it("retains arithmetic and fixed-arity proofs in reachable handlers but omits disconnected blocks", () => {
 		const program = new CoreProgram(coreOpcodeRegistry, { stringConstants: [[]] });
 		const builder = new CoreFunctionBuilder(program);

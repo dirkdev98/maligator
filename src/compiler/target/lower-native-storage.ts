@@ -1534,8 +1534,8 @@ export function validateNativeStorage(
 			const expected = selected[index]!;
 			return (
 				plan.kind === expected.kind &&
-				(plan.kind !== "fixed-f64" ||
-					(expected.kind === "fixed-f64" &&
+				(plan.kind !== "fixed-numeric" ||
+					(expected.kind === "fixed-numeric" &&
 						plan.index === expected.index &&
 						plan.bound === expected.bound &&
 						plan.views.length === expected.views.length &&

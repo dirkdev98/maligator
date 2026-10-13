@@ -98,16 +98,34 @@ export function connectCoreNativeEntries(
 			.exceptional();
 	const signatureKey = (representations: ReadonlyArray<CorePlanRepresentation>) =>
 		representations.join(",");
+	const entrySignature = (
+		parameters: ReadonlyArray<CorePlanRepresentation>,
+		arguments_: ReadonlyArray<CorePlanRepresentation> | undefined,
+	) =>
+		`${signatureKey(parameters)}:${arguments_ === undefined ? "plain" : signatureKey(arguments_)}`;
+	const observations = new Map<
+		CoreFunctionId,
+		ReturnType<typeof coreArgumentObservation>
+	>();
+	const observationFor = (target: CoreFunctionId) => {
+		let observation = observations.get(target);
+		if (observation === undefined) {
+			observation = coreArgumentObservation(program.function(target));
+			observations.set(target, observation);
+		}
+		return observation;
+	};
 	const declined = new Set<string>();
 	const candidateCosts = new Map<
-		CoreFunctionId,
+		string,
 		{ generatedCode: number; compilerWork: number } | undefined
 	>();
-	const candidateCost = (target: CoreFunctionId) => {
-		if (candidateCosts.has(target)) return candidateCosts.get(target);
+	const candidateCost = (target: CoreFunctionId, argumentCount?: number) => {
+		const key = `${target}:${argumentCount ?? "plain"}`;
+		if (candidateCosts.has(key)) return candidateCosts.get(key);
 		const fn = program.function(target);
 		const instructionCount = [...fn.instructionIds()].length;
-		const observation = coreArgumentObservation(fn);
+		const observation = observationFor(target);
 		const eligible =
 			!fn.isGenerator &&
 			!fn.isAsync &&
@@ -115,14 +133,18 @@ export function connectCoreNativeEntries(
 			!fn.metadata.isDerivedConstructor &&
 			instructionCount <= 512 &&
 			observation.kind !== "general" &&
-			!observation.readsCount &&
-			observation.indices.length === 0 &&
-			observation.restStarts.length === 0;
+			(argumentCount === undefined
+				? !observation.readsCount &&
+					observation.indices.length === 0 &&
+					observation.restStarts.length === 0
+				: argumentCount <= 16 &&
+					observation.indices.every((index) => index < argumentCount) &&
+					observation.restStarts.every((index) => index <= argumentCount));
 		const generatedCode = Math.max(8, instructionCount);
 		const cost = eligible
 			? { generatedCode, compilerWork: generatedCode + fn.valueCapacity }
 			: undefined;
-		candidateCosts.set(target, cost);
+		candidateCosts.set(key, cost);
 		return cost;
 	};
 	const request = (
@@ -131,23 +153,28 @@ export function connectCoreNativeEntries(
 		parameters: ReadonlyArray<CorePlanRepresentation>,
 		callSites: CoreDirectEntryPlan["callSites"] = Object.freeze([]),
 		prepared?: ReturnType<typeof analyzeCoreNativeEntry>,
+		arguments_?: ReadonlyArray<CorePlanRepresentation>,
 	): EntryNode | undefined => {
-		const signature = signatureKey(parameters);
+		const signature = entrySignature(parameters, arguments_);
 		const entries = nodes.get(target) ?? [];
 		const existing = entries.find(
 			({ entry }) =>
-				plain(entry) && signatureKey(entry.parameterRepresentations) === signature,
+				entry.fieldParameters === undefined &&
+				entrySignature(entry.parameterRepresentations, entry.argumentRepresentations) ===
+					signature,
 		);
 		if (existing !== undefined) return existing;
 		const key = `${target}:${signature}`;
 		if (declined.has(key) || entries.length >= 4) return undefined;
 		declined.add(key);
 		const fn = program.function(target);
-		const cost = candidateCost(target);
+		const cost = candidateCost(target, arguments_?.length);
 		if (cost === undefined) return undefined;
 		const generatedCode = cost.generatedCode;
 		const compilerWork = prepared === undefined ? cost.compilerWork : 0;
-		const resultOnly = parameters.every((representation) => representation === "boxed");
+		const resultOnly = (arguments_ ?? parameters).every(
+			(representation) => representation === "boxed",
+		);
 		// A boxed-input helper can still return a scalar. Charge its proof as
 		// discovery so a rejected result does not consume a generated sibling.
 		if (
@@ -158,7 +185,7 @@ export function connectCoreNativeEntries(
 			return undefined;
 		const variant =
 			prepared ??
-			analyzeCoreNativeEntry(fn, cfg(target), parameters, undefined, callSites);
+			analyzeCoreNativeEntry(fn, cfg(target), parameters, arguments_, callSites);
 		if (
 			resultOnly &&
 			(variant.resultRepresentation === "boxed" ||
@@ -171,6 +198,9 @@ export function connectCoreNativeEntries(
 				function: target,
 				callSites,
 				parameterRepresentations: Object.freeze([...parameters]),
+				...(arguments_ === undefined
+					? {}
+					: { argumentRepresentations: Object.freeze([...arguments_]) }),
 				...variant,
 				target: "native",
 				fallback: "canonical-core",
@@ -186,7 +216,8 @@ export function connectCoreNativeEntries(
 		string,
 		{
 			target: CoreFunctionId;
-			parameters: ReadonlyArray<CorePlanRepresentation>;
+			representations: ReadonlyArray<CorePlanRepresentation>;
+			exactArity: boolean;
 			calls: Array<CoreDirectEntryPlan["callSites"][number]>;
 		}
 	>();
@@ -199,6 +230,13 @@ export function connectCoreNativeEntries(
 				: builtinOperationDescriptor(operation)?.callback;
 		if (invocation === undefined || operation === undefined) continue;
 		const fn = program.function(callback.target);
+		const observation = observationFor(callback.target);
+		if (observation.kind === "general") continue;
+		const exactArity =
+			observation.readsCount ||
+			observation.indices.length > 0 ||
+			observation.restStarts.length > 0;
+		const argumentCount = invocation.argumentKinds.length;
 		if (
 			(nodes.get(callback.target) ?? []).some(
 				({ entry }) =>
@@ -209,12 +247,14 @@ export function connectCoreNativeEntries(
 			)
 		)
 			continue;
-		const parameters = Array.from(
-			{ length: fn.parameterCount },
+		// Builtin invocation arity is independent of the callback's declared formals.
+		const representations = Array.from(
+			{ length: exactArity ? argumentCount : fn.parameterCount },
 			(_, index): CorePlanRepresentation =>
 				invocation.argumentKinds[index] === "number" ? "f64" : "boxed",
 		);
 		if (
+			!exactArity &&
 			!invocation.argumentKinds.some(
 				(kind, index) =>
 					index < fn.parameterCount &&
@@ -223,10 +263,11 @@ export function connectCoreNativeEntries(
 			)
 		)
 			continue;
-		const key = `${callback.target}:${signatureKey(parameters)}`;
+		const key = `${callback.target}:${exactArity}:${signatureKey(representations)}`;
 		const seed = callbackSeeds.get(key) ?? {
 			target: callback.target,
-			parameters,
+			representations,
+			exactArity,
 			calls: [],
 		};
 		seed.calls.push(
@@ -242,20 +283,30 @@ export function connectCoreNativeEntries(
 	const nominatedTargets = new Set<CoreFunctionId>();
 	for (const seed of callbackSeeds.values()) {
 		if ((nodes.get(seed.target)?.length ?? 0) >= 4) continue;
-		const cost = candidateCost(seed.target);
+		const cost = candidateCost(
+			seed.target,
+			seed.exactArity ? seed.representations.length : undefined,
+		);
 		if (cost === undefined) continue;
 		const fn = program.function(seed.target);
 		const invocation = builtinOperationDescriptor(
 			seed.calls[0]!.builtinCallbackOperation!,
 		)!.callback!;
-		const nominated = seed.parameters.map((rep, index) =>
+		const observation = observationFor(seed.target);
+		const nominated = seed.representations.map((rep, index) =>
 			!nominatedTargets.has(seed.target) &&
 			invocation.argumentKinds[index] === "any" &&
-			fn.valueUseCount(fn.kernel.functionParameter(index)) > 0
+			((index < fn.parameterCount &&
+				fn.valueUseCount(fn.kernel.functionParameter(index)) > 0) ||
+				(observation.kind !== "general" &&
+					(observation.indices.includes(index) ||
+						observation.restStarts.some((start) => index >= start))))
 				? ("f64" as const)
 				: rep,
 		);
-		const triesNumbers = nominated.some((rep, index) => rep !== seed.parameters[index]);
+		const triesNumbers = nominated.some(
+			(rep, index) => rep !== seed.representations[index],
+		);
 		if (triesNumbers) nominatedTargets.add(seed.target);
 		if (
 			!admitAnalysis(
@@ -266,14 +317,19 @@ export function connectCoreNativeEntries(
 			continue;
 		const control = cfg(seed.target);
 		const calls = Object.freeze(seed.calls);
+		const parametersFor = (representations: ReadonlyArray<CorePlanRepresentation>) =>
+			Array.from(
+				{ length: fn.parameterCount },
+				(_, index) => representations[index] ?? "boxed",
+			);
 		const baseline = analyzeCoreNativeEntry(
 			fn,
 			control,
-			seed.parameters,
-			undefined,
+			parametersFor(seed.representations),
+			seed.exactArity ? seed.representations : undefined,
 			calls,
 		);
-		let parameters = seed.parameters,
+		let representations = seed.representations,
 			callSites = calls,
 			variant = baseline;
 		if (triesNumbers) {
@@ -285,8 +341,8 @@ export function connectCoreNativeEntries(
 			const candidate = analyzeCoreNativeEntry(
 				fn,
 				control,
-				nominated,
-				undefined,
+				parametersFor(nominated),
+				seed.exactArity ? nominated : undefined,
 				guardedCalls,
 			);
 			const baselineNumbers = new Set(
@@ -302,13 +358,20 @@ export function connectCoreNativeEntries(
 					site.masks.every((mask) => mask === COMPILER_VALUE_KIND_NUMBER),
 			);
 			if (gain) {
-				parameters = nominated;
+				representations = nominated;
 				callSites = guardedCalls;
 				variant = candidate;
 			}
 		}
-		if (parameters.every((rep) => rep === "boxed")) continue;
-		request(seed.target, calls[0]!.instruction, parameters, callSites, variant);
+		if (representations.every((rep) => rep === "boxed")) continue;
+		request(
+			seed.target,
+			calls[0]!.instruction,
+			parametersFor(representations),
+			callSites,
+			variant,
+			seed.exactArity ? representations : undefined,
+		);
 	}
 	for (let cursor = 0; cursor < pending.length; cursor++) {
 		const node = pending[cursor]!;

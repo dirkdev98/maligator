@@ -16,6 +16,14 @@ function compile(body: string) {
 	);
 }
 describe("Object.keys count storage", () => {
+	it.each([
+		"const keys=Object.keys({ first:record, second:hook });return [keys[hook],keys.length];",
+		"const keys=Object.keys(hook(record));return [keys[0],keys.length];",
+	])("retains the captured builtin across argument preparation: %s", (source) => {
+		const image = compile(source);
+		expect(image.native.functions[1]!.storage!.objectKeysSnapshots).toHaveLength(1);
+		expect(deserializeCompilerArtifact(serializeCompilerArtifact(image))).toEqual(image);
+	});
 	it("bounds lifetime analysis even when earlier key snapshots escape", () => {
 		const source = (escapes: number) =>
 			`${"hook(Object.keys(record));".repeat(escapes)} return Object.keys(record).length;`;

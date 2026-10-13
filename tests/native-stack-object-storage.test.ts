@@ -391,6 +391,56 @@ describe("native typed stack fields", () => {
 });
 
 describe("observing virtual objects", () => {
+	it("carries a helper's one allocation through mixed loop aliases and observations", () => {
+		const image = compile(`
+			function make(value){return {x:value,y:2,label:"span"};}
+			const original=make(1.5);let object=input;let prior=input;let sum=0;
+			for(let i=0;i<12;i++){
+				if(i%3===0)object=original;
+				if(i%3===1)object=input;
+				if(i%4===0)globalThis.observe(object,prior);
+				object.y=object.y+1;sum+=object.x+prior.y;prior=object;
+			}
+			return sum+original.y;
+		`);
+		const native = image.native.functions[1]!;
+		const sites = native.specializations.flatMap((region) =>
+			region.kind === "stack-object-plan" ? region.sites : [],
+		);
+		expect(sites).toHaveLength(1);
+		expect(sites[0]!.materializations.some((entry) => entry.kind === "observe")).toBe(
+			true,
+		);
+		expect(native.storage!.stackObjects).toHaveLength(1);
+		expect(deserializeCompilerArtifact(serializeCompilerArtifact(image))).toEqual(image);
+		expect(emitCompiledFunction(native, native.functionIndex, "", false)).not.toBeNull();
+	});
+
+	it.each([
+		`let object=input;let sum=0;for(let i=0;i<12;i++){
+			if(i%3===0)object={x:i,y:2};if(i%4===0)globalThis.observe(object);
+			sum+=object.x+object.y;
+		}return sum;`,
+		`let prior=input;for(let i=0;i<3;i++){
+			const object={x:i,y:2};if(i)globalThis.observe(prior);prior=object;
+		}return prior.x;`,
+		`const original={x:1,y:2};let object=input;let sum=0;for(let i=0;i<3;i++){
+			try{if(i%2)object=original;globalThis.observe(object);sum+=object.x;}
+			catch(error){object=input;sum+=object.y;}
+		}return sum;`,
+	])(
+		"declines recycled generations or handled observations on mixed backedges",
+		(body) => {
+			const image = compile(body);
+			expect(
+				image.native.functions[1]!.specializations.some(
+					(region) => region.kind === "stack-object-plan",
+				),
+			).toBe(false);
+			expect(() => serializeCompilerArtifact(image)).not.toThrow();
+		},
+	);
+
 	it("retains mixed helper results inside a loop without carrying virtual values across its backedge", () => {
 		const image = compile(
 			`let sum=0;for(let i=0;i<12;i++){const o=i%2?{x:i,y:2}:input;if(i%3===0)globalThis.observe(o);sum+=o.x+o.y;}return sum;`,

@@ -6,6 +6,7 @@ import {
 	compilerOperatorInputKindsHaveExactNativeSemantics,
 } from "../shared/compiler-value-kinds.ts";
 import type { CoreControlFlow } from "./core-ir-control-flow.ts";
+import { coreInstructionEffects } from "./core-ir-opcodes.ts";
 import type { CoreDirectEntryPlan, CorePlanRepresentation } from "./core-ir-regions.ts";
 import type { CoreValueKindAnalysis } from "./core-ir-value-kinds.ts";
 import { analyzeCoreValueKinds } from "./core-ir-value-kinds.ts";
@@ -302,9 +303,21 @@ export type CoreArgumentObservation =
 export function coreArgumentObservation(fn: CoreFunctionStore): CoreArgumentObservation {
 	if (fn.metadata.mappedArguments) return { kind: "general" };
 	const snapshots = new Map<CoreValueId, number>();
+	let prefixBudget = 64;
 	for (const instruction of fn.bodyInstructionIds(fn.entry)) {
+		if (prefixBudget-- === 0) break;
 		const opcode = fn.instructionOpcodeName(instruction);
-		if (opcode !== "loadArgumentCount" && opcode !== "loadArgument") break;
+		if (opcode !== "loadArgumentCount" && opcode !== "loadArgument") {
+			const effects = coreInstructionEffects(fn, instruction);
+			if (
+				effects.mayGc ||
+				effects.mayThrow ||
+				effects.maySuspend ||
+				effects.callsUserCode ||
+				effects.writes.length > 0
+			)
+				break;
+		}
 		if (opcode === "loadArgument")
 			snapshots.set(
 				fn.kernel.resultAt(fn.kernel.instructionResultStart(instruction)),

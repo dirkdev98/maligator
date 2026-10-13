@@ -67,7 +67,6 @@ export function selectNativeCallbackTransports(
 				resultRepresentation: entry.resultRepresentation,
 				...((call.guardedBuiltinCall?.operation === "Array.prototype.reduce" ||
 					call.guardedBuiltinCall?.operation === "Array.prototype.reduceRight") &&
-				entry.argumentRepresentations === undefined &&
 				entry.resultRepresentation === "number" &&
 				parameters.length >= 2 &&
 				parameters.length <= 4 &&

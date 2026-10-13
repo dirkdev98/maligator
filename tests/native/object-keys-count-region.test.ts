@@ -6,6 +6,7 @@ import { afterAll, describe, expect, it } from "vitest";
 import { resolveBuildConfig } from "../../src/build-config.ts";
 import {
 	buildBackendPairFromOneProgramImage,
+	buildNativeBinaryResult,
 	HOST_MAIN,
 	runToStdout,
 	STRESS_ENV,
@@ -26,21 +27,23 @@ describe("Object.keys count regions", () => {
 			],
 			{ encoding: "utf8" },
 		);
-		const pair = buildBackendPairFromOneProgramImage({
-			fixture: realmFixture,
-			name: "object-keys-snapshot-realms",
-			outDir,
-			config: resolveBuildConfig({ engine: { primordials: "mutable", realms: true } }),
-		});
-		expect(
-			pair.programImage.native.functions.some((fn) =>
-				fn.storage!.objectKeysSnapshots.some((plan) => plan.elementIps.length > 0),
-			),
-		).toBe(true);
-		for (const binary of [pair.compiled, pair.interpreted]) {
+		for (const compiled of [true, false]) {
+			const built = buildNativeBinaryResult({
+				fixture: realmFixture,
+				name: `object-keys-snapshot-realms-${compiled ? "compiled" : "interpreted"}`,
+				compiled,
+				mainFile: "runtime/test262_main.c",
+				outDir,
+				config: resolveBuildConfig({ engine: { primordials: "mutable", realms: true } }),
+			});
+			expect(
+				built.programImage.native.functions.some((fn) =>
+					fn.storage!.objectKeysSnapshots.some((plan) => plan.elementIps.length > 0),
+				),
+			).toBe(true);
 			for (const stress of [{}, STRESS_ENV]) {
 				expect(
-					runToStdout(binary, {
+					runToStdout(built.binaryPath, {
 						env: { MAL_TEST262: "1", MAL_HOST_GC: "1", ...stress },
 						timeoutMs: 60_000,
 					}),

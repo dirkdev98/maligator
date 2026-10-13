@@ -17,7 +17,7 @@ afterAll(() => rmSync(outDir, { recursive: true, force: true }));
 
 describe("fixed TypedArray storage regions", () => {
 	it.each(["mutable", "locked"] as const)(
-		"preserves bounds, overlap, fallback coercions, detachment, and polled state under %s primordials",
+		"preserves numeric conversions, mixed overlap, fallback coercions, detachment, and polled state under %s primordials",
 		(primordials) => {
 			const expected = execFileSync(process.execPath, [fixture], {
 				encoding: "utf8",
@@ -37,7 +37,7 @@ describe("fixed TypedArray storage regions", () => {
 			expect(
 				pair.programImage.native.functions
 					.flatMap((fn) => fn.storage!.numericLoopRegions)
-					.some((plan) => plan.kind === "fixed-f64"),
+					.some((plan) => plan.kind === "fixed-numeric"),
 			).toBe(true);
 			for (const binary of [pair.compiled, pair.interpreted])
 				for (const stress of [{}, STRESS_ENV])
@@ -59,10 +59,11 @@ describe("fixed TypedArray storage regions", () => {
 			expect(measured.status, measured.stderr).toBe(0);
 			expect(measured.stdout).toBe(expected);
 			const stats = measured.stderr.match(
-				/\[perf-typed-array-region-stats\] admissions=(\d+)/,
+				/\[perf-typed-array-region-stats\] admissions=(\d+) i32_views=(\d+) u32_views=(\d+) f32_views=(\d+) f64_views=(\d+) f64_regions=(\d+)/,
 			);
 			expect(stats).not.toBeNull();
-			expect(Number(stats![1])).toBeGreaterThan(0);
+			for (const count of stats!.slice(1)) expect(Number(count)).toBeGreaterThan(0);
+			expect(Number(stats![6])).toBeLessThan(Number(stats![1]));
 		},
 		600_000,
 	);

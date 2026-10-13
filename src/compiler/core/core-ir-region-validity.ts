@@ -2129,9 +2129,10 @@ export function verifyCoreOptimizationPlan(
 				if (
 					callbackOrigins.has(origin) ||
 					observation.kind === "general" ||
-					observation.readsCount ||
-					observation.indices.length > 0 ||
-					observation.restStarts.length > 0 ||
+					(entry.argumentRepresentations === undefined &&
+						(observation.readsCount ||
+							observation.indices.length > 0 ||
+							observation.restStarts.length > 0)) ||
 					!plan.liveFunctions.includes(site.caller) ||
 					!caller.isInstructionLive(site.instruction) ||
 					!blockProofs
@@ -2146,15 +2147,18 @@ export function verifyCoreOptimizationPlan(
 					site.numericSortCallbackViaCall !== undefined ||
 					site.fieldObject !== undefined ||
 					entry.fieldParameters !== undefined ||
-					entry.argumentRepresentations !== undefined ||
-					entry.parameterRepresentations.some((rep, index) => {
-						const kind = invocation.argumentKinds[index];
-						return kind === "number"
-							? rep !== "f64"
-							: kind === "any" && site.builtinCallbackNumbers === true
-								? rep !== "boxed" && rep !== "f64"
-								: rep !== "boxed";
-					})
+					(entry.argumentRepresentations !== undefined &&
+						entry.argumentRepresentations.length !== invocation.argumentKinds.length) ||
+					(entry.argumentRepresentations ?? entry.parameterRepresentations).some(
+						(rep, index) => {
+							const kind = invocation.argumentKinds[index];
+							return kind === "number"
+								? rep !== "f64"
+								: kind === "any" && site.builtinCallbackNumbers === true
+									? rep !== "boxed" && rep !== "f64"
+									: rep !== "boxed";
+						},
+					)
 				)
 					fail(
 						`direct entry ${entry.function}:${entry.id} has an invalid builtin callback contract`,
