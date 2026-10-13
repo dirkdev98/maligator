@@ -85,6 +85,28 @@ describe("composable string spans", () => {
 						.map((plan) => plan.sourceKind) ?? [],
 			);
 			expect(nestedSources).toEqual(expect.arrayContaining(["range", "split", "regexp"]));
+			const deepSources = pair.programImage.native.functions.flatMap((fn) => {
+				const depths = new Map(
+					fn.specializations
+						.filter((region) => region.kind === "string-span")
+						.map((region) => [region.callIp, 1]),
+				);
+				const sources: Array<string> = [];
+				for (const plan of fn.storage?.spanContinuations ?? []) {
+					const depth =
+						1 +
+						Math.max(
+							0,
+							...plan.consumers
+								.filter((consumer) => consumer.kind === "rangeCall")
+								.map((consumer) => depths.get(consumer.ip) ?? 0),
+						);
+					depths.set(plan.producerIp, depth);
+					if (depth === 4) sources.push(plan.sourceKind);
+				}
+				return sources;
+			});
+			expect(deepSources).toEqual(expect.arrayContaining(["range", "split", "regexp"]));
 			for (const binary of [pair.compiled, pair.interpreted])
 				for (const stress of [{}, STRESS_ENV])
 					expect(
@@ -134,6 +156,11 @@ describe("composable string spans", () => {
 			);
 			expect(nested).not.toBeNull();
 			expect(Number(nested![1])).toBeGreaterThan(0);
+			const deep = measured.stderr.match(
+				/\[perf-string-span-deep-stats\] admissions=(\d+)/,
+			);
+			expect(deep).not.toBeNull();
+			expect(Number(deep![1])).toBeGreaterThan(0);
 			const substring = measured.stderr.match(
 				/\[perf-string-span-substring-stats\] admissions=(\d+)/,
 			);

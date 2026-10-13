@@ -102,6 +102,8 @@ export const VM_GUARDED_BUILTIN_OPERATIONS = [
 	"Math.max",
 	"RegExp.prototype.exec",
 	"Array.prototype.forEach",
+	"Map.prototype.forEach",
+	"Set.prototype.forEach",
 	"Array.prototype.some",
 	"Array.prototype.every",
 	"Array.prototype.find",

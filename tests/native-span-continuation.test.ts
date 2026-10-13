@@ -459,3 +459,139 @@ describe("string character continuation results", () => {
 		},
 	);
 });
+
+describe("bounded bottom-up span composition", () => {
+	function chain(depth: number, producer = "source.slice(1,-1)") {
+		const producers = Array.from(
+			{ length: depth },
+			(_, index) =>
+				`const p${index}=${index === 0 ? producer : `p${index - 1}.${index % 2 ? "substring(0,8)" : "slice(0,7)"}`};`,
+		).join("");
+		return `${producers}const result=p${depth - 1}.charAt(0)+p${depth - 1}.at(-1);if(escape)return [result,p0];return result+p0.length;`;
+	}
+	function depthOf(native: ReturnType<typeof compile>["native"]["functions"][number]) {
+		const depths = new Map(
+			native.specializations
+				.filter((region) => region.kind === "string-span")
+				.map((region) => [region.callIp, 1]),
+		);
+		for (const plan of native.storage!.spanContinuations) {
+			const childDepths = plan.consumers
+				.filter((consumer) => consumer.kind === "rangeCall")
+				.map((consumer) => {
+					const child = depths.get(consumer.ip);
+					expect(child, "children must precede their admitted parents").toBeDefined();
+					return child!;
+				});
+			depths.set(plan.producerIp, 1 + Math.max(0, ...childDepths));
+		}
+		return Math.max(0, ...depths.values());
+	}
+	it.each(["mutable", "locked"] as const)(
+		"composes four levels with independent observers under %s primordials",
+		(mode) => {
+			for (const producer of [
+				"source.slice(1,-1)",
+				"source.split('|')[1]",
+				"observe.exec(source)[1]",
+			]) {
+				for (const depth of [3, 4]) {
+					const image = compile(chain(depth, producer), mode);
+					const native = image.native.functions[1]!;
+					expect(depthOf(native)).toBe(depth);
+					expect(native.storage!.spanContinuations).toHaveLength(depth - 1);
+					const root = native.storage!.spanContinuations.at(-1)!;
+					expect(root.consumers.map((c) => c.kind)).toEqual(
+						expect.arrayContaining(["rangeCall", "length", "materialize"]),
+					);
+					for (const plan of native.storage!.spanContinuations) {
+						for (const consumer of plan.consumers.filter((c) => c.kind === "rangeCall")) {
+							const producer = native.body.instructions[consumer.ip]!;
+							expect(producer).toMatchObject({ thisValue: consumer.value });
+						}
+					}
+					expect(deserializeCompilerArtifact(serializeCompilerArtifact(image))).toEqual(
+						image,
+					);
+					const emitted = emitCompiledFunction(native, 1, "", false)!.source;
+					const rangeRoots = [
+						...emitted.matchAll(
+							/mal_builtin_string_range_span_init\([^\n]+&__gc_slots\[(\d+)\], &__string_span_/g,
+						),
+					].map((match) => match[1]);
+					expect(rangeRoots).toHaveLength(producer.includes("slice") ? depth : depth - 1);
+					expect(new Set(rangeRoots).size).toBe(rangeRoots.length);
+					expect(() => emitProgramImage(image, {})).not.toThrow();
+				}
+			}
+		},
+	);
+	it("retains a four-level suffix when a fifth producer exceeds the depth budget", () => {
+		const native = compile(chain(5)).native.functions[1]!;
+		expect(depthOf(native)).toBe(4);
+		expect(native.storage!.spanContinuations).toHaveLength(3);
+		const firstCall = native.body.instructions.findIndex(
+			(op) => op.opcode === "CALL" || op.opcode === "CALL_KNOWN",
+		);
+		expect(
+			native.storage!.spanContinuations.some((plan) => plan.producerIp === firstCall),
+		).toBe(false);
+	});
+	it("composes both child branches and retains intermediate materializing observers", () => {
+		const image = compile(
+			`const outer=source.slice(1,-1); const middle=outer.substring(0,8);observe(middle);if(escape){const child=middle.slice(0,4);const leaf=child.substring(0,2);return leaf.length+middle.length;}const child=middle.substring(1,7);const leaf=child.slice(0,2);return leaf.charCodeAt(0)+outer.length;`,
+		);
+		const native = image.native.functions[1]!;
+		expect(depthOf(native)).toBe(4);
+		const middle = native.storage!.spanContinuations.find(
+			(plan) => plan.consumers.filter((c) => c.kind === "rangeCall").length === 2,
+		)!;
+		expect(middle).toBeDefined();
+		expect(middle.consumers.map((c) => c.kind)).toContain("materialize");
+		expect(() => emitProgramImage(image, {})).not.toThrow();
+	});
+	it("rejects forged middle links and omitted intermediate observers", () => {
+		const image = compile(
+			`const outer=source.slice(1,-1);const middle=outer.substring(0,8);observe(middle);const leaf=middle.slice(0,2);return leaf.length+outer.length;`,
+		);
+		const native = image.native.functions[1]!;
+		const plans = native.storage!.spanContinuations;
+		expect(depthOf(native)).toBe(3);
+		for (const mutate of [
+			(plan: (typeof plans)[number]) => ({
+				...plan,
+				consumers: plan.consumers.filter((c) => c.kind !== "materialize"),
+			}),
+			(plan: (typeof plans)[number]) => ({
+				...plan,
+				consumers: plan.consumers.map((c) =>
+					c.kind === "rangeCall" ? { ...c, ip: plan.producerIp } : c,
+				),
+			}),
+		]) {
+			const forged = plans.map(mutate);
+			expect(() =>
+				serializeCompilerArtifact({
+					...image,
+					native: {
+						...image.native,
+						functions: image.native.functions.with(1, {
+							...native,
+							storage: { ...native.storage!, spanContinuations: forged },
+						}),
+					},
+				}),
+			).toThrow(/invalid or stale storage plan/);
+		}
+	});
+	it("rejects mixed middle lifetimes and captures retained through another exec", () => {
+		for (const source of [
+			`const outer=source.slice(1,-1);const middle=outer.substring(0,8);const chosen=escape?middle:source;const leaf=chosen.slice(0,2);return leaf.length;`,
+			`let previous="";let result=0;for(let i=0;i<3;i++){const outer=observe.exec(source)[1];const middle=outer.substring(0,8);const leaf=previous.slice(0,2);result+=leaf.length;previous=middle;}return result;`,
+		]) {
+			const native = compile(source).native.functions[1]!;
+			expect(depthOf(native)).toBeLessThan(3);
+			expect(() => emitCompiledFunction(native, 1, "", false)).not.toThrow();
+		}
+	});
+});

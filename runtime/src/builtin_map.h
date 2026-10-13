@@ -15,6 +15,11 @@ typedef enum MalBuiltinCollectionReceiverFact {
  */
 void mal_builtin_map_install(MalVm *vm);
 
+MalValue mal_builtin_map_prototype_for_each(
+    MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count,
+    MalValue new_target, MalValue callee
+);
+
 /** Exact locked Map.prototype.get after private-fresh receiver proof. */
 MalValue mal_builtin_map_get_known(
     MalVm *vm,

@@ -2903,6 +2903,19 @@
 			"controls": ["sorting", "typed-array-operations"]
 		},
 		{
+			"id": "map-foreach-callback",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "Map forEach callback transport",
+			"category": "api-builtins",
+			"mechanisms": ["array-callback"],
+			"inputShape": "Map forEach traverses nonnumeric keys with captured arithmetic and exact value/key/owner argument transport.",
+			"unit": "visited entry",
+			"sourceSeam": "runtime/src/builtin_map.c",
+			"fixture": "cases/map-foreach-callback.mjs",
+			"controls": ["map-operations", "typed-array-map-callback"]
+		},
+		{
 			"id": "string-span-characters",
 			"group": "runtime",
 			"suite": "runtime",
@@ -2914,6 +2927,19 @@
 			"sourceSeam": "runtime/src/builtin_string.c",
 			"fixture": "cases/string-span-characters.mjs",
 			"controls": ["string-span-code-points", "string-span-nested"]
+		},
+		{
+			"id": "string-span-deep",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "Bounded nested string spans",
+			"category": "memory-layout-usage",
+			"mechanisms": ["string-allocation", "string-traversal"],
+			"inputShape": "Four-level alternating slice and substring chains retain relative UTF-16 bounds and ancestor lengths through character consumers and sparse observations.",
+			"unit": "token",
+			"sourceSeam": "src/compiler/target/native-span-continuation.ts",
+			"fixture": "cases/string-span-deep.mjs",
+			"controls": ["string-span-nested", "string-span-characters"]
 		},
 		{
 			"id": "method-name-unique",

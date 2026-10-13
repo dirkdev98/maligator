@@ -1,5 +1,6 @@
 import {
 	builtinOperations,
+	builtinOperationDescriptor,
 	builtinPrimitiveResult,
 	exactBuiltinCallDescriptor,
 	mathUnaryOperationKeys,
@@ -984,6 +985,9 @@ const rewriteExactBuiltinCalls: CoreFunctionPass = {
 			}
 			const existingKnownBuiltinCall =
 				fn.instructionAttributes(instruction).knownBuiltinCall;
+			const previousBuiltinOperation = (
+				existingKnownBuiltinCall as { readonly operation?: unknown } | undefined
+			)?.operation;
 			const inputs = copyInstructionOperands(fn, instruction);
 			const [callee, receiver] = inputs;
 			if (callee === undefined || receiver === undefined) continue;
@@ -1034,6 +1038,17 @@ const rewriteExactBuiltinCalls: CoreFunctionPass = {
 			const callbackFamily = candidates.find(
 				(candidate) => candidate.guardedCallees !== undefined,
 			);
+			const callbackHints = candidates.filter(
+				(candidate) =>
+					candidate.callback !== undefined &&
+					constructedCallbackReceiverHint(
+						program,
+						fn,
+						root,
+						receiverRoot,
+						candidate.receiver,
+					),
+			);
 			const compatibleCollectionCollision =
 				candidates.length === 2 &&
 				(key === "has" || key === "delete") &&
@@ -1044,11 +1059,13 @@ const rewriteExactBuiltinCalls: CoreFunctionPass = {
 					? candidates[0]
 					: ownerMatches.length === 1
 						? ownerMatches[0]
-						: callbackFamily !== undefined
-							? callbackFamily
-							: compatibleCollectionCollision
-								? candidates[0]
-								: undefined;
+						: callbackHints.length === 1
+							? callbackHints[0]
+							: callbackFamily !== undefined
+								? callbackFamily
+								: compatibleCollectionCollision
+									? candidates[0]
+									: undefined;
 			if (descriptor === undefined) continue;
 			if (descriptor.receiver === "boolean" && !booleanReceiver()) continue;
 			const exact = exactBuiltinCallDescriptor(descriptor.id);
@@ -1157,7 +1174,14 @@ const rewriteExactBuiltinCalls: CoreFunctionPass = {
 			if (
 				numericRewrite === undefined &&
 				exactRewrite === undefined &&
-				existingKnownBuiltinCall !== undefined
+				existingKnownBuiltinCall !== undefined &&
+				!(
+					descriptor.callback !== undefined &&
+					(ownerMatches.length === 1 || callbackHints.length === 1) &&
+					typeof previousBuiltinOperation === "string" &&
+					builtinOperationDescriptor(previousBuiltinOperation)?.guardedCallees !==
+						undefined
+				)
 			) {
 				continue;
 			}
@@ -1447,6 +1471,36 @@ function constructedCollectionReceiver(
 		fn.instructionOpcodeName(constructorDefinition) === "loadIntrinsic" &&
 		fn.instructionAttributes(constructorDefinition).intrinsic ===
 			(receiver === "map" ? "Map" : "Set")
+	);
+}
+
+function constructedCallbackReceiverHint(
+	program: CoreProgram,
+	fn: CoreFunctionStore,
+	root: (value: CoreValueId) => CoreValueId,
+	value: CoreValueId,
+	receiver: string,
+): boolean {
+	if (receiver !== "map" && receiver !== "set") return false;
+	const construction = definingInstruction(fn, value);
+	if (
+		construction === undefined ||
+		fn.instructionOpcodeName(construction) !== "construct"
+	)
+		return false;
+	const constructor = instructionOperand(fn, construction, 0);
+	const definition =
+		constructor === undefined ? undefined : definingInstruction(fn, root(constructor));
+	if (
+		definition === undefined ||
+		fn.instructionOpcodeName(definition) !== "loadGlobalProperty"
+	)
+		return false;
+	const name = fn.instructionAttributes(definition).nameStringIndex;
+	// A replaceable constructor only nominates a guarded callback; it proves no receiver brand.
+	return (
+		typeof name === "number" &&
+		decodeString(program, name) === (receiver === "map" ? "Map" : "Set")
 	);
 }
 

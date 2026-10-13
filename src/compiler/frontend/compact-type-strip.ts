@@ -14,7 +14,7 @@
  * can produce different output for source that already stripped successfully;
  * frontend, fragment, and test image caches key their stripped input on it.
  */
-export const TYPE_STRIPPER_IDENTITY = "compact-type-strip-v4";
+export const TYPE_STRIPPER_IDENTITY = "compact-type-strip-v5";
 
 /**
  * Erase types in place: every type span becomes spaces, so the result has the
@@ -247,7 +247,7 @@ export function lexicalCodeMask(source: string, filePath: string): Array<boolean
 	};
 	function markTemplate(start: number): number {
 		let i = start;
-		code[i++] = false;
+		code[i++] = true;
 		while (i < source.length) {
 			code[i] = false;
 			if (source[i] === "\\") {
@@ -1973,6 +1973,8 @@ function findTypeEnd(
 			braces === 0 &&
 			angles === 0 &&
 			delimiters.includes(char) &&
+			// A template interpolation opens part of the type, not the function body.
+			!(char === "{" && source[i - 1] === "$" && code[i - 1]) &&
 			!(char === "=" && source[i + 1] === ">")
 		) {
 			if (!sawType) fail(filePath, start, "empty type annotations");
@@ -1991,6 +1993,7 @@ function findTypeEnd(
 			(char >= "0" && char <= "9") ||
 			char === '"' ||
 			char === "'" ||
+			char === "`" ||
 			char === "[" ||
 			char === "("
 		)

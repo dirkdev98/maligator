@@ -164,3 +164,5 @@ tests/native/map-region-entries.test.ts
 tests/native/array-initialization-region.test.ts
 tests/native/numeric-sort-invocation.test.ts
 tests/native/sort-callback-continuation.test.ts
+
+tests/native/collection-foreach-callback.test.ts

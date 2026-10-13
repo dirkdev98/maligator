@@ -44,7 +44,9 @@ import {
 } from "../core/core-specialization-recipes.ts";
 import type { CoreSpecializationRecipeTable } from "../core/core-specialization-recipes.ts";
 import type { CoreFunctionStore } from "../core/core-store.ts";
+import { builtinOperationDescriptor } from "../shared/builtin-registry.ts";
 import type { CompilerSiteFacts } from "../shared/compiler-facts.ts";
+import { knownFact } from "../shared/compiler-facts.ts";
 import { COMPILER_TWO_ADDRESS_OPERANDS } from "../shared/compiler-instruction.ts";
 import type {
 	CompilerImmediateValue,
@@ -52,6 +54,7 @@ import type {
 	CompilerNumericSortCallback,
 } from "../shared/compiler-instruction.ts";
 import type { CompilerOperatorInputKindMasks } from "../shared/compiler-value-kinds.ts";
+import { knownOperationIndex, knownOperations } from "../shared/known-operations.ts";
 import { NATIVE_STRING_SWITCH_CASE_LIMIT } from "../shared/native-string-switch.ts";
 import {
 	coreInstructionNeedsOperationSafepoint,
@@ -1957,7 +1960,7 @@ function lowerFunctionToTarget(
 			instructions.push(
 				...sourcePositionMarker(coreFunction.instructionSourcePosition(instruction)),
 			);
-			const rebuilt = rebuildOperation(
+			let rebuilt = rebuildOperation(
 				coreFunction,
 				instruction,
 				registerForValue,
@@ -1978,6 +1981,78 @@ function lowerFunctionToTarget(
 			if (numericCallback !== undefined && rebuilt.type === "call")
 				rebuilt.numericSortCallback = numericCallback;
 			const directCallback = directBuiltinCallbacks.get(instruction);
+			if (
+				directCallback !== undefined &&
+				rebuilt.type === "callKnown" &&
+				!rebuilt.construct &&
+				rebuilt.argumentMode === undefined
+			) {
+				const known = knownOperations()[knownOperationIndex(rebuilt.operation) ?? -1];
+				const descriptor = builtinOperationDescriptor(rebuilt.operation);
+				const identity = rebuilt.knownBuiltinCall.identity;
+				if (known === undefined || descriptor === undefined || identity.kind !== "known")
+					throw new Error("Exact callback lost its builtin identity");
+				const proof = {
+					...identity.proof,
+					// The callback bridge rechecks the captured builtin's realm before entering it.
+					dependencies: identity.proof.dependencies.filter(
+						(dependency) =>
+							dependency.kind !== "world" || dependency.fact !== "realms.disabled",
+					),
+					obligations: [
+						...identity.proof.obligations,
+						{
+							kind: "fallback" as const,
+							id: `callback:${coreFunction.id}:${instruction}`,
+							cause: "loaded-callee" as const,
+						},
+						{
+							kind: "fallback" as const,
+							id: `callback-realm:${coreFunction.id}:${instruction}`,
+							cause: "realm" as const,
+						},
+					],
+				};
+				const callee = nextRegister.value++;
+				registerRepresentations.set(callee, "boxed");
+				temporaryRegisters.push(callee);
+				instructions.push({
+					type: "loadPrimordial",
+					registers: [callee],
+					nodeIndex: known.node,
+				});
+				// The locked builtin identity survives while its callback keeps the ordinary boxed ABI.
+				rebuilt = {
+					type: "call",
+					registers: [
+						rebuilt.registers[0],
+						callee,
+						rebuilt.registers[1],
+						...rebuilt.registers.slice(2),
+					],
+					knownBuiltinCall: {
+						operation: descriptor.id,
+						identity: knownFact(identity.value, proof),
+						semantics: knownFact(
+							{
+								effects: descriptor.effects,
+								result: descriptor.result,
+								lowerings: descriptor.lowerings,
+							},
+							proof,
+						),
+					},
+					...(rebuilt.immediateValues === undefined
+						? {}
+						: {
+								immediateValues: [
+									rebuilt.immediateValues[0],
+									undefined,
+									...rebuilt.immediateValues.slice(1),
+								],
+							}),
+				};
+			}
 			if (directCallback !== undefined && rebuilt.type === "call") {
 				rebuilt.directCallbackFunctionIndex =
 					functionMap.coreToExecution[directCallback]!;
@@ -2081,8 +2156,14 @@ function lowerFunctionToTarget(
 			const operandStart = kernel.instructionOperandStart(instruction);
 			const operandCount = kernel.instructionOperandCount(instruction);
 			const resultCount = kernel.instructionResultCount(instruction);
+			const callbackCalleeOffset =
+				coreFunction.instructionOpcodeName(instruction) === "callKnown" &&
+				lowered.type === "call"
+					? 1
+					: 0;
 			for (let index = 0; index < operandCount; index++) {
-				if (immediateValues?.[resultCount + index] === undefined) continue;
+				if (immediateValues?.[resultCount + callbackCalleeOffset + index] === undefined)
+					continue;
 				const input = kernel.operandAt(operandStart + index);
 				if (kernel.valueDefinitionKind(input) !== 1) continue;
 				const origin = kernel.valueDefinitionOwner(input) as CoreInstructionId;

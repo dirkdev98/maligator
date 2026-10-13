@@ -907,6 +907,8 @@ static void mal_perf_stats_print(void) {
         (unsigned long long) mal_perf_stats.string_span_code_point_reads);
     fprintf(stderr, "[perf-string-span-nested-stats] admissions=%llu\n",
         (unsigned long long) mal_perf_stats.string_span_nested_admissions);
+    fprintf(stderr, "[perf-string-span-deep-stats] admissions=%llu\n",
+        (unsigned long long) mal_perf_stats.string_span_deep_admissions);
     fprintf(stderr, "[perf-string-span-substring-stats] admissions=%llu\n",
         (unsigned long long) mal_perf_stats.string_span_substring_admissions);
     fprintf(stderr, "[perf-typed-array-region-stats] admissions=%llu i32_views=%llu u32_views=%llu f32_views=%llu f64_views=%llu f64_regions=%llu i8_views=%llu u8_views=%llu u8c_views=%llu i16_views=%llu u16_views=%llu affine_regions=%llu\n",

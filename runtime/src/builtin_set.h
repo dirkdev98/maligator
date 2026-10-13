@@ -11,6 +11,11 @@ typedef struct MalVm MalVm;
  */
 void mal_builtin_set_install(MalVm *vm);
 
+MalValue mal_builtin_set_prototype_for_each(
+    MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count,
+    MalValue new_target, MalValue callee
+);
+
 MalValue mal_builtin_set_add_known(
     MalVm *vm,
     MalValue this_value,

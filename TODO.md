@@ -519,14 +519,34 @@ numeric sorting, stack objects, and string projections.
       numeric entries, callback effects, and result coercion on the boxed path.
       Implemented through the shared exact callback entry without changing sorting
       algorithms; 23 compiler checks and isolated Array, BigInt, mixed, and realm Node
-      oracles pass. Native verification and measurement remain pending.
+      oracles pass. All three Linux ASan/UBSan checks pass; measurement remains pending.
 - [ ] Extend shared span character consumers to `charAt` and `at`, including nested
       ranges; preserve relative indexing, single UTF-16 code-unit results, method
       identity, coercion order, and root publication when producing strings. Implemented
       through the shared bounded character helper, with transported consumer validation
       and ordinary call root publication. Focused compiler and primitive-operation
-      checks, Node oracles, and emitted-C syntax checks pass; native verification and
-      measurement remain pending.
+      checks, Node oracles, and emitted-C syntax checks pass. Range-span Linux ASan/UBSan
+      passes. Split and regexp outputs match under both backends and GC stress, but
+      three new character-counter assertions were unexercised after caller inlining.
+      Executed callback paths now cover numeric/undefined positions; strict assertions
+      remain and the sanitizer rerun is pending. Measurement remains pending.
+
+- [ ] Compose bounded range continuations up to four levels, including split and
+      regexp roots, while retaining each span's own lifetime and materialization state.
+      Seed discovery from certified leaves, permit only validated child boundaries,
+      and keep fixed discovery, plan, and consumer budgets. Implemented with memoized
+      bottom-up admission, independent roots, and a depth-four suffix when an outer
+      producer exceeds the cap. All three source kinds select connected depth-four
+      chains; 133 span/codec checks, Node oracles, and emitted-C syntax checks pass.
+      Native execution and measurement remain pending.
+- [ ] Extend exact callback invocation to Map and Set `forEach` receivers.
+      Carry value/key/owner arguments without numeric assumptions, preserving live
+      iteration, mutation, callback effects, realms, and cached generic fallback.
+      Implemented through the existing iterators and exact callback entry. Constructed
+      receivers nominate mutable guarded calls without proving their brand; locked
+      builtin calls retain their callback contract through target lowering. Focused
+      compiler and verifier checks pass; native execution and measurement remain pending.
+      Unknown helper receivers need a separately validated common invocation contract.
 
 | Order | Slice                        | Owning work and exit condition                                                                                                                                  |
 | ----- | ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |

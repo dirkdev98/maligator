@@ -52,18 +52,23 @@ export function selectNativeSpanContinuations(
 	const children = native.specializations.filter(
 		(region) => region.kind === "string-span",
 	);
-	const childCalls = new Map(children.map((region) => [region.callIp, region]));
-	const childProperties = new Map(
+	type Child = { callIp: number; propertyIp: number; depth: number };
+	const childCalls = new Map<number, Child>(
+		children.map((region) => [region.callIp, { ...region, depth: 1 }]),
+	);
+	const childProperties = new Map<number, Child>(
 		children
 			.filter((region) => region.propertyIp >= 0)
-			.map((region) => [region.propertyIp, region]),
+			.map((region) => [region.propertyIp, { ...region, depth: 1 }]),
 	);
-	const sources: Array<{
+	type Candidate = {
 		producerIp: number;
 		sourceKind: NativeSpanContinuation["sourceKind"];
 		sourceCallIp: number;
 		rangeOperation?: "slice" | "substring";
-	}> = [];
+		propertyIp: number;
+	};
+	const sources: Array<Candidate> = [];
 	for (const region of native.specializations) {
 		if (
 			region.kind !== "string-split-projection" &&
@@ -77,10 +82,11 @@ export function selectNativeSpanContinuations(
 				producerIp: load.ip,
 				sourceKind: region.kind === "string-split-projection" ? "split" : "regexp",
 				sourceCallIp: region.callIp,
+				propertyIp: -1,
 			});
 		}
 	}
-	// Only certified leaf ranges can consume another virtual range; nesting cannot recursively enlarge discovery.
+	// Discovery stays bounded independently of how many admitted children a parent has.
 	if (children.length)
 		for (const [ip, call] of fn.instructions.entries()) {
 			if (sources.length >= 32) break;
@@ -91,6 +97,7 @@ export function selectNativeSpanContinuations(
 			)
 				continue;
 			let operation: "slice" | "substring" | undefined;
+			let propertyIp = -1;
 			if (call.opcode === "CALL_KNOWN") {
 				if (call.construct || call.argumentMode !== undefined) continue;
 				operation =
@@ -111,7 +118,10 @@ export function selectNativeSpanContinuations(
 							const name = String.fromCharCode(
 								...(strings[definition.stringIndex] ?? []),
 							);
-							if (name === "slice" || name === "substring") operation = name;
+							if (name === "slice" || name === "substring") {
+								operation = name;
+								propertyIp = at;
+							}
 						}
 						break;
 					}
@@ -124,19 +134,38 @@ export function selectNativeSpanContinuations(
 					sourceKind: "range",
 					sourceCallIp: ip,
 					rangeOperation: operation,
+					propertyIp,
 				});
 		}
+	const candidates = sources.slice(0, 32);
+	const candidateCalls = new Map(
+		candidates
+			.filter((source) => source.sourceKind === "range")
+			.map((source) => [source.producerIp, source]),
+	);
+	const candidateProperties = new Map(
+		candidates
+			.filter((source) => source.propertyIp >= 0)
+			.map((source) => [source.propertyIp, source]),
+	);
 	const claimed = new Set<number>();
-	for (const candidate of sources.slice(0, 32)) {
-		if (plans.length >= 16) return plans;
+	const depths = new Map<number, number>();
+	const attempted = new Set<number>();
+	const parents = new Map<number, number>();
+	// Memoization bounds lifetime analysis per candidate and rejects recursive dependency cycles.
+	const admit = (candidate: Candidate): number | undefined => {
 		const { producerIp, sourceKind, sourceCallIp } = candidate;
+		if (attempted.has(producerIp)) return depths.get(producerIp);
+		attempted.add(producerIp);
+		if (plans.length >= 16) return undefined;
 		const producer = fn.instructions[producerIp];
-		if (producer === undefined || !("dst" in producer)) continue;
+		if (producer === undefined || !("dst" in producer)) return undefined;
 		const reset = new Set(sourceKind === "range" ? [] : [sourceCallIp]);
 		const flow = nativeVirtualValueFlow(fn.instructions, producerIp, producer.dst, reset);
 		const consumers: Array<NativeSpanConsumer> = [];
 		let safe = true,
-			projected = false;
+			projected = false,
+			depth = 1;
 		for (const [ip, aliases] of flow) {
 			if (ip === producerIp) continue;
 			const op = fn.instructions[ip]!;
@@ -146,14 +175,18 @@ export function selectNativeSpanContinuations(
 				),
 			];
 			if (!reads.length || op.opcode === "MOVE" || op.opcode === "THROW_IF_TDZ") continue;
+			const childCandidate = candidateCalls.get(ip) ?? candidateProperties.get(ip);
+			if (childCandidate !== undefined && admit(childCandidate) === undefined) {
+				safe = false;
+				break;
+			}
 			if (
 				reads.length !== 1 ||
 				!aliases.must.has(reads[0]!) ||
 				(unavailable(ip) &&
 					!materializingObservers.has(ip) &&
 					!childCalls.has(ip) &&
-					!childProperties.has(ip)) ||
-				claimed.has(ip)
+					!childProperties.has(ip))
 			) {
 				safe = false;
 				break;
@@ -229,9 +262,15 @@ export function selectNativeSpanContinuations(
 				kind = "equal";
 			else kind = "materialize";
 			if (
+				(claimed.has(ip) && (kind !== "rangeCall" || parents.has(ip))) ||
 				(childCalls.has(ip) && kind !== "rangeCall") ||
 				(childProperties.has(ip) && kind !== "rangeProperty")
 			) {
+				safe = false;
+				break;
+			}
+			if (kind === "rangeCall") depth = Math.max(depth, childCalls.get(ip)!.depth + 1);
+			if (depth > 4 || consumers.length >= 16) {
 				safe = false;
 				break;
 			}
@@ -245,7 +284,7 @@ export function selectNativeSpanContinuations(
 			(sourceKind === "range" &&
 				!consumers.some((consumer) => consumer.kind === "rangeCall"))
 		)
-			continue;
+			return undefined;
 		try {
 			validateNativeVirtualValue(
 				fn.instructions,
@@ -261,17 +300,33 @@ export function selectNativeSpanContinuations(
 			);
 		} catch (error) {
 			if (!(error instanceof RangeError)) throw error;
-			continue;
+			return undefined;
 		}
+		if (plans.length >= 16) return undefined;
 		consumers.sort((a, b) => a.ip - b.ip);
 		const claimedIps = [producerIp, ...consumers.map((consumer) => consumer.ip)];
 		for (const ip of claimedIps) claimed.add(ip);
+		for (const consumer of consumers)
+			if (consumer.kind === "rangeCall") parents.set(consumer.ip, producerIp);
 		plans.push({
-			...candidate,
+			producerIp,
+			sourceKind,
+			sourceCallIp,
+			...(candidate.rangeOperation === undefined
+				? {}
+				: { rangeOperation: candidate.rangeOperation }),
 			consumers,
 			claimedIps,
 			borrowedRegisters: [],
 		});
-	}
+		depths.set(producerIp, depth);
+		if (sourceKind === "range") {
+			const child = { callIp: producerIp, propertyIp: candidate.propertyIp, depth };
+			childCalls.set(producerIp, child);
+			if (candidate.propertyIp >= 0) childProperties.set(candidate.propertyIp, child);
+		}
+		return depth;
+	};
+	for (const candidate of candidates) admit(candidate);
 	return plans;
 }

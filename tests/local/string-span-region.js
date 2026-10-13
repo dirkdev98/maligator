@@ -626,4 +626,163 @@ function nestedStringCharacters(source, position, effect) {
 for (const source of ["x😀z", "x\ud800az", "x\udc00z", "xaz", ""])
 	for (const position of [-2, -1, -0.5, 0, 1, 2, undefined])
 		observations.push(nestedStringCharacters(source, position, retainedCharacterState));
+
+function deepRange(source, start, end, escape, effect) {
+	const outer = source.slice(1, -1);
+	const middle = outer.substring(start, end);
+	const third = middle.slice(0, 4);
+	const leaf = third.substring(0, 2);
+	effect(middle);
+	if (escape) return leaf;
+	return [
+		leaf.length,
+		leaf.charAt(0),
+		leaf.at(-1),
+		leaf.codePointAt(0),
+		leaf.charCodeAt(1),
+		Number(leaf),
+		middle.length,
+		outer.length,
+	];
+}
+function deepSplit(source, start, end, escape) {
+	const outer = source.split("|")[1];
+	if (outer === undefined) return "absent";
+	const middle = outer.substring(start, end);
+	const third = middle.slice(0, 4);
+	const leaf = third.substring(0, 2);
+	collect();
+	if (escape) return leaf;
+	return leaf.charAt(0) + leaf.at(-1) + outer.length;
+}
+function deepCapture(source, regexp, start, end, escape) {
+	const match = regexp.exec(source);
+	if (match === null) return "null";
+	const outer = match[1];
+	if (outer === undefined) return "absent";
+	const middle = outer.substring(start, end);
+	const third = middle.slice(0, 4);
+	const leaf = third.substring(0, 2);
+	collect();
+	if (escape) return leaf;
+	return leaf.codePointAt(0) + leaf.length + outer.length + regexp.lastIndex;
+}
+function deepBranches(source, choice, effect) {
+	const outer = source.slice(1, -1);
+	const middle = outer.substring(0, 8);
+	effect(middle);
+	if (choice) {
+		const child = middle.slice(0, 4);
+		const leaf = child.substring(0, 2);
+		return leaf.charAt(0) + leaf.length + middle.length;
+	}
+	const child = middle.substring(1, 7);
+	const leaf = child.slice(0, 2);
+	return leaf.at(-1) + leaf.charCodeAt(0) + outer.length;
+}
+for (let repeat = 0; repeat < 4; repeat++)
+	for (const source of [
+		"x😀z",
+		"x\ud800az",
+		"x\udc00z",
+		"x12z",
+		"",
+		"xab".repeat(300) + "z",
+	])
+		for (const bounds of [
+			[0, 2],
+			[3, 0],
+			[-Infinity, Infinity],
+			[NaN, undefined],
+			[-0, 1.8],
+			["1", null],
+		])
+			for (const escape of [false, true]) {
+				observations.push(deepRange(source, bounds[0], bounds[1], escape, collect));
+				observations.push(deepSplit("a|" + source + "|b", bounds[0], bounds[1], escape));
+				observations.push(deepCapture(source, /(.*)/g, bounds[0], bounds[1], escape));
+				observations.push(deepBranches(source, escape, collect));
+			}
+observations.push(
+	deepSplit("absent", 0, 2, true),
+	deepCapture("", /(a)?/, 0, 2, true),
+	deepCapture("", /(a)/, 0, 2, true),
+);
+const deepEvents = [];
+const deepStart = {
+	valueOf() {
+		deepEvents.push("start");
+		collect();
+		return 0;
+	},
+};
+const deepEnd = {
+	valueOf() {
+		deepEvents.push("end");
+		collect();
+		return 2;
+	},
+};
+observations.push(deepRange("x😀z", deepStart, deepEnd, true, collect), deepEvents);
+for (const bound of [
+	Symbol("start"),
+	1n,
+	{
+		valueOf() {
+			collect();
+			throw new RangeError("deep bound");
+		},
+	},
+]) {
+	try {
+		observations.push(deepRange("x😀z", bound, 2, true, collect));
+	} catch (error) {
+		observations.push(error.name);
+	}
+}
+if (process.env.MAL_STRING_SPAN_MUTABLE !== "locked") {
+	const saved = Object.getOwnPropertyDescriptor(String.prototype, "substring");
+	const receivers = [];
+	Object.defineProperty(String.prototype, "substring", {
+		configurable: true,
+		get() {
+			receivers.push(String(this));
+			collect();
+			return saved.value;
+		},
+	});
+	observations.push(deepRange("x😀z", 0, 2, true, collect), receivers);
+	Object.defineProperty(String.prototype, "substring", saved);
+	observations.push(
+		deepRange(
+			"x😀z",
+			{
+				valueOf() {
+					String.prototype.substring = () => "changed";
+					collect();
+					return 0;
+				},
+			},
+			2,
+			true,
+			collect,
+		),
+	);
+	Object.defineProperty(String.prototype, "substring", saved);
+}
+function retainedDeepCapture(source, regexp) {
+	let previous = "";
+	const values = [];
+	for (let index = 0; index < 3; index++) {
+		const outer = regexp.exec(source)[1];
+		const middle = outer.substring(0, 8);
+		const third = middle.slice(0, 4);
+		const leaf = third.substring(0, 2);
+		collect();
+		values.push(previous.charAt(0), leaf.at(-1));
+		previous = third;
+	}
+	return values;
+}
+observations.push(retainedDeepCapture("ab cd ef", /(\w+)/g));
 console.log(JSON.stringify(observations));

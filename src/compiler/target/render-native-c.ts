@@ -6257,6 +6257,11 @@ function emitInstruction(
 				`${source} = MAL_VALUE_UNDEFINED;`,
 				`${prefix}_active = ${profileCall("string", `mal_builtin_string_range_span_init(${callee}, ${receiver}, ${bounds}, ${argument(0)}, ${argument(1)}, MAL_STRING_RANGE_${operation.toUpperCase()}, ${locked ? "true" : "false"}, &${source}, &${prefix}_start, &${prefix}_end)`)};`,
 				`if (${prefix}_active) {`,
+				...(parent?.parent === undefined
+					? []
+					: [
+							`  if (${parentPrefix}_active && __string_span_${parent.parent.producerIp}_active) MAL_PERF_COUNT(string_span_deep_admissions);`,
+						]),
 				`  r${instruction.dst} = MAL_VALUE_UNDEFINED;`,
 				`  ${poll()}`,
 				`} else {`,
@@ -10395,6 +10400,8 @@ function emitInstruction(
 					? undefined
 					: {
 							"Array.prototype.forEach": "MAL_BUILTIN_ARRAY_ITERATION_FOR_EACH",
+							"Map.prototype.forEach": "MAL_BUILTIN_MAP_FOR_EACH",
+							"Set.prototype.forEach": "MAL_BUILTIN_SET_FOR_EACH",
 							"Array.prototype.some": "MAL_BUILTIN_ARRAY_ITERATION_SOME",
 							"Array.prototype.every": "MAL_BUILTIN_ARRAY_ITERATION_EVERY",
 							"Array.prototype.find": "MAL_BUILTIN_ARRAY_ITERATION_FIND",
@@ -10441,6 +10448,8 @@ function emitInstruction(
 						}[
 							guardedBuiltinOperation as
 								| "Array.prototype.forEach"
+								| "Map.prototype.forEach"
+								| "Set.prototype.forEach"
 								| "Array.prototype.some"
 								| "Array.prototype.every"
 								| "Array.prototype.find"

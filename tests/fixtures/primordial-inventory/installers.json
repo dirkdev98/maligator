@@ -5,7 +5,7 @@
 	},
 	{
 		"file": "builtin_array.c",
-		"sha256": "1bd80534ee7c2cb637c832b4417dbbdd87f040653b329e52c46c60d3f61324bd"
+		"sha256": "dffd2c63ca5dc75695cb08e5316bf6096051ffa31f5e9da3f192b295f27e4318"
 	},
 	{
 		"file": "builtin_array_buffer.c",
@@ -81,7 +81,7 @@
 	},
 	{
 		"file": "builtin_map.c",
-		"sha256": "056accf18608f29a418da8621c94579cc82c2fe734e694d8be9f166aa30d3eca"
+		"sha256": "821c994e8ae4bd3eae8de369596b6d9d6ae652fe63a3ce65a2b53790be99777b"
 	},
 	{
 		"file": "builtin_math.c",
@@ -113,7 +113,7 @@
 	},
 	{
 		"file": "builtin_set.c",
-		"sha256": "7c7fd0526c184f249670d00ce17fe96b75d60b2689df7300f60faf61494ca3c3"
+		"sha256": "f569744b11a4032d35030c900001f04abe655c3896a3ae31e97d06ffe1ed330d"
 	},
 	{
 		"file": "builtin_shadow_realm.c",

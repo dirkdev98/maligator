@@ -1,9 +1,11 @@
+import { coreDirectBuiltinCallbackTarget } from "../core/core-ir-call-targets.ts";
 import { coreOpcodeRegistry, isCoreOpcode } from "../core/core-ir-opcodes.ts";
 import type { CoreAllocatedRegion } from "../core/core-ir-regions.ts";
 import type { CoreInstructionId } from "../core/core-ir.ts";
 import type { CoreFunctionStore } from "../core/core-store.ts";
 import { COMPILER_TWO_ADDRESS_OPERANDS } from "../shared/compiler-instruction.ts";
 import type { CompilerInstruction } from "../shared/compiler-instruction.ts";
+import { knownOperationIndex, knownOperations } from "../shared/known-operations.ts";
 import {
 	coreInstructionNeedsOperationSafepoint,
 	entrySuppliedArgumentRead,
@@ -914,7 +916,35 @@ function verifyGcRoots(
 			});
 		}
 		const originOpcode = core.instructionOpcodeName(coreInstruction);
-		if (instruction.type !== originOpcode) {
+		const attributes = core.instructionAttributes(coreInstruction);
+		const callee = fn.blocks[site.block]!.instructions[site.index - 1];
+		const known =
+			typeof attributes.operation === "string"
+				? knownOperations()[knownOperationIndex(attributes.operation) ?? -1]
+				: undefined;
+		const exactCallbackCall =
+			originOpcode === "callKnown" &&
+			instruction.type === "call" &&
+			!attributes.construct &&
+			attributes.argumentMode === undefined &&
+			instruction.directCallbackFunctionIndex !== undefined &&
+			coreDirectBuiltinCallbackTarget(core, coreInstruction) !== undefined &&
+			instruction.knownBuiltinCall?.operation === attributes.operation &&
+			callee?.type === "loadPrimordial" &&
+			known !== undefined &&
+			callee.nodeIndex === known.node &&
+			callee.registers[0] === instruction.registers[1] &&
+			callee.registers[0] >= fn.allocatedRegisterCount;
+		if (
+			exactCallbackCall &&
+			instruction.registers.length !==
+				core.kernel.instructionResultCount(coreInstruction) +
+					core.kernel.instructionOperandCount(coreInstruction) +
+					1
+		) {
+			fail("exact builtin callback bridge changed its argument count", { functionIndex });
+		}
+		if (instruction.type !== originOpcode && !exactCallbackCall) {
 			fail(
 				`Core instruction @${coreInstruction} lowered to ${instruction.type}, expected ${originOpcode}`,
 				{ functionIndex },
@@ -927,7 +957,11 @@ function verifyGcRoots(
 		const originInputCount = kernel.instructionOperandCount(coreInstruction);
 		const originOutputCount = kernel.instructionResultCount(coreInstruction);
 		for (let index = 0; index < originInputCount; index++) {
-			if (immediates?.[originOutputCount + index] === undefined) continue;
+			if (
+				immediates?.[originOutputCount + (exactCallbackCall ? 1 : 0) + index] ===
+				undefined
+			)
+				continue;
 			const input = kernel.operandAt(originInputStart + index);
 			if (kernel.valueDefinitionKind(input) === 1) {
 				embeddedSafepoints.add(kernel.valueDefinitionOwner(input));

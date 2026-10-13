@@ -65,6 +65,21 @@ globalThis.stripResult = [!satisfies(1, 2), retryAfter({ headers: { get: () => "
 		expect(() => parseModule(stripped)).not.toThrow();
 		expect(runInNewContext(stripped)).toBe(41);
 	});
+	test("erases template literal annotations without consuming bodies or runtime templates", () => {
+		const source = [
+			'const methods = ["charAt", "at"] as const;',
+			"function call(method: string): `${(typeof methods)[number]}Call` | undefined { return `${method}Call`; }",
+			'function literal(): `ready` { return "ready"; }',
+			"function nested(value: `${`${number}`}-${string}`): `${string}` { return value; }",
+			"const object = { method(value: number): `${number}` { return `${value as number}`; } };",
+			"const arrow = (value: string): `${string}` => `${value}`;",
+			'const value: `${string}Call` = call("at");',
+			'globalThis.stripResult = [value, literal(), nested("2-x"), object.method(3), arrow("x")];',
+		].join("\n");
+		const stripped = strip(source);
+		expect(() => parseModule(stripped)).not.toThrow();
+		expect(runInNewContext(stripped)).toEqual(["atCall", "ready", "2-x", "3", "x"]);
+	});
 	test("preserves loop comparisons before a later generic constructor", () => {
 		const source = `let sum = 0; for (let index = 0; index < 4; index++) { sum += index; } const cache = new Map<string, number>(); globalThis.stripResult = sum;`;
 		const stripped = strip(source);

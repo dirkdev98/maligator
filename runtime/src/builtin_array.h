@@ -138,10 +138,12 @@ typedef enum MalBuiltinArrayIterationOp {
     MAL_BUILTIN_TYPED_ARRAY_REDUCE_RIGHT,
     MAL_BUILTIN_ARRAY_OR_TYPED_ARRAY_REDUCE,
     MAL_BUILTIN_ARRAY_OR_TYPED_ARRAY_REDUCE_RIGHT,
+    MAL_BUILTIN_MAP_FOR_EACH,
+    MAL_BUILTIN_SET_FOR_EACH,
 } MalBuiltinArrayIterationOp;
 
 /**
- * Call a statically identified Array or TypedArray callback builtin after validating the
+ * Call a statically identified collection callback builtin after validating the
  * ordinary loaded callee once. A shadowed or cross-Realm method retains the
  * original cached call and all of its observable behavior.
  */

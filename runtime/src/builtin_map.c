@@ -720,7 +720,7 @@ static MalValue mal_builtin_map_prototype_get_or_insert_computed(MalVm *vm, MalV
     );
 }
 
-static MalValue mal_builtin_map_prototype_for_each(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
+MalValue mal_builtin_map_prototype_for_each(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     MalMapObject *map = mal_builtin_map_this(vm, this_value, "Receiver is not a Map");
     if (map == nullptr) {
         return mal_value_new_undefined();
@@ -742,11 +742,12 @@ static MalValue mal_builtin_map_prototype_for_each(MalVm *vm, MalValue this_valu
     MalRootSpan callback_span;
     mal_gc_root(&callback_span, callback_args, countof(callback_args));
     mal_gc_native_rooted_begin(vm);
-    // Compiled callbacks dispatch directly; every other callable keeps generic [[Call]].
     MalCallCache callback_cache = {0};
     while (mal_map_iter_next(&iter, &callback_args[1], &callback_args[0])) {
-        MalCompletion completion = mal_vm_call_cached(
-            vm, &callback_cache, args[0], this_arg, callback_args, 3);
+        MalExactScriptCall *exact = vm->exact_script_call;
+        MalCompletion completion = exact != nullptr && exact->callee == args[0]
+            ? mal_vm_call_builtin_callback(vm, args[0], this_arg, callback_args, 3)
+            : mal_vm_call_cached(vm, &callback_cache, args[0], this_arg, callback_args, 3);
         if (completion.kind != MAL_COMPLETION_NORMAL) break;
     }
     mal_gc_native_rooted_end(vm);

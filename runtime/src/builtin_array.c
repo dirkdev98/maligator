@@ -8,8 +8,10 @@
 #include "builtin_async_iterator.h"
 #include "builtin_iterator.h"
 #include "builtin_math.h"
+#include "builtin_map.h"
 #include "builtin_object.h"
 #include "builtin_promise.h"
+#include "builtin_set.h"
 #include "builtin_typed_array.h"
 #include "checked_size.h"
 #include "function_object.h"
@@ -5179,6 +5181,12 @@ static MalCompletion mal_builtin_array_iteration_direct_impl(
     MalNativeFunctionCallback expected = nullptr;
     MalNativeFunctionCallback alternate = nullptr;
     switch (operation) {
+        case MAL_BUILTIN_MAP_FOR_EACH:
+            expected = mal_builtin_map_prototype_for_each;
+            break;
+        case MAL_BUILTIN_SET_FOR_EACH:
+            expected = mal_builtin_set_prototype_for_each;
+            break;
         case MAL_BUILTIN_ARRAY_ITERATION_FOR_EACH:
             expected = mal_builtin_array_for_each;
             break;
