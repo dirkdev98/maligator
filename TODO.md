@@ -643,14 +643,17 @@ The shared lifetime and fallback rules are recorded in
       collection, boxed comparator semantics, nested contexts, and realm fallback.
       Implemented through one shared canonical callback nomination helper. All 31
       focused checks, Node oracles, eleven frontend/codec/generated-C checks, and
-      runtime C syntax checks pass. Native execution and measurement remain pending.
+      runtime C syntax checks pass. The focused sanitizer run passed fourteen controls
+      but exposed three sort stress timeouts. The tests now use the documented
+      compiler-only GC cadence; diagnostic rerun and measurement remain pending.
 - [ ] Extend enumeration snapshots to `Object.values` on ordinary shaped data
       records. Capture values eagerly in rooted slots, retain the cached result
       materialization, and decline accessors before executing any user effects.
       Implemented through one keys/values plan and runtime helper with sixteen
       rooted elements. All 211 focused checks, Node oracles, seven actual bundled
-      programs, artifact roundtrips, and C syntax checks pass. Native execution
-      and measurement remain pending.
+      programs, artifact roundtrips, and C syntax checks pass. Both Linux ASan/UBSan
+      checks pass across backends, primordial modes, and GC stress; measurement
+      remains pending.
 
 - [ ] Reuse canonical callback contexts for functional String and RegExp replacers.
       Preserve eager match collection, variable callback arguments, result coercion,
@@ -681,6 +684,21 @@ The shared lifetime and fallback rules are recorded in
       Implemented with existing exception successor facts and bounded alias discovery.
       All 197 focused checks, Node oracles, four actual bundled programs, artifact
       roundtrips, and generated C syntax checks pass. Native execution and measurement
+      remain pending.
+
+- [ ] Accept non-observable primitive position conversions in shared string spans.
+      Reuse the canonical number parser for null, Boolean, and primitive string bounds;
+      preserve method defaults and defer object, Symbol, and BigInt coercions.
+      Implemented through one shared primitive-number guard and canonical parser.
+      All 102 focused checks, Node oracles, four actual bundled programs, artifact
+      roundtrips, and runtime/generated C syntax checks pass. Native execution and
+      measurement remain pending.
+- [ ] Reuse canonical callback nomination in Object.groupBy and Map.groupBy.
+      Preserve iterator closing, property-key conversion, identity and equality rules,
+      callback arity, nested contexts, and rooted group construction. Implemented in
+      the existing rooted traversals through the shared callback contract. All 43
+      focused checks, Node oracles, ten actual frontend/artifact roundtrips, and
+      runtime/generated C syntax checks pass. Native execution and measurement
       remain pending.
 
 | Order | Slice                        | Owning work and exit condition                                                                                                                                  |

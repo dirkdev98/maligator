@@ -94,18 +94,15 @@ static f64 mal_builtin_string_arg_to_number(MalVm *vm, MalValue value) {
     return number;
 }
 
-/**
- * Non-observable Number extraction for primitive fast paths. Undefined is
- * represented as NaN because every String index operation below subsequently
- * applies ToIntegerOrInfinity/ToLength (or lastIndexOf's explicit NaN rule).
- */
+// Primitive parsing cannot reenter or collect; Symbol/BigInt require the throwing VM path.
 static bool mal_builtin_string_primitive_number(MalValue value, f64 *number_out) {
     if (mal_ops_is_number(value)) {
         *number_out = mal_ops_number_as_f64(value);
         return true;
     }
-    if (mal_value_is_undefined(value)) {
-        *number_out = NAN;
+    if (mal_value_is_undefined(value) || mal_value_is_null(value) ||
+        mal_value_is_boolean(value) || mal_value_is_string(value)) {
+        *number_out = mal_ops_to_number(value);
         return true;
     }
     return false;
@@ -1704,11 +1701,12 @@ bool mal_builtin_string_span_character(
         case MAL_STRING_CHARACTER_CODE_POINT_AT: expected = mal_builtin_string_prototype_code_point_at; break;
         default: return false;
     }
+    f64 offset;
     if ((!locked && (!mal_value_is_native_function_object(callee) ||
          mal_native_function_object_callback(mal_value_to_native_function_object(callee)) != expected)) ||
-        (!mal_value_is_undefined(position) && !mal_ops_is_number(position))) return false;
+        !mal_builtin_string_primitive_number(position, &offset)) return false;
     *out = mal_builtin_string_character_numeric(vm, mal_value_to_string(subject), start, end,
-        mal_value_is_undefined(position) ? 0 : mal_ops_number_as_f64(position), operation);
+        offset, operation);
     switch (operation) {
         case MAL_STRING_CHARACTER_AT: MAL_PERF_COUNT(string_span_at_reads); break;
         case MAL_STRING_CHARACTER_CHAR_AT: MAL_PERF_COUNT(string_span_char_at_reads); break;
@@ -1731,13 +1729,15 @@ bool mal_builtin_string_span_search(
         case MAL_STRING_SEARCH_ENDS_WITH: expected = mal_builtin_string_prototype_ends_with; break;
         default: return false;
     }
+    f64 offset;
     if ((!locked && (!mal_value_is_native_function_object(callee) ||
          mal_native_function_object_callback(mal_value_to_native_function_object(callee)) != expected)) ||
         !mal_value_is_string(needle) ||
-        (!mal_value_is_undefined(position) && !mal_ops_is_number(position))) return false;
-    f64 offset = mal_value_is_undefined(position)
-        ? (operation == MAL_STRING_SEARCH_ENDS_WITH || operation == MAL_STRING_SEARCH_LAST_INDEX_OF ? INFINITY : 0)
-        : mal_ops_number_as_f64(position);
+        !mal_builtin_string_primitive_number(position, &offset)) return false;
+    if (mal_value_is_undefined(position)) {
+        offset = operation == MAL_STRING_SEARCH_ENDS_WITH || operation == MAL_STRING_SEARCH_LAST_INDEX_OF
+            ? INFINITY : 0;
+    }
     *out = mal_builtin_string_search_impl(mal_value_to_string(subject), start, end,
         mal_value_to_string(needle), offset, operation);
     switch (operation) {
@@ -2398,8 +2398,6 @@ bool mal_builtin_string_range_span_init(
         default: return false;
     }
     if (!mal_value_is_string(receiver) ||
-        (!trim && ((!mal_ops_is_number(start_value) && !mal_value_is_undefined(start_value)) ||
-                   (!mal_ops_is_number(end_value) && !mal_value_is_undefined(end_value)))) ||
         (!identity_locked && (!mal_value_is_native_function_object(callee) ||
          mal_native_function_object_callback(mal_value_to_native_function_object(callee)) != expected))) return false;
     MalString *subject = mal_value_to_string(receiver);
@@ -2419,8 +2417,10 @@ bool mal_builtin_string_range_span_init(
         }
     } else {
         usize length = source_end - source_start;
-        f64 start_number = mal_value_is_undefined(start_value) ? 0 : mal_ops_number_as_f64(start_value);
-        f64 end_number = mal_value_is_undefined(end_value) ? (f64) length : mal_ops_number_as_f64(end_value);
+        f64 start_number, end_number;
+        if (!mal_builtin_string_primitive_number(start_value, &start_number) ||
+            !mal_builtin_string_primitive_number(end_value, &end_number)) return false;
+        if (mal_value_is_undefined(end_value)) end_number = (f64) length;
         mal_builtin_string_range_bounds(length, start_number, end_number, operation, start_out, end_out);
         *start_out += source_start;
         *end_out += source_start;

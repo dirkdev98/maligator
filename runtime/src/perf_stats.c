@@ -1353,6 +1353,9 @@ static void mal_perf_stats_print(void) {
     fprintf(stderr, "[perf-from-callback-stats] array_nominations=%llu typed_nominations=%llu\n",
         (unsigned long long) mal_perf_stats.array_from_runtime_callback_nominations,
         (unsigned long long) mal_perf_stats.typed_array_from_runtime_callback_nominations);
+    fprintf(stderr, "[perf-group-by-callback-stats] object_nominations=%llu map_nominations=%llu\n",
+        (unsigned long long) mal_perf_stats.object_group_by_runtime_callback_nominations,
+        (unsigned long long) mal_perf_stats.map_group_by_runtime_callback_nominations);
     for (usize i = 0; i < MAL_PERF_NATIVE_NAME_CAPACITY; i++) {
         const MalPerfNativeName *entry = &mal_perf_native_names[i];
         if (entry->calls == 0) continue;

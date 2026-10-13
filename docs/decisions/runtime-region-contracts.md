@@ -22,9 +22,10 @@ result facts; selected numeric adapters retain their separate guards.
 
 String spans retain a rooted source, normalized UTF-16 bounds, and one cached
 materialization per lifetime. Child spans share the source while retaining their
-own bounds and observation state. Coercing arguments and unsupported observers
-materialize before the original operation. Search helpers honor both window
-boundaries, including when traversing ropes in reverse.
+own bounds and observation state. Non-observable primitive position conversions
+share the canonical number parser. Arguments that invoke JavaScript or throw, and
+unsupported observers, materialize before the original operation. Search helpers
+honor both window boundaries, including when traversing ropes in reverse.
 
 Enumeration snapshots retain the sequence produced by the original operation.
 Keys can be counted without loading values; values must be copied eagerly into
@@ -36,7 +37,9 @@ materialization, so later reads see mutations made through that Array.
 
 Virtual state follows allocation identity and control flow. Unreachable uses do
 not create an escape, but live joins, exception transport, and allocation-generation
-backedges still require a valid lifetime proof. A runtime guard may restart an
+backedges still require a valid lifetime proof. Independent handlers do not exclude
+a region whose retained state stays outside protected instructions and handler
+entries. A runtime guard may restart an
 operation only before observable work. After completed work, fallback resumes from
 the corresponding state rather than replaying earlier effects.
 

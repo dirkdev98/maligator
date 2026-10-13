@@ -3124,6 +3124,32 @@
 			"controls": ["object-values-snapshot", "object-keys-snapshot-traversal"]
 		},
 		{
+			"id": "forwarded-group-by",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "Shared grouping callback invocation",
+			"category": "api-builtins",
+			"mechanisms": ["array-callback"],
+			"inputShape": "128 elements grouped by runtime-selected captured callbacks into Object and Map groups.",
+			"unit": "grouped element",
+			"sourceSeam": "runtime/src/builtin_object.c",
+			"fixture": "cases/forwarded-group-by.mjs",
+			"controls": ["forwarded-from-mapper", "forwarded-array-callback"]
+		},
+		{
+			"id": "string-span-primitive-positions",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "Primitive position conversion in shared string spans",
+			"category": "api-builtins",
+			"mechanisms": ["string-span"],
+			"inputShape": "String ranges, character reads and searches with null, Boolean and numeric string positions.",
+			"unit": "string probe",
+			"sourceSeam": "runtime/src/builtin_string.c",
+			"fixture": "cases/string-span-primitive-positions.mjs",
+			"controls": ["string-span-reverse-search", "string-span-search"]
+		},
+		{
 			"id": "method-name-unique",
 			"group": "runtime",
 			"suite": "runtime",
