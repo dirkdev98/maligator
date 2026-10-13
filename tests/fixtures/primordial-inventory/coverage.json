@@ -21082,6 +21082,7 @@
 			"owner": "%MAL_INTRINSIC_NODE_URL_MODULE%.urlToHttpOptions",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_URL_MODULE%.urlToHttpOptions",
+				"%MAL_INTRINSIC_NODE_URL_MODULE%.urlToHttpOptions.prototype.constructor",
 				"mal_host_install_node_url:urlToHttpOptions"
 			],
 			"key": "length",
@@ -21095,11 +21096,36 @@
 			"owner": "%MAL_INTRINSIC_NODE_URL_MODULE%.urlToHttpOptions",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_URL_MODULE%.urlToHttpOptions",
+				"%MAL_INTRINSIC_NODE_URL_MODULE%.urlToHttpOptions.prototype.constructor",
 				"mal_host_install_node_url:urlToHttpOptions"
 			],
 			"key": "name",
 			"kind": "data",
 			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_URL_MODULE%.urlToHttpOptions\",\"prototype\"]",
+			"owner": "%MAL_INTRINSIC_NODE_URL_MODULE%.urlToHttpOptions",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_URL_MODULE%.urlToHttpOptions",
+				"%MAL_INTRINSIC_NODE_URL_MODULE%.urlToHttpOptions.prototype.constructor",
+				"mal_host_install_node_url:urlToHttpOptions"
+			],
+			"key": "prototype",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_URL_MODULE%.urlToHttpOptions.prototype\",\"constructor\"]",
+			"owner": "%MAL_INTRINSIC_NODE_URL_MODULE%.urlToHttpOptions.prototype",
+			"ownerPaths": ["%MAL_INTRINSIC_NODE_URL_MODULE%.urlToHttpOptions.prototype"],
+			"key": "constructor",
+			"kind": "data",
+			"operations": ["%MAL_INTRINSIC_NODE_URL_MODULE%.urlToHttpOptions"],
 			"task": "H-10",
 			"decisions": []
 		},
@@ -79832,6 +79858,22 @@
 			"decisions": []
 		},
 		{
+			"id": "[\"globalThis.Buffer\",\"copyBytesFrom\"]",
+			"owner": "globalThis.Buffer",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_BUFFER_MODULE%.Buffer",
+				"MAL_INTRINSIC_NODE_BUFFER_CONSTRUCTOR",
+				"globalThis.Buffer",
+				"globalThis.Buffer.prototype.constructor",
+				"mal_host_install_node_buffer:Buffer"
+			],
+			"key": "copyBytesFrom",
+			"kind": "data",
+			"operations": ["globalThis.Buffer.copyBytesFrom"],
+			"task": "N-04",
+			"decisions": []
+		},
+		{
 			"id": "[\"globalThis.Buffer\",\"byteLength\"]",
 			"owner": "globalThis.Buffer",
 			"ownerPaths": [
@@ -79976,6 +80018,55 @@
 			"key": "name",
 			"kind": "data",
 			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.Buffer.copyBytesFrom\",\"length\"]",
+			"owner": "globalThis.Buffer.copyBytesFrom",
+			"ownerPaths": [
+				"globalThis.Buffer.copyBytesFrom",
+				"globalThis.Buffer.copyBytesFrom.prototype.constructor"
+			],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.Buffer.copyBytesFrom\",\"name\"]",
+			"owner": "globalThis.Buffer.copyBytesFrom",
+			"ownerPaths": [
+				"globalThis.Buffer.copyBytesFrom",
+				"globalThis.Buffer.copyBytesFrom.prototype.constructor"
+			],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.Buffer.copyBytesFrom\",\"prototype\"]",
+			"owner": "globalThis.Buffer.copyBytesFrom",
+			"ownerPaths": [
+				"globalThis.Buffer.copyBytesFrom",
+				"globalThis.Buffer.copyBytesFrom.prototype.constructor"
+			],
+			"key": "prototype",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.Buffer.copyBytesFrom.prototype\",\"constructor\"]",
+			"owner": "globalThis.Buffer.copyBytesFrom.prototype",
+			"ownerPaths": ["globalThis.Buffer.copyBytesFrom.prototype"],
+			"key": "constructor",
+			"kind": "data",
+			"operations": ["globalThis.Buffer.copyBytesFrom"],
 			"task": "H-10",
 			"decisions": []
 		},
@@ -101658,6 +101749,7 @@
 			"owner": "%MAL_INTRINSIC_NODE_URL_MODULE%.urlToHttpOptions",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_URL_MODULE%.urlToHttpOptions",
+				"%MAL_INTRINSIC_NODE_URL_MODULE%.urlToHttpOptions.prototype.constructor",
 				"mal_host_install_node_url:urlToHttpOptions"
 			],
 			"key": "<call>",
@@ -101671,6 +101763,7 @@
 			"owner": "%MAL_INTRINSIC_NODE_URL_MODULE%.urlToHttpOptions",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_URL_MODULE%.urlToHttpOptions",
+				"%MAL_INTRINSIC_NODE_URL_MODULE%.urlToHttpOptions.prototype.constructor",
 				"mal_host_install_node_url:urlToHttpOptions"
 			],
 			"key": "<construct>",
@@ -203240,6 +203333,32 @@
 			"decisions": []
 		},
 		{
+			"id": "[\"globalThis.Buffer.copyBytesFrom\",\"<call>\"]",
+			"owner": "globalThis.Buffer.copyBytesFrom",
+			"ownerPaths": [
+				"globalThis.Buffer.copyBytesFrom",
+				"globalThis.Buffer.copyBytesFrom.prototype.constructor"
+			],
+			"key": "<call>",
+			"kind": "call",
+			"operations": ["globalThis.Buffer.copyBytesFrom"],
+			"task": "N-04",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.Buffer.copyBytesFrom\",\"<construct>\"]",
+			"owner": "globalThis.Buffer.copyBytesFrom",
+			"ownerPaths": [
+				"globalThis.Buffer.copyBytesFrom",
+				"globalThis.Buffer.copyBytesFrom.prototype.constructor"
+			],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": ["globalThis.Buffer.copyBytesFrom"],
+			"task": "N-04",
+			"decisions": []
+		},
+		{
 			"id": "[\"globalThis.Buffer.from\",\"<call>\"]",
 			"owner": "globalThis.Buffer.from",
 			"ownerPaths": ["globalThis.Buffer.from"],
@@ -224559,6 +224678,10 @@
 		},
 		{ "id": "globalThis.Buffer.compare", "identities": ["globalThis.Buffer.compare"] },
 		{ "id": "globalThis.Buffer.concat", "identities": ["globalThis.Buffer.concat"] },
+		{
+			"id": "globalThis.Buffer.copyBytesFrom",
+			"identities": ["globalThis.Buffer.copyBytesFrom"]
+		},
 		{ "id": "globalThis.Buffer.from", "identities": ["globalThis.Buffer.from"] },
 		{ "id": "globalThis.Buffer.isBuffer", "identities": ["globalThis.Buffer.isBuffer"] },
 		{
@@ -234553,8 +234676,8 @@
 			"owner": "Buffer",
 			"key": "copyBytesFrom",
 			"task": "N-04",
-			"exposures": [],
-			"state": "not-installed-in-full-inventory"
+			"exposures": ["[\"globalThis.Buffer\",\"copyBytesFrom\"]"],
+			"state": "reconciled"
 		},
 		{
 			"owner": "Buffer",

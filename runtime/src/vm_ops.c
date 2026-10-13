@@ -42,6 +42,7 @@
 #include "profile.h"
 #include "property_iter.h"
 #include "proxy_object.h"
+#include "rooted_collection.h"
 #include "shape.h"
 #include "typed_array_object.h"
 #include "value_ops.h"
@@ -8153,16 +8154,20 @@ void mal_vm_op_merge_data_properties(MalVm *vm, MalValue target_value, MalValue 
     }
     MAL_PERF_COUNT(merge_data_fallbacks);
 
-    MalPropertyIter iter;
-    mal_property_iter_init(&iter, mal_value_to_object(source), MAL_PROPERTY_ITER_ENUMERABLE_OWN_PROPERTY_ORDER);
-
-    MalKey key;
-    MalPropertyDesc desc;
-    while (mal_property_iter_next(&iter, &key, &desc)) {
+    MalValue roots[] = {target_value, source};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    MalRootedKeySnapshot keys;
+    mal_rooted_key_snapshot_init(&keys);
+    bool ok = mal_rooted_key_snapshot_own_keys(vm, source, &keys);
+    for (usize index = 0; ok && index < keys.count; index++) {
+        MalKey key = keys.keys[index];
+        bool present;
+        MalPropertyDesc desc;
+        if (!mal_vm_get_own_property(vm, source, key, &present, &desc)) break;
+        if (!present || !(desc.flags & MAL_PROPERTY_ENUMERABLE)) continue;
         MalValue value;
-        if (!mal_vm_desc_read(vm, desc, source, &value)) {
-            return;
-        }
+        if (!mal_vm_get_property(vm, source, key, &value)) break;
 
         // CreateDataProperty: own enumerable data property, no inherited setters.
         MalPropertyDesc data = mal_intrinsic_data_desc(
@@ -8171,6 +8176,8 @@ void mal_vm_op_merge_data_properties(MalVm *vm, MalValue target_value, MalValue 
         );
         mal_object_define_own(target, key, &data);
     }
+    mal_rooted_key_snapshot_dispose(&keys);
+    mal_gc_unroot(&root);
 }
 
 void mal_op_merge_data_properties(MalCallable *callable, const MalInstruction *instruction) {

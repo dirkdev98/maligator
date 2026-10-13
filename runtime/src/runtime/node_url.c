@@ -7,6 +7,7 @@
 #include <unistd.h>
 
 #include "ascii.h"
+#include "builtin_uri.h"
 #include "function_object.h"
 #include "gc.h"
 #include "heap_string.h"
@@ -516,16 +517,97 @@ static MalValue url_file_url_to_path(
     return mal_value_from_string(result_string);
 }
 
-static MalValue url_to_http_options_unavailable(
+static MalValue url_to_http_options(
     MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
     MalValue new_target, MalValue callee) {
-    (void) receiver;
-    (void) args;
-    (void) argc;
-    (void) new_target;
-    (void) callee;
-    mal_vm_throw_error(vm, MAL_INTRINSIC_ERROR_PROTOTYPE,
-        "Converting URL objects to HTTP options is not supported by this host");
+    (void) receiver; (void) callee;
+    if (!mal_value_is_undefined(new_target)) {
+        MalObject *prototype;
+        if (!mal_vm_get_prototype_from_constructor(
+                vm, new_target, MAL_INTRINSIC_OBJECT_PROTOTYPE, &prototype)) {
+            return mal_value_new_undefined();
+        }
+    }
+    enum {INPUT, HOSTNAME, PATHNAME, PORT, USERNAME, PASSWORD, SEARCH, OPTIONS, TEMP, LEFT, RIGHT, ROOT_COUNT};
+    MalValue roots[ROOT_COUNT];
+    for (usize index = 0; index < countof(roots); index++) roots[index] = mal_value_new_undefined();
+    roots[INPUT] = argc > 0 ? args[0] : mal_value_new_undefined();
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    if (!mal_value_is_object(roots[INPUT])) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "The url argument must be of type object");
+        roots[TEMP] = vm->completion.value;
+        roots[LEFT] = mal_value_from_string(mal_intrinsic_ascii(vm, "ERR_INVALID_ARG_TYPE"));
+        mal_intrinsic_define_data(vm, mal_value_to_object(roots[TEMP]), "code", roots[LEFT], URL_VISIBLE);
+        goto failed;
+    }
+    static const char *captured[] = {"hostname", "pathname", "port", "username", "password", "search"};
+    for (usize index = 0; index < countof(captured); index++) {
+        if (!mal_vm_get_property(vm, roots[INPUT], mal_intrinsic_string_key(vm, captured[index]), &roots[HOSTNAME + index])) goto failed;
+    }
+    roots[OPTIONS] = mal_value_from_object(mal_object_new(&vm->heap, nullptr));
+    mal_vm_op_merge_data_properties(vm, roots[OPTIONS], roots[INPUT]);
+    if (vm->completion.kind == MAL_COMPLETION_THROW) goto failed;
+    if (!mal_vm_get_property(vm, roots[INPUT], mal_intrinsic_string_key(vm, "protocol"), &roots[TEMP])) goto failed;
+    url_set(vm, roots[OPTIONS], "protocol", roots[TEMP]);
+    if (mal_value_is_truthy(roots[HOSTNAME])) {
+        if (!mal_vm_get_property(vm, roots[HOSTNAME], mal_key_index(0), &roots[TEMP])) goto failed;
+        if (mal_value_is_string(roots[TEMP]) && mal_string_equals_ascii(mal_value_to_string(roots[TEMP]), "[")) {
+            MalString *hostname;
+            if (!mal_vm_to_string(vm, roots[HOSTNAME], &hostname)) goto failed;
+            roots[TEMP] = mal_value_from_string(hostname);
+            usize length = mal_string_length(hostname);
+            usize start = length > 0 ? 1 : 0;
+            usize end = length > 1 ? length - 1 : start;
+            roots[HOSTNAME] = url_slice(vm, hostname, start, end);
+        }
+    }
+    url_set(vm, roots[OPTIONS], "hostname", roots[HOSTNAME]);
+    if (!mal_vm_get_property(vm, roots[INPUT], mal_intrinsic_string_key(vm, "hash"), &roots[TEMP])) goto failed;
+    url_set(vm, roots[OPTIONS], "hash", roots[TEMP]);
+    url_set(vm, roots[OPTIONS], "search", roots[SEARCH]);
+    url_set(vm, roots[OPTIONS], "pathname", roots[PATHNAME]);
+    MalString *left, *right, *joined;
+    if (!mal_vm_to_string(vm, mal_value_is_truthy(roots[PATHNAME]) ? roots[PATHNAME]
+            : mal_value_from_string(mal_intrinsic_ascii(vm, "")), &left)) goto failed;
+    roots[LEFT] = mal_value_from_string(left);
+    if (!mal_vm_to_string(vm, mal_value_is_truthy(roots[SEARCH]) ? roots[SEARCH]
+            : mal_value_from_string(mal_intrinsic_ascii(vm, "")), &right)) goto failed;
+    roots[RIGHT] = mal_value_from_string(right);
+    roots[TEMP] = mal_vm_concat_strings_known(vm, mal_value_to_string(roots[LEFT]), right);
+    if (vm->completion.kind == MAL_COMPLETION_THROW) goto failed;
+    url_set(vm, roots[OPTIONS], "path", roots[TEMP]);
+    if (!mal_vm_get_property(vm, roots[INPUT], mal_intrinsic_string_key(vm, "href"), &roots[TEMP])) goto failed;
+    url_set(vm, roots[OPTIONS], "href", roots[TEMP]);
+    if (!mal_value_is_string(roots[PORT]) || mal_string_length(mal_value_to_string(roots[PORT])) != 0) {
+        MalCompletion completion = mal_vm_call_value(vm, vm->intrinsics[MAL_INTRINSIC_NUMBER_CONSTRUCTOR],
+            mal_value_new_undefined(), roots + PORT, 1);
+        if (completion.kind == MAL_COMPLETION_THROW) goto failed;
+        roots[TEMP] = completion.value;
+        url_set(vm, roots[OPTIONS], "port", roots[TEMP]);
+    }
+    if (mal_value_is_truthy(roots[USERNAME]) || mal_value_is_truthy(roots[PASSWORD])) {
+        if (!mal_vm_to_string(vm, roots[USERNAME], &left)) goto failed;
+        roots[LEFT] = mal_value_from_string(left);
+        roots[LEFT] = mal_builtin_uri_decode_known(vm, left, false);
+        if (vm->completion.kind == MAL_COMPLETION_THROW) goto failed;
+        if (!mal_vm_to_string(vm, roots[PASSWORD], &right)) goto failed;
+        roots[RIGHT] = mal_value_from_string(right);
+        roots[RIGHT] = mal_builtin_uri_decode_known(vm, right, false);
+        if (vm->completion.kind == MAL_COMPLETION_THROW) goto failed;
+        roots[TEMP] = mal_value_from_string(mal_intrinsic_ascii(vm, ":"));
+        MalString *parts[] = {mal_value_to_string(roots[LEFT]), mal_value_to_string(roots[TEMP]), mal_value_to_string(roots[RIGHT])};
+        if (!mal_string_new_flat_parts_checked(&vm->heap, parts, countof(parts), &joined)) goto overflow;
+        roots[TEMP] = mal_value_from_string(joined);
+        url_set(vm, roots[OPTIONS], "auth", roots[TEMP]);
+    }
+    MalValue result = roots[OPTIONS];
+    mal_gc_unroot(&root);
+    return result;
+ overflow:
+    mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Invalid string length");
+ failed:
+    mal_gc_unroot(&root);
     return mal_value_new_undefined();
 }
 
@@ -543,7 +625,7 @@ void mal_host_install_node_url(
             mal_value_new_undefined(), mal_value_new_undefined(), mal_value_new_undefined(),
             mal_value_new_undefined(),
             mal_value_new_undefined(),
-			mal_value_new_undefined(), mal_value_new_undefined(),
+			mal_value_new_undefined(), mal_value_new_undefined(), mal_value_new_undefined(),
         };
         MalRootSpan root;
         mal_gc_root(&root, roots, countof(roots));
@@ -570,7 +652,14 @@ void mal_host_install_node_url(
 		roots[7] = vm->intrinsics[MAL_INTRINSIC_URL_CONSTRUCTOR];
 		roots[8] = mal_intrinsic_define_method_n(
 			vm, mal_value_to_object(roots[0]), (const byte *) "urlToHttpOptions", 1,
-			url_to_http_options_unavailable);
+			url_to_http_options);
+        MalNativeFunctionObject *http_options = mal_value_to_native_function_object(roots[8]);
+        mal_native_function_object_set_constructor(http_options);
+        mal_native_function_object_set_handles_new_target_prototype(http_options);
+        roots[9] = mal_value_from_object(mal_intrinsic_new_object(vm));
+        mal_intrinsic_define_data(vm, (MalObject *) http_options, "prototype", roots[9], MAL_PROPERTY_WRITABLE);
+        mal_intrinsic_define_data(vm, mal_value_to_object(roots[9]), "constructor", roots[8],
+            MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
         static const char *names[] = {
 			"Url", "parse", "format", "pathToFileURL", "fileURLToPath", "URL",
 			"urlToHttpOptions",

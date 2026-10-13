@@ -305,7 +305,7 @@
 	},
 	{
 		"file": "generated/known_primordials.inc",
-		"sha256": "39124813ea9c18d5e0134936fa3a3059e3a70a223c76de8b06054eb664e6378b"
+		"sha256": "b736b433838ca63acf0ae79070f0955f8892ed144a84a0f0d368dbb31dae3088"
 	},
 	{
 		"file": "generated/node_builtin_installers.inc",
@@ -393,7 +393,7 @@
 	},
 	{
 		"file": "runtime/node_buffer.c",
-		"sha256": "c7dfb457664add099ac9605c60c9455f98c854dc7be2cb06ec1bfe735d7855f4"
+		"sha256": "616f21436c8ea81ede00feed4e7994d5740096bd60b036abcecf1cbdba9a1212"
 	},
 	{
 		"file": "runtime/node_buffer.h",
@@ -617,7 +617,7 @@
 	},
 	{
 		"file": "runtime/node_url.c",
-		"sha256": "41c0a31c7578304c69a130aaa6a7e4a67ad00f9ea121e217e12b9deac9189bf2"
+		"sha256": "5144154216a4e268c40eddda5e9abd52661bcd78e0f6c3cb920c189f59e609d7"
 	},
 	{
 		"file": "runtime/node_url.h",
@@ -725,7 +725,7 @@
 	},
 	{
 		"file": "vm_ops.c",
-		"sha256": "eac79b829856249174d40e9ab11f50d6c363b32ac0503306fb6f8d4f7cae7db9"
+		"sha256": "7ca82c80adc489ac23298510cf86077899cdce18ce0a9aa74175ec49b082b390"
 	},
 	{
 		"file": "vm_ops.h",

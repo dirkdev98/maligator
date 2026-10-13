@@ -133,6 +133,45 @@ try {
 }
 check("throwing getter fallback", caught === thrown);
 
+const spreadEffects = [];
+const spreadTarget = { first: 1, removed: 2, changed: 3 };
+const spreadProxy = new Proxy(spreadTarget, {
+	ownKeys() {
+		spreadEffects.push("keys");
+		return ["first", "removed", "changed"];
+	},
+	getOwnPropertyDescriptor(target, key) {
+		spreadEffects.push("descriptor:" + key);
+		return Reflect.getOwnPropertyDescriptor(target, key);
+	},
+	get(target, key) {
+		spreadEffects.push("get:" + key);
+		if (key === "first") {
+			delete target.removed;
+			target.changed = 4;
+			target.added = 5;
+		}
+		return Reflect.get(target, key);
+	},
+});
+const proxyCopy = { ...spreadProxy };
+check(
+	"Proxy spread snapshots keys and reads current descriptors",
+	JSON.stringify(spreadEffects) ===
+		'["keys","descriptor:first","get:first","descriptor:removed","descriptor:changed","get:changed"]' &&
+		JSON.stringify(proxyCopy) === '{"first":1,"changed":4}',
+);
+
+const revokedSpread = Proxy.revocable({}, {});
+revokedSpread.revoke();
+caught = undefined;
+try {
+	({ ...revokedSpread.proxy });
+} catch (error) {
+	caught = error;
+}
+check("revoked Proxy spread throws", caught instanceof TypeError);
+
 const nonempty = { prefix: 53, ...shapedSource };
 check("nonempty target fallback", nonempty.prefix === 53 && nonempty.value === shared);
 

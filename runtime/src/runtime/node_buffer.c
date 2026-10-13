@@ -706,6 +706,43 @@ static MalTypedArrayObject *mal_buffer_byte_view(MalVm *vm, MalValue value) {
     return mal_value_to_typed_array_object(value);
 }
 
+static MalValue mal_buffer_throw_code(
+    MalVm *vm, MalIntrinsic prototype, const byte *message, const byte *code
+) {
+    mal_vm_throw_error(vm, prototype, message);
+    MalValue roots[] = {
+        vm->completion.value,
+        mal_value_from_string(mal_intrinsic_ascii(vm, code)),
+    };
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    mal_intrinsic_define_data(vm, mal_value_to_object(roots[0]), "code", roots[1],
+        MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE);
+    mal_gc_unroot(&root);
+    return mal_value_new_undefined();
+}
+
+static MalValue mal_buffer_invalid_type(MalVm *vm, MalValue input, const byte *message) {
+    if (mal_value_is_object(input) || mal_value_is_callable(input)) {
+        MalValue received[] = { input, mal_value_new_undefined() };
+        MalRootSpan received_root;
+        mal_gc_root(&received_root, received, countof(received));
+        // Node's error formatting observes constructor/name accessors before throwing.
+        bool callable = mal_value_is_callable(input);
+        received[1] = mal_vm_op_load_property(vm, received[0], mal_value_from_string(
+            mal_intrinsic_ascii(vm, callable ? "name" : "constructor")));
+        if (!callable && vm->completion.kind != MAL_COMPLETION_THROW
+            && !mal_value_is_nil(received[1])) {
+            received[1] = mal_vm_op_load_property(vm, received[1], mal_value_from_string(
+                mal_intrinsic_ascii(vm, "name")));
+        }
+        mal_gc_unroot(&received_root);
+        if (vm->completion.kind == MAL_COMPLETION_THROW) return mal_value_new_undefined();
+    }
+    return mal_buffer_throw_code(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+        message, "ERR_INVALID_ARG_TYPE");
+}
+
 static MalValue mal_buffer_validate_text(MalVm *vm, MalValue input, bool utf8) {
     const byte *data;
     u32 length;
@@ -721,37 +758,8 @@ static MalValue mal_buffer_validate_text(MalVm *vm, MalValue input, bool utf8) {
         data = length == 0 ? nullptr : mal_buffer_view_data(view);
         shared = mal_buffer_view_shared(view);
     } else {
-        if (mal_value_is_object(input) || mal_value_is_callable(input)) {
-            MalValue received[] = { input, mal_value_new_undefined() };
-            MalRootSpan received_root;
-            mal_gc_root(&received_root, received, countof(received));
-            // Node's error formatting observes constructor/name accessors before throwing.
-            bool callable = mal_value_is_callable(input);
-            received[1] = mal_vm_op_load_property(vm, received[0], mal_value_from_string(
-                mal_intrinsic_ascii(vm, callable ? "name" : "constructor")));
-            if (!callable && vm->completion.kind != MAL_COMPLETION_THROW
-                && !mal_value_is_nil(received[1])) {
-                received[1] = mal_vm_op_load_property(vm, received[1], mal_value_from_string(
-                    mal_intrinsic_ascii(vm, "name")));
-            }
-            mal_gc_unroot(&received_root);
-            if (vm->completion.kind == MAL_COMPLETION_THROW) return mal_value_new_undefined();
-        }
-        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+        return mal_buffer_invalid_type(vm, input,
             "The input argument must be an ArrayBuffer, Buffer, or TypedArray");
-        if (vm->completion.kind == MAL_COMPLETION_THROW
-            && mal_value_is_object(vm->completion.value)) {
-            MalValue roots[] = {
-                vm->completion.value,
-                mal_value_from_string(mal_intrinsic_ascii(vm, "ERR_INVALID_ARG_TYPE")),
-            };
-            MalRootSpan root;
-            mal_gc_root(&root, roots, countof(roots));
-            mal_intrinsic_define_data(vm, mal_value_to_object(roots[0]), "code", roots[1],
-                MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE);
-            mal_gc_unroot(&root);
-        }
-        return mal_value_new_undefined();
     }
     if (length == 0) return mal_value_new_boolean(true);
     byte *snapshot = nullptr;
@@ -777,6 +785,82 @@ static MalValue mal_buffer_validate_text(MalVm *vm, MalValue input, bool utf8) {
     }
     free(snapshot);
     return mal_value_new_boolean(valid);
+}
+
+static bool mal_buffer_copy_index(MalVm *vm, MalValue value, f64 *out) {
+    if (!mal_ops_is_number(value)) {
+        mal_buffer_invalid_type(vm, value,
+            "The offset or length argument must be a number");
+        return false;
+    }
+    f64 number = mal_ops_number_as_f64(value);
+    if (!isfinite(number) || number < 0 || trunc(number) != number
+        || number > 9007199254740991.0) {
+        mal_buffer_throw_code(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
+            "The offset or length argument must be a nonnegative safe integer",
+            "ERR_OUT_OF_RANGE");
+        return false;
+    }
+    *out = number;
+    return true;
+}
+
+static MalValue mal_buffer_copy_bytes_from(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
+    MalValue new_target, MalValue callee
+) {
+    (void) receiver;
+    if (!mal_value_is_undefined(new_target)) {
+        MalObject *prototype;
+        if (!mal_vm_get_prototype_from_constructor(
+                vm, new_target, MAL_INTRINSIC_OBJECT_PROTOTYPE, &prototype)) {
+            return mal_value_new_undefined();
+        }
+    }
+    MalValue roots[] = {
+        argc > 0 ? args[0] : mal_value_new_undefined(),
+        mal_value_new_undefined(),
+    };
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    if (!mal_value_is_typed_array_object(roots[0])) {
+        mal_buffer_invalid_type(vm, roots[0], "The view argument must be a TypedArray");
+        goto failed;
+    }
+    MalTypedArrayObject *input = mal_value_to_typed_array_object(roots[0]);
+    u32 view_length = mal_typed_array_object_length(input);
+    u32 start = 0, end = view_length;
+    if (view_length == 0) goto empty;
+    if (argc > 1 && !mal_value_is_undefined(args[1])) {
+        f64 offset;
+        if (!mal_buffer_copy_index(vm, args[1], &offset)) goto failed;
+        if (offset >= view_length) goto empty;
+        start = (u32) offset;
+    }
+    if (argc > 2 && !mal_value_is_undefined(args[2])) {
+        f64 length;
+        if (!mal_buffer_copy_index(vm, args[2], &length)) goto failed;
+        f64 requested_end = start + length;
+        end = requested_end < view_length ? (u32) requested_end : view_length;
+    }
+    if (end <= start) goto empty;
+    u32 element_size = mal_typed_array_element_size(input->kind);
+    u32 byte_length = (end - start) * element_size;
+    roots[1] = mal_buffer_new_uninitialized(
+        vm, mal_buffer_prototype_from_callee(callee), byte_length);
+    if (vm->completion.kind == MAL_COMPLETION_THROW) goto failed;
+    mal_buffer_view_read(input, start * element_size,
+        mal_buffer_view_data(mal_value_to_typed_array_object(roots[1])), byte_length);
+    MalValue result = roots[1];
+    mal_gc_unroot(&root);
+    return result;
+ empty:
+    result = mal_buffer_new(vm, mal_buffer_prototype_from_callee(callee), 0);
+    mal_gc_unroot(&root);
+    return result;
+ failed:
+    mal_gc_unroot(&root);
+    return mal_value_new_undefined();
 }
 
 static MalValue mal_buffer_validate_text_call(
@@ -1845,6 +1929,8 @@ void mal_host_install_node_buffer(
                              mal_buffer_is_buffer, roots[0]);
     mal_buffer_define_regular_method(vm, (MalObject *) constructor, "isEncoding", 1,
                                     mal_buffer_is_encoding, roots[0]);
+    mal_buffer_define_regular_method(vm, (MalObject *) constructor, "copyBytesFrom", 3,
+                                    mal_buffer_copy_bytes_from, roots[0]);
     mal_buffer_define_method(vm, (MalObject *) constructor, "byteLength", 1,
                              mal_buffer_byte_length, roots[0]);
     mal_buffer_define_method(vm, (MalObject *) constructor, "concat", 1, mal_buffer_concat,
